@@ -1,4 +1,7 @@
 import { createHmac } from "node:crypto";
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
@@ -8,6 +11,12 @@ const webhookSecret = "top-secret";
 
 function sign(payload: string): string {
   return createHmac("sha256", webhookSecret).update(payload).digest("hex");
+}
+
+async function writeWorkspaceFile(rootDir: string, relativePath: string, content: string): Promise<void> {
+  const filePath = join(rootDir, relativePath);
+  await mkdir(dirname(filePath), { recursive: true });
+  await writeFile(filePath, content, "utf8");
 }
 
 describe("createServerApp", () => {
@@ -51,6 +60,90 @@ describe("createServerApp", () => {
     expect(body.accepted).toBe(true);
     expect(body.reviewEvent?.repoRef).toBe("owent/example");
     expect(body.reviewEvent?.headSha).toBe("head-sha");
+  });
+
+  it("prepares a review prompt when review preparation is configured", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-server-review-"));
+
+    try {
+      await writeWorkspaceFile(tempDir, "src/AGENTS.md", "# Source\nUse transactions for auth writes.\n");
+      const app = createServerApp({
+        gitea: {
+          triggerName: "gitea-internal",
+          workspaceId: "gitea-internal-owent-example",
+          webhookSecret,
+        },
+        reviewPreparation: {
+          baseSystemPrompt: [
+            "<repo>",
+            "{{REPO_INSTRUCTION_SUMMARIES}}",
+            "</repo>",
+            "<skills>",
+            "{{ACTIVE_SKILL_SUMMARIES}}",
+            "</skills>",
+            "<memory>",
+            "{{MEMORY_HINTS}}",
+            "</memory>",
+            "<task>",
+            "{{TASK_CONTEXT}}",
+            "</task>",
+          ].join("\n"),
+          sourceRootResolver: () => tempDir,
+          changedPathsResolver: () => ["src/auth/login.ts"],
+          maxPromptTokens: 200,
+        },
+      });
+      const payload = JSON.stringify({
+        action: "opened",
+        repository: {
+          full_name: "owent/example",
+        },
+        sender: {
+          login: "owent",
+        },
+        pull_request: {
+          html_url: "https://gitea.internal.corp/owent/example/pulls/42",
+          base: { sha: "base-sha" },
+          head: { sha: "head-sha" },
+        },
+      });
+
+      const response = await app.request("/webhooks/gitea", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-gitea-event": "pull_request",
+          "x-gitea-signature": sign(payload),
+        },
+        body: payload,
+      });
+      const body = (await response.json()) as {
+        accepted: boolean;
+        reviewPreparation?: {
+          changedPathCount?: number;
+          promptTokenEstimate?: number;
+          instructionCount?: number;
+          skillCount?: number;
+          droppedAssetCount?: number;
+          systemPrompt?: string;
+          sourceRoot?: string;
+          taskContext?: string;
+        };
+      };
+
+      expect(response.status).toBe(202);
+      expect(body.accepted).toBe(true);
+      expect(body.reviewPreparation?.instructionCount).toBeGreaterThanOrEqual(1);
+      expect(body.reviewPreparation?.changedPathCount).toBe(1);
+      expect(body.reviewPreparation?.promptTokenEstimate).toBeGreaterThan(0);
+      expect(body.reviewPreparation?.skillCount).toBe(0);
+      expect(body.reviewPreparation?.droppedAssetCount).toBeGreaterThanOrEqual(0);
+      expect(body.reviewPreparation).not.toHaveProperty("systemPrompt");
+      expect(body.reviewPreparation).not.toHaveProperty("sourceRoot");
+      expect(body.reviewPreparation).not.toHaveProperty("taskContext");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
   });
 
   it("rejects a webhook when the HMAC signature does not match", async () => {
@@ -298,6 +391,74 @@ describe("createServerApp", () => {
     });
 
     expect(response.status).toBe(202);
+  });
+
+  it("returns 500 review_preparation_failed when the source-root resolver throws", async () => {
+    const app = createServerApp({
+      gitea: {
+        triggerName: "gitea-internal",
+        workspaceId: "ws",
+        webhookSecret,
+      },
+      reviewPreparation: {
+        baseSystemPrompt: "<task>{{TASK_CONTEXT}}</task>",
+        sourceRootResolver: () => {
+          throw new Error("boom while resolving source root");
+        },
+      },
+    });
+    const payload = JSON.stringify({
+      action: "opened",
+      repository: { full_name: "owent/example" },
+      sender: { login: "owent" },
+      pull_request: { base: { sha: "b" }, head: { sha: "h" } },
+    });
+    const response = await app.request("/webhooks/gitea", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-gitea-event": "pull_request",
+        "x-gitea-signature": sign(payload),
+      },
+      body: payload,
+    });
+    expect(response.status).toBe(500);
+    const body = (await response.json()) as { reason?: string; message?: string };
+    expect(body.reason).toBe("review_preparation_failed");
+    expect(body.message).toContain("boom while resolving source root");
+  });
+
+  it("skips review preparation but still accepts the webhook when no source root is resolved", async () => {
+    const app = createServerApp({
+      gitea: {
+        triggerName: "gitea-internal",
+        workspaceId: "ws",
+        webhookSecret,
+      },
+      reviewPreparation: {
+        baseSystemPrompt: "<task>{{TASK_CONTEXT}}</task>",
+        sourceRootResolver: () => undefined,
+      },
+    });
+    const payload = JSON.stringify({
+      action: "opened",
+      repository: { full_name: "owent/example" },
+      sender: { login: "owent" },
+      pull_request: { base: { sha: "b" }, head: { sha: "h" } },
+    });
+    const response = await app.request("/webhooks/gitea", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-gitea-event": "pull_request",
+        "x-gitea-signature": sign(payload),
+      },
+      body: payload,
+    });
+    expect(response.status).toBe(202);
+    const body = (await response.json()) as { accepted: boolean; reviewPreparation?: unknown };
+    expect(body.accepted).toBe(true);
+    expect(body.reviewPreparation).toBeUndefined();
   });
 
   it("exposes /healthz and /readyz", async () => {

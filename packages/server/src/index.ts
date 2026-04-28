@@ -2,6 +2,11 @@ import { Hono } from "hono";
 import { ZodError } from "zod";
 
 import {
+  prepareReviewPrompt,
+  type PreparedReviewPrompt,
+  type ReviewEvent,
+} from "@aicr/core";
+import {
   translateWebhookToReviewEvent,
   type GiteaWebhookConfig,
   verifyWebhookSignature,
@@ -10,6 +15,41 @@ import {
 export interface ServerAppOptions {
   readonly gitea?: GiteaWebhookConfig;
   readonly forgejo?: GiteaWebhookConfig;
+  readonly reviewPreparation?: ServerReviewPreparationOptions;
+}
+
+export interface ServerReviewPreparationOptions {
+  readonly baseSystemPrompt: string;
+  readonly sourceRootResolver: (reviewEvent: ReviewEvent) => string | undefined;
+  readonly changedPathsResolver?: (context: {
+    reviewEvent: ReviewEvent;
+    payload: unknown;
+    provider: "gitea" | "forgejo";
+    eventName: string;
+  }) => readonly string[] | undefined;
+  readonly operatorOverrides?: readonly string[];
+  readonly memoryHints?: readonly string[];
+  readonly maxPromptTokens?: number;
+  readonly taskContextBuilder?: (
+    reviewEvent: ReviewEvent,
+    changedPaths: readonly string[],
+  ) => string | undefined;
+}
+
+function summarizePreparedReviewPromptForWebhook(preparation: PreparedReviewPrompt): {
+  changedPathCount: number;
+  promptTokenEstimate: number;
+  instructionCount: number;
+  skillCount: number;
+  droppedAssetCount: number;
+} {
+  return {
+    changedPathCount: preparation.changedPaths.length,
+    promptTokenEstimate: preparation.prompt.tokenEstimate,
+    instructionCount: preparation.prompt.loadedInstructionRefs.length,
+    skillCount: preparation.prompt.activatedSkillRefs.length,
+    droppedAssetCount: preparation.prompt.droppedInstructionRefs.length,
+  };
 }
 
 function registerGiteaLikeWebhook(
@@ -17,6 +57,7 @@ function registerGiteaLikeWebhook(
   provider: "gitea" | "forgejo",
   path: string,
   config: GiteaWebhookConfig | undefined,
+  reviewPreparationOptions: ServerReviewPreparationOptions | undefined,
 ): void {
   app.post(path, async (c) => {
     if (!config) {
@@ -75,7 +116,58 @@ function registerGiteaLikeWebhook(
       return c.json({ accepted: false, reason: "unsupported_event", provider, eventName }, 202);
     }
 
-    return c.json({ accepted: true, provider, reviewEvent }, 202);
+    let reviewPreparation;
+    if (reviewPreparationOptions) {
+      try {
+        const changedPaths = [
+          ...(reviewPreparationOptions.changedPathsResolver?.({
+            reviewEvent,
+            payload: decoded,
+            provider,
+            eventName,
+          }) ?? reviewEvent.changedFiles ?? []),
+        ];
+        const sourceRoot = reviewPreparationOptions.sourceRootResolver(reviewEvent);
+
+        if (sourceRoot) {
+          const taskContext = reviewPreparationOptions.taskContextBuilder?.(
+            reviewEvent,
+            changedPaths,
+          );
+          const prepared = await prepareReviewPrompt({
+            reviewEvent,
+            sourceRoot,
+            changedPaths,
+            baseSystemPrompt: reviewPreparationOptions.baseSystemPrompt,
+            ...(reviewPreparationOptions.operatorOverrides
+              ? { operatorOverrides: reviewPreparationOptions.operatorOverrides }
+              : {}),
+            ...(reviewPreparationOptions.memoryHints
+              ? { memoryHints: reviewPreparationOptions.memoryHints }
+              : {}),
+            ...(reviewPreparationOptions.maxPromptTokens !== undefined
+              ? { maxPromptTokens: reviewPreparationOptions.maxPromptTokens }
+              : {}),
+            ...(taskContext ? { taskContext } : {}),
+          });
+          reviewPreparation = summarizePreparedReviewPromptForWebhook(prepared);
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return c.json(
+          {
+            accepted: false,
+            reason: "review_preparation_failed",
+            provider,
+            eventName,
+            message,
+          },
+          500,
+        );
+      }
+    }
+
+    return c.json({ accepted: true, provider, reviewEvent, reviewPreparation }, 202);
   });
 }
 
@@ -85,8 +177,20 @@ export function createServerApp(options: ServerAppOptions = {}): Hono {
   app.get("/healthz", (c) => c.text("ok"));
   app.get("/readyz", (c) => c.text("ready"));
 
-  registerGiteaLikeWebhook(app, "gitea", "/webhooks/gitea", options.gitea);
-  registerGiteaLikeWebhook(app, "forgejo", "/webhooks/forgejo", options.forgejo);
+  registerGiteaLikeWebhook(
+    app,
+    "gitea",
+    "/webhooks/gitea",
+    options.gitea,
+    options.reviewPreparation,
+  );
+  registerGiteaLikeWebhook(
+    app,
+    "forgejo",
+    "/webhooks/forgejo",
+    options.forgejo,
+    options.reviewPreparation,
+  );
 
   return app;
 }
