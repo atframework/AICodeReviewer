@@ -1,0 +1,1 @@
+export const evalPackageName = "@aicr/eval";

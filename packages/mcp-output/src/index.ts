@@ -1,0 +1,1 @@
+export const mcpOutputPackageName = "@aicr/mcp-output";

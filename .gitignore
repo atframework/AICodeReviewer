@@ -1,0 +1,14 @@
+node_modules/
+dist/
+coverage/
+.turbo/
+*.tsbuildinfo
+.DS_Store
+.env
+pnpm-debug.log*
+/.cmd-*.log
+/.tmp-*.log
+
+# Temporary repository artifacts must live under build/
+/build/
+/.venv

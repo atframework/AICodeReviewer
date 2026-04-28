@@ -1,0 +1,1 @@
+export const llmPackageName = "@aicr/llm";
