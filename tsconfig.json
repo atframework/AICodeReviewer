@@ -1,0 +1,16 @@
+{
+  "files": [],
+  "references": [
+    { "path": "./packages/agents" },
+    { "path": "./packages/cli" },
+    { "path": "./packages/core" },
+    { "path": "./packages/eval" },
+    { "path": "./packages/llm" },
+    { "path": "./packages/mcp-output" },
+    { "path": "./packages/outputs" },
+    { "path": "./packages/sandbox" },
+    { "path": "./packages/server" },
+    { "path": "./packages/store" },
+    { "path": "./packages/vcs" }
+  ]
+}
