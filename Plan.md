@@ -880,7 +880,7 @@ workspaces/<workspace_id>/
 
 > 需求要求"所有功能都要有完整的单元测试"。具体落地：
 
-- **单元测试**（[Vitest](https://vitest.dev)，目标行覆盖 ≥ 85%）：
+- **单元测试**（[Vitest](https://vitest.dev)，目标行覆盖 ≥ 90%）：
   - VCS 适配器：`simple-git` + 临时裸仓覆盖 git；p4 / svn 用 fake server / 录制回放（[`nock`](https://github.com/nock/nock)、`@stoplight/prism` mock）。
   - Diff 解析与行号映射：覆盖新增、删除、修改、重命名、二进制 patch、空文件。
   - Scrubber：黄金样本（包含 / 不包含 secret 的 diff）正反用例。
@@ -915,15 +915,15 @@ workspaces/<workspace_id>/
 | 里程碑 | 状态 | 已完成 | 未完成 / 下一轮 |
 | --- | --- | --- | --- |
 | M0 | 已完成 | pnpm monorepo、strict TypeScript、ESLint/Vitest/CI、Zod 配置合并、pino/OTel 骨架、Drizzle schema、Dockerfile 基线、`AGENTS.md` / `.agents/skills/` 骨架与相关单元测试 | 无 |
-| M0.5 | 未开始 | 尚无对应阶段产物 | `docs/prompt-research.md`、`prompts/system/code-reviewer.system.md`、提示词调研结论评审 |
+| M0.5 | 进行中 | `docs/prompt-research.md` 草案、`prompts/system/code-reviewer.system.md` 草案、默认提示词分层模板、Prompt Manager 组装契约、repo-local AI 资产加载优先级初稿、severity 推荐语义与回归样例清单 | 补齐低置信来源的实现期实测/确认、完成调研结论评审、把草案接入 Prompt Manager 实现 |
 | M1 | 进行中（下一轮主线） | Hono webhook receiver、Gitea/Forgejo 签名校验、`ReviewEvent` 归一化、invalid JSON / invalid payload 处理、`packages/core` / `packages/server` 单元测试 | Git VCS adapter 实现、Diff 解析、OpenAI 兼容 LLM 接入、Gitea PR review comment 输出、内置 MCP server 雏形 |
 | M2 | 未开始 | 仅 `packages/sandbox/` 与相关配置 schema 占位，不计入阶段完成 | Kilo adapter、auto-approve、Docker sandbox、命令 / 网络白名单、目录隔离 |
 | M3-M9 | 未开始 | 仅少量 package / config 占位，不计入阶段完成 | 按各里程碑原目标推进 |
 
 ### 8.2 下一轮执行包
 
-1. **先补 M0.5 前置产物**：完成 `docs/prompt-research.md` 与 `prompts/system/code-reviewer.system.md` 草案，避免后续 M1 / M2 长期脱离提示词基线；调研必须覆盖默认提示词分层结构、repo-local `AGENTS.md` / repository instructions / path-specific instructions / skills 的发现与加载优先级。
-2. **继续收口 M1**：补齐 Git VCS adapter、Diff 解析、OpenAI 兼容 provider 接入、Gitea PR review comment 输出与内置 MCP server 雏形。
+1. **压实 M0.5 草案**：评审 `docs/prompt-research.md` 与 `prompts/system/code-reviewer.system.md`，重点确认默认提示词分层结构、Prompt Manager 组装契约、repo-local `AGENTS.md` / repository instructions / path-specific instructions / skills 的发现与加载优先级、severity 推荐语义，以及低置信来源是否需要补充实测。
+2. **继续收口 M1**：补齐 Git VCS adapter、Diff 解析、OpenAI 兼容 provider 接入、Gitea PR review comment 输出与内置 MCP server 雏形，并按 M0.5 草案接入最小 Prompt Manager 组装逻辑。
 3. **不把占位当成交付**：M2 之后若仍只有 package、类型或 schema 占位，不计为已完成，必须等到里程碑定义的关键能力与验收项真正落地后再转为完成。
 
 ### M0 — 项目骨架（状态：已完成）
@@ -931,10 +931,11 @@ workspaces/<workspace_id>/
 - pnpm monorepo + tsc strict + ESLint / Prettier + CI（lint / typecheck / test / markdownlint） + 目录结构 + 配置加载（Zod） + pino 日志 + OTel 骨架 + Drizzle + SQLite store + `deploy/Dockerfile` 雏形 + `.markdownlint.json` + 根 `AGENTS.md` 骨架 + `.agents/skills/` 骨架 + AI 元数据校验雏形。
 - 验收：`aicr --help`、`vitest run` 通过、配置三层合并的单元测试、`markdownlint-cli2` 在 CI 通过且包含 `Plan.md`。
 
-### M0.5 — 提示词调研（前置，状态：未开始）
+### M0.5 — 提示词调研（前置，状态：进行中）
 
 - 产出 `docs/prompt-research.md`，对以下方案做横向对比与可借鉴点提炼：PR-Agent (`pr_reviewer_prompts.toml`)、CodeRabbit、Aider CONVENTIONS、Cursor 系统提示词公开摘录、Anthropic Claude Code 系统提示、GitHub Copilot for PR Reviews、OpenAI / Anthropic 官方 prompt engineering 指南、GitHub 官方 repository custom instructions / `AGENTS.md` 机制、Google Engineering Code Review Standards、Kilo Code / OpenCode 内置评审 skills。
-- 输出：每方案的 *任务结构 / 输出协议 / 静默策略 / 反注入 / 上下文获取* 五维总结表 + 我们将采纳与拒绝的项 + `prompts/system/code-reviewer.system.md` 草案；并额外产出 **默认提示词分层模板**、**repo-local AI 资产加载优先级矩阵**、**冲突处理规则** 与 **上下文预算策略**。
+- 输出：每方案的 *任务结构 / 输出协议 / 静默策略 / 反注入 / 上下文获取* 五维总结表 + 我们将采纳与拒绝的项 + `prompts/system/code-reviewer.system.md` 草案；并额外产出 **默认提示词分层模板**、**Prompt Manager 组装契约**、**repo-local AI 资产加载优先级矩阵**、**冲突处理规则**、**severity 推荐语义**、**回归样例清单** 与 **上下文预算策略**。
+- 当前状态：`docs/prompt-research.md` 与 `prompts/system/code-reviewer.system.md` 草案已创建，并补齐 Prompt Manager 组装契约、severity 推荐语义与回归样例清单；低置信公开来源（如 Cursor / Claude Code 公开摘录、Kilo/OpenCode skills）暂不作为硬规则依据，后续在实现期通过实测补充或确认。
 - 验收：`prompts/system/*.md` 通过 markdownlint；docs 评审通过后才进入 M1 写最小 prompt。
 
 ### M1 — Gitea + Git + 单 LLM 端到端最小闭环（状态：进行中 / 下一轮）

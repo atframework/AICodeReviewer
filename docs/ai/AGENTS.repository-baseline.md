@@ -6,6 +6,7 @@
 - Toolchain: Node `>=20`, pnpm `10.20.0`, TypeScript `NodeNext` with `strict` and `noUncheckedIndexedAccess`, ESLint 9, Vitest 3, Prettier 3, and `markdownlint-cli2`.
 - Tests live in `packages/*/test/**/*.test.ts`; coverage targets `packages/*/src/**/*.ts` and excludes `packages/*/src/index.ts`.
 - Shared root baseline files are `package.json`, `pnpm-workspace.yaml`, `tsconfig.json`, `tsconfig.base.json`, `eslint.config.mjs`, `vitest.config.ts`, `.markdownlint.json`, and `deploy/Dockerfile`.
+- Prompt baseline assets currently live in `docs/prompt-research.md` and `prompts/system/code-reviewer.system.md`; keep them aligned with `Plan.md` M0.5 decisions and validate them with markdownlint when changed.
 - Temporary repository artifacts such as scratch scripts, debug logs, ad hoc reports, and captured command output belong under `build/`, not in the repository root.
 - Docker baseline currently uses Chainguard Node, activates pnpm with `corepack prepare pnpm@10.20.0 --activate`, and does not use `pnpm setup`.
 
@@ -16,6 +17,7 @@
 - If a task needs temporary helpers or captured output during repository maintenance, place them under `build/` subdirectories instead of creating root-level scratch files.
 - Keep AI-facing assets concise: stable repository rules belong in `AGENTS.md`, repeatable workflows belong in `.agents/skills/`, and historical stage detail belongs in `docs/ai/milestones/`.
 - When updating AI-facing assets, merge with existing guidance instead of appending near-duplicate sections.
+- When updating the default review prompt, keep `docs/prompt-research.md`, `prompts/system/code-reviewer.system.md`, and the relevant `Plan.md` M0.5 sections in sync so future agents see both rationale and current contract.
 
 ## Default verification order
 
