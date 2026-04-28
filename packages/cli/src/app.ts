@@ -6,7 +6,6 @@ import {
   createReviewEvent,
   loadSystemPromptTemplate,
   prepareReviewPrompt,
-  type ReviewEvent,
   summarizePreparedReviewPrompt,
 } from "@aicr/core";
 
@@ -142,9 +141,24 @@ export async function runCli(
       const basePromptPath = resolve(cwd, values["base-prompt"] ?? "prompts/system/code-reviewer.system.md");
       const maxPromptTokens = parseOptionalInteger(values["max-prompt-tokens"], "--max-prompt-tokens");
       const baseSystemPrompt = await loadSystemPromptTemplate(basePromptPath);
+      const provider = values.provider ?? "manual";
+      const validProviders = [
+        "gitea",
+        "forgejo",
+        "github",
+        "gitlab",
+        "p4",
+        "svn",
+        "scheduled",
+        "manual",
+      ] as const;
+      if (!validProviders.includes(provider as (typeof validProviders)[number])) {
+        stderr.write(`aicr review: invalid provider "${provider}". Must be one of: ${validProviders.join(", ")}.\n`);
+        return 1;
+      }
       const reviewEvent = createReviewEvent({
         triggerName: values.trigger ?? "manual-cli",
-        provider: (values.provider ?? "manual") as ReviewEvent["provider"],
+        provider: provider as (typeof validProviders)[number],
         workspaceId: values.workspace ?? "manual-workspace",
         targetKind: "manual",
         repoRef: values.repo,

@@ -3,6 +3,8 @@ import { dirname, join, relative, resolve } from "node:path";
 
 import { parse as parseYaml } from "yaml";
 
+import { isPlainObject, normalizeChangedPath, normalizePath } from "./utils.js";
+
 export type RepoInstructionKind =
   | "nearest_agents"
   | "root_agents"
@@ -100,13 +102,7 @@ const operatorOverridePriority = 1_000;
 
 const frontmatterPattern = /^---\s*\r?\n([\s\S]*?)\r?\n---\s*(?:\r?\n|$)/;
 
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
-function normalizePath(value: string): string {
-  return value.replaceAll("\\", "/").replace(/^\.\//u, "").replace(/^\/+|\/+$/gu, "");
-}
 
 function truncate(text: string, maxChars = 240): string {
   if (text.length <= maxChars) {
@@ -132,7 +128,25 @@ function summarizeMarkdown(markdown: string, maxChars = 240): string {
 }
 
 function estimateTokens(text: string): number {
-  return Math.ceil(text.length / 4);
+  let tokens = 0;
+  for (let i = 0; i < text.length; i += 1) {
+    const code = text.codePointAt(i)!;
+    if (
+      (code >= 0x4e00 && code <= 0x9fff) ||
+      (code >= 0x3400 && code <= 0x4dbf) ||
+      (code >= 0x20000 && code <= 0x2a6df) ||
+      (code >= 0xf900 && code <= 0xfaff) ||
+      (code >= 0x2f800 && code <= 0x2fa1f)
+    ) {
+      tokens += 2;
+    } else {
+      tokens += 0.25;
+    }
+    if (code > 0xffff) {
+      i += 1;
+    }
+  }
+  return Math.ceil(tokens);
 }
 
 function splitMarkdownFrontmatter(content: string): {
@@ -285,17 +299,6 @@ function globMatchesPath(pattern: string, pathValue: string): boolean {
   }
 
   return matchAt(0, 0);
-}
-
-function normalizeChangedPath(sourceRoot: string, changedPath: string): string {
-  const absolutePath = resolve(sourceRoot, changedPath);
-  const relativePath = normalizePath(relative(sourceRoot, absolutePath));
-
-  if (!relativePath || relativePath.startsWith("../") || relativePath === "..") {
-    throw new RangeError(`Changed path ${changedPath} must stay within ${sourceRoot}`);
-  }
-
-  return relativePath;
 }
 
 async function readTextFileIfExists(filePath: string): Promise<string | undefined> {
@@ -664,11 +667,80 @@ export async function discoverRepoPromptAssets(
   instructions.sort((left, right) => compareLoadedRefs(left, right));
   skills.sort((left, right) => compareLoadedRefs(left, right));
 
+  // Conflict detection (Plan §3.6.1)
+  const detectedConflicts = [...conflicts];
+
+  // 1. Duplicate skill names
+  const skillNameMap = new Map<string, SkillCandidate[]>();
+  for (const skill of skills) {
+    const existing = skillNameMap.get(skill.name) ?? [];
+    existing.push(skill);
+    skillNameMap.set(skill.name, existing);
+  }
+  for (const [name, entries] of skillNameMap.entries()) {
+    if (entries.length > 1) {
+      const winner = entries[0]!;
+      for (let i = 1; i < entries.length; i++) {
+        const loser = entries[i]!;
+        detectedConflicts.push({
+          winner: winner.path,
+          loser: loser.path,
+          reason: `duplicate skill name "${name}"; higher specificity/priority wins`,
+        });
+      }
+    }
+  }
+
+  // 2. Overlapping path-instructions for the same changed paths
+  const pathToInstructions = new Map<string, RepoInstructionCandidate[]>();
+  for (const instruction of instructions) {
+    if (instruction.kind === "path_instruction") {
+      for (const matchedPath of instruction.matchedPaths ?? []) {
+        const existing = pathToInstructions.get(matchedPath) ?? [];
+        existing.push(instruction);
+        pathToInstructions.set(matchedPath, existing);
+      }
+    }
+  }
+  const reportedPathConflicts = new Set<string>();
+  for (const [pathValue, pathInstructions] of pathToInstructions.entries()) {
+    if (pathInstructions.length > 1) {
+      const sortedInstructions = [...pathInstructions].sort((a, b) => b.specificity - a.specificity);
+      const winner = sortedInstructions[0]!;
+      for (let i = 1; i < sortedInstructions.length; i++) {
+        const loser = sortedInstructions[i]!;
+        const pairKey = `${winner.path}|${loser.path}`;
+        if (!reportedPathConflicts.has(pairKey)) {
+          reportedPathConflicts.add(pairKey);
+          detectedConflicts.push({
+            winner: winner.path,
+            loser: loser.path,
+            reason: `overlapping path-instructions for "${pathValue}"; higher specificity wins`,
+          });
+        }
+      }
+    }
+  }
+
+  // 3. Alias vs copilot-instruction overlap
+  const aliasInstructions = instructions.filter((instruction) => instruction.kind === "alias");
+  const copilotInstructions = instructions.filter((instruction) => instruction.kind === "copilot_instruction");
+  if (aliasInstructions.length > 0 && copilotInstructions.length > 0) {
+    for (const alias of aliasInstructions) {
+      for (const copilot of copilotInstructions) {
+        detectedConflicts.push({
+          winner: copilot.path,
+          loser: alias.path,
+          reason: "copilot-instruction takes precedence over compatible alias",        });
+      }
+    }
+  }
+
   return {
     instructions,
     skills,
     droppedRefs,
-    conflicts,
+    conflicts: detectedConflicts,
   };
 }
 

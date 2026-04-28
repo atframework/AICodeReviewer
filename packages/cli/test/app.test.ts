@@ -186,7 +186,7 @@ describe("runCli", () => {
         { cwd: tempDir, stdout, stderr },
       );
       expect(exitCode).toBe(1);
-      expect(stderr.output).toContain("aicr review failed:");
+      expect(stderr.output).toContain("invalid provider");
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }
