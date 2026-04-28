@@ -3,6 +3,9 @@ import { readFile } from "node:fs/promises";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
 
+import { reviewTargetKindSchema } from "./review-event.js";
+import { isPlainObject } from "./utils.js";
+
 export const workspaceRootKeys = ["cache", "defaults", "instances"] as const;
 
 const reservedWorkspaceIds = new Set<string>(workspaceRootKeys);
@@ -34,6 +37,75 @@ const llmProviderSchema = z
   })
   .passthrough();
 
+const llmFallbackEntrySchema = z
+  .object({
+    provider: z.string().min(1),
+    model: z.string().min(1),
+    role: z.enum(["light", "heavy", "any"]),
+  })
+  .passthrough();
+
+const llmRetrySchema = z
+  .object({
+    max_attempts: z.number().int().positive().optional(),
+    respect_retry_after: z.boolean().optional(),
+    backoff: z
+      .object({
+        kind: z.enum(["exponential", "linear", "constant"]),
+        base_ms: z.number().positive().optional(),
+        max_ms: z.number().positive().optional(),
+        jitter: z.boolean().optional(),
+      })
+      .passthrough()
+      .optional(),
+    give_up_after_seconds: z.number().positive().optional(),
+  })
+  .passthrough()
+  .optional();
+
+const llmBudgetSchema = z
+  .object({
+    per_run_usd: z.number().nonnegative().optional(),
+    per_repo_daily_usd: z.number().nonnegative().optional(),
+  })
+  .passthrough()
+  .optional();
+
+const llmPerProviderOverridesSchema = z
+  .record(
+    z.string().min(1),
+    z
+      .object({
+        max_attempts: z.number().int().positive().optional(),
+        give_up_after_seconds: z.number().positive().optional(),
+      })
+      .passthrough()
+      .optional(),
+  )
+  .optional();
+
+const compressionSchema = z
+  .object({
+    trigger_tokens: z.number().int().positive().optional(),
+    max_input_ratio: z.number().min(0).max(1).optional(),
+    summarize_model_role: z.string().min(1).optional(),
+    keep_hunks_top_k: z.number().int().positive().optional(),
+    context_lines: z.number().int().positive().optional(),
+    per_model_overrides: z
+      .record(
+        z.string().min(1),
+        z
+          .object({
+            trigger_tokens: z.number().int().positive().optional(),
+          })
+          .passthrough()
+          .optional(),
+      )
+      .optional(),
+  })
+  .passthrough()
+  .optional();
+
 const triggerSchema = z
   .object({
     name: z.string().min(1),
@@ -45,7 +117,27 @@ const outputChannelSchema = z
   .object({
     name: z.string().min(1),
     kind: z.string().min(1),
+    trigger: z.string().min(1).optional(),
     mention_author: z.boolean().optional(),
+    mention_fallback: z.enum(["all", "skip"]).optional(),
+  })
+  .passthrough();
+
+const outputRouteTargetKindSchema = z.preprocess((value) => {
+  return value === "pr" ? "pull_request" : value;
+}, reviewTargetKindSchema);
+
+const outputRouteSchema = z
+  .object({
+    match: z
+      .object({
+        trigger: z.string().min(1).optional(),
+        target_kind: outputRouteTargetKindSchema.optional(),
+      })
+      .passthrough()
+      .optional(),
+    line_comments: z.array(z.string()).optional(),
+    summary: z.array(z.string()).optional(),
   })
   .passthrough();
 
@@ -59,10 +151,46 @@ const sandboxSchema = z
 
 const reviewSchema = z
   .object({
+    languages_auto_detect: z.boolean().optional(),
+    include: z.array(z.string()).optional(),
     exclude: z.array(z.string()).optional(),
+    max_files: z.number().int().positive().optional(),
+    max_patch_bytes: z.number().int().positive().optional(),
+    incremental: z.boolean().optional(),
+    skip_lgtm: z.boolean().optional(),
+    output_language: z.string().min(1).optional(),
     commit_strategy: z.enum(["per_commit", "aggregate", "head_only"]).optional(),
+    git: z
+      .object({
+        allow_deepen: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
+    fetch_extra: z
+      .object({
+        max_bytes: z.number().int().positive().optional(),
+        max_files: z.number().int().positive().optional(),
+        allow_paths: z.array(z.string()).optional(),
+      })
+      .strict()
+      .optional(),
+    reflection: z
+      .object({
+        enabled: z.boolean().optional(),
+        mode: z.enum(["off", "light", "thorough"]).optional(),
+        memory: z
+          .object({
+            max_size_kb: z.number().int().positive().optional(),
+            compact_after_runs: z.number().int().positive().optional(),
+            retention_days: z.number().int().positive().optional(),
+          })
+          .strict()
+          .optional(),
+      })
+      .strict()
+      .optional(),
   })
-  .strict();
+  .passthrough();
 
 const workspaceInstanceSchema = z
   .object({
@@ -91,25 +219,74 @@ const workspaceInstanceSchema = z
   })
   .strict();
 
+const workspaceConfigFileSchema = workspaceInstanceSchema.omit({ sandbox: true }).strict();
+
 const appConfigSchema = z
   .object({
     llm: z
       .object({
         providers: z.array(llmProviderSchema).default([]),
+        fallback_chain: z.array(llmFallbackEntrySchema).default([]),
+        retry: llmRetrySchema,
+        per_provider_overrides: llmPerProviderOverridesSchema,
+        budget: llmBudgetSchema,
       })
       .passthrough()
-      .default({ providers: [] }),
+      .default({ providers: [], fallback_chain: [] }),
     triggers: z.array(triggerSchema).default([]),
     outputs: z
       .object({
         template_engine: z.enum(["handlebars", "eta"]).default("handlebars"),
         channels: z.array(outputChannelSchema).default([]),
+        routes: z
+          .object({
+            default: outputRouteSchema.optional(),
+            rules: z.array(outputRouteSchema).default([]),
+          })
+          .passthrough()
+          .optional(),
       })
       .passthrough()
       .default({ template_engine: "handlebars", channels: [] }),
     queue: z
       .object({
         kind: z.enum(["memory", "sqlite", "redis", "rabbitmq"]).default("memory"),
+        workers: z
+          .object({
+            concurrency: z.number().int().positive().optional(),
+            per_workspace_concurrency: z.number().int().positive().optional(),
+            lock_ttl_seconds: z.number().int().positive().optional(),
+          })
+          .passthrough()
+          .optional(),
+        rate_limit: z
+          .object({
+            per_provider_rps: z.record(z.string().min(1), z.number().positive()).optional(),
+          })
+          .passthrough()
+          .optional(),
+        retry: z
+          .object({
+            attempts: z.number().int().positive().optional(),
+            backoff: z
+              .object({
+                kind: z.enum(["exponential", "linear", "constant"]),
+                base_ms: z.number().positive().optional(),
+                max_ms: z.number().positive().optional(),
+                jitter: z.boolean().optional(),
+              })
+              .passthrough()
+              .optional(),
+          })
+          .passthrough()
+          .optional(),
+        dead_letter: z
+          .object({
+            enabled: z.boolean().optional(),
+            max_age_hours: z.number().int().positive().optional(),
+          })
+          .passthrough()
+          .optional(),
       })
       .passthrough()
       .default({ kind: "memory" }),
@@ -127,13 +304,18 @@ const appConfigSchema = z
         auto_approve: true,
         sandbox: { kind: "docker", engine: "auto" },
       }),
-    review: z
-      .object({
-        incremental: z.boolean().default(true),
-        skip_lgtm: z.boolean().default(true),
-      })
-      .passthrough()
-      .default({ incremental: true, skip_lgtm: true }),
+    compression: compressionSchema,
+    review: reviewSchema.default({
+      incremental: true,
+      skip_lgtm: true,
+      languages_auto_detect: true,
+      include: ["**/*"],
+      exclude: ["**/vendor/**", "**/*.min.js", "**/*.lock"],
+      max_files: 50,
+      max_patch_bytes: 200_000,
+      output_language: "zh-CN",
+      commit_strategy: "aggregate",
+    }),
     workspaces: z
       .object({
         cache: z
@@ -148,6 +330,12 @@ const appConfigSchema = z
           .object({
             sandbox: sandboxSchema.optional(),
             review: reviewSchema.optional(),
+            agent: z
+              .object({
+                default: z.string().min(1).optional(),
+              })
+              .strict()
+              .optional(),
           })
           .strict()
           .default({}),
@@ -164,10 +352,8 @@ const appConfigSchema = z
 
 export type AppConfig = z.infer<typeof appConfigSchema>;
 export type AppConfigInput = Record<string, unknown>;
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
+export type WorkspaceConfig = z.infer<typeof workspaceInstanceSchema>;
+export type WorkspaceConfigFile = z.infer<typeof workspaceConfigFileSchema>;
 
 function mergeValue(base: unknown, override: unknown): unknown {
   if (override === undefined) {
@@ -199,6 +385,16 @@ export function mergeConfigLayers(...layers: AppConfigInput[]): AppConfig {
   return appConfigSchema.parse(merged);
 }
 
+export function resolveWorkspaceConfig(config: AppConfig, workspaceId: string): WorkspaceConfig {
+  const instance = config.workspaces.instances[workspaceId];
+
+  if (!instance) {
+    throw new RangeError(`Workspace ${workspaceId} is not configured.`);
+  }
+
+  return workspaceInstanceSchema.parse(mergeValue(config.workspaces.defaults, instance));
+}
+
 function normalizeConfigDocument(parsed: unknown): AppConfigInput {
   if (parsed == null) {
     return {};
@@ -218,4 +414,11 @@ export async function loadConfigFile(path: string): Promise<AppConfig> {
   return appConfigSchema.parse(parsed);
 }
 
-export { appConfigSchema };
+export async function loadWorkspaceConfigFile(path: string): Promise<WorkspaceConfigFile> {
+  const raw = await readFile(path, "utf8");
+  const parsed = normalizeConfigDocument(parseYaml(raw));
+
+  return workspaceConfigFileSchema.parse(parsed);
+}
+
+export { appConfigSchema, workspaceConfigFileSchema };

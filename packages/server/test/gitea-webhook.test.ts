@@ -470,4 +470,216 @@ describe("createServerApp", () => {
     expect(readyz.status).toBe(200);
     expect(await readyz.text()).toBe("ready");
   });
+
+  it("uses changedPathsResolver to provide custom changed paths", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-server-changed-paths-"));
+
+    try {
+      await writeWorkspaceFile(tempDir, "AGENTS.md", "# Root\nRules.\n");
+      let resolverCalled = false;
+      const app = createServerApp({
+        gitea: {
+          triggerName: "gitea-internal",
+          workspaceId: "ws",
+          webhookSecret,
+        },
+        reviewPreparation: {
+          baseSystemPrompt: "<task>\n{{TASK_CONTEXT}}\n</task>",
+          sourceRootResolver: () => tempDir,
+          changedPathsResolver: (ctx) => {
+            resolverCalled = true;
+            expect(ctx.provider).toBe("gitea");
+            expect(ctx.eventName).toBe("pull_request");
+            return ["custom/path.ts", "another/path.ts"];
+          },
+        },
+      });
+      const payload = JSON.stringify({
+        action: "opened",
+        repository: { full_name: "owent/example" },
+        sender: { login: "owent" },
+        pull_request: {
+          html_url: "https://gitea.internal/pulls/1",
+          base: { sha: "b" },
+          head: { sha: "h" },
+        },
+      });
+
+      const response = await app.request("/webhooks/gitea", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-gitea-event": "pull_request",
+          "x-gitea-signature": sign(payload),
+        },
+        body: payload,
+      });
+
+      expect(response.status).toBe(202);
+      expect(resolverCalled).toBe(true);
+      const body = (await response.json()) as {
+        reviewPreparation?: { changedPathCount?: number };
+      };
+      expect(body.reviewPreparation?.changedPathCount).toBe(2);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("uses taskContextBuilder to provide custom task context", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-server-task-ctx-"));
+
+    try {
+      await writeWorkspaceFile(tempDir, "AGENTS.md", "# Root\nRules.\n");
+      let builderCalled = false;
+      const app = createServerApp({
+        gitea: {
+          triggerName: "gitea-internal",
+          workspaceId: "ws",
+          webhookSecret,
+        },
+        reviewPreparation: {
+          baseSystemPrompt: "<task>\n{{TASK_CONTEXT}}\n</task>",
+          sourceRootResolver: () => tempDir,
+          taskContextBuilder: (reviewEvent, changedPaths) => {
+            builderCalled = true;
+            expect(reviewEvent.provider).toBe("gitea");
+            expect(changedPaths).toEqual(expect.any(Array));
+            return "Custom task context from builder.";
+          },
+        },
+      });
+      const payload = JSON.stringify({
+        action: "opened",
+        repository: { full_name: "owent/example" },
+        sender: { login: "owent" },
+        pull_request: {
+          html_url: "https://gitea.internal/pulls/1",
+          base: { sha: "b" },
+          head: { sha: "h" },
+        },
+      });
+
+      const response = await app.request("/webhooks/gitea", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-gitea-event": "pull_request",
+          "x-gitea-signature": sign(payload),
+        },
+        body: payload,
+      });
+
+      expect(response.status).toBe(202);
+      expect(builderCalled).toBe(true);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("falls back to reviewEvent.changedFiles when changedPathsResolver returns undefined", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-server-fallback-paths-"));
+
+    try {
+      await writeWorkspaceFile(tempDir, "AGENTS.md", "# Root\nRules.\n");
+      const app = createServerApp({
+        gitea: {
+          triggerName: "gitea-internal",
+          workspaceId: "ws",
+          webhookSecret,
+        },
+        reviewPreparation: {
+          baseSystemPrompt: "<task>\n{{TASK_CONTEXT}}\n</task>",
+          sourceRootResolver: () => tempDir,
+          changedPathsResolver: () => undefined,
+        },
+      });
+      const payload = JSON.stringify({
+        action: "opened",
+        repository: { full_name: "owent/example" },
+        sender: { login: "owent" },
+        pull_request: {
+          html_url: "https://gitea.internal/pulls/1",
+          base: { sha: "b" },
+          head: { sha: "h" },
+        },
+      });
+
+      const response = await app.request("/webhooks/gitea", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-gitea-event": "pull_request",
+          "x-gitea-signature": sign(payload),
+        },
+        body: payload,
+      });
+
+      expect(response.status).toBe(202);
+      const body = (await response.json()) as {
+        accepted: boolean;
+        reviewPreparation?: { changedPathCount?: number };
+      };
+      expect(body.accepted).toBe(true);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("propagates operatorOverrides and memoryHints through review preparation", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-server-overrides-"));
+
+    try {
+      await writeWorkspaceFile(tempDir, "AGENTS.md", "# Root\nRules.\n");
+      const app = createServerApp({
+        gitea: {
+          triggerName: "gitea-internal",
+          workspaceId: "ws",
+          webhookSecret,
+        },
+        reviewPreparation: {
+          baseSystemPrompt: [
+            "<repo>",
+            "{{REPO_INSTRUCTION_SUMMARIES}}",
+            "</repo>",
+            "<memory>",
+            "{{MEMORY_HINTS}}",
+            "</memory>",
+            "<task>",
+            "{{TASK_CONTEXT}}",
+            "</task>",
+          ].join("\n"),
+          sourceRootResolver: () => tempDir,
+          operatorOverrides: ["Check all error paths."],
+          memoryHints: ["Previous run found missing null checks."],
+        },
+      });
+      const payload = JSON.stringify({
+        action: "opened",
+        repository: { full_name: "owent/example" },
+        sender: { login: "owent" },
+        pull_request: {
+          html_url: "https://gitea.internal/pulls/1",
+          base: { sha: "b" },
+          head: { sha: "h" },
+        },
+      });
+
+      const response = await app.request("/webhooks/gitea", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-gitea-event": "pull_request",
+          "x-gitea-signature": sign(payload),
+        },
+        body: payload,
+      });
+
+      expect(response.status).toBe(202);
+      const body = (await response.json()) as { accepted: boolean };
+      expect(body.accepted).toBe(true);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
 });

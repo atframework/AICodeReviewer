@@ -1,5 +1,5 @@
 import { readFile } from "node:fs/promises";
-import { relative, resolve } from "node:path";
+import { resolve } from "node:path";
 
 import {
   assemblePrompt,
@@ -10,6 +10,7 @@ import {
   type RepoPromptDiscovery,
 } from "./prompt-manager.js";
 import type { ReviewEvent } from "./review-event.js";
+import { normalizeChangedPath } from "./utils.js";
 
 export interface PrepareReviewPromptInput {
   readonly reviewEvent: ReviewEvent;
@@ -43,21 +44,6 @@ export interface PreparedReviewPromptSummary {
   readonly activeSkills: readonly LoadedPromptAssetRef[];
   readonly droppedAssets: readonly DroppedPromptAssetRef[];
   readonly systemPrompt: string;
-}
-
-function normalizePath(value: string): string {
-  return value.replaceAll("\\", "/").replace(/^\.\//u, "").replace(/^\/+|\/+$/gu, "");
-}
-
-function normalizeChangedPath(sourceRoot: string, changedPath: string): string {
-  const absolutePath = resolve(sourceRoot, changedPath);
-  const relativePath = normalizePath(relative(sourceRoot, absolutePath));
-
-  if (!relativePath || relativePath.startsWith("../") || relativePath === "..") {
-    throw new RangeError(`Changed path ${changedPath} must stay within ${sourceRoot}`);
-  }
-
-  return relativePath;
 }
 
 function uniqueChangedPaths(sourceRoot: string, paths: readonly string[]): string[] {

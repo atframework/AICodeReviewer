@@ -4,7 +4,12 @@ import { dirname, join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { assemblePrompt, discoverRepoPromptAssets } from "../src/prompt-manager.js";
+import {
+  assemblePrompt,
+  discoverRepoPromptAssets,
+  estimatePromptTokens,
+  renderPromptTemplate,
+} from "../src/prompt-manager.js";
 
 async function writeWorkspaceFile(rootDir: string, relativePath: string, content: string): Promise<void> {
   const filePath = join(rootDir, relativePath);
@@ -439,5 +444,330 @@ describe("assemblePrompt", () => {
         (ref) => ref.kind === "nearest_agents" && ref.label === "src/AGENTS.md",
       ),
     ).toBe(true);
+  });
+
+  it("works without a maxPromptTokens budget (no trimming)", () => {
+    const output = assemblePrompt({
+      baseSystemPrompt: "<repo>\n{{REPO_INSTRUCTION_SUMMARIES}}\n</repo>\n<task>\n{{TASK_CONTEXT}}\n</task>",
+      discovery: {
+        instructions: [
+          {
+            kind: "root_agents" as const,
+            label: "AGENTS.md",
+            path: "AGENTS.md",
+            content: "Keep commits small.",
+            summary: "Keep commits small and focused.",
+            reason: "repo-wide root AGENTS.md",
+            priority: 300,
+            specificity: 0,
+          },
+        ],
+        skills: [],
+        droppedRefs: [],
+        conflicts: [],
+      },
+      taskContext: "Changed files: src/a.ts",
+    });
+
+    expect(output.systemPrompt).toContain("Keep commits small");
+    expect(output.droppedInstructionRefs).toEqual([]);
+    expect(output.tokenEstimate).toBeGreaterThan(0);
+  });
+
+  it("preserves conflicts from discovery output", () => {
+    const output = assemblePrompt({
+      baseSystemPrompt: "<task>\n{{TASK_CONTEXT}}\n</task>",
+      discovery: {
+        instructions: [],
+        skills: [],
+        droppedRefs: [],
+        conflicts: [
+          { winner: "src/AGENTS.md", loser: "AGENTS.md", reason: "nearest takes precedence" },
+        ],
+      },
+      taskContext: "test",
+    });
+
+    expect(output.conflicts).toHaveLength(1);
+    expect(output.conflicts[0]?.winner).toBe("src/AGENTS.md");
+  });
+});
+
+describe("discoverRepoPromptAssets (additional)", () => {
+  it("discovers repo-wide skills when no Applies To section is present", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-prompt-manager-repo-skill-"));
+
+    try {
+      await writeWorkspaceFile(
+        tempDir,
+        ".agents/skills/general-review/SKILL.md",
+        [
+          "---",
+          "name: general-review",
+          'description: "General code review checklist."',
+          "---",
+          "",
+          "# General Review",
+          "",
+          "## Procedure",
+          "",
+          "- Check naming conventions.",
+          "",
+        ].join("\n"),
+      );
+
+      const discovery = await discoverRepoPromptAssets({
+        sourceRoot: tempDir,
+        changedPaths: ["src/a.ts"],
+      });
+
+      expect(discovery.skills).toHaveLength(1);
+      expect(discovery.skills[0]?.name).toBe("general-review");
+      expect(discovery.skills[0]?.reason).toContain("repo-wide skill");
+      expect(discovery.droppedRefs).toHaveLength(0);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("discovers different nearest AGENTS.md for changed paths in different directories", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-prompt-manager-multi-agents-"));
+
+    try {
+      await writeWorkspaceFile(tempDir, "src/auth/AGENTS.md", "# Auth\nAuth-specific rules.\n");
+      await writeWorkspaceFile(tempDir, "src/api/AGENTS.md", "# API\nAPI-specific rules.\n");
+
+      const discovery = await discoverRepoPromptAssets({
+        sourceRoot: tempDir,
+        changedPaths: ["src/auth/login.ts", "src/api/endpoint.ts"],
+      });
+
+      const nearestInstructions = discovery.instructions.filter(
+        (instruction) => instruction.kind === "nearest_agents",
+      );
+      expect(nearestInstructions).toHaveLength(2);
+      expect(nearestInstructions.map((instruction) => instruction.path)).toEqual(
+        expect.arrayContaining(["src/auth/AGENTS.md", "src/api/AGENTS.md"]),
+      );
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("discovers GEMINI.md as an alias instruction", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-prompt-manager-gemini-"));
+
+    try {
+      await writeWorkspaceFile(tempDir, "GEMINI.md", "# Gemini\nCompatible alias for Gemini.\n");
+
+      const discovery = await discoverRepoPromptAssets({
+        sourceRoot: tempDir,
+        changedPaths: ["src/a.ts"],
+      });
+
+      expect(discovery.instructions.some((instruction) => instruction.path === "GEMINI.md")).toBe(
+        true,
+      );
+      expect(
+        discovery.instructions.find((instruction) => instruction.path === "GEMINI.md")?.kind,
+      ).toBe("alias");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("returns empty results for a source root with no AI assets", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-prompt-manager-empty-"));
+
+    try {
+      const discovery = await discoverRepoPromptAssets({
+        sourceRoot: tempDir,
+        changedPaths: ["src/a.ts"],
+      });
+
+      expect(discovery.instructions).toEqual([]);
+      expect(discovery.skills).toEqual([]);
+      expect(discovery.droppedRefs).toEqual([]);
+      expect(discovery.conflicts).toEqual([]);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("dedupes identical changed paths before discovery", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-prompt-manager-dedup-"));
+
+    try {
+      await writeWorkspaceFile(tempDir, "AGENTS.md", "# Root\nRules.\n");
+
+      const discovery = await discoverRepoPromptAssets({
+        sourceRoot: tempDir,
+        changedPaths: ["src/a.ts", "src/a.ts", "./src/a.ts"],
+      });
+
+      const nearest = discovery.instructions.find(
+        (instruction) => instruction.kind === "nearest_agents",
+      );
+      expect(nearest?.matchedPaths).toEqual(["src/a.ts"]);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("estimatePromptTokens", () => {
+  it("estimates more tokens for CJK text than for ASCII text of the same length", () => {
+    const ascii = "Hello world test";
+    const cjk = "你好世界测试";
+
+    expect(estimatePromptTokens(cjk)).toBeGreaterThan(estimatePromptTokens(ascii));
+  });
+
+  it("estimates approximately 0.25 tokens per ASCII character", () => {
+    const text = "aaaa";
+    expect(estimatePromptTokens(text)).toBe(1);
+  });
+
+  it("estimates approximately 2 tokens per CJK character", () => {
+    const text = "你好";
+    expect(estimatePromptTokens(text)).toBe(4);
+  });
+
+  it("handles mixed ASCII and CJK text", () => {
+    const text = "Hello你好";
+    const asciiPart = estimatePromptTokens("Hello");
+    const cjkPart = estimatePromptTokens("你好");
+    expect(estimatePromptTokens(text)).toBe(asciiPart + cjkPart);
+  });
+
+  it("returns 0 for empty string", () => {
+    expect(estimatePromptTokens("")).toBe(0);
+  });
+
+  it("handles surrogate pairs (emoji / rare CJK) correctly", () => {
+    const text = "🎉";
+    expect(estimatePromptTokens(text)).toBeGreaterThan(0);
+  });
+});
+
+describe("renderPromptTemplate", () => {
+  it("replaces all placeholders in the template", () => {
+    const template = "<task>\n{{TASK_CONTEXT}}\n</task>\n<repo>\n{{REPO_INSTRUCTION_SUMMARIES}}\n</repo>";
+    const result = renderPromptTemplate(template, {
+      TASK_CONTEXT: "review target",
+      REPO_INSTRUCTION_SUMMARIES: "instruction list",
+    });
+
+    expect(result).toContain("review target");
+    expect(result).toContain("instruction list");
+    expect(result).not.toContain("{{TASK_CONTEXT}}");
+    expect(result).not.toContain("{{REPO_INSTRUCTION_SUMMARIES}}");
+  });
+
+  it("leaves unmatched placeholders unchanged", () => {
+    const template = "<task>\n{{UNKNOWN_PLACEHOLDER}}\n</task>";
+    const result = renderPromptTemplate(template, {});
+
+    expect(result).toContain("{{UNKNOWN_PLACEHOLDER}}");
+  });
+
+  it("replaces all occurrences of the same placeholder", () => {
+    const template = "{{TASK}} and {{TASK}} again";
+    const result = renderPromptTemplate(template, { TASK: "review" });
+
+    expect(result).toBe("review and review again");
+  });
+});
+
+describe("discoverRepoPromptAssets conflict detection", () => {
+  it("detects duplicate skill names and records conflicts", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-prompt-manager-skill-conflict-"));
+
+    try {
+      await writeWorkspaceFile(
+        tempDir,
+        ".agents/skills/security-check/SKILL.md",
+        ["---", "name: security-check", 'description: "First security skill."', "---", "", "# First", ""].join("\n"),
+      );
+      await writeWorkspaceFile(
+        tempDir,
+        ".agents/skills/security-check-alt/SKILL.md",
+        ["---", "name: security-check", 'description: "Second security skill."', "---", "", "# Second", ""].join("\n"),
+      );
+
+      const discovery = await discoverRepoPromptAssets({
+        sourceRoot: tempDir,
+        changedPaths: ["src/auth/login.ts"],
+      });
+
+      expect(discovery.conflicts.length).toBeGreaterThanOrEqual(1);
+      expect(discovery.conflicts.some((c) => c.reason.includes("duplicate skill name"))).toBe(true);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("detects overlapping path-instructions for the same changed paths", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-prompt-manager-path-conflict-"));
+
+    try {
+      await writeWorkspaceFile(
+        tempDir,
+        ".github/instructions/backend.instructions.md",
+        ['---', 'applyTo:', '  - "src/**/*.ts"', '---', '', '# Backend', ''].join("\n"),
+      );
+      await writeWorkspaceFile(
+        tempDir,
+        ".github/instructions/auth.instructions.md",
+        ['---', 'applyTo:', '  - "src/auth/**/*.ts"', '---', '', '# Auth', ''].join("\n"),
+      );
+
+      const discovery = await discoverRepoPromptAssets({
+        sourceRoot: tempDir,
+        changedPaths: ["src/auth/login.ts"],
+      });
+
+      expect(discovery.instructions.filter((i) => i.kind === "path_instruction")).toHaveLength(2);
+      expect(discovery.conflicts.length).toBeGreaterThanOrEqual(1);
+      expect(discovery.conflicts.some((c) => c.reason.includes("overlapping path-instructions"))).toBe(true);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("detects alias vs copilot-instruction conflicts", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-prompt-manager-alias-conflict-"));
+
+    try {
+      await writeWorkspaceFile(tempDir, "CLAUDE.md", "# Claude\nAlias instructions.\n");
+      await writeWorkspaceFile(tempDir, ".github/copilot-instructions.md", "# Copilot\nCopilot instructions.\n");
+
+      const discovery = await discoverRepoPromptAssets({
+        sourceRoot: tempDir,
+        changedPaths: ["src/a.ts"],
+      });
+
+      expect(discovery.conflicts.length).toBeGreaterThanOrEqual(1);
+      expect(discovery.conflicts.some((c) => c.reason.includes("copilot-instruction takes precedence"))).toBe(true);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("returns no conflicts for a clean source root", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-prompt-manager-clean-"));
+
+    try {
+      await writeWorkspaceFile(tempDir, "AGENTS.md", "# Root\nRoot rules.\n");
+
+      const discovery = await discoverRepoPromptAssets({
+        sourceRoot: tempDir,
+        changedPaths: ["src/a.ts"],
+      });
+
+      expect(discovery.conflicts).toEqual([]);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
   });
 });
