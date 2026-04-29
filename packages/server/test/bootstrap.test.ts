@@ -69,7 +69,7 @@ function makeConfig(overrides: Partial<AppConfig> = {}): AppConfig {
       default: "kilo",
       timeout_seconds: 600,
       auto_approve: true,
-      sandbox: { kind: "docker", engine: "auto" },
+      sandbox: { kind: "native" },
     },
     review: {
       incremental: true,
@@ -176,6 +176,53 @@ describe("resolveModelSpecFromConfig", () => {
 
     expect(model.providerId).toBe("p2");
     expect(model.modelId).toBe("llama3");
+  });
+
+  it("maps Plan ModelSpec provider fields from config", () => {
+    const config = makeConfig({
+      llm: {
+        providers: [
+          {
+            id: "azure-prod",
+            kind: "azure_openai",
+            base_url: "https://azure.example.com/openai",
+            api_key_env: "AZURE_KEY",
+            api_version: "2025-01-01-preview",
+            organization: "org-1",
+            extra_headers: { "x-test": "yes" },
+            extra_body: { safety: true },
+            extra_params: { temperature: 0.2 },
+            thinking_level: "high",
+            reasoning_effort: "medium",
+            response_format: { kind: "json_object" },
+            tool_choice: "auto",
+            parallel_tool_calls: false,
+            context_window: 128000,
+            supports_vision: true,
+          },
+        ],
+        fallback_chain: [{ provider: "azure-prod", model: "deployment-a", role: "heavy" }],
+      },
+    } as Partial<AppConfig>);
+
+    const model = resolveModelSpecFromConfig(config);
+
+    expect(model.providerKind).toBe("azure_openai");
+    expect(model.modelId).toBe("deployment-a");
+    expect(model.baseUrl).toBe("https://azure.example.com/openai");
+    expect(model.apiKeyEnv).toBe("AZURE_KEY");
+    expect(model.apiVersion).toBe("2025-01-01-preview");
+    expect(model.organization).toBe("org-1");
+    expect(model.extraHeaders).toEqual({ "x-test": "yes" });
+    expect(model.extraBody).toEqual({ safety: true });
+    expect(model.extraParams).toEqual({ temperature: 0.2 });
+    expect(model.thinkingLevel).toBe("high");
+    expect(model.reasoningEffort).toBe("medium");
+    expect(model.responseFormat).toEqual({ kind: "json_object" });
+    expect(model.toolChoice).toBe("auto");
+    expect(model.parallelToolCalls).toBe(false);
+    expect(model.contextWindow).toBe(128000);
+    expect(model.supportsVision).toBe(true);
   });
 });
 
@@ -427,12 +474,12 @@ describe("buildSourceRootResolver", () => {
 });
 
 describe("bootstrapServerApp", () => {
-  it("returns ServerAppOptions with orchestration", () => {
+  it("returns ServerAppOptions with orchestration", async () => {
     const originalKey = process.env.OPENAI_API_KEY;
     process.env.OPENAI_API_KEY = "test-key";
     try {
       const config = makeConfig();
-      const result = bootstrapServerApp({
+      const result = await bootstrapServerApp({
         config,
         baseSystemPrompt: "test prompt",
       });
@@ -442,6 +489,9 @@ describe("bootstrapServerApp", () => {
       expect(result.reviewOrchestration?.model.providerId).toBe("openai-prod");
       expect(result.reviewOrchestration?.dryRun).toBe(false);
       expect(typeof result.reviewOrchestration?.outputPublisherResolver).toBe("function");
+      expect(result.reviewOrchestration?.sandbox?.kind).toBe("native");
+      expect(result.reviewOrchestration?.agentAdapter?.kind).toBe("kilo");
+      expect(result.reviewOrchestration?.agentTimeoutMs).toBe(600_000);
     } finally {
       if (originalKey === undefined) {
         delete process.env.OPENAI_API_KEY;
@@ -451,14 +501,14 @@ describe("bootstrapServerApp", () => {
     }
   });
 
-  it("includes gitea config when a gitea trigger is configured", () => {
+  it("includes gitea config when a gitea trigger is configured", async () => {
     const originalKey = process.env.OPENAI_API_KEY;
     const originalSecret = process.env.GITEA_SECRET;
     process.env.OPENAI_API_KEY = "test-key";
     process.env.GITEA_SECRET = "test-secret";
     try {
       const config = makeConfig();
-      const result = bootstrapServerApp({
+      const result = await bootstrapServerApp({
         config,
         baseSystemPrompt: "test",
       });

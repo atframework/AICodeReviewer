@@ -1,3 +1,7 @@
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { describe, expect, it } from "vitest";
 
 import {
@@ -45,10 +49,11 @@ describe("createKiloAdapter", () => {
 
   describe("detect", () => {
     it("returns a detect result", async () => {
-      const adapter = createKiloAdapter();
+      const adapter = createKiloAdapter({ binary: process.execPath });
       const result = await adapter.detect();
-      expect(typeof result.available).toBe("boolean");
-      expect(result.binary).toBe("kilo");
+      expect(result.available).toBe(true);
+      expect(result.binary).toBe(process.execPath);
+      expect(result.version).toContain(process.version);
     });
   });
 
@@ -160,6 +165,35 @@ describe("createKiloAdapter", () => {
       );
 
       expect(result.envVars.KILO_API_KEY).toBe("${OPENAI_API_KEY}");
+      expect(result.envVars.KILO_API_KEY_P).toBe("${OPENAI_API_KEY}");
+    });
+
+    it("writes providers.json to the working directory", async () => {
+      const tempDir = await mkdtemp(join(tmpdir(), "aicr-kilo-adapter-"));
+
+      try {
+        const adapter = createKiloAdapter();
+        await adapter.materializeConfig(
+          {
+            providerKind: "openai_compatible",
+            providerId: "openai-prod",
+            modelId: "gpt-4o",
+            apiVersion: "2025-01-01-preview",
+            thinkingLevel: "high",
+            responseFormat: { kind: "json_object" },
+          },
+          tempDir,
+        );
+
+        const configJson = await readFile(join(tempDir, ".kilo", "providers.json"), "utf8");
+        const parsed = JSON.parse(configJson);
+        expect(parsed.providers[0]?.id).toBe("openai-prod");
+        expect(parsed.providers[0]?.apiVersion).toBe("2025-01-01-preview");
+        expect(parsed.providers[0]?.thinkingLevel).toBe("high");
+        expect(parsed.providers[0]?.responseFormat).toEqual({ kind: "json_object" });
+      } finally {
+        await rm(tempDir, { recursive: true, force: true });
+      }
     });
 
     it("returns empty env vars when no API key env", async () => {

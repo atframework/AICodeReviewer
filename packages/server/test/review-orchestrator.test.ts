@@ -2,9 +2,11 @@ import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
+import type { AgentAdapter } from "@aicr/agents";
 import { createReviewEvent } from "@aicr/core";
 import type { ChatCompletionClient, ModelSpec } from "@aicr/llm";
 import type { ReviewFinding } from "@aicr/outputs";
+import type { SandboxBackend, SandboxSpawnOptions } from "@aicr/sandbox";
 import { parseUnifiedDiff, type ChangeRange } from "@aicr/vcs";
 import { describe, expect, it } from "vitest";
 
@@ -198,6 +200,99 @@ describe("runReviewOrchestration", () => {
       expect(result.skipReason).toBe("lgtm");
       expect(result.dispatchCount).toBe(0);
     } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("runs an agent through sandbox with the prepared prompt on stdin", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-agent-sandbox-"));
+    const originalToken = process.env.AICR_AGENT_TOKEN;
+    process.env.AICR_AGENT_TOKEN = "resolved-token";
+
+    try {
+      await writeWorkspaceFile(tempDir, "src/app.ts", "const ok = true;\n");
+      const spawnCalls: SandboxSpawnOptions[] = [];
+      let teardownCount = 0;
+      const sandbox: SandboxBackend = {
+        kind: "native",
+        async materializeFs(layout) {
+          await mkdir(layout.agentDir, { recursive: true });
+          await mkdir(layout.tmpDir, { recursive: true });
+          return { agentDir: layout.agentDir, tmpDir: layout.tmpDir, mountSpecs: [] };
+        },
+        async spawn(spawnOptions) {
+          spawnCalls.push(spawnOptions);
+          return {
+            exitCode: 0,
+            stdout: JSON.stringify({ skipReason: "lgtm" }),
+            stderr: "agent log",
+            timedOut: false,
+            durationMs: 12,
+          };
+        },
+        async teardown() {
+          teardownCount += 1;
+        },
+      };
+      const agentAdapter: AgentAdapter = {
+        kind: "kilo",
+        async detect() {
+          return { available: true, binary: "kilo" };
+        },
+        buildCommand(task, spawnOptions) {
+          expect(task).toContain("<task>");
+          expect(spawnOptions.task).toBe(task);
+          expect(spawnOptions.workingDir).toContain("agent");
+          return ["kilo", "run", "--auto"];
+        },
+        async materializeConfig(_model, workingDir) {
+          return {
+            configFiles: new Map(),
+            envVars: { AICR_AGENT_TOKEN: "${AICR_AGENT_TOKEN}" },
+            workingDir,
+          };
+        },
+      };
+      const llm: ChatCompletionClient = {
+        async complete() {
+          throw new Error("LLM path should not be used when agent+sandbox are provided");
+        },
+      };
+
+      const result = await runReviewOrchestration(
+        {
+          reviewEvent: createReviewEventFixture(),
+          payload: {},
+          provider: "gitea",
+          eventName: "pull_request",
+        },
+        {
+          baseSystemPrompt: "<task>\n{{TASK_CONTEXT}}\n</task>",
+          sourceRootResolver: () => tempDir,
+          vcs: createVcs(tempDir),
+          llm,
+          model,
+          sandbox,
+          agentAdapter,
+          agentTimeoutMs: 30_000,
+        },
+      );
+
+      expect(result.status).toBe("skipped");
+      expect(result.skipReason).toBe("lgtm");
+      expect(result.agentResult?.stdout).toContain("lgtm");
+      expect(result.llmResult.raw).toMatchObject({ agent: "kilo", stderr: "agent log" });
+      expect(spawnCalls).toHaveLength(1);
+      expect(spawnCalls[0]?.stdin).toContain("Diff:");
+      expect(spawnCalls[0]?.env).toEqual({ AICR_AGENT_TOKEN: "resolved-token" });
+      expect(spawnCalls[0]?.timeoutMs).toBe(30_000);
+      expect(teardownCount).toBe(1);
+    } finally {
+      if (originalToken === undefined) {
+        delete process.env.AICR_AGENT_TOKEN;
+      } else {
+        process.env.AICR_AGENT_TOKEN = originalToken;
+      }
       await rm(tempDir, { recursive: true, force: true });
     }
   });

@@ -1,362 +1,445 @@
 import {
-	LlmProviderError,
-	type ChatCompletionClient,
-	type ChatCompletionInput,
-	type ChatCompletionResult,
-	type ChatCompletionUsage,
-	type ModelProviderKind,
-	type ModelSpec,
+  LlmProviderError,
+  type ChatCompletionClient,
+  type ChatCompletionInput,
+  type ChatCompletionResult,
+  type ChatCompletionUsage,
+  type ModelProviderKind,
+  type ModelSpec,
 } from "./index.js";
 
 export interface LlmGatewayFallbackEntry {
-	readonly provider: string;
-	readonly model: string;
-	readonly role: "light" | "heavy" | "any";
+  readonly provider: string;
+  readonly model: string;
+  readonly role: "light" | "heavy" | "any";
 }
 
 export interface LlmGatewayRetryConfig {
-	readonly maxAttempts?: number;
-	readonly respectRetryAfter?: boolean;
-	readonly backoff?: {
-		readonly kind: "exponential" | "linear" | "constant";
-		readonly baseMs?: number;
-		readonly maxMs?: number;
-		readonly jitter?: boolean;
-	};
-	readonly giveUpAfterSeconds?: number;
+  readonly maxAttempts?: number;
+  readonly respectRetryAfter?: boolean;
+  readonly backoff?: {
+    readonly kind: "exponential" | "linear" | "constant";
+    readonly baseMs?: number;
+    readonly maxMs?: number;
+    readonly jitter?: boolean;
+  };
+  readonly giveUpAfterSeconds?: number;
 }
 
 export interface LlmGatewayBudgetConfig {
-	readonly perRunUsd?: number;
-	readonly perRepoDailyUsd?: number;
+  readonly perRunUsd?: number;
+  readonly perRepoDailyUsd?: number;
 }
 
 export interface LlmGatewayPerProviderOverride {
-	readonly maxAttempts?: number;
-	readonly giveUpAfterSeconds?: number;
+  readonly maxAttempts?: number;
+  readonly giveUpAfterSeconds?: number;
 }
 
 export interface LlmGatewayProviderConfig {
-	readonly id: string;
-	readonly kind: ModelProviderKind;
-	readonly baseUrl?: string;
-	readonly apiKeyEnv?: string;
+  readonly id: string;
+  readonly kind: ModelProviderKind;
+  readonly baseUrl?: string;
+  readonly apiKeyEnv?: string;
+  readonly organization?: string;
+  readonly extraHeaders?: Readonly<Record<string, string>>;
+  readonly extraBody?: Readonly<Record<string, unknown>>;
+  readonly extraParams?: Readonly<Record<string, unknown>>;
+  readonly httpProxy?: string;
+  readonly timeoutMs?: number;
+  readonly maxRetries?: number;
+  readonly apiVersion?: string;
+  readonly vertexProject?: string;
+  readonly vertexLocation?: string;
+  readonly googleApplicationCredentialsEnv?: string;
+  readonly awsRegion?: string;
+  readonly awsAccessKeyEnv?: string;
+  readonly awsSecretKeyEnv?: string;
+  readonly awsSessionTokenEnv?: string;
+  readonly awsProfile?: string;
+  readonly anthropicVersion?: string;
+  readonly anthropicBeta?: readonly string[];
+  readonly cacheControl?: "ephemeral" | "off";
+  readonly thinkingLevel?: "off" | "minimal" | "low" | "medium" | "high" | "max";
+  readonly thinkingBudgetTokens?: number;
+  readonly reasoningEffort?: "minimal" | "low" | "medium" | "high";
+  readonly thinking?: { readonly enabled: boolean; readonly budgetTokens?: number };
+  readonly responseFormat?: { readonly kind: "json_schema" | "json_object" | "text"; readonly schema?: unknown };
+  readonly toolChoice?: "auto" | "none" | "required" | { readonly name: string };
+  readonly parallelToolCalls?: boolean;
+  readonly seed?: number;
+  readonly logitBias?: Readonly<Record<string, number>>;
+  readonly dropParams?: readonly string[];
+  readonly allowedOpenaiParams?: readonly string[];
+  readonly contextWindow?: number;
+  readonly supportsToolCall?: boolean;
+  readonly supportsVision?: boolean;
+  readonly supportsCachePrompt?: boolean;
+}
+
+export class DailyBudgetTracker {
+  private readonly dailySpend = new Map<string, number>();
+
+  private dayKey(): string {
+    const now = new Date();
+    return `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}-${String(now.getUTCDate()).padStart(2, "0")}`;
+  }
+
+  recordSpend(workspaceId: string, costUsd: number): number {
+    const key = `${this.dayKey()}:${workspaceId}`;
+    const current = this.dailySpend.get(key) ?? 0;
+    const updated = current + costUsd;
+    this.dailySpend.set(key, updated);
+    return updated;
+  }
+
+  getDailySpend(workspaceId: string): number {
+    const key = `${this.dayKey()}:${workspaceId}`;
+    return this.dailySpend.get(key) ?? 0;
+  }
 }
 
 export interface LlmGatewayOptions {
-	readonly clientFactory: (model: ModelSpec) => ChatCompletionClient;
-	readonly providers: readonly LlmGatewayProviderConfig[];
-	readonly fallbackChain: readonly LlmGatewayFallbackEntry[];
-	readonly retry?: LlmGatewayRetryConfig;
-	readonly budget?: LlmGatewayBudgetConfig;
-	readonly perProviderOverrides?: Readonly<Record<string, LlmGatewayPerProviderOverride>>;
-	readonly onFallback?: (reason: string, from: ModelSpec, to: ModelSpec) => void;
+  readonly clientFactory: (model: ModelSpec) => ChatCompletionClient;
+  readonly providers: readonly LlmGatewayProviderConfig[];
+  readonly fallbackChain: readonly LlmGatewayFallbackEntry[];
+  readonly retry?: LlmGatewayRetryConfig;
+  readonly budget?: LlmGatewayBudgetConfig;
+  readonly perProviderOverrides?: Readonly<Record<string, LlmGatewayPerProviderOverride>>;
+  readonly onFallback?: (reason: string, from: ModelSpec, to: ModelSpec) => void;
+  readonly workspaceId?: string;
+  readonly dailyBudgetTracker?: DailyBudgetTracker;
 }
 
 export interface LlmGatewayCallResult extends ChatCompletionResult {
-	readonly fallbackCount: number;
-	readonly retryCount: number;
-	readonly estimatedCostUsd: number;
+  readonly fallbackCount: number;
+  readonly retryCount: number;
+  readonly estimatedCostUsd: number;
+  readonly budgetExceeded?: "per_run" | "per_repo_daily";
 }
 
 export interface LlmGatewayChatClient extends ChatCompletionClient {
-	complete(input: ChatCompletionInput): Promise<LlmGatewayCallResult>;
+  complete(input: ChatCompletionInput): Promise<LlmGatewayCallResult>;
 }
 
 export class LlmBudgetExceededError extends Error {
-	readonly reason: string;
-	readonly limitUsd: number;
-	readonly estimatedCostUsd: number;
+  readonly reason: string;
+  readonly limitUsd: number;
+  readonly estimatedCostUsd: number;
 
-	constructor(reason: string, limitUsd: number, estimatedCostUsd: number) {
-		super(`LLM budget exceeded: ${reason} (limit $${limitUsd.toFixed(4)}, estimated $${estimatedCostUsd.toFixed(4)})`);
-		this.name = "LlmBudgetExceededError";
-		this.reason = reason;
-		this.limitUsd = limitUsd;
-		this.estimatedCostUsd = estimatedCostUsd;
-	}
+  constructor(reason: string, limitUsd: number, estimatedCostUsd: number) {
+    super(`LLM budget exceeded: ${reason} (limit $${limitUsd.toFixed(4)}, estimated $${estimatedCostUsd.toFixed(4)})`);
+    this.name = "LlmBudgetExceededError";
+    this.reason = reason;
+    this.limitUsd = limitUsd;
+    this.estimatedCostUsd = estimatedCostUsd;
+  }
 }
 
 export class LlmFallbackExhaustedError extends Error {
-	readonly lastError: unknown;
-	readonly attemptedModels: readonly ModelSpec[];
+  readonly lastError: unknown;
+  readonly attemptedModels: readonly ModelSpec[];
 
-	constructor(lastError: unknown, attemptedModels: readonly ModelSpec[]) {
-		super(`LLM fallback chain exhausted after ${attemptedModels.length} attempt(s).`);
-		this.name = "LlmFallbackExhaustedError";
-		this.lastError = lastError;
-		this.attemptedModels = attemptedModels;
-	}
+  constructor(lastError: unknown, attemptedModels: readonly ModelSpec[]) {
+    super(`LLM fallback chain exhausted after ${attemptedModels.length} attempt(s).`);
+    this.name = "LlmFallbackExhaustedError";
+    this.lastError = lastError;
+    this.attemptedModels = attemptedModels;
+  }
 }
 
 function sleep(ms: number): Promise<void> {
-	return new Promise((resolve) => {
-		setTimeout(resolve, ms);
-	});
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 function parseRetryAfter(value: string): number | undefined {
-	const trimmed = value.trim();
-	if (/^\d+$/u.test(trimmed)) {
-		const seconds = Number.parseInt(trimmed, 10);
-		return seconds * 1000;
-	}
+  const trimmed = value.trim();
+  if (/^\d+$/u.test(trimmed)) {
+    const seconds = Number.parseInt(trimmed, 10);
+    return seconds * 1000;
+  }
 
-	const date = Date.parse(trimmed);
-	if (!Number.isNaN(date)) {
-		return Math.max(0, date - Date.now());
-	}
+  const date = Date.parse(trimmed);
+  if (!Number.isNaN(date)) {
+    return Math.max(0, date - Date.now());
+  }
 
-	return undefined;
+  return undefined;
 }
 
 function computeBackoffDelay(
-	attempt: number,
-	retryConfig: LlmGatewayRetryConfig,
-	retryAfter?: string,
+  attempt: number,
+  retryConfig: LlmGatewayRetryConfig,
+  retryAfter?: string,
 ): number {
-	const baseMs = retryConfig.backoff?.baseMs ?? 1000;
-	const maxMs = retryConfig.backoff?.maxMs ?? 60000;
-	const jitter = retryConfig.backoff?.jitter ?? true;
-	const kind = retryConfig.backoff?.kind ?? "exponential";
+  const baseMs = retryConfig.backoff?.baseMs ?? 1000;
+  const maxMs = retryConfig.backoff?.maxMs ?? 60000;
+  const jitter = retryConfig.backoff?.jitter ?? true;
+  const kind = retryConfig.backoff?.kind ?? "exponential";
 
-	let delay: number;
-	if (retryConfig.respectRetryAfter && retryAfter) {
-		const parsedRetryAfter = parseRetryAfter(retryAfter);
-		if (parsedRetryAfter !== undefined) {
-			const computedDelay =
-				kind === "exponential"
-					? baseMs * 2 ** attempt
-					: kind === "linear"
-						? baseMs * (attempt + 1)
-						: baseMs;
-			delay = Math.min(parsedRetryAfter, computedDelay);
-		} else {
-			delay =
-				kind === "exponential"
-					? baseMs * 2 ** attempt
-					: kind === "linear"
-						? baseMs * (attempt + 1)
-						: baseMs;
-		}
-	} else {
-		delay =
-			kind === "exponential"
-				? baseMs * 2 ** attempt
-				: kind === "linear"
-					? baseMs * (attempt + 1)
-					: baseMs;
-	}
+  let delay: number;
+  if (retryConfig.respectRetryAfter && retryAfter) {
+    const parsedRetryAfter = parseRetryAfter(retryAfter);
+    if (parsedRetryAfter !== undefined) {
+      const computedDelay =
+        kind === "exponential"
+          ? baseMs * 2 ** attempt
+          : kind === "linear"
+            ? baseMs * (attempt + 1)
+            : baseMs;
+      delay = Math.min(parsedRetryAfter, computedDelay);
+    } else {
+      delay =
+        kind === "exponential"
+          ? baseMs * 2 ** attempt
+          : kind === "linear"
+            ? baseMs * (attempt + 1)
+            : baseMs;
+    }
+  } else {
+    delay =
+      kind === "exponential"
+        ? baseMs * 2 ** attempt
+        : kind === "linear"
+          ? baseMs * (attempt + 1)
+          : baseMs;
+  }
 
-	if (jitter) {
-		delay = delay * (0.5 + Math.random() * 0.5);
-	}
+  if (jitter) {
+    delay = delay * (0.5 + Math.random() * 0.5);
+  }
 
-	return Math.min(delay, maxMs);
+  return Math.min(delay, maxMs);
 }
 
 function isContextOverflowError(error: unknown): boolean {
-	if (!(error instanceof Error)) {
-		return false;
-	}
+  if (!(error instanceof Error)) {
+    return false;
+  }
 
-	const message = `${error.message}\n${error instanceof LlmProviderError ? error.responseBody ?? "" : ""}`;
-	return /context(?:_|\s|-)?(?:length|window|overflow)|maximum context|too many tokens/iu.test(message);
+  const message = `${error.message}\n${error instanceof LlmProviderError ? error.responseBody ?? "" : ""}`;
+  return /context(?:_|\s|-)?(?:length|window|overflow)|maximum context|too many tokens/iu.test(message);
 }
 
 function isFallbackEligibleError(error: unknown): boolean {
-	if (error instanceof LlmProviderError) {
-		if (error.status === 429) return true;
-		if (error.status && error.status >= 500) return true;
-	}
+  if (error instanceof LlmProviderError) {
+    if (error.status === 429) return true;
+    if (error.status && error.status >= 500) return true;
+  }
 
-	if (isContextOverflowError(error)) return true;
-	if (error instanceof Error && error.name === "AbortError") return true;
-	if (error instanceof Error && error.name === "TimeoutError") return true;
+  if (isContextOverflowError(error)) return true;
+  if (error instanceof Error && error.name === "AbortError") return true;
+  if (error instanceof Error && error.name === "TimeoutError") return true;
 
-	return false;
+  return false;
 }
 
 function getProviderOverride(
-	providerId: string,
-	overrides: Readonly<Record<string, LlmGatewayPerProviderOverride>> | undefined,
+  providerId: string,
+  overrides: Readonly<Record<string, LlmGatewayPerProviderOverride>> | undefined,
 ): LlmGatewayPerProviderOverride | undefined {
-	return overrides?.[providerId];
+  return overrides?.[providerId];
 }
 
 function resolveRetryConfig(
-	providerId: string,
-	baseRetry: LlmGatewayRetryConfig | undefined,
-	overrides: Readonly<Record<string, LlmGatewayPerProviderOverride>> | undefined,
+  providerId: string,
+  baseRetry: LlmGatewayRetryConfig | undefined,
+  overrides: Readonly<Record<string, LlmGatewayPerProviderOverride>> | undefined,
 ): LlmGatewayRetryConfig {
-	const providerOverride = getProviderOverride(providerId, overrides);
-	if (!providerOverride) {
-		return baseRetry ?? {};
-	}
+  const providerOverride = getProviderOverride(providerId, overrides);
+  if (!providerOverride) {
+    return baseRetry ?? {};
+  }
 
-	return {
-		...baseRetry,
-		...(providerOverride.maxAttempts !== undefined ? { maxAttempts: providerOverride.maxAttempts } : {}),
-		...(providerOverride.giveUpAfterSeconds !== undefined
-			? { giveUpAfterSeconds: providerOverride.giveUpAfterSeconds }
-			: {}),
-	};
+  return {
+    ...baseRetry,
+    ...(providerOverride.maxAttempts !== undefined ? { maxAttempts: providerOverride.maxAttempts } : {}),
+    ...(providerOverride.giveUpAfterSeconds !== undefined
+      ? { giveUpAfterSeconds: providerOverride.giveUpAfterSeconds }
+      : {}),
+  };
 }
 
 function findCurrentFallbackIndex(
-	model: ModelSpec,
-	fallbackChain: readonly LlmGatewayFallbackEntry[],
+  model: ModelSpec,
+  fallbackChain: readonly LlmGatewayFallbackEntry[],
 ): number {
-	for (let i = 0; i < fallbackChain.length; i++) {
-		const entry = fallbackChain[i];
-		if (entry && entry.provider === model.providerId && entry.model === model.modelId) {
-			return i;
-		}
-	}
+  for (let i = 0; i < fallbackChain.length; i++) {
+    const entry = fallbackChain[i];
+    if (entry && entry.provider === model.providerId && entry.model === model.modelId) {
+      return i;
+    }
+  }
 
-	return -1;
+  return -1;
 }
 
 function findNextFallbackEntry(
-	currentModel: ModelSpec,
-	fallbackChain: readonly LlmGatewayFallbackEntry[],
-	usedIndices: Set<number>,
+  currentModel: ModelSpec,
+  fallbackChain: readonly LlmGatewayFallbackEntry[],
+  usedIndices: Set<number>,
 ): { entry: LlmGatewayFallbackEntry; index: number } | undefined {
-	const currentIndex = findCurrentFallbackIndex(currentModel, fallbackChain);
-	for (let i = currentIndex + 1; i < fallbackChain.length; i++) {
-		if (!usedIndices.has(i)) {
-			const entry = fallbackChain[i];
-			if (entry) {
-				return { entry, index: i };
-			}
-		}
-	}
+  const currentIndex = findCurrentFallbackIndex(currentModel, fallbackChain);
+  for (let i = currentIndex + 1; i < fallbackChain.length; i++) {
+    if (!usedIndices.has(i)) {
+      const entry = fallbackChain[i];
+      if (entry) {
+        return { entry, index: i };
+      }
+    }
+  }
 
-	return undefined;
+  return undefined;
 }
 
 function buildModelSpecFromFallback(
-	entry: LlmGatewayFallbackEntry,
-	providers: readonly LlmGatewayProviderConfig[],
+  entry: LlmGatewayFallbackEntry,
+  providers: readonly LlmGatewayProviderConfig[],
 ): ModelSpec {
-	const provider = providers.find((p) => p.id === entry.provider);
-	if (!provider) {
-		throw new LlmProviderError(`Fallback provider "${entry.provider}" not found in configured providers.`);
-	}
+  const provider = providers.find((p) => p.id === entry.provider);
+  if (!provider) {
+    throw new LlmProviderError(`Fallback provider "${entry.provider}" not found in configured providers.`);
+  }
 
-	return {
-		providerKind: provider.kind,
-		providerId: provider.id,
-		modelId: entry.model,
-		...(provider.baseUrl ? { baseUrl: provider.baseUrl } : {}),
-		...(provider.apiKeyEnv ? { apiKeyEnv: provider.apiKeyEnv } : {}),
-	};
+  const { id: _id, kind: _kind, ...providerFields } = provider;
+
+  return {
+    providerKind: provider.kind,
+    providerId: provider.id,
+    modelId: entry.model,
+    ...providerFields,
+  };
 }
 
 function estimateCost(usage: ChatCompletionUsage | undefined): number {
-	if (!usage) return 0;
-	const tokens = usage.totalTokens ?? (usage.promptTokens ?? 0) + (usage.completionTokens ?? 0);
-	return (tokens / 1000) * 0.002;
+  if (!usage) return 0;
+  const tokens = usage.totalTokens ?? (usage.promptTokens ?? 0) + (usage.completionTokens ?? 0);
+  return (tokens / 1000) * 0.002;
 }
 
 export function createResilientChatClient(options: LlmGatewayOptions): LlmGatewayChatClient {
-	const {
-		clientFactory,
-		providers,
-		fallbackChain,
-		retry: baseRetry,
-		budget,
-		perProviderOverrides,
-		onFallback,
-	} = options;
+  const {
+    clientFactory,
+    providers,
+    fallbackChain,
+    retry: baseRetry,
+    budget,
+    perProviderOverrides,
+    onFallback,
+    workspaceId,
+    dailyBudgetTracker,
+  } = options;
 
-	return {
-		async complete(input: ChatCompletionInput): Promise<LlmGatewayCallResult> {
-			let currentModel = input.model;
-			const attemptedModels: ModelSpec[] = [currentModel];
-			const usedFallbackIndices = new Set<number>();
-			let fallbackCount = 0;
-			let totalRetryCount = 0;
-			let accumulatedCost = 0;
-			let lastError: unknown;
+  return {
+    async complete(input: ChatCompletionInput): Promise<LlmGatewayCallResult> {
+      let currentModel = input.model;
+      const attemptedModels: ModelSpec[] = [currentModel];
+      const usedFallbackIndices = new Set<number>();
+      let fallbackCount = 0;
+      let totalRetryCount = 0;
+      let accumulatedCost = 0;
+      let lastError: unknown;
 
-			while (true) {
-				const retryConfig = resolveRetryConfig(currentModel.providerId, baseRetry, perProviderOverrides);
-				const maxAttempts = Math.max(1, retryConfig.maxAttempts ?? 1);
-				const giveUpAfterSeconds = Math.max(0, retryConfig.giveUpAfterSeconds ?? 300);
-				const startTime = Date.now();
-				let attempt = 0;
+      if (budget?.perRepoDailyUsd && workspaceId && dailyBudgetTracker) {
+        const dailySpend = dailyBudgetTracker.getDailySpend(workspaceId);
+        if (dailySpend >= budget.perRepoDailyUsd) {
+          throw new LlmBudgetExceededError(
+            "per_repo_daily_usd exceeded",
+            budget.perRepoDailyUsd,
+            dailySpend,
+          );
+        }
+      }
 
-				while (attempt < maxAttempts) {
-					try {
-						const client = clientFactory(currentModel);
-						const result = await client.complete({ ...input, model: currentModel });
-						const callCost = estimateCost(result.usage);
-						accumulatedCost += callCost;
+      while (true) {
+        const retryConfig = resolveRetryConfig(currentModel.providerId, baseRetry, perProviderOverrides);
+        const maxAttempts = Math.max(1, retryConfig.maxAttempts ?? 1);
+        const giveUpAfterSeconds = Math.max(0, retryConfig.giveUpAfterSeconds ?? 300);
+        const startTime = Date.now();
+        let attempt = 0;
 
-						if (budget?.perRunUsd && accumulatedCost > budget.perRunUsd) {
-							throw new LlmBudgetExceededError("per_run_usd exceeded", budget.perRunUsd, accumulatedCost);
-						}
+        while (attempt < maxAttempts) {
+          try {
+            const client = clientFactory(currentModel);
+            const result = await client.complete({ ...input, model: currentModel });
+            const callCost = estimateCost(result.usage);
+            accumulatedCost += callCost;
 
-						return {
-							...result,
-							fallbackCount,
-							retryCount: totalRetryCount,
-							estimatedCostUsd: accumulatedCost,
-						};
-					} catch (error) {
-						lastError = error;
-						const elapsedSeconds = (Date.now() - startTime) / 1000;
+            if (workspaceId && dailyBudgetTracker && callCost > 0) {
+              dailyBudgetTracker.recordSpend(workspaceId, callCost);
+            }
 
-						if (error instanceof LlmBudgetExceededError) {
-							throw error;
-						}
+            if (budget?.perRunUsd && accumulatedCost > budget.perRunUsd) {
+              return {
+                ...result,
+                fallbackCount,
+                retryCount: totalRetryCount,
+                estimatedCostUsd: accumulatedCost,
+                budgetExceeded: "per_run" as const,
+              };
+            }
 
-						if (!isFallbackEligibleError(error)) {
-							throw error;
-						}
+            return {
+              ...result,
+              fallbackCount,
+              retryCount: totalRetryCount,
+              estimatedCostUsd: accumulatedCost,
+            };
+          } catch (error) {
+            lastError = error;
+            const elapsedSeconds = (Date.now() - startTime) / 1000;
 
-						const hasRetryAttemptRemaining = attempt + 1 < maxAttempts;
-						if (!hasRetryAttemptRemaining || elapsedSeconds >= giveUpAfterSeconds) {
-							break;
-						}
+            if (error instanceof LlmBudgetExceededError) {
+              throw error;
+            }
 
-						const retryAfter =
-							error instanceof LlmProviderError ? error.retryAfter : undefined;
-						const delay = computeBackoffDelay(attempt, retryConfig, retryAfter);
-						if (elapsedSeconds + delay / 1000 >= giveUpAfterSeconds) {
-							break;
-						}
+            if (!isFallbackEligibleError(error)) {
+              throw error;
+            }
 
-						await sleep(delay);
-						attempt++;
-						totalRetryCount++;
-					}
-				}
+            const hasRetryAttemptRemaining = attempt + 1 < maxAttempts;
+            if (!hasRetryAttemptRemaining || elapsedSeconds >= giveUpAfterSeconds) {
+              break;
+            }
 
-				const nextFallback = findNextFallbackEntry(currentModel, fallbackChain, usedFallbackIndices);
-				if (!nextFallback) {
-					if (lastError instanceof LlmBudgetExceededError) {
-						throw lastError;
-					}
+            const retryAfter =
+              error instanceof LlmProviderError ? error.retryAfter : undefined;
+            const delay = computeBackoffDelay(attempt, retryConfig, retryAfter);
+            if (elapsedSeconds + delay / 1000 >= giveUpAfterSeconds) {
+              break;
+            }
 
-					throw new LlmFallbackExhaustedError(lastError, attemptedModels);
-				}
+            await sleep(delay);
+            attempt++;
+            totalRetryCount++;
+          }
+        }
 
-				const nextModel = buildModelSpecFromFallback(nextFallback.entry, providers);
-				usedFallbackIndices.add(nextFallback.index);
-				if (onFallback) {
-					onFallback(
-						lastError instanceof Error ? lastError.message : String(lastError),
-						currentModel,
-						nextModel,
-					);
-				}
+        const nextFallback = findNextFallbackEntry(currentModel, fallbackChain, usedFallbackIndices);
+        if (!nextFallback) {
+          if (lastError instanceof LlmBudgetExceededError) {
+            throw lastError;
+          }
 
-				currentModel = nextModel;
-				attemptedModels.push(currentModel);
-				fallbackCount++;
-			}
-		},
-	};
+          throw new LlmFallbackExhaustedError(lastError, attemptedModels);
+        }
+
+        const nextModel = buildModelSpecFromFallback(nextFallback.entry, providers);
+        usedFallbackIndices.add(nextFallback.index);
+        if (onFallback) {
+          onFallback(
+            lastError instanceof Error ? lastError.message : String(lastError),
+            currentModel,
+            nextModel,
+          );
+        }
+
+        currentModel = nextModel;
+        attemptedModels.push(currentModel);
+        fallbackCount++;
+      }
+    },
+  };
 }

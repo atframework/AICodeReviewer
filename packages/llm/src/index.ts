@@ -20,10 +20,36 @@ export interface ModelSpec {
 	readonly extraHeaders?: Readonly<Record<string, string>>;
 	readonly extraBody?: Readonly<Record<string, unknown>>;
 	readonly extraParams?: Readonly<Record<string, unknown>>;
+	readonly httpProxy?: string;
 	readonly timeoutMs?: number;
 	readonly maxRetries?: number;
+	readonly apiVersion?: string;
+	readonly vertexProject?: string;
+	readonly vertexLocation?: string;
+	readonly googleApplicationCredentialsEnv?: string;
+	readonly awsRegion?: string;
+	readonly awsAccessKeyEnv?: string;
+	readonly awsSecretKeyEnv?: string;
+	readonly awsSessionTokenEnv?: string;
+	readonly awsProfile?: string;
+	readonly anthropicVersion?: string;
+	readonly anthropicBeta?: readonly string[];
+	readonly cacheControl?: "ephemeral" | "off";
+	readonly thinkingLevel?: "off" | "minimal" | "low" | "medium" | "high" | "max";
+	readonly thinkingBudgetTokens?: number;
+	readonly reasoningEffort?: "minimal" | "low" | "medium" | "high";
+	readonly thinking?: { readonly enabled: boolean; readonly budgetTokens?: number };
+	readonly responseFormat?: { readonly kind: "json_schema" | "json_object" | "text"; readonly schema?: unknown };
+	readonly toolChoice?: "auto" | "none" | "required" | { readonly name: string };
+	readonly parallelToolCalls?: boolean;
+	readonly seed?: number;
+	readonly logitBias?: Readonly<Record<string, number>>;
+	readonly dropParams?: readonly string[];
+	readonly allowedOpenaiParams?: readonly string[];
 	readonly contextWindow?: number;
 	readonly supportsToolCall?: boolean;
+	readonly supportsVision?: boolean;
+	readonly supportsCachePrompt?: boolean;
 }
 
 export type ChatMessageRole = "system" | "user" | "assistant" | "tool";
@@ -209,6 +235,7 @@ function extractUsage(raw: unknown): ChatCompletionUsage | undefined {
 
 export {
 	createResilientChatClient,
+	DailyBudgetTracker,
 	LlmBudgetExceededError,
 	LlmFallbackExhaustedError,
 	type LlmGatewayBudgetConfig,
@@ -220,6 +247,20 @@ export {
 	type LlmGatewayCallResult,
 	type LlmGatewayChatClient,
 } from "./gateway.js";
+
+export {
+	buildCompactedDiff,
+	compressDiff,
+	estimatePromptTokenCount,
+	generatePerFileSummaries,
+	scoreAndSelectHunks,
+	shouldTriggerCompression,
+	type CompressionConfig,
+	type CompressionInput,
+	type CompressionResult,
+	type CompressDiffOptions,
+	type ScoredHunk,
+} from "./compression.js";
 
 export function createOpenAICompatibleChatClient(
 	options: OpenAICompatibleClientOptions = {},

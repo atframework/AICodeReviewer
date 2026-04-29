@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -526,6 +526,33 @@ describe("assemblePrompt", () => {
       VAL: "$1\\2",
     });
     expect(result).toBe("value: $1\\2");
+  });
+
+  it("assembles the checked-in system prompt without unresolved runtime placeholders", async () => {
+    const baseSystemPrompt = await readFile(
+      join(process.cwd(), "prompts/system/code-reviewer.system.md"),
+      "utf8",
+    );
+
+    const output = assemblePrompt({
+      baseSystemPrompt,
+      discovery: {
+        instructions: [],
+        skills: [],
+        droppedRefs: [],
+        conflicts: [],
+      },
+      taskContext: "Changed files: src/app.ts",
+    });
+
+    expect(output.systemPrompt).toContain("<mission>");
+    expect(output.systemPrompt).toContain("<tool_protocol>");
+    expect(output.systemPrompt).toContain("<task_context>");
+    expect(output.systemPrompt).toContain("Changed files: src/app.ts");
+    expect(output.systemPrompt).not.toContain("{{REPO_INSTRUCTION_SUMMARIES}}");
+    expect(output.systemPrompt).not.toContain("{{ACTIVE_SKILL_SUMMARIES}}");
+    expect(output.systemPrompt).not.toContain("{{MEMORY_HINTS}}");
+    expect(output.systemPrompt).not.toContain("{{TASK_CONTEXT}}");
   });
 });
 

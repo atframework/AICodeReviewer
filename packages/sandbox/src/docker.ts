@@ -142,6 +142,7 @@ export function createDockerSandboxBackend(options: DockerSandboxOptions = {}): 
   const commandRunner = options.commandRunner ?? execContainerCommand;
   const containerIds: string[] = [];
   let envFiles: string[] = [];
+  let activeMounts: readonly SandboxMountSpec[] = [];
 
   return {
     kind,
@@ -168,6 +169,13 @@ export function createDockerSandboxBackend(options: DockerSandboxOptions = {}): 
         envArgs.push("--env-file", envFilePath);
       }
 
+      const volumeArgs = activeMounts.length > 0
+        ? activeMounts.flatMap((mount) => [
+            "-v",
+            `${mount.hostPath}:${mount.containerPath}:${mount.readOnly ? "ro" : "rw"}`,
+          ])
+        : ["-v", `${spawnOptions.cwd}:/workspace/agent:rw`];
+
       const dockerArgs = [
         "run",
         "--name", containerName,
@@ -175,7 +183,7 @@ export function createDockerSandboxBackend(options: DockerSandboxOptions = {}): 
         "--init",
         "--network", "none",
         ...envArgs,
-        "-v", `${spawnOptions.cwd}:/workspace/agent:rw`,
+        ...volumeArgs,
         image,
         ...spawnOptions.command,
       ];
@@ -220,6 +228,8 @@ export function createDockerSandboxBackend(options: DockerSandboxOptions = {}): 
         mountSpecs.push(...layout.extraMounts);
       }
 
+      activeMounts = mountSpecs;
+
       return { agentDir: layout.agentDir, tmpDir: layout.tmpDir, mountSpecs };
     },
 
@@ -234,6 +244,7 @@ export function createDockerSandboxBackend(options: DockerSandboxOptions = {}): 
         }
       }
       containerIds.length = 0;
+      activeMounts = [];
     },
   };
 
