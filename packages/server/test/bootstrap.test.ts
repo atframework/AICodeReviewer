@@ -107,6 +107,35 @@ describe("resolveModelSpecFromConfig", () => {
     expect(model.apiKeyEnv).toBe("OPENAI_API_KEY");
   });
 
+  it("uses the first fallback_chain entry as the default model route", () => {
+    const config = makeConfig({
+      llm: {
+        providers: [
+          { id: "ollama-local", kind: "ollama", base_url: "http://localhost:11434/v1" },
+          { id: "openai-prod", kind: "openai_compatible", base_url: "https://api.openai.com/v1" },
+        ],
+        fallback_chain: [{ provider: "openai-prod", model: "gpt-4o", role: "heavy" }],
+      },
+    } as Partial<AppConfig>);
+
+    const model = resolveModelSpecFromConfig(config);
+
+    expect(model.providerId).toBe("openai-prod");
+    expect(model.modelId).toBe("gpt-4o");
+    expect(model.baseUrl).toBe("https://api.openai.com/v1");
+  });
+
+  it("throws when the first fallback_chain provider is not configured", () => {
+    const config = makeConfig({
+      llm: {
+        providers: [{ id: "openai-prod", kind: "openai_compatible" }],
+        fallback_chain: [{ provider: "missing-provider", model: "gpt-4o", role: "heavy" }],
+      },
+    } as Partial<AppConfig>);
+
+    expect(() => resolveModelSpecFromConfig(config)).toThrow('LLM provider "missing-provider" not found');
+  });
+
   it("falls back to gpt-4o-mini when no fallback entry matches", () => {
     const config = makeConfig({
       llm: {
