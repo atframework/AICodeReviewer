@@ -48,16 +48,26 @@ importers:
         specifier: ^3.2.4
         version: 3.2.4(@types/debug@4.1.13)(@types/node@24.12.2)(tsx@4.21.0)(yaml@2.8.3)
 
-  packages/agents: {}
+  packages/agents:
+    dependencies:
+      '@aicr/llm':
+        specifier: workspace:*
+        version: link:../llm
 
   packages/cli:
     dependencies:
+      '@aicr/agents':
+        specifier: workspace:*
+        version: link:../agents
       '@aicr/core':
         specifier: workspace:*
         version: link:../core
       '@aicr/llm':
         specifier: workspace:*
         version: link:../llm
+      '@aicr/sandbox':
+        specifier: workspace:*
+        version: link:../sandbox
       '@aicr/server':
         specifier: workspace:*
         version: link:../server
@@ -95,6 +105,9 @@ importers:
 
   packages/server:
     dependencies:
+      '@aicr/agents':
+        specifier: workspace:*
+        version: link:../agents
       '@aicr/core':
         specifier: workspace:*
         version: link:../core
@@ -107,6 +120,9 @@ importers:
       '@aicr/outputs':
         specifier: workspace:*
         version: link:../outputs
+      '@aicr/sandbox':
+        specifier: workspace:*
+        version: link:../sandbox
       '@aicr/vcs':
         specifier: workspace:*
         version: link:../vcs

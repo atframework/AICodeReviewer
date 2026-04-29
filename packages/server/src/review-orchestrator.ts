@@ -5,6 +5,7 @@ import {
   type PreparedReviewPrompt,
   type ReviewEvent,
 } from "@aicr/core";
+import type { AgentAdapter } from "@aicr/agents";
 import type { ChatCompletionClient, ChatCompletionResult, ModelSpec } from "@aicr/llm";
 import {
   AicrOutputCollector,
@@ -16,6 +17,7 @@ import {
   type PublishFindingInput,
 } from "@aicr/mcp-output";
 import type { DispatchResult, ReviewFinding } from "@aicr/outputs";
+import type { SandboxBackend } from "@aicr/sandbox";
 import type { ChangeRange, ExtraContextRequest, ParsedDiff, VcsAdapter } from "@aicr/vcs";
 
 export interface DiffCapableVcsAdapter extends VcsAdapter {
@@ -25,6 +27,10 @@ export interface DiffCapableVcsAdapter extends VcsAdapter {
 export interface ReviewOutputPublisher {
   publishFinding(finding: ReviewFinding): Promise<DispatchResult>;
 }
+
+export type ReviewOutputPublisherResolver = (
+  context: ReviewOrchestrationContext,
+) => ReviewOutputPublisher | undefined;
 
 export interface ReviewOrchestrationContext {
   readonly reviewEvent: ReviewEvent;
@@ -40,12 +46,16 @@ export interface ServerReviewOrchestrationOptions {
   readonly llm: ChatCompletionClient;
   readonly model: ModelSpec;
   readonly outputPublisher?: ReviewOutputPublisher;
+  readonly outputPublisherResolver?: ReviewOutputPublisherResolver;
   readonly changedPathsResolver?: (context: ReviewOrchestrationContext) => readonly string[] | undefined;
   readonly operatorOverrides?: readonly string[];
   readonly memoryHints?: readonly string[];
   readonly maxPromptTokens?: number;
   readonly diffContextLines?: number;
   readonly dryRun?: boolean;
+  readonly sandbox?: SandboxBackend;
+  readonly agentAdapter?: AgentAdapter;
+  readonly agentTimeoutMs?: number;
   readonly taskContextBuilder?: (
     reviewEvent: ReviewEvent,
     changedPaths: readonly string[],
@@ -330,15 +340,16 @@ export async function runReviewOrchestration(
   await callAicrTools(llmResult.content, tools);
   const outputState = collector.snapshot();
   const dispatchResults: DispatchResult[] = [];
+  const outputPublisher = options.outputPublisher ?? options.outputPublisherResolver?.(context);
 
-  if (!options.dryRun && options.outputPublisher) {
+  if (!options.dryRun && outputPublisher) {
     for (const finding of outputState.findings) {
-      dispatchResults.push(await options.outputPublisher.publishFinding(toReviewFinding(finding)));
+      dispatchResults.push(await outputPublisher.publishFinding(toReviewFinding(finding)));
     }
   }
 
   const implicitSkipReason = !options.dryRun && !outputState.skipReason && dispatchResults.length === 0
-    ? outputState.findings.length > 0 && !options.outputPublisher
+    ? outputState.findings.length > 0 && !outputPublisher
       ? "no_output_publisher"
       : "no_dispatchable_findings"
     : undefined;

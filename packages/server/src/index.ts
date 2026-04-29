@@ -242,6 +242,7 @@ export type {
   ReviewOrchestrationResult,
   ReviewOrchestrationWebhookSummary,
   ReviewOutputPublisher,
+  ReviewOutputPublisherResolver,
   ServerReviewOrchestrationOptions,
 } from "./review-orchestrator.js";
 
@@ -250,7 +251,10 @@ export {
   buildSourceRootResolver,
   createLlmClientFromModelSpec,
   createOutputPublisherFromConfig,
+  createOutputPublisherResolverFromConfig,
+  createSandboxBackendFromConfig,
   createVcsAdapterFromConfig,
+  resolveAgentAdapterFromConfig,
   resolveGiteaWebhookConfig,
   resolveModelSpecFromConfig,
 } from "./bootstrap.js";

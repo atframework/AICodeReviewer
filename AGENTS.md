@@ -49,6 +49,11 @@ These issues have been found and fixed in prior sessions. Before making changes,
 8. **No unused imports**: Always verify that every import is used before committing. The CLI `app.ts` previously had an unused `ReviewEvent` import.
 9. **DRY utility functions**: `normalizePath`, `normalizeChangedPath`, and `isPlainObject` live in `packages/core/src/utils.ts`. Import from `@aicr/core` or the local `./utils.js` — do not duplicate these functions in other files.
 10. **Sandbox and agents packages must have tests**: Even if they only export a constant, create `test/index.test.ts` to verify the export.
+11. **Sandbox `exactOptionalPropertyTypes`**: When passing optional fields from config to sandbox/agent constructors, use conditional spread (`options.image ? { image: options.image } : {}`) instead of direct assignment to avoid `undefined` type mismatches.
+12. **Agent adapter factory must guard optional fields**: `createAgentAdapter` must not pass `undefined` binary to `createKiloAdapter`; use conditional construction instead.
+13. **`execFile` does not support `input` on Node 20**: For passing stdin to child processes in sandbox/docker, use `spawn` directly rather than `execFile` with `input` option.
+14. **Serve bootstrap must publish when configured**: `bootstrapServerApp` must not force `dryRun: true`; use a per-event `outputPublisherResolver` so Gitea webhook payloads can resolve PR numbers and publish line comments.
+15. **Container sandbox engine and allowlist must be enforced**: Docker-compatible sandbox code must invoke the resolved `docker`/`podman` CLI and validate commands against `ALLOWED_COMMANDS` before spawning containers.
 
 ## Default verification order
 

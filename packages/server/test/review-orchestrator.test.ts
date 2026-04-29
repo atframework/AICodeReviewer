@@ -690,6 +690,58 @@ describe("runReviewOrchestration error paths", () => {
     }
   });
 
+  it("uses outputPublisherResolver for per-event publishing", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-publisher-resolver-"));
+
+    try {
+      await writeWorkspaceFile(tempDir, "src/app.ts", "const ok = true;\n");
+      const llm: ChatCompletionClient = {
+        async complete(input) {
+          return {
+            providerId: input.model.providerId,
+            modelId: input.model.modelId,
+            content: JSON.stringify({
+              findings: [
+                { file: "src/app.ts", line: 1, severity: "high", category: "correctness", message: "Issue." },
+              ],
+            }),
+            raw: {},
+          };
+        },
+      };
+      const published: ReviewFinding[] = [];
+
+      const result = await runReviewOrchestration(
+        {
+          reviewEvent: createReviewEventFixture(),
+          payload: { pull_request: { number: 42 } },
+          provider: "gitea",
+          eventName: "pull_request",
+        },
+        {
+          baseSystemPrompt: "<task>\n{{TASK_CONTEXT}}\n</task>",
+          sourceRootResolver: () => tempDir,
+          vcs: createVcs(tempDir),
+          llm,
+          model,
+          dryRun: false,
+          outputPublisherResolver: () => ({
+            async publishFinding(finding) {
+              published.push(finding);
+              return { channel: "resolved", status: "published", externalId: "42", raw: {} };
+            },
+          }),
+        },
+      );
+
+      expect(result.status).toBe("published");
+      expect(result.dispatchCount).toBe(1);
+      expect(published).toHaveLength(1);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("rejects LLM JSON output that is not an object", async () => {
     const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-array-json-"));
 

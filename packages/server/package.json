@@ -15,10 +15,12 @@
     "build": "tsc -p tsconfig.json"
   },
   "dependencies": {
+    "@aicr/agents": "workspace:*",
     "@aicr/core": "workspace:*",
     "@aicr/llm": "workspace:*",
     "@aicr/mcp-output": "workspace:*",
     "@aicr/outputs": "workspace:*",
+    "@aicr/sandbox": "workspace:*",
     "@aicr/vcs": "workspace:*",
     "hono": "^4.7.7",
     "zod": "^3.24.4"

@@ -19,8 +19,10 @@
     "dev": "tsx src/index.ts"
   },
   "dependencies": {
+    "@aicr/agents": "workspace:*",
     "@aicr/core": "workspace:*",
     "@aicr/llm": "workspace:*",
+    "@aicr/sandbox": "workspace:*",
     "@aicr/server": "workspace:*",
     "@aicr/vcs": "workspace:*"
   }

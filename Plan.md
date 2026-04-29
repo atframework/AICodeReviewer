@@ -917,14 +917,15 @@ workspaces/<workspace_id>/
 | M0 | 已完成 | pnpm monorepo、strict TypeScript、ESLint/Vitest/CI、Zod 配置合并、pino/OTel 骨架、Drizzle schema、Dockerfile 基线、`AGENTS.md` / `.agents/skills/` 骨架与相关单元测试 | 无 |
 | M0.5 | 进行中 | `docs/prompt-research.md` 草案、`prompts/system/code-reviewer.system.md` 草案、默认提示词分层模板、Prompt Manager 组装契约、repo-local AI 资产发现 / 路径过滤 / 优先级 / 冲突记录实现与单元测试、severity 推荐语义与回归样例清单 | 补齐低置信来源的实现期实测/确认、完成调研结论评审 |
 | M1 | 进行中（下一轮主线） | Hono webhook receiver、Gitea/Forgejo 签名校验、`ReviewEvent` 归一化、invalid JSON / invalid payload 处理、Git VCS adapter 最小实现、unified diff 解析、OpenAI 兼容 chat client、Gitea PR review comment dispatcher、`aicr-output` 工具收集器雏形、webhook → Git fetch/diff → Prompt Manager → LLM → MCP findings → Gitea 输出的最小 orchestration 与相关单元测试、配置 bootstrap 层（config → ServerAppOptions 接线）、CLI `serve` 命令（config 驱动启动 Hono server）、CLI `review --dry-run`（config 驱动 LLM 调用 + orchestration 输出）、Node.js HTTP adapter (`serveAsync`)、bootstrap / node-serve / CLI 增强单元测试 | 真实 Gitea e2e 验收 |
-| M2 | 未开始 | 仅 `packages/sandbox/` 与相关配置 schema 占位，不计入阶段完成 | Kilo adapter、auto-approve、Docker sandbox、命令 / 网络白名单、目录隔离 |
+| M2 | 进行中 | `SandboxBackend` 抽象接口 + native / docker / podman 实现、命令白名单、超时与 watchdog、目录隔离与 mount 规范、`AgentAdapter` 抽象接口 + Kilo adapter（detect / buildCommand / materializeConfig）、OpenAI 兼容 Model Config Translator、bootstrap 层集成 `createSandboxBackendFromConfig` / `resolveAgentAdapterFromConfig`、review-orchestrator 新增 `sandbox` / `agentAdapter` / `agentTimeoutMs` 选项、sandbox / agents 包完整单元测试（53 个新测试） | 完全由 Kilo 驱动端到端验收、恶意 PR 注入沙箱逃逸测试 |
 | M3-M9 | 未开始 | 仅少量 package / config 占位，不计入阶段完成 | 按各里程碑原目标推进 |
 
 ### 8.2 下一轮执行包
 
 1. **压实 M0.5 草案**：评审 `docs/prompt-research.md` 与 `prompts/system/code-reviewer.system.md`，重点确认默认提示词分层结构、Prompt Manager 组装契约、repo-local `AGENTS.md` / repository instructions / path-specific instructions / skills 的发现与加载优先级、severity 推荐语义，以及低置信来源是否需要补充实测。
 2. **继续收口 M1**：配置 bootstrap 层与 CLI `serve` / `review --dry-run` 已落地；剩余为真实 Gitea e2e 验收路径（本地 docker 起 Gitea，PR 触发后能看到 line comment）。
-3. **不把占位当成交付**：M2 之后若仍只有 package、类型或 schema 占位，不计为已完成，必须等到里程碑定义的关键能力与验收项真正落地后再转为完成。
+3. **继续收口 M2**：SandboxBackend + AgentAdapter + Kilo adapter 核心实现已落地；剩余为完全由 Kilo 驱动端到端验收 + 恶意 PR 注入沙箱逃逸测试。
+4. **不把占位当成交付**：M3 之后若仍只有 package、类型或 schema 占位，不计为已完成，必须等到里程碑定义的关键能力与验收项真正落地后再转为完成。
 
 ### M0 — 项目骨架（状态：已完成）
 
