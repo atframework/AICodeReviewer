@@ -7,10 +7,12 @@
     "tsBuildInfoFile": "dist/.tsbuildinfo"
   },
   "references": [
+    { "path": "../agents" },
     { "path": "../core" },
     { "path": "../llm" },
     { "path": "../mcp-output" },
     { "path": "../outputs" },
+    { "path": "../sandbox" },
     { "path": "../vcs" }
   ],
   "include": ["src/**/*.ts"]

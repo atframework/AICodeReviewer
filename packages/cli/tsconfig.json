@@ -7,8 +7,10 @@
     "tsBuildInfoFile": "dist/.tsbuildinfo"
   },
   "references": [
+    { "path": "../agents" },
     { "path": "../core" },
     { "path": "../llm" },
+    { "path": "../sandbox" },
     { "path": "../server" },
     { "path": "../vcs" }
   ],
