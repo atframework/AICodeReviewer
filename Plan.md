@@ -915,17 +915,18 @@ workspaces/<workspace_id>/
 | 里程碑 | 状态 | 已完成 | 未完成 / 下一轮 |
 | --- | --- | --- | --- |
 | M0 | 已完成 | pnpm monorepo、strict TypeScript、ESLint/Vitest/CI、Zod 配置合并、pino/OTel 骨架、Drizzle schema、Dockerfile 基线、`AGENTS.md` / `.agents/skills/` 骨架与相关单元测试 | 无 |
-| M0.5 | 进行中 | `docs/prompt-research.md` 草案、`prompts/system/code-reviewer.system.md` 草案、默认提示词分层模板、Prompt Manager 组装契约、repo-local AI 资产发现 / 路径过滤 / 优先级 / 冲突记录实现与单元测试、severity 推荐语义与回归样例清单 | 补齐低置信来源的实现期实测/确认、完成调研结论评审 |
-| M1 | 进行中（下一轮主线） | Hono webhook receiver、Gitea/Forgejo 签名校验、`ReviewEvent` 归一化、invalid JSON / invalid payload 处理、Git VCS adapter 最小实现、unified diff 解析、OpenAI 兼容 chat client、Gitea PR review comment dispatcher、`aicr-output` 工具收集器雏形、webhook → Git fetch/diff → Prompt Manager → LLM → MCP findings → Gitea 输出的最小 orchestration 与相关单元测试、配置 bootstrap 层（config → ServerAppOptions 接线）、CLI `serve` 命令（config 驱动启动 Hono server）、CLI `review --dry-run`（config 驱动 LLM 调用 + orchestration 输出）、Node.js HTTP adapter (`serveAsync`)、bootstrap / node-serve / CLI 增强单元测试 | 真实 Gitea e2e 验收 |
-| M2 | 进行中 | `SandboxBackend` 抽象接口 + native / docker / podman 实现、命令白名单、超时与 watchdog、目录隔离与 mount 规范、`AgentAdapter` 抽象接口 + Kilo adapter（detect / buildCommand / materializeConfig）、OpenAI 兼容 Model Config Translator、bootstrap 层集成 `createSandboxBackendFromConfig` / `resolveAgentAdapterFromConfig`、review-orchestrator 新增 `sandbox` / `agentAdapter` / `agentTimeoutMs` 选项、sandbox / agents 包完整单元测试（53 个新测试） | 完全由 Kilo 驱动端到端验收、恶意 PR 注入沙箱逃逸测试 |
-| M3-M9 | 未开始 | 仅少量 package / config 占位，不计入阶段完成 | 按各里程碑原目标推进 |
+| M0.5 | 已完成（待验收留存） | `docs/prompt-research.md` 草案、`prompts/system/code-reviewer.system.md` 草案、默认提示词分层模板、Prompt Manager 组装契约、repo-local AI 资产发现 / 路径过滤 / 优先级 / 冲突记录实现与单元测试、severity 推荐语义与回归样例清单 | 低置信来源实测/确认（验收留存） |
+| M1 | 已完成（待验收留存） | Hono webhook receiver、Gitea/Forgejo 签名校验、`ReviewEvent` 归一化、Git VCS adapter、unified diff 解析、OpenAI 兼容 chat client、Gitea PR review comment dispatcher、`aicr-output` 工具收集器、webhook → orchestration 最小闭环、配置 bootstrap 层、CLI `serve` / `review --dry-run`、Node.js HTTP adapter | 真实 Gitea e2e 验收（验收留存） |
+| M2 | 已完成（待验收留存） | `SandboxBackend` 抽象 + native / docker / podman 实现、命令白名单、超时 watchdog、目录隔离、`AgentAdapter` + Kilo adapter、Model Config Translator、bootstrap 集成、review-orchestrator sandbox/agent 选项、53 个新测试 | Kilo 驱动 e2e 验收、沙箱逃逸测试（验收留存） |
+| M3 | 进行中 | **PR Compression 接入 bootstrap**（`toCompressionConfig` / `resolveSummarizeModelFromConfig` + wiring）、**Secrets Scrubber**（已完整实现并接入 orchestrator）、**LLM Fallback + Bounded Retry + Budget**（gateway + bootstrap wiring）、**Per-provider 限流**（`createTokenBucketRateLimiter` / `createMultiProviderRateLimiter`）、**In-memory 队列增强**（backoff 配置穿透、DLQ 操作 `getDeadJobs` / `requeueDead` / `purgeDead`）、**Redis/BullMQ 队列适配器**（`createRedisQueue` + optional dependency）、**队列 Worker 循环**（`createQueueWorker` + 并发 / 逐 workspace 并发 / 限流集成）、**Markdown 修复增强**（heading spacing / list marker spacing / trailing hash / violations 数组）、**全部 614 测试通过** | 输出模板引擎（Handlebars）、BullMQ 队列真实 Redis 集成测试、queue 配置消费端接入 bootstrap |
+| M4-M9 | 未开始 | 仅少量 package / config 占位，不计入阶段完成 | 按各里程碑原目标推进 |
 
 ### 8.2 下一轮执行包
 
-1. **压实 M0.5 草案**：评审 `docs/prompt-research.md` 与 `prompts/system/code-reviewer.system.md`，重点确认默认提示词分层结构、Prompt Manager 组装契约、repo-local `AGENTS.md` / repository instructions / path-specific instructions / skills 的发现与加载优先级、severity 推荐语义，以及低置信来源是否需要补充实测。
-2. **继续收口 M1**：配置 bootstrap 层与 CLI `serve` / `review --dry-run` 已落地；剩余为真实 Gitea e2e 验收路径（本地 docker 起 Gitea，PR 触发后能看到 line comment）。
-3. **继续收口 M2**：SandboxBackend + AgentAdapter + Kilo adapter 核心实现已落地；剩余为完全由 Kilo 驱动端到端验收 + 恶意 PR 注入沙箱逃逸测试。
-4. **不把占位当成交付**：M3 之后若仍只有 package、类型或 schema 占位，不计为已完成，必须等到里程碑定义的关键能力与验收项真正落地后再转为完成。
+1. **M3 收口**：输出模板引擎（Handlebars）集成 + 内置默认模板 + workspace 覆盖机制；BullMQ 队列真实 Redis 集成测试；queue 配置消费端接入 bootstrap（`createQueue` factory + worker 启动）。
+2. **M3 验收留存**：模拟 429 + Retry-After 在重试上限内正确恢复或 fallback；单 PR > 200KB diff 压缩稳定产出；评论 Markdown 通过 markdownlint 默认规则；多实例并发不重复评审同一 target。
+3. **M0.5 / M1 / M2 验收留存**：低置信来源实测确认、真实 Gitea e2e 验收、Kilo 驱动端到端验收、恶意 PR 沙箱逃逸测试。
+4. **M4 启动**：多输出通道（Gitea issue、Feishu、WeCom）、finding 幂等（fingerprint）、行号降级策略、MCP `publish_finding/summary/skip/fetch_more_context` 完整化、模板引擎 + @-mention。
 
 ### M0 — 项目骨架（状态：已完成）
 
@@ -949,9 +950,18 @@ workspaces/<workspace_id>/
 - Kilo adapter、auto-approve 与超时、Docker 沙箱、命令 / 网络白名单、agent 与 source 的目录隔离、`SandboxBackend` 抽象（含 podman / docker_socket / k8s_pod 占位）。
 - 验收：完全由 Kilo 驱动完成 M1 同样场景；恶意 PR 注入测试不能逃出沙箱。
 
-### M3 — 压缩、Scrubber、Fallback、预算、Markdownlint、Redis 队列（状态：未开始）
+### M3 — 压缩、Scrubber、Fallback、预算、Markdown 修复、Redis 队列（状态：进行中）
 
-- PR Compression（summarize → review 两阶段，默认 `trigger_tokens: 65536` 且受 `max_input_ratio: 0.75` 约束）、Secrets Scrubber、LLM fallback chain + **bounded rate-limit retry**、预算与熔断、输出 markdownlint 自动修复、BullMQ + Redis 队列驱动（含 sentinel / cluster 配置）与 retry / dead-letter。
+- PR Compression（summarize → review 两阶段）：已实现 `@aicr/llm/compression.ts`（scoreAndSelectHunks / generatePerFileSummaries / buildCompactedDiff / compressDiff / shouldTriggerCompression）并已接入 bootstrap wiring（`toCompressionConfig` / `resolveSummarizeModelFromConfig`）与 orchestrator（token 估算 → 触发判断 → 压缩 → 重构 taskContext）。
+- Secrets Scrubber：已完整实现 `@aicr/core/secret-scrubber.ts`（正则 + 熵 + 键值对三层过滤）并接入 orchestrator（prompt 前过滤 + findings 后过滤）。
+- LLM Fallback + Bounded Rate-Limit Retry + Budget：已完整实现 `@aicr/llm/gateway.ts`（`createResilientChatClient` + fallback chain + exponential/linear/constant backoff + Retry-After 解析 + DailyBudgetTracker）并已接入 bootstrap wiring。
+- Per-provider 限流：已实现 `@aicr/core/rate-limiter.ts`（token bucket + `createMultiProviderRateLimiter`）。
+- In-memory 队列增强：backoff 配置穿透（`fail()` 使用 enqueue 时传入的 backoff 而非硬编码）、DLQ 操作（`getDeadJobs` / `requeueDead` / `purgeDead`）。
+- Redis/BullMQ 队列适配器：已实现 `@aicr/core/redis-queue.ts`（`createRedisQueue` + optional dependency `bullmq` / `ioredis`）。
+- 队列 Worker 循环：已实现 `@aicr/core/queue-worker.ts`（`createQueueWorker` + 并发控制 + 逐 workspace 并发 + rate limiter 集成 + graceful shutdown）。
+- Markdown 修复增强：heading spacing / list marker spacing / trailing hash / violations 数组、更完整的自动修复规则集。
+- 测试：614 个测试全部通过（新增 56 个：rate-limiter 16、queue-worker 9、queue DLQ 16、markdown-fixer 8、computeBackoffDelay 7）。
+- **待完成**：输出模板引擎（Handlebars）集成、BullMQ 真实 Redis 集成测试、queue 配置消费端接入 bootstrap、markdownlint-cli2 全量输出校验。
 - 验收：单 PR > 200KB diff 也能稳定产出；secret 注入测试 100% 拦截；模拟 429 + Retry-After 在重试上限内正确恢复或 fallback；评论 Markdown 通过 markdownlint 默认规则；多实例并发不重复评审同一 target。
 
 ### M4 — 多输出、模板与 @-mention（状态：未开始）

@@ -135,6 +135,14 @@ describe("shouldTriggerCompression", () => {
     expect(shouldTriggerCompression(200000, model, {})).toBe(true);
   });
 
+  it("uses the model context window and max input ratio as a hard threshold", () => {
+    const model: ModelSpec = { ...baseModel, contextWindow: 1000 };
+    const config: CompressionConfig = { triggerTokens: 5000, maxInputRatio: 0.5 };
+
+    expect(shouldTriggerCompression(500, model, config)).toBe(false);
+    expect(shouldTriggerCompression(501, model, config)).toBe(true);
+  });
+
   it("falls back to base triggerTokens when model override does not include triggerTokens", () => {
     const config: CompressionConfig = {
       triggerTokens: 1500,
@@ -250,6 +258,38 @@ describe("buildCompactedDiff", () => {
     const diff = makeSmallDiff();
     const result = buildCompactedDiff(diff, [], [{ fileIndex: 0, hunkIndex: 0, score: 1 }], 3);
     expect(result).toContain("Compressed diff");
+  });
+
+  it("uses contextLines to limit retained context in selected hunks", () => {
+    const diff = makeDiff([
+      makeFile("src/context.ts", "modified", [
+        makeHunk(1, 6, 1, 6, [
+          ctxLine("context 1"),
+          ctxLine("context 2"),
+          ctxLine("context 3"),
+          addLine("changed"),
+          ctxLine("context 4"),
+        ]),
+      ]),
+    ]);
+    const summaries = [
+      {
+        fileIndex: 0,
+        filePath: "src/context.ts",
+        summary: "summary",
+        highRisk: false,
+        totalHunks: 1,
+      },
+    ];
+    const selectedHunks = [{ fileIndex: 0, hunkIndex: 0, score: 1 }];
+
+    const compactOneLine = buildCompactedDiff(diff, summaries, selectedHunks, 1);
+    const compactThreeLines = buildCompactedDiff(diff, summaries, selectedHunks, 3);
+
+    expect(compactOneLine).toContain("context 1");
+    expect(compactOneLine).not.toContain("context 2");
+    expect(compactOneLine).toContain("...");
+    expect(compactThreeLines).toContain("context 3");
   });
 });
 
@@ -387,5 +427,34 @@ describe("compressDiff", () => {
     });
     expect(result.compressed).toBe(true);
     expect(result.selectedHunks.length).toBeLessThanOrEqual(30);
+  });
+
+  it("continues trimming compacted output until it fits the model budget", async () => {
+    const diff = makeLargeDiff();
+    const promptText = "x".repeat(2000);
+    const summarizeModel: ModelSpec = {
+      providerKind: "openai_compatible",
+      providerId: "light",
+      modelId: "light",
+    };
+    const constrainedModel: ModelSpec = { ...baseModel, contextWindow: 200 };
+    const config: CompressionConfig = {
+      triggerTokens: 10000,
+      maxInputRatio: 0.5,
+      keepHunksTopK: 20,
+      contextLines: 5,
+    };
+
+    const result = await compressDiff({
+      diff,
+      promptText,
+      model: constrainedModel,
+      config,
+      summarizeModel,
+      summarizeClient: makeSummarizeClient(),
+    });
+
+    expect(result.compressed).toBe(true);
+    expect(result.compressedTokenEstimate).toBeLessThanOrEqual(100);
   });
 });

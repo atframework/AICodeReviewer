@@ -140,13 +140,14 @@ function scoreHunk(
 	return score;
 }
 
-function formatHunkCompact(hunk: ParsedDiffHunk, _contextLines: number): string {
+function formatHunkCompact(hunk: ParsedDiffHunk, contextLines: number): string {
 	const section = hunk.section ? ` ${hunk.section}` : "";
 	let result = `@@ -${hunk.oldStart},${hunk.oldLines} +${hunk.newStart},${hunk.newLines} @@${section}\n`;
+	const maxContextLines = Math.max(0, Math.floor(contextLines));
 
 	let lineCount = 0;
 	for (const line of hunk.lines) {
-		if (line.kind === "context" && lineCount >= 3) {
+		if (line.kind === "context" && lineCount >= maxContextLines) {
 			if (result.endsWith("...\n")) continue;
 			result += "...\n";
 			continue;
@@ -174,15 +175,53 @@ export function estimatePromptTokenCount(text: string): number {
 	return estimatePromptTokens(text);
 }
 
+function getConfiguredTriggerTokens(model: ModelSpec, config: CompressionConfig): number {
+	const modelOverride = config.perModelOverrides?.[`${model.providerKind}:${model.modelId}`];
+	return modelOverride?.triggerTokens ?? config.triggerTokens ?? 131072;
+}
+
+function resolveCompressionTokenLimit(model: ModelSpec, config: CompressionConfig): number {
+	const triggerTokens = getConfiguredTriggerTokens(model, config);
+	if (!model.contextWindow) {
+		return triggerTokens;
+	}
+
+	const maxInputRatio = config.maxInputRatio ?? 0.6;
+	const modelWindowLimit = Math.max(1, Math.floor(model.contextWindow * maxInputRatio));
+	return Math.min(triggerTokens, modelWindowLimit);
+}
+
+function truncateToTokenBudget(text: string, budgetTokens: number): string {
+	if (estimatePromptTokenCount(text) <= budgetTokens) {
+		return text;
+	}
+
+	const marker = "\n\n[truncated to fit compression token budget]\n";
+	if (estimatePromptTokenCount(marker) > budgetTokens) {
+		return "";
+	}
+
+	let low = 0;
+	let high = text.length;
+	while (low < high) {
+		const mid = Math.ceil((low + high) / 2);
+		const candidate = `${text.slice(0, mid).trimEnd()}${marker}`;
+		if (estimatePromptTokenCount(candidate) <= budgetTokens) {
+			low = mid;
+		} else {
+			high = mid - 1;
+		}
+	}
+
+	return `${text.slice(0, low).trimEnd()}${marker}`;
+}
+
 export function shouldTriggerCompression(
 	tokenEstimate: number,
 	model: ModelSpec,
 	config: CompressionConfig,
 ): boolean {
-	const modelOverride = config.perModelOverrides?.[`${model.providerKind}:${model.modelId}`];
-	const triggerTokens = modelOverride?.triggerTokens ?? config.triggerTokens ?? 131072;
-
-	return tokenEstimate > triggerTokens;
+	return tokenEstimate > resolveCompressionTokenLimit(model, config);
 }
 
 export function scoreAndSelectHunks(
@@ -325,6 +364,41 @@ export function buildCompactedDiff(
 	return lines.join("\n");
 }
 
+function buildCompactedDiffWithinBudget(
+	diff: ParsedDiff,
+	summaries: readonly PerFileSummary[],
+	selectedHunks: readonly ScoredHunk[],
+	contextLines: number,
+	budgetTokens: number,
+): {
+	readonly compactDiff: string;
+	readonly selectedHunks: readonly ScoredHunk[];
+	readonly tokenEstimate: number;
+} {
+	let retainedHunks = [...selectedHunks];
+	let retainedContextLines = Math.max(0, Math.floor(contextLines));
+	let compactDiff = buildCompactedDiff(diff, summaries, retainedHunks, retainedContextLines);
+	let tokenEstimate = estimatePromptTokenCount(compactDiff);
+
+	while (tokenEstimate > budgetTokens && (retainedContextLines > 0 || retainedHunks.length > 0)) {
+		if (retainedContextLines > 0) {
+			retainedContextLines -= 1;
+		} else {
+			retainedHunks = retainedHunks.slice(0, -1);
+		}
+
+		compactDiff = buildCompactedDiff(diff, summaries, retainedHunks, retainedContextLines);
+		tokenEstimate = estimatePromptTokenCount(compactDiff);
+	}
+
+	if (tokenEstimate > budgetTokens) {
+		compactDiff = truncateToTokenBudget(compactDiff, budgetTokens);
+		tokenEstimate = estimatePromptTokenCount(compactDiff);
+	}
+
+	return { compactDiff, selectedHunks: retainedHunks, tokenEstimate };
+}
+
 export interface CompressDiffOptions {
 	readonly diff: ParsedDiff;
 	readonly promptText: string;
@@ -350,10 +424,8 @@ export async function compressDiff(options: CompressDiffOptions): Promise<Compre
 
 	const keepTopK = config.keepHunksTopK ?? 30;
 	const contextLines = config.contextLines ?? 5;
-	const maxInputRatio = config.maxInputRatio ?? 0.6;
-	const budgetTokenLimit = model.contextWindow
-		? Math.floor(model.contextWindow * maxInputRatio * 0.3)
-		: undefined;
+	const compressionTokenLimit = resolveCompressionTokenLimit(model, config);
+	const budgetTokenLimit = Math.max(1, Math.floor(compressionTokenLimit * 0.3));
 
 	const selectedHunks = scoreAndSelectHunks(diff, keepTopK);
 
@@ -364,14 +436,19 @@ export async function compressDiff(options: CompressDiffOptions): Promise<Compre
 		budgetTokenLimit,
 	);
 
-	const compactDiff = buildCompactedDiff(diff, summaries, selectedHunks, contextLines);
-	const compressedTokenEstimate = estimatePromptTokenCount(compactDiff);
+	const compacted = buildCompactedDiffWithinBudget(
+		diff,
+		summaries,
+		selectedHunks,
+		contextLines,
+		compressionTokenLimit,
+	);
 
 	return {
 		compressed: true,
-		compactDiff,
-		selectedHunks,
+		compactDiff: compacted.compactDiff,
+		selectedHunks: compacted.selectedHunks,
 		originalTokenEstimate,
-		compressedTokenEstimate,
+		compressedTokenEstimate: compacted.tokenEstimate,
 	};
 }

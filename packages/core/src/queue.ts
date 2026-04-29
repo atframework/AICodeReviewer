@@ -13,16 +13,22 @@ export interface QueueJob<T = unknown> {
   readonly lastError?: string;
 }
 
+export interface QueueBackoffConfig {
+  readonly kind: "exponential" | "linear" | "constant";
+  readonly baseMs: number;
+  readonly maxMs: number;
+  readonly jitter?: boolean;
+}
+
 export interface QueueEnqueueOptions {
   readonly workspaceId: string;
   readonly triggerName: string;
   readonly maxAttempts?: number;
-  readonly backoff?: {
-    readonly kind: "exponential" | "linear" | "constant";
-    readonly baseMs: number;
-    readonly maxMs: number;
-    readonly jitter?: boolean;
-  };
+  readonly backoff?: QueueBackoffConfig;
+}
+
+export interface QueueDequeueOptions {
+  readonly excludedWorkspaceIds?: readonly string[];
 }
 
 export interface QueueStats {
@@ -36,16 +42,23 @@ export interface QueueStats {
 export interface ReviewQueue {
   readonly kind: string;
   enqueue<T>(data: T, options: QueueEnqueueOptions): Promise<QueueJob<T>>;
-  dequeue(workerId: string, concurrencyLimit?: number): Promise<QueueJob | undefined>;
+  dequeue(
+    workerId: string,
+    concurrencyLimit?: number,
+    options?: QueueDequeueOptions,
+  ): Promise<QueueJob | undefined>;
   complete(jobId: string): Promise<void>;
   fail(jobId: string, error: Error): Promise<void>;
   getStats(): Promise<QueueStats>;
   getJob(jobId: string): Promise<QueueJob | undefined>;
+  getDeadJobs(): Promise<readonly QueueJob[]>;
+  requeueDead(jobId: string): Promise<QueueJob | undefined>;
+  purgeDead(maxAgeMs?: number): Promise<number>;
 }
 
-function computeBackoffDelay(
+export function computeBackoffDelay(
   attempt: number,
-  backoff?: QueueEnqueueOptions["backoff"],
+  backoff?: QueueBackoffConfig,
 ): number {
   if (!backoff) return 0;
   const baseMs = backoff.baseMs;
@@ -68,8 +81,20 @@ function computeBackoffDelay(
   return Math.min(delay, maxMs);
 }
 
+const DEFAULT_BACKOFF: QueueBackoffConfig = {
+  kind: "exponential",
+  baseMs: 2000,
+  maxMs: 60000,
+  jitter: true,
+};
+
+interface InternalQueueJob extends QueueJob {
+  readonly backoff: QueueBackoffConfig;
+  readonly availableAt?: number;
+}
+
 export function createInMemoryQueue(): ReviewQueue {
-  const jobs = new Map<string, QueueJob>();
+  const jobs = new Map<string, InternalQueueJob>();
   const pending: string[] = [];
   let jobCounter = 0;
 
@@ -83,7 +108,7 @@ export function createInMemoryQueue(): ReviewQueue {
 
     async enqueue<T>(data: T, options: QueueEnqueueOptions): Promise<QueueJob<T>> {
       const id = nextId();
-      const job: QueueJob<T> = {
+      const job: InternalQueueJob = {
         id,
         workspaceId: options.workspaceId,
         triggerName: options.triggerName,
@@ -92,18 +117,39 @@ export function createInMemoryQueue(): ReviewQueue {
         maxAttempts: options.maxAttempts ?? 3,
         status: "queued",
         enqueuedAt: Date.now(),
+        backoff: options.backoff ?? DEFAULT_BACKOFF,
       };
-      jobs.set(id, job as QueueJob);
+      jobs.set(id, job);
       pending.push(id);
-      return job;
+      return job as QueueJob<T>;
     },
 
-    async dequeue(_workerId: string, _concurrencyLimit?: number): Promise<QueueJob | undefined> {
+    async dequeue(
+      _workerId: string,
+      _concurrencyLimit?: number,
+      options?: QueueDequeueOptions,
+    ): Promise<QueueJob | undefined> {
       if (pending.length === 0) {
         return undefined;
       }
 
-      const targetId = pending.shift();
+      const excluded = new Set(options?.excludedWorkspaceIds ?? []);
+      const now = Date.now();
+      const targetIndex = pending.findIndex((id) => {
+        const candidate = jobs.get(id);
+        return Boolean(
+          candidate &&
+          candidate.status === "queued" &&
+          !excluded.has(candidate.workspaceId) &&
+          (candidate.availableAt === undefined || candidate.availableAt <= now),
+        );
+      });
+
+      if (targetIndex < 0) {
+        return undefined;
+      }
+
+      const targetId = pending.splice(targetIndex, 1)[0];
       if (!targetId) {
         return undefined;
       }
@@ -113,12 +159,12 @@ export function createInMemoryQueue(): ReviewQueue {
         return undefined;
       }
 
-      const updated: QueueJob = {
-        ...job,
+      const { availableAt: _availableAt, ...rest } = job;
+      const updated: InternalQueueJob = {
+        ...rest,
         status: "running",
         attempt: job.attempt + 1,
         startedAt: Date.now(),
-        ...(job.startedAt ? {} : { startedAt: Date.now() }),
       };
       jobs.set(targetId, updated);
       return updated;
@@ -136,16 +182,14 @@ export function createInMemoryQueue(): ReviewQueue {
       if (!job) return;
 
       if (job.attempt < job.maxAttempts) {
-        const delay = computeBackoffDelay(job.attempt, {
-          kind: "exponential",
-          baseMs: 2000,
-          maxMs: 60000,
-          jitter: true,
-        });
-        if (delay > 0) {
-          await new Promise((resolve) => setTimeout(resolve, delay));
-        }
-        const updated: QueueJob = { ...job, status: "queued", lastError: error.message };
+        const delay = computeBackoffDelay(job.attempt, job.backoff);
+        const { availableAt: _availableAt, ...retryableJob } = job;
+        const updated: InternalQueueJob = {
+          ...retryableJob,
+          status: "queued",
+          lastError: error.message,
+          ...(delay > 0 ? { availableAt: Date.now() + delay } : {}),
+        };
         jobs.set(jobId, updated);
         pending.push(jobId);
       } else {
@@ -173,6 +217,47 @@ export function createInMemoryQueue(): ReviewQueue {
 
     async getJob(jobId: string): Promise<QueueJob | undefined> {
       return jobs.get(jobId);
+    },
+
+    async getDeadJobs(): Promise<readonly QueueJob[]> {
+      const deadJobs: QueueJob[] = [];
+      for (const job of jobs.values()) {
+        if (job.status === "dead") {
+          deadJobs.push(job);
+        }
+      }
+      return deadJobs;
+    },
+
+    async requeueDead(jobId: string): Promise<QueueJob | undefined> {
+      const job = jobs.get(jobId);
+      if (!job || job.status !== "dead") {
+        return undefined;
+      }
+
+      const { lastError: _ignored, availableAt: _availableAt, ...rest } = job;
+      const requeued: InternalQueueJob = {
+        ...rest,
+        status: "queued",
+        attempt: 0,
+      };
+      jobs.set(jobId, requeued);
+      pending.push(jobId);
+      return requeued;
+    },
+
+    async purgeDead(maxAgeMs?: number): Promise<number> {
+      let purged = 0;
+      const now = Date.now();
+      for (const [id, job] of jobs.entries()) {
+        if (job.status === "dead") {
+          if (maxAgeMs === undefined || (now - job.enqueuedAt) > maxAgeMs) {
+            jobs.delete(id);
+            purged++;
+          }
+        }
+      }
+      return purged;
     },
   };
 }
