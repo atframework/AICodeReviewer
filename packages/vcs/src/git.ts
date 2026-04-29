@@ -19,6 +19,9 @@ export interface GitVcsAdapterOptions {
   readonly repositoryDir: string;
   readonly git?: GitCommandRunner;
   readonly diffFilter?: string;
+  readonly allowDeepen?: boolean;
+  readonly deepenBy?: number;
+  readonly remote?: string;
 }
 
 export interface GitDiffOptions {
@@ -76,17 +79,53 @@ function ensurePositiveLine(value: number, label: string): void {
   }
 }
 
+function isRevisionRangeError(error: unknown): boolean {
+  const maybeGitError = error as { readonly stdout?: unknown; readonly stderr?: unknown };
+  const text = [
+    error instanceof Error ? error.message : String(error),
+    typeof maybeGitError.stdout === "string" ? maybeGitError.stdout : "",
+    typeof maybeGitError.stderr === "string" ? maybeGitError.stderr : "",
+  ].join("\n");
+
+  return /(?:ambiguous argument|bad revision|unknown revision|invalid object name|not a valid object name|needed a single revision)/iu.test(
+    text,
+  );
+}
+
 export class GitVcsAdapter implements VcsAdapter {
   readonly kind = "git" as const;
 
   private readonly repositoryDir: string;
   private readonly git: GitCommandRunner;
   private readonly diffFilter: string;
+  private readonly allowDeepen: boolean;
+  private readonly deepenBy: number;
+  private readonly remote: string;
 
   constructor(options: GitVcsAdapterOptions) {
     this.repositoryDir = resolve(options.repositoryDir);
     this.git = options.git ?? defaultGitRunner;
     this.diffFilter = options.diffFilter ?? "ACMRT";
+    this.allowDeepen = options.allowDeepen ?? false;
+    this.deepenBy = options.deepenBy ?? 100;
+    this.remote = options.remote ?? "origin";
+
+    if (!Number.isInteger(this.deepenBy) || this.deepenBy < 1) {
+      throw new RangeError("deepenBy must be a positive integer.");
+    }
+  }
+
+  private async runRevisionRangeCommand(args: readonly string[]): Promise<GitCommandResult> {
+    try {
+      return await this.git(args);
+    } catch (error) {
+      if (!this.allowDeepen || !isRevisionRangeError(error)) {
+        throw error;
+      }
+
+      await this.git(["-C", this.repositoryDir, "fetch", `--deepen=${this.deepenBy}`, this.remote]);
+      return this.git(args);
+    }
   }
 
   async listChanges(ev: ReviewEvent): Promise<ChangeRange> {
@@ -100,7 +139,7 @@ export class GitVcsAdapter implements VcsAdapter {
       throw new RangeError("Git listChanges requires base/head revisions or ReviewEvent.changedFiles.");
     }
 
-    const result = await this.git([
+    const result = await this.runRevisionRangeCommand([
       "-C",
       this.repositoryDir,
       "diff",
@@ -191,7 +230,7 @@ export class GitVcsAdapter implements VcsAdapter {
       "--",
       ...uniqueNormalizedPaths(this.repositoryDir, range.files),
     ];
-    const result = await this.git(args);
+    const result = await this.runRevisionRangeCommand(args);
 
     return parseUnifiedDiff(result.stdout);
   }

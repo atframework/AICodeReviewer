@@ -8,6 +8,15 @@ import { describe, expect, it } from "vitest";
 import { createGitVcsAdapter, type GitCommandRunner } from "../src/git.js";
 
 describe("GitVcsAdapter", () => {
+  it("rejects a non-positive deepenBy value", () => {
+    expect(() =>
+      createGitVcsAdapter({
+        repositoryDir: "C:/repo",
+        deepenBy: 0,
+      }),
+    ).toThrow("deepenBy must be a positive integer.");
+  });
+
   it("lists changed files from git diff when revisions are present", async () => {
     const mutableCalls: string[][] = [];
     const git: GitCommandRunner = async (args) => {
@@ -54,6 +63,73 @@ describe("GitVcsAdapter", () => {
     });
 
     await expect(adapter.listChanges(event)).resolves.toEqual({ files: ["src/app.ts"] });
+  });
+
+  it("deepens a shallow repository and retries listChanges when enabled", async () => {
+    const mutableCalls: string[][] = [];
+    let diffAttempts = 0;
+    const git: GitCommandRunner = async (args) => {
+      mutableCalls.push([...args]);
+      if (args[2] === "diff") {
+        diffAttempts += 1;
+        if (diffAttempts === 1) {
+          throw new Error("fatal: bad revision 'base..head'");
+        }
+        return { stdout: "src/app.ts\n", stderr: "" };
+      }
+
+      if (args[2] === "fetch") {
+        return { stdout: "", stderr: "" };
+      }
+
+      throw new Error(`unexpected git call: ${args.join(" ")}`);
+    };
+    const adapter = createGitVcsAdapter({ repositoryDir: "C:/repo", git, allowDeepen: true });
+    const event = createReviewEvent({
+      triggerName: "manual",
+      provider: "manual",
+      workspaceId: "ws",
+      targetKind: "manual",
+      repoRef: "owent/example",
+      baseSha: "base",
+      headSha: "head",
+      author: { username: "owent" },
+      reason: "manual:test",
+    });
+
+    const range = await adapter.listChanges(event);
+
+    expect(range.files).toEqual(["src/app.ts"]);
+    expect(mutableCalls).toEqual([
+      ["-C", expect.stringMatching(/repo$/u), "diff", "--name-only", "--diff-filter=ACMRT", "base..head", "--"],
+      ["-C", expect.stringMatching(/repo$/u), "fetch", "--deepen=100", "origin"],
+      ["-C", expect.stringMatching(/repo$/u), "diff", "--name-only", "--diff-filter=ACMRT", "base..head", "--"],
+    ]);
+  });
+
+  it("does not deepen a shallow repository when disabled", async () => {
+    const mutableCalls: string[][] = [];
+    const git: GitCommandRunner = async (args) => {
+      mutableCalls.push([...args]);
+      throw new Error("fatal: bad revision 'base..head'");
+    };
+    const adapter = createGitVcsAdapter({ repositoryDir: "C:/repo", git, allowDeepen: false });
+    const event = createReviewEvent({
+      triggerName: "manual",
+      provider: "manual",
+      workspaceId: "ws",
+      targetKind: "manual",
+      repoRef: "owent/example",
+      baseSha: "base",
+      headSha: "head",
+      author: { username: "owent" },
+      reason: "manual:test",
+    });
+
+    await expect(adapter.listChanges(event)).rejects.toThrow(/bad revision/u);
+    expect(mutableCalls).toEqual([
+      ["-C", expect.stringMatching(/repo$/u), "diff", "--name-only", "--diff-filter=ACMRT", "base..head", "--"],
+    ]);
   });
 
   it("materializes scoped text files from the head revision", async () => {
@@ -125,6 +201,37 @@ describe("GitVcsAdapter", () => {
 
     expect(diff.files[0]?.newPath).toBe("src/app.ts");
     expect(diff.files[0]?.hunks[0]?.lines.map((line) => line.kind)).toEqual(["delete", "add"]);
+  });
+
+  it("deepens a shallow repository and retries diff parsing when enabled", async () => {
+    let diffAttempts = 0;
+    const git: GitCommandRunner = async (args) => {
+      if (args[2] === "fetch") {
+        return { stdout: "", stderr: "" };
+      }
+
+      diffAttempts += 1;
+      if (diffAttempts === 1) {
+        throw new Error("fatal: ambiguous argument 'base..head': unknown revision");
+      }
+
+      return {
+        stdout: [
+          "diff --git a/src/app.ts b/src/app.ts",
+          "--- a/src/app.ts",
+          "+++ b/src/app.ts",
+          "@@ -1 +1 @@",
+          "-old",
+          "+new",
+        ].join("\n"),
+        stderr: "",
+      };
+    };
+    const adapter = createGitVcsAdapter({ repositoryDir: "C:/repo", git, allowDeepen: true });
+
+    const diff = await adapter.diff({ baseRevision: "base", headRevision: "head", files: ["src/app.ts"] });
+
+    expect(diff.files[0]?.newPath).toBe("src/app.ts");
   });
 
   it("throws when listChanges has neither revisions nor changedFiles", async () => {

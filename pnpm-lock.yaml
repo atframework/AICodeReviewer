@@ -55,6 +55,15 @@ importers:
       '@aicr/core':
         specifier: workspace:*
         version: link:../core
+      '@aicr/llm':
+        specifier: workspace:*
+        version: link:../llm
+      '@aicr/server':
+        specifier: workspace:*
+        version: link:../server
+      '@aicr/vcs':
+        specifier: workspace:*
+        version: link:../vcs
 
   packages/core:
     dependencies:

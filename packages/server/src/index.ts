@@ -244,3 +244,17 @@ export type {
   ReviewOutputPublisher,
   ServerReviewOrchestrationOptions,
 } from "./review-orchestrator.js";
+
+export {
+  bootstrapServerApp,
+  buildSourceRootResolver,
+  createLlmClientFromModelSpec,
+  createOutputPublisherFromConfig,
+  createVcsAdapterFromConfig,
+  resolveGiteaWebhookConfig,
+  resolveModelSpecFromConfig,
+} from "./bootstrap.js";
+export type { BootstrapServerOptions } from "./bootstrap.js";
+
+export { serve, serveAsync } from "./node-serve.js";
+export type { ServeOptions } from "./node-serve.js";

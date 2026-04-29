@@ -139,9 +139,43 @@ describe("runCli", () => {
   it("falls through to a scaffolded message for unknown commands", async () => {
     const stdout = new MemoryWriter();
     const stderr = new MemoryWriter();
-    const exitCode = await runCli(["serve"], { stdout, stderr });
+    const exitCode = await runCli(["replay"], { stdout, stderr });
     expect(exitCode).toBe(0);
-    expect(stdout.output).toContain('Command "serve" is scaffolded');
+    expect(stdout.output).toContain('Command "replay" is scaffolded');
+  });
+
+  it("returns an error when serve is called without a config file", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-cli-serve-"));
+    try {
+      const stdout = new MemoryWriter();
+      const stderr = new MemoryWriter();
+      const exitCode = await runCli(["serve"], { cwd: tempDir, stdout, stderr });
+      expect(exitCode).toBe(1);
+      expect(stderr.output).toContain("aicr serve failed:");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("returns an error when review --dry-run has no config", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-cli-dry-run-"));
+    try {
+      await writeWorkspaceFile(
+        tempDir,
+        "prompts/system/code-reviewer.system.md",
+        "<task>\n{{TASK_CONTEXT}}\n</task>\n",
+      );
+      const stdout = new MemoryWriter();
+      const stderr = new MemoryWriter();
+      const exitCode = await runCli(
+        ["review", "--repo", "owent/example", "--dry-run"],
+        { cwd: tempDir, stdout, stderr },
+      );
+      expect(exitCode).toBe(1);
+      expect(stderr.output).toContain("requires a valid config file");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
   });
 
   it("returns an error when --max-prompt-tokens is not a positive integer", async () => {

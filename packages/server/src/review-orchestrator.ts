@@ -205,8 +205,13 @@ function parseToolCalls(content: string): ToolCallEnvelope[] {
     throw new TypeError("LLM JSON output must be an object.");
   }
 
-  if (Array.isArray(payload.toolCalls)) {
-    return payload.toolCalls.map((entry) => {
+  const toolCalls = (payload as { readonly toolCalls?: unknown }).toolCalls;
+  if (toolCalls !== undefined) {
+    if (!Array.isArray(toolCalls)) {
+      throw new TypeError("toolCalls must be an array when provided.");
+    }
+
+    return toolCalls.map((entry) => {
       if (!isPlainObject(entry)) {
         throw new TypeError("toolCalls entries must be objects.");
       }
@@ -332,7 +337,13 @@ export async function runReviewOrchestration(
     }
   }
 
-  const status = outputState.skipReason
+  const implicitSkipReason = !options.dryRun && !outputState.skipReason && dispatchResults.length === 0
+    ? outputState.findings.length > 0 && !options.outputPublisher
+      ? "no_output_publisher"
+      : "no_dispatchable_findings"
+    : undefined;
+  const skipReason = outputState.skipReason ?? implicitSkipReason;
+  const status = skipReason
     ? "skipped"
     : dispatchResults.length > 0
       ? "published"
@@ -351,7 +362,7 @@ export async function runReviewOrchestration(
     summaryCount: outputState.summaries.length,
     contextRequestCount: outputState.contextRequests.length,
     dispatchCount: dispatchResults.length,
-    ...(outputState.skipReason ? { skipReason: outputState.skipReason } : {}),
+    ...(skipReason ? { skipReason } : {}),
     model: {
       providerId: llmResult.providerId,
       modelId: llmResult.modelId,

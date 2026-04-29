@@ -326,6 +326,35 @@ describe("createServerApp", () => {
     expect(body.reason).toBe("invalid_signature");
   });
 
+  it("rejects a webhook when the HMAC signature is not hexadecimal", async () => {
+    const app = createServerApp({
+      gitea: {
+        triggerName: "gitea-internal",
+        workspaceId: "gitea-internal-owent-example",
+        webhookSecret,
+      },
+    });
+    const payload = JSON.stringify({
+      repository: { full_name: "owent/example" },
+      pull_request: { base: { sha: "base-sha" }, head: { sha: "head-sha" } },
+    });
+
+    const response = await app.request("/webhooks/gitea", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-gitea-event": "pull_request",
+        "x-gitea-signature": "z".repeat(64),
+      },
+      body: payload,
+    });
+    const body = (await response.json()) as { accepted: boolean; reason?: string };
+
+    expect(response.status).toBe(401);
+    expect(body.accepted).toBe(false);
+    expect(body.reason).toBe("invalid_signature");
+  });
+
   it("accepts a Forgejo push webhook through the shared adapter path", async () => {
     const app = createServerApp({
       forgejo: {
