@@ -89,6 +89,18 @@ importers:
       '@aicr/core':
         specifier: workspace:*
         version: link:../core
+      '@aicr/llm':
+        specifier: workspace:*
+        version: link:../llm
+      '@aicr/mcp-output':
+        specifier: workspace:*
+        version: link:../mcp-output
+      '@aicr/outputs':
+        specifier: workspace:*
+        version: link:../outputs
+      '@aicr/vcs':
+        specifier: workspace:*
+        version: link:../vcs
       hono:
         specifier: ^4.7.7
         version: 4.12.15

@@ -5,6 +5,7 @@ coverage/
 *.tsbuildinfo
 .DS_Store
 .env
+CLAUDE.local.md
 pnpm-debug.log*
 /.cmd-*.log
 /.tmp-*.log

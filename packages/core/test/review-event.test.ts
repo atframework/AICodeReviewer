@@ -79,4 +79,40 @@ describe("createReviewEvent", () => {
     expect(event.baseSha).toBeUndefined();
     expect(event.headSha).toBeUndefined();
   });
+
+  it("rejects an empty workspaceId", () => {
+    const result = reviewEventSchema.safeParse({ ...baseEvent, workspaceId: "" });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects an empty repoRef", () => {
+    const result = reviewEventSchema.safeParse({ ...baseEvent, repoRef: "" });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects an empty reason", () => {
+    const result = reviewEventSchema.safeParse({ ...baseEvent, reason: "" });
+    expect(result.success).toBe(false);
+  });
+
+  it("allows empty changedFiles array", () => {
+    const event = createReviewEvent({ ...baseEvent, changedFiles: [] });
+    expect(event.changedFiles).toEqual([]);
+  });
+
+  it("allows author with only email", () => {
+    const event = createReviewEvent({
+      ...baseEvent,
+      author: { email: "test@example.com" },
+    });
+    expect(event.author.email).toBe("test@example.com");
+  });
+
+  it("rejects malformed email in author", () => {
+    const result = reviewEventSchema.safeParse({
+      ...baseEvent,
+      author: { email: "not-an-email" },
+    });
+    expect(result.success).toBe(false);
+  });
 });

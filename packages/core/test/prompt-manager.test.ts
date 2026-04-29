@@ -491,6 +491,42 @@ describe("assemblePrompt", () => {
     expect(output.conflicts).toHaveLength(1);
     expect(output.conflicts[0]?.winner).toBe("src/AGENTS.md");
   });
+
+  it("renders appliesTo qualifiers for path instructions in the assembled prompt", () => {
+    const output = assemblePrompt({
+      baseSystemPrompt: "<repo>\n{{REPO_INSTRUCTION_SUMMARIES}}\n</repo>",
+      discovery: {
+        instructions: [
+          {
+            kind: "path_instruction" as const,
+            label: ".github/instructions/backend.instructions.md",
+            path: ".github/instructions/backend.instructions.md",
+            content: "Validate auth boundaries.",
+            summary: "Validate auth and transaction boundaries.",
+            reason: "matches src/auth/login.ts",
+            priority: 410,
+            specificity: 10,
+            matchedPaths: ["src/auth/login.ts"],
+            appliesTo: ["src/**/*.ts"],
+          },
+        ],
+        skills: [],
+        droppedRefs: [],
+        conflicts: [],
+      },
+      taskContext: "test",
+    });
+
+    expect(output.systemPrompt).toContain("applies to `src/**/*.ts`");
+    expect(output.repoInstructionSummaries[0]).toContain("applies to `src/**/*.ts`");
+  });
+
+  it("handles renderPromptTemplate values containing dollar signs and backslashes", () => {
+    const result = renderPromptTemplate("value: {{VAL}}", {
+      VAL: "$1\\2",
+    });
+    expect(result).toBe("value: $1\\2");
+  });
 });
 
 describe("discoverRepoPromptAssets (additional)", () => {
@@ -609,6 +645,84 @@ describe("discoverRepoPromptAssets (additional)", () => {
         (instruction) => instruction.kind === "nearest_agents",
       );
       expect(nearest?.matchedPaths).toEqual(["src/a.ts"]);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("aggregates multiple changed paths under the same nearest AGENTS.md", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-prompt-manager-multi-paths-"));
+
+    try {
+      await writeWorkspaceFile(tempDir, "src/feature/AGENTS.md", "# Feature\nFeature rules.\n");
+
+      const discovery = await discoverRepoPromptAssets({
+        sourceRoot: tempDir,
+        changedPaths: ["src/feature/a.ts", "src/feature/b.ts"],
+      });
+
+      const nearest = discovery.instructions.find(
+        (instruction) => instruction.kind === "nearest_agents",
+      );
+      expect(nearest?.matchedPaths).toEqual(
+        expect.arrayContaining(["src/feature/a.ts", "src/feature/b.ts"]),
+      );
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("accepts path instruction applyTo as a comma-separated string", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-prompt-manager-string-applyto-"));
+
+    try {
+      await writeWorkspaceFile(
+        tempDir,
+        ".github/instructions/backend.instructions.md",
+        ['---', 'applyTo: "src/**/*.ts, src/**/*.js"', '---', '', '# Backend', ''].join("\n"),
+      );
+
+      const discovery = await discoverRepoPromptAssets({
+        sourceRoot: tempDir,
+        changedPaths: ["src/a.js"],
+      });
+
+      expect(discovery.instructions.some((i) => i.path === ".github/instructions/backend.instructions.md")).toBe(true);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("accepts skill Applies To entries wrapped in backticks", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-prompt-manager-backtick-"));
+
+    try {
+      await writeWorkspaceFile(
+        tempDir,
+        ".agents/skills/api-review/SKILL.md",
+        [
+          "---",
+          "name: api-review",
+          'description: "Review API endpoints."',
+          "---",
+          "",
+          "# API Review",
+          "",
+          "## Applies To",
+          "",
+          "- `src/api/**`",
+          "",
+        ].join("\n"),
+      );
+
+      const discovery = await discoverRepoPromptAssets({
+        sourceRoot: tempDir,
+        changedPaths: ["src/api/endpoint.ts"],
+      });
+
+      expect(discovery.skills).toHaveLength(1);
+      expect(discovery.skills[0]?.name).toBe("api-review");
+      expect(discovery.skills[0]?.appliesTo).toContain("src/api/**");
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }
@@ -766,6 +880,45 @@ describe("discoverRepoPromptAssets conflict detection", () => {
       });
 
       expect(discovery.conflicts).toEqual([]);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("uses nearest AGENTS.md reason with matched paths for non-root files", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-prompt-manager-reason-"));
+
+    try {
+      await writeWorkspaceFile(
+        tempDir,
+        "src/feature/AGENTS.md",
+        "# Feature\nFeature-level rules.\n",
+      );
+
+      const discovery = await discoverRepoPromptAssets({
+        sourceRoot: tempDir,
+        changedPaths: ["src/feature/sub/file.ts"],
+      });
+
+      const nearest = discovery.instructions.find((i) => i.kind === "nearest_agents");
+      expect(nearest?.reason).toContain("matches src/feature/sub/file.ts");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("walks up to root directory boundary when searching for AGENTS.md", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-prompt-manager-root-boundary-"));
+
+    try {
+      await writeWorkspaceFile(tempDir, "AGENTS.md", "# Root\nRoot rules.\n");
+
+      const discovery = await discoverRepoPromptAssets({
+        sourceRoot: tempDir,
+        changedPaths: ["deeply/nested/file.ts"],
+      });
+
+      expect(discovery.instructions.some((i) => i.kind === "nearest_agents" && i.path === "AGENTS.md")).toBe(true);
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }

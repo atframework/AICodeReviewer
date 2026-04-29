@@ -1,6 +1,6 @@
 ---
 name: repository-baseline-validation
-description: "Validate repository-wide build, lint, test, markdown, Docker, and root tooling changes. Use when touching shared config, CI, Docker, docs, or workspace topology; do not use for isolated package-only feature edits."
+description: "Use when: validating repository-wide build, lint, test, markdown, Docker, docs, CI, root tooling, or workspace topology changes; do not use for isolated package-only feature edits."
 user-invocable: false
 ---
 
@@ -20,8 +20,27 @@ user-invocable: false
 
 1. Check the current baseline in `../../../docs/ai/AGENTS.repository-baseline.md`.
 2. If workspace topology changed, verify package manifests, local `tsconfig.json` files, and root `tsconfig.json` references together.
-3. Run validation in this order: `pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm markdownlint`, `pnpm build`.
+3. Run validation in this order (see environment notes below for Windows workarounds):
+   - Lint
+   - Typecheck
+   - Tests
+   - Markdownlint
+   - Build
 4. Treat failures as baseline regressions; fix the root cause instead of broadening ignore patterns or weakening strict flags.
 5. Put temporary validation helpers, logs, and captured output under `../../../build/` instead of scattering scratch files in the repository root.
 6. If repository-wide conventions changed, update `../../../AGENTS.md`, `../../../docs/ai/AGENTS.repository-baseline.md`, and any affected skills in the same change.
 7. Summarize which gates were run, which failed, and which shared files were touched.
+
+## Environment: Windows PowerShell workarounds
+
+On Windows, PowerShell execution policy blocks `.ps1` scripts by default. Use `node` to invoke CLI tools directly:
+
+| Tool | Windows command | Linux/CI command |
+|------|----------------|-----------------|
+| Lint | `node node_modules/eslint/bin/eslint.js .` | `pnpm lint` |
+| Typecheck | `node node_modules/typescript/bin/tsc -b tsconfig.json --pretty false` | `pnpm typecheck` |
+| Test | `node node_modules/vitest/vitest.mjs run` | `pnpm test` |
+| Markdownlint | `node node_modules/markdownlint-cli2/markdownlint-cli2.mjs "**/*.md" "!**/node_modules/**" "!**/dist/**" "!**/coverage/**"` | `pnpm markdownlint` |
+| Build | `cmd /c "pnpm build"` | `pnpm build` |
+
+Always try the `node` direct invocation first if `pnpm` or `npx` fails with a PowerShell security error.

@@ -1,6 +1,6 @@
 ---
 name: workspace-scaffold-maintenance
-description: "Maintain the pnpm workspace scaffold, package manifests, project references, and shared build wiring. Use when adding, removing, or reshaping packages or shared tooling; do not use for package-local feature edits that leave the scaffold unchanged."
+description: "Use when: adding, removing, or reshaping pnpm workspace packages, package manifests, project references, or shared build wiring; do not use for package-local feature edits that leave the scaffold unchanged."
 user-invocable: false
 ---
 
