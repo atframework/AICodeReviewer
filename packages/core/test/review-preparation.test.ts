@@ -495,4 +495,62 @@ describe("renderPromptTemplate", () => {
     const result = renderPromptTemplate("No placeholders here.", {});
     expect(result).toBe("No placeholders here.");
   });
+
+  it("replaces placeholders with multiline values", () => {
+    const result = renderPromptTemplate("<task>\n{{TASK_CONTEXT}}\n</task>", {
+      TASK_CONTEXT: "Line 1\nLine 2",
+    });
+    expect(result).toBe("<task>\nLine 1\nLine 2\n</task>");
+  });
+});
+
+describe("prepareReviewPrompt edge cases", () => {
+  it("falls back to reviewEvent.changedFiles when changedPaths is omitted", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-prep-empty-"));
+    try {
+      const reviewEvent = createReviewEvent({
+        triggerName: "gitea-internal",
+        provider: "gitea",
+        workspaceId: "ws",
+        targetKind: "pull_request",
+        repoRef: "owent/example",
+        changedFiles: ["src/a.ts"],
+        author: { username: "owent" },
+        reason: "gitea:opened",
+      });
+      const prepared = await prepareReviewPrompt({
+        reviewEvent,
+        sourceRoot: tempDir,
+        baseSystemPrompt: "<task>\n{{TASK_CONTEXT}}\n</task>",
+      });
+      expect(prepared.changedPaths).toEqual(["src/a.ts"]);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("ignores all-whitespace changed paths and falls back to built context", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-prep-ws-paths-"));
+    try {
+      const reviewEvent = createReviewEvent({
+        triggerName: "manual-cli",
+        provider: "manual",
+        workspaceId: "ws",
+        targetKind: "manual",
+        repoRef: "owent/example",
+        reason: "manual:review",
+        author: {},
+      });
+      const prepared = await prepareReviewPrompt({
+        reviewEvent,
+        sourceRoot: tempDir,
+        baseSystemPrompt: "<task>\n{{TASK_CONTEXT}}\n</task>",
+        changedPaths: ["  ", "", "\t"],
+      });
+      expect(prepared.changedPaths).toEqual([]);
+      expect(prepared.taskContext).toContain("- (not provided)");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
 });

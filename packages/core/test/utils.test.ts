@@ -71,4 +71,32 @@ describe("normalizeChangedPath", () => {
   it("normalizes parent directory references that stay within root", () => {
     expect(normalizeChangedPath("/repo", "src/../src/a.ts")).toBe("src/a.ts");
   });
+
+  it("throws for paths that resolve to the parent of source root via multiple segments", () => {
+    expect(() => normalizeChangedPath("/repo", "a/../../escape.ts")).toThrow(/must stay within/u);
+  });
+});
+
+describe("normalizePath edge cases", () => {
+  it("preserves a lone dot segment", () => {
+    expect(normalizePath(".")).toBe(".");
+  });
+
+  it("handles path with multiple consecutive slashes", () => {
+    expect(normalizePath("src//auth///login.ts")).toBe("src/auth/login.ts");
+  });
+});
+
+describe("isPlainObject edge cases", () => {
+  it("returns false for Date instances", () => {
+    expect(isPlainObject(new Date())).toBe(false);
+  });
+
+  it("returns false for RegExp instances", () => {
+    expect(isPlainObject(/test/)).toBe(false);
+  });
+
+  it("returns false for null prototype objects created with Object.create(null)", () => {
+    expect(isPlainObject(Object.create(null))).toBe(true);
+  });
 });

@@ -1,11 +1,19 @@
 import { relative, resolve } from "node:path";
 
 export function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
+  }
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
 }
 
 export function normalizePath(value: string): string {
-  return value.replaceAll("\\", "/").replace(/^\.\//u, "").replace(/^\/+|\/+$/gu, "");
+  return value
+    .replaceAll("\\", "/")
+    .replace(/^\.\//u, "")
+    .replace(/\/+/gu, "/")
+    .replace(/^\/+|\/+$/gu, "");
 }
 
 export function normalizeChangedPath(sourceRoot: string, changedPath: string): string {

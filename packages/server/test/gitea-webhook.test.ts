@@ -3,6 +3,9 @@ import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
+import type { ChatCompletionClient, ModelSpec } from "@aicr/llm";
+import type { ReviewFinding } from "@aicr/outputs";
+import { parseUnifiedDiff, type ChangeRange } from "@aicr/vcs";
 import { describe, expect, it } from "vitest";
 
 import { createServerApp } from "../src/index.js";
@@ -141,6 +144,154 @@ describe("createServerApp", () => {
       expect(body.reviewPreparation).not.toHaveProperty("systemPrompt");
       expect(body.reviewPreparation).not.toHaveProperty("sourceRoot");
       expect(body.reviewPreparation).not.toHaveProperty("taskContext");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("runs review orchestration after accepting a signed webhook", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-server-orchestration-"));
+
+    try {
+      await writeWorkspaceFile(tempDir, "AGENTS.md", "# Root\nReview only concrete defects.\n");
+      await writeWorkspaceFile(tempDir, "src/app.ts", "const ok = false;\nreturn ok;\n");
+      const model: ModelSpec = {
+        providerKind: "openai_compatible",
+        providerId: "openai-prod",
+        modelId: "gpt-test",
+      };
+      const llm: ChatCompletionClient = {
+        async complete(input) {
+          expect(input.messages[0]?.content).toContain("Diff:");
+          return {
+            providerId: input.model.providerId,
+            modelId: input.model.modelId,
+            content: JSON.stringify({
+              toolCalls: [
+                {
+                  name: "aicr.publish_finding",
+                  input: {
+                    file: "src/app.ts",
+                    line: 2,
+                    severity: "medium",
+                    category: "correctness",
+                    message: "The new return path always reports failure.",
+                  },
+                },
+                {
+                  name: "aicr.publish_summary",
+                  input: { markdown: "Found one issue." },
+                },
+              ],
+            }),
+            raw: {},
+          };
+        },
+      };
+      const published: ReviewFinding[] = [];
+      const app = createServerApp({
+        gitea: {
+          triggerName: "gitea-internal",
+          workspaceId: "ws",
+          webhookSecret,
+        },
+        reviewOrchestration: {
+          baseSystemPrompt: [
+            "<repo>",
+            "{{REPO_INSTRUCTION_SUMMARIES}}",
+            "</repo>",
+            "<task>",
+            "{{TASK_CONTEXT}}",
+            "</task>",
+          ].join("\n"),
+          sourceRootResolver: () => tempDir,
+          vcs: {
+            kind: "git",
+            async listChanges(): Promise<ChangeRange> {
+              return { baseRevision: "base-sha", headRevision: "head-sha", files: ["src/app.ts"] };
+            },
+            async fetchScoped(range, ws) {
+              return { workspaceId: ws.id, rootDir: tempDir, fetchedFiles: [...range.files] };
+            },
+            async fetchExtraContext(req) {
+              return { path: req.path, content: "extra context" };
+            },
+            async diff() {
+              return parseUnifiedDiff(
+                [
+                  "diff --git a/src/app.ts b/src/app.ts",
+                  "--- a/src/app.ts",
+                  "+++ b/src/app.ts",
+                  "@@ -1 +1,2 @@",
+                  " const ok = true;",
+                  "+return false;",
+                ].join("\n"),
+              );
+            },
+          },
+          llm,
+          model,
+          outputPublisher: {
+            async publishFinding(finding) {
+              published.push(finding);
+              return { channel: "gitea-pr", status: "published", raw: { id: 7 } };
+            },
+          },
+        },
+      });
+      const payload = JSON.stringify({
+        action: "opened",
+        repository: { full_name: "owent/example" },
+        sender: { login: "owent" },
+        pull_request: {
+          html_url: "https://gitea.internal.corp/owent/example/pulls/42",
+          base: { sha: "base-sha" },
+          head: { sha: "head-sha" },
+        },
+      });
+
+      const response = await app.request("/webhooks/gitea", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-gitea-event": "pull_request",
+          "x-gitea-signature": sign(payload),
+        },
+        body: payload,
+      });
+      const body = (await response.json()) as {
+        accepted: boolean;
+        reviewRun?: {
+          status?: string;
+          findingCount?: number;
+          summaryCount?: number;
+          dispatchCount?: number;
+          promptTokenEstimate?: number;
+          model?: { providerId?: string; modelId?: string };
+          systemPrompt?: string;
+        };
+      };
+
+      expect(response.status).toBe(202);
+      expect(body.accepted).toBe(true);
+      expect(body.reviewRun).toMatchObject({
+        status: "published",
+        findingCount: 1,
+        summaryCount: 1,
+        dispatchCount: 1,
+        model: { providerId: "openai-prod", modelId: "gpt-test" },
+      });
+      expect(body.reviewRun?.promptTokenEstimate).toBeGreaterThan(0);
+      expect(body.reviewRun).not.toHaveProperty("systemPrompt");
+      expect(published).toEqual([
+        {
+          file: "src/app.ts",
+          line: 2,
+          severity: "medium",
+          category: "correctness",
+          message: "The new return path always reports failure.",
+        },
+      ]);
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }

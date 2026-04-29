@@ -16,6 +16,10 @@
   },
   "dependencies": {
     "@aicr/core": "workspace:*",
+    "@aicr/llm": "workspace:*",
+    "@aicr/mcp-output": "workspace:*",
+    "@aicr/outputs": "workspace:*",
+    "@aicr/vcs": "workspace:*",
     "hono": "^4.7.7",
     "zod": "^3.24.4"
   }

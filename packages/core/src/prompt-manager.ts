@@ -102,8 +102,6 @@ const operatorOverridePriority = 1_000;
 
 const frontmatterPattern = /^---\s*\r?\n([\s\S]*?)\r?\n---\s*(?:\r?\n|$)/;
 
-
-
 function truncate(text: string, maxChars = 240): string {
   if (text.length <= maxChars) {
     return text;
@@ -731,7 +729,8 @@ export async function discoverRepoPromptAssets(
         detectedConflicts.push({
           winner: copilot.path,
           loser: alias.path,
-          reason: "copilot-instruction takes precedence over compatible alias",        });
+          reason: "copilot-instruction takes precedence over compatible alias",
+        });
       }
     }
   }
@@ -806,7 +805,12 @@ export function assemblePrompt(input: PromptAssemblyInput): PromptAssemblyOutput
       const removedSkill = skillRefs.pop();
       if (removedSkill) {
         droppedInstructionRefs.push(
-          createDroppedRef("skill", removedSkill.label, `trimmed to stay within prompt budget (${input.maxPromptTokens} tokens)`, removedSkill.path ? { path: removedSkill.path } : undefined),
+          createDroppedRef(
+            "skill",
+            removedSkill.label,
+            `trimmed to stay within prompt budget (${input.maxPromptTokens} tokens)`,
+            removedSkill.path ? { path: removedSkill.path } : undefined,
+          ),
         );
         removed = true;
       }

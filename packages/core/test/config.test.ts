@@ -937,7 +937,7 @@ describe("mergeConfigLayers", () => {
     }
   });
 
-  it("rejects system-only fields in workspace config files per Plan §3.10", () => {
+it("rejects system-only fields in workspace config files per Plan §3.10", () => {
     for (const config of [
       { queue: { kind: "redis" } },
       { agent: { auto_approve: true } },
@@ -945,5 +945,98 @@ describe("mergeConfigLayers", () => {
     ]) {
       expect(workspaceConfigFileSchema.safeParse(config).success).toBe(false);
     }
+  });
+
+  it("accepts all commit_strategy values from Plan §3.10", () => {
+    for (const strategy of ["per_commit", "aggregate", "head_only"]) {
+      const result = appConfigSchema.safeParse({
+        review: { commit_strategy: strategy },
+      });
+      expect(result.success).toBe(true);
+    }
+  });
+
+  it("rejects an invalid commit_strategy", () => {
+    const result = appConfigSchema.safeParse({
+      review: { commit_strategy: "per_file" },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("accepts review git.allow_deepen: false", () => {
+    const result = appConfigSchema.safeParse({
+      review: { git: { allow_deepen: false } },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects unknown fields in review git section", () => {
+    const result = appConfigSchema.safeParse({
+      review: { git: { unknown_field: true } },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects unknown fields in review fetch_extra section", () => {
+    const result = appConfigSchema.safeParse({
+      review: { fetch_extra: { unknown_field: true } },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("accepts workspace config file with only source_repo", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-workspace-src-only-"));
+    const filePath = join(tempDir, "config.yaml");
+
+    try {
+      await writeFile(filePath, "source_repo: { trigger: gitea-internal, repo: owent/example }\n", "utf8");
+      const loaded = await loadWorkspaceConfigFile(filePath);
+      expect(loaded.source_repo?.trigger).toBe("gitea-internal");
+      expect(loaded.review).toBeUndefined();
+      expect(loaded.outputs).toBeUndefined();
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("workspace config file rejects unknown trigger kinds", () => {
+    const result = workspaceConfigFileSchema.safeParse({
+      triggers: [{ name: "test", kind: "bitbucket" }],
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("resolves workspace defaults merge with no instance overrides", () => {
+    const merged = mergeConfigLayers({
+      workspaces: {
+        defaults: {
+          sandbox: { kind: "docker", engine: "auto" },
+          review: { commit_strategy: "aggregate" },
+          agent: { default: "kilo" },
+        },
+        instances: {
+          "bare-workspace": {},
+        },
+      },
+    });
+
+    const workspace = resolveWorkspaceConfig(merged, "bare-workspace");
+    expect(workspace.sandbox?.kind).toBe("docker");
+    expect(workspace.sandbox?.engine).toBe("auto");
+    expect(workspace.review?.commit_strategy).toBe("aggregate");
+    expect(workspace.agent?.default).toBe("kilo");
+  });
+
+  it("accepts workspace instances with sandbox override that upgrades isolation", () => {
+    const result = appConfigSchema.safeParse({
+      workspaces: {
+        instances: {
+          "contractor-workspace": {
+            sandbox: { kind: "docker_socket", engine: "podman" },
+          },
+        },
+      },
+    });
+    expect(result.success).toBe(true);
   });
 });
