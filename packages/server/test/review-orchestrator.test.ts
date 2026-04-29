@@ -644,7 +644,7 @@ describe("runReviewOrchestration error paths", () => {
     }
   });
 
-  it("reports published status when dryRun is false and no publisher is configured", async () => {
+  it("reports skipped status when dryRun is false and no publisher is configured", async () => {
     const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-no-publisher-"));
 
     try {
@@ -681,7 +681,8 @@ describe("runReviewOrchestration error paths", () => {
         },
       );
 
-      expect(result.status).toBe("published");
+      expect(result.status).toBe("skipped");
+      expect(result.skipReason).toBe("no_output_publisher");
       expect(result.findingCount).toBe(1);
       expect(result.dispatchCount).toBe(0);
     } finally {
@@ -760,6 +761,44 @@ describe("runReviewOrchestration error paths", () => {
           },
         ),
       ).rejects.toThrow(/toolCalls entries must be objects/u);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a toolCalls field that is not an array", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-toolcalls-not-array-"));
+
+    try {
+      await writeWorkspaceFile(tempDir, "src/app.ts", "const ok = true;\n");
+      const llm: ChatCompletionClient = {
+        async complete(input) {
+          return {
+            providerId: input.model.providerId,
+            modelId: input.model.modelId,
+            content: JSON.stringify({ toolCalls: "not-an-array" }),
+            raw: {},
+          };
+        },
+      };
+
+      await expect(
+        runReviewOrchestration(
+          {
+            reviewEvent: createReviewEventFixture(),
+            payload: {},
+            provider: "gitea",
+            eventName: "pull_request",
+          },
+          {
+            baseSystemPrompt: "<task>\n{{TASK_CONTEXT}}\n</task>",
+            sourceRootResolver: () => tempDir,
+            vcs: createVcs(tempDir),
+            llm,
+            model,
+          },
+        ),
+      ).rejects.toThrow(/toolCalls must be an array/u);
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }
@@ -1240,6 +1279,8 @@ describe("extractJsonPayload edge cases", () => {
 
       expect(result.findingCount).toBe(0);
       expect(result.summaryCount).toBe(1);
+      expect(result.status).toBe("skipped");
+      expect(result.skipReason).toBe("no_dispatchable_findings");
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }
