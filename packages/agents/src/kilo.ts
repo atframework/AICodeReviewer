@@ -56,7 +56,31 @@ function buildKiloProviderConfig(model: ModelSpec): Record<string, unknown> {
     Object.assign(provider, model.extraParams);
   }
 
+  if (model.extraHeaders) {
+    provider.extraHeaders = model.extraHeaders;
+  }
+
+  if (model.extraBody) {
+    provider.extraBody = model.extraBody;
+  }
+
+  if (model.apiVersion) {
+    provider.apiVersion = model.apiVersion;
+  }
+
+  if (model.thinkingLevel) {
+    provider.thinkingLevel = model.thinkingLevel;
+  }
+
+  if (model.responseFormat) {
+    provider.responseFormat = model.responseFormat;
+  }
+
   return provider;
+}
+
+function sanitizeEnvSuffix(value: string): string {
+  return value.replace(/[^A-Za-z0-9]/gu, "_").toUpperCase();
 }
 
 export function createKiloAdapter(options: KiloAdapterOptions = {}): AgentAdapter {
@@ -108,6 +132,7 @@ export function createKiloAdapter(options: KiloAdapterOptions = {}): AgentAdapte
       const envVars: Record<string, string> = {};
       if (model.apiKeyEnv) {
         envVars.KILO_API_KEY = `\${${model.apiKeyEnv}}`;
+        envVars[`KILO_API_KEY_${sanitizeEnvSuffix(model.providerId)}`] = `\${${model.apiKeyEnv}}`;
       }
 
       return {

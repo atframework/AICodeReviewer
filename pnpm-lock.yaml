@@ -95,7 +95,14 @@ importers:
 
   packages/eval: {}
 
-  packages/llm: {}
+  packages/llm:
+    dependencies:
+      '@aicr/core':
+        specifier: workspace:*
+        version: link:../core
+      '@aicr/vcs':
+        specifier: workspace:*
+        version: link:../vcs
 
   packages/mcp-output: {}
 

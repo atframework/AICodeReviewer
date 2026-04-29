@@ -82,9 +82,220 @@ export function resolveModelSpecFromConfig(config: AppConfig, providerId?: strin
     providerKind: provider.kind as ModelProviderKind,
     providerId: provider.id,
     modelId,
-    ...(provider.base_url ? { baseUrl: provider.base_url } : {}),
-    ...(provider.api_key_env ? { apiKeyEnv: provider.api_key_env } : {}),
+    ...resolveModelProviderFields(provider),
   };
+}
+
+function readString(raw: Record<string, unknown>, ...keys: readonly string[]): string | undefined {
+  for (const key of keys) {
+    const value = raw[key];
+    if (typeof value === "string" && value.length > 0) {
+      return value;
+    }
+  }
+
+  return undefined;
+}
+
+function readNumber(raw: Record<string, unknown>, ...keys: readonly string[]): number | undefined {
+  for (const key of keys) {
+    const value = raw[key];
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return value;
+    }
+  }
+
+  return undefined;
+}
+
+function readBoolean(raw: Record<string, unknown>, ...keys: readonly string[]): boolean | undefined {
+  for (const key of keys) {
+    const value = raw[key];
+    if (typeof value === "boolean") {
+      return value;
+    }
+  }
+
+  return undefined;
+}
+
+function readStringArray(raw: Record<string, unknown>, ...keys: readonly string[]): readonly string[] | undefined {
+  for (const key of keys) {
+    const value = raw[key];
+    if (Array.isArray(value) && value.every((entry) => typeof entry === "string")) {
+      return value;
+    }
+  }
+
+  return undefined;
+}
+
+function readRecord(raw: Record<string, unknown>, ...keys: readonly string[]): Readonly<Record<string, unknown>> | undefined {
+  for (const key of keys) {
+    const value = raw[key];
+    if (isPlainObject(value)) {
+      return value;
+    }
+  }
+
+  return undefined;
+}
+
+function readStringRecord(raw: Record<string, unknown>, ...keys: readonly string[]): Readonly<Record<string, string>> | undefined {
+  const value = readRecord(raw, ...keys);
+  if (!value || Object.values(value).some((entry) => typeof entry !== "string")) {
+    return undefined;
+  }
+
+  return value as Readonly<Record<string, string>>;
+}
+
+function readNumberRecord(raw: Record<string, unknown>, ...keys: readonly string[]): Readonly<Record<string, number>> | undefined {
+  const value = readRecord(raw, ...keys);
+  if (!value || Object.values(value).some((entry) => typeof entry !== "number")) {
+    return undefined;
+  }
+
+  return value as Readonly<Record<string, number>>;
+}
+
+function readThinking(raw: Record<string, unknown>): ModelSpec["thinking"] | undefined {
+  const value = readRecord(raw, "thinking");
+  if (!value || typeof value.enabled !== "boolean") {
+    return undefined;
+  }
+
+  return {
+    enabled: value.enabled,
+    ...(typeof value.budgetTokens === "number" ? { budgetTokens: value.budgetTokens } : {}),
+    ...(typeof value.budget_tokens === "number" ? { budgetTokens: value.budget_tokens } : {}),
+  };
+}
+
+function readResponseFormat(raw: Record<string, unknown>): ModelSpec["responseFormat"] | undefined {
+  const value = readRecord(raw, "response_format", "responseFormat");
+  if (!value || (value.kind !== "json_schema" && value.kind !== "json_object" && value.kind !== "text")) {
+    return undefined;
+  }
+
+  return {
+    kind: value.kind,
+    ...(value.schema !== undefined ? { schema: value.schema } : {}),
+  };
+}
+
+function readToolChoice(raw: Record<string, unknown>): ModelSpec["toolChoice"] | undefined {
+  const value = raw.tool_choice ?? raw.toolChoice;
+  if (value === "auto" || value === "none" || value === "required") {
+    return value;
+  }
+
+  if (isPlainObject(value) && typeof value.name === "string") {
+    return { name: value.name };
+  }
+
+  return undefined;
+}
+
+type MutableModelFields = {
+  -readonly [K in keyof ModelSpec]?: ModelSpec[K];
+};
+
+function resolveModelProviderFields(provider: AppConfig["llm"]["providers"][number]): Partial<ModelSpec> {
+  const raw = provider as Record<string, unknown>;
+  const fields: MutableModelFields = {};
+
+  const baseUrl = readString(raw, "base_url", "baseUrl");
+  if (baseUrl !== undefined) fields.baseUrl = baseUrl;
+  const apiKeyEnv = readString(raw, "api_key_env", "apiKeyEnv");
+  if (apiKeyEnv !== undefined) fields.apiKeyEnv = apiKeyEnv;
+  const organization = readString(raw, "organization");
+  if (organization !== undefined) fields.organization = organization;
+  const extraHeaders = readStringRecord(raw, "extra_headers", "extraHeaders");
+  if (extraHeaders !== undefined) fields.extraHeaders = extraHeaders;
+  const extraBody = readRecord(raw, "extra_body", "extraBody");
+  if (extraBody !== undefined) fields.extraBody = extraBody;
+  const extraParams = readRecord(raw, "extra_params", "extraParams");
+  if (extraParams !== undefined) fields.extraParams = extraParams;
+  const httpProxy = readString(raw, "http_proxy", "httpProxy");
+  if (httpProxy !== undefined) fields.httpProxy = httpProxy;
+  const timeoutMs = readNumber(raw, "timeout_ms", "timeoutMs");
+  if (timeoutMs !== undefined) fields.timeoutMs = timeoutMs;
+  const maxRetries = readNumber(raw, "max_retries", "maxRetries");
+  if (maxRetries !== undefined) fields.maxRetries = maxRetries;
+  const apiVersion = readString(raw, "api_version", "apiVersion");
+  if (apiVersion !== undefined) fields.apiVersion = apiVersion;
+  const vertexProject = readString(raw, "vertex_project", "vertexProject");
+  if (vertexProject !== undefined) fields.vertexProject = vertexProject;
+  const vertexLocation = readString(raw, "vertex_location", "vertexLocation");
+  if (vertexLocation !== undefined) fields.vertexLocation = vertexLocation;
+  const googleCredentialsEnv = readString(raw, "google_application_credentials_env", "googleApplicationCredentialsEnv");
+  if (googleCredentialsEnv !== undefined) fields.googleApplicationCredentialsEnv = googleCredentialsEnv;
+  const awsRegion = readString(raw, "aws_region", "awsRegion");
+  if (awsRegion !== undefined) fields.awsRegion = awsRegion;
+  const awsAccessKeyEnv = readString(raw, "aws_access_key_env", "awsAccessKeyEnv");
+  if (awsAccessKeyEnv !== undefined) fields.awsAccessKeyEnv = awsAccessKeyEnv;
+  const awsSecretKeyEnv = readString(raw, "aws_secret_key_env", "awsSecretKeyEnv");
+  if (awsSecretKeyEnv !== undefined) fields.awsSecretKeyEnv = awsSecretKeyEnv;
+  const awsSessionTokenEnv = readString(raw, "aws_session_token_env", "awsSessionTokenEnv");
+  if (awsSessionTokenEnv !== undefined) fields.awsSessionTokenEnv = awsSessionTokenEnv;
+  const awsProfile = readString(raw, "aws_profile", "awsProfile");
+  if (awsProfile !== undefined) fields.awsProfile = awsProfile;
+  const anthropicVersion = readString(raw, "anthropic_version", "anthropicVersion");
+  if (anthropicVersion !== undefined) fields.anthropicVersion = anthropicVersion;
+  const anthropicBeta = readStringArray(raw, "anthropic_beta", "anthropicBeta");
+  if (anthropicBeta !== undefined) fields.anthropicBeta = anthropicBeta;
+
+  const cacheControl = readString(raw, "cache_control", "cacheControl");
+  if (cacheControl === "ephemeral" || cacheControl === "off") fields.cacheControl = cacheControl;
+  const thinkingLevel = readString(raw, "thinking_level", "thinkingLevel");
+  if (
+    thinkingLevel === "off" ||
+    thinkingLevel === "minimal" ||
+    thinkingLevel === "low" ||
+    thinkingLevel === "medium" ||
+    thinkingLevel === "high" ||
+    thinkingLevel === "max"
+  ) {
+    fields.thinkingLevel = thinkingLevel;
+  }
+  const thinkingBudgetTokens = readNumber(raw, "thinking_budget_tokens", "thinkingBudgetTokens");
+  if (thinkingBudgetTokens !== undefined) fields.thinkingBudgetTokens = thinkingBudgetTokens;
+  const reasoningEffort = readString(raw, "reasoning_effort", "reasoningEffort");
+  if (
+    reasoningEffort === "minimal" ||
+    reasoningEffort === "low" ||
+    reasoningEffort === "medium" ||
+    reasoningEffort === "high"
+  ) {
+    fields.reasoningEffort = reasoningEffort;
+  }
+  const thinking = readThinking(raw);
+  if (thinking !== undefined) fields.thinking = thinking;
+  const responseFormat = readResponseFormat(raw);
+  if (responseFormat !== undefined) fields.responseFormat = responseFormat;
+  const toolChoice = readToolChoice(raw);
+  if (toolChoice !== undefined) fields.toolChoice = toolChoice;
+  const parallelToolCalls = readBoolean(raw, "parallel_tool_calls", "parallelToolCalls");
+  if (parallelToolCalls !== undefined) fields.parallelToolCalls = parallelToolCalls;
+  const seed = readNumber(raw, "seed");
+  if (seed !== undefined) fields.seed = seed;
+  const logitBias = readNumberRecord(raw, "logit_bias", "logitBias");
+  if (logitBias !== undefined) fields.logitBias = logitBias;
+  const dropParams = readStringArray(raw, "drop_params", "dropParams");
+  if (dropParams !== undefined) fields.dropParams = dropParams;
+  const allowedOpenaiParams = readStringArray(raw, "allowed_openai_params", "allowedOpenaiParams");
+  if (allowedOpenaiParams !== undefined) fields.allowedOpenaiParams = allowedOpenaiParams;
+  const contextWindow = readNumber(raw, "context_window", "contextWindow");
+  if (contextWindow !== undefined) fields.contextWindow = contextWindow;
+  const supportsToolCall = readBoolean(raw, "supports_tool_call", "supportsToolCall");
+  if (supportsToolCall !== undefined) fields.supportsToolCall = supportsToolCall;
+  const supportsVision = readBoolean(raw, "supports_vision", "supportsVision");
+  if (supportsVision !== undefined) fields.supportsVision = supportsVision;
+  const supportsCachePrompt = readBoolean(raw, "supports_cache_prompt", "supportsCachePrompt");
+  if (supportsCachePrompt !== undefined) fields.supportsCachePrompt = supportsCachePrompt;
+
+  return fields;
 }
 
 export function createLlmClientFromModelSpec(model: ModelSpec): ChatCompletionClient {
@@ -337,8 +548,7 @@ function toGatewayProviders(
   return providers.map((p) => ({
     id: p.id,
     kind: p.kind as ModelProviderKind,
-    ...(p.base_url ? { baseUrl: p.base_url } : {}),
-    ...(p.api_key_env ? { apiKeyEnv: p.api_key_env } : {}),
+    ...resolveModelProviderFields(p),
   }));
 }
 
@@ -401,7 +611,7 @@ function toGatewayFallbackChain(
   }));
 }
 
-export function bootstrapServerApp(options: BootstrapServerOptions): ServerAppOptions {
+export async function bootstrapServerApp(options: BootstrapServerOptions): Promise<ServerAppOptions> {
   const { config, baseSystemPrompt, baseDir = process.cwd() } = options;
 
   const giteaConfig = resolveGiteaWebhookConfig(config);
@@ -420,6 +630,8 @@ export function bootstrapServerApp(options: BootstrapServerOptions): ServerAppOp
   });
 
   const sourceRootResolver = buildSourceRootResolver(baseDir);
+  const sandbox = await createSandboxBackendFromConfig(config);
+  const agentAdapter = resolveAgentAdapterFromConfig(config);
 
   const orchestrationOptions: ServerReviewOrchestrationOptions = {
     baseSystemPrompt,
@@ -429,6 +641,9 @@ export function bootstrapServerApp(options: BootstrapServerOptions): ServerAppOp
     model,
     dryRun: false,
     outputPublisherResolver: createOutputPublisherResolverFromConfig(config),
+    sandbox,
+    agentAdapter,
+    agentTimeoutMs: config.agent.timeout_seconds * 1000,
   };
 
   return {

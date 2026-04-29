@@ -11,6 +11,10 @@
       "default": "./dist/index.js"
     }
   },
+  "dependencies": {
+    "@aicr/core": "workspace:*",
+    "@aicr/vcs": "workspace:*"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json"
   }

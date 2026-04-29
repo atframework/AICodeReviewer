@@ -7,6 +7,7 @@ import { describe, expect, it, afterEach } from "vitest";
 import {
   sandboxPackageName,
   createNativeSandboxBackend,
+  createDockerSandboxBackend,
   ALLOWED_COMMANDS,
   DEFAULT_SANDBOX_IMAGE,
   DEFAULT_TIMEOUT_MS,
@@ -264,5 +265,48 @@ describe("createNativeSandboxBackend", () => {
       const backend = createNativeSandboxBackend();
       await expect(backend.teardown()).resolves.toBeUndefined();
     });
+  });
+});
+
+describe("createDockerSandboxBackend", () => {
+  it("uses materialized source, agent, and tmp mounts when spawning", async () => {
+    const calls: { engine: string; args: readonly string[] }[] = [];
+    const backend = createDockerSandboxBackend({
+      kind: "docker",
+      image: "aicr-test-image",
+      commandRunner: async (engine, args) => {
+        calls.push({ engine, args });
+        return { stdout: "{}", stderr: "", exitCode: 0 };
+      },
+    });
+    const base = await mkdtemp(join(tmpdir(), "aicr-docker-sandbox-"));
+
+    try {
+      await backend.materializeFs({
+        sourceDir: join(base, "source"),
+        agentDir: join(base, "agent"),
+        tmpDir: join(base, "tmp"),
+      });
+
+      await backend.spawn({
+        command: ["node", "agent.js"],
+        cwd: join(base, "agent"),
+      });
+
+      expect(calls[0]?.engine).toBe("docker");
+      expect(calls[0]?.args).toEqual(
+        expect.arrayContaining([
+          "-v",
+          `${join(base, "source")}:/workspace/source:ro`,
+          "-v",
+          `${join(base, "agent")}:/workspace/agent:rw`,
+          "-v",
+          `${join(base, "tmp")}:/workspace/tmp:rw`,
+        ]),
+      );
+    } finally {
+      await backend.teardown();
+      await rm(base, { recursive: true, force: true });
+    }
   });
 });

@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node node_modules/vitest/vitest.mjs run packages/llm/test/compression.test.ts)",
+      "Bash(node -e \"const m = require\\('markdownlint-cli2'\\); console.log\\(Object.keys\\(m\\)\\)\")",
+      "Bash(node -e \"const m = require\\('markdownlint'\\); console.log\\(Object.keys\\(m\\)\\)\")",
+      "Bash(node node_modules/vitest/vitest.mjs run packages/core/test/markdown-fixer.test.ts)",
+      "Bash(node node_modules/vitest/vitest.mjs run packages/core/test/queue.test.ts)",
+      "Bash(node node_modules/vitest/vitest.mjs run packages/llm/test/gateway.test.ts)",
+      "Bash(git checkout *)",
+      "Bash(node node_modules/typescript/bin/tsc -b tsconfig.json --pretty false)",
+      "Bash(node node_modules/vitest/vitest.mjs run)"
+    ]
+  }
+}

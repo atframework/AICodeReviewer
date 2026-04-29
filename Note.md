@@ -46,15 +46,12 @@ Cost: **消耗Token: 约11.7M(Pro订阅 5小时的19%)**
 | 优化 | 1    | 抽出 parseAllowedCommand() 让 native/docker sandbox 共用白名单校验逻辑，并在 AGENTS.md 记录新坑位                                                                        | 约 17 行     | 约 1.07%   |
 | 合计 | 6    | 本轮实现侧修复总量                                                                                                                                                       | 约 185 行    | 约 11.67%  |
 
-
 | 类型             | 数量 | 覆盖内容                                                                                                                                                                                                                             | 约测试代码量 | 测试代码量占比 |
 | ---------------- | ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------ | -------------- |
 | 单元测试遗漏补全 | 9    | Podman CLI 选择、docker→podman auto fallback、显式 podman preflight、容器命令白名单、factory 传递 allowlist、native stdin EOF、translator apiKeyEnv fallback、Plan 风格 Gitea publisher 配置解析、workspace route publisher resolver | 约 214 行    | 约 9.52%       |
 | 错误修复         | 2    | bootstrapServerApp 从期望 dryRun: true 改为可发布；“required fields missing” 用例调整为真正缺 trigger/workspace repo 的场景                                                                                                          | 约 10 行     | 约 0.44%       |
 | 测试意图未覆盖   | 3    | 编排器 per-event outputPublisherResolver dispatch；缺 PR number 时 resolver 返回 `undefined`；sandbox package name 测试改为真实导出断言                                                                                              | 约 62 行     | 约 2.76%       |
 | 合计             | 14   | 本轮测试侧补齐/修正总量                                                                                                                                                                                                              | 约 286 行    | 约 12.73%      |
-
-
 
 ### Kimi K2.6 + Max思考强度
 
@@ -75,6 +72,27 @@ Cost: **消耗Token: 约5.2M(Allegretto订阅 5小时的8%，高峰期倍率x3)*
 | 错误修复         | 3    | 旧测试中“400 会 fallback”的错误意图改为 5xx；retry attempts 语义从“重试次数”修正为“总调用次数”；provider override 下 maxAttempts=1 不再期望 retry          | 约 15 行     | 约 0.45%               |
 | 测试意图未覆盖   | 2    | 预算超限不触发 fallback 的断言；fallback callback 只在可恢复错误切换模型时触发                                                                             | 约 20 行     | 约 0.61%               |
 | 合计             | 10   | 本轮测试侧补齐/修正总量                                                                                                                                    | 约 160 行    | 约 4.85%               |
+
+### DeepSeed V4 Pro + Max思考强度
+
+Cost: **消耗Token: 约17M(缓存命中率大约97%，现在有Super打折活动，只花了2块9毛)**
+
+AI Agent: 由于Kilo Code和Roo Code都还没完全适配 DeepSeed V4 Pro 的 reasoning_content ，所以实际代码是Kilo Code先改了一小部分之后改用Claude Code完成。
+
+| 类型 | 数量 | 主要内容                                                                                                                            | 约实现代码量 | 占参与分析实现代码比例 |
+| ---- | ---- | ----------------------------------------------------------------------------------------------------------------------------------- | ------------ | ---------------------- |
+| 致命 | 0    | 未发现会导致当前仓库无法启动/构建的致命缺陷                                                                                         | 0 行         | 0.00%                  |
+| 严重 | 3    | M2 agent+sandbox 未接入真实编排链路；ModelSpec/provider 字段在配置/fallback/adapter 间丢失；Docker sandbox 忽略 materialized mounts | 约 410 行    | 约 9.08%               |
+| 一般 | 3    | Kilo provider config/env 映射不完整；lint 阻断项；fallback ModelSpec 额外字段清理                                                   | 约 35 行     | 约 0.78%               |
+| 优化 | 1    | 将外部 CLI 探测相关行为改为确定性路径，降低本地/CI 偶发失败概率                                                                     | 约 5 行      | 约 0.11%               |
+| 合计 | 7    | 本轮实现侧修复总量                                                                                                                  | 约 450 行    | 约 9.97%               |
+
+| 类型             | 数量 | 覆盖内容                                                                                                                                            | 约测试代码量 | 占参与分析测试代码比例 |
+| ---------------- | ---- | --------------------------------------------------------------------------------------------------------------------------------------------------- | ------------ | ---------------------- |
+| 单元测试遗漏补全 | 5    | agent+sandbox orchestration；bootstrap 注入 sandbox/agent；Plan ModelSpec 字段映射；Docker materialized mounts；真实 system prompt placeholder 装配 | 约 220 行    | 约 6.22%               |
+| 错误修复         | 1    | Kilo detect 测试不再依赖真实 `kilo` binary，改用 process.execPath                                                                                   | 约 6 行      | 约 0.17%               |
+| 测试意图未覆盖   | 2    | agent stdin/env/teardown 断言；Kilo providers.json 和 provider-specific env 断言                                                                    | 约 34 行     | 约 0.96%               |
+| 合计             | 8    | 本轮测试侧补齐/修正总量                                                                                                                             | 约 260 行    | 约 7.35%               |
 
 ## Continue Plan
 

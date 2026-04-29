@@ -174,7 +174,7 @@ export async function runCli(
       const baseSystemPrompt = await loadSystemPromptTemplate(basePromptPath);
       const port = parseOptionalInteger(values.port, "--port") ?? 8080;
 
-      const serverOptions = bootstrapServerApp({
+      const serverOptions = await bootstrapServerApp({
         config,
         baseSystemPrompt,
         baseDir: cwd,

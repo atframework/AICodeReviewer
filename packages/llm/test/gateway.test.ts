@@ -2,7 +2,6 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
 	createResilientChatClient,
-	LlmBudgetExceededError,
 	LlmFallbackExhaustedError,
 	LlmProviderError,
 	type ChatCompletionClient,
@@ -340,7 +339,7 @@ describe("createResilientChatClient", () => {
 		expect(result.retryCount).toBe(0);
 	});
 
-	it("throws LlmBudgetExceededError when perRunUsd is exceeded", async () => {
+	it("returns budgetExceeded flag when perRunUsd is exceeded", async () => {
 		const expensiveResult: ChatCompletionResult = {
 			providerId: "openai-prod",
 			modelId: "gpt-test",
@@ -359,9 +358,9 @@ describe("createResilientChatClient", () => {
 			}),
 		);
 
-		await expect(gateway.complete({ model: baseModel, messages: [] })).rejects.toBeInstanceOf(
-			LlmBudgetExceededError,
-		);
+		const result = await gateway.complete({ model: baseModel, messages: [] });
+		expect(result.budgetExceeded).toBe("per_run");
+		expect(result.content).toBe("expensive");
 		expect(clientFactory).toHaveBeenCalledOnce();
 		expect(onFallback).not.toHaveBeenCalled();
 	});

@@ -1,12 +1,26 @@
+import { basename, dirname, join } from "node:path";
+
 import {
   buildReviewTaskContext,
+  fixAndValidateMarkdown,
   isPlainObject,
   prepareReviewPrompt,
+  scrubPromptMessages,
+  scrubText,
   type PreparedReviewPrompt,
   type ReviewEvent,
+  type ScrubFinding,
 } from "@aicr/core";
 import type { AgentAdapter } from "@aicr/agents";
-import type { ChatCompletionClient, ChatCompletionResult, ModelSpec } from "@aicr/llm";
+import {
+  type ChatCompletionClient,
+  type ChatCompletionResult,
+  compressDiff,
+  estimatePromptTokenCount,
+  shouldTriggerCompression,
+  type CompressionConfig,
+  type ModelSpec,
+} from "@aicr/llm";
 import {
   AicrOutputCollector,
   createAicrOutputToolRegistry,
@@ -17,7 +31,7 @@ import {
   type PublishFindingInput,
 } from "@aicr/mcp-output";
 import type { DispatchResult, ReviewFinding } from "@aicr/outputs";
-import type { SandboxBackend } from "@aicr/sandbox";
+import type { SandboxBackend, SandboxSpawnResult } from "@aicr/sandbox";
 import type { ChangeRange, ExtraContextRequest, ParsedDiff, VcsAdapter } from "@aicr/vcs";
 
 export interface DiffCapableVcsAdapter extends VcsAdapter {
@@ -56,11 +70,15 @@ export interface ServerReviewOrchestrationOptions {
   readonly sandbox?: SandboxBackend;
   readonly agentAdapter?: AgentAdapter;
   readonly agentTimeoutMs?: number;
+  readonly scrubSecrets?: boolean;
   readonly taskContextBuilder?: (
     reviewEvent: ReviewEvent,
     changedPaths: readonly string[],
     diff: ParsedDiff | undefined,
   ) => string | undefined;
+  readonly compression?: CompressionConfig;
+  readonly summarizeModel?: ModelSpec;
+  readonly summarizeClient?: ChatCompletionClient;
 }
 
 export interface ReviewOrchestrationResult {
@@ -83,6 +101,11 @@ export interface ReviewOrchestrationResult {
   readonly outputState: AicrOutputState;
   readonly dispatchResults: readonly DispatchResult[];
   readonly llmResult: ChatCompletionResult;
+  readonly agentResult?: SandboxSpawnResult;
+  readonly scrubFindings: readonly ScrubFinding[];
+  readonly compressed?: boolean;
+  readonly originalTokenEstimate?: number;
+  readonly compressedTokenEstimate?: number;
 }
 
 export interface ReviewOrchestrationWebhookSummary {
@@ -96,6 +119,9 @@ export interface ReviewOrchestrationWebhookSummary {
   readonly contextRequestCount: number;
   readonly dispatchCount: number;
   readonly skipReason?: string;
+  readonly compressed?: boolean;
+  readonly originalTokenEstimate?: number;
+  readonly compressedTokenEstimate?: number;
   readonly model: {
     readonly providerId: string;
     readonly modelId: string;
@@ -163,6 +189,98 @@ function buildTaskContext(
     "",
     buildJsonToolContract(),
   ].join("\n");
+}
+
+function deriveWorkspaceRuntimeDirs(sourceRoot: string): { agentDir: string; tmpDir: string } {
+  const sourceParent = dirname(sourceRoot);
+  const workspaceRoot = basename(sourceParent) === "source" ? dirname(sourceParent) : sourceRoot;
+
+  return {
+    agentDir: join(workspaceRoot, "agent"),
+    tmpDir: join(workspaceRoot, "tmp"),
+  };
+}
+
+function resolveEnvPlaceholders(envVars: Readonly<Record<string, string>>): Record<string, string> {
+  const resolved: Record<string, string> = {};
+
+  for (const [key, value] of Object.entries(envVars)) {
+    const envRef = /^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$/u.exec(value);
+    resolved[key] = envRef ? process.env[envRef[1]!] ?? "" : value;
+  }
+
+  return resolved;
+}
+
+function agentWorkingDirForSandbox(sandbox: SandboxBackend, hostAgentDir: string): string {
+  return sandbox.kind === "native" ? hostAgentDir : "/workspace/agent";
+}
+
+async function runAgentReview(
+  sourceRoot: string,
+  task: string,
+  options: ServerReviewOrchestrationOptions,
+): Promise<{ readonly llmResult: ChatCompletionResult; readonly agentResult: SandboxSpawnResult }> {
+  const sandbox = options.sandbox;
+  const agentAdapter = options.agentAdapter;
+  if (!sandbox || !agentAdapter) {
+    throw new TypeError("Agent review requires both sandbox and agentAdapter options.");
+  }
+
+  const dirs = deriveWorkspaceRuntimeDirs(sourceRoot);
+  let agentResult: SandboxSpawnResult | undefined;
+
+  try {
+    const materializedFs = await sandbox.materializeFs({
+      sourceDir: sourceRoot,
+      agentDir: dirs.agentDir,
+      tmpDir: dirs.tmpDir,
+    });
+    const materializedAgent = await agentAdapter.materializeConfig(options.model, materializedFs.agentDir);
+    const command = agentAdapter.buildCommand(task, {
+      workingDir: agentWorkingDirForSandbox(sandbox, materializedAgent.workingDir),
+      ...(options.agentTimeoutMs !== undefined ? { timeoutMs: options.agentTimeoutMs } : {}),
+      model: options.model,
+      autoApprove: true,
+      task,
+    });
+    const env = resolveEnvPlaceholders(materializedAgent.envVars);
+
+    agentResult = await sandbox.spawn({
+      command,
+      cwd: materializedFs.agentDir,
+      ...(Object.keys(env).length > 0 ? { env } : {}),
+      ...(options.agentTimeoutMs !== undefined ? { timeoutMs: options.agentTimeoutMs } : {}),
+      stdin: task,
+    });
+  } finally {
+    await sandbox.teardown();
+  }
+
+  if (agentResult.timedOut) {
+    throw new Error(`Agent ${agentAdapter.kind} timed out after ${agentResult.durationMs}ms.`);
+  }
+
+  if (agentResult.exitCode !== 0) {
+    throw new Error(
+      `Agent ${agentAdapter.kind} exited with code ${agentResult.exitCode ?? "unknown"}: ${agentResult.stderr}`,
+    );
+  }
+
+  return {
+    llmResult: {
+      providerId: options.model.providerId,
+      modelId: options.model.modelId,
+      content: agentResult.stdout,
+      raw: {
+        agent: agentAdapter.kind,
+        exitCode: agentResult.exitCode,
+        stderr: agentResult.stderr,
+        durationMs: agentResult.durationMs,
+      },
+    },
+    agentResult,
+  };
 }
 
 function extractJsonPayload(content: string): unknown {
@@ -315,8 +433,41 @@ export async function runReviewOrchestration(
         { contextLines: options.diffContextLines ?? 3 },
       )
     : undefined;
-  const taskContext = options.taskContextBuilder?.(context.reviewEvent, changedPaths, diff) ??
+  const rawTaskContext = options.taskContextBuilder?.(context.reviewEvent, changedPaths, diff) ??
     buildTaskContext(context.reviewEvent, changedPaths, diff);
+
+  let compressed = false;
+  let originalTokenEstimate: number | undefined;
+  let compressedTokenEstimate: number | undefined;
+  let taskContext = rawTaskContext;
+
+  if (diff && options.compression && options.summarizeModel && options.summarizeClient) {
+    const preEstimate = estimatePromptTokenCount(rawTaskContext);
+    if (shouldTriggerCompression(preEstimate, options.model, options.compression)) {
+      const compressionResult = await compressDiff({
+        diff,
+        promptText: rawTaskContext,
+        model: options.model,
+        config: options.compression,
+        summarizeModel: options.summarizeModel,
+        summarizeClient: options.summarizeClient,
+      });
+
+      if (compressionResult.compressed) {
+        compressed = true;
+        originalTokenEstimate = compressionResult.originalTokenEstimate;
+        compressedTokenEstimate = compressionResult.compressedTokenEstimate;
+        taskContext = [
+          buildReviewTaskContext(context.reviewEvent, changedPaths),
+          "",
+          compressionResult.compactDiff,
+          "",
+          buildJsonToolContract(),
+        ].join("\n");
+      }
+    }
+  }
+
   const preparedPrompt = await prepareReviewPrompt({
     reviewEvent: context.reviewEvent,
     sourceRoot: scopedTree.rootDir,
@@ -327,14 +478,31 @@ export async function runReviewOrchestration(
     ...(options.memoryHints ? { memoryHints: options.memoryHints } : {}),
     ...(options.maxPromptTokens !== undefined ? { maxPromptTokens: options.maxPromptTokens } : {}),
   });
+
+  const enableScrub = options.scrubSecrets !== false;
+  const allScrubFindings: ScrubFinding[] = [];
+
+  const scrubbedPrompt = enableScrub
+    ? scrubPromptMessages([{ role: "system", content: preparedPrompt.prompt.systemPrompt }])
+    : { messages: [{ role: "system", content: preparedPrompt.prompt.systemPrompt }], findings: [] as ScrubFinding[] };
+
+  if (enableScrub) {
+    allScrubFindings.push(...scrubbedPrompt.findings);
+  }
+
+  const llmSystemPrompt = (scrubbedPrompt.messages[0] as { role: string; content: string }).content;
+
   const collector = new AicrOutputCollector();
   const tools = createAicrOutputToolRegistry(collector, async (request) => {
     const result = await options.vcs.fetchExtraContext(toExtraContextRequest(request), workspaceRef);
     return result.content;
   });
-  const llmResult = await options.llm.complete({
+  const agentExecution = options.sandbox && options.agentAdapter
+    ? await runAgentReview(scopedTree.rootDir, llmSystemPrompt, options)
+    : undefined;
+  const llmResult = agentExecution?.llmResult ?? await options.llm.complete({
     model: options.model,
-    messages: [{ role: "system", content: preparedPrompt.prompt.systemPrompt }],
+    messages: [{ role: "system", content: llmSystemPrompt }],
   });
 
   await callAicrTools(llmResult.content, tools);
@@ -344,7 +512,26 @@ export async function runReviewOrchestration(
 
   if (!options.dryRun && outputPublisher) {
     for (const finding of outputState.findings) {
-      dispatchResults.push(await outputPublisher.publishFinding(toReviewFinding(finding)));
+      const reviewFinding = toReviewFinding(finding);
+      if (enableScrub) {
+        const scrubbedMsg = scrubText(reviewFinding.message);
+        const scrubbedSuggestion = reviewFinding.suggestion ? scrubText(reviewFinding.suggestion) : undefined;
+        allScrubFindings.push(...scrubbedMsg.findings);
+        if (scrubbedSuggestion) {
+          allScrubFindings.push(...scrubbedSuggestion.findings);
+        }
+        dispatchResults.push(await outputPublisher.publishFinding({
+          ...reviewFinding,
+          message: fixAndValidateMarkdown(scrubbedMsg.text),
+          ...(scrubbedSuggestion ? { suggestion: fixAndValidateMarkdown(scrubbedSuggestion.text) } : {}),
+        }));
+      } else {
+        dispatchResults.push(await outputPublisher.publishFinding({
+          ...reviewFinding,
+          message: fixAndValidateMarkdown(reviewFinding.message),
+          ...(reviewFinding.suggestion ? { suggestion: fixAndValidateMarkdown(reviewFinding.suggestion) } : {}),
+        }));
+      }
     }
   }
 
@@ -382,6 +569,11 @@ export async function runReviewOrchestration(
     outputState,
     dispatchResults,
     llmResult,
+    ...(agentExecution?.agentResult ? { agentResult: agentExecution.agentResult } : {}),
+    scrubFindings: allScrubFindings,
+    ...(compressed ? { compressed } : {}),
+    ...(originalTokenEstimate !== undefined ? { originalTokenEstimate } : {}),
+    ...(compressedTokenEstimate !== undefined ? { compressedTokenEstimate } : {}),
   };
 }
 
@@ -399,6 +591,9 @@ export function summarizeReviewOrchestrationForWebhook(
     contextRequestCount: result.contextRequestCount,
     dispatchCount: result.dispatchCount,
     ...(result.skipReason ? { skipReason: result.skipReason } : {}),
+    ...(result.compressed ? { compressed: result.compressed } : {}),
+    ...(result.originalTokenEstimate !== undefined ? { originalTokenEstimate: result.originalTokenEstimate } : {}),
+    ...(result.compressedTokenEstimate !== undefined ? { compressedTokenEstimate: result.compressedTokenEstimate } : {}),
     model: result.model,
   };
 }
