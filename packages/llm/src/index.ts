@@ -207,6 +207,20 @@ function extractUsage(raw: unknown): ChatCompletionUsage | undefined {
 	};
 }
 
+export {
+	createResilientChatClient,
+	LlmBudgetExceededError,
+	LlmFallbackExhaustedError,
+	type LlmGatewayBudgetConfig,
+	type LlmGatewayFallbackEntry,
+	type LlmGatewayOptions,
+	type LlmGatewayPerProviderOverride,
+	type LlmGatewayProviderConfig,
+	type LlmGatewayRetryConfig,
+	type LlmGatewayCallResult,
+	type LlmGatewayChatClient,
+} from "./gateway.js";
+
 export function createOpenAICompatibleChatClient(
 	options: OpenAICompatibleClientOptions = {},
 ): ChatCompletionClient {

@@ -4,7 +4,13 @@ import { isPlainObject, type AppConfig, type ReviewEvent } from "@aicr/core";
 import { createAgentAdapter, type AgentAdapter, type AgentKind } from "@aicr/agents";
 import {
   createOpenAICompatibleChatClient,
+  createResilientChatClient,
   type ChatCompletionClient,
+  type LlmGatewayProviderConfig,
+  type LlmGatewayRetryConfig,
+  type LlmGatewayBudgetConfig,
+  type LlmGatewayFallbackEntry,
+  type LlmGatewayPerProviderOverride,
   type ModelSpec,
   type ModelProviderKind,
 } from "@aicr/llm";
@@ -56,15 +62,20 @@ export function resolveModelSpecFromConfig(config: AppConfig, providerId?: strin
     throw new TypeError("No LLM providers configured.");
   }
 
-  const provider = providerId
-    ? providers.find((p) => p.id === providerId)
-    : providers[0];
+  const fallbackEntry = providerId
+    ? config.llm.fallback_chain.find((entry) => entry.provider === providerId)
+    : config.llm.fallback_chain[0];
+  const provider = fallbackEntry
+    ? providers.find((p) => p.id === fallbackEntry.provider)
+    : providerId
+      ? providers.find((p) => p.id === providerId)
+      : providers[0];
 
   if (!provider) {
-    throw new TypeError(`LLM provider "${providerId}" not found in configuration.`);
+    const missingProviderId = fallbackEntry?.provider ?? providerId;
+    throw new TypeError(`LLM provider "${missingProviderId}" not found in configuration.`);
   }
 
-  const fallbackEntry = config.llm.fallback_chain.find((entry) => entry.provider === provider.id);
   const modelId = fallbackEntry?.model ?? "gpt-4o-mini";
 
   return {
@@ -320,13 +331,93 @@ export function buildSourceRootResolver(
   };
 }
 
+function toGatewayProviders(
+  providers: AppConfig["llm"]["providers"],
+): readonly LlmGatewayProviderConfig[] {
+  return providers.map((p) => ({
+    id: p.id,
+    kind: p.kind as ModelProviderKind,
+    ...(p.base_url ? { baseUrl: p.base_url } : {}),
+    ...(p.api_key_env ? { apiKeyEnv: p.api_key_env } : {}),
+  }));
+}
+
+function toGatewayRetry(config: AppConfig["llm"]["retry"]): LlmGatewayRetryConfig | undefined {
+  if (!config) return undefined;
+  return {
+    ...(config.max_attempts !== undefined ? { maxAttempts: config.max_attempts } : {}),
+    ...(config.respect_retry_after !== undefined ? { respectRetryAfter: config.respect_retry_after } : {}),
+    ...(config.backoff
+      ? {
+          backoff: {
+            kind: config.backoff.kind,
+            ...(config.backoff.base_ms !== undefined ? { baseMs: config.backoff.base_ms } : {}),
+            ...(config.backoff.max_ms !== undefined ? { maxMs: config.backoff.max_ms } : {}),
+            ...(config.backoff.jitter !== undefined ? { jitter: config.backoff.jitter } : {}),
+          },
+        }
+      : {}),
+    ...(config.give_up_after_seconds !== undefined ? { giveUpAfterSeconds: config.give_up_after_seconds } : {}),
+  };
+}
+
+function toGatewayBudget(config: AppConfig["llm"]["budget"]): LlmGatewayBudgetConfig | undefined {
+  if (!config) return undefined;
+  return {
+    ...(config.per_run_usd !== undefined ? { perRunUsd: config.per_run_usd } : {}),
+    ...(config.per_repo_daily_usd !== undefined ? { perRepoDailyUsd: config.per_repo_daily_usd } : {}),
+  };
+}
+
+function toGatewayPerProviderOverrides(
+  overrides: AppConfig["llm"]["per_provider_overrides"],
+): Readonly<Record<string, LlmGatewayPerProviderOverride>> | undefined {
+  if (!overrides) return undefined;
+
+  const result: Record<string, LlmGatewayPerProviderOverride> = {};
+  for (const [key, value] of Object.entries(overrides)) {
+    if (!value) continue;
+
+    const entry: LlmGatewayPerProviderOverride = {
+      ...(value.max_attempts !== undefined ? { maxAttempts: value.max_attempts } : {}),
+      ...(value.give_up_after_seconds !== undefined ? { giveUpAfterSeconds: value.give_up_after_seconds } : {}),
+    };
+
+    if (Object.keys(entry).length > 0) {
+      result[key] = entry;
+    }
+  }
+
+  return Object.keys(result).length > 0 ? result : undefined;
+}
+
+function toGatewayFallbackChain(
+  chain: AppConfig["llm"]["fallback_chain"],
+): readonly LlmGatewayFallbackEntry[] {
+  return chain.map((entry) => ({
+    provider: entry.provider,
+    model: entry.model,
+    role: entry.role,
+  }));
+}
+
 export function bootstrapServerApp(options: BootstrapServerOptions): ServerAppOptions {
   const { config, baseSystemPrompt, baseDir = process.cwd() } = options;
 
   const giteaConfig = resolveGiteaWebhookConfig(config);
 
   const model = resolveModelSpecFromConfig(config);
-  const llmClient = createLlmClientFromModelSpec(model);
+  const retryConfig = toGatewayRetry(config.llm.retry);
+  const budgetConfig = toGatewayBudget(config.llm.budget);
+  const perProviderOverrides = toGatewayPerProviderOverrides(config.llm.per_provider_overrides);
+  const llmClient = createResilientChatClient({
+    clientFactory: createLlmClientFromModelSpec,
+    providers: toGatewayProviders(config.llm.providers),
+    fallbackChain: toGatewayFallbackChain(config.llm.fallback_chain),
+    ...(retryConfig ? { retry: retryConfig } : {}),
+    ...(budgetConfig ? { budget: budgetConfig } : {}),
+    ...(perProviderOverrides ? { perProviderOverrides } : {}),
+  });
 
   const sourceRootResolver = buildSourceRootResolver(baseDir);
 

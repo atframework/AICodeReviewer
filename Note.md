@@ -13,7 +13,9 @@
 
 ### Mimi v2.5 Pro + High思考强度
 
-消耗Token: 约17M
+Cost: **消耗Token: 约17M(kilo统计位8.7M,模型倍率x2)**
+
+耗时: （除命令行执行外）模型响应耗时 ~29分钟
 
 | 类型 | 数量 | 修复点                                                 | 修复代码量 | 代码量占比 |
 | ---- | ---- | ------------------------------------------------------ | ---------- | ---------- |
@@ -32,29 +34,54 @@
 
 ### GLM 5.1 + High思考强度
 
-消耗Token: 约6.47M
+Cost: **消耗Token: 约11.7M(Pro订阅 5小时的19%)**
 
-| 类型 | 数量 | 修复点                                                                                                                                                                   | 约修复代码量 | 占参与分析实现代码比例 |
-| ---- | ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------ | ---------------------- |
-| 致命 | 1    | bootstrapServerApp()原先会把 webhook 编排固定为 dryRun: true，且无法按每个 Gitea PR payload 动态解析 PR 号与输出发布器，导致真实 Gitea e2e 即使跑通也不会发 line comment | 约 78 行     | 约 4.92%               |
-| 严重 | 2    | Docker/Podman sandbox 实际总是调用 `docker`；容器 sandbox 未在启动容器前执行命令白名单校验                                                                               | 约 76 行     | 约 4.79%               |
-| 一般 | 2    | native sandbox 在无 stdin 时不主动关闭 stdin；OpenAI 兼容模型翻译器在仅配置 options.apiKeyEnv 时会生成错误的 `${}` 占位                                                  | 约 14 行     | 约 0.88%               |
-| 优化 | 1    | 抽出 parseAllowedCommand() 让 native/docker sandbox 共用白名单校验逻辑，并在 AGENTS.md 记录新坑位                                                                        | 约 17 行     | 约 1.07%               |
-| 合计 | 6    | 本轮实现侧修复总量                                                                                                                                                       | 约 185 行    | 约 11.67%              |
+耗时: （除命令行执行外）模型响应耗时 ~33分钟
+
+| 类型 | 数量 | 修复点                                                                                                                                                                   | 约修复代码量 | 代码量占比 |
+| ---- | ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------ | ---------- |
+| 致命 | 1    | bootstrapServerApp()原先会把 webhook 编排固定为 dryRun: true，且无法按每个 Gitea PR payload 动态解析 PR 号与输出发布器，导致真实 Gitea e2e 即使跑通也不会发 line comment | 约 78 行     | 约 4.92%   |
+| 严重 | 2    | Docker/Podman sandbox 实际总是调用 `docker`；容器 sandbox 未在启动容器前执行命令白名单校验                                                                               | 约 76 行     | 约 4.79%   |
+| 一般 | 2    | native sandbox 在无 stdin 时不主动关闭 stdin；OpenAI 兼容模型翻译器在仅配置 options.apiKeyEnv 时会生成错误的 `${}` 占位                                                  | 约 14 行     | 约 0.88%   |
+| 优化 | 1    | 抽出 parseAllowedCommand() 让 native/docker sandbox 共用白名单校验逻辑，并在 AGENTS.md 记录新坑位                                                                        | 约 17 行     | 约 1.07%   |
+| 合计 | 6    | 本轮实现侧修复总量                                                                                                                                                       | 约 185 行    | 约 11.67%  |
 
 
-| 类型             | 数量 | 覆盖内容                                                                                                                                                                                                                             | 约测试代码量 | 占参与分析测试代码比例 |
-| ---------------- | ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------ | ---------------------- |
-| 单元测试遗漏补全 | 9    | Podman CLI 选择、docker→podman auto fallback、显式 podman preflight、容器命令白名单、factory 传递 allowlist、native stdin EOF、translator apiKeyEnv fallback、Plan 风格 Gitea publisher 配置解析、workspace route publisher resolver | 约 214 行    | 约 9.52%               |
-| 错误修复         | 2    | bootstrapServerApp 从期望 dryRun: true 改为可发布；“required fields missing” 用例调整为真正缺 trigger/workspace repo 的场景                                                                                                          | 约 10 行     | 约 0.44%               |
-| 测试意图未覆盖   | 3    | 编排器 per-event outputPublisherResolver dispatch；缺 PR number 时 resolver 返回 `undefined`；sandbox package name 测试改为真实导出断言                                                                                              | 约 62 行     | 约 2.76%               |
-| 合计             | 14   | 本轮测试侧补齐/修正总量                                                                                                                                                                                                              | 约 286 行    | 约 12.73%              |
+| 类型             | 数量 | 覆盖内容                                                                                                                                                                                                                             | 约测试代码量 | 测试代码量占比 |
+| ---------------- | ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------ | -------------- |
+| 单元测试遗漏补全 | 9    | Podman CLI 选择、docker→podman auto fallback、显式 podman preflight、容器命令白名单、factory 传递 allowlist、native stdin EOF、translator apiKeyEnv fallback、Plan 风格 Gitea publisher 配置解析、workspace route publisher resolver | 约 214 行    | 约 9.52%       |
+| 错误修复         | 2    | bootstrapServerApp 从期望 dryRun: true 改为可发布；“required fields missing” 用例调整为真正缺 trigger/workspace repo 的场景                                                                                                          | 约 10 行     | 约 0.44%       |
+| 测试意图未覆盖   | 3    | 编排器 per-event outputPublisherResolver dispatch；缺 PR number 时 resolver 返回 `undefined`；sandbox package name 测试改为真实导出断言                                                                                              | 约 62 行     | 约 2.76%       |
+| 合计             | 14   | 本轮测试侧补齐/修正总量                                                                                                                                                                                                              | 约 286 行    | 约 12.73%      |
+
+
+
+### Kimi K2.6 + Max思考强度
+
+Cost: **消耗Token: 约5.2M(Allegretto订阅 5小时的8%，高峰期倍率x3)**
+耗时: （除命令行执行外）模型响应耗时 ~45分钟
+
+| 类型 | 数量 | 修复点                                                                                                                                                                           | 约修复代码量 | 占参与分析实现代码比例 |
+| ---- | ---- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------ | ---------------------- |
+| 致命 | 0    | 未发现当前阶段必然导致 webhook → review 主链路完全中断的问题                                                                                                                     | 0 行         | 0%                     |
+| 严重 | 4    | 非 429/5xx/超时/context-overflow 的 4xx 不应 fallback；maxAttempts 计数偏移并会在最后一次失败后多等；预算超限后不应继续 fallback；bootstrap 默认模型不应被 provider 数组顺序误导 | 约 67 行     | 约 3.83%               |
+| 一般 | 1    | Gateway 返回结果补齐显式 LlmGatewayChatClient 类型，避免调用侧只能看到基础 ChatCompletionResult                                                                                  | 约 7 行      | 约 0.40%               |
+| 优化 | 1    | `Retry-After` 解析更严格，并对直接调用 gateway API 的异常 retry 配置做防御性兜底                                                                                                 | 约 8 行      | 约 0.46%               |
+| 合计 | 6    | 本轮实现侧修复总量                                                                                                                                                               | 约 82 行     | 约 4.69%               |
+
+| 类型             | 数量 | 覆盖内容                                                                                                                                                   | 约测试代码量 | 占参与分析测试代码比例 |
+| ---------------- | ---- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------ | ---------------------- |
+| 单元测试遗漏补全 | 5    | 普通 400 不 fallback；context-overflow 400 允许 fallback；maxAttempts=1 不重试也不多 sleep；默认模型使用 fallback_chain 首项；fallback provider 缺失时报错 | 约 125 行    | 约 3.79%               |
+| 错误修复         | 3    | 旧测试中“400 会 fallback”的错误意图改为 5xx；retry attempts 语义从“重试次数”修正为“总调用次数”；provider override 下 maxAttempts=1 不再期望 retry          | 约 15 行     | 约 0.45%               |
+| 测试意图未覆盖   | 2    | 预算超限不触发 fallback 的断言；fallback callback 只在可恢复错误切换模型时触发                                                                             | 约 20 行     | 约 0.61%               |
+| 合计             | 10   | 本轮测试侧补齐/修正总量                                                                                                                                    | 约 160 行    | 约 4.85%               |
 
 ## Continue Plan
 
 请分析Plan.md和当前实现的进度，继续执行计划。
 
+请分析Plan.md和当前实现的进度，先跳过待验收留存，继续执行计划。
+
 ## 验收
 
 - 仅剩真实 Gitea e2e 验收（本地 docker 起 Gitea → PR 触发 → 看到 line comment）。其余 M1 核心能力（webhook → VCS → prompt → LLM → output 全链路 + 配置驱动 + CLI serve/dry-run）已全部落地。
-
