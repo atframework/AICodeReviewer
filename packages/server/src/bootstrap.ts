@@ -6,6 +6,7 @@ import {
   createOpenAICompatibleChatClient,
   createResilientChatClient,
   type ChatCompletionClient,
+  type CompressionConfig,
   type LlmGatewayProviderConfig,
   type LlmGatewayRetryConfig,
   type LlmGatewayBudgetConfig,
@@ -611,6 +612,47 @@ function toGatewayFallbackChain(
   }));
 }
 
+function toCompressionConfig(compression: AppConfig["compression"]): CompressionConfig | undefined {
+  if (!compression) return undefined;
+
+  let perModelOverrides: Readonly<Record<string, { readonly triggerTokens?: number }>> | undefined;
+  if (compression.per_model_overrides) {
+    const entries: Record<string, { readonly triggerTokens?: number }> = {};
+    for (const [key, value] of Object.entries(compression.per_model_overrides)) {
+      if (value && typeof value === "object" && value.trigger_tokens !== undefined) {
+        entries[key] = { triggerTokens: value.trigger_tokens };
+      }
+    }
+    if (Object.keys(entries).length > 0) {
+      perModelOverrides = entries;
+    }
+  }
+
+  return {
+    ...(compression.trigger_tokens !== undefined ? { triggerTokens: compression.trigger_tokens } : {}),
+    ...(compression.max_input_ratio !== undefined ? { maxInputRatio: compression.max_input_ratio } : {}),
+    ...(compression.keep_hunks_top_k !== undefined ? { keepHunksTopK: compression.keep_hunks_top_k } : {}),
+    ...(compression.context_lines !== undefined ? { contextLines: compression.context_lines } : {}),
+    ...(compression.summarize_model_role !== undefined ? { summarizeModelRole: compression.summarize_model_role } : {}),
+    ...(perModelOverrides ? { perModelOverrides } : {}),
+  };
+}
+
+function resolveSummarizeModelFromConfig(config: AppConfig): ModelSpec | undefined {
+  const summarizeRole = config.compression?.summarize_model_role ?? "light";
+  const providers = config.llm.providers;
+  if (providers.length === 0) return undefined;
+
+  const fallbackEntry = config.llm.fallback_chain.find((entry) => entry.role === summarizeRole);
+  if (!fallbackEntry) {
+    return config.llm.fallback_chain.length > 0
+      ? resolveModelSpecFromConfig(config, config.llm.fallback_chain[0]!.provider)
+      : undefined;
+  }
+
+  return resolveModelSpecFromConfig(config, fallbackEntry.provider);
+}
+
 export async function bootstrapServerApp(options: BootstrapServerOptions): Promise<ServerAppOptions> {
   const { config, baseSystemPrompt, baseDir = process.cwd() } = options;
 
@@ -629,6 +671,10 @@ export async function bootstrapServerApp(options: BootstrapServerOptions): Promi
     ...(perProviderOverrides ? { perProviderOverrides } : {}),
   });
 
+  const compressionConfig = toCompressionConfig(config.compression);
+  const summarizeModel = compressionConfig ? resolveSummarizeModelFromConfig(config) : undefined;
+  const summarizeClient = summarizeModel ? createLlmClientFromModelSpec(summarizeModel) : undefined;
+
   const sourceRootResolver = buildSourceRootResolver(baseDir);
   const sandbox = await createSandboxBackendFromConfig(config);
   const agentAdapter = resolveAgentAdapterFromConfig(config);
@@ -644,6 +690,9 @@ export async function bootstrapServerApp(options: BootstrapServerOptions): Promi
     sandbox,
     agentAdapter,
     agentTimeoutMs: config.agent.timeout_seconds * 1000,
+    ...(compressionConfig ? { compression: compressionConfig } : {}),
+    ...(summarizeModel ? { summarizeModel } : {}),
+    ...(summarizeClient ? { summarizeClient } : {}),
   };
 
   return {

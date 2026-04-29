@@ -204,6 +204,67 @@ describe("runReviewOrchestration", () => {
     }
   });
 
+  it("scrubs secrets and fixes markdown before publishing findings", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-scrub-markdown-"));
+
+    try {
+      await writeWorkspaceFile(tempDir, "src/app.ts", "const ok = true;\n");
+      const llm: ChatCompletionClient = {
+        async complete(input) {
+          return {
+            providerId: input.model.providerId,
+            modelId: input.model.modelId,
+            content: JSON.stringify({
+              findings: [
+                {
+                  file: "src/app.ts",
+                  line: 1,
+                  severity: "high",
+                  category: "security",
+                  message: "#Issue\n-contains AKIAIOSFODNN7EXAMPLE",
+                  suggestion: "##Fix\n*replace ghp_abcdefghijklmnopqrstuvwxyz01234567890123",
+                },
+              ],
+            }),
+            raw: {},
+          };
+        },
+      };
+      const published: ReviewFinding[] = [];
+
+      const result = await runReviewOrchestration(
+        {
+          reviewEvent: createReviewEventFixture(),
+          payload: {},
+          provider: "gitea",
+          eventName: "pull_request",
+        },
+        {
+          baseSystemPrompt: "<task>\n{{TASK_CONTEXT}}\n</task>",
+          sourceRootResolver: () => tempDir,
+          vcs: createVcs(tempDir),
+          llm,
+          model,
+          outputPublisher: {
+            async publishFinding(finding) {
+              published.push(finding);
+              return { channel: "test", status: "published", raw: {} };
+            },
+          },
+        },
+      );
+
+      expect(result.status).toBe("published");
+      expect(result.scrubFindings.length).toBeGreaterThanOrEqual(2);
+      expect(published[0]?.message).toBe("# Issue\n- contains <REDACTED:AWS_KEY>\n");
+      expect(published[0]?.suggestion).toBe("## Fix\n* replace <REDACTED:GITHUB_TOKEN>\n");
+      expect(published[0]?.message).not.toContain("AKIAIOSFODNN7EXAMPLE");
+      expect(published[0]?.suggestion).not.toContain("ghp_");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("runs an agent through sandbox with the prepared prompt on stdin", async () => {
     const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-agent-sandbox-"));
     const originalToken = process.env.AICR_AGENT_TOKEN;

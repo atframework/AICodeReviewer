@@ -66,6 +66,48 @@ describe("fixMarkdown", () => {
     expect(result.fixed).toBe("a\n\nb\n");
     expect(result.changed).toBe(true);
   });
+
+  it("fixes heading without space after hash", () => {
+    const result = fixMarkdown("#Title\n");
+    expect(result.fixed).toBe("# Title\n");
+    expect(result.changed).toBe(true);
+    expect(result.violations.length).toBeGreaterThan(0);
+  });
+
+  it("fixes heading with trailing hash", () => {
+    const result = fixMarkdown("# Title #\n");
+    expect(result.fixed).toBe("# Title\n");
+    expect(result.changed).toBe(true);
+  });
+
+  it("fixes list marker without space", () => {
+    const result = fixMarkdown("-item\n");
+    expect(result.fixed).toBe("- item\n");
+    expect(result.changed).toBe(true);
+  });
+
+  it("fixes asterisk list marker without space", () => {
+    const result = fixMarkdown("*item\n");
+    expect(result.fixed).toBe("* item\n");
+    expect(result.changed).toBe(true);
+  });
+
+  it("returns violations array", () => {
+    const result = fixMarkdown("#Title\n");
+    expect(Array.isArray(result.violations)).toBe(true);
+  });
+
+  it("warns about inconsistent heading indent", () => {
+    const result = fixMarkdown(" # Title\n");
+    expect(result.warnings).toContain("MD027: inconsistent heading indent detected");
+  });
+
+  it("handles combined fixes", () => {
+    const input = "#Title   \n\n\n-item\n";
+    const result = fixMarkdown(input);
+    expect(result.fixed).toBe("# Title\n\n- item\n");
+    expect(result.changed).toBe(true);
+  });
 });
 
 describe("fixAndValidateMarkdown", () => {
@@ -77,5 +119,10 @@ describe("fixAndValidateMarkdown", () => {
   it("returns same content when nothing to fix", () => {
     const content = "# Title\n\nContent.\n";
     expect(fixAndValidateMarkdown(content)).toBe(content);
+  });
+
+  it("fixes heading and list issues", () => {
+    const result = fixAndValidateMarkdown("#Title\n-item\n");
+    expect(result).toBe("# Title\n- item\n");
   });
 });
