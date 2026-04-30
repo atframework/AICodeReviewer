@@ -13,3 +13,6 @@ pnpm-debug.log*
 # Temporary repository artifacts must live under build/
 /build/
 /.venv
+
+/.claude/settings.local*
+/.vscode/settings.json
