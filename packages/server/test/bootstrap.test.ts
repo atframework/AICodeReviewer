@@ -357,6 +357,128 @@ describe("createOutputPublisherFromConfig", () => {
       }
     }
   });
+
+  it("creates a GitHub PR publisher from channel trigger and workspace source repo", async () => {
+    const calls: { url: string; init: { headers?: Record<string, string>; body?: string } }[] = [];
+    vi.stubGlobal("fetch", async (url: string, init?: { headers?: Record<string, string>; body?: string }) => {
+      calls.push({ url, init: init ?? {} });
+      return response({ id: 987 });
+    });
+
+    const originalToken = process.env.GITHUB_TOKEN;
+    process.env.GITHUB_TOKEN = "github-token";
+    try {
+      const config = makeConfig({
+        triggers: [{ name: "github-saas", kind: "github", token_env: "GITHUB_TOKEN" }],
+        outputs: {
+          template_engine: "handlebars",
+          channels: [{ name: "github-pr", kind: "github_pr_review", trigger: "github-saas" }],
+        },
+        workspaces: {
+          cache: { max_total_gb: 50, eviction: "lru", ttl_days: 30 },
+          defaults: {},
+          instances: {
+            "test-workspace": {
+              source_repo: { trigger: "github-saas", repo: "owent/example" },
+            },
+          },
+        },
+      } as Partial<AppConfig>);
+      const publisher = createOutputPublisherFromConfig(config, "github-pr", 42, "test-workspace");
+
+      expect(publisher).toBeDefined();
+      const result = await publisher?.publishFinding({
+        file: "src/app.ts",
+        line: 7,
+        severity: "high",
+        category: "correctness",
+        message: "Issue.",
+      });
+
+      expect(result?.externalId).toBe("987");
+      expect(calls[0]?.url).toBe("https://api.github.com/repos/owent/example/pulls/42/reviews");
+      expect(calls[0]?.init.headers).toMatchObject({ authorization: "Bearer github-token" });
+    } finally {
+      vi.unstubAllGlobals();
+      if (originalToken === undefined) {
+        delete process.env.GITHUB_TOKEN;
+      } else {
+        process.env.GITHUB_TOKEN = originalToken;
+      }
+    }
+  });
+
+  it("creates a GitLab MR publisher with base/head SHAs from the review event", async () => {
+    const calls: { url: string; init: { headers?: Record<string, string>; body?: string } }[] = [];
+    vi.stubGlobal("fetch", async (url: string, init?: { headers?: Record<string, string>; body?: string }) => {
+      calls.push({ url, init: init ?? {} });
+      return response({ id: 654 });
+    });
+
+    const originalToken = process.env.GITLAB_TOKEN;
+    process.env.GITLAB_TOKEN = "gitlab-token";
+    try {
+      const config = makeConfig({
+        triggers: [
+          { name: "gitlab-main", kind: "gitlab", base_url: "https://gitlab.example", token_env: "GITLAB_TOKEN" },
+        ],
+        outputs: {
+          template_engine: "handlebars",
+          channels: [{ name: "gitlab-mr", kind: "gitlab_mr_review", trigger: "gitlab-main" }],
+        },
+        workspaces: {
+          cache: { max_total_gb: 50, eviction: "lru", ttl_days: 30 },
+          defaults: {},
+          instances: {
+            "test-workspace": {
+              source_repo: { trigger: "gitlab-main", repo: "owent/example" },
+            },
+          },
+        },
+      } as Partial<AppConfig>);
+      const publisher = createOutputPublisherFromConfig(
+        config,
+        "gitlab-mr",
+        9,
+        "test-workspace",
+        {
+          triggerName: "gitlab-main",
+          provider: "gitlab",
+          workspaceId: "test-workspace",
+          targetKind: "pull_request",
+          repoRef: "owent/example",
+          baseSha: "base-sha",
+          headSha: "head-sha",
+          author: {},
+          reason: "gitlab:merge_request",
+        },
+      );
+
+      expect(publisher).toBeDefined();
+      await publisher?.publishFinding({
+        file: "src/app.ts",
+        line: 7,
+        severity: "medium",
+        category: "correctness",
+        message: "Issue.",
+      });
+
+      expect(calls[0]?.url).toBe("https://gitlab.example/api/v4/projects/owent%2Fexample/merge_requests/9/discussions");
+      expect(calls[0]?.init.headers).toMatchObject({ "private-token": "gitlab-token" });
+      expect(JSON.parse(calls[0]?.init.body ?? "{}").position).toMatchObject({
+        base_sha: "base-sha",
+        head_sha: "head-sha",
+        new_line: 7,
+      });
+    } finally {
+      vi.unstubAllGlobals();
+      if (originalToken === undefined) {
+        delete process.env.GITLAB_TOKEN;
+      } else {
+        process.env.GITLAB_TOKEN = originalToken;
+      }
+    }
+  });
 });
 
 describe("createOutputPublisherResolverFromConfig", () => {

@@ -4,7 +4,9 @@ import { ZodError } from "zod";
 import {
   prepareReviewPrompt,
   type PreparedReviewPrompt,
+  type QueueWorker,
   type ReviewEvent,
+  type ReviewQueue,
 } from "@aicr/core";
 import {
   translateWebhookToReviewEvent,
@@ -22,6 +24,8 @@ export interface ServerAppOptions {
   readonly forgejo?: GiteaWebhookConfig;
   readonly reviewPreparation?: ServerReviewPreparationOptions;
   readonly reviewOrchestration?: ServerReviewOrchestrationOptions;
+  readonly queue?: ReviewQueue;
+  readonly worker?: QueueWorker;
 }
 
 export interface ServerReviewPreparationOptions {

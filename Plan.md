@@ -918,15 +918,14 @@ workspaces/<workspace_id>/
 | M0.5 | 已完成（待验收留存） | `docs/prompt-research.md` 草案、`prompts/system/code-reviewer.system.md` 草案、默认提示词分层模板、Prompt Manager 组装契约、repo-local AI 资产发现 / 路径过滤 / 优先级 / 冲突记录实现与单元测试、severity 推荐语义与回归样例清单 | 低置信来源实测/确认（验收留存） |
 | M1 | 已完成（待验收留存） | Hono webhook receiver、Gitea/Forgejo 签名校验、`ReviewEvent` 归一化、Git VCS adapter、unified diff 解析、OpenAI 兼容 chat client、Gitea PR review comment dispatcher、`aicr-output` 工具收集器、webhook → orchestration 最小闭环、配置 bootstrap 层、CLI `serve` / `review --dry-run`、Node.js HTTP adapter | 真实 Gitea e2e 验收（验收留存） |
 | M2 | 已完成（待验收留存） | `SandboxBackend` 抽象 + native / docker / podman 实现、命令白名单、超时 watchdog、目录隔离、`AgentAdapter` + Kilo adapter、Model Config Translator、bootstrap 集成、review-orchestrator sandbox/agent 选项、53 个新测试 | Kilo 驱动 e2e 验收、沙箱逃逸测试（验收留存） |
-| M3 | 进行中 | **PR Compression 接入 bootstrap**（`toCompressionConfig` / `resolveSummarizeModelFromConfig` + wiring）、**Secrets Scrubber**（已完整实现并接入 orchestrator）、**LLM Fallback + Bounded Retry + Budget**（gateway + bootstrap wiring）、**Per-provider 限流**（`createTokenBucketRateLimiter` / `createMultiProviderRateLimiter`）、**In-memory 队列增强**（backoff 配置穿透、DLQ 操作 `getDeadJobs` / `requeueDead` / `purgeDead`）、**Redis/BullMQ 队列适配器**（`createRedisQueue` + optional dependency）、**队列 Worker 循环**（`createQueueWorker` + 并发 / 逐 workspace 并发 / 限流集成）、**Markdown 修复增强**（heading spacing / list marker spacing / trailing hash / violations 数组）、**全部 614 测试通过** | 输出模板引擎（Handlebars）、BullMQ 队列真实 Redis 集成测试、queue 配置消费端接入 bootstrap |
-| M4-M9 | 未开始 | 仅少量 package / config 占位，不计入阶段完成 | 按各里程碑原目标推进 |
+| M3 | 已完成（待验收留存） | **PR Compression 接入 bootstrap**、**Secrets Scrubber**、**LLM Fallback + Bounded Retry + Budget**、**Per-provider 限流**、**In-memory 队列增强**（backoff / DLQ）、**Redis/BullMQ 队列适配器**、**队列 Worker 循环**、**Markdown 修复增强**、**输出模板引擎（Handlebars）** + 内置默认模板（6 通道）+ workspace 覆盖机制 + `TemplateResolver`、**Queue 配置消费端接入 bootstrap**（`createQueueFromConfig` factory + worker 启动）、**全部 666 测试通过** | BullMQ 真实 Redis 集成测试（验收留存） |
+| M4 | 进行中 | **多输出通道**：Gitea Issue dispatcher（聚合 findings → issue comment）、Feishu Bot dispatcher（interactive card + HMAC sign）、WeCom Bot dispatcher（markdown + mentioned_mobile_list）、**finding fingerprint**（`computeFindingFingerprint`）、**模板引擎接入 orchestrator**（per-channel `TemplateResolver` + markdown fix post-validation）、43 个新测试 | GitHub / GitLab PR review dispatcher、行号降级策略、@-mention 作者解析管线与邮箱黑名单、workspace 覆盖模板实际读取 |
 
 ### 8.2 下一轮执行包
 
-1. **M3 收口**：输出模板引擎（Handlebars）集成 + 内置默认模板 + workspace 覆盖机制；BullMQ 队列真实 Redis 集成测试；queue 配置消费端接入 bootstrap（`createQueue` factory + worker 启动）。
-2. **M3 验收留存**：模拟 429 + Retry-After 在重试上限内正确恢复或 fallback；单 PR > 200KB diff 压缩稳定产出；评论 Markdown 通过 markdownlint 默认规则；多实例并发不重复评审同一 target。
-3. **M0.5 / M1 / M2 验收留存**：低置信来源实测确认、真实 Gitea e2e 验收、Kilo 驱动端到端验收、恶意 PR 沙箱逃逸测试。
-4. **M4 启动**：多输出通道（Gitea issue、Feishu、WeCom）、finding 幂等（fingerprint）、行号降级策略、MCP `publish_finding/summary/skip/fetch_more_context` 完整化、模板引擎 + @-mention。
+1. **M4 继续收口**：GitHub / GitLab PR review dispatcher、行号降级策略（超出 diff 范围 → 通用评论）、@-mention 作者解析管线与邮箱黑名单、workspace 覆盖模板文件读取。
+2. **M3 / M0.5 / M1 / M2 验收留存**：模拟 429 + Retry-After、单 PR > 200KB diff 压缩、评论 markdownlint、多实例并发不重复、真实 Gitea e2e、Kilo 驱动 e2e、沙箱逃逸测试。
+3. **M5 启动**：多 Agent CLI（OpenCode、Roo、Copilot CLI、Claude Code）适配器 + Model Config Translator 全量字段 + Podman sandbox backend 落地。
 
 ### M0 — 项目骨架（状态：已完成）
 

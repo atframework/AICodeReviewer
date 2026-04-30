@@ -4,6 +4,7 @@ import {
   buildReviewTaskContext,
   fixAndValidateMarkdown,
   isPlainObject,
+  normalizePath,
   prepareReviewPrompt,
   scrubPromptMessages,
   scrubText,
@@ -30,6 +31,12 @@ import {
   type FetchMoreContextInput,
   type PublishFindingInput,
 } from "@aicr/mcp-output";
+import {
+  createTemplateResolver,
+  toTemplateFinding,
+  type TemplateContext,
+  type TemplateResolver,
+} from "@aicr/outputs";
 import type { DispatchResult, ReviewFinding } from "@aicr/outputs";
 import type { SandboxBackend, SandboxSpawnResult } from "@aicr/sandbox";
 import type { ChangeRange, ExtraContextRequest, ParsedDiff, VcsAdapter } from "@aicr/vcs";
@@ -79,6 +86,8 @@ export interface ServerReviewOrchestrationOptions {
   readonly compression?: CompressionConfig;
   readonly summarizeModel?: ModelSpec;
   readonly summarizeClient?: ChatCompletionClient;
+  readonly templateResolver?: TemplateResolver;
+  readonly channelKind?: string;
 }
 
 export interface ReviewOrchestrationResult {
@@ -409,6 +418,32 @@ function toReviewFinding(input: PublishFindingInput): ReviewFinding {
   };
 }
 
+function pathMatchesDiffFile(findingPath: string, file: ParsedDiff["files"][number]): boolean {
+  const normalizedFindingPath = normalizePath(findingPath);
+  return [file.newPath, file.oldPath]
+    .filter((path): path is string => Boolean(path))
+    .some((path) => normalizePath(path) === normalizedFindingPath);
+}
+
+function isLineCommentableInDiff(finding: ReviewFinding, diff: ParsedDiff | undefined): boolean | undefined {
+  if (!diff) {
+    return undefined;
+  }
+
+  const matchingFiles = diff.files.filter((file) => pathMatchesDiffFile(finding.file, file));
+  if (matchingFiles.length === 0) {
+    return false;
+  }
+
+  return matchingFiles.some((file) =>
+    file.hunks.some((hunk) =>
+      hunk.lines.some((line) =>
+        (line.kind === "add" || line.kind === "context") && line.newLine === finding.line,
+      ),
+    ),
+  );
+}
+
 export async function runReviewOrchestration(
   context: ReviewOrchestrationContext,
   options: ServerReviewOrchestrationOptions,
@@ -511,8 +546,19 @@ export async function runReviewOrchestration(
   const outputPublisher = options.outputPublisher ?? options.outputPublisherResolver?.(context);
 
   if (!options.dryRun && outputPublisher) {
+    const resolver = options.templateResolver ?? (
+      options.channelKind
+        ? createTemplateResolver({ channelKind: options.channelKind })
+        : undefined
+    );
     for (const finding of outputState.findings) {
-      const reviewFinding = toReviewFinding(finding);
+      const rawReviewFinding = toReviewFinding(finding);
+      const lineCommentable = isLineCommentableInDiff(rawReviewFinding, diff);
+      const reviewFinding: ReviewFinding = lineCommentable === false
+        ? { ...rawReviewFinding, lineCommentAllowed: false }
+        : rawReviewFinding;
+      let renderedMessage: string;
+      let renderedSuggestion: string | undefined;
       if (enableScrub) {
         const scrubbedMsg = scrubText(reviewFinding.message);
         const scrubbedSuggestion = reviewFinding.suggestion ? scrubText(reviewFinding.suggestion) : undefined;
@@ -520,18 +566,29 @@ export async function runReviewOrchestration(
         if (scrubbedSuggestion) {
           allScrubFindings.push(...scrubbedSuggestion.findings);
         }
-        dispatchResults.push(await outputPublisher.publishFinding({
-          ...reviewFinding,
-          message: fixAndValidateMarkdown(scrubbedMsg.text),
-          ...(scrubbedSuggestion ? { suggestion: fixAndValidateMarkdown(scrubbedSuggestion.text) } : {}),
-        }));
+        renderedMessage = fixAndValidateMarkdown(scrubbedMsg.text);
+        renderedSuggestion = scrubbedSuggestion ? fixAndValidateMarkdown(scrubbedSuggestion.text) : undefined;
       } else {
-        dispatchResults.push(await outputPublisher.publishFinding({
-          ...reviewFinding,
-          message: fixAndValidateMarkdown(reviewFinding.message),
-          ...(reviewFinding.suggestion ? { suggestion: fixAndValidateMarkdown(reviewFinding.suggestion) } : {}),
-        }));
+        renderedMessage = fixAndValidateMarkdown(reviewFinding.message);
+        renderedSuggestion = reviewFinding.suggestion ? fixAndValidateMarkdown(reviewFinding.suggestion) : undefined;
       }
+
+      if (resolver) {
+        const templateCtx: TemplateContext = {
+          finding: toTemplateFinding({
+            ...reviewFinding,
+            message: renderedMessage,
+            ...(renderedSuggestion ? { suggestion: renderedSuggestion } : {}),
+          }),
+        };
+        renderedMessage = fixAndValidateMarkdown(resolver.render("finding", templateCtx));
+      }
+
+      dispatchResults.push(await outputPublisher.publishFinding({
+        ...reviewFinding,
+        message: renderedMessage,
+        ...(renderedSuggestion ? { suggestion: renderedSuggestion } : {}),
+      }));
     }
   }
 

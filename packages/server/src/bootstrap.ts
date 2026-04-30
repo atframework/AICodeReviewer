@@ -1,6 +1,7 @@
 import { resolve } from "node:path";
 
-import { isPlainObject, type AppConfig, type ReviewEvent } from "@aicr/core";
+import { isPlainObject, createQueueFromConfig, type AppConfig, type ReviewEvent } from "@aicr/core";
+import { createQueueWorker, type QueueJobHandler, type QueueWorker } from "@aicr/core";
 import { createAgentAdapter, type AgentAdapter, type AgentKind } from "@aicr/agents";
 import {
   createOpenAICompatibleChatClient,
@@ -15,7 +16,13 @@ import {
   type ModelSpec,
   type ModelProviderKind,
 } from "@aicr/llm";
-import { createGiteaPullRequestReviewDispatcher, type ReviewFinding, type DispatchResult } from "@aicr/outputs";
+import {
+  createGiteaPullRequestReviewDispatcher,
+  createGithubPullRequestReviewDispatcher,
+  createGitlabMergeRequestReviewDispatcher,
+  type ReviewFinding,
+  type DispatchResult,
+} from "@aicr/outputs";
 import {
   createSandboxBackend,
   resolveSandboxKind,
@@ -38,6 +45,7 @@ export interface BootstrapServerOptions {
   readonly baseSystemPrompt: string;
   readonly baseDir?: string;
   readonly workspaceId?: string;
+  readonly jobHandler?: QueueJobHandler;
 }
 
 function resolveEnv(name: string | undefined): string | undefined {
@@ -376,6 +384,7 @@ export function createOutputPublisherFromConfig(
   channelName?: string,
   pullNumber?: number,
   workspaceId?: string,
+  reviewEvent?: ReviewEvent,
 ): ReviewOutputPublisher | undefined {
   const channels = config.outputs.channels;
   if (channels.length === 0) {
@@ -384,17 +393,29 @@ export function createOutputPublisherFromConfig(
 
   const channel = channelName
     ? channels.find((c) => c.name === channelName)
-    : channels.find((c) => c.kind === "gitea_pr_review");
+    : channels.find((c) => c.kind === "gitea_pr_review" || c.kind === "github_pr_review" || c.kind === "gitlab_mr_review");
 
-  if (!channel || channel.kind !== "gitea_pr_review") {
+  if (!channel) {
     return undefined;
   }
 
   const channelConfig = channel as Record<string, unknown>;
   const triggerName = channelConfig.trigger as string | undefined;
+  const supportedTriggerKinds = channel.kind === "gitea_pr_review"
+    ? ["gitea", "forgejo"]
+    : channel.kind === "github_pr_review"
+      ? ["github"]
+      : channel.kind === "gitlab_mr_review"
+        ? ["gitlab"]
+        : [];
+
+  if (supportedTriggerKinds.length === 0) {
+    return undefined;
+  }
+
   const trigger = triggerName
-    ? config.triggers.find((t) => t.name === triggerName && (t.kind === "gitea" || t.kind === "forgejo"))
-    : config.triggers.find((t) => t.kind === "gitea" || t.kind === "forgejo");
+    ? config.triggers.find((t) => t.name === triggerName && supportedTriggerKinds.includes(t.kind))
+    : config.triggers.find((t) => supportedTriggerKinds.includes(t.kind));
   const triggerConfig = (trigger ?? {}) as Record<string, unknown>;
   const baseUrl = (channelConfig.base_url as string | undefined) ??
     (triggerConfig.base_url as string | undefined);
@@ -405,28 +426,78 @@ export function createOutputPublisherFromConfig(
   const workspaceRepoRef = trigger
     ? resolveWorkspaceRepoRef(config, trigger.name, workspaceId)
     : undefined;
-  const parsedRepo = parseRepoRef(explicitOwner ? explicitRepo : explicitRepo ?? workspaceRepoRef);
+  const parsedRepo = parseRepoRef(explicitOwner && explicitRepo ? undefined : explicitRepo ?? workspaceRepoRef);
   const owner = explicitOwner ?? parsedRepo?.owner;
   const repo = explicitOwner ? explicitRepo : parsedRepo?.repo;
 
-  if (!baseUrl || !owner || !repo || !pullNumber) {
-    return undefined;
+  if (channel.kind === "gitea_pr_review") {
+    if (!baseUrl || !owner || !repo || pullNumber === undefined) {
+      return undefined;
+    }
+
+    const dispatcher = createGiteaPullRequestReviewDispatcher({
+      baseUrl,
+      ...(tokenEnv ? { token: resolveEnv(tokenEnv) ?? "" } : {}),
+      owner,
+      repo,
+      pullNumber,
+      channelName: channel.name,
+    });
+
+    return {
+      async publishFinding(finding: ReviewFinding): Promise<DispatchResult> {
+        return dispatcher.publishFinding(finding);
+      },
+    };
   }
 
-  const dispatcher = createGiteaPullRequestReviewDispatcher({
-    baseUrl,
-    ...(tokenEnv ? { token: resolveEnv(tokenEnv) ?? "" } : {}),
-    owner,
-    repo,
-    pullNumber,
-    channelName: channel.name,
-  });
+  if (channel.kind === "github_pr_review") {
+    if (!owner || !repo || pullNumber === undefined) {
+      return undefined;
+    }
 
-  return {
-    async publishFinding(finding: ReviewFinding): Promise<DispatchResult> {
-      return dispatcher.publishFinding(finding);
-    },
-  };
+    const dispatcher = createGithubPullRequestReviewDispatcher({
+      ...(baseUrl ? { baseUrl } : {}),
+      ...(tokenEnv ? { token: resolveEnv(tokenEnv) ?? "" } : {}),
+      owner,
+      repo,
+      pullNumber,
+      channelName: channel.name,
+    });
+
+    return {
+      async publishFinding(finding: ReviewFinding): Promise<DispatchResult> {
+        return dispatcher.publishFinding(finding);
+      },
+    };
+  }
+
+  if (channel.kind === "gitlab_mr_review") {
+    const projectId = channelConfig.project_id ?? channelConfig.projectId ?? (owner && repo ? `${owner}/${repo}` : workspaceRepoRef);
+    const mergeRequestIid = readNumber(channelConfig, "merge_request_iid", "mergeRequestIid") ?? pullNumber;
+    if ((typeof projectId !== "string" && typeof projectId !== "number") || mergeRequestIid === undefined) {
+      return undefined;
+    }
+
+    const dispatcher = createGitlabMergeRequestReviewDispatcher({
+      ...(baseUrl ? { baseUrl } : {}),
+      ...(tokenEnv ? { token: resolveEnv(tokenEnv) ?? "" } : {}),
+      projectId,
+      mergeRequestIid,
+      ...(reviewEvent?.baseSha ? { baseSha: reviewEvent.baseSha } : {}),
+      ...(reviewEvent?.baseSha ? { startSha: reviewEvent.baseSha } : {}),
+      ...(reviewEvent?.headSha ? { headSha: reviewEvent.headSha } : {}),
+      channelName: channel.name,
+    });
+
+    return {
+      async publishFinding(finding: ReviewFinding): Promise<DispatchResult> {
+        return dispatcher.publishFinding(finding);
+      },
+    };
+  }
+
+  return undefined;
 }
 
 function routeMatchesEvent(
@@ -488,6 +559,7 @@ export function createOutputPublisherResolverFromConfig(
       resolveLineCommentChannelName(config, context),
       pullNumber,
       context.reviewEvent.workspaceId,
+      context.reviewEvent,
     );
   };
 }
@@ -654,7 +726,7 @@ function resolveSummarizeModelFromConfig(config: AppConfig): ModelSpec | undefin
 }
 
 export async function bootstrapServerApp(options: BootstrapServerOptions): Promise<ServerAppOptions> {
-  const { config, baseSystemPrompt, baseDir = process.cwd() } = options;
+  const { config, baseSystemPrompt, baseDir = process.cwd(), jobHandler } = options;
 
   const giteaConfig = resolveGiteaWebhookConfig(config);
 
@@ -695,8 +767,23 @@ export async function bootstrapServerApp(options: BootstrapServerOptions): Promi
     ...(summarizeClient ? { summarizeClient } : {}),
   };
 
+  const queue = await createQueueFromConfig(config);
+
+  let worker: QueueWorker | undefined;
+  if (jobHandler) {
+    const workersConfig = config.queue.workers;
+    worker = createQueueWorker(jobHandler, {
+      queue,
+      concurrency: workersConfig?.concurrency ?? 4,
+      perWorkspaceConcurrency: workersConfig?.per_workspace_concurrency ?? 1,
+      lockTtlSeconds: workersConfig?.lock_ttl_seconds ?? 1800,
+    });
+  }
+
   return {
     ...(giteaConfig ? { gitea: giteaConfig } : {}),
     reviewOrchestration: orchestrationOptions,
+    queue,
+    ...(worker ? { worker } : {}),
   };
 }
