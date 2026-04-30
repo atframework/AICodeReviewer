@@ -125,4 +125,24 @@ describe("fixAndValidateMarkdown", () => {
     const result = fixAndValidateMarkdown("#Title\n-item\n");
     expect(result).toBe("# Title\n- item\n");
   });
+
+  it("does not modify heading-like content inside fenced code blocks", () => {
+    const input = "# Real Heading\n\n```\n#NotAHeading\n-notAList\n```\n\n#FixMe\n";
+    const result = fixAndValidateMarkdown(input);
+    expect(result).toContain("```\n#NotAHeading\n-notAList\n```");
+    expect(result).toContain("# FixMe");
+  });
+
+  it("does not modify list-like content inside tilde fenced code blocks", () => {
+    const input = "Intro\n\n~~~\n-item\n#hash\n~~~\n\n-fixme\n";
+    const result = fixAndValidateMarkdown(input);
+    expect(result).toContain("~~~\n-item\n#hash\n~~~");
+    expect(result).toContain("- fixme");
+  });
+
+  it("handles unterminated fenced block by leaving its body untouched", () => {
+    const input = "Intro\n\n```\n#noTouch\n-stillCode\n";
+    const result = fixAndValidateMarkdown(input);
+    expect(result).toContain("```\n#noTouch\n-stillCode");
+  });
 });
