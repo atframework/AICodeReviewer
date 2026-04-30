@@ -637,6 +637,21 @@ describe("mergeConfigLayers", () => {
     }
   });
 
+  it("accepts output author resolution mappings and email blacklist", () => {
+    const result = appConfigSchema.safeParse({
+      outputs: {
+        author_resolution: {
+          email_mappings: {
+            "dev@example.com": "ou_dev",
+          },
+          email_blacklist: ["bot@example.com"],
+        },
+      },
+    });
+
+    expect(result.success).toBe(true);
+  });
+
   it("accepts output routes configuration from Plan §3.10", () => {
     const result = appConfigSchema.safeParse({
       outputs: {

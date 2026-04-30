@@ -262,6 +262,10 @@ export {
 	type ScoredHunk,
 } from "./compression.js";
 
+import { createAnthropicChatClient } from "./anthropic.js";
+export { createAnthropicChatClient } from "./anthropic.js";
+export type { AnthropicClientOptions } from "./anthropic.js";
+
 export function createOpenAICompatibleChatClient(
 	options: OpenAICompatibleClientOptions = {},
 ): ChatCompletionClient {
@@ -312,4 +316,46 @@ export function createOpenAICompatibleChatClient(
 			};
 		},
 	};
+}
+
+export function createChatClientFromModelSpec(model: ModelSpec): ChatCompletionClient {
+	switch (model.providerKind) {
+		case "openai_compatible":
+		case "ollama":
+			return createOpenAICompatibleChatClient();
+		case "azure_openai": {
+			const apiVersion = model.apiVersion ?? "2024-06-01";
+			const azureOpts: OpenAICompatibleClientOptions = {
+				fetch: async (input, init) => {
+					const url = new URL(input);
+					url.searchParams.set("api-version", apiVersion);
+					const resolvedUrl = url.toString();
+					const candidate = globalThis.fetch;
+					if (!candidate) {
+						throw new TypeError("No global fetch implementation is available.");
+					}
+					const apiKey = model.apiKeyEnv ? process.env[model.apiKeyEnv] : undefined;
+					const headers: Record<string, string> = {
+						...(init?.headers ?? {}),
+						"content-type": "application/json",
+						...(apiKey ? { "api-key": apiKey } : {}),
+					};
+				return candidate(resolvedUrl, { ...init, headers }) as unknown as Awaited<ReturnType<FetchLike>>;
+			},
+		};
+		if (model.apiKeyEnv) {
+			(azureOpts as Record<string, unknown>).apiKeyResolver = (envName: string) => process.env[envName];
+		}
+		return createOpenAICompatibleChatClient(azureOpts);
+		}
+		case "anthropic":
+			return createAnthropicChatClient();
+		case "vertex_ai":
+		case "bedrock":
+		case "google_ai_studio":
+		case "copilot":
+			throw new TypeError(
+				`Provider kind "${model.providerKind}" is not yet supported. Only openai_compatible, ollama, azure_openai, and anthropic are implemented.`,
+			);
+	}
 }

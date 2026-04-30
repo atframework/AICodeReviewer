@@ -344,8 +344,9 @@ describe("createOutputPublisherFromConfig", () => {
         category: "correctness",
         message: "Issue.",
       });
+      const firstResult = Array.isArray(result) ? result[0] : result;
 
-      expect(result?.externalId).toBe("321");
+      expect(firstResult?.externalId).toBe("321");
       expect(calls[0]?.url).toBe("https://gitea.example.com/api/v1/repos/owent/example/pulls/42/reviews");
       expect(calls[0]?.init.headers).toMatchObject({ authorization: "token token-from-trigger" });
     } finally {
@@ -394,8 +395,9 @@ describe("createOutputPublisherFromConfig", () => {
         category: "correctness",
         message: "Issue.",
       });
+      const firstResult = Array.isArray(result) ? result[0] : result;
 
-      expect(result?.externalId).toBe("987");
+      expect(firstResult?.externalId).toBe("987");
       expect(calls[0]?.url).toBe("https://api.github.com/repos/owent/example/pulls/42/reviews");
       expect(calls[0]?.init.headers).toMatchObject({ authorization: "Bearer github-token" });
     } finally {
@@ -479,6 +481,143 @@ describe("createOutputPublisherFromConfig", () => {
       }
     }
   });
+
+  it("passes configured Feishu author mappings as mention text", async () => {
+    const calls: { url: string; init: { body?: string } }[] = [];
+    vi.stubGlobal("fetch", async (url: string, init?: { body?: string }) => {
+      calls.push({ url, init: init ?? {} });
+      return response({ code: 0 });
+    });
+
+    const originalWebhook = process.env.FEISHU_WEBHOOK;
+    process.env.FEISHU_WEBHOOK = "https://open.feishu.cn/hook/test";
+    try {
+      const config = makeConfig({
+        outputs: {
+          template_engine: "handlebars",
+          author_resolution: {
+            email_mappings: { "dev@example.com": "ou_dev" },
+            email_blacklist: [],
+          },
+          channels: [
+            {
+              name: "feishu-team",
+              kind: "feishu_bot",
+              webhook_url_env: "FEISHU_WEBHOOK",
+              mention_author: true,
+            },
+          ],
+        },
+      } as Partial<AppConfig>);
+      const publisher = createOutputPublisherFromConfig(
+        config,
+        "feishu-team",
+        undefined,
+        "test-workspace",
+        {
+          triggerName: "gitea-internal",
+          provider: "gitea",
+          workspaceId: "test-workspace",
+          targetKind: "pull_request",
+          repoRef: "owent/example",
+          author: { email: "dev@example.com" },
+          reason: "gitea:opened",
+        },
+      );
+
+      await publisher?.publishSummary?.("Review summary", []);
+
+      const body = JSON.parse(calls[0]?.init.body ?? "{}");
+      const elements = (body.card as { elements: Array<{ content?: string }> }).elements;
+      expect(elements.some((element) => element.content?.includes('<at user_id="ou_dev"></at>'))).toBe(true);
+    } finally {
+      vi.unstubAllGlobals();
+      if (originalWebhook === undefined) {
+        delete process.env.FEISHU_WEBHOOK;
+      } else {
+        process.env.FEISHU_WEBHOOK = originalWebhook;
+      }
+    }
+  });
+
+  it("honors Feishu mention_fallback all and mention_author false", async () => {
+    const calls: { init: { body?: string } }[] = [];
+    vi.stubGlobal("fetch", async (_url: string, init?: { body?: string }) => {
+      calls.push({ init: init ?? {} });
+      return response({ code: 0 });
+    });
+
+    const originalWebhook = process.env.FEISHU_WEBHOOK;
+    process.env.FEISHU_WEBHOOK = "https://open.feishu.cn/hook/test";
+    try {
+      const baseConfig = makeConfig({
+        outputs: {
+          template_engine: "handlebars",
+          channels: [
+            {
+              name: "feishu-team",
+              kind: "feishu_bot",
+              webhook_url_env: "FEISHU_WEBHOOK",
+              mention_author: true,
+              mention_fallback: "all",
+            },
+          ],
+        },
+      } as Partial<AppConfig>);
+      const reviewEvent = {
+        triggerName: "gitea-internal",
+        provider: "gitea" as const,
+        workspaceId: "test-workspace",
+        targetKind: "pull_request" as const,
+        repoRef: "owent/example",
+        author: { email: "unknown@example.com" },
+        reason: "gitea:opened",
+      };
+
+      await createOutputPublisherFromConfig(
+        baseConfig,
+        "feishu-team",
+        undefined,
+        "test-workspace",
+        reviewEvent,
+      )?.publishSummary?.("Review summary", []);
+      const fallbackBody = JSON.parse(calls[0]?.init.body ?? "{}");
+      const fallbackElements = (fallbackBody.card as { elements: Array<{ content?: string }> }).elements;
+      expect(fallbackElements.some((element) => element.content?.includes('<at user_id="all"></at>'))).toBe(true);
+
+      const noMentionConfig = makeConfig({
+        outputs: {
+          template_engine: "handlebars",
+          channels: [
+            {
+              name: "feishu-team",
+              kind: "feishu_bot",
+              webhook_url_env: "FEISHU_WEBHOOK",
+              mention_author: false,
+              mention_fallback: "all",
+            },
+          ],
+        },
+      } as Partial<AppConfig>);
+      await createOutputPublisherFromConfig(
+        noMentionConfig,
+        "feishu-team",
+        undefined,
+        "test-workspace",
+        reviewEvent,
+      )?.publishSummary?.("Review summary", []);
+      const disabledBody = JSON.parse(calls[1]?.init.body ?? "{}");
+      const disabledElements = (disabledBody.card as { elements: Array<{ content?: string }> }).elements;
+      expect(disabledElements.some((element) => element.content?.includes("<at"))).toBe(false);
+    } finally {
+      vi.unstubAllGlobals();
+      if (originalWebhook === undefined) {
+        delete process.env.FEISHU_WEBHOOK;
+      } else {
+        process.env.FEISHU_WEBHOOK = originalWebhook;
+      }
+    }
+  });
 });
 
 describe("createOutputPublisherResolverFromConfig", () => {
@@ -543,6 +682,89 @@ describe("createOutputPublisherResolverFromConfig", () => {
         delete process.env.GITEA_TOKEN;
       } else {
         process.env.GITEA_TOKEN = originalToken;
+      }
+    }
+  });
+
+  it("routes line comments and summaries to separate configured channels", async () => {
+    const calls: { url: string; init: { body?: string } }[] = [];
+    vi.stubGlobal("fetch", async (url: string, init?: { body?: string }) => {
+      calls.push({ url, init: init ?? {} });
+      return response({ id: calls.length, code: 0 });
+    });
+
+    const originalGiteaToken = process.env.GITEA_TOKEN;
+    const originalFeishuWebhook = process.env.FEISHU_WEBHOOK;
+    process.env.GITEA_TOKEN = "resolver-token";
+    process.env.FEISHU_WEBHOOK = "https://open.feishu.cn/hook/test";
+    try {
+      const config = makeConfig({
+        outputs: {
+          template_engine: "handlebars",
+          channels: [
+            { name: "gitea-pr", kind: "gitea_pr_review", trigger: "gitea-internal" },
+            { name: "feishu-team", kind: "feishu_bot", webhook_url_env: "FEISHU_WEBHOOK" },
+          ],
+          routes: {
+            default: {
+              line_comments: ["gitea-pr"],
+              summary: ["feishu-team"],
+            },
+            rules: [],
+          },
+        },
+        workspaces: {
+          cache: { max_total_gb: 50, eviction: "lru", ttl_days: 30 },
+          defaults: {},
+          instances: {
+            "test-workspace": {
+              source_repo: { trigger: "gitea-internal", repo: "owent/example" },
+            },
+          },
+        },
+      } as Partial<AppConfig>);
+      const publisher = createOutputPublisherResolverFromConfig(config)({
+        reviewEvent: {
+          triggerName: "gitea-internal",
+          provider: "gitea",
+          workspaceId: "test-workspace",
+          targetKind: "pull_request",
+          repoRef: "owent/example",
+          author: {},
+          reason: "gitea:opened",
+        },
+        payload: { pull_request: { number: 77 } },
+        provider: "gitea",
+        eventName: "pull_request",
+      });
+
+      expect(publisher).toBeDefined();
+      await publisher?.publishFinding({
+        file: "src/app.ts",
+        line: 3,
+        severity: "medium",
+        category: "correctness",
+        message: "Issue.",
+      });
+      await publisher?.publishSummary?.("Summary.", [
+        { file: "src/app.ts", line: 3, severity: "medium", category: "correctness", message: "Issue." },
+      ]);
+
+      expect(calls.map((call) => call.url)).toEqual([
+        "https://gitea.example.com/api/v1/repos/owent/example/pulls/77/reviews",
+        "https://open.feishu.cn/hook/test",
+      ]);
+    } finally {
+      vi.unstubAllGlobals();
+      if (originalGiteaToken === undefined) {
+        delete process.env.GITEA_TOKEN;
+      } else {
+        process.env.GITEA_TOKEN = originalGiteaToken;
+      }
+      if (originalFeishuWebhook === undefined) {
+        delete process.env.FEISHU_WEBHOOK;
+      } else {
+        process.env.FEISHU_WEBHOOK = originalFeishuWebhook;
       }
     }
   });

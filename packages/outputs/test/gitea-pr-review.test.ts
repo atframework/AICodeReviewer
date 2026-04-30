@@ -84,6 +84,15 @@ describe("renderFindingMarkdown", () => {
 
     expect(markdown).toContain("src/bulk.ts:10-20");
   });
+
+  it("uses pre-rendered markdown without wrapping it again", () => {
+    const markdown = renderFindingMarkdown({
+      ...finding,
+      renderedMarkdown: "CUSTOM BODY",
+    });
+
+    expect(markdown).toBe("CUSTOM BODY");
+  });
 });
 
 describe("createGiteaPullRequestReviewDispatcher", () => {

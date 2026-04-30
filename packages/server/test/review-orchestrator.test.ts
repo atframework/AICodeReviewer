@@ -846,6 +846,69 @@ describe("runReviewOrchestration error paths", () => {
     }
   });
 
+  it("publishes findings through summary-only channels even when the model omits a summary", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-summary-only-"));
+
+    try {
+      await writeWorkspaceFile(tempDir, "src/app.ts", "const ok = true;\n");
+      const llm: ChatCompletionClient = {
+        async complete(input) {
+          return {
+            providerId: input.model.providerId,
+            modelId: input.model.modelId,
+            content: JSON.stringify({
+              findings: [
+                {
+                  file: "src/app.ts",
+                  line: 1,
+                  severity: "high",
+                  category: "security",
+                  message: "Leaked AKIAIOSFODNN7EXAMPLE in output.",
+                },
+              ],
+            }),
+            raw: {},
+          };
+        },
+      };
+      const summarizedFindings: ReviewFinding[][] = [];
+
+      const result = await runReviewOrchestration(
+        {
+          reviewEvent: createReviewEventFixture(),
+          payload: {},
+          provider: "gitea",
+          eventName: "pull_request",
+        },
+        {
+          baseSystemPrompt: "<task>\n{{TASK_CONTEXT}}\n</task>",
+          sourceRootResolver: () => tempDir,
+          vcs: createVcs(tempDir),
+          llm,
+          model,
+          outputPublisher: {
+            publishesFindings: false,
+            async publishFinding() {
+              throw new Error("summary-only publisher should not receive line findings");
+            },
+            async publishSummary(_summary, findings) {
+              summarizedFindings.push([...(findings ?? [])]);
+              return { channel: "feishu", status: "published", raw: {} };
+            },
+          },
+        },
+      );
+
+      expect(result.status).toBe("published");
+      expect(result.dispatchCount).toBe(1);
+      expect(result.summaryCount).toBe(0);
+      expect(summarizedFindings[0]?.[0]?.message).toContain("<REDACTED:AWS_KEY>");
+      expect(summarizedFindings[0]?.[0]?.message).not.toContain("AKIA");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("uses outputPublisherResolver for per-event publishing", async () => {
     const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-publisher-resolver-"));
 

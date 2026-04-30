@@ -205,6 +205,23 @@ describe("createWeComBotDispatcher", () => {
 		expect(md.mentioned_mobile_list).toEqual(["13800138000", "13900139000"]);
 	});
 
+	it("appends WeCom mention text to the markdown content", async () => {
+		const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
+		const dispatcher = createWeComBotDispatcher({
+			webhookUrl: "https://qyapi.weixin.qq.com/hook/test",
+			fetch: async (url, init) => {
+				calls.push({ url, init });
+				return response({ errcode: 0 });
+			},
+		});
+
+		await dispatcher.publishAggregatedFindings(findings, "Review done", "<@dev>");
+
+		const body = JSON.parse(calls[0]?.init?.body ?? "{}");
+		const md = body.markdown as Record<string, unknown>;
+		expect(md.content).toContain("<@dev>");
+	});
+
 	it("throws on non-2xx response", async () => {
 		const dispatcher = createWeComBotDispatcher({
 			webhookUrl: "https://qyapi.weixin.qq.com/hook/test",
