@@ -10,6 +10,7 @@
     { "path": "../agents" },
     { "path": "../core" },
     { "path": "../llm" },
+    { "path": "../outputs" },
     { "path": "../sandbox" },
     { "path": "../server" },
     { "path": "../vcs" }

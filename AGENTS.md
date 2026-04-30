@@ -54,6 +54,7 @@ These issues have been found and fixed in prior sessions. Before making changes,
 13. **`execFile` does not support `input` on Node 20**: For passing stdin to child processes in sandbox/docker, use `spawn` directly rather than `execFile` with `input` option.
 14. **Serve bootstrap must publish when configured**: `bootstrapServerApp` must not force `dryRun: true`; use a per-event `outputPublisherResolver` so Gitea webhook payloads can resolve PR numbers and publish line comments.
 15. **Container sandbox engine and allowlist must be enforced**: Docker-compatible sandbox code must invoke the resolved `docker`/`podman` CLI and validate commands against `ALLOWED_COMMANDS` before spawning containers.
+16. **Container env files must stay outside mounted workspaces**: `--env-file` paths for docker/podman must be temporary host files outside `agent/`, `tmp/`, and `source/` mounts, then deleted after the run.
 
 ## Default verification order
 

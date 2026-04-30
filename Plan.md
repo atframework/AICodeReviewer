@@ -917,15 +917,16 @@ workspaces/<workspace_id>/
 | M0 | 已完成 | pnpm monorepo、strict TypeScript、ESLint/Vitest/CI、Zod 配置合并、pino/OTel 骨架、Drizzle schema、Dockerfile 基线、`AGENTS.md` / `.agents/skills/` 骨架与相关单元测试 | 无 |
 | M0.5 | 已完成（待验收留存） | `docs/prompt-research.md` 草案、`prompts/system/code-reviewer.system.md` 草案、默认提示词分层模板、Prompt Manager 组装契约、repo-local AI 资产发现 / 路径过滤 / 优先级 / 冲突记录实现与单元测试、severity 推荐语义与回归样例清单 | 低置信来源实测/确认（验收留存） |
 | M1 | 已完成（待验收留存） | Hono webhook receiver、Gitea/Forgejo 签名校验、`ReviewEvent` 归一化、Git VCS adapter、unified diff 解析、OpenAI 兼容 chat client、Gitea PR review comment dispatcher、`aicr-output` 工具收集器、webhook → orchestration 最小闭环、配置 bootstrap 层、CLI `serve` / `review --dry-run`、Node.js HTTP adapter | 真实 Gitea e2e 验收（验收留存） |
-| M2 | 已完成（待验收留存） | `SandboxBackend` 抽象 + native / docker / podman 实现、命令白名单、超时 watchdog、目录隔离、`AgentAdapter` + Kilo adapter、Model Config Translator、bootstrap 集成、review-orchestrator sandbox/agent 选项、53 个新测试 | Kilo 驱动 e2e 验收、沙箱逃逸测试（验收留存） |
-| M3 | 已完成（待验收留存） | **PR Compression 接入 bootstrap**、**Secrets Scrubber**、**LLM Fallback + Bounded Retry + Budget**、**Per-provider 限流**、**In-memory 队列增强**（backoff / DLQ）、**Redis/BullMQ 队列适配器**、**队列 Worker 循环**、**Markdown 修复增强**、**输出模板引擎（Handlebars）** + 内置默认模板（6 通道）+ workspace 覆盖机制 + `TemplateResolver`、**Queue 配置消费端接入 bootstrap**（`createQueueFromConfig` factory + worker 启动）、**全部 666 测试通过** | BullMQ 真实 Redis 集成测试（验收留存） |
-| M4 | 进行中 | **多输出通道**：Gitea Issue dispatcher（聚合 findings → issue comment）、Feishu Bot dispatcher（interactive card + HMAC sign）、WeCom Bot dispatcher（markdown + mentioned_mobile_list）、**finding fingerprint**（`computeFindingFingerprint`）、**模板引擎接入 orchestrator**（per-channel `TemplateResolver` + markdown fix post-validation）、43 个新测试 | GitHub / GitLab PR review dispatcher、行号降级策略、@-mention 作者解析管线与邮箱黑名单、workspace 覆盖模板实际读取 |
+| M2 | 已完成（待验收留存） | `SandboxBackend` 抽象 + native / docker / podman 实现、命令白名单、超时 watchdog、目录隔离、`AgentAdapter` + Kilo / Claude Code / OpenCode / Roo / Copilot CLI 适配器（全部 5 种）、Model Config Translator（OpenAI 兼容 + Anthropic）、bootstrap 集成、review-orchestrator sandbox/agent 选项 | Kilo 驱动 e2e 验收、沙箱逃逸测试（验收留存） |
+| M3 | 已完成（待验收留存） | **PR Compression 接入 bootstrap**、**Secrets Scrubber**、**LLM Fallback + Bounded Retry + Budget**、**Per-provider 限流**、**In-memory 队列增强**（backoff / DLQ）、**Redis/BullMQ 队列适配器**、**队列 Worker 循环（含 rateLimiter wiring）**、**Markdown 修复增强**、**输出模板引擎（Handlebars）** + 内置默认模板（6 通道）+ workspace 覆盖机制 + `TemplateResolver`、**Queue 配置消费端接入 bootstrap**（`createQueueFromConfig` factory + worker 启动）、**742 测试通过** | BullMQ 真实 Redis 集成测试（验收留存） |
+| M4 | 已完成（待验收留存） | **多输出通道**：Gitea PR review、Gitea Issue、Feishu Bot、WeCom Bot dispatcher、GitHub PR review dispatcher、GitLab MR review dispatcher（全部 6 通道）；**finding fingerprint**（`computeFindingFingerprint`）；**模板引擎接入 orchestrator**（per-channel `TemplateResolver` + markdown fix post-validation）；**@-mention 作者解析管线**（email → username 映射 + 邮箱黑名单 + Feishu/WeCom/GitHub/GitLab/Gitea 方言）；**行号降级策略**（超出 diff 范围 → 通用评论 fallback，422 处理）；**workspace 覆盖模板文件读取**（`workspaces/<id>/templates/` + channelName/channelKind 优先级） | 真实 Gitea/GitHub/GitLab e2e 验收（验收留存） |
+| M5 | 进行中 | **Agent CLI 适配器**：Kilo / Claude Code / OpenCode / Roo / Copilot CLI（全部 5 种）；**Model Config Translator**：OpenAI 兼容 + Anthropic + Vertex AI + Bedrock（含 anthropicVersion、anthropicBeta、thinking、vertexProject、vertexLocation、awsRegion、awsProfile 等全部字段）；**Sandbox Backend**：native / docker / podman auto-detect + fallback；**Server webhook**：Gitea / Forgejo / GitHub / GitLab 全部 4 种 webhook endpoint 已注册；**CLI**：replay、memory、lint 命令已实现 | Podman sandbox backend 完整落地（M5 待实现）；k8s_pod / firecracker sandbox（M9） |
 
 ### 8.2 下一轮执行包
 
-1. **M4 继续收口**：GitHub / GitLab PR review dispatcher、行号降级策略（超出 diff 范围 → 通用评论）、@-mention 作者解析管线与邮箱黑名单、workspace 覆盖模板文件读取。
-2. **M3 / M0.5 / M1 / M2 验收留存**：模拟 429 + Retry-After、单 PR > 200KB diff 压缩、评论 markdownlint、多实例并发不重复、真实 Gitea e2e、Kilo 驱动 e2e、沙箱逃逸测试。
-3. **M5 启动**：多 Agent CLI（OpenCode、Roo、Copilot CLI、Claude Code）适配器 + Model Config Translator 全量字段 + Podman sandbox backend 落地。
+1. **M5 收口**：**Podman sandbox backend 完整落地**（rootless daemonless 独立实现 + `docs/podman.md` 指引）、**sandbox 逃逸测试**。
+2. **M3 / M0.5 / M1 / M2 / M4 验收留存**：真实 Gitea e2e（本地 docker 起 Gitea → PR 触发 → 看到 line comment）、模拟 429 + Retry-After、单 PR > 200KB diff 压缩、评论 markdownlint、多实例并发不重复、Kilo 驱动 e2e、沙箱逃逸测试。
+3. **M6 启动**：多 VCS（P4 / SVN triggers + adapters）、多触发面（push / commit / tag / scheduled / manual webhook/trigger 扩展）。
 
 ### M0 — 项目骨架（状态：已完成）
 

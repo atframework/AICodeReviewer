@@ -22,6 +22,7 @@
     "@aicr/agents": "workspace:*",
     "@aicr/core": "workspace:*",
     "@aicr/llm": "workspace:*",
+    "@aicr/outputs": "workspace:*",
     "@aicr/sandbox": "workspace:*",
     "@aicr/server": "workspace:*",
     "@aicr/vcs": "workspace:*"

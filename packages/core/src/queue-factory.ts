@@ -39,9 +39,11 @@ export async function createQueueFromConfig(config: AppConfig): Promise<ReviewQu
 			return createRedisQueue(toRedisQueueOptions(config));
 		}
 		case "sqlite": {
+			console.warn("SQLite queue backend is not yet implemented; falling back to in-memory queue.");
 			return createInMemoryQueue();
 		}
 		case "rabbitmq": {
+			console.warn("RabbitMQ queue backend is not yet implemented; falling back to in-memory queue.");
 			return createInMemoryQueue();
 		}
 		default:

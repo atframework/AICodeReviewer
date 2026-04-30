@@ -7,6 +7,7 @@ import {
   type QueueWorker,
   type ReviewEvent,
   type ReviewQueue,
+  type ReviewProvider,
 } from "@aicr/core";
 import {
   translateWebhookToReviewEvent,
@@ -22,6 +23,8 @@ import {
 export interface ServerAppOptions {
   readonly gitea?: GiteaWebhookConfig;
   readonly forgejo?: GiteaWebhookConfig;
+  readonly github?: GiteaWebhookConfig;
+  readonly gitlab?: GiteaWebhookConfig;
   readonly reviewPreparation?: ServerReviewPreparationOptions;
   readonly reviewOrchestration?: ServerReviewOrchestrationOptions;
   readonly queue?: ReviewQueue;
@@ -34,7 +37,7 @@ export interface ServerReviewPreparationOptions {
   readonly changedPathsResolver?: (context: {
     reviewEvent: ReviewEvent;
     payload: unknown;
-    provider: "gitea" | "forgejo";
+    provider: ReviewProvider;
     eventName: string;
   }) => readonly string[] | undefined;
   readonly operatorOverrides?: readonly string[];
@@ -127,87 +130,179 @@ function registerGiteaLikeWebhook(
       return c.json({ accepted: false, reason: "unsupported_event", provider, eventName }, 202);
     }
 
-    let reviewPreparation;
-    if (reviewPreparationOptions) {
-      try {
-        const changedPaths = [
-          ...(reviewPreparationOptions.changedPathsResolver?.({
-            reviewEvent,
-            payload: decoded,
-            provider,
-            eventName,
-          }) ?? reviewEvent.changedFiles ?? []),
-        ];
-        const sourceRoot = reviewPreparationOptions.sourceRootResolver(reviewEvent);
-
-        if (sourceRoot) {
-          const taskContext = reviewPreparationOptions.taskContextBuilder?.(
-            reviewEvent,
-            changedPaths,
-          );
-          const prepared = await prepareReviewPrompt({
-            reviewEvent,
-            sourceRoot,
-            changedPaths,
-            baseSystemPrompt: reviewPreparationOptions.baseSystemPrompt,
-            ...(reviewPreparationOptions.operatorOverrides
-              ? { operatorOverrides: reviewPreparationOptions.operatorOverrides }
-              : {}),
-            ...(reviewPreparationOptions.memoryHints
-              ? { memoryHints: reviewPreparationOptions.memoryHints }
-              : {}),
-            ...(reviewPreparationOptions.maxPromptTokens !== undefined
-              ? { maxPromptTokens: reviewPreparationOptions.maxPromptTokens }
-              : {}),
-            ...(taskContext ? { taskContext } : {}),
-          });
-          reviewPreparation = summarizePreparedReviewPromptForWebhook(prepared);
-        }
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        return c.json(
-          {
-            accepted: false,
-            reason: "review_preparation_failed",
-            provider,
-            eventName,
-            message,
-          },
-          500,
-        );
-      }
-    }
-
-    let reviewRun;
-    if (reviewOrchestrationOptions) {
-      try {
-        const result = await runReviewOrchestration(
-          {
-            reviewEvent,
-            payload: decoded,
-            provider,
-            eventName,
-          },
-          reviewOrchestrationOptions,
-        );
-        reviewRun = summarizeReviewOrchestrationForWebhook(result);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        return c.json(
-          {
-            accepted: false,
-            reason: "review_orchestration_failed",
-            provider,
-            eventName,
-            message,
-          },
-          500,
-        );
-      }
-    }
-
-    return c.json({ accepted: true, provider, reviewEvent, reviewPreparation, reviewRun }, 202);
+    return handleReviewOrchestration(c, provider, eventName, decoded, reviewEvent, reviewPreparationOptions, reviewOrchestrationOptions);
   });
+}
+
+function registerGenericWebhook(
+  app: Hono,
+  provider: "github" | "gitlab",
+  path: string,
+  config: GiteaWebhookConfig | undefined,
+  reviewPreparationOptions: ServerReviewPreparationOptions | undefined,
+  reviewOrchestrationOptions: ServerReviewOrchestrationOptions | undefined,
+): void {
+  app.post(path, async (c) => {
+    if (!config) {
+      return c.json({ accepted: false, reason: "trigger_not_configured", provider }, 503);
+    }
+
+    const payload = await c.req.text();
+
+    if (provider === "github") {
+      const signature = c.req.header("x-hub-signature-256") ?? undefined;
+      if (!verifyWebhookSignature(payload, config.webhookSecret, signature)) {
+        return c.json({ accepted: false, reason: "invalid_signature", provider }, 401);
+      }
+    }
+
+    if (provider === "gitlab") {
+      const token = c.req.header("x-gitlab-token") ?? undefined;
+      if (config.webhookSecret && token !== config.webhookSecret) {
+        return c.json({ accepted: false, reason: "invalid_signature", provider }, 401);
+      }
+    }
+
+    const eventName = provider === "github"
+      ? c.req.header("x-github-event")
+      : c.req.header("x-gitlab-event");
+
+    if (!eventName) {
+      return c.json({ accepted: false, reason: "missing_event_name", provider }, 400);
+    }
+
+    const decoded: unknown = (() => {
+      try {
+        return JSON.parse(payload) as unknown;
+      } catch {
+        return undefined;
+      }
+    })();
+
+    if (decoded === undefined) {
+      return c.json({ accepted: false, reason: "invalid_json", provider }, 400);
+    }
+
+    let reviewEvent;
+    try {
+      reviewEvent = translateWebhookToReviewEvent(provider, eventName, decoded, config);
+    } catch (error) {
+      if (error instanceof ZodError) {
+        return c.json(
+          {
+            accepted: false,
+            reason: "invalid_payload",
+            provider,
+            eventName,
+            issues: error.issues.map((issue) => ({
+              path: issue.path,
+              message: issue.message,
+            })),
+          },
+          400,
+        );
+      }
+      throw error;
+    }
+
+    if (!reviewEvent) {
+      return c.json({ accepted: false, reason: "unsupported_event", provider, eventName }, 202);
+    }
+
+    return handleReviewOrchestration(c, provider, eventName, decoded, reviewEvent, reviewPreparationOptions, reviewOrchestrationOptions);
+  });
+}
+
+async function handleReviewOrchestration(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  c: any,
+  provider: ReviewProvider,
+  eventName: string,
+  decoded: unknown,
+  reviewEvent: ReviewEvent,
+  reviewPreparationOptions: ServerReviewPreparationOptions | undefined,
+  reviewOrchestrationOptions: ServerReviewOrchestrationOptions | undefined,
+): Promise<Response> {
+  let reviewPreparation;
+  if (reviewPreparationOptions) {
+    try {
+      const changedPaths = [
+        ...(reviewPreparationOptions.changedPathsResolver?.({
+          reviewEvent,
+          payload: decoded,
+          provider,
+          eventName,
+        }) ?? reviewEvent.changedFiles ?? []),
+      ];
+      const sourceRoot = reviewPreparationOptions.sourceRootResolver(reviewEvent);
+
+      if (sourceRoot) {
+        const taskContext = reviewPreparationOptions.taskContextBuilder?.(
+          reviewEvent,
+          changedPaths,
+        );
+        const prepared = await prepareReviewPrompt({
+          reviewEvent,
+          sourceRoot,
+          changedPaths,
+          baseSystemPrompt: reviewPreparationOptions.baseSystemPrompt,
+          ...(reviewPreparationOptions.operatorOverrides
+            ? { operatorOverrides: reviewPreparationOptions.operatorOverrides }
+            : {}),
+          ...(reviewPreparationOptions.memoryHints
+            ? { memoryHints: reviewPreparationOptions.memoryHints }
+            : {}),
+          ...(reviewPreparationOptions.maxPromptTokens !== undefined
+            ? { maxPromptTokens: reviewPreparationOptions.maxPromptTokens }
+            : {}),
+          ...(taskContext ? { taskContext } : {}),
+        });
+        reviewPreparation = summarizePreparedReviewPromptForWebhook(prepared);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return c.json(
+        {
+          accepted: false,
+          reason: "review_preparation_failed",
+          provider,
+          eventName,
+          message,
+        },
+        500,
+      );
+    }
+  }
+
+  let reviewRun;
+  if (reviewOrchestrationOptions) {
+    try {
+      const result = await runReviewOrchestration(
+        {
+          reviewEvent,
+          payload: decoded,
+          provider,
+          eventName,
+        },
+        reviewOrchestrationOptions,
+      );
+      reviewRun = summarizeReviewOrchestrationForWebhook(result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return c.json(
+        {
+          accepted: false,
+          reason: "review_orchestration_failed",
+          provider,
+          eventName,
+          message,
+        },
+        500,
+      );
+    }
+  }
+
+  return c.json({ accepted: true, provider, reviewEvent, reviewPreparation, reviewRun }, 202);
 }
 
 export function createServerApp(options: ServerAppOptions = {}): Hono {
@@ -229,6 +324,22 @@ export function createServerApp(options: ServerAppOptions = {}): Hono {
     "forgejo",
     "/webhooks/forgejo",
     options.forgejo,
+    options.reviewPreparation,
+    options.reviewOrchestration,
+  );
+  registerGenericWebhook(
+    app,
+    "github",
+    "/webhooks/github",
+    options.github,
+    options.reviewPreparation,
+    options.reviewOrchestration,
+  );
+  registerGenericWebhook(
+    app,
+    "gitlab",
+    "/webhooks/gitlab",
+    options.gitlab,
     options.reviewPreparation,
     options.reviewOrchestration,
   );
@@ -260,6 +371,7 @@ export {
   createVcsAdapterFromConfig,
   resolveAgentAdapterFromConfig,
   resolveGiteaWebhookConfig,
+  resolveGenericWebhookConfig,
   resolveModelSpecFromConfig,
 } from "./bootstrap.js";
 export type { BootstrapServerOptions } from "./bootstrap.js";

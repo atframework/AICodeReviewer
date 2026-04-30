@@ -1,4 +1,5 @@
-import { mkdir, writeFile, unlink } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 
@@ -141,7 +142,7 @@ export function createDockerSandboxBackend(options: DockerSandboxOptions = {}): 
   const allowedCommands = options.commandAllowlist ?? ALLOWED_COMMANDS;
   const commandRunner = options.commandRunner ?? execContainerCommand;
   const containerIds: string[] = [];
-  let envFiles: string[] = [];
+  let envFileDirs: string[] = [];
   let activeMounts: readonly SandboxMountSpec[] = [];
 
   return {
@@ -157,15 +158,13 @@ export function createDockerSandboxBackend(options: DockerSandboxOptions = {}): 
       const envArgs: string[] = [];
 
       if (spawnOptions.env) {
-        const envFilePath = join(
-          spawnOptions.cwd,
-          `.aicr-env-${containerName}`,
-        );
+        const envFileDir = await mkdtemp(join(tmpdir(), "aicr-env-"));
+        const envFilePath = join(envFileDir, "env");
         const envLines = Object.entries(spawnOptions.env)
           .map(([key, value]) => `${key}=${value}`)
           .join("\n");
         await writeFile(envFilePath, envLines, "utf8");
-        envFiles.push(envFilePath);
+        envFileDirs.push(envFileDir);
         envArgs.push("--env-file", envFilePath);
       }
 
@@ -189,14 +188,17 @@ export function createDockerSandboxBackend(options: DockerSandboxOptions = {}): 
       ];
 
       const effectiveTimeout = timeoutMs + GRACE_PERIOD_MS;
-      const result = await commandRunner(containerCli, dockerArgs, {
-        timeoutMs: effectiveTimeout,
-        ...(spawnOptions.stdin ? { stdin: spawnOptions.stdin } : {}),
-      });
+      let result: ContainerCommandResult;
+      try {
+        result = await commandRunner(containerCli, dockerArgs, {
+          timeoutMs: effectiveTimeout,
+          ...(spawnOptions.stdin ? { stdin: spawnOptions.stdin } : {}),
+        });
+      } finally {
+        await cleanupEnvFiles();
+      }
 
       containerIds.push(containerName);
-
-      await cleanupEnvFiles();
 
       return {
         exitCode: result.exitCode,
@@ -249,8 +251,8 @@ export function createDockerSandboxBackend(options: DockerSandboxOptions = {}): 
   };
 
   async function cleanupEnvFiles(): Promise<void> {
-    const files = envFiles;
-    envFiles = [];
-    await Promise.all(files.map((f) => unlink(f).catch(() => {})));
+    const dirs = envFileDirs;
+    envFileDirs = [];
+    await Promise.all(dirs.map((dir) => rm(dir, { recursive: true, force: true }).catch(() => {})));
   }
 }
