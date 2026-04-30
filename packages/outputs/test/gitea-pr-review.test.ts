@@ -178,6 +178,50 @@ describe("createGiteaPullRequestReviewDispatcher", () => {
     expect(result.externalId).toBeUndefined();
   });
 
+  it("publishes a general review comment when a finding is marked non-line-commentable", async () => {
+    const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
+    const dispatcher = createGiteaPullRequestReviewDispatcher({
+      baseUrl: "https://gitea.example",
+      owner: "owent",
+      repo: "example",
+      pullNumber: 1,
+      fetch: async (url, init) => {
+        calls.push({ url, init });
+        return response({ id: 1 });
+      },
+    });
+
+    await dispatcher.publishFinding({ ...finding, lineCommentAllowed: false });
+
+    const body = JSON.parse(calls[0]?.init?.body ?? "{}");
+    expect(body.event).toBe("COMMENT");
+    expect(body.comments).toBeUndefined();
+    expect(body.body).toContain("src/app.ts:42");
+  });
+
+  it("falls back to a general review comment when Gitea rejects the line anchor", async () => {
+    const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
+    const dispatcher = createGiteaPullRequestReviewDispatcher({
+      baseUrl: "https://gitea.example",
+      owner: "owent",
+      repo: "example",
+      pullNumber: 1,
+      fetch: async (url, init) => {
+        calls.push({ url, init });
+        return calls.length === 1
+          ? response({ message: "invalid position" }, 422)
+          : response({ id: 2 });
+      },
+    });
+
+    const result = await dispatcher.publishFinding(finding);
+
+    expect(result.externalId).toBe("2");
+    expect(calls).toHaveLength(2);
+    expect(JSON.parse(calls[0]?.init?.body ?? "{}").comments).toHaveLength(1);
+    expect(JSON.parse(calls[1]?.init?.body ?? "{}").comments).toBeUndefined();
+  });
+
   it("strips trailing slashes from the base URL", async () => {
     const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
     const dispatcher = createGiteaPullRequestReviewDispatcher({

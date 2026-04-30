@@ -13,5 +13,11 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "handlebars": "^4.7.9"
+  },
+  "devDependencies": {
+    "@types/handlebars": "^4.1.0"
   }
 }

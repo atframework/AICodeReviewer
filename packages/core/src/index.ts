@@ -3,6 +3,7 @@ export * from "./markdown-fixer.js";
 export * from "./observability.js";
 export * from "./prompt-manager.js";
 export * from "./queue.js";
+export * from "./queue-factory.js";
 export * from "./queue-worker.js";
 export * from "./rate-limiter.js";
 export * from "./redis-queue.js";

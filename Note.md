@@ -57,6 +57,8 @@ Cost: **消耗Token: 约24.5M(kilo统计位12.3M,模型倍率x2)**
 
 ### GLM 5.1 + High思考强度
 
+#### 第一轮
+
 Cost: **消耗Token: 约11.7M(Pro订阅 5小时的19%)**
 
 耗时: （除命令行执行外）模型响应耗时 ~33分钟
@@ -76,7 +78,11 @@ Cost: **消耗Token: 约11.7M(Pro订阅 5小时的19%)**
 | 测试意图未覆盖   | 3    | 编排器 per-event outputPublisherResolver dispatch；缺 PR number 时 resolver 返回 `undefined`；sandbox package name 测试改为真实导出断言                                                                                              | 约 62 行     | 约 2.76%       |
 | 合计             | 14   | 本轮测试侧补齐/修正总量                                                                                                                                                                                                              | 约 286 行    | 约 12.73%      |
 
+#### 第二轮
+
 ### Kimi K2.6 + Max思考强度
+
+#### 第一轮
 
 Cost: **消耗Token: 约5.2M(Allegretto订阅 5小时的8%，高峰期倍率x3)**
 耗时: （除命令行执行外）模型响应耗时 ~45分钟
@@ -96,7 +102,11 @@ Cost: **消耗Token: 约5.2M(Allegretto订阅 5小时的8%，高峰期倍率x3)*
 | 测试意图未覆盖   | 2    | 预算超限不触发 fallback 的断言；fallback callback 只在可恢复错误切换模型时触发                                                                             | 约 20 行     | 约 0.61%               |
 | 合计             | 10   | 本轮测试侧补齐/修正总量                                                                                                                                    | 约 160 行    | 约 4.85%               |
 
+#### 第二轮
+
 ### DeepSeed V4 Pro + Max思考强度
+
+#### 第一轮
 
 Cost: **消耗Token: 约17M(缓存命中率大约97%，现在有Super打折活动，只花了2块9毛)**
 
@@ -117,11 +127,13 @@ AI Agent: 由于Kilo Code和Roo Code都还没完全适配 DeepSeed V4 Pro 的 re
 | 测试意图未覆盖   | 2    | agent stdin/env/teardown 断言；Kilo providers.json 和 provider-specific env 断言                                                                    | 约 34 行     | 约 0.96%               |
 | 合计             | 8    | 本轮测试侧补齐/修正总量                                                                                                                             | 约 260 行    | 约 7.35%               |
 
+#### 第二轮
+
 ## Continue Plan
 
 请分析Plan.md和当前实现的进度，继续执行计划。
 
-请分析Plan.md和当前实现的进度，先跳过待验收留存，继续执行计划。
+请分析Plan.md和当前实现的进度，先跳过依赖外部VCS（gitea,github等）验收部分，本地有kili命令行工具，继续执行计划。
 
 ## 验收
 
@@ -129,3 +141,4 @@ AI Agent: 由于Kilo Code和Roo Code都还没完全适配 DeepSeed V4 Pro 的 re
 - 使用真实 Kilo CLI 做完整 agent review。
 - 未用真实 Docker/Podman 容器跑恶意 PR sandbox escape 场景。
 - 队列/并发/限流和多事件路由的压力型测试仍可继续加强。
+- M0.5/M1/M2 验收留存项

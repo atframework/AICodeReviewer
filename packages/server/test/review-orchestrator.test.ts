@@ -898,6 +898,56 @@ describe("runReviewOrchestration error paths", () => {
     }
   });
 
+  it("marks findings outside the parsed diff as non-line-commentable", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-line-fallback-"));
+
+    try {
+      await writeWorkspaceFile(tempDir, "src/app.ts", "const ok = true;\ncommitBeforeReturn();\n");
+      const llm: ChatCompletionClient = {
+        async complete(input) {
+          return {
+            providerId: input.model.providerId,
+            modelId: input.model.modelId,
+            content: JSON.stringify({
+              findings: [
+                { file: "src/app.ts", line: 999, severity: "medium", category: "correctness", message: "Issue." },
+              ],
+            }),
+            raw: {},
+          };
+        },
+      };
+      const published: ReviewFinding[] = [];
+
+      const result = await runReviewOrchestration(
+        {
+          reviewEvent: createReviewEventFixture(),
+          payload: {},
+          provider: "gitea",
+          eventName: "pull_request",
+        },
+        {
+          baseSystemPrompt: "<task>\n{{TASK_CONTEXT}}\n</task>",
+          sourceRootResolver: () => tempDir,
+          vcs: createVcs(tempDir),
+          llm,
+          model,
+          outputPublisher: {
+            async publishFinding(finding) {
+              published.push(finding);
+              return { channel: "test", status: "published", raw: {} };
+            },
+          },
+        },
+      );
+
+      expect(result.status).toBe("published");
+      expect(published[0]?.lineCommentAllowed).toBe(false);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("rejects LLM JSON output that is not an object", async () => {
     const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-array-json-"));
 
