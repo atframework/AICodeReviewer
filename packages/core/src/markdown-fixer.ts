@@ -30,26 +30,92 @@ function fixConsecutiveBlankLines(content: string): { text: string; changed: boo
   return { text: content.replace(CONSECUTIVE_BLANK_LINES_RE, "\n\n"), changed: true };
 }
 
-function fixHeadingSpacing(content: string): { text: string; changed: boolean } {
+interface MarkdownSegment {
+  readonly kind: "text" | "code";
+  readonly value: string;
+}
+
+const FENCE_LINE_RE = /^(\s{0,3})(`{3,}|~{3,})/u;
+
+function splitByFences(content: string): MarkdownSegment[] {
+  const segments: MarkdownSegment[] = [];
+  const lines = content.split("\n");
+  let buffer: string[] = [];
+  let inFence = false;
+  let fenceMarker: string | undefined;
+
+  function flushAs(kind: "text" | "code"): void {
+    if (buffer.length === 0) return;
+    segments.push({ kind, value: buffer.join("\n") });
+    buffer = [];
+  }
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i] ?? "";
+    const fenceMatch = FENCE_LINE_RE.exec(line);
+    if (!inFence && fenceMatch && fenceMatch[2]) {
+      flushAs("text");
+      fenceMarker = fenceMatch[2][0];
+      buffer.push(line);
+      inFence = true;
+    } else if (inFence && fenceMatch && fenceMatch[2] && fenceMatch[2].startsWith(fenceMarker ?? "")) {
+      buffer.push(line);
+      flushAs("code");
+      inFence = false;
+      fenceMarker = undefined;
+    } else {
+      buffer.push(line);
+    }
+  }
+
+  // Unterminated fence: treat the open block as code to avoid touching it.
+  flushAs(inFence ? "code" : "text");
+  return segments;
+}
+
+function applyTextTransform(
+  content: string,
+  transform: (text: string) => { text: string; changed: boolean },
+): { text: string; changed: boolean } {
+  if (!content.includes("```") && !content.includes("~~~")) {
+    return transform(content);
+  }
+
+  const segments = splitByFences(content);
   let changed = false;
-  let text = content.replace(HEADING_WITHOUT_SPACE_RE, (_match, hashes: string, after: string) => {
-    changed = true;
-    return `${hashes} ${after}`;
+  const out = segments.map((segment) => {
+    if (segment.kind !== "text") return segment.value;
+    const result = transform(segment.value);
+    if (result.changed) changed = true;
+    return result.text;
   });
-  text = text.replace(HEADING_WITH_TRAILING_HASH_RE, () => {
-    changed = true;
-    return "";
+  return { text: out.join("\n"), changed };
+}
+
+function fixHeadingSpacing(content: string): { text: string; changed: boolean } {
+  return applyTextTransform(content, (text) => {
+    let changed = false;
+    let next = text.replace(HEADING_WITHOUT_SPACE_RE, (_match, hashes: string, after: string) => {
+      changed = true;
+      return `${hashes} ${after}`;
+    });
+    next = next.replace(HEADING_WITH_TRAILING_HASH_RE, () => {
+      changed = true;
+      return "";
+    });
+    return { text: next, changed };
   });
-  return { text, changed };
 }
 
 function fixListMarkerSpacing(content: string): { text: string; changed: boolean } {
-  let changed = false;
-  const text = content.replace(LIST_MARKER_WITHOUT_SPACE_RE, (match: string, marker: string) => {
-    changed = true;
-    return `${marker} `;
+  return applyTextTransform(content, (text) => {
+    let changed = false;
+    const next = text.replace(LIST_MARKER_WITHOUT_SPACE_RE, (_match: string, marker: string) => {
+      changed = true;
+      return `${marker} `;
+    });
+    return { text: next, changed };
   });
-  return { text, changed };
 }
 
 function fixTrailingNewline(content: string): { text: string; changed: boolean } {
