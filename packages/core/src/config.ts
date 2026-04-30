@@ -123,6 +123,14 @@ const outputChannelSchema = z
   })
   .passthrough();
 
+const outputAuthorResolutionSchema = z
+  .object({
+    email_mappings: z.record(z.string().min(1), z.string().min(1)).optional(),
+    email_blacklist: z.array(z.string().email()).optional(),
+  })
+  .passthrough()
+  .optional();
+
 const outputRouteTargetKindSchema = z.preprocess((value) => {
   return value === "pr" ? "pull_request" : value;
 }, reviewTargetKindSchema);
@@ -238,6 +246,7 @@ const appConfigSchema = z
       .object({
         template_engine: z.enum(["handlebars", "eta"]).default("handlebars"),
         channels: z.array(outputChannelSchema).default([]),
+        author_resolution: outputAuthorResolutionSchema,
         routes: z
           .object({
             default: outputRouteSchema.optional(),

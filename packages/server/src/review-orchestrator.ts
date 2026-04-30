@@ -10,6 +10,7 @@ import {
   scrubText,
   type PreparedReviewPrompt,
   type ReviewEvent,
+  type ReviewProvider,
   type ScrubFinding,
 } from "@aicr/core";
 import type { AgentAdapter } from "@aicr/agents";
@@ -32,10 +33,13 @@ import {
   type PublishFindingInput,
 } from "@aicr/mcp-output";
 import {
+  buildAtMentions,
   createTemplateResolver,
   toTemplateFinding,
+  type AuthorResolutionOptions,
   type TemplateContext,
   type TemplateResolver,
+  type MentionChannelKind,
 } from "@aicr/outputs";
 import type { DispatchResult, ReviewFinding } from "@aicr/outputs";
 import type { SandboxBackend, SandboxSpawnResult } from "@aicr/sandbox";
@@ -45,18 +49,25 @@ export interface DiffCapableVcsAdapter extends VcsAdapter {
   diff?(range: ChangeRange, options?: { readonly contextLines?: number }): Promise<ParsedDiff>;
 }
 
+export type ReviewDispatchResult = DispatchResult | readonly DispatchResult[];
+
 export interface ReviewOutputPublisher {
-  publishFinding(finding: ReviewFinding): Promise<DispatchResult>;
+  readonly publishesFindings?: boolean;
+  readonly handlesRendering?: boolean;
+  publishFinding(finding: ReviewFinding): Promise<ReviewDispatchResult>;
+  publishSummary?(summary: string, findings?: readonly ReviewFinding[]): Promise<ReviewDispatchResult>;
 }
 
 export type ReviewOutputPublisherResolver = (
   context: ReviewOrchestrationContext,
 ) => ReviewOutputPublisher | undefined;
 
+export type ReviewOrchestrationProvider = ReviewProvider;
+
 export interface ReviewOrchestrationContext {
   readonly reviewEvent: ReviewEvent;
   readonly payload: unknown;
-  readonly provider: "gitea" | "forgejo";
+  readonly provider: ReviewOrchestrationProvider;
   readonly eventName: string;
 }
 
@@ -88,6 +99,8 @@ export interface ServerReviewOrchestrationOptions {
   readonly summarizeClient?: ChatCompletionClient;
   readonly templateResolver?: TemplateResolver;
   readonly channelKind?: string;
+  readonly mentionAuthor?: boolean;
+  readonly authorResolution?: AuthorResolutionOptions;
 }
 
 export interface ReviewOrchestrationResult {
@@ -444,6 +457,15 @@ function isLineCommentableInDiff(finding: ReviewFinding, diff: ParsedDiff | unde
   );
 }
 
+function appendDispatchResults(target: DispatchResult[], result: ReviewDispatchResult): void {
+  if (Array.isArray(result)) {
+    target.push(...(result as readonly DispatchResult[]));
+    return;
+  }
+
+  target.push(result as DispatchResult);
+}
+
 export async function runReviewOrchestration(
   context: ReviewOrchestrationContext,
   options: ServerReviewOrchestrationOptions,
@@ -546,11 +568,36 @@ export async function runReviewOrchestration(
   const outputPublisher = options.outputPublisher ?? options.outputPublisherResolver?.(context);
 
   if (!options.dryRun && outputPublisher) {
-    const resolver = options.templateResolver ?? (
-      options.channelKind
-        ? createTemplateResolver({ channelKind: options.channelKind })
-        : undefined
-    );
+    const resolver = outputPublisher.handlesRendering
+      ? undefined
+      : options.templateResolver ?? (
+          options.channelKind
+            ? createTemplateResolver({ channelKind: options.channelKind })
+            : undefined
+        );
+    const mentionChannelKind = options.channelKind as MentionChannelKind | undefined;
+    const eventAuthor = context.reviewEvent.author?.username ?? context.reviewEvent.author?.displayName;
+    const eventCtx: { author?: string; url?: string; title?: string } = {};
+    if (eventAuthor !== undefined) {
+      eventCtx.author = eventAuthor;
+    }
+    if (context.reviewEvent.url !== undefined) {
+      eventCtx.url = context.reviewEvent.url;
+    }
+    const baseTemplateContext: Omit<TemplateContext, "finding"> = {
+      ...(Object.keys(eventCtx).length > 0 ? { event: eventCtx } : {}),
+      repo: {
+        fullName: context.reviewEvent.repoRef,
+      },
+      ...(mentionChannelKind && options.mentionAuthor !== false
+        ? { atMentions: buildAtMentions(
+            { ...(context.reviewEvent.author ? { author: context.reviewEvent.author } : {}) },
+            mentionChannelKind,
+            options.authorResolution,
+          ) }
+        : {}),
+    };
+    const reviewFindings: ReviewFinding[] = [];
     for (const finding of outputState.findings) {
       const rawReviewFinding = toReviewFinding(finding);
       const lineCommentable = isLineCommentableInDiff(rawReviewFinding, diff);
@@ -575,20 +622,62 @@ export async function runReviewOrchestration(
 
       if (resolver) {
         const templateCtx: TemplateContext = {
+          ...baseTemplateContext,
           finding: toTemplateFinding({
             ...reviewFinding,
             message: renderedMessage,
             ...(renderedSuggestion ? { suggestion: renderedSuggestion } : {}),
           }),
         };
-        renderedMessage = fixAndValidateMarkdown(resolver.render("finding", templateCtx));
+        const renderedMarkdown = fixAndValidateMarkdown(resolver.render("finding", templateCtx));
+        const preparedFinding: ReviewFinding = {
+          ...reviewFinding,
+          message: renderedMessage,
+          ...(renderedSuggestion ? { suggestion: renderedSuggestion } : {}),
+          renderedMarkdown,
+        };
+        reviewFindings.push(preparedFinding);
+        if (outputPublisher.publishesFindings !== false) {
+          appendDispatchResults(dispatchResults, await outputPublisher.publishFinding(preparedFinding));
+        }
+        continue;
       }
 
-      dispatchResults.push(await outputPublisher.publishFinding({
+      const preparedFinding: ReviewFinding = {
         ...reviewFinding,
         message: renderedMessage,
         ...(renderedSuggestion ? { suggestion: renderedSuggestion } : {}),
-      }));
+      };
+      reviewFindings.push(preparedFinding);
+      if (outputPublisher.publishesFindings !== false) {
+        appendDispatchResults(dispatchResults, await outputPublisher.publishFinding(preparedFinding));
+      }
+    }
+
+    if (outputPublisher.publishSummary) {
+      const summariesToPublish = outputState.summaries.length > 0
+        ? outputState.summaries
+        : reviewFindings.length > 0
+          ? [""]
+          : [];
+      for (const summary of summariesToPublish) {
+        let renderedSummary = enableScrub ? fixAndValidateMarkdown(scrubText(summary).text) : fixAndValidateMarkdown(summary);
+        if (resolver) {
+          const summaryCtx: TemplateContext = {
+            ...baseTemplateContext,
+            summary: renderedSummary,
+            findings: reviewFindings.map((f) =>
+              toTemplateFinding({
+                ...f,
+                message: f.message,
+                ...(f.suggestion ? { suggestion: f.suggestion } : {}),
+              }),
+            ),
+          };
+          renderedSummary = fixAndValidateMarkdown(resolver.render("summary", summaryCtx));
+        }
+        appendDispatchResults(dispatchResults, await outputPublisher.publishSummary(renderedSummary, reviewFindings));
+      }
     }
   }
 

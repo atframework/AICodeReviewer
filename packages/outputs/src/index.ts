@@ -16,6 +16,15 @@ export {
 	type TemplateResolverOptions,
 } from "./template-engine.js";
 
+export {
+	buildAtMentions,
+	renderMentions,
+	resolveAuthorUsername,
+	type AuthorMentionContext,
+	type AuthorResolutionOptions,
+	type MentionChannelKind,
+} from "./author-resolution.js";
+
 export type FindingSeverity = "info" | "low" | "medium" | "high" | "critical";
 
 export interface ReviewFinding {
@@ -28,6 +37,7 @@ export interface ReviewFinding {
 	readonly message: string;
 	readonly suggestion?: string;
 	readonly fingerprint?: string;
+	readonly renderedMarkdown?: string;
 }
 
 export interface DispatchResult {
@@ -102,6 +112,10 @@ function shouldFallbackToGeneralComment(status: number): boolean {
 }
 
 export function renderFindingMarkdown(finding: ReviewFinding): string {
+	if (finding.renderedMarkdown) {
+		return finding.renderedMarkdown;
+	}
+
 	const location = finding.endLine ? `${finding.file}:${finding.line}-${finding.endLine}` : `${finding.file}:${finding.line}`;
 	const parts = [
 		`**${finding.severity.toUpperCase()} · ${finding.category}**`,
@@ -542,9 +556,9 @@ export function createGiteaIssueDispatcher(options: GiteaIssueOptions): GiteaIss
 
 export interface FeishuBotOptions {
 	readonly webhookUrl: string;
-	readonly secret?: string;
-	readonly channelName?: string;
-	readonly fetch?: FetchLike;
+	readonly secret?: string | undefined;
+	readonly channelName?: string | undefined;
+	readonly fetch?: FetchLike | undefined;
 }
 
 export interface FeishuBotDispatcher {
@@ -638,7 +652,7 @@ export interface WeComBotOptions {
 }
 
 export interface WeComBotDispatcher {
-	publishAggregatedFindings(findings: readonly ReviewFinding[], summary?: string): Promise<DispatchResult>;
+	publishAggregatedFindings(findings: readonly ReviewFinding[], summary?: string, mentionText?: string): Promise<DispatchResult>;
 }
 
 export function createWeComBotDispatcher(options: WeComBotOptions): WeComBotDispatcher {
@@ -646,10 +660,13 @@ export function createWeComBotDispatcher(options: WeComBotOptions): WeComBotDisp
 	const channel = options.channelName ?? "wecom_bot";
 
 	return {
-		async publishAggregatedFindings(findings, summary): Promise<DispatchResult> {
+		async publishAggregatedFindings(findings, summary, mentionText): Promise<DispatchResult> {
 			const sections: string[] = [];
 			if (summary) {
 				sections.push(summary);
+			}
+			if (mentionText) {
+				sections.push(mentionText);
 			}
 			if (findings.length > 0) {
 				sections.push("", `Findings: ${findings.length}`);

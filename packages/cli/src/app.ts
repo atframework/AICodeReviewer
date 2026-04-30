@@ -12,9 +12,6 @@ import {
 import {
   bootstrapServerApp,
   createServerApp,
-  createVcsAdapterFromConfig,
-  createLlmClientFromModelSpec,
-  resolveModelSpecFromConfig,
   runReviewOrchestration,
   serveAsync,
   summarizeReviewOrchestrationForWebhook,
@@ -253,9 +250,17 @@ export async function runCli(
           return 1;
         }
 
-        const model = resolveModelSpecFromConfig(config);
-        const llmClient = createLlmClientFromModelSpec(model);
-        const vcs = createVcsAdapterFromConfig(config, sourceRoot);
+        const serverOptions = await bootstrapServerApp({
+          config,
+          baseSystemPrompt,
+          baseDir: cwd,
+          workspaceId: reviewEvent.workspaceId,
+        });
+        const orchestration = serverOptions.reviewOrchestration;
+        if (!orchestration) {
+          stderr.write("aicr review --dry-run: failed to initialize review orchestration.\n");
+          return 1;
+        }
 
         const result = await runReviewOrchestration(
           {
@@ -265,12 +270,22 @@ export async function runCli(
             eventName: "manual",
           },
           {
-            baseSystemPrompt,
+            baseSystemPrompt: orchestration.baseSystemPrompt,
             sourceRootResolver: () => sourceRoot,
-            vcs,
-            llm: llmClient,
-            model,
+            vcs: orchestration.vcs,
+            llm: orchestration.llm,
+            model: orchestration.model,
             dryRun: true,
+            ...(orchestration.outputPublisher ? { outputPublisher: orchestration.outputPublisher } : {}),
+            ...(orchestration.outputPublisherResolver ? { outputPublisherResolver: orchestration.outputPublisherResolver } : {}),
+            ...(orchestration.sandbox ? { sandbox: orchestration.sandbox } : {}),
+            ...(orchestration.agentAdapter ? { agentAdapter: orchestration.agentAdapter } : {}),
+            ...(orchestration.agentTimeoutMs !== undefined ? { agentTimeoutMs: orchestration.agentTimeoutMs } : {}),
+            ...(orchestration.compression ? { compression: orchestration.compression } : {}),
+            ...(orchestration.summarizeModel ? { summarizeModel: orchestration.summarizeModel } : {}),
+            ...(orchestration.summarizeClient ? { summarizeClient: orchestration.summarizeClient } : {}),
+            ...(orchestration.templateResolver ? { templateResolver: orchestration.templateResolver } : {}),
+            ...(orchestration.channelKind ? { channelKind: orchestration.channelKind } : {}),
             ...(maxPromptTokens !== undefined ? { maxPromptTokens } : {}),
             ...(values["operator-override"]?.length
               ? { operatorOverrides: values["operator-override"] }

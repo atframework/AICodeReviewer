@@ -1,10 +1,10 @@
 import { resolve } from "node:path";
 
-import { isPlainObject, createQueueFromConfig, type AppConfig, type ReviewEvent } from "@aicr/core";
+import { fixAndValidateMarkdown, isPlainObject, createQueueFromConfig, type AppConfig, type ReviewEvent } from "@aicr/core";
 import { createQueueWorker, type QueueJobHandler, type QueueWorker } from "@aicr/core";
 import { createAgentAdapter, type AgentAdapter, type AgentKind } from "@aicr/agents";
 import {
-  createOpenAICompatibleChatClient,
+  createChatClientFromModelSpec,
   createResilientChatClient,
   type ChatCompletionClient,
   type CompressionConfig,
@@ -17,11 +17,20 @@ import {
   type ModelProviderKind,
 } from "@aicr/llm";
 import {
+  buildAtMentions,
+  createTemplateResolver,
   createGiteaPullRequestReviewDispatcher,
   createGithubPullRequestReviewDispatcher,
   createGitlabMergeRequestReviewDispatcher,
+  createGiteaIssueDispatcher,
+  createFeishuBotDispatcher,
+  createWeComBotDispatcher,
   type ReviewFinding,
   type DispatchResult,
+  toTemplateFinding,
+  type AuthorResolutionOptions,
+  type MentionChannelKind,
+  type TemplateContext,
 } from "@aicr/outputs";
 import {
   createSandboxBackend,
@@ -35,6 +44,7 @@ import { createGitVcsAdapter, type GitVcsAdapter } from "@aicr/vcs";
 import type { GiteaWebhookConfig } from "./gitea-webhook.js";
 import type { ServerAppOptions, ServerReviewOrchestrationOptions } from "./index.js";
 import type {
+  ReviewDispatchResult,
   ReviewOrchestrationContext,
   ReviewOutputPublisher,
   ReviewOutputPublisherResolver,
@@ -308,16 +318,7 @@ function resolveModelProviderFields(provider: AppConfig["llm"]["providers"][numb
 }
 
 export function createLlmClientFromModelSpec(model: ModelSpec): ChatCompletionClient {
-  if (
-    model.providerKind === "openai_compatible" ||
-    model.providerKind === "ollama"
-  ) {
-    return createOpenAICompatibleChatClient();
-  }
-
-  throw new TypeError(
-    `Provider kind "${model.providerKind}" is not yet supported. Only openai_compatible and ollama are implemented.`,
-  );
+  return createChatClientFromModelSpec(model);
 }
 
 export function resolveAgentAdapterFromConfig(config: AppConfig): AgentAdapter {
@@ -379,12 +380,198 @@ function resolveWorkspaceIdFromTrigger(config: AppConfig, triggerName: string): 
   return "default";
 }
 
+type OutputChannelConfig = AppConfig["outputs"]["channels"][number];
+type OutputRouteChannelKey = "line_comments" | "summary";
+
+export interface OutputPublisherConfigOptions {
+  readonly baseDir?: string;
+}
+
+function toMentionChannelKind(channelKind: string): MentionChannelKind | undefined {
+  switch (channelKind) {
+    case "gitea_pr_review":
+    case "github_pr_review":
+    case "gitlab_mr_review":
+    case "gitea_issue":
+    case "feishu_bot":
+    case "wecom_bot":
+      return channelKind;
+    default:
+      return undefined;
+  }
+}
+
+function shouldMentionAuthor(channel: OutputChannelConfig): boolean {
+  const configured = (channel as Record<string, unknown>).mention_author;
+  if (typeof configured === "boolean") {
+    return configured;
+  }
+
+  return channel.kind === "gitea_pr_review" ||
+    channel.kind === "github_pr_review" ||
+    channel.kind === "gitlab_mr_review" ||
+    channel.kind === "gitea_issue";
+}
+
+function buildAuthorResolutionOptions(
+  config: AppConfig,
+  channel: OutputChannelConfig,
+): AuthorResolutionOptions | undefined {
+  const authorResolution = config.outputs.author_resolution;
+  const mentionFallback = (channel as Record<string, unknown>).mention_fallback;
+  const options: AuthorResolutionOptions = {
+    ...(authorResolution?.email_mappings ? { emailMappings: authorResolution.email_mappings } : {}),
+    ...(authorResolution?.email_blacklist ? { emailBlacklist: new Set(authorResolution.email_blacklist) } : {}),
+    ...(mentionFallback === "all" || mentionFallback === "skip" ? { mentionFallback } : {}),
+  };
+
+  return Object.keys(options).length > 0 ? options : undefined;
+}
+
+function buildBaseTemplateContext(
+  reviewEvent: ReviewEvent | undefined,
+  repoRef: string | undefined,
+  mentionChannelKind: MentionChannelKind | undefined,
+  mentionAuthor: boolean,
+  authorResolution: AuthorResolutionOptions | undefined,
+): Omit<TemplateContext, "finding"> {
+  const eventAuthor = reviewEvent?.author?.username ?? reviewEvent?.author?.displayName;
+  const eventCtx: { author?: string; url?: string; title?: string } = {};
+  if (eventAuthor !== undefined) {
+    eventCtx.author = eventAuthor;
+  }
+  if (reviewEvent?.url !== undefined) {
+    eventCtx.url = reviewEvent.url;
+  }
+
+  const resolvedRepoRef = reviewEvent?.repoRef ?? repoRef;
+  const repoName = resolvedRepoRef?.split("/").at(-1);
+  const repo = resolvedRepoRef
+    ? {
+        fullName: resolvedRepoRef,
+        ...(repoName ? { name: repoName } : {}),
+      }
+    : undefined;
+  const atMentions = mentionAuthor && reviewEvent && mentionChannelKind
+    ? buildAtMentions({ author: reviewEvent.author }, mentionChannelKind, authorResolution)
+    : "";
+
+  return {
+    ...(Object.keys(eventCtx).length > 0 ? { event: eventCtx } : {}),
+    ...(repo ? { repo } : {}),
+    ...(atMentions ? { atMentions } : {}),
+  };
+}
+
+function createChannelRendering(
+  config: AppConfig,
+  channel: OutputChannelConfig,
+  workspaceId: string | undefined,
+  reviewEvent: ReviewEvent | undefined,
+  repoRef: string | undefined,
+  baseDir: string,
+): {
+  readonly mentionText: string;
+  readonly renderFinding: (finding: ReviewFinding) => ReviewFinding;
+  readonly renderSummary: (summary: string, findings: readonly ReviewFinding[]) => string;
+} {
+  const workspaceTemplatesDir = workspaceId
+    ? resolve(baseDir, "workspaces", workspaceId, "templates")
+    : undefined;
+  const resolver = createTemplateResolver({
+    channelKind: channel.kind,
+    channelName: channel.name,
+    ...(workspaceTemplatesDir ? { workspaceTemplatesDir } : {}),
+  });
+  const mentionChannelKind = toMentionChannelKind(channel.kind);
+  const authorResolution = buildAuthorResolutionOptions(config, channel);
+  const baseTemplateContext = buildBaseTemplateContext(
+    reviewEvent,
+    repoRef,
+    mentionChannelKind,
+    shouldMentionAuthor(channel),
+    authorResolution,
+  );
+
+  return {
+    mentionText: baseTemplateContext.atMentions ?? "",
+    renderFinding(finding: ReviewFinding): ReviewFinding {
+      if (finding.renderedMarkdown) {
+        return finding;
+      }
+
+      const renderedMarkdown = fixAndValidateMarkdown(resolver.render("finding", {
+        ...baseTemplateContext,
+        finding: toTemplateFinding(finding),
+      }));
+
+      return { ...finding, renderedMarkdown };
+    },
+    renderSummary(summary: string, findings: readonly ReviewFinding[]): string {
+      return fixAndValidateMarkdown(resolver.render("summary", {
+        ...baseTemplateContext,
+        summary,
+        findings: findings.map((finding) => toTemplateFinding(finding)),
+      }));
+    },
+  };
+}
+
+function appendPublisherResults(target: DispatchResult[], result: ReviewDispatchResult): void {
+  if (Array.isArray(result)) {
+    target.push(...(result as readonly DispatchResult[]));
+    return;
+  }
+
+  target.push(result as DispatchResult);
+}
+
+function createCompositeOutputPublisher(
+  linePublishers: readonly ReviewOutputPublisher[],
+  summaryPublishers: readonly ReviewOutputPublisher[],
+): ReviewOutputPublisher | undefined {
+  const summaryCapable = summaryPublishers.filter((publisher) => publisher.publishSummary);
+  if (linePublishers.length === 0 && summaryCapable.length === 0) {
+    return undefined;
+  }
+
+  if (linePublishers.length === 1 && summaryCapable.length === 0) {
+    return linePublishers[0]!;
+  }
+
+  return {
+    handlesRendering: true,
+    publishesFindings: linePublishers.length > 0,
+    async publishFinding(finding: ReviewFinding): Promise<readonly DispatchResult[]> {
+      const results: DispatchResult[] = [];
+      for (const publisher of linePublishers) {
+        appendPublisherResults(results, await publisher.publishFinding(finding));
+      }
+      return results;
+    },
+    ...(summaryCapable.length > 0
+      ? {
+          async publishSummary(summary: string, findings?: readonly ReviewFinding[]): Promise<readonly DispatchResult[]> {
+            const results: DispatchResult[] = [];
+            for (const publisher of summaryCapable) {
+              if (publisher.publishSummary) {
+                appendPublisherResults(results, await publisher.publishSummary(summary, findings));
+              }
+            }
+            return results;
+          },
+        }
+      : {}),
+  };
+}
+
 export function createOutputPublisherFromConfig(
   config: AppConfig,
   channelName?: string,
   pullNumber?: number,
   workspaceId?: string,
   reviewEvent?: ReviewEvent,
+  baseDir = process.cwd(),
 ): ReviewOutputPublisher | undefined {
   const channels = config.outputs.channels;
   if (channels.length === 0) {
@@ -401,7 +588,8 @@ export function createOutputPublisherFromConfig(
 
   const channelConfig = channel as Record<string, unknown>;
   const triggerName = channelConfig.trigger as string | undefined;
-  const supportedTriggerKinds = channel.kind === "gitea_pr_review"
+  const isPrReview = channel.kind === "gitea_pr_review" || channel.kind === "github_pr_review" || channel.kind === "gitlab_mr_review";
+  const supportedTriggerKinds = channel.kind === "gitea_pr_review" || channel.kind === "gitea_issue"
     ? ["gitea", "forgejo"]
     : channel.kind === "github_pr_review"
       ? ["github"]
@@ -409,13 +597,11 @@ export function createOutputPublisherFromConfig(
         ? ["gitlab"]
         : [];
 
-  if (supportedTriggerKinds.length === 0) {
-    return undefined;
-  }
-
-  const trigger = triggerName
-    ? config.triggers.find((t) => t.name === triggerName && supportedTriggerKinds.includes(t.kind))
-    : config.triggers.find((t) => supportedTriggerKinds.includes(t.kind));
+  const trigger = isPrReview || supportedTriggerKinds.length > 0
+    ? (triggerName
+        ? config.triggers.find((t) => t.name === triggerName && supportedTriggerKinds.includes(t.kind))
+        : config.triggers.find((t) => supportedTriggerKinds.includes(t.kind)))
+    : undefined;
   const triggerConfig = (trigger ?? {}) as Record<string, unknown>;
   const baseUrl = (channelConfig.base_url as string | undefined) ??
     (triggerConfig.base_url as string | undefined);
@@ -429,6 +615,8 @@ export function createOutputPublisherFromConfig(
   const parsedRepo = parseRepoRef(explicitOwner && explicitRepo ? undefined : explicitRepo ?? workspaceRepoRef);
   const owner = explicitOwner ?? parsedRepo?.owner;
   const repo = explicitOwner ? explicitRepo : parsedRepo?.repo;
+  const repoRef = owner && repo ? `${owner}/${repo}` : workspaceRepoRef;
+  const rendering = createChannelRendering(config, channel, workspaceId, reviewEvent, repoRef, baseDir);
 
   if (channel.kind === "gitea_pr_review") {
     if (!baseUrl || !owner || !repo || pullNumber === undefined) {
@@ -445,8 +633,9 @@ export function createOutputPublisherFromConfig(
     });
 
     return {
+      handlesRendering: true,
       async publishFinding(finding: ReviewFinding): Promise<DispatchResult> {
-        return dispatcher.publishFinding(finding);
+        return dispatcher.publishFinding(rendering.renderFinding(finding));
       },
     };
   }
@@ -466,8 +655,9 @@ export function createOutputPublisherFromConfig(
     });
 
     return {
+      handlesRendering: true,
       async publishFinding(finding: ReviewFinding): Promise<DispatchResult> {
-        return dispatcher.publishFinding(finding);
+        return dispatcher.publishFinding(rendering.renderFinding(finding));
       },
     };
   }
@@ -491,8 +681,106 @@ export function createOutputPublisherFromConfig(
     });
 
     return {
+      handlesRendering: true,
       async publishFinding(finding: ReviewFinding): Promise<DispatchResult> {
-        return dispatcher.publishFinding(finding);
+        return dispatcher.publishFinding(rendering.renderFinding(finding));
+      },
+    };
+  }
+
+  if (channel.kind === "gitea_issue") {
+    if (!baseUrl || !owner || !repo || pullNumber === undefined) {
+      return undefined;
+    }
+
+    const dispatcher = createGiteaIssueDispatcher({
+      baseUrl,
+      ...(tokenEnv ? { token: resolveEnv(tokenEnv) ?? "" } : {}),
+      owner,
+      repo,
+      indexNumber: pullNumber,
+      channelName: channel.name,
+    });
+
+    const findings: ReviewFinding[] = [];
+    return {
+      handlesRendering: true,
+      async publishFinding(finding: ReviewFinding): Promise<DispatchResult> {
+        findings.push(rendering.renderFinding(finding));
+        return { channel: channel.name, status: "published", raw: {} };
+      },
+      async publishSummary(summary: string, summaryFindings?: readonly ReviewFinding[]): Promise<DispatchResult> {
+        const renderedFindings = summaryFindings ?? findings;
+        return dispatcher.publishAggregatedFindings(
+          renderedFindings,
+          rendering.renderSummary(summary, renderedFindings),
+        );
+      },
+    };
+  }
+
+  if (channel.kind === "feishu_bot") {
+    const webhookUrlEnv = channelConfig.webhook_url_env as string | undefined;
+    const webhookUrl = webhookUrlEnv ? resolveEnv(webhookUrlEnv) : undefined;
+    if (!webhookUrl) {
+      return undefined;
+    }
+
+    const feishuSecretEnv = channelConfig.secret_env as string | undefined;
+    const feishuSecret = feishuSecretEnv ? resolveEnv(feishuSecretEnv) : undefined;
+    const dispatcher = createFeishuBotDispatcher({
+      webhookUrl,
+      ...(feishuSecret !== undefined ? { secret: feishuSecret } : {}),
+      channelName: channel.name,
+    });
+
+    const findings: ReviewFinding[] = [];
+    return {
+      handlesRendering: true,
+      async publishFinding(finding: ReviewFinding): Promise<DispatchResult> {
+        findings.push(rendering.renderFinding(finding));
+        return { channel: channel.name, status: "published", raw: {} };
+      },
+      async publishSummary(summary: string, summaryFindings?: readonly ReviewFinding[]): Promise<DispatchResult> {
+        const renderedFindings = summaryFindings ?? findings;
+        return dispatcher.publishAggregatedFindings(
+          renderedFindings,
+          rendering.renderSummary(summary, renderedFindings),
+          rendering.mentionText || undefined,
+        );
+      },
+    };
+  }
+
+  if (channel.kind === "wecom_bot") {
+    const webhookUrlEnv = channelConfig.webhook_url_env as string | undefined;
+    const webhookUrl = webhookUrlEnv ? resolveEnv(webhookUrlEnv) : undefined;
+    if (!webhookUrl) {
+      return undefined;
+    }
+
+    const dispatcher = createWeComBotDispatcher({
+      webhookUrl,
+      channelName: channel.name,
+      ...(channelConfig.mentioned_mobile_list
+        ? { mentionedMobileList: channelConfig.mentioned_mobile_list as readonly string[] }
+        : {}),
+    });
+
+    const findings: ReviewFinding[] = [];
+    return {
+      handlesRendering: true,
+      async publishFinding(finding: ReviewFinding): Promise<DispatchResult> {
+        findings.push(rendering.renderFinding(finding));
+        return { channel: channel.name, status: "published", raw: {} };
+      },
+      async publishSummary(summary: string, summaryFindings?: readonly ReviewFinding[]): Promise<DispatchResult> {
+        const renderedFindings = summaryFindings ?? findings;
+        return dispatcher.publishAggregatedFindings(
+          renderedFindings,
+          rendering.renderSummary(summary, renderedFindings),
+          rendering.mentionText || undefined,
+        );
       },
     };
   }
@@ -525,42 +813,72 @@ function routeMatchesEvent(
   return true;
 }
 
-function resolveLineCommentChannelName(
+function uniqueChannelNames(channelNames: readonly string[]): readonly string[] {
+  return [...new Set(channelNames)];
+}
+
+function resolveOutputChannelNames(
   config: AppConfig,
   context: ReviewOrchestrationContext,
-): string | undefined {
+  key: OutputRouteChannelKey,
+): readonly string[] {
   const workspace = config.workspaces.instances[context.reviewEvent.workspaceId];
-  const workspaceChannel = workspace?.outputs?.line_comments?.[0];
-  if (workspaceChannel) {
-    return workspaceChannel;
+  const workspaceChannels = workspace?.outputs?.[key];
+  if (workspaceChannels && workspaceChannels.length > 0) {
+    return uniqueChannelNames(workspaceChannels);
   }
 
-  const routeChannel = config.outputs.routes?.rules
+  const routeChannels = config.outputs.routes?.rules
     .find((route) => routeMatchesEvent(route, context))
-    ?.line_comments?.[0];
-  if (routeChannel) {
-    return routeChannel;
+    ?.[key];
+  if (routeChannels && routeChannels.length > 0) {
+    return uniqueChannelNames(routeChannels);
   }
 
-  return config.outputs.routes?.default?.line_comments?.[0];
+  const defaultChannels = config.outputs.routes?.default?.[key];
+  if (defaultChannels && defaultChannels.length > 0) {
+    return uniqueChannelNames(defaultChannels);
+  }
+
+  if (key === "line_comments") {
+    const fallback = config.outputs.channels.find((c) =>
+      c.kind === "gitea_pr_review" || c.kind === "github_pr_review" || c.kind === "gitlab_mr_review"
+    );
+    return fallback ? [fallback.name] : [];
+  }
+
+  return [];
 }
 
 export function createOutputPublisherResolverFromConfig(
   config: AppConfig,
+  options: OutputPublisherConfigOptions = {},
 ): ReviewOutputPublisherResolver {
   return (context) => {
     const pullNumber = extractPullNumber(context.payload);
-    if (pullNumber === undefined) {
-      return undefined;
-    }
+    const baseDir = options.baseDir ?? process.cwd();
+    const linePublishers = resolveOutputChannelNames(config, context, "line_comments")
+      .map((name) => createOutputPublisherFromConfig(
+        config,
+        name,
+        pullNumber,
+        context.reviewEvent.workspaceId,
+        context.reviewEvent,
+        baseDir,
+      ))
+      .filter((publisher): publisher is ReviewOutputPublisher => Boolean(publisher));
+    const summaryPublishers = resolveOutputChannelNames(config, context, "summary")
+      .map((name) => createOutputPublisherFromConfig(
+        config,
+        name,
+        pullNumber,
+        context.reviewEvent.workspaceId,
+        context.reviewEvent,
+        baseDir,
+      ))
+      .filter((publisher): publisher is ReviewOutputPublisher => Boolean(publisher));
 
-    return createOutputPublisherFromConfig(
-      config,
-      resolveLineCommentChannelName(config, context),
-      pullNumber,
-      context.reviewEvent.workspaceId,
-      context.reviewEvent,
-    );
+    return createCompositeOutputPublisher(linePublishers, summaryPublishers);
   };
 }
 
@@ -758,7 +1076,7 @@ export async function bootstrapServerApp(options: BootstrapServerOptions): Promi
     llm: llmClient,
     model,
     dryRun: false,
-    outputPublisherResolver: createOutputPublisherResolverFromConfig(config),
+    outputPublisherResolver: createOutputPublisherResolverFromConfig(config, { baseDir }),
     sandbox,
     agentAdapter,
     agentTimeoutMs: config.agent.timeout_seconds * 1000,
