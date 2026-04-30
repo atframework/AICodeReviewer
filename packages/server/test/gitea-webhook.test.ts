@@ -394,6 +394,205 @@ describe("createServerApp", () => {
     expect(body.reviewEvent?.targetKind).toBe("push");
   });
 
+  it("accepts a signed GitHub pull_request webhook", async () => {
+    const app = createServerApp({
+      github: {
+        triggerName: "github-saas",
+        workspaceId: "github-owent-example",
+        webhookSecret,
+      },
+    });
+    const payload = JSON.stringify({
+      action: "opened",
+      number: 42,
+      repository: {
+        full_name: "owent/example",
+      },
+      sender: {
+        login: "owent",
+        email: "owent@example.com",
+      },
+      pull_request: {
+        html_url: "https://github.com/owent/example/pull/42",
+        base: { sha: "base-sha" },
+        head: { sha: "head-sha" },
+      },
+    });
+
+    const response = await app.request("/webhooks/github", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-github-event": "pull_request",
+        "x-hub-signature-256": `sha256=${sign(payload)}`,
+      },
+      body: payload,
+    });
+    const body = (await response.json()) as {
+      accepted: boolean;
+      provider?: string;
+      reviewEvent?: { provider?: string; repoRef?: string; targetKind?: string; headSha?: string; reason?: string };
+    };
+
+    expect(response.status).toBe(202);
+    expect(body.accepted).toBe(true);
+    expect(body.provider).toBe("github");
+    expect(body.reviewEvent).toMatchObject({
+      provider: "github",
+      repoRef: "owent/example",
+      targetKind: "pull_request",
+      headSha: "head-sha",
+      reason: "github:opened",
+    });
+  });
+
+  it("rejects a GitHub webhook when the signature is invalid", async () => {
+    const app = createServerApp({
+      github: {
+        triggerName: "github-saas",
+        workspaceId: "github-owent-example",
+        webhookSecret,
+      },
+    });
+    const payload = JSON.stringify({ repository: { full_name: "owent/example" } });
+
+    const response = await app.request("/webhooks/github", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-github-event": "pull_request",
+        "x-hub-signature-256": "sha256=deadbeef",
+      },
+      body: payload,
+    });
+    const body = (await response.json()) as { accepted: boolean; reason?: string };
+
+    expect(response.status).toBe(401);
+    expect(body.accepted).toBe(false);
+    expect(body.reason).toBe("invalid_signature");
+  });
+
+  it("accepts a GitLab merge request webhook with token verification", async () => {
+    const app = createServerApp({
+      gitlab: {
+        triggerName: "gitlab-self-hosted",
+        workspaceId: "gitlab-owent-example",
+        webhookSecret,
+      },
+    });
+    const payload = JSON.stringify({
+      object_attributes: {
+        iid: 77,
+        action: "open",
+        source_branch: "feature/aicr",
+        target_branch: "main",
+        diff_refs: {
+          base_sha: "base-sha-gitlab",
+          start_sha: "start-sha-gitlab",
+          head_sha: "head-sha-gitlab",
+        },
+        last_commit: { id: "last-commit-sha" },
+        source: { default_branch: "main" },
+        url: "https://gitlab.example.com/owent/example/-/merge_requests/77",
+      },
+      project: {
+        path_with_namespace: "owent/example",
+      },
+      user: {
+        username: "owent",
+        email: "owent@example.com",
+      },
+    });
+
+    const response = await app.request("/webhooks/gitlab", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-gitlab-event": "Merge Request Hook",
+        "x-gitlab-token": webhookSecret,
+      },
+      body: payload,
+    });
+    const body = (await response.json()) as {
+      accepted: boolean;
+      provider?: string;
+      reviewEvent?: { provider?: string; repoRef?: string; targetKind?: string; baseSha?: string; headSha?: string; url?: string };
+    };
+
+    expect(response.status).toBe(202);
+    expect(body.accepted).toBe(true);
+    expect(body.provider).toBe("gitlab");
+    expect(body.reviewEvent).toMatchObject({
+      provider: "gitlab",
+      repoRef: "owent/example",
+      targetKind: "pull_request",
+      baseSha: "base-sha-gitlab",
+      headSha: "head-sha-gitlab",
+      url: "https://gitlab.example.com/owent/example/-/merge_requests/77",
+    });
+  });
+
+  it("uses GitLab last_commit id as head revision when diff refs are absent", async () => {
+    const app = createServerApp({
+      gitlab: {
+        triggerName: "gitlab-self-hosted",
+        workspaceId: "gitlab-owent-example",
+        webhookSecret,
+      },
+    });
+    const payload = JSON.stringify({
+      object_attributes: {
+        action: "update",
+        source_branch: "feature/aicr",
+        target_branch: "main",
+        last_commit: { id: "last-commit-sha" },
+      },
+      project: { path_with_namespace: "owent/example" },
+      user: { username: "owent" },
+    });
+
+    const response = await app.request("/webhooks/gitlab", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-gitlab-event": "Merge Request Hook",
+        "x-gitlab-token": webhookSecret,
+      },
+      body: payload,
+    });
+    const body = (await response.json()) as { reviewEvent?: { baseSha?: string; headSha?: string } };
+
+    expect(response.status).toBe(202);
+    expect(body.reviewEvent?.baseSha).toBe("main");
+    expect(body.reviewEvent?.headSha).toBe("last-commit-sha");
+  });
+
+  it("rejects a GitLab webhook when the token does not match", async () => {
+    const app = createServerApp({
+      gitlab: {
+        triggerName: "gitlab-self-hosted",
+        workspaceId: "gitlab-owent-example",
+        webhookSecret,
+      },
+    });
+    const payload = JSON.stringify({ project: { path_with_namespace: "owent/example" } });
+
+    const response = await app.request("/webhooks/gitlab", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-gitlab-event": "Merge Request Hook",
+        "x-gitlab-token": "wrong-token",
+      },
+      body: payload,
+    });
+    const body = (await response.json()) as { accepted: boolean; reason?: string };
+
+    expect(response.status).toBe(401);
+    expect(body.accepted).toBe(false);
+    expect(body.reason).toBe("invalid_signature");
+  });
+
   it("returns 503 when the trigger is not configured", async () => {
     const app = createServerApp({});
     const response = await app.request("/webhooks/gitea", {

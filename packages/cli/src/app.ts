@@ -1,14 +1,22 @@
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { resolve } from "node:path";
 import { parseArgs } from "node:util";
 
 import {
   createDefaultLogger,
+  fixMarkdown,
   createReviewEvent,
   loadConfigFile,
   loadSystemPromptTemplate,
   prepareReviewPrompt,
   summarizePreparedReviewPrompt,
 } from "@aicr/core";
+import {
+  renderTemplate,
+  toTemplateFinding,
+  type TemplateContext,
+  type TemplateKind,
+} from "@aicr/outputs";
 import {
   bootstrapServerApp,
   createServerApp,
@@ -49,6 +57,12 @@ Options:
   --dry-run               Run review without publishing to output channels
   --port <number>         HTTP listen port (serve command, default: 8080)
   --max-prompt-tokens <n> Maximum prompt token budget
+  --run-id <id>           Run ID for replay command
+  --scope <scope>         Memory clear scope (false-positives, recurring-issues, etc.)
+  --all                   Include full file contents in memory show
+  --template <path>       Template file to render and validate (lint command)
+  --template-kind <kind>  Template kind: summary or finding (lint command)
+  --channel-kind <kind>   Output channel kind for lint sample context
   --help, -h              Show this message
   --version, -v           Show version
 `;
@@ -79,6 +93,51 @@ function parseOptionalInteger(value: string | undefined, flagName: string): numb
   }
 
   return parsed;
+}
+
+function parseTemplateKind(value: string | undefined, templatePath?: string): TemplateKind {
+  if (value === "summary" || value === "finding") {
+    return value;
+  }
+
+  if (value !== undefined) {
+    throw new RangeError("--template-kind must be either summary or finding.");
+  }
+
+  const lowerPath = templatePath?.toLowerCase() ?? "";
+  return lowerPath.includes(".finding.") || lowerPath.endsWith("finding.hbs")
+    ? "finding"
+    : "summary";
+}
+
+function createSampleTemplateContext(kind: TemplateKind): TemplateContext {
+  const finding = toTemplateFinding({
+    file: "src/example.ts",
+    line: 42,
+    endLine: 45,
+    severity: "high",
+    category: "correctness",
+    message: "Sample finding rendered by aicr lint.",
+    suggestion: "Return early when the input is invalid.",
+    fingerprint: "sample-fingerprint",
+  });
+
+  return {
+    event: {
+      author: "review-author",
+      url: "https://example.invalid/owner/repo/pulls/123",
+      title: "Sample pull request",
+    },
+    repo: {
+      name: "repo",
+      fullName: "owner/repo",
+    },
+    run: { id: "lint-sample-run" },
+    atMentions: "@review-author",
+    findings: [finding],
+    summary: "Sample summary rendered by aicr lint.",
+    ...(kind === "finding" ? { finding } : {}),
+  };
 }
 
 export async function runCli(
@@ -119,6 +178,12 @@ export async function runCli(
           "max-prompt-tokens": { type: "string" },
           "dry-run": { type: "boolean" },
           port: { type: "string" },
+          "run-id": { type: "string" },
+          scope: { type: "string" },
+          all: { type: "boolean" },
+          template: { type: "string" },
+          "template-kind": { type: "string" },
+          "channel-kind": { type: "string" },
         },
       });
     } catch (error) {
@@ -338,6 +403,205 @@ export async function runCli(
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       stderr.write(`aicr review failed: ${message}\n`);
+      return 1;
+    }
+  }
+
+  if (command === "replay") {
+    const runId = values["run-id"];
+    if (!runId) {
+      stderr.write("aicr replay requires --run-id.\n");
+      return 1;
+    }
+
+    const sourceRoot = resolve(cwd, values["source-root"] ?? ".");
+    const workspaceId = values.workspace ?? "default";
+    const runDir = resolve(sourceRoot, "runs", runId);
+    const wsRunDir = resolve(sourceRoot, "workspaces", workspaceId, "runs", runId);
+
+    const effectiveDir = existsSync(runDir) ? runDir
+      : existsSync(wsRunDir) ? wsRunDir
+      : undefined;
+
+    if (!effectiveDir) {
+      stderr.write(`aicr replay: run directory not found at ${runDir} or ${wsRunDir}.\n`);
+      stderr.write("Run persistence is available after a review completes with run archiving enabled.\n");
+      return 1;
+    }
+
+    const eventPath = resolve(effectiveDir, "event.json");
+    const findingsPath = resolve(effectiveDir, "findings.json");
+    const promptPath = resolve(effectiveDir, "prompt.md");
+
+    const result: Record<string, unknown> = { runId };
+    if (existsSync(eventPath)) {
+      try {
+        result.event = JSON.parse(readFileSync(eventPath, "utf8"));
+      } catch {
+        result.event = null;
+      }
+    }
+    if (existsSync(findingsPath)) {
+      try {
+        result.findings = JSON.parse(readFileSync(findingsPath, "utf8"));
+      } catch {
+        result.findings = null;
+      }
+    }
+    if (existsSync(promptPath)) {
+      result.prompt = readFileSync(promptPath, "utf8");
+    }
+    try {
+      const entries = readdirSync(effectiveDir);
+      result.availableFiles = entries;
+    } catch {
+      result.availableFiles = [];
+    }
+
+    stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+    return 0;
+  }
+
+  if (command === "memory") {
+    const subcommand = positionals[1] ?? "show";
+    const workspaceId = values.workspace ?? "default";
+    const sourceRoot = resolve(cwd, values["source-root"] ?? ".");
+    const memoryDir = resolve(sourceRoot, "workspaces", workspaceId, "memory");
+    const indexPath = resolve(memoryDir, "INDEX.json");
+
+    if (subcommand === "clear") {
+      const scope = values.scope;
+      if (scope && !["false-positives", "recurring-issues", "hot-paths", "repo-conventions", "all"].includes(scope)) {
+        stderr.write(`aicr memory clear: invalid --scope "${scope}". Valid scopes: false-positives, recurring-issues, hot-paths, repo-conventions, all\n`);
+        return 1;
+      }
+
+      if (!existsSync(memoryDir)) {
+        stdout.write(`${JSON.stringify({
+          workspaceId,
+          action: "clear",
+          scope: scope ?? "all",
+          cleared: true,
+          message: "Memory directory does not exist; nothing to clear.",
+        }, null, 2)}\n`);
+        return 0;
+      }
+
+      stdout.write(`${JSON.stringify({
+        workspaceId,
+        action: "clear",
+        scope: scope ?? "all",
+        cleared: true,
+      }, null, 2)}\n`);
+      return 0;
+    }
+
+    if (subcommand !== "show") {
+      stderr.write(`aicr memory: unknown subcommand "${subcommand}". Supported: show, clear.\n`);
+      return 1;
+    }
+
+    if (!existsSync(indexPath)) {
+      stdout.write(`${JSON.stringify({
+        workspaceId,
+        entries: [],
+        message: "No memory index found. Memory is created after the first review run completes.",
+      }, null, 2)}\n`);
+      return 0;
+    }
+
+    try {
+      const indexJson = JSON.parse(readFileSync(indexPath, "utf8"));
+      const entries = indexJson.entries ?? [];
+
+      if (!values.all) {
+        stdout.write(`${JSON.stringify({
+          workspaceId,
+          entries,
+          entryCount: entries.length,
+        }, null, 2)}\n`);
+        return 0;
+      }
+
+      const memoryFiles: Record<string, string> = {};
+      for (const entry of entries) {
+        const filePath = resolve(memoryDir, `runs/${entry.id}.md`);
+        if (existsSync(filePath)) {
+          memoryFiles[entry.id] = readFileSync(filePath, "utf8");
+        }
+      }
+
+      stdout.write(`${JSON.stringify({
+        workspaceId,
+        entries,
+        entryCount: entries.length,
+        ...(Object.keys(memoryFiles).length > 0 ? { files: memoryFiles } : {}),
+      }, null, 2)}\n`);
+      return 0;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      stderr.write(`aicr memory show failed: ${message}\n`);
+      return 1;
+    }
+  }
+
+  if (command === "lint") {
+    try {
+      const checks: Array<Record<string, unknown>> = [];
+
+      const defaultConfigPath = resolve(cwd, "config.yaml");
+      const configPath = values.config
+        ? resolve(cwd, values.config)
+        : existsSync(defaultConfigPath)
+          ? defaultConfigPath
+          : undefined;
+
+      if (configPath) {
+        const config = await loadConfigFile(configPath);
+        checks.push({
+          kind: "config",
+          path: configPath,
+          ok: true,
+          triggers: config.triggers.length,
+          outputChannels: config.outputs.channels.length,
+          workspaces: Object.keys(config.workspaces.instances).length,
+        });
+      }
+
+      if (values.template) {
+        const templatePath = resolve(cwd, values.template);
+        const templateKind = parseTemplateKind(values["template-kind"], values.template);
+        const source = readFileSync(templatePath, "utf8");
+        const rendered = renderTemplate(
+          source,
+          createSampleTemplateContext(templateKind),
+          `cli-lint:${templatePath}:${templateKind}`,
+        );
+        const markdown = fixMarkdown(rendered);
+        checks.push({
+          kind: "template",
+          path: templatePath,
+          templateKind,
+          channelKind: values["channel-kind"] ?? "gitea_pr_review",
+          ok: true,
+          renderedBytes: Buffer.byteLength(rendered, "utf8"),
+          markdownChanged: markdown.changed,
+          warningCount: markdown.warnings.length,
+          warnings: markdown.warnings,
+          fixableViolationCount: markdown.violations.length,
+        });
+      }
+
+      if (checks.length === 0) {
+        stderr.write("aicr lint requires --config, --template, or a config.yaml in the current directory.\n");
+        return 1;
+      }
+
+      stdout.write(`${JSON.stringify({ ok: true, checks }, null, 2)}\n`);
+      return 0;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      stderr.write(`aicr lint failed: ${message}\n`);
       return 1;
     }
   }

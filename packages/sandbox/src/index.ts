@@ -23,5 +23,7 @@ export {
 export { createNativeSandboxBackend } from "./native.js";
 export { createDockerSandboxBackend, preflightSandbox } from "./docker.js";
 export type { DockerSandboxOptions } from "./docker.js";
+export { createPodmanSandboxBackend } from "./podman.js";
+export type { PodmanSandboxOptions } from "./podman.js";
 export { createSandboxBackend, resolveSandboxKind } from "./factory.js";
 export type { CreateSandboxOptions } from "./factory.js";

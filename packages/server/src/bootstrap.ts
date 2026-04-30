@@ -1,6 +1,13 @@
 import { resolve } from "node:path";
 
-import { fixAndValidateMarkdown, isPlainObject, createQueueFromConfig, type AppConfig, type ReviewEvent } from "@aicr/core";
+import {
+  fixAndValidateMarkdown,
+  isPlainObject,
+  createMultiProviderRateLimiter,
+  createQueueFromConfig,
+  type AppConfig,
+  type ReviewEvent,
+} from "@aicr/core";
 import { createQueueWorker, type QueueJobHandler, type QueueWorker } from "@aicr/core";
 import { createAgentAdapter, type AgentAdapter, type AgentKind } from "@aicr/agents";
 import {
@@ -347,6 +354,30 @@ export function resolveGiteaWebhookConfig(
   const trigger = triggerName
     ? config.triggers.find((t) => t.name === triggerName && (t.kind === "gitea" || t.kind === "forgejo"))
     : config.triggers.find((t) => t.kind === "gitea" || t.kind === "forgejo");
+
+  if (!trigger) {
+    return undefined;
+  }
+
+  const triggerConfig = trigger as Record<string, unknown>;
+  const webhookSecretEnv = triggerConfig.webhook_secret_env as string | undefined;
+  const webhookSecret = webhookSecretEnv ? resolveEnv(webhookSecretEnv) : undefined;
+
+  return {
+    triggerName: trigger.name,
+    workspaceId: resolveWorkspaceIdFromTrigger(config, trigger.name),
+    ...(webhookSecret !== undefined ? { webhookSecret } : {}),
+  };
+}
+
+export function resolveGenericWebhookConfig(
+  config: AppConfig,
+  kind: string,
+  triggerName?: string,
+): GiteaWebhookConfig | undefined {
+  const trigger = triggerName
+    ? config.triggers.find((t) => t.name === triggerName && t.kind === kind)
+    : config.triggers.find((t) => t.kind === kind);
 
   if (!trigger) {
     return undefined;
@@ -1047,6 +1078,8 @@ export async function bootstrapServerApp(options: BootstrapServerOptions): Promi
   const { config, baseSystemPrompt, baseDir = process.cwd(), jobHandler } = options;
 
   const giteaConfig = resolveGiteaWebhookConfig(config);
+  const githubConfig = resolveGenericWebhookConfig(config, "github");
+  const gitlabConfig = resolveGenericWebhookConfig(config, "gitlab");
 
   const model = resolveModelSpecFromConfig(config);
   const retryConfig = toGatewayRetry(config.llm.retry);
@@ -1087,6 +1120,10 @@ export async function bootstrapServerApp(options: BootstrapServerOptions): Promi
 
   const queue = await createQueueFromConfig(config);
 
+  const rateLimiter = config.queue.rate_limit?.per_provider_rps
+    ? createMultiProviderRateLimiter(config.queue.rate_limit.per_provider_rps)
+    : undefined;
+
   let worker: QueueWorker | undefined;
   if (jobHandler) {
     const workersConfig = config.queue.workers;
@@ -1095,11 +1132,14 @@ export async function bootstrapServerApp(options: BootstrapServerOptions): Promi
       concurrency: workersConfig?.concurrency ?? 4,
       perWorkspaceConcurrency: workersConfig?.per_workspace_concurrency ?? 1,
       lockTtlSeconds: workersConfig?.lock_ttl_seconds ?? 1800,
+      ...(rateLimiter ? { rateLimiter } : {}),
     });
   }
 
   return {
     ...(giteaConfig ? { gitea: giteaConfig } : {}),
+    ...(githubConfig ? { github: githubConfig } : {}),
+    ...(gitlabConfig ? { gitlab: gitlabConfig } : {}),
     reviewOrchestration: orchestrationOptions,
     queue,
     ...(worker ? { worker } : {}),

@@ -136,12 +136,71 @@ describe("runCli", () => {
     expect(parsed.config).toBe("config.toml");
   });
 
-  it("falls through to a scaffolded message for unknown commands", async () => {
+  it("fails replay when missing --run-id", async () => {
     const stdout = new MemoryWriter();
     const stderr = new MemoryWriter();
     const exitCode = await runCli(["replay"], { stdout, stderr });
-    expect(exitCode).toBe(0);
-    expect(stdout.output).toContain('Command "replay" is scaffolded');
+    expect(exitCode).toBe(1);
+    expect(stderr.output).toContain("requires --run-id");
+  });
+
+  it("fails replay when run directory does not exist", async () => {
+    const stdout = new MemoryWriter();
+    const stderr = new MemoryWriter();
+    const exitCode = await runCli(
+      ["replay", "--run-id", "nonexistent", "--source-root", tmpdir()],
+      { stdout, stderr },
+    );
+    expect(exitCode).toBe(1);
+    expect(stderr.output).toContain("run directory not found");
+  });
+
+  it("shows memory index for a workspace that has no memory yet", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-cli-memory-"));
+    try {
+      const stdout = new MemoryWriter();
+      const stderr = new MemoryWriter();
+      const exitCode = await runCli(
+        ["memory", "show", "--workspace", "test-ws", "--source-root", tempDir],
+        { stdout, stderr },
+      );
+      expect(exitCode).toBe(0);
+      const parsed = JSON.parse(stdout.output) as { entries: unknown[]; message?: string };
+      expect(parsed.entries).toEqual([]);
+      expect(parsed.message).toContain("No memory index");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects invalid memory clear scope", async () => {
+    const stdout = new MemoryWriter();
+    const stderr = new MemoryWriter();
+    const exitCode = await runCli(
+      ["memory", "clear", "--scope", "invalid-scope", "--workspace", "ws"],
+      { stdout, stderr },
+    );
+    expect(exitCode).toBe(1);
+    expect(stderr.output).toContain("invalid --scope");
+  });
+
+  it("memory clear shows helpful message when directory does not exist", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-cli-memory-clear-"));
+    try {
+      const stdout = new MemoryWriter();
+      const stderr = new MemoryWriter();
+      const exitCode = await runCli(
+        ["memory", "clear", "--workspace", "test-ws", "--source-root", tempDir],
+        { stdout, stderr },
+      );
+      expect(exitCode).toBe(0);
+      const parsed = JSON.parse(stdout.output) as { action: string; cleared: boolean };
+      expect(parsed.action).toBe("clear");
+      expect(parsed.cleared).toBe(true);
+      expect(stderr.output).toBe("");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
   });
 
   it("returns an error when serve is called without a config file", async () => {
@@ -221,6 +280,105 @@ describe("runCli", () => {
       );
       expect(exitCode).toBe(1);
       expect(stderr.output).toContain("invalid provider");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("lint validates a config file and reports checked resources", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-cli-lint-config-"));
+    try {
+      await writeWorkspaceFile(
+        tempDir,
+        "config.yaml",
+        [
+          "triggers:",
+          "  - name: github-main",
+          "    kind: github",
+          "outputs:",
+          "  channels:",
+          "    - name: github-pr",
+          "      kind: github_pr_review",
+          "workspaces:",
+          "  instances:",
+          "    ws:",
+          "      source_repo:",
+          "        trigger: github-main",
+          "        repo: owent/example",
+        ].join("\n"),
+      );
+      const stdout = new MemoryWriter();
+      const stderr = new MemoryWriter();
+      const exitCode = await runCli(["lint", "--config", "config.yaml"], { cwd: tempDir, stdout, stderr });
+
+      expect(exitCode).toBe(0);
+      expect(stderr.output).toBe("");
+      const parsed = JSON.parse(stdout.output) as { ok: boolean; checks: Array<{ kind: string; workspaces?: number }> };
+      expect(parsed.ok).toBe(true);
+      expect(parsed.checks).toEqual([
+        expect.objectContaining({ kind: "config", ok: true, triggers: 1, outputChannels: 1, workspaces: 1 }),
+      ]);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("lint renders a workspace template with sample context", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-cli-lint-template-"));
+    try {
+      await writeWorkspaceFile(
+        tempDir,
+        "templates/custom.summary.md.hbs",
+        "## {{summary}}\n\n{{#each findings}}- `{{location}}`: {{message}}\n{{/each}}",
+      );
+      const stdout = new MemoryWriter();
+      const stderr = new MemoryWriter();
+      const exitCode = await runCli(
+        ["lint", "--template", "templates/custom.summary.md.hbs", "--template-kind", "summary"],
+        { cwd: tempDir, stdout, stderr },
+      );
+
+      expect(exitCode).toBe(0);
+      expect(stderr.output).toBe("");
+      const parsed = JSON.parse(stdout.output) as { checks: Array<{ kind: string; templateKind?: string; renderedBytes?: number }> };
+      expect(parsed.checks).toEqual([
+        expect.objectContaining({ kind: "template", ok: true, templateKind: "summary" }),
+      ]);
+      expect(parsed.checks[0]?.renderedBytes).toBeGreaterThan(0);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("lint returns an error when no lint target is available", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-cli-lint-empty-"));
+    try {
+      const stdout = new MemoryWriter();
+      const stderr = new MemoryWriter();
+      const exitCode = await runCli(["lint"], { cwd: tempDir, stdout, stderr });
+
+      expect(exitCode).toBe(1);
+      expect(stdout.output).toBe("");
+      expect(stderr.output).toContain("requires --config, --template, or a config.yaml");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("lint rejects invalid template kind values", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-cli-lint-kind-"));
+    try {
+      await writeWorkspaceFile(tempDir, "template.hbs", "{{summary}}\n");
+      const stdout = new MemoryWriter();
+      const stderr = new MemoryWriter();
+      const exitCode = await runCli(
+        ["lint", "--template", "template.hbs", "--template-kind", "invalid"],
+        { cwd: tempDir, stdout, stderr },
+      );
+
+      expect(exitCode).toBe(1);
+      expect(stdout.output).toBe("");
+      expect(stderr.output).toContain("--template-kind must be either summary or finding");
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }

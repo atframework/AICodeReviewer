@@ -53,6 +53,10 @@ export function createClaudeCodeAdapter(options: ClaudeCodeAdapterOptions = {}):
 				args.push("--model", spawnOptions.model.modelId);
 			}
 
+			if (spawnOptions.model?.thinking?.enabled) {
+				args.push("--thinking");
+			}
+
 			args.push("--cwd", spawnOptions.workingDir);
 
 			return args;
@@ -72,8 +76,20 @@ export function createClaudeCodeAdapter(options: ClaudeCodeAdapterOptions = {}):
 				envVars.ANTHROPIC_BASE_URL = model.baseUrl;
 			}
 
-			if (model.extraParams?.max_tokens) {
+			if (model.anthropicVersion) {
+				envVars.ANTHROPIC_VERSION = model.anthropicVersion;
+			}
+
+			if (model.anthropicBeta && model.anthropicBeta.length > 0) {
+				envVars.ANTHROPIC_BETA = model.anthropicBeta.join(",");
+			}
+
+			if (model.extraParams?.max_tokens !== undefined) {
 				envVars.ANTHROPIC_MAX_TOKENS = String(model.extraParams.max_tokens);
+			}
+
+			if (model.thinking?.enabled && model.thinking.budgetTokens !== undefined) {
+				envVars.ANTHROPIC_THINKING_BUDGET_TOKENS = String(model.thinking.budgetTokens);
 			}
 
 			return {

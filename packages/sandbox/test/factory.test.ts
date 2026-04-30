@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { createPodmanSandboxBackend } from "../src/index.js";
 import { createSandboxBackend, resolveSandboxKind } from "../src/factory.js";
 
 describe("createSandboxBackend", () => {
@@ -15,6 +16,12 @@ describe("createSandboxBackend", () => {
 
   it("preserves podman backend kind and engine", async () => {
     const backend = await createSandboxBackend({ kind: "podman", engine: "podman" });
+    expect(backend.kind).toBe("podman");
+    expect(backend.engine).toBe("podman");
+  });
+
+  it("exports a dedicated podman backend factory", () => {
+    const backend = createPodmanSandboxBackend();
     expect(backend.kind).toBe("podman");
     expect(backend.engine).toBe("podman");
   });

@@ -55,6 +55,60 @@ const pushPayloadSchema = z
   })
   .passthrough();
 
+const gitlabMergeRequestPayloadSchema = z
+  .object({
+    object_attributes: z
+      .object({
+        iid: z.number().optional(),
+        action: z.string().min(1).optional(),
+        source_branch: z.string().min(1).optional(),
+        target_branch: z.string().min(1).optional(),
+        diff_refs: z
+          .object({
+            base_sha: z.string().min(1).optional(),
+            start_sha: z.string().min(1).optional(),
+            head_sha: z.string().min(1).optional(),
+          })
+          .passthrough()
+          .optional(),
+        last_commit: z
+          .object({
+            id: z.string().min(1).optional(),
+          })
+          .passthrough()
+          .optional(),
+        source: z
+          .object({
+            default_branch: z.string().min(1).optional(),
+          })
+          .passthrough()
+          .optional(),
+        url: z.string().url().optional(),
+      })
+      .passthrough(),
+    project: z
+      .object({
+        path_with_namespace: z.string().min(1),
+      })
+      .passthrough(),
+    user: actorSchema.optional(),
+  })
+  .passthrough();
+
+const gitlabPushPayloadSchema = z
+  .object({
+    before: z.string().min(1).optional(),
+    after: z.string().min(1).optional(),
+    project: z
+      .object({
+        path_with_namespace: z.string().min(1),
+      })
+      .passthrough(),
+    user_username: z.string().min(1).optional(),
+    user_email: z.string().email().optional(),
+  })
+  .passthrough();
+
 function normalizeActor(actor: z.infer<typeof actorSchema> | undefined): ReviewActor {
   return {
     username: actor?.login ?? actor?.username,
@@ -127,6 +181,44 @@ export function translateWebhookToReviewEvent(
       headSha: parsed.after,
       author: normalizeActor(parsed.pusher),
       url: parsed.compare_url,
+      reason: `${provider}:push`,
+      rawEventName: eventName,
+    });
+  }
+
+  if (eventName === "Merge Request Hook" || eventName === "merge_request") {
+    const parsed = gitlabMergeRequestPayloadSchema.parse(payload);
+
+    return createReviewEvent({
+      triggerName: config.triggerName,
+      provider,
+      workspaceId: config.workspaceId,
+      targetKind: "pull_request",
+      repoRef: parsed.project.path_with_namespace,
+      baseSha: parsed.object_attributes.diff_refs?.base_sha ?? parsed.object_attributes.target_branch ?? parsed.object_attributes.source?.default_branch,
+      headSha: parsed.object_attributes.diff_refs?.head_sha ?? parsed.object_attributes.last_commit?.id ?? parsed.object_attributes.source_branch,
+      author: normalizeActor(parsed.user),
+      url: parsed.object_attributes.url,
+      reason: `${provider}:${parsed.object_attributes.action ?? "merge_request"}`,
+      rawEventName: eventName,
+    });
+  }
+
+  if (eventName === "Push Hook" || eventName === "git_push") {
+    const parsed = gitlabPushPayloadSchema.parse(payload);
+
+    return createReviewEvent({
+      triggerName: config.triggerName,
+      provider,
+      workspaceId: config.workspaceId,
+      targetKind: "push",
+      repoRef: parsed.project.path_with_namespace,
+      baseSha: parsed.before,
+      headSha: parsed.after,
+      author: {
+        username: parsed.user_username,
+        email: parsed.user_email,
+      },
       reason: `${provider}:push`,
       rawEventName: eventName,
     });

@@ -22,6 +22,6 @@ export { createOpencodeAdapter } from "./opencode.js";
 export type { OpencodeAdapterOptions } from "./opencode.js";
 export { createRooAdapter } from "./roo.js";
 export type { RooAdapterOptions } from "./roo.js";
-export { createOpenAICompatibleTranslator } from "./model-translator.js";
+export { createOpenAICompatibleTranslator, createAnthropicTranslator, createVertexAiTranslator, createBedrockTranslator } from "./model-translator.js";
 export { createAgentAdapter } from "./factory.js";
 export type { CreateAgentOptions } from "./factory.js";

@@ -164,6 +164,25 @@ AI Agent: 由于Kilo Code和Roo Code都还没完全适配 DeepSeed V4 Pro 的 re
 
 #### 第二轮
 
+Cost: **消耗Token: 约13.6M(缓存命中率大约96%，现在有Super打折活动，只花了2块3毛)**
+
+AI Agent: 执行第二轮的时候Kilo Code更新了，新版本兼容DeepSeed V4 Pro的思考模式似乎没问题了，所以第二轮也是用kilo code。
+
+| 类型 | 数量 | 主要修复                                                     | 估算修复代码量 | 占参与分析实现代码比例 |
+| ---- | ---- | ------------------------------------------------------------ | -------------- | ---------------------- |
+| 致命 | 1    | 容器 sandbox 的 --env-file 原先可能落在已挂载 agent 工作目录内，agent 可读到注入凭据；已改为系统临时目录，并在正常/异常路径清理 | ~34 行         | ~2.00%                 |
+| 严重 | 4    | `aicr lint` 从占位命令变为真实 config/template 校验；GitLab MR 优先使用 diff_refs/last_commit SHA；Claude Code adapter 透传 Anthropic version/beta/thinking/max_tokens；新增独立 Podman backend 工厂入口 | ~225 行        | ~13.27%                |
+| 一般 | 1    | Webhook review preparation provider 类型从 Gitea-only cast 扩展为 ReviewProvider，避免 GitHub/GitLab 回调上下文语义错误 | ~11 行         | ~0.65%                 |
+| 优化 | 1    | 新增 podman.md 与 AGENTS.md sandbox env-file 坑位记录，强化后续维护约束（文档不计入实现代码占比） | 0 行实现代码   | 0%                     |
+| 合计 | 7    | M5 本地长链路正确性、安全边界与可维护性修复                  | ~270 行        | ~15.92%                |
+
+| 类型             | 数量 | 覆盖内容                                                     | 估算测试代码量 | 占参与分析测试代码比例 |
+| ---------------- | ---- | ------------------------------------------------------------ | -------------- | ---------------------- |
+| 单元测试遗漏补全 | 12   | CLI lint config/template/错误输入；GitHub webhook HMAC；GitLab webhook token/MR 归一化；Claude Code advanced Anthropic 字段；Podman 专用 factory export | ~383 行        | ~14.20%                |
+| 错误修复         | 0    | 未发现需修改既有错误断言的测试                               | 0 行           | 0%                     |
+| 测试意图未覆盖   | 4    | sandbox env-file 不在挂载目录、runner 抛错仍清理、shell-wrapped escape 被拒绝、默认禁网且不挂载 Docker/Podman socket | ~95 行         | ~3.52%                 |
+| 合计             | 16   | M5 本地长链路和安全边界测试增强                              | ~478 行        | ~17.72%                |
+
 ## Continue Plan
 
 请分析Plan.md和当前实现的进度，继续执行计划。

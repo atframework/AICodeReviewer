@@ -1,3 +1,8 @@
+import { existsSync } from "node:fs";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { describe, expect, it } from "vitest";
 
 import { preflightSandbox, createDockerSandboxBackend } from "../src/docker.js";
@@ -68,6 +73,87 @@ describe("createDockerSandboxBackend", () => {
     expect(invoked).toBe(false);
   });
 
+  it("rejects shell-wrapped escape commands before invoking the container engine", async () => {
+    let invoked = false;
+    const backend = createDockerSandboxBackend({
+      commandRunner: async () => {
+        invoked = true;
+        return { stdout: "", stderr: "", exitCode: 0 };
+      },
+    });
+
+    await expect(
+      backend.spawn({
+        command: ["sh", "-c", "rm -rf /workspace/source"],
+        cwd: "/tmp/aicr-agent",
+        timeoutMs: 1000,
+      }),
+    ).rejects.toThrow("not in the allowed list");
+    expect(invoked).toBe(false);
+  });
+
+  it("keeps generated env files outside the mounted agent workspace", async () => {
+    const base = await mkdtemp(join(tmpdir(), "aicr-docker-env-"));
+    const agentDir = join(base, "agent");
+    let envFilePath: string | undefined;
+    const backend = createDockerSandboxBackend({
+      commandRunner: async (_engine, args) => {
+        const envFileIndex = args.indexOf("--env-file");
+        envFilePath = typeof args[envFileIndex + 1] === "string"
+          ? args[envFileIndex + 1]
+          : undefined;
+        return { stdout: "ok", stderr: "", exitCode: 0 };
+      },
+    });
+
+    try {
+      await backend.materializeFs({ agentDir, tmpDir: join(base, "tmp") });
+      await backend.spawn({
+        command: ["node", "agent.js"],
+        cwd: agentDir,
+        env: { AICR_SECRET: "super-secret" },
+        timeoutMs: 1000,
+      });
+
+      expect(envFilePath).toBeDefined();
+      expect(envFilePath?.startsWith(agentDir)).toBe(false);
+    } finally {
+      await backend.teardown();
+      await rm(base, { recursive: true, force: true });
+    }
+  });
+
+  it("cleans generated env files when the container runner throws", async () => {
+    const base = await mkdtemp(join(tmpdir(), "aicr-docker-env-error-"));
+    let envFilePath: string | undefined;
+    const backend = createDockerSandboxBackend({
+      commandRunner: async (_engine, args) => {
+        const envFileIndex = args.indexOf("--env-file");
+        envFilePath = typeof args[envFileIndex + 1] === "string"
+          ? args[envFileIndex + 1]
+          : undefined;
+        throw new Error("container failed to start");
+      },
+    });
+
+    try {
+      await expect(
+        backend.spawn({
+          command: ["node", "agent.js"],
+          cwd: join(base, "agent"),
+          env: { AICR_SECRET: "super-secret" },
+          timeoutMs: 1000,
+        }),
+      ).rejects.toThrow("container failed to start");
+
+      expect(envFilePath).toBeDefined();
+      expect(existsSync(envFilePath!)).toBe(false);
+    } finally {
+      await backend.teardown();
+      await rm(base, { recursive: true, force: true });
+    }
+  });
+
   describe("materializeFs", () => {
     it("creates mount specs with correct structure", async () => {
       const backend = createDockerSandboxBackend();
@@ -83,6 +169,39 @@ describe("createDockerSandboxBackend", () => {
       expect(result.mountSpecs).toHaveLength(2);
       expect(result.mountSpecs[0]?.readOnly).toBe(false);
       expect(result.mountSpecs[1]?.readOnly).toBe(false);
+    });
+
+    it("spawns containers with network disabled and without host container socket mounts", async () => {
+      const calls: Array<{ args: readonly string[] }> = [];
+      const backend = createDockerSandboxBackend({
+        commandRunner: async (_engine, args) => {
+          calls.push({ args });
+          return { stdout: "ok", stderr: "", exitCode: 0 };
+        },
+      });
+      const base = await mkdtemp(join(tmpdir(), "aicr-docker-isolation-"));
+
+      try {
+        await backend.materializeFs({
+          sourceDir: join(base, "source"),
+          agentDir: join(base, "agent"),
+          tmpDir: join(base, "tmp"),
+        });
+
+        await backend.spawn({
+          command: ["node", "agent.js"],
+          cwd: join(base, "agent"),
+          timeoutMs: 1000,
+        });
+
+        const args = calls[0]?.args ?? [];
+        expect(args).toEqual(expect.arrayContaining(["--network", "none"]));
+        expect(args.join(" ")).not.toContain("/var/run/docker.sock");
+        expect(args.join(" ")).not.toContain("/run/podman/podman.sock");
+      } finally {
+        await backend.teardown();
+        await rm(base, { recursive: true, force: true });
+      }
     });
   });
 

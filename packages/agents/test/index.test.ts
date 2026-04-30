@@ -12,6 +12,9 @@ import {
   createOpencodeAdapter,
   createRooAdapter,
   createOpenAICompatibleTranslator,
+  createAnthropicTranslator,
+  createVertexAiTranslator,
+  createBedrockTranslator,
   createAgentAdapter,
 } from "../src/index.js";
 
@@ -321,6 +324,277 @@ describe("createOpenAICompatibleTranslator", () => {
   });
 });
 
+describe("createAnthropicTranslator", () => {
+  it("translates Anthropic ModelSpec with API key env vars", () => {
+    const translator = createAnthropicTranslator("anthropic-prod");
+    const result = translator.translate({
+      providerKind: "anthropic",
+      providerId: "anthropic-prod",
+      modelId: "claude-sonnet-4",
+      apiKeyEnv: "MY_ANTHROPIC_KEY",
+      baseUrl: "https://api.anthropic.com",
+    });
+
+    expect(result.providerId).toBe("anthropic-prod");
+    expect(result.modelId).toBe("claude-sonnet-4");
+    expect(result.envVars.ANTHROPIC_API_KEY).toBe("${MY_ANTHROPIC_KEY}");
+    expect(result.envVars.ANTHROPIC_BASE_URL).toBe("https://api.anthropic.com");
+    expect(result.cliFlags).toContain("--model");
+    expect(result.cliFlags).toContain("claude-sonnet-4");
+  });
+
+  it("defaults API key to ANTHROPIC_API_KEY when not specified", () => {
+    const translator = createAnthropicTranslator("p");
+    const result = translator.translate({
+      providerKind: "anthropic",
+      providerId: "p",
+      modelId: "m",
+    });
+
+    expect(result.envVars.ANTHROPIC_API_KEY).toBe("${ANTHROPIC_API_KEY}");
+  });
+
+  it("uses options baseUrl as fallback", () => {
+    const translator = createAnthropicTranslator("p", {
+      baseUrl: "https://proxy.example.com",
+    });
+    const result = translator.translate({
+      providerKind: "anthropic",
+      providerId: "p",
+      modelId: "m",
+    });
+
+    expect(result.envVars.ANTHROPIC_BASE_URL).toBe("https://proxy.example.com");
+  });
+
+  it("prefers model baseUrl over options baseUrl", () => {
+    const translator = createAnthropicTranslator("p", {
+      baseUrl: "https://proxy.example.com",
+    });
+    const result = translator.translate({
+      providerKind: "anthropic",
+      providerId: "p",
+      modelId: "m",
+      baseUrl: "https://api.anthropic.com",
+    });
+
+    expect(result.envVars.ANTHROPIC_BASE_URL).toBe("https://api.anthropic.com");
+  });
+
+  it("includes anthropicVersion env var", () => {
+    const translator = createAnthropicTranslator("p");
+    const result = translator.translate({
+      providerKind: "anthropic",
+      providerId: "p",
+      modelId: "m",
+      anthropicVersion: "2025-01-01",
+    });
+
+    expect(result.envVars.ANTHROPIC_VERSION).toBe("2025-01-01");
+  });
+
+  it("includes anthropicBeta env var", () => {
+    const translator = createAnthropicTranslator("p");
+    const result = translator.translate({
+      providerKind: "anthropic",
+      providerId: "p",
+      modelId: "m",
+      anthropicBeta: ["prompt-caching-tool", "output-128k"],
+    });
+
+    expect(result.envVars.ANTHROPIC_BETA).toBe("prompt-caching-tool,output-128k");
+  });
+
+  it("includes thinking budget tokens env var", () => {
+    const translator = createAnthropicTranslator("p");
+    const result = translator.translate({
+      providerKind: "anthropic",
+      providerId: "p",
+      modelId: "m",
+      thinking: { enabled: true, budgetTokens: 4096 },
+    });
+
+    expect(result.envVars.ANTHROPIC_THINKING_BUDGET_TOKENS).toBe("4096");
+    expect(result.cliFlags).toContain("--thinking");
+  });
+
+  it("includes max_tokens from extraParams", () => {
+    const translator = createAnthropicTranslator("p");
+    const result = translator.translate({
+      providerKind: "anthropic",
+      providerId: "p",
+      modelId: "m",
+      extraParams: { max_tokens: 8192, temperature: 0.7 },
+    });
+
+    expect(result.envVars.ANTHROPIC_MAX_TOKENS).toBe("8192");
+
+    const config = JSON.parse(result.configJson);
+    expect(config.temperature).toBe(0.7);
+    expect(config.max_tokens).toBe(8192);
+  });
+
+  it("does not include thinking flag when thinking is not enabled", () => {
+    const translator = createAnthropicTranslator("p");
+    const result = translator.translate({
+      providerKind: "anthropic",
+      providerId: "p",
+      modelId: "m",
+      thinking: { enabled: false, budgetTokens: 4096 },
+    });
+
+    expect(result.cliFlags).not.toContain("--thinking");
+  });
+
+  it("uses options apiKeyEnv when model does not override it", () => {
+    const translator = createAnthropicTranslator("p", {
+      apiKeyEnv: "CUSTOM_KEY",
+    });
+    const result = translator.translate({
+      providerKind: "anthropic",
+      providerId: "p",
+      modelId: "m",
+    });
+
+    expect(result.envVars.ANTHROPIC_API_KEY).toBe("${CUSTOM_KEY}");
+  });
+});
+
+describe("createVertexAiTranslator", () => {
+  it("translates Vertex AI ModelSpec with default credentials env", () => {
+    const translator = createVertexAiTranslator("vertex-prod");
+    const result = translator.translate({
+      providerKind: "vertex_ai",
+      providerId: "vertex-prod",
+      modelId: "gemini-2.0-flash",
+      vertexProject: "my-project",
+      vertexLocation: "us-central1",
+    });
+
+    expect(result.providerId).toBe("vertex-prod");
+    expect(result.modelId).toBe("gemini-2.0-flash");
+    expect(result.envVars.GOOGLE_APPLICATION_CREDENTIALS).toBe("${GOOGLE_APPLICATION_CREDENTIALS}");
+    expect(result.envVars.GOOGLE_CLOUD_PROJECT).toBe("my-project");
+    expect(result.envVars.GOOGLE_CLOUD_LOCATION).toBe("us-central1");
+    expect(result.cliFlags).toContain("--project");
+    expect(result.cliFlags).toContain("my-project");
+    expect(result.cliFlags).toContain("--location");
+    expect(result.cliFlags).toContain("us-central1");
+  });
+
+  it("uses custom credentials env var", () => {
+    const translator = createVertexAiTranslator("p");
+    const result = translator.translate({
+      providerKind: "vertex_ai",
+      providerId: "p",
+      modelId: "m",
+      googleApplicationCredentialsEnv: "MY_CREDS",
+    });
+
+    expect(result.envVars.GOOGLE_APPLICATION_CREDENTIALS).toBe("${MY_CREDS}");
+  });
+
+  it("includes extraParams in config", () => {
+    const translator = createVertexAiTranslator("p");
+    const result = translator.translate({
+      providerKind: "vertex_ai",
+      providerId: "p",
+      modelId: "m",
+      extraParams: { temperature: 0.5 },
+    });
+
+    const config = JSON.parse(result.configJson);
+    expect(config.temperature).toBe(0.5);
+  });
+
+  it("does not include project/location flags when not provided", () => {
+    const translator = createVertexAiTranslator("p");
+    const result = translator.translate({
+      providerKind: "vertex_ai",
+      providerId: "p",
+      modelId: "m",
+    });
+
+    expect(result.cliFlags).not.toContain("--project");
+    expect(result.cliFlags).not.toContain("--location");
+  });
+});
+
+describe("createBedrockTranslator", () => {
+  it("translates Bedrock ModelSpec with AWS env vars", () => {
+    const translator = createBedrockTranslator("bedrock-prod");
+    const result = translator.translate({
+      providerKind: "bedrock",
+      providerId: "bedrock-prod",
+      modelId: "claude-v3",
+      awsRegion: "us-west-2",
+      awsAccessKeyEnv: "AWS_KEY",
+      awsSecretKeyEnv: "AWS_SECRET",
+      awsSessionTokenEnv: "AWS_SESSION",
+      awsProfile: "my-profile",
+    });
+
+    expect(result.providerId).toBe("bedrock-prod");
+    expect(result.modelId).toBe("claude-v3");
+    expect(result.envVars.AWS_REGION).toBe("us-west-2");
+    expect(result.envVars.AWS_ACCESS_KEY_ID).toBe("${AWS_KEY}");
+    expect(result.envVars.AWS_SECRET_ACCESS_KEY).toBe("${AWS_SECRET}");
+    expect(result.envVars.AWS_SESSION_TOKEN).toBe("${AWS_SESSION}");
+    expect(result.envVars.AWS_PROFILE).toBe("my-profile");
+    expect(result.cliFlags).toContain("--region");
+    expect(result.cliFlags).toContain("us-west-2");
+  });
+
+  it("includes baseUrl as AWS_ENDPOINT_URL", () => {
+    const translator = createBedrockTranslator("p");
+    const result = translator.translate({
+      providerKind: "bedrock",
+      providerId: "p",
+      modelId: "m",
+      baseUrl: "https://bedrock-runtime.custom.example.com",
+    });
+
+    expect(result.envVars.AWS_ENDPOINT_URL).toBe("https://bedrock-runtime.custom.example.com");
+  });
+
+  it("includes extraParams in config", () => {
+    const translator = createBedrockTranslator("p");
+    const result = translator.translate({
+      providerKind: "bedrock",
+      providerId: "p",
+      modelId: "m",
+      extraParams: { max_tokens: 4096 },
+    });
+
+    const config = JSON.parse(result.configJson);
+    expect(config.max_tokens).toBe(4096);
+  });
+
+  it("does not include region flag when awsRegion is not provided", () => {
+    const translator = createBedrockTranslator("p");
+    const result = translator.translate({
+      providerKind: "bedrock",
+      providerId: "p",
+      modelId: "m",
+    });
+
+    expect(result.cliFlags).not.toContain("--region");
+  });
+
+  it("does not include env vars for missing credentials", () => {
+    const translator = createBedrockTranslator("p");
+    const result = translator.translate({
+      providerKind: "bedrock",
+      providerId: "p",
+      modelId: "m",
+    });
+
+    expect(result.envVars.AWS_ACCESS_KEY_ID).toBeUndefined();
+    expect(result.envVars.AWS_SECRET_ACCESS_KEY).toBeUndefined();
+    expect(result.envVars.AWS_SESSION_TOKEN).toBeUndefined();
+  });
+});
+
 describe("createClaudeCodeAdapter", () => {
   it("creates adapter with default binary", () => {
     const adapter = createClaudeCodeAdapter();
@@ -360,6 +634,21 @@ describe("createClaudeCodeAdapter", () => {
       expect(cmd).toContain("--cwd");
       expect(cmd).toContain("/workspace");
     });
+
+    it("passes the thinking flag when Anthropic thinking is enabled", () => {
+      const adapter = createClaudeCodeAdapter();
+      const cmd = adapter.buildCommand("review this", {
+        workingDir: "/workspace",
+        model: {
+          providerKind: "anthropic",
+          providerId: "anthropic-prod",
+          modelId: "claude-sonnet-4",
+          thinking: { enabled: true, budgetTokens: 4096 },
+        },
+      });
+
+      expect(cmd).toContain("--thinking");
+    });
   });
 
   describe("materializeConfig", () => {
@@ -378,6 +667,28 @@ describe("createClaudeCodeAdapter", () => {
 
       expect(result.envVars.ANTHROPIC_API_KEY).toBe("${ANTHROPIC_API_KEY}");
       expect(result.envVars.ANTHROPIC_BASE_URL).toBe("https://api.anthropic.com");
+    });
+
+    it("returns advanced Anthropic env vars", async () => {
+      const adapter = createClaudeCodeAdapter();
+      const result = await adapter.materializeConfig(
+        {
+          providerKind: "anthropic",
+          providerId: "anthropic-prod",
+          modelId: "claude-sonnet-4",
+          apiKeyEnv: "ANTHROPIC_API_KEY",
+          anthropicVersion: "2025-01-01",
+          anthropicBeta: ["prompt-caching", "output-128k"],
+          thinking: { enabled: true, budgetTokens: 8192 },
+          extraParams: { max_tokens: 16384 },
+        },
+        "/tmp/test",
+      );
+
+      expect(result.envVars.ANTHROPIC_VERSION).toBe("2025-01-01");
+      expect(result.envVars.ANTHROPIC_BETA).toBe("prompt-caching,output-128k");
+      expect(result.envVars.ANTHROPIC_THINKING_BUDGET_TOKENS).toBe("8192");
+      expect(result.envVars.ANTHROPIC_MAX_TOKENS).toBe("16384");
     });
 
     it("returns empty config when no API key env", async () => {

@@ -1,6 +1,7 @@
 import type { SandboxBackend, SandboxKind, SandboxEngine } from "./types.js";
 import { createNativeSandboxBackend } from "./native.js";
 import { createDockerSandboxBackend, preflightSandbox } from "./docker.js";
+import { createPodmanSandboxBackend } from "./podman.js";
 
 export interface CreateSandboxOptions {
   readonly kind: SandboxKind;
@@ -19,10 +20,9 @@ export async function createSandboxBackend(
     }
 
     case "docker":
-    case "podman":
     case "docker_socket": {
       const dockerOpts: {
-        kind: Extract<SandboxKind, "docker" | "podman" | "docker_socket">;
+        kind: Extract<SandboxKind, "docker" | "docker_socket">;
         image?: string;
         engine?: SandboxEngine;
         commandAllowlist?: ReadonlySet<string>;
@@ -31,6 +31,16 @@ export async function createSandboxBackend(
       if (options.engine) dockerOpts.engine = options.engine;
       if (options.allowedCommands) dockerOpts.commandAllowlist = options.allowedCommands;
       return createDockerSandboxBackend(dockerOpts);
+    }
+
+    case "podman": {
+      const podmanOpts: {
+        image?: string;
+        commandAllowlist?: ReadonlySet<string>;
+      } = {};
+      if (options.image) podmanOpts.image = options.image;
+      if (options.allowedCommands) podmanOpts.commandAllowlist = options.allowedCommands;
+      return createPodmanSandboxBackend(podmanOpts);
     }
 
     case "k8s_pod":
@@ -61,3 +71,5 @@ export async function resolveSandboxKind(
 export { createNativeSandboxBackend } from "./native.js";
 export { createDockerSandboxBackend, preflightSandbox } from "./docker.js";
 export type { DockerSandboxOptions } from "./docker.js";
+export { createPodmanSandboxBackend } from "./podman.js";
+export type { PodmanSandboxOptions } from "./podman.js";
