@@ -338,6 +338,7 @@ export async function runCli(
             baseSystemPrompt: orchestration.baseSystemPrompt,
             sourceRootResolver: () => sourceRoot,
             vcs: orchestration.vcs,
+            ...(orchestration.vcsFactory ? { vcsFactory: orchestration.vcsFactory } : {}),
             llm: orchestration.llm,
             model: orchestration.model,
             dryRun: true,

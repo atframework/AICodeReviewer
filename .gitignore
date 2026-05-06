@@ -16,3 +16,5 @@ pnpm-debug.log*
 
 /.claude/settings.local*
 /.vscode/settings.json
+/workspaces
+config.acceptance.yaml

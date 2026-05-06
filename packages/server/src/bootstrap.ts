@@ -1106,6 +1106,7 @@ export async function bootstrapServerApp(options: BootstrapServerOptions): Promi
     baseSystemPrompt,
     sourceRootResolver,
     vcs: createVcsAdapterFromConfig(config, baseDir),
+    vcsFactory: (sourceRoot: string) => createVcsAdapterFromConfig(config, sourceRoot),
     llm: llmClient,
     model,
     dryRun: false,
