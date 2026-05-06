@@ -1,0 +1,125 @@
+# =============================================================================
+# AICodeReviewer — Deployment Configuration Sample
+# =============================================================================
+# Copy this file as config.yaml, then fill in your values.
+# All secrets MUST be provided via environment variables (see .env.sample).
+
+# ---------------------------------------------------------------------------
+# LLM providers
+# ---------------------------------------------------------------------------
+llm:
+  providers:
+    - id: my-llm
+      kind: openai_compatible          # openai_compatible | azure_openai | anthropic | ollama | google_ai_studio | vertex_ai | bedrock | copilot
+      base_url: https://api.openai.com/v1
+      api_key_env: AICR_LLM_API_KEY    # reads API key from $AICR_LLM_API_KEY
+
+  fallback_chain:
+    - provider: my-llm
+      model: gpt-4o-mini               # change to your model
+      role: any                         # any | light | heavy
+
+  retry:
+    max_attempts: 3
+    backoff:
+      kind: exponential
+      base_ms: 1000
+      max_ms: 30000
+      jitter: true
+
+  budget:
+    per_run_usd: 0.10
+    per_repo_daily_usd: 1.0
+
+# ---------------------------------------------------------------------------
+# Triggers — one per VCS source
+# ---------------------------------------------------------------------------
+triggers:
+  - name: gitea
+    kind: gitea                         # gitea | forgejo | github | gitlab
+    base_url: https://git.example.com   # your Gitea / Forgejo base URL
+    token_env: AICR_GITEA_TOKEN         # reads token from $AICR_GITEA_TOKEN
+    webhook_secret_env: AICR_WEBHOOK_SECRET
+
+# ---------------------------------------------------------------------------
+# Output channels
+# ---------------------------------------------------------------------------
+outputs:
+  template_engine: handlebars
+
+  channels:
+    - name: gitea-pr-review
+      kind: gitea_pr_review             # gitea_pr_review | github_pr_review | gitlab_mr_review | gitea_issue | feishu_bot | wecom_bot
+      trigger: gitea
+      mention_author: false
+
+  routes:
+    default:
+      line_comments: [gitea-pr-review]
+      summary: [gitea-pr-review]
+
+# ---------------------------------------------------------------------------
+# Queue
+# ---------------------------------------------------------------------------
+queue:
+  kind: memory                          # memory (default; redis / sqlite / rabbitmq planned)
+
+  workers:
+    concurrency: 4
+    per_workspace_concurrency: 1
+    lock_ttl_seconds: 1800
+
+# ---------------------------------------------------------------------------
+# Agent & sandbox
+# ---------------------------------------------------------------------------
+# Set agent.default to an AgentKind (kilo, opencode, roo, claude-code, copilot-cli)
+# to use agent-based review inside a sandbox container.
+# Set to any other value (e.g. "native-llm") to use direct LLM call without an agent.
+agent:
+  default: native-llm
+  timeout_seconds: 300
+  auto_approve: true
+  sandbox:
+    kind: docker                        # native | docker | podman | docker_socket | k8s_pod
+    engine: auto                        # auto | docker | podman
+
+# ---------------------------------------------------------------------------
+# Review defaults
+# ---------------------------------------------------------------------------
+review:
+  languages_auto_detect: true
+  include: ["**/*"]
+  exclude:
+    - "**/node_modules/**"
+    - "**/.git/**"
+    - "**/dist/**"
+    - "**/coverage/**"
+    - "**/vendor/**"
+    - "**/*.min.js"
+    - "**/*.lock"
+  max_files: 50
+  max_patch_bytes: 200000
+  skip_lgtm: true
+  output_language: en                   # en | zh-CN | ja | …
+  commit_strategy: aggregate            # aggregate | per_commit | head_only
+  git:
+    allow_deepen: true
+
+# ---------------------------------------------------------------------------
+# Workspaces — one per repository you want to review
+# ---------------------------------------------------------------------------
+workspaces:
+  cache:
+    max_total_gb: 10
+    eviction: lru
+    ttl_days: 30
+
+  instances:
+    # Workspace ID — must be unique
+    my-repo:
+      source_repo:
+        trigger: gitea                  # references trigger name above
+        repo: "my-org/my-repo"          # owner/repo on your Gitea
+      outputs:
+        line_comments: [gitea-pr-review]
+        summary: [gitea-pr-review]

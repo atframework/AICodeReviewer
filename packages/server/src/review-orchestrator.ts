@@ -75,6 +75,7 @@ export interface ServerReviewOrchestrationOptions {
   readonly baseSystemPrompt: string;
   readonly sourceRootResolver: (reviewEvent: ReviewEvent) => string | undefined;
   readonly vcs: DiffCapableVcsAdapter;
+  readonly vcsFactory?: (sourceRoot: string) => DiffCapableVcsAdapter;
   readonly llm: ChatCompletionClient;
   readonly model: ModelSpec;
   readonly outputPublisher?: ReviewOutputPublisher;
@@ -349,7 +350,41 @@ function findingToToolInput(value: unknown): PublishFindingInput {
   } as PublishFindingInput;
 }
 
+function parseXmlToolCalls(content: string): ToolCallEnvelope[] | null {
+  const calls: ToolCallEnvelope[] = [];
+  const regex = /<tool_call\s+name\s*=\s*"([^"]+)"\s*>([\s\S]*?)<\/tool_call>/gu;
+  let match: RegExpExecArray | null;
+  while ((match = regex.exec(content)) !== null) {
+    try {
+      const input = JSON.parse(match[2]!.trim());
+      calls.push({ name: normalizeToolName(match[1]), input });
+    } catch {
+      const innerMatch = /\{[\s\S]*\}/u.exec(match[2]!);
+      if (innerMatch) {
+        try {
+          const input = JSON.parse(innerMatch[0]);
+          calls.push({ name: normalizeToolName(match[1]), input });
+        } catch {
+          continue;
+        }
+      }
+    }
+  }
+
+  const selfClosingRegex = /<tool_call\s+name\s*=\s*"([^"]+)"\s*\/>/gu;
+  while ((match = selfClosingRegex.exec(content)) !== null) {
+    calls.push({ name: normalizeToolName(match[1]), input: {} });
+  }
+
+  return calls.length > 0 ? calls : null;
+}
+
 function parseToolCalls(content: string): ToolCallEnvelope[] {
+  const xmlCalls = parseXmlToolCalls(content);
+  if (xmlCalls) {
+    return xmlCalls;
+  }
+
   const payload = extractJsonPayload(content);
   if (!isPlainObject(payload)) {
     throw new TypeError("LLM JSON output must be an object.");
@@ -479,13 +514,14 @@ export async function runReviewOrchestration(
     id: context.reviewEvent.workspaceId,
     sourceDir: sourceRoot,
   };
-  const range = await options.vcs.listChanges(context.reviewEvent);
-  const scopedTree = await options.vcs.fetchScoped(range, workspaceRef);
+  const vcs = options.vcsFactory ? options.vcsFactory(sourceRoot) : options.vcs;
+  const range = await vcs.listChanges(context.reviewEvent);
+  const scopedTree = await vcs.fetchScoped(range, workspaceRef);
   const changedPaths = [
     ...(options.changedPathsResolver?.(context) ?? range.files ?? context.reviewEvent.changedFiles ?? []),
   ];
-  const diff = options.vcs.diff
-    ? await options.vcs.diff(
+  const diff = vcs.diff
+    ? await vcs.diff(
         { ...range, files: changedPaths.length > 0 ? changedPaths : range.files },
         { contextLines: options.diffContextLines ?? 3 },
       )
@@ -551,7 +587,7 @@ export async function runReviewOrchestration(
 
   const collector = new AicrOutputCollector();
   const tools = createAicrOutputToolRegistry(collector, async (request) => {
-    const result = await options.vcs.fetchExtraContext(toExtraContextRequest(request), workspaceRef);
+    const result = await vcs.fetchExtraContext(toExtraContextRequest(request), workspaceRef);
     return result.content;
   });
   const agentExecution = options.sandbox && options.agentAdapter
