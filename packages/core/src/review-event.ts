@@ -15,6 +15,7 @@ export const reviewTargetKindSchema = z.enum([
   "pull_request",
   "push",
   "commit",
+  "issue",
   "manual",
   "scheduled",
 ]);

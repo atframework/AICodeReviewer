@@ -1005,6 +1005,179 @@ describe("createServerApp", () => {
     }
   });
 
+  it("accepts a Gitea issues webhook and translates it into an issue ReviewEvent", async () => {
+    const app = createServerApp({
+      gitea: {
+        triggerName: "gitea-internal",
+        workspaceId: "gitea-internal-owent-example",
+        webhookSecret,
+      },
+    });
+    const payload = JSON.stringify({
+      action: "opened",
+      repository: {
+        full_name: "owent/example",
+      },
+      sender: {
+        login: "owent",
+        email: "owent@example.com",
+      },
+      issue: {
+        number: 15,
+        title: "Bug: App crashes",
+        body: "The app crashes when loading",
+        html_url: "https://gitea.example.com/owent/example/issues/15",
+        state: "open",
+        user: { login: "owent" },
+        labels: [{ name: "bug" }],
+      },
+    });
+
+    const response = await app.request("/webhooks/gitea", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-gitea-event": "issues",
+        "x-gitea-signature": sign(payload),
+      },
+      body: payload,
+    });
+    const body = (await response.json()) as {
+      accepted: boolean;
+      reviewEvent?: {
+        targetKind?: string;
+        repoRef?: string;
+        reason?: string;
+        changedFiles?: string[];
+      };
+    };
+
+    expect(response.status).toBe(202);
+    expect(body.accepted).toBe(true);
+    expect(body.reviewEvent?.targetKind).toBe("issue");
+    expect(body.reviewEvent?.repoRef).toBe("owent/example");
+    expect(body.reviewEvent?.reason).toBe("gitea:opened");
+    expect(body.reviewEvent?.changedFiles).toEqual(["15"]);
+  });
+
+  it("accepts a Gitea issues webhook without issue number", async () => {
+    const app = createServerApp({
+      gitea: {
+        triggerName: "gitea-internal",
+        workspaceId: "ws",
+        webhookSecret,
+      },
+    });
+    const payload = JSON.stringify({
+      action: "opened",
+      repository: { full_name: "owent/example" },
+      sender: { login: "owent" },
+      issue: {
+        title: "Some issue",
+        html_url: "https://gitea.example.com/owent/example/issues/20",
+      },
+    });
+
+    const response = await app.request("/webhooks/gitea", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-gitea-event": "issues",
+        "x-gitea-signature": sign(payload),
+      },
+      body: payload,
+    });
+    const body = (await response.json()) as {
+      accepted: boolean;
+      reviewEvent?: { targetKind?: string; changedFiles?: string[] };
+    };
+
+    expect(response.status).toBe(202);
+    expect(body.accepted).toBe(true);
+    expect(body.reviewEvent?.targetKind).toBe("issue");
+    expect(body.reviewEvent?.changedFiles).toBeUndefined();
+  });
+
+  it("runs issue triage when issue event and triage options are provided", async () => {
+    let triageModelCalled = false;
+    const mockLlm: ChatCompletionClient = {
+      async complete() {
+        triageModelCalled = true;
+        return {
+          providerId: "test",
+          modelId: "test",
+          content: '{"action":"keep_open","reason":"Valid bug","category":"valid"}',
+          raw: {},
+        };
+      },
+    };
+    const mockFetch = async () => ({
+      ok: true,
+      status: 200,
+      async json() {
+        return {
+          title: "Bug report",
+          body: "Something is broken",
+          state: "open",
+          user: { login: "reporter" },
+          html_url: "https://gitea.example.com/owent/example/issues/10",
+          created_at: "2026-01-01T00:00:00Z",
+          comments: 0,
+          labels: [],
+        };
+      },
+      async text() { return "{}"; },
+    });
+    const { GiteaApiClient } = await import("../src/issue-triage.js");
+    const giteaClient = new GiteaApiClient({
+      baseUrl: "https://gitea.example.com",
+      token: "test-token",
+      fetch: mockFetch,
+    });
+    const app = createServerApp({
+      gitea: {
+        triggerName: "gitea-internal",
+        workspaceId: "ws",
+        webhookSecret,
+      },
+      issueTriage: {
+        llm: mockLlm,
+        model: { providerKind: "openai_compatible", providerId: "test", modelId: "test" },
+        giteaClient,
+      },
+    });
+    const payload = JSON.stringify({
+      action: "opened",
+      repository: { full_name: "owent/example" },
+      sender: { login: "owent" },
+      issue: {
+        number: 10,
+        title: "Bug report",
+        html_url: "https://gitea.example.com/owent/example/issues/10",
+      },
+    });
+
+    const response = await app.request("/webhooks/gitea", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-gitea-event": "issues",
+        "x-gitea-signature": sign(payload),
+      },
+      body: payload,
+    });
+    const body = (await response.json()) as {
+      accepted: boolean;
+      triage?: { decision?: { action?: string; category?: string }; closed?: boolean };
+    };
+
+    expect(response.status).toBe(202);
+    expect(body.accepted).toBe(true);
+    expect(triageModelCalled).toBe(true);
+    expect(body.triage?.decision?.action).toBe("keep_open");
+    expect(body.triage?.closed).toBe(false);
+  });
+
   it("propagates operatorOverrides and memoryHints through review preparation", async () => {
     const tempDir = await mkdtemp(join(tmpdir(), "aicr-server-overrides-"));
 

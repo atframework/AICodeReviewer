@@ -49,6 +49,8 @@ import {
 import { createGitVcsAdapter, type GitVcsAdapter } from "@aicr/vcs";
 
 import type { GiteaWebhookConfig } from "./gitea-webhook.js";
+import { GiteaApiClient } from "./issue-triage.js";
+import type { IssueTriageRuntimeOptions, WorkspaceIssueTriagePolicy } from "./issue-triage.js";
 import type { ServerAppOptions, ServerReviewOrchestrationOptions } from "./index.js";
 import type {
   ReviewDispatchResult,
@@ -1137,12 +1139,73 @@ export async function bootstrapServerApp(options: BootstrapServerOptions): Promi
     });
   }
 
+  const triageOptions = resolveIssueTriageOptions(config, llmClient, model);
+
   return {
     ...(giteaConfig ? { gitea: giteaConfig } : {}),
     ...(githubConfig ? { github: githubConfig } : {}),
     ...(gitlabConfig ? { gitlab: gitlabConfig } : {}),
     reviewOrchestration: orchestrationOptions,
+    ...(triageOptions ? { issueTriage: triageOptions } : {}),
     queue,
     ...(worker ? { worker } : {}),
+    ...(config.server.path_prefix ? { pathPrefix: config.server.path_prefix } : {}),
+  };
+}
+
+function resolveIssueTriageOptions(
+  config: AppConfig,
+  llmClient: ChatCompletionClient,
+  model: ModelSpec,
+): IssueTriageRuntimeOptions | undefined {
+  const anyTriageEnabled = Object.values(config.workspaces.instances).some(
+    (instance) => instance.triage?.enabled === true,
+  );
+  if (!anyTriageEnabled) {
+    return undefined;
+  }
+
+  const giteaTrigger = config.triggers.find(
+    (t) => t.kind === "gitea" || t.kind === "forgejo",
+  );
+  if (!giteaTrigger) {
+    return undefined;
+  }
+
+  const triggerConfig = giteaTrigger as Record<string, unknown>;
+  const baseUrl = (triggerConfig.base_url as string | undefined) ??
+    config.server.base_url;
+  const tokenEnv = triggerConfig.token_env as string | undefined;
+  const token = tokenEnv ? resolveEnv(tokenEnv) : undefined;
+
+  if (!baseUrl) {
+    return undefined;
+  }
+
+  const workspacePolicies: Record<string, WorkspaceIssueTriagePolicy> = {};
+  for (const [workspaceId, instance] of Object.entries(config.workspaces.instances)) {
+    const triageConfig = instance.triage;
+    if (triageConfig?.enabled !== true) {
+      continue;
+    }
+
+    workspacePolicies[workspaceId] = {
+      ...(triageConfig.actions ? { actions: triageConfig.actions } : {}),
+      ...(triageConfig.categories_close ? { categoriesClose: triageConfig.categories_close } : {}),
+      ...(triageConfig.dry_run !== undefined ? { dryRun: triageConfig.dry_run } : {}),
+      ...(triageConfig.custom_prompt ? { customPrompt: triageConfig.custom_prompt } : {}),
+    };
+  }
+
+  const giteaClient = new GiteaApiClient({
+    baseUrl,
+    ...(token ? { token } : {}),
+  });
+
+  return {
+    llm: llmClient,
+    model,
+    giteaClient,
+    workspacePolicies,
   };
 }

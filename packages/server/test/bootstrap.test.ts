@@ -91,6 +91,11 @@ function makeConfig(overrides: Partial<AppConfig> = {}): AppConfig {
         },
       },
     },
+    server: {
+      port: 8080,
+      hostname: "0.0.0.0",
+      trust_proxy: false,
+    },
     ...overrides,
   } as AppConfig;
 }
@@ -869,6 +874,45 @@ describe("bootstrapServerApp", () => {
         delete process.env.GITEA_SECRET;
       } else {
         process.env.GITEA_SECRET = originalSecret;
+      }
+    }
+  });
+
+  it("passes workspace-specific triage policy into server options", async () => {
+    const originalKey = process.env.OPENAI_API_KEY;
+    process.env.OPENAI_API_KEY = "test-key";
+    try {
+      const config = makeConfig({
+        workspaces: {
+          cache: { max_total_gb: 50, eviction: "lru", ttl_days: 30 },
+          defaults: {},
+          instances: {
+            "test-workspace": {
+              source_repo: { trigger: "gitea-internal", repo: "owent/example" },
+              triage: {
+                enabled: true,
+                actions: ["close"],
+                categories_close: ["spam", "invalid", "duplicate"],
+                events: ["issues"],
+                dry_run: true,
+              },
+            },
+          },
+        },
+      } as Partial<AppConfig>);
+
+      const result = await bootstrapServerApp({ config, baseSystemPrompt: "test" });
+
+      expect(result.issueTriage?.workspacePolicies?.["test-workspace"]).toMatchObject({
+        actions: ["close"],
+        categoriesClose: ["spam", "invalid", "duplicate"],
+        dryRun: true,
+      });
+    } finally {
+      if (originalKey === undefined) {
+        delete process.env.OPENAI_API_KEY;
+      } else {
+        process.env.OPENAI_API_KEY = originalKey;
       }
     }
   });

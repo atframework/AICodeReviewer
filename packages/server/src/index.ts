@@ -15,6 +15,11 @@ import {
   verifyWebhookSignature,
 } from "./gitea-webhook.js";
 import {
+  type IssueTriageRuntimeOptions,
+  triageIssue,
+  type TriageResult,
+} from "./issue-triage.js";
+import {
   runReviewOrchestration,
   summarizeReviewOrchestrationForWebhook,
   type ServerReviewOrchestrationOptions,
@@ -27,8 +32,10 @@ export interface ServerAppOptions {
   readonly gitlab?: GiteaWebhookConfig;
   readonly reviewPreparation?: ServerReviewPreparationOptions;
   readonly reviewOrchestration?: ServerReviewOrchestrationOptions;
+  readonly issueTriage?: IssueTriageRuntimeOptions;
   readonly queue?: ReviewQueue;
   readonly worker?: QueueWorker;
+  readonly pathPrefix?: string;
 }
 
 export interface ServerReviewPreparationOptions {
@@ -72,6 +79,7 @@ function registerGiteaLikeWebhook(
   config: GiteaWebhookConfig | undefined,
   reviewPreparationOptions: ServerReviewPreparationOptions | undefined,
   reviewOrchestrationOptions: ServerReviewOrchestrationOptions | undefined,
+  issueTriageOptions: IssueTriageRuntimeOptions | undefined,
 ): void {
   app.post(path, async (c) => {
     if (!config) {
@@ -130,7 +138,7 @@ function registerGiteaLikeWebhook(
       return c.json({ accepted: false, reason: "unsupported_event", provider, eventName }, 202);
     }
 
-    return handleReviewOrchestration(c, provider, eventName, decoded, reviewEvent, reviewPreparationOptions, reviewOrchestrationOptions);
+    return handleReviewOrchestration(c, provider, eventName, decoded, reviewEvent, reviewPreparationOptions, reviewOrchestrationOptions, issueTriageOptions);
   });
 }
 
@@ -141,6 +149,7 @@ function registerGenericWebhook(
   config: GiteaWebhookConfig | undefined,
   reviewPreparationOptions: ServerReviewPreparationOptions | undefined,
   reviewOrchestrationOptions: ServerReviewOrchestrationOptions | undefined,
+  issueTriageOptions: IssueTriageRuntimeOptions | undefined,
 ): void {
   app.post(path, async (c) => {
     if (!config) {
@@ -209,7 +218,7 @@ function registerGenericWebhook(
       return c.json({ accepted: false, reason: "unsupported_event", provider, eventName }, 202);
     }
 
-    return handleReviewOrchestration(c, provider, eventName, decoded, reviewEvent, reviewPreparationOptions, reviewOrchestrationOptions);
+    return handleReviewOrchestration(c, provider, eventName, decoded, reviewEvent, reviewPreparationOptions, reviewOrchestrationOptions, issueTriageOptions);
   });
 }
 
@@ -222,9 +231,51 @@ async function handleReviewOrchestration(
   reviewEvent: ReviewEvent,
   reviewPreparationOptions: ServerReviewPreparationOptions | undefined,
   reviewOrchestrationOptions: ServerReviewOrchestrationOptions | undefined,
+  issueTriageOptions: IssueTriageRuntimeOptions | undefined,
 ): Promise<Response> {
+  let triageResult: TriageResult | undefined;
+  if (reviewEvent.targetKind === "issue" && issueTriageOptions) {
+    try {
+      const issueNumber = reviewEvent.changedFiles?.[0];
+      if (issueNumber) {
+        const repoParts = reviewEvent.repoRef.split("/");
+        const owner = repoParts[0];
+        const repo = repoParts[1];
+        if (owner && repo) {
+          const issue = await issueTriageOptions.giteaClient.getIssue(
+            owner,
+            repo,
+            Number(issueNumber),
+          );
+          const workspacePolicy = issueTriageOptions.workspacePolicies?.[reviewEvent.workspaceId];
+          triageResult = await triageIssue(issue, {
+            ...issueTriageOptions,
+            ...(workspacePolicy?.actions ? { actions: workspacePolicy.actions } : {}),
+            ...(workspacePolicy?.categoriesClose ? { categoriesClose: workspacePolicy.categoriesClose } : {}),
+            ...(workspacePolicy?.dryRun !== undefined ? { dryRun: workspacePolicy.dryRun } : {}),
+            ...(workspacePolicy?.customPrompt ? { customPrompt: workspacePolicy.customPrompt } : {}),
+          });
+        }
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return c.json(
+        {
+          accepted: false,
+          reason: "issue_triage_failed",
+          provider,
+          eventName,
+          message,
+        },
+        500,
+      );
+    }
+  }
+
+  const isIssueEvent = reviewEvent.targetKind === "issue";
+
   let reviewPreparation;
-  if (reviewPreparationOptions) {
+  if (reviewPreparationOptions && !isIssueEvent) {
     try {
       const changedPaths = [
         ...(reviewPreparationOptions.changedPathsResolver?.({
@@ -275,7 +326,7 @@ async function handleReviewOrchestration(
   }
 
   let reviewRun;
-  if (reviewOrchestrationOptions) {
+  if (reviewOrchestrationOptions && !isIssueEvent) {
     try {
       const result = await runReviewOrchestration(
         {
@@ -302,12 +353,35 @@ async function handleReviewOrchestration(
     }
   }
 
-  return c.json({ accepted: true, provider, reviewEvent, reviewPreparation, reviewRun }, 202);
+  return c.json({
+    accepted: true,
+    provider,
+    reviewEvent,
+    reviewPreparation,
+    reviewRun,
+    ...(triageResult ? { triage: triageResult } : {}),
+  }, 202);
 }
 
 export function createServerApp(options: ServerAppOptions = {}): Hono {
   const app = new Hono();
 
+  if (options.pathPrefix) {
+    app.route(options.pathPrefix, createRoutedApp(options));
+  } else {
+    mountRoutes(app, options);
+  }
+
+  return app;
+}
+
+function createRoutedApp(options: ServerAppOptions): Hono {
+  const sub = new Hono();
+  mountRoutes(sub, options);
+  return sub;
+}
+
+function mountRoutes(app: Hono, options: ServerAppOptions): void {
   app.get("/healthz", (c) => c.text("ok"));
   app.get("/readyz", (c) => c.text("ready"));
 
@@ -318,6 +392,7 @@ export function createServerApp(options: ServerAppOptions = {}): Hono {
     options.gitea,
     options.reviewPreparation,
     options.reviewOrchestration,
+    options.issueTriage,
   );
   registerGiteaLikeWebhook(
     app,
@@ -326,6 +401,7 @@ export function createServerApp(options: ServerAppOptions = {}): Hono {
     options.forgejo,
     options.reviewPreparation,
     options.reviewOrchestration,
+    options.issueTriage,
   );
   registerGenericWebhook(
     app,
@@ -334,6 +410,7 @@ export function createServerApp(options: ServerAppOptions = {}): Hono {
     options.github,
     options.reviewPreparation,
     options.reviewOrchestration,
+    options.issueTriage,
   );
   registerGenericWebhook(
     app,
@@ -342,9 +419,8 @@ export function createServerApp(options: ServerAppOptions = {}): Hono {
     options.gitlab,
     options.reviewPreparation,
     options.reviewOrchestration,
+    options.issueTriage,
   );
-
-  return app;
 }
 
 export {
@@ -378,3 +454,20 @@ export type { BootstrapServerOptions } from "./bootstrap.js";
 
 export { serve, serveAsync } from "./node-serve.js";
 export type { ServeOptions } from "./node-serve.js";
+
+export {
+  GiteaApiClient,
+  triageIssue,
+  DEFAULT_TRIAGE_SYSTEM_PROMPT,
+} from "./issue-triage.js";
+export type {
+  GiteaApiClientOptions,
+  IssueComment,
+  IssueDetails,
+  IssueTriageOptions,
+  IssueTriageRuntimeOptions,
+  IssueRepository,
+  TriageDecision,
+  TriageResult,
+  WorkspaceIssueTriagePolicy,
+} from "./issue-triage.js";

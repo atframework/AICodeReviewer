@@ -1055,3 +1055,144 @@ it("rejects system-only fields in workspace config files per Plan §3.10", () =>
     expect(result.success).toBe(true);
   });
 });
+
+describe("server config", () => {
+  it("provides defaults for server config", () => {
+    const result = appConfigSchema.parse({});
+    expect(result.server.port).toBe(8080);
+    expect(result.server.hostname).toBe("0.0.0.0");
+    expect(result.server.trust_proxy).toBe(false);
+    expect(result.server.base_url).toBeUndefined();
+    expect(result.server.path_prefix).toBeUndefined();
+  });
+
+  it("accepts server config with trust_proxy true", () => {
+    const result = appConfigSchema.parse({
+      server: { trust_proxy: true },
+    });
+    expect(result.server.trust_proxy).toBe(true);
+  });
+
+  it("accepts server config with trust_proxy loopback", () => {
+    const result = appConfigSchema.parse({
+      server: { trust_proxy: "loopback" },
+    });
+    expect(result.server.trust_proxy).toBe("loopback");
+  });
+
+  it("accepts server config with trust_proxy CIDR array", () => {
+    const result = appConfigSchema.parse({
+      server: { trust_proxy: ["192.168.1.0/24", "10.0.0.0/8"] },
+    });
+    expect(result.server.trust_proxy).toEqual(["192.168.1.0/24", "10.0.0.0/8"]);
+  });
+
+  it("accepts server config with base_url and path_prefix", () => {
+    const result = appConfigSchema.parse({
+      server: {
+        trust_proxy: "loopback",
+        base_url: "https://aicr.example.com/aicr",
+        path_prefix: "/aicr",
+        port: 9090,
+        hostname: "127.0.0.1",
+      },
+    });
+    expect(result.server.base_url).toBe("https://aicr.example.com/aicr");
+    expect(result.server.path_prefix).toBe("/aicr");
+    expect(result.server.port).toBe(9090);
+    expect(result.server.hostname).toBe("127.0.0.1");
+  });
+
+  it("merges server config across layers", () => {
+    const merged = mergeConfigLayers(
+      { server: { port: 8080, trust_proxy: false } },
+      { server: { trust_proxy: "loopback" } },
+    );
+    expect(merged.server.port).toBe(8080);
+    expect(merged.server.trust_proxy).toBe("loopback");
+  });
+});
+
+describe("triage config", () => {
+  it("defaults triage to disabled", () => {
+    const result = appConfigSchema.parse({});
+    const instance = result.workspaces.instances["default"];
+    expect(instance).toBeUndefined();
+  });
+
+  it("accepts workspace triage config with all fields", () => {
+    const result = appConfigSchema.parse({
+      workspaces: {
+        instances: {
+          myws: {
+            source_repo: { trigger: "gitea", repo: "owner/repo" },
+            triage: {
+              enabled: true,
+              actions: ["close"],
+              categories_close: ["spam", "invalid", "duplicate"],
+              events: ["issues"],
+              dry_run: true,
+              custom_prompt: "Custom triage rules",
+            },
+          },
+        },
+      },
+    });
+    const triage = result.workspaces.instances.myws!.triage!;
+    expect(triage.enabled).toBe(true);
+    expect(triage.actions).toEqual(["close"]);
+    expect(triage.categories_close).toEqual(["spam", "invalid", "duplicate"]);
+    expect(triage.events).toEqual(["issues"]);
+    expect(triage.dry_run).toBe(true);
+    expect(triage.custom_prompt).toBe("Custom triage rules");
+  });
+
+  it("provides default triage values", () => {
+    const result = appConfigSchema.parse({
+      workspaces: {
+        instances: {
+          myws: {
+            source_repo: { trigger: "gitea", repo: "owner/repo" },
+            triage: {
+              enabled: true,
+            },
+          },
+        },
+      },
+    });
+    const triage = result.workspaces.instances.myws!.triage!;
+    expect(triage.enabled).toBe(true);
+    expect(triage.actions).toEqual(["close"]);
+    expect(triage.categories_close).toEqual(["spam", "invalid"]);
+    expect(triage.events).toEqual(["issues"]);
+    expect(triage.dry_run).toBe(false);
+  });
+
+  it("merges triage config across layers", () => {
+    const merged = mergeConfigLayers(
+      {
+        workspaces: {
+          instances: {
+            myws: {
+              source_repo: { trigger: "gitea", repo: "owner/repo" },
+              triage: { enabled: true, categories_close: ["spam"] },
+            },
+          },
+        },
+      },
+      {
+        workspaces: {
+          instances: {
+            myws: {
+              triage: { dry_run: true },
+            },
+          },
+        },
+      },
+    );
+    const triage = merged.workspaces.instances.myws!.triage!;
+    expect(triage.enabled).toBe(true);
+    expect(triage.categories_close).toEqual(["spam"]);
+    expect(triage.dry_run).toBe(true);
+  });
+});

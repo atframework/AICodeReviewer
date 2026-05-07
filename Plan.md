@@ -631,6 +631,13 @@ export interface ModelSpec {
       enabled: true
       max_age_hours: 72
 
+  server:
+    port: 8080                    # 内部监听端口（也可通过 --port CLI 参数覆盖），与外部暴露端口无关
+    hostname: "0.0.0.0"           # 内部监听地址（bind address，非外部 hostname）
+    trust_proxy: false            # true | false | "loopback" | "linklocal" | "uniquelocal" | CIDR 数组
+    base_url: ""                  # 可选覆盖；留空时由转发 header 自动推导（含非标准端口）
+    path_prefix: ""               # 可选覆盖；留空时优先读 X-Forwarded-Prefix，其次按首请求自动检测
+
   agent:
     default: kilo
     timeout_seconds: 600
@@ -685,6 +692,13 @@ export interface ModelSpec {
   - `workspaces.defaults`：所有 workspace 实例的默认字段，被 `instances.<id>` 深度合并覆盖。
   - `workspaces.instances.<workspace_id>`：每个 workspace 实例的具体配置。**workspace_id 只能出现在 `instances.` 下，不允许出现在 `workspaces.` 顶层**，由 Zod schema 强制（保留字 `cache` / `defaults` / `instances` 不可作 workspace_id）。
 - **路由模型**：输出由 `outputs.routes`（全局）+ `workspaces.instances.<id>.outputs`（workspace 级覆盖）决定；同一 finding 可同时落多个通道。
+- **`server` 反向代理支持**：当 AICR 部署在 nginx / Traefik / Caddy / 云负载均衡等反向代理之后时，通过 `server` 节控制协议与路径行为。**启用 `trust_proxy` 后，`base_url` 与 `path_prefix` 可自动推导，无需手动配置**：
+  - `port` / `hostname`：仅控制 AICR 内部 HTTP 监听的 bind 地址，与外部暴露的端口完全独立。反向代理可以监听任意端口（如 `:8443`、`:443`）并转发到内部 `:8080`。
+  - `trust_proxy`：启用后读取 `X-Forwarded-Proto` / `X-Forwarded-Host` / `X-Forwarded-Port` / `X-Forwarded-For` / `X-Forwarded-Prefix` 替代原始 socket 信息。支持 `true`（信任所有）、`false`（不信任，默认）、`"loopback"` / `"linklocal"` / `"uniquelocal"`（仅信任对应来源）或 CIDR 数组。
+  - `base_url`（可选覆盖）：外部可达根 URL（含 scheme + host + port + 可选 path prefix）。**留空时自动推导**：`X-Forwarded-Proto` + `X-Forwarded-Host`（含端口，如 `aicr.example.com:8443`）+ `X-Forwarded-Prefix`（或 `path_prefix`）。端口推导规则：`X-Forwarded-Host` 含端口时直接使用；否则检查 `X-Forwarded-Port`；标准端口（HTTP 80 / HTTPS 443）省略，非标准端口保留。仅当自动推导结果不正确时才需手动设置（如 CDN 域名与代理域名不同）。
+  - `path_prefix`（可选覆盖）：路由挂载前缀。**留空时自动推导**：优先读 `X-Forwarded-Prefix`（Traefik / Caddy 自动设置），其次根据首个匹配到的路由与请求路径的差值自动检测。非空时 Hono 路由自动添加前缀，webhook 路径变为 `/aicr/webhooks/gitea`，health 变为 `/aicr/healthz`。
+  - 自动推导按请求缓存：首个信任来源的请求完成推导后，后续同来源请求复用缓存值，避免重复计算；检测到不一致时日志告警。
+  - 安全约束：`trust_proxy` 设为 `true`（信任所有）时启动日志告警，建议生产环境使用 CIDR 或 `"loopback"` 限制信任范围。
 - workspace 级 `config.yaml` 的 schema 是上面 *workspace 级允许字段* 的子集，且 *无法覆盖* `agent.auto_approve`、`agent.sandbox`（除非系统配置允许 *升级而非降级*）、`secrets.*`、`queue.*`（系统级安全字段，schema 标 `system_only: true`）。
 
 ### 3.11 状态机与可观测性
@@ -915,18 +929,19 @@ workspaces/<workspace_id>/
 | 里程碑 | 状态 | 已完成 | 未完成 / 下一轮 |
 | --- | --- | --- | --- |
 | M0 | 已完成 | pnpm monorepo、strict TypeScript、ESLint/Vitest/CI、Zod 配置合并、pino/OTel 骨架、Drizzle schema、Dockerfile 基线、`AGENTS.md` / `.agents/skills/` 骨架与相关单元测试 | 无 |
-| M0.5 | 已完成（待验收留存） | `docs/prompt-research.md` 草案、`prompts/system/code-reviewer.system.md` 草案、默认提示词分层模板、Prompt Manager 组装契约、repo-local AI 资产发现 / 路径过滤 / 优先级 / 冲突记录实现与单元测试、severity 推荐语义与回归样例清单 | 低置信来源实测/确认（验收留存） |
-| M1 | 已完成（待验收留存） | Hono webhook receiver、Gitea/Forgejo 签名校验、`ReviewEvent` 归一化、Git VCS adapter、unified diff 解析、OpenAI 兼容 chat client、Gitea PR review comment dispatcher、`aicr-output` 工具收集器、webhook → orchestration 最小闭环、配置 bootstrap 层、CLI `serve` / `review --dry-run`、Node.js HTTP adapter | 真实 Gitea e2e 验收（验收留存） |
+| M0.5 | 已完成 | `docs/prompt-research.md` 草案、`prompts/system/code-reviewer.system.md` 草案、默认提示词分层模板、Prompt Manager 组装契约、repo-local AI 资产发现 / 路径过滤 / 优先级 / 冲突记录实现与单元测试、severity 推荐语义与回归样例清单 | 低置信来源实测/确认（验收留存） |
+| M1 | 已完成 | Hono webhook receiver、Gitea/Forgejo 签名校验、`ReviewEvent` 归一化、Git VCS adapter、unified diff 解析、OpenAI 兼容 chat client、Gitea PR review comment dispatcher、`aicr-output` 工具收集器、webhook → orchestration 最小闭环、配置 bootstrap 层、CLI `serve` / `review --dry-run`、Node.js HTTP adapter、**真实 Gitea e2e 验收通过（5 findings → PR review comments）** | 无 |
 | M2 | 已完成（待验收留存） | `SandboxBackend` 抽象 + native / docker / podman 实现、命令白名单、超时 watchdog、目录隔离、`AgentAdapter` + Kilo / Claude Code / OpenCode / Roo / Copilot CLI 适配器（全部 5 种）、Model Config Translator（OpenAI 兼容 + Anthropic）、bootstrap 集成、review-orchestrator sandbox/agent 选项 | Kilo 驱动 e2e 验收、沙箱逃逸测试（验收留存） |
-| M3 | 已完成（待验收留存） | **PR Compression 接入 bootstrap**、**Secrets Scrubber**、**LLM Fallback + Bounded Retry + Budget**、**Per-provider 限流**、**In-memory 队列增强**（backoff / DLQ）、**Redis/BullMQ 队列适配器**、**队列 Worker 循环（含 rateLimiter wiring）**、**Markdown 修复增强**、**输出模板引擎（Handlebars）** + 内置默认模板（6 通道）+ workspace 覆盖机制 + `TemplateResolver`、**Queue 配置消费端接入 bootstrap**（`createQueueFromConfig` factory + worker 启动）、**742 测试通过** | BullMQ 真实 Redis 集成测试（验收留存） |
-| M4 | 已完成（待验收留存） | **多输出通道**：Gitea PR review、Gitea Issue、Feishu Bot、WeCom Bot dispatcher、GitHub PR review dispatcher、GitLab MR review dispatcher（全部 6 通道）；**finding fingerprint**（`computeFindingFingerprint`）；**模板引擎接入 orchestrator**（per-channel `TemplateResolver` + markdown fix post-validation）；**@-mention 作者解析管线**（email → username 映射 + 邮箱黑名单 + Feishu/WeCom/GitHub/GitLab/Gitea 方言）；**行号降级策略**（超出 diff 范围 → 通用评论 fallback，422 处理）；**workspace 覆盖模板文件读取**（`workspaces/<id>/templates/` + channelName/channelKind 优先级） | 真实 Gitea/GitHub/GitLab e2e 验收（验收留存） |
-| M5 | 进行中 | **Agent CLI 适配器**：Kilo / Claude Code / OpenCode / Roo / Copilot CLI（全部 5 种）；**Model Config Translator**：OpenAI 兼容 + Anthropic + Vertex AI + Bedrock（含 anthropicVersion、anthropicBeta、thinking、vertexProject、vertexLocation、awsRegion、awsProfile 等全部字段）；**Sandbox Backend**：native / docker / podman auto-detect + fallback；**Server webhook**：Gitea / Forgejo / GitHub / GitLab 全部 4 种 webhook endpoint 已注册；**CLI**：replay、memory、lint 命令已实现 | Podman sandbox backend 完整落地（M5 待实现）；k8s_pod / firecracker sandbox（M9） |
+| M3 | 已完成（待验收留存） | **PR Compression 接入 bootstrap**、**Secrets Scrubber**、**LLM Fallback + Bounded Retry + Budget**、**Per-provider 限流**、**In-memory 队列增强**（backoff / DLQ）、**Redis/BullMQ 队列适配器**、**队列 Worker 循环（含 rateLimiter wiring）**、**Markdown 修复增强**、**输出模板引擎（Handlebars）** + 内置默认模板（6 通道）+ workspace 覆盖机制 + `TemplateResolver`、**Queue 配置消费端接入 bootstrap**（`createQueueFromConfig` factory + worker 启动）、**770 测试通过** | BullMQ 真实 Redis 集成测试（验收留存） |
+| M4 | 已完成（待验收留存） | **多输出通道**：Gitea PR review、Gitea Issue、Feishu Bot、WeCom Bot dispatcher、GitHub PR review dispatcher、GitLab MR review dispatcher（全部 6 通道）；**finding fingerprint**（`computeFindingFingerprint`）；**模板引擎接入 orchestrator**（per-channel `TemplateResolver` + markdown fix post-validation）；**@-mention 作者解析管线**（email → username 映射 + 邮箱黑名单 + Feishu/WeCom/GitHub/GitLab/Gitea 方言）；**行号降级策略**（超出 diff 范围 → 通用评论 fallback，422 处理）；**workspace 覆盖模板文件读取**（`workspaces/<id>/templates/` + channelName/channelKind 优先级） | 真实 GitHub/GitLab e2e 验收（验收留存） |
+| M5 | 已完成（待验收留存） | **Agent CLI 适配器**：Kilo / Claude Code / OpenCode / Roo / Copilot CLI（全部 5 种）；**Model Config Translator**：OpenAI 兼容 + Anthropic + Vertex AI + Bedrock（含 anthropicVersion、anthropicBeta、thinking、vertexProject、vertexLocation、awsRegion、awsProfile 等全部字段）；**Sandbox Backend**：native / docker / podman auto-detect + fallback；**Server webhook**：Gitea / Forgejo / GitHub / GitLab 全部 4 种 webhook endpoint 已注册；**CLI**：replay、memory、lint 命令已实现；**Podman sandbox**（thin wrapper over docker backend）；**vcsFactory** per-request VCS adapter；**XML `<tool_call/>` 解析**；**example/ 部署示例** | Kilo 驱动 e2e 验收、沙箱逃逸测试（验收留存） |
 
 ### 8.2 下一轮执行包
 
 1. **M5 收口**：**Podman sandbox backend 完整落地**（rootless daemonless 独立实现 + `docs/podman.md` 指引）、**sandbox 逃逸测试**。
 2. **M3 / M0.5 / M1 / M2 / M4 验收留存**：真实 Gitea e2e（本地 docker 起 Gitea → PR 触发 → 看到 line comment）、模拟 429 + Retry-After、单 PR > 200KB diff 压缩、评论 markdownlint、多实例并发不重复、Kilo 驱动 e2e、沙箱逃逸测试。
-3. **M6 启动**：多 VCS（P4 / SVN triggers + adapters）、多触发面（push / commit / tag / scheduled / manual webhook/trigger 扩展）。
+3. **反向代理支持（M1 增量 / M9 前置）**：在 `packages/core/src/config.ts` 添加 `server` 配置 schema（`trust_proxy` / `base_url` / `path_prefix` / `port` / `hostname`）；在 `packages/server/src/node-serve.ts` 实现 `X-Forwarded-Proto` / `X-Forwarded-Host` / `X-Forwarded-For` 解析与 trust 策略；在 Hono app 注册路由时支持 `basePath` 前缀；CLI `serve` 命令透传 `server` 配置；补齐反向代理场景的单元测试与集成测试。
+4. **M6 启动**：多 VCS（P4 / SVN triggers + adapters）、多触发面（push / commit / tag / scheduled / manual webhook/trigger 扩展）。
 
 ### M0 — 项目骨架（状态：已完成）
 
@@ -1017,6 +1032,7 @@ workspaces/<workspace_id>/
 | D15 | Forgejo 支持 | Forgejo 与 Gitea API 兼容，复用同一 adapter；配置中 `kind: gitea` 与 `kind: forgejo` 等价 | §3.2 / §3.9 / §3.10 |
 | D16 | 仓库 AI 维护资产 | 使用 `AGENTS.md` 作为唯一常驻指令源，`.agents/skills/` 作为 canonical Agent Skills 源；如需兼容工具私有目录，通过 materialize / symlink / shim 暴露，禁止手工复制正文 | §2.2 / §3.6 / §8 |
 | D17 | 默认提示词分层与源码仓库 AI 资产加载 | 默认 system prompt 只保留稳定硬规则；源码仓库拉取后自动发现并归一化加载 repo-local `AGENTS.md`、repository/path-specific instructions 与 skills，按就近与路径相关优先 | §1.2 / §3.6.1 / §4 / §8 |
+| D18 | 反向代理支持 | 应用自身不处理 TLS，由反向代理终止；通过 `server.trust_proxy` 信任转发 header（`X-Forwarded-Proto/Host/For`），通过 `server.path_prefix` 支持子路径挂载，通过 `server.base_url` 生成正确的回调地址；生产环境 `trust_proxy` 不得为 `true`（信任所有） | §3.10 / §11.5 / §8.2 |
 
 ---
 
@@ -1126,6 +1142,119 @@ volumes: { aicr-data: {}, redis-data: {} }
 ### 11.4 仅 CLI 模式
 
 `aicr review --workspace <id> --pr 42` 可在 CI runner 中独立运行，复用同一核心代码（`packages/cli` 直接 import `packages/core`），无需起 HTTP server。
+
+### 11.5 反向代理部署
+
+当 AICR 部署在 nginx / Traefik / Caddy / 云负载均衡等反向代理之后时，**只需设置 `trust_proxy`**，其余参数由转发 header 自动推导：
+
+```yaml
+server:
+  trust_proxy: "loopback"          # 仅此一项为必需；base_url / path_prefix 自动推导
+```
+
+仅在自动推导结果不正确时才需手动覆盖：
+
+```yaml
+server:
+  trust_proxy: "loopback"
+  base_url: https://aicr.example.com/aicr    # 仅当 CDN 域名与代理域名不同等特殊场景
+  path_prefix: /aicr                          # 仅当反向代理不设 X-Forwarded-Prefix 且未 strip 前缀时
+```
+
+#### 自动推导机制
+
+| 字段 | 推导优先级 | 说明 |
+| --- | --- | --- |
+| 协议（scheme） | `X-Forwarded-Proto` → `X-Forwarded-Scheme` → `socket.encrypted` | 代理设置 `X-Forwarded-Proto: https` 即可 |
+| 主机名 + 端口（host） | `X-Forwarded-Host` → `Host` header | `X-Forwarded-Host` 可含端口（如 `aicr.example.com:8443`），直接保留；无端口时查 `X-Forwarded-Port` |
+| 端口（port） | `X-Forwarded-Host` 内嵌端口 → `X-Forwarded-Port` → 标准端口省略 | 非标准端口（非 80/443）自动拼入 `base_url`；标准端口省略 |
+| 路径前缀 | 配置值 `path_prefix` → `X-Forwarded-Prefix` → 首请求路由差值 | Traefik/Caddy 自动设 `X-Forwarded-Prefix`；nginx 不设则按路由匹配自动检测 |
+| `base_url` | 配置值 `base_url` → `scheme + host[:port] + prefix` 拼合 | 留空时由上述三者自动拼合 |
+
+> **端口关键点**：`server.port`（内部监听端口，如 `8080`）与外部端口完全解耦。外部端口由反向代理决定——可以是 `443`（HTTPS 标准端口，自动省略）、`8443`（非标准端口，自动拼入 URL）或任意其他端口。AICR 从不假设内部端口等于外部端口。
+
+#### 反向代理配置要点
+
+1. **协议转发**：反向代理必须设置以下 header，AICR 在 `trust_proxy` 启用后据此重建正确的请求 URL：
+   - `X-Forwarded-Proto: https`（或 `X-Forwarded-Scheme`）
+   - `X-Forwarded-Host: aicr.example.com:8443`（含非标准端口时必须带端口；标准端口可省略）
+   - `X-Forwarded-Port: 8443`（部分代理单独设置端口，AICR 优先取 `X-Forwarded-Host` 内嵌端口）
+   - `X-Forwarded-For: <客户端真实 IP>`
+2. **端口映射**：反向代理的外部端口与 AICR 内部 `server.port` 无需相同。典型场景：外部 `:443` 或 `:8443` → 内部 `:8080`；AICR 从转发 header 推导外部端口，`server.port` 仅控制 bind。
+3. **路径前缀**（二选一）：
+   - **推荐**：反向代理 strip 前缀后转发（nginx `proxy_pass` 末尾加 `/`），AICR 无需任何前缀配置。
+   - 反向代理保留原始路径转发时，推荐设置 `X-Forwarded-Prefix: /aicr`（Traefik/Caddy 自动设置）；或手动配置 `path_prefix: /aicr`。
+4. **Webhook 回调**：VCS 侧配置的 webhook URL 需与实际外部路径一致，例如 `https://aicr.example.com/aicr/webhooks/gitea`。
+5. **TLS 终止**：AICR 自身仅监听 HTTP；TLS 由反向代理统一处理。
+
+#### 典型 nginx 配置示例（标准端口 443 + 非标准端口 8443）
+
+```nginx
+# 标准端口 443（自动推导为 https://aicr.example.com/...）
+server {
+    listen 443 ssl http2;
+    server_name aicr.example.com;
+
+    ssl_certificate     /etc/nginx/ssl/aicr.crt;
+    ssl_certificate_key /etc/nginx/ssl/aicr.key;
+
+    location /aicr/ {
+        proxy_pass http://127.0.0.1:8080/;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+}
+
+# 非标准端口 8443（自动推导为 https://aicr.example.com:8443/...）
+server {
+    listen 8443 ssl http2;
+    server_name aicr.example.com;
+
+    ssl_certificate     /etc/nginx/ssl/aicr.crt;
+    ssl_certificate_key /etc/nginx/ssl/aicr.key;
+
+    location /aicr/ {
+        proxy_pass http://127.0.0.1:8080/;
+        proxy_set_header Host $host:$server_port;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host:$server_port;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+}
+```
+
+> **注意**：上例 `proxy_pass` 末尾 `/` 会 strip `/aicr` 前缀，此时 AICR 不需要设置 `path_prefix`。
+> 如果不 strip（`proxy_pass http://127.0.0.1:8080`），则需设置 `path_prefix: /aicr`。
+> 非标准端口场景中 `X-Forwarded-Host` 必须带端口（`$host:$server_port`），否则推导出的 URL 缺少端口号。
+
+#### 典型 Traefik 配置示例（非标准端口 8443）
+
+```yaml
+# docker-compose.yaml（Traefik labels 模式）
+services:
+  aicr:
+    image: ghcr.io/owent/aicodereviewer:latest
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.aicr.rule=PathPrefix(`/aicr`)"
+      - "traefik.http.routers.aicr.entrypoints=websecure"
+      - "traefik.http.routers.aicr.tls=true"
+      - "traefik.http.services.aicr.loadbalancer.server.port=8080"
+      # Traefik 自动设置 X-Forwarded-* headers（含 X-Forwarded-Host 带端口）
+    environment:
+      AICR_SERVER_TRUST_PROXY: "true"
+      # Traefik 自动设置 X-Forwarded-Prefix，无需手动 path_prefix
+```
+
+> Traefik 自动在 `X-Forwarded-Host` 中包含外部端口（包括非标准端口），无需额外配置。
+
+#### 安全注意事项
+
+- 生产环境 `trust_proxy` 不应设为 `true`（信任所有），推荐使用 `"loopback"` 或 CIDR 限制，防止客户端伪造 `X-Forwarded-*` header 绕过安全策略。
+- `base_url` 必须反映外部可达地址，不得使用内部 hostname 或 `localhost`。
+- 反向代理层应配置请求体大小限制（webhook payload 通常 < 10MB）。
 
 ---
 
