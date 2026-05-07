@@ -1113,6 +1113,33 @@ describe("server config", () => {
   });
 });
 
+describe("finding issue output config", () => {
+  it("accepts configurable markers and resolved actions for Gitea managed issues", () => {
+    const result = appConfigSchema.parse({
+      outputs: {
+        channels: [
+          {
+            name: "gitea-finding-issues",
+            kind: "gitea_finding_issue",
+            trigger: "gitea-internal",
+            marker_prefix: "[AICR Managed]",
+            marker_label: "aicr-managed",
+            label_ids: [1, 2],
+            resolved_action: "delete",
+          },
+        ],
+      },
+    });
+
+    expect(result.outputs.channels[0]).toMatchObject({
+      marker_prefix: "[AICR Managed]",
+      marker_label: "aicr-managed",
+      label_ids: [1, 2],
+      resolved_action: "delete",
+    });
+  });
+});
+
 describe("triage config", () => {
   it("defaults triage to disabled", () => {
     const result = appConfigSchema.parse({});

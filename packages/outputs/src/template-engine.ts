@@ -155,6 +155,10 @@ const builtinTemplates: Readonly<Record<string, Record<TemplateKind, string>>> =
 		summary: BUILTIN_GITEA_ISSUE_SUMMARY_TEMPLATE,
 		finding: BUILTIN_FINDING_TEMPLATE,
 	},
+	gitea_finding_issue: {
+		summary: BUILTIN_GITEA_ISSUE_SUMMARY_TEMPLATE,
+		finding: BUILTIN_FINDING_TEMPLATE,
+	},
 	github_pr_review: {
 		summary: BUILTIN_SUMMARY_TEMPLATE,
 		finding: BUILTIN_FINDING_TEMPLATE,

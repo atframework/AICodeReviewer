@@ -283,15 +283,15 @@ describe("createServerApp", () => {
       });
       expect(body.reviewRun?.promptTokenEstimate).toBeGreaterThan(0);
       expect(body.reviewRun).not.toHaveProperty("systemPrompt");
-      expect(published).toEqual([
-        {
-          file: "src/app.ts",
-          line: 2,
-          severity: "medium",
-          category: "correctness",
-          message: "The new return path always reports failure.",
-        },
-      ]);
+      expect(published).toHaveLength(1);
+      expect(published[0]).toMatchObject({
+        file: "src/app.ts",
+        line: 2,
+        severity: "medium",
+        category: "correctness",
+        message: "The new return path always reports failure.",
+      });
+      expect(published[0]?.fingerprint).toMatch(/^[0-9a-f]{16}$/u);
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }

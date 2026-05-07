@@ -487,6 +487,71 @@ describe("createOutputPublisherFromConfig", () => {
     }
   });
 
+  it("creates a Gitea finding issue lifecycle publisher without a pull number", async () => {
+    const calls: { url: string; init: { headers?: Record<string, string>; body?: string; method?: string } }[] = [];
+    vi.stubGlobal("fetch", async (url: string, init?: { headers?: Record<string, string>; body?: string; method?: string }) => {
+      calls.push({ url, init: init ?? {} });
+      return calls.length === 1 ? response([]) : response({ id: 88, number: 12 });
+    });
+
+    const originalToken = process.env.GITEA_TOKEN;
+    process.env.GITEA_TOKEN = "resolver-token";
+    try {
+      const config = makeConfig({
+        outputs: {
+          template_engine: "handlebars",
+          channels: [
+            {
+              name: "gitea-finding-issues",
+              kind: "gitea_finding_issue",
+              trigger: "gitea-internal",
+              marker_prefix: "[AICR Managed]",
+              marker_label: "aicr-managed",
+              resolved_action: "close",
+            },
+          ],
+        },
+      } as Partial<AppConfig>);
+      const publisher = createOutputPublisherFromConfig(
+        config,
+        "gitea-finding-issues",
+        undefined,
+        "test-workspace",
+        {
+          triggerName: "gitea-internal",
+          provider: "gitea",
+          workspaceId: "test-workspace",
+          targetKind: "push",
+          repoRef: "owent/example",
+          author: {},
+          reason: "gitea:push",
+        },
+      );
+
+      expect(publisher).toBeDefined();
+      expect(publisher?.publishesFindings).toBe(false);
+      expect(publisher?.publishEmptySummary).toBe(true);
+      const results = await publisher?.publishSummary?.("", [
+        { file: "src/app.ts", line: 3, severity: "high", category: "security", message: "Issue." },
+      ]);
+
+      expect(Array.isArray(results)).toBe(true);
+      expect(calls[0]?.url).toBe("https://gitea.example.com/api/v1/repos/owent/example/issues?state=open&type=issues");
+      expect(calls[1]?.url).toBe("https://gitea.example.com/api/v1/repos/owent/example/issues");
+      expect(calls[1]?.init.headers).toMatchObject({ authorization: "token resolver-token" });
+      const body = JSON.parse(calls[1]?.init.body ?? "{}");
+      expect(body.title).toContain("[AICR Managed] [HIGH] security: src/app.ts:3");
+      expect(body.body).toContain("<!-- aicr:managed=finding-issue -->");
+    } finally {
+      vi.unstubAllGlobals();
+      if (originalToken === undefined) {
+        delete process.env.GITEA_TOKEN;
+      } else {
+        process.env.GITEA_TOKEN = originalToken;
+      }
+    }
+  });
+
   it("passes configured Feishu author mappings as mention text", async () => {
     const calls: { url: string; init: { body?: string } }[] = [];
     vi.stubGlobal("fetch", async (url: string, init?: { body?: string }) => {
@@ -770,6 +835,61 @@ describe("createOutputPublisherResolverFromConfig", () => {
         delete process.env.FEISHU_WEBHOOK;
       } else {
         process.env.FEISHU_WEBHOOK = originalFeishuWebhook;
+      }
+    }
+  });
+
+  it("resolves a finding issue lifecycle channel for push events", async () => {
+    const calls: { url: string; init: { body?: string; method?: string } }[] = [];
+    vi.stubGlobal("fetch", async (url: string, init?: { body?: string; method?: string }) => {
+      calls.push({ url, init: init ?? {} });
+      return calls.length === 1 ? response([]) : response({ id: 100, number: 20 });
+    });
+
+    const originalToken = process.env.GITEA_TOKEN;
+    process.env.GITEA_TOKEN = "resolver-token";
+    try {
+      const config = makeConfig({
+        outputs: {
+          template_engine: "handlebars",
+          channels: [
+            { name: "gitea-finding-issues", kind: "gitea_finding_issue", trigger: "gitea-internal" },
+          ],
+          routes: {
+            default: {},
+            rules: [
+              { match: { target_kind: "push" }, summary: ["gitea-finding-issues"] },
+            ],
+          },
+        },
+      } as Partial<AppConfig>);
+      const publisher = createOutputPublisherResolverFromConfig(config)({
+        reviewEvent: {
+          triggerName: "gitea-internal",
+          provider: "gitea",
+          workspaceId: "test-workspace",
+          targetKind: "push",
+          repoRef: "owent/example",
+          author: {},
+          reason: "gitea:push",
+        },
+        payload: {},
+        provider: "gitea",
+        eventName: "push",
+      });
+
+      expect(publisher).toBeDefined();
+      await publisher?.publishSummary?.("", [
+        { file: "src/app.ts", line: 1, severity: "medium", category: "correctness", message: "Issue." },
+      ]);
+
+      expect(calls[1]?.url).toBe("https://gitea.example.com/api/v1/repos/owent/example/issues");
+    } finally {
+      vi.unstubAllGlobals();
+      if (originalToken === undefined) {
+        delete process.env.GITEA_TOKEN;
+      } else {
+        process.env.GITEA_TOKEN = originalToken;
       }
     }
   });

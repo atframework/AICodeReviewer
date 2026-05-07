@@ -554,6 +554,255 @@ export function createGiteaIssueDispatcher(options: GiteaIssueOptions): GiteaIss
 	};
 }
 
+export type GiteaFindingIssueResolvedAction = "none" | "close" | "delete";
+
+export interface GiteaFindingIssueOptions {
+	readonly baseUrl: string;
+	readonly token?: string;
+	readonly owner: string;
+	readonly repo: string;
+	readonly channelName?: string;
+	readonly markerPrefix?: string;
+	readonly markerLabel?: string;
+	readonly labelIds?: readonly number[];
+	readonly resolvedAction?: GiteaFindingIssueResolvedAction;
+	readonly fetch?: FetchLike;
+}
+
+export interface GiteaFindingIssueDispatcher {
+	reconcileFindings(findings: readonly ReviewFinding[], summary?: string): Promise<readonly DispatchResult[]>;
+}
+
+interface ManagedGiteaIssue {
+	readonly number: number;
+	readonly title: string;
+	readonly body: string;
+	readonly state: string;
+	readonly url?: string;
+	readonly fingerprint?: string;
+}
+
+const AICR_MANAGED_ISSUE_MARKER = "<!-- aicr:managed=finding-issue -->";
+
+function extractManagedIssueFingerprint(body: string): string | undefined {
+	const match = /<!--\s*aicr:fingerprint=([^\s-][^\s]*)\s*-->/u.exec(body);
+	return match?.[1];
+}
+
+function extractIssueNumber(raw: Record<string, unknown>): number | undefined {
+	const value = raw.number ?? raw.index;
+	return typeof value === "number" && Number.isInteger(value) ? value : undefined;
+}
+
+function buildFindingIssueTitle(finding: ReviewFinding, markerPrefix: string): string {
+	const location = finding.endLine ? `${finding.file}:${finding.line}-${finding.endLine}` : `${finding.file}:${finding.line}`;
+	const normalizedMessage = finding.message.replace(/\s+/gu, " ").trim();
+	const title = `${markerPrefix} [${finding.severity.toUpperCase()}] ${finding.category}: ${location} - ${normalizedMessage}`;
+	return title.length > 240 ? `${title.slice(0, 237)}...` : title;
+}
+
+function ensureFindingFingerprint(finding: ReviewFinding): ReviewFinding {
+	return finding.fingerprint ? finding : { ...finding, fingerprint: computeFindingFingerprint(finding) };
+}
+
+function buildManagedIssueBody(
+	finding: ReviewFinding,
+	options: {
+		readonly channel: string;
+		readonly markerLabel: string;
+		readonly summary?: string;
+	},
+): string {
+	const sections = [
+		AICR_MANAGED_ISSUE_MARKER,
+		`<!-- aicr:channel=${options.channel} -->`,
+		`<!-- aicr:label=${options.markerLabel} -->`,
+		`<!-- aicr:fingerprint=${finding.fingerprint ?? computeFindingFingerprint(finding)} -->`,
+		"",
+		renderFindingMarkdown(finding),
+	];
+
+	if (options.summary?.trim()) {
+		sections.push("", "---", "", "### Review summary", "", options.summary);
+	}
+
+	return sections.join("\n");
+}
+
+function parseManagedIssues(raw: unknown, markerPrefix: string, markerLabel: string): readonly ManagedGiteaIssue[] {
+	if (!Array.isArray(raw)) {
+		return [];
+	}
+
+	const issues: ManagedGiteaIssue[] = [];
+	for (const entry of raw) {
+		if (!entry || typeof entry !== "object") {
+			continue;
+		}
+
+		const rawIssue = entry as Record<string, unknown>;
+		if (rawIssue.pull_request) {
+			continue;
+		}
+
+		const number = extractIssueNumber(rawIssue);
+		const title = String(rawIssue.title ?? "");
+		const body = String(rawIssue.body ?? "");
+		const state = String(rawIssue.state ?? "");
+		if (number === undefined || !title.startsWith(markerPrefix) || !body.includes(AICR_MANAGED_ISSUE_MARKER)) {
+			continue;
+		}
+
+		if (!body.includes(`<!-- aicr:label=${markerLabel} -->`)) {
+			continue;
+		}
+
+		const fingerprint = extractManagedIssueFingerprint(body);
+		issues.push({
+			number,
+			title,
+			body,
+			state,
+			...(typeof rawIssue.html_url === "string" ? { url: rawIssue.html_url } : {}),
+			...(fingerprint ? { fingerprint } : {}),
+		});
+	}
+
+	return issues;
+}
+
+export function createGiteaFindingIssueDispatcher(options: GiteaFindingIssueOptions): GiteaFindingIssueDispatcher {
+	const fetchImpl = options.fetch ?? defaultFetch();
+	const baseUrl = options.baseUrl.replace(/\/+$/u, "");
+	const channel = options.channelName ?? "gitea_finding_issue";
+	const markerPrefix = options.markerPrefix ?? "[AICR]";
+	const markerLabel = options.markerLabel ?? "aicr-managed";
+	const resolvedAction = options.resolvedAction ?? "close";
+	const repoPath = [
+		baseUrl,
+		"api/v1/repos",
+		encodePathSegment(options.owner),
+		encodePathSegment(options.repo),
+	].join("/");
+	const headers: Record<string, string> = {
+		"content-type": "application/json",
+	};
+	if (options.token) {
+		headers.authorization = `token ${options.token}`;
+	}
+
+	async function request(method: string, endpoint: string, body?: unknown): Promise<unknown> {
+		const response = await fetchImpl(endpoint, {
+			method,
+			headers,
+			...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+		});
+
+		if (!response.ok) {
+			throw new OutputDispatchError(`Gitea finding issue API returned ${response.status}.`, {
+				status: response.status,
+				responseBody: await response.text(),
+			});
+		}
+
+		if (response.status === 204) {
+			return {};
+		}
+
+		return response.json();
+	}
+
+	async function listManagedOpenIssues(): Promise<readonly ManagedGiteaIssue[]> {
+		const params = new URLSearchParams({ state: "open", type: "issues" });
+		const raw = await request("GET", `${repoPath}/issues?${params.toString()}`);
+		return parseManagedIssues(raw, markerPrefix, markerLabel);
+	}
+
+	async function createIssue(finding: ReviewFinding, summary: string | undefined): Promise<DispatchResult> {
+		const body: Record<string, unknown> = {
+			title: buildFindingIssueTitle(finding, markerPrefix),
+			body: buildManagedIssueBody(finding, { channel, markerLabel, ...(summary ? { summary } : {}) }),
+		};
+		if (options.labelIds && options.labelIds.length > 0) {
+			body.labels = [...options.labelIds];
+		}
+
+		const raw = await request("POST", `${repoPath}/issues`, body);
+		const externalId = extractExternalId(raw);
+		return {
+			channel,
+			status: "published",
+			...(externalId ? { externalId } : {}),
+			raw: { action: "created", issue: raw },
+		};
+	}
+
+	async function resolveIssue(issue: ManagedGiteaIssue): Promise<DispatchResult | undefined> {
+		if (resolvedAction === "none") {
+			return undefined;
+		}
+
+		if (resolvedAction === "delete") {
+			const raw = await request("DELETE", `${repoPath}/issues/${issue.number}`);
+			return {
+				channel,
+				status: "published",
+				externalId: String(issue.number),
+				raw: { action: "deleted", issueNumber: issue.number, response: raw },
+			};
+		}
+
+		await request("POST", `${repoPath}/issues/${issue.number}/comments`, {
+			body: [
+				"🤖 **AICR lifecycle:** this managed finding is no longer present in the latest analysis.",
+				"",
+				"Closing the issue automatically. Reopen it if the finding is still valid.",
+			].join("\n"),
+		});
+		const raw = await request("PATCH", `${repoPath}/issues/${issue.number}`, { state: "closed" });
+		return {
+			channel,
+			status: "published",
+			externalId: String(issue.number),
+			raw: { action: "closed", issueNumber: issue.number, issue: raw },
+		};
+	}
+
+	return {
+		async reconcileFindings(findings, summary): Promise<readonly DispatchResult[]> {
+			const preparedFindings = findings.map(ensureFindingFingerprint);
+			const currentFingerprints = new Set(preparedFindings.map((finding) => finding.fingerprint!));
+			const existingIssues = await listManagedOpenIssues();
+			const existingByFingerprint = new Map<string, ManagedGiteaIssue>();
+			for (const issue of existingIssues) {
+				if (issue.fingerprint) {
+					existingByFingerprint.set(issue.fingerprint, issue);
+				}
+			}
+
+			const results: DispatchResult[] = [];
+			for (const finding of preparedFindings) {
+				if (!existingByFingerprint.has(finding.fingerprint!)) {
+					results.push(await createIssue(finding, summary));
+				}
+			}
+
+			for (const issue of existingIssues) {
+				if (!issue.fingerprint || currentFingerprints.has(issue.fingerprint)) {
+					continue;
+				}
+
+				const result = await resolveIssue(issue);
+				if (result) {
+					results.push(result);
+				}
+			}
+
+			return results;
+		},
+	};
+}
+
 export interface FeishuBotOptions {
 	readonly webhookUrl: string;
 	readonly secret?: string | undefined;
