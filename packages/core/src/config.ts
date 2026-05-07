@@ -120,6 +120,10 @@ const outputChannelSchema = z
     trigger: z.string().min(1).optional(),
     mention_author: z.boolean().optional(),
     mention_fallback: z.enum(["all", "skip"]).optional(),
+    marker_prefix: z.string().min(1).optional(),
+    marker_label: z.string().min(1).optional(),
+    label_ids: z.array(z.number().int().positive()).optional(),
+    resolved_action: z.enum(["none", "close", "delete"]).optional(),
   })
   .passthrough();
 

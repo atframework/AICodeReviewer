@@ -909,6 +909,59 @@ describe("runReviewOrchestration error paths", () => {
     }
   });
 
+  it("invokes lifecycle summary publishers even when the model reports no findings", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-empty-lifecycle-"));
+
+    try {
+      await writeWorkspaceFile(tempDir, "src/app.ts", "const ok = true;\n");
+      const llm: ChatCompletionClient = {
+        async complete(input) {
+          return {
+            providerId: input.model.providerId,
+            modelId: input.model.modelId,
+            content: JSON.stringify({ findings: [] }),
+            raw: {},
+          };
+        },
+      };
+      const summaryCalls: Array<{ summary: string; findings: readonly ReviewFinding[] | undefined }> = [];
+
+      const result = await runReviewOrchestration(
+        {
+          reviewEvent: createReviewEventFixture(),
+          payload: {},
+          provider: "gitea",
+          eventName: "push",
+        },
+        {
+          baseSystemPrompt: "<task>\n{{TASK_CONTEXT}}\n</task>",
+          sourceRootResolver: () => tempDir,
+          vcs: createVcs(tempDir),
+          llm,
+          model,
+          outputPublisher: {
+            publishesFindings: false,
+            publishEmptySummary: true,
+            async publishFinding() {
+              throw new Error("lifecycle publisher should not receive line findings");
+            },
+            async publishSummary(summary, findings) {
+              summaryCalls.push({ summary, findings });
+              return { channel: "gitea-finding-issue", status: "published", raw: { action: "closed" } };
+            },
+          },
+        },
+      );
+
+      expect(result.status).toBe("published");
+      expect(result.findingCount).toBe(0);
+      expect(result.dispatchCount).toBe(1);
+      expect(summaryCalls).toEqual([{ summary: "", findings: [] }]);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("uses outputPublisherResolver for per-event publishing", async () => {
     const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-publisher-resolver-"));
 
@@ -1006,6 +1059,55 @@ describe("runReviewOrchestration error paths", () => {
 
       expect(result.status).toBe("published");
       expect(published[0]?.lineCommentAllowed).toBe(false);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("adds a stable fingerprint before publishing when the model omits one", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-auto-fingerprint-"));
+
+    try {
+      await writeWorkspaceFile(tempDir, "src/app.ts", "const ok = true;\n");
+      const llm: ChatCompletionClient = {
+        async complete(input) {
+          return {
+            providerId: input.model.providerId,
+            modelId: input.model.modelId,
+            content: JSON.stringify({
+              findings: [
+                { file: "src/app.ts", line: 1, severity: "medium", category: "correctness", message: "Issue." },
+              ],
+            }),
+            raw: {},
+          };
+        },
+      };
+      const published: ReviewFinding[] = [];
+
+      await runReviewOrchestration(
+        {
+          reviewEvent: createReviewEventFixture(),
+          payload: {},
+          provider: "gitea",
+          eventName: "pull_request",
+        },
+        {
+          baseSystemPrompt: "<task>\n{{TASK_CONTEXT}}\n</task>",
+          sourceRootResolver: () => tempDir,
+          vcs: createVcs(tempDir),
+          llm,
+          model,
+          outputPublisher: {
+            async publishFinding(finding) {
+              published.push(finding);
+              return { channel: "test", status: "published", raw: {} };
+            },
+          },
+        },
+      );
+
+      expect(published[0]?.fingerprint).toMatch(/^[0-9a-f]{16}$/u);
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }

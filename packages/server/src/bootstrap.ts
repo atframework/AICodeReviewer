@@ -30,6 +30,7 @@ import {
   createGithubPullRequestReviewDispatcher,
   createGitlabMergeRequestReviewDispatcher,
   createGiteaIssueDispatcher,
+  createGiteaFindingIssueDispatcher,
   createFeishuBotDispatcher,
   createWeComBotDispatcher,
   type ReviewFinding,
@@ -426,6 +427,7 @@ function toMentionChannelKind(channelKind: string): MentionChannelKind | undefin
     case "github_pr_review":
     case "gitlab_mr_review":
     case "gitea_issue":
+    case "gitea_finding_issue":
     case "feishu_bot":
     case "wecom_bot":
       return channelKind;
@@ -575,6 +577,7 @@ function createCompositeOutputPublisher(
   return {
     handlesRendering: true,
     publishesFindings: linePublishers.length > 0,
+    publishEmptySummary: summaryCapable.some((publisher) => publisher.publishEmptySummary),
     async publishFinding(finding: ReviewFinding): Promise<readonly DispatchResult[]> {
       const results: DispatchResult[] = [];
       for (const publisher of linePublishers) {
@@ -622,7 +625,7 @@ export function createOutputPublisherFromConfig(
   const channelConfig = channel as Record<string, unknown>;
   const triggerName = channelConfig.trigger as string | undefined;
   const isPrReview = channel.kind === "gitea_pr_review" || channel.kind === "github_pr_review" || channel.kind === "gitlab_mr_review";
-  const supportedTriggerKinds = channel.kind === "gitea_pr_review" || channel.kind === "gitea_issue"
+  const supportedTriggerKinds = channel.kind === "gitea_pr_review" || channel.kind === "gitea_issue" || channel.kind === "gitea_finding_issue"
     ? ["gitea", "forgejo"]
     : channel.kind === "github_pr_review"
       ? ["github"]
@@ -745,6 +748,46 @@ export function createOutputPublisherFromConfig(
       async publishSummary(summary: string, summaryFindings?: readonly ReviewFinding[]): Promise<DispatchResult> {
         const renderedFindings = summaryFindings ?? findings;
         return dispatcher.publishAggregatedFindings(
+          renderedFindings,
+          rendering.renderSummary(summary, renderedFindings),
+        );
+      },
+    };
+  }
+
+  if (channel.kind === "gitea_finding_issue") {
+    if (!baseUrl || !owner || !repo) {
+      return undefined;
+    }
+
+    const resolvedAction = readString(channelConfig, "resolved_action", "resolvedAction");
+    const markerPrefix = readString(channelConfig, "marker_prefix", "markerPrefix");
+    const markerLabel = readString(channelConfig, "marker_label", "markerLabel");
+    const labelIds = Array.isArray(channelConfig.label_ids) && channelConfig.label_ids.every((value) => typeof value === "number")
+      ? channelConfig.label_ids as readonly number[]
+      : undefined;
+    const dispatcher = createGiteaFindingIssueDispatcher({
+      baseUrl,
+      ...(tokenEnv ? { token: resolveEnv(tokenEnv) ?? "" } : {}),
+      owner,
+      repo,
+      channelName: channel.name,
+      ...(markerPrefix ? { markerPrefix } : {}),
+      ...(markerLabel ? { markerLabel } : {}),
+      ...(labelIds ? { labelIds } : {}),
+      ...(resolvedAction === "none" || resolvedAction === "close" || resolvedAction === "delete" ? { resolvedAction } : {}),
+    });
+
+    return {
+      handlesRendering: true,
+      publishesFindings: false,
+      publishEmptySummary: true,
+      async publishFinding(): Promise<DispatchResult> {
+        return { channel: channel.name, status: "published", raw: { collected: true } };
+      },
+      async publishSummary(summary: string, summaryFindings?: readonly ReviewFinding[]): Promise<readonly DispatchResult[]> {
+        const renderedFindings = (summaryFindings ?? []).map((finding) => rendering.renderFinding(finding));
+        return dispatcher.reconcileFindings(
           renderedFindings,
           rendering.renderSummary(summary, renderedFindings),
         );

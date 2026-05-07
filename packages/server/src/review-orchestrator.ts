@@ -34,6 +34,7 @@ import {
 } from "@aicr/mcp-output";
 import {
   buildAtMentions,
+  computeFindingFingerprint,
   createTemplateResolver,
   toTemplateFinding,
   type AuthorResolutionOptions,
@@ -54,6 +55,7 @@ export type ReviewDispatchResult = DispatchResult | readonly DispatchResult[];
 export interface ReviewOutputPublisher {
   readonly publishesFindings?: boolean;
   readonly handlesRendering?: boolean;
+  readonly publishEmptySummary?: boolean;
   publishFinding(finding: ReviewFinding): Promise<ReviewDispatchResult>;
   publishSummary?(summary: string, findings?: readonly ReviewFinding[]): Promise<ReviewDispatchResult>;
 }
@@ -454,7 +456,7 @@ function toExtraContextRequest(input: FetchMoreContextInput): ExtraContextReques
 }
 
 function toReviewFinding(input: PublishFindingInput): ReviewFinding {
-  return {
+  const finding = {
     file: input.file,
     line: input.line,
     ...(input.end_line !== undefined ? { endLine: input.end_line } : {}),
@@ -464,6 +466,8 @@ function toReviewFinding(input: PublishFindingInput): ReviewFinding {
     ...(input.suggestion ? { suggestion: input.suggestion } : {}),
     ...(input.fingerprint ? { fingerprint: input.fingerprint } : {}),
   };
+
+  return finding.fingerprint ? finding : { ...finding, fingerprint: computeFindingFingerprint(finding) };
 }
 
 function pathMatchesDiffFile(findingPath: string, file: ParsedDiff["files"][number]): boolean {
@@ -693,7 +697,7 @@ export async function runReviewOrchestration(
     if (outputPublisher.publishSummary) {
       const summariesToPublish = outputState.summaries.length > 0
         ? outputState.summaries
-        : reviewFindings.length > 0
+        : reviewFindings.length > 0 || outputPublisher.publishEmptySummary
           ? [""]
           : [];
       for (const summary of summariesToPublish) {
