@@ -55,6 +55,29 @@ const pushPayloadSchema = z
   })
   .passthrough();
 
+const issuePayloadSchema = z
+  .object({
+    action: z.string().min(1).optional(),
+    repository: repositorySchema,
+    sender: actorSchema.optional(),
+    issue: z
+      .object({
+        number: z.number().int().positive().optional(),
+        title: z.string().min(1).optional(),
+        body: z.string().optional(),
+        html_url: z.string().url().optional(),
+        state: z.string().min(1).optional(),
+        user: actorSchema.optional(),
+        labels: z
+          .array(
+            z.object({ name: z.string().min(1).optional() }).passthrough(),
+          )
+          .optional(),
+      })
+      .passthrough(),
+  })
+  .passthrough();
+
 const gitlabMergeRequestPayloadSchema = z
   .object({
     object_attributes: z
@@ -183,6 +206,25 @@ export function translateWebhookToReviewEvent(
       url: parsed.compare_url,
       reason: `${provider}:push`,
       rawEventName: eventName,
+    });
+  }
+
+  if (eventName === "issues") {
+    const parsed = issuePayloadSchema.parse(payload);
+    const issueNumber = parsed.issue?.number;
+    const issueUrl = parsed.issue?.html_url;
+
+    return createReviewEvent({
+      triggerName: config.triggerName,
+      provider,
+      workspaceId: config.workspaceId,
+      targetKind: "issue",
+      repoRef: parsed.repository.full_name,
+      author: normalizeActor(parsed.sender ?? parsed.issue?.user),
+      url: issueUrl,
+      reason: `${provider}:${parsed.action ?? "issues"}`,
+      rawEventName: eventName,
+      ...(issueNumber !== undefined ? { changedFiles: [String(issueNumber)] } : {}),
     });
   }
 

@@ -234,7 +234,7 @@ export async function runCli(
       const config = await loadConfigFile(configPath);
       const basePromptPath = resolve(cwd, values["base-prompt"] ?? "prompts/system/code-reviewer.system.md");
       const baseSystemPrompt = await loadSystemPromptTemplate(basePromptPath);
-      const port = parseOptionalInteger(values.port, "--port") ?? 8080;
+      const port = parseOptionalInteger(values.port, "--port") ?? config.server.port ?? 8080;
 
       const serverOptions = await bootstrapServerApp({
         config,
@@ -243,7 +243,19 @@ export async function runCli(
       });
       const app = createServerApp(serverOptions);
 
-      await serveAsync(app, { port });
+      const proxyConfig = config.server.trust_proxy !== false
+        ? {
+            trustProxy: config.server.trust_proxy,
+            ...(config.server.base_url ? { baseUrl: config.server.base_url } : {}),
+            ...(config.server.path_prefix ? { pathPrefix: config.server.path_prefix } : {}),
+          }
+        : undefined;
+
+      await serveAsync(app, {
+        port,
+        hostname: config.server.hostname,
+        ...(proxyConfig ? { proxy: proxyConfig } : {}),
+      });
       logger.info({ port }, "AICR server started");
       stdout.write(`AICR server listening on port ${port}\n`);
 

@@ -157,6 +157,33 @@ const sandboxSchema = z
   })
   .strict();
 
+const triageSchema = z
+  .object({
+    enabled: z.boolean().default(false),
+    actions: z
+      .array(z.enum(["close"]))
+      .default(["close"]),
+    categories_close: z
+      .array(
+        z.enum([
+          "spam",
+          "invalid",
+          "duplicate",
+          "resolved",
+          "out_of_scope",
+          "stale",
+        ]),
+      )
+      .default(["spam", "invalid"]),
+    events: z
+      .array(z.enum(["issues"]))
+      .default(["issues"]),
+    custom_prompt: z.string().min(1).optional(),
+    dry_run: z.boolean().default(false),
+  })
+  .passthrough()
+  .default({ enabled: false, actions: ["close"], categories_close: ["spam", "invalid"], events: ["issues"], dry_run: false });
+
 const reviewSchema = z
   .object({
     languages_auto_detect: z.boolean().optional(),
@@ -224,13 +251,36 @@ const workspaceInstanceSchema = z
       .strict()
       .optional(),
     sandbox: sandboxSchema.optional(),
+    triage: triageSchema.optional(),
   })
   .strict();
 
 const workspaceConfigFileSchema = workspaceInstanceSchema.omit({ sandbox: true }).strict();
 
+const trustProxyValueSchema: z.ZodType<
+  boolean | "loopback" | "linklocal" | "uniquelocal" | readonly string[],
+  z.ZodTypeDef,
+  unknown
+> = z.union([
+  z.boolean(),
+  z.enum(["loopback", "linklocal", "uniquelocal"]),
+  z.array(z.string().min(1)),
+]);
+
+const serverSchema = z
+  .object({
+    port: z.number().int().positive().default(8080),
+    hostname: z.string().min(1).default("0.0.0.0"),
+    trust_proxy: trustProxyValueSchema.default(false),
+    base_url: z.string().min(1).optional(),
+    path_prefix: z.string().min(1).optional(),
+  })
+  .passthrough()
+  .default({ port: 8080, hostname: "0.0.0.0", trust_proxy: false });
+
 const appConfigSchema = z
   .object({
+    server: serverSchema,
     llm: z
       .object({
         providers: z.array(llmProviderSchema).default([]),
