@@ -5,6 +5,7 @@ import type { AppConfig } from "@aicr/core";
 import {
   resolveModelSpecFromConfig,
   resolveGiteaWebhookConfig,
+  resolveP4TriggerConfig,
   createOutputPublisherFromConfig,
   createOutputPublisherResolverFromConfig,
   createVcsAdapterFromConfig,
@@ -1035,5 +1036,129 @@ describe("bootstrapServerApp", () => {
         process.env.OPENAI_API_KEY = originalKey;
       }
     }
+  });
+});
+
+describe("resolveP4TriggerConfig", () => {
+  it("returns undefined when no p4 trigger configured", () => {
+    const config = makeConfig();
+    const result = resolveP4TriggerConfig(config);
+    expect(result).toBeUndefined();
+  });
+
+  it("resolves p4 trigger config from trigger list", () => {
+    process.env.P4USER = "testuser";
+    process.env.P4TICKET = "testticket";
+    try {
+      const config = makeConfig({
+        triggers: [
+          {
+            name: "p4-main",
+            kind: "p4",
+            port: "perforce:1666",
+            user_env: "P4USER",
+            ticket_env: "P4TICKET",
+            depot_path: "//depot/main",
+            workspace: "aicr-p4-ws",
+            watch_path: ["src/", "include/"],
+            include_cr_file: ["**/*.cpp", "**/*.h"],
+            exclude_cr_file: ["**/*.gen.cpp"],
+          },
+        ],
+        workspaces: {
+          cache: { max_total_gb: 50, eviction: "lru", ttl_days: 30 },
+          defaults: {},
+          instances: {
+            "p4-workspace": {
+              source_repo: { trigger: "p4-main", repo: "//depot/main" },
+            },
+          },
+        },
+      } as Partial<AppConfig>);
+
+      const result = resolveP4TriggerConfig(config);
+      expect(result).toBeDefined();
+      expect(result!.triggerName).toBe("p4-main");
+      expect(result!.workspaceId).toBe("p4-workspace");
+      expect(result!.port).toBe("perforce:1666");
+      expect(result!.user).toBe("testuser");
+      expect(result!.password).toBe("testticket");
+      expect(result!.depot).toBe("//depot/main");
+      expect(result!.workspace).toBe("aicr-p4-ws");
+      expect(result!.watchPath).toEqual(["src/", "include/"]);
+      expect(result!.includeCrFile).toEqual(["**/*.cpp", "**/*.h"]);
+      expect(result!.excludeCrFile).toEqual(["**/*.gen.cpp"]);
+    } finally {
+      delete process.env.P4USER;
+      delete process.env.P4TICKET;
+    }
+  });
+
+  it("resolves p4 trigger by name", () => {
+    const config = makeConfig({
+      triggers: [
+        { name: "p4-first", kind: "p4", depot_path: "//depot/first" },
+        { name: "p4-second", kind: "p4", depot_path: "//depot/second" },
+      ],
+      workspaces: {
+        cache: { max_total_gb: 50, eviction: "lru", ttl_days: 30 },
+        defaults: {},
+        instances: {},
+      },
+    } as Partial<AppConfig>);
+
+    const result = resolveP4TriggerConfig(config, "p4-second");
+    expect(result).toBeDefined();
+    expect(result!.triggerName).toBe("p4-second");
+  });
+
+  it("creates P4 VCS adapter when p4 trigger exists", () => {
+    process.env.P4USER = "testuser";
+    try {
+      const config = makeConfig({
+        triggers: [
+          {
+            name: "p4-main",
+            kind: "p4",
+            port: "perforce:1666",
+            user_env: "P4USER",
+            depot_path: "//depot/main",
+          },
+        ],
+        workspaces: {
+          cache: { max_total_gb: 50, eviction: "lru", ttl_days: 30 },
+          defaults: {},
+          instances: {},
+        },
+      } as Partial<AppConfig>);
+
+      const adapter = createVcsAdapterFromConfig(config, "/tmp/test");
+      expect(adapter.kind).toBe("p4");
+    } finally {
+      delete process.env.P4USER;
+    }
+  });
+
+  it("creates Git VCS adapter when no p4 trigger", () => {
+    const config = makeConfig();
+    const adapter = createVcsAdapterFromConfig(config, "/tmp/test");
+    expect(adapter.kind).toBe("git");
+  });
+
+  it("creates Git VCS adapter for a Gitea trigger when P4 is also configured", () => {
+    const config = makeConfig({
+      triggers: [
+        { name: "gitea-main", kind: "gitea", base_url: "https://git.example.com" },
+        { name: "p4-main", kind: "p4", depot_path: "//depot/main" },
+      ],
+      workspaces: {
+        cache: { max_total_gb: 50, eviction: "lru", ttl_days: 30 },
+        defaults: {},
+        instances: {},
+      },
+    } as Partial<AppConfig>);
+
+    const adapter = createVcsAdapterFromConfig(config, "/tmp/test", "gitea-main");
+    expect(adapter.kind).toBe("git");
   });
 });

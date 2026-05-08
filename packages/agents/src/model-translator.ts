@@ -30,6 +30,26 @@ export function createOpenAICompatibleTranslator(
         Object.assign(config, model.extraParams);
       }
 
+      if (model.reasoningEffort) {
+        config.reasoningEffort = model.reasoningEffort;
+      }
+
+      if (model.thinkingLevel) {
+        config.thinkingLevel = model.thinkingLevel;
+      }
+
+      if (model.thinkingBudgetTokens !== undefined) {
+        config.thinkingBudgetTokens = model.thinkingBudgetTokens;
+      }
+
+      if (model.thinking) {
+        config.thinking = model.thinking;
+      }
+
+      if (model.responseFormat) {
+        config.responseFormat = model.responseFormat;
+      }
+
       const envVars: Record<string, string> = {};
       const apiKeyEnv = model.apiKeyEnv ?? options?.apiKeyEnv;
       if (apiKeyEnv) {

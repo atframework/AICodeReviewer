@@ -56,8 +56,25 @@ function buildOpencodeProviderConfig(model: ModelSpec): Record<string, unknown> 
 		provider.options = model.extraParams;
 	}
 
+	const options: Record<string, unknown> = {
+		...(model.extraParams ?? {}),
+		...(model.reasoningEffort ? { reasoningEffort: model.reasoningEffort } : {}),
+		...(model.thinkingLevel ? { thinkingLevel: model.thinkingLevel } : {}),
+		...(model.thinkingBudgetTokens !== undefined ? { thinkingBudgetTokens: model.thinkingBudgetTokens } : {}),
+		...(model.thinking ? { thinking: model.thinking } : {}),
+		...(model.responseFormat ? { responseFormat: model.responseFormat } : {}),
+	};
+
+	if (Object.keys(options).length > 0) {
+		provider.options = options;
+	}
+
 	if (model.extraHeaders) {
 		provider.extraHeaders = model.extraHeaders;
+	}
+
+	if (model.extraBody) {
+		provider.extraBody = model.extraBody;
 	}
 
 	return provider;

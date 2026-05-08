@@ -72,8 +72,28 @@ function buildKiloProviderConfig(model: ModelSpec): Record<string, unknown> {
     provider.thinkingLevel = model.thinkingLevel;
   }
 
+  if (model.thinkingBudgetTokens !== undefined) {
+    provider.thinkingBudgetTokens = model.thinkingBudgetTokens;
+  }
+
+  if (model.reasoningEffort) {
+    provider.reasoningEffort = model.reasoningEffort;
+  }
+
+  if (model.thinking) {
+    provider.thinking = model.thinking;
+  }
+
   if (model.responseFormat) {
     provider.responseFormat = model.responseFormat;
+  }
+
+  if (model.toolChoice) {
+    provider.toolChoice = model.toolChoice;
+  }
+
+  if (model.parallelToolCalls !== undefined) {
+    provider.parallelToolCalls = model.parallelToolCalls;
   }
 
   return provider;

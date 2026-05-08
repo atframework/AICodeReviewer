@@ -8,7 +8,7 @@ import type { ChatCompletionClient, ModelSpec } from "@aicr/llm";
 import type { ReviewFinding } from "@aicr/outputs";
 import type { SandboxBackend, SandboxSpawnOptions } from "@aicr/sandbox";
 import { parseUnifiedDiff, type ChangeRange } from "@aicr/vcs";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   runReviewOrchestration,
@@ -762,7 +762,7 @@ describe("runReviewOrchestration error paths", () => {
     }
   });
 
-  it("throws when LLM output is not valid JSON", async () => {
+  it("treats non-JSON LLM output as a natural language summary", async () => {
     const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-bad-json-"));
 
     try {
@@ -778,23 +778,22 @@ describe("runReviewOrchestration error paths", () => {
         },
       };
 
-      await expect(
-        runReviewOrchestration(
-          {
-            reviewEvent: createReviewEventFixture(),
-            payload: {},
-            provider: "gitea",
-            eventName: "pull_request",
-          },
-          {
-            baseSystemPrompt: "<task>\n{{TASK_CONTEXT}}\n</task>",
-            sourceRootResolver: () => tempDir,
-            vcs: createVcs(tempDir),
-            llm,
-            model,
-          },
-        ),
-      ).rejects.toThrow(/not valid JSON/u);
+      const result = await runReviewOrchestration(
+        {
+          reviewEvent: createReviewEventFixture(),
+          payload: {},
+          provider: "gitea",
+          eventName: "pull_request",
+        },
+        {
+          baseSystemPrompt: "<task>\n{{TASK_CONTEXT}}\n</task>",
+          sourceRootResolver: () => tempDir,
+          vcs: createVcs(tempDir),
+          llm,
+          model,
+        },
+      );
+      expect(result.status).toBe("skipped");
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }
@@ -1113,7 +1112,7 @@ describe("runReviewOrchestration error paths", () => {
     }
   });
 
-  it("rejects LLM JSON output that is not an object", async () => {
+  it("treats non-object JSON LLM output as a natural language summary", async () => {
     const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-array-json-"));
 
     try {
@@ -1129,23 +1128,22 @@ describe("runReviewOrchestration error paths", () => {
         },
       };
 
-      await expect(
-        runReviewOrchestration(
-          {
-            reviewEvent: createReviewEventFixture(),
-            payload: {},
-            provider: "gitea",
-            eventName: "pull_request",
-          },
-          {
-            baseSystemPrompt: "<task>\n{{TASK_CONTEXT}}\n</task>",
-            sourceRootResolver: () => tempDir,
-            vcs: createVcs(tempDir),
-            llm,
-            model,
-          },
-        ),
-      ).rejects.toThrow(/must be an object/u);
+      const result = await runReviewOrchestration(
+        {
+          reviewEvent: createReviewEventFixture(),
+          payload: {},
+          provider: "gitea",
+          eventName: "pull_request",
+        },
+        {
+          baseSystemPrompt: "<task>\n{{TASK_CONTEXT}}\n</task>",
+          sourceRootResolver: () => tempDir,
+          vcs: createVcs(tempDir),
+          llm,
+          model,
+        },
+      );
+      expect(result.status).toBe("skipped");
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }
@@ -1369,6 +1367,57 @@ describe("runReviewOrchestration error paths", () => {
     }
   });
 
+  it("ignores invalid fetch_more_context tool calls without failing the review", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-invalid-fetch-more-"));
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    try {
+      await writeWorkspaceFile(tempDir, "src/app.ts", "const ok = true;\n");
+      const llm: ChatCompletionClient = {
+        async complete(input) {
+          return {
+            providerId: input.model.providerId,
+            modelId: input.model.modelId,
+            content: JSON.stringify({
+              toolCalls: [
+                {
+                  name: "aicr.fetch_more_context",
+                  input: { path: "", reason: "model requested context without selecting a file" },
+                },
+                { name: "aicr.skip", input: { reason: "lgtm" } },
+              ],
+            }),
+            raw: {},
+          };
+        },
+      };
+
+      const result = await runReviewOrchestration(
+        {
+          reviewEvent: createReviewEventFixture(),
+          payload: {},
+          provider: "gitea",
+          eventName: "push",
+        },
+        {
+          baseSystemPrompt: "<task>\n{{TASK_CONTEXT}}\n</task>",
+          sourceRootResolver: () => tempDir,
+          vcs: createVcs(tempDir),
+          llm,
+          model,
+        },
+      );
+
+      expect(result.status).toBe("skipped");
+      expect(result.skipReason).toBe("lgtm");
+      expect(result.contextRequestCount).toBe(0);
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("ignored invalid fetch_more_context tool call"));
+    } finally {
+      warnSpy.mockRestore();
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("omits the diff section when the VCS adapter does not implement diff()", async () => {
     const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-no-diff-"));
 
@@ -1412,6 +1461,54 @@ describe("runReviewOrchestration error paths", () => {
 
       expect(result.diffFileCount).toBe(0);
       expect(captured).toContain("Diff: (not available)");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("continues with changed paths when VCS diff fails", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-diff-fails-"));
+
+    try {
+      await writeWorkspaceFile(tempDir, "src/app.ts", "const ok = true;\n");
+      const vcs: DiffCapableVcsAdapter = {
+        ...createVcs(tempDir),
+        async diff() {
+          throw new Error("local history unavailable");
+        },
+      };
+      let captured = "";
+      const llm: ChatCompletionClient = {
+        async complete(input) {
+          captured = input.messages[0]?.content ?? "";
+          return {
+            providerId: input.model.providerId,
+            modelId: input.model.modelId,
+            content: JSON.stringify({ skipReason: "lgtm" }),
+            raw: {},
+          };
+        },
+      };
+
+      const result = await runReviewOrchestration(
+        {
+          reviewEvent: createReviewEventFixture(),
+          payload: {},
+          provider: "gitea",
+          eventName: "push",
+        },
+        {
+          baseSystemPrompt: "<task>\n{{TASK_CONTEXT}}\n</task>",
+          sourceRootResolver: () => tempDir,
+          vcs,
+          llm,
+          model,
+        },
+      );
+
+      expect(result.diffFileCount).toBe(0);
+      expect(captured).toContain("Diff: (not available)");
+      expect(result.status).toBe("skipped");
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }
@@ -1623,6 +1720,130 @@ describe("parseToolCalls with isPlainObject", () => {
 });
 
 describe("extractJsonPayload edge cases", () => {
+  it("ignores DeepSeek/Kimi-style <think> blocks and parses the final JSON object", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-think-json-"));
+
+    try {
+      await writeWorkspaceFile(tempDir, "src/app.ts", "const ok = true;\n");
+      const llm: ChatCompletionClient = {
+        async complete(input) {
+          return {
+            providerId: input.model.providerId,
+            modelId: input.model.modelId,
+            content: [
+              "<think>先看 {这里不是最终 JSON}，再输出结论。</think>",
+              JSON.stringify({
+                findings: [
+                  { file: "src/app.ts", line: 1, severity: "medium", category: "correctness", message: "Issue." },
+                ],
+              }),
+            ].join("\n"),
+            raw: {},
+          };
+        },
+      };
+
+      const result = await runReviewOrchestration(
+        {
+          reviewEvent: createReviewEventFixture(),
+          payload: {},
+          provider: "gitea",
+          eventName: "pull_request",
+        },
+        {
+          baseSystemPrompt: "<task>\n{{TASK_CONTEXT}}\n</task>",
+          sourceRootResolver: () => tempDir,
+          vcs: createVcs(tempDir),
+          llm,
+          model,
+        },
+      );
+
+      expect(result.findingCount).toBe(1);
+      expect(result.summaryCount).toBe(0);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("parses a JSON fence even when the model adds prose before the conclusion", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-fenced-json-prose-"));
+
+    try {
+      await writeWorkspaceFile(tempDir, "src/app.ts", "const ok = true;\n");
+      const llm: ChatCompletionClient = {
+        async complete(input) {
+          return {
+            providerId: input.model.providerId,
+            modelId: input.model.modelId,
+            content: "分析完成，最终结论如下：\n```json\n{\"summary\":\"没有发现问题\"}\n```",
+            raw: {},
+          };
+        },
+      };
+
+      const result = await runReviewOrchestration(
+        {
+          reviewEvent: createReviewEventFixture(),
+          payload: {},
+          provider: "gitea",
+          eventName: "pull_request",
+        },
+        {
+          baseSystemPrompt: "<task>\n{{TASK_CONTEXT}}\n</task>",
+          sourceRootResolver: () => tempDir,
+          vcs: createVcs(tempDir),
+          llm,
+          model,
+        },
+      );
+
+      expect(result.findingCount).toBe(0);
+      expect(result.summaryCount).toBe(1);
+      expect(result.outputState.summaries).toEqual(["没有发现问题"]);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("strips reasoning blocks from natural-language summary fallback", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-think-summary-"));
+
+    try {
+      await writeWorkspaceFile(tempDir, "src/app.ts", "const ok = true;\n");
+      const llm: ChatCompletionClient = {
+        async complete(input) {
+          return {
+            providerId: input.model.providerId,
+            modelId: input.model.modelId,
+            content: "<thinking>不应进入摘要</thinking>最终摘要",
+            raw: {},
+          };
+        },
+      };
+
+      const result = await runReviewOrchestration(
+        {
+          reviewEvent: createReviewEventFixture(),
+          payload: {},
+          provider: "gitea",
+          eventName: "pull_request",
+        },
+        {
+          baseSystemPrompt: "<task>\n{{TASK_CONTEXT}}\n</task>",
+          sourceRootResolver: () => tempDir,
+          vcs: createVcs(tempDir),
+          llm,
+          model,
+        },
+      );
+
+      expect(result.outputState.summaries).toEqual(["最终摘要"]);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("handles mixed-line toolCalls and alternative format together", async () => {
     const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-mixed-format-"));
 

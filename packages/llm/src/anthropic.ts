@@ -38,6 +38,32 @@ function extractAnthropicContent(raw: unknown): string {
 		.join("");
 }
 
+function extractAnthropicReasoningContent(raw: unknown): string | undefined {
+	if (!raw || typeof raw !== "object" || !("content" in raw) || !Array.isArray(raw.content)) {
+		return undefined;
+	}
+
+	const content = raw.content as unknown[];
+	const reasoning = content.flatMap((block) => {
+		if (!block || typeof block !== "object") {
+			return [];
+		}
+
+		const record = block as Record<string, unknown>;
+		if (record.type === "thinking" && typeof record.thinking === "string") {
+			return [record.thinking];
+		}
+
+		if (record.type === "redacted_thinking" && typeof record.data === "string") {
+			return [record.data];
+		}
+
+		return [];
+	});
+
+	return reasoning.length > 0 ? reasoning.join("\n") : undefined;
+}
+
 function extractAnthropicUsage(raw: unknown): ChatCompletionUsage | undefined {
 	if (!raw || typeof raw !== "object" || !("usage" in raw)) {
 		return undefined;
@@ -94,7 +120,7 @@ export function createAnthropicChatClient(options: AnthropicClientOptions = {}):
 
 			const body: Record<string, unknown> = {
 				model: input.model.modelId,
-				max_tokens: input.model.extraParams?.max_tokens ?? 4096,
+				max_tokens: input.maxTokens ?? input.model.extraParams?.max_tokens ?? 4096,
 				messages: conversationMessages.map((message) => ({
 					role: message.role === "assistant" ? "assistant" : "user",
 					content: message.content,
@@ -102,7 +128,7 @@ export function createAnthropicChatClient(options: AnthropicClientOptions = {}):
 				stream: false,
 				...(systemMessage !== undefined ? { system: systemMessage } : {}),
 				...(input.temperature !== undefined ? { temperature: input.temperature } : {}),
-				...(input.model.thinking
+				...(input.model.thinking?.enabled
 					? {
 						thinking: {
 							type: "enabled",
@@ -132,10 +158,12 @@ export function createAnthropicChatClient(options: AnthropicClientOptions = {}):
 
 			const raw = await response.json();
 			const usage = extractAnthropicUsage(raw);
+			const reasoningContent = extractAnthropicReasoningContent(raw);
 			return {
 				providerId: input.model.providerId,
 				modelId: input.model.modelId,
 				content: extractAnthropicContent(raw),
+				...(reasoningContent ? { reasoningContent } : {}),
 				...(usage ? { usage } : {}),
 				raw,
 			};

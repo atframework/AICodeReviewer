@@ -6,7 +6,7 @@ import { dirname, join } from "node:path";
 import type { ChatCompletionClient, ModelSpec } from "@aicr/llm";
 import type { ReviewFinding } from "@aicr/outputs";
 import { parseUnifiedDiff, type ChangeRange } from "@aicr/vcs";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { createServerApp } from "../src/index.js";
 
@@ -294,6 +294,90 @@ describe("createServerApp", () => {
       expect(published[0]?.fingerprint).toMatch(/^[0-9a-f]{16}$/u);
     } finally {
       await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("returns immediately in async trigger mode without waiting for LLM completion", async () => {
+    vi.useFakeTimers();
+    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => {});
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    try {
+      let llmCalled = false;
+      const model: ModelSpec = {
+        providerKind: "openai_compatible",
+        providerId: "openai-prod",
+        modelId: "gpt-test",
+      };
+      const llm: ChatCompletionClient = {
+        async complete() {
+          llmCalled = true;
+          return new Promise(() => {});
+        },
+      };
+      const app = createServerApp({
+        asyncTriggers: true,
+        gitea: {
+          triggerName: "gitea-internal",
+          workspaceId: "ws",
+          webhookSecret,
+        },
+        reviewOrchestration: {
+          baseSystemPrompt: "<task>{{TASK_CONTEXT}}</task>",
+          sourceRootResolver: () => "/tmp/not-used-before-response",
+          vcs: {
+            kind: "git",
+            async listChanges(): Promise<ChangeRange> {
+              throw new Error("listChanges should run in the background only");
+            },
+            async fetchScoped() {
+              throw new Error("fetchScoped should run in the background only");
+            },
+            async fetchExtraContext() {
+              throw new Error("fetchExtraContext should run in the background only");
+            },
+          },
+          llm,
+          model,
+        },
+      });
+      const payload = JSON.stringify({
+        action: "opened",
+        repository: { full_name: "owent/example" },
+        sender: { login: "owent" },
+        pull_request: {
+          html_url: "https://gitea.internal.corp/owent/example/pulls/42",
+          base: { sha: "base-sha" },
+          head: { sha: "head-sha" },
+        },
+      });
+
+      const response = await app.request("/webhooks/gitea", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-gitea-event": "pull_request",
+          "x-gitea-signature": sign(payload),
+        },
+        body: payload,
+      });
+      const body = (await response.json()) as {
+        accepted: boolean;
+        reviewRun?: unknown;
+        processing?: { mode?: string; status?: string; runId?: string };
+      };
+
+      expect(response.status).toBe(202);
+      expect(body.accepted).toBe(true);
+      expect(body.reviewRun).toBeUndefined();
+      expect(body.processing).toMatchObject({ mode: "background", status: "scheduled" });
+      expect(body.processing?.runId).toMatch(/^[0-9a-f-]{36}$/u);
+      expect(llmCalled).toBe(false);
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+      infoSpy.mockRestore();
+      errorSpy.mockRestore();
     }
   });
 
@@ -1233,5 +1317,148 @@ describe("createServerApp", () => {
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("P4 trigger endpoint", () => {
+  it("returns 503 when P4 trigger is not configured", async () => {
+    const app = createServerApp({});
+
+    const response = await app.request("/triggers/p4", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ change: "12345", user: "testuser" }),
+    });
+
+    expect(response.status).toBe(503);
+    const body = (await response.json()) as { accepted: boolean; reason: string };
+    expect(body.accepted).toBe(false);
+    expect(body.reason).toBe("trigger_not_configured");
+  });
+
+  it("accepts JSON P4 trigger payload", async () => {
+    const app = createServerApp({
+      p4: {
+        triggerName: "p4-main",
+        workspaceId: "p4-workspace",
+        depot: "//depot/main",
+      },
+    });
+
+    const payload = JSON.stringify({
+      change: "12345",
+      user: "testuser",
+      client: "testclient",
+      description: "Test commit",
+      files: ["//depot/main/src/foo.cpp", "//depot/main/src/bar.h"],
+    });
+
+    const response = await app.request("/triggers/p4", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: payload,
+    });
+
+    expect(response.status).toBe(202);
+    const body = (await response.json()) as {
+      accepted: boolean;
+      provider: string;
+      reviewEvent: { triggerName: string; provider: string; headSha: string; targetKind: string };
+    };
+    expect(body.accepted).toBe(true);
+    expect(body.provider).toBe("p4");
+    expect(body.reviewEvent.triggerName).toBe("p4-main");
+    expect(body.reviewEvent.provider).toBe("p4");
+    expect(body.reviewEvent.headSha).toBe("12345");
+    expect(body.reviewEvent.targetKind).toBe("commit");
+  });
+
+  it("accepts form-data P4 trigger payload", async () => {
+    const app = createServerApp({
+      p4: {
+        triggerName: "p4-main",
+        workspaceId: "p4-workspace",
+      },
+    });
+
+    const formData = new URLSearchParams();
+    formData.append("change", "67890");
+    formData.append("user", "testuser");
+    formData.append("client", "testclient");
+
+    const response = await app.request("/triggers/p4", {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: formData.toString(),
+    });
+
+    const body = (await response.json()) as Record<string, unknown>;
+    if (response.status !== 202) {
+      throw new Error(`Expected 202, got ${response.status}: ${JSON.stringify(body)}`);
+    }
+    expect(body.accepted).toBe(true);
+    expect((body.reviewEvent as Record<string, unknown>)?.headSha).toBe("67890");
+  });
+
+  it("returns 400 when changelist number is missing", async () => {
+    const app = createServerApp({
+      p4: {
+        triggerName: "p4-main",
+        workspaceId: "p4-workspace",
+      },
+    });
+
+    const response = await app.request("/triggers/p4", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ user: "testuser" }),
+    });
+
+    expect(response.status).toBe(400);
+    const body = (await response.json()) as { accepted: boolean; reason: string };
+    expect(body.accepted).toBe(false);
+    expect(body.reason).toBe("missing_changelist");
+  });
+
+  it("returns 400 for invalid JSON", async () => {
+    const app = createServerApp({
+      p4: {
+        triggerName: "p4-main",
+        workspaceId: "p4-workspace",
+      },
+    });
+
+    const response = await app.request("/triggers/p4", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "not-json",
+    });
+
+    expect(response.status).toBe(400);
+    const body = (await response.json()) as { accepted: boolean; reason: string };
+    expect(body.accepted).toBe(false);
+    expect(body.reason).toBe("invalid_json");
+  });
+
+  it("uses changelist alias field", async () => {
+    const app = createServerApp({
+      p4: {
+        triggerName: "p4-main",
+        workspaceId: "p4-workspace",
+      },
+    });
+
+    const response = await app.request("/triggers/p4", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ changelist: "99999" }),
+    });
+
+    expect(response.status).toBe(202);
+    const body = (await response.json()) as {
+      accepted: boolean;
+      reviewEvent: { headSha: string };
+    };
+    expect(body.reviewEvent.headSha).toBe("99999");
   });
 });

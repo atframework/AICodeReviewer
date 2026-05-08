@@ -25,6 +25,8 @@ import {
   summarizeReviewOrchestrationForWebhook,
 } from "@aicr/server";
 
+import { installFileLogTeeFromEnv } from "./log-file.js";
+
 const helpText = `AICodeReviewer CLI
 
 Usage:
@@ -147,6 +149,7 @@ export async function runCli(
   const cwd = resolve(options.cwd ?? process.cwd());
   const stdout = options.stdout ?? process.stdout;
   const stderr = options.stderr ?? process.stderr;
+  installFileLogTeeFromEnv();
   const logger = options.logger ?? createDefaultLogger({ serviceName: "aicr-cli" });
 
   const parsedArgs = (() => {

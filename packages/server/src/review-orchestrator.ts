@@ -77,7 +77,7 @@ export interface ServerReviewOrchestrationOptions {
   readonly baseSystemPrompt: string;
   readonly sourceRootResolver: (reviewEvent: ReviewEvent) => string | undefined;
   readonly vcs: DiffCapableVcsAdapter;
-  readonly vcsFactory?: (sourceRoot: string) => DiffCapableVcsAdapter;
+  readonly vcsFactory?: (sourceRoot: string, context: ReviewOrchestrationContext) => DiffCapableVcsAdapter;
   readonly llm: ChatCompletionClient;
   readonly model: ModelSpec;
   readonly outputPublisher?: ReviewOutputPublisher;
@@ -308,17 +308,90 @@ async function runAgentReview(
   };
 }
 
-function extractJsonPayload(content: string): unknown {
-  const trimmed = content.trim();
-  const fencedMatch = /^```(?:json)?\s*\n([\s\S]*?)\n```$/u.exec(trimmed);
-  const jsonText = fencedMatch?.[1] ?? trimmed;
+function stripReasoningBlocks(content: string): string {
+  return content
+    .replace(/<think\b[^>]*>[\s\S]*?<\/think>/giu, "")
+    .replace(/<thinking\b[^>]*>[\s\S]*?<\/thinking>/giu, "")
+    .replace(/<reasoning\b[^>]*>[\s\S]*?<\/reasoning>/giu, "");
+}
 
+function parseJsonCandidate(candidate: string): unknown | null {
   try {
-    return JSON.parse(jsonText) as unknown;
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    throw new TypeError(`LLM output was not valid JSON tool output: ${message}`);
+    return JSON.parse(candidate) as unknown;
+  } catch {
+    return null;
   }
+}
+
+function extractFencedJsonPayload(content: string): unknown | null {
+  const fenceRegex = /```(?:json)?\s*\n([\s\S]*?)\n```/giu;
+  let match: RegExpExecArray | null;
+  while ((match = fenceRegex.exec(content)) !== null) {
+    const parsed = parseJsonCandidate(match[1]!.trim());
+    if (parsed !== null) {
+      return parsed;
+    }
+  }
+
+  return null;
+}
+
+function extractBalancedJsonPayload(content: string): unknown | null {
+  for (let start = 0; start < content.length; start++) {
+    const open = content[start];
+    if (open !== "{" && open !== "[") {
+      continue;
+    }
+
+    const close = open === "{" ? "}" : "]";
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+
+    for (let index = start; index < content.length; index++) {
+      const char = content[index];
+
+      if (inString) {
+        if (escaped) {
+          escaped = false;
+        } else if (char === "\\") {
+          escaped = true;
+        } else if (char === "\"") {
+          inString = false;
+        }
+        continue;
+      }
+
+      if (char === "\"") {
+        inString = true;
+        continue;
+      }
+
+      if (char === open) {
+        depth += 1;
+      } else if (char === close) {
+        depth -= 1;
+        if (depth === 0) {
+          const parsed = parseJsonCandidate(content.slice(start, index + 1));
+          if (parsed !== null) {
+            return parsed;
+          }
+          break;
+        }
+      }
+    }
+  }
+
+  return null;
+}
+
+function extractJsonPayload(content: string): unknown {
+  const trimmed = stripReasoningBlocks(content).trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  return parseJsonCandidate(trimmed) ?? extractFencedJsonPayload(trimmed) ?? extractBalancedJsonPayload(trimmed);
 }
 
 function normalizeToolName(value: unknown): AicrOutputToolName {
@@ -382,14 +455,20 @@ function parseXmlToolCalls(content: string): ToolCallEnvelope[] | null {
 }
 
 function parseToolCalls(content: string): ToolCallEnvelope[] {
-  const xmlCalls = parseXmlToolCalls(content);
+  const toolContent = stripReasoningBlocks(content);
+  const xmlCalls = parseXmlToolCalls(toolContent);
   if (xmlCalls) {
     return xmlCalls;
   }
 
-  const payload = extractJsonPayload(content);
-  if (!isPlainObject(payload)) {
-    throw new TypeError("LLM JSON output must be an object.");
+  const payload = extractJsonPayload(toolContent);
+  if (payload === null || !isPlainObject(payload)) {
+    // LLM returned natural language — treat as a summary so the review is not lost
+    const text = toolContent.trim();
+    if (text.length > 0) {
+      return [{ name: "aicr.publish_summary", input: { markdown: text } }];
+    }
+    return [];
   }
 
   const toolCalls = (payload as { readonly toolCalls?: unknown }).toolCalls;
@@ -442,7 +521,20 @@ async function callAicrTools(
       throw new TypeError(`AICR tool ${toolCall.name} is not registered.`);
     }
 
-    await tool.call(toolCall.input);
+    try {
+      await tool.call(toolCall.input);
+    } catch (error) {
+      if (toolCall.name === "aicr.fetch_more_context") {
+        console.warn(JSON.stringify({
+          level: "warn",
+          msg: "ignored invalid fetch_more_context tool call",
+          error: error instanceof Error ? error.message : String(error),
+        }));
+        continue;
+      }
+
+      throw error;
+    }
   }
 }
 
@@ -518,18 +610,23 @@ export async function runReviewOrchestration(
     id: context.reviewEvent.workspaceId,
     sourceDir: sourceRoot,
   };
-  const vcs = options.vcsFactory ? options.vcsFactory(sourceRoot) : options.vcs;
+  const vcs = options.vcsFactory ? options.vcsFactory(sourceRoot, context) : options.vcs;
   const range = await vcs.listChanges(context.reviewEvent);
   const scopedTree = await vcs.fetchScoped(range, workspaceRef);
   const changedPaths = [
     ...(options.changedPathsResolver?.(context) ?? range.files ?? context.reviewEvent.changedFiles ?? []),
   ];
-  const diff = vcs.diff
-    ? await vcs.diff(
+  let diff: ParsedDiff | undefined;
+  if (vcs.diff) {
+    try {
+      diff = await vcs.diff(
         { ...range, files: changedPaths.length > 0 ? changedPaths : range.files },
         { contextLines: options.diffContextLines ?? 3 },
-      )
-    : undefined;
+      );
+    } catch {
+      diff = undefined;
+    }
+  }
   const rawTaskContext = options.taskContextBuilder?.(context.reviewEvent, changedPaths, diff) ??
     buildTaskContext(context.reviewEvent, changedPaths, diff);
 
