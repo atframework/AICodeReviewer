@@ -18,9 +18,31 @@
 - 队列/并发/限流和多事件路由的压力型测试仍可继续加强。
 - M0.5/M1/M2 验收留存项
 
-- LLM的baseURL请使用 `jq ".xiaomimimo_token_plan.baseURL"  ".vscode/secret.json"` 提。
-- LLM的token通过 `jq ".xiaomimimo_token_plan.token"  ".vscode/secret.json"` 提取。
-- gitea的token使用 `jq ".gitea.token"  ".vscode/secret.json"` 提取。
+- LLM的baseURL请使用 `jq ".xiaomimimo_token_plan.baseURL" ".vscode/secret.json"` 提。
+- LLM的token通过 `jq ".xiaomimimo_token_plan.token" ".vscode/secret.json"` 提取。
+- gitea环境提取方式如下:
+  - token使用 `jq ".gitea.token" ".vscode/secret.json"` 提取。
+  - webhook签名密钥: `jq ".gitea.webhook_secret" ".vscode/secret.json"`
+  - 关注的路径: `jq ".gitea.watch_path" ".vscode/secret.json"`
+  - 要分析(包含)的代码: `jq ".gitea.include_cr_file" ".vscode/secret.json"`
+  - 忽略(不包含)的代码: `jq ".gitea.exclude_cr_file" ".vscode/secret.json"`
+- p4环境提取方式如下:
+  - 用户名: `jq ".p4.username" ".vscode/secret.json"`
+  - 密码: `jq ".p4.password" ".vscode/secret.json"`
+  - Depot(Stream类型): `jq ".p4.depot_path" ".vscode/secret.json"`
+  - P4服务器地址: `jq ".p4.port" ".vscode/secret.json"`
+  - 当前工具使用的P4 Workspace名: `jq ".p4.workspace" ".vscode/secret.json"`
+  - P4 trigger签名密钥: `jq ".p4.webhook_secret" ".vscode/secret.json"` (预留，当前P4通过API Key保护)
+  - 关注的路径: `jq ".p4.watch_path" ".vscode/secret.json"`
+  - 要分析(包含)的代码: `jq ".p4.include_cr_file" ".vscode/secret.json"`
+  - 忽略(不包含)的代码: `jq ".p4.exclude_cr_file" ".vscode/secret.json"`
+  - 请确保p4拉取时仅仅拉取最小所需的代码，不要全仓库拉取。
+- 飞书机器人
+  - Webhook地址通过 `jq ".feishu_robot.webhook" ".vscode/secret.json"` 提取。
+  - token通过 `jq ".feishu_robot.token" ".vscode/secret.json"` 提取。
+- AICR服务端全局API Key: `jq ".aicr_server.api_key" ".vscode/secret.json"` 提取。
+  - 仅保护 /triggers/* 端点（P4 等），通过 X-API-Key 头或 Authorization: Bearer 头。
+  - /webhooks/* 端点（Gitea、GitHub、GitLab）使用 HMAC 签名验证，不经过 API Key。
 - 当前测试和验证的执行流程禁止提交token到任何API，仅允许通过命令行工具提取。
 - 注意所有的命令执行都要防止流程卡死（如果长时间无任何输出则要强制kill掉）。超时后需要先尝试清理之前卡住的进程。
 - 远程部署时，请使用 `ssh -p 36000 -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no -o User=tools -i D:/workspace/keys/id_ed25519.it 10.64.8.2` 连接远程服务器，部署到 `/data/disk2/AICodeReviewer` 目录。
@@ -37,8 +59,71 @@
     - baseURL: `".tencentcloud_coding_plan.baseURL" ".vscode/secret.json"` 提取, token: `".tencentcloud_coding_plan.token" ".vscode/secret.json"` 提取, 模型: kimi-k2.5
     - baseURL: `".aliyun_coding_plan.baseURL" ".vscode/secret.json"` 提取, token: `".aliyun_coding_plan.token" ".vscode/secret.json"` 提取, 模型: qwen3.6-plus
   - 已经设置CodeReview的仓库如下:
-    - <https://git.m-oa.com:6023/ProjectY/server>
-    - <https://git.m-oa.com:6023/ProjectY/pipeline>
-    - <https://git.m-oa.com:6023/ProjectY/robot>
-    - <https://git.m-oa.com:6023/ProjectX/server>
-    - <https://git.m-oa.com:6023/ProjectX/Pipeline>
+    - gitea: <https://git.m-oa.com:6023/ProjectY/server>
+    - gitea: <https://git.m-oa.com:6023/ProjectY/pipeline>
+    - gitea: <https://git.m-oa.com:6023/ProjectY/robot>
+    - gitea: <https://git.m-oa.com:6023/ProjectX/server>
+    - gitea: <https://git.m-oa.com:6023/ProjectX/Pipeline>
+    - p4: <ssl:p4.m-oa.com:8666>
+  - P4 trigger脚本: `example/p4-trigger.sh`
+    - 环境变量: `AICR_URL=https://aicr.m-oa.com:6023`, `AICR_API_KEY`
+    - `AICR_DEPOT_PATH` 可省略，默认使用 AICR 服务端 `config.yaml` 中 P4 trigger 的 `depot_path`；仅在脚本需要覆盖服务端配置时设置。
+
+## 密钥验证命令
+
+远程服务地址: `https://aicr.m-oa.com:6023` (反向代理 → `http://10.64.8.2:8090`)
+
+### 验证 healthz (无需认证)
+
+```bash
+curl -sf https://aicr.m-oa.com:6023/healthz
+# 预期输出: ok
+```
+
+### 验证 Gitea webhook — HMAC 签名（无 API Key）
+
+```bash
+# /webhooks/* 不需要 API Key，仅靠 HMAC 签名验证
+WEBHOOK_SECRET=$(jq -r ".gitea.webhook_secret" ".vscode/secret.json")
+BODY='{"action":"opened","number":1,"pull_request":{"title":"test"}}'
+SIGNATURE=$(echo -n "$BODY" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | awk '{print $NF}')
+
+# 不带签名 → 应返回 401
+curl -sf -X POST https://aicr.m-oa.com:6023/webhooks/gitea \
+  -H "Content-Type: application/json" \
+  -d "$BODY"
+# 预期: {"accepted":false,"reason":"invalid_signature",...}
+
+# 带签名 → 业务处理
+curl -sf -X POST https://aicr.m-oa.com:6023/webhooks/gitea \
+  -H "Content-Type: application/json" \
+  -H "x-gitea-signature-256: $SIGNATURE" \
+  -d "$BODY"
+# 预期: {"accepted":false,"reason":"..."} (业务拒绝，非401)
+```
+
+### 验证 P4 trigger — API Key 认证
+
+```bash
+AICR_KEY=$(jq -r ".aicr_server.api_key" ".vscode/secret.json")
+
+# 无密钥 → 应返回 401
+curl -sf -X POST https://aicr.m-oa.com:6023/triggers/p4 \
+  -H "Content-Type: application/json" \
+  -d '{"change":"99999","user":"testuser","depot_path":"//Prx/Prx_Main","files":["//Prx/Prx_Main/Client/Projects/test.cpp"]}'
+# 预期: {"error":"unauthorized",...}
+
+# 带正确密钥 → 应返回 202
+curl -sf -X POST https://aicr.m-oa.com:6023/triggers/p4 \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: $AICR_KEY" \
+  -d '{"change":"99999","user":"testuser","depot_path":"//Prx/Prx_Main","files":["//Prx/Prx_Main/Client/Projects/test.cpp"]}'
+# 预期: {"accepted":true,...} 或业务错误(非401)
+
+# 错误密钥 → 应返回 403
+curl -sf -X POST https://aicr.m-oa.com:6023/triggers/p4 \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: wrong-key" \
+  -d '{"change":"99999","user":"testuser","depot_path":"//Prx/Prx_Main","files":["//Prx/Prx_Main/Client/Projects/test.cpp"]}'
+# 预期: {"error":"forbidden",...}
+```

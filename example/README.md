@@ -50,7 +50,9 @@ docker run -d \
   --env-file example/.env \
   -p 8080:8080 \
   -v $(pwd)/example/config.yaml:/app/config.yaml:ro \
+  -v aicr-data:/app/data \
   -v aicr-workspaces:/app/workspaces \
+  -v aicr-logs:/app/logs \
   aicodereviewer
 ```
 
@@ -64,6 +66,123 @@ After the server is running, add a webhook to your Gitea repository:
 4. **Secret**: the same value as `AICR_WEBHOOK_SECRET` in your `.env`
 5. **Events**: check `Pull Request`
 6. Save
+
+---
+
+## Authentication & Secret Configuration
+
+AICodeReviewer supports **three layers** of authentication:
+
+| Layer             | Scope         | What it protects                                              | Config location                              |
+| ----------------- | ------------- | ------------------------------------------------------------- | -------------------------------------------- |
+| Webhook HMAC      | Per-trigger   | Verifies inbound webhook is from the real VCS (`/webhooks/*`) | `triggers[].webhook_secret_env`              |
+| Server API key    | Global        | Protects `/triggers/*` routes (P4, custom scripts, etc.)      | `server.auth.api_key_env`                    |
+| Workspace API key | Per-workspace | Same as server, but with workspace-specific keys              | `workspaces.instances.<id>.auth.api_key_env` |
+
+> **Important**: `/webhooks/*` routes (Gitea, GitHub, GitLab) are protected **only by HMAC**.
+> `/triggers/*` routes (P4, etc.) are protected by **API key**.
+> These two layers are independent — webhook HMAC and API key are never combined on the same request.
+
+### Layer 1: Webhook HMAC (per-trigger, recommended)
+
+Each trigger kind uses a specific verification mechanism:
+
+| Trigger kind            | Config field         | Mechanism        | HTTP header             | How to set on VCS side        |
+| ----------------------- | -------------------- | ---------------- | ----------------------- | ----------------------------- |
+| **gitea** / **forgejo** | `webhook_secret_env` | HMAC-SHA256      | `x-gitea-signature-256` | Gitea webhook → Secret field  |
+| **github**              | `webhook_secret_env` | HMAC-SHA256      | `x-hub-signature-256`   | GitHub webhook → Secret field |
+| **gitlab**              | `webhook_secret_env` | Token comparison | `x-gitlab-token`        | GitLab webhook → Secret token |
+| **p4**                  | `webhook_secret_env` | HMAC-SHA256      | `x-aicr-signature-256`  | p4-trigger.sh computes HMAC   |
+
+**Generate a secret:**
+
+```bash
+node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+```
+
+**Config example:**
+
+```yaml
+triggers:
+  - name: gitea
+    kind: gitea
+    webhook_secret_env: AICR_WEBHOOK_SECRET  # env var holding the secret
+```
+
+**If `webhook_secret_env` is omitted, webhook signature verification is skipped** (not recommended for production).
+
+### Layer 2: Server-level API key (triggers only, optional)
+
+Protects `/triggers/*` routes with a shared API key. VCS webhooks (`/webhooks/*`)
+are NOT affected — they use HMAC instead (see Layer 1).
+
+Callers of trigger endpoints must send `X-API-Key: <key>` or `Authorization: Bearer <key>`.
+
+```yaml
+server:
+  auth:
+    api_key_env: AICR_API_KEY    # env var holding the global API key
+    enabled: true                 # set false to temporarily disable
+```
+
+### Layer 3: Per-workspace API key (optional override)
+
+Individual workspaces can have their own API keys:
+
+```yaml
+workspaces:
+  instances:
+    my-repo:
+      source_repo: { trigger: gitea, repo: "org/repo" }
+      auth:
+        api_key_env: AICR_MY_REPO_API_KEY
+        enabled: true
+```
+
+Both global and workspace keys are accepted — a request is allowed if it matches **any** configured key.
+
+### P4 trigger script with API key
+
+The P4 trigger endpoint (`/triggers/p4`) requires an API key when `server.auth`
+is configured. Use the bundled `p4-trigger.sh`; it includes the `X-API-Key`
+header and does not run `p4 describe` by default:
+
+```bash
+export AICR_URL="http://<aicr-host>:8080"
+export AICR_API_KEY="<same value as server.auth.api_key_env>"
+
+/path/to/p4-trigger.sh 12345 submitter-user submitter-client
+```
+
+`AICR_DEPOT_PATH` is optional. Leave it unset to use the P4 `depot_path`
+configured in AICR server `config.yaml`; set it only when one script must
+override the server-side depot for a special case.
+
+Register the trigger with `%change% %user% %client%` so the script can forward
+submitter metadata without needing to query P4 from inside the p4d process.
+
+### Quick reference: which secrets go where
+
+```text
+┌─────────────────────────────────────────────────────────────────────────┐
+│ .env (environment variables — never committed to git)                   │
+│                                                                         │
+│ ── Inbound: Webhook HMAC secrets (protect /webhooks/*) ──              │
+│ AICR_WEBHOOK_SECRET=7f3a...        ← shared with Gitea webhook config  │
+│ AICR_GITHUB_WEBHOOK_SECRET=b2c1... ← shared with GitHub webhook config │
+│ AICR_GITLAB_WEBHOOK_SECRET=d4e5... ← shared with GitLab webhook config │
+│                                                                         │
+│ ── Inbound: API key (protects /triggers/* like P4) ──                  │
+│ AICR_API_KEY=c6d7e8f9...           ← p4-trigger.sh sends X-API-Key    │
+│                                                                         │
+│ ── Outbound: AICR calls external services ──                           │
+│ AICR_GITEA_TOKEN=4b5d...           ← AICR → Gitea API (post comments) │
+│ AICR_P4USER=p4-ci                  ← AICR → P4 server (fetch files)   │
+│ AICR_P4PASSWORD=vUF_...            ← AICR → P4 server (fetch files)   │
+│ AICR_FEISHU_SECRET=3Ob2...         ← AICR → Feishu API (send cards)   │
+│ AICR_LLM_API_KEY=sk-...            ← AICR → LLM API (completions)     │
+└─────────────────────────────────────────────────────────────────────────┘
+```
 
 ## File Reference
 
@@ -111,4 +230,249 @@ node packages/cli/dist/index.js review \
   --provider gitea \
   --source-root . \
   --dry-run
+```
+
+---
+
+## P4 (Perforce) Trigger Configuration
+
+AICodeReviewer supports Perforce change-commit triggers. When a changelist is
+submitted, P4 calls a script on the server that forwards the change details to
+the AICR server.
+
+### 1. Configure the P4 trigger in `config.yaml`
+
+```yaml
+triggers:
+  - name: p4-main
+    kind: p4
+    port: "ssl:perforce.corp:1666"       # P4 server address:port
+    user_env: AICR_P4USER                 # env var for P4 username
+    password_env: AICR_P4PASSWORD         # env var for P4 password or ticket
+    depot_path: "//depot/main"            # depot or stream path
+    workspace: "aicr-p4-main"             # P4 workspace/client name
+    # File filtering (all optional, omit = analyze everything)
+    watch_path:
+      - "src/"
+      - "include/"
+    include_cr_file:
+      - "**/*.cpp"
+      - "**/*.h"
+    exclude_cr_file:
+      - "**/*.gen.cpp"
+      - "**/*.pb.h"
+```
+
+Add a workspace that references the P4 trigger:
+
+```yaml
+workspaces:
+  instances:
+    p4-main:
+      source_repo:
+        trigger: p4-main
+        repo: "//depot/main"
+      outputs:
+        summary: [feishu-code-review]     # or any other output channel
+```
+
+### 2. File filtering fields
+
+All three fields are **optional**. When set, they work as a three-stage filter
+pipeline applied to the file list before code review:
+
+| Field             | Type       | Description                                                                |
+| ----------------- | ---------- | -------------------------------------------------------------------------- |
+| `watch_path`      | `string[]` | Only analyze files under these depot-relative sub-paths. Omit = all paths. |
+| `include_cr_file` | `string[]` | Glob patterns — a file **must match at least one** pattern to be analyzed. |
+| `exclude_cr_file` | `string[]` | Glob patterns — a file matching **any** pattern is **skipped**.            |
+
+**Filter pipeline**: `all changed files` → `watch_path filter` → `include filter` → `exclude filter` → `files to review`
+
+**Glob syntax**:
+
+- `**/*.cpp` — matches `foo.cpp`, `src/foo.cpp`, `a/b/c/foo.cpp` (any depth)
+- `*.md` — matches `readme.md` but NOT `docs/readme.md` (no directory traversal)
+- `src/**` — matches everything under `src/`
+- `**/*.pb.*` — matches `foo.pb.h`, `foo.pb.cc`, etc.
+
+**Example** — only review C++/C# source files, excluding generated protobuf code:
+
+```yaml
+watch_path:
+  - "Client/Projects"
+include_cr_file:
+  - "*.h"
+  - "*.hpp"
+  - "*.cpp"
+  - "*.cc"
+  - "*.cs"
+exclude_cr_file:
+  - "*.pb.h"
+  - "*.pb.cc"
+  - "*.pb.go"
+```
+
+### 3. Register the trigger on the P4 server
+
+Run `p4 triggers` and add an entry:
+
+```text
+aicr-review change-commit //depot/main/... "/path/to/p4-trigger.sh %change% %user% %client%"
+```
+
+### 4. Create the trigger script
+
+Copy [`p4-trigger.sh`](p4-trigger.sh) to the **P4 server host** (not inside the
+AICR container) and make it executable:
+
+```bash
+cp example/p4-trigger.sh /path/to/p4-trigger.sh
+chmod +x /path/to/p4-trigger.sh
+```
+
+Set these environment variables on the P4 server:
+
+| Variable                | Required | Description                                                                                                                                     |
+| ----------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `AICR_URL`              | Yes      | AICR server address, e.g. `http://10.64.8.2:8090`                                                                                                |
+| `AICR_API_KEY`          | Yes      | Must match `server.auth.api_key_env` in `config.yaml`                                                                                            |
+| `AICR_DEPOT_PATH`       | No       | Optional depot path override. Leave unset to use the server-side P4 trigger `depot_path` from `config.yaml`.                                    |
+| `AICR_P4_COLLECT_FILES` | No       | Default `0`. Keep disabled so the p4d trigger does not run `p4 describe` and does not require local `p4 trust`.                                  |
+| `AICR_P4PORT`           | No       | Required only when `AICR_P4_COLLECT_FILES=1`; must be explicit, e.g. `ssl:p4.example.com:1666`.                                                  |
+| `AICR_P4USER`           | No       | Optional user override for `AICR_P4_COLLECT_FILES=1`; otherwise the script uses trigger `%user%`, then `P4USER`, but never implicit OS `root`.    |
+| `AICR_P4CLIENT`         | No       | Optional client override for `AICR_P4_COLLECT_FILES=1`; otherwise the script uses trigger `%client%`, then `P4CLIENT`.                           |
+| `AICR_P4PASSWD`         | No       | Optional password or ticket for `AICR_P4_COLLECT_FILES=1`; use only with an explicit service user if your P4 security level requires login.       |
+| `AICR_P4_AUTO_TRUST`    | No       | Optional `1`/`true` for the opt-in file collection mode; default `0`. Otherwise run `p4 trust` once as the trigger OS user.                      |
+
+The script:
+
+1. Posts the changelist number, user, client, and optional depot path to `/triggers/p4`
+2. Does **not** run `p4 describe` by default, preventing p4d-side SSL trust prompts from blocking submits
+3. Lets AICR fetch changelist details and files using the P4 connection configured in `config.yaml`
+4. Logs failures locally and exits successfully so the async reviewer never blocks the submit/commit path
+
+<details>
+<summary>Full script source (p4-trigger.sh)</summary>
+
+See [`p4-trigger.sh`](p4-trigger.sh). The script body is intentionally kept in
+one file to avoid documentation drift.
+
+</details>
+
+### 5. Test manually
+
+```bash
+# Without API key (will fail if server.auth is enabled):
+curl -X POST http://localhost:8080/triggers/p4 \
+  -H "Content-Type: application/json" \
+  -d '{"change":"12345","user":"testuser","depot_path":"//depot/main","files":["//depot/main/src/main.cpp"]}'
+
+# With API key:
+curl -X POST http://localhost:8080/triggers/p4 \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: YOUR_API_KEY" \
+  -d '{"change":"12345","user":"testuser","depot_path":"//depot/main","files":["//depot/main/src/main.cpp"]}'
+```
+
+A successful response returns `{"accepted": true, ...}`.
+
+---
+
+## Feishu (飞书) Bot Configuration
+
+AICodeReviewer can push aggregated review findings to a Feishu group via a
+custom bot webhook.
+
+### 1. Create a custom bot in Feishu
+
+1. Open the target group → **Settings** → **Group Bots** → **Add Bot** →
+   **Custom Bot**
+2. Set the bot name and avatar
+3. Copy the **webhook URL** (format: `https://open.feishu.cn/open-apis/bot/v2/hook/...`)
+4. If you enable **signature verification** (recommended), copy the signing
+   secret shown in the bot settings
+5. Click **Save**
+
+### 2. Set environment variables
+
+```bash
+# Required
+export AICR_FEISHU_WEBHOOK="https://open.feishu.cn/open-apis/bot/v2/hook/xxxxxxxx"
+
+# Required if signature verification is enabled in Feishu bot settings
+export AICR_FEISHU_SECRET="your-signing-secret"
+```
+
+### 3. Configure the output channel
+
+```yaml
+outputs:
+  channels:
+    - name: feishu-code-review
+      kind: feishu_bot
+      webhook_url_env: AICR_FEISHU_WEBHOOK   # env var with the webhook URL
+      secret_env: AICR_FEISHU_SECRET          # env var with signing secret (required if bot has signature verification)
+      mention_author: true                     # @-mention the commit author
+      mention_fallback: skip                  # what to do if author can't be resolved: "all" | "skip"
+```
+
+### 4. Route review events to Feishu
+
+Use `outputs.routes` to direct specific triggers to the Feishu channel:
+
+```yaml
+outputs:
+  routes:
+    default:
+      line_comments: [gitea-pr-review]
+      summary: [gitea-pr-review]
+    rules:
+      # Route P4 commits to Feishu
+      - match:
+          trigger: p4-main
+          target_kind: commit
+        summary: [feishu-code-review]
+```
+
+Or route at the workspace level:
+
+```yaml
+workspaces:
+  instances:
+    p4-main:
+      source_repo:
+        trigger: p4-main
+        repo: "//depot/main"
+      outputs:
+        summary: [feishu-code-review]
+```
+
+### 5. Signature verification notes
+
+When signature verification is enabled on the Feishu bot, every request must
+include a `timestamp` and `sign` field. AICodeReviewer computes the signature
+automatically using the secret from `secret_env`. The algorithm is:
+
+```text
+string_to_sign = timestamp + "\n" + secret
+signature = Base64(HMAC-SHA256(key=string_to_sign, message=""))
+```
+
+If you see error `19021: sign match fail`, verify that the `secret_env` value
+matches the signing secret shown in the Feishu bot configuration page.
+
+---
+
+## WeCom (企业微信) Bot Configuration
+
+Similar to Feishu, add a WeCom group bot and configure:
+
+```yaml
+outputs:
+  channels:
+    - name: wecom-ops
+      kind: wecom_bot
+      webhook_url_env: AICR_WECOM_WEBHOOK
+      mentioned_mobile_list: ["+86-13800138000"]   # optional: @ specific users
 ```

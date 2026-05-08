@@ -23,10 +23,10 @@ export const reviewTargetKindSchema = z.enum([
 export const reviewActorSchema = z
   .object({
     username: z.string().min(1).optional(),
-    email: z.string().email().optional(),
+    email: z.string().min(1).optional(),
     displayName: z.string().min(1).optional(),
   })
-  .strict();
+  .passthrough();
 
 export const reviewEventSchema = z
   .object({

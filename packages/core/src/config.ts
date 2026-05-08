@@ -110,6 +110,9 @@ const triggerSchema = z
   .object({
     name: z.string().min(1),
     kind: z.enum(["gitea", "forgejo", "github", "gitlab", "p4", "svn", "scheduled", "manual"]),
+    watch_path: z.array(z.string().min(1)).optional(),
+    include_cr_file: z.array(z.string().min(1)).optional(),
+    exclude_cr_file: z.array(z.string().min(1)).optional(),
   })
   .passthrough();
 
@@ -256,6 +259,13 @@ const workspaceInstanceSchema = z
       .optional(),
     sandbox: sandboxSchema.optional(),
     triage: triageSchema.optional(),
+    auth: z
+      .object({
+        api_key_env: z.string().min(1).optional(),
+        enabled: z.boolean().default(true),
+      })
+      .passthrough()
+      .optional(),
   })
   .strict();
 
@@ -271,6 +281,14 @@ const trustProxyValueSchema: z.ZodType<
   z.array(z.string().min(1)),
 ]);
 
+const authSchema = z
+  .object({
+    api_key_env: z.string().min(1).optional(),
+    enabled: z.boolean().default(true),
+  })
+  .passthrough()
+  .optional();
+
 const serverSchema = z
   .object({
     port: z.number().int().positive().default(8080),
@@ -278,6 +296,7 @@ const serverSchema = z
     trust_proxy: trustProxyValueSchema.default(false),
     base_url: z.string().min(1).optional(),
     path_prefix: z.string().min(1).optional(),
+    auth: authSchema,
   })
   .passthrough()
   .default({ port: 8080, hostname: "0.0.0.0", trust_proxy: false });

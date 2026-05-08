@@ -90,6 +90,89 @@ describe("createOpenAICompatibleChatClient", () => {
     ).resolves.toMatchObject({ content: "part one part two" });
   });
 
+  it("keeps DeepSeek/Kimi/GLM-style reasoning_content separate from final content", async () => {
+    const client = createOpenAICompatibleChatClient({
+      fetch: async () =>
+        jsonResponse({
+          choices: [
+            {
+              message: {
+                reasoning_content: "先分析改动影响，再生成结论。",
+                content: '{"skipReason":"lgtm"}',
+              },
+            },
+          ],
+        }),
+    });
+
+    const result = await client.complete({
+      model: { providerKind: "openai_compatible", providerId: "deepseek", modelId: "deepseek-v4-pro" },
+      messages: [{ role: "user", content: "review" }],
+    });
+
+    expect(result.content).toBe('{"skipReason":"lgtm"}');
+    expect(result.reasoningContent).toBe("先分析改动影响，再生成结论。");
+  });
+
+  it("separates thought parts from final text in OpenAI-compatible multimodal content", async () => {
+    const client = createOpenAICompatibleChatClient({
+      fetch: async () =>
+        jsonResponse({
+          choices: [
+            {
+              message: {
+                content: [
+                  { type: "reasoning", text: "内部推理", thought: true },
+                  { type: "text", text: '{"summary":"结论"}' },
+                ],
+              },
+            },
+          ],
+        }),
+    });
+
+    const result = await client.complete({
+      model: { providerKind: "openai_compatible", providerId: "glm", modelId: "glm-5.1" },
+      messages: [{ role: "user", content: "review" }],
+    });
+
+    expect(result.content).toBe('{"summary":"结论"}');
+    expect(result.reasoningContent).toBe("内部推理");
+  });
+
+  it("converts OpenAI function tool calls to AICR JSON toolCalls when content is empty", async () => {
+    const client = createOpenAICompatibleChatClient({
+      fetch: async () =>
+        jsonResponse({
+          choices: [
+            {
+              message: {
+                content: null,
+                tool_calls: [
+                  {
+                    type: "function",
+                    function: {
+                      name: "aicr.publish_summary",
+                      arguments: '{"markdown":"工具结论"}',
+                    },
+                  },
+                ],
+              },
+            },
+          ],
+        }),
+    });
+
+    const result = await client.complete({
+      model: { providerKind: "openai_compatible", providerId: "openai", modelId: "gpt-4.1" },
+      messages: [{ role: "user", content: "review" }],
+    });
+
+    expect(JSON.parse(result.content)).toEqual({
+      toolCalls: [{ name: "aicr.publish_summary", input: { markdown: "工具结论" } }],
+    });
+  });
+
   it("throws provider errors with retry-after details", async () => {
     const client = createOpenAICompatibleChatClient({
       fetch: async () => ({
@@ -246,6 +329,79 @@ describe("createOpenAICompatibleChatClient", () => {
     const body = JSON.parse(calls[0]?.init?.body ?? "{}");
     expect(body.top_p).toBe(0.9);
     expect(body.user).toBe("test-user");
+  });
+
+  it("passes reasoning and structured-output parameters for GPT-compatible providers", async () => {
+    const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
+    const client = createOpenAICompatibleChatClient({
+      fetch: async (url, init) => {
+        calls.push({ url, init });
+        return jsonResponse({ choices: [{ message: { content: "ok" } }] });
+      },
+      apiKeyResolver: () => "key",
+    });
+
+    await client.complete({
+      model: {
+        ...model,
+        reasoningEffort: "high",
+        responseFormat: {
+          kind: "json_schema",
+          schema: {
+            type: "object",
+            properties: { summary: { type: "string" } },
+            required: ["summary"],
+            additionalProperties: false,
+          },
+        },
+        toolChoice: { name: "aicr.publish_summary" },
+        parallelToolCalls: false,
+        seed: 123,
+        logitBias: { "42": -1 },
+      },
+      messages: [{ role: "user", content: "hi" }],
+    });
+
+    const body = JSON.parse(calls[0]?.init?.body ?? "{}");
+    expect(body.reasoning_effort).toBe("high");
+    expect(body.response_format).toMatchObject({
+      type: "json_schema",
+      json_schema: { name: "aicr_review_result", strict: true },
+    });
+    expect(body.tool_choice).toEqual({ type: "function", function: { name: "aicr.publish_summary" } });
+    expect(body.parallel_tool_calls).toBe(false);
+    expect(body.seed).toBe(123);
+    expect(body.logit_bias).toEqual({ "42": -1 });
+  });
+
+  it("supports dropParams and allowedOpenaiParams for provider-specific compatibility", async () => {
+    const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
+    const client = createOpenAICompatibleChatClient({
+      fetch: async (url, init) => {
+        calls.push({ url, init });
+        return jsonResponse({ choices: [{ message: { content: "ok" } }] });
+      },
+      apiKeyResolver: () => "key",
+    });
+
+    await client.complete({
+      model: {
+        ...model,
+        reasoningEffort: "medium",
+        responseFormat: { kind: "json_object" },
+        extraParams: { top_p: 0.8 },
+        dropParams: ["top_p"],
+        allowedOpenaiParams: ["reasoning_effort"],
+      },
+      messages: [{ role: "user", content: "hi" }],
+      temperature: 0.1,
+    });
+
+    const body = JSON.parse(calls[0]?.init?.body ?? "{}");
+    expect(body.reasoning_effort).toBe("medium");
+    expect(body).not.toHaveProperty("top_p");
+    expect(body).not.toHaveProperty("temperature");
+    expect(body).not.toHaveProperty("response_format");
   });
 
   it("uses the default OpenAI base URL when none is specified", async () => {

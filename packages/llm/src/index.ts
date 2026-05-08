@@ -78,6 +78,7 @@ export interface ChatCompletionResult {
 	readonly providerId: string;
 	readonly modelId: string;
 	readonly content: string;
+	readonly reasoningContent?: string;
 	readonly usage?: ChatCompletionUsage;
 	readonly raw: unknown;
 }
@@ -182,7 +183,129 @@ function buildHeaders(
 	return headers;
 }
 
-function extractContent(raw: unknown): string {
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function firstStringField(value: Record<string, unknown>, keys: readonly string[]): string | undefined {
+	for (const key of keys) {
+		const candidate = value[key];
+		if (typeof candidate === "string") {
+			return candidate;
+		}
+	}
+
+	return undefined;
+}
+
+function collectReasoningValue(value: unknown): string[] {
+	if (typeof value === "string" && value.length > 0) {
+		return [value];
+	}
+
+	if (Array.isArray(value)) {
+		return value.flatMap((entry) => collectReasoningValue(entry));
+	}
+
+	if (!isRecord(value)) {
+		return [];
+	}
+
+	const text = firstStringField(value, [
+		"text",
+		"content",
+		"reasoning",
+		"reasoning_content",
+		"reasoningContent",
+		"thinking",
+		"thought",
+	]);
+
+	return text ? [text] : [];
+}
+
+function isReasoningContentPart(part: Record<string, unknown>): boolean {
+	const type = typeof part.type === "string" ? part.type.toLowerCase() : "";
+	return part.thought === true || part.is_thought === true || /reason|think|thought/u.test(type);
+}
+
+function extractTextFromContentPart(part: unknown): string | undefined {
+	if (typeof part === "string") {
+		return part;
+	}
+
+	if (!isRecord(part)) {
+		return undefined;
+	}
+
+	return firstStringField(part, ["text", "content", "output_text", "reasoning", "thinking"]);
+}
+
+function extractContentParts(content: unknown): { readonly content: string; readonly reasoningContent?: string } {
+	if (typeof content === "string") {
+		return { content };
+	}
+
+	if (content === null || content === undefined) {
+		return { content: "" };
+	}
+
+	if (Array.isArray(content)) {
+		const finalText: string[] = [];
+		const reasoningText: string[] = [];
+		for (const part of content) {
+			const text = extractTextFromContentPart(part);
+			if (text === undefined) {
+				continue;
+			}
+
+			if (isRecord(part) && isReasoningContentPart(part)) {
+				reasoningText.push(text);
+			} else {
+				finalText.push(text);
+			}
+		}
+
+		return {
+			content: finalText.join(""),
+			...(reasoningText.length > 0 ? { reasoningContent: reasoningText.join("\n") } : {}),
+		};
+	}
+
+	throw new LlmProviderError("OpenAI-compatible response message content is not text.");
+}
+
+function extractToolCallsAsJson(toolCalls: unknown): string | undefined {
+	if (!Array.isArray(toolCalls) || toolCalls.length === 0) {
+		return undefined;
+	}
+
+	const translated = toolCalls.flatMap((entry) => {
+		if (!isRecord(entry) || !isRecord(entry.function)) {
+			return [];
+		}
+
+		const name = typeof entry.function.name === "string" ? entry.function.name : undefined;
+		if (!name) {
+			return [];
+		}
+
+		let input: unknown = {};
+		if (typeof entry.function.arguments === "string" && entry.function.arguments.trim()) {
+			try {
+				input = JSON.parse(entry.function.arguments) as unknown;
+			} catch {
+				input = { arguments: entry.function.arguments };
+			}
+		}
+
+		return [{ name, input }];
+	});
+
+	return translated.length > 0 ? JSON.stringify({ toolCalls: translated }) : undefined;
+}
+
+function extractContent(raw: unknown): { readonly content: string; readonly reasoningContent?: string } {
 	if (!raw || typeof raw !== "object" || !("choices" in raw) || !Array.isArray(raw.choices)) {
 		throw new LlmProviderError("OpenAI-compatible response did not include choices[].");
 	}
@@ -193,27 +316,146 @@ function extractContent(raw: unknown): string {
 	}
 
 	const message = firstChoice.message as unknown;
-	if (!message || typeof message !== "object" || !("content" in message)) {
+	if (!isRecord(message)) {
+		throw new LlmProviderError("OpenAI-compatible response did not include choices[0].message.");
+	}
+
+	if (!("content" in message) && !("tool_calls" in message)) {
 		throw new LlmProviderError("OpenAI-compatible response did not include message content.");
 	}
 
-	const content = (message as { content: unknown }).content;
-	if (typeof content === "string") {
-		return content;
+	const extracted = extractContentParts(message.content);
+	const toolCallContent = extracted.content ? undefined : extractToolCallsAsJson(message.tool_calls);
+	const reasoningText = [
+		...collectReasoningValue(message.reasoning_content),
+		...collectReasoningValue(message.reasoningContent),
+		...collectReasoningValue(message.reasoning),
+		...collectReasoningValue(message.thinking),
+		...collectReasoningValue(message.thought),
+		...collectReasoningValue(message.reasoning_details),
+		...collectReasoningValue(message.reasoningDetails),
+		...(extracted.reasoningContent ? [extracted.reasoningContent] : []),
+	];
+
+	return {
+		content: toolCallContent ?? extracted.content,
+		...(reasoningText.length > 0 ? { reasoningContent: reasoningText.join("\n") } : {}),
+	};
+}
+
+function buildResponseFormat(format: ModelSpec["responseFormat"]): Record<string, unknown> | undefined {
+	if (!format) {
+		return undefined;
 	}
 
-	if (Array.isArray(content)) {
-		return content
-			.flatMap((part) => {
-				if (part && typeof part === "object" && "text" in part && typeof part.text === "string") {
-					return [part.text];
-				}
-				return [];
-			})
-			.join("");
+	if (format.kind === "text") {
+		return { type: "text" };
 	}
 
-	throw new LlmProviderError("OpenAI-compatible response message content is not text.");
+	if (format.kind === "json_object") {
+		return { type: "json_object" };
+	}
+
+	const schema = format.schema;
+	if (isRecord(schema) && typeof schema.name === "string" && schema.schema !== undefined) {
+		return { type: "json_schema", json_schema: schema };
+	}
+
+	return {
+		type: "json_schema",
+		json_schema: {
+			name: "aicr_review_result",
+			strict: true,
+			schema: schema ?? {},
+		},
+	};
+}
+
+function thinkingLevelToReasoningEffort(level: ModelSpec["thinkingLevel"]): ModelSpec["reasoningEffort"] | undefined {
+	switch (level) {
+		case "minimal":
+			return "minimal";
+		case "low":
+			return "low";
+		case "medium":
+			return "medium";
+		case "high":
+		case "max":
+			return "high";
+		case "off":
+		case undefined:
+			return undefined;
+	}
+}
+
+function normalizeToolChoice(toolChoice: ModelSpec["toolChoice"]): unknown {
+	if (!toolChoice) {
+		return undefined;
+	}
+
+	if (typeof toolChoice === "string") {
+		return toolChoice;
+	}
+
+	return { type: "function", function: { name: toolChoice.name } };
+}
+
+function applyOpenAIParamFilters(body: Record<string, unknown>, model: ModelSpec): Record<string, unknown> {
+	const filtered = { ...body };
+	for (const param of model.dropParams ?? []) {
+		delete filtered[param];
+	}
+
+	if (model.allowedOpenaiParams && model.allowedOpenaiParams.length > 0) {
+		const alwaysAllowed = new Set(["model", "messages", "stream"]);
+		const allowed = new Set([...model.allowedOpenaiParams, ...alwaysAllowed]);
+		for (const key of Object.keys(filtered)) {
+			if (!allowed.has(key)) {
+				delete filtered[key];
+			}
+		}
+	}
+
+	return filtered;
+}
+
+function buildOpenAICompatibleBody(input: ChatCompletionInput): Record<string, unknown> {
+	const responseFormat = buildResponseFormat(input.model.responseFormat);
+	const reasoningEffort = input.model.reasoningEffort ?? thinkingLevelToReasoningEffort(input.model.thinkingLevel);
+	const toolChoice = normalizeToolChoice(input.model.toolChoice);
+	const thinking = input.model.thinking;
+	const body: Record<string, unknown> = {
+		model: input.model.modelId,
+		messages: input.messages.map((message) => ({
+			role: message.role,
+			content: message.content,
+			...(message.name ? { name: message.name } : {}),
+		})),
+		stream: false,
+		...(input.temperature !== undefined ? { temperature: input.temperature } : {}),
+		...(input.maxTokens !== undefined ? { max_tokens: input.maxTokens } : {}),
+		...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}),
+		...(input.model.thinkingBudgetTokens !== undefined
+			? { thinking_budget_tokens: input.model.thinkingBudgetTokens }
+			: {}),
+		...(thinking
+			? {
+				thinking: {
+					enabled: thinking.enabled,
+					...(thinking.budgetTokens !== undefined ? { budget_tokens: thinking.budgetTokens } : {}),
+				},
+			}
+			: {}),
+		...(responseFormat ? { response_format: responseFormat } : {}),
+		...(toolChoice !== undefined ? { tool_choice: toolChoice } : {}),
+		...(input.model.parallelToolCalls !== undefined ? { parallel_tool_calls: input.model.parallelToolCalls } : {}),
+		...(input.model.seed !== undefined ? { seed: input.model.seed } : {}),
+		...(input.model.logitBias ? { logit_bias: input.model.logitBias } : {}),
+		...(input.model.extraParams ?? {}),
+		...(input.model.extraBody ?? {}),
+	};
+
+	return applyOpenAIParamFilters(body, input.model);
 }
 
 function extractUsage(raw: unknown): ChatCompletionUsage | undefined {
@@ -265,6 +507,9 @@ export {
 import { createAnthropicChatClient } from "./anthropic.js";
 export { createAnthropicChatClient } from "./anthropic.js";
 export type { AnthropicClientOptions } from "./anthropic.js";
+import { createGoogleAiStudioChatClient } from "./google-ai-studio.js";
+export { createGoogleAiStudioChatClient } from "./google-ai-studio.js";
+export type { GoogleAiStudioClientOptions } from "./google-ai-studio.js";
 
 export function createOpenAICompatibleChatClient(
 	options: OpenAICompatibleClientOptions = {},
@@ -275,19 +520,7 @@ export function createOpenAICompatibleChatClient(
 	return {
 		async complete(input: ChatCompletionInput): Promise<ChatCompletionResult> {
 			const baseUrl = normalizeBaseUrl(input.model);
-			const body = {
-				model: input.model.modelId,
-				messages: input.messages.map((message) => ({
-					role: message.role,
-					content: message.content,
-					...(message.name ? { name: message.name } : {}),
-				})),
-				stream: false,
-				...(input.temperature !== undefined ? { temperature: input.temperature } : {}),
-				...(input.maxTokens !== undefined ? { max_tokens: input.maxTokens } : {}),
-				...(input.model.extraParams ?? {}),
-				...(input.model.extraBody ?? {}),
-			};
+			const body = buildOpenAICompatibleBody(input);
 			const response = await fetchImpl(`${baseUrl}/chat/completions`, {
 				method: "POST",
 				headers: buildHeaders(input.model, apiKeyResolver),
@@ -307,10 +540,12 @@ export function createOpenAICompatibleChatClient(
 
 			const raw = await response.json();
 			const usage = extractUsage(raw);
+			const extracted = extractContent(raw);
 			return {
 				providerId: input.model.providerId,
 				modelId: input.model.modelId,
-				content: extractContent(raw),
+				content: extracted.content,
+				...(extracted.reasoningContent ? { reasoningContent: extracted.reasoningContent } : {}),
 				...(usage ? { usage } : {}),
 				raw,
 			};
@@ -350,12 +585,13 @@ export function createChatClientFromModelSpec(model: ModelSpec): ChatCompletionC
 		}
 		case "anthropic":
 			return createAnthropicChatClient();
+		case "google_ai_studio":
+			return createGoogleAiStudioChatClient();
 		case "vertex_ai":
 		case "bedrock":
-		case "google_ai_studio":
 		case "copilot":
 			throw new TypeError(
-				`Provider kind "${model.providerKind}" is not yet supported. Only openai_compatible, ollama, azure_openai, and anthropic are implemented.`,
+				`Provider kind "${model.providerKind}" is not yet supported. Only openai_compatible, ollama, azure_openai, anthropic, and google_ai_studio are implemented.`,
 			);
 	}
 }

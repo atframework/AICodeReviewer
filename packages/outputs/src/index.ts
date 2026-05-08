@@ -816,15 +816,15 @@ export interface FeishuBotDispatcher {
 
 async function computeFeishuSign(timestamp: number, secret: string): Promise<string> {
 	const encoder = new TextEncoder();
+	const stringToSign = `${timestamp}\n${secret}`;
 	const key = await crypto.subtle.importKey(
 		"raw",
-		encoder.encode(secret),
+		encoder.encode(stringToSign),
 		{ name: "HMAC", hash: "SHA-256" },
 		false,
 		["sign"],
 	);
-	const message = `${timestamp}\n${secret}`;
-	const signature = await crypto.subtle.sign("HMAC", key, encoder.encode(message));
+	const signature = await crypto.subtle.sign("HMAC", key, encoder.encode(""));
 	return btoa(String.fromCharCode(...new Uint8Array(signature)));
 }
 

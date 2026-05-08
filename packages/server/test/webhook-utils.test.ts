@@ -135,6 +135,10 @@ describe("translateWebhookToReviewEvent", () => {
         compare_url: "https://gitea.example.com/owent/example/compare/abc123...def456",
         repository: { full_name: "owent/example" },
         pusher: { login: "pusher-user", email: "pusher@example.com" },
+        commits: [
+          { added: ["src/new.ts"], modified: ["src/app.ts"], removed: ["src/old.ts"] },
+        ],
+        head_commit: { modified: ["src/app.ts", "README.md"] },
       },
       config,
     );
@@ -146,6 +150,7 @@ describe("translateWebhookToReviewEvent", () => {
       "https://gitea.example.com/owent/example/compare/abc123...def456",
     );
     expect(event?.author.username).toBe("pusher-user");
+    expect(event?.changedFiles).toEqual(["src/new.ts", "src/app.ts", "src/old.ts", "README.md"]);
   });
 
   it("uses sender over pull_request.user when both are present", () => {
@@ -201,5 +206,27 @@ describe("translateWebhookToReviewEvent", () => {
     );
 
     expect(event?.rawEventName).toBe("pull_request");
+  });
+
+  it("uses repository mappings to select the target workspace", () => {
+    const event = translateWebhookToReviewEvent(
+      "gitea",
+      "push",
+      {
+        before: "abc123",
+        after: "def456",
+        repository: { full_name: "ProjectX/Pipeline" },
+      },
+      {
+        triggerName: "gitea-internal",
+        workspaceId: "fallback-ws",
+        repoMappings: [
+          { match: "ProjectY/server", workspace: "projecty-server" },
+          { match: "ProjectX/Pipeline", workspace: "projectx-pipeline" },
+        ],
+      },
+    );
+
+    expect(event?.workspaceId).toBe("projectx-pipeline");
   });
 });

@@ -47,12 +47,14 @@ import {
   type SandboxKind,
   type SandboxEngine,
 } from "@aicr/sandbox";
-import { createGitVcsAdapter, type GitVcsAdapter } from "@aicr/vcs";
+import { createGitVcsAdapter, createP4VcsAdapter, type GitVcsAdapter, type P4VcsAdapter } from "@aicr/vcs";
 
 import type { GiteaWebhookConfig } from "./gitea-webhook.js";
+import type { P4TriggerConfig } from "./p4-webhook.js";
 import { GiteaApiClient } from "./issue-triage.js";
 import type { IssueTriageRuntimeOptions, WorkspaceIssueTriagePolicy } from "./issue-triage.js";
 import type { ServerAppOptions, ServerReviewOrchestrationOptions } from "./index.js";
+import { type AuthConfig } from "./auth.js";
 import type {
   ReviewDispatchResult,
   ReviewOrchestrationContext,
@@ -369,6 +371,7 @@ export function resolveGiteaWebhookConfig(
   return {
     triggerName: trigger.name,
     workspaceId: resolveWorkspaceIdFromTrigger(config, trigger.name),
+    ...withRepoMappings(triggerConfig),
     ...(webhookSecret !== undefined ? { webhookSecret } : {}),
   };
 }
@@ -393,7 +396,82 @@ export function resolveGenericWebhookConfig(
   return {
     triggerName: trigger.name,
     workspaceId: resolveWorkspaceIdFromTrigger(config, trigger.name),
+    ...withRepoMappings(triggerConfig),
     ...(webhookSecret !== undefined ? { webhookSecret } : {}),
+  };
+}
+
+export function resolveP4TriggerConfig(
+  config: AppConfig,
+  triggerName?: string,
+): P4TriggerConfig | undefined {
+  const trigger = triggerName
+    ? config.triggers.find((t) => t.name === triggerName && t.kind === "p4")
+    : config.triggers.find((t) => t.kind === "p4");
+
+  if (!trigger) {
+    return undefined;
+  }
+
+  const triggerConfig = trigger as Record<string, unknown>;
+  const port = triggerConfig.port as string | undefined;
+  const userEnv = triggerConfig.user_env as string | undefined;
+  const ticketEnv = triggerConfig.ticket_env as string | undefined;
+  const passwordEnv = triggerConfig.password_env as string | undefined;
+  const user = userEnv ? resolveEnv(userEnv) : undefined;
+  const rawPassword = passwordEnv ? resolveEnv(passwordEnv) : ticketEnv ? resolveEnv(ticketEnv) : undefined;
+  const depot = triggerConfig.depot_path as string | undefined;
+  const streams = triggerConfig.streams as string[] | undefined;
+  const workspace = triggerConfig.workspace as string | undefined;
+  const watchPath = triggerConfig.watch_path as string[] | undefined;
+  const includeCrFile = triggerConfig.include_cr_file as string[] | undefined;
+  const excludeCrFile = triggerConfig.exclude_cr_file as string[] | undefined;
+
+  return {
+    triggerName: trigger.name,
+    workspaceId: resolveWorkspaceIdFromTrigger(config, trigger.name),
+    ...(port ? { port } : {}),
+    ...(user ? { user } : {}),
+    ...(rawPassword ? { password: rawPassword } : {}),
+    ...(depot ? { depot } : {}),
+    ...(streams?.[0] ? { depot: streams[0] } : {}),
+    ...(workspace ? { workspace } : {}),
+    ...(watchPath ? { watchPath } : {}),
+    ...(includeCrFile ? { includeCrFile } : {}),
+    ...(excludeCrFile ? { excludeCrFile } : {}),
+  };
+}
+
+export function resolveAuthConfig(config: AppConfig): AuthConfig | undefined {
+  const serverAuth = config.server.auth as Record<string, unknown> | undefined;
+  const globalApiKeyEnv = serverAuth?.api_key_env as string | undefined;
+  const globalApiKey = globalApiKeyEnv ? resolveEnv(globalApiKeyEnv) : undefined;
+  const authEnabled = serverAuth ? (serverAuth.enabled as boolean | undefined) !== false : true;
+
+  const workspaceApiKeys = new Map<string, string>();
+  for (const [workspaceId, instance] of Object.entries(config.workspaces.instances)) {
+    const workspaceConfig = instance as Record<string, unknown>;
+    const workspaceAuth = workspaceConfig.auth as Record<string, unknown> | undefined;
+    if (!workspaceAuth) continue;
+
+    const wsEnabled = workspaceAuth.enabled as boolean | undefined;
+    if (wsEnabled === false) continue;
+
+    const wsApiKeyEnv = workspaceAuth.api_key_env as string | undefined;
+    const wsApiKey = wsApiKeyEnv ? resolveEnv(wsApiKeyEnv) : undefined;
+    if (wsApiKey) {
+      workspaceApiKeys.set(workspaceId, wsApiKey);
+    }
+  }
+
+  if (!globalApiKey && workspaceApiKeys.size === 0 && authEnabled) {
+    return undefined;
+  }
+
+  return {
+    ...(globalApiKey ? { globalApiKey } : {}),
+    workspaceApiKeys,
+    enabled: authEnabled,
   };
 }
 
@@ -404,7 +482,6 @@ function resolveWorkspaceIdFromTrigger(config: AppConfig, triggerName: string): 
       return id;
     }
   }
-
   const instanceKeys = Object.keys(instances);
   const firstKey = instanceKeys[0];
   if (firstKey !== undefined) {
@@ -412,6 +489,31 @@ function resolveWorkspaceIdFromTrigger(config: AppConfig, triggerName: string): 
   }
 
   return "default";
+}
+
+function resolveRepoMappings(triggerConfig: Record<string, unknown>): readonly { readonly match: string; readonly workspace: string }[] {
+  const repos = triggerConfig.repos;
+  if (!Array.isArray(repos)) {
+    return [];
+  }
+
+  return repos.flatMap((repo) => {
+    if (!repo || typeof repo !== "object") {
+      return [];
+    }
+
+    const entry = repo as Record<string, unknown>;
+    return typeof entry.match === "string" && typeof entry.workspace === "string"
+      ? [{ match: entry.match, workspace: entry.workspace }]
+      : [];
+  });
+}
+
+function withRepoMappings(
+  triggerConfig: Record<string, unknown>,
+): { readonly repoMappings?: readonly { readonly match: string; readonly workspace: string }[] } {
+  const repoMappings = resolveRepoMappings(triggerConfig);
+  return repoMappings.length > 0 ? { repoMappings } : {};
 }
 
 type OutputChannelConfig = AppConfig["outputs"]["channels"][number];
@@ -990,13 +1092,80 @@ function parseRepoRef(repoRef: string | undefined): { owner: string; repo: strin
   return { owner, repo };
 }
 
+function isGitRemoteTriggerKind(kind: string): boolean {
+  return kind === "gitea" || kind === "forgejo" || kind === "github" || kind === "gitlab";
+}
+
+function buildGitRemoteUrl(baseUrl: string | undefined, repoRef: string | undefined): string | undefined {
+  if (!baseUrl || !repoRef) {
+    return undefined;
+  }
+
+  const normalizedBaseUrl = baseUrl.replace(/\/+$/u, "");
+  const normalizedRepoRef = repoRef.replace(/^\/+|\/+$/gu, "");
+  if (!normalizedBaseUrl || !normalizedRepoRef) {
+    return undefined;
+  }
+
+  return `${normalizedBaseUrl}/${normalizedRepoRef}.git`;
+}
+
 export function createVcsAdapterFromConfig(
   config: AppConfig,
   repositoryDir: string,
-): GitVcsAdapter {
+  triggerName?: string,
+  repoRef?: string,
+): GitVcsAdapter | P4VcsAdapter {
+  const p4Trigger = triggerName
+    ? config.triggers.find((t) => t.name === triggerName && t.kind === "p4")
+    : config.triggers.find((t) => t.kind === "p4");
+  if (p4Trigger) {
+    const triggerConfig = p4Trigger as Record<string, unknown>;
+    const port = triggerConfig.port as string | undefined;
+    const userEnv = triggerConfig.user_env as string | undefined;
+    const ticketEnv = triggerConfig.ticket_env as string | undefined;
+    const passwordEnv = triggerConfig.password_env as string | undefined;
+    const workspace = triggerConfig.workspace as string | undefined;
+    const depot = triggerConfig.depot_path as string | undefined;
+    const streams = triggerConfig.streams as string[] | undefined;
+    const watchPath = triggerConfig.watch_path as string[] | undefined;
+    const includeCrFile = triggerConfig.include_cr_file as string[] | undefined;
+    const excludeCrFile = triggerConfig.exclude_cr_file as string[] | undefined;
+
+    const password = passwordEnv
+      ? resolveEnv(passwordEnv)
+      : ticketEnv
+        ? resolveEnv(ticketEnv)
+        : undefined;
+    const user = userEnv ? resolveEnv(userEnv) : undefined;
+
+    return createP4VcsAdapter({
+      repositoryDir: resolve(repositoryDir),
+      ...(port ? { port } : {}),
+      ...(user ? { user } : {}),
+      ...(password ? { password } : {}),
+      ...(workspace ? { workspace } : {}),
+      ...(depot ? { depot } : {}),
+      ...(streams?.[0] ? { depot: streams[0] } : {}),
+      ...(watchPath ? { watchPath } : {}),
+      ...(includeCrFile ? { includeCrFile } : {}),
+      ...(excludeCrFile ? { excludeCrFile } : {}),
+    });
+  }
+
+  const gitTrigger = triggerName
+    ? config.triggers.find((t) => t.name === triggerName && isGitRemoteTriggerKind(t.kind))
+    : undefined;
+  const gitTriggerConfig = gitTrigger as Record<string, unknown> | undefined;
+  const remoteUrl = buildGitRemoteUrl(gitTriggerConfig?.base_url as string | undefined, repoRef);
+  const tokenEnv = gitTriggerConfig?.token_env as string | undefined;
+  const token = tokenEnv ? resolveEnv(tokenEnv) : undefined;
+
   return createGitVcsAdapter({
     repositoryDir: resolve(repositoryDir),
     allowDeepen: config.review.git?.allow_deepen ?? false,
+    ...(remoteUrl ? { remoteUrl } : {}),
+    ...(token ? { token } : {}),
   });
 }
 
@@ -1125,6 +1294,7 @@ export async function bootstrapServerApp(options: BootstrapServerOptions): Promi
   const giteaConfig = resolveGiteaWebhookConfig(config);
   const githubConfig = resolveGenericWebhookConfig(config, "github");
   const gitlabConfig = resolveGenericWebhookConfig(config, "gitlab");
+  const p4Config = resolveP4TriggerConfig(config);
 
   const model = resolveModelSpecFromConfig(config);
   const retryConfig = toGatewayRetry(config.llm.retry);
@@ -1151,7 +1321,8 @@ export async function bootstrapServerApp(options: BootstrapServerOptions): Promi
     baseSystemPrompt,
     sourceRootResolver,
     vcs: createVcsAdapterFromConfig(config, baseDir),
-    vcsFactory: (sourceRoot: string) => createVcsAdapterFromConfig(config, sourceRoot),
+    vcsFactory: (sourceRoot: string, context: ReviewOrchestrationContext) =>
+      createVcsAdapterFromConfig(config, sourceRoot, context.reviewEvent.triggerName, context.reviewEvent.repoRef),
     llm: llmClient,
     model,
     dryRun: false,
@@ -1183,16 +1354,20 @@ export async function bootstrapServerApp(options: BootstrapServerOptions): Promi
   }
 
   const triageOptions = resolveIssueTriageOptions(config, llmClient, model);
+  const authConfig = resolveAuthConfig(config);
 
   return {
     ...(giteaConfig ? { gitea: giteaConfig } : {}),
     ...(githubConfig ? { github: githubConfig } : {}),
     ...(gitlabConfig ? { gitlab: gitlabConfig } : {}),
+    ...(p4Config ? { p4: p4Config } : {}),
     reviewOrchestration: orchestrationOptions,
     ...(triageOptions ? { issueTriage: triageOptions } : {}),
     queue,
     ...(worker ? { worker } : {}),
     ...(config.server.path_prefix ? { pathPrefix: config.server.path_prefix } : {}),
+    ...(authConfig ? { auth: authConfig } : {}),
+    asyncTriggers: true,
   };
 }
 

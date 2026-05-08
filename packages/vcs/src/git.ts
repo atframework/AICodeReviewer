@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
 
@@ -22,6 +22,8 @@ export interface GitVcsAdapterOptions {
   readonly allowDeepen?: boolean;
   readonly deepenBy?: number;
   readonly remote?: string;
+  readonly remoteUrl?: string;
+  readonly token?: string;
 }
 
 export interface GitDiffOptions {
@@ -92,6 +94,47 @@ function isRevisionRangeError(error: unknown): boolean {
   );
 }
 
+function redactGitSecrets(text: string): string {
+  return text
+    .replace(/(http\.extraHeader=Authorization:\s*(?:token|bearer)\s+)[^\s'"\],]+/giu, "$1***")
+    .replace(/(Authorization:\s*(?:token|bearer)\s+)[^\s'"\],]+/giu, "$1***");
+}
+
+function redactGitError(error: unknown): Error {
+  const source = error as {
+    readonly stdout?: unknown;
+    readonly stderr?: unknown;
+    readonly code?: unknown;
+    readonly errno?: unknown;
+    readonly syscall?: unknown;
+    readonly path?: unknown;
+  };
+  const sanitized = new Error(redactGitSecrets(error instanceof Error ? error.message : String(error)));
+  sanitized.name = error instanceof Error ? error.name : "Error";
+  const target = sanitized as Error & Record<string, unknown>;
+
+  if (typeof source.stdout === "string") {
+    target.stdout = redactGitSecrets(source.stdout);
+  }
+  if (typeof source.stderr === "string") {
+    target.stderr = redactGitSecrets(source.stderr);
+  }
+  if (source.code !== undefined) {
+    target.code = source.code;
+  }
+  if (source.errno !== undefined) {
+    target.errno = source.errno;
+  }
+  if (typeof source.syscall === "string") {
+    target.syscall = source.syscall;
+  }
+  if (typeof source.path === "string") {
+    target.path = source.path;
+  }
+
+  return sanitized;
+}
+
 export class GitVcsAdapter implements VcsAdapter {
   readonly kind = "git" as const;
 
@@ -101,6 +144,9 @@ export class GitVcsAdapter implements VcsAdapter {
   private readonly allowDeepen: boolean;
   private readonly deepenBy: number;
   private readonly remote: string;
+  private readonly remoteUrl: string | undefined;
+  private readonly token: string | undefined;
+  private repositorySynced = false;
 
   constructor(options: GitVcsAdapterOptions) {
     this.repositoryDir = resolve(options.repositoryDir);
@@ -109,22 +155,64 @@ export class GitVcsAdapter implements VcsAdapter {
     this.allowDeepen = options.allowDeepen ?? false;
     this.deepenBy = options.deepenBy ?? 100;
     this.remote = options.remote ?? "origin";
+    this.remoteUrl = options.remoteUrl;
+    this.token = options.token;
 
     if (!Number.isInteger(this.deepenBy) || this.deepenBy < 1) {
       throw new RangeError("deepenBy must be a positive integer.");
     }
   }
 
+  private buildGitArgs(args: readonly string[]): string[] {
+    return this.token
+      ? ["-c", `http.extraHeader=Authorization: token ${this.token}`, ...args]
+      : [...args];
+  }
+
+  private async runGit(args: readonly string[]): Promise<GitCommandResult> {
+    try {
+      return await this.git(this.buildGitArgs(args));
+    } catch (error) {
+      throw redactGitError(error);
+    }
+  }
+
+  private async isGitRepository(): Promise<boolean> {
+    try {
+      const result = await this.runGit(["-C", this.repositoryDir, "rev-parse", "--is-inside-work-tree"]);
+      return result.stdout.trim() === "true";
+    } catch {
+      return false;
+    }
+  }
+
+  private async syncRepository(): Promise<void> {
+    if (!this.remoteUrl || this.repositorySynced) {
+      return;
+    }
+
+    if (await this.isGitRepository()) {
+      await this.runGit(["-C", this.repositoryDir, "fetch", "--prune", this.remote]);
+      this.repositorySynced = true;
+      return;
+    }
+
+    await rm(this.repositoryDir, { recursive: true, force: true });
+    await mkdir(dirname(this.repositoryDir), { recursive: true });
+    await this.runGit(["clone", "--no-checkout", this.remoteUrl, this.repositoryDir]);
+    this.repositorySynced = true;
+  }
+
   private async runRevisionRangeCommand(args: readonly string[]): Promise<GitCommandResult> {
     try {
-      return await this.git(args);
+      return await this.runGit(args);
     } catch (error) {
       if (!this.allowDeepen || !isRevisionRangeError(error)) {
         throw error;
       }
 
-      await this.git(["-C", this.repositoryDir, "fetch", `--deepen=${this.deepenBy}`, this.remote]);
-      return this.git(args);
+      await this.runGit(["-C", this.repositoryDir, "fetch", `--deepen=${this.deepenBy}`, this.remote]);
+      return this.runGit(args);
     }
   }
 
@@ -139,16 +227,26 @@ export class GitVcsAdapter implements VcsAdapter {
       throw new RangeError("Git listChanges requires base/head revisions or ReviewEvent.changedFiles.");
     }
 
-    const result = await this.runRevisionRangeCommand([
-      "-C",
-      this.repositoryDir,
-      "diff",
-      "--name-only",
-      `--diff-filter=${this.diffFilter}`,
-      buildRevisionRange(ev.baseSha, ev.headSha),
-      "--",
-    ]);
-    const files = normalizeGitOutputPaths(this.repositoryDir, result.stdout);
+    await this.syncRepository();
+
+    let files: string[];
+    try {
+      const result = await this.runRevisionRangeCommand([
+        "-C",
+        this.repositoryDir,
+        "diff",
+        "--name-only",
+        `--diff-filter=${this.diffFilter}`,
+        buildRevisionRange(ev.baseSha, ev.headSha),
+        "--",
+      ]);
+      files = normalizeGitOutputPaths(this.repositoryDir, result.stdout);
+    } catch (error) {
+      if (eventFiles.length === 0) {
+        throw error;
+      }
+      files = [];
+    }
 
     return {
       baseRevision: ev.baseSha,
@@ -170,9 +268,11 @@ export class GitVcsAdapter implements VcsAdapter {
       };
     }
 
+    await this.syncRepository();
+
     for (const filePath of uniqueNormalizedPaths(workspaceSourceDir, range.files)) {
       try {
-        const result = await this.git([
+        const result = await this.runGit([
           "-C",
           this.repositoryDir,
           "show",
@@ -220,6 +320,7 @@ export class GitVcsAdapter implements VcsAdapter {
   }
 
   async diff(range: ChangeRange, options: GitDiffOptions = {}): Promise<ParsedDiff> {
+    await this.syncRepository();
     const { baseRevision, headRevision } = requireRevisionPair(range);
     const args = [
       "-C",

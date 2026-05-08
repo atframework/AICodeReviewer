@@ -7,7 +7,13 @@
 #   3. docker compose up -d
 #
 # The config.yaml and .env live next to this file.
-# The container mounts ./config.yaml and reads env vars from .env.
+# The container mounts ./config.yaml (read-only) and reads env vars from .env.
+#
+# Volumes:
+#   ./config.yaml  → /app/config.yaml:ro   — read-only config
+#   aicr-data      → /app/data             — persistent queue DB, run history
+#   aicr-workspaces→ /app/workspaces       — cloned repo caches
+#   aicr-logs      → /app/logs             — application log files
 
 services:
   aicr:
@@ -21,7 +27,9 @@ services:
       - .env
     volumes:
       - ./config.yaml:/app/config.yaml:ro
+      - aicr-data:/app/data
       - aicr-workspaces:/app/workspaces
+      - aicr-logs:/app/logs
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://localhost:8080/healthz').then(r=>{if(!r.ok)process.exit(1)})"]
@@ -31,4 +39,6 @@ services:
       start_period: 10s
 
 volumes:
+  aicr-data:
   aicr-workspaces:
+  aicr-logs:

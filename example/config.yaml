@@ -3,6 +3,7 @@
 # =============================================================================
 # Copy this file as config.yaml, then fill in your values.
 # All secrets MUST be provided via environment variables (see .env.sample).
+# See example/README.md for detailed setup guides (P4, Feishu, WeCom, etc.).
 
 # ---------------------------------------------------------------------------
 # LLM providers
@@ -10,14 +11,14 @@
 llm:
   providers:
     - id: my-llm
-      kind: openai_compatible          # openai_compatible | azure_openai | anthropic | ollama | google_ai_studio | vertex_ai | bedrock | copilot
+      kind: openai_compatible # openai_compatible | azure_openai | anthropic | ollama | google_ai_studio | vertex_ai | bedrock | copilot
       base_url: https://api.openai.com/v1
-      api_key_env: AICR_LLM_API_KEY    # reads API key from $AICR_LLM_API_KEY
+      api_key_env: AICR_LLM_API_KEY # reads API key from $AICR_LLM_API_KEY
 
   fallback_chain:
     - provider: my-llm
-      model: gpt-4o-mini               # change to your model
-      role: any                         # any | light | heavy
+      model: gpt-4o-mini # change to your model
+      role: any # any | light | heavy
 
   retry:
     max_attempts: 3
@@ -32,14 +33,130 @@ llm:
     per_repo_daily_usd: 1.0
 
 # ---------------------------------------------------------------------------
+# Server authentication (optional, recommended for production)
+# ---------------------------------------------------------------------------
+# Protects /triggers/* endpoints (P4, custom scripts, etc.) with a global API key.
+# Callers must send:  X-API-Key: <key>  or  Authorization: Bearer <key>
+# /webhooks/* routes (Gitea, GitHub, GitLab) are NOT protected by API key —
+# they use per-trigger HMAC signature verification instead (see triggers section).
+# Per-workspace keys can also be set (see workspaces section below).
+# When auth is configured but no keys are set, the middleware is a no-op.
+#
+# Generate a key:
+#   node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+#
+# server:
+#   auth:
+#     api_key_env: AICR_API_KEY          # reads global API key from $AICR_API_KEY
+#     enabled: true                       # set false to disable auth middleware
+
+# ---------------------------------------------------------------------------
 # Triggers — one per VCS source
 # ---------------------------------------------------------------------------
+# Every trigger accepts three optional file-filtering fields:
+#
+#   watch_path       (string[])  Only analyze files under these depot-relative
+#                                sub-paths. Omit to analyze all paths.
+#                                Example: ["src/", "include/"]
+#
+#   include_cr_file  (string[])  Glob patterns — a file must match at least one
+#                                pattern to be analyzed.
+#                                Example: ["**/*.cpp", "*.h", "**/*.py"]
+#
+#   exclude_cr_file  (string[])  Glob patterns — a file matching any pattern is
+#                                skipped (takes priority over include).
+#                                Example: ["**/*.gen.cpp", "**/*.pb.h"]
+#
+# Filter pipeline: all changed files → watch_path → include → exclude → review
+#
+# Glob syntax:
+#   **/*.cpp   matches any depth (foo.cpp, src/foo.cpp, a/b/c/foo.cpp)
+#   *.md       root-level only (readme.md, NOT docs/readme.md)
+#   src/**     everything under src/
+#   **/*.pb.*  matches foo.pb.h, foo.pb.cc, etc.
+#
+# ── Secret field reference per trigger kind ──
+#
+#   kind          Secret field             Auth mechanism           Header
+#   ───────────   ─────────────────────    ──────────────────────   ────────────────────────
+#   gitea         webhook_secret_env       HMAC-SHA256              x-gitea-signature-256
+#   forgejo       webhook_secret_env       HMAC-SHA256              x-gitea-signature-256
+#   github        webhook_secret_env       HMAC-SHA256              x-hub-signature-256
+#   gitlab        webhook_secret_env       Token comparison         x-gitlab-token
+#   p4            (none — uses server.auth API key, see above)
+#
+# * webhook_secret_env — name of an env var holding the shared secret.
+#   Omit to skip verification (NOT recommended for production).
+#   Only applies to /webhooks/* routes (Gitea, GitHub, GitLab).
+# * P4 triggers (/triggers/p4) use server.auth.api_key_env instead.
+# * token_env / api_key_env — outbound credentials used by AICR to call
+#   the VCS API (post comments, read files). NOT used for inbound auth.
+# * user_env / password_env (P4 only) — outbound P4 login credentials.
+# ---------------------------------------------------------------------------
 triggers:
+  # -- Gitea / Forgejo webhook trigger --
   - name: gitea
-    kind: gitea                         # gitea | forgejo | github | gitlab
-    base_url: https://git.example.com   # your Gitea / Forgejo base URL
-    token_env: AICR_GITEA_TOKEN         # reads token from $AICR_GITEA_TOKEN
-    webhook_secret_env: AICR_WEBHOOK_SECRET
+    kind: gitea # gitea | forgejo | github | gitlab | p4 | svn
+    base_url: https://git.example.com # your Gitea / Forgejo base URL
+    token_env: AICR_GITEA_TOKEN # outbound: reads token from $AICR_GITEA_TOKEN
+    webhook_secret_env: AICR_WEBHOOK_SECRET # inbound: HMAC-SHA256 secret for webhook verification
+    # Optional: only analyze files in these paths (omit = all paths)
+    # watch_path:
+    #   - "src/"
+    #   - "include/"
+    # Optional: only analyze files matching these glob patterns
+    # include_cr_file:
+    #   - "**/*.cpp"
+    #   - "**/*.h"
+    #   - "**/*.proto"
+    #   - "**/*.py"
+    # Optional: exclude generated files from analysis
+    # exclude_cr_file:
+    #   - "**/*.gen.cpp"
+
+  # -- GitHub webhook trigger --
+  # - name: github
+  #   kind: github
+  #   base_url: https://github.com
+  #   token_env: AICR_GITHUB_TOKEN            # outbound: personal access token
+  #   webhook_secret_env: AICR_GITHUB_WEBHOOK_SECRET  # inbound: HMAC-SHA256 secret
+
+  # -- GitLab webhook trigger --
+  # - name: gitlab
+  #   kind: gitlab
+  #   base_url: https://gitlab.com
+  #   token_env: AICR_GITLAB_TOKEN             # outbound: personal access token
+  #   webhook_secret_env: AICR_GITLAB_WEBHOOK_SECRET  # inbound: token (sent as x-gitlab-token)
+
+  # -- P4 (Perforce) change-commit trigger --
+  # Requires: p4-trigger.sh on the P4 server that POSTs to /triggers/p4
+  # The P4 trigger script must send X-API-Key header (from server.auth.api_key_env).
+  # See example/README.md "P4 Trigger Configuration" for full setup guide.
+  #
+  # - name: p4-main
+  #   kind: p4
+  #   port: "perforce.corp:1666"           # P4 server address:port (prefix ssl: for TLS)
+  #   user_env: AICR_P4USER                # outbound: env var for P4 username
+  #   password_env: AICR_P4PASSWORD        # outbound: env var for P4 password or login ticket
+  #   depot_path: "//depot/main"           # depot or stream path to analyze
+  #   workspace: "aicr-p4-main"            # P4 workspace/client name used by AICR
+  #   # File filtering (all optional):
+  #   watch_path:                          # only analyze files under these paths
+  #     - "src/"
+  #     - "include/"
+  #   include_cr_file:                     # only analyze files matching these globs
+  #     - "**/*.cpp"
+  #     - "**/*.h"
+  #     - "**/*.hpp"
+  #     - "**/*.java"
+  #     - "**/*.py"
+  #     - "**/*.ts"
+  #     - "**/*.proto"
+  #   exclude_cr_file:                     # skip files matching these globs
+  #     - "**/*.gen.cpp"
+  #     - "**/*.gen.h"
+  #     - "**/*.pb.cc"
+  #     - "**/*.pb.h"
 
 # ---------------------------------------------------------------------------
 # Output channels
@@ -48,21 +165,47 @@ outputs:
   template_engine: handlebars
 
   channels:
+    # Gitea PR review — inline line comments on pull requests
     - name: gitea-pr-review
-      kind: gitea_pr_review             # gitea_pr_review | github_pr_review | gitlab_mr_review | gitea_issue | feishu_bot | wecom_bot
+      kind: gitea_pr_review # gitea_pr_review | github_pr_review | gitlab_mr_review | gitea_issue | feishu_bot | wecom_bot
       trigger: gitea
       mention_author: false
+
+    # Feishu (飞书) bot — push aggregated review findings to a Feishu group.
+    # Setup: group Settings → Group Bots → Add Bot → Custom Bot → copy webhook & secret.
+    # See example/README.md "Feishu Bot Configuration" for full guide.
+    #
+    # - name: feishu-code-review
+    #   kind: feishu_bot
+    #   webhook_url_env: AICR_FEISHU_WEBHOOK   # env var with the webhook URL
+    #   secret_env: AICR_FEISHU_SECRET          # env var with signing secret
+    #                                             (required if bot has signature verification enabled)
+    #   mention_author: true                     # @-mention the commit author in the card
+    #   mention_fallback: skip                  # "all" = mention everyone, "skip" = no mention if author not found
+
+    # WeCom (企业微信) bot — push aggregated findings to a WeCom group.
+    # - name: wecom-ops
+    #   kind: wecom_bot
+    #   webhook_url_env: AICR_WECOM_WEBHOOK
+    #   mention_author: false
 
   routes:
     default:
       line_comments: [gitea-pr-review]
       summary: [gitea-pr-review]
+    # Route specific triggers to different output channels.
+    # Each rule has a "match" filter and output channel lists.
+    # rules:
+    #   - match:
+    #       trigger: p4-main                # match events from the p4-main trigger
+    #       target_kind: commit              # match commit events only
+    #     summary: [feishu-code-review]      # send summary to Feishu
 
 # ---------------------------------------------------------------------------
 # Queue
 # ---------------------------------------------------------------------------
 queue:
-  kind: memory                          # memory (default; redis / sqlite / rabbitmq planned)
+  kind: memory # memory (default) | redis | sqlite | rabbitmq
 
   workers:
     concurrency: 4
@@ -80,8 +223,8 @@ agent:
   timeout_seconds: 300
   auto_approve: true
   sandbox:
-    kind: docker                        # native | docker | podman | docker_socket | k8s_pod
-    engine: auto                        # auto | docker | podman
+    kind: docker # native | docker | podman | docker_socket | k8s_pod
+    engine: auto # auto | docker | podman
 
 # ---------------------------------------------------------------------------
 # Review defaults
@@ -100,13 +243,18 @@ review:
   max_files: 50
   max_patch_bytes: 200000
   skip_lgtm: true
-  output_language: en                   # en | zh-CN | ja | …
-  commit_strategy: aggregate            # aggregate | per_commit | head_only
+  output_language: en # en | zh-CN | ja | …
+  commit_strategy: aggregate # aggregate | per_commit | head_only
   git:
     allow_deepen: true
 
 # ---------------------------------------------------------------------------
 # Workspaces — one per repository you want to review
+# ---------------------------------------------------------------------------
+# Each workspace can optionally override the global auth with its own API key:
+#   auth:
+#     api_key_env: AICR_WORKSPACE_API_KEY  # env var with a per-workspace key
+#     enabled: true
 # ---------------------------------------------------------------------------
 workspaces:
   cache:
@@ -115,11 +263,23 @@ workspaces:
     ttl_days: 30
 
   instances:
-    # Workspace ID — must be unique
+    # Gitea workspace
     my-repo:
       source_repo:
-        trigger: gitea                  # references trigger name above
-        repo: "my-org/my-repo"          # owner/repo on your Gitea
+        trigger: gitea # references trigger name above
+        repo: "my-org/my-repo" # owner/repo on your Gitea
       outputs:
         line_comments: [gitea-pr-review]
         summary: [gitea-pr-review]
+      # Per-workspace auth (optional, overrides global server.auth)
+      # auth:
+      #   api_key_env: AICR_MY_REPO_API_KEY
+      #   enabled: true
+
+    # P4 workspace — uncomment when p4-main trigger is enabled
+    # p4-main:
+    #   source_repo:
+    #     trigger: p4-main
+    #     repo: "//depot/main"
+    #   outputs:
+    #     summary: [feishu-code-review]

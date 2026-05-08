@@ -29,7 +29,7 @@ RUN pnpm install --frozen-lockfile
 RUN pnpm build
 
 # ---------- Runtime stage ----------
-FROM cgr.dev/chainguard/node:latest AS runtime
+FROM cgr.dev/chainguard/node:latest-dev AS runtime
 
 ENV NODE_ENV=production
 
@@ -69,12 +69,12 @@ COPY --from=build --chown=node:node /app/packages/agents/node_modules ./packages
 COPY --from=build --chown=node:node /app/packages/store/node_modules ./packages/store/node_modules
 COPY --from=build --chown=node:node /app/prompts ./prompts
 
-# Create workspace directory for cloned repos
-RUN mkdir -p /app/workspaces && chown node:node /app/workspaces
+RUN mkdir -p /app/workspaces /app/data /app/logs && chown -R node:node /app/workspaces /app/data /app/logs
+
 USER node
 
-# Config is expected at /app/config.yaml — mount or copy it
-# Example: docker run -v $(pwd)/config.yaml:/app/config.yaml:ro ...
+VOLUME ["/app/workspaces", "/app/data", "/app/logs"]
+
 EXPOSE 8080
 
 ENTRYPOINT ["node", "packages/cli/dist/index.js"]

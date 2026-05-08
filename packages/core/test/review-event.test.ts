@@ -57,12 +57,12 @@ describe("createReviewEvent", () => {
     expect(result.success).toBe(false);
   });
 
-  it("rejects unexpected fields inside author because the nested schema is strict", () => {
+  it("allows extra fields inside author (passthrough schema)", () => {
     const result = reviewEventSchema.safeParse({
       ...baseEvent,
       author: { username: "owent", role: "admin" },
     });
-    expect(result.success).toBe(false);
+    expect(result.success).toBe(true);
   });
 
   it("allows omitting optional sha fields for manual or scheduled triggers", () => {
@@ -108,11 +108,11 @@ describe("createReviewEvent", () => {
     expect(event.author.email).toBe("test@example.com");
   });
 
-  it("rejects malformed email in author", () => {
+  it("accepts non-standard email strings in author", () => {
     const result = reviewEventSchema.safeParse({
       ...baseEvent,
-      author: { email: "not-an-email" },
+      author: { email: "owent@noreply" },
     });
-    expect(result.success).toBe(false);
+    expect(result.success).toBe(true);
   });
 });

@@ -12,19 +12,25 @@ export interface GiteaWebhookConfig {
   readonly triggerName: string;
   readonly workspaceId: string;
   readonly webhookSecret?: string;
+  readonly repoMappings?: readonly RepositoryWorkspaceMapping[];
+}
+
+export interface RepositoryWorkspaceMapping {
+  readonly match: string;
+  readonly workspace: string;
 }
 
 const repositorySchema = z
   .object({
     full_name: z.string().min(1),
   })
-  .strict();
+  .passthrough();
 
 const actorSchema = z
   .object({
     login: z.string().min(1).optional(),
     username: z.string().min(1).optional(),
-    email: z.string().email().optional(),
+    email: z.string().min(1).optional(),
     full_name: z.string().min(1).optional(),
   })
   .passthrough();
@@ -52,6 +58,26 @@ const pushPayloadSchema = z
     compare_url: z.string().url().optional(),
     repository: repositorySchema,
     pusher: actorSchema.optional(),
+    commits: z
+      .array(
+        z
+          .object({
+            added: z.array(z.string()).optional(),
+            modified: z.array(z.string()).optional(),
+            removed: z.array(z.string()).optional(),
+          })
+          .passthrough(),
+      )
+      .optional(),
+    head_commit: z
+      .object({
+        added: z.array(z.string()).optional(),
+        modified: z.array(z.string()).optional(),
+        removed: z.array(z.string()).optional(),
+      })
+      .passthrough()
+      .nullable()
+      .optional(),
   })
   .passthrough();
 
@@ -128,7 +154,7 @@ const gitlabPushPayloadSchema = z
       })
       .passthrough(),
     user_username: z.string().min(1).optional(),
-    user_email: z.string().email().optional(),
+    user_email: z.string().min(1).optional(),
   })
   .passthrough();
 
@@ -138,6 +164,37 @@ function normalizeActor(actor: z.infer<typeof actorSchema> | undefined): ReviewA
     email: actor?.email,
     displayName: actor?.full_name,
   };
+}
+
+function collectPushChangedFiles(parsed: z.infer<typeof pushPayloadSchema>): string[] {
+  const files = new Set<string>();
+  for (const commit of parsed.commits ?? []) {
+    for (const file of [...(commit.added ?? []), ...(commit.modified ?? []), ...(commit.removed ?? [])]) {
+      files.add(file);
+    }
+  }
+
+  if (parsed.head_commit) {
+    for (const file of [
+      ...(parsed.head_commit.added ?? []),
+      ...(parsed.head_commit.modified ?? []),
+      ...(parsed.head_commit.removed ?? []),
+    ]) {
+      files.add(file);
+    }
+  }
+
+  return [...files];
+}
+
+function resolveWorkspaceIdForRepo(config: GiteaWebhookConfig, repoRef: string): string {
+  const normalizedRepo = repoRef.toLowerCase();
+  const matched = config.repoMappings?.find((mapping) => {
+    const normalizedMatch = mapping.match.toLowerCase();
+    return normalizedRepo === normalizedMatch || normalizedRepo.endsWith(`/${normalizedMatch}`);
+  });
+
+  return matched?.workspace ?? config.workspaceId;
 }
 
 export function computeWebhookSignature(payload: string, secret: string): string {
@@ -179,7 +236,7 @@ export function translateWebhookToReviewEvent(
     return createReviewEvent({
       triggerName: config.triggerName,
       provider,
-      workspaceId: config.workspaceId,
+      workspaceId: resolveWorkspaceIdForRepo(config, parsed.repository.full_name),
       targetKind: "pull_request",
       repoRef: parsed.repository.full_name,
       baseSha: parsed.pull_request.base.sha,
@@ -193,11 +250,12 @@ export function translateWebhookToReviewEvent(
 
   if (eventName === "push") {
     const parsed = pushPayloadSchema.parse(payload);
+    const changedFiles = collectPushChangedFiles(parsed);
 
     return createReviewEvent({
       triggerName: config.triggerName,
       provider,
-      workspaceId: config.workspaceId,
+      workspaceId: resolveWorkspaceIdForRepo(config, parsed.repository.full_name),
       targetKind: "push",
       repoRef: parsed.repository.full_name,
       baseSha: parsed.before,
@@ -206,6 +264,7 @@ export function translateWebhookToReviewEvent(
       url: parsed.compare_url,
       reason: `${provider}:push`,
       rawEventName: eventName,
+      ...(changedFiles.length > 0 ? { changedFiles } : {}),
     });
   }
 
@@ -217,7 +276,7 @@ export function translateWebhookToReviewEvent(
     return createReviewEvent({
       triggerName: config.triggerName,
       provider,
-      workspaceId: config.workspaceId,
+      workspaceId: resolveWorkspaceIdForRepo(config, parsed.repository.full_name),
       targetKind: "issue",
       repoRef: parsed.repository.full_name,
       author: normalizeActor(parsed.sender ?? parsed.issue?.user),

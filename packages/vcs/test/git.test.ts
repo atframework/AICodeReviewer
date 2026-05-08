@@ -132,6 +132,151 @@ describe("GitVcsAdapter", () => {
     ]);
   });
 
+  it("falls back to ReviewEvent.changedFiles when git diff fails", async () => {
+    const adapter = createGitVcsAdapter({
+      repositoryDir: "C:/repo",
+      git: async () => {
+        throw new Error("fatal: not a git repository");
+      },
+    });
+    const event = createReviewEvent({
+      triggerName: "gitea",
+      provider: "gitea",
+      workspaceId: "ws",
+      targetKind: "push",
+      repoRef: "owent/example",
+      baseSha: "base",
+      headSha: "head",
+      changedFiles: ["src/app.ts"],
+      author: { username: "owent" },
+      reason: "gitea:push",
+    });
+
+    await expect(adapter.listChanges(event)).resolves.toEqual({
+      baseRevision: "base",
+      headRevision: "head",
+      files: ["src/app.ts"],
+    });
+  });
+
+  it("clones a configured remote before listing changes when the source repo is missing", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-git-clone-"));
+    const repositoryDir = join(tempDir, "source", "owent_example");
+    const mutableCalls: string[][] = [];
+    const git: GitCommandRunner = async (args) => {
+      mutableCalls.push([...args]);
+      if (args[2] === "rev-parse") {
+        throw new Error("fatal: not a git repository");
+      }
+
+      if (args[0] === "clone") {
+        return { stdout: "", stderr: "" };
+      }
+
+      if (args[2] === "diff") {
+        return { stdout: "DedicatedServerBuildLinux.jenkinsfile\n", stderr: "" };
+      }
+
+      throw new Error(`unexpected git call: ${args.join(" ")}`);
+    };
+    const adapter = createGitVcsAdapter({
+      repositoryDir,
+      git,
+      remoteUrl: "https://git.example.com/owent/example.git",
+    });
+    const event = createReviewEvent({
+      triggerName: "gitea",
+      provider: "gitea",
+      workspaceId: "ws",
+      targetKind: "push",
+      repoRef: "owent/example",
+      baseSha: "base",
+      headSha: "head",
+      changedFiles: ["DedicatedServerBuildLinux.jenkinsfile"],
+      author: {},
+      reason: "gitea:push",
+    });
+
+    const range = await adapter.listChanges(event);
+
+    expect(range.files).toEqual(["DedicatedServerBuildLinux.jenkinsfile"]);
+    expect(mutableCalls).toEqual([
+      ["-C", repositoryDir, "rev-parse", "--is-inside-work-tree"],
+      ["clone", "--no-checkout", "https://git.example.com/owent/example.git", repositoryDir],
+      ["-C", repositoryDir, "diff", "--name-only", "--diff-filter=ACMRT", "base..head", "--"],
+    ]);
+
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  it("fetches an existing configured remote before diffing", async () => {
+    const mutableCalls: string[][] = [];
+    const git: GitCommandRunner = async (args) => {
+      mutableCalls.push([...args]);
+      if (args[2] === "rev-parse") {
+        return { stdout: "true\n", stderr: "" };
+      }
+
+      if (args[2] === "fetch") {
+        return { stdout: "", stderr: "" };
+      }
+
+      if (args[2] === "diff") {
+        return { stdout: "src/app.ts\n", stderr: "" };
+      }
+
+      throw new Error(`unexpected git call: ${args.join(" ")}`);
+    };
+    const adapter = createGitVcsAdapter({
+      repositoryDir: "C:/repo",
+      git,
+      remoteUrl: "https://git.example.com/owent/example.git",
+    });
+    const event = createReviewEvent({
+      triggerName: "gitea",
+      provider: "gitea",
+      workspaceId: "ws",
+      targetKind: "push",
+      repoRef: "owent/example",
+      baseSha: "base",
+      headSha: "head",
+      author: {},
+      reason: "gitea:push",
+    });
+
+    await expect(adapter.listChanges(event)).resolves.toEqual({
+      baseRevision: "base",
+      headRevision: "head",
+      files: ["src/app.ts"],
+    });
+    expect(mutableCalls).toEqual([
+      ["-C", expect.stringMatching(/repo$/u), "rev-parse", "--is-inside-work-tree"],
+      ["-C", expect.stringMatching(/repo$/u), "fetch", "--prune", "origin"],
+      ["-C", expect.stringMatching(/repo$/u), "diff", "--name-only", "--diff-filter=ACMRT", "base..head", "--"],
+    ]);
+  });
+
+  it("redacts authentication headers from Git command errors", async () => {
+    const adapter = createGitVcsAdapter({
+      repositoryDir: "C:/repo",
+      token: "secret-token",
+      git: async (args) => {
+        throw new Error(`failed git ${args.join(" ")}`);
+      },
+    });
+
+    let thrown: unknown;
+    try {
+      await adapter.diff({ baseRevision: "base", headRevision: "head", files: ["src/app.ts"] });
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(Error);
+    expect(String(thrown)).toMatch(/Authorization: token \*\*\*/u);
+    expect(String(thrown)).not.toContain("secret-token");
+  });
+
   it("materializes scoped text files from the head revision", async () => {
     const tempDir = await mkdtemp(join(tmpdir(), "aicr-git-adapter-"));
 
