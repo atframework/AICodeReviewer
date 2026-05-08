@@ -71,7 +71,7 @@ llm:
 #
 # Glob syntax:
 #   **/*.cpp   matches any depth (foo.cpp, src/foo.cpp, a/b/c/foo.cpp)
-#   *.md       root-level only (readme.md, NOT docs/readme.md)
+#   *.md       matches file basenames at any depth (readme.md, docs/readme.md)
 #   src/**     everything under src/
 #   **/*.pb.*  matches foo.pb.h, foo.pb.cc, etc.
 #
@@ -106,13 +106,41 @@ triggers:
     #   - "include/"
     # Optional: only analyze files matching these glob patterns
     # include_cr_file:
-    #   - "**/*.cpp"
     #   - "**/*.h"
-    #   - "**/*.proto"
+    #   - "**/*.hpp"
+    #   - "**/*.cpp"
+    #   - "**/*.cc"
+    #   - "**/*.cxx"
+    #   - "**/*.go"
+    #   - "**/*.lua"
+    #   - "**/*.cs"
+    #   - "**/*.java"
     #   - "**/*.py"
+    #   - "**/*.gd"
+    #   - "**/*.js"
+    #   - "**/*.ts"
+    #   - "**/*.mjs"
+    #   - "**/*.css"
+    #   - "**/*.scss"
+    #   - "**/*.html"
+    #   - "**/*.cmake"
+    #   - "**/*.mako"
+    #   - "**/*.in"
+    #   - "**/*.yaml"
+    #   - "**/*.xml"
+    #   - "**/*.sh"
+    #   - "**/*.ps1"
+    #   - "**/*.bat"
+    #   - "**/*.md"
+    #   - "**/*.txt"
+    #   - "**/*.jenkinsfile"
     # Optional: exclude generated files from analysis
     # exclude_cr_file:
+    #   - "**/*.pb.h"
+    #   - "**/*.pb.cc"
+    #   - "**/*.gen.h"
     #   - "**/*.gen.cpp"
+    #   - "**/*.pb.go"
 
   # -- GitHub webhook trigger --
   # - name: github
@@ -144,19 +172,43 @@ triggers:
   #   watch_path:                          # only analyze files under these paths
   #     - "src/"
   #     - "include/"
-  #   include_cr_file:                     # only analyze files matching these globs
-  #     - "**/*.cpp"
-  #     - "**/*.h"
-  #     - "**/*.hpp"
-  #     - "**/*.java"
-  #     - "**/*.py"
-  #     - "**/*.ts"
-  #     - "**/*.proto"
-  #   exclude_cr_file:                     # skip files matching these globs
-  #     - "**/*.gen.cpp"
-  #     - "**/*.gen.h"
-  #     - "**/*.pb.cc"
-  #     - "**/*.pb.h"
+  # Optional: only analyze files matching these glob patterns
+  # include_cr_file:
+  #   - "**/*.h"
+  #   - "**/*.hpp"
+  #   - "**/*.cpp"
+  #   - "**/*.cc"
+  #   - "**/*.cxx"
+  #   - "**/*.go"
+  #   - "**/*.lua"
+  #   - "**/*.cs"
+  #   - "**/*.java"
+  #   - "**/*.py"
+  #   - "**/*.gd"
+  #   - "**/*.js"
+  #   - "**/*.ts"
+  #   - "**/*.mjs"
+  #   - "**/*.css"
+  #   - "**/*.scss"
+  #   - "**/*.html"
+  #   - "**/*.cmake"
+  #   - "**/*.mako"
+  #   - "**/*.in"
+  #   - "**/*.yaml"
+  #   - "**/*.xml"
+  #   - "**/*.sh"
+  #   - "**/*.ps1"
+  #   - "**/*.bat"
+  #   - "**/*.md"
+  #   - "**/*.txt"
+  #   - "**/*.jenkinsfile"
+  # Optional: exclude generated files from analysis
+  # exclude_cr_file:
+  #   - "**/*.pb.h"
+  #   - "**/*.pb.cc"
+  #   - "**/*.gen.h"
+  #   - "**/*.gen.cpp"
+  #   - "**/*.pb.go"
 
 # ---------------------------------------------------------------------------
 # Output channels

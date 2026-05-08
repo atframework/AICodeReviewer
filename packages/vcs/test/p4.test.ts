@@ -148,6 +148,33 @@ describe("P4VcsAdapter", () => {
       expect(range.files).toEqual(["src/foo.cpp"]);
     });
 
+    it("matches slashless include and exclude patterns against basenames at any depth", async () => {
+      const mockP4 = createMockP4Runner({
+        "describe -s 12345": {
+          stdout: `Change 12345 by testuser@testclient on 2026/05/07 10:00:00
+
+Affected files ...
+
+... //depot/main/Client/Projects/Prx/Source/Foo.cpp#2 edit
+... //depot/main/Client/Projects/Prx/Source/Foo.pb.h#1 edit
+... //depot/main/Client/Projects/Prx/Content/Icon.uasset#1 edit
+`,
+          stderr: "",
+        },
+      });
+      const adapter = new P4VcsAdapter({
+        repositoryDir: "/tmp/test",
+        depot: "//depot/main",
+        watchPath: ["Client/Projects"],
+        includeCrFile: ["*.cpp", "*.h"],
+        excludeCrFile: ["*.pb.h"],
+        p4: mockP4,
+      });
+
+      const range = await adapter.listChanges(makeEvent());
+      expect(range.files).toEqual(["Client/Projects/Prx/Source/Foo.cpp"]);
+    });
+
     it("filters files by exclude patterns", async () => {
       const mockP4 = createMockP4Runner({
         "describe -s 12345": { stdout: describeOutput, stderr: "" },
@@ -163,6 +190,42 @@ describe("P4VcsAdapter", () => {
       expect(range.files).toContain("src/foo.cpp");
       expect(range.files).toContain("src/bar.h");
       expect(range.files).not.toContain("README.md");
+    });
+
+    it("logs in with the configured password and retries when p4 reports an invalid ticket", async () => {
+      let describeAttempts = 0;
+      let loginCalls = 0;
+      const mockP4: P4CommandRunner = async (args, env) => {
+        if (args.join(" ").includes("describe -s 12345")) {
+          describeAttempts += 1;
+          expect(env).toEqual({ P4PASSWD: "secret-password" });
+          if (describeAttempts === 1) {
+            throw Object.assign(new Error("Perforce password (P4PASSWD) invalid or unset."), {
+              stderr: "Perforce password (P4PASSWD) invalid or unset.",
+            });
+          }
+          return { stdout: describeOutput, stderr: "" };
+        }
+        return { stdout: "", stderr: "" };
+      };
+      const adapter = new P4VcsAdapter({
+        repositoryDir: "/tmp/test",
+        depot: "//depot/main",
+        password: "secret-password",
+        p4: mockP4,
+        p4Login: async (args, password, env) => {
+          loginCalls += 1;
+          expect(args).not.toContain("login");
+          expect(password).toBe("secret-password");
+          expect(env).toEqual({ P4PASSWD: "secret-password" });
+          return { stdout: "User logged in.", stderr: "" };
+        },
+      });
+
+      const range = await adapter.listChanges(makeEvent());
+      expect(loginCalls).toBe(1);
+      expect(describeAttempts).toBe(2);
+      expect(range.files).toContain("src/foo.cpp");
     });
 
     it("filters files by watch path", async () => {

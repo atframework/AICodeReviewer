@@ -292,7 +292,7 @@ pipeline applied to the file list before code review:
 **Glob syntax**:
 
 - `**/*.cpp` — matches `foo.cpp`, `src/foo.cpp`, `a/b/c/foo.cpp` (any depth)
-- `*.md` — matches `readme.md` but NOT `docs/readme.md` (no directory traversal)
+- `*.md` — matches file basenames at any depth, e.g. `readme.md` and `docs/readme.md`
 - `src/**` — matches everything under `src/`
 - `**/*.pb.*` — matches `foo.pb.h`, `foo.pb.cc`, etc.
 
