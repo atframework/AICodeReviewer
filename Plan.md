@@ -932,40 +932,44 @@ workspaces/<workspace_id>/
 | M0.5 | 已完成 | `docs/prompt-research.md` 草案、`prompts/system/code-reviewer.system.md` 草案、默认提示词分层模板、Prompt Manager 组装契约、repo-local AI 资产发现 / 路径过滤 / 优先级 / 冲突记录实现与单元测试、severity 推荐语义与回归样例清单 | 低置信来源实测/确认（验收留存） |
 | M1 | 已完成 | Hono webhook receiver、Gitea/Forgejo 签名校验、`ReviewEvent` 归一化、Git VCS adapter、unified diff 解析、OpenAI 兼容 chat client、Gitea PR review comment dispatcher、`aicr-output` 工具收集器、webhook → orchestration 最小闭环、配置 bootstrap 层、CLI `serve` / `review --dry-run`、Node.js HTTP adapter、**真实 Gitea e2e 验收通过（5 findings → PR review comments）** | 无 |
 | M2 | 已完成（待验收留存） | `SandboxBackend` 抽象 + native / docker / podman 实现、命令白名单、超时 watchdog、目录隔离、`AgentAdapter` + Kilo / Claude Code / OpenCode / Roo / Copilot CLI 适配器（全部 5 种）、Model Config Translator（OpenAI 兼容 + Anthropic）、bootstrap 集成、review-orchestrator sandbox/agent 选项 | Kilo 驱动 e2e 验收、沙箱逃逸测试（验收留存） |
-| M3 | 已完成（待验收留存） | **PR Compression 接入 bootstrap**、**Secrets Scrubber**、**LLM Fallback + Bounded Retry + Budget**、**Per-provider 限流**、**In-memory 队列增强**（backoff / DLQ）、**Redis/BullMQ 队列适配器**、**队列 Worker 循环（含 rateLimiter wiring）**、**Markdown 修复增强**、**输出模板引擎（Handlebars）** + 内置默认模板（6 通道）+ workspace 覆盖机制 + `TemplateResolver`、**Queue 配置消费端接入 bootstrap**（`createQueueFromConfig` factory + worker 启动）、**770 测试通过** | BullMQ 真实 Redis 集成测试（验收留存） |
+| M3 | 已完成（待验收留存） | **PR Compression 接入 bootstrap**、**Secrets Scrubber**、**LLM Fallback + Bounded Retry + Budget**、**Per-provider 限流**、**In-memory 队列增强**（backoff / DLQ）、**Redis/BullMQ 队列适配器**、**队列 Worker 循环（含 rateLimiter wiring）**、**Markdown 修复增强**、**输出模板引擎（Handlebars）** + 内置默认模板（6 通道）+ workspace 覆盖机制 + `TemplateResolver`、**Queue 配置消费端接入 bootstrap**（`createQueueFromConfig` factory + worker 启动）、**LLM 兼容性增强**（OpenAI-compatible reasoning/final 分离、tool calls JSON 化、结构化输出/推理参数过滤、Anthropic thinking、Google AI Studio/Gemini） | BullMQ 真实 Redis 集成测试（验收留存） |
 | M4 | 已完成（待验收留存） | **多输出通道**：Gitea PR review、Gitea Issue、Feishu Bot、WeCom Bot dispatcher、GitHub PR review dispatcher、GitLab MR review dispatcher（全部 6 通道）；**finding fingerprint**（`computeFindingFingerprint`）；**模板引擎接入 orchestrator**（per-channel `TemplateResolver` + markdown fix post-validation）；**@-mention 作者解析管线**（email → username 映射 + 邮箱黑名单 + Feishu/WeCom/GitHub/GitLab/Gitea 方言）；**行号降级策略**（超出 diff 范围 → 通用评论 fallback，422 处理）；**workspace 覆盖模板文件读取**（`workspaces/<id>/templates/` + channelName/channelKind 优先级） | 真实 GitHub/GitLab e2e 验收（验收留存） |
-| M5 | 已完成（待验收留存） | **Agent CLI 适配器**：Kilo / Claude Code / OpenCode / Roo / Copilot CLI（全部 5 种）；**Model Config Translator**：OpenAI 兼容 + Anthropic + Vertex AI + Bedrock（含 anthropicVersion、anthropicBeta、thinking、vertexProject、vertexLocation、awsRegion、awsProfile 等全部字段）；**Sandbox Backend**：native / docker / podman auto-detect + fallback；**Server webhook**：Gitea / Forgejo / GitHub / GitLab 全部 4 种 webhook endpoint 已注册；**CLI**：replay、memory、lint 命令已实现；**Podman sandbox**（thin wrapper over docker backend）；**vcsFactory** per-request VCS adapter；**XML `<tool_call/>` 解析**；**example/ 部署示例** | Kilo 驱动 e2e 验收、沙箱逃逸测试（验收留存） |
+| M5 | 已完成（待验收留存） | **Agent CLI 适配器**：Kilo / Claude Code / OpenCode / Roo / Copilot CLI（全部 5 种）；**Model Config Translator**：OpenAI 兼容 + Anthropic + Vertex AI + Bedrock（含 anthropicVersion、anthropicBeta、thinking、vertexProject、vertexLocation、awsRegion、awsProfile 等字段）并向 Kilo/OpenCode 透传 reasoning/structured-output 参数；**Sandbox Backend**：native / docker / podman auto-detect + fallback；**Server webhook**：Gitea / Forgejo / GitHub / GitLab 全部 4 种 webhook endpoint 已注册；**CLI**：replay、memory、lint 命令已实现；**Podman sandbox**（thin wrapper over docker backend）；**vcsFactory** per-request VCS adapter；**XML `<tool_call/>` 解析**；**example/ 部署示例** | Kilo 驱动 e2e 验收、沙箱逃逸测试（验收留存） |
+| M6 | 进行中（P4 / Git push 已生产验证） | **P4 trigger endpoint**（`/triggers/p4`）+ API Key 保护；**P4 trigger 脚本**（非阻塞、默认不本地 `p4 describe`、`AICR_DEPOT_PATH` 可省略）；**P4 VCS adapter**（`describe`/`print`/`diff`、`P4PASSWORD` 自动 login + retry、watch/include/exclude 过滤、basename glob 匹配）；**Gitea push changedFiles + repo mappings**；**Git remote clone/fetch + token redaction**；**async triggers**（立即 202，后台日志/错误报告）；生产部署到 `10.64.8.2` 并用 CL 6251 验证 `.h/.cpp` 可识别 | SVN adapter/trigger、scheduled/manual/tag 触发面、真实 GitHub/GitLab e2e、P4 完整 LLM review 补跑与长期运行观测 |
+| M7 | 未开始 | Workspace memory / reflection 设计已在计划中定义，CLI memory 命令已有基础入口 | Self-Reflection 写入/归并/注入闭环、按 path skill 激活的 e2e、国际化验收 |
+| M8 | 进行中（日志与回放基础） | CLI replay/memory/lint 命令已存在；async trigger structured logs；生产容器同时输出 Podman log 与本地 rotating file log（7 天、最多 3 文件、每文件 100MB）；后台错误可经 output publisher 汇报 | `runs/<run_id>/` 完整快照、Prometheus metrics、OTel trace 贯穿、eval dataset/CLI、无副作用 replay 完整验收 |
+| M9 | 进行中（部署与示例已生产验证） | `deploy/Dockerfile` + `deploy/deploy.sh` 支持 Podman 构建/运行、持久化 workspaces/data/logs、P4 CLI 挂载与 trust 初始化；`example/` 文档覆盖 auth/P4/Feishu/WeCom；已在 `10.64.8.2` 反向代理 `https://aicr.m-oa.com:6023` 生产部署并多轮健康检查通过 | Helm chart、docker_socket/k8s_pod 完整实现与验收、发布镜像版本固定/changelog、从零部署文档最终验收 |
 
 ### 8.2 下一轮执行包
 
-1. **M5 收口**：**Podman sandbox backend 完整落地**（rootless daemonless 独立实现 + `docs/podman.md` 指引）、**sandbox 逃逸测试**。
-2. **M3 / M0.5 / M1 / M2 / M4 验收留存**：真实 Gitea e2e（本地 docker 起 Gitea → PR 触发 → 看到 line comment）、模拟 429 + Retry-After、单 PR > 200KB diff 压缩、评论 markdownlint、多实例并发不重复、Kilo 驱动 e2e、沙箱逃逸测试。
-3. **反向代理支持（M1 增量 / M9 前置）**：在 `packages/core/src/config.ts` 添加 `server` 配置 schema（`trust_proxy` / `base_url` / `path_prefix` / `port` / `hostname`）；在 `packages/server/src/node-serve.ts` 实现 `X-Forwarded-Proto` / `X-Forwarded-Host` / `X-Forwarded-For` 解析与 trust 策略；在 Hono app 注册路由时支持 `basePath` 前缀；CLI `serve` 命令透传 `server` 配置；补齐反向代理场景的单元测试与集成测试。
-4. **M6 启动**：多 VCS（P4 / SVN triggers + adapters）、多触发面（push / commit / tag / scheduled / manual webhook/trigger 扩展）。
+1. **M6 收口**：补齐 SVN adapter/trigger、tag / scheduled / manual 触发面，继续验证 P4 真实 changelist 的完整 LLM review 与输出通道闭环。
+2. **验收留存**：Kilo 驱动 e2e、沙箱逃逸测试、BullMQ 真实 Redis 集成测试、真实 GitHub/GitLab e2e、P4 长时间运行与失败报告验证。
+3. **M8 深化**：落地 `runs/<run_id>/` 事件 / prompt / trace / findings 快照、Prometheus metrics、OTel trace、eval dataset 与无副作用 replay 验收。
+4. **M9 收口**：固定发布镜像标签、补 Helm / docker_socket / k8s_pod 文档与验收、整理生产部署 runbook，并跑全仓 lint / typecheck / test / markdownlint / build 基线。
 
 ### M0 — 项目骨架（状态：已完成）
 
 - pnpm monorepo + tsc strict + ESLint / Prettier + CI（lint / typecheck / test / markdownlint） + 目录结构 + 配置加载（Zod） + pino 日志 + OTel 骨架 + Drizzle + SQLite store + `deploy/Dockerfile` 雏形 + `.markdownlint.json` + 根 `AGENTS.md` 骨架 + `.agents/skills/` 骨架 + AI 元数据校验雏形。
 - 验收：`aicr --help`、`vitest run` 通过、配置三层合并的单元测试、`markdownlint-cli2` 在 CI 通过且包含 `Plan.md`。
 
-### M0.5 — 提示词调研（前置，状态：进行中）
+### M0.5 — 提示词调研（前置，状态：已完成，低置信来源实测留存）
 
 - 产出 `docs/prompt-research.md`，对以下方案做横向对比与可借鉴点提炼：PR-Agent (`pr_reviewer_prompts.toml`)、CodeRabbit、Aider CONVENTIONS、Cursor 系统提示词公开摘录、Anthropic Claude Code 系统提示、GitHub Copilot for PR Reviews、OpenAI / Anthropic 官方 prompt engineering 指南、GitHub 官方 repository custom instructions / `AGENTS.md` 机制、Google Engineering Code Review Standards、Kilo Code / OpenCode 内置评审 skills。
 - 输出：每方案的 *任务结构 / 输出协议 / 静默策略 / 反注入 / 上下文获取* 五维总结表 + 我们将采纳与拒绝的项 + `prompts/system/code-reviewer.system.md` 草案；并额外产出 **默认提示词分层模板**、**Prompt Manager 组装契约**、**repo-local AI 资产加载优先级矩阵**、**冲突处理规则**、**severity 推荐语义**、**回归样例清单** 与 **上下文预算策略**。
 - 当前状态：`docs/prompt-research.md` 与 `prompts/system/code-reviewer.system.md` 草案已创建，并补齐 Prompt Manager 组装契约、severity 推荐语义与回归样例清单；低置信公开来源（如 Cursor / Claude Code 公开摘录、Kilo/OpenCode skills）暂不作为硬规则依据，后续在实现期通过实测补充或确认。
 - 验收：`prompts/system/*.md` 通过 markdownlint；docs 评审通过后才进入 M1 写最小 prompt。
 
-### M1 — Gitea + Git + 单 LLM 端到端最小闭环（状态：进行中 / 下一轮）
+### M1 — Gitea + Git + 单 LLM 端到端最小闭环（状态：已完成）
 
 - Gitea webhook receiver（Hono）、Git VCS adapter（统一三段式契约 + workspace 持久缓存 + `--depth=100`）、Diff 解析、最小 system prompt（取自 M0.5 草案）、`ai-sdk` 直连一个 OpenAI 兼容 provider、Gitea PR review comment 输出、内置 MCP server 雏形。
 - 验收：本地 docker 起 Gitea，PR 触发后能在 PR 上看到 ≥1 条 line comment；e2e 测试通过。
 
-### M2 — Agent CLI 接入（Kilo）+ 沙箱（状态：未开始）
+### M2 — Agent CLI 接入（Kilo）+ 沙箱（状态：已完成，验收留存）
 
 - Kilo adapter、auto-approve 与超时、Docker 沙箱、命令 / 网络白名单、agent 与 source 的目录隔离、`SandboxBackend` 抽象（含 podman / docker_socket / k8s_pod 占位）。
 - 验收：完全由 Kilo 驱动完成 M1 同样场景；恶意 PR 注入测试不能逃出沙箱。
 
-### M3 — 压缩、Scrubber、Fallback、预算、Markdown 修复、Redis 队列（状态：进行中）
+### M3 — 压缩、Scrubber、Fallback、预算、Markdown 修复、Redis 队列（状态：已完成，验收留存）
 
 - PR Compression（summarize → review 两阶段）：已实现 `@aicr/llm/compression.ts`（scoreAndSelectHunks / generatePerFileSummaries / buildCompactedDiff / compressDiff / shouldTriggerCompression）并已接入 bootstrap wiring（`toCompressionConfig` / `resolveSummarizeModelFromConfig`）与 orchestrator（token 估算 → 触发判断 → 压缩 → 重构 taskContext）。
 - Secrets Scrubber：已完整实现 `@aicr/core/secret-scrubber.ts`（正则 + 熵 + 键值对三层过滤）并接入 orchestrator（prompt 前过滤 + findings 后过滤）。
@@ -975,38 +979,41 @@ workspaces/<workspace_id>/
 - Redis/BullMQ 队列适配器：已实现 `@aicr/core/redis-queue.ts`（`createRedisQueue` + optional dependency `bullmq` / `ioredis`）。
 - 队列 Worker 循环：已实现 `@aicr/core/queue-worker.ts`（`createQueueWorker` + 并发控制 + 逐 workspace 并发 + rate limiter 集成 + graceful shutdown）。
 - Markdown 修复增强：heading spacing / list marker spacing / trailing hash / violations 数组、更完整的自动修复规则集。
-- 测试：614 个测试全部通过（新增 56 个：rate-limiter 16、queue-worker 9、queue DLQ 16、markdown-fixer 8、computeBackoffDelay 7）。
-- **待完成**：输出模板引擎（Handlebars）集成、BullMQ 真实 Redis 集成测试、queue 配置消费端接入 bootstrap、markdownlint-cli2 全量输出校验。
+- LLM 兼容性增强：OpenAI-compatible provider 已支持 reasoning/final content 分离、结构化输出、tool call JSON 化、provider 参数过滤；Anthropic client 支持 thinking/redacted thinking；Google AI Studio/Gemini client 已接入。
+- **验收留存**：BullMQ 真实 Redis 集成测试、压缩大 PR 长时间稳定性、全量输出 Markdown 校验。
 - 验收：单 PR > 200KB diff 也能稳定产出；secret 注入测试 100% 拦截；模拟 429 + Retry-After 在重试上限内正确恢复或 fallback；评论 Markdown 通过 markdownlint 默认规则；多实例并发不重复评审同一 target。
 
-### M4 — 多输出、模板与 @-mention（状态：未开始）
+### M4 — 多输出、模板与 @-mention（状态：已完成，验收留存）
 
 - Gitea issue、Feishu、WeCom；finding 幂等（fingerprint）；行号降级策略；MCP `publish_finding/summary/skip/fetch_more_context` 完整化；模板引擎（Handlebars）+ 内置默认模板 + workspace 覆盖；作者解析与 @-mention（含飞书 / 企微方言、邮箱黑名单）。
 - 验收：同一 PR 二次评审不重复发同条评论；Feishu 群里收到聚合卡片并正确 @ 作者；workspace 覆盖模板生效。
 
-### M5 — 多 Agent CLI（OpenCode、Roo、Copilot CLI、Claude Code）+ Podman（状态：未开始）
+### M5 — 多 Agent CLI（OpenCode、Roo、Copilot CLI、Claude Code）+ Podman（状态：已完成，验收留存）
 
 - 适配器 + 各自 skills / prompts 文件物化（含 AgentSkill `SKILL.md` 兼容 / 降级转换）、统一 auto-approve 策略、Model Config Translator 全量字段（含 Azure / Vertex / Bedrock / 推理类参数）跑通；Podman sandbox backend 落地 + `docs/podman.md` 指引；`sandbox.engine: auto` 自动检测。
 - 验收：通过 `agent.default` 切换四种 CLI（含 `claude-code`）都能跑通基准 PR；docker / podman 任一引擎都可独立完成 M3 用例。
 
-### M6 — 多 VCS（GitHub / GitLab / P4 / SVN）+ 触发面扩展（状态：未开始）
+### M6 — 多 VCS（GitHub / GitLab / P4 / SVN）+ 触发面扩展（状态：进行中）
 
-- 各自 trigger + adapter + 输出（GitHub / GitLab review comments）；新增 push / commit / tag / scheduled / manual 触发器；P4 stream + 最小化拉取 + 持久 client；SVN 按 rev + 路径列表拉取 + 持久 working copy。
-- 验收：每种 provider 至少 1 条 e2e 用例；scheduled cron 巡检能产出报告。
+- 已完成：GitHub / GitLab webhook endpoint 注册；Gitea push changedFiles 与 repo mappings；Git remote clone/fetch/token redaction；P4 `/triggers/p4` endpoint + API Key auth；P4 trigger 脚本非阻塞回调；P4 adapter 支持 `describe` / `print` / `diff`、自动 `p4 login` 后重试、`watch_path` / `include_cr_file` / `exclude_cr_file` 过滤；`AICR_DEPOT_PATH` 可省略并回退服务端 `depot_path`；P4 生产部署已验证 CL 6251 能识别 `.h/.cpp` 文件。
+- 待完成：SVN 按 rev + 路径列表拉取 + 持久 working copy；tag / scheduled / manual 触发器；GitHub / GitLab / P4 的真实 e2e 与长期运行验收。
+- 验收：每种 provider 至少 1 条 e2e 用例；scheduled cron 巡检能产出报告；P4 changelist 能从 trigger → adapter → LLM → 输出通道完整闭环。
 
 ### M7 — Workspace 定制 + skill by glob + 国际化 + Self-Reflection & Memory（状态：未开始）
 
 - 扁平 workspace 拉取与合并、按 path 激活 skill、输出语言选择、§3.12 反思与 workspace memory 落盘 + 注入。
 - 验收：workspace 自定义 skill 能影响 review；中英文输出可切换；同一 workspace 二次 run 能读取 memory 并避免 false-positive 重复出现。
 
-### M8 — 可观测性、回放与 eval（状态：未开始）
+### M8 — 可观测性、回放与 eval（状态：进行中）
 
-- OTel trace、Prometheus metrics（含 `aicr_llm_retries_total`）、`aicr replay <run_id>`、eval CLI 与基准数据集。
+- 已完成：async trigger 调度 / 完成 / 失败 structured logs；失败可通过配置的 output publisher 汇报；CLI replay / memory / lint 基础命令；生产日志同时写 Podman log 与本地 rotating file log（7 天、最多 3 文件、每文件最大 100MB）。
+- 待完成：OTel trace、Prometheus metrics（含 `aicr_llm_retries_total`）、`runs/<run_id>/` 完整快照、eval CLI 与基准数据集。
 - 验收：CI 上传 eval 报告；`aicr replay` 可在不触发外部副作用前提下复现一次 review。
 
-### M9 — 文档、示例、`docker_socket` / `k8s_pod` 沙箱与发布（状态：未开始）
+### M9 — 文档、示例、`docker_socket` / `k8s_pod` 沙箱与发布（状态：进行中）
 
-- `docs/`（含 `podman.md` / `output-channels.md` / `prompt-research.md`）、示例配置、Helm chart / docker-compose、Redis 集群部署示例、`docker_socket` 与 `k8s_pod` 沙箱后端落地、版本与 changelog；最终一遍 `markdownlint-cli2` 全仓校验。
+- 已完成：`deploy/Dockerfile`、`deploy/deploy.sh`、`example/config.yaml`、`example/docker-compose.yaml`、`example/.env.sample` 与 `example/README.md` 已覆盖 auth、P4、Feishu、WeCom、日志卷与 Podman 部署；生产部署到 `10.64.8.2`，反向代理 `https://aicr.m-oa.com:6023` 多轮健康检查通过。
+- 待完成：Helm chart / Redis 集群部署示例、`docker_socket` 与 `k8s_pod` 沙箱后端落地、版本固定与 changelog、从零部署文档最终验收；最终一遍 `markdownlint-cli2` 全仓校验。
 - 验收：从零跟着 README 30 分钟内能在 Gitea 上看到第一个 AI review；多 Gitea 实例 + 多飞书机器人路由示例可一键启动；所有 `*.md` 通过 markdownlint。
 
 ---
@@ -1021,7 +1028,7 @@ workspaces/<workspace_id>/
 | D4 | 审批流（Human-in-the-loop） | 当前不实现；通过 *Output Pipeline 中间件 + Run 状态机扩展* 预留口子 | §10.2 |
 | D5 | Workspace 目录布局 | 扁平、自包含，`workspaces/<workspace_id>/{source,prompts,skills,memory,templates,...}`；不再按 `<provider>/<owner>/<repo>` 分层；workspace_id 由用户配置 | §2.2 / §3.10 / §5.5 |
 | D6 | VCS 拉取深度 | 默认 `--depth=100` + workspace 持久缓存；缺 base 时受闸门 `review.git.allow_deepen` 控制走 `--deepen` | §3.2 |
-| D7 | 压缩触发阈值 | 默认 `trigger_tokens: 65536` 并叠加 `max_input_ratio: 0.75`，参考 Copilot / Kilo / Claude Code 的有效窗口 | §3.3 |
+| D7 | 压缩触发阈值 | 默认 `trigger_tokens: 131072 (128K)` 并叠加 `max_input_ratio: 0.6`，参考 GPT-5.x、Claude 4.x、GLM 5.1、Kimi K2.6、DeepSeek V4 Pro 等当代模型 | §3.3 / D13 |
 | D8 | LLM 限流策略 | 单次调用层 *bounded rate-limit retry*（尊重 Retry-After + 上限），与队列层 retry 解耦 | §3.5 |
 | D9 | 模板与 @-mention | 输出走模板引擎（Handlebars），workspace 可覆盖；@-mention 经作者解析管线 + 邮箱黑名单 | §3.9 |
 | D10 | 沙箱引擎 | docker 与 podman 平等支持；`sandbox.engine: auto` 自动检测；`docker_socket` 兼容 podman socket | §3.8 + `docs/podman.md` |
@@ -1033,6 +1040,9 @@ workspaces/<workspace_id>/
 | D16 | 仓库 AI 维护资产 | 使用 `AGENTS.md` 作为唯一常驻指令源，`.agents/skills/` 作为 canonical Agent Skills 源；如需兼容工具私有目录，通过 materialize / symlink / shim 暴露，禁止手工复制正文 | §2.2 / §3.6 / §8 |
 | D17 | 默认提示词分层与源码仓库 AI 资产加载 | 默认 system prompt 只保留稳定硬规则；源码仓库拉取后自动发现并归一化加载 repo-local `AGENTS.md`、repository/path-specific instructions 与 skills，按就近与路径相关优先 | §1.2 / §3.6.1 / §4 / §8 |
 | D18 | 反向代理支持 | 应用自身不处理 TLS，由反向代理终止；通过 `server.trust_proxy` 信任转发 header（`X-Forwarded-Proto/Host/For`），通过 `server.path_prefix` 支持子路径挂载，通过 `server.base_url` 生成正确的回调地址；生产环境 `trust_proxy` 不得为 `true`（信任所有） | §3.10 / §11.5 / §8.2 |
+| D19 | Trigger 非阻塞语义 | `/webhooks/*` 与 `/triggers/*` 可配置为 async；配置和鉴权通过后立即返回 `202` + `runId`，LLM review 后台执行，失败写日志并可通过输出通道报告 | §3.1 / §8.1 M6 / `packages/server/src/index.ts` |
+| D20 | P4 trigger 职责边界 | P4D trigger 脚本只负责最小 metadata POST，默认不在 p4d 进程内执行 `p4 describe`；depot 路径默认使用服务端 `config.yaml` 的 `depot_path`，脚本侧 `AICR_DEPOT_PATH` 仅作为覆盖项 | §3.1 / §3.2 / `example/p4-trigger.sh` |
+| D21 | P4 凭据与过滤语义 | `P4PASSWORD` 作为密码时，P4 adapter 遇到 ticket/password 错误需非交互 `p4 login` 后重试；`include_cr_file` / `exclude_cr_file` 中不含 `/` 的 glob（如 `*.cpp`）按 basename 匹配任意层级 | §3.2 / §8.1 M6 / `packages/vcs/src/p4.ts` |
 
 ---
 

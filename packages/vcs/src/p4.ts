@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
@@ -20,6 +20,12 @@ export type P4CommandRunner = (
   env?: Readonly<Record<string, string>>,
 ) => Promise<P4CommandResult>;
 
+export type P4LoginRunner = (
+  args: readonly string[],
+  password: string,
+  env?: Readonly<Record<string, string>>,
+) => Promise<P4CommandResult>;
+
 export interface P4VcsAdapterOptions {
   readonly repositoryDir: string;
   readonly port?: string;
@@ -31,6 +37,7 @@ export interface P4VcsAdapterOptions {
   readonly includeCrFile?: readonly string[];
   readonly excludeCrFile?: readonly string[];
   readonly p4?: P4CommandRunner;
+  readonly p4Login?: P4LoginRunner;
 }
 
 async function defaultP4Runner(
@@ -49,6 +56,52 @@ async function defaultP4Runner(
   };
 }
 
+async function defaultP4LoginRunner(
+  args: readonly string[],
+  password: string,
+  env: Readonly<Record<string, string>> = {},
+): Promise<P4CommandResult> {
+  return new Promise((resolvePromise, reject) => {
+    const child = spawn("p4", [...args, "login"], {
+      env: { ...process.env, ...env },
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => { stdout += chunk; });
+    child.stderr.on("data", (chunk: string) => { stderr += chunk; });
+    child.on("error", reject);
+    child.on("close", (code) => {
+      const result = { stdout, stderr };
+      if (code === 0) {
+        resolvePromise(result);
+        return;
+      }
+
+      const error = new Error(`p4 login failed with exit code ${code ?? "unknown"}. ${stderr || stdout}`);
+      Object.assign(error, result, { code });
+      reject(error);
+    });
+    child.stdin.end(`${password}\n`);
+  });
+}
+
+function getErrorText(error: unknown): string {
+  const candidate = error as { readonly stdout?: unknown; readonly stderr?: unknown };
+  return [
+    error instanceof Error ? error.message : String(error),
+    typeof candidate.stdout === "string" ? candidate.stdout : "",
+    typeof candidate.stderr === "string" ? candidate.stderr : "",
+  ].join("\n");
+}
+
+function isP4AuthenticationError(error: unknown): boolean {
+  return /P4PASSWD|Perforce password|not logged in|login required|session has expired|ticket.*expired/iu.test(getErrorText(error));
+}
+
 function filterFilesByPatterns(
   files: readonly string[],
   includePatterns: readonly string[] | undefined,
@@ -57,20 +110,38 @@ function filterFilesByPatterns(
   let filtered = [...files];
 
   if (includePatterns && includePatterns.length > 0) {
-    const includeRegexes = includePatterns.map((pattern) => globToRegex(pattern));
+    const includeMatchers = includePatterns.map((pattern) => createGlobMatcher(pattern));
     filtered = filtered.filter((file) =>
-      includeRegexes.some((regex) => regex.test(file)),
+      includeMatchers.some((matches) => matches(file)),
     );
   }
 
   if (excludePatterns && excludePatterns.length > 0) {
-    const excludeRegexes = excludePatterns.map((pattern) => globToRegex(pattern));
+    const excludeMatchers = excludePatterns.map((pattern) => createGlobMatcher(pattern));
     filtered = filtered.filter((file) =>
-      !excludeRegexes.some((regex) => regex.test(file)),
+      !excludeMatchers.some((matches) => matches(file)),
     );
   }
 
   return filtered;
+}
+
+function createGlobMatcher(pattern: string): (file: string) => boolean {
+  const normalizedPattern = normalizePath(pattern);
+  const regex = globToRegex(normalizedPattern);
+  const matchBasename = !normalizedPattern.includes("/");
+
+  return (file: string) => {
+    if (regex.test(file)) {
+      return true;
+    }
+
+    if (!matchBasename) {
+      return false;
+    }
+
+    return regex.test(file.split("/").at(-1) ?? file);
+  };
 }
 
 function globToRegex(pattern: string): RegExp {
@@ -113,6 +184,8 @@ export class P4VcsAdapter implements VcsAdapter {
   private readonly includeCrFile: readonly string[] | undefined;
   private readonly excludeCrFile: readonly string[] | undefined;
   private readonly p4: P4CommandRunner;
+  private readonly p4Login: P4LoginRunner;
+  private loginAttempted = false;
 
   constructor(options: P4VcsAdapterOptions) {
     this.repositoryDir = resolve(options.repositoryDir);
@@ -125,6 +198,7 @@ export class P4VcsAdapter implements VcsAdapter {
     this.includeCrFile = options.includeCrFile;
     this.excludeCrFile = options.excludeCrFile;
     this.p4 = options.p4 ?? defaultP4Runner;
+    this.p4Login = options.p4Login ?? defaultP4LoginRunner;
   }
 
   private buildBaseArgs(): string[] {
@@ -139,14 +213,28 @@ export class P4VcsAdapter implements VcsAdapter {
     return this.password ? { P4PASSWD: this.password } : undefined;
   }
 
-  private async runP4(args: readonly string[]): Promise<P4CommandResult> {
+  private async runP4Once(args: readonly string[]): Promise<P4CommandResult> {
     const baseArgs = this.buildBaseArgs();
     return this.p4([...baseArgs, ...args], this.buildEnv());
   }
 
+  private async runP4(args: readonly string[]): Promise<P4CommandResult> {
+    try {
+      return await this.runP4Once(args);
+    } catch (error) {
+      if (!this.password || this.loginAttempted || !isP4AuthenticationError(error)) {
+        throw error;
+      }
+
+      await this.login();
+      return this.runP4Once(args);
+    }
+  }
+
   async login(): Promise<void> {
     if (!this.password) return;
-    await this.runP4(["login"]);
+    this.loginAttempted = true;
+    await this.p4Login(this.buildBaseArgs(), this.password, this.buildEnv());
   }
 
   async listChanges(ev: ReviewEvent): Promise<ChangeRange> {
