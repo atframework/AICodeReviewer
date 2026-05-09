@@ -12,12 +12,12 @@
 
 ## 验收
 
-- 仅剩真实 Gitea e2e 验收（本地 docker 起 Gitea → PR 触发 → 看到 line comment）。其余 M1 核心能力（webhook → VCS → prompt → LLM → output 全链路 + 配置驱动 + CLI serve/dry-run）已全部落地。
-- 使用真实 Kilo CLI 做完整 agent review。
-- 未用真实 Docker/Podman 容器跑恶意 PR sandbox escape 场景。
-- 队列/并发/限流和多事件路由的压力型测试仍可继续加强。
-- M0.5/M1/M2 验收留存项
-
+- 部署测试必须使用 **Kilo Code** 做至少一次完整端到端验证，确认真实 agent 路径可用，而不是只验证 direct LLM / `native-llm` 路径。
+  - `example/config.yaml` 的默认验收路径应保持 `agent.default: kilo`。
+  - Kilo CLI 可作为自动化烟测补充，但不能替代 Kilo Code 人工确认。
+  - 验收至少覆盖：触发入口（Gitea webhook 或 P4 trigger）→ VCS 最小拉取 / diff → Kilo agent → AICR MCP 工具提交 problem/summary → 输出通道（PR/MR/Issue/飞书/企微）。
+  - 在 Kilo `.kilo/mcp.json` 与外部 `aicr-output` stdio/HTTP MCP 服务补齐前，Kilo 验收只能算 agent/stdout tool-call 兼容路径通过，不能关闭外部 MCP 服务验收项。
+  - 生产发布前若 Kilo Code 无法完成 MCP 工具调用或输出发布，视为部署未通过。
 - LLM的baseURL请使用 `jq ".xiaomimimo_token_plan.baseURL" ".vscode/secret.json"` 提。
 - LLM的token通过 `jq ".xiaomimimo_token_plan.token" ".vscode/secret.json"` 提取。
 - gitea环境提取方式如下:
@@ -47,6 +47,7 @@
 - 注意所有的命令执行都要防止流程卡死（如果长时间无任何输出则要强制kill掉）。超时后需要先尝试清理之前卡住的进程。
 - 远程部署时，请使用 `ssh -p 36000 -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no -o User=tools -i D:/workspace/keys/id_ed25519.it 10.64.8.2` 连接远程服务器，部署到 `/data/disk2/AICodeReviewer` 目录。
   - 使用podman构建和运行镜像
+  - 部署的测试环境的公共系统提示词里请增加“使用简体中文回答最终分析报告”
   - 我不仅仅需要支持MR/PR，也需要有新的commit时自动执行分析
     - 对于gitea输出，支持分析代码并在分析到有问题时自动创建issue。
     - 自动创建的issue和PR/MR，请通过标题前缀或者tag、标签来标识是否是当前工具创建的。需要可配置。

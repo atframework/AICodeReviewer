@@ -329,7 +329,7 @@ describe("runCli", () => {
       await writeWorkspaceFile(
         tempDir,
         "templates/custom.summary.md.hbs",
-        "## {{summary}}\n\n{{#each findings}}- `{{location}}`: {{message}}\n{{/each}}",
+        "## {{summary}}\n\n{{#each problems}}- `{{location}}`: {{message}}\n{{/each}}",
       );
       const stdout = new MemoryWriter();
       const stderr = new MemoryWriter();
@@ -378,7 +378,7 @@ describe("runCli", () => {
 
       expect(exitCode).toBe(1);
       expect(stdout.output).toBe("");
-      expect(stderr.output).toContain("--template-kind must be either summary or finding");
+      expect(stderr.output).toContain("--template-kind must be summary or problem");
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }

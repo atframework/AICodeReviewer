@@ -8,9 +8,11 @@ export {
 	getBuiltinTemplate,
 	renderBuiltinTemplate,
 	renderTemplate,
-	toTemplateFinding,
+	toTemplateProblem,
+	toTemplateProblem as toTemplateFinding,
 	type TemplateContext,
-	type TemplateFinding,
+	type TemplateProblem,
+	type TemplateProblem as TemplateFinding,
 	type TemplateKind,
 	type TemplateResolver,
 	type TemplateResolverOptions,
@@ -25,20 +27,25 @@ export {
 	type MentionChannelKind,
 } from "./author-resolution.js";
 
-export type FindingSeverity = "info" | "low" | "medium" | "high" | "critical";
+export type ProblemSeverity = "info" | "low" | "medium" | "high" | "critical";
+/** @deprecated Use ProblemSeverity. */
+export type FindingSeverity = ProblemSeverity;
 
-export interface ReviewFinding {
+export interface ReviewProblem {
 	readonly file: string;
 	readonly line: number;
 	readonly endLine?: number;
 	readonly lineCommentAllowed?: boolean;
-	readonly severity: FindingSeverity;
+	readonly severity: ProblemSeverity;
 	readonly category: string;
 	readonly message: string;
 	readonly suggestion?: string;
 	readonly fingerprint?: string;
 	readonly renderedMarkdown?: string;
 }
+
+/** @deprecated Use ReviewProblem. */
+export type ReviewFinding = ReviewProblem;
 
 export interface DispatchResult {
 	readonly channel: string;
@@ -75,7 +82,9 @@ export interface GiteaPullRequestReviewOptions {
 }
 
 export interface GiteaPullRequestReviewDispatcher {
-	publishFinding(finding: ReviewFinding): Promise<DispatchResult>;
+	publishProblem(problem: ReviewProblem): Promise<DispatchResult>;
+	/** @deprecated Use publishProblem. */
+	publishFinding(problem: ReviewProblem): Promise<DispatchResult>;
 }
 
 export class OutputDispatchError extends Error {
@@ -111,30 +120,33 @@ function shouldFallbackToGeneralComment(status: number): boolean {
 	return status === 422;
 }
 
-export function renderFindingMarkdown(finding: ReviewFinding): string {
-	if (finding.renderedMarkdown) {
-		return finding.renderedMarkdown;
+export function renderProblemMarkdown(problem: ReviewProblem): string {
+	if (problem.renderedMarkdown) {
+		return problem.renderedMarkdown;
 	}
 
-	const location = finding.endLine ? `${finding.file}:${finding.line}-${finding.endLine}` : `${finding.file}:${finding.line}`;
+	const location = problem.endLine ? `${problem.file}:${problem.line}-${problem.endLine}` : `${problem.file}:${problem.line}`;
 	const parts = [
-		`**${finding.severity.toUpperCase()} · ${finding.category}**`,
+		`**${problem.severity.toUpperCase()} · ${problem.category}**`,
 		"",
-		finding.message,
+		problem.message,
 		"",
 		`Location: \`${location}\``,
 	];
 
-	if (finding.suggestion) {
-		parts.push("", "Suggested fix:", "", finding.suggestion);
+	if (problem.suggestion) {
+		parts.push("", "Suggested fix:", "", problem.suggestion);
 	}
 
-	if (finding.fingerprint) {
-		parts.push("", `<!-- aicr:fingerprint=${finding.fingerprint} -->`);
+	if (problem.fingerprint) {
+		parts.push("", `<!-- aicr:fingerprint=${problem.fingerprint} -->`);
 	}
 
 	return parts.join("\n");
 }
+
+/** @deprecated Use renderProblemMarkdown. */
+export const renderFindingMarkdown = renderProblemMarkdown;
 
 function extractExternalId(raw: unknown): string | undefined {
 	if (!raw || typeof raw !== "object") {
@@ -191,27 +203,27 @@ export function createGiteaPullRequestReviewDispatcher(
 		};
 	}
 
-	function generalReviewBody(finding: ReviewFinding): Record<string, unknown> {
+	function generalReviewBody(problem: ReviewProblem): Record<string, unknown> {
 		return {
 			event: "COMMENT",
-			body: renderFindingMarkdown(finding),
+			body: renderProblemMarkdown(problem),
 		};
 	}
 
-	return {
-		async publishFinding(finding: ReviewFinding): Promise<DispatchResult> {
-			if (finding.lineCommentAllowed === false) {
-				return postReview(generalReviewBody(finding));
+	const dispatcher = {
+		async publishProblem(problem: ReviewProblem): Promise<DispatchResult> {
+			if (problem.lineCommentAllowed === false) {
+				return postReview(generalReviewBody(problem));
 			}
 
 			const body = {
 				event: "COMMENT",
-				body: `AICR finding for ${finding.file}:${finding.line}`,
+				body: `AICR problem for ${problem.file}:${problem.line}`,
 				comments: [
 					{
-						path: finding.file,
-						new_position: finding.line,
-						body: renderFindingMarkdown(finding),
+						path: problem.file,
+						new_position: problem.line,
+						body: renderProblemMarkdown(problem),
 					},
 				],
 			};
@@ -225,7 +237,7 @@ export function createGiteaPullRequestReviewDispatcher(
 			if (!response.ok) {
 				if (shouldFallbackToGeneralComment(response.status)) {
 					await response.text();
-					return postReview(generalReviewBody(finding));
+					return postReview(generalReviewBody(problem));
 				}
 
 				throw new OutputDispatchError(`Gitea review API returned ${response.status}.`, {
@@ -244,6 +256,11 @@ export function createGiteaPullRequestReviewDispatcher(
 			};
 		},
 	};
+
+	return {
+		...dispatcher,
+		publishFinding: dispatcher.publishProblem,
+	};
 }
 
 export interface GithubPullRequestReviewOptions {
@@ -257,7 +274,9 @@ export interface GithubPullRequestReviewOptions {
 }
 
 export interface GithubPullRequestReviewDispatcher {
-	publishFinding(finding: ReviewFinding): Promise<DispatchResult>;
+	publishProblem(problem: ReviewProblem): Promise<DispatchResult>;
+	/** @deprecated Use publishProblem. */
+	publishFinding(problem: ReviewProblem): Promise<DispatchResult>;
 }
 
 export function createGithubPullRequestReviewDispatcher(
@@ -308,28 +327,28 @@ export function createGithubPullRequestReviewDispatcher(
 		};
 	}
 
-	function generalReviewBody(finding: ReviewFinding): Record<string, unknown> {
+	function generalReviewBody(problem: ReviewProblem): Record<string, unknown> {
 		return {
 			event: "COMMENT",
-			body: renderFindingMarkdown(finding),
+			body: renderProblemMarkdown(problem),
 		};
 	}
 
-	return {
-		async publishFinding(finding: ReviewFinding): Promise<DispatchResult> {
-			if (finding.lineCommentAllowed === false) {
-				return postReview(generalReviewBody(finding));
+	const dispatcher = {
+		async publishProblem(problem: ReviewProblem): Promise<DispatchResult> {
+			if (problem.lineCommentAllowed === false) {
+				return postReview(generalReviewBody(problem));
 			}
 
 			const body = {
 				event: "COMMENT",
-				body: `AICR finding for ${finding.file}:${finding.line}`,
+				body: `AICR problem for ${problem.file}:${problem.line}`,
 				comments: [
 					{
-						path: finding.file,
-						line: finding.line,
+						path: problem.file,
+						line: problem.line,
 						side: "RIGHT",
-						body: renderFindingMarkdown(finding),
+						body: renderProblemMarkdown(problem),
 					},
 				],
 			};
@@ -343,7 +362,7 @@ export function createGithubPullRequestReviewDispatcher(
 			if (!response.ok) {
 				if (shouldFallbackToGeneralComment(response.status)) {
 					await response.text();
-					return postReview(generalReviewBody(finding));
+					return postReview(generalReviewBody(problem));
 				}
 
 				throw new OutputDispatchError(`GitHub review API returned ${response.status}.`, {
@@ -362,6 +381,11 @@ export function createGithubPullRequestReviewDispatcher(
 			};
 		},
 	};
+
+	return {
+		...dispatcher,
+		publishFinding: dispatcher.publishProblem,
+	};
 }
 
 export interface GitlabMergeRequestReviewOptions {
@@ -377,7 +401,9 @@ export interface GitlabMergeRequestReviewOptions {
 }
 
 export interface GitlabMergeRequestReviewDispatcher {
-	publishFinding(finding: ReviewFinding): Promise<DispatchResult>;
+	publishProblem(problem: ReviewProblem): Promise<DispatchResult>;
+	/** @deprecated Use publishProblem. */
+	publishFinding(problem: ReviewProblem): Promise<DispatchResult>;
 }
 
 export function createGitlabMergeRequestReviewDispatcher(
@@ -419,32 +445,32 @@ export function createGitlabMergeRequestReviewDispatcher(
 		};
 	}
 
-	function canPublishLineComment(finding: ReviewFinding): boolean {
-		return finding.lineCommentAllowed !== false && Boolean(options.baseSha && options.headSha);
+	function canPublishLineComment(problem: ReviewProblem): boolean {
+		return problem.lineCommentAllowed !== false && Boolean(options.baseSha && options.headSha);
 	}
 
-	function generalNoteBody(finding: ReviewFinding): Record<string, unknown> {
-		return { body: renderFindingMarkdown(finding) };
+	function generalNoteBody(problem: ReviewProblem): Record<string, unknown> {
+		return { body: renderProblemMarkdown(problem) };
 	}
 
-	return {
-		async publishFinding(finding: ReviewFinding): Promise<DispatchResult> {
+	const dispatcher = {
+		async publishProblem(problem: ReviewProblem): Promise<DispatchResult> {
 			const notesEndpoint = `${mrPath}/notes`;
-			if (!canPublishLineComment(finding)) {
-				return post(notesEndpoint, generalNoteBody(finding), "GitLab merge request note API");
+			if (!canPublishLineComment(problem)) {
+				return post(notesEndpoint, generalNoteBody(problem), "GitLab merge request note API");
 			}
 
 			const discussionsEndpoint = `${mrPath}/discussions`;
 			const body = {
-				body: renderFindingMarkdown(finding),
+				body: renderProblemMarkdown(problem),
 				position: {
 					position_type: "text",
 					base_sha: options.baseSha,
 					start_sha: options.startSha ?? options.baseSha,
 					head_sha: options.headSha,
-					old_path: finding.file,
-					new_path: finding.file,
-					new_line: finding.line,
+					old_path: problem.file,
+					new_path: problem.file,
+					new_line: problem.line,
 				},
 			};
 
@@ -457,7 +483,7 @@ export function createGitlabMergeRequestReviewDispatcher(
 			if (!response.ok) {
 				if (shouldFallbackToGeneralComment(response.status)) {
 					await response.text();
-					return post(notesEndpoint, generalNoteBody(finding), "GitLab merge request note API");
+					return post(notesEndpoint, generalNoteBody(problem), "GitLab merge request note API");
 				}
 
 				throw new OutputDispatchError(`GitLab merge request discussion API returned ${response.status}.`, {
@@ -476,6 +502,11 @@ export function createGitlabMergeRequestReviewDispatcher(
 			};
 		},
 	};
+
+	return {
+		...dispatcher,
+		publishFinding: dispatcher.publishProblem,
+	};
 }
 
 export interface GiteaIssueOptions {
@@ -489,7 +520,9 @@ export interface GiteaIssueOptions {
 }
 
 export interface GiteaIssueDispatcher {
-	publishAggregatedFindings(findings: readonly ReviewFinding[], summary?: string): Promise<DispatchResult>;
+	publishAggregatedProblems(problems: readonly ReviewProblem[], summary?: string): Promise<DispatchResult>;
+	/** @deprecated Use publishAggregatedProblems. */
+	publishAggregatedFindings(problems: readonly ReviewProblem[], summary?: string): Promise<DispatchResult>;
 }
 
 export function createGiteaIssueDispatcher(options: GiteaIssueOptions): GiteaIssueDispatcher {
@@ -497,8 +530,8 @@ export function createGiteaIssueDispatcher(options: GiteaIssueOptions): GiteaIss
 	const baseUrl = options.baseUrl.replace(/\/+$/u, "");
 	const channel = options.channelName ?? "gitea_issue";
 
-	return {
-		async publishAggregatedFindings(findings, summary): Promise<DispatchResult> {
+	const dispatcher = {
+		async publishAggregatedProblems(problems: readonly ReviewProblem[], summary?: string): Promise<DispatchResult> {
 			const endpoint = [
 				baseUrl,
 				"api/v1/repos",
@@ -513,10 +546,10 @@ export function createGiteaIssueDispatcher(options: GiteaIssueOptions): GiteaIss
 			if (summary) {
 				sections.push(summary, "");
 			}
-			if (findings.length > 0) {
-				sections.push(`### Findings (${findings.length})`, "");
-				for (const finding of findings) {
-					sections.push(renderFindingMarkdown(finding));
+			if (problems.length > 0) {
+				sections.push(`### Problems (${problems.length})`, "");
+				for (const problem of problems) {
+					sections.push(renderProblemMarkdown(problem));
 					sections.push("");
 				}
 			}
@@ -552,11 +585,16 @@ export function createGiteaIssueDispatcher(options: GiteaIssueOptions): GiteaIss
 			};
 		},
 	};
+
+	return {
+		...dispatcher,
+		publishAggregatedFindings: dispatcher.publishAggregatedProblems,
+	};
 }
 
-export type GiteaFindingIssueResolvedAction = "none" | "close" | "delete";
+export type GiteaProblemIssueResolvedAction = "none" | "close" | "delete";
 
-export interface GiteaFindingIssueOptions {
+export interface GiteaProblemIssueOptions {
 	readonly baseUrl: string;
 	readonly token?: string;
 	readonly owner: string;
@@ -565,12 +603,14 @@ export interface GiteaFindingIssueOptions {
 	readonly markerPrefix?: string;
 	readonly markerLabel?: string;
 	readonly labelIds?: readonly number[];
-	readonly resolvedAction?: GiteaFindingIssueResolvedAction;
+	readonly resolvedAction?: GiteaProblemIssueResolvedAction;
 	readonly fetch?: FetchLike;
 }
 
-export interface GiteaFindingIssueDispatcher {
-	reconcileFindings(findings: readonly ReviewFinding[], summary?: string): Promise<readonly DispatchResult[]>;
+export interface GiteaProblemIssueDispatcher {
+	reconcileProblems(problems: readonly ReviewProblem[], summary?: string): Promise<readonly DispatchResult[]>;
+	/** @deprecated Use reconcileProblems. */
+	reconcileFindings(problems: readonly ReviewProblem[], summary?: string): Promise<readonly DispatchResult[]>;
 }
 
 interface ManagedGiteaIssue {
@@ -582,7 +622,8 @@ interface ManagedGiteaIssue {
 	readonly fingerprint?: string;
 }
 
-const AICR_MANAGED_ISSUE_MARKER = "<!-- aicr:managed=finding-issue -->";
+const AICR_MANAGED_PROBLEM_ISSUE_MARKER = "<!-- aicr:managed=problem-issue -->";
+const AICR_LEGACY_MANAGED_FINDING_ISSUE_MARKER = "<!-- aicr:managed=finding-issue -->";
 
 function extractManagedIssueFingerprint(body: string): string | undefined {
 	const match = /<!--\s*aicr:fingerprint=([^\s-][^\s]*)\s*-->/u.exec(body);
@@ -594,19 +635,23 @@ function extractIssueNumber(raw: Record<string, unknown>): number | undefined {
 	return typeof value === "number" && Number.isInteger(value) ? value : undefined;
 }
 
-function buildFindingIssueTitle(finding: ReviewFinding, markerPrefix: string): string {
-	const location = finding.endLine ? `${finding.file}:${finding.line}-${finding.endLine}` : `${finding.file}:${finding.line}`;
-	const normalizedMessage = finding.message.replace(/\s+/gu, " ").trim();
-	const title = `${markerPrefix} [${finding.severity.toUpperCase()}] ${finding.category}: ${location} - ${normalizedMessage}`;
+function hasManagedProblemIssueMarker(body: string): boolean {
+	return body.includes(AICR_MANAGED_PROBLEM_ISSUE_MARKER) || body.includes(AICR_LEGACY_MANAGED_FINDING_ISSUE_MARKER);
+}
+
+function buildProblemIssueTitle(problem: ReviewProblem, markerPrefix: string): string {
+	const location = problem.endLine ? `${problem.file}:${problem.line}-${problem.endLine}` : `${problem.file}:${problem.line}`;
+	const normalizedMessage = problem.message.replace(/\s+/gu, " ").trim();
+	const title = `${markerPrefix} [${problem.severity.toUpperCase()}] ${problem.category}: ${location} - ${normalizedMessage}`;
 	return title.length > 240 ? `${title.slice(0, 237)}...` : title;
 }
 
-function ensureFindingFingerprint(finding: ReviewFinding): ReviewFinding {
-	return finding.fingerprint ? finding : { ...finding, fingerprint: computeFindingFingerprint(finding) };
+function ensureProblemFingerprint(problem: ReviewProblem): ReviewProblem {
+	return problem.fingerprint ? problem : { ...problem, fingerprint: computeProblemFingerprint(problem) };
 }
 
 function buildManagedIssueBody(
-	finding: ReviewFinding,
+	problem: ReviewProblem,
 	options: {
 		readonly channel: string;
 		readonly markerLabel: string;
@@ -614,12 +659,12 @@ function buildManagedIssueBody(
 	},
 ): string {
 	const sections = [
-		AICR_MANAGED_ISSUE_MARKER,
+		AICR_MANAGED_PROBLEM_ISSUE_MARKER,
 		`<!-- aicr:channel=${options.channel} -->`,
 		`<!-- aicr:label=${options.markerLabel} -->`,
-		`<!-- aicr:fingerprint=${finding.fingerprint ?? computeFindingFingerprint(finding)} -->`,
+		`<!-- aicr:fingerprint=${problem.fingerprint ?? computeProblemFingerprint(problem)} -->`,
 		"",
-		renderFindingMarkdown(finding),
+		renderProblemMarkdown(problem),
 	];
 
 	if (options.summary?.trim()) {
@@ -649,7 +694,7 @@ function parseManagedIssues(raw: unknown, markerPrefix: string, markerLabel: str
 		const title = String(rawIssue.title ?? "");
 		const body = String(rawIssue.body ?? "");
 		const state = String(rawIssue.state ?? "");
-		if (number === undefined || !title.startsWith(markerPrefix) || !body.includes(AICR_MANAGED_ISSUE_MARKER)) {
+		if (number === undefined || !title.startsWith(markerPrefix) || !hasManagedProblemIssueMarker(body)) {
 			continue;
 		}
 
@@ -671,10 +716,10 @@ function parseManagedIssues(raw: unknown, markerPrefix: string, markerLabel: str
 	return issues;
 }
 
-export function createGiteaFindingIssueDispatcher(options: GiteaFindingIssueOptions): GiteaFindingIssueDispatcher {
+export function createGiteaProblemIssueDispatcher(options: GiteaProblemIssueOptions): GiteaProblemIssueDispatcher {
 	const fetchImpl = options.fetch ?? defaultFetch();
 	const baseUrl = options.baseUrl.replace(/\/+$/u, "");
-	const channel = options.channelName ?? "gitea_finding_issue";
+	const channel = options.channelName ?? "gitea_problem_issue";
 	const markerPrefix = options.markerPrefix ?? "[AICR]";
 	const markerLabel = options.markerLabel ?? "aicr-managed";
 	const resolvedAction = options.resolvedAction ?? "close";
@@ -699,7 +744,7 @@ export function createGiteaFindingIssueDispatcher(options: GiteaFindingIssueOpti
 		});
 
 		if (!response.ok) {
-			throw new OutputDispatchError(`Gitea finding issue API returned ${response.status}.`, {
+			throw new OutputDispatchError(`Gitea problem issue API returned ${response.status}.`, {
 				status: response.status,
 				responseBody: await response.text(),
 			});
@@ -718,10 +763,10 @@ export function createGiteaFindingIssueDispatcher(options: GiteaFindingIssueOpti
 		return parseManagedIssues(raw, markerPrefix, markerLabel);
 	}
 
-	async function createIssue(finding: ReviewFinding, summary: string | undefined): Promise<DispatchResult> {
+	async function createIssue(problem: ReviewProblem, summary: string | undefined): Promise<DispatchResult> {
 		const body: Record<string, unknown> = {
-			title: buildFindingIssueTitle(finding, markerPrefix),
-			body: buildManagedIssueBody(finding, { channel, markerLabel, ...(summary ? { summary } : {}) }),
+			title: buildProblemIssueTitle(problem, markerPrefix),
+			body: buildManagedIssueBody(problem, { channel, markerLabel, ...(summary ? { summary } : {}) }),
 		};
 		if (options.labelIds && options.labelIds.length > 0) {
 			body.labels = [...options.labelIds];
@@ -754,9 +799,9 @@ export function createGiteaFindingIssueDispatcher(options: GiteaFindingIssueOpti
 
 		await request("POST", `${repoPath}/issues/${issue.number}/comments`, {
 			body: [
-				"🤖 **AICR lifecycle:** this managed finding is no longer present in the latest analysis.",
+				"🤖 **AICR lifecycle:** this managed problem is no longer present in the latest analysis.",
 				"",
-				"Closing the issue automatically. Reopen it if the finding is still valid.",
+				"Closing the issue automatically. Reopen it if the problem is still valid.",
 			].join("\n"),
 		});
 		const raw = await request("PATCH", `${repoPath}/issues/${issue.number}`, { state: "closed" });
@@ -768,10 +813,10 @@ export function createGiteaFindingIssueDispatcher(options: GiteaFindingIssueOpti
 		};
 	}
 
-	return {
-		async reconcileFindings(findings, summary): Promise<readonly DispatchResult[]> {
-			const preparedFindings = findings.map(ensureFindingFingerprint);
-			const currentFingerprints = new Set(preparedFindings.map((finding) => finding.fingerprint!));
+	const dispatcher = {
+		async reconcileProblems(problems: readonly ReviewProblem[], summary?: string): Promise<readonly DispatchResult[]> {
+			const preparedProblems = problems.map(ensureProblemFingerprint);
+			const currentFingerprints = new Set(preparedProblems.map((problem) => problem.fingerprint!));
 			const existingIssues = await listManagedOpenIssues();
 			const existingByFingerprint = new Map<string, ManagedGiteaIssue>();
 			for (const issue of existingIssues) {
@@ -781,9 +826,9 @@ export function createGiteaFindingIssueDispatcher(options: GiteaFindingIssueOpti
 			}
 
 			const results: DispatchResult[] = [];
-			for (const finding of preparedFindings) {
-				if (!existingByFingerprint.has(finding.fingerprint!)) {
-					results.push(await createIssue(finding, summary));
+			for (const problem of preparedProblems) {
+				if (!existingByFingerprint.has(problem.fingerprint!)) {
+					results.push(await createIssue(problem, summary));
 				}
 			}
 
@@ -801,6 +846,11 @@ export function createGiteaFindingIssueDispatcher(options: GiteaFindingIssueOpti
 			return results;
 		},
 	};
+
+	return {
+		...dispatcher,
+		reconcileFindings: dispatcher.reconcileProblems,
+	};
 }
 
 export interface FeishuBotOptions {
@@ -811,7 +861,9 @@ export interface FeishuBotOptions {
 }
 
 export interface FeishuBotDispatcher {
-	publishAggregatedFindings(findings: readonly ReviewFinding[], summary?: string, mentionText?: string): Promise<DispatchResult>;
+	publishAggregatedProblems(problems: readonly ReviewProblem[], summary?: string, mentionText?: string): Promise<DispatchResult>;
+	/** @deprecated Use publishAggregatedProblems. */
+	publishAggregatedFindings(problems: readonly ReviewProblem[], summary?: string, mentionText?: string): Promise<DispatchResult>;
 }
 
 async function computeFeishuSign(timestamp: number, secret: string): Promise<string> {
@@ -832,19 +884,23 @@ export function createFeishuBotDispatcher(options: FeishuBotOptions): FeishuBotD
 	const fetchImpl = options.fetch ?? defaultFetch();
 	const channel = options.channelName ?? "feishu_bot";
 
-	return {
-		async publishAggregatedFindings(findings, summary, mentionText): Promise<DispatchResult> {
+	const dispatcher = {
+		async publishAggregatedProblems(
+			problems: readonly ReviewProblem[],
+			summary?: string,
+			mentionText?: string,
+		): Promise<DispatchResult> {
 			const sections: string[] = [];
 			if (summary) {
 				sections.push(summary);
 			}
-			if (findings.length > 0) {
-				sections.push("", `Findings: ${findings.length}`);
-				for (const finding of findings.slice(0, 10)) {
-					sections.push(`- [${finding.severity.toUpperCase()}] ${finding.category}: ${finding.file}:${finding.line}`);
+			if (problems.length > 0) {
+				sections.push("", `Problems: ${problems.length}`);
+				for (const problem of problems.slice(0, 10)) {
+					sections.push(`- [${problem.severity.toUpperCase()}] ${problem.category}: ${problem.file}:${problem.line}`);
 				}
-				if (findings.length > 10) {
-					sections.push(`... and ${findings.length - 10} more`);
+				if (problems.length > 10) {
+					sections.push(`... and ${problems.length - 10} more`);
 				}
 			}
 
@@ -891,6 +947,11 @@ export function createFeishuBotDispatcher(options: FeishuBotOptions): FeishuBotD
 			return { channel, status: "published", raw };
 		},
 	};
+
+	return {
+		...dispatcher,
+		publishAggregatedFindings: dispatcher.publishAggregatedProblems,
+	};
 }
 
 export interface WeComBotOptions {
@@ -901,15 +962,21 @@ export interface WeComBotOptions {
 }
 
 export interface WeComBotDispatcher {
-	publishAggregatedFindings(findings: readonly ReviewFinding[], summary?: string, mentionText?: string): Promise<DispatchResult>;
+	publishAggregatedProblems(problems: readonly ReviewProblem[], summary?: string, mentionText?: string): Promise<DispatchResult>;
+	/** @deprecated Use publishAggregatedProblems. */
+	publishAggregatedFindings(problems: readonly ReviewProblem[], summary?: string, mentionText?: string): Promise<DispatchResult>;
 }
 
 export function createWeComBotDispatcher(options: WeComBotOptions): WeComBotDispatcher {
 	const fetchImpl = options.fetch ?? defaultFetch();
 	const channel = options.channelName ?? "wecom_bot";
 
-	return {
-		async publishAggregatedFindings(findings, summary, mentionText): Promise<DispatchResult> {
+	const dispatcher = {
+		async publishAggregatedProblems(
+			problems: readonly ReviewProblem[],
+			summary?: string,
+			mentionText?: string,
+		): Promise<DispatchResult> {
 			const sections: string[] = [];
 			if (summary) {
 				sections.push(summary);
@@ -917,10 +984,10 @@ export function createWeComBotDispatcher(options: WeComBotOptions): WeComBotDisp
 			if (mentionText) {
 				sections.push(mentionText);
 			}
-			if (findings.length > 0) {
-				sections.push("", `Findings: ${findings.length}`);
-				for (const finding of findings.slice(0, 10)) {
-					sections.push(`- [${finding.severity.toUpperCase()}] ${finding.category}: ${finding.file}:${finding.line}`);
+			if (problems.length > 0) {
+				sections.push("", `Problems: ${problems.length}`);
+				for (const problem of problems.slice(0, 10)) {
+					sections.push(`- [${problem.severity.toUpperCase()}] ${problem.category}: ${problem.file}:${problem.line}`);
 				}
 			}
 
@@ -956,14 +1023,31 @@ export function createWeComBotDispatcher(options: WeComBotOptions): WeComBotDisp
 			return { channel, status: "published", raw };
 		},
 	};
+
+	return {
+		...dispatcher,
+		publishAggregatedFindings: dispatcher.publishAggregatedProblems,
+	};
 }
 
-export function computeFindingFingerprint(finding: {
+export function computeProblemFingerprint(problem: {
 	readonly file: string;
 	readonly line: number;
 	readonly category: string;
 	readonly message: string;
 }): string {
-	const raw = `${finding.file}:${finding.line}:${finding.category}:${finding.message}`;
+	const raw = `${problem.file}:${problem.line}:${problem.category}:${problem.message}`;
 	return createHash("sha256").update(raw).digest("hex").slice(0, 16);
 }
+
+/** @deprecated Use computeProblemFingerprint. */
+export const computeFindingFingerprint = computeProblemFingerprint;
+
+/** @deprecated Use GiteaProblemIssueResolvedAction. */
+export type GiteaFindingIssueResolvedAction = GiteaProblemIssueResolvedAction;
+/** @deprecated Use GiteaProblemIssueOptions. */
+export type GiteaFindingIssueOptions = GiteaProblemIssueOptions;
+/** @deprecated Use GiteaProblemIssueDispatcher. */
+export type GiteaFindingIssueDispatcher = GiteaProblemIssueDispatcher;
+/** @deprecated Use createGiteaProblemIssueDispatcher. */
+export const createGiteaFindingIssueDispatcher = createGiteaProblemIssueDispatcher;

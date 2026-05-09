@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
 import type { ChatCompletionClient, ModelSpec } from "@aicr/llm";
-import type { ReviewFinding } from "@aicr/outputs";
+import type { ReviewProblem } from "@aicr/outputs";
 import { parseUnifiedDiff, type ChangeRange } from "@aicr/vcs";
 import { describe, expect, it, vi } from "vitest";
 
@@ -169,7 +169,7 @@ describe("createServerApp", () => {
             content: JSON.stringify({
               toolCalls: [
                 {
-                  name: "aicr.publish_finding",
+                  name: "aicr.report_problem",
                   input: {
                     file: "src/app.ts",
                     line: 2,
@@ -188,7 +188,7 @@ describe("createServerApp", () => {
           };
         },
       };
-      const published: ReviewFinding[] = [];
+      const publishedProblems: ReviewProblem[] = [];
       const app = createServerApp({
         gitea: {
           triggerName: "gitea-internal",
@@ -232,8 +232,8 @@ describe("createServerApp", () => {
           llm,
           model,
           outputPublisher: {
-            async publishFinding(finding) {
-              published.push(finding);
+            async publishProblem(problem) {
+              publishedProblems.push(problem);
               return { channel: "gitea-pr", status: "published", raw: { id: 7 } };
             },
           },
@@ -263,7 +263,7 @@ describe("createServerApp", () => {
         accepted: boolean;
         reviewRun?: {
           status?: string;
-          findingCount?: number;
+          problemCount?: number;
           summaryCount?: number;
           dispatchCount?: number;
           promptTokenEstimate?: number;
@@ -276,22 +276,22 @@ describe("createServerApp", () => {
       expect(body.accepted).toBe(true);
       expect(body.reviewRun).toMatchObject({
         status: "published",
-        findingCount: 1,
+        problemCount: 1,
         summaryCount: 1,
         dispatchCount: 1,
         model: { providerId: "openai-prod", modelId: "gpt-test" },
       });
       expect(body.reviewRun?.promptTokenEstimate).toBeGreaterThan(0);
       expect(body.reviewRun).not.toHaveProperty("systemPrompt");
-      expect(published).toHaveLength(1);
-      expect(published[0]).toMatchObject({
+      expect(publishedProblems).toHaveLength(1);
+      expect(publishedProblems[0]).toMatchObject({
         file: "src/app.ts",
         line: 2,
         severity: "medium",
         category: "correctness",
         message: "The new return path always reports failure.",
       });
-      expect(published[0]?.fingerprint).toMatch(/^[0-9a-f]{16}$/u);
+      expect(publishedProblems[0]?.fingerprint).toMatch(/^[0-9a-f]{16}$/u);
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }

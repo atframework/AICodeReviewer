@@ -3,18 +3,18 @@ import { describe, expect, it } from "vitest";
 import { AicrOutputCollector, createAicrOutputToolRegistry } from "../src/index.js";
 
 describe("AicrOutputCollector", () => {
-  it("collects findings, summaries, skip reasons, and context requests", async () => {
+  it("collects reported problems, summaries, skip reasons, and context requests", async () => {
     const collector = new AicrOutputCollector();
     const tools = createAicrOutputToolRegistry(collector, async (input) => {
       return `context for ${input.path}`;
     });
-    const publishFinding = tools.find((tool) => tool.name === "aicr.publish_finding");
+    const reportProblem = tools.find((tool) => tool.name === "aicr.report_problem");
     const publishSummary = tools.find((tool) => tool.name === "aicr.publish_summary");
     const skip = tools.find((tool) => tool.name === "aicr.skip");
     const fetchMoreContext = tools.find((tool) => tool.name === "aicr.fetch_more_context");
 
     await expect(
-      publishFinding?.call({
+      reportProblem?.call({
         file: "src/app.ts",
         line: 12,
         severity: "medium",
@@ -22,7 +22,7 @@ describe("AicrOutputCollector", () => {
         message: "Validate the null branch before dereferencing.",
         fingerprint: "fp-1",
       }),
-    ).resolves.toEqual({ accepted: true, findingCount: 1 });
+    ).resolves.toEqual({ accepted: true, problemCount: 1 });
     await expect(publishSummary?.call({ markdown: "## Summary\n\nFound one issue." })).resolves.toEqual({
       accepted: true,
       summaryCount: 1,
@@ -36,17 +36,19 @@ describe("AicrOutputCollector", () => {
       }),
     ).resolves.toEqual({ content: "context for src/app.ts" });
 
-    expect(collector.snapshot()).toEqual({
-      findings: [
-        {
-          file: "src/app.ts",
-          line: 12,
-          severity: "medium",
-          category: "correctness",
-          message: "Validate the null branch before dereferencing.",
-          fingerprint: "fp-1",
-        },
-      ],
+    const snapshot = collector.snapshot();
+    expect(snapshot.problems).toEqual([
+      {
+        file: "src/app.ts",
+        line: 12,
+        severity: "medium",
+        category: "correctness",
+        message: "Validate the null branch before dereferencing.",
+        fingerprint: "fp-1",
+      },
+    ]);
+    expect(snapshot.findings).toEqual(snapshot.problems);
+    expect(snapshot).toMatchObject({
       summaries: ["## Summary\n\nFound one issue."],
       contextRequests: [
         {
@@ -61,12 +63,12 @@ describe("AicrOutputCollector", () => {
 
   it("rejects invalid tool inputs before mutating state", async () => {
     const collector = new AicrOutputCollector();
-    const publishFinding = createAicrOutputToolRegistry(collector).find(
-      (tool) => tool.name === "aicr.publish_finding",
+    const reportProblem = createAicrOutputToolRegistry(collector).find(
+      (tool) => tool.name === "aicr.report_problem",
     );
 
     await expect(
-      publishFinding?.call({
+      reportProblem?.call({
         file: "src/app.ts",
         line: 0,
         severity: "medium",
@@ -74,14 +76,14 @@ describe("AicrOutputCollector", () => {
         message: "Invalid line should be rejected.",
       }),
     ).rejects.toThrow(/line/u);
-    expect(collector.snapshot().findings).toEqual([]);
+    expect(collector.snapshot().problems).toEqual([]);
   });
 
   it("exposes stable tool names and JSON schemas", () => {
     const tools = createAicrOutputToolRegistry();
 
     expect(tools.map((tool) => tool.name)).toEqual([
-      "aicr.publish_finding",
+      "aicr.report_problem",
       "aicr.publish_summary",
       "aicr.skip",
       "aicr.fetch_more_context",
@@ -107,27 +109,27 @@ describe("AicrOutputCollector edge cases", () => {
     expect(collector.snapshot().contextRequests).toHaveLength(1);
   });
 
-  it("rejects publish_finding with missing required fields", async () => {
+  it("rejects report_problem with missing required fields", async () => {
     const collector = new AicrOutputCollector();
-    const publishFinding = createAicrOutputToolRegistry(collector).find(
-      (tool) => tool.name === "aicr.publish_finding",
+    const reportProblem = createAicrOutputToolRegistry(collector).find(
+      (tool) => tool.name === "aicr.report_problem",
     );
 
-    await expect(publishFinding?.call({})).rejects.toThrow();
-    await expect(publishFinding?.call({ file: "x.ts" })).rejects.toThrow();
+    await expect(reportProblem?.call({})).rejects.toThrow();
+    await expect(reportProblem?.call({ file: "x.ts" })).rejects.toThrow();
     await expect(
-      publishFinding?.call({ file: "x.ts", line: 1, severity: "medium", category: "c" }),
+      reportProblem?.call({ file: "x.ts", line: 1, severity: "medium", category: "c" }),
     ).rejects.toThrow(/message/u);
   });
 
-  it("rejects publish_finding with invalid severity", async () => {
+  it("rejects report_problem with invalid severity", async () => {
     const collector = new AicrOutputCollector();
-    const publishFinding = createAicrOutputToolRegistry(collector).find(
-      (tool) => tool.name === "aicr.publish_finding",
+    const reportProblem = createAicrOutputToolRegistry(collector).find(
+      (tool) => tool.name === "aicr.report_problem",
     );
 
     await expect(
-      publishFinding?.call({
+      reportProblem?.call({
         file: "x.ts",
         line: 1,
         severity: "critical_high",
@@ -177,14 +179,14 @@ describe("AicrOutputCollector edge cases", () => {
     expect(snapshot.contextRequests[0]?.range).toBeUndefined();
   });
 
-  it("accepts findings with optional end_line, suggestion, and fingerprint", async () => {
+  it("accepts reported problems with optional end_line, suggestion, and fingerprint", async () => {
     const collector = new AicrOutputCollector();
-    const publishFinding = createAicrOutputToolRegistry(collector).find(
-      (tool) => tool.name === "aicr.publish_finding",
+    const reportProblem = createAicrOutputToolRegistry(collector).find(
+      (tool) => tool.name === "aicr.report_problem",
     );
 
     await expect(
-      publishFinding?.call({
+      reportProblem?.call({
         file: "src/app.ts",
         line: 10,
         end_line: 20,
@@ -194,20 +196,20 @@ describe("AicrOutputCollector edge cases", () => {
         suggestion: "Refactor this block.",
         fingerprint: "fp-range",
       }),
-    ).resolves.toEqual({ accepted: true, findingCount: 1 });
+    ).resolves.toEqual({ accepted: true, problemCount: 1 });
 
     const snapshot = collector.snapshot();
-    expect(snapshot.findings[0]?.end_line).toBe(20);
-    expect(snapshot.findings[0]?.suggestion).toBe("Refactor this block.");
-    expect(snapshot.findings[0]?.fingerprint).toBe("fp-range");
+    expect(snapshot.problems[0]?.end_line).toBe(20);
+    expect(snapshot.problems[0]?.suggestion).toBe("Refactor this block.");
+    expect(snapshot.problems[0]?.fingerprint).toBe("fp-range");
   });
 
   it("snapshot returns independent copies of internal state", async () => {
     const collector = new AicrOutputCollector();
     const tools = createAicrOutputToolRegistry(collector);
-    const publishFinding = tools.find((tool) => tool.name === "aicr.publish_finding");
+    const reportProblem = tools.find((tool) => tool.name === "aicr.report_problem");
 
-    await publishFinding?.call({
+    await reportProblem?.call({
       file: "a.ts",
       line: 1,
       severity: "low",
@@ -216,7 +218,7 @@ describe("AicrOutputCollector edge cases", () => {
     });
 
     const snap1 = collector.snapshot();
-    await publishFinding?.call({
+    await reportProblem?.call({
       file: "b.ts",
       line: 2,
       severity: "low",
@@ -226,31 +228,31 @@ describe("AicrOutputCollector edge cases", () => {
 
     const snap2 = collector.snapshot();
 
-    expect(snap1.findings).toHaveLength(1);
-    expect(snap2.findings).toHaveLength(2);
+    expect(snap1.problems).toHaveLength(1);
+    expect(snap2.problems).toHaveLength(2);
   });
 });
 
 describe("AicrOutputCollector validation edge cases", () => {
-  it("rejects publish_finding when input is not an object", async () => {
+  it("rejects report_problem when input is not an object", async () => {
     const collector = new AicrOutputCollector();
-    const publishFinding = createAicrOutputToolRegistry(collector).find(
-      (tool) => tool.name === "aicr.publish_finding",
+    const reportProblem = createAicrOutputToolRegistry(collector).find(
+      (tool) => tool.name === "aicr.report_problem",
     );
 
-    await expect(publishFinding?.call(null)).rejects.toThrow(/object/u);
-    await expect(publishFinding?.call("string")).rejects.toThrow(/object/u);
-    await expect(publishFinding?.call(42)).rejects.toThrow(/object/u);
+    await expect(reportProblem?.call(null)).rejects.toThrow(/object/u);
+    await expect(reportProblem?.call("string")).rejects.toThrow(/object/u);
+    await expect(reportProblem?.call(42)).rejects.toThrow(/object/u);
   });
 
-  it("rejects publish_finding with empty string required fields", async () => {
+  it("rejects report_problem with empty string required fields", async () => {
     const collector = new AicrOutputCollector();
-    const publishFinding = createAicrOutputToolRegistry(collector).find(
-      (tool) => tool.name === "aicr.publish_finding",
+    const reportProblem = createAicrOutputToolRegistry(collector).find(
+      (tool) => tool.name === "aicr.report_problem",
     );
 
     await expect(
-      publishFinding?.call({
+      reportProblem?.call({
         file: "",
         line: 1,
         severity: "medium",
@@ -260,14 +262,14 @@ describe("AicrOutputCollector validation edge cases", () => {
     ).rejects.toThrow(/non-empty/u);
   });
 
-  it("rejects publish_finding with negative line number", async () => {
+  it("rejects report_problem with negative line number", async () => {
     const collector = new AicrOutputCollector();
-    const publishFinding = createAicrOutputToolRegistry(collector).find(
-      (tool) => tool.name === "aicr.publish_finding",
+    const reportProblem = createAicrOutputToolRegistry(collector).find(
+      (tool) => tool.name === "aicr.report_problem",
     );
 
     await expect(
-      publishFinding?.call({
+      reportProblem?.call({
         file: "a.ts",
         line: -1,
         severity: "medium",
@@ -277,14 +279,14 @@ describe("AicrOutputCollector validation edge cases", () => {
     ).rejects.toThrow(/positive integer/u);
   });
 
-  it("rejects publish_finding with zero end_line", async () => {
+  it("rejects report_problem with zero end_line", async () => {
     const collector = new AicrOutputCollector();
-    const publishFinding = createAicrOutputToolRegistry(collector).find(
-      (tool) => tool.name === "aicr.publish_finding",
+    const reportProblem = createAicrOutputToolRegistry(collector).find(
+      (tool) => tool.name === "aicr.report_problem",
     );
 
     await expect(
-      publishFinding?.call({
+      reportProblem?.call({
         file: "a.ts",
         line: 1,
         end_line: 0,
@@ -340,13 +342,13 @@ describe("AicrOutputCollector validation edge cases", () => {
 
   it("accepts all valid severity levels", async () => {
     const collector = new AicrOutputCollector();
-    const publishFinding = createAicrOutputToolRegistry(collector).find(
-      (tool) => tool.name === "aicr.publish_finding",
+    const reportProblem = createAicrOutputToolRegistry(collector).find(
+      (tool) => tool.name === "aicr.report_problem",
     );
 
     for (const severity of ["info", "low", "medium", "high", "critical"]) {
       await expect(
-        publishFinding?.call({
+        reportProblem?.call({
           file: "a.ts",
           line: 1,
           severity,
@@ -356,7 +358,7 @@ describe("AicrOutputCollector validation edge cases", () => {
       ).resolves.toMatchObject({ accepted: true });
     }
 
-    expect(collector.snapshot().findings).toHaveLength(5);
+    expect(collector.snapshot().problems).toHaveLength(5);
   });
 
   it("accepts fetch_more_context with only start_line in range", async () => {

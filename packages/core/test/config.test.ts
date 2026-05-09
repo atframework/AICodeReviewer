@@ -1113,14 +1113,14 @@ describe("server config", () => {
   });
 });
 
-describe("finding issue output config", () => {
+describe("problem issue output config", () => {
   it("accepts configurable markers and resolved actions for Gitea managed issues", () => {
     const result = appConfigSchema.parse({
       outputs: {
         channels: [
           {
-            name: "gitea-finding-issues",
-            kind: "gitea_finding_issue",
+            name: "gitea-problem-issues",
+            kind: "gitea_problem_issue",
             trigger: "gitea-internal",
             marker_prefix: "[AICR Managed]",
             marker_label: "aicr-managed",

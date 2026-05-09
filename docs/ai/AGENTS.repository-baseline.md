@@ -15,6 +15,7 @@
 
 - If a change touches shared tooling, CI, Docker, root docs, or workspace topology, run the repository validation flow.
 - When adding or removing packages, update package manifests, local `tsconfig.json` files, and root `tsconfig.json` references together.
+- When behavior changes touch config shape, agent adapters, MCP tool contracts, output rendering, deployment, or public workflows, update `Plan.md`, the relevant `docs/` module, and `example/config.yaml` / `example/README.md` together.
 - If a task needs temporary helpers or captured output during repository maintenance, place them under `build/` subdirectories instead of creating root-level scratch files.
 - Keep AI-facing assets concise: stable repository rules belong in `AGENTS.md`, repeatable workflows belong in `.agents/skills/`, and historical stage detail belongs in `docs/ai/milestones/`.
 - When updating AI-facing assets, merge with existing guidance instead of appending near-duplicate sections.

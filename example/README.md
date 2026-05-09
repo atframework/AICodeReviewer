@@ -38,6 +38,37 @@ node packages/cli/dist/index.js serve \
   --port 8080
 ```
 
+## Kilo Code Deployment Verification
+
+Kilo Code is the primary deployment-test agent for AICodeReviewer. The repeatable Kilo CLI path can be used for automation, but a production deployment is not considered verified until at least one end-to-end run has been checked from Kilo Code with the same model and workspace configuration.
+
+### Prerequisites
+
+- Kilo Code installed for interactive verification, and Kilo CLI available to the service user for automated runs.
+- `agent.default: kilo` in `config.yaml`.
+- A test Gitea/GitHub/GitLab PR or a P4 changelist that routes to a non-production output channel.
+- Required secrets loaded through environment variables; do not copy token values into `config.yaml` or prompts.
+
+### Verification flow
+
+1. Start AICR locally or in the deployment environment.
+2. In Kilo Code, run a review task against the same workspace that the service will use.
+3. Confirm that AICR materializes Kilo provider config under the run `agent/` directory and injects the model provider from `llm.fallback_chain`.
+4. When external MCP support is enabled, confirm Kilo also receives `.kilo/mcp.json` pointing at the `aicr-output` server. Until that lands, the Kilo verification covers the compatible JSON/XML tool-call stdout path and must not be used to close the external MCP gate.
+5. Trigger the review through the normal entry point, such as `/webhooks/gitea` or `/triggers/p4`.
+6. Verify the AICR log contains a scheduled run and a completed `reviewRun` with a non-zero `dispatchCount` when an output route is configured.
+7. Verify the destination channel received the report: PR/MR line comments, managed issue comments, Feishu card, or WeCom Markdown.
+
+### Automation supplement
+
+Use Kilo CLI for repeatable smoke tests after the Kilo Code check:
+
+```bash
+kilo run --auto --model <model-id> --cwd <workspace-agent-dir> --timeout 600
+```
+
+The CLI smoke test must use the same model id and provider that AICR translates from `llm.providers` and `llm.fallback_chain`. If the CLI succeeds but Kilo Code fails, treat the deployment as not verified.
+
 ## Docker (without Compose)
 
 ```bash
@@ -186,12 +217,13 @@ submitter metadata without needing to query P4 from inside the p4d process.
 
 ## File Reference
 
-| File                   | Purpose                                                 |
-| ---------------------- | ------------------------------------------------------- |
-| `config.yaml`          | Main configuration — LLM, triggers, outputs, workspaces |
-| `.env.sample`          | All environment variables with descriptions             |
-| `docker-compose.yaml`  | Docker Compose stack definition                         |
-| `../deploy/Dockerfile` | Multi-stage Docker build                                |
+| File                         | Purpose                                                 |
+| ---------------------------- | ------------------------------------------------------- |
+| `config.yaml`                | Main configuration — LLM, triggers, outputs, workspaces |
+| `.env.sample`                | All environment variables with descriptions             |
+| `docker-compose.yaml`        | Docker Compose stack definition                         |
+| `../deploy/Dockerfile`       | Multi-stage Docker build                                |
+| `../docs/output-channels.md` | MCP report contract and output rendering guide          |
 
 ## Adding More Repositories
 
@@ -335,15 +367,15 @@ Set these environment variables on the P4 server:
 
 | Variable                | Required | Description                                                                                                                                     |
 | ----------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| `AICR_URL`              | Yes      | AICR server address, e.g. `http://10.64.8.2:8090`                                                                                                |
-| `AICR_API_KEY`          | Yes      | Must match `server.auth.api_key_env` in `config.yaml`                                                                                            |
+| `AICR_URL`              | Yes      | AICR server address, e.g. `http://10.64.8.2:8090`                                                                                               |
+| `AICR_API_KEY`          | Yes      | Must match `server.auth.api_key_env` in `config.yaml`                                                                                           |
 | `AICR_DEPOT_PATH`       | No       | Optional depot path override. Leave unset to use the server-side P4 trigger `depot_path` from `config.yaml`.                                    |
-| `AICR_P4_COLLECT_FILES` | No       | Default `0`. Keep disabled so the p4d trigger does not run `p4 describe` and does not require local `p4 trust`.                                  |
-| `AICR_P4PORT`           | No       | Required only when `AICR_P4_COLLECT_FILES=1`; must be explicit, e.g. `ssl:p4.example.com:1666`.                                                  |
-| `AICR_P4USER`           | No       | Optional user override for `AICR_P4_COLLECT_FILES=1`; otherwise the script uses trigger `%user%`, then `P4USER`, but never implicit OS `root`.    |
-| `AICR_P4CLIENT`         | No       | Optional client override for `AICR_P4_COLLECT_FILES=1`; otherwise the script uses trigger `%client%`, then `P4CLIENT`.                           |
-| `AICR_P4PASSWD`         | No       | Optional password or ticket for `AICR_P4_COLLECT_FILES=1`; use only with an explicit service user if your P4 security level requires login.       |
-| `AICR_P4_AUTO_TRUST`    | No       | Optional `1`/`true` for the opt-in file collection mode; default `0`. Otherwise run `p4 trust` once as the trigger OS user.                      |
+| `AICR_P4_COLLECT_FILES` | No       | Default `0`. Keep disabled so the p4d trigger does not run `p4 describe` and does not require local `p4 trust`.                                 |
+| `AICR_P4PORT`           | No       | Required only when `AICR_P4_COLLECT_FILES=1`; must be explicit, e.g. `ssl:p4.example.com:1666`.                                                 |
+| `AICR_P4USER`           | No       | Optional user override for `AICR_P4_COLLECT_FILES=1`; otherwise the script uses trigger `%user%`, then `P4USER`, but never implicit OS `root`.  |
+| `AICR_P4CLIENT`         | No       | Optional client override for `AICR_P4_COLLECT_FILES=1`; otherwise the script uses trigger `%client%`, then `P4CLIENT`.                          |
+| `AICR_P4PASSWD`         | No       | Optional password or ticket for `AICR_P4_COLLECT_FILES=1`; use only with an explicit service user if your P4 security level requires login.     |
+| `AICR_P4_AUTO_TRUST`    | No       | Optional `1`/`true` for the opt-in file collection mode; default `0`. Otherwise run `p4 trust` once as the trigger OS user.                     |
 
 The script:
 
@@ -381,7 +413,7 @@ A successful response returns `{"accepted": true, ...}`.
 
 ## Feishu (飞书) Bot Configuration
 
-AICodeReviewer can push aggregated review findings to a Feishu group via a
+AICodeReviewer can push aggregated review problems to a Feishu group via a
 custom bot webhook.
 
 ### 1. Create a custom bot in Feishu

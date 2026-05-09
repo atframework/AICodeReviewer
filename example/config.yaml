@@ -223,7 +223,7 @@ outputs:
       trigger: gitea
       mention_author: false
 
-    # Feishu (飞书) bot — push aggregated review findings to a Feishu group.
+    # Feishu (飞书) bot — push aggregated review problems to a Feishu group.
     # Setup: group Settings → Group Bots → Add Bot → Custom Bot → copy webhook & secret.
     # See example/README.md "Feishu Bot Configuration" for full guide.
     #
@@ -235,7 +235,7 @@ outputs:
     #   mention_author: true                     # @-mention the commit author in the card
     #   mention_fallback: skip                  # "all" = mention everyone, "skip" = no mention if author not found
 
-    # WeCom (企业微信) bot — push aggregated findings to a WeCom group.
+    # WeCom (企业微信) bot — push aggregated problems to a WeCom group.
     # - name: wecom-ops
     #   kind: wecom_bot
     #   webhook_url_env: AICR_WECOM_WEBHOOK
@@ -267,11 +267,11 @@ queue:
 # ---------------------------------------------------------------------------
 # Agent & sandbox
 # ---------------------------------------------------------------------------
-# Set agent.default to an AgentKind (kilo, opencode, roo, claude-code, copilot-cli)
-# to use agent-based review inside a sandbox container.
-# Set to any other value (e.g. "native-llm") to use direct LLM call without an agent.
+# Kilo is the default supported agent path. Set agent.default to another
+# AgentKind (opencode, roo, claude-code, copilot-cli) only when explicitly
+# validating that adapter. Set to "native-llm" only for direct-LLM debugging.
 agent:
-  default: native-llm
+  default: kilo
   timeout_seconds: 300
   auto_approve: true
   sandbox:

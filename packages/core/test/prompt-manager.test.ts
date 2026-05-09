@@ -31,7 +31,7 @@ describe("discoverRepoPromptAssets", () => {
       await writeWorkspaceFile(
         tempDir,
         ".github/copilot-instructions.md",
-        "# Copilot\nPrefer focused findings over broad summaries.\n",
+        "# Copilot\nPrefer focused problems over broad summaries.\n",
       );
       await writeWorkspaceFile(
         tempDir,
@@ -328,7 +328,7 @@ describe("assemblePrompt", () => {
       ].join("\n"),
       discovery,
       operatorOverrides: [
-        "Always emit concise, deterministic findings and avoid praise or filler in summaries.",
+        "Always emit concise, deterministic problems and avoid praise or filler in summaries.",
       ],
       memoryHints: [
         "This is a deliberately long memory hint that should be trimmed first when the prompt budget gets tight.",

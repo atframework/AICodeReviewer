@@ -22,6 +22,7 @@
 
 - Prefer minimal edits; do not weaken lint, typecheck, test, or markdown gates just to get a change through.
 - When adding or removing a workspace package, update the package manifest, local `tsconfig.json`, and root `tsconfig.json` references together.
+- When code changes affect config shape, agent adapters, MCP tool contracts, output rendering, deployment behavior, or public workflow, update the matching `Plan.md`, `docs/`, `example/config.yaml`, and `example/README.md` entries in the same change, or explicitly state why no doc/example update is needed.
 - Keep temporary repository artifacts such as scratch scripts, debug logs, and one-off reports under `build/`; do not leave them in the repository root.
 - Use `.github/instructions/*.instructions.md` only for path-specific rules; keep workspace-wide rules in this file.
 - Keep AI-facing assets concise: stable rules here, detailed shared context in `AGENTS.*.md`, and repeatable procedures in skills.
@@ -74,3 +75,5 @@ These issues have been found and fixed in prior sessions. Before making changes,
 - `.agents/skills/workspace-scaffold-maintenance/SKILL.md`
 - `.agents/skills/ai-agent-maintenance/SKILL.md`
 - `.agents/skills/plan-implementation-audit/SKILL.md`
+- `.agents/skills/agent-runtime-integration/SKILL.md`
+- `.agents/skills/output-channel-contracts/SKILL.md`

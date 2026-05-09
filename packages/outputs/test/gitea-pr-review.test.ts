@@ -3,9 +3,9 @@ import { describe, expect, it } from "vitest";
 import {
   createGiteaPullRequestReviewDispatcher,
   OutputDispatchError,
-  renderFindingMarkdown,
+  renderProblemMarkdown,
   type FetchLike,
-  type ReviewFinding,
+  type ReviewProblem,
 } from "../src/index.js";
 
 function response(body: unknown, status = 200): Awaited<ReturnType<FetchLike>> {
@@ -22,7 +22,7 @@ function response(body: unknown, status = 200): Awaited<ReturnType<FetchLike>> {
   };
 }
 
-const finding: ReviewFinding = {
+const problem: ReviewProblem = {
   file: "src/app.ts",
   line: 42,
   severity: "high",
@@ -32,9 +32,9 @@ const finding: ReviewFinding = {
   fingerprint: "abc123",
 };
 
-describe("renderFindingMarkdown", () => {
+describe("renderProblemMarkdown", () => {
   it("renders severity, category, suggestion, location, and fingerprint", () => {
-    const markdown = renderFindingMarkdown(finding);
+    const markdown = renderProblemMarkdown(problem);
 
     expect(markdown).toContain("**HIGH · correctness**");
     expect(markdown).toContain("src/app.ts:42");
@@ -43,14 +43,14 @@ describe("renderFindingMarkdown", () => {
   });
 
   it("renders without suggestion when not provided", () => {
-    const minimal: ReviewFinding = {
+    const minimal: ReviewProblem = {
       file: "src/util.ts",
       line: 10,
       severity: "low",
       category: "style",
       message: "Inconsistent naming.",
     };
-    const markdown = renderFindingMarkdown(minimal);
+    const markdown = renderProblemMarkdown(minimal);
 
     expect(markdown).toContain("**LOW · style**");
     expect(markdown).toContain("src/util.ts:10");
@@ -59,20 +59,20 @@ describe("renderFindingMarkdown", () => {
   });
 
   it("renders without fingerprint when not provided", () => {
-    const noFp: ReviewFinding = {
+    const noFp: ReviewProblem = {
       file: "src/main.ts",
       line: 5,
       severity: "info",
       category: "naming",
       message: "Variable name could be more descriptive.",
     };
-    const markdown = renderFindingMarkdown(noFp);
+    const markdown = renderProblemMarkdown(noFp);
 
     expect(markdown).not.toContain("<!-- aicr:fingerprint=");
   });
 
   it("renders range notation when endLine is provided", () => {
-    const ranged: ReviewFinding = {
+    const ranged: ReviewProblem = {
       file: "src/bulk.ts",
       line: 10,
       endLine: 20,
@@ -80,14 +80,14 @@ describe("renderFindingMarkdown", () => {
       category: "complexity",
       message: "This function is too long.",
     };
-    const markdown = renderFindingMarkdown(ranged);
+    const markdown = renderProblemMarkdown(ranged);
 
     expect(markdown).toContain("src/bulk.ts:10-20");
   });
 
   it("uses pre-rendered markdown without wrapping it again", () => {
-    const markdown = renderFindingMarkdown({
-      ...finding,
+    const markdown = renderProblemMarkdown({
+      ...problem,
       renderedMarkdown: "CUSTOM BODY",
     });
 
@@ -96,7 +96,7 @@ describe("renderFindingMarkdown", () => {
 });
 
 describe("createGiteaPullRequestReviewDispatcher", () => {
-  it("publishes a finding as a Gitea pull request review comment", async () => {
+  it("publishes a problem as a Gitea pull request review comment", async () => {
     const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
     const dispatcher = createGiteaPullRequestReviewDispatcher({
       baseUrl: "https://gitea.example/",
@@ -111,7 +111,7 @@ describe("createGiteaPullRequestReviewDispatcher", () => {
       },
     });
 
-    const result = await dispatcher.publishFinding(finding);
+    const result = await dispatcher.publishProblem(problem);
 
     expect(result).toEqual({ channel: "gitea-pr-internal", status: "published", externalId: "123", raw: { id: 123 } });
     expect(calls[0]?.url).toBe("https://gitea.example/api/v1/repos/owent/example/pulls/42/reviews");
@@ -139,8 +139,8 @@ describe("createGiteaPullRequestReviewDispatcher", () => {
       fetch: async () => response({ message: "bad token" }, 401),
     });
 
-    await expect(dispatcher.publishFinding(finding)).rejects.toBeInstanceOf(OutputDispatchError);
-    await expect(dispatcher.publishFinding(finding)).rejects.toMatchObject({ status: 401 });
+    await expect(dispatcher.publishProblem(problem)).rejects.toBeInstanceOf(OutputDispatchError);
+    await expect(dispatcher.publishProblem(problem)).rejects.toMatchObject({ status: 401 });
   });
 
   it("uses the default channel name when not specified", async () => {
@@ -152,7 +152,7 @@ describe("createGiteaPullRequestReviewDispatcher", () => {
       fetch: async () => response({ id: 1 }),
     });
 
-    const result = await dispatcher.publishFinding(finding);
+    const result = await dispatcher.publishProblem(problem);
     expect(result.channel).toBe("gitea_pr_review");
   });
 
@@ -169,7 +169,7 @@ describe("createGiteaPullRequestReviewDispatcher", () => {
       },
     });
 
-    await dispatcher.publishFinding(finding);
+    await dispatcher.publishProblem(problem);
 
     expect(calls[0]?.init?.headers).not.toHaveProperty("authorization");
   });
@@ -183,11 +183,11 @@ describe("createGiteaPullRequestReviewDispatcher", () => {
       fetch: async () => response({}),
     });
 
-    const result = await dispatcher.publishFinding(finding);
+    const result = await dispatcher.publishProblem(problem);
     expect(result.externalId).toBeUndefined();
   });
 
-  it("publishes a general review comment when a finding is marked non-line-commentable", async () => {
+  it("publishes a general review comment when a problem is marked non-line-commentable", async () => {
     const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
     const dispatcher = createGiteaPullRequestReviewDispatcher({
       baseUrl: "https://gitea.example",
@@ -200,7 +200,7 @@ describe("createGiteaPullRequestReviewDispatcher", () => {
       },
     });
 
-    await dispatcher.publishFinding({ ...finding, lineCommentAllowed: false });
+    await dispatcher.publishProblem({ ...problem, lineCommentAllowed: false });
 
     const body = JSON.parse(calls[0]?.init?.body ?? "{}");
     expect(body.event).toBe("COMMENT");
@@ -223,7 +223,7 @@ describe("createGiteaPullRequestReviewDispatcher", () => {
       },
     });
 
-    const result = await dispatcher.publishFinding(finding);
+    const result = await dispatcher.publishProblem(problem);
 
     expect(result.externalId).toBe("2");
     expect(calls).toHaveLength(2);
@@ -244,7 +244,7 @@ describe("createGiteaPullRequestReviewDispatcher", () => {
       },
     });
 
-    await dispatcher.publishFinding(finding);
+    await dispatcher.publishProblem(problem);
 
     expect(calls[0]?.url).toBe("https://gitea.example/api/v1/repos/owent/example/pulls/1/reviews");
   });
@@ -277,7 +277,7 @@ describe("OutputDispatchError", () => {
   });
 });
 
-describe("renderFindingMarkdown additional edge cases", () => {
+describe("renderProblemMarkdown additional edge cases", () => {
   it("renders all severity levels with correct capitalization", () => {
     const severities: Array<[string, string]> = [
       ["info", "INFO"],
@@ -288,7 +288,7 @@ describe("renderFindingMarkdown additional edge cases", () => {
     ];
 
     for (const [severity, expected] of severities) {
-      const markdown = renderFindingMarkdown({
+      const markdown = renderProblemMarkdown({
         file: "a.ts",
         line: 1,
         severity: severity as "info" | "low" | "medium" | "high" | "critical",
@@ -300,8 +300,8 @@ describe("renderFindingMarkdown additional edge cases", () => {
     }
   });
 
-  it("renders critical severity finding", () => {
-    const markdown = renderFindingMarkdown({
+  it("renders critical severity problem", () => {
+    const markdown = renderProblemMarkdown({
       file: "src/auth.ts",
       line: 99,
       severity: "critical",
@@ -328,7 +328,7 @@ describe("extractExternalId via dispatcher", () => {
       fetch: async () => response({ id: 999 }),
     });
 
-    const result = await dispatcher.publishFinding(finding);
+    const result = await dispatcher.publishProblem(problem);
     expect(result.externalId).toBe("999");
   });
 
@@ -341,7 +341,7 @@ describe("extractExternalId via dispatcher", () => {
       fetch: async () => response({ review_id: "r-1" }),
     });
 
-    const result = await dispatcher.publishFinding(finding);
+    const result = await dispatcher.publishProblem(problem);
     expect(result.externalId).toBeUndefined();
   });
 
@@ -358,7 +358,7 @@ describe("extractExternalId via dispatcher", () => {
       },
     });
 
-    await dispatcher.publishFinding(finding);
+    await dispatcher.publishProblem(problem);
     expect(calls[0]?.url).toContain("org%2Fsub-org");
     expect(calls[0]?.url).toContain("repo%26name");
   });

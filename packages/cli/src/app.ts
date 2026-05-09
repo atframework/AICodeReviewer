@@ -13,7 +13,7 @@ import {
 } from "@aicr/core";
 import {
   renderTemplate,
-  toTemplateFinding,
+  toTemplateProblem,
   type TemplateContext,
   type TemplateKind,
 } from "@aicr/outputs";
@@ -63,7 +63,7 @@ Options:
   --scope <scope>         Memory clear scope (false-positives, recurring-issues, etc.)
   --all                   Include full file contents in memory show
   --template <path>       Template file to render and validate (lint command)
-  --template-kind <kind>  Template kind: summary or finding (lint command)
+  --template-kind <kind>  Template kind: summary or problem (lint command; finding is accepted as legacy)
   --channel-kind <kind>   Output channel kind for lint sample context
   --help, -h              Show this message
   --version, -v           Show version
@@ -98,28 +98,31 @@ function parseOptionalInteger(value: string | undefined, flagName: string): numb
 }
 
 function parseTemplateKind(value: string | undefined, templatePath?: string): TemplateKind {
-  if (value === "summary" || value === "finding") {
+  if (value === "summary" || value === "problem" || value === "finding") {
     return value;
   }
 
   if (value !== undefined) {
-    throw new RangeError("--template-kind must be either summary or finding.");
+    throw new RangeError("--template-kind must be summary or problem.");
   }
 
   const lowerPath = templatePath?.toLowerCase() ?? "";
-  return lowerPath.includes(".finding.") || lowerPath.endsWith("finding.hbs")
-    ? "finding"
+  return lowerPath.includes(".problem.") ||
+    lowerPath.endsWith("problem.hbs") ||
+    lowerPath.includes(".finding.") ||
+    lowerPath.endsWith("finding.hbs")
+    ? "problem"
     : "summary";
 }
 
 function createSampleTemplateContext(kind: TemplateKind): TemplateContext {
-  const finding = toTemplateFinding({
+  const problem = toTemplateProblem({
     file: "src/example.ts",
     line: 42,
     endLine: 45,
     severity: "high",
     category: "correctness",
-    message: "Sample finding rendered by aicr lint.",
+    message: "Sample problem rendered by aicr lint.",
     suggestion: "Return early when the input is invalid.",
     fingerprint: "sample-fingerprint",
   });
@@ -136,9 +139,9 @@ function createSampleTemplateContext(kind: TemplateKind): TemplateContext {
     },
     run: { id: "lint-sample-run" },
     atMentions: "@review-author",
-    findings: [finding],
+    problems: [problem],
     summary: "Sample summary rendered by aicr lint.",
-    ...(kind === "finding" ? { finding } : {}),
+    ...(kind === "problem" || kind === "finding" ? { problem } : {}),
   };
 }
 
@@ -382,7 +385,7 @@ export async function runCli(
             {
               reviewEvent,
               reviewRun: summarizeReviewOrchestrationForWebhook(result),
-              findings: result.outputState.findings,
+              problems: result.outputState.problems,
               summaries: result.outputState.summaries,
               ...(result.outputState.skipReason
                 ? { skipReason: result.outputState.skipReason }
@@ -446,7 +449,8 @@ export async function runCli(
     }
 
     const eventPath = resolve(effectiveDir, "event.json");
-    const findingsPath = resolve(effectiveDir, "findings.json");
+    const problemsPath = resolve(effectiveDir, "problems.json");
+    const legacyFindingsPath = resolve(effectiveDir, "findings.json");
     const promptPath = resolve(effectiveDir, "prompt.md");
 
     const result: Record<string, unknown> = { runId };
@@ -457,11 +461,17 @@ export async function runCli(
         result.event = null;
       }
     }
-    if (existsSync(findingsPath)) {
+    if (existsSync(problemsPath)) {
       try {
-        result.findings = JSON.parse(readFileSync(findingsPath, "utf8"));
+        result.problems = JSON.parse(readFileSync(problemsPath, "utf8"));
       } catch {
-        result.findings = null;
+        result.problems = null;
+      }
+    } else if (existsSync(legacyFindingsPath)) {
+      try {
+        result.problems = JSON.parse(readFileSync(legacyFindingsPath, "utf8"));
+      } catch {
+        result.problems = null;
       }
     }
     if (existsSync(promptPath)) {
