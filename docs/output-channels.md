@@ -72,7 +72,7 @@ Keep patches concise. Large rewrites belong in a summary or a linked follow-up, 
 - Feishu and WeCom aggregated reports.
 - Push, commit, and P4 changelist events where there may be no line-comment target.
 
-For push/commit/P4 events, publish a non-empty summary when configured channels need an audit trail. Once the planned `no_problems` policy is implemented, each channel decides whether a zero-problem result is published or suppressed.
+For push/commit/P4 events, publish a non-empty summary when configured channels need an audit trail. The `no_problems` policy decides per channel whether a zero-problem result is published or suppressed.
 
 ## Channel mapping
 
@@ -82,13 +82,13 @@ For push/commit/P4 events, publish a non-empty summary when configured channels 
 | `github_pr_review` | Pull request review comment | Pull request review / configured summary publisher | Uses GitHub line anchors where possible |
 | `gitlab_mr_review` | Merge request discussion when `baseSha` and `headSha` are available | Merge request note / configured summary publisher | Falls back to a general MR note when line anchoring is unavailable |
 | `gitea_issue` | Collected, then rendered into an issue comment | Aggregated issue comment | Useful for push events or issue-based triage |
-| `gitea_problem_issue` | Collected for reconciliation | Creates, updates, or resolves managed problem issues | Fingerprint stability matters most here; `gitea_finding_issue` is accepted only as a legacy alias |
+| `gitea_problem_issue` | Collected for reconciliation | Creates, updates, or resolves managed problem issues | Fingerprint stability matters most here |
 | `feishu_bot` | Collected for aggregation | Interactive card Markdown | Keep content concise; include counts, severities, and top locations |
 | `wecom_bot` | Collected for aggregation | Markdown message | Keep within WeCom message size and formatting limits |
 
-## Planned no-problems policy
+## No-problems policy
 
-The planned `no_problems` policy controls whether a successful review with zero actionable problems should publish a summary to each output channel.
+The implemented `no_problems` policy controls whether a successful review with zero actionable problems should publish a summary to each output channel.
 
 Effective policy is resolved in this order, from low to high precedence:
 
@@ -98,9 +98,39 @@ Effective policy is resolved in this order, from low to high precedence:
 4. Workspace defaults: `workspaces.defaults.outputs.no_problems` and `workspaces.defaults.outputs.channel_overrides.<channel>.no_problems`.
 5. Per-project overrides: `workspaces.instances.<workspace_id>.outputs.no_problems` and `workspaces.instances.<workspace_id>.outputs.channel_overrides.<channel>.no_problems`.
 
-Use positive wording: `no_problems.action: publish|suppress`. Notification channels such as Feishu, WeCom, and email usually set `suppress`; lifecycle channels that need to close resolved managed issues may set `publish`. `no_findings` is reserved as a deprecated config alias during migration.
+Use positive wording: `no_problems.action: publish|suppress`. Notification channels such as Feishu, WeCom, and email usually set `suppress`; lifecycle channels that need to close resolved managed issues may set `publish`. The removed `no_findings` spelling is rejected by config validation.
 
 This is an output-layer policy. It does not replace `review.skip_lgtm`, and it must not suppress error reports or problem lifecycle reconciliation.
+
+Example:
+
+```yaml
+outputs:
+  no_problems: { action: suppress }
+  channels:
+    - name: feishu-code-review
+      kind: feishu_bot
+      webhook_url_env: AICR_FEISHU_WEBHOOK
+      no_problems: { action: suppress }
+    - name: audit-archive
+      kind: gitea_issue
+      trigger: gitea
+      no_problems: { action: publish }
+
+workspaces:
+  defaults:
+    outputs:
+      no_problems: { action: suppress }
+  instances:
+    critical-service:
+      source_repo: { trigger: gitea, repo: "org/critical-service" }
+      outputs:
+        channel_overrides:
+          feishu-code-review:
+            no_problems: { action: publish }
+```
+
+If every configured summary channel suppresses a zero-problem result, the run is marked skipped with `skipReason="no_problems_suppressed"` in the run summary.
 
 ## Template rendering
 
@@ -125,7 +155,7 @@ Common template variables:
 | --- | --- |
 | `{{event.author}}` | Normalized event author when available |
 | `{{event.url}}` | Raw event URL when available; templates should not assume this is always a PR/MR URL |
-| `{{target.displayText}}`, `{{target.markdownLink}}` | Planned safe target label/link for PR, MR, commit, P4 changelist, SVN revision, manual, or scheduled events |
+| `{{target.displayText}}`, `{{target.markdownLink}}` | Safe target label/link for PR, MR, commit, P4 changelist, SVN revision, manual, or scheduled events |
 | `{{repo.fullName}}` | Repository reference |
 | `{{run.id}}` | Review run id when available |
 | `{{atMentions}}` | Pre-rendered channel-specific mention string |
@@ -134,11 +164,26 @@ Common template variables:
 | `{{problem.file}}`, `{{problem.line}}`, `{{problem.location}}` | Location fields for one reported problem |
 | `{{problem.severity}}`, `{{problem.category}}`, `{{problem.message}}`, `{{problem.suggestion}}` | Problem content fields |
 
-Legacy templates may still reference `{{findings}}` and `{{finding.*}}`; new templates should use `{{problems}}` and `{{problem.*}}`.
+Templates must use `{{problems}}` and `{{problem.*}}`; the removed `{{findings}}` and `{{finding.*}}` variables are not provided.
 
 After rendering, AICR fixes and validates Markdown before dispatch. If a template cannot be made safe and valid, prefer a plain-text fallback over dropping the report.
 
 Built-in templates must not render `[View PR]` for non-PR/MR events. For push, commit, P4, SVN, scheduled, or manual reviews, render `target.markdownLink` when available, otherwise render `target.displayText`, and omit the target line when neither exists. Commit/revision URLs may be derived from supported SCM providers or explicit URL templates such as a P4 Swarm changelist URL template.
+
+Supported URL-template fields on triggers and channels are `commit_url_template`, `revision_url_template`, and `change_url_template`. Supported variables are `{{revision}}`, `{{commit}}`, `{{commit_id}}`, `{{headSha}}`, `{{head_sha}}`, `{{baseSha}}`, `{{base_sha}}`, `{{repo}}`, `{{repo_ref}}`, `{{provider}}`, `{{trigger}}`, and `{{workspace_id}}`; values are URL-encoded before substitution.
+
+```yaml
+triggers:
+  - name: p4-main
+    kind: p4
+    change_url_template: "https://swarm.example.com/changes/{{revision}}"
+
+outputs:
+  channels:
+    - name: feishu-code-review
+      kind: feishu_bot
+      revision_url_template: "https://review.example.com/revisions/{{revision}}"
+```
 
 ## Agent prompt requirement
 

@@ -72,12 +72,12 @@ Provide a table of: issue found, file location, fix applied, and test added.
 
 ## Common test gaps to check
 
-| Package            | Common gaps                                                                                                                                             |
-| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `@aicr/llm`        | Error paths (missing choices/message), default base URLs, organization header, extra params                                                             |
-| `@aicr/outputs`    | `renderProblemMarkdown` variants (no suggestion, no fingerprint, with endLine), target link templates for PR and non-PR events, no-auth dispatch        |
-| `@aicr/mcp-output` | `fetchMoreContext` without handler, individual validation edge cases, tool schema/name drift                                                            |
-| `@aicr/server`     | Alternative LLM output format (problems/summary/skipReason), legacy findings alias parsing, invalid JSON, status logic, per-channel no-problems routing |
-| `@aicr/vcs`        | Multi-file diffs, copied files, context-only hunks, empty diffs                                                                                         |
-| `@aicr/agents`     | Runtime bundle materialization, model config, MCP tools, native skills, isolated env, manifest; must have tests even for simple exports                 |
-| `@aicr/sandbox`    | Must have at least `test/index.test.ts` even if only exporting a constant                                                                               |
+| Package            | Common gaps                                                                                                                                                 |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `@aicr/llm`        | Error paths (missing choices/message), default base URLs, organization header, extra params                                                                 |
+| `@aicr/outputs`    | `renderProblemMarkdown` variants (no suggestion, no fingerprint, with endLine), target link templates for PR and non-PR events, no-auth dispatch            |
+| `@aicr/mcp-output` | `fetchMoreContext` without handler, individual validation edge cases, tool schema/name drift                                                                |
+| `@aicr/server`     | Alternative LLM output format (problems/summary/skipReason), removed finding aliases rejection, invalid JSON, status logic, per-channel no-problems routing |
+| `@aicr/vcs`        | Multi-file diffs, copied files, context-only hunks, empty diffs                                                                                             |
+| `@aicr/agents`     | Runtime bundle materialization, model config, MCP tools, native skills, isolated env, manifest; must have tests even for simple exports                     |
+| `@aicr/sandbox`    | Must have at least `test/index.test.ts` even if only exporting a constant                                                                                   |

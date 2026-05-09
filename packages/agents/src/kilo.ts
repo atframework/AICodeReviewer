@@ -38,69 +38,71 @@ async function detectBinary(
   }
 }
 
-function buildKiloProviderConfig(model: ModelSpec): Record<string, unknown> {
-  const provider: Record<string, unknown> = {
-    id: model.providerId,
-    type: model.providerKind,
-  };
+function buildKiloProviderOptions(model: ModelSpec): Record<string, unknown> {
+  const options: Record<string, unknown> = {};
 
   if (model.baseUrl) {
-    provider.baseUrl = model.baseUrl;
+    options.baseURL = model.baseUrl;
+  }
+
+  if (model.apiKeyEnv) {
+    const apiKey = process.env[model.apiKeyEnv];
+    if (apiKey) {
+      options.apiKey = apiKey;
+    }
   }
 
   if (model.organization) {
-    provider.organization = model.organization;
+    options.organization = model.organization;
   }
 
-  if (model.extraParams) {
-    Object.assign(provider, model.extraParams);
+  if (model.timeoutMs !== undefined) {
+    options.timeout = model.timeoutMs;
   }
 
   if (model.extraHeaders) {
-    provider.extraHeaders = model.extraHeaders;
+    options.extraHeaders = model.extraHeaders;
   }
 
   if (model.extraBody) {
-    provider.extraBody = model.extraBody;
+    options.extraBody = model.extraBody;
   }
 
   if (model.apiVersion) {
-    provider.apiVersion = model.apiVersion;
+    options.apiVersion = model.apiVersion;
   }
 
-  if (model.thinkingLevel) {
-    provider.thinkingLevel = model.thinkingLevel;
-  }
+  return options;
+}
 
-  if (model.thinkingBudgetTokens !== undefined) {
-    provider.thinkingBudgetTokens = model.thinkingBudgetTokens;
-  }
+function buildKiloJsonConfig(model: ModelSpec): Record<string, unknown> {
+  const options = buildKiloProviderOptions(model);
+  const models: Record<string, unknown> = {
+    [model.modelId]: {},
+  };
 
-  if (model.reasoningEffort) {
-    provider.reasoningEffort = model.reasoningEffort;
-  }
+  const providerEntry: Record<string, unknown> = {
+    options,
+    models,
+  };
 
-  if (model.thinking) {
-    provider.thinking = model.thinking;
-  }
+  const config: Record<string, unknown> = {
+    provider: {
+      [model.providerId]: providerEntry,
+    },
+  };
 
-  if (model.responseFormat) {
-    provider.responseFormat = model.responseFormat;
-  }
-
-  if (model.toolChoice) {
-    provider.toolChoice = model.toolChoice;
-  }
-
-  if (model.parallelToolCalls !== undefined) {
-    provider.parallelToolCalls = model.parallelToolCalls;
-  }
-
-  return provider;
+  return config;
 }
 
 function sanitizeEnvSuffix(value: string): string {
   return value.replace(/[^A-Za-z0-9]/gu, "_").toUpperCase();
+}
+
+function formatKiloModel(model: ModelSpec): string {
+  return model.modelId.includes("/")
+    ? model.modelId
+    : `${model.providerId}/${model.modelId}`;
 }
 
 export function createKiloAdapter(options: KiloAdapterOptions = {}): AgentAdapter {
@@ -114,20 +116,20 @@ export function createKiloAdapter(options: KiloAdapterOptions = {}): AgentAdapte
     },
 
     buildCommand(task: string, spawnOptions: AgentSpawnOptions): readonly string[] {
-      const timeoutSec = Math.floor((spawnOptions.timeoutMs ?? 600_000) / 1000);
       const args: string[] = [
         binary,
         "run",
         "--auto",
+        "--dangerously-skip-permissions",
+        "--format", "json",
       ];
 
       if (spawnOptions.model) {
-        args.push("--provider", spawnOptions.model.providerId);
-        args.push("--model", spawnOptions.model.modelId);
+        args.push("--model", formatKiloModel(spawnOptions.model));
       }
 
-      args.push("--cwd", spawnOptions.workingDir);
-      args.push("--timeout", String(timeoutSec));
+      args.push("--dir", spawnOptions.workingDir);
+      args.push(task);
 
       return args;
     },
@@ -141,13 +143,11 @@ export function createKiloAdapter(options: KiloAdapterOptions = {}): AgentAdapte
       const kiloDir = join(workingDir, ".kilo");
       await mkdir(kiloDir, { recursive: true });
 
-      const providerConfig = buildKiloProviderConfig(model);
-      const providersJson = {
-        providers: [providerConfig],
-      };
+      const kiloJsonConfig = buildKiloJsonConfig(model);
+      const kiloJsonContent = JSON.stringify(kiloJsonConfig, null, 2);
 
-      const configPath = join(kiloDir, "providers.json");
-      await writeFile(configPath, JSON.stringify(providersJson, null, 2), "utf8");
+      const configPath = join(kiloDir, "kilo.json");
+      await writeFile(configPath, kiloJsonContent, "utf8");
 
       const envVars: Record<string, string> = {};
       if (model.apiKeyEnv) {
@@ -157,7 +157,7 @@ export function createKiloAdapter(options: KiloAdapterOptions = {}): AgentAdapte
 
       return {
         configFiles: new Map([
-          [".kilo/providers.json", JSON.stringify(providersJson, null, 2)],
+          [".kilo/kilo.json", kiloJsonContent],
         ]),
         envVars,
         workingDir,

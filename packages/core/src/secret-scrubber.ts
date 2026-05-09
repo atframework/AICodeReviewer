@@ -12,7 +12,7 @@ export type RedactedKind =
 	| "high_entropy"
 	| "key_value_pair";
 
-export interface ScrubFinding {
+export interface ScrubMatch {
 	readonly line: number;
 	readonly column: number;
 	readonly kind: RedactedKind;
@@ -22,7 +22,7 @@ export interface ScrubFinding {
 
 export interface ScrubResult {
 	readonly text: string;
-	readonly findings: readonly ScrubFinding[];
+	readonly matches: readonly ScrubMatch[];
 }
 
 const SECRET_PATTERNS: readonly { readonly kind: RedactedKind; readonly pattern: RegExp; readonly caseInsensitive?: boolean }[] = [
@@ -145,7 +145,7 @@ function redactValue(kind: RedactedKind): string {
 }
 
 export function scrubText(input: string): ScrubResult {
-	const findings: ScrubFinding[] = [];
+	const matches: ScrubMatch[] = [];
 	let text = input;
 
 	for (const { kind, pattern } of SECRET_PATTERNS) {
@@ -156,7 +156,7 @@ export function scrubText(input: string): ScrubResult {
 			const lineOffset = text.slice(0, match.index).split("\n").length - 1;
 			const columnOffset = match.index - text.lastIndexOf("\n", match.index - 1) - 1;
 			const replacement = redactValue(kind);
-			findings.push({
+			matches.push({
 				line: lineOffset,
 				column: Math.max(0, columnOffset),
 				kind,
@@ -166,8 +166,8 @@ export function scrubText(input: string): ScrubResult {
 		}
 	}
 
-	for (const finding of findings) {
-		text = text.replace(finding.matched, finding.replacement);
+	for (const match of matches) {
+		text = text.replace(match.matched, match.replacement);
 	}
 
 	const postRegexText = text;
@@ -176,7 +176,7 @@ export function scrubText(input: string): ScrubResult {
 	while ((entropyMatch = HIGH_ENTROPY_PATTERN.exec(postRegexText)) !== null) {
 		const candidate = entropyMatch[0];
 
-		if (findings.some((f) => entropyMatch && postRegexText.slice(entropyMatch.index, entropyMatch.index + candidate.length).includes(f.replacement))) {
+		if (matches.some((entry) => entropyMatch && postRegexText.slice(entropyMatch.index, entropyMatch.index + candidate.length).includes(entry.replacement))) {
 			continue;
 		}
 
@@ -185,7 +185,7 @@ export function scrubText(input: string): ScrubResult {
 			const lineOffset = postRegexText.slice(0, entropyMatch.index).split("\n").length - 1;
 			const columnOffset = entropyMatch.index - postRegexText.lastIndexOf("\n", entropyMatch.index - 1) - 1;
 			const replacement = redactValue("high_entropy");
-			findings.push({
+			matches.push({
 				line: lineOffset,
 				column: Math.max(0, columnOffset),
 				kind: "high_entropy",
@@ -195,8 +195,8 @@ export function scrubText(input: string): ScrubResult {
 		}
 	}
 
-	for (const finding of findings.filter((f) => f.kind === "high_entropy")) {
-		text = text.replace(finding.matched, finding.replacement);
+	for (const match of matches.filter((entry) => entry.kind === "high_entropy")) {
+		text = text.replace(match.matched, match.replacement);
 	}
 
 	KEY_VALUE_PATTERN.lastIndex = 0;
@@ -207,15 +207,15 @@ export function scrubText(input: string): ScrubResult {
 		const matched = kvMatch[0];
 
 		if (KEY_VALUE_SENSITIVE_NAMES.has(varName) && varValue.length >= 16) {
-			const alreadyRedacted = findings.some((f) => {
-				const idx = text.indexOf(f.replacement);
+			const alreadyRedacted = matches.some((entry) => {
+				const idx = text.indexOf(entry.replacement);
 				return idx >= 0 && idx >= kvMatch!.index && idx < kvMatch!.index + matched.length;
 			});
 			if (alreadyRedacted) continue;
 
 			const lineOffset = text.slice(0, kvMatch.index).split("\n").length - 1;
 			const columnOffset = kvMatch.index - text.lastIndexOf("\n", kvMatch.index - 1) - 1;
-			findings.push({
+			matches.push({
 				line: lineOffset,
 				column: Math.max(0, columnOffset),
 				kind: "key_value_pair",
@@ -226,7 +226,7 @@ export function scrubText(input: string): ScrubResult {
 		}
 	}
 
-	return { text, findings };
+	return { text, matches };
 }
 
 export function scrubDiff(input: string): ScrubResult {
@@ -235,13 +235,13 @@ export function scrubDiff(input: string): ScrubResult {
 
 export function scrubPromptMessages(messages: readonly { readonly role: string; readonly content: string }[]): {
 	messages: readonly { readonly role: string; readonly content: string }[];
-	findings: readonly ScrubFinding[];
+	matches: readonly ScrubMatch[];
 } {
-	const allFindings: ScrubFinding[] = [];
+	const allMatches: ScrubMatch[] = [];
 	const scrubbedMessages = messages.map((msg) => {
 		const result = scrubText(msg.content);
-		allFindings.push(...result.findings);
+		allMatches.push(...result.matches);
 		return { role: msg.role, content: result.text };
 	});
-	return { messages: scrubbedMessages, findings: allFindings };
+	return { messages: scrubbedMessages, matches: allMatches };
 }

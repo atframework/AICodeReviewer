@@ -8,12 +8,14 @@ export {
 	getBuiltinTemplate,
 	renderBuiltinTemplate,
 	renderTemplate,
+	buildTemplateTargetContext,
 	toTemplateProblem,
-	toTemplateProblem as toTemplateFinding,
+	type BuildTemplateTargetOptions,
 	type TemplateContext,
 	type TemplateProblem,
-	type TemplateProblem as TemplateFinding,
 	type TemplateKind,
+	type TemplateTarget,
+	type TemplateTargetKind,
 	type TemplateResolver,
 	type TemplateResolverOptions,
 } from "./template-engine.js";
@@ -28,8 +30,6 @@ export {
 } from "./author-resolution.js";
 
 export type ProblemSeverity = "info" | "low" | "medium" | "high" | "critical";
-/** @deprecated Use ProblemSeverity. */
-export type FindingSeverity = ProblemSeverity;
 
 export interface ReviewProblem {
 	readonly file: string;
@@ -43,9 +43,6 @@ export interface ReviewProblem {
 	readonly fingerprint?: string;
 	readonly renderedMarkdown?: string;
 }
-
-/** @deprecated Use ReviewProblem. */
-export type ReviewFinding = ReviewProblem;
 
 export interface DispatchResult {
 	readonly channel: string;
@@ -83,8 +80,6 @@ export interface GiteaPullRequestReviewOptions {
 
 export interface GiteaPullRequestReviewDispatcher {
 	publishProblem(problem: ReviewProblem): Promise<DispatchResult>;
-	/** @deprecated Use publishProblem. */
-	publishFinding(problem: ReviewProblem): Promise<DispatchResult>;
 }
 
 export class OutputDispatchError extends Error {
@@ -144,9 +139,6 @@ export function renderProblemMarkdown(problem: ReviewProblem): string {
 
 	return parts.join("\n");
 }
-
-/** @deprecated Use renderProblemMarkdown. */
-export const renderFindingMarkdown = renderProblemMarkdown;
 
 function extractExternalId(raw: unknown): string | undefined {
 	if (!raw || typeof raw !== "object") {
@@ -257,10 +249,7 @@ export function createGiteaPullRequestReviewDispatcher(
 		},
 	};
 
-	return {
-		...dispatcher,
-		publishFinding: dispatcher.publishProblem,
-	};
+	return dispatcher;
 }
 
 export interface GithubPullRequestReviewOptions {
@@ -275,8 +264,6 @@ export interface GithubPullRequestReviewOptions {
 
 export interface GithubPullRequestReviewDispatcher {
 	publishProblem(problem: ReviewProblem): Promise<DispatchResult>;
-	/** @deprecated Use publishProblem. */
-	publishFinding(problem: ReviewProblem): Promise<DispatchResult>;
 }
 
 export function createGithubPullRequestReviewDispatcher(
@@ -382,10 +369,7 @@ export function createGithubPullRequestReviewDispatcher(
 		},
 	};
 
-	return {
-		...dispatcher,
-		publishFinding: dispatcher.publishProblem,
-	};
+	return dispatcher;
 }
 
 export interface GitlabMergeRequestReviewOptions {
@@ -402,8 +386,6 @@ export interface GitlabMergeRequestReviewOptions {
 
 export interface GitlabMergeRequestReviewDispatcher {
 	publishProblem(problem: ReviewProblem): Promise<DispatchResult>;
-	/** @deprecated Use publishProblem. */
-	publishFinding(problem: ReviewProblem): Promise<DispatchResult>;
 }
 
 export function createGitlabMergeRequestReviewDispatcher(
@@ -503,10 +485,7 @@ export function createGitlabMergeRequestReviewDispatcher(
 		},
 	};
 
-	return {
-		...dispatcher,
-		publishFinding: dispatcher.publishProblem,
-	};
+	return dispatcher;
 }
 
 export interface GiteaIssueOptions {
@@ -521,8 +500,6 @@ export interface GiteaIssueOptions {
 
 export interface GiteaIssueDispatcher {
 	publishAggregatedProblems(problems: readonly ReviewProblem[], summary?: string): Promise<DispatchResult>;
-	/** @deprecated Use publishAggregatedProblems. */
-	publishAggregatedFindings(problems: readonly ReviewProblem[], summary?: string): Promise<DispatchResult>;
 }
 
 export function createGiteaIssueDispatcher(options: GiteaIssueOptions): GiteaIssueDispatcher {
@@ -586,10 +563,7 @@ export function createGiteaIssueDispatcher(options: GiteaIssueOptions): GiteaIss
 		},
 	};
 
-	return {
-		...dispatcher,
-		publishAggregatedFindings: dispatcher.publishAggregatedProblems,
-	};
+	return dispatcher;
 }
 
 export type GiteaProblemIssueResolvedAction = "none" | "close" | "delete";
@@ -609,8 +583,6 @@ export interface GiteaProblemIssueOptions {
 
 export interface GiteaProblemIssueDispatcher {
 	reconcileProblems(problems: readonly ReviewProblem[], summary?: string): Promise<readonly DispatchResult[]>;
-	/** @deprecated Use reconcileProblems. */
-	reconcileFindings(problems: readonly ReviewProblem[], summary?: string): Promise<readonly DispatchResult[]>;
 }
 
 interface ManagedGiteaIssue {
@@ -623,7 +595,6 @@ interface ManagedGiteaIssue {
 }
 
 const AICR_MANAGED_PROBLEM_ISSUE_MARKER = "<!-- aicr:managed=problem-issue -->";
-const AICR_LEGACY_MANAGED_FINDING_ISSUE_MARKER = "<!-- aicr:managed=finding-issue -->";
 
 function extractManagedIssueFingerprint(body: string): string | undefined {
 	const match = /<!--\s*aicr:fingerprint=([^\s-][^\s]*)\s*-->/u.exec(body);
@@ -636,7 +607,7 @@ function extractIssueNumber(raw: Record<string, unknown>): number | undefined {
 }
 
 function hasManagedProblemIssueMarker(body: string): boolean {
-	return body.includes(AICR_MANAGED_PROBLEM_ISSUE_MARKER) || body.includes(AICR_LEGACY_MANAGED_FINDING_ISSUE_MARKER);
+	return body.includes(AICR_MANAGED_PROBLEM_ISSUE_MARKER);
 }
 
 function buildProblemIssueTitle(problem: ReviewProblem, markerPrefix: string): string {
@@ -847,10 +818,7 @@ export function createGiteaProblemIssueDispatcher(options: GiteaProblemIssueOpti
 		},
 	};
 
-	return {
-		...dispatcher,
-		reconcileFindings: dispatcher.reconcileProblems,
-	};
+	return dispatcher;
 }
 
 export interface FeishuBotOptions {
@@ -862,8 +830,6 @@ export interface FeishuBotOptions {
 
 export interface FeishuBotDispatcher {
 	publishAggregatedProblems(problems: readonly ReviewProblem[], summary?: string, mentionText?: string): Promise<DispatchResult>;
-	/** @deprecated Use publishAggregatedProblems. */
-	publishAggregatedFindings(problems: readonly ReviewProblem[], summary?: string, mentionText?: string): Promise<DispatchResult>;
 }
 
 async function computeFeishuSign(timestamp: number, secret: string): Promise<string> {
@@ -948,10 +914,7 @@ export function createFeishuBotDispatcher(options: FeishuBotOptions): FeishuBotD
 		},
 	};
 
-	return {
-		...dispatcher,
-		publishAggregatedFindings: dispatcher.publishAggregatedProblems,
-	};
+	return dispatcher;
 }
 
 export interface WeComBotOptions {
@@ -963,8 +926,6 @@ export interface WeComBotOptions {
 
 export interface WeComBotDispatcher {
 	publishAggregatedProblems(problems: readonly ReviewProblem[], summary?: string, mentionText?: string): Promise<DispatchResult>;
-	/** @deprecated Use publishAggregatedProblems. */
-	publishAggregatedFindings(problems: readonly ReviewProblem[], summary?: string, mentionText?: string): Promise<DispatchResult>;
 }
 
 export function createWeComBotDispatcher(options: WeComBotOptions): WeComBotDispatcher {
@@ -1024,10 +985,7 @@ export function createWeComBotDispatcher(options: WeComBotOptions): WeComBotDisp
 		},
 	};
 
-	return {
-		...dispatcher,
-		publishAggregatedFindings: dispatcher.publishAggregatedProblems,
-	};
+	return dispatcher;
 }
 
 export function computeProblemFingerprint(problem: {
@@ -1039,15 +997,3 @@ export function computeProblemFingerprint(problem: {
 	const raw = `${problem.file}:${problem.line}:${problem.category}:${problem.message}`;
 	return createHash("sha256").update(raw).digest("hex").slice(0, 16);
 }
-
-/** @deprecated Use computeProblemFingerprint. */
-export const computeFindingFingerprint = computeProblemFingerprint;
-
-/** @deprecated Use GiteaProblemIssueResolvedAction. */
-export type GiteaFindingIssueResolvedAction = GiteaProblemIssueResolvedAction;
-/** @deprecated Use GiteaProblemIssueOptions. */
-export type GiteaFindingIssueOptions = GiteaProblemIssueOptions;
-/** @deprecated Use GiteaProblemIssueDispatcher. */
-export type GiteaFindingIssueDispatcher = GiteaProblemIssueDispatcher;
-/** @deprecated Use createGiteaProblemIssueDispatcher. */
-export const createGiteaFindingIssueDispatcher = createGiteaProblemIssueDispatcher;

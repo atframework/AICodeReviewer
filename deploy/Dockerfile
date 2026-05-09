@@ -31,10 +31,16 @@ RUN pnpm build
 # ---------- Runtime stage ----------
 FROM cgr.dev/chainguard/node:latest-dev AS runtime
 
+ARG NPM_REGISTRY=https://registry.npmjs.org
+ARG NPM_STRICT_SSL=true
 ENV NODE_ENV=production
+ENV npm_config_registry=${NPM_REGISTRY}
+ENV npm_config_strict_ssl=${NPM_STRICT_SSL}
 
 USER root
 WORKDIR /app
+
+RUN npm install --global @kilocode/cli@7.2.40 --registry="${NPM_REGISTRY}" --strict-ssl="${NPM_STRICT_SSL}"
 
 COPY --from=build --chown=node:node /app/packages/cli/package.json ./packages/cli/package.json
 COPY --from=build --chown=node:node /app/packages/core/package.json ./packages/core/package.json

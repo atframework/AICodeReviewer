@@ -78,7 +78,7 @@ describe("createKiloAdapter", () => {
   });
 
   describe("buildCommand", () => {
-    it("builds command with auto-approve flag", () => {
+    it("builds command with auto-approve flags, format json, and message", () => {
       const adapter = createKiloAdapter();
       const cmd = adapter.buildCommand("review this", {
         workingDir: "/workspace",
@@ -88,10 +88,15 @@ describe("createKiloAdapter", () => {
       expect(cmd[0]).toBe("kilo");
       expect(cmd).toContain("run");
       expect(cmd).toContain("--auto");
+      expect(cmd).toContain("--dangerously-skip-permissions");
+      expect(cmd).toContain("--format");
+      expect(cmd).toContain("json");
+      expect(cmd).toContain("--dir");
       expect(cmd).toContain("/workspace");
+      expect(cmd).toContain("review this");
     });
 
-    it("includes model flags when model is provided", () => {
+    it("includes model flag in provider/model format", () => {
       const adapter = createKiloAdapter();
       const cmd = adapter.buildCommand("review", {
         workingDir: "/ws",
@@ -102,38 +107,37 @@ describe("createKiloAdapter", () => {
         },
       });
 
-      expect(cmd).toContain("--provider");
-      expect(cmd).toContain("test-provider");
       expect(cmd).toContain("--model");
-      expect(cmd).toContain("gpt-4o");
+      expect(cmd).toContain("test-provider/gpt-4o");
     });
 
-    it("calculates timeout in seconds", () => {
+    it("uses bare modelId when it already contains a slash", () => {
       const adapter = createKiloAdapter();
       const cmd = adapter.buildCommand("review", {
         workingDir: "/ws",
-        timeoutMs: 300_000,
+        model: {
+          providerKind: "openai_compatible",
+          providerId: "test-provider",
+          modelId: "other/model",
+        },
       });
 
-      const timeoutIdx = cmd.indexOf("--timeout");
-      expect(timeoutIdx).toBeGreaterThan(-1);
-      expect(cmd[timeoutIdx + 1]).toBe("300");
+      expect(cmd).toContain("--model");
+      expect(cmd).toContain("other/model");
     });
 
-    it("uses default timeout of 600s when not specified", () => {
+    it("passes task as trailing message argument", () => {
       const adapter = createKiloAdapter();
-      const cmd = adapter.buildCommand("review", {
+      const cmd = adapter.buildCommand("do the thing", {
         workingDir: "/ws",
       });
 
-      const timeoutIdx = cmd.indexOf("--timeout");
-      expect(timeoutIdx).toBeGreaterThan(-1);
-      expect(cmd[timeoutIdx + 1]).toBe("600");
+      expect(cmd[cmd.length - 1]).toBe("do the thing");
     });
   });
 
   describe("materializeConfig", () => {
-    it("returns config files map with providers.json", async () => {
+    it("returns config files map with kilo.json", async () => {
       const adapter = createKiloAdapter();
       const result = await adapter.materializeConfig(
         {
@@ -145,17 +149,18 @@ describe("createKiloAdapter", () => {
         "/tmp/test-workspace",
       );
 
-      expect(result.configFiles.has(".kilo/providers.json")).toBe(true);
-      const configJson = result.configFiles.get(".kilo/providers.json");
+      expect(result.configFiles.has(".kilo/kilo.json")).toBe(true);
+      const configJson = result.configFiles.get(".kilo/kilo.json");
       expect(configJson).toBeDefined();
 
       const parsed = JSON.parse(configJson ?? "{}");
-      expect(parsed.providers).toHaveLength(1);
-      expect(parsed.providers[0]?.id).toBe("my-provider");
-      expect(parsed.providers[0]?.baseUrl).toBe("https://api.openai.com/v1");
+      expect(parsed.provider).toBeDefined();
+      expect(parsed.provider["my-provider"]).toBeDefined();
+      expect(parsed.provider["my-provider"]?.options?.baseURL).toBe("https://api.openai.com/v1");
+      expect(parsed.provider["my-provider"]?.models?.["gpt-4o"]).toEqual({});
     });
 
-    it("includes organization in provider config", async () => {
+    it("includes organization in provider options", async () => {
       const adapter = createKiloAdapter();
       const result = await adapter.materializeConfig(
         {
@@ -167,9 +172,9 @@ describe("createKiloAdapter", () => {
         "/tmp/test",
       );
 
-      const configJson = result.configFiles.get(".kilo/providers.json") ?? "{}";
+      const configJson = result.configFiles.get(".kilo/kilo.json") ?? "{}";
       const parsed = JSON.parse(configJson);
-      expect(parsed.providers[0]?.organization).toBe("org-123");
+      expect(parsed.provider["org-provider"]?.options?.organization).toBe("org-123");
     });
 
     it("includes env vars for API key", async () => {
@@ -188,7 +193,7 @@ describe("createKiloAdapter", () => {
       expect(result.envVars.KILO_API_KEY_P).toBe("${OPENAI_API_KEY}");
     });
 
-    it("writes providers.json to the working directory", async () => {
+    it("writes kilo.json to the working directory", async () => {
       const tempDir = await mkdtemp(join(tmpdir(), "aicr-kilo-adapter-"));
 
       try {
@@ -198,19 +203,18 @@ describe("createKiloAdapter", () => {
             providerKind: "openai_compatible",
             providerId: "openai-prod",
             modelId: "gpt-4o",
+            baseUrl: "https://api.openai.com/v1",
             apiVersion: "2025-01-01-preview",
-            thinkingLevel: "high",
-            responseFormat: { kind: "json_object" },
           },
           tempDir,
         );
 
-        const configJson = await readFile(join(tempDir, ".kilo", "providers.json"), "utf8");
+        const configJson = await readFile(join(tempDir, ".kilo", "kilo.json"), "utf8");
         const parsed = JSON.parse(configJson);
-        expect(parsed.providers[0]?.id).toBe("openai-prod");
-        expect(parsed.providers[0]?.apiVersion).toBe("2025-01-01-preview");
-        expect(parsed.providers[0]?.thinkingLevel).toBe("high");
-        expect(parsed.providers[0]?.responseFormat).toEqual({ kind: "json_object" });
+        expect(parsed.provider["openai-prod"]).toBeDefined();
+        expect(parsed.provider["openai-prod"]?.options?.baseURL).toBe("https://api.openai.com/v1");
+        expect(parsed.provider["openai-prod"]?.options?.apiVersion).toBe("2025-01-01-preview");
+        expect(parsed.provider["openai-prod"]?.models?.["gpt-4o"]).toEqual({});
       } finally {
         await rm(tempDir, { recursive: true, force: true });
       }

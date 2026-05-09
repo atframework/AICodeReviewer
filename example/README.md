@@ -44,7 +44,7 @@ Kilo Code is the primary deployment-test agent for AICodeReviewer. The repeatabl
 
 ### Prerequisites
 
-- Kilo Code installed for interactive verification, and Kilo CLI available to the service user for automated runs.
+- Kilo Code installed for interactive verification. The deployment image installs `@kilocode/cli` so the service container has the `kilo` binary for automated runs.
 - `agent.default: kilo` in `config.yaml`.
 - A test Gitea/GitHub/GitLab PR or a P4 changelist that routes to a non-production output channel.
 - Required secrets loaded through environment variables; do not copy token values into `config.yaml` or prompts.
@@ -248,6 +248,55 @@ workspaces:
         line_comments: [gitea-pr-review]
         summary: [gitea-pr-review]
 ```
+
+## Zero-Problem Output Policy
+
+Use `no_problems.action` to decide whether successful reviews with no actionable
+problems should notify each channel. The default sample keeps notification
+channels quiet and lets individual workspaces/channels opt in when an audit
+trail is required.
+
+```yaml
+outputs:
+  no_problems: { action: suppress }
+  channels:
+    - name: feishu-code-review
+      kind: feishu_bot
+      webhook_url_env: AICR_FEISHU_WEBHOOK
+      no_problems: { action: suppress }
+
+workspaces:
+  instances:
+    critical-service:
+      source_repo: { trigger: gitea, repo: "my-org/critical-service" }
+      outputs:
+        summary: [feishu-code-review]
+        channel_overrides:
+          feishu-code-review:
+            no_problems: { action: publish }
+```
+
+If all selected summary channels suppress a zero-problem result, the run is
+recorded as skipped with `skipReason="no_problems_suppressed"`.
+
+## Non-PR Target Links
+
+Built-in templates render `target.markdownLink` / `target.displayText` instead
+of assuming every review is a PR. Gitea, Forgejo, GitHub, and GitLab commit
+links are derived from trigger `base_url`, repo, and revision. P4/SVN/internal
+systems can provide explicit URL templates:
+
+```yaml
+triggers:
+  - name: p4-main
+    kind: p4
+    depot_path: "//depot/main"
+    change_url_template: "https://swarm.example.com/changes/{{revision}}"
+```
+
+Template variables are URL-encoded before substitution. Use simple revision or
+commit variables for path segments, and prefer automatic derivation for Git
+providers when possible.
 
 ## CLI One-shot Review (dry-run)
 

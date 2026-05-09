@@ -18,7 +18,6 @@ export type MentionChannelKind =
 	| "gitlab_mr_review"
 	| "gitea_issue"
 	| "gitea_problem_issue"
-	| "gitea_finding_issue"
 	| "feishu_bot"
 	| "wecom_bot";
 
@@ -80,7 +79,6 @@ function renderFallbackMention(channelKind: MentionChannelKind): string {
 		case "gitlab_mr_review":
 		case "gitea_issue":
 		case "gitea_problem_issue":
-		case "gitea_finding_issue":
 		default:
 			return "";
 	}
@@ -104,7 +102,6 @@ export function renderMentions(
 		case "gitlab_mr_review":
 		case "gitea_issue":
 		case "gitea_problem_issue":
-		case "gitea_finding_issue":
 		default:
 			return usernames.map((u) => `@${u}`).join(" ");
 	}

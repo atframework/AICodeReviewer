@@ -174,6 +174,10 @@ Each reported problem must be:
 - explicit about uncertainty when certainty is incomplete;
 - optionally suggestive about the smallest plausible fix direction.
 
+Use Simplified Chinese（简体中文）for human-readable problem messages and final
+summaries unless a higher-priority runtime or repository instruction explicitly
+requires a different language.
+
 Avoid:
 
 - praise or filler;

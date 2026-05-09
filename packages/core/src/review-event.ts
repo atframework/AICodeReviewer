@@ -39,6 +39,7 @@ export const reviewEventSchema = z
     headSha: z.string().min(1).optional(),
     changedFiles: z.array(z.string().min(1)).optional(),
     author: reviewActorSchema,
+    title: z.string().min(1).optional(),
     url: z.string().url().optional(),
     reason: z.string().min(1),
     rawEventName: z.string().min(1).optional(),

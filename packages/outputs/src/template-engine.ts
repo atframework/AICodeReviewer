@@ -3,9 +3,36 @@ import { join } from "node:path";
 
 import Handlebars from "handlebars";
 
-type PrimaryTemplateKind = "problem" | "summary";
+export type TemplateKind = "problem" | "summary";
 
-export type TemplateKind = PrimaryTemplateKind | "finding";
+export type TemplateTargetKind = "pull_request" | "push" | "commit" | "issue" | "manual" | "scheduled";
+
+export interface TemplateTarget {
+	readonly kind: TemplateTargetKind;
+	readonly label: string;
+	readonly id?: string;
+	readonly url?: string;
+	readonly baseRevision?: string;
+	readonly headRevision?: string;
+	readonly displayText: string;
+	readonly markdownLink?: string;
+}
+
+export interface BuildTemplateTargetOptions {
+	readonly kind?: TemplateTargetKind;
+	readonly provider?: string;
+	readonly repoRef?: string;
+	readonly title?: string;
+	readonly url?: string;
+	readonly baseRevision?: string;
+	readonly headRevision?: string;
+	readonly triggerName?: string;
+	readonly workspaceId?: string;
+	readonly baseUrl?: string;
+	readonly commitUrlTemplate?: string;
+	readonly revisionUrlTemplate?: string;
+	readonly changeUrlTemplate?: string;
+}
 
 export interface TemplateContext {
 	readonly event?: {
@@ -13,6 +40,7 @@ export interface TemplateContext {
 		readonly url?: string;
 		readonly title?: string;
 	};
+	readonly target?: TemplateTarget;
 	readonly repo?: {
 		readonly name?: string;
 		readonly fullName?: string;
@@ -23,11 +51,7 @@ export interface TemplateContext {
 	readonly atMentions?: string;
 	readonly problems?: readonly TemplateProblem[];
 	readonly problem?: TemplateProblem;
-	/** @deprecated Use problems. */
-	readonly findings?: readonly TemplateProblem[];
 	readonly summary?: string;
-	/** @deprecated Use problem. */
-	readonly finding?: TemplateProblem;
 }
 
 export interface TemplateProblem {
@@ -42,10 +66,191 @@ export interface TemplateProblem {
 	readonly location: string;
 }
 
+function shortRevision(value: string | undefined): string | undefined {
+	return value && value.length > 12 ? value.slice(0, 12) : value;
+}
+
+function isHttpUrl(value: string | undefined): value is string {
+	if (!value) {
+		return false;
+	}
+
+	try {
+		const parsed = new URL(value);
+		return parsed.protocol === "http:" || parsed.protocol === "https:";
+	} catch {
+		return false;
+	}
+}
+
+function escapeMarkdownLinkLabel(value: string): string {
+	return value.replace(/[\\[\]()]/gu, "\\$&");
+}
+
+function markdownLink(displayText: string, url: string | undefined): string | undefined {
+	return isHttpUrl(url) ? `[${escapeMarkdownLinkLabel(displayText)}](${url})` : undefined;
+}
+
+function encodeRepoRef(repoRef: string): string {
+	return repoRef
+		.split("/")
+		.filter((part) => part.length > 0)
+		.map((part) => encodeURIComponent(part))
+		.join("/");
+}
+
+function extractTargetId(kind: TemplateTargetKind, url: string | undefined): string | undefined {
+	if (!url) {
+		return undefined;
+	}
+
+	try {
+		const pathname = new URL(url).pathname;
+		const patterns = kind === "issue"
+			? [/\/issues\/(\d+)(?:\/|$)/u]
+			: [/\/pulls\/(\d+)(?:\/|$)/u, /\/pull\/(\d+)(?:\/|$)/u, /\/merge_requests\/(\d+)(?:\/|$)/u];
+		for (const pattern of patterns) {
+			const match = pattern.exec(pathname);
+			if (match?.[1]) {
+				return match[1];
+			}
+		}
+	} catch {
+		return undefined;
+	}
+
+	return undefined;
+}
+
+function renderUrlTemplate(
+	template: string | undefined,
+	variables: Readonly<Record<string, string | undefined>>,
+): string | undefined {
+	if (!template) {
+		return undefined;
+	}
+
+	let unknownVariable = false;
+	const rendered = template.replace(/\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}/gu, (_match, key: string) => {
+		const value = variables[key];
+		if (value === undefined) {
+			unknownVariable = true;
+			return "";
+		}
+		return encodeURIComponent(value);
+	});
+
+	return unknownVariable || /\{\{/u.test(rendered) || !isHttpUrl(rendered) ? undefined : rendered;
+}
+
+function deriveCommitUrl(options: BuildTemplateTargetOptions, revision: string | undefined): string | undefined {
+	if (!revision || !options.baseUrl || !options.repoRef) {
+		return undefined;
+	}
+
+	const baseUrl = options.baseUrl.replace(/\/+$/u, "");
+	const repoRef = encodeRepoRef(options.repoRef);
+	if (!baseUrl || !repoRef) {
+		return undefined;
+	}
+
+	const encodedRevision = encodeURIComponent(revision);
+	if (options.provider === "gitlab") {
+		return `${baseUrl}/${repoRef}/-/commit/${encodedRevision}`;
+	}
+
+	if (options.provider === "gitea" || options.provider === "forgejo" || options.provider === "github") {
+		return `${baseUrl}/${repoRef}/commit/${encodedRevision}`;
+	}
+
+	return undefined;
+}
+
+function targetDisplayText(options: BuildTemplateTargetOptions, kind: TemplateTargetKind, id: string | undefined): { label: string; displayText: string } {
+	const revision = options.headRevision;
+	if (kind === "pull_request") {
+		const label = options.provider === "gitlab" ? "MR" : "PR";
+		return {
+			label,
+			displayText: options.title ?? (id ? `${label} ${label === "MR" ? "!" : "#"}${id}` : `${label} review target`),
+		};
+	}
+
+	if (kind === "issue") {
+		return {
+			label: "Issue",
+			displayText: options.title ?? (id ? `Issue #${id}` : "Issue"),
+		};
+	}
+
+	if (kind === "commit" || kind === "push") {
+		if (options.provider === "p4") {
+			return { label: "P4 CL", displayText: revision ? `P4 CL ${revision}` : "P4 changelist" };
+		}
+		if (options.provider === "svn") {
+			return { label: "SVN revision", displayText: revision ? `SVN r${revision}` : "SVN revision" };
+		}
+		const short = shortRevision(revision);
+		return { label: kind === "push" ? "Push" : "Commit", displayText: short ? `Commit ${short}` : kind === "push" ? "Push event" : "Commit" };
+	}
+
+	if (kind === "scheduled") {
+		return { label: "Scheduled review", displayText: "Scheduled review" };
+	}
+
+	return { label: "Manual review", displayText: "Manual review" };
+}
+
+export function buildTemplateTargetContext(options: BuildTemplateTargetOptions): TemplateTarget {
+	const kind = options.kind ?? "manual";
+	const id = extractTargetId(kind, options.url);
+	const { label, displayText } = targetDisplayText(options, kind, id);
+	const revision = options.headRevision;
+	const variables = {
+		revision,
+		commit: revision,
+		commit_id: revision,
+		headSha: options.headRevision,
+		head_sha: options.headRevision,
+		baseSha: options.baseRevision,
+		base_sha: options.baseRevision,
+		repo: options.repoRef,
+		repo_ref: options.repoRef,
+		provider: options.provider,
+		trigger: options.triggerName,
+		workspace_id: options.workspaceId,
+	};
+	const templatedUrl = renderUrlTemplate(options.changeUrlTemplate, variables) ??
+		renderUrlTemplate(options.revisionUrlTemplate, variables) ??
+		renderUrlTemplate(options.commitUrlTemplate, variables);
+	const derivedUrl = kind === "commit" || kind === "push" ? deriveCommitUrl(options, revision) : undefined;
+	const url = templatedUrl ?? (isHttpUrl(options.url) ? options.url : undefined) ?? derivedUrl;
+	const targetMarkdownLink = markdownLink(displayText, url);
+
+	return {
+		kind,
+		label,
+		...(id ? { id } : {}),
+		...(url ? { url } : {}),
+		...(options.baseRevision ? { baseRevision: options.baseRevision } : {}),
+		...(options.headRevision ? { headRevision: options.headRevision } : {}),
+		displayText,
+		...(targetMarkdownLink ? { markdownLink: targetMarkdownLink } : {}),
+	};
+}
+
 const BUILTIN_SUMMARY_TEMPLATE = `## AI Code Review Summary
 
+{{#if target.markdownLink}}
+**Target**: {{{target.markdownLink}}}
+{{else}}
+{{#if target.displayText}}
+**Target**: {{target.displayText}}
+{{else}}
 {{#if event.url}}
-**PR**: [{{#if event.title}}{{event.title}}]({{event.url}}){{else}}View changes{{/if}}
+**Target**: [{{#if event.title}}{{event.title}}{{else}}Review target{{/if}}]({{event.url}})
+{{/if}}
+{{/if}}
 {{/if}}
 {{#if event.author}}
 **Author**: @{{event.author}}
@@ -95,8 +300,16 @@ Location: \`{{problem.location}}\`
 
 const BUILTIN_GITEA_ISSUE_SUMMARY_TEMPLATE = `## AI Code Review Report
 
+{{#if target.markdownLink}}
+**Reviewed**: {{{target.markdownLink}}}
+{{else}}
+{{#if target.displayText}}
+**Reviewed**: {{target.displayText}}
+{{else}}
 {{#if event.url}}
-**Reviewed**: [{{#if event.title}}{{event.title}}]({{event.url}}){{else}}changes{{/if}}
+**Reviewed**: [{{#if event.title}}{{event.title}}{{else}}Review target{{/if}}]({{event.url}})
+{{/if}}
+{{/if}}
 {{/if}}
 {{#if event.author}}
 **Author**: @{{event.author}}
@@ -129,11 +342,19 @@ No summary provided.
 *Generated by AICodeReviewer*{{#if run.id}} | Run: {{run.id}}{{/if}}
 `;
 
-const BUILTIN_FEISHU_SUMMARY_TEMPLATE = `{{#if event.title}}**{{event.title}}**{{/if}}
+const BUILTIN_FEISHU_SUMMARY_TEMPLATE = `{{#if event.title}}**{{event.title}}**{{else}}{{#if target.displayText}}**{{target.displayText}}**{{/if}}{{/if}}
 
 {{#if problems}}Problems: {{problems.length}}{{/if}}
+{{#if target.markdownLink}}
+{{{target.markdownLink}}}
+{{else}}
+{{#if target.displayText}}
+{{target.displayText}}
+{{else}}
 {{#if event.url}}
-[View changes]({{event.url}})
+[Review target]({{event.url}})
+{{/if}}
+{{/if}}
 {{/if}}
 {{#if summary}}
 
@@ -141,18 +362,26 @@ const BUILTIN_FEISHU_SUMMARY_TEMPLATE = `{{#if event.title}}**{{event.title}}**{
 {{/if}}
 `;
 
-const BUILTIN_WECOM_SUMMARY_TEMPLATE = `{{#if event.title}}{{event.title}}{{/if}}
+const BUILTIN_WECOM_SUMMARY_TEMPLATE = `{{#if event.title}}{{event.title}}{{else}}{{#if target.displayText}}{{target.displayText}}{{/if}}{{/if}}
 {{#if problems}}Problems: {{problems.length}}{{/if}}
+{{#if target.url}}
+{{target.url}}
+{{else}}
+{{#if target.displayText}}
+{{target.displayText}}
+{{else}}
 {{#if event.url}}
 {{event.url}}
 {{/if}}
+{{/if}}
+{{/if}}
 {{#if summary}}
 
 {{{summary}}}
 {{/if}}
 `;
 
-const builtinTemplates: Readonly<Record<string, Record<PrimaryTemplateKind, string>>> = {
+const builtinTemplates: Readonly<Record<string, Record<TemplateKind, string>>> = {
 	gitea_pr_review: {
 		summary: BUILTIN_SUMMARY_TEMPLATE,
 		problem: BUILTIN_PROBLEM_TEMPLATE,
@@ -162,10 +391,6 @@ const builtinTemplates: Readonly<Record<string, Record<PrimaryTemplateKind, stri
 		problem: BUILTIN_PROBLEM_TEMPLATE,
 	},
 	gitea_problem_issue: {
-		summary: BUILTIN_GITEA_ISSUE_SUMMARY_TEMPLATE,
-		problem: BUILTIN_PROBLEM_TEMPLATE,
-	},
-	gitea_finding_issue: {
 		summary: BUILTIN_GITEA_ISSUE_SUMMARY_TEMPLATE,
 		problem: BUILTIN_PROBLEM_TEMPLATE,
 	},
@@ -200,28 +425,13 @@ function compileTemplate(source: string, cacheKey: string): Handlebars.TemplateD
 	return compiled;
 }
 
-function normalizeTemplateKind(kind: TemplateKind): PrimaryTemplateKind {
-	return kind === "finding" ? "problem" : kind;
-}
-
-function withTemplateAliases(context: TemplateContext): TemplateContext {
-	const problems = context.problems ?? context.findings;
-	const problem = context.problem ?? context.finding;
-	return {
-		...context,
-		...(problems ? { problems, findings: problems } : {}),
-		...(problem ? { problem, finding: problem } : {}),
-	};
-}
-
 export function getBuiltinTemplate(channelKind: string, kind: TemplateKind): string {
-	const normalizedKind = normalizeTemplateKind(kind);
 	const channelTemplates = builtinTemplates[channelKind];
 	if (channelTemplates) {
-		return channelTemplates[normalizedKind];
+		return channelTemplates[kind];
 	}
 
-	return builtinTemplates["gitea_pr_review"]![normalizedKind];
+	return builtinTemplates["gitea_pr_review"]![kind];
 }
 
 export function clearTemplateCache(): void {
@@ -235,7 +445,7 @@ export function renderTemplate(
 ): string {
 	const key = cacheKey ?? source;
 	const compiled = compileTemplate(source, key);
-	return compiled(withTemplateAliases(context));
+	return compiled(context);
 }
 
 export function renderBuiltinTemplate(
@@ -298,22 +508,16 @@ function isMissingFileError(error: unknown): boolean {
 
 function workspaceTemplateCandidates(options: TemplateResolverOptions, kind: TemplateKind): string[] {
 	const candidates: string[] = [];
-	const normalizedKind = normalizeTemplateKind(kind);
-	const kinds = normalizedKind === "problem" ? ["problem", "finding"] : [normalizedKind];
 	if (options.channelName) {
-		for (const candidateKind of kinds) {
-			candidates.push(`${options.channelName}.${candidateKind}.md.hbs`, `${options.channelName}.${candidateKind}.hbs`);
-		}
+		candidates.push(`${options.channelName}.${kind}.md.hbs`, `${options.channelName}.${kind}.hbs`);
 	}
 
-	for (const candidateKind of kinds) {
-		candidates.push(
-			`${options.channelKind}.${candidateKind}.md.hbs`,
-			`${options.channelKind}.${candidateKind}.hbs`,
-			`${candidateKind}.md.hbs`,
-			`${candidateKind}.hbs`,
-		);
-	}
+	candidates.push(
+		`${options.channelKind}.${kind}.md.hbs`,
+		`${options.channelKind}.${kind}.hbs`,
+		`${kind}.md.hbs`,
+		`${kind}.hbs`,
+	);
 
 	return candidates;
 }
@@ -351,15 +555,14 @@ function resolveWorkspaceTemplate(
 }
 
 function resolveTemplateSource(options: TemplateResolverOptions, kind: TemplateKind): ResolvedTemplateSource {
-	const normalizedKind = normalizeTemplateKind(kind);
 	const workspaceTemplate = resolveWorkspaceTemplate(options, kind);
 	if (workspaceTemplate) {
 		return workspaceTemplate;
 	}
 
 	return {
-		source: getBuiltinTemplate(options.channelKind, normalizedKind),
-		cacheKey: `builtin:${options.channelKind}:${normalizedKind}`,
+		source: getBuiltinTemplate(options.channelKind, kind),
+		cacheKey: `builtin:${options.channelKind}:${kind}`,
 	};
 }
 

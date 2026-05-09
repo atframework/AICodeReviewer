@@ -543,8 +543,8 @@ export interface ModelSpec {
 
 #### 3.9.1 无问题输出策略与目标链接渲染
 
-- **无问题输出策略（计划）**：新增 `no_problems` 策略，控制一次成功 review 在 `problemCount === 0` 且没有错误报告时，某个输出通道是否仍发布 summary / 空结果通知。策略只影响“无 actionable problem”的正常结果，不影响运行失败、鉴权失败、托管 problem issue 的关闭 / 解决生命周期事件。
-- **策略字段**：统一使用正向语义，避免双重否定：`no_problems.action: publish|suppress`。`publish` 表示即使没有问题也发送 summary；`suppress` 表示静默，run trace 中记录 `skipReason="no_problems_suppressed"` 与被跳过的 channel。`no_findings` 作为旧配置别名只用于兼容迁移，不再出现在新文档与示例中。
+- **无问题输出策略**：`no_problems` 策略控制一次成功 review 在 `problemCount === 0` 且没有错误报告时，某个输出通道是否仍发布 summary / 空结果通知。策略只影响“无 actionable problem”的正常结果，不影响运行失败、鉴权失败、托管 problem issue 的关闭 / 解决生命周期事件。
+- **策略字段**：统一使用正向语义，避免双重否定：`no_problems.action: publish|suppress`。`publish` 表示即使没有问题也发送 summary；`suppress` 表示静默，run trace 中记录 `skipReason="no_problems_suppressed"` 与被跳过的 channel。旧 `no_findings` 配置名已移除，加载配置时必须拒绝。
 - **覆盖层级（低 → 高）**：
   1. 内置默认：静默优先，普通 summary / IM 通道默认 `suppress`；需要生命周期收口的通道（如 `gitea_problem_issue` 用于关闭已修复问题）可内置为 `publish`。
   2. 全局默认：`outputs.no_problems`，适用于所有输出通道。
@@ -552,7 +552,7 @@ export interface ModelSpec {
   4. workspace 默认：`workspaces.defaults.outputs.no_problems` 与 `workspaces.defaults.outputs.channel_overrides.<channel>.no_problems`。
   5. 每个工程：`workspaces.instances.<workspace_id>.outputs.no_problems` 与 `workspaces.instances.<workspace_id>.outputs.channel_overrides.<channel>.no_problems`，最高优先级，用于某个工程单独决定“无问题是否通知”。
 - **发布链路要求**：`createOutputPublisherResolverFromConfig()` 应在构造每个 channel publisher 时计算该 channel 对当前 workspace 的 effective policy；组合 publisher 不能再只用一个全局 `publishEmptySummary` 布尔值决定所有 summary channel，而应逐 channel 过滤。`review.skip_lgtm` 继续控制 agent 是否倾向静默；`no_problems` 控制 AICR 输出层最终是否发送。
-- **非 PR/MR 目标渲染（计划）**：模板上下文新增 `target` 对象，包含 `kind`、`label`、`id`、`url?`、`baseRevision?`、`headRevision?`、`displayText`、`markdownLink?`。内置模板必须使用 `target.markdownLink || target.displayText`，不得在非 PR/MR 事件中输出空的 `View PR`。
+- **非 PR/MR 目标渲染**：模板上下文新增 `target` 对象，包含 `kind`、`label`、`id`、`url?`、`baseRevision?`、`headRevision?`、`displayText`、`markdownLink?`。内置模板必须使用 `target.markdownLink || target.displayText`，不得在非 PR/MR 事件中输出空的 `View PR`。
 - **目标标签规则**：
   - `targetKind=pull_request`：显示 `PR` / `MR` 标题和 URL；无标题时用 `PR #<id>` / `MR !<id>`，不再用裸 `View PR`。
   - `targetKind=commit|push`：优先显示 `Commit <short headSha>`；P4 provider 显示 `P4 CL <headSha>`；SVN provider 显示 `SVN r<headSha>`；缺少 URL 时显示纯文本。
@@ -597,8 +597,8 @@ export interface ModelSpec {
 #### 3.9.3 模板引擎
 
 - 引擎：Handlebars（默认）；可切到 Eta（`outputs.template_engine: handlebars|eta`）。
-- 默认模板：内置在 `packages/outputs/src/template-engine.ts` 中并打包，按 channel kind 提供 `summary` 与 `problem` 两套（`gitea_pr_review` / `gitea_issue` / `gitea_problem_issue` / `github_pr_review` / `gitlab_mr_review` / `feishu_bot` / `wecom_bot`）。`gitea_finding_issue` 与 `finding` 模板名仅作为旧配置 / 旧模板兼容别名。`docs/output-channels.md` 只记录契约、渲染策略与覆盖方式，避免文档模板和运行时代码模板漂移。
-- 仓库覆盖：放到 `workspaces/<workspace_id>/templates/<channel-name>.{summary,problem}.md.hbs`；按 `channel.name` 精确覆盖优先于按 `channel.kind` 默认覆盖；`.finding.*` 文件名作为兼容 fallback 在 `.problem.*` 之后查找。
+- 默认模板：内置在 `packages/outputs/src/template-engine.ts` 中并打包，按 channel kind 提供 `summary` 与 `problem` 两套（`gitea_pr_review` / `gitea_issue` / `gitea_problem_issue` / `github_pr_review` / `gitlab_mr_review` / `feishu_bot` / `wecom_bot`）。旧 `gitea_finding_issue` channel kind 与 `finding` 模板类型已移除。`docs/output-channels.md` 只记录契约、渲染策略与覆盖方式，避免文档模板和运行时代码模板漂移。
+- 仓库覆盖：放到 `workspaces/<workspace_id>/templates/<channel-name>.{summary,problem}.md.hbs`；按 `channel.name` 精确覆盖优先于按 `channel.kind` 默认覆盖；只查找 `.summary.*` 与 `.problem.*` 文件名。
 - 模板变量（部分）：
 
   | 变量 | 含义 |
@@ -615,7 +615,7 @@ export interface ModelSpec {
   | `{{problem.file}}` `{{problem.line}}` `{{problem.severity}}` `{{problem.message}}` `{{problem.suggestion}}` | 单条 problem 字段 |
   | `{{problem.attribution.author}}` `{{problem.attribution.revision}}` `{{problem.attribution.url}}` | 单条问题的可验证提交归因 |
 
-  `{{findings}}` 与 `{{finding.*}}` 仅作为旧模板兼容别名保留。
+  旧 `{{findings}}` 与 `{{finding.*}}` 模板变量已移除，模板必须使用 `{{problems}}` 与 `{{problem.*}}`。
 
 - 渲染后输出 → 走 `markdownlint-cli2` 自动修复；不可自动修复的违规 → 回退为纯文本并记录告警。
 - 详细文档：`docs/output-channels.md`。
@@ -836,7 +836,7 @@ export interface ModelSpec {
   ```
 
 - 状态机：`queued → preparing → analyzing → publishing → (succeeded | failed | cancelled | timeout)`；每次 transition 触发 `OrchestratorHook`（见 §10.2 扩展点）。
-- 每次 run 的 `runs/<run_id>/` 保存 `event.json / diff.patch / prompt.md / llm-trace.jsonl / agent-stdout.log / problems.json`，便于 `aicr replay`；`findings.json` 仅作为旧 run 读取兼容。
+- 每次 run 的 `runs/<run_id>/` 保存 `event.json / diff.patch / prompt.md / llm-trace.jsonl / agent-stdout.log / problems.json`，便于 `aicr replay`；旧 `findings.json` 不再读取。
 - Metrics（Prometheus，`prom-client`）：`aicr_runs_total{status}`、`aicr_llm_tokens_total{provider,model}`、`aicr_run_duration_seconds`、`aicr_problems_total{severity,channel}`、`aicr_agent_timeouts_total{adapter}`、`aicr_llm_retries_total{provider,reason}`。
 - Tracing：每个 webhook → run 共享一条 OTel trace（`traceparent` 透传到子进程环境变量 `OTEL_*`）。
 
@@ -1044,12 +1044,12 @@ workspaces/<workspace_id>/
 | M1 | 已完成 | Hono webhook receiver、Gitea/Forgejo 签名校验、`ReviewEvent` 归一化、Git VCS adapter、unified diff 解析、OpenAI 兼容 chat client、Gitea PR review comment dispatcher、`aicr-output` 工具收集器、webhook → orchestration 最小闭环、配置 bootstrap 层、CLI `serve` / `review --dry-run`、Node.js HTTP adapter、**真实 Gitea e2e 验收通过（5 problems → PR review comments）** | 无 |
 | M2 | 已完成（待验收留存） | `SandboxBackend` 抽象 + native / docker / podman 实现、命令白名单、超时 watchdog、目录隔离、`AgentAdapter` + Kilo / Claude Code / OpenCode / Roo / Copilot CLI 适配器（全部 5 种）、Model Config Translator（OpenAI 兼容 + Anthropic）、bootstrap 集成、review-orchestrator sandbox/agent 选项 | Kilo Code 驱动 e2e 验收、沙箱逃逸测试（验收留存）；外部 MCP 配置注入归入 M5/M8 收口 |
 | M3 | 已完成（待验收留存） | **PR Compression 接入 bootstrap**、**Secrets Scrubber**、**LLM Fallback + Bounded Retry + Budget**、**Per-provider 限流**、**In-memory 队列增强**（backoff / DLQ）、**Redis/BullMQ 队列适配器**、**队列 Worker 循环（含 rateLimiter wiring）**、**Markdown 修复增强**、**输出模板引擎（Handlebars）** + 内置默认模板（6 通道）+ workspace 覆盖机制 + `TemplateResolver`、**Queue 配置消费端接入 bootstrap**（`createQueueFromConfig` factory + worker 启动）、**LLM 兼容性增强**（OpenAI-compatible reasoning/final 分离、tool calls JSON 化、结构化输出/推理参数过滤、Anthropic thinking、Google AI Studio/Gemini） | BullMQ 真实 Redis 集成测试（验收留存） |
-| M4 | 已完成（新增输出策略待收口） | **多输出通道**：Gitea PR review、Gitea Issue、Feishu Bot、WeCom Bot dispatcher、GitHub PR review dispatcher、GitLab MR review dispatcher（全部 6 通道）；**problem fingerprint**（`computeProblemFingerprint`，旧 `computeFindingFingerprint` 仅兼容）；**模板引擎接入 orchestrator**（per-channel `TemplateResolver` + markdown fix post-validation）；**@-mention 作者解析管线**（email → username 映射 + 邮箱黑名单 + Feishu/WeCom/GitHub/GitLab/Gitea 方言）；**行号降级策略**（超出 diff 范围 → 通用评论 fallback，422 处理）；**workspace 覆盖模板文件读取**（`workspaces/<id>/templates/` + channelName/channelKind 优先级） | 真实 GitHub/GitLab e2e 验收（验收留存）；`no_problems` 全局 / channel / workspace 覆盖策略、per-channel 空结果过滤、非 PR/MR `target` 模板上下文与内置模板修正 |
+| M4 | 已完成（外部验收留存） | **多输出通道**：Gitea PR review、Gitea Issue、Feishu Bot、WeCom Bot dispatcher、GitHub PR review dispatcher、GitLab MR review dispatcher（全部 6 通道）；**problem fingerprint**（`computeProblemFingerprint`）；**模板引擎接入 orchestrator**（per-channel `TemplateResolver` + markdown fix post-validation）；**@-mention 作者解析管线**（email → username 映射 + 邮箱黑名单 + Feishu/WeCom/GitHub/GitLab/Gitea 方言）；**行号降级策略**（超出 diff 范围 → 通用评论 fallback，422 处理）；**workspace 覆盖模板文件读取**（`workspaces/<id>/templates/` + channelName/channelKind 优先级）；**`no_problems` 全局 / channel / workspace 覆盖策略**；**per-channel 空结果过滤**；**非 PR/MR `target` 模板上下文与内置模板修正** | 真实 GitHub/GitLab e2e 验收（验收留存） |
 | M5 | 进行中（adapter 已完成，外部 MCP 注入待收口） | **Agent CLI 适配器**：Kilo / Claude Code / OpenCode / Roo / Copilot CLI（全部 5 种）；**Model Config Translator**：OpenAI 兼容 + Anthropic + Vertex AI + Bedrock（含 anthropicVersion、anthropicBeta、thinking、vertexProject、vertexLocation、awsRegion、awsProfile 等字段）并向 Kilo/OpenCode 透传 reasoning/structured-output 参数；**Sandbox Backend**：native / docker / podman auto-detect + fallback；**Server webhook**：Gitea / Forgejo / GitHub / GitLab 全部 4 种 webhook endpoint 已注册；**CLI**：replay、memory、lint 命令已实现；**Podman sandbox**（thin wrapper over docker backend）；**vcsFactory** per-request VCS adapter；**JSON/XML `<tool_call/>` stdout 兼容解析**；**example/ 部署示例** | Agent Runtime Bundle 物化、Kilo `.kilo/mcp.json` / Roo / OpenCode MCP 配置物化、`aicr-output` stdio / HTTP MCP server、`aicr.try_blame` schema/server/client 测试、Kilo Code 驱动 e2e 验收、沙箱逃逸测试（验收留存） |
 | M6 | 进行中（P4 / Git push 已生产验证） | **P4 trigger endpoint**（`/triggers/p4`）+ API Key 保护；**P4 trigger 脚本**（非阻塞、默认不本地 `p4 describe`、`AICR_DEPOT_PATH` 可省略）；**P4 VCS adapter**（`describe`/`print`/`diff`、`P4PASSWORD` 自动 login + retry、watch/include/exclude 过滤、basename glob 匹配、原生 `====` + `@@` diff 解析）；**Gitea push changedFiles + repo mappings**；**Git remote clone/fetch + token redaction**；**async triggers**（立即 202，后台日志/错误报告）；生产部署到 `10.64.8.2`，CL 6251 验证 `.h/.cpp` 可识别，CL 6285 已跑通 trigger → diff → LLM → Feishu summary/problem 发布 | SVN adapter/trigger、scheduled/manual/tag 触发面、多源 / 子仓库 scoped fetch、Git/P4/SVN best-effort attribution、真实 GitHub/GitLab e2e、P4 长期运行观测 |
 | M7 | 未开始 | Workspace memory / reflection 设计已在计划中定义，CLI memory 命令已有基础入口 | Self-Reflection 写入/归并/注入闭环、按 path skill 激活的 e2e、国际化验收 |
 | M8 | 进行中（日志与回放基础） | CLI replay/memory/lint 命令已存在；async trigger structured logs；生产容器同时输出 Podman log 与本地 rotating file log（7 天、最多 3 文件、每文件 100MB）；后台错误可经 output publisher 汇报 | `runs/<run_id>/` 完整快照、Prometheus metrics、OTel trace 贯穿、eval dataset/CLI、无副作用 replay 完整验收 |
-| M9 | 进行中（部署与示例已生产验证） | `deploy/Dockerfile` + `deploy/deploy.sh` 支持 Podman 构建/运行、持久化 workspaces/data/logs、P4 CLI 挂载与 trust 初始化；`example/` 文档覆盖 auth/P4/Feishu/WeCom/Kilo Code 部署验收；`docs/output-channels.md` 记录 MCP problem 契约与通道渲染；已在 `10.64.8.2` 反向代理 `https://aicr.m-oa.com:6023` 生产部署并多轮健康检查通过 | Helm chart、docker_socket/k8s_pod 完整实现与验收、发布镜像版本固定/changelog、从零部署文档最终验收；补充 `no_problems` 与 commit/revision target link 配置示例 |
+| M9 | 进行中（部署与示例已生产验证） | `deploy/Dockerfile` + `deploy/deploy.sh` 支持 Podman 构建/运行、持久化 workspaces/data/logs、P4 CLI 挂载与 trust 初始化、Kilo CLI 运行时安装；`example/` 文档覆盖 auth/P4/Feishu/WeCom/Kilo Code 部署验收；`docs/output-channels.md` 记录 MCP problem 契约与通道渲染；`no_problems` 与 commit/revision target link 示例；已在 `10.64.8.2` 反向代理 `https://aicr.m-oa.com:6023` 生产部署并多轮健康检查通过 | Helm chart、docker_socket/k8s_pod 完整实现与验收、发布镜像版本固定/changelog、从零部署文档最终验收 |
 
 ### 8.2 下一轮执行包
 
@@ -1057,7 +1057,7 @@ workspaces/<workspace_id>/
 2. **M6 多源 VCS 收口**：补齐 SVN adapter/trigger、tag / scheduled / manual 触发面、多源 / 子仓库 scoped fetch、Git/P4/SVN 行级提交归因，继续观察 P4 真实 changelist 长期运行与失败报告闭环。
 3. **验收留存**：Kilo 驱动 e2e、沙箱逃逸测试、BullMQ 真实 Redis 集成测试、真实 GitHub/GitLab e2e、P4 长时间运行与失败报告验证。
 4. **M8 深化**：落地 `runs/<run_id>/` 事件 / prompt / trace / problems 快照、Prometheus metrics、OTel trace、eval dataset 与无副作用 replay 验收。
-5. **M9 收口**：固定发布镜像标签、补 Helm / docker_socket / k8s_pod 文档与验收、整理生产部署 runbook，补齐 `no_problems` 与非 PR/MR target link 配置示例，并跑全仓 lint / typecheck / test / markdownlint / build 基线。
+5. **M9 收口**：固定发布镜像标签、补 Helm / docker_socket / k8s_pod 文档与验收、整理生产部署 runbook，并跑全仓 lint / typecheck / test / markdownlint / build 基线。
 
 ### M0 — 项目骨架（状态：已完成）
 
