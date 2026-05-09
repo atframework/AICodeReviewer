@@ -624,6 +624,114 @@ describe("mergeConfigLayers", () => {
     expect(result.success).toBe(true);
   });
 
+  it("accepts no_problems policies across global, channel, and workspace layers", () => {
+    const result = appConfigSchema.safeParse({
+      outputs: {
+        no_problems: { action: "suppress" },
+        channels: [
+          {
+            name: "feishu-team",
+            kind: "feishu_bot",
+            no_problems: { action: "publish" },
+          },
+        ],
+      },
+      workspaces: {
+        defaults: {
+          outputs: {
+            no_problems: { action: "suppress" },
+            channel_overrides: {
+              "feishu-team": { no_problems: { action: "publish" } },
+            },
+          },
+        },
+        instances: {
+          "my-workspace": {
+            outputs: {
+              summary: ["feishu-team"],
+              no_problems: { action: "publish" },
+              channel_overrides: {
+                "feishu-team": { no_problems: { action: "suppress" } },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects removed no_findings aliases", () => {
+    const result = appConfigSchema.safeParse({
+      outputs: {
+        no_findings: { action: "publish" },
+        channels: [
+          { name: "legacy", kind: "feishu_bot", no_findings: { action: "suppress" } },
+        ],
+      },
+      workspaces: {
+        instances: {
+          "legacy-workspace": {
+            outputs: {
+              no_findings: { action: "publish" },
+              channel_overrides: {
+                legacy: { no_findings: { action: "suppress" } },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects removed gitea_finding_issue channel kind", () => {
+    const result = appConfigSchema.safeParse({
+      outputs: {
+        channels: [
+          { name: "legacy-managed", kind: "gitea_finding_issue" },
+        ],
+      },
+    });
+
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects invalid no_problems actions", () => {
+    const result = appConfigSchema.safeParse({
+      outputs: {
+        no_problems: { action: "skip" },
+      },
+    });
+
+    expect(result.success).toBe(false);
+  });
+
+  it("accepts trigger and channel URL templates for non-PR targets", () => {
+    const result = appConfigSchema.safeParse({
+      triggers: [
+        {
+          name: "p4-main",
+          kind: "p4",
+          change_url_template: "https://swarm.example.com/changes/{{revision}}",
+        },
+      ],
+      outputs: {
+        channels: [
+          {
+            name: "feishu-team",
+            kind: "feishu_bot",
+            revision_url_template: "https://review.example.com/revisions/{{revision}}",
+          },
+        ],
+      },
+    });
+
+    expect(result.success).toBe(true);
+  });
+
   it("accepts output channel with mention_fallback from Plan §3.9.2", () => {
     for (const fallback of ["all", "skip"]) {
       const result = appConfigSchema.safeParse({
@@ -895,12 +1003,23 @@ describe("mergeConfigLayers", () => {
             exclude: ["**/vendor/**"],
           },
           agent: { default: "kilo" },
+          outputs: {
+            no_problems: { action: "suppress" },
+            channel_overrides: {
+              "feishu-team": { no_problems: { action: "suppress" } },
+            },
+          },
         },
         instances: {
           "gitea-internal-owent-example": {
             source_repo: { trigger: "gitea-internal", repo: "owent/example" },
             agent: { default: "claude-code" },
             review: { exclude: ["docs/**"] },
+            outputs: {
+              channel_overrides: {
+                "feishu-team": { no_problems: { action: "publish" } },
+              },
+            },
           },
         },
       },
@@ -914,6 +1033,8 @@ describe("mergeConfigLayers", () => {
     expect(workspace.sandbox?.engine).toBe("auto");
     expect(workspace.review?.commit_strategy).toBe("aggregate");
     expect(workspace.review?.exclude).toEqual(["docs/**"]);
+    expect(workspace.outputs?.no_problems?.action).toBe("suppress");
+    expect(workspace.outputs?.channel_overrides?.["feishu-team"]?.no_problems?.action).toBe("publish");
   });
 
   it("throws a clear error when resolving an unknown workspace", () => {

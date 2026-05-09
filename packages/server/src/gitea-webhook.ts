@@ -42,6 +42,7 @@ const pullRequestPayloadSchema = z
     sender: actorSchema.optional(),
     pull_request: z
       .object({
+        title: z.string().min(1).optional(),
         html_url: z.string().url().optional(),
         user: actorSchema.optional(),
         base: z.object({ sha: z.string().min(1).optional() }).passthrough(),
@@ -109,6 +110,7 @@ const gitlabMergeRequestPayloadSchema = z
     object_attributes: z
       .object({
         iid: z.number().optional(),
+        title: z.string().min(1).optional(),
         action: z.string().min(1).optional(),
         source_branch: z.string().min(1).optional(),
         target_branch: z.string().min(1).optional(),
@@ -242,6 +244,7 @@ export function translateWebhookToReviewEvent(
       baseSha: parsed.pull_request.base.sha,
       headSha: parsed.pull_request.head.sha,
       author: normalizeActor(parsed.sender ?? parsed.pull_request.user),
+      title: parsed.pull_request.title,
       url: parsed.pull_request.html_url,
       reason: `${provider}:${parsed.action ?? "pull_request"}`,
       rawEventName: eventName,
@@ -280,6 +283,7 @@ export function translateWebhookToReviewEvent(
       targetKind: "issue",
       repoRef: parsed.repository.full_name,
       author: normalizeActor(parsed.sender ?? parsed.issue?.user),
+      title: parsed.issue?.title,
       url: issueUrl,
       reason: `${provider}:${parsed.action ?? "issues"}`,
       rawEventName: eventName,
@@ -299,6 +303,7 @@ export function translateWebhookToReviewEvent(
       baseSha: parsed.object_attributes.diff_refs?.base_sha ?? parsed.object_attributes.target_branch ?? parsed.object_attributes.source?.default_branch,
       headSha: parsed.object_attributes.diff_refs?.head_sha ?? parsed.object_attributes.last_commit?.id ?? parsed.object_attributes.source_branch,
       author: normalizeActor(parsed.user),
+      title: parsed.object_attributes.title,
       url: parsed.object_attributes.url,
       reason: `${provider}:${parsed.object_attributes.action ?? "merge_request"}`,
       rawEventName: eventName,

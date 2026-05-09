@@ -47,7 +47,7 @@ describe("AicrOutputCollector", () => {
         fingerprint: "fp-1",
       },
     ]);
-    expect(snapshot.findings).toEqual(snapshot.problems);
+    expect(snapshot).not.toHaveProperty("findings");
     expect(snapshot).toMatchObject({
       summaries: ["## Summary\n\nFound one issue."],
       contextRequests: [

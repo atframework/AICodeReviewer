@@ -8,9 +8,6 @@ export type AicrOutputToolName =
 
 export type ProblemSeverity = "info" | "low" | "medium" | "high" | "critical";
 
-/** @deprecated Use ProblemSeverity. */
-export type FindingSeverity = ProblemSeverity;
-
 export interface ReportProblemInput {
 	readonly file: string;
 	readonly line: number;
@@ -41,8 +38,6 @@ export interface FetchMoreContextInput {
 
 export interface AicrOutputState {
 	readonly problems: readonly ReportProblemInput[];
-	/** @deprecated Use problems. */
-	readonly findings?: readonly ReportProblemInput[];
 	readonly summaries: readonly string[];
 	readonly contextRequests: readonly FetchMoreContextInput[];
 	readonly skipReason?: string;
@@ -160,7 +155,6 @@ export class AicrOutputCollector {
 		const problems = [...this.problems];
 		return {
 			problems,
-			findings: problems,
 			summaries: [...this.summaries],
 			contextRequests: [...this.contextRequests],
 			...(this.skipReasonValue ? { skipReason: this.skipReasonValue } : {}),

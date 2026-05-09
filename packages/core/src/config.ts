@@ -113,22 +113,55 @@ const triggerSchema = z
     watch_path: z.array(z.string().min(1)).optional(),
     include_cr_file: z.array(z.string().min(1)).optional(),
     exclude_cr_file: z.array(z.string().min(1)).optional(),
+    commit_url_template: z.string().min(1).optional(),
+    revision_url_template: z.string().min(1).optional(),
+    change_url_template: z.string().min(1).optional(),
+  })
+  .passthrough();
+
+const noProblemsPolicySchema = z
+  .object({
+    action: z.enum(["publish", "suppress"]),
+  })
+  .strict();
+
+const outputChannelOverrideSchema = z
+  .object({
+    no_problems: noProblemsPolicySchema.optional(),
+    no_findings: z.never().optional(),
   })
   .passthrough();
 
 const outputChannelSchema = z
   .object({
     name: z.string().min(1),
-    kind: z.string().min(1),
+    kind: z.string().min(1).refine((value) => value !== "gitea_finding_issue", {
+      message: "gitea_finding_issue has been removed; use gitea_problem_issue.",
+    }),
     trigger: z.string().min(1).optional(),
     mention_author: z.boolean().optional(),
     mention_fallback: z.enum(["all", "skip"]).optional(),
+    no_problems: noProblemsPolicySchema.optional(),
+    no_findings: z.never().optional(),
+    commit_url_template: z.string().min(1).optional(),
+    revision_url_template: z.string().min(1).optional(),
+    change_url_template: z.string().min(1).optional(),
     marker_prefix: z.string().min(1).optional(),
     marker_label: z.string().min(1).optional(),
     label_ids: z.array(z.number().int().positive()).optional(),
     resolved_action: z.enum(["none", "close", "delete"]).optional(),
   })
   .passthrough();
+
+const workspaceOutputsSchema = z
+  .object({
+    line_comments: z.array(z.string()).optional(),
+    summary: z.array(z.string()).optional(),
+    no_problems: noProblemsPolicySchema.optional(),
+    no_findings: z.never().optional(),
+    channel_overrides: z.record(z.string().min(1), outputChannelOverrideSchema).optional(),
+  })
+  .strict();
 
 const outputAuthorResolutionSchema = z
   .object({
@@ -250,13 +283,7 @@ const workspaceInstanceSchema = z
       .strict()
       .optional(),
     review: reviewSchema.optional(),
-    outputs: z
-      .object({
-        line_comments: z.array(z.string()).optional(),
-        summary: z.array(z.string()).optional(),
-      })
-      .strict()
-      .optional(),
+    outputs: workspaceOutputsSchema.optional(),
     sandbox: sandboxSchema.optional(),
     triage: triageSchema.optional(),
     auth: z
@@ -318,6 +345,8 @@ const appConfigSchema = z
     outputs: z
       .object({
         template_engine: z.enum(["handlebars", "eta"]).default("handlebars"),
+        no_problems: noProblemsPolicySchema.optional(),
+        no_findings: z.never().optional(),
         channels: z.array(outputChannelSchema).default([]),
         author_resolution: outputAuthorResolutionSchema,
         routes: z
@@ -418,6 +447,7 @@ const appConfigSchema = z
               })
               .strict()
               .optional(),
+            outputs: workspaceOutputsSchema.optional(),
           })
           .strict()
           .default({}),

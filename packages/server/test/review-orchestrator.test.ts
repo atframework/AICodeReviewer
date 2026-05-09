@@ -255,7 +255,7 @@ describe("runReviewOrchestration", () => {
       );
 
       expect(result.status).toBe("published");
-      expect(result.scrubFindings.length).toBeGreaterThanOrEqual(2);
+      expect(result.scrubMatches.length).toBeGreaterThanOrEqual(2);
       expect(publishedProblems[0]?.message).toBe("# Issue\n- contains <REDACTED:AWS_KEY>\n");
       expect(publishedProblems[0]?.suggestion).toBe("## Fix\n* replace <REDACTED:GITHUB_TOKEN>\n");
       expect(publishedProblems[0]?.message).not.toContain("AKIAIOSFODNN7EXAMPLE");
@@ -644,7 +644,7 @@ describe("runReviewOrchestration error paths", () => {
     }
   });
 
-  it("handles the legacy findings alias with summary from LLM output", async () => {
+  it("does not treat removed findings payloads as problems", async () => {
     const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-alt-format-"));
 
     try {
@@ -674,6 +674,7 @@ describe("runReviewOrchestration error paths", () => {
         },
       };
       const publishedProblems: ReviewProblem[] = [];
+      const publishedSummaries: string[] = [];
       const result = await runReviewOrchestration(
         {
           reviewEvent: createReviewEventFixture(),
@@ -692,16 +693,19 @@ describe("runReviewOrchestration error paths", () => {
               publishedProblems.push(problem);
               return { channel: "test", status: "published", raw: {} };
             },
+            async publishSummary(summary) {
+              publishedSummaries.push(summary);
+              return { channel: "test", status: "published", raw: {} };
+            },
           },
         },
       );
 
       expect(result.status).toBe("published");
-      expect(result.problemCount).toBe(1);
+      expect(result.problemCount).toBe(0);
       expect(result.summaryCount).toBe(1);
-      expect(publishedProblems[0]?.endLine).toBe(5);
-      expect(publishedProblems[0]?.suggestion).toBe("Fix it.");
-      expect(publishedProblems[0]?.fingerprint).toBe("fp-alt");
+      expect(publishedProblems).toEqual([]);
+      expect(publishedSummaries).toEqual(["One issue found."]);
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }
@@ -955,7 +959,60 @@ describe("runReviewOrchestration error paths", () => {
       expect(result.status).toBe("published");
       expect(result.problemCount).toBe(0);
       expect(result.dispatchCount).toBe(1);
-      expect(summaryCalls).toEqual([{ summary: "", problems: [] }]);
+      expect(summaryCalls).toHaveLength(1);
+      expect(summaryCalls[0]?.summary).toContain("AICR review completed");
+      expect(summaryCalls[0]?.problems).toEqual([]);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("suppresses zero-problem summaries when the publisher policy says suppress", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-no-problems-suppress-"));
+
+    try {
+      await writeWorkspaceFile(tempDir, "src/app.ts", "const ok = true;\n");
+      const llm: ChatCompletionClient = {
+        async complete(input) {
+          return {
+            providerId: input.model.providerId,
+            modelId: input.model.modelId,
+            content: JSON.stringify({ summary: "No actionable problems." }),
+            raw: {},
+          };
+        },
+      };
+      const summaryCalls: string[] = [];
+
+      const result = await runReviewOrchestration(
+        {
+          reviewEvent: createReviewEventFixture(),
+          payload: {},
+          provider: "gitea",
+          eventName: "pull_request",
+        },
+        {
+          baseSystemPrompt: "<task>\n{{TASK_CONTEXT}}\n</task>",
+          sourceRootResolver: () => tempDir,
+          vcs: createVcs(tempDir),
+          llm,
+          model,
+          outputPublisher: {
+            publishesProblems: false,
+            noProblemsAction: "suppress",
+            async publishSummary(summary) {
+              summaryCalls.push(summary);
+              return { channel: "feishu", status: "published", raw: {} };
+            },
+          },
+        },
+      );
+
+      expect(result.status).toBe("skipped");
+      expect(result.problemCount).toBe(0);
+      expect(result.summaryCount).toBe(1);
+      expect(result.dispatchCount).toBe(0);
+      expect(summaryCalls).toEqual([]);
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }

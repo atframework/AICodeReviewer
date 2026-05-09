@@ -63,7 +63,7 @@ Options:
   --scope <scope>         Memory clear scope (false-positives, recurring-issues, etc.)
   --all                   Include full file contents in memory show
   --template <path>       Template file to render and validate (lint command)
-  --template-kind <kind>  Template kind: summary or problem (lint command; finding is accepted as legacy)
+  --template-kind <kind>  Template kind: summary or problem (lint command)
   --channel-kind <kind>   Output channel kind for lint sample context
   --help, -h              Show this message
   --version, -v           Show version
@@ -98,7 +98,7 @@ function parseOptionalInteger(value: string | undefined, flagName: string): numb
 }
 
 function parseTemplateKind(value: string | undefined, templatePath?: string): TemplateKind {
-  if (value === "summary" || value === "problem" || value === "finding") {
+  if (value === "summary" || value === "problem") {
     return value;
   }
 
@@ -108,9 +108,7 @@ function parseTemplateKind(value: string | undefined, templatePath?: string): Te
 
   const lowerPath = templatePath?.toLowerCase() ?? "";
   return lowerPath.includes(".problem.") ||
-    lowerPath.endsWith("problem.hbs") ||
-    lowerPath.includes(".finding.") ||
-    lowerPath.endsWith("finding.hbs")
+    lowerPath.endsWith("problem.hbs")
     ? "problem"
     : "summary";
 }
@@ -141,7 +139,7 @@ function createSampleTemplateContext(kind: TemplateKind): TemplateContext {
     atMentions: "@review-author",
     problems: [problem],
     summary: "Sample summary rendered by aicr lint.",
-    ...(kind === "problem" || kind === "finding" ? { problem } : {}),
+    ...(kind === "problem" ? { problem } : {}),
   };
 }
 
@@ -450,7 +448,6 @@ export async function runCli(
 
     const eventPath = resolve(effectiveDir, "event.json");
     const problemsPath = resolve(effectiveDir, "problems.json");
-    const legacyFindingsPath = resolve(effectiveDir, "findings.json");
     const promptPath = resolve(effectiveDir, "prompt.md");
 
     const result: Record<string, unknown> = { runId };
@@ -464,12 +461,6 @@ export async function runCli(
     if (existsSync(problemsPath)) {
       try {
         result.problems = JSON.parse(readFileSync(problemsPath, "utf8"));
-      } catch {
-        result.problems = null;
-      }
-    } else if (existsSync(legacyFindingsPath)) {
-      try {
-        result.problems = JSON.parse(readFileSync(legacyFindingsPath, "utf8"));
       } catch {
         result.problems = null;
       }

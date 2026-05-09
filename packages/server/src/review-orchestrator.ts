@@ -11,7 +11,7 @@ import {
   type PreparedReviewPrompt,
   type ReviewEvent,
   type ReviewProvider,
-  type ScrubFinding,
+  type ScrubMatch,
 } from "@aicr/core";
 import type { AgentAdapter } from "@aicr/agents";
 import {
@@ -34,6 +34,7 @@ import {
 } from "@aicr/mcp-output";
 import {
   buildAtMentions,
+  buildTemplateTargetContext,
   computeProblemFingerprint,
   createTemplateResolver,
   toTemplateProblem,
@@ -54,13 +55,10 @@ export type ReviewDispatchResult = DispatchResult | readonly DispatchResult[];
 
 export interface ReviewOutputPublisher {
   readonly publishesProblems?: boolean;
-  /** @deprecated Use publishesProblems. */
-  readonly publishesFindings?: boolean;
   readonly handlesRendering?: boolean;
   readonly publishEmptySummary?: boolean;
+  readonly noProblemsAction?: "publish" | "suppress";
   publishProblem?(problem: ReviewProblem): Promise<ReviewDispatchResult>;
-  /** @deprecated Use publishProblem. */
-  publishFinding?(problem: ReviewProblem): Promise<ReviewDispatchResult>;
   publishSummary?(summary: string, problems?: readonly ReviewProblem[]): Promise<ReviewDispatchResult>;
 }
 
@@ -118,8 +116,6 @@ export interface ReviewOrchestrationResult {
   readonly diffFileCount: number;
   readonly promptTokenEstimate: number;
   readonly problemCount: number;
-  /** @deprecated Use problemCount. */
-  readonly findingCount?: number;
   readonly summaryCount: number;
   readonly contextRequestCount: number;
   readonly dispatchCount: number;
@@ -133,7 +129,7 @@ export interface ReviewOrchestrationResult {
   readonly dispatchResults: readonly DispatchResult[];
   readonly llmResult: ChatCompletionResult;
   readonly agentResult?: SandboxSpawnResult;
-  readonly scrubFindings: readonly ScrubFinding[];
+  readonly scrubMatches: readonly ScrubMatch[];
   readonly compressed?: boolean;
   readonly originalTokenEstimate?: number;
   readonly compressedTokenEstimate?: number;
@@ -146,8 +142,6 @@ export interface ReviewOrchestrationWebhookSummary {
   readonly diffFileCount: number;
   readonly promptTokenEstimate: number;
   readonly problemCount: number;
-  /** @deprecated Use problemCount. */
-  readonly findingCount?: number;
   readonly summaryCount: number;
   readonly contextRequestCount: number;
   readonly dispatchCount: number;
@@ -231,7 +225,6 @@ function buildJsonToolContract(): string {
     '{"toolCalls":[{"name":"aicr.report_problem","input":{"file":"src/file.ts","line":1,"severity":"medium","category":"correctness","message":"..."}}],"notes":"optional"}',
     '{"toolCalls":[{"name":"aicr.publish_summary","input":{"markdown":"Review completed; no actionable problems."}}]}',
     "Alternatively use problems/summary/skipReason fields; AICR will translate them into tool calls.",
-    "Legacy findings arrays are still accepted for backward compatibility but are not preferred.",
   ].join("\n");
 }
 
@@ -272,6 +265,41 @@ function resolveEnvPlaceholders(envVars: Readonly<Record<string, string>>): Reco
 
 function agentWorkingDirForSandbox(sandbox: SandboxBackend, hostAgentDir: string): string {
   return sandbox.kind === "native" ? hostAgentDir : "/workspace/agent";
+}
+
+function extractKiloJsonStreamContent(stdout: string): string {
+  const textParts: string[] = [];
+  for (const line of stdout.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    try {
+      const event = JSON.parse(trimmed) as Record<string, unknown>;
+      if (event.type === "text") {
+        const part = event.part as Record<string, unknown> | undefined;
+        const text = typeof event.text === "string"
+          ? event.text
+          : typeof part?.text === "string"
+            ? part.text
+            : typeof event.content === "string"
+              ? event.content
+              : undefined;
+        if (text) {
+          textParts.push(text);
+        }
+      } else if (event.type === "assistant" && typeof event.content === "string") {
+        textParts.push(event.content);
+      } else if (event.type === "error") {
+        const errorData = event.error as Record<string, unknown> | undefined;
+        const message = typeof errorData?.message === "string" ? errorData.message : JSON.stringify(event.error);
+        throw new Error(`Kilo agent error: ${message}`);
+      }
+    } catch (error) {
+      if (error instanceof Error && error.message.startsWith("Kilo agent error:")) {
+        throw error;
+      }
+    }
+  }
+  return textParts.length > 0 ? textParts.join("\n") : stdout;
 }
 
 async function runAgentReview(
@@ -325,11 +353,15 @@ async function runAgentReview(
     );
   }
 
+  const isKiloAgent = agentAdapter.kind === "kilo";
+  const rawStdout = agentResult.stdout;
+  const content = isKiloAgent ? extractKiloJsonStreamContent(rawStdout) : rawStdout;
+
   return {
     llmResult: {
       providerId: options.model.providerId,
       modelId: options.model.modelId,
-      content: agentResult.stdout,
+      content,
       raw: {
         agent: agentAdapter.kind,
         exitCode: agentResult.exitCode,
@@ -473,11 +505,6 @@ function normalizeToolName(value: unknown): AicrOutputToolName {
     return value;
   }
 
-  // Backward-compatible parser alias for older agent outputs; not advertised in the public tool registry.
-  if (value === "aicr.publish_finding") {
-    return "aicr.report_problem";
-  }
-
   throw new TypeError(`Unsupported AICR tool name: ${String(value)}`);
 }
 
@@ -563,17 +590,11 @@ function parseToolCalls(content: string): ToolCallEnvelope[] {
     });
   }
 
+  const hasProblemsField = "problems" in payload;
   const calls: ToolCallEnvelope[] = [];
   if (Array.isArray(payload.problems)) {
     calls.push(
       ...payload.problems.map((problem) => ({
-        name: "aicr.report_problem" as const,
-        input: problemToToolInput(problem),
-      })),
-    );
-  } else if (Array.isArray(payload.findings)) {
-    calls.push(
-      ...payload.findings.map((problem) => ({
         name: "aicr.report_problem" as const,
         input: problemToToolInput(problem),
       })),
@@ -586,6 +607,13 @@ function parseToolCalls(content: string): ToolCallEnvelope[] {
 
   if (typeof payload.skipReason === "string" && payload.skipReason.trim()) {
     calls.push({ name: "aicr.skip", input: { reason: payload.skipReason } });
+  }
+
+  if (calls.length === 0 && toolCalls === undefined && !hasProblemsField && !("summary" in payload) && !("skipReason" in payload)) {
+    const text = toolContent.trim();
+    if (text.length > 0) {
+      return [{ name: "aicr.publish_summary", input: { markdown: text } }];
+    }
   }
 
   return calls;
@@ -772,19 +800,18 @@ function isLineCommentableInDiff(problem: ReviewProblem, diff: ParsedDiff | unde
 }
 
 function publishesProblems(publisher: ReviewOutputPublisher): boolean {
-  return publisher.publishesProblems ?? publisher.publishesFindings ?? true;
+  return publisher.publishesProblems ?? true;
 }
 
 function publishProblem(
   publisher: ReviewOutputPublisher,
   problem: ReviewProblem,
 ): Promise<ReviewDispatchResult> {
-  const publish = publisher.publishProblem ?? publisher.publishFinding;
-  if (!publish) {
+  if (!publisher.publishProblem) {
     throw new TypeError("Review output publisher must provide publishProblem.");
   }
 
-  return publish.call(publisher, problem);
+  return publisher.publishProblem(problem);
 }
 
 function appendDispatchResults(target: DispatchResult[], result: ReviewDispatchResult): void {
@@ -858,7 +885,7 @@ export async function runReviewOrchestration(
       outputState: { problems: [], summaries: [], contextRequests: [] },
       dispatchResults: [],
       llmResult: { providerId: options.model.providerId, modelId: options.model.modelId, content: "", raw: null },
-      scrubFindings: [],
+      scrubMatches: [],
     };
   }
   let diff: ParsedDiff | undefined;
@@ -919,14 +946,14 @@ export async function runReviewOrchestration(
   });
 
   const enableScrub = options.scrubSecrets !== false;
-  const allScrubFindings: ScrubFinding[] = [];
+  const allScrubMatches: ScrubMatch[] = [];
 
   const scrubbedPrompt = enableScrub
     ? scrubPromptMessages([{ role: "system", content: preparedPrompt.prompt.systemPrompt }])
-    : { messages: [{ role: "system", content: preparedPrompt.prompt.systemPrompt }], findings: [] as ScrubFinding[] };
+    : { messages: [{ role: "system", content: preparedPrompt.prompt.systemPrompt }], matches: [] as ScrubMatch[] };
 
   if (enableScrub) {
-    allScrubFindings.push(...scrubbedPrompt.findings);
+    allScrubMatches.push(...scrubbedPrompt.matches);
   }
 
   const llmSystemPrompt = (scrubbedPrompt.messages[0] as { role: string; content: string }).content;
@@ -937,13 +964,39 @@ export async function runReviewOrchestration(
     return result.content;
   });
   let completion = await requestReviewCompletion(scopedTree.rootDir, llmSystemPrompt, options);
-  const toolExecution = await callAicrTools(completion.llmResult.content, tools);
+  const rawModelOutput = completion.llmResult.content;
+  const toolExecution = await callAicrTools(rawModelOutput, tools);
   let outputState = collector.snapshot();
   const shouldRepairModelOutput = !hasFinalReviewOutput(outputState) && (
     toolExecution.contextResponses.length > 0 ||
     toolExecution.invalidContextRequestCount > 0 ||
     toolExecution.invalidReviewOutputCount > 0
   );
+
+  if (!hasFinalReviewOutput(outputState) && toolExecution.toolCallCount === 0) {
+    const truncatedOutput = rawModelOutput.length > 500
+      ? `${rawModelOutput.slice(0, 500)}... (${rawModelOutput.length} chars total)`
+      : rawModelOutput;
+    console.warn(JSON.stringify({
+      level: "warn",
+      msg: "model output produced no parseable review payload",
+      headSha: context.reviewEvent.headSha,
+      toolCallCount: toolExecution.toolCallCount,
+      reviewOutputCount: toolExecution.reviewOutputCount,
+      outputLength: rawModelOutput.length,
+      outputPreview: truncatedOutput,
+      ...(completion.agentResult ? {
+        agentExitCode: completion.agentResult.exitCode,
+        agentDurationMs: completion.agentResult.durationMs,
+        agentStderrLength: completion.agentResult.stderr.length,
+        agentStderrPreview: completion.agentResult.stderr.length > 200
+          ? `${completion.agentResult.stderr.slice(0, 200)}...`
+          : completion.agentResult.stderr,
+      } : {}),
+    }));
+    collector.publishSummary({ markdown: buildFallbackReviewSummary(context.reviewEvent, changedPaths) });
+    outputState = collector.snapshot();
+  }
 
   if (shouldRepairModelOutput) {
     completion = await requestReviewCompletion(
@@ -982,11 +1035,25 @@ export async function runReviewOrchestration(
     if (eventAuthor !== undefined) {
       eventCtx.author = eventAuthor;
     }
+    if (context.reviewEvent.title !== undefined) {
+      eventCtx.title = context.reviewEvent.title;
+    }
     if (context.reviewEvent.url !== undefined) {
       eventCtx.url = context.reviewEvent.url;
     }
-    const baseTemplateContext: Omit<TemplateContext, "problem" | "finding" | "problems" | "findings"> = {
+    const baseTemplateContext: Omit<TemplateContext, "problem" | "problems"> = {
       ...(Object.keys(eventCtx).length > 0 ? { event: eventCtx } : {}),
+      target: buildTemplateTargetContext({
+        kind: context.reviewEvent.targetKind,
+        provider: context.reviewEvent.provider,
+        repoRef: context.reviewEvent.repoRef,
+        ...(context.reviewEvent.title !== undefined ? { title: context.reviewEvent.title } : {}),
+        ...(context.reviewEvent.url !== undefined ? { url: context.reviewEvent.url } : {}),
+        ...(context.reviewEvent.baseSha !== undefined ? { baseRevision: context.reviewEvent.baseSha } : {}),
+        ...(context.reviewEvent.headSha !== undefined ? { headRevision: context.reviewEvent.headSha } : {}),
+        triggerName: context.reviewEvent.triggerName,
+        workspaceId: context.reviewEvent.workspaceId,
+      }),
       repo: {
         fullName: context.reviewEvent.repoRef,
       },
@@ -1010,9 +1077,9 @@ export async function runReviewOrchestration(
       if (enableScrub) {
         const scrubbedMsg = scrubText(reviewProblem.message);
         const scrubbedSuggestion = reviewProblem.suggestion ? scrubText(reviewProblem.suggestion) : undefined;
-        allScrubFindings.push(...scrubbedMsg.findings);
+        allScrubMatches.push(...scrubbedMsg.matches);
         if (scrubbedSuggestion) {
-          allScrubFindings.push(...scrubbedSuggestion.findings);
+          allScrubMatches.push(...scrubbedSuggestion.matches);
         }
         renderedMessage = fixAndValidateMarkdown(scrubbedMsg.text);
         renderedSuggestion = scrubbedSuggestion ? fixAndValidateMarkdown(scrubbedSuggestion.text) : undefined;
@@ -1056,36 +1123,78 @@ export async function runReviewOrchestration(
     }
 
     if (outputPublisher.publishSummary) {
-      const summariesToPublish = outputState.summaries.length > 0
-        ? outputState.summaries
-        : reviewProblems.length > 0 || outputPublisher.publishEmptySummary
-          ? [""]
-          : [];
-      for (const summary of summariesToPublish) {
-        let renderedSummary = enableScrub ? fixAndValidateMarkdown(scrubText(summary).text) : fixAndValidateMarkdown(summary);
-        if (resolver) {
-          const summaryCtx: TemplateContext = {
-            ...baseTemplateContext,
-            summary: renderedSummary,
-            problems: reviewProblems.map((problem) =>
-              toTemplateProblem({
-                ...problem,
-                message: problem.message,
-                ...(problem.suggestion ? { suggestion: problem.suggestion } : {}),
-              }),
-            ),
-          };
-          renderedSummary = fixAndValidateMarkdown(resolver.render("summary", summaryCtx));
+      const suppressNoProblemsSummary = reviewProblems.length === 0
+        && outputPublisher.noProblemsAction === "suppress";
+      if (!suppressNoProblemsSummary) {
+        const summariesToPublish = outputState.summaries.length > 0
+          ? outputState.summaries
+          : reviewProblems.length > 0 || outputPublisher.publishEmptySummary
+            ? [""]
+            : [];
+        for (const summary of summariesToPublish) {
+          let renderedSummary = enableScrub ? fixAndValidateMarkdown(scrubText(summary).text) : fixAndValidateMarkdown(summary);
+          if (resolver) {
+            const summaryCtx: TemplateContext = {
+              ...baseTemplateContext,
+              summary: renderedSummary,
+              problems: reviewProblems.map((problem) =>
+                toTemplateProblem({
+                  ...problem,
+                  message: problem.message,
+                  ...(problem.suggestion ? { suggestion: problem.suggestion } : {}),
+                }),
+              ),
+            };
+            renderedSummary = fixAndValidateMarkdown(resolver.render("summary", summaryCtx));
+          }
+          appendDispatchResults(dispatchResults, await outputPublisher.publishSummary(renderedSummary, reviewProblems));
         }
-        appendDispatchResults(dispatchResults, await outputPublisher.publishSummary(renderedSummary, reviewProblems));
       }
     }
+  }
+
+  {
+    const llmContentPreview = llmResult.content.length > 2000
+      ? `${llmResult.content.slice(0, 2000)}... (${llmResult.content.length} chars total)`
+      : llmResult.content;
+    console.info(JSON.stringify({
+      level: "info",
+      msg: "review model output",
+      headSha: context.reviewEvent.headSha,
+      triggerName: context.reviewEvent.triggerName,
+      workspaceId: context.reviewEvent.workspaceId,
+      modelProvider: llmResult.providerId,
+      modelId: llmResult.modelId,
+      ...(agentResult ? {
+        agentKind: "kilo",
+        agentExitCode: agentResult.exitCode,
+        agentDurationMs: agentResult.durationMs,
+      } : {}),
+      problemCount: outputState.problems.length,
+      summaryCount: outputState.summaries.length,
+      llmOutput: llmContentPreview,
+      ...(outputState.problems.length > 0 ? {
+        problems: outputState.problems.map((p) => ({
+          file: p.file,
+          line: p.line,
+          severity: p.severity,
+          message: p.message.length > 200 ? `${p.message.slice(0, 200)}...` : p.message,
+        })),
+      } : {}),
+      ...(outputState.summaries.length > 0 ? {
+        summaries: outputState.summaries.map((s) =>
+          s.length > 500 ? `${s.slice(0, 500)}...` : s,
+        ),
+      } : {}),
+    }));
   }
 
   const implicitSkipReason = !options.dryRun && !outputState.skipReason && dispatchResults.length === 0
     ? outputState.problems.length > 0 && !outputPublisher
       ? "no_output_publisher"
-      : "no_dispatchable_problems"
+      : outputState.problems.length === 0 && outputPublisher?.noProblemsAction === "suppress"
+        ? "no_problems_suppressed"
+        : "no_dispatchable_problems"
     : undefined;
   const skipReason = outputState.skipReason ?? implicitSkipReason;
   const status = skipReason
@@ -1104,7 +1213,6 @@ export async function runReviewOrchestration(
     diffFileCount: diff?.files.length ?? 0,
     promptTokenEstimate: preparedPrompt.prompt.tokenEstimate,
     problemCount: outputState.problems.length,
-    findingCount: outputState.problems.length,
     summaryCount: outputState.summaries.length,
     contextRequestCount: outputState.contextRequests.length,
     dispatchCount: dispatchResults.length,
@@ -1118,7 +1226,7 @@ export async function runReviewOrchestration(
     dispatchResults,
     llmResult,
     ...(agentResult ? { agentResult } : {}),
-    scrubFindings: allScrubFindings,
+    scrubMatches: allScrubMatches,
     ...(compressed ? { compressed } : {}),
     ...(originalTokenEstimate !== undefined ? { originalTokenEstimate } : {}),
     ...(compressedTokenEstimate !== undefined ? { compressedTokenEstimate } : {}),
@@ -1135,7 +1243,6 @@ export function summarizeReviewOrchestrationForWebhook(
     diffFileCount: result.diffFileCount,
     promptTokenEstimate: result.promptTokenEstimate,
     problemCount: result.problemCount,
-    findingCount: result.problemCount,
     summaryCount: result.summaryCount,
     contextRequestCount: result.contextRequestCount,
     dispatchCount: result.dispatchCount,

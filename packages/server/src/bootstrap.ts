@@ -25,6 +25,7 @@ import {
 } from "@aicr/llm";
 import {
   buildAtMentions,
+  buildTemplateTargetContext,
   createTemplateResolver,
   createGiteaPullRequestReviewDispatcher,
   createGithubPullRequestReviewDispatcher,
@@ -518,9 +519,67 @@ function withRepoMappings(
 
 type OutputChannelConfig = AppConfig["outputs"]["channels"][number];
 type OutputRouteChannelKey = "line_comments" | "summary";
+type NoProblemsAction = "publish" | "suppress";
+
+interface TargetUrlTemplateOptions {
+  readonly commitUrlTemplate?: string;
+  readonly revisionUrlTemplate?: string;
+  readonly changeUrlTemplate?: string;
+  readonly baseUrl?: string;
+}
 
 export interface OutputPublisherConfigOptions {
   readonly baseDir?: string;
+}
+
+function readNoProblemsAction(value: unknown): NoProblemsAction | undefined {
+  if (!isPlainObject(value)) {
+    return undefined;
+  }
+
+  return value.action === "publish" || value.action === "suppress" ? value.action : undefined;
+}
+
+function readNoProblemsActionFrom(raw: unknown): NoProblemsAction | undefined {
+  if (!isPlainObject(raw)) {
+    return undefined;
+  }
+
+  return readNoProblemsAction(raw.no_problems);
+}
+
+function readChannelOverrideNoProblemsAction(raw: unknown, channelName: string): NoProblemsAction | undefined {
+  if (!isPlainObject(raw) || !isPlainObject(raw.channel_overrides)) {
+    return undefined;
+  }
+
+  return readNoProblemsActionFrom(raw.channel_overrides[channelName]);
+}
+
+function defaultNoProblemsActionForChannel(channelKind: string): NoProblemsAction {
+  return channelKind === "gitea_problem_issue"
+    ? "publish"
+    : "suppress";
+}
+
+function resolveNoProblemsAction(
+  config: AppConfig,
+  channel: OutputChannelConfig,
+  workspaceId: string | undefined,
+): NoProblemsAction {
+  let action = defaultNoProblemsActionForChannel(channel.kind);
+  action = readNoProblemsActionFrom(config.outputs) ?? action;
+  action = readNoProblemsActionFrom(channel) ?? action;
+
+  const defaultsOutputs = config.workspaces.defaults.outputs;
+  action = readNoProblemsActionFrom(defaultsOutputs) ?? action;
+  action = readChannelOverrideNoProblemsAction(defaultsOutputs, channel.name) ?? action;
+
+  const workspaceOutputs = workspaceId ? config.workspaces.instances[workspaceId]?.outputs : undefined;
+  action = readNoProblemsActionFrom(workspaceOutputs) ?? action;
+  action = readChannelOverrideNoProblemsAction(workspaceOutputs, channel.name) ?? action;
+
+  return action;
 }
 
 function toMentionChannelKind(channelKind: string): MentionChannelKind | undefined {
@@ -530,7 +589,6 @@ function toMentionChannelKind(channelKind: string): MentionChannelKind | undefin
     case "gitlab_mr_review":
     case "gitea_issue":
     case "gitea_problem_issue":
-    case "gitea_finding_issue":
     case "feishu_bot":
     case "wecom_bot":
       return channelKind;
@@ -572,11 +630,15 @@ function buildBaseTemplateContext(
   mentionChannelKind: MentionChannelKind | undefined,
   mentionAuthor: boolean,
   authorResolution: AuthorResolutionOptions | undefined,
-): Omit<TemplateContext, "problem" | "finding" | "problems" | "findings"> {
+  targetUrlTemplates: TargetUrlTemplateOptions = {},
+): Omit<TemplateContext, "problem" | "problems"> {
   const eventAuthor = reviewEvent?.author?.username ?? reviewEvent?.author?.displayName;
   const eventCtx: { author?: string; url?: string; title?: string } = {};
   if (eventAuthor !== undefined) {
     eventCtx.author = eventAuthor;
+  }
+  if (reviewEvent?.title !== undefined) {
+    eventCtx.title = reviewEvent.title;
   }
   if (reviewEvent?.url !== undefined) {
     eventCtx.url = reviewEvent.url;
@@ -593,9 +655,24 @@ function buildBaseTemplateContext(
   const atMentions = mentionAuthor && reviewEvent && mentionChannelKind
     ? buildAtMentions({ author: reviewEvent.author }, mentionChannelKind, authorResolution)
     : "";
+  const target = reviewEvent
+    ? buildTemplateTargetContext({
+        kind: reviewEvent.targetKind,
+        provider: reviewEvent.provider,
+        ...(resolvedRepoRef ? { repoRef: resolvedRepoRef } : {}),
+        ...(reviewEvent.title !== undefined ? { title: reviewEvent.title } : {}),
+        ...(reviewEvent.url !== undefined ? { url: reviewEvent.url } : {}),
+        ...(reviewEvent.baseSha !== undefined ? { baseRevision: reviewEvent.baseSha } : {}),
+        ...(reviewEvent.headSha !== undefined ? { headRevision: reviewEvent.headSha } : {}),
+        triggerName: reviewEvent.triggerName,
+        workspaceId: reviewEvent.workspaceId,
+        ...targetUrlTemplates,
+      })
+    : undefined;
 
   return {
     ...(Object.keys(eventCtx).length > 0 ? { event: eventCtx } : {}),
+    ...(target ? { target } : {}),
     ...(repo ? { repo } : {}),
     ...(atMentions ? { atMentions } : {}),
   };
@@ -608,6 +685,7 @@ function createChannelRendering(
   reviewEvent: ReviewEvent | undefined,
   repoRef: string | undefined,
   baseDir: string,
+  targetUrlTemplates: TargetUrlTemplateOptions = {},
 ): {
   readonly mentionText: string;
   readonly renderProblem: (problem: ReviewProblem) => ReviewProblem;
@@ -629,6 +707,7 @@ function createChannelRendering(
     mentionChannelKind,
     shouldMentionAuthor(channel),
     authorResolution,
+    targetUrlTemplates,
   );
 
   return {
@@ -668,12 +747,11 @@ function callPublishProblem(
   publisher: ReviewOutputPublisher,
   problem: ReviewProblem,
 ): Promise<ReviewDispatchResult> {
-  const publish = publisher.publishProblem ?? publisher.publishFinding;
-  if (!publish) {
+  if (!publisher.publishProblem) {
     throw new TypeError("Review output publisher must provide publishProblem.");
   }
 
-  return publish.call(publisher, problem);
+  return publisher.publishProblem(problem);
 }
 
 function createCompositeOutputPublisher(
@@ -692,7 +770,8 @@ function createCompositeOutputPublisher(
   return {
     handlesRendering: true,
     publishesProblems: linePublishers.length > 0,
-    publishEmptySummary: summaryCapable.some((publisher) => publisher.publishEmptySummary),
+    noProblemsAction: summaryCapable.some((publisher) => publisher.noProblemsAction !== "suppress") ? "publish" : "suppress",
+    publishEmptySummary: summaryCapable.some((publisher) => publisher.publishEmptySummary && publisher.noProblemsAction !== "suppress"),
     async publishProblem(problem: ReviewProblem): Promise<readonly DispatchResult[]> {
       const results: DispatchResult[] = [];
       for (const publisher of linePublishers) {
@@ -704,7 +783,12 @@ function createCompositeOutputPublisher(
       ? {
           async publishSummary(summary: string, problems?: readonly ReviewProblem[]): Promise<readonly DispatchResult[]> {
             const results: DispatchResult[] = [];
+            const noProblems = (problems?.length ?? 0) === 0;
+            const hasExplicitSummary = summary.trim().length > 0;
             for (const publisher of summaryCapable) {
+              if (noProblems && !hasExplicitSummary && publisher.noProblemsAction === "suppress") {
+                continue;
+              }
               if (publisher.publishSummary) {
                 appendPublisherResults(results, await publisher.publishSummary(summary, problems));
               }
@@ -742,8 +826,7 @@ export function createOutputPublisherFromConfig(
   const isPrReview = channel.kind === "gitea_pr_review" || channel.kind === "github_pr_review" || channel.kind === "gitlab_mr_review";
   const supportedTriggerKinds = channel.kind === "gitea_pr_review" ||
     channel.kind === "gitea_issue" ||
-    channel.kind === "gitea_problem_issue" ||
-    channel.kind === "gitea_finding_issue"
+    channel.kind === "gitea_problem_issue"
     ? ["gitea", "forgejo"]
     : channel.kind === "github_pr_review"
       ? ["github"]
@@ -759,6 +842,19 @@ export function createOutputPublisherFromConfig(
   const triggerConfig = (trigger ?? {}) as Record<string, unknown>;
   const baseUrl = (channelConfig.base_url as string | undefined) ??
     (triggerConfig.base_url as string | undefined);
+  const commitUrlTemplate = readString(channelConfig, "commit_url_template", "commitUrlTemplate") ??
+    readString(triggerConfig, "commit_url_template", "commitUrlTemplate");
+  const revisionUrlTemplate = readString(channelConfig, "revision_url_template", "revisionUrlTemplate") ??
+    readString(triggerConfig, "revision_url_template", "revisionUrlTemplate");
+  const changeUrlTemplate = readString(channelConfig, "change_url_template", "changeUrlTemplate") ??
+    readString(triggerConfig, "change_url_template", "changeUrlTemplate");
+  const targetUrlTemplates: TargetUrlTemplateOptions = {
+    ...(commitUrlTemplate ? { commitUrlTemplate } : {}),
+    ...(revisionUrlTemplate ? { revisionUrlTemplate } : {}),
+    ...(changeUrlTemplate ? { changeUrlTemplate } : {}),
+    ...(baseUrl ? { baseUrl } : {}),
+  };
+  const noProblemsAction = resolveNoProblemsAction(config, channel, workspaceId);
   const tokenEnv = (channelConfig.token_env as string | undefined) ??
     (triggerConfig.token_env as string | undefined);
   const explicitOwner = channelConfig.owner as string | undefined;
@@ -770,7 +866,8 @@ export function createOutputPublisherFromConfig(
   const owner = explicitOwner ?? parsedRepo?.owner;
   const repo = explicitOwner ? explicitRepo : parsedRepo?.repo;
   const repoRef = owner && repo ? `${owner}/${repo}` : workspaceRepoRef;
-  const rendering = createChannelRendering(config, channel, workspaceId, reviewEvent, repoRef, baseDir);
+  const rendering = createChannelRendering(config, channel, workspaceId, reviewEvent, repoRef, baseDir, targetUrlTemplates);
+  const publishEmptySummary = noProblemsAction === "publish";
 
   if (channel.kind === "gitea_pr_review") {
     if (!baseUrl || !owner || !repo || pullNumber === undefined) {
@@ -788,6 +885,7 @@ export function createOutputPublisherFromConfig(
 
     return {
       handlesRendering: true,
+      noProblemsAction,
       async publishProblem(problem: ReviewProblem): Promise<DispatchResult> {
         return dispatcher.publishProblem(rendering.renderProblem(problem));
       },
@@ -810,6 +908,7 @@ export function createOutputPublisherFromConfig(
 
     return {
       handlesRendering: true,
+      noProblemsAction,
       async publishProblem(problem: ReviewProblem): Promise<DispatchResult> {
         return dispatcher.publishProblem(rendering.renderProblem(problem));
       },
@@ -836,6 +935,7 @@ export function createOutputPublisherFromConfig(
 
     return {
       handlesRendering: true,
+      noProblemsAction,
       async publishProblem(problem: ReviewProblem): Promise<DispatchResult> {
         return dispatcher.publishProblem(rendering.renderProblem(problem));
       },
@@ -859,6 +959,8 @@ export function createOutputPublisherFromConfig(
     const problems: ReviewProblem[] = [];
     return {
       handlesRendering: true,
+      noProblemsAction,
+      publishEmptySummary,
       async publishProblem(problem: ReviewProblem): Promise<DispatchResult> {
         problems.push(rendering.renderProblem(problem));
         return { channel: channel.name, status: "published", raw: {} };
@@ -873,7 +975,7 @@ export function createOutputPublisherFromConfig(
     };
   }
 
-  if (channel.kind === "gitea_problem_issue" || channel.kind === "gitea_finding_issue") {
+  if (channel.kind === "gitea_problem_issue") {
     if (!baseUrl || !owner || !repo) {
       return undefined;
     }
@@ -899,7 +1001,8 @@ export function createOutputPublisherFromConfig(
     return {
       handlesRendering: true,
       publishesProblems: false,
-      publishEmptySummary: true,
+      noProblemsAction,
+      publishEmptySummary,
       async publishProblem(): Promise<DispatchResult> {
         return { channel: channel.name, status: "published", raw: { collected: true } };
       },
@@ -931,6 +1034,8 @@ export function createOutputPublisherFromConfig(
     const problems: ReviewProblem[] = [];
     return {
       handlesRendering: true,
+      noProblemsAction,
+      publishEmptySummary,
       async publishProblem(problem: ReviewProblem): Promise<DispatchResult> {
         problems.push(rendering.renderProblem(problem));
         return { channel: channel.name, status: "published", raw: {} };
@@ -964,6 +1069,8 @@ export function createOutputPublisherFromConfig(
     const problems: ReviewProblem[] = [];
     return {
       handlesRendering: true,
+      noProblemsAction,
+      publishEmptySummary,
       async publishProblem(problem: ReviewProblem): Promise<DispatchResult> {
         problems.push(rendering.renderProblem(problem));
         return { channel: channel.name, status: "published", raw: {} };

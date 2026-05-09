@@ -101,6 +101,13 @@ function makeConfig(overrides: Partial<AppConfig> = {}): AppConfig {
   } as AppConfig;
 }
 
+type OutputPublisher = NonNullable<ReturnType<typeof createOutputPublisherFromConfig>>;
+type ProblemPublisher = OutputPublisher & { readonly publishProblem: NonNullable<OutputPublisher["publishProblem"]> };
+
+function assertProblemPublisher(publisher: OutputPublisher | undefined): asserts publisher is ProblemPublisher {
+  expect(typeof publisher?.publishProblem).toBe("function");
+}
+
 describe("resolveModelSpecFromConfig", () => {
   it("returns a ModelSpec from the first provider and matching fallback", () => {
     const config = makeConfig();
@@ -342,8 +349,8 @@ describe("createOutputPublisherFromConfig", () => {
       } as Partial<AppConfig>);
       const publisher = createOutputPublisherFromConfig(config, "plan-gitea-pr", 42, "test-workspace");
 
-      expect(publisher).toBeDefined();
-      const result = await publisher?.publishProblem({
+      assertProblemPublisher(publisher);
+      const result = await publisher.publishProblem({
         file: "src/app.ts",
         line: 7,
         severity: "high",
@@ -393,8 +400,8 @@ describe("createOutputPublisherFromConfig", () => {
       } as Partial<AppConfig>);
       const publisher = createOutputPublisherFromConfig(config, "github-pr", 42, "test-workspace");
 
-      expect(publisher).toBeDefined();
-      const result = await publisher?.publishProblem({
+      assertProblemPublisher(publisher);
+      const result = await publisher.publishProblem({
         file: "src/app.ts",
         line: 7,
         severity: "high",
@@ -462,8 +469,8 @@ describe("createOutputPublisherFromConfig", () => {
         },
       );
 
-      expect(publisher).toBeDefined();
-      await publisher?.publishProblem({
+      assertProblemPublisher(publisher);
+      await publisher.publishProblem({
         file: "src/app.ts",
         line: 7,
         severity: "medium",
@@ -736,8 +743,8 @@ describe("createOutputPublisherResolverFromConfig", () => {
         eventName: "pull_request",
       });
 
-      expect(publisher).toBeDefined();
-      await publisher?.publishProblem({
+      assertProblemPublisher(publisher);
+      await publisher.publishProblem({
         file: "src/app.ts",
         line: 3,
         severity: "medium",
@@ -809,8 +816,8 @@ describe("createOutputPublisherResolverFromConfig", () => {
         eventName: "pull_request",
       });
 
-      expect(publisher).toBeDefined();
-      await publisher?.publishProblem({
+      assertProblemPublisher(publisher);
+      await publisher.publishProblem({
         file: "src/app.ts",
         line: 3,
         severity: "medium",
@@ -891,6 +898,96 @@ describe("createOutputPublisherResolverFromConfig", () => {
         delete process.env.GITEA_TOKEN;
       } else {
         process.env.GITEA_TOKEN = originalToken;
+      }
+    }
+  });
+
+  it("filters zero-problem summaries per channel no_problems policy", async () => {
+    const calls: { url: string; init: { body?: string } }[] = [];
+    vi.stubGlobal("fetch", async (url: string, init?: { body?: string }) => {
+      calls.push({ url, init: init ?? {} });
+      return response({ code: 0 });
+    });
+
+    const originalSuppressWebhook = process.env.FEISHU_SUPPRESS_WEBHOOK;
+    const originalPublishWebhook = process.env.FEISHU_PUBLISH_WEBHOOK;
+    process.env.FEISHU_SUPPRESS_WEBHOOK = "https://open.feishu.cn/hook/suppress";
+    process.env.FEISHU_PUBLISH_WEBHOOK = "https://open.feishu.cn/hook/publish";
+    try {
+      const config = makeConfig({
+        outputs: {
+          template_engine: "handlebars",
+          no_problems: { action: "suppress" },
+          channels: [
+            {
+              name: "feishu-suppress",
+              kind: "feishu_bot",
+              webhook_url_env: "FEISHU_SUPPRESS_WEBHOOK",
+            },
+            {
+              name: "feishu-publish",
+              kind: "feishu_bot",
+              webhook_url_env: "FEISHU_PUBLISH_WEBHOOK",
+            },
+          ],
+          routes: {
+            default: { summary: ["feishu-suppress", "feishu-publish"] },
+            rules: [],
+          },
+        },
+        workspaces: {
+          cache: { max_total_gb: 50, eviction: "lru", ttl_days: 30 },
+          defaults: {},
+          instances: {
+            "test-workspace": {
+              source_repo: { trigger: "gitea-internal", repo: "owent/example" },
+              outputs: {
+                channel_overrides: {
+                  "feishu-publish": { no_problems: { action: "publish" } },
+                },
+              },
+            },
+          },
+        },
+      } as Partial<AppConfig>);
+      const publisher = createOutputPublisherResolverFromConfig(config)({
+        reviewEvent: {
+          triggerName: "gitea-internal",
+          provider: "gitea",
+          workspaceId: "test-workspace",
+          targetKind: "push",
+          repoRef: "owent/example",
+          headSha: "abcdef1234567890",
+          author: {},
+          reason: "gitea:push",
+        },
+        payload: {},
+        provider: "gitea",
+        eventName: "push",
+      });
+
+      expect(publisher).toBeDefined();
+      expect(publisher?.noProblemsAction).toBe("publish");
+      const results = await publisher?.publishSummary?.("No actionable problems.", []);
+
+      expect(Array.isArray(results)).toBe(true);
+      expect(calls.map((call) => call.url)).toEqual([
+        "https://open.feishu.cn/hook/suppress",
+        "https://open.feishu.cn/hook/publish",
+      ]);
+      expect(calls[1]?.init.body).toContain("No actionable problems.");
+      expect(calls[1]?.init.body).toContain("Commit abcdef123456");
+    } finally {
+      vi.unstubAllGlobals();
+      if (originalSuppressWebhook === undefined) {
+        delete process.env.FEISHU_SUPPRESS_WEBHOOK;
+      } else {
+        process.env.FEISHU_SUPPRESS_WEBHOOK = originalSuppressWebhook;
+      }
+      if (originalPublishWebhook === undefined) {
+        delete process.env.FEISHU_PUBLISH_WEBHOOK;
+      } else {
+        process.env.FEISHU_PUBLISH_WEBHOOK = originalPublishWebhook;
       }
     }
   });

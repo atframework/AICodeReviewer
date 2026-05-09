@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import {
+	buildTemplateTargetContext,
 	clearTemplateCache,
 	createTemplateResolver,
 	getBuiltinTemplate,
@@ -30,6 +31,13 @@ const sampleContext: TemplateContext = {
 		url: "https://gitea.example/owent/example/pulls/1",
 		title: "Add feature",
 	},
+	target: buildTemplateTargetContext({
+		kind: "pull_request",
+		provider: "gitea",
+		repoRef: "owent/example",
+		title: "Add feature",
+		url: "https://gitea.example/owent/example/pulls/1",
+	}),
 	repo: {
 		name: "example",
 		fullName: "owent/example",
@@ -68,6 +76,54 @@ describe("toTemplateProblem", () => {
 		expect(result.suggestion).toBeUndefined();
 		expect(result.fingerprint).toBeUndefined();
 		expect(result.endLine).toBeUndefined();
+	});
+});
+
+describe("buildTemplateTargetContext", () => {
+	it("builds a PR target link without a generic View PR label", () => {
+		const target = buildTemplateTargetContext({
+			kind: "pull_request",
+			provider: "gitea",
+			title: "Fix parser",
+			url: "https://gitea.example/owent/example/pulls/42",
+		});
+
+		expect(target.displayText).toBe("Fix parser");
+		expect(target.id).toBe("42");
+		expect(target.markdownLink).toBe("[Fix parser](https://gitea.example/owent/example/pulls/42)");
+	});
+
+	it("derives a GitLab commit URL for push events", () => {
+		const target = buildTemplateTargetContext({
+			kind: "push",
+			provider: "gitlab",
+			repoRef: "group/project",
+			headRevision: "abcdef1234567890",
+			baseUrl: "https://gitlab.example",
+		});
+
+		expect(target.displayText).toBe("Commit abcdef123456");
+		expect(target.url).toBe("https://gitlab.example/group/project/-/commit/abcdef1234567890");
+		expect(target.markdownLink).toContain("Commit abcdef123456");
+	});
+
+	it("uses configured P4 changelist URL templates", () => {
+		const target = buildTemplateTargetContext({
+			kind: "commit",
+			provider: "p4",
+			headRevision: "6251",
+			changeUrlTemplate: "https://swarm.example.com/changes/{{revision}}",
+		});
+
+		expect(target.displayText).toBe("P4 CL 6251");
+		expect(target.markdownLink).toBe("[P4 CL 6251](https://swarm.example.com/changes/6251)");
+	});
+
+	it("keeps scheduled targets as plain text when no URL exists", () => {
+		const target = buildTemplateTargetContext({ kind: "scheduled" });
+
+		expect(target.displayText).toBe("Scheduled review");
+		expect(target.markdownLink).toBeUndefined();
 	});
 });
 
@@ -131,6 +187,7 @@ describe("renderBuiltinTemplate", () => {
 
 		expect(result).toContain("AI Code Review Summary");
 		expect(result).toContain("Add feature");
+		expect(result).toContain("**Target**: [Add feature](https://gitea.example/owent/example/pulls/1)");
 		expect(result).toContain("@dev @reviewer");
 		expect(result).toContain("Bug found.");
 		expect(result).toContain("run-abc");
@@ -166,6 +223,24 @@ describe("renderBuiltinTemplate", () => {
 		expect(result).toContain("Add feature");
 		expect(result).toContain("1");
 		expect(result).toContain("https://gitea.example/owent/example/pulls/1");
+	});
+
+	it("renders commit targets without View PR wording", () => {
+		const result = renderBuiltinTemplate("feishu_bot", "summary", {
+			target: buildTemplateTargetContext({
+				kind: "commit",
+				provider: "p4",
+				headRevision: "6285",
+				changeUrlTemplate: "https://swarm.example.com/changes/{{revision}}",
+			}),
+			problems: [],
+			summary: "No actionable problems.",
+		});
+
+		expect(result).toContain("P4 CL 6285");
+		expect(result).toContain("https://swarm.example.com/changes/6285");
+		expect(result).not.toContain("View PR");
+		expect(result).not.toContain("View changes");
 	});
 
 	it("renders wecom_bot summary", () => {
@@ -235,8 +310,8 @@ describe("createTemplateResolver", () => {
 		}
 	});
 
-	it("keeps legacy finding workspace templates as fallback", async () => {
-		const dir = await mkdtemp(join(tmpdir(), "aicr-template-legacy-kind-"));
+	it("does not use removed finding workspace templates as fallback", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "aicr-template-removed-kind-"));
 		try {
 			await writeFile(join(dir, "github_pr_review.finding.md.hbs"), "GH {{finding.location}}", "utf8");
 			const resolver = createTemplateResolver({
@@ -245,7 +320,7 @@ describe("createTemplateResolver", () => {
 				workspaceTemplatesDir: dir,
 			});
 
-			expect(resolver.render("problem", { problem: toTemplateProblem(sampleProblem) })).toBe("GH src/app.ts:42");
+			expect(resolver.render("problem", { problem: toTemplateProblem(sampleProblem) })).toContain("Location: `src/app.ts:42`");
 		} finally {
 			await rm(dir, { recursive: true, force: true });
 		}

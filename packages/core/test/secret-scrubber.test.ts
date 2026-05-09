@@ -8,7 +8,7 @@ describe("secret-scrubber", () => {
 			const result = scrubText('env AWS_ACCESS_KEY_ID = "AKIAIOSFODNN7EXAMPLE"');
 			expect(result.text).toContain("<REDACTED:AWS_KEY>");
 			expect(result.text).not.toContain("AKIAIOSFODNN7EXAMPLE");
-			expect(result.findings.some((f) => f.kind === "aws_key")).toBe(true);
+			expect(result.matches.some((f) => f.kind === "aws_key")).toBe(true);
 		});
 
 		it("redacts AWS secret access keys", () => {
@@ -16,13 +16,13 @@ describe("secret-scrubber", () => {
 				'aws_secret_access_key = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"',
 			);
 			expect(result.text).toContain("<REDACTED:AWS_KEY>");
-			expect(result.findings.some((f) => f.kind === "aws_key")).toBe(true);
+			expect(result.matches.some((f) => f.kind === "aws_key")).toBe(true);
 		});
 
 		it("redacts private key PEM headers", () => {
 			const result = scrubText("-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAK...");
 			expect(result.text).toContain("<REDACTED:PRIVATE_KEY>");
-			expect(result.findings.some((f) => f.kind === "private_key")).toBe(true);
+			expect(result.matches.some((f) => f.kind === "private_key")).toBe(true);
 		});
 
 		it("redacts JWT tokens", () => {
@@ -31,7 +31,7 @@ describe("secret-scrubber", () => {
 			);
 			expect(result.text).toContain("<REDACTED:JWT>");
 			expect(result.text).not.toContain("eyJhbGciOi");
-			expect(result.findings.some((f) => f.kind === "jwt")).toBe(true);
+			expect(result.matches.some((f) => f.kind === "jwt")).toBe(true);
 		});
 
 		it("redacts GitHub personal access tokens (ghp_)", () => {
@@ -40,7 +40,7 @@ describe("secret-scrubber", () => {
 			);
 			expect(result.text).toContain("<REDACTED:GITHUB_TOKEN>");
 			expect(result.text).not.toContain("ghp_");
-			expect(result.findings.some((f) => f.kind === "github_token")).toBe(true);
+			expect(result.matches.some((f) => f.kind === "github_token")).toBe(true);
 		});
 
 		it("redacts GitHub fine-grained tokens (github_pat_)", () => {
@@ -73,7 +73,7 @@ describe("secret-scrubber", () => {
 			);
 			expect(result.text).toContain("<REDACTED:CONNECTION_STRING>");
 			expect(result.text).not.toContain("mongodb://");
-			expect(result.findings.some((f) => f.kind === "connection_string")).toBe(true);
+			expect(result.matches.some((f) => f.kind === "connection_string")).toBe(true);
 		});
 
 		it("redacts postgres connection strings", () => {
@@ -90,7 +90,7 @@ describe("secret-scrubber", () => {
 			);
 			expect(result.text).toContain("<REDACTED:GENERIC_API_KEY>");
 			expect(result.text).not.toContain("sk-abcdefghij");
-			expect(result.findings.some((f) => f.kind === "generic_api_key")).toBe(true);
+			expect(result.matches.some((f) => f.kind === "generic_api_key")).toBe(true);
 		});
 
 		it("redacts OAuth tokens", () => {
@@ -114,14 +114,14 @@ describe("secret-scrubber", () => {
 				'dGVzdHNlY3JldGtleWZvcmVudHJvcHlzY2FubmluZ3Rlc3RzZWNyZXRrZXk=',
 			);
 			expect(result.text).toContain("<REDACTED:HIGH_ENTROPY>");
-			expect(result.findings.some((f) => f.kind === "high_entropy")).toBe(true);
+			expect(result.matches.some((f) => f.kind === "high_entropy")).toBe(true);
 		});
 
 		it("does not flag low-entropy long strings", () => {
 			const result = scrubText(
 				"The quick brown fox jumps over the lazy dog. This is a normal sentence without any secrets.",
 			);
-			expect(result.findings.filter((f) => f.kind === "high_entropy")).toHaveLength(0);
+			expect(result.matches.filter((f) => f.kind === "high_entropy")).toHaveLength(0);
 		});
 
 		it("redacts sensitive key-value pairs", () => {
@@ -129,7 +129,7 @@ describe("secret-scrubber", () => {
 				'const password = "mySuperSecretValue123456"',
 			);
 			expect(result.text).toContain("<REDACTED:KEY_VALUE_PAIR>");
-			expect(result.findings.some((f) => f.kind === "key_value_pair")).toBe(true);
+			expect(result.matches.some((f) => f.kind === "key_value_pair")).toBe(true);
 		});
 
 		it("redacts apiKey key-value pairs", () => {
@@ -150,23 +150,23 @@ describe("secret-scrubber", () => {
 			const result = scrubText(
 				'const message = "Hello World! This is a normal message"',
 			);
-			expect(result.findings.filter((f) => f.kind === "key_value_pair")).toHaveLength(0);
+			expect(result.matches.filter((f) => f.kind === "key_value_pair")).toHaveLength(0);
 		});
 
-		it("reports correct line numbers in findings", () => {
+		it("reports correct line numbers in matches", () => {
 			const result = scrubText(
 				"line one\nline two\nAPI_KEY=sk-abcdefghijklmnopqrstuvwxyz\nline four",
 			);
-			const apiFinding = result.findings.find((f) => f.kind === "generic_api_key");
-			expect(apiFinding).toBeDefined();
-			expect(apiFinding!.line).toBe(2);
+			const apiMatch = result.matches.find((f) => f.kind === "generic_api_key");
+			expect(apiMatch).toBeDefined();
+			expect(apiMatch!.line).toBe(2);
 		});
 
-		it("returns empty findings for clean text", () => {
+		it("returns empty matches for clean text", () => {
 			const result = scrubText(
 				"function hello() {\n  return 'world';\n}\n",
 			);
-			expect(result.findings).toHaveLength(0);
+			expect(result.matches).toHaveLength(0);
 			expect(result.text).toBe(
 				"function hello() {\n  return 'world';\n}\n",
 			);
@@ -175,7 +175,7 @@ describe("secret-scrubber", () => {
 		it("handles empty input", () => {
 			const result = scrubText("");
 			expect(result.text).toBe("");
-			expect(result.findings).toHaveLength(0);
+			expect(result.matches).toHaveLength(0);
 		});
 	});
 
@@ -202,17 +202,17 @@ describe("secret-scrubber", () => {
 			expect(result.messages[0]!.content).toBe("You are a code reviewer.");
 			expect(result.messages[1]!.content).toContain("<REDACTED:AWS_KEY>");
 			expect(result.messages[1]!.content).not.toContain("AKIAIOSFODNN7EXAMPLE");
-			expect(result.findings.length).toBeGreaterThan(0);
+			expect(result.matches.length).toBeGreaterThan(0);
 		});
 
-		it("returns all findings across messages", () => {
+		it("returns all matches across messages", () => {
 			const messages = [
 				{ role: "user", content: "AKIAIOSFODNN7EXAMPLE" },
 				{ role: "user", content: "ghp_abcdefghijklmnopqrstuvwxyz01234567890123" },
 			];
 			const result = scrubPromptMessages(messages);
-			expect(result.findings.some((f) => f.kind === "aws_key")).toBe(true);
-			expect(result.findings.some((f) => f.kind === "github_token")).toBe(true);
+			expect(result.matches.some((f) => f.kind === "aws_key")).toBe(true);
+			expect(result.matches.some((f) => f.kind === "github_token")).toBe(true);
 		});
 	});
 });

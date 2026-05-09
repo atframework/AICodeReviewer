@@ -100,6 +100,7 @@ triggers:
     base_url: https://git.example.com # your Gitea / Forgejo base URL
     token_env: AICR_GITEA_TOKEN # outbound: reads token from $AICR_GITEA_TOKEN
     webhook_secret_env: AICR_WEBHOOK_SECRET # inbound: HMAC-SHA256 secret for webhook verification
+    # Commit URLs for push/commit targets are derived from base_url + repo + revision.
     # Optional: only analyze files in these paths (omit = all paths)
     # watch_path:
     #   - "src/"
@@ -168,6 +169,7 @@ triggers:
   #   password_env: AICR_P4PASSWORD        # outbound: env var for P4 password or login ticket
   #   depot_path: "//depot/main"           # depot or stream path to analyze
   #   workspace: "aicr-p4-main"            # P4 workspace/client name used by AICR
+  #   change_url_template: "https://swarm.example.com/changes/{{revision}}"  # optional target link in reports
   #   # File filtering (all optional):
   #   watch_path:                          # only analyze files under these paths
   #     - "src/"
@@ -215,6 +217,9 @@ triggers:
 # ---------------------------------------------------------------------------
 outputs:
   template_engine: handlebars
+  # Zero-problem output policy. Notification channels are quiet by default;
+  # lifecycle/audit channels can override to publish.
+  no_problems: { action: suppress } # publish | suppress
 
   channels:
     # Gitea PR review — inline line comments on pull requests
@@ -222,6 +227,7 @@ outputs:
       kind: gitea_pr_review # gitea_pr_review | github_pr_review | gitlab_mr_review | gitea_issue | feishu_bot | wecom_bot
       trigger: gitea
       mention_author: false
+      no_problems: { action: suppress }
 
     # Feishu (飞书) bot — push aggregated review problems to a Feishu group.
     # Setup: group Settings → Group Bots → Add Bot → Custom Bot → copy webhook & secret.
@@ -234,12 +240,15 @@ outputs:
     #                                             (required if bot has signature verification enabled)
     #   mention_author: true                     # @-mention the commit author in the card
     #   mention_fallback: skip                  # "all" = mention everyone, "skip" = no mention if author not found
+    #   no_problems: { action: suppress }        # keep quiet when no actionable problems are found
+    #   revision_url_template: "https://swarm.example.com/changes/{{revision}}"  # optional P4/SVN link override
 
     # WeCom (企业微信) bot — push aggregated problems to a WeCom group.
     # - name: wecom-ops
     #   kind: wecom_bot
     #   webhook_url_env: AICR_WECOM_WEBHOOK
     #   mention_author: false
+    #   no_problems: { action: suppress }
 
   routes:
     default:
@@ -314,6 +323,10 @@ workspaces:
     eviction: lru
     ttl_days: 30
 
+  defaults:
+    outputs:
+      no_problems: { action: suppress }
+
   instances:
     # Gitea workspace
     my-repo:
@@ -323,6 +336,10 @@ workspaces:
       outputs:
         line_comments: [gitea-pr-review]
         summary: [gitea-pr-review]
+        # Per-workspace/channel override. Set publish for audit-heavy repos.
+        # channel_overrides:
+        #   feishu-code-review:
+        #     no_problems: { action: publish }
       # Per-workspace auth (optional, overrides global server.auth)
       # auth:
       #   api_key_env: AICR_MY_REPO_API_KEY
