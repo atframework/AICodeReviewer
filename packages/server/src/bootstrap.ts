@@ -30,12 +30,12 @@ import {
   createGithubPullRequestReviewDispatcher,
   createGitlabMergeRequestReviewDispatcher,
   createGiteaIssueDispatcher,
-  createGiteaFindingIssueDispatcher,
+  createGiteaProblemIssueDispatcher,
   createFeishuBotDispatcher,
   createWeComBotDispatcher,
-  type ReviewFinding,
+  type ReviewProblem,
   type DispatchResult,
-  toTemplateFinding,
+  toTemplateProblem,
   type AuthorResolutionOptions,
   type MentionChannelKind,
   type TemplateContext,
@@ -529,6 +529,7 @@ function toMentionChannelKind(channelKind: string): MentionChannelKind | undefin
     case "github_pr_review":
     case "gitlab_mr_review":
     case "gitea_issue":
+    case "gitea_problem_issue":
     case "gitea_finding_issue":
     case "feishu_bot":
     case "wecom_bot":
@@ -571,7 +572,7 @@ function buildBaseTemplateContext(
   mentionChannelKind: MentionChannelKind | undefined,
   mentionAuthor: boolean,
   authorResolution: AuthorResolutionOptions | undefined,
-): Omit<TemplateContext, "finding"> {
+): Omit<TemplateContext, "problem" | "finding" | "problems" | "findings"> {
   const eventAuthor = reviewEvent?.author?.username ?? reviewEvent?.author?.displayName;
   const eventCtx: { author?: string; url?: string; title?: string } = {};
   if (eventAuthor !== undefined) {
@@ -609,8 +610,8 @@ function createChannelRendering(
   baseDir: string,
 ): {
   readonly mentionText: string;
-  readonly renderFinding: (finding: ReviewFinding) => ReviewFinding;
-  readonly renderSummary: (summary: string, findings: readonly ReviewFinding[]) => string;
+  readonly renderProblem: (problem: ReviewProblem) => ReviewProblem;
+  readonly renderSummary: (summary: string, problems: readonly ReviewProblem[]) => string;
 } {
   const workspaceTemplatesDir = workspaceId
     ? resolve(baseDir, "workspaces", workspaceId, "templates")
@@ -632,23 +633,23 @@ function createChannelRendering(
 
   return {
     mentionText: baseTemplateContext.atMentions ?? "",
-    renderFinding(finding: ReviewFinding): ReviewFinding {
-      if (finding.renderedMarkdown) {
-        return finding;
+    renderProblem(problem: ReviewProblem): ReviewProblem {
+      if (problem.renderedMarkdown) {
+        return problem;
       }
 
-      const renderedMarkdown = fixAndValidateMarkdown(resolver.render("finding", {
+      const renderedMarkdown = fixAndValidateMarkdown(resolver.render("problem", {
         ...baseTemplateContext,
-        finding: toTemplateFinding(finding),
+        problem: toTemplateProblem(problem),
       }));
 
-      return { ...finding, renderedMarkdown };
+      return { ...problem, renderedMarkdown };
     },
-    renderSummary(summary: string, findings: readonly ReviewFinding[]): string {
+    renderSummary(summary: string, problems: readonly ReviewProblem[]): string {
       return fixAndValidateMarkdown(resolver.render("summary", {
         ...baseTemplateContext,
         summary,
-        findings: findings.map((finding) => toTemplateFinding(finding)),
+        problems: problems.map((problem) => toTemplateProblem(problem)),
       }));
     },
   };
@@ -661,6 +662,18 @@ function appendPublisherResults(target: DispatchResult[], result: ReviewDispatch
   }
 
   target.push(result as DispatchResult);
+}
+
+function callPublishProblem(
+  publisher: ReviewOutputPublisher,
+  problem: ReviewProblem,
+): Promise<ReviewDispatchResult> {
+  const publish = publisher.publishProblem ?? publisher.publishFinding;
+  if (!publish) {
+    throw new TypeError("Review output publisher must provide publishProblem.");
+  }
+
+  return publish.call(publisher, problem);
 }
 
 function createCompositeOutputPublisher(
@@ -678,22 +691,22 @@ function createCompositeOutputPublisher(
 
   return {
     handlesRendering: true,
-    publishesFindings: linePublishers.length > 0,
+    publishesProblems: linePublishers.length > 0,
     publishEmptySummary: summaryCapable.some((publisher) => publisher.publishEmptySummary),
-    async publishFinding(finding: ReviewFinding): Promise<readonly DispatchResult[]> {
+    async publishProblem(problem: ReviewProblem): Promise<readonly DispatchResult[]> {
       const results: DispatchResult[] = [];
       for (const publisher of linePublishers) {
-        appendPublisherResults(results, await publisher.publishFinding(finding));
+        appendPublisherResults(results, await callPublishProblem(publisher, problem));
       }
       return results;
     },
     ...(summaryCapable.length > 0
       ? {
-          async publishSummary(summary: string, findings?: readonly ReviewFinding[]): Promise<readonly DispatchResult[]> {
+          async publishSummary(summary: string, problems?: readonly ReviewProblem[]): Promise<readonly DispatchResult[]> {
             const results: DispatchResult[] = [];
             for (const publisher of summaryCapable) {
               if (publisher.publishSummary) {
-                appendPublisherResults(results, await publisher.publishSummary(summary, findings));
+                appendPublisherResults(results, await publisher.publishSummary(summary, problems));
               }
             }
             return results;
@@ -727,7 +740,10 @@ export function createOutputPublisherFromConfig(
   const channelConfig = channel as Record<string, unknown>;
   const triggerName = channelConfig.trigger as string | undefined;
   const isPrReview = channel.kind === "gitea_pr_review" || channel.kind === "github_pr_review" || channel.kind === "gitlab_mr_review";
-  const supportedTriggerKinds = channel.kind === "gitea_pr_review" || channel.kind === "gitea_issue" || channel.kind === "gitea_finding_issue"
+  const supportedTriggerKinds = channel.kind === "gitea_pr_review" ||
+    channel.kind === "gitea_issue" ||
+    channel.kind === "gitea_problem_issue" ||
+    channel.kind === "gitea_finding_issue"
     ? ["gitea", "forgejo"]
     : channel.kind === "github_pr_review"
       ? ["github"]
@@ -772,8 +788,8 @@ export function createOutputPublisherFromConfig(
 
     return {
       handlesRendering: true,
-      async publishFinding(finding: ReviewFinding): Promise<DispatchResult> {
-        return dispatcher.publishFinding(rendering.renderFinding(finding));
+      async publishProblem(problem: ReviewProblem): Promise<DispatchResult> {
+        return dispatcher.publishProblem(rendering.renderProblem(problem));
       },
     };
   }
@@ -794,8 +810,8 @@ export function createOutputPublisherFromConfig(
 
     return {
       handlesRendering: true,
-      async publishFinding(finding: ReviewFinding): Promise<DispatchResult> {
-        return dispatcher.publishFinding(rendering.renderFinding(finding));
+      async publishProblem(problem: ReviewProblem): Promise<DispatchResult> {
+        return dispatcher.publishProblem(rendering.renderProblem(problem));
       },
     };
   }
@@ -820,8 +836,8 @@ export function createOutputPublisherFromConfig(
 
     return {
       handlesRendering: true,
-      async publishFinding(finding: ReviewFinding): Promise<DispatchResult> {
-        return dispatcher.publishFinding(rendering.renderFinding(finding));
+      async publishProblem(problem: ReviewProblem): Promise<DispatchResult> {
+        return dispatcher.publishProblem(rendering.renderProblem(problem));
       },
     };
   }
@@ -840,24 +856,24 @@ export function createOutputPublisherFromConfig(
       channelName: channel.name,
     });
 
-    const findings: ReviewFinding[] = [];
+    const problems: ReviewProblem[] = [];
     return {
       handlesRendering: true,
-      async publishFinding(finding: ReviewFinding): Promise<DispatchResult> {
-        findings.push(rendering.renderFinding(finding));
+      async publishProblem(problem: ReviewProblem): Promise<DispatchResult> {
+        problems.push(rendering.renderProblem(problem));
         return { channel: channel.name, status: "published", raw: {} };
       },
-      async publishSummary(summary: string, summaryFindings?: readonly ReviewFinding[]): Promise<DispatchResult> {
-        const renderedFindings = summaryFindings ?? findings;
-        return dispatcher.publishAggregatedFindings(
-          renderedFindings,
-          rendering.renderSummary(summary, renderedFindings),
+      async publishSummary(summary: string, summaryProblems?: readonly ReviewProblem[]): Promise<DispatchResult> {
+        const renderedProblems = summaryProblems ?? problems;
+        return dispatcher.publishAggregatedProblems(
+          renderedProblems,
+          rendering.renderSummary(summary, renderedProblems),
         );
       },
     };
   }
 
-  if (channel.kind === "gitea_finding_issue") {
+  if (channel.kind === "gitea_problem_issue" || channel.kind === "gitea_finding_issue") {
     if (!baseUrl || !owner || !repo) {
       return undefined;
     }
@@ -868,7 +884,7 @@ export function createOutputPublisherFromConfig(
     const labelIds = Array.isArray(channelConfig.label_ids) && channelConfig.label_ids.every((value) => typeof value === "number")
       ? channelConfig.label_ids as readonly number[]
       : undefined;
-    const dispatcher = createGiteaFindingIssueDispatcher({
+    const dispatcher = createGiteaProblemIssueDispatcher({
       baseUrl,
       ...(tokenEnv ? { token: resolveEnv(tokenEnv) ?? "" } : {}),
       owner,
@@ -882,16 +898,16 @@ export function createOutputPublisherFromConfig(
 
     return {
       handlesRendering: true,
-      publishesFindings: false,
+      publishesProblems: false,
       publishEmptySummary: true,
-      async publishFinding(): Promise<DispatchResult> {
+      async publishProblem(): Promise<DispatchResult> {
         return { channel: channel.name, status: "published", raw: { collected: true } };
       },
-      async publishSummary(summary: string, summaryFindings?: readonly ReviewFinding[]): Promise<readonly DispatchResult[]> {
-        const renderedFindings = (summaryFindings ?? []).map((finding) => rendering.renderFinding(finding));
-        return dispatcher.reconcileFindings(
-          renderedFindings,
-          rendering.renderSummary(summary, renderedFindings),
+      async publishSummary(summary: string, summaryProblems?: readonly ReviewProblem[]): Promise<readonly DispatchResult[]> {
+        const renderedProblems = (summaryProblems ?? []).map((problem) => rendering.renderProblem(problem));
+        return dispatcher.reconcileProblems(
+          renderedProblems,
+          rendering.renderSummary(summary, renderedProblems),
         );
       },
     };
@@ -912,18 +928,18 @@ export function createOutputPublisherFromConfig(
       channelName: channel.name,
     });
 
-    const findings: ReviewFinding[] = [];
+    const problems: ReviewProblem[] = [];
     return {
       handlesRendering: true,
-      async publishFinding(finding: ReviewFinding): Promise<DispatchResult> {
-        findings.push(rendering.renderFinding(finding));
+      async publishProblem(problem: ReviewProblem): Promise<DispatchResult> {
+        problems.push(rendering.renderProblem(problem));
         return { channel: channel.name, status: "published", raw: {} };
       },
-      async publishSummary(summary: string, summaryFindings?: readonly ReviewFinding[]): Promise<DispatchResult> {
-        const renderedFindings = summaryFindings ?? findings;
-        return dispatcher.publishAggregatedFindings(
-          renderedFindings,
-          rendering.renderSummary(summary, renderedFindings),
+      async publishSummary(summary: string, summaryProblems?: readonly ReviewProblem[]): Promise<DispatchResult> {
+        const renderedProblems = summaryProblems ?? problems;
+        return dispatcher.publishAggregatedProblems(
+          renderedProblems,
+          rendering.renderSummary(summary, renderedProblems),
           rendering.mentionText || undefined,
         );
       },
@@ -945,18 +961,18 @@ export function createOutputPublisherFromConfig(
         : {}),
     });
 
-    const findings: ReviewFinding[] = [];
+    const problems: ReviewProblem[] = [];
     return {
       handlesRendering: true,
-      async publishFinding(finding: ReviewFinding): Promise<DispatchResult> {
-        findings.push(rendering.renderFinding(finding));
+      async publishProblem(problem: ReviewProblem): Promise<DispatchResult> {
+        problems.push(rendering.renderProblem(problem));
         return { channel: channel.name, status: "published", raw: {} };
       },
-      async publishSummary(summary: string, summaryFindings?: readonly ReviewFinding[]): Promise<DispatchResult> {
-        const renderedFindings = summaryFindings ?? findings;
-        return dispatcher.publishAggregatedFindings(
-          renderedFindings,
-          rendering.renderSummary(summary, renderedFindings),
+      async publishSummary(summary: string, summaryProblems?: readonly ReviewProblem[]): Promise<DispatchResult> {
+        const renderedProblems = summaryProblems ?? problems;
+        return dispatcher.publishAggregatedProblems(
+          renderedProblems,
+          rendering.renderSummary(summary, renderedProblems),
           rendering.mentionText || undefined,
         );
       },

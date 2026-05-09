@@ -319,7 +319,7 @@ describe("createOutputPublisherFromConfig", () => {
     const result = createOutputPublisherFromConfig(config, "gitea-pr", 42);
 
     expect(result).toBeDefined();
-    expect(typeof result?.publishFinding).toBe("function");
+    expect(typeof result?.publishProblem).toBe("function");
   });
 
   it("derives Gitea target from channel trigger and workspace source repo", async () => {
@@ -343,7 +343,7 @@ describe("createOutputPublisherFromConfig", () => {
       const publisher = createOutputPublisherFromConfig(config, "plan-gitea-pr", 42, "test-workspace");
 
       expect(publisher).toBeDefined();
-      const result = await publisher?.publishFinding({
+      const result = await publisher?.publishProblem({
         file: "src/app.ts",
         line: 7,
         severity: "high",
@@ -394,7 +394,7 @@ describe("createOutputPublisherFromConfig", () => {
       const publisher = createOutputPublisherFromConfig(config, "github-pr", 42, "test-workspace");
 
       expect(publisher).toBeDefined();
-      const result = await publisher?.publishFinding({
+      const result = await publisher?.publishProblem({
         file: "src/app.ts",
         line: 7,
         severity: "high",
@@ -463,7 +463,7 @@ describe("createOutputPublisherFromConfig", () => {
       );
 
       expect(publisher).toBeDefined();
-      await publisher?.publishFinding({
+      await publisher?.publishProblem({
         file: "src/app.ts",
         line: 7,
         severity: "medium",
@@ -488,7 +488,7 @@ describe("createOutputPublisherFromConfig", () => {
     }
   });
 
-  it("creates a Gitea finding issue lifecycle publisher without a pull number", async () => {
+  it("creates a Gitea problem issue lifecycle publisher without a pull number", async () => {
     const calls: { url: string; init: { headers?: Record<string, string>; body?: string; method?: string } }[] = [];
     vi.stubGlobal("fetch", async (url: string, init?: { headers?: Record<string, string>; body?: string; method?: string }) => {
       calls.push({ url, init: init ?? {} });
@@ -503,8 +503,8 @@ describe("createOutputPublisherFromConfig", () => {
           template_engine: "handlebars",
           channels: [
             {
-              name: "gitea-finding-issues",
-              kind: "gitea_finding_issue",
+              name: "gitea-problem-issues",
+              kind: "gitea_problem_issue",
               trigger: "gitea-internal",
               marker_prefix: "[AICR Managed]",
               marker_label: "aicr-managed",
@@ -515,7 +515,7 @@ describe("createOutputPublisherFromConfig", () => {
       } as Partial<AppConfig>);
       const publisher = createOutputPublisherFromConfig(
         config,
-        "gitea-finding-issues",
+        "gitea-problem-issues",
         undefined,
         "test-workspace",
         {
@@ -530,7 +530,7 @@ describe("createOutputPublisherFromConfig", () => {
       );
 
       expect(publisher).toBeDefined();
-      expect(publisher?.publishesFindings).toBe(false);
+      expect(publisher?.publishesProblems).toBe(false);
       expect(publisher?.publishEmptySummary).toBe(true);
       const results = await publisher?.publishSummary?.("", [
         { file: "src/app.ts", line: 3, severity: "high", category: "security", message: "Issue." },
@@ -542,7 +542,7 @@ describe("createOutputPublisherFromConfig", () => {
       expect(calls[1]?.init.headers).toMatchObject({ authorization: "token resolver-token" });
       const body = JSON.parse(calls[1]?.init.body ?? "{}");
       expect(body.title).toContain("[AICR Managed] [HIGH] security: src/app.ts:3");
-      expect(body.body).toContain("<!-- aicr:managed=finding-issue -->");
+      expect(body.body).toContain("<!-- aicr:managed=problem-issue -->");
     } finally {
       vi.unstubAllGlobals();
       if (originalToken === undefined) {
@@ -737,7 +737,7 @@ describe("createOutputPublisherResolverFromConfig", () => {
       });
 
       expect(publisher).toBeDefined();
-      await publisher?.publishFinding({
+      await publisher?.publishProblem({
         file: "src/app.ts",
         line: 3,
         severity: "medium",
@@ -810,7 +810,7 @@ describe("createOutputPublisherResolverFromConfig", () => {
       });
 
       expect(publisher).toBeDefined();
-      await publisher?.publishFinding({
+      await publisher?.publishProblem({
         file: "src/app.ts",
         line: 3,
         severity: "medium",
@@ -840,7 +840,7 @@ describe("createOutputPublisherResolverFromConfig", () => {
     }
   });
 
-  it("resolves a finding issue lifecycle channel for push events", async () => {
+  it("resolves a problem issue lifecycle channel for push events", async () => {
     const calls: { url: string; init: { body?: string; method?: string } }[] = [];
     vi.stubGlobal("fetch", async (url: string, init?: { body?: string; method?: string }) => {
       calls.push({ url, init: init ?? {} });
@@ -854,12 +854,12 @@ describe("createOutputPublisherResolverFromConfig", () => {
         outputs: {
           template_engine: "handlebars",
           channels: [
-            { name: "gitea-finding-issues", kind: "gitea_finding_issue", trigger: "gitea-internal" },
+            { name: "gitea-problem-issues", kind: "gitea_problem_issue", trigger: "gitea-internal" },
           ],
           routes: {
             default: {},
             rules: [
-              { match: { target_kind: "push" }, summary: ["gitea-finding-issues"] },
+              { match: { target_kind: "push" }, summary: ["gitea-problem-issues"] },
             ],
           },
         },

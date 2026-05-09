@@ -30,19 +30,19 @@ import {
   type AicrOutputToolName,
   type AicrOutputState,
   type FetchMoreContextInput,
-  type PublishFindingInput,
+  type ReportProblemInput,
 } from "@aicr/mcp-output";
 import {
   buildAtMentions,
-  computeFindingFingerprint,
+  computeProblemFingerprint,
   createTemplateResolver,
-  toTemplateFinding,
+  toTemplateProblem,
   type AuthorResolutionOptions,
   type TemplateContext,
   type TemplateResolver,
   type MentionChannelKind,
 } from "@aicr/outputs";
-import type { DispatchResult, ReviewFinding } from "@aicr/outputs";
+import type { DispatchResult, ReviewProblem } from "@aicr/outputs";
 import type { SandboxBackend, SandboxSpawnResult } from "@aicr/sandbox";
 import type { ChangeRange, ExtraContextRequest, ParsedDiff, VcsAdapter } from "@aicr/vcs";
 
@@ -53,11 +53,15 @@ export interface DiffCapableVcsAdapter extends VcsAdapter {
 export type ReviewDispatchResult = DispatchResult | readonly DispatchResult[];
 
 export interface ReviewOutputPublisher {
+  readonly publishesProblems?: boolean;
+  /** @deprecated Use publishesProblems. */
   readonly publishesFindings?: boolean;
   readonly handlesRendering?: boolean;
   readonly publishEmptySummary?: boolean;
-  publishFinding(finding: ReviewFinding): Promise<ReviewDispatchResult>;
-  publishSummary?(summary: string, findings?: readonly ReviewFinding[]): Promise<ReviewDispatchResult>;
+  publishProblem?(problem: ReviewProblem): Promise<ReviewDispatchResult>;
+  /** @deprecated Use publishProblem. */
+  publishFinding?(problem: ReviewProblem): Promise<ReviewDispatchResult>;
+  publishSummary?(summary: string, problems?: readonly ReviewProblem[]): Promise<ReviewDispatchResult>;
 }
 
 export type ReviewOutputPublisherResolver = (
@@ -113,7 +117,9 @@ export interface ReviewOrchestrationResult {
   readonly fetchedFiles: readonly string[];
   readonly diffFileCount: number;
   readonly promptTokenEstimate: number;
-  readonly findingCount: number;
+  readonly problemCount: number;
+  /** @deprecated Use problemCount. */
+  readonly findingCount?: number;
   readonly summaryCount: number;
   readonly contextRequestCount: number;
   readonly dispatchCount: number;
@@ -139,7 +145,9 @@ export interface ReviewOrchestrationWebhookSummary {
   readonly fetchedFileCount: number;
   readonly diffFileCount: number;
   readonly promptTokenEstimate: number;
-  readonly findingCount: number;
+  readonly problemCount: number;
+  /** @deprecated Use problemCount. */
+  readonly findingCount?: number;
   readonly summaryCount: number;
   readonly contextRequestCount: number;
   readonly dispatchCount: number;
@@ -156,6 +164,26 @@ export interface ReviewOrchestrationWebhookSummary {
 interface ToolCallEnvelope {
   readonly name: AicrOutputToolName;
   readonly input: unknown;
+}
+
+interface ContextToolResponse {
+  readonly path?: string;
+  readonly content?: string;
+  readonly error?: string;
+}
+
+interface InvalidToolCallResponse {
+  readonly name: AicrOutputToolName;
+  readonly error: string;
+}
+
+interface ToolCallExecutionResult {
+  readonly toolCallCount: number;
+  readonly reviewOutputCount: number;
+  readonly contextResponses: readonly ContextToolResponse[];
+  readonly invalidContextRequestCount: number;
+  readonly invalidReviewOutputCount: number;
+  readonly invalidReviewOutputs: readonly InvalidToolCallResponse[];
 }
 
 function formatFilePath(file: { readonly oldPath?: string; readonly newPath?: string }): string {
@@ -196,9 +224,14 @@ function buildJsonToolContract(): string {
   return [
     "Model output format:",
     "Return a single JSON object and no prose.",
+    "Do not return only aicr.fetch_more_context; after any context request you must return a final review result.",
+    "Never call aicr.fetch_more_context with an empty path; path must be one of the changed files listed in this task.",
+    "For push/commit/change-commit events, include aicr.publish_summary even when there are no actionable problems so notification channels receive the analysis result.",
     "Preferred shape:",
-    '{"toolCalls":[{"name":"aicr.publish_finding","input":{"file":"src/file.ts","line":1,"severity":"medium","category":"correctness","message":"..."}}],"notes":"optional"}',
-    "Alternatively use findings/summary/skipReason fields; AICR will translate them into tool calls.",
+    '{"toolCalls":[{"name":"aicr.report_problem","input":{"file":"src/file.ts","line":1,"severity":"medium","category":"correctness","message":"..."}}],"notes":"optional"}',
+    '{"toolCalls":[{"name":"aicr.publish_summary","input":{"markdown":"Review completed; no actionable problems."}}]}',
+    "Alternatively use problems/summary/skipReason fields; AICR will translate them into tool calls.",
+    "Legacy findings arrays are still accepted for backward compatibility but are not preferred.",
   ].join("\n");
 }
 
@@ -308,6 +341,42 @@ async function runAgentReview(
   };
 }
 
+async function requestReviewCompletion(
+  sourceRoot: string,
+  systemPrompt: string,
+  options: ServerReviewOrchestrationOptions,
+  followUp?: { readonly previousOutput: string; readonly prompt: string },
+): Promise<{ readonly llmResult: ChatCompletionResult; readonly agentResult?: SandboxSpawnResult }> {
+  if (options.sandbox && options.agentAdapter) {
+    const task = followUp
+      ? [
+          systemPrompt,
+          "",
+          "Previous model output:",
+          followUp.previousOutput,
+          "",
+          followUp.prompt,
+        ].join("\n")
+      : systemPrompt;
+    return runAgentReview(sourceRoot, task, options);
+  }
+
+  const messages = followUp
+    ? [
+        { role: "system" as const, content: systemPrompt },
+        { role: "assistant" as const, content: followUp.previousOutput },
+        { role: "user" as const, content: followUp.prompt },
+      ]
+    : [{ role: "system" as const, content: systemPrompt }];
+
+  return {
+    llmResult: await options.llm.complete({
+      model: options.model,
+      messages,
+    }),
+  };
+}
+
 function stripReasoningBlocks(content: string): string {
   return content
     .replace(/<think\b[^>]*>[\s\S]*?<\/think>/giu, "")
@@ -396,7 +465,7 @@ function extractJsonPayload(content: string): unknown {
 
 function normalizeToolName(value: unknown): AicrOutputToolName {
   if (
-    value === "aicr.publish_finding" ||
+    value === "aicr.report_problem" ||
     value === "aicr.publish_summary" ||
     value === "aicr.skip" ||
     value === "aicr.fetch_more_context"
@@ -404,12 +473,17 @@ function normalizeToolName(value: unknown): AicrOutputToolName {
     return value;
   }
 
+  // Backward-compatible parser alias for older agent outputs; not advertised in the public tool registry.
+  if (value === "aicr.publish_finding") {
+    return "aicr.report_problem";
+  }
+
   throw new TypeError(`Unsupported AICR tool name: ${String(value)}`);
 }
 
-function findingToToolInput(value: unknown): PublishFindingInput {
+function problemToToolInput(value: unknown): ReportProblemInput {
   if (!isPlainObject(value)) {
-    throw new TypeError("finding must be an object.");
+    throw new TypeError("problem must be an object.");
   }
 
   return {
@@ -422,7 +496,7 @@ function findingToToolInput(value: unknown): PublishFindingInput {
     message: value.message,
     ...(value.suggestion !== undefined ? { suggestion: value.suggestion } : {}),
     ...(value.fingerprint !== undefined ? { fingerprint: value.fingerprint } : {}),
-  } as PublishFindingInput;
+  } as ReportProblemInput;
 }
 
 function parseXmlToolCalls(content: string): ToolCallEnvelope[] | null {
@@ -490,11 +564,18 @@ function parseToolCalls(content: string): ToolCallEnvelope[] {
   }
 
   const calls: ToolCallEnvelope[] = [];
-  if (Array.isArray(payload.findings)) {
+  if (Array.isArray(payload.problems)) {
     calls.push(
-      ...payload.findings.map((finding) => ({
-        name: "aicr.publish_finding" as const,
-        input: findingToToolInput(finding),
+      ...payload.problems.map((problem) => ({
+        name: "aicr.report_problem" as const,
+        input: problemToToolInput(problem),
+      })),
+    );
+  } else if (Array.isArray(payload.findings)) {
+    calls.push(
+      ...payload.findings.map((problem) => ({
+        name: "aicr.report_problem" as const,
+        input: problemToToolInput(problem),
       })),
     );
   }
@@ -513,22 +594,53 @@ function parseToolCalls(content: string): ToolCallEnvelope[] {
 async function callAicrTools(
   content: string,
   tools: readonly AicrOutputToolDefinition[],
-): Promise<void> {
+): Promise<ToolCallExecutionResult> {
   const toolMap = new Map(tools.map((tool) => [tool.name, tool]));
+  let toolCallCount = 0;
+  let reviewOutputCount = 0;
+  let invalidContextRequestCount = 0;
+  let invalidReviewOutputCount = 0;
+  const contextResponses: ContextToolResponse[] = [];
+  const invalidReviewOutputs: InvalidToolCallResponse[] = [];
   for (const toolCall of parseToolCalls(content)) {
+    toolCallCount += 1;
     const tool = toolMap.get(toolCall.name);
     if (!tool) {
       throw new TypeError(`AICR tool ${toolCall.name} is not registered.`);
     }
 
     try {
-      await tool.call(toolCall.input);
-    } catch (error) {
+      const result = await tool.call(toolCall.input);
       if (toolCall.name === "aicr.fetch_more_context") {
+        const input = isPlainObject(toolCall.input) ? toolCall.input : {};
+        contextResponses.push({
+          ...(typeof input.path === "string" ? { path: input.path } : {}),
+          ...(isPlainObject(result) && typeof result.content === "string" ? { content: result.content } : {}),
+        });
+      } else {
+        reviewOutputCount += 1;
+      }
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      if (toolCall.name === "aicr.fetch_more_context") {
+        invalidContextRequestCount += 1;
+        contextResponses.push({ error: errorMessage });
         console.warn(JSON.stringify({
           level: "warn",
           msg: "ignored invalid fetch_more_context tool call",
-          error: error instanceof Error ? error.message : String(error),
+          error: errorMessage,
+        }));
+        continue;
+      }
+
+      if (toolCall.name === "aicr.publish_summary") {
+        invalidReviewOutputCount += 1;
+        invalidReviewOutputs.push({ name: toolCall.name, error: errorMessage });
+        console.warn(JSON.stringify({
+          level: "warn",
+          msg: "ignored invalid review output tool call",
+          toolName: toolCall.name,
+          error: errorMessage,
         }));
         continue;
       }
@@ -536,6 +648,77 @@ async function callAicrTools(
       throw error;
     }
   }
+
+  return {
+    toolCallCount,
+    reviewOutputCount,
+    contextResponses,
+    invalidContextRequestCount,
+    invalidReviewOutputCount,
+    invalidReviewOutputs,
+  };
+}
+
+function hasFinalReviewOutput(state: AicrOutputState): boolean {
+  return state.problems.length > 0 || state.summaries.length > 0 || Boolean(state.skipReason);
+}
+
+function buildContextFollowUpPrompt(
+  changedPaths: readonly string[],
+  execution: ToolCallExecutionResult,
+): string {
+  const sections: string[] = [
+    "The previous output did not include final review problems, summary, or skip reason.",
+    "Use the original task plus the context below to finish the review now.",
+    "Return one JSON object only. Prefer problems plus summary; if there are no actionable problems, call aicr.publish_summary with a concise analysis result.",
+    "Do not call aicr.fetch_more_context again unless path is exactly one of the changed files listed below.",
+    "",
+    "Changed files:",
+    ...changedPaths.map((path) => `- ${path}`),
+  ];
+
+  if (execution.invalidContextRequestCount > 0) {
+    sections.push(
+      "",
+      "Ignored invalid context requests:",
+      ...execution.contextResponses
+        .filter((response) => response.error)
+        .map((response) => `- ${response.error}`),
+    );
+  }
+
+  if (execution.invalidReviewOutputCount > 0) {
+    sections.push(
+      "",
+      "Ignored invalid review output tool calls:",
+      ...execution.invalidReviewOutputs.map((response) => `- ${response.name}: ${response.error}`),
+    );
+  }
+
+  const validResponses = execution.contextResponses.filter((response) => response.path && response.content !== undefined);
+  if (validResponses.length > 0) {
+    sections.push("", "Fetched context:");
+    for (const response of validResponses) {
+      sections.push(
+        `\n--- ${response.path} ---`,
+        response.content ?? "",
+      );
+    }
+  }
+
+  return sections.join("\n");
+}
+
+function buildFallbackReviewSummary(
+  reviewEvent: ReviewEvent,
+  changedPaths: readonly string[],
+): string {
+  const target = reviewEvent.headSha ? `${reviewEvent.repoRef}@${reviewEvent.headSha}` : reviewEvent.repoRef;
+  return [
+    `AICR review completed for ${target}.`,
+    `Changed files analyzed: ${changedPaths.length}.`,
+    "The model did not return a valid final review payload after a format-repair retry; no actionable problems were published.",
+  ].join("\n");
 }
 
 function toExtraContextRequest(input: FetchMoreContextInput): ExtraContextRequest {
@@ -547,8 +730,8 @@ function toExtraContextRequest(input: FetchMoreContextInput): ExtraContextReques
   };
 }
 
-function toReviewFinding(input: PublishFindingInput): ReviewFinding {
-  const finding = {
+function toReviewProblem(input: ReportProblemInput): ReviewProblem {
+  const problem = {
     file: input.file,
     line: input.line,
     ...(input.end_line !== undefined ? { endLine: input.end_line } : {}),
@@ -559,22 +742,22 @@ function toReviewFinding(input: PublishFindingInput): ReviewFinding {
     ...(input.fingerprint ? { fingerprint: input.fingerprint } : {}),
   };
 
-  return finding.fingerprint ? finding : { ...finding, fingerprint: computeFindingFingerprint(finding) };
+  return problem.fingerprint ? problem : { ...problem, fingerprint: computeProblemFingerprint(problem) };
 }
 
-function pathMatchesDiffFile(findingPath: string, file: ParsedDiff["files"][number]): boolean {
-  const normalizedFindingPath = normalizePath(findingPath);
+function pathMatchesDiffFile(problemPath: string, file: ParsedDiff["files"][number]): boolean {
+  const normalizedProblemPath = normalizePath(problemPath);
   return [file.newPath, file.oldPath]
     .filter((path): path is string => Boolean(path))
-    .some((path) => normalizePath(path) === normalizedFindingPath);
+    .some((path) => normalizePath(path) === normalizedProblemPath);
 }
 
-function isLineCommentableInDiff(finding: ReviewFinding, diff: ParsedDiff | undefined): boolean | undefined {
+function isLineCommentableInDiff(problem: ReviewProblem, diff: ParsedDiff | undefined): boolean | undefined {
   if (!diff) {
     return undefined;
   }
 
-  const matchingFiles = diff.files.filter((file) => pathMatchesDiffFile(finding.file, file));
+  const matchingFiles = diff.files.filter((file) => pathMatchesDiffFile(problem.file, file));
   if (matchingFiles.length === 0) {
     return false;
   }
@@ -582,10 +765,26 @@ function isLineCommentableInDiff(finding: ReviewFinding, diff: ParsedDiff | unde
   return matchingFiles.some((file) =>
     file.hunks.some((hunk) =>
       hunk.lines.some((line) =>
-        (line.kind === "add" || line.kind === "context") && line.newLine === finding.line,
+        (line.kind === "add" || line.kind === "context") && line.newLine === problem.line,
       ),
     ),
   );
+}
+
+function publishesProblems(publisher: ReviewOutputPublisher): boolean {
+  return publisher.publishesProblems ?? publisher.publishesFindings ?? true;
+}
+
+function publishProblem(
+  publisher: ReviewOutputPublisher,
+  problem: ReviewProblem,
+): Promise<ReviewDispatchResult> {
+  const publish = publisher.publishProblem ?? publisher.publishFinding;
+  if (!publish) {
+    throw new TypeError("Review output publisher must provide publishProblem.");
+  }
+
+  return publish.call(publisher, problem);
 }
 
 function appendDispatchResults(target: DispatchResult[], result: ReviewDispatchResult): void {
@@ -616,6 +815,52 @@ export async function runReviewOrchestration(
   const changedPaths = [
     ...(options.changedPathsResolver?.(context) ?? range.files ?? context.reviewEvent.changedFiles ?? []),
   ];
+
+  if (changedPaths.length === 0 && !options.dryRun) {
+    console.info(JSON.stringify({
+      level: "info",
+      msg: "no changed files after filtering, skipping review",
+      triggerName: context.reviewEvent.triggerName,
+      workspaceId: context.reviewEvent.workspaceId,
+      repoRef: context.reviewEvent.repoRef,
+      headSha: context.reviewEvent.headSha,
+    }));
+    return {
+      status: "skipped",
+      sourceRoot: scopedTree.rootDir,
+      changedFiles: [],
+      fetchedFiles: scopedTree.fetchedFiles,
+      diffFileCount: 0,
+      promptTokenEstimate: 0,
+      problemCount: 0,
+      summaryCount: 0,
+      contextRequestCount: 0,
+      dispatchCount: 0,
+      skipReason: "no_changed_files",
+      model: { providerId: options.model.providerId, modelId: options.model.modelId },
+      preparedPrompt: {
+        reviewEvent: context.reviewEvent,
+        sourceRoot,
+        changedPaths: [],
+        taskContext: "",
+        discovery: { instructions: [], skills: [], droppedRefs: [], conflicts: [] },
+        prompt: {
+          systemPrompt: "",
+          tokenEstimate: 0,
+          repoInstructionSummaries: [],
+          activeSkillSummaries: [],
+          loadedInstructionRefs: [],
+          activatedSkillRefs: [],
+          droppedInstructionRefs: [],
+          conflicts: [],
+        },
+      },
+      outputState: { problems: [], summaries: [], contextRequests: [] },
+      dispatchResults: [],
+      llmResult: { providerId: options.model.providerId, modelId: options.model.modelId, content: "", raw: null },
+      scrubFindings: [],
+    };
+  }
   let diff: ParsedDiff | undefined;
   if (vcs.diff) {
     try {
@@ -691,16 +936,35 @@ export async function runReviewOrchestration(
     const result = await vcs.fetchExtraContext(toExtraContextRequest(request), workspaceRef);
     return result.content;
   });
-  const agentExecution = options.sandbox && options.agentAdapter
-    ? await runAgentReview(scopedTree.rootDir, llmSystemPrompt, options)
-    : undefined;
-  const llmResult = agentExecution?.llmResult ?? await options.llm.complete({
-    model: options.model,
-    messages: [{ role: "system", content: llmSystemPrompt }],
-  });
+  let completion = await requestReviewCompletion(scopedTree.rootDir, llmSystemPrompt, options);
+  const toolExecution = await callAicrTools(completion.llmResult.content, tools);
+  let outputState = collector.snapshot();
+  const shouldRepairModelOutput = !hasFinalReviewOutput(outputState) && (
+    toolExecution.contextResponses.length > 0 ||
+    toolExecution.invalidContextRequestCount > 0 ||
+    toolExecution.invalidReviewOutputCount > 0
+  );
 
-  await callAicrTools(llmResult.content, tools);
-  const outputState = collector.snapshot();
+  if (shouldRepairModelOutput) {
+    completion = await requestReviewCompletion(
+      scopedTree.rootDir,
+      llmSystemPrompt,
+      options,
+      {
+        previousOutput: completion.llmResult.content,
+        prompt: buildContextFollowUpPrompt(changedPaths, toolExecution),
+      },
+    );
+    await callAicrTools(completion.llmResult.content, tools);
+    outputState = collector.snapshot();
+    if (!hasFinalReviewOutput(outputState)) {
+      collector.publishSummary({ markdown: buildFallbackReviewSummary(context.reviewEvent, changedPaths) });
+      outputState = collector.snapshot();
+    }
+  }
+
+  const llmResult = completion.llmResult;
+  const agentResult = completion.agentResult;
   const dispatchResults: DispatchResult[] = [];
   const outputPublisher = options.outputPublisher ?? options.outputPublisherResolver?.(context);
 
@@ -721,7 +985,7 @@ export async function runReviewOrchestration(
     if (context.reviewEvent.url !== undefined) {
       eventCtx.url = context.reviewEvent.url;
     }
-    const baseTemplateContext: Omit<TemplateContext, "finding"> = {
+    const baseTemplateContext: Omit<TemplateContext, "problem" | "finding" | "problems" | "findings"> = {
       ...(Object.keys(eventCtx).length > 0 ? { event: eventCtx } : {}),
       repo: {
         fullName: context.reviewEvent.repoRef,
@@ -734,18 +998,18 @@ export async function runReviewOrchestration(
           ) }
         : {}),
     };
-    const reviewFindings: ReviewFinding[] = [];
-    for (const finding of outputState.findings) {
-      const rawReviewFinding = toReviewFinding(finding);
-      const lineCommentable = isLineCommentableInDiff(rawReviewFinding, diff);
-      const reviewFinding: ReviewFinding = lineCommentable === false
-        ? { ...rawReviewFinding, lineCommentAllowed: false }
-        : rawReviewFinding;
+    const reviewProblems: ReviewProblem[] = [];
+    for (const reportedProblem of outputState.problems) {
+      const rawReviewProblem = toReviewProblem(reportedProblem);
+      const lineCommentable = isLineCommentableInDiff(rawReviewProblem, diff);
+      const reviewProblem: ReviewProblem = lineCommentable === false
+        ? { ...rawReviewProblem, lineCommentAllowed: false }
+        : rawReviewProblem;
       let renderedMessage: string;
       let renderedSuggestion: string | undefined;
       if (enableScrub) {
-        const scrubbedMsg = scrubText(reviewFinding.message);
-        const scrubbedSuggestion = reviewFinding.suggestion ? scrubText(reviewFinding.suggestion) : undefined;
+        const scrubbedMsg = scrubText(reviewProblem.message);
+        const scrubbedSuggestion = reviewProblem.suggestion ? scrubText(reviewProblem.suggestion) : undefined;
         allScrubFindings.push(...scrubbedMsg.findings);
         if (scrubbedSuggestion) {
           allScrubFindings.push(...scrubbedSuggestion.findings);
@@ -753,48 +1017,48 @@ export async function runReviewOrchestration(
         renderedMessage = fixAndValidateMarkdown(scrubbedMsg.text);
         renderedSuggestion = scrubbedSuggestion ? fixAndValidateMarkdown(scrubbedSuggestion.text) : undefined;
       } else {
-        renderedMessage = fixAndValidateMarkdown(reviewFinding.message);
-        renderedSuggestion = reviewFinding.suggestion ? fixAndValidateMarkdown(reviewFinding.suggestion) : undefined;
+        renderedMessage = fixAndValidateMarkdown(reviewProblem.message);
+        renderedSuggestion = reviewProblem.suggestion ? fixAndValidateMarkdown(reviewProblem.suggestion) : undefined;
       }
 
       if (resolver) {
         const templateCtx: TemplateContext = {
           ...baseTemplateContext,
-          finding: toTemplateFinding({
-            ...reviewFinding,
+          problem: toTemplateProblem({
+            ...reviewProblem,
             message: renderedMessage,
             ...(renderedSuggestion ? { suggestion: renderedSuggestion } : {}),
           }),
         };
-        const renderedMarkdown = fixAndValidateMarkdown(resolver.render("finding", templateCtx));
-        const preparedFinding: ReviewFinding = {
-          ...reviewFinding,
+        const renderedMarkdown = fixAndValidateMarkdown(resolver.render("problem", templateCtx));
+        const preparedProblem: ReviewProblem = {
+          ...reviewProblem,
           message: renderedMessage,
           ...(renderedSuggestion ? { suggestion: renderedSuggestion } : {}),
           renderedMarkdown,
         };
-        reviewFindings.push(preparedFinding);
-        if (outputPublisher.publishesFindings !== false) {
-          appendDispatchResults(dispatchResults, await outputPublisher.publishFinding(preparedFinding));
+        reviewProblems.push(preparedProblem);
+        if (publishesProblems(outputPublisher)) {
+          appendDispatchResults(dispatchResults, await publishProblem(outputPublisher, preparedProblem));
         }
         continue;
       }
 
-      const preparedFinding: ReviewFinding = {
-        ...reviewFinding,
+      const preparedProblem: ReviewProblem = {
+        ...reviewProblem,
         message: renderedMessage,
         ...(renderedSuggestion ? { suggestion: renderedSuggestion } : {}),
       };
-      reviewFindings.push(preparedFinding);
-      if (outputPublisher.publishesFindings !== false) {
-        appendDispatchResults(dispatchResults, await outputPublisher.publishFinding(preparedFinding));
+      reviewProblems.push(preparedProblem);
+      if (publishesProblems(outputPublisher)) {
+        appendDispatchResults(dispatchResults, await publishProblem(outputPublisher, preparedProblem));
       }
     }
 
     if (outputPublisher.publishSummary) {
       const summariesToPublish = outputState.summaries.length > 0
         ? outputState.summaries
-        : reviewFindings.length > 0 || outputPublisher.publishEmptySummary
+        : reviewProblems.length > 0 || outputPublisher.publishEmptySummary
           ? [""]
           : [];
       for (const summary of summariesToPublish) {
@@ -803,25 +1067,25 @@ export async function runReviewOrchestration(
           const summaryCtx: TemplateContext = {
             ...baseTemplateContext,
             summary: renderedSummary,
-            findings: reviewFindings.map((f) =>
-              toTemplateFinding({
-                ...f,
-                message: f.message,
-                ...(f.suggestion ? { suggestion: f.suggestion } : {}),
+            problems: reviewProblems.map((problem) =>
+              toTemplateProblem({
+                ...problem,
+                message: problem.message,
+                ...(problem.suggestion ? { suggestion: problem.suggestion } : {}),
               }),
             ),
           };
           renderedSummary = fixAndValidateMarkdown(resolver.render("summary", summaryCtx));
         }
-        appendDispatchResults(dispatchResults, await outputPublisher.publishSummary(renderedSummary, reviewFindings));
+        appendDispatchResults(dispatchResults, await outputPublisher.publishSummary(renderedSummary, reviewProblems));
       }
     }
   }
 
   const implicitSkipReason = !options.dryRun && !outputState.skipReason && dispatchResults.length === 0
-    ? outputState.findings.length > 0 && !outputPublisher
+    ? outputState.problems.length > 0 && !outputPublisher
       ? "no_output_publisher"
-      : "no_dispatchable_findings"
+      : "no_dispatchable_problems"
     : undefined;
   const skipReason = outputState.skipReason ?? implicitSkipReason;
   const status = skipReason
@@ -839,7 +1103,8 @@ export async function runReviewOrchestration(
     fetchedFiles: scopedTree.fetchedFiles,
     diffFileCount: diff?.files.length ?? 0,
     promptTokenEstimate: preparedPrompt.prompt.tokenEstimate,
-    findingCount: outputState.findings.length,
+    problemCount: outputState.problems.length,
+    findingCount: outputState.problems.length,
     summaryCount: outputState.summaries.length,
     contextRequestCount: outputState.contextRequests.length,
     dispatchCount: dispatchResults.length,
@@ -852,7 +1117,7 @@ export async function runReviewOrchestration(
     outputState,
     dispatchResults,
     llmResult,
-    ...(agentExecution?.agentResult ? { agentResult: agentExecution.agentResult } : {}),
+    ...(agentResult ? { agentResult } : {}),
     scrubFindings: allScrubFindings,
     ...(compressed ? { compressed } : {}),
     ...(originalTokenEstimate !== undefined ? { originalTokenEstimate } : {}),
@@ -869,7 +1134,8 @@ export function summarizeReviewOrchestrationForWebhook(
     fetchedFileCount: result.fetchedFiles.length,
     diffFileCount: result.diffFileCount,
     promptTokenEstimate: result.promptTokenEstimate,
-    findingCount: result.findingCount,
+    problemCount: result.problemCount,
+    findingCount: result.problemCount,
     summaryCount: result.summaryCount,
     contextRequestCount: result.contextRequestCount,
     dispatchCount: result.dispatchCount,

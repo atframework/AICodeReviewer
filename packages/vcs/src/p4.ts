@@ -160,6 +160,43 @@ function globToRegex(pattern: string): RegExp {
   return new RegExp(`^${withGlobstar}$`, "u");
 }
 
+function isP4AddAction(action: string | undefined): boolean {
+  return action === "add" || action === "branch" || action === "move/add";
+}
+
+function isP4DeleteAction(action: string | undefined): boolean {
+  return action === "delete" || action === "move/delete";
+}
+
+function isDevNullPath(path: string): boolean {
+  return path === "/dev/null" || path === "//dev/null";
+}
+
+function appendSyntheticUnifiedHeaders(
+  target: string[],
+  localPath: string,
+  action: string | undefined,
+): void {
+  target.push(`diff --git a/${localPath} b/${localPath}`);
+
+  if (isP4AddAction(action)) {
+    target.push("new file mode 100644");
+    target.push("--- /dev/null");
+    target.push(`+++ b/${localPath}`);
+    return;
+  }
+
+  if (isP4DeleteAction(action)) {
+    target.push("deleted file mode 100644");
+    target.push(`--- a/${localPath}`);
+    target.push("+++ /dev/null");
+    return;
+  }
+
+  target.push(`--- a/${localPath}`);
+  target.push(`+++ b/${localPath}`);
+}
+
 function filterFilesByWatchPath(files: readonly string[], watchPath: readonly string[] | undefined): string[] {
   if (!watchPath || watchPath.length === 0) {
     return [...files];
@@ -270,7 +307,13 @@ export class P4VcsAdapter implements VcsAdapter {
         ...(ev.baseSha ? { baseRevision: ev.baseSha } : {}),
         files: filtered,
       };
-    } catch {
+    } catch (error) {
+      console.warn(JSON.stringify({
+        level: "warn",
+        msg: "p4 describe -s failed in listChanges",
+        changeNumber,
+        error: error instanceof Error ? error.message : String(error),
+      }));
       return {
         headRevision: changeNumber,
         ...(ev.baseSha ? { baseRevision: ev.baseSha } : {}),
@@ -354,7 +397,7 @@ export class P4VcsAdapter implements VcsAdapter {
         "-du",
         revision,
       ]);
-      return this.parseP4DiffOutput(result.stdout);
+      return this.filterDiffToRange(this.parseP4DiffOutput(result.stdout), range.files);
     } catch {
       return { files: [] };
     }
@@ -403,31 +446,106 @@ export class P4VcsAdapter implements VcsAdapter {
     return normalizePath(path);
   }
 
-  private parseP4DiffOutput(stdout: string): ParsedDiff {
-    const unifiedLines: string[] = [];
-    const lines = stdout.split(/\r?\n/u);
-    let inDiff = false;
-    let currentFile = "";
+  private collectDescribeActions(lines: readonly string[]): ReadonlyMap<string, string> {
+    const actions = new Map<string, string>();
+    const filePattern = /^\.{3}\s+(\/\/[^#]+)#\d+\s+(\S+)/u;
 
     for (const line of lines) {
-      if (/^==== \/\/.*====/u.test(line)) {
-        inDiff = false;
+      const match = filePattern.exec(line.trim());
+      if (!match) {
         continue;
       }
 
-      const fileHeader = /^--- .*####.*####/u.test(line);
-      if (fileHeader) {
+      const depotFile = match[1];
+      const action = match[2];
+      if (!depotFile || !action) {
+        continue;
+      }
+
+      const localPath = this.depotToLocalPath(depotFile);
+      if (localPath) {
+        actions.set(localPath, action);
+      }
+    }
+
+    return actions;
+  }
+
+  private filterDiffToRange(diff: ParsedDiff, files: readonly string[]): ParsedDiff {
+    if (files.length === 0) {
+      return diff;
+    }
+
+    const allowed = new Set(files.map((file) => this.toLocalPath(file)));
+    return {
+      files: diff.files.filter((file) =>
+        [file.newPath, file.oldPath]
+          .filter((path): path is string => Boolean(path))
+          .some((path) => allowed.has(normalizePath(path))),
+      ),
+    };
+  }
+
+  private parseP4DiffOutput(stdout: string): ParsedDiff {
+    const unifiedLines: string[] = [];
+    const lines = stdout.split(/\r?\n/u);
+    const describeActions = this.collectDescribeActions(lines);
+    let inDiff = false;
+    let oldIsDevNull = false;
+    let pendingLocalPath: string | undefined;
+    let pendingAction: string | undefined;
+
+    for (const line of lines) {
+      const separatorMatch = /^==== (\/\/[^#\s]+)(?:#\d+)?\s+.*====$/u.exec(line);
+      if (separatorMatch?.[1]) {
+        inDiff = false;
+        oldIsDevNull = false;
+        pendingLocalPath = this.depotToLocalPath(separatorMatch[1]) ?? normalizePath(separatorMatch[1]);
+        pendingAction = describeActions.get(pendingLocalPath);
+        continue;
+      }
+
+      const headerMatch = /^--- ((?:\/\/|\/)[^#\s]+)(?:#\d+)?(?:\s|####|$)/u.exec(line);
+      if (headerMatch && !inDiff) {
         inDiff = true;
-        const parts = line.split(/\s+/u);
-        if (parts.length >= 4) {
-          currentFile = this.depotToLocalPath(parts[1]!) ?? parts[1]!;
-          unifiedLines.push(`diff --git a/${currentFile} b/${currentFile}`);
+        oldIsDevNull = isDevNullPath(headerMatch[1]!);
+        if (!oldIsDevNull) {
+          const localPath = this.depotToLocalPath(headerMatch[1]!) ?? normalizePath(headerMatch[1]!);
+          unifiedLines.push(`diff --git a/${localPath} b/${localPath}`);
+          unifiedLines.push(`--- a/${localPath}`);
         }
         continue;
       }
 
+      if (inDiff && /^\+\+\+ /u.test(line)) {
+        if (/^\+\+\+ \/dev\/null/u.test(line) || /^\+\+\+ \/\/dev\/null\b/u.test(line)) {
+          unifiedLines.push("+++ /dev/null");
+        } else {
+          const plusMatch = /^\+\+\+ ((?:\/\/|\/)[^#\s]+)(?:#\d+)?(?:\s|####|$)/u.exec(line);
+          if (plusMatch?.[1]) {
+            const localPath = this.depotToLocalPath(plusMatch[1]) ?? normalizePath(plusMatch[1]);
+            if (oldIsDevNull) {
+              unifiedLines.push(`diff --git a/${localPath} b/${localPath}`);
+              unifiedLines.push("--- /dev/null");
+              unifiedLines.push(`+++ b/${localPath}`);
+            } else {
+              unifiedLines.push(`+++ b/${localPath}`);
+            }
+          }
+        }
+        continue;
+      }
+
+      if (!inDiff && pendingLocalPath && /^@@ /u.test(line)) {
+        appendSyntheticUnifiedHeaders(unifiedLines, pendingLocalPath, pendingAction);
+        inDiff = true;
+      }
+
       if (inDiff) {
         if (/^\d+[,\d]*[acd][,\d]*\d+$/u.test(line)) {
+          continue;
+        }
+        if (line === "") {
           continue;
         }
         unifiedLines.push(line);

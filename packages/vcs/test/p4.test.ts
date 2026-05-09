@@ -47,7 +47,7 @@ const _printOutput = `//depot/main/src/foo.cpp#2 - edit change 12345 (text)
 int main() { return 0; }
 `;
 
-const _diffOutput = `Change 12345 by testuser@testclient on 2026/05/07 10:00:00
+const _diffOutputOldStyle = `Change 12345 by testuser@testclient on 2026/05/07 10:00:00
 
 \tTest commit
 
@@ -61,6 +61,83 @@ Affected files ...
 < old line
 ---
 > new line
+`;
+
+const diffOutputUnified = `Change 12345 by testuser@testclient on 2026/05/07 10:00:00
+
+\tTest commit
+
+Affected files ...
+
+... //depot/main/src/foo.cpp#2 edit
+
+==== //depot/main/src/foo.cpp#2 (text) ====
+
+--- //depot/main/src/foo.cpp#2\t2026/05/07 09:55:00
++++ //depot/main/src/foo.cpp#2\t2026/05/07 10:00:00
+@@ -4,1 +4,1 @@
+ old line
+-old line
++new line
+`;
+
+const diffOutputMultiFile = `Change 12345 by testuser@testclient on 2026/05/07 10:00:00
+
+\tTest commit
+
+Affected files ...
+
+... //depot/main/src/foo.cpp#2 edit
+... //depot/main/src/bar.h#1 add
+
+==== //depot/main/src/foo.cpp#2 (text) ====
+
+--- //depot/main/src/foo.cpp#2\t2026/05/07 09:55:00
++++ //depot/main/src/foo.cpp#2\t2026/05/07 10:00:00
+@@ -1,3 +1,3 @@
+ #include <iostream>
+-int main() { return 1; }
++int main() { return 0; }
+ // end
+
+==== //depot/main/src/bar.h#1 (text) ====
+
+--- //dev/null\t1970-01-01 00:00:00
++++ //depot/main/src/bar.h\t2026/05/07 10:00:00
+@@ -0,0 +1,5 @@
++#pragma once
++struct Bar {
++    int x;
++    int y;
++};
+`;
+
+const diffOutputP4NativeUnified = `Change 12345 by testuser@testclient on 2026/05/07 10:00:00
+
+  Test commit
+
+Affected files ...
+
+... //depot/main/src/foo.cpp#2 edit
+... //depot/main/src/bar.h#1 add
+... //depot/main/src/skip.cs#2 edit
+
+==== //depot/main/src/foo.cpp#2 (text+C) ====
+@@ -1,2 +1,3 @@
+ context
+-old value
++new value
++extra value
+
+==== //depot/main/src/bar.h#1 (text) ====
+@@ -0,0 +1,2 @@
++#pragma once
++void bar();
+
+==== //depot/main/src/skip.cs#2 (text) ====
+@@ -1,1 +1,1 @@
+-old
++new
 `;
 
 describe("P4VcsAdapter", () => {
@@ -332,6 +409,124 @@ Affected files ...
       );
 
       expect(result.content).toBe("line2\nline3");
+    });
+  });
+
+  describe("diff", () => {
+    it("parses unified diff from p4 describe -du", async () => {
+      const mockP4 = createMockP4Runner({
+        "describe -du 12345": { stdout: diffOutputUnified, stderr: "" },
+      });
+      const adapter = new P4VcsAdapter({
+        repositoryDir: "/tmp/test",
+        depot: "//depot/main",
+        p4: mockP4,
+      });
+
+      const result = await adapter.diff({ headRevision: "12345", files: ["src/foo.cpp"] });
+      expect(result.files.length).toBe(1);
+      expect(result.files[0]?.oldPath).toBe("src/foo.cpp");
+      expect(result.files[0]?.newPath).toBe("src/foo.cpp");
+      expect(result.files[0]?.hunks.length).toBe(1);
+      expect(result.files[0]?.hunks[0]?.lines.length).toBe(3);
+      expect(result.files[0]?.hunks[0]?.lines[1]?.kind).toBe("delete");
+      expect(result.files[0]?.hunks[0]?.lines[2]?.kind).toBe("add");
+    });
+
+    it("parses multi-file unified diff", async () => {
+      const mockP4 = createMockP4Runner({
+        "describe -du 12345": { stdout: diffOutputMultiFile, stderr: "" },
+      });
+      const adapter = new P4VcsAdapter({
+        repositoryDir: "/tmp/test",
+        depot: "//depot/main",
+        p4: mockP4,
+      });
+
+      const result = await adapter.diff({ headRevision: "12345", files: ["src/foo.cpp", "src/bar.h"] });
+      expect(result.files.length).toBe(2);
+
+      expect(result.files[0]?.oldPath).toBe("src/foo.cpp");
+      expect(result.files[0]?.newPath).toBe("src/foo.cpp");
+      expect(result.files[0]?.hunks[0]?.lines.length).toBe(4);
+
+      expect(result.files[1]?.status).toBe("added");
+      expect(result.files[1]?.newPath).toBe("src/bar.h");
+      expect(result.files[1]?.hunks[0]?.lines.length).toBe(5);
+    });
+
+    it("parses native p4 unified diff hunks without explicit file headers", async () => {
+      const mockP4 = createMockP4Runner({
+        "describe -du 12345": { stdout: diffOutputP4NativeUnified, stderr: "" },
+      });
+      const adapter = new P4VcsAdapter({
+        repositoryDir: "/tmp/test",
+        depot: "//depot/main",
+        p4: mockP4,
+      });
+
+      const result = await adapter.diff({ headRevision: "12345", files: ["src/foo.cpp", "src/bar.h"] });
+
+      expect(result.files.length).toBe(2);
+      expect(result.files[0]?.status).toBe("modified");
+      expect(result.files[0]?.oldPath).toBe("src/foo.cpp");
+      expect(result.files[0]?.newPath).toBe("src/foo.cpp");
+      expect(result.files[0]?.hunks[0]?.lines.map((line) => line.kind)).toEqual([
+        "context",
+        "delete",
+        "add",
+        "add",
+      ]);
+      expect(result.files[1]?.status).toBe("added");
+      expect(result.files[1]?.oldPath).toBeUndefined();
+      expect(result.files[1]?.newPath).toBe("src/bar.h");
+      expect(result.files.map((file) => file.newPath ?? file.oldPath)).not.toContain("src/skip.cs");
+    });
+
+    it("returns empty when no revision", async () => {
+      const adapter = new P4VcsAdapter({ repositoryDir: "/tmp/test" });
+      const result = await adapter.diff({ files: ["a.cpp"] });
+      expect(result.files).toEqual([]);
+    });
+
+    it("returns empty when p4 describe fails", async () => {
+      const mockP4 = async (): Promise<P4CommandResult> => {
+        throw new Error("connection failed");
+      };
+      const adapter = new P4VcsAdapter({
+        repositoryDir: "/tmp/test",
+        depot: "//depot/main",
+        p4: mockP4,
+      });
+
+      const result = await adapter.diff({ headRevision: "99999", files: ["a.cpp"] });
+      expect(result.files).toEqual([]);
+    });
+
+    it("handles empty diff output gracefully", async () => {
+      const mockP4 = createMockP4Runner({
+        "describe -du 12345": {
+          stdout: `Change 12345 by testuser@testclient on 2026/05/07 10:00:00
+
+\tTest commit
+
+Affected files ...
+
+... //depot/main/src/binary.png#1 add
+
+==== //depot/main/src/binary.png#1 (binary) ====
+`,
+          stderr: "",
+        },
+      });
+      const adapter = new P4VcsAdapter({
+        repositoryDir: "/tmp/test",
+        depot: "//depot/main",
+        p4: mockP4,
+      });
+
+      const result = await adapter.diff({ headRevision: "12345", files: ["src/binary.png"] });
+      expect(result.files).toEqual([]);
     });
   });
 

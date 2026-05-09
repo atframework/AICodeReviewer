@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  createGiteaFindingIssueDispatcher,
+  createGiteaProblemIssueDispatcher,
   type FetchLike,
-  type ReviewFinding,
+  type ReviewProblem,
 } from "../src/index.js";
 
 function response(body: unknown, status = 200): Awaited<ReturnType<FetchLike>> {
@@ -20,7 +20,7 @@ function response(body: unknown, status = 200): Awaited<ReturnType<FetchLike>> {
   };
 }
 
-const finding: ReviewFinding = {
+const problem: ReviewProblem = {
   file: "src/auth.ts",
   line: 12,
   severity: "critical",
@@ -31,18 +31,18 @@ const finding: ReviewFinding = {
 };
 
 const managedBody = [
-  "<!-- aicr:managed=finding-issue -->",
+  "<!-- aicr:managed=problem-issue -->",
   "<!-- aicr:channel=aicr-issues -->",
   "<!-- aicr:label=aicr-managed -->",
   "<!-- aicr:fingerprint=fp-old -->",
   "",
-  "Old finding",
+  "Old problem",
 ].join("\n");
 
-describe("createGiteaFindingIssueDispatcher", () => {
-  it("creates one marked issue per new finding", async () => {
+describe("createGiteaProblemIssueDispatcher", () => {
+  it("creates one marked issue per new problem", async () => {
     const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
-    const dispatcher = createGiteaFindingIssueDispatcher({
+    const dispatcher = createGiteaProblemIssueDispatcher({
       baseUrl: "https://gitea.example",
       token: "token-value",
       owner: "owent",
@@ -57,7 +57,7 @@ describe("createGiteaFindingIssueDispatcher", () => {
       },
     });
 
-    const results = await dispatcher.reconcileFindings([finding], "Summary text");
+    const results = await dispatcher.reconcileProblems([problem], "Summary text");
 
     expect(results).toHaveLength(1);
     expect(results[0]?.externalId).toBe("99");
@@ -66,7 +66,7 @@ describe("createGiteaFindingIssueDispatcher", () => {
     expect(calls[1]?.init?.headers).toMatchObject({ authorization: "token token-value" });
     const body = JSON.parse(calls[1]?.init?.body ?? "{}");
     expect(body.title).toContain("[AICR Test] [CRITICAL] security: src/auth.ts:12");
-    expect(body.body).toContain("<!-- aicr:managed=finding-issue -->");
+    expect(body.body).toContain("<!-- aicr:managed=problem-issue -->");
     expect(body.body).toContain("<!-- aicr:fingerprint=fp-sql -->");
     expect(body.body).toContain("Summary text");
     expect(body.labels).toEqual([1, 2]);
@@ -74,7 +74,7 @@ describe("createGiteaFindingIssueDispatcher", () => {
 
   it("does not duplicate an open managed issue with the same fingerprint", async () => {
     const calls: string[] = [];
-    const dispatcher = createGiteaFindingIssueDispatcher({
+    const dispatcher = createGiteaProblemIssueDispatcher({
       baseUrl: "https://gitea.example",
       owner: "owent",
       repo: "example",
@@ -91,15 +91,15 @@ describe("createGiteaFindingIssueDispatcher", () => {
       },
     });
 
-    const results = await dispatcher.reconcileFindings([finding]);
+    const results = await dispatcher.reconcileProblems([problem]);
 
     expect(results).toEqual([]);
     expect(calls).toHaveLength(1);
   });
 
-  it("closes stale managed issues when findings disappear", async () => {
+  it("closes stale managed issues when problems disappear", async () => {
     const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
-    const dispatcher = createGiteaFindingIssueDispatcher({
+    const dispatcher = createGiteaProblemIssueDispatcher({
       baseUrl: "https://gitea.example",
       owner: "owent",
       repo: "example",
@@ -120,7 +120,7 @@ describe("createGiteaFindingIssueDispatcher", () => {
       },
     });
 
-    const results = await dispatcher.reconcileFindings([]);
+    const results = await dispatcher.reconcileProblems([]);
 
     expect(results).toHaveLength(1);
     expect(results[0]?.raw).toMatchObject({ action: "closed", issueNumber: 42 });
@@ -134,7 +134,7 @@ describe("createGiteaFindingIssueDispatcher", () => {
 
   it("deletes stale managed issues when configured", async () => {
     const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
-    const dispatcher = createGiteaFindingIssueDispatcher({
+    const dispatcher = createGiteaProblemIssueDispatcher({
       baseUrl: "https://gitea.example",
       owner: "owent",
       repo: "example",
@@ -147,7 +147,7 @@ describe("createGiteaFindingIssueDispatcher", () => {
       },
     });
 
-    const results = await dispatcher.reconcileFindings([]);
+    const results = await dispatcher.reconcileProblems([]);
 
     expect(results).toHaveLength(1);
     expect(results[0]?.raw).toMatchObject({ action: "deleted", issueNumber: 42 });

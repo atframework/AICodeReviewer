@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import {
-	computeFindingFingerprint,
+	computeProblemFingerprint,
 	createGiteaIssueDispatcher,
 	createFeishuBotDispatcher,
 	createWeComBotDispatcher,
 	type FetchLike,
-	type ReviewFinding,
+	type ReviewProblem,
 } from "../src/index.js";
 
 function response(body: unknown, status = 200): Awaited<ReturnType<FetchLike>> {
@@ -23,7 +23,7 @@ function response(body: unknown, status = 200): Awaited<ReturnType<FetchLike>> {
 	};
 }
 
-const findings: readonly ReviewFinding[] = [
+const problems: readonly ReviewProblem[] = [
 	{
 		file: "src/app.ts",
 		line: 42,
@@ -43,7 +43,7 @@ const findings: readonly ReviewFinding[] = [
 ];
 
 describe("createGiteaIssueDispatcher", () => {
-	it("publishes aggregated findings as an issue comment", async () => {
+	it("publishes aggregated problems as an issue comment", async () => {
 		const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
 		const dispatcher = createGiteaIssueDispatcher({
 			baseUrl: "https://gitea.example",
@@ -58,7 +58,7 @@ describe("createGiteaIssueDispatcher", () => {
 			},
 		});
 
-		const result = await dispatcher.publishAggregatedFindings(findings, "Summary text");
+		const result = await dispatcher.publishAggregatedProblems(problems, "Summary text");
 
 		expect(result.channel).toBe("gitea-issue-internal");
 		expect(result.status).toBe("published");
@@ -82,7 +82,7 @@ describe("createGiteaIssueDispatcher", () => {
 			fetch: async () => response({ message: "forbidden" }, 403),
 		});
 
-		await expect(dispatcher.publishAggregatedFindings(findings)).rejects.toThrow("Gitea issue API returned 403");
+		await expect(dispatcher.publishAggregatedProblems(problems)).rejects.toThrow("Gitea issue API returned 403");
 	});
 
 	it("publishes without summary when not provided", async () => {
@@ -98,16 +98,16 @@ describe("createGiteaIssueDispatcher", () => {
 			},
 		});
 
-		await dispatcher.publishAggregatedFindings(findings);
+		await dispatcher.publishAggregatedProblems(problems);
 
 		const body = JSON.parse(calls[0]?.init?.body ?? "{}");
-		expect(body.body).toContain("Findings (2)");
+		expect(body.body).toContain("Problems (2)");
 		expect(body.body).not.toContain("undefined");
 	});
 });
 
 describe("createFeishuBotDispatcher", () => {
-	it("publishes aggregated findings to Feishu webhook", async () => {
+	it("publishes aggregated problems to Feishu webhook", async () => {
 		const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
 		const dispatcher = createFeishuBotDispatcher({
 			webhookUrl: "https://open.feishu.cn/open-apis/bot/v2/hook/test",
@@ -118,8 +118,8 @@ describe("createFeishuBotDispatcher", () => {
 			},
 		});
 
-		const result = await dispatcher.publishAggregatedFindings(
-			findings,
+		const result = await dispatcher.publishAggregatedProblems(
+			problems,
 			"Review summary",
 			"<at user_id=\"all\"></at>",
 		);
@@ -141,7 +141,7 @@ describe("createFeishuBotDispatcher", () => {
 			fetch: async () => response({ code: 19001 }, 400),
 		});
 
-		await expect(dispatcher.publishAggregatedFindings(findings)).rejects.toThrow("Feishu webhook returned 400");
+		await expect(dispatcher.publishAggregatedProblems(problems)).rejects.toThrow("Feishu webhook returned 400");
 	});
 
 	it("includes sign when secret is provided", async () => {
@@ -155,7 +155,7 @@ describe("createFeishuBotDispatcher", () => {
 			},
 		});
 
-		await dispatcher.publishAggregatedFindings(findings);
+		await dispatcher.publishAggregatedProblems(problems);
 
 		const body = JSON.parse(calls[0]?.init?.body ?? "{}");
 		expect(body.sign).toBeDefined();
@@ -164,7 +164,7 @@ describe("createFeishuBotDispatcher", () => {
 });
 
 describe("createWeComBotDispatcher", () => {
-	it("publishes aggregated findings to WeCom webhook", async () => {
+	it("publishes aggregated problems to WeCom webhook", async () => {
 		const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
 		const dispatcher = createWeComBotDispatcher({
 			webhookUrl: "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=test",
@@ -175,7 +175,7 @@ describe("createWeComBotDispatcher", () => {
 			},
 		});
 
-		const result = await dispatcher.publishAggregatedFindings(findings, "Review done");
+		const result = await dispatcher.publishAggregatedProblems(problems, "Review done");
 
 		expect(result.channel).toBe("wecom-ops");
 		expect(result.status).toBe("published");
@@ -198,7 +198,7 @@ describe("createWeComBotDispatcher", () => {
 			},
 		});
 
-		await dispatcher.publishAggregatedFindings(findings);
+		await dispatcher.publishAggregatedProblems(problems);
 
 		const body = JSON.parse(calls[0]?.init?.body ?? "{}");
 		const md = body.markdown as Record<string, unknown>;
@@ -215,7 +215,7 @@ describe("createWeComBotDispatcher", () => {
 			},
 		});
 
-		await dispatcher.publishAggregatedFindings(findings, "Review done", "<@dev>");
+		await dispatcher.publishAggregatedProblems(problems, "Review done", "<@dev>");
 
 		const body = JSON.parse(calls[0]?.init?.body ?? "{}");
 		const md = body.markdown as Record<string, unknown>;
@@ -228,16 +228,16 @@ describe("createWeComBotDispatcher", () => {
 			fetch: async () => response({ errcode: 40001 }, 400),
 		});
 
-		await expect(dispatcher.publishAggregatedFindings(findings)).rejects.toThrow("WeCom webhook returned 400");
+		await expect(dispatcher.publishAggregatedProblems(problems)).rejects.toThrow("WeCom webhook returned 400");
 	});
 
-	it("truncates findings to 10 in display", async () => {
-		const manyFindings: ReviewFinding[] = Array.from({ length: 15 }, (_, i) => ({
+	it("truncates problems to 10 in display", async () => {
+		const manyProblems: ReviewProblem[] = Array.from({ length: 15 }, (_, i) => ({
 			file: `file${i}.ts`,
 			line: i + 1,
 			severity: "low" as const,
 			category: "test",
-			message: `Finding ${i}`,
+			message: `Problem ${i}`,
 		}));
 
 		const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
@@ -249,26 +249,26 @@ describe("createWeComBotDispatcher", () => {
 			},
 		});
 
-		await dispatcher.publishAggregatedFindings(manyFindings);
+		await dispatcher.publishAggregatedProblems(manyProblems);
 
 		const body = JSON.parse(calls[0]?.init?.body ?? "{}");
 		const md = body.markdown as Record<string, unknown>;
-		expect(md.content).toContain("Findings: 15");
+		expect(md.content).toContain("Problems: 15");
 		expect(md.content).toContain("file0.ts");
 		expect(md.content).toContain("file9.ts");
 		expect(md.content).not.toContain("file10.ts");
 	});
 });
 
-describe("computeFindingFingerprint", () => {
+describe("computeProblemFingerprint", () => {
 	it("produces a deterministic hash for same input", () => {
-		const fp1 = computeFindingFingerprint({
+		const fp1 = computeProblemFingerprint({
 			file: "src/app.ts",
 			line: 42,
 			category: "correctness",
 			message: "Bug found.",
 		});
-		const fp2 = computeFindingFingerprint({
+		const fp2 = computeProblemFingerprint({
 			file: "src/app.ts",
 			line: 42,
 			category: "correctness",
@@ -279,13 +279,13 @@ describe("computeFindingFingerprint", () => {
 	});
 
 	it("produces different hashes for different inputs", () => {
-		const fp1 = computeFindingFingerprint({
+		const fp1 = computeProblemFingerprint({
 			file: "src/app.ts",
 			line: 42,
 			category: "correctness",
 			message: "Bug found.",
 		});
-		const fp2 = computeFindingFingerprint({
+		const fp2 = computeProblemFingerprint({
 			file: "src/app.ts",
 			line: 43,
 			category: "correctness",
@@ -296,7 +296,7 @@ describe("computeFindingFingerprint", () => {
 	});
 
 	it("returns a non-empty string", () => {
-		const fp = computeFindingFingerprint({
+		const fp = computeProblemFingerprint({
 			file: "a.ts",
 			line: 1,
 			category: "test",

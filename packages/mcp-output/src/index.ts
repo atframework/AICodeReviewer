@@ -1,18 +1,21 @@
 export const mcpOutputPackageName = "@aicr/mcp-output";
 
 export type AicrOutputToolName =
-	| "aicr.publish_finding"
+	| "aicr.report_problem"
 	| "aicr.publish_summary"
 	| "aicr.skip"
 	| "aicr.fetch_more_context";
 
-export type FindingSeverity = "info" | "low" | "medium" | "high" | "critical";
+export type ProblemSeverity = "info" | "low" | "medium" | "high" | "critical";
 
-export interface PublishFindingInput {
+/** @deprecated Use ProblemSeverity. */
+export type FindingSeverity = ProblemSeverity;
+
+export interface ReportProblemInput {
 	readonly file: string;
 	readonly line: number;
 	readonly end_line?: number;
-	readonly severity: FindingSeverity;
+	readonly severity: ProblemSeverity;
 	readonly category: string;
 	readonly message: string;
 	readonly suggestion?: string;
@@ -37,7 +40,9 @@ export interface FetchMoreContextInput {
 }
 
 export interface AicrOutputState {
-	readonly findings: readonly PublishFindingInput[];
+	readonly problems: readonly ReportProblemInput[];
+	/** @deprecated Use problems. */
+	readonly findings?: readonly ReportProblemInput[];
 	readonly summaries: readonly string[];
 	readonly contextRequests: readonly FetchMoreContextInput[];
 	readonly skipReason?: string;
@@ -74,8 +79,8 @@ function requirePositiveInteger(value: unknown, label: string): number {
 	return Number(value);
 }
 
-function parseFinding(input: unknown): PublishFindingInput {
-	assertPlainObject(input, "publish_finding input");
+function parseProblem(input: unknown): ReportProblemInput {
+	assertPlainObject(input, "report_problem input");
 	const severity = requireString(input.severity, "severity");
 	if (!["info", "low", "medium", "high", "critical"].includes(severity)) {
 		throw new TypeError("severity must be one of info, low, medium, high, critical.");
@@ -85,7 +90,7 @@ function parseFinding(input: unknown): PublishFindingInput {
 		file: requireString(input.file, "file"),
 		line: requirePositiveInteger(input.line, "line"),
 		...(input.end_line !== undefined ? { end_line: requirePositiveInteger(input.end_line, "end_line") } : {}),
-		severity: severity as FindingSeverity,
+		severity: severity as ProblemSeverity,
 		category: requireString(input.category, "category"),
 		message: requireString(input.message, "message"),
 		...(input.suggestion !== undefined ? { suggestion: requireString(input.suggestion, "suggestion") } : {}),
@@ -127,14 +132,14 @@ function parseFetchMoreContext(input: unknown): FetchMoreContextInput {
 }
 
 export class AicrOutputCollector {
-	private readonly findings: PublishFindingInput[] = [];
+	private readonly problems: ReportProblemInput[] = [];
 	private readonly summaries: string[] = [];
 	private readonly contextRequests: FetchMoreContextInput[] = [];
 	private skipReasonValue: string | undefined;
 
-	publishFinding(input: PublishFindingInput): { accepted: true; findingCount: number } {
-		this.findings.push(input);
-		return { accepted: true, findingCount: this.findings.length };
+	reportProblem(input: ReportProblemInput): { accepted: true; problemCount: number } {
+		this.problems.push(input);
+		return { accepted: true, problemCount: this.problems.length };
 	}
 
 	publishSummary(input: PublishSummaryInput): { accepted: true; summaryCount: number } {
@@ -152,8 +157,10 @@ export class AicrOutputCollector {
 	}
 
 	snapshot(): AicrOutputState {
+		const problems = [...this.problems];
 		return {
-			findings: [...this.findings],
+			problems,
+			findings: problems,
 			summaries: [...this.summaries],
 			contextRequests: [...this.contextRequests],
 			...(this.skipReasonValue ? { skipReason: this.skipReasonValue } : {}),
@@ -161,7 +168,7 @@ export class AicrOutputCollector {
 	}
 }
 
-const findingInputSchema = {
+const problemInputSchema = {
 	type: "object",
 	required: ["file", "line", "severity", "category", "message"],
 	properties: {
@@ -182,11 +189,11 @@ export function createAicrOutputToolRegistry(
 ): readonly AicrOutputToolDefinition[] {
 	return [
 		{
-			name: "aicr.publish_finding",
-			description: "Publish one actionable code review finding anchored to a changed line.",
-			inputSchema: findingInputSchema,
+			name: "aicr.report_problem",
+			description: "Report one actionable code review problem anchored to a changed line.",
+			inputSchema: problemInputSchema,
 			async call(input: unknown) {
-				return collector.publishFinding(parseFinding(input));
+				return collector.reportProblem(parseProblem(input));
 			},
 		},
 		{
@@ -203,7 +210,7 @@ export function createAicrOutputToolRegistry(
 		},
 		{
 			name: "aicr.skip",
-			description: "Skip output when there are no actionable findings.",
+			description: "Skip output when there are no actionable problems.",
 			inputSchema: {
 				type: "object",
 				required: ["reason"],

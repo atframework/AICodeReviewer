@@ -3,7 +3,9 @@ import { join } from "node:path";
 
 import Handlebars from "handlebars";
 
-export type TemplateKind = "finding" | "summary";
+type PrimaryTemplateKind = "problem" | "summary";
+
+export type TemplateKind = PrimaryTemplateKind | "finding";
 
 export interface TemplateContext {
 	readonly event?: {
@@ -19,12 +21,16 @@ export interface TemplateContext {
 		readonly id?: string;
 	};
 	readonly atMentions?: string;
-	readonly findings?: readonly TemplateFinding[];
+	readonly problems?: readonly TemplateProblem[];
+	readonly problem?: TemplateProblem;
+	/** @deprecated Use problems. */
+	readonly findings?: readonly TemplateProblem[];
 	readonly summary?: string;
-	readonly finding?: TemplateFinding;
+	/** @deprecated Use problem. */
+	readonly finding?: TemplateProblem;
 }
 
-export interface TemplateFinding {
+export interface TemplateProblem {
 	readonly file: string;
 	readonly line: number;
 	readonly endLine?: number;
@@ -56,12 +62,12 @@ const BUILTIN_SUMMARY_TEMPLATE = `## AI Code Review Summary
 No summary provided.
 {{/if}}
 
-{{#if findings}}
-### Findings ({{findings.length}})
+{{#if problems}}
+### Problems ({{problems.length}})
 
 | # | Severity | Category | Location | Message |
 |---|----------|----------|----------|---------|
-{{#each findings}}
+{{#each problems}}
 | {{@index}} | {{severity}} | {{category}} | \`{{location}}\` | {{message}} |
 {{/each}}
 {{/if}}
@@ -70,20 +76,20 @@ No summary provided.
 *Powered by AICodeReviewer*{{#if run.id}} | Run: {{run.id}}{{/if}}
 `;
 
-const BUILTIN_FINDING_TEMPLATE = `**{{finding.severity}} · {{finding.category}}**
+const BUILTIN_PROBLEM_TEMPLATE = `**{{problem.severity}} · {{problem.category}}**
 
-{{finding.message}}
+{{problem.message}}
 
-Location: \`{{finding.location}}\`
-{{#if finding.suggestion}}
+Location: \`{{problem.location}}\`
+{{#if problem.suggestion}}
 
 **Suggested fix:**
 
-{{finding.suggestion}}
+{{problem.suggestion}}
 {{/if}}
-{{#if finding.fingerprint}}
+{{#if problem.fingerprint}}
 
-<!-- aicr:fingerprint={{finding.fingerprint}} -->
+<!-- aicr:fingerprint={{problem.fingerprint}} -->
 {{/if}}
 `;
 
@@ -104,10 +110,10 @@ const BUILTIN_GITEA_ISSUE_SUMMARY_TEMPLATE = `## AI Code Review Report
 No summary provided.
 {{/if}}
 
-{{#if findings}}
-### All Findings ({{findings.length}})
+{{#if problems}}
+### All Problems ({{problems.length}})
 
-{{#each findings}}
+{{#each problems}}
 #### {{@index}}. [{{severity}}] {{category}} — \`{{location}}\`
 
 {{message}}
@@ -125,9 +131,9 @@ No summary provided.
 
 const BUILTIN_FEISHU_SUMMARY_TEMPLATE = `{{#if event.title}}**{{event.title}}**{{/if}}
 
-{{#if findings}}Findings: {{findings.length}}{{/if}}
+{{#if problems}}Problems: {{problems.length}}{{/if}}
 {{#if event.url}}
-[View PR]({{event.url}})
+[View changes]({{event.url}})
 {{/if}}
 {{#if summary}}
 
@@ -136,7 +142,7 @@ const BUILTIN_FEISHU_SUMMARY_TEMPLATE = `{{#if event.title}}**{{event.title}}**{
 `;
 
 const BUILTIN_WECOM_SUMMARY_TEMPLATE = `{{#if event.title}}{{event.title}}{{/if}}
-{{#if findings}}Findings: {{findings.length}}{{/if}}
+{{#if problems}}Problems: {{problems.length}}{{/if}}
 {{#if event.url}}
 {{event.url}}
 {{/if}}
@@ -146,34 +152,38 @@ const BUILTIN_WECOM_SUMMARY_TEMPLATE = `{{#if event.title}}{{event.title}}{{/if}
 {{/if}}
 `;
 
-const builtinTemplates: Readonly<Record<string, Record<TemplateKind, string>>> = {
+const builtinTemplates: Readonly<Record<string, Record<PrimaryTemplateKind, string>>> = {
 	gitea_pr_review: {
 		summary: BUILTIN_SUMMARY_TEMPLATE,
-		finding: BUILTIN_FINDING_TEMPLATE,
+		problem: BUILTIN_PROBLEM_TEMPLATE,
 	},
 	gitea_issue: {
 		summary: BUILTIN_GITEA_ISSUE_SUMMARY_TEMPLATE,
-		finding: BUILTIN_FINDING_TEMPLATE,
+		problem: BUILTIN_PROBLEM_TEMPLATE,
+	},
+	gitea_problem_issue: {
+		summary: BUILTIN_GITEA_ISSUE_SUMMARY_TEMPLATE,
+		problem: BUILTIN_PROBLEM_TEMPLATE,
 	},
 	gitea_finding_issue: {
 		summary: BUILTIN_GITEA_ISSUE_SUMMARY_TEMPLATE,
-		finding: BUILTIN_FINDING_TEMPLATE,
+		problem: BUILTIN_PROBLEM_TEMPLATE,
 	},
 	github_pr_review: {
 		summary: BUILTIN_SUMMARY_TEMPLATE,
-		finding: BUILTIN_FINDING_TEMPLATE,
+		problem: BUILTIN_PROBLEM_TEMPLATE,
 	},
 	gitlab_mr_review: {
 		summary: BUILTIN_SUMMARY_TEMPLATE,
-		finding: BUILTIN_FINDING_TEMPLATE,
+		problem: BUILTIN_PROBLEM_TEMPLATE,
 	},
 	feishu_bot: {
 		summary: BUILTIN_FEISHU_SUMMARY_TEMPLATE,
-		finding: BUILTIN_FINDING_TEMPLATE,
+		problem: BUILTIN_PROBLEM_TEMPLATE,
 	},
 	wecom_bot: {
 		summary: BUILTIN_WECOM_SUMMARY_TEMPLATE,
-		finding: BUILTIN_FINDING_TEMPLATE,
+		problem: BUILTIN_PROBLEM_TEMPLATE,
 	},
 };
 
@@ -190,13 +200,28 @@ function compileTemplate(source: string, cacheKey: string): Handlebars.TemplateD
 	return compiled;
 }
 
+function normalizeTemplateKind(kind: TemplateKind): PrimaryTemplateKind {
+	return kind === "finding" ? "problem" : kind;
+}
+
+function withTemplateAliases(context: TemplateContext): TemplateContext {
+	const problems = context.problems ?? context.findings;
+	const problem = context.problem ?? context.finding;
+	return {
+		...context,
+		...(problems ? { problems, findings: problems } : {}),
+		...(problem ? { problem, finding: problem } : {}),
+	};
+}
+
 export function getBuiltinTemplate(channelKind: string, kind: TemplateKind): string {
+	const normalizedKind = normalizeTemplateKind(kind);
 	const channelTemplates = builtinTemplates[channelKind];
 	if (channelTemplates) {
-		return channelTemplates[kind];
+		return channelTemplates[normalizedKind];
 	}
 
-	return builtinTemplates["gitea_pr_review"]![kind];
+	return builtinTemplates["gitea_pr_review"]![normalizedKind];
 }
 
 export function clearTemplateCache(): void {
@@ -210,7 +235,7 @@ export function renderTemplate(
 ): string {
 	const key = cacheKey ?? source;
 	const compiled = compileTemplate(source, key);
-	return compiled(context);
+	return compiled(withTemplateAliases(context));
 }
 
 export function renderBuiltinTemplate(
@@ -222,7 +247,7 @@ export function renderBuiltinTemplate(
 	return renderTemplate(source, context, `builtin:${channelKind}:${kind}`);
 }
 
-export function toTemplateFinding(finding: {
+export function toTemplateProblem(problem: {
 	readonly file: string;
 	readonly line: number;
 	readonly endLine?: number;
@@ -231,19 +256,19 @@ export function toTemplateFinding(finding: {
 	readonly message: string;
 	readonly suggestion?: string;
 	readonly fingerprint?: string;
-}): TemplateFinding {
+}): TemplateProblem {
 	return {
-		file: finding.file,
-		line: finding.line,
-		...(finding.endLine !== undefined ? { endLine: finding.endLine } : {}),
-		severity: finding.severity.toUpperCase(),
-		category: finding.category,
-		message: finding.message,
-		...(finding.suggestion ? { suggestion: finding.suggestion } : {}),
-		...(finding.fingerprint ? { fingerprint: finding.fingerprint } : {}),
-		location: finding.endLine
-			? `${finding.file}:${finding.line}-${finding.endLine}`
-			: `${finding.file}:${finding.line}`,
+		file: problem.file,
+		line: problem.line,
+		...(problem.endLine !== undefined ? { endLine: problem.endLine } : {}),
+		severity: problem.severity.toUpperCase(),
+		category: problem.category,
+		message: problem.message,
+		...(problem.suggestion ? { suggestion: problem.suggestion } : {}),
+		...(problem.fingerprint ? { fingerprint: problem.fingerprint } : {}),
+		location: problem.endLine
+			? `${problem.file}:${problem.line}-${problem.endLine}`
+			: `${problem.file}:${problem.line}`,
 	};
 }
 
@@ -273,16 +298,22 @@ function isMissingFileError(error: unknown): boolean {
 
 function workspaceTemplateCandidates(options: TemplateResolverOptions, kind: TemplateKind): string[] {
 	const candidates: string[] = [];
+	const normalizedKind = normalizeTemplateKind(kind);
+	const kinds = normalizedKind === "problem" ? ["problem", "finding"] : [normalizedKind];
 	if (options.channelName) {
-		candidates.push(`${options.channelName}.${kind}.md.hbs`, `${options.channelName}.${kind}.hbs`);
+		for (const candidateKind of kinds) {
+			candidates.push(`${options.channelName}.${candidateKind}.md.hbs`, `${options.channelName}.${candidateKind}.hbs`);
+		}
 	}
 
-	candidates.push(
-		`${options.channelKind}.${kind}.md.hbs`,
-		`${options.channelKind}.${kind}.hbs`,
-		`${kind}.md.hbs`,
-		`${kind}.hbs`,
-	);
+	for (const candidateKind of kinds) {
+		candidates.push(
+			`${options.channelKind}.${candidateKind}.md.hbs`,
+			`${options.channelKind}.${candidateKind}.hbs`,
+			`${candidateKind}.md.hbs`,
+			`${candidateKind}.hbs`,
+		);
+	}
 
 	return candidates;
 }
@@ -320,14 +351,15 @@ function resolveWorkspaceTemplate(
 }
 
 function resolveTemplateSource(options: TemplateResolverOptions, kind: TemplateKind): ResolvedTemplateSource {
+	const normalizedKind = normalizeTemplateKind(kind);
 	const workspaceTemplate = resolveWorkspaceTemplate(options, kind);
 	if (workspaceTemplate) {
 		return workspaceTemplate;
 	}
 
 	return {
-		source: getBuiltinTemplate(options.channelKind, kind),
-		cacheKey: `builtin:${options.channelKind}:${kind}`,
+		source: getBuiltinTemplate(options.channelKind, normalizedKind),
+		cacheKey: `builtin:${options.channelKind}:${normalizedKind}`,
 	};
 }
 

@@ -4,7 +4,7 @@ import {
   createGithubPullRequestReviewDispatcher,
   OutputDispatchError,
   type FetchLike,
-  type ReviewFinding,
+  type ReviewProblem,
 } from "../src/index.js";
 
 function response(body: unknown, status = 200): Awaited<ReturnType<FetchLike>> {
@@ -21,7 +21,7 @@ function response(body: unknown, status = 200): Awaited<ReturnType<FetchLike>> {
   };
 }
 
-const finding: ReviewFinding = {
+const problem: ReviewProblem = {
   file: "src/app.ts",
   line: 42,
   severity: "high",
@@ -32,7 +32,7 @@ const finding: ReviewFinding = {
 };
 
 describe("createGithubPullRequestReviewDispatcher", () => {
-  it("publishes a finding as a GitHub pull request review comment", async () => {
+  it("publishes a problem as a GitHub pull request review comment", async () => {
     const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
     const dispatcher = createGithubPullRequestReviewDispatcher({
       token: "gh-token",
@@ -46,7 +46,7 @@ describe("createGithubPullRequestReviewDispatcher", () => {
       },
     });
 
-    const result = await dispatcher.publishFinding(finding);
+    const result = await dispatcher.publishProblem(problem);
 
     expect(result).toEqual({ channel: "github-pr-main", status: "published", externalId: "123", raw: { id: 123 } });
     expect(calls[0]?.url).toBe("https://api.github.com/repos/owent/example/pulls/42/reviews");
@@ -80,12 +80,12 @@ describe("createGithubPullRequestReviewDispatcher", () => {
       },
     });
 
-    await dispatcher.publishFinding(finding);
+    await dispatcher.publishProblem(problem);
 
     expect(calls[0]?.url).toBe("https://github.enterprise/api/v3/repos/org%2Fsub-org/repo%26name/pulls/5/reviews");
   });
 
-  it("publishes a general review comment when a finding is marked non-line-commentable", async () => {
+  it("publishes a general review comment when a problem is marked non-line-commentable", async () => {
     const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
     const dispatcher = createGithubPullRequestReviewDispatcher({
       owner: "owent",
@@ -97,7 +97,7 @@ describe("createGithubPullRequestReviewDispatcher", () => {
       },
     });
 
-    await dispatcher.publishFinding({ ...finding, lineCommentAllowed: false });
+    await dispatcher.publishProblem({ ...problem, lineCommentAllowed: false });
 
     const body = JSON.parse(calls[0]?.init?.body ?? "{}");
     expect(body.event).toBe("COMMENT");
@@ -119,7 +119,7 @@ describe("createGithubPullRequestReviewDispatcher", () => {
       },
     });
 
-    const result = await dispatcher.publishFinding(finding);
+    const result = await dispatcher.publishProblem(problem);
 
     expect(result.externalId).toBe("2");
     expect(calls).toHaveLength(2);
@@ -135,7 +135,7 @@ describe("createGithubPullRequestReviewDispatcher", () => {
       fetch: async () => response({ message: "bad credentials" }, 401),
     });
 
-    await expect(dispatcher.publishFinding(finding)).rejects.toBeInstanceOf(OutputDispatchError);
-    await expect(dispatcher.publishFinding(finding)).rejects.toMatchObject({ status: 401 });
+    await expect(dispatcher.publishProblem(problem)).rejects.toBeInstanceOf(OutputDispatchError);
+    await expect(dispatcher.publishProblem(problem)).rejects.toMatchObject({ status: 401 });
   });
 });

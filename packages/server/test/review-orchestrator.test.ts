@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 import type { AgentAdapter } from "@aicr/agents";
 import { createReviewEvent } from "@aicr/core";
 import type { ChatCompletionClient, ModelSpec } from "@aicr/llm";
-import type { ReviewFinding } from "@aicr/outputs";
+import type { ReviewProblem } from "@aicr/outputs";
 import type { SandboxBackend, SandboxSpawnOptions } from "@aicr/sandbox";
 import { parseUnifiedDiff, type ChangeRange } from "@aicr/vcs";
 import { describe, expect, it, vi } from "vitest";
@@ -77,7 +77,7 @@ describe("runReviewOrchestration", () => {
     const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-orchestrator-"));
 
     try {
-      await writeWorkspaceFile(tempDir, "AGENTS.md", "# Root\nKeep findings focused.\n");
+      await writeWorkspaceFile(tempDir, "AGENTS.md", "# Root\nKeep problems focused.\n");
       await writeWorkspaceFile(tempDir, "src/app.ts", "const value = oldValue();\ncommitBeforeReturn();\n");
       let modelPrompt = "";
       const llm: ChatCompletionClient = {
@@ -87,7 +87,7 @@ describe("runReviewOrchestration", () => {
             providerId: input.model.providerId,
             modelId: input.model.modelId,
             content: JSON.stringify({
-              findings: [
+              problems: [
                 {
                   file: "src/app.ts",
                   line: 2,
@@ -104,10 +104,10 @@ describe("runReviewOrchestration", () => {
           };
         },
       };
-      const published: ReviewFinding[] = [];
+      const publishedProblems: ReviewProblem[] = [];
       const outputPublisher: ReviewOutputPublisher = {
-        async publishFinding(finding) {
-          published.push(finding);
+        async publishProblem(problem) {
+          publishedProblems.push(problem);
           return { channel: "gitea-pr", status: "published", externalId: "123", raw: { id: 123 } };
         },
       };
@@ -137,14 +137,14 @@ describe("runReviewOrchestration", () => {
       );
 
       expect(result.status).toBe("published");
-      expect(result.findingCount).toBe(1);
+      expect(result.problemCount).toBe(1);
       expect(result.summaryCount).toBe(1);
       expect(result.dispatchCount).toBe(1);
       expect(result.diffFileCount).toBe(1);
       expect(modelPrompt).toContain("AGENTS.md");
       expect(modelPrompt).toContain("Diff:");
       expect(modelPrompt).toContain("+2: commitBeforeReturn();");
-      expect(published).toEqual([
+      expect(publishedProblems).toEqual([
         {
           file: "src/app.ts",
           line: 2,
@@ -160,7 +160,7 @@ describe("runReviewOrchestration", () => {
     }
   });
 
-  it("supports fenced JSON skip output without dispatching findings", async () => {
+  it("supports fenced JSON skip output without dispatching problems", async () => {
     const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-orchestrator-skip-"));
 
     try {
@@ -189,8 +189,8 @@ describe("runReviewOrchestration", () => {
           llm,
           model,
           outputPublisher: {
-            async publishFinding() {
-              throw new Error("skip output should not dispatch findings");
+            async publishProblem() {
+              throw new Error("skip output should not dispatch problems");
             },
           },
         },
@@ -204,7 +204,7 @@ describe("runReviewOrchestration", () => {
     }
   });
 
-  it("scrubs secrets and fixes markdown before publishing findings", async () => {
+  it("scrubs secrets and fixes markdown before publishing problems", async () => {
     const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-scrub-markdown-"));
 
     try {
@@ -215,7 +215,7 @@ describe("runReviewOrchestration", () => {
             providerId: input.model.providerId,
             modelId: input.model.modelId,
             content: JSON.stringify({
-              findings: [
+              problems: [
                 {
                   file: "src/app.ts",
                   line: 1,
@@ -230,7 +230,7 @@ describe("runReviewOrchestration", () => {
           };
         },
       };
-      const published: ReviewFinding[] = [];
+      const publishedProblems: ReviewProblem[] = [];
 
       const result = await runReviewOrchestration(
         {
@@ -246,8 +246,8 @@ describe("runReviewOrchestration", () => {
           llm,
           model,
           outputPublisher: {
-            async publishFinding(finding) {
-              published.push(finding);
+            async publishProblem(problem) {
+              publishedProblems.push(problem);
               return { channel: "test", status: "published", raw: {} };
             },
           },
@@ -256,10 +256,10 @@ describe("runReviewOrchestration", () => {
 
       expect(result.status).toBe("published");
       expect(result.scrubFindings.length).toBeGreaterThanOrEqual(2);
-      expect(published[0]?.message).toBe("# Issue\n- contains <REDACTED:AWS_KEY>\n");
-      expect(published[0]?.suggestion).toBe("## Fix\n* replace <REDACTED:GITHUB_TOKEN>\n");
-      expect(published[0]?.message).not.toContain("AKIAIOSFODNN7EXAMPLE");
-      expect(published[0]?.suggestion).not.toContain("ghp_");
+      expect(publishedProblems[0]?.message).toBe("# Issue\n- contains <REDACTED:AWS_KEY>\n");
+      expect(publishedProblems[0]?.suggestion).toBe("## Fix\n* replace <REDACTED:GITHUB_TOKEN>\n");
+      expect(publishedProblems[0]?.message).not.toContain("AKIAIOSFODNN7EXAMPLE");
+      expect(publishedProblems[0]?.suggestion).not.toContain("ghp_");
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }
@@ -447,7 +447,7 @@ describe("summarizeReviewOrchestrationForWebhook", () => {
       expect(summary.fetchedFileCount).toBe(result.fetchedFiles.length);
       expect(summary.diffFileCount).toBe(result.diffFileCount);
       expect(summary.promptTokenEstimate).toBe(result.promptTokenEstimate);
-      expect(summary.findingCount).toBe(result.findingCount);
+      expect(summary.problemCount).toBe(result.problemCount);
       expect(summary.summaryCount).toBe(result.summaryCount);
       expect(summary.contextRequestCount).toBe(result.contextRequestCount);
       expect(summary.dispatchCount).toBe(result.dispatchCount);
@@ -457,7 +457,7 @@ describe("summarizeReviewOrchestrationForWebhook", () => {
     }
   });
 
-  it("produces a summary without skipReason when findings are published", async () => {
+  it("produces a summary without skipReason when problems are published", async () => {
     const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-summary-pub-"));
 
     try {
@@ -470,7 +470,7 @@ describe("summarizeReviewOrchestrationForWebhook", () => {
             content: JSON.stringify({
               toolCalls: [
                 {
-                  name: "aicr.publish_finding",
+                  name: "aicr.report_problem",
                   input: {
                     file: "src/app.ts",
                     line: 1,
@@ -500,7 +500,7 @@ describe("summarizeReviewOrchestrationForWebhook", () => {
           llm,
           model,
           outputPublisher: {
-            async publishFinding() {
+            async publishProblem() {
               return { channel: "test", status: "published", externalId: "1", raw: {} };
             },
           },
@@ -511,7 +511,7 @@ describe("summarizeReviewOrchestrationForWebhook", () => {
 
       expect(summary.status).toBe("published");
       expect(summary.skipReason).toBeUndefined();
-      expect(summary.findingCount).toBe(1);
+      expect(summary.problemCount).toBe(1);
       expect(summary.dispatchCount).toBe(1);
     } finally {
       await rm(tempDir, { recursive: true, force: true });
@@ -563,7 +563,7 @@ describe("runReviewOrchestration error paths", () => {
             providerId: input.model.providerId,
             modelId: input.model.modelId,
             content: JSON.stringify({
-              findings: [
+              problems: [
                 {
                   file: "src/app.ts",
                   line: 1,
@@ -597,7 +597,7 @@ describe("runReviewOrchestration error paths", () => {
 
       expect(result.status).toBe("dry_run");
       expect(result.dispatchCount).toBe(0);
-      expect(result.findingCount).toBe(1);
+      expect(result.problemCount).toBe(1);
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }
@@ -644,7 +644,7 @@ describe("runReviewOrchestration error paths", () => {
     }
   });
 
-  it("handles the alternative findings/summary format from LLM output", async () => {
+  it("handles the legacy findings alias with summary from LLM output", async () => {
     const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-alt-format-"));
 
     try {
@@ -673,7 +673,7 @@ describe("runReviewOrchestration error paths", () => {
           };
         },
       };
-      const published: ReviewFinding[] = [];
+      const publishedProblems: ReviewProblem[] = [];
       const result = await runReviewOrchestration(
         {
           reviewEvent: createReviewEventFixture(),
@@ -688,8 +688,8 @@ describe("runReviewOrchestration error paths", () => {
           llm,
           model,
           outputPublisher: {
-            async publishFinding(finding) {
-              published.push(finding);
+            async publishProblem(problem) {
+              publishedProblems.push(problem);
               return { channel: "test", status: "published", raw: {} };
             },
           },
@@ -697,11 +697,11 @@ describe("runReviewOrchestration error paths", () => {
       );
 
       expect(result.status).toBe("published");
-      expect(result.findingCount).toBe(1);
+      expect(result.problemCount).toBe(1);
       expect(result.summaryCount).toBe(1);
-      expect(published[0]?.endLine).toBe(5);
-      expect(published[0]?.suggestion).toBe("Fix it.");
-      expect(published[0]?.fingerprint).toBe("fp-alt");
+      expect(publishedProblems[0]?.endLine).toBe(5);
+      expect(publishedProblems[0]?.suggestion).toBe("Fix it.");
+      expect(publishedProblems[0]?.fingerprint).toBe("fp-alt");
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }
@@ -718,7 +718,7 @@ describe("runReviewOrchestration error paths", () => {
             providerId: input.model.providerId,
             modelId: input.model.modelId,
             content: JSON.stringify({
-              findings: [
+              problems: [
                 {
                   file: "src/app.ts",
                   line: 1,
@@ -733,7 +733,7 @@ describe("runReviewOrchestration error paths", () => {
           };
         },
       };
-      const published: ReviewFinding[] = [];
+      const publishedProblems: ReviewProblem[] = [];
       await runReviewOrchestration(
         {
           reviewEvent: createReviewEventFixture(),
@@ -748,15 +748,15 @@ describe("runReviewOrchestration error paths", () => {
           llm,
           model,
           outputPublisher: {
-            async publishFinding(finding) {
-              published.push(finding);
+            async publishProblem(problem) {
+              publishedProblems.push(problem);
               return { channel: "test", status: "published", raw: {} };
             },
           },
         },
       );
 
-      expect(published[0]?.endLine).toBe(10);
+      expect(publishedProblems[0]?.endLine).toBe(10);
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }
@@ -810,7 +810,7 @@ describe("runReviewOrchestration error paths", () => {
             providerId: input.model.providerId,
             modelId: input.model.modelId,
             content: JSON.stringify({
-              findings: [
+              problems: [
                 { file: "src/app.ts", line: 1, severity: "low", category: "style", message: "Minor." },
               ],
             }),
@@ -838,14 +838,14 @@ describe("runReviewOrchestration error paths", () => {
 
       expect(result.status).toBe("skipped");
       expect(result.skipReason).toBe("no_output_publisher");
-      expect(result.findingCount).toBe(1);
+      expect(result.problemCount).toBe(1);
       expect(result.dispatchCount).toBe(0);
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }
   });
 
-  it("publishes findings through summary-only channels even when the model omits a summary", async () => {
+  it("publishes problems through summary-only channels even when the model omits a summary", async () => {
     const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-summary-only-"));
 
     try {
@@ -856,7 +856,7 @@ describe("runReviewOrchestration error paths", () => {
             providerId: input.model.providerId,
             modelId: input.model.modelId,
             content: JSON.stringify({
-              findings: [
+              problems: [
                 {
                   file: "src/app.ts",
                   line: 1,
@@ -870,7 +870,7 @@ describe("runReviewOrchestration error paths", () => {
           };
         },
       };
-      const summarizedFindings: ReviewFinding[][] = [];
+      const summarizedProblems: ReviewProblem[][] = [];
 
       const result = await runReviewOrchestration(
         {
@@ -886,12 +886,12 @@ describe("runReviewOrchestration error paths", () => {
           llm,
           model,
           outputPublisher: {
-            publishesFindings: false,
-            async publishFinding() {
-              throw new Error("summary-only publisher should not receive line findings");
+            publishesProblems: false,
+            async publishProblem() {
+              throw new Error("summary-only publisher should not receive line problems");
             },
-            async publishSummary(_summary, findings) {
-              summarizedFindings.push([...(findings ?? [])]);
+            async publishSummary(_summary, problems) {
+              summarizedProblems.push([...(problems ?? [])]);
               return { channel: "feishu", status: "published", raw: {} };
             },
           },
@@ -901,14 +901,14 @@ describe("runReviewOrchestration error paths", () => {
       expect(result.status).toBe("published");
       expect(result.dispatchCount).toBe(1);
       expect(result.summaryCount).toBe(0);
-      expect(summarizedFindings[0]?.[0]?.message).toContain("<REDACTED:AWS_KEY>");
-      expect(summarizedFindings[0]?.[0]?.message).not.toContain("AKIA");
+      expect(summarizedProblems[0]?.[0]?.message).toContain("<REDACTED:AWS_KEY>");
+      expect(summarizedProblems[0]?.[0]?.message).not.toContain("AKIA");
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }
   });
 
-  it("invokes lifecycle summary publishers even when the model reports no findings", async () => {
+  it("invokes lifecycle summary publishers even when the model reports no problems", async () => {
     const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-empty-lifecycle-"));
 
     try {
@@ -918,12 +918,12 @@ describe("runReviewOrchestration error paths", () => {
           return {
             providerId: input.model.providerId,
             modelId: input.model.modelId,
-            content: JSON.stringify({ findings: [] }),
+            content: JSON.stringify({ problems: [] }),
             raw: {},
           };
         },
       };
-      const summaryCalls: Array<{ summary: string; findings: readonly ReviewFinding[] | undefined }> = [];
+      const summaryCalls: Array<{ summary: string; problems: readonly ReviewProblem[] | undefined }> = [];
 
       const result = await runReviewOrchestration(
         {
@@ -939,23 +939,23 @@ describe("runReviewOrchestration error paths", () => {
           llm,
           model,
           outputPublisher: {
-            publishesFindings: false,
+            publishesProblems: false,
             publishEmptySummary: true,
-            async publishFinding() {
-              throw new Error("lifecycle publisher should not receive line findings");
+            async publishProblem() {
+              throw new Error("lifecycle publisher should not receive line problems");
             },
-            async publishSummary(summary, findings) {
-              summaryCalls.push({ summary, findings });
-              return { channel: "gitea-finding-issue", status: "published", raw: { action: "closed" } };
+            async publishSummary(summary, problems) {
+              summaryCalls.push({ summary, problems });
+              return { channel: "gitea-problem-issue", status: "published", raw: { action: "closed" } };
             },
           },
         },
       );
 
       expect(result.status).toBe("published");
-      expect(result.findingCount).toBe(0);
+      expect(result.problemCount).toBe(0);
       expect(result.dispatchCount).toBe(1);
-      expect(summaryCalls).toEqual([{ summary: "", findings: [] }]);
+      expect(summaryCalls).toEqual([{ summary: "", problems: [] }]);
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }
@@ -972,7 +972,7 @@ describe("runReviewOrchestration error paths", () => {
             providerId: input.model.providerId,
             modelId: input.model.modelId,
             content: JSON.stringify({
-              findings: [
+              problems: [
                 { file: "src/app.ts", line: 1, severity: "high", category: "correctness", message: "Issue." },
               ],
             }),
@@ -980,7 +980,7 @@ describe("runReviewOrchestration error paths", () => {
           };
         },
       };
-      const published: ReviewFinding[] = [];
+      const publishedProblems: ReviewProblem[] = [];
 
       const result = await runReviewOrchestration(
         {
@@ -997,8 +997,8 @@ describe("runReviewOrchestration error paths", () => {
           model,
           dryRun: false,
           outputPublisherResolver: () => ({
-            async publishFinding(finding) {
-              published.push(finding);
+            async publishProblem(problem) {
+              publishedProblems.push(problem);
               return { channel: "resolved", status: "published", externalId: "42", raw: {} };
             },
           }),
@@ -1007,13 +1007,13 @@ describe("runReviewOrchestration error paths", () => {
 
       expect(result.status).toBe("published");
       expect(result.dispatchCount).toBe(1);
-      expect(published).toHaveLength(1);
+      expect(publishedProblems).toHaveLength(1);
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }
   });
 
-  it("marks findings outside the parsed diff as non-line-commentable", async () => {
+  it("marks problems outside the parsed diff as non-line-commentable", async () => {
     const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-line-fallback-"));
 
     try {
@@ -1024,7 +1024,7 @@ describe("runReviewOrchestration error paths", () => {
             providerId: input.model.providerId,
             modelId: input.model.modelId,
             content: JSON.stringify({
-              findings: [
+              problems: [
                 { file: "src/app.ts", line: 999, severity: "medium", category: "correctness", message: "Issue." },
               ],
             }),
@@ -1032,7 +1032,7 @@ describe("runReviewOrchestration error paths", () => {
           };
         },
       };
-      const published: ReviewFinding[] = [];
+      const publishedProblems: ReviewProblem[] = [];
 
       const result = await runReviewOrchestration(
         {
@@ -1048,8 +1048,8 @@ describe("runReviewOrchestration error paths", () => {
           llm,
           model,
           outputPublisher: {
-            async publishFinding(finding) {
-              published.push(finding);
+            async publishProblem(problem) {
+              publishedProblems.push(problem);
               return { channel: "test", status: "published", raw: {} };
             },
           },
@@ -1057,7 +1057,7 @@ describe("runReviewOrchestration error paths", () => {
       );
 
       expect(result.status).toBe("published");
-      expect(published[0]?.lineCommentAllowed).toBe(false);
+      expect(publishedProblems[0]?.lineCommentAllowed).toBe(false);
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }
@@ -1074,7 +1074,7 @@ describe("runReviewOrchestration error paths", () => {
             providerId: input.model.providerId,
             modelId: input.model.modelId,
             content: JSON.stringify({
-              findings: [
+              problems: [
                 { file: "src/app.ts", line: 1, severity: "medium", category: "correctness", message: "Issue." },
               ],
             }),
@@ -1082,7 +1082,7 @@ describe("runReviewOrchestration error paths", () => {
           };
         },
       };
-      const published: ReviewFinding[] = [];
+      const publishedProblems: ReviewProblem[] = [];
 
       await runReviewOrchestration(
         {
@@ -1098,15 +1098,15 @@ describe("runReviewOrchestration error paths", () => {
           llm,
           model,
           outputPublisher: {
-            async publishFinding(finding) {
-              published.push(finding);
+            async publishProblem(problem) {
+              publishedProblems.push(problem);
               return { channel: "test", status: "published", raw: {} };
             },
           },
         },
       );
 
-      expect(published[0]?.fingerprint).toMatch(/^[0-9a-f]{16}$/u);
+      expect(publishedProblems[0]?.fingerprint).toMatch(/^[0-9a-f]{16}$/u);
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }
@@ -1263,8 +1263,8 @@ describe("runReviewOrchestration error paths", () => {
     }
   });
 
-  it("rejects findings entries that are not objects", async () => {
-    const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-bad-finding-"));
+  it("rejects problem entries that are not objects", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-bad-problem-"));
 
     try {
       await writeWorkspaceFile(tempDir, "src/app.ts", "const ok = true;\n");
@@ -1273,7 +1273,7 @@ describe("runReviewOrchestration error paths", () => {
           return {
             providerId: input.model.providerId,
             modelId: input.model.modelId,
-            content: JSON.stringify({ findings: ["not-an-object"] }),
+            content: JSON.stringify({ problems: ["not-an-object"] }),
             raw: {},
           };
         },
@@ -1295,7 +1295,7 @@ describe("runReviewOrchestration error paths", () => {
             model,
           },
         ),
-      ).rejects.toThrow(/finding must be an object/u);
+      ).rejects.toThrow(/problem must be an object/u);
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }
@@ -1412,6 +1412,216 @@ describe("runReviewOrchestration error paths", () => {
       expect(result.skipReason).toBe("lgtm");
       expect(result.contextRequestCount).toBe(0);
       expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("ignored invalid fetch_more_context tool call"));
+    } finally {
+      warnSpy.mockRestore();
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("asks for a final result when the model only returns an invalid context request", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-invalid-fetch-follow-up-"));
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    try {
+      await writeWorkspaceFile(tempDir, "src/app.ts", "const ok = true;\n");
+      let completeCalls = 0;
+      const summaryCalls: string[] = [];
+      const llm: ChatCompletionClient = {
+        async complete(input) {
+          completeCalls += 1;
+          if (completeCalls === 1) {
+            return {
+              providerId: input.model.providerId,
+              modelId: input.model.modelId,
+              content: JSON.stringify({
+                toolCalls: [
+                  {
+                    name: "aicr.fetch_more_context",
+                    input: { path: "", reason: "need more context but no file was selected" },
+                  },
+                ],
+              }),
+              raw: {},
+            };
+          }
+
+          expect(input.messages).toHaveLength(3);
+          expect(input.messages[2]?.content).toContain("Changed files:");
+          expect(input.messages[2]?.content).toContain("src/app.ts");
+          expect(input.messages[2]?.content).toContain("path must be a non-empty string");
+          return {
+            providerId: input.model.providerId,
+            modelId: input.model.modelId,
+            content: JSON.stringify({ summary: "Analysis completed; no actionable problems." }),
+            raw: {},
+          };
+        },
+      };
+
+      const result = await runReviewOrchestration(
+        {
+          reviewEvent: createReviewEventFixture(),
+          payload: {},
+          provider: "p4",
+          eventName: "change-commit",
+        },
+        {
+          baseSystemPrompt: "<task>\n{{TASK_CONTEXT}}\n</task>",
+          sourceRootResolver: () => tempDir,
+          vcs: createVcs(tempDir),
+          llm,
+          model,
+          outputPublisher: {
+            publishesProblems: false,
+            async publishProblem() {
+              throw new Error("summary-only publisher should not receive line problems");
+            },
+            async publishSummary(summary) {
+              summaryCalls.push(summary);
+              return { channel: "feishu", status: "published", raw: {} };
+            },
+          },
+        },
+      );
+
+      expect(result.status).toBe("published");
+      expect(result.summaryCount).toBe(1);
+      expect(result.dispatchCount).toBe(1);
+      expect(completeCalls).toBe(2);
+      expect(summaryCalls).toEqual(["Analysis completed; no actionable problems."]);
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("ignored invalid fetch_more_context tool call"));
+    } finally {
+      warnSpy.mockRestore();
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("repairs an invalid empty publish_summary tool call and still dispatches to summary channels", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-invalid-summary-follow-up-"));
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    try {
+      await writeWorkspaceFile(tempDir, "src/app.ts", "const ok = true;\n");
+      let completeCalls = 0;
+      const summaryCalls: string[] = [];
+      const llm: ChatCompletionClient = {
+        async complete(input) {
+          completeCalls += 1;
+          if (completeCalls === 1) {
+            return {
+              providerId: input.model.providerId,
+              modelId: input.model.modelId,
+              content: JSON.stringify({
+                toolCalls: [
+                  { name: "aicr.publish_summary", input: { markdown: "" } },
+                ],
+              }),
+              raw: {},
+            };
+          }
+
+          expect(input.messages[2]?.content).toContain("Ignored invalid review output tool calls:");
+          expect(input.messages[2]?.content).toContain("markdown must be a non-empty string");
+          return {
+            providerId: input.model.providerId,
+            modelId: input.model.modelId,
+            content: JSON.stringify({ summary: "Analysis completed after format repair." }),
+            raw: {},
+          };
+        },
+      };
+
+      const result = await runReviewOrchestration(
+        {
+          reviewEvent: createReviewEventFixture(),
+          payload: {},
+          provider: "p4",
+          eventName: "change-commit",
+        },
+        {
+          baseSystemPrompt: "<task>\n{{TASK_CONTEXT}}\n</task>",
+          sourceRootResolver: () => tempDir,
+          vcs: createVcs(tempDir),
+          llm,
+          model,
+          outputPublisher: {
+            publishesProblems: false,
+            async publishProblem() {
+              throw new Error("summary-only publisher should not receive line problems");
+            },
+            async publishSummary(summary) {
+              summaryCalls.push(summary);
+              return { channel: "feishu", status: "published", raw: {} };
+            },
+          },
+        },
+      );
+
+      expect(result.status).toBe("published");
+      expect(result.summaryCount).toBe(1);
+      expect(result.dispatchCount).toBe(1);
+      expect(completeCalls).toBe(2);
+      expect(summaryCalls).toEqual(["Analysis completed after format repair."]);
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("ignored invalid review output tool call"));
+    } finally {
+      warnSpy.mockRestore();
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("publishes a generated summary when format repair still has no final review output", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-fallback-summary-"));
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    try {
+      await writeWorkspaceFile(tempDir, "src/app.ts", "const ok = true;\n");
+      const summaryCalls: string[] = [];
+      const llm: ChatCompletionClient = {
+        async complete(input) {
+          return {
+            providerId: input.model.providerId,
+            modelId: input.model.modelId,
+            content: JSON.stringify({
+              toolCalls: [
+                { name: "aicr.publish_summary", input: { markdown: "" } },
+              ],
+            }),
+            raw: {},
+          };
+        },
+      };
+
+      const result = await runReviewOrchestration(
+        {
+          reviewEvent: createReviewEventFixture(),
+          payload: {},
+          provider: "p4",
+          eventName: "change-commit",
+        },
+        {
+          baseSystemPrompt: "<task>\n{{TASK_CONTEXT}}\n</task>",
+          sourceRootResolver: () => tempDir,
+          vcs: createVcs(tempDir),
+          llm,
+          model,
+          outputPublisher: {
+            publishesProblems: false,
+            async publishProblem() {
+              throw new Error("summary-only publisher should not receive line problems");
+            },
+            async publishSummary(summary) {
+              summaryCalls.push(summary);
+              return { channel: "feishu", status: "published", raw: {} };
+            },
+          },
+        },
+      );
+
+      expect(result.status).toBe("published");
+      expect(result.dispatchCount).toBe(1);
+      expect(summaryCalls[0]).toContain("AICR review completed for owent/example@head");
+      expect(summaryCalls[0]).toContain("Changed files analyzed: 1");
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("ignored invalid review output tool call"));
     } finally {
       warnSpy.mockRestore();
       await rm(tempDir, { recursive: true, force: true });
@@ -1555,8 +1765,8 @@ describe("runReviewOrchestration error paths", () => {
 });
 
 describe("parseToolCalls with isPlainObject", () => {
-  it("rejects findings entries that are Date instances (not plain objects)", async () => {
-    const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-date-finding-"));
+  it("rejects problem entries that are Date instances (not plain objects)", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-date-problem-"));
 
     try {
       await writeWorkspaceFile(tempDir, "src/app.ts", "const ok = true;\n");
@@ -1565,7 +1775,7 @@ describe("parseToolCalls with isPlainObject", () => {
           return {
             providerId: input.model.providerId,
             modelId: input.model.modelId,
-            content: JSON.stringify({ findings: [new Date()] }),
+            content: JSON.stringify({ problems: [new Date()] }),
             raw: {},
           };
         },
@@ -1587,7 +1797,7 @@ describe("parseToolCalls with isPlainObject", () => {
             model,
           },
         ),
-      ).rejects.toThrow(/finding must be an object/u);
+      ).rejects.toThrow(/problem must be an object/u);
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }
@@ -1674,23 +1884,23 @@ describe("parseToolCalls with isPlainObject", () => {
     }
   });
 
-  it("accepts null-prototype objects as valid findings entries", async () => {
-    const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-nullproto-finding-"));
+  it("accepts null-prototype objects as valid problem entries", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-nullproto-problem-"));
 
     try {
       await writeWorkspaceFile(tempDir, "src/app.ts", "const ok = true;\n");
-      const findingObj = Object.create(null);
-      findingObj.file = "src/app.ts";
-      findingObj.line = 1;
-      findingObj.severity = "low";
-      findingObj.category = "style";
-      findingObj.message = "Minor.";
+      const problemObj = Object.create(null);
+      problemObj.file = "src/app.ts";
+      problemObj.line = 1;
+      problemObj.severity = "low";
+      problemObj.category = "style";
+      problemObj.message = "Minor.";
       const llm: ChatCompletionClient = {
         async complete(input) {
           return {
             providerId: input.model.providerId,
             modelId: input.model.modelId,
-            content: JSON.stringify({ findings: [findingObj] }),
+            content: JSON.stringify({ problems: [problemObj] }),
             raw: {},
           };
         },
@@ -1712,7 +1922,7 @@ describe("parseToolCalls with isPlainObject", () => {
         },
       );
 
-      expect(result.findingCount).toBe(1);
+      expect(result.problemCount).toBe(1);
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }
@@ -1733,7 +1943,7 @@ describe("extractJsonPayload edge cases", () => {
             content: [
               "<think>先看 {这里不是最终 JSON}，再输出结论。</think>",
               JSON.stringify({
-                findings: [
+                problems: [
                   { file: "src/app.ts", line: 1, severity: "medium", category: "correctness", message: "Issue." },
                 ],
               }),
@@ -1759,7 +1969,7 @@ describe("extractJsonPayload edge cases", () => {
         },
       );
 
-      expect(result.findingCount).toBe(1);
+      expect(result.problemCount).toBe(1);
       expect(result.summaryCount).toBe(0);
     } finally {
       await rm(tempDir, { recursive: true, force: true });
@@ -1798,7 +2008,7 @@ describe("extractJsonPayload edge cases", () => {
         },
       );
 
-      expect(result.findingCount).toBe(0);
+      expect(result.problemCount).toBe(0);
       expect(result.summaryCount).toBe(1);
       expect(result.outputState.summaries).toEqual(["没有发现问题"]);
     } finally {
@@ -1855,7 +2065,7 @@ describe("extractJsonPayload edge cases", () => {
             providerId: input.model.providerId,
             modelId: input.model.modelId,
             content: JSON.stringify({
-              toolCalls: [{ name: "aicr.publish_finding", input: { file: "src/app.ts", line: 1, severity: "low", category: "style", message: "Issue." } }],
+              toolCalls: [{ name: "aicr.report_problem", input: { file: "src/app.ts", line: 1, severity: "low", category: "style", message: "Issue." } }],
               summary: "Mixed format output.",
             }),
             raw: {},
@@ -1879,15 +2089,15 @@ describe("extractJsonPayload edge cases", () => {
         },
       );
 
-      expect(result.findingCount).toBe(1);
+      expect(result.problemCount).toBe(1);
       expect(result.summaryCount).toBe(0);
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }
   });
 
-  it("handles empty findings array with summary", async () => {
-    const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-empty-findings-"));
+  it("handles empty problems array with summary", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-empty-problems-"));
 
     try {
       await writeWorkspaceFile(tempDir, "src/app.ts", "const ok = true;\n");
@@ -1897,7 +2107,7 @@ describe("extractJsonPayload edge cases", () => {
             providerId: input.model.providerId,
             modelId: input.model.modelId,
             content: JSON.stringify({
-              findings: [],
+              problems: [],
               summary: "No issues found.",
             }),
             raw: {},
@@ -1921,10 +2131,59 @@ describe("extractJsonPayload edge cases", () => {
         },
       );
 
-      expect(result.findingCount).toBe(0);
+      expect(result.problemCount).toBe(0);
       expect(result.summaryCount).toBe(1);
       expect(result.status).toBe("skipped");
-      expect(result.skipReason).toBe("no_dispatchable_findings");
+      expect(result.skipReason).toBe("no_dispatchable_problems");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("skips review with no_changed_files when changedPaths is empty and not dryRun", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-no-files-"));
+
+    try {
+      const vcsNoFiles: DiffCapableVcsAdapter = {
+        kind: "p4",
+        listChanges: async () => ({ headRevision: "1", files: [] }),
+        fetchScoped: async (_range, ws) => ({ workspaceId: ws.id, rootDir: tempDir, fetchedFiles: [] }),
+        fetchExtraContext: async () => ({ path: "", content: "" }),
+        diff: async () => ({ files: [] }),
+      };
+
+      const result = await runReviewOrchestration(
+        {
+          reviewEvent: createReviewEventFixture(),
+          payload: {},
+          provider: "p4",
+          eventName: "change-commit",
+        },
+        {
+          baseSystemPrompt: "<task>\n{{TASK_CONTEXT}}\n</task>",
+          sourceRootResolver: () => tempDir,
+          vcs: vcsNoFiles,
+          llm: {
+            async complete(input) {
+              return {
+                providerId: input.model.providerId,
+                modelId: input.model.modelId,
+                content: "",
+                raw: {},
+              };
+            },
+          },
+          model,
+        },
+      );
+
+      expect(result.status).toBe("skipped");
+      expect(result.skipReason).toBe("no_changed_files");
+      expect(result.changedFiles).toEqual([]);
+      expect(result.fetchedFiles).toEqual([]);
+      expect(result.diffFileCount).toBe(0);
+      expect(result.promptTokenEstimate).toBe(0);
+      expect(result.problemCount).toBe(0);
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }

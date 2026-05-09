@@ -4,7 +4,7 @@ import {
   createGitlabMergeRequestReviewDispatcher,
   OutputDispatchError,
   type FetchLike,
-  type ReviewFinding,
+  type ReviewProblem,
 } from "../src/index.js";
 
 function response(body: unknown, status = 200): Awaited<ReturnType<FetchLike>> {
@@ -21,7 +21,7 @@ function response(body: unknown, status = 200): Awaited<ReturnType<FetchLike>> {
   };
 }
 
-const finding: ReviewFinding = {
+const problem: ReviewProblem = {
   file: "src/app.ts",
   line: 42,
   severity: "medium",
@@ -32,7 +32,7 @@ const finding: ReviewFinding = {
 };
 
 describe("createGitlabMergeRequestReviewDispatcher", () => {
-  it("publishes a finding as a GitLab merge request discussion", async () => {
+  it("publishes a problem as a GitLab merge request discussion", async () => {
     const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
     const dispatcher = createGitlabMergeRequestReviewDispatcher({
       baseUrl: "https://gitlab.example/",
@@ -49,7 +49,7 @@ describe("createGitlabMergeRequestReviewDispatcher", () => {
       },
     });
 
-    const result = await dispatcher.publishFinding(finding);
+    const result = await dispatcher.publishProblem(problem);
 
     expect(result).toEqual({ channel: "gitlab-main", status: "published", externalId: "456", raw: { id: 456 } });
     expect(calls[0]?.url).toBe("https://gitlab.example/api/v4/projects/owent%2Fexample/merge_requests/7/discussions");
@@ -80,7 +80,7 @@ describe("createGitlabMergeRequestReviewDispatcher", () => {
       },
     });
 
-    await dispatcher.publishFinding(finding);
+    await dispatcher.publishProblem(problem);
 
     expect(calls[0]?.url).toBe("https://gitlab.com/api/v4/projects/123/merge_requests/7/notes");
     const body = JSON.parse(calls[0]?.init?.body ?? "{}");
@@ -88,7 +88,7 @@ describe("createGitlabMergeRequestReviewDispatcher", () => {
     expect(body.body).toContain("src/app.ts:42");
   });
 
-  it("publishes a general MR note when a finding is marked non-line-commentable", async () => {
+  it("publishes a general MR note when a problem is marked non-line-commentable", async () => {
     const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
     const dispatcher = createGitlabMergeRequestReviewDispatcher({
       projectId: "owent/example",
@@ -101,7 +101,7 @@ describe("createGitlabMergeRequestReviewDispatcher", () => {
       },
     });
 
-    await dispatcher.publishFinding({ ...finding, lineCommentAllowed: false });
+    await dispatcher.publishProblem({ ...problem, lineCommentAllowed: false });
 
     expect(calls[0]?.url).toBe("https://gitlab.com/api/v4/projects/owent%2Fexample/merge_requests/7/notes");
     expect(JSON.parse(calls[0]?.init?.body ?? "{}").position).toBeUndefined();
@@ -122,7 +122,7 @@ describe("createGitlabMergeRequestReviewDispatcher", () => {
       },
     });
 
-    const result = await dispatcher.publishFinding(finding);
+    const result = await dispatcher.publishProblem(problem);
 
     expect(result.externalId).toBe("2");
     expect(calls).toHaveLength(2);
@@ -137,7 +137,7 @@ describe("createGitlabMergeRequestReviewDispatcher", () => {
       fetch: async () => response({ message: "forbidden" }, 403),
     });
 
-    await expect(dispatcher.publishFinding(finding)).rejects.toBeInstanceOf(OutputDispatchError);
-    await expect(dispatcher.publishFinding(finding)).rejects.toMatchObject({ status: 403 });
+    await expect(dispatcher.publishProblem(problem)).rejects.toBeInstanceOf(OutputDispatchError);
+    await expect(dispatcher.publishProblem(problem)).rejects.toMatchObject({ status: 403 });
   });
 });

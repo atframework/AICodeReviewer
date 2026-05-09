@@ -10,11 +10,11 @@ import {
 	getBuiltinTemplate,
 	renderBuiltinTemplate,
 	renderTemplate,
-	toTemplateFinding,
+	toTemplateProblem,
 	type TemplateContext,
 } from "../src/template-engine.js";
 
-const sampleFinding = {
+const sampleProblem = {
 	file: "src/app.ts",
 	line: 42,
 	severity: "high",
@@ -36,13 +36,13 @@ const sampleContext: TemplateContext = {
 	},
 	run: { id: "run-abc" },
 	atMentions: "@dev @reviewer",
-	findings: [toTemplateFinding(sampleFinding)],
-	summary: "Overall the PR looks good with one finding.",
+	problems: [toTemplateProblem(sampleProblem)],
+	summary: "Overall the PR looks good with one problem.",
 };
 
-describe("toTemplateFinding", () => {
-	it("converts a finding with all fields", () => {
-		const result = toTemplateFinding(sampleFinding);
+describe("toTemplateProblem", () => {
+	it("converts a problem with all fields", () => {
+		const result = toTemplateProblem(sampleProblem);
 
 		expect(result.severity).toBe("HIGH");
 		expect(result.location).toBe("src/app.ts:42");
@@ -51,13 +51,13 @@ describe("toTemplateFinding", () => {
 	});
 
 	it("renders range location when endLine is present", () => {
-		const result = toTemplateFinding({ ...sampleFinding, endLine: 50 });
+		const result = toTemplateProblem({ ...sampleProblem, endLine: 50 });
 
 		expect(result.location).toBe("src/app.ts:42-50");
 	});
 
 	it("omits optional fields when not present", () => {
-		const result = toTemplateFinding({
+		const result = toTemplateProblem({
 			file: "a.ts",
 			line: 1,
 			severity: "low",
@@ -76,8 +76,8 @@ describe("getBuiltinTemplate", () => {
 		expect(getBuiltinTemplate("gitea_pr_review", "summary").length).toBeGreaterThan(0);
 	});
 
-	it("returns a non-empty string for gitea_pr_review finding", () => {
-		expect(getBuiltinTemplate("gitea_pr_review", "finding").length).toBeGreaterThan(0);
+	it("returns a non-empty string for gitea_pr_review problem", () => {
+		expect(getBuiltinTemplate("gitea_pr_review", "problem").length).toBeGreaterThan(0);
 	});
 
 	it("returns gitea_pr_review as fallback for unknown channel kind", () => {
@@ -98,7 +98,7 @@ describe("getBuiltinTemplate", () => {
 
 		for (const kind of channelKinds) {
 			expect(getBuiltinTemplate(kind, "summary").length).toBeGreaterThan(0);
-			expect(getBuiltinTemplate(kind, "finding").length).toBeGreaterThan(0);
+			expect(getBuiltinTemplate(kind, "problem").length).toBeGreaterThan(0);
 		}
 	});
 });
@@ -137,11 +137,11 @@ describe("renderBuiltinTemplate", () => {
 		expect(result).toContain("1");
 	});
 
-	it("renders gitea_pr_review finding with suggestion and fingerprint", () => {
+	it("renders gitea_pr_review problem with suggestion and fingerprint", () => {
 		const ctx: TemplateContext = {
-			finding: toTemplateFinding(sampleFinding),
+			problem: toTemplateProblem(sampleProblem),
 		};
-		const result = renderBuiltinTemplate("gitea_pr_review", "finding", ctx);
+		const result = renderBuiltinTemplate("gitea_pr_review", "problem", ctx);
 
 		expect(result).toContain("HIGH");
 		expect(result).toContain("correctness");
@@ -151,7 +151,7 @@ describe("renderBuiltinTemplate", () => {
 		expect(result).toContain("aicr:fingerprint=fp-1");
 	});
 
-	it("renders gitea_issue summary with numbered findings", () => {
+	it("renders gitea_issue summary with numbered problems", () => {
 		const result = renderBuiltinTemplate("gitea_issue", "summary", sampleContext);
 
 		expect(result).toContain("AI Code Review Report");
@@ -213,7 +213,7 @@ describe("createTemplateResolver", () => {
 			});
 
 			expect(resolver.resolveTemplate("summary")).toContain("Custom");
-			expect(resolver.render("summary", sampleContext)).toBe("Custom Overall the PR looks good with one finding. for run-abc");
+			expect(resolver.render("summary", sampleContext)).toBe("Custom Overall the PR looks good with one problem. for run-abc");
 		} finally {
 			await rm(dir, { recursive: true, force: true });
 		}
@@ -222,6 +222,22 @@ describe("createTemplateResolver", () => {
 	it("uses channel-kind workspace templates when channel-name templates are absent", async () => {
 		const dir = await mkdtemp(join(tmpdir(), "aicr-template-kind-"));
 		try {
+			await writeFile(join(dir, "github_pr_review.problem.md.hbs"), "GH {{problem.location}}", "utf8");
+			const resolver = createTemplateResolver({
+				channelKind: "github_pr_review",
+				channelName: "github-main",
+				workspaceTemplatesDir: dir,
+			});
+
+			expect(resolver.render("problem", { problem: toTemplateProblem(sampleProblem) })).toBe("GH src/app.ts:42");
+		} finally {
+			await rm(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("keeps legacy finding workspace templates as fallback", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "aicr-template-legacy-kind-"));
+		try {
 			await writeFile(join(dir, "github_pr_review.finding.md.hbs"), "GH {{finding.location}}", "utf8");
 			const resolver = createTemplateResolver({
 				channelKind: "github_pr_review",
@@ -229,7 +245,7 @@ describe("createTemplateResolver", () => {
 				workspaceTemplatesDir: dir,
 			});
 
-			expect(resolver.render("finding", { finding: toTemplateFinding(sampleFinding) })).toBe("GH src/app.ts:42");
+			expect(resolver.render("problem", { problem: toTemplateProblem(sampleProblem) })).toBe("GH src/app.ts:42");
 		} finally {
 			await rm(dir, { recursive: true, force: true });
 		}
