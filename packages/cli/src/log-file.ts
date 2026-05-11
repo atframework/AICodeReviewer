@@ -186,6 +186,7 @@ export function installFileLogTeeFromEnv(
   function writeFileCopy(chunk: unknown): void {
     try {
       if (typeof chunk === "string" || chunk instanceof Uint8Array) {
+        writer.write(`[${new Date().toISOString()}] `);
         writer.write(chunk);
       }
     } catch (error) {

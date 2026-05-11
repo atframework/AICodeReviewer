@@ -1259,6 +1259,39 @@ describe("problem issue output config", () => {
       resolved_action: "delete",
     });
   });
+
+  it("accepts assignee, severity label, and Feishu notification fields", () => {
+    const result = appConfigSchema.parse({
+      outputs: {
+        channels: [
+          {
+            name: "gitea-problem-issues",
+            kind: "gitea_problem_issue",
+            assign_committer: true,
+            owners_file: "CODEOWNERS",
+            add_owners_as_assignees: false,
+            severity_label_prefix: "aicr:problem:",
+            severity_label_colors: { high: "e11d48", critical: "b60205" },
+            notify_feishu: {
+              webhook_url_env: "FEISHU_NOTIFY_URL",
+              secret_env: "FEISHU_NOTIFY_SECRET",
+            },
+          },
+        ],
+      },
+    });
+
+    const channel = result.outputs.channels[0]!;
+    expect(channel.assign_committer).toBe(true);
+    expect(channel.owners_file).toBe("CODEOWNERS");
+    expect(channel.add_owners_as_assignees).toBe(false);
+    expect(channel.severity_label_prefix).toBe("aicr:problem:");
+    expect(channel.severity_label_colors).toEqual({ high: "e11d48", critical: "b60205" });
+    expect(channel.notify_feishu).toEqual({
+      webhook_url_env: "FEISHU_NOTIFY_URL",
+      secret_env: "FEISHU_NOTIFY_SECRET",
+    });
+  });
 });
 
 describe("triage config", () => {

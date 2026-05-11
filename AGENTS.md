@@ -77,3 +77,4 @@ These issues have been found and fixed in prior sessions. Before making changes,
 - `.agents/skills/plan-implementation-audit/SKILL.md`
 - `.agents/skills/agent-runtime-integration/SKILL.md`
 - `.agents/skills/output-channel-contracts/SKILL.md`
+- `.agents/skills/remote-deployment/SKILL.md`
