@@ -362,4 +362,53 @@ describe("extractExternalId via dispatcher", () => {
     expect(calls[0]?.url).toContain("org%2Fsub-org");
     expect(calls[0]?.url).toContain("repo%26name");
   });
+
+  it("attaches highest severity label to PR via publishSummary", async () => {
+    const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
+    const dispatcher = createGiteaPullRequestReviewDispatcher({
+      baseUrl: "https://gitea.example",
+      owner: "owent",
+      repo: "example",
+      pullNumber: 10,
+      severityLabelPrefix: "aicr:problem:",
+      fetch: async (url, init) => {
+        calls.push({ url, init });
+        if (url.includes("/labels?name=")) {
+          return response([{ id: 90, name: "aicr:problem:critical", color: "b60205" }]);
+        }
+        if (url.endsWith("/labels") && init?.method === "POST") {
+          return response({ id: 91, name: "aicr:problem:critical", color: "b60205" });
+        }
+        return response({ id: 1 });
+      },
+    });
+
+    const problems = [
+      { ...problem, severity: "high" as const },
+      { ...problem, severity: "critical" as const, fingerprint: "fp-crit" },
+    ];
+    const result = await dispatcher.publishSummary!("summary", problems);
+
+    expect(result.status).toBe("published");
+    const labelCall = calls.find((c) => c.url.includes("/issues/10/labels"));
+    expect(labelCall).toBeDefined();
+    const body = JSON.parse(labelCall?.init?.body ?? "{}");
+    expect(body.labels).toContain(90);
+  });
+
+  it("skips label attachment when severityLabelPrefix is not configured", async () => {
+    const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
+    const dispatcher = createGiteaPullRequestReviewDispatcher({
+      baseUrl: "https://gitea.example",
+      owner: "owent",
+      repo: "example",
+      pullNumber: 10,
+      fetch: async (url, init) => {
+        calls.push({ url, init });
+        return response({ id: 1 });
+      },
+    });
+
+    expect(dispatcher.publishSummary).toBeUndefined();
+  });
 });

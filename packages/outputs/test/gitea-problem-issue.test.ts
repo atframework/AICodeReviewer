@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   createGiteaProblemIssueDispatcher,
+  getHighestSeverity,
   matchOwnersForFile,
   parseOwnersContent,
   type FetchLike,
@@ -353,5 +354,27 @@ describe("matchOwnersForFile", () => {
 
   it("falls back to reviewers when no path matches", () => {
     expect(matchOwnersForFile("README.md", owners)).toEqual(["admin1", "admin2"]);
+  });
+});
+
+describe("getHighestSeverity", () => {
+  it("returns the highest severity from a list of problems", () => {
+    const problems: ReviewProblem[] = [
+      { file: "a.ts", line: 1, severity: "low", category: "style", message: "m1" },
+      { file: "b.ts", line: 2, severity: "critical", category: "security", message: "m2" },
+      { file: "c.ts", line: 3, severity: "medium", category: "correctness", message: "m3" },
+    ];
+    expect(getHighestSeverity(problems)).toBe("critical");
+  });
+
+  it("returns undefined for empty array", () => {
+    expect(getHighestSeverity([])).toBeUndefined();
+  });
+
+  it("returns the single severity when only one problem", () => {
+    const problems: ReviewProblem[] = [
+      { file: "a.ts", line: 1, severity: "high", category: "correctness", message: "m1" },
+    ];
+    expect(getHighestSeverity(problems)).toBe("high");
   });
 });

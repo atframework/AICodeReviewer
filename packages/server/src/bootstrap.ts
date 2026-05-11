@@ -869,6 +869,10 @@ export function createOutputPublisherFromConfig(
   const repoRef = owner && repo ? `${owner}/${repo}` : workspaceRepoRef;
   const rendering = createChannelRendering(config, channel, workspaceId, reviewEvent, repoRef, baseDir, targetUrlTemplates);
   const publishEmptySummary = noProblemsAction === "publish";
+  const channelSeverityLabelPrefix = readString(channelConfig, "severity_label_prefix", "severityLabelPrefix");
+  const channelSeverityLabelColors = isPlainObject(channelConfig.severity_label_colors)
+    ? channelConfig.severity_label_colors as Readonly<Record<string, string>>
+    : undefined;
 
   if (channel.kind === "gitea_pr_review") {
     if (!baseUrl || !owner || !repo || pullNumber === undefined) {
@@ -882,6 +886,8 @@ export function createOutputPublisherFromConfig(
       repo,
       pullNumber,
       channelName: channel.name,
+      ...(channelSeverityLabelPrefix ? { severityLabelPrefix: channelSeverityLabelPrefix } : {}),
+      ...(channelSeverityLabelColors ? { severityLabelColors: channelSeverityLabelColors } : {}),
     });
 
     return {
@@ -890,6 +896,11 @@ export function createOutputPublisherFromConfig(
       async publishProblem(problem: ReviewProblem): Promise<DispatchResult> {
         return dispatcher.publishProblem(rendering.renderProblem(problem));
       },
+      ...(dispatcher.publishSummary ? {
+        async publishSummary(summary: string, problems?: readonly ReviewProblem[]): Promise<DispatchResult> {
+          return dispatcher.publishSummary!(summary, problems);
+        },
+      } : {}),
     };
   }
 
@@ -905,6 +916,8 @@ export function createOutputPublisherFromConfig(
       repo,
       pullNumber,
       channelName: channel.name,
+      ...(channelSeverityLabelPrefix ? { severityLabelPrefix: channelSeverityLabelPrefix } : {}),
+      ...(channelSeverityLabelColors ? { severityLabelColors: channelSeverityLabelColors } : {}),
     });
 
     return {
@@ -913,6 +926,11 @@ export function createOutputPublisherFromConfig(
       async publishProblem(problem: ReviewProblem): Promise<DispatchResult> {
         return dispatcher.publishProblem(rendering.renderProblem(problem));
       },
+      ...(dispatcher.publishSummary ? {
+        async publishSummary(summary: string, problems?: readonly ReviewProblem[]): Promise<DispatchResult> {
+          return dispatcher.publishSummary!(summary, problems);
+        },
+      } : {}),
     };
   }
 
@@ -932,6 +950,8 @@ export function createOutputPublisherFromConfig(
       ...(reviewEvent?.baseSha ? { startSha: reviewEvent.baseSha } : {}),
       ...(reviewEvent?.headSha ? { headSha: reviewEvent.headSha } : {}),
       channelName: channel.name,
+      ...(channelSeverityLabelPrefix ? { severityLabelPrefix: channelSeverityLabelPrefix } : {}),
+      ...(channelSeverityLabelColors ? { severityLabelColors: channelSeverityLabelColors } : {}),
     });
 
     return {
@@ -940,6 +960,11 @@ export function createOutputPublisherFromConfig(
       async publishProblem(problem: ReviewProblem): Promise<DispatchResult> {
         return dispatcher.publishProblem(rendering.renderProblem(problem));
       },
+      ...(dispatcher.publishSummary ? {
+        async publishSummary(summary: string, problems?: readonly ReviewProblem[]): Promise<DispatchResult> {
+          return dispatcher.publishSummary!(summary, problems);
+        },
+      } : {}),
     };
   }
 
@@ -990,10 +1015,6 @@ export function createOutputPublisherFromConfig(
     const assignCommitter = readBoolean(channelConfig, "assign_committer", "assignCommitter");
     const ownersFile = readString(channelConfig, "owners_file", "ownersFile");
     const addOwnersAsAssignees = readBoolean(channelConfig, "add_owners_as_assignees", "addOwnersAsAssignees");
-    const severityLabelPrefix = readString(channelConfig, "severity_label_prefix", "severityLabelPrefix");
-    const severityLabelColors = isPlainObject(channelConfig.severity_label_colors)
-      ? channelConfig.severity_label_colors as Readonly<Record<string, string>>
-      : undefined;
     const notifyFeishuConfig = isPlainObject(channelConfig.notify_feishu)
       ? channelConfig.notify_feishu as Record<string, unknown>
       : undefined;
@@ -1021,8 +1042,8 @@ export function createOutputPublisherFromConfig(
       ...(committerUsername ? { committerUsername } : {}),
       ...(ownersFile ? { ownersFilePath: ownersFile } : {}),
       ...(addOwnersAsAssignees !== undefined ? { addOwnersAsAssignees } : {}),
-      ...(severityLabelPrefix ? { severityLabelPrefix } : {}),
-      ...(severityLabelColors ? { severityLabelColors } : {}),
+      ...(channelSeverityLabelPrefix ? { severityLabelPrefix: channelSeverityLabelPrefix } : {}),
+      ...(channelSeverityLabelColors ? { severityLabelColors: channelSeverityLabelColors } : {}),
       ...(notifyFeishuWebhookUrl ? { notifyFeishu: { webhookUrl: notifyFeishuWebhookUrl, ...(notifyFeishuSecret ? { secret: notifyFeishuSecret } : {}) } } : {}),
       ref,
     });
