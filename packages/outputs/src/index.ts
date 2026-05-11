@@ -31,6 +31,27 @@ export {
 
 export type ProblemSeverity = "info" | "low" | "medium" | "high" | "critical";
 
+const SEVERITY_RANK: Readonly<Record<ProblemSeverity, number>> = {
+	info: 1,
+	low: 2,
+	medium: 3,
+	high: 4,
+	critical: 5,
+};
+
+export function getHighestSeverity(problems: readonly ReviewProblem[]): ProblemSeverity | undefined {
+	let best: ProblemSeverity | undefined;
+	let bestRank = 0;
+	for (const p of problems) {
+		const rank = SEVERITY_RANK[p.severity] ?? 0;
+		if (rank > bestRank) {
+			bestRank = rank;
+			best = p.severity;
+		}
+	}
+	return best;
+}
+
 export interface ReviewProblem {
 	readonly file: string;
 	readonly line: number;
@@ -76,10 +97,13 @@ export interface GiteaPullRequestReviewOptions {
 	readonly pullNumber: number;
 	readonly channelName?: string;
 	readonly fetch?: FetchLike;
+	readonly severityLabelPrefix?: string;
+	readonly severityLabelColors?: Readonly<Record<string, string>>;
 }
 
 export interface GiteaPullRequestReviewDispatcher {
 	publishProblem(problem: ReviewProblem): Promise<DispatchResult>;
+	publishSummary?(summary: string, problems?: readonly ReviewProblem[]): Promise<DispatchResult>;
 }
 
 export class OutputDispatchError extends Error {
@@ -202,7 +226,7 @@ export function createGiteaPullRequestReviewDispatcher(
 		};
 	}
 
-	const dispatcher = {
+	const dispatcher: GiteaPullRequestReviewDispatcher = {
 		async publishProblem(problem: ReviewProblem): Promise<DispatchResult> {
 			if (problem.lineCommentAllowed === false) {
 				return postReview(generalReviewBody(problem));
@@ -249,6 +273,94 @@ export function createGiteaPullRequestReviewDispatcher(
 		},
 	};
 
+	if (options.severityLabelPrefix) {
+		const labelCache = new Map<string, number>();
+		const repoPath = [
+			baseUrl,
+			"api/v1/repos",
+			encodePathSegment(options.owner),
+			encodePathSegment(options.repo),
+		].join("/");
+		const severityColors = { ...DEFAULT_SEVERITY_COLORS, ...(options.severityLabelColors ?? {}) };
+
+		async function resolveLabelId(severity: string): Promise<number | undefined> {
+			const cached = labelCache.get(severity);
+			if (cached !== undefined) {
+				return cached;
+			}
+
+			const labelName = `${options.severityLabelPrefix}${severity}`;
+
+			try {
+				const resp = await fetchImpl(`${repoPath}/labels?name=${encodeURIComponent(labelName)}`, { headers });
+				if (resp.ok) {
+					const list = await resp.json();
+					if (Array.isArray(list)) {
+						for (const label of list) {
+							if (label && typeof label === "object" && (label as Record<string, unknown>).name === labelName) {
+								const id = (label as Record<string, unknown>).id;
+								if (typeof id === "number") {
+									labelCache.set(severity, id);
+									return id;
+								}
+							}
+						}
+					}
+				}
+			} catch {
+				// not found, try creating
+			}
+
+			const color = (severityColors[severity] ?? "#ededed").replace(/^#/u, "");
+			try {
+				const resp = await fetchImpl(`${repoPath}/labels`, {
+					method: "POST",
+					headers,
+					body: JSON.stringify({ name: labelName, color }),
+				});
+				if (resp.ok) {
+					const created = await resp.json();
+					if (created && typeof created === "object") {
+						const id = (created as Record<string, unknown>).id;
+						if (typeof id === "number") {
+							labelCache.set(severity, id);
+							return id;
+						}
+					}
+				}
+			} catch {
+				// label creation failed
+			}
+
+			return undefined;
+		}
+
+		dispatcher.publishSummary = async (_summary: string, problems?: readonly ReviewProblem[]): Promise<DispatchResult> => {
+			const allProblems = problems ?? [];
+			const highest = getHighestSeverity(allProblems);
+			if (!highest) {
+				return { channel, status: "published" as const, raw: {} };
+			}
+
+			const labelId = await resolveLabelId(highest);
+			if (labelId === undefined) {
+				return { channel, status: "published" as const, raw: {} };
+			}
+
+			try {
+				await fetchImpl(`${repoPath}/issues/${options.pullNumber}/labels`, {
+					method: "POST",
+					headers,
+					body: JSON.stringify({ labels: [labelId] }),
+				});
+			} catch {
+				// label attachment failed, non-critical
+			}
+
+			return { channel, status: "published" as const, raw: {} };
+		};
+	}
+
 	return dispatcher;
 }
 
@@ -260,10 +372,13 @@ export interface GithubPullRequestReviewOptions {
 	readonly pullNumber: number;
 	readonly channelName?: string;
 	readonly fetch?: FetchLike;
+	readonly severityLabelPrefix?: string;
+	readonly severityLabelColors?: Readonly<Record<string, string>>;
 }
 
 export interface GithubPullRequestReviewDispatcher {
 	publishProblem(problem: ReviewProblem): Promise<DispatchResult>;
+	publishSummary?(summary: string, problems?: readonly ReviewProblem[]): Promise<DispatchResult>;
 }
 
 export function createGithubPullRequestReviewDispatcher(
@@ -321,7 +436,7 @@ export function createGithubPullRequestReviewDispatcher(
 		};
 	}
 
-	const dispatcher = {
+	const dispatcher: GithubPullRequestReviewDispatcher = {
 		async publishProblem(problem: ReviewProblem): Promise<DispatchResult> {
 			if (problem.lineCommentAllowed === false) {
 				return postReview(generalReviewBody(problem));
@@ -369,6 +484,94 @@ export function createGithubPullRequestReviewDispatcher(
 		},
 	};
 
+	if (options.severityLabelPrefix) {
+		const labelCache = new Map<string, number>();
+		const repoPath = [
+			baseUrl,
+			"repos",
+			encodePathSegment(options.owner),
+			encodePathSegment(options.repo),
+		].join("/");
+		const severityColors = { ...DEFAULT_SEVERITY_COLORS, ...(options.severityLabelColors ?? {}) };
+
+		async function resolveLabelId(severity: string): Promise<number | undefined> {
+			const cached = labelCache.get(severity);
+			if (cached !== undefined) {
+				return cached;
+			}
+
+			const labelName = `${options.severityLabelPrefix}${severity}`;
+
+			try {
+				const resp = await fetchImpl(`${repoPath}/labels`, { headers });
+				if (resp.ok) {
+					const list = await resp.json();
+					if (Array.isArray(list)) {
+						for (const label of list) {
+							if (label && typeof label === "object" && (label as Record<string, unknown>).name === labelName) {
+								const id = (label as Record<string, unknown>).id;
+								if (typeof id === "number") {
+									labelCache.set(severity, id);
+									return id;
+								}
+							}
+						}
+					}
+				}
+			} catch {
+				// not found
+			}
+
+			const color = (severityColors[severity] ?? "#ededed").replace(/^#/u, "");
+			try {
+				const resp = await fetchImpl(`${repoPath}/labels`, {
+					method: "POST",
+					headers,
+					body: JSON.stringify({ name: labelName, color }),
+				});
+				if (resp.ok) {
+					const created = await resp.json();
+					if (created && typeof created === "object") {
+						const id = (created as Record<string, unknown>).id;
+						if (typeof id === "number") {
+							labelCache.set(severity, id);
+							return id;
+						}
+					}
+				}
+			} catch {
+				// label creation failed
+			}
+
+			return undefined;
+		}
+
+		dispatcher.publishSummary = async (_summary: string, problems?: readonly ReviewProblem[]): Promise<DispatchResult> => {
+			const allProblems = problems ?? [];
+			const highest = getHighestSeverity(allProblems);
+			if (!highest) {
+				return { channel, status: "published" as const, raw: {} };
+			}
+
+			const labelId = await resolveLabelId(highest);
+			if (labelId === undefined) {
+				return { channel, status: "published" as const, raw: {} };
+			}
+
+			try {
+				await fetchImpl(`${repoPath}/issues/${options.pullNumber}/labels`, {
+					method: "POST",
+					headers,
+					body: JSON.stringify({ labels: [labelId] }),
+				});
+			} catch {
+				// label attachment failed, non-critical
+			}
+
+			return { channel, status: "published" as const, raw: {} };
+		};
+	}
+
 	return dispatcher;
 }
 
@@ -382,10 +585,13 @@ export interface GitlabMergeRequestReviewOptions {
 	readonly headSha?: string;
 	readonly channelName?: string;
 	readonly fetch?: FetchLike;
+	readonly severityLabelPrefix?: string;
+	readonly severityLabelColors?: Readonly<Record<string, string>>;
 }
 
 export interface GitlabMergeRequestReviewDispatcher {
 	publishProblem(problem: ReviewProblem): Promise<DispatchResult>;
+	publishSummary?(summary: string, problems?: readonly ReviewProblem[]): Promise<DispatchResult>;
 }
 
 export function createGitlabMergeRequestReviewDispatcher(
@@ -435,7 +641,7 @@ export function createGitlabMergeRequestReviewDispatcher(
 		return { body: renderProblemMarkdown(problem) };
 	}
 
-	const dispatcher = {
+	const dispatcher: GitlabMergeRequestReviewDispatcher = {
 		async publishProblem(problem: ReviewProblem): Promise<DispatchResult> {
 			const notesEndpoint = `${mrPath}/notes`;
 			if (!canPublishLineComment(problem)) {
@@ -484,6 +690,92 @@ export function createGitlabMergeRequestReviewDispatcher(
 			};
 		},
 	};
+
+	if (options.severityLabelPrefix) {
+		const labelCache = new Map<string, number>();
+		const gitlabProjectPath = [
+			baseUrl,
+			"api/v4/projects",
+			projectPath,
+		].join("/");
+		const severityColors = { ...DEFAULT_SEVERITY_COLORS, ...(options.severityLabelColors ?? {}) };
+
+		async function resolveLabelId(severity: string): Promise<number | undefined> {
+			const cached = labelCache.get(severity);
+			if (cached !== undefined) {
+				return cached;
+			}
+
+			const labelName = `${options.severityLabelPrefix}${severity}`;
+
+			try {
+				const resp = await fetchImpl(`${gitlabProjectPath}/labels?search=${encodeURIComponent(labelName)}`, { headers });
+				if (resp.ok) {
+					const list = await resp.json();
+					if (Array.isArray(list)) {
+						for (const label of list) {
+							if (label && typeof label === "object" && (label as Record<string, unknown>).name === labelName) {
+								const id = (label as Record<string, unknown>).id;
+								if (typeof id === "number") {
+									labelCache.set(severity, id);
+									return id;
+								}
+							}
+						}
+					}
+				}
+			} catch {
+				// not found
+			}
+
+			const color = (severityColors[severity] ?? "#ededed").replace(/^#/u, "");
+			try {
+				const resp = await fetchImpl(`${gitlabProjectPath}/labels`, {
+					method: "POST",
+					headers,
+					body: JSON.stringify({ name: labelName, color }),
+				});
+				if (resp.ok) {
+					const created = await resp.json();
+					if (created && typeof created === "object") {
+						const id = (created as Record<string, unknown>).id;
+						if (typeof id === "number") {
+							labelCache.set(severity, id);
+							return id;
+						}
+					}
+				}
+			} catch {
+				// label creation failed
+			}
+
+			return undefined;
+		}
+
+		dispatcher.publishSummary = async (_summary: string, problems?: readonly ReviewProblem[]): Promise<DispatchResult> => {
+			const allProblems = problems ?? [];
+			const highest = getHighestSeverity(allProblems);
+			if (!highest) {
+				return { channel, status: "published" as const, raw: {} };
+			}
+
+			const labelId = await resolveLabelId(highest);
+			if (labelId === undefined) {
+				return { channel, status: "published" as const, raw: {} };
+			}
+
+			try {
+				await fetchImpl(`${gitlabProjectPath}/merge_requests/${options.mergeRequestIid}?add_labels=${encodeURIComponent(String(labelId))}`, {
+					method: "PUT",
+					headers,
+				});
+			} catch {
+				// label attachment failed, non-critical
+			}
+
+			return { channel, status: "published" as const, raw: {} };
+		};
+	}
 
 	return dispatcher;
 }
