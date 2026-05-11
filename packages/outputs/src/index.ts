@@ -568,6 +568,11 @@ export function createGiteaIssueDispatcher(options: GiteaIssueOptions): GiteaIss
 
 export type GiteaProblemIssueResolvedAction = "none" | "close" | "delete";
 
+export interface OwnersConfig {
+	readonly reviewers?: readonly string[];
+	readonly paths?: Readonly<Record<string, readonly string[]>>;
+}
+
 export interface GiteaProblemIssueOptions {
 	readonly baseUrl: string;
 	readonly token?: string;
@@ -579,10 +584,121 @@ export interface GiteaProblemIssueOptions {
 	readonly labelIds?: readonly number[];
 	readonly resolvedAction?: GiteaProblemIssueResolvedAction;
 	readonly fetch?: FetchLike;
+	readonly assignCommitter?: boolean;
+	readonly committerUsername?: string;
+	readonly ownersFilePath?: string;
+	readonly ownersContent?: string;
+	readonly addOwnersAsAssignees?: boolean;
+	readonly ref?: string;
+	readonly severityLabelPrefix?: string;
+	readonly severityLabelColors?: Readonly<Record<string, string>>;
+	readonly notifyFeishu?: {
+		readonly webhookUrl: string;
+		readonly secret?: string;
+	};
 }
 
 export interface GiteaProblemIssueDispatcher {
 	reconcileProblems(problems: readonly ReviewProblem[], summary?: string): Promise<readonly DispatchResult[]>;
+}
+
+const DEFAULT_SEVERITY_COLORS: Readonly<Record<string, string>> = {
+	info: "#207de1",
+	low: "#006b75",
+	medium: "#fbca04",
+	high: "#e11d48",
+	critical: "#b60205",
+};
+
+export function parseOwnersContent(content: string): OwnersConfig {
+	const lines = content.split("\n");
+	const reviewers: string[] = [];
+	const paths: Record<string, string[]> = {};
+	let currentPath: string | null = null;
+
+	for (const rawLine of lines) {
+		const line = rawLine.trim();
+		if (line === "" || line.startsWith("#")) {
+			continue;
+		}
+
+		const indented = rawLine.length > 0 && (rawLine[0] === " " || rawLine[0] === "\t");
+
+		const colonMatch = /^(.+?):\s*$/u.exec(line);
+		if (colonMatch) {
+			let key = colonMatch[1]!.trim();
+
+			if ((key.startsWith('"') && key.endsWith('"')) || (key.startsWith("'") && key.endsWith("'"))) {
+				key = key.slice(1, -1);
+			}
+
+			if (key === "reviewers") {
+				currentPath = "__reviewers__";
+				continue;
+			}
+
+			if (key === "paths") {
+				currentPath = null;
+				continue;
+			}
+
+			if (key.includes("/") || key.includes("\\") || key.includes("*")) {
+				currentPath = key;
+				if (!paths[key]) {
+					paths[key] = [];
+				}
+				continue;
+			}
+		}
+
+		if (indented) {
+			const value = line.replace(/^-\s*/u, "").trim();
+			if (!value) {
+				continue;
+			}
+
+			if (currentPath === "__reviewers__") {
+				reviewers.push(value);
+			} else if (currentPath !== null && paths[currentPath]) {
+				paths[currentPath]!.push(value);
+			}
+		}
+	}
+
+	const result: { reviewers?: string[]; paths?: Record<string, string[]> } = {};
+	if (reviewers.length > 0) {
+		result.reviewers = reviewers;
+	}
+	if (Object.keys(paths).length > 0) {
+		result.paths = paths;
+	}
+	return result;
+}
+
+export function matchOwnersForFile(
+	filePath: string,
+	owners: OwnersConfig,
+): readonly string[] {
+	const matchedOwners: string[] = [];
+	let bestMatchLength = -1;
+
+	if (owners.paths) {
+		for (const [dirPath, users] of Object.entries(owners.paths)) {
+			const normalizedDir = dirPath.replace(/\\/gu, "/").replace(/\/+$/u, "") + "/";
+			const normalizedFile = filePath.replace(/\\/gu, "/");
+			if (normalizedFile.startsWith(normalizedDir) && normalizedDir.length > bestMatchLength) {
+				bestMatchLength = normalizedDir.length;
+				matchedOwners.length = 0;
+				matchedOwners.push(...users);
+			}
+		}
+	}
+
+	if (matchedOwners.length === 0 && owners.reviewers) {
+		return owners.reviewers;
+	}
+
+	return matchedOwners;
 }
 
 interface ManagedGiteaIssue {
@@ -694,6 +810,11 @@ export function createGiteaProblemIssueDispatcher(options: GiteaProblemIssueOpti
 	const markerPrefix = options.markerPrefix ?? "[AICR]";
 	const markerLabel = options.markerLabel ?? "aicr-managed";
 	const resolvedAction = options.resolvedAction ?? "close";
+	const assignCommitter = options.assignCommitter ?? true;
+	const addOwnersAsAssignees = options.addOwnersAsAssignees ?? false;
+	const ownersFilePath = options.ownersFilePath ?? "OWNERS";
+	const severityLabelPrefix = options.severityLabelPrefix;
+	const severityLabelColors = options.severityLabelColors;
 	const repoPath = [
 		baseUrl,
 		"api/v1/repos",
@@ -706,6 +827,8 @@ export function createGiteaProblemIssueDispatcher(options: GiteaProblemIssueOpti
 	if (options.token) {
 		headers.authorization = `token ${options.token}`;
 	}
+
+	const severityLabelCache = new Map<string, number>();
 
 	async function request(method: string, endpoint: string, body?: unknown): Promise<unknown> {
 		const response = await fetchImpl(endpoint, {
@@ -728,23 +851,216 @@ export function createGiteaProblemIssueDispatcher(options: GiteaProblemIssueOpti
 		return response.json();
 	}
 
+	async function fetchOwnersContent(): Promise<string | undefined> {
+		if (options.ownersContent !== undefined) {
+			return options.ownersContent;
+		}
+
+		try {
+			const refParam = options.ref ? `?ref=${encodeURIComponent(options.ref)}` : "";
+			const raw = await request("GET", `${repoPath}/contents/${encodePathSegment(ownersFilePath)}${refParam}`);
+			if (!raw || typeof raw !== "object") {
+				return undefined;
+			}
+
+			const content = (raw as Record<string, unknown>).content;
+			if (typeof content !== "string") {
+				return undefined;
+			}
+
+			return Buffer.from(content, "base64").toString("utf8");
+		} catch {
+			return undefined;
+		}
+	}
+
+	async function resolveSeverityLabelId(severity: string): Promise<number | undefined> {
+		if (!severityLabelPrefix) {
+			return undefined;
+		}
+
+		const cached = severityLabelCache.get(severity);
+		if (cached !== undefined) {
+			return cached;
+		}
+
+		const labelName = `${severityLabelPrefix}${severity}`;
+
+		try {
+			const listRaw = await request("GET", `${repoPath}/labels?name=${encodeURIComponent(labelName)}`);
+			if (Array.isArray(listRaw)) {
+				for (const label of listRaw) {
+					if (label && typeof label === "object" && (label as Record<string, unknown>).name === labelName) {
+						const id = (label as Record<string, unknown>).id;
+						if (typeof id === "number") {
+							severityLabelCache.set(severity, id);
+							return id;
+						}
+					}
+				}
+			}
+		} catch {
+			// Label list failed, try creating
+		}
+
+		try {
+			const allLabelsRaw = await request("GET", `${repoPath}/labels`);
+			if (Array.isArray(allLabelsRaw)) {
+				for (const label of allLabelsRaw) {
+					if (label && typeof label === "object" && (label as Record<string, unknown>).name === labelName) {
+						const id = (label as Record<string, unknown>).id;
+						if (typeof id === "number") {
+							severityLabelCache.set(severity, id);
+							return id;
+						}
+					}
+				}
+			}
+		} catch {
+			// Continue to create
+		}
+
+		const colors = { ...DEFAULT_SEVERITY_COLORS, ...(severityLabelColors ?? {}) };
+		const color = colors[severity] ?? "#ededed";
+		try {
+			const created = await request("POST", `${repoPath}/labels`, {
+				name: labelName,
+				color: color.replace(/^#/u, ""),
+			});
+			if (created && typeof created === "object") {
+				const id = (created as Record<string, unknown>).id;
+				if (typeof id === "number") {
+					severityLabelCache.set(severity, id);
+					return id;
+				}
+			}
+		} catch {
+			// Label creation failed
+		}
+
+		return undefined;
+	}
+
+	async function sendFeishuNotification(
+		issueTitle: string,
+		issueUrl: string | undefined,
+		severity: string,
+		problemFile: string,
+	): Promise<void> {
+		if (!options.notifyFeishu) {
+			return;
+		}
+
+		try {
+			const sections = [
+				`**New AICR Issue Created**`,
+				`**Severity:** [${severity.toUpperCase()}]`,
+				`**File:** ${problemFile}`,
+			];
+			if (issueUrl) {
+				sections.push(`**Link:** [${issueTitle}](${issueUrl})`);
+			} else {
+				sections.push(`**Title:** ${issueTitle}`);
+			}
+
+			const timestamp = Math.floor(Date.now() / 1000);
+			const body: Record<string, unknown> = {
+				msg_type: "interactive",
+				card: {
+					elements: [
+						{
+							tag: "markdown",
+							content: sections.join("\n"),
+						},
+					],
+				},
+			};
+
+			if (options.notifyFeishu.secret) {
+				body.timestamp = String(timestamp);
+				body.sign = await computeFeishuSign(timestamp, options.notifyFeishu.secret);
+			}
+
+			await fetchImpl(options.notifyFeishu.webhookUrl, {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify(body),
+			});
+		} catch {
+			// Feishu notification failure should not block issue creation
+		}
+	}
+
 	async function listManagedOpenIssues(): Promise<readonly ManagedGiteaIssue[]> {
 		const params = new URLSearchParams({ state: "open", type: "issues" });
 		const raw = await request("GET", `${repoPath}/issues?${params.toString()}`);
 		return parseManagedIssues(raw, markerPrefix, markerLabel);
 	}
 
-	async function createIssue(problem: ReviewProblem, summary: string | undefined): Promise<DispatchResult> {
+	function resolveAssignees(problem: ReviewProblem, owners: OwnersConfig | undefined): string[] {
+		const assignees: string[] = [];
+
+		if (assignCommitter && options.committerUsername) {
+			assignees.push(options.committerUsername);
+		}
+
+		if (addOwnersAsAssignees && owners) {
+			const matched = matchOwnersForFile(problem.file, owners);
+			for (const owner of matched) {
+				if (!assignees.includes(owner)) {
+					assignees.push(owner);
+				}
+			}
+		}
+
+		return assignees;
+	}
+
+	async function createIssue(
+		problem: ReviewProblem,
+		summary: string | undefined,
+		owners: OwnersConfig | undefined,
+	): Promise<DispatchResult> {
 		const body: Record<string, unknown> = {
 			title: buildProblemIssueTitle(problem, markerPrefix),
 			body: buildManagedIssueBody(problem, { channel, markerLabel, ...(summary ? { summary } : {}) }),
 		};
+
+		const labelIdList: number[] = [];
 		if (options.labelIds && options.labelIds.length > 0) {
-			body.labels = [...options.labelIds];
+			labelIdList.push(...options.labelIds);
+		}
+
+		if (severityLabelPrefix) {
+			const severityId = await resolveSeverityLabelId(problem.severity);
+			if (severityId !== undefined && !labelIdList.includes(severityId)) {
+				labelIdList.push(severityId);
+			}
+		}
+
+		if (labelIdList.length > 0) {
+			body.labels = labelIdList;
+		}
+
+		const assignees = resolveAssignees(problem, owners);
+		if (assignees.length > 0) {
+			body.assignees = assignees;
 		}
 
 		const raw = await request("POST", `${repoPath}/issues`, body);
 		const externalId = extractExternalId(raw);
+
+		const issueUrl = raw && typeof raw === "object"
+			? (raw as Record<string, unknown>).html_url as string | undefined
+			: undefined;
+
+		await sendFeishuNotification(
+			buildProblemIssueTitle(problem, markerPrefix),
+			issueUrl,
+			problem.severity,
+			problem.file,
+		);
+
 		return {
 			channel,
 			status: "published",
@@ -787,6 +1103,15 @@ export function createGiteaProblemIssueDispatcher(options: GiteaProblemIssueOpti
 	const dispatcher = {
 		async reconcileProblems(problems: readonly ReviewProblem[], summary?: string): Promise<readonly DispatchResult[]> {
 			const preparedProblems = problems.map(ensureProblemFingerprint);
+			let owners: OwnersConfig | undefined;
+
+			if (addOwnersAsAssignees) {
+				const ownersContent = await fetchOwnersContent();
+				if (ownersContent) {
+					owners = parseOwnersContent(ownersContent);
+				}
+			}
+
 			const currentFingerprints = new Set(preparedProblems.map((problem) => problem.fingerprint!));
 			const existingIssues = await listManagedOpenIssues();
 			const existingByFingerprint = new Map<string, ManagedGiteaIssue>();
@@ -799,7 +1124,7 @@ export function createGiteaProblemIssueDispatcher(options: GiteaProblemIssueOpti
 			const results: DispatchResult[] = [];
 			for (const problem of preparedProblems) {
 				if (!existingByFingerprint.has(problem.fingerprint!)) {
-					results.push(await createIssue(problem, summary));
+					results.push(await createIssue(problem, summary, owners));
 				}
 			}
 

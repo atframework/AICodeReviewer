@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { RotatingFileWriter } from "../src/log-file.js";
+import { RotatingFileWriter, installFileLogTeeFromEnv } from "../src/log-file.js";
 
 async function listLogFiles(logDir: string): Promise<string[]> {
   return (await readdir(logDir)).filter((name) => name.endsWith(".log")).sort();
@@ -93,6 +93,32 @@ describe("RotatingFileWriter", () => {
       expect(files).toEqual(["aicr.log"]);
       await expect(readFile(activePath, "utf8")).resolves.toBe("fresh\n");
     } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("installFileLogTeeFromEnv", () => {
+  it("prepends an ISO timestamp to each log line written to the file", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-log-tee-ts-"));
+    const logFile = join(tempDir, "aicr.log");
+    const savedStdoutWrite = process.stdout.write.bind(process.stdout);
+    const savedStderrWrite = process.stderr.write.bind(process.stderr);
+
+    try {
+      const writer = installFileLogTeeFromEnv({
+        AICR_LOG_DIR: tempDir,
+        AICR_LOG_FILE: "aicr.log",
+      });
+      expect(writer).toBeDefined();
+
+      process.stdout.write("hello\n" as unknown as Buffer, "utf8" as unknown as BufferEncoding);
+
+      const content = await readFile(logFile, "utf8");
+      expect(content).toMatch(/^\[\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z\] hello\n$/);
+    } finally {
+      process.stdout.write = savedStdoutWrite;
+      process.stderr.write = savedStderrWrite;
       await rm(tempDir, { recursive: true, force: true });
     }
   });

@@ -37,6 +37,7 @@ import {
   type ReviewProblem,
   type DispatchResult,
   toTemplateProblem,
+  resolveAuthorUsername,
   type AuthorResolutionOptions,
   type MentionChannelKind,
   type TemplateContext,
@@ -986,6 +987,26 @@ export function createOutputPublisherFromConfig(
     const labelIds = Array.isArray(channelConfig.label_ids) && channelConfig.label_ids.every((value) => typeof value === "number")
       ? channelConfig.label_ids as readonly number[]
       : undefined;
+    const assignCommitter = readBoolean(channelConfig, "assign_committer", "assignCommitter");
+    const ownersFile = readString(channelConfig, "owners_file", "ownersFile");
+    const addOwnersAsAssignees = readBoolean(channelConfig, "add_owners_as_assignees", "addOwnersAsAssignees");
+    const severityLabelPrefix = readString(channelConfig, "severity_label_prefix", "severityLabelPrefix");
+    const severityLabelColors = isPlainObject(channelConfig.severity_label_colors)
+      ? channelConfig.severity_label_colors as Readonly<Record<string, string>>
+      : undefined;
+    const notifyFeishuConfig = isPlainObject(channelConfig.notify_feishu)
+      ? channelConfig.notify_feishu as Record<string, unknown>
+      : undefined;
+    const notifyFeishuWebhookUrlEnv = notifyFeishuConfig?.webhook_url_env as string | undefined;
+    const notifyFeishuWebhookUrl = notifyFeishuWebhookUrlEnv ? resolveEnv(notifyFeishuWebhookUrlEnv) : undefined;
+    const notifyFeishuSecretEnv = notifyFeishuConfig?.secret_env as string | undefined;
+    const notifyFeishuSecret = notifyFeishuSecretEnv ? resolveEnv(notifyFeishuSecretEnv) : undefined;
+    const authorResolution = buildAuthorResolutionOptions(config, channel);
+    const committerUsername = reviewEvent?.author
+      ? resolveAuthorUsername({ author: reviewEvent.author }, authorResolution)
+      : undefined;
+    const ref = reviewEvent?.headSha ?? "main";
+
     const dispatcher = createGiteaProblemIssueDispatcher({
       baseUrl,
       ...(tokenEnv ? { token: resolveEnv(tokenEnv) ?? "" } : {}),
@@ -996,6 +1017,14 @@ export function createOutputPublisherFromConfig(
       ...(markerLabel ? { markerLabel } : {}),
       ...(labelIds ? { labelIds } : {}),
       ...(resolvedAction === "none" || resolvedAction === "close" || resolvedAction === "delete" ? { resolvedAction } : {}),
+      ...(assignCommitter !== undefined ? { assignCommitter } : {}),
+      ...(committerUsername ? { committerUsername } : {}),
+      ...(ownersFile ? { ownersFilePath: ownersFile } : {}),
+      ...(addOwnersAsAssignees !== undefined ? { addOwnersAsAssignees } : {}),
+      ...(severityLabelPrefix ? { severityLabelPrefix } : {}),
+      ...(severityLabelColors ? { severityLabelColors } : {}),
+      ...(notifyFeishuWebhookUrl ? { notifyFeishu: { webhookUrl: notifyFeishuWebhookUrl, ...(notifyFeishuSecret ? { secret: notifyFeishuSecret } : {}) } } : {}),
+      ref,
     });
 
     return {

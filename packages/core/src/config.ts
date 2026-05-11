@@ -150,6 +150,18 @@ const outputChannelSchema = z
     marker_label: z.string().min(1).optional(),
     label_ids: z.array(z.number().int().positive()).optional(),
     resolved_action: z.enum(["none", "close", "delete"]).optional(),
+    assign_committer: z.boolean().optional(),
+    owners_file: z.string().min(1).optional(),
+    add_owners_as_assignees: z.boolean().optional(),
+    severity_label_prefix: z.string().min(1).optional(),
+    severity_label_colors: z.record(z.string().min(1), z.string().min(1)).optional(),
+    notify_feishu: z
+      .object({
+        webhook_url_env: z.string().min(1),
+        secret_env: z.string().min(1).optional(),
+      })
+      .passthrough()
+      .optional(),
   })
   .passthrough();
 

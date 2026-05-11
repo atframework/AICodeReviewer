@@ -243,6 +243,35 @@ outputs:
     #   no_problems: { action: suppress }        # keep quiet when no actionable problems are found
     #   revision_url_template: "https://swarm.example.com/changes/{{revision}}"  # optional P4/SVN link override
 
+    # Gitea managed problem issues — create/close/delete issues per problem fingerprint.
+    # Supports: assignees (committer + OWNERS), severity labels, Feishu notifications.
+    #
+    # - name: gitea-problem-issues
+    #   kind: gitea_problem_issue
+    #   trigger: gitea
+    #   marker_prefix: "[AICR]"                  # title prefix for managed issues
+    #   marker_label: "aicr-managed"             # hidden marker to identify managed issues
+    #   resolved_action: close                   # none | close (default) | delete — action when problem is fixed
+    #
+    #   # -- Assignee configuration --
+    #   assign_committer: true                   # add the commit author as assignee (default: true)
+    #   owners_file: "OWNERS"                    # path to OWNERS file in repo (default: "OWNERS")
+    #   add_owners_as_assignees: true            # add matched OWNERS as assignees (default: true)
+    #
+    #   # -- Severity labels --
+    #   severity_label_prefix: "aicr:problem:"  # auto-created labels: aicr:problem:info, aicr:problem:low, etc.
+    #   # severity_label_colors:                  # optional custom colors (hex, without #)
+    #   #   info: "207de1"
+    #   #   low: "006b75"
+    #   #   medium: "fbca04"
+    #   #   high: "e11d48"
+    #   #   critical: "b60205"
+    #
+    #   # -- Feishu notification on issue creation --
+    #   # notify_feishu:
+    #   #   webhook_url_env: FEISHU_ISSUE_NOTIFY_WEBHOOK
+    #   #   secret_env: FEISHU_ISSUE_NOTIFY_SECRET
+
     # WeCom (企业微信) bot — push aggregated problems to a WeCom group.
     # - name: wecom-ops
     #   kind: wecom_bot
