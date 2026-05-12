@@ -485,7 +485,7 @@ export function createGithubPullRequestReviewDispatcher(
 	};
 
 	if (options.severityLabelPrefix) {
-		const labelCache = new Map<string, number>();
+		const labelCache = new Map<string, string>();
 		const repoPath = [
 			baseUrl,
 			"repos",
@@ -494,7 +494,7 @@ export function createGithubPullRequestReviewDispatcher(
 		].join("/");
 		const severityColors = { ...DEFAULT_SEVERITY_COLORS, ...(options.severityLabelColors ?? {}) };
 
-		async function resolveLabelId(severity: string): Promise<number | undefined> {
+		async function resolveLabelName(severity: string): Promise<string | undefined> {
 			const cached = labelCache.get(severity);
 			if (cached !== undefined) {
 				return cached;
@@ -509,11 +509,8 @@ export function createGithubPullRequestReviewDispatcher(
 					if (Array.isArray(list)) {
 						for (const label of list) {
 							if (label && typeof label === "object" && (label as Record<string, unknown>).name === labelName) {
-								const id = (label as Record<string, unknown>).id;
-								if (typeof id === "number") {
-									labelCache.set(severity, id);
-									return id;
-								}
+								labelCache.set(severity, labelName);
+								return labelName;
 							}
 						}
 					}
@@ -532,10 +529,10 @@ export function createGithubPullRequestReviewDispatcher(
 				if (resp.ok) {
 					const created = await resp.json();
 					if (created && typeof created === "object") {
-						const id = (created as Record<string, unknown>).id;
-						if (typeof id === "number") {
-							labelCache.set(severity, id);
-							return id;
+						const createdName = (created as Record<string, unknown>).name;
+						if (createdName === labelName) {
+							labelCache.set(severity, labelName);
+							return labelName;
 						}
 					}
 				}
@@ -553,8 +550,8 @@ export function createGithubPullRequestReviewDispatcher(
 				return { channel, status: "published" as const, raw: {} };
 			}
 
-			const labelId = await resolveLabelId(highest);
-			if (labelId === undefined) {
+			const labelName = await resolveLabelName(highest);
+			if (labelName === undefined) {
 				return { channel, status: "published" as const, raw: {} };
 			}
 
@@ -562,7 +559,7 @@ export function createGithubPullRequestReviewDispatcher(
 				await fetchImpl(`${repoPath}/issues/${options.pullNumber}/labels`, {
 					method: "POST",
 					headers,
-					body: JSON.stringify({ labels: [labelId] }),
+					body: JSON.stringify({ labels: [labelName] }),
 				});
 			} catch {
 				// label attachment failed, non-critical
@@ -692,7 +689,7 @@ export function createGitlabMergeRequestReviewDispatcher(
 	};
 
 	if (options.severityLabelPrefix) {
-		const labelCache = new Map<string, number>();
+		const labelCache = new Map<string, string>();
 		const gitlabProjectPath = [
 			baseUrl,
 			"api/v4/projects",
@@ -700,7 +697,11 @@ export function createGitlabMergeRequestReviewDispatcher(
 		].join("/");
 		const severityColors = { ...DEFAULT_SEVERITY_COLORS, ...(options.severityLabelColors ?? {}) };
 
-		async function resolveLabelId(severity: string): Promise<number | undefined> {
+		function normalizeGitlabLabelColor(color: string): string {
+			return color.startsWith("#") ? color : `#${color}`;
+		}
+
+		async function resolveLabelName(severity: string): Promise<string | undefined> {
 			const cached = labelCache.get(severity);
 			if (cached !== undefined) {
 				return cached;
@@ -715,11 +716,8 @@ export function createGitlabMergeRequestReviewDispatcher(
 					if (Array.isArray(list)) {
 						for (const label of list) {
 							if (label && typeof label === "object" && (label as Record<string, unknown>).name === labelName) {
-								const id = (label as Record<string, unknown>).id;
-								if (typeof id === "number") {
-									labelCache.set(severity, id);
-									return id;
-								}
+								labelCache.set(severity, labelName);
+								return labelName;
 							}
 						}
 					}
@@ -728,7 +726,7 @@ export function createGitlabMergeRequestReviewDispatcher(
 				// not found
 			}
 
-			const color = (severityColors[severity] ?? "#ededed").replace(/^#/u, "");
+			const color = normalizeGitlabLabelColor(severityColors[severity] ?? "#ededed");
 			try {
 				const resp = await fetchImpl(`${gitlabProjectPath}/labels`, {
 					method: "POST",
@@ -738,10 +736,10 @@ export function createGitlabMergeRequestReviewDispatcher(
 				if (resp.ok) {
 					const created = await resp.json();
 					if (created && typeof created === "object") {
-						const id = (created as Record<string, unknown>).id;
-						if (typeof id === "number") {
-							labelCache.set(severity, id);
-							return id;
+						const createdName = (created as Record<string, unknown>).name;
+						if (createdName === labelName) {
+							labelCache.set(severity, labelName);
+							return labelName;
 						}
 					}
 				}
@@ -759,13 +757,13 @@ export function createGitlabMergeRequestReviewDispatcher(
 				return { channel, status: "published" as const, raw: {} };
 			}
 
-			const labelId = await resolveLabelId(highest);
-			if (labelId === undefined) {
+			const labelName = await resolveLabelName(highest);
+			if (labelName === undefined) {
 				return { channel, status: "published" as const, raw: {} };
 			}
 
 			try {
-				await fetchImpl(`${gitlabProjectPath}/merge_requests/${options.mergeRequestIid}?add_labels=${encodeURIComponent(String(labelId))}`, {
+				await fetchImpl(`${gitlabProjectPath}/merge_requests/${options.mergeRequestIid}?add_labels=${encodeURIComponent(labelName)}`, {
 					method: "PUT",
 					headers,
 				});

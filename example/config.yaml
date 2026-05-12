@@ -256,7 +256,7 @@ outputs:
     #   # -- Assignee configuration --
     #   assign_committer: true                   # add the commit author as assignee (default: true)
     #   owners_file: "OWNERS"                    # path to OWNERS file in repo (default: "OWNERS")
-    #   add_owners_as_assignees: true            # add matched OWNERS as assignees (default: true)
+    #   add_owners_as_assignees: true            # add matched OWNERS as assignees (default: false)
     #
     #   # -- Severity labels --
     #   severity_label_prefix: "aicr:problem:"  # auto-created labels: aicr:problem:info, aicr:problem:low, etc.

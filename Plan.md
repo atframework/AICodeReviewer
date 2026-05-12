@@ -641,7 +641,7 @@ export interface ModelSpec {
 - **参与者与指派（assignees）**：
   - 新增配置字段 `assign_committer: boolean`（默认 `true`）：创建 issue 时自动将触发 review 的提交人（`ReviewEvent.author.username`）添加为指派成员。提交人用户名通过 `author_resolution` 管线解析后传入 dispatcher。
   - 新增配置字段 `owners_file: string`（默认 `"OWNERS"`）：从仓库根目录读取 OWNERS 文件（YAML 格式），按问题文件路径匹配责任人。匹配算法为最长前缀匹配（`src/auth/login.ts` 匹配 `src/auth/` 而非 `src/`）。
-  - 新增配置字段 `add_owners_as_assignees: boolean`（默认 `true`）：将匹配到的 OWNERS 也添加为 issue 指派成员。
+  - 新增配置字段 `add_owners_as_assignees: boolean`（默认 `false`）：将匹配到的 OWNERS 也添加为 issue 指派成员。
   - OWNERS 文件通过 Gitea Contents API（`GET /api/v1/repos/{owner}/{repo}/contents/OWNERS?ref={ref}`）获取，结果按仓库缓存（同一 `reconcileProblems` 调用只获取一次）。
   - 参与者列表（`assignees` 字段）同时出现在 `POST .../issues` 请求体中；Gitea 会自动将指派成员设为 issue 订阅者。
 
@@ -670,7 +670,7 @@ export interface ModelSpec {
   - 文件缺失或格式错误不阻塞 issue 创建，仅记录告警日志。
 
 - **严重程度标签（severity labels）**：
-  - 新增配置字段 `severity_label_prefix: string`（默认 `"aicr:problem:"`）：为每个创建的 issue 自动附加对应严重程度的标签，标签名格式为 `{prefix}{severity}`，例如 `aicr:problem:high`、`aicr:problem:critical`。
+  - 新增配置字段 `severity_label_prefix: string`：配置后为每个创建的 issue 自动附加对应严重程度的标签，标签名格式为 `{prefix}{severity}`，例如 `aicr:problem:high`、`aicr:problem:critical`。
   - 标签自动创建：若 Gitea 仓库中不存在该标签，通过 `POST /api/v1/repos/{owner}/{repo}/labels` 自动创建（颜色按严重程度分级：`info=#207de1`、`low=#006b75`、`medium=#fbca04`、`high=#e11d48`、`critical=#b60205`）。
   - 标签 ID 缓存：同一 dispatcher 实例内缓存已解析/已创建的标签 ID，避免重复 API 调用。
   - 对 PR review 通道（`gitea_pr_review`、`github_pr_review`、`gitlab_mr_review`）：在所有 problem 发布完成后，将最高严重程度的标签添加到 PR/MR 上。Gitea/GitHub 将 PR 视为特殊 issue，可复用同一 labels API。

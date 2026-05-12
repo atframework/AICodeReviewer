@@ -140,4 +140,37 @@ describe("createGitlabMergeRequestReviewDispatcher", () => {
     await expect(dispatcher.publishProblem(problem)).rejects.toBeInstanceOf(OutputDispatchError);
     await expect(dispatcher.publishProblem(problem)).rejects.toMatchObject({ status: 403 });
   });
+
+  it("attaches the highest severity label by name", async () => {
+    const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
+    const dispatcher = createGitlabMergeRequestReviewDispatcher({
+      baseUrl: "https://gitlab.example",
+      projectId: "owent/example",
+      mergeRequestIid: 7,
+      severityLabelPrefix: "aicr:problem:",
+      severityLabelColors: { critical: "b60205" },
+      fetch: async (url, init) => {
+        calls.push({ url, init });
+        if (url.includes("/labels?search=")) {
+          return response([]);
+        }
+        if (url.endsWith("/labels") && init?.method === "POST") {
+          return response({ id: 91, name: "aicr:problem:critical", color: "#b60205" });
+        }
+        return response({ id: 1 });
+      },
+    });
+
+    await dispatcher.publishSummary!("summary", [
+      { ...problem, severity: "medium", fingerprint: "fp-medium" },
+      { ...problem, severity: "critical", fingerprint: "fp-critical" },
+    ]);
+
+    const createBody = JSON.parse(
+      calls.find((call) => call.url.endsWith("/labels") && call.init?.method === "POST")?.init?.body ?? "{}",
+    );
+    expect(createBody).toEqual({ name: "aicr:problem:critical", color: "#b60205" });
+    const attachCall = calls.find((call) => call.url.includes("/merge_requests/7?add_labels="));
+    expect(attachCall?.url).toBe("https://gitlab.example/api/v4/projects/owent%2Fexample/merge_requests/7?add_labels=aicr%3Aproblem%3Acritical");
+  });
 });

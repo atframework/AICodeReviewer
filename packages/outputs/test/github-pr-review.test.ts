@@ -138,4 +138,30 @@ describe("createGithubPullRequestReviewDispatcher", () => {
     await expect(dispatcher.publishProblem(problem)).rejects.toBeInstanceOf(OutputDispatchError);
     await expect(dispatcher.publishProblem(problem)).rejects.toMatchObject({ status: 401 });
   });
+
+  it("attaches the highest severity label by name", async () => {
+    const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
+    const dispatcher = createGithubPullRequestReviewDispatcher({
+      owner: "owent",
+      repo: "example",
+      pullNumber: 10,
+      severityLabelPrefix: "aicr:problem:",
+      fetch: async (url, init) => {
+        calls.push({ url, init });
+        if (url.endsWith("/labels") && init?.method !== "POST") {
+          return response([{ id: 90, name: "aicr:problem:critical", color: "b60205" }]);
+        }
+        return response({ id: 1 });
+      },
+    });
+
+    await dispatcher.publishSummary!("summary", [
+      { ...problem, severity: "medium", fingerprint: "fp-medium" },
+      { ...problem, severity: "critical", fingerprint: "fp-critical" },
+    ]);
+
+    const labelCall = calls.find((call) => call.url.includes("/issues/10/labels"));
+    expect(labelCall).toBeDefined();
+    expect(JSON.parse(labelCall?.init?.body ?? "{}")).toEqual({ labels: ["aicr:problem:critical"] });
+  });
 });

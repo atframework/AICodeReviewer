@@ -86,6 +86,56 @@ For push/commit/P4 events, publish a non-empty summary when configured channels 
 | `feishu_bot` | Collected for aggregation | Interactive card Markdown | Keep content concise; include counts, severities, and top locations |
 | `wecom_bot` | Collected for aggregation | Markdown message | Keep within WeCom message size and formatting limits |
 
+## Managed Gitea problem issues
+
+The `gitea_problem_issue` channel reconciles one managed Gitea issue per problem fingerprint. On every summary publish it creates issues for new fingerprints and applies `resolved_action` to open managed issues whose fingerprints disappeared from the latest analysis.
+
+Channel fields:
+
+| Field | Meaning |
+| --- | --- |
+| `marker_prefix` | Title prefix used to identify managed issues; defaults to `[AICR]` |
+| `marker_label` | Hidden body marker used to scope managed issues; defaults to `aicr-managed` |
+| `label_ids` | Existing Gitea label IDs to attach to every created issue |
+| `resolved_action` | `none`, `close`, or `delete`; defaults to `close` |
+| `assign_committer` | Add the resolved review author as an assignee; defaults to `true` |
+| `owners_file` | Repository file to read for path owners; defaults to `OWNERS` |
+| `add_owners_as_assignees` | Set to `true` to add matched OWNERS entries as assignees |
+| `severity_label_prefix` | When set, auto-create and attach one severity label such as `aicr:problem:high` |
+| `severity_label_colors` | Optional severity-to-color map for auto-created labels |
+| `notify_feishu` | Optional issue-created notification webhook config |
+
+The OWNERS file uses a small YAML shape:
+
+```yaml
+reviewers:
+  - admin1
+paths:
+  "src/auth/":
+    - alice
+    - bob
+```
+
+Path owners use longest-prefix matching. If no path matches, `reviewers` are used as a fallback. Missing or unreadable OWNERS files do not block issue creation.
+
+Example:
+
+```yaml
+outputs:
+  channels:
+    - name: gitea-problem-issues
+      kind: gitea_problem_issue
+      trigger: gitea
+      resolved_action: close
+      assign_committer: true
+      owners_file: OWNERS
+      add_owners_as_assignees: true
+      severity_label_prefix: "aicr:problem:"
+      notify_feishu:
+        webhook_url_env: FEISHU_ISSUE_NOTIFY_WEBHOOK
+        secret_env: FEISHU_ISSUE_NOTIFY_SECRET
+```
+
 ## No-problems policy
 
 The implemented `no_problems` policy controls whether a successful review with zero actionable problems should publish a summary to each output channel.
