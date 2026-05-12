@@ -1190,6 +1190,9 @@ export async function runReviewOrchestration(
       problemCount: outputState.problems.length,
       summaryCount: outputState.summaries.length,
       llmOutput: llmContentPreview,
+      ...(context.reviewEvent.branch ? { branch: context.reviewEvent.branch } : {}),
+      ...(context.reviewEvent.author?.username ? { author: context.reviewEvent.author.username } : {}),
+      ...(context.reviewEvent.author?.email ? { authorEmail: context.reviewEvent.author.email } : {}),
       ...(outputState.problems.length > 0 ? {
         problems: outputState.problems.map((p) => ({
           file: p.file,

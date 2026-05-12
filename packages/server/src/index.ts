@@ -530,6 +530,9 @@ function scheduleTriggerProcessing(
     workspaceId: reviewEvent.workspaceId,
     repoRef: reviewEvent.repoRef,
     ...(reviewEvent.headSha ? { headSha: reviewEvent.headSha } : {}),
+    ...(reviewEvent.branch ? { branch: reviewEvent.branch } : {}),
+    ...(reviewEvent.author?.username ? { author: reviewEvent.author.username } : {}),
+    ...(reviewEvent.author?.email ? { authorEmail: reviewEvent.author.email } : {}),
   }));
 
   setTimeout(() => {
@@ -552,6 +555,9 @@ function scheduleTriggerProcessing(
         workspaceId: reviewEvent.workspaceId,
         repoRef: reviewEvent.repoRef,
         ...(reviewEvent.headSha ? { headSha: reviewEvent.headSha } : {}),
+        ...(reviewEvent.branch ? { branch: reviewEvent.branch } : {}),
+        ...(reviewEvent.author?.username ? { author: reviewEvent.author.username } : {}),
+        ...(reviewEvent.author?.email ? { authorEmail: reviewEvent.author.email } : {}),
         ...(result.reviewRun ? { reviewRun: result.reviewRun } : {}),
         ...(result.triage ? { triage: result.triage } : {}),
       }));
@@ -568,6 +574,9 @@ function scheduleTriggerProcessing(
         workspaceId: reviewEvent.workspaceId,
         repoRef: reviewEvent.repoRef,
         ...(reviewEvent.headSha ? { headSha: reviewEvent.headSha } : {}),
+        ...(reviewEvent.branch ? { branch: reviewEvent.branch } : {}),
+        ...(reviewEvent.author?.username ? { author: reviewEvent.author.username } : {}),
+        ...(reviewEvent.author?.email ? { authorEmail: reviewEvent.author.email } : {}),
         reason,
         error: message,
       }));

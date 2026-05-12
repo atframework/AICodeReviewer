@@ -648,6 +648,7 @@ describe("createOutputPublisherFromConfig", () => {
       const issueCall = calls.find((c) => c.url.endsWith("/repos/my-org/my-repo/issues") && c.init?.method === "POST");
       expect(issueCall).toBeDefined();
       expect(issueCall?.init.headers).toMatchObject({ authorization: "Bearer gh-problem-token" });
+      expect(calls[0]?.url).toBe("https://api.github.com/repos/my-org/my-repo/issues?state=open&sort=updated&direction=desc&per_page=20&page=1");
     } finally {
       vi.unstubAllGlobals();
       if (originalToken === undefined) {
@@ -779,7 +780,7 @@ describe("createOutputPublisherFromConfig", () => {
       ]);
 
       expect(Array.isArray(results)).toBe(true);
-      expect(calls[0]?.url).toBe("https://gitea.example.com/api/v1/repos/owent/example/issues?state=open&type=issues");
+      expect(calls[0]?.url).toBe("https://gitea.example.com/api/v1/repos/owent/example/issues?state=open&type=issues&limit=20&page=1");
       expect(calls[1]?.url).toBe("https://gitea.example.com/api/v1/repos/owent/example/issues");
       expect(calls[1]?.init.headers).toMatchObject({ authorization: "token resolver-token" });
       const body = JSON.parse(calls[1]?.init.body ?? "{}");
@@ -792,6 +793,62 @@ describe("createOutputPublisherFromConfig", () => {
       } else {
         process.env.GITEA_TOKEN = originalToken;
       }
+    }
+  });
+
+  it("passes workspace managed issue fetch limit overrides to problem issue publishers", async () => {
+    const calls: { url: string; init: { headers?: Record<string, string>; body?: string; method?: string } }[] = [];
+    vi.stubGlobal("fetch", async (url: string, init?: { headers?: Record<string, string>; body?: string; method?: string }) => {
+      calls.push({ url, init: init ?? {} });
+      return response([]);
+    });
+
+    const base = makeConfig();
+    const config = makeConfig({
+      triggers: [{ name: "github-saas", kind: "github" }],
+      review: {
+        ...base.review,
+        problem_issue: { max_recent_issues: 50 },
+      },
+      outputs: {
+        template_engine: "handlebars",
+        channels: [{ name: "github-problem-issues", kind: "github_problem_issue", trigger: "github-saas" }],
+      },
+      workspaces: {
+        cache: { max_total_gb: 50, eviction: "lru", ttl_days: 30 },
+        defaults: {},
+        instances: {
+          "test-workspace": {
+            source_repo: { trigger: "github-saas", repo: "my-org/my-repo" },
+            review: { problem_issue: { max_recent_issues: 7 } },
+          },
+        },
+      },
+    } as Partial<AppConfig>);
+
+    try {
+      const publisher = createOutputPublisherFromConfig(
+        config,
+        "github-problem-issues",
+        undefined,
+        "test-workspace",
+        {
+          triggerName: "github-saas",
+          provider: "github",
+          workspaceId: "test-workspace",
+          targetKind: "push",
+          repoRef: "my-org/my-repo",
+          author: {},
+          reason: "github:push",
+        },
+      );
+
+      expect(publisher).toBeDefined();
+      await publisher?.publishSummary?.("", []);
+
+      expect(calls[0]?.url).toBe("https://api.github.com/repos/my-org/my-repo/issues?state=open&sort=updated&direction=desc&per_page=7&page=1");
+    } finally {
+      vi.unstubAllGlobals();
     }
   });
 
@@ -1103,6 +1160,75 @@ describe("createOutputPublisherResolverFromConfig", () => {
             rules: [
               { match: { target_kind: "push" }, summary: ["gitea-problem-issues"] },
             ],
+          },
+        },
+      } as Partial<AppConfig>);
+      const publisher = createOutputPublisherResolverFromConfig(config)({
+        reviewEvent: {
+          triggerName: "gitea-internal",
+          provider: "gitea",
+          workspaceId: "test-workspace",
+          targetKind: "push",
+          repoRef: "owent/example",
+          author: {},
+          reason: "gitea:push",
+        },
+        payload: {},
+        provider: "gitea",
+        eventName: "push",
+      });
+
+      expect(publisher).toBeDefined();
+      await publisher?.publishSummary?.("", [
+        { file: "src/app.ts", line: 1, severity: "medium", category: "correctness", message: "Issue." },
+      ]);
+
+      expect(calls[1]?.url).toBe("https://gitea.example.com/api/v1/repos/owent/example/issues");
+    } finally {
+      vi.unstubAllGlobals();
+      if (originalToken === undefined) {
+        delete process.env.GITEA_TOKEN;
+      } else {
+        process.env.GITEA_TOKEN = originalToken;
+      }
+    }
+  });
+
+  it("prefers route rules over workspace outputs for push events", async () => {
+    const calls: { url: string; init: { body?: string; method?: string } }[] = [];
+    vi.stubGlobal("fetch", async (url: string, init?: { body?: string; method?: string }) => {
+      calls.push({ url, init: init ?? {} });
+      return calls.length === 1 ? response([]) : response({ id: 100, number: 20 });
+    });
+
+    const originalToken = process.env.GITEA_TOKEN;
+    process.env.GITEA_TOKEN = "resolver-token";
+    try {
+      const config = makeConfig({
+        outputs: {
+          template_engine: "handlebars",
+          channels: [
+            { name: "gitea-pr", kind: "gitea_pr_review", trigger: "gitea-internal" },
+            { name: "gitea-problem-issues", kind: "gitea_problem_issue", trigger: "gitea-internal" },
+          ],
+          routes: {
+            default: {},
+            rules: [
+              { match: { target_kind: "push" }, summary: ["gitea-problem-issues"] },
+            ],
+          },
+        },
+        workspaces: {
+          cache: { max_total_gb: 50, eviction: "lru", ttl_days: 30 },
+          defaults: {},
+          instances: {
+            "test-workspace": {
+              source_repo: { trigger: "gitea-internal", repo: "owent/example" },
+              outputs: {
+                line_comments: ["gitea-pr"],
+                summary: ["gitea-pr"],
+              },
+            },
           },
         },
       } as Partial<AppConfig>);

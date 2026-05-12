@@ -171,8 +171,9 @@ const gitlabPushPayloadSchema = z
   .passthrough();
 
 function normalizeActor(actor: z.infer<typeof actorSchema> | undefined): ReviewActor {
+  const raw = actor as Record<string, unknown> | undefined;
   return {
-    username: actor?.login ?? actor?.username,
+    username: actor?.login ?? actor?.username ?? (typeof raw?.name === "string" ? raw.name : undefined),
     email: actor?.email,
     displayName: actor?.full_name,
   };

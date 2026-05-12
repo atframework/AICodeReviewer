@@ -588,6 +588,9 @@ describe("mergeConfigLayers", () => {
           auto_tag: "aicr",
           reviewed_tag: "aicr:reviewed",
         },
+        problem_issue: {
+          max_recent_issues: 20,
+        },
         fetch_extra: {
           max_bytes: 524288,
           max_files: 5,
@@ -598,6 +601,38 @@ describe("mergeConfigLayers", () => {
     });
 
     expect(result.success).toBe(true);
+  });
+
+  it("accepts bounded managed problem issue fetch limits with workspace overrides", () => {
+    const merged = mergeConfigLayers({
+      review: {
+        problem_issue: { max_recent_issues: 25 },
+      },
+      workspaces: {
+        defaults: {
+          review: {
+            problem_issue: { max_recent_issues: 30 },
+          },
+        },
+        instances: {
+          "my-workspace": {
+            review: {
+              problem_issue: { max_recent_issues: 7 },
+            },
+          },
+          "defaulted-workspace": {},
+        },
+      },
+    });
+
+    expect(merged.review.problem_issue?.max_recent_issues).toBe(25);
+    expect(resolveWorkspaceConfig(merged, "my-workspace").review?.problem_issue?.max_recent_issues).toBe(7);
+    expect(resolveWorkspaceConfig(merged, "defaulted-workspace").review?.problem_issue?.max_recent_issues).toBe(30);
+  });
+
+  it("rejects managed problem issue fetch limits outside the supported API page size", () => {
+    expect(appConfigSchema.safeParse({ review: { problem_issue: { max_recent_issues: 0 } } }).success).toBe(false);
+    expect(appConfigSchema.safeParse({ review: { problem_issue: { max_recent_issues: 101 } } }).success).toBe(false);
   });
 
   it("accepts review reflection modes from Plan §3.12", () => {
