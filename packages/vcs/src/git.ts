@@ -97,7 +97,8 @@ function isRevisionRangeError(error: unknown): boolean {
 function redactGitSecrets(text: string): string {
   return text
     .replace(/(http\.extraHeader=Authorization:\s*(?:token|bearer)\s+)[^\s'"\],]+/giu, "$1***")
-    .replace(/(Authorization:\s*(?:token|bearer)\s+)[^\s'"\],]+/giu, "$1***");
+    .replace(/(Authorization:\s*(?:token|bearer)\s+)[^\s'"\],]+/giu, "$1***")
+    .replace(/(x-access-token:)[^@]+(@)/gu, "$1***$2");
 }
 
 function redactGitError(error: unknown): Error {
@@ -135,6 +136,19 @@ function redactGitError(error: unknown): Error {
   return sanitized;
 }
 
+function parseHttpRemoteUrl(remoteUrl: string | undefined): URL | undefined {
+  if (!remoteUrl) {
+    return undefined;
+  }
+
+  try {
+    const url = new URL(remoteUrl);
+    return url.protocol === "http:" || url.protocol === "https:" ? url : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export class GitVcsAdapter implements VcsAdapter {
   readonly kind = "git" as const;
 
@@ -163,10 +177,29 @@ export class GitVcsAdapter implements VcsAdapter {
     }
   }
 
+  private authenticatedRemoteUrl(): string | undefined {
+    if (!this.remoteUrl || !this.token) {
+      return this.remoteUrl;
+    }
+
+    const url = parseHttpRemoteUrl(this.remoteUrl);
+    if (!url) {
+      return this.remoteUrl;
+    }
+
+    url.username = "x-access-token";
+    url.password = this.token;
+    return url.toString();
+  }
+
   private buildGitArgs(args: readonly string[]): string[] {
-    return this.token
-      ? ["-c", `http.extraHeader=Authorization: token ${this.token}`, ...args]
-      : [...args];
+    if (!this.token) {
+      return [...args];
+    }
+    if (parseHttpRemoteUrl(this.remoteUrl)) {
+      return [...args];
+    }
+    return ["-c", `http.extraHeader=Authorization: token ${this.token}`, ...args];
   }
 
   private async runGit(args: readonly string[]): Promise<GitCommandResult> {
@@ -191,16 +224,34 @@ export class GitVcsAdapter implements VcsAdapter {
       return;
     }
 
+    const authUrl = this.authenticatedRemoteUrl();
+
     if (await this.isGitRepository()) {
+      if (authUrl) {
+        await this.runGit(["-C", this.repositoryDir, "remote", "set-url", this.remote, authUrl]);
+      }
       await this.runGit(["-C", this.repositoryDir, "fetch", "--prune", this.remote]);
+      await this.fetchPrRefs();
       this.repositorySynced = true;
       return;
     }
 
     await rm(this.repositoryDir, { recursive: true, force: true });
     await mkdir(dirname(this.repositoryDir), { recursive: true });
-    await this.runGit(["clone", "--no-checkout", this.remoteUrl, this.repositoryDir]);
+    await this.runGit(["clone", "--no-checkout", authUrl ?? this.remoteUrl, this.repositoryDir]);
+    await this.fetchPrRefs();
     this.repositorySynced = true;
+  }
+
+  private async fetchPrRefs(): Promise<void> {
+    try {
+      await this.runGit([
+        "-C", this.repositoryDir, "fetch", this.remote,
+        "+refs/pull/*/head:refs/remotes/origin/pr/*",
+      ]);
+    } catch {
+      // Not all remotes expose PR refs; ignore failures.
+    }
   }
 
   private async runRevisionRangeCommand(args: readonly string[]): Promise<GitCommandResult> {

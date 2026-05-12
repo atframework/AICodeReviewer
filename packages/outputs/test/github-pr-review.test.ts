@@ -139,6 +139,29 @@ describe("createGithubPullRequestReviewDispatcher", () => {
     await expect(dispatcher.publishProblem(problem)).rejects.toMatchObject({ status: 401 });
   });
 
+  it("publishes a summary as a GitHub pull request review comment", async () => {
+    const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
+    const dispatcher = createGithubPullRequestReviewDispatcher({
+      owner: "owent",
+      repo: "example",
+      pullNumber: 10,
+      fetch: async (url, init) => {
+        calls.push({ url, init });
+        return response({ id: 42 });
+      },
+    });
+
+    const result = await dispatcher.publishSummary!("Review summary", []);
+
+    expect(result.externalId).toBe("42");
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.url).toBe("https://api.github.com/repos/owent/example/pulls/10/reviews");
+    expect(JSON.parse(calls[0]?.init?.body ?? "{}")).toEqual({
+      event: "COMMENT",
+      body: "Review summary",
+    });
+  });
+
   it("attaches the highest severity label by name", async () => {
     const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
     const dispatcher = createGithubPullRequestReviewDispatcher({
@@ -163,5 +186,40 @@ describe("createGithubPullRequestReviewDispatcher", () => {
     const labelCall = calls.find((call) => call.url.includes("/issues/10/labels"));
     expect(labelCall).toBeDefined();
     expect(JSON.parse(labelCall?.init?.body ?? "{}")).toEqual({ labels: ["aicr:problem:critical"] });
+  });
+
+  it("attaches auto, reviewed, and highest severity labels to PR summaries", async () => {
+    const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
+    const existingLabels = [
+      { id: 1, name: "aicr", color: "ededed" },
+      { id: 2, name: "aicr:reviewed", color: "ededed" },
+      { id: 3, name: "aicr:problem:critical", color: "b60205" },
+    ];
+    const dispatcher = createGithubPullRequestReviewDispatcher({
+      owner: "owent",
+      repo: "example",
+      pullNumber: 10,
+      autoTag: "aicr",
+      reviewedTag: "aicr:reviewed",
+      severityLabelPrefix: "aicr:problem:",
+      fetch: async (url, init) => {
+        calls.push({ url, init });
+        if (url.endsWith("/labels") && init?.method !== "POST") {
+          return response(existingLabels);
+        }
+        return response({ id: 1 });
+      },
+    });
+
+    await dispatcher.publishSummary!("Review summary", [
+      { ...problem, severity: "medium", fingerprint: "fp-medium" },
+      { ...problem, severity: "critical", fingerprint: "fp-critical" },
+    ]);
+
+    const labelCall = calls.find((call) => call.url.includes("/issues/10/labels"));
+    expect(labelCall).toBeDefined();
+    expect(JSON.parse(labelCall?.init?.body ?? "{}")).toEqual({
+      labels: ["aicr", "aicr:reviewed", "aicr:problem:critical"],
+    });
   });
 });

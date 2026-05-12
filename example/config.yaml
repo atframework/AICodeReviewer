@@ -128,6 +128,7 @@ triggers:
     #   - "**/*.mako"
     #   - "**/*.in"
     #   - "**/*.yaml"
+    #   - "**/*.yml"
     #   - "**/*.xml"
     #   - "**/*.sh"
     #   - "**/*.ps1"
@@ -146,9 +147,11 @@ triggers:
   # -- GitHub webhook trigger --
   # - name: github
   #   kind: github
-  #   base_url: https://github.com
-  #   token_env: AICR_GITHUB_TOKEN            # outbound: personal access token
+  #   base_url: https://github.com            # optional for github.com; set to GHE URL for GitHub Enterprise
+  #   token_env: AICR_GITHUB_TOKEN            # outbound: personal access token (needs repo scope)
   #   webhook_secret_env: AICR_GITHUB_WEBHOOK_SECRET  # inbound: HMAC-SHA256 secret
+  #   repos:                                  # optional: map specific repos to workspaces
+  #     - { match: "my-org/my-repo", workspace: github-my-repo }
 
   # -- GitLab webhook trigger --
   # - name: gitlab
@@ -197,6 +200,7 @@ triggers:
   #   - "**/*.mako"
   #   - "**/*.in"
   #   - "**/*.yaml"
+  #   - "**/*.yml"
   #   - "**/*.xml"
   #   - "**/*.sh"
   #   - "**/*.ps1"
@@ -224,7 +228,7 @@ outputs:
   channels:
     # Gitea PR review — inline line comments on pull requests
     - name: gitea-pr-review
-      kind: gitea_pr_review # gitea_pr_review | github_pr_review | gitlab_mr_review | gitea_issue | feishu_bot | wecom_bot
+      kind: gitea_pr_review # gitea_pr_review | github_pr_review | gitlab_mr_review | gitea_issue | github_issue | github_problem_issue | feishu_bot | wecom_bot
       trigger: gitea
       mention_author: false
       no_problems: { action: suppress }
@@ -271,6 +275,35 @@ outputs:
     #   # notify_feishu:
     #   #   webhook_url_env: FEISHU_ISSUE_NOTIFY_WEBHOOK
     #   #   secret_env: FEISHU_ISSUE_NOTIFY_SECRET
+
+    # GitHub PR review — inline line comments on pull requests.
+    # Requires a GitHub trigger (see triggers section above).
+    #
+    # - name: github-pr-review
+    #   kind: github_pr_review
+    #   trigger: github
+    #   mention_author: true
+    #   no_problems: { action: suppress }
+
+    # GitHub managed problem issues — create/close issues per problem fingerprint.
+    # GitHub does not support deleting issues; resolved_action can only be close or none.
+    #
+    # - name: github-problem-issues
+    #   kind: github_problem_issue
+    #   trigger: github
+    #   marker_prefix: "[AICR]"
+    #   marker_label: "aicr-managed"
+    #   resolved_action: close                   # none | close (GitHub does not support delete)
+    #   assign_committer: true
+    #   owners_file: "OWNERS"
+    #   add_owners_as_assignees: true
+
+    # GitHub issue comment — post aggregated review as a comment on an existing issue.
+    #
+    # - name: github-issue-comment
+    #   kind: github_issue
+    #   trigger: github
+    #   mention_author: false
 
     # WeCom (企业微信) bot — push aggregated problems to a WeCom group.
     # - name: wecom-ops
@@ -388,6 +421,15 @@ workspaces:
     #     repo: "//depot/main"
     #   outputs:
     #     summary: [feishu-code-review]
+
+    # GitHub workspace — uncomment when github trigger is enabled
+    # github-my-repo:
+    #   source_repo:
+    #     trigger: github
+    #     repo: "my-org/my-repo"               # owner/repo on GitHub
+    #   outputs:
+    #     line_comments: [github-pr-review]
+    #     summary: [github-pr-review]
 
 # --- Template overrides ---
 # Built-in templates live in templates/builtin/*.hbs in the deployment directory.

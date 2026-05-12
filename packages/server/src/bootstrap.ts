@@ -33,6 +33,8 @@ import {
   createGitlabMergeRequestReviewDispatcher,
   createGiteaIssueDispatcher,
   createGiteaProblemIssueDispatcher,
+  createGithubIssueDispatcher,
+  createGithubProblemIssueDispatcher,
   createFeishuBotDispatcher,
   createWeComBotDispatcher,
   type ReviewProblem,
@@ -560,7 +562,7 @@ function readChannelOverrideNoProblemsAction(raw: unknown, channelName: string):
 }
 
 function defaultNoProblemsActionForChannel(channelKind: string): NoProblemsAction {
-  return channelKind === "gitea_problem_issue"
+  return channelKind === "gitea_problem_issue" || channelKind === "github_problem_issue"
     ? "publish"
     : "suppress";
 }
@@ -589,6 +591,8 @@ function toMentionChannelKind(channelKind: string): MentionChannelKind | undefin
   switch (channelKind) {
     case "gitea_pr_review":
     case "github_pr_review":
+    case "github_issue":
+    case "github_problem_issue":
     case "gitlab_mr_review":
     case "gitea_issue":
     case "gitea_problem_issue":
@@ -608,6 +612,8 @@ function shouldMentionAuthor(channel: OutputChannelConfig): boolean {
 
   return channel.kind === "gitea_pr_review" ||
     channel.kind === "github_pr_review" ||
+    channel.kind === "github_issue" ||
+    channel.kind === "github_problem_issue" ||
     channel.kind === "gitlab_mr_review" ||
     channel.kind === "gitea_issue";
 }
@@ -871,7 +877,9 @@ export function createOutputPublisherFromConfig(
     channel.kind === "gitea_issue" ||
     channel.kind === "gitea_problem_issue"
     ? ["gitea", "forgejo"]
-    : channel.kind === "github_pr_review"
+    : channel.kind === "github_pr_review" ||
+      channel.kind === "github_issue" ||
+      channel.kind === "github_problem_issue"
       ? ["github"]
       : channel.kind === "gitlab_mr_review"
         ? ["gitlab"]
@@ -949,12 +957,14 @@ export function createOutputPublisherFromConfig(
     return {
       handlesRendering: true,
       noProblemsAction,
+      publishEmptySummary,
       async publishProblem(problem: ReviewProblem): Promise<DispatchResult> {
         return dispatcher.publishProblem(rendering.renderProblem(problem));
       },
       ...(dispatcher.publishSummary ? {
         async publishSummary(summary: string, problems?: readonly ReviewProblem[]): Promise<DispatchResult> {
-          return dispatcher.publishSummary!(summary, problems);
+          const renderedProblems = (problems ?? []).map((problem) => rendering.renderProblem(problem));
+          return dispatcher.publishSummary!(rendering.renderSummary(summary, renderedProblems), renderedProblems);
         },
       } : {}),
     };
@@ -981,14 +991,118 @@ export function createOutputPublisherFromConfig(
     return {
       handlesRendering: true,
       noProblemsAction,
+      publishEmptySummary,
       async publishProblem(problem: ReviewProblem): Promise<DispatchResult> {
         return dispatcher.publishProblem(rendering.renderProblem(problem));
       },
       ...(dispatcher.publishSummary ? {
         async publishSummary(summary: string, problems?: readonly ReviewProblem[]): Promise<DispatchResult> {
-          return dispatcher.publishSummary!(summary, problems);
+          const renderedProblems = (problems ?? []).map((problem) => rendering.renderProblem(problem));
+          return dispatcher.publishSummary!(rendering.renderSummary(summary, renderedProblems), renderedProblems);
         },
       } : {}),
+    };
+  }
+
+  if (channel.kind === "github_issue") {
+    if (!owner || !repo || pullNumber === undefined) {
+      return undefined;
+    }
+
+    const dispatcher = createGithubIssueDispatcher({
+      ...(baseUrl ? { baseUrl } : {}),
+      ...(tokenEnv ? { token: resolveEnv(tokenEnv) ?? "" } : {}),
+      owner,
+      repo,
+      issueNumber: pullNumber,
+      channelName: channel.name,
+      ...(autoTag ? { autoTag } : {}),
+      ...(reviewedTag ? { reviewedTag } : {}),
+    });
+
+    const problems: ReviewProblem[] = [];
+    return {
+      handlesRendering: true,
+      noProblemsAction,
+      publishEmptySummary,
+      async publishProblem(problem: ReviewProblem): Promise<DispatchResult> {
+        problems.push(rendering.renderProblem(problem));
+        return { channel: channel.name, status: "published", raw: {} };
+      },
+      async publishSummary(summary: string, summaryProblems?: readonly ReviewProblem[]): Promise<DispatchResult> {
+        const renderedProblems = (summaryProblems ?? problems).map((problem) => rendering.renderProblem(problem));
+        return dispatcher.publishAggregatedProblems(
+          renderedProblems,
+          rendering.renderSummary(summary, renderedProblems),
+        );
+      },
+    };
+  }
+
+  if (channel.kind === "github_problem_issue") {
+    if (!owner || !repo) {
+      return undefined;
+    }
+
+    const resolvedAction = readString(channelConfig, "resolved_action", "resolvedAction");
+    const markerPrefix = readString(channelConfig, "marker_prefix", "markerPrefix");
+    const markerLabel = readString(channelConfig, "marker_label", "markerLabel");
+    const channelLabels = Array.isArray(channelConfig.labels) && channelConfig.labels.every((value) => typeof value === "string")
+      ? channelConfig.labels as readonly string[]
+      : undefined;
+    const assignCommitter = readBoolean(channelConfig, "assign_committer", "assignCommitter");
+    const ownersFile = readString(channelConfig, "owners_file", "ownersFile");
+    const addOwnersAsAssignees = readBoolean(channelConfig, "add_owners_as_assignees", "addOwnersAsAssignees");
+    const notifyFeishuConfig = isPlainObject(channelConfig.notify_feishu)
+      ? channelConfig.notify_feishu as Record<string, unknown>
+      : undefined;
+    const notifyFeishuWebhookUrlEnv = notifyFeishuConfig?.webhook_url_env as string | undefined;
+    const notifyFeishuWebhookUrl = notifyFeishuWebhookUrlEnv ? resolveEnv(notifyFeishuWebhookUrlEnv) : undefined;
+    const notifyFeishuSecretEnv = notifyFeishuConfig?.secret_env as string | undefined;
+    const notifyFeishuSecret = notifyFeishuSecretEnv ? resolveEnv(notifyFeishuSecretEnv) : undefined;
+    const authorResolution = buildAuthorResolutionOptions(config, channel);
+    const committerUsername = reviewEvent?.author
+      ? resolveAuthorUsername({ author: reviewEvent.author }, authorResolution)
+      : undefined;
+    const ref = reviewEvent?.headSha ?? "main";
+
+    const dispatcher = createGithubProblemIssueDispatcher({
+      ...(baseUrl ? { baseUrl } : {}),
+      ...(tokenEnv ? { token: resolveEnv(tokenEnv) ?? "" } : {}),
+      owner,
+      repo,
+      channelName: channel.name,
+      ...(markerPrefix ? { markerPrefix } : {}),
+      ...(markerLabel ? { markerLabel } : {}),
+      ...(channelLabels ? { labels: channelLabels } : {}),
+      ...(resolvedAction === "none" || resolvedAction === "close" ? { resolvedAction } : {}),
+      ...(assignCommitter !== undefined ? { assignCommitter } : {}),
+      ...(committerUsername ? { committerUsername } : {}),
+      ...(ownersFile ? { ownersFilePath: ownersFile } : {}),
+      ...(addOwnersAsAssignees !== undefined ? { addOwnersAsAssignees } : {}),
+      ...(channelSeverityLabelPrefix ? { severityLabelPrefix: channelSeverityLabelPrefix } : {}),
+      ...(channelSeverityLabelColors ? { severityLabelColors: channelSeverityLabelColors } : {}),
+      ...(notifyFeishuWebhookUrl ? { notifyFeishu: { webhookUrl: notifyFeishuWebhookUrl, ...(notifyFeishuSecret ? { secret: notifyFeishuSecret } : {}) } } : {}),
+      ...(autoTag ? { autoTag } : {}),
+      ...(reviewedTag ? { reviewedTag } : {}),
+      ref,
+    });
+
+    return {
+      handlesRendering: true,
+      publishesProblems: false,
+      noProblemsAction,
+      publishEmptySummary,
+      async publishProblem(): Promise<DispatchResult> {
+        return { channel: channel.name, status: "published", raw: { collected: true } };
+      },
+      async publishSummary(summary: string, summaryProblems?: readonly ReviewProblem[]): Promise<readonly DispatchResult[]> {
+        const renderedProblems = (summaryProblems ?? []).map((problem) => rendering.renderProblem(problem));
+        return dispatcher.reconcileProblems(
+          renderedProblems,
+          rendering.renderSummary(summary, renderedProblems),
+        );
+      },
     };
   }
 
@@ -1017,12 +1131,14 @@ export function createOutputPublisherFromConfig(
     return {
       handlesRendering: true,
       noProblemsAction,
+      publishEmptySummary,
       async publishProblem(problem: ReviewProblem): Promise<DispatchResult> {
         return dispatcher.publishProblem(rendering.renderProblem(problem));
       },
       ...(dispatcher.publishSummary ? {
         async publishSummary(summary: string, problems?: readonly ReviewProblem[]): Promise<DispatchResult> {
-          return dispatcher.publishSummary!(summary, problems);
+          const renderedProblems = (problems ?? []).map((problem) => rendering.renderProblem(problem));
+          return dispatcher.publishSummary!(rendering.renderSummary(summary, renderedProblems), renderedProblems);
         },
       } : {}),
     };
@@ -1054,7 +1170,7 @@ export function createOutputPublisherFromConfig(
         return { channel: channel.name, status: "published", raw: {} };
       },
       async publishSummary(summary: string, summaryProblems?: readonly ReviewProblem[]): Promise<DispatchResult> {
-        const renderedProblems = summaryProblems ?? problems;
+        const renderedProblems = (summaryProblems ?? problems).map((problem) => rendering.renderProblem(problem));
         return dispatcher.publishAggregatedProblems(
           renderedProblems,
           rendering.renderSummary(summary, renderedProblems),
@@ -1155,7 +1271,7 @@ export function createOutputPublisherFromConfig(
         return { channel: channel.name, status: "published", raw: {} };
       },
       async publishSummary(summary: string, summaryProblems?: readonly ReviewProblem[]): Promise<DispatchResult> {
-        const renderedProblems = summaryProblems ?? problems;
+        const renderedProblems = (summaryProblems ?? problems).map((problem) => rendering.renderProblem(problem));
         return dispatcher.publishAggregatedProblems(
           renderedProblems,
           rendering.renderSummary(summary, renderedProblems),
@@ -1190,7 +1306,7 @@ export function createOutputPublisherFromConfig(
         return { channel: channel.name, status: "published", raw: {} };
       },
       async publishSummary(summary: string, summaryProblems?: readonly ReviewProblem[]): Promise<DispatchResult> {
-        const renderedProblems = summaryProblems ?? problems;
+        const renderedProblems = (summaryProblems ?? problems).map((problem) => rendering.renderProblem(problem));
         return dispatcher.publishAggregatedProblems(
           renderedProblems,
           rendering.renderSummary(summary, renderedProblems),
@@ -1394,7 +1510,11 @@ export function createVcsAdapterFromConfig(
     ? config.triggers.find((t) => t.name === triggerName && isGitRemoteTriggerKind(t.kind))
     : undefined;
   const gitTriggerConfig = gitTrigger as Record<string, unknown> | undefined;
-  const remoteUrl = buildGitRemoteUrl(gitTriggerConfig?.base_url as string | undefined, repoRef);
+  const gitTriggerKind = gitTriggerConfig?.kind as string | undefined;
+  const triggerBaseUrl = gitTriggerConfig?.base_url as string | undefined;
+  const effectiveBaseUrl = triggerBaseUrl
+    ?? (gitTriggerKind === "github" ? "https://github.com" : undefined);
+  const remoteUrl = buildGitRemoteUrl(effectiveBaseUrl, repoRef);
   const tokenEnv = gitTriggerConfig?.token_env as string | undefined;
   const token = tokenEnv ? resolveEnv(tokenEnv) : undefined;
 

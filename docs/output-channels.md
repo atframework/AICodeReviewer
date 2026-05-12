@@ -83,6 +83,8 @@ For push/commit/P4 events, publish a non-empty summary when configured channels 
 | `gitlab_mr_review` | Merge request discussion when `baseSha` and `headSha` are available | Merge request note / configured summary publisher | Falls back to a general MR note when line anchoring is unavailable |
 | `gitea_issue` | Collected, then rendered into an issue comment | Aggregated issue comment | Useful for push events or issue-based triage |
 | `gitea_problem_issue` | Collected for reconciliation | Creates, updates, or resolves managed problem issues | Fingerprint stability matters most here |
+| `github_issue` | Collected, then rendered into an issue comment | Aggregated issue comment | Same as `gitea_issue` but for GitHub repositories |
+| `github_problem_issue` | Collected for reconciliation | Creates or resolves managed GitHub issues | Like `gitea_problem_issue` but uses string label names; `resolved_action` supports `close` and `none` only (GitHub has no issue delete API) |
 | `feishu_bot` | Collected for aggregation | Interactive card Markdown | Includes summary, problem count, severity/category/file/line, and truncated message/suggestion per problem |
 | `wecom_bot` | Collected for aggregation | Markdown message | Same content as Feishu; messages truncated to 500 chars and suggestions to 300 chars to stay within size limits |
 
@@ -134,6 +136,47 @@ outputs:
       notify_feishu:
         webhook_url_env: FEISHU_ISSUE_NOTIFY_WEBHOOK
         secret_env: FEISHU_ISSUE_NOTIFY_SECRET
+```
+
+## Managed GitHub problem issues
+
+The `github_problem_issue` channel works identically to `gitea_problem_issue` but targets the GitHub REST API. It reconciles one managed GitHub issue per problem fingerprint using string label names (not numeric IDs). On every summary publish it creates issues for new fingerprints and applies `resolved_action` to open managed issues whose fingerprints disappeared.
+
+Key differences from `gitea_problem_issue`:
+
+- **Labels**: GitHub uses string names directly (`labels: ["bug", "aicr:problem:high"]`); Gitea uses numeric IDs.
+- **Resolved action**: GitHub does not support deleting issues; `resolved_action` can only be `close` (default) or `none`. The `delete` option is not available.
+- **API headers**: `accept: application/vnd.github+json`, `x-github-api-version: 2022-11-28`, `authorization: Bearer <token>`.
+- **Base URL**: Defaults to `https://api.github.com`; for GitHub Enterprise, set to `https://ghe.example.com/api/v3`.
+
+Channel fields:
+
+| Field | Meaning |
+| --- | --- |
+| `marker_prefix` | Title prefix used to identify managed issues; defaults to `[AICR]` |
+| `marker_label` | Hidden body marker used to scope managed issues; defaults to `aicr-managed` |
+| `labels` | GitHub label names to attach to every created issue |
+| `resolved_action` | `none` or `close`; defaults to `close` |
+| `assign_committer` | Add the resolved review author as an assignee; defaults to `true` |
+| `owners_file` | Repository file to read for path owners; defaults to `OWNERS` |
+| `add_owners_as_assignees` | Set to `true` to add matched OWNERS entries as assignees |
+| `severity_label_prefix` | When set, auto-create and attach one severity label such as `aicr:problem:high` |
+| `severity_label_colors` | Optional severity-to-color map for auto-created labels |
+| `notify_feishu` | Optional issue-created notification webhook config |
+
+Example:
+
+```yaml
+outputs:
+  channels:
+    - name: github-problem-issues
+      kind: github_problem_issue
+      trigger: github
+      resolved_action: close
+      assign_committer: true
+      owners_file: OWNERS
+      add_owners_as_assignees: true
+      severity_label_prefix: "aicr:problem:"
 ```
 
 ## No-problems policy

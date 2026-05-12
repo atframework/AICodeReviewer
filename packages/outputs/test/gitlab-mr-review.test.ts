@@ -141,6 +141,26 @@ describe("createGitlabMergeRequestReviewDispatcher", () => {
     await expect(dispatcher.publishProblem(problem)).rejects.toMatchObject({ status: 403 });
   });
 
+  it("publishes a summary as a GitLab merge request note", async () => {
+    const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
+    const dispatcher = createGitlabMergeRequestReviewDispatcher({
+      baseUrl: "https://gitlab.example",
+      projectId: "owent/example",
+      mergeRequestIid: 7,
+      fetch: async (url, init) => {
+        calls.push({ url, init });
+        return response({ id: 42 });
+      },
+    });
+
+    const result = await dispatcher.publishSummary!("Review summary", []);
+
+    expect(result.externalId).toBe("42");
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.url).toBe("https://gitlab.example/api/v4/projects/owent%2Fexample/merge_requests/7/notes");
+    expect(JSON.parse(calls[0]?.init?.body ?? "{}")).toEqual({ body: "Review summary" });
+  });
+
   it("attaches the highest severity label by name", async () => {
     const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
     const dispatcher = createGitlabMergeRequestReviewDispatcher({
@@ -172,5 +192,39 @@ describe("createGitlabMergeRequestReviewDispatcher", () => {
     expect(createBody).toEqual({ name: "aicr:problem:critical", color: "#b60205" });
     const attachCall = calls.find((call) => call.url.includes("/merge_requests/7?add_labels="));
     expect(attachCall?.url).toBe("https://gitlab.example/api/v4/projects/owent%2Fexample/merge_requests/7?add_labels=aicr%3Aproblem%3Acritical");
+  });
+
+  it("attaches auto, reviewed, and highest severity labels to MR summaries", async () => {
+    const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
+    const existingLabels = [
+      { id: 1, name: "aicr", color: "#ededed" },
+      { id: 2, name: "aicr:reviewed", color: "#ededed" },
+      { id: 3, name: "aicr:problem:critical", color: "#b60205" },
+    ];
+    const dispatcher = createGitlabMergeRequestReviewDispatcher({
+      baseUrl: "https://gitlab.example",
+      projectId: "owent/example",
+      mergeRequestIid: 7,
+      autoTag: "aicr",
+      reviewedTag: "aicr:reviewed",
+      severityLabelPrefix: "aicr:problem:",
+      fetch: async (url, init) => {
+        calls.push({ url, init });
+        if (url.includes("/labels?search=")) {
+          return response(existingLabels);
+        }
+        return response({ id: 1 });
+      },
+    });
+
+    await dispatcher.publishSummary!("Review summary", [
+      { ...problem, severity: "medium", fingerprint: "fp-medium" },
+      { ...problem, severity: "critical", fingerprint: "fp-critical" },
+    ]);
+
+    const attachCall = calls.find((call) => call.url.includes("/merge_requests/7?add_labels="));
+    expect(attachCall?.url).toBe(
+      "https://gitlab.example/api/v4/projects/owent%2Fexample/merge_requests/7?add_labels=aicr,aicr%3Areviewed,aicr%3Aproblem%3Acritical",
+    );
   });
 });

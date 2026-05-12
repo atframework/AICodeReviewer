@@ -1,3 +1,7 @@
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { describe, expect, it, vi } from "vitest";
 
 import type { AppConfig } from "@aicr/core";
@@ -372,6 +376,63 @@ describe("createOutputPublisherFromConfig", () => {
     }
   });
 
+  it("renders and publishes Gitea PR summaries through the configured publisher", async () => {
+    const calls: { url: string; init: { headers?: Record<string, string>; body?: string } }[] = [];
+    vi.stubGlobal("fetch", async (url: string, init?: { headers?: Record<string, string>; body?: string }) => {
+      calls.push({ url, init: init ?? {} });
+      return response({ id: 789 });
+    });
+
+    try {
+      const config = makeConfig({
+        outputs: {
+          template_engine: "handlebars",
+          channels: [
+            {
+              name: "gitea-pr",
+              kind: "gitea_pr_review",
+              trigger: "gitea-internal",
+              no_problems: { action: "publish" },
+            },
+          ],
+        },
+      } as Partial<AppConfig>);
+      const publisher = createOutputPublisherFromConfig(
+        config,
+        "gitea-pr",
+        42,
+        "test-workspace",
+        {
+          triggerName: "gitea-internal",
+          provider: "gitea",
+          workspaceId: "test-workspace",
+          targetKind: "pull_request",
+          repoRef: "owent/example",
+          title: "Fix parser",
+          url: "https://gitea.example.com/owent/example/pulls/42",
+          author: { username: "owent" },
+          reason: "gitea:opened",
+        },
+      );
+
+      expect(publisher?.publishEmptySummary).toBe(true);
+      const result = await publisher?.publishSummary?.("Review summary", [
+        { file: "src/app.ts", line: 3, severity: "medium", category: "correctness", message: "Issue." },
+      ]);
+
+      expect(result).toMatchObject({ channel: "gitea-pr", status: "published", externalId: "789" });
+      expect(calls[0]?.url).toBe("https://gitea.example.com/api/v1/repos/owent/example/pulls/42/reviews");
+      const body = JSON.parse(calls[0]?.init.body ?? "{}");
+      expect(body.event).toBe("COMMENT");
+      expect(body.body).toContain("AI Code Review Summary");
+      expect(body.body).toContain("Fix parser");
+      expect(body.body).toContain("Review summary");
+      expect(body.body).toContain("src/app.ts:3");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("creates a GitHub PR publisher from channel trigger and workspace source repo", async () => {
     const calls: { url: string; init: { headers?: Record<string, string>; body?: string } }[] = [];
     vi.stubGlobal("fetch", async (url: string, init?: { headers?: Record<string, string>; body?: string }) => {
@@ -413,6 +474,180 @@ describe("createOutputPublisherFromConfig", () => {
       expect(firstResult?.externalId).toBe("987");
       expect(calls[0]?.url).toBe("https://api.github.com/repos/owent/example/pulls/42/reviews");
       expect(calls[0]?.init.headers).toMatchObject({ authorization: "Bearer github-token" });
+    } finally {
+      vi.unstubAllGlobals();
+      if (originalToken === undefined) {
+        delete process.env.GITHUB_TOKEN;
+      } else {
+        process.env.GITHUB_TOKEN = originalToken;
+      }
+    }
+  });
+
+  it("creates a GitHub issue publisher from channel trigger and workspace", async () => {
+    const calls: { url: string; init: { headers?: Record<string, string>; body?: string } }[] = [];
+    vi.stubGlobal("fetch", async (url: string, init?: { headers?: Record<string, string>; body?: string }) => {
+      calls.push({ url, init: init ?? {} });
+      return response({ id: 555 });
+    });
+
+    const originalToken = process.env.GITHUB_TOKEN;
+    process.env.GITHUB_TOKEN = "gh-issue-token";
+    try {
+      const config = makeConfig({
+        triggers: [{ name: "github-saas", kind: "github", token_env: "GITHUB_TOKEN" }],
+        outputs: {
+          template_engine: "handlebars",
+          channels: [{ name: "github-issue", kind: "github_issue", trigger: "github-saas" }],
+        },
+        workspaces: {
+          cache: { max_total_gb: 50, eviction: "lru", ttl_days: 30 },
+          defaults: {},
+          instances: {
+            "test-workspace": {
+              source_repo: { trigger: "github-saas", repo: "my-org/my-repo" },
+            },
+          },
+        },
+      } as Partial<AppConfig>);
+      const publisher = createOutputPublisherFromConfig(config, "github-issue", 10, "test-workspace");
+
+      expect(publisher).toBeDefined();
+      await publisher!.publishProblem({
+        file: "src/app.ts",
+        line: 7,
+        severity: "high",
+        category: "correctness",
+        message: "Issue.",
+      });
+      await publisher!.publishSummary("Review summary");
+
+      expect(calls[0]?.url).toBe("https://api.github.com/repos/my-org/my-repo/issues/10/comments");
+      expect(calls[0]?.init.headers).toMatchObject({ authorization: "Bearer gh-issue-token" });
+    } finally {
+      vi.unstubAllGlobals();
+      if (originalToken === undefined) {
+        delete process.env.GITHUB_TOKEN;
+      } else {
+        process.env.GITHUB_TOKEN = originalToken;
+      }
+    }
+  });
+
+  it("renders GitHub issue summary problems passed directly", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-bootstrap-templates-"));
+    const calls: { url: string; init: { body?: string } }[] = [];
+    vi.stubGlobal("fetch", async (url: string, init?: { body?: string }) => {
+      calls.push({ url, init: init ?? {} });
+      return response({ id: 556 });
+    });
+
+    try {
+      const templatesDir = join(tempDir, "workspaces", "test-workspace", "templates");
+      await mkdir(templatesDir, { recursive: true });
+      await writeFile(
+        join(templatesDir, "problem.hbs"),
+        "CUSTOM PROBLEM {{problem.location}} :: {{problem.message}}",
+        "utf8",
+      );
+      const config = makeConfig({
+        triggers: [{ name: "github-saas", kind: "github" }],
+        outputs: {
+          template_engine: "handlebars",
+          channels: [{ name: "github-issue", kind: "github_issue", trigger: "github-saas" }],
+        },
+        workspaces: {
+          cache: { max_total_gb: 50, eviction: "lru", ttl_days: 30 },
+          defaults: {},
+          instances: {
+            "test-workspace": {
+              source_repo: { trigger: "github-saas", repo: "my-org/my-repo" },
+            },
+          },
+        },
+      } as Partial<AppConfig>);
+      const publisher = createOutputPublisherFromConfig(config, "github-issue", 10, "test-workspace", {
+        triggerName: "github-saas",
+        provider: "github",
+        workspaceId: "test-workspace",
+        targetKind: "pull_request",
+        repoRef: "my-org/my-repo",
+        author: { username: "octocat" },
+        reason: "github:opened",
+      }, tempDir);
+
+      await publisher!.publishSummary?.("Review summary", [
+        { file: "src/app.ts", line: 7, severity: "high", category: "correctness", message: "Issue." },
+      ]);
+
+      const body = JSON.parse(calls[0]?.init.body ?? "{}");
+      expect(body.body).toContain("AI Code Review Summary");
+      expect(body.body).toContain("Reviewers");
+      expect(body.body).toContain("@octocat");
+      expect(body.body).toContain("CUSTOM PROBLEM src/app.ts:7 :: Issue.");
+    } finally {
+      vi.unstubAllGlobals();
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("creates a GitHub problem issue publisher from channel config", async () => {
+    const calls: { url: string; init: { headers?: Record<string, string>; body?: string } }[] = [];
+    vi.stubGlobal("fetch", async (url: string, init?: { headers?: Record<string, string>; body?: string }) => {
+      calls.push({ url, init: init ?? {} });
+      if (url.includes("/issues?state=open")) {
+        return response([]);
+      }
+      return response({ id: 600, number: 30, html_url: "https://github.com/my-org/my-repo/issues/30" });
+    });
+
+    const originalToken = process.env.GITHUB_TOKEN;
+    process.env.GITHUB_TOKEN = "gh-problem-token";
+    try {
+      const config = makeConfig({
+        triggers: [{ name: "github-saas", kind: "github", token_env: "GITHUB_TOKEN" }],
+        outputs: {
+          template_engine: "handlebars",
+          channels: [{
+            name: "github-problem-issues",
+            kind: "github_problem_issue",
+            trigger: "github-saas",
+            marker_prefix: "[AICR]",
+            marker_label: "aicr-managed",
+          }],
+        },
+        workspaces: {
+          cache: { max_total_gb: 50, eviction: "lru", ttl_days: 30 },
+          defaults: {},
+          instances: {
+            "test-workspace": {
+              source_repo: { trigger: "github-saas", repo: "my-org/my-repo" },
+            },
+          },
+        },
+      } as Partial<AppConfig>);
+      const publisher = createOutputPublisherFromConfig(config, "github-problem-issues", undefined, "test-workspace");
+
+      expect(publisher).toBeDefined();
+      expect(publisher!.publishesProblems).toBe(false);
+      expect(publisher!.publishEmptySummary).toBe(true);
+
+      await publisher!.publishProblem({
+        file: "src/app.ts",
+        line: 7,
+        severity: "high",
+        category: "correctness",
+        message: "Issue.",
+      });
+
+      const results = await publisher!.publishSummary("Review summary", [
+        { file: "src/app.ts", line: 7, severity: "high", category: "correctness", message: "Issue." },
+      ]);
+
+      expect(Array.isArray(results)).toBe(true);
+      const issueCall = calls.find((c) => c.url.endsWith("/repos/my-org/my-repo/issues") && c.init?.method === "POST");
+      expect(issueCall).toBeDefined();
+      expect(issueCall?.init.headers).toMatchObject({ authorization: "Bearer gh-problem-token" });
     } finally {
       vi.unstubAllGlobals();
       if (originalToken === undefined) {

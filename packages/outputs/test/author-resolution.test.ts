@@ -62,6 +62,11 @@ describe("renderMentions", () => {
 		expect(renderMentions(["alice", "bob"], "github_pr_review")).toBe("@alice @bob");
 	});
 
+	it("renders GitHub issue mentions", () => {
+		expect(renderMentions(["alice"], "github_issue")).toBe("@alice");
+		expect(renderMentions(["alice"], "github_problem_issue")).toBe("@alice");
+	});
+
 	it("renders Gitea-style mentions", () => {
 		expect(renderMentions(["alice"], "gitea_pr_review")).toBe("@alice");
 	});
@@ -99,6 +104,18 @@ describe("buildAtMentions", () => {
 		expect(buildAtMentions(ctx, "feishu_bot", { mentionFallback: "all" })).toBe(
 			'<at user_id="all"></at>',
 		);
+	});
+
+	it("renders WeCom all fallback when configured and author cannot be resolved", () => {
+		const ctx: AuthorMentionContext = { author: { email: "unknown@example.com" } };
+		expect(buildAtMentions(ctx, "wecom_bot", { mentionFallback: "all" })).toBe("<@all>");
+	});
+
+	it("does not render all fallback for Git-based review channels", () => {
+		const ctx: AuthorMentionContext = { author: { email: "unknown@example.com" } };
+		expect(buildAtMentions(ctx, "github_pr_review", { mentionFallback: "all" })).toBe("");
+		expect(buildAtMentions(ctx, "github_issue", { mentionFallback: "all" })).toBe("");
+		expect(buildAtMentions(ctx, "github_problem_issue", { mentionFallback: "all" })).toBe("");
 	});
 
 	it("does not fallback when author email is blacklisted", () => {

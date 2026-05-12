@@ -396,7 +396,7 @@ describe("extractExternalId via dispatcher", () => {
     expect(body.labels).toContain(90);
   });
 
-  it("skips label attachment when severityLabelPrefix is not configured", async () => {
+  it("publishes a summary as a Gitea pull request review comment without label config", async () => {
     const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
     const dispatcher = createGiteaPullRequestReviewDispatcher({
       baseUrl: "https://gitea.example",
@@ -409,6 +409,50 @@ describe("extractExternalId via dispatcher", () => {
       },
     });
 
-    expect(dispatcher.publishSummary).toBeUndefined();
+    const result = await dispatcher.publishSummary!("Review summary", []);
+
+    expect(result.externalId).toBe("1");
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.url).toBe("https://gitea.example/api/v1/repos/owent/example/pulls/10/reviews");
+    expect(JSON.parse(calls[0]?.init?.body ?? "{}")).toEqual({
+      event: "COMMENT",
+      body: "Review summary",
+    });
+  });
+
+  it("attaches auto, reviewed, and highest severity labels to PR summaries", async () => {
+    const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
+    const labelIds: Record<string, number> = {
+      "aicr": 70,
+      "aicr:reviewed": 71,
+      "aicr:problem:critical": 72,
+    };
+    const dispatcher = createGiteaPullRequestReviewDispatcher({
+      baseUrl: "https://gitea.example",
+      owner: "owent",
+      repo: "example",
+      pullNumber: 10,
+      autoTag: "aicr",
+      reviewedTag: "aicr:reviewed",
+      severityLabelPrefix: "aicr:problem:",
+      fetch: async (url, init) => {
+        calls.push({ url, init });
+        const nameMatch = /[?&]name=([^&]+)/u.exec(url);
+        if (nameMatch?.[1]) {
+          const name = decodeURIComponent(nameMatch[1]);
+          return response([{ id: labelIds[name], name, color: "ededed" }]);
+        }
+        return response({ id: 1 });
+      },
+    });
+
+    await dispatcher.publishSummary!("Review summary", [
+      { ...problem, severity: "medium", fingerprint: "fp-medium" },
+      { ...problem, severity: "critical", fingerprint: "fp-critical" },
+    ]);
+
+    const labelCall = calls.find((c) => c.url.includes("/issues/10/labels"));
+    expect(labelCall).toBeDefined();
+    expect(JSON.parse(labelCall?.init?.body ?? "{}")).toEqual({ labels: [70, 71, 72] });
   });
 });

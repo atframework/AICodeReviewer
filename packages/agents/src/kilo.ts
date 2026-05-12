@@ -129,7 +129,6 @@ export function createKiloAdapter(options: KiloAdapterOptions = {}): AgentAdapte
       }
 
       args.push("--dir", spawnOptions.workingDir);
-      args.push(task);
 
       return args;
     },

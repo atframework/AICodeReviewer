@@ -149,6 +149,7 @@ const outputChannelSchema = z
     marker_prefix: z.string().min(1).optional(),
     marker_label: z.string().min(1).optional(),
     label_ids: z.array(z.number().int().positive()).optional(),
+    labels: z.array(z.string().min(1)).optional(),
     resolved_action: z.enum(["none", "close", "delete"]).optional(),
     assign_committer: z.boolean().optional(),
     owners_file: z.string().min(1).optional(),
