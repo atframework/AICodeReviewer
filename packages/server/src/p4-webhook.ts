@@ -38,6 +38,7 @@ export function translateP4TriggerToReviewEvent(
   const changeNumber = String(parsed.change ?? parsed.changelist ?? parsed.cl ?? "");
   const user = parsed.user ?? "";
   const client = parsed.client ?? "";
+  const workspace = client || config.workspace || "";
   const _description = parsed.description ?? "";
   const depotPath = parsed.depot_path || parsed.path || config.depot || "";
   const changedFiles = parsed.files ?? [];
@@ -57,12 +58,11 @@ export function translateP4TriggerToReviewEvent(
     ...(changedFiles.length > 0 ? { changedFiles } : {}),
     author: {
       username: user || undefined,
-      displayName: client || undefined,
     },
     url: depotPath ? `p4://${depotPath.replace(/^\/\//u, "")}@${changeNumber}` : undefined,
     reason: `p4:change-commit:${changeNumber}`,
     rawEventName: "change-commit",
     depotPath: depotPath || undefined,
-    ...(config.workspace ? { p4Workspace: config.workspace } : {}),
+    ...(workspace ? { p4Workspace: workspace } : {}),
   });
 }

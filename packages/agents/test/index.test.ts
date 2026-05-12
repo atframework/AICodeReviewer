@@ -93,7 +93,7 @@ describe("createKiloAdapter", () => {
       expect(cmd).toContain("json");
       expect(cmd).toContain("--dir");
       expect(cmd).toContain("/workspace");
-      expect(cmd).toContain("review this");
+      expect(cmd).not.toContain("review this");
     });
 
     it("includes model flag in provider/model format", () => {
@@ -126,13 +126,14 @@ describe("createKiloAdapter", () => {
       expect(cmd).toContain("other/model");
     });
 
-    it("passes task as trailing message argument", () => {
+    it("does not pass task as command line argument", () => {
       const adapter = createKiloAdapter();
       const cmd = adapter.buildCommand("do the thing", {
         workingDir: "/ws",
       });
 
-      expect(cmd[cmd.length - 1]).toBe("do the thing");
+      expect(cmd[cmd.length - 1]).toBe("/ws");
+      expect(cmd).not.toContain("do the thing");
     });
   });
 

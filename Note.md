@@ -26,6 +26,12 @@
   - 关注的路径: `jq ".gitea.watch_path" ".vscode/secret.json"`
   - 要分析(包含)的代码: `jq ".gitea.include_cr_file" ".vscode/secret.json"`
   - 忽略(不包含)的代码: `jq ".gitea.exclude_cr_file" ".vscode/secret.json"`
+- github环境(atframework下的仓库)提取方式如下:
+  - token使用 `jq ".github-atframework.token" ".vscode/secret.json"` 提取。
+  - webhook签名密钥: `jq ".github-atframework.webhook_secret" ".vscode/secret.json"`
+  - 关注的路径: `jq ".github-atframework.watch_path" ".vscode/secret.json"`
+  - 要分析(包含)的代码: `jq ".github-atframework.include_cr_file" ".vscode/secret.json"`
+  - 忽略(不包含)的代码: `jq ".github-atframework.exclude_cr_file" ".vscode/secret.json"`
 - p4环境提取方式如下:
   - 用户名: `jq ".p4.username" ".vscode/secret.json"`
   - 密码: `jq ".p4.password" ".vscode/secret.json"`
@@ -66,6 +72,7 @@
     - gitea: <https://git.m-oa.com:6023/ProjectX/server>
     - gitea: <https://git.m-oa.com:6023/ProjectX/Pipeline>
     - p4: <ssl:p4.m-oa.com:8666>
+    - github: <https://github.com/atframework/atsf4g-co>
   - P4 trigger脚本: `example/p4-trigger.sh`
     - 环境变量: `AICR_URL=https://aicr.m-oa.com:6023`, `AICR_API_KEY`
     - `AICR_DEPOT_PATH` 可省略，默认使用 AICR 服务端 `config.yaml` 中 P4 trigger 的 `depot_path`；仅在脚本需要覆盖服务端配置时设置。

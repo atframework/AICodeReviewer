@@ -236,6 +236,8 @@ export function createGiteaPullRequestReviewDispatcher(
 		};
 	}
 
+	let attachSummaryLabels: (problems?: readonly ReviewProblem[]) => Promise<void> = () => Promise.resolve();
+
 	const dispatcher: GiteaPullRequestReviewDispatcher = {
 		async publishProblem(problem: ReviewProblem): Promise<DispatchResult> {
 			if (problem.lineCommentAllowed === false) {
@@ -280,6 +282,14 @@ export function createGiteaPullRequestReviewDispatcher(
 				...(externalId ? { externalId } : {}),
 				raw,
 			};
+		},
+		async publishSummary(summary: string, problems?: readonly ReviewProblem[]): Promise<DispatchResult> {
+			const result = summary.trim().length > 0
+				? await postReview({ event: "COMMENT", body: summary })
+				: undefined;
+			await attachSummaryLabels(problems);
+
+			return result ?? { channel, status: "published", raw: {} };
 		},
 	};
 
@@ -350,7 +360,7 @@ export function createGiteaPullRequestReviewDispatcher(
 			return resolveLabelIdByName(`${options.severityLabelPrefix}${severity}`, severityColors[severity] ?? "#ededed");
 		}
 
-		dispatcher.publishSummary = async (_summary: string, problems?: readonly ReviewProblem[]): Promise<DispatchResult> => {
+		attachSummaryLabels = async (problems?: readonly ReviewProblem[]): Promise<void> => {
 			const labelIds: number[] = [];
 
 			if (options.autoTag) {
@@ -377,7 +387,7 @@ export function createGiteaPullRequestReviewDispatcher(
 			}
 
 			if (labelIds.length === 0) {
-				return { channel, status: "published" as const, raw: {} };
+				return;
 			}
 
 			try {
@@ -389,8 +399,6 @@ export function createGiteaPullRequestReviewDispatcher(
 			} catch {
 				// label attachment failed, non-critical
 			}
-
-			return { channel, status: "published" as const, raw: {} };
 		};
 	}
 
@@ -471,6 +479,8 @@ export function createGithubPullRequestReviewDispatcher(
 		};
 	}
 
+	let attachSummaryLabels: (problems?: readonly ReviewProblem[]) => Promise<void> = () => Promise.resolve();
+
 	const dispatcher: GithubPullRequestReviewDispatcher = {
 		async publishProblem(problem: ReviewProblem): Promise<DispatchResult> {
 			if (problem.lineCommentAllowed === false) {
@@ -517,6 +527,14 @@ export function createGithubPullRequestReviewDispatcher(
 				raw,
 			};
 		},
+		async publishSummary(summary: string, problems?: readonly ReviewProblem[]): Promise<DispatchResult> {
+			const result = summary.trim().length > 0
+				? await postReview({ event: "COMMENT", body: summary })
+				: undefined;
+			await attachSummaryLabels(problems);
+
+			return result ?? { channel, status: "published", raw: {} };
+		},
 	};
 
 	if (options.severityLabelPrefix || options.autoTag || options.reviewedTag) {
@@ -528,6 +546,12 @@ export function createGithubPullRequestReviewDispatcher(
 			encodePathSegment(options.repo),
 		].join("/");
 		const severityColors = { ...DEFAULT_SEVERITY_COLORS, ...(options.severityLabelColors ?? {}) };
+		let repositoryLabelNamesPromise: Promise<Set<string> | undefined> | undefined;
+
+		function getRepositoryLabelNames(): Promise<Set<string> | undefined> {
+			repositoryLabelNamesPromise ??= fetchGithubRepositoryLabelNames(fetchImpl, repoPath, headers);
+			return repositoryLabelNamesPromise;
+		}
 
 		async function resolveLabelNameByString(labelName: string, color?: string): Promise<string | undefined> {
 			const cached = labelCache.get(labelName);
@@ -535,21 +559,10 @@ export function createGithubPullRequestReviewDispatcher(
 				return cached;
 			}
 
-			try {
-				const resp = await fetchImpl(`${repoPath}/labels`, { headers });
-				if (resp.ok) {
-					const list = await resp.json();
-					if (Array.isArray(list)) {
-						for (const label of list) {
-							if (label && typeof label === "object" && (label as Record<string, unknown>).name === labelName) {
-								labelCache.set(labelName, labelName);
-								return labelName;
-							}
-						}
-					}
-				}
-			} catch {
-				// not found
+			const repositoryLabelNames = await getRepositoryLabelNames();
+			if (repositoryLabelNames?.has(labelName)) {
+				labelCache.set(labelName, labelName);
+				return labelName;
 			}
 
 			const normalizedColor = (color ?? "#ededed").replace(/^#/u, "");
@@ -564,6 +577,7 @@ export function createGithubPullRequestReviewDispatcher(
 					if (created && typeof created === "object") {
 						const createdName = (created as Record<string, unknown>).name;
 						if (createdName === labelName) {
+							repositoryLabelNames?.add(labelName);
 							labelCache.set(labelName, labelName);
 							return labelName;
 						}
@@ -583,7 +597,7 @@ export function createGithubPullRequestReviewDispatcher(
 			return resolveLabelNameByString(`${options.severityLabelPrefix}${severity}`, severityColors[severity] ?? "#ededed");
 		}
 
-		dispatcher.publishSummary = async (_summary: string, problems?: readonly ReviewProblem[]): Promise<DispatchResult> => {
+		attachSummaryLabels = async (problems?: readonly ReviewProblem[]): Promise<void> => {
 			const labelNames: string[] = [];
 
 			if (options.autoTag) {
@@ -610,7 +624,7 @@ export function createGithubPullRequestReviewDispatcher(
 			}
 
 			if (labelNames.length === 0) {
-				return { channel, status: "published" as const, raw: {} };
+				return;
 			}
 
 			try {
@@ -622,10 +636,617 @@ export function createGithubPullRequestReviewDispatcher(
 			} catch {
 				// label attachment failed, non-critical
 			}
-
-			return { channel, status: "published" as const, raw: {} };
 		};
 	}
+
+	return dispatcher;
+}
+
+export interface GithubIssueOptions {
+	readonly baseUrl?: string;
+	readonly token?: string;
+	readonly owner: string;
+	readonly repo: string;
+	readonly issueNumber: number;
+	readonly channelName?: string;
+	readonly fetch?: FetchLike;
+	readonly autoTag?: string;
+	readonly reviewedTag?: string;
+}
+
+export interface GithubIssueDispatcher {
+	publishAggregatedProblems(problems: readonly ReviewProblem[], summary?: string): Promise<DispatchResult>;
+}
+
+function buildGithubHeaders(token?: string): Record<string, string> {
+	const headers: Record<string, string> = {
+		"accept": "application/vnd.github+json",
+		"content-type": "application/json",
+		"x-github-api-version": "2022-11-28",
+	};
+	if (token) {
+		headers.authorization = `Bearer ${token}`;
+	}
+	return headers;
+}
+
+function buildGithubRepoPath(baseUrl: string, owner: string, repo: string): string {
+	return [
+		(baseUrl || "https://api.github.com").replace(/\/+$/u, ""),
+		"repos",
+		encodePathSegment(owner),
+		encodePathSegment(repo),
+	].join("/");
+}
+
+async function fetchGithubRepositoryLabelNames(
+	fetchImpl: FetchLike,
+	repoPath: string,
+	headers: Readonly<Record<string, string>>,
+): Promise<Set<string> | undefined> {
+	try {
+		const resp = await fetchImpl(`${repoPath}/labels`, { headers });
+		if (!resp.ok) {
+			return undefined;
+		}
+
+		const list = await resp.json();
+		if (!Array.isArray(list)) {
+			return undefined;
+		}
+
+		const names = new Set<string>();
+		for (const label of list) {
+			if (label && typeof label === "object") {
+				const name = (label as Record<string, unknown>).name;
+				if (typeof name === "string") {
+					names.add(name);
+				}
+			}
+		}
+
+		return names;
+	} catch {
+		return undefined;
+	}
+}
+
+export function createGithubIssueDispatcher(options: GithubIssueOptions): GithubIssueDispatcher {
+	const fetchImpl = options.fetch ?? defaultFetch();
+	const baseUrl = (options.baseUrl ?? "https://api.github.com").replace(/\/+$/u, "");
+	const channel = options.channelName ?? "github_issue";
+	const repoPath = buildGithubRepoPath(baseUrl, options.owner, options.repo);
+	const headers = buildGithubHeaders(options.token);
+	const labelCache = new Map<string, string>();
+	let repositoryLabelNamesPromise: Promise<Set<string> | undefined> | undefined;
+
+	function getRepositoryLabelNames(): Promise<Set<string> | undefined> {
+		repositoryLabelNamesPromise ??= fetchGithubRepositoryLabelNames(fetchImpl, repoPath, headers);
+		return repositoryLabelNamesPromise;
+	}
+
+	async function resolveLabelName(labelName: string): Promise<string | undefined> {
+		const cached = labelCache.get(labelName);
+		if (cached !== undefined) {
+			return cached;
+		}
+
+		const repositoryLabelNames = await getRepositoryLabelNames();
+		if (repositoryLabelNames?.has(labelName)) {
+			labelCache.set(labelName, labelName);
+			return labelName;
+		}
+
+		try {
+			const resp = await fetchImpl(`${repoPath}/labels`, {
+				method: "POST",
+				headers,
+				body: JSON.stringify({ name: labelName, color: "ededed" }),
+			});
+			if (resp.ok) {
+				const created = await resp.json();
+				if (created && typeof created === "object" && (created as Record<string, unknown>).name === labelName) {
+					repositoryLabelNames?.add(labelName);
+					labelCache.set(labelName, labelName);
+					return labelName;
+				}
+			}
+		} catch {
+			// label creation failed
+		}
+
+		return undefined;
+	}
+
+	async function addLabelsToIssue(labels: readonly string[]): Promise<void> {
+		if (labels.length === 0) {
+			return;
+		}
+		const resolvedNames: string[] = [];
+		for (const labelName of new Set(labels)) {
+			const resolvedName = await resolveLabelName(labelName);
+			if (resolvedName !== undefined) {
+				resolvedNames.push(resolvedName);
+			}
+		}
+		if (resolvedNames.length === 0) {
+			return;
+		}
+		try {
+			await fetchImpl(`${repoPath}/issues/${options.issueNumber}/labels`, {
+				method: "POST",
+				headers,
+				body: JSON.stringify({ labels: resolvedNames }),
+			});
+		} catch {
+			// label attachment failed, non-critical
+		}
+	}
+
+	const dispatcher = {
+		async publishAggregatedProblems(problems: readonly ReviewProblem[], summary?: string): Promise<DispatchResult> {
+			const endpoint = [
+				baseUrl,
+				"repos",
+				encodePathSegment(options.owner),
+				encodePathSegment(options.repo),
+				"issues",
+				String(options.issueNumber),
+				"comments",
+			].join("/");
+
+			const sections: string[] = [];
+			if (summary) {
+				sections.push(summary, "");
+			}
+			if (problems.length > 0) {
+				sections.push(`### Problems (${problems.length})`, "");
+				for (const problem of problems) {
+					sections.push(renderProblemMarkdown(problem));
+					sections.push("");
+				}
+			}
+
+			const body = sections.join("\n");
+			const response = await fetchImpl(endpoint, {
+				method: "POST",
+				headers,
+				body: JSON.stringify({ body }),
+			});
+
+			if (!response.ok) {
+				throw new OutputDispatchError(`GitHub issue API returned ${response.status}.`, {
+					status: response.status,
+					responseBody: await response.text(),
+				});
+			}
+
+			const raw = await response.json();
+			const externalId = extractExternalId(raw);
+
+			const labelsToAdd: string[] = [];
+			if (options.autoTag) {
+				labelsToAdd.push(options.autoTag);
+			}
+			if (options.reviewedTag) {
+				labelsToAdd.push(options.reviewedTag);
+			}
+			if (labelsToAdd.length > 0) {
+				await addLabelsToIssue(labelsToAdd);
+			}
+
+			return {
+				channel,
+				status: "published",
+				...(externalId ? { externalId } : {}),
+				raw,
+			};
+		},
+	};
+
+	return dispatcher;
+}
+
+export type GithubProblemIssueResolvedAction = "none" | "close";
+
+export interface GithubProblemIssueOptions {
+	readonly baseUrl?: string;
+	readonly token?: string;
+	readonly owner: string;
+	readonly repo: string;
+	readonly channelName?: string;
+	readonly markerPrefix?: string;
+	readonly markerLabel?: string;
+	readonly labels?: readonly string[];
+	readonly resolvedAction?: GithubProblemIssueResolvedAction;
+	readonly fetch?: FetchLike;
+	readonly assignCommitter?: boolean;
+	readonly committerUsername?: string;
+	readonly ownersFilePath?: string;
+	readonly ownersContent?: string;
+	readonly addOwnersAsAssignees?: boolean;
+	readonly ref?: string;
+	readonly severityLabelPrefix?: string;
+	readonly severityLabelColors?: Readonly<Record<string, string>>;
+	readonly notifyFeishu?: {
+		readonly webhookUrl: string;
+		readonly secret?: string;
+	};
+	readonly autoTag?: string;
+	readonly reviewedTag?: string;
+}
+
+export interface GithubProblemIssueDispatcher {
+	reconcileProblems(problems: readonly ReviewProblem[], summary?: string): Promise<readonly DispatchResult[]>;
+}
+
+interface ManagedGithubIssue {
+	readonly number: number;
+	readonly title: string;
+	readonly body: string;
+	readonly state: string;
+	readonly url?: string;
+	readonly fingerprint?: string;
+}
+
+function parseManagedGithubIssues(raw: unknown, markerPrefix: string, markerLabel: string): readonly ManagedGithubIssue[] {
+	if (!Array.isArray(raw)) {
+		return [];
+	}
+
+	const issues: ManagedGithubIssue[] = [];
+	for (const entry of raw) {
+		if (!entry || typeof entry !== "object") {
+			continue;
+		}
+
+		const rawIssue = entry as Record<string, unknown>;
+		if (rawIssue.pull_request) {
+			continue;
+		}
+
+		const number = extractIssueNumber(rawIssue);
+		const title = String(rawIssue.title ?? "");
+		const body = String(rawIssue.body ?? "");
+		const state = String(rawIssue.state ?? "");
+		if (number === undefined || !title.startsWith(markerPrefix) || !hasManagedProblemIssueMarker(body)) {
+			continue;
+		}
+
+		if (!body.includes(`<!-- aicr:label=${markerLabel} -->`)) {
+			continue;
+		}
+
+		const fingerprint = extractManagedIssueFingerprint(body);
+		issues.push({
+			number,
+			title,
+			body,
+			state,
+			...(typeof rawIssue.html_url === "string" ? { url: rawIssue.html_url } : {}),
+			...(fingerprint ? { fingerprint } : {}),
+		});
+	}
+
+	return issues;
+}
+
+export function createGithubProblemIssueDispatcher(options: GithubProblemIssueOptions): GithubProblemIssueDispatcher {
+	const fetchImpl = options.fetch ?? defaultFetch();
+	const baseUrl = (options.baseUrl ?? "https://api.github.com").replace(/\/+$/u, "");
+	const channel = options.channelName ?? "github_problem_issue";
+	const markerPrefix = options.markerPrefix ?? "[AICR]";
+	const markerLabel = options.markerLabel ?? "aicr-managed";
+	const resolvedAction = options.resolvedAction ?? "close";
+	const assignCommitter = options.assignCommitter ?? true;
+	const addOwnersAsAssignees = options.addOwnersAsAssignees ?? false;
+	const ownersFilePath = options.ownersFilePath ?? "OWNERS";
+	const severityLabelPrefix = options.severityLabelPrefix;
+	const severityLabelColors = options.severityLabelColors;
+	const repoPath = buildGithubRepoPath(baseUrl, options.owner, options.repo);
+	const headers = buildGithubHeaders(options.token);
+
+	async function request(method: string, endpoint: string, body?: unknown): Promise<unknown> {
+		const response = await fetchImpl(endpoint, {
+			method,
+			headers,
+			...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+		});
+
+		if (!response.ok) {
+			throw new OutputDispatchError(`GitHub problem issue API returned ${response.status}.`, {
+				status: response.status,
+				responseBody: await response.text(),
+			});
+		}
+
+		if (response.status === 204) {
+			return {};
+		}
+
+		return response.json();
+	}
+
+	async function fetchOwnersContent(): Promise<string | undefined> {
+		if (options.ownersContent !== undefined) {
+			return options.ownersContent;
+		}
+
+		try {
+			const refParam = options.ref ? `?ref=${encodeURIComponent(options.ref)}` : "";
+			const raw = await request("GET", `${repoPath}/contents/${encodePathSegment(ownersFilePath)}${refParam}`);
+			if (!raw || typeof raw !== "object") {
+				return undefined;
+			}
+
+			const content = (raw as Record<string, unknown>).content;
+			if (typeof content !== "string") {
+				return undefined;
+			}
+
+			return Buffer.from(content, "base64").toString("utf8");
+		} catch {
+			return undefined;
+		}
+	}
+
+	const autoTagLabelCache = new Map<string, string>();
+	let repositoryLabelNamesPromise: Promise<Set<string> | undefined> | undefined;
+
+	function getRepositoryLabelNames(): Promise<Set<string> | undefined> {
+		repositoryLabelNamesPromise ??= fetchGithubRepositoryLabelNames(fetchImpl, repoPath, headers);
+		return repositoryLabelNamesPromise;
+	}
+
+	async function resolveLabelName(labelName: string, color?: string): Promise<string | undefined> {
+		const cached = autoTagLabelCache.get(labelName);
+		if (cached !== undefined) {
+			return cached;
+		}
+
+		const repositoryLabelNames = await getRepositoryLabelNames();
+		if (repositoryLabelNames?.has(labelName)) {
+			autoTagLabelCache.set(labelName, labelName);
+			return labelName;
+		}
+
+		const normalizedColor = (color ?? "#ededed").replace(/^#/u, "");
+		try {
+			const resp = await fetchImpl(`${repoPath}/labels`, {
+				method: "POST",
+				headers,
+				body: JSON.stringify({ name: labelName, color: normalizedColor }),
+			});
+			if (resp.ok) {
+				const created = await resp.json();
+				if (created && typeof created === "object") {
+					const createdName = (created as Record<string, unknown>).name;
+					if (createdName === labelName) {
+						repositoryLabelNames?.add(labelName);
+						autoTagLabelCache.set(labelName, labelName);
+						return labelName;
+					}
+				}
+			}
+		} catch {
+			// label creation failed
+		}
+
+		return undefined;
+	}
+
+	async function resolveSeverityLabelName(severity: string): Promise<string | undefined> {
+		if (!severityLabelPrefix) {
+			return undefined;
+		}
+		return resolveLabelName(`${severityLabelPrefix}${severity}`, severityLabelColors?.[severity] ?? DEFAULT_SEVERITY_COLORS[severity]);
+	}
+
+	async function sendFeishuNotification(
+		issueTitle: string,
+		issueUrl: string | undefined,
+		severity: string,
+		problemFile: string,
+	): Promise<void> {
+		if (!options.notifyFeishu) {
+			return;
+		}
+
+		try {
+			const sections = [
+				`**New AICR Issue Created**`,
+				`**Severity:** [${severity.toUpperCase()}]`,
+				`**File:** ${problemFile}`,
+			];
+			if (issueUrl) {
+				sections.push(`**Link:** [${issueTitle}](${issueUrl})`);
+			} else {
+				sections.push(`**Title:** ${issueTitle}`);
+			}
+
+			const timestamp = Math.floor(Date.now() / 1000);
+			const body: Record<string, unknown> = {
+				msg_type: "interactive",
+				card: {
+					elements: [
+						{
+							tag: "markdown",
+							content: sections.join("\n"),
+						},
+					],
+				},
+			};
+
+			if (options.notifyFeishu.secret) {
+				body.timestamp = String(timestamp);
+				body.sign = await computeFeishuSign(timestamp, options.notifyFeishu.secret);
+			}
+
+			await fetchImpl(options.notifyFeishu.webhookUrl, {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify(body),
+			});
+		} catch {
+			// Feishu notification failure should not block issue creation
+		}
+	}
+
+	async function listManagedOpenIssues(): Promise<readonly ManagedGithubIssue[]> {
+		const params = new URLSearchParams({ state: "open", per_page: "100" });
+		const raw = await request("GET", `${repoPath}/issues?${params.toString()}`);
+		return parseManagedGithubIssues(raw, markerPrefix, markerLabel);
+	}
+
+	function resolveAssignees(problem: ReviewProblem, owners: OwnersConfig | undefined): string[] {
+		const assignees: string[] = [];
+
+		if (assignCommitter && options.committerUsername) {
+			assignees.push(options.committerUsername);
+		}
+
+		if (addOwnersAsAssignees && owners) {
+			const matched = matchOwnersForFile(problem.file, owners);
+			for (const owner of matched) {
+				if (!assignees.includes(owner)) {
+					assignees.push(owner);
+				}
+			}
+		}
+
+		return assignees;
+	}
+
+	async function createIssue(
+		problem: ReviewProblem,
+		summary: string | undefined,
+		owners: OwnersConfig | undefined,
+	): Promise<DispatchResult> {
+		const body: Record<string, unknown> = {
+			title: buildProblemIssueTitle(problem, markerPrefix),
+			body: buildManagedIssueBody(problem, { channel, markerLabel, ...(summary ? { summary } : {}) }),
+		};
+
+		const labelNames: string[] = [];
+		if (options.labels && options.labels.length > 0) {
+			labelNames.push(...options.labels);
+		}
+
+		if (options.autoTag) {
+			const name = await resolveLabelName(options.autoTag);
+			if (name !== undefined && !labelNames.includes(name)) {
+				labelNames.push(name);
+			}
+		}
+
+		if (options.reviewedTag) {
+			const name = await resolveLabelName(options.reviewedTag);
+			if (name !== undefined && !labelNames.includes(name)) {
+				labelNames.push(name);
+			}
+		}
+
+		if (severityLabelPrefix) {
+			const severityName = await resolveSeverityLabelName(problem.severity);
+			if (severityName !== undefined && !labelNames.includes(severityName)) {
+				labelNames.push(severityName);
+			}
+		}
+
+		if (labelNames.length > 0) {
+			body.labels = labelNames;
+		}
+
+		const assignees = resolveAssignees(problem, owners);
+		if (assignees.length > 0) {
+			body.assignees = assignees;
+		}
+
+		const raw = await request("POST", `${repoPath}/issues`, body);
+		const externalId = extractExternalId(raw);
+
+		const issueUrl = raw && typeof raw === "object"
+			? (raw as Record<string, unknown>).html_url as string | undefined
+			: undefined;
+
+		await sendFeishuNotification(
+			buildProblemIssueTitle(problem, markerPrefix),
+			issueUrl,
+			problem.severity,
+			problem.file,
+		);
+
+		return {
+			channel,
+			status: "published",
+			...(externalId ? { externalId } : {}),
+			raw: { action: "created", issue: raw },
+		};
+	}
+
+	async function resolveIssue(issue: ManagedGithubIssue): Promise<DispatchResult | undefined> {
+		if (resolvedAction === "none") {
+			return undefined;
+		}
+
+		await request("POST", `${repoPath}/issues/${issue.number}/comments`, {
+			body: [
+				"🤖 **AICR lifecycle:** this managed problem is no longer present in the latest analysis.",
+				"",
+				"Closing the issue automatically. Reopen it if the problem is still valid.",
+			].join("\n"),
+		});
+		const raw = await request("PATCH", `${repoPath}/issues/${issue.number}`, { state: "closed" });
+		return {
+			channel,
+			status: "published",
+			externalId: String(issue.number),
+			raw: { action: "closed", issueNumber: issue.number, issue: raw },
+		};
+	}
+
+	const dispatcher = {
+		async reconcileProblems(problems: readonly ReviewProblem[], summary?: string): Promise<readonly DispatchResult[]> {
+			const preparedProblems = problems.map(ensureProblemFingerprint);
+			let owners: OwnersConfig | undefined;
+
+			if (addOwnersAsAssignees) {
+				const ownersContent = await fetchOwnersContent();
+				if (ownersContent) {
+					owners = parseOwnersContent(ownersContent);
+				}
+			}
+
+			const currentFingerprints = new Set(preparedProblems.map((problem) => problem.fingerprint!));
+			const existingIssues = await listManagedOpenIssues();
+			const existingByFingerprint = new Map<string, ManagedGithubIssue>();
+			for (const issue of existingIssues) {
+				if (issue.fingerprint) {
+					existingByFingerprint.set(issue.fingerprint, issue);
+				}
+			}
+
+			const results: DispatchResult[] = [];
+			for (const problem of preparedProblems) {
+				if (!existingByFingerprint.has(problem.fingerprint!)) {
+					results.push(await createIssue(problem, summary, owners));
+				}
+			}
+
+			for (const issue of existingIssues) {
+				if (!issue.fingerprint || currentFingerprints.has(issue.fingerprint)) {
+					continue;
+				}
+
+				const result = await resolveIssue(issue);
+				if (result) {
+					results.push(result);
+				}
+			}
+
+			return results;
+		},
+	};
 
 	return dispatcher;
 }
@@ -698,9 +1319,11 @@ export function createGitlabMergeRequestReviewDispatcher(
 		return { body: renderProblemMarkdown(problem) };
 	}
 
+	const notesEndpoint = `${mrPath}/notes`;
+	let attachSummaryLabels: (problems?: readonly ReviewProblem[]) => Promise<void> = () => Promise.resolve();
+
 	const dispatcher: GitlabMergeRequestReviewDispatcher = {
 		async publishProblem(problem: ReviewProblem): Promise<DispatchResult> {
-			const notesEndpoint = `${mrPath}/notes`;
 			if (!canPublishLineComment(problem)) {
 				return post(notesEndpoint, generalNoteBody(problem), "GitLab merge request note API");
 			}
@@ -745,6 +1368,14 @@ export function createGitlabMergeRequestReviewDispatcher(
 				...(externalId ? { externalId } : {}),
 				raw,
 			};
+		},
+		async publishSummary(summary: string, problems?: readonly ReviewProblem[]): Promise<DispatchResult> {
+			const result = summary.trim().length > 0
+				? await post(notesEndpoint, { body: summary }, "GitLab merge request note API")
+				: undefined;
+			await attachSummaryLabels(problems);
+
+			return result ?? { channel, status: "published", raw: {} };
 		},
 	};
 
@@ -815,7 +1446,7 @@ export function createGitlabMergeRequestReviewDispatcher(
 			return resolveLabelNameByString(`${options.severityLabelPrefix}${severity}`, severityColors[severity] ?? "#ededed");
 		}
 
-		dispatcher.publishSummary = async (_summary: string, problems?: readonly ReviewProblem[]): Promise<DispatchResult> => {
+		attachSummaryLabels = async (problems?: readonly ReviewProblem[]): Promise<void> => {
 			const labelNames: string[] = [];
 
 			if (options.autoTag) {
@@ -842,7 +1473,7 @@ export function createGitlabMergeRequestReviewDispatcher(
 			}
 
 			if (labelNames.length === 0) {
-				return { channel, status: "published" as const, raw: {} };
+				return;
 			}
 
 			try {
@@ -854,8 +1485,6 @@ export function createGitlabMergeRequestReviewDispatcher(
 			} catch {
 				// label attachment failed, non-critical
 			}
-
-			return { channel, status: "published" as const, raw: {} };
 		};
 	}
 

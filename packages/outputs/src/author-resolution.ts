@@ -15,6 +15,8 @@ export interface AuthorResolutionOptions {
 export type MentionChannelKind =
 	| "gitea_pr_review"
 	| "github_pr_review"
+	| "github_issue"
+	| "github_problem_issue"
 	| "gitlab_mr_review"
 	| "gitea_issue"
 	| "gitea_problem_issue"
@@ -76,6 +78,8 @@ function renderFallbackMention(channelKind: MentionChannelKind): string {
 			return "<@all>";
 		case "gitea_pr_review":
 		case "github_pr_review":
+		case "github_issue":
+		case "github_problem_issue":
 		case "gitlab_mr_review":
 		case "gitea_issue":
 		case "gitea_problem_issue":
@@ -99,6 +103,8 @@ export function renderMentions(
 			return usernames.map((u) => `<@${u}>`).join(" ");
 		case "gitea_pr_review":
 		case "github_pr_review":
+		case "github_issue":
+		case "github_problem_issue":
 		case "gitlab_mr_review":
 		case "gitea_issue":
 		case "gitea_problem_issue":

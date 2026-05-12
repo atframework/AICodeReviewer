@@ -173,6 +173,10 @@ describe("GitVcsAdapter", () => {
         return { stdout: "", stderr: "" };
       }
 
+      if (args[2] === "fetch" && args[3] === "origin" && args[4]?.includes("refs/pull")) {
+        return { stdout: "", stderr: "" };
+      }
+
       if (args[2] === "diff") {
         return { stdout: "DedicatedServerBuildLinux.jenkinsfile\n", stderr: "" };
       }
@@ -203,6 +207,7 @@ describe("GitVcsAdapter", () => {
     expect(mutableCalls).toEqual([
       ["-C", repositoryDir, "rev-parse", "--is-inside-work-tree"],
       ["clone", "--no-checkout", "https://git.example.com/owent/example.git", repositoryDir],
+      ["-C", repositoryDir, "fetch", "origin", "+refs/pull/*/head:refs/remotes/origin/pr/*"],
       ["-C", repositoryDir, "diff", "--name-only", "--diff-filter=ACMRT", "base..head", "--"],
     ]);
 
@@ -215,6 +220,10 @@ describe("GitVcsAdapter", () => {
       mutableCalls.push([...args]);
       if (args[2] === "rev-parse") {
         return { stdout: "true\n", stderr: "" };
+      }
+
+      if (args[2] === "remote" && args[3] === "set-url") {
+        return { stdout: "", stderr: "" };
       }
 
       if (args[2] === "fetch") {
@@ -251,9 +260,120 @@ describe("GitVcsAdapter", () => {
     });
     expect(mutableCalls).toEqual([
       ["-C", expect.stringMatching(/repo$/u), "rev-parse", "--is-inside-work-tree"],
+      ["-C", expect.stringMatching(/repo$/u), "remote", "set-url", "origin", "https://git.example.com/owent/example.git"],
       ["-C", expect.stringMatching(/repo$/u), "fetch", "--prune", "origin"],
+      ["-C", expect.stringMatching(/repo$/u), "fetch", "origin", "+refs/pull/*/head:refs/remotes/origin/pr/*"],
       ["-C", expect.stringMatching(/repo$/u), "diff", "--name-only", "--diff-filter=ACMRT", "base..head", "--"],
     ]);
+  });
+
+  it("clones with embedded token in remote URL when token is provided", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-git-auth-url-"));
+    const repositoryDir = join(tempDir, "source", "atsf4g-co");
+    const calls: string[][] = [];
+    const git = async (args: readonly string[]): Promise<GitCommandResult> => {
+      calls.push([...args]);
+      if (args.includes("clone")) {
+        return { stdout: "", stderr: "Cloning..." };
+      }
+      if (args.includes("diff")) {
+        return { stdout: "src/app.ts\n", stderr: "" };
+      }
+      throw new Error(`unexpected git call: ${args.join(" ")}`);
+    };
+    const adapter = createGitVcsAdapter({
+      repositoryDir,
+      git,
+      remoteUrl: "https://github.com/atframework/atsf4g-co.git",
+      token: "github_pat_test123",
+    });
+    const event = createReviewEvent({
+      triggerName: "github",
+      provider: "github",
+      workspaceId: "ws",
+      targetKind: "pull_request",
+      repoRef: "atframework/atsf4g-co",
+      baseSha: "aaa",
+      headSha: "bbb",
+      author: {},
+      reason: "github:opened",
+    });
+
+    const result = await adapter.listChanges(event);
+    expect(result.files).toEqual(["src/app.ts"]);
+    const cloneCall = calls.find((c) => c.includes("clone"));
+    expect(cloneCall).toBeDefined();
+    expect(cloneCall?.some((arg) => arg.includes("http.extraHeader"))).toBe(false);
+    const cloneUrl = cloneCall!.find((a) => a.includes("x-access-token:"));
+    expect(cloneUrl).toContain("x-access-token:github_pat_test123@github.com");
+
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  it("uses an auth header when the remote URL cannot embed a token", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-git-auth-header-"));
+    const repositoryDir = join(tempDir, "source", "org_repo");
+    const calls: string[][] = [];
+    const git: GitCommandRunner = async (args) => {
+      calls.push([...args]);
+      if (args.includes("rev-parse")) {
+        throw new Error("fatal: not a git repository");
+      }
+      if (args.includes("clone") || args.includes("fetch")) {
+        return { stdout: "", stderr: "" };
+      }
+      if (args.includes("diff")) {
+        return { stdout: "src/app.ts\n", stderr: "" };
+      }
+      throw new Error(`unexpected git call: ${args.join(" ")}`);
+    };
+    const adapter = createGitVcsAdapter({
+      repositoryDir,
+      git,
+      remoteUrl: "git@github.com:org/repo.git",
+      token: "ssh-remote-token",
+    });
+    const event = createReviewEvent({
+      triggerName: "github",
+      provider: "github",
+      workspaceId: "ws",
+      targetKind: "pull_request",
+      repoRef: "org/repo",
+      baseSha: "aaa",
+      headSha: "bbb",
+      author: {},
+      reason: "github:opened",
+    });
+
+    await expect(adapter.listChanges(event)).resolves.toMatchObject({ files: ["src/app.ts"] });
+
+    const cloneCall = calls.find((c) => c.includes("clone"));
+    expect(cloneCall).toBeDefined();
+    expect(cloneCall?.slice(0, 2)).toEqual(["-c", "http.extraHeader=Authorization: token ssh-remote-token"]);
+    expect(cloneCall).toContain("git@github.com:org/repo.git");
+
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  it("redacts URL-embedded token from Git command errors", async () => {
+    const adapter = createGitVcsAdapter({
+      repositoryDir: "C:/repo",
+      token: "secret-token",
+      remoteUrl: "https://github.com/user/repo.git",
+      git: async (args) => {
+        throw new Error(`failed git clone ${args.join(" ")}`);
+      },
+    });
+
+    let thrown: unknown;
+    try {
+      await adapter.diff({ baseRevision: "a", headRevision: "b", files: ["f.ts"] });
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(Error);
+    expect(String(thrown)).not.toContain("secret-token");
   });
 
   it("redacts authentication headers from Git command errors", async () => {

@@ -37,7 +37,7 @@ describe("translateP4TriggerToReviewEvent", () => {
     expect(event?.repoRef).toBe("//Other/Main");
   });
 
-  it("includes depotPath and p4Workspace when configured", () => {
+  it("includes depotPath and submitter client as p4Workspace", () => {
     const event = translateP4TriggerToReviewEvent(
       { change: "6244", user: "submitter", client: "submit-client" },
       {
@@ -49,7 +49,22 @@ describe("translateP4TriggerToReviewEvent", () => {
     );
 
     expect(event?.depotPath).toBe("//Prx/Prx_Main");
-    expect(event?.p4Workspace).toBe("submit-client-ws");
+    expect(event?.p4Workspace).toBe("submit-client");
+    expect(event?.author).toEqual({ username: "submitter" });
+  });
+
+  it("falls back to configured workspace when payload omits client", () => {
+    const event = translateP4TriggerToReviewEvent(
+      { change: "6244", user: "submitter" },
+      {
+        triggerName: "p4-main",
+        workspaceId: "p4-workspace",
+        depot: "//Prx/Prx_Main",
+        workspace: "configured-client-ws",
+      },
+    );
+
+    expect(event?.p4Workspace).toBe("configured-client-ws");
   });
 
   it("uses payload depot_path for depotPath field", () => {

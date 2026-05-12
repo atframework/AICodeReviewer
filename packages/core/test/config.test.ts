@@ -1340,6 +1340,26 @@ describe("problem issue output config", () => {
       secret_env: "FEISHU_NOTIFY_SECRET",
     });
   });
+
+  it("accepts string labels for GitHub managed problem issues", () => {
+    const result = appConfigSchema.parse({
+      outputs: {
+        channels: [
+          {
+            name: "github-problem-issues",
+            kind: "github_problem_issue",
+            labels: ["bug", "aicr-managed"],
+            resolved_action: "close",
+          },
+        ],
+      },
+    });
+
+    expect(result.outputs.channels[0]).toMatchObject({
+      labels: ["bug", "aicr-managed"],
+      resolved_action: "close",
+    });
+  });
 });
 
 describe("triage config", () => {
