@@ -337,6 +337,13 @@ review:
   commit_strategy: aggregate # aggregate | per_commit | head_only
   git:
     allow_deepen: true
+  # AICR label management — skip review if PR/MR/issue has these labels,
+  # and auto-tag targets when review starts/completes.
+  # All fields support global → workspace-level override.
+  labels:
+    ignore: ["aicr:ignore", "aicr-ignore"]
+    auto_tag: "aicr"
+    reviewed_tag: "aicr:reviewed"
 
 # ---------------------------------------------------------------------------
 # Workspaces — one per repository you want to review
@@ -381,3 +388,34 @@ workspaces:
     #     repo: "//depot/main"
     #   outputs:
     #     summary: [feishu-code-review]
+
+# --- Template overrides ---
+# Built-in templates live in templates/builtin/*.hbs in the deployment directory.
+# Override them per workspace by placing files under:
+#   workspaces/<workspace_id>/templates/
+#
+# Candidate file names (checked in order):
+#   1. <channel_name>.<kind>.md.hbs  (e.g., feishu-code-review.summary.md.hbs)
+#   2. <channel_name>.<kind>.hbs
+#   3. <channel_kind>.<kind>.md.hbs  (e.g., feishu_bot.summary.md.hbs)
+#   4. <channel_kind>.<kind>.hbs
+#   5. <kind>.md.hbs                  (e.g., summary.md.hbs)
+#   6. <kind>.hbs
+#
+# Template variables available:
+#   event:  { author, email, displayName, url, title }
+#   target: { kind, displayText, markdownLink, url, ... }
+#   repo:   { name, fullName }
+#   vcs:    { branch, depot, workspace, repositoryPath }
+#   run:    { id }
+#   atMentions: pre-rendered channel-specific mention string
+#   summary: review summary markdown
+#   problems: array of { file, line, severity, category, message, suggestion, location }
+#   problem: single problem (in problem template only)
+#
+# Example: create workspaces/p4-main/templates/feishu_bot.summary.hbs
+#   **{{target.displayText}}**{{#if event.author}}
+#   **Author**: @{{event.author}}{{#if event.email}} <{{event.email}}>{{/if}}{{/if}}{{#if vcs.depot}}
+#   **Depot**: {{vcs.depot}}{{/if}}{{#if vcs.workspace}}
+#   **Workspace**: {{vcs.workspace}}{{/if}}
+#   {{{summary}}}

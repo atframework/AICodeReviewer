@@ -88,7 +88,7 @@ docs/
   prompt-research.md # 提示词调研报告（M0.5 产出）
   podman.md          # Podman 沙箱接入指引
   output-channels.md # 输出通道与模板说明
-  templates/         # 可选：长模板样例与文档素材；运行时内置模板在 packages/outputs 中打包
+  templates/         # 内置输出模板（Handlebars .hbs 文件，模板源码）
 prompts/system/      # 内置系统提示词（基于 prompt-research.md 总结）
 deploy/
   Dockerfile
@@ -597,7 +597,7 @@ export interface ModelSpec {
 #### 3.9.3 模板引擎
 
 - 引擎：Handlebars（默认）；可切到 Eta（`outputs.template_engine: handlebars|eta`）。
-- 默认模板：内置在 `packages/outputs/src/template-engine.ts` 中并打包，按 channel kind 提供 `summary` 与 `problem` 两套（`gitea_pr_review` / `gitea_issue` / `gitea_problem_issue` / `github_pr_review` / `gitlab_mr_review` / `feishu_bot` / `wecom_bot`）。旧 `gitea_finding_issue` channel kind 与 `finding` 模板类型已移除。`docs/output-channels.md` 只记录契约、渲染策略与覆盖方式，避免文档模板和运行时代码模板漂移。
+- 默认模板：内置在 `templates/builtin/*.hbs` 中，文件系统加载优先，代码内嵌字符串作为降级回退。按 channel kind 提供 `summary` 与 `problem` 两套（`gitea_pr_review` / `gitea_issue` / `gitea_problem_issue` / `github_pr_review` / `gitlab_mr_review` / `feishu_bot` / `wecom_bot`）。`TemplateContext` 包含 `event`（author/email/displayName/url/title）、`target`（kind/displayText/markdownLink）、`repo`（name/fullName）、`vcs`（branch/depot/workspace/repositoryPath）、`run`（id）、`atMentions`、`summary`、`problems`/`problem`。`docs/output-channels.md` 只记录契约、渲染策略与覆盖方式，避免文档模板和运行时代码模板漂移。
 - 仓库覆盖：放到 `workspaces/<workspace_id>/templates/<channel-name>.{summary,problem}.md.hbs`；按 `channel.name` 精确覆盖优先于按 `channel.kind` 默认覆盖；只查找 `.summary.*` 与 `.problem.*` 文件名。
 - 模板变量（部分）：
 
@@ -675,6 +675,16 @@ export interface ModelSpec {
   - 标签 ID 缓存：同一 dispatcher 实例内缓存已解析/已创建的标签 ID，避免重复 API 调用。
   - 对 PR review 通道（`gitea_pr_review`、`github_pr_review`、`gitlab_mr_review`）：在所有 problem 发布完成后，将最高严重程度的标签添加到 PR/MR 上。Gitea/GitHub 将 PR 视为特殊 issue，可复用同一 labels API。
   - 新增配置字段 `severity_label_colors`：允许用户自定义标签颜色映射，格式为 `{ severity: "#hexcolor" }`。
+
+- **AICR 标签管理（ignore / auto-tag / reviewed-tag）**：
+  - 新增配置字段 `review.labels`：
+    - `ignore`（`string[]`）：PR/MR/issue 如果带有这些标签中的任意一个，AICR 将跳过检查。默认值：`["aicr:ignore", "aicr-ignore"]`。
+    - `auto_tag`（`string`）：AICR 自动给处理的 PR/MR/issue 打上的固定标签。默认值：`"aicr"`。
+    - `reviewed_tag`（`string`）：AICR 完成 review 后给 PR/MR/issue 打上的标签。默认值：`"aicr:reviewed"`。
+  - 支持全局 → workspace 级别覆盖，与 `review` 下其他字段合并行为一致。
+  - 忽略标签在 webhook 层检查：收到 PR/MR/issue webhook 后，若 payload 中的 labels 包含任一忽略标签，立即返回 `{ accepted: false, reason: "ignored_by_label" }`，不进入后台 review 流程。
+  - 自动标签在 dispatcher `publishSummary`（PR/MR review 完成）或 `publishAggregatedProblems`（issue 评论发布）时追加，与 severity label 一起通过平台 Labels API 附加到目标上。标签不存在时自动创建（颜色默认 `#ededed`）。
+  - 对 `gitea_problem_issue`：auto_tag 和 reviewed_tag 在创建 managed issue 时直接附加到 `body.labels` 中。
 
 - **飞书通知（Feishu notify on issue creation）**：
   - 新增配置字段 `notify_feishu`：创建 issue 后通过飞书 webhook 发送通知卡片，包含 issue 标题、URL、严重程度和摘要。
@@ -823,6 +833,10 @@ export interface ModelSpec {
     commit_strategy: aggregate
     git:
       allow_deepen: true
+    labels:
+      ignore: ["aicr:ignore", "aicr-ignore"]
+      auto_tag: "aicr"
+      reviewed_tag: "aicr:reviewed"
     fetch_extra:
       max_bytes: 524288
       max_files: 5
@@ -1035,9 +1049,8 @@ workspaces/<workspace_id>/
 
 ### 5.6 自定义输出模板
 
-- 默认模板由 `packages/outputs/src/template-engine.ts` 打包；输出契约、字段说明和覆盖方式见 `docs/output-channels.md`。按 `channel.name` 在 `workspaces/<workspace_id>/templates/` 同名覆盖。
-- 模板变量见 §3.9.3 表；新增字段会向后兼容地追加。
-- 渲染流程：`problem/summary 数据 → 模板渲染 → markdownlint 自动修复 → dispatch`。
+- 默认模板由 `templates/builtin/*.hbs` 提供；输出契约、字段说明和覆盖方式见 `docs/output-channels.md`。按 `channel.name` 在 `workspaces/<workspace_id>/templates/` 同名覆盖（候选顺序：`<channelName>.<kind>.md.hbs` → `<channelName>.<kind>.hbs` → `<channelKind>.<kind>.md.hbs` → `<channelKind>.<kind>.hbs` → `<kind>.md.hbs` → `<kind>.hbs`）。
+- 模板变量：`event`（author/email/displayName/url/title）、`target`（kind/displayText/markdownLink/url）、`repo`（name/fullName）、`vcs`（branch/depot/workspace/repositoryPath）、`run`（id）、`atMentions`、`summary`、`problems`/`problem`（file/line/severity/category/message/suggestion/location）。
 - 调试：`aicr lint --template <path>` 可单测模板与样例数据。
 
 ---

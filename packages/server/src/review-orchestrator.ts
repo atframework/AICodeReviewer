@@ -110,6 +110,7 @@ export interface ServerReviewOrchestrationOptions {
   readonly channelKind?: string;
   readonly mentionAuthor?: boolean;
   readonly authorResolution?: AuthorResolutionOptions;
+  readonly ignoreLabelsResolver?: (workspaceId: string) => readonly string[];
 }
 
 export interface ReviewOrchestrationResult {
@@ -607,6 +608,8 @@ function parseToolCalls(content: string): ToolCallEnvelope[] {
 
   if (typeof payload.summary === "string" && payload.summary.trim()) {
     calls.push({ name: "aicr.publish_summary", input: { markdown: payload.summary } });
+  } else if (isPlainObject(payload.summary) && typeof payload.summary.markdown === "string" && payload.summary.markdown.trim()) {
+    calls.push({ name: "aicr.publish_summary", input: { markdown: payload.summary.markdown } });
   }
 
   if (typeof payload.skipReason === "string" && payload.skipReason.trim()) {
@@ -1035,9 +1038,17 @@ export async function runReviewOrchestration(
         );
     const mentionChannelKind = options.channelKind as MentionChannelKind | undefined;
     const eventAuthor = context.reviewEvent.author?.username ?? context.reviewEvent.author?.displayName;
-    const eventCtx: { author?: string; url?: string; title?: string } = {};
+    const eventEmail = context.reviewEvent.author?.email;
+    const eventDisplayName = context.reviewEvent.author?.displayName;
+    const eventCtx: { author?: string; email?: string; displayName?: string; url?: string; title?: string } = {};
     if (eventAuthor !== undefined) {
       eventCtx.author = eventAuthor;
+    }
+    if (eventEmail !== undefined) {
+      eventCtx.email = eventEmail;
+    }
+    if (eventDisplayName !== undefined) {
+      eventCtx.displayName = eventDisplayName;
     }
     if (context.reviewEvent.title !== undefined) {
       eventCtx.title = context.reviewEvent.title;
@@ -1045,6 +1056,7 @@ export async function runReviewOrchestration(
     if (context.reviewEvent.url !== undefined) {
       eventCtx.url = context.reviewEvent.url;
     }
+    const vcsCtx = buildOrchestratorVcsContext(context.reviewEvent);
     const baseTemplateContext: Omit<TemplateContext, "problem" | "problems"> = {
       ...(Object.keys(eventCtx).length > 0 ? { event: eventCtx } : {}),
       target: buildTemplateTargetContext({
@@ -1068,6 +1080,7 @@ export async function runReviewOrchestration(
             options.authorResolution,
           ) }
         : {}),
+      ...(Object.keys(vcsCtx).length > 0 ? { vcs: vcsCtx } : {}),
     };
     const reviewProblems: ReviewProblem[] = [];
     for (const reportedProblem of outputState.problems) {
@@ -1235,6 +1248,25 @@ export async function runReviewOrchestration(
     ...(originalTokenEstimate !== undefined ? { originalTokenEstimate } : {}),
     ...(compressedTokenEstimate !== undefined ? { compressedTokenEstimate } : {}),
   };
+}
+
+function buildOrchestratorVcsContext(reviewEvent: ReviewEvent): { branch?: string; depot?: string; workspace?: string; repositoryPath?: string } {
+  const result: { branch?: string; depot?: string; workspace?: string; repositoryPath?: string } = {};
+
+  if (reviewEvent.branch !== undefined) {
+    result.branch = reviewEvent.branch;
+  }
+  if (reviewEvent.depotPath !== undefined) {
+    result.depot = reviewEvent.depotPath;
+  }
+  if (reviewEvent.p4Workspace !== undefined) {
+    result.workspace = reviewEvent.p4Workspace;
+  }
+  if (reviewEvent.repoRef !== undefined) {
+    result.repositoryPath = reviewEvent.repoRef;
+  }
+
+  return result;
 }
 
 export function summarizeReviewOrchestrationForWebhook(

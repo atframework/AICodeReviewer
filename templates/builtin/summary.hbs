@@ -1,0 +1,53 @@
+## AI Code Review Summary
+
+{{#if target.markdownLink}}
+**Target**: {{{target.markdownLink}}}
+{{else}}
+{{#if target.displayText}}
+**Target**: {{target.displayText}}
+{{else}}
+{{#if event.url}}
+**Target**: [{{#if event.title}}{{event.title}}{{else}}Review target{{/if}}]({{event.url}})
+{{/if}}
+{{/if}}
+{{/if}}
+{{#if event.displayName}}
+**Author**: {{event.displayName}}{{#if event.email}} <{{event.email}}>{{/if}}
+{{else}}
+{{#if event.author}}
+**Author**: @{{event.author}}{{#if event.email}} <{{event.email}}>{{/if}}
+{{/if}}
+{{/if}}
+{{#if vcs.branch}}
+**Branch**: {{vcs.branch}}
+{{/if}}
+{{#if vcs.depot}}
+**Depot**: {{vcs.depot}}
+{{/if}}
+{{#if vcs.workspace}}
+**Workspace**: {{vcs.workspace}}
+{{/if}}
+{{#if atMentions}}
+**Reviewers**: {{atMentions}}
+{{/if}}
+
+---
+
+{{#if summary}}
+{{{summary}}}
+{{else}}
+No summary provided.
+{{/if}}
+
+{{#if problems}}
+### Problems ({{problems.length}})
+
+| # | Severity | Category | Location | Message |
+|---|----------|----------|----------|---------|
+{{#each problems}}
+| {{@index}} | {{severity}} | {{category}} | `{{location}}` | {{message}} |
+{{/each}}
+{{/if}}
+
+---
+*Powered by AICodeReviewer*{{#if run.id}} | Run: {{run.id}}{{/if}}

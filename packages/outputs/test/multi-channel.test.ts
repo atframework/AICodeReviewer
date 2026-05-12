@@ -132,7 +132,11 @@ describe("createFeishuBotDispatcher", () => {
 		const card = body.card as Record<string, unknown>;
 		const elements = card.elements as Record<string, unknown>[];
 		expect(elements.length).toBe(2);
-		expect((elements[0] as Record<string, unknown>).content).toContain("Review summary");
+		const content = (elements[0] as Record<string, unknown>).content as string;
+		expect(content).toContain("Review summary");
+		expect(content).toContain("Bug found.");
+		expect(content).toContain("Naming issue.");
+		expect(content).toContain("Suggestion: Fix it.");
 	});
 
 	it("throws on non-2xx response", async () => {
@@ -185,6 +189,9 @@ describe("createWeComBotDispatcher", () => {
 		const md = body.markdown as Record<string, unknown>;
 		expect(md.content).toContain("Review done");
 		expect(md.content).toContain("[HIGH]");
+		expect(md.content).toContain("Bug found.");
+		expect(md.content).toContain("Naming issue.");
+		expect(md.content).toContain("Suggestion: Fix it.");
 	});
 
 	it("includes mentioned_mobile_list when provided", async () => {
@@ -257,6 +264,40 @@ describe("createWeComBotDispatcher", () => {
 		expect(md.content).toContain("file0.ts");
 		expect(md.content).toContain("file9.ts");
 		expect(md.content).not.toContain("file10.ts");
+	});
+
+	it("truncates long messages to avoid exceeding card limits", async () => {
+		const longMessage = "A".repeat(600);
+		const longSuggestion = "B".repeat(400);
+		const longProblems: ReviewProblem[] = [{
+			file: "src/app.ts",
+			line: 1,
+			severity: "high",
+			category: "correctness",
+			message: longMessage,
+			suggestion: longSuggestion,
+		}];
+
+		const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
+		const dispatcher = createFeishuBotDispatcher({
+			webhookUrl: "https://open.feishu.cn/hook/test",
+			fetch: async (url, init) => {
+				calls.push({ url, init });
+				return response({ code: 0 });
+			},
+		});
+
+		await dispatcher.publishAggregatedProblems(longProblems);
+
+		const body = JSON.parse(calls[0]?.init?.body ?? "{}");
+		const card = body.card as Record<string, unknown>;
+		const elements = card.elements as Record<string, unknown>[];
+		const content = (elements[0] as Record<string, unknown>).content as string;
+		expect(content).toContain("A".repeat(500));
+		expect(content).toContain("...");
+		expect(content).toContain("B".repeat(300));
+		expect(content).not.toContain("A".repeat(501));
+		expect(content).not.toContain("B".repeat(301));
 	});
 });
 

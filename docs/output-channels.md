@@ -83,8 +83,8 @@ For push/commit/P4 events, publish a non-empty summary when configured channels 
 | `gitlab_mr_review` | Merge request discussion when `baseSha` and `headSha` are available | Merge request note / configured summary publisher | Falls back to a general MR note when line anchoring is unavailable |
 | `gitea_issue` | Collected, then rendered into an issue comment | Aggregated issue comment | Useful for push events or issue-based triage |
 | `gitea_problem_issue` | Collected for reconciliation | Creates, updates, or resolves managed problem issues | Fingerprint stability matters most here |
-| `feishu_bot` | Collected for aggregation | Interactive card Markdown | Keep content concise; include counts, severities, and top locations |
-| `wecom_bot` | Collected for aggregation | Markdown message | Keep within WeCom message size and formatting limits |
+| `feishu_bot` | Collected for aggregation | Interactive card Markdown | Includes summary, problem count, severity/category/file/line, and truncated message/suggestion per problem |
+| `wecom_bot` | Collected for aggregation | Markdown message | Same content as Feishu; messages truncated to 500 chars and suggestions to 300 chars to stay within size limits |
 
 ## Managed Gitea problem issues
 
@@ -204,11 +204,17 @@ Common template variables:
 | Variable | Meaning |
 | --- | --- |
 | `{{event.author}}` | Normalized event author when available |
+| `{{event.email}}` | Author's email when available |
+| `{{event.displayName}}` | Author's display name when available |
 | `{{event.url}}` | Raw event URL when available; templates should not assume this is always a PR/MR URL |
 | `{{target.displayText}}`, `{{target.markdownLink}}` | Safe target label/link for PR, MR, commit, P4 changelist, SVN revision, manual, or scheduled events |
 | `{{repo.fullName}}` | Repository reference |
 | `{{run.id}}` | Review run id when available |
 | `{{atMentions}}` | Pre-rendered channel-specific mention string |
+| `{{vcs.branch}}` | Git branch name (when available) |
+| `{{vcs.depot}}` | Perforce depot path (when available) |
+| `{{vcs.workspace}}` | Perforce client workspace name (when available) |
+| `{{vcs.repositoryPath}}` | Repository/depot reference path |
 | `{{summary}}` | Summary Markdown |
 | `{{problems}}` | Template problem list |
 | `{{problem.file}}`, `{{problem.line}}`, `{{problem.location}}` | Location fields for one reported problem |

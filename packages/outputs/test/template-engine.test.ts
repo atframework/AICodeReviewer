@@ -221,8 +221,26 @@ describe("renderBuiltinTemplate", () => {
 		const result = renderBuiltinTemplate("feishu_bot", "summary", sampleContext);
 
 		expect(result).toContain("Add feature");
-		expect(result).toContain("1");
 		expect(result).toContain("https://gitea.example/owent/example/pulls/1");
+		expect(result).toContain("Overall the PR looks good with one problem.");
+	});
+
+	it("renders feishu_bot auto-summary when summary is empty", () => {
+		const result = renderBuiltinTemplate("feishu_bot", "summary", {
+			...sampleContext,
+			summary: "",
+		});
+
+		expect(result).toContain("Add feature");
+		expect(result).toContain("Review completed:");
+		expect(result).toContain("1 issue(s) found");
+		expect(result).toContain("[HIGH]");
+	});
+
+	it("renders feishu_bot without Problems count duplication", () => {
+		const result = renderBuiltinTemplate("feishu_bot", "summary", sampleContext);
+		const count = (result.match(/Problems:/gu) ?? []).length;
+		expect(count).toBe(0);
 	});
 
 	it("renders commit targets without View PR wording", () => {
@@ -247,8 +265,8 @@ describe("renderBuiltinTemplate", () => {
 		const result = renderBuiltinTemplate("wecom_bot", "summary", sampleContext);
 
 		expect(result).toContain("Add feature");
-		expect(result).toContain("1");
 		expect(result).toContain("https://gitea.example/owent/example/pulls/1");
+		expect(result).toContain("Overall the PR looks good with one problem.");
 	});
 
 	it("renders without optional fields when not provided", () => {
@@ -257,6 +275,59 @@ describe("renderBuiltinTemplate", () => {
 
 		expect(result).toContain("AI Code Review Summary");
 		expect(result).toContain("No summary provided.");
+	});
+
+	it("renders author email when provided", () => {
+		const ctx: TemplateContext = {
+			event: { author: "dev", email: "dev@example.com" },
+		};
+		const result = renderBuiltinTemplate("gitea_pr_review", "summary", ctx);
+
+		expect(result).toContain("@dev");
+		expect(result).toContain("dev@example.com");
+	});
+
+	it("renders displayName and email when provided", () => {
+		const ctx: TemplateContext = {
+			event: { displayName: "Developer", email: "dev@example.com" },
+		};
+		const result = renderBuiltinTemplate("feishu_bot", "summary", ctx);
+
+		expect(result).toContain("Developer");
+		expect(result).toContain("dev@example.com");
+	});
+
+	it("renders VCS context fields", () => {
+		const ctx: TemplateContext = {
+			vcs: { branch: "feature/x", depot: "//depot/main", workspace: "ws-client-1" },
+		};
+		const result = renderBuiltinTemplate("gitea_pr_review", "summary", ctx);
+
+		expect(result).toContain("feature/x");
+		expect(result).toContain("//depot/main");
+		expect(result).toContain("ws-client-1");
+	});
+
+	it("renders VCS context in IM templates", () => {
+		const ctx: TemplateContext = {
+			vcs: { branch: "main", depot: "//Prx/Prx_Main" },
+			problems: [toTemplateProblem(sampleProblem)],
+		};
+		const feishuResult = renderBuiltinTemplate("feishu_bot", "summary", ctx);
+
+		expect(feishuResult).toContain("main");
+		expect(feishuResult).toContain("//Prx/Prx_Main");
+	});
+
+	it("omits VCS fields when not provided", () => {
+		const ctx: TemplateContext = {
+			problems: [toTemplateProblem(sampleProblem)],
+		};
+		const result = renderBuiltinTemplate("feishu_bot", "summary", ctx);
+
+		expect(result).not.toContain("Branch:");
+		expect(result).not.toContain("Depot:");
+		expect(result).not.toContain("Workspace:");
 	});
 });
 
@@ -333,6 +404,32 @@ describe("createTemplateResolver", () => {
 		});
 
 		expect(resolver.render("summary", sampleContext)).toContain("AI Code Review Summary");
+	});
+
+	it("prefers builtin file templates over inline constants", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "aicr-template-builtin-"));
+		try {
+			await writeFile(join(dir, "feishu-summary.hbs"), "FILE: {{#if vcs.branch}}{{vcs.branch}}{{/if}}", "utf8");
+			const resolver = createTemplateResolver({
+				channelKind: "feishu_bot",
+				builtinTemplatesBaseDir: dir,
+			});
+
+			const result = resolver.render("summary", { vcs: { branch: "test-branch" } });
+			expect(result).toContain("FILE: test-branch");
+			expect(result).not.toContain("P4 CL");
+		} finally {
+			await rm(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("falls back to inline when builtin file dir is missing", () => {
+		const resolver = createTemplateResolver({
+			channelKind: "feishu_bot",
+			builtinTemplatesBaseDir: join(tmpdir(), "aicr-template-nonexistent"),
+		});
+
+		expect(resolver.render("summary", { problems: [] })).toContain("");
 	});
 });
 

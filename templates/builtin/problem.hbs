@@ -1,0 +1,13 @@
+**{{problem.severity}} · {{problem.category}}**
+{{problem.message}}
+
+Location: `{{problem.location}}`
+{{#if problem.suggestion}}
+
+**Suggested fix:**
+{{problem.suggestion}}
+{{/if}}
+{{#if problem.fingerprint}}
+
+<!-- aicr:fingerprint={{problem.fingerprint}} -->
+{{/if}}

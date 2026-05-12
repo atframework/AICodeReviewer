@@ -583,6 +583,11 @@ describe("mergeConfigLayers", () => {
         output_language: "zh-CN",
         commit_strategy: "aggregate",
         git: { allow_deepen: true },
+        labels: {
+          ignore: ["aicr:ignore", "aicr-ignore"],
+          auto_tag: "aicr",
+          reviewed_tag: "aicr:reviewed",
+        },
         fetch_extra: {
           max_bytes: 524288,
           max_files: 5,
@@ -610,6 +615,49 @@ describe("mergeConfigLayers", () => {
     });
 
     expect(result.success).toBe(false);
+  });
+
+  it("accepts review labels configuration with ignore/auto_tag/reviewed_tag", () => {
+    const result = appConfigSchema.safeParse({
+      review: {
+        labels: {
+          ignore: ["aicr:ignore", "aicr-ignore"],
+          auto_tag: "aicr",
+          reviewed_tag: "aicr:reviewed",
+        },
+      },
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts workspace-level review labels overrides", () => {
+    const result = appConfigSchema.safeParse({
+      workspaces: {
+        defaults: {
+          review: {
+            labels: {
+              ignore: ["aicr:ignore"],
+              auto_tag: "aicr",
+              reviewed_tag: "aicr:reviewed",
+            },
+          },
+        },
+        instances: {
+          "my-workspace": {
+            review: {
+              labels: {
+                ignore: ["custom-ignore"],
+                auto_tag: "my-auto-tag",
+                reviewed_tag: "my-reviewed-tag",
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(result.success).toBe(true);
   });
 
   it("accepts output channel configuration with trigger reference", () => {

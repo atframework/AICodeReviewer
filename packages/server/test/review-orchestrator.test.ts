@@ -2197,6 +2197,55 @@ describe("extractJsonPayload edge cases", () => {
     }
   });
 
+  it("parses summary as nested { markdown } object from model output", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-nested-summary-"));
+
+    try {
+      await writeWorkspaceFile(tempDir, "src/app.ts", "const ok = true;\n");
+      const llm: ChatCompletionClient = {
+        async complete(input) {
+          return {
+            providerId: input.model.providerId,
+            modelId: input.model.modelId,
+            content: JSON.stringify({
+              problems: [{
+                file: "src/app.ts",
+                line: 1,
+                severity: "medium",
+                category: "style",
+                message: "Naming issue.",
+              }],
+              summary: { markdown: "## Review Summary\n\nOne style issue found." },
+            }),
+            raw: {},
+          };
+        },
+      };
+
+      const result = await runReviewOrchestration(
+        {
+          reviewEvent: createReviewEventFixture(),
+          payload: {},
+          provider: "gitea",
+          eventName: "pull_request",
+        },
+        {
+          baseSystemPrompt: "<task>\n{{TASK_CONTEXT}}\n</task>",
+          sourceRootResolver: () => tempDir,
+          vcs: createVcs(tempDir),
+          llm,
+          model,
+        },
+      );
+
+      expect(result.problemCount).toBe(1);
+      expect(result.summaryCount).toBe(1);
+      expect(result.outputState.summaries[0]).toBe("## Review Summary\n\nOne style issue found.");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("skips review with no_changed_files when changedPaths is empty and not dryRun", async () => {
     const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-no-files-"));
 

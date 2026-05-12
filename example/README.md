@@ -279,6 +279,26 @@ workspaces:
 If all selected summary channels suppress a zero-problem result, the run is
 recorded as skipped with `skipReason="no_problems_suppressed"`.
 
+## AICR Label Management
+
+AICR can skip reviews based on labels and auto-tag PRs/MRs/issues when processing.
+
+```yaml
+review:
+  labels:
+    ignore: ["aicr:ignore", "aicr-ignore"]  # skip review if any label matches
+    auto_tag: "aicr"                         # fixed tag added when AICR starts
+    reviewed_tag: "aicr:reviewed"            # tag added when review completes
+```
+
+- **Ignore labels**: Checked at the webhook layer. If a PR/MR/issue carries any
+  configured ignore label, AICR returns immediately without scheduling a review.
+- **Auto tags**: Applied by output dispatchers (`gitea_pr_review`, `github_pr_review`,
+  `gitlab_mr_review`, `gitea_issue`, `gitea_problem_issue`) when publishing results.
+  Tags are created automatically if they do not exist.
+- **Workspace override**: Set per-workspace `review.labels` to customize behavior
+  for individual repositories.
+
 ## Non-PR Target Links
 
 Built-in templates render `target.markdownLink` / `target.displayText` instead

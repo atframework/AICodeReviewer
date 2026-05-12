@@ -253,6 +253,14 @@ const reviewSchema = z
       })
       .strict()
       .optional(),
+    labels: z
+      .object({
+        ignore: z.array(z.string().min(1)).optional(),
+        auto_tag: z.string().min(1).optional(),
+        reviewed_tag: z.string().min(1).optional(),
+      })
+      .strict()
+      .optional(),
     fetch_extra: z
       .object({
         max_bytes: z.number().int().positive().optional(),

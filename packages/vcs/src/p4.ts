@@ -337,13 +337,13 @@ export class P4VcsAdapter implements VcsAdapter {
 
     for (const filePath of range.files) {
       const normalizedPath = this.toLocalPath(filePath);
-      try {
-        let depotPath = filePath.startsWith("//") ? filePath : normalizedPath;
-        if (this.depot && !depotPath.startsWith("//")) {
-          const depotBase = this.depot.replace(/\/+$/u, "");
-          depotPath = `${depotBase}/${normalizedPath.replace(/^\/+/u, "")}`;
-        }
+      let depotPath = filePath.startsWith("//") ? filePath : normalizedPath;
+      if (this.depot && !depotPath.startsWith("//")) {
+        const depotBase = this.depot.replace(/\/+$/u, "");
+        depotPath = `${depotBase}/${normalizedPath.replace(/^\/+/u, "")}`;
+      }
 
+      try {
         const result = await this.runP4([
           "print",
           "-q",
@@ -355,8 +355,25 @@ export class P4VcsAdapter implements VcsAdapter {
         await mkdir(dirname(destinationPath), { recursive: true });
         await writeFile(destinationPath, result.stdout, "utf8");
         fetchedFiles.push(safeLocalPath);
-      } catch {
-        // Binary or deleted files may not be printable
+      } catch (error) {
+        const errorText = getErrorText(error);
+        if (/no such file\(s\)/iu.test(errorText)) {
+          console.warn(JSON.stringify({
+            level: "warn",
+            msg: "p4 print failed: file not found at revision",
+            depotPath: `${depotPath}@${revision}`,
+            localPath: normalizedPath,
+            error: errorText.slice(0, 500),
+          }));
+        } else {
+          console.warn(JSON.stringify({
+            level: "warn",
+            msg: "p4 print failed",
+            depotPath: `${depotPath}@${revision}`,
+            localPath: normalizedPath,
+            error: errorText.slice(0, 500),
+          }));
+        }
       }
     }
 
@@ -398,7 +415,13 @@ export class P4VcsAdapter implements VcsAdapter {
         revision,
       ]);
       return this.filterDiffToRange(this.parseP4DiffOutput(result.stdout), range.files);
-    } catch {
+    } catch (error) {
+      console.warn(JSON.stringify({
+        level: "warn",
+        msg: "p4 describe -du failed",
+        revision,
+        error: getErrorText(error).slice(0, 500),
+      }));
       return { files: [] };
     }
   }
