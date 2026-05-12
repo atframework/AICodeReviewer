@@ -1,0 +1,35 @@
+{{#if event.title}}{{event.title}}{{else}}{{#if target.displayText}}{{target.displayText}}{{/if}}{{/if}}
+{{#if target.url}}
+
+{{target.url}}
+{{else}}
+{{#if event.url}}
+
+{{event.url}}
+{{/if}}
+{{/if}}
+{{#if event.displayName}}
+Author: {{event.displayName}}{{#if event.email}} <{{event.email}}>{{/if}}
+{{else}}
+{{#if event.author}}
+Author: @{{event.author}}{{#if event.email}} <{{event.email}}>{{/if}}
+{{/if}}
+{{/if}}
+{{#if vcs.branch}}
+Branch: {{vcs.branch}}
+{{/if}}
+{{#if vcs.depot}}
+Depot: {{vcs.depot}}
+{{/if}}
+{{#if vcs.workspace}}
+Workspace: {{vcs.workspace}}
+{{/if}}
+{{#if summary}}
+
+{{{summary}}}
+{{else}}
+{{#if problems}}
+
+Review completed: {{problems.length}} issue(s) found.{{#each problems}} [{{severity}}]{{/each}}
+{{/if}}
+{{/if}}

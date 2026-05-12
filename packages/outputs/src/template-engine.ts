@@ -34,9 +34,18 @@ export interface BuildTemplateTargetOptions {
 	readonly changeUrlTemplate?: string;
 }
 
+export interface TemplateVcsContext {
+	readonly branch?: string;
+	readonly depot?: string;
+	readonly workspace?: string;
+	readonly repositoryPath?: string;
+}
+
 export interface TemplateContext {
 	readonly event?: {
 		readonly author?: string;
+		readonly email?: string;
+		readonly displayName?: string;
 		readonly url?: string;
 		readonly title?: string;
 	};
@@ -52,6 +61,7 @@ export interface TemplateContext {
 	readonly problems?: readonly TemplateProblem[];
 	readonly problem?: TemplateProblem;
 	readonly summary?: string;
+	readonly vcs?: TemplateVcsContext;
 }
 
 export interface TemplateProblem {
@@ -239,6 +249,8 @@ export function buildTemplateTargetContext(options: BuildTemplateTargetOptions):
 	};
 }
 
+// ---- Built-in template strings (fallback when .hbs files are not found) ----
+
 const BUILTIN_SUMMARY_TEMPLATE = `## AI Code Review Summary
 
 {{#if target.markdownLink}}
@@ -252,8 +264,21 @@ const BUILTIN_SUMMARY_TEMPLATE = `## AI Code Review Summary
 {{/if}}
 {{/if}}
 {{/if}}
+{{#if event.displayName}}
+**Author**: {{event.displayName}}{{#if event.email}} <{{event.email}}>{{/if}}
+{{else}}
 {{#if event.author}}
-**Author**: @{{event.author}}
+**Author**: @{{event.author}}{{#if event.email}} <{{event.email}}>{{/if}}
+{{/if}}
+{{/if}}
+{{#if vcs.branch}}
+**Branch**: {{vcs.branch}}
+{{/if}}
+{{#if vcs.depot}}
+**Depot**: {{vcs.depot}}
+{{/if}}
+{{#if vcs.workspace}}
+**Workspace**: {{vcs.workspace}}
 {{/if}}
 {{#if atMentions}}
 **Reviewers**: {{atMentions}}
@@ -311,8 +336,21 @@ const BUILTIN_GITEA_ISSUE_SUMMARY_TEMPLATE = `## AI Code Review Report
 {{/if}}
 {{/if}}
 {{/if}}
+{{#if event.displayName}}
+**Author**: {{event.displayName}}{{#if event.email}} <{{event.email}}>{{/if}}
+{{else}}
 {{#if event.author}}
-**Author**: @{{event.author}}
+**Author**: @{{event.author}}{{#if event.email}} <{{event.email}}>{{/if}}
+{{/if}}
+{{/if}}
+{{#if vcs.branch}}
+**Branch**: {{vcs.branch}}
+{{/if}}
+{{#if vcs.depot}}
+**Depot**: {{vcs.depot}}
+{{/if}}
+{{#if vcs.workspace}}
+**Workspace**: {{vcs.workspace}}
 {{/if}}
 
 ---
@@ -343,41 +381,76 @@ No summary provided.
 `;
 
 const BUILTIN_FEISHU_SUMMARY_TEMPLATE = `{{#if event.title}}**{{event.title}}**{{else}}{{#if target.displayText}}**{{target.displayText}}**{{/if}}{{/if}}
-
-{{#if problems}}Problems: {{problems.length}}{{/if}}
 {{#if target.markdownLink}}
+
 {{{target.markdownLink}}}
 {{else}}
-{{#if target.displayText}}
-{{target.displayText}}
-{{else}}
 {{#if event.url}}
+
 [Review target]({{event.url}})
 {{/if}}
 {{/if}}
+{{#if event.displayName}}
+**Author**: {{event.displayName}}{{#if event.email}} &lt;{{event.email}}&gt;{{/if}}
+{{else}}
+{{#if event.author}}
+**Author**: @{{event.author}}{{#if event.email}} &lt;{{event.email}}&gt;{{/if}}
+{{/if}}
+{{/if}}
+{{#if vcs.branch}}
+**Branch**: {{vcs.branch}}
+{{/if}}
+{{#if vcs.depot}}
+**Depot**: {{vcs.depot}}
+{{/if}}
+{{#if vcs.workspace}}
+**Workspace**: {{vcs.workspace}}
 {{/if}}
 {{#if summary}}
 
 {{{summary}}}
+{{else}}
+{{#if problems}}
+
+Review completed: {{problems.length}} issue(s) found.{{#each problems}} [{{severity}}]{{/each}}
+{{/if}}
 {{/if}}
 `;
 
 const BUILTIN_WECOM_SUMMARY_TEMPLATE = `{{#if event.title}}{{event.title}}{{else}}{{#if target.displayText}}{{target.displayText}}{{/if}}{{/if}}
-{{#if problems}}Problems: {{problems.length}}{{/if}}
 {{#if target.url}}
+
 {{target.url}}
 {{else}}
-{{#if target.displayText}}
-{{target.displayText}}
-{{else}}
 {{#if event.url}}
+
 {{event.url}}
 {{/if}}
 {{/if}}
+{{#if event.displayName}}
+Author: {{event.displayName}}{{#if event.email}} <{{event.email}}>{{/if}}
+{{else}}
+{{#if event.author}}
+Author: @{{event.author}}{{#if event.email}} <{{event.email}}>{{/if}}
+{{/if}}
+{{/if}}
+{{#if vcs.branch}}
+Branch: {{vcs.branch}}
+{{/if}}
+{{#if vcs.depot}}
+Depot: {{vcs.depot}}
+{{/if}}
+{{#if vcs.workspace}}
+Workspace: {{vcs.workspace}}
 {{/if}}
 {{#if summary}}
 
 {{{summary}}}
+{{else}}
+{{#if problems}}
+
+Review completed: {{problems.length}} issue(s) found.{{#each problems}} [{{severity}}]{{/each}}
+{{/if}}
 {{/if}}
 `;
 
@@ -410,6 +483,18 @@ const builtinTemplates: Readonly<Record<string, Record<TemplateKind, string>>> =
 		summary: BUILTIN_WECOM_SUMMARY_TEMPLATE,
 		problem: BUILTIN_PROBLEM_TEMPLATE,
 	},
+};
+
+// ---- File-based builtin template name mapping ----
+
+const BUILTIN_TEMPLATE_FILE_NAMES: Readonly<Record<string, Record<TemplateKind, string>>> = {
+	gitea_pr_review: { summary: "summary.hbs", problem: "problem.hbs" },
+	gitea_issue: { summary: "gitea-issue-summary.hbs", problem: "problem.hbs" },
+	gitea_problem_issue: { summary: "gitea-issue-summary.hbs", problem: "problem.hbs" },
+	github_pr_review: { summary: "summary.hbs", problem: "problem.hbs" },
+	gitlab_mr_review: { summary: "summary.hbs", problem: "problem.hbs" },
+	feishu_bot: { summary: "feishu-summary.hbs", problem: "problem.hbs" },
+	wecom_bot: { summary: "wecom-summary.hbs", problem: "problem.hbs" },
 };
 
 const compiledCache = new Map<string, Handlebars.TemplateDelegate<TemplateContext>>();
@@ -482,10 +567,13 @@ export function toTemplateProblem(problem: {
 	};
 }
 
+// ---- Template resolver with file-based builtin support ----
+
 export interface TemplateResolverOptions {
 	readonly channelKind: string;
 	readonly channelName?: string;
 	readonly workspaceTemplatesDir?: string;
+	readonly builtinTemplatesBaseDir?: string;
 }
 
 export interface TemplateResolver {
@@ -522,25 +610,18 @@ function workspaceTemplateCandidates(options: TemplateResolverOptions, kind: Tem
 	return candidates;
 }
 
-function resolveWorkspaceTemplate(
-	options: TemplateResolverOptions,
-	kind: TemplateKind,
-): ResolvedTemplateSource | undefined {
-	if (!options.workspaceTemplatesDir) {
-		return undefined;
-	}
-
-	for (const candidate of workspaceTemplateCandidates(options, kind)) {
-		const templatePath = join(options.workspaceTemplatesDir, candidate);
+function resolveFileTemplate(dir: string, candidates: readonly string[], cachePrefix: string): ResolvedTemplateSource | undefined {
+	for (const candidate of candidates) {
+		const templatePath = join(dir, candidate);
 		try {
-			const stat = statSync(templatePath);
-			if (!stat.isFile()) {
+			const st = statSync(templatePath);
+			if (!st.isFile()) {
 				continue;
 			}
 
 			return {
 				source: readFileSync(templatePath, "utf8"),
-				cacheKey: `workspace:${templatePath}:${stat.mtimeMs}`,
+				cacheKey: `${cachePrefix}:${templatePath}:${st.mtimeMs}`,
 			};
 		} catch (error) {
 			if (isMissingFileError(error)) {
@@ -554,10 +635,48 @@ function resolveWorkspaceTemplate(
 	return undefined;
 }
 
+function resolveBuiltinFileTemplate(options: TemplateResolverOptions, kind: TemplateKind): ResolvedTemplateSource | undefined {
+	if (!options.builtinTemplatesBaseDir) {
+		return undefined;
+	}
+
+	const fileNames = BUILTIN_TEMPLATE_FILE_NAMES[options.channelKind];
+	if (!fileNames) {
+		return undefined;
+	}
+
+	const fileName = fileNames[kind];
+	if (!fileName) {
+		return undefined;
+	}
+
+	return resolveFileTemplate(options.builtinTemplatesBaseDir, [fileName], "builtin-file");
+}
+
+function resolveWorkspaceTemplate(
+	options: TemplateResolverOptions,
+	kind: TemplateKind,
+): ResolvedTemplateSource | undefined {
+	if (!options.workspaceTemplatesDir) {
+		return undefined;
+	}
+
+	return resolveFileTemplate(
+		options.workspaceTemplatesDir,
+		workspaceTemplateCandidates(options, kind),
+		"workspace",
+	);
+}
+
 function resolveTemplateSource(options: TemplateResolverOptions, kind: TemplateKind): ResolvedTemplateSource {
 	const workspaceTemplate = resolveWorkspaceTemplate(options, kind);
 	if (workspaceTemplate) {
 		return workspaceTemplate;
+	}
+
+	const builtinFileTemplate = resolveBuiltinFileTemplate(options, kind);
+	if (builtinFileTemplate) {
+		return builtinFileTemplate;
 	}
 
 	return {

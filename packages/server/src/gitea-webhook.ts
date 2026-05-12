@@ -47,6 +47,11 @@ const pullRequestPayloadSchema = z
         user: actorSchema.optional(),
         base: z.object({ sha: z.string().min(1).optional() }).passthrough(),
         head: z.object({ sha: z.string().min(1).optional() }).passthrough(),
+        labels: z
+          .array(
+            z.object({ name: z.string().min(1).optional() }).passthrough(),
+          )
+          .optional(),
       })
       .passthrough(),
   })
@@ -135,6 +140,11 @@ const gitlabMergeRequestPayloadSchema = z
           .passthrough()
           .optional(),
         url: z.string().url().optional(),
+        labels: z
+          .array(
+            z.object({ title: z.string().min(1).optional() }).passthrough(),
+          )
+          .optional(),
       })
       .passthrough(),
     project: z
@@ -168,6 +178,22 @@ function normalizeActor(actor: z.infer<typeof actorSchema> | undefined): ReviewA
   };
 }
 
+function extractLabelNames(labels: unknown): string[] {
+  if (!Array.isArray(labels)) {
+    return [];
+  }
+  const names: string[] = [];
+  for (const label of labels) {
+    if (label && typeof label === "object") {
+      const name = (label as Record<string, unknown>).name ?? (label as Record<string, unknown>).title;
+      if (typeof name === "string" && name.length > 0) {
+        names.push(name);
+      }
+    }
+  }
+  return names;
+}
+
 function collectPushChangedFiles(parsed: z.infer<typeof pushPayloadSchema>): string[] {
   const files = new Set<string>();
   for (const commit of parsed.commits ?? []) {
@@ -197,6 +223,39 @@ function resolveWorkspaceIdForRepo(config: GiteaWebhookConfig, repoRef: string):
   });
 
   return matched?.workspace ?? config.workspaceId;
+}
+
+function extractRefBranch(payload: Record<string, unknown>): string | undefined {
+  const ref = payload.ref as string | undefined;
+  if (!ref) {
+    return undefined;
+  }
+
+  const prefix = "refs/heads/";
+  if (ref.startsWith(prefix)) {
+    return ref.slice(prefix.length);
+  }
+
+  return ref;
+}
+
+function extractPrBranch(pr: Record<string, unknown>): string | undefined {
+  const head = pr.head as Record<string, unknown> | undefined;
+  if (!head) {
+    return undefined;
+  }
+
+  const ref = head.ref as string | undefined;
+  if (ref) {
+    return ref;
+  }
+
+  const label = head.label as string | undefined;
+  if (label) {
+    return label.split(":").at(-1);
+  }
+
+  return undefined;
 }
 
 export function computeWebhookSignature(payload: string, secret: string): string {
@@ -235,6 +294,8 @@ export function translateWebhookToReviewEvent(
   if (eventName === "pull_request") {
     const parsed = pullRequestPayloadSchema.parse(payload);
 
+    const prLabels = extractLabelNames(parsed.pull_request.labels);
+
     return createReviewEvent({
       triggerName: config.triggerName,
       provider,
@@ -248,6 +309,8 @@ export function translateWebhookToReviewEvent(
       url: parsed.pull_request.html_url,
       reason: `${provider}:${parsed.action ?? "pull_request"}`,
       rawEventName: eventName,
+      ...(prLabels.length > 0 ? { labels: prLabels } : {}),
+      branch: extractPrBranch(parsed.pull_request),
     });
   }
 
@@ -268,6 +331,7 @@ export function translateWebhookToReviewEvent(
       reason: `${provider}:push`,
       rawEventName: eventName,
       ...(changedFiles.length > 0 ? { changedFiles } : {}),
+      branch: extractRefBranch(parsed as Record<string, unknown>),
     });
   }
 
@@ -275,6 +339,7 @@ export function translateWebhookToReviewEvent(
     const parsed = issuePayloadSchema.parse(payload);
     const issueNumber = parsed.issue?.number;
     const issueUrl = parsed.issue?.html_url;
+    const issueLabels = extractLabelNames(parsed.issue?.labels);
 
     return createReviewEvent({
       triggerName: config.triggerName,
@@ -288,11 +353,13 @@ export function translateWebhookToReviewEvent(
       reason: `${provider}:${parsed.action ?? "issues"}`,
       rawEventName: eventName,
       ...(issueNumber !== undefined ? { changedFiles: [String(issueNumber)] } : {}),
+      ...(issueLabels.length > 0 ? { labels: issueLabels } : {}),
     });
   }
 
   if (eventName === "Merge Request Hook" || eventName === "merge_request") {
     const parsed = gitlabMergeRequestPayloadSchema.parse(payload);
+    const mrLabels = extractLabelNames(parsed.object_attributes.labels);
 
     return createReviewEvent({
       triggerName: config.triggerName,
@@ -307,6 +374,7 @@ export function translateWebhookToReviewEvent(
       url: parsed.object_attributes.url,
       reason: `${provider}:${parsed.object_attributes.action ?? "merge_request"}`,
       rawEventName: eventName,
+      ...(mrLabels.length > 0 ? { labels: mrLabels } : {}),
     });
   }
 

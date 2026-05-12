@@ -152,6 +152,11 @@ function registerGiteaLikeWebhook(
       return c.json({ accepted: false, reason: "unsupported_event", provider, eventName }, 202);
     }
 
+    const ignoredLabels = shouldIgnoreByLabels(reviewEvent, reviewOrchestrationOptions?.ignoreLabelsResolver);
+    if (ignoredLabels) {
+      return c.json({ accepted: false, reason: "ignored_by_label", provider, eventName, matchedLabels: ignoredLabels }, 200);
+    }
+
     return handleReviewOrchestration(c, provider, eventName, decoded, reviewEvent, reviewPreparationOptions, reviewOrchestrationOptions, issueTriageOptions, asyncTriggers);
   });
 }
@@ -313,8 +318,25 @@ function registerGenericWebhook(
       return c.json({ accepted: false, reason: "unsupported_event", provider, eventName }, 202);
     }
 
+    const ignoredLabels = shouldIgnoreByLabels(reviewEvent, reviewOrchestrationOptions?.ignoreLabelsResolver);
+    if (ignoredLabels) {
+      return c.json({ accepted: false, reason: "ignored_by_label", provider, eventName, matchedLabels: ignoredLabels }, 200);
+    }
+
     return handleReviewOrchestration(c, provider, eventName, decoded, reviewEvent, reviewPreparationOptions, reviewOrchestrationOptions, issueTriageOptions, asyncTriggers);
   });
+}
+
+function shouldIgnoreByLabels(
+  reviewEvent: ReviewEvent,
+  ignoreLabelsResolver?: (workspaceId: string) => readonly string[],
+): readonly string[] | undefined {
+  const ignoreLabels = ignoreLabelsResolver?.(reviewEvent.workspaceId) ?? [];
+  if (ignoreLabels.length === 0 || !reviewEvent.labels) {
+    return undefined;
+  }
+  const matched = reviewEvent.labels.filter((label) => ignoreLabels.includes(label));
+  return matched.length > 0 ? matched : undefined;
 }
 
 interface TriggerProcessingResult {

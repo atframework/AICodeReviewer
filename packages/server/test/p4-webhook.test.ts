@@ -36,4 +36,32 @@ describe("translateP4TriggerToReviewEvent", () => {
 
     expect(event?.repoRef).toBe("//Other/Main");
   });
+
+  it("includes depotPath and p4Workspace when configured", () => {
+    const event = translateP4TriggerToReviewEvent(
+      { change: "6244", user: "submitter", client: "submit-client" },
+      {
+        triggerName: "p4-main",
+        workspaceId: "p4-workspace",
+        depot: "//Prx/Prx_Main",
+        workspace: "submit-client-ws",
+      },
+    );
+
+    expect(event?.depotPath).toBe("//Prx/Prx_Main");
+    expect(event?.p4Workspace).toBe("submit-client-ws");
+  });
+
+  it("uses payload depot_path for depotPath field", () => {
+    const event = translateP4TriggerToReviewEvent(
+      { change: "6244", depot_path: "//Custom/Path" },
+      {
+        triggerName: "p4-main",
+        workspaceId: "p4-workspace",
+        depot: "//Prx/Prx_Main",
+      },
+    );
+
+    expect(event?.depotPath).toBe("//Custom/Path");
+  });
 });

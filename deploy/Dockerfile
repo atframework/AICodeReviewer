@@ -23,6 +23,7 @@ WORKDIR /app
 COPY --chown=node:node package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json tsconfig.json ./
 COPY --chown=node:node packages ./packages
 COPY --chown=node:node prompts ./prompts
+COPY --chown=node:node templates ./templates
 COPY --chown=node:node .markdownlint.json ./
 
 RUN pnpm install --frozen-lockfile
@@ -74,6 +75,7 @@ COPY --from=build --chown=node:node /app/packages/outputs/node_modules ./package
 COPY --from=build --chown=node:node /app/packages/agents/node_modules ./packages/agents/node_modules
 COPY --from=build --chown=node:node /app/packages/store/node_modules ./packages/store/node_modules
 COPY --from=build --chown=node:node /app/prompts ./prompts
+COPY --from=build --chown=node:node /app/templates ./templates
 
 RUN mkdir -p /app/workspaces /app/data /app/logs && chown -R node:node /app/workspaces /app/data /app/logs
 

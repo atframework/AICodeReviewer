@@ -5,6 +5,7 @@ import {
   isPlainObject,
   createMultiProviderRateLimiter,
   createQueueFromConfig,
+  resolveWorkspaceConfig,
   type AppConfig,
   type ReviewEvent,
 } from "@aicr/core";
@@ -635,9 +636,17 @@ function buildBaseTemplateContext(
   targetUrlTemplates: TargetUrlTemplateOptions = {},
 ): Omit<TemplateContext, "problem" | "problems"> {
   const eventAuthor = reviewEvent?.author?.username ?? reviewEvent?.author?.displayName;
-  const eventCtx: { author?: string; url?: string; title?: string } = {};
+  const eventEmail = reviewEvent?.author?.email;
+  const eventDisplayName = reviewEvent?.author?.displayName;
+  const eventCtx: { author?: string; email?: string; displayName?: string; url?: string; title?: string } = {};
   if (eventAuthor !== undefined) {
     eventCtx.author = eventAuthor;
+  }
+  if (eventEmail !== undefined) {
+    eventCtx.email = eventEmail;
+  }
+  if (eventDisplayName !== undefined) {
+    eventCtx.displayName = eventDisplayName;
   }
   if (reviewEvent?.title !== undefined) {
     eventCtx.title = reviewEvent.title;
@@ -672,12 +681,38 @@ function buildBaseTemplateContext(
       })
     : undefined;
 
+  const vcs = buildVcsContext(reviewEvent);
+
   return {
     ...(Object.keys(eventCtx).length > 0 ? { event: eventCtx } : {}),
     ...(target ? { target } : {}),
     ...(repo ? { repo } : {}),
     ...(atMentions ? { atMentions } : {}),
+    ...(Object.keys(vcs).length > 0 ? { vcs } : {}),
   };
+}
+
+function buildVcsContext(reviewEvent: ReviewEvent | undefined): { branch?: string; depot?: string; workspace?: string; repositoryPath?: string } {
+  if (!reviewEvent) {
+    return {};
+  }
+
+  const result: { branch?: string; depot?: string; workspace?: string; repositoryPath?: string } = {};
+
+  if (reviewEvent.branch !== undefined) {
+    result.branch = reviewEvent.branch;
+  }
+  if (reviewEvent.depotPath !== undefined) {
+    result.depot = reviewEvent.depotPath;
+  }
+  if (reviewEvent.p4Workspace !== undefined) {
+    result.workspace = reviewEvent.p4Workspace;
+  }
+  if (reviewEvent.repoRef !== undefined) {
+    result.repositoryPath = reviewEvent.repoRef;
+  }
+
+  return result;
 }
 
 function createChannelRendering(
@@ -696,10 +731,12 @@ function createChannelRendering(
   const workspaceTemplatesDir = workspaceId
     ? resolve(baseDir, "workspaces", workspaceId, "templates")
     : undefined;
+  const builtinTemplatesBaseDir = resolve(baseDir, "templates", "builtin");
   const resolver = createTemplateResolver({
     channelKind: channel.kind,
     channelName: channel.name,
     ...(workspaceTemplatesDir ? { workspaceTemplatesDir } : {}),
+    builtinTemplatesBaseDir,
   });
   const mentionChannelKind = toMentionChannelKind(channel.kind);
   const authorResolution = buildAuthorResolutionOptions(config, channel);
@@ -861,6 +898,18 @@ export function createOutputPublisherFromConfig(
     ...(baseUrl ? { baseUrl } : {}),
   };
   const noProblemsAction = resolveNoProblemsAction(config, channel, workspaceId);
+  const workspaceLabels = workspaceId
+    ? (() => {
+        try {
+          const ws = resolveWorkspaceConfig(config, workspaceId);
+          return ws.review?.labels;
+        } catch {
+          return undefined;
+        }
+      })()
+    : undefined;
+  const autoTag = workspaceLabels?.auto_tag ?? config.review.labels?.auto_tag;
+  const reviewedTag = workspaceLabels?.reviewed_tag ?? config.review.labels?.reviewed_tag;
   const tokenEnv = (channelConfig.token_env as string | undefined) ??
     (triggerConfig.token_env as string | undefined);
   const explicitOwner = channelConfig.owner as string | undefined;
@@ -893,6 +942,8 @@ export function createOutputPublisherFromConfig(
       channelName: channel.name,
       ...(channelSeverityLabelPrefix ? { severityLabelPrefix: channelSeverityLabelPrefix } : {}),
       ...(channelSeverityLabelColors ? { severityLabelColors: channelSeverityLabelColors } : {}),
+      ...(autoTag ? { autoTag } : {}),
+      ...(reviewedTag ? { reviewedTag } : {}),
     });
 
     return {
@@ -923,6 +974,8 @@ export function createOutputPublisherFromConfig(
       channelName: channel.name,
       ...(channelSeverityLabelPrefix ? { severityLabelPrefix: channelSeverityLabelPrefix } : {}),
       ...(channelSeverityLabelColors ? { severityLabelColors: channelSeverityLabelColors } : {}),
+      ...(autoTag ? { autoTag } : {}),
+      ...(reviewedTag ? { reviewedTag } : {}),
     });
 
     return {
@@ -957,6 +1010,8 @@ export function createOutputPublisherFromConfig(
       channelName: channel.name,
       ...(channelSeverityLabelPrefix ? { severityLabelPrefix: channelSeverityLabelPrefix } : {}),
       ...(channelSeverityLabelColors ? { severityLabelColors: channelSeverityLabelColors } : {}),
+      ...(autoTag ? { autoTag } : {}),
+      ...(reviewedTag ? { reviewedTag } : {}),
     });
 
     return {
@@ -985,6 +1040,8 @@ export function createOutputPublisherFromConfig(
       repo,
       indexNumber: pullNumber,
       channelName: channel.name,
+      ...(autoTag ? { autoTag } : {}),
+      ...(reviewedTag ? { reviewedTag } : {}),
     });
 
     const problems: ReviewProblem[] = [];
@@ -1050,6 +1107,8 @@ export function createOutputPublisherFromConfig(
       ...(channelSeverityLabelPrefix ? { severityLabelPrefix: channelSeverityLabelPrefix } : {}),
       ...(channelSeverityLabelColors ? { severityLabelColors: channelSeverityLabelColors } : {}),
       ...(notifyFeishuWebhookUrl ? { notifyFeishu: { webhookUrl: notifyFeishuWebhookUrl, ...(notifyFeishuSecret ? { secret: notifyFeishuSecret } : {}) } } : {}),
+      ...(autoTag ? { autoTag } : {}),
+      ...(reviewedTag ? { reviewedTag } : {}),
       ref,
     });
 
@@ -1508,6 +1567,14 @@ export async function bootstrapServerApp(options: BootstrapServerOptions): Promi
     sandbox,
     agentAdapter,
     agentTimeoutMs: config.agent.timeout_seconds * 1000,
+    ignoreLabelsResolver: (workspaceId) => {
+      try {
+        const workspace = resolveWorkspaceConfig(config, workspaceId);
+        return workspace.review?.labels?.ignore ?? config.review.labels?.ignore ?? ["aicr:ignore", "aicr-ignore"];
+      } catch {
+        return config.review.labels?.ignore ?? ["aicr:ignore", "aicr-ignore"];
+      }
+    },
     ...(compressionConfig ? { compression: compressionConfig } : {}),
     ...(summarizeModel ? { summarizeModel } : {}),
     ...(summarizeClient ? { summarizeClient } : {}),

@@ -44,6 +44,19 @@ Do not use this skill for LLM prompt layering, agent runtime materialization, or
    - Add template tests for PR/MR and non-PR targets whenever built-in templates change.
    - Add routing tests for mixed channels where one suppresses no-problems output and another publishes it.
 
+## Label contracts
+
+- `review.labels.ignore` causes the webhook handler to return `ignored_by_label` before scheduling a review. This is checked per-event, not per-channel.
+- `review.labels.auto_tag` and `review.labels.reviewed_tag` are applied by PR/MR and issue dispatchers during `publishSummary` or `publishAggregatedProblems`. They are resolved/created via the platform Labels API and attached alongside any `severity_label_prefix` labels.
+- `gitea_problem_issue` applies both tags at issue creation time via `body.labels`.
+- All label fields support global → workspace-level override through `workspaces.defaults.review.labels` and `workspaces.instances.<id>.review.labels`.
+
+## IM bot message contracts
+
+- Feishu and WeCom `publishAggregatedProblems` include the full `problem.message` and `problem.suggestion` (when present) under each problem line.
+- Long messages are truncated to 500 chars and suggestions to 300 chars with a `...` suffix to stay within platform card/message size limits.
+- The truncation helper is internal; do not expose truncation length as user-configurable fields without updating tests and docs.
+
 ## Pitfalls
 
 - Do not conflate `review.skip_lgtm` with output routing; the former guides review behavior, the latter decides dispatch per channel.

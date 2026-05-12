@@ -62,5 +62,7 @@ export function translateP4TriggerToReviewEvent(
     url: depotPath ? `p4://${depotPath.replace(/^\/\//u, "")}@${changeNumber}` : undefined,
     reason: `p4:change-commit:${changeNumber}`,
     rawEventName: "change-commit",
+    depotPath: depotPath || undefined,
+    ...(config.workspace ? { p4Workspace: config.workspace } : {}),
   });
 }
