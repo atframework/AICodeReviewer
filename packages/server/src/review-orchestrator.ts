@@ -59,7 +59,11 @@ export interface ReviewOutputPublisher {
   readonly publishEmptySummary?: boolean;
   readonly noProblemsAction?: "publish" | "suppress";
   publishProblem?(problem: ReviewProblem): Promise<ReviewDispatchResult>;
-  publishSummary?(summary: string, problems?: readonly ReviewProblem[]): Promise<ReviewDispatchResult>;
+  publishSummary?(summary: string, problems?: readonly ReviewProblem[], options?: ReviewSummaryPublishOptions): Promise<ReviewDispatchResult>;
+}
+
+export interface ReviewSummaryPublishOptions {
+  readonly bypassNoProblemsPolicy?: boolean;
 }
 
 export type ReviewOutputPublisherResolver = (

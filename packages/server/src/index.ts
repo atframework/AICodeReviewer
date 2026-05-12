@@ -369,7 +369,7 @@ async function publishTriggerErrorReport(
   ].join("\n");
 
   try {
-    await publisher.publishSummary(summary, []);
+    await publisher.publishSummary(summary, [], { bypassNoProblemsPolicy: true });
   } catch (error) {
     console.error(JSON.stringify({
       level: "error",

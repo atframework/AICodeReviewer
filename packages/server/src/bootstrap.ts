@@ -62,6 +62,7 @@ import type {
   ReviewOrchestrationContext,
   ReviewOutputPublisher,
   ReviewOutputPublisherResolver,
+  ReviewSummaryPublishOptions,
 } from "./review-orchestrator.js";
 
 export interface BootstrapServerOptions {
@@ -782,16 +783,20 @@ function createCompositeOutputPublisher(
     },
     ...(summaryCapable.length > 0
       ? {
-          async publishSummary(summary: string, problems?: readonly ReviewProblem[]): Promise<readonly DispatchResult[]> {
+          async publishSummary(
+            summary: string,
+            problems?: readonly ReviewProblem[],
+            options?: ReviewSummaryPublishOptions,
+          ): Promise<readonly DispatchResult[]> {
             const results: DispatchResult[] = [];
             const noProblems = (problems?.length ?? 0) === 0;
-            const hasExplicitSummary = summary.trim().length > 0;
+            const bypassNoProblemsPolicy = options?.bypassNoProblemsPolicy === true;
             for (const publisher of summaryCapable) {
-              if (noProblems && !hasExplicitSummary && publisher.noProblemsAction === "suppress") {
+              if (!bypassNoProblemsPolicy && noProblems && publisher.noProblemsAction === "suppress") {
                 continue;
               }
               if (publisher.publishSummary) {
-                appendPublisherResults(results, await publisher.publishSummary(summary, problems));
+                appendPublisherResults(results, await publisher.publishSummary(summary, problems, options));
               }
             }
             return results;

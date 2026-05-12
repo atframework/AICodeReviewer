@@ -971,12 +971,89 @@ describe("createOutputPublisherResolverFromConfig", () => {
       const results = await publisher?.publishSummary?.("No actionable problems.", []);
 
       expect(Array.isArray(results)).toBe(true);
+      expect(results).toHaveLength(1);
+      expect(calls.map((call) => call.url)).toEqual([
+        "https://open.feishu.cn/hook/publish",
+      ]);
+      expect(calls[0]?.init.body).toContain("No actionable problems.");
+      expect(calls[0]?.init.body).toContain("Commit abcdef123456");
+    } finally {
+      vi.unstubAllGlobals();
+      if (originalSuppressWebhook === undefined) {
+        delete process.env.FEISHU_SUPPRESS_WEBHOOK;
+      } else {
+        process.env.FEISHU_SUPPRESS_WEBHOOK = originalSuppressWebhook;
+      }
+      if (originalPublishWebhook === undefined) {
+        delete process.env.FEISHU_PUBLISH_WEBHOOK;
+      } else {
+        process.env.FEISHU_PUBLISH_WEBHOOK = originalPublishWebhook;
+      }
+    }
+  });
+
+  it("publishes trigger error reports even when no_problems is suppressed", async () => {
+    const calls: { url: string; init: { body?: string } }[] = [];
+    vi.stubGlobal("fetch", async (url: string, init?: { body?: string }) => {
+      calls.push({ url, init: init ?? {} });
+      return response({ code: 0 });
+    });
+
+    const originalSuppressWebhook = process.env.FEISHU_SUPPRESS_WEBHOOK;
+    const originalPublishWebhook = process.env.FEISHU_PUBLISH_WEBHOOK;
+    process.env.FEISHU_SUPPRESS_WEBHOOK = "https://open.feishu.cn/hook/suppress";
+    process.env.FEISHU_PUBLISH_WEBHOOK = "https://open.feishu.cn/hook/publish";
+    try {
+      const config = makeConfig({
+        outputs: {
+          template_engine: "handlebars",
+          no_problems: { action: "suppress" },
+          channels: [
+            {
+              name: "feishu-suppress",
+              kind: "feishu_bot",
+              webhook_url_env: "FEISHU_SUPPRESS_WEBHOOK",
+            },
+            {
+              name: "feishu-publish",
+              kind: "feishu_bot",
+              webhook_url_env: "FEISHU_PUBLISH_WEBHOOK",
+              no_problems: { action: "publish" },
+            },
+          ],
+          routes: {
+            default: { summary: ["feishu-suppress", "feishu-publish"] },
+            rules: [],
+          },
+        },
+      } as Partial<AppConfig>);
+      const publisher = createOutputPublisherResolverFromConfig(config)({
+        reviewEvent: {
+          triggerName: "gitea-internal",
+          provider: "gitea",
+          workspaceId: "test-workspace",
+          targetKind: "push",
+          repoRef: "owent/example",
+          author: {},
+          reason: "gitea:push",
+        },
+        payload: {},
+        provider: "gitea",
+        eventName: "push",
+      });
+
+      const results = await publisher?.publishSummary?.(
+        "## AICodeReviewer trigger processing failed\n\n- reason: test",
+        [],
+        { bypassNoProblemsPolicy: true },
+      );
+
+      expect(Array.isArray(results)).toBe(true);
+      expect(results).toHaveLength(2);
       expect(calls.map((call) => call.url)).toEqual([
         "https://open.feishu.cn/hook/suppress",
         "https://open.feishu.cn/hook/publish",
       ]);
-      expect(calls[1]?.init.body).toContain("No actionable problems.");
-      expect(calls[1]?.init.body).toContain("Commit abcdef123456");
     } finally {
       vi.unstubAllGlobals();
       if (originalSuppressWebhook === undefined) {
