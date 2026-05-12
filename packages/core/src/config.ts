@@ -262,6 +262,12 @@ const reviewSchema = z
       })
       .strict()
       .optional(),
+    problem_issue: z
+      .object({
+        max_recent_issues: z.number().int().min(1).max(100).optional(),
+      })
+      .strict()
+      .optional(),
     fetch_extra: z
       .object({
         max_bytes: z.number().int().positive().optional(),

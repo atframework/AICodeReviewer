@@ -208,6 +208,43 @@ describe("translateWebhookToReviewEvent", () => {
     expect(event?.rawEventName).toBe("pull_request");
   });
 
+  it("extracts branch from push ref for GitHub-style push events", () => {
+    const event = translateWebhookToReviewEvent(
+      "github",
+      "push",
+      {
+        ref: "refs/heads/sample_solution",
+        before: "abc123",
+        after: "def456",
+        repository: { full_name: "atframework/atsf4g-co" },
+        pusher: { name: "yousongyang", email: "yousongyang@example.com" },
+        commits: [],
+      },
+      { triggerName: "github-atframework", workspaceId: "github-atsf4g-co" },
+    );
+
+    expect(event?.branch).toBe("sample_solution");
+  });
+
+  it("falls back pusher.name to author.username for GitHub push events", () => {
+    const event = translateWebhookToReviewEvent(
+      "github",
+      "push",
+      {
+        ref: "refs/heads/main",
+        before: "abc123",
+        after: "def456",
+        repository: { full_name: "atframework/atsf4g-co" },
+        pusher: { name: "yousongyang", email: "yousongyang@example.com" },
+        commits: [],
+      },
+      { triggerName: "github-atframework", workspaceId: "github-atsf4g-co" },
+    );
+
+    expect(event?.author.username).toBe("yousongyang");
+    expect(event?.author.email).toBe("yousongyang@example.com");
+  });
+
   it("uses repository mappings to select the target workspace", () => {
     const event = translateWebhookToReviewEvent(
       "gitea",

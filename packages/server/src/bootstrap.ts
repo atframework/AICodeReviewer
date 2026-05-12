@@ -587,6 +587,23 @@ function resolveNoProblemsAction(
   return action;
 }
 
+function resolveProblemIssueMaxRecentIssues(
+  config: AppConfig,
+  workspaceId: string | undefined,
+): number | undefined {
+  const globalLimit = config.review.problem_issue?.max_recent_issues;
+  if (!workspaceId) {
+    return globalLimit;
+  }
+
+  try {
+    const workspace = resolveWorkspaceConfig(config, workspaceId);
+    return workspace.review?.problem_issue?.max_recent_issues ?? globalLimit;
+  } catch {
+    return globalLimit;
+  }
+}
+
 function toMentionChannelKind(channelKind: string): MentionChannelKind | undefined {
   switch (channelKind) {
     case "gitea_pr_review":
@@ -935,6 +952,7 @@ export function createOutputPublisherFromConfig(
   const channelSeverityLabelColors = isPlainObject(channelConfig.severity_label_colors)
     ? channelConfig.severity_label_colors as Readonly<Record<string, string>>
     : undefined;
+  const problemIssueMaxRecentIssues = resolveProblemIssueMaxRecentIssues(config, workspaceId);
 
   if (channel.kind === "gitea_pr_review") {
     if (!baseUrl || !owner || !repo || pullNumber === undefined) {
@@ -1076,6 +1094,7 @@ export function createOutputPublisherFromConfig(
       ...(markerLabel ? { markerLabel } : {}),
       ...(channelLabels ? { labels: channelLabels } : {}),
       ...(resolvedAction === "none" || resolvedAction === "close" ? { resolvedAction } : {}),
+      ...(problemIssueMaxRecentIssues !== undefined ? { maxRecentIssues: problemIssueMaxRecentIssues } : {}),
       ...(assignCommitter !== undefined ? { assignCommitter } : {}),
       ...(committerUsername ? { committerUsername } : {}),
       ...(ownersFile ? { ownersFilePath: ownersFile } : {}),
@@ -1216,6 +1235,7 @@ export function createOutputPublisherFromConfig(
       ...(markerLabel ? { markerLabel } : {}),
       ...(labelIds ? { labelIds } : {}),
       ...(resolvedAction === "none" || resolvedAction === "close" || resolvedAction === "delete" ? { resolvedAction } : {}),
+      ...(problemIssueMaxRecentIssues !== undefined ? { maxRecentIssues: problemIssueMaxRecentIssues } : {}),
       ...(assignCommitter !== undefined ? { assignCommitter } : {}),
       ...(committerUsername ? { committerUsername } : {}),
       ...(ownersFile ? { ownersFilePath: ownersFile } : {}),
@@ -1353,17 +1373,20 @@ function resolveOutputChannelNames(
   context: ReviewOrchestrationContext,
   key: OutputRouteChannelKey,
 ): readonly string[] {
-  const workspace = config.workspaces.instances[context.reviewEvent.workspaceId];
-  const workspaceChannels = workspace?.outputs?.[key];
-  if (workspaceChannels && workspaceChannels.length > 0) {
-    return uniqueChannelNames(workspaceChannels);
-  }
-
+  // Route rules are more specific (match by trigger + target_kind) and should
+  // override workspace defaults for events like push/commit that need different
+  // channels than pull_request (e.g. problem_issue instead of pr_review).
   const routeChannels = config.outputs.routes?.rules
     .find((route) => routeMatchesEvent(route, context))
     ?.[key];
   if (routeChannels && routeChannels.length > 0) {
     return uniqueChannelNames(routeChannels);
+  }
+
+  const workspace = config.workspaces.instances[context.reviewEvent.workspaceId];
+  const workspaceChannels = workspace?.outputs?.[key];
+  if (workspaceChannels && workspaceChannels.length > 0) {
+    return uniqueChannelNames(workspaceChannels);
   }
 
   const defaultChannels = config.outputs.routes?.default?.[key];
