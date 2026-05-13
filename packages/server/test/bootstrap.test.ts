@@ -410,22 +410,29 @@ describe("createOutputPublisherFromConfig", () => {
           repoRef: "owent/example",
           title: "Fix parser",
           url: "https://gitea.example.com/owent/example/pulls/42",
-          author: { username: "owent" },
+          author: { username: "owent", displayName: "OwEnt" },
           reason: "gitea:opened",
         },
       );
 
       expect(publisher?.publishEmptySummary).toBe(true);
-      const result = await publisher?.publishSummary?.("Review summary", [
-        { file: "src/app.ts", line: 3, severity: "medium", category: "correctness", message: "Issue." },
-      ]);
+      const result = await publisher?.publishSummary?.(
+        "Review summary",
+        [
+          { file: "src/app.ts", line: 3, severity: "medium", category: "correctness", message: "Issue." },
+        ],
+        { title: "Focused summary title" },
+      );
 
       expect(result).toMatchObject({ channel: "gitea-pr", status: "published", externalId: "789" });
       expect(calls[0]?.url).toBe("https://gitea.example.com/api/v1/repos/owent/example/pulls/42/reviews");
       const body = JSON.parse(calls[0]?.init.body ?? "{}");
       expect(body.event).toBe("COMMENT");
       expect(body.body).toContain("AI Code Review Summary");
+      expect(body.body).toContain("Focused summary title");
       expect(body.body).toContain("Fix parser");
+      expect(body.body).toContain("**Author**: @owent (OwEnt)");
+      expect(body.body).toContain("**Reviewers**: @owent (OwEnt)");
       expect(body.body).toContain("Review summary");
       expect(body.body).toContain("src/app.ts:3");
     } finally {
@@ -784,7 +791,8 @@ describe("createOutputPublisherFromConfig", () => {
       expect(calls[1]?.url).toBe("https://gitea.example.com/api/v1/repos/owent/example/issues");
       expect(calls[1]?.init.headers).toMatchObject({ authorization: "token resolver-token" });
       const body = JSON.parse(calls[1]?.init.body ?? "{}");
-      expect(body.title).toContain("[AICR Managed] [HIGH] security: src/app.ts:3");
+      expect(body.title).toBe("[AICR Managed] [HIGH] Issue (src/app.ts:3)");
+      expect(body.title).not.toContain(" - ");
       expect(body.body).toContain("<!-- aicr:managed=problem-issue -->");
     } finally {
       vi.unstubAllGlobals();

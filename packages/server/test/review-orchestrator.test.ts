@@ -152,6 +152,8 @@ describe("runReviewOrchestration", () => {
           category: "correctness",
           message: "The return path can run before the commit finishes.",
           suggestion: "Await the commit before returning success.",
+          codeSnippet: "const value = oldValue();\ncommitBeforeReturn();",
+          codeLanguage: "ts",
           fingerprint: "fp-commit",
         },
       ]);
@@ -384,7 +386,9 @@ describe("formatParsedDiffForPrompt", () => {
     const formatted = formatParsedDiffForPrompt(diff);
 
     expect(formatted).toContain("renamed: old.ts -> new.ts");
+    expect(formatted).toContain("-N lines are deleted old code");
     expect(formatted).toContain("-1: old");
+    expect(formatted).toContain("[deleted old code; not current]");
     expect(formatted).toContain("+1: new");
   });
 
@@ -1115,6 +1119,72 @@ describe("runReviewOrchestration error paths", () => {
 
       expect(result.status).toBe("published");
       expect(publishedProblems[0]?.lineCommentAllowed).toBe(false);
+      expect(publishedProblems[0]?.codeSnippet).toBeUndefined();
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("scrubs automatically attached code reference snippets", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-code-reference-scrub-"));
+
+    try {
+      await writeWorkspaceFile(tempDir, "src/app.ts", "const token = \"ghp_abcdefghijklmnopqrstuvwxyz01234567890123\";\n");
+      const llm: ChatCompletionClient = {
+        async complete(input) {
+          return {
+            providerId: input.model.providerId,
+            modelId: input.model.modelId,
+            content: JSON.stringify({
+              problems: [
+                { file: "src/app.ts", line: 1, severity: "high", category: "security", message: "Token is hardcoded." },
+              ],
+            }),
+            raw: {},
+          };
+        },
+      };
+      const vcs: DiffCapableVcsAdapter = {
+        ...createVcs(tempDir),
+        async diff() {
+          return parseUnifiedDiff([
+            "diff --git a/src/app.ts b/src/app.ts",
+            "--- a/src/app.ts",
+            "+++ b/src/app.ts",
+            "@@ -0,0 +1 @@",
+            "+const token = \"ghp_abcdefghijklmnopqrstuvwxyz01234567890123\";",
+          ].join("\n"));
+        },
+      };
+      const publishedProblems: ReviewProblem[] = [];
+
+      const result = await runReviewOrchestration(
+        {
+          reviewEvent: createReviewEventFixture(),
+          payload: {},
+          provider: "gitea",
+          eventName: "pull_request",
+        },
+        {
+          baseSystemPrompt: "<task>\n{{TASK_CONTEXT}}\n</task>",
+          sourceRootResolver: () => tempDir,
+          vcs,
+          llm,
+          model,
+          outputPublisher: {
+            async publishProblem(problem) {
+              publishedProblems.push(problem);
+              return { channel: "test", status: "published", raw: {} };
+            },
+          },
+        },
+      );
+
+      expect(result.status).toBe("published");
+      expect(result.scrubMatches.length).toBeGreaterThanOrEqual(1);
+      expect(publishedProblems[0]?.codeSnippet).toContain("<REDACTED:GITHUB_TOKEN>");
+      expect(publishedProblems[0]?.codeSnippet).not.toContain("ghp_");
+      expect(publishedProblems[0]?.codeLanguage).toBe("ts");
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }
@@ -2067,7 +2137,7 @@ describe("extractJsonPayload edge cases", () => {
 
       expect(result.problemCount).toBe(0);
       expect(result.summaryCount).toBe(1);
-      expect(result.outputState.summaries).toEqual(["没有发现问题"]);
+      expect(result.outputState.summaries).toEqual([{ markdown: "没有发现问题" }]);
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }
@@ -2105,7 +2175,7 @@ describe("extractJsonPayload edge cases", () => {
         },
       );
 
-      expect(result.outputState.summaries).toEqual(["最终摘要"]);
+      expect(result.outputState.summaries).toEqual([{ markdown: "最终摘要" }]);
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }
@@ -2240,7 +2310,61 @@ describe("extractJsonPayload edge cases", () => {
 
       expect(result.problemCount).toBe(1);
       expect(result.summaryCount).toBe(1);
-      expect(result.outputState.summaries[0]).toBe("## Review Summary\n\nOne style issue found.");
+      expect(result.outputState.summaries[0]).toEqual({ markdown: "## Review Summary\n\nOne style issue found." });
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves summary titles and forwards them to summary publishers", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-summary-title-"));
+
+    try {
+      await writeWorkspaceFile(tempDir, "src/app.ts", "const ok = true;\n");
+      const llm: ChatCompletionClient = {
+        async complete(input) {
+          return {
+            providerId: input.model.providerId,
+            modelId: input.model.modelId,
+            content: JSON.stringify({
+              summary: {
+                title: "简短标题",
+                markdown: "最终摘要",
+              },
+            }),
+            raw: {},
+          };
+        },
+      };
+      const publishedSummaries: Array<{ summary: string; title?: string }> = [];
+
+      const result = await runReviewOrchestration(
+        {
+          reviewEvent: createReviewEventFixture(),
+          payload: {},
+          provider: "gitea",
+          eventName: "pull_request",
+        },
+        {
+          baseSystemPrompt: "<task>\n{{TASK_CONTEXT}}\n</task>",
+          sourceRootResolver: () => tempDir,
+          vcs: createVcs(tempDir),
+          llm,
+          model,
+          outputPublisher: {
+            publishesProblems: false,
+            async publishSummary(summary, _problems, options) {
+              publishedSummaries.push({ summary, ...(options?.title ? { title: options.title } : {}) });
+              return { channel: "test", status: "published", raw: {} };
+            },
+          },
+        },
+      );
+
+      expect(result.status).toBe("published");
+      expect(result.summaryCount).toBe(1);
+      expect(result.outputState.summaries).toEqual([{ title: "简短标题", markdown: "最终摘要" }]);
+      expect(publishedSummaries).toEqual([{ summary: "最终摘要", title: "简短标题" }]);
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }

@@ -23,6 +23,21 @@ export type MentionChannelKind =
 	| "feishu_bot"
 	| "wecom_bot";
 
+function isGitMentionChannel(channelKind: MentionChannelKind): boolean {
+	return channelKind === "gitea_pr_review" ||
+		channelKind === "github_pr_review" ||
+		channelKind === "github_issue" ||
+		channelKind === "github_problem_issue" ||
+		channelKind === "gitlab_mr_review" ||
+		channelKind === "gitea_issue" ||
+		channelKind === "gitea_problem_issue";
+}
+
+function normalizeDisplayName(value: string | undefined): string | undefined {
+	const normalized = value?.trim();
+	return normalized ? normalized : undefined;
+}
+
 function normalizeEmail(value: string): string {
 	return value.trim().toLowerCase();
 }
@@ -133,6 +148,11 @@ export function buildAtMentions(
 		}
 
 		return "";
+	}
+
+	const displayName = normalizeDisplayName(context.author.displayName);
+	if (isGitMentionChannel(channelKind) && displayName && displayName !== username) {
+		return `@${username} (${displayName})`;
 	}
 
 	return renderMentions([username], channelKind);

@@ -1,6 +1,6 @@
 # Output channels and MCP report contract
 
-This document is the user-facing module for AICodeReviewer report output. Keep it aligned with `packages/mcp-output/src/index.ts`, `packages/outputs/src/index.ts`, `packages/outputs/src/template-engine.ts`, and `example/config.yaml`.
+This document is the user-facing module for AICodeReviewer report output. Keep it aligned with `packages/mcp-output/src/index.ts`, `packages/outputs/src/index.ts`, `packages/outputs/src/template-engine.ts`, `docs/ai/architecture.md` §3.9-§3.10, and `example/config.yaml`.
 
 ## Design goals
 
@@ -20,7 +20,7 @@ The current in-process tool registry exposes these AICR tools to the review exec
 | `aicr.skip` | Mark the review as intentionally skipped | `reason` |
 | `aicr.fetch_more_context` | Request bounded extra source context | `path`, `reason` |
 
-Planned attribution, memory, and skill recall tools are documented in `Plan.md`; do not describe them as implemented until they exist in `packages/mcp-output` and tests.
+Planned attribution, memory, and skill recall tools are tracked by the `Plan.md` roadmap and detailed in `docs/ai/architecture.md`; do not describe them as implemented until they exist in `packages/mcp-output` and tests.
 
 The external stdio / Streamable HTTP MCP server and per-agent MCP config materialization are tracked as remaining M5/M8 work. Until that lands, Kilo and other agent adapters use the compatible JSON/XML tool-call stdout path that AICR validates with the same schemas below.
 
@@ -31,13 +31,15 @@ The external stdio / Streamable HTTP MCP server and per-agent MCP config materia
 | Field | Required | Meaning | Rendering notes |
 | --- | --- | --- | --- |
 | `file` | Yes | Repository-relative path to the affected file | Used as PR/MR line-comment path and issue location |
-| `line` | Yes | New-file line number for the primary anchor | Must be a changed or diff-commentable line when possible |
+| `line` | Yes | New-file line number for the primary anchor | Must be a changed or diff-commentable line when possible; deleted `-N` diff lines are old-code lines and must not be used as current-code anchors |
 | `end_line` | No | End line for a range problem | Rendered as `file:start-end`; line-comment APIs may fall back to a single-line anchor |
 | `severity` | Yes | `info`, `low`, `medium`, `high`, or `critical` | Use conservative severity calibration from the system prompt |
 | `category` | Yes | Short problem family such as `correctness`, `security`, or `api-contract` | Kept stable for grouping and dedupe |
 | `message` | Yes | Problem analysis: what is wrong, trigger scenario, and impact | This is the primary review comment body |
 | `suggestion` | No | Smallest plausible fix direction; may include a fenced `diff` patch | Rendered under “Suggested fix” in VCS and issue channels |
 | `fingerprint` | No | Stable dedupe key | Preserved in hidden comments where supported |
+
+Git-based output channels may enrich a reported problem with an AICR-derived code reference snippet during publishing. The snippet is taken from the parsed diff around `file:line`, scrubbed for secrets, and rendered by templates as a fenced Markdown code block. This does not add fields to `aicr.report_problem`; agents should still report only the stable problem schema above.
 
 Planned optional fields will stay additive. In particular, `attribution` may be added later so `aicr.report_problem` can carry AICR-verified author / committer / revision context when available. Agent-supplied attribution must be treated as advisory until the server revalidates it through event metadata, provider APIs, or a read-only attribution tool such as planned `aicr.try_blame`.
 
@@ -65,7 +67,9 @@ Keep patches concise. Large rewrites belong in a summary or a linked follow-up, 
 
 ## Summary schema
 
-`aicr.publish_summary` takes Markdown in `markdown` and is used for:
+`aicr.publish_summary` takes Markdown in `markdown` and may also carry a short optional `title`. The title is intended to be concise and channel-friendly; built-in summary templates render it as a secondary heading or top title when appropriate.
+
+`aicr.publish_summary` is used for:
 
 - PR/MR summary comments when a channel supports summary publishing.
 - Gitea managed problem issues.
@@ -73,6 +77,27 @@ Keep patches concise. Large rewrites belong in a summary or a linked follow-up, 
 - Push, commit, and P4 changelist events where there may be no line-comment target.
 
 For push/commit/P4 events, publish a non-empty summary when configured channels need an audit trail. The `no_problems` policy decides per channel whether a zero-problem result is published or suppressed.
+
+Recommended pattern:
+
+- `title`: one short line, suitable for a summary heading.
+- `markdown`: the full structured analysis body.
+
+Example:
+
+```json
+{
+  "toolCalls": [
+    {
+      "name": "aicr.publish_summary",
+      "input": {
+        "title": "发现 1 个高风险问题",
+        "markdown": "## Review Summary\n\n发现 1 个高风险问题，建议优先修复事务提交时序。"
+      }
+    }
+  ]
+}
+```
 
 If a run has problems but records `skipReason="no_output_publisher"`, no summary route selected a publishable channel for that event. Add an `outputs.routes.rules[].summary` rule or a workspace-level `outputs.summary` entry for the trigger/target, for example to send GitHub push reviews to `feishu_bot` and/or `github_problem_issue`.
 
@@ -87,8 +112,8 @@ If a run has problems but records `skipReason="no_output_publisher"`, no summary
 | `gitea_problem_issue` | Collected for reconciliation | Creates, updates, or resolves managed problem issues | Fingerprint stability matters most here |
 | `github_issue` | Collected, then rendered into an issue comment | Aggregated issue comment | Same as `gitea_issue` but for GitHub repositories |
 | `github_problem_issue` | Collected for reconciliation | Creates or resolves managed GitHub issues | Like `gitea_problem_issue` but uses string label names; `resolved_action` supports `close` and `none` only (GitHub has no issue delete API) |
-| `feishu_bot` | Collected for aggregation | Interactive card Markdown | Includes summary, problem count, severity/category/file/line, and truncated message/suggestion per problem |
-| `wecom_bot` | Collected for aggregation | Markdown message | Same content as Feishu; messages truncated to 500 chars and suggestions to 300 chars to stay within size limits |
+| `feishu_bot` | Collected for aggregation | Interactive card Markdown | Includes summary, problem count, severity/category/file/line, and truncated message/suggestion per problem; built-in summaries render `@username (Display Name)` when both are available |
+| `wecom_bot` | Collected for aggregation | Markdown message | Same content as Feishu; messages truncated to 500 chars and suggestions to 300 chars to stay within size limits; built-in summaries render `@username (Display Name)` when both are available |
 
 ## Managed problem issue fetch limit
 
@@ -206,6 +231,19 @@ outputs:
       severity_label_prefix: "aicr:problem:"
 ```
 
+## GitHub and Gitea code references
+
+GitHub and Gitea/Forgejo issue comments both support fenced Markdown code blocks, so AICR renders referenced code as portable Markdown rather than depending on one provider's proprietary review UI. For each problem whose `file:line` can be found in the parsed diff, AICR adds a small fenced code block with nearby context lines below the location in the problem body and, where templates list problems in a summary table, below the table as separate code reference sections.
+
+GitHub also has first-class line anchors and rich selected-line references in its web UI. Gitea/Forgejo has file line anchors and standard Markdown fences, but not a GitHub Copilot-identical rich reference card API. The portable fenced-block rendering keeps GitHub, GitHub Enterprise, Gitea, and Forgejo behavior consistent.
+
+Code reference snippets are bounded and safe by default:
+
+- Source: parsed diff only; no extra repository read is performed for rendering.
+- Size: at most 12 lines and 2000 characters per problem.
+- Safety: snippets pass through the same output secret scrubber before dispatch.
+- Fallback: if the line is outside the diff or unavailable, AICR keeps the normal location text/link and omits the code block.
+
 ## No-problems policy
 
 The implemented `no_problems` policy controls whether a successful review with zero actionable problems should publish a summary to each output channel.
@@ -282,13 +320,17 @@ Common template variables:
 | `{{run.id}}` | Review run id when available |
 | `{{atMentions}}` | Pre-rendered channel-specific mention string |
 | `{{vcs.branch}}` | Git branch name (when available) |
-| `{{vcs.depot}}` | Perforce depot path (when available) |
-| `{{vcs.workspace}}` | Perforce client workspace name (when available) |
+| `{{vcs.sourcePath}}` | Provider-specific source namespace/path, such as a depot or repository subpath (when available) |
+| `{{vcs.workspace}}` | Source-control client/workspace name captured from the submitter event (when available); for P4 this comes from trigger `%client%` / payload `client`, not from the analysis client configured for AICR |
 | `{{vcs.repositoryPath}}` | Repository/depot reference path |
+| `{{summaryTitle}}` | Optional short summary title supplied via `aicr.publish_summary.title` |
 | `{{summary}}` | Summary Markdown |
 | `{{problems}}` | Template problem list |
 | `{{problem.file}}`, `{{problem.line}}`, `{{problem.location}}` | Location fields for one reported problem |
 | `{{problem.severity}}`, `{{problem.category}}`, `{{problem.message}}`, `{{problem.suggestion}}` | Problem content fields |
+| `{{problem.codeSnippet}}`, `{{problem.codeLanguage}}`, `{{{problem.codeFence}}}` | Optional AICR-derived code reference snippet, language, and pre-built fenced code block |
+
+For Git-based channels (`gitea_*`, `github_*`, `gitlab_mr_review`), built-in templates prefer `@username` formatting when a provider username is available. If a display name is also available, they render it as `@username (Display Name)` so the platform can still resolve the mention while humans see the nickname. Feishu and WeCom summary templates use the same human-readable `@username (Display Name)` convention for event authors; native bot mentions still flow through the separate `{{atMentions}}` / author-resolution path when enabled.
 
 Templates must use `{{problems}}` and `{{problem.*}}`; the removed `{{findings}}` and `{{finding.*}}` variables are not provided.
 
@@ -321,4 +363,4 @@ The base system prompt in `prompts/system/code-reviewer.system.md` must keep the
 - Use `aicr.fetch_more_context` only for bounded, justified gaps.
 - Do not treat stdout as the final review channel.
 
-When changing the tool contract, update the prompt, this document, `Plan.md`, examples, and unit tests together.
+When changing the tool contract, update the prompt, this document, `docs/ai/architecture.md`, the relevant `Plan.md` roadmap summary, examples, and unit tests together.

@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
 
+import { renderMarkdownCodeFence } from "./template-engine.js";
+
 export const outputsPackageName = "@aicr/outputs";
 
 export {
@@ -8,6 +10,7 @@ export {
 	getBuiltinTemplate,
 	renderBuiltinTemplate,
 	renderTemplate,
+	renderMarkdownCodeFence,
 	buildTemplateTargetContext,
 	toTemplateProblem,
 	type BuildTemplateTargetOptions,
@@ -61,6 +64,8 @@ export interface ReviewProblem {
 	readonly category: string;
 	readonly message: string;
 	readonly suggestion?: string;
+	readonly codeSnippet?: string;
+	readonly codeLanguage?: string;
 	readonly fingerprint?: string;
 	readonly renderedMarkdown?: string;
 }
@@ -165,6 +170,15 @@ export function renderProblemMarkdown(problem: ReviewProblem): string {
 
 	if (problem.suggestion) {
 		parts.push("", "Suggested fix:", "", problem.suggestion);
+	}
+
+	if (problem.codeSnippet) {
+		parts.push(
+			"",
+			`Referenced code: \`${location}\``,
+			"",
+			renderMarkdownCodeFence(problem.codeSnippet, problem.codeLanguage),
+		);
 	}
 
 	if (problem.fingerprint) {
@@ -1846,9 +1860,39 @@ function hasManagedProblemIssueMarker(body: string): boolean {
 
 function buildProblemIssueTitle(problem: ReviewProblem, markerPrefix: string): string {
 	const location = problem.endLine ? `${problem.file}:${problem.line}-${problem.endLine}` : `${problem.file}:${problem.line}`;
-	const normalizedMessage = problem.message.replace(/\s+/gu, " ").trim();
-	const title = `${markerPrefix} [${problem.severity.toUpperCase()}] ${problem.category}: ${location} - ${normalizedMessage}`;
-	return title.length > 240 ? `${title.slice(0, 237)}...` : title;
+	const core = summarizeProblemForIssueTitle(problem.message) || problem.category;
+	const title = `${markerPrefix} [${problem.severity.toUpperCase()}] ${core} (${location})`;
+	return truncateIssueTitle(title, 160);
+}
+
+function stripMarkdownForIssueTitle(value: string): string {
+	return value
+		.replace(/```[\s\S]*?```/gu, " ")
+		.replace(/`([^`]+)`/gu, "$1")
+		.replace(/\[([^\]]+)\]\([^)]*\)/gu, "$1")
+		.replace(/[>#*_~]/gu, " ");
+}
+
+function truncateIssueTitle(value: string, maxLength: number): string {
+	const normalized = value.replace(/\s+/gu, " ").trim();
+	if (normalized.length <= maxLength) {
+		return normalized;
+	}
+
+	const limit = Math.max(3, maxLength - 3);
+	const prefix = normalized.slice(0, limit).trimEnd();
+	const wordBoundary = prefix.lastIndexOf(" ");
+	const shortened = wordBoundary > Math.floor(limit * 0.6)
+		? prefix.slice(0, wordBoundary)
+		: prefix;
+	return `${shortened}...`;
+}
+
+function summarizeProblemForIssueTitle(message: string): string {
+	const normalized = stripMarkdownForIssueTitle(message).replace(/\s+/gu, " ").trim();
+	const sentenceEnd = /[。！？]|[.!?](?=\s|$)/u.exec(normalized);
+	const firstSentence = sentenceEnd ? normalized.slice(0, sentenceEnd.index).trim() : normalized;
+	return truncateIssueTitle(firstSentence, 96).replace(/[。！？.!?]+$/u, "").trim();
 }
 
 function ensureProblemFingerprint(problem: ReviewProblem): ReviewProblem {

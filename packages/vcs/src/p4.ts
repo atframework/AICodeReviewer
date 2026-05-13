@@ -1,5 +1,5 @@
 import { execFile, spawn } from "node:child_process";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
 
@@ -215,7 +215,7 @@ export class P4VcsAdapter implements VcsAdapter {
   private readonly port: string | undefined;
   private readonly user: string | undefined;
   private readonly password: string | undefined;
-  private readonly p4workspace: string | undefined;
+  private readonly clientWorkspace: string | undefined;
   private readonly depot: string | undefined;
   private readonly watchPath: readonly string[] | undefined;
   private readonly includeCrFile: readonly string[] | undefined;
@@ -229,7 +229,7 @@ export class P4VcsAdapter implements VcsAdapter {
     this.port = options.port;
     this.user = options.user;
     this.password = options.password;
-    this.p4workspace = options.workspace;
+    this.clientWorkspace = options.workspace;
     this.depot = options.depot;
     this.watchPath = options.watchPath;
     this.includeCrFile = options.includeCrFile;
@@ -242,7 +242,7 @@ export class P4VcsAdapter implements VcsAdapter {
     const args: string[] = [];
     if (this.port) args.push("-p", this.port);
     if (this.user) args.push("-u", this.user);
-    if (this.p4workspace) args.push("-c", this.p4workspace);
+    if (this.clientWorkspace) args.push("-c", this.clientWorkspace);
     return args;
   }
 
@@ -337,6 +337,8 @@ export class P4VcsAdapter implements VcsAdapter {
 
     for (const filePath of range.files) {
       const normalizedPath = this.toLocalPath(filePath);
+      const safeLocalPath = normalizeChangedPath(workspaceSourceDir, normalizedPath);
+      const destinationPath = join(workspaceSourceDir, safeLocalPath);
       let depotPath = filePath.startsWith("//") ? filePath : normalizedPath;
       if (this.depot && !depotPath.startsWith("//")) {
         const depotBase = this.depot.replace(/\/+$/u, "");
@@ -344,14 +346,13 @@ export class P4VcsAdapter implements VcsAdapter {
       }
 
       try {
+        await rm(destinationPath, { recursive: true, force: true });
         const result = await this.runP4([
           "print",
           "-q",
           `${depotPath}@${revision}`,
         ]);
 
-        const safeLocalPath = normalizeChangedPath(workspaceSourceDir, normalizedPath);
-        const destinationPath = join(workspaceSourceDir, safeLocalPath);
         await mkdir(dirname(destinationPath), { recursive: true });
         await writeFile(destinationPath, result.stdout, "utf8");
         fetchedFiles.push(safeLocalPath);

@@ -94,6 +94,17 @@ describe("buildAtMentions", () => {
 		expect(buildAtMentions(ctx, "github_pr_review")).toBe("@owent");
 	});
 
+	it("includes the display name for Git-based mentions when available", () => {
+		const ctx: AuthorMentionContext = { author: { username: "owent", displayName: "OwEnt" } };
+		expect(buildAtMentions(ctx, "github_pr_review")).toBe("@owent (OwEnt)");
+		expect(buildAtMentions(ctx, "gitea_issue")).toBe("@owent (OwEnt)");
+	});
+
+	it("does not repeat the display name when it matches the username", () => {
+		const ctx: AuthorMentionContext = { author: { username: "owent", displayName: "owent" } };
+		expect(buildAtMentions(ctx, "github_pr_review")).toBe("@owent");
+	});
+
 	it("returns empty string when author cannot be resolved", () => {
 		const ctx: AuthorMentionContext = { author: { email: "unknown@example.com" } };
 		expect(buildAtMentions(ctx, "github_pr_review")).toBe("");

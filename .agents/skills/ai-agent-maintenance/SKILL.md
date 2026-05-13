@@ -12,8 +12,9 @@ Use this skill when updating AI-agent guidance, prompt assets, bridge files, or 
 
 - Research the current prompt and skill layout before editing.
 - Keep always-on guidance compact, actionable, and non-redundant.
+- Keep `Plan.md` forward-looking; move durable detail into `docs/ai/index.md`-linked docs instead of re-expanding always-on assets.
 - Preserve compatibility across AGENTS-aware tools, VS Code Copilot, Copilot CLI, Codex, Claude Code, Kilo Code/CLI, Roo Code, opencode, and similar agents when the repository intentionally supports them.
-- Keep AI-facing guidance aligned with user-facing docs and examples; if a change affects agent config materialization, MCP tools, output templates, or deployment behavior, sync `Plan.md`, the relevant `docs/` module, `example/config.yaml`, and `example/README.md` or note why they are unchanged.
+- Keep AI-facing guidance aligned with user-facing docs and examples; if a change affects agent config materialization, MCP tools, output templates, or deployment behavior, sync the relevant `Plan.md` roadmap summary, the relevant `docs/` module, `example/config.yaml`, and `example/README.md` or note why they are unchanged.
 - When a change affects agent runtime setup, verify LLM config translation, MCP tool mapping, three-layer prompt/instruction layering (system built-in → user common → project/repo-local), and skill materialization together; use `../agent-runtime-integration/SKILL.md` for the detailed workflow.
 - Merge improvements into existing prompt and skill content; do not leave old versions, migration notes, changelog notes, or historical comparison sections.
 - If an agent task succeeds only after retrying or switching approach, preserve the reusable cause and fix in the right AI-facing asset so future agents avoid the same failure path.
@@ -29,13 +30,15 @@ Use this skill when updating AI-agent guidance, prompt assets, bridge files, or 
 ## Procedure
 
 1. **Research first**
-   - Read the nearest `AGENTS.md`, referenced `AGENTS.*.md` files, present bridge files such as `CLAUDE.md`, and relevant `SKILL.md` files before editing.
+   - Read the nearest `AGENTS.md`, referenced `AGENTS.*.md` files, `../../../docs/ai/index.md` when doc routing matters, present bridge files such as `CLAUDE.md`, and relevant `SKILL.md` files before editing.
    - Check current official or maintained community references for prompt/agent/skill authoring before planning any AI-facing edit; prioritize concise instructions, progressive disclosure, discoverable descriptions, and real-use validation.
    - If compatibility behavior may change, check current official docs or maintained references for the affected tools.
    - Respect dirty workspaces: preserve unrelated user or formatter edits and avoid broad reformatting.
 
 2. **Choose the right surface**
    - Put facts that apply to nearly every task in `AGENTS.md`.
+   - Keep `Plan.md` for active roadmap summaries only.
+   - Put stable detailed architecture in `docs/ai/architecture.md`, stable decisions in `docs/ai/decisions.md`, and completed-stage history in `docs/ai/milestones/*.md`.
    - Put path-specific or tool-specific rules in their native file only when that scope is needed.
    - Put multi-step, task-specific, or rarely used guidance in skills.
    - For retry-derived lessons, record only durable patterns: the trigger, root cause, and preferred fix. Skip one-off environment glitches, stale data, and facts that are obvious from nearby code.

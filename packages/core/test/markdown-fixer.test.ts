@@ -92,6 +92,25 @@ describe("fixMarkdown", () => {
     expect(result.changed).toBe(true);
   });
 
+  it("does not break bold markers at line start", () => {
+    const result = fixMarkdown("**Reviewed**: [Commit abc](https://example.com)\n**Author**: Someone <a@b>\n**Branch**: main\n");
+    expect(result.fixed).toBe("**Reviewed**: [Commit abc](https://example.com)\n**Author**: Someone <a@b>\n**Branch**: main\n");
+    expect(result.changed).toBe(false);
+  });
+
+  it("does not break bold-italic markers at line start", () => {
+    const result = fixMarkdown("***Important*** note\n");
+    expect(result.fixed).toBe("***Important*** note\n");
+    expect(result.changed).toBe(false);
+  });
+
+  it("does not break thematic breaks", () => {
+    const input = "Intro\n\n---\n\nSummary text.\n";
+    const result = fixMarkdown(input);
+    expect(result.fixed).toBe(input);
+    expect(result.changed).toBe(false);
+  });
+
   it("returns violations array", () => {
     const result = fixMarkdown("#Title\n");
     expect(Array.isArray(result.violations)).toBe(true);
@@ -144,5 +163,11 @@ describe("fixAndValidateMarkdown", () => {
     const input = "Intro\n\n```\n#noTouch\n-stillCode\n";
     const result = fixAndValidateMarkdown(input);
     expect(result).toContain("```\n#noTouch\n-stillCode");
+  });
+
+  it("preserves bold summary header from template rendering", () => {
+    const input = "## AI Code Review Report\n\n**Reviewed**: [Commit c0a7ca4](https://example.com)\n**Author**: Yang <yang@n>\n**Branch**: main\n\n---\n\nSummary text.\n";
+    const result = fixAndValidateMarkdown(input);
+    expect(result).toBe(input);
   });
 });

@@ -191,6 +191,9 @@ override the server-side depot for a special case.
 
 Register the trigger with `%change% %user% %client%` so the script can forward
 submitter metadata without needing to query P4 from inside the p4d process.
+AICR treats the configured P4 client/workspace as the analysis workspace only;
+it does not display that value as the submitter workspace when `%client%` is
+omitted.
 
 ### Quick reference: which secrets go where
 
@@ -217,13 +220,14 @@ submitter metadata without needing to query P4 from inside the p4d process.
 
 ## File Reference
 
-| File                         | Purpose                                                 |
-| ---------------------------- | ------------------------------------------------------- |
-| `config.yaml`                | Main configuration — LLM, triggers, outputs, workspaces |
-| `.env.sample`                | All environment variables with descriptions             |
-| `docker-compose.yaml`        | Docker Compose stack definition                         |
-| `../deploy/Dockerfile`       | Multi-stage Docker build                                |
-| `../docs/output-channels.md` | MCP report contract and output rendering guide          |
+| File                          | Purpose                                                    |
+| ----------------------------- | ---------------------------------------------------------- |
+| `config.yaml`                 | Main configuration — LLM, triggers, outputs, workspaces    |
+| `.env.sample`                 | All environment variables with descriptions                |
+| `docker-compose.yaml`         | Docker Compose stack definition                            |
+| `../deploy/Dockerfile`        | Multi-stage Docker build                                   |
+| `../docs/ai/index.md`         | AI-facing doc map for roadmap, architecture, and milestones |
+| `../docs/output-channels.md`  | MCP report contract and output rendering guide             |
 
 ## Adding More Repositories
 
@@ -446,6 +450,11 @@ Run `p4 triggers` and add an entry:
 aicr-review change-commit //depot/main/... "/path/to/p4-trigger.sh %change% %user% %client%"
 ```
 
+Keep `%user%` and `%client%` in the trigger command. They are forwarded to AICR
+as the changelist author and submitter client for Feishu/WeCom summaries; the
+AICR adapter's configured P4 workspace is only the analysis client and is not
+used as display-facing submitter metadata.
+
 ### 4. Create the trigger script
 
 Copy [`p4-trigger.sh`](p4-trigger.sh) to the **P4 server host** (not inside the
@@ -475,7 +484,8 @@ The script:
 1. Posts the changelist number, user, client, and optional depot path to `/triggers/p4`
 2. Does **not** run `p4 describe` by default, preventing p4d-side SSL trust prompts from blocking submits
 3. Lets AICR fetch changelist details and files using the P4 connection configured in `config.yaml`
-4. Logs failures locally and exits successfully so the async reviewer never blocks the submit/commit path
+4. Warns locally if `%user%` or `%client%` are missing, because AICR will not substitute its analysis workspace as submitter metadata
+5. Logs failures locally and exits successfully so the async reviewer never blocks the submit/commit path
 
 <details>
 <summary>Full script source (p4-trigger.sh)</summary>

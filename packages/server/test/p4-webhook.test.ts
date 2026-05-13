@@ -37,7 +37,7 @@ describe("translateP4TriggerToReviewEvent", () => {
     expect(event?.repoRef).toBe("//Other/Main");
   });
 
-  it("includes depotPath and submitter client as p4Workspace", () => {
+  it("includes sourcePath and submitter client workspace", () => {
     const event = translateP4TriggerToReviewEvent(
       { change: "6244", user: "submitter", client: "submit-client" },
       {
@@ -48,12 +48,12 @@ describe("translateP4TriggerToReviewEvent", () => {
       },
     );
 
-    expect(event?.depotPath).toBe("//Prx/Prx_Main");
-    expect(event?.p4Workspace).toBe("submit-client");
+    expect(event?.sourcePath).toBe("//Prx/Prx_Main");
+    expect(event?.submitterWorkspace).toBe("submit-client");
     expect(event?.author).toEqual({ username: "submitter" });
   });
 
-  it("falls back to configured workspace when payload omits client", () => {
+  it("does not expose configured analysis workspace when payload omits client", () => {
     const event = translateP4TriggerToReviewEvent(
       { change: "6244", user: "submitter" },
       {
@@ -64,10 +64,21 @@ describe("translateP4TriggerToReviewEvent", () => {
       },
     );
 
-    expect(event?.p4Workspace).toBe("configured-client-ws");
+    expect(event?.submitterWorkspace).toBeUndefined();
+    expect(event?.author).toEqual({ username: "submitter" });
   });
 
-  it("uses payload depot_path for depotPath field", () => {
+  it("accepts alternate submitter metadata fields", () => {
+    const event = translateP4TriggerToReviewEvent(
+      { change: "6244", p4_user: "submitter", p4_client: "submit-client" },
+      config,
+    );
+
+    expect(event?.author).toEqual({ username: "submitter" });
+    expect(event?.submitterWorkspace).toBe("submit-client");
+  });
+
+  it("uses payload depot_path for sourcePath field", () => {
     const event = translateP4TriggerToReviewEvent(
       { change: "6244", depot_path: "//Custom/Path" },
       {
@@ -77,6 +88,6 @@ describe("translateP4TriggerToReviewEvent", () => {
       },
     );
 
-    expect(event?.depotPath).toBe("//Custom/Path");
+    expect(event?.sourcePath).toBe("//Custom/Path");
   });
 });

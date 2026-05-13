@@ -68,7 +68,8 @@ describe("createGiteaProblemIssueDispatcher", () => {
     expect(calls[1]?.url).toBe("https://gitea.example/api/v1/repos/owent/example/issues");
     expect(calls[1]?.init?.headers).toMatchObject({ authorization: "token token-value" });
     const body = JSON.parse(calls[1]?.init?.body ?? "{}");
-    expect(body.title).toContain("[AICR Test] [CRITICAL] security: src/auth.ts:12");
+    expect(body.title).toBe("[AICR Test] [CRITICAL] SQL query uses unsanitized input (src/auth.ts:12)");
+    expect(body.title).not.toContain(" - ");
     expect(body.body).toContain("<!-- aicr:managed=problem-issue -->");
     expect(body.body).toContain("<!-- aicr:fingerprint=fp-sql -->");
     expect(body.body).toContain("Summary text");

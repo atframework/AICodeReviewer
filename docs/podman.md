@@ -1,6 +1,6 @@
 # Podman sandbox guide
 
-This guide explains how to run AICodeReviewer with the Podman-compatible sandbox path from Plan.md M5. The implementation uses the same container contract as Docker, but resolves the CLI to `podman` when `sandbox.kind: podman` or `sandbox.engine: podman` is selected.
+This guide explains how to run AICodeReviewer with the Podman-compatible sandbox path described in `docs/ai/architecture.md` §3.8 and tracked in the `Plan.md` M5 roadmap. The implementation uses the same container contract as Docker, but resolves the CLI to `podman` when `sandbox.kind: podman` or `sandbox.engine: podman` is selected.
 
 ## When to choose Podman
 

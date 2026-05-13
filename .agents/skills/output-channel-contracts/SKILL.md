@@ -21,7 +21,8 @@ Do not use this skill for LLM prompt layering, agent runtime materialization, or
 ## Procedure
 
 1. **Read the authoritative surfaces**
-   - `../../../Plan.md` §3.9 and §3.10.
+   - `../../../docs/ai/architecture.md` §3.9 and §3.10.
+   - `../../../Plan.md` when roadmap status or remaining milestone scope matters.
    - `../../../docs/output-channels.md`.
    - `../../../packages/core/src/config.ts` and `../../../packages/core/test/config.test.ts` for schema coverage.
    - `../../../packages/server/src/bootstrap.ts` and `../../../packages/server/src/review-orchestrator.ts` for publisher routing and empty-summary behavior.
@@ -41,7 +42,7 @@ Do not use this skill for LLM prompt layering, agent runtime materialization, or
    - For configurable URL templates, validate allowed variables and scrub untrusted data before rendering.
 
 4. **Keep docs, examples, and tests aligned**
-   - If config shape changes, update `Plan.md`, `docs/output-channels.md`, `example/config.yaml`, and config schema tests together.
+   - If config shape changes, update the relevant `Plan.md` roadmap summary, `../../../docs/ai/architecture.md`, `docs/output-channels.md`, `example/config.yaml`, and config schema tests together.
    - Add template tests for PR/MR and non-PR targets whenever built-in templates change.
    - Add routing tests for mixed channels where one suppresses no-problems output and another publishes it.
 
@@ -55,6 +56,8 @@ Do not use this skill for LLM prompt layering, agent runtime materialization, or
 ## IM bot message contracts
 
 - Feishu and WeCom `publishAggregatedProblems` include the full `problem.message` and `problem.suggestion` (when present) under each problem line.
+- Built-in Feishu and WeCom summaries must include the event username when present, rendering `@username (Display Name)` when both normalized username and display name are available.
+- `vcs.workspace` is submitter metadata captured from the event payload; do not substitute analysis/client workspaces from adapter configuration into user-visible IM output.
 - Long messages are truncated to 500 chars and suggestions to 300 chars with a `...` suffix to stay within platform card/message size limits.
 - The truncation helper is internal; do not expose truncation length as user-configurable fields without updating tests and docs.
 

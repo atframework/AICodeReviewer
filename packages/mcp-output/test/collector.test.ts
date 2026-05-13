@@ -23,7 +23,7 @@ describe("AicrOutputCollector", () => {
         fingerprint: "fp-1",
       }),
     ).resolves.toEqual({ accepted: true, problemCount: 1 });
-    await expect(publishSummary?.call({ markdown: "## Summary\n\nFound one issue." })).resolves.toEqual({
+    await expect(publishSummary?.call({ title: "Concise review title", markdown: "## Summary\n\nFound one issue." })).resolves.toEqual({
       accepted: true,
       summaryCount: 1,
     });
@@ -49,7 +49,7 @@ describe("AicrOutputCollector", () => {
     ]);
     expect(snapshot).not.toHaveProperty("findings");
     expect(snapshot).toMatchObject({
-      summaries: ["## Summary\n\nFound one issue."],
+      summaries: [{ title: "Concise review title", markdown: "## Summary\n\nFound one issue." }],
       contextRequests: [
         {
           path: "src/app.ts",
@@ -90,6 +90,13 @@ describe("AicrOutputCollector", () => {
     ]);
     expect(tools[0]?.inputSchema).toMatchObject({
       required: ["file", "line", "severity", "category", "message"],
+    });
+    expect(tools[1]?.inputSchema).toMatchObject({
+      required: ["markdown"],
+      properties: {
+        markdown: { type: "string" },
+        title: { type: "string" },
+      },
     });
   });
 });
@@ -146,6 +153,15 @@ describe("AicrOutputCollector edge cases", () => {
     );
 
     await expect(publishSummary?.call({})).rejects.toThrow(/markdown/u);
+  });
+
+  it("rejects publish_summary with an empty title when title is provided", async () => {
+    const collector = new AicrOutputCollector();
+    const publishSummary = createAicrOutputToolRegistry(collector).find(
+      (tool) => tool.name === "aicr.publish_summary",
+    );
+
+    await expect(publishSummary?.call({ markdown: "ok", title: " " })).rejects.toThrow(/title/u);
   });
 
   it("rejects skip with missing reason", async () => {

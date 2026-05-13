@@ -1,4 +1,4 @@
-{{#if event.title}}{{event.title}}{{else}}{{#if target.displayText}}{{target.displayText}}{{/if}}{{/if}}
+{{#if summaryTitle}}{{summaryTitle}}{{else}}{{#if event.title}}{{event.title}}{{else}}{{#if target.displayText}}{{target.displayText}}{{/if}}{{/if}}{{/if}}
 {{#if target.url}}
 
 {{target.url}}
@@ -8,18 +8,18 @@
 {{event.url}}
 {{/if}}
 {{/if}}
+{{#if event.author}}
+Author: @{{event.author}}{{#if event.displayName}} ({{event.displayName}}){{/if}}{{#if event.email}} <{{event.email}}>{{/if}}
+{{else}}
 {{#if event.displayName}}
 Author: {{event.displayName}}{{#if event.email}} <{{event.email}}>{{/if}}
-{{else}}
-{{#if event.author}}
-Author: @{{event.author}}{{#if event.email}} <{{event.email}}>{{/if}}
 {{/if}}
 {{/if}}
 {{#if vcs.branch}}
 Branch: {{vcs.branch}}
 {{/if}}
-{{#if vcs.depot}}
-Depot: {{vcs.depot}}
+{{#if vcs.sourcePath}}
+Source: {{vcs.sourcePath}}
 {{/if}}
 {{#if vcs.workspace}}
 Workspace: {{vcs.workspace}}

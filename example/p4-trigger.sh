@@ -136,6 +136,13 @@ fi
 FILES="$(collect_changed_files)"
 FILES_JSON="$(printf '%s\n' "$FILES" | sed '/^$/d' | json_array_from_lines)"
 
+if [ -z "$SUBMIT_USER" ]; then
+  log "WARNING: submitter user is empty; register the trigger with %user% so IM output can show the changelist author."
+fi
+if [ -z "$SUBMIT_CLIENT" ]; then
+  log "WARNING: submitter client is empty; register the trigger with %client% so IM output can show the submitter workspace instead of omitting it."
+fi
+
 if command -v jq >/dev/null 2>&1; then
   BODY="$(jq -n \
     --arg ch "$CHANGE" \

@@ -658,7 +658,7 @@ function buildBaseTemplateContext(
   authorResolution: AuthorResolutionOptions | undefined,
   targetUrlTemplates: TargetUrlTemplateOptions = {},
 ): Omit<TemplateContext, "problem" | "problems"> {
-  const eventAuthor = reviewEvent?.author?.username ?? reviewEvent?.author?.displayName;
+  const eventAuthor = reviewEvent?.author?.username;
   const eventEmail = reviewEvent?.author?.email;
   const eventDisplayName = reviewEvent?.author?.displayName;
   const eventCtx: { author?: string; email?: string; displayName?: string; url?: string; title?: string } = {};
@@ -715,21 +715,21 @@ function buildBaseTemplateContext(
   };
 }
 
-function buildVcsContext(reviewEvent: ReviewEvent | undefined): { branch?: string; depot?: string; workspace?: string; repositoryPath?: string } {
+function buildVcsContext(reviewEvent: ReviewEvent | undefined): { branch?: string; sourcePath?: string; workspace?: string; repositoryPath?: string } {
   if (!reviewEvent) {
     return {};
   }
 
-  const result: { branch?: string; depot?: string; workspace?: string; repositoryPath?: string } = {};
+  const result: { branch?: string; sourcePath?: string; workspace?: string; repositoryPath?: string } = {};
 
   if (reviewEvent.branch !== undefined) {
     result.branch = reviewEvent.branch;
   }
-  if (reviewEvent.depotPath !== undefined) {
-    result.depot = reviewEvent.depotPath;
+  if (reviewEvent.sourcePath !== undefined) {
+    result.sourcePath = reviewEvent.sourcePath;
   }
-  if (reviewEvent.p4Workspace !== undefined) {
-    result.workspace = reviewEvent.p4Workspace;
+  if (reviewEvent.submitterWorkspace !== undefined) {
+    result.workspace = reviewEvent.submitterWorkspace;
   }
   if (reviewEvent.repoRef !== undefined) {
     result.repositoryPath = reviewEvent.repoRef;
@@ -749,7 +749,7 @@ function createChannelRendering(
 ): {
   readonly mentionText: string;
   readonly renderProblem: (problem: ReviewProblem) => ReviewProblem;
-  readonly renderSummary: (summary: string, problems: readonly ReviewProblem[]) => string;
+  readonly renderSummary: (summary: string, problems: readonly ReviewProblem[], title?: string) => string;
 } {
   const workspaceTemplatesDir = workspaceId
     ? resolve(baseDir, "workspaces", workspaceId, "templates")
@@ -786,10 +786,11 @@ function createChannelRendering(
 
       return { ...problem, renderedMarkdown };
     },
-    renderSummary(summary: string, problems: readonly ReviewProblem[]): string {
+    renderSummary(summary: string, problems: readonly ReviewProblem[], title?: string): string {
       return fixAndValidateMarkdown(resolver.render("summary", {
         ...baseTemplateContext,
         summary,
+        ...(title ? { summaryTitle: title } : {}),
         problems: problems.map((problem) => toTemplateProblem(problem)),
       }));
     },
@@ -980,9 +981,9 @@ export function createOutputPublisherFromConfig(
         return dispatcher.publishProblem(rendering.renderProblem(problem));
       },
       ...(dispatcher.publishSummary ? {
-        async publishSummary(summary: string, problems?: readonly ReviewProblem[]): Promise<DispatchResult> {
+        async publishSummary(summary: string, problems?: readonly ReviewProblem[], options?: ReviewSummaryPublishOptions): Promise<DispatchResult> {
           const renderedProblems = (problems ?? []).map((problem) => rendering.renderProblem(problem));
-          return dispatcher.publishSummary!(rendering.renderSummary(summary, renderedProblems), renderedProblems);
+          return dispatcher.publishSummary!(rendering.renderSummary(summary, renderedProblems, options?.title), renderedProblems);
         },
       } : {}),
     };
@@ -1014,9 +1015,9 @@ export function createOutputPublisherFromConfig(
         return dispatcher.publishProblem(rendering.renderProblem(problem));
       },
       ...(dispatcher.publishSummary ? {
-        async publishSummary(summary: string, problems?: readonly ReviewProblem[]): Promise<DispatchResult> {
+        async publishSummary(summary: string, problems?: readonly ReviewProblem[], options?: ReviewSummaryPublishOptions): Promise<DispatchResult> {
           const renderedProblems = (problems ?? []).map((problem) => rendering.renderProblem(problem));
-          return dispatcher.publishSummary!(rendering.renderSummary(summary, renderedProblems), renderedProblems);
+          return dispatcher.publishSummary!(rendering.renderSummary(summary, renderedProblems, options?.title), renderedProblems);
         },
       } : {}),
     };
@@ -1047,11 +1048,11 @@ export function createOutputPublisherFromConfig(
         problems.push(rendering.renderProblem(problem));
         return { channel: channel.name, status: "published", raw: {} };
       },
-      async publishSummary(summary: string, summaryProblems?: readonly ReviewProblem[]): Promise<DispatchResult> {
+      async publishSummary(summary: string, summaryProblems?: readonly ReviewProblem[], options?: ReviewSummaryPublishOptions): Promise<DispatchResult> {
         const renderedProblems = (summaryProblems ?? problems).map((problem) => rendering.renderProblem(problem));
         return dispatcher.publishAggregatedProblems(
           renderedProblems,
-          rendering.renderSummary(summary, renderedProblems),
+          rendering.renderSummary(summary, renderedProblems, options?.title),
         );
       },
     };
@@ -1115,11 +1116,11 @@ export function createOutputPublisherFromConfig(
       async publishProblem(): Promise<DispatchResult> {
         return { channel: channel.name, status: "published", raw: { collected: true } };
       },
-      async publishSummary(summary: string, summaryProblems?: readonly ReviewProblem[]): Promise<readonly DispatchResult[]> {
+      async publishSummary(summary: string, summaryProblems?: readonly ReviewProblem[], options?: ReviewSummaryPublishOptions): Promise<readonly DispatchResult[]> {
         const renderedProblems = (summaryProblems ?? []).map((problem) => rendering.renderProblem(problem));
         return dispatcher.reconcileProblems(
           renderedProblems,
-          rendering.renderSummary(summary, renderedProblems),
+          rendering.renderSummary(summary, renderedProblems, options?.title),
         );
       },
     };
@@ -1155,9 +1156,9 @@ export function createOutputPublisherFromConfig(
         return dispatcher.publishProblem(rendering.renderProblem(problem));
       },
       ...(dispatcher.publishSummary ? {
-        async publishSummary(summary: string, problems?: readonly ReviewProblem[]): Promise<DispatchResult> {
+        async publishSummary(summary: string, problems?: readonly ReviewProblem[], options?: ReviewSummaryPublishOptions): Promise<DispatchResult> {
           const renderedProblems = (problems ?? []).map((problem) => rendering.renderProblem(problem));
-          return dispatcher.publishSummary!(rendering.renderSummary(summary, renderedProblems), renderedProblems);
+          return dispatcher.publishSummary!(rendering.renderSummary(summary, renderedProblems, options?.title), renderedProblems);
         },
       } : {}),
     };
@@ -1188,11 +1189,11 @@ export function createOutputPublisherFromConfig(
         problems.push(rendering.renderProblem(problem));
         return { channel: channel.name, status: "published", raw: {} };
       },
-      async publishSummary(summary: string, summaryProblems?: readonly ReviewProblem[]): Promise<DispatchResult> {
+      async publishSummary(summary: string, summaryProblems?: readonly ReviewProblem[], options?: ReviewSummaryPublishOptions): Promise<DispatchResult> {
         const renderedProblems = (summaryProblems ?? problems).map((problem) => rendering.renderProblem(problem));
         return dispatcher.publishAggregatedProblems(
           renderedProblems,
-          rendering.renderSummary(summary, renderedProblems),
+          rendering.renderSummary(summary, renderedProblems, options?.title),
         );
       },
     };
@@ -1256,11 +1257,11 @@ export function createOutputPublisherFromConfig(
       async publishProblem(): Promise<DispatchResult> {
         return { channel: channel.name, status: "published", raw: { collected: true } };
       },
-      async publishSummary(summary: string, summaryProblems?: readonly ReviewProblem[]): Promise<readonly DispatchResult[]> {
+      async publishSummary(summary: string, summaryProblems?: readonly ReviewProblem[], options?: ReviewSummaryPublishOptions): Promise<readonly DispatchResult[]> {
         const renderedProblems = (summaryProblems ?? []).map((problem) => rendering.renderProblem(problem));
         return dispatcher.reconcileProblems(
           renderedProblems,
-          rendering.renderSummary(summary, renderedProblems),
+          rendering.renderSummary(summary, renderedProblems, options?.title),
         );
       },
     };
@@ -1290,11 +1291,11 @@ export function createOutputPublisherFromConfig(
         problems.push(rendering.renderProblem(problem));
         return { channel: channel.name, status: "published", raw: {} };
       },
-      async publishSummary(summary: string, summaryProblems?: readonly ReviewProblem[]): Promise<DispatchResult> {
+      async publishSummary(summary: string, summaryProblems?: readonly ReviewProblem[], options?: ReviewSummaryPublishOptions): Promise<DispatchResult> {
         const renderedProblems = (summaryProblems ?? problems).map((problem) => rendering.renderProblem(problem));
         return dispatcher.publishAggregatedProblems(
           renderedProblems,
-          rendering.renderSummary(summary, renderedProblems),
+          rendering.renderSummary(summary, renderedProblems, options?.title),
           rendering.mentionText || undefined,
         );
       },
@@ -1325,11 +1326,11 @@ export function createOutputPublisherFromConfig(
         problems.push(rendering.renderProblem(problem));
         return { channel: channel.name, status: "published", raw: {} };
       },
-      async publishSummary(summary: string, summaryProblems?: readonly ReviewProblem[]): Promise<DispatchResult> {
+      async publishSummary(summary: string, summaryProblems?: readonly ReviewProblem[], options?: ReviewSummaryPublishOptions): Promise<DispatchResult> {
         const renderedProblems = (summaryProblems ?? problems).map((problem) => rendering.renderProblem(problem));
         return dispatcher.publishAggregatedProblems(
           renderedProblems,
-          rendering.renderSummary(summary, renderedProblems),
+          rendering.renderSummary(summary, renderedProblems, options?.title),
           rendering.mentionText || undefined,
         );
       },
