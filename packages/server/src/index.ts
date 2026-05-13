@@ -19,6 +19,7 @@ import {
   verifyWebhookSignature,
 } from "./gitea-webhook.js";
 import {
+  enrichP4ReviewEvent,
   translateP4TriggerToReviewEvent,
   type P4TriggerConfig,
 } from "./p4-webhook.js";
@@ -236,6 +237,8 @@ function registerP4Trigger(
     if (!reviewEvent) {
       return c.json({ accepted: false, reason: "missing_changelist", provider: "p4" }, 400);
     }
+
+    reviewEvent = await enrichP4ReviewEvent(reviewEvent, config);
 
     const decoded = payload;
 
