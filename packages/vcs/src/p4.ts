@@ -415,7 +415,20 @@ export class P4VcsAdapter implements VcsAdapter {
         "-du",
         revision,
       ]);
-      return this.filterDiffToRange(this.parseP4DiffOutput(result.stdout), range.files);
+      const parsed = this.parseP4DiffOutput(result.stdout);
+      const filtered = this.filterDiffToRange(parsed, range.files);
+      if (filtered.files.length === 0 && result.stdout.length > 0) {
+        console.warn(JSON.stringify({
+          level: "warn",
+          msg: "p4 diff parsed empty but stdout was non-empty",
+          revision,
+          stdoutPreview: result.stdout.slice(0, 800).replaceAll("\n", " "),
+          parsedFileCount: parsed.files.length,
+          filterInputFiles: range.files,
+          depot: this.depot,
+        }));
+      }
+      return filtered;
     } catch (error) {
       console.warn(JSON.stringify({
         level: "warn",
