@@ -1,5 +1,9 @@
 import { createReviewEvent, type ReviewEvent } from "@aicr/core";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { z } from "zod";
+
+const execFileAsync = promisify(execFile);
 
 export interface P4TriggerConfig {
   readonly triggerName: string;
@@ -46,6 +50,30 @@ function firstNonEmpty(...values: readonly (string | undefined)[]): string {
   return "";
 }
 
+function buildP4Args(config: P4TriggerConfig): string[] {
+  const args: string[] = [];
+  if (config.port) {
+    args.push("-p", config.port);
+  }
+  if (config.user) {
+    args.push("-u", config.user);
+  }
+  if (config.workspace) {
+    args.push("-c", config.workspace);
+  }
+
+  return args;
+}
+
+function buildP4Env(config: P4TriggerConfig): NodeJS.ProcessEnv {
+  const env = { ...process.env };
+  if (config.password) {
+    env.P4PASSWD = config.password;
+  }
+
+  return env;
+}
+
 export function translateP4TriggerToReviewEvent(
   payload: unknown,
   config: P4TriggerConfig,
@@ -80,4 +108,78 @@ export function translateP4TriggerToReviewEvent(
     sourcePath: depotPath || undefined,
     ...(submitterWorkspace ? { submitterWorkspace } : {}),
   });
+}
+
+export type P4DescribeRunner = (
+  args: readonly string[],
+  env: NodeJS.ProcessEnv,
+) => Promise<{ stdout: string }>;
+
+async function defaultP4DescribeRunner(
+  args: readonly string[],
+  env: NodeJS.ProcessEnv,
+): Promise<{ stdout: string }> {
+  const { stdout } = await execFileAsync("p4", args, {
+    encoding: "utf8",
+    maxBuffer: 10 * 1024 * 1024,
+    env,
+  });
+
+  return { stdout };
+}
+
+export async function enrichP4ReviewEvent(
+  event: ReviewEvent,
+  config: P4TriggerConfig,
+  runner: P4DescribeRunner = defaultP4DescribeRunner,
+): Promise<ReviewEvent> {
+  const needsAuthor = !event.author?.username;
+  const needsWorkspace = event.submitterWorkspace === undefined;
+
+  if (!needsAuthor && !needsWorkspace) {
+    return event;
+  }
+
+  if (!event.headSha) {
+    return event;
+  }
+
+  if (!config.port && !config.user && !config.password && !config.workspace) {
+    return event;
+  }
+
+  const args = [...buildP4Args(config), "describe", "-s", event.headSha];
+
+  try {
+    const { stdout } = await runner(args, buildP4Env(config));
+
+    const firstLine = stdout.split(/\r?\n/u)[0] ?? "";
+    const match = /^Change \d+ by ([^@]+)@(\S+)/u.exec(firstLine);
+
+    if (match) {
+      const username = match[1];
+      const client = match[2];
+
+      if (needsAuthor && username) {
+        event = createReviewEvent({
+          ...event,
+          author: {
+            ...event.author,
+            username,
+          },
+        });
+      }
+
+      if (needsWorkspace && client) {
+        event = createReviewEvent({
+          ...event,
+          submitterWorkspace: client,
+        });
+      }
+    }
+  } catch {
+    // Fallback query failed; keep the original event.
+  }
+
+  return event;
 }
