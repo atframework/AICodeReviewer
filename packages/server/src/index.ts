@@ -12,6 +12,8 @@ import {
   type ReviewProvider,
 } from "@aicr/core";
 import {
+  extractWebhookRepositoryRef,
+  matchesWebhookRepo,
   translateWebhookToReviewEvent,
   type GiteaWebhookConfig,
   verifyWebhookSignature,
@@ -35,11 +37,14 @@ import {
   type ServerReviewOrchestrationOptions,
 } from "./review-orchestrator.js";
 
+type GenericWebhookProvider = "github" | "gitlab";
+type GenericWebhookConfigInput = GiteaWebhookConfig | readonly GiteaWebhookConfig[];
+
 export interface ServerAppOptions {
   readonly gitea?: GiteaWebhookConfig;
   readonly forgejo?: GiteaWebhookConfig;
-  readonly github?: GiteaWebhookConfig;
-  readonly gitlab?: GiteaWebhookConfig;
+  readonly github?: GenericWebhookConfigInput;
+  readonly gitlab?: GenericWebhookConfigInput;
   readonly p4?: P4TriggerConfig;
   readonly reviewPreparation?: ServerReviewPreparationOptions;
   readonly reviewOrchestration?: ServerReviewOrchestrationOptions;
@@ -241,44 +246,103 @@ function registerP4Trigger(
   });
 }
 
+function normalizeGenericWebhookConfigs(
+  config: GenericWebhookConfigInput | undefined,
+): readonly GiteaWebhookConfig[] {
+  if (!config) {
+    return [];
+  }
+
+  if (isGenericWebhookConfigArray(config)) {
+    return config;
+  }
+
+  return [config];
+}
+
+function isGenericWebhookConfigArray(
+  config: GenericWebhookConfigInput,
+): config is readonly GiteaWebhookConfig[] {
+  return Array.isArray(config);
+}
+
+function matchesGenericWebhookCredential(
+  provider: GenericWebhookProvider,
+  payload: string,
+  config: GiteaWebhookConfig,
+  credential: string | undefined,
+): boolean {
+  if (provider === "github") {
+    return verifyWebhookSignature(payload, config.webhookSecret, credential);
+  }
+
+  return !config.webhookSecret || credential === config.webhookSecret;
+}
+
+function selectGenericWebhookConfig(
+  provider: GenericWebhookProvider,
+  payload: string,
+  decoded: unknown,
+  configs: readonly GiteaWebhookConfig[],
+  credential: string | undefined,
+): { readonly config?: GiteaWebhookConfig; readonly reason?: "invalid_signature" | "repository_not_configured" } {
+  const repoRef = decoded === undefined ? undefined : extractWebhookRepositoryRef(provider, decoded);
+
+  if (configs.length > 1 && repoRef) {
+    const repoScopedConfigs = configs.filter((entry) => matchesWebhookRepo(entry, repoRef));
+    if (repoScopedConfigs.length > 0) {
+      const verifiedRepoConfigs = repoScopedConfigs.filter((entry) =>
+        matchesGenericWebhookCredential(provider, payload, entry, credential),
+      );
+      const verifiedRepoConfig = verifiedRepoConfigs[0];
+
+      return verifiedRepoConfig
+        ? { config: verifiedRepoConfig }
+        : { reason: "invalid_signature" };
+    }
+
+    const verifiedConfigs = configs.filter((entry) =>
+      matchesGenericWebhookCredential(provider, payload, entry, credential),
+    );
+    return verifiedConfigs.length > 0
+      ? { reason: "repository_not_configured" }
+      : { reason: "invalid_signature" };
+  }
+
+  const verifiedConfigs = configs.filter((entry) =>
+    matchesGenericWebhookCredential(provider, payload, entry, credential),
+  );
+
+  if (verifiedConfigs.length === 0) {
+    return { reason: "invalid_signature" };
+  }
+
+  const verifiedConfig = verifiedConfigs[0];
+  return verifiedConfig
+    ? { config: verifiedConfig }
+    : { reason: "invalid_signature" };
+}
+
 function registerGenericWebhook(
   app: Hono,
-  provider: "github" | "gitlab",
+  provider: GenericWebhookProvider,
   path: string,
-  config: GiteaWebhookConfig | undefined,
+  config: GenericWebhookConfigInput | undefined,
   reviewPreparationOptions: ServerReviewPreparationOptions | undefined,
   reviewOrchestrationOptions: ServerReviewOrchestrationOptions | undefined,
   issueTriageOptions: IssueTriageRuntimeOptions | undefined,
   asyncTriggers: boolean,
 ): void {
   app.post(path, async (c) => {
-    if (!config) {
+    const configs = normalizeGenericWebhookConfigs(config);
+    if (configs.length === 0) {
       return c.json({ accepted: false, reason: "trigger_not_configured", provider }, 503);
     }
 
     const payload = await c.req.text();
-
-    if (provider === "github") {
-      const signature = c.req.header("x-hub-signature-256") ?? undefined;
-      if (!verifyWebhookSignature(payload, config.webhookSecret, signature)) {
-        return c.json({ accepted: false, reason: "invalid_signature", provider }, 401);
-      }
-    }
-
-    if (provider === "gitlab") {
-      const token = c.req.header("x-gitlab-token") ?? undefined;
-      if (config.webhookSecret && token !== config.webhookSecret) {
-        return c.json({ accepted: false, reason: "invalid_signature", provider }, 401);
-      }
-    }
-
-    const eventName = provider === "github"
-      ? c.req.header("x-github-event")
-      : c.req.header("x-gitlab-event");
-
-    if (!eventName) {
-      return c.json({ accepted: false, reason: "missing_event_name", provider }, 400);
-    }
+    const credential = provider === "github"
+      ? c.req.header("x-hub-signature-256") ?? undefined
+      : c.req.header("x-gitlab-token") ?? undefined;
 
     const decoded: unknown = (() => {
       try {
@@ -288,13 +352,29 @@ function registerGenericWebhook(
       }
     })();
 
+    const selected = selectGenericWebhookConfig(provider, payload, decoded, configs, credential);
+    if (!selected.config) {
+      const status = selected.reason === "repository_not_configured" ? 202 : 401;
+      return c.json({ accepted: false, reason: selected.reason, provider }, status);
+    }
+
+    const webhookConfig = selected.config;
+
+    const eventName = provider === "github"
+      ? c.req.header("x-github-event")
+      : c.req.header("x-gitlab-event");
+
+    if (!eventName) {
+      return c.json({ accepted: false, reason: "missing_event_name", provider }, 400);
+    }
+
     if (decoded === undefined) {
       return c.json({ accepted: false, reason: "invalid_json", provider }, 400);
     }
 
     let reviewEvent;
     try {
-      reviewEvent = translateWebhookToReviewEvent(provider, eventName, decoded, config);
+      reviewEvent = translateWebhookToReviewEvent(provider, eventName, decoded, webhookConfig);
     } catch (error) {
       if (error instanceof ZodError) {
         return c.json(
@@ -760,6 +840,7 @@ export {
   resolveAgentAdapterFromConfig,
   resolveGiteaWebhookConfig,
   resolveGenericWebhookConfig,
+  resolveGenericWebhookConfigs,
   resolveP4TriggerConfig,
   resolveModelSpecFromConfig,
 } from "./bootstrap.js";

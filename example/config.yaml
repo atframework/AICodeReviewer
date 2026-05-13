@@ -145,6 +145,11 @@ triggers:
     #   - "**/*.pb.go"
 
   # -- GitHub webhook trigger --
+  # You can define multiple GitHub triggers on the same /webhooks/github route
+  # when different repositories need different outbound tokens, webhook secrets,
+  # or file filters. When more than one GitHub trigger is configured, AICR
+  # selects the final trigger profile by verified webhook credential and
+  # repository full_name before it creates the ReviewEvent.
   # - name: github
   #   kind: github
   #   base_url: https://github.com            # optional for github.com; set to GHE URL for GitHub Enterprise
@@ -152,8 +157,14 @@ triggers:
   #   webhook_secret_env: AICR_GITHUB_WEBHOOK_SECRET  # inbound: HMAC-SHA256 secret
   #   repos:                                  # optional: map specific repos to workspaces
   #     - { match: "my-org/my-repo", workspace: github-my-repo }
+  # - name: github-partner
+  #   kind: github
+  #   token_env: AICR_GITHUB_PARTNER_TOKEN
+  #   webhook_secret_env: AICR_GITHUB_PARTNER_WEBHOOK_SECRET
 
   # -- GitLab webhook trigger --
+  # GitLab supports the same per-repo profile pattern on /webhooks/gitlab when
+  # different repositories need different token/secret/filter combinations.
   # - name: gitlab
   #   kind: gitlab
   #   base_url: https://gitlab.com
@@ -249,12 +260,14 @@ outputs:
 
     # Gitea managed problem issues — create/close/delete issues per problem fingerprint.
     # Supports: assignees (committer + OWNERS), severity labels, Feishu notifications.
+    # Use issue_mode: consolidated to merge all problems from one review into a single issue.
     #
     # - name: gitea-problem-issues
     #   kind: gitea_problem_issue
     #   trigger: gitea
-    #   marker_prefix: "[AICR]"                  # title prefix for managed issues
+    #   marker_prefix: "[AICR]"                  # title prefix for managed issues; the rest of the title is auto-shortened
     #   marker_label: "aicr-managed"             # hidden marker to identify managed issues
+    #   issue_mode: consolidated                 # consolidated (default) | per_problem
     #   resolved_action: close                   # none | close (default) | delete — action when problem is fixed
     #
     #   # -- Assignee configuration --
@@ -287,12 +300,14 @@ outputs:
 
     # GitHub managed problem issues — create/close issues per problem fingerprint.
     # GitHub does not support deleting issues; resolved_action can only be close or none.
+    # Use issue_mode: consolidated to merge all problems from one review into a single issue.
     #
     # - name: github-problem-issues
     #   kind: github_problem_issue
     #   trigger: github
-    #   marker_prefix: "[AICR]"
+    #   marker_prefix: "[AICR]"                  # title prefix only; managed issue titles stay concise automatically
     #   marker_label: "aicr-managed"
+    #   issue_mode: consolidated                 # consolidated (default) | per_problem
     #   resolved_action: close                   # none | close (GitHub does not support delete)
     #   assign_committer: true
     #   owners_file: "OWNERS"
@@ -437,11 +452,19 @@ workspaces:
     # GitHub workspace — uncomment when github trigger is enabled
     # github-my-repo:
     #   source_repo:
-    #     trigger: github
+    #     trigger: github                      # bind this repo to the matching GitHub trigger profile
     #     repo: "my-org/my-repo"               # owner/repo on GitHub
     #   outputs:
     #     line_comments: [github-pr-review]
     #     summary: [github-pr-review, feishu-code-review, github-problem-issues]
+
+    # github-partner-repo:
+    #   source_repo:
+    #     trigger: github-partner
+    #     repo: "partner-org/partner-repo"
+    #   outputs:
+    #     line_comments: [github-pr-review]
+    #     summary: [github-pr-review, github-problem-issues]
 
 # --- Template overrides ---
 # Built-in templates live in templates/builtin/*.hbs in the deployment directory.

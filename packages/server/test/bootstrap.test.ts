@@ -9,6 +9,7 @@ import type { AppConfig } from "@aicr/core";
 import {
   resolveModelSpecFromConfig,
   resolveGiteaWebhookConfig,
+  resolveGenericWebhookConfigs,
   resolveP4TriggerConfig,
   createOutputPublisherFromConfig,
   createOutputPublisherResolverFromConfig,
@@ -287,6 +288,72 @@ describe("resolveGiteaWebhookConfig", () => {
     const result = resolveGiteaWebhookConfig(config, "t2");
 
     expect(result?.triggerName).toBe("t2");
+  });
+});
+
+describe("resolveGenericWebhookConfigs", () => {
+  it("returns all matching GitHub webhook configs with repo identities", () => {
+    const originalAtframeworkSecret = process.env.GITHUB_ATFRAMEWORK_SECRET;
+    const originalOwentSecret = process.env.GITHUB_OWENT_SECRET;
+    process.env.GITHUB_ATFRAMEWORK_SECRET = "atframework-secret";
+    process.env.GITHUB_OWENT_SECRET = "owent-secret";
+
+    try {
+      const config = makeConfig({
+        triggers: [
+          {
+            name: "github-atframework",
+            kind: "github",
+            webhook_secret_env: "GITHUB_ATFRAMEWORK_SECRET",
+          },
+          {
+            name: "github-owent",
+            kind: "github",
+            webhook_secret_env: "GITHUB_OWENT_SECRET",
+          },
+        ],
+        workspaces: {
+          cache: { max_total_gb: 50, eviction: "lru", ttl_days: 30 },
+          defaults: {},
+          instances: {
+            "github-atsf4g-co": {
+              source_repo: { trigger: "github-atframework", repo: "atframework/atsf4g-co" },
+            },
+            "github-libatapp": {
+              source_repo: { trigger: "github-owent", repo: "owent/libatapp" },
+            },
+          },
+        },
+      } as Partial<AppConfig>);
+
+      const result = resolveGenericWebhookConfigs(config, "github");
+
+      expect(result).toMatchObject([
+        {
+          triggerName: "github-atframework",
+          workspaceId: "github-atsf4g-co",
+          repoRef: "atframework/atsf4g-co",
+          webhookSecret: "atframework-secret",
+        },
+        {
+          triggerName: "github-owent",
+          workspaceId: "github-libatapp",
+          repoRef: "owent/libatapp",
+          webhookSecret: "owent-secret",
+        },
+      ]);
+    } finally {
+      if (originalAtframeworkSecret === undefined) {
+        delete process.env.GITHUB_ATFRAMEWORK_SECRET;
+      } else {
+        process.env.GITHUB_ATFRAMEWORK_SECRET = originalAtframeworkSecret;
+      }
+      if (originalOwentSecret === undefined) {
+        delete process.env.GITHUB_OWENT_SECRET;
+      } else {
+        process.env.GITHUB_OWENT_SECRET = originalOwentSecret;
+      }
+    }
   });
 });
 
@@ -647,14 +714,20 @@ describe("createOutputPublisherFromConfig", () => {
         message: "Issue.",
       });
 
-      const results = await publisher!.publishSummary("Review summary", [
-        { file: "src/app.ts", line: 7, severity: "high", category: "correctness", message: "Issue." },
-      ]);
+      const results = await publisher!.publishSummary(
+        "Review summary",
+        [{ file: "src/app.ts", line: 7, severity: "high", category: "correctness", message: "Issue." }],
+        { title: "Focused summary title" },
+      );
 
       expect(Array.isArray(results)).toBe(true);
       const issueCall = calls.find((c) => c.url.endsWith("/repos/my-org/my-repo/issues") && c.init?.method === "POST");
       expect(issueCall).toBeDefined();
       expect(issueCall?.init.headers).toMatchObject({ authorization: "Bearer gh-problem-token" });
+      const body = JSON.parse(issueCall?.init.body ?? "{}");
+      expect(body.title).toBe("[AICR] [HIGH] 1 problem");
+      expect(body.title).not.toContain("Focused summary title");
+      expect(body.body).toContain("Focused summary title");
       expect(calls[0]?.url).toBe("https://api.github.com/repos/my-org/my-repo/issues?state=open&sort=updated&direction=desc&per_page=20&page=1");
     } finally {
       vi.unstubAllGlobals();
@@ -782,16 +855,20 @@ describe("createOutputPublisherFromConfig", () => {
       expect(publisher).toBeDefined();
       expect(publisher?.publishesProblems).toBe(false);
       expect(publisher?.publishEmptySummary).toBe(true);
-      const results = await publisher?.publishSummary?.("", [
-        { file: "src/app.ts", line: 3, severity: "high", category: "security", message: "Issue." },
-      ]);
+      const results = await publisher?.publishSummary?.(
+        "",
+        [{ file: "src/app.ts", line: 3, severity: "high", category: "security", message: "Issue." }],
+        { title: "Focused summary title" },
+      );
 
       expect(Array.isArray(results)).toBe(true);
       expect(calls[0]?.url).toBe("https://gitea.example.com/api/v1/repos/owent/example/issues?state=open&type=issues&limit=20&page=1");
       expect(calls[1]?.url).toBe("https://gitea.example.com/api/v1/repos/owent/example/issues");
       expect(calls[1]?.init.headers).toMatchObject({ authorization: "token resolver-token" });
       const body = JSON.parse(calls[1]?.init.body ?? "{}");
-      expect(body.title).toBe("[AICR Managed] [HIGH] Issue (src/app.ts:3)");
+      expect(body.title).toBe("[AICR Managed] [HIGH] 1 problem");
+      expect(body.title).not.toContain("Focused summary title");
+      expect(body.body).toContain("Focused summary title");
       expect(body.title).not.toContain(" - ");
       expect(body.body).toContain("<!-- aicr:managed=problem-issue -->");
     } finally {
@@ -1538,6 +1615,56 @@ describe("bootstrapServerApp", () => {
         delete process.env.GITEA_SECRET;
       } else {
         process.env.GITEA_SECRET = originalSecret;
+      }
+    }
+  });
+
+  it("exposes multiple GitHub webhook configs when several GitHub triggers are configured", async () => {
+    const originalKey = process.env.OPENAI_API_KEY;
+    process.env.OPENAI_API_KEY = "test-key";
+    try {
+      const config = makeConfig({
+        triggers: [
+          { name: "github-atframework", kind: "github" },
+          { name: "github-owent", kind: "github" },
+        ],
+        workspaces: {
+          cache: { max_total_gb: 50, eviction: "lru", ttl_days: 30 },
+          defaults: {},
+          instances: {
+            "github-atsf4g-co": {
+              source_repo: { trigger: "github-atframework", repo: "atframework/atsf4g-co" },
+            },
+            "github-libatapp": {
+              source_repo: { trigger: "github-owent", repo: "owent/libatapp" },
+            },
+          },
+        },
+      } as Partial<AppConfig>);
+
+      const result = await bootstrapServerApp({
+        config,
+        baseSystemPrompt: "test",
+      });
+
+      expect(Array.isArray(result.github)).toBe(true);
+      expect(result.github).toMatchObject([
+        {
+          triggerName: "github-atframework",
+          workspaceId: "github-atsf4g-co",
+          repoRef: "atframework/atsf4g-co",
+        },
+        {
+          triggerName: "github-owent",
+          workspaceId: "github-libatapp",
+          repoRef: "owent/libatapp",
+        },
+      ]);
+    } finally {
+      if (originalKey === undefined) {
+        delete process.env.OPENAI_API_KEY;
+      } else {
+        process.env.OPENAI_API_KEY = originalKey;
       }
     }
   });

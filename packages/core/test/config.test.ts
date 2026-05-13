@@ -1395,6 +1395,25 @@ describe("problem issue output config", () => {
       resolved_action: "close",
     });
   });
+
+  it("accepts issue_mode for consolidated problem issue creation", () => {
+    const result = appConfigSchema.parse({
+      outputs: {
+        channels: [
+          {
+            name: "gitea-problem-issues",
+            kind: "gitea_problem_issue",
+            issue_mode: "consolidated",
+            resolved_action: "close",
+          },
+        ],
+      },
+    });
+
+    expect(result.outputs.channels[0]).toMatchObject({
+      issue_mode: "consolidated",
+    });
+  });
 });
 
 describe("triage config", () => {

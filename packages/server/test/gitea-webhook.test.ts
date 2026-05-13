@@ -12,8 +12,12 @@ import { createServerApp } from "../src/index.js";
 
 const webhookSecret = "top-secret";
 
+function signWithSecret(payload: string, secret: string): string {
+  return createHmac("sha256", secret).update(payload).digest("hex");
+}
+
 function sign(payload: string): string {
-  return createHmac("sha256", webhookSecret).update(payload).digest("hex");
+  return signWithSecret(payload, webhookSecret);
 }
 
 async function writeWorkspaceFile(rootDir: string, relativePath: string, content: string): Promise<void> {
@@ -528,6 +532,150 @@ describe("createServerApp", () => {
       headSha: "head-sha",
       reason: "github:opened",
     });
+  });
+
+  it("selects the matching GitHub trigger config by repository", async () => {
+    const atframeworkSecret = "github-atframework-secret";
+    const owentSecret = "github-owent-secret";
+    const app = createServerApp({
+      github: [
+        {
+          triggerName: "github-atframework",
+          workspaceId: "github-atsf4g-co",
+          webhookSecret: atframeworkSecret,
+          repoRef: "atframework/atsf4g-co",
+        },
+        {
+          triggerName: "github-owent",
+          workspaceId: "github-libatapp",
+          webhookSecret: owentSecret,
+          repoRef: "owent/libatapp",
+        },
+      ],
+    });
+    const payload = JSON.stringify({
+      action: "opened",
+      repository: {
+        full_name: "owent/libatapp",
+      },
+      sender: {
+        login: "owent",
+      },
+      pull_request: {
+        html_url: "https://github.com/owent/libatapp/pull/7",
+        base: { sha: "base-sha" },
+        head: { sha: "head-sha" },
+      },
+    });
+
+    const response = await app.request("/webhooks/github", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-github-event": "pull_request",
+        "x-hub-signature-256": `sha256=${signWithSecret(payload, owentSecret)}`,
+      },
+      body: payload,
+    });
+    const body = (await response.json()) as {
+      accepted: boolean;
+      reviewEvent?: { triggerName?: string; workspaceId?: string; repoRef?: string };
+    };
+
+    expect(response.status).toBe(202);
+    expect(body.accepted).toBe(true);
+    expect(body.reviewEvent).toMatchObject({
+      triggerName: "github-owent",
+      workspaceId: "github-libatapp",
+      repoRef: "owent/libatapp",
+    });
+  });
+
+  it("rejects a matched GitHub repository when its trigger signature is invalid", async () => {
+    const matchedSecret = "github-owent-secret";
+    const app = createServerApp({
+      github: [
+        {
+          triggerName: "github-default",
+          workspaceId: "github-default",
+        },
+        {
+          triggerName: "github-owent",
+          workspaceId: "github-libatapp",
+          webhookSecret: matchedSecret,
+          repoRef: "owent/libatapp",
+        },
+      ],
+    });
+    const payload = JSON.stringify({
+      action: "opened",
+      repository: {
+        full_name: "owent/libatapp",
+      },
+      pull_request: {
+        base: { sha: "base-sha" },
+        head: { sha: "head-sha" },
+      },
+    });
+
+    const response = await app.request("/webhooks/github", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-github-event": "pull_request",
+      },
+      body: payload,
+    });
+    const body = (await response.json()) as { accepted: boolean; reason?: string };
+
+    expect(response.status).toBe(401);
+    expect(body.accepted).toBe(false);
+    expect(body.reason).toBe("invalid_signature");
+  });
+
+  it("returns repository_not_configured for a verified GitHub repo without a matching trigger", async () => {
+    const sharedSecret = "shared-github-secret";
+    const app = createServerApp({
+      github: [
+        {
+          triggerName: "github-atframework",
+          workspaceId: "github-atsf4g-co",
+          webhookSecret: sharedSecret,
+          repoRef: "atframework/atsf4g-co",
+        },
+        {
+          triggerName: "github-owent",
+          workspaceId: "github-libatapp",
+          webhookSecret: sharedSecret,
+          repoRef: "owent/libatapp",
+        },
+      ],
+    });
+    const payload = JSON.stringify({
+      action: "opened",
+      repository: {
+        full_name: "someone/else",
+      },
+      pull_request: {
+        base: { sha: "base-sha" },
+        head: { sha: "head-sha" },
+      },
+    });
+
+    const response = await app.request("/webhooks/github", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-github-event": "pull_request",
+        "x-hub-signature-256": `sha256=${signWithSecret(payload, sharedSecret)}`,
+      },
+      body: payload,
+    });
+    const body = (await response.json()) as { accepted: boolean; reason?: string };
+
+    expect(response.status).toBe(202);
+    expect(body.accepted).toBe(false);
+    expect(body.reason).toBe("repository_not_configured");
   });
 
   it("rejects a GitHub webhook when the signature is invalid", async () => {

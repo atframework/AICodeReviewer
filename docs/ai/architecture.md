@@ -39,6 +39,7 @@
 - 入站面包含：`/webhooks/*`、`/triggers/*`、手工触发、定时触发。
 - 所有入口都应收敛到统一 `ReviewEvent`，避免在公共模块暴露平台私有字段名。
 - 触发器需要在**鉴权/签名校验通过后**再创建 run。
+- GitHub / GitLab 这类共享 webhook 路由允许挂多个同类 trigger profile；服务端需要先按请求凭据确认候选 trigger，再按仓库标识选择最终 profile，避免把不同仓库的 secret、token 或过滤规则混用。
 - 当开启 async 语义时，入口应尽快返回 `202` 与 `runId`，后台完成 review。
 - `ReviewEvent` 要覆盖提交者、目标、仓库映射、变更集、workspace 等最小稳定字段。
 - P4 trigger 只负责最小 metadata POST；服务端负责拉取和补足 diff/describe。
@@ -210,6 +211,12 @@
 - managed problem issue 的创建、关闭与清理属于输出层职责。
 - 最近问题列表受 `review.problem_issue.max_recent_issues` 控制。
 - 零 problem 正常 review 的抑制逻辑，不能误伤错误报告、告警或生命周期回收。
+- 支持 `issue_mode` 控制创建策略：
+-  - `consolidated`（默认）：一次分析的所有问题合并为一个 issue，基于 scope fingerprint（channel + repo）做生命周期管理。每次审查更新已有 issue 内容；零问题时按 `resolved_action` 关闭或删除。
+-  - `per_problem`：每个问题创建独立 issue，基于 fingerprint 做生命周期管理。
+- consolidated 模式下 labels 使用最高严重级别，assignees 汇总所有关联负责人。
+- managed issue 标题由输出层生成，优先保持单行可读：`per_problem` 使用严重级别 + 缩短位置 + 简短摘要；`consolidated` 使用严重级别 + 问题数量。
+- `aicr.publish_summary.title` 只影响 issue body 里的 summary heading，不直接控制 managed issue 标题。
 
 ### 3.10 配置体系
 
@@ -219,6 +226,7 @@
   - `workspaces.defaults`
   - `workspaces.instances.<id>`
 - workspace 配置文件不能写系统级字段。
+- 当多个 GitHub / GitLab trigger 共用同一路由时，`workspaces.instances.<id>.source_repo.trigger` 必须显式绑定到对应 trigger profile；不同 repo 需要独立 token / webhook secret / 文件过滤规则时，不应复用同一个 trigger 名称。
 - 需要长期保持覆盖完整性的关键配置包括：
   - `compression`
   - `llm.fallback_chain`

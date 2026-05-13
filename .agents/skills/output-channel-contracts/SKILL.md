@@ -61,9 +61,23 @@ Do not use this skill for LLM prompt layering, agent runtime materialization, or
 - Long messages are truncated to 500 chars and suggestions to 300 chars with a `...` suffix to stay within platform card/message size limits.
 - The truncation helper is internal; do not expose truncation length as user-configurable fields without updating tests and docs.
 
+## Managed problem issue lifecycle
+
+- `gitea_problem_issue` and `github_problem_issue` channels support `issue_mode` to control creation strategy:
+  - `consolidated` (default): all problems from one review run are merged into a single issue, scope-fingerprint-based reconciliation. The scope fingerprint is derived from `channel + owner + repo`.
+  - `per_problem`: one issue per problem, fingerprint-based reconciliation.
+- In consolidated mode:
+  - Title stays concise (e.g., `[AICR] [CRITICAL] 3 problems`).
+  - Body groups problems by severity (critical → info).
+  - Labels use highest severity. Assignees are aggregated across all problems.
+  - On re-analysis: existing consolidated issue is updated (PATCH). If no problems: closed/deleted per `resolved_action`.
+- `aicr.publish_summary.title` affects the rendered summary section in the issue body, not the managed issue title itself.
+- `gitea_problem_issue` applies auto_tag and reviewed_tag at issue creation time via `body.labels`.
+
 ## Pitfalls
 
 - Do not conflate `review.skip_lgtm` with output routing; the former guides review behavior, the latter decides dispatch per channel.
 - Do not use a single composite `publishEmptySummary` boolean when different channels have different policies.
 - Do not expose provider-specific URL assumptions in generic templates; derive target links before rendering.
 - Do not publish empty Feishu/WeCom/email notifications unless the effective channel policy explicitly allows it.
+- When switching between `per_problem` and `consolidated` modes, stale issues from the previous mode will be cleaned up during the next reconciliation cycle.
