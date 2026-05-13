@@ -22,12 +22,15 @@ const sampleProblem = {
 	category: "correctness",
 	message: "Bug found.",
 	suggestion: "Fix it.",
+	codeSnippet: "if (!ready) {\n\treturn;\n}",
+	codeLanguage: "ts",
 	fingerprint: "fp-1",
 };
 
 const sampleContext: TemplateContext = {
 	event: {
 		author: "dev",
+		displayName: "Developer",
 		url: "https://gitea.example/owent/example/pulls/1",
 		title: "Add feature",
 	},
@@ -43,9 +46,10 @@ const sampleContext: TemplateContext = {
 		fullName: "owent/example",
 	},
 	run: { id: "run-abc" },
-	atMentions: "@dev @reviewer",
+	atMentions: "@dev (Developer)",
 	problems: [toTemplateProblem(sampleProblem)],
 	summary: "Overall the PR looks good with one problem.",
+	summaryTitle: "Focused review summary",
 };
 
 describe("toTemplateProblem", () => {
@@ -56,6 +60,9 @@ describe("toTemplateProblem", () => {
 		expect(result.location).toBe("src/app.ts:42");
 		expect(result.fingerprint).toBe("fp-1");
 		expect(result.suggestion).toBe("Fix it.");
+		expect(result.codeLanguage).toBe("ts");
+		expect(result.codeFence).toContain("```ts");
+		expect(result.codeFence).toContain("if (!ready)");
 	});
 
 	it("renders range location when endLine is present", () => {
@@ -186,9 +193,11 @@ describe("renderBuiltinTemplate", () => {
 		const result = renderBuiltinTemplate("gitea_pr_review", "summary", sampleContext);
 
 		expect(result).toContain("AI Code Review Summary");
+		expect(result).toContain("Focused review summary");
 		expect(result).toContain("Add feature");
 		expect(result).toContain("**Target**: [Add feature](https://gitea.example/owent/example/pulls/1)");
-		expect(result).toContain("@dev @reviewer");
+		expect(result).toContain("**Author**: @dev (Developer)");
+		expect(result).toContain("**Reviewers**: @dev (Developer)");
 		expect(result).toContain("Bug found.");
 		expect(result).toContain("run-abc");
 		expect(result).toContain("1");
@@ -205,6 +214,8 @@ describe("renderBuiltinTemplate", () => {
 		expect(result).toContain("Bug found.");
 		expect(result).toContain("Suggested fix:");
 		expect(result).toContain("Fix it.");
+		expect(result).toContain("Referenced code");
+		expect(result).toContain("```ts");
 		expect(result).toContain("aicr:fingerprint=fp-1");
 	});
 
@@ -212,15 +223,21 @@ describe("renderBuiltinTemplate", () => {
 		const result = renderBuiltinTemplate("gitea_issue", "summary", sampleContext);
 
 		expect(result).toContain("AI Code Review Report");
+		expect(result).toContain("Focused review summary");
+		expect(result).toContain("**Author**: @dev (Developer)");
 		expect(result).toContain("[HIGH]");
 		expect(result).toContain("correctness");
 		expect(result).toContain("`src/app.ts:42`");
+		expect(result).toContain("Referenced code");
+		expect(result).toContain("if (!ready)");
 	});
 
 	it("renders feishu_bot summary", () => {
 		const result = renderBuiltinTemplate("feishu_bot", "summary", sampleContext);
 
+		expect(result).toContain("Focused review summary");
 		expect(result).toContain("Add feature");
+		expect(result).toContain("**Author**: @dev (Developer)");
 		expect(result).toContain("https://gitea.example/owent/example/pulls/1");
 		expect(result).toContain("Overall the PR looks good with one problem.");
 	});
@@ -264,7 +281,8 @@ describe("renderBuiltinTemplate", () => {
 	it("renders wecom_bot summary", () => {
 		const result = renderBuiltinTemplate("wecom_bot", "summary", sampleContext);
 
-		expect(result).toContain("Add feature");
+		expect(result).toContain("Focused review summary");
+		expect(result).toContain("Author: @dev (Developer)");
 		expect(result).toContain("https://gitea.example/owent/example/pulls/1");
 		expect(result).toContain("Overall the PR looks good with one problem.");
 	});
@@ -299,7 +317,7 @@ describe("renderBuiltinTemplate", () => {
 
 	it("renders VCS context fields", () => {
 		const ctx: TemplateContext = {
-			vcs: { branch: "feature/x", depot: "//depot/main", workspace: "ws-client-1" },
+			vcs: { branch: "feature/x", sourcePath: "//depot/main", workspace: "ws-client-1" },
 		};
 		const result = renderBuiltinTemplate("gitea_pr_review", "summary", ctx);
 
@@ -310,7 +328,7 @@ describe("renderBuiltinTemplate", () => {
 
 	it("renders VCS context in IM templates", () => {
 		const ctx: TemplateContext = {
-			vcs: { branch: "main", depot: "//Prx/Prx_Main" },
+			vcs: { branch: "main", sourcePath: "//Prx/Prx_Main" },
 			problems: [toTemplateProblem(sampleProblem)],
 		};
 		const feishuResult = renderBuiltinTemplate("feishu_bot", "summary", ctx);
@@ -326,7 +344,7 @@ describe("renderBuiltinTemplate", () => {
 		const result = renderBuiltinTemplate("feishu_bot", "summary", ctx);
 
 		expect(result).not.toContain("Branch:");
-		expect(result).not.toContain("Depot:");
+		expect(result).not.toContain("Source:");
 		expect(result).not.toContain("Workspace:");
 	});
 });

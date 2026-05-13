@@ -30,6 +30,7 @@ import {
   type AicrOutputToolName,
   type AicrOutputState,
   type FetchMoreContextInput,
+  type PublishSummaryInput,
   type ReportProblemInput,
 } from "@aicr/mcp-output";
 import {
@@ -64,6 +65,7 @@ export interface ReviewOutputPublisher {
 
 export interface ReviewSummaryPublishOptions {
   readonly bypassNoProblemsPolicy?: boolean;
+  readonly title?: string;
 }
 
 export type ReviewOutputPublisherResolver = (
@@ -198,7 +200,10 @@ export function formatParsedDiffForPrompt(diff: ParsedDiff | undefined): string 
     return "Diff: (not available)";
   }
 
-  const lines: string[] = ["Diff:"];
+  const lines: string[] = [
+    "Diff:",
+    "Legend: +N lines are current/new code, plain N lines are current context, and -N lines are deleted old code that is not present after the change. Do not report problems that exist only on -N deleted lines.",
+  ];
   for (const file of diff.files) {
     lines.push(`- ${file.status}: ${formatFilePath(file)}`);
     for (const hunk of file.hunks) {
@@ -208,7 +213,7 @@ export function formatParsedDiffForPrompt(diff: ParsedDiff | undefined): string 
         if (line.kind === "add") {
           lines.push(`  +${line.newLine ?? "?"}: ${line.content}`);
         } else if (line.kind === "delete") {
-          lines.push(`  -${line.oldLine ?? "?"}: ${line.content}`);
+          lines.push(`  -${line.oldLine ?? "?"}: ${line.content}  [deleted old code; not current]`);
         } else if (line.kind === "context") {
           lines.push(`   ${line.newLine ?? line.oldLine ?? "?"}: ${line.content}`);
         }
@@ -226,9 +231,10 @@ function buildJsonToolContract(): string {
     "Do not return only aicr.fetch_more_context; after any context request you must return a final review result.",
     "Never call aicr.fetch_more_context with an empty path; path must be one of the changed files listed in this task.",
     "For push/commit/change-commit events, include aicr.publish_summary even when there are no actionable problems so notification channels receive the analysis result.",
+    "When useful, add a short title to aicr.publish_summary input.title so summary channels can render a concise heading.",
     "Preferred shape:",
     '{"toolCalls":[{"name":"aicr.report_problem","input":{"file":"src/file.ts","line":1,"severity":"medium","category":"correctness","message":"..."}}],"notes":"optional"}',
-    '{"toolCalls":[{"name":"aicr.publish_summary","input":{"markdown":"Review completed; no actionable problems."}}]}',
+    '{"toolCalls":[{"name":"aicr.publish_summary","input":{"title":"未发现阻塞问题","markdown":"Review completed; no actionable problems."}}]}',
     "Alternatively use problems/summary/skipReason fields; AICR will translate them into tool calls.",
   ].join("\n");
 }
@@ -609,7 +615,13 @@ function parseToolCalls(content: string): ToolCallEnvelope[] {
   if (typeof payload.summary === "string" && payload.summary.trim()) {
     calls.push({ name: "aicr.publish_summary", input: { markdown: payload.summary } });
   } else if (isPlainObject(payload.summary) && typeof payload.summary.markdown === "string" && payload.summary.markdown.trim()) {
-    calls.push({ name: "aicr.publish_summary", input: { markdown: payload.summary.markdown } });
+    calls.push({
+      name: "aicr.publish_summary",
+      input: {
+        markdown: payload.summary.markdown,
+        ...("title" in payload.summary ? { title: payload.summary.title } : {}),
+      },
+    });
   }
 
   if (typeof payload.skipReason === "string" && payload.skipReason.trim()) {
@@ -804,6 +816,105 @@ function isLineCommentableInDiff(problem: ReviewProblem, diff: ParsedDiff | unde
       ),
     ),
   );
+}
+
+const CODE_REFERENCE_CONTEXT_LINES = 2;
+const CODE_REFERENCE_MAX_LINES = 12;
+const CODE_REFERENCE_MAX_CHARS = 2000;
+
+function inferCodeFenceLanguage(filePath: string): string {
+  const lower = filePath.toLowerCase();
+  if (lower.endsWith(".ts") || lower.endsWith(".tsx")) return "ts";
+  if (lower.endsWith(".js") || lower.endsWith(".jsx") || lower.endsWith(".mjs") || lower.endsWith(".cjs")) return "js";
+  if (lower.endsWith(".json") || lower.endsWith(".jsonc")) return "json";
+  if (lower.endsWith(".md") || lower.endsWith(".markdown")) return "md";
+  if (lower.endsWith(".py")) return "py";
+  if (lower.endsWith(".go")) return "go";
+  if (lower.endsWith(".rs")) return "rs";
+  if (lower.endsWith(".java")) return "java";
+  if (lower.endsWith(".kt") || lower.endsWith(".kts")) return "kotlin";
+  if (lower.endsWith(".c")) return "c";
+  if (lower.endsWith(".cc") || lower.endsWith(".cpp") || lower.endsWith(".cxx") || lower.endsWith(".hpp") || lower.endsWith(".hh") || lower.endsWith(".hxx")) return "cpp";
+  if (lower.endsWith(".h")) return "c";
+  if (lower.endsWith(".cs")) return "csharp";
+  if (lower.endsWith(".php")) return "php";
+  if (lower.endsWith(".rb")) return "ruby";
+  if (lower.endsWith(".sh") || lower.endsWith(".bash")) return "bash";
+  if (lower.endsWith(".ps1")) return "powershell";
+  if (lower.endsWith(".yml") || lower.endsWith(".yaml")) return "yaml";
+  if (lower.endsWith(".xml")) return "xml";
+  if (lower.endsWith(".html") || lower.endsWith(".htm")) return "html";
+  if (lower.endsWith(".css")) return "css";
+  if (lower.endsWith(".sql")) return "sql";
+  return "text";
+}
+
+function buildCodeReferenceSnippet(problem: ReviewProblem, diff: ParsedDiff | undefined): string | undefined {
+  if (!diff) {
+    return undefined;
+  }
+
+  const matchingFiles = diff.files.filter((file) => pathMatchesDiffFile(problem.file, file));
+  const targetStart = Math.min(problem.line, problem.endLine ?? problem.line);
+  const targetEnd = Math.max(problem.line, problem.endLine ?? problem.line);
+  const windowStart = Math.max(1, targetStart - CODE_REFERENCE_CONTEXT_LINES);
+  const windowEnd = targetEnd + CODE_REFERENCE_CONTEXT_LINES;
+
+  for (const file of matchingFiles) {
+    for (const hunk of file.hunks) {
+      const sourceLines = hunk.lines.filter((line) => line.kind !== "delete" && line.newLine !== undefined);
+      const overlapsTarget = sourceLines.some((line) => line.newLine! >= targetStart && line.newLine! <= targetEnd);
+      if (!overlapsTarget) {
+        continue;
+      }
+
+      const selectedLines = sourceLines
+        .filter((line) => line.newLine! >= windowStart && line.newLine! <= windowEnd)
+        .slice(0, CODE_REFERENCE_MAX_LINES)
+        .map((line) => line.content);
+      const snippet = selectedLines.join("\n").replace(/\s+$/u, "");
+      if (!snippet) {
+        continue;
+      }
+
+      return snippet.length > CODE_REFERENCE_MAX_CHARS
+        ? `${snippet.slice(0, CODE_REFERENCE_MAX_CHARS).replace(/\s+$/u, "")}\n...`
+        : snippet;
+    }
+  }
+
+  return undefined;
+}
+
+function withCodeReference(problem: ReviewProblem, diff: ParsedDiff | undefined): ReviewProblem {
+  if (problem.codeSnippet) {
+    return problem;
+  }
+
+  const codeSnippet = buildCodeReferenceSnippet(problem, diff);
+  return codeSnippet
+    ? { ...problem, codeSnippet, codeLanguage: inferCodeFenceLanguage(problem.file) }
+    : problem;
+}
+
+function withRenderedProblemContent(
+  problem: ReviewProblem,
+  message: string,
+  suggestion: string | undefined,
+  codeSnippet: string | undefined,
+): ReviewProblem {
+  return {
+    file: problem.file,
+    line: problem.line,
+    ...(problem.endLine !== undefined ? { endLine: problem.endLine } : {}),
+    ...(problem.lineCommentAllowed !== undefined ? { lineCommentAllowed: problem.lineCommentAllowed } : {}),
+    severity: problem.severity,
+    category: problem.category,
+    message,
+    ...(suggestion ? { suggestion } : {}),
+    ...(codeSnippet ? { codeSnippet, codeLanguage: problem.codeLanguage ?? inferCodeFenceLanguage(problem.file) } : {}),
+    ...(problem.fingerprint ? { fingerprint: problem.fingerprint } : {}),
+  };
 }
 
 function publishesProblems(publisher: ReviewOutputPublisher): boolean {
@@ -1037,7 +1148,7 @@ export async function runReviewOrchestration(
             : undefined
         );
     const mentionChannelKind = options.channelKind as MentionChannelKind | undefined;
-    const eventAuthor = context.reviewEvent.author?.username ?? context.reviewEvent.author?.displayName;
+    const eventAuthor = context.reviewEvent.author?.username;
     const eventEmail = context.reviewEvent.author?.email;
     const eventDisplayName = context.reviewEvent.author?.displayName;
     const eventCtx: { author?: string; email?: string; displayName?: string; url?: string; title?: string } = {};
@@ -1086,39 +1197,48 @@ export async function runReviewOrchestration(
     for (const reportedProblem of outputState.problems) {
       const rawReviewProblem = toReviewProblem(reportedProblem);
       const lineCommentable = isLineCommentableInDiff(rawReviewProblem, diff);
-      const reviewProblem: ReviewProblem = lineCommentable === false
+      const anchoredProblem: ReviewProblem = lineCommentable === false
         ? { ...rawReviewProblem, lineCommentAllowed: false }
         : rawReviewProblem;
+      const reviewProblem = withCodeReference(anchoredProblem, diff);
       let renderedMessage: string;
       let renderedSuggestion: string | undefined;
+      let renderedCodeSnippet: string | undefined;
       if (enableScrub) {
         const scrubbedMsg = scrubText(reviewProblem.message);
         const scrubbedSuggestion = reviewProblem.suggestion ? scrubText(reviewProblem.suggestion) : undefined;
+        const scrubbedCodeSnippet = reviewProblem.codeSnippet ? scrubText(reviewProblem.codeSnippet) : undefined;
         allScrubMatches.push(...scrubbedMsg.matches);
         if (scrubbedSuggestion) {
           allScrubMatches.push(...scrubbedSuggestion.matches);
         }
+        if (scrubbedCodeSnippet) {
+          allScrubMatches.push(...scrubbedCodeSnippet.matches);
+        }
         renderedMessage = fixAndValidateMarkdown(scrubbedMsg.text);
         renderedSuggestion = scrubbedSuggestion ? fixAndValidateMarkdown(scrubbedSuggestion.text) : undefined;
+        renderedCodeSnippet = scrubbedCodeSnippet?.text;
       } else {
         renderedMessage = fixAndValidateMarkdown(reviewProblem.message);
         renderedSuggestion = reviewProblem.suggestion ? fixAndValidateMarkdown(reviewProblem.suggestion) : undefined;
+        renderedCodeSnippet = reviewProblem.codeSnippet;
       }
+
+      const renderedProblemContent = withRenderedProblemContent(
+        reviewProblem,
+        renderedMessage,
+        renderedSuggestion,
+        renderedCodeSnippet,
+      );
 
       if (resolver) {
         const templateCtx: TemplateContext = {
           ...baseTemplateContext,
-          problem: toTemplateProblem({
-            ...reviewProblem,
-            message: renderedMessage,
-            ...(renderedSuggestion ? { suggestion: renderedSuggestion } : {}),
-          }),
+          problem: toTemplateProblem(renderedProblemContent),
         };
         const renderedMarkdown = fixAndValidateMarkdown(resolver.render("problem", templateCtx));
         const preparedProblem: ReviewProblem = {
-          ...reviewProblem,
-          message: renderedMessage,
-          ...(renderedSuggestion ? { suggestion: renderedSuggestion } : {}),
+          ...renderedProblemContent,
           renderedMarkdown,
         };
         reviewProblems.push(preparedProblem);
@@ -1128,11 +1248,7 @@ export async function runReviewOrchestration(
         continue;
       }
 
-      const preparedProblem: ReviewProblem = {
-        ...reviewProblem,
-        message: renderedMessage,
-        ...(renderedSuggestion ? { suggestion: renderedSuggestion } : {}),
-      };
+      const preparedProblem: ReviewProblem = renderedProblemContent;
       reviewProblems.push(preparedProblem);
       if (publishesProblems(outputPublisher)) {
         appendDispatchResults(dispatchResults, await publishProblem(outputPublisher, preparedProblem));
@@ -1143,17 +1259,33 @@ export async function runReviewOrchestration(
       const suppressNoProblemsSummary = reviewProblems.length === 0
         && outputPublisher.noProblemsAction === "suppress";
       if (!suppressNoProblemsSummary) {
-        const summariesToPublish = outputState.summaries.length > 0
+        const summariesToPublish: readonly PublishSummaryInput[] = outputState.summaries.length > 0
           ? outputState.summaries
           : reviewProblems.length > 0 || outputPublisher.publishEmptySummary
-            ? [""]
+            ? [{ markdown: "" }]
             : [];
-        for (const summary of summariesToPublish) {
-          let renderedSummary = enableScrub ? fixAndValidateMarkdown(scrubText(summary).text) : fixAndValidateMarkdown(summary);
+        for (const summaryEntry of summariesToPublish) {
+          let renderedSummary: string;
+          let renderedSummaryTitle: string | undefined;
+          if (enableScrub) {
+            const scrubbedSummary = scrubText(summaryEntry.markdown);
+            const scrubbedTitle = summaryEntry.title ? scrubText(summaryEntry.title) : undefined;
+            allScrubMatches.push(...scrubbedSummary.matches);
+            if (scrubbedTitle) {
+              allScrubMatches.push(...scrubbedTitle.matches);
+            }
+            renderedSummary = fixAndValidateMarkdown(scrubbedSummary.text);
+            renderedSummaryTitle = scrubbedTitle ? fixAndValidateMarkdown(scrubbedTitle.text) : undefined;
+          } else {
+            renderedSummary = fixAndValidateMarkdown(summaryEntry.markdown);
+            renderedSummaryTitle = summaryEntry.title ? fixAndValidateMarkdown(summaryEntry.title) : undefined;
+          }
+
           if (resolver) {
             const summaryCtx: TemplateContext = {
               ...baseTemplateContext,
               summary: renderedSummary,
+              ...(renderedSummaryTitle ? { summaryTitle: renderedSummaryTitle } : {}),
               problems: reviewProblems.map((problem) =>
                 toTemplateProblem({
                   ...problem,
@@ -1164,7 +1296,16 @@ export async function runReviewOrchestration(
             };
             renderedSummary = fixAndValidateMarkdown(resolver.render("summary", summaryCtx));
           }
-          appendDispatchResults(dispatchResults, await outputPublisher.publishSummary(renderedSummary, reviewProblems));
+          appendDispatchResults(
+            dispatchResults,
+            await outputPublisher.publishSummary(
+              renderedSummary,
+              reviewProblems,
+              {
+                ...(renderedSummaryTitle ? { title: renderedSummaryTitle } : {}),
+              },
+            ),
+          );
         }
       }
     }
@@ -1202,9 +1343,12 @@ export async function runReviewOrchestration(
         })),
       } : {}),
       ...(outputState.summaries.length > 0 ? {
-        summaries: outputState.summaries.map((s) =>
-          s.length > 500 ? `${s.slice(0, 500)}...` : s,
-        ),
+        summaries: outputState.summaries.map((summary) => ({
+          ...(summary.title ? {
+            title: summary.title.length > 120 ? `${summary.title.slice(0, 120)}...` : summary.title,
+          } : {}),
+          markdown: summary.markdown.length > 500 ? `${summary.markdown.slice(0, 500)}...` : summary.markdown,
+        })),
       } : {}),
     }));
   }
@@ -1253,17 +1397,17 @@ export async function runReviewOrchestration(
   };
 }
 
-function buildOrchestratorVcsContext(reviewEvent: ReviewEvent): { branch?: string; depot?: string; workspace?: string; repositoryPath?: string } {
-  const result: { branch?: string; depot?: string; workspace?: string; repositoryPath?: string } = {};
+function buildOrchestratorVcsContext(reviewEvent: ReviewEvent): { branch?: string; sourcePath?: string; workspace?: string; repositoryPath?: string } {
+  const result: { branch?: string; sourcePath?: string; workspace?: string; repositoryPath?: string } = {};
 
   if (reviewEvent.branch !== undefined) {
     result.branch = reviewEvent.branch;
   }
-  if (reviewEvent.depotPath !== undefined) {
-    result.depot = reviewEvent.depotPath;
+  if (reviewEvent.sourcePath !== undefined) {
+    result.sourcePath = reviewEvent.sourcePath;
   }
-  if (reviewEvent.p4Workspace !== undefined) {
-    result.workspace = reviewEvent.p4Workspace;
+  if (reviewEvent.submitterWorkspace !== undefined) {
+    result.workspace = reviewEvent.submitterWorkspace;
   }
   if (reviewEvent.repoRef !== undefined) {
     result.repositoryPath = reviewEvent.repoRef;

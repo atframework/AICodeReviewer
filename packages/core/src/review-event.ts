@@ -45,8 +45,8 @@ export const reviewEventSchema = z
     labels: z.array(z.string().min(1)).optional(),
     rawEventName: z.string().min(1).optional(),
     branch: z.string().min(1).optional(),
-    depotPath: z.string().min(1).optional(),
-    p4Workspace: z.string().min(1).optional(),
+    sourcePath: z.string().min(1).optional(),
+    submitterWorkspace: z.string().min(1).optional(),
   })
   .strict();
 

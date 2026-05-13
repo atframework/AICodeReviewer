@@ -1,13 +1,21 @@
-**{{problem.severity}} · {{problem.category}}**
+**{{problem.severity}}
+·
+{{problem.category}}**
 {{problem.message}}
 
 Location: `{{problem.location}}`
+{{#if problem.codeFence}}
+
+  **Referenced code (`{{problem.location}}`):**
+
+  {{{problem.codeFence}}}
+{{/if}}
 {{#if problem.suggestion}}
 
-**Suggested fix:**
-{{problem.suggestion}}
+  **Suggested fix:**
+  {{problem.suggestion}}
 {{/if}}
 {{#if problem.fingerprint}}
 
-<!-- aicr:fingerprint={{problem.fingerprint}} -->
+  <!-- aicr:fingerprint={{problem.fingerprint}} -->
 {{/if}}

@@ -1,5 +1,9 @@
 ## AI Code Review Report
 
+{{#if summaryTitle}}
+### {{summaryTitle}}
+{{/if}}
+
 {{#if target.markdownLink}}
 **Reviewed**: {{{target.markdownLink}}}
 {{else}}
@@ -11,18 +15,18 @@
 {{/if}}
 {{/if}}
 {{/if}}
+{{#if event.author}}
+**Author**: @{{event.author}}{{#if event.displayName}} ({{event.displayName}}){{/if}}{{#if event.email}} <{{event.email}}>{{/if}}
+{{else}}
 {{#if event.displayName}}
 **Author**: {{event.displayName}}{{#if event.email}} <{{event.email}}>{{/if}}
-{{else}}
-{{#if event.author}}
-**Author**: @{{event.author}}{{#if event.email}} <{{event.email}}>{{/if}}
 {{/if}}
 {{/if}}
 {{#if vcs.branch}}
 **Branch**: {{vcs.branch}}
 {{/if}}
-{{#if vcs.depot}}
-**Depot**: {{vcs.depot}}
+{{#if vcs.sourcePath}}
+**Source**: {{vcs.sourcePath}}
 {{/if}}
 {{#if vcs.workspace}}
 **Workspace**: {{vcs.workspace}}
@@ -43,6 +47,12 @@ No summary provided.
 #### {{@index}}. [{{severity}}] {{category}} — `{{location}}`
 
 {{message}}
+{{#if codeFence}}
+
+**Referenced code:**
+
+{{{codeFence}}}
+{{/if}}
 {{#if suggestion}}
 
 > **Suggested fix**: {{suggestion}}

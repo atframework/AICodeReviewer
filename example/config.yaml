@@ -460,7 +460,7 @@ workspaces:
 #   event:  { author, email, displayName, url, title }
 #   target: { kind, displayText, markdownLink, url, ... }
 #   repo:   { name, fullName }
-#   vcs:    { branch, depot, workspace, repositoryPath }
+#   vcs:    { branch, sourcePath, workspace, repositoryPath }
 #   run:    { id }
 #   atMentions: pre-rendered channel-specific mention string
 #   summary: review summary markdown
@@ -469,7 +469,7 @@ workspaces:
 #
 # Example: create workspaces/p4-main/templates/feishu_bot.summary.hbs
 #   **{{target.displayText}}**{{#if event.author}}
-#   **Author**: @{{event.author}}{{#if event.email}} <{{event.email}}>{{/if}}{{/if}}{{#if vcs.depot}}
-#   **Depot**: {{vcs.depot}}{{/if}}{{#if vcs.workspace}}
+#   **Author**: @{{event.author}}{{#if event.email}} <{{event.email}}>{{/if}}{{/if}}{{#if vcs.sourcePath}}
+#   **Source**: {{vcs.sourcePath}}{{/if}}{{#if vcs.workspace}}
 #   **Workspace**: {{vcs.workspace}}{{/if}}
 #   {{{summary}}}

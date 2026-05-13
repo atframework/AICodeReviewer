@@ -23,7 +23,8 @@ Do not use this skill for VCS implementation details, output channel rendering, 
 ## Procedure
 
 1. **Read current contracts first**
-   - `../../../Plan.md` §3.6, §3.7, and §3.9.
+   - `../../../docs/ai/architecture.md` §3.6, §3.7, and §3.9.
+   - `../../../Plan.md` §8.1 when roadmap status or remaining milestone scope matters.
    - `../../../packages/agents/src/types.ts` and the target adapter implementation.
    - `../../../packages/mcp-output/src/index.ts` for the authoritative AICR tool registry.
    - `../../../packages/core/src/prompt-manager.ts` for instruction and skill discovery rules.

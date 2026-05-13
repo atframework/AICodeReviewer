@@ -1,3 +1,7 @@
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { describe, it, expect } from "vitest";
 
 import { createReviewEvent, type ReviewEvent } from "@aicr/core";
@@ -391,12 +395,40 @@ Affected files ...
 
       expect(result.fetchedFiles).toEqual(["src/exists.cpp"]);
     });
+
+    it("removes stale destination files before p4 print failures", async () => {
+      const tempDir = await mkdtemp(join(tmpdir(), "aicr-p4-stale-"));
+
+      try {
+        const sourceDir = join(tempDir, "source");
+        const stalePath = join(sourceDir, "src", "stale.cpp");
+        await mkdir(join(sourceDir, "src"), { recursive: true });
+        await writeFile(stalePath, "old stale content", "utf8");
+
+        const mockP4 = async (): Promise<P4CommandResult> => {
+          throw Object.assign(new Error("no such file(s)"), { stderr: "no such file(s)" });
+        };
+        const adapter = new P4VcsAdapter({
+          repositoryDir: tempDir,
+          depot: "//depot/main",
+          p4: mockP4,
+        });
+
+        const result = await adapter.fetchScoped(
+          { headRevision: "12345", files: ["src/stale.cpp"] },
+          { id: "test-ws", sourceDir },
+        );
+
+        expect(result.fetchedFiles).toEqual([]);
+        await expect(readFile(stalePath, "utf8")).rejects.toHaveProperty("code", "ENOENT");
+      } finally {
+        await rm(tempDir, { recursive: true, force: true });
+      }
+    });
   });
 
   describe("fetchExtraContext", () => {
     it("reads file from workspace source dir", async () => {
-      const { mkdir, writeFile } = await import("node:fs/promises");
-      const { join } = await import("node:path");
       const tmpDir = join(process.cwd(), "build", "test-p4-ctx");
 
       await mkdir(join(tmpDir, "src"), { recursive: true });

@@ -17,7 +17,7 @@ const CONSECUTIVE_BLANK_LINES_RE = /\n{3,}/gu;
 const BARE_URL_RE = /(?<![<([`])(https?:\/\/[^\s<>[\]]+)(?![\])\s,;.:!?)>`])/giu;
 const HEADING_WITHOUT_SPACE_RE = /^(#{1,6})([^ #\n])/gmu;
 const HEADING_WITH_TRAILING_HASH_RE = /[ \t]+#+[ \t]*$/gmu;
-const LIST_MARKER_WITHOUT_SPACE_RE = /^(\s*[-*+]|\s*\d+\.)(?=[^ \n])/gmu;
+const LIST_MARKER_WITHOUT_SPACE_RE = /^([ \t]*[-](?=[^- \n])|[ \t]*[+](?=[^+ \n])|[ \t]*\*(?=[^* \n])|[ \t]*\d+\.(?=[^ \n]))/gmu;
 const INCONSISTENT_HEADING_INDENT_RE = /^( {1,3})(#{1,6}\s)/gmu;
 
 function fixTrailingSpaces(content: string): { text: string; changed: boolean } {

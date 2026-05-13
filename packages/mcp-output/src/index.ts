@@ -21,6 +21,7 @@ export interface ReportProblemInput {
 
 export interface PublishSummaryInput {
 	readonly markdown: string;
+	readonly title?: string;
 }
 
 export interface SkipInput {
@@ -38,7 +39,7 @@ export interface FetchMoreContextInput {
 
 export interface AicrOutputState {
 	readonly problems: readonly ReportProblemInput[];
-	readonly summaries: readonly string[];
+	readonly summaries: readonly PublishSummaryInput[];
 	readonly contextRequests: readonly FetchMoreContextInput[];
 	readonly skipReason?: string;
 }
@@ -95,7 +96,10 @@ function parseProblem(input: unknown): ReportProblemInput {
 
 function parseSummary(input: unknown): PublishSummaryInput {
 	assertPlainObject(input, "publish_summary input");
-	return { markdown: requireString(input.markdown, "markdown") };
+	return {
+		markdown: requireString(input.markdown, "markdown"),
+		...(input.title !== undefined ? { title: requireString(input.title, "title") } : {}),
+	};
 }
 
 function parseSkip(input: unknown): SkipInput {
@@ -128,7 +132,7 @@ function parseFetchMoreContext(input: unknown): FetchMoreContextInput {
 
 export class AicrOutputCollector {
 	private readonly problems: ReportProblemInput[] = [];
-	private readonly summaries: string[] = [];
+	private readonly summaries: PublishSummaryInput[] = [];
 	private readonly contextRequests: FetchMoreContextInput[] = [];
 	private skipReasonValue: string | undefined;
 
@@ -138,7 +142,10 @@ export class AicrOutputCollector {
 	}
 
 	publishSummary(input: PublishSummaryInput): { accepted: true; summaryCount: number } {
-		this.summaries.push(input.markdown);
+		this.summaries.push({
+			markdown: input.markdown,
+			...(input.title ? { title: input.title } : {}),
+		});
 		return { accepted: true, summaryCount: this.summaries.length };
 	}
 
@@ -155,7 +162,10 @@ export class AicrOutputCollector {
 		const problems = [...this.problems];
 		return {
 			problems,
-			summaries: [...this.summaries],
+			summaries: this.summaries.map((summary) => ({
+				markdown: summary.markdown,
+				...(summary.title ? { title: summary.title } : {}),
+			})),
 			contextRequests: [...this.contextRequests],
 			...(this.skipReasonValue ? { skipReason: this.skipReasonValue } : {}),
 		};
@@ -196,7 +206,10 @@ export function createAicrOutputToolRegistry(
 			inputSchema: {
 				type: "object",
 				required: ["markdown"],
-				properties: { markdown: { type: "string" } },
+				properties: {
+					markdown: { type: "string" },
+					title: { type: "string" },
+				},
 			},
 			async call(input: unknown) {
 				return collector.publishSummary(parseSummary(input));

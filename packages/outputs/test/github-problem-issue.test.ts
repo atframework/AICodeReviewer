@@ -70,7 +70,8 @@ describe("createGithubProblemIssueDispatcher", () => {
 		});
 
 		const body = JSON.parse(calls[1]?.init?.body ?? "{}");
-		expect(body.title).toContain("[AICR Test] [CRITICAL] security: src/auth.ts:12");
+		expect(body.title).toBe("[AICR Test] [CRITICAL] SQL query uses unsanitized input (src/auth.ts:12)");
+		expect(body.title).not.toContain(" - ");
 		expect(body.body).toContain("<!-- aicr:managed=problem-issue -->");
 		expect(body.body).toContain("<!-- aicr:fingerprint=fp-sql -->");
 		expect(body.body).toContain("Summary text");
@@ -355,5 +356,28 @@ describe("createGithubProblemIssueDispatcher", () => {
 
 		expect(results).toHaveLength(1);
 		expect(results[0]?.raw).toMatchObject({ action: "created" });
+	});
+
+	it("keeps managed issue titles concise for verbose messages", async () => {
+		const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
+		const dispatcher = createGithubProblemIssueDispatcher({
+			owner: "my-org",
+			repo: "my-repo",
+			fetch: async (url, init) => {
+				calls.push({ url, init });
+				return calls.length === 1 ? response([]) : response({ id: 101, number: 8 });
+			},
+		});
+
+		await dispatcher.reconcileProblems([{
+			...problem,
+			message: "The authentication retry path can return a success response before persisting the failed login attempt, allowing audit records to be silently dropped when storage is temporarily unavailable. This is intentionally verbose.",
+		}]);
+
+		const body = JSON.parse(calls[1]?.init?.body ?? "{}");
+		expect(body.title.length).toBeLessThanOrEqual(160);
+		expect(body.title).toContain("authentication retry path");
+		expect(body.title).toContain("(src/auth.ts:12)");
+		expect(body.title).not.toContain("This is intentionally verbose");
 	});
 });

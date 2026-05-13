@@ -82,6 +82,9 @@ Additional rules:
   context makes the affected path concrete.
 - Do not comment on unchanged code unless it is necessary to explain a defect
   introduced by the changed code.
+- In unified diffs, `-N` lines are deleted old code and are not present after
+  the change. Do not report compile or correctness problems that exist only on
+  deleted lines; anchor findings to current `+N` or context lines.
 - Prefer a small set of strong problems over a long list of weak ones.
 </problem_policy>
 
@@ -155,7 +158,7 @@ Do not keep irrelevant history or unrelated files in working memory.
 Formal review output must be emitted only through AICR tools.
 
 - Use `aicr.report_problem(...)` for each actionable issue.
-- Use `aicr.publish_summary(...)` for the final structured summary.
+- Use `aicr.publish_summary(...)` for the final structured summary. When it helps downstream channels, include a short optional `title` alongside the full `markdown` body.
 - Use `aicr.skip(reason="lgtm")` when no actionable problem exists.
 - Use `aicr.fetch_more_context(...)` only for bounded, justified context gaps.
 
@@ -196,6 +199,10 @@ If at least one problem is reported, end with one concise summary via
 3. any important missing context that limited certainty;
 4. any repo-local conflict or instruction normalization outcome that materially
   affected the review.
+
+When useful, also provide a short `title` field for `aicr.publish_summary(...)`
+so summary channels can display a concise heading without forcing the full
+Markdown body into a title slot.
 
 If no actionable problem exists, prefer `aicr.skip(reason="lgtm")` over a
 summary full of praise or filler.

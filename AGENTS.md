@@ -8,6 +8,7 @@
 - If `AGENTS.md` references AI-facing prompt or context files, those files must use the `AGENTS.` prefix and functional names.
 - When updating AI-facing assets, read the existing `AGENTS.md`, referenced `AGENTS.*.md` files, and related skills first, then merge instead of appending near-duplicate content.
 - Keep milestone detail in `docs/ai/milestones/*.md`; do not duplicate large milestone summaries into prompts or skills, and do not use milestone IDs in prompt or skill names.
+- Treat `Plan.md` as the forward-looking roadmap only. When a task needs stable design details or completed-stage history, read `docs/ai/index.md` and follow its links on demand instead of expanding `Plan.md` again.
 - Do not maintain duplicate global prompt bodies in `.github/copilot-instructions.md`, `CLAUDE.md`, `.roo/`, `.kilo/`, `opencode.json`, or other tool-private files. Tool-specific files may only bridge to `AGENTS.md` or add narrowly scoped behavior the shared file cannot express.
 
 ## Agent compatibility
@@ -22,7 +23,7 @@
 
 - Prefer minimal edits; do not weaken lint, typecheck, test, or markdown gates just to get a change through.
 - When adding or removing a workspace package, update the package manifest, local `tsconfig.json`, and root `tsconfig.json` references together.
-- When code changes affect config shape, agent adapters, MCP tool contracts, output rendering, deployment behavior, or public workflow, update the matching `Plan.md`, `docs/`, `example/config.yaml`, and `example/README.md` entries in the same change, or explicitly state why no doc/example update is needed.
+- When code changes affect config shape, agent adapters, MCP tool contracts, output rendering, deployment behavior, or public workflow, update the matching `Plan.md` roadmap summary, relevant `docs/` modules, `example/config.yaml`, and `example/README.md` entries in the same change, or explicitly state why no doc/example update is needed.
 - Keep temporary repository artifacts such as scratch scripts, debug logs, and one-off reports under `build/`; do not leave them in the repository root.
 - Use `.github/instructions/*.instructions.md` only for path-specific rules; keep workspace-wide rules in this file.
 - Keep AI-facing assets concise: stable rules here, detailed shared context in `AGENTS.*.md`, and repeatable procedures in skills.
@@ -41,8 +42,8 @@
 
 These issues have been found and fixed in prior sessions. Before making changes, check that you are not reintroducing any of them:
 
-1. **Config schema must track Plan.md §3.10**: `packages/core/src/config.ts` Zod schemas must include `compression`, `llm.fallback_chain`, `llm.retry`, `llm.budget`, `llm.per_provider_overrides`, `queue.workers`, `queue.rate_limit`, `queue.retry`, `queue.dead_letter`, `review.problem_issue.max_recent_issues`, `review.reflection.memory`, `workspaces.defaults.agent`, `outputs.channels[].mention_fallback`, and `outputs.routes`. If you add config fields, add corresponding tests in `packages/core/test/config.test.ts`.
-2. **Store schema must track Plan.md §3.11**: `packages/store/src/schema.ts` must include `triggerName`, `provider`, and `providerModel` columns. If you change the schema, update `packages/store/test/schema.test.ts`.
+1. **Config schema must track Plan.md §3.10 / `docs/ai/architecture.md` §3.10**: `packages/core/src/config.ts` Zod schemas must include `compression`, `llm.fallback_chain`, `llm.retry`, `llm.budget`, `llm.per_provider_overrides`, `queue.workers`, `queue.rate_limit`, `queue.retry`, `queue.dead_letter`, `review.problem_issue.max_recent_issues`, `review.reflection.memory`, `workspaces.defaults.agent`, `outputs.channels[].mention_fallback`, and `outputs.routes`. If you add config fields, add corresponding tests in `packages/core/test/config.test.ts`.
+2. **Store schema must track Plan.md §3.11 / `docs/ai/architecture.md` §3.11**: `packages/store/src/schema.ts` must include `triggerName`, `provider`, and `providerModel` columns. If you change the schema, update `packages/store/test/schema.test.ts`.
 3. **`isPlainObject` must reject built-in class instances**: `Date`, `RegExp`, and other non-plain prototypes must return `false`. Only `Object.prototype` or `null` prototype are plain.
 4. **`normalizePath` must compress consecutive slashes**: `//` → `/` in addition to backslash replacement and leading `./` stripping.
 5. **`estimateTokens` must handle CJK characters**: Characters in CJK Unicode ranges count as ~2 tokens, not 0.25.
@@ -57,6 +58,9 @@ These issues have been found and fixed in prior sessions. Before making changes,
 14. **Serve bootstrap must publish when configured**: `bootstrapServerApp` must not force `dryRun: true`; use a per-event `outputPublisherResolver` so Gitea webhook payloads can resolve PR numbers and publish line comments.
 15. **Container sandbox engine and allowlist must be enforced**: Docker-compatible sandbox code must invoke the resolved `docker`/`podman` CLI and validate commands against `ALLOWED_COMMANDS` before spawning containers.
 16. **Container env files must stay outside mounted workspaces**: `--env-file` paths for docker/podman must be temporary host files outside `agent/`, `tmp/`, and `source/` mounts, then deleted after the run.
+17. **`fixListMarkerSpacing` must not break `**bold**` or `***bold-italic***`**: The `LIST_MARKER_WITHOUT_SPACE_RE` regex in `packages/core/src/markdown-fixer.ts` must exclude `*` from the follow-character set for `*` markers so that `**Text**` at line start is never split into `* *Text**`.
+18. **`fixListMarkerSpacing` must not break thematic breaks**: Its indentation groups must use `[ \t]*`, not `\s*`, so `---` stays a thematic break instead of becoming `- --`.
+19. **Keep generic public modules platform-neutral**: Shared/public modules such as `packages/cli/src`, `ReviewEvent`, and `TemplateContext` must not duplicate provider/channel literal lists or expose platform-specific field names. Import canonical schemas/constants from `@aicr/core` and use generic fields such as `sourcePath` and `submitterWorkspace`; keep Gitea/GitHub/P4/etc. names inside config contracts, docs/examples, tests, and platform-specific adapters.
 
 ## Default verification order
 

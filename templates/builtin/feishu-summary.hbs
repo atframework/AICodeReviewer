@@ -1,35 +1,47 @@
-{{#if event.title}}**{{event.title}}**{{else}}{{#if target.displayText}}**{{target.displayText}}**{{/if}}{{/if}}
+{{#if summaryTitle}}**{{summaryTitle}}**{{else if
+  event.title
+}}**{{event.title}}**{{else if
+  target.displayText
+}}**{{target.displayText}}**{{/if}}
 {{#if target.markdownLink}}
 
-{{{target.markdownLink}}}
+  {{{target.markdownLink}}}
 {{else}}
-{{#if event.url}}
+  {{#if event.url}}
 
-[Review target]({{event.url}})
+    [Review target]({{event.url}})
+  {{/if}}
 {{/if}}
-{{/if}}
-{{#if event.displayName}}
-**Author**: {{event.displayName}}{{#if event.email}} &lt;{{event.email}}&gt;{{/if}}
-{{else}}
 {{#if event.author}}
-**Author**: @{{event.author}}{{#if event.email}} &lt;{{event.email}}&gt;{{/if}}
-{{/if}}
+  **Author**: @{{event.author}}{{#if event.displayName}}
+    ({{event.displayName}}){{/if}}{{#if event.email}}
+    &lt;{{event.email}}&gt;{{/if}}
+{{else}}
+  {{#if event.displayName}}
+    **Author**:
+    {{event.displayName}}{{#if event.email}} &lt;{{event.email}}&gt;{{/if}}
+  {{/if}}
 {{/if}}
 {{#if vcs.branch}}
-**Branch**: {{vcs.branch}}
+  **Branch**:
+  {{vcs.branch}}
 {{/if}}
-{{#if vcs.depot}}
-**Depot**: {{vcs.depot}}
+{{#if vcs.sourcePath}}
+  **Source**:
+  {{vcs.sourcePath}}
 {{/if}}
 {{#if vcs.workspace}}
-**Workspace**: {{vcs.workspace}}
+  **Workspace**:
+  {{vcs.workspace}}
 {{/if}}
 {{#if summary}}
 
-{{{summary}}}
+  {{{summary}}}
 {{else}}
-{{#if problems}}
+  {{#if problems}}
 
-Review completed: {{problems.length}} issue(s) found.{{#each problems}} [{{severity}}]{{/each}}
-{{/if}}
+    Review completed:
+    {{problems.length}}
+    issue(s) found.{{#each problems}} [{{severity}}]{{/each}}
+  {{/if}}
 {{/if}}

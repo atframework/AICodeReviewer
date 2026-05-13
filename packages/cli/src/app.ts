@@ -9,7 +9,9 @@ import {
   loadConfigFile,
   loadSystemPromptTemplate,
   prepareReviewPrompt,
+  reviewProviderSchema,
   summarizePreparedReviewPrompt,
+  type ReviewProvider,
 } from "@aicr/core";
 import {
   renderTemplate,
@@ -45,7 +47,7 @@ Options:
   --config <path>         Path to config YAML file
   --workspace <id>        Workspace ID
   --repo <ref>            Repository reference (owner/repo)
-  --provider <name>       Trigger provider (gitea, forgejo, github, etc.)
+  --provider <name>       Trigger provider kind from the config schema
   --trigger <name>        Trigger name
   --reason <text>         Review reason
   --source-root <path>    Source root directory
@@ -285,23 +287,16 @@ export async function runCli(
       const maxPromptTokens = parseOptionalInteger(values["max-prompt-tokens"], "--max-prompt-tokens");
       const baseSystemPrompt = await loadSystemPromptTemplate(basePromptPath);
       const provider = values.provider ?? "manual";
-      const validProviders = [
-        "gitea",
-        "forgejo",
-        "github",
-        "gitlab",
-        "p4",
-        "svn",
-        "scheduled",
-        "manual",
-      ] as const;
-      if (!validProviders.includes(provider as (typeof validProviders)[number])) {
+      const validProviders = reviewProviderSchema.options;
+      const parsedProvider = reviewProviderSchema.safeParse(provider);
+      if (!parsedProvider.success) {
         stderr.write(`aicr review: invalid provider "${provider}". Must be one of: ${validProviders.join(", ")}.\n`);
         return 1;
       }
+      const reviewProvider: ReviewProvider = parsedProvider.data;
       const reviewEvent = createReviewEvent({
         triggerName: values.trigger ?? "manual-cli",
-        provider: provider as (typeof validProviders)[number],
+        provider: reviewProvider,
         workspaceId: values.workspace ?? "manual-workspace",
         targetKind: "manual",
         repoRef: values.repo,
@@ -347,7 +342,7 @@ export async function runCli(
           {
             reviewEvent,
             payload: null,
-            provider: "gitea",
+            provider: reviewProvider,
             eventName: "manual",
           },
           {
@@ -599,7 +594,7 @@ export async function runCli(
           kind: "template",
           path: templatePath,
           templateKind,
-          channelKind: values["channel-kind"] ?? "gitea_pr_review",
+          channelKind: values["channel-kind"] ?? "custom_summary",
           ok: true,
           renderedBytes: Buffer.byteLength(rendered, "utf8"),
           markdownChanged: markdown.changed,

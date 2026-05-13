@@ -93,6 +93,18 @@ describe("renderProblemMarkdown", () => {
 
     expect(markdown).toBe("CUSTOM BODY");
   });
+
+  it("renders a referenced code block when a snippet is provided", () => {
+    const markdown = renderProblemMarkdown({
+      ...problem,
+      codeSnippet: "const ok = false;\nreturn ok;",
+      codeLanguage: "ts",
+    });
+
+    expect(markdown).toContain("Referenced code: `src/app.ts:42`");
+    expect(markdown).toContain("```ts");
+    expect(markdown).toContain("return ok;");
+  });
 });
 
 describe("createGiteaPullRequestReviewDispatcher", () => {
