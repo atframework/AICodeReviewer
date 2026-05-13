@@ -370,16 +370,38 @@ export function resolveGiteaWebhookConfig(
     return undefined;
   }
 
+  return buildWebhookConfigFromTrigger(config, trigger);
+}
+
+function buildWebhookConfigFromTrigger(
+  config: AppConfig,
+  trigger: AppConfig["triggers"][number],
+): GiteaWebhookConfig {
   const triggerConfig = trigger as Record<string, unknown>;
   const webhookSecretEnv = triggerConfig.webhook_secret_env as string | undefined;
   const webhookSecret = webhookSecretEnv ? resolveEnv(webhookSecretEnv) : undefined;
+  const workspaceId = resolveWorkspaceIdFromTrigger(config, trigger.name);
+  const repoRef = resolveWorkspaceRepoRef(config, trigger.name, workspaceId) ?? resolveWorkspaceRepoRef(config, trigger.name);
 
   return {
     triggerName: trigger.name,
-    workspaceId: resolveWorkspaceIdFromTrigger(config, trigger.name),
+    workspaceId,
+    ...(repoRef ? { repoRef } : {}),
     ...withRepoMappings(triggerConfig),
     ...(webhookSecret !== undefined ? { webhookSecret } : {}),
   };
+}
+
+export function resolveGenericWebhookConfigs(
+  config: AppConfig,
+  kind: string,
+  triggerName?: string,
+): readonly GiteaWebhookConfig[] {
+  const triggers = triggerName
+    ? config.triggers.filter((trigger) => trigger.name === triggerName && trigger.kind === kind)
+    : config.triggers.filter((trigger) => trigger.kind === kind);
+
+  return triggers.map((trigger) => buildWebhookConfigFromTrigger(config, trigger));
 }
 
 export function resolveGenericWebhookConfig(
@@ -387,24 +409,7 @@ export function resolveGenericWebhookConfig(
   kind: string,
   triggerName?: string,
 ): GiteaWebhookConfig | undefined {
-  const trigger = triggerName
-    ? config.triggers.find((t) => t.name === triggerName && t.kind === kind)
-    : config.triggers.find((t) => t.kind === kind);
-
-  if (!trigger) {
-    return undefined;
-  }
-
-  const triggerConfig = trigger as Record<string, unknown>;
-  const webhookSecretEnv = triggerConfig.webhook_secret_env as string | undefined;
-  const webhookSecret = webhookSecretEnv ? resolveEnv(webhookSecretEnv) : undefined;
-
-  return {
-    triggerName: trigger.name,
-    workspaceId: resolveWorkspaceIdFromTrigger(config, trigger.name),
-    ...withRepoMappings(triggerConfig),
-    ...(webhookSecret !== undefined ? { webhookSecret } : {}),
-  };
+  return resolveGenericWebhookConfigs(config, kind, triggerName)[0];
 }
 
 export function resolveP4TriggerConfig(
@@ -1066,6 +1071,7 @@ export function createOutputPublisherFromConfig(
     const resolvedAction = readString(channelConfig, "resolved_action", "resolvedAction");
     const markerPrefix = readString(channelConfig, "marker_prefix", "markerPrefix");
     const markerLabel = readString(channelConfig, "marker_label", "markerLabel");
+    const issueMode = readString(channelConfig, "issue_mode", "issueMode");
     const channelLabels = Array.isArray(channelConfig.labels) && channelConfig.labels.every((value) => typeof value === "string")
       ? channelConfig.labels as readonly string[]
       : undefined;
@@ -1094,6 +1100,7 @@ export function createOutputPublisherFromConfig(
       ...(markerPrefix ? { markerPrefix } : {}),
       ...(markerLabel ? { markerLabel } : {}),
       ...(channelLabels ? { labels: channelLabels } : {}),
+      ...(issueMode === "consolidated" ? { issueMode: "consolidated" as const } : {}),
       ...(resolvedAction === "none" || resolvedAction === "close" ? { resolvedAction } : {}),
       ...(problemIssueMaxRecentIssues !== undefined ? { maxRecentIssues: problemIssueMaxRecentIssues } : {}),
       ...(assignCommitter !== undefined ? { assignCommitter } : {}),
@@ -1207,6 +1214,7 @@ export function createOutputPublisherFromConfig(
     const resolvedAction = readString(channelConfig, "resolved_action", "resolvedAction");
     const markerPrefix = readString(channelConfig, "marker_prefix", "markerPrefix");
     const markerLabel = readString(channelConfig, "marker_label", "markerLabel");
+    const issueMode = readString(channelConfig, "issue_mode", "issueMode");
     const labelIds = Array.isArray(channelConfig.label_ids) && channelConfig.label_ids.every((value) => typeof value === "number")
       ? channelConfig.label_ids as readonly number[]
       : undefined;
@@ -1235,6 +1243,7 @@ export function createOutputPublisherFromConfig(
       ...(markerPrefix ? { markerPrefix } : {}),
       ...(markerLabel ? { markerLabel } : {}),
       ...(labelIds ? { labelIds } : {}),
+      ...(issueMode === "consolidated" ? { issueMode: "consolidated" as const } : {}),
       ...(resolvedAction === "none" || resolvedAction === "close" || resolvedAction === "delete" ? { resolvedAction } : {}),
       ...(problemIssueMaxRecentIssues !== undefined ? { maxRecentIssues: problemIssueMaxRecentIssues } : {}),
       ...(assignCommitter !== undefined ? { assignCommitter } : {}),
@@ -1673,8 +1682,8 @@ export async function bootstrapServerApp(options: BootstrapServerOptions): Promi
   const { config, baseSystemPrompt, baseDir = process.cwd(), jobHandler } = options;
 
   const giteaConfig = resolveGiteaWebhookConfig(config);
-  const githubConfig = resolveGenericWebhookConfig(config, "github");
-  const gitlabConfig = resolveGenericWebhookConfig(config, "gitlab");
+  const githubConfigs = resolveGenericWebhookConfigs(config, "github");
+  const gitlabConfigs = resolveGenericWebhookConfigs(config, "gitlab");
   const p4Config = resolveP4TriggerConfig(config);
 
   const model = resolveModelSpecFromConfig(config);
@@ -1744,11 +1753,13 @@ export async function bootstrapServerApp(options: BootstrapServerOptions): Promi
 
   const triageOptions = resolveIssueTriageOptions(config, llmClient, model);
   const authConfig = resolveAuthConfig(config);
+  const githubOption = toServerWebhookOption(githubConfigs);
+  const gitlabOption = toServerWebhookOption(gitlabConfigs);
 
   return {
     ...(giteaConfig ? { gitea: giteaConfig } : {}),
-    ...(githubConfig ? { github: githubConfig } : {}),
-    ...(gitlabConfig ? { gitlab: gitlabConfig } : {}),
+    ...(githubOption ? { github: githubOption } : {}),
+    ...(gitlabOption ? { gitlab: gitlabOption } : {}),
     ...(p4Config ? { p4: p4Config } : {}),
     reviewOrchestration: orchestrationOptions,
     ...(triageOptions ? { issueTriage: triageOptions } : {}),
@@ -1758,6 +1769,21 @@ export async function bootstrapServerApp(options: BootstrapServerOptions): Promi
     ...(authConfig ? { auth: authConfig } : {}),
     asyncTriggers: true,
   };
+}
+
+function toServerWebhookOption(
+  configs: readonly GiteaWebhookConfig[],
+): GiteaWebhookConfig | readonly GiteaWebhookConfig[] | undefined {
+  if (configs.length === 0) {
+    return undefined;
+  }
+
+  const firstConfig = configs[0];
+  if (!firstConfig) {
+    return undefined;
+  }
+
+  return configs.length === 1 ? firstConfig : configs;
 }
 
 function resolveIssueTriageOptions(

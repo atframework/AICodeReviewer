@@ -65,6 +65,7 @@
 
 - 所有 webhook、trigger、手工和定时入口都要归一到统一 `ReviewEvent`。
 - 鉴权、签名校验与事件归一化必须先于入队执行。
+- GitHub / GitLab 共享 webhook 路由支持按已验证 secret/token + repo 标识选择不同 trigger profile，用于隔离不同仓库的 token、webhook secret 与文件过滤规则。
 - async 入口以 `202 + runId` 作为非阻塞语义。
 - P4 trigger 只提交最小 metadata，服务端负责后续拉取和分析。
 - 详细合同：`docs/ai/architecture.md` §3.1。
@@ -135,11 +136,20 @@
 - 目标链接用标准化 `target` 上下文渲染，不把所有目标都写成 `View PR`。
 - 详细合同：`docs/ai/architecture.md` §3.9.1 与 `docs/output-channels.md`。
 
+### 3.9.5 Managed problem issue 生命周期
+
+- `gitea_problem_issue` 和 `github_problem_issue` 支持 `issue_mode`:
+  - `consolidated`（默认）：一次分析的所有问题合并为一个 issue，scope fingerprint 驱动更新与关闭。
+  - `per_problem`：每个问题独立 issue，fingerprint 驱动生命周期。
+- managed issue 标题由输出层生成并保持单行可读；summary title 只影响正文 summary heading。
+- 详细合同：`docs/ai/architecture.md` §3.9.5 与 `docs/output-channels.md`。
+
 ### 3.10 配置体系
 
 - 配置 schema 的代码真源是 `packages/core/src/config.ts`。
 - `workspaces.cache` / `workspaces.defaults` / `workspaces.instances.<id>`
   是稳定命名空间。
+- 同一路由上的多 GitHub / GitLab trigger 需要通过 `source_repo.trigger` 做 repo → profile 显式绑定。
 - 配置变更应同步 schema 测试、示例配置、专题文档与本计划摘要。
 - 详细合同：`docs/ai/architecture.md` §3.10。
 

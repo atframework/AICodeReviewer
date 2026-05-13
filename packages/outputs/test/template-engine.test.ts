@@ -463,3 +463,30 @@ describe("clearTemplateCache", () => {
 		expect(r2).toBe("updated-x");
 	});
 });
+
+describe("markdownlint compliance of rendered templates", () => {
+	it("renders gitea_pr_review summary that collapses to valid output after fixMarkdown", () => {
+		const raw = renderBuiltinTemplate("gitea_pr_review", "summary", sampleContext);
+		expect(raw).toContain("## AI Code Review Summary");
+		expect(raw).toContain("### Focused review summary");
+		const collapsed = raw.replace(/\n{3,}/gu, "\n\n");
+		expect(collapsed).not.toMatch(/\n{3,}/u);
+	});
+
+	it("renders gitea_issue summary that collapses to valid output after fixMarkdown", () => {
+		const raw = renderBuiltinTemplate("gitea_issue", "summary", sampleContext);
+		expect(raw).toContain("## AI Code Review Report");
+		const collapsed = raw.replace(/\n{3,}/gu, "\n\n");
+		expect(collapsed).not.toMatch(/\n{3,}/u);
+	});
+
+	it("renders gitea_pr_review problem with all fields", () => {
+		const raw = renderBuiltinTemplate("gitea_pr_review", "problem", {
+			problem: toTemplateProblem(sampleProblem),
+		});
+		expect(raw).toContain("HIGH");
+		expect(raw).toContain("Bug found.");
+		expect(raw).toContain("Suggested fix:");
+		expect(raw).toContain("```ts");
+	});
+});

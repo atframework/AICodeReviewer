@@ -142,6 +142,15 @@ function encodePathSegment(value: string): string {
 	return encodeURIComponent(value);
 }
 
+const CONSECUTIVE_BLANK_LINES_RE = /\n{3,}/gu;
+const TRAILING_SPACES_RE = /[ \t]+$/gmu;
+
+function normalizeMarkdownBody(body: string): string {
+	const trimmed = body.replace(TRAILING_SPACES_RE, "");
+	const collapsed = trimmed.replace(CONSECUTIVE_BLANK_LINES_RE, "\n\n");
+	return collapsed.endsWith("\n") ? collapsed : `${collapsed}\n`;
+}
+
 function shouldFallbackToGeneralComment(status: number): boolean {
 	return status === 422;
 }
@@ -185,7 +194,7 @@ export function renderProblemMarkdown(problem: ReviewProblem): string {
 		parts.push("", `<!-- aicr:fingerprint=${problem.fingerprint} -->`);
 	}
 
-	return parts.join("\n");
+	return normalizeMarkdownBody(parts.join("\n"));
 }
 
 function extractExternalId(raw: unknown): string | undefined {
@@ -821,7 +830,7 @@ export function createGithubIssueDispatcher(options: GithubIssueOptions): Github
 				}
 			}
 
-			const body = sections.join("\n");
+			const body = normalizeMarkdownBody(sections.join("\n"));
 			const response = await fetchImpl(endpoint, {
 				method: "POST",
 				headers,
@@ -861,6 +870,8 @@ export function createGithubIssueDispatcher(options: GithubIssueOptions): Github
 	return dispatcher;
 }
 
+export type ProblemIssueMode = "per_problem" | "consolidated";
+
 export type GithubProblemIssueResolvedAction = "none" | "close";
 
 const DEFAULT_MANAGED_ISSUE_FETCH_LIMIT = 20;
@@ -883,6 +894,7 @@ export interface GithubProblemIssueOptions {
 	readonly markerPrefix?: string;
 	readonly markerLabel?: string;
 	readonly labels?: readonly string[];
+	readonly issueMode?: ProblemIssueMode;
 	readonly resolvedAction?: GithubProblemIssueResolvedAction;
 	readonly maxRecentIssues?: number;
 	readonly fetch?: FetchLike;
@@ -913,6 +925,7 @@ interface ManagedGithubIssue {
 	readonly state: string;
 	readonly url?: string;
 	readonly fingerprint?: string;
+	readonly scopeFingerprint?: string;
 }
 
 function parseManagedGithubIssues(raw: unknown, markerPrefix: string, markerLabel: string): readonly ManagedGithubIssue[] {
@@ -944,6 +957,7 @@ function parseManagedGithubIssues(raw: unknown, markerPrefix: string, markerLabe
 		}
 
 		const fingerprint = extractManagedIssueFingerprint(body);
+		const scopeFingerprint = extractConsolidatedScopeFingerprint(body);
 		issues.push({
 			number,
 			title,
@@ -951,6 +965,7 @@ function parseManagedGithubIssues(raw: unknown, markerPrefix: string, markerLabe
 			state,
 			...(typeof rawIssue.html_url === "string" ? { url: rawIssue.html_url } : {}),
 			...(fingerprint ? { fingerprint } : {}),
+			...(scopeFingerprint ? { scopeFingerprint } : {}),
 		});
 	}
 
@@ -965,6 +980,7 @@ export function createGithubProblemIssueDispatcher(options: GithubProblemIssueOp
 	const markerLabel = options.markerLabel ?? "aicr-managed";
 	const resolvedAction = options.resolvedAction ?? "close";
 	const maxRecentIssues = normalizeManagedIssueFetchLimit(options.maxRecentIssues);
+    const issueMode = options.issueMode ?? "consolidated";
 	const assignCommitter = options.assignCommitter ?? true;
 	const addOwnersAsAssignees = options.addOwnersAsAssignees ?? false;
 	const ownersFilePath = options.ownersFilePath ?? "OWNERS";
@@ -1217,6 +1233,122 @@ export function createGithubProblemIssueDispatcher(options: GithubProblemIssueOp
 		};
 	}
 
+	async function createConsolidatedIssue(
+		problems: readonly ReviewProblem[],
+		summary: string | undefined,
+		owners: OwnersConfig | undefined,
+	): Promise<DispatchResult> {
+		const scopeFingerprint = computeScopeFingerprint(channel, options.owner, options.repo);
+		const body: Record<string, unknown> = {
+			title: buildConsolidatedIssueTitle(problems, markerPrefix),
+			body: buildConsolidatedIssueBody(problems, { channel, markerLabel, scopeFingerprint, ...(summary ? { summary } : {}) }),
+		};
+
+		const labelNames: string[] = [];
+		if (options.labels && options.labels.length > 0) {
+			labelNames.push(...options.labels);
+		}
+
+		if (options.autoTag) {
+			const name = await resolveLabelName(options.autoTag);
+			if (name !== undefined && !labelNames.includes(name)) {
+				labelNames.push(name);
+			}
+		}
+
+		if (options.reviewedTag) {
+			const name = await resolveLabelName(options.reviewedTag);
+			if (name !== undefined && !labelNames.includes(name)) {
+				labelNames.push(name);
+			}
+		}
+
+		if (severityLabelPrefix) {
+			const highest = getHighestSeverity(problems);
+			if (highest) {
+				const severityName = await resolveSeverityLabelName(highest);
+				if (severityName !== undefined && !labelNames.includes(severityName)) {
+					labelNames.push(severityName);
+				}
+			}
+		}
+
+		if (labelNames.length > 0) {
+			body.labels = labelNames;
+		}
+
+		const allAssignees = collectAllAssignees(problems, owners);
+		if (allAssignees.length > 0) {
+			body.assignees = allAssignees;
+		}
+
+		const raw = await request("POST", `${repoPath}/issues`, body);
+		const externalId = extractExternalId(raw);
+
+		const issueUrl = raw && typeof raw === "object"
+			? (raw as Record<string, unknown>).html_url as string | undefined
+			: undefined;
+
+		const highest = getHighestSeverity(problems);
+		await sendFeishuNotification(
+			buildConsolidatedIssueTitle(problems, markerPrefix),
+			issueUrl,
+			highest ?? "info",
+			`${problems.length} problems`,
+		);
+
+		return {
+			channel,
+			status: "published",
+			...(externalId ? { externalId } : {}),
+			raw: { action: "created_consolidated", issue: raw },
+		};
+	}
+
+	async function updateConsolidatedIssue(
+		existing: ManagedGithubIssue,
+		problems: readonly ReviewProblem[],
+		summary: string | undefined,
+	): Promise<DispatchResult> {
+		const scopeFingerprint = computeScopeFingerprint(channel, options.owner, options.repo);
+		const body: Record<string, unknown> = {
+			title: buildConsolidatedIssueTitle(problems, markerPrefix),
+			body: buildConsolidatedIssueBody(problems, { channel, markerLabel, scopeFingerprint, ...(summary ? { summary } : {}) }),
+		};
+
+		if (severityLabelPrefix) {
+			const labelNames: string[] = [];
+			const highest = getHighestSeverity(problems);
+			if (highest) {
+				const severityName = await resolveSeverityLabelName(highest);
+				if (severityName !== undefined) {
+					labelNames.push(severityName);
+				}
+			}
+			if (labelNames.length > 0) {
+				body.labels = labelNames;
+			}
+		}
+
+		const raw = await request("PATCH", `${repoPath}/issues/${existing.number}`, body);
+		return {
+			channel,
+			status: "published",
+			externalId: String(existing.number),
+			raw: { action: "updated_consolidated", issueNumber: existing.number, issue: raw },
+		};
+	}
+
+	function collectAllAssignees(problems: readonly ReviewProblem[], owners: OwnersConfig | undefined): string[] {
+		const assigneeSet = new Set<string>();
+		for (const problem of problems) {
+			for (const assignee of resolveAssignees(problem, owners)) {
+				assigneeSet.add(assignee);
+			}
+		}
+		return [...assigneeSet];
+	}
+
 	async function resolveIssue(issue: ManagedGithubIssue): Promise<DispatchResult | undefined> {
 		if (resolvedAction === "none") {
 			return undefined;
@@ -1240,7 +1372,6 @@ export function createGithubProblemIssueDispatcher(options: GithubProblemIssueOp
 
 	const dispatcher = {
 		async reconcileProblems(problems: readonly ReviewProblem[], summary?: string): Promise<readonly DispatchResult[]> {
-			const preparedProblems = problems.map(ensureProblemFingerprint);
 			let owners: OwnersConfig | undefined;
 
 			if (addOwnersAsAssignees) {
@@ -1249,6 +1380,49 @@ export function createGithubProblemIssueDispatcher(options: GithubProblemIssueOp
 					owners = parseOwnersContent(ownersContent);
 				}
 			}
+
+			if (issueMode === "consolidated") {
+				const existingIssues = await listManagedOpenIssues();
+				const scopeFingerprint = computeScopeFingerprint(channel, options.owner, options.repo);
+				const existingConsolidated = existingIssues.find(
+					(issue) => issue.scopeFingerprint === scopeFingerprint,
+				);
+
+				const results: DispatchResult[] = [];
+
+				if (problems.length === 0) {
+					if (existingConsolidated && resolvedAction !== "none") {
+						const result = await resolveIssue(existingConsolidated);
+						if (result) {
+							results.push(result);
+						}
+					}
+					return results;
+				}
+
+				if (existingConsolidated) {
+					results.push(await updateConsolidatedIssue(existingConsolidated, problems, summary));
+				} else {
+					results.push(await createConsolidatedIssue(problems, summary, owners));
+				}
+
+				for (const issue of existingIssues) {
+					if (issue.scopeFingerprint === scopeFingerprint) {
+						continue;
+					}
+					if (!isConsolidatedManagedIssue(issue.body)) {
+						continue;
+					}
+					const result = await resolveIssue(issue);
+					if (result) {
+						results.push(result);
+					}
+				}
+
+				return results;
+			}
+
+			const preparedProblems = problems.map(ensureProblemFingerprint);
 
 			const currentFingerprints = new Set(preparedProblems.map((problem) => problem.fingerprint!));
 			const existingIssues = await listManagedOpenIssues();
@@ -1648,7 +1822,7 @@ export function createGiteaIssueDispatcher(options: GiteaIssueOptions): GiteaIss
 				}
 			}
 
-			const body = sections.join("\n");
+			const body = normalizeMarkdownBody(sections.join("\n"));
 			const headers: Record<string, string> = {
 				"content-type": "application/json",
 			};
@@ -1711,6 +1885,7 @@ export interface GiteaProblemIssueOptions {
 	readonly markerPrefix?: string;
 	readonly markerLabel?: string;
 	readonly labelIds?: readonly number[];
+	readonly issueMode?: ProblemIssueMode;
 	readonly resolvedAction?: GiteaProblemIssueResolvedAction;
 	readonly maxRecentIssues?: number;
 	readonly fetch?: FetchLike;
@@ -1840,6 +2015,7 @@ interface ManagedGiteaIssue {
 	readonly state: string;
 	readonly url?: string;
 	readonly fingerprint?: string;
+	readonly scopeFingerprint?: string;
 }
 
 const AICR_MANAGED_PROBLEM_ISSUE_MARKER = "<!-- aicr:managed=problem-issue -->";
@@ -1858,11 +2034,250 @@ function hasManagedProblemIssueMarker(body: string): boolean {
 	return body.includes(AICR_MANAGED_PROBLEM_ISSUE_MARKER);
 }
 
+const AICR_CONSOLIDATED_MARKER = "<!-- aicr:consolidated=true -->";
+
+const MANAGED_ISSUE_TITLE_MAX_DISPLAY_WIDTH = 72;
+const MANAGED_ISSUE_LOCATION_MAX_DISPLAY_WIDTH = 32;
+const MANAGED_ISSUE_CORE_MIN_DISPLAY_WIDTH = 16;
+
+function isConsolidatedManagedIssue(body: string): boolean {
+	return body.includes(AICR_CONSOLIDATED_MARKER);
+}
+
+function extractConsolidatedScopeFingerprint(body: string): string | undefined {
+	const match = /<!--\s*aicr:scope_fingerprint=([^\s-][^\s]*)\s*-->/u.exec(body);
+	return match?.[1];
+}
+
+export function computeScopeFingerprint(channel: string, owner: string, repo: string): string {
+	const raw = `consolidated:${channel}:${owner}/${repo}`;
+	return createHash("sha256").update(raw).digest("hex").slice(0, 16);
+}
+
+function isWideIssueTitleCodePoint(code: number): boolean {
+	return (
+		(code >= 0x1100 && code <= 0x115f) ||
+		code === 0x2329 ||
+		code === 0x232a ||
+		(code >= 0x2e80 && code <= 0xa4cf) ||
+		(code >= 0xac00 && code <= 0xd7a3) ||
+		(code >= 0xf900 && code <= 0xfaff) ||
+		(code >= 0xfe10 && code <= 0xfe19) ||
+		(code >= 0xfe30 && code <= 0xfe6f) ||
+		(code >= 0xff00 && code <= 0xff60) ||
+		(code >= 0xffe0 && code <= 0xffe6) ||
+		(code >= 0x1f300 && code <= 0x1faff) ||
+		(code >= 0x20000 && code <= 0x3fffd)
+	);
+}
+
+function getIssueTitleDisplayWidth(value: string): number {
+	let width = 0;
+	for (const char of value) {
+		const code = char.codePointAt(0)!;
+		width += isWideIssueTitleCodePoint(code) ? 2 : 1;
+	}
+	return width;
+}
+
+function sliceIssueTitleByDisplayWidth(value: string, maxDisplayWidth: number): string {
+	if (maxDisplayWidth <= 0) {
+		return "";
+	}
+
+	let width = 0;
+	let result = "";
+	for (const char of value) {
+		const code = char.codePointAt(0)!;
+		const charWidth = isWideIssueTitleCodePoint(code) ? 2 : 1;
+		if (width + charWidth > maxDisplayWidth) {
+			break;
+		}
+		result += char;
+		width += charWidth;
+	}
+
+	return result;
+}
+
+function sliceIssueTitleFromEndByDisplayWidth(value: string, maxDisplayWidth: number): string {
+	if (maxDisplayWidth <= 0) {
+		return "";
+	}
+
+	let width = 0;
+	const chars = Array.from(value);
+	const result: string[] = [];
+	for (let i = chars.length - 1; i >= 0; i -= 1) {
+		const char = chars[i]!;
+		const code = char.codePointAt(0)!;
+		const charWidth = isWideIssueTitleCodePoint(code) ? 2 : 1;
+		if (width + charWidth > maxDisplayWidth) {
+			break;
+		}
+		result.unshift(char);
+		width += charWidth;
+	}
+
+	return result.join("");
+}
+
+function buildConsolidatedIssueTitle(
+	problems: readonly ReviewProblem[],
+	markerPrefix: string,
+): string {
+	const highest = getHighestSeverity(problems);
+	const count = problems.length;
+	const title = [
+		markerPrefix,
+		...(highest ? [`[${highest.toUpperCase()}]`] : []),
+		`${count} problem${count !== 1 ? "s" : ""}`,
+	].join(" ");
+	return truncateIssueTitle(title, MANAGED_ISSUE_TITLE_MAX_DISPLAY_WIDTH);
+}
+
+function buildConsolidatedIssueBody(
+	problems: readonly ReviewProblem[],
+	options: {
+		readonly channel: string;
+		readonly markerLabel: string;
+		readonly scopeFingerprint: string;
+		readonly summary?: string;
+	},
+): string {
+	const sections: string[] = [
+		AICR_MANAGED_PROBLEM_ISSUE_MARKER,
+		AICR_CONSOLIDATED_MARKER,
+		`<!-- aicr:channel=${options.channel} -->`,
+		`<!-- aicr:label=${options.markerLabel} -->`,
+		`<!-- aicr:scope_fingerprint=${options.scopeFingerprint} -->`,
+		"",
+	];
+
+	if (options.summary?.trim()) {
+		sections.push(options.summary, "", "---", "");
+	}
+
+	const grouped = groupProblemsBySeverity(problems);
+	for (const group of grouped) {
+		sections.push(`### ${group.severity.toUpperCase()} (${group.problems.length})`, "");
+		for (let i = 0; i < group.problems.length; i++) {
+			const p = group.problems[i]!;
+			const location = p.endLine ? `${p.file}:${p.line}-${p.endLine}` : `${p.file}:${p.line}`;
+			sections.push(`**${i + 1}. ${p.category}** — \`${location}\``, "");
+			sections.push(p.message);
+			if (p.suggestion) {
+				sections.push("", `> **Suggested fix:** ${p.suggestion}`);
+			}
+			if (p.codeSnippet && p.codeLanguage) {
+				sections.push("", renderMarkdownCodeFence(p.codeLanguage, p.codeSnippet));
+			}
+			sections.push("");
+		}
+	}
+
+	return normalizeMarkdownBody(sections.join("\n"));
+}
+
+interface SeverityGroup {
+	readonly severity: ProblemSeverity;
+	readonly problems: readonly ReviewProblem[];
+}
+
+const CONSOLIDATION_SEVERITY_ORDER: readonly ProblemSeverity[] = ["critical", "high", "medium", "low", "info"];
+
+function groupProblemsBySeverity(problems: readonly ReviewProblem[]): readonly SeverityGroup[] {
+	const map = new Map<ProblemSeverity, ReviewProblem[]>();
+	for (const p of problems) {
+		const list = map.get(p.severity) ?? [];
+		list.push(p);
+		map.set(p.severity, list);
+	}
+	const groups: SeverityGroup[] = [];
+	for (const sev of CONSOLIDATION_SEVERITY_ORDER) {
+		const list = map.get(sev);
+		if (list && list.length > 0) {
+			groups.push({ severity: sev, problems: list });
+		}
+	}
+	return groups;
+}
+
+function buildProblemLocation(problem: ReviewProblem): string {
+	return problem.endLine ? `${problem.file}:${problem.line}-${problem.endLine}` : `${problem.file}:${problem.line}`;
+}
+
+function truncateIssueTitleTail(value: string, maxDisplayWidth: number): string {
+	const normalized = value.replace(/\s+/gu, " ").trim();
+	if (normalized === "") {
+		return "";
+	}
+
+	if (getIssueTitleDisplayWidth(normalized) <= maxDisplayWidth) {
+		return normalized;
+	}
+
+	const ellipsis = "...";
+	const suffixWidth = maxDisplayWidth - getIssueTitleDisplayWidth(ellipsis);
+	if (suffixWidth <= 0) {
+		return ellipsis;
+	}
+
+	return `${ellipsis}${sliceIssueTitleFromEndByDisplayWidth(normalized, suffixWidth).trimStart()}`;
+}
+
+function abbreviateLocationForIssueTitle(location: string, maxDisplayWidth: number): string {
+	const normalized = location.replace(/\\/gu, "/").replace(/\s+/gu, " ").trim();
+	if (normalized === "") {
+		return "";
+	}
+
+	if (getIssueTitleDisplayWidth(normalized) <= maxDisplayWidth) {
+		return normalized;
+	}
+
+	if (normalized.includes("/")) {
+		const segments = normalized.split("/");
+		let suffix = segments.at(-1) ?? normalized;
+		for (let i = segments.length - 2; i >= 0; i -= 1) {
+			const candidate = `${segments[i]!}/${suffix}`;
+			if (getIssueTitleDisplayWidth(`.../${candidate}`) > maxDisplayWidth) {
+				break;
+			}
+			suffix = candidate;
+		}
+
+		const abbreviated = `.../${suffix}`;
+		if (getIssueTitleDisplayWidth(abbreviated) <= maxDisplayWidth) {
+			return abbreviated;
+		}
+	}
+
+	return truncateIssueTitleTail(normalized, maxDisplayWidth);
+}
+
 function buildProblemIssueTitle(problem: ReviewProblem, markerPrefix: string): string {
-	const location = problem.endLine ? `${problem.file}:${problem.line}-${problem.endLine}` : `${problem.file}:${problem.line}`;
-	const core = summarizeProblemForIssueTitle(problem.message) || problem.category;
-	const title = `${markerPrefix} [${problem.severity.toUpperCase()}] ${core} (${location})`;
-	return truncateIssueTitle(title, 160);
+	const prefix = `${markerPrefix} [${problem.severity.toUpperCase()}]`;
+	const rawLocation = buildProblemLocation(problem);
+	let location = abbreviateLocationForIssueTitle(rawLocation, MANAGED_ISSUE_LOCATION_MAX_DISPLAY_WIDTH);
+	let coreBudget = MANAGED_ISSUE_TITLE_MAX_DISPLAY_WIDTH - getIssueTitleDisplayWidth(`${prefix} ${location} · `);
+
+	if (coreBudget < MANAGED_ISSUE_CORE_MIN_DISPLAY_WIDTH) {
+		const reducedLocationBudget = Math.max(
+			12,
+			MANAGED_ISSUE_TITLE_MAX_DISPLAY_WIDTH -
+				getIssueTitleDisplayWidth(`${prefix} · `) -
+				MANAGED_ISSUE_CORE_MIN_DISPLAY_WIDTH,
+		);
+		location = abbreviateLocationForIssueTitle(rawLocation, reducedLocationBudget);
+		coreBudget = MANAGED_ISSUE_TITLE_MAX_DISPLAY_WIDTH - getIssueTitleDisplayWidth(`${prefix} ${location} · `);
+	}
+
+	const summary = coreBudget > 0
+		? summarizeProblemForIssueTitle(problem.message, coreBudget) || truncateIssueTitle(problem.category, coreBudget)
+		: "";
+	const title = summary ? `${prefix} ${location} · ${summary}` : `${prefix} ${location}`;
+	return truncateIssueTitle(title, MANAGED_ISSUE_TITLE_MAX_DISPLAY_WIDTH);
 }
 
 function stripMarkdownForIssueTitle(value: string): string {
@@ -1873,26 +2288,43 @@ function stripMarkdownForIssueTitle(value: string): string {
 		.replace(/[>#*_~]/gu, " ");
 }
 
-function truncateIssueTitle(value: string, maxLength: number): string {
+function truncateIssueTitle(value: string, maxDisplayWidth: number): string {
 	const normalized = value.replace(/\s+/gu, " ").trim();
-	if (normalized.length <= maxLength) {
+	if (normalized === "" || maxDisplayWidth <= 0) {
+		return "";
+	}
+
+	if (getIssueTitleDisplayWidth(normalized) <= maxDisplayWidth) {
 		return normalized;
 	}
 
-	const limit = Math.max(3, maxLength - 3);
-	const prefix = normalized.slice(0, limit).trimEnd();
+	const ellipsis = "...";
+	const limit = maxDisplayWidth - getIssueTitleDisplayWidth(ellipsis);
+	if (limit <= 0) {
+		return ellipsis;
+	}
+
+	const prefix = sliceIssueTitleByDisplayWidth(normalized, limit).trimEnd();
 	const wordBoundary = prefix.lastIndexOf(" ");
-	const shortened = wordBoundary > Math.floor(limit * 0.6)
+	const shortened = wordBoundary > Math.floor(prefix.length * 0.6)
 		? prefix.slice(0, wordBoundary)
 		: prefix;
-	return `${shortened}...`;
+	return `${shortened}${ellipsis}`;
 }
 
-function summarizeProblemForIssueTitle(message: string): string {
+function summarizeProblemForIssueTitle(message: string, maxDisplayWidth = 40): string {
+	if (maxDisplayWidth <= 0) {
+		return "";
+	}
+
 	const normalized = stripMarkdownForIssueTitle(message).replace(/\s+/gu, " ").trim();
+	if (normalized === "") {
+		return "";
+	}
+
 	const sentenceEnd = /[。！？]|[.!?](?=\s|$)/u.exec(normalized);
 	const firstSentence = sentenceEnd ? normalized.slice(0, sentenceEnd.index).trim() : normalized;
-	return truncateIssueTitle(firstSentence, 96).replace(/[。！？.!?]+$/u, "").trim();
+	return truncateIssueTitle(firstSentence, maxDisplayWidth).replace(/[。！？.!?]+$/u, "").trim();
 }
 
 function ensureProblemFingerprint(problem: ReviewProblem): ReviewProblem {
@@ -1920,7 +2352,7 @@ function buildManagedIssueBody(
 		sections.push("", "---", "", "### Review summary", "", options.summary);
 	}
 
-	return sections.join("\n");
+	return normalizeMarkdownBody(sections.join("\n"));
 }
 
 function parseManagedIssues(raw: unknown, markerPrefix: string, markerLabel: string): readonly ManagedGiteaIssue[] {
@@ -1952,6 +2384,7 @@ function parseManagedIssues(raw: unknown, markerPrefix: string, markerLabel: str
 		}
 
 		const fingerprint = extractManagedIssueFingerprint(body);
+		const scopeFingerprint = extractConsolidatedScopeFingerprint(body);
 		issues.push({
 			number,
 			title,
@@ -1959,6 +2392,7 @@ function parseManagedIssues(raw: unknown, markerPrefix: string, markerLabel: str
 			state,
 			...(typeof rawIssue.html_url === "string" ? { url: rawIssue.html_url } : {}),
 			...(fingerprint ? { fingerprint } : {}),
+			...(scopeFingerprint ? { scopeFingerprint } : {}),
 		});
 	}
 
@@ -1973,6 +2407,7 @@ export function createGiteaProblemIssueDispatcher(options: GiteaProblemIssueOpti
 	const markerLabel = options.markerLabel ?? "aicr-managed";
 	const resolvedAction = options.resolvedAction ?? "close";
 	const maxRecentIssues = normalizeManagedIssueFetchLimit(options.maxRecentIssues);
+    const issueMode = options.issueMode ?? "consolidated";
 	const assignCommitter = options.assignCommitter ?? true;
 	const addOwnersAsAssignees = options.addOwnersAsAssignees ?? false;
 	const ownersFilePath = options.ownersFilePath ?? "OWNERS";
@@ -2313,6 +2748,122 @@ export function createGiteaProblemIssueDispatcher(options: GiteaProblemIssueOpti
 		};
 	}
 
+	async function createConsolidatedIssue(
+		problems: readonly ReviewProblem[],
+		summary: string | undefined,
+		owners: OwnersConfig | undefined,
+	): Promise<DispatchResult> {
+		const scopeFingerprint = computeScopeFingerprint(channel, options.owner, options.repo);
+		const body: Record<string, unknown> = {
+			title: buildConsolidatedIssueTitle(problems, markerPrefix),
+			body: buildConsolidatedIssueBody(problems, { channel, markerLabel, scopeFingerprint, ...(summary ? { summary } : {}) }),
+		};
+
+		const labelIdList: number[] = [];
+		if (options.labelIds && options.labelIds.length > 0) {
+			labelIdList.push(...options.labelIds);
+		}
+
+		if (options.autoTag) {
+			const autoTagId = await resolveLabelIdByName(options.autoTag);
+			if (autoTagId !== undefined && !labelIdList.includes(autoTagId)) {
+				labelIdList.push(autoTagId);
+			}
+		}
+
+		if (options.reviewedTag) {
+			const reviewedTagId = await resolveLabelIdByName(options.reviewedTag);
+			if (reviewedTagId !== undefined && !labelIdList.includes(reviewedTagId)) {
+				labelIdList.push(reviewedTagId);
+			}
+		}
+
+		if (severityLabelPrefix) {
+			const highest = getHighestSeverity(problems);
+			if (highest) {
+				const severityId = await resolveSeverityLabelId(highest);
+				if (severityId !== undefined && !labelIdList.includes(severityId)) {
+					labelIdList.push(severityId);
+				}
+			}
+		}
+
+		if (labelIdList.length > 0) {
+			body.labels = labelIdList;
+		}
+
+		const allAssignees = collectAllAssignees(problems, owners);
+		if (allAssignees.length > 0) {
+			body.assignees = allAssignees;
+		}
+
+		const raw = await request("POST", `${repoPath}/issues`, body);
+		const externalId = extractExternalId(raw);
+
+		const issueUrl = raw && typeof raw === "object"
+			? (raw as Record<string, unknown>).html_url as string | undefined
+			: undefined;
+
+		const highest = getHighestSeverity(problems);
+		await sendFeishuNotification(
+			buildConsolidatedIssueTitle(problems, markerPrefix),
+			issueUrl,
+			highest ?? "info",
+			`${problems.length} problems`,
+		);
+
+		return {
+			channel,
+			status: "published",
+			...(externalId ? { externalId } : {}),
+			raw: { action: "created_consolidated", issue: raw },
+		};
+	}
+
+	async function updateConsolidatedIssue(
+		existing: ManagedGiteaIssue,
+		problems: readonly ReviewProblem[],
+		summary: string | undefined,
+	): Promise<DispatchResult> {
+		const scopeFingerprint = computeScopeFingerprint(channel, options.owner, options.repo);
+		const body: Record<string, unknown> = {
+			title: buildConsolidatedIssueTitle(problems, markerPrefix),
+			body: buildConsolidatedIssueBody(problems, { channel, markerLabel, scopeFingerprint, ...(summary ? { summary } : {}) }),
+		};
+
+		if (severityLabelPrefix) {
+			const labelIdList: number[] = [];
+			const highest = getHighestSeverity(problems);
+			if (highest) {
+				const severityId = await resolveSeverityLabelId(highest);
+				if (severityId !== undefined) {
+					labelIdList.push(severityId);
+				}
+			}
+			if (labelIdList.length > 0) {
+				body.labels = labelIdList;
+			}
+		}
+
+		const raw = await request("PATCH", `${repoPath}/issues/${existing.number}`, body);
+		return {
+			channel,
+			status: "published",
+			externalId: String(existing.number),
+			raw: { action: "updated_consolidated", issueNumber: existing.number, issue: raw },
+		};
+	}
+
+	function collectAllAssignees(problems: readonly ReviewProblem[], owners: OwnersConfig | undefined): string[] {
+		const assigneeSet = new Set<string>();
+		for (const problem of problems) {
+			for (const assignee of resolveAssignees(problem, owners)) {
+				assigneeSet.add(assignee);
+			}
+		}
+		return [...assigneeSet];
+	}
+
 	async function resolveIssue(issue: ManagedGiteaIssue): Promise<DispatchResult | undefined> {
 		if (resolvedAction === "none") {
 			return undefined;
@@ -2346,7 +2897,6 @@ export function createGiteaProblemIssueDispatcher(options: GiteaProblemIssueOpti
 
 	const dispatcher = {
 		async reconcileProblems(problems: readonly ReviewProblem[], summary?: string): Promise<readonly DispatchResult[]> {
-			const preparedProblems = problems.map(ensureProblemFingerprint);
 			let owners: OwnersConfig | undefined;
 
 			if (addOwnersAsAssignees) {
@@ -2355,6 +2905,49 @@ export function createGiteaProblemIssueDispatcher(options: GiteaProblemIssueOpti
 					owners = parseOwnersContent(ownersContent);
 				}
 			}
+
+			if (issueMode === "consolidated") {
+				const existingIssues = await listManagedOpenIssues();
+				const scopeFingerprint = computeScopeFingerprint(channel, options.owner, options.repo);
+				const existingConsolidated = existingIssues.find(
+					(issue) => issue.scopeFingerprint === scopeFingerprint,
+				);
+
+				const results: DispatchResult[] = [];
+
+				if (problems.length === 0) {
+					if (existingConsolidated && resolvedAction !== "none") {
+						const result = await resolveIssue(existingConsolidated);
+						if (result) {
+							results.push(result);
+						}
+					}
+					return results;
+				}
+
+				if (existingConsolidated) {
+					results.push(await updateConsolidatedIssue(existingConsolidated, problems, summary));
+				} else {
+					results.push(await createConsolidatedIssue(problems, summary, owners));
+				}
+
+				for (const issue of existingIssues) {
+					if (issue.scopeFingerprint === scopeFingerprint) {
+						continue;
+					}
+					if (!isConsolidatedManagedIssue(issue.body)) {
+						continue;
+					}
+					const result = await resolveIssue(issue);
+					if (result) {
+						results.push(result);
+					}
+				}
+
+				return results;
+			}
+
+			const preparedProblems = problems.map(ensureProblemFingerprint);
 
 			const currentFingerprints = new Set(preparedProblems.map((problem) => problem.fingerprint!));
 			const existingIssues = await listManagedOpenIssues();

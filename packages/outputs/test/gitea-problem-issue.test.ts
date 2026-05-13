@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   createGiteaProblemIssueDispatcher,
+  computeScopeFingerprint,
   getHighestSeverity,
   matchOwnersForFile,
   parseOwnersContent,
@@ -50,6 +51,7 @@ describe("createGiteaProblemIssueDispatcher", () => {
       token: "token-value",
       owner: "owent",
       repo: "example",
+      issueMode: "per_problem",
       channelName: "aicr-issues",
       markerPrefix: "[AICR Test]",
       markerLabel: "aicr-managed",
@@ -68,7 +70,7 @@ describe("createGiteaProblemIssueDispatcher", () => {
     expect(calls[1]?.url).toBe("https://gitea.example/api/v1/repos/owent/example/issues");
     expect(calls[1]?.init?.headers).toMatchObject({ authorization: "token token-value" });
     const body = JSON.parse(calls[1]?.init?.body ?? "{}");
-    expect(body.title).toBe("[AICR Test] [CRITICAL] SQL query uses unsanitized input (src/auth.ts:12)");
+    expect(body.title).toBe("[AICR Test] [CRITICAL] src/auth.ts:12 · SQL query uses unsanitized input");
     expect(body.title).not.toContain(" - ");
     expect(body.body).toContain("<!-- aicr:managed=problem-issue -->");
     expect(body.body).toContain("<!-- aicr:fingerprint=fp-sql -->");
@@ -82,6 +84,7 @@ describe("createGiteaProblemIssueDispatcher", () => {
       baseUrl: "https://gitea.example",
       owner: "owent",
       repo: "example",
+      issueMode: "per_problem",
       fetch: async (url) => {
         calls.push(url);
         return response([
@@ -107,6 +110,7 @@ describe("createGiteaProblemIssueDispatcher", () => {
       baseUrl: "https://gitea.example",
       owner: "owent",
       repo: "example",
+      issueMode: "per_problem",
       channelName: "aicr-issues",
       fetch: async (url, init) => {
         calls.push({ url, init });
@@ -142,6 +146,7 @@ describe("createGiteaProblemIssueDispatcher", () => {
       baseUrl: "https://gitea.example",
       owner: "owent",
       repo: "example",
+      issueMode: "per_problem",
       maxRecentIssues: 7,
       fetch: async (url) => {
         calls.push(url);
@@ -162,6 +167,7 @@ describe("createGiteaProblemIssueDispatcher", () => {
       baseUrl: "https://gitea.example",
       owner: "owent",
       repo: "example",
+      issueMode: "per_problem",
       resolvedAction: "delete",
       fetch: async (url, init) => {
         calls.push({ url, init });
@@ -193,6 +199,7 @@ describe("createGiteaProblemIssueDispatcher", () => {
       baseUrl: "https://gitea.example",
       owner: "owent",
       repo: "example",
+      issueMode: "per_problem",
       committerUsername: "committer-user",
       addOwnersAsAssignees: true,
       ownersContent: [
@@ -224,6 +231,7 @@ describe("createGiteaProblemIssueDispatcher", () => {
       baseUrl: "https://gitea.example",
       owner: "owent",
       repo: "example",
+      issueMode: "per_problem",
       committerUsername: "committer-user",
       addOwnersAsAssignees: true,
       ownersContent: [
@@ -255,6 +263,7 @@ describe("createGiteaProblemIssueDispatcher", () => {
       baseUrl: "https://gitea.example",
       owner: "owent",
       repo: "example",
+      issueMode: "per_problem",
       severityLabelPrefix: "aicr:problem:",
       fetch: async (url, init) => {
         calls.push({ url, init });
@@ -285,6 +294,7 @@ describe("createGiteaProblemIssueDispatcher", () => {
       baseUrl: "https://gitea.example",
       owner: "owent",
       repo: "example",
+      issueMode: "per_problem",
       notifyFeishu: {
         webhookUrl: "https://open.feishu.cn/open-apis/bot/v2/hook/test",
         secret: "test-secret",
@@ -397,5 +407,156 @@ describe("getHighestSeverity", () => {
       { file: "a.ts", line: 1, severity: "high", category: "correctness", message: "m1" },
     ];
     expect(getHighestSeverity(problems)).toBe("high");
+  });
+});
+
+describe("createGiteaProblemIssueDispatcher consolidated mode", () => {
+  const problem2: ReviewProblem = {
+    file: "src/utils.ts",
+    line: 30,
+    severity: "medium",
+    category: "performance",
+    message: "Inefficient loop detected.",
+  };
+
+  it("creates one consolidated issue with all problems", async () => {
+    const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
+    const dispatcher = createGiteaProblemIssueDispatcher({
+      baseUrl: "https://gitea.example",
+      token: "token-value",
+      owner: "owent",
+      repo: "example",
+      channelName: "aicr-issues",
+      markerPrefix: "[AICR]",
+      issueMode: "consolidated",
+      fetch: async (url, init) => {
+        calls.push({ url, init });
+        if (url.includes("/issues?")) {
+          return response([]);
+        }
+        return response({ id: 500, number: 50 });
+      },
+    });
+
+    const results = await dispatcher.reconcileProblems([problem, problem2], "Review summary");
+
+    expect(results).toHaveLength(1);
+    expect(results[0]?.raw).toMatchObject({ action: "created_consolidated" });
+
+    const body = JSON.parse(
+      calls.find((c) => c.url === "https://gitea.example/api/v1/repos/owent/example/issues" && c.init?.method === "POST")?.init?.body ?? "{}",
+    );
+    expect(body.title).toBe("[AICR] [CRITICAL] 2 problems");
+    expect(body.title).not.toContain("Code Review Report");
+    expect(body.body).toContain("<!-- aicr:consolidated=true -->");
+    expect(body.body).toContain("<!-- aicr:scope_fingerprint=");
+    expect(body.body).toContain("SQL query uses unsanitized input");
+    expect(body.body).toContain("Inefficient loop detected");
+    expect(body.body).toContain("Review summary");
+  });
+
+  it("updates existing consolidated issue on re-analysis", async () => {
+    const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
+    const scopeFp = computeScopeFingerprint("aicr-issues", "owent", "example");
+    const consolidatedBody = [
+      "<!-- aicr:managed=problem-issue -->",
+      "<!-- aicr:consolidated=true -->",
+      "<!-- aicr:channel=aicr-issues -->",
+      "<!-- aicr:label=aicr-managed -->",
+      `<!-- aicr:scope_fingerprint=${scopeFp} -->`,
+      "",
+      "Old content",
+    ].join("\n");
+
+    const dispatcher = createGiteaProblemIssueDispatcher({
+      baseUrl: "https://gitea.example",
+      owner: "owent",
+      repo: "example",
+      channelName: "aicr-issues",
+      issueMode: "consolidated",
+      fetch: async (url, init) => {
+        calls.push({ url, init });
+        if (url.includes("/issues?")) {
+          return response([{
+            number: 42,
+            title: "[AICR] Code Review Report ...",
+            body: consolidatedBody,
+            state: "open",
+          }]);
+        }
+        return response({ id: 42, number: 42 });
+      },
+    });
+
+    const results = await dispatcher.reconcileProblems([problem], "New summary");
+
+    expect(results).toHaveLength(1);
+    expect(results[0]?.raw).toMatchObject({ action: "updated_consolidated", issueNumber: 42 });
+
+    const patchCall = calls.find((c) => c.init?.method === "PATCH");
+    expect(patchCall).toBeDefined();
+    const body = JSON.parse(patchCall?.init?.body ?? "{}");
+    expect(body.title).toBe("[AICR] [CRITICAL] 1 problem");
+    expect(body.body).toContain("New summary");
+    expect(body.body).toContain("SQL query uses unsanitized input");
+  });
+
+  it("closes consolidated issue when no problems found", async () => {
+    const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
+    const scopeFp = computeScopeFingerprint("aicr-issues", "owent", "example");
+    const consolidatedBody = [
+      "<!-- aicr:managed=problem-issue -->",
+      "<!-- aicr:consolidated=true -->",
+      "<!-- aicr:channel=aicr-issues -->",
+      "<!-- aicr:label=aicr-managed -->",
+      `<!-- aicr:scope_fingerprint=${scopeFp} -->`,
+      "",
+      "Old content",
+    ].join("\n");
+
+    const dispatcher = createGiteaProblemIssueDispatcher({
+      baseUrl: "https://gitea.example",
+      owner: "owent",
+      repo: "example",
+      channelName: "aicr-issues",
+      issueMode: "consolidated",
+      fetch: async (url, init) => {
+        calls.push({ url, init });
+        if (url.includes("/issues?")) {
+          return response([{
+            number: 42,
+            title: "[AICR] Code Review Report ...",
+            body: consolidatedBody,
+            state: "open",
+          }]);
+        }
+        return response({ id: 1 });
+      },
+    });
+
+    const results = await dispatcher.reconcileProblems([]);
+
+    expect(results).toHaveLength(1);
+    expect(results[0]?.raw).toMatchObject({ action: "closed", issueNumber: 42 });
+  });
+
+  it("returns empty results when no problems and no existing issue", async () => {
+    const calls: string[] = [];
+    const dispatcher = createGiteaProblemIssueDispatcher({
+      baseUrl: "https://gitea.example",
+      owner: "owent",
+      repo: "example",
+      channelName: "aicr-issues",
+      issueMode: "consolidated",
+      fetch: async (url) => {
+        calls.push(url);
+        return response([]);
+      },
+    });
+
+    const results = await dispatcher.reconcileProblems([]);
+
+    expect(results).toEqual([]);
+    expect(calls).toHaveLength(1);
   });
 });

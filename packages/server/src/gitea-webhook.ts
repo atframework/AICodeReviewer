@@ -12,6 +12,7 @@ export interface GiteaWebhookConfig {
   readonly triggerName: string;
   readonly workspaceId: string;
   readonly webhookSecret?: string;
+  readonly repoRef?: string;
   readonly repoMappings?: readonly RepositoryWorkspaceMapping[];
 }
 
@@ -216,10 +217,33 @@ function collectPushChangedFiles(parsed: z.infer<typeof pushPayloadSchema>): str
   return [...files];
 }
 
+function normalizeRepositoryRef(repoRef: string): string {
+  return repoRef.trim().replace(/^\/+|\/+$/gu, "").toLowerCase();
+}
+
+export function matchesWebhookRepo(config: GiteaWebhookConfig, repoRef: string): boolean {
+  const normalizedRepo = normalizeRepositoryRef(repoRef);
+  if (!normalizedRepo) {
+    return false;
+  }
+
+  if (config.repoRef) {
+    const normalizedConfigRepo = normalizeRepositoryRef(config.repoRef);
+    if (normalizedRepo === normalizedConfigRepo) {
+      return true;
+    }
+  }
+
+  return config.repoMappings?.some((mapping) => {
+    const normalizedMatch = normalizeRepositoryRef(mapping.match);
+    return normalizedRepo === normalizedMatch || normalizedRepo.endsWith(`/${normalizedMatch}`);
+  }) ?? false;
+}
+
 function resolveWorkspaceIdForRepo(config: GiteaWebhookConfig, repoRef: string): string {
-  const normalizedRepo = repoRef.toLowerCase();
+  const normalizedRepo = normalizeRepositoryRef(repoRef);
   const matched = config.repoMappings?.find((mapping) => {
-    const normalizedMatch = mapping.match.toLowerCase();
+    const normalizedMatch = normalizeRepositoryRef(mapping.match);
     return normalizedRepo === normalizedMatch || normalizedRepo.endsWith(`/${normalizedMatch}`);
   });
 
@@ -254,6 +278,44 @@ function extractPrBranch(pr: Record<string, unknown>): string | undefined {
   const label = head.label as string | undefined;
   if (label) {
     return label.split(":").at(-1);
+  }
+
+  return undefined;
+}
+
+export function extractWebhookRepositoryRef(
+  provider: ReviewProvider,
+  payload: unknown,
+): string | undefined {
+  if (!payload || typeof payload !== "object") {
+    return undefined;
+  }
+
+  const rawPayload = payload as Record<string, unknown>;
+
+  if (provider === "gitea" || provider === "forgejo" || provider === "github") {
+    const repository = rawPayload.repository;
+    if (repository && typeof repository === "object") {
+      const fullName = (repository as Record<string, unknown>).full_name;
+      return typeof fullName === "string" && fullName.length > 0 ? fullName : undefined;
+    }
+    return undefined;
+  }
+
+  if (provider === "gitlab") {
+    const project = rawPayload.project;
+    if (project && typeof project === "object") {
+      const pathWithNamespace = (project as Record<string, unknown>).path_with_namespace;
+      if (typeof pathWithNamespace === "string" && pathWithNamespace.length > 0) {
+        return pathWithNamespace;
+      }
+    }
+
+    const repository = rawPayload.repository;
+    if (repository && typeof repository === "object") {
+      const fullName = (repository as Record<string, unknown>).full_name;
+      return typeof fullName === "string" && fullName.length > 0 ? fullName : undefined;
+    }
   }
 
   return undefined;
@@ -365,7 +427,7 @@ export function translateWebhookToReviewEvent(
     return createReviewEvent({
       triggerName: config.triggerName,
       provider,
-      workspaceId: config.workspaceId,
+      workspaceId: resolveWorkspaceIdForRepo(config, parsed.project.path_with_namespace),
       targetKind: "pull_request",
       repoRef: parsed.project.path_with_namespace,
       baseSha: parsed.object_attributes.diff_refs?.base_sha ?? parsed.object_attributes.target_branch ?? parsed.object_attributes.source?.default_branch,
@@ -385,7 +447,7 @@ export function translateWebhookToReviewEvent(
     return createReviewEvent({
       triggerName: config.triggerName,
       provider,
-      workspaceId: config.workspaceId,
+      workspaceId: resolveWorkspaceIdForRepo(config, parsed.project.path_with_namespace),
       targetKind: "push",
       repoRef: parsed.project.path_with_namespace,
       baseSha: parsed.before,

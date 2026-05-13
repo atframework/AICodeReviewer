@@ -125,6 +125,8 @@ Each trigger kind uses a specific verification mechanism:
 | **gitlab**              | `webhook_secret_env` | Token comparison | `x-gitlab-token`        | GitLab webhook → Secret token |
 | **p4**                  | `webhook_secret_env` | HMAC-SHA256      | `x-aicr-signature-256`  | p4-trigger.sh computes HMAC   |
 
+GitHub and GitLab can each define **multiple trigger profiles on the same route** (`/webhooks/github` or `/webhooks/gitlab`). Use separate trigger names when repositories need different outbound tokens, webhook secrets, or file filters; AICR picks the final profile by the verified credential plus the repository identity from the webhook payload.
+
 **Generate a secret:**
 
 ```bash
@@ -252,6 +254,42 @@ workspaces:
         line_comments: [gitea-pr-review]
         summary: [gitea-pr-review]
 ```
+
+### Per-repo GitHub / GitLab profiles on one webhook route
+
+When two GitHub or GitLab repositories need different auth or filtering rules,
+define one trigger profile per repo (or per repo family) and bind each
+workspace to the matching `source_repo.trigger`:
+
+```yaml
+triggers:
+  - name: github-core
+    kind: github
+    token_env: AICR_GITHUB_CORE_TOKEN
+    webhook_secret_env: AICR_GITHUB_CORE_WEBHOOK_SECRET
+
+  - name: github-external
+    kind: github
+    token_env: AICR_GITHUB_EXTERNAL_TOKEN
+    webhook_secret_env: AICR_GITHUB_EXTERNAL_WEBHOOK_SECRET
+    include_cr_file: ["**/*.ts", "**/*.tsx"]
+
+workspaces:
+  instances:
+    core-repo:
+      source_repo:
+        trigger: github-core
+        repo: "my-org/core-repo"
+
+    external-repo:
+      source_repo:
+        trigger: github-external
+        repo: "partner-org/external-repo"
+```
+
+This keeps each repo on its own outbound token, webhook secret, and file-filter
+set while still using the standard `/webhooks/github` or `/webhooks/gitlab`
+endpoint.
 
 ## Zero-Problem Output Policy
 
