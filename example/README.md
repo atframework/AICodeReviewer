@@ -299,6 +299,30 @@ review:
 - **Workspace override**: Set per-workspace `review.labels` to customize behavior
   for individual repositories.
 
+## Managed Problem Issue Lifecycle Limit
+
+`gitea_problem_issue` and `github_problem_issue` reconcile stale managed issues
+by listing only the most recent open issues. Configure the cap globally under
+`review.problem_issue.max_recent_issues` and override it per workspace when a
+repository needs a tighter or looser lifecycle scan.
+
+```yaml
+review:
+  problem_issue:
+    max_recent_issues: 20  # default; valid range is 1..100
+
+workspaces:
+  instances:
+    latency-sensitive-service:
+      review:
+        problem_issue:
+          max_recent_issues: 10
+```
+
+If a repository has more open managed issues than the limit, fingerprints
+outside the recent window are not deduplicated or closed in that run. Later
+runs, or a temporarily raised cap, can be used for large cleanup runs.
+
 ## Non-PR Target Links
 
 Built-in templates render `target.markdownLink` / `target.displayText` instead
@@ -533,6 +557,13 @@ outputs:
       - match:
           trigger: p4-main
           target_kind: commit
+        summary: [feishu-code-review]
+
+      # Route GitHub push reviews to Feishu. Without a summary route, runs with
+      # problems can be recorded as skipped with skipReason="no_output_publisher".
+      - match:
+          trigger: github
+          target_kind: push
         summary: [feishu-code-review]
 ```
 

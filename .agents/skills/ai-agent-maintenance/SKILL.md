@@ -16,6 +16,7 @@ Use this skill when updating AI-agent guidance, prompt assets, bridge files, or 
 - Keep AI-facing guidance aligned with user-facing docs and examples; if a change affects agent config materialization, MCP tools, output templates, or deployment behavior, sync `Plan.md`, the relevant `docs/` module, `example/config.yaml`, and `example/README.md` or note why they are unchanged.
 - When a change affects agent runtime setup, verify LLM config translation, MCP tool mapping, three-layer prompt/instruction layering (system built-in → user common → project/repo-local), and skill materialization together; use `../agent-runtime-integration/SKILL.md` for the detailed workflow.
 - Merge improvements into existing prompt and skill content; do not leave old versions, migration notes, changelog notes, or historical comparison sections.
+- If an agent task succeeds only after retrying or switching approach, preserve the reusable cause and fix in the right AI-facing asset so future agents avoid the same failure path.
 
 ## Compatibility Model
 
@@ -29,6 +30,7 @@ Use this skill when updating AI-agent guidance, prompt assets, bridge files, or 
 
 1. **Research first**
    - Read the nearest `AGENTS.md`, referenced `AGENTS.*.md` files, present bridge files such as `CLAUDE.md`, and relevant `SKILL.md` files before editing.
+   - Check current official or maintained community references for prompt/agent/skill authoring before planning any AI-facing edit; prioritize concise instructions, progressive disclosure, discoverable descriptions, and real-use validation.
    - If compatibility behavior may change, check current official docs or maintained references for the affected tools.
    - Respect dirty workspaces: preserve unrelated user or formatter edits and avoid broad reformatting.
 
@@ -36,6 +38,7 @@ Use this skill when updating AI-agent guidance, prompt assets, bridge files, or 
    - Put facts that apply to nearly every task in `AGENTS.md`.
    - Put path-specific or tool-specific rules in their native file only when that scope is needed.
    - Put multi-step, task-specific, or rarely used guidance in skills.
+   - For retry-derived lessons, record only durable patterns: the trigger, root cause, and preferred fix. Skip one-off environment glitches, stale data, and facts that are obvious from nearby code.
    - Prefer links or references to existing docs or skills over copying long material into always-on prompts.
    - For agent CLI runtime changes, keep the repository source of truth in `.agents/skills/` and generate adapter-native copies or shims at materialization time; do not commit duplicate Kilo/Roo/OpenCode/Claude skill bodies.
 
@@ -54,4 +57,5 @@ Use this skill when updating AI-agent guidance, prompt assets, bridge files, or 
 
 5. **Summarize clearly**
    - Report the files changed, compatibility surfaces preserved, and validations run.
+   - When the edit records a retry-derived lesson, summarize the original error cause and the chosen fix without keeping a chronological incident log in the prompt asset.
    - Call out skipped build/test work when only documentation changed.

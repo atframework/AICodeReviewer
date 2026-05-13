@@ -26,6 +26,7 @@
 - Keep temporary repository artifacts such as scratch scripts, debug logs, and one-off reports under `build/`; do not leave them in the repository root.
 - Use `.github/instructions/*.instructions.md` only for path-specific rules; keep workspace-wide rules in this file.
 - Keep AI-facing assets concise: stable rules here, detailed shared context in `AGENTS.*.md`, and repeatable procedures in skills.
+- When an agent hits an error but succeeds by retrying or changing approach, capture the generalizable cause and fix in the most appropriate existing `AGENTS.md` or skill file after researching current prompt/skill best practices; merge the lesson concisely instead of adding incident logs or duplicates.
 
 ## Environment notes
 
@@ -40,7 +41,7 @@
 
 These issues have been found and fixed in prior sessions. Before making changes, check that you are not reintroducing any of them:
 
-1. **Config schema must track Plan.md §3.10**: `packages/core/src/config.ts` Zod schemas must include `compression`, `llm.fallback_chain`, `llm.retry`, `llm.budget`, `llm.per_provider_overrides`, `queue.workers`, `queue.rate_limit`, `queue.retry`, `queue.dead_letter`, `review.reflection.memory`, `workspaces.defaults.agent`, `outputs.channels[].mention_fallback`, and `outputs.routes`. If you add config fields, add corresponding tests in `packages/core/test/config.test.ts`.
+1. **Config schema must track Plan.md §3.10**: `packages/core/src/config.ts` Zod schemas must include `compression`, `llm.fallback_chain`, `llm.retry`, `llm.budget`, `llm.per_provider_overrides`, `queue.workers`, `queue.rate_limit`, `queue.retry`, `queue.dead_letter`, `review.problem_issue.max_recent_issues`, `review.reflection.memory`, `workspaces.defaults.agent`, `outputs.channels[].mention_fallback`, and `outputs.routes`. If you add config fields, add corresponding tests in `packages/core/test/config.test.ts`.
 2. **Store schema must track Plan.md §3.11**: `packages/store/src/schema.ts` must include `triggerName`, `provider`, and `providerModel` columns. If you change the schema, update `packages/store/test/schema.test.ts`.
 3. **`isPlainObject` must reject built-in class instances**: `Date`, `RegExp`, and other non-plain prototypes must return `false`. Only `Object.prototype` or `null` prototype are plain.
 4. **`normalizePath` must compress consecutive slashes**: `//` → `/` in addition to backslash replacement and leading `./` stripping.

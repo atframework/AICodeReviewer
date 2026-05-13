@@ -64,7 +64,7 @@ describe("createGiteaProblemIssueDispatcher", () => {
 
     expect(results).toHaveLength(1);
     expect(results[0]?.externalId).toBe("99");
-    expect(calls[0]?.url).toBe("https://gitea.example/api/v1/repos/owent/example/issues?state=open&type=issues");
+    expect(calls[0]?.url).toBe("https://gitea.example/api/v1/repos/owent/example/issues?state=open&type=issues&limit=20&page=1");
     expect(calls[1]?.url).toBe("https://gitea.example/api/v1/repos/owent/example/issues");
     expect(calls[1]?.init?.headers).toMatchObject({ authorization: "token token-value" });
     const body = JSON.parse(calls[1]?.init?.body ?? "{}");
@@ -128,11 +128,31 @@ describe("createGiteaProblemIssueDispatcher", () => {
     expect(results).toHaveLength(1);
     expect(results[0]?.raw).toMatchObject({ action: "closed", issueNumber: 42 });
     expect(calls.map((call) => `${call.init?.method ?? "GET"} ${call.url}`)).toEqual([
-      "GET https://gitea.example/api/v1/repos/owent/example/issues?state=open&type=issues",
+      "GET https://gitea.example/api/v1/repos/owent/example/issues?state=open&type=issues&limit=20&page=1",
       "POST https://gitea.example/api/v1/repos/owent/example/issues/42/comments",
       "PATCH https://gitea.example/api/v1/repos/owent/example/issues/42",
     ]);
     expect(JSON.parse(calls[2]?.init?.body ?? "{}")).toEqual({ state: "closed" });
+  });
+
+  it("uses a configured recent managed issue fetch limit", async () => {
+    const calls: string[] = [];
+    const dispatcher = createGiteaProblemIssueDispatcher({
+      baseUrl: "https://gitea.example",
+      owner: "owent",
+      repo: "example",
+      maxRecentIssues: 7,
+      fetch: async (url) => {
+        calls.push(url);
+        return response([]);
+      },
+    });
+
+    await dispatcher.reconcileProblems([]);
+
+    expect(calls).toEqual([
+      "https://gitea.example/api/v1/repos/owent/example/issues?state=open&type=issues&limit=7&page=1",
+    ]);
   });
 
   it("deletes stale managed issues when configured", async () => {

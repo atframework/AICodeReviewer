@@ -61,7 +61,7 @@ describe("createGithubProblemIssueDispatcher", () => {
 		expect(results).toHaveLength(1);
 		expect(results[0]?.externalId).toBe("99");
 
-		expect(calls[0]?.url).toBe("https://api.github.com/repos/my-org/my-repo/issues?state=open&per_page=100");
+		expect(calls[0]?.url).toBe("https://api.github.com/repos/my-org/my-repo/issues?state=open&sort=updated&direction=desc&per_page=20&page=1");
 		expect(calls[1]?.url).toBe("https://api.github.com/repos/my-org/my-repo/issues");
 		expect(calls[1]?.init?.headers).toMatchObject({
 			authorization: "Bearer gh-token",
@@ -128,11 +128,30 @@ describe("createGithubProblemIssueDispatcher", () => {
 		expect(results).toHaveLength(1);
 		expect(results[0]?.raw).toMatchObject({ action: "closed", issueNumber: 42 });
 		expect(calls.map((call) => `${call.init?.method ?? "GET"} ${call.url}`)).toEqual([
-			"GET https://api.github.com/repos/my-org/my-repo/issues?state=open&per_page=100",
+			"GET https://api.github.com/repos/my-org/my-repo/issues?state=open&sort=updated&direction=desc&per_page=20&page=1",
 			"POST https://api.github.com/repos/my-org/my-repo/issues/42/comments",
 			"PATCH https://api.github.com/repos/my-org/my-repo/issues/42",
 		]);
 		expect(JSON.parse(calls[2]?.init?.body ?? "{}")).toEqual({ state: "closed" });
+	});
+
+	it("uses a configured recent managed issue fetch limit", async () => {
+		const calls: string[] = [];
+		const dispatcher = createGithubProblemIssueDispatcher({
+			owner: "my-org",
+			repo: "my-repo",
+			maxRecentIssues: 7,
+			fetch: async (url) => {
+				calls.push(url);
+				return response([]);
+			},
+		});
+
+		await dispatcher.reconcileProblems([]);
+
+		expect(calls).toEqual([
+			"https://api.github.com/repos/my-org/my-repo/issues?state=open&sort=updated&direction=desc&per_page=7&page=1",
+		]);
 	});
 
 	it("skips resolvedAction none for stale issues", async () => {
