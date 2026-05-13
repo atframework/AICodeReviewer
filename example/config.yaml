@@ -228,7 +228,7 @@ outputs:
   channels:
     # Gitea PR review — inline line comments on pull requests
     - name: gitea-pr-review
-      kind: gitea_pr_review # gitea_pr_review | github_pr_review | gitlab_mr_review | gitea_issue | github_issue | github_problem_issue | feishu_bot | wecom_bot
+      kind: gitea_pr_review # gitea_pr_review | github_pr_review | gitlab_mr_review | gitea_issue | gitea_problem_issue | github_issue | github_problem_issue | feishu_bot | wecom_bot
       trigger: gitea
       mention_author: false
       no_problems: { action: suppress }
@@ -323,6 +323,10 @@ outputs:
     #       trigger: p4-main                # match events from the p4-main trigger
     #       target_kind: commit              # match commit events only
     #     summary: [feishu-code-review]      # send summary to Feishu
+    #   - match:
+    #       trigger: github                  # GitHub push events have no PR line-comment target
+    #       target_kind: push
+    #     summary: [feishu-code-review, github-problem-issues]
 
 # ---------------------------------------------------------------------------
 # Queue
@@ -377,6 +381,10 @@ review:
     ignore: ["aicr:ignore", "aicr-ignore"]
     auto_tag: "aicr"
     reviewed_tag: "aicr:reviewed"
+  # Managed problem issue lifecycle scan cap. AICR lists only the most recent
+  # open managed issues before closing stale ones. Range: 1..100, default: 20.
+  problem_issue:
+    max_recent_issues: 20
 
 # ---------------------------------------------------------------------------
 # Workspaces — one per repository you want to review
@@ -409,6 +417,10 @@ workspaces:
         # channel_overrides:
         #   feishu-code-review:
         #     no_problems: { action: publish }
+      # Optional per-workspace override for latency-sensitive repositories.
+      # review:
+      #   problem_issue:
+      #     max_recent_issues: 10
       # Per-workspace auth (optional, overrides global server.auth)
       # auth:
       #   api_key_env: AICR_MY_REPO_API_KEY
@@ -429,7 +441,7 @@ workspaces:
     #     repo: "my-org/my-repo"               # owner/repo on GitHub
     #   outputs:
     #     line_comments: [github-pr-review]
-    #     summary: [github-pr-review]
+    #     summary: [github-pr-review, feishu-code-review, github-problem-issues]
 
 # --- Template overrides ---
 # Built-in templates live in templates/builtin/*.hbs in the deployment directory.

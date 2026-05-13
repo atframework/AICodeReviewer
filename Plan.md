@@ -540,6 +540,7 @@ export interface ModelSpec {
   - **Gitea / Forgejo / GitHub / GitLab issue**：聚合所有 problem 写入 issue 正文。
   - **Feishu / WeCom 机器人**：分组合并 problem，附 PR 链接 + 行链接。
 - **幂等**：每条 problem 生成 `fingerprint = hash(file, anchor_line, category, message_norm)`；二次评审时同 fingerprint 评论 → 编辑而非新增；已修复 → 自动 resolve（在 Gitea / GitHub / GitLab 上 minimize / 解决线程）。归因 metadata 不进入默认 fingerprint，避免同一问题因 blame 历史变化而重复开新评论；如通道需要，可把 attribution hash 作为二级字段展示。
+- **托管 problem issue 生命周期拉取上限**：`gitea_problem_issue` / `github_problem_issue` 在自动关闭已修复或过期 issue 前，只拉取近期 open managed issues。上限由 `review.problem_issue.max_recent_issues` 控制，默认 `20`，允许 `1..100`，全局配置可被 workspace 覆盖。GitHub 使用 `sort=updated&direction=desc&per_page=N&page=1` 获取最近更新 issue；Gitea 使用 `limit=N&page=1` 保持兼容。若历史 open managed issue 超过上限，窗口外 fingerprint 本次不参与去重或关闭；可通过后续运行或临时调大上限清理较旧 stale issue，避免单次任务耗时和 token/API 消耗过大。
 
 #### 3.9.1 无问题输出策略与目标链接渲染
 
@@ -837,6 +838,8 @@ export interface ModelSpec {
       ignore: ["aicr:ignore", "aicr-ignore"]
       auto_tag: "aicr"
       reviewed_tag: "aicr:reviewed"
+    problem_issue:
+      max_recent_issues: 20
     fetch_extra:
       max_bytes: 524288
       max_files: 5
@@ -851,14 +854,14 @@ export interface ModelSpec {
       ttl_days: 30                          # eviction=ttl 时生效
     defaults:                               # 所有 workspace 实例的默认值（可被 instances.<id> 覆盖）
       sandbox: { kind: docker, engine: auto }
-      review:  { commit_strategy: aggregate }
+      review:  { commit_strategy: aggregate, problem_issue: { max_recent_issues: 20 } }
       outputs:
         no_problems: { action: suppress }
     instances:
       gitea-internal-owent-example:
         source_repo: { trigger: gitea-internal, repo: "owent/example" }
         agent: { default: claude-code }
-        review: { exclude: ["docs/**"] }
+        review: { exclude: ["docs/**"], problem_issue: { max_recent_issues: 10 } }
         outputs:
           line_comments: [gitea-pr-internal]
           summary: [feishu-team-a]
@@ -876,6 +879,7 @@ export interface ModelSpec {
   - `workspaces.instances.<workspace_id>`：每个 workspace 实例的具体配置。**workspace_id 只能出现在 `instances.` 下，不允许出现在 `workspaces.` 顶层**，由 Zod schema 强制（保留字 `cache` / `defaults` / `instances` 不可作 workspace_id）。
 - **多源配置计划（M5/M6 落地时同步 Zod schema 和测试）**：当前 `source_repo` 继续表示 primary 源；下一轮增加 `sources` 显式声明辅助仓库 / 子仓库，形如 `sources: [{ alias: engine, trigger: p4-main, repo: "//depot/engine", role: dependency, fetch: scoped, include: ["Runtime/**"] }]`。`submodules.mode` 默认为 `none`，可显式设为 `metadata` 或 `scoped`；任何 `full recursive` 拉取都必须是管理员级配置且受配额限制。
 - **路由模型**：输出由 `outputs.routes`（全局）+ `workspaces.instances.<id>.outputs`（workspace 级覆盖）决定；同一 problem 可同时落多个通道。无问题输出策略由 §3.9.1 的 `no_problems` 层级计算，路由只决定“发往哪些通道”，policy 决定“这些通道在零 problem 时是否静默”。
+- **非 PR/MR 通知路由**：push / commit / P4 / SVN / scheduled 等没有 PR 行评论目标的事件，若需要 Feishu / WeCom 或托管 problem issue 输出，必须通过 `outputs.routes.rules[].summary` 或 `workspaces.instances.<id>.outputs.summary` 选中对应通道；否则 run 会记录 `skipReason="no_output_publisher"`，不会触发 IM 通知。
 - **`server` 反向代理支持**：当 AICR 部署在 nginx / Traefik / Caddy / 云负载均衡等反向代理之后时，通过 `server` 节控制协议与路径行为。**启用 `trust_proxy` 后，`base_url` 与 `path_prefix` 可自动推导，无需手动配置**：
   - `port` / `hostname`：仅控制 AICR 内部 HTTP 监听的 bind 地址，与外部暴露的端口完全独立。反向代理可以监听任意端口（如 `:8443`、`:443`）并转发到内部 `:8080`。
   - `trust_proxy`：启用后读取 `X-Forwarded-Proto` / `X-Forwarded-Host` / `X-Forwarded-Port` / `X-Forwarded-For` / `X-Forwarded-Prefix` 替代原始 socket 信息。支持 `true`（信任所有）、`false`（不信任，默认）、`"loopback"` / `"linklocal"` / `"uniquelocal"`（仅信任对应来源）或 CIDR 数组。

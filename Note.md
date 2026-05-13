@@ -4,12 +4,6 @@
 
 请分析 Plan.md 和当前阶段的代码实现，分析并修复问题并尽可能补全单元测试。
 
-## Continue Plan
-
-请分析Plan.md和当前实现的进度，继续执行计划。
-
-请分析Plan.md和当前实现的进度，先跳过依赖外部VCS（gitea,github等）验收部分，本地有kili命令行工具，继续执行计划。
-
 ## 验收
 
 - 部署测试必须使用 **Kilo Code** 做至少一次完整端到端验证，确认真实 agent 路径可用，而不是只验证 direct LLM / `native-llm` 路径。
@@ -77,7 +71,7 @@
     - 环境变量: `AICR_URL=https://aicr.m-oa.com:6023`, `AICR_API_KEY`
     - `AICR_DEPOT_PATH` 可省略，默认使用 AICR 服务端 `config.yaml` 中 P4 trigger 的 `depot_path`；仅在脚本需要覆盖服务端配置时设置。
 
-## 密钥验证命令
+## 部署验证
 
 远程服务地址: `https://aicr.m-oa.com:6023` (反向代理 → `http://10.64.8.2:8090`)
 
@@ -88,50 +82,6 @@ curl -sf https://aicr.m-oa.com:6023/healthz
 # 预期输出: ok
 ```
 
-### 验证 Gitea webhook — HMAC 签名（无 API Key）
+### 验证新功能
 
-```bash
-# /webhooks/* 不需要 API Key，仅靠 HMAC 签名验证
-WEBHOOK_SECRET=$(jq -r ".gitea.webhook_secret" ".vscode/secret.json")
-BODY='{"action":"opened","number":1,"pull_request":{"title":"test"}}'
-SIGNATURE=$(echo -n "$BODY" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | awk '{print $NF}')
-
-# 不带签名 → 应返回 401
-curl -sf -X POST https://aicr.m-oa.com:6023/webhooks/gitea \
-  -H "Content-Type: application/json" \
-  -d "$BODY"
-# 预期: {"accepted":false,"reason":"invalid_signature",...}
-
-# 带签名 → 业务处理
-curl -sf -X POST https://aicr.m-oa.com:6023/webhooks/gitea \
-  -H "Content-Type: application/json" \
-  -H "x-gitea-signature-256: $SIGNATURE" \
-  -d "$BODY"
-# 预期: {"accepted":false,"reason":"..."} (业务拒绝，非401)
-```
-
-### 验证 P4 trigger — API Key 认证
-
-```bash
-AICR_KEY=$(jq -r ".aicr_server.api_key" ".vscode/secret.json")
-
-# 无密钥 → 应返回 401
-curl -sf -X POST https://aicr.m-oa.com:6023/triggers/p4 \
-  -H "Content-Type: application/json" \
-  -d '{"change":"99999","user":"testuser","depot_path":"//Prx/Prx_Main","files":["//Prx/Prx_Main/Client/Projects/test.cpp"]}'
-# 预期: {"error":"unauthorized",...}
-
-# 带正确密钥 → 应返回 202
-curl -sf -X POST https://aicr.m-oa.com:6023/triggers/p4 \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: $AICR_KEY" \
-  -d '{"change":"99999","user":"testuser","depot_path":"//Prx/Prx_Main","files":["//Prx/Prx_Main/Client/Projects/test.cpp"]}'
-# 预期: {"accepted":true,...} 或业务错误(非401)
-
-# 错误密钥 → 应返回 403
-curl -sf -X POST https://aicr.m-oa.com:6023/triggers/p4 \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: wrong-key" \
-  -d '{"change":"99999","user":"testuser","depot_path":"//Prx/Prx_Main","files":["//Prx/Prx_Main/Client/Projects/test.cpp"]}'
-# 预期: {"error":"forbidden",...}
-```
+不需要每次都全部重新验证，重点验证本轮任务新增的功能和修复的功能即可。

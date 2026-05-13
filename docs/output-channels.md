@@ -74,6 +74,8 @@ Keep patches concise. Large rewrites belong in a summary or a linked follow-up, 
 
 For push/commit/P4 events, publish a non-empty summary when configured channels need an audit trail. The `no_problems` policy decides per channel whether a zero-problem result is published or suppressed.
 
+If a run has problems but records `skipReason="no_output_publisher"`, no summary route selected a publishable channel for that event. Add an `outputs.routes.rules[].summary` rule or a workspace-level `outputs.summary` entry for the trigger/target, for example to send GitHub push reviews to `feishu_bot` and/or `github_problem_issue`.
+
 ## Channel mapping
 
 | Channel kind | Problem output | Summary output | Notes |
@@ -87,6 +89,31 @@ For push/commit/P4 events, publish a non-empty summary when configured channels 
 | `github_problem_issue` | Collected for reconciliation | Creates or resolves managed GitHub issues | Like `gitea_problem_issue` but uses string label names; `resolved_action` supports `close` and `none` only (GitHub has no issue delete API) |
 | `feishu_bot` | Collected for aggregation | Interactive card Markdown | Includes summary, problem count, severity/category/file/line, and truncated message/suggestion per problem |
 | `wecom_bot` | Collected for aggregation | Markdown message | Same content as Feishu; messages truncated to 500 chars and suggestions to 300 chars to stay within size limits |
+
+## Managed problem issue fetch limit
+
+Managed issue lifecycle reconciliation is intentionally bounded. Before closing or deleting stale managed issues, AICR lists only the most recent open issues up to the effective `review.problem_issue.max_recent_issues` value:
+
+- Default: `20`.
+- Supported range: `1` to `100`.
+- Precedence: global `review.problem_issue.max_recent_issues`, then `workspaces.defaults.review.problem_issue.max_recent_issues`, then `workspaces.instances.<workspace_id>.review.problem_issue.max_recent_issues`.
+- GitHub uses the repository issues API with `sort=updated`, `direction=desc`, `per_page=<limit>`, and `page=1`.
+- Gitea/Forgejo uses the repository issues API with `type=issues`, `limit=<limit>`, and `page=1` for broad version compatibility.
+
+When a repository has more open managed problem issues than the limit, fingerprints outside the recent window are not deduplicated or closed in that run. Temporarily raise the limit, or run repeated scheduled reviews, when doing a one-time cleanup of a large backlog.
+
+```yaml
+review:
+  problem_issue:
+    max_recent_issues: 20
+
+workspaces:
+  instances:
+    latency-sensitive-service:
+      review:
+        problem_issue:
+          max_recent_issues: 10
+```
 
 ## Managed Gitea problem issues
 

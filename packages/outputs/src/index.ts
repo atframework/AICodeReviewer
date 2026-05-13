@@ -849,6 +849,17 @@ export function createGithubIssueDispatcher(options: GithubIssueOptions): Github
 
 export type GithubProblemIssueResolvedAction = "none" | "close";
 
+const DEFAULT_MANAGED_ISSUE_FETCH_LIMIT = 20;
+const MAX_MANAGED_ISSUE_FETCH_LIMIT = 100;
+
+function normalizeManagedIssueFetchLimit(limit: number | undefined): number {
+	if (limit === undefined || !Number.isFinite(limit)) {
+		return DEFAULT_MANAGED_ISSUE_FETCH_LIMIT;
+	}
+
+	return Math.min(MAX_MANAGED_ISSUE_FETCH_LIMIT, Math.max(1, Math.trunc(limit)));
+}
+
 export interface GithubProblemIssueOptions {
 	readonly baseUrl?: string;
 	readonly token?: string;
@@ -859,6 +870,7 @@ export interface GithubProblemIssueOptions {
 	readonly markerLabel?: string;
 	readonly labels?: readonly string[];
 	readonly resolvedAction?: GithubProblemIssueResolvedAction;
+	readonly maxRecentIssues?: number;
 	readonly fetch?: FetchLike;
 	readonly assignCommitter?: boolean;
 	readonly committerUsername?: string;
@@ -938,6 +950,7 @@ export function createGithubProblemIssueDispatcher(options: GithubProblemIssueOp
 	const markerPrefix = options.markerPrefix ?? "[AICR]";
 	const markerLabel = options.markerLabel ?? "aicr-managed";
 	const resolvedAction = options.resolvedAction ?? "close";
+	const maxRecentIssues = normalizeManagedIssueFetchLimit(options.maxRecentIssues);
 	const assignCommitter = options.assignCommitter ?? true;
 	const addOwnersAsAssignees = options.addOwnersAsAssignees ?? false;
 	const ownersFilePath = options.ownersFilePath ?? "OWNERS";
@@ -1093,7 +1106,13 @@ export function createGithubProblemIssueDispatcher(options: GithubProblemIssueOp
 	}
 
 	async function listManagedOpenIssues(): Promise<readonly ManagedGithubIssue[]> {
-		const params = new URLSearchParams({ state: "open", per_page: "100" });
+		const params = new URLSearchParams({
+			state: "open",
+			sort: "updated",
+			direction: "desc",
+			per_page: String(maxRecentIssues),
+			page: "1",
+		});
 		const raw = await request("GET", `${repoPath}/issues?${params.toString()}`);
 		return parseManagedGithubIssues(raw, markerPrefix, markerLabel);
 	}
@@ -1679,6 +1698,7 @@ export interface GiteaProblemIssueOptions {
 	readonly markerLabel?: string;
 	readonly labelIds?: readonly number[];
 	readonly resolvedAction?: GiteaProblemIssueResolvedAction;
+	readonly maxRecentIssues?: number;
 	readonly fetch?: FetchLike;
 	readonly assignCommitter?: boolean;
 	readonly committerUsername?: string;
@@ -1908,6 +1928,7 @@ export function createGiteaProblemIssueDispatcher(options: GiteaProblemIssueOpti
 	const markerPrefix = options.markerPrefix ?? "[AICR]";
 	const markerLabel = options.markerLabel ?? "aicr-managed";
 	const resolvedAction = options.resolvedAction ?? "close";
+	const maxRecentIssues = normalizeManagedIssueFetchLimit(options.maxRecentIssues);
 	const assignCommitter = options.assignCommitter ?? true;
 	const addOwnersAsAssignees = options.addOwnersAsAssignees ?? false;
 	const ownersFilePath = options.ownersFilePath ?? "OWNERS";
@@ -2152,7 +2173,12 @@ export function createGiteaProblemIssueDispatcher(options: GiteaProblemIssueOpti
 	}
 
 	async function listManagedOpenIssues(): Promise<readonly ManagedGiteaIssue[]> {
-		const params = new URLSearchParams({ state: "open", type: "issues" });
+		const params = new URLSearchParams({
+			state: "open",
+			type: "issues",
+			limit: String(maxRecentIssues),
+			page: "1",
+		});
 		const raw = await request("GET", `${repoPath}/issues?${params.toString()}`);
 		return parseManagedIssues(raw, markerPrefix, markerLabel);
 	}

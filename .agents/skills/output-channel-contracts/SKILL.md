@@ -32,6 +32,7 @@ Do not use this skill for LLM prompt layering, agent runtime materialization, or
    - Use positive values (`publish` or `suppress`); avoid negative booleans such as `skip_no_problems`.
    - Apply the policy per output channel, not once for the whole composite publisher.
    - Do not suppress error reports, security alerts, or managed-problem lifecycle reconciliation under the normal no-problems policy.
+   - Managed problem issue lifecycle listing must honor `review.problem_issue.max_recent_issues` (default 20, global → workspace override, range 1..100) before closing or deleting stale issues.
 
 3. **Render target links accurately**
    - Do not label every `event.url` as `View PR`.
