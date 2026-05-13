@@ -1009,11 +1009,26 @@ export async function runReviewOrchestration(
   let diff: ParsedDiff | undefined;
   if (vcs.diff) {
     try {
-      diff = await vcs.diff(
-        { ...range, files: changedPaths.length > 0 ? changedPaths : range.files },
-        { contextLines: options.diffContextLines ?? 3 },
-      );
-    } catch {
+      const diffRange = { ...range, files: changedPaths.length > 0 ? changedPaths : range.files };
+      diff = await vcs.diff(diffRange, { contextLines: options.diffContextLines ?? 3 });
+      if (!diff || diff.files.length === 0) {
+        console.warn(JSON.stringify({
+          level: "warn",
+          msg: "vcs diff returned empty result",
+          provider: vcs.kind,
+          headSha: context.reviewEvent.headSha,
+          changedFileCount: changedPaths.length,
+          rangeFileCount: range.files.length,
+        }));
+      }
+    } catch (error) {
+      console.warn(JSON.stringify({
+        level: "warn",
+        msg: "vcs diff threw an exception",
+        provider: vcs.kind,
+        headSha: context.reviewEvent.headSha,
+        error: error instanceof Error ? error.message : String(error),
+      }));
       diff = undefined;
     }
   }
