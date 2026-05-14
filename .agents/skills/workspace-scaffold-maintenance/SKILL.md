@@ -22,7 +22,7 @@ user-invocable: false
 2. Update the package `tsconfig.json` (`composite`, `rootDir`, `outDir`, `tsBuildInfoFile`, and local `references`) as needed.
 3. Update root `tsconfig.json` references and any `workspace:*` dependencies when package relationships change.
 4. Check whether the scaffold change also requires updates to `package.json`, `pnpm-workspace.yaml`, `eslint.config.mjs`, `vitest.config.ts`, `.markdownlint.json`, or `deploy/Dockerfile`.
-5. Put temporary scaffold helpers, scratch scripts, and debug logs under `../../../build/` rather than the repository root.
+5. Put temporary scaffold helpers, scratch scripts, and debug logs under the repository `build/` directory (e.g. `build/tmp/`, `build/logs/`) rather than the repository root.
 6. Keep tests under `packages/*/test/**/*.test.ts` and source files under `packages/*/src/**/*.ts`.
 7. Run the repository baseline validation workflow before finishing.
 8. If the scaffold pattern itself changed, sync `../../../AGENTS.md`, `../../../docs/ai/AGENTS.repository-baseline.md`, and the relevant maintenance skills.

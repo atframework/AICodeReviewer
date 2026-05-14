@@ -35,21 +35,22 @@ On Windows PowerShell, **do not use `&&` inside a single command string** — it
 
 ### Problem: rsync is not available on Windows
 
-**Solution:** Use `tar czf` + `scp` + `ssh tar xzf`:
+**Solution:** Use `tar czf` + `scp` + `ssh tar xzf`.
+Per `AGENTS.md`, keep the local tarball under `build/`, never in the repository root:
 
 ```powershell
-# 1. Create tarball locally
-tar czf /tmp/aicr-update.tar.gz -C D:/workspace/git/github/atframework/AICodeReviewer `
-  file1 file2 dir1/ ...
+# 1. Create tarball locally under build/
+tar czf build/aicr-deploy-latest.tar.gz `
+  --exclude=.git --exclude=node_modules --exclude=dist --exclude=coverage .
 
 # 2. SCP to remote
 scp -P 36000 -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no `
   -i D:/workspace/keys/id_ed25519.it `
-  /tmp/aicr-update.tar.gz tools@10.64.8.2:/data/disk2/AICodeReviewer/
+  build/aicr-deploy-latest.tar.gz tools@10.64.8.2:/data/disk2/AICodeReviewer/
 
-# 3. Extract on remote (separate SSH call)
+# 3. Extract on remote and clean up tarball (separate SSH call)
 ssh -p 36000 ... 10.64.8.2 `
-  "cd /data/disk2/AICodeReviewer/source; tar xzf ../aicr-update.tar.gz; rm ../aicr-update.tar.gz"
+  "cd /data/disk2/AICodeReviewer && rm -rf source/* && mkdir -p source && tar xzf aicr-deploy-latest.tar.gz -C source && rm -f aicr-deploy-latest.tar.gz"
 ```
 
 If many files changed, sync the entire `packages/` tree or use `git archive` from the local repo.
@@ -143,6 +144,7 @@ ssh -p 36000 ... 10.64.8.2 "cd /data/disk2/AICodeReviewer; bash deploy.sh"
 ```
 
 The `deploy.sh` script:
+
 1. Builds podman image `aicr:latest` from `source/` using `deploy/Dockerfile`
 2. Stops and removes old `aicr` container
 3. Starts new container with volume mounts and env vars
@@ -176,13 +178,13 @@ The `.env` file on remote contains secrets. **Never display its full contents in
 
 ## Common Failures and Recovery
 
-| Symptom | Likely Cause | Fix |
-|---------|-------------|-----|
-| `deploy.sh` fails at build stage | Outdated `source/` or lockfile mismatch | Re-sync source, ensure `pnpm-lock.yaml` is up to date |
-| `healthz` returns non-200 | Config validation failed | Check `podman logs aicr` for Zod/config errors |
-| Container exits immediately | Port conflict or missing volume | Check `podman ps -a` and logs |
-| Feishu/webhook notifications fail | Missing env var in `.env` | Verify `.env` has required vars, restart container |
-| Gitea issues not created | `kind` mismatch or missing `token_env` | Verify config `kind` matches code, check `token_env` resolution |
+| Symptom                           | Likely Cause                            | Fix                                                             |
+| --------------------------------- | --------------------------------------- | --------------------------------------------------------------- |
+| `deploy.sh` fails at build stage  | Outdated `source/` or lockfile mismatch | Re-sync source, ensure `pnpm-lock.yaml` is up to date           |
+| `healthz` returns non-200         | Config validation failed                | Check `podman logs aicr` for Zod/config errors                  |
+| Container exits immediately       | Port conflict or missing volume         | Check `podman ps -a` and logs                                   |
+| Feishu/webhook notifications fail | Missing env var in `.env`               | Verify `.env` has required vars, restart container              |
+| Gitea issues not created          | `kind` mismatch or missing `token_env`  | Verify config `kind` matches code, check `token_env` resolution |
 
 ## Security Notes
 

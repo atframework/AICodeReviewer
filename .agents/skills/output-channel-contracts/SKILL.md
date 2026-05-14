@@ -67,7 +67,7 @@ Do not use this skill for LLM prompt layering, agent runtime materialization, or
   - `consolidated` (default): all problems from one review run are merged into a single issue, scope-fingerprint-based reconciliation. The scope fingerprint is derived from `channel + owner + repo`.
   - `per_problem`: one issue per problem, fingerprint-based reconciliation.
 - In consolidated mode:
-  - Title stays concise (e.g., `[AICR] [CRITICAL] 3 problems`).
+  - Title stays concise: single problem uses `per_problem` format; multiple problems append a representative summary from the highest-severity issue (e.g., `[AICR] [CRITICAL] 3 problems · SQL query uses unsanitized input`).
   - Body groups problems by severity (critical → info).
   - Labels use highest severity. Assignees are aggregated across all problems.
   - On re-analysis: existing consolidated issue is updated (PATCH). If no problems: closed/deleted per `resolved_action`.

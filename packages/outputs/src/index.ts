@@ -24,6 +24,13 @@ export {
 } from "./template-engine.js";
 
 export {
+	toFeishuMarkdown,
+	toWeComMarkdown,
+	toDingTalkMarkdown,
+	toSlackMarkdown,
+} from "./im-markdown.js";
+
+export {
 	buildAtMentions,
 	renderMentions,
 	resolveAuthorUsername,
@@ -2126,13 +2133,33 @@ function buildConsolidatedIssueTitle(
 	problems: readonly ReviewProblem[],
 	markerPrefix: string,
 ): string {
+	if (problems.length === 1) {
+		return buildProblemIssueTitle(problems[0]!, markerPrefix);
+	}
+
 	const highest = getHighestSeverity(problems);
 	const count = problems.length;
-	const title = [
+	const prefix = [
 		markerPrefix,
 		...(highest ? [`[${highest.toUpperCase()}]`] : []),
 		`${count} problem${count !== 1 ? "s" : ""}`,
 	].join(" ");
+
+	const highestProblems = highest
+		? problems.filter((p) => p.severity === highest)
+		: problems;
+	const representative = highestProblems[0]!;
+	const separator = " · ";
+	const summaryBudget =
+		MANAGED_ISSUE_TITLE_MAX_DISPLAY_WIDTH -
+		getIssueTitleDisplayWidth(prefix) -
+		getIssueTitleDisplayWidth(separator);
+	const summary =
+		summaryBudget > MANAGED_ISSUE_CORE_MIN_DISPLAY_WIDTH
+			? (summarizeProblemForIssueTitle(representative.message, summaryBudget) ||
+				truncateIssueTitle(representative.category, summaryBudget))
+			: "";
+	const title = summary ? `${prefix}${separator}${summary}` : prefix;
 	return truncateIssueTitle(title, MANAGED_ISSUE_TITLE_MAX_DISPLAY_WIDTH);
 }
 

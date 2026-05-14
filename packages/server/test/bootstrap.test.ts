@@ -725,7 +725,7 @@ describe("createOutputPublisherFromConfig", () => {
       expect(issueCall).toBeDefined();
       expect(issueCall?.init.headers).toMatchObject({ authorization: "Bearer gh-problem-token" });
       const body = JSON.parse(issueCall?.init.body ?? "{}");
-      expect(body.title).toBe("[AICR] [HIGH] 1 problem");
+      expect(body.title).toBe("[AICR] [HIGH] src/app.ts:7 · Issue");
       expect(body.title).not.toContain("Focused summary title");
       expect(body.body).toContain("Focused summary title");
       expect(calls[0]?.url).toBe("https://api.github.com/repos/my-org/my-repo/issues?state=open&sort=updated&direction=desc&per_page=20&page=1");
@@ -866,7 +866,7 @@ describe("createOutputPublisherFromConfig", () => {
       expect(calls[1]?.url).toBe("https://gitea.example.com/api/v1/repos/owent/example/issues");
       expect(calls[1]?.init.headers).toMatchObject({ authorization: "token resolver-token" });
       const body = JSON.parse(calls[1]?.init.body ?? "{}");
-      expect(body.title).toBe("[AICR Managed] [HIGH] 1 problem");
+      expect(body.title).toBe("[AICR Managed] [HIGH] src/app.ts:3 · Issue");
       expect(body.title).not.toContain("Focused summary title");
       expect(body.body).toContain("Focused summary title");
       expect(body.title).not.toContain(" - ");

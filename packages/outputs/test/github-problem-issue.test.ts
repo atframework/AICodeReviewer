@@ -474,7 +474,7 @@ describe("createGithubProblemIssueDispatcher", () => {
 		const body = JSON.parse(
 			calls.find((c) => c.url.endsWith("/repos/my-org/my-repo/issues") && c.init?.method === "POST")?.init?.body ?? "{}",
 		);
-		expect(body.title).toBe("[AICR] [CRITICAL] 2 problems");
+		expect(body.title).toBe("[AICR] [CRITICAL] 2 problems · SQL query uses unsanitized input");
 		expect(body.title).not.toContain("Code Review Report");
 		expect(body.body).toContain("<!-- aicr:consolidated=true -->");
 		expect(body.body).toContain("<!-- aicr:scope_fingerprint=");
@@ -525,7 +525,7 @@ describe("createGithubProblemIssueDispatcher", () => {
 		const patchCall = calls.find((c) => c.init?.method === "PATCH");
 		expect(patchCall).toBeDefined();
 		const body = JSON.parse(patchCall?.init?.body ?? "{}");
-		expect(body.title).toBe("[AICR] [CRITICAL] 1 problem");
+		expect(body.title).toBe("[AICR] [CRITICAL] src/auth.ts:12 · SQL query uses unsanitized input");
 		expect(body.body).toContain("New summary");
 		expect(body.body).toContain("SQL query uses unsanitized input");
 	});
