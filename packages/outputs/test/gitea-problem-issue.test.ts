@@ -446,7 +446,7 @@ describe("createGiteaProblemIssueDispatcher consolidated mode", () => {
     const body = JSON.parse(
       calls.find((c) => c.url === "https://gitea.example/api/v1/repos/owent/example/issues" && c.init?.method === "POST")?.init?.body ?? "{}",
     );
-    expect(body.title).toBe("[AICR] [CRITICAL] 2 problems");
+    expect(body.title).toBe("[AICR] [CRITICAL] 2 problems · SQL query uses unsanitized input");
     expect(body.title).not.toContain("Code Review Report");
     expect(body.body).toContain("<!-- aicr:consolidated=true -->");
     expect(body.body).toContain("<!-- aicr:scope_fingerprint=");
@@ -496,7 +496,7 @@ describe("createGiteaProblemIssueDispatcher consolidated mode", () => {
     const patchCall = calls.find((c) => c.init?.method === "PATCH");
     expect(patchCall).toBeDefined();
     const body = JSON.parse(patchCall?.init?.body ?? "{}");
-    expect(body.title).toBe("[AICR] [CRITICAL] 1 problem");
+    expect(body.title).toBe("[AICR] [CRITICAL] src/auth.ts:12 · SQL query uses unsanitized input");
     expect(body.body).toContain("New summary");
     expect(body.body).toContain("SQL query uses unsanitized input");
   });

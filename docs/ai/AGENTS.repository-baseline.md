@@ -9,7 +9,7 @@
 - AI agent guidance uses `AGENTS.md` plus `.agents/skills/*/SKILL.md` as the canonical tool-neutral layer; `CLAUDE.md` is only a bridge that imports `AGENTS.md` for Claude Code.
 - Prompt baseline assets currently live in `docs/prompt-research.md`, `docs/ai/milestones/M0.5.md`, and `prompts/system/code-reviewer.system.md`; keep them aligned and validate them with markdownlint when changed.
 - `Plan.md` is now roadmap-only. Use `docs/ai/index.md` to find detailed architecture, milestone history, and decision records on demand.
-- Temporary repository artifacts such as scratch scripts, debug logs, ad hoc reports, and captured command output belong under `build/`, not in the repository root.
+- Temporary repository artifacts such as scratch scripts, debug logs, ad hoc reports, and captured command output belong under `build/` subdirectories (`build/tmp/`, `build/logs/`, `build/deploy/`), not in the repository root. Ensure the subdirectory exists before writing.
 - Docker baseline currently uses Chainguard Node, activates pnpm with `corepack prepare pnpm@10.20.0 --activate`, and does not use `pnpm setup`.
 
 ## Change heuristics
@@ -17,7 +17,7 @@
 - If a change touches shared tooling, CI, Docker, root docs, or workspace topology, run the repository validation flow.
 - When adding or removing packages, update package manifests, local `tsconfig.json` files, and root `tsconfig.json` references together.
 - When behavior changes touch config shape, agent adapters, MCP tool contracts, output rendering, deployment, or public workflows, update `Plan.md` roadmap summaries, the relevant `docs/` module, and `example/config.yaml` / `example/README.md` together.
-- If a task needs temporary helpers or captured output during repository maintenance, place them under `build/` subdirectories instead of creating root-level scratch files.
+- If a task needs temporary helpers or captured output during repository maintenance, place them under `build/` subdirectories (`build/tmp/`, `build/logs/`) instead of creating root-level scratch files.
 - Keep AI-facing assets concise: stable repository rules belong in `AGENTS.md`, repeatable workflows belong in `.agents/skills/`, and historical stage detail belongs in `docs/ai/milestones/`.
 - When updating AI-facing assets, merge with existing guidance instead of appending near-duplicate sections.
 - Keep tool-private AI files as tiny bridges or scoped deltas; do not copy the full `AGENTS.md` body into Copilot, Claude, Kilo, Roo, opencode, or similar client-specific locations.

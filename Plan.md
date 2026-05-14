@@ -141,7 +141,7 @@
 - `gitea_problem_issue` 和 `github_problem_issue` 支持 `issue_mode`:
   - `consolidated`（默认）：一次分析的所有问题合并为一个 issue，scope fingerprint 驱动更新与关闭。
   - `per_problem`：每个问题独立 issue，fingerprint 驱动生命周期。
-- managed issue 标题由输出层生成并保持单行可读；summary title 只影响正文 summary heading。
+- managed issue 标题由输出层生成并保持单行可读：单问题用 `per_problem` 格式（含位置与摘要），多问题在最高 severity + 计数后附加代表性摘要；summary title 只影响正文 summary heading。
 - 详细合同：`docs/ai/architecture.md` §3.9.5 与 `docs/output-channels.md`。
 
 ### 3.10 配置体系

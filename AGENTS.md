@@ -24,7 +24,7 @@
 - Prefer minimal edits; do not weaken lint, typecheck, test, or markdown gates just to get a change through.
 - When adding or removing a workspace package, update the package manifest, local `tsconfig.json`, and root `tsconfig.json` references together.
 - When code changes affect config shape, agent adapters, MCP tool contracts, output rendering, deployment behavior, or public workflow, update the matching `Plan.md` roadmap summary, relevant `docs/` modules, `example/config.yaml`, and `example/README.md` entries in the same change, or explicitly state why no doc/example update is needed.
-- Keep temporary repository artifacts such as scratch scripts, debug logs, and one-off reports under `build/`; do not leave them in the repository root.
+- Keep temporary repository artifacts such as scratch scripts, debug logs, and one-off reports under `build/`; do not leave them in the repository root. Use purposeful subdirectories: `build/tmp/` for ad-hoc data, `build/logs/` for captured output, and existing `build/deploy/` for deployment staging. Ensure the subdirectory exists before writing (`node -e "require('fs').mkdirSync('build/tmp',{recursive:true})"`).
 - Use `.github/instructions/*.instructions.md` only for path-specific rules; keep workspace-wide rules in this file.
 - Keep AI-facing assets concise: stable rules here, detailed shared context in `AGENTS.*.md`, and repeatable procedures in skills.
 - When an agent hits an error but succeeds by retrying or changing approach, capture the generalizable cause and fix in the most appropriate existing `AGENTS.md` or skill file after researching current prompt/skill best practices; merge the lesson concisely instead of adding incident logs or duplicates.

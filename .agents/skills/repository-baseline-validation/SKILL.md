@@ -27,7 +27,7 @@ user-invocable: false
    - Markdownlint
    - Build
 4. Treat failures as baseline regressions; fix the root cause instead of broadening ignore patterns or weakening strict flags.
-5. Put temporary validation helpers, logs, and captured output under `../../../build/` instead of scattering scratch files in the repository root.
+5. Put temporary validation helpers, logs, and captured output under the repository `build/` directory (e.g. `build/tmp/`, `build/logs/`) instead of scattering scratch files in the repository root. Ensure the subdirectory exists before writing.
 6. If repository-wide conventions or AI-doc routing changed, update `../../../AGENTS.md`, `../../../docs/ai/AGENTS.repository-baseline.md`, `../../../docs/ai/index.md`, and any affected skills in the same change.
 7. When touching public/shared modules, verify generic entry points do not duplicate platform literal lists or expose platform-specific field names; platform names belong in config contracts, docs/examples, tests, and platform-specific adapters.
 8. Summarize which gates were run, which failed, and which shared files were touched.

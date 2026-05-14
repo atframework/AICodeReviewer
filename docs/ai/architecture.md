@@ -215,7 +215,9 @@
 -  - `consolidated`（默认）：一次分析的所有问题合并为一个 issue，基于 scope fingerprint（channel + repo）做生命周期管理。每次审查更新已有 issue 内容；零问题时按 `resolved_action` 关闭或删除。
 -  - `per_problem`：每个问题创建独立 issue，基于 fingerprint 做生命周期管理。
 - consolidated 模式下 labels 使用最高严重级别，assignees 汇总所有关联负责人。
-- managed issue 标题由输出层生成，优先保持单行可读：`per_problem` 使用严重级别 + 缩短位置 + 简短摘要；`consolidated` 使用严重级别 + 问题数量。
+- managed issue 标题由输出层生成，优先保持单行可读：
+  - `per_problem`：前缀 + 严重级别 + 缩短位置 + 简短摘要（如 `[AICR] [HIGH] src/app.ts:3 · Issue`）。
+  - `consolidated`：单问题复用 `per_problem` 格式；多问题使用前缀 + 最高严重级别 + 问题数 + 代表摘要（如 `[AICR] [CRITICAL] 3 problems · SQL query uses unsanitized input`）。
 - `aicr.publish_summary.title` 只影响 issue body 里的 summary heading，不直接控制 managed issue 标题。
 
 ### 3.10 配置体系
