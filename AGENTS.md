@@ -61,6 +61,7 @@ These issues have been found and fixed in prior sessions. Before making changes,
 17. **`fixListMarkerSpacing` must not break `**bold**` or `***bold-italic***`**: The `LIST_MARKER_WITHOUT_SPACE_RE` regex in `packages/core/src/markdown-fixer.ts` must exclude `*` from the follow-character set for `*` markers so that `**Text**` at line start is never split into `* *Text**`.
 18. **`fixListMarkerSpacing` must not break thematic breaks**: Its indentation groups must use `[ \t]*`, not `\s*`, so `---` stays a thematic break instead of becoming `- --`.
 19. **Keep generic public modules platform-neutral**: Shared/public modules such as `packages/cli/src`, `ReviewEvent`, and `TemplateContext` must not duplicate provider/channel literal lists or expose platform-specific field names. Import canonical schemas/constants from `@aicr/core` and use generic fields such as `sourcePath` and `submitterWorkspace`; keep Gitea/GitHub/P4/etc. names inside config contracts, docs/examples, tests, and platform-specific adapters.
+20. **`fixAndValidateMarkdown` must enforce MD022 blanks-around-headings**: `fixBlanksAroundHeadings` in `packages/core/src/markdown-fixer.ts` must insert blank lines before and after ATX headings (`#`-prefixed lines) while skipping fenced code block content. This ensures LLM-generated summaries pass markdownlint MD022.
 
 ## Default verification order
 

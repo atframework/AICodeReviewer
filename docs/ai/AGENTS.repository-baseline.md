@@ -39,6 +39,7 @@ These issues were discovered and fixed in prior sessions. Before making changes,
 10. **All packages need tests**: Even packages that only export a constant need `test/index.test.ts`.
 11. **Public module naming boundaries**: Generic/public modules must import provider/channel contracts from canonical schemas instead of duplicating platform literal lists, and public event/template fields should use provider-neutral names such as `sourcePath` and `submitterWorkspace`.
 12. **Markdown list marker fixer boundaries**: `LIST_MARKER_WITHOUT_SPACE_RE` must use `[ \t]*` indentation and must preserve both bold markers and thematic breaks.
+13. **Markdown MD022 blanks-around-headings**: `fixBlanksAroundHeadings` in `packages/core/src/markdown-fixer.ts` must insert blank lines before and after ATX headings while skipping fenced code block content, ensuring LLM-generated summaries pass markdownlint MD022.
 
 ## Default verification order
 
