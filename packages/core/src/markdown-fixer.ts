@@ -17,6 +17,7 @@ const CONSECUTIVE_BLANK_LINES_RE = /\n{3,}/gu;
 const BARE_URL_RE = /(?<![<([`])(https?:\/\/[^\s<>[\]]+)(?![\])\s,;.:!?)>`])/giu;
 const HEADING_WITHOUT_SPACE_RE = /^(#{1,6})([^ #\n])/gmu;
 const HEADING_WITH_TRAILING_HASH_RE = /[ \t]+#+[ \t]*$/gmu;
+const ATX_HEADING_RE = /^#{1,6}[ \t]+/u;
 const LIST_MARKER_WITHOUT_SPACE_RE = /^([ \t]*[-](?=[^- \n])|[ \t]*[+](?=[^+ \n])|[ \t]*\*(?=[^* \n])|[ \t]*\d+\.(?=[^ \n]))/gmu;
 const INCONSISTENT_HEADING_INDENT_RE = /^( {1,3})(#{1,6}\s)/gmu;
 
@@ -107,6 +108,50 @@ function fixHeadingSpacing(content: string): { text: string; changed: boolean } 
   });
 }
 
+function fixBlanksAroundHeadings(content: string): { text: string; changed: boolean } {
+  const lines = content.split("\n");
+  const out: string[] = [];
+  let changed = false;
+  let inFence = false;
+  let fenceMarker: string | undefined;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]!;
+    const fenceMatch = FENCE_LINE_RE.exec(line);
+    if (!inFence && fenceMatch && fenceMatch[2]) {
+      inFence = true;
+      fenceMarker = fenceMatch[2][0];
+      out.push(line);
+      continue;
+    }
+    if (inFence && fenceMatch && fenceMatch[2] && fenceMatch[2].startsWith(fenceMarker ?? "")) {
+      inFence = false;
+      fenceMarker = undefined;
+      out.push(line);
+      continue;
+    }
+    if (inFence) {
+      out.push(line);
+      continue;
+    }
+    if (ATX_HEADING_RE.test(line)) {
+      const prevLine = out[out.length - 1];
+      if (prevLine !== undefined && prevLine !== "") {
+        out.push("");
+        changed = true;
+      }
+      out.push(line);
+      const nextLine = lines[i + 1];
+      if (nextLine !== undefined && nextLine !== "") {
+        out.push("");
+        changed = true;
+      }
+    } else {
+      out.push(line);
+    }
+  }
+  return { text: out.join("\n"), changed };
+}
+
 function fixListMarkerSpacing(content: string): { text: string; changed: boolean } {
   return applyTextTransform(content, (text) => {
     let changed = false;
@@ -178,6 +223,24 @@ export function fixMarkdown(content: string): MarkdownFixResult {
       detail: "Fixed heading spacing",
       fixable: true,
     });
+  }
+
+  const headingBlanks = fixBlanksAroundHeadings(fixed);
+  if (headingBlanks.changed) {
+    fixed = headingBlanks.text;
+    changed = true;
+    violations.push({
+      rule: "MD022",
+      line: 0,
+      detail: "Fixed blanks around headings",
+      fixable: true,
+    });
+  }
+
+  const blankLinesAfter = fixConsecutiveBlankLines(fixed);
+  if (blankLinesAfter.changed) {
+    fixed = blankLinesAfter.text;
+    changed = true;
   }
 
   const listSpacing = fixListMarkerSpacing(fixed);

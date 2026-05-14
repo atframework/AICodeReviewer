@@ -142,7 +142,7 @@ describe("fixAndValidateMarkdown", () => {
 
   it("fixes heading and list issues", () => {
     const result = fixAndValidateMarkdown("#Title\n-item\n");
-    expect(result).toBe("# Title\n- item\n");
+    expect(result).toBe("# Title\n\n- item\n");
   });
 
   it("does not modify heading-like content inside fenced code blocks", () => {
@@ -169,5 +169,32 @@ describe("fixAndValidateMarkdown", () => {
     const input = "## AI Code Review Report\n\n**Reviewed**: [Commit c0a7ca4](https://example.com)\n**Author**: Yang <yang@n>\n**Branch**: main\n\n---\n\nSummary text.\n";
     const result = fixAndValidateMarkdown(input);
     expect(result).toBe(input);
+  });
+
+  it("inserts blank lines around headings that lack them", () => {
+    const input = "## Heading\ncontent\n## Another\nmore";
+    const result = fixAndValidateMarkdown(input);
+    expect(result).toBe("## Heading\n\ncontent\n\n## Another\n\nmore\n");
+  });
+
+  it("does not duplicate blank lines around already-spaced headings", () => {
+    const input = "## Heading\n\ncontent\n\n## Another\n\nmore\n";
+    const result = fixAndValidateMarkdown(input);
+    expect(result).toBe(input);
+  });
+
+  it("fixes heading blanks inside fenced code blocks only for text segments", () => {
+    const input = "## Title\n```\n## not a heading\n```\n## After\ncontent";
+    const result = fixAndValidateMarkdown(input);
+    expect(result).toContain("## not a heading");
+    expect(result).toContain("## Title\n\n```\n## not a heading\n```\n\n## After\n\ncontent");
+  });
+
+  it("inserts blank lines around headings produced by LLM summaries", () => {
+    const input = "发现1个中等问题\n\n## 审查范围\n本次审查了 p4:change-commit:6484。\n\n## 发现问题\n中等问题: 描述\n\n## 问题详情\n`file:307` 的内容";
+    const result = fixAndValidateMarkdown(input);
+    expect(result).toContain("## 审查范围\n\n本次审查了");
+    expect(result).toContain("## 发现问题\n\n中等问题");
+    expect(result).toContain("## 问题详情\n\n`file:307`");
   });
 });

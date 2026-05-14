@@ -258,8 +258,8 @@ describe("runReviewOrchestration", () => {
 
       expect(result.status).toBe("published");
       expect(result.scrubMatches.length).toBeGreaterThanOrEqual(2);
-      expect(publishedProblems[0]?.message).toBe("# Issue\n- contains <REDACTED:AWS_KEY>\n");
-      expect(publishedProblems[0]?.suggestion).toBe("## Fix\n* replace <REDACTED:GITHUB_TOKEN>\n");
+      expect(publishedProblems[0]?.message).toBe("# Issue\n\n- contains <REDACTED:AWS_KEY>\n");
+      expect(publishedProblems[0]?.suggestion).toBe("## Fix\n\n* replace <REDACTED:GITHUB_TOKEN>\n");
       expect(publishedProblems[0]?.message).not.toContain("AKIAIOSFODNN7EXAMPLE");
       expect(publishedProblems[0]?.suggestion).not.toContain("ghp_");
     } finally {
