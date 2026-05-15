@@ -586,6 +586,47 @@ describe("createGithubProblemIssueDispatcher", () => {
 		expect(results).toEqual([]);
 		expect(calls).toHaveLength(1);
 	});
+
+	it("consolidated mode renders code fences with correct content/language order", async () => {
+		const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
+		const problemWithCode: ReviewProblem = {
+			file: "src/etcd_module.cpp",
+			line: 321,
+			severity: "critical",
+			category: "correctness",
+			message: "Logic condition inverted.",
+			codeSnippet: "if (keepalive_actor_list == nullptr) {\n  keepalive_count += keepalive_actor_list->size();\n}",
+			codeLanguage: "cpp",
+			fingerprint: "fp-inverted",
+		};
+		const dispatcher = createGithubProblemIssueDispatcher({
+			owner: "my-org",
+			repo: "my-repo",
+			channelName: "github-issues",
+			markerPrefix: "[AICR]",
+			issueMode: "consolidated",
+			fetch: async (url, init) => {
+				calls.push({ url, init });
+				if (url.includes("/issues?state=open")) {
+					return response([]);
+				}
+				return response({ id: 600, number: 60, html_url: "https://github.com/my-org/my-repo/issues/60" });
+			},
+		});
+
+		const results = await dispatcher.reconcileProblems([problemWithCode]);
+
+		expect(results).toHaveLength(1);
+		expect(results[0]?.raw).toMatchObject({ action: "created_consolidated" });
+
+		const body = JSON.parse(
+			calls.find((c) => c.url.endsWith("/repos/my-org/my-repo/issues") && c.init?.method === "POST")?.init?.body ?? "{}",
+		);
+		expect(body.body).toContain("```cpp");
+		expect(body.body).toContain("if (keepalive_actor_list == nullptr)");
+		expect(body.body).not.toContain("```if");
+		expect(body.body).not.toContain("keepalive_actor_listnullptr");
+	});
 });
 
 describe("markdownlint compliance of generated bodies", () => {

@@ -122,6 +122,9 @@
   - 生效中的 skills
   - env 注入
   - manifest / 审计信息
+- 代码真源：`packages/agents/src/runtime-bundle.ts`。
+- `materializeRuntimeBundle()` 接受 adapter、model、instructions、skills、mcpTools 和 env 变量，输出完整文件集和 `manifest.json`。
+- orchestrator 在 `runAgentReview` 中调用 `materializeRuntimeBundle` 替代原来的 `adapter.materializeConfig`，确保每次 agent run 都有完整 bundle。
 - 不得修改开发者的全局 Agent CLI 配置目录。
 - 适配器原生支持不足时，可以降级为：
   - 注入简版 skill 摘要到 prompt

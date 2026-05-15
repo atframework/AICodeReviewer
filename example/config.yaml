@@ -243,6 +243,12 @@ outputs:
       trigger: gitea
       mention_author: false
       no_problems: { action: suppress }
+      # review_mode: auto              # auto (default) | review | comment
+      #   auto   — try PR review API first, fallback to issue comment on 403/422
+      #   review — always use PR review API, no fallback
+      #   comment — always use issue comment API (POST /issues/{n}/comments)
+      # review_event: COMMENT           # COMMENT (default) | REQUEST_CHANGES
+      #   Controls the review event type when using the review API.
 
     # Feishu (飞书) bot — push aggregated review problems to a Feishu group.
     # Setup: group Settings → Group Bots → Add Bot → Custom Bot → copy webhook & secret.

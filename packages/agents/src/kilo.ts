@@ -75,7 +75,7 @@ function buildKiloProviderOptions(model: ModelSpec): Record<string, unknown> {
   return options;
 }
 
-function buildKiloJsonConfig(model: ModelSpec): Record<string, unknown> {
+function buildKiloJsonConfig(model: ModelSpec, mcpServers?: Readonly<Record<string, unknown>>): Record<string, unknown> {
   const options = buildKiloProviderOptions(model);
   const models: Record<string, unknown> = {
     [model.modelId]: {},
@@ -91,6 +91,10 @@ function buildKiloJsonConfig(model: ModelSpec): Record<string, unknown> {
       [model.providerId]: providerEntry,
     },
   };
+
+  if (mcpServers && Object.keys(mcpServers).length > 0) {
+    config.mcp = { ...mcpServers };
+  }
 
   return config;
 }
@@ -120,7 +124,6 @@ export function createKiloAdapter(options: KiloAdapterOptions = {}): AgentAdapte
         binary,
         "run",
         "--auto",
-        "--dangerously-skip-permissions",
         "--format", "json",
       ];
 

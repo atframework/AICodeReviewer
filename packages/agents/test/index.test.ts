@@ -16,7 +16,9 @@ import {
   createVertexAiTranslator,
   createBedrockTranslator,
   createAgentAdapter,
+  materializeRuntimeBundle,
 } from "../src/index.js";
+import type { RuntimeBundleInstruction, RuntimeBundleSkill, RuntimeBundleMcpTool, RuntimeBundleMcpServer } from "../src/index.js";
 
 describe("@aicr/agents", () => {
   it("exports the package name", () => {
@@ -88,7 +90,6 @@ describe("createKiloAdapter", () => {
       expect(cmd[0]).toBe("kilo");
       expect(cmd).toContain("run");
       expect(cmd).toContain("--auto");
-      expect(cmd).toContain("--dangerously-skip-permissions");
       expect(cmd).toContain("--format");
       expect(cmd).toContain("json");
       expect(cmd).toContain("--dir");
@@ -878,5 +879,306 @@ describe("createRooAdapter", () => {
         await rm(tempDir, { recursive: true, force: true });
       }
     });
+  });
+});
+
+describe("materializeRuntimeBundle", () => {
+  const baseModel = {
+    providerKind: "openai_compatible" as const,
+    providerId: "test-provider",
+    modelId: "gpt-4o",
+    baseUrl: "https://api.openai.com/v1",
+  };
+
+  it("materializes agent config without instructions or skills", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-bundle-minimal-"));
+
+    try {
+      const adapter = createKiloAdapter();
+      const result = await materializeRuntimeBundle({
+        adapter,
+        model: baseModel,
+        workingDir: tempDir,
+      });
+
+      expect(result.workingDir).toBe(tempDir);
+      expect(result.configFiles.has(".kilo/kilo.json")).toBe(true);
+      expect(result.configFiles.has("manifest.json")).toBe(true);
+      expect(result.manifest.version).toBe(1);
+      expect(result.manifest.agentKind).toBe("kilo");
+      expect(result.manifest.model.providerId).toBe("test-provider");
+      expect(result.manifest.model.modelId).toBe("gpt-4o");
+      expect(result.manifest.instructions).toHaveLength(0);
+      expect(result.manifest.skills).toHaveLength(0);
+      expect(result.manifest.mcpTools).toHaveLength(0);
+
+      const manifestContent = await readFile(result.manifestPath, "utf8");
+      const parsed = JSON.parse(manifestContent);
+      expect(parsed.version).toBe(1);
+      expect(parsed.agentKind).toBe("kilo");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("materializes instructions as files in the instructions directory", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-bundle-instr-"));
+
+    try {
+      const adapter = createKiloAdapter();
+      const instructions: RuntimeBundleInstruction[] = [
+        { kind: "nearest_agents", label: "src/AGENTS.md", content: "# Rules\nNo console.log", path: "src/AGENTS.md" },
+        { kind: "root_agents", label: "AGENTS.md", content: "# Root rules" },
+      ];
+
+      const result = await materializeRuntimeBundle({
+        adapter,
+        model: baseModel,
+        workingDir: tempDir,
+        instructions,
+      });
+
+      expect(result.manifest.instructions).toHaveLength(2);
+      expect(result.manifest.instructions[0]?.kind).toBe("nearest_agents");
+      expect(result.manifest.instructions[1]?.kind).toBe("root_agents");
+
+      const instrFile = await readFile(join(tempDir, "instructions", "src_AGENTS.md"), "utf8");
+      expect(instrFile).toBe("# Rules\nNo console.log");
+
+      const rootInstrFile = await readFile(join(tempDir, "instructions", "root_agents_1.md"), "utf8");
+      expect(rootInstrFile).toBe("# Root rules");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("materializes skills as files in the skills directory", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-bundle-skills-"));
+
+    try {
+      const adapter = createKiloAdapter();
+      const skills: RuntimeBundleSkill[] = [
+        {
+          name: "repository-baseline-validation",
+          description: "Validate repo baseline conventions",
+          content: "---\nname: repository-baseline-validation\n---\n\n# Skill content",
+          path: ".agents/skills/repository-baseline-validation/SKILL.md",
+        },
+        {
+          name: "plan-audit",
+          description: "Audit plan vs implementation",
+          content: "---\nname: plan-audit\n---\n\n# Plan audit skill",
+        },
+      ];
+
+      const result = await materializeRuntimeBundle({
+        adapter,
+        model: baseModel,
+        workingDir: tempDir,
+        skills,
+      });
+
+      expect(result.manifest.skills).toHaveLength(2);
+      expect(result.manifest.skills[0]?.name).toBe("repository-baseline-validation");
+      expect(result.manifest.skills[1]?.name).toBe("plan-audit");
+
+      const skillFile = await readFile(
+        join(tempDir, "skills", ".agents_skills_repository-baseline-validation_SKILL.md"),
+        "utf8",
+      );
+      expect(skillFile).toContain("repository-baseline-validation");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("materializes MCP tool names in manifest", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-bundle-mcp-"));
+
+    try {
+      const adapter = createKiloAdapter();
+      const mcpTools: RuntimeBundleMcpTool[] = [
+        { name: "aicr.report_problem", description: "Report a code review problem" },
+        { name: "aicr.publish_summary", description: "Publish review summary" },
+        { name: "aicr.skip", description: "Skip output" },
+        { name: "aicr.fetch_more_context", description: "Fetch more source context" },
+      ];
+
+      const result = await materializeRuntimeBundle({
+        adapter,
+        model: baseModel,
+        workingDir: tempDir,
+        mcpTools,
+      });
+
+      expect(result.manifest.mcpTools).toHaveLength(4);
+      expect(result.manifest.mcpTools).toContain("aicr.report_problem");
+      expect(result.manifest.mcpTools).toContain("aicr.publish_summary");
+      expect(result.manifest.mcpTools).toContain("aicr.skip");
+      expect(result.manifest.mcpTools).toContain("aicr.fetch_more_context");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("merges extra env vars with adapter env vars", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-bundle-env-"));
+
+    try {
+      const adapter = createKiloAdapter();
+      const result = await materializeRuntimeBundle({
+        adapter,
+        model: { ...baseModel, apiKeyEnv: "OPENAI_API_KEY" },
+        workingDir: tempDir,
+        extraEnvVars: {
+          AICR_RUN_ID: "run-123",
+          AICR_WORKSPACE_ID: "ws-main",
+        },
+      });
+
+      expect(result.envVars.KILO_API_KEY).toBe("${OPENAI_API_KEY}");
+      expect(result.envVars.AICR_RUN_ID).toBe("run-123");
+      expect(result.envVars.AICR_WORKSPACE_ID).toBe("ws-main");
+      expect(result.manifest.envKeys).toContain("KILO_API_KEY");
+      expect(result.manifest.envKeys).toContain("AICR_RUN_ID");
+      expect(result.manifest.envKeys).toContain("AICR_WORKSPACE_ID");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("includes runId in manifest when provided", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-bundle-runid-"));
+
+    try {
+      const adapter = createKiloAdapter();
+      const result = await materializeRuntimeBundle({
+        adapter,
+        model: baseModel,
+        workingDir: tempDir,
+        runId: "run-abc-456",
+      });
+
+      expect(result.manifest.runId).toBe("run-abc-456");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("omits runId from manifest when not provided", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-bundle-norunid-"));
+
+    try {
+      const adapter = createKiloAdapter();
+      const result = await materializeRuntimeBundle({
+        adapter,
+        model: baseModel,
+        workingDir: tempDir,
+      });
+
+      expect(result.manifest.runId).toBeUndefined();
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("works with claude-code adapter", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-bundle-claude-"));
+
+    try {
+      const adapter = createClaudeCodeAdapter();
+      const result = await materializeRuntimeBundle({
+        adapter,
+        model: {
+          providerKind: "anthropic",
+          providerId: "anthropic-prod",
+          modelId: "claude-sonnet-4",
+          apiKeyEnv: "ANTHROPIC_API_KEY",
+        },
+        workingDir: tempDir,
+        instructions: [
+          { kind: "root_agents", label: "AGENTS.md", content: "# Project rules" },
+        ],
+      });
+
+      expect(result.manifest.agentKind).toBe("claude-code");
+      expect(result.manifest.instructions).toHaveLength(1);
+      expect(result.envVars.ANTHROPIC_API_KEY).toBe("${ANTHROPIC_API_KEY}");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("creates manifest with all config file entries", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-bundle-all-"));
+
+    try {
+      const adapter = createKiloAdapter();
+      const result = await materializeRuntimeBundle({
+        adapter,
+        model: baseModel,
+        workingDir: tempDir,
+        instructions: [
+          { kind: "path_instruction", label: "ts rules", content: "strict mode", path: ".github/instructions/ts.instructions.md" },
+        ],
+        skills: [
+          { name: "test-skill", description: "A test skill", content: "skill body" },
+        ],
+        mcpTools: [
+          { name: "aicr.report_problem", description: "Report problem" },
+        ],
+      });
+
+      expect(result.configFiles.has(".kilo/kilo.json")).toBe(true);
+      expect(result.configFiles.has("manifest.json")).toBe(true);
+      expect(result.configFiles.size).toBeGreaterThanOrEqual(3);
+
+      const manifestContent = await readFile(result.manifestPath, "utf8");
+      const parsed = JSON.parse(manifestContent);
+      expect(parsed.instructions).toHaveLength(1);
+      expect(parsed.skills).toHaveLength(1);
+      expect(parsed.mcpTools).toContain("aicr.report_problem");
+      expect(parsed.createdAt).toBeTruthy();
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("injects MCP server config into kilo.json when mcpServers provided", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-bundle-mcpserver-"));
+
+    try {
+      const adapter = createKiloAdapter();
+      const mcpServers: RuntimeBundleMcpServer[] = [
+        {
+          name: "aicr-output",
+          config: {
+            type: "local",
+            command: ["node", "/app/packages/mcp-output/dist/server.js"],
+            enabled: true,
+          },
+        },
+      ];
+
+      const result = await materializeRuntimeBundle({
+        adapter,
+        model: baseModel,
+        workingDir: tempDir,
+        mcpServers,
+      });
+
+      const kiloConfig = result.configFiles.get(".kilo/kilo.json") ?? "{}";
+      const parsed = JSON.parse(kiloConfig);
+      expect(parsed.mcp).toBeDefined();
+      expect(parsed.mcp["aicr-output"]).toBeDefined();
+      expect((parsed.mcp["aicr-output"] as Record<string, unknown>).type).toBe("local");
+      expect((parsed.mcp["aicr-output"] as Record<string, unknown>).enabled).toBe(true);
+
+      const diskContent = await readFile(join(tempDir, ".kilo", "kilo.json"), "utf8");
+      const diskParsed = JSON.parse(diskContent);
+      expect(diskParsed.mcp["aicr-output"]).toBeDefined();
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
   });
 });
