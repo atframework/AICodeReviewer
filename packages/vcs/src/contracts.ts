@@ -21,6 +21,7 @@ export interface ExtraContextRequest {
   readonly path: string;
   readonly startLine?: number;
   readonly endLine?: number;
+  readonly revision?: string;
   readonly reason: string;
 }
 

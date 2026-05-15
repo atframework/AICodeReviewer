@@ -32,6 +32,7 @@ export type {
   RuntimeBundleInstruction,
   RuntimeBundleSkill,
   RuntimeBundleMcpTool,
+  RuntimeBundleMcpServer,
   RuntimeBundleInput,
   RuntimeBundleManifest,
   RuntimeBundleResult,

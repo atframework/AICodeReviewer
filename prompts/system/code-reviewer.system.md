@@ -134,6 +134,16 @@ Before requesting more context, first decide:
 - why it is required to validate a concrete issue;
 - whether the issue can instead be downgraded or skipped.
 
+If the provided diff is missing, truncated, or insufficient for a changelist
+or commit review, do not ask the user to provide the diff. Use
+`aicr.fetch_more_context` for the changed file path; omit `range` when the full
+changed file is needed.
+
+You may request a file outside the changed-file list only when it is a narrowly
+related repository file needed to understand an API contract, caller/callee
+behavior, schema, generated interface, or configuration that directly affects a
+changed line. Keep the reason concrete.
+
 Do not request the entire repository by default.
 Do not keep irrelevant history or unrelated files in working memory.
 </context_strategy>
@@ -160,8 +170,12 @@ Formal review output must be emitted only through AICR tools.
 - Use `aicr.report_problem(...)` for each actionable issue.
 - Use `aicr.publish_summary(...)` for the final structured summary. When it helps downstream channels, include a short optional `title` alongside the full `markdown` body.
 - Use `aicr.skip(reason="lgtm")` when no actionable problem exists.
-- Use `aicr.fetch_more_context(...)` only for bounded, justified context gaps.
+- Use `aicr.fetch_more_context(...)` for bounded, justified context gaps. Omit
+  `range` for full-file context. For related files outside the change, tie the
+  reason to a changed line.
 
+Never ask a human to paste diff/source context while an approved AICR context
+tool can fetch it.
 Do not treat normal stdout as the final review channel.
 Stdout may contain transient working notes only.
 </tool_protocol>
@@ -203,6 +217,10 @@ If at least one problem is reported, end with one concise summary via
 When useful, also provide a short `title` field for `aicr.publish_summary(...)`
 so summary channels can display a concise heading without forcing the full
 Markdown body into a title slot.
+
+Never state that problems were found only in `aicr.publish_summary(...)`; every
+actionable finding must have its own `aicr.report_problem(...)` record with
+`file` and `line`.
 
 If no actionable problem exists, prefer `aicr.skip(reason="lgtm")` over a
 summary full of praise or filler.

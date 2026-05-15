@@ -195,6 +195,35 @@ describe("AicrOutputCollector edge cases", () => {
     expect(snapshot.contextRequests[0]?.range).toBeUndefined();
   });
 
+  it("clears review outputs while preserving context request history", async () => {
+    const collector = new AicrOutputCollector();
+    const tools = createAicrOutputToolRegistry(collector);
+    const reportProblem = tools.find((tool) => tool.name === "aicr.report_problem");
+    const publishSummary = tools.find((tool) => tool.name === "aicr.publish_summary");
+    const skip = tools.find((tool) => tool.name === "aicr.skip");
+    const fetchMoreContext = tools.find((tool) => tool.name === "aicr.fetch_more_context");
+
+    await reportProblem?.call({
+      file: "src/app.ts",
+      line: 1,
+      severity: "medium",
+      category: "correctness",
+      message: "Issue.",
+    });
+    await publishSummary?.call({ markdown: "Found one issue." });
+    await skip?.call({ reason: "temporary" });
+    await fetchMoreContext?.call({ path: "src/app.ts", reason: "need full file" });
+
+    collector.clearReviewOutputs();
+
+    expect(collector.snapshot()).toMatchObject({
+      problems: [],
+      summaries: [],
+      contextRequests: [{ path: "src/app.ts", reason: "need full file" }],
+    });
+    expect(collector.snapshot().skipReason).toBeUndefined();
+  });
+
   it("accepts reported problems with optional end_line, suggestion, and fingerprint", async () => {
     const collector = new AicrOutputCollector();
     const reportProblem = createAicrOutputToolRegistry(collector).find(

@@ -72,6 +72,7 @@ COPY --from=build --chown=node:node /app/packages/server/node_modules ./packages
 COPY --from=build --chown=node:node /app/packages/llm/node_modules ./packages/llm/node_modules
 COPY --from=build --chown=node:node /app/packages/vcs/node_modules ./packages/vcs/node_modules
 COPY --from=build --chown=node:node /app/packages/outputs/node_modules ./packages/outputs/node_modules
+COPY --from=build --chown=node:node /app/packages/mcp-output/node_modules ./packages/mcp-output/node_modules
 COPY --from=build --chown=node:node /app/packages/agents/node_modules ./packages/agents/node_modules
 COPY --from=build --chown=node:node /app/packages/store/node_modules ./packages/store/node_modules
 COPY --from=build --chown=node:node /app/prompts ./prompts

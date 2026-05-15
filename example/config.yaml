@@ -184,6 +184,9 @@ triggers:
   #   depot_path: "//depot/main"           # depot or stream path to analyze
   #   workspace: "aicr-p4-main"            # P4 workspace/client name used by AICR
   #   change_url_template: "https://swarm.example.com/changes/{{revision}}"  # optional target link in reports
+  #   # AICR initially prints only changed files. During review, agents may use
+  #   # aicr.fetch_more_context to fetch full changed files or narrowly related
+  #   # files from this depot at the reviewed changelist revision.
   #   # File filtering (all optional):
   #   watch_path:                          # only analyze files under these paths
   #     - "src/"

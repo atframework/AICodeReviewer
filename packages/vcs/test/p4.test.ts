@@ -442,6 +442,55 @@ Affected files ...
 
       expect(result.content).toBe("line2\nline3");
     });
+
+    it("fetches missing related files from P4 at the review revision", async () => {
+      const tmpDir = await mkdtemp(join(tmpdir(), "aicr-p4-extra-context-"));
+      const capturedArgs: string[][] = [];
+      const mockP4: P4CommandRunner = async (args) => {
+        capturedArgs.push([...args]);
+        return { stdout: "header\nline2\nline3\n", stderr: "" };
+      };
+
+      try {
+        const sourceDir = join(tmpDir, "source");
+        const adapter = new P4VcsAdapter({
+          repositoryDir: tmpDir,
+          depot: "//depot/main",
+          p4: mockP4,
+        });
+
+        const result = await adapter.fetchExtraContext(
+          { path: "src/related.h", startLine: 2, endLine: 3, revision: "12345", reason: "need API contract" },
+          { id: "ws", sourceDir },
+        );
+
+        expect(result).toEqual({ path: "src/related.h", content: "line2\nline3" });
+        expect(capturedArgs[0]).toEqual(["print", "-q", "//depot/main/src/related.h@12345"]);
+        await expect(readFile(join(sourceDir, "src", "related.h"), "utf8")).resolves.toBe("header\nline2\nline3\n");
+      } finally {
+        await rm(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    it("rejects depot paths outside the configured P4 depot when fetching related context", async () => {
+      const tmpDir = await mkdtemp(join(tmpdir(), "aicr-p4-extra-context-outside-"));
+      const adapter = new P4VcsAdapter({
+        repositoryDir: tmpDir,
+        depot: "//depot/main",
+        p4: async () => ({ stdout: "", stderr: "" }),
+      });
+
+      try {
+        await expect(
+          adapter.fetchExtraContext(
+            { path: "//other/main/src/secret.h", revision: "12345", reason: "untrusted related path" },
+            { id: "ws", sourceDir: join(tmpDir, "source") },
+          ),
+        ).rejects.toThrow(/configured P4 depot/u);
+      } finally {
+        await rm(tmpDir, { recursive: true, force: true });
+      }
+    });
   });
 
   describe("diff", () => {

@@ -56,6 +56,9 @@ Do not use this skill for LLM prompt layering, agent runtime materialization, or
 ## IM bot message contracts
 
 - Feishu and WeCom `publishAggregatedProblems` include the full `problem.message` and `problem.suggestion` (when present) under each problem line.
+- Feishu and WeCom reports stay sectioned as review target, summary, and problems; problem locations must come from structured `aicr.report_problem` data, not prose-only summaries.
+- Agent CLI free-form stdout is not a publishable final report; repair to structured JSON/XML tool calls before summary-channel dispatch.
+- Summary text that says issues were found is not a problem record. If `problemCount` is zero, repair or suppress the summary instead of letting `no_problems` policy hide actionable prose without locations. Do the same when skip/summary prose asks a human to provide diff/source context; agents must request concrete files via `aicr.fetch_more_context`.
 - Built-in Feishu and WeCom summaries must include the event username when present, rendering `@username (Display Name)` when both normalized username and display name are available.
 - `vcs.workspace` is submitter metadata captured from the event payload; do not substitute analysis/client workspaces from adapter configuration into user-visible IM output.
 - Long messages are truncated to 500 chars and suggestions to 300 chars with a `...` suffix to stay within platform card/message size limits.

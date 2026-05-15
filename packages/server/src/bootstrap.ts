@@ -529,7 +529,7 @@ function withRepoMappings(
 
 type OutputChannelConfig = AppConfig["outputs"]["channels"][number];
 type OutputRouteChannelKey = "line_comments" | "summary";
-type NoProblemsAction = "publish" | "suppress";
+type NoProblemsAction = "publish" | "suppress" | "publish_if_summary";
 
 interface TargetUrlTemplateOptions {
   readonly commitUrlTemplate?: string;
@@ -547,7 +547,9 @@ function readNoProblemsAction(value: unknown): NoProblemsAction | undefined {
     return undefined;
   }
 
-  return value.action === "publish" || value.action === "suppress" ? value.action : undefined;
+  return value.action === "publish" || value.action === "suppress" || value.action === "publish_if_summary"
+    ? value.action
+    : undefined;
 }
 
 function readNoProblemsActionFrom(raw: unknown): NoProblemsAction | undefined {
@@ -567,9 +569,13 @@ function readChannelOverrideNoProblemsAction(raw: unknown, channelName: string):
 }
 
 function defaultNoProblemsActionForChannel(channelKind: string): NoProblemsAction {
-  return channelKind === "gitea_problem_issue" || channelKind === "github_problem_issue"
-    ? "publish"
-    : "suppress";
+  if (channelKind === "gitea_problem_issue" || channelKind === "github_problem_issue") {
+    return "publish";
+  }
+  if (channelKind === "feishu_bot" || channelKind === "wecom_bot") {
+    return "publish_if_summary";
+  }
+  return "suppress";
 }
 
 function resolveNoProblemsAction(
@@ -838,7 +844,7 @@ function createCompositeOutputPublisher(
   return {
     handlesRendering: true,
     publishesProblems: linePublishers.length > 0,
-    noProblemsAction: summaryCapable.some((publisher) => publisher.noProblemsAction !== "suppress") ? "publish" : "suppress",
+    noProblemsAction: summaryCapable.some((publisher) => publisher.noProblemsAction === "publish" || publisher.noProblemsAction === "publish_if_summary") ? summaryCapable.every((publisher) => publisher.noProblemsAction === "publish_if_summary") ? "publish_if_summary" : "publish" : "suppress",
     publishEmptySummary: summaryCapable.some((publisher) => publisher.publishEmptySummary && publisher.noProblemsAction !== "suppress"),
     async publishProblem(problem: ReviewProblem): Promise<readonly DispatchResult[]> {
       const results: DispatchResult[] = [];
@@ -858,8 +864,13 @@ function createCompositeOutputPublisher(
             const noProblems = (problems?.length ?? 0) === 0;
             const bypassNoProblemsPolicy = options?.bypassNoProblemsPolicy === true;
             for (const publisher of summaryCapable) {
-              if (!bypassNoProblemsPolicy && noProblems && publisher.noProblemsAction === "suppress") {
-                continue;
+              if (!bypassNoProblemsPolicy && noProblems) {
+                if (publisher.noProblemsAction === "suppress") {
+                  continue;
+                }
+                if (publisher.noProblemsAction === "publish_if_summary" && !summary.trim()) {
+                  continue;
+                }
               }
               if (publisher.publishSummary) {
                 appendPublisherResults(results, await publisher.publishSummary(summary, problems, options));

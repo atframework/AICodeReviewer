@@ -176,6 +176,39 @@ function truncateText(text: string, maxLength: number): string {
 	return `${text.slice(0, maxLength)}...`;
 }
 
+const IM_PROBLEM_DISPLAY_LIMIT = 10;
+const IM_MESSAGE_MAX_LENGTH = 500;
+const IM_SUGGESTION_MAX_LENGTH = 300;
+
+function normalizeImInlineText(text: string, maxLength: number): string {
+	return truncateText(text.replace(/\s+/gu, " ").trim(), maxLength);
+}
+
+function buildImProblemSections(problems: readonly ReviewProblem[]): string[] {
+	if (problems.length === 0) {
+		return [];
+	}
+
+	const sections: string[] = ["", `## Problems (${problems.length})`];
+	for (let i = 0; i < Math.min(problems.length, IM_PROBLEM_DISPLAY_LIMIT); i += 1) {
+		const problem = problems[i]!;
+		sections.push(
+			"",
+			`### ${i + 1}. [${problem.severity.toUpperCase()}] ${problem.category}`,
+			`- Location: \`${buildProblemLocation(problem)}\``,
+			`- Message: ${normalizeImInlineText(problem.message, IM_MESSAGE_MAX_LENGTH)}`,
+		);
+		if (problem.suggestion) {
+			sections.push(`- Suggestion: ${normalizeImInlineText(problem.suggestion, IM_SUGGESTION_MAX_LENGTH)}`);
+		}
+	}
+	if (problems.length > IM_PROBLEM_DISPLAY_LIMIT) {
+		sections.push("", `... and ${problems.length - IM_PROBLEM_DISPLAY_LIMIT} more`);
+	}
+
+	return sections;
+}
+
 export function renderProblemMarkdown(problem: ReviewProblem): string {
 	if (problem.renderedMarkdown) {
 		return problem.renderedMarkdown;
@@ -3141,23 +3174,9 @@ export function createFeishuBotDispatcher(options: FeishuBotOptions): FeishuBotD
 		): Promise<DispatchResult> {
 			const sections: string[] = [];
 			if (summary) {
-				sections.push(summary);
+				sections.push(summary.trim());
 			}
-			if (problems.length > 0) {
-				sections.push("", `Problems: ${problems.length}`);
-				for (const problem of problems.slice(0, 10)) {
-					sections.push(`- [${problem.severity.toUpperCase()}] ${problem.category}: ${problem.file}:${problem.line}`);
-					const msg = truncateText(problem.message, 500);
-					sections.push(`  ${msg}`);
-					if (problem.suggestion) {
-						const suggestion = truncateText(problem.suggestion, 300);
-						sections.push(`  Suggestion: ${suggestion}`);
-					}
-				}
-				if (problems.length > 10) {
-					sections.push(`... and ${problems.length - 10} more`);
-				}
-			}
+			sections.push(...buildImProblemSections(problems));
 
 			const timestamp = Math.floor(Date.now() / 1000);
 			const body: Record<string, unknown> = {
@@ -3229,23 +3248,12 @@ export function createWeComBotDispatcher(options: WeComBotOptions): WeComBotDisp
 		): Promise<DispatchResult> {
 			const sections: string[] = [];
 			if (summary) {
-				sections.push(summary);
+				sections.push(summary.trim());
 			}
 			if (mentionText) {
 				sections.push(mentionText);
 			}
-			if (problems.length > 0) {
-				sections.push("", `Problems: ${problems.length}`);
-				for (const problem of problems.slice(0, 10)) {
-					sections.push(`- [${problem.severity.toUpperCase()}] ${problem.category}: ${problem.file}:${problem.line}`);
-					const msg = truncateText(problem.message, 500);
-					sections.push(`  ${msg}`);
-					if (problem.suggestion) {
-						const suggestion = truncateText(problem.suggestion, 300);
-						sections.push(`  Suggestion: ${suggestion}`);
-					}
-				}
-			}
+			sections.push(...buildImProblemSections(problems));
 
 			const body: Record<string, unknown> = {
 				msgtype: "markdown",

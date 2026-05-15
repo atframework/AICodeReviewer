@@ -102,6 +102,33 @@ function isP4AuthenticationError(error: unknown): boolean {
   return /P4PASSWD|Perforce password|not logged in|login required|session has expired|ticket.*expired/iu.test(getErrorText(error));
 }
 
+function isFileNotFoundError(error: unknown): boolean {
+  return typeof error === "object"
+    && error !== null
+    && "code" in error
+    && (error as { readonly code?: unknown }).code === "ENOENT";
+}
+
+function selectLineRange(content: string, startLine: number | undefined, endLine: number | undefined): string {
+  if (startLine === undefined && endLine === undefined) {
+    return content;
+  }
+
+  const lines = content.split(/\r?\n/u);
+  const start = startLine ?? 1;
+  const end = endLine ?? lines.length;
+
+  if (!Number.isInteger(start) || start < 1 || !Number.isInteger(end) || end < 1) {
+    throw new RangeError("startLine and endLine must be positive integers.");
+  }
+
+  if (start > end) {
+    throw new RangeError("startLine must be less than or equal to endLine.");
+  }
+
+  return lines.slice(start - 1, end).join("\n");
+}
+
 function filterFilesByPatterns(
   files: readonly string[],
   includePatterns: readonly string[] | undefined,
@@ -387,19 +414,33 @@ export class P4VcsAdapter implements VcsAdapter {
 
   async fetchExtraContext(req: ExtraContextRequest, ws: WorkspaceRef): Promise<ExtraContextResult> {
     const workspaceSourceDir = resolve(ws.sourceDir);
-    const normalizedPath = normalizeChangedPath(workspaceSourceDir, req.path);
-    const content = await readFile(join(workspaceSourceDir, normalizedPath), "utf8");
+    const requestedLocalPath = this.toLocalPath(req.path);
+    const normalizedPath = normalizeChangedPath(workspaceSourceDir, requestedLocalPath);
+    const destinationPath = join(workspaceSourceDir, normalizedPath);
+    let content: string;
 
-    if (req.startLine === undefined && req.endLine === undefined) {
-      return { path: normalizedPath, content };
+    try {
+      content = await readFile(destinationPath, "utf8");
+    } catch (error) {
+      if (!isFileNotFoundError(error) || !req.revision) {
+        throw error;
+      }
+
+      const depotPath = this.toDepotPrintPath(req.path, normalizedPath);
+      const result = await this.runP4([
+        "print",
+        "-q",
+        `${depotPath}@${req.revision}`,
+      ]);
+      content = result.stdout;
+
+      await mkdir(dirname(destinationPath), { recursive: true });
+      await writeFile(destinationPath, content, "utf8");
     }
 
-    const startLine = req.startLine ?? 1;
-    const endLine = req.endLine ?? content.split(/\r?\n/u).length;
-    const selectedLines = content.split(/\r?\n/u).slice(startLine - 1, endLine);
     return {
       path: normalizedPath,
-      content: selectedLines.join("\n"),
+      content: selectLineRange(content, req.startLine, req.endLine),
     };
   }
 
@@ -481,6 +522,24 @@ export class P4VcsAdapter implements VcsAdapter {
     }
 
     return normalizePath(path);
+  }
+
+  private toDepotPrintPath(requestPath: string, localPath: string): string {
+    if (requestPath.startsWith("//")) {
+      const depotBase = this.depot?.replace(/\/+$/u, "");
+      if (depotBase && requestPath !== depotBase && !requestPath.startsWith(`${depotBase}/`)) {
+        throw new RangeError("fetchExtraContext path must stay within the configured P4 depot path.");
+      }
+
+      return requestPath;
+    }
+
+    if (!this.depot) {
+      return localPath;
+    }
+
+    const depotBase = this.depot.replace(/\/+$/u, "");
+    return `${depotBase}/${localPath.replace(/^\/+/u, "")}`;
   }
 
   private collectDescribeActions(lines: readonly string[]): ReadonlyMap<string, string> {

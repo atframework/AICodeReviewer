@@ -792,6 +792,22 @@ describe("mergeConfigLayers", () => {
     expect(result.success).toBe(false);
   });
 
+  it("accepts publish_if_summary as a no_problems action", () => {
+    const result = appConfigSchema.safeParse({
+      outputs: {
+        channels: [
+          {
+            name: "feishu-team",
+            kind: "feishu_bot",
+            no_problems: { action: "publish_if_summary" },
+          },
+        ],
+      },
+    });
+
+    expect(result.success).toBe(true);
+  });
+
   it("accepts trigger and channel URL templates for non-PR targets", () => {
     const result = appConfigSchema.safeParse({
       triggers: [
