@@ -134,6 +134,8 @@ describe("createFeishuBotDispatcher", () => {
 		expect(elements.length).toBe(2);
 		const content = (elements[0] as Record<string, unknown>).content as string;
 		expect(content).toContain("Review summary");
+		expect(content).toContain("**Problems (2)**");
+		expect(content).toContain("Location: `src/app.ts:42`");
 		expect(content).toContain("Bug found.");
 		expect(content).toContain("Naming issue.");
 		expect(content).toContain("Suggestion: Fix it.");
@@ -188,7 +190,9 @@ describe("createWeComBotDispatcher", () => {
 		expect(body.msgtype).toBe("markdown");
 		const md = body.markdown as Record<string, unknown>;
 		expect(md.content).toContain("Review done");
+		expect(md.content).toContain("## Problems (2)");
 		expect(md.content).toContain("[HIGH]");
+		expect(md.content).toContain("Location: `src/app.ts:42`");
 		expect(md.content).toContain("Bug found.");
 		expect(md.content).toContain("Naming issue.");
 		expect(md.content).toContain("Suggestion: Fix it.");
@@ -260,7 +264,7 @@ describe("createWeComBotDispatcher", () => {
 
 		const body = JSON.parse(calls[0]?.init?.body ?? "{}");
 		const md = body.markdown as Record<string, unknown>;
-		expect(md.content).toContain("Problems: 15");
+		expect(md.content).toContain("Problems (15)");
 		expect(md.content).toContain("file0.ts");
 		expect(md.content).toContain("file9.ts");
 		expect(md.content).not.toContain("file10.ts");

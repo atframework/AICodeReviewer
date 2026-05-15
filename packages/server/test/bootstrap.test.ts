@@ -1658,6 +1658,125 @@ describe("createOutputPublisherResolverFromConfig", () => {
     }
   });
 
+  it("publishes summary to feishu when publish_if_summary and summary has content", async () => {
+    const calls: { url: string; init: { body?: string } }[] = [];
+    vi.stubGlobal("fetch", async (url: string, init?: { body?: string }) => {
+      calls.push({ url, init: init ?? {} });
+      return response({ code: 0 });
+    });
+
+    const originalWebhook = process.env.FEISHU_IF_SUMMARY_WEBHOOK;
+    process.env.FEISHU_IF_SUMMARY_WEBHOOK = "https://open.feishu.cn/hook/if-summary";
+    try {
+      const config = makeConfig({
+        outputs: {
+          template_engine: "handlebars",
+          channels: [
+            {
+              name: "feishu-if-summary",
+              kind: "feishu_bot",
+              webhook_url_env: "FEISHU_IF_SUMMARY_WEBHOOK",
+            },
+          ],
+          routes: {
+            default: { summary: ["feishu-if-summary"] },
+            rules: [],
+          },
+        },
+      } as Partial<AppConfig>);
+      const publisher = createOutputPublisherResolverFromConfig(config)({
+        reviewEvent: {
+          triggerName: "gitea-internal",
+          provider: "gitea",
+          workspaceId: "test-workspace",
+          targetKind: "push",
+          repoRef: "owent/example",
+          headSha: "abcdef1234567890",
+          author: {},
+          reason: "gitea:push",
+        },
+        payload: {},
+        provider: "gitea",
+        eventName: "push",
+      });
+
+      expect(publisher).toBeDefined();
+      expect(publisher?.noProblemsAction).toBe("publish_if_summary");
+      const results = await publisher?.publishSummary?.("Found a critical issue: runtime error.", []);
+
+      expect(Array.isArray(results)).toBe(true);
+      expect(results).toHaveLength(1);
+      expect(calls[0]?.url).toBe("https://open.feishu.cn/hook/if-summary");
+      expect(calls[0]?.init.body).toContain("critical issue");
+    } finally {
+      vi.unstubAllGlobals();
+      if (originalWebhook === undefined) {
+        delete process.env.FEISHU_IF_SUMMARY_WEBHOOK;
+      } else {
+        process.env.FEISHU_IF_SUMMARY_WEBHOOK = originalWebhook;
+      }
+    }
+  });
+
+  it("suppresses summary to feishu when publish_if_summary and summary is empty", async () => {
+    const calls: { url: string; init: { body?: string } }[] = [];
+    vi.stubGlobal("fetch", async (url: string, init?: { body?: string }) => {
+      calls.push({ url, init: init ?? {} });
+      return response({ code: 0 });
+    });
+
+    const originalWebhook = process.env.FEISHU_IF_SUMMARY_EMPTY_WEBHOOK;
+    process.env.FEISHU_IF_SUMMARY_EMPTY_WEBHOOK = "https://open.feishu.cn/hook/if-summary-empty";
+    try {
+      const config = makeConfig({
+        outputs: {
+          template_engine: "handlebars",
+          channels: [
+            {
+              name: "feishu-if-summary-empty",
+              kind: "feishu_bot",
+              webhook_url_env: "FEISHU_IF_SUMMARY_EMPTY_WEBHOOK",
+            },
+          ],
+          routes: {
+            default: { summary: ["feishu-if-summary-empty"] },
+            rules: [],
+          },
+        },
+      } as Partial<AppConfig>);
+      const publisher = createOutputPublisherResolverFromConfig(config)({
+        reviewEvent: {
+          triggerName: "gitea-internal",
+          provider: "gitea",
+          workspaceId: "test-workspace",
+          targetKind: "push",
+          repoRef: "owent/example",
+          headSha: "abcdef1234567890",
+          author: {},
+          reason: "gitea:push",
+        },
+        payload: {},
+        provider: "gitea",
+        eventName: "push",
+      });
+
+      expect(publisher).toBeDefined();
+      expect(publisher?.noProblemsAction).toBe("publish_if_summary");
+      const results = await publisher?.publishSummary?.("", []);
+
+      expect(Array.isArray(results)).toBe(true);
+      expect(results).toHaveLength(0);
+      expect(calls).toHaveLength(0);
+    } finally {
+      vi.unstubAllGlobals();
+      if (originalWebhook === undefined) {
+        delete process.env.FEISHU_IF_SUMMARY_EMPTY_WEBHOOK;
+      } else {
+        process.env.FEISHU_IF_SUMMARY_EMPTY_WEBHOOK = originalWebhook;
+      }
+    }
+  });
+
   it("returns undefined when pull number is not present", () => {
     const resolver = createOutputPublisherResolverFromConfig(makeConfig());
     const publisher = resolver({

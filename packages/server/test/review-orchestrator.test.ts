@@ -359,6 +359,135 @@ describe("runReviewOrchestration", () => {
       await rm(tempDir, { recursive: true, force: true });
     }
   });
+
+  it("repairs free-form agent stdout before publishing summary-channel results", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-agent-freeform-repair-"));
+
+    try {
+      await writeWorkspaceFile(tempDir, "src/app.ts", "const value = oldValue();\ncommitBeforeReturn();\n");
+      const spawnCalls: SandboxSpawnOptions[] = [];
+      let spawnCount = 0;
+      let teardownCount = 0;
+      const sandbox: SandboxBackend = {
+        kind: "native",
+        async materializeFs(layout) {
+          await mkdir(layout.agentDir, { recursive: true });
+          await mkdir(layout.tmpDir, { recursive: true });
+          return { agentDir: layout.agentDir, tmpDir: layout.tmpDir, mountSpecs: [] };
+        },
+        async spawn(spawnOptions) {
+          spawnCalls.push(spawnOptions);
+          spawnCount += 1;
+          if (spawnCount === 1) {
+            return {
+              exitCode: 0,
+              stdout: [
+                "Looking at this diff, I need to understand the session iteration behavior.",
+                "Based on my analysis, let me report my findings.",
+                "审查完成。发现 1 个问题：提交前返回可能跳过必要状态。",
+              ].join("\n"),
+              stderr: "",
+              timedOut: false,
+              durationMs: 10,
+            };
+          }
+
+          return {
+            exitCode: 0,
+            stdout: JSON.stringify({
+              toolCalls: [
+                {
+                  name: "aicr.report_problem",
+                  input: {
+                    file: "src/app.ts",
+                    line: 2,
+                    severity: "medium",
+                    category: "correctness",
+                    message: "新增路径在提交完成前返回，触发成功响应时可能跳过必要状态更新。",
+                    suggestion: "等待提交完成后再返回成功。",
+                  },
+                },
+                {
+                  name: "aicr.publish_summary",
+                  input: { markdown: "结构化复查完成。发现 1 个问题。" },
+                },
+              ],
+            }),
+            stderr: "",
+            timedOut: false,
+            durationMs: 12,
+          };
+        },
+        async teardown() {
+          teardownCount += 1;
+        },
+      };
+      const agentAdapter: AgentAdapter = {
+        kind: "kilo",
+        async detect() {
+          return { available: true, binary: "kilo" };
+        },
+        buildCommand() {
+          return ["kilo", "run", "--auto"];
+        },
+        async materializeConfig(_model, workingDir) {
+          return { configFiles: new Map(), envVars: {}, workingDir };
+        },
+      };
+      const llm: ChatCompletionClient = {
+        async complete() {
+          throw new Error("LLM path should not be used when agent+sandbox are provided");
+        },
+      };
+      const summaryCalls: { summary: string; problems: readonly ReviewProblem[] }[] = [];
+
+      const result = await runReviewOrchestration(
+        {
+          reviewEvent: createReviewEventFixture(),
+          payload: {},
+          provider: "gitea",
+          eventName: "pull_request",
+        },
+        {
+          baseSystemPrompt: "<task>\n{{TASK_CONTEXT}}\n</task>",
+          sourceRootResolver: () => tempDir,
+          vcs: createVcs(tempDir),
+          llm,
+          model,
+          sandbox,
+          agentAdapter,
+          outputPublisher: {
+            publishesProblems: false,
+            async publishProblem() {
+              throw new Error("summary-only publisher should not receive line problems");
+            },
+            async publishSummary(summary, problems) {
+              summaryCalls.push({ summary, problems: problems ?? [] });
+              return { channel: "feishu", status: "published", raw: {} };
+            },
+          },
+        },
+      );
+
+      expect(result.status).toBe("published");
+      expect(result.problemCount).toBe(1);
+      expect(result.summaryCount).toBe(1);
+      expect(result.dispatchCount).toBe(1);
+      expect(spawnCalls).toHaveLength(2);
+      expect(spawnCalls[1]?.stdin).toContain("previous stdout was free-form text");
+      expect(teardownCount).toBe(2);
+      expect(summaryCalls[0]?.summary).toBe("结构化复查完成。发现 1 个问题。");
+      expect(summaryCalls[0]?.summary).not.toContain("Looking at this diff");
+      expect(summaryCalls[0]?.problems[0]).toMatchObject({
+        file: "src/app.ts",
+        line: 2,
+        severity: "medium",
+        category: "correctness",
+      });
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("formatParsedDiffForPrompt", () => {
@@ -1022,6 +1151,143 @@ describe("runReviewOrchestration error paths", () => {
     }
   });
 
+  it("repairs summary-only issue claims before publishing summary channels", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-summary-claim-repair-"));
+
+    try {
+      await writeWorkspaceFile(tempDir, "src/app.ts", "const ok = true;\n");
+      let completeCalls = 0;
+      const llm: ChatCompletionClient = {
+        async complete(input) {
+          completeCalls += 1;
+          if (completeCalls === 1) {
+            return {
+              providerId: input.model.providerId,
+              modelId: input.model.modelId,
+              content: "Found a critical issue: calling a commented-out function will cause a runtime error.",
+              raw: {},
+            };
+          }
+
+          expect(input.messages[2]?.content).toContain("claimed actionable problems in a summary");
+          return {
+            providerId: input.model.providerId,
+            modelId: input.model.modelId,
+            content: JSON.stringify({
+              toolCalls: [
+                {
+                  name: "aicr.report_problem",
+                  input: {
+                    file: "src/app.ts",
+                    line: 1,
+                    severity: "critical",
+                    category: "correctness",
+                    message: "Calling the commented-out function can fail at runtime.",
+                  },
+                },
+                {
+                  name: "aicr.publish_summary",
+                  input: { markdown: "Structured repair completed. Found 1 critical issue." },
+                },
+              ],
+            }),
+            raw: {},
+          };
+        },
+      };
+      const summaryCalls: Array<{ summary: string; problems: readonly ReviewProblem[] }> = [];
+
+      const result = await runReviewOrchestration(
+        {
+          reviewEvent: createReviewEventFixture(),
+          payload: {},
+          provider: "gitea",
+          eventName: "pull_request",
+        },
+        {
+          baseSystemPrompt: "<task>\n{{TASK_CONTEXT}}\n</task>",
+          sourceRootResolver: () => tempDir,
+          vcs: createVcs(tempDir),
+          llm,
+          model,
+          outputPublisher: {
+            publishesProblems: false,
+            noProblemsAction: "publish_if_summary",
+            async publishSummary(summary, problems) {
+              summaryCalls.push({ summary, problems: problems ?? [] });
+              return { channel: "feishu", status: "published", raw: {} };
+            },
+          },
+        },
+      );
+
+      expect(result.status).toBe("published");
+      expect(result.problemCount).toBe(1);
+      expect(result.summaryCount).toBe(1);
+      expect(result.dispatchCount).toBe(1);
+      expect(completeCalls).toBe(2);
+      expect(summaryCalls).toHaveLength(1);
+      expect(summaryCalls[0]?.summary).toBe("Structured repair completed. Found 1 critical issue.");
+      expect(summaryCalls[0]?.problems[0]).toMatchObject({
+        file: "src/app.ts",
+        line: 1,
+        severity: "critical",
+      });
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("suppresses with publish_if_summary when model skips review", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-publish-if-summary-skip-"));
+
+    try {
+      await writeWorkspaceFile(tempDir, "src/app.ts", "const ok = true;\n");
+      const llm: ChatCompletionClient = {
+        async complete(input) {
+          return {
+            providerId: input.model.providerId,
+            modelId: input.model.modelId,
+            content: JSON.stringify({ skipReason: "no issues found" }),
+            raw: {},
+          };
+        },
+      };
+      const summaryCalls: string[] = [];
+
+      const result = await runReviewOrchestration(
+        {
+          reviewEvent: createReviewEventFixture(),
+          payload: {},
+          provider: "gitea",
+          eventName: "pull_request",
+        },
+        {
+          baseSystemPrompt: "<task>\n{{TASK_CONTEXT}}\n</task>",
+          sourceRootResolver: () => tempDir,
+          vcs: createVcs(tempDir),
+          llm,
+          model,
+          outputPublisher: {
+            publishesProblems: false,
+            noProblemsAction: "publish_if_summary",
+            async publishSummary(summary) {
+              summaryCalls.push(summary);
+              return { channel: "feishu", status: "published", raw: {} };
+            },
+          },
+        },
+      );
+
+      expect(result.status).toBe("skipped");
+      expect(result.problemCount).toBe(0);
+      expect(result.dispatchCount).toBe(0);
+      expect(summaryCalls).toEqual([]);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("uses outputPublisherResolver for per-event publishing", async () => {
     const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-publisher-resolver-"));
 
@@ -1433,7 +1699,7 @@ describe("runReviewOrchestration error paths", () => {
 
     try {
       await writeWorkspaceFile(tempDir, "src/app.ts", "const ok = true;\n");
-      const fetchExtraCalls: { path: string; startLine?: number; endLine?: number }[] = [];
+      const fetchExtraCalls: { path: string; startLine?: number; endLine?: number; revision?: string }[] = [];
       const vcs: DiffCapableVcsAdapter = {
         ...createVcs(tempDir),
         async fetchExtraContext(req) {
@@ -1441,12 +1707,26 @@ describe("runReviewOrchestration error paths", () => {
             path: req.path,
             ...(req.startLine !== undefined ? { startLine: req.startLine } : {}),
             ...(req.endLine !== undefined ? { endLine: req.endLine } : {}),
+            ...(req.revision !== undefined ? { revision: req.revision } : {}),
           });
           return { path: req.path, content: `ctx-${req.path}` };
         },
       };
+      let completeCalls = 0;
       const llm: ChatCompletionClient = {
         async complete(input) {
+          completeCalls += 1;
+          if (completeCalls === 2) {
+            expect(input.messages[2]?.content).toContain("Fetched context:");
+            expect(input.messages[2]?.content).toContain("ctx-src/app.ts");
+            return {
+              providerId: input.model.providerId,
+              modelId: input.model.modelId,
+              content: JSON.stringify({ skipReason: "lgtm" }),
+              raw: {},
+            };
+          }
+
           return {
             providerId: input.model.providerId,
             modelId: input.model.modelId,
@@ -1486,9 +1766,287 @@ describe("runReviewOrchestration error paths", () => {
 
       expect(result.status).toBe("skipped");
       expect(result.contextRequestCount).toBe(1);
+      expect(completeCalls).toBe(2);
       expect(fetchExtraCalls).toEqual([
-        { path: "src/app.ts", startLine: 2, endLine: 4 },
+        { path: "src/app.ts", startLine: 2, endLine: 4, revision: "head" },
       ]);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("uses fetched related context for a follow-up before accepting a no-problem summary", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-related-context-follow-up-"));
+
+    try {
+      await writeWorkspaceFile(tempDir, "src/app.ts", "const ok = true;\n");
+      const fetchExtraCalls: string[] = [];
+      const vcs: DiffCapableVcsAdapter = {
+        ...createVcs(tempDir),
+        async fetchExtraContext(req) {
+          fetchExtraCalls.push(req.path);
+          return { path: req.path, content: "export function relatedContract() { return false; }" };
+        },
+      };
+      let completeCalls = 0;
+      const llm: ChatCompletionClient = {
+        async complete(input) {
+          completeCalls += 1;
+          if (completeCalls === 1) {
+            return {
+              providerId: input.model.providerId,
+              modelId: input.model.modelId,
+              content: JSON.stringify({
+                toolCalls: [
+                  {
+                    name: "aicr.fetch_more_context",
+                    input: {
+                      path: "src/related.ts",
+                      reason: "Need related API contract before deciding whether the changed call is safe.",
+                    },
+                  },
+                  {
+                    name: "aicr.publish_summary",
+                    input: { markdown: "No actionable problems based on the visible diff." },
+                  },
+                ],
+              }),
+              raw: {},
+            };
+          }
+
+          expect(input.messages[2]?.content).toContain("Fetched context:");
+          expect(input.messages[2]?.content).toContain("--- src/related.ts ---");
+          expect(input.messages[2]?.content).toContain("relatedContract");
+          return {
+            providerId: input.model.providerId,
+            modelId: input.model.modelId,
+            content: JSON.stringify({
+              problems: [
+                {
+                  file: "src/app.ts",
+                  line: 1,
+                  severity: "medium",
+                  category: "api-contract",
+                  message: "The changed call violates the related API contract.",
+                },
+              ],
+              summary: "Related context changed the result; found 1 issue.",
+            }),
+            raw: {},
+          };
+        },
+      };
+      const summaryCalls: Array<{ summary: string; problems: readonly ReviewProblem[] }> = [];
+
+      const result = await runReviewOrchestration(
+        {
+          reviewEvent: createReviewEventFixture(),
+          payload: {},
+          provider: "gitea",
+          eventName: "pull_request",
+        },
+        {
+          baseSystemPrompt: "<task>\n{{TASK_CONTEXT}}\n</task>",
+          sourceRootResolver: () => tempDir,
+          vcs,
+          llm,
+          model,
+          outputPublisher: {
+            publishesProblems: false,
+            async publishSummary(summary, problems) {
+              summaryCalls.push({ summary, problems: problems ?? [] });
+              return { channel: "feishu", status: "published", raw: {} };
+            },
+            async publishProblem() {
+              throw new Error("summary-only publisher should not receive line problems");
+            },
+          },
+        },
+      );
+
+      expect(result.status).toBe("published");
+      expect(result.problemCount).toBe(1);
+      expect(result.summaryCount).toBe(1);
+      expect(result.contextRequestCount).toBe(1);
+      expect(completeCalls).toBe(2);
+      expect(fetchExtraCalls).toEqual(["src/related.ts"]);
+      expect(summaryCalls[0]?.summary).toBe("Related context changed the result; found 1 issue.");
+      expect(summaryCalls[0]?.problems[0]?.file).toBe("src/app.ts");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("repairs missing-diff skip output by fetching changed-file context", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-missing-diff-repair-"));
+
+    try {
+      await writeWorkspaceFile(tempDir, "src/app.ts", "const value = oldValue();\ncommitBeforeReturn();\n");
+      const fetchExtraCalls: string[] = [];
+      const vcs: DiffCapableVcsAdapter = {
+        ...createVcs(tempDir),
+        async fetchExtraContext(req) {
+          fetchExtraCalls.push(req.path);
+          return { path: req.path, content: "const value = oldValue();\ncommitBeforeReturn();\n" };
+        },
+        async diff() {
+          return { files: [] };
+        },
+      };
+      let completeCalls = 0;
+      const llm: ChatCompletionClient = {
+        async complete(input) {
+          completeCalls += 1;
+          if (completeCalls === 1) {
+            return {
+              providerId: input.model.providerId,
+              modelId: input.model.modelId,
+              content: JSON.stringify({ skipReason: "无法获取 diff，请提供 diff 后再审查。" }),
+              raw: {},
+            };
+          }
+
+          if (completeCalls === 2) {
+            expect(input.messages[2]?.content).toContain("asked for diff/source context");
+            return {
+              providerId: input.model.providerId,
+              modelId: input.model.modelId,
+              content: JSON.stringify({
+                toolCalls: [
+                  {
+                    name: "aicr.fetch_more_context",
+                    input: { path: "src/app.ts", reason: "Diff is unavailable; need the full changed file." },
+                  },
+                ],
+              }),
+              raw: {},
+            };
+          }
+
+          expect(input.messages[2]?.content).toContain("Fetched context:");
+          expect(input.messages[2]?.content).toContain("commitBeforeReturn");
+          return {
+            providerId: input.model.providerId,
+            modelId: input.model.modelId,
+            content: JSON.stringify({
+              problems: [
+                {
+                  file: "src/app.ts",
+                  line: 2,
+                  severity: "medium",
+                  category: "correctness",
+                  message: "The function can return before the commit completes.",
+                },
+              ],
+              summary: "Fetched changed-file context and found 1 issue.",
+            }),
+            raw: {},
+          };
+        },
+      };
+
+      const result = await runReviewOrchestration(
+        {
+          reviewEvent: createReviewEventFixture(),
+          payload: {},
+          provider: "p4",
+          eventName: "change-commit",
+        },
+        {
+          baseSystemPrompt: "<task>\n{{TASK_CONTEXT}}\n</task>",
+          sourceRootResolver: () => tempDir,
+          vcs,
+          llm,
+          model,
+          outputPublisher: {
+            async publishProblem() {
+              return { channel: "test", status: "published", raw: {} };
+            },
+          },
+        },
+      );
+
+      expect(result.status).toBe("published");
+      expect(result.problemCount).toBe(1);
+      expect(result.summaryCount).toBe(1);
+      expect(result.contextRequestCount).toBe(1);
+      expect(result.diffFileCount).toBe(0);
+      expect(completeCalls).toBe(3);
+      expect(fetchExtraCalls).toEqual(["src/app.ts"]);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("parses XML context calls and a final JSON review payload from the same output", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-xml-plus-json-"));
+
+    try {
+      await writeWorkspaceFile(tempDir, "src/app.ts", "const value = oldValue();\ncommitBeforeReturn();\n");
+      const fetchExtraCalls: string[] = [];
+      const vcs: DiffCapableVcsAdapter = {
+        ...createVcs(tempDir),
+        async fetchExtraContext(req) {
+          fetchExtraCalls.push(req.path);
+          return { path: req.path, content: `ctx-${req.path}` };
+        },
+      };
+      const publishedProblems: ReviewProblem[] = [];
+      const llm: ChatCompletionClient = {
+        async complete(input) {
+          return {
+            providerId: input.model.providerId,
+            modelId: input.model.modelId,
+            content: [
+              '<tool_call name="aicr.fetch_more_context">{"path":"src/app.ts","reason":"need context"}</tool_call>',
+              JSON.stringify({
+                toolCalls: [
+                  {
+                    name: "aicr.report_problem",
+                    input: {
+                      file: "src/app.ts",
+                      line: 2,
+                      severity: "low",
+                      category: "correctness",
+                      message: "Issue after context fetch.",
+                    },
+                  },
+                ],
+              }),
+            ].join("\n"),
+            raw: {},
+          };
+        },
+      };
+
+      const result = await runReviewOrchestration(
+        {
+          reviewEvent: createReviewEventFixture(),
+          payload: {},
+          provider: "gitea",
+          eventName: "pull_request",
+        },
+        {
+          baseSystemPrompt: "<task>\n{{TASK_CONTEXT}}\n</task>",
+          sourceRootResolver: () => tempDir,
+          vcs,
+          llm,
+          model,
+          outputPublisher: {
+            async publishProblem(problem) {
+              publishedProblems.push(problem);
+              return { channel: "test", status: "published", raw: {} };
+            },
+          },
+        },
+      );
+
+      expect(result.problemCount).toBe(1);
+      expect(result.contextRequestCount).toBe(1);
+      expect(fetchExtraCalls).toEqual(["src/app.ts"]);
+      expect(publishedProblems[0]?.file).toBe("src/app.ts");
+      expect(publishedProblems[0]?.line).toBe(2);
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }

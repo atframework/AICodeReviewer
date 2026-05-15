@@ -15,7 +15,7 @@ import {
 } from "@aicr/core";
 import type { AgentAdapter } from "@aicr/agents";
 import { materializeRuntimeBundle } from "@aicr/agents";
-import type { RuntimeBundleInstruction, RuntimeBundleMcpTool, RuntimeBundleSkill } from "@aicr/agents";
+import type { RuntimeBundleInstruction, RuntimeBundleMcpServer, RuntimeBundleMcpTool, RuntimeBundleSkill } from "@aicr/agents";
 import {
   type ChatCompletionClient,
   type ChatCompletionResult,
@@ -60,7 +60,7 @@ export interface ReviewOutputPublisher {
   readonly publishesProblems?: boolean;
   readonly handlesRendering?: boolean;
   readonly publishEmptySummary?: boolean;
-  readonly noProblemsAction?: "publish" | "suppress";
+  readonly noProblemsAction?: "publish" | "suppress" | "publish_if_summary";
   publishProblem?(problem: ReviewProblem): Promise<ReviewDispatchResult>;
   publishSummary?(summary: string, problems?: readonly ReviewProblem[], options?: ReviewSummaryPublishOptions): Promise<ReviewDispatchResult>;
 }
@@ -189,6 +189,10 @@ interface ToolCallExecutionResult {
   readonly invalidReviewOutputs: readonly InvalidToolCallResponse[];
 }
 
+interface ParseToolCallOptions {
+  readonly allowNaturalLanguageSummary?: boolean;
+}
+
 function formatFilePath(file: { readonly oldPath?: string; readonly newPath?: string }): string {
   if (file.oldPath && file.newPath && file.oldPath !== file.newPath) {
     return `${file.oldPath} -> ${file.newPath}`;
@@ -230,12 +234,15 @@ function buildJsonToolContract(): string {
   return [
     "Model output format:",
     "Return a single JSON object and no prose.",
-    "Do not return only aicr.fetch_more_context; after any context request you must return a final review result.",
-    "Never call aicr.fetch_more_context with an empty path; path must be one of the changed files listed in this task.",
+    "When the diff is unavailable or insufficient, call aicr.fetch_more_context for the changed file; omit range to fetch the full file.",
+    "You may call aicr.fetch_more_context for a narrowly related repository file outside the change when it is required to understand an API contract or call path.",
+    "Never ask the user to provide diff or source context; request it through aicr.fetch_more_context with a concrete path and reason.",
     "For push/commit/change-commit events, include aicr.publish_summary even when there are no actionable problems so notification channels receive the analysis result.",
+    "If you found any actionable problem, emit one aicr.report_problem per problem; never mention found-problem counts only in a summary.",
     "When useful, add a short title to aicr.publish_summary input.title so summary channels can render a concise heading.",
     "Preferred shape:",
     '{"toolCalls":[{"name":"aicr.report_problem","input":{"file":"src/file.ts","line":1,"severity":"medium","category":"correctness","message":"..."}}],"notes":"optional"}',
+    '{"toolCalls":[{"name":"aicr.fetch_more_context","input":{"path":"src/file.ts","reason":"Need the full changed file because the diff is unavailable."}}]}',
     '{"toolCalls":[{"name":"aicr.publish_summary","input":{"title":"未发现阻塞问题","markdown":"Review completed; no actionable problems."}}]}',
     "Alternatively use problems/summary/skipReason fields; AICR will translate them into tool calls.",
   ].join("\n");
@@ -284,6 +291,7 @@ interface AgentBundleContext {
   instructions?: readonly RuntimeBundleInstruction[];
   skills?: readonly RuntimeBundleSkill[];
   mcpTools?: readonly RuntimeBundleMcpTool[];
+  mcpServers?: readonly RuntimeBundleMcpServer[];
   runId?: string;
 }
 
@@ -350,6 +358,7 @@ async function runAgentReview(
       ...(bundleContext?.instructions ? { instructions: bundleContext.instructions } : {}),
       ...(bundleContext?.skills ? { skills: bundleContext.skills } : {}),
       ...(bundleContext?.mcpTools ? { mcpTools: bundleContext.mcpTools } : {}),
+      ...(bundleContext?.mcpServers ? { mcpServers: bundleContext.mcpServers } : {}),
       ...(bundleContext?.runId ? { runId: bundleContext.runId } : {}),
     });
     const command = agentAdapter.buildCommand(task, {
@@ -585,39 +594,35 @@ function parseXmlToolCalls(content: string): ToolCallEnvelope[] | null {
   return calls.length > 0 ? calls : null;
 }
 
-function parseToolCalls(content: string): ToolCallEnvelope[] {
-  const toolContent = stripReasoningBlocks(content);
-  const xmlCalls = parseXmlToolCalls(toolContent);
-  if (xmlCalls) {
-    return xmlCalls;
-  }
+function stripXmlToolCalls(content: string): string {
+  return content
+    .replace(/<tool_call\s+name\s*=\s*"[^"]+"\s*>[\s\S]*?<\/tool_call>/gu, "")
+    .replace(/<tool_call\s+name\s*=\s*"[^"]+"\s*\/>/gu, "");
+}
 
-  const payload = extractJsonPayload(toolContent);
-  if (payload === null || !isPlainObject(payload)) {
-    // LLM returned natural language — treat as a summary so the review is not lost
-    const text = toolContent.trim();
-    if (text.length > 0) {
-      return [{ name: "aicr.publish_summary", input: { markdown: text } }];
-    }
-    return [];
-  }
-
+function structuredPayloadToToolCalls(payload: Record<string, unknown>): {
+  readonly calls: readonly ToolCallEnvelope[];
+  readonly hasKnownField: boolean;
+} {
   const toolCalls = (payload as { readonly toolCalls?: unknown }).toolCalls;
   if (toolCalls !== undefined) {
     if (!Array.isArray(toolCalls)) {
       throw new TypeError("toolCalls must be an array when provided.");
     }
 
-    return toolCalls.map((entry) => {
-      if (!isPlainObject(entry)) {
-        throw new TypeError("toolCalls entries must be objects.");
-      }
+    return {
+      hasKnownField: true,
+      calls: toolCalls.map((entry) => {
+        if (!isPlainObject(entry)) {
+          throw new TypeError("toolCalls entries must be objects.");
+        }
 
-      return {
-        name: normalizeToolName(entry.name),
-        input: entry.input ?? {},
-      };
-    });
+        return {
+          name: normalizeToolName(entry.name),
+          input: entry.input ?? {},
+        };
+      }),
+    };
   }
 
   const hasProblemsField = "problems" in payload;
@@ -647,19 +652,56 @@ function parseToolCalls(content: string): ToolCallEnvelope[] {
     calls.push({ name: "aicr.skip", input: { reason: payload.skipReason } });
   }
 
-  if (calls.length === 0 && toolCalls === undefined && !hasProblemsField && !("summary" in payload) && !("skipReason" in payload)) {
+  return {
+    calls,
+    hasKnownField: hasProblemsField || "summary" in payload || "skipReason" in payload,
+  };
+}
+
+function parseToolCalls(content: string, options: ParseToolCallOptions = {}): ToolCallEnvelope[] {
+  const allowNaturalLanguageSummary = options.allowNaturalLanguageSummary ?? true;
+  const toolContent = stripReasoningBlocks(content);
+  const xmlCalls = parseXmlToolCalls(toolContent) ?? [];
+  const jsonCandidateContent = xmlCalls.length > 0 ? stripXmlToolCalls(toolContent) : toolContent;
+
+  const payload = extractJsonPayload(jsonCandidateContent);
+  if (payload === null || !isPlainObject(payload)) {
+    if (xmlCalls.length > 0) {
+      return xmlCalls;
+    }
+
+    if (allowNaturalLanguageSummary) {
+      // Direct LLM returned natural language — treat as a summary so the review is not lost.
+      // Agent CLI stdout is stricter and disables this fallback because stdout often contains
+      // transient reasoning rather than the final AICR output contract.
+      const text = toolContent.trim();
+      if (text.length > 0) {
+        return [{ name: "aicr.publish_summary", input: { markdown: text } }];
+      }
+    }
+
+    return [];
+  }
+
+  const structured = structuredPayloadToToolCalls(payload);
+  if (structured.calls.length > 0 || structured.hasKnownField || xmlCalls.length > 0) {
+    return [...xmlCalls, ...structured.calls];
+  }
+
+  if (allowNaturalLanguageSummary) {
     const text = toolContent.trim();
     if (text.length > 0) {
       return [{ name: "aicr.publish_summary", input: { markdown: text } }];
     }
   }
 
-  return calls;
+  return [];
 }
 
 async function callAicrTools(
   content: string,
   tools: readonly AicrOutputToolDefinition[],
+  options: ParseToolCallOptions = {},
 ): Promise<ToolCallExecutionResult> {
   const toolMap = new Map(tools.map((tool) => [tool.name, tool]));
   let toolCallCount = 0;
@@ -668,7 +710,7 @@ async function callAicrTools(
   let invalidReviewOutputCount = 0;
   const contextResponses: ContextToolResponse[] = [];
   const invalidReviewOutputs: InvalidToolCallResponse[] = [];
-  for (const toolCall of parseToolCalls(content)) {
+  for (const toolCall of parseToolCalls(content, options)) {
     toolCallCount += 1;
     const tool = toolMap.get(toolCall.name);
     if (!tool) {
@@ -729,19 +771,65 @@ function hasFinalReviewOutput(state: AicrOutputState): boolean {
   return state.problems.length > 0 || state.summaries.length > 0 || Boolean(state.skipReason);
 }
 
+const NO_ACTIONABLE_PROBLEM_RE = /(?:no\s+(?:actionable\s+)?(?:issues?|problems?)\s+(?:found|detected)|no\s+(?:actionable\s+)?(?:issues?|problems?)|未发现(?:明显|可执行|阻塞|严重)?(?:问题|缺陷|风险)|没有发现(?:明显|可执行|阻塞|严重)?(?:问题|缺陷|风险)|暂无(?:问题|缺陷|风险)|无(?:明显|可执行|阻塞|严重)?(?:问题|缺陷|风险)|lgtm)/iu;
+const ACTIONABLE_PROBLEM_CLAIM_RE = /(?:(?:发现|發現)\s*(?:了\s*)?[1-9]\d*\s*(?:个|個|项|項)?\s*(?:问题|問題|缺陷|风险|風險)|(?:存在|检出|檢出)\s*(?:明显|可执行|阻塞|严重|高风险)?\s*(?:问题|問題|缺陷|风险|風險)|found\s+[1-9]\d*\s+(?:issues?|problems?)|[1-9]\d*\s+(?:issues?|problems?)\s+(?:found|detected)|(?:critical|high[-\s]?risk|blocking)\s+(?:issue|problem)|(?:严重|高风险|阻塞)\s*(?:问题|問題|缺陷|风险|風險))/iu;
+const MISSING_CONTEXT_REQUEST_RE = /(?:need(?:s|ed)?\s+(?:the\s+)?(?:diff|source|context)|more\s+context|provide\s+(?:the\s+)?diff|fetch_more_context|无法获取.*(?:diff|上下文|变更内容|源文件)|缺少.*(?:diff|上下文|变更内容|源文件)|需要.*(?:diff|上下文|变更内容|源文件)|请提供.*(?:diff|上下文|变更内容|源文件)|获取.*(?:diff|上下文|变更内容|源文件))/iu;
+
+function summaryClaimsActionableProblems(markdown: string): boolean {
+  if (NO_ACTIONABLE_PROBLEM_RE.test(markdown)) {
+    return false;
+  }
+
+  return ACTIONABLE_PROBLEM_CLAIM_RE.test(markdown);
+}
+
+function summaryOnlyClaimsActionableProblems(state: AicrOutputState): boolean {
+  return state.problems.length === 0
+    && state.summaries.some((summary) => summaryClaimsActionableProblems(summary.markdown));
+}
+
+function outputRequestsMissingContext(state: AicrOutputState): boolean {
+  if (state.problems.length > 0) {
+    return false;
+  }
+
+  return (state.skipReason !== undefined && MISSING_CONTEXT_REQUEST_RE.test(state.skipReason))
+    || state.summaries.some((summary) => MISSING_CONTEXT_REQUEST_RE.test(summary.markdown));
+}
+
 function buildContextFollowUpPrompt(
   changedPaths: readonly string[],
   execution: ToolCallExecutionResult,
+  options: { readonly summaryOnlyClaimsProblems?: boolean; readonly missingContextRequest?: boolean } = {},
 ): string {
   const sections: string[] = [
-    "The previous output did not include final review problems, summary, or skip reason.",
+    options.summaryOnlyClaimsProblems
+      ? "The previous output claimed actionable problems in a summary but did not emit any aicr.report_problem records."
+      : options.missingContextRequest
+        ? "The previous output asked for diff/source context instead of using the available AICR context tools."
+        : "The previous output did not include parseable final review problems, summary, or skip reason.",
     "Use the original task plus the context below to finish the review now.",
     "Return one JSON object only. Prefer problems plus summary; if there are no actionable problems, call aicr.publish_summary with a concise analysis result.",
-    "Do not call aicr.fetch_more_context again unless path is exactly one of the changed files listed below.",
+    "If you found any actionable problem, emit one aicr.report_problem entry per problem with file and line; do not mention problem counts only in a summary.",
+    "Use aicr.fetch_more_context only for a concrete changed file or a narrowly related repository file; never ask the user to provide diff or source context.",
     "",
     "Changed files:",
     ...changedPaths.map((path) => `- ${path}`),
   ];
+
+  if (execution.contextResponses.length > 0) {
+    sections.push(
+      "",
+      "AICR fetched the requested context below. Any previous summary or skip output emitted before this context was treated as provisional.",
+    );
+  }
+
+  if (execution.toolCallCount === 0) {
+    sections.push(
+      "",
+      "The previous stdout was free-form text rather than the AICR tool contract. Do not repeat interim reasoning such as context-gathering notes; convert the final findings into JSON toolCalls.",
+    );
+  }
 
   if (execution.invalidContextRequestCount > 0) {
     sections.push(
@@ -787,12 +875,13 @@ function buildFallbackReviewSummary(
   ].join("\n");
 }
 
-function toExtraContextRequest(input: FetchMoreContextInput): ExtraContextRequest {
+function toExtraContextRequest(input: FetchMoreContextInput, revision: string | undefined): ExtraContextRequest {
   return {
     path: input.path,
     reason: input.reason,
     ...(input.range?.start_line !== undefined ? { startLine: input.range.start_line } : {}),
     ...(input.range?.end_line !== undefined ? { endLine: input.range.end_line } : {}),
+    ...(revision !== undefined ? { revision } : {}),
   };
 }
 
@@ -1112,7 +1201,7 @@ export async function runReviewOrchestration(
 
   const collector = new AicrOutputCollector();
   const tools = createAicrOutputToolRegistry(collector, async (request) => {
-    const result = await vcs.fetchExtraContext(toExtraContextRequest(request), workspaceRef);
+    const result = await vcs.fetchExtraContext(toExtraContextRequest(request, range.headRevision), workspaceRef);
     return result.content;
   });
   const bundleContext: AgentBundleContext = {
@@ -1131,17 +1220,37 @@ export async function runReviewOrchestration(
     mcpTools: tools.map((tool) => ({
       name: tool.name,
       description: tool.description,
+      inputSchema: tool.inputSchema,
     })),
+    mcpServers: [
+      {
+        name: "aicr-output",
+        config: {
+          type: "local",
+          command: ["node", "/app/packages/mcp-output/dist/server.js"],
+          enabled: true,
+        },
+      },
+    ],
   };
   let completion = await requestReviewCompletion(scopedTree.rootDir, llmSystemPrompt, options, undefined, bundleContext);
   const rawModelOutput = completion.llmResult.content;
-  const toolExecution = await callAicrTools(rawModelOutput, tools);
+  const allowNaturalLanguageSummary = completion.agentResult === undefined;
+  const toolExecution = await callAicrTools(rawModelOutput, tools, { allowNaturalLanguageSummary });
   let outputState = collector.snapshot();
-  const shouldRepairModelOutput = !hasFinalReviewOutput(outputState) && (
+  const summaryOnlyProblemClaim = summaryOnlyClaimsActionableProblems(outputState);
+  const contextNeedsFinalPass = outputState.problems.length === 0 && (
     toolExecution.contextResponses.length > 0 ||
-    toolExecution.invalidContextRequestCount > 0 ||
-    toolExecution.invalidReviewOutputCount > 0
+    toolExecution.invalidContextRequestCount > 0
   );
+  const missingContextRequest = outputRequestsMissingContext(outputState);
+  const shouldRepairModelOutput = summaryOnlyProblemClaim
+    || contextNeedsFinalPass
+    || missingContextRequest
+    || (!hasFinalReviewOutput(outputState) && (
+      toolExecution.toolCallCount === 0 ||
+      toolExecution.invalidReviewOutputCount > 0
+    ));
 
   if (!hasFinalReviewOutput(outputState) && toolExecution.toolCallCount === 0) {
     const truncatedOutput = rawModelOutput.length > 500
@@ -1164,27 +1273,60 @@ export async function runReviewOrchestration(
           : completion.agentResult.stderr,
       } : {}),
     }));
-    collector.publishSummary({ markdown: buildFallbackReviewSummary(context.reviewEvent, changedPaths) });
-    outputState = collector.snapshot();
   }
 
   if (shouldRepairModelOutput) {
+    if (summaryOnlyProblemClaim || contextNeedsFinalPass || missingContextRequest) {
+      collector.clearReviewOutputs();
+    }
+
     completion = await requestReviewCompletion(
       scopedTree.rootDir,
       llmSystemPrompt,
       options,
       {
         previousOutput: completion.llmResult.content,
-        prompt: buildContextFollowUpPrompt(changedPaths, toolExecution),
+        prompt: buildContextFollowUpPrompt(changedPaths, toolExecution, {
+          ...(summaryOnlyProblemClaim ? { summaryOnlyClaimsProblems: true } : {}),
+          ...(missingContextRequest ? { missingContextRequest: true } : {}),
+        }),
       },
       bundleContext,
     );
-    await callAicrTools(completion.llmResult.content, tools);
+    const repairExecution = await callAicrTools(completion.llmResult.content, tools, {
+      allowNaturalLanguageSummary: completion.agentResult === undefined,
+    });
     outputState = collector.snapshot();
-    if (!hasFinalReviewOutput(outputState)) {
+
+    if (outputState.problems.length === 0 && repairExecution.contextResponses.length > 0) {
+      collector.clearReviewOutputs();
+      completion = await requestReviewCompletion(
+        scopedTree.rootDir,
+        llmSystemPrompt,
+        options,
+        {
+          previousOutput: completion.llmResult.content,
+          prompt: buildContextFollowUpPrompt(changedPaths, repairExecution),
+        },
+        bundleContext,
+      );
+      await callAicrTools(completion.llmResult.content, tools, {
+        allowNaturalLanguageSummary: completion.agentResult === undefined,
+      });
+      outputState = collector.snapshot();
+    }
+
+    if (summaryOnlyClaimsActionableProblems(outputState)) {
+      collector.clearReviewOutputs();
+      collector.publishSummary({ markdown: buildFallbackReviewSummary(context.reviewEvent, changedPaths) });
+      outputState = collector.snapshot();
+    } else if (!hasFinalReviewOutput(outputState)) {
       collector.publishSummary({ markdown: buildFallbackReviewSummary(context.reviewEvent, changedPaths) });
       outputState = collector.snapshot();
     }
+  } else if (!hasFinalReviewOutput(outputState) && toolExecution.toolCallCount === 0) {
+    collector.publishSummary({ markdown: buildFallbackReviewSummary(context.reviewEvent, changedPaths) });
+    outputState = collector.snapshot();
   }
 
   const llmResult = completion.llmResult;
@@ -1310,7 +1452,9 @@ export async function runReviewOrchestration(
 
     if (outputPublisher.publishSummary) {
       const suppressNoProblemsSummary = reviewProblems.length === 0
-        && outputPublisher.noProblemsAction === "suppress";
+        && (outputPublisher.noProblemsAction === "suppress"
+          || (outputPublisher.noProblemsAction === "publish_if_summary"
+            && outputState.summaries.every((s) => !s.markdown.trim())));
       if (!suppressNoProblemsSummary) {
         const summariesToPublish: readonly PublishSummaryInput[] = outputState.summaries.length > 0
           ? outputState.summaries
@@ -1409,7 +1553,10 @@ export async function runReviewOrchestration(
   const implicitSkipReason = !options.dryRun && !outputState.skipReason && dispatchResults.length === 0
     ? outputState.problems.length > 0 && !outputPublisher
       ? "no_output_publisher"
-      : outputState.problems.length === 0 && outputPublisher?.noProblemsAction === "suppress"
+      : outputState.problems.length === 0
+        && (outputPublisher?.noProblemsAction === "suppress"
+          || (outputPublisher?.noProblemsAction === "publish_if_summary"
+            && outputState.summaries.every((s) => !s.markdown.trim())))
         ? "no_problems_suppressed"
         : "no_dispatchable_problems"
     : undefined;

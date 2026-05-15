@@ -37,6 +37,7 @@ Do not use this skill for VCS implementation details, output channel rendering, 
 3. **Map MCP tools from the registry**
    - Generate adapter-native MCP config from `createAicrOutputToolRegistry()` and any implemented context tools.
    - Stable current tools are `aicr.report_problem`, `aicr.publish_summary`, `aicr.skip`, and `aicr.fetch_more_context`.
+   - `aicr.fetch_more_context` may fetch full changed files when the diff is missing/truncated and narrowly related repository files when needed to validate a changed line; keep requests bounded by path/range/reason.
    - Do not advertise planned tools such as `aicr.try_blame`, `aicr.recall_memory`, or `aicr.recall_skill` until schema, server, client tests, and prompt guidance exist.
    - Keep JSON/XML stdout tool-call parsing only as a compatibility fallback when MCP is unavailable.
 
@@ -65,3 +66,4 @@ Do not use this skill for VCS implementation details, output channel rendering, 
 - Do not let prompt text be the source of truth for tool names; the MCP registry is authoritative.
 - Do not expose arbitrary external MCP servers directly to the agent; route them through AICR allowlists and context tools.
 - Do not include secrets in generated config files; use env placeholders and sandbox env injection.
+- Do not accept summaries that claim actionable problems without `aicr.report_problem` records, or skip/summary prose that asks humans for diff/source context; trigger structured repair so locations and context requests remain machine-readable.

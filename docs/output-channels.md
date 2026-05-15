@@ -18,7 +18,7 @@ The current in-process tool registry exposes these AICR tools to the review exec
 | `aicr.report_problem` | Report one actionable code-review problem anchored to a changed line | `file`, `line`, `severity`, `category`, `message` |
 | `aicr.publish_summary` | Publish a structured Markdown review summary | `markdown` |
 | `aicr.skip` | Mark the review as intentionally skipped | `reason` |
-| `aicr.fetch_more_context` | Request bounded extra source context | `path`, `reason` |
+| `aicr.fetch_more_context` | Request source context for a changed file or narrowly related repository file | `path`, `reason` |
 
 Planned attribution, memory, and skill recall tools are tracked by the `Plan.md` roadmap and detailed in `docs/ai/architecture.md`; do not describe them as implemented until they exist in `packages/mcp-output` and tests.
 
@@ -78,6 +78,12 @@ Keep patches concise. Large rewrites belong in a summary or a linked follow-up, 
 
 For push/commit/P4 events, publish a non-empty summary when configured channels need an audit trail. The `no_problems` policy decides per channel whether a zero-problem result is published or suppressed.
 
+For agent-CLI reviews, free-form stdout is not treated as the final report. If stdout does not contain a parseable AICR JSON/XML tool payload, the orchestrator asks the agent for a bounded structured repair pass. This prevents interim reasoning such as “let me fetch more context” from leaking into IM cards and ensures problem locations come from `aicr.report_problem` records rather than prose summaries.
+
+Likewise, a summary that says issues were found is not a machine-readable finding. When a run has `problemCount=0` but the summary text claims actionable problems, AICR treats the summary as provisional and asks for a structured repair. If the repair still does not produce `aicr.report_problem` records, AICR replaces the claim with a fallback summary instead of publishing or suppressing misleading issue prose without locations. Skip reasons or summaries that ask a human to provide diff/source context are also repaired: AICR prompts the agent to request concrete files through `aicr.fetch_more_context`, then feeds the fetched content back for a final structured result.
+
+`aicr.fetch_more_context` is the supported way to close context gaps during review. Agents should request a changed file with no `range` when the diff is missing or too narrow, and may request a related file outside the change only when it is needed to understand an API contract, call path, schema, generated interface, or configuration that directly affects a changed line. P4 adapters keep the initial scoped fetch minimal; if a related file was not already materialized, AICR fetches it from the configured depot at the reviewed changelist revision.
+
 Recommended pattern:
 
 - `title`: one short line, suitable for a summary heading.
@@ -112,8 +118,8 @@ If a run has problems but records `skipReason="no_output_publisher"`, no summary
 | `gitea_problem_issue` | Collected for reconciliation | Creates, updates, or resolves managed problem issues | Fingerprint stability matters most here |
 | `github_issue` | Collected, then rendered into an issue comment | Aggregated issue comment | Same as `gitea_issue` but for GitHub repositories |
 | `github_problem_issue` | Collected for reconciliation | Creates or resolves managed GitHub issues | Like `gitea_problem_issue` but uses string label names; `resolved_action` supports `close` and `none` only (GitHub has no issue delete API) |
-| `feishu_bot` | Collected for aggregation | Interactive card Markdown | Includes summary, problem count, severity/category/file/line, and truncated message/suggestion per problem; built-in summaries render `@username (Display Name)` when both are available |
-| `wecom_bot` | Collected for aggregation | Markdown message | Same content as Feishu; messages truncated to 500 chars and suggestions to 300 chars to stay within size limits; built-in summaries render `@username (Display Name)` when both are available |
+| `feishu_bot` | Collected for aggregation | Interactive card Markdown | Renders sectioned `Review target` / `Summary` / `Problems` blocks. Each problem includes severity, category, `Location: file:line`, and truncated message/suggestion; built-in summaries render `@username (Display Name)` when both are available |
+| `wecom_bot` | Collected for aggregation | Markdown message | Same sectioned content as Feishu; messages are truncated to 500 chars and suggestions to 300 chars to stay within size limits; built-in summaries render `@username (Display Name)` when both are available |
 
 ## Managed problem issue fetch limit
 

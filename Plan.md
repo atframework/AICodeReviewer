@@ -75,6 +75,7 @@
 - VCS 访问保持统一三段式合同：列举变更、scoped fetch、额外上下文/归因。
 - 默认以单仓 `primary` 行为为主，多源上下文显式开启。
 - Git、P4、SVN、GitHub、GitLab、Gitea/Forgejo 的平台差异留在适配层消化。
+- P4 的额外上下文保持最小拉取：diff 缺失/过窄时先取完整变更文件，必要的相关文件按 changelist revision 在配置 depot 内 `p4 print`，不做全仓同步。
 - 归因能力必须来自事件、provider API 或只读 VCS 工具。
 - 详细合同：`docs/ai/architecture.md` §3.2。
 
@@ -128,6 +129,8 @@
   - `aicr.skip`
   - `aicr.fetch_more_context`
 - 未落地能力不得提前作为“已实现工具”对外宣传。
+- Agent CLI 自由文本 stdout 不作为正式报告；无法解析工具 payload 时先做结构化修复重试，IM 输出保持 target/summary/problems 分段并从 `aicr.report_problem` 渲染位置。
+- Summary 声称发现问题但没有 `aicr.report_problem` 记录，或 skip/summary 要求人类补 diff/source context 时，按结构化输出失败处理并修复，避免 `problemCount=0` 被 no-problems 策略静默压掉。
 - 详细合同：`docs/ai/architecture.md` §3.9 与 `docs/output-channels.md`。
 
 ### 3.9.1 `no_problems` 与 target 渲染

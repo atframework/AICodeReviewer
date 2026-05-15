@@ -1,47 +1,50 @@
-{{#if summaryTitle}}**{{summaryTitle}}**{{else if
-  event.title
-}}**{{event.title}}**{{else if
-  target.displayText
-}}**{{target.displayText}}**{{/if}}
-{{#if target.markdownLink}}
+{{#if summaryTitle}}## {{summaryTitle}}{{else if target.displayText}}##
+  {{target.displayText}}{{else if event.title}}## {{event.title}}{{else}}## AI
+  Code Review{{/if}}
 
+## Review target
+{{#if target.markdownLink}}
+  - Target:
   {{{target.markdownLink}}}
 {{else}}
-  {{#if event.url}}
-
-    [Review target]({{event.url}})
+  {{#if target.displayText}}
+    - Target:
+    {{target.displayText}}
+  {{else}}
+    {{#if event.url}}
+      - Target: [Review target]({{event.url}})
+    {{/if}}
   {{/if}}
 {{/if}}
 {{#if event.author}}
-  **Author**: @{{event.author}}{{#if event.displayName}}
+  - Author: @{{event.author}}{{#if event.displayName}}
     ({{event.displayName}}){{/if}}{{#if event.email}}
     &lt;{{event.email}}&gt;{{/if}}
 {{else}}
   {{#if event.displayName}}
-    **Author**:
+    - Author:
     {{event.displayName}}{{#if event.email}} &lt;{{event.email}}&gt;{{/if}}
   {{/if}}
 {{/if}}
 {{#if vcs.branch}}
-  **Branch**:
-  {{vcs.branch}}
+  - Branch: `{{vcs.branch}}`
 {{/if}}
 {{#if vcs.sourcePath}}
-  **Source**:
-  {{vcs.sourcePath}}
+  - Source: `{{vcs.sourcePath}}`
 {{/if}}
 {{#if vcs.workspace}}
-  **Workspace**:
-  {{vcs.workspace}}
+  - Workspace: `{{vcs.workspace}}`
 {{/if}}
-{{#if summary}}
 
+## Summary
+{{#if summary}}
   {{{summary}}}
 {{else}}
   {{#if problems}}
-
     Review completed:
     {{problems.length}}
     issue(s) found.{{#each problems}} [{{severity}}]{{/each}}
+  {{else}}
+    No summary provided.
   {{/if}}
 {{/if}}

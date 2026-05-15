@@ -121,7 +121,7 @@ const triggerSchema = z
 
 const noProblemsPolicySchema = z
   .object({
-    action: z.enum(["publish", "suppress"]),
+    action: z.enum(["publish", "suppress", "publish_if_summary"]),
   })
   .strict();
 

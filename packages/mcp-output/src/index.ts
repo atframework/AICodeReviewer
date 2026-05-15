@@ -158,6 +158,12 @@ export class AicrOutputCollector {
 		this.contextRequests.push(input);
 	}
 
+	clearReviewOutputs(): void {
+		this.problems.length = 0;
+		this.summaries.length = 0;
+		this.skipReasonValue = undefined;
+	}
+
 	snapshot(): AicrOutputState {
 		const problems = [...this.problems];
 		return {
@@ -229,7 +235,7 @@ export function createAicrOutputToolRegistry(
 		},
 		{
 			name: "aicr.fetch_more_context",
-			description: "Request bounded extra source context for a path and optional line range.",
+			description: "Request source context for a changed file or narrowly related repository file; omit range for the full file.",
 			inputSchema: {
 				type: "object",
 				required: ["path", "reason"],

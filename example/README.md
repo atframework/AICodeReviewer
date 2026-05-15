@@ -525,6 +525,13 @@ The script:
 4. Warns locally if `%user%` or `%client%` are missing, because AICR will not substitute its analysis workspace as submitter metadata
 5. Logs failures locally and exits successfully so the async reviewer never blocks the submit/commit path
 
+During review, AICR keeps the initial P4 fetch scoped to changed files. If the
+agent needs more evidence, it must use `aicr.fetch_more_context`: omit `range`
+to fetch a full changed file when diff is unavailable, or request a narrowly
+related file in the same configured depot when an API contract/call path is
+needed. AICR resolves those related P4 files with `p4 print <path>@<change>`;
+it does not sync the whole depot.
+
 <details>
 <summary>Full script source (p4-trigger.sh)</summary>
 

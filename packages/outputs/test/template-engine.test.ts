@@ -237,7 +237,9 @@ describe("renderBuiltinTemplate", () => {
 
 		expect(result).toContain("Focused review summary");
 		expect(result).toContain("Add feature");
-		expect(result).toContain("**Author**: @dev (Developer)");
+		expect(result).toContain("## Review target");
+		expect(result).toContain("## Summary");
+		expect(result).toContain("- Author: @dev (Developer)");
 		expect(result).toContain("https://gitea.example/owent/example/pulls/1");
 		expect(result).toContain("Overall the PR looks good with one problem.");
 	});
@@ -282,6 +284,8 @@ describe("renderBuiltinTemplate", () => {
 		const result = renderBuiltinTemplate("wecom_bot", "summary", sampleContext);
 
 		expect(result).toContain("Focused review summary");
+		expect(result).toContain("## Review target");
+		expect(result).toContain("## Summary");
 		expect(result).toContain("Author: @dev (Developer)");
 		expect(result).toContain("https://gitea.example/owent/example/pulls/1");
 		expect(result).toContain("Overall the PR looks good with one problem.");

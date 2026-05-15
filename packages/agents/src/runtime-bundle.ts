@@ -22,7 +22,7 @@ export interface RuntimeBundleSkill {
 export interface RuntimeBundleMcpTool {
   readonly name: string;
   readonly description: string;
-  readonly inputSchema?: Record<string, unknown>;
+  readonly inputSchema?: Readonly<Record<string, unknown>>;
 }
 
 export interface RuntimeBundleMcpServer {
