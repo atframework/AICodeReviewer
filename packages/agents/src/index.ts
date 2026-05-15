@@ -25,3 +25,14 @@ export type { RooAdapterOptions } from "./roo.js";
 export { createOpenAICompatibleTranslator, createAnthropicTranslator, createVertexAiTranslator, createBedrockTranslator } from "./model-translator.js";
 export { createAgentAdapter } from "./factory.js";
 export type { CreateAgentOptions } from "./factory.js";
+export {
+  materializeRuntimeBundle,
+} from "./runtime-bundle.js";
+export type {
+  RuntimeBundleInstruction,
+  RuntimeBundleSkill,
+  RuntimeBundleMcpTool,
+  RuntimeBundleInput,
+  RuntimeBundleManifest,
+  RuntimeBundleResult,
+} from "./runtime-bundle.js";

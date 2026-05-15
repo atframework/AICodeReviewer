@@ -108,9 +108,14 @@ function makeConfig(overrides: Partial<AppConfig> = {}): AppConfig {
 
 type OutputPublisher = NonNullable<ReturnType<typeof createOutputPublisherFromConfig>>;
 type ProblemPublisher = OutputPublisher & { readonly publishProblem: NonNullable<OutputPublisher["publishProblem"]> };
+type SummaryPublisher = OutputPublisher & { readonly publishSummary: NonNullable<OutputPublisher["publishSummary"]> };
 
 function assertProblemPublisher(publisher: OutputPublisher | undefined): asserts publisher is ProblemPublisher {
   expect(typeof publisher?.publishProblem).toBe("function");
+}
+
+function assertSummaryPublisher(publisher: OutputPublisher | undefined): asserts publisher is SummaryPublisher {
+  expect(typeof publisher?.publishSummary).toBe("function");
 }
 
 describe("resolveModelSpecFromConfig", () => {
@@ -587,14 +592,16 @@ describe("createOutputPublisherFromConfig", () => {
       const publisher = createOutputPublisherFromConfig(config, "github-issue", 10, "test-workspace");
 
       expect(publisher).toBeDefined();
-      await publisher!.publishProblem({
+      assertProblemPublisher(publisher);
+      assertSummaryPublisher(publisher);
+      await publisher.publishProblem({
         file: "src/app.ts",
         line: 7,
         severity: "high",
         category: "correctness",
         message: "Issue.",
       });
-      await publisher!.publishSummary("Review summary");
+      await publisher.publishSummary("Review summary");
 
       expect(calls[0]?.url).toBe("https://api.github.com/repos/my-org/my-repo/issues/10/comments");
       expect(calls[0]?.init.headers).toMatchObject({ authorization: "Bearer gh-issue-token" });
@@ -666,8 +673,8 @@ describe("createOutputPublisherFromConfig", () => {
   });
 
   it("creates a GitHub problem issue publisher from channel config", async () => {
-    const calls: { url: string; init: { headers?: Record<string, string>; body?: string } }[] = [];
-    vi.stubGlobal("fetch", async (url: string, init?: { headers?: Record<string, string>; body?: string }) => {
+    const calls: { url: string; init: { headers?: Record<string, string>; body?: string; method?: string } }[] = [];
+    vi.stubGlobal("fetch", async (url: string, init?: { headers?: Record<string, string>; body?: string; method?: string }) => {
       calls.push({ url, init: init ?? {} });
       if (url.includes("/issues?state=open")) {
         return response([]);
@@ -705,8 +712,10 @@ describe("createOutputPublisherFromConfig", () => {
       expect(publisher).toBeDefined();
       expect(publisher!.publishesProblems).toBe(false);
       expect(publisher!.publishEmptySummary).toBe(true);
+      assertProblemPublisher(publisher);
+      assertSummaryPublisher(publisher);
 
-      await publisher!.publishProblem({
+      await publisher.publishProblem({
         file: "src/app.ts",
         line: 7,
         severity: "high",
@@ -714,7 +723,7 @@ describe("createOutputPublisherFromConfig", () => {
         message: "Issue.",
       });
 
-      const results = await publisher!.publishSummary(
+      const results = await publisher.publishSummary(
         "Review summary",
         [{ file: "src/app.ts", line: 7, severity: "high", category: "correctness", message: "Issue." }],
         { title: "Focused summary title" },
@@ -729,6 +738,69 @@ describe("createOutputPublisherFromConfig", () => {
       expect(body.title).not.toContain("Focused summary title");
       expect(body.body).toContain("Focused summary title");
       expect(calls[0]?.url).toBe("https://api.github.com/repos/my-org/my-repo/issues?state=open&sort=updated&direction=desc&per_page=20&page=1");
+    } finally {
+      vi.unstubAllGlobals();
+      if (originalToken === undefined) {
+        delete process.env.GITHUB_TOKEN;
+      } else {
+        process.env.GITHUB_TOKEN = originalToken;
+      }
+    }
+  });
+
+  it("passes issue_mode per_problem to GitHub problem issue publishers", async () => {
+    const calls: { url: string; init: { headers?: Record<string, string>; body?: string; method?: string } }[] = [];
+    vi.stubGlobal("fetch", async (url: string, init?: { headers?: Record<string, string>; body?: string; method?: string }) => {
+      calls.push({ url, init: init ?? {} });
+      if (url.includes("/issues?state=open")) {
+        return response([]);
+      }
+      return response({ id: 600 + calls.length, number: 30 + calls.length, html_url: `https://github.com/my-org/my-repo/issues/${30 + calls.length}` });
+    });
+
+    const originalToken = process.env.GITHUB_TOKEN;
+    process.env.GITHUB_TOKEN = "gh-problem-token";
+    try {
+      const config = makeConfig({
+        triggers: [{ name: "github-saas", kind: "github", token_env: "GITHUB_TOKEN" }],
+        outputs: {
+          template_engine: "handlebars",
+          channels: [{
+            name: "github-problem-issues",
+            kind: "github_problem_issue",
+            trigger: "github-saas",
+            issue_mode: "per_problem",
+            marker_prefix: "[AICR]",
+            marker_label: "aicr-managed",
+          }],
+        },
+        workspaces: {
+          cache: { max_total_gb: 50, eviction: "lru", ttl_days: 30 },
+          defaults: {},
+          instances: {
+            "test-workspace": {
+              source_repo: { trigger: "github-saas", repo: "my-org/my-repo" },
+            },
+          },
+        },
+      } as Partial<AppConfig>);
+      const publisher = createOutputPublisherFromConfig(config, "github-problem-issues", undefined, "test-workspace");
+      assertSummaryPublisher(publisher);
+
+      const results = await publisher.publishSummary(
+        "Review summary",
+        [
+          { file: "src/app.ts", line: 7, severity: "high", category: "correctness", message: "First issue." },
+          { file: "src/lib.ts", line: 9, severity: "medium", category: "style", message: "Second issue." },
+        ],
+      );
+
+      expect(Array.isArray(results)).toBe(true);
+      expect(results).toHaveLength(2);
+      const issueCalls = calls.filter((c) => c.url.endsWith("/repos/my-org/my-repo/issues") && c.init?.method === "POST");
+      expect(issueCalls).toHaveLength(2);
+      const bodies = issueCalls.map((call) => JSON.parse(call.init.body ?? "{}"));
+      expect(bodies.every((body) => typeof body.title === "string" && !body.body.includes("<!-- aicr:consolidated=true -->"))).toBe(true);
     } finally {
       vi.unstubAllGlobals();
       if (originalToken === undefined) {
@@ -855,7 +927,8 @@ describe("createOutputPublisherFromConfig", () => {
       expect(publisher).toBeDefined();
       expect(publisher?.publishesProblems).toBe(false);
       expect(publisher?.publishEmptySummary).toBe(true);
-      const results = await publisher?.publishSummary?.(
+      assertSummaryPublisher(publisher);
+      const results = await publisher.publishSummary(
         "",
         [{ file: "src/app.ts", line: 3, severity: "high", category: "security", message: "Issue." }],
         { title: "Focused summary title" },
@@ -871,6 +944,76 @@ describe("createOutputPublisherFromConfig", () => {
       expect(body.body).toContain("Focused summary title");
       expect(body.title).not.toContain(" - ");
       expect(body.body).toContain("<!-- aicr:managed=problem-issue -->");
+    } finally {
+      vi.unstubAllGlobals();
+      if (originalToken === undefined) {
+        delete process.env.GITEA_TOKEN;
+      } else {
+        process.env.GITEA_TOKEN = originalToken;
+      }
+    }
+  });
+
+  it("passes issue_mode per_problem to Gitea problem issue publishers", async () => {
+    const calls: { url: string; init: { headers?: Record<string, string>; body?: string; method?: string } }[] = [];
+    vi.stubGlobal("fetch", async (url: string, init?: { headers?: Record<string, string>; body?: string; method?: string }) => {
+      calls.push({ url, init: init ?? {} });
+      if (url.includes("/issues?state=open&type=issues")) {
+        return response([]);
+      }
+      return response({ id: 80 + calls.length, number: 10 + calls.length });
+    });
+
+    const originalToken = process.env.GITEA_TOKEN;
+    process.env.GITEA_TOKEN = "resolver-token";
+    try {
+      const config = makeConfig({
+        outputs: {
+          template_engine: "handlebars",
+          channels: [
+            {
+              name: "gitea-problem-issues",
+              kind: "gitea_problem_issue",
+              trigger: "gitea-internal",
+              issue_mode: "per_problem",
+              marker_prefix: "[AICR Managed]",
+              marker_label: "aicr-managed",
+              resolved_action: "close",
+            },
+          ],
+        },
+      } as Partial<AppConfig>);
+      const publisher = createOutputPublisherFromConfig(
+        config,
+        "gitea-problem-issues",
+        undefined,
+        "test-workspace",
+        {
+          triggerName: "gitea-internal",
+          provider: "gitea",
+          workspaceId: "test-workspace",
+          targetKind: "push",
+          repoRef: "owent/example",
+          author: {},
+          reason: "gitea:push",
+        },
+      );
+      assertSummaryPublisher(publisher);
+
+      const results = await publisher.publishSummary(
+        "Review summary",
+        [
+          { file: "src/app.ts", line: 3, severity: "high", category: "security", message: "First issue." },
+          { file: "src/lib.ts", line: 5, severity: "medium", category: "style", message: "Second issue." },
+        ],
+      );
+
+      expect(Array.isArray(results)).toBe(true);
+      expect(results).toHaveLength(2);
+      const issueCalls = calls.filter((c) => c.url === "https://gitea.example.com/api/v1/repos/owent/example/issues" && c.init?.method === "POST");
+      expect(issueCalls).toHaveLength(2);
+      const bodies = issueCalls.map((call) => JSON.parse(call.init.body ?? "{}"));
+      expect(bodies.every((body) => typeof body.title === "string" && !body.body.includes("<!-- aicr:consolidated=true -->"))).toBe(true);
     } finally {
       vi.unstubAllGlobals();
       if (originalToken === undefined) {

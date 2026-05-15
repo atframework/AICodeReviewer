@@ -14,6 +14,8 @@ import {
   type ScrubMatch,
 } from "@aicr/core";
 import type { AgentAdapter } from "@aicr/agents";
+import { materializeRuntimeBundle } from "@aicr/agents";
+import type { RuntimeBundleInstruction, RuntimeBundleMcpTool, RuntimeBundleSkill } from "@aicr/agents";
 import {
   type ChatCompletionClient,
   type ChatCompletionResult,
@@ -278,6 +280,13 @@ function agentWorkingDirForSandbox(sandbox: SandboxBackend, hostAgentDir: string
   return sandbox.kind === "native" ? hostAgentDir : "/workspace/agent";
 }
 
+interface AgentBundleContext {
+  instructions?: readonly RuntimeBundleInstruction[];
+  skills?: readonly RuntimeBundleSkill[];
+  mcpTools?: readonly RuntimeBundleMcpTool[];
+  runId?: string;
+}
+
 function extractKiloJsonStreamContent(stdout: string): string {
   const textParts: string[] = [];
   for (const line of stdout.split("\n")) {
@@ -317,6 +326,7 @@ async function runAgentReview(
   sourceRoot: string,
   task: string,
   options: ServerReviewOrchestrationOptions,
+  bundleContext?: AgentBundleContext,
 ): Promise<{ readonly llmResult: ChatCompletionResult; readonly agentResult: SandboxSpawnResult }> {
   const sandbox = options.sandbox;
   const agentAdapter = options.agentAdapter;
@@ -333,15 +343,23 @@ async function runAgentReview(
       agentDir: dirs.agentDir,
       tmpDir: dirs.tmpDir,
     });
-    const materializedAgent = await agentAdapter.materializeConfig(options.model, materializedFs.agentDir);
+    const bundle = await materializeRuntimeBundle({
+      adapter: agentAdapter,
+      model: options.model,
+      workingDir: materializedFs.agentDir,
+      ...(bundleContext?.instructions ? { instructions: bundleContext.instructions } : {}),
+      ...(bundleContext?.skills ? { skills: bundleContext.skills } : {}),
+      ...(bundleContext?.mcpTools ? { mcpTools: bundleContext.mcpTools } : {}),
+      ...(bundleContext?.runId ? { runId: bundleContext.runId } : {}),
+    });
     const command = agentAdapter.buildCommand(task, {
-      workingDir: agentWorkingDirForSandbox(sandbox, materializedAgent.workingDir),
+      workingDir: agentWorkingDirForSandbox(sandbox, bundle.workingDir),
       ...(options.agentTimeoutMs !== undefined ? { timeoutMs: options.agentTimeoutMs } : {}),
       model: options.model,
       autoApprove: true,
       task,
     });
-    const env = resolveEnvPlaceholders(materializedAgent.envVars);
+    const env = resolveEnvPlaceholders(bundle.envVars);
 
     agentResult = await sandbox.spawn({
       command,
@@ -389,6 +407,7 @@ async function requestReviewCompletion(
   systemPrompt: string,
   options: ServerReviewOrchestrationOptions,
   followUp?: { readonly previousOutput: string; readonly prompt: string },
+  bundleContext?: AgentBundleContext,
 ): Promise<{ readonly llmResult: ChatCompletionResult; readonly agentResult?: SandboxSpawnResult }> {
   if (options.sandbox && options.agentAdapter) {
     const task = followUp
@@ -401,7 +420,7 @@ async function requestReviewCompletion(
           followUp.prompt,
         ].join("\n")
       : systemPrompt;
-    return runAgentReview(sourceRoot, task, options);
+    return runAgentReview(sourceRoot, task, options, bundleContext);
   }
 
   const messages = followUp
@@ -1096,7 +1115,25 @@ export async function runReviewOrchestration(
     const result = await vcs.fetchExtraContext(toExtraContextRequest(request), workspaceRef);
     return result.content;
   });
-  let completion = await requestReviewCompletion(scopedTree.rootDir, llmSystemPrompt, options);
+  const bundleContext: AgentBundleContext = {
+    instructions: preparedPrompt.discovery.instructions.map((instruction) => ({
+      kind: instruction.kind,
+      label: instruction.label,
+      content: instruction.content,
+      ...(instruction.path ? { path: instruction.path } : {}),
+    })),
+    skills: preparedPrompt.discovery.skills.map((skill) => ({
+      name: skill.name,
+      description: skill.description,
+      content: skill.content,
+      ...(skill.path ? { path: skill.path } : {}),
+    })),
+    mcpTools: tools.map((tool) => ({
+      name: tool.name,
+      description: tool.description,
+    })),
+  };
+  let completion = await requestReviewCompletion(scopedTree.rootDir, llmSystemPrompt, options, undefined, bundleContext);
   const rawModelOutput = completion.llmResult.content;
   const toolExecution = await callAicrTools(rawModelOutput, tools);
   let outputState = collector.snapshot();
@@ -1140,6 +1177,7 @@ export async function runReviewOrchestration(
         previousOutput: completion.llmResult.content,
         prompt: buildContextFollowUpPrompt(changedPaths, toolExecution),
       },
+      bundleContext,
     );
     await callAicrTools(completion.llmResult.content, tools);
     outputState = collector.snapshot();

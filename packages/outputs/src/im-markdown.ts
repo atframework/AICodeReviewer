@@ -59,8 +59,8 @@ function applyTextTransform(content: string, transform: (text: string) => string
 
 const HEADING_RE = /^(#{1,6})\s+(.+)$/gmu;
 const BLOCKQUOTE_RE = /^>[ \t]?(.*)$/gmu;
-const TABLE_DIVIDER_RE = /^\|[\s\-:|]+\|$/gmu;
-const TABLE_ROW_RE = /^\|.+\|$/gmu;
+const TABLE_DIVIDER_RE = /^\|[\s\-:|]+\|$/mu;
+const TABLE_ROW_RE = /^\|.+\|$/mu;
 
 function feishuFixHeadings(text: string): string {
   return text.replace(HEADING_RE, (_match, _hashes: string, title: string) => {

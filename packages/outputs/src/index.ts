@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 
 import { renderMarkdownCodeFence } from "./template-engine.js";
+import { toFeishuMarkdown, toWeComMarkdown } from "./im-markdown.js";
 
 export const outputsPackageName = "@aicr/outputs";
 
@@ -101,6 +102,9 @@ export type FetchLike = (
 	},
 ) => Promise<ResponseLike>;
 
+export type ReviewMode = "auto" | "review" | "comment";
+export type ReviewEvent = "COMMENT" | "REQUEST_CHANGES";
+
 export interface GiteaPullRequestReviewOptions {
 	readonly baseUrl: string;
 	readonly token?: string;
@@ -113,6 +117,8 @@ export interface GiteaPullRequestReviewOptions {
 	readonly severityLabelColors?: Readonly<Record<string, string>>;
 	readonly autoTag?: string;
 	readonly reviewedTag?: string;
+	readonly reviewMode?: ReviewMode;
+	readonly reviewEvent?: ReviewEvent;
 }
 
 export interface GiteaPullRequestReviewDispatcher {
@@ -159,7 +165,7 @@ function normalizeMarkdownBody(body: string): string {
 }
 
 function shouldFallbackToGeneralComment(status: number): boolean {
-	return status === 422;
+	return status === 422 || status === 403;
 }
 
 function truncateText(text: string, maxLength: number): string {
@@ -219,7 +225,9 @@ export function createGiteaPullRequestReviewDispatcher(
 	const fetchImpl = options.fetch ?? defaultFetch();
 	const baseUrl = options.baseUrl.replace(/\/+$/u, "");
 	const channel = options.channelName ?? "gitea_pr_review";
-	const endpoint = [
+	const reviewMode = options.reviewMode ?? "auto";
+	const reviewEvent = options.reviewEvent ?? "COMMENT";
+	const reviewEndpoint = [
 		baseUrl,
 		"api/v1/repos",
 		encodePathSegment(options.owner),
@@ -227,6 +235,15 @@ export function createGiteaPullRequestReviewDispatcher(
 		"pulls",
 		String(options.pullNumber),
 		"reviews",
+	].join("/");
+	const commentEndpoint = [
+		baseUrl,
+		"api/v1/repos",
+		encodePathSegment(options.owner),
+		encodePathSegment(options.repo),
+		"issues",
+		String(options.pullNumber),
+		"comments",
 	].join("/");
 	const headers: Record<string, string> = {
 		"content-type": "application/json",
@@ -236,7 +253,7 @@ export function createGiteaPullRequestReviewDispatcher(
 	}
 
 	async function postReview(body: Record<string, unknown>): Promise<DispatchResult> {
-		const response = await fetchImpl(endpoint, {
+		const response = await fetchImpl(reviewEndpoint, {
 			method: "POST",
 			headers,
 			body: JSON.stringify(body),
@@ -259,10 +276,77 @@ export function createGiteaPullRequestReviewDispatcher(
 		};
 	}
 
-	function generalReviewBody(problem: ReviewProblem): Record<string, unknown> {
+	async function postComment(body: string): Promise<DispatchResult> {
+		const response = await fetchImpl(commentEndpoint, {
+			method: "POST",
+			headers,
+			body: JSON.stringify({ body }),
+		});
+
+		if (!response.ok) {
+			throw new OutputDispatchError(`Gitea comment API returned ${response.status}.`, {
+				status: response.status,
+				responseBody: await response.text(),
+			});
+		}
+
+		const raw = await response.json();
+		const externalId = extractExternalId(raw);
 		return {
-			event: "COMMENT",
-			body: renderProblemMarkdown(problem),
+			channel,
+			status: "published",
+			...(externalId ? { externalId } : {}),
+			raw,
+		};
+	}
+
+	async function postProblem(problem: ReviewProblem): Promise<DispatchResult> {
+		const markdown = renderProblemMarkdown(problem);
+		if (reviewMode === "comment") {
+			return postComment(markdown);
+		}
+
+		if (problem.lineCommentAllowed === false) {
+			return postReview({ event: reviewEvent, body: markdown });
+		}
+
+		const body = {
+			event: reviewEvent,
+			body: `AICR problem for ${problem.file}:${problem.line}`,
+			comments: [
+				{
+					path: problem.file,
+					new_position: problem.line,
+					body: markdown,
+				},
+			],
+		};
+
+		const response = await fetchImpl(reviewEndpoint, {
+			method: "POST",
+			headers,
+			body: JSON.stringify(body),
+		});
+
+		if (!response.ok) {
+			if (reviewMode === "auto" && shouldFallbackToGeneralComment(response.status)) {
+				await response.text();
+				return postComment(markdown);
+			}
+
+			throw new OutputDispatchError(`Gitea review API returned ${response.status}.`, {
+				status: response.status,
+				responseBody: await response.text(),
+			});
+		}
+
+		const raw = await response.json();
+		const externalId = extractExternalId(raw);
+		return {
+			channel,
+			status: "published",
+			...(externalId ? { externalId } : {}),
+			raw,
 		};
 	}
 
@@ -270,53 +354,18 @@ export function createGiteaPullRequestReviewDispatcher(
 
 	const dispatcher: GiteaPullRequestReviewDispatcher = {
 		async publishProblem(problem: ReviewProblem): Promise<DispatchResult> {
-			if (problem.lineCommentAllowed === false) {
-				return postReview(generalReviewBody(problem));
-			}
-
-			const body = {
-				event: "COMMENT",
-				body: `AICR problem for ${problem.file}:${problem.line}`,
-				comments: [
-					{
-						path: problem.file,
-						new_position: problem.line,
-						body: renderProblemMarkdown(problem),
-					},
-				],
-			};
-
-			const response = await fetchImpl(endpoint, {
-				method: "POST",
-				headers,
-				body: JSON.stringify(body),
-			});
-
-			if (!response.ok) {
-				if (shouldFallbackToGeneralComment(response.status)) {
-					await response.text();
-					return postReview(generalReviewBody(problem));
-				}
-
-				throw new OutputDispatchError(`Gitea review API returned ${response.status}.`, {
-					status: response.status,
-					responseBody: await response.text(),
-				});
-			}
-
-			const raw = await response.json();
-			const externalId = extractExternalId(raw);
-			return {
-				channel,
-				status: "published",
-				...(externalId ? { externalId } : {}),
-				raw,
-			};
+			return postProblem(problem);
 		},
 		async publishSummary(summary: string, problems?: readonly ReviewProblem[]): Promise<DispatchResult> {
-			const result = summary.trim().length > 0
-				? await postReview({ event: "COMMENT", body: summary })
-				: undefined;
+			const trimmed = summary.trim();
+			let result: DispatchResult | undefined;
+			if (trimmed.length > 0) {
+				if (reviewMode === "comment") {
+					result = await postComment(trimmed);
+				} else {
+					result = await postReview({ event: reviewEvent, body: trimmed });
+				}
+			}
 			await attachSummaryLabels(problems);
 
 			return result ?? { channel, status: "published", raw: {} };
@@ -447,6 +496,8 @@ export interface GithubPullRequestReviewOptions {
 	readonly severityLabelColors?: Readonly<Record<string, string>>;
 	readonly autoTag?: string;
 	readonly reviewedTag?: string;
+	readonly reviewMode?: ReviewMode;
+	readonly reviewEvent?: ReviewEvent;
 }
 
 export interface GithubPullRequestReviewDispatcher {
@@ -460,7 +511,9 @@ export function createGithubPullRequestReviewDispatcher(
 	const fetchImpl = options.fetch ?? defaultFetch();
 	const baseUrl = (options.baseUrl ?? "https://api.github.com").replace(/\/+$/u, "");
 	const channel = options.channelName ?? "github_pr_review";
-	const endpoint = [
+	const reviewMode = options.reviewMode ?? "auto";
+	const reviewEvent = options.reviewEvent ?? "COMMENT";
+	const reviewEndpoint = [
 		baseUrl,
 		"repos",
 		encodePathSegment(options.owner),
@@ -468,6 +521,15 @@ export function createGithubPullRequestReviewDispatcher(
 		"pulls",
 		String(options.pullNumber),
 		"reviews",
+	].join("/");
+	const commentEndpoint = [
+		baseUrl,
+		"repos",
+		encodePathSegment(options.owner),
+		encodePathSegment(options.repo),
+		"issues",
+		String(options.pullNumber),
+		"comments",
 	].join("/");
 	const headers: Record<string, string> = {
 		"accept": "application/vnd.github+json",
@@ -479,7 +541,7 @@ export function createGithubPullRequestReviewDispatcher(
 	}
 
 	async function postReview(body: Record<string, unknown>): Promise<DispatchResult> {
-		const response = await fetchImpl(endpoint, {
+		const response = await fetchImpl(reviewEndpoint, {
 			method: "POST",
 			headers,
 			body: JSON.stringify(body),
@@ -502,10 +564,78 @@ export function createGithubPullRequestReviewDispatcher(
 		};
 	}
 
-	function generalReviewBody(problem: ReviewProblem): Record<string, unknown> {
+	async function postComment(body: string): Promise<DispatchResult> {
+		const response = await fetchImpl(commentEndpoint, {
+			method: "POST",
+			headers,
+			body: JSON.stringify({ body }),
+		});
+
+		if (!response.ok) {
+			throw new OutputDispatchError(`GitHub comment API returned ${response.status}.`, {
+				status: response.status,
+				responseBody: await response.text(),
+			});
+		}
+
+		const raw = await response.json();
+		const externalId = extractExternalId(raw);
 		return {
-			event: "COMMENT",
-			body: renderProblemMarkdown(problem),
+			channel,
+			status: "published",
+			...(externalId ? { externalId } : {}),
+			raw,
+		};
+	}
+
+	async function postProblem(problem: ReviewProblem): Promise<DispatchResult> {
+		const markdown = renderProblemMarkdown(problem);
+		if (reviewMode === "comment") {
+			return postComment(markdown);
+		}
+
+		if (problem.lineCommentAllowed === false) {
+			return postReview({ event: reviewEvent, body: markdown });
+		}
+
+		const body = {
+			event: reviewEvent,
+			body: `AICR problem for ${problem.file}:${problem.line}`,
+			comments: [
+				{
+					path: problem.file,
+					line: problem.line,
+					side: "RIGHT",
+					body: markdown,
+				},
+			],
+		};
+
+		const response = await fetchImpl(reviewEndpoint, {
+			method: "POST",
+			headers,
+			body: JSON.stringify(body),
+		});
+
+		if (!response.ok) {
+			if (reviewMode === "auto" && shouldFallbackToGeneralComment(response.status)) {
+				await response.text();
+				return postComment(markdown);
+			}
+
+			throw new OutputDispatchError(`GitHub review API returned ${response.status}.`, {
+				status: response.status,
+				responseBody: await response.text(),
+			});
+		}
+
+		const raw = await response.json();
+		const externalId = extractExternalId(raw);
+		return {
+			channel,
+			status: "published",
+			...(externalId ? { externalId } : {}),
+			raw,
 		};
 	}
 
@@ -513,54 +643,18 @@ export function createGithubPullRequestReviewDispatcher(
 
 	const dispatcher: GithubPullRequestReviewDispatcher = {
 		async publishProblem(problem: ReviewProblem): Promise<DispatchResult> {
-			if (problem.lineCommentAllowed === false) {
-				return postReview(generalReviewBody(problem));
-			}
-
-			const body = {
-				event: "COMMENT",
-				body: `AICR problem for ${problem.file}:${problem.line}`,
-				comments: [
-					{
-						path: problem.file,
-						line: problem.line,
-						side: "RIGHT",
-						body: renderProblemMarkdown(problem),
-					},
-				],
-			};
-
-			const response = await fetchImpl(endpoint, {
-				method: "POST",
-				headers,
-				body: JSON.stringify(body),
-			});
-
-			if (!response.ok) {
-				if (shouldFallbackToGeneralComment(response.status)) {
-					await response.text();
-					return postReview(generalReviewBody(problem));
-				}
-
-				throw new OutputDispatchError(`GitHub review API returned ${response.status}.`, {
-					status: response.status,
-					responseBody: await response.text(),
-				});
-			}
-
-			const raw = await response.json();
-			const externalId = extractExternalId(raw);
-			return {
-				channel,
-				status: "published",
-				...(externalId ? { externalId } : {}),
-				raw,
-			};
+			return postProblem(problem);
 		},
 		async publishSummary(summary: string, problems?: readonly ReviewProblem[]): Promise<DispatchResult> {
-			const result = summary.trim().length > 0
-				? await postReview({ event: "COMMENT", body: summary })
-				: undefined;
+			const trimmed = summary.trim();
+			let result: DispatchResult | undefined;
+			if (trimmed.length > 0) {
+				if (reviewMode === "comment") {
+					result = await postComment(trimmed);
+				} else {
+					result = await postReview({ event: reviewEvent, body: trimmed });
+				}
+			}
 			await attachSummaryLabels(problems);
 
 			return result ?? { channel, status: "published", raw: {} };
@@ -1121,7 +1215,7 @@ export function createGithubProblemIssueDispatcher(options: GithubProblemIssueOp
 					elements: [
 						{
 							tag: "markdown",
-							content: sections.join("\n"),
+							content: toFeishuMarkdown(sections.join("\n")),
 						},
 					],
 				},
@@ -2197,7 +2291,7 @@ function buildConsolidatedIssueBody(
 				sections.push("", `> **Suggested fix:** ${p.suggestion}`);
 			}
 			if (p.codeSnippet && p.codeLanguage) {
-				sections.push("", renderMarkdownCodeFence(p.codeLanguage, p.codeSnippet));
+				sections.push("", renderMarkdownCodeFence(p.codeSnippet, p.codeLanguage));
 			}
 			sections.push("");
 		}
@@ -2657,7 +2751,7 @@ export function createGiteaProblemIssueDispatcher(options: GiteaProblemIssueOpti
 					elements: [
 						{
 							tag: "markdown",
-							content: sections.join("\n"),
+							content: toFeishuMarkdown(sections.join("\n")),
 						},
 					],
 				},
@@ -3072,7 +3166,7 @@ export function createFeishuBotDispatcher(options: FeishuBotOptions): FeishuBotD
 					elements: [
 						{
 							tag: "markdown",
-							content: sections.join("\n"),
+							content: toFeishuMarkdown(sections.join("\n")),
 						},
 					],
 				},
@@ -3156,7 +3250,7 @@ export function createWeComBotDispatcher(options: WeComBotOptions): WeComBotDisp
 			const body: Record<string, unknown> = {
 				msgtype: "markdown",
 				markdown: {
-					content: sections.join("\n"),
+					content: toWeComMarkdown(sections.join("\n")),
 				},
 			};
 

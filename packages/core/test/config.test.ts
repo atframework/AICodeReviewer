@@ -1376,6 +1376,25 @@ describe("problem issue output config", () => {
     });
   });
 
+  it("accepts review_mode and review_event for PR review channels", () => {
+    const result = appConfigSchema.parse({
+      outputs: {
+        channels: [
+          {
+            name: "gitea-pr-review",
+            kind: "gitea_pr_review",
+            review_mode: "auto",
+            review_event: "REQUEST_CHANGES",
+          },
+        ],
+      },
+    });
+
+    const channel = result.outputs.channels[0]!;
+    expect(channel.review_mode).toBe("auto");
+    expect(channel.review_event).toBe("REQUEST_CHANGES");
+  });
+
   it("accepts string labels for GitHub managed problem issues", () => {
     const result = appConfigSchema.parse({
       outputs: {

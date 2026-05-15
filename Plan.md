@@ -214,7 +214,7 @@
 | M2 | 已完成 | `docs/ai/milestones/M2.md` | 作为 agent/sandbox 基线 |
 | M3 | 已完成 | `docs/ai/milestones/M3.md` | 继续复用压缩、预算、队列与 scrubber 能力 |
 | M4 | 已完成 | `docs/ai/milestones/M4.md` | 继续扩展模板、路由与 attribution |
-| M5 | 进行中 | 多 Agent CLI、Podman、runtime bundle | 补齐原生 MCP、runtime bundle、Kilo Code 验收 |
+| M5 | 进行中 | 多 Agent CLI、Podman、runtime bundle | Kilo Code 端到端验收、原生 MCP server 注入 |
 | M6 | 进行中 | 多 VCS、trigger 面、P4 生产链路 | 补齐 SVN、真实 GitHub/GitLab e2e、归因与多源上下文 |
 | M7 | 未开始 | workspace 定制、skill by glob、国际化、memory | 等待 M5/M6 更稳定后推进 |
 | M8 | 进行中 | structured logs、replay 基础、日志落盘 | 补齐 OTel、metrics、runs 快照、eval |
@@ -223,9 +223,12 @@
 ### 8.2 当前执行包
 
 1. **M5：runtime bundle 与 agent 原生能力对齐**
-   - 物化原生 MCP 配置
-   - 补齐 Agent Runtime Bundle manifest
-   - 完成 Kilo Code 端到端验收
+    - ~~物化原生 MCP 配置~~（已交付：runtime bundle 物化 MCP 工具清单到 manifest）
+    - ~~补齐 Agent Runtime Bundle manifest~~（已交付：`@aicr/agents` `materializeRuntimeBundle`）
+    - ~~移除 Kilo 适配器过期标志~~（已交付：`--dangerously-skip-permissions` 已从 kilo adapter 移除，`--auto` 即为 kilo 7.x 的自动审批方式）
+    - ~~MCP server 配置注入~~（已交付：runtime bundle 支持 `mcpServers` 参数，Kilo adapter 自动写入 `mcp` 配置段到 `.kilo/kilo.json`）
+    - 完成 Kilo Code 端到端验收
+    - 独立 MCP 服务器进程（当前为 stdout 回退；需要将 `@aicr/mcp-output` 暴露为 stdio/HTTP 独立服务）
 2. **M6：跨 VCS 能力补齐**
    - SVN 支持
    - GitHub/GitLab 真实 e2e

@@ -959,6 +959,8 @@ export function createOutputPublisherFromConfig(
     ? channelConfig.severity_label_colors as Readonly<Record<string, string>>
     : undefined;
   const problemIssueMaxRecentIssues = resolveProblemIssueMaxRecentIssues(config, workspaceId);
+  const channelReviewMode = readString(channelConfig, "review_mode", "reviewMode") as "auto" | "review" | "comment" | undefined;
+  const channelReviewEvent = readString(channelConfig, "review_event", "reviewEvent") as "COMMENT" | "REQUEST_CHANGES" | undefined;
 
   if (channel.kind === "gitea_pr_review") {
     if (!baseUrl || !owner || !repo || pullNumber === undefined) {
@@ -976,6 +978,8 @@ export function createOutputPublisherFromConfig(
       ...(channelSeverityLabelColors ? { severityLabelColors: channelSeverityLabelColors } : {}),
       ...(autoTag ? { autoTag } : {}),
       ...(reviewedTag ? { reviewedTag } : {}),
+      ...(channelReviewMode ? { reviewMode: channelReviewMode } : {}),
+      ...(channelReviewEvent ? { reviewEvent: channelReviewEvent } : {}),
     });
 
     return {
@@ -1010,6 +1014,8 @@ export function createOutputPublisherFromConfig(
       ...(channelSeverityLabelColors ? { severityLabelColors: channelSeverityLabelColors } : {}),
       ...(autoTag ? { autoTag } : {}),
       ...(reviewedTag ? { reviewedTag } : {}),
+      ...(channelReviewMode ? { reviewMode: channelReviewMode } : {}),
+      ...(channelReviewEvent ? { reviewEvent: channelReviewEvent } : {}),
     });
 
     return {
@@ -1072,6 +1078,9 @@ export function createOutputPublisherFromConfig(
     const markerPrefix = readString(channelConfig, "marker_prefix", "markerPrefix");
     const markerLabel = readString(channelConfig, "marker_label", "markerLabel");
     const issueMode = readString(channelConfig, "issue_mode", "issueMode");
+    const resolvedIssueMode = issueMode === "consolidated" || issueMode === "per_problem"
+      ? issueMode
+      : undefined;
     const channelLabels = Array.isArray(channelConfig.labels) && channelConfig.labels.every((value) => typeof value === "string")
       ? channelConfig.labels as readonly string[]
       : undefined;
@@ -1100,7 +1109,7 @@ export function createOutputPublisherFromConfig(
       ...(markerPrefix ? { markerPrefix } : {}),
       ...(markerLabel ? { markerLabel } : {}),
       ...(channelLabels ? { labels: channelLabels } : {}),
-      ...(issueMode === "consolidated" ? { issueMode: "consolidated" as const } : {}),
+      ...(resolvedIssueMode ? { issueMode: resolvedIssueMode } : {}),
       ...(resolvedAction === "none" || resolvedAction === "close" ? { resolvedAction } : {}),
       ...(problemIssueMaxRecentIssues !== undefined ? { maxRecentIssues: problemIssueMaxRecentIssues } : {}),
       ...(assignCommitter !== undefined ? { assignCommitter } : {}),
@@ -1215,6 +1224,9 @@ export function createOutputPublisherFromConfig(
     const markerPrefix = readString(channelConfig, "marker_prefix", "markerPrefix");
     const markerLabel = readString(channelConfig, "marker_label", "markerLabel");
     const issueMode = readString(channelConfig, "issue_mode", "issueMode");
+    const resolvedIssueMode = issueMode === "consolidated" || issueMode === "per_problem"
+      ? issueMode
+      : undefined;
     const labelIds = Array.isArray(channelConfig.label_ids) && channelConfig.label_ids.every((value) => typeof value === "number")
       ? channelConfig.label_ids as readonly number[]
       : undefined;
@@ -1243,7 +1255,7 @@ export function createOutputPublisherFromConfig(
       ...(markerPrefix ? { markerPrefix } : {}),
       ...(markerLabel ? { markerLabel } : {}),
       ...(labelIds ? { labelIds } : {}),
-      ...(issueMode === "consolidated" ? { issueMode: "consolidated" as const } : {}),
+      ...(resolvedIssueMode ? { issueMode: resolvedIssueMode } : {}),
       ...(resolvedAction === "none" || resolvedAction === "close" || resolvedAction === "delete" ? { resolvedAction } : {}),
       ...(problemIssueMaxRecentIssues !== undefined ? { maxRecentIssues: problemIssueMaxRecentIssues } : {}),
       ...(assignCommitter !== undefined ? { assignCommitter } : {}),

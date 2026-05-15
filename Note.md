@@ -100,6 +100,7 @@ LLM_TOKEN="$(jq -r '.xiaomimimo_token_plan.token' .vscode/secret.json)"
 | P4                 | exclude files      | `.p4.exclude_cr_file`                 |
 | Feishu robot       | webhook            | `.feishu_robot.webhook`               |
 | Feishu robot       | token              | `.feishu_robot.token`                 |
+| 企业微信 robot     | webhook            | `.wxwork_robot.webhook`               |
 | AICR server        | global API key     | `.aicr_server.api_key`                |
 
 ### GitHub repo → selector / trigger / workspace 映射
