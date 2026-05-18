@@ -1411,6 +1411,23 @@ describe("problem issue output config", () => {
     expect(channel.review_event).toBe("REQUEST_CHANGES");
   });
 
+  it("accepts review_update_strategy for PR review channels", () => {
+    const result = appConfigSchema.parse({
+      outputs: {
+        channels: [
+          {
+            name: "gitea-pr-review",
+            kind: "gitea_pr_review",
+            review_update_strategy: "update_existing",
+          },
+        ],
+      },
+    });
+
+    const channel = result.outputs.channels[0]!;
+    expect(channel.review_update_strategy).toBe("update_existing");
+  });
+
   it("accepts string labels for GitHub managed problem issues", () => {
     const result = appConfigSchema.parse({
       outputs: {

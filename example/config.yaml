@@ -252,6 +252,11 @@ outputs:
       #   comment — always use issue comment API (POST /issues/{n}/comments)
       # review_event: COMMENT           # COMMENT (default) | REQUEST_CHANGES
       #   Controls the review event type when using the review API.
+      # review_update_strategy: update_existing  # always_new | update_existing (default)
+      #   always_new      — create a new review/comment on every push (original behavior)
+      #   update_existing — find and update the previous AICR summary comment on the PR.
+      #                     Open issues are kept; resolved issues are marked with ✅;
+      #                     new issues are tagged with the introducing commit.
 
     # Feishu (飞书) bot — push aggregated review problems to a Feishu group.
     # Setup: group Settings → Group Bots → Add Bot → Custom Bot → copy webhook & secret.

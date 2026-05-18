@@ -133,6 +133,12 @@
 - Summary 声称发现问题但没有 `aicr.report_problem` 记录，或 skip/summary 要求人类补 diff/source context 时，按结构化输出失败处理并修复，避免 `problemCount=0` 被 no-problems 策略静默压掉。
 - 详细合同：`docs/ai/architecture.md` §3.9 与 `docs/output-channels.md`。
 
+### 3.9.0 PR Review Summary 更新模式
+
+- PR/MR review 通道（`gitea_pr_review`、`github_pr_review`）支持 `review_update_strategy`：`always_new` 或 `update_existing`（默认）。
+- `update_existing` 模式下，summary comment 通过 HTML 标记识别，用 PATCH 更新而非每次新建；问题按 fingerprint 分为 Still Open / New / Resolved 三类。
+- 详细合同：`docs/ai/architecture.md` §3.9.0。
+
 ### 3.9.1 `no_problems` 与 target 渲染
 
 - `no_problems.action` 按全局 → channel → workspace 覆盖。

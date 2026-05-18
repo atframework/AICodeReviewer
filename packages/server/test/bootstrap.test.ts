@@ -461,11 +461,12 @@ describe("createOutputPublisherFromConfig", () => {
           template_engine: "handlebars",
           channels: [
             {
-              name: "gitea-pr",
-              kind: "gitea_pr_review",
-              trigger: "gitea-internal",
-              no_problems: { action: "publish" },
-            },
+               name: "gitea-pr",
+               kind: "gitea_pr_review",
+               trigger: "gitea-internal",
+               no_problems: { action: "publish" },
+               review_update_strategy: "always_new",
+             },
           ],
         },
       } as Partial<AppConfig>);

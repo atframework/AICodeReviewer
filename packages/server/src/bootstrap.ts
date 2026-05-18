@@ -972,6 +972,8 @@ export function createOutputPublisherFromConfig(
   const problemIssueMaxRecentIssues = resolveProblemIssueMaxRecentIssues(config, workspaceId);
   const channelReviewMode = readString(channelConfig, "review_mode", "reviewMode") as "auto" | "review" | "comment" | undefined;
   const channelReviewEvent = readString(channelConfig, "review_event", "reviewEvent") as "COMMENT" | "REQUEST_CHANGES" | undefined;
+  const channelReviewUpdateStrategy = readString(channelConfig, "review_update_strategy", "reviewUpdateStrategy") as "always_new" | "update_existing" | undefined;
+  const headSha = reviewEvent?.headSha;
 
   if (channel.kind === "gitea_pr_review") {
     if (!baseUrl || !owner || !repo || pullNumber === undefined) {
@@ -991,6 +993,8 @@ export function createOutputPublisherFromConfig(
       ...(reviewedTag ? { reviewedTag } : {}),
       ...(channelReviewMode ? { reviewMode: channelReviewMode } : {}),
       ...(channelReviewEvent ? { reviewEvent: channelReviewEvent } : {}),
+      ...(channelReviewUpdateStrategy ? { reviewUpdateStrategy: channelReviewUpdateStrategy } : {}),
+      ...(headSha ? { headSha } : {}),
     });
 
     return {
@@ -1027,6 +1031,8 @@ export function createOutputPublisherFromConfig(
       ...(reviewedTag ? { reviewedTag } : {}),
       ...(channelReviewMode ? { reviewMode: channelReviewMode } : {}),
       ...(channelReviewEvent ? { reviewEvent: channelReviewEvent } : {}),
+      ...(channelReviewUpdateStrategy ? { reviewUpdateStrategy: channelReviewUpdateStrategy } : {}),
+      ...(headSha ? { headSha } : {}),
     });
 
     return {
