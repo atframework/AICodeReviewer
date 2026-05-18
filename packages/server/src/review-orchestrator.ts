@@ -1,4 +1,5 @@
 import { basename, dirname, join } from "node:path";
+import { readFile } from "node:fs/promises";
 
 import {
   buildReviewTaskContext,
@@ -295,13 +296,23 @@ interface AgentBundleContext {
   runId?: string;
 }
 
-function extractKiloJsonStreamContent(stdout: string): string {
+interface KiloStreamExtractionResult {
+  readonly content: string;
+  readonly toolCallEvents: readonly ToolCallEnvelope[];
+  readonly eventCounts: Readonly<Record<string, number>>;
+}
+
+function extractKiloJsonStreamContent(stdout: string): KiloStreamExtractionResult {
   const textParts: string[] = [];
+  const toolCallEvents: ToolCallEnvelope[] = [];
+  const eventCounts: Record<string, number> = {};
   for (const line of stdout.split("\n")) {
     const trimmed = line.trim();
     if (!trimmed) continue;
     try {
       const event = JSON.parse(trimmed) as Record<string, unknown>;
+      const eventType = typeof event.type === "string" ? event.type : "unknown";
+      eventCounts[eventType] = (eventCounts[eventType] ?? 0) + 1;
       if (event.type === "text") {
         const part = event.part as Record<string, unknown> | undefined;
         const text = typeof event.text === "string"
@@ -320,6 +331,20 @@ function extractKiloJsonStreamContent(stdout: string): string {
         const errorData = event.error as Record<string, unknown> | undefined;
         const message = typeof errorData?.message === "string" ? errorData.message : JSON.stringify(event.error);
         throw new Error(`Kilo agent error: ${message}`);
+      } else if (
+        (event.type === "tool_call" || event.type === "tool_use")
+        && typeof event.name === "string"
+        && event.input !== undefined
+      ) {
+        try {
+          toolCallEvents.push({ name: normalizeToolName(event.name), input: event.input });
+        } catch {
+          console.warn(JSON.stringify({
+            level: "warn",
+            msg: "kilo stream tool call has unsupported name",
+            toolName: event.name,
+          }));
+        }
       }
     } catch (error) {
       if (error instanceof Error && error.message.startsWith("Kilo agent error:")) {
@@ -327,7 +352,11 @@ function extractKiloJsonStreamContent(stdout: string): string {
       }
     }
   }
-  return textParts.length > 0 ? textParts.join("\n") : stdout;
+  return {
+    content: textParts.length > 0 ? textParts.join("\n") : stdout,
+    toolCallEvents,
+    eventCounts,
+  };
 }
 
 async function runAgentReview(
@@ -335,7 +364,7 @@ async function runAgentReview(
   task: string,
   options: ServerReviewOrchestrationOptions,
   bundleContext?: AgentBundleContext,
-): Promise<{ readonly llmResult: ChatCompletionResult; readonly agentResult: SandboxSpawnResult }> {
+): Promise<{ readonly llmResult: ChatCompletionResult; readonly agentResult: SandboxSpawnResult; readonly mcpState?: AicrOutputState }> {
   const sandbox = options.sandbox;
   const agentAdapter = options.agentAdapter;
   if (!sandbox || !agentAdapter) {
@@ -344,6 +373,7 @@ async function runAgentReview(
 
   const dirs = deriveWorkspaceRuntimeDirs(sourceRoot);
   let agentResult: SandboxSpawnResult | undefined;
+  let hostAgentDir: string | undefined;
 
   try {
     const materializedFs = await sandbox.materializeFs({
@@ -351,6 +381,7 @@ async function runAgentReview(
       agentDir: dirs.agentDir,
       tmpDir: dirs.tmpDir,
     });
+    hostAgentDir = materializedFs.agentDir;
     const bundle = await materializeRuntimeBundle({
       adapter: agentAdapter,
       model: options.model,
@@ -393,7 +424,51 @@ async function runAgentReview(
 
   const isKiloAgent = agentAdapter.kind === "kilo";
   const rawStdout = agentResult.stdout;
-  const content = isKiloAgent ? extractKiloJsonStreamContent(rawStdout) : rawStdout;
+  let content: string;
+  let kiloToolCalls: readonly ToolCallEnvelope[] = [];
+  if (isKiloAgent) {
+    const extraction = extractKiloJsonStreamContent(rawStdout);
+    content = extraction.content;
+    kiloToolCalls = extraction.toolCallEvents;
+    if (Object.keys(extraction.eventCounts).length > 0 || kiloToolCalls.length > 0) {
+      console.info(JSON.stringify({
+        level: "info",
+        msg: "kilo agent stream stats",
+        eventCounts: extraction.eventCounts,
+        streamToolCallCount: kiloToolCalls.length,
+        stdoutLength: rawStdout.length,
+        extractedContentLength: content.length,
+      }));
+    }
+  } else {
+    content = rawStdout;
+  }
+
+  let mcpState: AicrOutputState | undefined;
+  if (hostAgentDir) {
+    const statePath = join(hostAgentDir, ".aicr-output-state.json");
+    try {
+      const stateContent = await readFile(statePath, "utf8");
+      const parsed = JSON.parse(stateContent) as unknown;
+      if (isPlainObject(parsed)) {
+        mcpState = {
+          problems: Array.isArray(parsed.problems) ? parsed.problems : [],
+          summaries: Array.isArray(parsed.summaries) ? parsed.summaries : [],
+          contextRequests: Array.isArray(parsed.contextRequests) ? parsed.contextRequests : [],
+          ...(typeof parsed.skipReason === "string" ? { skipReason: parsed.skipReason } : {}),
+        };
+        console.info(JSON.stringify({
+          level: "info",
+          msg: "read MCP output state from agent workspace",
+          problemCount: mcpState.problems.length,
+          summaryCount: mcpState.summaries.length,
+          hasSkipReason: mcpState.skipReason !== undefined,
+        }));
+      }
+    } catch {
+      // State file does not exist or is invalid; agent may not have called MCP tools.
+    }
+  }
 
   return {
     llmResult: {
@@ -408,6 +483,7 @@ async function runAgentReview(
       },
     },
     agentResult,
+    ...(mcpState ? { mcpState } : {}),
   };
 }
 
@@ -417,7 +493,7 @@ async function requestReviewCompletion(
   options: ServerReviewOrchestrationOptions,
   followUp?: { readonly previousOutput: string; readonly prompt: string },
   bundleContext?: AgentBundleContext,
-): Promise<{ readonly llmResult: ChatCompletionResult; readonly agentResult?: SandboxSpawnResult }> {
+): Promise<{ readonly llmResult: ChatCompletionResult; readonly agentResult?: SandboxSpawnResult; readonly mcpState?: AicrOutputState }> {
   if (options.sandbox && options.agentAdapter) {
     const task = followUp
       ? [
@@ -534,6 +610,14 @@ function extractJsonPayload(content: string): unknown {
   return parseJsonCandidate(trimmed) ?? extractFencedJsonPayload(trimmed) ?? extractBalancedJsonPayload(trimmed);
 }
 
+const KILO_MCP_TOOL_NAME_RE = /^(?:[a-z0-9_-]+)_aicr[_]([a-z_]+)$/iu;
+const KILO_MCP_TOOL_MAP: Readonly<Record<string, AicrOutputToolName>> = {
+  report_problem: "aicr.report_problem",
+  publish_summary: "aicr.publish_summary",
+  skip: "aicr.skip",
+  fetch_more_context: "aicr.fetch_more_context",
+};
+
 function normalizeToolName(value: unknown): AicrOutputToolName {
   if (
     value === "aicr.report_problem" ||
@@ -542,6 +626,16 @@ function normalizeToolName(value: unknown): AicrOutputToolName {
     value === "aicr.fetch_more_context"
   ) {
     return value;
+  }
+
+  if (typeof value === "string") {
+    const kiloMatch = KILO_MCP_TOOL_NAME_RE.exec(value);
+    if (kiloMatch) {
+      const mapped = KILO_MCP_TOOL_MAP[kiloMatch[1]!.toLowerCase()];
+      if (mapped) {
+        return mapped;
+      }
+    }
   }
 
   throw new TypeError(`Unsupported AICR tool name: ${String(value)}`);
@@ -1236,6 +1330,41 @@ export async function runReviewOrchestration(
   let completion = await requestReviewCompletion(scopedTree.rootDir, llmSystemPrompt, options, undefined, bundleContext);
   const rawModelOutput = completion.llmResult.content;
   const allowNaturalLanguageSummary = completion.agentResult === undefined;
+  if (completion.mcpState) {
+    for (const problem of completion.mcpState.problems) {
+      try {
+        collector.reportProblem(problem);
+      } catch (error) {
+        console.warn(JSON.stringify({
+          level: "warn",
+          msg: "MCP state problem rejected by collector",
+          error: error instanceof Error ? error.message : String(error),
+        }));
+      }
+    }
+    for (const summary of completion.mcpState.summaries) {
+      try {
+        collector.publishSummary(summary);
+      } catch (error) {
+        console.warn(JSON.stringify({
+          level: "warn",
+          msg: "MCP state summary rejected by collector",
+          error: error instanceof Error ? error.message : String(error),
+        }));
+      }
+    }
+    if (completion.mcpState.skipReason) {
+      try {
+        collector.skip({ reason: completion.mcpState.skipReason });
+      } catch (error) {
+        console.warn(JSON.stringify({
+          level: "warn",
+          msg: "MCP state skip rejected by collector",
+          error: error instanceof Error ? error.message : String(error),
+        }));
+      }
+    }
+  }
   const toolExecution = await callAicrTools(rawModelOutput, tools, { allowNaturalLanguageSummary });
   let outputState = collector.snapshot();
   const summaryOnlyProblemClaim = summaryOnlyClaimsActionableProblems(outputState);
