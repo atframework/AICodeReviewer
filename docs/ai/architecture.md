@@ -211,9 +211,9 @@
 #### 3.9.4 作者解析与 @-mention
 
 - 作者解析优先事件用户名，再补 display name、邮箱或 provider profile。
-- Feishu / WeCom / issue comment 的 mention 方言由输出层负责转换。
+- IM bot channels（当前实现 `feishu_bot`、`wecom_bot`，未来可扩展 `dingtalk_bot`、`slack_bot` 等）的 mention 方言由输出层负责转换，各平台使用 `im-markdown.ts` 中对应的 `toXxxMarkdown()` transformer 适配 Markdown 子集。
 - 黑名单邮箱不能用于自动 mention。
-- IM 总结要尽量输出 `@username (Display Name)` 这样的稳定格式。
+- IM 总结要尽量输出 `@username (Display Name)` 这样的稳定格式；平台原生 mention tag（`<at>`、`<@user>` 等）由 `author-resolution.ts` 通过 `MentionChannelKind` 处理，模板只负责人类可读格式。
 
 #### 3.9.5 Managed problem issue 生命周期
 

@@ -175,6 +175,7 @@ The `.env` file on remote contains secrets. **Never display its full contents in
 - `P4USER`, `P4PASSWORD` — Perforce integration
 - `AICR_API_KEY` — Server API key for `/triggers/*`
 - `FEISHU_WEBHOOK`, `FEISHU_SECRET` — Feishu bot
+- `WECOM_WEBHOOK` — WeCom (企业微信) bot
 
 ## Common Failures and Recovery
 
@@ -184,6 +185,7 @@ The `.env` file on remote contains secrets. **Never display its full contents in
 | `healthz` returns non-200         | Config validation failed                | Check `podman logs aicr` for Zod/config errors                  |
 | Container exits immediately       | Port conflict or missing volume         | Check `podman ps -a` and logs                                   |
 | Feishu/webhook notifications fail | Missing env var in `.env`               | Verify `.env` has required vars, restart container              |
+| WeCom notifications fail          | Missing `WECOM_WEBHOOK` in `.env`       | Add env var, restart container                                  |
 | Gitea issues not created          | `kind` mismatch or missing `token_env`  | Verify config `kind` matches code, check `token_env` resolution |
 
 ## Security Notes

@@ -73,7 +73,7 @@ Keep patches concise. Large rewrites belong in a summary or a linked follow-up, 
 
 - PR/MR summary comments when a channel supports summary publishing.
 - Gitea managed problem issues.
-- Feishu and WeCom aggregated reports.
+- IM bot aggregated reports (Feishu, WeCom, etc.).
 - Push, commit, and P4 changelist events where there may be no line-comment target.
 
 For push/commit/P4 events, publish a non-empty summary when configured channels need an audit trail. The `no_problems` policy decides per channel whether a zero-problem result is published or suppressed.
@@ -291,7 +291,7 @@ Effective policy is resolved in this order, from low to high precedence:
 4. Workspace defaults: `workspaces.defaults.outputs.no_problems` and `workspaces.defaults.outputs.channel_overrides.<channel>.no_problems`.
 5. Per-project overrides: `workspaces.instances.<workspace_id>.outputs.no_problems` and `workspaces.instances.<workspace_id>.outputs.channel_overrides.<channel>.no_problems`.
 
-Use positive wording: `no_problems.action: publish|suppress`. Notification channels such as Feishu, WeCom, and email usually set `suppress`; lifecycle channels that need to close resolved managed issues may set `publish`. The removed `no_findings` spelling is rejected by config validation.
+Use positive wording: `no_problems.action: publish|suppress`. Notification channels (IM bots, email) usually set `suppress`; lifecycle channels that need to close resolved managed issues may set `publish`. The removed `no_findings` spelling is rejected by config validation.
 
 This is an output-layer policy. It does not replace `review.skip_lgtm`, and it must not suppress error reports or problem lifecycle reconciliation.
 
@@ -365,7 +365,7 @@ Common template variables:
 | `{{problem.severity}}`, `{{problem.category}}`, `{{problem.message}}`, `{{problem.suggestion}}` | Problem content fields |
 | `{{problem.codeSnippet}}`, `{{problem.codeLanguage}}`, `{{{problem.codeFence}}}` | Optional AICR-derived code reference snippet, language, and pre-built fenced code block |
 
-For Git-based channels (`gitea_*`, `github_*`, `gitlab_mr_review`), built-in templates prefer `@username` formatting when a provider username is available. If a display name is also available, they render it as `@username (Display Name)` so the platform can still resolve the mention while humans see the nickname. Feishu and WeCom summary templates use the same human-readable `@username (Display Name)` convention for event authors; native bot mentions still flow through the separate `{{atMentions}}` / author-resolution path when enabled.
+For Git-based channels (`gitea_*`, `github_*`, `gitlab_mr_review`), built-in templates prefer `@username` formatting when a provider username is available. If a display name is also available, they render it as `@username (Display Name)` so the platform can still resolve the mention while humans see the nickname. IM bot summary templates (`feishu_bot`, `wecom_bot`, and future IM channels) use the same human-readable `@username (Display Name)` convention for event authors; native bot mentions still flow through the separate `{{atMentions}}` / author-resolution path when enabled.
 
 Templates must use `{{problems}}` and `{{problem.*}}`; the removed `{{findings}}` and `{{finding.*}}` variables are not provided.
 
