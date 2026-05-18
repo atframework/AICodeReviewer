@@ -653,7 +653,26 @@ matches the signing secret shown in the Feishu bot configuration page.
 
 ## WeCom (企业微信) Bot Configuration
 
-Similar to Feishu, add a WeCom group bot and configure:
+AICodeReviewer can push aggregated review problems to a WeCom group via a
+group bot webhook.
+
+### 1. Create a group bot in WeCom
+
+1. Open the target group → **Group Settings** → **Group Bots** → **Add Bot**
+2. Set the bot name and avatar
+3. Copy the **webhook URL** (format: `https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=...`)
+4. Click **Save**
+
+### 2. Set environment variables
+
+```bash
+# Required
+export AICR_WECOM_WEBHOOK="https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxxxxxxx"
+```
+
+WeCom group bot webhooks do not use HMAC signature verification; no secret env var is needed.
+
+### 3. Configure the output channel
 
 ```yaml
 outputs:
@@ -661,5 +680,49 @@ outputs:
     - name: wecom-ops
       kind: wecom_bot
       webhook_url_env: AICR_WECOM_WEBHOOK
-      mentioned_mobile_list: ["+86-13800138000"]   # optional: @ specific users
+      mention_author: false                    # @-mention the commit author
+      mention_fallback: skip                   # what to do if author can't be resolved: "all" | "skip"
+      no_problems: { action: suppress }
+      # mentioned_mobile_list: ["+86-13800138000"]  # optional: @ specific users by phone
 ```
+
+### 4. Route review events to WeCom
+
+Use `outputs.routes` to direct specific triggers to the WeCom channel:
+
+```yaml
+outputs:
+  routes:
+    default:
+      line_comments: [gitea-pr-review]
+      summary: [gitea-pr-review]
+    rules:
+      # Route P4 commits to WeCom
+      - match:
+          trigger: p4-main
+          target_kind: commit
+        summary: [wecom-ops]
+```
+
+Or route at the workspace level:
+
+```yaml
+workspaces:
+  instances:
+    p4-main:
+      source_repo:
+        trigger: p4-main
+        repo: "//depot/main"
+      outputs:
+        summary: [wecom-ops]
+```
+
+### 5. Markdown rendering notes
+
+WeCom group bot messages support a subset of Markdown: headings, bold, links,
+inline code, and blockquotes are rendered natively. Tables are flattened to
+plain-text rows. Code fences are preserved. AICodeReviewer applies
+`toWeComMarkdown()` automatically before dispatch.
+
+Messages are truncated to 500 characters and suggestions to 300 characters
+with a `...` suffix to stay within WeCom message size limits.

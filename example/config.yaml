@@ -330,11 +330,17 @@ outputs:
     #   mention_author: false
 
     # WeCom (企业微信) bot — push aggregated problems to a WeCom group.
+    # Setup: group Settings → Group Bots → Add Bot → copy webhook URL.
+    # No signing secret is needed (WeCom group bot webhooks do not use HMAC).
+    # See example/README.md "WeCom Bot Configuration" for full guide.
+    #
     # - name: wecom-ops
     #   kind: wecom_bot
-    #   webhook_url_env: AICR_WECOM_WEBHOOK
-    #   mention_author: false
+    #   webhook_url_env: AICR_WECOM_WEBHOOK        # env var with the webhook URL
+    #   mention_author: false                       # @-mention the commit author
+    #   mention_fallback: skip                      # "all" = mention everyone, "skip" = no mention if author not found
     #   no_problems: { action: suppress }
+    #   # mentioned_mobile_list: ["+86-13800138000"] # optional: @ specific users by phone number
 
   routes:
     default:
