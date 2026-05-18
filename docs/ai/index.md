@@ -10,6 +10,8 @@
 | 稳定架构与合同 | `architecture.md` | 详细设计，按 `Plan.md` 的章节编号保留稳定引用点 |
 | 已完成里程碑历史 | `milestones/*.md` | 完成项沉淀与交付面，避免反复塞回 `Plan.md` |
 | 稳定决策与取舍 | `decisions.md` | 归档 D1-D27 等长期有效决策 |
+| AI 规则与技能来源 | `source-index.md` | 外部 Agent/Skills/MCP 文档核验记录、刷新触发条件与兼容性证据 |
+| Agent Skills 索引 | `../../.agents/skills/README.md` | 仓库技能目录地图；只按需读取具体 `SKILL.md` |
 | 评审提示词设计依据 | `../prompt-research.md` | M0.5 调研与默认 prompt 设计 rationale |
 | 输出通道契约 | `../output-channels.md` | MCP 输出工具、模板变量、路由与 IM 行为 |
 | Podman 沙箱说明 | `../podman.md` | Podman/rootless 部署和沙箱说明 |
@@ -34,9 +36,11 @@
 ### 做 AI 资产维护
 
 1. `../../AGENTS.md`
-2. `AGENTS.repository-baseline.md`
-3. 相关 `.agents/skills/*/SKILL.md`
-4. 需要历史背景时再读 `milestones/*.md`
+2. `source-index.md`
+3. `../../.agents/skills/README.md`
+4. `AGENTS.repository-baseline.md`
+5. 相关 `.agents/skills/*/SKILL.md`
+6. 需要历史背景时再读 `milestones/*.md`
 
 ## 里程碑归档
 
