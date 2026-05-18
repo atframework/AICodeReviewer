@@ -80,8 +80,8 @@ describe("verifyWebhookSignature", () => {
 describe("translateWebhookToReviewEvent", () => {
   const config = { triggerName: "gitea-internal", workspaceId: "ws" };
 
-  it("returns null for an unsupported event type", () => {
-    const event = translateWebhookToReviewEvent(
+  it("returns null for an unsupported event type", async () => {
+    const event = await translateWebhookToReviewEvent(
       "gitea",
       "release",
       { repository: { full_name: "owent/example" } },
@@ -90,8 +90,8 @@ describe("translateWebhookToReviewEvent", () => {
     expect(event).toBeNull();
   });
 
-  it("derives the author from sender first, then pull_request.user", () => {
-    const event = translateWebhookToReviewEvent(
+  it("derives the author from sender first, then pull_request.user", async () => {
+    const event = await translateWebhookToReviewEvent(
       "gitea",
       "pull_request",
       {
@@ -109,8 +109,8 @@ describe("translateWebhookToReviewEvent", () => {
     expect(event?.author.username).toBe("fallback-author");
   });
 
-  it("propagates the provider into reason and provider fields for forgejo", () => {
-    const event = translateWebhookToReviewEvent(
+  it("propagates the provider into reason and provider fields for forgejo", async () => {
+    const event = await translateWebhookToReviewEvent(
       "forgejo",
       "pull_request",
       {
@@ -125,8 +125,8 @@ describe("translateWebhookToReviewEvent", () => {
     expect(event?.reason).toBe("forgejo:opened");
   });
 
-  it("translates push events with before/after shas", () => {
-    const event = translateWebhookToReviewEvent(
+  it("translates push events with before/after shas", async () => {
+    const event = await translateWebhookToReviewEvent(
       "gitea",
       "push",
       {
@@ -153,8 +153,8 @@ describe("translateWebhookToReviewEvent", () => {
     expect(event?.changedFiles).toEqual(["src/new.ts", "src/app.ts", "src/old.ts", "README.md"]);
   });
 
-  it("uses sender over pull_request.user when both are present", () => {
-    const event = translateWebhookToReviewEvent(
+  it("uses sender over pull_request.user when both are present", async () => {
+    const event = await translateWebhookToReviewEvent(
       "gitea",
       "pull_request",
       {
@@ -174,8 +174,8 @@ describe("translateWebhookToReviewEvent", () => {
     expect(event?.author.email).toBe("sender@example.com");
   });
 
-  it("produces an empty author when both sender and pull_request.user are absent", () => {
-    const event = translateWebhookToReviewEvent(
+  it("produces an empty author when both sender and pull_request.user are absent", async () => {
+    const event = await translateWebhookToReviewEvent(
       "gitea",
       "pull_request",
       {
@@ -193,8 +193,8 @@ describe("translateWebhookToReviewEvent", () => {
     expect(event?.author.email).toBeUndefined();
   });
 
-  it("includes rawEventName in the translated event", () => {
-    const event = translateWebhookToReviewEvent(
+  it("includes rawEventName in the translated event", async () => {
+    const event = await translateWebhookToReviewEvent(
       "gitea",
       "pull_request",
       {
@@ -208,8 +208,8 @@ describe("translateWebhookToReviewEvent", () => {
     expect(event?.rawEventName).toBe("pull_request");
   });
 
-  it("extracts branch from push ref for GitHub-style push events", () => {
-    const event = translateWebhookToReviewEvent(
+  it("extracts branch from push ref for GitHub-style push events", async () => {
+    const event = await translateWebhookToReviewEvent(
       "github",
       "push",
       {
@@ -226,8 +226,8 @@ describe("translateWebhookToReviewEvent", () => {
     expect(event?.branch).toBe("sample_solution");
   });
 
-  it("falls back pusher.name to author.username for GitHub push events", () => {
-    const event = translateWebhookToReviewEvent(
+  it("falls back pusher.name to author.username for GitHub push events", async () => {
+    const event = await translateWebhookToReviewEvent(
       "github",
       "push",
       {
@@ -245,8 +245,8 @@ describe("translateWebhookToReviewEvent", () => {
     expect(event?.author.email).toBe("yousongyang@example.com");
   });
 
-  it("uses repository mappings to select the target workspace", () => {
-    const event = translateWebhookToReviewEvent(
+  it("uses repository mappings to select the target workspace", async () => {
+    const event = await translateWebhookToReviewEvent(
       "gitea",
       "push",
       {

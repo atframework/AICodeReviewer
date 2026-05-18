@@ -11,6 +11,7 @@ import {
   type ReviewQueue,
   type ReviewProvider,
 } from "@aicr/core";
+import type { ReviewDeduplicator } from "./review-deduplicator.js";
 import {
   extractWebhookRepositoryRef,
   matchesWebhookRepo,
@@ -55,6 +56,7 @@ export interface ServerAppOptions {
   readonly pathPrefix?: string;
   readonly auth?: AuthConfig;
   readonly asyncTriggers?: boolean;
+  readonly deduplicator?: ReviewDeduplicator;
 }
 
 export interface ServerReviewPreparationOptions {
@@ -100,6 +102,7 @@ function registerGiteaLikeWebhook(
   reviewOrchestrationOptions: ServerReviewOrchestrationOptions | undefined,
   issueTriageOptions: IssueTriageRuntimeOptions | undefined,
   asyncTriggers: boolean,
+  deduplicator: ReviewDeduplicator | undefined,
 ): void {
   app.post(path, async (c) => {
     if (!config) {
@@ -134,7 +137,7 @@ function registerGiteaLikeWebhook(
 
     let reviewEvent;
     try {
-      reviewEvent = translateWebhookToReviewEvent(provider, eventName, decoded, config);
+      reviewEvent = await translateWebhookToReviewEvent(provider, eventName, decoded, config);
     } catch (error) {
       if (error instanceof ZodError) {
         return c.json(
@@ -163,7 +166,7 @@ function registerGiteaLikeWebhook(
       return c.json({ accepted: false, reason: "ignored_by_label", provider, eventName, matchedLabels: ignoredLabels }, 200);
     }
 
-    return handleReviewOrchestration(c, provider, eventName, decoded, reviewEvent, reviewPreparationOptions, reviewOrchestrationOptions, issueTriageOptions, asyncTriggers);
+    return handleReviewOrchestration(c, provider, eventName, decoded, reviewEvent, reviewPreparationOptions, reviewOrchestrationOptions, issueTriageOptions, asyncTriggers, deduplicator);
   });
 }
 
@@ -173,6 +176,7 @@ function registerP4Trigger(
   reviewPreparationOptions: ServerReviewPreparationOptions | undefined,
   reviewOrchestrationOptions: ServerReviewOrchestrationOptions | undefined,
   asyncTriggers: boolean,
+  deduplicator: ReviewDeduplicator | undefined,
 ): void {
   app.post("/triggers/p4", async (c) => {
     if (!config) {
@@ -244,7 +248,7 @@ function registerP4Trigger(
 
     return handleReviewOrchestration(
       c, "p4", "change-commit", decoded, reviewEvent,
-      reviewPreparationOptions, reviewOrchestrationOptions, undefined, asyncTriggers,
+      reviewPreparationOptions, reviewOrchestrationOptions, undefined, asyncTriggers, deduplicator,
     );
   });
 }
@@ -335,6 +339,7 @@ function registerGenericWebhook(
   reviewOrchestrationOptions: ServerReviewOrchestrationOptions | undefined,
   issueTriageOptions: IssueTriageRuntimeOptions | undefined,
   asyncTriggers: boolean,
+  deduplicator: ReviewDeduplicator | undefined,
 ): void {
   app.post(path, async (c) => {
     const configs = normalizeGenericWebhookConfigs(config);
@@ -377,7 +382,7 @@ function registerGenericWebhook(
 
     let reviewEvent;
     try {
-      reviewEvent = translateWebhookToReviewEvent(provider, eventName, decoded, webhookConfig);
+      reviewEvent = await translateWebhookToReviewEvent(provider, eventName, decoded, webhookConfig);
     } catch (error) {
       if (error instanceof ZodError) {
         return c.json(
@@ -406,7 +411,7 @@ function registerGenericWebhook(
       return c.json({ accepted: false, reason: "ignored_by_label", provider, eventName, matchedLabels: ignoredLabels }, 200);
     }
 
-    return handleReviewOrchestration(c, provider, eventName, decoded, reviewEvent, reviewPreparationOptions, reviewOrchestrationOptions, issueTriageOptions, asyncTriggers);
+    return handleReviewOrchestration(c, provider, eventName, decoded, reviewEvent, reviewPreparationOptions, reviewOrchestrationOptions, issueTriageOptions, asyncTriggers, deduplicator);
   });
 }
 
@@ -600,9 +605,35 @@ function scheduleTriggerProcessing(
   reviewPreparationOptions: ServerReviewPreparationOptions | undefined,
   reviewOrchestrationOptions: ServerReviewOrchestrationOptions | undefined,
   issueTriageOptions: IssueTriageRuntimeOptions | undefined,
+  deduplicator: ReviewDeduplicator | undefined,
 ): string {
   const runId = randomUUID();
   const context = { reviewEvent, payload: decoded, provider, eventName };
+
+  if (deduplicator) {
+    const dedupKey = deduplicator.computeKey(reviewEvent);
+    const canSchedule = deduplicator.trySchedule(reviewEvent);
+    if (!canSchedule) {
+      deduplicator.setPending({ provider, eventName, decoded, reviewEvent });
+      console.info(JSON.stringify({
+        level: "info",
+        msg: "trigger processing deduplicated: same target already running, queued for re-review",
+        runId,
+        dedupKey,
+        provider,
+        eventName,
+        triggerName: reviewEvent.triggerName,
+        workspaceId: reviewEvent.workspaceId,
+        repoRef: reviewEvent.repoRef,
+        ...(reviewEvent.headSha ? { headSha: reviewEvent.headSha } : {}),
+        ...(reviewEvent.branch ? { branch: reviewEvent.branch } : {}),
+        ...(reviewEvent.author?.username ? { author: reviewEvent.author.username } : {}),
+        ...(reviewEvent.author?.email ? { authorEmail: reviewEvent.author.email } : {}),
+      }));
+      return runId;
+    }
+  }
+
   console.info(JSON.stringify({
     level: "info",
     msg: "trigger processing scheduled",
@@ -617,6 +648,23 @@ function scheduleTriggerProcessing(
     ...(reviewEvent.author?.username ? { author: reviewEvent.author.username } : {}),
     ...(reviewEvent.author?.email ? { authorEmail: reviewEvent.author.email } : {}),
   }));
+
+  function onCompleted(): void {
+    if (!deduplicator) return;
+    const pending = deduplicator.markCompleted(reviewEvent);
+    if (pending) {
+      scheduleTriggerProcessing(
+        pending.provider,
+        pending.eventName,
+        pending.decoded,
+        pending.reviewEvent,
+        reviewPreparationOptions,
+        reviewOrchestrationOptions,
+        issueTriageOptions,
+        deduplicator,
+      );
+    }
+  }
 
   setTimeout(() => {
     void runTriggerProcessing(
@@ -664,7 +712,7 @@ function scheduleTriggerProcessing(
         error: message,
       }));
       void publishTriggerErrorReport(context, reviewOrchestrationOptions, runId, reason, message);
-    });
+    }).finally(onCompleted);
   }, 0);
 
   return runId;
@@ -681,6 +729,7 @@ async function handleReviewOrchestration(
   reviewOrchestrationOptions: ServerReviewOrchestrationOptions | undefined,
   issueTriageOptions: IssueTriageRuntimeOptions | undefined,
   asyncTriggers: boolean,
+  deduplicator: ReviewDeduplicator | undefined,
 ): Promise<Response> {
   if (asyncTriggers) {
     const runId = scheduleTriggerProcessing(
@@ -691,6 +740,7 @@ async function handleReviewOrchestration(
       reviewPreparationOptions,
       reviewOrchestrationOptions,
       issueTriageOptions,
+      deduplicator,
     );
 
     return c.json({
@@ -778,6 +828,7 @@ function mountRoutes(app: Hono, options: ServerAppOptions): void {
     options.reviewOrchestration,
     options.issueTriage,
     asyncTriggers,
+    options.deduplicator,
   );
   registerGiteaLikeWebhook(
     app,
@@ -788,6 +839,7 @@ function mountRoutes(app: Hono, options: ServerAppOptions): void {
     options.reviewOrchestration,
     options.issueTriage,
     asyncTriggers,
+    options.deduplicator,
   );
   registerGenericWebhook(
     app,
@@ -798,6 +850,7 @@ function mountRoutes(app: Hono, options: ServerAppOptions): void {
     options.reviewOrchestration,
     options.issueTriage,
     asyncTriggers,
+    options.deduplicator,
   );
   registerGenericWebhook(
     app,
@@ -808,6 +861,7 @@ function mountRoutes(app: Hono, options: ServerAppOptions): void {
     options.reviewOrchestration,
     options.issueTriage,
     asyncTriggers,
+    options.deduplicator,
   );
   registerP4Trigger(
     app,
@@ -815,6 +869,7 @@ function mountRoutes(app: Hono, options: ServerAppOptions): void {
     options.reviewPreparation,
     options.reviewOrchestration,
     asyncTriggers,
+    options.deduplicator,
   );
 }
 
@@ -851,6 +906,14 @@ export type { BootstrapServerOptions } from "./bootstrap.js";
 
 export { serve, serveAsync } from "./node-serve.js";
 export type { ServeOptions } from "./node-serve.js";
+
+export {
+  createReviewDeduplicator,
+} from "./review-deduplicator.js";
+export type {
+  ReviewDeduplicator,
+  DeduplicationTarget,
+} from "./review-deduplicator.js";
 
 export {
   GiteaApiClient,

@@ -45,6 +45,15 @@
 - P4 trigger 只负责最小 metadata POST；服务端负责拉取和补足 diff/describe。
 - 提交者可见元数据必须来自事件或 provider/VCS 查询结果，不能回退成分析用 workspace 或 agent 本地环境。
 
+#### 3.1.1 Review 去重与合并
+
+- async 模式下，服务端维护一个内存中的 `ReviewDeduplicator`，对同一 target 的并发 review 进行去重。
+- 去重 key 由 `provider:repoRef:targetKind:branch` 构成；当 branch 不可用时回退到 `headSha`，再回退到 `baseSha`。
+- 当同一 target 已有 review 正在运行时，新到达的 review 请求（如 `/aicr review` 评论命令）不会立即创建新 run，而是被记录为 **pending re-review**，覆盖同一 target 的任何先前 pending 请求。
+- 当 running review 完成后（无论成功或失败），deduplicator 自动检查该 target 是否有 pending re-review；如果有，用最新的 `ReviewEvent` 重新触发一次 review。
+- 去重只影响 async 调度层，不影响 review orchestration 本身的业务逻辑；sync 模式不受此机制影响。
+- 代码真源：`packages/server/src/review-deduplicator.ts`；集成点在 `packages/server/src/index.ts` 的 `scheduleTriggerProcessing` 中。
+
 ### 3.2 VCS Adapter 与 scoped fetch
 
 - VCS adapter 维持统一三段式合同：
