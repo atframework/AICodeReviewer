@@ -159,6 +159,7 @@ const outputChannelSchema = z
     severity_label_colors: z.record(z.string().min(1), z.string().min(1)).optional(),
     review_mode: z.enum(["auto", "review", "comment"]).optional(),
     review_event: z.enum(["COMMENT", "REQUEST_CHANGES"]).optional(),
+    review_update_strategy: z.enum(["always_new", "update_existing"]).optional(),
     notify_feishu: z
       .object({
         webhook_url_env: z.string().min(1),

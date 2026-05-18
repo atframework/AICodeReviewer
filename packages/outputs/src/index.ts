@@ -104,6 +104,193 @@ export type FetchLike = (
 
 export type ReviewMode = "auto" | "review" | "comment";
 export type ReviewEvent = "COMMENT" | "REQUEST_CHANGES";
+export type ReviewUpdateStrategy = "always_new" | "update_existing";
+
+const AICR_REVIEW_SUMMARY_MARKER = "<!-- aicr:managed=pr-review -->";
+
+function hasManagedReviewSummaryMarker(body: string): boolean {
+	return body.includes(AICR_REVIEW_SUMMARY_MARKER);
+}
+
+const AICR_REVIEW_PROBLEMS_RE = /<!--\s*aicr:problems=([^\s]*)\s*-->/u;
+
+function extractReviewSummaryFingerprints(body: string): ReadonlySet<string> {
+	const match = AICR_REVIEW_PROBLEMS_RE.exec(body);
+	if (!match?.[1]) {
+		return new Set();
+	}
+	return new Set(match[1].split(",").filter((fp) => fp.length > 0));
+}
+
+function buildReviewSummaryProblemMarker(fingerprints: ReadonlySet<string>): string {
+	if (fingerprints.size === 0) {
+		return "<!-- aicr:problems= -->";
+	}
+	return `<!-- aicr:problems=${[...fingerprints].join(",")} -->`;
+}
+
+function buildProblemLocation(problem: { readonly file: string; readonly line: number; readonly endLine?: number }): string {
+	return problem.endLine ? `${problem.file}:${problem.line}-${problem.endLine}` : `${problem.file}:${problem.line}`;
+}
+
+function categorizeProblems(
+	currentProblems: readonly ReviewProblem[],
+	previousFingerprints: ReadonlySet<string>,
+): {
+		readonly newProblems: readonly ReviewProblem[];
+		readonly stillOpenProblems: readonly ReviewProblem[];
+		readonly resolvedFingerprints: ReadonlySet<string>;
+	} {
+	const currentFingerprints = new Set<string>();
+	const newProblems: ReviewProblem[] = [];
+	const stillOpenProblems: ReviewProblem[] = [];
+
+	for (const problem of currentProblems) {
+		const fp = problem.fingerprint ?? computeProblemFingerprint(problem);
+		currentFingerprints.add(fp);
+		if (previousFingerprints.has(fp)) {
+			stillOpenProblems.push(problem);
+		} else {
+			newProblems.push(problem);
+		}
+	}
+
+	const resolvedFingerprints = new Set<string>();
+	for (const fp of previousFingerprints) {
+		if (!currentFingerprints.has(fp)) {
+			resolvedFingerprints.add(fp);
+		}
+	}
+
+	return { newProblems, stillOpenProblems, resolvedFingerprints };
+}
+
+function buildReviewSummarySections(
+	categorized: {
+		readonly newProblems: readonly ReviewProblem[];
+		readonly stillOpenProblems: readonly ReviewProblem[];
+		readonly resolvedFingerprints: ReadonlySet<string>;
+	},
+	renderedSummary: string,
+	headSha?: string,
+): string {
+	const parts: string[] = [];
+	const timestamp = new Date().toISOString().replace("T", " ").replace(/\.\d+Z$/u, " UTC");
+	const commitSuffix = headSha ? ` | Commit: \`${headSha.slice(0, 7)}\`` : "";
+
+	parts.push(`> Updated: ${timestamp}${commitSuffix}`);
+	parts.push("");
+
+	if (renderedSummary.trim()) {
+		parts.push(renderedSummary.trim());
+		parts.push("");
+	}
+
+	const allCurrent = [...categorized.stillOpenProblems, ...categorized.newProblems];
+	if (allCurrent.length > 0) {
+		parts.push(`### Open Issues (${allCurrent.length})`);
+		parts.push("");
+		let idx = 1;
+		for (const problem of categorized.stillOpenProblems) {
+			const location = buildProblemLocation(problem);
+			parts.push(`${idx}. **[${problem.severity.toUpperCase()}] ${problem.category}** — \`${location}\``);
+			idx += 1;
+		}
+		for (const problem of categorized.newProblems) {
+			const location = buildProblemLocation(problem);
+			const commitTag = headSha ? ` *(new in \`${headSha.slice(0, 7)}\`)*` : " *(new)*";
+			parts.push(`${idx}. **[${problem.severity.toUpperCase()}] ${problem.category}** — \`${location}\`${commitTag}`);
+			idx += 1;
+		}
+		parts.push("");
+	}
+
+	if (categorized.resolvedFingerprints.size > 0) {
+		parts.push(`<details>`);
+		parts.push(`<summary>Resolved (${categorized.resolvedFingerprints.size})</summary>`);
+		parts.push("");
+		parts.push("The following previously reported issues are no longer present:");
+		parts.push("");
+		for (const fp of categorized.resolvedFingerprints) {
+			parts.push(`- ~~\`${fp}\`~~ ✅ Resolved`);
+		}
+		parts.push("");
+		parts.push("</details>");
+		parts.push("");
+	}
+
+	return normalizeMarkdownBody(parts.join("\n"));
+}
+
+function buildReviewSummaryCommentBody(
+	renderedSummary: string,
+	problems: readonly ReviewProblem[],
+	previousFingerprints: ReadonlySet<string>,
+	channel: string,
+	headSha?: string,
+): string {
+	const categorized = categorizeProblems(problems, previousFingerprints);
+	const currentFingerprints = new Set<string>();
+	for (const problem of problems) {
+		currentFingerprints.add(problem.fingerprint ?? computeProblemFingerprint(problem));
+	}
+	const scopeFingerprint = channel;
+
+	const sections = buildReviewSummarySections(categorized, renderedSummary, headSha);
+
+	const body = [
+		AICR_REVIEW_SUMMARY_MARKER,
+		`<!-- aicr:scope=${scopeFingerprint} -->`,
+		buildReviewSummaryProblemMarker(currentFingerprints),
+		"",
+		"## AI Code Review",
+		"",
+		sections,
+	].join("\n");
+
+	return normalizeMarkdownBody(body);
+}
+
+function updateReviewSummaryBody(
+	existingBody: string,
+	renderedSummary: string,
+	problems: readonly ReviewProblem[],
+	headSha?: string,
+): string {
+	const previousFingerprints = extractReviewSummaryFingerprints(existingBody);
+	const scopeMatch = /<!--\s*aicr:scope=([^\s]*)\s*-->/u.exec(existingBody);
+	const channel = scopeMatch?.[1] ?? "unknown";
+
+	const newBody = buildReviewSummaryCommentBody(renderedSummary, problems, previousFingerprints, channel, headSha);
+	return newBody;
+}
+
+interface ManagedReviewComment {
+	readonly id: number;
+	readonly body: string;
+}
+
+function parseManagedReviewComments(raw: unknown): readonly ManagedReviewComment[] {
+	if (!Array.isArray(raw)) {
+		return [];
+	}
+
+	const comments: ManagedReviewComment[] = [];
+	for (const entry of raw) {
+		if (!entry || typeof entry !== "object") {
+			continue;
+		}
+		const obj = entry as Record<string, unknown>;
+		const id = obj.id;
+		const body = String(obj.body ?? "");
+		if ((typeof id === "number" || typeof id === "string") && hasManagedReviewSummaryMarker(body)) {
+			comments.push({ id: Number(id), body });
+		}
+	}
+
+	return comments;
+}
+
 
 export interface GiteaPullRequestReviewOptions {
 	readonly baseUrl: string;
@@ -119,6 +306,8 @@ export interface GiteaPullRequestReviewOptions {
 	readonly reviewedTag?: string;
 	readonly reviewMode?: ReviewMode;
 	readonly reviewEvent?: ReviewEvent;
+	readonly reviewUpdateStrategy?: ReviewUpdateStrategy;
+	readonly headSha?: string;
 }
 
 export interface GiteaPullRequestReviewDispatcher {
@@ -383,6 +572,55 @@ export function createGiteaPullRequestReviewDispatcher(
 		};
 	}
 
+	const fetchCommentsEndpoint = commentEndpoint;
+
+	async function listManagedReviewComments(): Promise<readonly ManagedReviewComment[]> {
+		try {
+			const response = await fetchImpl(fetchCommentsEndpoint, { headers });
+			if (!response.ok) {
+				return [];
+			}
+			const raw = await response.json();
+			return parseManagedReviewComments(raw);
+		} catch {
+			return [];
+		}
+	}
+
+	async function patchComment(commentId: number, body: string): Promise<DispatchResult> {
+		const endpoint = [
+			baseUrl,
+			"api/v1/repos",
+			encodePathSegment(options.owner),
+			encodePathSegment(options.repo),
+			"issues",
+			"comments",
+			String(commentId),
+		].join("/");
+		const response = await fetchImpl(endpoint, {
+			method: "PATCH",
+			headers,
+			body: JSON.stringify({ body }),
+		});
+
+		if (!response.ok) {
+			throw new OutputDispatchError(`Gitea comment update API returned ${response.status}.`, {
+				status: response.status,
+				responseBody: await response.text(),
+			});
+		}
+
+		const raw = await response.json();
+		return {
+			channel,
+			status: "published",
+			externalId: String(commentId),
+			raw: { action: "updated", commentId, comment: raw },
+		};
+	}
+
+	const updateStrategy = options.reviewUpdateStrategy ?? "update_existing";
+
 	let attachSummaryLabels: (problems?: readonly ReviewProblem[]) => Promise<void> = () => Promise.resolve();
 
 	const dispatcher: GiteaPullRequestReviewDispatcher = {
@@ -391,15 +629,28 @@ export function createGiteaPullRequestReviewDispatcher(
 		},
 		async publishSummary(summary: string, problems?: readonly ReviewProblem[]): Promise<DispatchResult> {
 			const trimmed = summary.trim();
+			const allProblems = problems ?? [];
 			let result: DispatchResult | undefined;
-			if (trimmed.length > 0) {
+
+			if (updateStrategy === "update_existing") {
+				const existingComments = await listManagedReviewComments();
+				const latest = existingComments.length > 0 ? existingComments[existingComments.length - 1] : undefined;
+
+				if (latest) {
+					const updatedBody = updateReviewSummaryBody(latest.body, trimmed, allProblems, options.headSha);
+					result = await patchComment(latest.id, updatedBody);
+				} else {
+					const newBody = buildReviewSummaryCommentBody(trimmed, allProblems, new Set(), channel, options.headSha);
+					result = await postComment(newBody);
+				}
+			} else if (trimmed.length > 0) {
 				if (reviewMode === "comment") {
 					result = await postComment(trimmed);
 				} else {
 					result = await postReview({ event: reviewEvent, body: trimmed });
 				}
 			}
-			await attachSummaryLabels(problems);
+			await attachSummaryLabels(allProblems);
 
 			return result ?? { channel, status: "published", raw: {} };
 		},
@@ -531,6 +782,8 @@ export interface GithubPullRequestReviewOptions {
 	readonly reviewedTag?: string;
 	readonly reviewMode?: ReviewMode;
 	readonly reviewEvent?: ReviewEvent;
+	readonly reviewUpdateStrategy?: ReviewUpdateStrategy;
+	readonly headSha?: string;
 }
 
 export interface GithubPullRequestReviewDispatcher {
@@ -672,6 +925,55 @@ export function createGithubPullRequestReviewDispatcher(
 		};
 	}
 
+	const fetchCommentsEndpoint = commentEndpoint;
+
+	async function listManagedReviewComments(): Promise<readonly ManagedReviewComment[]> {
+		try {
+			const response = await fetchImpl(fetchCommentsEndpoint, { headers });
+			if (!response.ok) {
+				return [];
+			}
+			const raw = await response.json();
+			return parseManagedReviewComments(raw);
+		} catch {
+			return [];
+		}
+	}
+
+	async function patchComment(commentId: number, body: string): Promise<DispatchResult> {
+		const endpoint = [
+			baseUrl,
+			"repos",
+			encodePathSegment(options.owner),
+			encodePathSegment(options.repo),
+			"issues",
+			"comments",
+			String(commentId),
+		].join("/");
+		const response = await fetchImpl(endpoint, {
+			method: "PATCH",
+			headers,
+			body: JSON.stringify({ body }),
+		});
+
+		if (!response.ok) {
+			throw new OutputDispatchError(`GitHub comment update API returned ${response.status}.`, {
+				status: response.status,
+				responseBody: await response.text(),
+			});
+		}
+
+		const raw = await response.json();
+		return {
+			channel,
+			status: "published",
+			externalId: String(commentId),
+			raw: { action: "updated", commentId, comment: raw },
+		};
+	}
+
+	const updateStrategy = options.reviewUpdateStrategy ?? "update_existing";
+
 	let attachSummaryLabels: (problems?: readonly ReviewProblem[]) => Promise<void> = () => Promise.resolve();
 
 	const dispatcher: GithubPullRequestReviewDispatcher = {
@@ -680,15 +982,28 @@ export function createGithubPullRequestReviewDispatcher(
 		},
 		async publishSummary(summary: string, problems?: readonly ReviewProblem[]): Promise<DispatchResult> {
 			const trimmed = summary.trim();
+			const allProblems = problems ?? [];
 			let result: DispatchResult | undefined;
-			if (trimmed.length > 0) {
+
+			if (updateStrategy === "update_existing") {
+				const existingComments = await listManagedReviewComments();
+				const latest = existingComments.length > 0 ? existingComments[existingComments.length - 1] : undefined;
+
+				if (latest) {
+					const updatedBody = updateReviewSummaryBody(latest.body, trimmed, allProblems, options.headSha);
+					result = await patchComment(latest.id, updatedBody);
+				} else {
+					const newBody = buildReviewSummaryCommentBody(trimmed, allProblems, new Set(), channel, options.headSha);
+					result = await postComment(newBody);
+				}
+			} else if (trimmed.length > 0) {
 				if (reviewMode === "comment") {
 					result = await postComment(trimmed);
 				} else {
 					result = await postReview({ event: reviewEvent, body: trimmed });
 				}
 			}
-			await attachSummaryLabels(problems);
+			await attachSummaryLabels(allProblems);
 
 			return result ?? { channel, status: "published", raw: {} };
 		},
@@ -2355,10 +2670,6 @@ function groupProblemsBySeverity(problems: readonly ReviewProblem[]): readonly S
 		}
 	}
 	return groups;
-}
-
-function buildProblemLocation(problem: ReviewProblem): string {
-	return problem.endLine ? `${problem.file}:${problem.line}-${problem.endLine}` : `${problem.file}:${problem.line}`;
 }
 
 function truncateIssueTitleTail(value: string, maxDisplayWidth: number): string {

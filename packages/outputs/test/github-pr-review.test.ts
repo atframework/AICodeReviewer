@@ -149,6 +149,7 @@ describe("createGithubPullRequestReviewDispatcher", () => {
       owner: "owent",
       repo: "example",
       pullNumber: 10,
+      reviewUpdateStrategy: "always_new",
       fetch: async (url, init) => {
         calls.push({ url, init });
         return response({ id: 42 });
@@ -311,6 +312,7 @@ describe("createGithubPullRequestReviewDispatcher", () => {
       repo: "example",
       pullNumber: 1,
       reviewMode: "comment",
+      reviewUpdateStrategy: "always_new",
       fetch: async (url, init) => {
         calls.push({ url, init });
         return response({ id: 20 });
@@ -323,5 +325,129 @@ describe("createGithubPullRequestReviewDispatcher", () => {
     expect(calls[0]?.url).toContain("/issues/1/comments");
     const body = JSON.parse(calls[0]?.init?.body ?? "{}");
     expect(body.body).toBe("Review summary");
+  });
+});
+
+describe("createGithubPullRequestReviewDispatcher (update_existing)", () => {
+  it("creates a new managed summary comment when no existing one exists", async () => {
+    const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
+    const dispatcher = createGithubPullRequestReviewDispatcher({
+      owner: "owent",
+      repo: "example",
+      pullNumber: 10,
+      reviewUpdateStrategy: "update_existing",
+      headSha: "abc1234567890",
+      fetch: async (url, init) => {
+        calls.push({ url, init });
+        if (!init?.method || init.method === "GET") {
+          return response([]);
+        }
+        return response({ id: 100 });
+      },
+    });
+
+    const result = await dispatcher.publishSummary!("Summary text", [problem]);
+
+    expect(result.status).toBe("published");
+    const postCall = calls.find((c) => c.init?.method === "POST");
+    expect(postCall).toBeDefined();
+    const body = JSON.parse(postCall?.init?.body ?? "{}");
+    expect(body.body).toContain("aicr:managed=pr-review");
+    expect(body.body).toContain("Summary text");
+    expect(body.body).toContain("Open Issues");
+    expect(body.body).toContain("abc1234");
+  });
+
+  it("updates an existing managed summary comment", async () => {
+    const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
+    const existingBody = [
+      "<!-- aicr:managed=pr-review -->",
+      "<!-- aicr:scope=github_pr_review -->",
+      "<!-- aicr:problems=old-fp-1,old-fp-2 -->",
+      "",
+      "## AI Code Review",
+      "",
+      "Old summary",
+    ].join("\n");
+
+    const dispatcher = createGithubPullRequestReviewDispatcher({
+      owner: "owent",
+      repo: "example",
+      pullNumber: 10,
+      reviewUpdateStrategy: "update_existing",
+      headSha: "def4567890123",
+      fetch: async (url, init) => {
+        calls.push({ url, init });
+        if (!init?.method || init.method === "GET") {
+          return response([{ id: 50, body: existingBody }]);
+        }
+        return response({ id: 50 });
+      },
+    });
+
+    const newProblem: ReviewProblem = {
+      file: "src/new.ts",
+      line: 5,
+      severity: "medium",
+      category: "style",
+      message: "Bad style",
+      fingerprint: "new-fp-3",
+    };
+    const result = await dispatcher.publishSummary!("New summary", [newProblem]);
+
+    expect(result.status).toBe("published");
+    expect(result.externalId).toBe("50");
+    const patchCall = calls.find((c) => c.init?.method === "PATCH");
+    expect(patchCall).toBeDefined();
+    const body = JSON.parse(patchCall?.init?.body ?? "{}");
+    expect(body.body).toContain("aicr:managed=pr-review");
+    expect(body.body).toContain("New summary");
+    expect(body.body).toContain("new-fp-3");
+    expect(body.body).toContain("def4567");
+    expect(body.body).toContain("Resolved");
+  });
+
+  it("preserves still-open problems and marks new ones", async () => {
+    const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
+    const existingBody = [
+      "<!-- aicr:managed=pr-review -->",
+      "<!-- aicr:scope=github_pr_review -->",
+      "<!-- aicr:problems=fp-keep,fp-resolve -->",
+      "",
+      "## AI Code Review",
+    ].join("\n");
+
+    const dispatcher = createGithubPullRequestReviewDispatcher({
+      owner: "owent",
+      repo: "example",
+      pullNumber: 10,
+      reviewUpdateStrategy: "update_existing",
+      headSha: "aaa1112223334",
+      fetch: async (url, init) => {
+        calls.push({ url, init });
+        if (!init?.method || init.method === "GET") {
+          return response([{ id: 60, body: existingBody }]);
+        }
+        return response({ id: 60 });
+      },
+    });
+
+    const keptProblem: ReviewProblem = {
+      file: "src/keep.ts",
+      line: 10,
+      severity: "high",
+      category: "bug",
+      message: "Keep this",
+      fingerprint: "fp-keep",
+    };
+    const result = await dispatcher.publishSummary!("Updated", [keptProblem]);
+
+    expect(result.status).toBe("published");
+    const patchCall = calls.find((c) => c.init?.method === "PATCH");
+    const body = JSON.parse(patchCall?.init?.body ?? "{}");
+    expect(body.body).toContain("fp-keep");
+    expect(body.body).toContain("fp-resolve");
+    expect(body.body).toContain("Open Issues");
+    expect(body.body).toContain("Resolved");
   });
 });

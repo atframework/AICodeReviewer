@@ -189,6 +189,16 @@
 - `aicr.fetch_more_context` 可用于缺失/过窄 diff 下的完整变更文件，以及为验证变更行所必需的窄范围相关文件；problem 仍必须锚定到本次变更的文件与行。
 - IM 通知保持 `Review target` / `Summary` / `Problems` 分段结构，问题位置必须来自 `aicr.report_problem.file` 与 `line`。
 
+#### 3.9.0 PR Review Summary 更新模式
+
+- PR/MR review 通道（`gitea_pr_review`、`github_pr_review`）支持 `review_update_strategy` 配置：
+  - `always_new`：每次推送创建新的 review/comment。
+  - `update_existing`（默认）：查找 PR 上已有的 AICR 管理的 summary comment，通过 PATCH 更新而非新建。
+- 更新模式下 summary comment 使用 HTML 注释标记（`<!-- aicr:managed=pr-review -->`、`<!-- aicr:problems=fp1,fp2 -->`）做身份识别与 fingerprint 跟踪。
+- 问题分三类呈现：**Still Open**（指纹在旧 comment 和当前均存在）、**New**（仅当前存在，标注引入 commit）、**Resolved**（仅旧 comment 存在，标记 ✅ 不删除）。
+- 行级 inline comments（`publishProblem`）不受更新策略影响，仍然逐条创建 review comments。
+- 配置字段：`outputs.channels[].review_update_strategy`，类型 `always_new | update_existing`。
+
 #### 3.9.1 `no_problems` 与 target 渲染
 
 - `no_problems.action` 按全局 → channel → workspace 分层覆盖。
