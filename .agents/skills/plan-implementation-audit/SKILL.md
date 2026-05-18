@@ -58,8 +58,22 @@ For each in-progress milestone, check:
 4. **Agent runtime consistency**: If agent adapters changed, do tests cover model translation, MCP config materialization, three-layer skill/instruction merging (system built-in → user common → project/repo-local), isolated HOME/env handling, and stdout fallback behavior?
 5. **Context tool boundaries**: If VCS context tools changed, do they preserve scoped fetch, path allowlists, multi-repo selector validation, and no full recursive submodule fetch by default?
 6. **Output policy correctness**: If output routing or templates changed, do tests cover global → channel → workspace `no_problems` overrides, mixed-channel suppression/publishing, and commit/revision target links without misleading `View PR` labels?
+7. **Document sync**: Did the change touch config shape, agent adapters, MCP/output contracts, output rendering, deployment behavior, or review orchestration semantics without updating `Plan.md`, `docs/ai/architecture.md`, `example/config.yaml`, or `example/README.md`? See Step 5 for the mandatory sync checklist.
 
-### Step 5: Fix and test
+### Step 5: Document sync check (mandatory)
+
+Before declaring a change complete, verify documentation alignment:
+
+1. **Config shape changes** → Update `Plan.md` §3.10 summary, `docs/ai/architecture.md` §3.10, `packages/core/test/config.test.ts`, and `example/config.yaml`.
+2. **Store schema changes** → Update `Plan.md` §3.11 summary, `docs/ai/architecture.md` §3.11, and `packages/store/test/schema.test.ts`.
+3. **Agent adapter / MCP tool contract changes** → Update `docs/ai/architecture.md` §3.6–3.7, `docs/output-channels.md`, and relevant skill files.
+4. **Output rendering or channel behavior changes** → Update `docs/ai/architecture.md` §3.9, `docs/output-channels.md`, `example/config.yaml`, and `example/README.md`.
+5. **Review orchestration semantics changes** (deduplication, update strategy, comment commands) → Update `docs/ai/architecture.md` §3.1/§3.9, `Plan.md` §3.1/§3.9, and example docs.
+6. **Deployment or public workflow changes** → Update `example/README.md`, `docs/podman.md`, and `Plan.md` §11.
+
+If a change genuinely requires no doc update, explicitly state the reason in the change summary. Do not skip this check silently.
+
+### Step 6: Fix and test
 
 - Fix code issues first, then add tests.
 - When a fix changes config, agent behavior, MCP/output contracts, deployment, or public workflows, update the matching docs and examples (`Plan.md` roadmap summary, `docs/`, `example/config.yaml`, `example/README.md`) in the same change.

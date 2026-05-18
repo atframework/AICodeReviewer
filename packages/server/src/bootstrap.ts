@@ -60,6 +60,7 @@ import { GiteaApiClient } from "./issue-triage.js";
 import type { IssueTriageRuntimeOptions, WorkspaceIssueTriagePolicy } from "./issue-triage.js";
 import type { ServerAppOptions, ServerReviewOrchestrationOptions } from "./index.js";
 import { type AuthConfig } from "./auth.js";
+import { createReviewDeduplicator } from "./review-deduplicator.js";
 import type {
   ReviewDispatchResult,
   ReviewOrchestrationContext,
@@ -380,6 +381,9 @@ function buildWebhookConfigFromTrigger(
   const triggerConfig = trigger as Record<string, unknown>;
   const webhookSecretEnv = triggerConfig.webhook_secret_env as string | undefined;
   const webhookSecret = webhookSecretEnv ? resolveEnv(webhookSecretEnv) : undefined;
+  const tokenEnv = triggerConfig.token_env as string | undefined;
+  const token = tokenEnv ? resolveEnv(tokenEnv) : undefined;
+  const baseUrl = triggerConfig.base_url as string | undefined;
   const workspaceId = resolveWorkspaceIdFromTrigger(config, trigger.name);
   const repoRef = resolveWorkspaceRepoRef(config, trigger.name, workspaceId) ?? resolveWorkspaceRepoRef(config, trigger.name);
 
@@ -389,6 +393,8 @@ function buildWebhookConfigFromTrigger(
     ...(repoRef ? { repoRef } : {}),
     ...withRepoMappings(triggerConfig),
     ...(webhookSecret !== undefined ? { webhookSecret } : {}),
+    ...(token !== undefined ? { token } : {}),
+    ...(baseUrl !== undefined ? { baseUrl } : {}),
   };
 }
 
@@ -1797,6 +1803,7 @@ export async function bootstrapServerApp(options: BootstrapServerOptions): Promi
     ...(config.server.path_prefix ? { pathPrefix: config.server.path_prefix } : {}),
     ...(authConfig ? { auth: authConfig } : {}),
     asyncTriggers: true,
+    deduplicator: createReviewDeduplicator(),
   };
 }
 

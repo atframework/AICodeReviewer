@@ -14,6 +14,8 @@ export interface GiteaWebhookConfig {
   readonly webhookSecret?: string;
   readonly repoRef?: string;
   readonly repoMappings?: readonly RepositoryWorkspaceMapping[];
+  readonly token?: string;
+  readonly baseUrl?: string;
 }
 
 export interface RepositoryWorkspaceMapping {
@@ -170,6 +172,117 @@ const gitlabPushPayloadSchema = z
     user_email: z.string().min(1).optional(),
   })
   .passthrough();
+
+const issueCommentPayloadSchema = z
+  .object({
+    action: z.string().min(1).optional(),
+    repository: repositorySchema,
+    sender: actorSchema.optional(),
+    issue: z
+      .object({
+        number: z.number().int().positive(),
+        title: z.string().min(1).optional(),
+        pull_request: z
+          .object({
+            url: z.string().url(),
+            html_url: z.string().url().optional(),
+          })
+          .optional(),
+        user: actorSchema.optional(),
+        labels: z
+          .array(
+            z.object({ name: z.string().min(1).optional() }).passthrough(),
+          )
+          .optional(),
+      })
+      .passthrough()
+      .optional(),
+    comment: z
+      .object({
+        body: z.string(),
+        user: actorSchema.optional(),
+      })
+      .passthrough()
+      .optional(),
+  })
+  .passthrough();
+
+const gitlabNotePayloadSchema = z
+  .object({
+    object_kind: z.literal("note"),
+    project: z
+      .object({
+        path_with_namespace: z.string().min(1),
+      })
+      .passthrough(),
+    user: actorSchema.optional(),
+    merge_request: z
+      .object({
+        iid: z.number().int().positive(),
+        source_branch: z.string().min(1).optional(),
+        target_branch: z.string().min(1).optional(),
+        title: z.string().min(1).optional(),
+        diff_refs: z
+          .object({
+            base_sha: z.string().min(1).optional(),
+            head_sha: z.string().min(1).optional(),
+          })
+          .passthrough()
+          .optional(),
+        labels: z
+          .array(
+            z.object({ title: z.string().min(1).optional() }).passthrough(),
+          )
+          .optional(),
+      })
+      .passthrough()
+      .optional(),
+    object_attributes: z
+      .object({
+        note: z.string(),
+        noteable_type: z.string().min(1).optional(),
+      })
+      .passthrough(),
+  })
+  .passthrough();
+
+const REVIEW_COMMAND_RE = /(?:^|\s)\/aicr\s+review(?:\s|$)/iu;
+const REVIEW_COMMAND_SHORT_RE = /(?:^|\s)\/review(?:\s|$)/iu;
+
+function containsReviewCommand(body: string): boolean {
+  return REVIEW_COMMAND_RE.test(body) || REVIEW_COMMAND_SHORT_RE.test(body);
+}
+
+async function fetchPullRequestDetails(
+  prApiUrl: string,
+  token: string,
+): Promise<{
+  head?: { sha?: string; ref?: string };
+  base?: { sha?: string; ref?: string };
+  title?: string;
+  html_url?: string;
+  user?: z.infer<typeof actorSchema>;
+  labels?: unknown[];
+}> {
+  const response = await fetch(prApiUrl, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: "application/vnd.github+json",
+      "X-GitHub-Api-Version": "2022-11-28",
+    },
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to fetch PR details: ${response.status}`);
+  }
+  return response.json() as Promise<{
+    head?: { sha?: string; ref?: string };
+    base?: { sha?: string; ref?: string };
+    title?: string;
+    html_url?: string;
+    user?: z.infer<typeof actorSchema>;
+    labels?: unknown[];
+  }>;
+}
 
 function normalizeActor(actor: z.infer<typeof actorSchema> | undefined): ReviewActor {
   const raw = actor as Record<string, unknown> | undefined;
@@ -348,12 +461,12 @@ export function verifyWebhookSignature(
   return timingSafeEqual(Buffer.from(expectedHex, "hex"), Buffer.from(normalized, "hex"));
 }
 
-export function translateWebhookToReviewEvent(
+export async function translateWebhookToReviewEvent(
   provider: ReviewProvider,
   eventName: string,
   payload: unknown,
   config: GiteaWebhookConfig,
-): ReviewEvent | null {
+): Promise<ReviewEvent | null> {
   if (eventName === "pull_request") {
     const parsed = pullRequestPayloadSchema.parse(payload);
 
@@ -417,6 +530,91 @@ export function translateWebhookToReviewEvent(
       rawEventName: eventName,
       ...(issueNumber !== undefined ? { changedFiles: [String(issueNumber)] } : {}),
       ...(issueLabels.length > 0 ? { labels: issueLabels } : {}),
+    });
+  }
+
+  if (eventName === "issue_comment") {
+    const parsed = issueCommentPayloadSchema.parse(payload);
+    const commentBody = parsed.comment?.body ?? "";
+
+    if (!containsReviewCommand(commentBody)) {
+      return null;
+    }
+
+    const prInfo = parsed.issue?.pull_request;
+    if (!prInfo) {
+      return null;
+    }
+
+    let headSha: string | undefined;
+    let baseSha: string | undefined;
+    let title = parsed.issue?.title;
+    let url = prInfo.html_url;
+    let author = normalizeActor(parsed.comment?.user ?? parsed.sender);
+    let branch: string | undefined;
+    const prLabels = extractLabelNames(parsed.issue?.labels);
+
+    if (config.token) {
+      try {
+        const prDetails = await fetchPullRequestDetails(prInfo.url, config.token);
+        headSha = prDetails.head?.sha;
+        baseSha = prDetails.base?.sha;
+        title = prDetails.title ?? title;
+        url = prDetails.html_url ?? url;
+        author = normalizeActor(prDetails.user) ?? author;
+        branch = prDetails.head?.ref;
+      } catch {
+        // 获取失败时使用已有信息
+      }
+    }
+
+    return createReviewEvent({
+      triggerName: config.triggerName,
+      provider,
+      workspaceId: resolveWorkspaceIdForRepo(config, parsed.repository.full_name),
+      targetKind: "pull_request",
+      repoRef: parsed.repository.full_name,
+      ...(baseSha ? { baseSha } : {}),
+      ...(headSha ? { headSha } : {}),
+      author,
+      ...(title ? { title } : {}),
+      ...(url ? { url } : {}),
+      reason: `${provider}:comment_review`,
+      rawEventName: eventName,
+      ...(prLabels.length > 0 ? { labels: prLabels } : {}),
+      ...(branch ? { branch } : {}),
+    });
+  }
+
+  if (eventName === "note" || eventName === "Note Hook") {
+    const parsed = gitlabNotePayloadSchema.parse(payload);
+    const noteBody = parsed.object_attributes.note ?? "";
+
+    if (!containsReviewCommand(noteBody)) {
+      return null;
+    }
+
+    const mr = parsed.merge_request;
+    if (!mr) {
+      return null;
+    }
+
+    const mrLabels = extractLabelNames(mr.labels);
+
+    return createReviewEvent({
+      triggerName: config.triggerName,
+      provider,
+      workspaceId: resolveWorkspaceIdForRepo(config, parsed.project.path_with_namespace),
+      targetKind: "pull_request",
+      repoRef: parsed.project.path_with_namespace,
+      baseSha: mr.diff_refs?.base_sha ?? mr.target_branch,
+      headSha: mr.diff_refs?.head_sha ?? mr.source_branch,
+      author: normalizeActor(parsed.user),
+      title: mr.title,
+      reason: `${provider}:comment_review`,
+      rawEventName: eventName,
+      ...(mrLabels.length > 0 ? { labels: mrLabels } : {}),
+      branch: mr.source_branch,
     });
   }
 

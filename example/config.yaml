@@ -92,6 +92,13 @@ llm:
 # * token_env / api_key_env — outbound credentials used by AICR to call
 #   the VCS API (post comments, read files). NOT used for inbound auth.
 # * user_env / password_env (P4 only) — outbound P4 login credentials.
+#
+# ── Comment commands ──
+#   /aicr review   — Trigger a manual re-review on the PR/MR/issue.
+#   /review        — Shorthand alias for /aicr review.
+#   When multiple comment commands arrive while a review is already running,
+#   AICR deduplicates them: the running review completes first, then AICR
+#   automatically triggers one final re-review with the latest event.
 # ---------------------------------------------------------------------------
 triggers:
   # -- Gitea / Forgejo webhook trigger --
