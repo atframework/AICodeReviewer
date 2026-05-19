@@ -168,6 +168,7 @@
 
 - 持久化 schema 的代码真源是 `packages/store/src/schema.ts`。
 - async trigger、失败报告、publisher 行为和 replay 需要统一落在可观测性合同里。
+- `/metrics` 的 histogram 使用 Prometheus 累计语义；同步和异步 review run 都应记录 metrics 与 `runs/<run_id>/run.json` 快照。
 - 详细合同：`docs/ai/architecture.md` §3.11。
 
 ### 3.12 Reflection 与 memory
@@ -240,25 +241,30 @@
     - ~~MCP server 配置注入~~（已交付：runtime bundle 支持 `mcpServers` 参数，Kilo adapter 自动写入 `mcp` 配置段到 `.kilo/kilo.json`）
     - ~~Agent stdout 结构化修复与直连 LLM 兜底~~（已交付：orchestrator 支持 repair retry、skip 语义归一化、direct-LLM fallback）
     - ~~MCP 状态文件读取~~（已交付：agent 运行后 orchestrator 读取 `.aicr-output-state.json` 并回写 collector）
-    - 完成 Kilo Code 端到端验收（生产环境真实 agent 路径验证，覆盖 MCP tool-call stdout 路径）
-    - 独立 MCP 服务器进程（`@aicr/mcp-output` 已有 stdio server 可执行文件；待补齐：sandbox 内独立进程启动、HTTP/SSE 传输模式）
+    - ~~独立 MCP 服务器进程~~（已交付：通过 Kilo MCP 配置注入，`@aicr/mcp-output` 以独立子进程启动；状态文件 `.aicr-output-state.json` 由 orchestrator 读取）
+    - ~~完成 Kilo Code 端到端验收~~（已验收：生产日志证实 Kilo agent 在 sandbox 内完整运行，MCP 状态文件读取、stdout 流解析、结构化输出转换均正常工作）
+    - HTTP/SSE 传输模式（`@aicr/mcp-output` 当前仅支持 stdio；待调研 MCP SDK HTTP transport 可行性）
 2. **M6：跨 VCS 能力补齐**
-   - GitHub/GitLab webhook、dispatcher 与 PR review 已实现并带单元测试；待补齐真实仓库端到端验证记录
-   - SVN 支持（config schema 已预留，待实现 VCS adapter）
+    - ~~GitHub 真实仓库端到端验证~~（已验收：生产环境 `github-atframework` / `github-owent` 触发器正常运行，自动创建 issue 和分析 PR 记录完整）
+    - GitLab webhook、dispatcher 与 PR review 已实现并带单元测试；待补齐真实仓库端到端验证记录
+    - SVN 支持（config schema 已预留，待实现 VCS adapter）
    - blame/annotate 归因链路
    - 多源上下文 selector
 3. **M8：观测与回放**
-   - ~~结构化日志落盘~~（已交付：pino logger）
-   - OTel trace（observability.ts 已有 SDK stub，待补齐 exporter 配置与自动埋点）
-   - Prometheus metrics
-   - `runs/<run_id>/` 完整快照
-   - eval CLI / 基准集（`@aicr/eval` 已建包，待实现框架与基准集）
+    - ~~结构化日志落盘~~（已交付：pino logger）
+    - ~~OTel trace exporter~~（已交付：`createOtelSdk` 配置 OTLP HTTP exporter，支持 `OTEL_EXPORTER_OTLP_ENDPOINT` / `OTEL_EXPORTER_OTLP_HEADERS` 环境变量）
+    - ~~Prometheus metrics~~（已交付：`/metrics` 端点，`aicr_reviews_total` / `aicr_problems_total` / `aicr_review_duration_seconds` 等计数器与累计 histogram）
+    - ~~`runs/<run_id>/` 完整快照~~（已交付：`saveRunSnapshot` 保存 `runs/<run_id>/run.json`，通过 `ServerAppOptions.runsDir` 配置，同步/异步 review 均覆盖）
+    - ~~eval CLI / 基准集~~（已交付：`@aicr/eval` 最小框架 `runEval`、message-pattern 匹配、6 个单元测试）
 4. **M9：发布收尾**
-   - `docker_socket`（与 `docker` 共享容器后端实现，基础功能可用；待补齐专门测试与文档确认）
-   - `k8s_pod`（待实现或给出清晰的平台能力边界说明）
-   - 版本固定与 changelog
-   - 从零部署文档验收
-   - 最终发布检查单
+   - ~~`docker_socket` 文档确认~~（已交付：`example/README.md` 和 `docs/ai/architecture.md` §3.8.1 已补充说明）
+   - ~~`k8s_pod` / `firecracker` 平台能力边界说明~~（已交付：`architecture.md` §3.8.1 后端能力矩阵已明确标注为预留扩展位）
+   - ~~版本固定与 changelog~~（已交付：`CHANGELOG.md` 已创建，所有包版本固定为 `0.1.0`）
+   - ~~最终发布检查单~~（已交付：`docs/ai/milestones/M9-checklist.md` 已创建）
+   - `docker_socket` 专门集成测试（超出 factory 映射测试）
+   - `k8s_pod` 实现或更详细的平台边界文档
+   - `firecracker` 实现或更详细的平台边界文档
+   - 从零部署文档验收（在干净环境上走通完整流程）
 
 ### 8.3 已完成阶段归档
 
