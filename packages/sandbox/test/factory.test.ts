@@ -41,8 +41,15 @@ describe("createSandboxBackend", () => {
     ).rejects.toThrow("not in the allowed list");
   });
 
-  it("throws for k8s_pod (not yet implemented)", async () => {
-    await expect(createSandboxBackend({ kind: "k8s_pod" })).rejects.toThrow("not yet implemented");
+  it("creates a docker_socket backend mapped to docker implementation", async () => {
+    const backend = await createSandboxBackend({ kind: "docker_socket" });
+    expect(backend.kind).toBe("docker_socket");
+  });
+
+  it("throws for k8s_pod with a descriptive message", async () => {
+    await expect(createSandboxBackend({ kind: "k8s_pod" })).rejects.toThrow(
+      'Sandbox kind "k8s_pod" is not yet implemented',
+    );
   });
 
   it("throws for firecracker (not yet implemented)", async () => {

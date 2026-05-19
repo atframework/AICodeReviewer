@@ -2,6 +2,8 @@ import type { SandboxBackend, SandboxKind, SandboxEngine } from "./types.js";
 import { createNativeSandboxBackend } from "./native.js";
 import { createDockerSandboxBackend, preflightSandbox } from "./docker.js";
 import { createPodmanSandboxBackend } from "./podman.js";
+import { createK8sPodSandboxBackend } from "./k8s-pod.js";
+import { createFirecrackerSandboxBackend } from "./firecracker.js";
 
 export interface CreateSandboxOptions {
   readonly kind: SandboxKind;
@@ -43,9 +45,25 @@ export async function createSandboxBackend(
       return createPodmanSandboxBackend(podmanOpts);
     }
 
-    case "k8s_pod":
-    case "firecracker":
-      throw new TypeError(`Sandbox kind "${options.kind}" is not yet implemented.`);
+    case "k8s_pod": {
+      const k8sOpts: {
+        image?: string;
+        commandAllowlist?: ReadonlySet<string>;
+      } = {};
+      if (options.image) k8sOpts.image = options.image;
+      if (options.allowedCommands) k8sOpts.commandAllowlist = options.allowedCommands;
+      return createK8sPodSandboxBackend(k8sOpts);
+    }
+
+    case "firecracker": {
+      const fcOpts: {
+        image?: string;
+        commandAllowlist?: ReadonlySet<string>;
+      } = {};
+      if (options.image) fcOpts.image = options.image;
+      if (options.allowedCommands) fcOpts.commandAllowlist = options.allowedCommands;
+      return createFirecrackerSandboxBackend(fcOpts);
+    }
   }
 }
 
@@ -73,3 +91,7 @@ export { createDockerSandboxBackend, preflightSandbox } from "./docker.js";
 export type { DockerSandboxOptions } from "./docker.js";
 export { createPodmanSandboxBackend } from "./podman.js";
 export type { PodmanSandboxOptions } from "./podman.js";
+export { createK8sPodSandboxBackend } from "./k8s-pod.js";
+export type { K8sPodSandboxOptions } from "./k8s-pod.js";
+export { createFirecrackerSandboxBackend } from "./firecracker.js";
+export type { FirecrackerSandboxOptions } from "./firecracker.js";

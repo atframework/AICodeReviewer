@@ -1,17 +1,17 @@
 ---
 name: remote-deployment
-description: "Use when: deploying AICR to the remote server at 10.64.8.2, updating deployed config.yaml, syncing source files, or troubleshooting podman build/run issues; do not use for local development or CI pipeline changes."
+description: "Use when: deploying AICR to a remote server, updating deployed config.yaml, syncing source files, or troubleshooting podman build/run issues; do not use for local development or CI pipeline changes."
 user-invocable: false
 ---
 
 # Remote Deployment
 
-Deploy AICR to the production server (`10.64.8.2`, user `tools`, port `36000`, key `D:/workspace/keys/id_ed25519.it`).
+Deploy AICR to the production server. The actual host, port, user, key path, and deploy directory are documented in `development/README.md` and must never be hardcoded in committed scripts.
 
 ## Remote Layout
 
 ```
-/data/disk2/AICodeReviewer/
+<deploy-dir>/
   source/              # Build context for Dockerfile (copied from local repo)
   deploy/              # Dockerfile and deploy assets
   deploy.sh            # Build + restart script
@@ -25,8 +25,8 @@ Deploy AICR to the production server (`10.64.8.2`, user `tools`, port `36000`, k
 All SSH/SCP commands must include these flags:
 
 ```bash
-ssh -p 36000 -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no \
-  -o User=tools -i D:/workspace/keys/id_ed25519.it 10.64.8.2
+ssh -p <ssh-port> -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no \
+  -o User=<remote-user> -i <ssh-key> <remote-host>
 ```
 
 On Windows PowerShell, **do not use `&&` inside a single command string** — it fails with a parser error. Chain with `;` or use separate tool calls.
@@ -44,13 +44,13 @@ tar czf build/aicr-deploy-latest.tar.gz `
   --exclude=.git --exclude=node_modules --exclude=dist --exclude=coverage .
 
 # 2. SCP to remote
-scp -P 36000 -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no `
-  -i D:/workspace/keys/id_ed25519.it `
-  build/aicr-deploy-latest.tar.gz tools@10.64.8.2:/data/disk2/AICodeReviewer/
+scp -P <ssh-port> -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no `
+  -i <ssh-key> `
+  build/aicr-deploy-latest.tar.gz <remote-user>@<remote-host>:<deploy-dir>/
 
 # 3. Extract on remote and clean up tarball (separate SSH call)
-ssh -p 36000 ... 10.64.8.2 `
-  "cd /data/disk2/AICodeReviewer && rm -rf source/* && mkdir -p source && tar xzf aicr-deploy-latest.tar.gz -C source && rm -f aicr-deploy-latest.tar.gz"
+ssh -p <ssh-port> ... <remote-host> `
+  "cd <deploy-dir> && rm -rf source/* && mkdir -p source && tar xzf aicr-deploy-latest.tar.gz -C source && rm -f aicr-deploy-latest.tar.gz"
 ```
 
 If many files changed, sync the entire `packages/` tree or use `git archive` from the local repo.
@@ -68,7 +68,7 @@ The remote `config.yaml` uses YAML anchors (`&safe_issue_triage`) and aliases (`
 ```python
 import re
 
-with open("/data/disk2/AICodeReviewer/config.yaml", "r") as f:
+with open("<deploy-dir>/config.yaml", "r") as f:
     content = f.read()
 
 old_block = """    - name: gitea-managed-findings
@@ -82,7 +82,7 @@ new_block = old_block + "\n      assign_committer: true"
 
 if old_block in content:
     content = content.replace(old_block, new_block)
-    with open("/data/disk2/AICodeReviewer/config.yaml", "w") as f:
+    with open("<deploy-dir>/config.yaml", "w") as f:
         f.write(content)
     print("Updated OK")
 else:
@@ -109,15 +109,15 @@ PowerShell + SSH + Python string quoting creates escaping nightmares.
 # Write script locally
 $script = @"
 import re
-with open('/data/disk2/AICodeReviewer/config.yaml', 'r') as f:
+with open('<deploy-dir>/config.yaml', 'r') as f:
     content = f.read()
 # ... replacement logic ...
 "@
 Set-Content -Path C:\temp\update_config.py -Value $script
 
 # SCP and execute
-scp -P 36000 ... C:\temp\update_config.py tools@10.64.8.2:/data/disk2/AICodeReviewer/
-ssh -p 36000 ... 10.64.8.2 "python3 /data/disk2/AICodeReviewer/update_config.py; rm -f /data/disk2/AICodeReviewer/update_config.py"
+scp -P <ssh-port> ... C:\temp\update_config.py <remote-user>@<remote-host>:<deploy-dir>/
+ssh -p <ssh-port> ... <remote-host> "python3 <deploy-dir>/update_config.py; rm -f <deploy-dir>/update_config.py"
 ```
 
 ### Problem: Config kind drift between code and deployed config
@@ -127,7 +127,7 @@ The code schema may have renamed a channel `kind` (e.g., `gitea_finding_issue` �
 **Always verify before deploy:**
 
 ```bash
-ssh ... 10.64.8.2 "grep 'kind: gitea_problem_issue' /data/disk2/AICodeReviewer/config.yaml"
+ssh ... <remote-host> "grep 'kind: gitea_problem_issue' <deploy-dir>/config.yaml"
 ```
 
 If the kind name changed, update it in the remote config **before** running `deploy.sh`.
@@ -140,7 +140,7 @@ If the kind name changed, update it in the remote config **before** running `dep
 # 1. Sync source files to remote source/
 # 2. Update config.yaml if needed
 # 3. Run deploy script on remote
-ssh -p 36000 ... 10.64.8.2 "cd /data/disk2/AICodeReviewer; bash deploy.sh"
+ssh -p <ssh-port> ... <remote-host> "cd <deploy-dir>; bash deploy.sh"
 ```
 
 The `deploy.sh` script:
@@ -148,22 +148,22 @@ The `deploy.sh` script:
 1. Builds podman image `aicr:latest` from `source/` using `deploy/Dockerfile`
 2. Stops and removes old `aicr` container
 3. Starts new container with volume mounts and env vars
-4. Runs health check on `http://127.0.0.1:8090/healthz`
+4. Runs health check on `http://127.0.0.1:<host-port>/healthz`
 
 ### Post-deploy verification
 
 ```bash
 # Health check (remote)
-curl -sf http://127.0.0.1:8090/healthz
+curl -sf http://127.0.0.1:<host-port>/healthz
 
 # Health check (via reverse proxy)
-curl -sf https://aicr.m-oa.com:6023/healthz
+curl -sf <reverse-proxy>/healthz
 
 # Container status
-ssh ... 10.64.8.2 "podman ps --filter name=aicr"
+ssh ... <remote-host> "podman ps --filter name=aicr"
 
 # Recent logs
-ssh ... 10.64.8.2 "podman logs --tail 50 aicr"
+ssh ... <remote-host> "podman logs --tail 50 aicr"
 ```
 
 ## Environment Variables on Remote
@@ -187,9 +187,47 @@ The `.env` file on remote contains secrets. **Never display its full contents in
 | Feishu/webhook notifications fail | Missing env var in `.env`               | Verify `.env` has required vars, restart container              |
 | WeCom notifications fail          | Missing `WECOM_WEBHOOK` in `.env`       | Add env var, restart container                                  |
 | Gitea issues not created          | `kind` mismatch or missing `token_env`  | Verify config `kind` matches code, check `token_env` resolution |
+| `podman ps` fails with `invalid internal status` | Rootless storage driver init failure (custom `rootless_storage_path` in `/etc/containers/storage.conf`) | `podman --storage-driver=overlay system migrate`, then `podman start <containers>` |
+
+### Podman `invalid internal status` deep-dive
+
+**Root cause:** The server uses a custom `rootless_storage_path` in `/etc/containers/storage.conf`. Podman 5.x rootless auto-detection can fail to initialize the overlay storage driver after a reboot or OOM kill, producing the misleading message `"could not find any running process"`. The real issue is storage-layer initialization, not a missing pause process.
+
+**Verified fix:**
+
+```bash
+# Force explicit overlay driver — bypasses broken auto-detection
+podman --storage-driver=overlay system migrate
+
+# Restart containers stopped by migrate
+podman start <container-names>
+
+# Verify
+curl -sf http://127.0.0.1:<port>/healthz
+```
+
+**Prevention in deploy.sh:**
+
+All `podman` commands in `deploy.sh` must include `--storage-driver=overlay`:
+
+```bash
+podman --storage-driver=overlay build -t aicr:latest -f deploy/Dockerfile .
+podman --storage-driver=overlay rm -f aicr 2>/dev/null || true
+podman --storage-driver=overlay run -d --name aicr -p <host-port>:8080 ...
+```
+
+Add a pre-flight check at the top of `deploy.sh`:
+
+```bash
+if ! podman ps >/dev/null 2>&1; then
+  podman --storage-driver=overlay system migrate
+fi
+```
+
+**Why `--storage-driver=overlay` is required:** When the system `storage.conf` sets custom paths such as `graphroot`, `runroot`, or `rootless_storage_path` (e.g. on a host that redirects container storage to a non-default disk), Podman 5.x rootless auto-detection may fail to initialize the overlay driver. Without an explicit driver flag, Podman may open the storage database with a nil `storageService`, causing nil-pointer crashes during `system migrate`.
 
 ## Security Notes
 
-- The SSH key path `D:/workspace/keys/id_ed25519.it` is fixed; do not hardcode it in committed scripts.
+- The SSH key path is environment-specific; do not hardcode it in committed scripts.
 - `.env` and `secret.json` are in `.gitignore` equivalents; never commit them.
 - API keys and webhook secrets must be sourced from the remote `.env` file, not embedded in scripts.

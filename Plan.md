@@ -238,20 +238,24 @@
     - ~~补齐 Agent Runtime Bundle manifest~~（已交付：`@aicr/agents` `materializeRuntimeBundle`）
     - ~~移除 Kilo 适配器过期标志~~（已交付：`--dangerously-skip-permissions` 已从 kilo adapter 移除，`--auto` 即为 kilo 7.x 的自动审批方式）
     - ~~MCP server 配置注入~~（已交付：runtime bundle 支持 `mcpServers` 参数，Kilo adapter 自动写入 `mcp` 配置段到 `.kilo/kilo.json`）
-    - 完成 Kilo Code 端到端验收
-    - 独立 MCP 服务器进程（当前为 stdout 回退；需要将 `@aicr/mcp-output` 暴露为 stdio/HTTP 独立服务）
+    - ~~Agent stdout 结构化修复与直连 LLM 兜底~~（已交付：orchestrator 支持 repair retry、skip 语义归一化、direct-LLM fallback）
+    - ~~MCP 状态文件读取~~（已交付：agent 运行后 orchestrator 读取 `.aicr-output-state.json` 并回写 collector）
+    - 完成 Kilo Code 端到端验收（生产环境真实 agent 路径验证，覆盖 MCP tool-call stdout 路径）
+    - 独立 MCP 服务器进程（`@aicr/mcp-output` 已有 stdio server 可执行文件；待补齐：sandbox 内独立进程启动、HTTP/SSE 传输模式）
 2. **M6：跨 VCS 能力补齐**
-   - SVN 支持
-   - GitHub/GitLab 真实 e2e
+   - GitHub/GitLab webhook、dispatcher 与 PR review 已实现并带单元测试；待补齐真实仓库端到端验证记录
+   - SVN 支持（config schema 已预留，待实现 VCS adapter）
    - blame/annotate 归因链路
    - 多源上下文 selector
 3. **M8：观测与回放**
-   - OTel trace
+   - ~~结构化日志落盘~~（已交付：pino logger）
+   - OTel trace（observability.ts 已有 SDK stub，待补齐 exporter 配置与自动埋点）
    - Prometheus metrics
    - `runs/<run_id>/` 完整快照
-   - eval CLI / 基准集
+   - eval CLI / 基准集（`@aicr/eval` 已建包，待实现框架与基准集）
 4. **M9：发布收尾**
-   - `docker_socket` / `k8s_pod`
+   - `docker_socket`（与 `docker` 共享容器后端实现，基础功能可用；待补齐专门测试与文档确认）
+   - `k8s_pod`（待实现或给出清晰的平台能力边界说明）
    - 版本固定与 changelog
    - 从零部署文档验收
    - 最终发布检查单

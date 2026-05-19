@@ -79,6 +79,46 @@ On SELinux-enabled hosts, bind mounts may need relabeling. Prefer a dedicated re
 
 ## Troubleshooting
 
+### `invalid internal status, try resetting the pause process with "podman system migrate"`
+
+This error occurs when rootless Podman's storage driver initialization fails, often after a system reboot, OOM kill, or when `/etc/containers/storage.conf` uses a custom `rootless_storage_path`.
+
+**Important:** The error message `"could not find any running process"` is misleading. The root cause is usually **storage-layer initialization failure**, not a missing pause process.
+
+**Quick fix (non-destructive):**
+
+```bash
+# Force overlay driver explicitly — this bypasses the broken auto-detection
+podman --storage-driver=overlay system migrate
+
+# Restart stopped containers
+podman start aicr caddy
+
+# Verify
+curl -sf http://127.0.0.1:8090/healthz
+```
+
+**Why this works:** When `/etc/containers/storage.conf` configures custom paths (`graphroot`, `runroot`, `rootless_storage_path`), Podman 5.x may fail to auto-detect the storage driver in rootless mode. Explicit `--storage-driver=overlay` skips auto-detection and directly opens the overlay-backed storage.
+
+**If migrate still crashes:** Check for a stale container exit record with code 137 (SIGKILL) in `/run/user/$UID/libpod/tmp/exits/` or `/run/user/$UID/libpod/tmp/persist/`. Remove those files, then retry migrate.
+
+**Prevention in deploy scripts:** Always specify `--storage-driver=overlay` in `deploy.sh`:
+
+```bash
+podman --storage-driver=overlay build -t aicr:latest ...
+podman --storage-driver=overlay run -d --name aicr ...
+```
+
+**Pre-flight check for automation:**
+
+```bash
+if ! podman ps >/dev/null 2>&1; then
+  podman --storage-driver=overlay system migrate
+fi
+```
+
+### Other common issues
+
 - `podman --version` fails: install Podman for the service user and ensure `PATH` is available in the service environment.
 - Containers cannot read `/workspace/source`: verify the host source directory exists and the service user has read permission.
 - Containers cannot write `/workspace/agent` or `/workspace/tmp`: verify workspace ownership and rootless UID mapping.

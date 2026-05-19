@@ -30,12 +30,13 @@
 {{/if}}
 
 ## Summary
-{{#if summary}}
+
+{{#if summary~}}
 {{{summary}}}
-{{else}}
-{{#if problems}}
+{{~else}}
+{{#if problems~}}
 Review completed: {{problems.length}} issue(s) found.{{#each problems}} [{{severity}}]{{/each}}
-{{else}}
+{{~else}}
 No summary provided.
-{{/if}}
+{{~/if}}
 {{/if}}
