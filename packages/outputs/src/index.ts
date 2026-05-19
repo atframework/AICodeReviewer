@@ -112,14 +112,20 @@ function hasManagedReviewSummaryMarker(body: string): boolean {
 	return body.includes(AICR_REVIEW_SUMMARY_MARKER);
 }
 
-const AICR_REVIEW_PROBLEMS_RE = /<!--\s*aicr:problems=([^\s]*)\s*-->/u;
+const AICR_REVIEW_PROBLEMS_RE = /<!--\s*aicr:problems=([\s\S]*?)\s*-->/u;
+const AICR_REVIEW_SCOPE_RE = /<!--\s*aicr:scope=([^\s>]*)\s*-->/u;
 
 function extractReviewSummaryFingerprints(body: string): ReadonlySet<string> {
 	const match = AICR_REVIEW_PROBLEMS_RE.exec(body);
 	if (!match?.[1]) {
 		return new Set();
 	}
-	return new Set(match[1].split(",").filter((fp) => fp.length > 0));
+	return new Set(match[1].split(",").map((fp) => fp.trim()).filter((fp) => fp.length > 0));
+}
+
+function extractReviewSummaryScope(body: string): string | undefined {
+	const scope = AICR_REVIEW_SCOPE_RE.exec(body)?.[1]?.trim();
+	return scope ? scope : undefined;
 }
 
 function buildReviewSummaryProblemMarker(fingerprints: ReadonlySet<string>): string {
@@ -255,19 +261,20 @@ function updateReviewSummaryBody(
 	existingBody: string,
 	renderedSummary: string,
 	problems: readonly ReviewProblem[],
+	channel: string,
 	headSha?: string,
 ): string {
 	const previousFingerprints = extractReviewSummaryFingerprints(existingBody);
-	const scopeMatch = /<!--\s*aicr:scope=([^\s]*)\s*-->/u.exec(existingBody);
-	const channel = scopeMatch?.[1] ?? "unknown";
+	const summaryScope = extractReviewSummaryScope(existingBody) ?? channel;
 
-	const newBody = buildReviewSummaryCommentBody(renderedSummary, problems, previousFingerprints, channel, headSha);
+	const newBody = buildReviewSummaryCommentBody(renderedSummary, problems, previousFingerprints, summaryScope, headSha);
 	return newBody;
 }
 
 interface ManagedReviewComment {
 	readonly id: number;
 	readonly body: string;
+	readonly scope?: string;
 }
 
 function parseManagedReviewComments(raw: unknown): readonly ManagedReviewComment[] {
@@ -284,7 +291,8 @@ function parseManagedReviewComments(raw: unknown): readonly ManagedReviewComment
 		const id = obj.id;
 		const body = String(obj.body ?? "");
 		if ((typeof id === "number" || typeof id === "string") && hasManagedReviewSummaryMarker(body)) {
-			comments.push({ id: Number(id), body });
+			const scope = extractReviewSummaryScope(body);
+			comments.push({ id: Number(id), body, ...(scope ? { scope } : {}) });
 		}
 	}
 
@@ -634,10 +642,12 @@ export function createGiteaPullRequestReviewDispatcher(
 
 			if (updateStrategy === "update_existing") {
 				const existingComments = await listManagedReviewComments();
-				const latest = existingComments.length > 0 ? existingComments[existingComments.length - 1] : undefined;
+				const scopedComments = existingComments.filter((comment) => comment.scope === channel);
+				const legacyComments = existingComments.filter((comment) => comment.scope === undefined);
+				const latest = scopedComments.at(-1) ?? legacyComments.at(-1);
 
 				if (latest) {
-					const updatedBody = updateReviewSummaryBody(latest.body, trimmed, allProblems, options.headSha);
+					const updatedBody = updateReviewSummaryBody(latest.body, trimmed, allProblems, channel, options.headSha);
 					result = await patchComment(latest.id, updatedBody);
 				} else {
 					const newBody = buildReviewSummaryCommentBody(trimmed, allProblems, new Set(), channel, options.headSha);
@@ -987,10 +997,12 @@ export function createGithubPullRequestReviewDispatcher(
 
 			if (updateStrategy === "update_existing") {
 				const existingComments = await listManagedReviewComments();
-				const latest = existingComments.length > 0 ? existingComments[existingComments.length - 1] : undefined;
+				const scopedComments = existingComments.filter((comment) => comment.scope === channel);
+				const legacyComments = existingComments.filter((comment) => comment.scope === undefined);
+				const latest = scopedComments.at(-1) ?? legacyComments.at(-1);
 
 				if (latest) {
-					const updatedBody = updateReviewSummaryBody(latest.body, trimmed, allProblems, options.headSha);
+					const updatedBody = updateReviewSummaryBody(latest.body, trimmed, allProblems, channel, options.headSha);
 					result = await patchComment(latest.id, updatedBody);
 				} else {
 					const newBody = buildReviewSummaryCommentBody(trimmed, allProblems, new Set(), channel, options.headSha);

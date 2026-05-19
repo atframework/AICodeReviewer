@@ -549,7 +549,7 @@ export async function translateWebhookToReviewEvent(
     let headSha: string | undefined;
     let baseSha: string | undefined;
     let title = parsed.issue?.title;
-    let url = prInfo.html_url;
+    let url = prInfo.html_url ?? prInfo.url;
     let author = normalizeActor(parsed.comment?.user ?? parsed.sender);
     let branch: string | undefined;
     const prLabels = extractLabelNames(parsed.issue?.labels);

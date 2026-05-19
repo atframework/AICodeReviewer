@@ -48,7 +48,8 @@
 #### 3.1.1 Review 去重与合并
 
 - async 模式下，服务端维护一个内存中的 `ReviewDeduplicator`，对同一 target 的并发 review 进行去重。
-- 去重 key 由 `provider:repoRef:targetKind:branch` 构成；当 branch 不可用时回退到 `headSha`，再回退到 `baseSha`。
+- 去重 key 由 `triggerName:workspaceId:provider:repoRef:targetKind:targetId` 构成，避免同仓库不同 trigger/workspace 互相合并。
+- `targetId` 优先使用 `branch`，其次使用目标 `url`，再回退到 `headSha` / `baseSha`；这保证同一 PR/MR 的多次 `/aicr review` 在新 commit 推送后仍能合并，同时缺少 SHA 的评论命令不会全部落到同一个 `unknown` target。
 - 当同一 target 已有 review 正在运行时，新到达的 review 请求（如 `/aicr review` 评论命令）不会立即创建新 run，而是被记录为 **pending re-review**，覆盖同一 target 的任何先前 pending 请求。
 - 当 running review 完成后（无论成功或失败），deduplicator 自动检查该 target 是否有 pending re-review；如果有，用最新的 `ReviewEvent` 重新触发一次 review。
 - 去重只影响 async 调度层，不影响 review orchestration 本身的业务逻辑；sync 模式不受此机制影响。

@@ -143,6 +143,23 @@ describe("translateWebhookToReviewEvent comment commands", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it("uses the PR API URL as a fallback target identity when html_url is absent", async () => {
+    const result = await translateWebhookToReviewEvent("github", "issue_comment", {
+      action: "created",
+      repository: { full_name: "owent/libatapp" },
+      issue: {
+        number: 50,
+        title: "Fallback Title",
+        pull_request: { url: "https://api.github.com/repos/owent/libatapp/pulls/50" },
+      },
+      comment: { body: "/aicr review" },
+      sender: { login: "owent" },
+    }, baseConfig);
+
+    expect(result).not.toBeNull();
+    expect(result?.url).toBe("https://api.github.com/repos/owent/libatapp/pulls/50");
+  });
+
   it("falls back to payload info when PR detail fetch fails", async () => {
     vi.stubGlobal(
       "fetch",

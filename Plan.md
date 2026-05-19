@@ -68,7 +68,7 @@
 - GitHub / GitLab 共享 webhook 路由支持按已验证 secret/token + repo 标识选择不同 trigger profile，用于隔离不同仓库的 token、webhook secret 与文件过滤规则。
 - async 入口以 `202 + runId` 作为非阻塞语义。
 - P4 trigger 只提交最小 metadata，服务端负责后续拉取和分析。
-- **Review 去重**：async 模式下，同一 target（`provider:repoRef:targetKind:branch`）的并发 review 请求会被合并；running review 完成后自动触发最后一次 pending 的 re-review。
+- **Review 去重**：async 模式下，同一 target（`trigger:workspace:provider:repoRef:targetKind:branch/url/head/base`）的并发 review 请求会被合并；branch 优先，其次用目标 URL，再回退到 head/base revision；running review 完成后自动触发最后一次 pending 的 re-review。
 - 详细合同：`docs/ai/architecture.md` §3.1、§3.1.1。
 
 ### 3.2 VCS adapter 与 scoped fetch

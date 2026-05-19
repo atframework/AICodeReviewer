@@ -29,8 +29,15 @@ export interface ReviewDeduplicator {
 }
 
 function buildDedupKey(reviewEvent: ReviewEvent): string {
-  const targetId = reviewEvent.branch ?? reviewEvent.headSha ?? reviewEvent.baseSha ?? "unknown";
-  return `${reviewEvent.provider}:${reviewEvent.repoRef}:${reviewEvent.targetKind}:${targetId}`;
+  const targetId = reviewEvent.branch ?? reviewEvent.url ?? reviewEvent.headSha ?? reviewEvent.baseSha ?? "unknown";
+  return JSON.stringify([
+    reviewEvent.triggerName,
+    reviewEvent.workspaceId,
+    reviewEvent.provider,
+    reviewEvent.repoRef,
+    reviewEvent.targetKind,
+    targetId,
+  ]);
 }
 
 export function createReviewDeduplicator(): ReviewDeduplicator {

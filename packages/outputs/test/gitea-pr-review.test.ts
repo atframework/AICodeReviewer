@@ -701,4 +701,113 @@ describe("createGiteaPullRequestReviewDispatcher (update_existing)", () => {
     expect(body.body).toContain("Open Issues");
     expect(body.body).toContain("Resolved");
   });
+
+  it("parses previous fingerprints with spaces in managed summary markers", async () => {
+    const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
+    const existingBody = [
+      "<!-- aicr:managed=pr-review -->",
+      "<!-- aicr:scope=gitea_pr_review -->",
+      "<!-- aicr:problems=fp-keep, fp-resolve -->",
+      "",
+      "## AI Code Review",
+    ].join("\n");
+
+    const dispatcher = createGiteaPullRequestReviewDispatcher({
+      baseUrl: "https://gitea.example",
+      owner: "owent",
+      repo: "example",
+      pullNumber: 10,
+      reviewUpdateStrategy: "update_existing",
+      fetch: async (url, init) => {
+        calls.push({ url, init });
+        if (!init?.method || init.method === "GET") {
+          return response([{ id: 61, body: existingBody }]);
+        }
+        return response({ id: 61 });
+      },
+    });
+
+    await dispatcher.publishSummary!("Updated", [{
+      file: "src/keep.ts",
+      line: 10,
+      severity: "high",
+      category: "bug",
+      message: "Keep this",
+      fingerprint: "fp-keep",
+    }]);
+
+    const patchCall = calls.find((c) => c.init?.method === "PATCH");
+    const body = JSON.parse(patchCall?.init?.body ?? "{}");
+    expect(body.body).toContain("<!-- aicr:problems=fp-keep -->");
+    expect(body.body).toContain("Resolved (1)");
+    expect(body.body).toContain("fp-resolve");
+  });
+
+  it("does not update a managed summary comment from another channel scope", async () => {
+    const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
+    const existingBody = [
+      "<!-- aicr:managed=pr-review -->",
+      "<!-- aicr:scope=gitea-pr-primary -->",
+      "<!-- aicr:problems=fp-primary -->",
+      "",
+      "## AI Code Review",
+    ].join("\n");
+
+    const dispatcher = createGiteaPullRequestReviewDispatcher({
+      baseUrl: "https://gitea.example",
+      owner: "owent",
+      repo: "example",
+      pullNumber: 10,
+      channelName: "gitea-pr-secondary",
+      reviewUpdateStrategy: "update_existing",
+      fetch: async (url, init) => {
+        calls.push({ url, init });
+        if (!init?.method || init.method === "GET") {
+          return response([{ id: 62, body: existingBody }]);
+        }
+        return response({ id: 100 });
+      },
+    });
+
+    await dispatcher.publishSummary!("Secondary summary", []);
+
+    expect(calls.some((c) => c.init?.method === "PATCH")).toBe(false);
+    const postCall = calls.find((c) => c.init?.method === "POST");
+    expect(postCall).toBeDefined();
+    const body = JSON.parse(postCall?.init?.body ?? "{}");
+    expect(body.body).toContain("<!-- aicr:scope=gitea-pr-secondary -->");
+  });
+
+  it("migrates legacy unscoped managed summary comments to the current channel scope", async () => {
+    const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
+    const existingBody = [
+      "<!-- aicr:managed=pr-review -->",
+      "<!-- aicr:problems=fp-legacy -->",
+      "",
+      "## AI Code Review",
+    ].join("\n");
+
+    const dispatcher = createGiteaPullRequestReviewDispatcher({
+      baseUrl: "https://gitea.example",
+      owner: "owent",
+      repo: "example",
+      pullNumber: 10,
+      channelName: "gitea-pr-custom",
+      reviewUpdateStrategy: "update_existing",
+      fetch: async (url, init) => {
+        calls.push({ url, init });
+        if (!init?.method || init.method === "GET") {
+          return response([{ id: 63, body: existingBody }]);
+        }
+        return response({ id: 63 });
+      },
+    });
+
+    await dispatcher.publishSummary!("Migrated summary", []);
+
+    const patchCall = calls.find((c) => c.init?.method === "PATCH");
+    expect(patchCall).toBeDefined();
+    const body = JSON.parse(patchCall?.init?.body ?? "{}");
+    expect(body.body).toContain("<!-- aicr:scope=gitea-pr-custom -->");
+  });
 });

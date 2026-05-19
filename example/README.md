@@ -100,6 +100,36 @@ After the server is running, add a webhook to your Gitea repository:
 
 ---
 
+## Manual Re-review Comment Commands
+
+On supported PR/MR comment events, users can request a fresh review without
+changing the branch:
+
+- `/aicr review`
+- `/review`
+
+The server translates those comments into normal `ReviewEvent` objects. In async
+mode, repeated commands for the same target are coalesced: the current review
+finishes first, then AICR runs one final re-review using the latest event.
+
+For GitHub PR comments, configure a trigger `token_env` so AICR can fetch PR
+head/base SHA and branch details. If that fetch is unavailable, AICR still uses
+the PR URL from the comment payload as the deduplication identity instead of
+collapsing unrelated PRs into an `unknown` target.
+
+## PR/MR Summary Update Strategy
+
+`gitea_pr_review` and `github_pr_review` default to
+`review_update_strategy: update_existing`. AICR manages one scoped summary
+comment per channel, identified by hidden `aicr:managed`, `aicr:scope`, and
+`aicr:problems` markers. Later runs update the same comment, keep still-open
+issues visible, and move disappeared fingerprints into a Resolved section.
+
+Set `review_update_strategy: always_new` on a PR review channel if you prefer a
+new summary comment for every run.
+
+---
+
 ## Authentication & Secret Configuration
 
 AICodeReviewer supports **three layers** of authentication:
