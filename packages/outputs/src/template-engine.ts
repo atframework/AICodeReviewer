@@ -464,14 +464,14 @@ const BUILTIN_FEISHU_SUMMARY_TEMPLATE = `{{#if summaryTitle}}## {{summaryTitle}}
 {{/if}}
 
 ## Summary
-{{#if summary}}
+{{#if summary~}}
 {{{summary}}}
-{{else}}
-{{#if problems}}
+{{~else}}
+{{#if problems~}}
 Review completed: {{problems.length}} issue(s) found.{{#each problems}} [{{severity}}]{{/each}}
-{{else}}
+{{~else}}
 No summary provided.
-{{/if}}
+{{~/if}}
 {{/if}}
 `;
 
@@ -507,14 +507,14 @@ const BUILTIN_WECOM_SUMMARY_TEMPLATE = `{{#if summaryTitle}}## {{summaryTitle}}{
 {{/if}}
 
 ## Summary
-{{#if summary}}
+{{#if summary~}}
 {{{summary}}}
-{{else}}
-{{#if problems}}
+{{~else}}
+{{#if problems~}}
 Review completed: {{problems.length}} issue(s) found.{{#each problems}} [{{severity}}]{{/each}}
-{{else}}
+{{~else}}
 No summary provided.
-{{/if}}
+{{~/if}}
 {{/if}}
 `;
 

@@ -1,8 +1,10 @@
 # AICR 操作备忘与任务提示
 
-> 本文件是面向本仓库维护者的**任务与部署备忘**，不是仓库全局常驻指令。
-> AI agent 开始工作时仍应优先遵守 `AGENTS.md`，并按任务类型读取相关 `.agents/skills/*/SKILL.md`。
-> 要求所有操作深度调研后制定方案，不要猜测，按需更新文档、skill、example和Plan.md，保持最佳实践。
+本文件是面向本仓库维护者的**任务与部署备忘**，不是仓库全局常驻指令。
+
+AI agent 开始工作时仍应优先遵守 `AGENTS.md`，并按任务类型读取相关 `.agents/skills/*/SKILL.md`。
+
+**要求所有的任务都要深度调研后制定方案，不要瞎猜，按需更新文档、AI agent提示词、skill、example和Plan.md，保持最佳实践。**
 
 ## 1. 使用原则
 
@@ -157,7 +159,8 @@ curl -sf https://aicr.m-oa.com:6023/healthz
 - SSH 用户：`tools`
 - SSH 端口：`36000`
 - SSH key：`D:/workspace/keys/id_ed25519.it`
-- 部署目录：`/data/disk2/AICodeReviewer`
+- **生产部署目录**：`/data/disk2/AICodeReviewer`
+- **测试验收目录**：`/data/disk2/AICodeReviewerTest`（与生产完全隔离）
 - 容器引擎：Podman
 - 反向代理：`https://aicr.m-oa.com:6023` → `http://10.64.8.2:8090`
 
@@ -176,7 +179,86 @@ ssh -p 36000 -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no \
   -o User=tools -i D:/workspace/keys/id_ed25519.it 10.64.8.2
 ```
 
-## 8. 生产配置目标
+## 8. 测试验收环境（与生产隔离）
+
+### 8.1 隔离原则
+
+- 测试目录 `/data/disk2/AICodeReviewerTest` 与生产目录 `/data/disk2/AICodeReviewer` **完全隔离**。
+- 不得共享：容器镜像（使用不同 tag）、容器名（`aicr-test` vs `aicr`）、端口（`8091` vs `8090`）、数据卷、网络配置。
+- 测试环境用于：新功能验证、回归测试、破坏性配置实验、跨平台兼容性验证。
+- 生产环境仅用于：已验收版本的稳定运行。
+
+### 8.2 远程测试环境信息
+
+| 项目 | 测试环境 | 生产环境 |
+|------|---------|---------|
+| 部署目录 | `/data/disk2/AICodeReviewerTest` | `/data/disk2/AICodeReviewer` |
+| 容器名 | `aicr-test` | `aicr` |
+| 本机端口 | `8091` | `8090` |
+| 反向代理 | （暂无，直接访问或临时配置） | `https://aicr.m-oa.com:6023` |
+| 健康检查 | `http://10.64.8.2:8091/healthz` | `http://10.64.8.2:8090/healthz` |
+| 数据卷 | `aicr-test-data`, `aicr-test-workspaces`, `aicr-test-logs` | `aicr-data`, `aicr-workspaces`, `aicr-logs` |
+
+### 8.3 测试环境部署步骤
+
+```bash
+# 1. 在远程创建测试目录结构
+ssh -p 36000 -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no \
+  -o User=tools -i D:/workspace/keys/id_ed25519.it 10.64.8.2 \
+  "mkdir -p /data/disk2/AICodeReviewerTest/{source,deploy,data,workspaces,logs}"
+
+# 2. 同步源码到测试目录（使用独立 tarball，不污染生产 source/）
+#    在本地 PowerShell 执行：
+#    tar czf build/aicr-test-deploy.tar.gz --exclude=.git --exclude=node_modules --exclude=dist --exclude=coverage .
+#    scp -P 36000 ... build/aicr-test-deploy.tar.gz tools@10.64.8.2:/data/disk2/AICodeReviewerTest/
+#    ssh -p 36000 ... 10.64.8.2 "cd /data/disk2/AICodeReviewerTest && rm -rf source/* && mkdir -p source && tar xzf aicr-test-deploy.tar.gz -C source && rm -f aicr-test-deploy.tar.gz"
+
+# 3. 复制独立的测试 config.yaml 和 .env 到测试目录
+#    注意：测试环境的 secret 可以从同一 secret.json 提取，但 config.yaml 必须独立维护
+
+# 4. 在测试目录运行独立的 deploy.sh（需确保脚本支持 TEST_DIR 覆盖）
+#    或手动构建和启动：
+#    cd /data/disk2/AICodeReviewerTest/source
+#    podman build -t aicr:test -f deploy/Dockerfile .
+#    podman rm -f aicr-test 2>/dev/null || true
+#    podman run -d --name aicr-test -p 8091:8080 \
+#      --env-file /data/disk2/AICodeReviewerTest/.env \
+#      -v /data/disk2/AICodeReviewerTest/config.yaml:/app/config.yaml:ro \
+#      -v aicr-test-data:/app/data \
+#      -v aicr-test-workspaces:/app/workspaces \
+#      -v aicr-test-logs:/app/logs \
+#      aicr:test
+
+# 5. 验证测试环境健康检查
+#    ssh -p 36000 ... 10.64.8.2 "curl -sf http://127.0.0.1:8091/healthz"
+```
+
+### 8.4 测试环境配置差异
+
+测试 `config.yaml` 与生产的差异要点：
+
+- `agent.default` 保持 `kilo`（验收主路径）。
+- LLM 模型可降级到成本更低的模型做快速验证。
+- 输出通道应指向测试仓库 / 测试 IM 机器人，避免污染生产通知。
+- `server.auth.api_key_env` 可使用与生产不同的 key，防止测试触发误调用生产 webhook。
+- workspace 实例只配置测试仓库，不要包含生产仓库。
+
+### 8.5 容器接入与跨平台验证
+
+- 如需进入测试容器排查：
+  ```bash
+  ssh -p 36000 ... 10.64.8.2 "podman exec -it aicr-test /bin/sh"
+  ```
+- 如需查看测试容器日志：
+  ```bash
+  ssh -p 36000 ... 10.64.8.2 "podman logs --tail 100 -f aicr-test"
+  ```
+- 如需在测试容器内手动触发 review：
+  ```bash
+  ssh -p 36000 ... 10.64.8.2 "podman exec aicr-test node packages/cli/dist/index.js review --config /app/config.yaml --repo 'test-org/test-repo' --dry-run"
+  ```
+
+## 10. 生产配置目标
 
 - 测试环境公共系统提示词应包含“使用简体中文回答最终分析报告”。
 - AICR 需要支持 PR/MR，也需要支持新 commit 自动触发分析。
@@ -185,7 +267,7 @@ ssh -p 36000 -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no \
   - 自动创建的 issue / PR / MR 需通过可配置标题前缀、tag 或标签标识来源。
   - 后续提交修复问题、代码位置无效或问题过期时，应支持自动关闭或删除旧 issue。
 
-## 9. 已配置 review 目标
+## 10. 已配置 review 目标
 
 - Gitea：`https://git.m-oa.com:6023/ProjectY/server`
 - Gitea：`https://git.m-oa.com:6023/ProjectY/pipeline`
@@ -196,7 +278,47 @@ ssh -p 36000 -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no \
 - GitHub：`https://github.com/atframework/atsf4g-co`
 - GitHub：`https://github.com/owent/libatapp`
 
-## 10. 命令执行守则
+## 11. Podman 故障排查
+
+### 11.1 `invalid internal status` — rootless Podman 存储驱动初始化失败
+
+**现象：**
+```bash
+$ podman ps
+ERRO[0000] invalid internal status, try resetting the pause process with "podman system migrate": could not find any running process: no such process
+```
+
+**根因（深度调研结果）：**
+- 系统 `/etc/containers/storage.conf` 配置了自定义存储路径（`graphroot=/data/disk2/docker-image`、`runroot=/data/disk2/docker-container`、`rootless_storage_path=/data/disk2/docker-storage/$USER`）。
+- Podman 5.x 在 rootless 模式下，存储驱动自动检测与自定义路径配置存在兼容性问题。
+- 错误消息 `"could not find any running process"` 具有误导性；真正原因是**存储层初始化失败**，而非 pause 进程缺失。
+- `podman system migrate` 在默认模式下可能因 nil pointer 崩溃，因为它尝试引用已损坏的 `storageService`。
+
+**修复步骤（已验证）：**
+
+```bash
+# 1. 强制指定 overlay 驱动，绕过损坏的自动检测
+podman --storage-driver=overlay system migrate
+
+# 2. 重新启动被 migrate 停止的容器
+podman start aicr caddy
+
+# 3. 验证本地和反向代理健康检查
+curl -sf http://127.0.0.1:8090/healthz
+curl -sf https://aicr.m-oa.com:6023/healthz
+```
+
+**预防措施：**
+- `deploy.sh` 中所有 `podman build` / `podman run` / `podman rm` 命令必须显式加 `--storage-driver=overlay`。
+- 部署脚本开头加入 pre-flight 检查：
+  ```bash
+  if ! podman ps >/dev/null 2>&1; then
+    podman --storage-driver=overlay system migrate
+  fi
+  ```
+- 考虑将 AICR 容器注册为 systemd user service（`podman generate systemd`），避免依赖手动 `podman start`。
+
+## 12. 命令执行守则
 
 - 命令必须设置合理超时，避免流程卡死。
 - 如果命令长时间无输出或超时，先尝试清理卡住进程，再重试或换方案。
