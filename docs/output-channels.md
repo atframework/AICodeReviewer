@@ -121,6 +121,38 @@ If a run has problems but records `skipReason="no_output_publisher"`, no summary
 | `feishu_bot` | Collected for aggregation | Interactive card Markdown | Renders sectioned `Review target` / `Summary` / `Problems` blocks. Each problem includes severity, category, `Location: file:line`, and truncated message/suggestion; built-in summaries render `@username (Display Name)` when both are available |
 | `wecom_bot` | Collected for aggregation | Markdown message | Same sectioned content as Feishu; messages are truncated to 500 chars and suggestions to 300 chars to stay within size limits; built-in summaries render `@username (Display Name)` when both are available |
 
+## PR/MR review summary update mode
+
+PR/MR review channels (`gitea_pr_review` and `github_pr_review`) support
+`review_update_strategy`:
+
+- `update_existing` (default): AICR looks for an existing managed PR summary
+  comment and updates it through the issue-comment API (`PATCH`). It creates a
+  new managed comment only when no same-scope comment exists.
+- `always_new`: AICR preserves the original behavior and creates a new
+  review/comment for each summary publish.
+
+Managed summary comments always include these hidden markers:
+
+- `<!-- aicr:managed=pr-review -->` identifies comments owned by AICR.
+- `<!-- aicr:scope=<channel-name> -->` prevents multiple PR review channels on
+  the same PR from overwriting each other.
+- `<!-- aicr:problems=fp1,fp2 -->` tracks the current problem fingerprints.
+
+When updating a managed comment, AICR renders current problems as open issues,
+keeps previously open fingerprints as still-open when they remain, and lists
+missing fingerprints in a Resolved section. The fingerprint parser tolerates
+legacy marker formatting with whitespace such as `fp1, fp2`.
+
+Comment commands can trigger a manual re-review on PR/MR threads:
+
+- `/aicr review`
+- `/review`
+
+In async mode, concurrent requests for the same target are deduplicated. If a
+review is already running, the latest matching comment command becomes a single
+pending re-review and runs after the current review completes.
+
 ## Managed problem issue fetch limit
 
 Managed issue lifecycle reconciliation is intentionally bounded. Before closing or deleting stale managed issues, AICR lists only the most recent open issues up to the effective `review.problem_issue.max_recent_issues` value:

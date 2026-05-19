@@ -122,6 +122,60 @@ describe("createReviewDeduplicator", () => {
     expect(dedup.isRunning(event2)).toBe(true);
   });
 
+  it("prioritizes branch over changing URLs and SHAs", () => {
+    const dedup = createReviewDeduplicator();
+    const event1 = makeReviewEvent({
+      branch: "feature-a",
+      url: "https://github.example/owner/repo/pull/1",
+      headSha: "head-1",
+    });
+    const event2 = makeReviewEvent({
+      branch: "feature-a",
+      url: "https://github.example/owner/repo/pull/1#discussion_r2",
+      headSha: "head-2",
+    });
+
+    expect(dedup.trySchedule(event1)).toBe(true);
+    expect(dedup.trySchedule(event2)).toBe(false);
+  });
+
+  it("uses URL as a fallback identity before SHA for comment-triggered reviews", () => {
+    const dedup = createReviewDeduplicator();
+    const event1 = makeReviewEvent({
+      reason: "github:comment_review",
+      url: "https://api.github.com/repos/owner/repo/pulls/1",
+    });
+    const event2 = makeReviewEvent({
+      reason: "github:comment_review",
+      url: "https://api.github.com/repos/owner/repo/pulls/2",
+    });
+    const event3 = makeReviewEvent({
+      reason: "github:comment_review",
+      url: "https://api.github.com/repos/owner/repo/pulls/1",
+    });
+
+    expect(dedup.trySchedule(event1)).toBe(true);
+    expect(dedup.trySchedule(event2)).toBe(true);
+    expect(dedup.trySchedule(event3)).toBe(false);
+  });
+
+  it("isolates same repo and branch across triggers and workspaces", () => {
+    const dedup = createReviewDeduplicator();
+    const event1 = makeReviewEvent({
+      triggerName: "github-core",
+      workspaceId: "core-workspace",
+      branch: "feature-a",
+    });
+    const event2 = makeReviewEvent({
+      triggerName: "github-partner",
+      workspaceId: "partner-workspace",
+      branch: "feature-a",
+    });
+
+    expect(dedup.trySchedule(event1)).toBe(true);
+    expect(dedup.trySchedule(event2)).toBe(true);
+  });
+
   it("treats different repoRefs as different targets", () => {
     const dedup = createReviewDeduplicator();
     const event1 = makeReviewEvent({ repoRef: "owner/repo-a", headSha: "abc" });

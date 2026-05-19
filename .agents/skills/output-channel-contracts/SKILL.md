@@ -14,6 +14,7 @@ Use this skill when work touches how AICR decides whether, where, and how review
 - `no_problems` / LGTM / empty-summary publishing policy.
 - Built-in and workspace override templates.
 - Review target labels and links for PR, MR, commit, P4 changelist, SVN revision, scheduled, and manual runs.
+- PR/MR review summary update modes, managed comment markers, and channel-scope filtering.
 - Author mention rendering and safe channel-specific formatting.
 
 Do not use this skill for LLM prompt layering, agent runtime materialization, or VCS scoped-fetch implementation unless those changes directly affect output rendering.
@@ -43,6 +44,7 @@ Do not use this skill for LLM prompt layering, agent runtime materialization, or
 
 4. **Keep docs, examples, and tests aligned**
    - If config shape changes, update the relevant `Plan.md` roadmap summary, `../../../docs/ai/architecture.md`, `docs/output-channels.md`, `example/config.yaml`, and config schema tests together.
+   - If PR/MR review summary update behavior changes, test `update_existing` marker parsing (`aicr:managed`, `aicr:scope`, `aicr:problems`), same-scope PATCH behavior, cross-scope non-overwrite behavior, and whitespace-tolerant fingerprint parsing.
    - Add template tests for PR/MR and non-PR targets whenever built-in templates change.
    - Add routing tests for mixed channels where one suppresses no-problems output and another publishes it.
 

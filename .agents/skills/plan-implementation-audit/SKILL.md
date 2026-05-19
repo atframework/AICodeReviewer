@@ -64,6 +64,8 @@ For each in-progress milestone, check:
 
 Before declaring a change complete, verify documentation alignment:
 
+- **Start from the actual changed files** → Inspect `git diff --name-only`, `git show --name-only`, or the task's explicit file list. Map each changed source/config/test file to its public contract surfaces before deciding docs are unnecessary.
+
 1. **Config shape changes** → Update `Plan.md` §3.10 summary, `docs/ai/architecture.md` §3.10, `packages/core/test/config.test.ts`, and `example/config.yaml`.
 2. **Store schema changes** → Update `Plan.md` §3.11 summary, `docs/ai/architecture.md` §3.11, and `packages/store/test/schema.test.ts`.
 3. **Agent adapter / MCP tool contract changes** → Update `docs/ai/architecture.md` §3.6–3.7, `docs/output-channels.md`, and relevant skill files.
@@ -71,7 +73,7 @@ Before declaring a change complete, verify documentation alignment:
 5. **Review orchestration semantics changes** (deduplication, update strategy, comment commands) → Update `docs/ai/architecture.md` §3.1/§3.9, `Plan.md` §3.1/§3.9, and example docs.
 6. **Deployment or public workflow changes** → Update `example/README.md`, `docs/podman.md`, and `Plan.md` §11.
 
-If a change genuinely requires no doc update, explicitly state the reason in the change summary. Do not skip this check silently.
+For each matched category, verify both user-facing docs and example config snippets. If a change genuinely requires no doc update, explicitly state the reason in the change summary. Do not skip this check silently.
 
 ### Step 6: Fix and test
 
@@ -80,9 +82,9 @@ If a change genuinely requires no doc update, explicitly state the reason in the
 - Always run the full verification chain after changes.
 - Update `AGENTS.md` "Known codebase pitfalls" if a new recurring issue is found.
 
-### Step 6: Summarize
+### Step 7: Summarize
 
-Provide a table of: issue found, file location, fix applied, and test added.
+Provide a table of: issue found, file location, fix applied, test added, and docs/examples updated or why no docs/examples were needed.
 
 ## Common test gaps to check
 

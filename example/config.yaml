@@ -318,6 +318,7 @@ outputs:
     #   trigger: github
     #   mention_author: true
     #   no_problems: { action: suppress }
+    #   review_update_strategy: update_existing  # always_new | update_existing (default)
 
     # GitHub managed problem issues — create/close issues per problem fingerprint.
     # GitHub does not support deleting issues; resolved_action can only be close or none.
