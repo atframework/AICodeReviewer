@@ -78,7 +78,7 @@ Keep patches concise. Large rewrites belong in a summary or a linked follow-up, 
 
 For push/commit/P4 events, publish a non-empty summary when configured channels need an audit trail. The `no_problems` policy decides per channel whether a zero-problem result is published or suppressed.
 
-For agent-CLI reviews, free-form stdout is not treated as the final report. If stdout does not contain a parseable AICR JSON/XML tool payload, the orchestrator asks the agent for a bounded structured repair pass. This prevents interim reasoning such as “let me fetch more context” from leaking into IM cards and ensures problem locations come from `aicr.report_problem` records rather than prose summaries.
+For agent-CLI reviews, free-form stdout is not treated as the final report. If stdout does not contain a parseable AICR JSON/XML tool payload, the orchestrator asks the agent for a bounded structured repair pass. This prevents interim reasoning such as “let me fetch more context” from leaking into IM cards and ensures problem locations come from `aicr.report_problem` records rather than prose summaries. If the repair output is still prose but clearly says there are no actionable problems or no reviewable code, AICR records a skip (`lgtm` or `no_reviewable_code`) instead of publishing a fallback error summary; otherwise it falls back to direct LLM repair before generating the generic fallback summary.
 
 Likewise, a summary that says issues were found is not a machine-readable finding. When a run has `problemCount=0` but the summary text claims actionable problems, AICR treats the summary as provisional and asks for a structured repair. If the repair still does not produce `aicr.report_problem` records, AICR replaces the claim with a fallback summary instead of publishing or suppressing misleading issue prose without locations. Skip reasons or summaries that ask a human to provide diff/source context are also repaired: AICR prompts the agent to request concrete files through `aicr.fetch_more_context`, then feeds the fetched content back for a final structured result.
 
@@ -357,6 +357,8 @@ workspaces:
 
 If every configured summary channel suppresses a zero-problem result, the run is marked skipped with `skipReason="no_problems_suppressed"` in the run summary.
 
+When an agent repair attempt only returns prose equivalent to “no actionable problems” or “no reviewable code”, AICR normalizes it to `skipReason="lgtm"` or `skipReason="no_reviewable_code"`. This keeps IM channels quiet even when their `no_problems` policy would publish a non-empty zero-problem summary.
+
 ## Template rendering
 
 Built-in templates are packaged in `packages/outputs/src/template-engine.ts`. They are intentionally small and cover problem-comment and summary variants for every built-in channel kind.
@@ -426,7 +428,7 @@ The base system prompt in `prompts/system/code-reviewer.system.md` must keep the
 
 - Report actionable issues through `aicr.report_problem`.
 - Publish final summaries through `aicr.publish_summary`.
-- Use `aicr.skip` only when no actionable result should be dispatched.
+- Use `aicr.skip` when no actionable result should be dispatched, including empty/no-reviewable-code changes.
 - Use `aicr.fetch_more_context` only for bounded, justified gaps.
 - Do not treat stdout as the final review channel.
 
