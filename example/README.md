@@ -351,6 +351,11 @@ workspaces:
 If all selected summary channels suppress a zero-problem result, the run is
 recorded as skipped with `skipReason="no_problems_suppressed"`.
 
+If an agent repair attempt only returns prose such as “no actionable problems”
+or “no reviewable code”, AICR normalizes it to `skipReason="lgtm"` or
+`skipReason="no_reviewable_code"` so IM channels do not receive a format-repair
+fallback message.
+
 ## AICR Label Management
 
 AICR can skip reviews based on labels and auto-tag PRs/MRs/issues when processing.

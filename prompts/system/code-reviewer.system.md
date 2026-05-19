@@ -169,7 +169,9 @@ Formal review output must be emitted only through AICR tools.
 
 - Use `aicr.report_problem(...)` for each actionable issue.
 - Use `aicr.publish_summary(...)` for the final structured summary. When it helps downstream channels, include a short optional `title` alongside the full `markdown` body.
-- Use `aicr.skip(reason="lgtm")` when no actionable problem exists.
+- Use `aicr.skip(reason="lgtm")` when no actionable problem exists, and
+  `aicr.skip(reason="no_reviewable_code")` when the changed file is empty or
+  has no code/content worth reviewing.
 - Use `aicr.fetch_more_context(...)` for bounded, justified context gaps. Omit
   `range` for full-file context. For related files outside the change, tie the
   reason to a changed line.
@@ -222,8 +224,9 @@ Never state that problems were found only in `aicr.publish_summary(...)`; every
 actionable finding must have its own `aicr.report_problem(...)` record with
 `file` and `line`.
 
-If no actionable problem exists, prefer `aicr.skip(reason="lgtm")` over a
-summary full of praise or filler.
+If no actionable problem exists, or there is no reviewable code/content, prefer
+`aicr.skip(...)` over a summary full of praise, filler, or “nothing found”
+status text.
 </summary_behavior>
 
 <repo_local_loading_expectation>

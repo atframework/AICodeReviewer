@@ -488,6 +488,232 @@ describe("runReviewOrchestration", () => {
       await rm(tempDir, { recursive: true, force: true });
     }
   });
+
+  it("skips when agent repair prose says the changed file has no reviewable code", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-agent-no-reviewable-code-"));
+
+    try {
+      await writeWorkspaceFile(tempDir, "W_PrxCraftCostEntry.lua", "");
+      const spawnCalls: SandboxSpawnOptions[] = [];
+      let spawnCount = 0;
+      const sandbox: SandboxBackend = {
+        kind: "native",
+        async materializeFs(layout) {
+          await mkdir(layout.agentDir, { recursive: true });
+          await mkdir(layout.tmpDir, { recursive: true });
+          return { agentDir: layout.agentDir, tmpDir: layout.tmpDir, mountSpecs: [] };
+        },
+        async spawn(spawnOptions) {
+          spawnCalls.push(spawnOptions);
+          spawnCount += 1;
+          return {
+            exitCode: 0,
+            stdout: spawnCount === 1
+              ? "审查完成，稍后输出结构化结果。"
+              : "审查完成。文件 `W_PrxCraftCostEntry.lua` 内容为空，无代码可审查，未发现可操作的问题。",
+            stderr: "",
+            timedOut: false,
+            durationMs: 10,
+          };
+        },
+        async teardown() {},
+      };
+      const agentAdapter: AgentAdapter = {
+        kind: "kilo",
+        async detect() {
+          return { available: true, binary: "kilo" };
+        },
+        buildCommand() {
+          return ["kilo", "run", "--auto"];
+        },
+        async materializeConfig(_model, workingDir) {
+          return { configFiles: new Map(), envVars: {}, workingDir };
+        },
+      };
+      const llm: ChatCompletionClient = {
+        async complete() {
+          throw new Error("direct LLM fallback should not be needed for no-reviewable-code output");
+        },
+      };
+      const summaryCalls: string[] = [];
+
+      const result = await runReviewOrchestration(
+        {
+          reviewEvent: createReviewEvent({
+            triggerName: "p4-main",
+            provider: "p4",
+            workspaceId: "p4-main",
+            targetKind: "commit",
+            repoRef: "//Prx/Prx_Main",
+            headSha: "6576",
+            changedFiles: ["W_PrxCraftCostEntry.lua"],
+            author: { username: "p4-program" },
+            reason: "p4:change-commit",
+            rawEventName: "change-commit",
+          }),
+          payload: {},
+          provider: "p4",
+          eventName: "change-commit",
+        },
+        {
+          baseSystemPrompt: "<task>\n{{TASK_CONTEXT}}\n</task>",
+          sourceRootResolver: () => tempDir,
+          vcs: {
+            ...createVcs(tempDir),
+            async listChanges(): Promise<ChangeRange> {
+              return { headRevision: "6576", files: ["W_PrxCraftCostEntry.lua"] };
+            },
+          },
+          llm,
+          model,
+          sandbox,
+          agentAdapter,
+          outputPublisher: {
+            publishesProblems: false,
+            noProblemsAction: "publish_if_summary",
+            async publishProblem() {
+              throw new Error("no-reviewable-code output should not dispatch line problems");
+            },
+            async publishSummary(summary) {
+              summaryCalls.push(summary);
+              return { channel: "feishu", status: "published", raw: {} };
+            },
+          },
+        },
+      );
+
+      expect(result.status).toBe("skipped");
+      expect(result.skipReason).toBe("no_reviewable_code");
+      expect(result.problemCount).toBe(0);
+      expect(result.summaryCount).toBe(0);
+      expect(result.dispatchCount).toBe(0);
+      expect(spawnCalls).toHaveLength(2);
+      expect(summaryCalls).toEqual([]);
+      expect(result.outputState.summaries).toEqual([]);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("falls back to direct LLM when agent repair remains unstructured", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-agent-direct-llm-fallback-"));
+
+    try {
+      await writeWorkspaceFile(tempDir, "src/app.ts", "const value = oldValue();\ncommitBeforeReturn();\n");
+      const spawnCalls: SandboxSpawnOptions[] = [];
+      let spawnCount = 0;
+      const sandbox: SandboxBackend = {
+        kind: "native",
+        async materializeFs(layout) {
+          await mkdir(layout.agentDir, { recursive: true });
+          await mkdir(layout.tmpDir, { recursive: true });
+          return { agentDir: layout.agentDir, tmpDir: layout.tmpDir, mountSpecs: [] };
+        },
+        async spawn(spawnOptions) {
+          spawnCalls.push(spawnOptions);
+          spawnCount += 1;
+          return {
+            exitCode: 0,
+            stdout: spawnCount === 1
+              ? "Found a critical issue: the success path can return before committing state."
+              : "I still found a critical issue, but I am not emitting JSON.",
+            stderr: "",
+            timedOut: false,
+            durationMs: 11,
+          };
+        },
+        async teardown() {},
+      };
+      const agentAdapter: AgentAdapter = {
+        kind: "kilo",
+        async detect() {
+          return { available: true, binary: "kilo" };
+        },
+        buildCommand() {
+          return ["kilo", "run", "--auto"];
+        },
+        async materializeConfig(_model, workingDir) {
+          return { configFiles: new Map(), envVars: {}, workingDir };
+        },
+      };
+      let llmCalls = 0;
+      const llm: ChatCompletionClient = {
+        async complete(input) {
+          llmCalls += 1;
+          expect(input.messages[1]?.content).toContain("not emitting JSON");
+          expect(input.messages[2]?.content).toContain("previous stdout was free-form text");
+          return {
+            providerId: input.model.providerId,
+            modelId: input.model.modelId,
+            content: JSON.stringify({
+              toolCalls: [
+                {
+                  name: "aicr.report_problem",
+                  input: {
+                    file: "src/app.ts",
+                    line: 2,
+                    severity: "critical",
+                    category: "correctness",
+                    message: "成功路径在状态提交前返回，调用方收到成功后可能观察到未提交状态。",
+                  },
+                },
+                {
+                  name: "aicr.publish_summary",
+                  input: { markdown: "Direct LLM structured repair completed. Found 1 critical issue." },
+                },
+              ],
+            }),
+            raw: {},
+          };
+        },
+      };
+      const summaryCalls: { summary: string; problems: readonly ReviewProblem[] }[] = [];
+
+      const result = await runReviewOrchestration(
+        {
+          reviewEvent: createReviewEventFixture(),
+          payload: {},
+          provider: "gitea",
+          eventName: "pull_request",
+        },
+        {
+          baseSystemPrompt: "<task>\n{{TASK_CONTEXT}}\n</task>",
+          sourceRootResolver: () => tempDir,
+          vcs: createVcs(tempDir),
+          llm,
+          model,
+          sandbox,
+          agentAdapter,
+          outputPublisher: {
+            publishesProblems: false,
+            async publishProblem() {
+              throw new Error("summary-only publisher should not receive line problems");
+            },
+            async publishSummary(summary, problems) {
+              summaryCalls.push({ summary, problems: problems ?? [] });
+              return { channel: "feishu", status: "published", raw: {} };
+            },
+          },
+        },
+      );
+
+      expect(result.status).toBe("published");
+      expect(result.problemCount).toBe(1);
+      expect(result.summaryCount).toBe(1);
+      expect(result.dispatchCount).toBe(1);
+      expect(result.agentResult?.stdout).toContain("not emitting JSON");
+      expect(spawnCalls).toHaveLength(2);
+      expect(llmCalls).toBe(1);
+      expect(summaryCalls[0]?.summary).toBe("Direct LLM structured repair completed. Found 1 critical issue.");
+      expect(summaryCalls[0]?.problems[0]).toMatchObject({
+        file: "src/app.ts",
+        line: 2,
+        severity: "critical",
+      });
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("formatParsedDiffForPrompt", () => {

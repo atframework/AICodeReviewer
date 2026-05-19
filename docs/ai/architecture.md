@@ -194,6 +194,7 @@
 - problem 合同保持最小稳定字段；`message` 讲问题与影响，`suggestion` 给修复建议。
 - 模板渲染与最终发布由输出层统一控制，而不是让 agent 直写各平台方言。
 - Agent CLI 的自由文本 stdout 不是正式审查结果；无法解析出 AICR tool payload 时先触发结构化修复重试，避免中间思考泄露到 IM 通知。
+- 如果 Agent 结构化修复后的自由文本明确表示“无问题 / 无可审查代码”，orchestrator 会归一为 `aicr.skip`，避免把格式修复失败的 fallback 文案发布到 IM；若仍无法解析且不属于无问题语义，则改走直连 LLM 修复兜底。
 - Summary 中声称“发现问题”但没有 `aicr.report_problem` 记录时，也视为未满足输出合同并触发结构化修复，避免 `problemCount=0` 的问题被 `no_problems` 策略静默压掉。
 - Skip reason 或 summary 要求人类补 diff/source context 时，orchestrator 也会修复为 `aicr.fetch_more_context` 流程，并在拿到上下文后要求最终结构化输出。
 - `aicr.fetch_more_context` 可用于缺失/过窄 diff 下的完整变更文件，以及为验证变更行所必需的窄范围相关文件；problem 仍必须锚定到本次变更的文件与行。

@@ -131,6 +131,7 @@
   - `aicr.fetch_more_context`
 - 未落地能力不得提前作为“已实现工具”对外宣传。
 - Agent CLI 自由文本 stdout 不作为正式报告；无法解析工具 payload 时先做结构化修复重试，IM 输出保持 target/summary/problems 分段并从 `aicr.report_problem` 渲染位置。
+- Agent 修复后若仍只输出“未发现问题 / 无可审查代码”自由文本，服务端归一为 `aicr.skip` 并跳过 IM；若仍无法解析且不是无问题语义，则改走直连 LLM 修复兜底。
 - Summary 声称发现问题但没有 `aicr.report_problem` 记录，或 skip/summary 要求人类补 diff/source context 时，按结构化输出失败处理并修复，避免 `problemCount=0` 被 no-problems 策略静默压掉。
 - 详细合同：`docs/ai/architecture.md` §3.9 与 `docs/output-channels.md`。
 
