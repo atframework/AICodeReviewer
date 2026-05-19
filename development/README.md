@@ -107,10 +107,10 @@ LLM_TOKEN="$(jq -r '.xiaomimimo_token_plan.token' .vscode/secret.json)"
 
 ### GitHub repo → selector / trigger / workspace 映射
 
-| GitHub 仓库                | 本地 selector 组       | 远端 trigger          | 远端 workspace       | 说明                           |
-| -------------------------- | ---------------------- | --------------------- | -------------------- | ------------------------------ |
-| `atframework/atsf4g-co`    | `github-atframework`   | `github-atframework`  | `github-atsf4g-co`   | 保持现有仓库，继续独立配置     |
-| `owent/libatapp`           | `github-owent`         | `github-owent`        | `github-libatapp`    | 新增仓库，独立 token/secret/filter |
+| GitHub 仓库             | 本地 selector 组     | 远端 trigger         | 远端 workspace     | 说明                               |
+| ----------------------- | -------------------- | -------------------- | ------------------ | ---------------------------------- |
+| `atframework/atsf4g-co` | `github-atframework` | `github-atframework` | `github-atsf4g-co` | 保持现有仓库，继续独立配置         |
+| `owent/libatapp`        | `github-owent`       | `github-owent`       | `github-libatapp`  | 新增仓库，独立 token/secret/filter |
 
 - `/webhooks/github` 现在允许挂多个 GitHub trigger profile；服务端会先按 webhook secret 校验，再按 `repository.full_name` 选择最终 trigger。
 - 不同 GitHub 仓库若使用不同 token、webhook secret、`watch_path`、`include_cr_file`、`exclude_cr_file`，不要继续复用同一个 trigger。
@@ -190,14 +190,14 @@ ssh -p 36000 -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no \
 
 ### 8.2 远程测试环境信息
 
-| 项目 | 测试环境 | 生产环境 |
-|------|---------|---------|
-| 部署目录 | `/data/disk2/AICodeReviewerTest` | `/data/disk2/AICodeReviewer` |
-| 容器名 | `aicr-test` | `aicr` |
-| 本机端口 | `8091` | `8090` |
-| 反向代理 | （暂无，直接访问或临时配置） | `https://aicr.m-oa.com:6023` |
-| 健康检查 | `http://10.64.8.2:8091/healthz` | `http://10.64.8.2:8090/healthz` |
-| 数据卷 | `aicr-test-data`, `aicr-test-workspaces`, `aicr-test-logs` | `aicr-data`, `aicr-workspaces`, `aicr-logs` |
+| 项目     | 测试环境                                                   | 生产环境                                    |
+| -------- | ---------------------------------------------------------- | ------------------------------------------- |
+| 部署目录 | `/data/disk2/AICodeReviewerTest`                           | `/data/disk2/AICodeReviewer`                |
+| 容器名   | `aicr-test`                                                | `aicr`                                      |
+| 本机端口 | `8091`                                                     | `8090`                                      |
+| 反向代理 | （暂无，直接访问或临时配置）                               | `https://aicr.m-oa.com:6023`                |
+| 健康检查 | `http://10.64.8.2:8091/healthz`                            | `http://10.64.8.2:8090/healthz`             |
+| 数据卷   | `aicr-test-data`, `aicr-test-workspaces`, `aicr-test-logs` | `aicr-data`, `aicr-workspaces`, `aicr-logs` |
 
 ### 8.3 测试环境部署步骤
 
@@ -246,14 +246,19 @@ ssh -p 36000 -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no \
 ### 8.5 容器接入与跨平台验证
 
 - 如需进入测试容器排查：
+
   ```bash
   ssh -p 36000 ... 10.64.8.2 "podman exec -it aicr-test /bin/sh"
   ```
+
 - 如需查看测试容器日志：
+
   ```bash
   ssh -p 36000 ... 10.64.8.2 "podman logs --tail 100 -f aicr-test"
   ```
+
 - 如需在测试容器内手动触发 review：
+
   ```bash
   ssh -p 36000 ... 10.64.8.2 "podman exec aicr-test node packages/cli/dist/index.js review --config /app/config.yaml --repo 'test-org/test-repo' --dry-run"
   ```
@@ -283,12 +288,14 @@ ssh -p 36000 -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no \
 ### 11.1 `invalid internal status` — rootless Podman 存储驱动初始化失败
 
 **现象：**
+
 ```bash
 $ podman ps
 ERRO[0000] invalid internal status, try resetting the pause process with "podman system migrate": could not find any running process: no such process
 ```
 
 **根因（深度调研结果）：**
+
 - 系统 `/etc/containers/storage.conf` 配置了自定义存储路径（`graphroot=/data/disk2/docker-image`、`runroot=/data/disk2/docker-container`、`rootless_storage_path=/data/disk2/docker-storage/$USER`）。
 - Podman 5.x 在 rootless 模式下，存储驱动自动检测与自定义路径配置存在兼容性问题。
 - 错误消息 `"could not find any running process"` 具有误导性；真正原因是**存储层初始化失败**，而非 pause 进程缺失。
@@ -309,13 +316,16 @@ curl -sf https://aicr.m-oa.com:6023/healthz
 ```
 
 **预防措施：**
+
 - `deploy.sh` 中所有 `podman build` / `podman run` / `podman rm` 命令必须显式加 `--storage-driver=overlay`。
 - 部署脚本开头加入 pre-flight 检查：
+
   ```bash
   if ! podman ps >/dev/null 2>&1; then
     podman --storage-driver=overlay system migrate
   fi
   ```
+
 - 考虑将 AICR 容器注册为 systemd user service（`podman generate systemd`），避免依赖手动 `podman start`。
 
 ## 12. 命令执行守则

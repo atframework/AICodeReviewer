@@ -87,6 +87,20 @@ docker run -d \
   aicodereviewer
 ```
 
+### Docker Socket backend
+
+`docker_socket` uses the same container contract as `docker` but identifies runs that access the Docker daemon through a Unix socket. Configure it when the service itself runs inside a container that mounts `/var/run/docker.sock`:
+
+```yaml
+agent:
+  sandbox:
+    kind: docker_socket
+    engine: docker
+    image: ghcr.io/owent/aicr-agent:latest
+```
+
+No additional Docker Engine API client is required; AICR still invokes the `docker` CLI and relies on the host socket being available to the service container.
+
 ## Configuring Gitea Webhook
 
 After the server is running, add a webhook to your Gitea repository:

@@ -51,4 +51,19 @@ describe("observability", () => {
     const sdk = createOtelSdk({ serviceName: "full-test", enableOtelDiagnostics: true });
     expect(sdk).toBeDefined();
   });
+
+  it("constructs SDK with OTLP exporter from environment variables", () => {
+    const originalEndpoint = process.env.OTEL_EXPORTER_OTLP_ENDPOINT;
+    const originalHeaders = process.env.OTEL_EXPORTER_OTLP_HEADERS;
+    process.env.OTEL_EXPORTER_OTLP_ENDPOINT = "http://localhost:4318/v1/traces";
+    process.env.OTEL_EXPORTER_OTLP_HEADERS = "Authorization=Bearer test";
+
+    try {
+      const sdk = createOtelSdk({ serviceName: "otel-env-test" });
+      expect(sdk).toBeDefined();
+    } finally {
+      process.env.OTEL_EXPORTER_OTLP_ENDPOINT = originalEndpoint;
+      process.env.OTEL_EXPORTER_OTLP_HEADERS = originalHeaders;
+    }
+  });
 });

@@ -16,7 +16,8 @@
     "dev": "tsx watch src/index.ts"
   },
   "dependencies": {
-    "@opentelemetry/api": "^1.9.0",
+    "@opentelemetry/api": "^1.9.1",
+    "@opentelemetry/exporter-trace-otlp-http": "0.57.2",
     "@opentelemetry/sdk-node": "^0.57.2",
     "pino": "^9.7.0",
     "yaml": "^2.8.0",

@@ -175,12 +175,23 @@
 
 ### 3.8 SandboxBackend
 
-- 支持 native、docker、podman，保留 `docker_socket` 与 `k8s_pod` 扩展位。
+- 支持 native、docker、podman，保留 `docker_socket`、`k8s_pod` 与 `firecracker` 扩展位。
 - 容器后端必须通过 allowlist 验证允许执行的命令。
 - 容器 `--env-file` 必须位于挂载工作区之外的临时路径，运行后删除。
 - 源码工作区默认只读挂载，agent 工作目录与临时目录隔离。
 - 白名单、cwd、超时、网络/命令限制由 sandbox 统一守卫。
 - Podman 与 Docker 要共享一套容器合同，而不是两套分叉实现。
+
+#### 3.8.1 后端能力与边界
+
+| 后端 | 状态 | 说明 |
+| --- | --- | --- |
+| `native` | 已交付 | 直接 spawn 子进程，不依赖容器引擎；适用开发环境或无容器权限的场景。 |
+| `docker` | 已交付 | 通过 CLI 调用 Docker，支持镜像、allowlist、只读挂载、env-file 隔离。 |
+| `podman` | 已交付 | 与 Docker 共享同一容器合同，CLI 解析为 `podman`；支持 rootless。 |
+| `docker_socket` | 已交付（映射实现） | 复用 `docker` 后端的容器实现，仅 `kind` 标识不同；适用于通过 Unix socket 访问 Docker daemon 的场景，不额外引入 Docker Engine API 客户端。 |
+| `k8s_pod` | 预留扩展位 | 尚未实现。计划通过 Kubernetes API 创建 Job Pod，挂载 source/agent/tmp 卷，流式回传日志。需要集群环境、`@kubernetes/client-node` 和有效的 kubeconfig。 |
+| `firecracker` | 预留扩展位 | 尚未实现。计划通过 Firecracker API 创建 microVM，以块设备或 virtiofs 挂载 workspace，流式回传日志。需要 `firecracker` 二进制和 API socket。 |
 
 ### 3.9 输出通道、模板与 MCP 工具
 
@@ -289,6 +300,8 @@
 - async trigger 的调度、完成、失败都要有结构化日志。
 - 发布失败和 review 失败应保留足够上下文供 replay，而不是只吐一条裸字符串。
 - 当 `dryRun` 为 `false` 时，run status 不能因为没有 publisher 而错误回落到 `dry_run`。
+- Prometheus histogram bucket、sum、count 必须按进程生命周期累计；只能把原始 duration 样本缓冲做滑动窗口裁剪。
+- `/metrics` 计数与 `runs/<run_id>/run.json` 快照应覆盖同步和异步触发的 review run，不能只记录后台模式。
 
 ### 3.12 Reflection 与 memory
 

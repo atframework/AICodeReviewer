@@ -3,6 +3,12 @@ import { randomUUID } from "node:crypto";
 import { Hono } from "hono";
 import { ZodError } from "zod";
 
+import { createAicrMetrics, formatPrometheusMetrics, recordReviewResult } from "./metrics.js";
+import { saveRunSnapshot } from "./run-snapshot.js";
+import type { AicrMetrics } from "./metrics.js";
+
+const globalMetrics: AicrMetrics = createAicrMetrics();
+
 import {
   prepareReviewPrompt,
   type PreparedReviewPrompt,
@@ -57,6 +63,8 @@ export interface ServerAppOptions {
   readonly auth?: AuthConfig;
   readonly asyncTriggers?: boolean;
   readonly deduplicator?: ReviewDeduplicator;
+  readonly runsDir?: string;
+  readonly metrics?: AicrMetrics;
 }
 
 export interface ServerReviewPreparationOptions {
@@ -103,6 +111,8 @@ function registerGiteaLikeWebhook(
   issueTriageOptions: IssueTriageRuntimeOptions | undefined,
   asyncTriggers: boolean,
   deduplicator: ReviewDeduplicator | undefined,
+  runsDir: string | undefined,
+  metrics: AicrMetrics,
 ): void {
   app.post(path, async (c) => {
     if (!config) {
@@ -166,7 +176,7 @@ function registerGiteaLikeWebhook(
       return c.json({ accepted: false, reason: "ignored_by_label", provider, eventName, matchedLabels: ignoredLabels }, 200);
     }
 
-    return handleReviewOrchestration(c, provider, eventName, decoded, reviewEvent, reviewPreparationOptions, reviewOrchestrationOptions, issueTriageOptions, asyncTriggers, deduplicator);
+    return handleReviewOrchestration(c, provider, eventName, decoded, reviewEvent, reviewPreparationOptions, reviewOrchestrationOptions, issueTriageOptions, asyncTriggers, deduplicator, runsDir, metrics);
   });
 }
 
@@ -177,6 +187,8 @@ function registerP4Trigger(
   reviewOrchestrationOptions: ServerReviewOrchestrationOptions | undefined,
   asyncTriggers: boolean,
   deduplicator: ReviewDeduplicator | undefined,
+  runsDir: string | undefined,
+  metrics: AicrMetrics,
 ): void {
   app.post("/triggers/p4", async (c) => {
     if (!config) {
@@ -249,6 +261,8 @@ function registerP4Trigger(
     return handleReviewOrchestration(
       c, "p4", "change-commit", decoded, reviewEvent,
       reviewPreparationOptions, reviewOrchestrationOptions, undefined, asyncTriggers, deduplicator,
+      runsDir,
+      metrics,
     );
   });
 }
@@ -340,6 +354,8 @@ function registerGenericWebhook(
   issueTriageOptions: IssueTriageRuntimeOptions | undefined,
   asyncTriggers: boolean,
   deduplicator: ReviewDeduplicator | undefined,
+  runsDir: string | undefined,
+  metrics: AicrMetrics,
 ): void {
   app.post(path, async (c) => {
     const configs = normalizeGenericWebhookConfigs(config);
@@ -411,7 +427,7 @@ function registerGenericWebhook(
       return c.json({ accepted: false, reason: "ignored_by_label", provider, eventName, matchedLabels: ignoredLabels }, 200);
     }
 
-    return handleReviewOrchestration(c, provider, eventName, decoded, reviewEvent, reviewPreparationOptions, reviewOrchestrationOptions, issueTriageOptions, asyncTriggers, deduplicator);
+    return handleReviewOrchestration(c, provider, eventName, decoded, reviewEvent, reviewPreparationOptions, reviewOrchestrationOptions, issueTriageOptions, asyncTriggers, deduplicator, runsDir, metrics);
   });
 }
 
@@ -597,6 +613,45 @@ async function runTriggerProcessing(
   };
 }
 
+function recordCompletedReviewRun(
+  metrics: AicrMetrics,
+  reviewRun: NonNullable<TriggerProcessingResult["reviewRun"]>,
+  durationMs: number,
+): void {
+  recordReviewResult(metrics, {
+    status: reviewRun.status,
+    problemCount: reviewRun.problemCount,
+    durationMs,
+  });
+}
+
+async function saveCompletedRunSnapshot(
+  runsDir: string | undefined,
+  runId: string,
+  reviewEvent: ReviewEvent,
+  reviewRun: NonNullable<TriggerProcessingResult["reviewRun"]>,
+): Promise<void> {
+  if (!runsDir) {
+    return;
+  }
+
+  try {
+    await saveRunSnapshot(runsDir, {
+      runId,
+      timestamp: new Date().toISOString(),
+      reviewEvent,
+      reviewRun,
+    });
+  } catch (err: unknown) {
+    console.warn(JSON.stringify({
+      level: "warn",
+      msg: "failed to save run snapshot",
+      runId,
+      error: toErrorMessage(err),
+    }));
+  }
+}
+
 function scheduleTriggerProcessing(
   provider: ReviewProvider,
   eventName: string,
@@ -606,6 +661,8 @@ function scheduleTriggerProcessing(
   reviewOrchestrationOptions: ServerReviewOrchestrationOptions | undefined,
   issueTriageOptions: IssueTriageRuntimeOptions | undefined,
   deduplicator: ReviewDeduplicator | undefined,
+  metrics: AicrMetrics,
+  runsDir: string | undefined,
 ): string {
   const runId = randomUUID();
   const context = { reviewEvent, payload: decoded, provider, eventName };
@@ -662,11 +719,14 @@ function scheduleTriggerProcessing(
         reviewOrchestrationOptions,
         issueTriageOptions,
         deduplicator,
+        metrics,
+        runsDir,
       );
     }
   }
 
   setTimeout(() => {
+    const startMs = Date.now();
     void runTriggerProcessing(
       provider,
       eventName,
@@ -676,6 +736,11 @@ function scheduleTriggerProcessing(
       reviewOrchestrationOptions,
       issueTriageOptions,
     ).then((result) => {
+      const durationMs = Date.now() - startMs;
+      if (result.reviewRun) {
+        recordCompletedReviewRun(metrics, result.reviewRun, durationMs);
+        void saveCompletedRunSnapshot(runsDir, runId, reviewEvent, result.reviewRun);
+      }
       console.info(JSON.stringify({
         level: "info",
         msg: "trigger processing completed",
@@ -693,6 +758,8 @@ function scheduleTriggerProcessing(
         ...(result.triage ? { triage: result.triage } : {}),
       }));
     }).catch((error) => {
+      const durationMs = Date.now() - startMs;
+      recordReviewResult(metrics, { status: "failed", durationMs });
       const reason = error instanceof TriggerProcessingError ? error.reason : "trigger_processing_failed";
       const message = toErrorMessage(error);
       console.error(JSON.stringify({
@@ -730,6 +797,8 @@ async function handleReviewOrchestration(
   issueTriageOptions: IssueTriageRuntimeOptions | undefined,
   asyncTriggers: boolean,
   deduplicator: ReviewDeduplicator | undefined,
+  runsDir: string | undefined,
+  metrics: AicrMetrics,
 ): Promise<Response> {
   if (asyncTriggers) {
     const runId = scheduleTriggerProcessing(
@@ -741,6 +810,8 @@ async function handleReviewOrchestration(
       reviewOrchestrationOptions,
       issueTriageOptions,
       deduplicator,
+      metrics,
+      runsDir,
     );
 
     return c.json({
@@ -756,6 +827,8 @@ async function handleReviewOrchestration(
     }, 202);
   }
 
+  const runId = randomUUID();
+  const startMs = Date.now();
   let result: TriggerProcessingResult;
   try {
     result = await runTriggerProcessing(
@@ -768,6 +841,8 @@ async function handleReviewOrchestration(
       issueTriageOptions,
     );
   } catch (error) {
+    const durationMs = Date.now() - startMs;
+    recordReviewResult(metrics, { status: "failed", durationMs });
     const reason = error instanceof TriggerProcessingError ? error.reason : "trigger_processing_failed";
     const status = error instanceof TriggerProcessingError ? error.status : 500;
     return c.json(
@@ -780,6 +855,12 @@ async function handleReviewOrchestration(
       },
       status,
     );
+  }
+
+  const durationMs = Date.now() - startMs;
+  if (result.reviewRun) {
+    recordCompletedReviewRun(metrics, result.reviewRun, durationMs);
+    await saveCompletedRunSnapshot(runsDir, runId, reviewEvent, result.reviewRun);
   }
 
   return c.json({
@@ -810,14 +891,18 @@ function createRoutedApp(options: ServerAppOptions): Hono {
 
 function mountRoutes(app: Hono, options: ServerAppOptions): void {
   const asyncTriggers = options.asyncTriggers ?? false;
+  const metrics = options.metrics ?? globalMetrics;
 
   app.get("/healthz", (c) => c.text("ok"));
   app.get("/readyz", (c) => c.text("ready"));
+  app.get("/metrics", (c) => c.text(formatPrometheusMetrics(metrics)));
 
   if (options.auth) {
     const authMiddleware = createAuthMiddleware(options.auth);
     app.use("/triggers/*", authMiddleware);
   }
+
+  const runsDir = options.runsDir;
 
   registerGiteaLikeWebhook(
     app,
@@ -829,6 +914,8 @@ function mountRoutes(app: Hono, options: ServerAppOptions): void {
     options.issueTriage,
     asyncTriggers,
     options.deduplicator,
+    runsDir,
+    metrics,
   );
   registerGiteaLikeWebhook(
     app,
@@ -840,6 +927,8 @@ function mountRoutes(app: Hono, options: ServerAppOptions): void {
     options.issueTriage,
     asyncTriggers,
     options.deduplicator,
+    runsDir,
+    metrics,
   );
   registerGenericWebhook(
     app,
@@ -851,6 +940,8 @@ function mountRoutes(app: Hono, options: ServerAppOptions): void {
     options.issueTriage,
     asyncTriggers,
     options.deduplicator,
+    runsDir,
+    metrics,
   );
   registerGenericWebhook(
     app,
@@ -862,6 +953,8 @@ function mountRoutes(app: Hono, options: ServerAppOptions): void {
     options.issueTriage,
     asyncTriggers,
     options.deduplicator,
+    runsDir,
+    metrics,
   );
   registerP4Trigger(
     app,
@@ -870,6 +963,8 @@ function mountRoutes(app: Hono, options: ServerAppOptions): void {
     options.reviewOrchestration,
     asyncTriggers,
     options.deduplicator,
+    runsDir,
+    metrics,
   );
 }
 
