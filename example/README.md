@@ -101,6 +101,39 @@ agent:
 
 No additional Docker Engine API client is required; AICR still invokes the `docker` CLI and relies on the host socket being available to the service container.
 
+### Nested container sandbox (AICR inside a container)
+
+When AICR itself runs inside a container and you want sandbox-spawned child containers for agent isolation, enable the nested container sandbox in `deploy.sh`:
+
+```bash
+AICR_ENABLE_CONTAINER_SANDBOX=true bash deploy/deploy.sh
+```
+
+This tells `deploy.sh` to:
+
+1. Download a Docker static binary into the build context (talks to Podman's docker-compatible socket).
+2. Mount the host user-level Podman socket into the AICR container.
+3. Set `DOCKER_HOST` so the Docker CLI routes to the host Podman daemon.
+4. Add `--userns=keep-id --group-add keep-groups` so the container user can access the socket.
+
+Requirements on the host:
+
+```bash
+# Enable user-level Podman socket (rootless)
+systemctl --user enable --now podman.socket
+```
+
+In `config.yaml`, set `sandbox.kind: docker` (the Docker CLI inside the container talks to Podman):
+
+```yaml
+agent:
+  sandbox:
+    kind: docker
+    engine: auto
+```
+
+See `docs/podman.md` for full details and troubleshooting.
+
 ## Configuring Gitea Webhook
 
 After the server is running, add a webhook to your Gitea repository:
