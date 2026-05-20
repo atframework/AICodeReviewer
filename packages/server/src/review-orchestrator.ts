@@ -1,5 +1,5 @@
 import { basename, dirname, join } from "node:path";
-import { readFile } from "node:fs/promises";
+import { readFile, rm } from "node:fs/promises";
 
 import {
   buildReviewTaskContext,
@@ -199,6 +199,13 @@ interface ReviewCompletionFollowUp {
   readonly prompt: string;
 }
 
+interface ReviewCompletionResult {
+  readonly llmResult: ChatCompletionResult;
+  readonly agentResult?: SandboxSpawnResult;
+  readonly mcpState?: AicrOutputState;
+  readonly toolCallEvents?: readonly ToolCallEnvelope[];
+}
+
 function formatFilePath(file: { readonly oldPath?: string; readonly newPath?: string }): string {
   if (file.oldPath && file.newPath && file.oldPath !== file.newPath) {
     return `${file.oldPath} -> ${file.newPath}`;
@@ -242,6 +249,8 @@ function buildJsonToolContract(): string {
     "Return a single JSON object and no prose.",
     "When the diff is unavailable or insufficient, call aicr.fetch_more_context for the changed file; omit range to fetch the full file.",
     "You may call aicr.fetch_more_context for a narrowly related repository file outside the change when it is required to understand an API contract or call path.",
+    "When running inside an agent sandbox, inspect already materialized files with read-only shell commands such as cat, rg, grep, or find before concluding that source code is inaccessible.",
+    "If a needed file is not materialized or the MCP tool returns a pending/empty context response, stop making a final no-problem claim; request the concrete file through aicr.fetch_more_context so AICR can pull it from VCS and rerun the final pass.",
     "Never ask the user to provide diff or source context; request it through aicr.fetch_more_context with a concrete path and reason.",
     "If there are no actionable problems, or the changed file has no reviewable code, emit aicr.skip with a concise reason such as lgtm or no_reviewable_code.",
     "If you found any actionable problem, emit one aicr.report_problem per problem; never mention found-problem counts only in a summary.",
@@ -369,7 +378,7 @@ async function runAgentReview(
   task: string,
   options: ServerReviewOrchestrationOptions,
   bundleContext?: AgentBundleContext,
-): Promise<{ readonly llmResult: ChatCompletionResult; readonly agentResult: SandboxSpawnResult; readonly mcpState?: AicrOutputState }> {
+): Promise<ReviewCompletionResult & { readonly agentResult: SandboxSpawnResult }> {
   const sandbox = options.sandbox;
   const agentAdapter = options.agentAdapter;
   if (!sandbox || !agentAdapter) {
@@ -405,6 +414,8 @@ async function runAgentReview(
       task,
     });
     const env = resolveEnvPlaceholders(bundle.envVars);
+
+    await rm(join(materializedFs.agentDir, ".aicr-output-state.json"), { force: true });
 
     agentResult = await sandbox.spawn({
       command,
@@ -467,6 +478,7 @@ async function runAgentReview(
           msg: "read MCP output state from agent workspace",
           problemCount: mcpState.problems.length,
           summaryCount: mcpState.summaries.length,
+          contextRequestCount: mcpState.contextRequests.length,
           hasSkipReason: mcpState.skipReason !== undefined,
         }));
       }
@@ -489,6 +501,7 @@ async function runAgentReview(
     },
     agentResult,
     ...(mcpState ? { mcpState } : {}),
+    ...(kiloToolCalls.length > 0 ? { toolCallEvents: kiloToolCalls } : {}),
   };
 }
 
@@ -498,7 +511,7 @@ async function requestReviewCompletion(
   options: ServerReviewOrchestrationOptions,
   followUp?: ReviewCompletionFollowUp,
   bundleContext?: AgentBundleContext,
-): Promise<{ readonly llmResult: ChatCompletionResult; readonly agentResult?: SandboxSpawnResult; readonly mcpState?: AicrOutputState }> {
+): Promise<ReviewCompletionResult> {
   if (options.sandbox && options.agentAdapter) {
     const task = followUp
       ? [
@@ -805,10 +818,36 @@ function parseToolCalls(content: string, options: ParseToolCallOptions = {}): To
   return [];
 }
 
-async function callAicrTools(
-  content: string,
+function emptyToolExecutionResult(): ToolCallExecutionResult {
+  return {
+    toolCallCount: 0,
+    reviewOutputCount: 0,
+    contextResponses: [],
+    invalidContextRequestCount: 0,
+    invalidReviewOutputCount: 0,
+    invalidReviewOutputs: [],
+  };
+}
+
+function mergeToolExecutionResults(
+  ...results: readonly ToolCallExecutionResult[]
+): ToolCallExecutionResult {
+  return results.reduce<ToolCallExecutionResult>(
+    (merged, current) => ({
+      toolCallCount: merged.toolCallCount + current.toolCallCount,
+      reviewOutputCount: merged.reviewOutputCount + current.reviewOutputCount,
+      contextResponses: [...merged.contextResponses, ...current.contextResponses],
+      invalidContextRequestCount: merged.invalidContextRequestCount + current.invalidContextRequestCount,
+      invalidReviewOutputCount: merged.invalidReviewOutputCount + current.invalidReviewOutputCount,
+      invalidReviewOutputs: [...merged.invalidReviewOutputs, ...current.invalidReviewOutputs],
+    }),
+    emptyToolExecutionResult(),
+  );
+}
+
+async function executeAicrToolCalls(
+  toolCalls: readonly ToolCallEnvelope[],
   tools: readonly AicrOutputToolDefinition[],
-  options: ParseToolCallOptions = {},
 ): Promise<ToolCallExecutionResult> {
   const toolMap = new Map(tools.map((tool) => [tool.name, tool]));
   let toolCallCount = 0;
@@ -817,7 +856,7 @@ async function callAicrTools(
   let invalidReviewOutputCount = 0;
   const contextResponses: ContextToolResponse[] = [];
   const invalidReviewOutputs: InvalidToolCallResponse[] = [];
-  for (const toolCall of parseToolCalls(content, options)) {
+  for (const toolCall of toolCalls) {
     toolCallCount += 1;
     const tool = toolMap.get(toolCall.name);
     if (!tool) {
@@ -874,13 +913,84 @@ async function callAicrTools(
   };
 }
 
+async function callAicrTools(
+  content: string,
+  tools: readonly AicrOutputToolDefinition[],
+  options: ParseToolCallOptions = {},
+): Promise<ToolCallExecutionResult> {
+  return executeAicrToolCalls(parseToolCalls(content, options), tools);
+}
+
+function contextRequestsToToolCalls(requests: readonly FetchMoreContextInput[]): readonly ToolCallEnvelope[] {
+  return requests.map((request) => ({ name: "aicr.fetch_more_context", input: request }));
+}
+
+function replayMcpReviewOutputs(state: AicrOutputState, collector: AicrOutputCollector): void {
+  for (const problem of state.problems) {
+    try {
+      collector.reportProblem(problem);
+    } catch (error) {
+      console.warn(JSON.stringify({
+        level: "warn",
+        msg: "MCP state problem rejected by collector",
+        error: error instanceof Error ? error.message : String(error),
+      }));
+    }
+  }
+  for (const summary of state.summaries) {
+    try {
+      collector.publishSummary(summary);
+    } catch (error) {
+      console.warn(JSON.stringify({
+        level: "warn",
+        msg: "MCP state summary rejected by collector",
+        error: error instanceof Error ? error.message : String(error),
+      }));
+    }
+  }
+  if (state.skipReason) {
+    try {
+      collector.skip({ reason: state.skipReason });
+    } catch (error) {
+      console.warn(JSON.stringify({
+        level: "warn",
+        msg: "MCP state skip rejected by collector",
+        error: error instanceof Error ? error.message : String(error),
+      }));
+    }
+  }
+}
+
+async function collectCompletionOutputs(
+  completion: ReviewCompletionResult,
+  tools: readonly AicrOutputToolDefinition[],
+  collector: AicrOutputCollector,
+  options: ParseToolCallOptions = {},
+): Promise<ToolCallExecutionResult> {
+  const executions: ToolCallExecutionResult[] = [];
+
+  if (completion.mcpState) {
+    replayMcpReviewOutputs(completion.mcpState, collector);
+    if (completion.mcpState.contextRequests.length > 0) {
+      executions.push(
+        await executeAicrToolCalls(contextRequestsToToolCalls(completion.mcpState.contextRequests), tools),
+      );
+    }
+  } else if (completion.toolCallEvents && completion.toolCallEvents.length > 0) {
+    executions.push(await executeAicrToolCalls(completion.toolCallEvents, tools));
+  }
+
+  executions.push(await callAicrTools(completion.llmResult.content, tools, options));
+  return mergeToolExecutionResults(...executions);
+}
+
 function hasFinalReviewOutput(state: AicrOutputState): boolean {
   return state.problems.length > 0 || state.summaries.length > 0 || Boolean(state.skipReason);
 }
 
 const NO_ACTIONABLE_PROBLEM_RE = /(?:no\s+(?:actionable\s+)?(?:issues?|problems?|findings?)\s+(?:found|detected)|no\s+(?:actionable\s+)?(?:issues?|problems?|findings?)|未发现(?:明显|可执行|可操作|阻塞|严重)?(?:的)?(?:问题|缺陷|风险)|没有发现(?:明显|可执行|可操作|阻塞|严重)?(?:的)?(?:问题|缺陷|风险)|暂无(?:问题|缺陷|风险)|无(?:明显|可执行|可操作|阻塞|严重)?(?:的)?(?:问题|缺陷|风险)|lgtm)/iu;
 const ACTIONABLE_PROBLEM_CLAIM_RE = /(?:(?:发现|發現)\s*(?:了\s*)?[1-9]\d*\s*(?:个|個|项|項)?\s*(?:问题|問題|缺陷|风险|風險)|(?:存在|检出|檢出)\s*(?:明显|可执行|阻塞|严重|高风险)?\s*(?:问题|問題|缺陷|风险|風險)|found\s+[1-9]\d*\s+(?:issues?|problems?)|[1-9]\d*\s+(?:issues?|problems?)\s+(?:found|detected)|(?:critical|high[-\s]?risk|blocking)\s+(?:issue|problem)|(?:严重|高风险|阻塞)\s*(?:问题|問題|缺陷|风险|風險))/iu;
-const MISSING_CONTEXT_REQUEST_RE = /(?:need(?:s|ed)?\s+(?:the\s+)?(?:diff|source|context)|more\s+context|provide\s+(?:the\s+)?diff|fetch_more_context|无法获取.*(?:diff|上下文|变更内容|源文件)|缺少.*(?:diff|上下文|变更内容|源文件)|需要.*(?:diff|上下文|变更内容|源文件)|请提供.*(?:diff|上下文|变更内容|源文件)|获取.*(?:diff|上下文|变更内容|源文件))/iu;
+const MISSING_CONTEXT_REQUEST_RE = /(?:need(?:s|ed)?\s+(?:the\s+)?(?:diff|source|context)|more\s+context|provide\s+(?:the\s+)?diff|fetch_more_context|(?:cannot|can't|unable\s+to)\s+(?:access|read|inspect|verify).*(?:full\s+)?(?:repo|repository|source|code|context)|无法(?:获取|访问|读取|查看|验证).*(?:diff|上下文|变更内容|源文件|源代码|源码|完整仓库|仓库代码|完整代码|资源)|缺少.*(?:diff|上下文|变更内容|源文件|源代码|源码|完整仓库|仓库代码|完整代码|资源)|需要.*(?:diff|上下文|变更内容|源文件|源代码|源码|完整仓库|仓库代码|完整代码|资源)|请提供.*(?:diff|上下文|变更内容|源文件|源代码|源码|完整仓库|仓库代码|完整代码|资源)|获取.*(?:diff|上下文|变更内容|源文件|源代码|源码|完整仓库|仓库代码|完整代码|资源))/iu;
 const NO_REVIEWABLE_CODE_RE = /(?:no\s+(?:reviewable\s+)?(?:code|changes?)\s+to\s+review|nothing\s+to\s+review|empty\s+file|file\s+is\s+empty|文件为空|空文件|内容为空|无代码可(?:审查|评审)|无(?:可|需|需要)?(?:审查|评审)(?:的)?(?:代码|内容)|没有(?:可|需要)?(?:审查|评审)(?:的)?(?:代码|内容))/iu;
 
 type NoActionableSkipReason = "lgtm" | "no_reviewable_code";
@@ -1390,42 +1500,7 @@ export async function runReviewOrchestration(
   let lastAgentResult = completion.agentResult;
   const rawModelOutput = completion.llmResult.content;
   const allowNaturalLanguageSummary = completion.agentResult === undefined;
-  if (completion.mcpState) {
-    for (const problem of completion.mcpState.problems) {
-      try {
-        collector.reportProblem(problem);
-      } catch (error) {
-        console.warn(JSON.stringify({
-          level: "warn",
-          msg: "MCP state problem rejected by collector",
-          error: error instanceof Error ? error.message : String(error),
-        }));
-      }
-    }
-    for (const summary of completion.mcpState.summaries) {
-      try {
-        collector.publishSummary(summary);
-      } catch (error) {
-        console.warn(JSON.stringify({
-          level: "warn",
-          msg: "MCP state summary rejected by collector",
-          error: error instanceof Error ? error.message : String(error),
-        }));
-      }
-    }
-    if (completion.mcpState.skipReason) {
-      try {
-        collector.skip({ reason: completion.mcpState.skipReason });
-      } catch (error) {
-        console.warn(JSON.stringify({
-          level: "warn",
-          msg: "MCP state skip rejected by collector",
-          error: error instanceof Error ? error.message : String(error),
-        }));
-      }
-    }
-  }
-  const toolExecution = await callAicrTools(rawModelOutput, tools, { allowNaturalLanguageSummary });
+  const toolExecution = await collectCompletionOutputs(completion, tools, collector, { allowNaturalLanguageSummary });
   let outputState = collector.snapshot();
   const initialNoActionSkipReason = completion.agentResult && !hasFinalReviewOutput(outputState) && toolExecution.toolCallCount === 0
     ? classifyUnstructuredNoActionableOutput(rawModelOutput)
@@ -1491,7 +1566,7 @@ export async function runReviewOrchestration(
     if (completion.agentResult) {
       lastAgentResult = completion.agentResult;
     }
-    const repairExecution = await callAicrTools(completion.llmResult.content, tools, {
+    const repairExecution = await collectCompletionOutputs(completion, tools, collector, {
       allowNaturalLanguageSummary: completion.agentResult === undefined,
     });
     outputState = collector.snapshot();
@@ -1511,7 +1586,7 @@ export async function runReviewOrchestration(
       if (completion.agentResult) {
         lastAgentResult = completion.agentResult;
       }
-      await callAicrTools(completion.llmResult.content, tools, {
+      await collectCompletionOutputs(completion, tools, collector, {
         allowNaturalLanguageSummary: completion.agentResult === undefined,
       });
       outputState = collector.snapshot();
@@ -1542,7 +1617,7 @@ export async function runReviewOrchestration(
           prompt: buildContextFollowUpPrompt(changedPaths, repairExecution),
         },
       );
-      await callAicrTools(completion.llmResult.content, tools, { allowNaturalLanguageSummary: true });
+      await collectCompletionOutputs(completion, tools, collector, { allowNaturalLanguageSummary: true });
       outputState = collector.snapshot();
 
       const directNoActionSkipReason = classifyNoActionableReviewResult(outputState, completion.llmResult.content);

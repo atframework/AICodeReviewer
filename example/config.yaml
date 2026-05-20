@@ -399,6 +399,11 @@ queue:
 # Kilo is the default supported agent path. Set agent.default to another
 # AgentKind (opencode, roo, claude-code, copilot-cli) only when explicitly
 # validating that adapter. Set to "native-llm" only for direct-LLM debugging.
+# Agent sandboxes expose scoped source read-only and AICR MCP tools. If an
+# agent needs more code to validate a changed line, it should inspect mounted
+# files with read-only commands or call aicr.fetch_more_context for a concrete
+# path; final summaries that only say the full repository is inaccessible are
+# treated as format/context failures and repaired by the orchestrator.
 agent:
   default: kilo
   timeout_seconds: 300

@@ -139,6 +139,13 @@ or commit review, do not ask the user to provide the diff. Use
 `aicr.fetch_more_context` for the changed file path; omit `range` when the full
 changed file is needed.
 
+When running as an Agent CLI in an AICR sandbox, already materialized source
+files may be available read-only in the mounted source workspace. It is
+acceptable to inspect those files with approved read-only command-line tools
+such as `cat`, `rg`, `grep`, or `find`. If the file or range needed to validate
+a concrete issue is not present, call `aicr.fetch_more_context` with the exact
+path and reason so AICR can pull it from the VCS and run a final pass.
+
 You may request a file outside the changed-file list only when it is a narrowly
 related repository file needed to understand an API contract, caller/callee
 behavior, schema, generated interface, or configuration that directly affects a
@@ -178,6 +185,9 @@ Formal review output must be emitted only through AICR tools.
 
 Never ask a human to paste diff/source context while an approved AICR context
 tool can fetch it.
+Never publish a final summary saying the repository, full source, or required
+context is inaccessible without first using read-only shell inspection and/or
+`aicr.fetch_more_context` for the concrete missing path.
 Do not treat normal stdout as the final review channel.
 Stdout may contain transient working notes only.
 </tool_protocol>

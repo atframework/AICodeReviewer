@@ -54,10 +54,10 @@ Kilo Code is the primary deployment-test agent for AICodeReviewer. The repeatabl
 1. Start AICR locally or in the deployment environment.
 2. In Kilo Code, run a review task against the same workspace that the service will use.
 3. Confirm that AICR materializes Kilo provider config under the run `agent/` directory and injects the model provider from `llm.fallback_chain`.
-4. When external MCP support is enabled, confirm Kilo also receives `.kilo/mcp.json` pointing at the `aicr-output` server. Until that lands, the Kilo verification covers the compatible JSON/XML tool-call stdout path and must not be used to close the external MCP gate.
+4. Confirm Kilo receives the `aicr-output` MCP server config in the materialized `.kilo/kilo.json`, calls AICR tools, and writes `.aicr-output-state.json` in the run `agent/` directory. `aicr.fetch_more_context` requests should either return already mounted source content or be replayed by the orchestrator through VCS fetch and a final follow-up pass.
 5. Trigger the review through the normal entry point, such as `/webhooks/gitea` or `/triggers/p4`.
 6. Verify the AICR log contains a scheduled run and a completed `reviewRun` with a non-zero `dispatchCount` when an output route is configured.
-7. Verify the destination channel received the report: PR/MR line comments, managed issue comments, Feishu card, or WeCom Markdown.
+7. Verify the destination channel received the report: PR/MR line comments, managed issue comments, Feishu card, or WeCom Markdown. A final report that only says the full repository/source is inaccessible should be treated as a failed verification unless it first requested concrete context through `aicr.fetch_more_context` and AICR reran the final pass.
 
 ### Automation supplement
 
@@ -115,6 +115,8 @@ This tells `deploy.sh` to:
 2. Mount the host user-level Podman socket into the AICR container.
 3. Set `DOCKER_HOST` so the Docker CLI routes to the host Podman daemon.
 4. Add `--userns=keep-id --group-add keep-groups` so the container user can access the socket.
+
+When nested container sandboxing is disabled, `deploy.sh` still creates an empty `deploy/docker-static` placeholder in the source build context so clean syncs do not fail the Dockerfile's optional `COPY` step.
 
 Requirements on the host:
 

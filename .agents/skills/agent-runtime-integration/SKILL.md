@@ -67,4 +67,5 @@ Do not use this skill for VCS implementation details, output channel rendering, 
 - Do not expose arbitrary external MCP servers directly to the agent; route them through AICR allowlists and context tools.
 - Do not include secrets in generated config files; use env placeholders and sandbox env injection.
 - Do not accept summaries that claim actionable problems without `aicr.report_problem` records, or skip/summary prose that asks humans for diff/source context; trigger structured repair so locations and context requests remain machine-readable.
+- Do not treat MCP state `contextRequests` as passive metadata. Replay them through the VCS-backed `aicr.fetch_more_context` handler, feed fetched content into a follow-up pass, and clear stale `.aicr-output-state.json` before each agent run.
 - If an agent repair retry still cannot produce structured output, fall back to direct LLM repair; but when the prose explicitly says there are no actionable problems or no reviewable code, normalize to `aicr.skip` rather than publishing a generic fallback summary.

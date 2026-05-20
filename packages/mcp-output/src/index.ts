@@ -235,7 +235,7 @@ export function createAicrOutputToolRegistry(
 		},
 		{
 			name: "aicr.fetch_more_context",
-			description: "Request source context for a changed file or narrowly related repository file; omit range for the full file.",
+			description: "Request source context for a changed file or narrowly related repository file; omit range for the full file. If content is not returned immediately, AICR records the request, pulls it from VCS, and runs a follow-up pass.",
 			inputSchema: {
 				type: "object",
 				required: ["path", "reason"],

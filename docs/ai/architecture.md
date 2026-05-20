@@ -206,9 +206,12 @@
 - problem 合同保持最小稳定字段；`message` 讲问题与影响，`suggestion` 给修复建议。
 - 模板渲染与最终发布由输出层统一控制，而不是让 agent 直写各平台方言。
 - Agent CLI 的自由文本 stdout 不是正式审查结果；无法解析出 AICR tool payload 时先触发结构化修复重试，避免中间思考泄露到 IM 通知。
+- Kilo 等原生 MCP agent 写入 `.aicr-output-state.json` 后，orchestrator 必须读取其中的 problems / summaries / skip 和 `contextRequests`；`contextRequests` 需要通过 VCS `fetchExtraContext` 执行并回灌到 follow-up prompt，而不是只计数或发布“无法访问完整仓库代码”的摘要。
+- Kilo JSON stream 中的 `tool_call` / `tool_use` 事件在 MCP state 缺失时作为兼容回退执行，确保 `aicr.fetch_more_context` 不会因为 stdout 中没有最终 JSON payload 而丢失。
+- 每次 agent run 启动前要清理旧 `.aicr-output-state.json`，避免上一次 repair pass 的工具状态污染下一次输出。
 - 如果 Agent 结构化修复后的自由文本明确表示“无问题 / 无可审查代码”，orchestrator 会归一为 `aicr.skip`，避免把格式修复失败的 fallback 文案发布到 IM；若仍无法解析且不属于无问题语义，则改走直连 LLM 修复兜底。
 - Summary 中声称“发现问题”但没有 `aicr.report_problem` 记录时，也视为未满足输出合同并触发结构化修复，避免 `problemCount=0` 的问题被 `no_problems` 策略静默压掉。
-- Skip reason 或 summary 要求人类补 diff/source context 时，orchestrator 也会修复为 `aicr.fetch_more_context` 流程，并在拿到上下文后要求最终结构化输出。
+- Skip reason 或 summary 要求人类补 diff/source context，或声称无法访问完整仓库/源码而无法验证时，orchestrator 也会修复为“只读命令检查已物化源码或 `aicr.fetch_more_context` 补拉具体路径”的流程，并在拿到上下文后要求最终结构化输出。
 - `aicr.fetch_more_context` 可用于缺失/过窄 diff 下的完整变更文件，以及为验证变更行所必需的窄范围相关文件；problem 仍必须锚定到本次变更的文件与行。
 - IM 通知保持 `Review target` / `Summary` / `Problems` 分段结构，问题位置必须来自 `aicr.report_problem.file` 与 `line`。
 
@@ -254,8 +257,8 @@
 - 最近问题列表受 `review.problem_issue.max_recent_issues` 控制。
 - 零 problem 正常 review 的抑制逻辑，不能误伤错误报告、告警或生命周期回收。
 - 支持 `issue_mode` 控制创建策略：
--  - `consolidated`（默认）：一次分析的所有问题合并为一个 issue，基于 scope fingerprint（channel + repo）做生命周期管理。每次审查更新已有 issue 内容；零问题时按 `resolved_action` 关闭或删除。
--  - `per_problem`：每个问题创建独立 issue，基于 fingerprint 做生命周期管理。
+  - `consolidated`（默认）：一次分析的所有问题合并为一个 issue，基于 scope fingerprint（channel + repo）做生命周期管理。每次审查更新已有 issue 内容；零问题时按 `resolved_action` 关闭或删除。
+  - `per_problem`：每个问题创建独立 issue，基于 fingerprint 做生命周期管理。
 - consolidated 模式下 labels 使用最高严重级别，assignees 汇总所有关联负责人。
 - managed issue 标题由输出层生成，优先保持单行可读：
   - `per_problem`：前缀 + 严重级别 + 缩短位置 + 简短摘要（如 `[AICR] [HIGH] src/app.ts:3 · Issue`）。

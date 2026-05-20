@@ -131,8 +131,9 @@
   - `aicr.fetch_more_context`
 - 未落地能力不得提前作为“已实现工具”对外宣传。
 - Agent CLI 自由文本 stdout 不作为正式报告；无法解析工具 payload 时先做结构化修复重试，IM 输出保持 target/summary/problems 分段并从 `aicr.report_problem` 渲染位置。
+- Kilo 原生 MCP state 与 JSON stream tool-call 都必须进入同一条工具执行链；`contextRequests` 触发 VCS `fetchExtraContext` 补拉并回灌 follow-up，而不是发布“无法访问完整仓库代码/无法验证”之类的最终摘要。
 - Agent 修复后若仍只输出“未发现问题 / 无可审查代码”自由文本，服务端归一为 `aicr.skip` 并跳过 IM；若仍无法解析且不是无问题语义，则改走直连 LLM 修复兜底。
-- Summary 声称发现问题但没有 `aicr.report_problem` 记录，或 skip/summary 要求人类补 diff/source context 时，按结构化输出失败处理并修复，避免 `problemCount=0` 被 no-problems 策略静默压掉。
+- Summary 声称发现问题但没有 `aicr.report_problem` 记录，或 skip/summary 要求人类补 diff/source context / 声称源码不可访问时，按结构化输出失败处理并修复，避免 `problemCount=0` 被 no-problems 策略静默压掉。
 - 详细合同：`docs/ai/architecture.md` §3.9 与 `docs/output-channels.md`。
 
 ### 3.9.0 PR Review Summary 更新模式
@@ -265,6 +266,7 @@
     - ~~最终发布检查单~~（已交付：`docs/ai/milestones/M9-checklist.md` 已创建）
     - ~~`deploy.sh` 修复~~（已交付：所有 `podman` 命令已加 `--storage-driver=overlay`，加入 preflight 检查）
     - ~~`deploy.sh` 硬编码路径~~（已交付：改为环境变量覆盖 `AICR_DEPLOY_DIR`/`AICR_IMAGE_NAME`/`AICR_HOST_PORT`/`AICR_CONTAINER_NAME`/`AICR_ENGINE`）
+    - ~~`deploy/docker-static` 清洁同步兼容~~（已交付：未启用嵌套沙箱时 `deploy.sh` 创建占位文件，启用时下载真实 Docker CLI，避免 clean source sync 后 Dockerfile COPY 失败）
     - ~~`.dockerignore`~~（已交付：排除 `.git`/`node_modules`/`dist`/`coverage`/`docs` 等）
     - ~~Dockerfile 前向兼容~~（已交付：补齐 `sandbox`/`eval` node_modules COPY）
     - ~~部署资产审计修复~~（已交付：P4 认证表修正、`.env.sample` 补齐缺失变量、`config.yaml` 补齐 queue 子项示例、`SKILL.md` 环境变量名对齐、`Caddyfile.example` 添加）

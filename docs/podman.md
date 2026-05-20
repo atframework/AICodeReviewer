@@ -87,7 +87,7 @@ When AICR itself runs inside a container (e.g. via `deploy.sh`) and you want the
 
 ### How it works
 
-- `deploy.sh` downloads the Docker static binary and bakes it into the image.
+- `deploy.sh` downloads the Docker static binary and bakes it into the image when `AICR_ENABLE_CONTAINER_SANDBOX=true`; otherwise it creates a harmless `deploy/docker-static` placeholder so clean source syncs still satisfy the Dockerfile's optional `COPY` step.
 - At runtime, `deploy.sh` mounts the host user-level Podman socket (`/run/user/$UID/podman/podman.sock`) into the AICR container.
 - `deploy.sh` sets `DOCKER_HOST=unix:///run/user/$UID/podman/podman.sock` so the Docker CLI inside the container talks to the host Podman daemon.
 - `--userns=keep-id --group-add keep-groups` ensures the container process can access the user-level socket.
