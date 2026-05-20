@@ -96,6 +96,13 @@ if ! $ENGINE_CMD ps >/dev/null 2>&1; then
   $ENGINE_CMD $SD_FLAG system migrate
 fi
 
+# Preserve the previous image for rollback before overwriting the tag
+PREV_TAG="${IMAGE_NAME%:*}:previous"
+if $ENGINE_CMD $SD_FLAG inspect "$IMAGE_NAME" >/dev/null 2>&1; then
+  echo "=== Preserving previous image as $PREV_TAG ==="
+  $ENGINE_CMD $SD_FLAG tag "$IMAGE_NAME" "$PREV_TAG" 2>/dev/null || true
+fi
+
 # Build the image
 echo "=== Building AICR image ==="
 $ENGINE_CMD $SD_FLAG build \
