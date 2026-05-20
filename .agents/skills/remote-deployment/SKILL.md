@@ -166,6 +166,32 @@ ssh ... <remote-host> "podman ps --filter name=aicr"
 ssh ... <remote-host> "podman logs --tail 50 aicr"
 ```
 
+### Container sandbox deployment (optional)
+
+When AICR itself runs inside a container and you want the sandbox to spawn child containers for agent isolation, enable the nested container sandbox:
+
+```bash
+# On the host: ensure user-level Podman socket is active
+ssh ... <remote-host> "systemctl --user enable --now podman.socket"
+
+# Deploy with container sandbox enabled
+ssh -p <ssh-port> ... <remote-host> \
+  "cd <deploy-dir>; AICR_ENABLE_CONTAINER_SANDBOX=true bash deploy.sh"
+```
+
+Requirements:
+
+- Host must have Podman with user-level socket (`/run/user/$(id -u)/podman/podman.sock`).
+- `deploy.sh` downloads a Docker static binary (~40MB) on first run.
+- `config.yaml` must set `sandbox.kind: docker` (Docker CLI inside container talks to Podman socket).
+- `deploy.sh` adds `--userns=keep-id --group-add keep-groups` so the container process can access the socket.
+
+Verify after deploy:
+
+```bash
+ssh ... <remote-host> "podman exec aicr sh -c 'docker --version && docker run --rm alpine:latest echo sandbox-ok'"
+```
+
 ## Environment Variables on Remote
 
 The `.env` file on remote contains secrets. **Never display its full contents in logs.** The known env vars are:
@@ -189,6 +215,7 @@ The `.env` file on remote contains secrets. **Never display its full contents in
 | WeCom notifications fail          | Missing `WECOM_WEBHOOK` in `.env`       | Add env var, restart container                                  |
 | Gitea issues not created          | `kind` mismatch or missing `token_env`  | Verify config `kind` matches code, check `token_env` resolution |
 | `podman ps` fails with `invalid internal status` | Rootless storage driver init failure (custom `rootless_storage_path` in `/etc/containers/storage.conf`) | `podman --storage-driver=overlay system migrate`, then `podman start <containers>` |
+| Container sandbox fails with "permission denied" on socket | Missing `--group-add keep-groups` when using `--userns=keep-id` in detached containers | Ensure `AICR_ENABLE_CONTAINER_SANDBOX=true` in deploy.sh; verify `systemctl --user status podman.socket` is active |
 
 ### Podman `invalid internal status` deep-dive
 

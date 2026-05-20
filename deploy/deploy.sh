@@ -20,6 +20,68 @@ if command -v p4 >/dev/null 2>&1; then
   P4_MOUNT_ARGS=(-v "$P4_BIN:/usr/bin/p4:ro" -e P4TRUST=/app/data/p4trust)
 fi
 
+# ---------------------------------------------------------------------------
+# Optional container-nested sandbox support
+# ---------------------------------------------------------------------------
+# When AICR itself runs inside a container and config.yaml sets
+# sandbox.kind=docker|podman, the host container engine socket must be
+# mounted into the AICR container so it can spawn child containers.
+# The Docker static binary inside the image talks to Podman's
+# docker-compatible socket via DOCKER_HOST.
+AICR_ENABLE_CONTAINER_SANDBOX="${AICR_ENABLE_CONTAINER_SANDBOX:-false}"
+DOCKER_VERSION="${DOCKER_VERSION:-27.5.1}"
+SANDBOX_MOUNT_ARGS=()
+SANDBOX_ENV_ARGS=()
+USERNS_ARGS=()
+
+if [ "$AICR_ENABLE_CONTAINER_SANDBOX" = "true" ]; then
+  # Download Docker static binary if not already present
+  DOCKER_STATIC="$DEPLOY_DIR/source/deploy/docker-static"
+  if [ ! -f "$DOCKER_STATIC" ]; then
+    echo "=== Downloading Docker static binary v${DOCKER_VERSION} ==="
+    if command -v curl >/dev/null 2>&1; then
+      curl -fsSL -o /tmp/docker.tgz "https://download.docker.com/linux/static/stable/x86_64/docker-${DOCKER_VERSION}.tgz"
+    elif command -v wget >/dev/null 2>&1; then
+      wget -qO /tmp/docker.tgz "https://download.docker.com/linux/static/stable/x86_64/docker-${DOCKER_VERSION}.tgz"
+    else
+      echo "ERROR: curl or wget required to download Docker CLI"
+      exit 1
+    fi
+    tar xzf /tmp/docker.tgz -C /tmp
+    cp /tmp/docker/docker "$DOCKER_STATIC"
+    chmod +x "$DOCKER_STATIC"
+    rm -rf /tmp/docker /tmp/docker.tgz
+    echo "=== Docker static binary ready ==="
+  fi
+
+  # Detect host container engine socket
+  # Prefer user-level Podman socket (rootless) because system-level sockets
+  # are often root-owned and inaccessible to the service user.
+  PODMAN_SOCK="/run/user/$(id -u)/podman/podman.sock"
+  if [ -S "$PODMAN_SOCK" ]; then
+    echo "=== Container sandbox: using Podman socket $PODMAN_SOCK ==="
+    SANDBOX_MOUNT_ARGS=(-v "$PODMAN_SOCK:$PODMAN_SOCK")
+    SANDBOX_ENV_ARGS=(-e "DOCKER_HOST=unix://$PODMAN_SOCK")
+  elif [ -S "/var/run/docker.sock" ]; then
+    echo "=== Container sandbox: using Docker socket /var/run/docker.sock ==="
+    SANDBOX_MOUNT_ARGS=(-v "/var/run/docker.sock:/var/run/docker.sock")
+    SANDBOX_ENV_ARGS=(-e "DOCKER_HOST=unix:///var/run/docker.sock")
+  else
+    echo "WARNING: AICR_ENABLE_CONTAINER_SANDBOX=true but no container engine socket found."
+    echo "  Checked: $PODMAN_SOCK, /var/run/docker.sock"
+    echo "  For Podman rootless: systemctl --user enable --now podman.socket"
+  fi
+
+  # userns=keep-id maps the host user's UID/GID into the container so the
+  # container process can access the user-level Podman socket (which is
+  # owned by the host user). Without this, the container user has no
+  # permission to talk to the socket even after it is mounted.
+  # --group-add keep-groups is required for detached containers so the host
+  # user's supplementary groups (including the tools group that owns the
+  # socket) are visible inside the container.
+  USERNS_ARGS=(--userns=keep-id --group-add keep-groups)
+fi
+
 # Pre-flight: recover from rootless storage driver corruption (Podman 5.x)
 ENGINE_CMD="${AICR_ENGINE:-podman}"
 if ! $ENGINE_CMD ps >/dev/null 2>&1; then
@@ -50,12 +112,15 @@ $ENGINE_CMD $SD_FLAG run -d \
   -v "$DEPLOY_DIR/data/db:/app/data" \
   -v "$DEPLOY_DIR/data/logs:/app/logs" \
   "${P4_MOUNT_ARGS[@]}" \
+  "${SANDBOX_MOUNT_ARGS[@]}" \
   -e AICR_LOG_DIR=/app/logs \
   -e AICR_LOG_FILE=aicr.log \
   -e AICR_LOG_MAX_AGE_DAYS=7 \
   -e AICR_LOG_MAX_FILES=3 \
   -e AICR_LOG_MAX_SIZE_BYTES=104857600 \
+  "${SANDBOX_ENV_ARGS[@]}" \
   --env-file "$DEPLOY_DIR/.env" \
+  "${USERNS_ARGS[@]}" \
   "$IMAGE_NAME"
 
 echo "=== Waiting for startup ==="

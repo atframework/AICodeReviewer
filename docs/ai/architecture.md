@@ -190,6 +190,7 @@
 | `docker` | 已交付 | 通过 CLI 调用 Docker，支持镜像、allowlist、只读挂载、env-file 隔离。 |
 | `podman` | 已交付 | 与 Docker 共享同一容器合同，CLI 解析为 `podman`；支持 rootless。 |
 | `docker_socket` | 已交付（映射实现） | 复用 `docker` 后端的容器实现，仅 `kind` 标识不同；适用于通过 Unix socket 访问 Docker daemon 的场景，不额外引入 Docker Engine API 客户端。 |
+| `docker` (nested) | 已验证 | 当 AICR 本身运行在 Podman/Docker 容器内时，通过挂载宿主机容器引擎 socket + Docker 静态二进制实现嵌套容器隔离。见 `docs/podman.md` "Nested container sandbox"。 |
 | `k8s_pod` | 预留扩展位 | 尚未实现。计划通过 Kubernetes API 创建 Job Pod，挂载 source/agent/tmp 卷，流式回传日志。需要集群环境、`@kubernetes/client-node` 和有效的 kubeconfig。 |
 | `firecracker` | 预留扩展位 | 尚未实现。计划通过 Firecracker API 创建 microVM，以块设备或 virtiofs 挂载 workspace，流式回传日志。需要 `firecracker` 二进制和 API socket。 |
 

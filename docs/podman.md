@@ -62,6 +62,44 @@ workspaces:
         image: ghcr.io/example/python-review:latest
 ```
 
+## Nested container sandbox (AICR inside a container)
+
+When AICR itself runs inside a container (e.g. via `deploy.sh`) and you want the sandbox to spawn **child containers** for agent isolation, the host container engine socket must be mounted into the AICR container. This is a Docker-out-of-Docker (DooD) pattern applied to Podman.
+
+### Requirements
+
+1. **Host user-level Podman socket** must be enabled:
+   ```bash
+   systemctl --user enable --now podman.socket
+   ```
+2. **Docker static binary** inside the AICR image (installed by `deploy.sh` when `AICR_ENABLE_CONTAINER_SANDBOX=true`).
+3. **`deploy.sh` environment variables**:
+   ```bash
+   AICR_ENABLE_CONTAINER_SANDBOX=true   # enables socket mount + docker CLI
+   ```
+4. **`config.yaml` sandbox kind** set to `docker` (the Docker CLI talks to Podman's docker-compatible socket):
+   ```yaml
+   agent:
+     sandbox:
+       kind: docker
+       engine: auto
+   ```
+
+### How it works
+
+- `deploy.sh` downloads the Docker static binary and bakes it into the image.
+- At runtime, `deploy.sh` mounts the host user-level Podman socket (`/run/user/$UID/podman/podman.sock`) into the AICR container.
+- `deploy.sh` sets `DOCKER_HOST=unix:///run/user/$UID/podman/podman.sock` so the Docker CLI inside the container talks to the host Podman daemon.
+- `--userns=keep-id --group-add keep-groups` ensures the container process can access the user-level socket.
+
+### Verification
+
+After deployment, confirm from inside the AICR container:
+
+```bash
+podman exec aicr sh -c 'docker --version && docker run --rm alpine:latest echo ok'
+```
+
 ## Runtime guarantees
 
 The Podman path must preserve the same sandbox guarantees as Docker:
