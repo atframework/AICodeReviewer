@@ -166,6 +166,39 @@ ssh ... <remote-host> "podman ps --filter name=aicr"
 ssh ... <remote-host> "podman logs --tail 50 aicr"
 ```
 
+### Rollback
+
+`deploy.sh` tags the previous image as `<image>:previous` before building the new one, then stops the old container and starts a new one. If the new container fails the health check, the old container is already gone but the previous image is preserved. To roll back:
+
+1. Verify the `:previous` image exists:
+
+   ```bash
+   ssh ... <remote-host> "$ENGINE_CMD images --filter reference='aicr:previous'"
+   ```
+
+2. Stop the failed container and start one from the previous image:
+
+   ```bash
+   ssh ... <remote-host> "\
+     podman --storage-driver=overlay rm -f <container-name> 2>/dev/null; \
+     podman --storage-driver=overlay run -d --name <container-name> \
+       -p <host-port>:8080 \
+       --env-file <deploy-dir>/.env \
+       -v <deploy-dir>/config.yaml:/app/config.yaml:ro \
+       -v <deploy-dir>/data/workspaces:/app/workspaces \
+       -v <deploy-dir>/data/db:/app/data \
+       -v <deploy-dir>/data/logs:/app/logs \
+       aicr:previous"
+   ```
+
+   **Important**: `deploy.sh` uses bind mounts from `<deploy-dir>/data/*`, not named volumes.
+
+3. Verify health:
+
+   ```bash
+   curl -sf "http://127.0.0.1:<host-port>/healthz"
+   ```
+
 ### Container sandbox deployment (optional)
 
 When AICR itself runs inside a container and you want the sandbox to spawn child containers for agent isolation, enable the nested container sandbox:

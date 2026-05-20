@@ -54,16 +54,17 @@ This checklist tracks the remaining M9 deliverables before the release can be co
 
 - [x] Podman rootless `--storage-driver=overlay` fix documented and deployed.
 - [x] Health check (`/healthz`) confirmed working in production.
-- [ ] Zero-to-deployment walkthrough validated on a clean environment.
-- [ ] Rollback procedure documented.
+- [x] Incremental re-deployment validated: source sync → build → start → healthz/metrics OK on existing test env `/data/disk2/AICodeReviewerTest`.
+- [ ] Full zero-to-deployment on a completely clean directory (mkdir, write config.yaml, write .env, deploy.sh, healthz).
+- [x] Rollback procedure documented in `.agents/skills/remote-deployment/SKILL.md`; `deploy.sh` auto-tags previous image as `:previous`.
 
 ### Final Validation
 
-- [ ] ESLint clean.
-- [ ] TypeScript clean.
-- [ ] Vitest all passing.
-- [ ] markdownlint clean.
-- [ ] Build succeeds.
+- [x] ESLint clean.
+- [x] TypeScript clean.
+- [x] Vitest all passing (1188 tests).
+- [x] markdownlint clean.
+- [x] Build succeeds (Dockerfile `aicr:test` image built and started).
 
 ## Post-M9 Backlog
 

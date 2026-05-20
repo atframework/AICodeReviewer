@@ -197,7 +197,7 @@ ssh -p 36000 -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no \
 | 本机端口 | `8091`                                                     | `8090`                                      |
 | 反向代理 | （暂无，直接访问或临时配置）                               | `https://aicr.m-oa.com:6023`                |
 | 健康检查 | `http://10.64.8.2:8091/healthz`                            | `http://10.64.8.2:8090/healthz`             |
-| 数据卷   | `aicr-test-data`, `aicr-test-workspaces`, `aicr-test-logs` | `aicr-data`, `aicr-workspaces`, `aicr-logs` |
+| 数据卷   | bind: `…/data/workspaces`, `…/data/db`, `…/data/logs` | bind: `…/data/workspaces`, `…/data/db`, `…/data/logs` |
 
 ### 8.3 测试环境部署步骤
 
@@ -205,7 +205,7 @@ ssh -p 36000 -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no \
 # 1. 在远程创建测试目录结构
 ssh -p 36000 -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no \
   -o User=tools -i D:/workspace/keys/id_ed25519.it 10.64.8.2 \
-  "mkdir -p /data/disk2/AICodeReviewerTest/{source,deploy,data,workspaces,logs}"
+  "mkdir -p /data/disk2/AICodeReviewerTest/{source,deploy,data/{workspaces,db,logs}}"
 
 # 2. 同步源码到测试目录（使用独立 tarball，不污染生产 source/）
 #    在本地 PowerShell 执行：
@@ -216,17 +216,24 @@ ssh -p 36000 -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no \
 # 3. 复制独立的测试 config.yaml 和 .env 到测试目录
 #    注意：测试环境的 secret 可以从同一 secret.json 提取，但 config.yaml 必须独立维护
 
-# 4. 在测试目录运行独立的 deploy.sh（需确保脚本支持 TEST_DIR 覆盖）
-#    或手动构建和启动：
+# 4. 在测试目录运行独立的 deploy.sh（使用环境变量覆盖部署参数）
+#    cd /data/disk2/AICodeReviewerTest
+#    AICR_DEPLOY_DIR=/data/disk2/AICodeReviewerTest \
+#    AICR_IMAGE_NAME=aicr:test \
+#    AICR_CONTAINER_NAME=aicr-test \
+#    AICR_HOST_PORT=8091 \
+#    bash deploy.sh
+#
+#    或手动构建和启动（注意 deploy.sh 使用 bind mount，不是 named volume）：
 #    cd /data/disk2/AICodeReviewerTest/source
-#    podman build -t aicr:test -f deploy/Dockerfile .
-#    podman rm -f aicr-test 2>/dev/null || true
-#    podman run -d --name aicr-test -p 8091:8080 \
+#    podman --storage-driver=overlay build -t aicr:test -f deploy/Dockerfile .
+#    podman --storage-driver=overlay rm -f aicr-test 2>/dev/null || true
+#    podman --storage-driver=overlay run -d --name aicr-test -p 8091:8080 \
 #      --env-file /data/disk2/AICodeReviewerTest/.env \
 #      -v /data/disk2/AICodeReviewerTest/config.yaml:/app/config.yaml:ro \
-#      -v aicr-test-data:/app/data \
-#      -v aicr-test-workspaces:/app/workspaces \
-#      -v aicr-test-logs:/app/logs \
+#      -v /data/disk2/AICodeReviewerTest/data/workspaces:/app/workspaces \
+#      -v /data/disk2/AICodeReviewerTest/data/db:/app/data \
+#      -v /data/disk2/AICodeReviewerTest/data/logs:/app/logs \
 #      aicr:test
 
 # 5. 验证测试环境健康检查

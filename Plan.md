@@ -19,7 +19,7 @@
 - M5 已基本交付；仅剩 HTTP/SSE MCP transport 待调研（非阻塞）。
 - M6 GitHub 生产链路已验收；GitLab e2e 和 SVN adapter 移至 Backlog。
 - M8 观测能力已大部分交付：OTel 已接入 serve 命令、Prometheus metrics 和 run snapshot 已连线、eval CLI 已添加。
-- M9 发布收尾持续推进：deploy.sh 已修复 `--storage-driver=overlay`、docker_socket 文档已补齐。
+- M9 发布收尾接近完成：deploy.sh 已修复 `--storage-driver=overlay`、docker_socket 文档已补齐、增量部署验证已通过；从零部署验收待补充。
 - 本轮已完成文档收束：已完成阶段与稳定细节已搬离 `Plan.md`，未来 agent 应按需读文档，
   而不是默认吞下整份历史记录。
 
@@ -231,7 +231,7 @@
 | M6     | 部分完成   | GitHub 生产链路已验收                                   | GitLab e2e、SVN adapter 移至 Backlog     |
 | M7     | 未开始     | workspace 定制、skill by glob、国际化、memory           | 等待 M5/M6 更稳定后推进                  |
 | M8     | 大部分完成 | structured logs、OTel、metrics、run snapshot、eval CLI  | eval fixture 已补齐；CI 集成移至 Backlog |
-| M9     | 进行中     | 文档、示例、deploy.sh 修复、发布资产                    | 从零部署验收、最终发布检查               |
+| M9     | 接近完成   | 文档、示例、deploy.sh 修复、发布资产、增量部署验证      | 从零部署验收、版本 tag                   |
 
 ### 8.2 当前执行包
 
@@ -270,7 +270,8 @@
     - ~~`.dockerignore`~~（已交付：排除 `.git`/`node_modules`/`dist`/`coverage`/`docs` 等）
     - ~~Dockerfile 前向兼容~~（已交付：补齐 `sandbox`/`eval` node_modules COPY）
     - ~~部署资产审计修复~~（已交付：P4 认证表修正、`.env.sample` 补齐缺失变量、`config.yaml` 补齐 queue 子项示例、`SKILL.md` 环境变量名对齐、`Caddyfile.example` 添加）
-    - 从零部署验收（在干净环境上走通完整流程）
+    - ~~增量部署验证~~（已交付：测试环境 `/data/disk2/AICodeReviewerTest` 源码同步 → `deploy.sh` 构建 → 启动 → `healthz` / `/metrics` 验证通过）
+    - 从零部署验收（空目录上走通完整流程，含 config.yaml/.env 初始写入）
 
 ### 8.3 Backlog（低优先级延后项）
 
