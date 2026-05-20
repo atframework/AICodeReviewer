@@ -30,14 +30,16 @@ fi
 # docker-compatible socket via DOCKER_HOST.
 AICR_ENABLE_CONTAINER_SANDBOX="${AICR_ENABLE_CONTAINER_SANDBOX:-false}"
 DOCKER_VERSION="${DOCKER_VERSION:-27.5.1}"
+DOCKER_STATIC="$DEPLOY_DIR/source/deploy/docker-static"
 SANDBOX_MOUNT_ARGS=()
 SANDBOX_ENV_ARGS=()
 USERNS_ARGS=()
 
+mkdir -p "$(dirname "$DOCKER_STATIC")"
+
 if [ "$AICR_ENABLE_CONTAINER_SANDBOX" = "true" ]; then
   # Download Docker static binary if not already present
-  DOCKER_STATIC="$DEPLOY_DIR/source/deploy/docker-static"
-  if [ ! -f "$DOCKER_STATIC" ]; then
+  if [ ! -s "$DOCKER_STATIC" ]; then
     echo "=== Downloading Docker static binary v${DOCKER_VERSION} ==="
     if command -v curl >/dev/null 2>&1; then
       curl -fsSL -o /tmp/docker.tgz "https://download.docker.com/linux/static/stable/x86_64/docker-${DOCKER_VERSION}.tgz"
@@ -80,6 +82,11 @@ if [ "$AICR_ENABLE_CONTAINER_SANDBOX" = "true" ]; then
   # user's supplementary groups (including the tools group that owns the
   # socket) are visible inside the container.
   USERNS_ARGS=(--userns=keep-id --group-add keep-groups)
+else
+  # deploy/Dockerfile has an unconditional COPY for this optional binary.
+  # Keep a harmless placeholder in the build context when nested sandboxing is
+  # disabled so clean source syncs do not fail before the runtime starts.
+  [ -f "$DOCKER_STATIC" ] || : > "$DOCKER_STATIC"
 fi
 
 # Pre-flight: recover from rootless storage driver corruption (Podman 5.x)

@@ -12,6 +12,7 @@ pnpm-debug.log*
 
 # Temporary repository artifacts must live under build/
 /build/
+/aicr-deploy-*.tar.gz
 /.venv
 
 /.claude/settings.local*

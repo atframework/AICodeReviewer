@@ -206,16 +206,17 @@ The `.env` file on remote contains secrets. **Never display its full contents in
 
 ## Common Failures and Recovery
 
-| Symptom                           | Likely Cause                            | Fix                                                             |
-| --------------------------------- | --------------------------------------- | --------------------------------------------------------------- |
-| `deploy.sh` fails at build stage  | Outdated `source/` or lockfile mismatch | Re-sync source, ensure `pnpm-lock.yaml` is up to date           |
-| `healthz` returns non-200         | Config validation failed                | Check `podman logs aicr` for Zod/config errors                  |
-| Container exits immediately       | Port conflict or missing volume         | Check `podman ps -a` and logs                                   |
-| Feishu/webhook notifications fail | Missing env var in `.env`               | Verify `.env` has required vars, restart container              |
-| WeCom notifications fail          | Missing `WECOM_WEBHOOK` in `.env`       | Add env var, restart container                                  |
-| Gitea issues not created          | `kind` mismatch or missing `token_env`  | Verify config `kind` matches code, check `token_env` resolution |
-| `podman ps` fails with `invalid internal status` | Rootless storage driver init failure (custom `rootless_storage_path` in `/etc/containers/storage.conf`) | `podman --storage-driver=overlay system migrate`, then `podman start <containers>` |
-| Container sandbox fails with "permission denied" on socket | Missing `--group-add keep-groups` when using `--userns=keep-id` in detached containers | Ensure `AICR_ENABLE_CONTAINER_SANDBOX=true` in deploy.sh; verify `systemctl --user status podman.socket` is active |
+| Symptom                                                            | Likely Cause                                                                                            | Fix                                                                                                                             |
+| ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `deploy.sh` fails at build stage                                   | Outdated `source/` or lockfile mismatch                                                                 | Re-sync source, ensure `pnpm-lock.yaml` is up to date                                                                           |
+| `healthz` returns non-200                                          | Config validation failed                                                                                | Check `podman logs aicr` for Zod/config errors                                                                                  |
+| Container exits immediately                                        | Port conflict or missing volume                                                                         | Check `podman ps -a` and logs                                                                                                   |
+| Feishu/webhook notifications fail                                  | Missing env var in `.env`                                                                               | Verify `.env` has required vars, restart container                                                                              |
+| WeCom notifications fail                                           | Missing `WECOM_WEBHOOK` in `.env`                                                                       | Add env var, restart container                                                                                                  |
+| Gitea issues not created                                           | `kind` mismatch or missing `token_env`                                                                  | Verify config `kind` matches code, check `token_env` resolution                                                                 |
+| `podman ps` fails with `invalid internal status`                   | Rootless storage driver init failure (custom `rootless_storage_path` in `/etc/containers/storage.conf`) | `podman --storage-driver=overlay system migrate`, then `podman start <containers>`                                              |
+| Container sandbox fails with "permission denied" on socket         | Missing `--group-add keep-groups` when using `--userns=keep-id` in detached containers                  | Ensure `AICR_ENABLE_CONTAINER_SANDBOX=true` in deploy.sh; verify `systemctl --user status podman.socket` is active              |
+| Build fails at `COPY deploy/docker-static` after clean source sync | Optional Docker static binary placeholder missing from `source/deploy/`                                 | Use current `deploy.sh`; it creates a placeholder when nested sandboxing is disabled and downloads the real binary when enabled |
 
 ### Podman `invalid internal status` deep-dive
 

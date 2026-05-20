@@ -489,6 +489,231 @@ describe("runReviewOrchestration", () => {
     }
   });
 
+  it("fetches MCP state context requests before accepting inaccessible-code summaries", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-mcp-state-context-"));
+
+    try {
+      await writeWorkspaceFile(tempDir, "src/app.ts", "const value = oldValue();\ncommitBeforeReturn();\n");
+      const fetchExtraCalls: string[] = [];
+      const vcs: DiffCapableVcsAdapter = {
+        ...createVcs(tempDir),
+        async fetchExtraContext(req) {
+          fetchExtraCalls.push(req.path);
+          return { path: req.path, content: "const value = oldValue();\ncommitBeforeReturn();\n" };
+        },
+      };
+      const spawnCalls: SandboxSpawnOptions[] = [];
+      let spawnCount = 0;
+      const sandbox: SandboxBackend = {
+        kind: "native",
+        async materializeFs(layout) {
+          await mkdir(layout.agentDir, { recursive: true });
+          await mkdir(layout.tmpDir, { recursive: true });
+          return { agentDir: layout.agentDir, tmpDir: layout.tmpDir, mountSpecs: [] };
+        },
+        async spawn(spawnOptions) {
+          spawnCalls.push(spawnOptions);
+          spawnCount += 1;
+          const statePath = join(spawnOptions.cwd, ".aicr-output-state.json");
+          if (spawnCount === 1) {
+            await writeFile(statePath, JSON.stringify({
+              problems: [],
+              summaries: [{ markdown: "无法访问完整仓库代码，无法验证该变更。" }],
+              contextRequests: [{ path: "src/app.ts", reason: "需要完整仓库代码验证提交路径。" }],
+            }), "utf8");
+            return { exitCode: 0, stdout: "", stderr: "", timedOut: false, durationMs: 10 };
+          }
+
+          expect(spawnOptions.stdin).toContain("Fetched context:");
+          expect(spawnOptions.stdin).toContain("commitBeforeReturn");
+          await writeFile(statePath, JSON.stringify({
+            problems: [
+              {
+                file: "src/app.ts",
+                line: 2,
+                severity: "medium",
+                category: "correctness",
+                message: "新增路径在提交完成前返回，调用方可能观察到未提交状态。",
+              },
+            ],
+            summaries: [{ markdown: "补拉上下文后发现 1 个问题。" }],
+            contextRequests: [],
+          }), "utf8");
+          return { exitCode: 0, stdout: "", stderr: "", timedOut: false, durationMs: 12 };
+        },
+        async teardown() {},
+      };
+      const agentAdapter: AgentAdapter = {
+        kind: "kilo",
+        async detect() {
+          return { available: true, binary: "kilo" };
+        },
+        buildCommand() {
+          return ["kilo", "run", "--auto"];
+        },
+        async materializeConfig(_model, workingDir) {
+          return { configFiles: new Map(), envVars: {}, workingDir };
+        },
+      };
+      const publishedProblems: ReviewProblem[] = [];
+
+      const result = await runReviewOrchestration(
+        {
+          reviewEvent: createReviewEventFixture(),
+          payload: {},
+          provider: "gitea",
+          eventName: "pull_request",
+        },
+        {
+          baseSystemPrompt: "<task>\n{{TASK_CONTEXT}}\n</task>",
+          sourceRootResolver: () => tempDir,
+          vcs,
+          llm: {
+            async complete() {
+              throw new Error("LLM path should not be used when agent produces MCP state outputs");
+            },
+          },
+          model,
+          sandbox,
+          agentAdapter,
+          outputPublisher: {
+            async publishProblem(problem) {
+              publishedProblems.push(problem);
+              return { channel: "test", status: "published", raw: {} };
+            },
+            async publishSummary() {
+              return { channel: "test", status: "published", raw: {} };
+            },
+          },
+        },
+      );
+
+      expect(result.status).toBe("published");
+      expect(result.problemCount).toBe(1);
+      expect(result.summaryCount).toBe(1);
+      expect(result.contextRequestCount).toBe(1);
+      expect(fetchExtraCalls).toEqual(["src/app.ts"]);
+      expect(spawnCalls).toHaveLength(2);
+      expect(publishedProblems[0]?.file).toBe("src/app.ts");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("uses Kilo stream tool-call events as context requests when MCP state is absent", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-kilo-stream-context-"));
+
+    try {
+      await writeWorkspaceFile(tempDir, "src/app.ts", "const value = oldValue();\ncommitBeforeReturn();\n");
+      const fetchExtraCalls: string[] = [];
+      const vcs: DiffCapableVcsAdapter = {
+        ...createVcs(tempDir),
+        async fetchExtraContext(req) {
+          fetchExtraCalls.push(req.path);
+          return { path: req.path, content: "const value = oldValue();\ncommitBeforeReturn();\n" };
+        },
+      };
+      const spawnCalls: SandboxSpawnOptions[] = [];
+      let spawnCount = 0;
+      const sandbox: SandboxBackend = {
+        kind: "native",
+        async materializeFs(layout) {
+          await mkdir(layout.agentDir, { recursive: true });
+          await mkdir(layout.tmpDir, { recursive: true });
+          return { agentDir: layout.agentDir, tmpDir: layout.tmpDir, mountSpecs: [] };
+        },
+        async spawn(spawnOptions) {
+          spawnCalls.push(spawnOptions);
+          spawnCount += 1;
+          if (spawnCount === 1) {
+            return {
+              exitCode: 0,
+              stdout: JSON.stringify({
+                type: "tool_call",
+                name: "aicr-output_aicr_fetch_more_context",
+                input: { path: "src/app.ts", reason: "Need the full changed file before deciding." },
+              }),
+              stderr: "",
+              timedOut: false,
+              durationMs: 10,
+            };
+          }
+
+          expect(spawnOptions.stdin).toContain("Fetched context:");
+          expect(spawnOptions.stdin).toContain("commitBeforeReturn");
+          return {
+            exitCode: 0,
+            stdout: JSON.stringify({
+              toolCalls: [
+                {
+                  name: "aicr.report_problem",
+                  input: {
+                    file: "src/app.ts",
+                    line: 2,
+                    severity: "medium",
+                    category: "correctness",
+                    message: "成功路径在提交完成前返回。",
+                  },
+                },
+              ],
+            }),
+            stderr: "",
+            timedOut: false,
+            durationMs: 12,
+          };
+        },
+        async teardown() {},
+      };
+      const agentAdapter: AgentAdapter = {
+        kind: "kilo",
+        async detect() {
+          return { available: true, binary: "kilo" };
+        },
+        buildCommand() {
+          return ["kilo", "run", "--auto"];
+        },
+        async materializeConfig(_model, workingDir) {
+          return { configFiles: new Map(), envVars: {}, workingDir };
+        },
+      };
+
+      const result = await runReviewOrchestration(
+        {
+          reviewEvent: createReviewEventFixture(),
+          payload: {},
+          provider: "gitea",
+          eventName: "pull_request",
+        },
+        {
+          baseSystemPrompt: "<task>\n{{TASK_CONTEXT}}\n</task>",
+          sourceRootResolver: () => tempDir,
+          vcs,
+          llm: {
+            async complete() {
+              throw new Error("direct LLM should not be used when stream tool calls can be repaired by agent");
+            },
+          },
+          model,
+          sandbox,
+          agentAdapter,
+          outputPublisher: {
+            async publishProblem() {
+              return { channel: "test", status: "published", raw: {} };
+            },
+          },
+        },
+      );
+
+      expect(result.status).toBe("published");
+      expect(result.problemCount).toBe(1);
+      expect(result.contextRequestCount).toBe(1);
+      expect(fetchExtraCalls).toEqual(["src/app.ts"]);
+      expect(spawnCalls).toHaveLength(2);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("skips when agent repair prose says the changed file has no reviewable code", async () => {
     const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-agent-no-reviewable-code-"));
 
