@@ -75,6 +75,8 @@ COPY --from=build --chown=node:node /app/packages/outputs/node_modules ./package
 COPY --from=build --chown=node:node /app/packages/mcp-output/node_modules ./packages/mcp-output/node_modules
 COPY --from=build --chown=node:node /app/packages/agents/node_modules ./packages/agents/node_modules
 COPY --from=build --chown=node:node /app/packages/store/node_modules ./packages/store/node_modules
+COPY --from=build --chown=node:node /app/packages/sandbox/node_modules ./packages/sandbox/node_modules
+COPY --from=build --chown=node:node /app/packages/eval/node_modules ./packages/eval/node_modules
 COPY --from=build --chown=node:node /app/prompts ./prompts
 COPY --from=build --chown=node:node /app/templates ./templates
 

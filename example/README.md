@@ -167,7 +167,7 @@ Each trigger kind uses a specific verification mechanism:
 | **gitea** / **forgejo** | `webhook_secret_env` | HMAC-SHA256      | `x-gitea-signature-256` | Gitea webhook → Secret field  |
 | **github**              | `webhook_secret_env` | HMAC-SHA256      | `x-hub-signature-256`   | GitHub webhook → Secret field |
 | **gitlab**              | `webhook_secret_env` | Token comparison | `x-gitlab-token`        | GitLab webhook → Secret token |
-| **p4**                  | `webhook_secret_env` | HMAC-SHA256      | `x-aicr-signature-256`  | p4-trigger.sh computes HMAC   |
+| **p4**                  | `server.auth`        | API key          | `x-api-key`             | p4-trigger.sh sends `X-API-Key` header |
 
 GitHub and GitLab can each define **multiple trigger profiles on the same route** (`/webhooks/github` or `/webhooks/gitlab`). Use separate trigger names when repositories need different outbound tokens, webhook secrets, or file filters; AICR picks the final profile by the verified credential plus the repository identity from the webhook payload.
 

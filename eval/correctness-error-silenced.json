@@ -1,0 +1,16 @@
+{
+  "id": "correctness-error-silenced",
+  "description": "Detect empty catch block that silently swallows errors",
+  "changedFiles": ["src/io/parser.ts"],
+  "diff": "diff --git a/src/io/parser.ts b/src/io/parser.ts\n--- a/src/io/parser.ts\n+++ b/src/io/parser.ts\n@@ -8,3 +8,7 @@\n export function parseConfig(raw: string) {\n-  return JSON.parse(raw);\n+  try {\n+    return JSON.parse(raw);\n+  } catch {}\n }\n",
+  "expectedProblems": [
+    {
+      "file": "src/io/parser.ts",
+      "line": 11,
+      "severity": "medium",
+      "category": "correctness",
+      "messagePattern": "catch"
+    }
+  ],
+  "tags": ["correctness", "error-handling", "empty-catch"]
+}

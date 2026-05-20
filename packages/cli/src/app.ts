@@ -4,6 +4,7 @@ import { parseArgs } from "node:util";
 
 import {
   createDefaultLogger,
+  createOtelSdk,
   fixMarkdown,
   createReviewEvent,
   loadConfigFile,
@@ -26,6 +27,7 @@ import {
   serveAsync,
   summarizeReviewOrchestrationForWebhook,
 } from "@aicr/server";
+import { runEval, type EvalExample, type EvalReviewOutput } from "@aicr/eval";
 
 import { installFileLogTeeFromEnv } from "./log-file.js";
 
@@ -37,6 +39,7 @@ Usage:
 Commands:
   serve    Start the webhook server
   review   Run a code review (prompt preparation or full dry-run)
+  eval     Run evaluation benchmarks against configured LLM
   replay   Replay a stored review run scaffold
   memory   Inspect or clear workspace memory scaffold
   lint     Validate templates or config scaffold
@@ -67,6 +70,7 @@ Options:
   --template <path>       Template file to render and validate (lint command)
   --template-kind <kind>  Template kind: summary or problem (lint command)
   --channel-kind <kind>   Output channel kind for lint sample context
+  --eval-dir <path>       Directory containing eval JSON fixtures (eval command)
   --help, -h              Show this message
   --version, -v           Show version
 `;
@@ -190,6 +194,7 @@ export async function runCli(
           template: { type: "string" },
           "template-kind": { type: "string" },
           "channel-kind": { type: "string" },
+          "eval-dir": { type: "string" },
         },
       });
     } catch (error) {
@@ -241,6 +246,12 @@ export async function runCli(
       const basePromptPath = resolve(cwd, values["base-prompt"] ?? "prompts/system/code-reviewer.system.md");
       const baseSystemPrompt = await loadSystemPromptTemplate(basePromptPath);
       const port = parseOptionalInteger(values.port, "--port") ?? config.server.port ?? 8080;
+
+      let otelSdk: ReturnType<typeof createOtelSdk> | undefined;
+      if (process.env.OTEL_EXPORTER_OTLP_ENDPOINT) {
+        otelSdk = createOtelSdk({ serviceName: "aicr", enableOtelDiagnostics: true });
+        otelSdk.start();
+      }
 
       const serverOptions = await bootstrapServerApp({
         config,
@@ -614,6 +625,105 @@ export async function runCli(
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       stderr.write(`aicr lint failed: ${message}\n`);
+      return 1;
+    }
+  }
+
+  if (command === "eval") {
+    try {
+      const evalDir = values["eval-dir"]
+        ? resolve(cwd, values["eval-dir"])
+        : resolve(cwd, "eval");
+      if (!existsSync(evalDir)) {
+        stderr.write(`aicr eval: directory not found at ${evalDir}\n`);
+        return 1;
+      }
+
+      const exampleFiles = readdirSync(evalDir).filter((f) => f.endsWith(".json"));
+      if (exampleFiles.length === 0) {
+        stderr.write(`aicr eval: no .json example files found in ${evalDir}\n`);
+        return 1;
+      }
+
+      const configPath = values.config
+        ? resolve(cwd, values.config)
+        : resolve(cwd, "config.yaml");
+      if (!existsSync(configPath)) {
+        stderr.write(`aicr eval: config file not found at ${configPath}\n`);
+        return 1;
+      }
+
+      const config = await loadConfigFile(configPath);
+      const basePromptPath = resolve(cwd, values["base-prompt"] ?? "prompts/system/code-reviewer.system.md");
+      const baseSystemPrompt = await loadSystemPromptTemplate(basePromptPath);
+      const serverOptions = await bootstrapServerApp({
+        config,
+        baseSystemPrompt,
+        baseDir: cwd,
+      });
+      const orchestration = serverOptions.reviewOrchestration;
+      if (!orchestration) {
+        stderr.write("aicr eval: failed to initialize review orchestration.\n");
+        return 1;
+      }
+
+      const examples: EvalExample[] = [];
+      for (const file of exampleFiles) {
+        const raw = JSON.parse(readFileSync(resolve(evalDir, file), "utf8"));
+        examples.push(raw);
+      }
+
+      const reviewFn = async (example: EvalExample): Promise<EvalReviewOutput> => {
+        const reviewEvent = createReviewEvent({
+          triggerName: "eval",
+          provider: "gitea",
+          workspaceId: "eval",
+          targetKind: "pull_request",
+          repoRef: "eval/repo",
+          reason: `eval:${example.id}`,
+          headSha: "eval-sha",
+          changedFiles: [...example.changedFiles],
+          author: {},
+        });
+
+        const result = await runReviewOrchestration(
+          {
+            reviewEvent,
+            payload: null,
+            provider: "gitea",
+            eventName: "eval",
+          },
+          {
+            baseSystemPrompt: orchestration.baseSystemPrompt,
+            sourceRootResolver: () => cwd,
+            vcs: orchestration.vcs,
+            ...(orchestration.vcsFactory ? { vcsFactory: orchestration.vcsFactory } : {}),
+            llm: orchestration.llm,
+            model: orchestration.model,
+            dryRun: true,
+            taskContextBuilder: () => example.diff,
+          },
+        );
+
+        return {
+          problems: result.outputState.problems.map((p) => ({
+            file: p.file,
+            line: p.line,
+            severity: p.severity,
+            category: p.category,
+            message: p.message,
+          })),
+          ...(result.outputState.skipReason ? { skipReason: result.outputState.skipReason } : {}),
+          ...(result.outputState.summaries[0]?.markdown ? { summary: result.outputState.summaries[0].markdown } : {}),
+        };
+      };
+
+      const summary = await runEval({ examples, reviewFn });
+      stdout.write(`${JSON.stringify(summary, null, 2)}\n`);
+      return summary.failed > 0 ? 1 : 0;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      stderr.write(`aicr eval failed: ${message}\n`);
       return 1;
     }
   }

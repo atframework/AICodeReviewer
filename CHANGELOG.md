@@ -22,10 +22,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **M9**: Release checklist created at `docs/ai/milestones/M9-checklist.md`.
 - **M5**: Kilo Code end-to-end acceptance verified via production log analysis (agent sandbox execution, MCP state file read, stdout stream parsing, structured output conversion all confirmed working).
 - **M6**: GitHub production e2e verified (`github-atframework` / `github-owent` triggers running, auto-created issues and PR analysis records confirmed).
+- **M8**: OTel SDK now wired into `aicr serve` command; starts automatically when `OTEL_EXPORTER_OTLP_ENDPOINT` is set.
+- **M8**: `aicr eval` CLI command added — runs evaluation benchmarks from `eval/` directory JSON fixtures against configured LLM, outputs structured pass/fail summary.
+- **M8**: Baseline eval fixture `eval/baseline-sql-injection.json` added as a seed test case.
+- **M8**: Eval fixtures expanded to 6 total covering security (SQL injection, hardcoded secrets), correctness (null dereference, silenced errors), style (naming convention), and performance (N+1 query pattern).
+- **M9**: `deploy/deploy.sh` now includes `--storage-driver=overlay` on all `podman` commands and a preflight `podman system migrate` check (addresses rootless Podman 5.x storage corruption).
+- **M9**: `.dockerignore` added to reduce Docker build context size.
+- **M9**: `deploy.sh` converted to use environment-variable overrides (`AICR_DEPLOY_DIR`, `AICR_IMAGE_NAME`, `AICR_HOST_PORT`, `AICR_CONTAINER_NAME`, `AICR_ENGINE`) instead of hardcoded paths.
+- **M9**: `deploy/Caddyfile.example` added as a sample reverse proxy configuration for TLS termination.
+- **M9**: `deploy/Dockerfile` now copies `sandbox` and `eval` node_modules for forward compatibility.
+- **Docs**: `example/README.md` P4 authentication table row corrected — P4 uses server API key, not webhook HMAC.
+- **Docs**: `example/.env.sample` updated with missing env vars (`AICR_WORKSPACE_API_KEY`, GitHub multi-profile, Feishu issue notification).
+- **Docs**: `example/config.yaml` queue section updated with commented `rate_limit`, `retry`, `dead_letter` examples.
+- **Docs**: `.agents/skills/remote-deployment/SKILL.md` env var names aligned with `example/.env.sample`.
 
 ### Changed
 
 - **M5**: `Plan.md` current execution package updated to reflect actual delivery status (runtime bundle, MCP config injection, agent repair, MCP state file reading marked delivered).
+- **Plan**: `Plan.md` milestone table updated: M5→基本完成, M6→部分完成 (GitHub e2e 验收, GitLab/SVN→Backlog), M8→大部分完成 (OTel 接入, eval CLI 添加), M9→进行中. Low-priority items moved to explicit Backlog section.
 - **Docs**: `Note.md` moved to `development/README.md`; all references updated across skills and docs.
 - **Skill**: `.agents/skills/remote-deployment/SKILL.md` stripped of hardcoded deployment targets (IP, ports, directories, domains); values replaced with placeholders. Concrete environment info lives in `development/README.md`.
 

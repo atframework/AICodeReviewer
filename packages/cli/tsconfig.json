@@ -9,6 +9,7 @@
   "references": [
     { "path": "../agents" },
     { "path": "../core" },
+    { "path": "../eval" },
     { "path": "../llm" },
     { "path": "../outputs" },
     { "path": "../sandbox" },

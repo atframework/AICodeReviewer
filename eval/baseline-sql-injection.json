@@ -1,0 +1,16 @@
+{
+  "id": "baseline-sql-injection",
+  "description": "Detect obvious SQL injection via string concatenation",
+  "changedFiles": ["src/db/query.ts"],
+  "diff": "diff --git a/src/db/query.ts b/src/db/query.ts\n--- a/src/db/query.ts\n+++ b/src/db/query.ts\n@@ -10,3 +10,7 @@\n export function findUser(id: string) {\n-  return db.query('SELECT * FROM users WHERE id = $1', [id]);\n+  return db.query('SELECT * FROM users WHERE id = ' + id);\n }\n",
+  "expectedProblems": [
+    {
+      "file": "src/db/query.ts",
+      "line": 13,
+      "severity": "critical",
+      "category": "security",
+      "messagePattern": "injection"
+    }
+  ],
+  "tags": ["security", "sql-injection", "baseline"]
+}

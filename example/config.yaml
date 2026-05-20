@@ -382,6 +382,17 @@ queue:
     per_workspace_concurrency: 1
     lock_ttl_seconds: 1800
 
+  # rate_limit:
+  #   max_concurrent: 8
+  #   window_seconds: 60
+
+  # retry:
+  #   max_attempts: 3
+  #   backoff_seconds: 30
+
+  # dead_letter:
+  #   max_age_hours: 72
+
 # ---------------------------------------------------------------------------
 # Agent & sandbox
 # ---------------------------------------------------------------------------

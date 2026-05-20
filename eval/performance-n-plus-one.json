@@ -1,0 +1,16 @@
+{
+  "id": "performance-n-plus-one",
+  "description": "Detect N+1 query pattern in loop",
+  "changedFiles": ["src/services/orders.ts"],
+  "diff": "diff --git a/src/services/orders.ts b/src/services/orders.ts\n--- a/src/services/orders.ts\n+++ b/src/services/orders.ts\n@@ -10,3 +10,10 @@\n export async function getOrdersWithItems(ids: string[]) {\n-  return db.query('SELECT * FROM orders WHERE id = ANY($1)', [ids]);\n+  const results = [];\n+  for (const id of ids) {\n+    const order = await db.query('SELECT * FROM orders WHERE id = $1', [id]);\n+    results.push(order);\n+  }\n+  return results;\n }\n",
+  "expectedProblems": [
+    {
+      "file": "src/services/orders.ts",
+      "line": 13,
+      "severity": "medium",
+      "category": "performance",
+      "messagePattern": "N+1"
+    }
+  ],
+  "tags": ["performance", "n-plus-one", "database"]
+}

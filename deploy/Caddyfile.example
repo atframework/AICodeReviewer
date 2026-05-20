@@ -1,0 +1,14 @@
+# AICodeReviewer — Example Caddy reverse proxy config
+#
+# Usage:
+#   caddy run --config deploy/Caddyfile
+#
+# Or with Podman:
+#   podman run -d --name caddy \
+#     -v ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro \
+#     -p 443:443 -p 80:80 \
+#     caddy:latest
+
+<host>:443 {
+	reverse_proxy aicr:8080
+}
