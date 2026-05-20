@@ -21,6 +21,7 @@
   "dependencies": {
     "@aicr/agents": "workspace:*",
     "@aicr/core": "workspace:*",
+    "@aicr/eval": "workspace:*",
     "@aicr/llm": "workspace:*",
     "@aicr/outputs": "workspace:*",
     "@aicr/sandbox": "workspace:*",

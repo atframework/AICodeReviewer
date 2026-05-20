@@ -170,12 +170,13 @@ ssh ... <remote-host> "podman logs --tail 50 aicr"
 
 The `.env` file on remote contains secrets. **Never display its full contents in logs.** The known env vars are:
 
-- `ALIYUN_CODING_TOKEN`, `TENCENT_CODING_TOKEN` — LLM API keys
-- `GITEA_TOKEN`, `GITEA_WEBHOOK_SECRET` — Gitea integration
-- `P4USER`, `P4PASSWORD` — Perforce integration
+- `AICR_LLM_API_KEY` — LLM provider API key
+- `AICR_GITEA_TOKEN`, `AICR_WEBHOOK_SECRET` — Gitea integration
+- `AICR_GITHUB_TOKEN`, `AICR_GITHUB_WEBHOOK_SECRET` — GitHub integration
+- `AICR_P4USER`, `AICR_P4PASSWORD` — Perforce integration
 - `AICR_API_KEY` — Server API key for `/triggers/*`
-- `FEISHU_WEBHOOK`, `FEISHU_SECRET` — Feishu bot
-- `WECOM_WEBHOOK` — WeCom (企业微信) bot
+- `AICR_FEISHU_WEBHOOK`, `AICR_FEISHU_SECRET` — Feishu bot
+- `AICR_WECOM_WEBHOOK` — WeCom (企业微信) bot
 
 ## Common Failures and Recovery
 

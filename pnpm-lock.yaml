@@ -62,6 +62,9 @@ importers:
       '@aicr/core':
         specifier: workspace:*
         version: link:../core
+      '@aicr/eval':
+        specifier: workspace:*
+        version: link:../eval
       '@aicr/llm':
         specifier: workspace:*
         version: link:../llm

@@ -441,4 +441,112 @@ describe("runCli", () => {
       await rm(tempDir, { recursive: true, force: true });
     }
   });
+
+  describe("eval command", () => {
+    it("returns an error when the eval directory does not exist", async () => {
+      const tempDir = await mkdtemp(join(tmpdir(), "aicr-cli-eval-nodir-"));
+      try {
+        const stdout = new MemoryWriter();
+        const stderr = new MemoryWriter();
+        const exitCode = await runCli(
+          ["eval", "--eval-dir", join(tempDir, "nonexistent")],
+          { cwd: tempDir, stdout, stderr },
+        );
+        expect(exitCode).toBe(1);
+        expect(stderr.output).toContain("directory not found");
+      } finally {
+        await rm(tempDir, { recursive: true, force: true });
+      }
+    });
+
+    it("returns an error when the config file does not exist", async () => {
+      const tempDir = await mkdtemp(join(tmpdir(), "aicr-cli-eval-nocfg-"));
+      try {
+        await mkdir(join(tempDir, "eval"));
+        await writeFile(join(tempDir, "eval", "test.json"), JSON.stringify({ id: "t" }), "utf8");
+        const stdout = new MemoryWriter();
+        const stderr = new MemoryWriter();
+        const exitCode = await runCli(["eval"], { cwd: tempDir, stdout, stderr });
+        expect(exitCode).toBe(1);
+        expect(stderr.output).toContain("config file not found");
+      } finally {
+        await rm(tempDir, { recursive: true, force: true });
+      }
+    });
+
+    it("returns an error when the eval directory has no JSON fixtures", async () => {
+      const tempDir = await mkdtemp(join(tmpdir(), "aicr-cli-eval-empty-"));
+      try {
+        await mkdir(join(tempDir, "eval"));
+        await writeWorkspaceFile(
+          tempDir,
+          "config.yaml",
+          [
+            "triggers:",
+            "  - name: test",
+            "    kind: gitea",
+            "outputs:",
+            "  channels:",
+            "    - name: ch",
+            "      kind: gitea_pr_review",
+            "workspaces:",
+            "  instances:",
+            "    ws:",
+            "      source_repo:",
+            "        trigger: test",
+            "        repo: test/repo",
+          ].join("\n"),
+        );
+        const stdout = new MemoryWriter();
+        const stderr = new MemoryWriter();
+        const exitCode = await runCli(["eval"], { cwd: tempDir, stdout, stderr });
+        expect(exitCode).toBe(1);
+        expect(stderr.output).toContain("no .json example files found");
+      } finally {
+        await rm(tempDir, { recursive: true, force: true });
+      }
+    });
+
+    it("accepts --eval-dir to override the default eval directory path", async () => {
+      const tempDir = await mkdtemp(join(tmpdir(), "aicr-cli-eval-dirflag-"));
+      try {
+        const customEvalDir = join(tempDir, "custom-eval");
+        await mkdir(customEvalDir);
+        await writeFile(
+          join(customEvalDir, "sample.json"),
+          JSON.stringify({ id: "sample", description: "test", changedFiles: ["a.ts"], diff: "" }),
+          "utf8",
+        );
+        await writeWorkspaceFile(
+          tempDir,
+          "config.yaml",
+          [
+            "triggers:",
+            "  - name: test",
+            "    kind: gitea",
+            "outputs:",
+            "  channels:",
+            "    - name: ch",
+            "      kind: gitea_pr_review",
+            "workspaces:",
+            "  instances:",
+            "    ws:",
+            "      source_repo:",
+            "        trigger: test",
+            "        repo: test/repo",
+          ].join("\n"),
+        );
+        const stdout = new MemoryWriter();
+        const stderr = new MemoryWriter();
+        const exitCode = await runCli(
+          ["eval", "--eval-dir", customEvalDir],
+          { cwd: tempDir, stdout, stderr },
+        );
+        expect(exitCode).toBe(1);
+        expect(stderr.output).toContain("aicr eval failed:");
+      } finally {
+        await rm(tempDir, { recursive: true, force: true });
+      }
+    });
+  });
 });

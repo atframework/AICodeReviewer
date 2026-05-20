@@ -16,10 +16,10 @@
 
 ### 1.2 当前焦点
 
-- 继续推进 M5：补齐 Agent Runtime Bundle、原生 MCP 配置物化与 Kilo Code 端到端验收。
-- 继续推进 M6：补齐 GitHub/GitLab/SVN 实战覆盖、行级 attribution 与多源上下文能力。
-- 继续推进 M8：补齐 replay 快照、metrics / trace 与 eval 基线。
-- 继续推进 M9：完成最终发布资产、剩余沙箱后端、从零部署验收与 changelog/版本固定。
+- M5 已基本交付；仅剩 HTTP/SSE MCP transport 待调研（非阻塞）。
+- M6 GitHub 生产链路已验收；GitLab e2e 和 SVN adapter 移至 Backlog。
+- M8 观测能力已大部分交付：OTel 已接入 serve 命令、Prometheus metrics 和 run snapshot 已连线、eval CLI 已添加。
+- M9 发布收尾持续推进：deploy.sh 已修复 `--storage-driver=overlay`、docker_socket 文档已补齐。
 - 本轮已完成文档收束：已完成阶段与稳定细节已搬离 `Plan.md`，未来 agent 应按需读文档，
   而不是默认吞下整份历史记录。
 
@@ -218,23 +218,23 @@
 
 ### 8.1 当前状态
 
-| 里程碑 | 状态 | 主要落点 | 下一步 |
-| --- | --- | --- | --- |
-| M0 | 已完成 | `docs/ai/milestones/M0.md` | 保持基线稳定 |
-| M0.5 | 已完成 | `docs/ai/milestones/M0.5.md`、`docs/prompt-research.md` | 继续为 prompt/runtime 变更提供依据 |
-| M1 | 已完成 | `docs/ai/milestones/M1.md` | 作为最小 review 闭环基线 |
-| M2 | 已完成 | `docs/ai/milestones/M2.md` | 作为 agent/sandbox 基线 |
-| M3 | 已完成 | `docs/ai/milestones/M3.md` | 继续复用压缩、预算、队列与 scrubber 能力 |
-| M4 | 已完成 | `docs/ai/milestones/M4.md` | 继续扩展模板、路由与 attribution |
-| M5 | 进行中 | 多 Agent CLI、Podman、runtime bundle | Kilo Code 端到端验收、原生 MCP server 注入 |
-| M6 | 进行中 | 多 VCS、trigger 面、P4 生产链路 | 补齐 SVN、真实 GitHub/GitLab e2e、归因与多源上下文 |
-| M7 | 未开始 | workspace 定制、skill by glob、国际化、memory | 等待 M5/M6 更稳定后推进 |
-| M8 | 进行中 | structured logs、replay 基础、日志落盘 | 补齐 OTel、metrics、runs 快照、eval |
-| M9 | 进行中 | 文档、示例、发布与剩余沙箱后端 | 补齐 `docker_socket` / `k8s_pod`、发布资产与从零验收 |
+| 里程碑 | 状态       | 主要落点                                                | 下一步                                   |
+| ------ | ---------- | ------------------------------------------------------- | ---------------------------------------- |
+| M0     | 已完成     | `docs/ai/milestones/M0.md`                              | 保持基线稳定                             |
+| M0.5   | 已完成     | `docs/ai/milestones/M0.5.md`、`docs/prompt-research.md` | 继续为 prompt/runtime 变更提供依据       |
+| M1     | 已完成     | `docs/ai/milestones/M1.md`                              | 作为最小 review 闭环基线                 |
+| M2     | 已完成     | `docs/ai/milestones/M2.md`                              | 作为 agent/sandbox 基线                  |
+| M3     | 已完成     | `docs/ai/milestones/M3.md`                              | 继续复用压缩、预算、队列与 scrubber 能力 |
+| M4     | 已完成     | `docs/ai/milestones/M4.md`                              | 继续扩展模板、路由与 attribution         |
+| M5     | 基本完成   | 多 Agent CLI、Podman、runtime bundle、Kilo Code e2e     | HTTP/SSE MCP transport 调研（非阻塞）    |
+| M6     | 部分完成   | GitHub 生产链路已验收                                   | GitLab e2e、SVN adapter 移至 Backlog     |
+| M7     | 未开始     | workspace 定制、skill by glob、国际化、memory           | 等待 M5/M6 更稳定后推进                  |
+| M8     | 大部分完成 | structured logs、OTel、metrics、run snapshot、eval CLI  | eval fixture 已补齐；CI 集成移至 Backlog |
+| M9     | 进行中     | 文档、示例、deploy.sh 修复、发布资产                    | 从零部署验收、最终发布检查               |
 
 ### 8.2 当前执行包
 
-1. **M5：runtime bundle 与 agent 原生能力对齐**
+1. **M5：runtime bundle 与 agent 原生能力对齐**（基本完成）
     - ~~物化原生 MCP 配置~~（已交付：runtime bundle 物化 MCP 工具清单到 manifest）
     - ~~补齐 Agent Runtime Bundle manifest~~（已交付：`@aicr/agents` `materializeRuntimeBundle`）
     - ~~移除 Kilo 适配器过期标志~~（已交付：`--dangerously-skip-permissions` 已从 kilo adapter 移除，`--auto` 即为 kilo 7.x 的自动审批方式）
@@ -243,30 +243,46 @@
     - ~~MCP 状态文件读取~~（已交付：agent 运行后 orchestrator 读取 `.aicr-output-state.json` 并回写 collector）
     - ~~独立 MCP 服务器进程~~（已交付：通过 Kilo MCP 配置注入，`@aicr/mcp-output` 以独立子进程启动；状态文件 `.aicr-output-state.json` 由 orchestrator 读取）
     - ~~完成 Kilo Code 端到端验收~~（已验收：生产日志证实 Kilo agent 在 sandbox 内完整运行，MCP 状态文件读取、stdout 流解析、结构化输出转换均正常工作）
-    - HTTP/SSE 传输模式（`@aicr/mcp-output` 当前仅支持 stdio；待调研 MCP SDK HTTP transport 可行性）
-2. **M6：跨 VCS 能力补齐**
+    - HTTP/SSE 传输模式（`@aicr/mcp-output` 当前仅支持 stdio；待调研 MCP SDK HTTP transport 可行性；非阻塞项，可延后至 M9 之后）
+2. **M6：跨 VCS 能力补齐**（GitHub 已验收）
     - ~~GitHub 真实仓库端到端验证~~（已验收：生产环境 `github-atframework` / `github-owent` 触发器正常运行，自动创建 issue 和分析 PR 记录完整）
-    - GitLab webhook、dispatcher 与 PR review 已实现并带单元测试；待补齐真实仓库端到端验证记录
-    - SVN 支持（config schema 已预留，待实现 VCS adapter）
-   - blame/annotate 归因链路
-   - 多源上下文 selector
-3. **M8：观测与回放**
+    - GitLab webhook、dispatcher 与 PR review 已实现并带单元测试；待补齐真实仓库端到端验证记录 → **Backlog**
+    - SVN 支持（config schema 已预留，待实现 VCS adapter）→ **Backlog**
+    - ~~blame/annotate 归因链路~~（部分覆盖：`aicr.fetch_more_context` 提供额外上下文拉取能力；完整 blame/annotate 需 VCS 原生支持）
+    - ~~多源上下文 selector~~（部分覆盖：`aicr.fetch_more_context` + VCS adapter `fetchExtraContext`；专用聚合模块待 M7）
+3. **M8：观测与回放**（大部分完成）
     - ~~结构化日志落盘~~（已交付：pino logger）
-    - ~~OTel trace exporter~~（已交付：`createOtelSdk` 配置 OTLP HTTP exporter，支持 `OTEL_EXPORTER_OTLP_ENDPOINT` / `OTEL_EXPORTER_OTLP_HEADERS` 环境变量）
+    - ~~OTel trace exporter~~（已交付并接入：`createOtelSdk` 在 `aicr serve` 命令中自动启动，读取 `OTEL_EXPORTER_OTLP_ENDPOINT` / `OTEL_EXPORTER_OTLP_HEADERS` 环境变量）
     - ~~Prometheus metrics~~（已交付：`/metrics` 端点，`aicr_reviews_total` / `aicr_problems_total` / `aicr_review_duration_seconds` 等计数器与累计 histogram）
     - ~~`runs/<run_id>/` 完整快照~~（已交付：`saveRunSnapshot` 保存 `runs/<run_id>/run.json`，通过 `ServerAppOptions.runsDir` 配置，同步/异步 review 均覆盖）
-    - ~~eval CLI / 基准集~~（已交付：`@aicr/eval` 最小框架 `runEval`、message-pattern 匹配、6 个单元测试）
-4. **M9：发布收尾**
-   - ~~`docker_socket` 文档确认~~（已交付：`example/README.md` 和 `docs/ai/architecture.md` §3.8.1 已补充说明）
-   - ~~`k8s_pod` / `firecracker` 平台能力边界说明~~（已交付：`architecture.md` §3.8.1 后端能力矩阵已明确标注为预留扩展位）
-   - ~~版本固定与 changelog~~（已交付：`CHANGELOG.md` 已创建，所有包版本固定为 `0.1.0`）
-   - ~~最终发布检查单~~（已交付：`docs/ai/milestones/M9-checklist.md` 已创建）
-   - `docker_socket` 专门集成测试（超出 factory 映射测试）
-   - `k8s_pod` 实现或更详细的平台边界文档
-   - `firecracker` 实现或更详细的平台边界文档
-   - 从零部署文档验收（在干净环境上走通完整流程）
+    - ~~eval CLI / 基准集~~（已交付：`aicr eval` CLI 命令已接入 `@aicr/eval`，`eval/` 目录支持 JSON fixture 文件）
+    - ~~eval fixture 扩充~~（已交付：6 个 fixture 覆盖 security/sql-injection、security/hardcoded-secret、correctness/null-deref、correctness/error-silenced、style/naming、performance/n-plus-one）
+4. **M9：发布收尾**（进行中）
+    - ~~`docker_socket` 文档确认~~（已交付：`example/README.md` 和 `docs/ai/architecture.md` §3.8.1 已补充说明）
+    - ~~`k8s_pod` / `firecracker` 平台能力边界说明~~（已交付：`architecture.md` §3.8.1 后端能力矩阵已明确标注为预留扩展位）
+    - ~~版本固定与 changelog~~（已交付：`CHANGELOG.md` 已创建，所有包版本固定为 `0.1.0`）
+    - ~~最终发布检查单~~（已交付：`docs/ai/milestones/M9-checklist.md` 已创建）
+    - ~~`deploy.sh` 修复~~（已交付：所有 `podman` 命令已加 `--storage-driver=overlay`，加入 preflight 检查）
+    - ~~`deploy.sh` 硬编码路径~~（已交付：改为环境变量覆盖 `AICR_DEPLOY_DIR`/`AICR_IMAGE_NAME`/`AICR_HOST_PORT`/`AICR_CONTAINER_NAME`/`AICR_ENGINE`）
+    - ~~`.dockerignore`~~（已交付：排除 `.git`/`node_modules`/`dist`/`coverage`/`docs` 等）
+    - ~~Dockerfile 前向兼容~~（已交付：补齐 `sandbox`/`eval` node_modules COPY）
+    - ~~部署资产审计修复~~（已交付：P4 认证表修正、`.env.sample` 补齐缺失变量、`config.yaml` 补齐 queue 子项示例、`SKILL.md` 环境变量名对齐、`Caddyfile.example` 添加）
+    - 从零部署验收（在干净环境上走通完整流程）
 
-### 8.3 已完成阶段归档
+### 8.3 Backlog（低优先级延后项）
+
+| 项                         | 来源里程碑 | 说明                                                           |
+| -------------------------- | ---------- | -------------------------------------------------------------- |
+| HTTP/SSE MCP transport     | M5         | `@aicr/mcp-output` 仅支持 stdio；需调研 MCP SDK HTTP transport |
+| GitLab 真实仓库 e2e        | M6         | 代码已实现，待真实 GitLab 环境                                 |
+| SVN VCS adapter            | M6         | config schema 已预留，待实现                                   |
+| 完整 blame/annotate        | M6         | 需 VCS 原生 `git blame` / `p4 annotate` 集成                   |
+| 专用多源上下文聚合         | M6/M7      | 当前 `fetch_more_context` 部分覆盖                             |
+| `k8s_pod` sandbox 实现     | M9         | 需要 Kubernetes 集群和 `@kubernetes/client-node`               |
+| `firecracker` sandbox 实现 | M9         | 需要 Firecracker 二进制和 API socket                           |
+| CI eval 基准集成           | M8         | 将 `aicr eval` 接入 CI 流水线（需 CI pipeline 权限，延后扩展） |
+
+### 8.4 已完成阶段归档
 
 - `docs/ai/milestones/M0.md`
 - `docs/ai/milestones/M0.5.md`

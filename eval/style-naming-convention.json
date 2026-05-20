@@ -1,0 +1,16 @@
+{
+  "id": "style-naming-convention",
+  "description": "Detect inconsistent naming convention in exported function",
+  "changedFiles": ["src/api/handlers.ts"],
+  "diff": "diff --git a/src/api/handlers.ts b/src/api/handlers.ts\n--- a/src/api/handlers.ts\n+++ b/src/api/handlers.ts\n@@ -3,3 +3,7 @@\n export function GetUserById(id: string) {\n-  return db.query('SELECT * FROM users WHERE id = $1', [id]);\n+  const result = db.query('SELECT * FROM users WHERE id = $1', [id]);\n+  console.log(result);\n+  return result;\n }\n",
+  "expectedProblems": [
+    {
+      "file": "src/api/handlers.ts",
+      "line": 3,
+      "severity": "low",
+      "category": "style",
+      "messagePattern": "naming"
+    }
+  ],
+  "tags": ["style", "naming", "typescript"]
+}

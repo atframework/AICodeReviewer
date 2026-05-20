@@ -17,6 +17,6 @@ pnpm-debug.log*
 /.claude/settings.local*
 /.kilo/kilo.json
 /.vscode/settings.json
-/.vscode/secret.json
+/development/secret
 /workspaces
 config.acceptance.yaml

@@ -1,0 +1,16 @@
+{
+  "id": "correctness-null-deref",
+  "description": "Detect null dereference without null check",
+  "changedFiles": ["src/utils/format.ts"],
+  "diff": "diff --git a/src/utils/format.ts b/src/utils/format.ts\n--- a/src/utils/format.ts\n+++ b/src/utils/format.ts\n@@ -5,3 +5,7 @@\n export function greet(user: { name: string } | null) {\n-  if (!user) return 'Hello, guest';\n-  return `Hello, ${user.name}`;\n+  return `Hello, ${user.name}`;\n }\n",
+  "expectedProblems": [
+    {
+      "file": "src/utils/format.ts",
+      "line": 8,
+      "severity": "high",
+      "category": "correctness",
+      "messagePattern": "null"
+    }
+  ],
+  "tags": ["correctness", "null-deref", "typescript"]
+}
