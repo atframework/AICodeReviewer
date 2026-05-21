@@ -103,6 +103,8 @@ const execContainerCommand: ContainerCommandRunner = async function execContaine
   });
 };
 
+const AGENT_CONTAINER_WORKDIR = "/workspace/agent";
+
 export async function preflightSandbox(
   engine?: SandboxEngine,
   commandRunner: ContainerCommandRunner = execContainerCommand,
@@ -181,6 +183,7 @@ export function createDockerSandboxBackend(options: DockerSandboxOptions = {}): 
         "--rm",
         "--init",
         "--network", "none",
+        "--workdir", AGENT_CONTAINER_WORKDIR,
         ...envArgs,
         ...volumeArgs,
         image,

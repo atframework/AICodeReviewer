@@ -342,7 +342,7 @@ curl -sf https://aicr.m-oa.com:6023/healthz
 
 **预防措施：**
 
-- `deploy.sh` 中所有 `podman build` / `podman run` / `podman rm` 命令必须显式加 `--storage-driver=overlay`。
+- `deploy.sh` 中所有 `podman build` / `podman run` / `podman rm` 命令必须显式加 `--storage-driver=overlay`；如果通过 `AICR_ENGINE=docker` 切到 Docker，则不要传这个 Podman 专用参数。
 - 部署脚本开头加入 pre-flight 检查：
 
   ```bash

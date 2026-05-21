@@ -296,6 +296,8 @@ describe("createDockerSandboxBackend", () => {
       expect(calls[0]?.engine).toBe("docker");
       expect(calls[0]?.args).toEqual(
         expect.arrayContaining([
+          "--workdir",
+          "/workspace/agent",
           "-v",
           `${join(base, "source")}:/workspace/source:ro`,
           "-v",

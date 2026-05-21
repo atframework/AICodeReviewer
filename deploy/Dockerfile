@@ -26,7 +26,8 @@ COPY --chown=node:node prompts ./prompts
 COPY --chown=node:node templates ./templates
 COPY --chown=node:node .markdownlint.json ./
 
-RUN pnpm install --frozen-lockfile
+RUN pnpm install --frozen-lockfile \
+  && mkdir -p packages/sandbox/node_modules packages/eval/node_modules
 RUN pnpm build
 
 # ---------- Runtime stage ----------
@@ -73,8 +74,10 @@ COPY --from=build --chown=node:node /app/packages/llm/node_modules ./packages/ll
 COPY --from=build --chown=node:node /app/packages/vcs/node_modules ./packages/vcs/node_modules
 COPY --from=build --chown=node:node /app/packages/outputs/node_modules ./packages/outputs/node_modules
 COPY --from=build --chown=node:node /app/packages/mcp-output/node_modules ./packages/mcp-output/node_modules
+COPY --from=build --chown=node:node /app/packages/sandbox/node_modules ./packages/sandbox/node_modules
 COPY --from=build --chown=node:node /app/packages/agents/node_modules ./packages/agents/node_modules
 COPY --from=build --chown=node:node /app/packages/store/node_modules ./packages/store/node_modules
+COPY --from=build --chown=node:node /app/packages/eval/node_modules ./packages/eval/node_modules
 COPY --from=build --chown=node:node /app/prompts ./prompts
 COPY --from=build --chown=node:node /app/templates ./templates
 
@@ -82,7 +85,7 @@ COPY --from=build --chown=node:node /app/templates ./templates
 # When the host exposes a Podman docker-compatible socket, the static Docker
 # CLI binary can communicate with Podman via the DOCKER_HOST env var.
 COPY deploy/docker-static /usr/local/bin/docker
-RUN if [ -f /usr/local/bin/docker ]; then chmod +x /usr/local/bin/docker; else rm -f /usr/local/bin/docker; fi
+RUN if [ -s /usr/local/bin/docker ]; then chmod +x /usr/local/bin/docker; else rm -f /usr/local/bin/docker; fi
 
 RUN mkdir -p /app/workspaces /app/data /app/logs && chown -R node:node /app/workspaces /app/data /app/logs
 

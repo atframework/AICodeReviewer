@@ -69,15 +69,20 @@ When AICR itself runs inside a container (e.g. via `deploy.sh`) and you want the
 ### Requirements
 
 1. **Host user-level Podman socket** must be enabled:
+
    ```bash
    systemctl --user enable --now podman.socket
    ```
+
 2. **Docker static binary** inside the AICR image (installed by `deploy.sh` when `AICR_ENABLE_CONTAINER_SANDBOX=true`).
 3. **`deploy.sh` environment variables**:
+
    ```bash
    AICR_ENABLE_CONTAINER_SANDBOX=true   # enables socket mount + docker CLI
    ```
+
 4. **`config.yaml` sandbox kind** set to `docker` (the Docker CLI talks to Podman's docker-compatible socket):
+
    ```yaml
    agent:
      sandbox:
@@ -87,7 +92,7 @@ When AICR itself runs inside a container (e.g. via `deploy.sh`) and you want the
 
 ### How it works
 
-- `deploy.sh` downloads the Docker static binary and bakes it into the image when `AICR_ENABLE_CONTAINER_SANDBOX=true`; otherwise it creates a harmless `deploy/docker-static` placeholder so clean source syncs still satisfy the Dockerfile's optional `COPY` step.
+- `deploy.sh` downloads the Docker static binary and bakes it into the image when `AICR_ENABLE_CONTAINER_SANDBOX=true`; otherwise it creates a harmless empty `deploy/docker-static` placeholder so clean source syncs still satisfy the Dockerfile's optional `COPY` step. The runtime image removes that empty placeholder instead of installing a zero-byte `docker` executable.
 - At runtime, `deploy.sh` mounts the host user-level Podman socket (`/run/user/$UID/podman/podman.sock`) into the AICR container.
 - `deploy.sh` sets `DOCKER_HOST=unix:///run/user/$UID/podman/podman.sock` so the Docker CLI inside the container talks to the host Podman daemon.
 - `--userns=keep-id --group-add keep-groups` ensures the container process can access the user-level socket.
@@ -140,12 +145,14 @@ curl -sf http://127.0.0.1:8090/healthz
 
 **If migrate still crashes:** Check for a stale container exit record with code 137 (SIGKILL) in `/run/user/$UID/libpod/tmp/exits/` or `/run/user/$UID/libpod/tmp/persist/`. Remove those files, then retry migrate.
 
-**Prevention in deploy scripts:** Always specify `--storage-driver=overlay` in `deploy.sh`:
+**Prevention in deploy scripts:** When `deploy.sh` runs Podman (the default `AICR_ENGINE=podman` path), always specify `--storage-driver=overlay`:
 
 ```bash
 podman --storage-driver=overlay build -t aicr:latest ...
 podman --storage-driver=overlay run -d --name aicr ...
 ```
+
+If `AICR_ENGINE=docker` is selected, omit this Podman-only flag and fail fast if `docker ps` cannot connect to the daemon.
 
 **Pre-flight check for automation:**
 
