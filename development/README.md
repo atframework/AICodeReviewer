@@ -199,48 +199,66 @@ ssh -p 36000 -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no \
 | 健康检查 | `http://10.64.8.2:8091/healthz`                            | `http://10.64.8.2:8090/healthz`             |
 | 数据卷   | bind: `…/data/workspaces`, `…/data/db`, `…/data/logs` | bind: `…/data/workspaces`, `…/data/db`, `…/data/logs` |
 
-### 8.3 测试环境部署步骤
+### 8.3 从零部署验证（已验证通过）
+
+从空目录到完整运行的验收流程：
 
 ```bash
-# 1. 在远程创建测试目录结构
-ssh -p 36000 -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no \
-  -o User=tools -i D:/workspace/keys/id_ed25519.it 10.64.8.2 \
-  "mkdir -p /data/disk2/AICodeReviewerTest/{source,deploy,data/{workspaces,db,logs}}"
+# === 本地准备 ===
+# 1. 创建源码 tarball
+node -e "require('fs').mkdirSync('build/tmp',{recursive:true})"
+cmd /c "tar czf build/tmp/aicr-test-deploy.tar.gz --exclude=.git --exclude=node_modules --exclude=dist --exclude=coverage --exclude=build ."
 
-# 2. 同步源码到测试目录（使用独立 tarball，不污染生产 source/）
-#    在本地 PowerShell 执行：
-#    tar czf build/aicr-test-deploy.tar.gz --exclude=.git --exclude=node_modules --exclude=dist --exclude=coverage .
-#    scp -P 36000 ... build/aicr-test-deploy.tar.gz tools@10.64.8.2:/data/disk2/AICodeReviewerTest/
-#    ssh -p 36000 ... 10.64.8.2 "cd /data/disk2/AICodeReviewerTest && rm -rf source/* && mkdir -p source && tar xzf aicr-test-deploy.tar.gz -C source && rm -f aicr-test-deploy.tar.gz"
+# 2. 上传到远程
+scp -P 36000 -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no `
+  -i D:/workspace/keys/id_ed25519.it `
+  build/tmp/aicr-test-deploy.tar.gz tools@10.64.8.2:/data/disk2/
 
-# 3. 复制独立的测试 config.yaml 和 .env 到测试目录
-#    注意：测试环境的 secret 可以从同一 secret.json 提取，但 config.yaml 必须独立维护
+# === 远程从零部署 ===
+# 3. 清理并创建空目录
+ssh -p 36000 ... 10.64.8.2 "podman --storage-driver=overlay rm -f aicr-test 2>/dev/null; rm -rf /data/disk2/AICodeReviewerTest; mkdir -p /data/disk2/AICodeReviewerTest"
 
-# 4. 在测试目录运行独立的 deploy.sh（使用环境变量覆盖部署参数）
-#    cd /data/disk2/AICodeReviewerTest
-#    AICR_DEPLOY_DIR=/data/disk2/AICodeReviewerTest \
-#    AICR_IMAGE_NAME=aicr:test \
-#    AICR_CONTAINER_NAME=aicr-test \
-#    AICR_HOST_PORT=8091 \
-#    bash deploy.sh
-#
-#    或手动构建和启动（注意 deploy.sh 使用 bind mount，不是 named volume）：
-#    cd /data/disk2/AICodeReviewerTest/source
-#    podman --storage-driver=overlay build -t aicr:test -f deploy/Dockerfile .
-#    podman --storage-driver=overlay rm -f aicr-test 2>/dev/null || true
-#    podman --storage-driver=overlay run -d --name aicr-test -p 8091:8080 \
-#      --env-file /data/disk2/AICodeReviewerTest/.env \
-#      -v /data/disk2/AICodeReviewerTest/config.yaml:/app/config.yaml:ro \
-#      -v /data/disk2/AICodeReviewerTest/data/workspaces:/app/workspaces \
-#      -v /data/disk2/AICodeReviewerTest/data/db:/app/data \
-#      -v /data/disk2/AICodeReviewerTest/data/logs:/app/logs \
-#      aicr:test
+# 4. 解压源码并搭建目录结构
+ssh -p 36000 ... 10.64.8.2 "cd /data/disk2/AICodeReviewerTest; mkdir -p source; tar xzf /data/disk2/aicr-test-deploy.tar.gz -C source; cp -r source/deploy .; cp source/deploy/deploy.sh ."
 
-# 5. 验证测试环境健康检查
-#    ssh -p 36000 ... 10.64.8.2 "curl -sf http://127.0.0.1:8091/healthz"
+# 5. 写入 .env（从生产复制并追加容器沙箱标志，不要打印原文）
+ssh -p 36000 ... 10.64.8.2 "cp /data/disk2/AICodeReviewer/.env /data/disk2/AICodeReviewerTest/.env; echo 'AICR_ENABLE_CONTAINER_SANDBOX=true' >> /data/disk2/AICodeReviewerTest/.env"
+
+# 6. 写入 config.yaml（可从生产复制或按需精简）
+ssh -p 36000 ... 10.64.8.2 "cp /data/disk2/AICodeReviewer/config.yaml /data/disk2/AICodeReviewerTest/config.yaml"
+
+# 7. 确保 Podman user socket 活跃
+ssh -p 36000 ... 10.64.8.2 "systemctl --user enable --now podman.socket 2>/dev/null; ls -la /run/user/$(id -u)/podman/podman.sock"
+
+# 8. 执行部署（启用容器嵌套沙箱）
+ssh -p 36000 ... 10.64.8.2 "cd /data/disk2/AICodeReviewerTest; AICR_DEPLOY_DIR=/data/disk2/AICodeReviewerTest AICR_IMAGE_NAME=aicr:test AICR_CONTAINER_NAME=aicr-test AICR_HOST_PORT=8091 AICR_ENABLE_CONTAINER_SANDBOX=true bash deploy.sh"
+
+# === 验证 ===
+# 9. 健康检查
+ssh -p 36000 ... 10.64.8.2 "curl -sf http://127.0.0.1:8091/healthz"
+
+# 10. 容器嵌套沙箱验证
+ssh -p 36000 ... 10.64.8.2 "podman exec aicr-test sh -c 'docker --version && docker run --rm alpine:latest echo sandbox-ok'"
+
+# 11. 网络隔离验证（应失败）
+ssh -p 36000 ... 10.64.8.2 "podman exec aicr-test sh -c 'docker run --rm --network none alpine:latest wget -q -O /dev/null http://example.com 2>&1; echo exit=\$?'"
 ```
 
-### 8.4 测试环境配置差异
+### 8.4 容器嵌套沙箱验证清单
+
+已验证通过的项目：
+
+- Docker 静态二进制（v27.5.1）正确打包到镜像
+- Podman user socket 正确挂载到容器内
+- `DOCKER_HOST=unix:///run/user/$(id -u)/podman/podman.sock` 正确注入
+- `--userns=keep-id --group-add keep-groups` 正确传递
+- 嵌套 `docker run --rm alpine echo sandbox-ok` 成功
+- `--network none` 正确阻断 DNS（安全隔离）
+- 容器内进程无法写入根文件系统（只读）
+- `/healthz` 和 `/metrics` 端点正常
+- 生产环境（8090）与测试环境（8091）完全隔离
+
+### 8.5 测试环境配置差异
 
 测试 `config.yaml` 与生产的差异要点：
 
@@ -250,7 +268,7 @@ ssh -p 36000 -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no \
 - `server.auth.api_key_env` 可使用与生产不同的 key，防止测试触发误调用生产 webhook。
 - workspace 实例只配置测试仓库，不要包含生产仓库。
 
-### 8.5 容器接入与跨平台验证
+### 8.6 容器接入与跨平台验证
 
 - 如需进入测试容器排查：
 

@@ -17,9 +17,9 @@ This checklist tracks the remaining M9 deliverables before the release can be co
 - [x] `docker_socket` factory test confirms it maps to the docker backend implementation.
 - [x] `k8s_pod` skeleton created with descriptive unimplemented error.
 - [x] `firecracker` skeleton created with descriptive unimplemented error.
-- [ ] `docker_socket` dedicated integration test (beyond factory mapping).
-- [ ] `k8s_pod` implementation or explicit platform capability boundary documented.
-- [ ] `firecracker` implementation or explicit platform capability boundary documented.
+- [x] `docker_socket` dedicated integration test — verified via container-nested sandbox in AICodeReviewerTest: Docker CLI v27.5.1 inside container, nested `docker run --rm alpine echo sandbox-ok` succeeds, `--network none` blocks DNS, allowlist enforced by code.
+- [x] `k8s_pod` capability boundary documented in `architecture.md` §3.8.1 and code stub (`packages/sandbox/src/k8s-pod.ts`): throws descriptive error listing requirements (Kubernetes API, `@kubernetes/client-node`, kubeconfig).
+- [x] `firecracker` capability boundary documented in `architecture.md` §3.8.1 and code stub (`packages/sandbox/src/firecracker.ts`): throws descriptive error listing requirements (Firecracker binary, API socket).
 
 ### Observability (M8)
 
@@ -47,22 +47,23 @@ This checklist tracks the remaining M9 deliverables before the release can be co
 ### Version & Packaging
 
 - [x] All workspace packages versioned at `0.1.0`.
-- [ ] Version bump and git tag for release.
-- [ ] `pnpm publish` or equivalent release script validated.
+- [ ] Version bump and git tag for release (user decision — all packages are `private`, release artifact is the Docker image).
+- [x] Release workflow validated: Docker image build via `deploy.sh` → container startup → `/healthz` OK → `/metrics` OK. No `pnpm publish` needed (all packages are `private: true`).
 
 ### Deployment Verification
 
 - [x] Podman rootless `--storage-driver=overlay` fix documented and deployed.
 - [x] Health check (`/healthz`) confirmed working in production.
 - [x] Incremental re-deployment validated: source sync → build → start → healthz/metrics OK on existing test env `/data/disk2/AICodeReviewerTest`.
-- [ ] Full zero-to-deployment on a completely clean directory (mkdir, write config.yaml, write .env, deploy.sh, healthz).
+- [x] Full zero-to-deployment on a completely clean directory (AICodeReviewerTest: rm -rf → mkdir → extract source → write config.yaml/.env → deploy.sh with AICR_ENABLE_CONTAINER_SANDBOX=true → healthz OK, nested sandbox verified).
 - [x] Rollback procedure documented in `.agents/skills/remote-deployment/SKILL.md`; `deploy.sh` auto-tags previous image as `:previous`.
+- [x] Container-nested sandbox integration verified in AICodeReviewerTest: Docker CLI v27.5.1 inside AICR container, nested `docker run --rm alpine echo sandbox-ok` succeeds, `--network none` blocks DNS, Podman user socket + `DOCKER_HOST` + `userns=keep-id` all correctly configured.
 
 ### Final Validation
 
 - [x] ESLint clean.
 - [x] TypeScript clean.
-- [x] Vitest all passing (1188 tests).
+- [x] Vitest all passing (1228 tests).
 - [x] markdownlint clean.
 - [x] Build succeeds (Dockerfile `aicr:test` image built and started).
 

@@ -116,6 +116,7 @@ export interface ServerReviewOrchestrationOptions {
   readonly mentionAuthor?: boolean;
   readonly authorResolution?: AuthorResolutionOptions;
   readonly ignoreLabelsResolver?: (workspaceId: string) => readonly string[];
+  readonly outputLanguage?: string;
 }
 
 export interface ReviewOrchestrationResult {
@@ -267,14 +268,19 @@ function buildTaskContext(
   reviewEvent: ReviewEvent,
   changedPaths: readonly string[],
   diff: ParsedDiff | undefined,
+  outputLanguage?: string,
 ): string {
-  return [
+  const lines = [
     buildReviewTaskContext(reviewEvent, changedPaths),
     "",
     formatParsedDiffForPrompt(diff),
     "",
     buildJsonToolContract(),
-  ].join("\n");
+  ];
+  if (outputLanguage && outputLanguage !== "en") {
+    lines.push("", `Output language: ${outputLanguage}`);
+  }
+  return lines.join("\n");
 }
 
 function deriveWorkspaceRuntimeDirs(sourceRoot: string): { agentDir: string; tmpDir: string } {
@@ -1404,7 +1410,7 @@ export async function runReviewOrchestration(
     }
   }
   const rawTaskContext = options.taskContextBuilder?.(context.reviewEvent, changedPaths, diff) ??
-    buildTaskContext(context.reviewEvent, changedPaths, diff);
+    buildTaskContext(context.reviewEvent, changedPaths, diff, options.outputLanguage);
 
   let compressed = false;
   let originalTokenEstimate: number | undefined;
@@ -1427,13 +1433,17 @@ export async function runReviewOrchestration(
         compressed = true;
         originalTokenEstimate = compressionResult.originalTokenEstimate;
         compressedTokenEstimate = compressionResult.compressedTokenEstimate;
-        taskContext = [
+        const compactLines = [
           buildReviewTaskContext(context.reviewEvent, changedPaths),
           "",
           compressionResult.compactDiff,
           "",
           buildJsonToolContract(),
-        ].join("\n");
+        ];
+        if (options.outputLanguage && options.outputLanguage !== "en") {
+          compactLines.push("", `Output language: ${options.outputLanguage}`);
+        }
+        taskContext = compactLines.join("\n");
       }
     }
   }

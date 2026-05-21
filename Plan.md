@@ -19,7 +19,9 @@
 - M5 已基本交付；仅剩 HTTP/SSE MCP transport 待调研（非阻塞）。
 - M6 GitHub 生产链路已验收；GitLab e2e 和 SVN adapter 移至 Backlog。
 - M8 观测能力已大部分交付：OTel 已接入 serve 命令、Prometheus metrics 和 run snapshot 已连线、eval CLI 已添加。
-- M9 发布收尾接近完成：deploy.sh 已修复 `--storage-driver=overlay`、docker_socket 文档已补齐、增量部署验证已通过；从零部署验收待补充。
+- M9 发布收尾已基本完成：从零部署验收、容器嵌套沙箱集成验证均通过；版本 bump 待用户决策。
+- M7 国际化（i18n）已开始：`output_language` 注入到 review task context 已交付。
+- 所有包均已补齐 `test/index.test.ts` barrel export 测试（AGENTS.md pitfall #10）。
 - 本轮已完成文档收束：已完成阶段与稳定细节已搬离 `Plan.md`，未来 agent 应按需读文档，
   而不是默认吞下整份历史记录。
 
@@ -231,7 +233,8 @@
 | M6     | 部分完成   | GitHub 生产链路已验收                                   | GitLab e2e、SVN adapter 移至 Backlog     |
 | M7     | 未开始     | workspace 定制、skill by glob、国际化、memory           | 等待 M5/M6 更稳定后推进                  |
 | M8     | 大部分完成 | structured logs、OTel、metrics、run snapshot、eval CLI  | eval fixture 已补齐；CI 集成移至 Backlog |
-| M9     | 接近完成   | 文档、示例、deploy.sh 修复、发布资产、增量部署验证      | 从零部署验收、版本 tag                   |
+| M9     | 基本完成   | 文档、示例、deploy.sh 修复、发布资产、从零部署与容器嵌套沙箱验收 | 版本 tag（用户决策）                         |
+| M7     | 已开始     | `output_language` 注入 review task context              | skill by glob、workspace 定制、memory        |
 
 ### 8.2 当前执行包
 
@@ -258,7 +261,7 @@
     - ~~`runs/<run_id>/` 完整快照~~（已交付：`saveRunSnapshot` 保存 `runs/<run_id>/run.json`，通过 `ServerAppOptions.runsDir` 配置，同步/异步 review 均覆盖）
     - ~~eval CLI / 基准集~~（已交付：`aicr eval` CLI 命令已接入 `@aicr/eval`，`eval/` 目录支持 JSON fixture 文件）
     - ~~eval fixture 扩充~~（已交付：6 个 fixture 覆盖 security/sql-injection、security/hardcoded-secret、correctness/null-deref、correctness/error-silenced、style/naming、performance/n-plus-one）
-4. **M9：发布收尾**（进行中）
+ 4. **M9：发布收尾**（接近完成）
     - ~~`docker_socket` 文档确认~~（已交付：`example/README.md` 和 `docs/ai/architecture.md` §3.8.1 已补充说明）
     - ~~容器嵌套沙箱验证~~（已交付：`AICodeReviewerTest` 测试环境验证通过，确认 Podman socket + Docker 静态二进制 + `--userns=keep-id --group-add keep-groups` 路径可行；`deploy.sh`、`Dockerfile`、`.gitignore`、`docs/podman.md`、`example/README.md` 已更新）
     - ~~`k8s_pod` / `firecracker` 平台能力边界说明~~（已交付：`architecture.md` §3.8.1 后端能力矩阵已明确标注为预留扩展位）
@@ -271,7 +274,15 @@
     - ~~Dockerfile 前向兼容~~（已交付：补齐 `sandbox`/`eval` node_modules COPY）
     - ~~部署资产审计修复~~（已交付：P4 认证表修正、`.env.sample` 补齐缺失变量、`config.yaml` 补齐 queue 子项示例、`SKILL.md` 环境变量名对齐、`Caddyfile.example` 添加）
     - ~~增量部署验证~~（已交付：测试环境 `/data/disk2/AICodeReviewerTest` 源码同步 → `deploy.sh` 构建 → 启动 → `healthz` / `/metrics` 验证通过）
-    - 从零部署验收（空目录上走通完整流程，含 config.yaml/.env 初始写入）
+    - ~~从零部署验收~~（已交付：`AICodeReviewerTest` 空目录完整验收通过：`rm -rf` → `mkdir` → 解压源码 → 写入 config.yaml/.env → `deploy.sh` 构建 → `healthz` OK）
+    - ~~容器嵌套沙箱集成验证~~（已交付：Docker CLI v27.5.1 在 AICR 容器内正常运行；嵌套 `docker run --rm alpine echo sandbox-ok` 成功；`--network none` 网络隔离验证通过；Podman user socket 挂载 + `DOCKER_HOST` 注入 + `userns=keep-id` 均正确）
+    - 版本 bump 与 git tag（用户决策）
+5. **M7：workspace 定制、国际化、memory**（已开始）
+    - ~~`output_language` 注入 review task context~~（已交付：`ServerReviewOrchestrationOptions` 新增 `outputLanguage` 字段；`buildTaskContext` 在 `outputLanguage` 非 `en` 时追加 `Output language: <lang>` 指令；`bootstrap.ts` 从 `config.review.output_language` 注入；3 个单元测试覆盖注入/省略场景）
+    - 所有包 barrel export 测试补齐（已交付：`@aicr/core`/`@aicr/cli`/`@aicr/server`/`@aicr/llm`/`@aicr/vcs`/`@aicr/outputs`/`@aicr/mcp-output`/`@aicr/store` 新增 `test/index.test.ts`，总计 1228 测试全部通过）
+    - skill by glob（已有 `Applies To` 章节过滤；待配置级强制激活）
+    - per-workspace baseSystemPrompt 覆盖（待实现）
+    - memory / reflection 存储与检索（待实现）
 
 ### 8.3 Backlog（低优先级延后项）
 
