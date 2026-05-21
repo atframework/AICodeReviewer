@@ -190,14 +190,14 @@ ssh -p 36000 -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no \
 
 ### 8.2 远程测试环境信息
 
-| 项目     | 测试环境                                                   | 生产环境                                    |
-| -------- | ---------------------------------------------------------- | ------------------------------------------- |
-| 部署目录 | `/data/disk2/AICodeReviewerTest`                           | `/data/disk2/AICodeReviewer`                |
-| 容器名   | `aicr-test`                                                | `aicr`                                      |
-| 本机端口 | `8091`                                                     | `8090`                                      |
-| 反向代理 | （暂无，直接访问或临时配置）                               | `https://aicr.m-oa.com:6023`                |
-| 健康检查 | `http://10.64.8.2:8091/healthz`                            | `http://10.64.8.2:8090/healthz`             |
-| 数据卷   | bind: `…/data/workspaces`, `…/data/db`, `…/data/logs` | bind: `…/data/workspaces`, `…/data/db`, `…/data/logs` |
+| 项目     | 开发自测环境                                          | 内网测试环境                                          | 公网正式环境                                          |
+| -------- | ----------------------------------------------------- | ----------------------------------------------------- | ----------------------------------------------------- |
+| 部署目录 | `/data/disk2/AICodeReviewerTest`                      | `/data/disk2/AICodeReviewer`                          | `/home/tools/AICodeReviewer`                          |
+| 容器名   | `aicr-test`                                           | `aicr`                                                | `aicr`                                                |
+| 本机端口 | `8091`                                                | `8090`                                                | `8090`                                                |
+| 反向代理 | （暂无，直接访问或临时配置）                          | `https://aicr.m-oa.com:6023`                          | `https://aicr.x-ha.com:6023`                          |
+| 健康检查 | `http://10.64.8.2:8091/healthz`                       | `http://10.64.8.2:8090/healthz`                       | `http://10.0.4.9:8090/healthz`                        |
+| 数据卷   | bind: `…/data/workspaces`, `…/data/db`, `…/data/logs` | bind: `…/data/workspaces`, `…/data/db`, `…/data/logs` | bind: `…/data/workspaces`, `…/data/db`, `…/data/logs` |
 
 ### 8.3 从零部署验证（已验证通过）
 
