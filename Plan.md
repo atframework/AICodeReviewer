@@ -221,20 +221,20 @@
 
 ### 8.1 当前状态
 
-| 里程碑 | 状态       | 主要落点                                                | 下一步                                   |
-| ------ | ---------- | ------------------------------------------------------- | ---------------------------------------- |
-| M0     | 已完成     | `docs/ai/milestones/M0.md`                              | 保持基线稳定                             |
-| M0.5   | 已完成     | `docs/ai/milestones/M0.5.md`、`docs/prompt-research.md` | 继续为 prompt/runtime 变更提供依据       |
-| M1     | 已完成     | `docs/ai/milestones/M1.md`                              | 作为最小 review 闭环基线                 |
-| M2     | 已完成     | `docs/ai/milestones/M2.md`                              | 作为 agent/sandbox 基线                  |
-| M3     | 已完成     | `docs/ai/milestones/M3.md`                              | 继续复用压缩、预算、队列与 scrubber 能力 |
-| M4     | 已完成     | `docs/ai/milestones/M4.md`                              | 继续扩展模板、路由与 attribution         |
-| M5     | 基本完成   | 多 Agent CLI、Podman、runtime bundle、Kilo Code e2e     | HTTP/SSE MCP transport 调研（非阻塞）    |
-| M6     | 部分完成   | GitHub 生产链路已验收                                   | GitLab e2e、SVN adapter 移至 Backlog     |
-| M7     | 未开始     | workspace 定制、skill by glob、国际化、memory           | 等待 M5/M6 更稳定后推进                  |
-| M8     | 大部分完成 | structured logs、OTel、metrics、run snapshot、eval CLI  | eval fixture 已补齐；CI 集成移至 Backlog |
-| M9     | 基本完成   | 文档、示例、deploy.sh 修复、发布资产、从零部署与容器嵌套沙箱验收 | 版本 tag（用户决策）                         |
-| M7     | 已开始     | `output_language` 注入 review task context              | skill by glob、workspace 定制、memory        |
+| 里程碑 | 状态 | 主要落点 | 下一步 |
+| --- | --- | --- | --- |
+| M0 | 已完成 | `docs/ai/milestones/M0.md` | 保持基线稳定 |
+| M0.5 | 已完成 | `docs/ai/milestones/M0.5.md`、`docs/prompt-research.md` | 继续为 prompt/runtime 变更提供依据 |
+| M1 | 已完成 | `docs/ai/milestones/M1.md` | 作为最小 review 闭环基线 |
+| M2 | 已完成 | `docs/ai/milestones/M2.md` | 作为 agent/sandbox 基线 |
+| M3 | 已完成 | `docs/ai/milestones/M3.md` | 继续复用压缩、预算、队列与 scrubber 能力 |
+| M4 | 已完成 | `docs/ai/milestones/M4.md` | 继续扩展模板、路由与 attribution |
+| M5 | 基本完成 | 多 Agent CLI、Podman、runtime bundle、Kilo Code e2e | HTTP/SSE MCP transport 调研（非阻塞） |
+| M6 | 部分完成 | GitHub 生产链路已验收 | GitLab e2e、SVN adapter 移至 Backlog |
+| M7 | 未开始 | workspace 定制、skill by glob、国际化、memory | 等待 M5/M6 更稳定后推进 |
+| M8 | 大部分完成 | structured logs、OTel、metrics、run snapshot、eval CLI | eval fixture 已补齐；CI 集成移至 Backlog |
+| M9 | 基本完成 | 文档、示例、deploy.sh、发布资产、部署验收 | 版本 tag（用户决策） |
+| M7 | 已开始 | `output_language` 注入 review task context | skill by glob、workspace 定制、memory |
 
 ### 8.2 当前执行包
 
@@ -261,15 +261,15 @@
     - ~~`runs/<run_id>/` 完整快照~~（已交付：`saveRunSnapshot` 保存 `runs/<run_id>/run.json`，通过 `ServerAppOptions.runsDir` 配置，同步/异步 review 均覆盖）
     - ~~eval CLI / 基准集~~（已交付：`aicr eval` CLI 命令已接入 `@aicr/eval`，`eval/` 目录支持 JSON fixture 文件）
     - ~~eval fixture 扩充~~（已交付：6 个 fixture 覆盖 security/sql-injection、security/hardcoded-secret、correctness/null-deref、correctness/error-silenced、style/naming、performance/n-plus-one）
- 4. **M9：发布收尾**（接近完成）
+4. **M9：发布收尾**（接近完成）
     - ~~`docker_socket` 文档确认~~（已交付：`example/README.md` 和 `docs/ai/architecture.md` §3.8.1 已补充说明）
     - ~~容器嵌套沙箱验证~~（已交付：`AICodeReviewerTest` 测试环境验证通过，确认 Podman socket + Docker 静态二进制 + `--userns=keep-id --group-add keep-groups` 路径可行；`deploy.sh`、`Dockerfile`、`.gitignore`、`docs/podman.md`、`example/README.md` 已更新）
     - ~~`k8s_pod` / `firecracker` 平台能力边界说明~~（已交付：`architecture.md` §3.8.1 后端能力矩阵已明确标注为预留扩展位）
     - ~~版本固定与 changelog~~（已交付：`CHANGELOG.md` 已创建，所有包版本固定为 `0.1.0`）
     - ~~最终发布检查单~~（已交付：`docs/ai/milestones/M9-checklist.md` 已创建）
-    - ~~`deploy.sh` 修复~~（已交付：所有 `podman` 命令已加 `--storage-driver=overlay`，加入 preflight 检查）
+    - ~~`deploy.sh` 修复~~（已交付：所有 `podman` 命令通过条件化 engine 参数加 `--storage-driver=overlay`，Docker engine 不接收 Podman 专用参数；加入 preflight 检查）
     - ~~`deploy.sh` 硬编码路径~~（已交付：改为环境变量覆盖 `AICR_DEPLOY_DIR`/`AICR_IMAGE_NAME`/`AICR_HOST_PORT`/`AICR_CONTAINER_NAME`/`AICR_ENGINE`）
-    - ~~`deploy/docker-static` 清洁同步兼容~~（已交付：未启用嵌套沙箱时 `deploy.sh` 创建占位文件，启用时下载真实 Docker CLI，避免 clean source sync 后 Dockerfile COPY 失败）
+    - ~~`deploy/docker-static` 清洁同步兼容~~（已交付：未启用嵌套沙箱时 `deploy.sh` 创建空占位文件且运行镜像会移除该占位；启用时下载真实 Docker CLI，避免 clean source sync 后 Dockerfile COPY 失败）
     - ~~`.dockerignore`~~（已交付：排除 `.git`/`node_modules`/`dist`/`coverage`/`docs` 等）
     - ~~Dockerfile 前向兼容~~（已交付：补齐 `sandbox`/`eval` node_modules COPY）
     - ~~部署资产审计修复~~（已交付：P4 认证表修正、`.env.sample` 补齐缺失变量、`config.yaml` 补齐 queue 子项示例、`SKILL.md` 环境变量名对齐、`Caddyfile.example` 添加）

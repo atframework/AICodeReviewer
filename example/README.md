@@ -116,7 +116,7 @@ This tells `deploy.sh` to:
 3. Set `DOCKER_HOST` so the Docker CLI routes to the host Podman daemon.
 4. Add `--userns=keep-id --group-add keep-groups` so the container user can access the socket.
 
-When nested container sandboxing is disabled, `deploy.sh` still creates an empty `deploy/docker-static` placeholder in the source build context so clean syncs do not fail the Dockerfile's optional `COPY` step.
+When nested container sandboxing is disabled, `deploy.sh` still creates an empty `deploy/docker-static` placeholder in the source build context so clean syncs do not fail the Dockerfile's optional `COPY` step. The runtime image removes this empty placeholder rather than installing a zero-byte `docker` executable.
 
 Requirements on the host:
 
@@ -202,7 +202,7 @@ Each trigger kind uses a specific verification mechanism:
 | **gitea** / **forgejo** | `webhook_secret_env` | HMAC-SHA256      | `x-gitea-signature-256` | Gitea webhook → Secret field  |
 | **github**              | `webhook_secret_env` | HMAC-SHA256      | `x-hub-signature-256`   | GitHub webhook → Secret field |
 | **gitlab**              | `webhook_secret_env` | Token comparison | `x-gitlab-token`        | GitLab webhook → Secret token |
-| **p4**                  | `server.auth`        | API key          | `x-api-key`             | p4-trigger.sh sends `X-API-Key` header |
+| **p4**                  | `server.auth`        | API key          | `x-api-key`             | p4-trigger.sh sends API key   |
 
 GitHub and GitLab can each define **multiple trigger profiles on the same route** (`/webhooks/github` or `/webhooks/gitlab`). Use separate trigger names when repositories need different outbound tokens, webhook secrets, or file filters; AICR picks the final profile by the verified credential plus the repository identity from the webhook payload.
 
@@ -307,7 +307,7 @@ omitted.
 | `.env.sample`                 | All environment variables with descriptions                |
 | `docker-compose.yaml`         | Docker Compose stack definition                            |
 | `../deploy/Dockerfile`        | Multi-stage Docker build                                   |
-| `../docs/ai/index.md`         | AI-facing doc map for roadmap, architecture, and milestones |
+| `../docs/ai/index.md`         | AI-facing docs map                                         |
 | `../docs/output-channels.md`  | MCP report contract and output rendering guide             |
 
 ## Adding More Repositories

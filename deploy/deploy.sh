@@ -6,7 +6,12 @@ IMAGE_NAME="${AICR_IMAGE_NAME:-aicr:latest}"
 HOST_PORT="${AICR_HOST_PORT:-8090}"
 CONTAINER_PORT="${AICR_CONTAINER_PORT:-8080}"
 CONTAINER_NAME="${AICR_CONTAINER_NAME:-aicr}"
-SD_FLAG="--storage-driver=overlay"
+ENGINE_CMD="${AICR_ENGINE:-podman}"
+ENGINE_BASENAME="$(basename "$ENGINE_CMD")"
+ENGINE_ARGS=()
+if [ "$ENGINE_BASENAME" = "podman" ]; then
+  ENGINE_ARGS=(--storage-driver=overlay)
+fi
 
 cd "$DEPLOY_DIR"
 
@@ -90,22 +95,27 @@ else
 fi
 
 # Pre-flight: recover from rootless storage driver corruption (Podman 5.x)
-ENGINE_CMD="${AICR_ENGINE:-podman}"
-if ! $ENGINE_CMD ps >/dev/null 2>&1; then
-  echo "=== Preflight: $ENGINE_CMD migrate with $SD_FLAG ==="
-  $ENGINE_CMD $SD_FLAG system migrate
+if ! "$ENGINE_CMD" "${ENGINE_ARGS[@]}" ps >/dev/null 2>&1; then
+  if [ "$ENGINE_BASENAME" = "podman" ]; then
+    echo "=== Preflight: $ENGINE_CMD migrate with ${ENGINE_ARGS[*]} ==="
+    "$ENGINE_CMD" "${ENGINE_ARGS[@]}" system migrate
+  else
+    echo "ERROR: $ENGINE_CMD ps failed; automatic storage migration is only supported for Podman."
+    "$ENGINE_CMD" ps
+    exit 1
+  fi
 fi
 
 # Preserve the previous image for rollback before overwriting the tag
 PREV_TAG="${IMAGE_NAME%:*}:previous"
-if $ENGINE_CMD $SD_FLAG inspect "$IMAGE_NAME" >/dev/null 2>&1; then
+if "$ENGINE_CMD" "${ENGINE_ARGS[@]}" inspect "$IMAGE_NAME" >/dev/null 2>&1; then
   echo "=== Preserving previous image as $PREV_TAG ==="
-  $ENGINE_CMD $SD_FLAG tag "$IMAGE_NAME" "$PREV_TAG" 2>/dev/null || true
+  "$ENGINE_CMD" "${ENGINE_ARGS[@]}" tag "$IMAGE_NAME" "$PREV_TAG" 2>/dev/null || true
 fi
 
 # Build the image
 echo "=== Building AICR image ==="
-$ENGINE_CMD $SD_FLAG build \
+"$ENGINE_CMD" "${ENGINE_ARGS[@]}" build \
   --build-arg NPM_STRICT_SSL=false \
   -t "$IMAGE_NAME" \
   -f "$DEPLOY_DIR/deploy/Dockerfile" \
@@ -113,11 +123,11 @@ $ENGINE_CMD $SD_FLAG build \
 
 # Stop existing container if any
 echo "=== Stopping old container ==="
-$ENGINE_CMD $SD_FLAG rm -f "$CONTAINER_NAME" 2>/dev/null || true
+"$ENGINE_CMD" "${ENGINE_ARGS[@]}" rm -f "$CONTAINER_NAME" 2>/dev/null || true
 
 # Run new container
 echo "=== Starting AICR container ==="
-$ENGINE_CMD $SD_FLAG run -d \
+"$ENGINE_CMD" "${ENGINE_ARGS[@]}" run -d \
   --name "$CONTAINER_NAME" \
   --restart unless-stopped \
   -p "${HOST_PORT}:${CONTAINER_PORT}" \
@@ -146,8 +156,8 @@ for attempt in $(seq 1 30); do
 done
 
 P4_PORT="$(sed -n '/name: p4-main/,$p' "$DEPLOY_DIR/config.yaml" | sed -n 's/^[[:space:]]*port:[[:space:]]*["'"'"']\{0,1\}\([^"'"'"']*\)["'"'"']\{0,1\}.*/\1/p' | head -1)"
-if [ -n "$P4_PORT" ] && $ENGINE_CMD exec "$CONTAINER_NAME" test -x /usr/bin/p4 >/dev/null 2>&1; then
-  $ENGINE_CMD exec "$CONTAINER_NAME" p4 -p "$P4_PORT" trust -y >/dev/null 2>&1 || true
+if [ -n "$P4_PORT" ] && "$ENGINE_CMD" "${ENGINE_ARGS[@]}" exec "$CONTAINER_NAME" test -x /usr/bin/p4 >/dev/null 2>&1; then
+  "$ENGINE_CMD" "${ENGINE_ARGS[@]}" exec "$CONTAINER_NAME" p4 -p "$P4_PORT" trust -y >/dev/null 2>&1 || true
 fi
 
 # Check health
@@ -155,4 +165,4 @@ echo "=== Health check ==="
 curl -sf "http://127.0.0.1:${HOST_PORT}/healthz" && echo " - OK" || echo " - FAILED"
 
 echo "=== Done ==="
-$ENGINE_CMD ps --filter name="$CONTAINER_NAME"
+"$ENGINE_CMD" "${ENGINE_ARGS[@]}" ps --filter name="$CONTAINER_NAME"
