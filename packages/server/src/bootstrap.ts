@@ -1766,6 +1766,7 @@ export async function bootstrapServerApp(options: BootstrapServerOptions): Promi
     ...(compressionConfig ? { compression: compressionConfig } : {}),
     ...(summarizeModel ? { summarizeModel } : {}),
     ...(summarizeClient ? { summarizeClient } : {}),
+    ...(config.review.output_language ? { outputLanguage: config.review.output_language } : {}),
   };
 
   const queue = await createQueueFromConfig(config);

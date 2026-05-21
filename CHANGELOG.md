@@ -26,6 +26,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **M8**: `aicr eval` CLI command added — runs evaluation benchmarks from `eval/` directory JSON fixtures against configured LLM, outputs structured pass/fail summary.
 - **M8**: Baseline eval fixture `eval/baseline-sql-injection.json` added as a seed test case.
 - **M8**: Eval fixtures expanded to 6 total covering security (SQL injection, hardcoded secrets), correctness (null dereference, silenced errors), style (naming convention), and performance (N+1 query pattern).
+- **M7**: `review.output_language` now injected into the review task context as `Output language: <lang>` directive when set to a non-English value (`packages/server/src/review-orchestrator.ts`, `packages/server/src/bootstrap.ts`).
+- **M7**: Barrel export tests added for `@aicr/core`, `@aicr/cli`, `@aicr/server`, `@aicr/llm`, `@aicr/vcs`, `@aicr/outputs`, `@aicr/mcp-output`, `@aicr/store` (each package now has `test/index.test.ts` verifying exports per AGENTS.md pitfall #10).
 - **M9**: `deploy/deploy.sh` now includes `--storage-driver=overlay` on all `podman` commands and a preflight `podman system migrate` check (addresses rootless Podman 5.x storage corruption).
 - **M9**: `.dockerignore` added to reduce Docker build context size.
 - **M9**: `deploy.sh` converted to use environment-variable overrides (`AICR_DEPLOY_DIR`, `AICR_IMAGE_NAME`, `AICR_HOST_PORT`, `AICR_CONTAINER_NAME`, `AICR_ENGINE`) instead of hardcoded paths.

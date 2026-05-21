@@ -225,6 +225,45 @@ Verify after deploy:
 ssh ... <remote-host> "podman exec aicr sh -c 'docker --version && docker run --rm alpine:latest echo sandbox-ok'"
 ```
 
+### From-scratch deployment verification
+
+To verify the complete zero-to-deployment flow on an empty directory (e.g., AICodeReviewerTest):
+
+1. Stop existing test container and remove directory:
+
+   ```bash
+   ssh ... <remote-host> "podman --storage-driver=overlay rm -f aicr-test 2>/dev/null; rm -rf <test-dir>; mkdir -p <test-dir>"
+   ```
+
+2. Extract source and set up directory layout:
+
+   ```bash
+   ssh ... <remote-host> "cd <test-dir>; mkdir -p source; tar xzf /path/to/aicr-test-deploy.tar.gz -C source; cp -r source/deploy .; cp source/deploy/deploy.sh ."
+   ```
+
+3. Write `.env` and `config.yaml` (copy from production or create minimal versions).
+
+4. Ensure Podman user socket is active:
+
+   ```bash
+   ssh ... <remote-host> "systemctl --user enable --now podman.socket"
+   ```
+
+5. Deploy with container sandbox:
+
+   ```bash
+   ssh ... <remote-host> "cd <test-dir>; AICR_DEPLOY_DIR=<test-dir> AICR_IMAGE_NAME=aicr:test AICR_CONTAINER_NAME=aicr-test AICR_HOST_PORT=8091 AICR_ENABLE_CONTAINER_SANDBOX=true bash deploy.sh"
+   ```
+
+6. Verify:
+
+   ```bash
+   # Health check
+   ssh ... <remote-host> "curl -sf http://127.0.0.1:8091/healthz"
+   # Nested sandbox
+   ssh ... <remote-host> "podman exec aicr-test sh -c 'docker --version && docker run --rm alpine:latest echo sandbox-ok'"
+   ```
+
 ## Environment Variables on Remote
 
 The `.env` file on remote contains secrets. **Never display its full contents in logs.** The known env vars are:

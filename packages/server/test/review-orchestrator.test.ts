@@ -3428,3 +3428,127 @@ describe("extractJsonPayload edge cases", () => {
     }
   });
 });
+
+describe("outputLanguage injection", () => {
+  it("includes output language directive when outputLanguage is set to a non-English language", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-i18n-"));
+
+    try {
+      await writeWorkspaceFile(tempDir, "src/app.ts", "function main() {}\n");
+
+      let capturedPrompt = "";
+      const result = await runReviewOrchestration(
+        {
+          reviewEvent: createReviewEventFixture(),
+          payload: {},
+          provider: "gitea",
+          eventName: "pull_request",
+        },
+        {
+          baseSystemPrompt: "<task>\n{{TASK_CONTEXT}}\n</task>",
+          sourceRootResolver: () => tempDir,
+          vcs: createVcs(tempDir),
+          llm: {
+            async complete(input) {
+              capturedPrompt = input.messages[0]?.content ?? "";
+              return {
+                providerId: input.model.providerId,
+                modelId: input.model.modelId,
+                content: '{"skipReason":"lgtm"}',
+                raw: {},
+              };
+            },
+          },
+          model,
+          outputLanguage: "zh-CN",
+        },
+      );
+
+      expect(result.status).toBe("skipped");
+      expect(capturedPrompt).toContain("Output language: zh-CN");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("omits output language directive when outputLanguage is en", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-i18n-en-"));
+
+    try {
+      await writeWorkspaceFile(tempDir, "src/app.ts", "function main() {}\n");
+
+      let capturedPrompt = "";
+      const result = await runReviewOrchestration(
+        {
+          reviewEvent: createReviewEventFixture(),
+          payload: {},
+          provider: "gitea",
+          eventName: "pull_request",
+        },
+        {
+          baseSystemPrompt: "<task>\n{{TASK_CONTEXT}}\n</task>",
+          sourceRootResolver: () => tempDir,
+          vcs: createVcs(tempDir),
+          llm: {
+            async complete(input) {
+              capturedPrompt = input.messages[0]?.content ?? "";
+              return {
+                providerId: input.model.providerId,
+                modelId: input.model.modelId,
+                content: '{"skipReason":"lgtm"}',
+                raw: {},
+              };
+            },
+          },
+          model,
+          outputLanguage: "en",
+        },
+      );
+
+      expect(result.status).toBe("skipped");
+      expect(capturedPrompt).not.toContain("Output language:");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("omits output language directive when outputLanguage is not set", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-i18n-none-"));
+
+    try {
+      await writeWorkspaceFile(tempDir, "src/app.ts", "function main() {}\n");
+
+      let capturedPrompt = "";
+      const result = await runReviewOrchestration(
+        {
+          reviewEvent: createReviewEventFixture(),
+          payload: {},
+          provider: "gitea",
+          eventName: "pull_request",
+        },
+        {
+          baseSystemPrompt: "<task>\n{{TASK_CONTEXT}}\n</task>",
+          sourceRootResolver: () => tempDir,
+          vcs: createVcs(tempDir),
+          llm: {
+            async complete(input) {
+              capturedPrompt = input.messages[0]?.content ?? "";
+              return {
+                providerId: input.model.providerId,
+                modelId: input.model.modelId,
+                content: '{"skipReason":"lgtm"}',
+                raw: {},
+              };
+            },
+          },
+          model,
+        },
+      );
+
+      expect(result.status).toBe("skipped");
+      expect(capturedPrompt).not.toContain("Output language:");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+});
