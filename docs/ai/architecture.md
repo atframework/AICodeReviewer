@@ -289,6 +289,24 @@
   - `workspaces.defaults.agent`
   - `outputs.channels[].mention_fallback`
   - `outputs.routes`
+- 计划中的内置观测首页认证配置与 trigger API key 分离；配置文件只保存 env var 名称，
+  不保存超级管理员用户名/密码明文。密码哈希 env（如 `*_PASSWORD_HASH`）优先；
+  小型内网部署允许 raw password env，但必须常量时间比较、限速并禁止进入日志、
+  snapshot 或 metrics label。
+- 计划中的数据库、缓存和对象存储配置必须使用顶层 `storage` 命名空间，供观测、队列、
+  artifact、runtime 等能力复用，不复用 `queue.kind` 或 `workspaces.cache`：
+  - `storage.database.kind`: `sqlite`（默认）或 `postgres`。
+  - `storage.database.sqlite.path`: 默认 `/app/data/aicr.sqlite`。
+  - `storage.database.postgres.url_env`: 指向 Postgres 连接串环境变量。
+  - `storage.cache.kind`: `memory`（默认）、`redis` 或 `none`。
+  - `storage.cache.redis.url_env`: 指向 Redis 连接串环境变量。
+  - `storage.object.kind`: `filesystem`（默认）或 `s3`。
+  - `storage.object.filesystem.root`: 默认 `/app/data/objects`。
+  - `storage.object.s3.endpoint_url_env`: 可指向 AWS S3、MinIO、RustFS 等 S3-compatible endpoint。
+  - `storage.object.s3.bucket`: 对象存储 bucket 名称。
+  - `storage.object.s3.region_env`、`access_key_id_env`、`secret_access_key_env`: 通过环境变量引用凭据和区域。
+  - `storage.object.s3.force_path_style`: 支持 MinIO / RustFS 这类常见 S3-compatible 部署。
+  - `storage.retention.deleted_project_grace_days`: 已删除项目统计硬删除宽限期。
 - 输出路由、模板、agent、queue、review 行为都支持全局 → workspace default → workspace instance 覆盖。
 - 当配置 shape 变化时，要同步更新 schema 测试、示例配置、专题文档和 `Plan.md` 摘要。
 
@@ -306,6 +324,50 @@
 - 当 `dryRun` 为 `false` 时，run status 不能因为没有 publisher 而错误回落到 `dry_run`。
 - Prometheus histogram bucket、sum、count 必须按进程生命周期累计；只能把原始 duration 样本缓冲做滑动窗口裁剪。
 - `/metrics` 计数与 `runs/<run_id>/run.json` 快照应覆盖同步和异步触发的 review run，不能只记录后台模式。
+
+#### 3.11.1 内置观测首页（planned M8 follow-up）
+
+- 内置观测首页是 Prometheus/OTel 的补充，不是替代：外部时序系统存在时可以联动，
+  但默认部署不应因为未配置 Prometheus 就失去基础统计能力。
+- 页面和对应 JSON API 必须在认证后访问；认证面独立于 webhook/trigger API key。
+  超级管理员用户名、密码哈希或密码通过环境变量引用，服务端不得打印或落盘原值。
+- 非 Prometheus/OTel 的观测数据层必须作为独立产品能力存在。持久化数据使用统一
+  `storage.database` 后端；它是无 Prometheus 部署的统计真源，由 `@aicr/store` 统一
+  schema / migration，Drizzle 负责类型化访问。
+  `runs/<run_id>/run.json` 仍用于审计与问题排查，但不作为统计聚合查询真源。
+- 默认 `storage.database` 后端为 `/app/data/aicr.sqlite` 单文件 SQLite 数据库；SQLite 连接应启用 WAL、
+  `foreign_keys=ON` 和 `busy_timeout`，适合单容器/单服务进程的默认部署。
+- Postgres 是可选 `storage.database` 后端，面向集中化数据库、跨容器迁移和未来多实例部署；schema、
+  migration、查询语义必须与 SQLite 后端保持等价，不能出现只在一个后端有统计字段的情况。
+- Redis 是可选 `storage.cache` 后端，面向跨进程/多实例的观测首页查询缓存、登录/session 状态和短期索引；
+  Redis 数据必须可从 SQLite/Postgres 持久库重建，不能作为唯一历史统计存储。
+- `storage.object` 不参与结构化统计查询；它用于未来大体积 artifact、run 附件、归档数据或
+  可重建 blob。默认 filesystem 后端落在 `/app/data/objects`，S3-compatible 后端覆盖 AWS S3、
+  MinIO 和 RustFS，凭据只能通过环境变量引用。
+- Prometheus、OTel、JSONL 或 run snapshot 不能替代观测持久化 store；外部观测系统只作为
+  导出、告警和时序分析补充。
+- 统计 schema 至少包含：project/workspace 维度表、review run fact、代码量 fact、
+  LLM usage event、output dispatch / managed issue event，以及可从原始事件重算的 rollup 表。
+  project identity 由 `workspaceId + triggerName + repoRef` 派生，避免复用 workspace id 时把不同仓库的历史混在一起。
+- 时间窗口至少包含：今日、本周、本月、汇总。原始时间戳用 UTC 存储，窗口展示按
+  可配置 timezone 计算；未配置时使用服务端默认 timezone，并在 API 响应中显式返回。
+- 首屏统计至少包含：总 review 次数、成功/失败/跳过次数、发现问题的 run 次数、
+  problem 总数、创建 issue 数、分析代码量、LLM 请求数、输入/输出/总 token、估算成本。
+- 工程级维度按 workspace / repo / trigger 聚合，至少展示分析次数、分析代码量
+  （变更文件数、增删/分析行数、分析字节数）、发现问题的 run 次数、problem 总数、
+  创建 issue 数，以及该工程按 provider+model 拆分的请求数和 token 数。
+- provider+model 维度至少展示请求数、成功/失败数、重试与 fallback 次数、输入/输出/总
+  token、延迟统计和可用时的估算成本；模型切换和 fallback 不能被合并到原始 model 上。
+- `/metrics` 仍保持低基数、进程累计语义；不要为了页面筛选把 workspace、repo、branch、
+  author 或 issue id 等高基数字段直接塞进 Prometheus label。高基数查询走 `storage.database`
+  持久库，并可用 `storage.cache` 缓存热点聚合结果。
+- 观测数据只保存运行与用量元数据，不保存 prompt、完整 diff、secret 或未脱敏输出；
+  面向 UI 的错误摘要必须走 scrubber。
+- 删除项目清理必须自动化：服务启动、配置 reload 和每日维护任务都要把当前
+  `workspaces.instances` 解析成 active project set；不再存在的 project 先写入 `deleted_at`
+  并从 UI/API 默认结果隐藏，然后按可配置宽限期硬删除 project 维度行，由外键
+  `ON DELETE CASCADE` 清理 run、usage、issue event 和 rollup。宽限期为 0 时立即清理，
+  非 0 时可避免错误配置发布导致统计不可恢复。
 
 ### 3.12 Reflection 与 memory
 
