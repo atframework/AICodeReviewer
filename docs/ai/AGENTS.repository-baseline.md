@@ -27,8 +27,8 @@
 
 These issues were discovered and fixed in prior sessions. Before making changes, verify you are not reintroducing them:
 
-1. **Config schema gaps**: `packages/core/src/config.ts` Zod schemas must include all fields from Plan.md §3.10 / `docs/ai/architecture.md` §3.10 — `compression`, `llm.fallback_chain`, `llm.retry`, `llm.budget`, `llm.per_provider_overrides`, `queue.workers`, `queue.rate_limit`, `queue.retry`, `queue.dead_letter`, `review.reflection.memory`, `workspaces.defaults.agent`, `outputs.channels[].mention_fallback`, `outputs.routes`.
-2. **Store schema columns**: `packages/store/src/schema.ts` must include `triggerName`, `provider`, `providerModel` per Plan.md §3.11 / `docs/ai/architecture.md` §3.11.
+1. **Config schema gaps**: `packages/core/src/config.ts` Zod schemas must include all fields from Plan.md §3.10 / `docs/ai/architecture.md` §3.10 — `compression`, `llm.fallback_chain`, `llm.retry`, `llm.budget`, `llm.per_provider_overrides`, `queue.workers`, `queue.rate_limit`, `queue.retry`, `queue.dead_letter`, `review.problem_issue.max_recent_issues`, `review.reflection.memory`, `workspaces.defaults.agent`, `outputs.channels[].mention_fallback`, `outputs.routes`, top-level `storage` (database/cache/object/retention), and `admin` (username/password/password-hash env names and session TTL).
+2. **Store schema columns**: `packages/store/src/schema.ts` must include `triggerName`, `provider`, `providerModel`, and the observability tables `projects` (with `deleted_at`), `reviewRuns` (project FK, skip/compression/token/target/duration/count fields), `codeMetrics`, `llmUsage`, `outputEvents`, and `dailyRollups` per Plan.md §3.11 / `docs/ai/architecture.md` §3.11.
 3. **`isPlainObject` strictness**: Must reject `Date`, `RegExp`, and other built-in class instances. Only `Object.prototype` or `null` prototype.
 4. **`normalizePath` slash compression**: Must compress `//` → `/` in addition to backslash and `./` handling.
 5. **CJK token estimation**: `estimateTokens` must count CJK characters as ~2 tokens, not 0.25.

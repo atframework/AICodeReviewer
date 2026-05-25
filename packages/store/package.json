@@ -15,6 +15,10 @@
     "build": "tsc -p tsconfig.json"
   },
   "dependencies": {
+    "better-sqlite3": "^12.10.0",
     "drizzle-orm": "^0.41.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13"
   }
 }

@@ -24,6 +24,8 @@ import {
   GiteaApiClient,
   triageIssue,
   DEFAULT_TRIAGE_SYSTEM_PROMPT,
+  resolveAdminAuthConfig,
+  createAdminAuthMiddleware,
 } from "../src/index.js";
 
 describe("@aicr/server", () => {
@@ -66,5 +68,10 @@ describe("@aicr/server", () => {
     expect(GiteaApiClient).toBeDefined();
     expect(triageIssue).toBeDefined();
     expect(DEFAULT_TRIAGE_SYSTEM_PROMPT).toBeDefined();
+  });
+
+  it("exports admin auth utilities", () => {
+    expect(resolveAdminAuthConfig).toBeDefined();
+    expect(createAdminAuthMiddleware).toBeDefined();
   });
 });

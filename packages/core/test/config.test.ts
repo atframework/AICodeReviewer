@@ -1550,4 +1550,59 @@ describe("triage config", () => {
     expect(triage.categories_close).toEqual(["spam"]);
     expect(triage.dry_run).toBe(true);
   });
+
+  it("parses storage config with defaults", () => {
+    const config = mergeConfigLayers({});
+    expect(config.storage.database.kind).toBe("sqlite");
+    expect(config.storage.database.sqlite.path).toBe("/app/data/aicr.sqlite");
+    expect(config.storage.cache.kind).toBe("memory");
+    expect(config.storage.object.kind).toBe("filesystem");
+    expect(config.storage.object.filesystem.root).toBe("/app/data/objects");
+    expect(config.storage.retention.deleted_project_grace_days).toBe(30);
+  });
+
+  it("parses storage config with overrides", () => {
+    const config = mergeConfigLayers({
+      storage: {
+        database: {
+          kind: "postgres",
+          postgres: { url_env: "DATABASE_URL" },
+        },
+        cache: {
+          kind: "redis",
+          redis: { url_env: "REDIS_URL" },
+          ttl_seconds: 300,
+        },
+        retention: { deleted_project_grace_days: 7 },
+      },
+    });
+    expect(config.storage.database.kind).toBe("postgres");
+    expect(config.storage.cache.kind).toBe("redis");
+    expect(config.storage.retention.deleted_project_grace_days).toBe(7);
+  });
+
+  it("parses admin auth config", () => {
+    const config = mergeConfigLayers({
+      admin: {
+        username_env: "AICR_ADMIN_USER",
+        password_env: "AICR_ADMIN_PASS",
+        password_hash_env: "AICR_ADMIN_PASS_HASH",
+        session_ttl_seconds: 7200,
+      },
+    });
+    expect(config.admin).toBeDefined();
+    expect(config.admin!.username_env).toBe("AICR_ADMIN_USER");
+    expect(config.admin!.password_env).toBe("AICR_ADMIN_PASS");
+    expect(config.admin!.password_hash_env).toBe("AICR_ADMIN_PASS_HASH");
+    expect(config.admin!.session_ttl_seconds).toBe(7200);
+  });
+
+  it("admin defaults to env-backed super-admin settings", () => {
+    const config = mergeConfigLayers({});
+    expect(config.admin).toMatchObject({
+      username_env: "AICR_ADMIN_USERNAME",
+      password_env: "AICR_ADMIN_PASSWORD",
+      session_ttl_seconds: 86400,
+    });
+  });
 });

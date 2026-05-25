@@ -13,6 +13,7 @@
     { "path": "../mcp-output" },
     { "path": "../outputs" },
     { "path": "../sandbox" },
+    { "path": "../store" },
     { "path": "../vcs" }
   ],
   "include": ["src/**/*.ts"]

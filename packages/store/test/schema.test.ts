@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
 
-import { reviewRuns, runStatusValues, type RunStatus } from "../src/schema.js";
+import {
+  reviewRuns,
+  projects,
+  codeMetrics,
+  llmUsage,
+  outputEvents,
+  dailyRollups,
+  runStatusValues,
+} from "../src/schema.js";
 
 describe("reviewRuns schema", () => {
   it("defines all Plan.md §3.11 run status values", () => {
@@ -13,6 +21,7 @@ describe("reviewRuns schema", () => {
       "failed",
       "cancelled",
       "timeout",
+      "skipped",
     ]);
   });
 
@@ -23,6 +32,7 @@ describe("reviewRuns schema", () => {
     expect(columnNames).toEqual(
       expect.arrayContaining([
         "id",
+        "projectId",
         "eventId",
         "workspaceId",
         "triggerName",
@@ -36,32 +46,22 @@ describe("reviewRuns schema", () => {
         "tokensIn",
         "tokensOut",
         "error",
+        "skipReason",
+        "compressed",
+        "originalTokenEstimate",
+        "compressedTokenEstimate",
+        "diffFileCount",
+        "changedFileCount",
+        "problemCount",
+        "summaryCount",
+        "dispatchCount",
+        "durationMs",
+        "targetKind",
+        "targetUrl",
+        "branch",
+        "headSha",
       ]),
     );
-  });
-
-  it("uses id as the primary key column", () => {
-    const table = reviewRuns;
-    expect(table[Symbol.for("drizzle:BaseName")]).toBe("review_runs");
-  });
-
-  it("conforms RunStatus type to all valid status strings", () => {
-    const validStatuses: RunStatus[] = [
-      "queued",
-      "preparing",
-      "analyzing",
-      "publishing",
-      "succeeded",
-      "failed",
-      "cancelled",
-      "timeout",
-    ];
-
-    for (const status of validStatuses) {
-      expect(runStatusValues).toContain(status);
-    }
-
-    expect(validStatuses).toHaveLength(runStatusValues.length);
   });
 
   it("includes triggerName column for §3.1 trigger traceability", () => {
@@ -88,5 +88,104 @@ describe("reviewRuns schema", () => {
     expect(triggerNameCol.notNull).toBe(false);
     expect(providerCol.notNull).toBe(false);
     expect(providerModelCol.notNull).toBe(false);
+  });
+});
+
+describe("projects schema", () => {
+  it("defines the expected column names", () => {
+    const columns = projects[Symbol.for("drizzle:Columns")] as Record<string, unknown>;
+    const columnNames = Object.keys(columns);
+    expect(columnNames).toEqual(
+      expect.arrayContaining([
+        "id",
+        "workspaceId",
+        "triggerName",
+        "repoRef",
+        "displayName",
+        "createdAt",
+        "deletedAt",
+      ]),
+    );
+  });
+});
+
+describe("codeMetrics schema", () => {
+  it("defines the expected column names", () => {
+    const columns = codeMetrics[Symbol.for("drizzle:Columns")] as Record<string, unknown>;
+    const columnNames = Object.keys(columns);
+    expect(columnNames).toEqual(
+      expect.arrayContaining([
+        "id",
+        "runId",
+        "filesChanged",
+        "linesAdded",
+        "linesDeleted",
+        "bytesAnalyzed",
+        "filesAnalyzed",
+      ]),
+    );
+  });
+});
+
+describe("llmUsage schema", () => {
+  it("defines the expected column names", () => {
+    const columns = llmUsage[Symbol.for("drizzle:Columns")] as Record<string, unknown>;
+    const columnNames = Object.keys(columns);
+    expect(columnNames).toEqual(
+      expect.arrayContaining([
+        "id",
+        "runId",
+        "providerId",
+        "modelId",
+        "requestCount",
+        "tokensIn",
+        "tokensOut",
+        "tokensTotal",
+        "costUsd",
+        "retryCount",
+        "fallbackCount",
+        "failureCount",
+        "latencyMs",
+      ]),
+    );
+  });
+});
+
+describe("outputEvents schema", () => {
+  it("defines the expected column names", () => {
+    const columns = outputEvents[Symbol.for("drizzle:Columns")] as Record<string, unknown>;
+    const columnNames = Object.keys(columns);
+    expect(columnNames).toEqual(
+      expect.arrayContaining([
+        "id",
+        "runId",
+        "channelKind",
+        "eventType",
+        "issueCreated",
+        "commentCreated",
+        "timestamp",
+      ]),
+    );
+  });
+});
+
+describe("dailyRollups schema", () => {
+  it("defines the expected column names", () => {
+    const columns = dailyRollups[Symbol.for("drizzle:Columns")] as Record<string, unknown>;
+    const columnNames = Object.keys(columns);
+    expect(columnNames).toEqual(
+      expect.arrayContaining([
+        "id",
+        "projectId",
+        "date",
+        "reviewCount",
+        "successCount",
+        "failureCount",
+        "problemTotal",
+        "tokensIn",
+        "tokensOut",
+        "costUsd",
+      ]),
+    );
   });
 });

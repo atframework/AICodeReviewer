@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
 import type { AppConfig } from "@aicr/core";
+import { closeStoreDb, createStoreDb, getProjectStats, insertReviewRun } from "@aicr/store";
 
 import {
   resolveModelSpecFromConfig,
@@ -2093,5 +2094,278 @@ describe("resolveP4TriggerConfig", () => {
 
     const adapter = createVcsAdapterFromConfig(config, "/tmp/test", "gitea-main");
     expect(adapter.kind).toBe("git");
+  });
+
+  it("bootstrapServerApp initializes store and observability when admin auth env vars are set", async () => {
+    const tmpDir = await mkdtemp(join(tmpdir(), "aicr-bootstrap-obs-"));
+    process.env.AICR_ADMIN_USERNAME = "admin";
+    process.env.AICR_ADMIN_PASSWORD = "secret";
+    let result: Awaited<ReturnType<typeof bootstrapServerApp>> | undefined;
+    try {
+      const config = makeConfig({
+        admin: {
+          username_env: "AICR_ADMIN_USERNAME",
+          password_env: "AICR_ADMIN_PASSWORD",
+        },
+        storage: {
+          database: { kind: "sqlite" as const, sqlite: { path: join(tmpDir, "obs.db") } },
+          cache: { kind: "memory" as const },
+          object: { kind: "filesystem" as const },
+          retention: { deleted_project_grace_days: 7 },
+        },
+      } as Partial<AppConfig>);
+
+      result = await bootstrapServerApp({
+        config,
+        baseSystemPrompt: "test",
+        baseDir: tmpDir,
+      });
+
+      expect(result.store).toBeDefined();
+      expect(result.observability).toBeDefined();
+      expect(result.observability!.store).toBe(result.store);
+    } finally {
+      delete process.env.AICR_ADMIN_USERNAME;
+      delete process.env.AICR_ADMIN_PASSWORD;
+      if (result?.store) {
+        closeStoreDb(result.store);
+      }
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("bootstrapServerApp initializes observability from default admin env names", async () => {
+    const tmpDir = await mkdtemp(join(tmpdir(), "aicr-bootstrap-default-admin-"));
+    process.env.AICR_ADMIN_USERNAME = "admin";
+    process.env.AICR_ADMIN_PASSWORD = "secret";
+    let result: Awaited<ReturnType<typeof bootstrapServerApp>> | undefined;
+    try {
+      const config = makeConfig({
+        admin: {
+          username_env: "AICR_ADMIN_USERNAME",
+          password_env: "AICR_ADMIN_PASSWORD",
+          session_ttl_seconds: 86400,
+        },
+        storage: {
+          database: { kind: "sqlite" as const, sqlite: { path: join(tmpDir, "obs.db") } },
+          cache: { kind: "memory" as const },
+          object: { kind: "filesystem" as const },
+          retention: { deleted_project_grace_days: 30 },
+        },
+      } as Partial<AppConfig>);
+
+      result = await bootstrapServerApp({
+        config,
+        baseSystemPrompt: "test",
+        baseDir: tmpDir,
+      });
+
+      expect(result.store).toBeDefined();
+      expect(result.observability?.adminAuth.username).toBe("admin");
+    } finally {
+      delete process.env.AICR_ADMIN_USERNAME;
+      delete process.env.AICR_ADMIN_PASSWORD;
+      if (result?.store) {
+        closeStoreDb(result.store);
+      }
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("bootstrapServerApp rejects non-sqlite observability store backends until implemented", async () => {
+    const tmpDir = await mkdtemp(join(tmpdir(), "aicr-bootstrap-postgres-"));
+    process.env.AICR_ADMIN_USERNAME = "admin";
+    process.env.AICR_ADMIN_PASSWORD = "secret";
+    try {
+      const config = makeConfig({
+        admin: {
+          username_env: "AICR_ADMIN_USERNAME",
+          password_env: "AICR_ADMIN_PASSWORD",
+          session_ttl_seconds: 86400,
+        },
+        storage: {
+          database: { kind: "postgres" as const, sqlite: { path: join(tmpDir, "obs.db") }, postgres: { url_env: "DATABASE_URL" } },
+          cache: { kind: "memory" as const },
+          object: { kind: "filesystem" as const },
+          retention: { deleted_project_grace_days: 30 },
+        },
+      } as Partial<AppConfig>);
+
+      await expect(bootstrapServerApp({ config, baseSystemPrompt: "test", baseDir: tmpDir })).rejects.toThrow(
+        "currently supports sqlite only",
+      );
+    } finally {
+      delete process.env.AICR_ADMIN_USERNAME;
+      delete process.env.AICR_ADMIN_PASSWORD;
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("bootstrapServerApp hides projects removed from workspace config", async () => {
+    const tmpDir = await mkdtemp(join(tmpdir(), "aicr-bootstrap-project-cleanup-"));
+    const dbPath = join(tmpDir, "obs.db");
+    process.env.AICR_ADMIN_USERNAME = "admin";
+    process.env.AICR_ADMIN_PASSWORD = "secret";
+    let result: Awaited<ReturnType<typeof bootstrapServerApp>> | undefined;
+    const seedStore = createStoreDb(dbPath);
+    try {
+      insertReviewRun(seedStore, {
+        id: "run-active",
+        eventId: "evt-active",
+        workspaceId: "active-workspace",
+        triggerName: "gitea-active",
+        repoRef: "owner/active",
+        provider: null,
+        providerModel: null,
+        status: "succeeded",
+        startedAt: new Date(),
+      });
+      insertReviewRun(seedStore, {
+        id: "run-removed",
+        eventId: "evt-removed",
+        workspaceId: "removed-workspace",
+        triggerName: "gitea-removed",
+        repoRef: "owner/removed",
+        provider: null,
+        providerModel: null,
+        status: "succeeded",
+        startedAt: new Date(),
+      });
+      closeStoreDb(seedStore);
+
+      const config = makeConfig({
+        admin: {
+          username_env: "AICR_ADMIN_USERNAME",
+          password_env: "AICR_ADMIN_PASSWORD",
+          session_ttl_seconds: 86400,
+        },
+        storage: {
+          database: { kind: "sqlite" as const, sqlite: { path: dbPath } },
+          cache: { kind: "memory" as const },
+          object: { kind: "filesystem" as const },
+          retention: { deleted_project_grace_days: 30 },
+        },
+        workspaces: {
+          cache: { max_total_gb: 50, eviction: "lru", ttl_days: 30 },
+          defaults: {},
+          instances: {
+            "active-workspace": {
+              source_repo: { trigger: "gitea-active", repo: "owner/active" },
+            },
+          },
+        },
+      } as Partial<AppConfig>);
+
+      result = await bootstrapServerApp({
+        config,
+        baseSystemPrompt: "test",
+        baseDir: tmpDir,
+      });
+
+      expect(getProjectStats(result.store!)).toMatchObject([
+        { workspaceId: "active-workspace", repoRef: "owner/active" },
+      ]);
+    } finally {
+      delete process.env.AICR_ADMIN_USERNAME;
+      delete process.env.AICR_ADMIN_PASSWORD;
+      if (seedStore.sqlite.open) {
+        closeStoreDb(seedStore);
+      }
+      if (result?.store) {
+        closeStoreDb(result.store);
+      }
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("bootstrapServerApp hides all projects when workspace config is empty", async () => {
+    const tmpDir = await mkdtemp(join(tmpdir(), "aicr-bootstrap-empty-project-cleanup-"));
+    const dbPath = join(tmpDir, "obs.db");
+    process.env.AICR_ADMIN_USERNAME = "admin";
+    process.env.AICR_ADMIN_PASSWORD = "secret";
+    let result: Awaited<ReturnType<typeof bootstrapServerApp>> | undefined;
+    const seedStore = createStoreDb(dbPath);
+    try {
+      insertReviewRun(seedStore, {
+        id: "run-removed-a",
+        eventId: "evt-removed-a",
+        workspaceId: "removed-workspace-a",
+        triggerName: "gitea-removed-a",
+        repoRef: "owner/removed-a",
+        provider: null,
+        providerModel: null,
+        status: "succeeded",
+        startedAt: new Date(),
+      });
+      insertReviewRun(seedStore, {
+        id: "run-removed-b",
+        eventId: "evt-removed-b",
+        workspaceId: "removed-workspace-b",
+        triggerName: "gitea-removed-b",
+        repoRef: "owner/removed-b",
+        provider: null,
+        providerModel: null,
+        status: "succeeded",
+        startedAt: new Date(),
+      });
+      closeStoreDb(seedStore);
+
+      const config = makeConfig({
+        admin: {
+          username_env: "AICR_ADMIN_USERNAME",
+          password_env: "AICR_ADMIN_PASSWORD",
+          session_ttl_seconds: 86400,
+        },
+        storage: {
+          database: { kind: "sqlite" as const, sqlite: { path: dbPath } },
+          cache: { kind: "memory" as const },
+          object: { kind: "filesystem" as const },
+          retention: { deleted_project_grace_days: 30 },
+        },
+        workspaces: {
+          cache: { max_total_gb: 50, eviction: "lru", ttl_days: 30 },
+          defaults: {},
+          instances: {},
+        },
+      } as Partial<AppConfig>);
+
+      result = await bootstrapServerApp({
+        config,
+        baseSystemPrompt: "test",
+        baseDir: tmpDir,
+      });
+
+      expect(getProjectStats(result.store!)).toEqual([]);
+    } finally {
+      delete process.env.AICR_ADMIN_USERNAME;
+      delete process.env.AICR_ADMIN_PASSWORD;
+      if (seedStore.sqlite.open) {
+        closeStoreDb(seedStore);
+      }
+      if (result?.store) {
+        closeStoreDb(result.store);
+      }
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("bootstrapServerApp does not initialize store when admin auth env vars are missing", async () => {
+    const tmpDir = await mkdtemp(join(tmpdir(), "aicr-bootstrap-no-obs-"));
+    delete process.env.AICR_ADMIN_USERNAME;
+    delete process.env.AICR_ADMIN_PASSWORD;
+    try {
+      const config = makeConfig();
+
+      const result = await bootstrapServerApp({
+        config,
+        baseSystemPrompt: "test",
+        baseDir: tmpDir,
+      });
+
+      expect(result.store).toBeUndefined();
+      expect(result.observability).toBeUndefined();
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
   });
 });

@@ -53,6 +53,12 @@ import {
   type SandboxEngine,
 } from "@aicr/sandbox";
 import { createGitVcsAdapter, createP4VcsAdapter, type GitVcsAdapter, type P4VcsAdapter } from "@aicr/vcs";
+import {
+  createStoreDb,
+  hardDeleteExpiredProjects,
+  softDeleteMissingProjects,
+  type StoreDb,
+} from "@aicr/store";
 
 import type { GiteaWebhookConfig } from "./gitea-webhook.js";
 import type { P4TriggerConfig } from "./p4-webhook.js";
@@ -61,6 +67,8 @@ import type { IssueTriageRuntimeOptions, WorkspaceIssueTriagePolicy } from "./is
 import type { ServerAppOptions, ServerReviewOrchestrationOptions } from "./index.js";
 import { type AuthConfig } from "./auth.js";
 import { createReviewDeduplicator } from "./review-deduplicator.js";
+import { resolveAdminAuthConfig } from "./admin-auth.js";
+import type { ObservabilityApiOptions } from "./observability-api.js";
 import type {
   ReviewDispatchResult,
   ReviewOrchestrationContext,
@@ -75,6 +83,12 @@ export interface BootstrapServerOptions {
   readonly baseDir?: string;
   readonly workspaceId?: string;
   readonly jobHandler?: QueueJobHandler;
+}
+
+interface ActiveProjectIdentity {
+  readonly workspaceId: string;
+  readonly triggerName: string;
+  readonly repoRef: string;
 }
 
 function resolveEnv(name: string | undefined): string | undefined {
@@ -490,6 +504,21 @@ export function resolveAuthConfig(config: AppConfig): AuthConfig | undefined {
     workspaceApiKeys,
     enabled: authEnabled,
   };
+}
+
+function buildActiveProjectIdentities(config: AppConfig): readonly ActiveProjectIdentity[] {
+  return Object.entries(config.workspaces.instances).flatMap(([workspaceId, instance]) => {
+    const sourceRepo = instance.source_repo;
+    if (!sourceRepo) {
+      return [];
+    }
+
+    return [{
+      workspaceId,
+      triggerName: sourceRepo.trigger,
+      repoRef: sourceRepo.repo,
+    }];
+  });
 }
 
 function resolveWorkspaceIdFromTrigger(config: AppConfig, triggerName: string): string {
@@ -1792,6 +1821,31 @@ export async function bootstrapServerApp(options: BootstrapServerOptions): Promi
   const githubOption = toServerWebhookOption(githubConfigs);
   const gitlabOption = toServerWebhookOption(gitlabConfigs);
 
+  let store: StoreDb | undefined;
+  let observability: ObservabilityApiOptions | undefined;
+
+  const adminAuthConfig = resolveAdminAuthConfig(config as unknown as Record<string, unknown>, resolveEnv);
+
+  if (adminAuthConfig) {
+    if (config.storage.database.kind !== "sqlite") {
+      throw new TypeError(
+        `storage.database.kind=${config.storage.database.kind} is configured, but the built-in observability store currently supports sqlite only.`,
+      );
+    }
+
+    const dbPath = config.storage.database.sqlite.path;
+    store = createStoreDb(dbPath);
+
+    const activeProjectIdentities = buildActiveProjectIdentities(config);
+    softDeleteMissingProjects(store, activeProjectIdentities);
+    hardDeleteExpiredProjects(store, config.storage.retention.deleted_project_grace_days);
+
+    observability = {
+      store,
+      adminAuth: adminAuthConfig,
+    };
+  }
+
   return {
     ...(giteaConfig ? { gitea: giteaConfig } : {}),
     ...(githubOption ? { github: githubOption } : {}),
@@ -1805,6 +1859,8 @@ export async function bootstrapServerApp(options: BootstrapServerOptions): Promi
     ...(authConfig ? { auth: authConfig } : {}),
     asyncTriggers: true,
     deduplicator: createReviewDeduplicator(),
+    ...(observability ? { observability } : {}),
+    ...(store ? { store } : {}),
   };
 }
 

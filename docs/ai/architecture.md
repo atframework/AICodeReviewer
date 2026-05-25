@@ -290,9 +290,9 @@
   - `outputs.channels[].mention_fallback`
   - `outputs.routes`
 - 计划中的内置观测首页认证配置与 trigger API key 分离；配置文件只保存 env var 名称，
-  不保存超级管理员用户名/密码明文。密码哈希 env（如 `*_PASSWORD_HASH`）优先；
-  小型内网部署允许 raw password env，但必须常量时间比较、限速并禁止进入日志、
-  snapshot 或 metrics label。
+  不保存超级管理员用户名/密码明文。密码哈希 env（如 `*_PASSWORD_HASH`，格式
+  `sha256:<hex>`）优先且可单独使用；小型内网部署允许 raw password env，但必须
+  固定长度 digest 比较、限速并禁止进入日志、snapshot 或 metrics label。
 - 计划中的数据库、缓存和对象存储配置必须使用顶层 `storage` 命名空间，供观测、队列、
   artifact、runtime 等能力复用，不复用 `queue.kind` 或 `workspaces.cache`：
   - `storage.database.kind`: `sqlite`（默认）或 `postgres`。
@@ -325,49 +325,60 @@
 - Prometheus histogram bucket、sum、count 必须按进程生命周期累计；只能把原始 duration 样本缓冲做滑动窗口裁剪。
 - `/metrics` 计数与 `runs/<run_id>/run.json` 快照应覆盖同步和异步触发的 review run，不能只记录后台模式。
 
-#### 3.11.1 内置观测首页（planned M8 follow-up）
+#### 3.11.1 内置观测首页（M8 follow-up — 已交付）
 
 - 内置观测首页是 Prometheus/OTel 的补充，不是替代：外部时序系统存在时可以联动，
   但默认部署不应因为未配置 Prometheus 就失去基础统计能力。
 - 页面和对应 JSON API 必须在认证后访问；认证面独立于 webhook/trigger API key。
-  超级管理员用户名、密码哈希或密码通过环境变量引用，服务端不得打印或落盘原值。
-- 非 Prometheus/OTel 的观测数据层必须作为独立产品能力存在。持久化数据使用统一
-  `storage.database` 后端；它是无 Prometheus 部署的统计真源，由 `@aicr/store` 统一
-  schema / migration，Drizzle 负责类型化访问。
+  超级管理员用户名与密码或密码哈希通过环境变量 `AICR_ADMIN_USERNAME` +
+  `AICR_ADMIN_PASSWORD` 或 `AICR_ADMIN_PASSWORD_HASH` 引用；比较时转为固定长度
+  SHA-256 digest 后使用 `timingSafeEqual`。Session token 为 32 字节随机 hex，默认
+  TTL 86400 秒。服务端不得打印或落盘密码原值。
+- 持久化数据使用 SQLite + Drizzle ORM（`@aicr/store` 包）。
+  代码真源为 `packages/store/src/schema.ts`，连接通过 `createStoreDb()` 初始化。
+  SQLite 连接启用 WAL、`foreign_keys=ON`、`busy_timeout=5000` 和 `synchronous=NORMAL`。
+  迁移通过内联 SQL + `_migrations` 跟踪表在启动时自动运行。
   `runs/<run_id>/run.json` 仍用于审计与问题排查，但不作为统计聚合查询真源。
-- 默认 `storage.database` 后端为 `/app/data/aicr.sqlite` 单文件 SQLite 数据库；SQLite 连接应启用 WAL、
-  `foreign_keys=ON` 和 `busy_timeout`，适合单容器/单服务进程的默认部署。
-- Postgres 是可选 `storage.database` 后端，面向集中化数据库、跨容器迁移和未来多实例部署；schema、
-  migration、查询语义必须与 SQLite 后端保持等价，不能出现只在一个后端有统计字段的情况。
-- Redis 是可选 `storage.cache` 后端，面向跨进程/多实例的观测首页查询缓存、登录/session 状态和短期索引；
-  Redis 数据必须可从 SQLite/Postgres 持久库重建，不能作为唯一历史统计存储。
-- `storage.object` 不参与结构化统计查询；它用于未来大体积 artifact、run 附件、归档数据或
-  可重建 blob。默认 filesystem 后端落在 `/app/data/objects`，S3-compatible 后端覆盖 AWS S3、
-  MinIO 和 RustFS，凭据只能通过环境变量引用。
-- Prometheus、OTel、JSONL 或 run snapshot 不能替代观测持久化 store；外部观测系统只作为
-  导出、告警和时序分析补充。
-- 统计 schema 至少包含：project/workspace 维度表、review run fact、代码量 fact、
-  LLM usage event、output dispatch / managed issue event，以及可从原始事件重算的 rollup 表。
-  project identity 由 `workspaceId + triggerName + repoRef` 派生，避免复用 workspace id 时把不同仓库的历史混在一起。
-- 时间窗口至少包含：今日、本周、本月、汇总。原始时间戳用 UTC 存储，窗口展示按
-  可配置 timezone 计算；未配置时使用服务端默认 timezone，并在 API 响应中显式返回。
-- 首屏统计至少包含：总 review 次数、成功/失败/跳过次数、发现问题的 run 次数、
-  problem 总数、创建 issue 数、分析代码量、LLM 请求数、输入/输出/总 token、估算成本。
-- 工程级维度按 workspace / repo / trigger 聚合，至少展示分析次数、分析代码量
-  （变更文件数、增删/分析行数、分析字节数）、发现问题的 run 次数、problem 总数、
-  创建 issue 数，以及该工程按 provider+model 拆分的请求数和 token 数。
-- provider+model 维度至少展示请求数、成功/失败数、重试与 fallback 次数、输入/输出/总
-  token、延迟统计和可用时的估算成本；模型切换和 fallback 不能被合并到原始 model 上。
-- `/metrics` 仍保持低基数、进程累计语义；不要为了页面筛选把 workspace、repo、branch、
-  author 或 issue id 等高基数字段直接塞进 Prometheus label。高基数查询走 `storage.database`
-  持久库，并可用 `storage.cache` 缓存热点聚合结果。
-- 观测数据只保存运行与用量元数据，不保存 prompt、完整 diff、secret 或未脱敏输出；
-  面向 UI 的错误摘要必须走 scrubber。
-- 删除项目清理必须自动化：服务启动、配置 reload 和每日维护任务都要把当前
-  `workspaces.instances` 解析成 active project set；不再存在的 project 先写入 `deleted_at`
-  并从 UI/API 默认结果隐藏，然后按可配置宽限期硬删除 project 维度行，由外键
-  `ON DELETE CASCADE` 清理 run、usage、issue event 和 rollup。宽限期为 0 时立即清理，
-  非 0 时可避免错误配置发布导致统计不可恢复。
+- Postgres 和 Redis 后端为预留扩展位，当前仅实现 SQLite；当 admin dashboard 启用且
+  `storage.database.kind` 不是 `sqlite` 时，启动必须失败并给出清晰错误，不能静默落回 SQLite。
+- 统计 schema 包含六张表：
+  - `projects`：由 `workspaceId + triggerName + repoRef` 派生的 project identity，
+    含 `deleted_at` 软删除标记。
+  - `review_runs`：run 事实表，含 provider、model、status、problem/summary/dispatch 计数、
+    duration、skip reason、compression 标记、token 估算、target 元数据。
+  - `code_metrics`：每 run 的文件变更数、增删行数、分析字节数。
+  - `llm_usage`：每 run 的 provider+model 级请求数、token 数、成本、重试/fallback/失败次数、延迟。
+  - `output_events`：每 run 的 channel dispatch 事件，含 issue/comment 创建标记。
+  - `daily_rollups`：预留的按日聚合表（当前未写入，聚合从原始表实时计算）。
+- Admin API 端点（Hono 子路由 `/api/admin`）：
+  - `POST /login`：验证用户名/密码，返回 session token + 过期时间。
+  - `POST /logout`：撤销 session token。
+  - `GET /stats`：返回 overview + today/thisWeek/thisMonth 四个时间窗口统计、
+    project 列表、provider+model 统计、最近 20 条 run。
+  - `GET /stats/projects`：按 project 聚合统计，支持 `?since=` ISO 日期筛选。
+  - `GET /stats/providers`：按 provider+model 聚合统计，支持 `?since=` 筛选。
+  - `GET /runs`：最近 run 列表，支持 `?limit=` (1..100)。
+  所有端点（`/login` 除外）需 `Authorization: Bearer <token>` 头。
+- Dashboard SPA 嵌入于 `/dashboard` 和 `/` 路径，由 `packages/server/src/dashboard/dashboard.html`
+  提供。深色主题、登录表单、选项卡视图（overview / projects / providers / runs）、
+  时间窗口选择器（today / this week / this month / all）。
+- 首屏统计包含：总 review 次数、成功/失败/跳过次数、发现问题的 run 次数、
+  problem 总数、创建 issue 数、分析代码量、LLM 请求数、输入/输出/总 token、估算成本、平均 duration。
+- 工程级维度按 project 聚合：分析次数、代码量、问题数、issue 数。
+- provider+model 维度：请求数、token 数、成本、重试/fallback/失败、平均延迟。
+- Store DB 仅在 `adminAuthConfig` 可用时初始化（即设置了 `AICR_ADMIN_USERNAME` +
+  `AICR_ADMIN_PASSWORD`，或设置 `AICR_ADMIN_USERNAME` + `AICR_ADMIN_PASSWORD_HASH`）。
+  `bootstrapServerApp` 解析 admin auth config 后创建 `StoreDb` 实例，并注入
+  `ServerAppOptions.store` 和 `observability`。
+- Review run 持久化通过 `persistReviewRunToStore`（成功）和 `persistFailedRunToStore`
+  （失败）函数在 `scheduleTriggerProcessing` 和 `handleReviewOrchestration` 中调用。
+- `/metrics` 保持低基数、进程累计语义；高基数查询走 SQLite 持久库。
+- 观测数据只保存运行与用量元数据，不保存 prompt、完整 diff、secret 或未脱敏输出。
+- 删除项目清理已实现：
+  - `softDeleteMissingProjects(store, activeIdentities)`：启动/配置 reload 时将
+    不在 active set 中的 project 标记 `deleted_at`；空 active set 时软删除所有 project。
+  - `hardDeleteExpiredProjects(store, graceDays)`：按宽限期硬删除已软删除 project，
+    通过外键 `ON DELETE CASCADE` 级联清理关联数据。
 
 ### 3.12 Reflection 与 memory
 
