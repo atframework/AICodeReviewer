@@ -164,6 +164,22 @@ curl -sf https://aicr.m-oa.com:6023/healthz
 - 容器引擎：Podman
 - 反向代理：`https://aicr.m-oa.com:6023` → `http://10.64.8.2:8090`
 
+### 7.1 镜像源配置（国内部署必填）
+
+构建镜像时默认使用 npm 官方源，国内环境建议切换腾讯云镜像以加速下载：
+
+```bash
+export NPM_REGISTRY=http://mirrors.tencent.com/npm/
+export NPM_STRICT_SSL=false
+```
+
+`deploy.sh` 与 `Dockerfile` 均读取这两个环境变量：
+
+- `NPM_REGISTRY` —— 控制 pnpm/npm 的 registry 地址
+- `NPM_STRICT_SSL` —— 对应 `npm_config_strict_ssl`，内网镜像通常需设为 `false`
+
+部署前在远程会话中导出上述变量，再执行 `deploy.sh`，即可全局生效。
+
 远程部署时优先读取 `.agents/skills/remote-deployment/SKILL.md`，并遵守以下约束：
 
 - 使用 `tar + scp + ssh` 同步文件，不依赖 Windows 上不可用的 `rsync`。
