@@ -1,12 +1,22 @@
 # =============================================================================
 # AICodeReviewer — Dockerfile
 # =============================================================================
+#
+# Configurable mirror build args (for domestic/China deployment):
+#   BASE_IMAGE   — Override base image (default: cgr.dev/chainguard/node:latest-dev)
+#                  Tencent mirror: mirror.ccs.tencentyun.com/library/node:22-alpine
+#   APK_MIRROR   — Alpine apk mirror (e.g. https://mirrors.cloud.tencent.com/alpine)
+#   NPM_REGISTRY — npm/pnpm registry (e.g. http://mirrors.tencent.com/npm/)
+#   NPM_STRICT_SSL — Set to false when using HTTP mirrors
+# =============================================================================
 
 # ---------- Build stage ----------
-FROM cgr.dev/chainguard/node:latest-dev AS build
+ARG BASE_IMAGE=cgr.dev/chainguard/node:latest-dev
+FROM ${BASE_IMAGE} AS build
 
 ARG NPM_REGISTRY=https://registry.npmjs.org
 ARG NPM_STRICT_SSL=true
+ARG APK_MIRROR=
 ENV PNPM_HOME=/pnpm
 ENV PATH=${PNPM_HOME}:${PATH}
 ENV npm_config_registry=${NPM_REGISTRY}
@@ -14,6 +24,12 @@ ENV COREPACK_NPM_REGISTRY=${NPM_REGISTRY}
 ENV npm_config_strict_ssl=${NPM_STRICT_SSL}
 
 USER root
+
+# Configure APK mirror if provided (e.g. https://mirrors.cloud.tencent.com/alpine)
+RUN if [ -n "${APK_MIRROR}" ]; then \
+      sed -i "s|https://apk.cgr.dev|${APK_MIRROR}/edge/main|g" /etc/apk/repositories \
+      && echo "${APK_MIRROR}/edge/community" >> /etc/apk/repositories; \
+    fi
 
 # Install python3 and build tools for native module compilation (better-sqlite3).
 # On restricted networks where apk fails, the build continues using pre-built
@@ -37,15 +53,24 @@ RUN pnpm install --frozen-lockfile \
 RUN pnpm build
 
 # ---------- Runtime stage ----------
-FROM cgr.dev/chainguard/node:latest-dev AS runtime
+ARG BASE_IMAGE=cgr.dev/chainguard/node:latest-dev
+FROM ${BASE_IMAGE} AS runtime
 
 ARG NPM_REGISTRY=https://registry.npmjs.org
 ARG NPM_STRICT_SSL=true
+ARG APK_MIRROR=
 ENV NODE_ENV=production
 ENV npm_config_registry=${NPM_REGISTRY}
 ENV npm_config_strict_ssl=${NPM_STRICT_SSL}
 
 USER root
+
+# Configure APK mirror if provided
+RUN if [ -n "${APK_MIRROR}" ]; then \
+      sed -i "s|https://apk.cgr.dev|${APK_MIRROR}/edge/main|g" /etc/apk/repositories \
+      && echo "${APK_MIRROR}/edge/community" >> /etc/apk/repositories; \
+    fi
+
 WORKDIR /app
 
 RUN npm install --global @kilocode/cli@7.2.40 --registry="${NPM_REGISTRY}" --strict-ssl="${NPM_STRICT_SSL}"

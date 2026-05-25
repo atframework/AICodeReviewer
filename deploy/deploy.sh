@@ -35,6 +35,7 @@ fi
 # docker-compatible socket via DOCKER_HOST.
 AICR_ENABLE_CONTAINER_SANDBOX="${AICR_ENABLE_CONTAINER_SANDBOX:-false}"
 DOCKER_VERSION="${DOCKER_VERSION:-27.5.1}"
+DOCKER_DOWNLOAD_MIRROR="${DOCKER_DOWNLOAD_MIRROR:-https://download.docker.com/linux/static/stable/x86_64}"
 DOCKER_STATIC="$DEPLOY_DIR/source/deploy/docker-static"
 SANDBOX_MOUNT_ARGS=()
 SANDBOX_ENV_ARGS=()
@@ -46,10 +47,11 @@ if [ "$AICR_ENABLE_CONTAINER_SANDBOX" = "true" ]; then
   # Download Docker static binary if not already present
   if [ ! -s "$DOCKER_STATIC" ]; then
     echo "=== Downloading Docker static binary v${DOCKER_VERSION} ==="
+    DOCKER_TGZ_URL="${DOCKER_DOWNLOAD_MIRROR}/docker-${DOCKER_VERSION}.tgz"
     if command -v curl >/dev/null 2>&1; then
-      curl -fsSL -o /tmp/docker.tgz "https://download.docker.com/linux/static/stable/x86_64/docker-${DOCKER_VERSION}.tgz"
+      curl -fsSL -o /tmp/docker.tgz "$DOCKER_TGZ_URL"
     elif command -v wget >/dev/null 2>&1; then
-      wget -qO /tmp/docker.tgz "https://download.docker.com/linux/static/stable/x86_64/docker-${DOCKER_VERSION}.tgz"
+      wget -qO /tmp/docker.tgz "$DOCKER_TGZ_URL"
     else
       echo "ERROR: curl or wget required to download Docker CLI"
       exit 1
@@ -118,6 +120,12 @@ echo "=== Building AICR image ==="
 BUILD_ARGS=(--build-arg NPM_STRICT_SSL=false)
 if [ -n "${NPM_REGISTRY:-}" ]; then
   BUILD_ARGS+=(--build-arg "NPM_REGISTRY=${NPM_REGISTRY}")
+fi
+if [ -n "${APK_MIRROR:-}" ]; then
+  BUILD_ARGS+=(--build-arg "APK_MIRROR=${APK_MIRROR}")
+fi
+if [ -n "${BASE_IMAGE:-}" ]; then
+  BUILD_ARGS+=(--build-arg "BASE_IMAGE=${BASE_IMAGE}")
 fi
 "$ENGINE_CMD" "${ENGINE_ARGS[@]}" build \
   "${BUILD_ARGS[@]}" \
