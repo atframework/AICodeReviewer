@@ -15,6 +15,9 @@ ENV npm_config_strict_ssl=${NPM_STRICT_SSL}
 
 USER root
 
+# Install python3 and build tools for native module compilation (better-sqlite3)
+RUN apk add --no-cache python3 make build-base
+
 RUN npm install --global pnpm@10.20.0 --registry="${NPM_REGISTRY}" --strict-ssl="${NPM_STRICT_SSL}" \
   && pnpm config set strict-ssl "${NPM_STRICT_SSL}" \
   && pnpm config set store-dir /pnpm/store
