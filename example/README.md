@@ -189,6 +189,25 @@ AICodeReviewer supports **three layers** of authentication:
 | Server API key    | Global        | Protects `/triggers/*` routes (P4, custom scripts, etc.)      | `server.auth.api_key_env`                    |
 | Workspace API key | Per-workspace | Same as server, but with workspace-specific keys              | `workspaces.instances.<id>.auth.api_key_env` |
 
+The observability dashboard has a separate super-admin login (`admin.*`) and
+does not reuse webhook HMAC or trigger API keys.
+
+### Observability dashboard admin and storage
+
+Set `admin.username_env` plus either `admin.password_env` or
+`admin.password_hash_env` to enable the built-in dashboard:
+
+- `GET /dashboard` and `GET /` serve the embedded SPA.
+- `POST /api/admin/login` returns a Bearer session token.
+- `GET /api/admin/stats` returns all-time, today, this-week, and this-month
+  statistics, plus project/provider/recent-run data.
+
+The current built-in store is SQLite + Drizzle at
+`storage.database.sqlite.path` (default `/app/data/aicr.sqlite`). The schema
+already reserves Postgres, Redis cache, and S3-compatible object storage config
+under top-level `storage.*`, but the M8 dashboard runtime currently uses SQLite
+only. Keep secrets in `.env`; `config.yaml` should contain env var names only.
+
 > **Important**: `/webhooks/*` routes (Gitea, GitHub, GitLab) are protected **only by HMAC**.
 > `/triggers/*` routes (P4, etc.) are protected by **API key**.
 > These two layers are independent — webhook HMAC and API key are never combined on the same request.

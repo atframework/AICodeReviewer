@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AICodeReviewer Observability</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{--bg:#0f172a;--card:#1e293b;--border:#334155;--text:#e2e8f0;--muted:#94a3b8;--accent:#3b82f6;--green:#22c55e;--red:#ef4444;--yellow:#eab308;--orange:#f97316}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--text);line-height:1.6}
+.login-container{display:flex;justify-content:center;align-items:center;min-height:100vh;padding:1rem}
+.login-form{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:2rem;width:100%;max-width:400px}
+.login-form h1{text-align:center;margin-bottom:1.5rem;font-size:1.5rem}
+.form-group{margin-bottom:1rem}
+.form-group label{display:block;margin-bottom:0.25rem;color:var(--muted);font-size:0.875rem}
+.form-group input{width:100%;padding:0.625rem 0.75rem;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:1rem}
+.form-group input:focus{outline:none;border-color:var(--accent)}
+.btn{display:inline-flex;align-items:center;justify-content:center;padding:0.625rem 1.25rem;border:none;border-radius:6px;font-size:1rem;cursor:pointer;transition:opacity 0.15s}
+.btn:hover{opacity:0.85}
+.btn-primary{background:var(--accent);color:#fff;width:100%}
+.error-msg{color:var(--red);font-size:0.875rem;margin-top:0.5rem;text-align:center;min-height:1.25rem}
+.dashboard{display:none}
+.header{background:var(--card);border-bottom:1px solid var(--border);padding:0.75rem 1.5rem;display:flex;align-items:center;justify-content:space-between}
+.header h1{font-size:1.125rem;font-weight:600}
+.header-actions{display:flex;gap:0.75rem;align-items:center}
+.btn-sm{padding:0.375rem 0.75rem;font-size:0.8125rem}
+.btn-ghost{background:transparent;border:1px solid var(--border);color:var(--muted)}
+.btn-ghost:hover{color:var(--text);border-color:var(--muted)}
+.content{padding:1.5rem;max-width:1400px;margin:0 auto}
+.stats-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:1rem;margin-bottom:1.5rem}
+.stat-card{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:1rem}
+.stat-card .label{font-size:0.75rem;color:var(--muted);text-transform:uppercase;letter-spacing:0.05em}
+.stat-card .value{font-size:1.5rem;font-weight:700;margin-top:0.25rem}
+.stat-card .sub{font-size:0.75rem;color:var(--muted);margin-top:0.125rem}
+.section-title{font-size:1rem;font-weight:600;margin-bottom:0.75rem;margin-top:1rem}
+table{width:100%;border-collapse:collapse;background:var(--card);border:1px solid var(--border);border-radius:8px;overflow:hidden}
+th,td{padding:0.625rem 0.75rem;text-align:left;border-bottom:1px solid var(--border);font-size:0.8125rem}
+th{background:var(--bg);color:var(--muted);font-weight:500;text-transform:uppercase;font-size:0.75rem;letter-spacing:0.05em}
+tr:last-child td{border-bottom:none}
+tr:hover td{background:rgba(59,130,246,0.05)}
+.badge{display:inline-block;padding:0.125rem 0.5rem;border-radius:9999px;font-size:0.6875rem;font-weight:500}
+.badge-success{background:rgba(34,197,94,0.15);color:var(--green)}
+.badge-failure{background:rgba(239,68,68,0.15);color:var(--red)}
+.badge-skip{background:rgba(234,179,8,0.15);color:var(--yellow)}
+.badge-running{background:rgba(59,130,246,0.15);color:var(--accent)}
+.mono{font-family:"SF Mono","Fira Code",monospace;font-size:0.8125rem}
+.tabs{display:flex;gap:0;margin-bottom:1rem;border-bottom:1px solid var(--border)}
+.tab{padding:0.5rem 1rem;cursor:pointer;color:var(--muted);font-size:0.875rem;border-bottom:2px solid transparent;transition:all 0.15s}
+.tab:hover{color:var(--text)}
+.tab.active{color:var(--accent);border-bottom-color:var(--accent)}
+.tab-content{display:none}
+.tab-content.active{display:block}
+</style>
+</head>
+<body>
+
+<div id="login-view" class="login-container">
+<form class="login-form" id="login-form">
+<h1>AICodeReviewer</h1>
+<div class="form-group"><label for="username">Username</label><input type="text" id="username" autocomplete="username" required></div>
+<div class="form-group"><label for="password">Password</label><input type="password" id="password" autocomplete="current-password" required></div>
+<button type="submit" class="btn btn-primary">Sign In</button>
+<div class="error-msg" id="login-error"></div>
+</form>
+</div>
+
+<div id="dashboard-view" class="dashboard">
+<div class="header">
+<h1>AICodeReviewer Observability</h1>
+<div class="header-actions">
+<span id="refresh-indicator" style="font-size:0.75rem;color:var(--muted)"></span>
+<button class="btn btn-sm btn-ghost" onclick="refreshStats()">Refresh</button>
+<button class="btn btn-sm btn-ghost" onclick="logout()">Logout</button>
+</div>
+</div>
+<div class="content">
+
+<div class="tabs">
+<div class="tab active" data-tab="overview" onclick="switchTab('overview')">Overview</div>
+<div class="tab" data-tab="projects" onclick="switchTab('projects')">Projects</div>
+<div class="tab" data-tab="providers" onclick="switchTab('providers')">LLM Providers</div>
+<div class="tab" data-tab="runs" onclick="switchTab('runs')">Recent Runs</div>
+</div>
+
+<div id="tab-overview" class="tab-content active">
+<div id="time-selector" style="margin-bottom:1rem;display:flex;gap:0.5rem">
+<button class="btn btn-sm btn-ghost active" data-window="today" onclick="selectWindow('today')">Today</button>
+<button class="btn btn-sm btn-ghost" data-window="week" onclick="selectWindow('week')">This Week</button>
+<button class="btn btn-sm btn-ghost" data-window="month" onclick="selectWindow('month')">This Month</button>
+<button class="btn btn-sm btn-ghost" data-window="all" onclick="selectWindow('all')">All Time</button>
+</div>
+<div id="overview-stats" class="stats-grid"></div>
+<div class="section-title">Recent Activity</div>
+<table>
+<thead><tr><th>Time</th><th>Workspace</th><th>Provider</th><th>Status</th><th>Problems</th><th>Duration</th></tr></thead>
+<tbody id="overview-recent"></tbody>
+</table>
+</div>
+
+<div id="tab-projects" class="tab-content">
+<div id="project-stats"></div>
+</div>
+
+<div id="tab-providers" class="tab-content">
+<table>
+<thead><tr><th>Provider</th><th>Model</th><th>Requests</th><th>Tokens In</th><th>Tokens Out</th><th>Cost (USD)</th><th>Retries</th><th>Avg Latency</th></tr></thead>
+<tbody id="provider-table"></tbody>
+</table>
+</div>
+
+<div id="tab-runs" class="tab-content">
+<table>
+<thead><tr><th>ID</th><th>Time</th><th>Workspace</th><th>Trigger</th><th>Provider</th><th>Model</th><th>Status</th><th>Problems</th><th>Duration</th></tr></thead>
+<tbody id="runs-table"></tbody>
+</table>
+</div>
+
+</div>
+</div>
+
+<script>
+var authToken=null;
+var currentData=null;
+var currentWindow="today";
+
+function $(s){return document.querySelector(s)}
+function $$(s){return document.querySelectorAll(s)}
+
+function formatNumber(n){return n==null?"-":n.toLocaleString()}
+function formatCost(n){return n==null?"-":"$"+n.toFixed(4)}
+function formatDuration(ms){if(ms==null)return"-";if(ms<1000)return ms+"ms";return(ms/1000).toFixed(1)+"s"}
+function formatTime(d){if(!d)return"-";return new Date(d).toLocaleString()}
+function statusBadge(s){var m={succeeded:"success",published:"success",failed:"failure",skipped:"skip",queued:"running"};return '<span class="badge badge-'+(m[s]||"skip")+'">'+esc(s)+"</span>"}
+
+async function apiFetch(path,opts){
+  var headers=Object.assign({},(opts&&opts.headers)||{});
+  if(authToken)headers["Authorization"]="Bearer "+authToken;
+  var r=await fetch(path,Object.assign({},opts||{},{headers:headers}));
+  if(r.status===401){logout();throw new Error("unauthorized")}
+  return r;
+}
+
+document.getElementById("login-form").addEventListener("submit",async function(e){
+  e.preventDefault();
+  var err=document.getElementById("login-error");
+  err.textContent="";
+  var username=document.getElementById("username").value;
+  var password=document.getElementById("password").value;
+  try{
+    var r=await fetch("api/admin/login",{
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({username:username,password:password})
+    });
+    var data=await r.json();
+    if(!r.ok){err.textContent=data.message||"Login failed";return}
+    authToken=data.token;
+    localStorage.setItem("aicr_token",authToken);
+    showDashboard();
+  }catch(ex){err.textContent="Network error"}
+});
+
+function showDashboard(){
+  document.getElementById("login-view").style.display="none";
+  document.getElementById("dashboard-view").style.display="block";
+  refreshStats();
+}
+
+function logout(){
+  authToken=null;
+  localStorage.removeItem("aicr_token");
+  document.getElementById("login-view").style.display="flex";
+  document.getElementById("dashboard-view").style.display="none";
+}
+
+async function refreshStats(){
+  if(!authToken)return;
+  var ind=document.getElementById("refresh-indicator");
+  ind.textContent="Loading...";
+  try{
+    var r=await apiFetch("api/admin/stats");
+    currentData=await r.json();
+    renderDashboard();
+    ind.textContent="Updated "+new Date().toLocaleTimeString();
+  }catch(ex){ind.textContent="Error: "+ex.message}
+}
+
+function selectWindow(w){
+  currentWindow=w;
+  document.querySelectorAll("[data-window]").forEach(function(b){
+    b.classList.toggle("active",b.dataset.window===w);
+  });
+  renderOverviewStats();
+}
+
+function switchTab(t){
+  document.querySelectorAll(".tab").forEach(function(el){el.classList.toggle("active",el.dataset.tab===t)});
+  document.querySelectorAll(".tab-content").forEach(function(el){el.classList.toggle("active",el.id==="tab-"+t)});
+}
+
+function renderDashboard(){
+  if(!currentData)return;
+  renderOverviewStats();
+  renderProviderTable();
+  renderRunsTable(currentData.recentRuns);
+  renderProjectStats();
+}
+
+function getWindowStats(){
+  var d=currentData;
+  if(currentWindow==="today")return d.today;
+  if(currentWindow==="week")return d.thisWeek;
+  if(currentWindow==="month")return d.thisMonth;
+  return d.overview;
+}
+
+function renderOverviewStats(){
+  var s=getWindowStats();
+  var el=document.getElementById("overview-stats");
+  var cards=[
+    {label:"Reviews",value:formatNumber(s.reviewCount),sub:"Success: "+formatNumber(s.successCount)},
+    {label:"Failures",value:formatNumber(s.failureCount),sub:"Skipped: "+formatNumber(s.skipCount)},
+    {label:"Problems Found",value:formatNumber(s.problemTotal),sub:"In "+formatNumber(s.problemRunCount)+" runs"},
+    {label:"Issues Created",value:formatNumber(s.issueCreatedCount)},
+    {label:"Files Changed",value:formatNumber(s.filesChangedTotal),sub:"+"+formatNumber(s.linesAddedTotal)+" / -"+formatNumber(s.linesDeletedTotal)+" lines"},
+    {label:"LLM Requests",value:formatNumber(s.llmRequestTotal)},
+    {label:"Total Tokens",value:formatNumber(s.tokensTotalTotal),sub:"In: "+formatNumber(s.tokensInTotal)+" / Out: "+formatNumber(s.tokensOutTotal)},
+    {label:"Est. Cost",value:formatCost(s.costUsdTotal)}
+  ];
+  el.innerHTML=cards.map(function(c){
+    return '<div class="stat-card"><div class="label">'+c.label+'</div><div class="value">'+c.value+"</div>"+
+      (c.sub?'<div class="sub">'+c.sub+"</div>":"")+"</div>";
+  }).join("");
+  renderRunsTable(currentData.recentRuns,document.getElementById("overview-recent"),true);
+}
+
+function renderProviderTable(){
+  var el=document.getElementById("provider-table");
+  if(!currentData||!currentData.providerModels){
+    el.innerHTML='<tr><td colspan="8" style="text-align:center;color:var(--muted)">No data</td></tr>';
+    return;
+  }
+  el.innerHTML=currentData.providerModels.map(function(p){
+    return "<tr><td>"+esc(p.providerId)+"</td><td>"+esc(p.modelId)+"</td><td>"+
+      formatNumber(p.requestCount)+"</td><td>"+formatNumber(p.tokensIn)+"</td><td>"+
+      formatNumber(p.tokensOut)+"</td><td>"+formatCost(p.costUsd)+"</td><td>"+
+      formatNumber(p.retryCount)+"</td><td>"+formatDuration(p.avgLatencyMs)+"</td></tr>";
+  }).join("");
+}
+
+function renderRunsTable(runs,target,compact){
+  var el=target||document.getElementById("runs-table");
+  if(!runs||runs.length===0){
+    el.innerHTML='<tr><td colspan="'+(compact?6:9)+'" style="text-align:center;color:var(--muted)">No runs</td></tr>';
+    return;
+  }
+  el.innerHTML=runs.map(function(r){
+    if(compact){
+      return "<tr><td>"+formatTime(r.startedAt)+"</td><td>"+esc(r.workspaceId)+"</td><td>"+
+        esc(r.provider||"-")+"</td><td>"+statusBadge(r.status)+"</td><td>"+
+        formatNumber(r.problemCount)+"</td><td>"+formatDuration(r.durationMs)+"</td></tr>";
+    }
+    return "<tr><td>"+esc(r.id.slice(0,8))+"</td><td>"+formatTime(r.startedAt)+"</td><td>"+
+      esc(r.workspaceId)+"</td><td>"+esc(r.triggerName||"-")+"</td><td>"+
+      esc(r.provider||"-")+"</td><td>"+esc(r.providerModel||"-")+"</td><td>"+
+      statusBadge(r.status)+"</td><td>"+formatNumber(r.problemCount)+"</td><td>"+
+      formatDuration(r.durationMs)+"</td></tr>";
+  }).join("");
+}
+
+function renderProjectStats(){
+  var el=document.getElementById("project-stats");
+  if(!currentData||!currentData.projects||currentData.projects.length===0){
+    el.innerHTML='<p style="color:var(--muted)">No project data</p>';
+    return;
+  }
+  el.innerHTML=currentData.projects.map(function(p){
+    return '<div class="stat-card" style="margin-bottom:0.75rem"><div style="display:flex;justify-content:space-between;align-items:center">'+
+      '<div><strong>'+esc(p.workspaceId)+'</strong> <span style="color:var(--muted)">/ '+esc(p.triggerName)+"</span></div>"+
+      '<div style="display:flex;gap:1rem;font-size:0.8125rem"><span>'+formatNumber(p.reviewCount)+
+      " reviews</span><span>"+formatNumber(p.problemTotal)+" problems</span><span>Avg: "+
+      formatDuration(p.avgDurationMs)+"</span></div></div></div>";
+  }).join("");
+}
+
+function esc(s){
+  if(!s)return"";
+  var d=document.createElement("div");
+  d.textContent=s;
+  return d.innerHTML;
+}
+
+var saved=localStorage.getItem("aicr_token");
+if(saved){authToken=saved;showDashboard()}
+</script>
+</body>
+</html>

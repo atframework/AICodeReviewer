@@ -359,8 +359,92 @@ const serverSchema = z
   .passthrough()
   .default({ port: 8080, hostname: "0.0.0.0", trust_proxy: false });
 
+const storageDatabaseSchema = z
+  .object({
+    kind: z.enum(["sqlite", "postgres"]).default("sqlite"),
+    sqlite: z
+      .object({
+        path: z.string().min(1).default("/app/data/aicr.sqlite"),
+      })
+      .passthrough()
+      .default({ path: "/app/data/aicr.sqlite" }),
+    postgres: z
+      .object({
+        url_env: z.string().min(1).optional(),
+      })
+      .passthrough()
+      .optional(),
+  })
+  .passthrough()
+  .default({ kind: "sqlite", sqlite: { path: "/app/data/aicr.sqlite" } });
+
+const storageCacheSchema = z
+  .object({
+    kind: z.enum(["memory", "redis", "none"]).default("memory"),
+    redis: z
+      .object({
+        url_env: z.string().min(1).optional(),
+      })
+      .passthrough()
+      .optional(),
+    ttl_seconds: z.number().int().positive().optional(),
+  })
+  .passthrough()
+  .default({ kind: "memory" });
+
+const storageObjectSchema = z
+  .object({
+    kind: z.enum(["filesystem", "s3"]).default("filesystem"),
+    filesystem: z
+      .object({
+        root: z.string().min(1).default("/app/data/objects"),
+      })
+      .passthrough()
+      .default({ root: "/app/data/objects" }),
+    s3: z
+      .object({
+        endpoint_url_env: z.string().min(1).optional(),
+        bucket: z.string().min(1).optional(),
+        region_env: z.string().min(1).optional(),
+        access_key_id_env: z.string().min(1).optional(),
+        secret_access_key_env: z.string().min(1).optional(),
+        force_path_style: z.boolean().optional(),
+      })
+      .passthrough()
+      .optional(),
+  })
+  .passthrough()
+  .default({ kind: "filesystem", filesystem: { root: "/app/data/objects" } });
+
+const storageSchema = z
+  .object({
+    database: storageDatabaseSchema,
+    cache: storageCacheSchema,
+    object: storageObjectSchema,
+    retention: z
+      .object({
+        deleted_project_grace_days: z.number().int().nonnegative().default(30),
+      })
+      .passthrough()
+      .default({ deleted_project_grace_days: 30 }),
+  })
+  .passthrough()
+  .default({});
+
+const adminAuthSchema = z
+  .object({
+    username_env: z.string().min(1).default("AICR_ADMIN_USERNAME"),
+    password_env: z.string().min(1).default("AICR_ADMIN_PASSWORD"),
+    password_hash_env: z.string().min(1).optional(),
+    session_ttl_seconds: z.number().int().positive().default(86400),
+  })
+  .passthrough()
+  .default({});
+
 const appConfigSchema = z
   .object({
+    storage: storageSchema,
+    admin: adminAuthSchema,
     server: serverSchema,
     llm: z
       .object({

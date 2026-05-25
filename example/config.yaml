@@ -33,6 +33,57 @@ llm:
     per_repo_daily_usd: 1.0
 
 # ---------------------------------------------------------------------------
+# Observability dashboard admin (optional)
+# ---------------------------------------------------------------------------
+# When AICR_ADMIN_USERNAME and either AICR_ADMIN_PASSWORD or
+# AICR_ADMIN_PASSWORD_HASH are set, the server initializes a SQLite observation
+# store and enables:
+#   - /dashboard          — embedded SPA dashboard
+#   - /api/admin/login    — session token creation
+#   - /api/admin/stats    — overview + time-window statistics
+#   - /api/admin/stats/projects  — per-project stats
+#   - /api/admin/stats/providers — per-provider+model stats
+#   - /api/admin/runs     — recent run list
+# All admin endpoints (except /login) require a Bearer session token.
+#
+# admin:
+#   username_env: AICR_ADMIN_USERNAME
+#   password_env: AICR_ADMIN_PASSWORD              # raw password env; omit when password_hash_env is used
+#   # password_hash_env: AICR_ADMIN_PASSWORD_HASH  # alternative: sha256:<hex> hash env
+#   session_ttl_seconds: 86400
+
+# ---------------------------------------------------------------------------
+# Storage (optional, for observability and future features)
+# ---------------------------------------------------------------------------
+# Controls the local database path and retention for review run statistics.
+# The database is created automatically when admin auth is configured.
+#
+# storage:
+#   database:
+#     kind: sqlite
+#     sqlite:
+#       path: /app/data/aicr.sqlite
+#     # postgres:
+#     #   url_env: AICR_DATABASE_URL  # reserved for future multi-instance deployments
+#   cache:
+#     kind: memory                    # memory | redis | none
+#     # redis:
+#     #   url_env: AICR_REDIS_URL     # reserved for future cross-process cache/session use
+#   object:
+#     kind: filesystem                # filesystem | s3
+#     filesystem:
+#       root: /app/data/objects
+#     # s3:
+#     #   endpoint_url_env: AICR_S3_ENDPOINT_URL
+#     #   bucket: aicr-artifacts
+#     #   region_env: AICR_S3_REGION
+#     #   access_key_id_env: AICR_S3_ACCESS_KEY_ID
+#     #   secret_access_key_env: AICR_S3_SECRET_ACCESS_KEY
+#     #   force_path_style: true      # MinIO / RustFS / many S3-compatible endpoints
+#   retention:
+#     deleted_project_grace_days: 30  # hard-delete soft-deleted projects after this many days
+
+# ---------------------------------------------------------------------------
 # Server authentication (optional, recommended for production)
 # ---------------------------------------------------------------------------
 # Protects /triggers/* endpoints (P4, custom scripts, etc.) with a global API key.

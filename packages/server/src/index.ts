@@ -6,6 +6,10 @@ import { ZodError } from "zod";
 import { createAicrMetrics, formatPrometheusMetrics, recordReviewResult } from "./metrics.js";
 import { saveRunSnapshot } from "./run-snapshot.js";
 import type { AicrMetrics } from "./metrics.js";
+import { createObservabilityApi, type ObservabilityApiOptions } from "./observability-api.js";
+import { getDashboardHtml } from "./dashboard/index.js";
+import type { StoreDb } from "@aicr/store";
+import { insertReviewRun } from "@aicr/store";
 
 const globalMetrics: AicrMetrics = createAicrMetrics();
 
@@ -65,6 +69,8 @@ export interface ServerAppOptions {
   readonly deduplicator?: ReviewDeduplicator;
   readonly runsDir?: string;
   readonly metrics?: AicrMetrics;
+  readonly observability?: ObservabilityApiOptions;
+  readonly store?: StoreDb;
 }
 
 export interface ServerReviewPreparationOptions {
@@ -113,6 +119,7 @@ function registerGiteaLikeWebhook(
   deduplicator: ReviewDeduplicator | undefined,
   runsDir: string | undefined,
   metrics: AicrMetrics,
+  store: StoreDb | undefined,
 ): void {
   app.post(path, async (c) => {
     if (!config) {
@@ -176,7 +183,7 @@ function registerGiteaLikeWebhook(
       return c.json({ accepted: false, reason: "ignored_by_label", provider, eventName, matchedLabels: ignoredLabels }, 200);
     }
 
-    return handleReviewOrchestration(c, provider, eventName, decoded, reviewEvent, reviewPreparationOptions, reviewOrchestrationOptions, issueTriageOptions, asyncTriggers, deduplicator, runsDir, metrics);
+    return handleReviewOrchestration(c, provider, eventName, decoded, reviewEvent, reviewPreparationOptions, reviewOrchestrationOptions, issueTriageOptions, asyncTriggers, deduplicator, runsDir, metrics, store);
   });
 }
 
@@ -189,6 +196,7 @@ function registerP4Trigger(
   deduplicator: ReviewDeduplicator | undefined,
   runsDir: string | undefined,
   metrics: AicrMetrics,
+  store: StoreDb | undefined,
 ): void {
   app.post("/triggers/p4", async (c) => {
     if (!config) {
@@ -263,6 +271,7 @@ function registerP4Trigger(
       reviewPreparationOptions, reviewOrchestrationOptions, undefined, asyncTriggers, deduplicator,
       runsDir,
       metrics,
+      store,
     );
   });
 }
@@ -356,6 +365,7 @@ function registerGenericWebhook(
   deduplicator: ReviewDeduplicator | undefined,
   runsDir: string | undefined,
   metrics: AicrMetrics,
+  store: StoreDb | undefined,
 ): void {
   app.post(path, async (c) => {
     const configs = normalizeGenericWebhookConfigs(config);
@@ -427,7 +437,7 @@ function registerGenericWebhook(
       return c.json({ accepted: false, reason: "ignored_by_label", provider, eventName, matchedLabels: ignoredLabels }, 200);
     }
 
-    return handleReviewOrchestration(c, provider, eventName, decoded, reviewEvent, reviewPreparationOptions, reviewOrchestrationOptions, issueTriageOptions, asyncTriggers, deduplicator, runsDir, metrics);
+    return handleReviewOrchestration(c, provider, eventName, decoded, reviewEvent, reviewPreparationOptions, reviewOrchestrationOptions, issueTriageOptions, asyncTriggers, deduplicator, runsDir, metrics, store);
   });
 }
 
@@ -652,6 +662,104 @@ async function saveCompletedRunSnapshot(
   }
 }
 
+function persistReviewRunToStore(
+  store: StoreDb | undefined,
+  runId: string,
+  reviewEvent: ReviewEvent,
+  reviewRun: NonNullable<TriggerProcessingResult["reviewRun"]>,
+  durationMs: number,
+  startMs: number,
+): void {
+  if (!store) return;
+  try {
+    const status = reviewRun.status === "published"
+      ? "succeeded"
+      : reviewRun.status === "skipped"
+        ? "skipped"
+        : "skipped";
+    insertReviewRun(store, {
+      id: runId,
+      eventId: runId,
+      workspaceId: reviewEvent.workspaceId,
+      triggerName: reviewEvent.triggerName ?? null,
+      repoRef: reviewEvent.repoRef ?? null,
+      provider: reviewRun.model?.providerId ?? null,
+      providerModel: reviewRun.model?.modelId ?? null,
+      status,
+      startedAt: new Date(startMs),
+      finishedAt: new Date(startMs + durationMs),
+      durationMs,
+      problemCount: reviewRun.problemCount,
+      summaryCount: reviewRun.summaryCount,
+      dispatchCount: reviewRun.dispatchCount,
+      skipReason: reviewRun.skipReason ?? (reviewRun.status === "dry_run" ? "dry_run" : null),
+      compressed: reviewRun.compressed ?? null,
+      originalTokenEstimate: reviewRun.originalTokenEstimate ?? null,
+      compressedTokenEstimate: reviewRun.compressedTokenEstimate ?? null,
+      diffFileCount: reviewRun.diffFileCount ?? null,
+      changedFileCount: reviewRun.changedFileCount ?? null,
+      targetKind: reviewEvent.targetKind ?? null,
+      targetUrl: reviewEvent.url ?? null,
+      branch: reviewEvent.branch ?? null,
+      headSha: reviewEvent.headSha ?? null,
+      codeMetrics: {
+        filesChanged: reviewRun.changedFileCount,
+        filesAnalyzed: reviewRun.diffFileCount,
+      },
+      llmUsages: reviewRun.model ? [{
+        providerId: reviewRun.model.providerId,
+        modelId: reviewRun.model.modelId,
+        tokensTotal: reviewRun.promptTokenEstimate,
+      }] : [],
+    });
+  } catch (err: unknown) {
+    console.warn(JSON.stringify({
+      level: "warn",
+      msg: "failed to persist review run to store",
+      runId,
+      error: toErrorMessage(err),
+    }));
+  }
+}
+
+function persistFailedRunToStore(
+  store: StoreDb | undefined,
+  runId: string,
+  reviewEvent: ReviewEvent,
+  durationMs: number,
+  startMs: number,
+  error: unknown,
+): void {
+  if (!store) return;
+  try {
+    insertReviewRun(store, {
+      id: runId,
+      eventId: runId,
+      workspaceId: reviewEvent.workspaceId,
+      triggerName: reviewEvent.triggerName ?? null,
+      repoRef: reviewEvent.repoRef ?? null,
+      provider: null,
+      providerModel: null,
+      status: "failed" as const,
+      startedAt: new Date(startMs),
+      finishedAt: new Date(startMs + durationMs),
+      durationMs,
+      error: toErrorMessage(error),
+      targetKind: reviewEvent.targetKind ?? null,
+      targetUrl: reviewEvent.url ?? null,
+      branch: reviewEvent.branch ?? null,
+      headSha: reviewEvent.headSha ?? null,
+    });
+  } catch (err: unknown) {
+    console.warn(JSON.stringify({
+      level: "warn",
+      msg: "failed to persist failed run to store",
+      runId,
+      error: toErrorMessage(err),
+    }));
+  }
+}
+
 function scheduleTriggerProcessing(
   provider: ReviewProvider,
   eventName: string,
@@ -663,6 +771,7 @@ function scheduleTriggerProcessing(
   deduplicator: ReviewDeduplicator | undefined,
   metrics: AicrMetrics,
   runsDir: string | undefined,
+  store: StoreDb | undefined,
 ): string {
   const runId = randomUUID();
   const context = { reviewEvent, payload: decoded, provider, eventName };
@@ -721,6 +830,7 @@ function scheduleTriggerProcessing(
         deduplicator,
         metrics,
         runsDir,
+        store,
       );
     }
   }
@@ -740,6 +850,7 @@ function scheduleTriggerProcessing(
       if (result.reviewRun) {
         recordCompletedReviewRun(metrics, result.reviewRun, durationMs);
         void saveCompletedRunSnapshot(runsDir, runId, reviewEvent, result.reviewRun);
+        persistReviewRunToStore(store, runId, reviewEvent, result.reviewRun, durationMs, startMs);
       }
       console.info(JSON.stringify({
         level: "info",
@@ -760,6 +871,7 @@ function scheduleTriggerProcessing(
     }).catch((error) => {
       const durationMs = Date.now() - startMs;
       recordReviewResult(metrics, { status: "failed", durationMs });
+      persistFailedRunToStore(store, runId, reviewEvent, durationMs, startMs, error);
       const reason = error instanceof TriggerProcessingError ? error.reason : "trigger_processing_failed";
       const message = toErrorMessage(error);
       console.error(JSON.stringify({
@@ -799,6 +911,7 @@ async function handleReviewOrchestration(
   deduplicator: ReviewDeduplicator | undefined,
   runsDir: string | undefined,
   metrics: AicrMetrics,
+  store: StoreDb | undefined,
 ): Promise<Response> {
   if (asyncTriggers) {
     const runId = scheduleTriggerProcessing(
@@ -812,6 +925,7 @@ async function handleReviewOrchestration(
       deduplicator,
       metrics,
       runsDir,
+      store,
     );
 
     return c.json({
@@ -861,6 +975,7 @@ async function handleReviewOrchestration(
   if (result.reviewRun) {
     recordCompletedReviewRun(metrics, result.reviewRun, durationMs);
     await saveCompletedRunSnapshot(runsDir, runId, reviewEvent, result.reviewRun);
+    persistReviewRunToStore(store, runId, reviewEvent, result.reviewRun, durationMs, startMs);
   }
 
   return c.json({
@@ -897,6 +1012,13 @@ function mountRoutes(app: Hono, options: ServerAppOptions): void {
   app.get("/readyz", (c) => c.text("ready"));
   app.get("/metrics", (c) => c.text(formatPrometheusMetrics(metrics)));
 
+  if (options.observability) {
+    const observabilityApi = createObservabilityApi(options.observability);
+    app.route("/api/admin", observabilityApi);
+    app.get("/dashboard", (c) => c.html(getDashboardHtml()));
+    app.get("/", (c) => c.html(getDashboardHtml()));
+  }
+
   if (options.auth) {
     const authMiddleware = createAuthMiddleware(options.auth);
     app.use("/triggers/*", authMiddleware);
@@ -916,6 +1038,7 @@ function mountRoutes(app: Hono, options: ServerAppOptions): void {
     options.deduplicator,
     runsDir,
     metrics,
+    options.store,
   );
   registerGiteaLikeWebhook(
     app,
@@ -929,6 +1052,7 @@ function mountRoutes(app: Hono, options: ServerAppOptions): void {
     options.deduplicator,
     runsDir,
     metrics,
+    options.store,
   );
   registerGenericWebhook(
     app,
@@ -942,6 +1066,7 @@ function mountRoutes(app: Hono, options: ServerAppOptions): void {
     options.deduplicator,
     runsDir,
     metrics,
+    options.store,
   );
   registerGenericWebhook(
     app,
@@ -955,6 +1080,7 @@ function mountRoutes(app: Hono, options: ServerAppOptions): void {
     options.deduplicator,
     runsDir,
     metrics,
+    options.store,
   );
   registerP4Trigger(
     app,
@@ -965,6 +1091,7 @@ function mountRoutes(app: Hono, options: ServerAppOptions): void {
     options.deduplicator,
     runsDir,
     metrics,
+    options.store,
   );
 }
 
@@ -1001,6 +1128,13 @@ export type { BootstrapServerOptions } from "./bootstrap.js";
 
 export { serve, serveAsync } from "./node-serve.js";
 export type { ServeOptions } from "./node-serve.js";
+
+export type { ObservabilityApiOptions } from "./observability-api.js";
+export type { AdminAuthConfig } from "./admin-auth.js";
+export {
+  resolveAdminAuthConfig,
+  createAdminAuthMiddleware,
+} from "./admin-auth.js";
 
 export {
   createReviewDeduplicator,
