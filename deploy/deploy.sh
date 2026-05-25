@@ -147,6 +147,18 @@ if [ -f "$DEPLOY_DIR/.env" ]; then
 fi
 
 # Run new container
+# Rewrite proxy vars: replace any proxy host with host.containers.internal
+# so the container can reach the host proxy through Podman's DNS resolution.
+# Matches any host (IP or hostname) between :// and :port in proxy URLs.
+PROXY_ENV_ARGS=()
+for _pe in http_proxy https_proxy HTTP_PROXY HTTPS_PROXY no_proxy NO_PROXY; do
+  _pv="$(grep -oP "^${_pe}=\K.*" "$DEPLOY_DIR/.env" 2>/dev/null || true)"
+  if [ -n "$_pv" ]; then
+    _pv="$(echo "$_pv" | sed -E 's#://[^:/]+(:[0-9]+)?#://host.containers.internal\1#g')"
+    PROXY_ENV_ARGS+=(-e "${_pe}=${_pv}")
+  fi
+done
+
 echo "=== Starting AICR container ==="
 "$ENGINE_CMD" "${ENGINE_ARGS[@]}" run -d \
   --name "$CONTAINER_NAME" \
@@ -164,6 +176,7 @@ echo "=== Starting AICR container ==="
   -e AICR_LOG_MAX_FILES=3 \
   -e AICR_LOG_MAX_SIZE_BYTES=104857600 \
   "${SANDBOX_ENV_ARGS[@]}" \
+  "${PROXY_ENV_ARGS[@]}" \
   --env-file "$DEPLOY_DIR/.env" \
   "${USERNS_ARGS[@]}" \
   "$IMAGE_NAME"
