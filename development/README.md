@@ -155,6 +155,18 @@ curl -sf https://aicr.m-oa.com:6023/healthz
 
 ## 7. 远程部署备忘
 
+### 7.1 公网正式环境
+
+- 远程服务器：`10.0.4.9`（公网域名 `aicr.x-ha.com`）
+- SSH 用户：`tools`
+- SSH 端口：`36000`
+- SSH key：`D:/workspace/keys/id_ed25519.it`（注意必须使用 `.it` 后缀的 key）
+- **部署目录**：`/home/tools/AICodeReviewer`
+- 容器引擎：Podman
+- 反向代理：`https://aicr.x-ha.com:6023` → `http://10.0.4.9:8090`
+
+### 7.2 内网生产环境
+
 - 远程服务器：`10.64.8.2`
 - SSH 用户：`tools`
 - SSH 端口：`36000`
@@ -164,7 +176,7 @@ curl -sf https://aicr.m-oa.com:6023/healthz
 - 容器引擎：Podman
 - 反向代理：`https://aicr.m-oa.com:6023` → `http://10.64.8.2:8090`
 
-### 7.1 镜像源配置（国内部署必填）
+### 7.3 镜像源配置（国内部署必填）
 
 构建镜像时默认使用 npm 官方源，国内环境建议切换腾讯云镜像以加速下载：
 
@@ -188,12 +200,29 @@ export NPM_STRICT_SSL=false
 - 使用远端 `deploy.sh` 构建和重启服务。
 - 部署后验证远端本机 `/healthz` 与反向代理 `/healthz`。
 
-标准 SSH 选项：
+标准 SSH 选项（内网）：
 
 ```bash
 ssh -p 36000 -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no \
   -o User=tools -i D:/workspace/keys/id_ed25519.it 10.64.8.2
 ```
+
+标准 SSH 选项（公网）：
+
+```bash
+ssh -p 36000 -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no \
+  -o User=tools -i D:/workspace/keys/id_ed25519.it aicr.x-ha.com
+```
+
+### 7.4 部署常见陷阱
+
+- **SSH key 选择**：必须使用 `id_ed25519.it`，不能用 `id_ed25519`（后者会被公网服务器拒绝）。
+- **`.env` 文件编码**：Windows PowerShell 5.1 的 `>` 重定向和 `Out-File` 默认 UTF-16 LE，远程容器无法读取。使用 `scp` 传输或远端 `printf` 写入。`deploy.sh` 会在启动前自动检测 UTF-16 编码并报错。
+- **Config-only 变更只需重启**：`config.yaml` 和 `.env` 通过 volume 挂载到容器，修改后执行 `podman restart aicr` 即可；只有代码变更才需要 `deploy.sh` 完整重建。
+- **Admin session TTL**：`adminAuthSchema` 使用 `session_ttl_seconds`（默认 28800 = 8 小时），不是 `session_ttl_minutes`。设置 `minutes` 字段会被静默忽略。
+- **pnpm 10.x 原生模块**：必须通过 `pnpm-workspace.yaml` 的 `onlyBuiltDependencies: [better-sqlite3]` 授权构建，不能用 `pnpm config set` 或 `--allow-build`。
+- **Chainguard/Wolfi 构建依赖**：使用 `apk add --no-cache python3 make build-base`，包名是 `build-base` 不是 `g++`。
+- **公网环境 `podman build` 网络限制**：公网环境 `apk add` 可能因网络策略失败；Dockerfile 已做 fallback 处理。
 
 ## 8. 测试验收环境（与生产隔离）
 

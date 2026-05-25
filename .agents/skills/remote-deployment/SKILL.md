@@ -276,6 +276,14 @@ The `.env` file on remote contains secrets. **Never display its full contents in
 - `AICR_FEISHU_WEBHOOK`, `AICR_FEISHU_SECRET` — Feishu bot
 - `AICR_WECOM_WEBHOOK` — WeCom (企业微信) bot
 
+### Encoding safety
+
+The `.env` file must be ASCII or UTF-8 without BOM. Windows PowerShell 5.1 `>` redirect and `Out-File` default to UTF-16 LE, which the container cannot parse. `deploy.sh` detects UTF-16 encoding and aborts before starting the container. Prefer `scp` or remote `printf` to transfer `.env` files.
+
+### Config-only changes
+
+`config.yaml` and `.env` are volume-mounted into the container. After editing either, restart the container (`podman restart <name>`) — no image rebuild needed.
+
 ## Common Failures and Recovery
 
 | Symptom                                                            | Likely Cause                                                                                            | Fix                                                                                                                             |
@@ -289,6 +297,8 @@ The `.env` file on remote contains secrets. **Never display its full contents in
 | `podman ps` fails with `invalid internal status`                   | Rootless storage driver init failure (custom `rootless_storage_path` in `/etc/containers/storage.conf`) | `podman --storage-driver=overlay system migrate`, then `podman start <containers>`                                              |
 | Container sandbox fails with "permission denied" on socket         | Missing `--group-add keep-groups` when using `--userns=keep-id` in detached containers                  | Ensure `AICR_ENABLE_CONTAINER_SANDBOX=true` in deploy.sh; verify `systemctl --user status podman.socket` is active              |
 | Build fails at `COPY deploy/docker-static` after clean source sync | Optional Docker static binary placeholder missing from `source/deploy/`                                 | Use current `deploy.sh`; it creates a placeholder when nested sandboxing is disabled and downloads the real binary when enabled |
+| `.env` UTF-16 encoding causes container startup failure             | PowerShell `>` redirect wrote `.env` as UTF-16 LE                                                        | Use `scp` or remote `printf`; `deploy.sh` auto-detects and rejects UTF-16 `.env` files               |
+| `admin` sessions expire unexpectedly                                | Config used `session_ttl_minutes` instead of `session_ttl_seconds`                                       | Schema only recognizes `session_ttl_seconds` (default 28800 = 8 hours); `session_ttl_minutes` is silently ignored |
 
 ### Podman `invalid internal status` deep-dive
 
