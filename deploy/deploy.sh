@@ -115,8 +115,12 @@ fi
 
 # Build the image
 echo "=== Building AICR image ==="
+BUILD_ARGS=(--build-arg NPM_STRICT_SSL=false)
+if [ -n "${NPM_REGISTRY:-}" ]; then
+  BUILD_ARGS+=(--build-arg "NPM_REGISTRY=${NPM_REGISTRY}")
+fi
 "$ENGINE_CMD" "${ENGINE_ARGS[@]}" build \
-  --build-arg NPM_STRICT_SSL=false \
+  "${BUILD_ARGS[@]}" \
   -t "$IMAGE_NAME" \
   -f "$DEPLOY_DIR/deploy/Dockerfile" \
   "$DEPLOY_DIR/source"
@@ -124,6 +128,15 @@ echo "=== Building AICR image ==="
 # Stop existing container if any
 echo "=== Stopping old container ==="
 "$ENGINE_CMD" "${ENGINE_ARGS[@]}" rm -f "$CONTAINER_NAME" 2>/dev/null || true
+
+# Validate .env file is not UTF-16 (PowerShell redirect produces UTF-16 LE)
+if [ -f "$DEPLOY_DIR/.env" ]; then
+  if grep -qPml '\x00' "$DEPLOY_DIR/.env" 2>/dev/null || file "$DEPLOY_DIR/.env" 2>/dev/null | grep -qi "UTF-16"; then
+    echo "ERROR: $DEPLOY_DIR/.env appears to be UTF-16 encoded. Convert to ASCII/UTF-8 first:"
+    echo "  iconv -f UTF-16LE -t UTF-8 .env > .env.tmp && mv .env.tmp .env"
+    exit 1
+  fi
+fi
 
 # Run new container
 echo "=== Starting AICR container ==="
