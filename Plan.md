@@ -18,7 +18,8 @@
 
 - M5 已基本交付；仅剩 HTTP/SSE MCP transport 待调研（非阻塞）。
 - M6 GitHub 生产链路已验收；GitLab e2e 和 SVN adapter 移至 Backlog。
-- M8 观测能力已大部分交付：OTel 已接入 serve 命令、Prometheus metrics 和 run snapshot 已连线、eval CLI 已添加。
+- M8 观测底座已交付：OTel 已接入 serve 命令、Prometheus metrics 和 run snapshot 已连线、eval CLI 已添加。
+- M8 下一步转向内置观测首页：在认证后首屏展示工程级、provider+模型级和时间窗口统计，并在未配置 Prometheus 时依赖本地持久化聚合。
 - M9 发布收尾已基本完成：从零部署验收、容器嵌套沙箱集成验证均通过；版本 bump 待用户决策。
 - M7 国际化（i18n）已开始：`output_language` 注入到 review task context 已交付。
 - 所有包均已补齐 `test/index.test.ts` barrel export 测试（AGENTS.md pitfall #10）。
@@ -165,6 +166,12 @@
   是稳定命名空间。
 - 同一路由上的多 GitHub / GitLab trigger 需要通过 `source_repo.trigger` 做 repo → profile 显式绑定。
 - 配置变更应同步 schema 测试、示例配置、专题文档与本计划摘要。
+- 计划中的内置观测首页认证配置应独立于 trigger API key；超级管理员用户名与
+  密码/密码哈希仅通过环境变量引用，不能写入明文配置、日志或 run snapshot。
+- 计划中的数据库、缓存和对象存储配置使用顶层 `storage` 命名空间，供观测、队列、artifact、runtime 等能力复用：
+  `storage.database.kind` 默认为 `sqlite`，可选 `postgres`；
+  `storage.cache.kind` 默认为 `memory`，可选 `redis`；
+  `storage.object.kind` 默认为 `filesystem`，预留 S3 / MinIO / RustFS 等 S3-compatible 后端。
 - 详细合同：`docs/ai/architecture.md` §3.10。
 
 ### 3.11 Run 状态与可观测性
@@ -172,6 +179,13 @@
 - 持久化 schema 的代码真源是 `packages/store/src/schema.ts`。
 - async trigger、失败报告、publisher 行为和 replay 需要统一落在可观测性合同里。
 - `/metrics` 的 histogram 使用 Prometheus 累计语义；同步和异步 review run 都应记录 metrics 与 `runs/<run_id>/run.json` 快照。
+- 内置观测首页是 M8 follow-up：需要认证后访问，首屏展示整体、工程级、provider+模型级统计。
+- 非 Prometheus/OTel 的观测数据层必须独立存在；未配置外部观测系统时，今日/本周/本月/汇总统计来自持久化 store/rollup，而不是进程内 metrics。
+- 观测持久化使用统一 `storage.database` 后端，默认 `/app/data/aicr.sqlite` SQLite + Drizzle；需要集中化或多实例部署时支持 Postgres；`runs/<run_id>/run.json` 只作为审计快照，不作为聚合查询真源。
+- 观测查询缓存使用统一 `storage.cache` 后端，默认内存缓存，并支持 Redis 作为跨进程/多实例缓存；Redis 只缓存聚合结果、session 和短期索引，不作为唯一历史统计存储。
+- 工程级统计至少覆盖分析次数、分析代码量（变更文件数、增删/分析行数、分析字节数）、发现问题的 run 次数、问题数量、创建 issue 数量，以及该工程消耗的 provider+模型请求数与 token 数。
+- provider+模型级统计至少覆盖请求数、输入/输出/总 token、失败/重试/fallback 次数和可用时的估算成本。
+- 项目维度应以 workspace + trigger + repo 形成稳定 project identity；从 `workspaces.instances` 删除的项目要在启动/配置 reload 后自动隐藏并按可配置宽限期级联清理统计数据。
 - 详细合同：`docs/ai/architecture.md` §3.11。
 
 ### 3.12 Reflection 与 memory
@@ -232,7 +246,7 @@
 | M5 | 基本完成 | 多 Agent CLI、Podman、runtime bundle、Kilo Code e2e | HTTP/SSE MCP transport 调研（非阻塞） |
 | M6 | 部分完成 | GitHub 生产链路已验收 | GitLab e2e、SVN adapter 移至 Backlog |
 | M7 | 未开始 | workspace 定制、skill by glob、国际化、memory | 等待 M5/M6 更稳定后推进 |
-| M8 | 大部分完成 | structured logs、OTel、metrics、run snapshot、eval CLI | eval fixture 已补齐；CI 集成移至 Backlog |
+| M8 | 大部分完成 / 追加需求未开始 | structured logs、OTel、metrics、run snapshot、eval CLI | 内置认证观测首页、日/周/月/汇总统计；CI eval 集成移至 Backlog |
 | M9 | 基本完成 | 文档、示例、deploy.sh、发布资产、部署验收 | 版本 tag（用户决策） |
 | M7 | 已开始 | `output_language` 注入 review task context | skill by glob、workspace 定制、memory |
 
@@ -261,6 +275,25 @@
     - ~~`runs/<run_id>/` 完整快照~~（已交付：`saveRunSnapshot` 保存 `runs/<run_id>/run.json`，通过 `ServerAppOptions.runsDir` 配置，同步/异步 review 均覆盖）
     - ~~eval CLI / 基准集~~（已交付：`aicr eval` CLI 命令已接入 `@aicr/eval`，`eval/` 目录支持 JSON fixture 文件）
     - ~~eval fixture 扩充~~（已交付：6 个 fixture 覆盖 security/sql-injection、security/hardcoded-secret、correctness/null-deref、correctness/error-silenced、style/naming、performance/n-plus-one）
+    - 内置认证观测首页（待实现）：登录后首屏展示整体、工程/workspace、
+      provider+模型统计；不配置 Prometheus 时仍可用。
+    - 超级管理员认证配置（待实现）：独立于 `server.auth` trigger API key，
+      用户名与密码/密码哈希通过环境变量引用，密码比较常量时间化并禁止写日志。
+    - 统一基础存储配置 schema（待实现）：新增顶层 `storage.database`、
+      `storage.cache`、`storage.object` 与 retention/GC 配置；避免在观测、队列、
+      artifact、runtime 等模块内重复定义数据库、缓存或对象存储连接。
+    - 非 Prometheus/OTel 观测数据层（待实现）：以 `storage.database` 的 SQLite + Drizzle
+      为默认持久主库，默认路径 `/app/data/aicr.sqlite`；同时复用 Postgres 持久后端和 Redis 查询缓存。
+    - 对象存储扩展位（待实现）：`storage.object` 默认使用本地 filesystem；后续可接入
+      AWS S3、MinIO、RustFS 等 S3-compatible 后端，用于大体积 artifact、run 附件或归档数据。
+    - 本地/数据库统计数据模型与聚合 API（待实现）：持久化 project 维度、run、代码量、
+      LLM usage、输出 dispatch/issue 创建事件和可重算 rollup，支持今日、本周、本月和汇总窗口。
+    - 删除项目统计清理（待实现）：启动和配置 reload 时用当前 `workspaces.instances`
+      生成 active project set；已删除项目立即从观测首页隐藏，按可配置宽限期硬删除并级联清理历史统计。
+    - 工程级统计（待实现）：分析次数、分析代码量、发现问题的 run 次数、
+      问题数量、创建 issue 数，以及该工程按 provider+模型拆分的请求数/token 数。
+    - provider+模型统计（待实现）：请求数、输入/输出/总 token、失败/重试/
+      fallback 次数、延迟和可用时的估算成本。
 4. **M9：发布收尾**（接近完成）
     - ~~`docker_socket` 文档确认~~（已交付：`example/README.md` 和 `docs/ai/architecture.md` §3.8.1 已补充说明）
     - ~~容器嵌套沙箱验证~~（已交付：`AICodeReviewerTest` 测试环境验证通过，确认 Podman socket + Docker 静态二进制 + `--userns=keep-id --group-add keep-groups` 路径可行；`deploy.sh`、`Dockerfile`、`.gitignore`、`docs/podman.md`、`example/README.md` 已更新）
