@@ -178,19 +178,32 @@ curl -sf https://aicr.m-oa.com:6023/healthz
 
 ### 7.3 镜像源配置（国内部署必填）
 
-构建镜像时默认使用 npm 官方源，国内环境建议切换腾讯云镜像以加速下载：
+构建镜像时默认使用官方源，国内环境建议切换腾讯云镜像（https://mirrors.tencent.com/）以加速下载。
+
+`deploy.sh` 与 `Dockerfile` 读取以下环境变量：
+
+| 环境变量 | 用途 | 默认值 | 腾讯云镜像地址 |
+| --- | --- | --- | --- |
+| `BASE_IMAGE` | 容器基础镜像 | `cgr.dev/chainguard/node:latest-dev` | `mirror.ccs.tencentyun.com/library/node:22-alpine` |
+| `APK_MIRROR` | Alpine apk 包源 | （使用镜像内置源） | `https://mirrors.cloud.tencent.com/alpine` |
+| `NPM_REGISTRY` | pnpm/npm registry | `https://registry.npmjs.org` | `http://mirrors.tencent.com/npm/` |
+| `NPM_STRICT_SSL` | npm strict-ssl | `true` | `false`（HTTP 镜像必须） |
+| `DOCKER_DOWNLOAD_MIRROR` | Docker 静态二进制下载（容器嵌套沙箱） | `https://download.docker.com/linux/static/stable/x86_64` | `https://mirrors.cloud.tencent.com/docker-ce/linux/static/stable/x86_64` |
+
+> **关于 `BASE_IMAGE`**：Chainguard 官方镜像 `cgr.dev` 无国内镜像，国内构建可能拉取超时。可切换为 Docker Hub 的 Node Alpine 镜像，通过腾讯云容器镜像服务加速。使用非 Chainguard 镜像时，`APK_MIRROR` 指向标准 Alpine 镜像路径即可（不含 `/edge/chainguard` 子路径）。
+
+> **关于 `DOCKER_DOWNLOAD_MIRROR`**：仅当 `AICR_ENABLE_CONTAINER_SANDBOX=true` 时才需要下载 Docker 静态二进制。
+
+国内部署完整示例：
 
 ```bash
+export BASE_IMAGE=mirror.ccs.tencentyun.com/library/node:22-alpine
+export APK_MIRROR=https://mirrors.cloud.tencent.com/alpine
 export NPM_REGISTRY=http://mirrors.tencent.com/npm/
 export NPM_STRICT_SSL=false
+export DOCKER_DOWNLOAD_MIRROR=https://mirrors.cloud.tencent.com/docker-ce/linux/static/stable/x86_64
+./deploy.sh
 ```
-
-`deploy.sh` 与 `Dockerfile` 均读取这两个环境变量：
-
-- `NPM_REGISTRY` —— 控制 pnpm/npm 的 registry 地址
-- `NPM_STRICT_SSL` —— 对应 `npm_config_strict_ssl`，内网镜像通常需设为 `false`
-
-部署前在远程会话中导出上述变量，再执行 `deploy.sh`，即可全局生效。
 
 远程部署时优先读取 `.agents/skills/remote-deployment/SKILL.md`，并遵守以下约束：
 
