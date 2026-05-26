@@ -107,10 +107,10 @@ LLM_TOKEN="$(jq -r '.xiaomimimo_token_plan.token' development/secret/secret.json
 
 ### GitHub repo → selector / trigger / workspace 映射
 
-| GitHub 仓库             | 本地 selector 组     | 远端 trigger         | 远端 workspace       | 说明                               |
-| ----------------------- | -------------------- | -------------------- | -------------------- | ---------------------------------- |
-| `atframework/atsf4g-co` | `github-atframework` | `github-atframework` | `github-atsf4g-co`   | 保持现有仓库，继续独立配置         |
-| `owent/libatapp`        | `github-owent`       | `github-owent`       | `github-libatapp`    | 新增仓库，独立 token/secret/filter |
+| GitHub 仓库             | 本地 selector 组     | 远端 trigger         | 远端 workspace        | 说明                                |
+| ----------------------- | -------------------- | -------------------- | --------------------- | ----------------------------------- |
+| `atframework/atsf4g-co` | `github-atframework` | `github-atframework` | `github-atsf4g-co`    | 保持现有仓库，继续独立配置          |
+| `owent/libatapp`        | `github-owent`       | `github-owent`       | `github-libatapp`     | 新增仓库，独立 token/secret/filter  |
 | `owent/hiredis-happ`    | `github-owent`       | `github-owent`       | `github-hiredis-happ` | 复用 `github-owent` trigger/outputs |
 
 - `/webhooks/github` 现在允许挂多个 GitHub trigger profile；服务端会先按 webhook secret 校验，再按 `repository.full_name` 选择最终 trigger。
@@ -187,34 +187,34 @@ Wolfi 而失去 `p4-cli` 的可安装性。
 
 `deploy.sh` 与 `Dockerfile` 读取以下环境变量：
 
-| 环境变量 | 用途 | 默认值 | 国内/镜像建议 |
-| --- | --- | --- | --- |
-| `BASE_IMAGE` | Ubuntu 24.04 兼容基础镜像 | `ubuntu:24.04` | 保持默认，或替换为自建/缓存的 Ubuntu 24.04 mirror |
-| `NODE_IMAGE` | Node 22 userspace 来源镜像 | `node:22-bookworm-slim` | `mirror.ccs.tencentyun.com/library/node:22-bookworm-slim` |
-| `APT_MIRROR` | Ubuntu apt 包源 | （使用镜像内置源） | `http://mirrors.tencent.com/ubuntu` |
-| `PERFORCE_APT_DISTRO` | Perforce apt 仓库发行版代号 | `noble` | `noble` |
-| `NPM_REGISTRY` | pnpm/npm registry | `https://registry.npmjs.org` | `http://mirrors.tencent.com/npm/` |
-| `NPM_STRICT_SSL` | npm strict-ssl | `true` | `false`（HTTP 镜像必须） |
-| `PIP_INDEX_URL` | Python pip simple index | `https://pypi.org/simple` | `https://mirrors.tencent.com/pypi/simple` |
-| `PIP_TRUSTED_HOST` | pip HTTP/私有源信任主机 | （空） | 使用 HTTPS 的腾讯源时留空 |
-| `KUBERNETES_APT_REPO_BASE` | `kubectl` APT 源 base | `https://pkgs.k8s.io/core:/stable:` | `https://mirrors.tencent.com/kubernetes_new/core:/stable:` |
-| `KUBERNETES_APT_REPO_VERSION` | `kubectl` minor 版本源 | `v1.36` | 需与集群 minor 相差不超过 1；例如 `v1.36` |
-| `HELM_APT_REPO` | Helm Debian/Ubuntu apt 源 | `https://packages.buildkite.com/helm-linux/helm-debian/any/` | 腾讯源未提供 Helm 专用镜像；保留默认或替换为内部缓存 |
-| `HELM_APT_KEY_URL` | Helm apt signing key | `https://packages.buildkite.com/helm-linux/helm-debian/gpgkey` | 与 `HELM_APT_REPO` 的内部缓存配套 |
-| `YQ_VERSION` | Mike Farah `yq` 版本 | `v4.53.2` | 按需固定 |
-| `YQ_DOWNLOAD_BASE` | `yq` GitHub release 下载根路径 | `https://github.com/mikefarah/yq/releases/download` | 腾讯源未提供 yq 专用镜像；保留默认或替换为内部缓存 |
-| `DOCKER_DOWNLOAD_MIRROR` | Docker 静态二进制下载（容器嵌套沙箱） | `https://download.docker.com/linux/static/stable/x86_64` | `https://mirrors.tencent.com/docker-ce/linux/static/stable/x86_64` |
+| 环境变量                      | 用途                                  | 默认值                                                         | 国内/镜像建议                                                      |
+| ----------------------------- | ------------------------------------- | -------------------------------------------------------------- | ------------------------------------------------------------------ |
+| `BASE_IMAGE`                  | Ubuntu 24.04 兼容基础镜像             | `ubuntu:24.04`                                                 | 保持默认，或替换为自建/缓存的 Ubuntu 24.04 mirror                  |
+| `NODE_IMAGE`                  | Node 22 userspace 来源镜像            | `node:22-bookworm-slim`                                        | `mirror.ccs.tencentyun.com/library/node:22-bookworm-slim`          |
+| `APT_MIRROR`                  | Ubuntu apt 包源                       | （使用镜像内置源）                                             | `http://mirrors.tencent.com/ubuntu`                                |
+| `PERFORCE_APT_DISTRO`         | Perforce apt 仓库发行版代号           | `noble`                                                        | `noble`                                                            |
+| `NPM_REGISTRY`                | pnpm/npm registry                     | `https://registry.npmjs.org`                                   | `http://mirrors.tencent.com/npm/`                                  |
+| `NPM_STRICT_SSL`              | npm strict-ssl                        | `true`                                                         | `false`（HTTP 镜像必须）                                           |
+| `PIP_INDEX_URL`               | Python pip simple index               | `https://pypi.org/simple`                                      | `https://mirrors.tencent.com/pypi/simple`                          |
+| `PIP_TRUSTED_HOST`            | pip HTTP/私有源信任主机               | （空）                                                         | 使用 HTTPS 的腾讯源时留空                                          |
+| `KUBERNETES_APT_REPO_BASE`    | `kubectl` APT 源 base                 | `https://pkgs.k8s.io/core:/stable:`                            | `https://mirrors.tencent.com/kubernetes_new/core:/stable:`         |
+| `KUBERNETES_APT_REPO_VERSION` | `kubectl` minor 版本源                | `v1.36`                                                        | 需与集群 minor 相差不超过 1；例如 `v1.36`                          |
+| `HELM_APT_REPO`               | Helm Debian/Ubuntu apt 源             | `https://packages.buildkite.com/helm-linux/helm-debian/any/`   | 腾讯源未提供 Helm 专用镜像；保留默认或替换为内部缓存               |
+| `HELM_APT_KEY_URL`            | Helm apt signing key                  | `https://packages.buildkite.com/helm-linux/helm-debian/gpgkey` | 与 `HELM_APT_REPO` 的内部缓存配套                                  |
+| `YQ_VERSION`                  | Mike Farah `yq` 版本                  | `v4.53.2`                                                      | 按需固定                                                           |
+| `YQ_DOWNLOAD_BASE`            | `yq` GitHub release 下载根路径        | `https://github.com/mikefarah/yq/releases/download`            | 腾讯源未提供 yq 专用镜像；保留默认或替换为内部缓存                 |
+| `DOCKER_DOWNLOAD_MIRROR`      | Docker 静态二进制下载（容器嵌套沙箱） | `https://download.docker.com/linux/static/stable/x86_64`       | `https://mirrors.tencent.com/docker-ce/linux/static/stable/x86_64` |
 
 > **关于 `BASE_IMAGE`**：默认使用 `ubuntu:24.04`，因为官方 Perforce 包仓库支持 Ubuntu APT，且 `p4-cli` 不适合依赖 Alpine / Wolfi / 非 glibc 发行版。`BASE_IMAGE` 只建议替换为 Ubuntu 24.04 的镜像仓库地址，不建议再切回 Alpine / Chainguard / Wolfi。
-
+>
 > **关于 `APT_MIRROR`**：`deploy.sh` 仍接受旧的 `APK_MIRROR` 变量作为兼容别名，但新文档统一使用 `APT_MIRROR`。
-
+>
 > **关于 `PIP_INDEX_URL`**：Dockerfile 会把该值写入 `/etc/pip.conf` 并设置 `PIP_INDEX_URL` 环境变量；腾讯 PyPI 镜像必须包含 `/pypi/simple` 路径。
-
+>
 > **关于 Kubernetes/Helm/yq**：Dockerfile 使用官方 Kubernetes apt 源安装 `kubectl`，国内示例切换到腾讯 `kubernetes_new`；Helm 官方文档当前列出的 Debian/Ubuntu apt 源由 Buildkite 托管，Mike Farah `yq` 官方建议下载预编译二进制。腾讯镜像站已验证没有 `/helm/` 与 `/yq/` 专用入口，如需全内网构建，请用内部缓存覆盖 `HELM_APT_REPO`、`HELM_APT_KEY_URL` 与 `YQ_DOWNLOAD_BASE`。
-
+>
 > **关于 Podman socket**：运行时镜像现在内置 `podman` CLI，并继续支持可选 Docker static CLI。`AICR_ENABLE_CONTAINER_SANDBOX=true` 时，`deploy.sh` 会挂载宿主 Podman socket，同时设置 `CONTAINER_HOST`（Podman 原生客户端）和 `DOCKER_HOST`（Docker 兼容客户端）。容器内不需要启动 Podman daemon；真正创建/管理子容器的是宿主 Podman socket。
-
+>
 > **关于 `DOCKER_DOWNLOAD_MIRROR`**：仅当 `AICR_ENABLE_CONTAINER_SANDBOX=true` 且需要 Docker 兼容 CLI 时才需要下载 Docker 静态二进制；使用 `sandbox.kind: podman`/`engine: podman` 可直接走镜像内置 Podman CLI。
 
 国内部署完整示例：
