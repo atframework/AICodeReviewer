@@ -44,6 +44,12 @@
 - 工作区使用 pnpm + TypeScript project references。
 - review 流程长期目标是“服务编排 + AgentAdapter + Sandbox + Output Pipeline”。
 - 单容器自托管是主路径，Podman 与 Docker 平等支持。
+- 部署镜像默认采用 `ubuntu:24.04`（glibc）并复用官方
+  `node:22-bookworm-slim` 的 Node 22 userspace，以便稳定安装 `p4-cli`
+  与常用代码检索/构建/诊断工具；同时内置 `kubectl`、`helm`、`yq`
+  和 `podman`/`buildah`/`skopeo` 客户端，便于分析 Kubernetes manifest、
+  Helm chart 与通过宿主 Podman socket 管理隔离容器；Python `pip`
+  支持通过 `PIP_INDEX_URL` 配置镜像源。
 
 ### 2.2 目录与 workspace 布局
 
@@ -208,6 +214,9 @@
 - repo-local AI 资产按路径与优先级按需装配，不整仓注入。
 - 删除行、旧代码、上下文缺失等高风险场景需要在 prompt 中显式约束。
 - 工具合同由实现与注册表定义，不靠 prompt 发明字段。
+- 当 runtime / sandbox 已保证工具可用时，shell 只读检查优先使用
+  `rg` / `fd` / `bat` / `jq`；`grep` / `find` / `cat` 只作为兼容或精确
+  POSIX 语义兜底。
 
 ## 5. 用户入口与专题文档
 
@@ -250,79 +259,26 @@
 | M2 | 已完成 | `docs/ai/milestones/M2.md` | 作为 agent/sandbox 基线 |
 | M3 | 已完成 | `docs/ai/milestones/M3.md` | 继续复用压缩、预算、队列与 scrubber 能力 |
 | M4 | 已完成 | `docs/ai/milestones/M4.md` | 继续扩展模板、路由与 attribution |
-| M5 | 基本完成 | 多 Agent CLI、Podman、runtime bundle、Kilo Code e2e | HTTP/SSE MCP transport 调研（非阻塞） |
+| M5 | 基本完成 | `docs/ai/milestones/M5.md` | HTTP/SSE MCP transport 调研（非阻塞） |
 | M6 | 部分完成 | GitHub 生产链路已验收 | GitLab e2e、SVN adapter 移至 Backlog |
-| M7 | 未开始 | workspace 定制、skill by glob、国际化、memory | 等待 M5/M6 更稳定后推进 |
-| M8 | 大部分完成 / 追加需求未开始 | structured logs、OTel、metrics、run snapshot、eval CLI、内置观测首页 | 日/周/月/汇总统计已交付；CI eval 集成移至 Backlog |
-| M9 | 基本完成 | 文档、示例、deploy.sh、发布资产、部署验收 | 版本 tag（用户决策） |
 | M7 | 已开始 | `output_language` 注入 review task context | skill by glob、workspace 定制、memory |
+| M8 | 大部分完成 | `docs/ai/milestones/M8.md` | CI eval 集成移至 Backlog |
+| M9 | 基本完成 | `docs/ai/milestones/M9.md` | 版本 tag（用户决策） |
 
 ### 8.2 当前执行包
 
-1. **M5：runtime bundle 与 agent 原生能力对齐**（基本完成）
-    - ~~物化原生 MCP 配置~~（已交付：runtime bundle 物化 MCP 工具清单到 manifest）
-    - ~~补齐 Agent Runtime Bundle manifest~~（已交付：`@aicr/agents` `materializeRuntimeBundle`）
-    - ~~移除 Kilo 适配器过期标志~~（已交付：`--dangerously-skip-permissions` 已从 kilo adapter 移除，`--auto` 即为 kilo 7.x 的自动审批方式）
-    - ~~MCP server 配置注入~~（已交付：runtime bundle 支持 `mcpServers` 参数，Kilo adapter 自动写入 `mcp` 配置段到 `.kilo/kilo.json`）
-    - ~~Agent stdout 结构化修复与直连 LLM 兜底~~（已交付：orchestrator 支持 repair retry、skip 语义归一化、direct-LLM fallback）
-    - ~~MCP 状态文件读取~~（已交付：agent 运行后 orchestrator 读取 `.aicr-output-state.json` 并回写 collector）
-    - ~~独立 MCP 服务器进程~~（已交付：通过 Kilo MCP 配置注入，`@aicr/mcp-output` 以独立子进程启动；状态文件 `.aicr-output-state.json` 由 orchestrator 读取）
-    - ~~完成 Kilo Code 端到端验收~~（已验收：生产日志证实 Kilo agent 在 sandbox 内完整运行，MCP 状态文件读取、stdout 流解析、结构化输出转换均正常工作）
+1. **M5：runtime bundle 与 agent 原生能力对齐**（基本完成，已完成项归档至 `docs/ai/milestones/M5.md`）
     - HTTP/SSE 传输模式（`@aicr/mcp-output` 当前仅支持 stdio；待调研 MCP SDK HTTP transport 可行性；非阻塞项，可延后至 M9 之后）
 2. **M6：跨 VCS 能力补齐**（GitHub 已验收）
-    - ~~GitHub 真实仓库端到端验证~~（已验收：生产环境 `github-atframework` / `github-owent` 触发器正常运行，自动创建 issue 和分析 PR 记录完整）
     - GitLab webhook、dispatcher 与 PR review 已实现并带单元测试；待补齐真实仓库端到端验证记录 → **Backlog**
     - SVN 支持（config schema 已预留，待实现 VCS adapter）→ **Backlog**
-    - ~~blame/annotate 归因链路~~（部分覆盖：`aicr.fetch_more_context` 提供额外上下文拉取能力；完整 blame/annotate 需 VCS 原生支持）
-    - ~~多源上下文 selector~~（部分覆盖：`aicr.fetch_more_context` + VCS adapter `fetchExtraContext`；专用聚合模块待 M7）
-3. **M8：观测与回放**（大部分完成）
-    - ~~结构化日志落盘~~（已交付：pino logger）
-    - ~~OTel trace exporter~~（已交付并接入：`createOtelSdk` 在 `aicr serve` 命令中自动启动，读取 `OTEL_EXPORTER_OTLP_ENDPOINT` / `OTEL_EXPORTER_OTLP_HEADERS` 环境变量）
-    - ~~Prometheus metrics~~（已交付：`/metrics` 端点，`aicr_reviews_total` / `aicr_problems_total` / `aicr_review_duration_seconds` 等计数器与累计 histogram）
-    - ~~`runs/<run_id>/` 完整快照~~（已交付：`saveRunSnapshot` 保存 `runs/<run_id>/run.json`，通过 `ServerAppOptions.runsDir` 配置，同步/异步 review 均覆盖）
-    - ~~eval CLI / 基准集~~（已交付：`aicr eval` CLI 命令已接入 `@aicr/eval`，`eval/` 目录支持 JSON fixture 文件）
-    - ~~eval fixture 扩充~~（已交付：6 个 fixture 覆盖 security/sql-injection、security/hardcoded-secret、correctness/null-deref、correctness/error-silenced、style/naming、performance/n-plus-one）
-    - 内置认证观测首页（已交付）：SQLite + Drizzle 持久化 store
-      (`@aicr/store`)；admin auth 通过环境变量配置；Hono 子路由 `/api/admin`
-      暴露 stats/projects/providers/runs JSON API；嵌入式 SPA dashboard
-      在 `/dashboard` 和 `/` 提供深色主题首页。
-    - 超级管理员认证配置（已交付）：独立于 `server.auth` trigger API key，
-      用户名与密码或密码哈希通过 `AICR_ADMIN_USERNAME`、`AICR_ADMIN_PASSWORD` / `AICR_ADMIN_PASSWORD_HASH` 环境变量引用；
-      SHA-256 候选值、固定长度 digest 比较、内存 session token。
-    - 统一基础存储配置 schema（已交付）：`packages/core/src/config.ts` 新增
-      `storageSchema`（database/cache/object/retention）和 `adminAuthSchema`。
-    - 非 Prometheus/OTel 观测数据层（已交付）：SQLite + Drizzle 持久主库，
-      `@aicr/store` 包含 6 张表（projects、reviewRuns、codeMetrics、llmUsage、
-      outputEvents、dailyRollups）；内联 SQL 迁移；聚合查询支持 today/thisWeek/thisMonth/all。
-    - 本地/数据库统计数据模型与聚合 API（已交付）：project 维度聚合、run 事实表、
-      LLM usage、output dispatch 事件、provider+model 统计、最近 run 列表。
-    - 删除项目统计清理（已交付）：`softDeleteMissingProjects`（配置比对 + 软删除）以及
-      `hardDeleteExpiredProjects`（宽限期硬删除 + CASCADE 清理）。
-    - 工程级统计（已交付）：Projects 面板支持 today/thisWeek/thisMonth/all 时间维度切换，
-      以表格展示各工程的 reviews/success/failed/skipped/problems/issues/files/lines/
-      LLM requests/tokens/cost/avg duration。
-    - provider+模型统计（已交付）：Providers 面板支持 today/thisWeek/thisMonth/all 时间维度切换，
-      以表格展示各 provider+model 的 requests/tokens in/tokens out/total tokens/cost/
-      retries+fails/avg latency。
-4. **M9：发布收尾**（接近完成）
-    - ~~`docker_socket` 文档确认~~（已交付：`example/README.md` 和 `docs/ai/architecture.md` §3.8.1 已补充说明）
-    - ~~容器嵌套沙箱验证~~（已交付：`AICodeReviewerTest` 测试环境验证通过，确认 Podman socket + Docker 静态二进制 + `--userns=keep-id --group-add keep-groups` 路径可行；`deploy.sh`、`Dockerfile`、`.gitignore`、`docs/podman.md`、`example/README.md` 已更新）
-    - ~~`k8s_pod` / `firecracker` 平台能力边界说明~~（已交付：`architecture.md` §3.8.1 后端能力矩阵已明确标注为预留扩展位）
-    - ~~版本固定与 changelog~~（已交付：`CHANGELOG.md` 已创建，所有包版本固定为 `0.1.0`）
-    - ~~最终发布检查单~~（已交付：`docs/ai/milestones/M9-checklist.md` 已创建）
-    - ~~`deploy.sh` 修复~~（已交付：所有 `podman` 命令通过条件化 engine 参数加 `--storage-driver=overlay`，Docker engine 不接收 Podman 专用参数；加入 preflight 检查）
-    - ~~`deploy.sh` 硬编码路径~~（已交付：改为环境变量覆盖 `AICR_DEPLOY_DIR`/`AICR_IMAGE_NAME`/`AICR_HOST_PORT`/`AICR_CONTAINER_NAME`/`AICR_ENGINE`）
-    - ~~`deploy/docker-static` 清洁同步兼容~~（已交付：未启用嵌套沙箱时 `deploy.sh` 创建空占位文件且运行镜像会移除该占位；启用时下载真实 Docker CLI，避免 clean source sync 后 Dockerfile COPY 失败）
-    - ~~`.dockerignore`~~（已交付：排除 `.git`/`node_modules`/`dist`/`coverage`/`docs` 等）
-    - ~~Dockerfile 前向兼容~~（已交付：补齐 `sandbox`/`eval` node_modules COPY）
-    - ~~部署资产审计修复~~（已交付：P4 认证表修正、`.env.sample` 补齐缺失变量、`config.yaml` 补齐 queue 子项示例、`SKILL.md` 环境变量名对齐、`Caddyfile.example` 添加）
-    - ~~增量部署验证~~（已交付：测试环境 `/data/disk2/AICodeReviewerTest` 源码同步 → `deploy.sh` 构建 → 启动 → `healthz` / `/metrics` 验证通过）
-    - ~~从零部署验收~~（已交付：`AICodeReviewerTest` 空目录完整验收通过：`rm -rf` → `mkdir` → 解压源码 → 写入 config.yaml/.env → `deploy.sh` 构建 → `healthz` OK）
-    - ~~容器嵌套沙箱集成验证~~（已交付：Docker CLI v27.5.1 在 AICR 容器内正常运行；嵌套 `docker run --rm alpine echo sandbox-ok` 成功；`--network none` 网络隔离验证通过；Podman user socket 挂载 + `DOCKER_HOST` 注入 + `userns=keep-id` 均正确）
+3. **M8：观测与回放**（大部分完成，已完成项归档至 `docs/ai/milestones/M8.md`）
+    - CI eval 基准集成（将 `aicr eval` 接入 CI 流水线；需 CI pipeline 权限，延后扩展）→ **Backlog**
+4. **M9：发布收尾**（基本完成，已完成项归档至 `docs/ai/milestones/M9.md`）
     - 版本 bump 与 git tag（用户决策）
 5. **M7：workspace 定制、国际化、memory**（已开始）
-    - ~~`output_language` 注入 review task context~~（已交付：`ServerReviewOrchestrationOptions` 新增 `outputLanguage` 字段；`buildTaskContext` 在 `outputLanguage` 非 `en` 时追加 `Output language: <lang>` 指令；`bootstrap.ts` 从 `config.review.output_language` 注入；3 个单元测试覆盖注入/省略场景）
-    - 所有包 barrel export 测试补齐（已交付：`@aicr/core`/`@aicr/cli`/`@aicr/server`/`@aicr/llm`/`@aicr/vcs`/`@aicr/outputs`/`@aicr/mcp-output`/`@aicr/store` 新增 `test/index.test.ts`，总计 1228 测试全部通过）
+    - ~~`output_language` 注入 review task context~~（已交付）
+    - 所有包 barrel export 测试补齐（已交付：1228 测试全部通过）
     - skill by glob（已有 `Applies To` 章节过滤；待配置级强制激活）
     - per-workspace baseSystemPrompt 覆盖（待实现）
     - memory / reflection 存储与检索（待实现）
@@ -348,6 +304,9 @@
 - `docs/ai/milestones/M2.md`
 - `docs/ai/milestones/M3.md`
 - `docs/ai/milestones/M4.md`
+- `docs/ai/milestones/M5.md`
+- `docs/ai/milestones/M8.md`
+- `docs/ai/milestones/M9.md`
 
 ## 9. 稳定决策索引
 
@@ -368,5 +327,8 @@
 - 首选单容器自托管，HTTP 入站由反向代理处理 TLS。
 - 持久化保留 `config.yaml`、`.env`、workspace 数据、数据库和日志目录。
 - Podman / Docker 使用同一构建与运行合同，差异由 engine 选择吸收。
+- 国内部署示例统一使用 `mirrors.tencent.com` 的 Ubuntu、npm、PyPI、
+  Kubernetes APT 与 Docker static 镜像入口；Helm/yq 暂无已验证的腾讯
+  专用镜像时保留官方源或使用内部缓存覆盖 build arg。
 - 健康检查统一使用 `/healthz`。
 - 部署与验收入口：`example/README.md`、`docs/podman.md` 与相关 skill。

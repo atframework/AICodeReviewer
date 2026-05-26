@@ -215,14 +215,18 @@ ssh -p <ssh-port> ... <remote-host> \
 Requirements:
 
 - Host must have Podman with user-level socket (`/run/user/$(id -u)/podman/podman.sock`).
-- `deploy.sh` downloads a Docker static binary (~40MB) on first run.
-- `config.yaml` must set `sandbox.kind: docker` (Docker CLI inside container talks to Podman socket).
-- `deploy.sh` adds `--userns=keep-id --group-add keep-groups` so the container process can access the socket.
+- The runtime image ships `podman`, `buildah`, and `skopeo`; no Podman daemon runs inside the AICR container.
+- `deploy.sh` sets `CONTAINER_HOST` for the native Podman CLI and `DOCKER_HOST` for Docker-compatible clients.
+- `deploy.sh` downloads a Docker static binary (~40MB) on first run when Docker-compatible socket clients are needed.
+- Prefer `sandbox.kind: podman` with `sandbox.engine: podman`; use `sandbox.kind: docker` only when the Docker CLI compatibility path is required.
+- `deploy.sh` adds `--userns=keep-id --group-add keep-groups` so the container process can access the socket, and disables SELinux labeling for the mounted Podman socket.
+- Treat the mounted Podman socket as privileged host-user access; do not expose it to untrusted workloads.
 
 Verify after deploy:
 
 ```bash
-ssh ... <remote-host> "podman exec aicr sh -c 'docker --version && docker run --rm alpine:latest echo sandbox-ok'"
+ssh ... <remote-host> "podman exec aicr sh -c 'podman --version && podman run --rm alpine:latest echo podman-ok'"
+ssh ... <remote-host> "podman exec aicr sh -c 'docker --version && docker run --rm alpine:latest echo docker-ok'"
 ```
 
 ### From-scratch deployment verification
@@ -261,7 +265,8 @@ To verify the complete zero-to-deployment flow on an empty directory (e.g., AICo
    # Health check
    ssh ... <remote-host> "curl -sf http://127.0.0.1:8091/healthz"
    # Nested sandbox
-   ssh ... <remote-host> "podman exec aicr-test sh -c 'docker --version && docker run --rm alpine:latest echo sandbox-ok'"
+   ssh ... <remote-host> "podman exec aicr-test sh -c 'podman --version && podman run --rm alpine:latest echo podman-ok'"
+   ssh ... <remote-host> "podman exec aicr-test sh -c 'docker --version && docker run --rm alpine:latest echo docker-ok'"
    ```
 
 ## Environment Variables on Remote
@@ -286,19 +291,19 @@ The `.env` file must be ASCII or UTF-8 without BOM. Windows PowerShell 5.1 `>` r
 
 ## Common Failures and Recovery
 
-| Symptom                                                            | Likely Cause                                                                                            | Fix                                                                                                                             |
-| ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| `deploy.sh` fails at build stage                                   | Outdated `source/` or lockfile mismatch                                                                 | Re-sync source, ensure `pnpm-lock.yaml` is up to date                                                                           |
-| `healthz` returns non-200                                          | Config validation failed                                                                                | Check `podman logs aicr` for Zod/config errors                                                                                  |
-| Container exits immediately                                        | Port conflict or missing volume                                                                         | Check `podman ps -a` and logs                                                                                                   |
-| Feishu/webhook notifications fail                                  | Missing env var in `.env`                                                                               | Verify `.env` has required vars, restart container                                                                              |
-| WeCom notifications fail                                           | Missing `WECOM_WEBHOOK` in `.env`                                                                       | Add env var, restart container                                                                                                  |
-| Gitea issues not created                                           | `kind` mismatch or missing `token_env`                                                                  | Verify config `kind` matches code, check `token_env` resolution                                                                 |
-| `podman ps` fails with `invalid internal status`                   | Rootless storage driver init failure (custom `rootless_storage_path` in `/etc/containers/storage.conf`) | `podman --storage-driver=overlay system migrate`, then `podman start <containers>`                                              |
-| Container sandbox fails with "permission denied" on socket         | Missing `--group-add keep-groups` when using `--userns=keep-id` in detached containers                  | Ensure `AICR_ENABLE_CONTAINER_SANDBOX=true` in deploy.sh; verify `systemctl --user status podman.socket` is active              |
-| Build fails at `COPY deploy/docker-static` after clean source sync | Optional Docker static binary placeholder missing from `source/deploy/`                                 | Use current `deploy.sh`; it creates a placeholder when nested sandboxing is disabled and downloads the real binary when enabled |
-| `.env` UTF-16 encoding causes container startup failure             | PowerShell `>` redirect wrote `.env` as UTF-16 LE                                                        | Use `scp` or remote `printf`; `deploy.sh` auto-detects and rejects UTF-16 `.env` files               |
-| `admin` sessions expire unexpectedly                                | Config used `session_ttl_minutes` instead of `session_ttl_seconds`                                       | Schema only recognizes `session_ttl_seconds` (default 28800 = 8 hours); `session_ttl_minutes` is silently ignored |
+| Symptom                                                            | Likely Cause                                                                                                     | Fix                                                                                                                             |
+| ------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `deploy.sh` fails at build stage                                   | Outdated `source/` or lockfile mismatch                                                                          | Re-sync source, ensure `pnpm-lock.yaml` is up to date                                                                           |
+| `healthz` returns non-200                                          | Config validation failed                                                                                         | Check `podman logs aicr` for Zod/config errors                                                                                  |
+| Container exits immediately                                        | Port conflict or missing volume                                                                                  | Check `podman ps -a` and logs                                                                                                   |
+| Feishu/webhook notifications fail                                  | Missing env var in `.env`                                                                                        | Verify `.env` has required vars, restart container                                                                              |
+| WeCom notifications fail                                           | Missing `WECOM_WEBHOOK` in `.env`                                                                                | Add env var, restart container                                                                                                  |
+| Gitea issues not created                                           | `kind` mismatch or missing `token_env`                                                                           | Verify config `kind` matches code, check `token_env` resolution                                                                 |
+| `podman ps` fails with `invalid internal status`                   | Rootless storage driver init failure (custom `rootless_storage_path` in `/etc/containers/storage.conf`)          | `podman --storage-driver=overlay system migrate`, then `podman start <containers>`                                              |
+| Container sandbox fails with "permission denied" on socket         | Missing `--group-add keep-groups`, missing `CONTAINER_HOST`, or SELinux label blocking the mounted Podman socket | Ensure `AICR_ENABLE_CONTAINER_SANDBOX=true` in deploy.sh; verify `systemctl --user status podman.socket` is active              |
+| Build fails at `COPY deploy/docker-static` after clean source sync | Optional Docker static binary placeholder missing from `source/deploy/`                                          | Use current `deploy.sh`; it creates a placeholder when nested sandboxing is disabled and downloads the real binary when enabled |
+| `.env` UTF-16 encoding causes container startup failure            | PowerShell `>` redirect wrote `.env` as UTF-16 LE                                                                | Use `scp` or remote `printf`; `deploy.sh` auto-detects and rejects UTF-16 `.env` files                                          |
+| `admin` sessions expire unexpectedly                               | Config used `session_ttl_minutes` instead of `session_ttl_seconds`                                               | Schema only recognizes `session_ttl_seconds` (default 28800 = 8 hours); `session_ttl_minutes` is silently ignored               |
 
 ### Podman `invalid internal status` deep-dive
 

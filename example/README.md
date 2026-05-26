@@ -38,6 +38,62 @@ node packages/cli/dist/index.js serve \
   --port 8080
 ```
 
+## Runtime Image Baseline
+
+The deployment image intentionally uses `ubuntu:24.04` as the distro base and
+copies the Node 22 userspace from the official `node:22-bookworm-slim` image.
+This keeps the Node runtime on an official LTS userspace while allowing AICR to
+install the official Perforce Ubuntu APT package (`p4-cli`).
+
+The runtime tool baseline includes:
+
+- VCS: `git`, `git-lfs`, `subversion`, `p4`
+- Search and inspection: `rg`, `fd`, `bat`, `jq`, `tree`, `universal-ctags`
+- Kubernetes and YAML: `kubectl`, `helm`, Mike Farah `yq`; use
+  `kubectl kustomize` for Kustomize overlays when a standalone `kustomize`
+  binary is not required
+- Container clients: `podman`, `buildah`, `skopeo`, plus an optional Docker
+  static CLI for Docker-compatible socket workflows
+- Build and static analysis: `build-essential`, `cmake`, `ninja`,
+  `pkg-config`, `clang`, `clang-format`, `clang-tidy`, `cppcheck`
+- Python: `python3`, `python`, `pip`, `venv`, Python headers, setuptools,
+  and wheel support
+- Debugging and troubleshooting: `gdb`, `valgrind`, `shellcheck`, `strace`,
+  `lsof`, `inotify-tools`, `curl`, `wget`, `dnsutils`, `iputils-ping`,
+  `iproute2`, `tcpdump`, `netcat-openbsd`, `openssl`
+- Data and sync helpers: `sqlite3`, `rsync`, `xxd`, `bsdextrautils`
+- Patch and archive helpers: `diffutils`, `patch`, `unzip`, `zip`, `xz`,
+  `tar`, `gzip`, `bzip2`, `zstd`, `lz4`
+
+On Debian/Ubuntu, distro packages expose `fdfind` and `batcat`. The image adds
+compatibility symlinks so agent guidance can consistently refer to `fd` and
+`bat`. The container also ships `p4` directly, so deployment no longer depends
+on bind-mounting a host-side Perforce binary.
+
+Optional build args for `deploy/Dockerfile` / `deploy.sh`:
+
+- `BASE_IMAGE=ubuntu:24.04`
+- `NODE_IMAGE=node:22-bookworm-slim`
+- `APT_MIRROR=http://mirrors.tencent.com/ubuntu`
+- `PERFORCE_APT_DISTRO=noble`
+- `NPM_REGISTRY=http://mirrors.tencent.com/npm/`
+- `PIP_INDEX_URL=https://mirrors.tencent.com/pypi/simple`
+- `KUBERNETES_APT_REPO_BASE=https://mirrors.tencent.com/kubernetes_new/core:/stable:`
+- `KUBERNETES_APT_REPO_VERSION=v1.36`
+- `HELM_APT_REPO=https://packages.buildkite.com/helm-linux/helm-debian/any/`
+- `HELM_APT_KEY_URL=https://packages.buildkite.com/helm-linux/helm-debian/gpgkey`
+- `YQ_VERSION=v4.53.2`
+- `YQ_DOWNLOAD_BASE=https://github.com/mikefarah/yq/releases/download`
+- `DOCKER_DOWNLOAD_MIRROR=https://mirrors.tencent.com/docker-ce/linux/static/stable/x86_64`
+
+`deploy.sh` still accepts the old `APK_MIRROR` environment variable as a
+compatibility alias, but new setups should use `APT_MIRROR`.
+
+Tencent mirrors provide the Kubernetes `kubernetes_new` apt path used above.
+No dedicated `mirrors.tencent.com/helm/` or `mirrors.tencent.com/yq/` endpoint
+was verified; for fully internal builds, point the Helm/yq args at an internal
+cache that preserves the same repository layout.
+
 ## Kilo Code Deployment Verification
 
 Kilo Code is the primary deployment-test agent for AICodeReviewer. The repeatable Kilo CLI path can be used for automation, but a production deployment is not considered verified until at least one end-to-end run has been checked from Kilo Code with the same model and workspace configuration.
@@ -111,9 +167,11 @@ AICR_ENABLE_CONTAINER_SANDBOX=true bash deploy/deploy.sh
 
 This tells `deploy.sh` to:
 
-1. Download a Docker static binary into the build context (talks to Podman's docker-compatible socket).
+1. Download a Docker static binary into the build context when Docker-compatible
+  socket clients are needed.
 2. Mount the host user-level Podman socket into the AICR container.
-3. Set `DOCKER_HOST` so the Docker CLI routes to the host Podman daemon.
+3. Set `CONTAINER_HOST` for the native `podman` CLI and `DOCKER_HOST` for the
+  Docker CLI so both route to the host Podman service.
 4. Add `--userns=keep-id --group-add keep-groups` so the container user can access the socket.
 
 When nested container sandboxing is disabled, `deploy.sh` still creates an empty `deploy/docker-static` placeholder in the source build context so clean syncs do not fail the Dockerfile's optional `COPY` step. The runtime image removes this empty placeholder rather than installing a zero-byte `docker` executable.
@@ -125,7 +183,18 @@ Requirements on the host:
 systemctl --user enable --now podman.socket
 ```
 
-In `config.yaml`, set `sandbox.kind: docker` (the Docker CLI inside the container talks to Podman):
+Prefer native Podman when reviewing containerized workloads through the host
+Podman socket:
+
+```yaml
+agent:
+  sandbox:
+    kind: podman
+    engine: podman
+```
+
+For Docker-compatible workflows, set `sandbox.kind: docker` and let the Docker
+CLI inside the container talk to Podman through `DOCKER_HOST`:
 
 ```yaml
 agent:
