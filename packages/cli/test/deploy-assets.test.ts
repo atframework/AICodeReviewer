@@ -50,6 +50,32 @@ describe("deploy assets", () => {
     expect(script).toContain("--build-arg \"KUBERNETES_APT_REPO_BASE=${KUBERNETES_APT_REPO_BASE}\"");
   });
 
+  it("creates the node user without assuming uid or gid 1000 are free", () => {
+    const dockerfile = readRepoFile("deploy/Dockerfile");
+
+    expect(dockerfile).toContain("if getent group 1000 >/dev/null; then groupadd node; else groupadd --gid 1000 node; fi;");
+    expect(dockerfile).toContain("if getent passwd 1000 >/dev/null; then useradd --gid node --create-home --shell /bin/bash node; else useradd --uid 1000 --gid node --create-home --shell /bin/bash node; fi;");
+  });
+
+  it("rewrites Ubuntu apt sources before the first apt update and supports ports variants", () => {
+    const dockerfile = readRepoFile("deploy/Dockerfile");
+
+    const buildStage = dockerfile.split("# ---------- Runtime stage ----------")[0] ?? dockerfile;
+    const mirrorSwitchIndex = buildStage.indexOf('MIRROR="${APT_MIRROR:-${APK_MIRROR:-}}"; \\');
+    const firstAptUpdateIndex = buildStage.indexOf("apt-get update; \\");
+
+    expect(dockerfile).toContain("COPY deploy/extra-ca/ /usr/local/share/ca-certificates/");
+    expect(dockerfile).toContain('s|//ports.ubuntu.com/\\? |//ports.ubuntu.com/ubuntu-ports |g');
+    expect(dockerfile).toContain("s|http://ports.ubuntu.com/ubuntu-ports|${MIRROR}|g");
+    expect(dockerfile).toContain("s|https://ports.ubuntu.com/ubuntu-ports|${MIRROR}|g");
+    expect(mirrorSwitchIndex).toBeGreaterThan(-1);
+    expect(firstAptUpdateIndex).toBeGreaterThan(-1);
+    expect(mirrorSwitchIndex).toBeLessThan(firstAptUpdateIndex);
+    expect(dockerfile).toContain("apt-get install -y --no-install-recommends ca-certificates; \\");
+    expect(dockerfile).toContain("update-ca-certificates; \\");
+    expect(dockerfile).toContain("apt-get install -y --no-install-recommends \\\n  apt-transport-https \\\n  ca-certificates \\\n  curl \\\n  gnupg; \\");
+  });
+
   it("copies sandbox and eval workspace dependencies into the runtime image", () => {
     const dockerfile = readRepoFile("deploy/Dockerfile");
 
