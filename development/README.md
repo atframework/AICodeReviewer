@@ -107,10 +107,11 @@ LLM_TOKEN="$(jq -r '.xiaomimimo_token_plan.token' development/secret/secret.json
 
 ### GitHub repo → selector / trigger / workspace 映射
 
-| GitHub 仓库             | 本地 selector 组     | 远端 trigger         | 远端 workspace     | 说明                               |
-| ----------------------- | -------------------- | -------------------- | ------------------ | ---------------------------------- |
-| `atframework/atsf4g-co` | `github-atframework` | `github-atframework` | `github-atsf4g-co` | 保持现有仓库，继续独立配置         |
-| `owent/libatapp`        | `github-owent`       | `github-owent`       | `github-libatapp`  | 新增仓库，独立 token/secret/filter |
+| GitHub 仓库             | 本地 selector 组     | 远端 trigger         | 远端 workspace       | 说明                               |
+| ----------------------- | -------------------- | -------------------- | -------------------- | ---------------------------------- |
+| `atframework/atsf4g-co` | `github-atframework` | `github-atframework` | `github-atsf4g-co`   | 保持现有仓库，继续独立配置         |
+| `owent/libatapp`        | `github-owent`       | `github-owent`       | `github-libatapp`    | 新增仓库，独立 token/secret/filter |
+| `owent/hiredis-happ`    | `github-owent`       | `github-owent`       | `github-hiredis-happ` | 复用 `github-owent` trigger/outputs |
 
 - `/webhooks/github` 现在允许挂多个 GitHub trigger profile；服务端会先按 webhook secret 校验，再按 `repository.full_name` 选择最终 trigger。
 - 不同 GitHub 仓库若使用不同 token、webhook secret、`watch_path`、`include_cr_file`、`exclude_cr_file`，不要继续复用同一个 trigger。
@@ -365,6 +366,7 @@ ssh -p 36000 ... 10.64.8.2 "podman exec aicr-test sh -c 'docker run --rm --netwo
 - P4：`ssl:p4.m-oa.com:8666`
 - GitHub：`https://github.com/atframework/atsf4g-co`
 - GitHub：`https://github.com/owent/libatapp`
+- GitHub：`https://github.com/owent/hiredis-happ`
 
 ## 11. Podman 故障排查
 

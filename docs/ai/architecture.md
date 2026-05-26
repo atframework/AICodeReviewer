@@ -376,6 +376,9 @@
   所有端点（`/login` 除外）需 `Authorization: Bearer <token>` 头。
 - Dashboard SPA 嵌入于 `/dashboard` 和 `/` 路径，由 `packages/server/src/dashboard/dashboard.html`
   提供。深色主题、登录表单、选项卡视图（overview / projects / providers / runs）。
+  即使尚未配置 admin env，`/` 与 `/dashboard` 也必须返回 dashboard shell，并显示
+  setup-required 提示而不是 404；若启用了 `path_prefix`，顶层 `/` 与 `/dashboard`
+  应重定向到带前缀的 dashboard 入口。
   Overview 标签有时间窗口选择器（today / this week / this month / all）；
   Projects 与 Providers 标签各自独立支持时间维度切换，按需调用
   `GET /stats/projects?since=` 与 `GET /stats/providers?since=`。

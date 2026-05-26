@@ -186,6 +186,7 @@
 - async trigger、失败报告、publisher 行为和 replay 需要统一落在可观测性合同里。
 - `/metrics` 的 histogram 使用 Prometheus 累计语义；同步和异步 review run 都应记录 metrics 与 `runs/<run_id>/run.json` 快照。
 - 内置观测首页已交付：认证后首屏展示整体、工程级、provider+模型级和时间窗口统计（today/thisWeek/thisMonth/all），使用 SQLite 持久化。
+- 首页路由合同：`/` 与 `/dashboard` 都应落到 dashboard；未配置 admin env 时首页显示 setup 提示而不是 404；启用 `path_prefix` 时顶层根路径应重定向到带前缀的 dashboard 入口。
 - 非 Prometheus/OTel 的观测数据层必须独立存在；未配置外部观测系统时，今日/本周/本月/汇总统计来自持久化 store/rollup，而不是进程内 metrics。
 - 观测持久化使用统一 `storage.database` 配置，当前已实现默认 `/app/data/aicr.sqlite` SQLite + Drizzle；Postgres 字段为集中化或多实例部署预留，运行时在未实现前必须显式拒绝而不是静默回退；`runs/<run_id>/run.json` 只作为审计快照，不作为聚合查询真源。
 - 观测查询缓存使用统一 `storage.cache` 配置，当前实时查询 SQLite；Redis 字段为跨进程/多实例缓存、session 和短期索引预留，不能作为唯一历史统计存储。

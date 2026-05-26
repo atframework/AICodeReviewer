@@ -16,9 +16,11 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
 .form-group input{width:100%;padding:0.625rem 0.75rem;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:1rem}
 .form-group input:focus{outline:none;border-color:var(--accent)}
 .btn{display:inline-flex;align-items:center;justify-content:center;padding:0.625rem 1.25rem;border:none;border-radius:6px;font-size:1rem;cursor:pointer;transition:opacity 0.15s}
+.btn:disabled{opacity:0.55;cursor:not-allowed}
 .btn:hover{opacity:0.85}
 .btn-primary{background:var(--accent);color:#fff;width:100%}
 .error-msg{color:var(--red);font-size:0.875rem;margin-top:0.5rem;text-align:center;min-height:1.25rem}
+.hint-msg{color:var(--muted);font-size:0.875rem;margin-top:0.75rem;text-align:center;line-height:1.5}
 .dashboard{display:none}
 .header{background:var(--card);border-bottom:1px solid var(--border);padding:0.75rem 1.5rem;display:flex;align-items:center;justify-content:space-between}
 .header h1{font-size:1.125rem;font-weight:600}
@@ -61,6 +63,7 @@ tr:hover td{background:rgba(59,130,246,0.05)}
 <div class="form-group"><label for="password">Password</label><input type="password" id="password" autocomplete="current-password" required></div>
 <button type="submit" class="btn btn-primary">Sign In</button>
 <div class="error-msg" id="login-error"></div>
+<div class="hint-msg" id="login-hint" style="display:none"></div>
 </form>
 </div>
 
@@ -153,6 +156,8 @@ tr:hover td{background:rgba(59,130,246,0.05)}
 
 <script>
 var authToken=null;
+var dashboardEnabled=__AICR_DASHBOARD_ENABLED__;
+var dashboardDisabledMessage=__AICR_DASHBOARD_DISABLED_MESSAGE__;
 var currentData=null;
 var currentWindow="today";
 var currentProjectWindow="today";
@@ -162,6 +167,23 @@ var providerStatsData=null;
 
 function $(s){return document.querySelector(s)}
 function $$(s){return document.querySelectorAll(s)}
+
+function setLoginHint(message){
+  var hint=document.getElementById("login-hint");
+  if(!hint)return;
+  hint.textContent=message||"";
+  hint.style.display=message?"block":"none";
+}
+
+function configureDisabledDashboard(){
+  var username=document.getElementById("username");
+  var password=document.getElementById("password");
+  var submit=document.querySelector('#login-form button[type="submit"]');
+  if(username)username.disabled=true;
+  if(password)password.disabled=true;
+  if(submit){submit.disabled=true;submit.textContent="Dashboard not configured"}
+  setLoginHint(dashboardDisabledMessage);
+}
 
 function formatNumber(n){return n==null?"-":n.toLocaleString()}
 function formatCost(n){return n==null?"-":"$"+n.toFixed(4)}
@@ -181,6 +203,10 @@ document.getElementById("login-form").addEventListener("submit",async function(e
   e.preventDefault();
   var err=document.getElementById("login-error");
   err.textContent="";
+  if(!dashboardEnabled){
+    setLoginHint(dashboardDisabledMessage);
+    return;
+  }
   var username=document.getElementById("username").value;
   var password=document.getElementById("password").value;
   try{
@@ -189,7 +215,8 @@ document.getElementById("login-form").addEventListener("submit",async function(e
       headers:{"Content-Type":"application/json"},
       body:JSON.stringify({username:username,password:password})
     });
-    var data=await r.json();
+    var data={};
+    try{data=await r.json()}catch(_parseError){}
     if(!r.ok){err.textContent=data.message||"Login failed";return}
     authToken=data.token;
     localStorage.setItem("aicr_token",authToken);
@@ -198,6 +225,7 @@ document.getElementById("login-form").addEventListener("submit",async function(e
 });
 
 function showDashboard(){
+  if(!dashboardEnabled)return;
   document.getElementById("login-view").style.display="none";
   document.getElementById("dashboard-view").style.display="block";
   refreshStats();
@@ -405,8 +433,16 @@ function esc(s){
   return d.innerHTML;
 }
 
-var saved=localStorage.getItem("aicr_token");
-if(saved){authToken=saved;showDashboard()}
+function initDashboard(){
+  if(!dashboardEnabled){
+    configureDisabledDashboard();
+    return;
+  }
+  var saved=localStorage.getItem("aicr_token");
+  if(saved){authToken=saved;showDashboard()}
+}
+
+initDashboard();
 </script>
 </body>
 </html>
