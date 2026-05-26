@@ -181,7 +181,8 @@ curl -sf https://aicr.m-oa.com:6023/healthz
 
 构建镜像时默认使用 `ubuntu:24.04` + 官方 `node:22-bookworm-slim`
 userspace。国内环境建议切换 Ubuntu apt、Kubernetes apt、npm、PyPI/pip
-和 Docker static 下载源，并在需要时把 `NODE_IMAGE` 指向镜像仓库缓存。
+和 Docker static 下载源；如果目标机已经统一配置容器 registry mirror，通常
+不必单独设置 `NODE_IMAGE`，只有需要覆盖默认拉取策略时再显式指定。
 这样既能保留官方 Perforce Ubuntu APT 支持，又避免因切回 Alpine /
 Wolfi 而失去 `p4-cli` 的可安装性。
 
@@ -190,8 +191,8 @@ Wolfi 而失去 `p4-cli` 的可安装性。
 | 环境变量                      | 用途                                  | 默认值                                                         | 国内/镜像建议                                                      |
 | ----------------------------- | ------------------------------------- | -------------------------------------------------------------- | ------------------------------------------------------------------ |
 | `BASE_IMAGE`                  | Ubuntu 24.04 兼容基础镜像             | `ubuntu:24.04`                                                 | 保持默认，或替换为自建/缓存的 Ubuntu 24.04 mirror                  |
-| `NODE_IMAGE`                  | Node 22 userspace 来源镜像            | `node:22-bookworm-slim`                                        | `mirror.ccs.tencentyun.com/library/node:22-bookworm-slim`          |
-| `APT_MIRROR`                  | Ubuntu apt 包源                       | （使用镜像内置源）                                             | `http://mirrors.tencent.com/ubuntu`                                |
+| `NODE_IMAGE`                  | Node 22 userspace 来源镜像            | `node:22-bookworm-slim`                                        | 默认不设置；如需显式覆盖，再填镜像仓库地址                         |
+| `APT_MIRROR`                  | Ubuntu apt 包源                       | （使用镜像内置源）                                             | `http://mirrors.ustc.edu.cn/ubuntu`                                |
 | `PERFORCE_APT_DISTRO`         | Perforce apt 仓库发行版代号           | `noble`                                                        | `noble`                                                            |
 | `NPM_REGISTRY`                | pnpm/npm registry                     | `https://registry.npmjs.org`                                   | `http://mirrors.tencent.com/npm/`                                  |
 | `NPM_STRICT_SSL`              | npm strict-ssl                        | `true`                                                         | `false`（HTTP 镜像必须）                                           |
@@ -207,7 +208,11 @@ Wolfi 而失去 `p4-cli` 的可安装性。
 
 > **关于 `BASE_IMAGE`**：默认使用 `ubuntu:24.04`，因为官方 Perforce 包仓库支持 Ubuntu APT，且 `p4-cli` 不适合依赖 Alpine / Wolfi / 非 glibc 发行版。`BASE_IMAGE` 只建议替换为 Ubuntu 24.04 的镜像仓库地址，不建议再切回 Alpine / Chainguard / Wolfi。
 >
-> **关于 `APT_MIRROR`**：`deploy.sh` 仍接受旧的 `APK_MIRROR` 变量作为兼容别名，但新文档统一使用 `APT_MIRROR`。
+> **关于 `NODE_IMAGE`**：如果目标机已经在 Podman/Docker 侧统一配置了容器 registry mirror，保持默认 `node:22-bookworm-slim` 即可，不必在每次部署时额外导出 `NODE_IMAGE`；只有需要按任务覆盖拉取源时再显式设置。
+>
+> **关于 `APT_MIRROR`**：`deploy.sh` 仍接受旧的 `APK_MIRROR` 变量作为兼容别名，但新文档统一使用 `APT_MIRROR`。当前国内示例改为使用 USTC 的 HTTP Ubuntu 镜像：`amd64/i386` 使用 `http://mirrors.ustc.edu.cn/ubuntu`，其他架构按 USTC `ubuntu-ports` 文档改为 `http://mirrors.ustc.edu.cn/ubuntu-ports`。Dockerfile 会在首次 `apt-get update` 之前同时兼容替换 `archive.ubuntu.com`、`security.ubuntu.com` 与 `ports.ubuntu.com/ubuntu-ports`（含 `sources.list` / `ubuntu.sources` 两种格式），因此不再需要先回官方源安装 `ca-certificates`。
+>
+> **关于额外企业 CA**：如果目标机通过企业代理或本地缓存访问外部 HTTPS 仓库（例如 `package.perforce.com`、Helm Buildkite 源或 GitHub release），请把目标机 `/usr/local/share/ca-certificates/*.crt` 复制到构建上下文的 `deploy/extra-ca/`。Dockerfile 会在联网前把这些额外根证书安装进镜像信任链。
 >
 > **关于 `PIP_INDEX_URL`**：Dockerfile 会把该值写入 `/etc/pip.conf` 并设置 `PIP_INDEX_URL` 环境变量；腾讯 PyPI 镜像必须包含 `/pypi/simple` 路径。
 >
@@ -221,8 +226,7 @@ Wolfi 而失去 `p4-cli` 的可安装性。
 
 ```bash
 export BASE_IMAGE=ubuntu:24.04
-export NODE_IMAGE=mirror.ccs.tencentyun.com/library/node:22-bookworm-slim
-export APT_MIRROR=http://mirrors.tencent.com/ubuntu
+export APT_MIRROR=http://mirrors.ustc.edu.cn/ubuntu
 export PERFORCE_APT_DISTRO=noble
 export NPM_REGISTRY=http://mirrors.tencent.com/npm/
 export NPM_STRICT_SSL=false
@@ -268,9 +272,10 @@ ssh -p 36000 -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no \
   可安装性和当前工具基线。
 - **公网环境 `podman build` 网络限制**：公网环境 `apt-get`、Perforce APT
   仓库、Kubernetes APT、Helm APT、GitHub release、npm、pip 或 Docker
-  static 下载都可能因网络策略失败；优先配置 `APT_MIRROR`、`NODE_IMAGE`
-  mirror、`KUBERNETES_APT_REPO_BASE`、`NPM_REGISTRY`、`PIP_INDEX_URL` 和
-  `DOCKER_DOWNLOAD_MIRROR`。Helm/yq 如果无法直连官方源，使用内部缓存
+  static 下载都可能因网络策略失败；优先配置 `APT_MIRROR`、
+  `KUBERNETES_APT_REPO_BASE`、`NPM_REGISTRY`、`PIP_INDEX_URL` 和
+  `DOCKER_DOWNLOAD_MIRROR`。如果目标机没有统一配置容器 registry mirror，
+  再按需覆盖 `NODE_IMAGE`。Helm/yq 如果无法直连官方源，使用内部缓存
   覆盖 `HELM_APT_REPO`、`HELM_APT_KEY_URL`、`YQ_DOWNLOAD_BASE`。
 
 ## 8. 测试验收环境（与生产隔离）

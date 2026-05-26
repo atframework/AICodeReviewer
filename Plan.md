@@ -327,8 +327,10 @@
 - 首选单容器自托管，HTTP 入站由反向代理处理 TLS。
 - 持久化保留 `config.yaml`、`.env`、workspace 数据、数据库和日志目录。
 - Podman / Docker 使用同一构建与运行合同，差异由 engine 选择吸收。
-- 国内部署示例统一使用 `mirrors.tencent.com` 的 Ubuntu、npm、PyPI、
-  Kubernetes APT 与 Docker static 镜像入口；Helm/yq 暂无已验证的腾讯
-  专用镜像时保留官方源或使用内部缓存覆盖 build arg。
+- 国内部署示例统一使用 USTC 的 Ubuntu APT 镜像（`amd64/i386` 默认
+  `http://mirrors.ustc.edu.cn/ubuntu`，其他架构按文档切换到
+  `http://mirrors.ustc.edu.cn/ubuntu-ports`），npm、PyPI、Kubernetes
+  APT 与 Docker static 仍使用 `mirrors.tencent.com`；Helm/yq 暂无已验证
+  的腾讯专用镜像时保留官方源或使用内部缓存覆盖 build arg。
 - 健康检查统一使用 `/healthz`。
 - 部署与验收入口：`example/README.md`、`docs/podman.md` 与相关 skill。

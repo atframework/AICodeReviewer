@@ -6,7 +6,7 @@
 #   BASE_IMAGE   — Distro base image for build/runtime stages (default: ubuntu:24.04)
 #   NODE_IMAGE   — Official Node.js image used as the Node 22 userspace source
 #                  (default: node:22-bookworm-slim)
-#   APT_MIRROR   — Ubuntu apt mirror root (e.g. http://mirrors.tencent.com/ubuntu)
+#   APT_MIRROR   — Ubuntu apt mirror root (e.g. http://mirrors.ustc.edu.cn/ubuntu)
 #   APK_MIRROR   — Deprecated alias for APT_MIRROR (kept for backward compatibility)
 #   PERFORCE_APT_DISTRO — Ubuntu codename for Perforce APT repo (default: noble)
 #   NPM_REGISTRY — npm/pnpm registry (e.g. http://mirrors.tencent.com/npm/)
@@ -44,6 +44,8 @@ ENV PIP_NO_CACHE_DIR=1
 
 USER root
 
+COPY deploy/extra-ca/ /usr/local/share/ca-certificates/
+
 RUN set -eux; \
   MIRROR="${APT_MIRROR:-${APK_MIRROR:-}}"; \
   if [ -n "${MIRROR}" ]; then \
@@ -53,14 +55,19 @@ RUN set -eux; \
   -e "s|http://security.ubuntu.com/ubuntu|${MIRROR}|g" \
   -e "s|https://archive.ubuntu.com/ubuntu|${MIRROR}|g" \
   -e "s|https://security.ubuntu.com/ubuntu|${MIRROR}|g" \
+  -e "s|http://ports.ubuntu.com/ubuntu-ports|${MIRROR}|g" \
+  -e "s|https://ports.ubuntu.com/ubuntu-ports|${MIRROR}|g" \
   /etc/apt/sources.list.d/ubuntu.sources; \
   fi; \
   if [ -f /etc/apt/sources.list ]; then \
   sed -i \
+  -e 's|//ports.ubuntu.com/\? |//ports.ubuntu.com/ubuntu-ports |g' \
   -e "s|http://archive.ubuntu.com/ubuntu|${MIRROR}|g" \
   -e "s|http://security.ubuntu.com/ubuntu|${MIRROR}|g" \
   -e "s|https://archive.ubuntu.com/ubuntu|${MIRROR}|g" \
   -e "s|https://security.ubuntu.com/ubuntu|${MIRROR}|g" \
+  -e "s|http://ports.ubuntu.com/ubuntu-ports|${MIRROR}|g" \
+  -e "s|https://ports.ubuntu.com/ubuntu-ports|${MIRROR}|g" \
   /etc/apt/sources.list; \
   fi; \
   fi; \
@@ -68,8 +75,15 @@ RUN set -eux; \
   && ! grep -q '^Components: .*universe' /etc/apt/sources.list.d/ubuntu.sources; then \
   sed -i 's/^Components: \(.*\)$/Components: \1 universe/' /etc/apt/sources.list.d/ubuntu.sources; \
   fi; \
-  getent group node >/dev/null || groupadd --gid 1000 node; \
-  id -u node >/dev/null 2>&1 || useradd --uid 1000 --gid 1000 --create-home --shell /bin/bash node; \
+  apt-get update; \
+  apt-get install -y --no-install-recommends ca-certificates; \
+  update-ca-certificates; \
+  if ! getent group node >/dev/null; then \
+  if getent group 1000 >/dev/null; then groupadd node; else groupadd --gid 1000 node; fi; \
+  fi; \
+  if ! id -u node >/dev/null 2>&1; then \
+  if getent passwd 1000 >/dev/null; then useradd --gid node --create-home --shell /bin/bash node; else useradd --uid 1000 --gid node --create-home --shell /bin/bash node; fi; \
+  fi; \
   apt-get update; \
   apt-get install -y --no-install-recommends \
   build-essential \
@@ -136,6 +150,8 @@ ENV PIP_NO_CACHE_DIR=1
 
 USER root
 
+COPY deploy/extra-ca/ /usr/local/share/ca-certificates/
+
 RUN set -eux; \
   MIRROR="${APT_MIRROR:-${APK_MIRROR:-}}"; \
   if [ -n "${MIRROR}" ]; then \
@@ -145,14 +161,19 @@ RUN set -eux; \
   -e "s|http://security.ubuntu.com/ubuntu|${MIRROR}|g" \
   -e "s|https://archive.ubuntu.com/ubuntu|${MIRROR}|g" \
   -e "s|https://security.ubuntu.com/ubuntu|${MIRROR}|g" \
+  -e "s|http://ports.ubuntu.com/ubuntu-ports|${MIRROR}|g" \
+  -e "s|https://ports.ubuntu.com/ubuntu-ports|${MIRROR}|g" \
   /etc/apt/sources.list.d/ubuntu.sources; \
   fi; \
   if [ -f /etc/apt/sources.list ]; then \
   sed -i \
+  -e 's|//ports.ubuntu.com/\? |//ports.ubuntu.com/ubuntu-ports |g' \
   -e "s|http://archive.ubuntu.com/ubuntu|${MIRROR}|g" \
   -e "s|http://security.ubuntu.com/ubuntu|${MIRROR}|g" \
   -e "s|https://archive.ubuntu.com/ubuntu|${MIRROR}|g" \
   -e "s|https://security.ubuntu.com/ubuntu|${MIRROR}|g" \
+  -e "s|http://ports.ubuntu.com/ubuntu-ports|${MIRROR}|g" \
+  -e "s|https://ports.ubuntu.com/ubuntu-ports|${MIRROR}|g" \
   /etc/apt/sources.list; \
   fi; \
   fi; \
@@ -166,6 +187,8 @@ RUN set -eux; \
   ca-certificates \
   curl \
   gnupg; \
+  update-ca-certificates; \
+  apt-get update; \
   mkdir -p /etc/apt/keyrings; \
   mkdir -p /usr/share/keyrings; \
   curl -fsSL https://package.perforce.com/perforce.pubkey | gpg --dearmor -o /usr/share/keyrings/perforce.gpg; \
@@ -256,8 +279,12 @@ RUN set -eux; \
   curl -fsSL "${YQ_DOWNLOAD_BASE}/${YQ_VERSION}/yq_${yq_platform}" -o /usr/local/bin/yq; \
   chmod +x /usr/local/bin/yq; \
   rm -rf /var/lib/apt/lists/*; \
-  getent group node >/dev/null || groupadd --gid 1000 node; \
-  id -u node >/dev/null 2>&1 || useradd --uid 1000 --gid 1000 --create-home --shell /bin/bash node
+  if ! getent group node >/dev/null; then \
+  if getent group 1000 >/dev/null; then groupadd node; else groupadd --gid 1000 node; fi; \
+  fi; \
+  if ! id -u node >/dev/null 2>&1; then \
+  if getent passwd 1000 >/dev/null; then useradd --gid node --create-home --shell /bin/bash node; else useradd --uid 1000 --gid node --create-home --shell /bin/bash node; fi; \
+  fi
 
 COPY --from=node-base /usr/local/ /usr/local/
 

@@ -73,8 +73,8 @@ on bind-mounting a host-side Perforce binary.
 Optional build args for `deploy/Dockerfile` / `deploy.sh`:
 
 - `BASE_IMAGE=ubuntu:24.04`
-- `NODE_IMAGE=node:22-bookworm-slim`
-- `APT_MIRROR=http://mirrors.tencent.com/ubuntu`
+- `NODE_IMAGE=node:22-bookworm-slim` (optional; omit this when the target host already rewrites registry pulls through a global mirror)
+- `APT_MIRROR=http://mirrors.ustc.edu.cn/ubuntu`
 - `PERFORCE_APT_DISTRO=noble`
 - `NPM_REGISTRY=http://mirrors.tencent.com/npm/`
 - `PIP_INDEX_URL=https://mirrors.tencent.com/pypi/simple`
@@ -89,10 +89,27 @@ Optional build args for `deploy/Dockerfile` / `deploy.sh`:
 `deploy.sh` still accepts the old `APK_MIRROR` environment variable as a
 compatibility alias, but new setups should use `APT_MIRROR`.
 
+USTC mirror docs recommend `http://mirrors.ustc.edu.cn/ubuntu` for
+`amd64/i386`, while `arm64`/`armhf`/`ppc64el`/`s390x` should use
+`http://mirrors.ustc.edu.cn/ubuntu-ports`. `deploy/Dockerfile` rewrites both
+the standard Ubuntu `archive/security` entries and the `ports.ubuntu.com`
+variants before the first `apt-get update`, so the HTTP mirror works without a
+pre-bootstrap CA fetch.
+
 Tencent mirrors provide the Kubernetes `kubernetes_new` apt path used above.
 No dedicated `mirrors.tencent.com/helm/` or `mirrors.tencent.com/yq/` endpoint
 was verified; for fully internal builds, point the Helm/yq args at an internal
 cache that preserves the same repository layout.
+
+If your deployment host reaches external HTTPS repositories through a corporate
+proxy or local mirror with a private root CA, copy the required `.crt` files
+into `deploy/extra-ca/` before building. `deploy/Dockerfile` installs those
+extra certificates before fetching external keys, npm packages, or release
+artifacts.
+
+If the target host already configures Podman/Docker registry mirrors globally,
+leave `NODE_IMAGE` unset and let the default `node:22-bookworm-slim` pull flow
+use that host-level configuration.
 
 ## Kilo Code Deployment Verification
 
