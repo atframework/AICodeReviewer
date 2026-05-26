@@ -988,14 +988,38 @@ async function handleReviewOrchestration(
 
 export function createServerApp(options: ServerAppOptions = {}): Hono {
   const app = new Hono();
+  const pathPrefix = options.pathPrefix ? normalizePathPrefix(options.pathPrefix) : undefined;
 
-  if (options.pathPrefix) {
-    app.route(options.pathPrefix, createRoutedApp(options));
+  if (pathPrefix) {
+    registerPathPrefixedDashboardRedirects(app, pathPrefix);
+    app.route(pathPrefix, createRoutedApp(options));
   } else {
     mountRoutes(app, options);
   }
 
   return app;
+}
+
+function normalizePathPrefix(pathPrefix: string): string {
+  const normalized = pathPrefix.startsWith("/") ? pathPrefix : `/${pathPrefix}`;
+  const trimmed = normalized.replace(/\/+$/u, "");
+  return trimmed || "/";
+}
+
+function registerPathPrefixedDashboardRedirects(app: Hono, pathPrefix: string): void {
+  if (pathPrefix === "/") {
+    return;
+  }
+
+  const dashboardPath = `${pathPrefix}/dashboard`;
+  app.get("/", (c) => c.redirect(dashboardPath));
+  app.get("/dashboard", (c) => c.redirect(dashboardPath));
+}
+
+function registerDashboardRoutes(app: Hono, options: ServerAppOptions): void {
+  const dashboardHtml = getDashboardHtml({ enabled: Boolean(options.observability) });
+  app.get("/dashboard", (c) => c.html(dashboardHtml));
+  app.get("/", (c) => c.html(dashboardHtml));
 }
 
 function createRoutedApp(options: ServerAppOptions): Hono {
@@ -1011,12 +1035,11 @@ function mountRoutes(app: Hono, options: ServerAppOptions): void {
   app.get("/healthz", (c) => c.text("ok"));
   app.get("/readyz", (c) => c.text("ready"));
   app.get("/metrics", (c) => c.text(formatPrometheusMetrics(metrics)));
+  registerDashboardRoutes(app, options);
 
   if (options.observability) {
     const observabilityApi = createObservabilityApi(options.observability);
     app.route("/api/admin", observabilityApi);
-    app.get("/dashboard", (c) => c.html(getDashboardHtml()));
-    app.get("/", (c) => c.html(getDashboardHtml()));
   }
 
   if (options.auth) {
