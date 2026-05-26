@@ -136,6 +136,7 @@ describe("createGiteaProblemIssueDispatcher", () => {
       "GET https://gitea.example/api/v1/repos/owent/example/issues?state=open&type=issues&limit=20&page=1",
       "POST https://gitea.example/api/v1/repos/owent/example/issues/42/comments",
       "PATCH https://gitea.example/api/v1/repos/owent/example/issues/42",
+      "GET https://gitea.example/api/v1/repos/owent/example/issues/42",
     ]);
     expect(JSON.parse(calls[2]?.init?.body ?? "{}")).toEqual({ state: "closed" });
   });
@@ -558,5 +559,420 @@ describe("createGiteaProblemIssueDispatcher consolidated mode", () => {
 
     expect(results).toEqual([]);
     expect(calls).toHaveLength(1);
+  });
+
+  it("shows resolved section when new commit drops some problems", async () => {
+    const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
+    const scopeFp = computeScopeFingerprint("aicr-issues", "owent", "example");
+    const oldBody = [
+      "<!-- aicr:managed=problem-issue -->",
+      "<!-- aicr:consolidated=true -->",
+      "<!-- aicr:channel=aicr-issues -->",
+      "<!-- aicr:label=aicr-managed -->",
+      `<!-- aicr:scope_fingerprint=${scopeFp} -->`,
+      "<!-- aicr:commit=aaa111 -->",
+      "<!-- aicr:open_problems=fp-sql,fp-perf -->",
+      "",
+      "#### CRITICAL (1)",
+      "",
+      "**security** — `src/auth.ts:12` <!-- aicr:fp=fp-sql -->",
+      "",
+      "SQL query uses unsanitized input.",
+      "",
+      "#### MEDIUM (1)",
+      "",
+      "**performance** — `src/utils.ts:30` <!-- aicr:fp=fp-perf -->",
+      "",
+      "Inefficient loop detected.",
+      "",
+    ].join("\n");
+
+    const dispatcher = createGiteaProblemIssueDispatcher({
+      baseUrl: "https://gitea.example",
+      owner: "owent",
+      repo: "example",
+      channelName: "aicr-issues",
+      issueMode: "consolidated",
+      headSha: "bbb222",
+      fetch: async (url, init) => {
+        calls.push({ url, init });
+        if (url.includes("/issues?")) {
+          return response([{
+            number: 42,
+            title: "[AICR] Code Review Report ...",
+            body: oldBody,
+            state: "open",
+          }]);
+        }
+        if (url.includes("/compare/")) {
+          return response({ status: "ahead", ahead_by: 1, behind_by: 0 });
+        }
+        return response({ id: 42, number: 42 });
+      },
+    });
+
+    const results = await dispatcher.reconcileProblems([problem], "Updated summary");
+
+    expect(results).toHaveLength(1);
+    expect(results[0]?.raw).toMatchObject({ action: "updated_consolidated", issueNumber: 42 });
+
+    const patchCall = calls.find((c) => c.init?.method === "PATCH");
+    expect(patchCall).toBeDefined();
+    const body = JSON.parse(patchCall?.init?.body ?? "{}");
+    expect(body.body).toContain("Resolved");
+    expect(body.body).toContain("performance");
+    expect(body.body).toContain("src/utils.ts:30");
+    expect(body.body).toContain("<!-- aicr:commit=bbb222 -->");
+    expect(body.body).toContain("SQL query uses unsanitized input");
+  });
+
+  it("skips resolution on same commit", async () => {
+    const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
+    const scopeFp = computeScopeFingerprint("aicr-issues", "owent", "example");
+    const oldBody = [
+      "<!-- aicr:managed=problem-issue -->",
+      "<!-- aicr:consolidated=true -->",
+      "<!-- aicr:channel=aicr-issues -->",
+      "<!-- aicr:label=aicr-managed -->",
+      `<!-- aicr:scope_fingerprint=${scopeFp} -->`,
+      "<!-- aicr:commit=abc123 -->",
+      "<!-- aicr:open_problems=fp-sql,fp-perf -->",
+      "",
+      "Old content",
+    ].join("\n");
+
+    const dispatcher = createGiteaProblemIssueDispatcher({
+      baseUrl: "https://gitea.example",
+      owner: "owent",
+      repo: "example",
+      channelName: "aicr-issues",
+      issueMode: "consolidated",
+      headSha: "abc123",
+      fetch: async (url, init) => {
+        calls.push({ url, init });
+        if (url.includes("/issues?")) {
+          return response([{
+            number: 42,
+            title: "[AICR] ...",
+            body: oldBody,
+            state: "open",
+          }]);
+        }
+        return response({ id: 42, number: 42 });
+      },
+    });
+
+    const results = await dispatcher.reconcileProblems([problem], "Same commit");
+
+    expect(results).toHaveLength(1);
+    expect(results[0]?.raw).toMatchObject({ action: "updated_consolidated" });
+    const patchCall = calls.find((c) => c.init?.method === "PATCH");
+    const body = JSON.parse(patchCall?.init?.body ?? "{}");
+    expect(body.body).not.toContain("Resolved");
+    expect(body.body).toContain("Same commit");
+  });
+
+  it("skips update when current commit is behind stored commit", async () => {
+    const scopeFp = computeScopeFingerprint("aicr-issues", "owent", "example");
+    const oldBody = [
+      "<!-- aicr:managed=problem-issue -->",
+      "<!-- aicr:consolidated=true -->",
+      "<!-- aicr:channel=aicr-issues -->",
+      "<!-- aicr:label=aicr-managed -->",
+      `<!-- aicr:scope_fingerprint=${scopeFp} -->`,
+      "<!-- aicr:commit=bbb222 -->",
+      "<!-- aicr:open_problems=fp-sql -->",
+      "",
+      "Old content",
+    ].join("\n");
+
+    const dispatcher = createGiteaProblemIssueDispatcher({
+      baseUrl: "https://gitea.example",
+      owner: "owent",
+      repo: "example",
+      channelName: "aicr-issues",
+      issueMode: "consolidated",
+      headSha: "aaa111",
+      fetch: async (url, _init) => {
+        if (url.includes("/issues?")) {
+          return response([{
+            number: 42,
+            title: "[AICR] ...",
+            body: oldBody,
+            state: "open",
+          }]);
+        }
+        if (url.includes("/compare/")) {
+          return response({ status: "behind", ahead_by: 0, behind_by: 1 });
+        }
+        throw new Error("Unexpected request");
+      },
+    });
+
+    const results = await dispatcher.reconcileProblems([problem]);
+
+    expect(results).toEqual([]);
+  });
+
+  it("updates without categorization when compare API fails", async () => {
+    const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
+    const scopeFp = computeScopeFingerprint("aicr-issues", "owent", "example");
+    const oldBody = [
+      "<!-- aicr:managed=problem-issue -->",
+      "<!-- aicr:consolidated=true -->",
+      "<!-- aicr:channel=aicr-issues -->",
+      "<!-- aicr:label=aicr-managed -->",
+      `<!-- aicr:scope_fingerprint=${scopeFp} -->`,
+      "<!-- aicr:commit=aaa111 -->",
+      "<!-- aicr:open_problems=fp-sql,fp-perf -->",
+      "",
+      "Old content",
+    ].join("\n");
+
+    const dispatcher = createGiteaProblemIssueDispatcher({
+      baseUrl: "https://gitea.example",
+      owner: "owent",
+      repo: "example",
+      channelName: "aicr-issues",
+      issueMode: "consolidated",
+      headSha: "bbb222",
+      fetch: async (url, init) => {
+        calls.push({ url, init });
+        if (url.includes("/issues?")) {
+          return response([{
+            number: 42,
+            title: "[AICR] ...",
+            body: oldBody,
+            state: "open",
+          }]);
+        }
+        if (url.includes("/compare/")) {
+          return response({}, 500);
+        }
+        return response({ id: 42, number: 42 });
+      },
+    });
+
+    const results = await dispatcher.reconcileProblems([problem]);
+
+    expect(results).toHaveLength(1);
+    expect(results[0]?.raw).toMatchObject({ action: "updated_consolidated" });
+    const patchCall = calls.find((c) => c.init?.method === "PATCH");
+    const body = JSON.parse(patchCall?.init?.body ?? "{}");
+    expect(body.body).not.toContain("Resolved");
+  });
+
+  it("backward compatible with issue lacking commit marker", async () => {
+    const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
+    const scopeFp = computeScopeFingerprint("aicr-issues", "owent", "example");
+    const oldBody = [
+      "<!-- aicr:managed=problem-issue -->",
+      "<!-- aicr:consolidated=true -->",
+      "<!-- aicr:channel=aicr-issues -->",
+      "<!-- aicr:label=aicr-managed -->",
+      `<!-- aicr:scope_fingerprint=${scopeFp} -->`,
+      "",
+      "Old content",
+    ].join("\n");
+
+    const dispatcher = createGiteaProblemIssueDispatcher({
+      baseUrl: "https://gitea.example",
+      owner: "owent",
+      repo: "example",
+      channelName: "aicr-issues",
+      issueMode: "consolidated",
+      headSha: "newcommit",
+      fetch: async (url, init) => {
+        calls.push({ url, init });
+        if (url.includes("/issues?")) {
+          return response([{
+            number: 42,
+            title: "[AICR] ...",
+            body: oldBody,
+            state: "open",
+          }]);
+        }
+        return response({ id: 42, number: 42 });
+      },
+    });
+
+    const results = await dispatcher.reconcileProblems([problem]);
+
+    expect(results).toHaveLength(1);
+    expect(results[0]?.raw).toMatchObject({ action: "updated_consolidated" });
+  });
+
+  it("resolved section falls back to raw fingerprint when old body is not parseable", async () => {
+    const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
+    const scopeFp = computeScopeFingerprint("aicr-issues", "owent", "example");
+    const oldBody = [
+      "<!-- aicr:managed=problem-issue -->",
+      "<!-- aicr:consolidated=true -->",
+      "<!-- aicr:channel=aicr-issues -->",
+      "<!-- aicr:label=aicr-managed -->",
+      `<!-- aicr:scope_fingerprint=${scopeFp} -->`,
+      "<!-- aicr:commit=aaa111 -->",
+      "<!-- aicr:open_problems=fp-sql,fp-perf -->",
+      "",
+      "Old content in unparsable format",
+    ].join("\n");
+
+    const dispatcher = createGiteaProblemIssueDispatcher({
+      baseUrl: "https://gitea.example",
+      owner: "owent",
+      repo: "example",
+      channelName: "aicr-issues",
+      issueMode: "consolidated",
+      headSha: "bbb222",
+      fetch: async (url, init) => {
+        calls.push({ url, init });
+        if (url.includes("/issues?")) {
+          return response([{
+            number: 42,
+            title: "[AICR] ...",
+            body: oldBody,
+            state: "open",
+          }]);
+        }
+        if (url.includes("/compare/")) {
+          return response({ status: "ahead", ahead_by: 1, behind_by: 0 });
+        }
+        return response({ id: 42, number: 42 });
+      },
+    });
+
+    const results = await dispatcher.reconcileProblems([problem]);
+
+    expect(results).toHaveLength(1);
+    const patchCall = calls.find((c) => c.init?.method === "PATCH");
+    const body = JSON.parse(patchCall?.init?.body ?? "{}");
+    expect(body.body).toContain("Resolved");
+    expect(body.body).toContain("fp-perf");
+    expect(body.body).toContain("~~`fp-perf`~~");
+  });
+
+  it("categorizes problems when headSha is not provided but open_problems marker exists", async () => {
+    const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
+    const scopeFp = computeScopeFingerprint("aicr-issues", "owent", "example");
+    const oldBody = [
+      "<!-- aicr:managed=problem-issue -->",
+      "<!-- aicr:consolidated=true -->",
+      "<!-- aicr:channel=aicr-issues -->",
+      "<!-- aicr:label=aicr-managed -->",
+      `<!-- aicr:scope_fingerprint=${scopeFp} -->`,
+      "<!-- aicr:commit=aaa111 -->",
+      "<!-- aicr:open_problems=fp-sql,fp-perf -->",
+      "",
+      "#### CRITICAL (1)",
+      "",
+      "**security** — `src/auth.ts:12` <!-- aicr:fp=fp-sql -->",
+      "",
+      "SQL query uses unsanitized input.",
+      "",
+      "#### MEDIUM (1)",
+      "",
+      "**performance** — `src/utils.ts:30` <!-- aicr:fp=fp-perf -->",
+      "",
+      "Inefficient loop detected.",
+      "",
+    ].join("\n");
+
+    const dispatcher = createGiteaProblemIssueDispatcher({
+      baseUrl: "https://gitea.example",
+      owner: "owent",
+      repo: "example",
+      channelName: "aicr-issues",
+      issueMode: "consolidated",
+      fetch: async (url, init) => {
+        calls.push({ url, init });
+        if (url.includes("/issues?")) {
+          return response([{
+            number: 42,
+            title: "[AICR] ...",
+            body: oldBody,
+            state: "open",
+          }]);
+        }
+        return response({ id: 42, number: 42 });
+      },
+    });
+
+    const results = await dispatcher.reconcileProblems([problem]);
+
+    expect(results).toHaveLength(1);
+    const patchCall = calls.find((c) => c.init?.method === "PATCH");
+    const body = JSON.parse(patchCall?.init?.body ?? "{}");
+    expect(body.body).toContain("Resolved");
+    expect(body.body).toContain("performance");
+  });
+
+  it("marks all previous problems as resolved when new commit has entirely different problems", async () => {
+    const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
+    const scopeFp = computeScopeFingerprint("aicr-issues", "owent", "example");
+    const oldBody = [
+      "<!-- aicr:managed=problem-issue -->",
+      "<!-- aicr:consolidated=true -->",
+      "<!-- aicr:channel=aicr-issues -->",
+      "<!-- aicr:label=aicr-managed -->",
+      `<!-- aicr:scope_fingerprint=${scopeFp} -->`,
+      "<!-- aicr:commit=aaa111 -->",
+      "<!-- aicr:open_problems=fp-sql,fp-perf -->",
+      "",
+      "#### CRITICAL (1)",
+      "",
+      "**security** — `src/auth.ts:12` <!-- aicr:fp=fp-sql -->",
+      "",
+      "SQL query uses unsanitized input.",
+      "",
+      "#### MEDIUM (1)",
+      "",
+      "**performance** — `src/utils.ts:30` <!-- aicr:fp=fp-perf -->",
+      "",
+      "Inefficient loop detected.",
+      "",
+    ].join("\n");
+
+    const newProblem: ReviewProblem = {
+      file: "src/new.ts",
+      line: 1,
+      severity: "high",
+      category: "correctness",
+      message: "Brand new issue.",
+      fingerprint: "fp-new",
+    };
+
+    const dispatcher = createGiteaProblemIssueDispatcher({
+      baseUrl: "https://gitea.example",
+      owner: "owent",
+      repo: "example",
+      channelName: "aicr-issues",
+      issueMode: "consolidated",
+      headSha: "bbb222",
+      fetch: async (url, init) => {
+        calls.push({ url, init });
+        if (url.includes("/issues?")) {
+          return response([{
+            number: 42,
+            title: "[AICR] ...",
+            body: oldBody,
+            state: "open",
+          }]);
+        }
+        if (url.includes("/compare/")) {
+          return response({ status: "ahead", ahead_by: 1, behind_by: 0 });
+        }
+        return response({ id: 42, number: 42 });
+      },
+    });
+
+    const results = await dispatcher.reconcileProblems([newProblem]);
+
+    expect(results).toHaveLength(1);
+    const patchCall = calls.find((c) => c.init?.method === "PATCH");
+    const body = JSON.parse(patchCall?.init?.body ?? "{}");
+    expect(body.body).toContain("security");
+    expect(body.body).toContain("performance");
+    expect(body.body).toContain("fp-new");
+    expect(body.body).toContain("*(new in `bbb222`)*");
   });
 });

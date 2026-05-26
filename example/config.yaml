@@ -339,8 +339,8 @@ outputs:
     #   trigger: gitea
     #   marker_prefix: "[AICR]"                  # title prefix for managed issues; the rest of the title is auto-shortened with a representative problem summary
     #   marker_label: "aicr-managed"             # hidden marker to identify managed issues
-    #   issue_mode: consolidated                 # consolidated (default) | per_problem
-    #   resolved_action: close                   # none | close (default) | delete — action when problem is fixed
+    #   issue_mode: consolidated                 # consolidated (default) | per_problem | per_commit
+    #   resolved_action: close                   # none | close (default) | delete | mark_resolved — action when problem is fixed
     #
     #   # -- Assignee configuration --
     #   assign_committer: true                   # add the commit author as assignee (default: true)
@@ -380,8 +380,8 @@ outputs:
     #   trigger: github
     #   marker_prefix: "[AICR]"                  # title prefix only; managed issue titles stay concise automatically with a representative problem summary
     #   marker_label: "aicr-managed"
-    #   issue_mode: consolidated                 # consolidated (default) | per_problem
-    #   resolved_action: close                   # none | close (GitHub does not support delete)
+    #   issue_mode: consolidated                 # consolidated (default) | per_problem | per_commit
+    #   resolved_action: close                   # none | close | mark_resolved (GitHub does not support delete)
     #   assign_committer: true
     #   owners_file: "OWNERS"
     #   add_owners_as_assignees: true
@@ -481,6 +481,7 @@ review:
   max_patch_bytes: 200000
   skip_lgtm: true
   output_language: en # en | zh-CN | ja | …
+  # log_thinking: false             # set false to suppress verbose orchestrator thinking/execution logs (default: true)
   commit_strategy: aggregate # aggregate | per_commit | head_only
   git:
     allow_deepen: true

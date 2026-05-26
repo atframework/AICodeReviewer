@@ -98,12 +98,45 @@ tr:hover td{background:rgba(59,130,246,0.05)}
 </div>
 
 <div id="tab-projects" class="tab-content">
-<div id="project-stats"></div>
+<div style="margin-bottom:1rem;display:flex;gap:0.5rem">
+<button class="btn btn-sm btn-ghost active" data-pwin="today" onclick="selectProjectWindow('today')">Today</button>
+<button class="btn btn-sm btn-ghost" data-pwin="week" onclick="selectProjectWindow('week')">This Week</button>
+<button class="btn btn-sm btn-ghost" data-pwin="month" onclick="selectProjectWindow('month')">This Month</button>
+<button class="btn btn-sm btn-ghost" data-pwin="all" onclick="selectProjectWindow('all')">All Time</button>
+</div>
+<div id="project-loading" style="display:none;color:var(--muted);font-size:0.875rem;margin-bottom:0.5rem">Loading...</div>
+<table>
+<thead>
+<tr>
+<th>Project</th>
+<th style="text-align:right">Reviews</th>
+<th style="text-align:right">Success</th>
+<th style="text-align:right">Failed</th>
+<th style="text-align:right">Skipped</th>
+<th style="text-align:right">Problems</th>
+<th style="text-align:right">Issues</th>
+<th style="text-align:right">Files</th>
+<th style="text-align:right">Lines (+/-)</th>
+<th style="text-align:right">LLM Req</th>
+<th style="text-align:right">Tokens</th>
+<th style="text-align:right">Cost</th>
+<th style="text-align:right">Avg Dur</th>
+</tr>
+</thead>
+<tbody id="project-table"></tbody>
+</table>
 </div>
 
 <div id="tab-providers" class="tab-content">
+<div style="margin-bottom:1rem;display:flex;gap:0.5rem">
+<button class="btn btn-sm btn-ghost active" data-prwin="today" onclick="selectProviderWindow('today')">Today</button>
+<button class="btn btn-sm btn-ghost" data-prwin="week" onclick="selectProviderWindow('week')">This Week</button>
+<button class="btn btn-sm btn-ghost" data-prwin="month" onclick="selectProviderWindow('month')">This Month</button>
+<button class="btn btn-sm btn-ghost" data-prwin="all" onclick="selectProviderWindow('all')">All Time</button>
+</div>
+<div id="provider-loading" style="display:none;color:var(--muted);font-size:0.875rem;margin-bottom:0.5rem">Loading...</div>
 <table>
-<thead><tr><th>Provider</th><th>Model</th><th>Requests</th><th>Tokens In</th><th>Tokens Out</th><th>Cost (USD)</th><th>Retries</th><th>Avg Latency</th></tr></thead>
+<thead><tr><th>Provider</th><th>Model</th><th>Requests</th><th>Tokens In</th><th>Tokens Out</th><th>Total Tokens</th><th>Cost (USD)</th><th>Retries/Fails</th><th>Avg Latency</th></tr></thead>
 <tbody id="provider-table"></tbody>
 </table>
 </div>
@@ -122,6 +155,10 @@ tr:hover td{background:rgba(59,130,246,0.05)}
 var authToken=null;
 var currentData=null;
 var currentWindow="today";
+var currentProjectWindow="today";
+var currentProviderWindow="today";
+var projectStatsData=null;
+var providerStatsData=null;
 
 function $(s){return document.querySelector(s)}
 function $$(s){return document.querySelectorAll(s)}
@@ -196,14 +233,79 @@ function selectWindow(w){
 function switchTab(t){
   document.querySelectorAll(".tab").forEach(function(el){el.classList.toggle("active",el.dataset.tab===t)});
   document.querySelectorAll(".tab-content").forEach(function(el){el.classList.toggle("active",el.id==="tab-"+t)});
+  if(t==="projects"&&!projectStatsData)loadProjectStats(currentProjectWindow);
+  if(t==="providers"&&!providerStatsData)loadProviderStats(currentProviderWindow);
+}
+
+function getSinceForWindow(w){
+  if(w==="all")return null;
+  var now=new Date();
+  var today=new Date(Date.UTC(now.getUTCFullYear(),now.getUTCMonth(),now.getUTCDate()));
+  if(w==="today")return today.toISOString();
+  var week=new Date(today);
+  week.setUTCDate(week.getUTCDate()-week.getUTCDay());
+  if(w==="week")return week.toISOString();
+  var month=new Date(Date.UTC(now.getUTCFullYear(),now.getUTCMonth(),1));
+  if(w==="month")return month.toISOString();
+  return null;
+}
+
+function selectProjectWindow(w){
+  currentProjectWindow=w;
+  document.querySelectorAll("[data-pwin]").forEach(function(b){b.classList.toggle("active",b.dataset.pwin===w)});
+  loadProjectStats(w);
+}
+
+function selectProviderWindow(w){
+  currentProviderWindow=w;
+  document.querySelectorAll("[data-prwin]").forEach(function(b){b.classList.toggle("active",b.dataset.prwin===w)});
+  loadProviderStats(w);
+}
+
+async function loadProjectStats(w){
+  var since=getSinceForWindow(w);
+  var url="api/admin/stats/projects"+(since?"?since="+encodeURIComponent(since):"");
+  var el=document.getElementById("project-loading");
+  if(el)el.style.display="block";
+  try{
+    var r=await apiFetch(url);
+    projectStatsData=await r.json();
+    renderProjectTable();
+  }catch(ex){
+    var tbody=document.getElementById("project-table");
+    if(tbody)tbody.innerHTML='<tr><td colspan="13" style="text-align:center;color:var(--muted)">Error loading data</td></tr>';
+  }finally{
+    if(el)el.style.display="none";
+  }
+}
+
+async function loadProviderStats(w){
+  var since=getSinceForWindow(w);
+  var url="api/admin/stats/providers"+(since?"?since="+encodeURIComponent(since):"");
+  var el=document.getElementById("provider-loading");
+  if(el)el.style.display="block";
+  try{
+    var r=await apiFetch(url);
+    providerStatsData=await r.json();
+    renderProviderTable();
+  }catch(ex){
+    var tbody=document.getElementById("provider-table");
+    if(tbody)tbody.innerHTML='<tr><td colspan="9" style="text-align:center;color:var(--muted)">Error loading data</td></tr>';
+  }finally{
+    if(el)el.style.display="none";
+  }
 }
 
 function renderDashboard(){
   if(!currentData)return;
   renderOverviewStats();
-  renderProviderTable();
   renderRunsTable(currentData.recentRuns);
-  renderProjectStats();
+  if(document.getElementById("tab-projects").classList.contains("active")){
+    loadProjectStats(currentProjectWindow);
+  }
+  if(document.getElementById("tab-providers").classList.contains("active")){
+    loadProviderStats(currentProviderWindow);
+  }
 }
 
 function getWindowStats(){
@@ -234,17 +336,19 @@ function renderOverviewStats(){
   renderRunsTable(currentData.recentRuns,document.getElementById("overview-recent"),true);
 }
 
-function renderProviderTable(){
+function renderProviderTable(data){
   var el=document.getElementById("provider-table");
-  if(!currentData||!currentData.providerModels){
-    el.innerHTML='<tr><td colspan="8" style="text-align:center;color:var(--muted)">No data</td></tr>';
+  var src=data||currentData.providerModels;
+  if(!src||src.length===0){
+    el.innerHTML='<tr><td colspan="9" style="text-align:center;color:var(--muted)">No data</td></tr>';
     return;
   }
-  el.innerHTML=currentData.providerModels.map(function(p){
+  el.innerHTML=src.map(function(p){
     return "<tr><td>"+esc(p.providerId)+"</td><td>"+esc(p.modelId)+"</td><td>"+
       formatNumber(p.requestCount)+"</td><td>"+formatNumber(p.tokensIn)+"</td><td>"+
-      formatNumber(p.tokensOut)+"</td><td>"+formatCost(p.costUsd)+"</td><td>"+
-      formatNumber(p.retryCount)+"</td><td>"+formatDuration(p.avgLatencyMs)+"</td></tr>";
+      formatNumber(p.tokensOut)+"</td><td>"+formatNumber(p.tokensTotal)+"</td><td>"+
+      formatCost(p.costUsd)+"</td><td>"+formatNumber(p.retryCount+p.fallbackCount+p.failureCount)+"</td><td>"+
+      formatDuration(p.avgLatencyMs)+"</td></tr>";
   }).join("");
 }
 
@@ -268,18 +372,29 @@ function renderRunsTable(runs,target,compact){
   }).join("");
 }
 
-function renderProjectStats(){
-  var el=document.getElementById("project-stats");
-  if(!currentData||!currentData.projects||currentData.projects.length===0){
-    el.innerHTML='<p style="color:var(--muted)">No project data</p>';
+function renderProjectTable(data){
+  var el=document.getElementById("project-table");
+  var src=data||projectStatsData;
+  if(!src||src.length===0){
+    el.innerHTML='<tr><td colspan="13" style="text-align:center;color:var(--muted)">No project data</td></tr>';
     return;
   }
-  el.innerHTML=currentData.projects.map(function(p){
-    return '<div class="stat-card" style="margin-bottom:0.75rem"><div style="display:flex;justify-content:space-between;align-items:center">'+
-      '<div><strong>'+esc(p.workspaceId)+'</strong> <span style="color:var(--muted)">/ '+esc(p.triggerName)+"</span></div>"+
-      '<div style="display:flex;gap:1rem;font-size:0.8125rem"><span>'+formatNumber(p.reviewCount)+
-      " reviews</span><span>"+formatNumber(p.problemTotal)+" problems</span><span>Avg: "+
-      formatDuration(p.avgDurationMs)+"</span></div></div></div>";
+  el.innerHTML=src.map(function(p){
+    var name=esc(p.displayName||p.workspaceId+" / "+p.triggerName);
+    var sub=esc(p.repoRef||"");
+    return "<tr><td><div><strong>"+name+"</strong></div><div style=\"font-size:0.75rem;color:var(--muted)\">"+sub+"</div></td>"+
+      '<td style="text-align:right">'+formatNumber(p.reviewCount)+"</td>"+
+      '<td style="text-align:right">'+formatNumber(p.successCount)+"</td>"+
+      '<td style="text-align:right">'+formatNumber(p.failureCount)+"</td>"+
+      '<td style="text-align:right">'+formatNumber(p.skipCount)+"</td>"+
+      '<td style="text-align:right">'+formatNumber(p.problemTotal)+"</td>"+
+      '<td style="text-align:right">'+formatNumber(p.issueCreatedCount)+"</td>"+
+      '<td style="text-align:right">'+formatNumber(p.filesChangedTotal)+"</td>"+
+      '<td style="text-align:right">+'+formatNumber(p.linesAddedTotal)+" / -"+formatNumber(p.linesDeletedTotal)+"</td>"+
+      '<td style="text-align:right">'+formatNumber(p.llmRequestTotal)+"</td>"+
+      '<td style="text-align:right">'+formatNumber(p.tokensTotalTotal)+"</td>"+
+      '<td style="text-align:right">'+formatCost(p.costUsdTotal)+"</td>"+
+      '<td style="text-align:right">'+formatDuration(p.avgDurationMs)+"</td></tr>";
   }).join("");
 }
 

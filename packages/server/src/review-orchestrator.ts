@@ -117,6 +117,7 @@ export interface ServerReviewOrchestrationOptions {
   readonly authorResolution?: AuthorResolutionOptions;
   readonly ignoreLabelsResolver?: (workspaceId: string) => readonly string[];
   readonly outputLanguage?: string;
+  readonly logThinking?: boolean;
 }
 
 export interface ReviewOrchestrationResult {
@@ -453,6 +454,7 @@ async function runAgentReview(
     content = extraction.content;
     kiloToolCalls = extraction.toolCallEvents;
     if (Object.keys(extraction.eventCounts).length > 0 || kiloToolCalls.length > 0) {
+      if (options.logThinking !== false) {
       console.info(JSON.stringify({
         level: "info",
         msg: "kilo agent stream stats",
@@ -461,6 +463,7 @@ async function runAgentReview(
         stdoutLength: rawStdout.length,
         extractedContentLength: content.length,
       }));
+      }
     }
   } else {
     content = rawStdout;
@@ -479,6 +482,7 @@ async function runAgentReview(
           contextRequests: Array.isArray(parsed.contextRequests) ? parsed.contextRequests : [],
           ...(typeof parsed.skipReason === "string" ? { skipReason: parsed.skipReason } : {}),
         };
+        if (options.logThinking !== false) {
         console.info(JSON.stringify({
           level: "info",
           msg: "read MCP output state from agent workspace",
@@ -487,6 +491,7 @@ async function runAgentReview(
           contextRequestCount: mcpState.contextRequests.length,
           hasSkipReason: mcpState.skipReason !== undefined,
         }));
+        }
       }
     } catch {
       // State file does not exist or is invalid; agent may not have called MCP tools.
@@ -1830,7 +1835,7 @@ export async function runReviewOrchestration(
     }
   }
 
-  {
+  if (options.logThinking !== false) {
     const llmContentPreview = llmResult.content.length > 2000
       ? `${llmResult.content.slice(0, 2000)}... (${llmResult.content.length} chars total)`
       : llmResult.content;

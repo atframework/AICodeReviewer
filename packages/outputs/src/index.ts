@@ -1331,9 +1331,9 @@ export function createGithubIssueDispatcher(options: GithubIssueOptions): Github
 	return dispatcher;
 }
 
-export type ProblemIssueMode = "per_problem" | "consolidated";
+export type ProblemIssueMode = "per_problem" | "consolidated" | "per_commit";
 
-export type GithubProblemIssueResolvedAction = "none" | "close";
+export type GithubProblemIssueResolvedAction = "none" | "close" | "mark_resolved";
 
 const DEFAULT_MANAGED_ISSUE_FETCH_LIMIT = 20;
 const MAX_MANAGED_ISSUE_FETCH_LIMIT = 100;
@@ -1365,6 +1365,7 @@ export interface GithubProblemIssueOptions {
 	readonly ownersContent?: string;
 	readonly addOwnersAsAssignees?: boolean;
 	readonly ref?: string;
+	readonly headSha?: string;
 	readonly severityLabelPrefix?: string;
 	readonly severityLabelColors?: Readonly<Record<string, string>>;
 	readonly notifyFeishu?: {
@@ -1702,7 +1703,7 @@ export function createGithubProblemIssueDispatcher(options: GithubProblemIssueOp
 		const scopeFingerprint = computeScopeFingerprint(channel, options.owner, options.repo);
 		const body: Record<string, unknown> = {
 			title: buildConsolidatedIssueTitle(problems, markerPrefix),
-			body: buildConsolidatedIssueBody(problems, { channel, markerLabel, scopeFingerprint, ...(summary ? { summary } : {}) }),
+			body: buildConsolidatedIssueBody(problems, { channel, markerLabel, scopeFingerprint, ...(summary ? { summary } : {}), ...(options.headSha ? { headSha: options.headSha } : {}) }),
 		};
 
 		const labelNames: string[] = [];
@@ -1770,11 +1771,22 @@ export function createGithubProblemIssueDispatcher(options: GithubProblemIssueOp
 		existing: ManagedGithubIssue,
 		problems: readonly ReviewProblem[],
 		summary: string | undefined,
+		categorization?: {
+			readonly newProblems: readonly ReviewProblem[];
+			readonly stillOpenProblems: readonly ReviewProblem[];
+			readonly resolvedFingerprints: ReadonlySet<string>;
+			readonly resolvedDetails: ReadonlyMap<string, ParsedProblemInfo>;
+		},
 	): Promise<DispatchResult> {
 		const scopeFingerprint = computeScopeFingerprint(channel, options.owner, options.repo);
 		const body: Record<string, unknown> = {
 			title: buildConsolidatedIssueTitle(problems, markerPrefix),
-			body: buildConsolidatedIssueBody(problems, { channel, markerLabel, scopeFingerprint, ...(summary ? { summary } : {}) }),
+			body: buildConsolidatedIssueBody(problems, {
+				channel, markerLabel, scopeFingerprint,
+				...(summary ? { summary } : {}),
+				...(options.headSha ? { headSha: options.headSha } : {}),
+				...(categorization ? { categorization } : {}),
+			}),
 		};
 
 		if (severityLabelPrefix) {
@@ -1815,19 +1827,37 @@ export function createGithubProblemIssueDispatcher(options: GithubProblemIssueOp
 			return undefined;
 		}
 
+		const lifecycleMsg = [
+			"🤖 **AICR lifecycle:** this managed problem is no longer present in the latest analysis.",
+			"",
+			resolvedAction === "mark_resolved"
+				? "Marking as resolved and closing. Reopen it if the problem is still valid."
+				: "Closing the issue automatically. Reopen it if the problem is still valid.",
+		].join("\n");
+
 		await request("POST", `${repoPath}/issues/${issue.number}/comments`, {
-			body: [
-				"🤖 **AICR lifecycle:** this managed problem is no longer present in the latest analysis.",
-				"",
-				"Closing the issue automatically. Reopen it if the problem is still valid.",
-			].join("\n"),
+			body: lifecycleMsg,
 		});
-		const raw = await request("PATCH", `${repoPath}/issues/${issue.number}`, { state: "closed" });
+
+		if (resolvedAction === "mark_resolved") {
+			const markerEnd = issue.body.indexOf("\n", issue.body.indexOf(AICR_MANAGED_PROBLEM_ISSUE_MARKER));
+			const markers = markerEnd > 0 ? issue.body.slice(0, markerEnd + 1) : "";
+			const resolvedPrefix = "✅ **Resolved** — This issue is no longer present in the latest analysis.\n\n---\n\n";
+			const originalBody = markerEnd > 0 ? issue.body.slice(markerEnd + 1) : issue.body;
+			await request("PATCH", `${repoPath}/issues/${issue.number}`, {
+				body: markers + resolvedPrefix + originalBody,
+				state: "closed",
+			});
+		} else {
+			await request("PATCH", `${repoPath}/issues/${issue.number}`, { state: "closed" });
+		}
+
+		const raw = await request("GET", `${repoPath}/issues/${issue.number}`);
 		return {
 			channel,
 			status: "published",
 			externalId: String(issue.number),
-			raw: { action: "closed", issueNumber: issue.number, issue: raw },
+			raw: { action: resolvedAction === "mark_resolved" ? "mark_resolved" : "closed", issueNumber: issue.number, issue: raw },
 		};
 	}
 
@@ -1842,9 +1872,11 @@ export function createGithubProblemIssueDispatcher(options: GithubProblemIssueOp
 				}
 			}
 
-			if (issueMode === "consolidated") {
+			if (issueMode === "consolidated" || issueMode === "per_commit") {
 				const existingIssues = await listManagedOpenIssues();
-				const scopeFingerprint = computeScopeFingerprint(channel, options.owner, options.repo);
+				const scopeFingerprint = issueMode === "per_commit" && options.headSha
+					? computeScopeFingerprint(channel, options.owner, options.repo, options.headSha)
+					: computeScopeFingerprint(channel, options.owner, options.repo);
 				const existingConsolidated = existingIssues.find(
 					(issue) => issue.scopeFingerprint === scopeFingerprint,
 				);
@@ -1862,21 +1894,53 @@ export function createGithubProblemIssueDispatcher(options: GithubProblemIssueOp
 				}
 
 				if (existingConsolidated) {
-					results.push(await updateConsolidatedIssue(existingConsolidated, problems, summary));
+					const preparedProblems = problems.map(ensureProblemFingerprint);
+					const storedCommit = extractCommitFromIssueBody(existingConsolidated.body);
+					const storedFingerprints = extractOpenProblemFingerprintsFromBody(existingConsolidated.body);
+					const resolvedDetails = parseConsolidatedBodyProblemInfo(existingConsolidated.body);
+
+					if (storedCommit && options.headSha && storedCommit !== options.headSha) {
+						const isCurrentAtOrAfter = await verifyCommitAtOrAfter(request, repoPath, storedCommit, options.headSha);
+						if (isCurrentAtOrAfter === false) {
+							return results;
+						}
+						if (isCurrentAtOrAfter === undefined) {
+							results.push(await updateConsolidatedIssue(existingConsolidated, preparedProblems, summary));
+							return results;
+						}
+					}
+
+					const isSameCommit = storedCommit && options.headSha && storedCommit === options.headSha;
+
+					if (storedFingerprints.size > 0 && !isSameCommit) {
+						const categorized = categorizeProblems(preparedProblems, storedFingerprints);
+						if (categorized.resolvedFingerprints.size > 0) {
+							results.push(await updateConsolidatedIssue(existingConsolidated, preparedProblems, summary, {
+								...categorized,
+								resolvedDetails,
+							}));
+						} else {
+							results.push(await updateConsolidatedIssue(existingConsolidated, preparedProblems, summary));
+						}
+					} else {
+						results.push(await updateConsolidatedIssue(existingConsolidated, preparedProblems, summary));
+					}
 				} else {
 					results.push(await createConsolidatedIssue(problems, summary, owners));
 				}
 
-				for (const issue of existingIssues) {
-					if (issue.scopeFingerprint === scopeFingerprint) {
-						continue;
-					}
-					if (!isConsolidatedManagedIssue(issue.body)) {
-						continue;
-					}
-					const result = await resolveIssue(issue);
-					if (result) {
-						results.push(result);
+				if (issueMode === "consolidated") {
+					for (const issue of existingIssues) {
+						if (issue.scopeFingerprint === scopeFingerprint) {
+							continue;
+						}
+						if (!isConsolidatedManagedIssue(issue.body)) {
+							continue;
+						}
+						const result = await resolveIssue(issue);
+						if (result) {
+							results.push(result);
+						}
 					}
 				}
 
@@ -2330,7 +2394,7 @@ export function createGiteaIssueDispatcher(options: GiteaIssueOptions): GiteaIss
 	return dispatcher;
 }
 
-export type GiteaProblemIssueResolvedAction = "none" | "close" | "delete";
+export type GiteaProblemIssueResolvedAction = "none" | "close" | "mark_resolved" | "delete";
 
 export interface OwnersConfig {
 	readonly reviewers?: readonly string[];
@@ -2356,6 +2420,7 @@ export interface GiteaProblemIssueOptions {
 	readonly ownersContent?: string;
 	readonly addOwnersAsAssignees?: boolean;
 	readonly ref?: string;
+	readonly headSha?: string;
 	readonly severityLabelPrefix?: string;
 	readonly severityLabelColors?: Readonly<Record<string, string>>;
 	readonly notifyFeishu?: {
@@ -2510,9 +2575,78 @@ function extractConsolidatedScopeFingerprint(body: string): string | undefined {
 	return match?.[1];
 }
 
-export function computeScopeFingerprint(channel: string, owner: string, repo: string): string {
-	const raw = `consolidated:${channel}:${owner}/${repo}`;
+export function computeScopeFingerprint(channel: string, owner: string, repo: string, headSha?: string): string {
+	const raw = headSha
+		? `consolidated:${channel}:${owner}/${repo}:${headSha}`
+		: `consolidated:${channel}:${owner}/${repo}`;
 	return createHash("sha256").update(raw).digest("hex").slice(0, 16);
+}
+
+const AICR_COMMIT_RE = /<!--\s*aicr:commit=([^\s>]+)\s*-->/u;
+const AICR_OPEN_PROBLEMS_RE = /<!--\s*aicr:open_problems=([\s\S]*?)\s*-->/u;
+
+function extractCommitFromIssueBody(body: string): string | undefined {
+	return AICR_COMMIT_RE.exec(body)?.[1];
+}
+
+function extractOpenProblemFingerprintsFromBody(body: string): ReadonlySet<string> {
+	const match = AICR_OPEN_PROBLEMS_RE.exec(body);
+	if (!match?.[1]) return new Set();
+	return new Set(match[1].split(",").map((s) => s.trim()).filter((s) => s.length > 0));
+}
+
+interface ParsedProblemInfo {
+	readonly fingerprint: string;
+	readonly severity: string;
+	readonly category: string;
+	readonly file: string;
+	readonly line: number;
+}
+
+function parseConsolidatedBodyProblemInfo(body: string): Map<string, ParsedProblemInfo> {
+	const result = new Map<string, ParsedProblemInfo>();
+	let currentSeverity = "";
+	for (const line of body.split("\n")) {
+		const sevMatch = /^####\s+(CRITICAL|HIGH|MEDIUM|LOW|INFO)\s+\(\d+\)\s*$/u.exec(line);
+		if (sevMatch) { currentSeverity = sevMatch[1] ?? ""; continue; }
+		const probMatch = /^\*\*([^*]+?)\*\*\s+[\u2014-]\s+`([^`]+):(\d+)`\s*(?:<!--\s*aicr:fp=([^\s>]+)\s*-->)?/u.exec(line);
+		if (probMatch && probMatch[4]) {
+			const fp = probMatch[4];
+			const category = probMatch[1]?.trim() ?? "";
+			const file = probMatch[2] ?? "";
+			const lineStr = probMatch[3];
+			result.set(fp, {
+				fingerprint: fp,
+				severity: currentSeverity,
+				category,
+				file,
+				line: lineStr ? parseInt(lineStr, 10) : 0,
+			});
+		}
+	}
+	return result;
+}
+
+async function verifyCommitAtOrAfter(
+	requestFn: (method: string, url: string, body?: unknown) => Promise<unknown>,
+	repoPath: string,
+	storedCommit: string,
+	currentCommit: string,
+): Promise<boolean | undefined> {
+	if (storedCommit === currentCommit) return true;
+	try {
+		const result = await requestFn("GET", `${repoPath}/compare/${storedCommit}...${currentCommit}`);
+		if (!result || typeof result !== "object") return undefined;
+		const obj = result as Record<string, unknown>;
+		const status = typeof obj.status === "string" ? obj.status : "";
+		const behindBy = typeof obj.behind_by === "number" ? obj.behind_by : undefined;
+		if (status === "identical" || status === "ahead") return true;
+		if (status === "behind" || status === "diverged") return false;
+		if (behindBy !== undefined) return behindBy === 0;
+		return undefined;
+	} catch {
+		return undefined;
+	}
 }
 
 function isWideIssueTitleCodePoint(code: number): boolean {
@@ -2624,14 +2758,28 @@ function buildConsolidatedIssueBody(
 		readonly markerLabel: string;
 		readonly scopeFingerprint: string;
 		readonly summary?: string;
+		readonly headSha?: string;
+		readonly categorization?: {
+			readonly newProblems: readonly ReviewProblem[];
+			readonly stillOpenProblems: readonly ReviewProblem[];
+			readonly resolvedFingerprints: ReadonlySet<string>;
+			readonly resolvedDetails: ReadonlyMap<string, ParsedProblemInfo>;
+		};
 	},
 ): string {
+	const allFingerprints = new Set<string>();
+	for (const p of problems) {
+		allFingerprints.add(p.fingerprint ?? computeProblemFingerprint(p));
+	}
+
 	const sections: string[] = [
 		AICR_MANAGED_PROBLEM_ISSUE_MARKER,
 		AICR_CONSOLIDATED_MARKER,
 		`<!-- aicr:channel=${options.channel} -->`,
 		`<!-- aicr:label=${options.markerLabel} -->`,
 		`<!-- aicr:scope_fingerprint=${options.scopeFingerprint} -->`,
+		...(options.headSha ? [`<!-- aicr:commit=${options.headSha} -->`] : []),
+		`<!-- aicr:open_problems=${[...allFingerprints].join(",")} -->`,
 		"",
 	];
 
@@ -2639,22 +2787,55 @@ function buildConsolidatedIssueBody(
 		sections.push(options.summary, "", "---", "");
 	}
 
-	const grouped = groupProblemsBySeverity(problems);
-	for (const group of grouped) {
-		sections.push(`### ${group.severity.toUpperCase()} (${group.problems.length})`, "");
-		for (let i = 0; i < group.problems.length; i++) {
-			const p = group.problems[i]!;
-			const location = p.endLine ? `${p.file}:${p.line}-${p.endLine}` : `${p.file}:${p.line}`;
-			sections.push(`**${i + 1}. ${p.category}** — \`${location}\``, "");
-			sections.push(p.message);
-			if (p.suggestion) {
-				sections.push("", `> **Suggested fix:** ${p.suggestion}`);
-			}
-			if (p.codeSnippet && p.codeLanguage) {
-				sections.push("", renderMarkdownCodeFence(p.codeSnippet, p.codeLanguage));
-			}
-			sections.push("");
+	const cat = options.categorization;
+	const openProblems = cat ? [...cat.stillOpenProblems, ...cat.newProblems] : problems;
+	const newFpSet = cat ? new Set(cat.newProblems.map((p) => p.fingerprint ?? computeProblemFingerprint(p))) : new Set<string>();
+
+	if (openProblems.length > 0) {
+		if (cat) {
+			sections.push("### Open Issues", "");
 		}
+
+		const grouped = groupProblemsBySeverity(openProblems);
+		for (const group of grouped) {
+			sections.push(`#### ${group.severity.toUpperCase()} (${group.problems.length})`, "");
+			for (const p of group.problems) {
+				const fp = p.fingerprint ?? computeProblemFingerprint(p);
+				const location = p.endLine ? `${p.file}:${p.line}-${p.endLine}` : `${p.file}:${p.line}`;
+				sections.push(`**${p.category}** \u2014 \`${location}\` <!-- aicr:fp=${fp} -->`);
+				if (newFpSet.has(fp) && options.headSha) {
+					sections.push(`*(new in \`${options.headSha.slice(0, 7)}\`)*`);
+				}
+				sections.push("");
+				sections.push(p.message);
+				if (p.suggestion) {
+					sections.push("", `> **Suggested fix:** ${p.suggestion}`);
+				}
+				if (p.codeSnippet && p.codeLanguage) {
+					sections.push("", renderMarkdownCodeFence(p.codeSnippet, p.codeLanguage));
+				}
+				sections.push("");
+			}
+		}
+	}
+
+	if (cat && cat.resolvedFingerprints.size > 0) {
+		sections.push("<details>");
+		sections.push(`<summary>\u2705 Resolved (${cat.resolvedFingerprints.size})</summary>`);
+		sections.push("");
+		sections.push("The following issues are no longer present in the latest analysis:");
+		sections.push("");
+		for (const fp of cat.resolvedFingerprints) {
+			const info = cat.resolvedDetails.get(fp);
+			if (info) {
+				const location = `${info.file}:${info.line}`;
+				sections.push(`- ~~**${info.severity} \u00b7 ${info.category}** \u2014 \`${location}\`~~ \u2705 Resolved`);
+			} else {
+				sections.push(`- ~~\`${fp}\`~~ \u2705 Resolved`);
+			}
+		}
+		sections.push("");
+		sections.push("</details>");
 	}
 
 	return normalizeMarkdownBody(sections.join("\n"));
@@ -3233,7 +3414,7 @@ export function createGiteaProblemIssueDispatcher(options: GiteaProblemIssueOpti
 		const scopeFingerprint = computeScopeFingerprint(channel, options.owner, options.repo);
 		const body: Record<string, unknown> = {
 			title: buildConsolidatedIssueTitle(problems, markerPrefix),
-			body: buildConsolidatedIssueBody(problems, { channel, markerLabel, scopeFingerprint, ...(summary ? { summary } : {}) }),
+			body: buildConsolidatedIssueBody(problems, { channel, markerLabel, scopeFingerprint, ...(summary ? { summary } : {}), ...(options.headSha ? { headSha: options.headSha } : {}) }),
 		};
 
 		const labelIdList: number[] = [];
@@ -3301,11 +3482,22 @@ export function createGiteaProblemIssueDispatcher(options: GiteaProblemIssueOpti
 		existing: ManagedGiteaIssue,
 		problems: readonly ReviewProblem[],
 		summary: string | undefined,
+		categorization?: {
+			readonly newProblems: readonly ReviewProblem[];
+			readonly stillOpenProblems: readonly ReviewProblem[];
+			readonly resolvedFingerprints: ReadonlySet<string>;
+			readonly resolvedDetails: ReadonlyMap<string, ParsedProblemInfo>;
+		},
 	): Promise<DispatchResult> {
 		const scopeFingerprint = computeScopeFingerprint(channel, options.owner, options.repo);
 		const body: Record<string, unknown> = {
 			title: buildConsolidatedIssueTitle(problems, markerPrefix),
-			body: buildConsolidatedIssueBody(problems, { channel, markerLabel, scopeFingerprint, ...(summary ? { summary } : {}) }),
+			body: buildConsolidatedIssueBody(problems, {
+				channel, markerLabel, scopeFingerprint,
+				...(summary ? { summary } : {}),
+				...(options.headSha ? { headSha: options.headSha } : {}),
+				...(categorization ? { categorization } : {}),
+			}),
 		};
 
 		if (severityLabelPrefix) {
@@ -3356,19 +3548,37 @@ export function createGiteaProblemIssueDispatcher(options: GiteaProblemIssueOpti
 			};
 		}
 
+		const lifecycleMsg = [
+			"🤖 **AICR lifecycle:** this managed problem is no longer present in the latest analysis.",
+			"",
+			resolvedAction === "mark_resolved"
+				? "Marking as resolved and closing. Reopen it if the problem is still valid."
+				: "Closing the issue automatically. Reopen it if the problem is still valid.",
+		].join("\n");
+
 		await request("POST", `${repoPath}/issues/${issue.number}/comments`, {
-			body: [
-				"🤖 **AICR lifecycle:** this managed problem is no longer present in the latest analysis.",
-				"",
-				"Closing the issue automatically. Reopen it if the problem is still valid.",
-			].join("\n"),
+			body: lifecycleMsg,
 		});
-		const raw = await request("PATCH", `${repoPath}/issues/${issue.number}`, { state: "closed" });
+
+		if (resolvedAction === "mark_resolved") {
+			const markerEnd = issue.body.indexOf("\n", issue.body.indexOf(AICR_MANAGED_PROBLEM_ISSUE_MARKER));
+			const markers = markerEnd > 0 ? issue.body.slice(0, markerEnd + 1) : "";
+			const resolvedPrefix = "✅ **Resolved** — This issue is no longer present in the latest analysis.\n\n---\n\n";
+			const originalBody = markerEnd > 0 ? issue.body.slice(markerEnd + 1) : issue.body;
+			await request("PATCH", `${repoPath}/issues/${issue.number}`, {
+				body: markers + resolvedPrefix + originalBody,
+				state: "closed",
+			});
+		} else {
+			await request("PATCH", `${repoPath}/issues/${issue.number}`, { state: "closed" });
+		}
+
+		const raw = await request("GET", `${repoPath}/issues/${issue.number}`);
 		return {
 			channel,
 			status: "published",
 			externalId: String(issue.number),
-			raw: { action: "closed", issueNumber: issue.number, issue: raw },
+			raw: { action: resolvedAction === "mark_resolved" ? "mark_resolved" : "closed", issueNumber: issue.number, issue: raw },
 		};
 	}
 
@@ -3383,9 +3593,11 @@ export function createGiteaProblemIssueDispatcher(options: GiteaProblemIssueOpti
 				}
 			}
 
-			if (issueMode === "consolidated") {
+			if (issueMode === "consolidated" || issueMode === "per_commit") {
 				const existingIssues = await listManagedOpenIssues();
-				const scopeFingerprint = computeScopeFingerprint(channel, options.owner, options.repo);
+				const scopeFingerprint = issueMode === "per_commit" && options.headSha
+					? computeScopeFingerprint(channel, options.owner, options.repo, options.headSha)
+					: computeScopeFingerprint(channel, options.owner, options.repo);
 				const existingConsolidated = existingIssues.find(
 					(issue) => issue.scopeFingerprint === scopeFingerprint,
 				);
@@ -3403,21 +3615,53 @@ export function createGiteaProblemIssueDispatcher(options: GiteaProblemIssueOpti
 				}
 
 				if (existingConsolidated) {
-					results.push(await updateConsolidatedIssue(existingConsolidated, problems, summary));
+					const preparedProblems = problems.map(ensureProblemFingerprint);
+					const storedCommit = extractCommitFromIssueBody(existingConsolidated.body);
+					const storedFingerprints = extractOpenProblemFingerprintsFromBody(existingConsolidated.body);
+					const resolvedDetails = parseConsolidatedBodyProblemInfo(existingConsolidated.body);
+
+					if (storedCommit && options.headSha && storedCommit !== options.headSha) {
+						const isCurrentAtOrAfter = await verifyCommitAtOrAfter(request, repoPath, storedCommit, options.headSha);
+						if (isCurrentAtOrAfter === false) {
+							return results;
+						}
+						if (isCurrentAtOrAfter === undefined) {
+							results.push(await updateConsolidatedIssue(existingConsolidated, preparedProblems, summary));
+							return results;
+						}
+					}
+
+					const isSameCommit = storedCommit && options.headSha && storedCommit === options.headSha;
+
+					if (storedFingerprints.size > 0 && !isSameCommit) {
+						const categorized = categorizeProblems(preparedProblems, storedFingerprints);
+						if (categorized.resolvedFingerprints.size > 0) {
+							results.push(await updateConsolidatedIssue(existingConsolidated, preparedProblems, summary, {
+								...categorized,
+								resolvedDetails,
+							}));
+						} else {
+							results.push(await updateConsolidatedIssue(existingConsolidated, preparedProblems, summary));
+						}
+					} else {
+						results.push(await updateConsolidatedIssue(existingConsolidated, preparedProblems, summary));
+					}
 				} else {
 					results.push(await createConsolidatedIssue(problems, summary, owners));
 				}
 
-				for (const issue of existingIssues) {
-					if (issue.scopeFingerprint === scopeFingerprint) {
-						continue;
-					}
-					if (!isConsolidatedManagedIssue(issue.body)) {
-						continue;
-					}
-					const result = await resolveIssue(issue);
-					if (result) {
-						results.push(result);
+				if (issueMode === "consolidated") {
+					for (const issue of existingIssues) {
+						if (issue.scopeFingerprint === scopeFingerprint) {
+							continue;
+						}
+						if (!isConsolidatedManagedIssue(issue.body)) {
+							continue;
+						}
+						const result = await resolveIssue(issue);
+						if (result) {
+							results.push(result);
+						}
 					}
 				}
 

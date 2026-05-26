@@ -150,8 +150,8 @@ const outputChannelSchema = z
     marker_label: z.string().min(1).optional(),
     label_ids: z.array(z.number().int().positive()).optional(),
     labels: z.array(z.string().min(1)).optional(),
-    issue_mode: z.enum(["per_problem", "consolidated"]).optional(),
-    resolved_action: z.enum(["none", "close", "delete"]).optional(),
+    issue_mode: z.enum(["per_problem", "consolidated", "per_commit"]).optional(),
+    resolved_action: z.enum(["none", "close", "mark_resolved", "delete"]).optional(),
     assign_committer: z.boolean().optional(),
     owners_file: z.string().min(1).optional(),
     add_owners_as_assignees: z.boolean().optional(),
@@ -252,6 +252,7 @@ const reviewSchema = z
     skip_lgtm: z.boolean().optional(),
     output_language: z.string().min(1).optional(),
     commit_strategy: z.enum(["per_commit", "aggregate", "head_only"]).optional(),
+    log_thinking: z.boolean().optional(),
     git: z
       .object({
         allow_deepen: z.boolean().optional(),
