@@ -10,7 +10,7 @@
 - Prompt baseline assets currently live in `docs/prompt-research.md`, `docs/ai/milestones/M0.5.md`, and `prompts/system/code-reviewer.system.md`; keep them aligned and validate them with markdownlint when changed.
 - `Plan.md` is now roadmap-only. Use `docs/ai/index.md` to find detailed architecture, milestone history, and decision records on demand.
 - Temporary repository artifacts such as scratch scripts, debug logs, ad hoc reports, and captured command output belong under `build/` subdirectories (`build/tmp/`, `build/logs/`, `build/deploy/`), not in the repository root. Ensure the subdirectory exists before writing.
-- Docker baseline currently uses Chainguard Node, activates pnpm with `corepack prepare pnpm@10.20.0 --activate`, and does not use `pnpm setup`.
+- Docker baseline now uses `ubuntu:24.04` as the distro base, copies the Node 22 userspace from `node:22-bookworm-slim`, installs `p4-cli` from Perforce's Ubuntu APT repo, includes Python pip/venv, Kubernetes/Helm/YAML tooling (`kubectl`, `helm`, Mike Farah `yq`), Podman/container clients (`podman`, `buildah`, `skopeo`), plus common build/debug/static-analysis tools, and normalizes Debian/Ubuntu command names so prompts can consistently refer to `fd` and `bat`.
 
 ## Change heuristics
 
@@ -22,6 +22,10 @@
 - When updating AI-facing assets, merge with existing guidance instead of appending near-duplicate sections.
 - Keep tool-private AI files as tiny bridges or scoped deltas; do not copy the full `AGENTS.md` body into Copilot, Claude, Kilo, Roo, opencode, or similar client-specific locations.
 - When updating the default review prompt, keep `docs/prompt-research.md`, `docs/ai/milestones/M0.5.md`, `prompts/system/code-reviewer.system.md`, and the relevant `Plan.md` roadmap summary in sync so future agents see both rationale and current contract.
+- When changing runtime shell-tool guidance or the deployment image baseline,
+  sync `AGENTS.md`, `prompts/system/code-reviewer.system.md`,
+  `docs/output-channels.md`, `development/README.md`, and `example/README.md`
+  together so agents only prefer tools that the shipped image guarantees.
 
 ## Known pitfalls (fixed, do not reintroduce)
 
@@ -40,6 +44,15 @@ These issues were discovered and fixed in prior sessions. Before making changes,
 11. **Public module naming boundaries**: Generic/public modules must import provider/channel contracts from canonical schemas instead of duplicating platform literal lists, and public event/template fields should use provider-neutral names such as `sourcePath` and `submitterWorkspace`.
 12. **Markdown list marker fixer boundaries**: `LIST_MARKER_WITHOUT_SPACE_RE` must use `[ \t]*` indentation and must preserve both bold markers and thematic breaks.
 13. **Markdown MD022 blanks-around-headings**: `fixBlanksAroundHeadings` in `packages/core/src/markdown-fixer.ts` must insert blank lines before and after ATX headings while skipping fenced code block content, ensuring LLM-generated summaries pass markdownlint MD022.
+14. **Runtime shell-tool guidance must match the image**: If prompts or skills
+    tell agents to prefer `rg` / `fd` / `bat` / `jq` / `yq` or local
+    `helm` / `kubectl` checks, `deploy/Dockerfile` must install them and
+    normalize distro-specific command names (`fd-find` → `fd`, `batcat` →
+    `bat`). The P4-enabled runtime image also
+    depends on Ubuntu/glibc unless the `p4` install path is revalidated. Keep
+    `PIP_INDEX_URL` / `/etc/pip.conf`, `KUBERNETES_APT_REPO_BASE`,
+    Helm apt repo, and `YQ_DOWNLOAD_BASE` support aligned with deployment
+    mirror docs when runtime tooling changes.
 
 ## Default verification order
 

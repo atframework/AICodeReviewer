@@ -142,9 +142,16 @@ changed file is needed.
 When running as an Agent CLI in an AICR sandbox, already materialized source
 files may be available read-only in the mounted source workspace. It is
 acceptable to inspect those files with approved read-only command-line tools
-such as `cat`, `rg`, `grep`, or `find`. If the file or range needed to validate
-a concrete issue is not present, call `aicr.fetch_more_context` with the exact
-path and reason so AICR can pull it from the VCS and run a final pass.
+such as `rg`, `fd`, `bat --paging=never --style=plain`, `jq`, and `yq`.
+Prefer these modern tools over `grep`, recursive `find`, raw `cat`, or ad-hoc
+YAML parsing when the runtime image provides them. For Kubernetes manifests or
+Helm charts, prefer offline local checks such as `helm template`, `helm lint`,
+and `kubectl kustomize`; do not contact a live cluster unless the task and
+credentials explicitly require it. Fall back to older POSIX tools only when a
+specific flag or host environment requires them. If the file or range needed to
+validate a concrete issue is not present, call
+`aicr.fetch_more_context` with the exact path and reason so AICR can pull it
+from the VCS and run a final pass.
 
 You may request a file outside the changed-file list only when it is a narrowly
 related repository file needed to understand an API contract, caller/callee

@@ -158,7 +158,7 @@ curl -sf https://aicr.m-oa.com:6023/healthz
 
 ### 7.1 公网正式环境
 
-- 远程服务器：`10.0.4.9`（公网域名 `aicr.x-ha.com`）
+- 远程服务器：内网ip `10.0.4.9` , 公网ip: `42.192.55.130`（公网域名 `aicr.x-ha.com`）
 - SSH 用户：`tools`
 - SSH 端口：`36000`
 - SSH key：`D:/workspace/keys/id_ed25519.it`（注意必须使用 `.it` 后缀的 key）
@@ -179,30 +179,57 @@ curl -sf https://aicr.m-oa.com:6023/healthz
 
 ### 7.3 镜像源配置（国内部署必填）
 
-构建镜像时默认使用官方源，国内环境建议切换腾讯云镜像（https://mirrors.tencent.com/）以加速下载。
+构建镜像时默认使用 `ubuntu:24.04` + 官方 `node:22-bookworm-slim`
+userspace。国内环境建议切换 Ubuntu apt、Kubernetes apt、npm、PyPI/pip
+和 Docker static 下载源，并在需要时把 `NODE_IMAGE` 指向镜像仓库缓存。
+这样既能保留官方 Perforce Ubuntu APT 支持，又避免因切回 Alpine /
+Wolfi 而失去 `p4-cli` 的可安装性。
 
 `deploy.sh` 与 `Dockerfile` 读取以下环境变量：
 
-| 环境变量 | 用途 | 默认值 | 腾讯云镜像地址 |
+| 环境变量 | 用途 | 默认值 | 国内/镜像建议 |
 | --- | --- | --- | --- |
-| `BASE_IMAGE` | 容器基础镜像 | `cgr.dev/chainguard/node:latest-dev` | `mirror.ccs.tencentyun.com/library/node:22-alpine` |
-| `APK_MIRROR` | Alpine apk 包源 | （使用镜像内置源） | `https://mirrors.cloud.tencent.com/alpine` |
+| `BASE_IMAGE` | Ubuntu 24.04 兼容基础镜像 | `ubuntu:24.04` | 保持默认，或替换为自建/缓存的 Ubuntu 24.04 mirror |
+| `NODE_IMAGE` | Node 22 userspace 来源镜像 | `node:22-bookworm-slim` | `mirror.ccs.tencentyun.com/library/node:22-bookworm-slim` |
+| `APT_MIRROR` | Ubuntu apt 包源 | （使用镜像内置源） | `http://mirrors.tencent.com/ubuntu` |
+| `PERFORCE_APT_DISTRO` | Perforce apt 仓库发行版代号 | `noble` | `noble` |
 | `NPM_REGISTRY` | pnpm/npm registry | `https://registry.npmjs.org` | `http://mirrors.tencent.com/npm/` |
 | `NPM_STRICT_SSL` | npm strict-ssl | `true` | `false`（HTTP 镜像必须） |
-| `DOCKER_DOWNLOAD_MIRROR` | Docker 静态二进制下载（容器嵌套沙箱） | `https://download.docker.com/linux/static/stable/x86_64` | `https://mirrors.cloud.tencent.com/docker-ce/linux/static/stable/x86_64` |
+| `PIP_INDEX_URL` | Python pip simple index | `https://pypi.org/simple` | `https://mirrors.tencent.com/pypi/simple` |
+| `PIP_TRUSTED_HOST` | pip HTTP/私有源信任主机 | （空） | 使用 HTTPS 的腾讯源时留空 |
+| `KUBERNETES_APT_REPO_BASE` | `kubectl` APT 源 base | `https://pkgs.k8s.io/core:/stable:` | `https://mirrors.tencent.com/kubernetes_new/core:/stable:` |
+| `KUBERNETES_APT_REPO_VERSION` | `kubectl` minor 版本源 | `v1.36` | 需与集群 minor 相差不超过 1；例如 `v1.36` |
+| `HELM_APT_REPO` | Helm Debian/Ubuntu apt 源 | `https://packages.buildkite.com/helm-linux/helm-debian/any/` | 腾讯源未提供 Helm 专用镜像；保留默认或替换为内部缓存 |
+| `HELM_APT_KEY_URL` | Helm apt signing key | `https://packages.buildkite.com/helm-linux/helm-debian/gpgkey` | 与 `HELM_APT_REPO` 的内部缓存配套 |
+| `YQ_VERSION` | Mike Farah `yq` 版本 | `v4.53.2` | 按需固定 |
+| `YQ_DOWNLOAD_BASE` | `yq` GitHub release 下载根路径 | `https://github.com/mikefarah/yq/releases/download` | 腾讯源未提供 yq 专用镜像；保留默认或替换为内部缓存 |
+| `DOCKER_DOWNLOAD_MIRROR` | Docker 静态二进制下载（容器嵌套沙箱） | `https://download.docker.com/linux/static/stable/x86_64` | `https://mirrors.tencent.com/docker-ce/linux/static/stable/x86_64` |
 
-> **关于 `BASE_IMAGE`**：Chainguard 官方镜像 `cgr.dev` 无国内镜像，国内构建可能拉取超时。可切换为 Docker Hub 的 Node Alpine 镜像，通过腾讯云容器镜像服务加速。使用非 Chainguard 镜像时，`APK_MIRROR` 指向标准 Alpine 镜像路径即可（不含 `/edge/chainguard` 子路径）。
+> **关于 `BASE_IMAGE`**：默认使用 `ubuntu:24.04`，因为官方 Perforce 包仓库支持 Ubuntu APT，且 `p4-cli` 不适合依赖 Alpine / Wolfi / 非 glibc 发行版。`BASE_IMAGE` 只建议替换为 Ubuntu 24.04 的镜像仓库地址，不建议再切回 Alpine / Chainguard / Wolfi。
 
-> **关于 `DOCKER_DOWNLOAD_MIRROR`**：仅当 `AICR_ENABLE_CONTAINER_SANDBOX=true` 时才需要下载 Docker 静态二进制。
+> **关于 `APT_MIRROR`**：`deploy.sh` 仍接受旧的 `APK_MIRROR` 变量作为兼容别名，但新文档统一使用 `APT_MIRROR`。
+
+> **关于 `PIP_INDEX_URL`**：Dockerfile 会把该值写入 `/etc/pip.conf` 并设置 `PIP_INDEX_URL` 环境变量；腾讯 PyPI 镜像必须包含 `/pypi/simple` 路径。
+
+> **关于 Kubernetes/Helm/yq**：Dockerfile 使用官方 Kubernetes apt 源安装 `kubectl`，国内示例切换到腾讯 `kubernetes_new`；Helm 官方文档当前列出的 Debian/Ubuntu apt 源由 Buildkite 托管，Mike Farah `yq` 官方建议下载预编译二进制。腾讯镜像站已验证没有 `/helm/` 与 `/yq/` 专用入口，如需全内网构建，请用内部缓存覆盖 `HELM_APT_REPO`、`HELM_APT_KEY_URL` 与 `YQ_DOWNLOAD_BASE`。
+
+> **关于 Podman socket**：运行时镜像现在内置 `podman` CLI，并继续支持可选 Docker static CLI。`AICR_ENABLE_CONTAINER_SANDBOX=true` 时，`deploy.sh` 会挂载宿主 Podman socket，同时设置 `CONTAINER_HOST`（Podman 原生客户端）和 `DOCKER_HOST`（Docker 兼容客户端）。容器内不需要启动 Podman daemon；真正创建/管理子容器的是宿主 Podman socket。
+
+> **关于 `DOCKER_DOWNLOAD_MIRROR`**：仅当 `AICR_ENABLE_CONTAINER_SANDBOX=true` 且需要 Docker 兼容 CLI 时才需要下载 Docker 静态二进制；使用 `sandbox.kind: podman`/`engine: podman` 可直接走镜像内置 Podman CLI。
 
 国内部署完整示例：
 
 ```bash
-export BASE_IMAGE=mirror.ccs.tencentyun.com/library/node:22-alpine
-export APK_MIRROR=https://mirrors.cloud.tencent.com/alpine
+export BASE_IMAGE=ubuntu:24.04
+export NODE_IMAGE=mirror.ccs.tencentyun.com/library/node:22-bookworm-slim
+export APT_MIRROR=http://mirrors.tencent.com/ubuntu
+export PERFORCE_APT_DISTRO=noble
 export NPM_REGISTRY=http://mirrors.tencent.com/npm/
 export NPM_STRICT_SSL=false
-export DOCKER_DOWNLOAD_MIRROR=https://mirrors.cloud.tencent.com/docker-ce/linux/static/stable/x86_64
+export PIP_INDEX_URL=https://mirrors.tencent.com/pypi/simple
+export KUBERNETES_APT_REPO_BASE=https://mirrors.tencent.com/kubernetes_new/core:/stable:
+export KUBERNETES_APT_REPO_VERSION=v1.36
+export DOCKER_DOWNLOAD_MIRROR=https://mirrors.tencent.com/docker-ce/linux/static/stable/x86_64
 ./deploy.sh
 ```
 
@@ -235,8 +262,16 @@ ssh -p 36000 -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no \
 - **Config-only 变更只需重启**：`config.yaml` 和 `.env` 通过 volume 挂载到容器，修改后执行 `podman restart aicr` 即可；只有代码变更才需要 `deploy.sh` 完整重建。
 - **Admin session TTL**：`adminAuthSchema` 使用 `session_ttl_seconds`（默认 28800 = 8 小时），不是 `session_ttl_minutes`。设置 `minutes` 字段会被静默忽略。
 - **pnpm 10.x 原生模块**：必须通过 `pnpm-workspace.yaml` 的 `onlyBuiltDependencies: [better-sqlite3]` 授权构建，不能用 `pnpm config set` 或 `--allow-build`。
-- **Chainguard/Wolfi 构建依赖**：使用 `apk add --no-cache python3 make build-base`，包名是 `build-base` 不是 `g++`。
-- **公网环境 `podman build` 网络限制**：公网环境 `apk add` 可能因网络策略失败；Dockerfile 已做 fallback 处理。
+- **P4 运行时基线**：运行时镜像默认固定在 `ubuntu:24.04` + `p4-cli`
+  官方 APT 安装链路。若替换 `BASE_IMAGE`，只建议使用 Ubuntu 24.04 的
+  registry mirror；切回 Alpine / Chainguard / Wolfi 会直接破坏 `p4`
+  可安装性和当前工具基线。
+- **公网环境 `podman build` 网络限制**：公网环境 `apt-get`、Perforce APT
+  仓库、Kubernetes APT、Helm APT、GitHub release、npm、pip 或 Docker
+  static 下载都可能因网络策略失败；优先配置 `APT_MIRROR`、`NODE_IMAGE`
+  mirror、`KUBERNETES_APT_REPO_BASE`、`NPM_REGISTRY`、`PIP_INDEX_URL` 和
+  `DOCKER_DOWNLOAD_MIRROR`。Helm/yq 如果无法直连官方源，使用内部缓存
+  覆盖 `HELM_APT_REPO`、`HELM_APT_KEY_URL`、`YQ_DOWNLOAD_BASE`。
 
 ## 8. 测试验收环境（与生产隔离）
 

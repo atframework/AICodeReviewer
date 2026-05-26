@@ -21,7 +21,7 @@ ensure_writable_tree() {
   mkdir -p "$path"
 
   # Bind-mounted files keep host ownership. When the runtime image changes its
-  # default UID/GID (for example Chainguard's 65532 vs official Node's 1000),
+  # default UID/GID (for example an older image or an alternate distro base),
   # previously created database, log, or workspace files can become read-only
   # to the new container user even though the top-level directory still exists.
   # Repair the whole tree before starting a new container so restarts and
@@ -39,12 +39,6 @@ ensure_writable_tree "$DEPLOY_DIR/data/workspaces"
 ensure_writable_tree "$DEPLOY_DIR/data/db"
 ensure_writable_tree "$DEPLOY_DIR/data/logs"
 
-P4_MOUNT_ARGS=()
-if command -v p4 >/dev/null 2>&1; then
-  P4_BIN="$(command -v p4)"
-  P4_MOUNT_ARGS=(-v "$P4_BIN:/usr/bin/p4:ro" -e P4TRUST=/app/data/p4trust)
-fi
-
 # ---------------------------------------------------------------------------
 # Optional container-nested sandbox support
 # ---------------------------------------------------------------------------
@@ -59,6 +53,7 @@ DOCKER_DOWNLOAD_MIRROR="${DOCKER_DOWNLOAD_MIRROR:-https://download.docker.com/li
 DOCKER_STATIC="$DEPLOY_DIR/source/deploy/docker-static"
 SANDBOX_MOUNT_ARGS=()
 SANDBOX_ENV_ARGS=()
+SANDBOX_SECURITY_ARGS=()
 USERNS_ARGS=()
 
 mkdir -p "$(dirname "$DOCKER_STATIC")"
@@ -90,7 +85,8 @@ if [ "$AICR_ENABLE_CONTAINER_SANDBOX" = "true" ]; then
   if [ -S "$PODMAN_SOCK" ]; then
     echo "=== Container sandbox: using Podman socket $PODMAN_SOCK ==="
     SANDBOX_MOUNT_ARGS=(-v "$PODMAN_SOCK:$PODMAN_SOCK")
-    SANDBOX_ENV_ARGS=(-e "DOCKER_HOST=unix://$PODMAN_SOCK")
+    SANDBOX_ENV_ARGS=(-e "DOCKER_HOST=unix://$PODMAN_SOCK" -e "CONTAINER_HOST=unix://$PODMAN_SOCK")
+    SANDBOX_SECURITY_ARGS=(--security-opt label=disable)
   elif [ -S "/var/run/docker.sock" ]; then
     echo "=== Container sandbox: using Docker socket /var/run/docker.sock ==="
     SANDBOX_MOUNT_ARGS=(-v "/var/run/docker.sock:/var/run/docker.sock")
@@ -141,11 +137,42 @@ BUILD_ARGS=(--build-arg NPM_STRICT_SSL=false)
 if [ -n "${NPM_REGISTRY:-}" ]; then
   BUILD_ARGS+=(--build-arg "NPM_REGISTRY=${NPM_REGISTRY}")
 fi
-if [ -n "${APK_MIRROR:-}" ]; then
-  BUILD_ARGS+=(--build-arg "APK_MIRROR=${APK_MIRROR}")
+if [ -n "${PIP_INDEX_URL:-}" ]; then
+  BUILD_ARGS+=(--build-arg "PIP_INDEX_URL=${PIP_INDEX_URL}")
+fi
+if [ -n "${PIP_TRUSTED_HOST:-}" ]; then
+  BUILD_ARGS+=(--build-arg "PIP_TRUSTED_HOST=${PIP_TRUSTED_HOST}")
+fi
+if [ -n "${KUBERNETES_APT_REPO_BASE:-}" ]; then
+  BUILD_ARGS+=(--build-arg "KUBERNETES_APT_REPO_BASE=${KUBERNETES_APT_REPO_BASE}")
+fi
+if [ -n "${KUBERNETES_APT_REPO_VERSION:-}" ]; then
+  BUILD_ARGS+=(--build-arg "KUBERNETES_APT_REPO_VERSION=${KUBERNETES_APT_REPO_VERSION}")
+fi
+if [ -n "${HELM_APT_REPO:-}" ]; then
+  BUILD_ARGS+=(--build-arg "HELM_APT_REPO=${HELM_APT_REPO}")
+fi
+if [ -n "${HELM_APT_KEY_URL:-}" ]; then
+  BUILD_ARGS+=(--build-arg "HELM_APT_KEY_URL=${HELM_APT_KEY_URL}")
+fi
+if [ -n "${YQ_VERSION:-}" ]; then
+  BUILD_ARGS+=(--build-arg "YQ_VERSION=${YQ_VERSION}")
+fi
+if [ -n "${YQ_DOWNLOAD_BASE:-}" ]; then
+  BUILD_ARGS+=(--build-arg "YQ_DOWNLOAD_BASE=${YQ_DOWNLOAD_BASE}")
+fi
+APT_MIRROR_VALUE="${APT_MIRROR:-${APK_MIRROR:-}}"
+if [ -n "${APT_MIRROR_VALUE}" ]; then
+  BUILD_ARGS+=(--build-arg "APT_MIRROR=${APT_MIRROR_VALUE}")
 fi
 if [ -n "${BASE_IMAGE:-}" ]; then
   BUILD_ARGS+=(--build-arg "BASE_IMAGE=${BASE_IMAGE}")
+fi
+if [ -n "${NODE_IMAGE:-}" ]; then
+  BUILD_ARGS+=(--build-arg "NODE_IMAGE=${NODE_IMAGE}")
+fi
+if [ -n "${PERFORCE_APT_DISTRO:-}" ]; then
+  BUILD_ARGS+=(--build-arg "PERFORCE_APT_DISTRO=${PERFORCE_APT_DISTRO}")
 fi
 "$ENGINE_CMD" "${ENGINE_ARGS[@]}" build \
   "${BUILD_ARGS[@]}" \
@@ -188,13 +215,14 @@ echo "=== Starting AICR container ==="
   -v "$DEPLOY_DIR/data/workspaces:/app/workspaces" \
   -v "$DEPLOY_DIR/data/db:/app/data" \
   -v "$DEPLOY_DIR/data/logs:/app/logs" \
-  "${P4_MOUNT_ARGS[@]}" \
   "${SANDBOX_MOUNT_ARGS[@]}" \
+  "${SANDBOX_SECURITY_ARGS[@]}" \
   -e AICR_LOG_DIR=/app/logs \
   -e AICR_LOG_FILE=aicr.log \
   -e AICR_LOG_MAX_AGE_DAYS=7 \
   -e AICR_LOG_MAX_FILES=3 \
   -e AICR_LOG_MAX_SIZE_BYTES=104857600 \
+  -e P4TRUST=/app/data/p4trust \
   "${SANDBOX_ENV_ARGS[@]}" \
   "${PROXY_ENV_ARGS[@]}" \
   --env-file "$DEPLOY_DIR/.env" \

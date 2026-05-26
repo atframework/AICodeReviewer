@@ -32,6 +32,24 @@ describe("deploy assets", () => {
     expect(dockerfile).toContain("if [ -s /usr/local/bin/docker ]; then chmod +x /usr/local/bin/docker; else rm -f /usr/local/bin/docker; fi");
   });
 
+  it("ships cloud-native and Podman socket client tooling", () => {
+    const dockerfile = readRepoFile("deploy/Dockerfile");
+    const script = readRepoFile("deploy/deploy.sh");
+
+    expect(dockerfile).toContain("ARG KUBERNETES_APT_REPO_BASE=https://pkgs.k8s.io/core:/stable:");
+    expect(dockerfile).toContain("ARG KUBERNETES_APT_REPO_VERSION=v1.36");
+    expect(dockerfile).toContain("ARG HELM_APT_REPO=https://packages.buildkite.com/helm-linux/helm-debian/any/");
+    expect(dockerfile).toContain("ARG YQ_VERSION=v4.53.2");
+    expect(dockerfile).toContain("  kubectl \\");
+    expect(dockerfile).toContain("  helm \\");
+    expect(dockerfile).toContain("  podman \\");
+    expect(dockerfile).toContain("  buildah \\");
+    expect(dockerfile).toContain("  skopeo \\");
+    expect(dockerfile).toContain("/usr/local/bin/yq");
+    expect(script).toContain('-e "CONTAINER_HOST=unix://$PODMAN_SOCK"');
+    expect(script).toContain("--build-arg \"KUBERNETES_APT_REPO_BASE=${KUBERNETES_APT_REPO_BASE}\"");
+  });
+
   it("copies sandbox and eval workspace dependencies into the runtime image", () => {
     const dockerfile = readRepoFile("deploy/Dockerfile");
 

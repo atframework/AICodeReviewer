@@ -74,14 +74,28 @@ When AICR itself runs inside a container (e.g. via `deploy.sh`) and you want the
    systemctl --user enable --now podman.socket
    ```
 
-2. **Docker static binary** inside the AICR image (installed by `deploy.sh` when `AICR_ENABLE_CONTAINER_SANDBOX=true`).
-3. **`deploy.sh` environment variables**:
+2. **Podman CLI** inside the AICR image. The runtime image ships `podman` so
+   `sandbox.kind: podman` / `sandbox.engine: podman` can talk to the mounted
+   host socket through `CONTAINER_HOST`.
+3. **Optional Docker static binary** inside the AICR image for Docker-compatible
+   clients (installed by `deploy.sh` when `AICR_ENABLE_CONTAINER_SANDBOX=true`).
+4. **`deploy.sh` environment variables**:
 
    ```bash
-   AICR_ENABLE_CONTAINER_SANDBOX=true   # enables socket mount + docker CLI
+   AICR_ENABLE_CONTAINER_SANDBOX=true   # enables socket mount + Podman/Docker clients
    ```
 
-4. **`config.yaml` sandbox kind** set to `docker` (the Docker CLI talks to Podman's docker-compatible socket):
+5. **`config.yaml` sandbox kind** set to native Podman when possible:
+
+   ```yaml
+   agent:
+     sandbox:
+       kind: podman
+       engine: podman
+   ```
+
+   Docker-compatible mode remains available when you specifically need Docker
+   CLI semantics:
 
    ```yaml
    agent:
@@ -92,17 +106,29 @@ When AICR itself runs inside a container (e.g. via `deploy.sh`) and you want the
 
 ### How it works
 
+- The runtime image installs `podman`, `buildah`, and `skopeo`. No Podman daemon
+  is started inside the AICR container; the CLI is only a client for the mounted
+  host Podman API socket.
 - `deploy.sh` downloads the Docker static binary and bakes it into the image when `AICR_ENABLE_CONTAINER_SANDBOX=true`; otherwise it creates a harmless empty `deploy/docker-static` placeholder so clean source syncs still satisfy the Dockerfile's optional `COPY` step. The runtime image removes that empty placeholder instead of installing a zero-byte `docker` executable.
 - At runtime, `deploy.sh` mounts the host user-level Podman socket (`/run/user/$UID/podman/podman.sock`) into the AICR container.
-- `deploy.sh` sets `DOCKER_HOST=unix:///run/user/$UID/podman/podman.sock` so the Docker CLI inside the container talks to the host Podman daemon.
+- `deploy.sh` sets `CONTAINER_HOST=unix:///run/user/$UID/podman/podman.sock` so
+  the Podman CLI talks to the host Podman service.
+- `deploy.sh` also sets `DOCKER_HOST=unix:///run/user/$UID/podman/podman.sock`
+  so Docker-compatible tools can use Podman's Docker API layer.
 - `--userns=keep-id --group-add keep-groups` ensures the container process can access the user-level socket.
+- `--security-opt label=disable` is added when a Podman socket is mounted, which
+  matches Podman's documented guidance for accessing the Unix socket from inside
+  another container on SELinux-enabled hosts.
+- Treat the socket as privileged access: the Podman API can start containers and
+  execute arbitrary code as the host user that owns the socket.
 
 ### Verification
 
 After deployment, confirm from inside the AICR container:
 
 ```bash
-podman exec aicr sh -c 'docker --version && docker run --rm alpine:latest echo ok'
+podman exec aicr sh -c 'podman --version && podman run --rm alpine:latest echo podman-ok'
+podman exec aicr sh -c 'docker --version && docker run --rm alpine:latest echo docker-ok'
 ```
 
 ## Runtime guarantees

@@ -24,7 +24,7 @@
 - Prefer minimal edits; do not weaken lint, typecheck, test, or markdown gates just to get a change through.
 - When adding or removing a workspace package, update the package manifest, local `tsconfig.json`, and root `tsconfig.json` references together.
 - When code changes affect config shape, agent adapters, MCP tool contracts, output rendering, deployment behavior, or public workflow, update the matching `Plan.md` roadmap summary, relevant `docs/` modules, `example/config.yaml`, and `example/README.md` entries in the same change, or explicitly state why no doc/example update is needed.
-- Keep temporary repository artifacts such as scratch scripts, debug logs, and one-off reports under `build/`; do not leave them in the repository root. Use purposeful subdirectories: `build/tmp/` for ad-hoc data, `build/logs/` for captured output, and existing `build/deploy/` for deployment staging. Ensure the subdirectory exists before writing (`node -e "require('fs').mkdirSync('build/tmp',{recursive:true})"`).
+- **All temporary task artifacts must go under `build/`**: scratch scripts, debug logs, one-off reports, intermediate data, benchmark outputs, and any file produced during an agent session that is not a permanent part of the codebase must be written under `build/`. Never leave temporary files in the repository root, `eval/`, or any package directory. Use purposeful subdirectories: `build/tmp/` for ad-hoc data, `build/logs/` for captured output, and existing `build/deploy/` for deployment staging. Ensure the subdirectory exists before writing (`node -e "require('fs').mkdirSync('build/tmp',{recursive:true})"`). The `eval/` directory is reserved for permanent eval CLI test fixtures only; do not store task scratch files there.
 - Use `.github/instructions/*.instructions.md` only for path-specific rules; keep workspace-wide rules in this file.
 - Keep AI-facing assets concise: stable rules here, detailed shared context in `AGENTS.*.md`, and repeatable procedures in skills.
 - When an agent hits an error but succeeds by retrying or changing approach, capture the generalizable cause and fix in the most appropriate existing `AGENTS.md` or skill file after researching current prompt/skill best practices; merge the lesson concisely instead of adding incident logs or duplicates.
@@ -37,6 +37,15 @@
   - Typecheck: `node node_modules/typescript/bin/tsc -b tsconfig.json --pretty false`
   - Build: Use `cmd /c "pnpm build"` or invoke the package build scripts directly.
 - If `pnpm` is available in the environment (e.g., CI Linux runner), prefer `pnpm` over the `node` workaround.
+- **Linux review/runtime shell baseline**: The deployed review image ships
+  `git`, `git-lfs`, `subversion`, `p4`, `rg`, `fd`, `bat`, `jq`, `tree`,
+  `yq`, `kubectl`, `helm`, `podman`, `buildah`, `skopeo`, `python3`/`pip`/`venv`,
+  `build-essential`, `cmake`, `ninja`, `clang`, `clang-format`, `clang-tidy`,
+  `cppcheck`, `gdb`, `valgrind`, `shellcheck`, `strace`, `lsof`, `sqlite3`,
+  `rsync`, and `universal-ctags`. Prefer `rg` over `grep`, `fd` over recursive
+  `find`, `bat --paging=never --style=plain` over raw `cat` for human
+  inspection, `jq` for JSON, and `yq` for YAML. Use POSIX fallbacks only when
+  exact flags or host portability are required.
 
 ## Known codebase pitfalls
 
@@ -79,7 +88,16 @@ These issues have been found and fixed in prior sessions. Before making changes,
 35. **Container sandbox workdir must be `/workspace/agent`**: Docker/Podman sandbox runs must set the container workdir to the writable agent mount. Otherwise Kilo-spawned MCP servers can write `.aicr-output-state.json` under the image workdir (for example `/app`) and the orchestrator will miss structured results.
 36. **Runtime image copies need build-stage directories for hoisted-only packages**: `deploy/Dockerfile` must copy `packages/sandbox/node_modules` and `packages/eval/node_modules` alongside their `dist/` outputs, but `pnpm install` can omit those package-local directories when the packages only use hoisted/workspace dependencies. Create them in the build stage with `mkdir -p packages/sandbox/node_modules packages/eval/node_modules` before the runtime `COPY --from=build ... node_modules` lines, or remote image builds will fail with `copier: stat: "/app/packages/.../node_modules": no such file or directory`.
 37. **pnpm 10.x native module builds require `onlyBuiltDependencies` in workspace yaml**: pnpm 10 introduced a build-approval gate for native modules. The correct fix is adding `onlyBuiltDependencies: [better-sqlite3]` to `pnpm-workspace.yaml`. Do NOT use `pnpm config set onlyBuiltDependencies` (sets a global string, not a project list), `--allow-build` (does not exist in pnpm 10.20.0), or `pnpm rebuild` (also blocked by the approval mechanism).
-38. **Chainguard/Wolfi build deps use `build-base` not `g++`**: Chainguard images lack python3 by default; `apk add --no-cache python3 make build-base` provides node-gyp compilation tooling. The package `g++` does not exist in Wolfi repos; `build-base` is the correct meta-package.
+38. **P4-enabled runtime image requires Ubuntu/glibc**: `deploy/Dockerfile`
+  now uses `ubuntu:24.04` as the distro base and copies the Node 22
+  userspace from `node:22-bookworm-slim`. Official Perforce packages provide
+  an Ubuntu APT repository and do not support Alpine/non-glibc images. Do
+  not switch the runtime `BASE_IMAGE` back to Alpine/Wolfi/Chainguard unless
+  you also replace the `p4-cli` installation path and revalidate the full
+  tool baseline (`git`, `subversion`, `p4`, `ripgrep`, `fd`, `bat`, `jq`,
+  `yq`, `kubectl`, `helm`, `podman`, `buildah`, `skopeo`, `python3-pip`,
+  `cmake`, `ninja`, `clang-tidy`, `cppcheck`, `gdb`, `valgrind`,
+  `shellcheck`, `strace`, `lsof`, `universal-ctags`).
 39. **Windows PowerShell file encoding defaults to UTF-16 LE**: PowerShell 5.1 `>` redirect and `Out-File` default to UTF-16 LE encoding; `Out-File -Encoding utf8` adds a BOM. For remote file transfers (`.env`, `config.yaml`, scripts), use `Out-File -Encoding ascii` or `Set-Content -Encoding utf8` (PS 7+). Better: use `scp` from the Linux-side or `printf` on the remote host to avoid encoding issues entirely.
 40. **Admin config uses `session_ttl_seconds` not `minutes`**: The `adminAuthSchema` in `packages/core/src/config.ts` uses `session_ttl_seconds` (default 28800 = 8 hours). Do not set `session_ttl_minutes`; it will be silently ignored and sessions will expire at the default.
 41. **Config-only changes need container restart, not rebuild**: `config.yaml` and `.env` are volume-mounted into the container, not baked into the image. After editing either file, restart the container (`podman restart aicr`); a full image rebuild is only needed for code changes.
