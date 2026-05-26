@@ -15,9 +15,29 @@ fi
 
 cd "$DEPLOY_DIR"
 
+ensure_writable_tree() {
+  local path="$1"
+
+  mkdir -p "$path"
+
+  # Bind-mounted files keep host ownership. When the runtime image changes its
+  # default UID/GID (for example Chainguard's 65532 vs official Node's 1000),
+  # previously created database, log, or workspace files can become read-only
+  # to the new container user even though the top-level directory still exists.
+  # Repair the whole tree before starting a new container so restarts and
+  # rollouts remain no-downtime.
+  chmod u+rwX,g+rwX,o+rwX "$path" 2>/dev/null || true
+  if [ "$ENGINE_BASENAME" = "podman" ]; then
+    "$ENGINE_CMD" unshare chmod -R u+rwX,g+rwX,o+rwX "$path"
+  else
+    chmod -R u+rwX,g+rwX,o+rwX "$path"
+  fi
+}
+
 # Ensure persistent data directories exist
-mkdir -p "$DEPLOY_DIR/data/workspaces" "$DEPLOY_DIR/data/db" "$DEPLOY_DIR/data/logs"
-chmod u+rwX,g+rwX,o+rwX "$DEPLOY_DIR/data/workspaces" "$DEPLOY_DIR/data/db" "$DEPLOY_DIR/data/logs"
+ensure_writable_tree "$DEPLOY_DIR/data/workspaces"
+ensure_writable_tree "$DEPLOY_DIR/data/db"
+ensure_writable_tree "$DEPLOY_DIR/data/logs"
 
 P4_MOUNT_ARGS=()
 if command -v p4 >/dev/null 2>&1; then
