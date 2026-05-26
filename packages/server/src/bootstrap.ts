@@ -1130,7 +1130,7 @@ export function createOutputPublisherFromConfig(
     const markerPrefix = readString(channelConfig, "marker_prefix", "markerPrefix");
     const markerLabel = readString(channelConfig, "marker_label", "markerLabel");
     const issueMode = readString(channelConfig, "issue_mode", "issueMode");
-    const resolvedIssueMode = issueMode === "consolidated" || issueMode === "per_problem"
+    const resolvedIssueMode = issueMode === "consolidated" || issueMode === "per_problem" || issueMode === "per_commit"
       ? issueMode
       : undefined;
     const channelLabels = Array.isArray(channelConfig.labels) && channelConfig.labels.every((value) => typeof value === "string")
@@ -1162,7 +1162,7 @@ export function createOutputPublisherFromConfig(
       ...(markerLabel ? { markerLabel } : {}),
       ...(channelLabels ? { labels: channelLabels } : {}),
       ...(resolvedIssueMode ? { issueMode: resolvedIssueMode } : {}),
-      ...(resolvedAction === "none" || resolvedAction === "close" ? { resolvedAction } : {}),
+      ...(resolvedAction === "none" || resolvedAction === "close" || resolvedAction === "mark_resolved" ? { resolvedAction } : {}),
       ...(problemIssueMaxRecentIssues !== undefined ? { maxRecentIssues: problemIssueMaxRecentIssues } : {}),
       ...(assignCommitter !== undefined ? { assignCommitter } : {}),
       ...(committerUsername ? { committerUsername } : {}),
@@ -1174,6 +1174,7 @@ export function createOutputPublisherFromConfig(
       ...(autoTag ? { autoTag } : {}),
       ...(reviewedTag ? { reviewedTag } : {}),
       ref,
+      ...(reviewEvent?.headSha ? { headSha: reviewEvent.headSha } : {}),
     });
 
     return {
@@ -1276,7 +1277,7 @@ export function createOutputPublisherFromConfig(
     const markerPrefix = readString(channelConfig, "marker_prefix", "markerPrefix");
     const markerLabel = readString(channelConfig, "marker_label", "markerLabel");
     const issueMode = readString(channelConfig, "issue_mode", "issueMode");
-    const resolvedIssueMode = issueMode === "consolidated" || issueMode === "per_problem"
+    const resolvedIssueMode = issueMode === "consolidated" || issueMode === "per_problem" || issueMode === "per_commit"
       ? issueMode
       : undefined;
     const labelIds = Array.isArray(channelConfig.label_ids) && channelConfig.label_ids.every((value) => typeof value === "number")
@@ -1308,7 +1309,7 @@ export function createOutputPublisherFromConfig(
       ...(markerLabel ? { markerLabel } : {}),
       ...(labelIds ? { labelIds } : {}),
       ...(resolvedIssueMode ? { issueMode: resolvedIssueMode } : {}),
-      ...(resolvedAction === "none" || resolvedAction === "close" || resolvedAction === "delete" ? { resolvedAction } : {}),
+      ...(resolvedAction === "none" || resolvedAction === "close" || resolvedAction === "mark_resolved" || resolvedAction === "delete" ? { resolvedAction } : {}),
       ...(problemIssueMaxRecentIssues !== undefined ? { maxRecentIssues: problemIssueMaxRecentIssues } : {}),
       ...(assignCommitter !== undefined ? { assignCommitter } : {}),
       ...(committerUsername ? { committerUsername } : {}),
@@ -1320,6 +1321,7 @@ export function createOutputPublisherFromConfig(
       ...(autoTag ? { autoTag } : {}),
       ...(reviewedTag ? { reviewedTag } : {}),
       ref,
+      ...(reviewEvent?.headSha ? { headSha: reviewEvent.headSha } : {}),
     });
 
     return {
@@ -1796,6 +1798,7 @@ export async function bootstrapServerApp(options: BootstrapServerOptions): Promi
     ...(summarizeModel ? { summarizeModel } : {}),
     ...(summarizeClient ? { summarizeClient } : {}),
     ...(config.review.output_language ? { outputLanguage: config.review.output_language } : {}),
+    ...(config.review.log_thinking === false ? { logThinking: false } : {}),
   };
 
   const queue = await createQueueFromConfig(config);

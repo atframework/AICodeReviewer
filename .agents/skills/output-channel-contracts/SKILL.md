@@ -80,6 +80,7 @@ All IM bot channels (`feishu_bot`, `wecom_bot`, and future channels such as `din
   - Body groups problems by severity (critical → info).
   - Labels use highest severity. Assignees are aggregated across all problems.
   - On re-analysis: existing consolidated issue is updated (PATCH). If no problems: closed/deleted per `resolved_action`.
+  - Per-fingerprint resolution tracking: body includes `<!-- aicr:commit={headSha} -->`, `<!-- aicr:open_problems=... -->`, and per-problem `<!-- aicr:fp={fp} -->` markers. On update, the VCS compare API verifies commit ordering; resolved problems are shown in a collapsible "Resolved" section. Same-commit updates merge without resolving; older-commit updates are skipped; compare API failures degrade gracefully to a full replacement.
 - `aicr.publish_summary.title` affects the rendered summary section in the issue body, not the managed issue title itself.
 - `gitea_problem_issue` applies auto_tag and reviewed_tag at issue creation time via `body.labels`.
 

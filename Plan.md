@@ -18,8 +18,7 @@
 
 - M5 已基本交付；仅剩 HTTP/SSE MCP transport 待调研（非阻塞）。
 - M6 GitHub 生产链路已验收；GitLab e2e 和 SVN adapter 移至 Backlog。
-- M8 观测底座已交付：OTel 已接入 serve 命令、Prometheus metrics 和 run snapshot 已连线、eval CLI 已添加。
-- M8 下一步转向内置观测首页：在认证后首屏展示工程级、provider+模型级和时间窗口统计，并在未配置 Prometheus 时依赖本地持久化聚合。
+- M8 观测底座与内置观测首页已交付：OTel 已接入 serve 命令、Prometheus metrics 和 run snapshot 已连线、eval CLI 已添加；Dashboard 支持 Overview / Projects / Providers / Runs 四个标签，工程面板与 Provider 面板均支持 today/thisWeek/thisMonth/all 时间维度切换。
 - M9 发布收尾已基本完成：从零部署验收、容器嵌套沙箱集成验证均通过；版本 bump 待用户决策。
 - M7 国际化（i18n）已开始：`output_language` 注入到 review task context 已交付。
 - 所有包均已补齐 `test/index.test.ts` barrel export 测试（AGENTS.md pitfall #10）。
@@ -156,7 +155,14 @@
 - `gitea_problem_issue` 和 `github_problem_issue` 支持 `issue_mode`:
   - `consolidated`（默认）：一次分析的所有问题合并为一个 issue，scope fingerprint 驱动更新与关闭。
   - `per_problem`：每个问题独立 issue，fingerprint 驱动生命周期。
+  - `per_commit`：按 commit scope fingerprint 创建 issue（含 headSha），不同 commit 的问题相互独立，不自动关闭其他 commit 的 issue。
+- `resolved_action` 支持 `mark_resolved`：关闭 issue 时在正文顶部添加 ✅ Resolved 标记，保留 issue 供历史追踪。
 - managed issue 标题由输出层生成并保持单行可读：单问题用 `per_problem` 格式（含位置与摘要），多问题在最高 severity + 计数后附加代表性摘要；summary title 只影响正文 summary heading。
+- `log_thinking` 配置控制 orchestrator 是否输出详细思考/执行日志（默认 true）。
+- consolidated issue per-fingerprint 解决跟踪与 webhook 重放保护：
+  - issue body 包含 `<!-- aicr:commit={headSha} -->`、`<!-- aicr:open_problems=... -->`、`<!-- aicr:fp=... -->` 标记。
+  - 更新时通过 VCS compare API 验证 commit 顺序；新 commit 分类新增/仍存在/已解决问题，同 commit 仅合并不解决，旧 commit 跳过更新，API 失败时安全降级。
+  - 向后兼容无标记的旧 issue。
 - 详细合同：`docs/ai/architecture.md` §3.9.5 与 `docs/output-channels.md`。
 
 ### 3.10 配置体系
@@ -183,8 +189,8 @@
 - 非 Prometheus/OTel 的观测数据层必须独立存在；未配置外部观测系统时，今日/本周/本月/汇总统计来自持久化 store/rollup，而不是进程内 metrics。
 - 观测持久化使用统一 `storage.database` 配置，当前已实现默认 `/app/data/aicr.sqlite` SQLite + Drizzle；Postgres 字段为集中化或多实例部署预留，运行时在未实现前必须显式拒绝而不是静默回退；`runs/<run_id>/run.json` 只作为审计快照，不作为聚合查询真源。
 - 观测查询缓存使用统一 `storage.cache` 配置，当前实时查询 SQLite；Redis 字段为跨进程/多实例缓存、session 和短期索引预留，不能作为唯一历史统计存储。
-- 工程级统计至少覆盖分析次数、分析代码量（变更文件数、增删/分析行数、分析字节数）、发现问题的 run 次数、问题数量、创建 issue 数量，以及该工程消耗的 provider+模型请求数与 token 数。
-- provider+模型级统计至少覆盖请求数、输入/输出/总 token、失败/重试/fallback 次数和可用时的估算成本。
+- 工程级统计至少覆盖分析次数、分析代码量（变更文件数、增删/分析行数、分析字节数）、发现问题的 run 次数、问题数量、创建 issue 数量，以及该工程消耗的 provider+模型请求数与 token 数；Dashboard Projects 面板支持 today/thisWeek/thisMonth/all 时间维度切换，以表格展示各工程的全部指标。
+- provider+模型级统计至少覆盖请求数、输入/输出/总 token、失败/重试/fallback 次数和可用时的估算成本；Dashboard Providers 面板支持 today/thisWeek/thisMonth/all 时间维度切换，以表格展示各 provider+model 的全部指标。
 - 项目维度应以 workspace + trigger + repo 形成稳定 project identity；从 `workspaces.instances` 删除的项目要在启动/配置 reload 后自动隐藏并按可配置宽限期级联清理统计数据。
 - 详细合同：`docs/ai/architecture.md` §3.11。
 
@@ -291,9 +297,12 @@
       LLM usage、output dispatch 事件、provider+model 统计、最近 run 列表。
     - 删除项目统计清理（已交付）：`softDeleteMissingProjects`（配置比对 + 软删除）以及
       `hardDeleteExpiredProjects`（宽限期硬删除 + CASCADE 清理）。
-    - 工程级统计（已交付）：分析次数、代码量（文件数/行数/字节）、问题 run 数、
-      problem 总数、issue 创建数。
-    - provider+模型统计（已交付）：请求数、token 数、成本、重试/fallback/失败、平均延迟。
+    - 工程级统计（已交付）：Projects 面板支持 today/thisWeek/thisMonth/all 时间维度切换，
+      以表格展示各工程的 reviews/success/failed/skipped/problems/issues/files/lines/
+      LLM requests/tokens/cost/avg duration。
+    - provider+模型统计（已交付）：Providers 面板支持 today/thisWeek/thisMonth/all 时间维度切换，
+      以表格展示各 provider+model 的 requests/tokens in/tokens out/total tokens/cost/
+      retries+fails/avg latency。
 4. **M9：发布收尾**（接近完成）
     - ~~`docker_socket` 文档确认~~（已交付：`example/README.md` 和 `docs/ai/architecture.md` §3.8.1 已补充说明）
     - ~~容器嵌套沙箱验证~~（已交付：`AICodeReviewerTest` 测试环境验证通过，确认 Podman socket + Docker 静态二进制 + `--userns=keep-id --group-add keep-groups` 路径可行；`deploy.sh`、`Dockerfile`、`.gitignore`、`docs/podman.md`、`example/README.md` 已更新）

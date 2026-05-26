@@ -259,11 +259,25 @@
 - 支持 `issue_mode` 控制创建策略：
   - `consolidated`（默认）：一次分析的所有问题合并为一个 issue，基于 scope fingerprint（channel + repo）做生命周期管理。每次审查更新已有 issue 内容；零问题时按 `resolved_action` 关闭或删除。
   - `per_problem`：每个问题创建独立 issue，基于 fingerprint 做生命周期管理。
+  - `per_commit`：按 commit scope fingerprint（channel + repo + headSha）创建 issue，不同 commit 的问题相互独立，不自动关闭其他 commit 的 issue。
+- `resolved_action` 支持：
+  - `close`（默认）：关闭 issue。
+  - `delete`：删除 issue（仅 Gitea）。
+  - `mark_resolved`：在 issue 正文顶部添加 ✅ Resolved 标记并关闭，保留 issue 供历史追踪。
+  - `none`：不执行任何操作。
 - consolidated 模式下 labels 使用最高严重级别，assignees 汇总所有关联负责人。
 - managed issue 标题由输出层生成，优先保持单行可读：
   - `per_problem`：前缀 + 严重级别 + 缩短位置 + 简短摘要（如 `[AICR] [HIGH] src/app.ts:3 · Issue`）。
   - `consolidated`：单问题复用 `per_problem` 格式；多问题使用前缀 + 最高严重级别 + 问题数 + 代表摘要（如 `[AICR] [CRITICAL] 3 problems · SQL query uses unsanitized input`）。
 - `aicr.publish_summary.title` 只影响 issue body 里的 summary heading，不直接控制 managed issue 标题。
+- consolidated issue 支持 per-fingerprint 解决跟踪与 webhook 重放保护：
+  - issue body 包含隐藏标记 `<!-- aicr:commit={headSha} -->` 和 `<!-- aicr:open_problems=fp1,fp2 -->`，每个问题标题后嵌入 `<!-- aicr:fp={fp} -->`。
+  - 更新已有 consolidated issue 时，通过 VCS compare API 验证当前 commit 是否在存储 commit 之后：
+    - 当前 commit 在存储 commit 之后（`ahead` 或 `identical`）：执行完整分类（新增/仍存在/已解决），在 issue body 中显示 Resolved 折叠区。
+    - 相同 commit：仅合并新问题，不标记任何问题为已解决（避免 LLM 可变性误判）。
+    - 当前 commit 更旧（`behind` 或 `diverged`）：完全跳过更新（防止 webhook 重放）。
+    - compare API 失败或不可用：更新但不分类（fail-safe，不误标记已解决）。
+  - 向后兼容：缺少新标记的旧 issue body 按原有逻辑全量替换。
 
 ### 3.10 配置体系
 
@@ -285,6 +299,7 @@
   - `queue.retry`
   - `queue.dead_letter`
   - `review.problem_issue.max_recent_issues`
+  - `review.log_thinking`
   - `review.reflection.memory`
   - `workspaces.defaults.agent`
   - `outputs.channels[].mention_fallback`
@@ -360,12 +375,19 @@
   - `GET /runs`：最近 run 列表，支持 `?limit=` (1..100)。
   所有端点（`/login` 除外）需 `Authorization: Bearer <token>` 头。
 - Dashboard SPA 嵌入于 `/dashboard` 和 `/` 路径，由 `packages/server/src/dashboard/dashboard.html`
-  提供。深色主题、登录表单、选项卡视图（overview / projects / providers / runs）、
-  时间窗口选择器（today / this week / this month / all）。
+  提供。深色主题、登录表单、选项卡视图（overview / projects / providers / runs）。
+  Overview 标签有时间窗口选择器（today / this week / this month / all）；
+  Projects 与 Providers 标签各自独立支持时间维度切换，按需调用
+  `GET /stats/projects?since=` 与 `GET /stats/providers?since=`。
 - 首屏统计包含：总 review 次数、成功/失败/跳过次数、发现问题的 run 次数、
   problem 总数、创建 issue 数、分析代码量、LLM 请求数、输入/输出/总 token、估算成本、平均 duration。
-- 工程级维度按 project 聚合：分析次数、代码量、问题数、issue 数。
-- provider+model 维度：请求数、token 数、成本、重试/fallback/失败、平均延迟。
+- 工程级维度按 project 聚合：Projects 面板以表格展示各工程的 reviewCount、successCount、
+  failureCount、skipCount、problemTotal、issueCreatedCount、filesChangedTotal、
+  linesAddedTotal / linesDeletedTotal、llmRequestTotal、tokensTotalTotal、costUsdTotal、
+  avgDurationMs；支持 today/thisWeek/thisMonth/all 筛选。
+- provider+model 维度：Providers 面板以表格展示各 provider+model 的 requestCount、
+  tokensIn、tokensOut、tokensTotal、costUsd、retryCount+fallbackCount+failureCount、
+  avgLatencyMs；支持 today/thisWeek/thisMonth/all 筛选。
 - Store DB 仅在 `adminAuthConfig` 可用时初始化（即设置了 `AICR_ADMIN_USERNAME` +
   `AICR_ADMIN_PASSWORD`，或设置 `AICR_ADMIN_USERNAME` + `AICR_ADMIN_PASSWORD_HASH`）。
   `bootstrapServerApp` 解析 admin auth config 后创建 `StoreDb` 实例，并注入
