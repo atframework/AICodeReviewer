@@ -25,6 +25,18 @@ describe("deploy assets", () => {
     expect(script).not.toContain("$ENGINE_CMD $SD_FLAG");
   });
 
+  it("auto-detects a host-side 3128 proxy for build and download steps", () => {
+    const script = readRepoFile("deploy/deploy.sh");
+
+    expect(script).toContain("DEFAULT_BUILD_PROXY_PORT=3128");
+    expect(script).toContain('BUILD_PROXY_SOURCE="auto-detected host port ${DEFAULT_BUILD_PROXY_PORT}"');
+    expect(script).toContain('run_with_build_proxy curl -fsSL -o /tmp/docker.tgz "$DOCKER_TGZ_URL"');
+    expect(script).toContain('run_with_build_proxy "$ENGINE_CMD" "${ENGINE_ARGS[@]}" build');
+    expect(script).toContain('BUILD_NETWORK_MODE="host"');
+    expect(script).toContain('BUILD_ARGS+=(--http-proxy=true)');
+    expect(script).toContain('BUILD_ARGS+=(--build-arg "HTTP_PROXY=${BUILD_HTTP_PROXY}" --build-arg "http_proxy=${BUILD_HTTP_PROXY}")');
+  });
+
   it("removes the optional Docker CLI placeholder from runtime images when it is empty", () => {
     const dockerfile = readRepoFile("deploy/Dockerfile");
 
@@ -62,6 +74,7 @@ describe("deploy assets", () => {
 
     const buildStage = dockerfile.split("# ---------- Runtime stage ----------")[0] ?? dockerfile;
     const mirrorSwitchIndex = buildStage.indexOf('MIRROR="${APT_MIRROR:-${APK_MIRROR:-}}"; \\');
+    const noninteractiveIndex = buildStage.indexOf("export DEBIAN_FRONTEND=noninteractive; \\");
     const firstAptUpdateIndex = buildStage.indexOf("apt-get update; \\");
 
     expect(dockerfile).toContain("COPY deploy/extra-ca/ /usr/local/share/ca-certificates/");
@@ -69,8 +82,12 @@ describe("deploy assets", () => {
     expect(dockerfile).toContain("s|http://ports.ubuntu.com/ubuntu-ports|${MIRROR}|g");
     expect(dockerfile).toContain("s|https://ports.ubuntu.com/ubuntu-ports|${MIRROR}|g");
     expect(mirrorSwitchIndex).toBeGreaterThan(-1);
+    expect(noninteractiveIndex).toBeGreaterThan(-1);
     expect(firstAptUpdateIndex).toBeGreaterThan(-1);
     expect(mirrorSwitchIndex).toBeLessThan(firstAptUpdateIndex);
+    expect(noninteractiveIndex).toBeLessThan(firstAptUpdateIndex);
+    expect(dockerfile).toContain("export DEBIAN_FRONTEND=noninteractive; \\");
+    expect(dockerfile).toContain("export DEBCONF_NONINTERACTIVE_SEEN=true; \\");
     expect(dockerfile).toContain("apt-get install -y --no-install-recommends ca-certificates; \\");
     expect(dockerfile).toContain("update-ca-certificates; \\");
     expect(dockerfile).toContain("apt-get install -y --no-install-recommends \\\n  apt-transport-https \\\n  ca-certificates \\\n  curl \\\n  gnupg; \\");

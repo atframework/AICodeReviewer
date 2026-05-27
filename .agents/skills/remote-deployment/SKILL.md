@@ -150,6 +150,12 @@ The `deploy.sh` script:
 3. Starts new container with volume mounts and env vars
 4. Runs health check on `http://127.0.0.1:<host-port>/healthz`
 
+If the deploy host listens on TCP `3128` and no explicit `HTTP_PROXY` /
+`HTTPS_PROXY` is exported, `deploy.sh` auto-detects that host-side HTTP proxy
+and uses it for host downloads plus image-build fetches. If the proxy only
+binds to loopback, the script temporarily builds with host networking so
+Dockerfile `RUN` steps can still reach `127.0.0.1:3128`.
+
 ### Post-deploy verification
 
 ```bash

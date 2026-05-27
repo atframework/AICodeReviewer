@@ -374,6 +374,8 @@ outputs:
     # GitHub managed problem issues — create/close issues per problem fingerprint.
     # GitHub does not support deleting issues; resolved_action can only be close or none.
     # Use issue_mode: consolidated to merge all problems from one review into a single issue.
+    # Requires a GitHub trigger/channel token_env with Issues read/write permission;
+    # enabling GitHub webhook "Issues" events is not an API permission grant.
     #
     # - name: github-problem-issues
     #   kind: github_problem_issue

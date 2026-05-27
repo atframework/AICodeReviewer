@@ -214,6 +214,7 @@
 - Skip reason 或 summary 要求人类补 diff/source context，或声称无法访问完整仓库/源码而无法验证时，orchestrator 也会修复为“只读命令检查已物化源码或 `aicr.fetch_more_context` 补拉具体路径”的流程，并在拿到上下文后要求最终结构化输出。
 - `aicr.fetch_more_context` 可用于缺失/过窄 diff 下的完整变更文件，以及为验证变更行所必需的窄范围相关文件；problem 仍必须锚定到本次变更的文件与行。
 - IM 通知保持 `Review target` / `Summary` / `Problems` 分段结构，问题位置必须来自 `aicr.report_problem.file` 与 `line`。
+- 复合输出 publisher 必须隔离单通道发布失败：某个 channel（例如 GitHub issue API 403）失败时记录 `DispatchResult.status=failed` 和告警日志，继续尝试后续 channel；只有成功发布的 dispatch 才使 run 状态成为 `published`，若全部 dispatch 都失败则 run 以 `skipped/output_dispatch_failed` 结束，而不是把触发器升级为 `review_orchestration_failed`。
 
 #### 3.9.0 PR Review Summary 更新模式
 
@@ -278,6 +279,7 @@
     - 当前 commit 更旧（`behind` 或 `diverged`）：完全跳过更新（防止 webhook 重放）。
     - compare API 失败或不可用：更新但不分类（fail-safe，不误标记已解决）。
   - 向后兼容：缺少新标记的旧 issue body 按原有逻辑全量替换。
+- GitHub managed problem issue 需要 `token_env` 指向具备 Issues read/write 权限的 PAT 或 GitHub App installation token；Webhook 的 `Issues` / `Issue comments` 事件订阅只控制入站事件，不授予 REST API 创建/更新 issue 的权限。
 
 ### 3.10 配置体系
 
