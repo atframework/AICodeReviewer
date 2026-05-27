@@ -80,7 +80,7 @@ export interface ReviewProblem {
 
 export interface DispatchResult {
 	readonly channel: string;
-	readonly status: "published";
+	readonly status: "published" | "failed";
 	readonly externalId?: string;
 	readonly raw: unknown;
 }

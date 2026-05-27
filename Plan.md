@@ -142,6 +142,7 @@
 - Kilo 原生 MCP state 与 JSON stream tool-call 都必须进入同一条工具执行链；`contextRequests` 触发 VCS `fetchExtraContext` 补拉并回灌 follow-up，而不是发布“无法访问完整仓库代码/无法验证”之类的最终摘要。
 - Agent 修复后若仍只输出“未发现问题 / 无可审查代码”自由文本，服务端归一为 `aicr.skip` 并跳过 IM；若仍无法解析且不是无问题语义，则改走直连 LLM 修复兜底。
 - Summary 声称发现问题但没有 `aicr.report_problem` 记录，或 skip/summary 要求人类补 diff/source context / 声称源码不可访问时，按结构化输出失败处理并修复，避免 `problemCount=0` 被 no-problems 策略静默压掉。
+- 复合输出通道隔离单 channel 发布失败：失败记录为 dispatch `failed` 并继续后续 channel；若全失败，run 以 `skipped/output_dispatch_failed` 结束，不再升级成触发器失败。
 - 详细合同：`docs/ai/architecture.md` §3.9 与 `docs/output-channels.md`。
 
 ### 3.9.0 PR Review Summary 更新模式
@@ -169,6 +170,7 @@
   - issue body 包含 `<!-- aicr:commit={headSha} -->`、`<!-- aicr:open_problems=... -->`、`<!-- aicr:fp=... -->` 标记。
   - 更新时通过 VCS compare API 验证 commit 顺序；新 commit 分类新增/仍存在/已解决问题，同 commit 仅合并不解决，旧 commit 跳过更新，API 失败时安全降级。
   - 向后兼容无标记的旧 issue。
+- `github_problem_issue` 的 `token_env` 必须具备 GitHub Issues read/write 权限；Webhook 事件订阅不等于 API 权限。
 - 详细合同：`docs/ai/architecture.md` §3.9.5 与 `docs/output-channels.md`。
 
 ### 3.10 配置体系
@@ -332,5 +334,6 @@
   `http://mirrors.ustc.edu.cn/ubuntu-ports`），npm、PyPI、Kubernetes
   APT 与 Docker static 仍使用 `mirrors.tencent.com`；Helm/yq 暂无已验证
   的腾讯专用镜像时保留官方源或使用内部缓存覆盖 build arg。
+- `deploy.sh` 在未显式设置 `HTTP_PROXY` / `HTTPS_PROXY` 时，会自动探测部署宿主机的 TCP `3128` HTTP 代理，并将宿主下载与镜像构建流量切到该代理；若代理只绑定 loopback，则临时使用 host build network 保证 Dockerfile 下载可达。
 - 健康检查统一使用 `/healthz`。
 - 部署与验收入口：`example/README.md`、`docs/podman.md` 与相关 skill。

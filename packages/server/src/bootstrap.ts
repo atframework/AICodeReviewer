@@ -852,6 +852,62 @@ function appendPublisherResults(target: DispatchResult[], result: ReviewDispatch
   target.push(result as DispatchResult);
 }
 
+interface OutputPublisherEntry {
+  readonly name: string;
+  readonly publisher: ReviewOutputPublisher;
+}
+
+function readDispatchErrorStatus(error: unknown): number | undefined {
+  if (!error || typeof error !== "object") {
+    return undefined;
+  }
+
+  const status = (error as { readonly status?: unknown }).status;
+  return typeof status === "number" ? status : undefined;
+}
+
+function toDispatchErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function buildDispatchFailureHint(channelName: string, status: number | undefined): string | undefined {
+  if (status === 403 && channelName.toLowerCase().includes("github")) {
+    return "GitHub webhook event subscriptions do not grant REST API permissions. Configure token_env with a token or GitHub App installation token that has Issues read/write access, and reinstall/refresh the App installation after changing permissions.";
+  }
+
+  return undefined;
+}
+
+function createFailedDispatchResult(channelName: string, phase: "problem" | "summary", error: unknown): DispatchResult {
+  const status = readDispatchErrorStatus(error);
+  const hint = buildDispatchFailureHint(channelName, status);
+  return {
+    channel: channelName,
+    status: "failed",
+    raw: {
+      action: "dispatch_failed",
+      phase,
+      error: toDispatchErrorMessage(error),
+      ...(status !== undefined ? { status } : {}),
+      ...(hint ? { hint } : {}),
+    },
+  };
+}
+
+function logDispatchFailure(channelName: string, phase: "problem" | "summary", error: unknown): void {
+  const status = readDispatchErrorStatus(error);
+  const hint = buildDispatchFailureHint(channelName, status);
+  console.warn(JSON.stringify({
+    level: "warn",
+    msg: "output channel dispatch failed",
+    channel: channelName,
+    phase,
+    error: toDispatchErrorMessage(error),
+    ...(status !== undefined ? { status } : {}),
+    ...(hint ? { hint } : {}),
+  }));
+}
+
 function callPublishProblem(
   publisher: ReviewOutputPublisher,
   problem: ReviewProblem,
@@ -864,27 +920,28 @@ function callPublishProblem(
 }
 
 function createCompositeOutputPublisher(
-  linePublishers: readonly ReviewOutputPublisher[],
-  summaryPublishers: readonly ReviewOutputPublisher[],
+  linePublishers: readonly OutputPublisherEntry[],
+  summaryPublishers: readonly OutputPublisherEntry[],
 ): ReviewOutputPublisher | undefined {
-  const summaryCapable = summaryPublishers.filter((publisher) => publisher.publishSummary);
+  const summaryCapable = summaryPublishers.filter((entry) => entry.publisher.publishSummary);
   if (linePublishers.length === 0 && summaryCapable.length === 0) {
     return undefined;
-  }
-
-  if (linePublishers.length === 1 && summaryCapable.length === 0) {
-    return linePublishers[0]!;
   }
 
   return {
     handlesRendering: true,
     publishesProblems: linePublishers.length > 0,
-    noProblemsAction: summaryCapable.some((publisher) => publisher.noProblemsAction === "publish" || publisher.noProblemsAction === "publish_if_summary") ? summaryCapable.every((publisher) => publisher.noProblemsAction === "publish_if_summary") ? "publish_if_summary" : "publish" : "suppress",
-    publishEmptySummary: summaryCapable.some((publisher) => publisher.publishEmptySummary && publisher.noProblemsAction !== "suppress"),
+    noProblemsAction: summaryCapable.some((entry) => entry.publisher.noProblemsAction === "publish" || entry.publisher.noProblemsAction === "publish_if_summary") ? summaryCapable.every((entry) => entry.publisher.noProblemsAction === "publish_if_summary") ? "publish_if_summary" : "publish" : "suppress",
+    publishEmptySummary: summaryCapable.some((entry) => entry.publisher.publishEmptySummary && entry.publisher.noProblemsAction !== "suppress"),
     async publishProblem(problem: ReviewProblem): Promise<readonly DispatchResult[]> {
       const results: DispatchResult[] = [];
-      for (const publisher of linePublishers) {
-        appendPublisherResults(results, await callPublishProblem(publisher, problem));
+      for (const entry of linePublishers) {
+        try {
+          appendPublisherResults(results, await callPublishProblem(entry.publisher, problem));
+        } catch (error) {
+          logDispatchFailure(entry.name, "problem", error);
+          results.push(createFailedDispatchResult(entry.name, "problem", error));
+        }
       }
       return results;
     },
@@ -898,7 +955,8 @@ function createCompositeOutputPublisher(
             const results: DispatchResult[] = [];
             const noProblems = (problems?.length ?? 0) === 0;
             const bypassNoProblemsPolicy = options?.bypassNoProblemsPolicy === true;
-            for (const publisher of summaryCapable) {
+            for (const entry of summaryCapable) {
+              const publisher = entry.publisher;
               if (!bypassNoProblemsPolicy && noProblems) {
                 if (publisher.noProblemsAction === "suppress") {
                   continue;
@@ -908,7 +966,12 @@ function createCompositeOutputPublisher(
                 }
               }
               if (publisher.publishSummary) {
-                appendPublisherResults(results, await publisher.publishSummary(summary, problems, options));
+                try {
+                  appendPublisherResults(results, await publisher.publishSummary(summary, problems, options));
+                } catch (error) {
+                  logDispatchFailure(entry.name, "summary", error);
+                  results.push(createFailedDispatchResult(entry.name, "summary", error));
+                }
               }
             }
             return results;
@@ -1488,25 +1551,31 @@ export function createOutputPublisherResolverFromConfig(
     const pullNumber = extractPullNumber(context.payload);
     const baseDir = options.baseDir ?? process.cwd();
     const linePublishers = resolveOutputChannelNames(config, context, "line_comments")
-      .map((name) => createOutputPublisherFromConfig(
-        config,
-        name,
-        pullNumber,
-        context.reviewEvent.workspaceId,
-        context.reviewEvent,
-        baseDir,
-      ))
-      .filter((publisher): publisher is ReviewOutputPublisher => Boolean(publisher));
+      .map((name): OutputPublisherEntry | undefined => {
+        const publisher = createOutputPublisherFromConfig(
+          config,
+          name,
+          pullNumber,
+          context.reviewEvent.workspaceId,
+          context.reviewEvent,
+          baseDir,
+        );
+        return publisher ? { name, publisher } : undefined;
+      })
+      .filter((entry): entry is OutputPublisherEntry => Boolean(entry));
     const summaryPublishers = resolveOutputChannelNames(config, context, "summary")
-      .map((name) => createOutputPublisherFromConfig(
-        config,
-        name,
-        pullNumber,
-        context.reviewEvent.workspaceId,
-        context.reviewEvent,
-        baseDir,
-      ))
-      .filter((publisher): publisher is ReviewOutputPublisher => Boolean(publisher));
+      .map((name): OutputPublisherEntry | undefined => {
+        const publisher = createOutputPublisherFromConfig(
+          config,
+          name,
+          pullNumber,
+          context.reviewEvent.workspaceId,
+          context.reviewEvent,
+          baseDir,
+        );
+        return publisher ? { name, publisher } : undefined;
+      })
+      .filter((entry): entry is OutputPublisherEntry => Boolean(entry));
 
     return createCompositeOutputPublisher(linePublishers, summaryPublishers);
   };

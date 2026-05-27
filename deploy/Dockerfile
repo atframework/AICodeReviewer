@@ -47,6 +47,8 @@ USER root
 COPY deploy/extra-ca/ /usr/local/share/ca-certificates/
 
 RUN set -eux; \
+  export DEBIAN_FRONTEND=noninteractive; \
+  export DEBCONF_NONINTERACTIVE_SEEN=true; \
   MIRROR="${APT_MIRROR:-${APK_MIRROR:-}}"; \
   if [ -n "${MIRROR}" ]; then \
   if [ -f /etc/apt/sources.list.d/ubuntu.sources ]; then \
@@ -153,6 +155,8 @@ USER root
 COPY deploy/extra-ca/ /usr/local/share/ca-certificates/
 
 RUN set -eux; \
+  export DEBIAN_FRONTEND=noninteractive; \
+  export DEBCONF_NONINTERACTIVE_SEEN=true; \
   MIRROR="${APT_MIRROR:-${APK_MIRROR:-}}"; \
   if [ -n "${MIRROR}" ]; then \
   if [ -f /etc/apt/sources.list.d/ubuntu.sources ]; then \

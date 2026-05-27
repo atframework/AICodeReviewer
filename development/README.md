@@ -165,6 +165,7 @@ curl -sf https://aicr.m-oa.com:6023/healthz
 - **部署目录**：`/home/tools/AICodeReviewer`
 - 容器引擎：Podman
 - 反向代理：`https://aicr.x-ha.com:6023` → `http://10.0.4.9:8090`
+- 如果公网机本机监听了 TCP `3128`，`deploy.sh` 会自动探测这个 HTTP 代理并用于宿主下载与镜像构建；详细规则见下文“关于构建期 HTTP 代理”。
 
 ### 7.2 内网生产环境
 
@@ -221,6 +222,8 @@ Wolfi 而失去 `p4-cli` 的可安装性。
 > **关于 Podman socket**：运行时镜像现在内置 `podman` CLI，并继续支持可选 Docker static CLI。`AICR_ENABLE_CONTAINER_SANDBOX=true` 时，`deploy.sh` 会挂载宿主 Podman socket，同时设置 `CONTAINER_HOST`（Podman 原生客户端）和 `DOCKER_HOST`（Docker 兼容客户端）。容器内不需要启动 Podman daemon；真正创建/管理子容器的是宿主 Podman socket。
 >
 > **关于 `DOCKER_DOWNLOAD_MIRROR`**：仅当 `AICR_ENABLE_CONTAINER_SANDBOX=true` 且需要 Docker 兼容 CLI 时才需要下载 Docker 静态二进制；使用 `sandbox.kind: podman`/`engine: podman` 可直接走镜像内置 Podman CLI。
+>
+> **关于构建期 HTTP 代理**：`deploy.sh` 会优先使用已显式导出的 `HTTP_PROXY`、`HTTPS_PROXY`、`NO_PROXY`（或对应小写变量）。如果这些变量都没有设置，但部署宿主机正在监听 TCP `3128`，脚本会自动探测该代理并把宿主侧下载（例如 Docker static CLI）以及 `podman build` / `docker build` 的联网步骤切到 `http://<宿主机IP或域名>:3128`。如果代理只绑定到 loopback（如 `127.0.0.1:3128`），脚本会在构建时临时切换到 `--network=host`，保证 Dockerfile 中的 `apt`、`curl`、`npm`、`pip`、`yq` 下载同样能命中这个代理，而不会把代理地址永久写进最终镜像。
 
 国内部署完整示例：
 

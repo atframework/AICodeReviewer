@@ -269,9 +269,11 @@ As with Gitea, managed issue titles stay output-generated and concise; `aicr.pub
 Key differences from `gitea_problem_issue`:
 
 - **Labels**: GitHub uses string names directly (`labels: ["bug", "aicr:problem:high"]`); Gitea uses numeric IDs.
-- **Resolved action**: GitHub does not support deleting issues; `resolved_action` can only be `close` (default) or `none`. The `delete` option is not available.
+- **Resolved action**: GitHub does not support deleting issues; `resolved_action` can be `close` (default), `mark_resolved`, or `none`. The `delete` option is not available.
 - **API headers**: `accept: application/vnd.github+json`, `x-github-api-version: 2022-11-28`, `authorization: Bearer <token>`.
 - **Base URL**: Defaults to `https://api.github.com`; for GitHub Enterprise, set to `https://ghe.example.com/api/v3`.
+- **Permissions**: the trigger or channel `token_env` must resolve to a token with repository Issues read/write access. GitHub webhook event checkboxes such as **Issues** or **Issue comments** only subscribe AICR to inbound events; they do not grant REST API permissions. For GitHub Apps, update repository permissions and reinstall/refresh the installation after changing them. For fine-grained PATs, grant at least Metadata read plus Issues read/write for the target repository; add Contents read if AICR should read `OWNERS`.
+- **Failure handling**: a GitHub issue API 403/404/5xx is recorded as a failed dispatch result and logged with the channel name. In a routed multi-channel setup, later channels (for example Feishu/WeCom notifications) are still attempted. If every dispatch attempt fails, the review run ends as `skipped` with `skipReason: output_dispatch_failed` instead of failing trigger processing.
 
 Channel fields:
 
@@ -280,8 +282,8 @@ Channel fields:
 | `marker_prefix` | Title prefix used to identify managed issues; defaults to `[AICR]` |
 | `marker_label` | Hidden body marker used to scope managed issues; defaults to `aicr-managed` |
 | `labels` | GitHub label names to attach to every created issue |
-| `issue_mode` | `consolidated` (default) or `per_problem` |
-| `resolved_action` | `none` or `close`; defaults to `close` |
+| `issue_mode` | `consolidated` (default), `per_problem`, or `per_commit` |
+| `resolved_action` | `none`, `close`, or `mark_resolved`; defaults to `close` |
 | `assign_committer` | Add the resolved review author as an assignee; defaults to `true` |
 | `owners_file` | Repository file to read for path owners; defaults to `OWNERS` |
 | `add_owners_as_assignees` | Set to `true` to add matched OWNERS entries as assignees |

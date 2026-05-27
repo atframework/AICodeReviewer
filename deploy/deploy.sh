@@ -56,6 +56,153 @@ SANDBOX_ENV_ARGS=()
 SANDBOX_SECURITY_ARGS=()
 USERNS_ARGS=()
 
+DEFAULT_BUILD_PROXY_PORT=3128
+BUILD_HTTP_PROXY="${HTTP_PROXY:-${http_proxy:-}}"
+BUILD_HTTPS_PROXY="${HTTPS_PROXY:-${https_proxy:-}}"
+BUILD_NO_PROXY="${NO_PROXY:-${no_proxy:-}}"
+BUILD_PROXY_SOURCE=""
+BUILD_NETWORK_MODE=""
+BUILD_PROXY_ENV=()
+
+extract_host_from_endpoint() {
+  local endpoint="$1"
+
+  if [[ "$endpoint" == \[*\]:* ]]; then
+    endpoint="${endpoint#\[}"
+    endpoint="${endpoint%%\]*}"
+  else
+    endpoint="${endpoint%:*}"
+  fi
+
+  printf '%s' "$endpoint"
+}
+
+extract_host_from_url() {
+  local url="$1"
+
+  url="${url#*://}"
+  url="${url%%/*}"
+
+  if [[ "$url" == \[*\]* ]]; then
+    url="${url#\[}"
+    url="${url%%\]*}"
+  else
+    url="${url%%:*}"
+  fi
+
+  printf '%s' "$url"
+}
+
+is_loopback_host() {
+  case "$1" in
+    127.*|::1|localhost)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+first_listening_tcp_endpoint() {
+  local port="$1"
+  local endpoint=""
+
+  if command -v ss >/dev/null 2>&1; then
+    endpoint="$(ss -H -ltn "( sport = :${port} )" 2>/dev/null | awk 'NR == 1 { print $4 }')"
+  elif command -v netstat >/dev/null 2>&1; then
+    endpoint="$(netstat -ltn 2>/dev/null | awk -v port=":${port}$" '$4 ~ port { print $4; exit }')"
+  fi
+
+  printf '%s' "$endpoint"
+}
+
+detect_primary_ipv4() {
+  local detected_ip=""
+
+  if command -v ip >/dev/null 2>&1; then
+    detected_ip="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for (i = 1; i <= NF; i++) if ($i == "src") { print $(i + 1); exit }}')"
+  fi
+
+  if [ -z "$detected_ip" ]; then
+    detected_ip="$(hostname -I 2>/dev/null | awk '{for (i = 1; i <= NF; i++) if ($i ~ /^[0-9]+\./) { print $i; exit }}')"
+  fi
+
+  printf '%s' "$detected_ip"
+}
+
+auto_detect_build_proxy_url() {
+  local endpoint=""
+  local host_value=""
+
+  endpoint="$(first_listening_tcp_endpoint "$DEFAULT_BUILD_PROXY_PORT")"
+  [ -n "$endpoint" ] || return 1
+
+  host_value="$(extract_host_from_endpoint "$endpoint")"
+  case "$host_value" in
+    ""|"*"|"0.0.0.0"|"::")
+      host_value="$(detect_primary_ipv4)"
+      ;;
+  esac
+
+  if [ -z "$host_value" ]; then
+    host_value="127.0.0.1"
+  fi
+
+  printf 'http://%s:%s' "$host_value" "$DEFAULT_BUILD_PROXY_PORT"
+}
+
+if [ -z "$BUILD_HTTP_PROXY" ] && [ -z "$BUILD_HTTPS_PROXY" ]; then
+  AUTO_BUILD_PROXY_URL="$(auto_detect_build_proxy_url || true)"
+  if [ -n "$AUTO_BUILD_PROXY_URL" ]; then
+    BUILD_HTTP_PROXY="$AUTO_BUILD_PROXY_URL"
+    BUILD_HTTPS_PROXY="$AUTO_BUILD_PROXY_URL"
+    BUILD_PROXY_SOURCE="auto-detected host port ${DEFAULT_BUILD_PROXY_PORT}"
+  fi
+fi
+
+if [ -n "$BUILD_HTTP_PROXY" ] && [ -z "$BUILD_HTTPS_PROXY" ]; then
+  BUILD_HTTPS_PROXY="$BUILD_HTTP_PROXY"
+fi
+if [ -n "$BUILD_HTTPS_PROXY" ] && [ -z "$BUILD_HTTP_PROXY" ]; then
+  BUILD_HTTP_PROXY="$BUILD_HTTPS_PROXY"
+fi
+
+if [ -n "$BUILD_HTTP_PROXY" ]; then
+  BUILD_PROXY_ENV+=("HTTP_PROXY=${BUILD_HTTP_PROXY}" "http_proxy=${BUILD_HTTP_PROXY}")
+fi
+if [ -n "$BUILD_HTTPS_PROXY" ]; then
+  BUILD_PROXY_ENV+=("HTTPS_PROXY=${BUILD_HTTPS_PROXY}" "https_proxy=${BUILD_HTTPS_PROXY}")
+fi
+if [ -n "$BUILD_NO_PROXY" ]; then
+  BUILD_PROXY_ENV+=("NO_PROXY=${BUILD_NO_PROXY}" "no_proxy=${BUILD_NO_PROXY}")
+fi
+
+if [ -n "$BUILD_HTTP_PROXY" ] && is_loopback_host "$(extract_host_from_url "$BUILD_HTTP_PROXY")"; then
+  BUILD_NETWORK_MODE="host"
+elif [ -n "$BUILD_HTTPS_PROXY" ] && is_loopback_host "$(extract_host_from_url "$BUILD_HTTPS_PROXY")"; then
+  BUILD_NETWORK_MODE="host"
+fi
+
+run_with_build_proxy() {
+  if [ "${#BUILD_PROXY_ENV[@]}" -gt 0 ]; then
+    env "${BUILD_PROXY_ENV[@]}" "$@"
+  else
+    "$@"
+  fi
+}
+
+if [ -n "$BUILD_HTTP_PROXY" ] || [ -n "$BUILD_HTTPS_PROXY" ]; then
+  if [ -n "$BUILD_PROXY_SOURCE" ]; then
+    echo "=== Build/download proxy: enabled (${BUILD_PROXY_SOURCE}) ==="
+  else
+    echo "=== Build/download proxy: enabled (from environment) ==="
+  fi
+  if [ -n "$BUILD_NETWORK_MODE" ]; then
+    echo "=== Build network mode: ${BUILD_NETWORK_MODE} (loopback proxy detected) ==="
+  fi
+fi
+
 mkdir -p "$(dirname "$DOCKER_STATIC")"
 
 if [ "$AICR_ENABLE_CONTAINER_SANDBOX" = "true" ]; then
@@ -64,9 +211,9 @@ if [ "$AICR_ENABLE_CONTAINER_SANDBOX" = "true" ]; then
     echo "=== Downloading Docker static binary v${DOCKER_VERSION} ==="
     DOCKER_TGZ_URL="${DOCKER_DOWNLOAD_MIRROR}/docker-${DOCKER_VERSION}.tgz"
     if command -v curl >/dev/null 2>&1; then
-      curl -fsSL -o /tmp/docker.tgz "$DOCKER_TGZ_URL"
+      run_with_build_proxy curl -fsSL -o /tmp/docker.tgz "$DOCKER_TGZ_URL"
     elif command -v wget >/dev/null 2>&1; then
-      wget -qO /tmp/docker.tgz "$DOCKER_TGZ_URL"
+      run_with_build_proxy wget -qO /tmp/docker.tgz "$DOCKER_TGZ_URL"
     else
       echo "ERROR: curl or wget required to download Docker CLI"
       exit 1
@@ -134,6 +281,24 @@ fi
 # Build the image
 echo "=== Building AICR image ==="
 BUILD_ARGS=(--build-arg NPM_STRICT_SSL=false)
+if [ -n "$BUILD_NETWORK_MODE" ]; then
+  BUILD_ARGS+=("--network=${BUILD_NETWORK_MODE}")
+fi
+if [ -n "$BUILD_HTTP_PROXY" ] || [ -n "$BUILD_HTTPS_PROXY" ] || [ -n "$BUILD_NO_PROXY" ]; then
+  if [ "$ENGINE_BASENAME" = "podman" ]; then
+    BUILD_ARGS+=(--http-proxy=true)
+  else
+    if [ -n "$BUILD_HTTP_PROXY" ]; then
+      BUILD_ARGS+=(--build-arg "HTTP_PROXY=${BUILD_HTTP_PROXY}" --build-arg "http_proxy=${BUILD_HTTP_PROXY}")
+    fi
+    if [ -n "$BUILD_HTTPS_PROXY" ]; then
+      BUILD_ARGS+=(--build-arg "HTTPS_PROXY=${BUILD_HTTPS_PROXY}" --build-arg "https_proxy=${BUILD_HTTPS_PROXY}")
+    fi
+    if [ -n "$BUILD_NO_PROXY" ]; then
+      BUILD_ARGS+=(--build-arg "NO_PROXY=${BUILD_NO_PROXY}" --build-arg "no_proxy=${BUILD_NO_PROXY}")
+    fi
+  fi
+fi
 if [ -n "${NPM_REGISTRY:-}" ]; then
   BUILD_ARGS+=(--build-arg "NPM_REGISTRY=${NPM_REGISTRY}")
 fi
@@ -174,7 +339,7 @@ fi
 if [ -n "${PERFORCE_APT_DISTRO:-}" ]; then
   BUILD_ARGS+=(--build-arg "PERFORCE_APT_DISTRO=${PERFORCE_APT_DISTRO}")
 fi
-"$ENGINE_CMD" "${ENGINE_ARGS[@]}" build \
+run_with_build_proxy "$ENGINE_CMD" "${ENGINE_ARGS[@]}" build \
   "${BUILD_ARGS[@]}" \
   -t "$IMAGE_NAME" \
   -f "$DEPLOY_DIR/deploy/Dockerfile" \

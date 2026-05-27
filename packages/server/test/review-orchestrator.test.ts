@@ -1496,6 +1496,67 @@ describe("runReviewOrchestration error paths", () => {
     }
   });
 
+  it("records output dispatch failures without failing orchestration", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-dispatch-failure-"));
+
+    try {
+      await writeWorkspaceFile(tempDir, "src/app.ts", "const ok = true;\n");
+      const llm: ChatCompletionClient = {
+        async complete(input) {
+          return {
+            providerId: input.model.providerId,
+            modelId: input.model.modelId,
+            content: JSON.stringify({
+              problems: [
+                { file: "src/app.ts", line: 1, severity: "high", category: "correctness", message: "Issue." },
+              ],
+            }),
+            raw: {},
+          };
+        },
+      };
+      const dispatchError = Object.assign(new Error("GitHub problem issue API returned 403."), { status: 403 });
+
+      const result = await runReviewOrchestration(
+        {
+          reviewEvent: createReviewEventFixture(),
+          payload: {},
+          provider: "gitea",
+          eventName: "push",
+        },
+        {
+          baseSystemPrompt: "<task>\n{{TASK_CONTEXT}}\n</task>",
+          sourceRootResolver: () => tempDir,
+          vcs: createVcs(tempDir),
+          llm,
+          model,
+          outputPublisher: {
+            publishesProblems: false,
+            async publishSummary() {
+              throw dispatchError;
+            },
+          },
+        },
+      );
+
+      expect(result.status).toBe("skipped");
+      expect(result.skipReason).toBe("output_dispatch_failed");
+      expect(result.problemCount).toBe(1);
+      expect(result.dispatchCount).toBe(1);
+      expect(result.dispatchResults[0]).toMatchObject({
+        channel: "output",
+        status: "failed",
+        raw: {
+          action: "dispatch_failed",
+          phase: "summary",
+          status: 403,
+        },
+      });
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("invokes lifecycle summary publishers even when the model reports no problems", async () => {
     const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-empty-lifecycle-"));
 

@@ -89,6 +89,13 @@ Optional build args for `deploy/Dockerfile` / `deploy.sh`:
 `deploy.sh` still accepts the old `APK_MIRROR` environment variable as a
 compatibility alias, but new setups should use `APT_MIRROR`.
 
+If the deployment host already exposes an HTTP proxy on TCP `3128`, `deploy.sh`
+now auto-detects it and uses it for host-side downloads plus `podman build` /
+`docker build` fetches. Explicit `HTTP_PROXY` / `HTTPS_PROXY` /
+`NO_PROXY` environment variables still take precedence, and a loopback-only
+proxy automatically switches the build to host networking so Dockerfile
+downloads can still reach `127.0.0.1:3128`.
+
 USTC mirror docs recommend `http://mirrors.ustc.edu.cn/ubuntu` for
 `amd64/i386`, while `arm64`/`armhf`/`ppc64el`/`s390x` should use
 `http://mirrors.ustc.edu.cn/ubuntu-ports`. `deploy/Dockerfile` rewrites both
@@ -251,6 +258,14 @@ For GitHub PR comments, configure a trigger `token_env` so AICR can fetch PR
 head/base SHA and branch details. If that fetch is unavailable, AICR still uses
 the PR URL from the comment payload as the deduplication identity instead of
 collapsing unrelated PRs into an `unknown` target.
+
+For GitHub output channels that write back to the repository, the same
+`token_env` (or a channel-level override) must be an outbound API credential,
+not the webhook secret. `github_problem_issue` specifically needs repository
+Issues read/write permission. Selecting **Issues** or **Issue comments** in the
+GitHub webhook event list only controls which inbound events are delivered to
+AICR; it does not grant REST API permissions. If you use a GitHub App, update
+the repository permission and reinstall/refresh the installation before retrying.
 
 ## PR/MR Summary Update Strategy
 
@@ -536,6 +551,12 @@ review:
 by listing only the most recent open issues. Configure the cap globally under
 `review.problem_issue.max_recent_issues` and override it per workspace when a
 repository needs a tighter or looser lifecycle scan.
+
+If one configured output channel cannot publish, AICR logs the channel failure
+and continues trying the remaining routed channels. A run where every dispatch
+attempt fails is reported as `skipped` with `skipReason: output_dispatch_failed`
+instead of `review_orchestration_failed`, so the review result and failure cause
+remain visible without poisoning the trigger queue.
 
 ```yaml
 review:

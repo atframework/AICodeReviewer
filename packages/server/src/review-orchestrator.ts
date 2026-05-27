@@ -1323,6 +1323,53 @@ function appendDispatchResults(target: DispatchResult[], result: ReviewDispatchR
   target.push(result as DispatchResult);
 }
 
+function countPublishedDispatchResults(results: readonly DispatchResult[]): number {
+  return results.filter((result) => result.status === "published").length;
+}
+
+function countFailedDispatchResults(results: readonly DispatchResult[]): number {
+  return results.filter((result) => result.status === "failed").length;
+}
+
+function readDispatchErrorStatus(error: unknown): number | undefined {
+  if (!error || typeof error !== "object") {
+    return undefined;
+  }
+
+  const status = (error as { readonly status?: unknown }).status;
+  return typeof status === "number" ? status : undefined;
+}
+
+function toDispatchErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function createFailedDispatchResult(channel: string, phase: "problem" | "summary", error: unknown): DispatchResult {
+  const status = readDispatchErrorStatus(error);
+  return {
+    channel,
+    status: "failed",
+    raw: {
+      action: "dispatch_failed",
+      phase,
+      error: toDispatchErrorMessage(error),
+      ...(status !== undefined ? { status } : {}),
+    },
+  };
+}
+
+function logDispatchFailure(channel: string, phase: "problem" | "summary", error: unknown): void {
+  const status = readDispatchErrorStatus(error);
+  console.warn(JSON.stringify({
+    level: "warn",
+    msg: "output publisher dispatch failed",
+    channel,
+    phase,
+    error: toDispatchErrorMessage(error),
+    ...(status !== undefined ? { status } : {}),
+  }));
+}
+
 export async function runReviewOrchestration(
   context: ReviewOrchestrationContext,
   options: ServerReviewOrchestrationOptions,
@@ -1765,7 +1812,12 @@ export async function runReviewOrchestration(
         };
         reviewProblems.push(preparedProblem);
         if (publishesProblems(outputPublisher)) {
-          appendDispatchResults(dispatchResults, await publishProblem(outputPublisher, preparedProblem));
+          try {
+            appendDispatchResults(dispatchResults, await publishProblem(outputPublisher, preparedProblem));
+          } catch (error) {
+            logDispatchFailure("output", "problem", error);
+            dispatchResults.push(createFailedDispatchResult("output", "problem", error));
+          }
         }
         continue;
       }
@@ -1773,7 +1825,12 @@ export async function runReviewOrchestration(
       const preparedProblem: ReviewProblem = renderedProblemContent;
       reviewProblems.push(preparedProblem);
       if (publishesProblems(outputPublisher)) {
-        appendDispatchResults(dispatchResults, await publishProblem(outputPublisher, preparedProblem));
+        try {
+          appendDispatchResults(dispatchResults, await publishProblem(outputPublisher, preparedProblem));
+        } catch (error) {
+          logDispatchFailure("output", "problem", error);
+          dispatchResults.push(createFailedDispatchResult("output", "problem", error));
+        }
       }
     }
 
@@ -1820,16 +1877,21 @@ export async function runReviewOrchestration(
             };
             renderedSummary = fixAndValidateMarkdown(resolver.render("summary", summaryCtx));
           }
-          appendDispatchResults(
-            dispatchResults,
-            await outputPublisher.publishSummary(
-              renderedSummary,
-              reviewProblems,
-              {
-                ...(renderedSummaryTitle ? { title: renderedSummaryTitle } : {}),
-              },
-            ),
-          );
+          try {
+            appendDispatchResults(
+              dispatchResults,
+              await outputPublisher.publishSummary(
+                renderedSummary,
+                reviewProblems,
+                {
+                  ...(renderedSummaryTitle ? { title: renderedSummaryTitle } : {}),
+                },
+              ),
+            );
+          } catch (error) {
+            logDispatchFailure("output", "summary", error);
+            dispatchResults.push(createFailedDispatchResult("output", "summary", error));
+          }
         }
       }
     }
@@ -1877,8 +1939,12 @@ export async function runReviewOrchestration(
     }));
   }
 
-  const implicitSkipReason = !options.dryRun && !outputState.skipReason && dispatchResults.length === 0
-    ? outputState.problems.length > 0 && !outputPublisher
+  const publishedDispatchCount = countPublishedDispatchResults(dispatchResults);
+  const failedDispatchCount = countFailedDispatchResults(dispatchResults);
+  const implicitSkipReason = !options.dryRun && !outputState.skipReason && publishedDispatchCount === 0
+    ? failedDispatchCount > 0
+      ? "output_dispatch_failed"
+      : outputState.problems.length > 0 && !outputPublisher
       ? "no_output_publisher"
       : outputState.problems.length === 0
         && (outputPublisher?.noProblemsAction === "suppress"
@@ -1890,7 +1956,7 @@ export async function runReviewOrchestration(
   const skipReason = outputState.skipReason ?? implicitSkipReason;
   const status = skipReason
     ? "skipped"
-    : dispatchResults.length > 0
+    : publishedDispatchCount > 0
       ? "published"
       : options.dryRun
         ? "dry_run"

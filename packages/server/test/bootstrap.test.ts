@@ -1369,6 +1369,98 @@ describe("createOutputPublisherResolverFromConfig", () => {
     }
   });
 
+  it("isolates a failing summary channel and continues publishing later channels", async () => {
+    const calls: { url: string; init: { body?: string; method?: string } }[] = [];
+    vi.stubGlobal("fetch", async (url: string, init?: { body?: string; method?: string }) => {
+      calls.push({ url, init: init ?? {} });
+      if (url.startsWith("https://api.github.com/")) {
+        return response({ message: "Resource not accessible by integration" }, 403);
+      }
+      return response({ code: 0 });
+    });
+
+    const originalGithubToken = process.env.GITHUB_TOKEN;
+    const originalFeishuWebhook = process.env.FEISHU_WEBHOOK;
+    process.env.GITHUB_TOKEN = "github-token-without-issues-write";
+    process.env.FEISHU_WEBHOOK = "https://open.feishu.cn/hook/success";
+    try {
+      const config = makeConfig({
+        triggers: [{ name: "github-saas", kind: "github", token_env: "GITHUB_TOKEN" }],
+        outputs: {
+          template_engine: "handlebars",
+          channels: [
+            { name: "github-problem-issues", kind: "github_problem_issue", trigger: "github-saas" },
+            { name: "feishu-team", kind: "feishu_bot", webhook_url_env: "FEISHU_WEBHOOK" },
+          ],
+          routes: {
+            default: {},
+            rules: [
+              { match: { trigger: "github-saas", target_kind: "push" }, summary: ["github-problem-issues", "feishu-team"] },
+            ],
+          },
+        },
+        workspaces: {
+          cache: { max_total_gb: 50, eviction: "lru", ttl_days: 30 },
+          defaults: {},
+          instances: {
+            "test-workspace": {
+              source_repo: { trigger: "github-saas", repo: "my-org/my-repo" },
+            },
+          },
+        },
+      } as Partial<AppConfig>);
+      const publisher = createOutputPublisherResolverFromConfig(config)({
+        reviewEvent: {
+          triggerName: "github-saas",
+          provider: "github",
+          workspaceId: "test-workspace",
+          targetKind: "push",
+          repoRef: "my-org/my-repo",
+          headSha: "abcdef1234567890",
+          author: {},
+          reason: "github:push",
+        },
+        payload: {},
+        provider: "github",
+        eventName: "push",
+      });
+
+      expect(publisher).toBeDefined();
+      const results = await publisher?.publishSummary?.("Review summary", [
+        { file: "src/app.ts", line: 1, severity: "high", category: "correctness", message: "Issue." },
+      ]);
+
+      expect(results).toHaveLength(2);
+      expect(results?.[0]).toMatchObject({
+        channel: "github-problem-issues",
+        status: "failed",
+        raw: {
+          action: "dispatch_failed",
+          phase: "summary",
+          status: 403,
+        },
+      });
+      expect(String((results?.[0]?.raw as { hint?: unknown } | undefined)?.hint)).toContain("webhook event subscriptions");
+      expect(results?.[1]).toMatchObject({ channel: "feishu-team", status: "published" });
+      expect(calls.map((call) => call.url)).toEqual([
+        "https://api.github.com/repos/my-org/my-repo/issues?state=open&sort=updated&direction=desc&per_page=20&page=1",
+        "https://open.feishu.cn/hook/success",
+      ]);
+    } finally {
+      vi.unstubAllGlobals();
+      if (originalGithubToken === undefined) {
+        delete process.env.GITHUB_TOKEN;
+      } else {
+        process.env.GITHUB_TOKEN = originalGithubToken;
+      }
+      if (originalFeishuWebhook === undefined) {
+        delete process.env.FEISHU_WEBHOOK;
+      } else {
+        process.env.FEISHU_WEBHOOK = originalFeishuWebhook;
+      }
+    }
+  });
+
   it("resolves a problem issue lifecycle channel for push events", async () => {
     const calls: { url: string; init: { body?: string; method?: string } }[] = [];
     vi.stubGlobal("fetch", async (url: string, init?: { body?: string; method?: string }) => {
