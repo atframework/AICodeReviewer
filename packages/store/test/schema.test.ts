@@ -7,6 +7,7 @@ import {
   llmUsage,
   outputEvents,
   dailyRollups,
+  reflectionMemory,
   runStatusValues,
 } from "../src/schema.js";
 
@@ -185,6 +186,24 @@ describe("dailyRollups schema", () => {
         "tokensIn",
         "tokensOut",
         "costUsd",
+      ]),
+    );
+  });
+});
+
+describe("reflectionMemory schema", () => {
+  it("defines the expected column names for M7 reflection memory", () => {
+    const columns = reflectionMemory[Symbol.for("drizzle:Columns")] as Record<string, unknown>;
+    const columnNames = Object.keys(columns);
+    expect(columnNames).toEqual(
+      expect.arrayContaining([
+        "id",
+        "workspaceId",
+        "fingerprint",
+        "content",
+        "sourceRunId",
+        "createdAt",
+        "expiresAt",
       ]),
     );
   });

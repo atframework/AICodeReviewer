@@ -1605,4 +1605,96 @@ describe("triage config", () => {
       session_ttl_seconds: 86400,
     });
   });
+
+  describe("workspace prompt override", () => {
+    it("accepts prompt.base_system_prompt_file in workspace instance", () => {
+      const result = appConfigSchema.safeParse({
+        workspaces: {
+          instances: {
+            "my-repo": {
+              prompt: {
+                base_system_prompt_file: "prompts/system/custom-reviewer.system.md",
+              },
+            },
+          },
+        },
+      });
+      expect(result.success).toBe(true);
+      if (!result.success) return;
+      const ws = result.data.workspaces.instances["my-repo"]!;
+      expect(ws.prompt?.base_system_prompt_file).toBe("prompts/system/custom-reviewer.system.md");
+    });
+
+    it("accepts prompt.force_skills in workspace instance", () => {
+      const result = appConfigSchema.safeParse({
+        workspaces: {
+          instances: {
+            "my-repo": {
+              prompt: {
+                force_skills: ["security-audit", "api-review"],
+              },
+            },
+          },
+        },
+      });
+      expect(result.success).toBe(true);
+      if (!result.success) return;
+      const ws = result.data.workspaces.instances["my-repo"]!;
+      expect(ws.prompt?.force_skills).toEqual(["security-audit", "api-review"]);
+    });
+
+    it("accepts prompt in workspaces.defaults", () => {
+      const result = appConfigSchema.safeParse({
+        workspaces: {
+          defaults: {
+            prompt: {
+              base_system_prompt_file: "prompts/system/default.system.md",
+              force_skills: ["repo-conventions"],
+            },
+          },
+        },
+      });
+      expect(result.success).toBe(true);
+    });
+
+    it("merges workspace defaults prompt into instance prompt", () => {
+      const config = mergeConfigLayers(
+        {
+          workspaces: {
+            defaults: {
+              prompt: {
+                base_system_prompt_file: "prompts/system/default.system.md",
+                force_skills: ["repo-conventions"],
+              },
+            },
+            instances: {
+              "my-repo": {
+                prompt: {
+                  force_skills: ["security-audit"],
+                },
+              },
+            },
+          },
+        },
+      );
+      const ws = resolveWorkspaceConfig(config, "my-repo");
+      expect(ws.prompt?.base_system_prompt_file).toBe("prompts/system/default.system.md");
+      expect(ws.prompt?.force_skills).toEqual(["security-audit"]);
+    });
+
+    it("rejects unknown fields in prompt schema", () => {
+      const result = appConfigSchema.safeParse({
+        workspaces: {
+          instances: {
+            "my-repo": {
+              prompt: {
+                unknown_field: true,
+              },
+            },
+          },
+        },
+      });
+      expect(result.success).toBe(false);
+    });
+  });
 });

@@ -86,6 +86,8 @@ export interface ReviewOrchestrationContext {
 
 export interface ServerReviewOrchestrationOptions {
   readonly baseSystemPrompt: string;
+  readonly baseSystemPromptResolver?: (workspaceId: string) => Promise<string | undefined> | string | undefined;
+  readonly forceSkillsResolver?: (workspaceId: string) => readonly string[] | undefined;
   readonly sourceRootResolver: (reviewEvent: ReviewEvent) => string | undefined;
   readonly vcs: DiffCapableVcsAdapter;
   readonly vcsFactory?: (sourceRoot: string, context: ReviewOrchestrationContext) => DiffCapableVcsAdapter;
@@ -1500,12 +1502,25 @@ export async function runReviewOrchestration(
     }
   }
 
+  const resolvedBasePrompt = await (async () => {
+    if (options.baseSystemPromptResolver) {
+      const resolved = await options.baseSystemPromptResolver(context.reviewEvent.workspaceId);
+      if (resolved !== undefined) {
+        return resolved;
+      }
+    }
+    return options.baseSystemPrompt;
+  })();
+
+  const resolvedForceSkills = options.forceSkillsResolver?.(context.reviewEvent.workspaceId);
+
   const preparedPrompt = await prepareReviewPrompt({
     reviewEvent: context.reviewEvent,
     sourceRoot: scopedTree.rootDir,
     changedPaths,
-    baseSystemPrompt: options.baseSystemPrompt,
+    baseSystemPrompt: resolvedBasePrompt,
     taskContext,
+    ...(resolvedForceSkills?.length ? { forceSkills: resolvedForceSkills } : {}),
     ...(options.operatorOverrides ? { operatorOverrides: options.operatorOverrides } : {}),
     ...(options.memoryHints ? { memoryHints: options.memoryHints } : {}),
     ...(options.maxPromptTokens !== undefined ? { maxPromptTokens: options.maxPromptTokens } : {}),

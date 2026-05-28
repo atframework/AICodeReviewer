@@ -21,6 +21,7 @@ export interface PrepareReviewPromptInput {
   readonly memoryHints?: readonly string[];
   readonly maxPromptTokens?: number;
   readonly taskContext?: string;
+  readonly forceSkills?: readonly string[];
 }
 
 export interface PreparedReviewPrompt {
@@ -108,6 +109,7 @@ export async function prepareReviewPrompt(
   const discovery = await discoverRepoPromptAssets({
     sourceRoot,
     changedPaths,
+    ...(input.forceSkills?.length ? { forceSkills: input.forceSkills } : {}),
   });
   const taskContext = input.taskContext?.trim()
     ? input.taskContext.trim()

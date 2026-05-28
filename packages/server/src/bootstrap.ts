@@ -5,6 +5,7 @@ import {
   isPlainObject,
   createMultiProviderRateLimiter,
   createQueueFromConfig,
+  loadSystemPromptTemplate,
   resolveWorkspaceConfig,
   type AppConfig,
   type ReviewEvent,
@@ -1844,6 +1845,26 @@ export async function bootstrapServerApp(options: BootstrapServerOptions): Promi
 
   const orchestrationOptions: ServerReviewOrchestrationOptions = {
     baseSystemPrompt,
+    baseSystemPromptResolver: async (workspaceId: string) => {
+      try {
+        const workspace = resolveWorkspaceConfig(config, workspaceId);
+        const promptFile = workspace.prompt?.base_system_prompt_file;
+        if (promptFile) {
+          return await loadSystemPromptTemplate(resolve(baseDir, promptFile));
+        }
+      } catch {
+        // workspace not found or file not readable — fall back to global prompt
+      }
+      return undefined;
+    },
+    forceSkillsResolver: (workspaceId: string) => {
+      try {
+        const workspace = resolveWorkspaceConfig(config, workspaceId);
+        return workspace.prompt?.force_skills;
+      } catch {
+        return undefined;
+      }
+    },
     sourceRootResolver,
     vcs: createVcsAdapterFromConfig(config, baseDir),
     vcsFactory: (sourceRoot: string, context: ReviewOrchestrationContext) =>

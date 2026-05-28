@@ -519,6 +519,10 @@ workspaces:
   defaults:
     outputs:
       no_problems: { action: suppress }
+    # prompt:                           # per-workspace prompt overrides (see instances below)
+    #   base_system_prompt_file: "prompts/system/code-reviewer.system.md"
+    #   force_skills:                   # skill names to always activate regardless of Applies To glob
+    #     - "repo-conventions"
 
   instances:
     # Gitea workspace
@@ -541,6 +545,11 @@ workspaces:
       # auth:
       #   api_key_env: AICR_MY_REPO_API_KEY
       #   enabled: true
+      # Per-workspace prompt override (optional, overrides global --base-prompt)
+      # prompt:
+      #   base_system_prompt_file: "prompts/system/strict-reviewer.system.md"
+      #   force_skills:                     # always activate these skills regardless of glob matching
+      #     - "security-audit"
 
     # P4 workspace — uncomment when p4-main trigger is enabled
     # p4-main:

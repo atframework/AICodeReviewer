@@ -950,4 +950,85 @@ describe("discoverRepoPromptAssets conflict detection", () => {
       await rm(tempDir, { recursive: true, force: true });
     }
   });
+
+  describe("forceSkills", () => {
+    it("force-activates a skill that would otherwise be dropped by Applies To", async () => {
+      const tempDir = await mkdtemp(join(tmpdir(), "aicr-force-skills-"));
+
+      try {
+        await writeWorkspaceFile(
+          tempDir,
+          ".agents/skills/security-audit/SKILL.md",
+          [
+            "---",
+            "name: security-audit",
+            "description: Security audit skill",
+            "---",
+            "# Security Audit",
+            "",
+            "## Applies To",
+            "- `src/auth/**`",
+          ].join("\n"),
+        );
+
+        const discovery = await discoverRepoPromptAssets({
+          sourceRoot: tempDir,
+          changedPaths: ["src/utils/helper.ts"],
+          forceSkills: ["security-audit"],
+        });
+
+        expect(discovery.skills.some((s) => s.name === "security-audit")).toBe(true);
+        expect(discovery.droppedRefs.some((d) => d.label === "security-audit")).toBe(false);
+        const skill = discovery.skills.find((s) => s.name === "security-audit")!;
+        expect(skill.reason).toContain("force-activated");
+      } finally {
+        await rm(tempDir, { recursive: true, force: true });
+      }
+    });
+
+    it("does not duplicate already-active skills when force-activating", async () => {
+      const tempDir = await mkdtemp(join(tmpdir(), "aicr-force-skills-no-dup-"));
+
+      try {
+        await writeWorkspaceFile(
+          tempDir,
+          ".agents/skills/api-review/SKILL.md",
+          [
+            "---",
+            "name: api-review",
+            "description: API review skill",
+            "---",
+            "# API Review",
+          ].join("\n"),
+        );
+
+        const discovery = await discoverRepoPromptAssets({
+          sourceRoot: tempDir,
+          changedPaths: ["src/api/route.ts"],
+          forceSkills: ["api-review"],
+        });
+
+        const apiSkills = discovery.skills.filter((s) => s.name === "api-review");
+        expect(apiSkills.length).toBe(1);
+      } finally {
+        await rm(tempDir, { recursive: true, force: true });
+      }
+    });
+
+    it("ignores forceSkills for non-existent skill names", async () => {
+      const tempDir = await mkdtemp(join(tmpdir(), "aicr-force-skills-nonexist-"));
+
+      try {
+        const discovery = await discoverRepoPromptAssets({
+          sourceRoot: tempDir,
+          changedPaths: ["src/app.ts"],
+          forceSkills: ["non-existent-skill"],
+        });
+
+        expect(discovery.skills.length).toBe(0);
+      } finally {
+        await rm(tempDir, { recursive: true, force: true });
+      }
+    });
+  });
 });

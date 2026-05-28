@@ -304,6 +304,8 @@
   - `review.log_thinking`
   - `review.reflection.memory`
   - `workspaces.defaults.agent`
+  - `workspaces.defaults.prompt.base_system_prompt_file`
+  - `workspaces.defaults.prompt.force_skills`
   - `outputs.channels[].mention_fallback`
   - `outputs.routes`
 - 计划中的内置观测首页认证配置与 trigger API key 分离；配置文件只保存 env var 名称，
@@ -326,6 +328,14 @@
   - `storage.retention.deleted_project_grace_days`: 已删除项目统计硬删除宽限期。
 - 输出路由、模板、agent、queue、review 行为都支持全局 → workspace default → workspace instance 覆盖。
 - 当配置 shape 变化时，要同步更新 schema 测试、示例配置、专题文档和 `Plan.md` 摘要。
+
+#### 3.10.1 Per-workspace prompt 覆盖
+
+- `workspaces.defaults.prompt` 和 `workspaces.instances.<id>.prompt` 支持两个字段：
+  - `base_system_prompt_file`：指向自定义 system prompt 模板文件的路径（相对于部署根目录）。设置后，该 workspace 的 review 使用此模板替代全局 `--base-prompt` 加载的模板。
+  - `force_skills`：技能名称数组，强制激活指定技能，忽略 `Applies To` glob 过滤。适用于需要始终运行的审计、安全等技能。
+- Bootstrap 阶段为每个 workspace 注册 `baseSystemPromptResolver` 和 `forceSkillsResolver`；orchestrator 在调用 `prepareReviewPrompt()` 前解析 workspace 级配置。
+- 代码真源：`packages/server/src/bootstrap.ts`（resolver 注册）、`packages/server/src/review-orchestrator.ts`（运行时解析）。
 
 ### 3.11 Run 状态与可观测性
 
@@ -409,12 +419,21 @@
 
 ### 3.12 Reflection 与 memory
 
-- reflection / memory 是规划中的长期能力，不应提前伪装成已完成实现。
-- 当前配置与文档仅保留 schema 与扩展位。
+- reflection / memory 是 M7 阶段的**增量落地能力**，不应提前伪装为已完成实现。
+- 配置与文档保留 schema 与扩展位（`review.reflection.enabled`、`review.reflection.mode`、`review.reflection.memory`）。
+- 已交付的基础设施：
+  - 存储表 `reflection_memory`（`packages/store/src/schema.ts`），含 `workspaceId`、`fingerprint`、`content`、`sourceRunId`、`createdAt`、`expiresAt`。
+  - 数据库迁移 `002_reflection_memory`，自动在 store 初始化时运行。
+  - 读写 API：`writeReflectionMemory()`、`readReflectionMemory()`、`compactReflectionMemory()`（`packages/store/src/reflection.ts`）。
+  - 按 workspace 隔离，支持 TTL 过期和条目上限压缩。
+- 待实现：
+  - review run 完成后从输出中提取 reflection 条目并写入 store。
+  - review run 开始前从 store 读取相关 memory 并注入 `memoryHints`。
+  - false-positive 模式识别、repo 约定学习等高级提取逻辑。
 - 真正落地时应明确：
   - memory 的写入边界
   - 去敏策略
-  - workspace 级隔离
+  - workspace 级隔离（已通过 `workspaceId` 列保证）
   - 对 false-positive 抑制的实际收益评估
 
 ## 4. 默认评审 Prompt 合同

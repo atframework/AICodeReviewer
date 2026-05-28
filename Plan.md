@@ -263,7 +263,7 @@
 | M4 | 已完成 | `docs/ai/milestones/M4.md` | 继续扩展模板、路由与 attribution |
 | M5 | 基本完成 | `docs/ai/milestones/M5.md` | HTTP/SSE MCP transport 调研（非阻塞） |
 | M6 | 部分完成 | GitHub 生产链路已验收 | GitLab e2e、SVN adapter 移至 Backlog |
-| M7 | 已开始 | `output_language` 注入 review task context | skill by glob、workspace 定制、memory |
+| M7 | 已开始 | `output_language` 注入 review task context | memory/reflection 存储与检索（写入/读取/压缩已实现） |
 | M8 | 大部分完成 | `docs/ai/milestones/M8.md` | CI eval 集成移至 Backlog |
 | M9 | 基本完成 | `docs/ai/milestones/M9.md` | 版本 tag（用户决策） |
 
@@ -278,12 +278,14 @@
     - CI eval 基准集成（将 `aicr eval` 接入 CI 流水线；需 CI pipeline 权限，延后扩展）→ **Backlog**
 4. **M9：发布收尾**（基本完成，已完成项归档至 `docs/ai/milestones/M9.md`）
     - 版本 bump 与 git tag（用户决策）
-5. **M7：workspace 定制、国际化、memory**（已开始）
+ 5. **M7：workspace 定制、国际化、memory**（已开始）
     - ~~`output_language` 注入 review task context~~（已交付）
     - 所有包 barrel export 测试补齐（已交付：1228 测试全部通过）
-    - skill by glob（已有 `Applies To` 章节过滤；待配置级强制激活）
-    - per-workspace baseSystemPrompt 覆盖（待实现）
-    - memory / reflection 存储与检索（待实现）
+    - ~~per-workspace `prompt.base_system_prompt_file` 覆盖~~（已交付：config schema + bootstrap resolver + tests）
+    - ~~config-level `prompt.force_skills` 强制技能激活~~（已交付：prompt-manager forceSkills + tests）
+    - ~~reflection memory 存储与检索~~（已交付：store schema + migration + read/write/compact + tests）
+    - memory/reflection 写入与 review 流程集成（待实现：run 后写入 reflection，run 前读取 memory hints）
+    - reflection 提取逻辑（待实现：从 review 输出中提取 false-positive patterns 等）
 
 ### 8.3 Backlog（低优先级延后项）
 

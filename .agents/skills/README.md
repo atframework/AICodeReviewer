@@ -14,11 +14,12 @@ This directory is the repository's canonical Agent Skills surface. Agents should
 
 | Skill | Use when | Do not use when |
 | --- | --- | --- |
+| `agent-behavior-guardrails` | Planning, coding, refactoring, reviewing, or editing prompts for non-trivial tasks where assumptions, scope control, simplicity, or verification matter. | Obvious one-line fixes. |
 | `agent-runtime-integration` | Implementing or auditing agent CLI runtime materialization, LLM config translation, MCP tool mapping, prompt layering, or skill merging. | Ordinary review logic or output rendering changes. |
 | `ai-agent-maintenance` | Auditing, creating, or optimizing AI agent prompts, bridge files, skills, `SKILL.md` metadata, or cross-tool compatibility. | Ordinary feature edits that leave AI-facing assets unchanged. |
 | `output-channel-contracts` | Changing output channel config, no-problems behavior, templates, target links, author mentions, or dispatch contracts. | Agent runtime or VCS fetch internals. |
 | `plan-implementation-audit` | Comparing roadmap/docs with implementation, finding gaps, fixing milestone issues, or adding missing tests. | Unrelated feature work. |
-| `remote-deployment` | Deploying AICR to `10.64.8.2`, syncing deployed source/config, or troubleshooting podman deployment. | Local development or CI-only changes. |
+| `remote-deployment` | Deploying AICR to a remote server, syncing deployed source/config, or troubleshooting podman deployment. | Local development or CI-only changes. |
 | `repository-baseline-validation` | Validating repository-wide build, lint, test, markdown, Docker, docs, CI, root tooling, or workspace topology changes. | Isolated package-only feature edits. |
 | `workspace-scaffold-maintenance` | Adding, removing, or reshaping pnpm workspace packages, manifests, project references, or shared build wiring. | Package-local feature edits that leave the scaffold unchanged. |
 

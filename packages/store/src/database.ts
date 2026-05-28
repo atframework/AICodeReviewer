@@ -184,4 +184,25 @@ const MIGRATIONS = [
         ON daily_rollups(project_id, date);
     `,
   },
+  {
+    name: "002_reflection_memory",
+    sql: `
+      CREATE TABLE IF NOT EXISTS reflection_memory (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        workspace_id TEXT NOT NULL,
+        fingerprint TEXT NOT NULL,
+        content TEXT NOT NULL,
+        source_run_id TEXT,
+        created_at INTEGER NOT NULL,
+        expires_at INTEGER
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_reflection_memory_workspace
+        ON reflection_memory(workspace_id);
+
+      CREATE INDEX IF NOT EXISTS idx_reflection_memory_expires
+        ON reflection_memory(expires_at)
+        WHERE expires_at IS NOT NULL;
+    `,
+  },
 ];
