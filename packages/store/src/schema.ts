@@ -123,3 +123,13 @@ export const dailyRollups = sqliteTable("daily_rollups", {
   tokensTotal: integer("tokens_total").notNull().default(0),
   costUsd: real("cost_usd"),
 });
+
+export const reflectionMemory = sqliteTable("reflection_memory", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  workspaceId: text("workspace_id").notNull(),
+  fingerprint: text("fingerprint").notNull(),
+  content: text("content").notNull(),
+  sourceRunId: text("source_run_id"),
+  createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+  expiresAt: integer("expires_at", { mode: "timestamp_ms" }),
+});

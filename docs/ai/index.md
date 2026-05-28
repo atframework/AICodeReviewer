@@ -56,7 +56,7 @@
 | M8 | 大部分完成 | `milestones/M8.md` |
 | M9 | 基本完成 | `milestones/M9.md` |
 | M6 | 部分完成 | 先看 `../../Plan.md` |
-| M7 | 已开始 | 先看 `../../Plan.md` |
+| M7 | 已开始 | `milestones/M7.md` |
 
 ## 维护规则
 

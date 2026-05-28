@@ -65,6 +65,7 @@ export interface RepoPromptDiscovery {
 export interface DiscoverRepoPromptAssetsOptions {
   sourceRoot: string;
   changedPaths: string[];
+  forceSkills?: readonly string[];
 }
 
 export interface PromptAssemblyInput {
@@ -664,6 +665,54 @@ export async function discoverRepoPromptAssets(
 
   instructions.sort((left, right) => compareLoadedRefs(left, right));
   skills.sort((left, right) => compareLoadedRefs(left, right));
+
+  if (options.forceSkills && options.forceSkills.length > 0) {
+    const forceSet = new Set(options.forceSkills);
+    const activeNames = new Set(skills.map((s) => s.name));
+    const forcedDropped: DroppedPromptAssetRef[] = [];
+
+    for (let i = droppedRefs.length - 1; i >= 0; i -= 1) {
+      const ref = droppedRefs[i]!;
+      if (ref.kind === "skill" && forceSet.has(ref.label)) {
+        forcedDropped.push(ref);
+        droppedRefs.splice(i, 1);
+      }
+    }
+
+    for (const skillFile of skillFiles) {
+      const relativePath = normalizePath(relative(sourceRoot, skillFile));
+      const content = await readFile(skillFile, "utf8");
+      const { attributes, body } = splitMarkdownFrontmatter(content);
+      const name = typeof attributes.name === "string" ? attributes.name.trim() : "";
+      const description = typeof attributes.description === "string" ? attributes.description.trim() : "";
+
+      if (name && forceSet.has(name) && !activeNames.has(name)) {
+        const appliesTo = extractAppliesToSectionPatterns(body);
+        const summaryText = appliesTo.length > 0 ? `${description} (force-activated)` : `${description} (force-activated, repo-wide)`;
+        skills.push({
+          ...createLoadedRef(
+            "skill",
+            name,
+            truncate(summaryText),
+            `force-activated via config; overrides Applies To filter`,
+            skillBasePriority + patternSpecificity(appliesTo),
+            {
+              path: relativePath,
+              appliesTo,
+            },
+          ),
+          path: relativePath,
+          name,
+          description,
+          content,
+          specificity: patternSpecificity(appliesTo),
+        });
+        activeNames.add(name);
+      }
+    }
+
+    skills.sort((left, right) => compareLoadedRefs(left, right));
+  }
 
   // Conflict detection (Plan §3.6.1)
   const detectedConflicts = [...conflicts];

@@ -22,6 +22,8 @@
 ## Guardrails
 
 - Prefer minimal edits; do not weaken lint, typecheck, test, or markdown gates just to get a change through.
+- For non-trivial work, make assumptions, tradeoffs, and success criteria explicit before editing; ask when ambiguity changes the implementation.
+- Keep solutions simple and surgical: no speculative features, broad refactors, or style churn outside the user-requested scope; clean up only code made unused by your changes.
 - When adding or removing a workspace package, update the package manifest, local `tsconfig.json`, and root `tsconfig.json` references together.
 - When code changes affect config shape, agent adapters, MCP tool contracts, output rendering, deployment behavior, or public workflow, update the matching `Plan.md` roadmap summary, relevant `docs/` modules, `example/config.yaml`, and `example/README.md` entries in the same change, or explicitly state why no doc/example update is needed.
 - **All temporary task artifacts must go under `build/`**: scratch scripts, debug logs, one-off reports, intermediate data, benchmark outputs, and any file produced during an agent session that is not a permanent part of the codebase must be written under `build/`. Never leave temporary files in the repository root, `eval/`, or any package directory. Use purposeful subdirectories: `build/tmp/` for ad-hoc data, `build/logs/` for captured output, and existing `build/deploy/` for deployment staging. Ensure the subdirectory exists before writing (`node -e "require('fs').mkdirSync('build/tmp',{recursive:true})"`). The `eval/` directory is reserved for permanent eval CLI test fixtures only; do not store task scratch files there.
@@ -36,6 +38,7 @@
   - Lint: `node node_modules/eslint/bin/eslint.js .`
   - Typecheck: `node node_modules/typescript/bin/tsc -b tsconfig.json --pretty false`
   - Build: Use `cmd /c "pnpm build"` or invoke the package build scripts directly.
+- PowerShell treats backticks as escapes/line continuations; avoid inline `node -e` snippets that contain JavaScript template literals or complex quote nesting. Prefer native PowerShell, a short script under `build/tmp/`, or quote-free Node snippets.
 - If `pnpm` is available in the environment (e.g., CI Linux runner), prefer `pnpm` over the `node` workaround.
 - **Linux review/runtime shell baseline**: The deployed review image ships
   `git`, `git-lfs`, `subversion`, `p4`, `rg`, `fd`, `bat`, `jq`, `tree`,
@@ -116,6 +119,7 @@ These issues have been found and fixed in prior sessions. Before making changes,
 
 ## Relevant skills
 
+- `.agents/skills/agent-behavior-guardrails/SKILL.md`
 - `.agents/skills/repository-baseline-validation/SKILL.md`
 - `.agents/skills/workspace-scaffold-maintenance/SKILL.md`
 - `.agents/skills/ai-agent-maintenance/SKILL.md`

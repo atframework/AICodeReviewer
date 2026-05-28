@@ -15,6 +15,11 @@ import {
   softDeleteMissingProjects,
   hardDeleteExpiredProjects,
 } from "../src/stats.js";
+import {
+  writeReflectionMemory,
+  readReflectionMemory,
+  compactReflectionMemory,
+} from "../src/reflection.js";
 
 let tmpDir: string;
 let store: StoreDb;
@@ -417,5 +422,80 @@ describe("project lifecycle", () => {
 
     const projects = getProjectStats(store);
     expect(projects.length).toBe(1);
+  });
+});
+
+describe("reflection memory", () => {
+  it("creates the reflection_memory table via migration", () => {
+    const tables = store.sqlite
+      .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+      .all()
+      .map((r: unknown) => (r as Record<string, string>).name);
+    expect(tables).toContain("reflection_memory");
+  });
+
+  it("writes and reads reflection memory entries", async () => {
+    const now = new Date();
+    await writeReflectionMemory(store, [
+      {
+        workspaceId: "ws-1",
+        fingerprint: "fp-1",
+        content: "This project prefers early return patterns.",
+        sourceRunId: "run-001",
+        createdAt: now,
+      },
+    ]);
+
+    const entries = await readReflectionMemory(store, "ws-1");
+    expect(entries.length).toBe(1);
+    expect(entries[0]!.content).toBe("This project prefers early return patterns.");
+    expect(entries[0]!.fingerprint).toBe("fp-1");
+    expect(entries[0]!.sourceRunId).toBe("run-001");
+  });
+
+  it("filters out expired entries on read", async () => {
+    const now = new Date();
+    await writeReflectionMemory(store, [
+      {
+        workspaceId: "ws-1",
+        fingerprint: "fp-expired",
+        content: "Old entry",
+        createdAt: new Date(now.getTime() - 100_000),
+        expiresAt: new Date(now.getTime() - 1),
+      },
+      {
+        workspaceId: "ws-1",
+        fingerprint: "fp-valid",
+        content: "Valid entry",
+        createdAt: now,
+        expiresAt: new Date(now.getTime() + 86_400_000),
+      },
+    ]);
+
+    const entries = await readReflectionMemory(store, "ws-1");
+    expect(entries.length).toBe(1);
+    expect(entries[0]!.fingerprint).toBe("fp-valid");
+  });
+
+  it("compacts old entries beyond retention", async () => {
+    const now = new Date();
+    for (let i = 0; i < 10; i += 1) {
+      await writeReflectionMemory(store, [
+        {
+          workspaceId: "ws-compact",
+          fingerprint: `fp-${i}`,
+          content: `Entry ${i}`,
+          createdAt: now,
+        },
+      ]);
+    }
+
+    const deleted = await compactReflectionMemory(store, "ws-compact", {
+      maxEntries: 3,
+    });
+    expect(deleted).toBe(7);
+
+    const remaining = await readReflectionMemory(store, "ws-compact");
+    expect(remaining.length).toBe(3);
   });
 });

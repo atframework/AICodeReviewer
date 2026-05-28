@@ -299,6 +299,14 @@ const reviewSchema = z
   })
   .passthrough();
 
+const workspacePromptSchema = z
+  .object({
+    base_system_prompt_file: z.string().min(1).optional(),
+    force_skills: z.array(z.string().min(1)).optional(),
+  })
+  .strict()
+  .optional();
+
 const workspaceInstanceSchema = z
   .object({
     source_repo: z
@@ -318,6 +326,7 @@ const workspaceInstanceSchema = z
     outputs: workspaceOutputsSchema.optional(),
     sandbox: sandboxSchema.optional(),
     triage: triageSchema.optional(),
+    prompt: workspacePromptSchema,
     auth: z
       .object({
         api_key_env: z.string().min(1).optional(),
@@ -564,6 +573,7 @@ const appConfigSchema = z
               .strict()
               .optional(),
             outputs: workspaceOutputsSchema.optional(),
+            prompt: workspacePromptSchema,
           })
           .strict()
           .default({}),

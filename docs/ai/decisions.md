@@ -41,6 +41,8 @@
 | D26 | Agent Runtime Bundle | 每次 run 在隔离 `agent/` 目录物化 LLM、MCP、instructions、skills、env 与 manifest。 | `docs/ai/architecture.md` §3.6.3、§3.7 |
 | D27 | 无问题输出策略与目标链接 | `no_problems.action` 按全局 → channel → workspace 覆盖，模板用 `target` 上下文渲染不同目标类型。 | `docs/output-channels.md`、`docs/ai/architecture.md` §3.9.1、§3.10 |
 | D28 | 统一基础存储配置 | 数据库、缓存和对象存储使用顶层 `storage` 命名空间，供观测、队列、artifact、runtime 等能力复用。数据库默认 `/app/data/aicr.sqlite` SQLite + Drizzle；Postgres 字段为未来集中化持久后端预留，当前 runtime 必须显式拒绝未实现后端而不是静默回退。Redis 只做缓存/session/短期索引，不能作为唯一历史统计存储；对象存储默认 filesystem，预留 AWS S3、MinIO、RustFS 等 S3-compatible 后端。Prometheus/OTel/run snapshot 只是外部观测或审计补充；project 维度基于 workspace + trigger + repo，并对已从配置删除的项目执行 soft delete + 级联 GC。 | `Plan.md` §3.10-§3.11、`docs/ai/architecture.md` §3.10-§3.11.1 |
+| D29 | Per-workspace prompt 覆盖与强制技能 | workspace 级 `prompt.base_system_prompt_file` 覆盖全局 system prompt 模板；`prompt.force_skills` 按 skill 名称强制激活，忽略 `Applies To` glob 过滤。配置合并遵循全局 → defaults → instance 分层。 | `docs/ai/architecture.md` §3.10.1、`packages/core/src/config.ts` |
+| D30 | Reflection memory 存储 | `reflectionMemory` 表按 workspace 隔离，支持 TTL 过期和条目上限压缩。写入在 review 完成后，读取在 review 开始前注入 `memoryHints`。当前仅基础设施已就绪，写入/读取与 review lifecycle 的集成待实现。 | `docs/ai/architecture.md` §3.12、`packages/store/src/reflection.ts` |
 
 ## 维护规则
 

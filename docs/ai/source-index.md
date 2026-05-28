@@ -51,6 +51,21 @@ This file records verified external sources for repository AI-agent guidance, Ag
 - `next_review`: 2026-07-18
 - `update_trigger`: Re-check before changing `SKILL.md` frontmatter shape, skill directory layout, script expectations, or skill activation descriptions.
 
+### Karpathy-inspired coding-agent behavior
+
+- Sources:
+  - <https://x.com/karpathy/status/2015883857489522876>
+  - <https://github.com/multica-ai/andrej-karpathy-skills>
+  - <https://github.com/multica-ai/andrej-karpathy-skills/blob/main/skills/karpathy-guidelines/SKILL.md>
+  - <https://github.com/multica-ai/andrej-karpathy-skills/blob/main/README.zh.md>
+- Verified guidance:
+  - Common coding-agent failure modes include hidden assumptions, overbuilt APIs, drive-by edits, and completion claims without concrete success criteria.
+  - Useful mitigations are to surface assumptions, choose the simplest sufficient implementation, keep edits surgical, and turn work into verifiable goals.
+  - The reference repository packages the same behavioral guidance as a thin root instruction, Cursor rule, Claude plugin, and Agent Skill; this repository keeps one canonical tool-neutral source in `AGENTS.md` plus `.agents/skills/` instead of copying tool-private prompt bodies.
+- `last_checked`: 2026-05-28
+- `next_review`: 2026-08-28
+- `update_trigger`: Re-check when changing broad agent behavior guardrails, adding tool-specific behavioral bridges, or adopting a new external behavioral-guidance source.
+
 ### VS Code Copilot customization
 
 - Sources:

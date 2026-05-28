@@ -16,6 +16,7 @@ Use this skill when updating AI-agent guidance, prompt assets, bridge files, or 
 - Maintain `../../../docs/ai/source-index.md` when external AI-tool compatibility claims, Agent Skills conventions, or MCP guidance change; include `last_checked`, `next_review`, and `update_trigger` instead of unsupported guesses.
 - Preserve compatibility across AGENTS-aware tools, VS Code Copilot, Copilot CLI, Codex, Claude Code, Kilo Code/CLI, Roo Code, opencode, and similar agents when the repository intentionally supports them.
 - Keep AI-facing guidance aligned with user-facing docs and examples; if a change affects agent config materialization, MCP tools, output templates, or deployment behavior, sync the relevant `Plan.md` roadmap summary, the relevant `docs/` module, `example/config.yaml`, and `example/README.md` or note why they are unchanged.
+- For non-trivial prompt or skill edits, apply `../agent-behavior-guardrails/SKILL.md`: surface assumptions, choose the simplest sufficient change, keep diffs surgical, and define validation before editing.
 - When prompts or skills recommend shell tools, tie the recommendation to the
   guaranteed runtime baseline. Prefer `rg` / `fd` / `bat` / `jq` / `yq` and
   local `helm` / `kubectl` checks only when the deployment image or sandbox
