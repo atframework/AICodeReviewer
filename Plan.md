@@ -113,6 +113,9 @@
 - 保护性规则、用户公共层、工程层规则按稳定优先级合并。
 - repo-local `AGENTS.md`、path instructions 与 skills 需要自动发现、去重和冲突检测。
 - 只激活与当前 review 路径相关的 repo-local 资产。
+- **主动上下文获取**：默认 prompt 强制要求 agent 在报告问题前主动读取完整变更
+  文件、接口/类型定义、调用方/被调用方、配置和 schema，不允许仅基于 diff hunks
+  猜测。`buildJsonToolContract()` 和 MCP 工具描述已对齐此策略。
 - 详细合同：`docs/ai/architecture.md` §3.6、§3.6.1、§3.6.2。
 
 ### 3.7 AgentAdapter 与模型翻译

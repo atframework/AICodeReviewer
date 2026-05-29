@@ -176,7 +176,7 @@ async function main(): Promise<void> {
 	server.registerTool(
 		"aicr.fetch_more_context",
 		{
-			description: "Request source context for a changed file or narrowly related repository file; omit range for the full file. If content is not returned immediately, AICR records the request, pulls it from VCS, and runs a follow-up pass.",
+			description: "Request source context for a changed file or a related repository file (interface, type definition, caller, callee, schema, configuration). Omit range for the full file. Prefer reading the full changed file before analyzing individual hunks. For related files outside the change, tie the reason to a specific changed line or symbol. If content is not returned immediately, AICR records the request, pulls it from VCS, and runs a follow-up pass.",
 			inputSchema: fetchMoreContextShape,
 		},
 		async (args: unknown) => {
