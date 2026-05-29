@@ -118,6 +118,17 @@
   - alias/桥接文件与 canonical 资产的冲突
 - 只对当前 review 路径相关的 repo-local 规则做激活，避免把全仓规则一次性塞进主 prompt。
 
+#### 3.6.2 默认评审 prompt 上下文策略
+
+- Diff hunks 不够用于准确评审。默认 prompt 强制要求 agent 在报告任何问题前
+  主动读取完整变更文件、接口/类型定义、调用方/被调用方、配置和 schema。
+- agent 必须使用 `aicr.fetch_more_context` 或 shell 只读工具（`rg`、`fd`、`bat`）
+  获取相关代码，不允许仅基于 diff 片段发表猜测性问题。
+- 当无法获取验证所需的上下文时：高影响问题可附带不确定性声明报告；中低影响问题
+  应跳过。
+- `buildJsonToolContract()` 和 MCP `aicr.fetch_more_context` 工具描述已对齐
+  这一策略，在 JSON 格式指引和工具元数据层面都要求先读后报。
+
 #### 3.6.2 Canonical AI 资产约束
 
 - `AGENTS.md` 与 `.agents/skills/` 是跨工具共享真源。
