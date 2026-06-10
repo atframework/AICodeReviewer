@@ -111,8 +111,8 @@ If a run has problems but records `skipReason="no_output_publisher"`, no summary
 
 | Channel kind | Problem output | Summary output | Notes |
 | --- | --- | --- | --- |
-| `gitea_pr_review` | PR review line comment when line is commentable | PR review / configured summary publisher | Falls back to a general review comment when the line is outside the diff |
-| `github_pr_review` | Pull request review comment | Pull request review / configured summary publisher | Uses GitHub line anchors where possible |
+| `gitea_pr_review` | One consolidated PR review/comment body | PR review / configured summary publisher | Problems are buffered and flushed into one Markdown body; falls back to one issue comment on 403/422 |
+| `github_pr_review` | One consolidated pull request review/comment body | Pull request review / configured summary publisher | Problems are buffered and flushed into one Markdown body; falls back to one issue comment on 403/422 |
 | `gitlab_mr_review` | Merge request discussion when `baseSha` and `headSha` are available | Merge request note / configured summary publisher | Falls back to a general MR note when line anchoring is unavailable |
 | `gitea_issue` | Collected, then rendered into an issue comment | Aggregated issue comment | Useful for push events or issue-based triage |
 | `gitea_problem_issue` | Collected for reconciliation | Creates, updates, or resolves managed problem issues | Fingerprint stability matters most here |
@@ -138,11 +138,25 @@ Managed summary comments always include these hidden markers:
 - `<!-- aicr:scope=<channel-name> -->` prevents multiple PR review channels on
   the same PR from overwriting each other.
 - `<!-- aicr:problems=fp1,fp2 -->` tracks the current problem fingerprints.
+- `<!-- aicr:problem-meta=BASE64_JSON -->` stores per-problem metadata
+  (severity, category, file, line) so resolved issues can be rendered with
+  readable titles instead of raw fingerprint hashes.
 
-When updating a managed comment, AICR renders current problems as open issues,
-keeps previously open fingerprints as still-open when they remain, and lists
-missing fingerprints in a Resolved section. The fingerprint parser tolerates
-legacy marker formatting with whitespace such as `fp1, fp2`.
+When updating a managed comment, AICR renders current problems as open issues
+with stable anchor IDs, keeps previously open fingerprints as still-open when
+they remain, and lists missing fingerprints in a Resolved section. Each resolved
+item shows its original title (`[SEVERITY] category — file:line`) when metadata
+is available. Legacy comments without metadata render a readable
+`Previously reported issue` placeholder instead of exposing the raw fingerprint.
+The fingerprint parser tolerates legacy marker formatting with whitespace such
+as `fp1, fp2`.
+
+Problem dispatching for PR/MR review channels is batched: `publishProblem`
+buffers each problem internally; `publishSummary` flushes all buffered problems
+as one Markdown reply body. This also applies when the PR review channel is only
+configured under `outputs.routes.*.line_comments`; the summary flush is still
+called so buffered problems are not dropped. Code reference snippets are grouped
+inside the same reply body instead of being split across per-problem comments.
 
 Comment commands can trigger a manual re-review on PR/MR threads:
 

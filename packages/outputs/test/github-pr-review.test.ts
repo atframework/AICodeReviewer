@@ -32,7 +32,7 @@ const problem: ReviewProblem = {
 };
 
 describe("createGithubPullRequestReviewDispatcher", () => {
-  it("publishes a problem as a GitHub pull request review comment", async () => {
+  it("publishes a problem as a single GitHub pull request review body", async () => {
     const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
     const dispatcher = createGithubPullRequestReviewDispatcher({
       token: "gh-token",
@@ -40,31 +40,28 @@ describe("createGithubPullRequestReviewDispatcher", () => {
       repo: "example",
       pullNumber: 42,
       channelName: "github-pr-main",
+      reviewUpdateStrategy: "always_new",
       fetch: async (url, init) => {
         calls.push({ url, init });
         return response({ id: 123 });
       },
     });
 
-    const result = await dispatcher.publishProblem(problem);
+    await dispatcher.publishProblem(problem);
+    const result = await dispatcher.publishSummary!("");
 
-    expect(result).toEqual({ channel: "github-pr-main", status: "published", externalId: "123", raw: { id: 123 } });
+    expect(result).toMatchObject({ channel: "github-pr-main", status: "published", externalId: "123" });
     expect(calls[0]?.url).toBe("https://api.github.com/repos/owent/example/pulls/42/reviews");
     expect(calls[0]?.init?.headers).toMatchObject({
       "content-type": "application/json",
       authorization: "Bearer gh-token",
       accept: "application/vnd.github+json",
     });
-    expect(JSON.parse(calls[0]?.init?.body ?? "{}")).toMatchObject({
-      event: "COMMENT",
-      comments: [
-        {
-          path: "src/app.ts",
-          line: 42,
-          side: "RIGHT",
-        },
-      ],
-    });
+    const body = JSON.parse(calls[0]?.init?.body ?? "{}");
+    expect(body.event).toBe("COMMENT");
+    expect(body.comments).toBeUndefined();
+    expect(body.body).toContain("src/app.ts:42");
+    expect(body.body).toContain("This branch returns success before the write is committed.");
   });
 
   it("uses a custom API base URL and URL-encodes path segments", async () => {
@@ -74,6 +71,7 @@ describe("createGithubPullRequestReviewDispatcher", () => {
       owner: "org/sub-org",
       repo: "repo&name",
       pullNumber: 5,
+      reviewUpdateStrategy: "always_new",
       fetch: async (url, init) => {
         calls.push({ url, init });
         return response({ id: 1 });
@@ -81,6 +79,7 @@ describe("createGithubPullRequestReviewDispatcher", () => {
     });
 
     await dispatcher.publishProblem(problem);
+    await dispatcher.publishSummary!("");
 
     expect(calls[0]?.url).toBe("https://github.enterprise/api/v3/repos/org%2Fsub-org/repo%26name/pulls/5/reviews");
   });
@@ -91,6 +90,7 @@ describe("createGithubPullRequestReviewDispatcher", () => {
       owner: "owent",
       repo: "example",
       pullNumber: 1,
+      reviewUpdateStrategy: "always_new",
       fetch: async (url, init) => {
         calls.push({ url, init });
         return response({ id: 1 });
@@ -98,6 +98,7 @@ describe("createGithubPullRequestReviewDispatcher", () => {
     });
 
     await dispatcher.publishProblem({ ...problem, lineCommentAllowed: false });
+    await dispatcher.publishSummary!("");
 
     const body = JSON.parse(calls[0]?.init?.body ?? "{}");
     expect(body.event).toBe("COMMENT");
@@ -105,12 +106,13 @@ describe("createGithubPullRequestReviewDispatcher", () => {
     expect(body.body).toContain("src/app.ts:42");
   });
 
-  it("falls back to issue comment when GitHub rejects the line anchor (auto mode)", async () => {
+  it("falls back to one issue comment when GitHub rejects the review body (auto mode)", async () => {
     const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
     const dispatcher = createGithubPullRequestReviewDispatcher({
       owner: "owent",
       repo: "example",
       pullNumber: 1,
+      reviewUpdateStrategy: "always_new",
       fetch: async (url, init) => {
         calls.push({ url, init });
         return calls.length === 1
@@ -119,12 +121,13 @@ describe("createGithubPullRequestReviewDispatcher", () => {
       },
     });
 
-    const result = await dispatcher.publishProblem(problem);
+    await dispatcher.publishProblem(problem);
+    const result = await dispatcher.publishSummary!("");
 
     expect(result.externalId).toBe("2");
     expect(calls).toHaveLength(2);
     expect(calls[0]?.url).toContain("/reviews");
-    expect(JSON.parse(calls[0]?.init?.body ?? "{}").comments).toHaveLength(1);
+    expect(JSON.parse(calls[0]?.init?.body ?? "{}").comments).toBeUndefined();
     expect(calls[1]?.url).toContain("/issues/1/comments");
     const commentBody = JSON.parse(calls[1]?.init?.body ?? "{}");
     expect(commentBody.body).toContain("src/app.ts:42");
@@ -139,8 +142,9 @@ describe("createGithubPullRequestReviewDispatcher", () => {
       fetch: async () => response({ message: "bad credentials" }, 401),
     });
 
-    await expect(dispatcher.publishProblem(problem)).rejects.toBeInstanceOf(OutputDispatchError);
-    await expect(dispatcher.publishProblem(problem)).rejects.toMatchObject({ status: 401 });
+    await dispatcher.publishProblem(problem);
+    await expect(dispatcher.publishSummary!("")).rejects.toBeInstanceOf(OutputDispatchError);
+    await expect(dispatcher.publishSummary!("")).rejects.toMatchObject({ status: 401 });
   });
 
   it("publishes a summary as a GitHub pull request review comment", async () => {
@@ -235,13 +239,15 @@ describe("createGithubPullRequestReviewDispatcher", () => {
       repo: "example",
       pullNumber: 1,
       reviewMode: "comment",
+      reviewUpdateStrategy: "always_new",
       fetch: async (url, init) => {
         calls.push({ url, init });
         return response({ id: 10 });
       },
     });
 
-    const result = await dispatcher.publishProblem(problem);
+    await dispatcher.publishProblem(problem);
+    const result = await dispatcher.publishSummary!("");
 
     expect(result.channel).toBe("github_pr_review");
     expect(calls).toHaveLength(1);
@@ -258,6 +264,7 @@ describe("createGithubPullRequestReviewDispatcher", () => {
       repo: "example",
       pullNumber: 1,
       reviewEvent: "REQUEST_CHANGES",
+      reviewUpdateStrategy: "always_new",
       fetch: async (url, init) => {
         calls.push({ url, init });
         return response({ id: 11 });
@@ -265,10 +272,12 @@ describe("createGithubPullRequestReviewDispatcher", () => {
     });
 
     await dispatcher.publishProblem(problem);
+    await dispatcher.publishSummary!("");
 
     const body = JSON.parse(calls[0]?.init?.body ?? "{}");
     expect(body.event).toBe("REQUEST_CHANGES");
-    expect(body.comments).toHaveLength(1);
+    expect(body.comments).toBeUndefined();
+    expect(body.body).toContain("src/app.ts:42");
   });
 
   it("does not fallback in review mode on permission error", async () => {
@@ -277,10 +286,12 @@ describe("createGithubPullRequestReviewDispatcher", () => {
       repo: "example",
       pullNumber: 1,
       reviewMode: "review",
+      reviewUpdateStrategy: "always_new",
       fetch: async () => response({ message: "forbidden" }, 403),
     });
 
-    await expect(dispatcher.publishProblem(problem)).rejects.toThrow("GitHub review API returned 403");
+    await dispatcher.publishProblem(problem);
+    await expect(dispatcher.publishSummary!("")).rejects.toThrow("GitHub review API returned 403");
   });
 
   it("falls back to issue comment on 403 (auto mode)", async () => {
@@ -289,6 +300,7 @@ describe("createGithubPullRequestReviewDispatcher", () => {
       owner: "owent",
       repo: "example",
       pullNumber: 1,
+      reviewUpdateStrategy: "always_new",
       fetch: async (url, init) => {
         calls.push({ url, init });
         return calls.length === 1
@@ -297,7 +309,8 @@ describe("createGithubPullRequestReviewDispatcher", () => {
       },
     });
 
-    const result = await dispatcher.publishProblem(problem);
+    await dispatcher.publishProblem(problem);
+    const result = await dispatcher.publishSummary!("");
 
     expect(result.externalId).toBe("3");
     expect(calls).toHaveLength(2);
@@ -325,6 +338,194 @@ describe("createGithubPullRequestReviewDispatcher", () => {
     expect(calls[0]?.url).toContain("/issues/1/comments");
     const body = JSON.parse(calls[0]?.init?.body ?? "{}");
     expect(body.body).toBe("Review summary");
+  });
+
+  it("buffers problems and returns status buffered before publishSummary flushes", async () => {
+    const dispatcher = createGithubPullRequestReviewDispatcher({
+      owner: "owent",
+      repo: "example",
+      pullNumber: 1,
+      reviewUpdateStrategy: "always_new",
+      fetch: async () => response({ id: 1 }),
+    });
+
+    const buffered = await dispatcher.publishProblem(problem);
+    expect(buffered.status).toBe("buffered");
+    expect(buffered.raw).toMatchObject({ buffered: true });
+  });
+
+  it("flushes buffered problems as a single consolidated review", async () => {
+    const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
+    const dispatcher = createGithubPullRequestReviewDispatcher({
+      owner: "owent",
+      repo: "example",
+      pullNumber: 1,
+      reviewUpdateStrategy: "always_new",
+      fetch: async (url, init) => {
+        calls.push({ url, init });
+        return response({ id: 99 });
+      },
+    });
+
+    await dispatcher.publishProblem(problem);
+    await dispatcher.publishProblem({ ...problem, file: "src/other.ts", line: 10, fingerprint: "def456" });
+    await dispatcher.publishSummary!("Summary");
+
+    const reviewCall = calls.find((c) => c.url.includes("/reviews"));
+    expect(reviewCall).toBeDefined();
+    const body = JSON.parse(reviewCall?.init?.body ?? "{}");
+    expect(body.comments).toBeUndefined();
+    expect(body.body).toContain("Summary");
+    expect(body.body).toContain("src/app.ts:42");
+    expect(body.body).toContain("src/other.ts:10");
+    expect(body.body.match(/### \d+\. \[HIGH\] correctness/gu)).toHaveLength(2);
+  });
+
+  it("embeds problem metadata marker in managed summary comment", async () => {
+    const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
+    const dispatcher = createGithubPullRequestReviewDispatcher({
+      owner: "owent",
+      repo: "example",
+      pullNumber: 10,
+      reviewUpdateStrategy: "update_existing",
+      headSha: "abc1234567890",
+      fetch: async (url, init) => {
+        calls.push({ url, init });
+        if (!init?.method || init.method === "GET") {
+          return response([]);
+        }
+        return response({ id: 100 });
+      },
+    });
+
+    await dispatcher.publishSummary!("Summary text", [problem]);
+
+    const postCall = calls.find((c) => c.init?.method === "POST");
+    expect(postCall).toBeDefined();
+    const body = JSON.parse(postCall?.init?.body ?? "{}");
+    expect(body.body).toMatch(/<!--\s*aicr:problem-meta=/u);
+  });
+
+  it("renders resolved issues with readable titles from metadata", async () => {
+    const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
+    const previousFingerprint = problem.fingerprint!;
+    const encodedMeta = Buffer.from(JSON.stringify([{
+      fingerprint: previousFingerprint,
+      severity: problem.severity,
+      category: problem.category,
+      file: problem.file,
+      line: problem.line,
+    }]), "utf-8").toString("base64");
+    const existingBody = [
+      "<!-- aicr:managed=pr-review -->",
+      "<!-- aicr:scope=github_pr_review -->",
+      `<!-- aicr:problems=${previousFingerprint} -->`,
+      `<!-- aicr:problem-meta=${encodedMeta} -->`,
+      "",
+      "## AI Code Review",
+      "",
+      "Old summary",
+    ].join("\n");
+
+    const dispatcher = createGithubPullRequestReviewDispatcher({
+      owner: "owent",
+      repo: "example",
+      pullNumber: 10,
+      reviewUpdateStrategy: "update_existing",
+      headSha: "def7890123456",
+      fetch: async (url, init) => {
+        calls.push({ url, init });
+        if (!init?.method || init.method === "GET") {
+          return response([{ id: 1, body: existingBody }]);
+        }
+        return response({ id: 101 });
+      },
+    });
+
+    await dispatcher.publishSummary!("New summary", []);
+
+    const patchCall = calls.find((c) => c.init?.method === "PATCH");
+    expect(patchCall).toBeDefined();
+    const body = JSON.parse(patchCall?.init?.body ?? "{}");
+    expect(body.body).toContain("Resolved");
+    expect(body.body).toContain("[HIGH] correctness — src/app.ts:42");
+    expect(body.body).not.toContain(previousFingerprint);
+    expect(body.body).toMatch(/\[~~\[HIGH\] correctness — src\/app\.ts:42~~\]\(#aicr-problem-[0-9a-f]{12}\)/u);
+    expect(body.body).toMatch(/<span id="aicr-resolved-1"><\/span>/u);
+  });
+
+  it("backfills readable resolved titles from legacy open issue lines", async () => {
+    const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
+    const previousFingerprint = "763ad070712ca49e";
+    const existingBody = [
+      "<!-- aicr:managed=pr-review -->",
+      "<!-- aicr:scope=github_pr_review -->",
+      `<!-- aicr:problems=${previousFingerprint} -->`,
+      "",
+      "## AI Code Review",
+      "",
+      "### Open Issues (1)",
+      "",
+      "1. **[MEDIUM] api_contract** — `src/service.cpp:87`",
+    ].join("\n");
+
+    const dispatcher = createGithubPullRequestReviewDispatcher({
+      owner: "owent",
+      repo: "example",
+      pullNumber: 10,
+      reviewUpdateStrategy: "update_existing",
+      fetch: async (url, init) => {
+        calls.push({ url, init });
+        if (!init?.method || init.method === "GET") {
+          return response([{ id: 1, body: existingBody }]);
+        }
+        return response({ id: 102 });
+      },
+    });
+
+    await dispatcher.publishSummary!("New summary", []);
+
+    const patchCall = calls.find((c) => c.init?.method === "PATCH");
+    expect(patchCall).toBeDefined();
+    const body = JSON.parse(patchCall?.init?.body ?? "{}");
+    expect(body.body).toContain("[MEDIUM] api_contract — src/service.cpp:87");
+    expect(body.body).not.toContain(previousFingerprint);
+  });
+
+  it("does not render raw fingerprint text when legacy resolved metadata is unavailable", async () => {
+    const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
+    const previousFingerprint = "763ad070712ca49e";
+    const existingBody = [
+      "<!-- aicr:managed=pr-review -->",
+      "<!-- aicr:scope=github_pr_review -->",
+      `<!-- aicr:problems=${previousFingerprint} -->`,
+      "",
+      "## AI Code Review",
+      "",
+      "Old summary without problem metadata",
+    ].join("\n");
+
+    const dispatcher = createGithubPullRequestReviewDispatcher({
+      owner: "owent",
+      repo: "example",
+      pullNumber: 10,
+      reviewUpdateStrategy: "update_existing",
+      fetch: async (url, init) => {
+        calls.push({ url, init });
+        if (!init?.method || init.method === "GET") {
+          return response([{ id: 1, body: existingBody }]);
+        }
+        return response({ id: 103 });
+      },
+    });
+
+    await dispatcher.publishSummary!("New summary", []);
+
+    const patchCall = calls.find((c) => c.init?.method === "PATCH");
+    expect(patchCall).toBeDefined();
+    const body = JSON.parse(patchCall?.init?.body ?? "{}");
+    expect(body.body).toContain("Previously reported issue");
+    expect(body.body).not.toContain(previousFingerprint);
   });
 });
 
@@ -446,9 +647,10 @@ describe("createGithubPullRequestReviewDispatcher (update_existing)", () => {
     const patchCall = calls.find((c) => c.init?.method === "PATCH");
     const body = JSON.parse(patchCall?.init?.body ?? "{}");
     expect(body.body).toContain("fp-keep");
-    expect(body.body).toContain("fp-resolve");
     expect(body.body).toContain("Open Issues");
     expect(body.body).toContain("Resolved");
+    expect(body.body).toContain("Previously reported issue");
+    expect(body.body).not.toContain("fp-resolve");
   });
 
   it("parses previous fingerprints with spaces in managed summary markers", async () => {
@@ -488,7 +690,8 @@ describe("createGithubPullRequestReviewDispatcher (update_existing)", () => {
     const body = JSON.parse(patchCall?.init?.body ?? "{}");
     expect(body.body).toContain("<!-- aicr:problems=fp-keep -->");
     expect(body.body).toContain("Resolved (1)");
-    expect(body.body).toContain("fp-resolve");
+    expect(body.body).toContain("Previously reported issue");
+    expect(body.body).not.toContain("fp-resolve");
   });
 
   it("does not update a managed summary comment from another channel scope", async () => {

@@ -420,20 +420,22 @@ describe("createOutputPublisherFromConfig", () => {
         outputs: {
           template_engine: "handlebars",
           channels: [
-            { name: "plan-gitea-pr", kind: "gitea_pr_review", trigger: "gitea-internal" },
+            { name: "plan-gitea-pr", kind: "gitea_pr_review", trigger: "gitea-internal", review_update_strategy: "always_new" },
           ],
         },
       } as Partial<AppConfig>);
       const publisher = createOutputPublisherFromConfig(config, "plan-gitea-pr", 42, "test-workspace");
 
       assertProblemPublisher(publisher);
-      const result = await publisher.publishProblem({
+      assertSummaryPublisher(publisher);
+      await publisher.publishProblem({
         file: "src/app.ts",
         line: 7,
         severity: "high",
         category: "correctness",
         message: "Issue.",
       });
+      const result = await publisher.publishSummary!("", []);
       const firstResult = Array.isArray(result) ? result[0] : result;
 
       expect(firstResult?.externalId).toBe("321");
@@ -528,7 +530,7 @@ describe("createOutputPublisherFromConfig", () => {
         triggers: [{ name: "github-saas", kind: "github", token_env: "GITHUB_TOKEN" }],
         outputs: {
           template_engine: "handlebars",
-          channels: [{ name: "github-pr", kind: "github_pr_review", trigger: "github-saas" }],
+          channels: [{ name: "github-pr", kind: "github_pr_review", trigger: "github-saas", review_update_strategy: "always_new" }],
         },
         workspaces: {
           cache: { max_total_gb: 50, eviction: "lru", ttl_days: 30 },
@@ -543,13 +545,15 @@ describe("createOutputPublisherFromConfig", () => {
       const publisher = createOutputPublisherFromConfig(config, "github-pr", 42, "test-workspace");
 
       assertProblemPublisher(publisher);
-      const result = await publisher.publishProblem({
+      assertSummaryPublisher(publisher);
+      await publisher.publishProblem({
         file: "src/app.ts",
         line: 7,
         severity: "high",
         category: "correctness",
         message: "Issue.",
       });
+      const result = await publisher.publishSummary!("", []);
       const firstResult = Array.isArray(result) ? result[0] : result;
 
       expect(firstResult?.externalId).toBe("987");
@@ -1235,7 +1239,7 @@ describe("createOutputPublisherResolverFromConfig", () => {
         outputs: {
           template_engine: "handlebars",
           channels: [
-            { name: "gitea-pr", kind: "gitea_pr_review", trigger: "gitea-internal" },
+            { name: "gitea-pr", kind: "gitea_pr_review", trigger: "gitea-internal", review_update_strategy: "always_new" },
           ],
         },
         workspaces: {
@@ -1244,7 +1248,10 @@ describe("createOutputPublisherResolverFromConfig", () => {
           instances: {
             "test-workspace": {
               source_repo: { trigger: "gitea-internal", repo: "owent/example" },
-              outputs: { line_comments: ["gitea-pr"] },
+              outputs: {
+                line_comments: ["gitea-pr"],
+                summary: ["gitea-pr"],
+              },
             },
           },
         },
@@ -1265,14 +1272,10 @@ describe("createOutputPublisherResolverFromConfig", () => {
         eventName: "pull_request",
       });
 
-      assertProblemPublisher(publisher);
-      await publisher.publishProblem({
-        file: "src/app.ts",
-        line: 3,
-        severity: "medium",
-        category: "correctness",
-        message: "Issue.",
-      });
+      assertSummaryPublisher(publisher);
+      await publisher.publishSummary("Review summary", [
+        { file: "src/app.ts", line: 3, severity: "medium", category: "correctness", message: "Issue." },
+      ]);
 
       expect(calls[0]?.url).toBe("https://gitea.example.com/api/v1/repos/owent/example/pulls/77/reviews");
       expect(calls[0]?.init.headers).toMatchObject({ authorization: "token resolver-token" });
@@ -1302,7 +1305,7 @@ describe("createOutputPublisherResolverFromConfig", () => {
         outputs: {
           template_engine: "handlebars",
           channels: [
-            { name: "gitea-pr", kind: "gitea_pr_review", trigger: "gitea-internal" },
+            { name: "gitea-pr", kind: "gitea_pr_review", trigger: "gitea-internal", review_update_strategy: "always_new" },
             { name: "feishu-team", kind: "feishu_bot", webhook_url_env: "FEISHU_WEBHOOK" },
           ],
           routes: {
@@ -1354,6 +1357,9 @@ describe("createOutputPublisherResolverFromConfig", () => {
         "https://gitea.example.com/api/v1/repos/owent/example/pulls/77/reviews",
         "https://open.feishu.cn/hook/test",
       ]);
+      const reviewBody = JSON.parse(calls[0]?.init.body ?? "{}");
+      expect(reviewBody.comments).toBeUndefined();
+      expect(reviewBody.body).toContain("src/app.ts:3");
     } finally {
       vi.unstubAllGlobals();
       if (originalGiteaToken === undefined) {
@@ -1365,6 +1371,85 @@ describe("createOutputPublisherResolverFromConfig", () => {
         delete process.env.FEISHU_WEBHOOK;
       } else {
         process.env.FEISHU_WEBHOOK = originalFeishuWebhook;
+      }
+    }
+  });
+
+  it("flushes line-comment PR review channels even when no summary route is configured", async () => {
+    const calls: { url: string; init: { body?: string } }[] = [];
+    vi.stubGlobal("fetch", async (url: string, init?: { body?: string }) => {
+      calls.push({ url, init: init ?? {} });
+      return response({ id: 777 });
+    });
+
+    const originalGiteaToken = process.env.GITEA_TOKEN;
+    process.env.GITEA_TOKEN = "resolver-token";
+    try {
+      const config = makeConfig({
+        outputs: {
+          template_engine: "handlebars",
+          channels: [
+            { name: "gitea-pr", kind: "gitea_pr_review", trigger: "gitea-internal", review_update_strategy: "always_new" },
+          ],
+          routes: {
+            default: {
+              line_comments: ["gitea-pr"],
+            },
+            rules: [],
+          },
+        },
+        workspaces: {
+          cache: { max_total_gb: 50, eviction: "lru", ttl_days: 30 },
+          defaults: {},
+          instances: {
+            "test-workspace": {
+              source_repo: { trigger: "gitea-internal", repo: "owent/example" },
+            },
+          },
+        },
+      } as Partial<AppConfig>);
+      const publisher = createOutputPublisherResolverFromConfig(config)({
+        reviewEvent: {
+          triggerName: "gitea-internal",
+          provider: "gitea",
+          workspaceId: "test-workspace",
+          targetKind: "pull_request",
+          repoRef: "owent/example",
+          author: {},
+          reason: "gitea:opened",
+        },
+        payload: { pull_request: { number: 77 } },
+        provider: "gitea",
+        eventName: "pull_request",
+      });
+
+      assertProblemPublisher(publisher);
+      assertSummaryPublisher(publisher);
+      await publisher.publishProblem({
+        file: "src/app.ts",
+        line: 3,
+        severity: "medium",
+        category: "correctness",
+        message: "Issue.",
+      });
+      const result = await publisher.publishSummary("", [
+        { file: "src/app.ts", line: 3, severity: "medium", category: "correctness", message: "Issue." },
+      ]);
+
+      expect(calls.map((call) => call.url)).toEqual([
+        "https://gitea.example.com/api/v1/repos/owent/example/pulls/77/reviews",
+      ]);
+      const firstResult = Array.isArray(result) ? result[0] : result;
+      expect(firstResult?.status).toBe("published");
+      const reviewBody = JSON.parse(calls[0]?.init.body ?? "{}");
+      expect(reviewBody.comments).toBeUndefined();
+      expect(reviewBody.body).toContain("src/app.ts:3");
+    } finally {
+      vi.unstubAllGlobals();
+      if (originalGiteaToken === undefined) {
+        delete process.env.GITEA_TOKEN;
+      } else {
+        process.env.GITEA_TOKEN = originalGiteaToken;
       }
     }
   });
@@ -2054,6 +2139,40 @@ describe("bootstrapServerApp", () => {
         actions: ["close"],
         categoriesClose: ["spam", "invalid", "duplicate"],
         dryRun: true,
+      });
+    } finally {
+      if (originalKey === undefined) {
+        delete process.env.OPENAI_API_KEY;
+      } else {
+        process.env.OPENAI_API_KEY = originalKey;
+      }
+    }
+  });
+
+  it("normalizes legacy queue retry fields into trigger retry options", async () => {
+    const originalKey = process.env.OPENAI_API_KEY;
+    process.env.OPENAI_API_KEY = "test-key";
+    try {
+      const config = makeConfig({
+        queue: {
+          kind: "memory",
+          retry: {
+            max_attempts: 3,
+            backoff_seconds: 30,
+          },
+        },
+      } as Partial<AppConfig>);
+
+      const result = await bootstrapServerApp({ config, baseSystemPrompt: "test" });
+
+      expect(result.triggerRetry).toEqual({
+        attempts: 3,
+        backoff: {
+          kind: "constant",
+          base_ms: 30000,
+          max_ms: 30000,
+          jitter: false,
+        },
       });
     } finally {
       if (originalKey === undefined) {

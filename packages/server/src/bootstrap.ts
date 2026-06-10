@@ -61,11 +61,11 @@ import {
   type StoreDb,
 } from "@aicr/store";
 
-import type { GiteaWebhookConfig } from "./gitea-webhook.js";
+import type { VcsWebhookConfig } from "./webhook-common.js";
 import type { P4TriggerConfig } from "./p4-webhook.js";
 import { GiteaApiClient } from "./issue-triage.js";
 import type { IssueTriageRuntimeOptions, WorkspaceIssueTriagePolicy } from "./issue-triage.js";
-import type { ServerAppOptions, ServerReviewOrchestrationOptions } from "./index.js";
+import type { ServerAppOptions, ServerReviewOrchestrationOptions, TriggerRetryConfig } from "./index.js";
 import { type AuthConfig } from "./auth.js";
 import { createReviewDeduplicator } from "./review-deduplicator.js";
 import { resolveAdminAuthConfig } from "./admin-auth.js";
@@ -377,7 +377,7 @@ export async function createSandboxBackendFromConfig(config: AppConfig): Promise
 export function resolveGiteaWebhookConfig(
   config: AppConfig,
   triggerName?: string,
-): GiteaWebhookConfig | undefined {
+): VcsWebhookConfig | undefined {
   const trigger = triggerName
     ? config.triggers.find((t) => t.name === triggerName && (t.kind === "gitea" || t.kind === "forgejo"))
     : config.triggers.find((t) => t.kind === "gitea" || t.kind === "forgejo");
@@ -392,7 +392,7 @@ export function resolveGiteaWebhookConfig(
 function buildWebhookConfigFromTrigger(
   config: AppConfig,
   trigger: AppConfig["triggers"][number],
-): GiteaWebhookConfig {
+): VcsWebhookConfig {
   const triggerConfig = trigger as Record<string, unknown>;
   const webhookSecretEnv = triggerConfig.webhook_secret_env as string | undefined;
   const webhookSecret = webhookSecretEnv ? resolveEnv(webhookSecretEnv) : undefined;
@@ -417,7 +417,7 @@ export function resolveGenericWebhookConfigs(
   config: AppConfig,
   kind: string,
   triggerName?: string,
-): readonly GiteaWebhookConfig[] {
+): readonly VcsWebhookConfig[] {
   const triggers = triggerName
     ? config.triggers.filter((trigger) => trigger.name === triggerName && trigger.kind === kind)
     : config.triggers.filter((trigger) => trigger.kind === kind);
@@ -429,8 +429,46 @@ export function resolveGenericWebhookConfig(
   config: AppConfig,
   kind: string,
   triggerName?: string,
-): GiteaWebhookConfig | undefined {
+): VcsWebhookConfig | undefined {
   return resolveGenericWebhookConfigs(config, kind, triggerName)[0];
+}
+
+function resolveTriggerRetryConfig(config: AppConfig): TriggerRetryConfig | undefined {
+  const retry = config.queue?.retry;
+  if (!retry) {
+    return undefined;
+  }
+
+  const raw = retry as Record<string, unknown>;
+  const legacyAttempts = typeof raw.max_attempts === "number" && raw.max_attempts > 0
+    ? Math.floor(raw.max_attempts)
+    : undefined;
+  const attempts = retry.attempts ?? legacyAttempts;
+  const legacyBackoffSeconds = typeof raw.backoff_seconds === "number" && raw.backoff_seconds > 0
+    ? raw.backoff_seconds
+    : undefined;
+  const legacyBackoff = legacyBackoffSeconds !== undefined
+    ? {
+        kind: "constant" as const,
+        base_ms: legacyBackoffSeconds * 1000,
+        max_ms: legacyBackoffSeconds * 1000,
+        jitter: false,
+      }
+    : undefined;
+  const configuredBackoff = retry.backoff
+    ? {
+        ...(retry.backoff.kind !== undefined ? { kind: retry.backoff.kind } : {}),
+        ...(retry.backoff.base_ms !== undefined ? { base_ms: retry.backoff.base_ms } : {}),
+        ...(retry.backoff.max_ms !== undefined ? { max_ms: retry.backoff.max_ms } : {}),
+        ...(retry.backoff.jitter !== undefined ? { jitter: retry.backoff.jitter } : {}),
+      }
+    : undefined;
+  const backoff = configuredBackoff ?? legacyBackoff;
+
+  return {
+    ...(attempts !== undefined ? { attempts } : {}),
+    ...(backoff !== undefined ? { backoff } : {}),
+  };
 }
 
 export function resolveP4TriggerConfig(
@@ -920,12 +958,29 @@ function callPublishProblem(
   return publisher.publishProblem(problem);
 }
 
+function uniqueOutputPublisherEntries(entries: readonly OutputPublisherEntry[]): readonly OutputPublisherEntry[] {
+  const seen = new Set<string>();
+  const result: OutputPublisherEntry[] = [];
+  for (const entry of entries) {
+    if (seen.has(entry.name)) {
+      continue;
+    }
+    seen.add(entry.name);
+    result.push(entry);
+  }
+  return result;
+}
+
 function createCompositeOutputPublisher(
   linePublishers: readonly OutputPublisherEntry[],
   summaryPublishers: readonly OutputPublisherEntry[],
 ): ReviewOutputPublisher | undefined {
-  const summaryCapable = summaryPublishers.filter((entry) => entry.publisher.publishSummary);
-  if (linePublishers.length === 0 && summaryCapable.length === 0) {
+  const summaryCapable = uniqueOutputPublisherEntries(summaryPublishers.filter((entry) => entry.publisher.publishSummary));
+  const lineFlushCapable = uniqueOutputPublisherEntries(linePublishers.filter((entry) => entry.publisher.publishSummary));
+  const summaryFlushCapable = uniqueOutputPublisherEntries([...lineFlushCapable, ...summaryCapable]);
+  const summaryChannelNames = new Set(summaryCapable.map((entry) => entry.name));
+
+  if (linePublishers.length === 0 && summaryFlushCapable.length === 0) {
     return undefined;
   }
 
@@ -946,7 +1001,7 @@ function createCompositeOutputPublisher(
       }
       return results;
     },
-    ...(summaryCapable.length > 0
+    ...(summaryFlushCapable.length > 0
       ? {
           async publishSummary(
             summary: string,
@@ -956,8 +1011,12 @@ function createCompositeOutputPublisher(
             const results: DispatchResult[] = [];
             const noProblems = (problems?.length ?? 0) === 0;
             const bypassNoProblemsPolicy = options?.bypassNoProblemsPolicy === true;
-            for (const entry of summaryCapable) {
+            const entries = noProblems ? summaryCapable : summaryFlushCapable;
+            for (const entry of entries) {
               const publisher = entry.publisher;
+              if (!summaryChannelNames.has(entry.name) && noProblems) {
+                continue;
+              }
               if (!bypassNoProblemsPolicy && noProblems) {
                 if (publisher.noProblemsAction === "suppress") {
                   continue;
@@ -1918,6 +1977,7 @@ export async function bootstrapServerApp(options: BootstrapServerOptions): Promi
   let observability: ObservabilityApiOptions | undefined;
 
   const adminAuthConfig = resolveAdminAuthConfig(config as unknown as Record<string, unknown>, resolveEnv);
+  const triggerRetry = resolveTriggerRetryConfig(config);
 
   if (adminAuthConfig) {
     if (config.storage.database.kind !== "sqlite") {
@@ -1952,14 +2012,15 @@ export async function bootstrapServerApp(options: BootstrapServerOptions): Promi
     ...(authConfig ? { auth: authConfig } : {}),
     asyncTriggers: true,
     deduplicator: createReviewDeduplicator(),
+    ...(triggerRetry ? { triggerRetry } : {}),
     ...(observability ? { observability } : {}),
     ...(store ? { store } : {}),
   };
 }
 
 function toServerWebhookOption(
-  configs: readonly GiteaWebhookConfig[],
-): GiteaWebhookConfig | readonly GiteaWebhookConfig[] | undefined {
+  configs: readonly VcsWebhookConfig[],
+): VcsWebhookConfig | readonly VcsWebhookConfig[] | undefined {
   if (configs.length === 0) {
     return undefined;
   }

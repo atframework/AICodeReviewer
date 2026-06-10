@@ -45,6 +45,8 @@ Do not use this skill for LLM prompt layering, agent runtime materialization, or
 4. **Keep docs, examples, and tests aligned**
    - If config shape changes, update the relevant `Plan.md` roadmap summary, `../../../docs/ai/architecture.md`, `docs/output-channels.md`, `example/config.yaml`, and config schema tests together.
    - If PR/MR review summary update behavior changes, test `update_existing` marker parsing (`aicr:managed`, `aicr:scope`, `aicr:problems`), same-scope PATCH behavior, cross-scope non-overwrite behavior, and whitespace-tolerant fingerprint parsing.
+   - If PR/MR review problem dispatching changes, test consolidated review buffering (`publishProblem` buffers, `publishSummary` flushes), one-body Markdown aggregation, line-comments-only route flushing, fallback to one issue comment on 403/422, and non-inline problem inclusion in the same body.
+   - If resolved issue rendering changes, test the `<!-- aicr:problem-meta=BASE64_JSON -->` marker roundtrip, readable title rendering (`[SEVERITY] category — file:line`), legacy no-metadata fallback without raw fingerprints, and anchor ID generation for both open and resolved items.
    - Add template tests for PR/MR and non-PR targets whenever built-in templates change.
    - Add routing tests for mixed channels where one suppresses no-problems output and another publishes it.
 

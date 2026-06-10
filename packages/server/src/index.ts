@@ -26,9 +26,9 @@ import {
   extractWebhookRepositoryRef,
   matchesWebhookRepo,
   translateWebhookToReviewEvent,
-  type GiteaWebhookConfig,
+  type VcsWebhookConfig,
   verifyWebhookSignature,
-} from "./gitea-webhook.js";
+} from "./webhook-translator.js";
 import {
   enrichP4ReviewEvent,
   translateP4TriggerToReviewEvent,
@@ -50,11 +50,21 @@ import {
 } from "./review-orchestrator.js";
 
 type GenericWebhookProvider = "github" | "gitlab";
-type GenericWebhookConfigInput = GiteaWebhookConfig | readonly GiteaWebhookConfig[];
+type GenericWebhookConfigInput = VcsWebhookConfig | readonly VcsWebhookConfig[];
+
+export interface TriggerRetryConfig {
+  readonly attempts?: number;
+  readonly backoff?: {
+    readonly kind?: "exponential" | "linear" | "constant";
+    readonly base_ms?: number;
+    readonly max_ms?: number;
+    readonly jitter?: boolean;
+  };
+}
 
 export interface ServerAppOptions {
-  readonly gitea?: GiteaWebhookConfig;
-  readonly forgejo?: GiteaWebhookConfig;
+  readonly gitea?: VcsWebhookConfig;
+  readonly forgejo?: VcsWebhookConfig;
   readonly github?: GenericWebhookConfigInput;
   readonly gitlab?: GenericWebhookConfigInput;
   readonly p4?: P4TriggerConfig;
@@ -67,6 +77,7 @@ export interface ServerAppOptions {
   readonly auth?: AuthConfig;
   readonly asyncTriggers?: boolean;
   readonly deduplicator?: ReviewDeduplicator;
+  readonly triggerRetry?: TriggerRetryConfig;
   readonly runsDir?: string;
   readonly metrics?: AicrMetrics;
   readonly observability?: ObservabilityApiOptions;
@@ -111,7 +122,7 @@ function registerGiteaLikeWebhook(
   app: Hono,
   provider: "gitea" | "forgejo",
   path: string,
-  config: GiteaWebhookConfig | undefined,
+  config: VcsWebhookConfig | undefined,
   reviewPreparationOptions: ServerReviewPreparationOptions | undefined,
   reviewOrchestrationOptions: ServerReviewOrchestrationOptions | undefined,
   issueTriageOptions: IssueTriageRuntimeOptions | undefined,
@@ -120,6 +131,7 @@ function registerGiteaLikeWebhook(
   runsDir: string | undefined,
   metrics: AicrMetrics,
   store: StoreDb | undefined,
+  triggerRetry?: TriggerRetryConfig,
 ): void {
   app.post(path, async (c) => {
     if (!config) {
@@ -134,7 +146,11 @@ function registerGiteaLikeWebhook(
       return c.json({ accepted: false, reason: "invalid_signature", provider }, 401);
     }
 
-    const eventName = c.req.header("x-gitea-event");
+    const normalizedEventName = c.req.header("x-gitea-event");
+    const eventTypeName = c.req.header("x-gitea-event-type");
+    const eventName = eventTypeName === "pull_request_review_request"
+      ? eventTypeName
+      : normalizedEventName;
 
     if (!eventName) {
       return c.json({ accepted: false, reason: "missing_event_name", provider }, 400);
@@ -183,7 +199,7 @@ function registerGiteaLikeWebhook(
       return c.json({ accepted: false, reason: "ignored_by_label", provider, eventName, matchedLabels: ignoredLabels }, 200);
     }
 
-    return handleReviewOrchestration(c, provider, eventName, decoded, reviewEvent, reviewPreparationOptions, reviewOrchestrationOptions, issueTriageOptions, asyncTriggers, deduplicator, runsDir, metrics, store);
+    return handleReviewOrchestration(c, provider, eventName, decoded, reviewEvent, reviewPreparationOptions, reviewOrchestrationOptions, issueTriageOptions, asyncTriggers, deduplicator, runsDir, metrics, store, triggerRetry);
   });
 }
 
@@ -197,6 +213,7 @@ function registerP4Trigger(
   runsDir: string | undefined,
   metrics: AicrMetrics,
   store: StoreDb | undefined,
+  triggerRetry?: TriggerRetryConfig,
 ): void {
   app.post("/triggers/p4", async (c) => {
     if (!config) {
@@ -272,13 +289,14 @@ function registerP4Trigger(
       runsDir,
       metrics,
       store,
+      triggerRetry,
     );
   });
 }
 
 function normalizeGenericWebhookConfigs(
   config: GenericWebhookConfigInput | undefined,
-): readonly GiteaWebhookConfig[] {
+): readonly VcsWebhookConfig[] {
   if (!config) {
     return [];
   }
@@ -292,14 +310,14 @@ function normalizeGenericWebhookConfigs(
 
 function isGenericWebhookConfigArray(
   config: GenericWebhookConfigInput,
-): config is readonly GiteaWebhookConfig[] {
+): config is readonly VcsWebhookConfig[] {
   return Array.isArray(config);
 }
 
 function matchesGenericWebhookCredential(
   provider: GenericWebhookProvider,
   payload: string,
-  config: GiteaWebhookConfig,
+  config: VcsWebhookConfig,
   credential: string | undefined,
 ): boolean {
   if (provider === "github") {
@@ -313,9 +331,9 @@ function selectGenericWebhookConfig(
   provider: GenericWebhookProvider,
   payload: string,
   decoded: unknown,
-  configs: readonly GiteaWebhookConfig[],
+  configs: readonly VcsWebhookConfig[],
   credential: string | undefined,
-): { readonly config?: GiteaWebhookConfig; readonly reason?: "invalid_signature" | "repository_not_configured" } {
+): { readonly config?: VcsWebhookConfig; readonly reason?: "invalid_signature" | "repository_not_configured" } {
   const repoRef = decoded === undefined ? undefined : extractWebhookRepositoryRef(provider, decoded);
 
   if (configs.length > 1 && repoRef) {
@@ -366,6 +384,7 @@ function registerGenericWebhook(
   runsDir: string | undefined,
   metrics: AicrMetrics,
   store: StoreDb | undefined,
+  triggerRetry?: TriggerRetryConfig,
 ): void {
   app.post(path, async (c) => {
     const configs = normalizeGenericWebhookConfigs(config);
@@ -437,7 +456,7 @@ function registerGenericWebhook(
       return c.json({ accepted: false, reason: "ignored_by_label", provider, eventName, matchedLabels: ignoredLabels }, 200);
     }
 
-    return handleReviewOrchestration(c, provider, eventName, decoded, reviewEvent, reviewPreparationOptions, reviewOrchestrationOptions, issueTriageOptions, asyncTriggers, deduplicator, runsDir, metrics, store);
+    return handleReviewOrchestration(c, provider, eventName, decoded, reviewEvent, reviewPreparationOptions, reviewOrchestrationOptions, issueTriageOptions, asyncTriggers, deduplicator, runsDir, metrics, store, triggerRetry);
   });
 }
 
@@ -760,6 +779,27 @@ function persistFailedRunToStore(
   }
 }
 
+function computeBackoff(
+  baseMs: number,
+  maxMs: number,
+  attempt: number,
+  kind: "exponential" | "linear" | "constant",
+  jitter: boolean,
+): number {
+  let delay: number;
+  if (kind === "exponential") {
+    delay = baseMs * Math.pow(2, attempt - 1);
+  } else if (kind === "linear") {
+    delay = baseMs * attempt;
+  } else {
+    delay = baseMs;
+  }
+  if (jitter) {
+    delay = delay * (0.5 + Math.random() * 0.5);
+  }
+  return Math.min(Math.round(delay), maxMs);
+}
+
 function scheduleTriggerProcessing(
   provider: ReviewProvider,
   eventName: string,
@@ -772,6 +812,7 @@ function scheduleTriggerProcessing(
   metrics: AicrMetrics,
   runsDir: string | undefined,
   store: StoreDb | undefined,
+  triggerRetry?: TriggerRetryConfig,
 ): string {
   const runId = randomUUID();
   const context = { reviewEvent, payload: decoded, provider, eventName };
@@ -815,6 +856,12 @@ function scheduleTriggerProcessing(
     ...(reviewEvent.author?.email ? { authorEmail: reviewEvent.author.email } : {}),
   }));
 
+  const maxAttempts = triggerRetry?.attempts ?? 1;
+  const backoffBaseMs = triggerRetry?.backoff?.base_ms ?? 5000;
+  const backoffMaxMs = triggerRetry?.backoff?.max_ms ?? 60000;
+  const backoffKind = triggerRetry?.backoff?.kind ?? "exponential";
+  const backoffJitter = triggerRetry?.backoff?.jitter ?? true;
+
   function onCompleted(): void {
     if (!deduplicator) return;
     const pending = deduplicator.markCompleted(reviewEvent);
@@ -831,11 +878,12 @@ function scheduleTriggerProcessing(
         metrics,
         runsDir,
         store,
+        triggerRetry,
       );
     }
   }
 
-  setTimeout(() => {
+  function runAttempt(attemptNumber: number): void {
     const startMs = Date.now();
     void runTriggerProcessing(
       provider,
@@ -868,12 +916,37 @@ function scheduleTriggerProcessing(
         ...(result.reviewRun ? { reviewRun: result.reviewRun } : {}),
         ...(result.triage ? { triage: result.triage } : {}),
       }));
+      onCompleted();
     }).catch((error) => {
       const durationMs = Date.now() - startMs;
-      recordReviewResult(metrics, { status: "failed", durationMs });
-      persistFailedRunToStore(store, runId, reviewEvent, durationMs, startMs, error);
       const reason = error instanceof TriggerProcessingError ? error.reason : "trigger_processing_failed";
       const message = toErrorMessage(error);
+
+      if (attemptNumber < maxAttempts) {
+        const delayMs = computeBackoff(backoffBaseMs, backoffMaxMs, attemptNumber, backoffKind, backoffJitter);
+        console.warn(JSON.stringify({
+          level: "warn",
+          msg: "trigger processing failed, retrying",
+          runId,
+          attempt: attemptNumber,
+          maxAttempts,
+          nextRetryInMs: delayMs,
+          provider,
+          eventName,
+          triggerName: reviewEvent.triggerName,
+          workspaceId: reviewEvent.workspaceId,
+          repoRef: reviewEvent.repoRef,
+          ...(reviewEvent.headSha ? { headSha: reviewEvent.headSha } : {}),
+          ...(reviewEvent.branch ? { branch: reviewEvent.branch } : {}),
+          reason,
+          error: message,
+        }));
+        setTimeout(() => runAttempt(attemptNumber + 1), delayMs);
+        return;
+      }
+
+      recordReviewResult(metrics, { status: "failed", durationMs });
+      persistFailedRunToStore(store, runId, reviewEvent, durationMs, startMs, error);
       console.error(JSON.stringify({
         level: "error",
         msg: "trigger processing failed",
@@ -889,10 +962,14 @@ function scheduleTriggerProcessing(
         ...(reviewEvent.author?.email ? { authorEmail: reviewEvent.author.email } : {}),
         reason,
         error: message,
+        ...(maxAttempts > 1 ? { attempts: maxAttempts } : {}),
       }));
       void publishTriggerErrorReport(context, reviewOrchestrationOptions, runId, reason, message);
-    }).finally(onCompleted);
-  }, 0);
+      onCompleted();
+    });
+  }
+
+  setTimeout(() => runAttempt(1), 0);
 
   return runId;
 }
@@ -912,6 +989,7 @@ async function handleReviewOrchestration(
   runsDir: string | undefined,
   metrics: AicrMetrics,
   store: StoreDb | undefined,
+  triggerRetry?: TriggerRetryConfig,
 ): Promise<Response> {
   if (asyncTriggers) {
     const runId = scheduleTriggerProcessing(
@@ -926,6 +1004,7 @@ async function handleReviewOrchestration(
       metrics,
       runsDir,
       store,
+      triggerRetry,
     );
 
     return c.json({
@@ -1062,6 +1141,7 @@ function mountRoutes(app: Hono, options: ServerAppOptions): void {
     runsDir,
     metrics,
     options.store,
+    options.triggerRetry,
   );
   registerGiteaLikeWebhook(
     app,
@@ -1076,6 +1156,7 @@ function mountRoutes(app: Hono, options: ServerAppOptions): void {
     runsDir,
     metrics,
     options.store,
+    options.triggerRetry,
   );
   registerGenericWebhook(
     app,
@@ -1090,6 +1171,7 @@ function mountRoutes(app: Hono, options: ServerAppOptions): void {
     runsDir,
     metrics,
     options.store,
+    options.triggerRetry,
   );
   registerGenericWebhook(
     app,
@@ -1104,6 +1186,7 @@ function mountRoutes(app: Hono, options: ServerAppOptions): void {
     runsDir,
     metrics,
     options.store,
+    options.triggerRetry,
   );
   registerP4Trigger(
     app,
@@ -1115,6 +1198,7 @@ function mountRoutes(app: Hono, options: ServerAppOptions): void {
     runsDir,
     metrics,
     options.store,
+    options.triggerRetry,
   );
 }
 

@@ -150,6 +150,11 @@ llm:
 #   When multiple comment commands arrive while a review is already running,
 #   AICR deduplicates them: the running review completes first, then AICR
 #   automatically triggers one final re-review with the latest event.
+#
+# ── Review request events ──
+#   GitHub pull_request action review_requested triggers a PR re-review.
+#   Gitea / Forgejo pull_request_review_request action review_requested also
+#   triggers a PR re-review. review_request_removed is ignored.
 # ---------------------------------------------------------------------------
 triggers:
   # -- Gitea / Forgejo webhook trigger --
@@ -440,8 +445,12 @@ queue:
   #   window_seconds: 60
 
   # retry:
-  #   max_attempts: 3
-  #   backoff_seconds: 30
+  #   attempts: 2          # Retry once on transient failures (default: 1 = no retry)
+  #   backoff:
+  #     kind: exponential  # exponential | linear | constant
+  #     base_ms: 5000
+  #     max_ms: 60000
+  #     jitter: true
 
   # dead_letter:
   #   max_age_hours: 72

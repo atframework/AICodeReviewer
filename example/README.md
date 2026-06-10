@@ -237,8 +237,16 @@ After the server is running, add a webhook to your Gitea repository:
 2. **Target URL**: `http://<aicr-host>:8080/webhooks/gitea`
 3. **Content type**: `application/json`
 4. **Secret**: the same value as `AICR_WEBHOOK_SECRET` in your `.env`
-5. **Events**: check `Pull Request`
+5. **Events**: check `Pull Request`. For active re-review when a reviewer is
+   requested, also enable the Gitea/Forgejo pull request review request event
+   (`pull_request_review_request`); AICR triggers on the `review_requested`
+   action and ignores `review_request_removed`.
 6. Save
+
+For GitHub repositories, point a repository webhook at
+`http://<aicr-host>:8080/webhooks/github`, set the same HMAC secret as
+`AICR_GITHUB_WEBHOOK_SECRET`, and subscribe to **Pull requests**. AICR handles
+the `pull_request` `review_requested` action as a PR re-review trigger.
 
 ---
 
