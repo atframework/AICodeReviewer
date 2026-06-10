@@ -138,6 +138,28 @@ describe("extractReflections", () => {
     expect(titleReflection).toBeUndefined();
   });
 
+  it("keeps the summary reflection fingerprint stable across runs so the latest overwrites", () => {
+    const firstRun = extractReflections({
+      ...baseInput,
+      runId: "run-001",
+      status: "published",
+      summaries: [{ title: "First summary" }],
+    });
+    const secondRun = extractReflections({
+      ...baseInput,
+      runId: "run-999",
+      status: "published",
+      summaries: [{ title: "Second summary" }],
+    });
+
+    const first = firstRun.find(r => r.content.includes("Latest review summary"));
+    const second = secondRun.find(r => r.content.includes("Latest review summary"));
+    expect(first).toBeDefined();
+    expect(second).toBeDefined();
+    expect(first!.fingerprint).toBe(second!.fingerprint);
+    expect(second!.content).toContain("Second summary");
+  });
+
   it("produces stable fingerprints for same workspace and category", () => {
     const result1 = extractReflections({
       ...baseInput,

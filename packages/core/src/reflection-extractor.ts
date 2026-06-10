@@ -70,7 +70,7 @@ function groupByExtension(files: readonly string[]): Map<string, number> {
 
 export function extractReflections(input: ReflectionExtractorInput): readonly ExtractedReflection[] {
   const reflections: ExtractedReflection[] = [];
-  const { workspaceId, runId, status, skipReason, problems, summaries, changedFiles } = input;
+  const { workspaceId, status, skipReason, problems, summaries, changedFiles } = input;
 
   if (status === "skipped" && skipReason) {
     reflections.push({
@@ -133,7 +133,9 @@ export function extractReflections(input: ReflectionExtractorInput): readonly Ex
 
   if (summaries.length > 0 && summaries[0]?.title) {
     reflections.push({
-      fingerprint: stableFingerprint(workspaceId, "run", runId),
+      // Stable per-workspace fingerprint so the newest summary overwrites the
+      // previous one instead of accumulating a fresh entry per run.
+      fingerprint: stableFingerprint(workspaceId, "summary", "latest"),
       content: `Latest review summary: ${summaries[0].title}`,
     });
   }

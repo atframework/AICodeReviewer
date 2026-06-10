@@ -203,6 +203,32 @@ describe("createGiteaPullRequestReviewDispatcher", () => {
     expect(result.externalId).toBeUndefined();
   });
 
+  it("publishes buffered problems only once across multiple summary entries (always_new)", async () => {
+    const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
+    const dispatcher = createGiteaPullRequestReviewDispatcher({
+      baseUrl: "https://gitea.example",
+      owner: "owent",
+      repo: "example",
+      pullNumber: 1,
+      reviewUpdateStrategy: "always_new",
+      fetch: async (url, init) => {
+        calls.push({ url, init });
+        return response({ id: calls.length });
+      },
+    });
+
+    await dispatcher.publishProblem(problem);
+    // The orchestrator may emit more than one summary entry; the buffered
+    // problems must not be re-published with each summary.
+    await dispatcher.publishSummary!("First summary", [problem]);
+    await dispatcher.publishSummary!("Second summary", [problem]);
+
+    const bodiesWithProblem = calls.filter((call) =>
+      String(JSON.parse(call.init?.body ?? "{}").body ?? "").includes("src/app.ts:42"),
+    );
+    expect(bodiesWithProblem).toHaveLength(1);
+  });
+
   it("publishes a general review comment when a problem is marked non-line-commentable", async () => {
     const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
     const dispatcher = createGiteaPullRequestReviewDispatcher({

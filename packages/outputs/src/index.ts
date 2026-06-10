@@ -783,6 +783,10 @@ export function createGiteaPullRequestReviewDispatcher(
 
 	const updateStrategy = options.reviewUpdateStrategy ?? "update_existing";
 	const problemBuffer: ReviewProblem[] = [];
+	// Buffered problems must be published at most once per review, even when the
+	// orchestrator emits multiple summary entries. The dispatcher is created per
+	// review event, so this flag is naturally scoped to a single review.
+	let problemsDispatched = false;
 
 	let attachSummaryLabels: (problems?: readonly ReviewProblem[]) => Promise<void> = () => Promise.resolve();
 
@@ -797,7 +801,7 @@ export function createGiteaPullRequestReviewDispatcher(
 			const allProblems = problems ?? bufferedProblems;
 			let result: DispatchResult | undefined;
 
-			if (updateStrategy !== "update_existing" && allProblems.length > 0) {
+			if (updateStrategy !== "update_existing" && !problemsDispatched && allProblems.length > 0) {
 				const problemsToPublish = bufferedProblems.length > 0 ? bufferedProblems : allProblems;
 				result = await flushBufferedReviewProblems([...problemsToPublish], {
 					reviewMode,
@@ -806,6 +810,7 @@ export function createGiteaPullRequestReviewDispatcher(
 					postComment,
 					summary: trimmed,
 				});
+				problemsDispatched = true;
 			}
 
 			if (updateStrategy === "update_existing") {
@@ -1102,6 +1107,10 @@ export function createGithubPullRequestReviewDispatcher(
 
 	const updateStrategy = options.reviewUpdateStrategy ?? "update_existing";
 	const problemBuffer: ReviewProblem[] = [];
+	// Buffered problems must be published at most once per review, even when the
+	// orchestrator emits multiple summary entries. The dispatcher is created per
+	// review event, so this flag is naturally scoped to a single review.
+	let problemsDispatched = false;
 
 	let attachSummaryLabels: (problems?: readonly ReviewProblem[]) => Promise<void> = () => Promise.resolve();
 
@@ -1116,7 +1125,7 @@ export function createGithubPullRequestReviewDispatcher(
 			const allProblems = problems ?? bufferedProblems;
 			let result: DispatchResult | undefined;
 
-			if (updateStrategy !== "update_existing" && allProblems.length > 0) {
+			if (updateStrategy !== "update_existing" && !problemsDispatched && allProblems.length > 0) {
 				const problemsToPublish = bufferedProblems.length > 0 ? bufferedProblems : allProblems;
 				result = await flushBufferedReviewProblems([...problemsToPublish], {
 					reviewMode,
@@ -1125,6 +1134,7 @@ export function createGithubPullRequestReviewDispatcher(
 					postComment,
 					summary: trimmed,
 				});
+				problemsDispatched = true;
 			}
 
 			if (updateStrategy === "update_existing") {
