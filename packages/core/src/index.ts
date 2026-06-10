@@ -7,6 +7,7 @@ export * from "./queue-factory.js";
 export * from "./queue-worker.js";
 export * from "./rate-limiter.js";
 export * from "./redis-queue.js";
+export * from "./reflection-extractor.js";
 export * from "./review-event.js";
 export * from "./review-preparation.js";
 export * from "./secret-scrubber.js";

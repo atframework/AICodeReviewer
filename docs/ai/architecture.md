@@ -434,22 +434,31 @@
 
 ### 3.12 Reflection 与 memory
 
-- reflection / memory 是 M7 阶段的**增量落地能力**，不应提前伪装为已完成实现。
-- 配置与文档保留 schema 与扩展位（`review.reflection.enabled`、`review.reflection.mode`、`review.reflection.memory`）。
+- reflection / memory 是 M7 阶段的**已落地能力**，当前支持 "light" 模式。
+- 配置 schema（`review.reflection`）：`enabled`（boolean）、`mode`（`"off"` | `"light"` | `"thorough"`）、`memory.max_size_kb`、`memory.max_entries`、`memory.retention_days`。
 - 已交付的基础设施：
   - 存储表 `reflection_memory`（`packages/store/src/schema.ts`），含 `workspaceId`、`fingerprint`、`content`、`sourceRunId`、`createdAt`、`expiresAt`。
   - 数据库迁移 `002_reflection_memory`，自动在 store 初始化时运行。
   - 读写 API：`writeReflectionMemory()`、`readReflectionMemory()`、`compactReflectionMemory()`（`packages/store/src/reflection.ts`）。
   - 按 workspace 隔离，支持 TTL 过期和条目上限压缩。
-- 待实现：
-  - review run 完成后从输出中提取 reflection 条目并写入 store。
-  - review run 开始前从 store 读取相关 memory 并注入 `memoryHints`。
-  - false-positive 模式识别、repo 约定学习等高级提取逻辑。
-- 真正落地时应明确：
-  - memory 的写入边界
-  - 去敏策略
-  - workspace 级隔离（已通过 `workspaceId` 列保证）
-  - 对 false-positive 抑制的实际收益评估
+- 已交付的流程集成：
+  - **Pre-run memory 读取**：`memoryHintsResolver` 在 review run 开始前从 store 读取当前 workspace 的 memory 条目，映射为 `string[]` 注入 `memoryHints`，通过 prompt pipeline 渲染到 `{{MEMORY_HINTS}}` 模板占位。`memoryHintsResolver` 优先于静态 `memoryHints` 字段。
+  - **Post-run reflection 提取与写入**：`postRunCallback` 在 review run 完成后调用 `extractReflections()`（`packages/core/src/reflection-extractor.ts`），从 `outputState` 提取 per-category 问题模式、文件类型范围、summary 标题等 reflection 条目，写入 store。每个条目使用 `sha256(workspaceId:pattern)` 生成 fingerprint 实现幂等覆盖。
+  - **Compaction 触发**：每次写入后检查 `review.reflection.memory.max_entries` 配置，若设置则调用 `compactReflectionMemory` 清理过期和超限条目。
+  - **Bootstrap 自动配置**：`bootstrapServerApp` 在 store 可用且 `review.reflection` 未显式禁用时，自动注入 `memoryHintsResolver` 和 `postRunCallback`。Post-run callback 异常仅输出 warn 日志，不阻塞 review 主流程。
+- Light mode 提取规则：
+  - Skipped run：记录 skip reason 作为 reflection。
+  - 问题归纳：按 category 分组，统计 severity 分布、关联文件扩展名，3 条以内附加具体位置。
+  - 文件类型范围：统计 changed files 的扩展名分布。
+  - Summary 标题：记录最新 review 的 summary title。
+- Thorough mode（预留，未实现）：
+  - 跨 run 聚合分析 false-positive 模式。
+  - Repo 约定学习与自动注入。
+  - 更精细的去**敏策略。
+- 真正落地时的约束：
+  - memory 的写入边界由 extractor 的 fingerprint 保证幂等。
+  - workspace 隔离已通过 `workspaceId` 列保证。
+  - memory content 经过 secret scrubber 同样的脱敏规则。
 
 ## 4. 默认评审 Prompt 合同
 

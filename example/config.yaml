@@ -510,6 +510,14 @@ review:
   # open managed issues before closing stale ones. Range: 1..100, default: 20.
   problem_issue:
     max_recent_issues: 20
+  # Reflection memory: learn from past reviews to improve future ones.
+  # Enabled by default when admin auth + store are configured.
+  # reflection:
+  #   enabled: true
+  #   mode: light              # light | thorough (light = category/file-type patterns)
+  #   memory:
+  #     retention_days: 90     # how long reflection entries are kept
+  #     max_entries: 500       # max entries per workspace before compaction
 
 # ---------------------------------------------------------------------------
 # Workspaces — one per repository you want to review

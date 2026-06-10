@@ -288,7 +288,7 @@ const reviewSchema = z
         memory: z
           .object({
             max_size_kb: z.number().int().positive().optional(),
-            compact_after_runs: z.number().int().positive().optional(),
+            max_entries: z.number().int().positive().optional(),
             retention_days: z.number().int().positive().optional(),
           })
           .strict()

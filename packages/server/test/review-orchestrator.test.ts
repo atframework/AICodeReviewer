@@ -15,6 +15,8 @@ import {
   summarizeReviewOrchestrationForWebhook,
   formatParsedDiffForPrompt,
   type DiffCapableVcsAdapter,
+  type ReviewOrchestrationResult,
+  type ReviewOrchestrationContext,
   type ReviewOutputPublisher,
 } from "../src/review-orchestrator.js";
 
@@ -3608,6 +3610,184 @@ describe("outputLanguage injection", () => {
 
       expect(result.status).toBe("skipped");
       expect(capturedPrompt).not.toContain("Output language:");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves memoryHints via memoryHintsResolver and passes to prompt", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-hints-"));
+    try {
+      await writeWorkspaceFile(tempDir, "src/app.ts", "const x = 1;\n");
+      let capturedPrompt = "";
+      const llm: ChatCompletionClient = {
+        async complete(input) {
+          capturedPrompt = input.messages[0]?.content ?? "";
+          return {
+            providerId: input.model.providerId,
+            modelId: input.model.modelId,
+            content: '{"skipReason":"lgtm"}',
+            raw: {},
+          };
+        },
+      };
+
+      const result = await runReviewOrchestration(
+        {
+          reviewEvent: createReviewEventFixture(),
+          payload: {},
+          provider: "gitea",
+          eventName: "pull_request",
+        },
+        {
+          baseSystemPrompt: [
+            "{{REPO_INSTRUCTION_SUMMARIES}}",
+            "{{MEMORY_HINTS}}",
+            "{{TASK_CONTEXT}}",
+          ].join("\n"),
+          sourceRootResolver: () => tempDir,
+          vcs: createVcs(tempDir),
+          llm,
+          model,
+          memoryHintsResolver: async (workspaceId) => {
+            if (workspaceId === "ws") {
+              return ["Previous review found style issues in .ts files", "Repo uses ESLint strict rules"];
+            }
+            return [];
+          },
+        },
+      );
+
+      expect(result.status).toBe("skipped");
+      expect(capturedPrompt).toContain("memory hint 1: Previous review found style issues");
+      expect(capturedPrompt).toContain("memory hint 2: Repo uses ESLint strict rules");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("falls back to static memoryHints when no resolver is provided", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-hints-static-"));
+    try {
+      await writeWorkspaceFile(tempDir, "src/app.ts", "const x = 1;\n");
+      let capturedPrompt = "";
+      const llm: ChatCompletionClient = {
+        async complete(input) {
+          capturedPrompt = input.messages[0]?.content ?? "";
+          return {
+            providerId: input.model.providerId,
+            modelId: input.model.modelId,
+            content: '{"skipReason":"lgtm"}',
+            raw: {},
+          };
+        },
+      };
+
+      const result = await runReviewOrchestration(
+        {
+          reviewEvent: createReviewEventFixture(),
+          payload: {},
+          provider: "gitea",
+          eventName: "pull_request",
+        },
+        {
+          baseSystemPrompt: "{{MEMORY_HINTS}}\n{{TASK_CONTEXT}}",
+          sourceRootResolver: () => tempDir,
+          vcs: createVcs(tempDir),
+          llm,
+          model,
+          memoryHints: ["Static hint from config"],
+        },
+      );
+
+      expect(result.status).toBe("skipped");
+      expect(capturedPrompt).toContain("Static hint from config");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("calls postRunCallback after successful review", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-callback-"));
+    try {
+      await writeWorkspaceFile(tempDir, "src/app.ts", "const x = 1;\n");
+      const llm: ChatCompletionClient = {
+        async complete(input) {
+          return {
+            providerId: input.model.providerId,
+            modelId: input.model.modelId,
+            content: '{"skipReason":"lgtm"}',
+            raw: {},
+          };
+        },
+      };
+
+      let callbackResult: ReviewOrchestrationResult | null = null;
+      let callbackContext: ReviewOrchestrationContext | null = null;
+
+      await runReviewOrchestration(
+        {
+          reviewEvent: createReviewEventFixture(),
+          payload: {},
+          provider: "gitea",
+          eventName: "pull_request",
+        },
+        {
+          baseSystemPrompt: "{{TASK_CONTEXT}}",
+          sourceRootResolver: () => tempDir,
+          vcs: createVcs(tempDir),
+          llm,
+          model,
+          postRunCallback: async (result, context) => {
+            callbackResult = result;
+            callbackContext = context;
+          },
+        },
+      );
+
+      expect(callbackResult).not.toBeNull();
+      expect(callbackResult!.status).toBe("skipped");
+      expect(callbackContext!.reviewEvent.workspaceId).toBe("ws");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not fail review when postRunCallback throws", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-callback-err-"));
+    try {
+      await writeWorkspaceFile(tempDir, "src/app.ts", "const x = 1;\n");
+      const llm: ChatCompletionClient = {
+        async complete(input) {
+          return {
+            providerId: input.model.providerId,
+            modelId: input.model.modelId,
+            content: '{"skipReason":"lgtm"}',
+            raw: {},
+          };
+        },
+      };
+
+      const result = await runReviewOrchestration(
+        {
+          reviewEvent: createReviewEventFixture(),
+          payload: {},
+          provider: "gitea",
+          eventName: "pull_request",
+        },
+        {
+          baseSystemPrompt: "{{TASK_CONTEXT}}",
+          sourceRootResolver: () => tempDir,
+          vcs: createVcs(tempDir),
+          llm,
+          model,
+          postRunCallback: async () => {
+            throw new Error("reflection store unavailable");
+          },
+        },
+      );
+
+      expect(result.status).toBe("skipped");
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }
