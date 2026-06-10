@@ -8,10 +8,27 @@ import {
   pullRequestPayloadSchema,
   pushPayloadSchema,
   translateIssueCommentReviewCommand,
+  type PullRequestDetails,
   type VcsWebhookConfig,
 } from "./webhook-common.js";
 
 type GiteaLikeProvider = Extract<ReviewProvider, "gitea" | "forgejo">;
+
+async function fetchGiteaPullRequestDetails(
+  prApiUrl: string,
+  token: string,
+): Promise<PullRequestDetails> {
+  const response = await fetch(prApiUrl, {
+    headers: {
+      Authorization: `token ${token}`,
+      Accept: "application/json",
+    },
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to fetch PR details: ${response.status}`);
+  }
+  return response.json() as Promise<PullRequestDetails>;
+}
 
 export async function translateGiteaWebhookToReviewEvent(
   provider: GiteaLikeProvider,
@@ -38,7 +55,7 @@ export async function translateGiteaWebhookToReviewEvent(
   }
 
   if (eventName === "issue_comment") {
-    return translateIssueCommentReviewCommand(provider, eventName, payload, config);
+    return translateIssueCommentReviewCommand(provider, eventName, payload, config, fetchGiteaPullRequestDetails);
   }
 
   return null;

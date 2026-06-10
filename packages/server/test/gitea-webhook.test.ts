@@ -69,6 +69,88 @@ describe("createServerApp", () => {
     expect(body.reviewEvent?.headSha).toBe("head-sha");
   });
 
+  it("enriches a Gitea /aicr review comment on a pull request with fetched PR details", async () => {
+    const prApiUrl = "https://gitea.internal.corp/api/v1/repos/owent/example/pulls/42";
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(
+        async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
+          const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+          expect(url).toBe(prApiUrl);
+          expect(new Headers(init?.headers).get("authorization")).toBe("token gitea-token");
+          return new Response(
+            JSON.stringify({
+              title: "Fix the login bug",
+              html_url: "https://gitea.internal.corp/owent/example/pulls/42",
+              head: { sha: "comment-head-sha", ref: "feature/login" },
+              base: { sha: "comment-base-sha", ref: "main" },
+              user: { login: "owent" },
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          );
+        },
+      );
+
+    try {
+      const app = createServerApp({
+        gitea: {
+          triggerName: "gitea-internal",
+          workspaceId: "gitea-internal-owent-example",
+          webhookSecret,
+          token: "gitea-token",
+        },
+      });
+
+      const payload = JSON.stringify({
+        action: "created",
+        repository: { full_name: "owent/example" },
+        sender: { login: "commenter" },
+        issue: {
+          number: 42,
+          title: "Original issue title",
+          pull_request: {
+            url: prApiUrl,
+            html_url: "https://gitea.internal.corp/owent/example/pulls/42",
+          },
+        },
+        comment: { body: "Please take a look /aicr review", user: { login: "commenter" } },
+      });
+
+      const response = await app.request("/webhooks/gitea", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-gitea-event": "issue_comment",
+          "x-gitea-signature": sign(payload),
+        },
+        body: payload,
+      });
+      const body = (await response.json()) as {
+        accepted: boolean;
+        reviewEvent?: {
+          targetKind: string;
+          headSha?: string;
+          baseSha?: string;
+          branch?: string;
+          reason?: string;
+          title?: string;
+        };
+      };
+
+      expect(response.status).toBe(202);
+      expect(body.accepted).toBe(true);
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+      expect(body.reviewEvent?.targetKind).toBe("pull_request");
+      expect(body.reviewEvent?.headSha).toBe("comment-head-sha");
+      expect(body.reviewEvent?.baseSha).toBe("comment-base-sha");
+      expect(body.reviewEvent?.branch).toBe("feature/login");
+      expect(body.reviewEvent?.reason).toBe("gitea:comment_review");
+      expect(body.reviewEvent?.title).toBe("Fix the login bug");
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
   it("accepts a signed Gitea pull_request_review_request webhook and triggers review_requested", async () => {
     const app = createServerApp({
       gitea: {
