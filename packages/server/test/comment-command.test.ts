@@ -1,8 +1,8 @@
 import { vi, describe, it, expect, beforeEach, afterEach } from "vitest";
 
-import { translateWebhookToReviewEvent, type GiteaWebhookConfig } from "../src/gitea-webhook.js";
+import { translateWebhookToReviewEvent, type VcsWebhookConfig } from "../src/webhook-translator.js";
 
-const baseConfig: GiteaWebhookConfig = {
+const baseConfig: VcsWebhookConfig = {
   triggerName: "github-owent",
   workspaceId: "github-libatapp",
   repoRef: "owent/libatapp",

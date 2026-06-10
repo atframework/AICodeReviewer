@@ -74,6 +74,8 @@
 - 所有 webhook、trigger、手工和定时入口都要归一到统一 `ReviewEvent`。
 - 鉴权、签名校验与事件归一化必须先于入队执行。
 - GitHub / GitLab 共享 webhook 路由支持按已验证 secret/token + repo 标识选择不同 trigger profile，用于隔离不同仓库的 token、webhook secret 与文件过滤规则。
+- GitHub `pull_request.review_requested` 和 Gitea/Forgejo `pull_request_review_request` 的 `review_requested` action 会主动触发 PR re-review；移除 review request 不触发新 review。
+- Webhook 平台代码保持分层：`webhook-common.ts` 放签名、repo mapping 与共用 payload 构造；`gitea-webhook.ts`、`github-webhook.ts`、`gitlab-webhook.ts` 分别承载平台事件语义；`webhook-translator.ts` 只做统一分发。
 - async 入口以 `202 + runId` 作为非阻塞语义。
 - P4 trigger 只提交最小 metadata，服务端负责后续拉取和分析。
 - **Review 去重**：async 模式下，同一 target（`trigger:workspace:provider:repoRef:targetKind:branch/url/head/base`）的并发 review 请求会被合并；branch 优先，其次用目标 URL，再回退到 head/base revision；running review 完成后自动触发最后一次 pending 的 re-review。
@@ -151,7 +153,8 @@
 ### 3.9.0 PR Review Summary 更新模式
 
 - PR/MR review 通道（`gitea_pr_review`、`github_pr_review`）支持 `review_update_strategy`：`always_new` 或 `update_existing`（默认）。
-- `update_existing` 模式下，summary comment 通过 HTML 标记识别，用 PATCH 更新而非每次新建；问题按 fingerprint 分为 Still Open / New / Resolved 三类。
+- `update_existing` 模式下，summary comment 通过 HTML 标记识别，用 PATCH 更新而非每次新建；问题按 fingerprint 分为 Still Open / New / Resolved 三类，Resolved 显示可读标题/占位而不是 raw fingerprint。
+- PR review 问题通过 `publishProblem` 缓冲并在 `publishSummary` 汇总成单个 Markdown reply body；line-comments-only 路由也必须触发 summary flush，避免问题丢失。
 - 详细合同：`docs/ai/architecture.md` §3.9.0。
 
 ### 3.9.1 `no_problems` 与 target 渲染

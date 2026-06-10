@@ -80,9 +80,9 @@ export interface ReviewProblem {
 
 export interface DispatchResult {
 	readonly channel: string;
-	readonly status: "published" | "failed";
+	readonly status: "published" | "failed" | "buffered";
 	readonly externalId?: string;
-	readonly raw: unknown;
+	readonly raw?: unknown;
 }
 
 export interface ResponseLike {
@@ -114,6 +114,18 @@ function hasManagedReviewSummaryMarker(body: string): boolean {
 
 const AICR_REVIEW_PROBLEMS_RE = /<!--\s*aicr:problems=([\s\S]*?)\s*-->/u;
 const AICR_REVIEW_SCOPE_RE = /<!--\s*aicr:scope=([^\s>]*)\s*-->/u;
+const AICR_REVIEW_PROBLEM_META_RE = /<!--\s*aicr:problem-meta=([\s\S]*?)\s*-->/u;
+
+export interface ProblemMetaEntry {
+	readonly fingerprint: string;
+	readonly severity: string;
+	readonly category: string;
+	readonly file: string;
+	readonly line: number;
+}
+
+const OPEN_ISSUE_TITLE_RE =
+	/(?:<span id="aicr-[^"]+"><\/span>)*\d+\.\s+(?:\[[^\]]*\]\([^)]*\)|\*\*\[([A-Za-z]+)\]\s+(.+?)\*\*\s+—\s+`([^`]+)`)/gu;
 
 function extractReviewSummaryFingerprints(body: string): ReadonlySet<string> {
 	const match = AICR_REVIEW_PROBLEMS_RE.exec(body);
@@ -135,8 +147,117 @@ function buildReviewSummaryProblemMarker(fingerprints: ReadonlySet<string>): str
 	return `<!-- aicr:problems=${[...fingerprints].join(",")} -->`;
 }
 
+function buildReviewSummaryProblemMetaMarker(problems: readonly ReviewProblem[]): string {
+	if (problems.length === 0) {
+		return "<!-- aicr:problem-meta= -->";
+	}
+	const entries: ProblemMetaEntry[] = problems.map((p) => ({
+		fingerprint: p.fingerprint ?? computeProblemFingerprint(p),
+		severity: p.severity,
+		category: p.category,
+		file: p.file,
+		line: p.line,
+	}));
+	const encoded = Buffer.from(JSON.stringify(entries), "utf-8").toString("base64");
+	return `<!-- aicr:problem-meta=${encoded} -->`;
+}
+
+function isProblemMetaEntry(value: unknown): value is ProblemMetaEntry {
+	if (!value || typeof value !== "object") {
+		return false;
+	}
+	const candidate = value as Record<string, unknown>;
+	return (
+		typeof candidate.fingerprint === "string" &&
+		typeof candidate.severity === "string" &&
+		typeof candidate.category === "string" &&
+		typeof candidate.file === "string" &&
+		typeof candidate.line === "number" &&
+		Number.isFinite(candidate.line) &&
+		candidate.line >= 0
+	);
+}
+
+function parseProblemLocation(location: string): { readonly file: string; readonly line: number } | undefined {
+	const match = /^(.*):(\d+)(?:-\d+)?$/u.exec(location.trim());
+	if (!match) {
+		return undefined;
+	}
+	const file = match[1]?.trim();
+	const line = Number(match[2]);
+	return file && Number.isFinite(line) ? { file, line } : undefined;
+}
+
+function extractLegacyReviewSummaryProblemMeta(
+	body: string,
+	fingerprints: readonly string[],
+): Map<string, ProblemMetaEntry> {
+	const result = new Map<string, ProblemMetaEntry>();
+	if (fingerprints.length === 0) {
+		return result;
+	}
+
+	let idx = 0;
+	for (const match of body.matchAll(OPEN_ISSUE_TITLE_RE)) {
+		const fp = fingerprints[idx];
+		const severity = match[1]?.toLowerCase();
+		const category = match[2]?.trim();
+		const location = match[3] ? parseProblemLocation(match[3]) : undefined;
+		if (fp && severity && category && location) {
+			result.set(fp, {
+				fingerprint: fp,
+				severity,
+				category,
+				file: location.file,
+				line: location.line,
+			});
+		}
+		idx += 1;
+	}
+
+	return result;
+}
+
+function extractReviewSummaryProblemMeta(
+	body: string,
+	previousFingerprints: readonly string[] = [],
+): Map<string, ProblemMetaEntry> {
+	const match = AICR_REVIEW_PROBLEM_META_RE.exec(body);
+	if (!match?.[1]?.trim()) {
+		return extractLegacyReviewSummaryProblemMeta(body, previousFingerprints);
+	}
+	try {
+		const json = Buffer.from(match[1].trim(), "base64").toString("utf-8");
+		const parsed = JSON.parse(json);
+		if (!Array.isArray(parsed)) {
+			return new Map();
+		}
+		const result = new Map<string, ProblemMetaEntry>();
+		for (const e of parsed) {
+			if (isProblemMetaEntry(e)) {
+				result.set(e.fingerprint, e);
+			}
+		}
+		return result.size > 0 ? result : extractLegacyReviewSummaryProblemMeta(body, previousFingerprints);
+	} catch {
+		return extractLegacyReviewSummaryProblemMeta(body, previousFingerprints);
+	}
+}
+
 function buildProblemLocation(problem: { readonly file: string; readonly line: number; readonly endLine?: number }): string {
 	return problem.endLine ? `${problem.file}:${problem.line}-${problem.endLine}` : `${problem.file}:${problem.line}`;
+}
+
+function buildProblemAnchorId(fingerprint: string): string {
+	return `aicr-problem-${createHash("sha256").update(fingerprint).digest("hex").slice(0, 12)}`;
+}
+
+function buildProblemTitle(problem: { readonly severity: string; readonly category: string; readonly file: string; readonly line: number; readonly endLine?: number }): string {
+	return `[${problem.severity.toUpperCase()}] ${problem.category} — ${buildProblemLocation(problem)}`;
+}
+
+function buildResolvedTitle(meta: ProblemMetaEntry | undefined): string {
+	return meta ? buildProblemTitle(meta) : "Previously reported issue";
 }
 
 function categorizeProblems(
@@ -179,6 +300,7 @@ function buildReviewSummarySections(
 	},
 	renderedSummary: string,
 	headSha?: string,
+	resolvedMeta?: ReadonlyMap<string, ProblemMetaEntry>,
 ): string {
 	const parts: string[] = [];
 	const timestamp = new Date().toISOString().replace("T", " ").replace(/\.\d+Z$/u, " UTC");
@@ -198,14 +320,18 @@ function buildReviewSummarySections(
 		parts.push("");
 		let idx = 1;
 		for (const problem of categorized.stillOpenProblems) {
+			const fp = problem.fingerprint ?? computeProblemFingerprint(problem);
+			const anchor = buildProblemAnchorId(fp);
 			const location = buildProblemLocation(problem);
-			parts.push(`${idx}. **[${problem.severity.toUpperCase()}] ${problem.category}** — \`${location}\``);
+			parts.push(`<span id="${anchor}"></span><span id="aicr-open-${idx}"></span>${idx}. [**[${problem.severity.toUpperCase()}] ${problem.category}** — \`${location}\`](#${anchor})`);
 			idx += 1;
 		}
 		for (const problem of categorized.newProblems) {
+			const fp = problem.fingerprint ?? computeProblemFingerprint(problem);
+			const anchor = buildProblemAnchorId(fp);
 			const location = buildProblemLocation(problem);
 			const commitTag = headSha ? ` *(new in \`${headSha.slice(0, 7)}\`)*` : " *(new)*";
-			parts.push(`${idx}. **[${problem.severity.toUpperCase()}] ${problem.category}** — \`${location}\`${commitTag}`);
+			parts.push(`<span id="${anchor}"></span><span id="aicr-open-${idx}"></span>${idx}. [**[${problem.severity.toUpperCase()}] ${problem.category}** — \`${location}\`](#${anchor})${commitTag}`);
 			idx += 1;
 		}
 		parts.push("");
@@ -217,8 +343,13 @@ function buildReviewSummarySections(
 		parts.push("");
 		parts.push("The following previously reported issues are no longer present:");
 		parts.push("");
+		let resolvedIdx = 1;
 		for (const fp of categorized.resolvedFingerprints) {
-			parts.push(`- ~~\`${fp}\`~~ ✅ Resolved`);
+			const meta = resolvedMeta?.get(fp);
+			const anchor = buildProblemAnchorId(fp);
+			const title = buildResolvedTitle(meta);
+			parts.push(`<span id="${anchor}"></span><span id="aicr-resolved-${resolvedIdx}"></span>- [~~${title}~~](#${anchor}) ✅ Resolved`);
+			resolvedIdx += 1;
 		}
 		parts.push("");
 		parts.push("</details>");
@@ -234,6 +365,7 @@ function buildReviewSummaryCommentBody(
 	previousFingerprints: ReadonlySet<string>,
 	channel: string,
 	headSha?: string,
+	previousMeta?: ReadonlyMap<string, ProblemMetaEntry>,
 ): string {
 	const categorized = categorizeProblems(problems, previousFingerprints);
 	const currentFingerprints = new Set<string>();
@@ -242,12 +374,14 @@ function buildReviewSummaryCommentBody(
 	}
 	const scopeFingerprint = channel;
 
-	const sections = buildReviewSummarySections(categorized, renderedSummary, headSha);
+	const resolvedMeta = previousMeta ?? new Map<string, ProblemMetaEntry>();
+	const sections = buildReviewSummarySections(categorized, renderedSummary, headSha, resolvedMeta);
 
 	const body = [
 		AICR_REVIEW_SUMMARY_MARKER,
 		`<!-- aicr:scope=${scopeFingerprint} -->`,
 		buildReviewSummaryProblemMarker(currentFingerprints),
+		buildReviewSummaryProblemMetaMarker(problems),
 		"",
 		"## AI Code Review",
 		"",
@@ -265,9 +399,10 @@ function updateReviewSummaryBody(
 	headSha?: string,
 ): string {
 	const previousFingerprints = extractReviewSummaryFingerprints(existingBody);
+	const previousMeta = extractReviewSummaryProblemMeta(existingBody, [...previousFingerprints]);
 	const summaryScope = extractReviewSummaryScope(existingBody) ?? channel;
 
-	const newBody = buildReviewSummaryCommentBody(renderedSummary, problems, previousFingerprints, summaryScope, headSha);
+	const newBody = buildReviewSummaryCommentBody(renderedSummary, problems, previousFingerprints, summaryScope, headSha, previousMeta);
 	return newBody;
 }
 
@@ -449,6 +584,75 @@ function extractExternalId(raw: unknown): string | undefined {
 	return typeof value === "string" || typeof value === "number" ? String(value) : undefined;
 }
 
+interface FlushBufferedProblemsOptions {
+	readonly reviewMode: ReviewMode;
+	readonly reviewEvent: ReviewEvent;
+	readonly postReview: (body: Record<string, unknown>) => Promise<DispatchResult>;
+	readonly postComment: (body: string) => Promise<DispatchResult>;
+	readonly summary: string;
+}
+
+function summaryAlreadyContainsProblemDetails(summary: string): boolean {
+	return /(^|\n)#{2,4}\s+(?:All\s+)?Problems\s*(?:\(|$)/iu.test(summary)
+		|| /(^|\n)#{2,5}\s+Code reference:/iu.test(summary);
+}
+
+function buildAggregatedReviewBody(summary: string, problems: readonly ReviewProblem[]): string {
+	const sections: string[] = [];
+	const trimmedSummary = summary.trim();
+	if (trimmedSummary.length > 0) {
+		sections.push(trimmedSummary);
+	}
+
+	if (problems.length > 0 && !summaryAlreadyContainsProblemDetails(trimmedSummary)) {
+		if (sections.length > 0) {
+			sections.push("---");
+		}
+		sections.push(`## Problems (${problems.length})`);
+		let idx = 1;
+		for (const problem of problems) {
+			const location = buildProblemLocation(problem);
+			sections.push(
+				"",
+				`### ${idx}. [${problem.severity.toUpperCase()}] ${problem.category} — \`${location}\``,
+				"",
+				renderProblemMarkdown(problem).trim(),
+			);
+			idx += 1;
+		}
+	}
+
+	return normalizeMarkdownBody(sections.join("\n\n"));
+}
+
+async function flushBufferedReviewProblems(
+	problemBuffer: ReviewProblem[],
+	options: FlushBufferedProblemsOptions,
+): Promise<DispatchResult | undefined> {
+	if (problemBuffer.length === 0) {
+		return undefined;
+	}
+	const toFlush = problemBuffer.splice(0);
+	const body = buildAggregatedReviewBody(options.summary, toFlush);
+	if (options.reviewMode === "comment") {
+		return options.postComment(body);
+	}
+
+	try {
+		return await options.postReview({ event: options.reviewEvent, body });
+	} catch (error) {
+		if (
+			options.reviewMode === "auto" &&
+			error instanceof OutputDispatchError &&
+			error.status !== undefined &&
+			shouldFallbackToGeneralComment(error.status)
+		) {
+			return options.postComment(body);
+		}
+		throw error;
+	}
+}
+
 export function createGiteaPullRequestReviewDispatcher(
 	options: GiteaPullRequestReviewOptions,
 ): GiteaPullRequestReviewDispatcher {
@@ -530,56 +734,6 @@ export function createGiteaPullRequestReviewDispatcher(
 		};
 	}
 
-	async function postProblem(problem: ReviewProblem): Promise<DispatchResult> {
-		const markdown = renderProblemMarkdown(problem);
-		if (reviewMode === "comment") {
-			return postComment(markdown);
-		}
-
-		if (problem.lineCommentAllowed === false) {
-			return postReview({ event: reviewEvent, body: markdown });
-		}
-
-		const body = {
-			event: reviewEvent,
-			body: `AICR problem for ${problem.file}:${problem.line}`,
-			comments: [
-				{
-					path: problem.file,
-					new_position: problem.line,
-					body: markdown,
-				},
-			],
-		};
-
-		const response = await fetchImpl(reviewEndpoint, {
-			method: "POST",
-			headers,
-			body: JSON.stringify(body),
-		});
-
-		if (!response.ok) {
-			if (reviewMode === "auto" && shouldFallbackToGeneralComment(response.status)) {
-				await response.text();
-				return postComment(markdown);
-			}
-
-			throw new OutputDispatchError(`Gitea review API returned ${response.status}.`, {
-				status: response.status,
-				responseBody: await response.text(),
-			});
-		}
-
-		const raw = await response.json();
-		const externalId = extractExternalId(raw);
-		return {
-			channel,
-			status: "published",
-			...(externalId ? { externalId } : {}),
-			raw,
-		};
-	}
-
 	const fetchCommentsEndpoint = commentEndpoint;
 
 	async function listManagedReviewComments(): Promise<readonly ManagedReviewComment[]> {
@@ -628,17 +782,31 @@ export function createGiteaPullRequestReviewDispatcher(
 	}
 
 	const updateStrategy = options.reviewUpdateStrategy ?? "update_existing";
+	const problemBuffer: ReviewProblem[] = [];
 
 	let attachSummaryLabels: (problems?: readonly ReviewProblem[]) => Promise<void> = () => Promise.resolve();
 
 	const dispatcher: GiteaPullRequestReviewDispatcher = {
 		async publishProblem(problem: ReviewProblem): Promise<DispatchResult> {
-			return postProblem(problem);
+			problemBuffer.push(problem);
+			return { channel, status: "buffered", raw: { buffered: true } };
 		},
 		async publishSummary(summary: string, problems?: readonly ReviewProblem[]): Promise<DispatchResult> {
 			const trimmed = summary.trim();
-			const allProblems = problems ?? [];
+			const bufferedProblems = [...problemBuffer];
+			const allProblems = problems ?? bufferedProblems;
 			let result: DispatchResult | undefined;
+
+			if (updateStrategy !== "update_existing" && allProblems.length > 0) {
+				const problemsToPublish = bufferedProblems.length > 0 ? bufferedProblems : allProblems;
+				result = await flushBufferedReviewProblems([...problemsToPublish], {
+					reviewMode,
+					reviewEvent,
+					postReview,
+					postComment,
+					summary: trimmed,
+				});
+			}
 
 			if (updateStrategy === "update_existing") {
 				const existingComments = await listManagedReviewComments();
@@ -653,7 +821,7 @@ export function createGiteaPullRequestReviewDispatcher(
 					const newBody = buildReviewSummaryCommentBody(trimmed, allProblems, new Set(), channel, options.headSha);
 					result = await postComment(newBody);
 				}
-			} else if (trimmed.length > 0) {
+			} else if (trimmed.length > 0 && result === undefined) {
 				if (reviewMode === "comment") {
 					result = await postComment(trimmed);
 				} else {
@@ -662,6 +830,7 @@ export function createGiteaPullRequestReviewDispatcher(
 			}
 			await attachSummaryLabels(allProblems);
 
+			problemBuffer.splice(0);
 			return result ?? { channel, status: "published", raw: {} };
 		},
 	};
@@ -884,57 +1053,6 @@ export function createGithubPullRequestReviewDispatcher(
 		};
 	}
 
-	async function postProblem(problem: ReviewProblem): Promise<DispatchResult> {
-		const markdown = renderProblemMarkdown(problem);
-		if (reviewMode === "comment") {
-			return postComment(markdown);
-		}
-
-		if (problem.lineCommentAllowed === false) {
-			return postReview({ event: reviewEvent, body: markdown });
-		}
-
-		const body = {
-			event: reviewEvent,
-			body: `AICR problem for ${problem.file}:${problem.line}`,
-			comments: [
-				{
-					path: problem.file,
-					line: problem.line,
-					side: "RIGHT",
-					body: markdown,
-				},
-			],
-		};
-
-		const response = await fetchImpl(reviewEndpoint, {
-			method: "POST",
-			headers,
-			body: JSON.stringify(body),
-		});
-
-		if (!response.ok) {
-			if (reviewMode === "auto" && shouldFallbackToGeneralComment(response.status)) {
-				await response.text();
-				return postComment(markdown);
-			}
-
-			throw new OutputDispatchError(`GitHub review API returned ${response.status}.`, {
-				status: response.status,
-				responseBody: await response.text(),
-			});
-		}
-
-		const raw = await response.json();
-		const externalId = extractExternalId(raw);
-		return {
-			channel,
-			status: "published",
-			...(externalId ? { externalId } : {}),
-			raw,
-		};
-	}
-
 	const fetchCommentsEndpoint = commentEndpoint;
 
 	async function listManagedReviewComments(): Promise<readonly ManagedReviewComment[]> {
@@ -983,17 +1101,31 @@ export function createGithubPullRequestReviewDispatcher(
 	}
 
 	const updateStrategy = options.reviewUpdateStrategy ?? "update_existing";
+	const problemBuffer: ReviewProblem[] = [];
 
 	let attachSummaryLabels: (problems?: readonly ReviewProblem[]) => Promise<void> = () => Promise.resolve();
 
 	const dispatcher: GithubPullRequestReviewDispatcher = {
 		async publishProblem(problem: ReviewProblem): Promise<DispatchResult> {
-			return postProblem(problem);
+			problemBuffer.push(problem);
+			return { channel, status: "buffered", raw: { buffered: true } };
 		},
 		async publishSummary(summary: string, problems?: readonly ReviewProblem[]): Promise<DispatchResult> {
 			const trimmed = summary.trim();
-			const allProblems = problems ?? [];
+			const bufferedProblems = [...problemBuffer];
+			const allProblems = problems ?? bufferedProblems;
 			let result: DispatchResult | undefined;
+
+			if (updateStrategy !== "update_existing" && allProblems.length > 0) {
+				const problemsToPublish = bufferedProblems.length > 0 ? bufferedProblems : allProblems;
+				result = await flushBufferedReviewProblems([...problemsToPublish], {
+					reviewMode,
+					reviewEvent,
+					postReview,
+					postComment,
+					summary: trimmed,
+				});
+			}
 
 			if (updateStrategy === "update_existing") {
 				const existingComments = await listManagedReviewComments();
@@ -1008,7 +1140,7 @@ export function createGithubPullRequestReviewDispatcher(
 					const newBody = buildReviewSummaryCommentBody(trimmed, allProblems, new Set(), channel, options.headSha);
 					result = await postComment(newBody);
 				}
-			} else if (trimmed.length > 0) {
+			} else if (trimmed.length > 0 && result === undefined) {
 				if (reviewMode === "comment") {
 					result = await postComment(trimmed);
 				} else {
@@ -1017,6 +1149,7 @@ export function createGithubPullRequestReviewDispatcher(
 			}
 			await attachSummaryLabels(allProblems);
 
+			problemBuffer.splice(0);
 			return result ?? { channel, status: "published", raw: {} };
 		},
 	};

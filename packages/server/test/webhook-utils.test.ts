@@ -4,7 +4,7 @@ import {
   computeWebhookSignature,
   translateWebhookToReviewEvent,
   verifyWebhookSignature,
-} from "../src/gitea-webhook.js";
+} from "../src/webhook-translator.js";
 
 describe("computeWebhookSignature", () => {
   it("produces a deterministic hex string for a given payload and secret", () => {
@@ -123,6 +123,84 @@ describe("translateWebhookToReviewEvent", () => {
 
     expect(event?.provider).toBe("forgejo");
     expect(event?.reason).toBe("forgejo:opened");
+  });
+
+  it("translates GitHub pull_request review_requested into a pull request review event", async () => {
+    const event = await translateWebhookToReviewEvent(
+      "github",
+      "pull_request",
+      {
+        action: "review_requested",
+        repository: { full_name: "owent/example" },
+        sender: { login: "maintainer" },
+        pull_request: {
+          title: "Add auth checks",
+          html_url: "https://github.com/owent/example/pull/42",
+          base: { sha: "base-sha" },
+          head: { sha: "head-sha", ref: "feature/auth" },
+        },
+        requested_reviewer: { login: "aicr-bot" },
+      },
+      { triggerName: "github", workspaceId: "github-owent-example" },
+    );
+
+    expect(event).toMatchObject({
+      provider: "github",
+      targetKind: "pull_request",
+      repoRef: "owent/example",
+      baseSha: "base-sha",
+      headSha: "head-sha",
+      reason: "github:review_requested",
+      rawEventName: "pull_request",
+      branch: "feature/auth",
+    });
+  });
+
+  it("translates Gitea pull_request_review_request review_requested into a pull request review event", async () => {
+    const event = await translateWebhookToReviewEvent(
+      "gitea",
+      "pull_request_review_request",
+      {
+        action: "review_requested",
+        repository: { full_name: "owent/example" },
+        sender: { login: "maintainer" },
+        pull_request: {
+          title: "Add auth checks",
+          html_url: "https://gitea.example.com/owent/example/pulls/42",
+          base: { sha: "base-sha" },
+          head: { sha: "head-sha", ref: "feature/auth" },
+        },
+        requested_reviewer: { login: "aicr-bot" },
+      },
+      config,
+    );
+
+    expect(event).toMatchObject({
+      provider: "gitea",
+      targetKind: "pull_request",
+      repoRef: "owent/example",
+      baseSha: "base-sha",
+      headSha: "head-sha",
+      reason: "gitea:review_requested",
+      rawEventName: "pull_request_review_request",
+      branch: "feature/auth",
+    });
+  });
+
+  it("does not translate Gitea pull_request_review_request review_request_removed into a review event", async () => {
+    const event = await translateWebhookToReviewEvent(
+      "gitea",
+      "pull_request_review_request",
+      {
+        action: "review_request_removed",
+        repository: { full_name: "owent/example" },
+        sender: { login: "maintainer" },
+        pull_request: { base: { sha: "base-sha" }, head: { sha: "head-sha" } },
+      },
+      config,
+    );
+
+    expect(event).toBeNull();
   });
 
   it("translates push events with before/after shas", async () => {

@@ -108,7 +108,7 @@ describe("renderProblemMarkdown", () => {
 });
 
 describe("createGiteaPullRequestReviewDispatcher", () => {
-  it("publishes a problem as a Gitea pull request review comment", async () => {
+  it("publishes a problem as a single Gitea pull request review body", async () => {
     const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
     const dispatcher = createGiteaPullRequestReviewDispatcher({
       baseUrl: "https://gitea.example/",
@@ -117,29 +117,27 @@ describe("createGiteaPullRequestReviewDispatcher", () => {
       repo: "example",
       pullNumber: 42,
       channelName: "gitea-pr-internal",
+      reviewUpdateStrategy: "always_new",
       fetch: async (url, init) => {
         calls.push({ url, init });
         return response({ id: 123 });
       },
     });
 
-    const result = await dispatcher.publishProblem(problem);
+    await dispatcher.publishProblem(problem);
+    const result = await dispatcher.publishSummary!("");
 
-    expect(result).toEqual({ channel: "gitea-pr-internal", status: "published", externalId: "123", raw: { id: 123 } });
+    expect(result).toMatchObject({ channel: "gitea-pr-internal", status: "published", externalId: "123" });
     expect(calls[0]?.url).toBe("https://gitea.example/api/v1/repos/owent/example/pulls/42/reviews");
     expect(calls[0]?.init?.headers).toMatchObject({
       "content-type": "application/json",
       authorization: "token token-value",
     });
-    expect(JSON.parse(calls[0]?.init?.body ?? "{}")).toMatchObject({
-      event: "COMMENT",
-      comments: [
-        {
-          path: "src/app.ts",
-          new_position: 42,
-        },
-      ],
-    });
+    const body = JSON.parse(calls[0]?.init?.body ?? "{}");
+    expect(body.event).toBe("COMMENT");
+    expect(body.comments).toBeUndefined();
+    expect(body.body).toContain("src/app.ts:42");
+    expect(body.body).toContain("This branch returns success before the write is committed.");
   });
 
   it("throws a typed dispatch error on non-2xx responses", async () => {
@@ -151,8 +149,10 @@ describe("createGiteaPullRequestReviewDispatcher", () => {
       fetch: async () => response({ message: "bad token" }, 401),
     });
 
-    await expect(dispatcher.publishProblem(problem)).rejects.toBeInstanceOf(OutputDispatchError);
-    await expect(dispatcher.publishProblem(problem)).rejects.toMatchObject({ status: 401 });
+    await dispatcher.publishProblem(problem);
+    await expect(dispatcher.publishSummary!("")).rejects.toBeInstanceOf(OutputDispatchError);
+    await dispatcher.publishProblem(problem);
+    await expect(dispatcher.publishSummary!("")).rejects.toMatchObject({ status: 401 });
   });
 
   it("uses the default channel name when not specified", async () => {
@@ -175,6 +175,7 @@ describe("createGiteaPullRequestReviewDispatcher", () => {
       owner: "owent",
       repo: "example",
       pullNumber: 1,
+      reviewUpdateStrategy: "always_new",
       fetch: async (url, init) => {
         calls.push({ url, init });
         return response({ id: 1 });
@@ -182,6 +183,7 @@ describe("createGiteaPullRequestReviewDispatcher", () => {
     });
 
     await dispatcher.publishProblem(problem);
+    await dispatcher.publishSummary!("");
 
     expect(calls[0]?.init?.headers).not.toHaveProperty("authorization");
   });
@@ -192,10 +194,12 @@ describe("createGiteaPullRequestReviewDispatcher", () => {
       owner: "owent",
       repo: "example",
       pullNumber: 1,
+      reviewUpdateStrategy: "always_new",
       fetch: async () => response({}),
     });
 
-    const result = await dispatcher.publishProblem(problem);
+    await dispatcher.publishProblem(problem);
+    const result = await dispatcher.publishSummary!("", [problem]);
     expect(result.externalId).toBeUndefined();
   });
 
@@ -206,6 +210,7 @@ describe("createGiteaPullRequestReviewDispatcher", () => {
       owner: "owent",
       repo: "example",
       pullNumber: 1,
+      reviewUpdateStrategy: "always_new",
       fetch: async (url, init) => {
         calls.push({ url, init });
         return response({ id: 1 });
@@ -213,6 +218,7 @@ describe("createGiteaPullRequestReviewDispatcher", () => {
     });
 
     await dispatcher.publishProblem({ ...problem, lineCommentAllowed: false });
+    await dispatcher.publishSummary!("");
 
     const body = JSON.parse(calls[0]?.init?.body ?? "{}");
     expect(body.event).toBe("COMMENT");
@@ -220,13 +226,14 @@ describe("createGiteaPullRequestReviewDispatcher", () => {
     expect(body.body).toContain("src/app.ts:42");
   });
 
-  it("falls back to issue comment when Gitea rejects the line anchor (auto mode)", async () => {
+  it("falls back to one issue comment when Gitea rejects the review body (auto mode)", async () => {
     const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
     const dispatcher = createGiteaPullRequestReviewDispatcher({
       baseUrl: "https://gitea.example",
       owner: "owent",
       repo: "example",
       pullNumber: 1,
+      reviewUpdateStrategy: "always_new",
       fetch: async (url, init) => {
         calls.push({ url, init });
         return calls.length === 1
@@ -235,12 +242,13 @@ describe("createGiteaPullRequestReviewDispatcher", () => {
       },
     });
 
-    const result = await dispatcher.publishProblem(problem);
+    await dispatcher.publishProblem(problem);
+    const result = await dispatcher.publishSummary!("");
 
     expect(result.externalId).toBe("2");
     expect(calls).toHaveLength(2);
     expect(calls[0]?.url).toContain("/reviews");
-    expect(JSON.parse(calls[0]?.init?.body ?? "{}").comments).toHaveLength(1);
+    expect(JSON.parse(calls[0]?.init?.body ?? "{}").comments).toBeUndefined();
     expect(calls[1]?.url).toContain("/issues/1/comments");
     expect(JSON.parse(calls[1]?.init?.body ?? "{}").body).toContain("src/app.ts:42");
   });
@@ -252,6 +260,7 @@ describe("createGiteaPullRequestReviewDispatcher", () => {
       owner: "owent",
       repo: "example",
       pullNumber: 1,
+      reviewUpdateStrategy: "always_new",
       fetch: async (url, init) => {
         calls.push({ url, init });
         return calls.length === 1
@@ -260,7 +269,8 @@ describe("createGiteaPullRequestReviewDispatcher", () => {
       },
     });
 
-    const result = await dispatcher.publishProblem(problem);
+    await dispatcher.publishProblem(problem);
+    const result = await dispatcher.publishSummary!("");
 
     expect(result.externalId).toBe("3");
     expect(calls).toHaveLength(2);
@@ -275,6 +285,7 @@ describe("createGiteaPullRequestReviewDispatcher", () => {
       owner: "owent",
       repo: "example",
       pullNumber: 1,
+      reviewUpdateStrategy: "always_new",
       fetch: async (url, init) => {
         calls.push({ url, init });
         return response({ id: 1 });
@@ -282,6 +293,7 @@ describe("createGiteaPullRequestReviewDispatcher", () => {
     });
 
     await dispatcher.publishProblem(problem);
+    await dispatcher.publishSummary!("");
 
     expect(calls[0]?.url).toBe("https://gitea.example/api/v1/repos/owent/example/pulls/1/reviews");
   });
@@ -294,13 +306,15 @@ describe("createGiteaPullRequestReviewDispatcher", () => {
       repo: "example",
       pullNumber: 1,
       reviewMode: "comment",
+      reviewUpdateStrategy: "always_new",
       fetch: async (url, init) => {
         calls.push({ url, init });
         return response({ id: 10 });
       },
     });
 
-    const result = await dispatcher.publishProblem(problem);
+    await dispatcher.publishProblem(problem);
+    const result = await dispatcher.publishSummary!("");
 
     expect(result.channel).toBe("gitea_pr_review");
     expect(calls).toHaveLength(1);
@@ -318,6 +332,7 @@ describe("createGiteaPullRequestReviewDispatcher", () => {
       repo: "example",
       pullNumber: 1,
       reviewEvent: "REQUEST_CHANGES",
+      reviewUpdateStrategy: "always_new",
       fetch: async (url, init) => {
         calls.push({ url, init });
         return response({ id: 11 });
@@ -325,10 +340,12 @@ describe("createGiteaPullRequestReviewDispatcher", () => {
     });
 
     await dispatcher.publishProblem(problem);
+    await dispatcher.publishSummary!("");
 
     const body = JSON.parse(calls[0]?.init?.body ?? "{}");
     expect(body.event).toBe("REQUEST_CHANGES");
-    expect(body.comments).toHaveLength(1);
+    expect(body.comments).toBeUndefined();
+    expect(body.body).toContain("src/app.ts:42");
   });
 
   it("does not fallback in review mode on permission error", async () => {
@@ -338,10 +355,12 @@ describe("createGiteaPullRequestReviewDispatcher", () => {
       repo: "example",
       pullNumber: 1,
       reviewMode: "review",
+      reviewUpdateStrategy: "always_new",
       fetch: async () => response({ message: "forbidden" }, 403),
     });
 
-    await expect(dispatcher.publishProblem(problem)).rejects.toThrow("Gitea review API returned 403");
+    await dispatcher.publishProblem(problem);
+    await expect(dispatcher.publishSummary!("")).rejects.toThrow("Gitea review API returned 403");
   });
 
   it("publishes summary via comment endpoint in comment mode", async () => {
@@ -443,10 +462,12 @@ describe("extractExternalId via dispatcher", () => {
       owner: "owent",
       repo: "example",
       pullNumber: 1,
+      reviewUpdateStrategy: "always_new",
       fetch: async () => response({ id: 999 }),
     });
 
-    const result = await dispatcher.publishProblem(problem);
+    await dispatcher.publishProblem(problem);
+    const result = await dispatcher.publishSummary!("", [problem]);
     expect(result.externalId).toBe("999");
   });
 
@@ -456,10 +477,12 @@ describe("extractExternalId via dispatcher", () => {
       owner: "owent",
       repo: "example",
       pullNumber: 1,
+      reviewUpdateStrategy: "always_new",
       fetch: async () => response({ review_id: "r-1" }),
     });
 
-    const result = await dispatcher.publishProblem(problem);
+    await dispatcher.publishProblem(problem);
+    const result = await dispatcher.publishSummary!("", [problem]);
     expect(result.externalId).toBeUndefined();
   });
 
@@ -470,6 +493,7 @@ describe("extractExternalId via dispatcher", () => {
       owner: "org/sub-org",
       repo: "repo&name",
       pullNumber: 5,
+      reviewUpdateStrategy: "always_new",
       fetch: async (url, init) => {
         calls.push({ url, init });
         return response({ id: 1 });
@@ -477,6 +501,7 @@ describe("extractExternalId via dispatcher", () => {
     });
 
     await dispatcher.publishProblem(problem);
+    await dispatcher.publishSummary!("");
     expect(calls[0]?.url).toContain("org%2Fsub-org");
     expect(calls[0]?.url).toContain("repo%26name");
   });
@@ -697,9 +722,10 @@ describe("createGiteaPullRequestReviewDispatcher (update_existing)", () => {
     const patchCall = calls.find((c) => c.init?.method === "PATCH");
     const body = JSON.parse(patchCall?.init?.body ?? "{}");
     expect(body.body).toContain("fp-keep");
-    expect(body.body).toContain("fp-resolve");
     expect(body.body).toContain("Open Issues");
     expect(body.body).toContain("Resolved");
+    expect(body.body).toContain("Previously reported issue");
+    expect(body.body).not.toContain("fp-resolve");
   });
 
   it("parses previous fingerprints with spaces in managed summary markers", async () => {
@@ -740,7 +766,8 @@ describe("createGiteaPullRequestReviewDispatcher (update_existing)", () => {
     const body = JSON.parse(patchCall?.init?.body ?? "{}");
     expect(body.body).toContain("<!-- aicr:problems=fp-keep -->");
     expect(body.body).toContain("Resolved (1)");
-    expect(body.body).toContain("fp-resolve");
+    expect(body.body).toContain("Previously reported issue");
+    expect(body.body).not.toContain("fp-resolve");
   });
 
   it("does not update a managed summary comment from another channel scope", async () => {

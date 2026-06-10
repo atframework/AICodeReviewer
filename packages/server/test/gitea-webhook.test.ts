@@ -69,6 +69,128 @@ describe("createServerApp", () => {
     expect(body.reviewEvent?.headSha).toBe("head-sha");
   });
 
+  it("accepts a signed Gitea pull_request_review_request webhook and triggers review_requested", async () => {
+    const app = createServerApp({
+      gitea: {
+        triggerName: "gitea-internal",
+        workspaceId: "gitea-internal-owent-example",
+        webhookSecret,
+      },
+    });
+    const payload = JSON.stringify({
+      action: "review_requested",
+      repository: {
+        full_name: "owent/example",
+      },
+      sender: {
+        login: "maintainer",
+      },
+      pull_request: {
+        html_url: "https://gitea.internal.corp/owent/example/pulls/42",
+        base: { sha: "base-sha" },
+        head: { sha: "head-sha", ref: "feature/auth" },
+      },
+      requested_reviewer: {
+        login: "aicr-bot",
+      },
+    });
+
+    const response = await app.request("/webhooks/gitea", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-gitea-event": "pull_request",
+        "x-gitea-event-type": "pull_request_review_request",
+        "x-gitea-signature": sign(payload),
+      },
+      body: payload,
+    });
+    const body = (await response.json()) as {
+      accepted: boolean;
+      reviewEvent?: {
+        rawEventName?: string;
+        reason?: string;
+        targetKind?: string;
+        branch?: string;
+      };
+    };
+
+    expect(response.status).toBe(202);
+    expect(body.accepted).toBe(true);
+    expect(body.reviewEvent).toMatchObject({
+      rawEventName: "pull_request_review_request",
+      reason: "gitea:review_requested",
+      targetKind: "pull_request",
+      branch: "feature/auth",
+    });
+  });
+
+  it("retries async trigger processing before marking the run complete", async () => {
+    vi.useFakeTimers();
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => undefined);
+    const sourceRootResolver = vi.fn()
+      .mockImplementationOnce(() => {
+        throw new Error("transient preparation failure");
+      })
+      .mockReturnValue(undefined);
+    try {
+      const app = createServerApp({
+        gitea: {
+          triggerName: "gitea-internal",
+          workspaceId: "gitea-internal-owent-example",
+          webhookSecret,
+        },
+        asyncTriggers: true,
+        triggerRetry: {
+          attempts: 2,
+          backoff: {
+            kind: "constant",
+            base_ms: 5,
+            max_ms: 5,
+            jitter: false,
+          },
+        },
+        reviewPreparation: {
+          baseSystemPrompt: "test",
+          sourceRootResolver,
+        },
+      });
+      const payload = JSON.stringify({
+        action: "opened",
+        repository: { full_name: "owent/example" },
+        sender: { login: "owent" },
+        pull_request: {
+          html_url: "https://gitea.internal.corp/owent/example/pulls/42",
+          base: { sha: "base-sha" },
+          head: { sha: "head-sha" },
+        },
+      });
+
+      const response = await app.request("/webhooks/gitea", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-gitea-event": "pull_request",
+          "x-gitea-signature": sign(payload),
+        },
+        body: payload,
+      });
+
+      expect(response.status).toBe(202);
+      await vi.runOnlyPendingTimersAsync();
+      expect(sourceRootResolver).toHaveBeenCalledTimes(1);
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("trigger processing failed, retrying"));
+
+      await vi.advanceTimersByTimeAsync(5);
+      expect(sourceRootResolver).toHaveBeenCalledTimes(2);
+    } finally {
+      warnSpy.mockRestore();
+      infoSpy.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
   it("prepares a review prompt when review preparation is configured", async () => {
     const tempDir = await mkdtemp(join(tmpdir(), "aicr-server-review-"));
 
@@ -531,6 +653,57 @@ describe("createServerApp", () => {
       targetKind: "pull_request",
       headSha: "head-sha",
       reason: "github:opened",
+    });
+  });
+
+  it("accepts a signed GitHub pull_request review_requested webhook", async () => {
+    const app = createServerApp({
+      github: {
+        triggerName: "github-saas",
+        workspaceId: "github-owent-example",
+        webhookSecret,
+      },
+    });
+    const payload = JSON.stringify({
+      action: "review_requested",
+      number: 42,
+      repository: {
+        full_name: "owent/example",
+      },
+      sender: {
+        login: "maintainer",
+      },
+      pull_request: {
+        html_url: "https://github.com/owent/example/pull/42",
+        base: { sha: "base-sha" },
+        head: { sha: "head-sha", ref: "feature/auth" },
+      },
+      requested_reviewer: {
+        login: "aicr-bot",
+      },
+    });
+
+    const response = await app.request("/webhooks/github", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-github-event": "pull_request",
+        "x-hub-signature-256": `sha256=${sign(payload)}`,
+      },
+      body: payload,
+    });
+    const body = (await response.json()) as {
+      accepted: boolean;
+      reviewEvent?: { reason?: string; rawEventName?: string; targetKind?: string; branch?: string };
+    };
+
+    expect(response.status).toBe(202);
+    expect(body.accepted).toBe(true);
+    expect(body.reviewEvent).toMatchObject({
+      reason: "github:review_requested",
+      rawEventName: "pull_request",
+      targetKind: "pull_request",
+      branch: "feature/auth",
     });
   });
 

@@ -40,6 +40,8 @@
 - 所有入口都应收敛到统一 `ReviewEvent`，避免在公共模块暴露平台私有字段名。
 - 触发器需要在**鉴权/签名校验通过后**再创建 run。
 - GitHub / GitLab 这类共享 webhook 路由允许挂多个同类 trigger profile；服务端需要先按请求凭据确认候选 trigger，再按仓库标识选择最终 profile，避免把不同仓库的 secret、token 或过滤规则混用。
+- Review request 事件属于主动 re-review 入口：GitHub `pull_request` 的 `review_requested` action 与 Gitea/Forgejo `pull_request_review_request` 的 `review_requested` action 都归一为 PR `ReviewEvent`；`review_request_removed` 不创建 review run。
+- Webhook 实现必须保持平台边界清晰：共用签名校验、repo mapping、payload schema 与 ReviewEvent 构造放在 `packages/server/src/webhook-common.ts`；Gitea/Forgejo、GitHub、GitLab 的事件语义分别放在对应平台文件；`webhook-translator.ts` 只负责按 provider 分发。
 - 当开启 async 语义时，入口应尽快返回 `202` 与 `runId`，后台完成 review。
 - `ReviewEvent` 要覆盖提交者、目标、仓库映射、变更集、workspace 等最小稳定字段。
 - P4 trigger 只负责最小 metadata POST；服务端负责拉取和补足 diff/describe。
@@ -233,8 +235,8 @@
   - `always_new`：每次推送创建新的 review/comment。
   - `update_existing`（默认）：查找 PR 上已有的 AICR 管理的 summary comment，通过 PATCH 更新而非新建。
 - 更新模式下 summary comment 使用 HTML 注释标记（`<!-- aicr:managed=pr-review -->`、`<!-- aicr:problems=fp1,fp2 -->`）做身份识别与 fingerprint 跟踪。
-- 问题分三类呈现：**Still Open**（指纹在旧 comment 和当前均存在）、**New**（仅当前存在，标注引入 commit）、**Resolved**（仅旧 comment 存在，标记 ✅ 不删除）。
-- 行级 inline comments（`publishProblem`）不受更新策略影响，仍然逐条创建 review comments。
+- 问题分三类呈现：**Still Open**（指纹在旧 comment 和当前均存在）、**New**（仅当前存在，标注引入 commit）、**Resolved**（仅旧 comment 存在，标记 ✅ 不删除）。Resolved 项优先显示元数据标题，旧 comment 无元数据时显示可读占位而不是 raw fingerprint。
+- `publishProblem` 只缓冲问题；`publishSummary` 将所有问题、summary 和代码引用集中到一个 Markdown reply body。即使 PR review 通道只配置在 `line_comments` 路由下，也必须通过 summary flush 发布，避免缓冲问题丢失。
 - 配置字段：`outputs.channels[].review_update_strategy`，类型 `always_new | update_existing`。
 
 #### 3.9.1 `no_problems` 与 target 渲染
@@ -319,6 +321,8 @@
   - `workspaces.defaults.prompt.force_skills`
   - `outputs.channels[].mention_fallback`
   - `outputs.routes`
+- `queue.retry` 的规范字段是 `attempts` 与 `backoff`；旧配置中的
+  `max_attempts` / `backoff_seconds` 仅作为兼容输入归一化，新增示例不要继续使用。
 - 计划中的内置观测首页认证配置与 trigger API key 分离；配置文件只保存 env var 名称，
   不保存超级管理员用户名/密码明文。密码哈希 env（如 `*_PASSWORD_HASH`，格式
   `sha256:<hex>`）优先且可单独使用；小型内网部署允许 raw password env，但必须
