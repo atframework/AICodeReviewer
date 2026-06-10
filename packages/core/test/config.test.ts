@@ -1008,7 +1008,7 @@ describe("mergeConfigLayers", () => {
           mode: "light",
           memory: {
             max_size_kb: 64,
-            compact_after_runs: 20,
+            max_entries: 20,
             retention_days: 180,
           },
         },

@@ -98,6 +98,8 @@ export interface ServerReviewOrchestrationOptions {
   readonly changedPathsResolver?: (context: ReviewOrchestrationContext) => readonly string[] | undefined;
   readonly operatorOverrides?: readonly string[];
   readonly memoryHints?: readonly string[];
+  readonly memoryHintsResolver?: (workspaceId: string) => Promise<readonly string[]> | readonly string[];
+  readonly postRunCallback?: (result: ReviewOrchestrationResult, context: ReviewOrchestrationContext) => Promise<void>;
   readonly maxPromptTokens?: number;
   readonly diffContextLines?: number;
   readonly dryRun?: boolean;
@@ -1515,6 +1517,9 @@ export async function runReviewOrchestration(
   })();
 
   const resolvedForceSkills = options.forceSkillsResolver?.(context.reviewEvent.workspaceId);
+  const resolvedMemoryHints = options.memoryHintsResolver
+    ? await options.memoryHintsResolver(context.reviewEvent.workspaceId)
+    : options.memoryHints ?? [];
 
   const preparedPrompt = await prepareReviewPrompt({
     reviewEvent: context.reviewEvent,
@@ -1524,7 +1529,7 @@ export async function runReviewOrchestration(
     taskContext,
     ...(resolvedForceSkills?.length ? { forceSkills: resolvedForceSkills } : {}),
     ...(options.operatorOverrides ? { operatorOverrides: options.operatorOverrides } : {}),
-    ...(options.memoryHints ? { memoryHints: options.memoryHints } : {}),
+    ...(resolvedMemoryHints.length > 0 ? { memoryHints: resolvedMemoryHints } : {}),
     ...(options.maxPromptTokens !== undefined ? { maxPromptTokens: options.maxPromptTokens } : {}),
   });
 
@@ -1979,7 +1984,7 @@ export async function runReviewOrchestration(
         ? "dry_run"
         : "published";
 
-  return {
+  const result: ReviewOrchestrationResult = {
     status,
     sourceRoot: scopedTree.rootDir,
     changedFiles: changedPaths,
@@ -2005,6 +2010,22 @@ export async function runReviewOrchestration(
     ...(originalTokenEstimate !== undefined ? { originalTokenEstimate } : {}),
     ...(compressedTokenEstimate !== undefined ? { compressedTokenEstimate } : {}),
   };
+
+  if (options.postRunCallback) {
+    try {
+      await options.postRunCallback(result, context);
+    } catch (callbackError: unknown) {
+      console.warn(JSON.stringify({
+        level: "warn",
+        msg: "postRunCallback failed",
+        triggerName: context.reviewEvent.triggerName,
+        workspaceId: context.reviewEvent.workspaceId,
+        error: callbackError instanceof Error ? callbackError.message : String(callbackError),
+      }));
+    }
+  }
+
+  return result;
 }
 
 function buildOrchestratorVcsContext(reviewEvent: ReviewEvent): { branch?: string; sourcePath?: string; workspace?: string; repositoryPath?: string } {

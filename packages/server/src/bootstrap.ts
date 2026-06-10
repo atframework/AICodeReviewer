@@ -57,9 +57,16 @@ import { createGitVcsAdapter, createP4VcsAdapter, type GitVcsAdapter, type P4Vcs
 import {
   createStoreDb,
   hardDeleteExpiredProjects,
+  readReflectionMemory,
+  writeReflectionMemory,
+  compactReflectionMemory,
   softDeleteMissingProjects,
   type StoreDb,
 } from "@aicr/store";
+import {
+  extractReflections,
+  type ExtractedReflection,
+} from "@aicr/core";
 
 import type { VcsWebhookConfig } from "./webhook-common.js";
 import type { P4TriggerConfig } from "./p4-webhook.js";
@@ -73,6 +80,7 @@ import type { ObservabilityApiOptions } from "./observability-api.js";
 import type {
   ReviewDispatchResult,
   ReviewOrchestrationContext,
+  ReviewOrchestrationResult,
   ReviewOutputPublisher,
   ReviewOutputPublisherResolver,
   ReviewSummaryPublishOptions,
@@ -1902,6 +1910,33 @@ export async function bootstrapServerApp(options: BootstrapServerOptions): Promi
   const sandbox = await createSandboxBackendFromConfig(config);
   const agentAdapter = resolveAgentAdapterFromConfig(config);
 
+  const adminAuthConfig = resolveAdminAuthConfig(config as unknown as Record<string, unknown>, resolveEnv);
+  let store: StoreDb | undefined;
+  let observability: ObservabilityApiOptions | undefined;
+
+  if (adminAuthConfig) {
+    if (config.storage.database.kind !== "sqlite") {
+      throw new TypeError(
+        `storage.database.kind=${config.storage.database.kind} is configured, but the built-in observability store currently supports sqlite only.`,
+      );
+    }
+
+    const dbPath = config.storage.database.sqlite.path;
+    store = createStoreDb(dbPath);
+
+    const activeProjectIdentities = buildActiveProjectIdentities(config);
+    softDeleteMissingProjects(store, activeProjectIdentities);
+    hardDeleteExpiredProjects(store, config.storage.retention.deleted_project_grace_days);
+
+    observability = {
+      store,
+      adminAuth: adminAuthConfig,
+    };
+  }
+
+  const reflectionConfig = config.review.reflection;
+  const reflectionEnabled = !!store && !!reflectionConfig && reflectionConfig.enabled !== false && reflectionConfig.mode !== "off";
+
   const orchestrationOptions: ServerReviewOrchestrationOptions = {
     baseSystemPrompt,
     baseSystemPromptResolver: async (workspaceId: string) => {
@@ -1943,6 +1978,57 @@ export async function bootstrapServerApp(options: BootstrapServerOptions): Promi
         return config.review.labels?.ignore ?? ["aicr:ignore", "aicr-ignore"];
       }
     },
+    ...(reflectionEnabled
+      ? {
+          memoryHintsResolver: async (workspaceId: string): Promise<readonly string[]> => {
+            try {
+              const entries = await readReflectionMemory(store!, workspaceId);
+              return entries.map((entry) => entry.content);
+            } catch {
+              return [];
+            }
+          },
+        }
+      : {}),
+    ...(reflectionEnabled
+      ? {
+          postRunCallback: async (result: ReviewOrchestrationResult, ctx: ReviewOrchestrationContext): Promise<void> => {
+            const workspaceId = ctx.reviewEvent.workspaceId;
+            const runId = ctx.reviewEvent.headSha ?? String(Date.now());
+            const reflections = extractReflections({
+              workspaceId,
+              runId,
+              status: result.status,
+              skipReason: result.skipReason,
+              problems: result.outputState.problems,
+              summaries: result.outputState.summaries,
+              changedFiles: result.changedFiles,
+            });
+
+            if (reflections.length > 0) {
+              const now = new Date();
+              const retentionDays = reflectionConfig?.memory?.retention_days ?? 90;
+              const entries = reflections.map((r: ExtractedReflection) => ({
+                workspaceId,
+                fingerprint: r.fingerprint,
+                content: r.content,
+                sourceRunId: runId,
+                createdAt: now,
+                expiresAt: new Date(now.getTime() + retentionDays * 86_400_000),
+              }));
+              await writeReflectionMemory(store!, entries);
+
+              const maxEntries = reflectionConfig?.memory?.max_entries;
+              if (maxEntries) {
+                void compactReflectionMemory(store!, workspaceId, {
+                  retentionDays,
+                  maxEntries,
+                });
+              }
+            }
+          },
+        }
+      : {}),
     ...(compressionConfig ? { compression: compressionConfig } : {}),
     ...(summarizeModel ? { summarizeModel } : {}),
     ...(summarizeClient ? { summarizeClient } : {}),
@@ -1973,31 +2059,7 @@ export async function bootstrapServerApp(options: BootstrapServerOptions): Promi
   const githubOption = toServerWebhookOption(githubConfigs);
   const gitlabOption = toServerWebhookOption(gitlabConfigs);
 
-  let store: StoreDb | undefined;
-  let observability: ObservabilityApiOptions | undefined;
-
-  const adminAuthConfig = resolveAdminAuthConfig(config as unknown as Record<string, unknown>, resolveEnv);
   const triggerRetry = resolveTriggerRetryConfig(config);
-
-  if (adminAuthConfig) {
-    if (config.storage.database.kind !== "sqlite") {
-      throw new TypeError(
-        `storage.database.kind=${config.storage.database.kind} is configured, but the built-in observability store currently supports sqlite only.`,
-      );
-    }
-
-    const dbPath = config.storage.database.sqlite.path;
-    store = createStoreDb(dbPath);
-
-    const activeProjectIdentities = buildActiveProjectIdentities(config);
-    softDeleteMissingProjects(store, activeProjectIdentities);
-    hardDeleteExpiredProjects(store, config.storage.retention.deleted_project_grace_days);
-
-    observability = {
-      store,
-      adminAuth: adminAuthConfig,
-    };
-  }
 
   return {
     ...(giteaConfig ? { gitea: giteaConfig } : {}),

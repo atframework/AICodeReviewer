@@ -20,7 +20,7 @@
 - M6 GitHub 生产链路已验收；GitLab e2e 和 SVN adapter 移至 Backlog。
 - M8 观测底座与内置观测首页已交付：OTel 已接入 serve 命令、Prometheus metrics 和 run snapshot 已连线、eval CLI 已添加；Dashboard 支持 Overview / Projects / Providers / Runs 四个标签，工程面板与 Provider 面板均支持 today/thisWeek/thisMonth/all 时间维度切换。
 - M9 发布收尾已基本完成：从零部署验收、容器嵌套沙箱集成验证均通过；版本 bump 待用户决策。
-- M7 国际化（i18n）已开始：`output_language` 注入到 review task context 已交付。
+- M7 已完成：workspace 定制、国际化、memory/reflection 全流程集成（light mode）已交付。
 - 所有包均已补齐 `test/index.test.ts` barrel export 测试（AGENTS.md pitfall #10）。
 - 本轮已完成文档收束：已完成阶段与稳定细节已搬离 `Plan.md`，未来 agent 应按需读文档，
   而不是默认吞下整份历史记录。
@@ -269,7 +269,7 @@
 | M4 | 已完成 | `docs/ai/milestones/M4.md` | 继续扩展模板、路由与 attribution |
 | M5 | 基本完成 | `docs/ai/milestones/M5.md` | HTTP/SSE MCP transport 调研（非阻塞） |
 | M6 | 部分完成 | GitHub 生产链路已验收 | GitLab e2e、SVN adapter 移至 Backlog |
-| M7 | 已开始 | `output_language` 注入 review task context | memory/reflection 存储与检索（写入/读取/压缩已实现） |
+| M7 | 已完成 | `docs/ai/milestones/M7.md` | thorough mode、跨 workspace 知识迁移 → Backlog |
 | M8 | 大部分完成 | `docs/ai/milestones/M8.md` | CI eval 集成移至 Backlog |
 | M9 | 基本完成 | `docs/ai/milestones/M9.md` | 版本 tag（用户决策） |
 
@@ -284,14 +284,14 @@
     - CI eval 基准集成（将 `aicr eval` 接入 CI 流水线；需 CI pipeline 权限，延后扩展）→ **Backlog**
 4. **M9：发布收尾**（基本完成，已完成项归档至 `docs/ai/milestones/M9.md`）
     - 版本 bump 与 git tag（用户决策）
- 5. **M7：workspace 定制、国际化、memory**（已开始）
+ 5. **M7：workspace 定制、国际化、memory**（已完成，归档至 `docs/ai/milestones/M7.md`）
     - ~~`output_language` 注入 review task context~~（已交付）
     - 所有包 barrel export 测试补齐（已交付：1228 测试全部通过）
     - ~~per-workspace `prompt.base_system_prompt_file` 覆盖~~（已交付：config schema + bootstrap resolver + tests）
     - ~~config-level `prompt.force_skills` 强制技能激活~~（已交付：prompt-manager forceSkills + tests）
     - ~~reflection memory 存储与检索~~（已交付：store schema + migration + read/write/compact + tests）
-    - memory/reflection 写入与 review 流程集成（待实现：run 后写入 reflection，run 前读取 memory hints）
-    - reflection 提取逻辑（待实现：从 review 输出中提取 false-positive patterns 等）
+    - ~~memory/reflection 写入与 review 流程集成~~（已交付：memoryHintsResolver + postRunCallback + reflection-extractor + tests）
+    - ~~reflection 提取逻辑~~（已交付：light mode per-category/file-type/summary 提取）
 
 ### 8.3 Backlog（低优先级延后项）
 
@@ -302,6 +302,7 @@
 | SVN VCS adapter            | M6         | config schema 已预留，待实现                                   |
 | 完整 blame/annotate        | M6         | 需 VCS 原生 `git blame` / `p4 annotate` 集成                   |
 | 专用多源上下文聚合         | M6/M7      | 当前 `fetch_more_context` 部分覆盖                             |
+| Reflection thorough mode   | M7         | 跨 run 聚合分析、false-positive 模式识别、repo 约定学习         |
 | `k8s_pod` sandbox 实现     | M9         | 需要 Kubernetes 集群和 `@kubernetes/client-node`               |
 | `firecracker` sandbox 实现 | M9         | 需要 Firecracker 二进制和 API socket                           |
 | CI eval 基准集成           | M8         | 将 `aicr eval` 接入 CI 流水线（需 CI pipeline 权限，延后扩展） |
@@ -315,6 +316,7 @@
 - `docs/ai/milestones/M3.md`
 - `docs/ai/milestones/M4.md`
 - `docs/ai/milestones/M5.md`
+- `docs/ai/milestones/M7.md`
 - `docs/ai/milestones/M8.md`
 - `docs/ai/milestones/M9.md`
 

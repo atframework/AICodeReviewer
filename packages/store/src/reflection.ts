@@ -18,16 +18,41 @@ export async function writeReflectionMemory(
 ): Promise<void> {
   if (entries.length === 0) return;
 
-  const values = entries.map((entry) => ({
-    workspaceId: entry.workspaceId,
-    fingerprint: entry.fingerprint,
-    content: entry.content,
-    sourceRunId: entry.sourceRunId ?? null,
-    createdAt: entry.createdAt,
-    expiresAt: entry.expiresAt ?? null,
-  }));
+  for (const entry of entries) {
+    const value = {
+      workspaceId: entry.workspaceId,
+      fingerprint: entry.fingerprint,
+      content: entry.content,
+      sourceRunId: entry.sourceRunId ?? null,
+      createdAt: entry.createdAt,
+      expiresAt: entry.expiresAt ?? null,
+    };
+    const existing = store.db
+      .select({ id: reflectionMemory.id })
+      .from(reflectionMemory)
+      .where(
+        and(
+          eq(reflectionMemory.workspaceId, entry.workspaceId),
+          eq(reflectionMemory.fingerprint, entry.fingerprint),
+        ),
+      )
+      .get();
 
-  store.db.insert(reflectionMemory).values(values).onConflictDoNothing().run();
+    if (existing) {
+      store.db
+        .update(reflectionMemory)
+        .set({
+          content: value.content,
+          sourceRunId: value.sourceRunId,
+          createdAt: value.createdAt,
+          expiresAt: value.expiresAt,
+        })
+        .where(eq(reflectionMemory.id, existing.id))
+        .run();
+    } else {
+      store.db.insert(reflectionMemory).values(value).run();
+    }
+  }
 }
 
 export async function readReflectionMemory(
