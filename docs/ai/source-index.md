@@ -213,6 +213,23 @@ This file records verified external sources for repository AI-agent guidance, Ag
 - `next_review`: 2026-06-18
 - `update_trigger`: Re-check when adding Antigravity rules/workflows/skills, MCP setup guidance, or knowledge-memory assumptions.
 
+### models.dev model metadata catalog
+
+- Sources:
+  - <https://models.dev/>
+  - <https://github.com/anomalyco/models.dev>
+  - <https://opencode.ai/docs/providers/>
+  - <https://roocodeinc.github.io/Roo-Code/providers/openai-compatible>
+- Verified guidance:
+  - models.dev is an open-source (MIT) database of AI model specs/pricing/capabilities, maintained by the SST team and used internally by opencode. Data is stored as TOML and built to JSON.
+  - HTTP API: `https://models.dev/api.json` (provider + serving view, keyed `<providerId>` → `models.<modelId>`), `https://models.dev/models.json` (provider-agnostic model facts), `https://models.dev/catalog.json` (both), `https://models.dev/logos/{provider}.svg`. Model IDs match the AI SDK identifiers.
+  - Per-model fields include `name`, `family`, `attachment`, `reasoning`, `tool_call`, `structured_output`, `temperature`, `knowledge`, `release_date`, `last_updated`, `open_weights`, `license`, `links`, `weights`, `benchmarks`, `interleaved.field`, `cost.{input,output,reasoning,cache_read,cache_write,input_audio,output_audio}` (USD per **million** tokens), `limit.{context,input,output}`, `modalities.{input,output}`, and `status`. A stable search/web-search capability field was not verified in the current schema; treat search support as optional override-only until upstream documents it.
+  - Cross-provider docs checked in this pass show additional capabilities that AICR should normalize when available or explicitly overridden: OpenAI exposes model tools such as functions, web search, file search, and computer use; Claude exposes max input/output tokens, capabilities objects, extended/adaptive thinking, provider-specific IDs and prompt caching; Gemini exposes function calling, Google Search grounding, URL context, file search, code execution, computer use, Live/audio, and model lifecycle labels; DeepSeek exposes thinking modes, JSON output, tool calls, cache-hit/cache-miss pricing, FIM/chat-prefix beta flags, and deprecated model aliases; GLM exposes thinking modes, function call, context caching, structured output, 128K/96K limits, and text modality; Kimi exposes multimodal input, tool use, JSON/schema response formats, prompt cache keys, thinking retention, and high-speed variants.
+  - Tool compatibility for config translation: opencode resolves known providers from models.dev automatically but requires manual `models.<id>.limit`/`cost` for custom `@ai-sdk/openai-compatible` providers, and honors `OPENCODE_MODELS_PATH` to point at a local `api.json`. Roo Code and Kilo Code (a Roo/Cline fork) do NOT read models.dev; their OpenAI-compatible custom providers need manual model info (Context Window, Max Output Tokens, Image Support, Computer Use, Input/Output Price, prompt cache). Claude Code and Copilot CLI rely on their own built-in model catalogs.
+- `last_checked`: 2026-06-16
+- `next_review`: 2026-09-16
+- `update_trigger`: Re-check before changing the model-catalog fetch URL, the api.json field mapping into `ModelSpec`, the per-tool config-injection strategy, or the build-time fallback snapshot source.
+
 ## Repository decisions from this pass
 
 - Keep `AGENTS.md` as the only always-on canonical repository instruction file.

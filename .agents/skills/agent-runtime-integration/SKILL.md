@@ -23,11 +23,12 @@ Do not use this skill for VCS implementation details, output channel rendering, 
 ## Procedure
 
 1. **Read current contracts first**
-   - `../../../docs/ai/architecture.md` §3.6, §3.7, and §3.9.
+   - `../../../docs/ai/architecture.md` §3.6, §3.7, §3.9, and §3.13 (model metadata catalog).
    - `../../../Plan.md` §8.1 when roadmap status or remaining milestone scope matters.
    - `../../../packages/agents/src/types.ts` and the target adapter implementation.
    - `../../../packages/mcp-output/src/index.ts` for the authoritative AICR tool registry.
    - `../../../packages/core/src/prompt-manager.ts` for instruction and skill discovery rules.
+   - `../../../packages/core/src/config.ts` (`llm.model_catalog`) and `../../../packages/llm/src/model-catalog.ts` when model parameters/pricing are in scope.
 
 2. **Build one runtime bundle, not parallel configs**
    - Treat model config, MCP tools, instructions, skills, mounts, env vars, and manifest as one atomic materialization step.
@@ -53,6 +54,7 @@ Do not use this skill for VCS implementation details, output channel rendering, 
 5. **Translate adapter capabilities explicitly**
    - For each adapter, document and test whether it supports model config, MCP config, native skills, repo instruction files, isolated HOME, and stdout fallback.
    - If a capability is unsupported, degrade visibly in the manifest and tests instead of silently dropping it.
+   - Apply resolved model metadata (context window, max input/output tokens, pricing, structured output, temperature, streaming/logprobs, supported/unsupported request parameters, tool-call/vision/search/reasoning/interleaved-reasoning flags, and native tool capability list) from the model catalog (§3.13) per tool: opencode resolves known providers from models.dev natively, so only inject `models.<id>.limit`/`cost` for custom `@ai-sdk/openai-compatible` providers; export `OPENCODE_MODELS_PATH` only when AICR generates a run-local models.dev-compatible api.json, never point it at SQLite/Redis. Kilo Code and Roo Code never read models.dev, so always inject `contextWindow` / `maxTokens` / `supportsImages` / `supportsPromptCache` / `inputPrice` / `outputPrice`; Claude Code and Copilot CLI have no injection surface, so record N/A in the manifest.
 
 6. **Validate the runtime bundle**
    - Add adapter tests that assert generated file paths, file contents, env vars, and manifest entries.
@@ -69,3 +71,4 @@ Do not use this skill for VCS implementation details, output channel rendering, 
 - Do not accept summaries that claim actionable problems without `aicr.report_problem` records, or skip/summary prose that asks humans for diff/source context; trigger structured repair so locations and context requests remain machine-readable.
 - Do not treat MCP state `contextRequests` as passive metadata. Replay them through the VCS-backed `aicr.fetch_more_context` handler, feed fetched content into a follow-up pass, and clear stale `.aicr-output-state.json` before each agent run.
 - If an agent repair retry still cannot produce structured output, fall back to direct LLM repair; but when the prose explicitly says there are no actionable problems or no reviewable code, normalize to `aicr.skip` rather than publishing a generic fallback summary.
+- Do not double-inject model metadata when the target tool already resolves it from models.dev (opencode known providers), and do not fabricate values the catalog is missing: user-supplied `llm.providers[]` fields always win over catalog data, and missing fields stay unset rather than guessed.
