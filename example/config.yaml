@@ -32,6 +32,73 @@ llm:
     per_run_usd: 0.10
     per_repo_daily_usd: 1.0
 
+  # -------------------------------------------------------------------------
+  # Model metadata catalog (PLANNED — M10, not yet active)
+  # -------------------------------------------------------------------------
+  # Reads model parameters (context window, max input/output tokens,
+  # input/output/cache pricing, and tool-call / vision / search / reasoning flags) from
+  # models.dev so you do not have to hand-maintain them per provider. These
+  # values feed compression thresholds, llm.budget cost accounting, and the
+  # model config passed to external agent CLIs (Kilo, Roo, opencode, ...).
+  #
+  # The refresh cache is stored in storage.database (SQLite by default) as a
+  # keyed model_catalog table, with optional Redis as a structured cache backend via
+  # storage.cache. Per-model reads are point lookups — the full api.json is
+  # parsed only at refresh time and upserted row-by-row, never re-parsed on read.
+  #
+  # Resolution order when a model is needed:
+  #   1. keyed refresh cache (SQLite/Redis) — only fetches remote when
+  #      source-level refresh metadata is missing or older than refresh_interval_hours
+  #      (default 24h = daily); unknown models do not refetch repeatedly within
+  #      the interval;
+  #   2. on remote failure: the stale cached row;
+  #   3. last resort: the read-only snapshot bundled at build time from
+  #      github.com/anomalyco/models.dev (seeded into the selected backend on demand).
+  #
+  # User-supplied provider fields below always win over catalog metadata.
+  #
+  # model_catalog:
+  #   enabled: true
+  #   source_url: https://models.dev/api.json
+  #   refresh_interval_hours: 24                 # 0 disables periodic refresh
+  #   fetch_timeout_ms: 10000
+  #   offline: false                             # true = never hit the network
+  #   apply_to_model_spec: true                  # fill ModelSpec gaps from catalog
+  #   apply_to_agent_config: true                # inject metadata into agent CLIs
+  #   cache:
+  #     backend: sqlite                          # sqlite (default) | redis | memory (test/dev only)
+  #     # sqlite reuses storage.database (keyed model_catalog table, point lookups);
+  #     # redis reuses storage.cache.redis and requires storage.cache.kind: redis.
+  #     # The full api.json is parsed only on refresh and upserted row-by-row —
+  #     # per-model reads never re-parse it.
+  #     ttl_seconds: 86400                       # backend TTL for redis/memory
+  #   overrides:                                 # manual per-model overrides win
+  #     "my-llm/gpt-4o-mini":
+  #       catalog_id: openai/gpt-4o-mini         # explicit models.dev lookup id
+  #       context_window: 128000
+  #       max_input_tokens: 128000
+  #       max_output_tokens: 16384
+  #       supports_tool_call: true
+  #       supports_vision: true
+  #       supports_search: false                 # only set when your provider/catalog documents it
+  #       supports_structured_output: true
+  #       supports_temperature: true             # set false for models that reject temperature
+  #       supports_streaming: true
+  #       supports_logprobs: false
+  #       supported_reasoning_efforts: [low, medium, high]
+  #       default_reasoning_effort: medium
+  #       thinking_modes: [enabled, disabled]
+  #       native_tool_capabilities: [function_calling]
+  #       unsupported_request_parameters: [frequency_penalty, presence_penalty]
+  #       knowledge_cutoff: "2024-10"
+  #       model_status: stable
+  #
+  # To map a custom provider to a models.dev provider, add `catalog_provider`
+  # (or `catalog_id`) to the provider entry under llm.providers above, e.g.:
+  #     - id: my-llm
+  #       kind: openai_compatible
+  #       catalog_provider: openai
+
 # ---------------------------------------------------------------------------
 # Observability dashboard admin (optional)
 # ---------------------------------------------------------------------------
@@ -69,6 +136,8 @@ llm:
 #     kind: memory                    # memory | redis | none
 #     # redis:
 #     #   url_env: AICR_REDIS_URL     # reserved for future cross-process cache/session use
+#     # When llm.model_catalog.cache.backend: redis is used, storage.cache.kind
+#     # must be redis and this URL env must be configured.
 #   object:
 #     kind: filesystem                # filesystem | s3
 #     filesystem:

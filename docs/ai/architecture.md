@@ -309,6 +309,7 @@
   - `llm.retry`
   - `llm.budget`
   - `llm.per_provider_overrides`
+  - `llm.model_catalog`（计划中，M10；见 §3.13）
   - `queue.workers`
   - `queue.rate_limit`
   - `queue.retry`
@@ -459,6 +460,174 @@
   - memory 的写入边界由 extractor 的 fingerprint 保证幂等。
   - workspace 隔离已通过 `workspaceId` 列保证。
   - memory content 经过 secret scrubber 同样的脱敏规则。
+
+### 3.13 模型元数据 Catalog（models.dev）
+
+> 状态：**计划中（M10）**。本节是稳定设计合同，实现落地前以本节描述为准；
+> 落地后代码真源以 `packages/core/src/config.ts`、`packages/llm/src/model-catalog.ts`
+>（纯解析/归一化）、`packages/store` 的 model catalog repository、`packages/server`
+> bootstrap 编排与各 adapter 实现为准。
+
+#### 3.13.1 目标与职责
+
+- 为每个被使用的 provider+model 提供统一的**模型参数元数据**：上下文窗口、最大
+  输入/输出 token、输入/输出/缓存价格，以及是否支持工具调用、视觉/附件、搜索（若
+  上游 catalog 提供）、推理、结构化输出等能力。
+- 经过 GPT/OpenAI、Claude、Gemini、DeepSeek、GLM、Kimi 等主流模型能力面对照后，
+  元数据分两层：
+  - **运行时 ModelSpec 字段**：会影响压缩、预算、请求参数裁剪、agent 配置注入或输出解析。
+  - **Catalog/vendor metadata**：用于审计、告警、映射和 UI，不直接变成请求参数。
+- 元数据用于三个消费面：
+  1. **压缩与预算**：`compression` 用 `contextWindow` 计算触发阈值；`llm.budget`
+     与观测成本统计用真实价格替代当前 `gateway.ts` 里 `(tokens/1000)*0.002` 的
+     占位估算。
+  2. **ModelSpec 充实**：把元数据合并进 `ModelSpec`，让 `contextWindow`、
+     `supportsToolCall`、`supportsVision`、`supportsCachePrompt` 等字段无需用户
+     手填即可生效。
+  3. **Agent/CLI 配置转换**：把元数据正确写入外部 Agent CLI 的模型配置（见
+     §3.13.5），特别是那些**不会自己读取 models.dev、完全依赖用户配置**的自定义
+     provider 路径。
+- 数据来源是 models.dev 的 `https://models.dev/api.json`（provider+serving 视图）。
+  数据为非 secret 的公开元数据；fetch 只读、只解析 JSON，不执行远端内容。
+
+#### 3.13.2 缓存存储与三层回退顺序
+
+刷新缓存使用**结构化按键存储**，复用顶层 `storage` 命名空间（见 §3.10、决策 D28），
+**不在读路径上解析整份 `api.json`**：
+
+- **默认 SQLite 后端（按模型点查）**：store 新增 keyed 表 `model_catalog`，主键
+  `catalog_id` = `<provider>/<model>`，每个模型一行，存解析后的字段（`context`、
+  `input`、`output`、各项 `cost`、能力 flag、`modalities`、`source`、`fetched_at`、
+  `etag`），并用同一 SQLite 数据库记录每个 `source_url` 的上次整表刷新时间与 ETag。
+  复用 `storage.database`（`sqlite.path` 默认 `/app/data/aicr.sqlite`）。新增表与迁移
+  `003_model_catalog`（`packages/store/src/schema.ts`、`packages/store/src/database.ts`），
+  随 store 初始化自动运行。
+- **可选 Redis 后端**：`llm.model_catalog.cache.backend: redis` 时，使用
+  `storage.cache.redis` 作为结构化缓存后端，按 key（如
+  `aicr:model-catalog:<provider>/<model>`）存已解析结果，并用 source-level key 记录
+  上次刷新时间；必须在 `storage.cache.kind: redis` 且 `redis.url_env` 可解析时启用，
+  否则启动时显式报错。Redis 后端是派生缓存，不作为唯一历史统计存储。
+- **memory 后端仅用于测试/临时开发**：不满足跨进程持久化，不应作为生产默认。
+- **读路径是点查**：取某个 provider+model 参数是 SQLite 主键点查或 Redis `GET`。
+  整份 `api.json` 只在刷新时解析一次并逐行 upsert，绝不每次读都全量解析整份 JSON。
+
+远端访问按 `source_url` 的刷新元数据判定，而不是“某个模型未命中就无条件拉远端”，避免
+未知模型导致每次 lookup 都触发远端请求：
+
+1. **刷新（最新）**：从未成功刷新过，或上次整表刷新超过 `refresh_interval_hours`
+   （默认 24h = 每天一次，可配置）时，拉一次 `source_url`，解析后逐行 upsert 进后端并
+   更新 source-level 刷新元数据；周期内直接点查本地缓存，不访问远端。
+2. **过期本地行（其次）**：远端拉取失败时，先用本地后端中已有（可能过期）的模型行。
+3. **打包保底快照（最旧，只读）**：随构建产物发布的
+   `packages/llm/assets/model-catalog/models-dev.json`，每次打包从
+   `https://github.com/anomalyco/models.dev`（或其 `api.json`）拉取刷新并签入仓库，保证
+   离线/无网络构建也能发布保底数据。仅当本地后端缺该模型时**按需 seed 一次**进
+   `model_catalog` 后端；保底 JSON 可以在首次 seed 时解析一次，但不能在每次读时重复解析。
+
+全部未命中时保留用户在 config 里显式写的字段，**不臆造**缺失值。`offline: true` 时直接跳过
+远端，只用本地结构化缓存 + 打包保底快照。每条解析结果都标注来源
+（`override` / `cache` / `remote` / `bundled` / `config`），写入 run 快照便于观测和排障。
+
+`bootstrapServerApp` 当前只在 admin/dashboard 启用时初始化 store；M10 实现必须把 store
+初始化条件扩展为：admin auth、`llm.model_catalog` SQLite 后端、reflection memory 任何一个
+需要持久化时都应创建 `StoreDb`。模型解析顺序也必须调整为“初始化 catalog service → 解析并
+充实 primary / fallback / summarize `ModelSpec` → 创建 LLM gateway / runtime bundle”，避免
+当前 `resolveModelSpecFromConfig()` 早于 store 初始化而拿不到 catalog。
+
+#### 3.13.3 解析链（providerId + modelId → catalog 条目）
+
+models.dev 的 key 是 `<providerId>/<modelId>`（AI SDK 标识）。自定义 provider 通常
+不会与 models.dev 的 provider id 对齐，因此按以下顺序解析，**显式配置永远优先**：
+
+1. `llm.model_catalog.overrides["<providerId>/<modelId>"]`（手填覆盖，最高优先）。
+2. override / provider 上的显式 `catalog_id`。
+3. provider 配置了 `catalog_provider` 时用 `<catalog_provider>/<modelId>`。
+4. 直接用 `<providerId>/<modelId>`。
+5. 跨 provider 按 `<modelId>` 模糊匹配（最后兜底，命中多个时记录歧义告警）。
+6. 全部未命中：保留用户在 config 里显式写的字段，**不臆造**缺失值。
+
+#### 3.13.4 ModelSpec 充实与合并优先级
+
+- `ModelSpec`（`packages/llm/src/index.ts`）在现有 `contextWindow`、
+  `supportsToolCall`、`supportsVision`、`supportsCachePrompt` 基础上，新增可选字段：
+  `maxInputTokens`、`maxOutputTokens`、`costInputPerMTok`、`costOutputPerMTok`、
+  `costCacheReadPerMTok`、`costCacheWritePerMTok`、`costReasoningPerMTok`、
+  `costInputAudioPerMTok`、`costOutputAudioPerMTok`、`supportsReasoning`、
+  `supportedReasoningEfforts`、`defaultReasoningEffort`、`thinkingModes`、
+  `supportsInterleavedReasoning`、`interleavedReasoningField`、`supportsStructuredOutput`、
+  `supportsTemperature`、`supportsStreaming`、`supportsLogprobs`、`supportsAttachment`、
+  `supportsSearch`、`supportsComputerUse`、`nativeToolCapabilities`、
+  `supportedRequestParameters`、`unsupportedRequestParameters`、`inputModalities`、
+  `outputModalities`、`catalogSource`。
+- models.dev → ModelSpec 映射：`limit.context`→`contextWindow`，
+  `limit.input`→`maxInputTokens`，`limit.output`→`maxOutputTokens`，
+  `tool_call`→`supportsToolCall`，
+  `attachment`（或 `modalities.input` 含 `image`）→`supportsVision`，
+  `attachment`→`supportsAttachment`，`structured_output`→`supportsStructuredOutput`，
+  `temperature`→`supportsTemperature`，`reasoning`→`supportsReasoning`，
+  `interleaved`→`supportsInterleavedReasoning` 与 `interleavedReasoningField`，
+  `cost.cache_read`/`cache_write` 存在→`supportsCachePrompt`，
+  `cost.input_audio`/`output_audio`→对应 audio 成本字段，`search` / `web_search`（若上游
+  schema 提供）→`supportsSearch`，`cost.*`（每百万 token USD）→对应 `cost*PerMTok`。
+  当前已核验的 models.dev schema 未保证搜索字段存在；缺失时只允许用户通过 overrides
+  显式补充。
+- 主流模型额外能力映射：OpenAI/Gemini 的 web/file search、URL context、code execution、
+  computer use 等归入 `nativeToolCapabilities`（如 `"web_search"`、`"file_search"`、
+  `"url_context"`、`"code_execution"`、`"computer_use"`）；Claude/GLM/Kimi/DeepSeek 的
+  thinking/effort/mode/`reasoning_content`/`reasoning_details` 等归入 reasoning、
+  `supportedReasoningEfforts`、`defaultReasoningEffort`、`thinkingModes` 与 interleaved 字段；
+  DeepSeek/Kimi 的 `response_format`、OpenAI structured outputs、Gemini structured outputs 归入
+  `supportsStructuredOutput`；DeepSeek 的 `logprobs` / `top_logprobs` 归入 logprob 与
+  request-parameter support；Kimi 的 `prompt_cache_key`、DeepSeek 的 cache hit/miss 价格与
+  GLM context caching 归入 cache 能力和 cost 字段。provider 文档中明确废弃或不支持的参数
+  （如某些 penalty 参数）必须进入 `unsupportedRequestParameters` / `dropParams`，避免 adapter
+  继续发送。
+- Catalog/vendor metadata（不直接写进请求参数）：`catalogId`、`displayName`、`family`、
+  `knowledgeCutoff`、`trainingCutoff`（若 provider 明确区分）、`releaseDate`、`lastUpdated`、
+  `modelStatus`（`stable`/`preview`/`experimental`/`alpha`/`beta`/`deprecated`/`shutdown`）、
+  `openWeights`、`license`、`modelLinks`、`providerDisplayName`、`providerNpmPackage`、
+  `providerEnvVars`、`providerApiBaseUrl`、`providerDocsUrl`、`providerModelAliases`、
+  `providerModelIds`（如 Claude API / Bedrock / Vertex / Foundry ID）、`apiProtocol` /
+  `preferredEndpoint`（如 OpenAI Responses、Anthropic Messages、Gemini GenerateContent、
+  OpenAI-compatible chat completions）、`latencyClass`、`priorityTierSupported`、
+  `rateLimitTier`、`concurrencyLimit`、`throughputHintTokensPerSecond`。
+  这些字段用于选择/告警/映射和 dashboard，不应让 adapter 自动发送给 LLM API。
+- 合并优先级：**用户在 `llm.providers[]` / `overrides` 里显式写的字段 > catalog
+  元数据**。catalog 只填补缺口，用户随时可覆盖。
+
+#### 3.13.5 各 Agent/CLI 的配置转换（关键）
+
+不同外部 Agent CLI 对 models.dev 的支持不同，转换策略必须按工具区分，避免“工具本身
+能读 models.dev 时重复注入”或“工具不读 models.dev 时漏注入”：
+
+| Adapter | 是否原生读 models.dev | 转换策略 |
+| --- | --- | --- |
+| **opencode** | 已知 provider 走 models.dev 自动解析；**自定义 `@ai-sdk/openai-compatible` provider 不自动解析** | 自定义 provider 注入 `models.<id>.limit.context`、`limit.output`、`cost.{input,output,cache_read,cache_write}`、`name`；如确需 `OPENCODE_MODELS_PATH`，只能指向 run `agent/` 目录下由 AICR 生成的 models.dev-compatible 小型 `api.json`，不能指向 SQLite/Redis 刷新缓存。命中 models.dev 已知 provider 时跳过注入。 |
+| **Kilo Code** | 否（Cline/Roo 衍生） | OpenAI-compatible 自定义 provider 注入模型参数：`contextWindow`、`maxTokens`（输出上限）、`supportsImages`（视觉）、`supportsComputerUse`、`supportsPromptCache`、`inputPrice`、`outputPrice`、`cacheReadsPrice`、`cacheWritesPrice`。 |
+| **Roo Code** | 否 | `.roo/settings.json` 的 `apiConfiguration.openAiCustomModelInfo` 注入 `contextWindow`、`maxTokens`、`supportsImages`、`supportsComputerUse`、`supportsPromptCache`、`inputPrice`、`outputPrice`。 |
+| **Claude Code** | 否（依赖内置 Anthropic 目录 + 环境变量） | 无 file 级模型元数据面；有 `maxOutputTokens` 时设置 `ANTHROPIC_MAX_TOKENS`，上下文窗口/价格依赖 Anthropic 内置目录。能力缺失时在 manifest 显式降级。 |
+| **Copilot CLI** | 否（Copilot 订阅固定目录） | 模型目录由 Copilot 订阅固定，无注入面；记为 N/A 并在 manifest 标注。 |
+
+- 注入只在**自定义/未被工具原生解析**的 provider 路径发生；工具能自己从 models.dev
+  解析时跳过，避免双写冲突。
+- runtime bundle manifest（§3.6.3）记录每个模型“哪些参数被注入、哪些委托给工具
+  原生目录”，能力不支持时显式降级而不是静默丢弃。
+
+#### 3.13.6 配置、观测与安全
+
+- 配置 schema：`llm.model_catalog`（`enabled`、`source_url`、`refresh_interval_hours`、
+  `fetch_timeout_ms`、`offline`、`apply_to_model_spec`、`apply_to_agent_config`、
+  `cache`、`overrides`）与每个 `llm.providers[]` 上可选的 `catalog_provider` /
+  `catalog_id`。`cache.backend`（`sqlite` 默认 | `redis` | `memory`）选择结构化刷新缓存
+  后端：`sqlite` 复用 `storage.database`（keyed `model_catalog` 表，按模型点查），
+  `redis` 复用 `storage.cache.redis` 并要求 `storage.cache.kind: redis`，`memory` 仅适合
+  测试/临时开发；`cache.ttl_seconds` 只控制 redis/memory 过期策略，不替代
+  `refresh_interval_hours`。不引入单独的 JSON 缓存文件路径。详见 §3.10 与
+  `packages/core/src/config.ts`。
+- 观测：`llmUsage` 与 `runs/<run_id>/run.json` 记录解析到的价格与 `catalogSource`，
+  让 Dashboard 成本统计基于真实价格而非固定估算；catalog 刷新失败回退时记录告警。
+- 安全：fetch 只取公开元数据，不含 secret；遵守全局 `http_proxy`；缓存写在
+  `storage.database` / `storage.cache`，不写进只读 source/agent 挂载；解析前校验 JSON 结构。
 
 ## 4. 默认评审 Prompt 合同
 

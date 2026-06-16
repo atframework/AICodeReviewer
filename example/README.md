@@ -38,6 +38,39 @@ node packages/cli/dist/index.js serve \
   --port 8080
 ```
 
+## Model metadata catalog (planned — M10)
+
+AICR is planned to read model parameters (context window, max output tokens,
+input/output/cache pricing, and tool-call / vision / search / reasoning capability
+flags) from [models.dev](https://models.dev/) so you do not have to maintain
+them by hand. See the commented `llm.model_catalog` block in
+[config.yaml](config.yaml) for the full schema and `docs/ai/architecture.md`
+§3.13 for the contract.
+
+How the lookup behaves once active:
+
+- The refresh cache is stored in `storage.database` (SQLite by default) as a
+  keyed `model_catalog` table, with optional Redis as a structured backend via
+  `storage.cache`. Per-model reads are point lookups — the full `api.json` is
+  parsed only at refresh time and upserted row by row, never re-parsed on each
+  read.
+- It only fetches `api.json` from the network when source-level refresh metadata
+  is missing or older than `refresh_interval_hours` (default `24` = once per day);
+  unknown model IDs do not trigger repeated remote fetches within the interval.
+- On a failed fetch it falls back to the stale cached row, then to a read-only
+  snapshot bundled at build time from `github.com/anomalyco/models.dev` (seeded
+  into the cache on demand).
+- The resolved metadata fills compression thresholds, `llm.budget` cost
+  accounting, and the model config handed to agent CLIs. Values you set on
+  `llm.providers[]` always win over catalog data.
+
+Per-tool config translation differs by agent: opencode resolves known
+providers from models.dev natively (custom OpenAI-compatible providers get
+`limit`/`cost` injected, and any `OPENCODE_MODELS_PATH` must point to a
+run-local generated api.json, not SQLite/Redis); Kilo Code and Roo Code always need
+`contextWindow` / `maxTokens` / `supportsImages` / pricing injected; Claude
+Code and Copilot CLI use their own built-in catalogs and get no injection.
+
 ## Runtime Image Baseline
 
 The deployment image intentionally uses `ubuntu:24.04` as the distro base and
