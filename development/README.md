@@ -165,7 +165,7 @@ curl -sf https://aicr.x-ha.com:6023/healthz
 - 远程服务器：内网ip `10.0.4.9` , 公网ip: `42.192.55.130`（公网域名 `aicr.x-ha.com`）
 - SSH 用户：通过 `yq '.deploy."aicr.w-oa.com:6023".ssh.user' development/secret/secret.yaml` 提取
 - SSH 端口：通过 `yq '.deploy."aicr.w-oa.com:6023".ssh.port' development/secret/secret.yaml` 提取
-- SSH key：通过 `yq '.deploy."aicr.w-oa.com:6023".ssh.key_file' development/secret/secret.yaml` 提取文件名
+- SSH key：通过 `yq '.deploy."aicr.w-oa.com:6023".ssh.key_file' development/secret/secret.yaml` 提取文件名（该值是远程主机路径；本地部署用同名私钥的本地镜像副本）
 - **部署目录**：`/home/tools/AICodeReviewer`
 - 容器引擎：Podman
 - 反向代理：`https://aicr.x-ha.com:6023` → `http://10.0.4.9:8090`
@@ -259,16 +259,24 @@ ssh -p 36000 -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no \
   -o User=tools -i D:/workspace/keys/id_ed25519.it 10.64.8.2
 ```
 
-标准 SSH 选项（公网）：
+标准 SSH 选项（公网，连接参数全部从 `development/secret/secret.yaml` 提取，不硬编码 key 路径）：
 
 ```bash
-ssh -p 36000 -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no \
-  -o User=tools -i D:/workspace/keys/id_ed25519.it aicr.x-ha.com
+SSH_HOST="$(yq -r '.deploy."aicr.w-oa.com:6023".ssh.host' development/secret/secret.yaml)"  # aicr.x-ha.com
+SSH_PORT="$(yq -r '.deploy."aicr.w-oa.com:6023".ssh.port' development/secret/secret.yaml)"  # 36000
+SSH_USER="$(yq -r '.deploy."aicr.w-oa.com:6023".ssh.user' development/secret/secret.yaml)"  # tools
+# ssh.key_file 是远程主机上的路径（如 /home/tools/.ssh/<key>）；本机需把同名私钥镜像到本地后，用本地路径作为 -i
+SSH_KEY="$(yq -r '.deploy."aicr.w-oa.com:6023".ssh.key_file' development/secret/secret.yaml)"
+
+ssh -p "$SSH_PORT" -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no \
+  -o User="$SSH_USER" -i "$SSH_KEY" "$SSH_HOST"
 ```
+
+> `ssh.key_file` 指向的是**远程主机上的路径**，从 Windows 本地部署时该路径不存在；需先把同名私钥镜像到本机本地 SSH 密钥目录（本地副本 basename 与远程一致，例如 `…/Keys/home/<key 文件名>`），再用本地路径作为 `-i`。不要继续使用工作区的 `id_ed25519` 或 `id_ed25519.it`——`id_ed25519` 会被公网服务器拒绝。
 
 ### 7.4 部署常见陷阱
 
-- **SSH key 选择**：必须使用 `id_ed25519.it`，不能用 `id_ed25519`（后者会被公网服务器拒绝）。
+- **SSH key 选择**：以 `development/secret/secret.yaml` 的 `.deploy."aicr.w-oa.com:6023".ssh.key_file` 为准，提取文件名并用本地镜像副本作为 `-i`。不要用工作区的 `id_ed25519`（会被公网服务器拒绝）。若认证返回 `Permission denied (publickey)`，说明所选公钥尚未加入公网机 `~/.ssh/authorized_keys`，需先从已可登录的主机把该公钥追加进去。
 - **`.env` 文件编码**：Windows PowerShell 5.1 的 `>` 重定向和 `Out-File` 默认 UTF-16 LE，远程容器无法读取。使用 `scp` 传输或远端 `printf` 写入。`deploy.sh` 会在启动前自动检测 UTF-16 编码并报错。
 - **Config-only 变更只需重启**：`config.yaml` 和 `.env` 通过 volume 挂载到容器，修改后执行 `podman restart aicr` 即可；只有代码变更才需要 `deploy.sh` 完整重建。
 - **Admin session TTL**：`adminAuthSchema` 使用 `session_ttl_seconds`（默认 28800 = 8 小时），不是 `session_ttl_minutes`。设置 `minutes` 字段会被静默忽略。
@@ -284,6 +292,13 @@ ssh -p 36000 -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no \
   `DOCKER_DOWNLOAD_MIRROR`。如果目标机没有统一配置容器 registry mirror，
   再按需覆盖 `NODE_IMAGE`。Helm/yq 如果无法直连官方源，使用内部缓存
   覆盖 `HELM_APT_REPO`、`HELM_APT_KEY_URL`、`YQ_DOWNLOAD_BASE`。
+- **公网机构建代理（loopback + host 网络）**：公网机 `10.0.4.9` 上 `*:3128` 是 Podman `rootlessport` 转发。`deploy.sh` 的构建代理自动探测会把它当成 HTTP 代理，并把 `HTTP_PROXY=http://10.0.4.9:3128` 注入构建容器；但该地址从 bridge 构建网络命名空间不可达，导致 `apt-get` 报 `Connection refused`、`ca-certificates has no installation candidate`。同时 Perforce APT 等下载在 bridge 直连时容易卡死（本机直连可达、容器内挂起，日志停在 `Get: … package.perforce.com … p4-cli` 无增长）。正确做法：构建时显式用 loopback 代理 + host 网络，让构建容器经 `127.0.0.1:3128` 取包——
+  ```bash
+  HTTP_PROXY=http://127.0.0.1:3128 HTTPS_PROXY=http://127.0.0.1:3128 \
+  NO_PROXY=127.0.0.1,localhost,::1,10.0.4.9 \
+  AICR_DEPLOY_DIR=/home/tools/AICodeReviewer bash deploy.sh
+  ```
+  `deploy.sh` 检测到 loopback 代理会自动加 `--network=host`，使构建容器能访问宿主 loopback 上的代理。镜像内的运行时容器不需要该代理，故 `NO_PROXY` 必须包含 `127.0.0.1,localhost`，否则 `deploy.sh` 末尾的 `curl /healthz` 健康检查会误走代理。若想完全不走代理（仅当本机直连所有源都稳定时），需用一份把代理自动探测块（`if [ -z "$BUILD_HTTP_PROXY" ] && [ -z "$BUILD_HTTPS_PROXY" ]; then`）改为 `if false; then` 的 `deploy.sh` 副本构建。
 
 ## 8. 测试验收环境（与生产隔离）
 
