@@ -84,9 +84,11 @@ export function createClaudeCodeAdapter(options: ClaudeCodeAdapterOptions = {}):
 				envVars.ANTHROPIC_BETA = model.anthropicBeta.join(",");
 			}
 
-			if (model.extraParams?.max_tokens !== undefined) {
-				envVars.ANTHROPIC_MAX_TOKENS = String(model.extraParams.max_tokens);
-			}
+		if (model.extraParams?.max_tokens !== undefined) {
+			envVars.ANTHROPIC_MAX_TOKENS = String(model.extraParams.max_tokens);
+		} else if (model.maxOutputTokens !== undefined) {
+			envVars.ANTHROPIC_MAX_TOKENS = String(model.maxOutputTokens);
+		}
 
 			if (model.thinking?.enabled && model.thinking.budgetTokens !== undefined) {
 				envVars.ANTHROPIC_THINKING_BUDGET_TOKENS = String(model.thinking.budgetTokens);

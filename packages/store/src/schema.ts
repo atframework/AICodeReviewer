@@ -133,3 +133,18 @@ export const reflectionMemory = sqliteTable("reflection_memory", {
   createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
   expiresAt: integer("expires_at", { mode: "timestamp_ms" }),
 });
+
+export const modelCatalog = sqliteTable("model_catalog", {
+  catalogId: text("catalog_id").primaryKey(),
+  providerId: text("provider_id").notNull(),
+  modelId: text("model_id").notNull(),
+  data: text("data").notNull(),
+  source: text("source"),
+  fetchedAt: integer("fetched_at", { mode: "timestamp_ms" }).notNull(),
+});
+
+export const modelCatalogSource = sqliteTable("model_catalog_source", {
+  sourceUrl: text("source_url").primaryKey(),
+  lastRefreshedAt: integer("last_refreshed_at", { mode: "timestamp_ms" }).notNull(),
+  etag: text("etag"),
+});

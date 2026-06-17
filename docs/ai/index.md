@@ -57,7 +57,7 @@
 | M9 | 基本完成 | `milestones/M9.md` |
 | M6 | 部分完成 | 先看 `../../Plan.md` |
 | M7 | 已完成 | `milestones/M7.md` |
-| M10 | 规划中 | 先看 `../../Plan.md` §3.13、§8.2 与 `architecture.md` §3.13 |
+| M10 | 基本完成 | 先看 `../../Plan.md` §3.13、§8.2 与 `architecture.md` §3.13 |
 
 ## 维护规则
 

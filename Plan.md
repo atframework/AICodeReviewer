@@ -24,10 +24,13 @@
 - 所有包均已补齐 `test/index.test.ts` barrel export 测试（AGENTS.md pitfall #10）。
 - 本轮已完成文档收束：已完成阶段与稳定细节已搬离 `Plan.md`，未来 agent 应按需读文档，
   而不是默认吞下整份历史记录。
-- M10（模型元数据 Catalog / models.dev 集成）已进入规划：统一获取上下文窗口、输入/输出
-  token 上限、价格与视觉/搜索/工具调用等能力，支持 SQLite 默认结构化缓存 + Redis 可选
-  后端 + 定时刷新 + 打包保底回退，并在 agent 配置转换时
-  按工具是否原生读 models.dev 决定是否注入参数。详见 §3.13、`docs/ai/architecture.md` §3.13。
+- M10（模型元数据 Catalog / models.dev 集成）已基本交付：config schema、store
+  keyed 表 `model_catalog` + 迁移 `003_model_catalog`、纯解析/归一化模块、catalog
+  service（刷新周期 + 三层回退 + 打包保底 seed）、bootstrap 编排（store 初始化条件
+  扩展到 admin/catalog-sqlite/reflection，并在 gateway 之前充实 ModelSpec）、
+  gateway 用 catalog 真实价格替换固定估算、Kilo/Roo/opencode/Claude Code 注入 +
+  manifest 降级标注、打包保底快照 + 构建期刷新脚本。SQLite 与 memory 后端可用；
+  Redis 结构化后端为预留项，当前显式拒绝。详见 §3.13、`docs/ai/architecture.md` §3.13。
 
 ### 1.3 文档地图
 
@@ -224,7 +227,7 @@
 
 ### 3.13 模型元数据 Catalog（models.dev）
 
-- 状态：**计划中（M10）**。统一为每个 provider+model 提供上下文窗口、最大输入/输出
+- 状态：**基本完成（M10）**。统一为每个 provider+model 提供上下文窗口、最大输入/输出
   token、输入/输出/缓存价格，以及是否支持工具调用、视觉/附件、搜索、推理等能力。
 - 数据源是 models.dev `https://models.dev/api.json`，分三层读取：
   - **刷新缓存**（最新、可写）：默认存 SQLite（store keyed 表 `model_catalog`，按模型点查，
@@ -302,7 +305,7 @@
 | M7 | 已完成 | `docs/ai/milestones/M7.md` | thorough mode、跨 workspace 知识迁移 → Backlog |
 | M8 | 大部分完成 | `docs/ai/milestones/M8.md` | CI eval 集成移至 Backlog |
 | M9 | 基本完成 | `docs/ai/milestones/M9.md` | 版本 tag（用户决策） |
-| M10 | 规划中 | 模型元数据 Catalog（models.dev），见 §3.13、`docs/ai/architecture.md` §3.13 | 见 §8.2 执行包 |
+| M10 | 基本完成 | 模型元数据 Catalog（models.dev），见 §3.13、`docs/ai/architecture.md` §3.13 | Redis 结构化缓存后端预留实现 |
 
 ### 8.2 当前执行包
 
@@ -323,23 +326,24 @@
     - ~~reflection memory 存储与检索~~（已交付：store schema + migration + read/write/compact + tests）
     - ~~memory/reflection 写入与 review 流程集成~~（已交付：memoryHintsResolver + postRunCallback + reflection-extractor + tests）
     - ~~reflection 提取逻辑~~（已交付：light mode per-category/file-type/summary 提取）
-6. **M10：模型元数据 Catalog（models.dev）集成**（规划中）
-    - `packages/core/src/config.ts` 新增 `llm.model_catalog` schema（含 `cache.backend`：`sqlite` 默认 / `redis` / `memory`，复用 `storage`）与 `llm.providers[].catalog_provider`/`catalog_id`，并补 `config.test.ts`；`redis` 后端必须要求 `storage.cache.kind: redis` 与 `redis.url_env`。
-    - `packages/store` 新增 keyed 表 `model_catalog`（主键 `<provider>/<model>`）和 source-level 刷新元数据表/行，与迁移 `003_model_catalog`，提供按模型点查 + 逐行 upsert + 刷新时间记录的读写 API；补 `schema.test.ts`。
-    - `packages/llm` 新增 `model-catalog.ts` 作为纯解析/归一化模块：解析 models.dev `api.json` 为逐模型记录、实现字段映射与解析链，不直接依赖 `@aicr/store`，避免包边界反向耦合；补解析单测。
-    - `packages/server` bootstrap 新增 catalog service 编排：在 admin、reflection 或 `llm.model_catalog` SQLite 后端需要持久化时初始化 `StoreDb`；按“初始化 catalog service → 充实 primary/fallback/summarize `ModelSpec` → 创建 LLM gateway/runtime bundle”的顺序执行；补 bootstrap 测试覆盖无 admin 但 catalog 启用的场景。
-    - catalog service 实现刷新周期与三层回退（过期本地行 → 打包保底 seed）；读路径按模型点查（SQLite 默认 / Redis 结构化后端 / memory 临时后端），不全量解析 JSON；补单测覆盖回退顺序、offline 模式与未知模型不反复远端请求。
-    - 打包保底快照：新增构建期拉取脚本（从 `anomalyco/models.dev` 刷新 `packages/llm/assets/model-catalog/models-dev.json`），签入仓库快照，`deploy/Dockerfile` 随 dist 一起发布。
-    - `ModelSpec` 新增 `maxInputTokens`、`maxOutputTokens`、`cost*PerMTok`（含 cache/reasoning/audio）、`supportsReasoning`、`supportedReasoningEfforts`、`defaultReasoningEffort`、`thinkingModes`、`supportsInterleavedReasoning`、`interleavedReasoningField`、`supportsStructuredOutput`、`supportsTemperature`、`supportsStreaming`、`supportsLogprobs`、`supportsAttachment`、`supportsSearch`、`supportsComputerUse`、`nativeToolCapabilities`、`supportedRequestParameters`/`unsupportedRequestParameters`、`inputModalities`/`outputModalities`、`catalogSource`；bootstrap 把 catalog 元数据合并进 ModelSpec（用户显式配置优先）。
-    - catalog/vendor metadata 保留 `catalogId`、`displayName`、`family`、`knowledgeCutoff`、`trainingCutoff`、`releaseDate`、`lastUpdated`、`modelStatus`、`openWeights`、`license`、`providerNpmPackage`、`providerEnvVars`、`providerApiBaseUrl`、`providerModelAliases`、`providerModelIds`、`apiProtocol`/`preferredEndpoint`、`latencyClass`、`priorityTierSupported`、`rateLimitTier`、`concurrencyLimit`、`throughputHintTokensPerSecond` 等非请求字段，用于映射、告警、dashboard 和审计，不直接发送给模型 API。
-    - `gateway.ts` 用解析到的价格替换固定 `estimateCost`，对接 `llm.budget` 与 `llmUsage` 成本统计；价格缺失时安全降级。
-    - Agent adapter 注入：opencode 自定义 provider 注入 `limit`/`cost`（如需 `OPENCODE_MODELS_PATH`，生成 run-local 小型 api.json），Kilo/Roo 注入 `contextWindow`/`maxTokens`/`supportsImages`/价格，Claude Code/Copilot CLI 记为无注入面并在 manifest 降级；补 adapter 测试与 manifest 断言。
-    - 同步 `example/config.yaml`、`example/README.md`、`docs/ai/decisions.md`（D31）、`docs/ai/source-index.md` 与 `.agents/skills/agent-runtime-integration/SKILL.md`。
+6. **M10：模型元数据 Catalog（models.dev）集成**（基本完成，Redis 结构化缓存后端预留）
+    - ~~`packages/core/src/config.ts` 新增 `llm.model_catalog` schema~~（已交付：含 `cache.backend`：`sqlite` 默认 / `redis` / `memory`，复用 `storage`；`llm.providers[].catalog_provider`/`catalog_id`；`redis` 跨字段 superRefine 要求 `storage.cache.kind: redis` 与 `redis.url_env`；config.test.ts 覆盖）
+    - ~~`packages/store` keyed 表 `model_catalog`~~（已交付：主键 `catalog_id` + `provider_id`/`model_id` 列支持模糊匹配 + source-level 刷新元数据表 + 迁移 `003_model_catalog` + 点查/逐行 upsert/刷新时间/模糊匹配 API + schema/repo 测试）
+    - ~~`packages/llm/src/model-catalog.ts` 纯解析/归一化模块~~（已交付：解析 models.dev `api.json`、解析链、ModelSpec 字段映射，不依赖 `@aicr/store`；解析单测）
+    - ~~bootstrap catalog service 编排~~（已交付：admin/catalog-sqlite/reflection 任一需要持久化即初始化 StoreDb；“初始化 catalog → 充实 primary/fallback/summarize ModelSpec → 创建 gateway”；bootstrap 测试覆盖无 admin 但 catalog 启用、memory 不初始化 store、redis 显式拒绝）
+    - ~~catalog service 刷新周期与三层回退~~（已交付：source-level 间隔刷新、过期本地行、打包保底 seed；单测覆盖回退顺序/offline/未知模型不反复远端请求）
+    - ~~打包保底快照~~（已交付：`packages/llm/scripts/refresh-model-catalog.mjs` 从 `models.dev/api.json` 刷新 `packages/llm/assets/model-catalog/models-dev.json` 签入；`deploy/Dockerfile` 随 dist 发布 assets）
+    - ~~`ModelSpec` 扩充~~（已交付：全部计划字段，含 `maxInputTokens`/`maxOutputTokens`/`cost*PerMTok`/能力 flag/`nativeToolCapabilities`/`supportedRequestParameters`/`catalogSource` 等；用户显式配置优先合并）
+    - ~~`gateway.ts` 真实价格~~（已交付：`estimateCost` 按 input/output per-MTok 计费，fallback 模型经 `modelPricing` map 注入，价格缺失回退旧固定估算）
+    - ~~Agent adapter 注入 + manifest 降级~~（已交付：opencode 自定义 provider 注入 `limit`/`cost`、Kilo/Roo 注入 `contextWindow`/`maxTokens`/`supportsImages`/价格、Claude Code 由 `maxOutputTokens` 派生 `ANTHROPIC_MAX_TOKENS`、Copilot CLI 记 N/A；runtime-bundle manifest 记录 `catalogSource` + `metadataInjection: injected/delegated/not_applicable`；adapter + manifest 测试）
+    - ~~文档同步~~（已交付：example/config.yaml、example/README.md、decisions.md D31、source-index.md、agent-runtime-integration SKILL.md、本计划）
+    - Redis 结构化缓存后端：预留字段已校验，运行时显式拒绝（`not yet implemented`），待引入 Redis 客户端依赖后落地 → **Backlog**
 
 ### 8.3 Backlog（低优先级延后项）
 
 | 项                         | 来源里程碑 | 说明                                                           |
 | -------------------------- | ---------- | -------------------------------------------------------------- |
+| Model catalog Redis backend| M10        | `llm.model_catalog.cache.backend: redis` 预留；需引入 Redis 客户端，当前显式拒绝 |
 | HTTP/SSE MCP transport     | M5         | `@aicr/mcp-output` 仅支持 stdio；需调研 MCP SDK HTTP transport |
 | GitLab 真实仓库 e2e        | M6         | 代码已实现，待真实 GitLab 环境                                 |
 | SVN VCS adapter            | M6         | config schema 已预留，待实现                                   |

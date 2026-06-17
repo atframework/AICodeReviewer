@@ -28,7 +28,7 @@ Do not use this skill for VCS implementation details, output channel rendering, 
    - `../../../packages/agents/src/types.ts` and the target adapter implementation.
    - `../../../packages/mcp-output/src/index.ts` for the authoritative AICR tool registry.
    - `../../../packages/core/src/prompt-manager.ts` for instruction and skill discovery rules.
-   - `../../../packages/core/src/config.ts` (`llm.model_catalog`) and `../../../packages/llm/src/model-catalog.ts` when model parameters/pricing are in scope.
+   - `../../../packages/core/src/config.ts` (`llm.model_catalog`), `../../../packages/llm/src/model-catalog.ts` (parser/normalizer), `../../../packages/server/src/model-catalog-service.ts` (refresh/fallback/enrichment), and `../../../packages/agents/src/model-metadata.ts` (per-adapter injection) when model parameters/pricing are in scope.
 
 2. **Build one runtime bundle, not parallel configs**
    - Treat model config, MCP tools, instructions, skills, mounts, env vars, and manifest as one atomic materialization step.
@@ -54,7 +54,12 @@ Do not use this skill for VCS implementation details, output channel rendering, 
 5. **Translate adapter capabilities explicitly**
    - For each adapter, document and test whether it supports model config, MCP config, native skills, repo instruction files, isolated HOME, and stdout fallback.
    - If a capability is unsupported, degrade visibly in the manifest and tests instead of silently dropping it.
-   - Apply resolved model metadata (context window, max input/output tokens, pricing, structured output, temperature, streaming/logprobs, supported/unsupported request parameters, tool-call/vision/search/reasoning/interleaved-reasoning flags, and native tool capability list) from the model catalog (§3.13) per tool: opencode resolves known providers from models.dev natively, so only inject `models.<id>.limit`/`cost` for custom `@ai-sdk/openai-compatible` providers; export `OPENCODE_MODELS_PATH` only when AICR generates a run-local models.dev-compatible api.json, never point it at SQLite/Redis. Kilo Code and Roo Code never read models.dev, so always inject `contextWindow` / `maxTokens` / `supportsImages` / `supportsPromptCache` / `inputPrice` / `outputPrice`; Claude Code and Copilot CLI have no injection surface, so record N/A in the manifest.
+   - Apply resolved model metadata from the model catalog (§3.13) per tool. The shared builders live in `packages/agents/src/model-metadata.ts`; each adapter's `materializeConfig` calls the right one, and `materializeRuntimeBundle` records `manifest.model.metadataInjection` (`injected` / `delegated` / `not_applicable`) plus `catalogSource`:
+     - **opencode** resolves known providers from models.dev natively, so only inject `models.<id>.limit`/`cost` for custom `@ai-sdk/openai-compatible` / `ollama` providers (via `buildOpencodeModelEntry`). Known providers (`anthropic`, `google_ai_studio`, …) get no `models` block.
+     - **Kilo Code** and **Roo Code** never read models.dev, so always inject `contextWindow` / `maxTokens` / `supportsImages` / `supportsComputerUse` / `supportsPromptCache` / `inputPrice` / `outputPrice` (Kilo also `cacheReadsPrice` / `cacheWritesPrice`) via `buildKiloModelInfo` / `buildRooCustomModelInfo`.
+     - **Claude Code** derives `ANTHROPIC_MAX_TOKENS` from `model.maxOutputTokens` (explicit `extraParams.max_tokens` wins); the rest is delegated to its built-in Anthropic catalog.
+     - **Copilot CLI** has no injection surface → `not_applicable`.
+   - Price values injected into Kilo/Roo/opencode are USD per 1M tokens (the models.dev native unit); keep them consistent across tools.
 
 6. **Validate the runtime bundle**
    - Add adapter tests that assert generated file paths, file contents, env vars, and manifest entries.

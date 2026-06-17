@@ -38,38 +38,45 @@ node packages/cli/dist/index.js serve \
   --port 8080
 ```
 
-## Model metadata catalog (planned — M10)
+## Model metadata catalog (M10 — available, opt-in)
 
-AICR is planned to read model parameters (context window, max output tokens,
-input/output/cache pricing, and tool-call / vision / search / reasoning capability
-flags) from [models.dev](https://models.dev/) so you do not have to maintain
-them by hand. See the commented `llm.model_catalog` block in
-[config.yaml](config.yaml) for the full schema and `docs/ai/architecture.md`
-§3.13 for the contract.
+AICR reads model parameters (context window, max output tokens, input/output/cache
+pricing, and tool-call / vision / reasoning / structured-output capability flags)
+from [models.dev](https://models.dev/) so you do not have to maintain them by hand.
+It is disabled by default; enable it with `llm.model_catalog.enabled: true`. See
+the commented `llm.model_catalog` block in [config.yaml](config.yaml) for the full
+schema and `docs/ai/architecture.md` §3.13 for the contract.
 
-How the lookup behaves once active:
+How the lookup behaves:
 
 - The refresh cache is stored in `storage.database` (SQLite by default) as a
-  keyed `model_catalog` table, with optional Redis as a structured backend via
-  `storage.cache`. Per-model reads are point lookups — the full `api.json` is
-  parsed only at refresh time and upserted row by row, never re-parsed on each
-  read.
+  keyed `model_catalog` table. Redis is reserved as a structured backend via
+  `storage.cache` but not yet implemented (it fails fast at startup today so
+  behavior is explicit). Per-model reads are point lookups — the full
+  `api.json` is parsed only at refresh time and upserted row by row, never
+  re-parsed on each read.
 - It only fetches `api.json` from the network when source-level refresh metadata
   is missing or older than `refresh_interval_hours` (default `24` = once per day);
   unknown model IDs do not trigger repeated remote fetches within the interval.
+  Set `offline: true` to never touch the network.
 - On a failed fetch it falls back to the stale cached row, then to a read-only
   snapshot bundled at build time from `github.com/anomalyco/models.dev` (seeded
   into the cache on demand).
-- The resolved metadata fills compression thresholds, `llm.budget` cost
-  accounting, and the model config handed to agent CLIs. Values you set on
-  `llm.providers[]` always win over catalog data.
+- The resolved metadata fills compression thresholds, replaces the legacy flat
+  cost estimate in `llm.budget` accounting, and feeds the model config handed to
+  agent CLIs. Values you set on `llm.providers[]` and `model_catalog.overrides`
+  always win over catalog data; missing fields are never fabricated. Set
+  `catalog_id` on either a provider or a per-model override to map custom aliases
+  to a specific models.dev entry.
 
-Per-tool config translation differs by agent: opencode resolves known
-providers from models.dev natively (custom OpenAI-compatible providers get
-`limit`/`cost` injected, and any `OPENCODE_MODELS_PATH` must point to a
-run-local generated api.json, not SQLite/Redis); Kilo Code and Roo Code always need
-`contextWindow` / `maxTokens` / `supportsImages` / pricing injected; Claude
-Code and Copilot CLI use their own built-in catalogs and get no injection.
+Per-tool config translation differs by agent: opencode resolves known providers
+from models.dev natively (custom OpenAI-compatible providers get `limit`/`cost`
+injected); Kilo Code and Roo Code always need `contextWindow` / `maxTokens` /
+`supportsImages` / pricing injected; Claude Code derives `ANTHROPIC_MAX_TOKENS`
+from the catalog and delegates the rest to its built-in Anthropic catalog;
+Copilot CLI uses its subscription's fixed catalog and gets no injection. Each
+runtime bundle `manifest.json` records whether metadata was `injected`,
+`delegated` to the tool's native catalog, or `not_applicable`.
 
 ## Runtime Image Baseline
 

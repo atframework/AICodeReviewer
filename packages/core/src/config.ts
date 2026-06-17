@@ -34,6 +34,8 @@ const llmProviderSchema = z
     base_url: z.string().url().optional(),
     api_key_env: z.string().min(1).optional(),
     api_version: z.string().min(1).optional(),
+    catalog_provider: z.string().min(1).optional(),
+    catalog_id: z.string().min(1).optional(),
   })
   .passthrough();
 
@@ -83,6 +85,106 @@ const llmPerProviderOverridesSchema = z
       .optional(),
   )
   .optional();
+
+const reasoningEffortSchema = z.enum(["minimal", "low", "medium", "high"]);
+const modelStatusSchema = z.enum([
+  "stable",
+  "preview",
+  "experimental",
+  "alpha",
+  "beta",
+  "deprecated",
+  "shutdown",
+]);
+
+const modelCatalogOverrideSchema = z
+  .object({
+    catalog_id: z.string().min(1).optional(),
+    context_window: z.number().int().positive().optional(),
+    max_input_tokens: z.number().int().positive().optional(),
+    max_output_tokens: z.number().int().positive().optional(),
+    cost_input_per_mtok: z.number().nonnegative().optional(),
+    cost_output_per_mtok: z.number().nonnegative().optional(),
+    cost_cache_read_per_mtok: z.number().nonnegative().optional(),
+    cost_cache_write_per_mtok: z.number().nonnegative().optional(),
+    cost_reasoning_per_mtok: z.number().nonnegative().optional(),
+    cost_input_audio_per_mtok: z.number().nonnegative().optional(),
+    cost_output_audio_per_mtok: z.number().nonnegative().optional(),
+    supports_tool_call: z.boolean().optional(),
+    supports_attachment: z.boolean().optional(),
+    supports_vision: z.boolean().optional(),
+    supports_cache_prompt: z.boolean().optional(),
+    supports_reasoning: z.boolean().optional(),
+    supported_reasoning_efforts: z.array(reasoningEffortSchema).optional(),
+    default_reasoning_effort: reasoningEffortSchema.optional(),
+    thinking_modes: z.array(z.string().min(1)).optional(),
+    supports_interleaved_reasoning: z.boolean().optional(),
+    interleaved_reasoning_field: z.string().min(1).optional(),
+    supports_structured_output: z.boolean().optional(),
+    supports_temperature: z.boolean().optional(),
+    supports_streaming: z.boolean().optional(),
+    supports_logprobs: z.boolean().optional(),
+    supports_search: z.boolean().optional(),
+    supports_computer_use: z.boolean().optional(),
+    native_tool_capabilities: z.array(z.string().min(1)).optional(),
+    supported_request_parameters: z.array(z.string().min(1)).optional(),
+    unsupported_request_parameters: z.array(z.string().min(1)).optional(),
+    input_modalities: z.array(z.string().min(1)).optional(),
+    output_modalities: z.array(z.string().min(1)).optional(),
+    display_name: z.string().min(1).optional(),
+    family: z.string().min(1).optional(),
+    knowledge_cutoff: z.string().min(1).optional(),
+    training_cutoff: z.string().min(1).optional(),
+    release_date: z.string().min(1).optional(),
+    last_updated: z.string().min(1).optional(),
+    model_status: modelStatusSchema.optional(),
+    open_weights: z.boolean().optional(),
+    license: z.string().min(1).optional(),
+    model_links: z.record(z.string().min(1), z.string().min(1)).optional(),
+    provider_display_name: z.string().min(1).optional(),
+    provider_npm_package: z.string().min(1).optional(),
+    provider_env_vars: z.array(z.string().min(1)).optional(),
+    provider_api_base_url: z.string().url().optional(),
+    provider_docs_url: z.string().url().optional(),
+    provider_model_aliases: z.array(z.string().min(1)).optional(),
+    provider_model_ids: z.array(z.string().min(1)).optional(),
+    preferred_endpoint: z.string().min(1).optional(),
+    latency_class: z.string().min(1).optional(),
+    priority_tier_supported: z.boolean().optional(),
+    rate_limit_tier: z.string().min(1).optional(),
+    concurrency_limit: z.number().int().positive().optional(),
+    throughput_hint_tokens_per_second: z.number().positive().optional(),
+  })
+  .passthrough();
+
+const modelCatalogSchema = z
+  .object({
+    enabled: z.boolean().default(false),
+    source_url: z.string().url().default("https://models.dev/api.json"),
+    refresh_interval_hours: z.number().int().positive().default(24),
+    fetch_timeout_ms: z.number().int().positive().default(10000),
+    offline: z.boolean().default(false),
+    apply_to_model_spec: z.boolean().default(true),
+    cache: z
+      .object({
+        backend: z.enum(["sqlite", "redis", "memory"]).default("sqlite"),
+      })
+      .passthrough()
+      .default({ backend: "sqlite" }),
+    overrides: z.record(z.string().min(1), modelCatalogOverrideSchema).default({}),
+  })
+  .passthrough()
+  .default({
+    enabled: false,
+    source_url: "https://models.dev/api.json",
+    refresh_interval_hours: 24,
+    fetch_timeout_ms: 10000,
+    offline: false,
+    apply_to_model_spec: true,
+    cache: { backend: "sqlite" },
+    overrides: {},
+  });
+
 
 const compressionSchema = z
   .object({
@@ -463,6 +565,7 @@ const appConfigSchema = z
         retry: llmRetrySchema,
         per_provider_overrides: llmPerProviderOverridesSchema,
         budget: llmBudgetSchema,
+        model_catalog: modelCatalogSchema,
       })
       .passthrough()
       .default({ providers: [], fallback_chain: [] }),
@@ -586,7 +689,28 @@ const appConfigSchema = z
         instances: {},
       }),
   })
-  .strict();
+  .strict()
+  .superRefine((config, ctx) => {
+    const catalog = config.llm.model_catalog;
+    if (catalog.enabled && catalog.cache.backend === "redis") {
+      if (config.storage.cache.kind !== "redis") {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message:
+            "llm.model_catalog.cache.backend 'redis' requires storage.cache.kind 'redis'; see Plan.md §3.13 / D31",
+          path: ["llm", "model_catalog", "cache", "backend"],
+        });
+      }
+      if (!config.storage.cache.redis?.url_env) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message:
+            "llm.model_catalog.cache.backend 'redis' requires storage.cache.redis.url_env; see Plan.md §3.13 / D31",
+          path: ["storage", "cache", "redis", "url_env"],
+        });
+      }
+    }
+  });
 
 export type AppConfig = z.infer<typeof appConfigSchema>;
 export type AppConfigInput = Record<string, unknown>;

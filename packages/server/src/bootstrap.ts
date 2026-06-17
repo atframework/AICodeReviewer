@@ -15,6 +15,8 @@ import { createAgentAdapter, type AgentAdapter, type AgentKind } from "@aicr/age
 import {
   createChatClientFromModelSpec,
   createResilientChatClient,
+  extractModelPricing,
+  getModelCatalogBundledSnapshotPath,
   type ChatCompletionClient,
   type CompressionConfig,
   type LlmGatewayProviderConfig,
@@ -22,6 +24,7 @@ import {
   type LlmGatewayBudgetConfig,
   type LlmGatewayFallbackEntry,
   type LlmGatewayPerProviderOverride,
+  type ModelPricing,
   type ModelSpec,
   type ModelProviderKind,
 } from "@aicr/llm";
@@ -76,6 +79,17 @@ import type { ServerAppOptions, ServerReviewOrchestrationOptions, TriggerRetryCo
 import { type AuthConfig } from "./auth.js";
 import { createReviewDeduplicator } from "./review-deduplicator.js";
 import { resolveAdminAuthConfig } from "./admin-auth.js";
+import {
+  createHttpModelCatalogFetcher,
+  createMemoryModelCatalogBackend,
+  createModelCatalogService,
+  createSqliteModelCatalogBackend,
+  MODEL_CATALOG_FIELD_KEY_MAP,
+  MODEL_CATALOG_HINT_KEY_MAP,
+  type ModelCatalogService,
+  type ModelCatalogOverrideFields,
+  type ModelCatalogProviderHint,
+} from "./model-catalog-service.js";
 import type { ObservabilityApiOptions } from "./observability-api.js";
 import type {
   ReviewDispatchResult,
@@ -258,9 +272,131 @@ function readToolChoice(raw: Record<string, unknown>): ModelSpec["toolChoice"] |
   return undefined;
 }
 
+function readStringEnum<T extends string>(
+  raw: Record<string, unknown>,
+  values: ReadonlySet<T>,
+  ...keys: readonly string[]
+): T | undefined {
+  const value = readString(raw, ...keys);
+  return value && values.has(value as T) ? value as T : undefined;
+}
+
 type MutableModelFields = {
   -readonly [K in keyof ModelSpec]?: ModelSpec[K];
 };
+
+function assignModelField(fields: MutableModelFields, key: keyof ModelSpec, value: unknown): void {
+  if (value !== undefined) {
+    (fields as Record<string, unknown>)[key] = value;
+  }
+}
+
+const modelCatalogNumberKeys = new Set<keyof ModelSpec>([
+  "contextWindow",
+  "maxInputTokens",
+  "maxOutputTokens",
+  "costInputPerMTok",
+  "costOutputPerMTok",
+  "costCacheReadPerMTok",
+  "costCacheWritePerMTok",
+  "costReasoningPerMTok",
+  "costInputAudioPerMTok",
+  "costOutputAudioPerMTok",
+  "concurrencyLimit",
+  "throughputHintTokensPerSecond",
+]);
+
+const modelCatalogBooleanKeys = new Set<keyof ModelSpec>([
+  "supportsToolCall",
+  "supportsAttachment",
+  "supportsVision",
+  "supportsCachePrompt",
+  "supportsReasoning",
+  "supportsInterleavedReasoning",
+  "supportsStructuredOutput",
+  "supportsTemperature",
+  "supportsStreaming",
+  "supportsLogprobs",
+  "supportsSearch",
+  "supportsComputerUse",
+  "openWeights",
+  "priorityTierSupported",
+]);
+
+const modelCatalogStringArrayKeys = new Set<keyof ModelSpec>([
+  "thinkingModes",
+  "nativeToolCapabilities",
+  "supportedRequestParameters",
+  "unsupportedRequestParameters",
+  "inputModalities",
+  "outputModalities",
+  "providerEnvVars",
+  "providerModelAliases",
+  "providerModelIds",
+]);
+
+const modelCatalogStringKeys = new Set<keyof ModelSpec>([
+  "interleavedReasoningField",
+  "displayName",
+  "family",
+  "knowledgeCutoff",
+  "trainingCutoff",
+  "releaseDate",
+  "lastUpdated",
+  "license",
+  "providerDisplayName",
+  "providerNpmPackage",
+  "providerApiBaseUrl",
+  "providerDocsUrl",
+  "preferredEndpoint",
+  "latencyClass",
+  "rateLimitTier",
+]);
+
+type ReasoningEffortValue = NonNullable<ModelSpec["defaultReasoningEffort"]>;
+type ModelStatusValue = NonNullable<ModelSpec["modelStatus"]>;
+
+const reasoningEffortValues = new Set<ReasoningEffortValue>([
+  "minimal",
+  "low",
+  "medium",
+  "high",
+]);
+
+const modelStatusValues = new Set<ModelStatusValue>([
+  "stable",
+  "preview",
+  "experimental",
+  "alpha",
+  "beta",
+  "deprecated",
+  "shutdown",
+]);
+
+function applyModelCatalogProviderFields(raw: Record<string, unknown>, fields: MutableModelFields): void {
+  for (const [snakeKey, modelKey] of Object.entries(MODEL_CATALOG_FIELD_KEY_MAP)) {
+    if (modelCatalogNumberKeys.has(modelKey)) {
+      assignModelField(fields, modelKey, readNumber(raw, snakeKey, modelKey));
+    } else if (modelCatalogBooleanKeys.has(modelKey)) {
+      assignModelField(fields, modelKey, readBoolean(raw, snakeKey, modelKey));
+    } else if (modelCatalogStringArrayKeys.has(modelKey)) {
+      assignModelField(fields, modelKey, readStringArray(raw, snakeKey, modelKey));
+    } else if (modelCatalogStringKeys.has(modelKey)) {
+      assignModelField(fields, modelKey, readString(raw, snakeKey, modelKey));
+    } else if (modelKey === "supportedReasoningEfforts") {
+      const efforts = readStringArray(raw, snakeKey, modelKey);
+      if (efforts?.every((effort) => reasoningEffortValues.has(effort as ReasoningEffortValue))) {
+        fields.supportedReasoningEfforts = efforts as NonNullable<ModelSpec["supportedReasoningEfforts"]>;
+      }
+    } else if (modelKey === "defaultReasoningEffort") {
+      assignModelField(fields, modelKey, readStringEnum(raw, reasoningEffortValues, snakeKey, modelKey));
+    } else if (modelKey === "modelStatus") {
+      assignModelField(fields, modelKey, readStringEnum(raw, modelStatusValues, snakeKey, modelKey));
+    } else if (modelKey === "modelLinks") {
+      assignModelField(fields, modelKey, readStringRecord(raw, snakeKey, modelKey));
+    }
+  }
+}
 
 function resolveModelProviderFields(provider: AppConfig["llm"]["providers"][number]): Partial<ModelSpec> {
   const raw = provider as Record<string, unknown>;
@@ -355,6 +491,7 @@ function resolveModelProviderFields(provider: AppConfig["llm"]["providers"][numb
   if (supportsVision !== undefined) fields.supportsVision = supportsVision;
   const supportsCachePrompt = readBoolean(raw, "supports_cache_prompt", "supportsCachePrompt");
   if (supportsCachePrompt !== undefined) fields.supportsCachePrompt = supportsCachePrompt;
+  applyModelCatalogProviderFields(raw, fields);
 
   return fields;
 }
@@ -1840,6 +1977,55 @@ function toGatewayFallbackChain(
   }));
 }
 
+export function normalizeModelCatalogOverrides(
+  raw: Readonly<Record<string, Record<string, unknown>>>,
+): Readonly<Record<string, ModelCatalogOverrideFields>> {
+  const keyMap: Readonly<Record<string, string>> = {
+    ...MODEL_CATALOG_HINT_KEY_MAP,
+    ...MODEL_CATALOG_FIELD_KEY_MAP,
+  };
+  const result: Record<string, ModelCatalogOverrideFields> = {};
+  for (const [modelKey, fields] of Object.entries(raw)) {
+    const normalized: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(fields)) {
+      normalized[keyMap[key] ?? key] = value;
+    }
+    result[modelKey] = normalized as ModelCatalogOverrideFields;
+  }
+  return result;
+}
+
+function buildGatewayModelPricing(
+  catalogService: ModelCatalogService,
+  config: AppConfig,
+): Record<string, ModelPricing> {
+  const pricing: Record<string, ModelPricing> = {};
+  const collect = (provider: AppConfig["llm"]["providers"][number], modelId: string): void => {
+    const key = `${provider.id}/${modelId}`;
+    if (pricing[key]) return;
+    const enriched = catalogService.enrichModelSpec({
+      providerKind: provider.kind as ModelProviderKind,
+      providerId: provider.id,
+      modelId,
+      ...resolveModelProviderFields(provider),
+    });
+    const extracted = extractModelPricing(enriched);
+    if (
+      extracted.costInputPerMTok !== undefined ||
+      extracted.costOutputPerMTok !== undefined
+    ) {
+      pricing[key] = extracted;
+    }
+  };
+  for (const entry of config.llm.fallback_chain) {
+    const provider = config.llm.providers.find((p) => p.id === entry.provider);
+    if (provider) {
+      collect(provider, entry.model);
+    }
+  }
+  return pricing;
+}
+
 function toCompressionConfig(compression: AppConfig["compression"]): CompressionConfig | undefined {
   if (!compression) return undefined;
 
@@ -1889,10 +2075,74 @@ export async function bootstrapServerApp(options: BootstrapServerOptions): Promi
   const gitlabConfigs = resolveGenericWebhookConfigs(config, "gitlab");
   const p4Config = resolveP4TriggerConfig(config);
 
-  const model = resolveModelSpecFromConfig(config);
+  const adminAuthConfig = resolveAdminAuthConfig(config as unknown as Record<string, unknown>, resolveEnv);
+  const catalogConfig = config.llm?.model_catalog;
+  const catalogEnabled = !!catalogConfig?.enabled;
+  const reflectionConfig = config.review.reflection;
+  const catalogNeedsStore = catalogEnabled && catalogConfig!.cache.backend === "sqlite";
+  const reflectionNeedsStore =
+    !!reflectionConfig && reflectionConfig.enabled !== false && reflectionConfig.mode !== "off";
+  const needsStore = !!adminAuthConfig || catalogNeedsStore || reflectionNeedsStore;
+
+  let store: StoreDb | undefined;
+  let observability: ObservabilityApiOptions | undefined;
+
+  if (needsStore) {
+    if (config.storage.database.kind !== "sqlite") {
+      throw new TypeError(
+        `storage.database.kind=${config.storage.database.kind} is configured, but the built-in store currently supports sqlite only.`,
+      );
+    }
+    store = createStoreDb(config.storage.database.sqlite.path);
+  }
+
+  let catalogService: ModelCatalogService | undefined;
+  if (catalogEnabled && catalogConfig) {
+    let catalogBackend;
+    if (catalogConfig.cache.backend === "sqlite") {
+      catalogBackend = store ? createSqliteModelCatalogBackend(store) : undefined;
+    } else if (catalogConfig.cache.backend === "memory") {
+      catalogBackend = createMemoryModelCatalogBackend();
+    } else if (catalogConfig.cache.backend === "redis") {
+      throw new TypeError(
+        "llm.model_catalog.cache.backend 'redis' is reserved and not yet implemented; use 'sqlite' (default) or 'memory'. See Plan.md §3.13 / D28.",
+      );
+    }
+    const providerHints: ModelCatalogProviderHint[] = config.llm.providers.map((provider) => {
+      const raw = provider as Record<string, unknown>;
+      const hint: { id: string; catalogProvider?: string; catalogId?: string } = { id: provider.id };
+      if (typeof raw.catalog_provider === "string") hint.catalogProvider = raw.catalog_provider;
+      if (typeof raw.catalog_id === "string") hint.catalogId = raw.catalog_id;
+      return hint;
+    });
+    catalogService = createModelCatalogService({
+      enabled: true,
+      sourceUrl: catalogConfig.source_url,
+      refreshIntervalHours: catalogConfig.refresh_interval_hours,
+      fetchTimeoutMs: catalogConfig.fetch_timeout_ms,
+      offline: catalogConfig.offline,
+      applyToModelSpec: catalogConfig.apply_to_model_spec,
+      providerHints,
+      overrides: normalizeModelCatalogOverrides(
+        (catalogConfig.overrides ?? {}) as Record<string, Record<string, unknown>>,
+      ),
+      ...(catalogBackend ? { backend: catalogBackend } : {}),
+      bundledSnapshotPath: getModelCatalogBundledSnapshotPath(),
+      fetcher: createHttpModelCatalogFetcher(),
+    });
+    await catalogService.ensureRefreshed();
+  }
+
+  let model = resolveModelSpecFromConfig(config);
+  if (catalogService) {
+    model = catalogService.enrichModelSpec(model);
+  }
   const retryConfig = toGatewayRetry(config.llm.retry);
   const budgetConfig = toGatewayBudget(config.llm.budget);
   const perProviderOverrides = toGatewayPerProviderOverrides(config.llm.per_provider_overrides);
+  const gatewayModelPricing = catalogService
+    ? buildGatewayModelPricing(catalogService, config)
+    : undefined;
   const llmClient = createResilientChatClient({
     clientFactory: createLlmClientFromModelSpec,
     providers: toGatewayProviders(config.llm.providers),
@@ -1900,30 +2150,21 @@ export async function bootstrapServerApp(options: BootstrapServerOptions): Promi
     ...(retryConfig ? { retry: retryConfig } : {}),
     ...(budgetConfig ? { budget: budgetConfig } : {}),
     ...(perProviderOverrides ? { perProviderOverrides } : {}),
+    ...(gatewayModelPricing ? { modelPricing: gatewayModelPricing } : {}),
   });
 
   const compressionConfig = toCompressionConfig(config.compression);
-  const summarizeModel = compressionConfig ? resolveSummarizeModelFromConfig(config) : undefined;
+  let summarizeModel = compressionConfig ? resolveSummarizeModelFromConfig(config) : undefined;
+  if (catalogService && summarizeModel) {
+    summarizeModel = catalogService.enrichModelSpec(summarizeModel);
+  }
   const summarizeClient = summarizeModel ? createLlmClientFromModelSpec(summarizeModel) : undefined;
 
   const sourceRootResolver = buildSourceRootResolver(baseDir);
   const sandbox = await createSandboxBackendFromConfig(config);
   const agentAdapter = resolveAgentAdapterFromConfig(config);
 
-  const adminAuthConfig = resolveAdminAuthConfig(config as unknown as Record<string, unknown>, resolveEnv);
-  let store: StoreDb | undefined;
-  let observability: ObservabilityApiOptions | undefined;
-
-  if (adminAuthConfig) {
-    if (config.storage.database.kind !== "sqlite") {
-      throw new TypeError(
-        `storage.database.kind=${config.storage.database.kind} is configured, but the built-in observability store currently supports sqlite only.`,
-      );
-    }
-
-    const dbPath = config.storage.database.sqlite.path;
-    store = createStoreDb(dbPath);
-
+  if (adminAuthConfig && store) {
     const activeProjectIdentities = buildActiveProjectIdentities(config);
     softDeleteMissingProjects(store, activeProjectIdentities);
     hardDeleteExpiredProjects(store, config.storage.retention.deleted_project_grace_days);
@@ -1934,8 +2175,7 @@ export async function bootstrapServerApp(options: BootstrapServerOptions): Promi
     };
   }
 
-  const reflectionConfig = config.review.reflection;
-  const reflectionEnabled = !!store && !!reflectionConfig && reflectionConfig.enabled !== false && reflectionConfig.mode !== "off";
+  const reflectionEnabled = !!store && reflectionNeedsStore;
 
   const orchestrationOptions: ServerReviewOrchestrationOptions = {
     baseSystemPrompt,

@@ -385,6 +385,87 @@ describe("createResilientChatClient", () => {
 		expect(output.estimatedCostUsd).toBeCloseTo(0.003, 4);
 	});
 
+	it("uses per-model pricing from ModelSpec when available", async () => {
+		const result: ChatCompletionResult = {
+			providerId: "openai-prod",
+			modelId: "gpt-test",
+			content: "ok",
+			usage: { promptTokens: 2_000_000, completionTokens: 1_000_000 },
+			raw: {},
+		};
+
+		const gateway = createResilientChatClient(
+			makeOptions({
+				clientFactory: () => makeClient(result),
+			}),
+		);
+
+		const pricedModel: ModelSpec = {
+			...baseModel,
+			costInputPerMTok: 2.5,
+			costOutputPerMTok: 10,
+		};
+		const output = await gateway.complete({ model: pricedModel, messages: [] });
+		// 2M input * $2.5/M + 1M output * $10/M = $5 + $10 = $15
+		expect(output.estimatedCostUsd).toBeCloseTo(15, 4);
+	});
+
+	it("uses modelPricing map for fallback models", async () => {
+		const primaryError = new LlmProviderError("fail", { status: 500 });
+		const fallbackResult: ChatCompletionResult = {
+			providerId: "anthropic-prod",
+			modelId: "claude-test",
+			content: "ok",
+			usage: { promptTokens: 1_000_000, completionTokens: 500_000 },
+			raw: {},
+		};
+
+		const gateway = createResilientChatClient(
+			makeOptions({
+				clientFactory: (model: ModelSpec) =>
+					model.providerId === "openai-prod" ? makeFailingClient(primaryError) : makeClient(fallbackResult),
+				modelPricing: {
+					"anthropic-prod/claude-test": { costInputPerMTok: 3, costOutputPerMTok: 15 },
+				},
+			}),
+		);
+
+		const output = await gateway.complete({ model: baseModel, messages: [] });
+		// 1M input * $3/M + 500K output * $15/M = $3 + $7.5 = $10.5
+		expect(output.fallbackCount).toBe(1);
+		expect(output.estimatedCostUsd).toBeCloseTo(10.5, 4);
+	});
+
+	it("lets fallback provider pricing override modelPricing map", async () => {
+		const primaryError = new LlmProviderError("fail", { status: 500 });
+		const fallbackResult: ChatCompletionResult = {
+			providerId: "anthropic-prod",
+			modelId: "claude-test",
+			content: "ok",
+			usage: { promptTokens: 1_000_000, completionTokens: 500_000 },
+			raw: {},
+		};
+
+		const gateway = createResilientChatClient(
+			makeOptions({
+				providers: [
+					{ id: "openai-prod", kind: "openai_compatible" },
+					{ id: "anthropic-prod", kind: "openai_compatible", costInputPerMTok: 4, costOutputPerMTok: 20 },
+				],
+				clientFactory: (model: ModelSpec) =>
+					model.providerId === "openai-prod" ? makeFailingClient(primaryError) : makeClient(fallbackResult),
+				modelPricing: {
+					"anthropic-prod/claude-test": { costInputPerMTok: 3, costOutputPerMTok: 15 },
+				},
+			}),
+		);
+
+		const output = await gateway.complete({ model: baseModel, messages: [] });
+		// Explicit provider pricing wins: 1M * $4/M + 500K * $20/M = $14.
+		expect(output.fallbackCount).toBe(1);
+		expect(output.estimatedCostUsd).toBeCloseTo(14, 4);
+	});
+
 	it("uses exponential backoff by default", async () => {
 		const rateLimitError = new LlmProviderError("rate limited", { status: 429 });
 		const successResult: ChatCompletionResult = {

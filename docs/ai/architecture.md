@@ -463,10 +463,11 @@
 
 ### 3.13 模型元数据 Catalog（models.dev）
 
-> 状态：**计划中（M10）**。本节是稳定设计合同，实现落地前以本节描述为准；
-> 落地后代码真源以 `packages/core/src/config.ts`、`packages/llm/src/model-catalog.ts`
->（纯解析/归一化）、`packages/store` 的 model catalog repository、`packages/server`
-> bootstrap 编排与各 adapter 实现为准。
+> 状态：**基本完成（M10）**。代码真源以 `packages/core/src/config.ts`、
+> `packages/llm/src/model-catalog.ts`（纯解析/归一化）、`packages/store/src/model-catalog.ts`
+> 与 `model_catalog`/`model_catalog_source` 表、`packages/server/src/model-catalog-service.ts`
+> 编排、`packages/agents/src/model-metadata.ts` 注入与各 adapter 实现为准。Redis 结构化
+> 缓存后端为预留项，当前显式拒绝。
 
 #### 3.13.1 目标与职责
 
@@ -565,6 +566,10 @@ models.dev 的 key 是 `<providerId>/<modelId>`（AI SDK 标识）。自定义 p
   `attachment`（或 `modalities.input` 含 `image`）→`supportsVision`，
   `attachment`→`supportsAttachment`，`structured_output`→`supportsStructuredOutput`，
   `temperature`→`supportsTemperature`，`reasoning`→`supportsReasoning`，
+  `reasoning_options[type=effort].values`→`supportedReasoningEfforts`（按 `string[]`
+  原样保留所有档位并保序去重，含 GPT-5.x `xhigh`、DeepSeek `max`、`none`、`default` 等
+  非 canonical 档位，不收窄到 `minimal/low/medium/high`），`reasoning_options[].type`
+  →`thinkingModes`（`effort`/`toggle`/`budget_tokens`），
   `interleaved`→`supportsInterleavedReasoning` 与 `interleavedReasoningField`，
   `cost.cache_read`/`cache_write` 存在→`supportsCachePrompt`，
   `cost.input_audio`/`output_audio`→对应 audio 成本字段，`search` / `web_search`（若上游
@@ -616,13 +621,12 @@ models.dev 的 key 是 `<providerId>/<modelId>`（AI SDK 标识）。自定义 p
 #### 3.13.6 配置、观测与安全
 
 - 配置 schema：`llm.model_catalog`（`enabled`、`source_url`、`refresh_interval_hours`、
-  `fetch_timeout_ms`、`offline`、`apply_to_model_spec`、`apply_to_agent_config`、
+  `fetch_timeout_ms`、`offline`、`apply_to_model_spec`、
   `cache`、`overrides`）与每个 `llm.providers[]` 上可选的 `catalog_provider` /
   `catalog_id`。`cache.backend`（`sqlite` 默认 | `redis` | `memory`）选择结构化刷新缓存
   后端：`sqlite` 复用 `storage.database`（keyed `model_catalog` 表，按模型点查），
   `redis` 复用 `storage.cache.redis` 并要求 `storage.cache.kind: redis`，`memory` 仅适合
-  测试/临时开发；`cache.ttl_seconds` 只控制 redis/memory 过期策略，不替代
-  `refresh_interval_hours`。不引入单独的 JSON 缓存文件路径。详见 §3.10 与
+  测试/临时开发。不引入单独的 JSON 缓存文件路径。详见 §3.10 与
   `packages/core/src/config.ts`。
 - 观测：`llmUsage` 与 `runs/<run_id>/run.json` 记录解析到的价格与 `catalogSource`，
   让 Dashboard 成本统计基于真实价格而非固定估算；catalog 刷新失败回退时记录告警。

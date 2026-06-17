@@ -16,6 +16,7 @@
     "@aicr/vcs": "workspace:*"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json"
+    "build": "tsc -p tsconfig.json",
+    "refresh-model-catalog": "node scripts/refresh-model-catalog.mjs"
   }
 }

@@ -36,6 +36,18 @@ export interface LlmGatewayPerProviderOverride {
   readonly giveUpAfterSeconds?: number;
 }
 
+export interface ModelPricing {
+  readonly costInputPerMTok?: number;
+  readonly costOutputPerMTok?: number;
+}
+
+export function extractModelPricing(model: ModelSpec): ModelPricing {
+	const pricing: { costInputPerMTok?: number; costOutputPerMTok?: number } = {};
+	if (model.costInputPerMTok !== undefined) pricing.costInputPerMTok = model.costInputPerMTok;
+	if (model.costOutputPerMTok !== undefined) pricing.costOutputPerMTok = model.costOutputPerMTok;
+	return pricing;
+}
+
 export interface LlmGatewayProviderConfig {
   readonly id: string;
   readonly kind: ModelProviderKind;
@@ -75,6 +87,8 @@ export interface LlmGatewayProviderConfig {
   readonly supportsToolCall?: boolean;
   readonly supportsVision?: boolean;
   readonly supportsCachePrompt?: boolean;
+  readonly costInputPerMTok?: number;
+  readonly costOutputPerMTok?: number;
 }
 
 export class DailyBudgetTracker {
@@ -109,6 +123,7 @@ export interface LlmGatewayOptions {
   readonly onFallback?: (reason: string, from: ModelSpec, to: ModelSpec) => void;
   readonly workspaceId?: string;
   readonly dailyBudgetTracker?: DailyBudgetTracker;
+  readonly modelPricing?: Readonly<Record<string, ModelPricing>>;
 }
 
 export interface LlmGatewayCallResult extends ChatCompletionResult {
@@ -297,6 +312,7 @@ function findNextFallbackEntry(
 function buildModelSpecFromFallback(
   entry: LlmGatewayFallbackEntry,
   providers: readonly LlmGatewayProviderConfig[],
+  modelPricing?: Readonly<Record<string, ModelPricing>>,
 ): ModelSpec {
   const provider = providers.find((p) => p.id === entry.provider);
   if (!provider) {
@@ -304,18 +320,29 @@ function buildModelSpecFromFallback(
   }
 
   const { id: _id, kind: _kind, ...providerFields } = provider;
+  const pricing = modelPricing?.[`${entry.provider}/${entry.model}`];
 
   return {
     providerKind: provider.kind,
     providerId: provider.id,
     modelId: entry.model,
+    ...(pricing ?? {}),
     ...providerFields,
   };
 }
 
-function estimateCost(usage: ChatCompletionUsage | undefined): number {
+function estimateCost(usage: ChatCompletionUsage | undefined, pricing?: ModelPricing): number {
   if (!usage) return 0;
-  const tokens = usage.totalTokens ?? (usage.promptTokens ?? 0) + (usage.completionTokens ?? 0);
+  const inputTokens = usage.promptTokens ?? 0;
+  const outputTokens = usage.completionTokens ?? 0;
+  if (pricing && (pricing.costInputPerMTok !== undefined || pricing.costOutputPerMTok !== undefined)) {
+    const inputCost =
+      pricing.costInputPerMTok !== undefined ? (inputTokens / 1_000_000) * pricing.costInputPerMTok : 0;
+    const outputCost =
+      pricing.costOutputPerMTok !== undefined ? (outputTokens / 1_000_000) * pricing.costOutputPerMTok : 0;
+    return inputCost + outputCost;
+  }
+  const tokens = usage.totalTokens ?? inputTokens + outputTokens;
   return (tokens / 1000) * 0.002;
 }
 
@@ -330,6 +357,7 @@ export function createResilientChatClient(options: LlmGatewayOptions): LlmGatewa
     onFallback,
     workspaceId,
     dailyBudgetTracker,
+    modelPricing,
   } = options;
 
   return {
@@ -364,7 +392,7 @@ export function createResilientChatClient(options: LlmGatewayOptions): LlmGatewa
           try {
             const client = clientFactory(currentModel);
             const result = await client.complete({ ...input, model: currentModel });
-            const callCost = estimateCost(result.usage);
+            const callCost = estimateCost(result.usage, extractModelPricing(currentModel));
             accumulatedCost += callCost;
 
             if (workspaceId && dailyBudgetTracker && callCost > 0) {
@@ -426,7 +454,7 @@ export function createResilientChatClient(options: LlmGatewayOptions): LlmGatewa
           throw new LlmFallbackExhaustedError(lastError, attemptedModels);
         }
 
-        const nextModel = buildModelSpecFromFallback(nextFallback.entry, providers);
+        const nextModel = buildModelSpecFromFallback(nextFallback.entry, providers, modelPricing);
         usedFallbackIndices.add(nextFallback.index);
         if (onFallback) {
           onFallback(

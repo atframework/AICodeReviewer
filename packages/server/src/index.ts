@@ -1224,6 +1224,7 @@ export {
   createOutputPublisherResolverFromConfig,
   createSandboxBackendFromConfig,
   createVcsAdapterFromConfig,
+  normalizeModelCatalogOverrides,
   resolveAgentAdapterFromConfig,
   resolveGiteaWebhookConfig,
   resolveGenericWebhookConfig,

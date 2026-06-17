@@ -33,71 +33,63 @@ llm:
     per_repo_daily_usd: 1.0
 
   # -------------------------------------------------------------------------
-  # Model metadata catalog (PLANNED — M10, not yet active)
+  # Model metadata catalog (M10 — available, opt-in)
   # -------------------------------------------------------------------------
   # Reads model parameters (context window, max input/output tokens,
-  # input/output/cache pricing, and tool-call / vision / search / reasoning flags) from
-  # models.dev so you do not have to hand-maintain them per provider. These
-  # values feed compression thresholds, llm.budget cost accounting, and the
-  # model config passed to external agent CLIs (Kilo, Roo, opencode, ...).
+  # input/output/cache pricing, and tool-call / vision / reasoning / structured
+  # output flags) from models.dev so you do not have to hand-maintain them per
+  # provider. These values feed compression thresholds, llm.budget cost
+  # accounting, and the model config passed to external agent CLIs (Kilo, Roo,
+  # opencode, ...). Disabled by default; set enabled: true to opt in.
   #
   # The refresh cache is stored in storage.database (SQLite by default) as a
-  # keyed model_catalog table, with optional Redis as a structured cache backend via
-  # storage.cache. Per-model reads are point lookups — the full api.json is
-  # parsed only at refresh time and upserted row-by-row, never re-parsed on read.
+  # keyed model_catalog table, with Redis reserved for a future structured
+  # cache backend via storage.cache. Per-model reads are point lookups — the
+  # full api.json is parsed only at refresh time and upserted row-by-row, never
+  # re-parsed on read.
   #
   # Resolution order when a model is needed:
-  #   1. keyed refresh cache (SQLite/Redis) — only fetches remote when
-  #      source-level refresh metadata is missing or older than refresh_interval_hours
-  #      (default 24h = daily); unknown models do not refetch repeatedly within
-  #      the interval;
+  #   1. keyed refresh cache (SQLite) — only fetches remote when the
+  #      source-level refresh metadata is missing or older than
+  #      refresh_interval_hours (default 24h = daily); unknown models do not
+  #      refetch repeatedly within the interval;
   #   2. on remote failure: the stale cached row;
   #   3. last resort: the read-only snapshot bundled at build time from
-  #      github.com/anomalyco/models.dev (seeded into the selected backend on demand).
+  #      github.com/anomalyco/models.dev (seeded into the backend on demand).
   #
-  # User-supplied provider fields below always win over catalog metadata.
+  # User-supplied provider fields and overrides always win over catalog
+  # metadata; missing fields are never fabricated.
   #
   # model_catalog:
   #   enabled: true
   #   source_url: https://models.dev/api.json
-  #   refresh_interval_hours: 24                 # 0 disables periodic refresh
+  #   refresh_interval_hours: 24                 # source-level refresh cadence (default daily)
   #   fetch_timeout_ms: 10000
-  #   offline: false                             # true = never hit the network
+  #   offline: false                             # true = never hit the network (bundled snapshot only)
   #   apply_to_model_spec: true                  # fill ModelSpec gaps from catalog
-  #   apply_to_agent_config: true                # inject metadata into agent CLIs
   #   cache:
-  #     backend: sqlite                          # sqlite (default) | redis | memory (test/dev only)
-  #     # sqlite reuses storage.database (keyed model_catalog table, point lookups);
-  #     # redis reuses storage.cache.redis and requires storage.cache.kind: redis.
-  #     # The full api.json is parsed only on refresh and upserted row-by-row —
-  #     # per-model reads never re-parse it.
-  #     ttl_seconds: 86400                       # backend TTL for redis/memory
-  #   overrides:                                 # manual per-model overrides win
+  #     backend: sqlite                          # sqlite (default) | memory (test/dev) | redis (reserved, not yet implemented)
+  #     # sqlite reuses storage.database (keyed model_catalog table, point lookups).
+  #     # redis will reuse storage.cache.redis and requires storage.cache.kind: redis
+  #     # once implemented; today selecting redis fails fast at startup.
+  #   overrides:                                 # manual per-model overrides win over catalog
   #     "my-llm/gpt-4o-mini":
-  #       catalog_id: openai/gpt-4o-mini         # explicit models.dev lookup id
+  #       catalog_id: openai/gpt-4o-mini         # optional models.dev lookup id for custom aliases
   #       context_window: 128000
-  #       max_input_tokens: 128000
   #       max_output_tokens: 16384
   #       supports_tool_call: true
   #       supports_vision: true
-  #       supports_search: false                 # only set when your provider/catalog documents it
-  #       supports_structured_output: true
-  #       supports_temperature: true             # set false for models that reject temperature
-  #       supports_streaming: true
-  #       supports_logprobs: false
-  #       supported_reasoning_efforts: [low, medium, high]
-  #       default_reasoning_effort: medium
-  #       thinking_modes: [enabled, disabled]
-  #       native_tool_capabilities: [function_calling]
-  #       unsupported_request_parameters: [frequency_penalty, presence_penalty]
-  #       knowledge_cutoff: "2024-10"
-  #       model_status: stable
+  #       supports_cache_prompt: true
+  #       cost_input_per_mtok: 0.15              # USD per 1M tokens
+  #       cost_output_per_mtok: 0.6
+  #       display_name: "GPT-4o mini (via gateway)"
   #
   # To map a custom provider to a models.dev provider, add `catalog_provider`
   # (or `catalog_id`) to the provider entry under llm.providers above, e.g.:
   #     - id: my-llm
   #       kind: openai_compatible
-  #       catalog_provider: openai
+  #       catalog_provider: openai               # resolve as openai/<modelId>
+  #       # catalog_id: openai/gpt-4o-mini       # or an explicit models.dev lookup id
 
 # ---------------------------------------------------------------------------
 # Observability dashboard admin (optional)
@@ -123,7 +115,8 @@ llm:
 # Storage (optional, for observability and future features)
 # ---------------------------------------------------------------------------
 # Controls the local database path and retention for review run statistics.
-# The database is created automatically when admin auth is configured.
+# The database is created automatically when admin auth is configured, when
+# llm.model_catalog uses the sqlite backend, or when reflection memory is enabled.
 #
 # storage:
 #   database:
