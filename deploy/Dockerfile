@@ -329,6 +329,7 @@ COPY --from=build --chown=node:node /app/packages/cli/dist ./packages/cli/dist
 COPY --from=build --chown=node:node /app/packages/core/dist ./packages/core/dist
 COPY --from=build --chown=node:node /app/packages/server/dist ./packages/server/dist
 COPY --from=build --chown=node:node /app/packages/llm/dist ./packages/llm/dist
+COPY --from=build --chown=node:node /app/packages/llm/assets ./packages/llm/assets
 COPY --from=build --chown=node:node /app/packages/vcs/dist ./packages/vcs/dist
 COPY --from=build --chown=node:node /app/packages/outputs/dist ./packages/outputs/dist
 COPY --from=build --chown=node:node /app/packages/mcp-output/dist ./packages/mcp-output/dist

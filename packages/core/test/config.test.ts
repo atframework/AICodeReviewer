@@ -1581,6 +1581,97 @@ describe("triage config", () => {
     expect(config.storage.retention.deleted_project_grace_days).toBe(7);
   });
 
+  it("parses model_catalog config with defaults (disabled)", () => {
+    const config = mergeConfigLayers({});
+    expect(config.llm.model_catalog.enabled).toBe(false);
+    expect(config.llm.model_catalog.source_url).toBe("https://models.dev/api.json");
+    expect(config.llm.model_catalog.refresh_interval_hours).toBe(24);
+    expect(config.llm.model_catalog.fetch_timeout_ms).toBe(10000);
+    expect(config.llm.model_catalog.offline).toBe(false);
+    expect(config.llm.model_catalog.apply_to_model_spec).toBe(true);
+    expect(config.llm.model_catalog.cache.backend).toBe("sqlite");
+    expect(config.llm.model_catalog.overrides).toEqual({});
+  });
+
+  it("parses model_catalog config with overrides and provider catalog fields", () => {
+    const config = mergeConfigLayers({
+      llm: {
+        model_catalog: {
+          enabled: true,
+          source_url: "https://models.dev/catalog.json",
+          refresh_interval_hours: 12,
+          offline: true,
+          cache: { backend: "memory" },
+          overrides: {
+            "openai/gpt-4o": {
+              catalog_id: "openai/gpt-4o",
+              context_window: 128000,
+              max_output_tokens: 16384,
+              cost_input_per_mtok: 2.5,
+              cost_output_per_mtok: 10,
+              supports_vision: true,
+              supports_logprobs: true,
+              supported_reasoning_efforts: ["low", "medium"],
+              native_tool_capabilities: ["web_search"],
+              provider_docs_url: "https://platform.openai.com/docs",
+              model_links: { docs: "https://example.com/model" },
+              concurrency_limit: 4,
+            },
+          },
+        },
+        providers: [
+          {
+            id: "custom-openai",
+            kind: "openai_compatible",
+            base_url: "http://localhost:11434/v1",
+            catalog_provider: "openai",
+            catalog_id: "openai/gpt-4o",
+          },
+        ],
+      },
+    });
+    expect(config.llm.model_catalog.enabled).toBe(true);
+    expect(config.llm.model_catalog.source_url).toBe("https://models.dev/catalog.json");
+    expect(config.llm.model_catalog.refresh_interval_hours).toBe(12);
+    expect(config.llm.model_catalog.offline).toBe(true);
+    expect(config.llm.model_catalog.cache.backend).toBe("memory");
+    expect(config.llm.model_catalog.overrides["openai/gpt-4o"]?.catalog_id).toBe("openai/gpt-4o");
+    expect(config.llm.model_catalog.overrides["openai/gpt-4o"]?.max_output_tokens).toBe(16384);
+    expect(config.llm.model_catalog.overrides["openai/gpt-4o"]?.supports_logprobs).toBe(true);
+    expect(config.llm.model_catalog.overrides["openai/gpt-4o"]?.supported_reasoning_efforts).toEqual([
+      "low",
+      "medium",
+    ]);
+    expect(config.llm.model_catalog.overrides["openai/gpt-4o"]?.native_tool_capabilities).toEqual(["web_search"]);
+    expect(config.llm.model_catalog.overrides["openai/gpt-4o"]?.provider_docs_url).toBe(
+      "https://platform.openai.com/docs",
+    );
+    expect(config.llm.model_catalog.overrides["openai/gpt-4o"]?.model_links).toEqual({
+      docs: "https://example.com/model",
+    });
+    expect(config.llm.model_catalog.overrides["openai/gpt-4o"]?.concurrency_limit).toBe(4);
+    const provider = config.llm.providers[0]!;
+    expect((provider as Record<string, unknown>).catalog_provider).toBe("openai");
+    expect((provider as Record<string, unknown>).catalog_id).toBe("openai/gpt-4o");
+  });
+
+  it("rejects model_catalog redis backend without storage.cache redis config", () => {
+    expect(() =>
+      mergeConfigLayers({
+        llm: { model_catalog: { enabled: true, cache: { backend: "redis" } } },
+      }),
+    ).toThrow();
+  });
+
+  it("accepts model_catalog redis backend when storage.cache redis is configured", () => {
+    const config = mergeConfigLayers({
+      storage: { cache: { kind: "redis", redis: { url_env: "REDIS_URL" } } },
+      llm: { model_catalog: { enabled: true, cache: { backend: "redis" } } },
+    });
+    expect(config.llm.model_catalog.cache.backend).toBe("redis");
+    expect(config.storage.cache.kind).toBe("redis");
+  });
+
   it("parses admin auth config", () => {
     const config = mergeConfigLayers({
       admin: {

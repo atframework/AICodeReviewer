@@ -205,4 +205,29 @@ const MIGRATIONS = [
         WHERE expires_at IS NOT NULL;
     `,
   },
+  {
+    name: "003_model_catalog",
+    sql: `
+      CREATE TABLE IF NOT EXISTS model_catalog (
+        catalog_id TEXT PRIMARY KEY,
+        provider_id TEXT NOT NULL,
+        model_id TEXT NOT NULL,
+        data TEXT NOT NULL,
+        source TEXT,
+        fetched_at INTEGER NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_model_catalog_provider_model
+        ON model_catalog(provider_id, model_id);
+
+      CREATE INDEX IF NOT EXISTS idx_model_catalog_model
+        ON model_catalog(model_id);
+
+      CREATE TABLE IF NOT EXISTS model_catalog_source (
+        source_url TEXT PRIMARY KEY,
+        last_refreshed_at INTEGER NOT NULL,
+        etag TEXT
+      );
+    `,
+  },
 ];

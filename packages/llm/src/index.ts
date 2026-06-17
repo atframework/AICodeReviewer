@@ -1,4 +1,11 @@
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
 export const llmPackageName = "@aicr/llm";
+
+export function getModelCatalogBundledSnapshotPath(): string {
+	return join(dirname(fileURLToPath(import.meta.url)), "../assets/model-catalog/models-dev.json");
+}
 
 export type ModelProviderKind =
 	| "openai_compatible"
@@ -9,6 +16,19 @@ export type ModelProviderKind =
 	| "google_ai_studio"
 	| "ollama"
 	| "copilot";
+
+export type CatalogSource = "override" | "config" | "remote" | "bundled" | "cache";
+
+export type ModelStatus =
+	| "stable"
+	| "preview"
+	| "experimental"
+	| "alpha"
+	| "beta"
+	| "deprecated"
+	| "shutdown";
+
+export type ReasoningEffort = "minimal" | "low" | "medium" | "high";
 
 export interface ModelSpec {
 	readonly providerKind: ModelProviderKind;
@@ -50,6 +70,62 @@ export interface ModelSpec {
 	readonly supportsToolCall?: boolean;
 	readonly supportsVision?: boolean;
 	readonly supportsCachePrompt?: boolean;
+	readonly maxInputTokens?: number;
+	readonly maxOutputTokens?: number;
+	readonly costInputPerMTok?: number;
+	readonly costOutputPerMTok?: number;
+	readonly costCacheReadPerMTok?: number;
+	readonly costCacheWritePerMTok?: number;
+	readonly costReasoningPerMTok?: number;
+	readonly costInputAudioPerMTok?: number;
+	readonly costOutputAudioPerMTok?: number;
+	readonly supportsReasoning?: boolean;
+	// Descriptive list of every reasoning-effort tier the catalog advertises
+	// (e.g. "none", "minimal", "low", "medium", "high", "xhigh", "max", "default").
+	// Kept as plain strings so mainstream tiers like GPT-5.x `xhigh` or DeepSeek
+	// `max` are not dropped; `defaultReasoningEffort` stays the narrow request value.
+	readonly supportedReasoningEfforts?: readonly string[];
+	readonly defaultReasoningEffort?: ReasoningEffort;
+	readonly thinkingModes?: readonly string[];
+	readonly supportsInterleavedReasoning?: boolean;
+	readonly interleavedReasoningField?: string;
+	readonly supportsStructuredOutput?: boolean;
+	readonly supportsTemperature?: boolean;
+	readonly supportsStreaming?: boolean;
+	readonly supportsLogprobs?: boolean;
+	readonly supportsAttachment?: boolean;
+	readonly supportsSearch?: boolean;
+	readonly supportsComputerUse?: boolean;
+	readonly nativeToolCapabilities?: readonly string[];
+	readonly supportedRequestParameters?: readonly string[];
+	readonly unsupportedRequestParameters?: readonly string[];
+	readonly inputModalities?: readonly string[];
+	readonly outputModalities?: readonly string[];
+	readonly catalogSource?: CatalogSource;
+	readonly catalogId?: string;
+	readonly displayName?: string;
+	readonly family?: string;
+	readonly knowledgeCutoff?: string;
+	readonly trainingCutoff?: string;
+	readonly releaseDate?: string;
+	readonly lastUpdated?: string;
+	readonly modelStatus?: ModelStatus;
+	readonly openWeights?: boolean;
+	readonly license?: string;
+	readonly modelLinks?: Readonly<Record<string, string>>;
+	readonly providerDisplayName?: string;
+	readonly providerNpmPackage?: string;
+	readonly providerEnvVars?: readonly string[];
+	readonly providerApiBaseUrl?: string;
+	readonly providerDocsUrl?: string;
+	readonly providerModelAliases?: readonly string[];
+	readonly providerModelIds?: readonly string[];
+	readonly preferredEndpoint?: string;
+	readonly latencyClass?: string;
+	readonly priorityTierSupported?: boolean;
+	readonly rateLimitTier?: string;
+	readonly concurrencyLimit?: number;
+	readonly throughputHintTokensPerSecond?: number;
 }
 
 export type ChatMessageRole = "system" | "user" | "assistant" | "tool";
@@ -478,6 +554,7 @@ function extractUsage(raw: unknown): ChatCompletionUsage | undefined {
 export {
 	createResilientChatClient,
 	DailyBudgetTracker,
+	extractModelPricing,
 	LlmBudgetExceededError,
 	LlmFallbackExhaustedError,
 	type LlmGatewayBudgetConfig,
@@ -488,6 +565,7 @@ export {
 	type LlmGatewayRetryConfig,
 	type LlmGatewayCallResult,
 	type LlmGatewayChatClient,
+	type ModelPricing,
 } from "./gateway.js";
 
 export {
@@ -510,6 +588,18 @@ export type { AnthropicClientOptions } from "./anthropic.js";
 import { createGoogleAiStudioChatClient } from "./google-ai-studio.js";
 export { createGoogleAiStudioChatClient } from "./google-ai-studio.js";
 export type { GoogleAiStudioClientOptions } from "./google-ai-studio.js";
+
+export {
+	mapCatalogEntryToModelSpecFields,
+	parseModelsDevApiJson,
+	resolveCatalogEntry,
+} from "./model-catalog.js";
+export type {
+	CatalogMatchStrategy,
+	CatalogResolutionHints,
+	CatalogResolutionResult,
+	ModelCatalogEntry,
+} from "./model-catalog.js";
 
 export function createOpenAICompatibleChatClient(
 	options: OpenAICompatibleClientOptions = {},

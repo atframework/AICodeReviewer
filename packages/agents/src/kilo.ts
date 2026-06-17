@@ -3,6 +3,7 @@ import { join } from "node:path";
 
 import type { ModelSpec } from "@aicr/llm";
 
+import { buildKiloModelInfo } from "./model-metadata.js";
 import type {
   AgentAdapter,
   AgentDetectResult,
@@ -77,8 +78,9 @@ function buildKiloProviderOptions(model: ModelSpec): Record<string, unknown> {
 
 function buildKiloJsonConfig(model: ModelSpec, mcpServers?: Readonly<Record<string, unknown>>): Record<string, unknown> {
   const options = buildKiloProviderOptions(model);
+  const modelInfo = buildKiloModelInfo(model);
   const models: Record<string, unknown> = {
-    [model.modelId]: {},
+    [model.modelId]: modelInfo ?? {},
   };
 
   const providerEntry: Record<string, unknown> = {

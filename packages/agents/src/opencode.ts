@@ -3,6 +3,7 @@ import { join } from "node:path";
 
 import type { ModelSpec } from "@aicr/llm";
 
+import { buildOpencodeModelEntry } from "./model-metadata.js";
 import type {
 	AgentAdapter,
 	AgentDetectResult,
@@ -113,10 +114,19 @@ export function createOpencodeAdapter(options: OpencodeAdapterOptions = {}): Age
 			const opencodeDir = join(workingDir, ".opencode");
 			await mkdir(opencodeDir, { recursive: true });
 
-			const providerConfig = buildOpencodeProviderConfig(model);
-			const configJson = {
-				provider: [providerConfig],
+		const providerConfig = buildOpencodeProviderConfig(model);
+		const configJson: Record<string, unknown> = {
+			provider: [providerConfig],
+		};
+
+		const modelEntry = buildOpencodeModelEntry(model);
+		if (modelEntry) {
+			configJson.models = {
+				[model.providerId]: {
+					[model.modelId]: modelEntry,
+				},
 			};
+		}
 
 			const configPath = join(opencodeDir, "config.json");
 			await writeFile(configPath, JSON.stringify(configJson, null, 2), "utf8");

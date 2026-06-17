@@ -4,6 +4,8 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
+import type { ModelSpec } from "@aicr/llm";
+
 import {
   agentPackageName,
   createKiloAdapter,
@@ -1177,6 +1179,152 @@ describe("materializeRuntimeBundle", () => {
       const diskContent = await readFile(join(tempDir, ".kilo", "kilo.json"), "utf8");
       const diskParsed = JSON.parse(diskContent);
       expect(diskParsed.mcp["aicr-output"]).toBeDefined();
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("model metadata injection (M10 catalog)", () => {
+  const enrichedModel: ModelSpec = {
+    providerKind: "openai_compatible",
+    providerId: "custom-gateway",
+    modelId: "gpt-4o",
+    contextWindow: 128000,
+    maxOutputTokens: 16384,
+    supportsVision: true,
+    supportsCachePrompt: true,
+    costInputPerMTok: 2.5,
+    costOutputPerMTok: 10,
+    costCacheReadPerMTok: 1.25,
+    costCacheWritePerMTok: 3.75,
+    catalogSource: "remote",
+  };
+
+  it("kilo injects context window, pricing, and capabilities into models entry", async () => {
+    const adapter = createKiloAdapter();
+    const result = await adapter.materializeConfig(enrichedModel, "/tmp/test");
+    const parsed = JSON.parse(result.configFiles.get(".kilo/kilo.json") ?? "{}");
+    const modelInfo = parsed.provider["custom-gateway"]?.models?.["gpt-4o"];
+    expect(modelInfo).toBeDefined();
+    expect(modelInfo.contextWindow).toBe(128000);
+    expect(modelInfo.maxTokens).toBe(16384);
+    expect(modelInfo.supportsImages).toBe(true);
+    expect(modelInfo.supportsPromptCache).toBe(true);
+    expect(modelInfo.inputPrice).toBe(2.5);
+    expect(modelInfo.outputPrice).toBe(10);
+    expect(modelInfo.cacheReadsPrice).toBe(1.25);
+    expect(modelInfo.cacheWritesPrice).toBe(3.75);
+  });
+
+  it("kilo emits empty models entry when no catalog metadata present", async () => {
+    const adapter = createKiloAdapter();
+    const result = await adapter.materializeConfig(
+      { providerKind: "openai_compatible", providerId: "p", modelId: "m" },
+      "/tmp/test",
+    );
+    const parsed = JSON.parse(result.configFiles.get(".kilo/kilo.json") ?? "{}");
+    expect(parsed.provider.p?.models?.m).toEqual({});
+  });
+
+  it("roo injects openAiCustomModelInfo", async () => {
+    const adapter = createRooAdapter();
+    const result = await adapter.materializeConfig(enrichedModel, "/tmp/test");
+    const parsed = JSON.parse(result.configFiles.get(".roo/settings.json") ?? "{}");
+    const info = parsed.apiConfiguration?.openAiCustomModelInfo;
+    expect(info).toBeDefined();
+    expect(info.contextWindow).toBe(128000);
+    expect(info.maxTokens).toBe(16384);
+    expect(info.supportsImages).toBe(true);
+    expect(info.inputPrice).toBe(2.5);
+    expect(info.outputPrice).toBe(10);
+  });
+
+  it("opencode injects models block for custom providers", async () => {
+    const adapter = createOpencodeAdapter();
+    const result = await adapter.materializeConfig(enrichedModel, "/tmp/test");
+    const parsed = JSON.parse(result.configFiles.get(".opencode/config.json") ?? "{}");
+    expect(parsed.models).toBeDefined();
+    const entry = parsed.models["custom-gateway"]?.["gpt-4o"];
+    expect(entry.limit.context).toBe(128000);
+    expect(entry.limit.output).toBe(16384);
+    expect(entry.cost.input).toBe(2.5);
+    expect(entry.cost.output).toBe(10);
+    expect(entry.cost.cache_read).toBe(1.25);
+  });
+
+  it("opencode does not inject models for known providers (delegates to native catalog)", async () => {
+    const adapter = createOpencodeAdapter();
+    const result = await adapter.materializeConfig(
+      { providerKind: "anthropic", providerId: "anthropic", modelId: "claude-sonnet-4-5", contextWindow: 200000 },
+      "/tmp/test",
+    );
+    const parsed = JSON.parse(result.configFiles.get(".opencode/config.json") ?? "{}");
+    expect(parsed.models).toBeUndefined();
+  });
+
+  it("claude-code derives ANTHROPIC_MAX_TOKENS from catalog maxOutputTokens when not explicitly set", async () => {
+    const adapter = createClaudeCodeAdapter();
+    const result = await adapter.materializeConfig(
+      { providerKind: "anthropic", providerId: "anthropic", modelId: "claude", maxOutputTokens: 64000 },
+      "/tmp/test",
+    );
+    expect(result.envVars.ANTHROPIC_MAX_TOKENS).toBe("64000");
+  });
+
+  it("claude-code prefers explicit extraParams max_tokens over catalog", async () => {
+    const adapter = createClaudeCodeAdapter();
+    const result = await adapter.materializeConfig(
+      {
+        providerKind: "anthropic",
+        providerId: "anthropic",
+        modelId: "claude",
+        maxOutputTokens: 64000,
+        extraParams: { max_tokens: 8192 },
+      },
+      "/tmp/test",
+    );
+    expect(result.envVars.ANTHROPIC_MAX_TOKENS).toBe("8192");
+  });
+
+  it("runtime bundle manifest records metadataInjection status and catalogSource", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-bundle-meta-"));
+    try {
+      const result = await materializeRuntimeBundle({
+        adapter: createKiloAdapter(),
+        model: enrichedModel,
+        workingDir: tempDir,
+      });
+      expect(result.manifest.model.catalogSource).toBe("remote");
+      expect(result.manifest.model.metadataInjection).toBe("injected");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("runtime bundle manifest degrades copilot-cli as not_applicable", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-bundle-copilot-"));
+    try {
+      const result = await materializeRuntimeBundle({
+        adapter: createCopilotCliAdapter(),
+        model: enrichedModel,
+        workingDir: tempDir,
+      });
+      expect(result.manifest.model.metadataInjection).toBe("not_applicable");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("runtime bundle manifest delegates opencode known provider", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-bundle-opencode-"));
+    try {
+      const result = await materializeRuntimeBundle({
+        adapter: createOpencodeAdapter(),
+        model: { providerKind: "anthropic", providerId: "anthropic", modelId: "claude-sonnet-4-5" },
+        workingDir: tempDir,
+      });
+      expect(result.manifest.model.metadataInjection).toBe("delegated");
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }

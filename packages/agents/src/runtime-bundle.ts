@@ -3,6 +3,12 @@ import { join, posix } from "node:path";
 
 import type { ModelSpec } from "@aicr/llm";
 
+import {
+	buildKiloModelInfo,
+	buildOpencodeModelEntry,
+	buildRooCustomModelInfo,
+	isOpenCodeCustomProvider,
+} from "./model-metadata.js";
 import type { AgentAdapter, AgentKind } from "./types.js";
 
 export interface RuntimeBundleInstruction {
@@ -49,6 +55,8 @@ export interface RuntimeBundleManifest {
   readonly model: {
     readonly providerId: string;
     readonly modelId: string;
+    readonly catalogSource?: string;
+    readonly metadataInjection?: "injected" | "delegated" | "not_applicable";
   };
   readonly runId?: string;
   readonly instructions: readonly {
@@ -100,6 +108,23 @@ function skillFilePath(skill: RuntimeBundleSkill): string {
   }
 
   return posix.join(SKILLS_DIR, `${sanitizeFilename(skill.name)}.md`);
+}
+
+function computeMetadataInjection(kind: AgentKind, model: ModelSpec): "injected" | "delegated" | "not_applicable" {
+  switch (kind) {
+    case "kilo":
+      return buildKiloModelInfo(model) ? "injected" : "delegated";
+    case "roo":
+      return buildRooCustomModelInfo(model) ? "injected" : "delegated";
+    case "opencode":
+      return isOpenCodeCustomProvider(model) && buildOpencodeModelEntry(model) ? "injected" : "delegated";
+    case "claude-code":
+      return "delegated";
+    case "copilot-cli":
+      return "not_applicable";
+    default:
+      return "delegated";
+  }
 }
 
 export async function materializeRuntimeBundle(
@@ -180,6 +205,8 @@ export async function materializeRuntimeBundle(
     model: {
       providerId: model.providerId,
       modelId: model.modelId,
+      ...(model.catalogSource ? { catalogSource: model.catalogSource } : {}),
+      metadataInjection: computeMetadataInjection(adapter.kind, model),
     },
     ...(input.runId ? { runId: input.runId } : {}),
     instructions: manifestInstructions,

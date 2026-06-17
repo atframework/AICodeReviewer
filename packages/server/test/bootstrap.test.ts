@@ -17,6 +17,7 @@ import {
   createVcsAdapterFromConfig,
   bootstrapServerApp,
   buildSourceRootResolver,
+  normalizeModelCatalogOverrides,
 } from "../src/bootstrap.js";
 
 function response(body: unknown, status = 200) {
@@ -47,6 +48,16 @@ function makeConfig(overrides: Partial<AppConfig> = {}): AppConfig {
       fallback_chain: [
         { provider: "openai-prod", model: "gpt-4o", role: "heavy" },
       ],
+      model_catalog: {
+        enabled: false,
+        source_url: "https://models.dev/api.json",
+        refresh_interval_hours: 24,
+        fetch_timeout_ms: 10000,
+        offline: false,
+        apply_to_model_spec: true,
+        cache: { backend: "sqlite" },
+        overrides: {},
+      },
     },
     triggers: [
       {
@@ -118,6 +129,83 @@ function assertProblemPublisher(publisher: OutputPublisher | undefined): asserts
 function assertSummaryPublisher(publisher: OutputPublisher | undefined): asserts publisher is SummaryPublisher {
   expect(typeof publisher?.publishSummary).toBe("function");
 }
+
+describe("normalizeModelCatalogOverrides", () => {
+  it("maps snake_case config keys to camelCase service keys including MTok pricing", () => {
+    const normalized = normalizeModelCatalogOverrides({
+      "openai/gpt-4o": {
+        context_window: 128000,
+        max_output_tokens: 16384,
+        catalog_id: "openai/gpt-4o",
+        supports_tool_call: true,
+        supports_vision: true,
+        supports_logprobs: true,
+        supports_computer_use: false,
+        supported_reasoning_efforts: ["low", "high"],
+        default_reasoning_effort: "low",
+        thinking_modes: ["effort"],
+        native_tool_capabilities: ["web_search"],
+        supported_request_parameters: ["temperature"],
+        unsupported_request_parameters: ["presence_penalty"],
+        input_modalities: ["text", "image"],
+        output_modalities: ["text"],
+        cost_input_per_mtok: 2.5,
+        cost_output_per_mtok: 10,
+        cost_input_audio_per_mtok: 30,
+        cost_output_audio_per_mtok: 60,
+        cost_cache_read_per_mtok: 1.25,
+        cost_cache_write_per_mtok: 2.5,
+        cost_reasoning_per_mtok: 0.5,
+        display_name: "GPT-4o",
+        family: "gpt",
+        model_status: "preview",
+        model_links: { docs: "https://example.com/model" },
+        provider_env_vars: ["OPENAI_API_KEY"],
+        provider_api_base_url: "https://api.openai.com/v1",
+        provider_docs_url: "https://platform.openai.com/docs",
+        provider_model_aliases: ["gpt4o"],
+        provider_model_ids: ["gpt-4o"],
+        priority_tier_supported: true,
+        concurrency_limit: 4,
+        throughput_hint_tokens_per_second: 100,
+      },
+    });
+
+    const fields = normalized["openai/gpt-4o"]!;
+    expect(fields.contextWindow).toBe(128000);
+    expect(fields.maxOutputTokens).toBe(16384);
+    expect(fields.catalogId).toBe("openai/gpt-4o");
+    expect(fields.supportsToolCall).toBe(true);
+    expect(fields.supportsVision).toBe(true);
+    expect(fields.supportsLogprobs).toBe(true);
+    expect(fields.supportedReasoningEfforts).toEqual(["low", "high"]);
+    expect(fields.nativeToolCapabilities).toEqual(["web_search"]);
+    expect(fields.supportedRequestParameters).toEqual(["temperature"]);
+    expect(fields.costInputPerMTok).toBe(2.5);
+    expect(fields.costOutputPerMTok).toBe(10);
+    expect(fields.costInputAudioPerMTok).toBe(30);
+    expect(fields.costCacheReadPerMTok).toBe(1.25);
+    expect(fields.costCacheWritePerMTok).toBe(2.5);
+    expect(fields.costReasoningPerMTok).toBe(0.5);
+    expect(fields.displayName).toBe("GPT-4o");
+    expect(fields.family).toBe("gpt");
+    expect(fields.modelLinks).toEqual({ docs: "https://example.com/model" });
+    expect(fields.providerEnvVars).toEqual(["OPENAI_API_KEY"]);
+    expect(fields.concurrencyLimit).toBe(4);
+  });
+
+  it("preserves already-camelCase keys", () => {
+    const normalized = normalizeModelCatalogOverrides({
+      "anthropic/claude": { contextWindow: 200000, costInputPerMTok: 3 },
+    });
+    expect(normalized["anthropic/claude"]!.contextWindow).toBe(200000);
+    expect(normalized["anthropic/claude"]!.costInputPerMTok).toBe(3);
+  });
+
+  it("returns an empty record for no overrides", () => {
+    expect(normalizeModelCatalogOverrides({})).toEqual({});
+  });
+});
 
 describe("resolveModelSpecFromConfig", () => {
   it("returns a ModelSpec from the first provider and matching fallback", () => {
@@ -222,7 +310,19 @@ describe("resolveModelSpecFromConfig", () => {
             tool_choice: "auto",
             parallel_tool_calls: false,
             context_window: 128000,
+            max_output_tokens: 8192,
+            cost_input_per_mtok: 1.5,
+            cost_output_per_mtok: 6,
             supports_vision: true,
+            supports_structured_output: true,
+            supports_logprobs: true,
+            supported_reasoning_efforts: ["low", "medium"],
+            default_reasoning_effort: "medium",
+            native_tool_capabilities: ["web_search"],
+            supported_request_parameters: ["temperature"],
+            unsupported_request_parameters: ["presence_penalty"],
+            display_name: "Azure deployment A",
+            model_links: { docs: "https://example.com/model" },
           },
         ],
         fallback_chain: [{ provider: "azure-prod", model: "deployment-a", role: "heavy" }],
@@ -246,7 +346,19 @@ describe("resolveModelSpecFromConfig", () => {
     expect(model.toolChoice).toBe("auto");
     expect(model.parallelToolCalls).toBe(false);
     expect(model.contextWindow).toBe(128000);
+    expect(model.maxOutputTokens).toBe(8192);
+    expect(model.costInputPerMTok).toBe(1.5);
+    expect(model.costOutputPerMTok).toBe(6);
     expect(model.supportsVision).toBe(true);
+    expect(model.supportsStructuredOutput).toBe(true);
+    expect(model.supportsLogprobs).toBe(true);
+    expect(model.supportedReasoningEfforts).toEqual(["low", "medium"]);
+    expect(model.defaultReasoningEffort).toBe("medium");
+    expect(model.nativeToolCapabilities).toEqual(["web_search"]);
+    expect(model.supportedRequestParameters).toEqual(["temperature"]);
+    expect(model.unsupportedRequestParameters).toEqual(["presence_penalty"]);
+    expect(model.displayName).toBe("Azure deployment A");
+    expect(model.modelLinks).toEqual({ docs: "https://example.com/model" });
   });
 });
 
@@ -2575,6 +2687,127 @@ describe("resolveP4TriggerConfig", () => {
 
       expect(result.store).toBeUndefined();
       expect(result.observability).toBeUndefined();
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("initializes store when model_catalog sqlite backend is enabled even without admin auth", async () => {
+    const tmpDir = await mkdtemp(join(tmpdir(), "aicr-bootstrap-catalog-"));
+    delete process.env.AICR_ADMIN_USERNAME;
+    delete process.env.AICR_ADMIN_PASSWORD;
+    try {
+      const dbPath = join(tmpDir, "aicr.sqlite");
+      const config = makeConfig({
+        storage: {
+          database: { kind: "sqlite", sqlite: { path: dbPath } },
+          cache: { kind: "memory" },
+          object: { kind: "filesystem", filesystem: { root: join(tmpDir, "objects") } },
+          retention: { deleted_project_grace_days: 30 },
+        } as Partial<AppConfig>,
+        llm: {
+          providers: [
+            { id: "openai-prod", kind: "openai_compatible", base_url: "https://api.openai.com/v1", api_key_env: "OPENAI_API_KEY", catalog_provider: "openai" },
+          ],
+          fallback_chain: [{ provider: "openai-prod", model: "gpt-4o", role: "heavy" }],
+          model_catalog: {
+            enabled: true,
+            source_url: "https://models.dev/api.json",
+            refresh_interval_hours: 24,
+            fetch_timeout_ms: 10000,
+            offline: true,
+            apply_to_model_spec: true,
+            cache: { backend: "sqlite" },
+            overrides: {},
+          },
+        } as Partial<AppConfig>,
+      });
+
+      const result = await bootstrapServerApp({
+        config,
+        baseSystemPrompt: "test",
+        baseDir: tmpDir,
+      });
+
+      expect(result.store).toBeDefined();
+      expect(result.observability).toBeUndefined();
+      if (result.store) {
+        closeStoreDb(result.store);
+      }
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not initialize store when model_catalog uses memory backend", async () => {
+    const tmpDir = await mkdtemp(join(tmpdir(), "aicr-bootstrap-catalog-mem-"));
+    delete process.env.AICR_ADMIN_USERNAME;
+    delete process.env.AICR_ADMIN_PASSWORD;
+    try {
+      const config = makeConfig({
+        llm: {
+          providers: [
+            { id: "openai-prod", kind: "openai_compatible", base_url: "https://api.openai.com/v1", api_key_env: "OPENAI_API_KEY" },
+          ],
+          fallback_chain: [{ provider: "openai-prod", model: "gpt-4o", role: "heavy" }],
+          model_catalog: {
+            enabled: true,
+            source_url: "https://models.dev/api.json",
+            refresh_interval_hours: 24,
+            fetch_timeout_ms: 10000,
+            offline: true,
+            apply_to_model_spec: true,
+            cache: { backend: "memory" },
+            overrides: {},
+          },
+        } as Partial<AppConfig>,
+      });
+
+      const result = await bootstrapServerApp({
+        config,
+        baseSystemPrompt: "test",
+        baseDir: tmpDir,
+      });
+
+      expect(result.store).toBeUndefined();
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects redis model_catalog backend at bootstrap with an explicit error", async () => {
+    const tmpDir = await mkdtemp(join(tmpdir(), "aicr-bootstrap-catalog-redis-"));
+    delete process.env.AICR_ADMIN_USERNAME;
+    delete process.env.AICR_ADMIN_PASSWORD;
+    try {
+      const config = makeConfig({
+        storage: {
+          database: { kind: "sqlite", sqlite: { path: join(tmpDir, "aicr.sqlite") } },
+          cache: { kind: "redis", redis: { url_env: "REDIS_URL" } },
+          object: { kind: "filesystem", filesystem: { root: join(tmpDir, "objects") } },
+          retention: { deleted_project_grace_days: 30 },
+        } as Partial<AppConfig>,
+        llm: {
+          providers: [
+            { id: "openai-prod", kind: "openai_compatible", base_url: "https://api.openai.com/v1", api_key_env: "OPENAI_API_KEY" },
+          ],
+          fallback_chain: [{ provider: "openai-prod", model: "gpt-4o", role: "heavy" }],
+          model_catalog: {
+            enabled: true,
+            source_url: "https://models.dev/api.json",
+            refresh_interval_hours: 24,
+            fetch_timeout_ms: 10000,
+            offline: true,
+            apply_to_model_spec: true,
+            cache: { backend: "redis" },
+            overrides: {},
+          },
+        } as Partial<AppConfig>,
+      });
+
+      await expect(
+        bootstrapServerApp({ config, baseSystemPrompt: "test", baseDir: tmpDir }),
+      ).rejects.toThrow(/redis.*not yet implemented/);
     } finally {
       await rm(tmpDir, { recursive: true, force: true });
     }

@@ -3,6 +3,7 @@ import { join } from "node:path";
 
 import type { ModelSpec } from "@aicr/llm";
 
+import { buildRooCustomModelInfo } from "./model-metadata.js";
 import type {
 	AgentAdapter,
 	AgentDetectResult,
@@ -85,11 +86,16 @@ export function createRooAdapter(options: RooAdapterOptions = {}): AgentAdapter 
 				apiConfiguration.modelTemperature = model.extraParams.temperature;
 			}
 
-			if (model.extraParams?.top_p !== undefined) {
-				apiConfiguration.modelTopP = model.extraParams.top_p;
-			}
+		if (model.extraParams?.top_p !== undefined) {
+			apiConfiguration.modelTopP = model.extraParams.top_p;
+		}
 
-			const settingsJson = { apiConfiguration };
+		const customModelInfo = buildRooCustomModelInfo(model);
+		if (customModelInfo) {
+			apiConfiguration.openAiCustomModelInfo = customModelInfo;
+		}
+
+		const settingsJson = { apiConfiguration };
 			const configPath = join(rooDir, "settings.json");
 			await writeFile(configPath, JSON.stringify(settingsJson, null, 2), "utf8");
 

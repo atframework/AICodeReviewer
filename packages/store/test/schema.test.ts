@@ -8,6 +8,8 @@ import {
   outputEvents,
   dailyRollups,
   reflectionMemory,
+  modelCatalog,
+  modelCatalogSource,
   runStatusValues,
 } from "../src/schema.js";
 
@@ -205,6 +207,24 @@ describe("reflectionMemory schema", () => {
         "createdAt",
         "expiresAt",
       ]),
+    );
+  });
+});
+
+describe("modelCatalog schema", () => {
+  it("defines the keyed table columns for M10 model metadata", () => {
+    const columns = modelCatalog[Symbol.for("drizzle:Columns")] as Record<string, unknown>;
+    const columnNames = Object.keys(columns);
+    expect(columnNames).toEqual(
+      expect.arrayContaining(["catalogId", "providerId", "modelId", "data", "source", "fetchedAt"]),
+    );
+  });
+
+  it("defines the source refresh metadata table for M10", () => {
+    const columns = modelCatalogSource[Symbol.for("drizzle:Columns")] as Record<string, unknown>;
+    const columnNames = Object.keys(columns);
+    expect(columnNames).toEqual(
+      expect.arrayContaining(["sourceUrl", "lastRefreshedAt", "etag"]),
     );
   });
 });
