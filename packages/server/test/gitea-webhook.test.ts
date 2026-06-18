@@ -1665,6 +1665,82 @@ describe("createServerApp", () => {
     expect(body.triage?.closed).toBe(false);
   });
 
+  it("skips issue triage for GitHub issue events when the triage client is Gitea-only", async () => {
+    let triageModelCalled = false;
+    let giteaFetchCalls = 0;
+    const mockLlm: ChatCompletionClient = {
+      async complete() {
+        triageModelCalled = true;
+        return {
+          providerId: "test",
+          modelId: "test",
+          content: '{"action":"keep_open","reason":"x","category":"valid"}',
+          raw: {},
+        };
+      },
+    };
+    const mockFetch = async () => {
+      giteaFetchCalls += 1;
+      return {
+        ok: true,
+        status: 200,
+        async json() {
+          return { title: "t", body: "b", state: "open", user: { login: "r" }, comments: 0, labels: [] };
+        },
+        async text() { return "{}"; },
+      };
+    };
+    const { GiteaApiClient } = await import("../src/issue-triage.js");
+    const giteaClient = new GiteaApiClient({
+      baseUrl: "https://gitea.example.com",
+      token: "test-token",
+      fetch: mockFetch,
+    });
+    const app = createServerApp({
+      github: {
+        triggerName: "github-saas",
+        workspaceId: "github-owent-example",
+        webhookSecret,
+      },
+      // Mirrors production: triage is wired for the Gitea provider only.
+      issueTriage: {
+        llm: mockLlm,
+        model: { providerKind: "openai_compatible", providerId: "test", modelId: "test" },
+        giteaClient,
+        provider: "gitea",
+      },
+    });
+    const payload = JSON.stringify({
+      action: "opened",
+      repository: { full_name: "owent/libatapp" },
+      sender: { login: "owent" },
+      issue: {
+        number: 55,
+        title: "Some issue",
+        html_url: "https://github.com/owent/libatapp/issues/55",
+      },
+    });
+
+    const response = await app.request("/webhooks/github", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-github-event": "issues",
+        "x-hub-signature-256": `sha256=${sign(payload)}`,
+      },
+      body: payload,
+    });
+    const body = (await response.json()) as { accepted: boolean; error?: { reason?: string } };
+
+    // Accepted (202) and, critically, the Gitea triage client is never called
+    // for a GitHub issue event, so no `fetch failed` surfaces.
+    expect(response.status).toBe(202);
+    expect(body.accepted).toBe(true);
+    expect(giteaFetchCalls).toBe(0);
+    expect(triageModelCalled).toBe(false);
+    expect(body.error?.reason).not.toBe("issue_triage_failed");
+  });
+
   it("propagates operatorOverrides and memoryHints through review preparation", async () => {
     const tempDir = await mkdtemp(join(tmpdir(), "aicr-server-overrides-"));
 

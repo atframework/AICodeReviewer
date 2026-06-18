@@ -376,12 +376,28 @@ export function createPullRequestReviewEvent(
   });
 }
 
+const ZERO_SHA_PATTERN = /^0+$/u;
+
+function isBranchCreateOrDeletePush(parsed: PushPayload): boolean {
+  // GitHub/Gitea send an all-zero SHA (40 or 64 zeros) for `before` on branch
+  // creation and for `after` on branch deletion. Neither has a reviewable
+  // commit range (`git diff` rejects a `..<all-zeros>` range with "Invalid
+  // revision range"), so these events must be skipped instead of failing the
+  // trigger with review_orchestration_failed.
+  return (typeof parsed.before === "string" && ZERO_SHA_PATTERN.test(parsed.before))
+    || (typeof parsed.after === "string" && ZERO_SHA_PATTERN.test(parsed.after));
+}
+
 export function createPushReviewEvent(
   provider: ReviewProvider,
   eventName: string,
   parsed: PushPayload,
   config: VcsWebhookConfig,
-): ReviewEvent {
+): ReviewEvent | null {
+  if (isBranchCreateOrDeletePush(parsed)) {
+    return null;
+  }
+
   const changedFiles = collectPushChangedFiles(parsed);
 
   return createReviewEvent({

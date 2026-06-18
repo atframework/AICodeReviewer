@@ -373,6 +373,7 @@ done
 
 echo "=== Starting AICR container ==="
 "$ENGINE_CMD" "${ENGINE_ARGS[@]}" run -d \
+  --init \
   --name "$CONTAINER_NAME" \
   --restart unless-stopped \
   -p "${HOST_PORT}:${CONTAINER_PORT}" \

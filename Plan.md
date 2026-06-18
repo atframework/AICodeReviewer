@@ -31,6 +31,40 @@
   gateway 用 catalog 真实价格替换固定估算、Kilo/Roo/opencode/Claude Code 注入 +
   manifest 降级标注、打包保底快照 + 构建期刷新脚本。SQLite 与 memory 后端可用；
   Redis 结构化后端为预留项，当前显式拒绝。详见 §3.13、`docs/ai/architecture.md` §3.13。
+- 生产稳定性修复（公网正式环境代码审查失败排查）：定位到 native/docker 沙箱超时
+  只杀 agent 父进程、`.kilo` worker 子进程被 reparent 到 PID 1 继续运行，形成
+  CPU 耗尽死亡螺旋（`durationMs` 远超 `agent.timeout_seconds`，重试越拖越慢）。
+  深度根因：Kilo 把 worker `setsid` 进独立 session/进程组，仅 `detached: true` +
+  `process.kill(-pid)` 杀进程组**无法覆盖**逃逸 worker。修复为 `killProcessTree`
+  在 Linux 下额外按 `/proc` PPID 链遍历后代逐个 kill（先深后浅）再叠加进程组信号
+  与 `proc.kill(signal)`，Windows 仍用 `taskkill /T /F`，并保留 SIGTERM→SIGKILL
+  级联与强制 resolve 兜底；外层容器改用 `podman run -d --init` 让 `tini`/`catatonit`
+  作为 PID 1 回收 reparent 的僵尸（生产实测 31 个 `Z` 状态进程堆积）。同时修复
+  issue triage 只构造 Gitea 客户端却对所有 provider issue 事件执行、GitHub issue
+  命中内部不可达 Gitea 报 `fetch failed` 的问题（按**事件 provider 族**
+  `gitea`/`forgejo` 门控，避免 Forgejo 经 gitea 路由时被误跳过）。详见
+  `AGENTS.md` pitfall #49/#50/#51、`docs/ai/architecture.md` §3.1/§3.8、
+  `packages/sandbox/src/process-tree.ts`、`deploy/deploy.sh`。
+- 生产稳定性修复（公网正式环境 fetch_more_context 上下文丢失）：git 适配器的
+  `fetchExtraContext`（`packages/vcs/src/git.ts`）原本只 `readFile`，而 `fetchScoped`
+  只物化变更文件，导致 agent 请求的相关但未变更文件（如被改动 `.cpp` 引用的头文件）
+  ENOENT，被 orchestrator 记为 `ignored invalid fetch_more_context tool call` 丢弃，
+  agent 拿不到上下文而循环/skip（生产实测 `ENOENT .../atapp.h`）。修复为 ENOENT 时
+  回退 `git show ${revision}:${path}` 补拉并回灌工作区，与 P4 适配器 `p4 print` 回退
+  对齐；确实不存在的路径（或子模块 gitlink）抛错作为停止重试信号。详见
+  `AGENTS.md` pitfall #52、`docs/output-channels.md`、`docs/ai/architecture.md` §3.1。
+- 直接 commit 到主干分支的 Code Review 与 issue 创建（`github-atsf4g-co`/
+  `github-libatapp`/`github-hiredis-happ`）：核查确认配置已正确——两个 GitHub
+  trigger 都订阅 `[pull_request, push, issues]`，全局 `outputs.routes` 按
+  `target_kind` 路由（push → `github-managed-findings`/`github-owent-managed-findings`
+  issue 通道），且全局路由优先级高于 workspace 级 `outputs` 兜底；orchestrator 的
+  `publishSummary` 始终带 problems，issue 通道 `reconcileProblems` 据此创建/维护 issue。
+  修复 `createPushReviewEvent`（`packages/server/src/webhook-common.ts`）：分支创建/删除
+  的 all-zero SHA 推送（`before`/`after` 匹配 `/^0+$/u`）无 reviewable 范围，`git diff`
+  会 `Invalid revision range` 崩溃，改为返回 null（路由答 202 跳过）。详见
+  `AGENTS.md` pitfall #53。注：`github-managed-findings`（atframework）issue 创建生产
+  返回 401，属 `GITHUB_ATFRAMEWORK_TOKEN` 权限/有效期问题（非代码缺陷），需在 GitHub
+  侧为该 PAT 补 `repo` 或 fine-grained `issues:write` 权限后重启容器。
 
 ### 1.3 文档地图
 

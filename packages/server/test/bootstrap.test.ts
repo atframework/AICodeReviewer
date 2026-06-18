@@ -2252,6 +2252,7 @@ describe("bootstrapServerApp", () => {
         categoriesClose: ["spam", "invalid", "duplicate"],
         dryRun: true,
       });
+      expect(result.issueTriage?.giteaClient).toBeDefined();
     } finally {
       if (originalKey === undefined) {
         delete process.env.OPENAI_API_KEY;

@@ -81,6 +81,13 @@ function ensurePositiveLine(value: number, label: string): void {
   }
 }
 
+function isFileNotFoundError(error: unknown): boolean {
+  return typeof error === "object"
+    && error !== null
+    && "code" in error
+    && (error as { readonly code?: unknown }).code === "ENOENT";
+}
+
 function isRevisionRangeError(error: unknown): boolean {
   const maybeGitError = error as { readonly stdout?: unknown; readonly stderr?: unknown };
   const text = [
@@ -348,7 +355,32 @@ export class GitVcsAdapter implements VcsAdapter {
   async fetchExtraContext(req: ExtraContextRequest, ws: WorkspaceRef): Promise<ExtraContextResult> {
     const workspaceSourceDir = resolve(ws.sourceDir);
     const normalizedPath = normalizeChangedPath(workspaceSourceDir, req.path);
-    const content = await readFile(join(workspaceSourceDir, normalizedPath), "utf8");
+    const destinationPath = join(workspaceSourceDir, normalizedPath);
+
+    let content: string;
+    try {
+      content = await readFile(destinationPath, "utf8");
+    } catch (error) {
+      // fetchScoped only materializes changed files (via per-file `git show`),
+      // so related-but-unchanged files the agent asks about are not on disk.
+      // Fall back to fetching the path from the head revision and persist it
+      // for subsequent reads. Without this, fetch_more_context always ENOENTs
+      // and the orchestrator drops the request ("ignored invalid
+      // fetch_more_context tool call"), starving the agent of the context it
+      // needs to confirm issues.
+      if (!isFileNotFoundError(error) || !req.revision) {
+        throw error;
+      }
+      const result = await this.runGit([
+        "-C",
+        this.repositoryDir,
+        "show",
+        `${req.revision}:${normalizePath(normalizedPath)}`,
+      ]);
+      content = result.stdout;
+      await mkdir(dirname(destinationPath), { recursive: true });
+      await writeFile(destinationPath, content, "utf8");
+    }
 
     if (req.startLine === undefined && req.endLine === undefined) {
       return { path: normalizedPath, content };

@@ -11,7 +11,10 @@ import type {
   SandboxMountSpec,
 } from "./types.js";
 import { parseAllowedCommand } from "./command.js";
+import { killProcessTree } from "./process-tree.js";
 import { ALLOWED_COMMANDS, DEFAULT_TIMEOUT_MS, GRACE_PERIOD_MS } from "./types.js";
+
+const IS_WINDOWS = process.platform === "win32";
 
 export function createNativeSandboxBackend(
   options: { readonly allowedCommands?: ReadonlySet<string> } = {},
@@ -32,19 +35,28 @@ export function createNativeSandboxBackend(
           env: { ...process.env, ...spawnOptions.env },
           stdio: ["pipe", "pipe", "pipe"],
           windowsHide: true,
+          // Run the agent in its own process group so a timeout can kill the
+          // whole tree (the agent binary spawns worker subprocesses that would
+          // otherwise be reparented to init and keep running as orphans).
+          ...(IS_WINDOWS ? {} : { detached: true }),
         });
 
         let stdout = "";
         let stderr = "";
         let settled = false;
         let timedOut = false;
-        const timers: { main?: ReturnType<typeof setTimeout>; kill?: ReturnType<typeof setTimeout> } = {};
+        const timers: {
+          main?: ReturnType<typeof setTimeout>;
+          kill?: ReturnType<typeof setTimeout>;
+          force?: ReturnType<typeof setTimeout>;
+        } = {};
 
         const finish = (exitCode: number | null) => {
           if (settled) return;
           settled = true;
           if (timers.main !== undefined) clearTimeout(timers.main);
           if (timers.kill !== undefined) clearTimeout(timers.kill);
+          if (timers.force !== undefined) clearTimeout(timers.force);
           resolvePromise({
             exitCode,
             stdout,
@@ -78,12 +90,32 @@ export function createNativeSandboxBackend(
 
         timers.main = setTimeout(() => {
           timedOut = true;
-          proc.kill("SIGTERM");
+          killProcessTree(proc, "SIGTERM");
 
           timers.kill = setTimeout(() => {
             if (!settled) {
-              proc.kill("SIGKILL");
+              killProcessTree(proc, "SIGKILL");
             }
+            // Backstop: if a descendant that escaped the process group still
+            // holds an inherited stdio handle, `close` would never fire and the
+            // promise (and the whole retry pipeline) would hang. Force-resolve
+            // so the orchestrator can move on; the container restart still
+            // reaps any lingering escaped processes.
+            timers.force = setTimeout(() => {
+              if (!settled) {
+                try {
+                  proc.stdout.destroy();
+                } catch {
+                  // ignore
+                }
+                try {
+                  proc.stderr.destroy();
+                } catch {
+                  // ignore
+                }
+                finish(null);
+              }
+            }, GRACE_PERIOD_MS);
           }, GRACE_PERIOD_MS);
         }, timeoutMs);
       });

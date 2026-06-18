@@ -279,6 +279,7 @@ ssh -p "$SSH_PORT" -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no \
 - **SSH key 选择**：以 `development/secret/secret.yaml` 的 `.deploy."aicr.w-oa.com:6023".ssh.key_file` 为准，提取文件名并用本地镜像副本作为 `-i`。不要用工作区的 `id_ed25519`（会被公网服务器拒绝）。若认证返回 `Permission denied (publickey)`，说明所选公钥尚未加入公网机 `~/.ssh/authorized_keys`，需先从已可登录的主机把该公钥追加进去。
 - **`.env` 文件编码**：Windows PowerShell 5.1 的 `>` 重定向和 `Out-File` 默认 UTF-16 LE，远程容器无法读取。使用 `scp` 传输或远端 `printf` 写入。`deploy.sh` 会在启动前自动检测 UTF-16 编码并报错。
 - **Config-only 变更只需重启**：`config.yaml` 和 `.env` 通过 volume 挂载到容器，修改后执行 `podman restart aicr` 即可；只有代码变更才需要 `deploy.sh` 完整重建。
+- **外层容器必须保留 `--init`**：`deploy/deploy.sh` 用 `podman run -d --init` 启动服务。`--init` 让 `tini`/`catatonit` 作为 PID 1 回收被沙箱超时 kill 后 reparent 的 `.kilo` worker 僵尸（Kilo 会把 worker `setsid` 进独立 session，进程组信号杀不到，必须靠 `/proc` PPID 遍历 + PID 1 回收兜底）。删掉 `--init` 会让僵尸在 PID 1 下堆积（公网实测 31 个 `Z` 状态进程），并在退出窗口内拖慢重试形成死亡螺旋。若出现 `Agent kilo timed out after <N>ms` 且 N 远超 `agent.timeout_seconds`，先用 `podman exec aicr ps -eo pid,ppid,etime,comm | grep kilo` 确认是否有大量 PPID=1 的残留进程，再 `podman restart aicr` 清理并重新部署带修复的镜像。
 - **Admin session TTL**：`adminAuthSchema` 使用 `session_ttl_seconds`（默认 28800 = 8 小时），不是 `session_ttl_minutes`。设置 `minutes` 字段会被静默忽略。
 - **pnpm 10.x 原生模块**：必须通过 `pnpm-workspace.yaml` 的 `onlyBuiltDependencies: [better-sqlite3]` 授权构建，不能用 `pnpm config set` 或 `--allow-build`。
 - **P4 运行时基线**：运行时镜像默认固定在 `ubuntu:24.04` + `p4-cli`
@@ -292,7 +293,7 @@ ssh -p "$SSH_PORT" -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no \
   `DOCKER_DOWNLOAD_MIRROR`。如果目标机没有统一配置容器 registry mirror，
   再按需覆盖 `NODE_IMAGE`。Helm/yq 如果无法直连官方源，使用内部缓存
   覆盖 `HELM_APT_REPO`、`HELM_APT_KEY_URL`、`YQ_DOWNLOAD_BASE`。
-- **公网机构建代理（loopback + host 网络）**：公网机 `10.0.4.9` 上 `*:3128` 是 Podman `rootlessport` 转发。`deploy.sh` 的构建代理自动探测会把它当成 HTTP 代理，并把 `HTTP_PROXY=http://10.0.4.9:3128` 注入构建容器；但该地址从 bridge 构建网络命名空间不可达，导致 `apt-get` 报 `Connection refused`、`ca-certificates has no installation candidate`。同时 Perforce APT 等下载在 bridge 直连时容易卡死（本机直连可达、容器内挂起，日志停在 `Get: … package.perforce.com … p4-cli` 无增长）。正确做法：构建时显式用 loopback 代理 + host 网络，让构建容器经 `127.0.0.1:3128` 取包——
+- **公网机构建代理（loopback + host 网络）**：公网机 `10.0.4.9` 上 `*:3128` 监听的是一个**可用 HTTP 转发代理**（实测经 `http://127.0.0.1:3128` 可代理到 npm/USTC ubuntu/Perforce 等）。`deploy.sh` 的构建代理自动探测会把监听端点解析成主网卡 IP，注入 `HTTP_PROXY=http://10.0.4.9:3128`；但该地址从 bridge 构建网络命名空间不可达，导致 `apt-get` 报 `Connection refused`、`ca-certificates has no installation candidate`。同时 Perforce APT 等下载在 bridge 直连时容易卡死（本机直连可达、容器内挂起，日志停在 `Get: … package.perforce.com … p4-cli` 无增长）。正确做法（已验证可用）：构建时显式用 loopback 代理 + host 网络，让构建容器经 `127.0.0.1:3128` 取包——
   ```bash
   HTTP_PROXY=http://127.0.0.1:3128 HTTPS_PROXY=http://127.0.0.1:3128 \
   NO_PROXY=127.0.0.1,localhost,::1,10.0.4.9 \

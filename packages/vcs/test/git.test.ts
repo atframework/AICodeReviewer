@@ -448,6 +448,97 @@ describe("GitVcsAdapter", () => {
     }
   });
 
+  it("fetches a not-yet-materialized related file from the head revision via git show", async () => {
+    // Mirrors production: fetchScoped only writes changed files, so a related
+    // header the agent asks about is absent from the workspace and must be
+    // pulled from the repo. Before the fix this threw ENOENT and the
+    // orchestrator logged "ignored invalid fetch_more_context tool call".
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-git-extra-fallback-"));
+
+    try {
+      const sourceDir = join(tempDir, "source");
+      await mkdir(sourceDir, { recursive: true });
+      const git: GitCommandRunner = async (args) => {
+        const last = args.at(-1);
+        if (last === "abc123:include/atapp/atapp.h") {
+          return { stdout: "#pragma once\nint atapp_run();\n", stderr: "" };
+        }
+        throw new Error(`unexpected git call: ${args.join(" ")}`);
+      };
+      const adapter = createGitVcsAdapter({ repositoryDir: join(tempDir, "repo"), git });
+
+      const result = await adapter.fetchExtraContext(
+        { path: "include/atapp/atapp.h", revision: "abc123", reason: "need the header" },
+        { id: "ws", sourceDir },
+      );
+
+      expect(result.content).toBe("#pragma once\nint atapp_run();\n");
+      // The fetched file must be persisted so the follow-up pass (and a direct
+      // workspace read) sees it without re-running git.
+      await expect(
+        readFile(join(sourceDir, "include", "atapp", "atapp.h"), "utf8"),
+      ).resolves.toBe("#pragma once\nint atapp_run();\n");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("reads the persisted file on the second fetchExtraContext without git show", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-git-extra-persist-"));
+
+    try {
+      const sourceDir = join(tempDir, "source");
+      await mkdir(sourceDir, { recursive: true });
+      let gitCalls = 0;
+      const git: GitCommandRunner = async (args) => {
+        gitCalls += 1;
+        const last = args.at(-1);
+        if (last === "rev1:src/related.ts") {
+          return { stdout: "export const x = 1;\n", stderr: "" };
+        }
+        throw new Error(`unexpected git call: ${args.join(" ")}`);
+      };
+      const adapter = createGitVcsAdapter({ repositoryDir: join(tempDir, "repo"), git });
+
+      const first = await adapter.fetchExtraContext(
+        { path: "src/related.ts", revision: "rev1", reason: "first fetch" },
+        { id: "ws", sourceDir },
+      );
+      const second = await adapter.fetchExtraContext(
+        { path: "src/related.ts", revision: "rev1", reason: "second fetch" },
+        { id: "ws", sourceDir },
+      );
+
+      expect(first.content).toBe("export const x = 1;\n");
+      expect(second.content).toBe("export const x = 1;\n");
+      expect(gitCalls).toBe(1);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("throws when the related file is absent and no revision is provided", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-git-extra-norev-"));
+
+    try {
+      const sourceDir = join(tempDir, "source");
+      await mkdir(sourceDir, { recursive: true });
+      const adapter = createGitVcsAdapter({
+        repositoryDir: tempDir,
+        git: async () => ({ stdout: "", stderr: "" }),
+      });
+
+      await expect(
+        adapter.fetchExtraContext(
+          { path: "missing.ts", reason: "no revision" },
+          { id: "ws", sourceDir },
+        ),
+      ).rejects.toThrow();
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("parses git diff output through the adapter", async () => {
     const git: GitCommandRunner = async () => ({
       stdout: [
