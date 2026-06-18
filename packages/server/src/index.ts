@@ -546,7 +546,18 @@ async function runTriggerProcessing(
   issueTriageOptions: IssueTriageRuntimeOptions | undefined,
 ): Promise<TriggerProcessingResult> {
   let triageResult: TriageResult | undefined;
-  if (reviewEvent.targetKind === "issue" && issueTriageOptions) {
+  // The triage client speaks the Gitea/Forgejo API, so only Gitea-family issue
+  // events may be triaged through it. Gate on the EVENT provider family rather
+  // than a tag derived from trigger kind: a Forgejo trigger is served via the
+  // Gitea route (provider "gitea"), so an equality check against the trigger
+  // kind would silently skip Forgejo triage. GitHub/GitLab/P4 issues must be
+  // skipped, otherwise they are triaged through an incompatible (and often
+  // unreachable) Gitea client and surface as `fetch failed`.
+  if (
+    reviewEvent.targetKind === "issue" &&
+    issueTriageOptions &&
+    (provider === "gitea" || provider === "forgejo")
+  ) {
     try {
       const issueNumber = reviewEvent.changedFiles?.[0];
       if (issueNumber) {

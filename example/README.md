@@ -221,6 +221,10 @@ agent:
 
 No additional Docker Engine API client is required; AICR still invokes the `docker` CLI and relies on the host socket being available to the service container.
 
+### Agent timeout and process cleanup
+
+`agent.timeout_seconds` is a hard cap on an agent run. When it fires, the sandbox kills the **whole process tree** (the agent binary plus its worker subprocesses), not just the direct child, so a run cannot overrun the budget by leaving orphaned workers behind. If reviews ever appear to hang or get progressively slower across retries, restart the AICR container — the runtime reaps any lingering agent processes.
+
 ### Nested container sandbox (AICR inside a container)
 
 When AICR itself runs inside a container and you want sandbox-spawned child containers for agent isolation, enable the nested container sandbox in `deploy.sh`:

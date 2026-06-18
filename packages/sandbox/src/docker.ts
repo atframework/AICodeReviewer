@@ -14,6 +14,7 @@ import type {
   SandboxMountSpec,
 } from "./types.js";
 import { parseAllowedCommand } from "./command.js";
+import { killProcessTree } from "./process-tree.js";
 import { ALLOWED_COMMANDS, DEFAULT_SANDBOX_IMAGE, DEFAULT_TIMEOUT_MS, GRACE_PERIOD_MS } from "./types.js";
 
 type ContainerEngine = "docker" | "podman";
@@ -55,9 +56,14 @@ const execContainerCommand: ContainerCommandRunner = async function execContaine
   const { spawn } = await import("node:child_process");
 
   return new Promise((resolvePromise) => {
+    // Spawn in its own process group (POSIX) so a timeout can kill the whole
+    // CLI tree via killProcessTree's -pid group kill. Without detached, the
+    // group does not exist, -pid always ESRCH-falls-back to a single kill, and
+    // a PID-recycle race could signal an unrelated process group.
     const proc = spawn(engine, args as string[], {
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
+      ...(process.platform === "win32" ? {} : { detached: true }),
     });
 
     let stdout = "";
@@ -97,7 +103,7 @@ const execContainerCommand: ContainerCommandRunner = async function execContaine
 
     if (options?.timeoutMs) {
       timer = setTimeout(() => {
-        proc.kill("SIGKILL");
+        killProcessTree(proc, "SIGKILL");
       }, options.timeoutMs);
     }
   });

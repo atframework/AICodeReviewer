@@ -231,6 +231,44 @@ describe("translateWebhookToReviewEvent", () => {
     expect(event?.changedFiles).toEqual(["src/new.ts", "src/app.ts", "src/old.ts", "README.md"]);
   });
 
+  it("skips branch-deletion push events (after is all zeros)", async () => {
+    const event = await translateWebhookToReviewEvent(
+      "github",
+      "push",
+      {
+        before: "2197257f23ded146aac94912aacd287e80f7f343",
+        after: "0000000000000000000000000000000000000000",
+        compare_url: "https://github.com/owent/example/compare/00000000^...0000000000000000000000000000000000000000",
+        repository: { full_name: "owent/example" },
+        pusher: { login: "pusher-user" },
+        ref: "refs/heads/develop/some_branch",
+      },
+      config,
+    );
+
+    // A branch deletion has no reviewable commit range; returning null lets the
+    // route skip it (202) instead of failing with an invalid `git diff` range.
+    expect(event).toBeNull();
+  });
+
+  it("skips branch-creation push events (before is all zeros)", async () => {
+    const event = await translateWebhookToReviewEvent(
+      "gitea",
+      "push",
+      {
+        before: "0000000000000000000000000000000000000000",
+        after: "def4567890abcdef1234567890abcdef12345678",
+        compare_url: "https://gitea.example.com/owent/example/compare/0000000...def4567",
+        repository: { full_name: "owent/example" },
+        pusher: { login: "pusher-user" },
+        ref: "refs/heads/feature/new",
+      },
+      config,
+    );
+
+    expect(event).toBeNull();
+  });
+
   it("uses sender over pull_request.user when both are present", async () => {
     const event = await translateWebhookToReviewEvent(
       "gitea",

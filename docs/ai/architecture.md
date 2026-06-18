@@ -46,6 +46,7 @@
 - `ReviewEvent` 要覆盖提交者、目标、仓库映射、变更集、workspace 等最小稳定字段。
 - P4 trigger 只负责最小 metadata POST；服务端负责拉取和补足 diff/describe。
 - 提交者可见元数据必须来自事件或 provider/VCS 查询结果，不能回退成分析用 workspace 或 agent 本地环境。
+- **Issue triage 仅支持 Gitea/Forgejo 且必须按事件 provider 族门控**：`resolveIssueTriageOptions`（`packages/server/src/bootstrap.ts`）只构造单个 `GiteaApiClient`（同时兼容 Gitea 与 Forgejo），因此 `packages/server/src/index.ts` 的 triage 分支只在 issue 事件的 `provider` 属于 `"gitea"`/`"forgejo"` 时执行，跳过 GitHub/GitLab/P4/SVN。门控依据**事件 provider 族**，而不是 trigger `kind` 派生的标签：Forgejo-kind trigger 实际由 `/webhooks/gitea` 路由提供服务（`options.forgejo` 从不填充，只填充 `options.gitea`），其事件带 `provider: "gitea"`，用 trigger kind 做相等比较会静默跳过 Forgejo triage。否则 GitHub/GitLab/P4 的 issue 事件会被 Gitea 客户端处理，指向内部不可达或语义不兼容的 URL，每次都以 `issue_triage_failed` / `fetch failed` 失败。当前不存在 GitHub triage 客户端，未新增对应 client 前不要把非 Gitea workspace 接入 triage。
 
 #### 3.1.1 Review 去重与合并
 
@@ -74,7 +75,7 @@
   - ticket/password 失败后的非交互 `p4 login` 重试
   - basename 级别 glob 过滤
   - trigger payload 中的提交者用户名与 client/workspace 透传
-  - `aicr.fetch_more_context` 请求未在 scoped tree 中的相关文件时，只在配置的 depot 内按当前 changelist revision 执行最小 `p4 print`，不扩大成全仓同步
+  - `aicr.fetch_more_context` 请求未在 scoped tree 中的相关文件时，按当前 revision 执行最小 VCS 补拉并回灌工作区：git 适配器用 `git show <revision>:<path>`，P4 适配器在配置 depot 内用 `p4 print <path>@<revision>`，均不扩大成全仓同步；仓库中确实不存在的路径（或子模块 gitlink）会被拒绝作为"停止重试该路径"的信号
 
 ### 3.3 Compression
 
@@ -194,6 +195,8 @@
 - 源码工作区默认只读挂载，agent 工作目录与临时目录隔离。
 - 白名单、cwd、超时、网络/命令限制由 sandbox 统一守卫。
 - Podman 与 Docker 要共享一套容器合同，而不是两套分叉实现。
+- **超时必须杀整个进程树（含 `setsid` 逃逸的 worker）**：native/docker 后端超时时调用共享 `killProcessTree`（`packages/sandbox/src/process-tree.ts`）终止整棵后代进程，而非只杀直接子进程。Agent 二进制（如 Kilo）会 `setsid` 把 worker 子进程放进独立 session/进程组，因此仅 `detached: true` + `process.kill(-pid)` 杀进程组**不足以**覆盖它们——worker 会逃逸、被 reparent 到 PID 1 继续运行并持有继承的 stdio，导致 spawn promise 挂起、`durationMs` 远超 `agent.timeout_seconds`（实测 600s 配置跑到 700s–1640s），重试越拖越慢形成 CPU 耗尽死亡螺旋。Linux 下 `killProcessTree` 必须额外按 `/proc` 的 PPID 链遍历后代（`setsid` 不改 PPID）并逐个 kill（先深后浅），再叠加 `kill(-pid)` 进程组信号与 `proc.kill(signal)`；Windows 用 `taskkill /T /F`。配 SIGTERM→SIGKILL 级联与强制 resolve 兜底。`packages/sandbox/test/native.test.ts` 同时覆盖继承 stdio 的孙进程与 `setsid` worker 回归（后者 Linux-only）。
+- **外层容器必须 `--init` 回收僵尸**：`deploy/deploy.sh` 用 `podman run -d --init` 启动服务（不要删 `--init`）。否则 Node 作为 PID 1 不会回收逃出沙箱 kill 的后代（如 #49 的 `setsid` worker），它们以 `Z` 状态堆积在 PID 1 下（生产实测 31 个），在退出前持续拖慢重试。`--init` 让 `tini`/`catatonit` 作为 PID 1 回收 reparent 的僵尸，是容器内 Node-as-PID-1 的标准修复。
 
 #### 3.8.1 后端能力与边界
 

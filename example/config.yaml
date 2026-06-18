@@ -530,6 +530,13 @@ queue:
 # treated as format/context failures and repaired by the orchestrator.
 agent:
   default: kilo
+  # Hard cap on a SINGLE agent run. On timeout the sandbox kills the WHOLE
+  # process tree (the agent binary plus its worker subprocesses, including
+  # workers that `setsid` into their own session), so a run cannot overrun by
+  # leaving orphaned workers behind. The orchestrator may run several passes
+  # (initial + context-repair + direct-LLM fallback), so the wall-clock per
+  # review can be a few times this value. Keep it comfortably above the slowest
+  # expected single pass; raise it for large PRs (production uses 600).
   timeout_seconds: 300
   auto_approve: true
   sandbox:
