@@ -640,6 +640,10 @@ triggers:
     kind: p4
     depot_path: "//depot/main"
     change_url_template: "https://swarm.example.com/changes/{{revision}}"
+  - name: svn-main
+    kind: svn
+    repository_url: "https://svn.example.com/repos/project/trunk"
+    revision_url_template: "https://svn.example.com/viewvc/project?view=revision&revision={{revision}}"
 ```
 
 Template variables are URL-encoded before substitution. Use simple revision or
@@ -660,6 +664,56 @@ node packages/cli/dist/index.js review \
   --source-root . \
   --dry-run
 ```
+
+---
+
+## SVN Repository Configuration
+
+AICodeReviewer includes a base SVN adapter for review events that carry SVN
+revision metadata. It does not yet ship a built-in SVN webhook endpoint or
+server-side trigger script; use it from manual/custom entry points that provide
+`headSha` as the SVN revision, optional `baseSha`, and optional `changedFiles`.
+
+The adapter keeps the fetch narrow:
+
+- `svn diff --summarize` lists changed paths.
+- `svn cat -r <revision>` materializes only changed files and later
+  `aicr.fetch_more_context` related files.
+- `svn diff --git` feeds the normal diff parser.
+- `watch_path`, `include_cr_file`, and `exclude_cr_file` use the same filtering
+  semantics as P4.
+
+```yaml
+triggers:
+  - name: svn-main
+    kind: svn
+    repository_url: "https://svn.example.com/repos/project/trunk"
+    username_env: AICR_SVN_USER       # optional
+    password_env: AICR_SVN_PASSWORD   # optional
+    revision_url_template: "https://svn.example.com/viewvc/project?view=revision&revision={{revision}}"
+    watch_path:
+      - "src/"
+      - "include/"
+    include_cr_file:
+      - "**/*.cpp"
+      - "**/*.h"
+    exclude_cr_file:
+      - "**/*.gen.cpp"
+
+workspaces:
+  instances:
+    svn-main:
+      source_repo:
+        trigger: svn-main
+        repo: "https://svn.example.com/repos/project/trunk"
+      outputs:
+        summary: [feishu-code-review]
+```
+
+SVN credentials are read from environment variables named in config. The adapter
+passes them to the SVN CLI non-interactively and redacts configured passwords
+from command errors, but production deployments should still prefer a scoped
+read-only SVN service account.
 
 ---
 

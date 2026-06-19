@@ -6,6 +6,7 @@ import {
   changedFilesFromDiff,
   createGitVcsAdapter,
   createP4VcsAdapter,
+  createSvnVcsAdapter,
 } from "../src/index.js";
 
 describe("@aicr/vcs", () => {
@@ -21,5 +22,6 @@ describe("@aicr/vcs", () => {
   it("exports VCS adapter creators", () => {
     expect(createGitVcsAdapter).toBeDefined();
     expect(createP4VcsAdapter).toBeDefined();
+    expect(createSvnVcsAdapter).toBeDefined();
   });
 });
