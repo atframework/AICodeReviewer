@@ -2420,6 +2420,34 @@ describe("resolveP4TriggerConfig", () => {
     expect(adapter.kind).toBe("git");
   });
 
+  it("creates SVN VCS adapter for an SVN trigger when P4 is also configured", () => {
+    const config = makeConfig({
+      triggers: [
+        { name: "p4-main", kind: "p4", depot_path: "//depot/main" },
+        {
+          name: "svn-main",
+          kind: "svn",
+          repository_url: "https://svn.example.com/repos/project/trunk",
+          watch_path: ["src/"],
+          include_cr_file: ["**/*.ts"],
+        },
+      ],
+      workspaces: {
+        cache: { max_total_gb: 50, eviction: "lru", ttl_days: 30 },
+        defaults: {},
+        instances: {},
+      },
+    } as Partial<AppConfig>);
+
+    const adapter = createVcsAdapterFromConfig(
+      config,
+      "/tmp/test",
+      "svn-main",
+      "https://svn.example.com/repos/project/trunk",
+    );
+    expect(adapter.kind).toBe("svn");
+  });
+
   it("bootstrapServerApp initializes store and observability when admin auth env vars are set", async () => {
     const tmpDir = await mkdtemp(join(tmpdir(), "aicr-bootstrap-obs-"));
     process.env.AICR_ADMIN_USERNAME = "admin";

@@ -76,6 +76,13 @@
   - basename 级别 glob 过滤
   - trigger payload 中的提交者用户名与 client/workspace 透传
   - `aicr.fetch_more_context` 请求未在 scoped tree 中的相关文件时，按当前 revision 执行最小 VCS 补拉并回灌工作区：git 适配器用 `git show <revision>:<path>`，P4 适配器在配置 depot 内用 `p4 print <path>@<revision>`，均不扩大成全仓同步；仓库中确实不存在的路径（或子模块 gitlink）会被拒绝作为"停止重试该路径"的信号
+- SVN 基础 adapter 使用 Subversion 原生命令，不做全仓 checkout：`svn diff --summarize`
+  列变更，`svn cat -r <revision>` 最小物化 changed/related 文件，
+  `svn diff --git` 供统一 diff parser 消费；`watch_path`、
+  `include_cr_file`、`exclude_cr_file` 与 P4 adapter 使用同一过滤语义。
+  `aicr.fetch_more_context` 对未物化相关文件回拉
+  `<repository_url>/<path>@revision` 等价内容，并拒绝配置 `repository_url` 外的 URL。
+  真实 SVN 仓库 e2e 与入站触发脚本/端点仍属 Backlog。
 
 ### 3.3 Compression
 

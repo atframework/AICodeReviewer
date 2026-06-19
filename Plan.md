@@ -17,7 +17,12 @@
 ### 1.2 当前焦点
 
 - M5 已基本交付；仅剩 HTTP/SSE MCP transport 待调研（非阻塞）。
-- M6 GitHub 生产链路已验收；GitLab e2e 和 SVN adapter 移至 Backlog。
+- M6 GitHub 生产链路已验收；SVN 基础 VCS adapter 已交付（`svn diff --summarize` /
+  `svn cat` / `svn diff --git` / `fetch_more_context`）；GitLab e2e 与 SVN 真实仓库
+  e2e/入站触发脚本移至 Backlog。
+- 后续优先执行不依赖外部系统和权限的本地闭环任务，详见 §8.3：Streamable HTTP
+  MCP transport、blame/annotate 基础能力、SVN 触发入口本地合同层、Reflection
+  thorough mode 小切片、SQLite queue / daily rollups。
 - M8 观测底座与内置观测首页已交付：OTel 已接入 serve 命令、Prometheus metrics 和 run snapshot 已连线、eval CLI 已添加；Dashboard 支持 Overview / Projects / Providers / Runs 四个标签，工程面板与 Provider 面板均支持 today/thisWeek/thisMonth/all 时间维度切换。
 - M9 发布收尾已基本完成：从零部署验收、容器嵌套沙箱集成验证均通过；版本 bump 待用户决策。
 - M7 已完成：workspace 定制、国际化、memory/reflection 全流程集成（light mode）已交付。
@@ -127,7 +132,9 @@
 - VCS 访问保持统一三段式合同：列举变更、scoped fetch、额外上下文/归因。
 - 默认以单仓 `primary` 行为为主，多源上下文显式开启。
 - Git、P4、SVN、GitHub、GitLab、Gitea/Forgejo 的平台差异留在适配层消化。
-- P4 的额外上下文保持最小拉取：diff 缺失/过窄时先取完整变更文件，必要的相关文件按 changelist revision 在配置 depot 内 `p4 print`，不做全仓同步。
+- P4/SVN 的额外上下文保持最小拉取：diff 缺失/过窄时先取完整变更文件，必要的相关文件
+  分别按 changelist revision 在配置 depot 内 `p4 print`、按 SVN revision 在
+  `repository_url` 内 `svn cat -r`，不做全仓同步/checkout。
 - 归因能力必须来自事件、provider API 或只读 VCS 工具。
 - 详细合同：`docs/ai/architecture.md` §3.2。
 
@@ -335,7 +342,7 @@
 | M3 | 已完成 | `docs/ai/milestones/M3.md` | 继续复用压缩、预算、队列与 scrubber 能力 |
 | M4 | 已完成 | `docs/ai/milestones/M4.md` | 继续扩展模板、路由与 attribution |
 | M5 | 基本完成 | `docs/ai/milestones/M5.md` | HTTP/SSE MCP transport 调研（非阻塞） |
-| M6 | 部分完成 | GitHub 生产链路已验收 | GitLab e2e、SVN adapter 移至 Backlog |
+| M6 | 部分完成 | GitHub 生产链路已验收；SVN 基础 adapter 已实现 | GitLab e2e、SVN 真实仓库 e2e/触发脚本移至 Backlog |
 | M7 | 已完成 | `docs/ai/milestones/M7.md` | thorough mode、跨 workspace 知识迁移 → Backlog |
 | M8 | 大部分完成 | `docs/ai/milestones/M8.md` | CI eval 集成移至 Backlog |
 | M9 | 基本完成 | `docs/ai/milestones/M9.md` | 版本 tag（用户决策） |
@@ -347,7 +354,10 @@
     - HTTP/SSE 传输模式（`@aicr/mcp-output` 当前仅支持 stdio；待调研 MCP SDK HTTP transport 可行性；非阻塞项，可延后至 M9 之后）
 2. **M6：跨 VCS 能力补齐**（GitHub 已验收）
     - GitLab webhook、dispatcher 与 PR review 已实现并带单元测试；待补齐真实仓库端到端验证记录 → **Backlog**
-    - SVN 支持（config schema 已预留，待实现 VCS adapter）→ **Backlog**
+    - ~~SVN 基础 VCS adapter~~（已交付：`svn diff --summarize` 列变更、`svn cat -r`
+      scoped fetch/额外上下文、`svn diff --git` 解析、与 Git/P4 一致的
+      `watch_path`/`include_cr_file`/`exclude_cr_file` 过滤、server factory 接入与单元测试）
+    - SVN 真实仓库 e2e 与入站触发脚本/端点设计 → **Backlog**
 3. **M8：观测与回放**（大部分完成，已完成项归档至 `docs/ai/milestones/M8.md`）
     - CI eval 基准集成（将 `aicr eval` 接入 CI 流水线；需 CI pipeline 权限，延后扩展）→ **Backlog**
 4. **M9：发布收尾**（基本完成，已完成项归档至 `docs/ai/milestones/M9.md`）
@@ -373,22 +383,36 @@
     - ~~文档同步~~（已交付：example/config.yaml、example/README.md、decisions.md D31、source-index.md、agent-runtime-integration SKILL.md、本计划）
     - Redis 结构化缓存后端：预留字段已校验，运行时显式拒绝（`not yet implemented`），待引入 Redis 客户端依赖后落地 → **Backlog**
 
-### 8.3 Backlog（低优先级延后项）
+### 8.3 本地优先执行队列（不依赖外部系统）
+
+这些任务应优先于需要真实 GitLab/SVN/Redis/K8s/CI 权限的 Backlog 项执行。每项都必须
+能用本地单元测试、集成测试、markdownlint/typecheck/build 闭环；若过程中发现必须接入
+外部服务，应拆出本地合同层并把真实环境验证留在 §8.4。
+
+| 优先级 | 项 | 来源里程碑 | 本地完成标准 |
+| --- | --- | --- | --- |
+| P0 | Streamable HTTP MCP transport | M5 | 基于现有 `@modelcontextprotocol/sdk` Streamable HTTP transport 增加本地 HTTP 启动/请求测试；stdio 保持默认可用；同步 `docs/output-channels.md`、`example/README.md` 和 agent runtime bundle 说明 |
+| P1 | blame/annotate 基础能力 | M6 | 在 VCS 层定义最小 attribution 接口并用 mock runner 覆盖 `git blame` / `p4 annotate` / `svn blame` 解析、缺失归因和路径越界；不提前宣传 `aicr.try_blame`，除非 MCP 工具也落地并测试 |
+| P2 | SVN 触发入口本地合同层 | M6 | 增加 `/triggers/svn` 或等价 translator 的 payload schema、鉴权、ReviewEvent 归一化、示例脚本骨架和单元测试；真实 SVN 仓库 e2e 留在 §8.4 |
+| P3 | Reflection thorough mode 小切片 | M7 | 先做跨 run false-positive / 重复问题模式聚合的最小实现，保持 workspace 隔离、稳定 fingerprint 和脱敏测试；不一次性扩展成完整知识迁移系统 |
+| P4 | SQLite queue backend | M3/M8 | 以 SQLite 实现最小 durable queue：enqueue、claim、ack/fail、retry/dead-letter、并发 claim 测试；替换当前 `queue.kind: sqlite` fallback 前必须补 schema/docs |
+| P5 | daily_rollups 写入 | M8 | 基于已有 `daily_rollups` 表在 run 完成后 upsert 日聚合，并补 store/query 测试；Dashboard 仍可从实时聚合回退 |
+| P6 | 输出/合同测试收束 | M4/M6 | 补非 PR/SVN target link、`no_problems` 混合路由、MCP context 边界、agent manifest 降级状态等低风险测试缺口 |
+
+### 8.4 Backlog（依赖外部系统或用户决策）
 
 | 项                         | 来源里程碑 | 说明                                                           |
 | -------------------------- | ---------- | -------------------------------------------------------------- |
 | Model catalog Redis backend| M10        | `llm.model_catalog.cache.backend: redis` 预留；需引入 Redis 客户端，当前显式拒绝 |
-| HTTP/SSE MCP transport     | M5         | `@aicr/mcp-output` 仅支持 stdio；需调研 MCP SDK HTTP transport |
 | GitLab 真实仓库 e2e        | M6         | 代码已实现，待真实 GitLab 环境                                 |
-| SVN VCS adapter            | M6         | config schema 已预留，待实现                                   |
-| 完整 blame/annotate        | M6         | 需 VCS 原生 `git blame` / `p4 annotate` 集成                   |
-| 专用多源上下文聚合         | M6/M7      | 当前 `fetch_more_context` 部分覆盖                             |
-| Reflection thorough mode   | M7         | 跨 run 聚合分析、false-positive 模式识别、repo 约定学习         |
+| SVN 真实仓库 e2e           | M6         | 基础 VCS adapter 已实现；触发入口本地合同层完成后仍需真实 SVN 仓库验证 |
+| 专用多源上下文聚合         | M6/M7      | 当前 `fetch_more_context` 部分覆盖；若无外部仓库选择器需求，先不扩大范围 |
 | `k8s_pod` sandbox 实现     | M9         | 需要 Kubernetes 集群和 `@kubernetes/client-node`               |
 | `firecracker` sandbox 实现 | M9         | 需要 Firecracker 二进制和 API socket                           |
 | CI eval 基准集成           | M8         | 将 `aicr eval` 接入 CI 流水线（需 CI pipeline 权限，延后扩展） |
+| 版本 bump / git tag        | M9         | 需要用户明确版本号与发布窗口决策                               |
 
-### 8.4 已完成阶段归档
+### 8.5 已完成阶段归档
 
 - `docs/ai/milestones/M0.md`
 - `docs/ai/milestones/M0.5.md`

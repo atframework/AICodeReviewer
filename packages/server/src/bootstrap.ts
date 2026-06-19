@@ -56,7 +56,14 @@ import {
   type SandboxKind,
   type SandboxEngine,
 } from "@aicr/sandbox";
-import { createGitVcsAdapter, createP4VcsAdapter, type GitVcsAdapter, type P4VcsAdapter } from "@aicr/vcs";
+import {
+  createGitVcsAdapter,
+  createP4VcsAdapter,
+  createSvnVcsAdapter,
+  type GitVcsAdapter,
+  type P4VcsAdapter,
+  type SvnVcsAdapter,
+} from "@aicr/vcs";
 import {
   createStoreDb,
   hardDeleteExpiredProjects,
@@ -1836,12 +1843,25 @@ function buildGitRemoteUrl(baseUrl: string | undefined, repoRef: string | undefi
   return `${normalizedBaseUrl}/${normalizedRepoRef}.git`;
 }
 
+function isRepositoryUrl(value: string | undefined): value is string {
+  if (!value) {
+    return false;
+  }
+
+  try {
+    const url = new URL(value);
+    return ["http:", "https:", "svn:", "svn+ssh:", "file:"].includes(url.protocol);
+  } catch {
+    return false;
+  }
+}
+
 export function createVcsAdapterFromConfig(
   config: AppConfig,
   repositoryDir: string,
   triggerName?: string,
   repoRef?: string,
-): GitVcsAdapter | P4VcsAdapter {
+): GitVcsAdapter | P4VcsAdapter | SvnVcsAdapter {
   const p4Trigger = triggerName
     ? config.triggers.find((t) => t.name === triggerName && t.kind === "p4")
     : config.triggers.find((t) => t.kind === "p4");
@@ -1873,6 +1893,36 @@ export function createVcsAdapterFromConfig(
       ...(workspace ? { workspace } : {}),
       ...(depot ? { depot } : {}),
       ...(streams?.[0] ? { depot: streams[0] } : {}),
+      ...(watchPath ? { watchPath } : {}),
+      ...(includeCrFile ? { includeCrFile } : {}),
+      ...(excludeCrFile ? { excludeCrFile } : {}),
+    });
+  }
+
+  const svnTrigger = triggerName
+    ? config.triggers.find((t) => t.name === triggerName && t.kind === "svn")
+    : config.triggers.find((t) => t.kind === "svn");
+  if (svnTrigger) {
+    const triggerConfig = svnTrigger as Record<string, unknown>;
+    const repositoryUrl = (triggerConfig.repository_url as string | undefined)
+      ?? (triggerConfig.url as string | undefined)
+      ?? (isRepositoryUrl(repoRef) ? repoRef : undefined);
+    const usernameEnv = (triggerConfig.username_env as string | undefined)
+      ?? (triggerConfig.user_env as string | undefined);
+    const passwordEnv = triggerConfig.password_env as string | undefined;
+    const username = usernameEnv ? resolveEnv(usernameEnv) : undefined;
+    const password = passwordEnv ? resolveEnv(passwordEnv) : undefined;
+    const watchPath = triggerConfig.watch_path as string[] | undefined;
+    const includeCrFile = triggerConfig.include_cr_file as string[] | undefined;
+    const excludeCrFile = triggerConfig.exclude_cr_file as string[] | undefined;
+    const trustServerCert = triggerConfig.trust_server_cert === true;
+
+    return createSvnVcsAdapter({
+      repositoryDir: resolve(repositoryDir),
+      ...(repositoryUrl ? { repositoryUrl } : {}),
+      ...(username ? { username } : {}),
+      ...(password ? { password } : {}),
+      ...(trustServerCert ? { trustServerCert } : {}),
       ...(watchPath ? { watchPath } : {}),
       ...(includeCrFile ? { includeCrFile } : {}),
       ...(excludeCrFile ? { excludeCrFile } : {}),

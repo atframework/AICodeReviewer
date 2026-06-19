@@ -355,6 +355,32 @@ triggers:
   #   - "**/*.gen.cpp"
   #   - "**/*.pb.go"
 
+  # -- SVN (Subversion) repository profile --
+  # The base adapter supports SVN revision events and manual/custom entry
+  # points that provide headSha/baseSha or changedFiles. A built-in SVN webhook
+  # endpoint/trigger script is still future work.
+  #
+  # - name: svn-main
+  #   kind: svn
+  #   repository_url: "https://svn.example.com/repos/project/trunk"
+  #   username_env: AICR_SVN_USER          # optional outbound SVN username
+  #   password_env: AICR_SVN_PASSWORD      # optional outbound SVN password
+  #   trust_server_cert: false             # optional; keep false unless you pin trust externally
+  #   revision_url_template: "https://svn.example.com/viewvc/project?view=revision&revision={{revision}}"
+  #   # AICR lists changes with svn diff --summarize, initially materializes
+  #   # only changed files with svn cat -r, and fetches narrowly related files
+  #   # through aicr.fetch_more_context without checking out the whole tree.
+  #   watch_path:
+  #     - "src/"
+  #     - "include/"
+  #   include_cr_file:
+  #     - "**/*.h"
+  #     - "**/*.cpp"
+  #     - "**/*.ts"
+  #   exclude_cr_file:
+  #     - "**/*.pb.h"
+  #     - "**/*.gen.cpp"
+
 # ---------------------------------------------------------------------------
 # Output channels
 # ---------------------------------------------------------------------------
@@ -642,6 +668,14 @@ workspaces:
     #   source_repo:
     #     trigger: p4-main
     #     repo: "//depot/main"
+    #   outputs:
+    #     summary: [feishu-code-review]
+
+    # SVN workspace — uncomment when svn-main profile is enabled
+    # svn-main:
+    #   source_repo:
+    #     trigger: svn-main
+    #     repo: "https://svn.example.com/repos/project/trunk"
     #   outputs:
     #     summary: [feishu-code-review]
 
