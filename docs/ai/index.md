@@ -52,7 +52,7 @@
 | M2 | 已完成 | `milestones/M2.md` |
 | M3 | 已完成 | `milestones/M3.md` |
 | M4 | 已完成 | `milestones/M4.md` |
-| M5 | 基本完成 | `milestones/M5.md` |
+| M5 | 已完成 | `milestones/M5.md` |
 | M8 | 大部分完成 | `milestones/M8.md` |
 | M9 | 基本完成 | `milestones/M9.md` |
 | M6 | 部分完成 | 先看 `../../Plan.md` |

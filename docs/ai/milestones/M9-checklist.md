@@ -34,7 +34,7 @@ This checklist tracks the remaining M9 deliverables before the release can be co
 - [x] Kilo adapter injects MCP config into `.kilo/kilo.json`.
 - [x] Agent stdout structured repair and direct-LLM fallback.
 - [x] MCP state file (`.aicr-output-state.json`) read after agent run.
-- [ ] HTTP/SSE transport for `@aicr/mcp-output` (deferred to post-M9).
+- [x] Streamable HTTP transport for `@aicr/mcp-output` (post-M9 local contract completed; runtime bundles still default to stdio).
 
 ### VCS & Triggers (M6)
 
@@ -71,14 +71,13 @@ This checklist tracks the remaining M9 deliverables before the release can be co
 
 The following items are intentionally deferred past M9:
 
-1. **HTTP/SSE MCP transport**: `@aicr/mcp-output` currently uses stdio via Kilo MCP config injection. HTTP/SSE transport requires MCP SDK investigation.
-2. **GitLab real e2e**: Needs a real GitLab repository with webhook access.
-3. **SVN adapter**: Config schema reserved; adapter not yet implemented.
-4. **k8s_pod backend**: Requires Kubernetes cluster and `@kubernetes/client-node`.
-5. **firecracker backend**: Requires Firecracker binary and API socket.
-6. **Blame/annotate attribution**: Pipeline design complete; implementation deferred.
-7. **Multi-source context selector**: Design complete; implementation deferred.
-8. **Memory / reflection**: Schema and extension points reserved; not yet implemented.
+1. **GitLab real e2e**: Needs a real GitLab repository with webhook access.
+2. **SVN real e2e and inbound trigger scripts**: Basic adapter exists; real SVN repository e2e and trigger entry scripts need external system access.
+3. **k8s_pod backend**: Requires Kubernetes cluster and `@kubernetes/client-node`.
+4. **firecracker backend**: Requires Firecracker binary and API socket.
+5. **Blame/annotate attribution**: Pipeline design complete; implementation deferred.
+6. **Multi-source context selector**: Design complete; implementation deferred.
+7. **Reflection thorough mode and knowledge migration**: Light mode exists; thorough-mode pattern aggregation and cross-workspace migration remain deferred.
 
 ## Sign-off
 

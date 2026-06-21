@@ -5,7 +5,22 @@ import { promisify } from "node:util";
 
 import { normalizeChangedPath, normalizePath, type ReviewEvent } from "@aicr/core";
 
-import type { ChangeRange, ExtraContextRequest, ExtraContextResult, ScopedTree, VcsAdapter, WorkspaceRef } from "./contracts.js";
+import {
+  buildAttributionEntry,
+  determineAttributionStatus,
+  filterAttributionByLineRange,
+} from "./attribution.js";
+import type {
+  AttributionEntry,
+  AttributionRequest,
+  AttributionResult,
+  ChangeRange,
+  ExtraContextRequest,
+  ExtraContextResult,
+  ScopedTree,
+  VcsAdapter,
+  WorkspaceRef,
+} from "./contracts.js";
 import { parseUnifiedDiff, type ParsedDiff } from "./diff.js";
 
 export interface GitCommandResult {
@@ -88,17 +103,90 @@ function isFileNotFoundError(error: unknown): boolean {
     && (error as { readonly code?: unknown }).code === "ENOENT";
 }
 
-function isRevisionRangeError(error: unknown): boolean {
+function getGitErrorText(error: unknown): string {
   const maybeGitError = error as { readonly stdout?: unknown; readonly stderr?: unknown };
-  const text = [
+  return [
     error instanceof Error ? error.message : String(error),
     typeof maybeGitError.stdout === "string" ? maybeGitError.stdout : "",
     typeof maybeGitError.stderr === "string" ? maybeGitError.stderr : "",
   ].join("\n");
+}
 
+function isRevisionRangeError(error: unknown): boolean {
   return /(?:ambiguous argument|bad revision|unknown revision|invalid object name|not a valid object name|needed a single revision)/iu.test(
-    text,
+    getGitErrorText(error),
   );
+}
+
+function isGitBlameMissingError(error: unknown): boolean {
+  return /(?:no such path|path .* does not exist|does not exist (?:in|at) revision|no such file or directory|bad object header)/iu.test(
+    getGitErrorText(error),
+  );
+}
+
+const GIT_BLAME_HEADER_RE = /^([0-9a-f]{4,64})\s+\d+\s+(\d+)(?:\s+\d+)?$/u;
+
+export function parseGitBlamePorcelain(stdout: string): AttributionEntry[] {
+  const entries: AttributionEntry[] = [];
+  const lines = stdout.split(/\r?\n/u);
+
+  let pendingRevision: string | undefined;
+  let pendingLine: number | undefined;
+  let pendingAuthor: string | undefined;
+  let pendingAuthorEmail: string | undefined;
+  let pendingSummary: string | undefined;
+
+  const flush = (): void => {
+    if (pendingLine === undefined) {
+      return;
+    }
+    entries.push(
+      buildAttributionEntry({
+        line: pendingLine,
+        revision: pendingRevision,
+        author: pendingAuthor,
+        authorEmail: pendingAuthorEmail,
+        summary: pendingSummary,
+      }),
+    );
+    pendingRevision = undefined;
+    pendingLine = undefined;
+    pendingAuthor = undefined;
+    pendingAuthorEmail = undefined;
+    pendingSummary = undefined;
+  };
+
+  for (const line of lines) {
+    const headerMatch = GIT_BLAME_HEADER_RE.exec(line);
+    if (headerMatch) {
+      flush();
+      pendingRevision = headerMatch[1];
+      pendingLine = Number(headerMatch[2]);
+      continue;
+    }
+
+    if (pendingLine === undefined) {
+      continue;
+    }
+
+    if (line.startsWith("\t")) {
+      flush();
+      continue;
+    }
+
+    if (line.startsWith("author ")) {
+      pendingAuthor = line.slice("author ".length);
+    } else if (line.startsWith("author-mail ")) {
+      pendingAuthorEmail = line
+        .slice("author-mail ".length)
+        .replace(/^<|>$/gu, "");
+    } else if (line.startsWith("summary ")) {
+      pendingSummary = line.slice("summary ".length);
+    }
+  }
+
+  flush();
+  return entries;
 }
 
 function redactGitSecrets(text: string): string {
@@ -399,6 +487,64 @@ export class GitVcsAdapter implements VcsAdapter {
     return {
       path: normalizedPath,
       content: selectedLines.join("\n"),
+    };
+  }
+
+  async fetchAttribution(req: AttributionRequest, ws: WorkspaceRef): Promise<AttributionResult> {
+    const workspaceSourceDir = resolve(ws.sourceDir);
+    const normalizedPath = normalizeChangedPath(workspaceSourceDir, req.path);
+    const revision = req.revision ?? "HEAD";
+
+    if (revision.length === 0 || revision.startsWith("-")) {
+      throw new RangeError("Attribution revision must not be empty or option-like.");
+    }
+
+    const useNativeRange =
+      Number.isInteger(req.startLine)
+      && (req.startLine as number) >= 1
+      && Number.isInteger(req.endLine)
+      && (req.endLine as number) >= 1
+      && (req.startLine as number) <= (req.endLine as number);
+    const rangeArgs = useNativeRange
+      ? ["-L", `${req.startLine},${req.endLine}`]
+      : [];
+
+    await this.syncRepository();
+
+    let stdout: string;
+    try {
+      const result = await this.runGit([
+        "-C",
+        this.repositoryDir,
+        "blame",
+        "--line-porcelain",
+        ...rangeArgs,
+        revision,
+        "--",
+        normalizePath(normalizedPath),
+      ]);
+      stdout = result.stdout;
+    } catch (error) {
+      if (isRevisionRangeError(error) || isGitBlameMissingError(error)) {
+        return { path: normalizedPath, status: "not_found", entries: [] };
+      }
+      throw error;
+    }
+
+    const parsed = parseGitBlamePorcelain(stdout);
+    if (parsed.length === 0) {
+      return { path: normalizedPath, status: "not_found", entries: [] };
+    }
+
+    const filtered = filterAttributionByLineRange(parsed, req.startLine, req.endLine);
+    if (filtered.length === 0) {
+      return { path: normalizedPath, status: "not_found", entries: [] };
+    }
+
+    return {
+      path: normalizedPath,
+      status: determineAttributionStatus(filtered),
+      entries: filtered,
     };
   }
 

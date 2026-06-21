@@ -16,13 +16,12 @@
 
 ### 1.2 当前焦点
 
-- M5 已基本交付；仅剩 HTTP/SSE MCP transport 待调研（非阻塞）。
+- M5 已完成；runtime bundle 默认继续使用本地 stdio MCP server，`@aicr/mcp-output` 另提供显式启动的本地 Streamable HTTP MCP transport。
 - M6 GitHub 生产链路已验收；SVN 基础 VCS adapter 已交付（`svn diff --summarize` /
   `svn cat` / `svn diff --git` / `fetch_more_context`）；GitLab e2e 与 SVN 真实仓库
   e2e/入站触发脚本移至 Backlog。
-- 后续优先执行不依赖外部系统和权限的本地闭环任务，详见 §8.3：Streamable HTTP
-  MCP transport、blame/annotate 基础能力、SVN 触发入口本地合同层、Reflection
-  thorough mode 小切片、SQLite queue / daily rollups。
+- 后续优先执行不依赖外部系统和权限的本地闭环任务，详见 §8.3：SVN 触发入口本地合同层、
+  Reflection thorough mode 小切片、SQLite queue / daily rollups（blame/annotate 基础能力 P1 已完成）。
 - M8 观测底座与内置观测首页已交付：OTel 已接入 serve 命令、Prometheus metrics 和 run snapshot 已连线、eval CLI 已添加；Dashboard 支持 Overview / Projects / Providers / Runs 四个标签，工程面板与 Provider 面板均支持 today/thisWeek/thisMonth/all 时间维度切换。
 - M9 发布收尾已基本完成：从零部署验收、容器嵌套沙箱集成验证均通过；版本 bump 待用户决策。
 - M7 已完成：workspace 定制、国际化、memory/reflection 全流程集成（light mode）已交付。
@@ -136,7 +135,11 @@
   分别按 changelist revision 在配置 depot 内 `p4 print`、按 SVN revision 在
   `repository_url` 内 `svn cat -r`，不做全仓同步/checkout。
 - 归因能力必须来自事件、provider API 或只读 VCS 工具。
-- 详细合同：`docs/ai/architecture.md` §3.2。
+- **归因（attribution）基础能力已交付（P1）**：VCS 层新增可选 `VcsAdapter.fetchAttribution`
+  与 `AttributionRequest`/`AttributionEntry`/`AttributionResult` 合同，git/P4/SVN 分别用
+  `git blame --line-porcelain`、`p4 annotate -c` + `p4 describe -s` join、`svn blame` 解析，
+  best-effort 缺失返回 `not_found`/`partial`；`aicr.try_blame` MCP 工具尚未落地，不提前宣传。
+- 详细合同：`docs/ai/architecture.md` §3.2、§3.9.2。
 
 ### 3.3 Compression
 
@@ -341,8 +344,8 @@
 | M2 | 已完成 | `docs/ai/milestones/M2.md` | 作为 agent/sandbox 基线 |
 | M3 | 已完成 | `docs/ai/milestones/M3.md` | 继续复用压缩、预算、队列与 scrubber 能力 |
 | M4 | 已完成 | `docs/ai/milestones/M4.md` | 继续扩展模板、路由与 attribution |
-| M5 | 基本完成 | `docs/ai/milestones/M5.md` | HTTP/SSE MCP transport 调研（非阻塞） |
-| M6 | 部分完成 | GitHub 生产链路已验收；SVN 基础 adapter 已实现 | GitLab e2e、SVN 真实仓库 e2e/触发脚本移至 Backlog |
+| M5 | 已完成 | `docs/ai/milestones/M5.md` | 保持 runtime bundle 与 MCP transport 合同稳定 |
+| M6 | 部分完成 | GitHub 生产链路已验收；SVN 基础 adapter 已实现；VCS 归因（attribution）基础合同已交付 | GitLab e2e、SVN 真实仓库 e2e/触发脚本移至 Backlog |
 | M7 | 已完成 | `docs/ai/milestones/M7.md` | thorough mode、跨 workspace 知识迁移 → Backlog |
 | M8 | 大部分完成 | `docs/ai/milestones/M8.md` | CI eval 集成移至 Backlog |
 | M9 | 基本完成 | `docs/ai/milestones/M9.md` | 版本 tag（用户决策） |
@@ -350,13 +353,17 @@
 
 ### 8.2 当前执行包
 
-1. **M5：runtime bundle 与 agent 原生能力对齐**（基本完成，已完成项归档至 `docs/ai/milestones/M5.md`）
-    - HTTP/SSE 传输模式（`@aicr/mcp-output` 当前仅支持 stdio；待调研 MCP SDK HTTP transport 可行性；非阻塞项，可延后至 M9 之后）
+1. **M5：runtime bundle 与 agent 原生能力对齐**（已完成，已完成项归档至 `docs/ai/milestones/M5.md`）
+    - ~~Streamable HTTP MCP transport~~（已交付：`@aicr/mcp-output` 支持 `--transport http` 本地 Streamable HTTP endpoint；runtime bundle/Kilo 默认 stdio 保持不变；本地 SDK client 测试覆盖工具列表、工具调用、state file 写入和 mounted source context 返回）
 2. **M6：跨 VCS 能力补齐**（GitHub 已验收）
     - GitLab webhook、dispatcher 与 PR review 已实现并带单元测试；待补齐真实仓库端到端验证记录 → **Backlog**
     - ~~SVN 基础 VCS adapter~~（已交付：`svn diff --summarize` 列变更、`svn cat -r`
       scoped fetch/额外上下文、`svn diff --git` 解析、与 Git/P4 一致的
       `watch_path`/`include_cr_file`/`exclude_cr_file` 过滤、server factory 接入与单元测试）
+    - ~~VCS 归因（attribution）基础能力 P1~~（已交付：可选 `VcsAdapter.fetchAttribution` +
+      `AttributionRequest`/`AttributionEntry`/`AttributionResult` 合同；git `blame --line-porcelain`、
+      P4 `annotate -c` + `describe -s` join、SVN `blame` 解析；mock runner 覆盖
+      `ok`/`not_found`/`partial` 与路径越界；`aicr.try_blame` MCP 工具待后续接线）
     - SVN 真实仓库 e2e 与入站触发脚本/端点设计 → **Backlog**
 3. **M8：观测与回放**（大部分完成，已完成项归档至 `docs/ai/milestones/M8.md`）
     - CI eval 基准集成（将 `aicr eval` 接入 CI 流水线；需 CI pipeline 权限，延后扩展）→ **Backlog**
@@ -389,10 +396,17 @@
 能用本地单元测试、集成测试、markdownlint/typecheck/build 闭环；若过程中发现必须接入
 外部服务，应拆出本地合同层并把真实环境验证留在 §8.4。
 
+最近完成：
+- P0 Streamable HTTP MCP transport 已落地并通过本地 HTTP MCP client 测试；stdio
+  仍是 runtime bundle 默认 transport。
+- P1 blame/annotate 基础能力已落地：VCS 层新增可选 `VcsAdapter.fetchAttribution` 与
+  `AttributionRequest`/`AttributionEntry`/`AttributionResult` 合同，git/P4/SVN 分别用
+  `git blame --line-porcelain`、`p4 annotate -c` + `p4 describe -s` join、`svn blame`
+  解析，mock runner 覆盖解析成功、缺失归因（`not_found`/`partial`）与路径越界；未宣传
+  `aicr.try_blame` MCP 工具（VCS 层合同先行，MCP 接线待后续）。
+
 | 优先级 | 项 | 来源里程碑 | 本地完成标准 |
 | --- | --- | --- | --- |
-| P0 | Streamable HTTP MCP transport | M5 | 基于现有 `@modelcontextprotocol/sdk` Streamable HTTP transport 增加本地 HTTP 启动/请求测试；stdio 保持默认可用；同步 `docs/output-channels.md`、`example/README.md` 和 agent runtime bundle 说明 |
-| P1 | blame/annotate 基础能力 | M6 | 在 VCS 层定义最小 attribution 接口并用 mock runner 覆盖 `git blame` / `p4 annotate` / `svn blame` 解析、缺失归因和路径越界；不提前宣传 `aicr.try_blame`，除非 MCP 工具也落地并测试 |
 | P2 | SVN 触发入口本地合同层 | M6 | 增加 `/triggers/svn` 或等价 translator 的 payload schema、鉴权、ReviewEvent 归一化、示例脚本骨架和单元测试；真实 SVN 仓库 e2e 留在 §8.4 |
 | P3 | Reflection thorough mode 小切片 | M7 | 先做跨 run false-positive / 重复问题模式聚合的最小实现，保持 workspace 隔离、稳定 fingerprint 和脱敏测试；不一次性扩展成完整知识迁移系统 |
 | P4 | SQLite queue backend | M3/M8 | 以 SQLite 实现最小 durable queue：enqueue、claim、ack/fail、retry/dead-letter、并发 claim 测试；替换当前 `queue.kind: sqlite` fallback 前必须补 schema/docs |

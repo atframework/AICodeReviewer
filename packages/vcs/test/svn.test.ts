@@ -225,3 +225,124 @@ describe("SvnVcsAdapter", () => {
     expect(String(thrown)).not.toContain("secret-password");
   });
 });
+
+describe("SvnVcsAdapter.fetchAttribution", () => {
+  const blameOutput = [
+    "    12     alice line one",
+    "    15     bob   line two",
+  ].join("\n");
+
+  it("parses svn blame into attribution entries", async () => {
+    const calls: string[][] = [];
+    const svn: SvnCommandRunner = async (args) => {
+      calls.push([...args]);
+      return { stdout: blameOutput, stderr: "" };
+    };
+    const adapter = createSvnVcsAdapter({ repositoryDir: "C:/repo", repositoryUrl, svn });
+
+    const result = await adapter.fetchAttribution(
+      { path: "src/app.ts", revision: "15", reason: "blame" },
+      { id: "ws", sourceDir: "C:/repo/source" },
+    );
+
+    expect(result.status).toBe("ok");
+    expect(result.entries).toEqual([
+      { line: 1, revision: "12", author: "alice" },
+      { line: 2, revision: "15", author: "bob" },
+    ]);
+    expect(calls[0]).toEqual([
+      "--non-interactive",
+      "blame",
+      "-r",
+      "15",
+      `${repositoryUrl}/src/app.ts`,
+    ]);
+  });
+
+  it("omits -r when no revision is requested", async () => {
+    const calls: string[][] = [];
+    const svn: SvnCommandRunner = async (args) => {
+      calls.push([...args]);
+      return { stdout: blameOutput, stderr: "" };
+    };
+    const adapter = createSvnVcsAdapter({ repositoryDir: "C:/repo", repositoryUrl, svn });
+
+    await adapter.fetchAttribution(
+      { path: "src/app.ts", reason: "blame" },
+      { id: "ws", sourceDir: "C:/repo/source" },
+    );
+
+    expect(calls[0]).toEqual(["--non-interactive", "blame", `${repositoryUrl}/src/app.ts`]);
+  });
+
+  it("filters attribution to the requested line range", async () => {
+    const svn: SvnCommandRunner = async () => ({ stdout: blameOutput, stderr: "" });
+    const adapter = createSvnVcsAdapter({ repositoryDir: "C:/repo", repositoryUrl, svn });
+
+    const result = await adapter.fetchAttribution(
+      { path: "src/app.ts", startLine: 2, endLine: 2, revision: "15", reason: "blame" },
+      { id: "ws", sourceDir: "C:/repo/source" },
+    );
+
+    expect(result.entries).toHaveLength(1);
+    expect(result.entries[0]?.line).toBe(2);
+    expect(result.entries[0]?.author).toBe("bob");
+  });
+
+  it("returns not_found when blame produces no parseable output (binary file)", async () => {
+    const svn: SvnCommandRunner = async () => ({
+      stdout: "Skipping binary file: src/app.ts\n",
+      stderr: "",
+    });
+    const adapter = createSvnVcsAdapter({ repositoryDir: "C:/repo", repositoryUrl, svn });
+
+    const result = await adapter.fetchAttribution(
+      { path: "src/app.ts", revision: "15", reason: "blame" },
+      { id: "ws", sourceDir: "C:/repo/source" },
+    );
+
+    expect(result).toEqual({ path: "src/app.ts", status: "not_found", entries: [] });
+  });
+
+  it("returns not_found when blame reports a missing path", async () => {
+    const svn: SvnCommandRunner = async () => {
+      throw new Error("svn: E160013: File not found");
+    };
+    const adapter = createSvnVcsAdapter({ repositoryDir: "C:/repo", repositoryUrl, svn });
+
+    const result = await adapter.fetchAttribution(
+      { path: "src/missing.ts", revision: "15", reason: "blame" },
+      { id: "ws", sourceDir: "C:/repo/source" },
+    );
+
+    expect(result).toEqual({ path: "src/missing.ts", status: "not_found", entries: [] });
+  });
+
+  it("rethrows non-missing blame errors instead of masking them as not_found", async () => {
+    const svn: SvnCommandRunner = async () => {
+      throw new Error("svn: E170013: Unable to connect to a repository at URL");
+    };
+    const adapter = createSvnVcsAdapter({ repositoryDir: "C:/repo", repositoryUrl, svn });
+
+    await expect(
+      adapter.fetchAttribution(
+        { path: "src/app.ts", revision: "15", reason: "blame" },
+        { id: "ws", sourceDir: "C:/repo/source" },
+      ),
+    ).rejects.toThrow("Unable to connect");
+  });
+
+  it("rejects a path that escapes the configured repository_url", async () => {
+    const svn: SvnCommandRunner = async () => {
+      throw new Error("svn should not be called for an out-of-repo path");
+    };
+    const adapter = createSvnVcsAdapter({ repositoryDir: "C:/repo", repositoryUrl, svn });
+
+    await expect(
+      adapter.fetchAttribution(
+        { path: "https://other.example.com/repos/project/file.ts", revision: "15", reason: "blame" },
+        { id: "ws", sourceDir: "C:/repo/source" },
+      ),
+    ).rejects.toThrow("must stay within the configured repository_url");
+  });
+});

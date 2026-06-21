@@ -83,6 +83,20 @@
   `aicr.fetch_more_context` 对未物化相关文件回拉
   `<repository_url>/<path>@revision` 等价内容，并拒绝配置 `repository_url` 外的 URL。
   真实 SVN 仓库 e2e 与入站触发脚本/端点仍属 Backlog。
+- **归因（attribution）能力**是 best-effort 上下文工具，通过 `VcsAdapter` 上的**可选**
+  `fetchAttribution(req, ws)` 方法提供，不污染默认 fingerprint，也不强制每个 adapter 实现
+  （provider API 路径与 mock adapter 可省略）：
+  - 请求 `AttributionRequest` 复用 `{ path, startLine?, endLine?, revision?, reason }` 形态；
+    结果 `AttributionResult` 返回 `status: ok | not_found | partial` 与逐行
+    `AttributionEntry`（`line` + 可选 `revision`/`author`/`authorEmail`/`summary`），不含文件内容。
+  - 解析来源：git 用 `git blame --line-porcelain`（支持 SHA-1/SHA-256），P4 用
+    `p4 annotate -c` 逐行 changelist 再批量 `p4 describe -s` 补 author/summary（describe 失败降级为
+    `partial`），SVN 用 `svn blame` 文本（仅取 revision + author，不解析内容列）。
+  - 路径越界统一复用 scoped fetch 的守卫：git 经 `normalizeChangedPath` 拒绝 `../`，P4 经
+    `toDepotPrintPath` 限定在配置 depot 内，SVN 经 `toLocalPath` 限定在配置 `repository_url` 内；
+    文件/revision 不存在或无可解析输出时显式返回 `not_found`，部分缺失 author 时返回 `partial`。
+  - 当前只交付 VCS 层接口与解析，**尚未对外宣传 `aicr.try_blame` MCP 工具**；MCP 工具与
+    orchestrator 接线需在工具落地并测试后再开放。
 
 ### 3.3 Compression
 
@@ -163,6 +177,7 @@
   - 把完整 skill 文件作为只读资源挂载
   - 用 stdout tool-call 作为兼容回退
 - MCP 工具名必须来自注册表，而不是从 prompt 文本反推。
+- Runtime bundle 当前默认物化本地 stdio `aicr-output` MCP server；`@aicr/mcp-output` 也支持显式启动的本地 Streamable HTTP endpoint（`--transport http`），复用同一工具注册表和 `.aicr-output-state.json` 合同。
 
 ### 3.7 AgentAdapter 与模型翻译
 
@@ -229,6 +244,7 @@
 - problem 合同保持最小稳定字段；`message` 讲问题与影响，`suggestion` 给修复建议。
 - 模板渲染与最终发布由输出层统一控制，而不是让 agent 直写各平台方言。
 - Agent CLI 的自由文本 stdout 不是正式审查结果；无法解析出 AICR tool payload 时先触发结构化修复重试，避免中间思考泄露到 IM 通知。
+- `@aicr/mcp-output` 的 stdio 与 Streamable HTTP server 使用同一组稳定工具和 state file 合同；Kilo runtime bundle 默认仍走 stdio，HTTP endpoint 供支持远程/HTTP MCP 的客户端或本地集成测试显式启用。
 - Kilo 等原生 MCP agent 写入 `.aicr-output-state.json` 后，orchestrator 必须读取其中的 problems / summaries / skip 和 `contextRequests`；`contextRequests` 需要通过 VCS `fetchExtraContext` 执行并回灌到 follow-up prompt，而不是只计数或发布“无法访问完整仓库代码”的摘要。
 - Kilo JSON stream 中的 `tool_call` / `tool_use` 事件在 MCP state 缺失时作为兼容回退执行，确保 `aicr.fetch_more_context` 不会因为 stdout 中没有最终 JSON payload 而丢失。
 - 每次 agent run 启动前要清理旧 `.aicr-output-state.json`，避免上一次 repair pass 的工具状态污染下一次输出。
@@ -261,6 +277,8 @@
 - attribution 来源只能是事件、provider API 或只读 VCS 工具。
 - agent 不得根据 commit message、diff 文本或昵称猜测作者。
 - best-effort attribution 缺失时，必须显式返回 `not_found` / `partial`。
+- VCS 层归因已通过可选 `VcsAdapter.fetchAttribution` 落地（git/P4/SVN，见 §3.2），但
+  `aicr.try_blame` MCP 工具尚未对外宣传，未接入 orchestrator。
 
 #### 3.9.3 模板引擎
 
