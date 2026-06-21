@@ -174,7 +174,7 @@ Kilo Code is the primary deployment-test agent for AICodeReviewer. The repeatabl
 1. Start AICR locally or in the deployment environment.
 2. In Kilo Code, run a review task against the same workspace that the service will use.
 3. Confirm that AICR materializes Kilo provider config under the run `agent/` directory and injects the model provider from `llm.fallback_chain`.
-4. Confirm Kilo receives the `aicr-output` MCP server config in the materialized `.kilo/kilo.json`, calls AICR tools, and writes `.aicr-output-state.json` in the run `agent/` directory. `aicr.fetch_more_context` requests should either return already mounted source content or be replayed by the orchestrator through VCS fetch and a final follow-up pass.
+4. Confirm Kilo receives the default stdio `aicr-output` MCP server config in the materialized `.kilo/kilo.json`, calls AICR tools, and writes `.aicr-output-state.json` in the run `agent/` directory. `aicr.fetch_more_context` requests should either return already mounted source content or be replayed by the orchestrator through VCS fetch and a final follow-up pass.
 5. Trigger the review through the normal entry point, such as `/webhooks/gitea` or `/triggers/p4`.
 6. Verify the AICR log contains a scheduled run and a completed `reviewRun` with a non-zero `dispatchCount` when an output route is configured.
 7. Verify the destination channel received the report: PR/MR line comments, managed issue comments, Feishu card, or WeCom Markdown. A final report that only says the full repository/source is inaccessible should be treated as a failed verification unless it first requested concrete context through `aicr.fetch_more_context` and AICR reran the final pass.
@@ -188,6 +188,8 @@ kilo run --auto --model <model-id> --cwd <workspace-agent-dir> --timeout 600
 ```
 
 The CLI smoke test must use the same model id and provider that AICR translates from `llm.providers` and `llm.fallback_chain`. If the CLI succeeds but Kilo Code fails, treat the deployment as not verified.
+
+For transport-level MCP smoke tests outside Kilo, build first and run `node packages/mcp-output/dist/server.js --transport http --host 127.0.0.1 --port 3000`. This starts the same AICR output tools over a local Streamable HTTP endpoint; production Kilo runtime bundles still use local stdio MCP unless an adapter explicitly chooses HTTP.
 
 ## Docker (without Compose)
 

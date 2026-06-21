@@ -22,7 +22,7 @@ The current in-process tool registry exposes these AICR tools to the review exec
 
 Planned attribution, memory, and skill recall tools are tracked by the `Plan.md` roadmap and detailed in `docs/ai/architecture.md`; do not describe them as implemented until they exist in `packages/mcp-output` and tests.
 
-`@aicr/mcp-output` provides both the in-process registry used by direct LLM/stdout-compatible runs and a stdio MCP server materialized into Kilo runtime bundles. The stdio server writes `.aicr-output-state.json` in the isolated `agent/` directory after tool calls; the orchestrator reads that state, validates review outputs, executes any recorded `aicr.fetch_more_context` requests through the configured VCS adapter, and reruns a final pass with fetched content when needed. Streamable HTTP MCP transport remains future work.
+`@aicr/mcp-output` provides the in-process registry used by direct LLM/stdout-compatible runs, the stdio MCP server materialized into Kilo runtime bundles, and an optional local Streamable HTTP endpoint started with `aicr-mcp-server --transport http`. Runtime bundles still use stdio by default. Both server transports write `.aicr-output-state.json` in the isolated `agent/` directory after tool calls; the orchestrator reads that state, validates review outputs, executes any recorded `aicr.fetch_more_context` requests through the configured VCS adapter, and reruns a final pass with fetched content when needed.
 
 ## Problem schema
 

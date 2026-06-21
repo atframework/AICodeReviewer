@@ -656,3 +656,142 @@ Affected files ...
     });
   });
 });
+
+describe("P4VcsAdapter.fetchAttribution", () => {
+  const annotateOutput = [
+    "12345: line one",
+    "12345: line two",
+    "12999: line three",
+    "",
+  ].join("\n");
+
+  const describeOutput = [
+    "Change 12345 by alice@alice-client on 2024/01/15 10:30:00",
+    "",
+    "\tfix login flow",
+    "",
+    "Affected files ...",
+    "Change 12999 by bob@bob-client on 2024/02/01 14:00:00",
+    "",
+    "\trefactor module",
+    "",
+    "Affected files ...",
+  ].join("\n");
+
+  it("joins p4 annotate -c with p4 describe -s into full attribution", async () => {
+    const calls: string[][] = [];
+    const p4: P4CommandRunner = async (args) => {
+      calls.push([...args]);
+      if (args.includes("annotate")) return { stdout: annotateOutput, stderr: "" };
+      if (args.includes("describe")) return { stdout: describeOutput, stderr: "" };
+      return { stdout: "", stderr: "" };
+    };
+    const adapter = new P4VcsAdapter({
+      repositoryDir: "/tmp/test",
+      depot: "//depot/main",
+      p4,
+    });
+
+    const result = await adapter.fetchAttribution(
+      { path: "src/app.ts", revision: "12345", reason: "blame" },
+      { id: "ws", sourceDir: "/tmp/test/source" },
+    );
+
+    expect(result.status).toBe("ok");
+    expect(result.entries).toEqual([
+      { line: 1, revision: "12345", author: "alice", summary: "fix login flow" },
+      { line: 2, revision: "12345", author: "alice", summary: "fix login flow" },
+      { line: 3, revision: "12999", author: "bob", summary: "refactor module" },
+    ]);
+    expect(calls[0]).toContain("annotate");
+    expect(calls[0]).toContain("-c");
+    expect(calls[0]).toContain("//depot/main/src/app.ts@12345");
+    expect(calls[1]).toContain("describe");
+  });
+
+  it("reports partial attribution when describe join fails", async () => {
+    const p4: P4CommandRunner = async (args) => {
+      if (args.includes("annotate")) return { stdout: annotateOutput, stderr: "" };
+      if (args.includes("describe")) throw new Error("connection failed");
+      return { stdout: "", stderr: "" };
+    };
+    const adapter = new P4VcsAdapter({ repositoryDir: "/tmp/test", depot: "//depot/main", p4 });
+
+    const result = await adapter.fetchAttribution(
+      { path: "src/app.ts", revision: "12345", reason: "blame" },
+      { id: "ws", sourceDir: "/tmp/test/source" },
+    );
+
+    expect(result.status).toBe("partial");
+    expect(result.entries).toHaveLength(3);
+    expect(result.entries[0]).toEqual({ line: 1, revision: "12345" });
+    expect(result.entries[0]?.author).toBeUndefined();
+  });
+
+  it("filters attribution to the requested line range", async () => {
+    const p4: P4CommandRunner = async (args) => {
+      if (args.includes("annotate")) return { stdout: annotateOutput, stderr: "" };
+      if (args.includes("describe")) return { stdout: describeOutput, stderr: "" };
+      return { stdout: "", stderr: "" };
+    };
+    const adapter = new P4VcsAdapter({ repositoryDir: "/tmp/test", depot: "//depot/main", p4 });
+
+    const result = await adapter.fetchAttribution(
+      { path: "src/app.ts", startLine: 3, endLine: 3, revision: "12345", reason: "blame" },
+      { id: "ws", sourceDir: "/tmp/test/source" },
+    );
+
+    expect(result.entries).toHaveLength(1);
+    expect(result.entries[0]?.line).toBe(3);
+    expect(result.entries[0]?.author).toBe("bob");
+  });
+
+  it("returns not_found when annotate reports no such file", async () => {
+    const p4: P4CommandRunner = async (args) => {
+      if (args.includes("annotate")) {
+        const error = new Error("p4 annotate failed");
+        Object.assign(error, {
+          stdout: "",
+          stderr: "//depot/main/src/missing.ts - no such file(s).",
+        });
+        throw error;
+      }
+      return { stdout: "", stderr: "" };
+    };
+    const adapter = new P4VcsAdapter({ repositoryDir: "/tmp/test", depot: "//depot/main", p4 });
+
+    const result = await adapter.fetchAttribution(
+      { path: "src/missing.ts", revision: "12345", reason: "blame" },
+      { id: "ws", sourceDir: "/tmp/test/source" },
+    );
+
+    expect(result).toEqual({ path: "src/missing.ts", status: "not_found", entries: [] });
+  });
+
+  it("returns not_found when annotate produces no parseable lines", async () => {
+    const p4: P4CommandRunner = async () => ({ stdout: "binary file\n", stderr: "" });
+    const adapter = new P4VcsAdapter({ repositoryDir: "/tmp/test", depot: "//depot/main", p4 });
+
+    const result = await adapter.fetchAttribution(
+      { path: "src/app.ts", revision: "12345", reason: "blame" },
+      { id: "ws", sourceDir: "/tmp/test/source" },
+    );
+
+    expect(result.status).toBe("not_found");
+    expect(result.entries).toEqual([]);
+  });
+
+  it("rejects a path outside the configured depot", async () => {
+    const p4: P4CommandRunner = async () => {
+      throw new Error("p4 should not be called for an out-of-depot path");
+    };
+    const adapter = new P4VcsAdapter({ repositoryDir: "/tmp/test", depot: "//depot/main", p4 });
+
+    await expect(
+      adapter.fetchAttribution(
+        { path: "//other/depot/file.ts", revision: "12345", reason: "blame" },
+        { id: "ws", sourceDir: "/tmp/test/source" },
+      ),
+    ).rejects.toThrow("must stay within");
+  });
+});

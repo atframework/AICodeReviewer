@@ -5,7 +5,22 @@ import { promisify } from "node:util";
 
 import { normalizeChangedPath, normalizePath, type ReviewEvent } from "@aicr/core";
 
-import type { ChangeRange, ExtraContextRequest, ExtraContextResult, ScopedTree, VcsAdapter, WorkspaceRef } from "./contracts.js";
+import {
+  buildAttributionEntry,
+  determineAttributionStatus,
+  filterAttributionByLineRange,
+} from "./attribution.js";
+import type {
+  AttributionEntry,
+  AttributionRequest,
+  AttributionResult,
+  ChangeRange,
+  ExtraContextRequest,
+  ExtraContextResult,
+  ScopedTree,
+  VcsAdapter,
+  WorkspaceRef,
+} from "./contracts.js";
 import { parseUnifiedDiff, type ParsedDiff } from "./diff.js";
 import { filterFilesByPatterns, filterFilesByWatchPath } from "./path-filters.js";
 
@@ -140,6 +155,73 @@ function isP4DeleteAction(action: string | undefined): boolean {
 
 function isDevNullPath(path: string): boolean {
   return path === "/dev/null" || path === "//dev/null";
+}
+
+const P4_ANNOTATE_LINE_RE = /^(\d+):/u;
+
+export function parseP4AnnotateForAttribution(stdout: string): AttributionEntry[] {
+  const entries: AttributionEntry[] = [];
+  let lineNumber = 0;
+
+  for (const line of stdout.split(/\r?\n/u)) {
+    const match = P4_ANNOTATE_LINE_RE.exec(line);
+    if (!match) {
+      continue;
+    }
+
+    lineNumber += 1;
+    entries.push(
+      buildAttributionEntry({
+        line: lineNumber,
+        revision: match[1],
+      }),
+    );
+  }
+
+  return entries;
+}
+
+interface P4DescribeAttribution {
+  readonly author?: string;
+  readonly summary?: string;
+}
+
+export function parseP4DescribeForAttribution(
+  stdout: string,
+): ReadonlyMap<string, P4DescribeAttribution> {
+  const map = new Map<string, P4DescribeAttribution>();
+  let currentClist: string | null = null;
+  let summaryCaptured = false;
+
+  for (const line of stdout.split(/\r?\n/u)) {
+    const headerMatch = /^Change (\d+) by (\S+)@/u.exec(line);
+    if (headerMatch) {
+      const clist = headerMatch[1];
+      const author = headerMatch[2];
+      if (clist && author) {
+        currentClist = clist;
+        map.set(clist, { author });
+      } else {
+        currentClist = null;
+      }
+      summaryCaptured = false;
+      continue;
+    }
+
+    if (!currentClist || summaryCaptured) {
+      continue;
+    }
+
+    const summaryMatch = /^\t\s*(.+?)\s*$/u.exec(line);
+    const summary = summaryMatch?.[1];
+    if (summary) {
+      const existing = map.get(currentClist);
+      map.set(currentClist, { ...existing, summary });
+      summaryCaptured = true;
+    }
+  }
+
+  return map;
 }
 
 function appendSyntheticUnifiedHeaders(
@@ -376,6 +458,66 @@ export class P4VcsAdapter implements VcsAdapter {
     };
   }
 
+  async fetchAttribution(req: AttributionRequest, ws: WorkspaceRef): Promise<AttributionResult> {
+    const workspaceSourceDir = resolve(ws.sourceDir);
+    const requestedLocalPath = this.toLocalPath(req.path);
+    const normalizedPath = normalizeChangedPath(workspaceSourceDir, requestedLocalPath);
+    const depotPath = this.toDepotPrintPath(req.path, normalizedPath);
+    const annotateTarget = req.revision ? `${depotPath}@${req.revision}` : depotPath;
+
+    let annotateStdout: string;
+    try {
+      const result = await this.runP4(["annotate", "-c", annotateTarget]);
+      annotateStdout = result.stdout;
+    } catch (error) {
+      const errorText = getErrorText(error);
+      if (/no such file\(s\)/iu.test(errorText)) {
+        return { path: normalizedPath, status: "not_found", entries: [] };
+      }
+      throw error;
+    }
+
+    const annotated = parseP4AnnotateForAttribution(annotateStdout);
+    if (annotated.length === 0) {
+      return { path: normalizedPath, status: "not_found", entries: [] };
+    }
+
+    const uniqueChangelists = Array.from(
+      new Set(annotated.map((entry) => entry.revision).filter((value): value is string => Boolean(value))),
+    );
+
+    let describeMap: ReadonlyMap<string, P4DescribeAttribution> = new Map();
+    if (uniqueChangelists.length > 0) {
+      try {
+        const describeResult = await this.runP4(["describe", "-s", ...uniqueChangelists]);
+        describeMap = parseP4DescribeForAttribution(describeResult.stdout);
+      } catch {
+        // Best-effort: keep changelist-only attribution and mark partial.
+      }
+    }
+
+    const merged = annotated.map((entry) => {
+      const describe = entry.revision ? describeMap.get(entry.revision) : undefined;
+      return buildAttributionEntry({
+        line: entry.line,
+        revision: entry.revision,
+        author: describe?.author,
+        summary: describe?.summary,
+      });
+    });
+
+    const filtered = filterAttributionByLineRange(merged, req.startLine, req.endLine);
+    if (filtered.length === 0) {
+      return { path: normalizedPath, status: "not_found", entries: [] };
+    }
+
+    return {
+      path: normalizedPath,
+      status: determineAttributionStatus(filtered),
+      entries: filtered,
+    };
+  }
+
   async diff(range: ChangeRange): Promise<ParsedDiff> {
     const revision = range.headRevision;
     if (!revision) {
@@ -460,7 +602,7 @@ export class P4VcsAdapter implements VcsAdapter {
     if (requestPath.startsWith("//")) {
       const depotBase = this.depot?.replace(/\/+$/u, "");
       if (depotBase && requestPath !== depotBase && !requestPath.startsWith(`${depotBase}/`)) {
-        throw new RangeError("fetchExtraContext path must stay within the configured P4 depot path.");
+        throw new RangeError("path must stay within the configured P4 depot path.");
       }
 
       return requestPath;

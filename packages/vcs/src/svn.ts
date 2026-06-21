@@ -5,7 +5,22 @@ import { promisify } from "node:util";
 
 import { normalizeChangedPath, normalizePath, type ReviewEvent } from "@aicr/core";
 
-import type { ChangeRange, ExtraContextRequest, ExtraContextResult, ScopedTree, VcsAdapter, WorkspaceRef } from "./contracts.js";
+import {
+  buildAttributionEntry,
+  determineAttributionStatus,
+  filterAttributionByLineRange,
+} from "./attribution.js";
+import type {
+  AttributionEntry,
+  AttributionRequest,
+  AttributionResult,
+  ChangeRange,
+  ExtraContextRequest,
+  ExtraContextResult,
+  ScopedTree,
+  VcsAdapter,
+  WorkspaceRef,
+} from "./contracts.js";
 import { parseUnifiedDiff, type ParsedDiff } from "./diff.js";
 import { filterFilesByPatterns, filterFilesByWatchPath } from "./path-filters.js";
 
@@ -77,6 +92,44 @@ function isUrlLike(value: string): boolean {
   } catch {
     return false;
   }
+}
+
+const SVN_BLAME_LINE_RE = /^\s*(\d+)\s+(\S+)/u;
+
+function isSvnBlameMissingError(error: unknown): boolean {
+  const candidate = error as { readonly stdout?: unknown; readonly stderr?: unknown };
+  const text = [
+    error instanceof Error ? error.message : String(error),
+    typeof candidate.stdout === "string" ? candidate.stdout : "",
+    typeof candidate.stderr === "string" ? candidate.stderr : "",
+  ].join("\n");
+
+  return /(?:E160013|E200009|path not found|no such file|does not exist|not a working copy|is not under version control)/iu.test(
+    text,
+  );
+}
+
+export function parseSvnBlameForAttribution(stdout: string): AttributionEntry[] {
+  const entries: AttributionEntry[] = [];
+  let lineNumber = 0;
+
+  for (const line of stdout.split(/\r?\n/u)) {
+    const match = SVN_BLAME_LINE_RE.exec(line);
+    if (!match) {
+      continue;
+    }
+
+    lineNumber += 1;
+    entries.push(
+      buildAttributionEntry({
+        line: lineNumber,
+        revision: match[1],
+        author: match[2],
+      }),
+    );
+  }
+
+  return entries;
 }
 
 function appendPathToRepositoryUrl(repositoryUrl: string, path: string): string {
@@ -343,6 +396,44 @@ export class SvnVcsAdapter implements VcsAdapter {
     return {
       path: normalizedPath,
       content: selectLineRange(content, req.startLine, req.endLine),
+    };
+  }
+
+  async fetchAttribution(req: AttributionRequest, ws: WorkspaceRef): Promise<AttributionResult> {
+    const workspaceSourceDir = resolve(ws.sourceDir);
+    const requestedLocalPath = this.toLocalPath(req.path);
+    const normalizedPath = normalizeChangedPath(workspaceSourceDir, requestedLocalPath);
+
+    const blameArgs = [
+      ...(req.revision ? ["-r", req.revision] : []),
+      this.targetForPath(normalizedPath),
+    ];
+
+    let stdout: string;
+    try {
+      const result = await this.runSvn(["blame", ...blameArgs]);
+      stdout = result.stdout;
+    } catch (error) {
+      if (isSvnBlameMissingError(error)) {
+        return { path: normalizedPath, status: "not_found", entries: [] };
+      }
+      throw error;
+    }
+
+    const parsed = parseSvnBlameForAttribution(stdout);
+    if (parsed.length === 0) {
+      return { path: normalizedPath, status: "not_found", entries: [] };
+    }
+
+    const filtered = filterAttributionByLineRange(parsed, req.startLine, req.endLine);
+    if (filtered.length === 0) {
+      return { path: normalizedPath, status: "not_found", entries: [] };
+    }
+
+    return {
+      path: normalizedPath,
+      status: determineAttributionStatus(filtered),
+      entries: filtered,
     };
   }
 

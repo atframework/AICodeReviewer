@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
 import type {
+  AttributionEntry,
+  AttributionRequest,
+  AttributionResult,
   ChangeRange,
   ExtraContextRequest,
   ExtraContextResult,
@@ -85,6 +88,54 @@ describe("vcs contracts", () => {
     expect(result.content).toContain("login");
   });
 
+  it("allows constructing a valid AttributionRequest", () => {
+    const req: AttributionRequest = {
+      path: "src/auth/login.ts",
+      startLine: 10,
+      endLine: 50,
+      revision: "def456",
+      reason: "agent requested authorship for auth flow",
+    };
+
+    expect(req.startLine).toBe(10);
+    expect(req.revision).toBe("def456");
+  });
+
+  it("allows constructing an AttributionRequest with only required fields", () => {
+    const req: AttributionRequest = {
+      path: "src/index.ts",
+      reason: "attribution for whole file",
+    };
+
+    expect(req.startLine).toBeUndefined();
+    expect(req.endLine).toBeUndefined();
+    expect(req.revision).toBeUndefined();
+  });
+
+  it("allows constructing AttributionEntry and AttributionResult with best-effort fields", () => {
+    const entry: AttributionEntry = {
+      line: 12,
+      revision: "abc123",
+      author: "alice",
+      authorEmail: "alice@example.com",
+      summary: "fix login flow",
+    };
+
+    expect(entry.author).toBe("alice");
+
+    const partial: AttributionEntry = { line: 13 };
+    expect(partial.revision).toBeUndefined();
+
+    const result: AttributionResult = {
+      path: "src/auth/login.ts",
+      status: "partial",
+      entries: [entry, partial],
+    };
+
+    expect(result.status).toBe("partial");
+    expect(result.entries).toHaveLength(2);
+  });
+
   it("supports all VcsAdapter kind values defined in Plan.md §3.2", () => {
     const kinds: VcsAdapter["kind"][] = [
       "git",
@@ -122,5 +173,46 @@ describe("vcs contracts", () => {
     expect(typeof mockAdapter.listChanges).toBe("function");
     expect(typeof mockAdapter.fetchScoped).toBe("function");
     expect(typeof mockAdapter.fetchExtraContext).toBe("function");
+  });
+
+  it("does not require fetchAttribution on a mock VcsAdapter (best-effort attribution)", () => {
+    const mockAdapter: VcsAdapter = {
+      kind: "github",
+      listChanges: async () => ({ files: [] }),
+      fetchScoped: async (_range, ws) => ({
+        workspaceId: ws.id,
+        rootDir: ws.sourceDir,
+        fetchedFiles: [],
+      }),
+      fetchExtraContext: async (req) => ({ path: req.path, content: "" }),
+    };
+
+    expect(mockAdapter.fetchAttribution).toBeUndefined();
+  });
+
+  it("allows implementing fetchAttribution on a mock VcsAdapter", async () => {
+    const mockAdapter: VcsAdapter = {
+      kind: "git",
+      listChanges: async () => ({ files: [] }),
+      fetchScoped: async (_range, ws) => ({
+        workspaceId: ws.id,
+        rootDir: ws.sourceDir,
+        fetchedFiles: [],
+      }),
+      fetchExtraContext: async (req) => ({ path: req.path, content: "" }),
+      fetchAttribution: async (req) => ({
+        path: req.path,
+        status: "ok",
+        entries: [{ line: 1, revision: "abc", author: "alice" }],
+      }),
+    };
+
+    const result = await mockAdapter.fetchAttribution(
+      { path: "src/a.ts", reason: "test" },
+      { id: "ws", sourceDir: "/tmp/ws/source" },
+    );
+
+    expect(result.status).toBe("ok");
+    expect(result.entries[0]?.author).toBe("alice");
   });
 });

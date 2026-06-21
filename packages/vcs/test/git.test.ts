@@ -1,6 +1,6 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 import { createReviewEvent } from "@aicr/core";
 import { describe, expect, it } from "vitest";
@@ -780,5 +780,209 @@ describe("GitVcsAdapter", () => {
     await expect(
       adapter.diff({ files: ["a.ts"] }),
     ).rejects.toThrow("Git diff requires both baseRevision and headRevision.");
+  });
+});
+
+describe("GitVcsAdapter.fetchAttribution", () => {
+  // Mirrors real `git blame --line-porcelain`: the first line of each commit
+  // group emits a 4-field header `<sha> <orig> <final> <num_lines>`; coalesced
+  // subsequent lines emit a 3-field header. Lines 1-2 share Alice's commit;
+  // line 3 is Bob's size-1 group.
+  const porcelain = [
+    "4f7d9a2b1234567890abcdef1234567890abcdef 1 1 2",
+    "author Alice",
+    "author-mail <alice@example.com>",
+    "author-time 1705000000",
+    "author-tz +0000",
+    "committer Alice",
+    "committer-mail <alice@example.com>",
+    "committer-time 1705000000",
+    "committer-tz +0000",
+    "summary fix login flow",
+    "filename src/auth.ts",
+    "\tline one",
+    "4f7d9a2b1234567890abcdef1234567890abcdef 2 2",
+    "author Alice",
+    "author-mail <alice@example.com>",
+    "author-time 1705000000",
+    "author-tz +0000",
+    "committer Alice",
+    "committer-mail <alice@example.com>",
+    "committer-time 1705000000",
+    "committer-tz +0000",
+    "summary fix login flow",
+    "filename src/auth.ts",
+    "\tline two",
+    "abcdef0987654321fedcba0987654321abcdef09 3 3 1",
+    "author Bob",
+    "author-mail <bob@example.com>",
+    "author-time 1706000000",
+    "author-tz +0100",
+    "committer Bob",
+    "committer-mail <bob@example.com>",
+    "committer-time 1706000000",
+    "committer-tz +0100",
+    "summary refactor module",
+    "filename src/auth.ts",
+    "\tline three",
+  ].join("\n");
+
+  it("parses git blame --line-porcelain including 4-field group-start headers", async () => {
+    const calls: string[][] = [];
+    const git: GitCommandRunner = async (args) => {
+      calls.push([...args]);
+      return { stdout: porcelain, stderr: "" };
+    };
+    const adapter = createGitVcsAdapter({ repositoryDir: "C:/repo", git });
+
+    const result = await adapter.fetchAttribution(
+      { path: "src/auth.ts", revision: "def456", reason: "blame" },
+      { id: "ws", sourceDir: "C:/repo/source" },
+    );
+
+    expect(result.status).toBe("ok");
+    expect(result.entries).toEqual([
+      {
+        line: 1,
+        revision: "4f7d9a2b1234567890abcdef1234567890abcdef",
+        author: "Alice",
+        authorEmail: "alice@example.com",
+        summary: "fix login flow",
+      },
+      {
+        line: 2,
+        revision: "4f7d9a2b1234567890abcdef1234567890abcdef",
+        author: "Alice",
+        authorEmail: "alice@example.com",
+        summary: "fix login flow",
+      },
+      {
+        line: 3,
+        revision: "abcdef0987654321fedcba0987654321abcdef09",
+        author: "Bob",
+        authorEmail: "bob@example.com",
+        summary: "refactor module",
+      },
+    ]);
+    expect(calls[0]).toEqual([
+      "-C",
+      resolve("C:/repo"),
+      "blame",
+      "--line-porcelain",
+      "def456",
+      "--",
+      "src/auth.ts",
+    ]);
+  });
+
+  it("defaults the revision to HEAD when not provided", async () => {
+    const calls: string[][] = [];
+    const git: GitCommandRunner = async (args) => {
+      calls.push([...args]);
+      return { stdout: porcelain, stderr: "" };
+    };
+    const adapter = createGitVcsAdapter({ repositoryDir: "C:/repo", git });
+
+    await adapter.fetchAttribution(
+      { path: "src/auth.ts", reason: "blame" },
+      { id: "ws", sourceDir: "C:/repo/source" },
+    );
+
+    expect(calls[0]).toContain("HEAD");
+  });
+
+  it("filters attribution to the requested line range and uses native -L when bounded", async () => {
+    const calls: string[][] = [];
+    const git: GitCommandRunner = async (args) => {
+      calls.push([...args]);
+      return { stdout: porcelain, stderr: "" };
+    };
+    const adapter = createGitVcsAdapter({ repositoryDir: "C:/repo", git });
+
+    const result = await adapter.fetchAttribution(
+      { path: "src/auth.ts", startLine: 2, endLine: 2, revision: "def456", reason: "blame" },
+      { id: "ws", sourceDir: "C:/repo/source" },
+    );
+
+    expect(result.entries).toHaveLength(1);
+    expect(result.entries[0]?.line).toBe(2);
+    expect(result.entries[0]?.author).toBe("Alice");
+    const lIndex = calls[0]?.indexOf("-L");
+    expect(lIndex).toBeGreaterThan(-1);
+    expect(calls[0]?.[Number(lIndex) + 1]).toBe("2,2");
+  });
+
+  it("returns not_found when the path does not exist at the revision", async () => {
+    const git: GitCommandRunner = async () => {
+      const error = new Error("fatal: no such path 'src/missing.ts' in HEAD");
+      Object.assign(error, {
+        stdout: "",
+        stderr: "fatal: no such path 'src/missing.ts' in HEAD",
+      });
+      throw error;
+    };
+    const adapter = createGitVcsAdapter({ repositoryDir: "C:/repo", git });
+
+    const result = await adapter.fetchAttribution(
+      { path: "src/missing.ts", revision: "def456", reason: "blame" },
+      { id: "ws", sourceDir: "C:/repo/source" },
+    );
+
+    expect(result).toEqual({ path: "src/missing.ts", status: "not_found", entries: [] });
+  });
+
+  it("returns not_found when blame produces no parseable output", async () => {
+    const git: GitCommandRunner = async () => ({ stdout: "", stderr: "" });
+    const adapter = createGitVcsAdapter({ repositoryDir: "C:/repo", git });
+
+    const result = await adapter.fetchAttribution(
+      { path: "src/auth.ts", revision: "def456", reason: "blame" },
+      { id: "ws", sourceDir: "C:/repo/source" },
+    );
+
+    expect(result.status).toBe("not_found");
+    expect(result.entries).toEqual([]);
+  });
+
+  it("rejects a path that escapes the workspace source dir", async () => {
+    const git: GitCommandRunner = async () => {
+      throw new Error("git should not be called for an escaping path");
+    };
+    const adapter = createGitVcsAdapter({ repositoryDir: "C:/repo", git });
+
+    await expect(
+      adapter.fetchAttribution(
+        { path: "../escape.ts", revision: "def456", reason: "blame" },
+        { id: "ws", sourceDir: "C:/repo/source" },
+      ),
+    ).rejects.toThrow("must stay within");
+  });
+
+  it("rejects an option-like revision to prevent git option injection", async () => {
+    const git: GitCommandRunner = async () => {
+      throw new Error("git should not be called for an option-like revision");
+    };
+    const adapter = createGitVcsAdapter({ repositoryDir: "C:/repo", git });
+
+    await expect(
+      adapter.fetchAttribution(
+        { path: "src/auth.ts", revision: "--output=/tmp/evil", reason: "blame" },
+        { id: "ws", sourceDir: "C:/repo/source" },
+      ),
+    ).rejects.toThrow("must not be empty or option-like");
+  });
+
+  it("rethrows non-missing blame errors instead of masking them", async () => {
+    const git: GitCommandRunner = async () => {
+      throw new Error("network unreachable");
+    };
+    const adapter = createGitVcsAdapter({ repositoryDir: "C:/repo", git });
+
+    await expect(
+      adapter.fetchAttribution(
+        { path: "src/auth.ts", revision: "def456", reason: "blame" },
+        { id: "ws", sourceDir: "C:/repo/source" },
+      ),
+    ).rejects.toThrow("network unreachable");
   });
 });
