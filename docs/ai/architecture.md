@@ -45,6 +45,7 @@
 - 当开启 async 语义时，入口应尽快返回 `202` 与 `runId`，后台完成 review。
 - `ReviewEvent` 要覆盖提交者、目标、仓库映射、变更集、workspace 等最小稳定字段。
 - P4 trigger 只负责最小 metadata POST；服务端负责拉取和补足 diff/describe。
+- SVN trigger 同样只负责最小 metadata POST（revision、author、可选 changed_files）；服务端使用配置的 `repository_url` 与 `svn diff --summarize` / `svn cat` 拉取实际 diff。
 - 提交者可见元数据必须来自事件或 provider/VCS 查询结果，不能回退成分析用 workspace 或 agent 本地环境。
 - **Issue triage 仅支持 Gitea/Forgejo 且必须按事件 provider 族门控**：`resolveIssueTriageOptions`（`packages/server/src/bootstrap.ts`）只构造单个 `GiteaApiClient`（同时兼容 Gitea 与 Forgejo），因此 `packages/server/src/index.ts` 的 triage 分支只在 issue 事件的 `provider` 属于 `"gitea"`/`"forgejo"` 时执行，跳过 GitHub/GitLab/P4/SVN。门控依据**事件 provider 族**，而不是 trigger `kind` 派生的标签：Forgejo-kind trigger 实际由 `/webhooks/gitea` 路由提供服务（`options.forgejo` 从不填充，只填充 `options.gitea`），其事件带 `provider: "gitea"`，用 trigger kind 做相等比较会静默跳过 Forgejo triage。否则 GitHub/GitLab/P4 的 issue 事件会被 Gitea 客户端处理，指向内部不可达或语义不兼容的 URL，每次都以 `issue_triage_failed` / `fetch failed` 失败。当前不存在 GitHub triage 客户端，未新增对应 client 前不要把非 Gitea workspace 接入 triage。
 
@@ -342,6 +343,7 @@
   - `queue.rate_limit`
   - `queue.retry`
   - `queue.dead_letter`
+  - `queue.sqlite`（path、lock_ttl_seconds）
   - `review.problem_issue.max_recent_issues`
   - `review.log_thinking`
   - `review.reflection.memory`
@@ -352,6 +354,13 @@
   - `outputs.routes`
 - `queue.retry` 的规范字段是 `attempts` 与 `backoff`；旧配置中的
   `max_attempts` / `backoff_seconds` 仅作为兼容输入归一化，新增示例不要继续使用。
+- **SQLite durable queue（P4 已落地）**：`queue.kind: "sqlite"` 使用原生 `better-sqlite3` 实现
+  durable queue（`packages/core/src/sqlite-queue.ts`），`review_queue_jobs` 表存储 job 状态、
+  attempt、backoff、available_at、worker_id。原子 claim 通过单条 `UPDATE ... RETURNING`
+  完成（`SELECT ... LIMIT 1` 子查询 + `UPDATE` 在同一语句中原子执行），多个 worker 不会
+  重复领取同一 job。`dequeue` 前自动 reclaim 超过 `lock_ttl_seconds`（默认 300s）的 stale
+  running job，处理 worker 崩溃恢复。enqueue/dequeue/complete/fail/retry/dead-letter/purge
+  全部实现，backoff 复用 `computeBackoffDelay`，跨进程安全（WAL + busy_timeout）。
 - 计划中的内置观测首页认证配置与 trigger API key 分离；配置文件只保存 env var 名称，
   不保存超级管理员用户名/密码明文。密码哈希 env（如 `*_PASSWORD_HASH`，格式
   `sha256:<hex>`）优先且可单独使用；小型内网部署允许 raw password env，但必须
@@ -480,10 +489,10 @@
   - 问题归纳：按 category 分组，统计 severity 分布、关联文件扩展名，3 条以内附加具体位置。
   - 文件类型范围：统计 changed files 的扩展名分布。
   - Summary 标题：记录最新 review 的 summary title。
-- Thorough mode（预留，未实现）：
-  - 跨 run 聚合分析 false-positive 模式。
-  - Repo 约定学习与自动注入。
-  - 更精细的去**敏策略。
+- Thorough mode（跨 run 聚合，最小实现已交付）：
+  - `reflection_memory` 表新增 `occurrence_count` 列（每次 fingerprint 命中递增，迁移 `004_reflection_occurrence`，迁移运行器已包裹在 `sqlite.transaction` 中保证原子性）。
+  - Post-run callback 在 `mode: "thorough"` 时，写入 light reflections 后读取 workspace 全量 memory entries，调用 `extractCrossRunPatterns()`（`packages/core/src/reflection-extractor.ts`），对 occurrence_count ≥ 阈值（默认 3）的 category 生成跨 run 重复模式 hint（如 `"style" reported in 8 recent reviews`），使用 `stableFingerprint(workspaceId, "thorough", "recurring", category)` 保证幂等覆盖。
+  - 当前只做 category 维度的重复检测；repo 约定学习、更精细的去敏策略仍为预留。
 - 真正落地时的约束：
   - memory 的写入边界由 extractor 的 fingerprint 保证幂等。
   - workspace 隔离已通过 `workspaceId` 列保证。

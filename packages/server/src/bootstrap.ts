@@ -74,12 +74,14 @@ import {
   type StoreDb,
 } from "@aicr/store";
 import {
+  extractCrossRunPatterns,
   extractReflections,
   type ExtractedReflection,
 } from "@aicr/core";
 
 import type { VcsWebhookConfig } from "./webhook-common.js";
 import type { P4TriggerConfig } from "./p4-webhook.js";
+import type { SvnTriggerConfig } from "./svn-webhook.js";
 import { GiteaApiClient } from "./issue-triage.js";
 import type { IssueTriageRuntimeOptions, WorkspaceIssueTriagePolicy } from "./issue-triage.js";
 import type { ServerAppOptions, ServerReviewOrchestrationOptions, TriggerRetryConfig } from "./index.js";
@@ -661,6 +663,34 @@ export function resolveP4TriggerConfig(
     ...(watchPath ? { watchPath } : {}),
     ...(includeCrFile ? { includeCrFile } : {}),
     ...(excludeCrFile ? { excludeCrFile } : {}),
+  };
+}
+
+export function resolveSvnTriggerConfig(
+  config: AppConfig,
+  triggerName?: string,
+): SvnTriggerConfig | undefined {
+  const trigger = triggerName
+    ? config.triggers.find((t) => t.name === triggerName && t.kind === "svn")
+    : config.triggers.find((t) => t.kind === "svn");
+
+  if (!trigger) {
+    return undefined;
+  }
+
+  const triggerConfig = trigger as Record<string, unknown>;
+  const repositoryUrl = typeof triggerConfig.repository_url === "string"
+    ? triggerConfig.repository_url.trim()
+    : "";
+
+  if (!repositoryUrl) {
+    return undefined;
+  }
+
+  return {
+    triggerName: trigger.name,
+    workspaceId: resolveWorkspaceIdFromTrigger(config, trigger.name),
+    repositoryUrl,
   };
 }
 
@@ -1843,19 +1873,6 @@ function buildGitRemoteUrl(baseUrl: string | undefined, repoRef: string | undefi
   return `${normalizedBaseUrl}/${normalizedRepoRef}.git`;
 }
 
-function isRepositoryUrl(value: string | undefined): value is string {
-  if (!value) {
-    return false;
-  }
-
-  try {
-    const url = new URL(value);
-    return ["http:", "https:", "svn:", "svn+ssh:", "file:"].includes(url.protocol);
-  } catch {
-    return false;
-  }
-}
-
 export function createVcsAdapterFromConfig(
   config: AppConfig,
   repositoryDir: string,
@@ -1904,9 +1921,9 @@ export function createVcsAdapterFromConfig(
     : config.triggers.find((t) => t.kind === "svn");
   if (svnTrigger) {
     const triggerConfig = svnTrigger as Record<string, unknown>;
-    const repositoryUrl = (triggerConfig.repository_url as string | undefined)
-      ?? (triggerConfig.url as string | undefined)
-      ?? (isRepositoryUrl(repoRef) ? repoRef : undefined);
+    const repositoryUrl = typeof triggerConfig.repository_url === "string"
+      ? triggerConfig.repository_url.trim()
+      : undefined;
     const usernameEnv = (triggerConfig.username_env as string | undefined)
       ?? (triggerConfig.user_env as string | undefined);
     const passwordEnv = triggerConfig.password_env as string | undefined;
@@ -2124,6 +2141,7 @@ export async function bootstrapServerApp(options: BootstrapServerOptions): Promi
   const githubConfigs = resolveGenericWebhookConfigs(config, "github");
   const gitlabConfigs = resolveGenericWebhookConfigs(config, "gitlab");
   const p4Config = resolveP4TriggerConfig(config);
+  const svnConfig = resolveSvnTriggerConfig(config);
 
   const adminAuthConfig = resolveAdminAuthConfig(config as unknown as Record<string, unknown>, resolveEnv);
   const catalogConfig = config.llm?.model_catalog;
@@ -2298,15 +2316,34 @@ export async function bootstrapServerApp(options: BootstrapServerOptions): Promi
             if (reflections.length > 0) {
               const now = new Date();
               const retentionDays = reflectionConfig?.memory?.retention_days ?? 90;
-              const entries = reflections.map((r: ExtractedReflection) => ({
-                workspaceId,
-                fingerprint: r.fingerprint,
-                content: r.content,
-                sourceRunId: runId,
-                createdAt: now,
-                expiresAt: new Date(now.getTime() + retentionDays * 86_400_000),
-              }));
-              await writeReflectionMemory(store!, entries);
+              const expiresAt = new Date(now.getTime() + retentionDays * 86_400_000);
+              const toEntries = (rs: readonly ExtractedReflection[]) =>
+                rs.map((r: ExtractedReflection) => ({
+                  workspaceId,
+                  fingerprint: r.fingerprint,
+                  content: r.content,
+                  sourceRunId: runId,
+                  createdAt: now,
+                  expiresAt,
+                }));
+              await writeReflectionMemory(store!, toEntries(reflections));
+
+              if (reflectionConfig?.mode === "thorough" && result.outputState.problems.length > 0) {
+                const allEntries = await readReflectionMemory(store!, workspaceId, { limit: 200 });
+                const currentCategories = [
+                  ...new Set(
+                    result.outputState.problems.map((p: { category?: string }) => p.category ?? "uncategorized"),
+                  ),
+                ];
+                const crossRunReflections = extractCrossRunPatterns(
+                  workspaceId,
+                  currentCategories,
+                  allEntries.map((e) => ({ fingerprint: e.fingerprint, occurrenceCount: e.occurrenceCount ?? 1 })),
+                );
+                if (crossRunReflections.length > 0) {
+                  await writeReflectionMemory(store!, toEntries(crossRunReflections));
+                }
+              }
 
               const maxEntries = reflectionConfig?.memory?.max_entries;
               if (maxEntries) {
@@ -2356,6 +2393,7 @@ export async function bootstrapServerApp(options: BootstrapServerOptions): Promi
     ...(githubOption ? { github: githubOption } : {}),
     ...(gitlabOption ? { gitlab: gitlabOption } : {}),
     ...(p4Config ? { p4: p4Config } : {}),
+    ...(svnConfig ? { svn: svnConfig } : {}),
     reviewOrchestration: orchestrationOptions,
     ...(triageOptions ? { issueTriage: triageOptions } : {}),
     queue,

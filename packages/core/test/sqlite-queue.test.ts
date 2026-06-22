@@ -1,68 +1,47 @@
-import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import { createInMemoryQueue, computeBackoffDelay, type ReviewQueue, type QueueBackoffConfig } from "../src/queue.js";
+import { rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
-describe("computeBackoffDelay", () => {
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import { createSqliteQueue, type ReviewQueue, type QueueBackoffConfig } from "../src/index.js";
+
+function makeTmpPath(): string {
+  return join(tmpdir(), `aicr-queue-test-${Date.now()}-${Math.random().toString(36).slice(2)}.sqlite`);
+}
+
+const noBackoff: QueueBackoffConfig = { kind: "constant", baseMs: 0, maxMs: 0, jitter: false };
+
+describe("createSqliteQueue", () => {
+  let queue: ReviewQueue;
+  let dbPath: string;
+
   beforeEach(() => {
-    vi.useFakeTimers();
+    dbPath = makeTmpPath();
   });
 
   afterEach(() => {
-    vi.useRealTimers();
+    queue?.close?.();
+    rmSync(dbPath, { force: true });
+    rmSync(`${dbPath}-wal`, { force: true });
+    rmSync(`${dbPath}-shm`, { force: true });
   });
 
-  it("returns 0 when no backoff config", () => {
-    expect(computeBackoffDelay(0)).toBe(0);
-    expect(computeBackoffDelay(5)).toBe(0);
-  });
-
-  it("computes exponential backoff", () => {
-    const backoff: QueueBackoffConfig = { kind: "exponential", baseMs: 1000, maxMs: 60000, jitter: false };
-    expect(computeBackoffDelay(0, backoff)).toBe(1000);
-    expect(computeBackoffDelay(1, backoff)).toBe(2000);
-    expect(computeBackoffDelay(2, backoff)).toBe(4000);
-    expect(computeBackoffDelay(3, backoff)).toBe(8000);
-  });
-
-  it("computes linear backoff", () => {
-    const backoff: QueueBackoffConfig = { kind: "linear", baseMs: 1000, maxMs: 60000, jitter: false };
-    expect(computeBackoffDelay(0, backoff)).toBe(1000);
-    expect(computeBackoffDelay(1, backoff)).toBe(2000);
-    expect(computeBackoffDelay(2, backoff)).toBe(3000);
-  });
-
-  it("computes constant backoff", () => {
-    const backoff: QueueBackoffConfig = { kind: "constant", baseMs: 5000, maxMs: 60000, jitter: false };
-    expect(computeBackoffDelay(0, backoff)).toBe(5000);
-    expect(computeBackoffDelay(5, backoff)).toBe(5000);
-  });
-
-  it("caps delay at maxMs", () => {
-    const backoff: QueueBackoffConfig = { kind: "exponential", baseMs: 10000, maxMs: 30000, jitter: false };
-    expect(computeBackoffDelay(5, backoff)).toBe(30000);
-  });
-
-  it("applies jitter when enabled", () => {
-    const backoff: QueueBackoffConfig = { kind: "exponential", baseMs: 1000, maxMs: 60000, jitter: true };
-    const delays = new Set<number>();
-    for (let i = 0; i < 50; i++) {
-      delays.add(computeBackoffDelay(1, backoff));
-    }
-    expect(delays.size).toBeGreaterThan(1);
-  });
-});
-
-describe("createInMemoryQueue", () => {
-  let queue: ReviewQueue;
-
-  const noBackoff: QueueBackoffConfig = { kind: "constant", baseMs: 0, maxMs: 0, jitter: false };
-
-  function setup(): ReviewQueue {
-    return createInMemoryQueue();
+  async function setup(): Promise<ReviewQueue> {
+    queue = await createSqliteQueue({ path: dbPath });
+    return queue;
   }
+
+  describe("kind", () => {
+    it("returns sqlite", async () => {
+      queue = await setup();
+      expect(queue.kind).toBe("sqlite");
+    });
+  });
 
   describe("enqueue", () => {
     it("enqueues a job and assigns an id", async () => {
-      queue = setup();
+      queue = await setup();
       const job = await queue.enqueue({ pr: 42 }, { workspaceId: "ws1", triggerName: "gitea" });
       expect(job.id).toBeTruthy();
       expect(job.status).toBe("queued");
@@ -73,34 +52,46 @@ describe("createInMemoryQueue", () => {
     });
 
     it("uses default maxAttempts of 3", async () => {
-      queue = setup();
+      queue = await setup();
       const job = await queue.enqueue({}, { workspaceId: "ws1", triggerName: "test" });
       expect(job.maxAttempts).toBe(3);
     });
 
     it("respects custom maxAttempts", async () => {
-      queue = setup();
+      queue = await setup();
       const job = await queue.enqueue({}, { workspaceId: "ws1", triggerName: "test", maxAttempts: 5 });
       expect(job.maxAttempts).toBe(5);
     });
 
     it("assigns unique ids to multiple jobs", async () => {
-      queue = setup();
+      queue = await setup();
       const j1 = await queue.enqueue({}, { workspaceId: "ws1", triggerName: "t1" });
       const j2 = await queue.enqueue({}, { workspaceId: "ws1", triggerName: "t1" });
       expect(j1.id).not.toBe(j2.id);
+    });
+
+    it("persists across queue instances", async () => {
+      queue = await setup();
+      const job = await queue.enqueue({ test: true }, { workspaceId: "ws1", triggerName: "t1" });
+      queue.close?.();
+      const queue2 = await createSqliteQueue({ path: dbPath });
+      const found = await queue2.getJob(job.id);
+      expect(found).toBeDefined();
+      expect(found!.id).toBe(job.id);
+      expect(found!.data).toEqual({ test: true });
+      queue2.close?.();
     });
   });
 
   describe("dequeue", () => {
     it("returns undefined when queue is empty", async () => {
-      queue = setup();
+      queue = await setup();
       const job = await queue.dequeue("worker-1");
       expect(job).toBeUndefined();
     });
 
     it("returns the first enqueued job and marks it running", async () => {
-      queue = setup();
+      queue = await setup();
       const enqueued = await queue.enqueue({ pr: 1 }, { workspaceId: "ws1", triggerName: "t1" });
       const dequeued = await queue.dequeue("worker-1");
       expect(dequeued).toBeTruthy();
@@ -111,7 +102,7 @@ describe("createInMemoryQueue", () => {
     });
 
     it("returns jobs in FIFO order", async () => {
-      queue = setup();
+      queue = await setup();
       const j1 = await queue.enqueue({ n: 1 }, { workspaceId: "ws1", triggerName: "t1" });
       const j2 = await queue.enqueue({ n: 2 }, { workspaceId: "ws1", triggerName: "t1" });
       const d1 = await queue.dequeue("w1");
@@ -121,7 +112,7 @@ describe("createInMemoryQueue", () => {
     });
 
     it("skips excluded workspaces without dropping their jobs", async () => {
-      queue = setup();
+      queue = await setup();
       const ws1 = await queue.enqueue({ n: 1 }, { workspaceId: "ws1", triggerName: "t1" });
       const ws2 = await queue.enqueue({ n: 2 }, { workspaceId: "ws2", triggerName: "t2" });
 
@@ -132,11 +123,36 @@ describe("createInMemoryQueue", () => {
       const second = await queue.dequeue("w1");
       expect(second?.id).toBe(ws1.id);
     });
+
+    it("does not hand the same job to two workers (atomic claim)", async () => {
+      queue = await setup();
+      await queue.enqueue({ n: 1 }, { workspaceId: "ws1", triggerName: "t1" });
+
+      const d1 = await queue.dequeue("w1");
+      const d2 = await queue.dequeue("w2");
+      expect(d1).toBeDefined();
+      expect(d2).toBeUndefined();
+    });
+
+    it("reclaims a stale running job after lock TTL expires", async () => {
+      const ttlQueue = await createSqliteQueue({ path: dbPath, lockTtlSeconds: 1 });
+      queue = ttlQueue;
+      const job = await queue.enqueue({}, { workspaceId: "ws1", triggerName: "t1", maxAttempts: 3 });
+      const d1 = await queue.dequeue("w1");
+      expect(d1).toBeDefined();
+
+      await new Promise((r) => setTimeout(r, 1100));
+
+      const d2 = await queue.dequeue("w2");
+      expect(d2).toBeDefined();
+      expect(d2!.id).toBe(job.id);
+      expect(d2!.attempt).toBe(2);
+    });
   });
 
   describe("complete", () => {
     it("marks a running job as completed", async () => {
-      queue = setup();
+      queue = await setup();
       const job = await queue.enqueue({}, { workspaceId: "ws1", triggerName: "t1" });
       await queue.dequeue("w1");
       await queue.complete(job.id);
@@ -149,7 +165,7 @@ describe("createInMemoryQueue", () => {
 
   describe("fail", () => {
     it("requeues a job if attempts remain", async () => {
-      queue = setup();
+      queue = await setup();
       const job = await queue.enqueue(
         {},
         { workspaceId: "ws1", triggerName: "t1", maxAttempts: 3, backoff: noBackoff },
@@ -167,7 +183,7 @@ describe("createInMemoryQueue", () => {
     });
 
     it("sends job to dead letter when maxAttempts exhausted", async () => {
-      queue = setup();
+      queue = await setup();
       const job = await queue.enqueue({}, { workspaceId: "ws1", triggerName: "t1", maxAttempts: 1 });
       await queue.dequeue("w1");
       await queue.fail(job.id, new Error("fatal error"));
@@ -177,45 +193,24 @@ describe("createInMemoryQueue", () => {
     });
 
     it("requeues until maxAttempts then dead-letters", async () => {
-      queue = setup();
+      queue = await setup();
       const job = await queue.enqueue(
         {},
         { workspaceId: "ws1", triggerName: "t1", maxAttempts: 2, backoff: noBackoff },
       );
-      // Attempt 1
       await queue.dequeue("w1");
       await queue.fail(job.id, new Error("e1"));
-      // Attempt 2
       const r2 = await queue.dequeue("w2");
       expect(r2!.attempt).toBe(2);
       await queue.fail(job.id, new Error("e2"));
-      // Should be dead
       const dead = await queue.getJob(job.id);
       expect(dead!.status).toBe("dead");
-    });
-
-    it("does not resurrect a completed job when fail is called late", async () => {
-      queue = setup();
-      const job = await queue.enqueue(
-        {},
-        { workspaceId: "ws1", triggerName: "t1", maxAttempts: 3, backoff: noBackoff },
-      );
-      await queue.dequeue("w1");
-      await queue.complete(job.id);
-
-      await queue.fail(job.id, new Error("late worker"));
-
-      const updated = await queue.getJob(job.id);
-      expect(updated!.status).toBe("completed");
-      const stats = await queue.getStats();
-      expect(stats.completed).toBe(1);
-      expect(stats.queued).toBe(0);
     });
 
     it("schedules retry availability without blocking fail", async () => {
       vi.useFakeTimers();
       try {
-        queue = setup();
+        queue = await setup();
         const job = await queue.enqueue(
           {},
           {
@@ -237,11 +232,30 @@ describe("createInMemoryQueue", () => {
         vi.useRealTimers();
       }
     });
+
+    it("does not resurrect a completed job when fail is called late", async () => {
+      queue = await setup();
+      const job = await queue.enqueue(
+        {},
+        { workspaceId: "ws1", triggerName: "t1", maxAttempts: 3, backoff: noBackoff },
+      );
+      await queue.dequeue("w1");
+      await queue.complete(job.id);
+
+      await queue.fail(job.id, new Error("late worker"));
+
+      const updated = await queue.getJob(job.id);
+      expect(updated!.status).toBe("completed");
+
+      const stats = await queue.getStats();
+      expect(stats.completed).toBe(1);
+      expect(stats.queued).toBe(0);
+    });
   });
 
   describe("getStats", () => {
     it("returns correct counts for each status", async () => {
-      queue = setup();
+      queue = await setup();
       await queue.enqueue({}, { workspaceId: "ws1", triggerName: "t1" });
       await queue.enqueue({}, { workspaceId: "ws2", triggerName: "t2" });
       const stats = await queue.getStats();
@@ -255,35 +269,28 @@ describe("createInMemoryQueue", () => {
 
   describe("getJob", () => {
     it("returns undefined for unknown id", async () => {
-      queue = setup();
+      queue = await setup();
       const job = await queue.getJob("nonexistent");
       expect(job).toBeUndefined();
     });
 
     it("returns the job for a known id", async () => {
-      queue = setup();
+      queue = await setup();
       const enqueued = await queue.enqueue({}, { workspaceId: "ws1", triggerName: "t1" });
       const found = await queue.getJob(enqueued.id);
       expect(found!.id).toBe(enqueued.id);
     });
   });
 
-  describe("kind", () => {
-    it("returns memory", () => {
-      queue = setup();
-      expect(queue.kind).toBe("memory");
-    });
-  });
-
   describe("getDeadJobs", () => {
     it("returns empty array when no dead jobs", async () => {
-      queue = setup();
+      queue = await setup();
       const dead = await queue.getDeadJobs();
       expect(dead).toEqual([]);
     });
 
     it("returns all dead jobs", async () => {
-      queue = setup();
+      queue = await setup();
       const j1 = await queue.enqueue({}, { workspaceId: "ws1", triggerName: "t1", maxAttempts: 1 });
       const j2 = await queue.enqueue({}, { workspaceId: "ws1", triggerName: "t1", maxAttempts: 1 });
       await queue.dequeue("w1");
@@ -297,7 +304,7 @@ describe("createInMemoryQueue", () => {
     });
 
     it("does not include non-dead failed jobs", async () => {
-      queue = setup();
+      queue = await setup();
       const job = await queue.enqueue({}, { workspaceId: "ws1", triggerName: "t1", maxAttempts: 3 });
       await queue.dequeue("w1");
       await queue.fail(job.id, new Error("retryable"));
@@ -309,7 +316,7 @@ describe("createInMemoryQueue", () => {
 
   describe("requeueDead", () => {
     it("requeues a dead job back to queued state", async () => {
-      queue = setup();
+      queue = await setup();
       const job = await queue.enqueue({}, { workspaceId: "ws1", triggerName: "t1", maxAttempts: 1 });
       await queue.dequeue("w1");
       await queue.fail(job.id, new Error("fatal"));
@@ -323,7 +330,7 @@ describe("createInMemoryQueue", () => {
     });
 
     it("makes requeued job available for dequeue", async () => {
-      queue = setup();
+      queue = await setup();
       const job = await queue.enqueue({}, { workspaceId: "ws1", triggerName: "t1", maxAttempts: 1 });
       await queue.dequeue("w1");
       await queue.fail(job.id, new Error("fatal"));
@@ -335,14 +342,14 @@ describe("createInMemoryQueue", () => {
     });
 
     it("returns undefined for non-dead job", async () => {
-      queue = setup();
+      queue = await setup();
       const job = await queue.enqueue({}, { workspaceId: "ws1", triggerName: "t1" });
       const result = await queue.requeueDead(job.id);
       expect(result).toBeUndefined();
     });
 
     it("returns undefined for unknown job", async () => {
-      queue = setup();
+      queue = await setup();
       const result = await queue.requeueDead("nonexistent");
       expect(result).toBeUndefined();
     });
@@ -350,7 +357,7 @@ describe("createInMemoryQueue", () => {
 
   describe("purgeDead", () => {
     it("purges all dead jobs when no maxAge specified", async () => {
-      queue = setup();
+      queue = await setup();
       const j1 = await queue.enqueue({}, { workspaceId: "ws1", triggerName: "t1", maxAttempts: 1 });
       const j2 = await queue.enqueue({}, { workspaceId: "ws1", triggerName: "t1", maxAttempts: 1 });
       await queue.dequeue("w1");
@@ -366,20 +373,47 @@ describe("createInMemoryQueue", () => {
     });
 
     it("returns 0 when no dead jobs to purge", async () => {
-      queue = setup();
+      queue = await setup();
       await queue.enqueue({}, { workspaceId: "ws1", triggerName: "t1" });
       const purged = await queue.purgeDead();
       expect(purged).toBe(0);
     });
 
     it("respects maxAge parameter", async () => {
-      queue = setup();
-      const job = await queue.enqueue({}, { workspaceId: "ws1", triggerName: "t1", maxAttempts: 1 });
-      await queue.dequeue("w1");
-      await queue.fail(job.id, new Error("e1"));
+      vi.useFakeTimers();
+      try {
+        queue = await setup();
+        const job = await queue.enqueue({}, { workspaceId: "ws1", triggerName: "t1", maxAttempts: 1 });
+        await queue.dequeue("w1");
+        await queue.fail(job.id, new Error("e1"));
 
-      const purged = await queue.purgeDead(999999);
-      expect(purged).toBe(0);
+        const purged = await queue.purgeDead(999999);
+        expect(purged).toBe(0);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
+  describe("concurrent claim (multiple workers)", () => {
+    it("distributes distinct jobs to multiple dequeuers", async () => {
+      queue = await setup();
+      const jobs = await Promise.all(
+        Array.from({ length: 5 }, (_, i) =>
+          queue.enqueue({ n: i }, { workspaceId: "ws1", triggerName: "t1" }),
+        ),
+      );
+
+      const claimed: string[] = [];
+      for (let i = 0; i < 5; i++) {
+        const d = await queue.dequeue(`w${i}`);
+        if (d) claimed.push(d.id);
+      }
+
+      expect(claimed).toHaveLength(5);
+      expect(new Set(claimed).size).toBe(5);
+      expect(claimed.sort()).toEqual(jobs.map((j) => j.id).sort());
     });
   });
 });
+

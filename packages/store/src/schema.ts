@@ -132,6 +132,7 @@ export const reflectionMemory = sqliteTable("reflection_memory", {
   sourceRunId: text("source_run_id"),
   createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
   expiresAt: integer("expires_at", { mode: "timestamp_ms" }),
+  occurrenceCount: integer("occurrence_count").notNull().default(1),
 });
 
 export const modelCatalog = sqliteTable("model_catalog", {

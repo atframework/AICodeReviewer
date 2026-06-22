@@ -498,4 +498,73 @@ describe("reflection memory", () => {
     const remaining = await readReflectionMemory(store, "ws-compact");
     expect(remaining.length).toBe(3);
   });
+
+  it("increments occurrence_count when the same fingerprint is written again", async () => {
+    const now = new Date();
+    const later = new Date(now.getTime() + 60_000);
+
+    await writeReflectionMemory(store, [
+      {
+        workspaceId: "ws-occ",
+        fingerprint: "fp-recurring",
+        content: "First content",
+        createdAt: now,
+      },
+    ]);
+
+    await writeReflectionMemory(store, [
+      {
+        workspaceId: "ws-occ",
+        fingerprint: "fp-recurring",
+        content: "Updated content",
+        createdAt: later,
+      },
+    ]);
+
+    const entries = await readReflectionMemory(store, "ws-occ");
+    expect(entries.length).toBe(1);
+    expect(entries[0]!.occurrenceCount).toBe(2);
+    expect(entries[0]!.content).toBe("Updated content");
+  });
+
+  it("keeps occurrence_count at 1 for a new fingerprint", async () => {
+    const now = new Date();
+    await writeReflectionMemory(store, [
+      {
+        workspaceId: "ws-occ-new",
+        fingerprint: "fp-new",
+        content: "Single entry",
+        createdAt: now,
+      },
+    ]);
+
+    const entries = await readReflectionMemory(store, "ws-occ-new");
+    expect(entries.length).toBe(1);
+    expect(entries[0]!.occurrenceCount).toBe(1);
+  });
+
+  it("isolates occurrence counts by workspace", async () => {
+    const now = new Date();
+    await writeReflectionMemory(store, [
+      {
+        workspaceId: "ws-a",
+        fingerprint: "fp-shared",
+        content: "A content",
+        createdAt: now,
+      },
+    ]);
+    await writeReflectionMemory(store, [
+      {
+        workspaceId: "ws-b",
+        fingerprint: "fp-shared",
+        content: "B content",
+        createdAt: now,
+      },
+    ]);
+
+    const entriesA = await readReflectionMemory(store, "ws-a");
+    const entriesB = await readReflectionMemory(store, "ws-b");
+    expect(entriesA[0]!.occurrenceCount).toBe(1);
+    expect(entriesB[0]!.occurrenceCount).toBe(1);
+  });
 });

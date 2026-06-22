@@ -29,6 +29,11 @@ export interface ExtractedReflection {
   readonly content: string;
 }
 
+export interface CrossRunMemoryEntry {
+  readonly fingerprint: string;
+  readonly occurrenceCount: number;
+}
+
 function stableFingerprint(workspaceId: string, ...parts: readonly string[]): string {
   const hash = createHash("sha256");
   hash.update(workspaceId);
@@ -57,6 +62,14 @@ function groupByCategory(problems: readonly ReflectionProblem[]): Map<string, re
     }
   }
   return groups;
+}
+
+function normalizeCategory(category: string): string {
+  return category || "uncategorized";
+}
+
+function categoryReflectionFingerprint(workspaceId: string, category: string): string {
+  return stableFingerprint(workspaceId, "category", normalizeCategory(category));
 }
 
 function groupByExtension(files: readonly string[]): Map<string, number> {
@@ -102,7 +115,7 @@ export function extractReflections(input: ReflectionExtractorInput): readonly Ex
       }
 
       reflections.push({
-        fingerprint: stableFingerprint(workspaceId, "category", category),
+        fingerprint: categoryReflectionFingerprint(workspaceId, category),
         content: hint,
       });
     }
@@ -140,5 +153,32 @@ export function extractReflections(input: ReflectionExtractorInput): readonly Ex
     });
   }
 
+  return reflections;
+}
+
+export function extractCrossRunPatterns(
+  workspaceId: string,
+  currentCategories: readonly string[],
+  memoryEntries: readonly CrossRunMemoryEntry[],
+  options?: { threshold?: number },
+): readonly ExtractedReflection[] {
+  const threshold = options?.threshold ?? 3;
+  const fingerprintToCount = new Map<string, number>();
+  for (const entry of memoryEntries) {
+    fingerprintToCount.set(entry.fingerprint, entry.occurrenceCount);
+  }
+
+  const reflections: ExtractedReflection[] = [];
+  for (const category of currentCategories) {
+    const normalizedCategory = normalizeCategory(category);
+    const categoryFp = categoryReflectionFingerprint(workspaceId, normalizedCategory);
+    const count = fingerprintToCount.get(categoryFp);
+    if (count !== undefined && count >= threshold) {
+      reflections.push({
+        fingerprint: stableFingerprint(workspaceId, "thorough", "recurring", normalizedCategory),
+        content: `Recurring pattern: category "${normalizedCategory}" reported in ${count} recent reviews. If these are non-actionable noise, consider adding ignore rules or adjusting filters.`,
+      });
+    }
+  }
   return reflections;
 }

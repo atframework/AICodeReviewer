@@ -377,6 +377,7 @@ Each trigger kind uses a specific verification mechanism:
 | **github**              | `webhook_secret_env` | HMAC-SHA256      | `x-hub-signature-256`   | GitHub webhook → Secret field |
 | **gitlab**              | `webhook_secret_env` | Token comparison | `x-gitlab-token`        | GitLab webhook → Secret token |
 | **p4**                  | `server.auth`        | API key          | `x-api-key`             | p4-trigger.sh sends API key   |
+| **svn**                 | `server.auth`        | API key          | `x-api-key`             | svn-trigger.sh sends API key  |
 
 GitHub and GitLab can each define **multiple trigger profiles on the same route** (`/webhooks/github` or `/webhooks/gitlab`). Use separate trigger names when repositories need different outbound tokens, webhook secrets, or file filters; AICR picks the final profile by the verified credential plus the repository identity from the webhook payload.
 
@@ -461,8 +462,8 @@ omitted.
 │ AICR_GITHUB_WEBHOOK_SECRET=b2c1... ← shared with GitHub webhook config │
 │ AICR_GITLAB_WEBHOOK_SECRET=d4e5... ← shared with GitLab webhook config │
 │                                                                         │
-│ ── Inbound: API key (protects /triggers/* like P4) ──                  │
-│ AICR_API_KEY=c6d7e8f9...           ← p4-trigger.sh sends X-API-Key    │
+│ ── Inbound: API key (protects /triggers/* like P4/SVN) ──              │
+│ AICR_API_KEY=c6d7e8f9...           ← p4-trigger.sh / svn-trigger.sh sends X-API-Key    │
 │                                                                         │
 │ ── Outbound: AICR calls external services ──                           │
 │ AICR_GITEA_TOKEN=4b5d...           ← AICR → Gitea API (post comments) │
@@ -480,6 +481,8 @@ omitted.
 | `config.yaml`                 | Main configuration — LLM, triggers, outputs, workspaces    |
 | `.env.sample`                 | All environment variables with descriptions                |
 | `docker-compose.yaml`         | Docker Compose stack definition                            |
+| `p4-trigger.sh`               | Perforce change-commit trigger script skeleton             |
+| `svn-trigger.sh`              | Subversion post-commit hook trigger script skeleton        |
 | `../deploy/Dockerfile`        | Multi-stage Docker build                                   |
 | `../docs/ai/index.md`         | AI-facing docs map                                         |
 | `../docs/output-channels.md`  | MCP report contract and output rendering guide             |
@@ -644,7 +647,7 @@ triggers:
     change_url_template: "https://swarm.example.com/changes/{{revision}}"
   - name: svn-main
     kind: svn
-    repository_url: "https://svn.example.com/repos/project/trunk"
+    repository_url: "https://svn.example.com/repos/project/trunk"  # required for /triggers/svn
     revision_url_template: "https://svn.example.com/viewvc/project?view=revision&revision={{revision}}"
 ```
 
@@ -671,10 +674,12 @@ node packages/cli/dist/index.js review \
 
 ## SVN Repository Configuration
 
-AICodeReviewer includes a base SVN adapter for review events that carry SVN
-revision metadata. It does not yet ship a built-in SVN webhook endpoint or
-server-side trigger script; use it from manual/custom entry points that provide
-`headSha` as the SVN revision, optional `baseSha`, and optional `changedFiles`.
+AICodeReviewer supports Subversion commit triggers through a dedicated
+`/triggers/svn` endpoint. The SVN server post-commit hook forwards minimal
+metadata (revision, author, optional changed files) to AICR, and the server
+uses `triggers[].repository_url` plus its own SVN credentials to fetch the
+actual diff. Payload repository URL fields are ignored so an inbound hook cannot
+switch the reviewed repository.
 
 The adapter keeps the fetch narrow:
 
@@ -685,11 +690,13 @@ The adapter keeps the fetch narrow:
 - `watch_path`, `include_cr_file`, and `exclude_cr_file` use the same filtering
   semantics as P4.
 
+### 1. Configure the SVN trigger in `config.yaml`
+
 ```yaml
 triggers:
   - name: svn-main
     kind: svn
-    repository_url: "https://svn.example.com/repos/project/trunk"
+    repository_url: "https://svn.example.com/repos/project/trunk"  # required for /triggers/svn
     username_env: AICR_SVN_USER       # optional
     password_env: AICR_SVN_PASSWORD   # optional
     revision_url_template: "https://svn.example.com/viewvc/project?view=revision&revision={{revision}}"
@@ -716,6 +723,69 @@ SVN credentials are read from environment variables named in config. The adapter
 passes them to the SVN CLI non-interactively and redacts configured passwords
 from command errors, but production deployments should still prefer a scoped
 read-only SVN service account.
+
+### 2. Register the post-commit hook on the SVN server
+
+In your repository `hooks/` directory, create a `post-commit` executable:
+
+```bash
+#!/bin/bash
+REPOS="$1"
+REV="$2"
+
+export AICR_URL="http://<aicr-host>:8080"
+export AICR_API_KEY="<same value as server.auth.api_key_env>"
+
+/path/to/svn-trigger.sh "$REPOS" "$REV"
+```
+
+Make it executable:
+
+```bash
+chmod +x /path/to/svn/repo/hooks/post-commit
+```
+
+### 3. Create the trigger script
+
+Copy [`svn-trigger.sh`](svn-trigger.sh) to the **SVN server host** (not inside
+the AICR container) and make it executable:
+
+```bash
+cp example/svn-trigger.sh /path/to/svn-trigger.sh
+chmod +x /path/to/svn-trigger.sh
+```
+
+Set these environment variables on the SVN server:
+
+| Variable              | Required | Description                                                                                              |
+| --------------------- | -------- | -------------------------------------------------------------------------------------------------------- |
+| `AICR_URL`            | Yes      | AICR server address, e.g. `http://10.64.8.2:8090`                                                        |
+| `AICR_API_KEY`        | Yes      | Must match `server.auth.api_key_env` in `config.yaml`                                                    |
+
+The script requires `jq` on the SVN server host to safely encode `svnlook`
+metadata as JSON. It uses `svnlook` (always available in the SVN server
+environment) to read author, log message, and changed paths, then POSTs JSON to
+`/triggers/svn`. It does not send a repository URL; AICR always uses the
+server-side `repository_url` configured in `config.yaml`. It logs failures
+locally and exits successfully so the async reviewer never blocks the commit
+path.
+
+### 4. Test manually
+
+```bash
+# Without API key (will fail if server.auth is enabled):
+curl -X POST http://localhost:8080/triggers/svn \
+  -H "Content-Type: application/json" \
+  -d '{"revision":"123","author":"testuser","files":["src/app.cpp"]}'
+
+# With API key:
+curl -X POST http://localhost:8080/triggers/svn \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: YOUR_API_KEY" \
+  -d '{"revision":"123","author":"testuser","files":["src/app.cpp"]}'
+```
+
+A successful response returns `{"accepted": true, ...}`.
 
 ---
 

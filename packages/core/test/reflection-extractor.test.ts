@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { extractReflections, type ReflectionExtractorInput } from "../src/reflection-extractor.js";
+import { extractCrossRunPatterns, extractReflections, type ReflectionExtractorInput } from "../src/reflection-extractor.js";
 
 describe("extractReflections", () => {
   const baseInput: ReflectionExtractorInput = {
@@ -221,5 +221,133 @@ describe("extractReflections", () => {
     const scope = result.find(r => r.content.includes("Reviewed files"));
     expect(scope).toBeDefined();
     expect(scope!.content).toContain("no-ext");
+  });
+});
+
+describe("extractCrossRunPatterns", () => {
+  const workspaceId = "ws-1";
+
+  function categoryFingerprint(category: string): string {
+    const lightResult = extractReflections({
+      workspaceId,
+      runId: "irrelevant",
+      status: "published",
+      problems: [{ file: "x.ts", line: 1, severity: "low", category, message: "m" }],
+      summaries: [],
+      changedFiles: [],
+    });
+    const categoryEntry = lightResult.find(r => r.content.includes(`"${category}"`));
+    return categoryEntry!.fingerprint;
+  }
+
+  it("returns no patterns when no category meets the threshold", () => {
+    const fp = categoryFingerprint("bug");
+    const result = extractCrossRunPatterns(
+      workspaceId,
+      ["bug"],
+      [{ fingerprint: fp, occurrenceCount: 2 }],
+    );
+    expect(result).toEqual([]);
+  });
+
+  it("detects a recurring category at or above the threshold", () => {
+    const fp = categoryFingerprint("style");
+    const result = extractCrossRunPatterns(
+      workspaceId,
+      ["style"],
+      [{ fingerprint: fp, occurrenceCount: 3 }],
+    );
+    expect(result).toHaveLength(1);
+    expect(result[0].content).toContain("style");
+    expect(result[0].content).toContain("3 recent reviews");
+  });
+
+  it("uses a custom threshold", () => {
+    const fp = categoryFingerprint("bug");
+    const result = extractCrossRunPatterns(
+      workspaceId,
+      ["bug"],
+      [{ fingerprint: fp, occurrenceCount: 2 }],
+      { threshold: 2 },
+    );
+    expect(result).toHaveLength(1);
+  });
+
+  it("produces stable fingerprints for the same workspace and category", () => {
+    const fp = categoryFingerprint("security");
+    const result1 = extractCrossRunPatterns(
+      workspaceId,
+      ["security"],
+      [{ fingerprint: fp, occurrenceCount: 5 }],
+    );
+    const result2 = extractCrossRunPatterns(
+      workspaceId,
+      ["security"],
+      [{ fingerprint: fp, occurrenceCount: 10 }],
+    );
+    expect(result1[0].fingerprint).toBe(result2[0].fingerprint);
+  });
+
+  it("produces different fingerprints for different workspaces", () => {
+    const fp1 = extractReflections({
+      workspaceId: "ws-1",
+      runId: "r",
+      status: "published",
+      problems: [{ file: "a.ts", line: 1, severity: "low", category: "bug", message: "m" }],
+      summaries: [],
+      changedFiles: [],
+    }).find(r => r.content.includes('"bug"'))!.fingerprint;
+
+    const fp2 = extractReflections({
+      workspaceId: "ws-2",
+      runId: "r",
+      status: "published",
+      problems: [{ file: "a.ts", line: 1, severity: "low", category: "bug", message: "m" }],
+      summaries: [],
+      changedFiles: [],
+    }).find(r => r.content.includes('"bug"'))!.fingerprint;
+
+    const result1 = extractCrossRunPatterns("ws-1", ["bug"], [{ fingerprint: fp1, occurrenceCount: 5 }]);
+    const result2 = extractCrossRunPatterns("ws-2", ["bug"], [{ fingerprint: fp2, occurrenceCount: 5 }]);
+    expect(result1[0].fingerprint).not.toBe(result2[0].fingerprint);
+  });
+
+  it("skips categories not present in the current run", () => {
+    const fp = categoryFingerprint("style");
+    const result = extractCrossRunPatterns(
+      workspaceId,
+      ["bug"],
+      [{ fingerprint: fp, occurrenceCount: 10 }],
+    );
+    expect(result).toEqual([]);
+  });
+
+  it("normalizes empty category names to uncategorized", () => {
+    const fp = extractReflections({
+      workspaceId,
+      runId: "r",
+      status: "published",
+      problems: [{ file: "a.ts", line: 1, severity: "low", category: "", message: "m" }],
+      summaries: [],
+      changedFiles: [],
+    }).find(r => r.content.includes("uncategorized"))!.fingerprint;
+
+    const result = extractCrossRunPatterns(
+      workspaceId,
+      [""],
+      [{ fingerprint: fp, occurrenceCount: 4 }],
+    );
+    expect(result).toHaveLength(1);
+    expect(result[0].content).toContain("uncategorized");
+  });
+
+  it("does not include secrets or file paths in content", () => {
+    const fp = categoryFingerprint("bug");
+    const result = extractCrossRunPatterns(
+      workspaceId,
+      ["bug"],
+      [{ fingerprint: fp, occurrenceCount: 5 }],
+    );
+    expect(result[0].content).not.toMatch(/\/|secret|password|token|api[-_]?key/i);
   });
 });
