@@ -16,7 +16,7 @@ pnpm-debug.log*
 /.venv
 
 /.claude/settings.local*
-/.kilo/kilo.json
+/.kilo/
 /.vscode/settings.json
 /development/secret
 /workspaces

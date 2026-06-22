@@ -264,6 +264,16 @@ describe("mergeConfigLayers", () => {
     expect(result.success).toBe(false);
   });
 
+  it("accepts queue.sqlite config from Plan.md §3.10", () => {
+    const result = appConfigSchema.safeParse({
+      queue: {
+        kind: "sqlite",
+        sqlite: { path: "data/queue.sqlite", lock_ttl_seconds: 300 },
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+
   it("accepts all output template engine options", () => {
     for (const engine of ["handlebars", "eta"]) {
       const result = appConfigSchema.safeParse({

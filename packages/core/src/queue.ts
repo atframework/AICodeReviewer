@@ -54,6 +54,7 @@ export interface ReviewQueue {
   getDeadJobs(): Promise<readonly QueueJob[]>;
   requeueDead(jobId: string): Promise<QueueJob | undefined>;
   purgeDead(maxAgeMs?: number): Promise<number>;
+  close?(): void;
 }
 
 export function computeBackoffDelay(
@@ -87,6 +88,9 @@ const DEFAULT_BACKOFF: QueueBackoffConfig = {
   maxMs: 60000,
   jitter: true,
 };
+
+export const DEFAULT_QUEUE_BACKOFF: QueueBackoffConfig = DEFAULT_BACKOFF;
+export const DEFAULT_MAX_ATTEMPTS = 3;
 
 interface InternalQueueJob extends QueueJob {
   readonly backoff: QueueBackoffConfig;
@@ -172,18 +176,18 @@ export function createInMemoryQueue(): ReviewQueue {
 
     async complete(jobId: string): Promise<void> {
       const job = jobs.get(jobId);
-      if (job) {
+      if (job?.status === "running") {
         jobs.set(jobId, { ...job, status: "completed" });
       }
     },
 
     async fail(jobId: string, error: Error): Promise<void> {
       const job = jobs.get(jobId);
-      if (!job) return;
+      if (!job || job.status !== "running") return;
 
       if (job.attempt < job.maxAttempts) {
         const delay = computeBackoffDelay(job.attempt, job.backoff);
-        const { availableAt: _availableAt, ...retryableJob } = job;
+        const { availableAt: _availableAt, startedAt: _startedAt, ...retryableJob } = job;
         const updated: InternalQueueJob = {
           ...retryableJob,
           status: "queued",
@@ -235,7 +239,7 @@ export function createInMemoryQueue(): ReviewQueue {
         return undefined;
       }
 
-      const { lastError: _ignored, availableAt: _availableAt, ...rest } = job;
+      const { lastError: _ignored, availableAt: _availableAt, startedAt: _startedAt, ...rest } = job;
       const requeued: InternalQueueJob = {
         ...rest,
         status: "queued",

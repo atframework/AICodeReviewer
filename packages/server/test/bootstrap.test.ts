@@ -12,6 +12,7 @@ import {
   resolveGiteaWebhookConfig,
   resolveGenericWebhookConfigs,
   resolveP4TriggerConfig,
+  resolveSvnTriggerConfig,
   createOutputPublisherFromConfig,
   createOutputPublisherResolverFromConfig,
   createVcsAdapterFromConfig,
@@ -2368,6 +2369,38 @@ describe("resolveP4TriggerConfig", () => {
     const result = resolveP4TriggerConfig(config, "p4-second");
     expect(result).toBeDefined();
     expect(result!.triggerName).toBe("p4-second");
+  });
+
+  it("resolves svn trigger config only when repository_url is configured", () => {
+    const configured = makeConfig({
+      triggers: [
+        {
+          name: "svn-main",
+          kind: "svn",
+          repository_url: "https://svn.example.com/repos/project/trunk",
+        },
+      ],
+      workspaces: {
+        cache: { max_total_gb: 50, eviction: "lru", ttl_days: 30 },
+        defaults: {},
+        instances: {},
+      },
+    } as Partial<AppConfig>);
+    expect(resolveSvnTriggerConfig(configured)).toEqual({
+      triggerName: "svn-main",
+      workspaceId: "default",
+      repositoryUrl: "https://svn.example.com/repos/project/trunk",
+    });
+
+    const missingRepository = makeConfig({
+      triggers: [{ name: "svn-main", kind: "svn" }],
+      workspaces: {
+        cache: { max_total_gb: 50, eviction: "lru", ttl_days: 30 },
+        defaults: {},
+        instances: {},
+      },
+    } as Partial<AppConfig>);
+    expect(resolveSvnTriggerConfig(missingRepository)).toBeUndefined();
   });
 
   it("creates P4 VCS adapter when p4 trigger exists", () => {

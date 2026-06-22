@@ -356,13 +356,16 @@ triggers:
   #   - "**/*.pb.go"
 
   # -- SVN (Subversion) repository profile --
-  # The base adapter supports SVN revision events and manual/custom entry
-  # points that provide headSha/baseSha or changedFiles. A built-in SVN webhook
-  # endpoint/trigger script is still future work.
+  # The post-commit hook forwards revision metadata to /triggers/svn; AICR
+  # uses this required repository_url plus its own SVN credentials to fetch
+  # the diff with svn diff/svn cat.
+  # Copy example/svn-trigger.sh to the SVN server host and wire it into
+  # repository/hooks/post-commit. See example/README.md "SVN Repository
+  # Configuration" for the full setup.
   #
   # - name: svn-main
   #   kind: svn
-  #   repository_url: "https://svn.example.com/repos/project/trunk"
+  #   repository_url: "https://svn.example.com/repos/project/trunk"  # required for /triggers/svn
   #   username_env: AICR_SVN_USER          # optional outbound SVN username
   #   password_env: AICR_SVN_PASSWORD      # optional outbound SVN password
   #   trust_server_cert: false             # optional; keep false unless you pin trust externally
@@ -528,6 +531,12 @@ queue:
     per_workspace_concurrency: 1
     lock_ttl_seconds: 1800
 
+  # SQLite durable queue (survives restarts; single-process or multiple
+  # processes sharing the same file). Uses better-sqlite3 with WAL.
+  # sqlite:
+  #   path: data/queue.sqlite     # default
+  #   lock_ttl_seconds: 300       # stale-running reclaim TTL (default 300)
+
   # rate_limit:
   #   max_concurrent: 8
   #   window_seconds: 60
@@ -609,7 +618,10 @@ review:
   # Enabled by default when admin auth + store are configured.
   # reflection:
   #   enabled: true
-  #   mode: light              # light | thorough (light = category/file-type patterns)
+  #   mode: light              # light | thorough
+  #                             # light    = per-category patterns, file-type scope, summary title
+  #                             # thorough = light + cross-run recurring-category detection
+  #                             #            (flags categories reported in 3+ recent reviews)
   #   memory:
   #     retention_days: 90     # how long reflection entries are kept
   #     max_entries: 500       # max entries per workspace before compaction

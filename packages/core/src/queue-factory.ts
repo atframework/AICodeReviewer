@@ -1,6 +1,7 @@
 import type { AppConfig } from "./config.js";
 import { createInMemoryQueue, type ReviewQueue } from "./queue.js";
 import { createRedisQueue, type RedisQueueOptions } from "./redis-queue.js";
+import { createSqliteQueue, type SqliteQueueOptions } from "./sqlite-queue.js";
 
 function resolveEnv(name: string | undefined): string | undefined {
 	return name ? process.env[name] : undefined;
@@ -33,14 +34,24 @@ function toRedisQueueOptions(config: AppConfig): RedisQueueOptions {
 	};
 }
 
+function toSqliteQueueOptions(config: AppConfig): SqliteQueueOptions {
+	const raw = config.queue as Record<string, unknown>;
+	const sqliteConfig = (raw.sqlite as Record<string, unknown> | undefined) ?? {};
+	const path = (sqliteConfig.path as string | undefined) ?? "data/queue.sqlite";
+	const lockTtlSeconds = sqliteConfig.lock_ttl_seconds as number | undefined;
+	return {
+		path,
+		...(lockTtlSeconds ? { lockTtlSeconds } : {}),
+	};
+}
+
 export async function createQueueFromConfig(config: AppConfig): Promise<ReviewQueue> {
 	switch (config.queue.kind) {
 		case "redis": {
 			return createRedisQueue(toRedisQueueOptions(config));
 		}
 		case "sqlite": {
-			console.warn("SQLite queue backend is not yet implemented; falling back to in-memory queue.");
-			return createInMemoryQueue();
+			return createSqliteQueue(toSqliteQueueOptions(config));
 		}
 		case "rabbitmq": {
 			console.warn("RabbitMQ queue backend is not yet implemented; falling back to in-memory queue.");
@@ -51,4 +62,4 @@ export async function createQueueFromConfig(config: AppConfig): Promise<ReviewQu
 	}
 }
 
-export { toRedisQueueOptions };
+export { toRedisQueueOptions, toSqliteQueueOptions };

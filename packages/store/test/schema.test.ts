@@ -206,6 +206,7 @@ describe("reflectionMemory schema", () => {
         "sourceRunId",
         "createdAt",
         "expiresAt",
+        "occurrenceCount",
       ]),
     );
   });

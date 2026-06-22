@@ -52,8 +52,10 @@ function runMigrations(sqlite: Database.Database): void {
 
   for (const migration of MIGRATIONS) {
     if (applied.has(migration.name)) continue;
-    sqlite.exec(migration.sql);
-    sqlite.prepare("INSERT INTO _migrations (name) VALUES (?)").run(migration.name);
+    sqlite.transaction(() => {
+      sqlite.exec(migration.sql);
+      sqlite.prepare("INSERT INTO _migrations (name) VALUES (?)").run(migration.name);
+    })();
   }
 }
 
@@ -228,6 +230,12 @@ const MIGRATIONS = [
         last_refreshed_at INTEGER NOT NULL,
         etag TEXT
       );
+    `,
+  },
+  {
+    name: "004_reflection_occurrence",
+    sql: `
+      ALTER TABLE reflection_memory ADD COLUMN occurrence_count INTEGER NOT NULL DEFAULT 1;
     `,
   },
 ];

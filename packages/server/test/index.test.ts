@@ -17,6 +17,7 @@ import {
   resolveGenericWebhookConfig,
   resolveGenericWebhookConfigs,
   resolveP4TriggerConfig,
+  resolveSvnTriggerConfig,
   resolveModelSpecFromConfig,
   serve,
   serveAsync,
@@ -52,6 +53,7 @@ describe("@aicr/server", () => {
     expect(resolveGenericWebhookConfig).toBeDefined();
     expect(resolveGenericWebhookConfigs).toBeDefined();
     expect(resolveP4TriggerConfig).toBeDefined();
+    expect(resolveSvnTriggerConfig).toBeDefined();
     expect(resolveModelSpecFromConfig).toBeDefined();
   });
 

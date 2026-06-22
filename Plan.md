@@ -123,6 +123,7 @@
 - Webhook 平台代码保持分层：`webhook-common.ts` 放签名、repo mapping 与共用 payload 构造；`gitea-webhook.ts`、`github-webhook.ts`、`gitlab-webhook.ts` 分别承载平台事件语义；`webhook-translator.ts` 只做统一分发。
 - async 入口以 `202 + runId` 作为非阻塞语义。
 - P4 trigger 只提交最小 metadata，服务端负责后续拉取和分析。
+- SVN trigger 同样只提交最小 metadata（revision、author、可选 changed_files），服务端使用配置的 `repository_url` 与 `svn diff`/`svn cat` 拉取实际变更。
 - **Review 去重**：async 模式下，同一 target（`trigger:workspace:provider:repoRef:targetKind:branch/url/head/base`）的并发 review 请求会被合并；branch 优先，其次用目标 URL，再回退到 head/base revision；running review 完成后自动触发最后一次 pending 的 re-review。
 - 详细合同：`docs/ai/architecture.md` §3.1、§3.1.1。
 
@@ -265,8 +266,11 @@
 
 ### 3.12 Reflection 与 memory
 
-- 当前只保留 schema 与扩展位，不提前宣传为已完成功能。
-- 真正落地时要明确 workspace 隔离、脱敏边界和收益评估。
+- "light" 模式已交付：per-category 问题归纳、文件类型范围、summary 标题、skip reason。
+- "thorough" 模式跨 run 聚合最小切片已交付：`reflection_memory` 追踪 `occurrence_count`，
+  `extractCrossRunPatterns` 对重复出现的 category 生成可操作 hint（默认阈值 3 次）。
+- workspace 隔离、稳定 fingerprint 和脱敏边界已保证。
+- 仍未实现：repo 约定学习与自动注入、完整知识迁移系统。
 - 详细合同：`docs/ai/architecture.md` §3.12。
 
 ### 3.13 模型元数据 Catalog（models.dev）
@@ -404,12 +408,24 @@
   `git blame --line-porcelain`、`p4 annotate -c` + `p4 describe -s` join、`svn blame`
   解析，mock runner 覆盖解析成功、缺失归因（`not_found`/`partial`）与路径越界；未宣传
   `aicr.try_blame` MCP 工具（VCS 层合同先行，MCP 接线待后续）。
+- P2 SVN 触发入口本地合同层已落地：新增 `/triggers/svn` 路由与
+  `translateSvnTriggerToReviewEvent`，payload schema 支持 revision/author/files 等字段
+  别名，鉴权复用 `/triggers/*` API key 中间件，bootstrap 新增 `resolveSvnTriggerConfig`，
+  提供 `example/svn-trigger.sh` post-commit hook 骨架，单元测试覆盖 JSON/form payload、
+  字段别名与缺省路径；真实 SVN 仓库 e2e 仍留在 §8.4。
+- P3 Reflection thorough mode 小切片已落地：`reflection_memory` 新增 `occurrence_count`/
+  `last_seen_at` 列（迁移 `004_reflection_occurrence`），`writeReflectionMemory` 在 fingerprint
+  命中时递增计数；`extractCrossRunPatterns()` 对 occurrence_count ≥ 3 的 category 生成跨 run
+  重复模式 hint，thorough 模式的 post-run callback 自动写入；workspace 隔离、稳定 fingerprint
+  和脱敏（content 仅含 category 名与计数）已保证；repo 约定学习与完整知识迁移系统仍为预留。
+- P4 SQLite durable queue 已落地：`queue.kind: "sqlite"` 使用原生 `better-sqlite3` 实现
+  `createSqliteQueue`，`review_queue_jobs` 表存储 job 全量状态，原子 claim 通过
+  `UPDATE ... RETURNING` 保证多 worker 不重复领取，stale job reclaim 处理 worker 崩溃；
+  enqueue/dequeue/complete/fail/retry/dead-letter/purge 全部实现；迁移原子化包裹在
+  `sqlite.transaction` 中；并发 claim 测试覆盖 5 job × 5 worker 无重复。
 
 | 优先级 | 项 | 来源里程碑 | 本地完成标准 |
 | --- | --- | --- | --- |
-| P2 | SVN 触发入口本地合同层 | M6 | 增加 `/triggers/svn` 或等价 translator 的 payload schema、鉴权、ReviewEvent 归一化、示例脚本骨架和单元测试；真实 SVN 仓库 e2e 留在 §8.4 |
-| P3 | Reflection thorough mode 小切片 | M7 | 先做跨 run false-positive / 重复问题模式聚合的最小实现，保持 workspace 隔离、稳定 fingerprint 和脱敏测试；不一次性扩展成完整知识迁移系统 |
-| P4 | SQLite queue backend | M3/M8 | 以 SQLite 实现最小 durable queue：enqueue、claim、ack/fail、retry/dead-letter、并发 claim 测试；替换当前 `queue.kind: sqlite` fallback 前必须补 schema/docs |
 | P5 | daily_rollups 写入 | M8 | 基于已有 `daily_rollups` 表在 run 完成后 upsert 日聚合，并补 store/query 测试；Dashboard 仍可从实时聚合回退 |
 | P6 | 输出/合同测试收束 | M4/M6 | 补非 PR/SVN target link、`no_problems` 混合路由、MCP context 边界、agent manifest 降级状态等低风险测试缺口 |
 

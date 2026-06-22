@@ -590,6 +590,13 @@ const appConfigSchema = z
     queue: z
       .object({
         kind: z.enum(["memory", "sqlite", "redis", "rabbitmq"]).default("memory"),
+        sqlite: z
+          .object({
+            path: z.string().min(1).optional(),
+            lock_ttl_seconds: z.number().int().positive().optional(),
+          })
+          .passthrough()
+          .optional(),
         workers: z
           .object({
             concurrency: z.number().int().positive().optional(),

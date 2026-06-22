@@ -10,6 +10,7 @@ export interface ReflectionMemoryEntry {
   readonly sourceRunId?: string;
   readonly createdAt: Date;
   readonly expiresAt?: Date;
+  readonly occurrenceCount?: number;
 }
 
 export async function writeReflectionMemory(
@@ -28,7 +29,7 @@ export async function writeReflectionMemory(
       expiresAt: entry.expiresAt ?? null,
     };
     const existing = store.db
-      .select({ id: reflectionMemory.id })
+      .select({ id: reflectionMemory.id, occurrenceCount: reflectionMemory.occurrenceCount })
       .from(reflectionMemory)
       .where(
         and(
@@ -46,6 +47,7 @@ export async function writeReflectionMemory(
           sourceRunId: value.sourceRunId,
           createdAt: value.createdAt,
           expiresAt: value.expiresAt,
+          occurrenceCount: existing.occurrenceCount + 1,
         })
         .where(eq(reflectionMemory.id, existing.id))
         .run();
@@ -76,13 +78,14 @@ export async function readReflectionMemory(
       if (row.expiresAt === null) return true;
       return row.expiresAt.getTime() > now;
     })
-    .map((row: { workspaceId: string; fingerprint: string; content: string; sourceRunId: string | null; createdAt: Date; expiresAt: Date | null }) => ({
+    .map((row: { workspaceId: string; fingerprint: string; content: string; sourceRunId: string | null; createdAt: Date; expiresAt: Date | null; occurrenceCount: number }) => ({
       workspaceId: row.workspaceId,
       fingerprint: row.fingerprint,
       content: row.content,
       ...(row.sourceRunId ? { sourceRunId: row.sourceRunId } : {}),
       createdAt: row.createdAt,
       ...(row.expiresAt ? { expiresAt: row.expiresAt } : {}),
+      occurrenceCount: row.occurrenceCount,
     }));
 }
 

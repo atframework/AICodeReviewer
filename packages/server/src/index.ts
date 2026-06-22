@@ -35,6 +35,10 @@ import {
   type P4TriggerConfig,
 } from "./p4-webhook.js";
 import {
+  translateSvnTriggerToReviewEvent,
+  type SvnTriggerConfig,
+} from "./svn-webhook.js";
+import {
   type IssueTriageRuntimeOptions,
   triageIssue,
   type TriageResult,
@@ -68,6 +72,7 @@ export interface ServerAppOptions {
   readonly github?: GenericWebhookConfigInput;
   readonly gitlab?: GenericWebhookConfigInput;
   readonly p4?: P4TriggerConfig;
+  readonly svn?: SvnTriggerConfig;
   readonly reviewPreparation?: ServerReviewPreparationOptions;
   readonly reviewOrchestration?: ServerReviewOrchestrationOptions;
   readonly issueTriage?: IssueTriageRuntimeOptions;
@@ -285,6 +290,104 @@ function registerP4Trigger(
 
     return handleReviewOrchestration(
       c, "p4", "change-commit", decoded, reviewEvent,
+      reviewPreparationOptions, reviewOrchestrationOptions, undefined, asyncTriggers, deduplicator,
+      runsDir,
+      metrics,
+      store,
+      triggerRetry,
+    );
+  });
+}
+
+function registerSvnTrigger(
+  app: Hono,
+  config: SvnTriggerConfig | undefined,
+  reviewPreparationOptions: ServerReviewPreparationOptions | undefined,
+  reviewOrchestrationOptions: ServerReviewOrchestrationOptions | undefined,
+  asyncTriggers: boolean,
+  deduplicator: ReviewDeduplicator | undefined,
+  runsDir: string | undefined,
+  metrics: AicrMetrics,
+  store: StoreDb | undefined,
+  triggerRetry?: TriggerRetryConfig,
+): void {
+  app.post("/triggers/svn", async (c) => {
+    if (!config) {
+      return c.json({ accepted: false, reason: "trigger_not_configured", provider: "svn" }, 503);
+    }
+
+    const contentType = c.req.header("content-type") ?? "";
+    let payload: unknown;
+
+    if (contentType.includes("application/json")) {
+      const rawPayload = await c.req.text();
+      try {
+        payload = JSON.parse(rawPayload) as unknown;
+      } catch {
+        return c.json({ accepted: false, reason: "invalid_json", provider: "svn" }, 400);
+      }
+    } else {
+      const form = await c.req.parseBody();
+      const revision = typeof form.revision === "string"
+        ? form.revision
+        : typeof form.rev === "string"
+          ? form.rev
+          : typeof form.r === "string"
+            ? form.r
+            : "";
+      const author = typeof form.author === "string" ? form.author : typeof form.user === "string" ? form.user : "";
+      const baseRevision = typeof form.base_revision === "string"
+        ? form.base_revision
+        : typeof form.base_rev === "string"
+          ? form.base_rev
+          : typeof form.old_revision === "string"
+            ? form.old_revision
+            : "";
+      const filesRaw = typeof form.changed_files === "string"
+        ? form.changed_files
+        : typeof form.files === "string"
+          ? form.files
+          : "";
+      const files = filesRaw
+        ? filesRaw.split(/\r?\n/u).map((line: string) => line.trim()).filter(Boolean)
+        : [];
+      payload = {
+        revision,
+        author,
+        base_revision: baseRevision,
+        files,
+      };
+    }
+
+    let reviewEvent;
+    try {
+      reviewEvent = translateSvnTriggerToReviewEvent(payload, config);
+    } catch (error) {
+      if (error instanceof ZodError) {
+        return c.json(
+          {
+            accepted: false,
+            reason: "invalid_payload",
+            provider: "svn",
+            issues: error.issues.map((issue) => ({
+              path: issue.path,
+              message: issue.message,
+            })),
+          },
+          400,
+        );
+      }
+      throw error;
+    }
+
+    if (!reviewEvent) {
+      return c.json({ accepted: false, reason: "missing_revision", provider: "svn" }, 400);
+    }
+
+    const decoded = payload;
+
+    return handleReviewOrchestration(
+      c, "svn", "post-commit", decoded, reviewEvent,
       reviewPreparationOptions, reviewOrchestrationOptions, undefined, asyncTriggers, deduplicator,
       runsDir,
       metrics,
@@ -1211,6 +1314,18 @@ function mountRoutes(app: Hono, options: ServerAppOptions): void {
     options.store,
     options.triggerRetry,
   );
+  registerSvnTrigger(
+    app,
+    options.svn,
+    options.reviewPreparation,
+    options.reviewOrchestration,
+    asyncTriggers,
+    options.deduplicator,
+    runsDir,
+    metrics,
+    options.store,
+    options.triggerRetry,
+  );
 }
 
 export {
@@ -1241,6 +1356,7 @@ export {
   resolveGenericWebhookConfig,
   resolveGenericWebhookConfigs,
   resolveP4TriggerConfig,
+  resolveSvnTriggerConfig,
   resolveModelSpecFromConfig,
 } from "./bootstrap.js";
 export type { BootstrapServerOptions } from "./bootstrap.js";
