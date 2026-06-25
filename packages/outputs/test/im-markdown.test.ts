@@ -3,33 +3,37 @@ import { describe, expect, it } from "vitest";
 import { toFeishuMarkdown, toWeComMarkdown } from "../src/im-markdown.js";
 
 describe("toFeishuMarkdown", () => {
-  it("converts ATX headings to bold", () => {
+  it("preserves ATX headings (Feishu JSON 2.0 renders them natively)", () => {
     const input = "## 发现的问题\n### 中等严重度（1个）\nfile.cpp:54 - issue";
     const result = toFeishuMarkdown(input);
 
-    expect(result).not.toContain("##");
-    expect(result).not.toContain("###");
-    expect(result).toContain("**发现的问题**");
-    expect(result).toContain("**中等严重度（1个）**");
+    expect(result).toContain("## 发现的问题");
+    expect(result).toContain("### 中等严重度（1个）");
   });
 
-  it("converts blockquotes to italic", () => {
+  it("preserves blockquotes (Feishu JSON 2.0 renders them natively)", () => {
     const input = "> This is a quote";
     const result = toFeishuMarkdown(input);
 
-    expect(result).toContain("*This is a quote*");
-    expect(result).not.toContain("> This is a quote");
+    expect(result).toContain("> This is a quote");
   });
 
-  it("preserves code fences", () => {
-    const input = "```ts\nconst x = 1;\n```";
+  it("preserves inline code (renders as code under JSON 2.0)", () => {
+    const input = "See `GameplayTagsManager.h` for details.";
     const result = toFeishuMarkdown(input);
 
-    expect(result).toContain("```ts");
+    expect(result).toContain("`GameplayTagsManager.h`");
+  });
+
+  it("preserves code fences with language for syntax highlighting", () => {
+    const input = "```cpp\nconst x = 1;\n```";
+    const result = toFeishuMarkdown(input);
+
+    expect(result).toContain("```cpp");
     expect(result).toContain("const x = 1;");
   });
 
-  it("does not convert headings inside code fences", () => {
+  it("does not transform headings inside code fences", () => {
     const input = "```\n## not a heading\n```";
     const result = toFeishuMarkdown(input);
 
@@ -43,13 +47,13 @@ describe("toFeishuMarkdown", () => {
     expect(result).not.toContain("\n\n\n");
   });
 
-  it("converts tables to plain text rows", () => {
+  it("preserves tables (Feishu JSON 2.0 renders them natively)", () => {
     const input = "| A | B |\n|---|---|\n| 1 | 2 |";
     const result = toFeishuMarkdown(input);
 
-    expect(result).not.toContain("|---|");
-    expect(result).toContain("A  ·  B");
-    expect(result).toContain("1  ·  2");
+    expect(result).toContain("| A | B |");
+    expect(result).toContain("|---|---|");
+    expect(result).toContain("| 1 | 2 |");
   });
 
   it("handles mixed content correctly", () => {
@@ -72,9 +76,9 @@ describe("toFeishuMarkdown", () => {
 
     const result = toFeishuMarkdown(input);
 
-    expect(result).toContain("**Summary**");
-    expect(result).toContain("**Details**");
-    expect(result).toContain("*A quote*");
+    expect(result).toContain("## Summary");
+    expect(result).toContain("### Details");
+    expect(result).toContain("> A quote");
     expect(result).toContain("```cpp");
     expect(result).toContain("int x = 0;");
     expect(result).toContain("**bold**");

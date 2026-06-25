@@ -1713,17 +1713,7 @@ export function createGithubProblemIssueDispatcher(options: GithubProblemIssueOp
 			}
 
 			const timestamp = Math.floor(Date.now() / 1000);
-			const body: Record<string, unknown> = {
-				msg_type: "interactive",
-				card: {
-					elements: [
-						{
-							tag: "markdown",
-							content: toFeishuMarkdown(sections.join("\n")),
-						},
-					],
-				},
-			};
+			const body: Record<string, unknown> = buildFeishuCardBody(toFeishuMarkdown(sections.join("\n")));
 
 			if (options.notifyFeishu.secret) {
 				body.timestamp = String(timestamp);
@@ -3425,17 +3415,7 @@ export function createGiteaProblemIssueDispatcher(options: GiteaProblemIssueOpti
 			}
 
 			const timestamp = Math.floor(Date.now() / 1000);
-			const body: Record<string, unknown> = {
-				msg_type: "interactive",
-				card: {
-					elements: [
-						{
-							tag: "markdown",
-							content: toFeishuMarkdown(sections.join("\n")),
-						},
-					],
-				},
-			};
+			const body: Record<string, unknown> = buildFeishuCardBody(toFeishuMarkdown(sections.join("\n")));
 
 			if (options.notifyFeishu.secret) {
 				body.timestamp = String(timestamp);
@@ -3858,6 +3838,34 @@ export interface FeishuBotDispatcher {
 	publishAggregatedProblems(problems: readonly ReviewProblem[], summary?: string, mentionText?: string): Promise<DispatchResult>;
 }
 
+/**
+ * Build a Feishu interactive-card webhook body using the JSON 2.0 schema.
+ *
+ * The 2.0 schema (`card.schema = "2.0"`, elements under `card.body.elements`) is
+ * required for inline code, fenced-code highlighting, headings, tables and
+ * blockquotes to render. All Feishu send paths MUST go through this helper so
+ * the schema cannot drift between the bot dispatcher and the issue-created
+ * notification builders. `markdownContent` becomes the first element; any
+ * `extraElements` (e.g. an @mention markdown block) are appended after it.
+ */
+function buildFeishuCardBody(
+	markdownContent: string,
+	extraElements: readonly Record<string, unknown>[] = [],
+): Record<string, unknown> {
+	return {
+		msg_type: "interactive",
+		card: {
+			schema: "2.0",
+			body: {
+				elements: [
+					{ tag: "markdown", content: markdownContent },
+					...extraElements,
+				],
+			},
+		},
+	};
+}
+
 async function computeFeishuSign(timestamp: number, secret: string): Promise<string> {
 	const encoder = new TextEncoder();
 	const stringToSign = `${timestamp}\n${secret}`;
@@ -3888,26 +3896,16 @@ export function createFeishuBotDispatcher(options: FeishuBotOptions): FeishuBotD
 			}
 			sections.push(...buildImProblemSections(problems));
 
-			const timestamp = Math.floor(Date.now() / 1000);
-			const body: Record<string, unknown> = {
-				msg_type: "interactive",
-				card: {
-					elements: [
-						{
-							tag: "markdown",
-							content: toFeishuMarkdown(sections.join("\n")),
-						},
-					],
-				},
-			};
-
+			const extraElements: Record<string, unknown>[] = [];
 			if (mentionText) {
-				const elements = body.card as Record<string, unknown>;
-				elements.elements = [
-					...(elements.elements as unknown[]),
-					{ tag: "markdown", content: mentionText },
-				];
+				extraElements.push({ tag: "markdown", content: mentionText });
 			}
+
+			const timestamp = Math.floor(Date.now() / 1000);
+			const body: Record<string, unknown> = buildFeishuCardBody(
+				toFeishuMarkdown(sections.join("\n")),
+				extraElements,
+			);
 
 			if (options.secret) {
 				body.timestamp = String(timestamp);

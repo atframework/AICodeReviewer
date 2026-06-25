@@ -54,89 +54,30 @@ function applyTextTransform(content: string, transform: (text: string) => string
 
 // ---- Feishu / Lark ----
 
-// Feishu interactive-card markdown does NOT support headings, blockquotes, or tables.
-// Supported: bold, italic, strikethrough, links, images, divider, lists (7.6+), code blocks (7.6+).
+// Feishu interactive-card Markdown supports a broad subset ONLY when the card
+// uses the JSON 2.0 schema (`card.schema = "2.0"`, elements under
+// `card.body.elements`). With 2.0 it renders headings, bold/italic/strikethrough,
+// links, images, dividers, ordered/unordered lists, blockquotes, tables, fenced
+// code blocks WITH language-based syntax highlighting (```cpp …), and inline
+// code (`code`). Under the legacy 1.0 schema inline code and highlighting do
+// NOT render (single backticks show literally), which is why AICR sends 2.0.
+// TABLE_DIVIDER_RE / TABLE_ROW_RE stay shared with the other IM transformers.
 
-const HEADING_RE = /^(#{1,6})\s+(.+)$/gmu;
-const BLOCKQUOTE_RE = /^>[ \t]?(.*)$/gmu;
 const TABLE_DIVIDER_RE = /^\|[\s\-:|]+\|$/mu;
 const TABLE_ROW_RE = /^\|.+\|$/mu;
 
-function feishuFixHeadings(text: string): string {
-  return text.replace(HEADING_RE, (_match, _hashes: string, title: string) => {
-    return `**${title.trim()}**`;
-  });
-}
-
-function feishuFixBlockquotes(text: string): string {
-  return text.replace(BLOCKQUOTE_RE, (_match, content: string) => {
-    const trimmed = content.trim();
-    if (!trimmed) return "";
-    return `*${trimmed}*`;
-  });
-}
-
-function feishuFixTables(text: string): string {
-  const lines = text.split("\n");
-  const out: string[] = [];
-  let inTable = false;
-  let tableRows: string[] = [];
-
-  function flushTable(): void {
-    if (tableRows.length === 0) return;
-    // Remove divider rows and convert data rows to plain text
-    const dataRows = tableRows.filter((row) => !TABLE_DIVIDER_RE.test(row));
-    for (const row of dataRows) {
-      const cells = row
-        .split("|")
-        .map((c) => c.trim())
-        .filter((c) => c.length > 0);
-      if (cells.length > 0) {
-        out.push(cells.join("  ·  "));
-      }
-    }
-    tableRows = [];
-  }
-
-  for (const line of lines) {
-    if (TABLE_ROW_RE.test(line)) {
-      inTable = true;
-      tableRows.push(line);
-    } else {
-      if (inTable) {
-        flushTable();
-        inTable = false;
-      }
-      out.push(line);
-    }
-  }
-  if (inTable) {
-    flushTable();
-  }
-
-  return out.join("\n");
-}
-
 /**
- * Convert standard Markdown into Feishu interactive-card Markdown subset.
+ * Normalize Markdown for the Feishu interactive-card Markdown component.
  *
- * Transformations applied:
- * - Headings (`# …` → `**…**`)
- * - Blockquotes (`> …` → `*…*`)
- * - Tables → plain-text bullet-like rows
- * - Trailing spaces / consecutive blank lines cleaned via {@link fixAndValidateMarkdown}
+ * Because Feishu JSON 2.0 cards render headings, lists, blockquotes, tables,
+ * inline code and fenced code blocks natively, no element degradation is
+ * applied. Only trailing spaces / consecutive blank lines are cleaned via
+ * {@link fixAndValidateMarkdown}. Callers MUST send the card with
+ * `schema: "2.0"` or inline code / highlighting will not render.
  */
 export function toFeishuMarkdown(content: string): string {
   const fixed = fixAndValidateMarkdown(content);
-  let transformed = applyTextTransform(fixed, (text) => {
-    let t = feishuFixHeadings(text);
-    t = feishuFixBlockquotes(t);
-    t = feishuFixTables(t);
-    return t;
-  });
-  // Remove possible empty lines left by blockquote stripping
-  transformed = transformed.replace(/\n{3,}/gu, "\n\n");
-  return transformed.trim();
+  return fixed.replace(/\n{3,}/gu, "\n\n").trim();
 }
 
 // ---- WeCom ----

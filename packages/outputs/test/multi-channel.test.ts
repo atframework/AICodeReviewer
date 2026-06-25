@@ -131,11 +131,13 @@ describe("createFeishuBotDispatcher", () => {
 		const body = JSON.parse(calls[0]?.init?.body ?? "{}");
 		expect(body.msg_type).toBe("interactive");
 		const card = body.card as Record<string, unknown>;
-		const elements = card.elements as Record<string, unknown>[];
+		expect(card.schema).toBe("2.0");
+		const cardBody = card.body as Record<string, unknown>;
+		const elements = cardBody.elements as Record<string, unknown>[];
 		expect(elements.length).toBe(2);
 		const content = (elements[0] as Record<string, unknown>).content as string;
 		expect(content).toContain("Review summary");
-		expect(content).toContain("**Problems (2)**");
+		expect(content).toContain("## Problems (2)");
 		expect(content).toContain("Location: `src/app.ts:42`");
 		expect(content).toContain("Bug found.");
 		expect(content).toContain("Naming issue.");
@@ -318,7 +320,8 @@ describe("createWeComBotDispatcher", () => {
 
 		const body = JSON.parse(calls[0]?.init?.body ?? "{}");
 		const card = body.card as Record<string, unknown>;
-		const elements = card.elements as Record<string, unknown>[];
+		const cardBody = card.body as Record<string, unknown>;
+		const elements = cardBody.elements as Record<string, unknown>[];
 		const content = (elements[0] as Record<string, unknown>).content as string;
 		expect(content).toContain("A".repeat(500));
 		expect(content).toContain("...");
