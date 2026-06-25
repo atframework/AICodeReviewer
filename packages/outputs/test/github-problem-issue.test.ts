@@ -340,7 +340,7 @@ describe("createGithubProblemIssueDispatcher", () => {
 		expect(feishuCall).toBeDefined();
 		const body = JSON.parse(feishuCall?.init?.body ?? "{}");
 		expect(body.msg_type).toBe("interactive");
-		const content = (body.card.elements as Array<{ content: string }>)[0]?.content ?? "";
+		const content = (body.card.body.elements as Array<{ content: string }>)[0]?.content ?? "";
 		expect(content).toContain("[CRITICAL]");
 		expect(content).toContain("https://github.com/my-org/my-repo/issues/30");
 		expect(body.sign).toBeDefined();
