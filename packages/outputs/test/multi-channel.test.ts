@@ -1,3 +1,4 @@
+import { createHmac } from "node:crypto";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -166,6 +167,28 @@ describe("createFeishuBotDispatcher", () => {
 		const body = JSON.parse(calls[0]?.init?.body ?? "{}");
 		expect(body.sign).toBeDefined();
 		expect(body.timestamp).toBeDefined();
+	});
+
+	it("computes Feishu HMAC-SHA256 signature correctly", async () => {
+		const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
+		const secret = "test-secret";
+		const dispatcher = createFeishuBotDispatcher({
+			webhookUrl: "https://open.feishu.cn/hook/test",
+			secret,
+			fetch: async (url, init) => {
+				calls.push({ url, init });
+				return response({ code: 0 });
+			},
+		});
+
+		await dispatcher.publishAggregatedProblems(problems);
+
+		const body = JSON.parse(calls[0]?.init?.body ?? "{}");
+		const timestamp = Number(body.timestamp);
+		expect(Number.isFinite(timestamp)).toBe(true);
+		const stringToSign = `${timestamp}\n${secret}`;
+		const expectedSign = createHmac("sha256", stringToSign).digest("base64");
+		expect(body.sign).toBe(expectedSign);
 	});
 });
 
