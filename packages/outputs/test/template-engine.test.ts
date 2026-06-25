@@ -132,6 +132,129 @@ describe("buildTemplateTargetContext", () => {
 		expect(target.displayText).toBe("Scheduled review");
 		expect(target.markdownLink).toBeUndefined();
 	});
+
+	it("builds a GitHub PR target link", () => {
+		const target = buildTemplateTargetContext({
+			kind: "pull_request",
+			provider: "github",
+			title: "Fix parser",
+			url: "https://github.com/owner/repo/pull/42",
+		});
+
+		expect(target.label).toBe("PR");
+		expect(target.id).toBe("42");
+		expect(target.displayText).toBe("Fix parser");
+		expect(target.markdownLink).toBe("[Fix parser](https://github.com/owner/repo/pull/42)");
+	});
+
+	it("renders a GitLab MR with the !id fallback when no title is set", () => {
+		const target = buildTemplateTargetContext({
+			kind: "pull_request",
+			provider: "gitlab",
+			url: "https://gitlab.example/group/project/-/merge_requests/9",
+		});
+
+		expect(target.label).toBe("MR");
+		expect(target.id).toBe("9");
+		expect(target.displayText).toBe("MR !9");
+		expect(target.markdownLink).toBe("[MR !9](https://gitlab.example/group/project/-/merge_requests/9)");
+	});
+
+	it("renders a Gitea PR with the #id fallback when no title is set", () => {
+		const target = buildTemplateTargetContext({
+			kind: "pull_request",
+			provider: "gitea",
+			url: "https://gitea.example/owent/example/pulls/7",
+		});
+
+		expect(target.label).toBe("PR");
+		expect(target.id).toBe("7");
+		expect(target.displayText).toBe("PR #7");
+	});
+
+	it("falls back to a plain PR review target label when no id or title is available", () => {
+		const target = buildTemplateTargetContext({ kind: "pull_request", provider: "github" });
+
+		expect(target.displayText).toBe("PR review target");
+		expect(target.id).toBeUndefined();
+		expect(target.markdownLink).toBeUndefined();
+	});
+
+	it("renders an issue target with an Issue #id label", () => {
+		const target = buildTemplateTargetContext({
+			kind: "issue",
+			provider: "gitea",
+			url: "https://gitea.example/owent/example/issues/5",
+		});
+
+		expect(target.label).toBe("Issue");
+		expect(target.id).toBe("5");
+		expect(target.displayText).toBe("Issue #5");
+		expect(target.markdownLink).toBe("[Issue #5](https://gitea.example/owent/example/issues/5)");
+	});
+
+	it("renders an SVN revision as plain text without a derived URL", () => {
+		const target = buildTemplateTargetContext({
+			kind: "commit",
+			provider: "svn",
+			headRevision: "12345",
+		});
+
+		expect(target.label).toBe("SVN revision");
+		expect(target.displayText).toBe("SVN r12345");
+		expect(target.url).toBeUndefined();
+		expect(target.markdownLink).toBeUndefined();
+	});
+
+	it("derives a GitHub push commit URL from base URL and repo ref", () => {
+		const target = buildTemplateTargetContext({
+			kind: "push",
+			provider: "github",
+			repoRef: "owner/repo",
+			headRevision: "abcdef1234567890",
+			baseUrl: "https://github.example",
+		});
+
+		expect(target.displayText).toBe("Commit abcdef123456");
+		expect(target.url).toBe("https://github.example/owner/repo/commit/abcdef1234567890");
+		expect(target.markdownLink).toBe("[Commit abcdef123456](https://github.example/owner/repo/commit/abcdef1234567890)");
+	});
+
+	it("derives a Gitea push commit URL from base URL and repo ref", () => {
+		const target = buildTemplateTargetContext({
+			kind: "push",
+			provider: "gitea",
+			repoRef: "owent/example",
+			headRevision: "0123456789abcdef",
+			baseUrl: "https://gitea.example",
+		});
+
+		expect(target.displayText).toBe("Commit 0123456789ab");
+		expect(target.url).toBe("https://gitea.example/owent/example/commit/0123456789abcdef");
+	});
+
+	it("defaults an omitted kind to a plain manual review target", () => {
+		const target = buildTemplateTargetContext({ provider: "github" });
+
+		expect(target.kind).toBe("manual");
+		expect(target.label).toBe("Manual review");
+		expect(target.displayText).toBe("Manual review");
+		expect(target.markdownLink).toBeUndefined();
+	});
+
+	it("prefers an explicit commit URL template over the derived commit URL", () => {
+		const target = buildTemplateTargetContext({
+			kind: "commit",
+			provider: "github",
+			repoRef: "owner/repo",
+			headRevision: "abc123",
+			baseUrl: "https://github.example",
+			commitUrlTemplate: "https://custom.example/c/{{revision}}",
+		});
+
+		expect(target.url).toBe("https://custom.example/c/abc123");
+		expect(target.markdownLink).toBe("[Commit abc123](https://custom.example/c/abc123)");
+	});
 });
 
 describe("getBuiltinTemplate", () => {

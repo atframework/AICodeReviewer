@@ -20,8 +20,9 @@
 - M6 GitHub 生产链路已验收；SVN 基础 VCS adapter 已交付（`svn diff --summarize` /
   `svn cat` / `svn diff --git` / `fetch_more_context`）；GitLab e2e 与 SVN 真实仓库
   e2e/入站触发脚本移至 Backlog。
-- 后续优先执行不依赖外部系统和权限的本地闭环任务，详见 §8.3：SVN 触发入口本地合同层、
-  Reflection thorough mode 小切片、SQLite queue / daily rollups（blame/annotate 基础能力 P1 已完成）。
+- 后续优先执行不依赖外部系统和权限的本地闭环任务，详见 §8.3：本地优先队列 P0–P5 已完成
+  （Streamable HTTP MCP transport、blame/annotate 基础能力、SVN 触发入口合同层、Reflection
+  thorough mode、SQLite durable queue、daily_rollups 写入），下一项为 P6 输出/合同测试收束。
 - M8 观测底座与内置观测首页已交付：OTel 已接入 serve 命令、Prometheus metrics 和 run snapshot 已连线、eval CLI 已添加；Dashboard 支持 Overview / Projects / Providers / Runs 四个标签，工程面板与 Provider 面板均支持 today/thisWeek/thisMonth/all 时间维度切换。
 - M9 发布收尾已基本完成：从零部署验收、容器嵌套沙箱集成验证均通过；版本 bump 待用户决策。
 - M7 已完成：workspace 定制、国际化、memory/reflection 全流程集成（light mode）已交付。
@@ -423,11 +424,23 @@
   `UPDATE ... RETURNING` 保证多 worker 不重复领取，stale job reclaim 处理 worker 崩溃；
   enqueue/dequeue/complete/fail/retry/dead-letter/purge 全部实现；迁移原子化包裹在
   `sqlite.transaction` 中；并发 claim 测试覆盖 5 job × 5 worker 无重复。
+- P5 daily_rollups 写入已落地：`recomputeDailyRollup(store, projectId, date)` 在 run 完成
+  持久化（`insertReviewRun`）与 output event 写入（`insertOutputEvents`）时，从原始表
+  （`review_runs`/`code_metrics`/`llm_usage`/`output_events`）按 `project_id + UTC 日期`
+  分区重算并 delete+insert 原子替换（idempotent、自愈）；日期分区取 run `started_at` 的 UTC
+  日，与 Dashboard 时间窗口一致。Dashboard 查询仍以实时聚合为主路径，`daily_rollups` 作为
+  预聚合缓存供后续切换；新增 `getDailyRollups` 读取入口与 `packages/store/test/rollups.test.ts`
+  覆盖写入、幂等、issue 计数刷新、project/date 隔离与跨天汇总对齐实时统计。
+- P6 输出/合同测试收束（target link 切片）已落地：`packages/outputs/test/template-engine.test.ts`
+  的 `buildTemplateTargetContext` 补齐非 PR/SVN target 渲染覆盖——GitHub PR、GitLab MR（`!id`
+  回退）、Gitea PR（`#id` 回退）、无 id/title 的 `PR review target` 兜底、`issue`（`Issue #id`）、
+  SVN revision（纯文本无链接）、GitHub/Gitea push commit URL 派生、`manual` 兜底与
+  `commitUrlTemplate` 优先于派生 URL；新增 10 个确定性低风险测试，与 §3.9/§3.9.1 target 渲染
+  合同对齐。剩余 `no_problems` 混合路由、MCP context 边界、agent manifest 降级状态子项见下表。
 
 | 优先级 | 项 | 来源里程碑 | 本地完成标准 |
 | --- | --- | --- | --- |
-| P5 | daily_rollups 写入 | M8 | 基于已有 `daily_rollups` 表在 run 完成后 upsert 日聚合，并补 store/query 测试；Dashboard 仍可从实时聚合回退 |
-| P6 | 输出/合同测试收束 | M4/M6 | 补非 PR/SVN target link、`no_problems` 混合路由、MCP context 边界、agent manifest 降级状态等低风险测试缺口 |
+| P6 | 输出/合同测试收束（剩余子项） | M4/M6 | 补 `no_problems` 混合路由（一个 channel 抑制、另一个发布的复合场景）、MCP context 边界（`fetch_more_context` ENOENT/越界回退）、agent manifest 降级状态（`metadataInjection: injected/delegated/not_applicable`）等低风险测试缺口 |
 
 ### 8.4 Backlog（依赖外部系统或用户决策）
 
