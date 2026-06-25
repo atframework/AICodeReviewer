@@ -429,7 +429,15 @@
   - `code_metrics`：每 run 的文件变更数、增删行数、分析字节数。
   - `llm_usage`：每 run 的 provider+model 级请求数、token 数、成本、重试/fallback/失败次数、延迟。
   - `output_events`：每 run 的 channel dispatch 事件，含 issue/comment 创建标记。
-  - `daily_rollups`：预留的按日聚合表（当前未写入，聚合从原始表实时计算）。
+  - `daily_rollups`：按 `project_id + UTC 日期(YYYY-MM-DD)` 聚合的物化视图表。
+    每次 run 完成持久化（`insertReviewRun`）或写入 output event（`insertOutputEvents`）时，
+    由 `recomputeDailyRollup(store, projectId, date)` 从原始表（`review_runs`/
+    `code_metrics`/`llm_usage`/`output_events`）重算该 project+UTC 日期分区并
+    delete+insert 原子替换（idempotent、自愈）。日期分区取 run `started_at` 的 UTC 日，
+    与 Dashboard 时间窗口（today/thisWeek/thisMonth 均按 UTC 计算）一致。
+    Dashboard 查询当前仍以实时聚合为主路径，`daily_rollups` 作为预聚合缓存供后续切换；
+    任何未来会修改 run/output 事实的写入路径（例如 `updateRunStatus` 接入生产）也必须
+    触发对应分区的 `recomputeDailyRollup`，否则该缓存会与实时聚合不一致。
 - Admin API 端点（Hono 子路由 `/api/admin`）：
   - `POST /login`：验证用户名/密码，返回 session token + 过期时间。
   - `POST /logout`：撤销 session token。

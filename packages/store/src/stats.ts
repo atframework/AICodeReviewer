@@ -1,4 +1,4 @@
-import { and, desc, eq, gte, sql, sum, count, avg } from "drizzle-orm";
+import { and, desc, eq, gte, lt, lte, sql, sum, count, avg } from "drizzle-orm";
 
 import type { StoreDb } from "./database.js";
 import {
@@ -7,6 +7,7 @@ import {
   codeMetrics,
   llmUsage,
   outputEvents,
+  dailyRollups,
   type RunStatus,
 } from "./schema.js";
 
@@ -83,6 +84,8 @@ export function insertReviewRun(store: StoreDb, run: ReviewRunInsert): void {
     displayName: run.displayName ?? null,
   });
 
+  const startedAt = run.startedAt ?? new Date();
+
   store.db.insert(reviewRuns).values({
     id: run.id,
     projectId,
@@ -93,7 +96,7 @@ export function insertReviewRun(store: StoreDb, run: ReviewRunInsert): void {
     providerModel: run.providerModel,
     status: run.status,
     ...(run.attempt ? { attempt: run.attempt } : {}),
-    startedAt: run.startedAt,
+    startedAt,
     finishedAt: run.finishedAt,
     ...(run.costUsd != null ? { costUsd: run.costUsd } : {}),
     ...(run.tokensIn != null ? { tokensIn: run.tokensIn } : {}),
@@ -145,6 +148,8 @@ export function insertReviewRun(store: StoreDb, run: ReviewRunInsert): void {
       }).run();
     }
   }
+
+  recomputeDailyRollup(store, projectId, toUtcDateString(startedAt));
 }
 
 export function insertOutputEvents(
@@ -161,6 +166,15 @@ export function insertOutputEvents(
       commentCreated: event.commentCreated ?? false,
       timestamp: event.timestamp ?? new Date(),
     }).run();
+  }
+
+  const run = store.db
+    .select({ projectId: reviewRuns.projectId, startedAt: reviewRuns.startedAt })
+    .from(reviewRuns)
+    .where(eq(reviewRuns.id, runId))
+    .get();
+  if (run) {
+    recomputeDailyRollup(store, run.projectId, toUtcDateString(run.startedAt ?? new Date()));
   }
 }
 
@@ -580,4 +594,168 @@ export function hardDeleteExpiredProjects(
     .run(cutoffMs);
 
   return Number(result.changes);
+}
+
+export function toUtcDateString(date: Date): string {
+  return date.toISOString().slice(0, 10);
+}
+
+export interface DailyRollupRow {
+  projectId: number;
+  date: string;
+  reviewCount: number;
+  successCount: number;
+  failureCount: number;
+  skipCount: number;
+  problemRunCount: number;
+  problemTotal: number;
+  issueCreatedCount: number;
+  filesChanged: number;
+  linesAdded: number;
+  linesDeleted: number;
+  bytesAnalyzed: number;
+  llmRequestCount: number;
+  tokensIn: number;
+  tokensOut: number;
+  tokensTotal: number;
+  costUsd: number | null;
+}
+
+function dayRange(date: string): { start: Date; end: Date } {
+  const start = new Date(Date.parse(`${date}T00:00:00.000Z`));
+  return { start, end: new Date(start.getTime() + 24 * 60 * 60 * 1000) };
+}
+
+export function recomputeDailyRollup(
+  store: StoreDb,
+  projectId: number,
+  date: string,
+): void {
+  const { start, end } = dayRange(date);
+  const windowWhere = and(
+    eq(reviewRuns.projectId, projectId),
+    gte(reviewRuns.startedAt, start),
+    lt(reviewRuns.startedAt, end),
+  );
+
+  const runBase = store.db
+    .select({
+      reviewCount: count(),
+      successCount: sum(sql`CASE WHEN ${reviewRuns.status} = 'succeeded' OR ${reviewRuns.status} = 'published' THEN 1 ELSE 0 END`),
+      failureCount: sum(sql`CASE WHEN ${reviewRuns.status} = 'failed' THEN 1 ELSE 0 END`),
+      skipCount: sum(sql`CASE WHEN ${reviewRuns.status} = 'skipped' THEN 1 ELSE 0 END`),
+      problemRunCount: sum(sql`CASE WHEN ${reviewRuns.problemCount} > 0 THEN 1 ELSE 0 END`),
+      problemTotal: sum(reviewRuns.problemCount),
+    })
+    .from(reviewRuns)
+    .where(windowWhere)
+    .get();
+
+  const reviewCount = Number(runBase?.reviewCount ?? 0);
+
+  const rollupWhere = and(eq(dailyRollups.projectId, projectId), eq(dailyRollups.date, date));
+
+  if (reviewCount === 0) {
+    store.db.delete(dailyRollups).where(rollupWhere).run();
+    return;
+  }
+
+  const codeBase = store.db
+    .select({
+      filesChanged: sum(codeMetrics.filesChanged),
+      linesAdded: sum(codeMetrics.linesAdded),
+      linesDeleted: sum(codeMetrics.linesDeleted),
+      bytesAnalyzed: sum(codeMetrics.bytesAnalyzed),
+    })
+    .from(codeMetrics)
+    .innerJoin(reviewRuns, eq(codeMetrics.runId, reviewRuns.id))
+    .where(windowWhere)
+    .get();
+
+  const outputBase = store.db
+    .select({
+      issueCreatedCount: sum(sql`CASE WHEN ${outputEvents.issueCreated} = 1 THEN 1 ELSE 0 END`),
+    })
+    .from(outputEvents)
+    .innerJoin(reviewRuns, eq(outputEvents.runId, reviewRuns.id))
+    .where(windowWhere)
+    .get();
+
+  const llmBase = store.db
+    .select({
+      llmRequestCount: sum(llmUsage.requestCount),
+      tokensIn: sum(llmUsage.tokensIn),
+      tokensOut: sum(llmUsage.tokensOut),
+      tokensTotal: sum(llmUsage.tokensTotal),
+      costUsd: sum(llmUsage.costUsd),
+    })
+    .from(llmUsage)
+    .innerJoin(reviewRuns, eq(llmUsage.runId, reviewRuns.id))
+    .where(windowWhere)
+    .get();
+
+  store.sqlite.transaction(() => {
+    store.db.delete(dailyRollups).where(rollupWhere).run();
+    store.db
+      .insert(dailyRollups)
+      .values({
+        projectId,
+        date,
+        reviewCount,
+        successCount: Number(runBase?.successCount ?? 0),
+        failureCount: Number(runBase?.failureCount ?? 0),
+        skipCount: Number(runBase?.skipCount ?? 0),
+        problemRunCount: Number(runBase?.problemRunCount ?? 0),
+        problemTotal: Number(runBase?.problemTotal ?? 0),
+        issueCreatedCount: Number(outputBase?.issueCreatedCount ?? 0),
+        filesChanged: Number(codeBase?.filesChanged ?? 0),
+        linesAdded: Number(codeBase?.linesAdded ?? 0),
+        linesDeleted: Number(codeBase?.linesDeleted ?? 0),
+        bytesAnalyzed: Number(codeBase?.bytesAnalyzed ?? 0),
+        llmRequestCount: Number(llmBase?.llmRequestCount ?? 0),
+        tokensIn: Number(llmBase?.tokensIn ?? 0),
+        tokensOut: Number(llmBase?.tokensOut ?? 0),
+        tokensTotal: Number(llmBase?.tokensTotal ?? 0),
+        costUsd: llmBase?.costUsd != null ? Number(llmBase.costUsd) : null,
+      })
+      .run();
+  })();
+}
+
+export function getDailyRollups(
+  store: StoreDb,
+  filter?: { projectId?: number; since?: string; until?: string },
+): DailyRollupRow[] {
+  const conditions = [];
+  if (filter?.projectId != null) conditions.push(eq(dailyRollups.projectId, filter.projectId));
+  if (filter?.since) conditions.push(gte(dailyRollups.date, filter.since));
+  if (filter?.until) conditions.push(lte(dailyRollups.date, filter.until));
+
+  const rows = store.db
+    .select()
+    .from(dailyRollups)
+    .where(conditions.length > 0 ? and(...conditions) : undefined)
+    .orderBy(dailyRollups.date, dailyRollups.projectId)
+    .all();
+
+  return rows.map((row) => ({
+    projectId: row.projectId,
+    date: row.date,
+    reviewCount: row.reviewCount,
+    successCount: row.successCount,
+    failureCount: row.failureCount,
+    skipCount: row.skipCount,
+    problemRunCount: row.problemRunCount,
+    problemTotal: row.problemTotal,
+    issueCreatedCount: row.issueCreatedCount,
+    filesChanged: row.filesChanged,
+    linesAdded: row.linesAdded,
+    linesDeleted: row.linesDeleted,
+    bytesAnalyzed: row.bytesAnalyzed,
+    llmRequestCount: row.llmRequestCount,
+    tokensIn: row.tokensIn,
+    tokensOut: row.tokensOut,
+    tokensTotal: row.tokensTotal,
+    costUsd: row.costUsd,
+  }));
 }
