@@ -1004,6 +1004,7 @@ describe("materializeRuntimeBundle", () => {
         { name: "aicr.publish_summary", description: "Publish review summary" },
         { name: "aicr.skip", description: "Skip output" },
         { name: "aicr.fetch_more_context", description: "Fetch more source context" },
+        { name: "aicr.try_blame", description: "Fetch VCS attribution" },
       ];
 
       const result = await materializeRuntimeBundle({
@@ -1013,11 +1014,12 @@ describe("materializeRuntimeBundle", () => {
         mcpTools,
       });
 
-      expect(result.manifest.mcpTools).toHaveLength(4);
+      expect(result.manifest.mcpTools).toHaveLength(5);
       expect(result.manifest.mcpTools).toContain("aicr.report_problem");
       expect(result.manifest.mcpTools).toContain("aicr.publish_summary");
       expect(result.manifest.mcpTools).toContain("aicr.skip");
       expect(result.manifest.mcpTools).toContain("aicr.fetch_more_context");
+      expect(result.manifest.mcpTools).toContain("aicr.try_blame");
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }

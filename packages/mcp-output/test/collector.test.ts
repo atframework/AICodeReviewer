@@ -5,13 +5,22 @@ import { AicrOutputCollector, createAicrOutputToolRegistry } from "../src/index.
 describe("AicrOutputCollector", () => {
   it("collects reported problems, summaries, skip reasons, and context requests", async () => {
     const collector = new AicrOutputCollector();
-    const tools = createAicrOutputToolRegistry(collector, async (input) => {
-      return `context for ${input.path}`;
-    });
+    const tools = createAicrOutputToolRegistry(
+      collector,
+      async (input) => {
+        return `context for ${input.path}`;
+      },
+      async (input) => ({
+        path: input.path,
+        status: "ok",
+        entries: [{ line: input.range?.start_line ?? 1, revision: "abc123", author: "Alice" }],
+      }),
+    );
     const reportProblem = tools.find((tool) => tool.name === "aicr.report_problem");
     const publishSummary = tools.find((tool) => tool.name === "aicr.publish_summary");
     const skip = tools.find((tool) => tool.name === "aicr.skip");
     const fetchMoreContext = tools.find((tool) => tool.name === "aicr.fetch_more_context");
+    const tryBlame = tools.find((tool) => tool.name === "aicr.try_blame");
 
     await expect(
       reportProblem?.call({
@@ -35,6 +44,23 @@ describe("AicrOutputCollector", () => {
         reason: "Need surrounding control flow.",
       }),
     ).resolves.toEqual({ content: "context for src/app.ts" });
+    await expect(
+      tryBlame?.call({
+        path: "src/app.ts",
+        range: { start_line: 12, end_line: 12 },
+        reason: "Need VCS-verified line attribution.",
+      }),
+    ).resolves.toEqual({
+      content: JSON.stringify(
+        {
+          path: "src/app.ts",
+          status: "ok",
+          entries: [{ line: 12, revision: "abc123", author: "Alice" }],
+        },
+        null,
+        2,
+      ),
+    });
 
     const snapshot = collector.snapshot();
     expect(snapshot.problems).toEqual([
@@ -55,6 +81,13 @@ describe("AicrOutputCollector", () => {
           path: "src/app.ts",
           range: { start_line: 10, end_line: 20 },
           reason: "Need surrounding control flow.",
+        },
+      ],
+      attributionRequests: [
+        {
+          path: "src/app.ts",
+          range: { start_line: 12, end_line: 12 },
+          reason: "Need VCS-verified line attribution.",
         },
       ],
       skipReason: "lgtm",
@@ -87,6 +120,7 @@ describe("AicrOutputCollector", () => {
       "aicr.publish_summary",
       "aicr.skip",
       "aicr.fetch_more_context",
+      "aicr.try_blame",
     ]);
     expect(tools[0]?.inputSchema).toMatchObject({
       required: ["file", "line", "severity", "category", "message"],
@@ -106,6 +140,7 @@ describe("AicrOutputCollector edge cases", () => {
     const collector = new AicrOutputCollector();
     const tools = createAicrOutputToolRegistry(collector);
     const fetchMoreContext = tools.find((tool) => tool.name === "aicr.fetch_more_context");
+    const tryBlame = tools.find((tool) => tool.name === "aicr.try_blame");
 
     const result = await fetchMoreContext?.call({
       path: "src/app.ts",
@@ -171,6 +206,15 @@ describe("AicrOutputCollector edge cases", () => {
     await expect(skip?.call({})).rejects.toThrow(/reason/u);
   });
 
+  it("rejects try_blame with missing path", async () => {
+    const collector = new AicrOutputCollector();
+    const tryBlame = createAicrOutputToolRegistry(collector).find(
+      (tool) => tool.name === "aicr.try_blame",
+    );
+
+    await expect(tryBlame?.call({ reason: "need attribution" })).rejects.toThrow(/path/u);
+  });
+
   it("rejects fetch_more_context with missing path", async () => {
     const collector = new AicrOutputCollector();
     const fetchMoreContext = createAicrOutputToolRegistry(collector).find(
@@ -180,10 +224,32 @@ describe("AicrOutputCollector edge cases", () => {
     await expect(fetchMoreContext?.call({ reason: "need context" })).rejects.toThrow(/path/u);
   });
 
+  it("returns empty content and records try_blame when no handler is provided", async () => {
+    const collector = new AicrOutputCollector();
+    const tools = createAicrOutputToolRegistry(collector);
+    const tryBlame = tools.find((tool) => tool.name === "aicr.try_blame");
+
+    const result = await tryBlame?.call({
+      path: "src/app.ts",
+      range: { start_line: 2, end_line: 2 },
+      reason: "Need attribution.",
+    });
+
+    expect(result).toEqual({ content: "" });
+    expect(collector.snapshot().attributionRequests).toEqual([
+      {
+        path: "src/app.ts",
+        range: { start_line: 2, end_line: 2 },
+        reason: "Need attribution.",
+      },
+    ]);
+  });
+
   it("accepts fetch_more_context with only path and reason (no range)", async () => {
     const collector = new AicrOutputCollector();
     const tools = createAicrOutputToolRegistry(collector);
     const fetchMoreContext = tools.find((tool) => tool.name === "aicr.fetch_more_context");
+    const tryBlame = tools.find((tool) => tool.name === "aicr.try_blame");
 
     const result = await fetchMoreContext?.call({
       path: "src/app.ts",
@@ -202,6 +268,7 @@ describe("AicrOutputCollector edge cases", () => {
     const publishSummary = tools.find((tool) => tool.name === "aicr.publish_summary");
     const skip = tools.find((tool) => tool.name === "aicr.skip");
     const fetchMoreContext = tools.find((tool) => tool.name === "aicr.fetch_more_context");
+    const tryBlame = tools.find((tool) => tool.name === "aicr.try_blame");
 
     await reportProblem?.call({
       file: "src/app.ts",
@@ -410,6 +477,7 @@ describe("AicrOutputCollector validation edge cases", () => {
     const collector = new AicrOutputCollector();
     const tools = createAicrOutputToolRegistry(collector);
     const fetchMoreContext = tools.find((tool) => tool.name === "aicr.fetch_more_context");
+    const tryBlame = tools.find((tool) => tool.name === "aicr.try_blame");
 
     await fetchMoreContext?.call({
       path: "src/app.ts",
@@ -426,6 +494,7 @@ describe("AicrOutputCollector validation edge cases", () => {
     const collector = new AicrOutputCollector();
     const tools = createAicrOutputToolRegistry(collector);
     const fetchMoreContext = tools.find((tool) => tool.name === "aicr.fetch_more_context");
+    const tryBlame = tools.find((tool) => tool.name === "aicr.try_blame");
 
     await fetchMoreContext?.call({
       path: "src/app.ts",

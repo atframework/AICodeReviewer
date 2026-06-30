@@ -35,6 +35,7 @@ import {
   type FetchMoreContextInput,
   type PublishSummaryInput,
   type ReportProblemInput,
+  type TryBlameInput,
 } from "@aicr/mcp-output";
 import {
   buildAtMentions,
@@ -49,7 +50,7 @@ import {
 } from "@aicr/outputs";
 import type { DispatchResult, ReviewProblem } from "@aicr/outputs";
 import type { SandboxBackend, SandboxSpawnResult } from "@aicr/sandbox";
-import type { ChangeRange, ExtraContextRequest, ParsedDiff, VcsAdapter } from "@aicr/vcs";
+import type { AttributionRequest, ChangeRange, ExtraContextRequest, ParsedDiff, VcsAdapter } from "@aicr/vcs";
 
 export interface DiffCapableVcsAdapter extends VcsAdapter {
   diff?(range: ChangeRange, options?: { readonly contextLines?: number }): Promise<ParsedDiff>;
@@ -256,6 +257,7 @@ function buildJsonToolContract(): string {
     "Before reporting any problem, read the full changed file (not just the diff hunk) and any interface, type definition, or caller/callee needed to confirm the issue. Use aicr.fetch_more_context (omit range for full file) or shell inspection (rg, bat) to read surrounding code.",
     "When the diff is unavailable or insufficient, call aicr.fetch_more_context for the changed file; omit range to fetch the full file.",
     "You may call aicr.fetch_more_context for a narrowly related repository file outside the change when it is required to understand an API contract, caller/callee, type definition, or configuration that directly affects a changed line.",
+    "Use aicr.try_blame only when VCS-verified line attribution is needed; it returns best-effort blame/annotate metadata and never returns source content. Do not guess authors from names, summaries, or diff text.",
     "When running inside an agent sandbox, inspect already materialized files with read-only shell commands (rg, fd, bat --paging=never --style=plain, jq, yq) before concluding that source code is inaccessible.",
     "If a needed file is not materialized or the MCP tool returns a pending/empty context response, stop making a final no-problem claim; request the concrete file through aicr.fetch_more_context so AICR can pull it from VCS and rerun the final pass.",
     "Never ask the user to provide diff or source context; request it through aicr.fetch_more_context with a concrete path and reason.",
@@ -265,6 +267,7 @@ function buildJsonToolContract(): string {
     "When useful, add a short title to aicr.publish_summary input.title so summary channels can render a concise heading.",
     "Preferred shape:",
     '{"toolCalls":[{"name":"aicr.fetch_more_context","input":{"path":"src/changed-file.ts","reason":"Need the full file to validate control flow around the changed function."}}]}',
+    '{"toolCalls":[{"name":"aicr.try_blame","input":{"path":"src/changed-file.ts","range":{"start_line":42,"end_line":42},"reason":"Need VCS-verified attribution for the changed line before deciding ownership-sensitive follow-up."}}]}',
     '{"toolCalls":[{"name":"aicr.report_problem","input":{"file":"src/file.ts","line":1,"severity":"medium","category":"correctness","message":"..."}}],"notes":"optional"}',
     '{"toolCalls":[{"name":"aicr.skip","input":{"reason":"lgtm"}}]}',
     "Alternatively use problems/summary/skipReason fields; AICR will translate them into tool calls.",
@@ -486,6 +489,7 @@ async function runAgentReview(
           problems: Array.isArray(parsed.problems) ? parsed.problems : [],
           summaries: Array.isArray(parsed.summaries) ? parsed.summaries : [],
           contextRequests: Array.isArray(parsed.contextRequests) ? parsed.contextRequests : [],
+          ...(Array.isArray(parsed.attributionRequests) ? { attributionRequests: parsed.attributionRequests } : {}),
           ...(typeof parsed.skipReason === "string" ? { skipReason: parsed.skipReason } : {}),
         };
         if (options.logThinking !== false) {
@@ -659,6 +663,7 @@ const KILO_MCP_TOOL_MAP: Readonly<Record<string, AicrOutputToolName>> = {
   publish_summary: "aicr.publish_summary",
   skip: "aicr.skip",
   fetch_more_context: "aicr.fetch_more_context",
+  try_blame: "aicr.try_blame",
 };
 
 function normalizeToolName(value: unknown): AicrOutputToolName {
@@ -666,7 +671,8 @@ function normalizeToolName(value: unknown): AicrOutputToolName {
     value === "aicr.report_problem" ||
     value === "aicr.publish_summary" ||
     value === "aicr.skip" ||
-    value === "aicr.fetch_more_context"
+    value === "aicr.fetch_more_context" ||
+    value === "aicr.try_blame"
   ) {
     return value;
   }
@@ -835,6 +841,10 @@ function parseToolCalls(content: string, options: ParseToolCallOptions = {}): To
   return [];
 }
 
+function isContextToolName(name: AicrOutputToolName): boolean {
+  return name === "aicr.fetch_more_context" || name === "aicr.try_blame";
+}
+
 function emptyToolExecutionResult(): ToolCallExecutionResult {
   return {
     toolCallCount: 0,
@@ -882,7 +892,7 @@ async function executeAicrToolCalls(
 
     try {
       const result = await tool.call(toolCall.input);
-      if (toolCall.name === "aicr.fetch_more_context") {
+      if (isContextToolName(toolCall.name)) {
         const input = isPlainObject(toolCall.input) ? toolCall.input : {};
         contextResponses.push({
           ...(typeof input.path === "string" ? { path: input.path } : {}),
@@ -893,12 +903,15 @@ async function executeAicrToolCalls(
       }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
-      if (toolCall.name === "aicr.fetch_more_context") {
+      if (isContextToolName(toolCall.name)) {
         invalidContextRequestCount += 1;
         contextResponses.push({ error: errorMessage });
         console.warn(JSON.stringify({
           level: "warn",
-          msg: "ignored invalid fetch_more_context tool call",
+          msg: toolCall.name === "aicr.fetch_more_context"
+            ? "ignored invalid fetch_more_context tool call"
+            : "ignored invalid try_blame tool call",
+          toolName: toolCall.name,
           error: errorMessage,
         }));
         continue;
@@ -940,6 +953,10 @@ async function callAicrTools(
 
 function contextRequestsToToolCalls(requests: readonly FetchMoreContextInput[]): readonly ToolCallEnvelope[] {
   return requests.map((request) => ({ name: "aicr.fetch_more_context", input: request }));
+}
+
+function attributionRequestsToToolCalls(requests: readonly TryBlameInput[]): readonly ToolCallEnvelope[] {
+  return requests.map((request) => ({ name: "aicr.try_blame", input: request }));
 }
 
 function replayMcpReviewOutputs(state: AicrOutputState, collector: AicrOutputCollector): void {
@@ -988,9 +1005,16 @@ async function collectCompletionOutputs(
 
   if (completion.mcpState) {
     replayMcpReviewOutputs(completion.mcpState, collector);
-    if (completion.mcpState.contextRequests.length > 0) {
+    const attributionRequests = completion.mcpState.attributionRequests ?? [];
+    if (completion.mcpState.contextRequests.length > 0 || attributionRequests.length > 0) {
       executions.push(
-        await executeAicrToolCalls(contextRequestsToToolCalls(completion.mcpState.contextRequests), tools),
+        await executeAicrToolCalls(
+          [
+            ...contextRequestsToToolCalls(completion.mcpState.contextRequests),
+            ...attributionRequestsToToolCalls(attributionRequests),
+          ],
+          tools,
+        ),
       );
     }
   } else if (completion.toolCallEvents && completion.toolCallEvents.length > 0) {
@@ -1092,6 +1116,7 @@ function buildContextFollowUpPrompt(
     "Return one JSON object only. Prefer problems plus summary; if there are no actionable problems or no reviewable code, call aicr.skip with a concise reason such as lgtm or no_reviewable_code.",
     "If you found any actionable problem, emit one aicr.report_problem entry per problem with file and line; do not mention problem counts only in a summary.",
     "Use aicr.fetch_more_context only for a concrete changed file or a narrowly related repository file; never ask the user to provide diff or source context.",
+    "Use aicr.try_blame only for VCS-verified line attribution; do not guess authors from prose, usernames, or commit summaries.",
     "",
     "Changed files:",
     ...changedPaths.map((path) => `- ${path}`),
@@ -1156,6 +1181,16 @@ function buildFallbackReviewSummary(
 }
 
 function toExtraContextRequest(input: FetchMoreContextInput, revision: string | undefined): ExtraContextRequest {
+  return {
+    path: input.path,
+    reason: input.reason,
+    ...(input.range?.start_line !== undefined ? { startLine: input.range.start_line } : {}),
+    ...(input.range?.end_line !== undefined ? { endLine: input.range.end_line } : {}),
+    ...(revision !== undefined ? { revision } : {}),
+  };
+}
+
+function toAttributionRequest(input: TryBlameInput, revision: string | undefined): AttributionRequest {
   return {
     path: input.path,
     reason: input.reason,
@@ -1547,10 +1582,20 @@ export async function runReviewOrchestration(
   const llmSystemPrompt = (scrubbedPrompt.messages[0] as { role: string; content: string }).content;
 
   const collector = new AicrOutputCollector();
-  const tools = createAicrOutputToolRegistry(collector, async (request) => {
-    const result = await vcs.fetchExtraContext(toExtraContextRequest(request, range.headRevision), workspaceRef);
-    return result.content;
-  });
+  const tools = createAicrOutputToolRegistry(
+    collector,
+    async (request) => {
+      const result = await vcs.fetchExtraContext(toExtraContextRequest(request, range.headRevision), workspaceRef);
+      return result.content;
+    },
+    async (request) => {
+      if (!vcs.fetchAttribution) {
+        return { path: request.path, status: "not_found", entries: [] };
+      }
+
+      return vcs.fetchAttribution(toAttributionRequest(request, range.headRevision), workspaceRef);
+    },
+  );
   const bundleContext: AgentBundleContext = {
     instructions: preparedPrompt.discovery.instructions.map((instruction) => ({
       kind: instruction.kind,

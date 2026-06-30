@@ -25,6 +25,14 @@ interface TestOutputState {
 			readonly end_line?: number;
 		};
 	}[];
+	readonly attributionRequests?: readonly {
+		readonly path: string;
+		readonly reason: string;
+		readonly range?: {
+			readonly start_line?: number;
+			readonly end_line?: number;
+		};
+	}[];
 }
 
 function isTextContent(value: unknown): value is { readonly type: "text"; readonly text: string } {
@@ -75,6 +83,7 @@ describe("AICR MCP Streamable HTTP server", () => {
 				"aicr.publish_summary",
 				"aicr.skip",
 				"aicr.fetch_more_context",
+				"aicr.try_blame",
 			]);
 
 			const reportResult = await client.callTool(
@@ -105,6 +114,19 @@ describe("AICR MCP Streamable HTTP server", () => {
 			);
 			expect(parseTextJson(contextResult)).toEqual({ content: "two\nthree" });
 
+			const blameResult = await client.callTool(
+				{
+					name: "aicr.try_blame",
+					arguments: {
+						path: "src/app.ts",
+						range: { start_line: 2, end_line: 2 },
+						reason: "Need verified attribution for this changed line.",
+					},
+				},
+				CallToolResultSchema,
+			);
+			expect(parseTextJson(blameResult)).toMatchObject({ pending: true, content: "" });
+
 			const state = JSON.parse(await readFile(outputStatePath, "utf8")) as TestOutputState;
 			expect(state.problems).toEqual([
 				{
@@ -121,6 +143,13 @@ describe("AICR MCP Streamable HTTP server", () => {
 					path: "src/app.ts",
 					reason: "Need the changed branch and following line.",
 					range: { start_line: 2, end_line: 3 },
+				},
+			]);
+			expect(state.attributionRequests).toEqual([
+				{
+					path: "src/app.ts",
+					reason: "Need verified attribution for this changed line.",
+					range: { start_line: 2, end_line: 2 },
 				},
 			]);
 		} finally {

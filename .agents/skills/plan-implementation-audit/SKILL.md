@@ -32,7 +32,7 @@ Read the "Known codebase pitfalls" section in `AGENTS.md`. These are issues foun
 - `normalizePath` compressing consecutive slashes
 - `estimateTokens` handling CJK characters
 - Prompt manager conflict detection
-- MCP tool contracts in `../../../docs/ai/architecture.md` §3.9 and `../../../docs/output-channels.md`, including `aicr.report_problem`, `aicr.publish_summary`, `aicr.fetch_more_context`, and only-advertise-when-implemented planned tools such as `aicr.try_blame`
+- MCP tool contracts in `../../../docs/ai/architecture.md` §3.9 and `../../../docs/output-channels.md`, including `aicr.report_problem`, `aicr.publish_summary`, `aicr.fetch_more_context`, `aicr.try_blame`, and only-advertise-when-implemented planned tools such as memory/skill recall
 - Output channel policy in `../../../docs/ai/architecture.md` §3.9/§3.10 and `../../../docs/output-channels.md`, including per-channel `no_problems` resolution and non-PR/MR target link rendering
 - Agent Runtime Bundle responsibilities from `../../../docs/ai/architecture.md` §3.6.3 / §3.7: LLM config, MCP config, instructions, skills, env vars, and manifest must be audited together
 - Review orchestrator status logic when `dryRun=false`
