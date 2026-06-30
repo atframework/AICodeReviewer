@@ -35,6 +35,8 @@ export interface ModelCatalogBackend {
 	upsertMany(entries: readonly ModelCatalogEntry[], source: CatalogSource): void;
 	getSourceMeta(sourceUrl: string): ModelCatalogSourceMetaView | undefined;
 	setSourceMeta(sourceUrl: string, meta: ModelCatalogSourceMetaView): void;
+	flushPending?(): Promise<void>;
+	close?(): Promise<void>;
 }
 
 function entryToRecord(entry: ModelCatalogEntry, source: CatalogSource, fetchedAt: Date): ModelCatalogRecord {
@@ -63,6 +65,272 @@ function sourceFromString(source: string | undefined): CatalogSource {
 		default:
 			return "cache";
 	}
+}
+
+export interface RedisModelCatalogClient {
+	readonly status?: string;
+	connect?(): Promise<unknown>;
+	get(key: string): Promise<string | null>;
+	set(key: string, value: string): Promise<unknown>;
+	scan(cursor: string, ...args: readonly string[]): Promise<[string, string[]]>;
+	quit?(): Promise<unknown>;
+	disconnect?(): void;
+}
+
+export interface RedisModelCatalogBackendOptions {
+	readonly url?: string;
+	readonly keyPrefix?: string;
+	readonly client?: RedisModelCatalogClient;
+	readonly scanCount?: number;
+}
+
+interface StoredRedisModelCatalogEntry {
+	readonly catalogId: string;
+	readonly providerId: string;
+	readonly modelId: string;
+	readonly data: ModelCatalogEntry;
+	readonly source?: CatalogSource;
+	readonly fetchedAt: string;
+}
+
+interface StoredRedisModelCatalogSourceMeta {
+	readonly lastRefreshedAt: string;
+	readonly etag?: string;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function normalizeRedisKeyPrefix(prefix: string | undefined): string {
+	const base = prefix && prefix.length > 0 ? prefix : "aicr:";
+	return `${base.endsWith(":") ? base : `${base}:`}model-catalog:`;
+}
+
+function encodeRedisKeyPart(value: string): string {
+	return encodeURIComponent(value);
+}
+
+function decodeRedisKeyPart(value: string): string | undefined {
+	try {
+		return decodeURIComponent(value);
+	} catch {
+		return undefined;
+	}
+}
+
+function redisEntryKey(namespace: string, catalogId: string): string {
+	return `${namespace}entry:${encodeRedisKeyPart(catalogId)}`;
+}
+
+function redisSourceKey(namespace: string, sourceUrl: string): string {
+	return `${namespace}source:${encodeRedisKeyPart(sourceUrl)}`;
+}
+
+function parseStoredRedisEntry(raw: string): StoredRedisModelCatalogEntry | undefined {
+	try {
+		const parsed = JSON.parse(raw) as unknown;
+		if (!isRecord(parsed) || !isRecord(parsed.data)) return undefined;
+		const catalogId = typeof parsed.catalogId === "string" ? parsed.catalogId : undefined;
+		const providerId = typeof parsed.providerId === "string" ? parsed.providerId : undefined;
+		const modelId = typeof parsed.modelId === "string" ? parsed.modelId : undefined;
+		const fetchedAt = typeof parsed.fetchedAt === "string" ? parsed.fetchedAt : undefined;
+		const data = parsed.data as Partial<ModelCatalogEntry>;
+		if (!catalogId || !providerId || !modelId || !fetchedAt) return undefined;
+		if (data.catalogId !== catalogId || data.providerId !== providerId || data.modelId !== modelId) return undefined;
+		return {
+			catalogId,
+			providerId,
+			modelId,
+			data: data as ModelCatalogEntry,
+			...(typeof parsed.source === "string" ? { source: sourceFromString(parsed.source) } : {}),
+			fetchedAt,
+		};
+	} catch {
+		return undefined;
+	}
+}
+
+function parseStoredRedisSourceMeta(raw: string): ModelCatalogSourceMetaView | undefined {
+	try {
+		const parsed = JSON.parse(raw) as unknown;
+		if (!isRecord(parsed) || typeof parsed.lastRefreshedAt !== "string") return undefined;
+		const lastRefreshedAt = new Date(parsed.lastRefreshedAt);
+		if (Number.isNaN(lastRefreshedAt.getTime())) return undefined;
+		return {
+			lastRefreshedAt,
+			...(typeof parsed.etag === "string" ? { etag: parsed.etag } : {}),
+		};
+	} catch {
+		return undefined;
+	}
+}
+
+async function loadRedisClient(url: string): Promise<RedisModelCatalogClient> {
+	try {
+		const mod = await import("ioredis");
+		const RedisCtor = mod.default as unknown as new (url: string, options: { lazyConnect: boolean; maxRetriesPerRequest: number }) => RedisModelCatalogClient;
+		const client = new RedisCtor(url, { lazyConnect: true, maxRetriesPerRequest: 2 });
+		if (client.connect) {
+			await client.connect();
+		}
+		return client;
+	} catch (error) {
+		throw new Error(
+			`ioredis is required for llm.model_catalog.cache.backend 'redis'. Install optional dependencies or use 'sqlite'/'memory'. Cause: ${error instanceof Error ? error.message : String(error)}`,
+		);
+	}
+}
+
+async function scanRedisKeys(client: RedisModelCatalogClient, pattern: string, count: number): Promise<string[]> {
+	const keys: string[] = [];
+	let cursor = "0";
+	do {
+		const [nextCursor, batch] = await client.scan(cursor, "MATCH", pattern, "COUNT", String(count));
+		cursor = nextCursor;
+		keys.push(...batch);
+	} while (cursor !== "0");
+	return keys;
+}
+
+export async function createRedisModelCatalogBackend(options: RedisModelCatalogBackendOptions): Promise<ModelCatalogBackend> {
+	if (!options.client && !options.url) {
+		throw new TypeError("Redis model catalog backend requires a Redis URL or an injected Redis client.");
+	}
+
+	const namespace = normalizeRedisKeyPrefix(options.keyPrefix);
+	const scanCount = options.scanCount ?? 100;
+	const client = options.client ?? (await loadRedisClient(options.url!));
+	if (options.client?.connect) {
+		await options.client.connect();
+	}
+
+	const entries = new Map<string, ModelCatalogEntry>();
+	const sources = new Map<string, CatalogSource>();
+	const modelIndex = new Map<string, Set<string>>();
+	const metaBySource = new Map<string, ModelCatalogSourceMetaView>();
+	const pendingWrites: Promise<Error | undefined>[] = [];
+
+	function rememberWrite(promise: Promise<unknown>): void {
+		pendingWrites.push(
+			promise.then(
+				() => undefined,
+				(error: unknown) => (error instanceof Error ? error : new Error(String(error))),
+			),
+		);
+	}
+
+	async function flushPending(): Promise<void> {
+		while (pendingWrites.length > 0) {
+			const batch = pendingWrites.splice(0);
+			const results = await Promise.all(batch);
+			const firstError = results.find((result): result is Error => result instanceof Error);
+			if (firstError) throw firstError;
+		}
+	}
+
+	function addToModelIndex(entry: ModelCatalogEntry): void {
+		let ids = modelIndex.get(entry.modelId);
+		if (!ids) {
+			ids = new Set<string>();
+			modelIndex.set(entry.modelId, ids);
+		}
+		ids.add(entry.catalogId);
+	}
+
+	function removeFromModelIndex(modelId: string, catalogId: string): void {
+		const ids = modelIndex.get(modelId);
+		if (!ids) return;
+		ids.delete(catalogId);
+		if (ids.size === 0) modelIndex.delete(modelId);
+	}
+
+	function cacheEntry(entry: ModelCatalogEntry, source: CatalogSource): void {
+		const previous = entries.get(entry.catalogId);
+		if (previous && previous.modelId !== entry.modelId) {
+			removeFromModelIndex(previous.modelId, entry.catalogId);
+		}
+		entries.set(entry.catalogId, entry);
+		sources.set(entry.catalogId, source);
+		addToModelIndex(entry);
+	}
+
+	async function loadExisting(): Promise<void> {
+		const entryKeys = await scanRedisKeys(client, `${namespace}entry:*`, scanCount);
+		for (const key of entryKeys) {
+			const raw = await client.get(key);
+			if (!raw) continue;
+			const stored = parseStoredRedisEntry(raw);
+			if (stored) {
+				cacheEntry(stored.data, stored.source ?? "cache");
+			}
+		}
+
+		const sourceKeys = await scanRedisKeys(client, `${namespace}source:*`, scanCount);
+		for (const key of sourceKeys) {
+			const encodedSourceUrl = key.slice(`${namespace}source:`.length);
+			const sourceUrl = decodeRedisKeyPart(encodedSourceUrl);
+			if (!sourceUrl) continue;
+			const raw = await client.get(key);
+			if (!raw) continue;
+			const meta = parseStoredRedisSourceMeta(raw);
+			if (meta) metaBySource.set(sourceUrl, meta);
+		}
+	}
+
+	await loadExisting();
+
+	return {
+		getEntry(catalogId: string): ModelCatalogBackendEntry | undefined {
+			const entry = entries.get(catalogId);
+			if (!entry) return undefined;
+			return { entry, source: sources.get(catalogId) ?? "cache" };
+		},
+		getEntriesByModelId(modelId: string): ModelCatalogBackendEntry[] {
+			const ids = modelIndex.get(modelId);
+			if (!ids) return [];
+			return [...ids].flatMap((catalogId) => {
+				const entry = entries.get(catalogId);
+				return entry ? [{ entry, source: sources.get(catalogId) ?? "cache" }] : [];
+			});
+		},
+		upsertMany(records: readonly ModelCatalogEntry[], source: CatalogSource): void {
+			if (records.length === 0) return;
+			const fetchedAt = new Date().toISOString();
+			for (const entry of records) {
+				cacheEntry(entry, source);
+				const stored: StoredRedisModelCatalogEntry = {
+					catalogId: entry.catalogId,
+					providerId: entry.providerId,
+					modelId: entry.modelId,
+					data: entry,
+					source,
+					fetchedAt,
+				};
+				rememberWrite(client.set(redisEntryKey(namespace, entry.catalogId), JSON.stringify(stored)));
+			}
+		},
+		getSourceMeta(sourceUrl: string): ModelCatalogSourceMetaView | undefined {
+			return metaBySource.get(sourceUrl);
+		},
+		setSourceMeta(sourceUrl: string, meta: ModelCatalogSourceMetaView): void {
+			metaBySource.set(sourceUrl, meta);
+			const stored: StoredRedisModelCatalogSourceMeta = {
+				lastRefreshedAt: meta.lastRefreshedAt.toISOString(),
+				...(meta.etag ? { etag: meta.etag } : {}),
+			};
+			rememberWrite(client.set(redisSourceKey(namespace, sourceUrl), JSON.stringify(stored)));
+		},
+		flushPending,
+		async close(): Promise<void> {
+			await flushPending();
+			if (client.quit) {
+				await client.quit();
+			} else {
+				client.disconnect?.();
+			}
+		},
+	};
 }
 
 export function createSqliteModelCatalogBackend(store: StoreDb): ModelCatalogBackend {
@@ -418,6 +686,7 @@ export function createModelCatalogService(options: ModelCatalogServiceOptions): 
 			refreshInFlight = undefined;
 		});
 		await refreshInFlight;
+		await backend.flushPending?.();
 	}
 
 	function seedFromBundled(catalogId: string): ModelCatalogEntry | undefined {

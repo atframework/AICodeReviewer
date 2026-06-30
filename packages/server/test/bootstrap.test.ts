@@ -2,10 +2,11 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AppConfig } from "@aicr/core";
 import { closeStoreDb, createStoreDb, getProjectStats, insertReviewRun } from "@aicr/store";
+
 
 import {
   resolveModelSpecFromConfig,
@@ -20,6 +21,66 @@ import {
   buildSourceRootResolver,
   normalizeModelCatalogOverrides,
 } from "../src/bootstrap.js";
+
+const redisMock = vi.hoisted(() => {
+  const stores = new Map<string, Map<string, string>>();
+  const instances: Array<{ url: string; connectCount: number; quitCount: number; data: Map<string, string> }> = [];
+
+  function globToRegExp(pattern: string): RegExp {
+    const escaped = pattern.replace(/[.+?^${}()|[\]\\]/gu, "\\$&").replace(/\*/gu, ".*");
+    return new RegExp(`^${escaped}$`, "u");
+  }
+
+  class MockRedis {
+    readonly data: Map<string, string>;
+    connectCount = 0;
+    quitCount = 0;
+
+    constructor(readonly url: string) {
+      let data = stores.get(url);
+      if (!data) {
+        data = new Map<string, string>();
+        stores.set(url, data);
+      }
+      this.data = data;
+      instances.push(this);
+    }
+
+    async connect(): Promise<void> {
+      this.connectCount += 1;
+    }
+
+    async get(key: string): Promise<string | null> {
+      return this.data.get(key) ?? null;
+    }
+
+    async set(key: string, value: string): Promise<"OK"> {
+      this.data.set(key, value);
+      return "OK";
+    }
+
+    async scan(_cursor: string, ...args: readonly string[]): Promise<[string, string[]]> {
+      const matchIndex = args.indexOf("MATCH");
+      const pattern = matchIndex >= 0 ? args[matchIndex + 1] ?? "*" : "*";
+      const regex = globToRegExp(pattern);
+      return ["0", [...this.data.keys()].filter((key) => regex.test(key)).sort()];
+    }
+
+    async quit(): Promise<"OK"> {
+      this.quitCount += 1;
+      return "OK";
+    }
+  }
+
+  return { stores, instances, MockRedis };
+});
+
+vi.mock("ioredis", () => ({ default: redisMock.MockRedis }));
+
+beforeEach(() => {
+  redisMock.stores.clear();
+  redisMock.instances.length = 0;
+});
 
 function response(body: unknown, status = 200) {
   return {
@@ -3015,10 +3076,11 @@ describe("resolveP4TriggerConfig", () => {
     }
   });
 
-  it("rejects redis model_catalog backend at bootstrap with an explicit error", async () => {
-    const tmpDir = await mkdtemp(join(tmpdir(), "aicr-bootstrap-catalog-redis-"));
+  it("rejects redis model_catalog backend when storage.cache.redis url_env is unresolved", async () => {
+    const tmpDir = await mkdtemp(join(tmpdir(), "aicr-bootstrap-catalog-redis-missing-"));
     delete process.env.AICR_ADMIN_USERNAME;
     delete process.env.AICR_ADMIN_PASSWORD;
+    delete process.env.REDIS_URL;
     try {
       const config = makeConfig({
         storage: {
@@ -3031,7 +3093,7 @@ describe("resolveP4TriggerConfig", () => {
           providers: [
             { id: "openai-prod", kind: "openai_compatible", base_url: "https://api.openai.com/v1", api_key_env: "OPENAI_API_KEY" },
           ],
-          fallback_chain: [{ provider: "openai-prod", model: "gpt-4o", role: "heavy" }],
+          fallback_chain: [{ provider: "openai-prod", model: "gpt-4o-mini", role: "heavy" }],
           model_catalog: {
             enabled: true,
             source_url: "https://models.dev/api.json",
@@ -3047,8 +3109,54 @@ describe("resolveP4TriggerConfig", () => {
 
       await expect(
         bootstrapServerApp({ config, baseSystemPrompt: "test", baseDir: tmpDir }),
-      ).rejects.toThrow(/redis.*not yet implemented/);
+      ).rejects.toThrow(/url_env.*Redis URL/);
+      expect(redisMock.instances).toHaveLength(0);
     } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("uses redis model_catalog backend for bootstrap model enrichment", async () => {
+    const tmpDir = await mkdtemp(join(tmpdir(), "aicr-bootstrap-catalog-redis-"));
+    delete process.env.AICR_ADMIN_USERNAME;
+    delete process.env.AICR_ADMIN_PASSWORD;
+    process.env.REDIS_URL = "redis://catalog-test";
+    try {
+      const config = makeConfig({
+        storage: {
+          database: { kind: "sqlite", sqlite: { path: join(tmpDir, "aicr.sqlite") } },
+          cache: { kind: "redis", redis: { url_env: "REDIS_URL", key_prefix: "catalog-test:" } },
+          object: { kind: "filesystem", filesystem: { root: join(tmpDir, "objects") } },
+          retention: { deleted_project_grace_days: 30 },
+        } as Partial<AppConfig>,
+        llm: {
+          providers: [
+            { id: "openai-prod", kind: "openai_compatible", base_url: "https://api.openai.com/v1", api_key_env: "OPENAI_API_KEY", catalog_provider: "openai" },
+          ],
+          fallback_chain: [{ provider: "openai-prod", model: "gpt-4o-mini", role: "heavy" }],
+          model_catalog: {
+            enabled: true,
+            source_url: "https://models.dev/api.json",
+            refresh_interval_hours: 24,
+            fetch_timeout_ms: 10000,
+            offline: true,
+            apply_to_model_spec: true,
+            cache: { backend: "redis" },
+            overrides: {},
+          },
+        } as Partial<AppConfig>,
+      });
+
+      const result = await bootstrapServerApp({ config, baseSystemPrompt: "test", baseDir: tmpDir });
+
+      expect(result.reviewOrchestration?.model.contextWindow).toBe(128000);
+      expect(result.reviewOrchestration?.model.catalogSource).toBe("bundled");
+      expect(redisMock.instances).toHaveLength(1);
+      expect(redisMock.instances[0]!.connectCount).toBe(1);
+      expect(redisMock.instances[0]!.quitCount).toBe(1);
+      expect(redisMock.stores.get("redis://catalog-test")?.has("catalog-test:model-catalog:entry:openai%2Fgpt-4o-mini")).toBe(true);
+    } finally {
+      delete process.env.REDIS_URL;
       await rm(tmpDir, { recursive: true, force: true });
     }
   });

@@ -2,7 +2,7 @@
 
 ## 范围
 
-这份归档记录此前从 `Plan.md` 拆出的 P0-P8 本地闭环任务。它们的共同标准是：不依赖真实 GitLab / SVN / Redis / Kubernetes / CI 权限，可通过本地单元测试、集成测试、typecheck、build 或 markdownlint 验证。
+这份归档记录此前从 `Plan.md` 拆出的 P0-P9 本地闭环任务。它们的共同标准是：不依赖真实 GitLab / SVN / Redis / Kubernetes / CI 权限，可通过本地单元测试、集成测试、typecheck、build 或 markdownlint 验证。
 
 ## 已完成任务
 
@@ -17,6 +17,7 @@
 | P6 输出/合同测试收束 | `no_problems`、git context 边界、manifest 降级矩阵、Feishu 2.0 schema 等测试补齐 | `../architecture.md` §3.9、`../../output-channels.md` |
 | P7 `aicr.try_blame` MCP 工具与 orchestrator 接线 | `@aicr/mcp-output` registry/server、runtime manifest、orchestrator VCS attribution replay 与 follow-up pass | `M6.md` |
 | P8 repo 约定学习与 prompt 自动注入 | `extractRepositoryConventions()` + `buildMemoryHintsForPrompt()`；同 workspace 读取、抽象模式、去重、限长、scrubber 兜底 | `M7.md` |
+| P9 Model catalog Redis backend 本地合同层 | `createRedisModelCatalogBackend()`、`storage.cache.redis` 接线、entry/model/source key 持久化、bootstrap enrichment 和缺失 Redis 配置显式拒绝测试 | `M10.md` |
 
 ## 后续规则
 

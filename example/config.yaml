@@ -43,10 +43,10 @@ llm:
   # opencode, ...). Disabled by default; set enabled: true to opt in.
   #
   # The refresh cache is stored in storage.database (SQLite by default) as a
-  # keyed model_catalog table, with Redis reserved for a future structured
-  # cache backend via storage.cache. Per-model reads are point lookups — the
-  # full api.json is parsed only at refresh time and upserted row-by-row, never
-  # re-parsed on read.
+  # keyed model_catalog table. Optional Redis backend reuses storage.cache.redis
+  # and persists parsed entry/model/source keys while serving runtime point lookups
+  # from a startup-loaded in-memory index. The full api.json is parsed only at
+  # refresh time and upserted row-by-row, never re-parsed on read.
   #
   # Resolution order when a model is needed:
   #   1. keyed refresh cache (SQLite) — only fetches remote when the
@@ -68,10 +68,11 @@ llm:
   #   offline: false                             # true = never hit the network (bundled snapshot only)
   #   apply_to_model_spec: true                  # fill ModelSpec gaps from catalog
   #   cache:
-  #     backend: sqlite                          # sqlite (default) | memory (test/dev) | redis (reserved, not yet implemented)
+  #     backend: sqlite                          # sqlite (default) | memory (test/dev) | redis
   #     # sqlite reuses storage.database (keyed model_catalog table, point lookups).
-  #     # redis will reuse storage.cache.redis and requires storage.cache.kind: redis
-  #     # once implemented; today selecting redis fails fast at startup.
+  #     # redis reuses storage.cache.redis and requires storage.cache.kind: redis
+  #     # plus a resolvable storage.cache.redis.url_env; use a unique key_prefix
+  #     # when sharing Redis across environments.
   #   overrides:                                 # manual per-model overrides win over catalog
   #     "my-llm/gpt-4o-mini":
   #       catalog_id: openai/gpt-4o-mini         # optional models.dev lookup id for custom aliases
@@ -128,7 +129,7 @@ llm:
 #   cache:
 #     kind: memory                    # memory | redis | none
 #     # redis:
-#     #   url_env: AICR_REDIS_URL     # reserved for future cross-process cache/session use
+#     #   url_env: AICR_REDIS_URL     # used by model catalog redis backend and future shared caches
 #     # When llm.model_catalog.cache.backend: redis is used, storage.cache.kind
 #     # must be redis and this URL env must be configured.
 #   object:

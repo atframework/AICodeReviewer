@@ -94,12 +94,15 @@ import {
   createHttpModelCatalogFetcher,
   createMemoryModelCatalogBackend,
   createModelCatalogService,
+  createRedisModelCatalogBackend,
   createSqliteModelCatalogBackend,
   MODEL_CATALOG_FIELD_KEY_MAP,
   MODEL_CATALOG_HINT_KEY_MAP,
+  type ModelCatalogBackend,
   type ModelCatalogService,
   type ModelCatalogOverrideFields,
   type ModelCatalogProviderHint,
+  type RedisModelCatalogBackendOptions,
 } from "./model-catalog-service.js";
 import type { ObservabilityApiOptions } from "./observability-api.js";
 import type {
@@ -127,6 +130,26 @@ interface ActiveProjectIdentity {
 
 function resolveEnv(name: string | undefined): string | undefined {
   return name ? process.env[name] : undefined;
+}
+
+function toRedisModelCatalogBackendOptions(config: AppConfig): RedisModelCatalogBackendOptions {
+  if (config.storage.cache.kind !== "redis") {
+    throw new TypeError("llm.model_catalog.cache.backend 'redis' requires storage.cache.kind 'redis'.");
+  }
+
+  const redisConfig = (config.storage.cache.redis ?? {}) as Record<string, unknown>;
+  const urlEnv = typeof redisConfig.url_env === "string" ? redisConfig.url_env : undefined;
+  const url = resolveEnv(urlEnv) ?? (typeof redisConfig.url === "string" ? redisConfig.url : undefined);
+  if (!url) {
+    throw new TypeError(
+      "llm.model_catalog.cache.backend 'redis' requires storage.cache.redis.url_env to resolve to a Redis URL.",
+    );
+  }
+
+  return {
+    url,
+    keyPrefix: typeof redisConfig.key_prefix === "string" ? redisConfig.key_prefix : "aicr:",
+  };
 }
 
 function extractPullNumber(payload: unknown): number | undefined {
@@ -2167,16 +2190,16 @@ export async function bootstrapServerApp(options: BootstrapServerOptions): Promi
   }
 
   let catalogService: ModelCatalogService | undefined;
+  let catalogBackendToClose: ModelCatalogBackend | undefined;
   if (catalogEnabled && catalogConfig) {
-    let catalogBackend;
+    let catalogBackend: ModelCatalogBackend | undefined;
     if (catalogConfig.cache.backend === "sqlite") {
       catalogBackend = store ? createSqliteModelCatalogBackend(store) : undefined;
     } else if (catalogConfig.cache.backend === "memory") {
       catalogBackend = createMemoryModelCatalogBackend();
     } else if (catalogConfig.cache.backend === "redis") {
-      throw new TypeError(
-        "llm.model_catalog.cache.backend 'redis' is reserved and not yet implemented; use 'sqlite' (default) or 'memory'. See Plan.md §3.13 / D28.",
-      );
+      catalogBackend = await createRedisModelCatalogBackend(toRedisModelCatalogBackendOptions(config));
+      catalogBackendToClose = catalogBackend;
     }
     const providerHints: ModelCatalogProviderHint[] = config.llm.providers.map((provider) => {
       const raw = provider as Record<string, unknown>;
@@ -2227,6 +2250,9 @@ export async function bootstrapServerApp(options: BootstrapServerOptions): Promi
   let summarizeModel = compressionConfig ? resolveSummarizeModelFromConfig(config) : undefined;
   if (catalogService && summarizeModel) {
     summarizeModel = catalogService.enrichModelSpec(summarizeModel);
+  }
+  if (catalogBackendToClose?.close) {
+    await catalogBackendToClose.close();
   }
   const summarizeClient = summarizeModel ? createLlmClientFromModelSpec(summarizeModel) : undefined;
 

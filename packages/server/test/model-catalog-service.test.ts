@@ -4,13 +4,15 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import type { ModelSpec } from "@aicr/llm";
+import { parseModelsDevApiJson, type ModelCatalogEntry, type ModelSpec } from "@aicr/llm";
 
 import {
 	createMemoryModelCatalogBackend,
 	createModelCatalogService,
+	createRedisModelCatalogBackend,
 	type ModelCatalogFetcher,
 	type ModelCatalogOverrideFields,
+	type RedisModelCatalogClient,
 } from "../src/model-catalog-service.js";
 
 const sampleApiJson = {
@@ -80,6 +82,93 @@ function baseSpec(overrides: Partial<ModelSpec> = {}): ModelSpec {
 	};
 }
 
+function sampleCatalogEntries(): ModelCatalogEntry[] {
+	return [...parseModelsDevApiJson(sampleApiJson).values()];
+}
+
+function globToRegExp(pattern: string): RegExp {
+	const escaped = pattern.replace(/[.+?^${}()|[\]\\]/gu, "\\$&").replace(/\*/gu, ".*");
+	return new RegExp(`^${escaped}$`, "u");
+}
+
+class FakeRedisModelCatalogClient implements RedisModelCatalogClient {
+	readonly data = new Map<string, string>();
+	connectCount = 0;
+	quitCount = 0;
+	disconnectCount = 0;
+
+	async connect(): Promise<void> {
+		this.connectCount += 1;
+	}
+
+	async get(key: string): Promise<string | null> {
+		return this.data.get(key) ?? null;
+	}
+
+	async set(key: string, value: string): Promise<"OK"> {
+		this.data.set(key, value);
+		return "OK";
+	}
+
+	async scan(_cursor: string, ...args: readonly string[]): Promise<[string, string[]]> {
+		const matchIndex = args.indexOf("MATCH");
+		const pattern = matchIndex >= 0 ? args[matchIndex + 1] ?? "*" : "*";
+		const regex = globToRegExp(pattern);
+		return ["0", [...this.data.keys()].filter((key) => regex.test(key)).sort()];
+	}
+
+	async quit(): Promise<"OK"> {
+		this.quitCount += 1;
+		return "OK";
+	}
+
+	disconnect(): void {
+		this.disconnectCount += 1;
+	}
+}
+
+describe("model catalog Redis backend", () => {
+	it("persists entries, model-id indexes, and source metadata", async () => {
+		const client = new FakeRedisModelCatalogClient();
+		const backend = await createRedisModelCatalogBackend({ client, keyPrefix: "test:" });
+		const entries = sampleCatalogEntries().filter((entry) => entry.providerId === "openai");
+
+		backend.upsertMany(entries, "remote");
+		backend.setSourceMeta("https://models.dev/api.json", {
+			lastRefreshedAt: new Date(1234),
+			etag: '"abc"',
+		});
+		await backend.flushPending?.();
+
+		expect(client.data.has("test:model-catalog:entry:openai%2Fgpt-4o")).toBe(true);
+		expect(client.data.has("test:model-catalog:model:gpt-4o")).toBe(false);
+
+		const reloaded = await createRedisModelCatalogBackend({ client, keyPrefix: "test:" });
+		expect(reloaded.getEntry("openai/gpt-4o")?.source).toBe("remote");
+		expect(reloaded.getEntry("openai/gpt-4o")?.entry.contextWindow).toBe(128000);
+		expect(reloaded.getEntriesByModelId("gpt-4o")).toHaveLength(1);
+		expect(reloaded.getSourceMeta("https://models.dev/api.json")).toEqual({
+			lastRefreshedAt: new Date(1234),
+			etag: '"abc"',
+		});
+
+		await reloaded.close?.();
+		expect(client.quitCount).toBe(1);
+	});
+
+	it("keeps Redis catalog namespaces isolated by key prefix", async () => {
+		const client = new FakeRedisModelCatalogClient();
+		const [entry] = sampleCatalogEntries();
+		expect(entry).toBeDefined();
+		const first = await createRedisModelCatalogBackend({ client, keyPrefix: "first:" });
+		first.upsertMany([entry!], "bundled");
+		await first.flushPending?.();
+
+		const second = await createRedisModelCatalogBackend({ client, keyPrefix: "second:" });
+		expect(second.getEntry(entry!.catalogId)).toBeUndefined();
+		expect(second.getEntriesByModelId(entry!.modelId)).toEqual([]);
+	});
+});
 describe("model catalog service — refresh and fallback", () => {
 	it("refreshes from remote and serves point queries", async () => {
 		const backend = createMemoryModelCatalogBackend();

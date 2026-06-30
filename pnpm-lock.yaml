@@ -186,6 +186,10 @@ importers:
       zod:
         specifier: ^3.24.4
         version: 3.25.76
+    optionalDependencies:
+      ioredis:
+        specifier: ^5.6.1
+        version: 5.10.1
 
   packages/store:
     dependencies:
