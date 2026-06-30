@@ -334,7 +334,7 @@
   - `llm.retry`
   - `llm.budget`
   - `llm.per_provider_overrides`
-  - `llm.model_catalog`（计划中，M10；见 §3.13）
+  - `llm.model_catalog`（M10 已交付，见 §3.13）
   - `queue.workers`
   - `queue.rate_limit`
   - `queue.retry`
@@ -570,11 +570,7 @@
 远端，只用本地结构化缓存 + 打包保底快照。每条解析结果都标注来源
 （`override` / `cache` / `remote` / `bundled` / `config`），写入 run 快照便于观测和排障。
 
-`bootstrapServerApp` 当前只在 admin/dashboard 启用时初始化 store；M10 实现必须把 store
-初始化条件扩展为：admin auth、`llm.model_catalog` SQLite 后端、reflection memory 任何一个
-需要持久化时都应创建 `StoreDb`。模型解析顺序也必须调整为“初始化 catalog service → 解析并
-充实 primary / fallback / summarize `ModelSpec` → 创建 LLM gateway / runtime bundle”，避免
-当前 `resolveModelSpecFromConfig()` 早于 store 初始化而拿不到 catalog。
+`bootstrapServerApp` 已把 store 初始化条件扩展为：admin auth、`llm.model_catalog` SQLite 后端、reflection memory 任一持久化需求都会创建 `StoreDb`。模型解析顺序保持为“初始化 catalog service → `ensureRefreshed()` → 解析并充实 primary / fallback / summarize `ModelSpec` → 创建 LLM gateway / runtime bundle”，避免 `resolveModelSpecFromConfig()` 早于 store 初始化而拿不到 catalog。
 
 #### 3.13.3 解析链（providerId + modelId → catalog 条目）
 
@@ -728,3 +724,4 @@ models.dev 的 key 是 `<providerId>/<modelId>`（AI SDK 标识）。自定义 p
 - Podman / Docker 使用同一构建与运行合同，差异通过 engine 选择吸收。
 - 健康检查统一使用 `/healthz`。
 - 远程部署的操作性说明以 `example/README.md`、`docs/podman.md` 与仓库技能为准；`development/README.md` 是当前仓库操作约束，不是对外产品文档。
+
