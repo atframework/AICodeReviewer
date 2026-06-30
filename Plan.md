@@ -20,9 +20,10 @@
 - M6 GitHub 生产链路已验收；SVN 基础 VCS adapter 已交付（`svn diff --summarize` /
   `svn cat` / `svn diff --git` / `fetch_more_context`）；GitLab e2e 与 SVN 真实仓库
   e2e/入站触发脚本移至 Backlog。
-- 后续优先执行不依赖外部系统和权限的本地闭环任务，详见 §8.3：本地优先队列 P0–P5 已完成
+- 后续优先执行不依赖外部系统和权限的本地闭环任务，详见 §8.3：本地优先队列 P0–P6 已完成
   （Streamable HTTP MCP transport、blame/annotate 基础能力、SVN 触发入口合同层、Reflection
-  thorough mode、SQLite durable queue、daily_rollups 写入），下一项为 P6 输出/合同测试收束。
+  thorough mode、SQLite durable queue、daily_rollups 写入、输出/合同测试收束），本地优先队列已清空，
+  后续推进依赖外部系统的 Backlog 项或新的本地需求。
 - M8 观测底座与内置观测首页已交付：OTel 已接入 serve 命令、Prometheus metrics 和 run snapshot 已连线、eval CLI 已添加；Dashboard 支持 Overview / Projects / Providers / Runs 四个标签，工程面板与 Provider 面板均支持 today/thisWeek/thisMonth/all 时间维度切换。
 - M9 发布收尾已基本完成：从零部署验收、容器嵌套沙箱集成验证均通过；版本 bump 待用户决策。
 - M7 已完成：workspace 定制、国际化、memory/reflection 全流程集成（light mode）已交付。
@@ -36,40 +37,16 @@
   gateway 用 catalog 真实价格替换固定估算、Kilo/Roo/opencode/Claude Code 注入 +
   manifest 降级标注、打包保底快照 + 构建期刷新脚本。SQLite 与 memory 后端可用；
   Redis 结构化后端为预留项，当前显式拒绝。详见 §3.13、`docs/ai/architecture.md` §3.13。
-- 生产稳定性修复（公网正式环境代码审查失败排查）：定位到 native/docker 沙箱超时
-  只杀 agent 父进程、`.kilo` worker 子进程被 reparent 到 PID 1 继续运行，形成
-  CPU 耗尽死亡螺旋（`durationMs` 远超 `agent.timeout_seconds`，重试越拖越慢）。
-  深度根因：Kilo 把 worker `setsid` 进独立 session/进程组，仅 `detached: true` +
-  `process.kill(-pid)` 杀进程组**无法覆盖**逃逸 worker。修复为 `killProcessTree`
-  在 Linux 下额外按 `/proc` PPID 链遍历后代逐个 kill（先深后浅）再叠加进程组信号
-  与 `proc.kill(signal)`，Windows 仍用 `taskkill /T /F`，并保留 SIGTERM→SIGKILL
-  级联与强制 resolve 兜底；外层容器改用 `podman run -d --init` 让 `tini`/`catatonit`
-  作为 PID 1 回收 reparent 的僵尸（生产实测 31 个 `Z` 状态进程堆积）。同时修复
-  issue triage 只构造 Gitea 客户端却对所有 provider issue 事件执行、GitHub issue
-  命中内部不可达 Gitea 报 `fetch failed` 的问题（按**事件 provider 族**
-  `gitea`/`forgejo` 门控，避免 Forgejo 经 gitea 路由时被误跳过）。详见
-  `AGENTS.md` pitfall #49/#50/#51、`docs/ai/architecture.md` §3.1/§3.8、
-  `packages/sandbox/src/process-tree.ts`、`deploy/deploy.sh`。
-- 生产稳定性修复（公网正式环境 fetch_more_context 上下文丢失）：git 适配器的
-  `fetchExtraContext`（`packages/vcs/src/git.ts`）原本只 `readFile`，而 `fetchScoped`
-  只物化变更文件，导致 agent 请求的相关但未变更文件（如被改动 `.cpp` 引用的头文件）
-  ENOENT，被 orchestrator 记为 `ignored invalid fetch_more_context tool call` 丢弃，
-  agent 拿不到上下文而循环/skip（生产实测 `ENOENT .../atapp.h`）。修复为 ENOENT 时
-  回退 `git show ${revision}:${path}` 补拉并回灌工作区，与 P4 适配器 `p4 print` 回退
-  对齐；确实不存在的路径（或子模块 gitlink）抛错作为停止重试信号。详见
-  `AGENTS.md` pitfall #52、`docs/output-channels.md`、`docs/ai/architecture.md` §3.1。
-- 直接 commit 到主干分支的 Code Review 与 issue 创建（`github-atsf4g-co`/
-  `github-libatapp`/`github-hiredis-happ`）：核查确认配置已正确——两个 GitHub
-  trigger 都订阅 `[pull_request, push, issues]`，全局 `outputs.routes` 按
-  `target_kind` 路由（push → `github-managed-findings`/`github-owent-managed-findings`
-  issue 通道），且全局路由优先级高于 workspace 级 `outputs` 兜底；orchestrator 的
-  `publishSummary` 始终带 problems，issue 通道 `reconcileProblems` 据此创建/维护 issue。
-  修复 `createPushReviewEvent`（`packages/server/src/webhook-common.ts`）：分支创建/删除
-  的 all-zero SHA 推送（`before`/`after` 匹配 `/^0+$/u`）无 reviewable 范围，`git diff`
-  会 `Invalid revision range` 崩溃，改为返回 null（路由答 202 跳过）。详见
-  `AGENTS.md` pitfall #53。注：`github-managed-findings`（atframework）issue 创建生产
-  返回 401，属 `GITHUB_ATFRAMEWORK_TOKEN` 权限/有效期问题（非代码缺陷），需在 GitHub
-  侧为该 PAT 补 `repo` 或 fine-grained `issues:write` 权限后重启容器。
+- 公网正式环境稳定性修复已落地并归档到 AGENTS.md pitfall：沙箱进程树回收 +
+  容器 `--init`（#49/#50）、issue triage 按事件 provider 族门控（#51）、
+  git/P4/SVN `fetchExtraContext` 回退补拉（#52）、push 全零 SHA 跳过（#53）。
+- 直接 push 到主干的 review 与 issue 创建链路已核查正确：两个 GitHub trigger
+  订阅 `[pull_request, push, issues]`，全局 `outputs.routes` 按 `target_kind`
+  路由 push → issue 通道，orchestrator `publishSummary` 始终带 problems 驱动
+  `reconcileProblems`；详细合同见 §3.1、`docs/ai/architecture.md` §3.1。
+- 运维待办：`github-managed-findings`（atframework）issue 创建生产返回 401，属
+  `GITHUB_ATFRAMEWORK_TOKEN` 权限/有效期问题（非代码缺陷），需在 GitHub 侧为该 PAT
+  补 `repo` 或 fine-grained `issues:write` 权限后重启容器。
 
 ### 1.3 文档地图
 
@@ -358,41 +335,16 @@
 
 ### 8.2 当前执行包
 
-1. **M5：runtime bundle 与 agent 原生能力对齐**（已完成，已完成项归档至 `docs/ai/milestones/M5.md`）
-    - ~~Streamable HTTP MCP transport~~（已交付：`@aicr/mcp-output` 支持 `--transport http` 本地 Streamable HTTP endpoint；runtime bundle/Kilo 默认 stdio 保持不变；本地 SDK client 测试覆盖工具列表、工具调用、state file 写入和 mounted source context 返回）
-2. **M6：跨 VCS 能力补齐**（GitHub 已验收）
+1. **M5：runtime bundle 与 agent 原生能力对齐** — 已完成，归档至 `docs/ai/milestones/M5.md`（Streamable HTTP MCP transport 已交付，stdio 仍为默认）。
+2. **M6：跨 VCS 能力补齐**（GitHub 已验收；SVN adapter + VCS 归因合同已交付，交付面见 §8.1）
     - GitLab webhook、dispatcher 与 PR review 已实现并带单元测试；待补齐真实仓库端到端验证记录 → **Backlog**
-    - ~~SVN 基础 VCS adapter~~（已交付：`svn diff --summarize` 列变更、`svn cat -r`
-      scoped fetch/额外上下文、`svn diff --git` 解析、与 Git/P4 一致的
-      `watch_path`/`include_cr_file`/`exclude_cr_file` 过滤、server factory 接入与单元测试）
-    - ~~VCS 归因（attribution）基础能力 P1~~（已交付：可选 `VcsAdapter.fetchAttribution` +
-      `AttributionRequest`/`AttributionEntry`/`AttributionResult` 合同；git `blame --line-porcelain`、
-      P4 `annotate -c` + `describe -s` join、SVN `blame` 解析；mock runner 覆盖
-      `ok`/`not_found`/`partial` 与路径越界；`aicr.try_blame` MCP 工具待后续接线）
     - SVN 真实仓库 e2e 与入站触发脚本/端点设计 → **Backlog**
-3. **M8：观测与回放**（大部分完成，已完成项归档至 `docs/ai/milestones/M8.md`）
-    - CI eval 基准集成（将 `aicr eval` 接入 CI 流水线；需 CI pipeline 权限，延后扩展）→ **Backlog**
-4. **M9：发布收尾**（基本完成，已完成项归档至 `docs/ai/milestones/M9.md`）
+3. **M8：观测与回放** — 大部分完成，归档至 `docs/ai/milestones/M8.md`
+    - CI eval 基准集成（需 CI pipeline 权限，延后扩展）→ **Backlog**
+4. **M9：发布收尾** — 基本完成，归档至 `docs/ai/milestones/M9.md`
     - 版本 bump 与 git tag（用户决策）
-5. **M7：workspace 定制、国际化、memory**（已完成，归档至 `docs/ai/milestones/M7.md`）
-    - ~~`output_language` 注入 review task context~~（已交付）
-    - 所有包 barrel export 测试补齐（已交付：1228 测试全部通过）
-    - ~~per-workspace `prompt.base_system_prompt_file` 覆盖~~（已交付：config schema + bootstrap resolver + tests）
-    - ~~config-level `prompt.force_skills` 强制技能激活~~（已交付：prompt-manager forceSkills + tests）
-    - ~~reflection memory 存储与检索~~（已交付：store schema + migration + read/write/compact + tests）
-    - ~~memory/reflection 写入与 review 流程集成~~（已交付：memoryHintsResolver + postRunCallback + reflection-extractor + tests）
-    - ~~reflection 提取逻辑~~（已交付：light mode per-category/file-type/summary 提取）
-6. **M10：模型元数据 Catalog（models.dev）集成**（基本完成，Redis 结构化缓存后端预留）
-    - ~~`packages/core/src/config.ts` 新增 `llm.model_catalog` schema~~（已交付：含 `cache.backend`：`sqlite` 默认 / `redis` / `memory`，复用 `storage`；`llm.providers[].catalog_provider`/`catalog_id`；`redis` 跨字段 superRefine 要求 `storage.cache.kind: redis` 与 `redis.url_env`；config.test.ts 覆盖）
-    - ~~`packages/store` keyed 表 `model_catalog`~~（已交付：主键 `catalog_id` + `provider_id`/`model_id` 列支持模糊匹配 + source-level 刷新元数据表 + 迁移 `003_model_catalog` + 点查/逐行 upsert/刷新时间/模糊匹配 API + schema/repo 测试）
-    - ~~`packages/llm/src/model-catalog.ts` 纯解析/归一化模块~~（已交付：解析 models.dev `api.json`、解析链、ModelSpec 字段映射，不依赖 `@aicr/store`；解析单测）
-    - ~~bootstrap catalog service 编排~~（已交付：admin/catalog-sqlite/reflection 任一需要持久化即初始化 StoreDb；“初始化 catalog → 充实 primary/fallback/summarize ModelSpec → 创建 gateway”；bootstrap 测试覆盖无 admin 但 catalog 启用、memory 不初始化 store、redis 显式拒绝）
-    - ~~catalog service 刷新周期与三层回退~~（已交付：source-level 间隔刷新、过期本地行、打包保底 seed；单测覆盖回退顺序/offline/未知模型不反复远端请求）
-    - ~~打包保底快照~~（已交付：`packages/llm/scripts/refresh-model-catalog.mjs` 从 `models.dev/api.json` 刷新 `packages/llm/assets/model-catalog/models-dev.json` 签入；`deploy/Dockerfile` 随 dist 发布 assets）
-    - ~~`ModelSpec` 扩充~~（已交付：全部计划字段，含 `maxInputTokens`/`maxOutputTokens`/`cost*PerMTok`/能力 flag/`nativeToolCapabilities`/`supportedRequestParameters`/`catalogSource` 等；用户显式配置优先合并）
-    - ~~`gateway.ts` 真实价格~~（已交付：`estimateCost` 按 input/output per-MTok 计费，fallback 模型经 `modelPricing` map 注入，价格缺失回退旧固定估算）
-    - ~~Agent adapter 注入 + manifest 降级~~（已交付：opencode 自定义 provider 注入 `limit`/`cost`、Kilo/Roo 注入 `contextWindow`/`maxTokens`/`supportsImages`/价格、Claude Code 由 `maxOutputTokens` 派生 `ANTHROPIC_MAX_TOKENS`、Copilot CLI 记 N/A；runtime-bundle manifest 记录 `catalogSource` + `metadataInjection: injected/delegated/not_applicable`；adapter + manifest 测试）
-    - ~~文档同步~~（已交付：example/config.yaml、example/README.md、decisions.md D31、source-index.md、agent-runtime-integration SKILL.md、本计划）
+5. **M7：workspace 定制、国际化、memory** — 已完成，归档至 `docs/ai/milestones/M7.md`（`output_language`、per-workspace prompt 覆盖、`force_skills`、reflection memory 全流程 light mode 均已交付）。
+6. **M10：模型元数据 Catalog（models.dev）** — 基本完成（config/store/解析/service/bootstrap/gateway 真实价格/adapter 注入 + manifest 降级/打包保底快照/文档同步全部交付，详见 §3.13、`docs/ai/architecture.md` §3.13）
     - Redis 结构化缓存后端：预留字段已校验，运行时显式拒绝（`not yet implemented`），待引入 Redis 客户端依赖后落地 → **Backlog**
 
 ### 8.3 本地优先执行队列（不依赖外部系统）
@@ -401,46 +353,21 @@
 能用本地单元测试、集成测试、markdownlint/typecheck/build 闭环；若过程中发现必须接入
 外部服务，应拆出本地合同层并把真实环境验证留在 §8.4。
 
-最近完成：
-- P0 Streamable HTTP MCP transport 已落地并通过本地 HTTP MCP client 测试；stdio
-  仍是 runtime bundle 默认 transport。
-- P1 blame/annotate 基础能力已落地：VCS 层新增可选 `VcsAdapter.fetchAttribution` 与
-  `AttributionRequest`/`AttributionEntry`/`AttributionResult` 合同，git/P4/SVN 分别用
-  `git blame --line-porcelain`、`p4 annotate -c` + `p4 describe -s` join、`svn blame`
-  解析，mock runner 覆盖解析成功、缺失归因（`not_found`/`partial`）与路径越界；未宣传
-  `aicr.try_blame` MCP 工具（VCS 层合同先行，MCP 接线待后续）。
-- P2 SVN 触发入口本地合同层已落地：新增 `/triggers/svn` 路由与
-  `translateSvnTriggerToReviewEvent`，payload schema 支持 revision/author/files 等字段
-  别名，鉴权复用 `/triggers/*` API key 中间件，bootstrap 新增 `resolveSvnTriggerConfig`，
-  提供 `example/svn-trigger.sh` post-commit hook 骨架，单元测试覆盖 JSON/form payload、
-  字段别名与缺省路径；真实 SVN 仓库 e2e 仍留在 §8.4。
-- P3 Reflection thorough mode 小切片已落地：`reflection_memory` 新增 `occurrence_count`/
-  `last_seen_at` 列（迁移 `004_reflection_occurrence`），`writeReflectionMemory` 在 fingerprint
-  命中时递增计数；`extractCrossRunPatterns()` 对 occurrence_count ≥ 3 的 category 生成跨 run
-  重复模式 hint，thorough 模式的 post-run callback 自动写入；workspace 隔离、稳定 fingerprint
-  和脱敏（content 仅含 category 名与计数）已保证；repo 约定学习与完整知识迁移系统仍为预留。
-- P4 SQLite durable queue 已落地：`queue.kind: "sqlite"` 使用原生 `better-sqlite3` 实现
-  `createSqliteQueue`，`review_queue_jobs` 表存储 job 全量状态，原子 claim 通过
-  `UPDATE ... RETURNING` 保证多 worker 不重复领取，stale job reclaim 处理 worker 崩溃；
-  enqueue/dequeue/complete/fail/retry/dead-letter/purge 全部实现；迁移原子化包裹在
-  `sqlite.transaction` 中；并发 claim 测试覆盖 5 job × 5 worker 无重复。
-- P5 daily_rollups 写入已落地：`recomputeDailyRollup(store, projectId, date)` 在 run 完成
-  持久化（`insertReviewRun`）与 output event 写入（`insertOutputEvents`）时，从原始表
-  （`review_runs`/`code_metrics`/`llm_usage`/`output_events`）按 `project_id + UTC 日期`
-  分区重算并 delete+insert 原子替换（idempotent、自愈）；日期分区取 run `started_at` 的 UTC
-  日，与 Dashboard 时间窗口一致。Dashboard 查询仍以实时聚合为主路径，`daily_rollups` 作为
-  预聚合缓存供后续切换；新增 `getDailyRollups` 读取入口与 `packages/store/test/rollups.test.ts`
-  覆盖写入、幂等、issue 计数刷新、project/date 隔离与跨天汇总对齐实时统计。
-- P6 输出/合同测试收束（target link 切片）已落地：`packages/outputs/test/template-engine.test.ts`
-  的 `buildTemplateTargetContext` 补齐非 PR/SVN target 渲染覆盖——GitHub PR、GitLab MR（`!id`
-  回退）、Gitea PR（`#id` 回退）、无 id/title 的 `PR review target` 兜底、`issue`（`Issue #id`）、
-  SVN revision（纯文本无链接）、GitHub/Gitea push commit URL 派生、`manual` 兜底与
-  `commitUrlTemplate` 优先于派生 URL；新增 10 个确定性低风险测试，与 §3.9/§3.9.1 target 渲染
-  合同对齐。剩余 `no_problems` 混合路由、MCP context 边界、agent manifest 降级状态子项见下表。
+最近完成（全部已交付，详细合同见对应章节）：
+
+| 项 | 落点 | 合同引用 |
+| --- | --- | --- |
+| P0 Streamable HTTP MCP transport | `@aicr/mcp-output --transport http`；stdio 仍为默认 | §3.9、`docs/ai/milestones/M5.md` |
+| P1 blame/annotate 归因 | `VcsAdapter.fetchAttribution` + `AttributionResult`；git/P4/SVN 实现 | §3.2、§3.9.2；`aicr.try_blame` MCP 待接线 |
+| P2 SVN 触发入口合同层 | `/triggers/svn` + `translateSvnTriggerToReviewEvent` + `example/svn-trigger.sh` | §3.1；真实仓库 e2e 留 §8.4 |
+| P3 Reflection thorough mode | `occurrence_count`/`extractCrossRunPatterns`（阈值 3） | §3.12 |
+| P4 SQLite durable queue | `queue.kind: "sqlite"`，`UPDATE ... RETURNING` 原子 claim | `packages/server/src/queue-sqlite.ts` |
+| P5 daily_rollups 写入 | `recomputeDailyRollup`（UTC 日分区，idempotent） | §3.11、`packages/store/test/rollups.test.ts` |
+| P6 输出/合同测试收束 | `no_problems` 混合路由、git context 边界、manifest 降级矩阵、Feishu 2.0 schema 测试修复 | §3.9/§3.9.1、pitfall #56 |
 
 | 优先级 | 项 | 来源里程碑 | 本地完成标准 |
 | --- | --- | --- | --- |
-| P6 | 输出/合同测试收束（剩余子项） | M4/M6 | 补 `no_problems` 混合路由（一个 channel 抑制、另一个发布的复合场景）、MCP context 边界（`fetch_more_context` ENOENT/越界回退）、agent manifest 降级状态（`metadataInjection: injected/delegated/not_applicable`）等低风险测试缺口 |
+| _(本地优先队列已清空)_ | — | — | 后续推进依赖外部系统的 Backlog 项或新的本地需求 |
 
 ### 8.4 Backlog（依赖外部系统或用户决策）
 
@@ -470,7 +397,7 @@
 
 ## 9. 稳定决策索引
 
-- 长期有效的 D1-D27 决策已迁移到 `docs/ai/decisions.md`。
+- 长期有效的 D1-D31 决策已迁移到 `docs/ai/decisions.md`。
 - 典型使用方式：
   - 先看本计划确认“现在做什么”
   - 再看 `docs/ai/decisions.md` 理解“为什么这样做”

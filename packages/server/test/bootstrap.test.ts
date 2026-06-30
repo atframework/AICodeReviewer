@@ -1245,7 +1245,9 @@ describe("createOutputPublisherFromConfig", () => {
       await publisher?.publishSummary?.("Review summary", []);
 
       const body = JSON.parse(calls[0]?.init.body ?? "{}");
-      const elements = (body.card as { elements: Array<{ content?: string }> }).elements;
+      const card = body.card as { schema?: string; body?: { elements: Array<{ content?: string }> } };
+      expect(card.schema).toBe("2.0");
+      const elements = card.body?.elements ?? [];
       expect(elements.some((element) => element.content?.includes('<at user_id="ou_dev"></at>'))).toBe(true);
     } finally {
       vi.unstubAllGlobals();
@@ -1299,7 +1301,8 @@ describe("createOutputPublisherFromConfig", () => {
         reviewEvent,
       )?.publishSummary?.("Review summary", []);
       const fallbackBody = JSON.parse(calls[0]?.init.body ?? "{}");
-      const fallbackElements = (fallbackBody.card as { elements: Array<{ content?: string }> }).elements;
+      const fallbackCard = fallbackBody.card as { body?: { elements: Array<{ content?: string }> } };
+      const fallbackElements = fallbackCard.body?.elements ?? [];
       expect(fallbackElements.some((element) => element.content?.includes('<at user_id="all"></at>'))).toBe(true);
 
       const noMentionConfig = makeConfig({
@@ -1324,7 +1327,8 @@ describe("createOutputPublisherFromConfig", () => {
         reviewEvent,
       )?.publishSummary?.("Review summary", []);
       const disabledBody = JSON.parse(calls[1]?.init.body ?? "{}");
-      const disabledElements = (disabledBody.card as { elements: Array<{ content?: string }> }).elements;
+      const disabledCard = disabledBody.card as { body?: { elements: Array<{ content?: string }> } };
+      const disabledElements = disabledCard.body?.elements ?? [];
       expect(disabledElements.some((element) => element.content?.includes("<at"))).toBe(false);
     } finally {
       vi.unstubAllGlobals();
@@ -2065,6 +2069,180 @@ describe("createOutputPublisherResolverFromConfig", () => {
         delete process.env.FEISHU_IF_SUMMARY_EMPTY_WEBHOOK;
       } else {
         process.env.FEISHU_IF_SUMMARY_EMPTY_WEBHOOK = originalWebhook;
+      }
+    }
+  });
+
+  it("publishes summary to a suppress channel when problems exist", async () => {
+    // The suppress policy only filters zero-problem summaries; when there ARE
+    // problems, every summary-capable channel (including suppress) must still
+    // receive the dispatch. Over-suppressing here would silently drop findings.
+    const calls: { url: string; init: { body?: string } }[] = [];
+    vi.stubGlobal("fetch", async (url: string, init?: { body?: string }) => {
+      calls.push({ url, init: init ?? {} });
+      return response({ code: 0 });
+    });
+
+    const originalSuppressWebhook = process.env.FEISHU_SUPPRESS_WEBHOOK;
+    const originalPublishWebhook = process.env.FEISHU_PUBLISH_WEBHOOK;
+    process.env.FEISHU_SUPPRESS_WEBHOOK = "https://open.feishu.cn/hook/suppress";
+    process.env.FEISHU_PUBLISH_WEBHOOK = "https://open.feishu.cn/hook/publish";
+    try {
+      const config = makeConfig({
+        outputs: {
+          template_engine: "handlebars",
+          no_problems: { action: "suppress" },
+          channels: [
+            {
+              name: "feishu-suppress",
+              kind: "feishu_bot",
+              webhook_url_env: "FEISHU_SUPPRESS_WEBHOOK",
+            },
+            {
+              name: "feishu-publish",
+              kind: "feishu_bot",
+              webhook_url_env: "FEISHU_PUBLISH_WEBHOOK",
+              no_problems: { action: "publish" },
+            },
+          ],
+          routes: {
+            default: { summary: ["feishu-suppress", "feishu-publish"] },
+            rules: [],
+          },
+        },
+      } as Partial<AppConfig>);
+      const publisher = createOutputPublisherResolverFromConfig(config)({
+        reviewEvent: {
+          triggerName: "gitea-internal",
+          provider: "gitea",
+          workspaceId: "test-workspace",
+          targetKind: "push",
+          repoRef: "owent/example",
+          headSha: "abcdef1234567890",
+          author: {},
+          reason: "gitea:push",
+        },
+        payload: {},
+        provider: "gitea",
+        eventName: "push",
+      });
+
+      expect(publisher).toBeDefined();
+      const results = await publisher?.publishSummary?.("Found a bug.", [
+        { file: "src/app.ts", line: 1, severity: "high", category: "correctness", message: "Issue." },
+      ]);
+
+      expect(Array.isArray(results)).toBe(true);
+      expect(results).toHaveLength(2);
+      expect(calls.map((call) => call.url)).toEqual([
+        "https://open.feishu.cn/hook/suppress",
+        "https://open.feishu.cn/hook/publish",
+      ]);
+    } finally {
+      vi.unstubAllGlobals();
+      if (originalSuppressWebhook === undefined) {
+        delete process.env.FEISHU_SUPPRESS_WEBHOOK;
+      } else {
+        process.env.FEISHU_SUPPRESS_WEBHOOK = originalSuppressWebhook;
+      }
+      if (originalPublishWebhook === undefined) {
+        delete process.env.FEISHU_PUBLISH_WEBHOOK;
+      } else {
+        process.env.FEISHU_PUBLISH_WEBHOOK = originalPublishWebhook;
+      }
+    }
+  });
+
+  it("resolves composite no_problems to publish when mixing suppress, publish_if_summary, and publish", async () => {
+    // Composite action is "publish" whenever at least one channel publishes.
+    // Per-channel policy still applies on the no-problems path: suppress is
+    // skipped, publish_if_summary publishes only when the summary has text,
+    // and publish always dispatches.
+    const calls: { url: string; init: { body?: string } }[] = [];
+    vi.stubGlobal("fetch", async (url: string, init?: { body?: string }) => {
+      calls.push({ url, init: init ?? {} });
+      return response({ code: 0 });
+    });
+
+    const originalA = process.env.FEISHU_MIX_A_WEBHOOK;
+    const originalB = process.env.FEISHU_MIX_B_WEBHOOK;
+    const originalC = process.env.FEISHU_MIX_C_WEBHOOK;
+    process.env.FEISHU_MIX_A_WEBHOOK = "https://open.feishu.cn/hook/a";
+    process.env.FEISHU_MIX_B_WEBHOOK = "https://open.feishu.cn/hook/b";
+    process.env.FEISHU_MIX_C_WEBHOOK = "https://open.feishu.cn/hook/c";
+    try {
+      const config = makeConfig({
+        outputs: {
+          template_engine: "handlebars",
+          no_problems: { action: "suppress" },
+          channels: [
+            {
+              name: "feishu-a",
+              kind: "feishu_bot",
+              webhook_url_env: "FEISHU_MIX_A_WEBHOOK",
+            },
+            {
+              name: "feishu-b",
+              kind: "feishu_bot",
+              webhook_url_env: "FEISHU_MIX_B_WEBHOOK",
+              no_problems: { action: "publish_if_summary" },
+            },
+            {
+              name: "feishu-c",
+              kind: "feishu_bot",
+              webhook_url_env: "FEISHU_MIX_C_WEBHOOK",
+              no_problems: { action: "publish" },
+            },
+          ],
+          routes: {
+            default: { summary: ["feishu-a", "feishu-b", "feishu-c"] },
+            rules: [],
+          },
+        },
+      } as Partial<AppConfig>);
+      const publisher = createOutputPublisherResolverFromConfig(config)({
+        reviewEvent: {
+          triggerName: "gitea-internal",
+          provider: "gitea",
+          workspaceId: "test-workspace",
+          targetKind: "push",
+          repoRef: "owent/example",
+          headSha: "abcdef1234567890",
+          author: {},
+          reason: "gitea:push",
+        },
+        payload: {},
+        provider: "gitea",
+        eventName: "push",
+      });
+
+      expect(publisher).toBeDefined();
+      expect(publisher?.noProblemsAction).toBe("publish");
+
+      const results = await publisher?.publishSummary?.("Clean review, no findings.", []);
+
+      expect(Array.isArray(results)).toBe(true);
+      expect(results).toHaveLength(2);
+      expect(calls.map((call) => call.url)).toEqual([
+        "https://open.feishu.cn/hook/b",
+        "https://open.feishu.cn/hook/c",
+      ]);
+    } finally {
+      vi.unstubAllGlobals();
+      if (originalA === undefined) {
+        delete process.env.FEISHU_MIX_A_WEBHOOK;
+      } else {
+        process.env.FEISHU_MIX_A_WEBHOOK = originalA;
+      }
+      if (originalB === undefined) {
+        delete process.env.FEISHU_MIX_B_WEBHOOK;
+      } else {
+        process.env.FEISHU_MIX_B_WEBHOOK = originalB;
+      }
+      if (originalC === undefined) {
+        delete process.env.FEISHU_MIX_C_WEBHOOK;
+      } else {
+        process.env.FEISHU_MIX_C_WEBHOOK = originalC;
       }
     }
   });
