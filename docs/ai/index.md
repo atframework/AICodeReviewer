@@ -53,11 +53,12 @@
 | M3 | 已完成 | `milestones/M3.md` |
 | M4 | 已完成 | `milestones/M4.md` |
 | M5 | 已完成 | `milestones/M5.md` |
+| M6 | 部分完成 | `milestones/M6.md` |
+| M7 | 已完成 | `milestones/M7.md` |
 | M8 | 大部分完成 | `milestones/M8.md` |
 | M9 | 基本完成 | `milestones/M9.md` |
-| M6 | 部分完成 | 先看 `../../Plan.md` |
-| M7 | 已完成 | `milestones/M7.md` |
-| M10 | 基本完成 | 先看 `../../Plan.md` §3.13、§8.2 与 `architecture.md` §3.13 |
+| M10 | 基本完成 | `milestones/M10.md` |
+| 本地优先队列 P0-P6 | 已完成 | `milestones/local-priority-queue.md` |
 
 ## 维护规则
 
@@ -70,3 +71,4 @@
   - `packages/store/src/schema.ts`
   - `packages/core/src/prompt-manager.ts`
   - `packages/outputs/src/template-engine.ts`
+

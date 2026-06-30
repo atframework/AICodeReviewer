@@ -40,8 +40,8 @@ This checklist tracks the remaining M9 deliverables before the release can be co
 
 - [x] GitHub production e2e verified (auto-created issues and PR analysis).
 - [ ] GitLab real repository e2e verification.
-- [ ] SVN VCS adapter implementation.
-- [ ] Blame/annotate attribution pipeline.
+- [x] SVN VCS adapter implementation.
+- [x] Blame/annotate attribution foundation (`VcsAdapter.fetchAttribution` + git/P4/SVN implementations).
 - [ ] Multi-source context selector.
 
 ### Version & Packaging
@@ -72,12 +72,12 @@ This checklist tracks the remaining M9 deliverables before the release can be co
 The following items are intentionally deferred past M9:
 
 1. **GitLab real e2e**: Needs a real GitLab repository with webhook access.
-2. **SVN real e2e and inbound trigger scripts**: Basic adapter exists; real SVN repository e2e and trigger entry scripts need external system access.
+2. **SVN real e2e**: Basic adapter and inbound trigger contract exist; real SVN repository e2e and server-side hook deployment need external system access.
 3. **k8s_pod backend**: Requires Kubernetes cluster and `@kubernetes/client-node`.
 4. **firecracker backend**: Requires Firecracker binary and API socket.
-5. **Blame/annotate attribution**: Pipeline design complete; implementation deferred.
+5. **aicr.try_blame MCP tool**: VCS attribution foundation exists; MCP tool/orchestrator wiring remains a local follow-up.
 6. **Multi-source context selector**: Design complete; implementation deferred.
-7. **Reflection thorough mode and knowledge migration**: Light mode exists; thorough-mode pattern aggregation and cross-workspace migration remain deferred.
+7. **Reflection knowledge migration**: Light mode and thorough-mode minimal aggregation exist; repo convention learning and cross-workspace migration remain deferred pending scope/privacy decisions.
 
 ## Sign-off
 
@@ -86,3 +86,4 @@ The following items are intentionally deferred past M9:
 | Tech Lead | | | |
 | QA | | | |
 | DevOps | | | |
+
