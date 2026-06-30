@@ -487,8 +487,8 @@
   - 读写 API：`writeReflectionMemory()`、`readReflectionMemory()`、`compactReflectionMemory()`（`packages/store/src/reflection.ts`）。
   - 按 workspace 隔离，支持 TTL 过期和条目上限压缩。
 - 已交付的流程集成：
-  - **Pre-run memory 读取**：`memoryHintsResolver` 在 review run 开始前从 store 读取当前 workspace 的 memory 条目，映射为 `string[]` 注入 `memoryHints`，通过 prompt pipeline 渲染到 `{{MEMORY_HINTS}}` 模板占位。`memoryHintsResolver` 优先于静态 `memoryHints` 字段。
-  - **Post-run reflection 提取与写入**：`postRunCallback` 在 review run 完成后调用 `extractReflections()`（`packages/core/src/reflection-extractor.ts`），从 `outputState` 提取 per-category 问题模式、文件类型范围、summary 标题等 reflection 条目，写入 store。每个条目使用 `sha256(workspaceId:pattern)` 生成 fingerprint 实现幂等覆盖。
+  - **Pre-run memory 读取**：`memoryHintsResolver` 在 review run 开始前从 store 读取当前 workspace 的 memory 条目，经 `buildMemoryHintsForPrompt()` 去重、限长、脱敏并把 `Repo convention:` 条目排在普通 reflection 前，再注入 `memoryHints`，通过 prompt pipeline 渲染到 `{{MEMORY_HINTS}}` 模板占位。`memoryHintsResolver` 优先于静态 `memoryHints` 字段。
+  - **Post-run reflection 提取与写入**：`postRunCallback` 在 review run 完成后调用 `extractReflections()` 与 `extractRepositoryConventions()`（`packages/core/src/reflection-extractor.ts`），从 `outputState` 提取 per-category 问题模式、文件类型范围、summary 标题、repo convention 抽象模式等 reflection 条目，写入 store。每个条目使用 `sha256(workspaceId:pattern)` 生成 fingerprint 实现幂等覆盖。
   - **Compaction 触发**：每次写入后检查 `review.reflection.memory.max_entries` 配置，若设置则调用 `compactReflectionMemory` 清理过期和超限条目。
   - **Bootstrap 自动配置**：`bootstrapServerApp` 在 store 可用且 `review.reflection` 未显式禁用时，自动注入 `memoryHintsResolver` 和 `postRunCallback`。Post-run callback 异常仅输出 warn 日志，不阻塞 review 主流程。
 - Light mode 提取规则：
@@ -496,14 +496,15 @@
   - 问题归纳：按 category 分组，统计 severity 分布、关联文件扩展名，3 条以内附加具体位置。
   - 文件类型范围：统计 changed files 的扩展名分布。
   - Summary 标题：记录最新 review 的 summary title。
+  - Repo convention：从已发布问题提取 `Repo convention:` 抽象提示，只包含 severity、category、文件类型/顶层目录和必要的相对路径+行号；不保存源码片段、problem 正文、commit message 或作者猜测。
 - Thorough mode（跨 run 聚合，最小实现已交付）：
   - `reflection_memory` 表新增 `occurrence_count` 列（每次 fingerprint 命中递增，迁移 `004_reflection_occurrence`，迁移运行器已包裹在 `sqlite.transaction` 中保证原子性）。
   - Post-run callback 在 `mode: "thorough"` 时，写入 light reflections 后读取 workspace 全量 memory entries，调用 `extractCrossRunPatterns()`（`packages/core/src/reflection-extractor.ts`），对 occurrence_count ≥ 阈值（默认 3）的 category 生成跨 run 重复模式 hint（如 `"style" reported in 8 recent reviews`），使用 `stableFingerprint(workspaceId, "thorough", "recurring", category)` 保证幂等覆盖。
-  - 当前只做 category 维度的重复检测；repo 约定学习、更精细的去敏策略仍为预留。
-- 真正落地时的约束：
+- 约束：
   - memory 的写入边界由 extractor 的 fingerprint 保证幂等。
-  - workspace 隔离已通过 `workspaceId` 列保证。
-  - memory content 经过 secret scrubber 同样的脱敏规则。
+  - workspace 隔离已通过 `workspaceId` 列与 `readReflectionMemory(store, workspaceId)` 读路径保证；当前明确不做跨 workspace 知识迁移。
+  - memory content 经过 secret scrubber 同样的脱敏规则；prompt 注入前再由 `buildMemoryHintsForPrompt()` 做 scrubber 兜底。
+  - memory hints 是历史模式提示，不是当前代码证据，不能覆盖 base system prompt、repo-local instructions 或本次源码检查。
 
 ### 3.13 模型元数据 Catalog（models.dev）
 

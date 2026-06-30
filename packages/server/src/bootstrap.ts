@@ -74,8 +74,10 @@ import {
   type StoreDb,
 } from "@aicr/store";
 import {
+  buildMemoryHintsForPrompt,
   extractCrossRunPatterns,
   extractReflections,
+  extractRepositoryConventions,
   type ExtractedReflection,
 } from "@aicr/core";
 
@@ -2290,8 +2292,8 @@ export async function bootstrapServerApp(options: BootstrapServerOptions): Promi
       ? {
           memoryHintsResolver: async (workspaceId: string): Promise<readonly string[]> => {
             try {
-              const entries = await readReflectionMemory(store!, workspaceId);
-              return entries.map((entry) => entry.content);
+              const entries = await readReflectionMemory(store!, workspaceId, { limit: 100 });
+              return buildMemoryHintsForPrompt(entries);
             } catch {
               return [];
             }
@@ -2303,7 +2305,7 @@ export async function bootstrapServerApp(options: BootstrapServerOptions): Promi
           postRunCallback: async (result: ReviewOrchestrationResult, ctx: ReviewOrchestrationContext): Promise<void> => {
             const workspaceId = ctx.reviewEvent.workspaceId;
             const runId = ctx.reviewEvent.headSha ?? String(Date.now());
-            const reflections = extractReflections({
+            const reflectionInput = {
               workspaceId,
               runId,
               status: result.status,
@@ -2311,7 +2313,11 @@ export async function bootstrapServerApp(options: BootstrapServerOptions): Promi
               problems: result.outputState.problems,
               summaries: result.outputState.summaries,
               changedFiles: result.changedFiles,
-            });
+            };
+            const reflections = [
+              ...extractReflections(reflectionInput),
+              ...extractRepositoryConventions(reflectionInput),
+            ];
 
             if (reflections.length > 0) {
               const now = new Date();

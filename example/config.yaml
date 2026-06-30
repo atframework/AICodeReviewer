@@ -614,12 +614,16 @@ review:
   # open managed issues before closing stale ones. Range: 1..100, default: 20.
   problem_issue:
     max_recent_issues: 20
-  # Reflection memory: learn from past reviews to improve future ones.
+  # Reflection memory: learn abstract patterns from past reviews in the same workspace.
   # Enabled by default when admin auth + store are configured.
+  # Stored memory is scrubbed and abstract: category/severity/file type/scope,
+  # repo convention hints, summary titles, skip reasons, and optional relative
+  # path + line references; never source snippets or cross-workspace knowledge.
   # reflection:
   #   enabled: true
   #   mode: light              # light | thorough
-  #                             # light    = per-category patterns, file-type scope, summary title
+  #                             # light    = per-category patterns, file-type scope,
+  #                             #            repo conventions, summary title
   #                             # thorough = light + cross-run recurring-category detection
   #                             #            (flags categories reported in 3+ recent reviews)
   #   memory:
