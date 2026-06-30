@@ -539,6 +539,36 @@ describe("GitVcsAdapter", () => {
     }
   });
 
+  it("propagates the error when git show also fails for a non-existent revision path", async () => {
+    // The ENOENT → `git show` fallback must still terminate cleanly when the
+    // path genuinely does not exist at the revision (or is a submodule gitlink).
+    // Re-throwing is the stop-signal that tells the orchestrator this context
+    // is unavailable instead of looping.
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-git-extra-showfail-"));
+
+    try {
+      const sourceDir = join(tempDir, "source");
+      await mkdir(sourceDir, { recursive: true });
+      const git: GitCommandRunner = async (args) => {
+        const last = args.at(-1);
+        if (typeof last === "string" && last.startsWith("deadbeef:")) {
+          throw new Error("fatal: Path 'does/not/exist.h' does not exist in 'deadbeef'");
+        }
+        throw new Error(`unexpected git call: ${args.join(" ")}`);
+      };
+      const adapter = createGitVcsAdapter({ repositoryDir: join(tempDir, "repo"), git });
+
+      await expect(
+        adapter.fetchExtraContext(
+          { path: "does/not/exist.h", revision: "deadbeef", reason: "genuinely missing" },
+          { id: "ws", sourceDir },
+        ),
+      ).rejects.toThrow("does not exist");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("parses git diff output through the adapter", async () => {
     const git: GitCommandRunner = async () => ({
       stdout: [
@@ -743,6 +773,32 @@ describe("GitVcsAdapter", () => {
           { id: "ws", sourceDir },
         ),
       ).rejects.toThrow("startLine must be a positive integer.");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("clamps endLine beyond the actual file content length", async () => {
+    // A slice-based extraction silently clamps out-of-range endLine values
+    // instead of throwing. This documents the boundary so the agent receives
+    // the whole tail rather than an error when it overestimates line count.
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-git-clamp-"));
+
+    try {
+      const sourceDir = join(tempDir, "source");
+      await mkdir(sourceDir, { recursive: true });
+      await writeFile(join(sourceDir, "file.ts"), "a\nb\nc\n", "utf8");
+      const adapter = createGitVcsAdapter({
+        repositoryDir: tempDir,
+        git: async () => ({ stdout: "", stderr: "" }),
+      });
+
+      const result = await adapter.fetchExtraContext(
+        { path: "file.ts", startLine: 2, endLine: 1000, reason: "overestimate" },
+        { id: "ws", sourceDir },
+      );
+
+      expect(result.content).toBe("b\nc\n");
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }

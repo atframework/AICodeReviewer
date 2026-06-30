@@ -9,7 +9,7 @@
 | 当前正在做什么 | `../../Plan.md` | 只保留当前路线图、活跃里程碑、下一执行包和简版架构摘要 |
 | 稳定架构与合同 | `architecture.md` | 详细设计，按 `Plan.md` 的章节编号保留稳定引用点 |
 | 已完成里程碑历史 | `milestones/*.md` | 完成项沉淀与交付面，避免反复塞回 `Plan.md` |
-| 稳定决策与取舍 | `decisions.md` | 归档 D1-D27 等长期有效决策 |
+| 稳定决策与取舍 | `decisions.md` | 归档 D1-D31 等长期有效决策 |
 | AI 规则与技能来源 | `source-index.md` | 外部 Agent/Skills/MCP 文档核验记录、刷新触发条件与兼容性证据 |
 | Agent Skills 索引 | `../../.agents/skills/README.md` | 仓库技能目录地图；只按需读取具体 `SKILL.md` |
 | 评审提示词设计依据 | `../prompt-research.md` | M0.5 调研与默认 prompt 设计 rationale |

@@ -1329,4 +1329,46 @@ describe("model metadata injection (M10 catalog)", () => {
       await rm(tempDir, { recursive: true, force: true });
     }
   });
+
+  it("runtime bundle manifest injects opencode custom provider catalog metadata", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-bundle-opencode-injected-"));
+    try {
+      const result = await materializeRuntimeBundle({
+        adapter: createOpencodeAdapter(),
+        model: enrichedModel,
+        workingDir: tempDir,
+      });
+      expect(result.manifest.model.metadataInjection).toBe("injected");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("runtime bundle manifest injects roo custom model info", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-bundle-roo-"));
+    try {
+      const result = await materializeRuntimeBundle({
+        adapter: createRooAdapter(),
+        model: enrichedModel,
+        workingDir: tempDir,
+      });
+      expect(result.manifest.model.metadataInjection).toBe("injected");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("runtime bundle manifest delegates claude-code", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-bundle-claude-"));
+    try {
+      const result = await materializeRuntimeBundle({
+        adapter: createClaudeCodeAdapter(),
+        model: enrichedModel,
+        workingDir: tempDir,
+      });
+      expect(result.manifest.model.metadataInjection).toBe("delegated");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
 });

@@ -127,8 +127,10 @@
 
 ### 3.6 Prompt Manager 与 AI 资产装配
 
-- 常驻仓库规则只放在 `AGENTS.md`。
+- 常驻仓库规则只放在 `AGENTS.md`；`AGENTS.md` 与 `.agents/skills/` 是跨工具共享真源。
 - 详细、可复用的 workflow 放在 `.agents/skills/*/SKILL.md`。
+- Claude / Roo / Kilo / Copilot 等私有格式只做桥接，不维护重复正文；共享规则写在
+  canonical 层，工具私有文件只保留最小差异。
 - 历史阶段说明放在 `docs/ai/milestones/*.md`。
 - Prompt Manager 负责发现、筛选、排序和合并 repo-local AI 资产。
 - 保护性规则必须稳定压在更具体但较弱的项目规则之上。
@@ -153,12 +155,6 @@
   应跳过。
 - `buildJsonToolContract()` 和 MCP `aicr.fetch_more_context` 工具描述已对齐
   这一策略，在 JSON 格式指引和工具元数据层面都要求先读后报。
-
-#### 3.6.2 Canonical AI 资产约束
-
-- `AGENTS.md` 与 `.agents/skills/` 是跨工具共享真源。
-- Claude / Roo / Kilo / Copilot 等私有格式只做桥接，不维护重复正文。
-- 共享规则写在 canonical 层，工具私有文件只保留最小差异。
 
 #### 3.6.3 Agent Runtime Bundle
 
