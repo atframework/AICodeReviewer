@@ -96,8 +96,10 @@
   - 路径越界统一复用 scoped fetch 的守卫：git 经 `normalizeChangedPath` 拒绝 `../`，P4 经
     `toDepotPrintPath` 限定在配置 depot 内，SVN 经 `toLocalPath` 限定在配置 `repository_url` 内；
     文件/revision 不存在或无可解析输出时显式返回 `not_found`，部分缺失 author 时返回 `partial`。
-  - 当前只交付 VCS 层接口与解析，**尚未对外宣传 `aicr.try_blame` MCP 工具**；MCP 工具与
-    orchestrator 接线需在工具落地并测试后再开放。
+  - `aicr.try_blame` MCP 工具已接入 `@aicr/mcp-output` registry/server、runtime bundle manifest
+    与 review orchestrator；orchestrator 对 MCP state/JSON stream 中的 attribution request 调用
+    `VcsAdapter.fetchAttribution`，再把结构化归因结果回灌 follow-up pass。没有 attribution backend
+    的 adapter 返回 `not_found`，不得让模型猜测作者。
 
 ### 3.3 Compression
 
@@ -237,17 +239,18 @@
   - `aicr.publish_summary`
   - `aicr.skip`
   - `aicr.fetch_more_context`
-- 尚未完全落地的工具（如 `aicr.try_blame`、memory/skill recall）不能提前宣传为已实现能力。
+  - `aicr.try_blame`
+- 尚未完全落地的工具（如 memory/skill recall）不能提前宣传为已实现能力。
 - problem 合同保持最小稳定字段；`message` 讲问题与影响，`suggestion` 给修复建议。
 - 模板渲染与最终发布由输出层统一控制，而不是让 agent 直写各平台方言。
 - Agent CLI 的自由文本 stdout 不是正式审查结果；无法解析出 AICR tool payload 时先触发结构化修复重试，避免中间思考泄露到 IM 通知。
 - `@aicr/mcp-output` 的 stdio 与 Streamable HTTP server 使用同一组稳定工具和 state file 合同；Kilo runtime bundle 默认仍走 stdio，HTTP endpoint 供支持远程/HTTP MCP 的客户端或本地集成测试显式启用。
-- Kilo 等原生 MCP agent 写入 `.aicr-output-state.json` 后，orchestrator 必须读取其中的 problems / summaries / skip 和 `contextRequests`；`contextRequests` 需要通过 VCS `fetchExtraContext` 执行并回灌到 follow-up prompt，而不是只计数或发布“无法访问完整仓库代码”的摘要。
-- Kilo JSON stream 中的 `tool_call` / `tool_use` 事件在 MCP state 缺失时作为兼容回退执行，确保 `aicr.fetch_more_context` 不会因为 stdout 中没有最终 JSON payload 而丢失。
+- Kilo 等原生 MCP agent 写入 `.aicr-output-state.json` 后，orchestrator 必须读取其中的 problems / summaries / skip、`contextRequests` 和 `attributionRequests`；`contextRequests` 通过 VCS `fetchExtraContext` 执行，`attributionRequests` 通过 VCS `fetchAttribution` 执行，并回灌到 follow-up prompt，而不是只计数或发布“无法访问完整仓库代码”的摘要。
+- Kilo JSON stream 中的 `tool_call` / `tool_use` 事件在 MCP state 缺失时作为兼容回退执行，确保 `aicr.fetch_more_context` 与 `aicr.try_blame` 不会因为 stdout 中没有最终 JSON payload 而丢失。
 - 每次 agent run 启动前要清理旧 `.aicr-output-state.json`，避免上一次 repair pass 的工具状态污染下一次输出。
 - 如果 Agent 结构化修复后的自由文本明确表示“无问题 / 无可审查代码”，orchestrator 会归一为 `aicr.skip`，避免把格式修复失败的 fallback 文案发布到 IM；若仍无法解析且不属于无问题语义，则改走直连 LLM 修复兜底。
 - Summary 中声称“发现问题”但没有 `aicr.report_problem` 记录时，也视为未满足输出合同并触发结构化修复，避免 `problemCount=0` 的问题被 `no_problems` 策略静默压掉。
-- Skip reason 或 summary 要求人类补 diff/source context，或声称无法访问完整仓库/源码而无法验证时，orchestrator 也会修复为“只读命令检查已物化源码或 `aicr.fetch_more_context` 补拉具体路径”的流程，并在拿到上下文后要求最终结构化输出。
+- Skip reason 或 summary 要求人类补 diff/source context，或声称无法访问完整仓库/源码而无法验证时，orchestrator 也会修复为“只读命令检查已物化源码、`aicr.fetch_more_context` 补拉具体路径，或 `aicr.try_blame` 请求 VCS 归因”的流程，并在拿到上下文后要求最终结构化输出。
 - `aicr.fetch_more_context` 可用于缺失/过窄 diff 下的完整变更文件，以及为验证变更行所必需的窄范围相关文件；problem 仍必须锚定到本次变更的文件与行。
 - IM 通知保持 `Review target` / `Summary` / `Problems` 分段结构，问题位置必须来自 `aicr.report_problem.file` 与 `line`。
 - 复合输出 publisher 必须隔离单通道发布失败：某个 channel（例如 GitHub issue API 403）失败时记录 `DispatchResult.status=failed` 和告警日志，继续尝试后续 channel；只有成功发布的 dispatch 才使 run 状态成为 `published`，若全部 dispatch 都失败则 run 以 `skipped/output_dispatch_failed` 结束，而不是把触发器升级为 `review_orchestration_failed`。
@@ -274,8 +277,8 @@
 - attribution 来源只能是事件、provider API 或只读 VCS 工具。
 - agent 不得根据 commit message、diff 文本或昵称猜测作者。
 - best-effort attribution 缺失时，必须显式返回 `not_found` / `partial`。
-- VCS 层归因已通过可选 `VcsAdapter.fetchAttribution` 落地（git/P4/SVN，见 §3.2），但
-  `aicr.try_blame` MCP 工具尚未对外宣传，未接入 orchestrator。
+- `aicr.try_blame` 已作为只读 MCP 上下文工具落地：registry/server 暴露 schema，runtime bundle manifest 宣告工具，orchestrator 将 MCP state 的 `attributionRequests` 与 JSON stream 的 `tool_call` / `tool_use` 统一转换为 `VcsAdapter.fetchAttribution` 请求，并把 `ok` / `partial` / `not_found` 结果回灌 follow-up pass。
+- `aicr.report_problem` 不接收 agent 自报 attribution；归因结果只作为经 AICR/VCS 验证的上下文，不进入默认 fingerprint。
 
 #### 3.9.3 模板引擎
 

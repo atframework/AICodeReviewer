@@ -18,6 +18,7 @@ import {
 	type AicrOutputState,
 	type FetchMoreContextInput,
 	type ProblemSeverity,
+	type TryBlameInput,
 } from "./index.js";
 
 const OUTPUT_STATE_PATH = process.env.AICR_OUTPUT_STATE_PATH ?? ".aicr-output-state.json";
@@ -26,6 +27,7 @@ const DEFAULT_HTTP_HOST = "127.0.0.1";
 const DEFAULT_HTTP_PORT = 3000;
 const DEFAULT_HTTP_PATH = "/mcp";
 const PENDING_CONTEXT_MESSAGE = "Context request recorded. AICR will fetch the requested path from VCS and run a follow-up pass if the content is not already mounted in the sandbox.";
+const PENDING_ATTRIBUTION_MESSAGE = "Attribution request recorded. AICR will resolve it through the configured read-only VCS adapter and run a follow-up pass with the result.";
 
 export interface AicrMcpServerOptions {
 	readonly outputStatePath?: string;
@@ -145,6 +147,25 @@ function buildContextRequest(input: {
 	};
 }
 
+function buildAttributionRequest(input: {
+	readonly path: string;
+	readonly reason: string;
+	readonly range: { readonly start_line?: number | undefined; readonly end_line?: number | undefined } | undefined;
+}): TryBlameInput {
+	if (!input.range) {
+		return { path: input.path, reason: input.reason };
+	}
+
+	return {
+		path: input.path,
+		reason: input.reason,
+		range: {
+			...(input.range.start_line !== undefined ? { start_line: input.range.start_line } : {}),
+			...(input.range.end_line !== undefined ? { end_line: input.range.end_line } : {}),
+		},
+	};
+}
+
 const severitySchema = z.enum(["info", "low", "medium", "high", "critical"]);
 
 const reportProblemShape = {
@@ -167,13 +188,21 @@ const skipShape = {
 	reason: z.string().min(1),
 };
 
+const contextRangeShape = z.object({
+	start_line: z.number().int().positive().optional(),
+	end_line: z.number().int().positive().optional(),
+});
+
 const fetchMoreContextShape = {
 	path: z.string().min(1),
 	reason: z.string().min(1),
-	range: z.object({
-		start_line: z.number().int().positive().optional(),
-		end_line: z.number().int().positive().optional(),
-	}).optional(),
+	range: contextRangeShape.optional(),
+};
+
+const tryBlameShape = {
+	path: z.string().min(1),
+	reason: z.string().min(1),
+	range: contextRangeShape.optional(),
 };
 
 export function createAicrMcpServer(options: AicrMcpServerOptions = {}): AicrMcpServerInstance {
@@ -274,6 +303,30 @@ export function createAicrMcpServer(options: AicrMcpServerOptions = {}): AicrMcp
 				content: [{
 					type: "text" as const,
 					text: JSON.stringify(content ? { content } : { content: "", pending: true, message: PENDING_CONTEXT_MESSAGE }),
+				}],
+			};
+		},
+	);
+
+	server.registerTool(
+		"aicr.try_blame",
+		{
+			description: "Request AICR-verified best-effort line attribution for a file or line range. Returns VCS blame/annotate metadata only, never source content. The reviewed head revision is used by default.",
+			inputSchema: tryBlameShape,
+		},
+		async (args: unknown) => {
+			const a = args as {
+				path: string;
+				reason: string;
+				range: { start_line?: number | undefined; end_line?: number | undefined } | undefined;
+			};
+			const request = buildAttributionRequest(a);
+			collector.recordAttributionRequest(request);
+			writeState(collector.snapshot(), outputStatePath);
+			return {
+				content: [{
+					type: "text" as const,
+					text: JSON.stringify({ content: "", pending: true, message: PENDING_ATTRIBUTION_MESSAGE }),
 				}],
 			};
 		},

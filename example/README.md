@@ -174,10 +174,10 @@ Kilo Code is the primary deployment-test agent for AICodeReviewer. The repeatabl
 1. Start AICR locally or in the deployment environment.
 2. In Kilo Code, run a review task against the same workspace that the service will use.
 3. Confirm that AICR materializes Kilo provider config under the run `agent/` directory and injects the model provider from `llm.fallback_chain`.
-4. Confirm Kilo receives the default stdio `aicr-output` MCP server config in the materialized `.kilo/kilo.json`, calls AICR tools, and writes `.aicr-output-state.json` in the run `agent/` directory. `aicr.fetch_more_context` requests should either return already mounted source content or be replayed by the orchestrator through VCS fetch and a final follow-up pass.
+4. Confirm Kilo receives the default stdio `aicr-output` MCP server config in the materialized `.kilo/kilo.json`, calls AICR tools, and writes `.aicr-output-state.json` in the run `agent/` directory. `aicr.fetch_more_context` requests should either return already mounted source content or be replayed by the orchestrator through VCS fetch; `aicr.try_blame` requests should be replayed through VCS attribution when supported. Both return paths feed a final follow-up pass.
 5. Trigger the review through the normal entry point, such as `/webhooks/gitea` or `/triggers/p4`.
 6. Verify the AICR log contains a scheduled run and a completed `reviewRun` with a non-zero `dispatchCount` when an output route is configured.
-7. Verify the destination channel received the report: PR/MR line comments, managed issue comments, Feishu card, or WeCom Markdown. A final report that only says the full repository/source is inaccessible should be treated as a failed verification unless it first requested concrete context through `aicr.fetch_more_context` and AICR reran the final pass.
+7. Verify the destination channel received the report: PR/MR line comments, managed issue comments, Feishu card, or WeCom Markdown. A final report that only says the full repository/source is inaccessible should be treated as a failed verification unless it first requested concrete context through `aicr.fetch_more_context` and AICR reran the final pass. Authorship-sensitive reports should use `aicr.try_blame` rather than inferred attribution.
 
 ### Automation supplement
 
@@ -918,7 +918,9 @@ agent needs more evidence, it must use `aicr.fetch_more_context`: omit `range`
 to fetch a full changed file when diff is unavailable, or request a narrowly
 related file in the same configured depot when an API contract/call path is
 needed. AICR resolves those related P4 files with `p4 print <path>@<change>`;
-it does not sync the whole depot.
+it does not sync the whole depot. If ownership or revision provenance matters,
+the agent should request bounded attribution with `aicr.try_blame`; AICR handles
+that through the configured P4 attribution backend instead of model inference.
 
 <details>
 <summary>Full script source (p4-trigger.sh)</summary>

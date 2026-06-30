@@ -2,7 +2,7 @@
 
 ## 范围
 
-这份归档记录此前从 `Plan.md` 拆出的 P0-P6 本地闭环任务。它们的共同标准是：不依赖真实 GitLab / SVN / Redis / Kubernetes / CI 权限，可通过本地单元测试、集成测试、typecheck、build 或 markdownlint 验证。
+这份归档记录此前从 `Plan.md` 拆出的 P0-P7 本地闭环任务。它们的共同标准是：不依赖真实 GitLab / SVN / Redis / Kubernetes / CI 权限，可通过本地单元测试、集成测试、typecheck、build 或 markdownlint 验证。
 
 ## 已完成任务
 
@@ -15,6 +15,7 @@
 | P4 SQLite durable queue | `queue.kind: "sqlite"` 与原子 claim | `../architecture.md` §3.10 |
 | P5 daily_rollups 写入 | UTC 日分区 `recomputeDailyRollup` 与 rollup 测试 | `M8.md` |
 | P6 输出/合同测试收束 | `no_problems`、git context 边界、manifest 降级矩阵、Feishu 2.0 schema 等测试补齐 | `../architecture.md` §3.9、`../../output-channels.md` |
+| P7 `aicr.try_blame` MCP 工具与 orchestrator 接线 | `@aicr/mcp-output` registry/server、runtime manifest、orchestrator VCS attribution replay 与 follow-up pass | `M6.md` |
 
 ## 后续规则
 

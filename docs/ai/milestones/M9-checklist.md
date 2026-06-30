@@ -75,9 +75,8 @@ The following items are intentionally deferred past M9:
 2. **SVN real e2e**: Basic adapter and inbound trigger contract exist; real SVN repository e2e and server-side hook deployment need external system access.
 3. **k8s_pod backend**: Requires Kubernetes cluster and `@kubernetes/client-node`.
 4. **firecracker backend**: Requires Firecracker binary and API socket.
-5. **aicr.try_blame MCP tool**: VCS attribution foundation exists; MCP tool/orchestrator wiring remains a local follow-up.
-6. **Multi-source context selector**: Design complete; implementation deferred.
-7. **Reflection knowledge migration**: Light mode and thorough-mode minimal aggregation exist; repo convention learning and cross-workspace migration remain deferred pending scope/privacy decisions.
+5. **Multi-source context selector**: Design complete; implementation deferred.
+6. **Reflection knowledge migration**: Light mode and thorough-mode minimal aggregation exist; repo convention learning and cross-workspace migration remain deferred pending scope/privacy decisions.
 
 ## Sign-off
 

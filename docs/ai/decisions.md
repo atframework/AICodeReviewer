@@ -36,7 +36,7 @@
 | D21 | P4 凭据与过滤语义 | 支持非交互 `p4 login` 后重试；不含 `/` 的 glob 走 basename 语义。 | `docs/ai/architecture.md` §3.2、`packages/vcs/src/p4.ts` |
 | D22 | Problem 报告契约 | MCP problem 保持最小稳定字段，`message` 说明问题，`suggestion` 给出修复方式。 | `docs/output-channels.md`、`packages/mcp-output/src/index.ts` |
 | D23 | 部署验收 agent | 部署测试以 Kilo Code 作为首要验收入口。 | `example/README.md`、`development/README.md` |
-| D24 | 提交归因契约 | attribution 必须来自事件、provider API 或只读 VCS 工具验证，不得猜测。VCS 层归因通过**可选** `VcsAdapter.fetchAttribution` 提供（best-effort，缺失返回 `not_found`/`partial`，不污染 fingerprint），`aicr.try_blame` MCP 工具在落地测试前不对外宣传。 | `docs/ai/architecture.md` §3.2、§3.9.2、`packages/vcs/src/{contracts,git,p4,svn,attribution}.ts` |
+| D24 | 提交归因契约 | attribution 必须来自事件、provider API 或只读 VCS 工具验证，不得猜测。VCS 层归因通过**可选** `VcsAdapter.fetchAttribution` 提供（best-effort，缺失返回 `not_found`/`partial`，不污染 fingerprint）；`aicr.try_blame` 是只读 MCP 上下文工具，orchestrator 验证并回灌归因结果，`aicr.report_problem` 不接收 agent 自报 attribution。 | `docs/ai/architecture.md` §3.2、§3.9.2、`docs/output-channels.md`、`packages/vcs/src/{contracts,git,p4,svn,attribution}.ts` |
 | D25 | 多源上下文 | 默认保持 `primary` 单仓行为，辅助仓库与子仓库显式访问。 | `docs/ai/architecture.md` §3.2、§3.10 |
 | D26 | Agent Runtime Bundle | 每次 run 在隔离 `agent/` 目录物化 LLM、MCP、instructions、skills、env 与 manifest。 | `docs/ai/architecture.md` §3.6.3、§3.7 |
 | D27 | 无问题输出策略与目标链接 | `no_problems.action` 按全局 → channel → workspace 覆盖，模板用 `target` 上下文渲染不同目标类型。 | `docs/output-channels.md`、`docs/ai/architecture.md` §3.9.1、§3.10 |

@@ -221,6 +221,9 @@ source workspace and `aicr.fetch_more_context` returns a pending response:
 - If the file or range needed to validate a concrete issue is not present, call
   `aicr.fetch_more_context` with the exact path and reason so AICR can pull it
   from the VCS and run a final pass.
+- If authorship, recent-change provenance, or line-level revision context is
+  material to a finding, call `aicr.try_blame` with a bounded path/range/reason.
+  Do not infer authorship from names, commit messages, or diff prose.
 
 Do not request the entire repository by default.
 Do not keep irrelevant history or unrelated files in working memory.
@@ -250,9 +253,11 @@ Formal review output must be emitted only through AICR tools.
 - Use `aicr.skip(reason="lgtm")` when no actionable problem exists, and
   `aicr.skip(reason="no_reviewable_code")` when the changed file is empty or
   has no code/content worth reviewing.
-- Use `aicr.fetch_more_context(...)` for bounded, justified context gaps. Omit
-  `range` for full-file context. For related files outside the change, tie the
-  reason to a changed line.
+- Use `aicr.fetch_more_context(...)` for bounded, justified source-context gaps.
+  Omit `range` for full-file context. For related files outside the change, tie
+  the reason to a changed line.
+- Use `aicr.try_blame(...)` only for bounded, justified VCS attribution context.
+  Treat `not_found` or missing attribution as a stop signal; do not guess.
 
 Never ask a human to paste diff/source context while an approved AICR context
 tool can fetch it.

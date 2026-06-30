@@ -37,9 +37,10 @@ Do not use this skill for VCS implementation details, output channel rendering, 
 
 3. **Map MCP tools from the registry**
    - Generate adapter-native MCP config from `createAicrOutputToolRegistry()` and any implemented context tools.
-   - Stable current tools are `aicr.report_problem`, `aicr.publish_summary`, `aicr.skip`, and `aicr.fetch_more_context`.
+   - Stable current tools are `aicr.report_problem`, `aicr.publish_summary`, `aicr.skip`, `aicr.fetch_more_context`, and `aicr.try_blame`.
    - `aicr.fetch_more_context` may fetch full changed files when the diff is missing/truncated and narrowly related repository files when needed to validate a changed line; keep requests bounded by path/range/reason.
-   - Do not advertise planned tools such as `aicr.try_blame`, `aicr.recall_memory`, or `aicr.recall_skill` until schema, server, client tests, and prompt guidance exist.
+   - `aicr.try_blame` may request VCS-verified, best-effort attribution when ownership or revision provenance materially affects review reasoning; keep requests bounded by path/range/reason and never ask the model to infer authorship.
+   - Do not advertise planned tools such as `aicr.recall_memory` or `aicr.recall_skill` until schema, server, client tests, and prompt guidance exist.
    - Keep JSON/XML stdout tool-call parsing only as a compatibility fallback when MCP is unavailable.
 
 4. **Merge instructions and skills deterministically**
@@ -74,6 +75,6 @@ Do not use this skill for VCS implementation details, output channel rendering, 
 - Do not expose arbitrary external MCP servers directly to the agent; route them through AICR allowlists and context tools.
 - Do not include secrets in generated config files; use env placeholders and sandbox env injection.
 - Do not accept summaries that claim actionable problems without `aicr.report_problem` records, or skip/summary prose that asks humans for diff/source context; trigger structured repair so locations and context requests remain machine-readable.
-- Do not treat MCP state `contextRequests` as passive metadata. Replay them through the VCS-backed `aicr.fetch_more_context` handler, feed fetched content into a follow-up pass, and clear stale `.aicr-output-state.json` before each agent run.
+- Do not treat MCP state `contextRequests` or `attributionRequests` as passive metadata. Replay them through the VCS-backed `aicr.fetch_more_context` / `aicr.try_blame` handlers, feed returned context into a follow-up pass, and clear stale `.aicr-output-state.json` before each agent run.
 - If an agent repair retry still cannot produce structured output, fall back to direct LLM repair; but when the prose explicitly says there are no actionable problems or no reviewable code, normalize to `aicr.skip` rather than publishing a generic fallback summary.
 - Do not double-inject model metadata when the target tool already resolves it from models.dev (opencode known providers), and do not fabricate values the catalog is missing: user-supplied `llm.providers[]` fields always win over catalog data, and missing fields stay unset rather than guessed.

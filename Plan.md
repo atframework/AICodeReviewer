@@ -18,7 +18,7 @@
 
 - M5 已完成；runtime bundle 默认继续使用本地 stdio MCP server，`@aicr/mcp-output` 另提供显式启动的本地 Streamable HTTP MCP transport。
 - M6 部分完成：GitHub 生产链路、SVN adapter/trigger 合同层、VCS attribution 基础能力已归档；GitLab 真实仓库 e2e、SVN 真实仓库 e2e 仍在 Backlog。
-- 已完成的本地优先队列 P0-P6 已移出路线图正文并归档到 `docs/ai/milestones/local-priority-queue.md`；当前重新核对后，本地可闭环项按 `aicr.try_blame`、repo 约定学习、Redis 本地合同层推进，详见 §8.3。
+- 已完成的本地优先队列 P0-P7 已移出路线图正文并归档到 `docs/ai/milestones/local-priority-queue.md`；当前重新核对后，本地可闭环项按 repo 约定学习、Redis 本地合同层推进，详见 §8.3。
 - M8 观测底座与内置观测首页已交付：OTel 已接入 serve 命令、Prometheus metrics 和 run snapshot 已连线、eval CLI 已添加；Dashboard 支持 Overview / Projects / Providers / Runs 四个标签，工程面板与 Provider 面板均支持 today/thisWeek/thisMonth/all 时间维度切换。
 - M9 发布收尾已基本完成：从零部署验收、容器嵌套沙箱集成验证均通过；当前明确不进入版本 bump / git tag。
 - M7 已完成：workspace 定制、国际化、memory/reflection 全流程集成（light mode）与 thorough mode 最小跨 run 聚合均已交付。
@@ -97,7 +97,8 @@
 - **归因（attribution）基础能力已交付（P1）**：VCS 层新增可选 `VcsAdapter.fetchAttribution`
   与 `AttributionRequest`/`AttributionEntry`/`AttributionResult` 合同，git/P4/SVN 分别用
   `git blame --line-porcelain`、`p4 annotate -c` + `p4 describe -s` join、`svn blame` 解析，
-  best-effort 缺失返回 `not_found`/`partial`；`aicr.try_blame` MCP 工具尚未落地，不提前宣传。
+  best-effort 缺失返回 `not_found`/`partial`；`aicr.try_blame` MCP 工具已通过 orchestrator
+  接入该可选 VCS 能力，作为只读归因上下文回灌后续 review pass。
 - 详细合同：`docs/ai/architecture.md` §3.2、§3.9.2。
 
 ### 3.3 Compression
@@ -152,9 +153,10 @@
   - `aicr.publish_summary`
   - `aicr.skip`
   - `aicr.fetch_more_context`
+  - `aicr.try_blame`
 - 未落地能力不得提前作为“已实现工具”对外宣传。
 - Agent CLI 自由文本 stdout 不作为正式报告；无法解析工具 payload 时先做结构化修复重试，IM 输出保持 target/summary/problems 分段并从 `aicr.report_problem` 渲染位置。
-- Kilo 原生 MCP state 与 JSON stream tool-call 都必须进入同一条工具执行链；`contextRequests` 触发 VCS `fetchExtraContext` 补拉并回灌 follow-up，而不是发布“无法访问完整仓库代码/无法验证”之类的最终摘要。
+- Kilo 原生 MCP state 与 JSON stream tool-call 都必须进入同一条工具执行链；`contextRequests` 触发 VCS `fetchExtraContext` 补拉，`attributionRequests` 触发 VCS `fetchAttribution` 归因，并一并回灌 follow-up，而不是发布“无法访问完整仓库代码/无法验证”之类的最终摘要。
 - Agent 修复后若仍只输出“未发现问题 / 无可审查代码”自由文本，服务端归一为 `aicr.skip` 并跳过 IM；若仍无法解析且不是无问题语义，则改走直连 LLM 修复兜底。
 - Summary 声称发现问题但没有 `aicr.report_problem` 记录，或 skip/summary 要求人类补 diff/source context / 声称源码不可访问时，按结构化输出失败处理并修复，避免 `problemCount=0` 被 no-problems 策略静默压掉。
 - 复合输出通道隔离单 channel 发布失败：失败记录为 dispatch `failed` 并继续后续 channel；若全失败，run 以 `skipped/output_dispatch_failed` 结束，不再升级成触发器失败。
@@ -307,7 +309,7 @@
 | M3 | 已完成 | `docs/ai/milestones/M3.md` | 继续复用压缩、预算、队列与 scrubber 能力 |
 | M4 | 已完成 | `docs/ai/milestones/M4.md` | 继续扩展模板、路由与 attribution |
 | M5 | 已完成 | `docs/ai/milestones/M5.md` | 保持 runtime bundle 与 MCP transport 合同稳定 |
-| M6 | 部分完成 | `docs/ai/milestones/M6.md` | GitLab e2e、SVN 真实仓库 e2e 移至 Backlog；`aicr.try_blame` 接线列入 §8.3 |
+| M6 | 部分完成 | `docs/ai/milestones/M6.md` | GitLab e2e、SVN 真实仓库 e2e 移至 Backlog |
 | M7 | 已完成 | `docs/ai/milestones/M7.md` | repo 约定学习与自动注入列入 §8.3；跨 workspace 知识迁移明确不做 |
 | M8 | 大部分完成 | `docs/ai/milestones/M8.md` | CI eval 集成移至 Backlog |
 | M9 | 基本完成 | `docs/ai/milestones/M9.md` | 不进入版本 bump / git tag |
@@ -317,9 +319,8 @@
 
 当前执行包按本地闭环优先推进：
 
-1. P7 `aicr.try_blame` MCP 工具与 orchestrator 接线。
-2. P8 repo 约定学习与 prompt 自动注入（同 workspace、抽象模式、脱敏）。
-3. P9 Model catalog Redis backend 本地合同层与临时 Redis 测试。
+1. P8 repo 约定学习与 prompt 自动注入（同 workspace、抽象模式、脱敏）。
+2. P9 Model catalog Redis backend 本地合同层与临时 Redis 测试。
 
 外部系统验收项仍留 §8.4；发布 tag 暂不进入计划。
 
@@ -327,11 +328,10 @@
 
 这些任务应优先于需要真实 GitLab/SVN/K8s/CI 权限的 Backlog 项执行。每项都必须能用本地单元测试、集成测试、markdownlint/typecheck/build 闭环；若过程中发现必须接入外部服务，应拆出本地合同层并把真实环境验证留在 §8.4。
 
-P0-P6 已完成并归档到 `docs/ai/milestones/local-priority-queue.md`。
+P0-P7 已完成并归档到 `docs/ai/milestones/local-priority-queue.md`。
 
 | 优先级 | 项 | 来源里程碑 | 本地完成标准 |
 | --- | --- | --- | --- |
-| P7 | `aicr.try_blame` MCP 工具与 orchestrator 接线 | M6 | `@aicr/mcp-output` 暴露工具 schema；orchestrator 通过当前 `VcsAdapter.fetchAttribution` 处理请求并回传结构化 attribution；runtime bundle manifest、prompt/tool contract、`docs/output-channels.md` 与测试同步；用 mock VCS 和本地 git fixture 覆盖成功、`partial`、`not_found`、无 adapter 支持和路径越界场景。 |
 | P8 | repo 约定学习与 prompt 自动注入 | M7 | 从同一 workspace 的历史 review/reflection 中提炼抽象仓库约定并注入后续 review prompt；不跨 workspace 读写或迁移经验；memory 不保存源码片段，只保存抽象模式和必要的相对路径/行号；注入内容去重、有长度上限、可追踪来源；补 scrubber/隔离/注入排序测试，覆盖 secret、源码片段和跨 workspace 访问被拒绝。 |
 | P9 | Model catalog Redis backend 本地合同层 | M10 | 实现 `llm.model_catalog.cache.backend: redis` 对应的 `ModelCatalogBackend`，复用 `storage.cache.redis`；覆盖 get/upsert/source metadata、按 model id 查询、bootstrap enrichment 与未配置 Redis 的显式拒绝；集成测试可启动临时 Redis，但必须用 `try/finally` 或等价机制关闭 client 并停止/删除测试 Redis，使用唯一 key prefix 并清理测试数据。 |
 

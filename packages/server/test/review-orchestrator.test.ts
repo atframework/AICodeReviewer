@@ -1,13 +1,15 @@
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { promisify } from "node:util";
 
 import type { AgentAdapter } from "@aicr/agents";
 import { createReviewEvent } from "@aicr/core";
 import type { ChatCompletionClient, ModelSpec } from "@aicr/llm";
 import type { ReviewProblem } from "@aicr/outputs";
 import type { SandboxBackend, SandboxSpawnOptions } from "@aicr/sandbox";
-import { parseUnifiedDiff, type ChangeRange } from "@aicr/vcs";
+import { createGitVcsAdapter, parseUnifiedDiff, type ChangeRange } from "@aicr/vcs";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -20,10 +22,29 @@ import {
   type ReviewOutputPublisher,
 } from "../src/review-orchestrator.js";
 
+const execFileAsync = promisify(execFile);
+
 async function writeWorkspaceFile(rootDir: string, relativePath: string, content: string): Promise<void> {
   const filePath = join(rootDir, relativePath);
   await mkdir(dirname(filePath), { recursive: true });
   await writeFile(filePath, content, "utf8");
+}
+
+async function runGit(rootDir: string, args: readonly string[]): Promise<void> {
+  await execFileAsync("git", [...args], { cwd: rootDir, encoding: "utf8" });
+}
+
+async function commitAll(rootDir: string, author: string, email: string, message: string): Promise<void> {
+  await runGit(rootDir, ["add", "."]);
+  await runGit(rootDir, [
+    "-c",
+    `user.name=${author}`,
+    "-c",
+    `user.email=${email}`,
+    "commit",
+    "-m",
+    message,
+  ]);
 }
 
 const model: ModelSpec = {
@@ -497,11 +518,20 @@ describe("runReviewOrchestration", () => {
     try {
       await writeWorkspaceFile(tempDir, "src/app.ts", "const value = oldValue();\ncommitBeforeReturn();\n");
       const fetchExtraCalls: string[] = [];
+      const attributionCalls: string[] = [];
       const vcs: DiffCapableVcsAdapter = {
         ...createVcs(tempDir),
         async fetchExtraContext(req) {
           fetchExtraCalls.push(req.path);
           return { path: req.path, content: "const value = oldValue();\ncommitBeforeReturn();\n" };
+        },
+        async fetchAttribution(req) {
+          attributionCalls.push(req.path);
+          return {
+            path: req.path,
+            status: "ok",
+            entries: [{ line: req.startLine ?? 1, revision: "r1", author: "Alice" }],
+          };
         },
       };
       const spawnCalls: SandboxSpawnOptions[] = [];
@@ -517,17 +547,29 @@ describe("runReviewOrchestration", () => {
           spawnCalls.push(spawnOptions);
           spawnCount += 1;
           const statePath = join(spawnOptions.cwd, ".aicr-output-state.json");
+          const manifest = JSON.parse(await readFile(join(spawnOptions.cwd, "manifest.json"), "utf8")) as {
+            readonly mcpTools: readonly string[];
+          };
+          expect(manifest.mcpTools).toContain("aicr.try_blame");
           if (spawnCount === 1) {
             await writeFile(statePath, JSON.stringify({
               problems: [],
               summaries: [{ markdown: "无法访问完整仓库代码，无法验证该变更。" }],
               contextRequests: [{ path: "src/app.ts", reason: "需要完整仓库代码验证提交路径。" }],
+              attributionRequests: [
+                {
+                  path: "src/app.ts",
+                  range: { start_line: 2, end_line: 2 },
+                  reason: "需要 VCS 归因验证该行。",
+                },
+              ],
             }), "utf8");
             return { exitCode: 0, stdout: "", stderr: "", timedOut: false, durationMs: 10 };
           }
 
           expect(spawnOptions.stdin).toContain("Fetched context:");
           expect(spawnOptions.stdin).toContain("commitBeforeReturn");
+          expect(spawnOptions.stdin).toContain('"author": "Alice"');
           await writeFile(statePath, JSON.stringify({
             problems: [
               {
@@ -595,6 +637,7 @@ describe("runReviewOrchestration", () => {
       expect(result.summaryCount).toBe(1);
       expect(result.contextRequestCount).toBe(1);
       expect(fetchExtraCalls).toEqual(["src/app.ts"]);
+      expect(attributionCalls).toEqual(["src/app.ts"]);
       expect(spawnCalls).toHaveLength(2);
       expect(publishedProblems[0]?.file).toBe("src/app.ts");
     } finally {
@@ -2285,6 +2328,230 @@ describe("runReviewOrchestration error paths", () => {
         { path: "src/app.ts", startLine: 2, endLine: 4, revision: "head" },
       ]);
     } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("feeds aicr.try_blame attribution from a local git fixture into a follow-up", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-try-blame-git-"));
+
+    try {
+      await runGit(tempDir, ["init"]);
+      await writeWorkspaceFile(tempDir, "src/app.ts", "const one = 1;\n");
+      await commitAll(tempDir, "Alice", "alice@example.com", "initial app");
+      await writeWorkspaceFile(tempDir, "src/app.ts", "const one = 1;\nconst two = 2;\n");
+      await commitAll(tempDir, "Bob", "bob@example.com", "add second line");
+
+      const gitAdapter = createGitVcsAdapter({ repositoryDir: tempDir });
+      const vcs: DiffCapableVcsAdapter = {
+        ...createVcs(tempDir),
+        async listChanges() {
+          return { baseRevision: "HEAD~1", headRevision: "HEAD", files: ["src/app.ts"] };
+        },
+        async fetchAttribution(req, ws) {
+          return gitAdapter.fetchAttribution(req, ws);
+        },
+      };
+      let completeCalls = 0;
+      const llm: ChatCompletionClient = {
+        async complete(input) {
+          completeCalls += 1;
+          if (completeCalls === 1) {
+            return {
+              providerId: input.model.providerId,
+              modelId: input.model.modelId,
+              content: JSON.stringify({
+                toolCalls: [
+                  {
+                    name: "aicr.try_blame",
+                    input: {
+                      path: "src/app.ts",
+                      range: { start_line: 2, end_line: 2 },
+                      reason: "Need verified attribution for the changed line.",
+                    },
+                  },
+                ],
+              }),
+              raw: {},
+            };
+          }
+
+          expect(input.messages[2]?.content).toContain("Fetched context:");
+          expect(input.messages[2]?.content).toContain('"status": "ok"');
+          expect(input.messages[2]?.content).toContain('"author": "Bob"');
+          expect(input.messages[2]?.content).toContain('"authorEmail": "bob@example.com"');
+          return {
+            providerId: input.model.providerId,
+            modelId: input.model.modelId,
+            content: JSON.stringify({ skipReason: "lgtm" }),
+            raw: {},
+          };
+        },
+      };
+
+      const result = await runReviewOrchestration(
+        {
+          reviewEvent: createReviewEventFixture(),
+          payload: {},
+          provider: "gitea",
+          eventName: "pull_request",
+        },
+        {
+          baseSystemPrompt: "<task>\n{{TASK_CONTEXT}}\n</task>",
+          sourceRootResolver: () => tempDir,
+          vcs,
+          llm,
+          model,
+        },
+      );
+
+      expect(result.status).toBe("skipped");
+      expect(result.skipReason).toBe("lgtm");
+      expect(result.contextRequestCount).toBe(0);
+      expect(result.outputState.attributionRequests).toEqual([
+        {
+          path: "src/app.ts",
+          range: { start_line: 2, end_line: 2 },
+          reason: "Need verified attribution for the changed line.",
+        },
+      ]);
+      expect(completeCalls).toBe(2);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("returns not_found for aicr.try_blame when the VCS adapter has no attribution support", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-try-blame-no-adapter-"));
+
+    try {
+      await writeWorkspaceFile(tempDir, "src/app.ts", "const ok = true;\n");
+      let completeCalls = 0;
+      const llm: ChatCompletionClient = {
+        async complete(input) {
+          completeCalls += 1;
+          if (completeCalls === 1) {
+            return {
+              providerId: input.model.providerId,
+              modelId: input.model.modelId,
+              content: JSON.stringify({
+                toolCalls: [
+                  {
+                    name: "aicr-output_aicr_try_blame",
+                    input: {
+                      path: "src/app.ts",
+                      range: { start_line: 1, end_line: 1 },
+                      reason: "Need attribution if available.",
+                    },
+                  },
+                ],
+              }),
+              raw: {},
+            };
+          }
+
+          expect(input.messages[2]?.content).toContain('"status": "not_found"');
+          return {
+            providerId: input.model.providerId,
+            modelId: input.model.modelId,
+            content: JSON.stringify({ skipReason: "lgtm" }),
+            raw: {},
+          };
+        },
+      };
+
+      const result = await runReviewOrchestration(
+        {
+          reviewEvent: createReviewEventFixture(),
+          payload: {},
+          provider: "gitea",
+          eventName: "pull_request",
+        },
+        {
+          baseSystemPrompt: "<task>\n{{TASK_CONTEXT}}\n</task>",
+          sourceRootResolver: () => tempDir,
+          vcs: createVcs(tempDir),
+          llm,
+          model,
+        },
+      );
+
+      expect(result.status).toBe("skipped");
+      expect(completeCalls).toBe(2);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("ignores invalid aicr.try_blame requests without failing the review", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-invalid-try-blame-"));
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    try {
+      await writeWorkspaceFile(tempDir, "src/app.ts", "const ok = true;\n");
+      const vcs: DiffCapableVcsAdapter = {
+        ...createVcs(tempDir),
+        async fetchAttribution() {
+          throw new RangeError("path must stay within the scoped workspace");
+        },
+      };
+      let completeCalls = 0;
+      const llm: ChatCompletionClient = {
+        async complete(input) {
+          completeCalls += 1;
+          if (completeCalls === 1) {
+            return {
+              providerId: input.model.providerId,
+              modelId: input.model.modelId,
+              content: JSON.stringify({
+                toolCalls: [
+                  {
+                    name: "aicr.try_blame",
+                    input: {
+                      path: "../secret.ts",
+                      reason: "This should be rejected by the VCS adapter.",
+                    },
+                  },
+                  { name: "aicr.skip", input: { reason: "lgtm" } },
+                ],
+              }),
+              raw: {},
+            };
+          }
+
+          expect(input.messages[2]?.content).toContain("Ignored invalid context requests:");
+          expect(input.messages[2]?.content).toContain("path must stay within the scoped workspace");
+          return {
+            providerId: input.model.providerId,
+            modelId: input.model.modelId,
+            content: JSON.stringify({ skipReason: "lgtm" }),
+            raw: {},
+          };
+        },
+      };
+
+      const result = await runReviewOrchestration(
+        {
+          reviewEvent: createReviewEventFixture(),
+          payload: {},
+          provider: "gitea",
+          eventName: "pull_request",
+        },
+        {
+          baseSystemPrompt: "<task>\n{{TASK_CONTEXT}}\n</task>",
+          sourceRootResolver: () => tempDir,
+          vcs,
+          llm,
+          model,
+        },
+      );
+
+      expect(result.status).toBe("skipped");
+      expect(result.skipReason).toBe("lgtm");
+      expect(completeCalls).toBe(2);
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("ignored invalid try_blame tool call"));
+    } finally {
+      warnSpy.mockRestore();
       await rm(tempDir, { recursive: true, force: true });
     }
   });

@@ -4,7 +4,8 @@ export type AicrOutputToolName =
 	| "aicr.report_problem"
 	| "aicr.publish_summary"
 	| "aicr.skip"
-	| "aicr.fetch_more_context";
+	| "aicr.fetch_more_context"
+	| "aicr.try_blame";
 
 export type ProblemSeverity = "info" | "low" | "medium" | "high" | "critical";
 
@@ -37,10 +38,36 @@ export interface FetchMoreContextInput {
 	readonly reason: string;
 }
 
+export interface TryBlameInput {
+	readonly path: string;
+	readonly range?: {
+		readonly start_line?: number;
+		readonly end_line?: number;
+	};
+	readonly reason: string;
+}
+
+export interface TryBlameEntry {
+	readonly line: number;
+	readonly revision?: string;
+	readonly author?: string;
+	readonly authorEmail?: string;
+	readonly summary?: string;
+}
+
+export type TryBlameStatus = "ok" | "not_found" | "partial";
+
+export interface TryBlameResult {
+	readonly path: string;
+	readonly status: TryBlameStatus;
+	readonly entries: readonly TryBlameEntry[];
+}
+
 export interface AicrOutputState {
 	readonly problems: readonly ReportProblemInput[];
 	readonly summaries: readonly PublishSummaryInput[];
 	readonly contextRequests: readonly FetchMoreContextInput[];
+	readonly attributionRequests?: readonly TryBlameInput[];
 	readonly skipReason?: string;
 }
 
@@ -52,6 +79,7 @@ export interface AicrOutputToolDefinition {
 }
 
 export type FetchMoreContextHandler = (input: FetchMoreContextInput) => Promise<string>;
+export type TryBlameHandler = (input: TryBlameInput) => Promise<TryBlameResult>;
 
 function assertPlainObject(value: unknown, label: string): asserts value is Record<string, unknown> {
 	if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -107,21 +135,37 @@ function parseSkip(input: unknown): SkipInput {
 	return { reason: requireString(input.reason, "reason") };
 }
 
+function parseRange(input: Record<string, unknown>, label: string): { readonly start_line?: number; readonly end_line?: number } | undefined {
+	const rawRange = input.range;
+	if (rawRange === undefined) {
+		return undefined;
+	}
+
+	assertPlainObject(rawRange, label);
+	return {
+		...(rawRange.start_line !== undefined
+			? { start_line: requirePositiveInteger(rawRange.start_line, `${label}.start_line`) }
+			: {}),
+		...(rawRange.end_line !== undefined
+			? { end_line: requirePositiveInteger(rawRange.end_line, `${label}.end_line`) }
+			: {}),
+	};
+}
+
 function parseFetchMoreContext(input: unknown): FetchMoreContextInput {
 	assertPlainObject(input, "fetch_more_context input");
-	const rawRange = input.range;
-	let range: FetchMoreContextInput["range"];
-	if (rawRange !== undefined) {
-		assertPlainObject(rawRange, "range");
-		range = {
-			...(rawRange.start_line !== undefined
-				? { start_line: requirePositiveInteger(rawRange.start_line, "range.start_line") }
-				: {}),
-			...(rawRange.end_line !== undefined
-				? { end_line: requirePositiveInteger(rawRange.end_line, "range.end_line") }
-				: {}),
-		};
-	}
+	const range = parseRange(input, "range");
+
+	return {
+		path: requireString(input.path, "path"),
+		...(range ? { range } : {}),
+		reason: requireString(input.reason, "reason"),
+	};
+}
+
+function parseTryBlame(input: unknown): TryBlameInput {
+	assertPlainObject(input, "try_blame input");
+	const range = parseRange(input, "range");
 
 	return {
 		path: requireString(input.path, "path"),
@@ -134,6 +178,7 @@ export class AicrOutputCollector {
 	private readonly problems: ReportProblemInput[] = [];
 	private readonly summaries: PublishSummaryInput[] = [];
 	private readonly contextRequests: FetchMoreContextInput[] = [];
+	private readonly attributionRequests: TryBlameInput[] = [];
 	private skipReasonValue: string | undefined;
 
 	reportProblem(input: ReportProblemInput): { accepted: true; problemCount: number } {
@@ -158,6 +203,10 @@ export class AicrOutputCollector {
 		this.contextRequests.push(input);
 	}
 
+	recordAttributionRequest(input: TryBlameInput): void {
+		this.attributionRequests.push(input);
+	}
+
 	clearReviewOutputs(): void {
 		this.problems.length = 0;
 		this.summaries.length = 0;
@@ -173,10 +222,19 @@ export class AicrOutputCollector {
 				...(summary.title ? { title: summary.title } : {}),
 			})),
 			contextRequests: [...this.contextRequests],
+			...(this.attributionRequests.length > 0 ? { attributionRequests: [...this.attributionRequests] } : {}),
 			...(this.skipReasonValue ? { skipReason: this.skipReasonValue } : {}),
 		};
 	}
 }
+
+const contextRangeSchema = {
+	type: "object",
+	properties: {
+		start_line: { type: "integer", minimum: 1 },
+		end_line: { type: "integer", minimum: 1 },
+	},
+} as const;
 
 const problemInputSchema = {
 	type: "object",
@@ -196,6 +254,7 @@ const problemInputSchema = {
 export function createAicrOutputToolRegistry(
 	collector = new AicrOutputCollector(),
 	fetchMoreContext?: FetchMoreContextHandler,
+	tryBlame?: TryBlameHandler,
 ): readonly AicrOutputToolDefinition[] {
 	return [
 		{
@@ -241,13 +300,7 @@ export function createAicrOutputToolRegistry(
 				required: ["path", "reason"],
 				properties: {
 					path: { type: "string" },
-					range: {
-						type: "object",
-						properties: {
-							start_line: { type: "integer", minimum: 1 },
-							end_line: { type: "integer", minimum: 1 },
-						},
-					},
+					range: contextRangeSchema,
 					reason: { type: "string" },
 				},
 			},
@@ -256,6 +309,26 @@ export function createAicrOutputToolRegistry(
 				collector.recordContextRequest(parsed);
 				return {
 					content: fetchMoreContext ? await fetchMoreContext(parsed) : "",
+				};
+			},
+		},
+		{
+			name: "aicr.try_blame",
+			description: "Request AICR-verified best-effort line attribution for a file or line range. Returns VCS blame/annotate metadata only, never source content.",
+			inputSchema: {
+				type: "object",
+				required: ["path", "reason"],
+				properties: {
+					path: { type: "string" },
+					range: contextRangeSchema,
+					reason: { type: "string" },
+				},
+			},
+			async call(input: unknown) {
+				const parsed = parseTryBlame(input);
+				collector.recordAttributionRequest(parsed);
+				return {
+					content: tryBlame ? JSON.stringify(await tryBlame(parsed), null, 2) : "",
 				};
 			},
 		},
