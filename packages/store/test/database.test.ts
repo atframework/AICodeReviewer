@@ -567,4 +567,26 @@ describe("reflection memory", () => {
     expect(entriesA[0]!.occurrenceCount).toBe(1);
     expect(entriesB[0]!.occurrenceCount).toBe(1);
   });
+  it("does not read repo convention memory across workspaces", async () => {
+    const now = new Date();
+    await writeReflectionMemory(store, [
+      {
+        workspaceId: "ws-a",
+        fingerprint: "fp-convention",
+        content: "Repo convention: workspace A only",
+        createdAt: now,
+      },
+      {
+        workspaceId: "ws-b",
+        fingerprint: "fp-convention",
+        content: "Repo convention: workspace B only",
+        createdAt: now,
+      },
+    ]);
+
+    const entriesA = await readReflectionMemory(store, "ws-a");
+    const entriesB = await readReflectionMemory(store, "ws-b");
+    expect(entriesA.map((entry) => entry.content)).toEqual(["Repo convention: workspace A only"]);
+    expect(entriesB.map((entry) => entry.content)).toEqual(["Repo convention: workspace B only"]);
+  });
 });

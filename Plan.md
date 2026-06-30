@@ -18,10 +18,10 @@
 
 - M5 已完成；runtime bundle 默认继续使用本地 stdio MCP server，`@aicr/mcp-output` 另提供显式启动的本地 Streamable HTTP MCP transport。
 - M6 部分完成：GitHub 生产链路、SVN adapter/trigger 合同层、VCS attribution 基础能力已归档；GitLab 真实仓库 e2e、SVN 真实仓库 e2e 仍在 Backlog。
-- 已完成的本地优先队列 P0-P7 已移出路线图正文并归档到 `docs/ai/milestones/local-priority-queue.md`；当前重新核对后，本地可闭环项按 repo 约定学习、Redis 本地合同层推进，详见 §8.3。
+- 已完成的本地优先队列 P0-P8 已移出路线图正文并归档到 `docs/ai/milestones/local-priority-queue.md`；当前重新核对后，本地可闭环项按 Redis 本地合同层推进，详见 §8.3。
 - M8 观测底座与内置观测首页已交付：OTel 已接入 serve 命令、Prometheus metrics 和 run snapshot 已连线、eval CLI 已添加；Dashboard 支持 Overview / Projects / Providers / Runs 四个标签，工程面板与 Provider 面板均支持 today/thisWeek/thisMonth/all 时间维度切换。
 - M9 发布收尾已基本完成：从零部署验收、容器嵌套沙箱集成验证均通过；当前明确不进入版本 bump / git tag。
-- M7 已完成：workspace 定制、国际化、memory/reflection 全流程集成（light mode）与 thorough mode 最小跨 run 聚合均已交付。
+- M7 已完成：workspace 定制、国际化、memory/reflection 全流程集成（light mode）、thorough mode 最小跨 run 聚合、repo 约定学习与同 workspace prompt 自动注入均已交付。
 - 所有包均已补齐 `test/index.test.ts` barrel export 测试（AGENTS.md pitfall #10）。
 - 本轮已完成文档收束：已完成阶段与稳定细节已搬离 `Plan.md`，未来 agent 应按需读文档，而不是默认吞下整份历史记录。
 - M10（模型元数据 Catalog / models.dev 集成）已基本交付并归档到 `docs/ai/milestones/M10.md`；SQLite 与 memory 后端可用，Redis 结构化后端进入本地合同层执行队列，详见 §3.13、§8.3、`docs/ai/architecture.md` §3.13。
@@ -230,7 +230,8 @@
 - "thorough" 模式跨 run 聚合最小切片已交付：`reflection_memory` 追踪 `occurrence_count`，
   `extractCrossRunPatterns` 对重复出现的 category 生成可操作 hint（默认阈值 3 次）。
 - workspace 隔离、稳定 fingerprint 和脱敏边界已保证。
-- 下一步允许实现 repo 约定学习与 prompt 自动注入，但仅限同一 workspace：memory 只存抽象模式和必要的相对路径/行号，不存源码片段；跨 workspace 知识迁移明确不做。
+- repo 约定学习与 prompt 自动注入已交付：post-run 提取 `Repo convention:` 抽象模式（category/severity/文件类型/目录/相对路径+行号），不保存源码片段或 problem 正文；pre-run 注入只读取同一 workspace 的 memory，先注入 repo conventions，再注入其它 reflection hints，并做去重、限长和 scrubber 兜底。
+- 跨 workspace 知识迁移明确不做。
 - 详细合同：`docs/ai/architecture.md` §3.12。
 
 ### 3.13 模型元数据 Catalog（models.dev）
@@ -310,7 +311,7 @@
 | M4 | 已完成 | `docs/ai/milestones/M4.md` | 继续扩展模板、路由与 attribution |
 | M5 | 已完成 | `docs/ai/milestones/M5.md` | 保持 runtime bundle 与 MCP transport 合同稳定 |
 | M6 | 部分完成 | `docs/ai/milestones/M6.md` | GitLab e2e、SVN 真实仓库 e2e 移至 Backlog |
-| M7 | 已完成 | `docs/ai/milestones/M7.md` | repo 约定学习与自动注入列入 §8.3；跨 workspace 知识迁移明确不做 |
+| M7 | 已完成 | `docs/ai/milestones/M7.md` | repo 约定学习与自动注入已归档；跨 workspace 知识迁移明确不做 |
 | M8 | 大部分完成 | `docs/ai/milestones/M8.md` | CI eval 集成移至 Backlog |
 | M9 | 基本完成 | `docs/ai/milestones/M9.md` | 不进入版本 bump / git tag |
 | M10 | 基本完成 | `docs/ai/milestones/M10.md` | Redis 结构化缓存后端本地合同层列入 §8.3 |
@@ -319,8 +320,7 @@
 
 当前执行包按本地闭环优先推进：
 
-1. P8 repo 约定学习与 prompt 自动注入（同 workspace、抽象模式、脱敏）。
-2. P9 Model catalog Redis backend 本地合同层与临时 Redis 测试。
+1. P9 Model catalog Redis backend 本地合同层与临时 Redis 测试。
 
 外部系统验收项仍留 §8.4；发布 tag 暂不进入计划。
 
@@ -328,11 +328,10 @@
 
 这些任务应优先于需要真实 GitLab/SVN/K8s/CI 权限的 Backlog 项执行。每项都必须能用本地单元测试、集成测试、markdownlint/typecheck/build 闭环；若过程中发现必须接入外部服务，应拆出本地合同层并把真实环境验证留在 §8.4。
 
-P0-P7 已完成并归档到 `docs/ai/milestones/local-priority-queue.md`。
+P0-P8 已完成并归档到 `docs/ai/milestones/local-priority-queue.md`。
 
 | 优先级 | 项 | 来源里程碑 | 本地完成标准 |
 | --- | --- | --- | --- |
-| P8 | repo 约定学习与 prompt 自动注入 | M7 | 从同一 workspace 的历史 review/reflection 中提炼抽象仓库约定并注入后续 review prompt；不跨 workspace 读写或迁移经验；memory 不保存源码片段，只保存抽象模式和必要的相对路径/行号；注入内容去重、有长度上限、可追踪来源；补 scrubber/隔离/注入排序测试，覆盖 secret、源码片段和跨 workspace 访问被拒绝。 |
 | P9 | Model catalog Redis backend 本地合同层 | M10 | 实现 `llm.model_catalog.cache.backend: redis` 对应的 `ModelCatalogBackend`，复用 `storage.cache.redis`；覆盖 get/upsert/source metadata、按 model id 查询、bootstrap enrichment 与未配置 Redis 的显式拒绝；集成测试可启动临时 Redis，但必须用 `try/finally` 或等价机制关闭 client 并停止/删除测试 Redis，使用唯一 key prefix 并清理测试数据。 |
 
 ### 8.4 Backlog（依赖外部系统或延后扩展）

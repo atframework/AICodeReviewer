@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { extractCrossRunPatterns, extractReflections, type ReflectionExtractorInput } from "../src/reflection-extractor.js";
+import { buildMemoryHintsForPrompt, extractCrossRunPatterns, extractReflections, extractRepositoryConventions, type ReflectionExtractorInput } from "../src/reflection-extractor.js";
 
 describe("extractReflections", () => {
   const baseInput: ReflectionExtractorInput = {
@@ -224,6 +224,112 @@ describe("extractReflections", () => {
   });
 });
 
+describe("extractRepositoryConventions", () => {
+  const baseInput: ReflectionExtractorInput = {
+    workspaceId: "ws-1",
+    runId: "run-001",
+    status: "published",
+    problems: [],
+    summaries: [],
+    changedFiles: [],
+  };
+
+  it("extracts abstract repo conventions without storing problem prose or source snippets", () => {
+    const result = extractRepositoryConventions({
+      ...baseInput,
+      problems: [
+        {
+          file: "packages/core/src/config.ts",
+          line: 42,
+          severity: "high",
+          category: "api-contract",
+          message: "The code `const token = \"ghp_abcdefghijklmnopqrstuvwxyz01234567890123\"` must not be stored.",
+        },
+      ],
+    });
+
+    expect(result).toHaveLength(1);
+    expect(result[0].content).toContain("Repo convention:");
+    expect(result[0].content).toContain("high api-contract concerns under packages/");
+    expect(result[0].content).toContain("Source: packages/core/src/config.ts:42");
+    expect(result[0].content).not.toContain("const token");
+    expect(result[0].content).not.toContain("ghp_");
+    expect(result[0].content.length).toBeLessThanOrEqual(260);
+  });
+
+  it("deduplicates conventions by category, file type, and top-level scope", () => {
+    const result = extractRepositoryConventions({
+      ...baseInput,
+      problems: [
+        { file: "packages/core/src/a.ts", line: 1, severity: "medium", category: "contract", message: "one" },
+        { file: "packages/core/src/b.ts", line: 2, severity: "high", category: "contract", message: "two" },
+        { file: "packages/server/src/c.ts", line: 3, severity: "high", category: "contract", message: "three" },
+      ],
+    });
+
+    expect(result).toHaveLength(1);
+    expect(result[0].content).toContain("high contract concerns under packages/");
+    expect(result[0].content).toContain("packages/core/src/b.ts:2");
+  });
+
+  it("keeps fingerprints scoped to the workspace", () => {
+    const first = extractRepositoryConventions({
+      ...baseInput,
+      workspaceId: "ws-1",
+      problems: [{ file: "src/a.ts", line: 1, severity: "low", category: "style", message: "m" }],
+    });
+    const second = extractRepositoryConventions({
+      ...baseInput,
+      workspaceId: "ws-2",
+      problems: [{ file: "src/a.ts", line: 1, severity: "low", category: "style", message: "m" }],
+    });
+
+    expect(first[0].fingerprint).not.toBe(second[0].fingerprint);
+  });
+
+  it("omits unsafe escaped locations", () => {
+    const result = extractRepositoryConventions({
+      ...baseInput,
+      problems: [{ file: "../secret.ts", line: 7, severity: "medium", category: "security", message: "m" }],
+    });
+
+    expect(result).toHaveLength(1);
+    expect(result[0].content).not.toContain("../secret.ts");
+    expect(result[0].content).not.toContain("../");
+    expect(result[0].content).toContain("in repository files");
+    expect(result[0].content).not.toContain("Source:");
+  });
+});
+
+describe("buildMemoryHintsForPrompt", () => {
+  it("orders repo conventions before generic reflections, dedupes, and caps length", () => {
+    const result = buildMemoryHintsForPrompt(
+      [
+        { content: "Latest review summary: no issues", occurrenceCount: 9 },
+        { content: "Repo convention: lower count but should be first", occurrenceCount: 1 },
+        { content: "Repo convention: lower count but should be first", occurrenceCount: 1 },
+        { content: `Repo convention: ${"x".repeat(400)}`, occurrenceCount: 10 },
+      ],
+      { maxHints: 3, maxHintLength: 80 },
+    );
+
+    expect(result).toHaveLength(3);
+    expect(result[0]).toMatch(/^Repo convention:/u);
+    expect(result[1]).toMatch(/^Repo convention:/u);
+    expect(result[2]).toBe("Latest review summary: no issues");
+    expect(result.every((hint) => hint.length <= 80)).toBe(true);
+    expect(result.filter((hint) => hint === "Repo convention: lower count but should be first")).toHaveLength(1);
+  });
+
+  it("scrubs secrets from injected memory hints", () => {
+    const result = buildMemoryHintsForPrompt([
+      { content: "Repo convention: token=ghp_abcdefghijklmnopqrstuvwxyz01234567890123 should be scrubbed" },
+    ]);
+
+    expect(result[0]).toMatch(/<REDACTED:[^>]+>/u);
+    expect(result[0]).not.toContain("ghp_");
+  });
+});
 describe("extractCrossRunPatterns", () => {
   const workspaceId = "ws-1";
 

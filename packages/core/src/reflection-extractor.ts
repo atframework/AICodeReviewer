@@ -1,5 +1,8 @@
 import { createHash } from "node:crypto";
 
+import { scrubText } from "./secret-scrubber.js";
+import { normalizePath } from "./utils.js";
+
 export interface ReflectionExtractorInput {
   readonly workspaceId: string;
   readonly runId: string;
@@ -33,6 +36,23 @@ export interface CrossRunMemoryEntry {
   readonly fingerprint: string;
   readonly occurrenceCount: number;
 }
+
+export interface ReflectionMemoryHintSource {
+  readonly content: string;
+  readonly fingerprint?: string;
+  readonly occurrenceCount?: number;
+}
+
+const repoConventionPrefix = "Repo convention:";
+const defaultMaxConventions = 5;
+const defaultMaxHintLength = 260;
+const severityRank: Readonly<Record<ReflectionSeverity, number>> = {
+  info: 0,
+  low: 1,
+  medium: 2,
+  high: 3,
+  critical: 4,
+};
 
 function stableFingerprint(workspaceId: string, ...parts: readonly string[]): string {
   const hash = createHash("sha256");
@@ -68,6 +88,15 @@ function normalizeCategory(category: string): string {
   return category || "uncategorized";
 }
 
+function normalizeMemoryToken(value: string, fallback: string): string {
+  const scrubbed = scrubText(value).text
+    .replace(/[^a-z0-9_.:/-]+/giu, "-")
+    .replace(/-+/gu, "-")
+    .replace(/^-|-$/gu, "")
+    .toLowerCase();
+  return scrubbed || fallback;
+}
+
 function categoryReflectionFingerprint(workspaceId: string, category: string): string {
   return stableFingerprint(workspaceId, "category", normalizeCategory(category));
 }
@@ -79,6 +108,45 @@ function groupByExtension(files: readonly string[]): Map<string, number> {
     counts.set(ext, (counts.get(ext) ?? 0) + 1);
   }
   return counts;
+}
+
+function isUnsafeRelativePath(normalized: string): boolean {
+  return !normalized || normalized === ".." || normalized.startsWith("../") || normalized.includes("/../") || /^[a-z]:/iu.test(normalized);
+}
+
+function normalizeRelativeLocation(file: string, line: number): string | undefined {
+  const normalized = normalizePath(file);
+  if (isUnsafeRelativePath(normalized)) {
+    return undefined;
+  }
+
+  return `${scrubText(normalized).text}:${line}`;
+}
+
+function conventionScope(file: string): string {
+  const normalized = normalizePath(file);
+  if (isUnsafeRelativePath(normalized)) {
+    return "in repository files";
+  }
+
+  const [firstSegment] = normalized.split("/");
+  if (firstSegment && firstSegment !== normalized && !firstSegment.includes(":")) {
+    return `under ${firstSegment}/`;
+  }
+  const ext = extractFileExtension(normalized);
+  return ext ? `in .${ext} files` : "in files without extensions";
+}
+
+function trimHint(value: string, maxLength: number): string {
+  if (value.length <= maxLength) {
+    return value;
+  }
+
+  return `${value.slice(0, Math.max(0, maxLength - 3)).trimEnd()}...`;
+}
+
+function isRepoConvention(content: string): boolean {
+  return content.startsWith(repoConventionPrefix);
 }
 
 export function extractReflections(input: ReflectionExtractorInput): readonly ExtractedReflection[] {
@@ -154,6 +222,84 @@ export function extractReflections(input: ReflectionExtractorInput): readonly Ex
   }
 
   return reflections;
+}
+
+export function extractRepositoryConventions(
+  input: ReflectionExtractorInput,
+  options?: { readonly maxConventions?: number; readonly maxHintLength?: number },
+): readonly ExtractedReflection[] {
+  if (input.problems.length === 0 || input.status === "skipped") {
+    return [];
+  }
+
+  const maxConventions = options?.maxConventions ?? defaultMaxConventions;
+  const maxHintLength = options?.maxHintLength ?? defaultMaxHintLength;
+  const candidates = [...input.problems]
+    .sort((a, b) => severityRank[b.severity] - severityRank[a.severity]);
+  const seen = new Set<string>();
+  const conventions: ExtractedReflection[] = [];
+
+  for (const problem of candidates) {
+    const category = normalizeMemoryToken(normalizeCategory(problem.category), "uncategorized");
+    const ext = normalizeMemoryToken(extractFileExtension(problem.file) || "no-ext", "no-ext");
+    const scope = conventionScope(problem.file);
+    const key = `${category}:${ext}:${scope}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+
+    const location = normalizeRelativeLocation(problem.file, problem.line);
+    const locationText = location ? ` Source: ${location}.` : "";
+    const rawContent = `${repoConventionPrefix} prior reviews in this workspace flagged ${problem.severity} ${category} concerns ${scope}; re-check this repository pattern before reporting similar changes.${locationText}`;
+    const content = trimHint(scrubText(rawContent).text, maxHintLength);
+
+    conventions.push({
+      fingerprint: stableFingerprint(input.workspaceId, "repo-convention", category, ext, scope),
+      content,
+    });
+
+    if (conventions.length >= maxConventions) {
+      break;
+    }
+  }
+
+  return conventions;
+}
+
+export function buildMemoryHintsForPrompt(
+  entries: readonly ReflectionMemoryHintSource[],
+  options?: { readonly maxHints?: number; readonly maxHintLength?: number },
+): readonly string[] {
+  const maxHints = options?.maxHints ?? 12;
+  const maxHintLength = options?.maxHintLength ?? defaultMaxHintLength;
+  const seen = new Set<string>();
+  const unique = entries
+    .map((entry, index) => ({
+      content: trimHint(scrubText(entry.content).text, maxHintLength),
+      occurrenceCount: entry.occurrenceCount ?? 1,
+      index,
+    }))
+    .filter((entry) => {
+      if (!entry.content || seen.has(entry.content)) {
+        return false;
+      }
+      seen.add(entry.content);
+      return true;
+    })
+    .sort((a, b) => {
+      const aConvention = isRepoConvention(a.content);
+      const bConvention = isRepoConvention(b.content);
+      if (aConvention !== bConvention) {
+        return aConvention ? -1 : 1;
+      }
+      if (a.occurrenceCount !== b.occurrenceCount) {
+        return b.occurrenceCount - a.occurrenceCount;
+      }
+      return a.index - b.index;
+    });
+
+  return unique.slice(0, maxHints).map((entry) => entry.content);
 }
 
 export function extractCrossRunPatterns(
