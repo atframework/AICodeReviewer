@@ -25,5 +25,8 @@
     "@aicr/vcs": "workspace:*",
     "hono": "^4.7.7",
     "zod": "^3.24.4"
+  },
+  "optionalDependencies": {
+    "ioredis": "^5.6.1"
   }
 }

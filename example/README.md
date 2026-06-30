@@ -50,11 +50,12 @@ schema and `docs/ai/architecture.md` §3.13 for the contract.
 How the lookup behaves:
 
 - The refresh cache is stored in `storage.database` (SQLite by default) as a
-  keyed `model_catalog` table. Redis is reserved as a structured backend via
-  `storage.cache` but not yet implemented (it fails fast at startup today so
-  behavior is explicit). Per-model reads are point lookups — the full
-  `api.json` is parsed only at refresh time and upserted row by row, never
-  re-parsed on each read.
+  keyed `model_catalog` table, or in Redis via `storage.cache.redis` when
+  `llm.model_catalog.cache.backend: redis` is selected. Redis requires
+  `storage.cache.kind: redis` and a resolvable `redis.url_env`; use a unique
+  `key_prefix` when sharing Redis across environments. The full `api.json` is
+  parsed only at refresh time and upserted row by row, never re-parsed on each
+  read.
 - It only fetches `api.json` from the network when source-level refresh metadata
   is missing or older than `refresh_interval_hours` (default `24` = once per day);
   unknown model IDs do not trigger repeated remote fetches within the interval.

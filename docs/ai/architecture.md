@@ -512,7 +512,7 @@
 > `packages/llm/src/model-catalog.ts`（纯解析/归一化）、`packages/store/src/model-catalog.ts`
 > 与 `model_catalog`/`model_catalog_source` 表、`packages/server/src/model-catalog-service.ts`
 > 编排、`packages/agents/src/model-metadata.ts` 注入与各 adapter 实现为准。Redis 结构化
-> 缓存后端为预留项，当前显式拒绝。
+> 缓存后端已接入本地合同层，复用 `storage.cache.redis`。
 
 #### 3.13.1 目标与职责
 
@@ -549,12 +549,14 @@
   `003_model_catalog`（`packages/store/src/schema.ts`、`packages/store/src/database.ts`），
   随 store 初始化自动运行。
 - **可选 Redis 后端**：`llm.model_catalog.cache.backend: redis` 时，使用
-  `storage.cache.redis` 作为结构化缓存后端，按 key（如
-  `aicr:model-catalog:<provider>/<model>`）存已解析结果，并用 source-level key 记录
-  上次刷新时间；必须在 `storage.cache.kind: redis` 且 `redis.url_env` 可解析时启用，
-  否则启动时显式报错。Redis 后端是派生缓存，不作为唯一历史统计存储。
+  `storage.cache.redis` 作为结构化缓存后端。启动时通过 `ioredis` 连接配置的
+  `redis.url_env`，扫描当前 `key_prefix` 下的 catalog namespace 并加载到内存索引；刷新
+  或 bundled snapshot seed 会同步更新内存索引，并持久化
+  `entry:<encoded_catalog_id>`、`model:<encoded_model_id>` 与 `source:<encoded_source_url>`
+  key。必须在 `storage.cache.kind: redis` 且 `redis.url_env` 可解析时启用，否则启动时
+  显式报错。Redis 后端是派生缓存，不作为唯一历史统计存储。
 - **memory 后端仅用于测试/临时开发**：不满足跨进程持久化，不应作为生产默认。
-- **读路径是点查**：取某个 provider+model 参数是 SQLite 主键点查或 Redis `GET`。
+- **读路径是点查**：取某个 provider+model 参数是 SQLite 主键点查；Redis 后端在启动时加载 namespace 后用内存 entry/model 索引做同步点查。
   整份 `api.json` 只在刷新时解析一次并逐行 upsert，绝不每次读都全量解析整份 JSON。
 
 远端访问按 `source_url` 的刷新元数据判定，而不是“某个模型未命中就无条件拉远端”，避免
