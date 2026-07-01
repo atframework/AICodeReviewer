@@ -74,6 +74,53 @@ describe("createOpenAICompatibleChatClient", () => {
     });
   });
 
+  it("extracts cached prompt tokens from prompt_tokens_details", async () => {
+    const fetch: FetchLike = async () =>
+      jsonResponse({
+        choices: [{ message: { content: "ok" } }],
+        usage: {
+          prompt_tokens: 1500,
+          completion_tokens: 50,
+          total_tokens: 1550,
+          prompt_tokens_details: { cached_tokens: 1200 },
+        },
+      });
+    const client = createOpenAICompatibleChatClient({ fetch, apiKeyResolver: () => "secret-value" });
+
+    const result = await client.complete({ model, messages: [] });
+
+    expect(result.usage).toEqual({
+      promptTokens: 1500,
+      completionTokens: 50,
+      totalTokens: 1550,
+      cachedPromptTokens: 1200,
+    });
+  });
+
+  it("extracts cached prompt tokens from DeepSeek prompt_cache_hit_tokens", async () => {
+    const fetch: FetchLike = async () =>
+      jsonResponse({
+        choices: [{ message: { content: "ok" } }],
+        usage: {
+          prompt_tokens: 1500,
+          completion_tokens: 50,
+          total_tokens: 1550,
+          prompt_cache_hit_tokens: 1200,
+          prompt_cache_miss_tokens: 300,
+        },
+      });
+    const client = createOpenAICompatibleChatClient({ fetch, apiKeyResolver: () => "secret-value" });
+
+    const result = await client.complete({ model, messages: [] });
+
+    expect(result.usage).toEqual({
+      promptTokens: 1500,
+      completionTokens: 50,
+      totalTokens: 1550,
+      cachedPromptTokens: 1200,
+    });
+  });
+
   it("supports OpenAI-compatible array content parts", async () => {
     const client = createOpenAICompatibleChatClient({
       fetch: async () =>

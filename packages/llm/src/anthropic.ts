@@ -74,10 +74,18 @@ function extractAnthropicUsage(raw: unknown): ChatCompletionUsage | undefined {
 		return undefined;
 	}
 
+	const inputTokens = typeof usage.input_tokens === "number" ? usage.input_tokens : undefined;
+	const cacheRead = typeof usage.cache_read_input_tokens === "number" ? usage.cache_read_input_tokens : undefined;
+	const cacheCreation =
+		typeof usage.cache_creation_input_tokens === "number" ? usage.cache_creation_input_tokens : undefined;
+	const totalInput = inputTokens !== undefined ? inputTokens + (cacheRead ?? 0) : undefined;
+
 	return {
-		...(typeof usage.input_tokens === "number" ? { promptTokens: usage.input_tokens } : {}),
+		...(totalInput !== undefined ? { promptTokens: totalInput } : {}),
 		...(typeof usage.output_tokens === "number" ? { completionTokens: usage.output_tokens } : {}),
 		...(typeof usage.total_tokens === "number" ? { totalTokens: usage.total_tokens } : {}),
+		...(cacheRead !== undefined ? { cachedPromptTokens: cacheRead } : {}),
+		...(cacheCreation !== undefined ? { cacheCreationTokens: cacheCreation } : {}),
 	};
 }
 

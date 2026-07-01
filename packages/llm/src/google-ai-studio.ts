@@ -97,6 +97,7 @@ function extractGoogleUsage(raw: unknown): ChatCompletionUsage | undefined {
 		...(typeof usage.promptTokenCount === "number" ? { promptTokens: usage.promptTokenCount } : {}),
 		...(typeof usage.candidatesTokenCount === "number" ? { completionTokens: usage.candidatesTokenCount } : {}),
 		...(typeof usage.totalTokenCount === "number" ? { totalTokens: usage.totalTokenCount } : {}),
+		...(typeof usage.cachedContentTokenCount === "number" ? { cachedPromptTokens: usage.cachedContentTokenCount } : {}),
 	};
 }
 
