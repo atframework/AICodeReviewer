@@ -20,6 +20,7 @@ import {
   type ReviewOrchestrationResult,
   type ReviewOrchestrationContext,
   type ReviewOutputPublisher,
+  type ReviewSummaryPublishOptions,
 } from "../src/review-orchestrator.js";
 
 const execFileAsync = promisify(execFile);
@@ -1652,6 +1653,60 @@ describe("runReviewOrchestration error paths", () => {
       expect(summaryCalls).toHaveLength(1);
       expect(summaryCalls[0]?.summary).toContain("AICR review completed");
       expect(summaryCalls[0]?.problems).toEqual([]);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("passes reviewedFiles (changedPaths) to publishSummary options", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-reviewed-files-"));
+
+    try {
+      await writeWorkspaceFile(tempDir, "src/app.ts", "const ok = true;\n");
+      const llm: ChatCompletionClient = {
+        async complete(input) {
+          return {
+            providerId: input.model.providerId,
+            modelId: input.model.modelId,
+            content: JSON.stringify({ problems: [] }),
+            raw: {},
+          };
+        },
+      };
+      const summaryOptions: Array<ReviewSummaryPublishOptions | undefined> = [];
+
+      const result = await runReviewOrchestration(
+        {
+          reviewEvent: createReviewEventFixture(),
+          payload: {},
+          provider: "gitea",
+          eventName: "push",
+        },
+        {
+          baseSystemPrompt: "<task>\n{{TASK_CONTEXT}}\n</task>",
+          sourceRootResolver: () => tempDir,
+          vcs: createVcs(tempDir),
+          llm,
+          model,
+          outputPublisher: {
+            publishesProblems: false,
+            publishEmptySummary: true,
+            async publishProblem() {
+              throw new Error("should not receive line problems");
+            },
+            async publishSummary(_summary, _problems, options) {
+              summaryOptions.push(options);
+              return { channel: "gitea-problem-issue", status: "published", raw: {} };
+            },
+          },
+        },
+      );
+
+      expect(result.status).toBe("published");
+      expect(summaryOptions).toHaveLength(1);
+      const opts = summaryOptions[0];
+      expect(opts?.reviewedFiles).toBeDefined();
+      expect(opts?.reviewedFiles).toContain("src/app.ts");
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }

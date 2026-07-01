@@ -325,7 +325,14 @@
     - 相同 commit：仅合并新问题，不标记任何问题为已解决（避免 LLM 可变性误判）。
     - 当前 commit 更旧（`behind` 或 `diverged`）：完全跳过更新（防止 webhook 重放）。
     - compare API 失败或不可用：更新但不分类（fail-safe，不误标记已解决）。
-  - 向后兼容：缺少新标记的旧 issue body 按原有逻辑全量替换。
+  - 向后兼容：缺少新标记的旧 issue body 在无 scoped `reviewedFiles` 时按原有逻辑全量替换；当 scoped `reviewedFiles` 存在且旧问题文件无法确定时，保守跳过关闭/重写。
+- 问题生命周期关闭必须由 reviewed file-scope 守卫：
+  - 只有当当前 review 实际重新分析了包含该问题的文件时，才允许标记"已解决"并关闭其 managed issue。
+  - `reconcileProblems` 通过第 3 参数 `{ reviewedFiles }` 接收当前 review 的 `changedPaths`（经 orchestrator → `ReviewSummaryPublishOptions.reviewedFiles` → bootstrap `publishSummary` 转发）。
+  - per_problem issue body 嵌入 `<!-- aicr:file=<path> -->` 标记；旧 body 通过解析 `Location: \`path:line\`` 回退。
+  - consolidated issue 通过 `parseConsolidatedBodyProblemInfo`（per-fingerprint 文件信息）提取文件。
+  - `isFileCoveredByReview(filePath, reviewedFiles)`：`reviewedFiles` 为空/未提供时返回 `true`（向后兼容）；`filePath` 无法确定且 `reviewedFiles` 非空时返回 `false`（保守不关闭）；文件在范围内返回 `true`。
+  - 守卫应用于：per_problem 解决循环、consolidated 空结果分支（`canResolveConsolidatedIssue`）、consolidated 分类（`categorizeProblems` via `previousFilesByFingerprint`）、consolidated 跨 scope 清理循环。consolidated 部分范围更新必须把未覆盖的旧 fingerprint 作为 retained open problem 写回 `open_problems` 和正文；如果旧 body 无法解析 retained fingerprint 的文件/元数据，则跳过本次重写，避免丢失追踪。
 - GitHub managed problem issue 需要 `token_env` 指向具备 Issues read/write 权限的 PAT 或 GitHub App installation token；Webhook 的 `Issues` / `Issue comments` 事件订阅只控制入站事件，不授予 REST API 创建/更新 issue 的权限。
 
 ### 3.10 配置体系

@@ -4,6 +4,7 @@ import {
 	createGithubProblemIssueDispatcher,
 	computeScopeFingerprint,
 	renderProblemMarkdown,
+	isFileCoveredByReview,
 	type FetchLike,
 	type ReviewProblem,
 } from "../src/index.js";
@@ -1038,6 +1039,393 @@ describe("createGithubProblemIssueDispatcher", () => {
 		expect(body.body).toContain("performance");
 		expect(body.body).toContain("fp-new");
 		expect(body.body).toContain("*(new in `bbb222`)*");
+	});
+});
+
+describe("isFileCoveredByReview", () => {
+	it("returns true when reviewedFiles is undefined (backward compat)", () => {
+		expect(isFileCoveredByReview("src/app.ts", undefined)).toBe(true);
+	});
+
+	it("returns true when reviewedFiles is empty (backward compat)", () => {
+		expect(isFileCoveredByReview("src/app.ts", [])).toBe(true);
+	});
+
+	it("returns false when filePath is undefined and reviewedFiles is provided", () => {
+		expect(isFileCoveredByReview(undefined, ["src/app.ts"])).toBe(false);
+	});
+
+	it("returns true when file is in reviewedFiles", () => {
+		expect(isFileCoveredByReview("src/app.ts", ["src/app.ts", "other.ts"])).toBe(true);
+	});
+
+	it("returns false when file is not in reviewedFiles", () => {
+		expect(isFileCoveredByReview("src/missing.ts", ["src/app.ts"])).toBe(false);
+	});
+
+	it("normalizes backslashes and double slashes before comparing", () => {
+		expect(isFileCoveredByReview("src\\app.ts", ["src/app.ts"])).toBe(true);
+		expect(isFileCoveredByReview("./src//app.ts", ["src/app.ts"])).toBe(true);
+	});
+
+	it("strips leading and trailing slashes before comparing", () => {
+		expect(isFileCoveredByReview("/src/app.ts/", ["src/app.ts"])).toBe(true);
+	});
+});
+
+describe("per_problem lifecycle file-scope guard", () => {
+	const managedBodyWithFile = (file: string): string => [
+		"<!-- aicr:managed=problem-issue -->",
+		"<!-- aicr:channel=github-issues -->",
+		"<!-- aicr:label=aicr-managed -->",
+		"<!-- aicr:fingerprint=fp-old -->",
+		`<!-- aicr:file=${file} -->`,
+		"",
+		"**HIGH · correctness**",
+		"",
+		"Some old problem.",
+		"",
+		`Location: \`${file}:42\``,
+	].join("\n");
+
+	it("embeds the file marker in newly-created issue bodies", async () => {
+		const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
+		const dispatcher = createGithubProblemIssueDispatcher({
+			owner: "my-org",
+			repo: "my-repo",
+			issueMode: "per_problem",
+			fetch: async (url, init) => {
+				calls.push({ url, init });
+				return calls.length === 1 ? response([]) : response({ id: 1, number: 1 });
+			},
+		});
+
+		await dispatcher.reconcileProblems([{ ...problem, fingerprint: "fp-new-file" }]);
+
+		const createCall = calls.find((c) => c.init?.method === "POST");
+		const body = JSON.parse(createCall?.init?.body ?? "{}");
+		expect(body.body).toContain("<!-- aicr:file=src/auth.ts -->");
+	});
+
+	it("does NOT close a managed issue when its file is outside the reviewed scope", async () => {
+		const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
+		const dispatcher = createGithubProblemIssueDispatcher({
+			owner: "my-org",
+			repo: "my-repo",
+			issueMode: "per_problem",
+			fetch: async (url, init) => {
+				calls.push({ url, init });
+				return response([
+					{
+						number: 42,
+						title: "[AICR] [HIGH] correctness: src/legacy.ts:42",
+						body: managedBodyWithFile("src/legacy.ts"),
+						state: "open",
+					},
+				]);
+			},
+		});
+
+		const results = await dispatcher.reconcileProblems([], undefined, { reviewedFiles: ["src/app.ts", "src/util.ts"] });
+
+		expect(results).toEqual([]);
+		expect(calls.filter((c) => c.init?.method === "PATCH")).toEqual([]);
+		expect(calls).toHaveLength(1);
+	});
+
+	it("DOES close a managed issue when its file IS in the reviewed scope", async () => {
+		const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
+		const dispatcher = createGithubProblemIssueDispatcher({
+			owner: "my-org",
+			repo: "my-repo",
+			issueMode: "per_problem",
+			fetch: async (url, init) => {
+				calls.push({ url, init });
+				if (calls.length === 1) {
+					return response([
+						{
+							number: 42,
+							title: "[AICR] [HIGH] correctness: src/app.ts:42",
+							body: managedBodyWithFile("src/app.ts"),
+							state: "open",
+						},
+					]);
+				}
+				return response({ id: calls.length });
+			},
+		});
+
+		const results = await dispatcher.reconcileProblems([], undefined, { reviewedFiles: ["src/app.ts", "src/util.ts"] });
+
+		expect(results).toHaveLength(1);
+		expect(results[0]?.raw).toMatchObject({ action: "closed", issueNumber: 42 });
+	});
+
+	it("closes issues when reviewedFiles is not provided (backward compat)", async () => {
+		const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
+		const dispatcher = createGithubProblemIssueDispatcher({
+			owner: "my-org",
+			repo: "my-repo",
+			issueMode: "per_problem",
+			fetch: async (url, init) => {
+				calls.push({ url, init });
+				if (calls.length === 1) {
+					return response([
+						{
+							number: 42,
+							title: "[AICR] [HIGH] correctness: src/legacy.ts:42",
+							body: managedBodyWithFile("src/legacy.ts"),
+							state: "open",
+						},
+					]);
+				}
+				return response({ id: calls.length });
+			},
+		});
+
+		const results = await dispatcher.reconcileProblems([]);
+
+		expect(results).toHaveLength(1);
+		expect(results[0]?.raw).toMatchObject({ action: "closed", issueNumber: 42 });
+	});
+
+	it("does NOT close when file cannot be determined and reviewedFiles is provided", async () => {
+		const dispatcher = createGithubProblemIssueDispatcher({
+			owner: "my-org",
+			repo: "my-repo",
+			issueMode: "per_problem",
+			fetch: async () => {
+				return response([
+					{
+						number: 42,
+						title: "[AICR] [HIGH] stale",
+						body: managedBody,
+						state: "open",
+					},
+				]);
+			},
+		});
+
+		const results = await dispatcher.reconcileProblems([], undefined, { reviewedFiles: ["src/app.ts"] });
+
+		expect(results).toEqual([]);
+	});
+});
+
+describe("consolidated lifecycle file-scope guard", () => {
+	const scopeFp = computeScopeFingerprint("github-issues", "my-org", "my-repo");
+	const consolidatedBodyWithOpenProblems = (files: readonly { readonly fp: string; readonly file: string; readonly line: number; readonly category: string }[]): string => {
+		const fps = files.map((f) => f.fp).join(",");
+		const sections: string[] = [
+			"<!-- aicr:managed=problem-issue -->",
+			"<!-- aicr:consolidated=true -->",
+			"<!-- aicr:channel=github-issues -->",
+			"<!-- aicr:label=aicr-managed -->",
+			`<!-- aicr:scope_fingerprint=${scopeFp} -->`,
+			`<!-- aicr:open_problems=${fps} -->`,
+			"",
+			"### Open Issues",
+			"",
+			"#### HIGH (1)",
+			"",
+		];
+		for (const f of files) {
+			sections.push(`**${f.category}** \u2014 \`${f.file}:${f.line}\` <!-- aicr:fp=${f.fp} -->`);
+			sections.push("");
+		}
+		return sections.join("\n");
+	};
+
+	it("does NOT close a consolidated issue on empty review when its files are outside scope", async () => {
+		const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
+		const dispatcher = createGithubProblemIssueDispatcher({
+			owner: "my-org",
+			repo: "my-repo",
+			channelName: "github-issues",
+			issueMode: "consolidated",
+			fetch: async (url, init) => {
+				calls.push({ url, init });
+				if (url.includes("/issues?state=open")) {
+					return response([
+						{
+							number: 99,
+							title: "[AICR] Consolidated",
+							body: consolidatedBodyWithOpenProblems([
+								{ fp: "fp-legacy", file: "src/legacy.ts", line: 10, category: "correctness" },
+							]),
+							state: "open",
+						},
+					]);
+				}
+				return response({ id: calls.length });
+			},
+		});
+
+		const results = await dispatcher.reconcileProblems([], undefined, { reviewedFiles: ["src/app.ts"] });
+
+		expect(results).toEqual([]);
+		expect(calls.filter((c) => c.init?.method === "PATCH")).toEqual([]);
+	});
+
+	it("DOES close a consolidated issue on empty review when its files ARE in scope", async () => {
+		const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
+		const dispatcher = createGithubProblemIssueDispatcher({
+			owner: "my-org",
+			repo: "my-repo",
+			channelName: "github-issues",
+			issueMode: "consolidated",
+			fetch: async (url, init) => {
+				calls.push({ url, init });
+				if (url.includes("/issues?state=open")) {
+					return response([
+						{
+							number: 99,
+							title: "[AICR] Consolidated",
+							body: consolidatedBodyWithOpenProblems([
+								{ fp: "fp-current", file: "src/app.ts", line: 10, category: "correctness" },
+							]),
+							state: "open",
+						},
+					]);
+				}
+				return response({ id: calls.length });
+			},
+		});
+
+		const results = await dispatcher.reconcileProblems([], undefined, { reviewedFiles: ["src/app.ts"] });
+
+		expect(results).toHaveLength(1);
+		expect(results[0]?.raw).toMatchObject({ issueNumber: 99 });
+	});
+
+	it("does NOT mark a dropped problem as resolved when its file is outside scope", async () => {
+		const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
+		const dispatcher = createGithubProblemIssueDispatcher({
+			owner: "my-org",
+			repo: "my-repo",
+			channelName: "github-issues",
+			issueMode: "consolidated",
+			fetch: async (url, init) => {
+				calls.push({ url, init });
+				if (url.includes("/issues?state=open")) {
+					return response([
+						{
+							number: 99,
+							title: "[AICR] Consolidated",
+							body: consolidatedBodyWithOpenProblems([
+								{ fp: "fp-legacy", file: "src/legacy.ts", line: 10, category: "correctness" },
+								{ fp: "fp-keep", file: "src/app.ts", line: 5, category: "security" },
+							]),
+							state: "open",
+						},
+					]);
+				}
+				return response({ id: calls.length });
+			},
+		});
+
+		const keepProblem: ReviewProblem = {
+			file: "src/app.ts",
+			line: 5,
+			severity: "high",
+			category: "security",
+			message: "Still here.",
+			fingerprint: "fp-keep",
+		};
+
+		await dispatcher.reconcileProblems([keepProblem], undefined, { reviewedFiles: ["src/app.ts"] });
+
+		const patchCall = calls.find((c) => c.init?.method === "PATCH");
+		expect(patchCall).toBeDefined();
+		const body = JSON.parse(patchCall?.init?.body ?? "{}");
+		expect(body.body).not.toContain("Resolved");
+		expect(body.body).toContain("<!-- aicr:open_problems=fp-keep,fp-legacy -->");
+		expect(body.body).toContain("<!-- aicr:fp=fp-legacy -->");
+		expect(body.body).toContain("current review did not re-analyze this file");
+	});
+
+	it("skips rewriting a consolidated issue when a retained fingerprint cannot be parsed", async () => {
+		const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
+		const dispatcher = createGithubProblemIssueDispatcher({
+			owner: "my-org",
+			repo: "my-repo",
+			channelName: "github-issues",
+			issueMode: "consolidated",
+			fetch: async (url, init) => {
+				calls.push({ url, init });
+				if (url.includes("/issues?state=open")) {
+					return response([
+						{
+							number: 99,
+							title: "[AICR] Consolidated",
+							body: [
+								"<!-- aicr:managed=problem-issue -->",
+								"<!-- aicr:consolidated=true -->",
+								"<!-- aicr:channel=github-issues -->",
+								"<!-- aicr:label=aicr-managed -->",
+								`<!-- aicr:scope_fingerprint=${scopeFp} -->`,
+								"<!-- aicr:open_problems=fp-legacy,fp-keep -->",
+								"",
+								"#### HIGH (1)",
+								"",
+								"**security** — `src/app.ts:5` <!-- aicr:fp=fp-keep -->",
+							].join("\n"),
+							state: "open",
+						},
+					]);
+				}
+				return response({ id: calls.length });
+			},
+		});
+
+		const keepProblem: ReviewProblem = {
+			file: "src/app.ts",
+			line: 5,
+			severity: "high",
+			category: "security",
+			message: "Still here.",
+			fingerprint: "fp-keep",
+		};
+
+		const results = await dispatcher.reconcileProblems([keepProblem], undefined, { reviewedFiles: ["src/app.ts"] });
+
+		expect(results).toEqual([]);
+		expect(calls.filter((c) => c.init?.method === "PATCH")).toEqual([]);
+	});
+
+	it("does NOT close a consolidated issue when previous files cannot be determined", async () => {
+		const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
+		const dispatcher = createGithubProblemIssueDispatcher({
+			owner: "my-org",
+			repo: "my-repo",
+			channelName: "github-issues",
+			issueMode: "consolidated",
+			fetch: async (url, init) => {
+				calls.push({ url, init });
+				if (url.includes("/issues?state=open")) {
+					return response([
+						{
+							number: 99,
+							title: "[AICR] Consolidated",
+							body: [
+								"<!-- aicr:managed=problem-issue -->",
+								"<!-- aicr:consolidated=true -->",
+								"<!-- aicr:channel=github-issues -->",
+								"<!-- aicr:label=aicr-managed -->",
+								`<!-- aicr:scope_fingerprint=${scopeFp} -->`,
+							].join("\n"),
+							state: "open",
+						},
+					]);
+				}
+				return response({ id: calls.length });
+			},
+		});
+
+		const results = await dispatcher.reconcileProblems([], undefined, { reviewedFiles: ["src/app.ts"] });
+
+		expect(results).toEqual([]);
+		expect(calls.filter((c) => c.init?.method === "PATCH")).toEqual([]);
 	});
 });
 

@@ -1520,6 +1520,7 @@ export function createOutputPublisherFromConfig(
         return dispatcher.reconcileProblems(
           renderedProblems,
           rendering.renderSummary(summary, renderedProblems, options?.title),
+          options?.reviewedFiles ? { reviewedFiles: options.reviewedFiles } : undefined,
         );
       },
     };
@@ -1667,6 +1668,7 @@ export function createOutputPublisherFromConfig(
         return dispatcher.reconcileProblems(
           renderedProblems,
           rendering.renderSummary(summary, renderedProblems, options?.title),
+          options?.reviewedFiles ? { reviewedFiles: options.reviewedFiles } : undefined,
         );
       },
     };

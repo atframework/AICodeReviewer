@@ -43,6 +43,7 @@ describe("dashboard routes", () => {
 
     expect(response.status).toBe(200);
     expect(html).toContain("var dashboardEnabled=true");
+    expect(html).toContain("var src=data||providerStatsData;");
   });
 
   it("redirects the top-level root to the prefixed dashboard", async () => {

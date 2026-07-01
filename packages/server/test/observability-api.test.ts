@@ -239,6 +239,57 @@ describe("observability API", () => {
     expect(data[0].providerId).toBe("openai");
   });
 
+  it("GET /stats/providers filters provider stats by since query", async () => {
+    insertReviewRun(store, {
+      id: "run-old",
+      eventId: "evt-old",
+      workspaceId: "ws-1",
+      triggerName: "gitea",
+      provider: "openai",
+      providerModel: "gpt-4o",
+      status: "succeeded",
+      startedAt: new Date("2026-01-01T00:00:00Z"),
+      llmUsages: [{
+        providerId: "openai",
+        modelId: "gpt-4o",
+        tokensIn: 100,
+        tokensOut: 50,
+        tokensTotal: 150,
+      }],
+    });
+    insertReviewRun(store, {
+      id: "run-recent",
+      eventId: "evt-recent",
+      workspaceId: "ws-1",
+      triggerName: "gitea",
+      provider: "openai",
+      providerModel: "gpt-4o",
+      status: "succeeded",
+      startedAt: new Date("2026-01-03T00:00:00Z"),
+      llmUsages: [{
+        providerId: "openai",
+        modelId: "gpt-4o",
+        tokensIn: 500,
+        tokensOut: 200,
+        tokensTotal: 700,
+      }],
+    });
+
+    const since = encodeURIComponent("2026-01-02T00:00:00Z");
+    const res = await fetchApi(`/stats/providers?since=${since}`);
+
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(data).toHaveLength(1);
+    expect(data[0].requestCount).toBe(1);
+    expect(data[0].tokensTotal).toBe(700);
+  });
+
+  it("GET /stats/providers rejects invalid since query", async () => {
+    const res = await fetchApi("/stats/providers?since=not-a-date");
+    expect(res.status).toBe(400);
+  });
+
   it("GET /runs returns recent runs", async () => {
     insertReviewRun(store, {
       id: "run-1",
