@@ -18,6 +18,7 @@
 | P7 `aicr.try_blame` MCP 工具与 orchestrator 接线 | `@aicr/mcp-output` registry/server、runtime manifest、orchestrator VCS attribution replay 与 follow-up pass | `M6.md` |
 | P8 repo 约定学习与 prompt 自动注入 | `extractRepositoryConventions()` + `buildMemoryHintsForPrompt()`；同 workspace 读取、抽象模式、去重、限长、scrubber 兜底 | `M7.md` |
 | P9 Model catalog Redis backend 本地合同层 | `createRedisModelCatalogBackend()`、`storage.cache.redis` 接线、entry/model/source key 持久化、bootstrap enrichment 和缺失 Redis 配置显式拒绝测试 | `M10.md` |
+| P10 稳定合同收敛（实现-文档-测试对齐） | `firecracker` sandbox config enum 与 `k8s_pod` 对称；`auth.ts` API-key 中间件安全测试（401/403/Bearer/per-workspace）；`path-filters.ts` glob 契约测试（pin 住 `example/config.yaml` 文档化的 `**/*.cpp` / `*.md` / `src/**` / `**/*.pb.*` 语义与 exclude 优先）；`dailyRollups` schema 列断言补全；`example/config.yaml` 的 `rate_limit`（`per_provider_rps`）/ `dead_letter`（`enabled`）/ `rabbitmq`（标注未实现）文档漂移修正 | `../architecture.md` §3.8、`example/config.yaml` |
 
 ## 后续规则
 

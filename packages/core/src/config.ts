@@ -310,7 +310,7 @@ const outputRouteSchema = z
 
 const sandboxSchema = z
   .object({
-    kind: z.enum(["native", "docker", "podman", "docker_socket", "k8s_pod"]).optional(),
+    kind: z.enum(["native", "docker", "podman", "docker_socket", "k8s_pod", "firecracker"]).optional(),
     engine: z.enum(["auto", "docker", "podman"]).optional(),
     image: z.string().min(1).optional(),
   })
