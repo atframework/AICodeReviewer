@@ -299,6 +299,18 @@ describe("extractRepositoryConventions", () => {
     expect(result[0].content).toContain("in repository files");
     expect(result[0].content).not.toContain("Source:");
   });
+
+  it("omits POSIX absolute locations", () => {
+    const result = extractRepositoryConventions({
+      ...baseInput,
+      problems: [{ file: "/home/build/secret.ts", line: 7, severity: "medium", category: "security", message: "m" }],
+    });
+
+    expect(result).toHaveLength(1);
+    expect(result[0].content).not.toContain("/home/build/secret.ts");
+    expect(result[0].content).toContain("in repository files");
+    expect(result[0].content).not.toContain("Source:");
+  });
 });
 
 describe("buildMemoryHintsForPrompt", () => {

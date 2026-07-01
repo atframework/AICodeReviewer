@@ -110,11 +110,16 @@ function groupByExtension(files: readonly string[]): Map<string, number> {
   return counts;
 }
 
-function isUnsafeRelativePath(normalized: string): boolean {
-  return !normalized || normalized === ".." || normalized.startsWith("../") || normalized.includes("/../") || /^[a-z]:/iu.test(normalized);
+function isUnsafeRelativePath(value: string): boolean {
+  const path = value.replaceAll("\\", "/");
+  return !path || path === ".." || path.startsWith("/") || path.startsWith("../") || path.includes("/../") || /^[a-z]:/iu.test(path);
 }
 
 function normalizeRelativeLocation(file: string, line: number): string | undefined {
+  if (isUnsafeRelativePath(file)) {
+    return undefined;
+  }
+
   const normalized = normalizePath(file);
   if (isUnsafeRelativePath(normalized)) {
     return undefined;
@@ -124,6 +129,10 @@ function normalizeRelativeLocation(file: string, line: number): string | undefin
 }
 
 function conventionScope(file: string): string {
+  if (isUnsafeRelativePath(file)) {
+    return "in repository files";
+  }
+
   const normalized = normalizePath(file);
   if (isUnsafeRelativePath(normalized)) {
     return "in repository files";

@@ -141,7 +141,9 @@ describe("model catalog Redis backend", () => {
 		await backend.flushPending?.();
 
 		expect(client.data.has("test:model-catalog:entry:openai%2Fgpt-4o")).toBe(true);
-		expect(client.data.has("test:model-catalog:model:gpt-4o")).toBe(false);
+		const rawModelIndex = client.data.get("test:model-catalog:model:gpt-4o");
+		expect(rawModelIndex).toBeDefined();
+		expect(JSON.parse(rawModelIndex!).catalogIds).toEqual(["openai/gpt-4o"]);
 
 		const reloaded = await createRedisModelCatalogBackend({ client, keyPrefix: "test:" });
 		expect(reloaded.getEntry("openai/gpt-4o")?.source).toBe("remote");
