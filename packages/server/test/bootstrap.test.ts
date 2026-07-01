@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AppConfig } from "@aicr/core";
-import { closeStoreDb, createStoreDb, getProjectStats, insertReviewRun } from "@aicr/store";
+import { closeStoreDb, createStoreDb, getProjectStats, hardDeleteExpiredProjects, insertReviewRun } from "@aicr/store";
 
 
 import {
@@ -2825,7 +2825,7 @@ describe("resolveP4TriggerConfig", () => {
     }
   });
 
-  it("bootstrapServerApp hides projects removed from workspace config", async () => {
+  it("bootstrapServerApp marks removed projects inactive but keeps them visible during grace period", async () => {
     const tmpDir = await mkdtemp(join(tmpdir(), "aicr-bootstrap-project-cleanup-"));
     const dbPath = join(tmpDir, "obs.db");
     process.env.AICR_ADMIN_USERNAME = "admin";
@@ -2886,9 +2886,11 @@ describe("resolveP4TriggerConfig", () => {
         baseDir: tmpDir,
       });
 
-      expect(getProjectStats(result.store!)).toMatchObject([
-        { workspaceId: "active-workspace", repoRef: "owner/active" },
-      ]);
+      const projects = getProjectStats(result.store!);
+      expect(projects.length).toBe(2);
+      const byWorkspace = new Map(projects.map((p) => [p.workspaceId, p]));
+      expect(byWorkspace.get("active-workspace")?.isActive).toBe(true);
+      expect(byWorkspace.get("removed-workspace")?.isActive).toBe(false);
     } finally {
       delete process.env.AICR_ADMIN_USERNAME;
       delete process.env.AICR_ADMIN_PASSWORD;
@@ -2902,7 +2904,7 @@ describe("resolveP4TriggerConfig", () => {
     }
   });
 
-  it("bootstrapServerApp hides all projects when workspace config is empty", async () => {
+  it("bootstrapServerApp marks all projects inactive when workspace config is empty", async () => {
     const tmpDir = await mkdtemp(join(tmpdir(), "aicr-bootstrap-empty-project-cleanup-"));
     const dbPath = join(tmpDir, "obs.db");
     process.env.AICR_ADMIN_USERNAME = "admin";
@@ -2959,7 +2961,12 @@ describe("resolveP4TriggerConfig", () => {
         baseDir: tmpDir,
       });
 
-      expect(getProjectStats(result.store!)).toEqual([]);
+      const projects = getProjectStats(result.store!);
+      expect(projects.length).toBe(2);
+      expect(projects.every((p) => p.isActive === false)).toBe(true);
+
+      hardDeleteExpiredProjects(result.store!, 0);
+      expect(getProjectStats(result.store!).length).toBe(0);
     } finally {
       delete process.env.AICR_ADMIN_USERNAME;
       delete process.env.AICR_ADMIN_PASSWORD;

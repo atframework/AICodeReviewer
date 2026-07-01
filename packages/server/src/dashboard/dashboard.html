@@ -410,7 +410,8 @@ function renderProjectTable(data){
   el.innerHTML=src.map(function(p){
     var name=esc(p.displayName||p.workspaceId+" / "+p.triggerName);
     var sub=esc(p.repoRef||"");
-    return "<tr><td><div><strong>"+name+"</strong></div><div style=\"font-size:0.75rem;color:var(--muted)\">"+sub+"</div></td>"+
+    var badge=p.isActive===false?' <span class="badge badge-skip" style="margin-left:0.25rem">inactive</span>':"";
+    return "<tr><td><div><strong>"+name+badge+"</strong></div><div style=\"font-size:0.75rem;color:var(--muted)\">"+sub+"</div></td>"+
       '<td style="text-align:right">'+formatNumber(p.reviewCount)+"</td>"+
       '<td style="text-align:right">'+formatNumber(p.successCount)+"</td>"+
       '<td style="text-align:right">'+formatNumber(p.failureCount)+"</td>"+

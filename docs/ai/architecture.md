@@ -482,6 +482,12 @@
     不在 active set 中的 project 标记 `deleted_at`；空 active set 时软删除所有 project。
   - `hardDeleteExpiredProjects(store, graceDays)`：按宽限期硬删除已软删除 project，
     通过外键 `ON DELETE CASCADE` 级联清理关联数据。
+  - **Dashboard 与软删除保持一致**：观测查询（`getOverviewStats` / `getProjectStats` /
+    `getRecentRuns`）都包含处于宽限期内的软删除 project，`ProjectStats.isActive` 标记是否仍在
+    配置中（`deleted_at IS NULL`）。这样 workspace 改名 / repo 调整导致 project 被软删除时，
+    历史统计在宽限期内仍可见、Overview 与 Projects/Recent Runs 三处口径一致；只有
+    `hardDeleteExpiredProjects` + 级联才从所有视图移除数据。`getProjectStats` 与
+    `getRecentRuns` 不再用 `deleted_at IS NULL` 过滤即时隐藏 project。
 
 ### 3.12 Reflection 与 memory
 
