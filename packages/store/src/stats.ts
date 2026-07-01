@@ -282,6 +282,7 @@ export interface ProjectStats extends TimeWindowStats {
   triggerName: string;
   repoRef: string;
   displayName: string | null;
+  isActive: boolean;
 }
 
 export interface ProviderModelStats {
@@ -376,8 +377,8 @@ export function getProjectStats(
   store: StoreDb,
   since?: Date,
 ): ProjectStats[] {
-  const runConditions = [sql`${projects.deletedAt} IS NULL`];
-  if (since) runConditions.push(gte(reviewRuns.startedAt, since));
+  const runConditions = since ? [gte(reviewRuns.startedAt, since)] : [];
+  const whereClause = runConditions.length > 0 ? and(...runConditions) : undefined;
 
   const rows = store.db
     .select({
@@ -386,6 +387,7 @@ export function getProjectStats(
       triggerName: projects.triggerName,
       repoRef: projects.repoRef,
       displayName: projects.displayName,
+      isActive: sql<boolean>`${projects.deletedAt} IS NULL`,
       reviewCount: count(),
       successCount: sum(sql`CASE WHEN ${reviewRuns.status} = 'succeeded' OR ${reviewRuns.status} = 'published' THEN 1 ELSE 0 END`),
       failureCount: sum(sql`CASE WHEN ${reviewRuns.status} = 'failed' THEN 1 ELSE 0 END`),
@@ -396,8 +398,8 @@ export function getProjectStats(
     })
     .from(reviewRuns)
     .innerJoin(projects, eq(reviewRuns.projectId, projects.id))
-    .where(and(...runConditions))
-    .groupBy(projects.id, projects.workspaceId, projects.triggerName, projects.repoRef, projects.displayName)
+    .where(whereClause)
+    .groupBy(projects.id, projects.workspaceId, projects.triggerName, projects.repoRef, projects.displayName, projects.deletedAt)
     .orderBy(desc(count()))
     .all();
 
@@ -412,7 +414,7 @@ export function getProjectStats(
     .from(codeMetrics)
     .innerJoin(reviewRuns, eq(codeMetrics.runId, reviewRuns.id))
     .innerJoin(projects, eq(reviewRuns.projectId, projects.id))
-    .where(and(...runConditions))
+    .where(whereClause)
     .groupBy(projects.id)
     .all();
 
@@ -424,7 +426,7 @@ export function getProjectStats(
     .from(outputEvents)
     .innerJoin(reviewRuns, eq(outputEvents.runId, reviewRuns.id))
     .innerJoin(projects, eq(reviewRuns.projectId, projects.id))
-    .where(and(...runConditions))
+    .where(whereClause)
     .groupBy(projects.id)
     .all();
 
@@ -440,7 +442,7 @@ export function getProjectStats(
     .from(llmUsage)
     .innerJoin(reviewRuns, eq(llmUsage.runId, reviewRuns.id))
     .innerJoin(projects, eq(reviewRuns.projectId, projects.id))
-    .where(and(...runConditions))
+    .where(whereClause)
     .groupBy(projects.id)
     .all();
 
@@ -454,6 +456,7 @@ export function getProjectStats(
     triggerName: row.triggerName,
     repoRef: row.repoRef,
     displayName: row.displayName,
+    isActive: Number(row.isActive) === 1,
     reviewCount: Number(row.reviewCount),
     successCount: Number(row.successCount),
     failureCount: Number(row.failureCount),
@@ -546,7 +549,6 @@ export function getRecentRuns(
     })
     .from(reviewRuns)
     .innerJoin(projects, eq(reviewRuns.projectId, projects.id))
-    .where(sql`${projects.deletedAt} IS NULL`)
     .orderBy(desc(reviewRuns.startedAt))
     .limit(limit)
     .all();

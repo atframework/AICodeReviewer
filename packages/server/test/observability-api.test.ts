@@ -3,7 +3,7 @@ import { mkdirSync, rmSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
-import { createStoreDb, closeStoreDb, type StoreDb } from "@aicr/store";
+import { createStoreDb, closeStoreDb, type StoreDb, softDeleteMissingProjects } from "@aicr/store";
 import { insertReviewRun } from "@aicr/store";
 import type { ObservabilityApiOptions } from "../src/observability-api.js";
 import { createObservabilityApi } from "../src/observability-api.js";
@@ -120,6 +120,67 @@ describe("observability API", () => {
     expect(data.providerModels).toBeDefined();
     expect(data.recentRuns).toBeDefined();
     expect(data.timezone).toBe("UTC");
+  });
+
+  it("GET /stats distinguishes time windows when runs span multiple windows", async () => {
+    const day = 24 * 60 * 60 * 1000;
+    insertReviewRun(store, {
+      id: "old-run",
+      eventId: "evt-old",
+      workspaceId: "ws-1",
+      triggerName: "gitea",
+      provider: null,
+      providerModel: null,
+      status: "succeeded",
+      startedAt: new Date(Date.now() - 40 * day),
+    });
+    insertReviewRun(store, {
+      id: "today-run",
+      eventId: "evt-today",
+      workspaceId: "ws-1",
+      triggerName: "gitea",
+      provider: null,
+      providerModel: null,
+      status: "succeeded",
+      startedAt: new Date(),
+    });
+
+    const res = await fetchApi("/stats");
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(data.overview.reviewCount).toBe(2);
+    expect(data.today.reviewCount).toBe(1);
+    expect(data.thisMonth.reviewCount).toBe(1);
+    expect(data.thisWeek.reviewCount).toBeLessThanOrEqual(data.overview.reviewCount);
+  });
+
+  it("GET /stats/projects includes soft-deleted projects marked inactive", async () => {
+    insertReviewRun(store, {
+      id: "run-1",
+      eventId: "evt",
+      workspaceId: "ws-1",
+      triggerName: "gitea",
+      repoRef: "owner/repo",
+      provider: null,
+      providerModel: null,
+      status: "succeeded",
+      startedAt: new Date(),
+    });
+
+    softDeleteMissingProjects(store, []);
+
+    const res = await fetchApi("/stats/projects");
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(data.length).toBe(1);
+    expect(data[0].workspaceId).toBe("ws-1");
+    expect(data[0].isActive).toBe(false);
+
+    const statsRes = await fetchApi("/stats");
+    const stats = await statsRes.json();
+    expect(stats.overview.reviewCount).toBe(1);
+    expect(stats.projects.length).toBe(1);
+    expect(stats.recentRuns.length).toBe(1);
   });
 
   it("GET /stats rejects unauthenticated requests", async () => {

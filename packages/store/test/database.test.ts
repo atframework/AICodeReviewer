@@ -376,7 +376,12 @@ describe("project lifecycle", () => {
     expect(deleted).toBe(1);
 
     const projects = getProjectStats(store);
-    expect(projects.length).toBe(0);
+    expect(projects.length).toBe(1);
+    expect(projects[0].workspaceId).toBe("ws-old");
+    expect(projects[0].isActive).toBe(false);
+
+    hardDeleteExpiredProjects(store, 0);
+    expect(getProjectStats(store).length).toBe(0);
   });
 
   it("hard-deletes expired projects", () => {
@@ -422,6 +427,7 @@ describe("project lifecycle", () => {
 
     const projects = getProjectStats(store);
     expect(projects.length).toBe(1);
+    expect(projects[0].isActive).toBe(true);
   });
 });
 
