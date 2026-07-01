@@ -366,7 +366,7 @@ function renderOverviewStats(){
 
 function renderProviderTable(data){
   var el=document.getElementById("provider-table");
-  var src=data||currentData.providerModels;
+  var src=data||providerStatsData;
   if(!src||src.length===0){
     el.innerHTML='<tr><td colspan="9" style="text-align:center;color:var(--muted)">No data</td></tr>';
     return;

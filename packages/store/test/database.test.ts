@@ -289,6 +289,54 @@ describe("stats insert and query", () => {
     expect(openai!.costUsd).toBeCloseTo(0.01);
   });
 
+  it("queries provider+model stats filtered by since window", () => {
+    const oldDate = new Date(Date.now() - 10 * 24 * 60 * 60 * 1000);
+    const recentDate = new Date();
+    insertReviewRun(store, {
+      id: "run-old",
+      eventId: "evt-old",
+      workspaceId: "ws-1",
+      triggerName: "gitea",
+      provider: "openai",
+      providerModel: "gpt-4o",
+      status: "succeeded",
+      startedAt: oldDate,
+      llmUsages: [
+        { providerId: "openai", modelId: "gpt-4o", tokensIn: 100, tokensOut: 50, tokensTotal: 150, costUsd: 0.01 },
+      ],
+    });
+    insertReviewRun(store, {
+      id: "run-recent",
+      eventId: "evt-recent",
+      workspaceId: "ws-1",
+      triggerName: "gitea",
+      provider: "openai",
+      providerModel: "gpt-4o",
+      status: "succeeded",
+      startedAt: recentDate,
+      llmUsages: [
+        { providerId: "openai", modelId: "gpt-4o", tokensIn: 500, tokensOut: 200, tokensTotal: 700, costUsd: 0.05 },
+        { providerId: "anthropic", modelId: "claude-3", tokensIn: 300, tokensOut: 100, tokensTotal: 400 },
+      ],
+    });
+
+    const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const providers = getProviderModelStats(store, since);
+    const openai = providers.find((p) => p.providerId === "openai");
+    expect(openai).toBeDefined();
+    expect(openai!.requestCount).toBe(1);
+    expect(openai!.tokensTotal).toBe(700);
+    expect(openai!.costUsd).toBeCloseTo(0.05);
+    const anthropic = providers.find((p) => p.providerId === "anthropic");
+    expect(anthropic).toBeDefined();
+    expect(anthropic!.tokensTotal).toBe(400);
+
+    const allTime = getProviderModelStats(store);
+    const openaiAll = allTime.find((p) => p.providerId === "openai");
+    expect(openaiAll!.requestCount).toBe(2);
+    expect(openaiAll!.tokensTotal).toBe(850);
+  });
+
   it("queries recent runs", () => {
     for (let i = 0; i < 5; i++) {
       insertReviewRun(store, {

@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
 
+import { normalizePath } from "@aicr/core";
+
 import { renderMarkdownCodeFence } from "./template-engine.js";
 import { toFeishuMarkdown, toWeComMarkdown } from "./im-markdown.js";
 
@@ -260,14 +262,73 @@ function buildResolvedTitle(meta: ProblemMetaEntry | undefined): string {
 	return meta ? buildProblemTitle(meta) : "Previously reported issue";
 }
 
+const AICR_MANAGED_FILE_RE = /<!--\s*aicr:file=([\s\S]*?)\s*-->/u;
+const AICR_LOCATION_RE = /Location:\s*`([^`]+):\d+(?:-\d+)?`/u;
+
+function extractManagedIssueFile(body: string): string | undefined {
+	const match = AICR_MANAGED_FILE_RE.exec(body);
+	if (match?.[1]) {
+		const file = match[1].trim();
+		if (file) {
+			return file;
+		}
+	}
+	const locMatch = AICR_LOCATION_RE.exec(body);
+	return locMatch?.[1]?.trim() || undefined;
+}
+
+export function isFileCoveredByReview(
+	filePath: string | undefined,
+	reviewedFiles: readonly string[] | undefined,
+): boolean {
+	if (!reviewedFiles || reviewedFiles.length === 0) {
+		return true;
+	}
+	if (!filePath) {
+		return false;
+	}
+	const target = normalizePath(filePath);
+	return reviewedFiles.some((reviewed) => normalizePath(reviewed) === target);
+}
+
+function canResolveConsolidatedIssue(
+	body: string,
+	reviewedFiles: readonly string[] | undefined,
+): boolean {
+	if (!reviewedFiles || reviewedFiles.length === 0) {
+		return true;
+	}
+	const storedFingerprints = extractOpenProblemFingerprintsFromBody(body);
+	if (storedFingerprints.size === 0) {
+		return false;
+	}
+	const problemInfo = parseConsolidatedBodyProblemInfo(body);
+	for (const fp of storedFingerprints) {
+		const file = problemInfo.get(fp)?.file;
+		if (!isFileCoveredByReview(file, reviewedFiles)) {
+			return false;
+		}
+	}
+	return true;
+}
+
+interface CategorizeGuard {
+	readonly reviewedFiles?: readonly string[];
+	readonly previousFilesByFingerprint?: ReadonlyMap<string, string>;
+}
+
+interface CategorizedProblems {
+	readonly newProblems: readonly ReviewProblem[];
+	readonly stillOpenProblems: readonly ReviewProblem[];
+	readonly retainedFingerprints: ReadonlySet<string>;
+	readonly resolvedFingerprints: ReadonlySet<string>;
+}
+
 function categorizeProblems(
 	currentProblems: readonly ReviewProblem[],
 	previousFingerprints: ReadonlySet<string>,
-): {
-		readonly newProblems: readonly ReviewProblem[];
-		readonly stillOpenProblems: readonly ReviewProblem[];
-		readonly resolvedFingerprints: ReadonlySet<string>;
-	} {
+	guard?: CategorizeGuard,
+): CategorizedProblems {
 	const currentFingerprints = new Set<string>();
 	const newProblems: ReviewProblem[] = [];
 	const stillOpenProblems: ReviewProblem[] = [];
@@ -283,13 +344,58 @@ function categorizeProblems(
 	}
 
 	const resolvedFingerprints = new Set<string>();
+	const retainedFingerprints = new Set<string>();
 	for (const fp of previousFingerprints) {
-		if (!currentFingerprints.has(fp)) {
-			resolvedFingerprints.add(fp);
+		if (currentFingerprints.has(fp)) {
+			continue;
 		}
+		if (guard?.reviewedFiles && guard.reviewedFiles.length > 0) {
+			const file = guard.previousFilesByFingerprint?.get(fp);
+			if (!isFileCoveredByReview(file, guard.reviewedFiles)) {
+				retainedFingerprints.add(fp);
+				continue;
+			}
+		}
+		resolvedFingerprints.add(fp);
 	}
 
-	return { newProblems, stillOpenProblems, resolvedFingerprints };
+	return { newProblems, stillOpenProblems, retainedFingerprints, resolvedFingerprints };
+}
+
+function toProblemSeverity(value: string): ProblemSeverity {
+	const normalized = value.toLowerCase();
+	return normalized === "critical" ||
+		normalized === "high" ||
+		normalized === "medium" ||
+		normalized === "low" ||
+		normalized === "info"
+		? normalized
+		: "info";
+}
+
+function buildRetainedProblem(info: ParsedProblemInfo): ReviewProblem {
+	return {
+		file: info.file,
+		line: info.line,
+		severity: toProblemSeverity(info.severity),
+		category: info.category || "previously reported",
+		message: "This problem was reported by an earlier analysis. The current review did not re-analyze this file, so AICR is keeping it open until that file is reviewed again.",
+		fingerprint: info.fingerprint,
+	};
+}
+
+function buildRetainedProblems(
+	fingerprints: ReadonlySet<string>,
+	previousDetails: ReadonlyMap<string, ParsedProblemInfo>,
+): readonly ReviewProblem[] {
+	const retained: ReviewProblem[] = [];
+	for (const fp of fingerprints) {
+		const info = previousDetails.get(fp);
+		if (info) {
+			retained.push(buildRetainedProblem(info));
+		}
+	}
+	return retained;
 }
 
 function buildReviewSummarySections(
@@ -1519,8 +1625,12 @@ export interface GithubProblemIssueOptions {
 	readonly reviewedTag?: string;
 }
 
+export interface ReconcileProblemsOptions {
+	readonly reviewedFiles?: readonly string[];
+}
+
 export interface GithubProblemIssueDispatcher {
-	reconcileProblems(problems: readonly ReviewProblem[], summary?: string): Promise<readonly DispatchResult[]>;
+	reconcileProblems(problems: readonly ReviewProblem[], summary?: string, options?: ReconcileProblemsOptions): Promise<readonly DispatchResult[]>;
 }
 
 interface ManagedGithubIssue {
@@ -1531,6 +1641,7 @@ interface ManagedGithubIssue {
 	readonly url?: string;
 	readonly fingerprint?: string;
 	readonly scopeFingerprint?: string;
+	readonly file?: string;
 }
 
 function parseManagedGithubIssues(raw: unknown, markerPrefix: string, markerLabel: string): readonly ManagedGithubIssue[] {
@@ -1563,6 +1674,7 @@ function parseManagedGithubIssues(raw: unknown, markerPrefix: string, markerLabe
 
 		const fingerprint = extractManagedIssueFingerprint(body);
 		const scopeFingerprint = extractConsolidatedScopeFingerprint(body);
+		const file = extractManagedIssueFile(body);
 		issues.push({
 			number,
 			title,
@@ -1571,6 +1683,7 @@ function parseManagedGithubIssues(raw: unknown, markerPrefix: string, markerLabe
 			...(typeof rawIssue.html_url === "string" ? { url: rawIssue.html_url } : {}),
 			...(fingerprint ? { fingerprint } : {}),
 			...(scopeFingerprint ? { scopeFingerprint } : {}),
+			...(file ? { file } : {}),
 		});
 	}
 
@@ -1904,16 +2017,11 @@ export function createGithubProblemIssueDispatcher(options: GithubProblemIssueOp
 		existing: ManagedGithubIssue,
 		problems: readonly ReviewProblem[],
 		summary: string | undefined,
-		categorization?: {
-			readonly newProblems: readonly ReviewProblem[];
-			readonly stillOpenProblems: readonly ReviewProblem[];
-			readonly resolvedFingerprints: ReadonlySet<string>;
-			readonly resolvedDetails: ReadonlyMap<string, ParsedProblemInfo>;
-		},
+		categorization?: ConsolidatedIssueCategorization,
 	): Promise<DispatchResult> {
 		const scopeFingerprint = computeScopeFingerprint(channel, options.owner, options.repo);
 		const body: Record<string, unknown> = {
-			title: buildConsolidatedIssueTitle(problems, markerPrefix),
+			title: buildConsolidatedIssueTitle(getConsolidatedOpenProblems(problems, categorization), markerPrefix),
 			body: buildConsolidatedIssueBody(problems, {
 				channel, markerLabel, scopeFingerprint,
 				...(summary ? { summary } : {}),
@@ -1995,7 +2103,8 @@ export function createGithubProblemIssueDispatcher(options: GithubProblemIssueOp
 	}
 
 	const dispatcher = {
-		async reconcileProblems(problems: readonly ReviewProblem[], summary?: string): Promise<readonly DispatchResult[]> {
+		async reconcileProblems(problems: readonly ReviewProblem[], summary?: string, reconcileOptions?: { readonly reviewedFiles?: readonly string[] }): Promise<readonly DispatchResult[]> {
+			const reviewedFiles = reconcileOptions?.reviewedFiles;
 			let owners: OwnersConfig | undefined;
 
 			if (addOwnersAsAssignees) {
@@ -2017,7 +2126,7 @@ export function createGithubProblemIssueDispatcher(options: GithubProblemIssueOp
 				const results: DispatchResult[] = [];
 
 				if (problems.length === 0) {
-					if (existingConsolidated && resolvedAction !== "none") {
+					if (existingConsolidated && resolvedAction !== "none" && canResolveConsolidatedIssue(existingConsolidated.body, reviewedFiles)) {
 						const result = await resolveIssue(existingConsolidated);
 						if (result) {
 							results.push(result);
@@ -2046,10 +2155,24 @@ export function createGithubProblemIssueDispatcher(options: GithubProblemIssueOp
 					const isSameCommit = storedCommit && options.headSha && storedCommit === options.headSha;
 
 					if (storedFingerprints.size > 0 && !isSameCommit) {
-						const categorized = categorizeProblems(preparedProblems, storedFingerprints);
-						if (categorized.resolvedFingerprints.size > 0) {
+						const previousFilesByFingerprint = new Map<string, string>();
+						for (const [fp, info] of resolvedDetails) {
+							previousFilesByFingerprint.set(fp, info.file);
+						}
+						const categorized = categorizeProblems(preparedProblems, storedFingerprints, {
+							previousFilesByFingerprint,
+							...(reviewedFiles ? { reviewedFiles } : {}),
+						});
+						const retainedProblems = buildRetainedProblems(categorized.retainedFingerprints, resolvedDetails);
+						if (categorized.retainedFingerprints.size > retainedProblems.length) {
+							return results;
+						}
+						if (categorized.resolvedFingerprints.size > 0 || retainedProblems.length > 0) {
 							results.push(await updateConsolidatedIssue(existingConsolidated, preparedProblems, summary, {
-								...categorized,
+								newProblems: categorized.newProblems,
+								stillOpenProblems: categorized.stillOpenProblems,
+								retainedProblems,
+								resolvedFingerprints: categorized.resolvedFingerprints,
 								resolvedDetails,
 							}));
 						} else {
@@ -2068,6 +2191,9 @@ export function createGithubProblemIssueDispatcher(options: GithubProblemIssueOp
 							continue;
 						}
 						if (!isConsolidatedManagedIssue(issue.body)) {
+							continue;
+						}
+						if (!canResolveConsolidatedIssue(issue.body, reviewedFiles)) {
 							continue;
 						}
 						const result = await resolveIssue(issue);
@@ -2100,6 +2226,10 @@ export function createGithubProblemIssueDispatcher(options: GithubProblemIssueOp
 
 			for (const issue of existingIssues) {
 				if (!issue.fingerprint || currentFingerprints.has(issue.fingerprint)) {
+					continue;
+				}
+
+				if (!isFileCoveredByReview(issue.file, reviewedFiles)) {
 					continue;
 				}
 
@@ -2565,7 +2695,7 @@ export interface GiteaProblemIssueOptions {
 }
 
 export interface GiteaProblemIssueDispatcher {
-	reconcileProblems(problems: readonly ReviewProblem[], summary?: string): Promise<readonly DispatchResult[]>;
+	reconcileProblems(problems: readonly ReviewProblem[], summary?: string, options?: ReconcileProblemsOptions): Promise<readonly DispatchResult[]>;
 }
 
 const DEFAULT_SEVERITY_COLORS: Readonly<Record<string, string>> = {
@@ -2675,6 +2805,7 @@ interface ManagedGiteaIssue {
 	readonly url?: string;
 	readonly fingerprint?: string;
 	readonly scopeFingerprint?: string;
+	readonly file?: string;
 }
 
 const AICR_MANAGED_PROBLEM_ISSUE_MARKER = "<!-- aicr:managed=problem-issue -->";
@@ -2884,6 +3015,23 @@ function buildConsolidatedIssueTitle(
 	return truncateIssueTitle(title, MANAGED_ISSUE_TITLE_MAX_DISPLAY_WIDTH);
 }
 
+interface ConsolidatedIssueCategorization {
+	readonly newProblems: readonly ReviewProblem[];
+	readonly stillOpenProblems: readonly ReviewProblem[];
+	readonly retainedProblems: readonly ReviewProblem[];
+	readonly resolvedFingerprints: ReadonlySet<string>;
+	readonly resolvedDetails: ReadonlyMap<string, ParsedProblemInfo>;
+}
+
+function getConsolidatedOpenProblems(
+	problems: readonly ReviewProblem[],
+	categorization?: ConsolidatedIssueCategorization,
+): readonly ReviewProblem[] {
+	return categorization
+		? [...categorization.stillOpenProblems, ...categorization.newProblems, ...categorization.retainedProblems]
+		: problems;
+}
+
 function buildConsolidatedIssueBody(
 	problems: readonly ReviewProblem[],
 	options: {
@@ -2892,16 +3040,13 @@ function buildConsolidatedIssueBody(
 		readonly scopeFingerprint: string;
 		readonly summary?: string;
 		readonly headSha?: string;
-		readonly categorization?: {
-			readonly newProblems: readonly ReviewProblem[];
-			readonly stillOpenProblems: readonly ReviewProblem[];
-			readonly resolvedFingerprints: ReadonlySet<string>;
-			readonly resolvedDetails: ReadonlyMap<string, ParsedProblemInfo>;
-		};
+		readonly categorization?: ConsolidatedIssueCategorization;
 	},
 ): string {
+	const cat = options.categorization;
+	const openProblems = getConsolidatedOpenProblems(problems, cat);
 	const allFingerprints = new Set<string>();
-	for (const p of problems) {
+	for (const p of openProblems) {
 		allFingerprints.add(p.fingerprint ?? computeProblemFingerprint(p));
 	}
 
@@ -2920,8 +3065,6 @@ function buildConsolidatedIssueBody(
 		sections.push(options.summary, "", "---", "");
 	}
 
-	const cat = options.categorization;
-	const openProblems = cat ? [...cat.stillOpenProblems, ...cat.newProblems] : problems;
 	const newFpSet = cat ? new Set(cat.newProblems.map((p) => p.fingerprint ?? computeProblemFingerprint(p))) : new Set<string>();
 
 	if (openProblems.length > 0) {
@@ -3135,6 +3278,7 @@ function buildManagedIssueBody(
 		`<!-- aicr:channel=${options.channel} -->`,
 		`<!-- aicr:label=${options.markerLabel} -->`,
 		`<!-- aicr:fingerprint=${problem.fingerprint ?? computeProblemFingerprint(problem)} -->`,
+		`<!-- aicr:file=${problem.file} -->`,
 		"",
 		renderProblemMarkdown(problem),
 	];
@@ -3176,6 +3320,7 @@ function parseManagedIssues(raw: unknown, markerPrefix: string, markerLabel: str
 
 		const fingerprint = extractManagedIssueFingerprint(body);
 		const scopeFingerprint = extractConsolidatedScopeFingerprint(body);
+		const file = extractManagedIssueFile(body);
 		issues.push({
 			number,
 			title,
@@ -3184,6 +3329,7 @@ function parseManagedIssues(raw: unknown, markerPrefix: string, markerLabel: str
 			...(typeof rawIssue.html_url === "string" ? { url: rawIssue.html_url } : {}),
 			...(fingerprint ? { fingerprint } : {}),
 			...(scopeFingerprint ? { scopeFingerprint } : {}),
+			...(file ? { file } : {}),
 		});
 	}
 
@@ -3605,16 +3751,11 @@ export function createGiteaProblemIssueDispatcher(options: GiteaProblemIssueOpti
 		existing: ManagedGiteaIssue,
 		problems: readonly ReviewProblem[],
 		summary: string | undefined,
-		categorization?: {
-			readonly newProblems: readonly ReviewProblem[];
-			readonly stillOpenProblems: readonly ReviewProblem[];
-			readonly resolvedFingerprints: ReadonlySet<string>;
-			readonly resolvedDetails: ReadonlyMap<string, ParsedProblemInfo>;
-		},
+		categorization?: ConsolidatedIssueCategorization,
 	): Promise<DispatchResult> {
 		const scopeFingerprint = computeScopeFingerprint(channel, options.owner, options.repo);
 		const body: Record<string, unknown> = {
-			title: buildConsolidatedIssueTitle(problems, markerPrefix),
+			title: buildConsolidatedIssueTitle(getConsolidatedOpenProblems(problems, categorization), markerPrefix),
 			body: buildConsolidatedIssueBody(problems, {
 				channel, markerLabel, scopeFingerprint,
 				...(summary ? { summary } : {}),
@@ -3706,7 +3847,8 @@ export function createGiteaProblemIssueDispatcher(options: GiteaProblemIssueOpti
 	}
 
 	const dispatcher = {
-		async reconcileProblems(problems: readonly ReviewProblem[], summary?: string): Promise<readonly DispatchResult[]> {
+		async reconcileProblems(problems: readonly ReviewProblem[], summary?: string, reconcileOptions?: { readonly reviewedFiles?: readonly string[] }): Promise<readonly DispatchResult[]> {
+			const reviewedFiles = reconcileOptions?.reviewedFiles;
 			let owners: OwnersConfig | undefined;
 
 			if (addOwnersAsAssignees) {
@@ -3728,7 +3870,7 @@ export function createGiteaProblemIssueDispatcher(options: GiteaProblemIssueOpti
 				const results: DispatchResult[] = [];
 
 				if (problems.length === 0) {
-					if (existingConsolidated && resolvedAction !== "none") {
+					if (existingConsolidated && resolvedAction !== "none" && canResolveConsolidatedIssue(existingConsolidated.body, reviewedFiles)) {
 						const result = await resolveIssue(existingConsolidated);
 						if (result) {
 							results.push(result);
@@ -3757,10 +3899,24 @@ export function createGiteaProblemIssueDispatcher(options: GiteaProblemIssueOpti
 					const isSameCommit = storedCommit && options.headSha && storedCommit === options.headSha;
 
 					if (storedFingerprints.size > 0 && !isSameCommit) {
-						const categorized = categorizeProblems(preparedProblems, storedFingerprints);
-						if (categorized.resolvedFingerprints.size > 0) {
+						const previousFilesByFingerprint = new Map<string, string>();
+						for (const [fp, info] of resolvedDetails) {
+							previousFilesByFingerprint.set(fp, info.file);
+						}
+						const categorized = categorizeProblems(preparedProblems, storedFingerprints, {
+							previousFilesByFingerprint,
+							...(reviewedFiles ? { reviewedFiles } : {}),
+						});
+						const retainedProblems = buildRetainedProblems(categorized.retainedFingerprints, resolvedDetails);
+						if (categorized.retainedFingerprints.size > retainedProblems.length) {
+							return results;
+						}
+						if (categorized.resolvedFingerprints.size > 0 || retainedProblems.length > 0) {
 							results.push(await updateConsolidatedIssue(existingConsolidated, preparedProblems, summary, {
-								...categorized,
+								newProblems: categorized.newProblems,
+								stillOpenProblems: categorized.stillOpenProblems,
+								retainedProblems,
+								resolvedFingerprints: categorized.resolvedFingerprints,
 								resolvedDetails,
 							}));
 						} else {
@@ -3779,6 +3935,9 @@ export function createGiteaProblemIssueDispatcher(options: GiteaProblemIssueOpti
 							continue;
 						}
 						if (!isConsolidatedManagedIssue(issue.body)) {
+							continue;
+						}
+						if (!canResolveConsolidatedIssue(issue.body, reviewedFiles)) {
 							continue;
 						}
 						const result = await resolveIssue(issue);
@@ -3811,6 +3970,10 @@ export function createGiteaProblemIssueDispatcher(options: GiteaProblemIssueOpti
 
 			for (const issue of existingIssues) {
 				if (!issue.fingerprint || currentFingerprints.has(issue.fingerprint)) {
+					continue;
+				}
+
+				if (!isFileCoveredByReview(issue.file, reviewedFiles)) {
 					continue;
 				}
 

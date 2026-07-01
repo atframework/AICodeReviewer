@@ -188,7 +188,8 @@
 - consolidated issue per-fingerprint 解决跟踪与 webhook 重放保护：
   - issue body 包含 `<!-- aicr:commit={headSha} -->`、`<!-- aicr:open_problems=... -->`、`<!-- aicr:fp=... -->` 标记。
   - 更新时通过 VCS compare API 验证 commit 顺序；新 commit 分类新增/仍存在/已解决问题，同 commit 仅合并不解决，旧 commit 跳过更新，API 失败时安全降级。
-  - 向后兼容无标记的旧 issue。
+  - 向后兼容无标记的旧 issue；scoped review 中无法确定文件时保守跳过关闭/重写。
+- 问题生命周期关闭必须由 file-scope 守卫：只有当当前 review 实际重新分析了包含该问题的文件时，才允许标记"已解决"并关闭其 managed issue。`reconcileProblems` 通过 `reviewedFiles`（当前 review 的 `changedPaths`）接收文件范围；per_problem issue body 嵌入 `<!-- aicr:file=<path> -->`，consolidated issue 通过 `parseConsolidatedBodyProblemInfo` 提取文件。当 `reviewedFiles` 未提供时保持旧行为（向后兼容）。`isFileCoveredByReview` 用于 per_problem 循环、consolidated 空结果分支（`canResolveConsolidatedIssue`）和 `categorizeProblems`；consolidated 部分范围更新必须保留未覆盖的旧 fingerprint，无法解析 retained fingerprint 时跳过重写。
 - `github_problem_issue` 的 `token_env` 必须具备 GitHub Issues read/write 权限；Webhook 事件订阅不等于 API 权限。
 - 详细合同：`docs/ai/architecture.md` §3.9.5 与 `docs/output-channels.md`。
 

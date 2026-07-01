@@ -68,8 +68,9 @@ export interface ReviewOutputPublisher {
 }
 
 export interface ReviewSummaryPublishOptions {
-  readonly bypassNoProblemsPolicy?: boolean;
-  readonly title?: string;
+	readonly bypassNoProblemsPolicy?: boolean;
+	readonly title?: string;
+	readonly reviewedFiles?: readonly string[];
 }
 
 export type ReviewOutputPublisherResolver = (
@@ -1952,6 +1953,7 @@ export async function runReviewOrchestration(
                 reviewProblems,
                 {
                   ...(renderedSummaryTitle ? { title: renderedSummaryTitle } : {}),
+                  ...(changedPaths.length > 0 ? { reviewedFiles: changedPaths } : {}),
                 },
               ),
             );
