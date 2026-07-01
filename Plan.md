@@ -140,7 +140,7 @@
 
 ### 3.8 SandboxBackend
 
-- native、docker、podman 是当前主路径；`docker_socket`、`k8s_pod` 保留扩展位。
+- native、docker、podman 是当前主路径；`docker_socket`、`k8s_pod`、`firecracker` 保留扩展位（后两者 config 接受、运行时显式拒绝）。
 - 沙箱必须统一执行 allowlist、只读源码挂载、隔离 cwd 和超时治理。
 - Podman 与 Docker 共享同一容器合同。
 - 详细合同：`docs/ai/architecture.md` §3.8 与 `docs/podman.md`。
@@ -318,13 +318,13 @@
 
 ### 8.2 当前执行包
 
-当前暂无新的本地闭环执行包。P9 已归档；外部系统验收项仍留 §8.4；发布 tag 暂不进入计划。
+当前暂无新的本地闭环执行包。P9、P10 已归档；外部系统验收项仍留 §8.4；发布 tag 暂不进入计划。
 
 ### 8.3 本地优先执行队列（不依赖外部系统）
 
 这些任务应优先于需要真实 GitLab/SVN/K8s/CI 权限的 Backlog 项执行。每项都必须能用本地单元测试、集成测试、markdownlint/typecheck/build 闭环；若过程中发现必须接入外部服务，应拆出本地合同层并把真实环境验证留在 §8.4。
 
-P0-P9 已完成并归档到 `docs/ai/milestones/local-priority-queue.md`。当前无待执行本地项。
+P0-P10 已完成并归档到 `docs/ai/milestones/local-priority-queue.md`。当前无待执行本地项（P10 为稳定合同收敛：`firecracker` sandbox config enum 对齐、`auth.ts` / `path-filters.ts` / `dailyRollups` 测试加固、`example/config.yaml` 的 `rate_limit` / `dead_letter` / `rabbitmq` 文档漂移修正）。
 
 ### 8.4 Backlog（依赖外部系统或延后扩展）
 

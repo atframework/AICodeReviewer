@@ -419,7 +419,7 @@ describe("mergeConfigLayers", () => {
   });
 
   it("accepts all sandbox kinds from Plan.md §3.8", () => {
-    const sandboxKinds = ["native", "docker", "podman", "docker_socket", "k8s_pod"] as const;
+    const sandboxKinds = ["native", "docker", "podman", "docker_socket", "k8s_pod", "firecracker"] as const;
 
     for (const kind of sandboxKinds) {
       const result = appConfigSchema.safeParse({

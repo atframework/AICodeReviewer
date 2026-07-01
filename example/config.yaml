@@ -525,7 +525,7 @@ outputs:
 # Queue
 # ---------------------------------------------------------------------------
 queue:
-  kind: memory # memory (default) | redis | sqlite | rabbitmq
+  kind: memory # memory (default) | sqlite | redis  (rabbitmq is reserved, not yet implemented)
 
   workers:
     concurrency: 4
@@ -539,8 +539,8 @@ queue:
   #   lock_ttl_seconds: 300       # stale-running reclaim TTL (default 300)
 
   # rate_limit:
-  #   max_concurrent: 8
-  #   window_seconds: 60
+  #   per_provider_rps:   # Per-provider requests-per-second cap (provider id → rps)
+  #     gitea-internal: 5
 
   # retry:
   #   attempts: 2          # Retry once on transient failures (default: 1 = no retry)
@@ -551,7 +551,8 @@ queue:
   #     jitter: true
 
   # dead_letter:
-  #   max_age_hours: 72
+  #   enabled: true       # When true, exhausted retries are parked for inspection
+  #   max_age_hours: 72   # Parked items older than this are pruned
 
 # ---------------------------------------------------------------------------
 # Agent & sandbox
@@ -579,7 +580,7 @@ agent:
     # For deploy.sh + AICR_ENABLE_CONTAINER_SANDBOX with a mounted Podman
     # socket, prefer kind: podman and engine: podman. Docker-compatible mode
     # remains available when a workflow specifically expects the Docker CLI.
-    kind: docker # native | docker | podman | docker_socket | k8s_pod
+    kind: docker # native | docker | podman | docker_socket | k8s_pod | firecracker (reserved)
     engine: auto # auto | docker | podman
 
 # ---------------------------------------------------------------------------
