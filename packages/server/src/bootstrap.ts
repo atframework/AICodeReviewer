@@ -2104,7 +2104,9 @@ function buildGatewayModelPricing(
     const extracted = extractModelPricing(enriched);
     if (
       extracted.costInputPerMTok !== undefined ||
-      extracted.costOutputPerMTok !== undefined
+      extracted.costOutputPerMTok !== undefined ||
+      extracted.costCacheReadPerMTok !== undefined ||
+      extracted.costCacheWritePerMTok !== undefined
     ) {
       pricing[key] = extracted;
     }

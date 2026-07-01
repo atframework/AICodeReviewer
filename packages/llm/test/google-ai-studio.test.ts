@@ -86,6 +86,31 @@ describe("createGoogleAiStudioChatClient", () => {
     });
   });
 
+  it("extracts cached content tokens from usageMetadata", async () => {
+    const client = createGoogleAiStudioChatClient({
+      fetch: async () =>
+        jsonResponse({
+          candidates: [{ content: { parts: [{ text: "ok" }] } }],
+          usageMetadata: {
+            promptTokenCount: 6000,
+            candidatesTokenCount: 50,
+            totalTokenCount: 6050,
+            cachedContentTokenCount: 5000,
+          },
+        }),
+      apiKeyResolver: () => "gemini-secret",
+    });
+
+    const result = await client.complete({ model, messages: [{ role: "user", content: "diff" }] });
+
+    expect(result.usage).toEqual({
+      promptTokens: 6000,
+      completionTokens: 50,
+      totalTokens: 6050,
+      cachedPromptTokens: 5000,
+    });
+  });
+
   it("passes JSON schema response configuration", async () => {
     const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
     const client = createGoogleAiStudioChatClient({

@@ -466,6 +466,116 @@ describe("createResilientChatClient", () => {
 		expect(output.estimatedCostUsd).toBeCloseTo(14, 4);
 	});
 
+	it("bills cached prompt tokens at the cache read rate", async () => {
+		const result: ChatCompletionResult = {
+			providerId: "openai-prod",
+			modelId: "gpt-test",
+			content: "ok",
+			usage: { promptTokens: 2_000_000, completionTokens: 1_000_000, cachedPromptTokens: 1_500_000 },
+			raw: {},
+		};
+
+		const gateway = createResilientChatClient(
+			makeOptions({
+				clientFactory: () => makeClient(result),
+			}),
+		);
+
+		const pricedModel: ModelSpec = {
+			...baseModel,
+			costInputPerMTok: 3,
+			costOutputPerMTok: 15,
+			costCacheReadPerMTok: 0.3,
+		};
+		const output = await gateway.complete({ model: pricedModel, messages: [] });
+		// 500K non-cached * $3/M + 1.5M cached * $0.3/M + 1M output * $15/M = 1.5 + 0.45 + 15 = 16.95
+		expect(output.estimatedCostUsd).toBeCloseTo(16.95, 4);
+	});
+
+	it("bills cache creation tokens at the cache write rate", async () => {
+		const result: ChatCompletionResult = {
+			providerId: "anthropic-prod",
+			modelId: "claude-test",
+			content: "ok",
+			usage: { promptTokens: 500_000, completionTokens: 100_000, cacheCreationTokens: 1_000_000 },
+			raw: {},
+		};
+
+		const gateway = createResilientChatClient(
+			makeOptions({
+				clientFactory: () => makeClient(result),
+			}),
+		);
+
+		const pricedModel: ModelSpec = {
+			...baseModel,
+			providerId: "anthropic-prod",
+			modelId: "claude-test",
+			costInputPerMTok: 3,
+			costOutputPerMTok: 15,
+			costCacheWritePerMTok: 3.75,
+		};
+		const output = await gateway.complete({ model: pricedModel, messages: [] });
+		// 500K input * $3/M + 1M cache-write * $3.75/M + 100K output * $15/M = 1.5 + 3.75 + 1.5 = 6.75
+		expect(output.estimatedCostUsd).toBeCloseTo(6.75, 4);
+	});
+
+	it("falls back to input rate when cache rates are unavailable", async () => {
+		const result: ChatCompletionResult = {
+			providerId: "openai-prod",
+			modelId: "gpt-test",
+			content: "ok",
+			usage: { promptTokens: 2_000_000, completionTokens: 0, cachedPromptTokens: 1_500_000 },
+			raw: {},
+		};
+
+		const gateway = createResilientChatClient(
+			makeOptions({
+				clientFactory: () => makeClient(result),
+			}),
+		);
+
+		const pricedModel: ModelSpec = {
+			...baseModel,
+			costInputPerMTok: 3,
+			costOutputPerMTok: 15,
+		};
+		const output = await gateway.complete({ model: pricedModel, messages: [] });
+		// No cache rate: cached tokens billed at input rate. 500K * $3/M + 1.5M * $3/M = 1.5 + 4.5 = 6.0
+		expect(output.estimatedCostUsd).toBeCloseTo(6.0, 4);
+	});
+
+	it("clamps negative or non-finite usage fields to protect budget accounting", async () => {
+		const result: ChatCompletionResult = {
+			providerId: "openai-prod",
+			modelId: "gpt-test",
+			content: "ok",
+			usage: {
+				promptTokens: 2_000_000,
+				completionTokens: 1_000_000,
+				cachedPromptTokens: -500_000,
+				cacheCreationTokens: Number.NaN,
+			},
+			raw: {},
+		};
+
+		const gateway = createResilientChatClient(
+			makeOptions({
+				clientFactory: () => makeClient(result),
+			}),
+		);
+
+		const pricedModel: ModelSpec = {
+			...baseModel,
+			costInputPerMTok: 3,
+			costOutputPerMTok: 15,
+		};
+		const output = await gateway.complete({ model: pricedModel, messages: [] });
+		// Negative cached and NaN cacheCreation must clamp to 0: 2M * $3/M + 1M * $15/M = 6 + 15 = 21
+		expect(Number.isFinite(output.estimatedCostUsd)).toBe(true);
+		expect(output.estimatedCostUsd).toBeCloseTo(21, 4);
+	});
+
 	it("uses exponential backoff by default", async () => {
 		const rateLimitError = new LlmProviderError("rate limited", { status: 429 });
 		const successResult: ChatCompletionResult = {

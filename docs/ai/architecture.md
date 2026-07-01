@@ -126,6 +126,12 @@
 - provider fallback chain 与队列 retry 是两层不同机制，不要混用。
 - 每日预算、每 provider 覆盖与速率限制独立配置。
 - provider 兼容层要对外暴露统一模型抽象，而不是把厂商字段散落到上层编排代码。
+- **按 token 类别的成本估算**：`ChatCompletionUsage` 携带 `cachedPromptTokens`（缓存命中的输入）
+  与 `cacheCreationTokens`（缓存写入，Anthropic）。gateway 的 `estimateCost` 用 catalog 的
+  `costCacheReadPerMTok` / `costCacheWritePerMTok` 对缓存 token 计费（缺失时回退输入价），再叠加
+  非缓存输入与输出价；只有完全无 catalog 价格时才回落到 `(tokens/1000)*0.002` 占位估算。`promptTokens`
+  语义统一为“总输入（含缓存命中）”，由 provider extractor 归一化（Anthropic 把 `cache_read_input_tokens`
+  折进 `promptTokens`），保证 `nonCachedInput = promptTokens - cachedPromptTokens` 在所有 provider 下成立。
 
 ### 3.6 Prompt Manager 与 AI 资产装配
 
@@ -525,8 +531,9 @@
   - **Catalog/vendor metadata**：用于审计、告警、映射和 UI，不直接变成请求参数。
 - 元数据用于三个消费面：
   1. **压缩与预算**：`compression` 用 `contextWindow` 计算触发阈值；`llm.budget`
-     与观测成本统计用真实价格替代当前 `gateway.ts` 里 `(tokens/1000)*0.002` 的
-     占位估算。
+     与观测成本统计用真实价格计费——`estimateCost` 已按 token 类别（非缓存输入、缓存命中、
+     缓存写入、输出）分别套用 catalog 价格，`costCacheReadPerMTok` / `costCacheWritePerMTok`
+     缺失时回退输入价；只有完全无 catalog 价格时才回落到 `(tokens/1000)*0.002` 占位估算。
   2. **ModelSpec 充实**：把元数据合并进 `ModelSpec`，让 `contextWindow`、
      `supportsToolCall`、`supportsVision`、`supportsCachePrompt` 等字段无需用户
      手填即可生效。

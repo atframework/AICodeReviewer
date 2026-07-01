@@ -48,6 +48,34 @@ describe("createAnthropicChatClient", () => {
     expect(result.usage).toEqual({ promptTokens: 10, completionTokens: 6 });
   });
 
+  it("extracts cache read and cache creation tokens, folding cache reads into prompt tokens", async () => {
+    const client = createAnthropicChatClient({
+      fetch: async () =>
+        jsonResponse({
+          content: [{ type: "text", text: "ok" }],
+          usage: {
+            input_tokens: 1000,
+            output_tokens: 50,
+            cache_read_input_tokens: 5000,
+            cache_creation_input_tokens: 2000,
+          },
+        }),
+      apiKeyResolver: () => "key",
+    });
+
+    const result = await client.complete({
+      model,
+      messages: [{ role: "user", content: "review" }],
+    });
+
+    expect(result.usage).toEqual({
+      promptTokens: 6000,
+      completionTokens: 50,
+      cachedPromptTokens: 5000,
+      cacheCreationTokens: 2000,
+    });
+  });
+
   it("does not send thinking config when thinking.enabled is false", async () => {
     const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
     const client = createAnthropicChatClient({

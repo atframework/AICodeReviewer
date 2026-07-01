@@ -148,6 +148,8 @@ export interface ChatCompletionUsage {
 	readonly promptTokens?: number;
 	readonly completionTokens?: number;
 	readonly totalTokens?: number;
+	readonly cachedPromptTokens?: number;
+	readonly cacheCreationTokens?: number;
 }
 
 export interface ChatCompletionResult {
@@ -544,10 +546,18 @@ function extractUsage(raw: unknown): ChatCompletionUsage | undefined {
 		return undefined;
 	}
 
+	const promptDetails = isRecord(usage.prompt_tokens_details) ? usage.prompt_tokens_details : undefined;
+	const cachedFromDetails = promptDetails && typeof promptDetails.cached_tokens === "number"
+		? promptDetails.cached_tokens
+		: undefined;
+	const cachedFromHit = typeof usage.prompt_cache_hit_tokens === "number" ? usage.prompt_cache_hit_tokens : undefined;
+	const cachedTokens = cachedFromHit ?? cachedFromDetails;
+
 	return {
 		...(typeof usage.prompt_tokens === "number" ? { promptTokens: usage.prompt_tokens } : {}),
 		...(typeof usage.completion_tokens === "number" ? { completionTokens: usage.completion_tokens } : {}),
 		...(typeof usage.total_tokens === "number" ? { totalTokens: usage.total_tokens } : {}),
+		...(cachedTokens !== undefined ? { cachedPromptTokens: cachedTokens } : {}),
 	};
 }
 

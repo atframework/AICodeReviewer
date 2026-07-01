@@ -39,12 +39,21 @@ export interface LlmGatewayPerProviderOverride {
 export interface ModelPricing {
   readonly costInputPerMTok?: number;
   readonly costOutputPerMTok?: number;
+  readonly costCacheReadPerMTok?: number;
+  readonly costCacheWritePerMTok?: number;
 }
 
 export function extractModelPricing(model: ModelSpec): ModelPricing {
-	const pricing: { costInputPerMTok?: number; costOutputPerMTok?: number } = {};
+	const pricing: {
+		costInputPerMTok?: number;
+		costOutputPerMTok?: number;
+		costCacheReadPerMTok?: number;
+		costCacheWritePerMTok?: number;
+	} = {};
 	if (model.costInputPerMTok !== undefined) pricing.costInputPerMTok = model.costInputPerMTok;
 	if (model.costOutputPerMTok !== undefined) pricing.costOutputPerMTok = model.costOutputPerMTok;
+	if (model.costCacheReadPerMTok !== undefined) pricing.costCacheReadPerMTok = model.costCacheReadPerMTok;
+	if (model.costCacheWritePerMTok !== undefined) pricing.costCacheWritePerMTok = model.costCacheWritePerMTok;
 	return pricing;
 }
 
@@ -331,18 +340,42 @@ function buildModelSpecFromFallback(
   };
 }
 
+function finiteTokenCount(value: number | undefined): number {
+  if (value === undefined || !Number.isFinite(value) || value < 0) return 0;
+  return value;
+}
+
 function estimateCost(usage: ChatCompletionUsage | undefined, pricing?: ModelPricing): number {
   if (!usage) return 0;
-  const inputTokens = usage.promptTokens ?? 0;
-  const outputTokens = usage.completionTokens ?? 0;
-  if (pricing && (pricing.costInputPerMTok !== undefined || pricing.costOutputPerMTok !== undefined)) {
-    const inputCost =
-      pricing.costInputPerMTok !== undefined ? (inputTokens / 1_000_000) * pricing.costInputPerMTok : 0;
-    const outputCost =
-      pricing.costOutputPerMTok !== undefined ? (outputTokens / 1_000_000) * pricing.costOutputPerMTok : 0;
-    return inputCost + outputCost;
+  const inputTokens = finiteTokenCount(usage.promptTokens);
+  const outputTokens = finiteTokenCount(usage.completionTokens);
+  const cachedTokens = finiteTokenCount(usage.cachedPromptTokens);
+  const cacheCreationTokens = finiteTokenCount(usage.cacheCreationTokens);
+  const nonCachedInput = Math.max(0, inputTokens - cachedTokens);
+
+  const inputRate = pricing?.costInputPerMTok;
+  const outputRate = pricing?.costOutputPerMTok;
+  const cacheReadRate = pricing?.costCacheReadPerMTok ?? inputRate;
+  const cacheWriteRate = pricing?.costCacheWritePerMTok ?? inputRate;
+
+  if (
+    inputRate !== undefined ||
+    outputRate !== undefined ||
+    cacheReadRate !== undefined ||
+    cacheWriteRate !== undefined
+  ) {
+    const inputCost = inputRate !== undefined ? (nonCachedInput / 1_000_000) * inputRate : 0;
+    const cacheReadCost = cacheReadRate !== undefined ? (cachedTokens / 1_000_000) * cacheReadRate : 0;
+    const cacheWriteCost = cacheWriteRate !== undefined ? (cacheCreationTokens / 1_000_000) * cacheWriteRate : 0;
+    const outputCost = outputRate !== undefined ? (outputTokens / 1_000_000) * outputRate : 0;
+    return Math.max(0, inputCost + cacheReadCost + cacheWriteCost + outputCost);
   }
-  const tokens = usage.totalTokens ?? inputTokens + outputTokens;
+
+  const totalRaw = usage.totalTokens;
+  const tokens =
+    totalRaw !== undefined && Number.isFinite(totalRaw) && totalRaw >= 0
+      ? totalRaw
+      : inputTokens + outputTokens;
   return (tokens / 1000) * 0.002;
 }
 
