@@ -78,7 +78,7 @@ function extractAnthropicUsage(raw: unknown): ChatCompletionUsage | undefined {
 	const cacheRead = typeof usage.cache_read_input_tokens === "number" ? usage.cache_read_input_tokens : undefined;
 	const cacheCreation =
 		typeof usage.cache_creation_input_tokens === "number" ? usage.cache_creation_input_tokens : undefined;
-	const totalInput = inputTokens !== undefined ? inputTokens + (cacheRead ?? 0) : undefined;
+	const totalInput = inputTokens !== undefined ? inputTokens + (cacheRead ?? 0) + (cacheCreation ?? 0) : undefined;
 
 	return {
 		...(totalInput !== undefined ? { promptTokens: totalInput } : {}),

@@ -98,6 +98,8 @@ export interface LlmGatewayProviderConfig {
   readonly supportsCachePrompt?: boolean;
   readonly costInputPerMTok?: number;
   readonly costOutputPerMTok?: number;
+  readonly costCacheReadPerMTok?: number;
+  readonly costCacheWritePerMTok?: number;
 }
 
 export class DailyBudgetTracker {
@@ -351,7 +353,7 @@ function estimateCost(usage: ChatCompletionUsage | undefined, pricing?: ModelPri
   const outputTokens = finiteTokenCount(usage.completionTokens);
   const cachedTokens = finiteTokenCount(usage.cachedPromptTokens);
   const cacheCreationTokens = finiteTokenCount(usage.cacheCreationTokens);
-  const nonCachedInput = Math.max(0, inputTokens - cachedTokens);
+  const nonCachedInput = Math.max(0, inputTokens - cachedTokens - cacheCreationTokens);
 
   const inputRate = pricing?.costInputPerMTok;
   const outputRate = pricing?.costOutputPerMTok;

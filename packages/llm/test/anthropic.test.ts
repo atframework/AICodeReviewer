@@ -48,7 +48,7 @@ describe("createAnthropicChatClient", () => {
     expect(result.usage).toEqual({ promptTokens: 10, completionTokens: 6 });
   });
 
-  it("extracts cache read and cache creation tokens, folding cache reads into prompt tokens", async () => {
+  it("extracts cache read and cache creation tokens into total prompt tokens", async () => {
     const client = createAnthropicChatClient({
       fetch: async () =>
         jsonResponse({
@@ -69,7 +69,7 @@ describe("createAnthropicChatClient", () => {
     });
 
     expect(result.usage).toEqual({
-      promptTokens: 6000,
+      promptTokens: 8000,
       completionTokens: 50,
       cachedPromptTokens: 5000,
       cacheCreationTokens: 2000,

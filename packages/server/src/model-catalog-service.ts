@@ -98,6 +98,12 @@ interface StoredRedisModelCatalogSourceMeta {
 	readonly etag?: string;
 }
 
+interface StoredRedisModelCatalogModelIndex {
+	readonly modelId: string;
+	readonly catalogIds: readonly string[];
+	readonly updatedAt: string;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -121,6 +127,10 @@ function decodeRedisKeyPart(value: string): string | undefined {
 
 function redisEntryKey(namespace: string, catalogId: string): string {
 	return `${namespace}entry:${encodeRedisKeyPart(catalogId)}`;
+}
+
+function redisModelKey(namespace: string, modelId: string): string {
+	return `${namespace}model:${encodeRedisKeyPart(modelId)}`;
 }
 
 function redisSourceKey(namespace: string, sourceUrl: string): string {
@@ -297,8 +307,12 @@ export async function createRedisModelCatalogBackend(options: RedisModelCatalogB
 		upsertMany(records: readonly ModelCatalogEntry[], source: CatalogSource): void {
 			if (records.length === 0) return;
 			const fetchedAt = new Date().toISOString();
+			const affectedModelIds = new Set<string>();
 			for (const entry of records) {
+				const previous = entries.get(entry.catalogId);
+				if (previous) affectedModelIds.add(previous.modelId);
 				cacheEntry(entry, source);
+				affectedModelIds.add(entry.modelId);
 				const stored: StoredRedisModelCatalogEntry = {
 					catalogId: entry.catalogId,
 					providerId: entry.providerId,
@@ -308,6 +322,14 @@ export async function createRedisModelCatalogBackend(options: RedisModelCatalogB
 					fetchedAt,
 				};
 				rememberWrite(client.set(redisEntryKey(namespace, entry.catalogId), JSON.stringify(stored)));
+			}
+			for (const modelId of affectedModelIds) {
+				const stored: StoredRedisModelCatalogModelIndex = {
+					modelId,
+					catalogIds: [...(modelIndex.get(modelId) ?? [])].sort(),
+					updatedAt: fetchedAt,
+				};
+				rememberWrite(client.set(redisModelKey(namespace, modelId), JSON.stringify(stored)));
 			}
 		},
 		getSourceMeta(sourceUrl: string): ModelCatalogSourceMetaView | undefined {

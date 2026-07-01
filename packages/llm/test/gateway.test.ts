@@ -466,6 +466,46 @@ describe("createResilientChatClient", () => {
 		expect(output.estimatedCostUsd).toBeCloseTo(14, 4);
 	});
 
+	it("lets fallback provider cache pricing override modelPricing map", async () => {
+		const primaryError = new LlmProviderError("fail", { status: 500 });
+		const fallbackResult: ChatCompletionResult = {
+			providerId: "anthropic-prod",
+			modelId: "claude-test",
+			content: "ok",
+			usage: { promptTokens: 2_000_000, completionTokens: 0, cachedPromptTokens: 1_000_000 },
+			raw: {},
+		};
+
+		const gateway = createResilientChatClient(
+			makeOptions({
+				providers: [
+					{ id: "openai-prod", kind: "openai_compatible" },
+					{
+						id: "anthropic-prod",
+						kind: "openai_compatible",
+						costInputPerMTok: 4,
+						costOutputPerMTok: 20,
+						costCacheReadPerMTok: 0.4,
+					},
+				],
+				clientFactory: (model: ModelSpec) =>
+					model.providerId === "openai-prod" ? makeFailingClient(primaryError) : makeClient(fallbackResult),
+				modelPricing: {
+					"anthropic-prod/claude-test": {
+						costInputPerMTok: 3,
+						costOutputPerMTok: 15,
+						costCacheReadPerMTok: 1.3,
+					},
+				},
+			}),
+		);
+
+		const output = await gateway.complete({ model: baseModel, messages: [] });
+		// Explicit provider cache pricing wins: 1M uncached * $4/M + 1M cached * $0.4/M = $4.4.
+		expect(output.fallbackCount).toBe(1);
+		expect(output.estimatedCostUsd).toBeCloseTo(4.4, 4);
+	});
+
 	it("bills cached prompt tokens at the cache read rate", async () => {
 		const result: ChatCompletionResult = {
 			providerId: "openai-prod",
@@ -497,7 +537,7 @@ describe("createResilientChatClient", () => {
 			providerId: "anthropic-prod",
 			modelId: "claude-test",
 			content: "ok",
-			usage: { promptTokens: 500_000, completionTokens: 100_000, cacheCreationTokens: 1_000_000 },
+			usage: { promptTokens: 1_500_000, completionTokens: 100_000, cacheCreationTokens: 1_000_000 },
 			raw: {},
 		};
 
