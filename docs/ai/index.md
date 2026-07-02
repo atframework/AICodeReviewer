@@ -10,6 +10,7 @@
 | 稳定架构与合同 | `architecture.md` | 详细设计，按 `Plan.md` 的章节编号保留稳定引用点 |
 | 已完成里程碑历史 | `milestones/*.md` | 完成项沉淀与交付面，避免反复塞回 `Plan.md` |
 | 稳定决策与取舍 | `decisions.md` | 归档 D1-D31 等长期有效决策 |
+| 用户文档站计划 | `documentation-site-plan.md` | M11 `docs/site` 文档站子工程选型、信息架构、构建与发布计划 |
 | AI 规则与技能来源 | `source-index.md` | 外部 Agent/Skills/MCP 文档核验记录、刷新触发条件与兼容性证据 |
 | Agent Skills 索引 | `../../.agents/skills/README.md` | 仓库技能目录地图；只按需读取具体 `SKILL.md` |
 | 评审提示词设计依据 | `../prompt-research.md` | M0.5 调研与默认 prompt 设计 rationale |
@@ -58,6 +59,7 @@
 | M8 | 基本完成 | `milestones/M8.md` |
 | M9 | 基本完成 | `milestones/M9.md` |
 | M10 | 基本完成 | `milestones/M10.md` |
+| M11 文档站子工程 | 规划中 | `documentation-site-plan.md` |
 | 本地优先队列 P0-P12 | 已完成 | `milestones/local-priority-queue.md` |
 
 ## 维护规则
