@@ -38,6 +38,20 @@ node packages/cli/dist/index.js serve \
   --port 8080
 ```
 
+## Eval Fixture Validation
+
+The root CI pipeline validates benchmark fixtures without requiring LLM secrets:
+
+```bash
+pnpm build
+pnpm eval:validate
+```
+
+`pnpm eval:validate` runs `aicr eval --validate-only`, which checks `eval/*.json`
+shape and expected-problem contracts only. A full `aicr eval` run still loads the
+configured review orchestration and calls the configured LLM, so keep that as a
+separate environment-specific benchmark job with the required secrets.
+
 ## Model metadata catalog (M10 — available, opt-in)
 
 AICR reads model parameters (context window, max output tokens, input/output/cache

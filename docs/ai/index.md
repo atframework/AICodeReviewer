@@ -55,10 +55,10 @@
 | M5 | 已完成 | `milestones/M5.md` |
 | M6 | 部分完成 | `milestones/M6.md` |
 | M7 | 已完成 | `milestones/M7.md` |
-| M8 | 大部分完成 | `milestones/M8.md` |
+| M8 | 基本完成 | `milestones/M8.md` |
 | M9 | 基本完成 | `milestones/M9.md` |
 | M10 | 基本完成 | `milestones/M10.md` |
-| 本地优先队列 P0-P11 | 已完成 | `milestones/local-priority-queue.md` |
+| 本地优先队列 P0-P12 | 已完成 | `milestones/local-priority-queue.md` |
 
 ## 维护规则
 

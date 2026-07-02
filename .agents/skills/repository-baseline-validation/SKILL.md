@@ -26,6 +26,7 @@ user-invocable: false
    - Tests
    - Markdownlint
    - Build
+   - Eval fixture validation (`aicr eval --validate-only`) after build
 4. Treat failures as baseline regressions; fix the root cause instead of broadening ignore patterns or weakening strict flags.
 5. Put temporary validation helpers, logs, and captured output under the repository `build/` directory (e.g. `build/tmp/`, `build/logs/`) instead of scattering scratch files in the repository root. Ensure the subdirectory exists before writing.
 6. If repository-wide conventions or AI-doc routing changed, update `../../../AGENTS.md`, `../../../docs/ai/AGENTS.repository-baseline.md`, `../../../docs/ai/index.md`, and any affected skills in the same change.
@@ -43,5 +44,6 @@ On Windows, PowerShell execution policy blocks `.ps1` scripts by default. Use `n
 | Test         | `node node_modules/vitest/vitest.mjs run`                                                                                   | `pnpm test`         |
 | Markdownlint | `node node_modules/markdownlint-cli2/markdownlint-cli2.mjs "**/*.md" "!**/node_modules/**" "!**/dist/**" "!**/coverage/**"` | `pnpm markdownlint` |
 | Build        | `cmd /c "pnpm build"`                                                                                                       | `pnpm build`        |
+| Eval fixtures | `node packages/cli/dist/index.js eval --validate-only`                                                                      | `pnpm eval:validate` |
 
 Always try the `node` direct invocation first if `pnpm` or `npx` fails with a PowerShell security error.

@@ -459,11 +459,70 @@ describe("runCli", () => {
       }
     });
 
+    it("validates eval fixtures without loading config or LLM", async () => {
+      const tempDir = await mkdtemp(join(tmpdir(), "aicr-cli-eval-validate-"));
+      try {
+        await mkdir(join(tempDir, "eval"));
+        await writeFile(
+          join(tempDir, "eval", "sample.json"),
+          JSON.stringify({
+            id: "sample",
+            description: "test",
+            changedFiles: ["a.ts"],
+            diff: "diff content",
+            expectedProblems: [
+              { file: "a.ts", line: 1, severity: "low", category: "style", messagePattern: "test" },
+            ],
+          }),
+          "utf8",
+        );
+        const stdout = new MemoryWriter();
+        const stderr = new MemoryWriter();
+        const exitCode = await runCli(["eval", "--validate-only"], { cwd: tempDir, stdout, stderr });
+
+        expect(exitCode).toBe(0);
+        expect(stderr.output).toBe("");
+        const parsed = JSON.parse(stdout.output) as { ok: boolean; fixtureCount: number; fixtures: string[] };
+        expect(parsed.ok).toBe(true);
+        expect(parsed.fixtureCount).toBe(1);
+        expect(parsed.fixtures).toEqual(["sample"]);
+      } finally {
+        await rm(tempDir, { recursive: true, force: true });
+      }
+    });
+
+    it("returns eval fixture validation errors before loading config", async () => {
+      const tempDir = await mkdtemp(join(tmpdir(), "aicr-cli-eval-invalid-"));
+      try {
+        await mkdir(join(tempDir, "eval"));
+        await writeFile(
+          join(tempDir, "eval", "bad.json"),
+          JSON.stringify({ id: "bad", description: "bad", changedFiles: [], diff: "" }),
+          "utf8",
+        );
+        const stdout = new MemoryWriter();
+        const stderr = new MemoryWriter();
+        const exitCode = await runCli(["eval", "--validate-only"], { cwd: tempDir, stdout, stderr });
+
+        expect(exitCode).toBe(1);
+        expect(stdout.output).toBe("");
+        expect(stderr.output).toContain("fixture validation failed");
+        expect(stderr.output).toContain("bad.json:$.changedFiles");
+        expect(stderr.output).toContain("bad.json:$.diff");
+      } finally {
+        await rm(tempDir, { recursive: true, force: true });
+      }
+    });
+
     it("returns an error when the config file does not exist", async () => {
       const tempDir = await mkdtemp(join(tmpdir(), "aicr-cli-eval-nocfg-"));
       try {
         await mkdir(join(tempDir, "eval"));
-        await writeFile(join(tempDir, "eval", "test.json"), JSON.stringify({ id: "t" }), "utf8");
+        await writeFile(
+          join(tempDir, "eval", "test.json"),
+          JSON.stringify({ id: "t", description: "test", changedFiles: ["a.ts"], diff: "diff content" }),
+          "utf8",
+        );
         const stdout = new MemoryWriter();
         const stderr = new MemoryWriter();
         const exitCode = await runCli(["eval"], { cwd: tempDir, stdout, stderr });
@@ -514,7 +573,7 @@ describe("runCli", () => {
         await mkdir(customEvalDir);
         await writeFile(
           join(customEvalDir, "sample.json"),
-          JSON.stringify({ id: "sample", description: "test", changedFiles: ["a.ts"], diff: "" }),
+          JSON.stringify({ id: "sample", description: "test", changedFiles: ["a.ts"], diff: "diff content" }),
           "utf8",
         );
         await writeWorkspaceFile(

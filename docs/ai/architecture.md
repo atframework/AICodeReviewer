@@ -445,6 +445,7 @@ AICR 采用**两层上下文管理**，两者互补：
 - 当 `dryRun` 为 `false` 时，run status 不能因为没有 publisher 而错误回落到 `dry_run`。
 - Prometheus histogram bucket、sum、count 必须按进程生命周期累计；只能把原始 duration 样本缓冲做滑动窗口裁剪。
 - `/metrics` 计数与 `runs/<run_id>/run.json` 快照应覆盖同步和异步触发的 review run，不能只记录后台模式。
+- `aicr eval --validate-only` 只校验 `eval/*.json` fixture 合同，不加载 config、bootstrap review orchestration 或调用 LLM；root `pnpm ci` 在 build 后运行该无密钥校验。完整 `aicr eval` benchmark 仍会加载配置并调用 LLM，属于需要 secrets / pipeline 权限的外部验收。
 
 #### 3.11.1 内置观测首页（M8 follow-up — 已交付）
 

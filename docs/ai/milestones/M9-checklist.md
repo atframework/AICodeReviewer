@@ -27,6 +27,8 @@ This checklist tracks the remaining M9 deliverables before the release can be co
 - [x] Prometheus metrics endpoint (`/metrics`) with counters and histograms.
 - [x] Run snapshot persistence (`runs/<run_id>/run.json`).
 - [x] Eval minimal framework (`@aicr/eval`).
+- [x] Eval fixture validation integrated into root CI (`pnpm eval:validate` runs
+  `aicr eval --validate-only` without LLM secrets).
 
 ### Agent & MCP (M5)
 
@@ -42,7 +44,8 @@ This checklist tracks the remaining M9 deliverables before the release can be co
 - [ ] GitLab real repository e2e verification.
 - [x] SVN VCS adapter implementation.
 - [x] Blame/annotate attribution foundation (`VcsAdapter.fetchAttribution` + git/P4/SVN implementations).
-- [ ] Multi-source context selector.
+- [ ] Dedicated multi-source context aggregation / selector (deferred until an
+  external repository-selector requirement is confirmed).
 
 ### Version & Packaging
 
@@ -69,14 +72,20 @@ This checklist tracks the remaining M9 deliverables before the release can be co
 
 ## Post-M9 Backlog
 
-The following items are intentionally deferred past M9:
+The following items are intentionally deferred past M9. `Plan.md` §8.4 is the
+current source of truth for this list.
 
 1. **GitLab real e2e**: Needs a real GitLab repository with webhook access.
 2. **SVN real e2e**: Basic adapter and inbound trigger contract exist; real SVN repository e2e and server-side hook deployment need external system access.
-3. **k8s_pod backend**: Requires Kubernetes cluster and `@kubernetes/client-node`.
-4. **firecracker backend**: Requires Firecracker binary and API socket.
-5. **Multi-source context selector**: Design complete; implementation deferred.
-6. **Reflection knowledge migration**: Light mode and thorough-mode minimal aggregation exist; repo convention learning and cross-workspace migration remain deferred pending scope/privacy decisions.
+3. **Dedicated multi-source context aggregation / selector**: Current
+   `fetch_more_context` behavior covers the primary repository; do not expand
+   until a concrete multi-repository selector requirement exists.
+4. **k8s_pod backend**: Requires Kubernetes cluster and `@kubernetes/client-node`.
+5. **firecracker backend**: Requires Firecracker binary and API socket.
+6. **CI real LLM eval benchmark**: Root CI now validates eval fixtures without
+   secrets; a full benchmark still needs CI secrets / pipeline permissions.
+7. **Version bump and git tag**: User decision; all packages are private and the
+   release artifact is the Docker image.
 
 ## Sign-off
 

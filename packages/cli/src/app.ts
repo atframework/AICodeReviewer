@@ -27,7 +27,13 @@ import {
   serveAsync,
   summarizeReviewOrchestrationForWebhook,
 } from "@aicr/server";
-import { runEval, type EvalExample, type EvalReviewOutput } from "@aicr/eval";
+import {
+  runEval,
+  validateEvalExample,
+  type EvalExample,
+  type EvalReviewOutput,
+  type EvalValidationIssue,
+} from "@aicr/eval";
 
 import { installFileLogTeeFromEnv } from "./log-file.js";
 
@@ -71,6 +77,7 @@ Options:
   --template-kind <kind>  Template kind: summary or problem (lint command)
   --channel-kind <kind>   Output channel kind for lint sample context
   --eval-dir <path>       Directory containing eval JSON fixtures (eval command)
+  --validate-only         Validate eval fixtures without loading config or LLM (eval command)
   --help, -h              Show this message
   --version, -v           Show version
 `;
@@ -149,6 +156,46 @@ function createSampleTemplateContext(kind: TemplateKind): TemplateContext {
   };
 }
 
+function formatJsonParseMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function loadEvalFixtures(
+  evalDir: string,
+  exampleFiles: readonly string[],
+): { examples: EvalExample[]; issues: EvalValidationIssue[] } {
+  const examples: EvalExample[] = [];
+  const issues: EvalValidationIssue[] = [];
+
+  for (const file of exampleFiles) {
+    const fixturePath = resolve(evalDir, file);
+    let raw: unknown;
+    try {
+      raw = JSON.parse(readFileSync(fixturePath, "utf8"));
+    } catch (error) {
+      issues.push({ path: file, message: `invalid JSON: ${formatJsonParseMessage(error)}` });
+      continue;
+    }
+
+    const validation = validateEvalExample(raw, { sourceName: file });
+    if (!validation.valid) {
+      issues.push(...validation.issues);
+      continue;
+    }
+
+    examples.push(raw as EvalExample);
+  }
+
+  return { examples, issues };
+}
+
+function writeEvalValidationFailure(stderr: Writer, issues: readonly EvalValidationIssue[]): void {
+  stderr.write("aicr eval: fixture validation failed\n");
+  for (const issue of issues) {
+    stderr.write(`- ${issue.path}: ${issue.message}\n`);
+  }
+}
+
 export async function runCli(
   argv: readonly string[],
   options: RunCliOptions = {},
@@ -195,6 +242,7 @@ export async function runCli(
           "template-kind": { type: "string" },
           "channel-kind": { type: "string" },
           "eval-dir": { type: "string" },
+          "validate-only": { type: "boolean" },
         },
       });
     } catch (error) {
@@ -640,10 +688,26 @@ export async function runCli(
         return 1;
       }
 
-      const exampleFiles = readdirSync(evalDir).filter((f) => f.endsWith(".json"));
+      const exampleFiles = readdirSync(evalDir).filter((f) => f.endsWith(".json")).sort();
       if (exampleFiles.length === 0) {
         stderr.write(`aicr eval: no .json example files found in ${evalDir}\n`);
         return 1;
+      }
+
+      const fixtureLoad = loadEvalFixtures(evalDir, exampleFiles);
+      if (fixtureLoad.issues.length > 0) {
+        writeEvalValidationFailure(stderr, fixtureLoad.issues);
+        return 1;
+      }
+
+      if (values["validate-only"]) {
+        stdout.write(`${JSON.stringify({
+          ok: true,
+          evalDir,
+          fixtureCount: fixtureLoad.examples.length,
+          fixtures: fixtureLoad.examples.map((example) => example.id),
+        }, null, 2)}\n`);
+        return 0;
       }
 
       const configPath = values.config
@@ -668,11 +732,7 @@ export async function runCli(
         return 1;
       }
 
-      const examples: EvalExample[] = [];
-      for (const file of exampleFiles) {
-        const raw = JSON.parse(readFileSync(resolve(evalDir, file), "utf8"));
-        examples.push(raw);
-      }
+      const examples = fixtureLoad.examples;
 
       const reviewFn = async (example: EvalExample): Promise<EvalReviewOutput> => {
         const reviewEvent = createReviewEvent({
