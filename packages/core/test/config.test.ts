@@ -980,6 +980,41 @@ describe("mergeConfigLayers", () => {
     expect(result.success).toBe(false);
   });
 
+  it("accepts agent.context_compaction configuration", () => {
+    const result = appConfigSchema.safeParse({
+      agent: {
+        default: "kilo",
+        context_compaction: {
+          auto: true,
+          threshold_percent: 80,
+          prune: true,
+        },
+      },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.agent.context_compaction.auto).toBe(true);
+      expect(result.data.agent.context_compaction.threshold_percent).toBe(80);
+      expect(result.data.agent.context_compaction.prune).toBe(true);
+    }
+  });
+
+  it("defaults agent.context_compaction to auto+prune enabled", () => {
+    const result = appConfigSchema.safeParse({});
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.agent.context_compaction.auto).toBe(true);
+      expect(result.data.agent.context_compaction.prune).toBe(true);
+    }
+  });
+
+  it("rejects agent.context_compaction.threshold_percent outside [1,100]", () => {
+    const result = appConfigSchema.safeParse({
+      agent: { context_compaction: { threshold_percent: 150 } },
+    });
+    expect(result.success).toBe(false);
+  });
+
   it("accepts queue workers, rate_limit, retry, and dead_letter from Plan §3.10", () => {
     const result = appConfigSchema.safeParse({
       queue: {

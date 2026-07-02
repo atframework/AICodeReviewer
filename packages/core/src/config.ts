@@ -316,6 +316,14 @@ const sandboxSchema = z
   })
   .strict();
 
+const contextCompactionSchema = z
+  .object({
+    auto: z.boolean().default(true),
+    threshold_percent: z.number().int().min(1).max(100).optional(),
+    prune: z.boolean().default(true),
+  })
+  .strict();
+
 const triageSchema = z
   .object({
     enabled: z.boolean().default(false),
@@ -642,6 +650,7 @@ const appConfigSchema = z
         timeout_seconds: z.number().int().positive().default(600),
         auto_approve: z.boolean().default(true),
         sandbox: sandboxSchema.default({ kind: "docker", engine: "auto" }),
+        context_compaction: contextCompactionSchema.default({ auto: true, prune: true }),
       })
       .strict()
       .default({
@@ -649,6 +658,7 @@ const appConfigSchema = z
         timeout_seconds: 600,
         auto_approve: true,
         sandbox: { kind: "docker", engine: "auto" },
+        context_compaction: { auto: true, prune: true },
       }),
     compression: compressionSchema,
     review: reviewSchema.default({

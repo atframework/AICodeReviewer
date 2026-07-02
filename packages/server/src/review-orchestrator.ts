@@ -14,7 +14,7 @@ import {
   type ReviewProvider,
   type ScrubMatch,
 } from "@aicr/core";
-import type { AgentAdapter } from "@aicr/agents";
+import type { AgentAdapter, AgentCompactionOptions } from "@aicr/agents";
 import { materializeRuntimeBundle } from "@aicr/agents";
 import type { RuntimeBundleInstruction, RuntimeBundleMcpServer, RuntimeBundleMcpTool, RuntimeBundleSkill } from "@aicr/agents";
 import {
@@ -108,6 +108,7 @@ export interface ServerReviewOrchestrationOptions {
   readonly sandbox?: SandboxBackend;
   readonly agentAdapter?: AgentAdapter;
   readonly agentTimeoutMs?: number;
+  readonly contextCompaction?: AgentCompactionOptions;
   readonly scrubSecrets?: boolean;
   readonly taskContextBuilder?: (
     reviewEvent: ReviewEvent,
@@ -304,6 +305,50 @@ function deriveWorkspaceRuntimeDirs(sourceRoot: string): { agentDir: string; tmp
   };
 }
 
+const CONTEXT_OVERFLOW_RE =
+  /context(?:_|\s|-)?(?:length|window|overflow)|exceeded model token limit|prompt is too long|too many tokens|ContextOverflowError/iu;
+
+export class AgentContextOverflowError extends Error {
+  readonly agentKind: string;
+
+  constructor(agentKind: string, innerMessage: string, details?: { contextWindow?: number; requestedTokens?: number }) {
+    const detailParts: string[] = [];
+    if (details?.contextWindow !== undefined) {
+      detailParts.push(`model limit: ${details.contextWindow}`);
+    }
+    if (details?.requestedTokens !== undefined) {
+      detailParts.push(`requested: ${details.requestedTokens}`);
+    }
+    const detailStr = detailParts.length > 0 ? ` (${detailParts.join(", ")})` : "";
+    super(
+      `Agent ${agentKind} hit a context window overflow${detailStr}: ${innerMessage}\n` +
+        `Actionable guidance: enable llm.model_catalog (or set context_window in llm.model_catalog.overrides) ` +
+        `so the agent knows the model's context limit and can auto-compact; configure the top-level ` +
+        `compression section so large diffs are summarized before review; or reduce the diff scope with ` +
+        `watch_path / include_cr_file / max_patch_bytes.`,
+    );
+    this.name = "AgentContextOverflowError";
+    this.agentKind = agentKind;
+  }
+}
+
+function detectContextOverflowDetails(message: string): { contextWindow?: number; requestedTokens?: number } {
+  const details: { contextWindow?: number; requestedTokens?: number } = {};
+  const limitMatch = /limit:?\s*(\d+)/iu.exec(message);
+  if (limitMatch?.[1]) {
+    details.contextWindow = Number.parseInt(limitMatch[1], 10);
+  }
+  const requestedMatch = /requested:?\s*(\d+)/iu.exec(message);
+  if (requestedMatch?.[1]) {
+    details.requestedTokens = Number.parseInt(requestedMatch[1], 10);
+  }
+  return details;
+}
+
+function isContextOverflowMessage(message: string): boolean {
+  return CONTEXT_OVERFLOW_RE.test(message);
+}
+
 function resolveEnvPlaceholders(envVars: Readonly<Record<string, string>>): Record<string, string> {
   const resolved: Record<string, string> = {};
 
@@ -324,6 +369,7 @@ interface AgentBundleContext {
   skills?: readonly RuntimeBundleSkill[];
   mcpTools?: readonly RuntimeBundleMcpTool[];
   mcpServers?: readonly RuntimeBundleMcpServer[];
+  compaction?: AgentCompactionOptions;
   runId?: string;
 }
 
@@ -421,6 +467,7 @@ async function runAgentReview(
       ...(bundleContext?.skills ? { skills: bundleContext.skills } : {}),
       ...(bundleContext?.mcpTools ? { mcpTools: bundleContext.mcpTools } : {}),
       ...(bundleContext?.mcpServers ? { mcpServers: bundleContext.mcpServers } : {}),
+      ...(bundleContext?.compaction ? { compaction: bundleContext.compaction } : {}),
       ...(bundleContext?.runId ? { runId: bundleContext.runId } : {}),
     });
     const command = agentAdapter.buildCommand(task, {
@@ -450,6 +497,13 @@ async function runAgentReview(
   }
 
   if (agentResult.exitCode !== 0) {
+    if (isContextOverflowMessage(agentResult.stderr)) {
+      throw new AgentContextOverflowError(
+        agentAdapter.kind,
+        agentResult.stderr,
+        detectContextOverflowDetails(agentResult.stderr),
+      );
+    }
     throw new Error(
       `Agent ${agentAdapter.kind} exited with code ${agentResult.exitCode ?? "unknown"}: ${agentResult.stderr}`,
     );
@@ -460,7 +514,20 @@ async function runAgentReview(
   let content: string;
   let kiloToolCalls: readonly ToolCallEnvelope[] = [];
   if (isKiloAgent) {
-    const extraction = extractKiloJsonStreamContent(rawStdout);
+    let extraction: KiloStreamExtractionResult;
+    try {
+      extraction = extractKiloJsonStreamContent(rawStdout);
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      if (isContextOverflowMessage(msg)) {
+        throw new AgentContextOverflowError(
+          agentAdapter.kind,
+          msg,
+          detectContextOverflowDetails(msg),
+        );
+      }
+      throw error;
+    }
     content = extraction.content;
     kiloToolCalls = extraction.toolCallEvents;
     if (Object.keys(extraction.eventCounts).length > 0 || kiloToolCalls.length > 0) {
@@ -1557,6 +1624,12 @@ export async function runReviewOrchestration(
     ? await options.memoryHintsResolver(context.reviewEvent.workspaceId)
     : options.memoryHints ?? [];
 
+  const effectiveMaxPromptTokens =
+    options.maxPromptTokens ??
+    (options.model.contextWindow
+      ? Math.max(4096, Math.floor(options.model.contextWindow * 0.6))
+      : undefined);
+
   const preparedPrompt = await prepareReviewPrompt({
     reviewEvent: context.reviewEvent,
     sourceRoot: scopedTree.rootDir,
@@ -1566,7 +1639,7 @@ export async function runReviewOrchestration(
     ...(resolvedForceSkills?.length ? { forceSkills: resolvedForceSkills } : {}),
     ...(options.operatorOverrides ? { operatorOverrides: options.operatorOverrides } : {}),
     ...(resolvedMemoryHints.length > 0 ? { memoryHints: resolvedMemoryHints } : {}),
-    ...(options.maxPromptTokens !== undefined ? { maxPromptTokens: options.maxPromptTokens } : {}),
+    ...(effectiveMaxPromptTokens !== undefined ? { maxPromptTokens: effectiveMaxPromptTokens } : {}),
   });
 
   const enableScrub = options.scrubSecrets !== false;
@@ -1625,6 +1698,7 @@ export async function runReviewOrchestration(
         },
       },
     ],
+    ...(options.contextCompaction ? { compaction: options.contextCompaction } : {}),
   };
   let completion = await requestReviewCompletion(scopedTree.rootDir, llmSystemPrompt, options, undefined, bundleContext);
   let lastAgentResult = completion.agentResult;

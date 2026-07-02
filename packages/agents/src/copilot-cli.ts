@@ -4,6 +4,7 @@ import type {
 	AgentAdapter,
 	AgentDetectResult,
 	AgentKind,
+	AgentMaterializeOptions,
 	AgentMaterializeResult,
 	AgentSpawnOptions,
 } from "./types.js";
@@ -60,6 +61,7 @@ export function createCopilotCliAdapter(options: CopilotCliAdapterOptions = {}):
 		async materializeConfig(
 			model: ModelSpec,
 			workingDir: string,
+			_options?: AgentMaterializeOptions,
 		): Promise<AgentMaterializeResult> {
 			const envVars: Record<string, string> = {};
 

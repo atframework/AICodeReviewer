@@ -555,6 +555,40 @@ queue:
   #   max_age_hours: 72   # Parked items older than this are pruned
 
 # ---------------------------------------------------------------------------
+# Diff compression (AICR-side)
+# ---------------------------------------------------------------------------
+# When the task context (diff + instructions) exceeds a token budget, AICR
+# summarizes the diff per-file using a "light" model, keeps only the highest-
+# risk hunks, and truncates to fit the model's context window. This runs
+# BEFORE the review model or agent sees the task, preventing context-overflow
+# failures on large PRs/changelists.
+#
+# Sensible defaults are derived from the model's context window when this
+# section is omitted, but tuning is recommended for production. To effectively
+# disable compression (restore the pre-default behavior), set trigger_tokens
+# to a value well above your model's context window.
+#   - trigger_tokens:      start compressing above this token estimate
+#                          (default: min(131072, 60% of context_window))
+#   - max_input_ratio:     also compress when task > ratio × context_window
+#                          (default 0.6)
+#   - keep_hunks_top_k:    number of highest-risk hunks to retain verbatim
+#                          (default 30)
+#   - context_lines:       context lines around retained hunks (default 5)
+#   - summarize_model_role: fallback_chain role used for per-file summaries
+#                          (default "light"; falls back to first chain entry)
+#   - per_model_overrides: per-model trigger_tokens overrides, keyed
+#                          "<providerKind>:<modelId>"
+#
+# compression:
+#   trigger_tokens: 131072
+#   max_input_ratio: 0.6
+#   keep_hunks_top_k: 30
+#   context_lines: 5
+#   summarize_model_role: light
+#   per_model_overrides:
+#     "anthropic:claude-sonnet-4.6": { trigger_tokens: 393216 }
+
+# ---------------------------------------------------------------------------
 # Agent & sandbox
 # ---------------------------------------------------------------------------
 # Kilo is the default supported agent path. Set agent.default to another
@@ -565,6 +599,19 @@ queue:
 # files with read-only commands or call aicr.fetch_more_context for a concrete
 # path; final summaries that only say the full repository is inaccessible are
 # treated as format/context failures and repaired by the orchestrator.
+#
+# Context auto-compaction: when enabled (default), AICR injects each agent's
+# native compaction settings so long-running reviews (large diffs, many tool
+# calls) summarize conversation history before hitting the model's context
+# window. This complements (does not replace) the top-level compression
+# diff-summarization settings. The agent MUST know the model's context window
+# for compaction to activate — enable llm.model_catalog or set context_window
+# in overrides so the limit is injected into the agent config.
+#   - Kilo:        compaction.auto / threshold_percent / prune in kilo.json
+#   - opencode:    compaction.auto / prune in opencode config
+#   - Roo:         autoCondenseContext / condenseContextPercentThreshold
+#   - Claude Code: auto-compacts by default (delegated, no config injected)
+#   - Copilot CLI: not applicable (no context management surface)
 agent:
   default: kilo
   # Hard cap on a SINGLE agent run. On timeout the sandbox kills the WHOLE
@@ -576,6 +623,10 @@ agent:
   # expected single pass; raise it for large PRs (production uses 600).
   timeout_seconds: 300
   auto_approve: true
+  context_compaction:
+    auto: true # enable auto-compaction in supported agent runtimes
+    # threshold_percent: 80 # compact at 80% of the model context window (Kilo)
+    prune: true # prune old tool outputs between turns (Kilo/opencode)
   sandbox:
     # For deploy.sh + AICR_ENABLE_CONTAINER_SANDBOX with a mounted Podman
     # socket, prefer kind: podman and engine: podman. Docker-compatible mode

@@ -8,6 +8,7 @@ import type {
 	AgentAdapter,
 	AgentDetectResult,
 	AgentKind,
+	AgentMaterializeOptions,
 	AgentMaterializeResult,
 	AgentSpawnOptions,
 } from "./types.js";
@@ -81,6 +82,19 @@ function buildOpencodeProviderConfig(model: ModelSpec): Record<string, unknown> 
 	return provider;
 }
 
+function buildOpencodeCompaction(options: AgentMaterializeOptions): Record<string, unknown> | undefined {
+	const compaction = options.compaction;
+	if (!compaction) return undefined;
+	if (!compaction.auto) {
+		return { auto: false };
+	}
+	const section: Record<string, unknown> = { auto: true };
+	if (compaction.prune !== undefined) {
+		section.prune = compaction.prune;
+	}
+	return section;
+}
+
 export function createOpencodeAdapter(options: OpencodeAdapterOptions = {}): AgentAdapter {
 	const binary = options.binary ?? OPENCODE_BINARY;
 
@@ -108,6 +122,7 @@ export function createOpencodeAdapter(options: OpencodeAdapterOptions = {}): Age
 		async materializeConfig(
 			model: ModelSpec,
 			workingDir: string,
+			options?: AgentMaterializeOptions,
 		): Promise<AgentMaterializeResult> {
 			await mkdir(workingDir, { recursive: true });
 
@@ -126,6 +141,11 @@ export function createOpencodeAdapter(options: OpencodeAdapterOptions = {}): Age
 					[model.modelId]: modelEntry,
 				},
 			};
+		}
+
+		const compactionSection = buildOpencodeCompaction(options ?? {});
+		if (compactionSection) {
+			configJson.compaction = compactionSection;
 		}
 
 			const configPath = join(opencodeDir, "config.json");

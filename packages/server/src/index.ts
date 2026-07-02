@@ -745,7 +745,10 @@ async function runTriggerProcessing(
       );
       reviewRun = summarizeReviewOrchestrationForWebhook(result);
     } catch (error) {
-      throw new TriggerProcessingError("review_orchestration_failed", toErrorMessage(error), 500);
+      const reason = error instanceof Error && error.name === "AgentContextOverflowError"
+        ? "context_overflow"
+        : "review_orchestration_failed";
+      throw new TriggerProcessingError(reason, toErrorMessage(error), 500);
     }
   }
 

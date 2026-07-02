@@ -4,6 +4,7 @@ import type {
 	AgentAdapter,
 	AgentDetectResult,
 	AgentKind,
+	AgentMaterializeOptions,
 	AgentMaterializeResult,
 	AgentSpawnOptions,
 } from "./types.js";
@@ -65,6 +66,7 @@ export function createClaudeCodeAdapter(options: ClaudeCodeAdapterOptions = {}):
 		async materializeConfig(
 			model: ModelSpec,
 			workingDir: string,
+			_options?: AgentMaterializeOptions,
 		): Promise<AgentMaterializeResult> {
 			const envVars: Record<string, string> = {};
 
