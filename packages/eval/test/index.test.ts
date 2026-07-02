@@ -1,10 +1,58 @@
 import { describe, expect, it } from "vitest";
 
-import { evalPackageName, runEval, type EvalExample, type EvalReviewOutput } from "../src/index.js";
+import { evalPackageName, runEval, validateEvalExample, type EvalExample, type EvalReviewOutput } from "../src/index.js";
 
 describe("@aicr/eval", () => {
   it("exports the package name", () => {
     expect(evalPackageName).toBe("@aicr/eval");
+  });
+
+  it("validates eval fixture contracts", () => {
+    const result = validateEvalExample({
+      id: "fixture-1",
+      description: "Detect a sample issue",
+      changedFiles: ["src/app.ts"],
+      diff: "diff --git a/src/app.ts b/src/app.ts",
+      expectedProblems: [
+        {
+          file: "src/app.ts",
+          line: 2,
+          severity: "high",
+          category: "correctness",
+          messagePattern: "sample",
+        },
+      ],
+      tags: ["baseline"],
+    });
+
+    expect(result.valid).toBe(true);
+    expect(result.issues).toEqual([]);
+  });
+
+  it("reports eval fixture contract issues with source paths", () => {
+    const result = validateEvalExample(
+      {
+        id: "fixture-2",
+        changedFiles: [],
+        diff: "",
+        expectedProblems: [{ file: "", line: 0, severity: "urgent", category: "" }],
+      },
+      { sourceName: "bad.json" },
+    );
+
+    expect(result.valid).toBe(false);
+    expect(result.issues).toEqual(
+      expect.arrayContaining([
+        { path: "bad.json:$.description", message: "must be a non-empty string" },
+        { path: "bad.json:$.changedFiles", message: "must include at least one entry" },
+        { path: "bad.json:$.diff", message: "must be a non-empty string" },
+        { path: "bad.json:$.expectedProblems[0].line", message: "must be a positive integer" },
+        {
+          path: "bad.json:$.expectedProblems[0].severity",
+          message: "must be one of info, low, medium, high, critical",
+        },
+      ]),
+    );
   });
 
   it("runs an eval with all expected problems found", async () => {

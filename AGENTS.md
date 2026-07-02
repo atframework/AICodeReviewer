@@ -38,8 +38,9 @@
   - Lint: `node node_modules/eslint/bin/eslint.js .`
   - Typecheck: `node node_modules/typescript/bin/tsc -b tsconfig.json --pretty false`
   - Build: Use `cmd /c "pnpm build"` or invoke the package build scripts directly.
+  - Eval fixture validation after build: `node packages/cli/dist/index.js eval --validate-only`
 - PowerShell treats backticks as escapes/line continuations; avoid inline `node -e` snippets that contain JavaScript template literals or complex quote nesting. Prefer native PowerShell, a short script under `build/tmp/`, or quote-free Node snippets.
-- If `pnpm` is available in the environment (e.g., CI Linux runner), prefer `pnpm` over the `node` workaround.
+- If `pnpm` is available in the environment (e.g., CI Linux runner), prefer `pnpm` over the `node` workaround; for eval fixture validation use `pnpm eval:validate` after `pnpm build`.
 - **Linux review/runtime shell baseline**: The deployed review image ships
   `git`, `git-lfs`, `subversion`, `p4`, `rg`, `fd`, `bat`, `jq`, `tree`,
   `yq`, `kubectl`, `helm`, `podman`, `buildah`, `skopeo`, `python3`/`pip`/`venv`,
