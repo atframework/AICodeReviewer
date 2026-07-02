@@ -11,7 +11,7 @@ import {
   type ReviewEvent,
 } from "@aicr/core";
 import { createQueueWorker, type QueueJobHandler, type QueueWorker } from "@aicr/core";
-import { createAgentAdapter, type AgentAdapter, type AgentKind } from "@aicr/agents";
+import { createAgentAdapter, type AgentAdapter } from "@aicr/agents";
 import {
   createChatClientFromModelSpec,
   createResilientChatClient,
@@ -536,7 +536,7 @@ export function createLlmClientFromModelSpec(model: ModelSpec): ChatCompletionCl
 
 export function resolveAgentAdapterFromConfig(config: AppConfig): AgentAdapter {
   const agentDefault = config.agent.default;
-  return createAgentAdapter({ kind: agentDefault as AgentKind });
+  return createAgentAdapter({ kind: agentDefault });
 }
 
 export async function createSandboxBackendFromConfig(config: AppConfig): Promise<SandboxBackend> {

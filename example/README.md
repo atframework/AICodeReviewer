@@ -72,7 +72,7 @@ How the lookup behaves:
 
 Per-tool config translation differs by agent: opencode resolves known providers
 from models.dev natively (custom OpenAI-compatible providers get `limit`/`cost`
-injected); Kilo Code and Roo Code always need `contextWindow` / `maxTokens` /
+injected); Kilo Code and Zoo Code always need `contextWindow` / `maxTokens` /
 `supportsImages` / pricing injected; Claude Code derives `ANTHROPIC_MAX_TOKENS`
 from the catalog and delegates the rest to its built-in Anthropic catalog;
 Copilot CLI uses its subscription's fixed catalog and gets no injection. Each
@@ -96,7 +96,7 @@ PRs and changelists:
    long-running reviews summarize their own history before hitting the limit:
    - **Kilo**: `compaction.{auto,threshold_percent,prune}` in `kilo.json`.
    - **opencode**: `compaction.{auto,prune}` in `.opencode/config.json`.
-   - **Roo**: `autoCondenseContext` / `condenseContextPercentThreshold`.
+   - **Zoo**: `autoCondenseContext` / `condenseContextPercentThreshold` in Zoo Code's current `.roo/settings.json` compatibility path.
    - **Claude Code**: auto-compacts by default (no config injected).
    - **Copilot CLI**: not applicable.
 

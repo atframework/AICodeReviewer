@@ -7,7 +7,7 @@ This document is the user-facing module for AICodeReviewer report output. Keep i
 - Agent CLIs do the code reasoning; AICR owns the report contract, validation, routing, and rendering.
 - Every formal review result must flow through AICR tools, never through free-form stdout.
 - The same reported problem must render cleanly as a VCS line comment, an issue entry, or an IM summary card.
-- The contract stays small and stable so Kilo Code, Roo Code, OpenCode, Claude Code, and other adapters can all emit the same shape.
+- The contract stays small and stable so Kilo Code, Zoo Code, OpenCode, Claude Code, and other adapters can all emit the same shape.
 
 ## Implemented MCP-style tools
 

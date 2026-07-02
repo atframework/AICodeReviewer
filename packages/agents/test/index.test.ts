@@ -12,7 +12,7 @@ import {
   createClaudeCodeAdapter,
   createCopilotCliAdapter,
   createOpencodeAdapter,
-  createRooAdapter,
+  createZooAdapter,
   createOpenAICompatibleTranslator,
   createAnthropicTranslator,
   createVertexAiTranslator,
@@ -39,9 +39,9 @@ describe("createAgentAdapter", () => {
     expect(adapter.kind).toBe("opencode");
   });
 
-  it("creates a roo adapter", () => {
-    const adapter = createAgentAdapter({ kind: "roo" });
-    expect(adapter.kind).toBe("roo");
+  it("creates a zoo adapter", () => {
+    const adapter = createAgentAdapter({ kind: "zoo" });
+    expect(adapter.kind).toBe("zoo");
   });
 
   it("creates a copilot-cli adapter", () => {
@@ -884,15 +884,15 @@ describe("createOpencodeAdapter", () => {
   });
 });
 
-describe("createRooAdapter", () => {
+describe("createZooAdapter", () => {
   it("creates adapter with default binary", () => {
-    const adapter = createRooAdapter();
-    expect(adapter.kind).toBe("roo");
+    const adapter = createZooAdapter();
+    expect(adapter.kind).toBe("zoo");
   });
 
   describe("buildCommand", () => {
-    it("builds command with model and cwd", () => {
-      const adapter = createRooAdapter();
+    it("builds Zoo stdin-stream command with model and workspace", () => {
+      const adapter = createZooAdapter();
       const cmd = adapter.buildCommand("review this", {
         workingDir: "/workspace",
         timeoutMs: 300_000,
@@ -904,18 +904,37 @@ describe("createRooAdapter", () => {
       });
 
       expect(cmd[0]).toBe("roo");
-      expect(cmd).toContain("run");
+      expect(cmd).toContain("--print");
+      expect(cmd).toContain("--stdin-prompt-stream");
+      expect(cmd).toContain("--workspace");
+      expect(cmd).toContain("/workspace");
       expect(cmd).toContain("--model");
       expect(cmd).toContain("gpt-4o");
+    });
+
+    it("serializes task stdin as Zoo stdin-stream NDJSON", () => {
+      const adapter = createZooAdapter();
+      const stdin = adapter.buildStdin?.("review\nthis", {
+        workingDir: "/workspace",
+        task: "review\nthis",
+      });
+
+      expect(stdin).toBeDefined();
+      const parsed = JSON.parse(stdin!.trim());
+      expect(parsed).toEqual({
+        command: "start",
+        requestId: "aicr-review",
+        prompt: "review\nthis",
+      });
     });
   });
 
   describe("materializeConfig", () => {
-    it("writes roo settings.json", async () => {
-      const tempDir = await mkdtemp(join(tmpdir(), "aicr-roo-adapter-"));
+    it("writes Zoo-compatible .roo settings.json", async () => {
+      const tempDir = await mkdtemp(join(tmpdir(), "aicr-zoo-adapter-"));
 
       try {
-        const adapter = createRooAdapter();
+        const adapter = createZooAdapter();
         const result = await adapter.materializeConfig(
           {
             providerKind: "openai_compatible",
@@ -942,7 +961,7 @@ describe("createRooAdapter", () => {
     });
 
     it("injects context condensing settings when compaction options are provided", async () => {
-      const adapter = createRooAdapter();
+      const adapter = createZooAdapter();
       const result = await adapter.materializeConfig(
         { providerKind: "openai_compatible", providerId: "p", modelId: "m" },
         "/tmp/test",
@@ -955,7 +974,7 @@ describe("createRooAdapter", () => {
     });
 
     it("omits context condensing settings when no compaction options are provided", async () => {
-      const adapter = createRooAdapter();
+      const adapter = createZooAdapter();
       const result = await adapter.materializeConfig(
         { providerKind: "openai_compatible", providerId: "p", modelId: "m" },
         "/tmp/test",
@@ -1372,8 +1391,8 @@ describe("model metadata injection (M10 catalog)", () => {
     expect(parsed.provider.p?.models?.m).toEqual({});
   });
 
-  it("roo injects openAiCustomModelInfo", async () => {
-    const adapter = createRooAdapter();
+  it("zoo injects openAiCustomModelInfo", async () => {
+    const adapter = createZooAdapter();
     const result = await adapter.materializeConfig(enrichedModel, "/tmp/test");
     const parsed = JSON.parse(result.configFiles.get(".roo/settings.json") ?? "{}");
     const info = parsed.apiConfiguration?.openAiCustomModelInfo;
@@ -1489,11 +1508,11 @@ describe("model metadata injection (M10 catalog)", () => {
     }
   });
 
-  it("runtime bundle manifest injects roo custom model info", async () => {
-    const tempDir = await mkdtemp(join(tmpdir(), "aicr-bundle-roo-"));
+  it("runtime bundle manifest injects zoo custom model info", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-bundle-zoo-"));
     try {
       const result = await materializeRuntimeBundle({
-        adapter: createRooAdapter(),
+        adapter: createZooAdapter(),
         model: enrichedModel,
         workingDir: tempDir,
       });

@@ -315,6 +315,7 @@ const sandboxSchema = z
     image: z.string().min(1).optional(),
   })
   .strict();
+const agentKindSchema = z.enum(["kilo", "opencode", "zoo", "copilot-cli", "claude-code"]);
 
 const contextCompactionSchema = z
   .object({
@@ -428,7 +429,7 @@ const workspaceInstanceSchema = z
       .optional(),
     agent: z
       .object({
-        default: z.string().min(1).optional(),
+        default: agentKindSchema.optional(),
       })
       .strict()
       .optional(),
@@ -646,7 +647,7 @@ const appConfigSchema = z
       .default({ kind: "memory" }),
     agent: z
       .object({
-        default: z.string().min(1).default("kilo"),
+        default: agentKindSchema.default("kilo"),
         timeout_seconds: z.number().int().positive().default(600),
         auto_approve: z.boolean().default(true),
         sandbox: sandboxSchema.default({ kind: "docker", engine: "auto" }),
@@ -688,7 +689,7 @@ const appConfigSchema = z
             review: reviewSchema.optional(),
             agent: z
               .object({
-                default: z.string().min(1).optional(),
+                default: agentKindSchema.optional(),
               })
               .strict()
               .optional(),

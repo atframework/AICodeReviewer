@@ -40,7 +40,7 @@ export function buildKiloModelInfo(model: ModelSpec): Record<string, unknown> | 
 	return buildGenericModelInfo(model, true);
 }
 
-export function buildRooCustomModelInfo(model: ModelSpec): Record<string, unknown> | undefined {
+export function buildZooCustomModelInfo(model: ModelSpec): Record<string, unknown> | undefined {
 	return buildGenericModelInfo(model, false);
 }
 

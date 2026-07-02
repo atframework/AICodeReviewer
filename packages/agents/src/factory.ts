@@ -3,7 +3,7 @@ import { createClaudeCodeAdapter } from "./claude-code.js";
 import { createCopilotCliAdapter } from "./copilot-cli.js";
 import { createKiloAdapter } from "./kilo.js";
 import { createOpencodeAdapter } from "./opencode.js";
-import { createRooAdapter } from "./roo.js";
+import { createZooAdapter } from "./zoo.js";
 
 export interface CreateAgentOptions {
   readonly kind: AgentKind;
@@ -22,9 +22,9 @@ export function createAgentAdapter(options: CreateAgentOptions): AgentAdapter {
       return createOpencodeAdapter(opencodeOpts);
     }
 
-    case "roo": {
-      const rooOpts = options.binary ? { binary: options.binary } : {};
-      return createRooAdapter(rooOpts);
+    case "zoo": {
+      const zooOpts = options.binary ? { binary: options.binary } : {};
+      return createZooAdapter(zooOpts);
     }
 
     case "copilot-cli": {
@@ -37,6 +37,9 @@ export function createAgentAdapter(options: CreateAgentOptions): AgentAdapter {
       return createClaudeCodeAdapter(claudeOpts);
     }
   }
+
+  const exhaustive: never = options.kind;
+  throw new RangeError(`Unsupported agent kind: ${String(exhaustive)}`);
 }
 
 export { createKiloAdapter } from "./kilo.js";
@@ -47,6 +50,6 @@ export { createCopilotCliAdapter } from "./copilot-cli.js";
 export type { CopilotCliAdapterOptions } from "./copilot-cli.js";
 export { createOpencodeAdapter } from "./opencode.js";
 export type { OpencodeAdapterOptions } from "./opencode.js";
-export { createRooAdapter } from "./roo.js";
-export type { RooAdapterOptions } from "./roo.js";
+export { createZooAdapter } from "./zoo.js";
+export type { ZooAdapterOptions } from "./zoo.js";
 export { createOpenAICompatibleTranslator } from "./model-translator.js";

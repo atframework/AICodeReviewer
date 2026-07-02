@@ -1,6 +1,6 @@
 import type { ModelSpec } from "@aicr/llm";
 
-export type AgentKind = "kilo" | "opencode" | "roo" | "copilot-cli" | "claude-code";
+export type AgentKind = "kilo" | "opencode" | "zoo" | "copilot-cli" | "claude-code";
 
 export interface AgentDetectResult {
   readonly available: boolean;
@@ -36,6 +36,7 @@ export interface AgentAdapter {
   readonly kind: AgentKind;
   detect(): Promise<AgentDetectResult>;
   buildCommand(task: string, options: AgentSpawnOptions): readonly string[];
+  buildStdin?(task: string, options: AgentSpawnOptions): string;
   materializeConfig(
     model: ModelSpec,
     workingDir: string,

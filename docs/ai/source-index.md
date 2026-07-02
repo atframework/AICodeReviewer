@@ -11,9 +11,9 @@ This file records verified external sources for repository AI-agent guidance, Ag
 
 ## Last research pass
 
-- `last_checked`: 2026-05-18
-- Scope: AGENTS.md, Agent Skills, VS Code Copilot customization, Claude Code, Kilo, Roo, Windsurf, OpenCode, OpenClaw, Hermes Agent, Google Antigravity, MCP, and skill registry/security guidance.
-- Result: Existing repository strategy is aligned: `AGENTS.md` remains canonical, `CLAUDE.md` stays a thin bridge, and repeatable procedures live under `.agents/skills/`.
+- `last_checked`: 2026-07-02
+- Scope: AGENTS.md, Agent Skills, VS Code Copilot customization, Claude Code, Kilo, Zoo Code migration/runtime compatibility, Windsurf, OpenCode, OpenClaw, Hermes Agent, Google Antigravity, MCP, and skill registry/security guidance.
+- Result: Existing repository strategy is aligned: `AGENTS.md` remains canonical, repeatable procedures live under `.agents/skills/`, and Zoo Code support should use `zoo` as the AICR adapter/config kind while preserving the current upstream `roo` CLI and `.roo`/`.roomodes` compatibility paths.
 
 ## Source records
 
@@ -96,20 +96,28 @@ This file records verified external sources for repository AI-agent guidance, Ag
 - `next_review`: 2026-07-18
 - `update_trigger`: Re-check when changing `CLAUDE.md`, adding `.claude/` assets, or relying on Claude-specific frontmatter or plugin behavior.
 
-### Kilo Code and Roo Code
+### Kilo Code and Zoo Code
 
 - Sources:
   - <https://kilo.ai/docs/customize/agents-md>
   - <https://kilo.ai/docs/customize/skills>
   - <https://kilo.ai/docs/customize/custom-instructions>
-  - <https://roocodeinc.github.io/Roo-Code/features/custom-instructions>
-  - <https://roocodeinc.github.io/Roo-Code/features/skills>
+  - <https://docs.zoocode.dev/>
+  - <https://docs.zoocode.dev/getting-started/installing>
+  - <https://docs.zoocode.dev/roo-to-zoo-migration>
+  - <https://marketplace.visualstudio.com/items?itemName=ZooCodeOrganization.zoo-code>
+  - <https://github.com/Zoo-Code-Org/Zoo-Code/tree/8d4ed32f0606a4c7f45aac959540508aeac0b0e2>
+  - <https://github.com/Zoo-Code-Org/Zoo-Code/blob/8d4ed32f0606a4c7f45aac959540508aeac0b0e2/apps/cli/src/index.ts>
+  - <https://github.com/Zoo-Code-Org/Zoo-Code/blob/8d4ed32f0606a4c7f45aac959540508aeac0b0e2/apps/cli/src/lib/storage/config-dir.ts>
+  - <https://github.com/Zoo-Code-Org/Zoo-Code/blob/8d4ed32f0606a4c7f45aac959540508aeac0b0e2/src/core/config/CustomModesManager.ts>
 - Verified guidance:
-  - Both tools support repository-level instruction files and Agent Skills-compatible workflows.
+  - Kilo Code supports repository-level instruction files and Agent Skills-compatible workflows.
+  - Zoo Code is the maintained VS Code extension published as `ZooCodeOrganization.zoo-code`; official migration guidance imports an exported settings file from the older tool into Zoo Code.
+  - Upstream Zoo Code source at `8d4ed32f0606a4c7f45aac959540508aeac0b0e2` currently keeps compatibility names: CLI program/bin is `roo`, user CLI config dir is `~/.roo`, and project rule/mode files use `.roomodes` plus `.roo/rules-*`. Do not invent `.zoo` paths or a `zoo` binary without re-checking upstream.
   - Keep shared instructions in the canonical repository layer and add tool-specific files only for narrow, necessary deltas.
-- `last_checked`: 2026-05-18
-- `next_review`: 2026-07-18
-- `update_trigger`: Re-check before adding `.roo/`, `.kilo/`, `.kilocode/`, Kilo/Roo path rules, or adapter-native skill materialization.
+- `last_checked`: 2026-07-02
+- `next_review`: 2026-10-02
+- `update_trigger`: Re-check before changing the `zoo` adapter kind, Zoo CLI binary, `.roo`/`.roomodes` compatibility paths, `.kilo`/`.kilocode` path rules, or adapter-native skill materialization.
 
 ### Windsurf
 
@@ -219,15 +227,15 @@ This file records verified external sources for repository AI-agent guidance, Ag
   - <https://models.dev/>
   - <https://github.com/anomalyco/models.dev>
   - <https://opencode.ai/docs/providers/>
-  - <https://roocodeinc.github.io/Roo-Code/providers/openai-compatible>
+  - <https://github.com/Zoo-Code-Org/Zoo-Code/blob/8d4ed32f0606a4c7f45aac959540508aeac0b0e2/packages/types/src/provider-settings.ts>
 - Verified guidance:
   - models.dev is an open-source (MIT) database of AI model specs/pricing/capabilities, maintained by the SST team and used internally by opencode. Data is stored as TOML and built to JSON.
   - HTTP API: `https://models.dev/api.json` (provider + serving view, keyed `<providerId>` → `models.<modelId>`), `https://models.dev/models.json` (provider-agnostic model facts), `https://models.dev/catalog.json` (both), `https://models.dev/logos/{provider}.svg`. Model IDs match the AI SDK identifiers.
   - Per-model fields include `name`, `family`, `attachment`, `reasoning`, `tool_call`, `structured_output`, `temperature`, `knowledge`, `release_date`, `last_updated`, `open_weights`, `license`, `links`, `weights`, `benchmarks`, `interleaved.field`, `cost.{input,output,reasoning,cache_read,cache_write,input_audio,output_audio}` (USD per **million** tokens), `limit.{context,input,output}`, `modalities.{input,output}`, and `status`. A stable search/web-search capability field was not verified in the current schema; treat search support as optional override-only until upstream documents it.
   - Cross-provider docs checked in this pass show additional capabilities that AICR should normalize when available or explicitly overridden: OpenAI exposes model tools such as functions, web search, file search, and computer use; Claude exposes max input/output tokens, capabilities objects, extended/adaptive thinking, provider-specific IDs and prompt caching; Gemini exposes function calling, Google Search grounding, URL context, file search, code execution, computer use, Live/audio, and model lifecycle labels; DeepSeek exposes thinking modes, JSON output, tool calls, cache-hit/cache-miss pricing, FIM/chat-prefix beta flags, and deprecated model aliases; GLM exposes thinking modes, function call, context caching, structured output, 128K/96K limits, and text modality; Kimi exposes multimodal input, tool use, JSON/schema response formats, prompt cache keys, thinking retention, and high-speed variants.
-  - Tool compatibility for config translation: opencode resolves known providers from models.dev automatically but requires manual `models.<id>.limit`/`cost` for custom `@ai-sdk/openai-compatible` providers, and honors `OPENCODE_MODELS_PATH` to point at a local `api.json`. Roo Code and Kilo Code (a Roo/Cline fork) do NOT read models.dev; their OpenAI-compatible custom providers need manual model info (Context Window, Max Output Tokens, Image Support, Computer Use, Input/Output Price, prompt cache). Claude Code and Copilot CLI rely on their own built-in model catalogs.
-- `last_checked`: 2026-06-16
-- `next_review`: 2026-09-16
+  - Tool compatibility for config translation: opencode resolves known providers from models.dev automatically but requires manual `models.<id>.limit`/`cost` for custom `@ai-sdk/openai-compatible` providers, and honors `OPENCODE_MODELS_PATH` to point at a local `api.json`. Zoo Code and Kilo Code do not have a verified native models.dev ingestion surface for custom OpenAI-compatible providers in the checked sources; AICR injects manual model info (Context Window, Max Output Tokens, Image Support, Computer Use, Input/Output Price, prompt cache) until upstream documents a native catalog path. Claude Code and Copilot CLI rely on their own built-in model catalogs.
+- `last_checked`: 2026-07-02
+- `next_review`: 2026-10-02
 - `update_trigger`: Re-check before changing the model-catalog fetch URL, the api.json field mapping into `ModelSpec`, the per-tool config-injection strategy, or the build-time fallback snapshot source.
 
 ## Repository decisions from this pass
@@ -235,5 +243,5 @@ This file records verified external sources for repository AI-agent guidance, Ag
 - Keep `AGENTS.md` as the only always-on canonical repository instruction file.
 - Keep `CLAUDE.md` as a thin bridge using `@AGENTS.md`; do not add a duplicated Claude prompt body.
 - Keep `.agents/skills/` as the canonical skill source and use `.agents/skills/README.md` only as a compact index.
-- Do not add `.github/copilot-instructions.md`, `.claude/`, `.roo/`, `.kilo/`, `.opencode/`, `.agents/rules/`, or other tool-private files unless a future task has a concrete tool-specific need.
+- Do not add `.github/copilot-instructions.md`, `.claude/`, Zoo Code `.roo/`, `.kilo/`, `.opencode/`, `.agents/rules/`, or other tool-private files unless a future task has a concrete tool-specific need.
 - Treat MCP and skill marketplace integrations as security-sensitive surfaces: record sources, use allowlists, keep secrets out of committed files, and prefer dry-run or pending-review flows for automated writes.

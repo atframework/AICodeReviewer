@@ -6,7 +6,7 @@ import type { ModelSpec } from "@aicr/llm";
 import {
 	buildKiloModelInfo,
 	buildOpencodeModelEntry,
-	buildRooCustomModelInfo,
+	buildZooCustomModelInfo,
 	isOpenCodeCustomProvider,
 } from "./model-metadata.js";
 import type { AgentAdapter, AgentCompactionOptions, AgentKind } from "./types.js";
@@ -119,8 +119,8 @@ function computeMetadataInjection(kind: AgentKind, model: ModelSpec): "injected"
   switch (kind) {
     case "kilo":
       return buildKiloModelInfo(model) ? "injected" : "delegated";
-    case "roo":
-      return buildRooCustomModelInfo(model) ? "injected" : "delegated";
+    case "zoo":
+      return buildZooCustomModelInfo(model) ? "injected" : "delegated";
     case "opencode":
       return isOpenCodeCustomProvider(model) && buildOpencodeModelEntry(model) ? "injected" : "delegated";
     case "claude-code":
@@ -138,7 +138,7 @@ function computeContextCompactionManifest(
 ): { readonly enabled: boolean; readonly mode: "injected" | "delegated" | "not_applicable" } {
   switch (kind) {
     case "kilo":
-    case "roo":
+    case "zoo":
     case "opencode":
       return { enabled: !!compaction?.auto, mode: "injected" };
     case "claude-code":

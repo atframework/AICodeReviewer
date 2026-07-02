@@ -39,7 +39,7 @@ llm:
   # input/output/cache pricing, and tool-call / vision / reasoning / structured
   # output flags) from models.dev so you do not have to hand-maintain them per
   # provider. These values feed compression thresholds, llm.budget cost
-  # accounting, and the model config passed to external agent CLIs (Kilo, Roo,
+  # accounting, and the model config passed to external agent CLIs (Kilo, Zoo,
   # opencode, ...). Disabled by default; set enabled: true to opt in.
   #
   # The refresh cache is stored in storage.database (SQLite by default) as a
@@ -592,7 +592,7 @@ queue:
 # Agent & sandbox
 # ---------------------------------------------------------------------------
 # Kilo is the default supported agent path. Set agent.default to another
-# AgentKind (opencode, roo, claude-code, copilot-cli) only when explicitly
+# AgentKind (opencode, zoo, claude-code, copilot-cli) only when explicitly
 # validating that adapter. Set to "native-llm" only for direct-LLM debugging.
 # Agent sandboxes expose scoped source read-only and AICR MCP tools. If an
 # agent needs more code to validate a changed line, it should inspect mounted
@@ -609,7 +609,7 @@ queue:
 # in overrides so the limit is injected into the agent config.
 #   - Kilo:        compaction.auto / threshold_percent / prune in kilo.json
 #   - opencode:    compaction.auto / prune in opencode config
-#   - Roo:         autoCondenseContext / condenseContextPercentThreshold
+#   - Zoo:         autoCondenseContext / condenseContextPercentThreshold in .roo/settings.json
 #   - Claude Code: auto-compacts by default (delegated, no config injected)
 #   - Copilot CLI: not applicable (no context management surface)
 agent:

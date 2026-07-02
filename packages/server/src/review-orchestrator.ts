@@ -14,7 +14,7 @@ import {
   type ReviewProvider,
   type ScrubMatch,
 } from "@aicr/core";
-import type { AgentAdapter, AgentCompactionOptions } from "@aicr/agents";
+import type { AgentAdapter, AgentCompactionOptions, AgentSpawnOptions } from "@aicr/agents";
 import { materializeRuntimeBundle } from "@aicr/agents";
 import type { RuntimeBundleInstruction, RuntimeBundleMcpServer, RuntimeBundleMcpTool, RuntimeBundleSkill } from "@aicr/agents";
 import {
@@ -470,13 +470,17 @@ async function runAgentReview(
       ...(bundleContext?.compaction ? { compaction: bundleContext.compaction } : {}),
       ...(bundleContext?.runId ? { runId: bundleContext.runId } : {}),
     });
-    const command = agentAdapter.buildCommand(task, {
+    const agentSpawnOptions: AgentSpawnOptions = {
       workingDir: agentWorkingDirForSandbox(sandbox, bundle.workingDir),
       ...(options.agentTimeoutMs !== undefined ? { timeoutMs: options.agentTimeoutMs } : {}),
       model: options.model,
       autoApprove: true,
       task,
-    });
+    };
+    const command = agentAdapter.buildCommand(task, agentSpawnOptions);
+    const stdin = agentAdapter.buildStdin
+      ? agentAdapter.buildStdin(task, agentSpawnOptions)
+      : task;
     const env = resolveEnvPlaceholders(bundle.envVars);
 
     await rm(join(materializedFs.agentDir, ".aicr-output-state.json"), { force: true });
@@ -486,7 +490,7 @@ async function runAgentReview(
       cwd: materializedFs.agentDir,
       ...(Object.keys(env).length > 0 ? { env } : {}),
       ...(options.agentTimeoutMs !== undefined ? { timeoutMs: options.agentTimeoutMs } : {}),
-      stdin: task,
+      stdin,
     });
   } finally {
     await sandbox.teardown();
@@ -2053,7 +2057,7 @@ export async function runReviewOrchestration(
       modelProvider: llmResult.providerId,
       modelId: llmResult.modelId,
       ...(agentResult ? {
-        agentKind: "kilo",
+        agentKind: options.agentAdapter?.kind ?? "unknown",
         agentExitCode: agentResult.exitCode,
         agentDurationMs: agentResult.durationMs,
       } : {}),
