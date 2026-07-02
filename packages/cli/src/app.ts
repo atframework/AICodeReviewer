@@ -369,6 +369,7 @@ export async function runCli(
             ...(orchestration.sandbox ? { sandbox: orchestration.sandbox } : {}),
             ...(orchestration.agentAdapter ? { agentAdapter: orchestration.agentAdapter } : {}),
             ...(orchestration.agentTimeoutMs !== undefined ? { agentTimeoutMs: orchestration.agentTimeoutMs } : {}),
+            ...(orchestration.contextCompaction ? { contextCompaction: orchestration.contextCompaction } : {}),
             ...(orchestration.compression ? { compression: orchestration.compression } : {}),
             ...(orchestration.summarizeModel ? { summarizeModel: orchestration.summarizeModel } : {}),
             ...(orchestration.summarizeClient ? { summarizeClient: orchestration.summarizeClient } : {}),

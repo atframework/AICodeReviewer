@@ -2148,6 +2148,19 @@ function toCompressionConfig(compression: AppConfig["compression"]): Compression
   };
 }
 
+function toDefaultCompressionConfig(model: ModelSpec): CompressionConfig {
+  const contextWindow = model.contextWindow;
+  const ratioLimit = contextWindow
+    ? Math.max(8192, Math.floor(contextWindow * 0.6))
+    : 131072;
+  return {
+    triggerTokens: Math.min(131072, ratioLimit),
+    maxInputRatio: 0.6,
+    keepHunksTopK: 30,
+    contextLines: 5,
+  };
+}
+
 function resolveSummarizeModelFromConfig(config: AppConfig): ModelSpec | undefined {
   const summarizeRole = config.compression?.summarize_model_role ?? "light";
   const providers = config.llm.providers;
@@ -2250,8 +2263,8 @@ export async function bootstrapServerApp(options: BootstrapServerOptions): Promi
     ...(gatewayModelPricing ? { modelPricing: gatewayModelPricing } : {}),
   });
 
-  const compressionConfig = toCompressionConfig(config.compression);
-  let summarizeModel = compressionConfig ? resolveSummarizeModelFromConfig(config) : undefined;
+  const compressionConfig = toCompressionConfig(config.compression) ?? toDefaultCompressionConfig(model);
+  let summarizeModel = resolveSummarizeModelFromConfig(config);
   if (catalogService && summarizeModel) {
     summarizeModel = catalogService.enrichModelSpec(summarizeModel);
   }
@@ -2310,6 +2323,15 @@ export async function bootstrapServerApp(options: BootstrapServerOptions): Promi
     sandbox,
     agentAdapter,
     agentTimeoutMs: config.agent.timeout_seconds * 1000,
+    contextCompaction: {
+      auto: config.agent.context_compaction?.auto ?? true,
+      ...(config.agent.context_compaction?.threshold_percent !== undefined
+        ? { thresholdPercent: config.agent.context_compaction.threshold_percent }
+        : {}),
+      ...(config.agent.context_compaction?.prune !== undefined
+        ? { prune: config.agent.context_compaction.prune }
+        : {}),
+    },
     ignoreLabelsResolver: (workspaceId) => {
       try {
         const workspace = resolveWorkspaceConfig(config, workspaceId);

@@ -384,6 +384,137 @@ describe("runReviewOrchestration", () => {
     }
   });
 
+  it("detects context overflow in kilo agent JSON stream and throws AgentContextOverflowError", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-agent-overflow-stream-"));
+
+    try {
+      await writeWorkspaceFile(tempDir, "src/app.ts", "const ok = true;\n");
+      const sandbox: SandboxBackend = {
+        kind: "native",
+        async materializeFs(layout) {
+          await mkdir(layout.agentDir, { recursive: true });
+          await mkdir(layout.tmpDir, { recursive: true });
+          return { agentDir: layout.agentDir, tmpDir: layout.tmpDir, mountSpecs: [] };
+        },
+        async spawn() {
+          return {
+            exitCode: 0,
+            stdout: JSON.stringify({
+              type: "error",
+              error: {
+                name: "ContextOverflowError",
+                data: {
+                  message:
+                    "Invalid request: Your request exceeded model token limit: 262144 (requested: 362661)",
+                },
+              },
+            }),
+            stderr: "",
+            timedOut: false,
+            durationMs: 10,
+          };
+        },
+        async teardown() {},
+      };
+      const agentAdapter: AgentAdapter = {
+        kind: "kilo",
+        async detect() {
+          return { available: true, binary: "kilo" };
+        },
+        buildCommand() {
+          return ["kilo", "run"];
+        },
+        async materializeConfig(_model, workingDir) {
+          return { configFiles: new Map(), envVars: {}, workingDir };
+        },
+      };
+      const llm: ChatCompletionClient = { async complete() { throw new Error("unused"); } };
+
+      await expect(
+        runReviewOrchestration(
+          {
+            reviewEvent: createReviewEventFixture(),
+            payload: {},
+            provider: "gitea",
+            eventName: "pull_request",
+          },
+          {
+            baseSystemPrompt: "{{TASK_CONTEXT}}",
+            sourceRootResolver: () => tempDir,
+            vcs: createVcs(tempDir),
+            llm,
+            model,
+            sandbox,
+            agentAdapter,
+          },
+        ),
+      ).rejects.toThrow(/context window overflow/iu);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("detects context overflow on non-zero agent exit", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-agent-overflow-exit-"));
+
+    try {
+      await writeWorkspaceFile(tempDir, "src/app.ts", "const ok = true;\n");
+      const sandbox: SandboxBackend = {
+        kind: "native",
+        async materializeFs(layout) {
+          await mkdir(layout.agentDir, { recursive: true });
+          await mkdir(layout.tmpDir, { recursive: true });
+          return { agentDir: layout.agentDir, tmpDir: layout.tmpDir, mountSpecs: [] };
+        },
+        async spawn() {
+          return {
+            exitCode: 1,
+            stdout: "",
+            stderr: "Error: context length exceeded (max 200000 tokens)",
+            timedOut: false,
+            durationMs: 10,
+          };
+        },
+        async teardown() {},
+      };
+      const agentAdapter: AgentAdapter = {
+        kind: "opencode",
+        async detect() {
+          return { available: true, binary: "opencode" };
+        },
+        buildCommand() {
+          return ["opencode", "run"];
+        },
+        async materializeConfig(_model, workingDir) {
+          return { configFiles: new Map(), envVars: {}, workingDir };
+        },
+      };
+      const llm: ChatCompletionClient = { async complete() { throw new Error("unused"); } };
+
+      await expect(
+        runReviewOrchestration(
+          {
+            reviewEvent: createReviewEventFixture(),
+            payload: {},
+            provider: "gitea",
+            eventName: "pull_request",
+          },
+          {
+            baseSystemPrompt: "{{TASK_CONTEXT}}",
+            sourceRootResolver: () => tempDir,
+            vcs: createVcs(tempDir),
+            llm,
+            model,
+            sandbox,
+            agentAdapter,
+          },
+        ),
+      ).rejects.toThrow(/context window overflow/iu);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("repairs free-form agent stdout before publishing summary-channel results", async () => {
     const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-agent-freeform-repair-"));
 

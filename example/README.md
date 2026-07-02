@@ -79,6 +79,35 @@ Copilot CLI uses its subscription's fixed catalog and gets no injection. Each
 runtime bundle `manifest.json` records whether metadata was `injected`,
 `delegated` to the tool's native catalog, or `not_applicable`.
 
+## Context management (diff compression + agent auto-compaction)
+
+AICR uses two complementary layers to prevent context-window overflows on large
+PRs and changelists:
+
+1. **Diff compression (AICR-side):** when the task context (diff + instructions)
+   exceeds a token budget, AICR summarizes the diff per-file with a "light"
+   model, keeps the highest-risk hunks, and truncates to fit the model's window.
+   Sensible defaults are derived from the model's context window when the
+   `compression` section is omitted; tune the commented `compression` block in
+   [config.yaml](config.yaml) for production. See `docs/ai/architecture.md` §3.3.1.
+
+2. **Agent auto-compaction (runtime-side):** `agent.context_compaction` (enabled
+   by default) injects each agent CLI's native conversation-compaction settings so
+   long-running reviews summarize their own history before hitting the limit:
+   - **Kilo**: `compaction.{auto,threshold_percent,prune}` in `kilo.json`.
+   - **opencode**: `compaction.{auto,prune}` in `.opencode/config.json`.
+   - **Roo**: `autoCondenseContext` / `condenseContextPercentThreshold`.
+   - **Claude Code**: auto-compacts by default (no config injected).
+   - **Copilot CLI**: not applicable.
+
+   **Important:** Kilo only auto-compacts for models that declare a `contextWindow`.
+   If the model catalog is disabled and no `context_window` override is set, Kilo
+   cannot track the context and will overflow. **Always enable `llm.model_catalog`
+   or set `context_window` in overrides.** If an overflow still occurs, AICR
+   throws `AgentContextOverflowError` with the model limit, requested tokens, and
+   actionable guidance instead of a generic failure. See
+   `docs/ai/architecture.md` §3.3.2.
+
 ## Runtime Image Baseline
 
 The deployment image intentionally uses `ubuntu:24.04` as the distro base and

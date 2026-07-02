@@ -9,7 +9,7 @@ import {
 	buildRooCustomModelInfo,
 	isOpenCodeCustomProvider,
 } from "./model-metadata.js";
-import type { AgentAdapter, AgentKind } from "./types.js";
+import type { AgentAdapter, AgentCompactionOptions, AgentKind } from "./types.js";
 
 export interface RuntimeBundleInstruction {
   readonly kind: string;
@@ -45,6 +45,7 @@ export interface RuntimeBundleInput {
   readonly mcpTools?: readonly RuntimeBundleMcpTool[];
   readonly mcpServers?: readonly RuntimeBundleMcpServer[];
   readonly extraEnvVars?: Readonly<Record<string, string>>;
+  readonly compaction?: AgentCompactionOptions;
   readonly runId?: string;
 }
 
@@ -71,6 +72,10 @@ export interface RuntimeBundleManifest {
   }[];
   readonly mcpTools: readonly string[];
   readonly envKeys: readonly string[];
+  readonly contextCompaction?: {
+    readonly enabled: boolean;
+    readonly mode: "injected" | "delegated" | "not_applicable";
+  };
 }
 
 export interface RuntimeBundleResult {
@@ -127,12 +132,32 @@ function computeMetadataInjection(kind: AgentKind, model: ModelSpec): "injected"
   }
 }
 
+function computeContextCompactionManifest(
+  kind: AgentKind,
+  compaction: AgentCompactionOptions | undefined,
+): { readonly enabled: boolean; readonly mode: "injected" | "delegated" | "not_applicable" } {
+  switch (kind) {
+    case "kilo":
+    case "roo":
+    case "opencode":
+      return { enabled: !!compaction?.auto, mode: "injected" };
+    case "claude-code":
+      return { enabled: true, mode: "delegated" };
+    case "copilot-cli":
+      return { enabled: false, mode: "not_applicable" };
+    default:
+      return { enabled: false, mode: "delegated" };
+  }
+}
+
 export async function materializeRuntimeBundle(
   input: RuntimeBundleInput,
 ): Promise<RuntimeBundleResult> {
   const { adapter, model, workingDir } = input;
 
-  const materialized = await adapter.materializeConfig(model, workingDir);
+  const materialized = await adapter.materializeConfig(model, workingDir, {
+    ...(input.compaction ? { compaction: input.compaction } : {}),
+  });
 
   const allConfigFiles = new Map(materialized.configFiles);
   const allEnvVars: Record<string, string> = { ...materialized.envVars };
@@ -213,6 +238,7 @@ export async function materializeRuntimeBundle(
     skills: manifestSkills,
     mcpTools: mcpToolNames,
     envKeys: Object.keys(allEnvVars),
+    contextCompaction: computeContextCompactionManifest(adapter.kind, input.compaction),
   };
 
   const manifestRelPath = MANIFEST_FILE;

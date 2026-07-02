@@ -22,11 +22,25 @@ export interface AgentSpawnResult {
   readonly durationMs: number;
 }
 
+export interface AgentCompactionOptions {
+  readonly auto: boolean;
+  readonly thresholdPercent?: number;
+  readonly prune?: boolean;
+}
+
+export interface AgentMaterializeOptions {
+  readonly compaction?: AgentCompactionOptions;
+}
+
 export interface AgentAdapter {
   readonly kind: AgentKind;
   detect(): Promise<AgentDetectResult>;
   buildCommand(task: string, options: AgentSpawnOptions): readonly string[];
-  materializeConfig(model: ModelSpec, workingDir: string): Promise<AgentMaterializeResult>;
+  materializeConfig(
+    model: ModelSpec,
+    workingDir: string,
+    options?: AgentMaterializeOptions,
+  ): Promise<AgentMaterializeResult>;
 }
 
 export interface AgentSpawnOptions {

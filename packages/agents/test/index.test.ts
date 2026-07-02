@@ -237,6 +237,41 @@ describe("createKiloAdapter", () => {
 
       expect(Object.keys(result.envVars)).toHaveLength(0);
     });
+
+    it("injects compaction config when context compaction options are provided", async () => {
+      const adapter = createKiloAdapter();
+      const result = await adapter.materializeConfig(
+        { providerKind: "openai_compatible", providerId: "p", modelId: "m" },
+        "/tmp/test",
+        { compaction: { auto: true, thresholdPercent: 80, prune: true } },
+      );
+
+      const parsed = JSON.parse(result.configFiles.get(".kilo/kilo.json") ?? "{}");
+      expect(parsed.compaction).toEqual({ auto: true, threshold_percent: 80, prune: true });
+    });
+
+    it("disables compaction when auto is false", async () => {
+      const adapter = createKiloAdapter();
+      const result = await adapter.materializeConfig(
+        { providerKind: "openai_compatible", providerId: "p", modelId: "m" },
+        "/tmp/test",
+        { compaction: { auto: false } },
+      );
+
+      const parsed = JSON.parse(result.configFiles.get(".kilo/kilo.json") ?? "{}");
+      expect(parsed.compaction).toEqual({ auto: false });
+    });
+
+    it("omits compaction section when no compaction options are provided", async () => {
+      const adapter = createKiloAdapter();
+      const result = await adapter.materializeConfig(
+        { providerKind: "openai_compatible", providerId: "p", modelId: "m" },
+        "/tmp/test",
+      );
+
+      const parsed = JSON.parse(result.configFiles.get(".kilo/kilo.json") ?? "{}");
+      expect(parsed.compaction).toBeUndefined();
+    });
   });
 });
 
@@ -822,6 +857,30 @@ describe("createOpencodeAdapter", () => {
         await rm(tempDir, { recursive: true, force: true });
       }
     });
+
+    it("injects compaction config when provided", async () => {
+      const adapter = createOpencodeAdapter();
+      const result = await adapter.materializeConfig(
+        { providerKind: "openai_compatible", providerId: "p", modelId: "m" },
+        "/tmp/test",
+        { compaction: { auto: true, prune: true } },
+      );
+
+      const parsed = JSON.parse(result.configFiles.get(".opencode/config.json") ?? "{}");
+      expect(parsed.compaction).toEqual({ auto: true, prune: true });
+    });
+
+    it("disables compaction when auto is false", async () => {
+      const adapter = createOpencodeAdapter();
+      const result = await adapter.materializeConfig(
+        { providerKind: "openai_compatible", providerId: "p", modelId: "m" },
+        "/tmp/test",
+        { compaction: { auto: false } },
+      );
+
+      const parsed = JSON.parse(result.configFiles.get(".opencode/config.json") ?? "{}");
+      expect(parsed.compaction).toEqual({ auto: false });
+    });
   });
 });
 
@@ -880,6 +939,30 @@ describe("createRooAdapter", () => {
       } finally {
         await rm(tempDir, { recursive: true, force: true });
       }
+    });
+
+    it("injects context condensing settings when compaction options are provided", async () => {
+      const adapter = createRooAdapter();
+      const result = await adapter.materializeConfig(
+        { providerKind: "openai_compatible", providerId: "p", modelId: "m" },
+        "/tmp/test",
+        { compaction: { auto: true, thresholdPercent: 75 } },
+      );
+
+      const parsed = JSON.parse(result.configFiles.get(".roo/settings.json") ?? "{}");
+      expect(parsed.autoCondenseContext).toBe(true);
+      expect(parsed.condenseContextPercentThreshold).toBe(75);
+    });
+
+    it("omits context condensing settings when no compaction options are provided", async () => {
+      const adapter = createRooAdapter();
+      const result = await adapter.materializeConfig(
+        { providerKind: "openai_compatible", providerId: "p", modelId: "m" },
+        "/tmp/test",
+      );
+
+      const parsed = JSON.parse(result.configFiles.get(".roo/settings.json") ?? "{}");
+      expect(parsed.autoCondenseContext).toBeUndefined();
     });
   });
 });
@@ -1081,6 +1164,66 @@ describe("materializeRuntimeBundle", () => {
       });
 
       expect(result.manifest.runId).toBeUndefined();
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("records contextCompaction in manifest for kilo with compaction enabled", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-bundle-compaction-"));
+
+    try {
+      const adapter = createKiloAdapter();
+      const result = await materializeRuntimeBundle({
+        adapter,
+        model: baseModel,
+        workingDir: tempDir,
+        compaction: { auto: true, thresholdPercent: 80, prune: true },
+      });
+
+      expect(result.manifest.contextCompaction).toEqual({ enabled: true, mode: "injected" });
+      const parsed = JSON.parse(result.configFiles.get(".kilo/kilo.json") ?? "{}");
+      expect(parsed.compaction?.auto).toBe(true);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("records delegated contextCompaction for claude-code", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-bundle-compaction-cc-"));
+
+    try {
+      const adapter = createClaudeCodeAdapter();
+      const result = await materializeRuntimeBundle({
+        adapter,
+        model: {
+          providerKind: "anthropic",
+          providerId: "anthropic",
+          modelId: "claude-sonnet-4",
+        },
+        workingDir: tempDir,
+        compaction: { auto: true },
+      });
+
+      expect(result.manifest.contextCompaction).toEqual({ enabled: true, mode: "delegated" });
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("records not_applicable contextCompaction for copilot-cli", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-bundle-compaction-cp-"));
+
+    try {
+      const adapter = createCopilotCliAdapter();
+      const result = await materializeRuntimeBundle({
+        adapter,
+        model: baseModel,
+        workingDir: tempDir,
+        compaction: { auto: true },
+      });
+
+      expect(result.manifest.contextCompaction).toEqual({ enabled: false, mode: "not_applicable" });
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }

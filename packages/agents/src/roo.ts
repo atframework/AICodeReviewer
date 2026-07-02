@@ -8,6 +8,7 @@ import type {
 	AgentAdapter,
 	AgentDetectResult,
 	AgentKind,
+	AgentMaterializeOptions,
 	AgentMaterializeResult,
 	AgentSpawnOptions,
 } from "./types.js";
@@ -66,6 +67,7 @@ export function createRooAdapter(options: RooAdapterOptions = {}): AgentAdapter 
 		async materializeConfig(
 			model: ModelSpec,
 			workingDir: string,
+			options?: AgentMaterializeOptions,
 		): Promise<AgentMaterializeResult> {
 			await mkdir(workingDir, { recursive: true });
 
@@ -95,9 +97,19 @@ export function createRooAdapter(options: RooAdapterOptions = {}): AgentAdapter 
 			apiConfiguration.openAiCustomModelInfo = customModelInfo;
 		}
 
-		const settingsJson = { apiConfiguration };
+		const settingsJson: Record<string, unknown> = { apiConfiguration };
+
+		const compaction = options?.compaction;
+		if (compaction) {
+			settingsJson.autoCondenseContext = compaction.auto;
+			if (compaction.thresholdPercent !== undefined) {
+				settingsJson.condenseContextPercentThreshold = compaction.thresholdPercent;
+			}
+		}
+
+		const settingsJsonContent = JSON.stringify(settingsJson, null, 2);
 			const configPath = join(rooDir, "settings.json");
-			await writeFile(configPath, JSON.stringify(settingsJson, null, 2), "utf8");
+			await writeFile(configPath, settingsJsonContent, "utf8");
 
 			const envVars: Record<string, string> = {};
 			if (model.apiKeyEnv) {
@@ -106,7 +118,7 @@ export function createRooAdapter(options: RooAdapterOptions = {}): AgentAdapter 
 
 			return {
 				configFiles: new Map([
-					[".roo/settings.json", JSON.stringify(settingsJson, null, 2)],
+					[".roo/settings.json", settingsJsonContent],
 				]),
 				envVars,
 				workingDir,

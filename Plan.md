@@ -101,11 +101,14 @@
   接入该可选 VCS 能力，作为只读归因上下文回灌后续 review pass。
 - 详细合同：`docs/ai/architecture.md` §3.2、§3.9.2。
 
-### 3.3 Compression
+### 3.3 Compression 与上下文管理
 
 - 压缩是 `summarize -> review` 两阶段，而不是简单截断 diff。
-- 触发由 token 阈值和输入占比共同控制。
-- 大 diff 稳定性优先于“全量上下文强行塞进模型”。
+- 触发由 token 阈值和输入占比共同控制；未配置时从 review model 的 contextWindow 派生默认阈值。
+- 大 diff 稳定性优先于"全量上下文强行塞进模型"。
+- **两层互补**：AICR 侧 diff 压缩（§3.3.1）+ agent 运行时上下文自动压缩（§3.3.2）。
+- `agent.context_compaction`（默认启用）向 Kilo / opencode / Roo 注入原生 auto-compaction 设置；
+  Claude Code 默认已压缩；上下文溢出检测为 `AgentContextOverflowError` 并携带可操作修复建议。
 - 详细合同：`docs/ai/architecture.md` §3.3。
 
 ### 3.4 Secrets Scrubber

@@ -8,6 +8,7 @@ import type {
   AgentAdapter,
   AgentDetectResult,
   AgentKind,
+  AgentMaterializeOptions,
   AgentMaterializeResult,
   AgentSpawnOptions,
 } from "./types.js";
@@ -76,15 +77,35 @@ function buildKiloProviderOptions(model: ModelSpec): Record<string, unknown> {
   return options;
 }
 
-function buildKiloJsonConfig(model: ModelSpec, mcpServers?: Readonly<Record<string, unknown>>): Record<string, unknown> {
-  const options = buildKiloProviderOptions(model);
+function buildKiloCompaction(options: AgentMaterializeOptions): Record<string, unknown> | undefined {
+  const compaction = options.compaction;
+  if (!compaction) return undefined;
+  if (!compaction.auto) {
+    return { auto: false };
+  }
+  const section: Record<string, unknown> = { auto: true };
+  if (compaction.thresholdPercent !== undefined) {
+    section.threshold_percent = compaction.thresholdPercent;
+  }
+  if (compaction.prune !== undefined) {
+    section.prune = compaction.prune;
+  }
+  return section;
+}
+
+function buildKiloJsonConfig(
+  model: ModelSpec,
+  mcpServers?: Readonly<Record<string, unknown>>,
+  options?: AgentMaterializeOptions,
+): Record<string, unknown> {
+  const providerOptions = buildKiloProviderOptions(model);
   const modelInfo = buildKiloModelInfo(model);
   const models: Record<string, unknown> = {
     [model.modelId]: modelInfo ?? {},
   };
 
   const providerEntry: Record<string, unknown> = {
-    options,
+    options: providerOptions,
     models,
   };
 
@@ -93,6 +114,11 @@ function buildKiloJsonConfig(model: ModelSpec, mcpServers?: Readonly<Record<stri
       [model.providerId]: providerEntry,
     },
   };
+
+  const compactionSection = buildKiloCompaction(options ?? {});
+  if (compactionSection) {
+    config.compaction = compactionSection;
+  }
 
   if (mcpServers && Object.keys(mcpServers).length > 0) {
     config.mcp = { ...mcpServers };
@@ -141,13 +167,14 @@ export function createKiloAdapter(options: KiloAdapterOptions = {}): AgentAdapte
     async materializeConfig(
       model: ModelSpec,
       workingDir: string,
+      options?: AgentMaterializeOptions,
     ): Promise<AgentMaterializeResult> {
       await mkdir(workingDir, { recursive: true });
 
       const kiloDir = join(workingDir, ".kilo");
       await mkdir(kiloDir, { recursive: true });
 
-      const kiloJsonConfig = buildKiloJsonConfig(model);
+      const kiloJsonConfig = buildKiloJsonConfig(model, undefined, options);
       const kiloJsonContent = JSON.stringify(kiloJsonConfig, null, 2);
 
       const configPath = join(kiloDir, "kilo.json");

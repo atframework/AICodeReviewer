@@ -101,13 +101,40 @@
     `VcsAdapter.fetchAttribution`，再把结构化归因结果回灌 follow-up pass。没有 attribution backend
     的 adapter 返回 `not_found`，不得让模型猜测作者。
 
-### 3.3 Compression
+### 3.3 Compression 与上下文管理
+
+AICR 采用**两层上下文管理**，两者互补：
+
+#### 3.3.1 AICR 侧 Diff 压缩（review model 看到之前）
 
 - 压缩是 `summarize -> review` 两阶段，而不是简单截断 diff。
 - 触发阈值由 token 预算与输入占比共同决定。
+- 当 `compression` 配置缺失时，bootstrap 从 review model 的 `contextWindow` 派生默认阈值
+  （`min(131072, floor(contextWindow × 0.6))`），确保大型 PR/changelist 不会因为未配置而溢出。
 - `estimateTokens` 需要正确处理 CJK 字符，避免低估上下文成本。
 - 压缩输出必须保留文件级摘要、关键 hunk 与足够的定位上下文。
 - 是否压缩、选择哪些 hunk、使用哪个 summarize model 都应可配置。
+
+#### 3.3.2 Agent 运行时上下文自动压缩（conversation 级）
+
+- agent CLI（Kilo / opencode / Roo / Claude Code）在 review 期间通过工具调用、文件读取
+  等持续积累对话上下文。如果超出 model context window，provider 返回 `ContextOverflowError`
+  导致整个 review 失败。
+- `agent.context_compaction`（默认启用）将各 agent 原生的 auto-compaction 设置注入生成的配置：
+  - **Kilo**：`kilo.json` 的 `compaction.auto` / `threshold_percent` / `prune`。
+    Kilo 只为**声明了 contextWindow 的 model** 跟踪并自动压缩，因此必须启用
+    `llm.model_catalog`（或在 `overrides` 中设置 `context_window`）让 contextWindow 注入 model 信息。
+  - **opencode**：`compaction.auto` / `prune`。
+  - **Roo**：`autoCondenseContext` / `condenseContextPercentThreshold`。
+  - **Claude Code**：默认自动压缩（delegated，不注入额外配置）。
+  - **Copilot CLI**：无上下文管理面（not_applicable）。
+- manifest 记录 `contextCompaction.{enabled,mode}`（`injected` / `delegated` / `not_applicable`）。
+- 当 agent 运行仍然触发上下文溢出（例如首轮 task 本身已超限），orchestrator 检测到
+  `ContextOverflowError` / `context length exceeded` 模式后抛出 `AgentContextOverflowError`，
+  携带 model limit、requested tokens 与可操作修复建议（启用 model_catalog / 配置 compression /
+  缩小 diff scope），而不是裸 `review_orchestration_failed`。
+- built-in（native-llm）路径由 orchestrator 根据 `contextWindow × 0.6` 计算 `maxPromptTokens`，
+  让 prompt-manager 在预算内裁剪 memory hints / skills / instructions；diff 本身由 §3.3.1 压缩。
 
 ### 3.4 Secrets Scrubber
 
@@ -360,6 +387,7 @@
   - `review.log_thinking`
   - `review.reflection.memory`
   - `workspaces.defaults.agent`
+  - `agent.context_compaction`（auto / threshold_percent / prune，见 §3.3.2）
   - `workspaces.defaults.prompt.base_system_prompt_file`
   - `workspaces.defaults.prompt.force_skills`
   - `outputs.channels[].mention_fallback`
