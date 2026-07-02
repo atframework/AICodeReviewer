@@ -6,7 +6,7 @@ This directory is the repository's canonical Agent Skills surface. Agents should
 
 - Treat `.agents/skills/<name>/SKILL.md` as the source of truth for repeatable workflows.
 - Keep `AGENTS.md` for stable always-on rules; keep detailed procedures in skills.
-- Do not copy full skill bodies into `CLAUDE.md`, `.github/copilot-instructions.md`, `.roo/`, `.kilo/`, `opencode.json`, or other tool-private files.
+- Do not copy full skill bodies into `CLAUDE.md`, `.github/copilot-instructions.md`, Zoo Code `.roo/`, `.kilo/`, `opencode.json`, or other tool-private files.
 - If a tool needs an adapter-native copy, generate or materialize it from this directory instead of committing a duplicate.
 - Before changing skill metadata, verify the current Agent Skills conventions and update `docs/ai/source-index.md` when compatibility claims change.
 

@@ -22,12 +22,12 @@ export { createCopilotCliAdapter } from "./copilot-cli.js";
 export type { CopilotCliAdapterOptions } from "./copilot-cli.js";
 export { createOpencodeAdapter } from "./opencode.js";
 export type { OpencodeAdapterOptions } from "./opencode.js";
-export { createRooAdapter } from "./roo.js";
-export type { RooAdapterOptions } from "./roo.js";
+export { createZooAdapter } from "./zoo.js";
+export type { ZooAdapterOptions } from "./zoo.js";
 export {
   buildKiloModelInfo,
   buildOpencodeModelEntry,
-  buildRooCustomModelInfo,
+  buildZooCustomModelInfo,
   isOpenCodeCustomProvider,
 } from "./model-metadata.js";
 export { createOpenAICompatibleTranslator, createAnthropicTranslator, createVertexAiTranslator, createBedrockTranslator } from "./model-translator.js";

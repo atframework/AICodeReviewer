@@ -112,6 +112,7 @@ export const ALLOWED_COMMANDS: ReadonlySet<string> = new Set([
   "npm",
   "pnpm",
   "kilo",
+  "zoo",
   "claude",
   "copilot",
   "roo",

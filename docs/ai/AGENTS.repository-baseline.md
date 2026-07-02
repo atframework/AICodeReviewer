@@ -20,7 +20,7 @@
 - If a task needs temporary helpers or captured output during repository maintenance, place them under `build/` subdirectories (`build/tmp/`, `build/logs/`) instead of creating root-level scratch files.
 - Keep AI-facing assets concise: stable repository rules belong in `AGENTS.md`, repeatable workflows belong in `.agents/skills/`, and historical stage detail belongs in `docs/ai/milestones/`.
 - When updating AI-facing assets, merge with existing guidance instead of appending near-duplicate sections.
-- Keep tool-private AI files as tiny bridges or scoped deltas; do not copy the full `AGENTS.md` body into Copilot, Claude, Kilo, Roo, opencode, or similar client-specific locations.
+- Keep tool-private AI files as tiny bridges or scoped deltas; do not copy the full `AGENTS.md` body into Copilot, Claude, Kilo, Zoo, opencode, or similar client-specific locations.
 - When updating the default review prompt, keep `docs/prompt-research.md`, `docs/ai/milestones/M0.5.md`, `prompts/system/code-reviewer.system.md`, and the relevant `Plan.md` roadmap summary in sync so future agents see both rationale and current contract.
 - When changing runtime shell-tool guidance or the deployment image baseline,
   sync `AGENTS.md`, `prompts/system/code-reviewer.system.md`,

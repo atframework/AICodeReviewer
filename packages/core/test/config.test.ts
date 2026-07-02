@@ -312,6 +312,24 @@ describe("mergeConfigLayers", () => {
     expect(result.success).toBe(false);
   });
 
+  it("accepts zoo as an agent default", () => {
+    const result = appConfigSchema.safeParse({
+      agent: { default: "zoo" },
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.agent.default).toBe("zoo");
+    }
+  });
+
+  it("rejects the removed legacy agent kind", () => {
+    const result = appConfigSchema.safeParse({
+      agent: { default: "roo" },
+    });
+
+    expect(result.success).toBe(false);
+  });
   it("rejects non-positive max_total_gb", () => {
     const result = appConfigSchema.safeParse({
       workspaces: {

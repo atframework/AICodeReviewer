@@ -117,7 +117,7 @@ AICR 采用**两层上下文管理**，两者互补：
 
 #### 3.3.2 Agent 运行时上下文自动压缩（conversation 级）
 
-- agent CLI（Kilo / opencode / Roo / Claude Code）在 review 期间通过工具调用、文件读取
+- agent CLI（Kilo / opencode / Zoo / Claude Code）在 review 期间通过工具调用、文件读取
   等持续积累对话上下文。如果超出 model context window，provider 返回 `ContextOverflowError`
   导致整个 review 失败。
 - `agent.context_compaction`（默认启用）将各 agent 原生的 auto-compaction 设置注入生成的配置：
@@ -125,7 +125,7 @@ AICR 采用**两层上下文管理**，两者互补：
     Kilo 只为**声明了 contextWindow 的 model** 跟踪并自动压缩，因此必须启用
     `llm.model_catalog`（或在 `overrides` 中设置 `context_window`）让 contextWindow 注入 model 信息。
   - **opencode**：`compaction.auto` / `prune`。
-  - **Roo**：`autoCondenseContext` / `condenseContextPercentThreshold`。
+  - **Zoo**：`autoCondenseContext` / `condenseContextPercentThreshold`，写入 Zoo Code 当前 `.roo/settings.json` 兼容路径。
   - **Claude Code**：默认自动压缩（delegated，不注入额外配置）。
   - **Copilot CLI**：无上下文管理面（not_applicable）。
 - manifest 记录 `contextCompaction.{enabled,mode}`（`injected` / `delegated` / `not_applicable`）。
@@ -164,7 +164,7 @@ AICR 采用**两层上下文管理**，两者互补：
 
 - 常驻仓库规则只放在 `AGENTS.md`；`AGENTS.md` 与 `.agents/skills/` 是跨工具共享真源。
 - 详细、可复用的 workflow 放在 `.agents/skills/*/SKILL.md`。
-- Claude / Roo / Kilo / Copilot 等私有格式只做桥接，不维护重复正文；共享规则写在
+- Claude / Zoo / Kilo / Copilot 等私有格式只做桥接，不维护重复正文；共享规则写在
   canonical 层，工具私有文件只保留最小差异。
 - 历史阶段说明放在 `docs/ai/milestones/*.md`。
 - Prompt Manager 负责发现、筛选、排序和合并 repo-local AI 资产。
@@ -213,7 +213,7 @@ AICR 采用**两层上下文管理**，两者互补：
 
 ### 3.7 AgentAdapter 与模型翻译
 
-- `AgentAdapter` 统一封装 Kilo、Claude Code、OpenCode、Roo、Copilot CLI 等外部 agent。
+- `AgentAdapter` 统一封装 Kilo、Claude Code、OpenCode、Zoo、Copilot CLI 等外部 agent。
 - 每个 adapter 都要显式说明支持能力：
   - 模型配置
   - 原生 MCP
@@ -226,7 +226,7 @@ AICR 采用**两层上下文管理**，两者互补：
 #### 3.7.1 适配目标
 
 - Kilo Code 是部署与端到端验收的首要目标。
-- Claude Code、OpenCode、Roo、Copilot CLI 作为并行适配面。
+- Claude Code、OpenCode、Zoo、Copilot CLI 作为并行适配面。
 - 新 adapter 应尽量复用 runtime bundle 物化与 sandbox contract，而不是重新发明一套配置树。
 
 #### 3.7.2 调用合同
@@ -234,6 +234,7 @@ AICR 采用**两层上下文管理**，两者互补：
 - adapter 的输入至少包括：工作目录、模型、工具、超时、skill/instruction 层和输出收集器。
 - adapter 的输出要么是 MCP 工具调用结果，要么是兼容回退解析后的同构结果。
 - 工具调用与普通文本输出必须分流处理。
+- Zoo Code adapter 对外 `AgentKind` 使用 `zoo`；按 2026-07-02 核验的上游源码，CLI 二进制和项目配置路径仍沿用 `roo` / `.roo` / `.roomodes` 兼容面，因此不要臆造 `.zoo` 路径或 `zoo` 二进制。
 
 #### 3.7.3 ModelSpec 翻译
 
@@ -699,8 +700,8 @@ models.dev 的 key 是 `<providerId>/<modelId>`（AI SDK 标识）。自定义 p
 | Adapter | 是否原生读 models.dev | 转换策略 |
 | --- | --- | --- |
 | **opencode** | 已知 provider 走 models.dev 自动解析；**自定义 `@ai-sdk/openai-compatible` provider 不自动解析** | 自定义 provider 注入 `models.<id>.limit.context`、`limit.output`、`cost.{input,output,cache_read,cache_write}`、`name`；如确需 `OPENCODE_MODELS_PATH`，只能指向 run `agent/` 目录下由 AICR 生成的 models.dev-compatible 小型 `api.json`，不能指向 SQLite/Redis 刷新缓存。命中 models.dev 已知 provider 时跳过注入。 |
-| **Kilo Code** | 否（Cline/Roo 衍生） | OpenAI-compatible 自定义 provider 注入模型参数：`contextWindow`、`maxTokens`（输出上限）、`supportsImages`（视觉）、`supportsComputerUse`、`supportsPromptCache`、`inputPrice`、`outputPrice`、`cacheReadsPrice`、`cacheWritesPrice`。 |
-| **Roo Code** | 否 | `.roo/settings.json` 的 `apiConfiguration.openAiCustomModelInfo` 注入 `contextWindow`、`maxTokens`、`supportsImages`、`supportsComputerUse`、`supportsPromptCache`、`inputPrice`、`outputPrice`。 |
+| **Kilo Code** | 否（Cline/Zoo 同源生态） | OpenAI-compatible 自定义 provider 注入模型参数：`contextWindow`、`maxTokens`（输出上限）、`supportsImages`（视觉）、`supportsComputerUse`、`supportsPromptCache`、`inputPrice`、`outputPrice`、`cacheReadsPrice`、`cacheWritesPrice`。 |
+| **Zoo Code** | 否（未验证到原生 models.dev 读取面） | Zoo Code 当前 `.roo/settings.json` 兼容路径的 `apiConfiguration.openAiCustomModelInfo` 注入 `contextWindow`、`maxTokens`、`supportsImages`、`supportsComputerUse`、`supportsPromptCache`、`inputPrice`、`outputPrice`。 |
 | **Claude Code** | 否（依赖内置 Anthropic 目录 + 环境变量） | 无 file 级模型元数据面；有 `maxOutputTokens` 时设置 `ANTHROPIC_MAX_TOKENS`，上下文窗口/价格依赖 Anthropic 内置目录。能力缺失时在 manifest 显式降级。 |
 | **Copilot CLI** | 否（Copilot 订阅固定目录） | 模型目录由 Copilot 订阅固定，无注入面；记为 N/A 并在 manifest 标注。 |
 

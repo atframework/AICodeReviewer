@@ -107,7 +107,7 @@
 - 触发由 token 阈值和输入占比共同控制；未配置时从 review model 的 contextWindow 派生默认阈值。
 - 大 diff 稳定性优先于"全量上下文强行塞进模型"。
 - **两层互补**：AICR 侧 diff 压缩（§3.3.1）+ agent 运行时上下文自动压缩（§3.3.2）。
-- `agent.context_compaction`（默认启用）向 Kilo / opencode / Roo 注入原生 auto-compaction 设置；
+- `agent.context_compaction`（默认启用）向 Kilo / opencode / Zoo 注入原生 auto-compaction 设置；
   Claude Code 默认已压缩；上下文溢出检测为 `AgentContextOverflowError` 并携带可操作修复建议。
 - 详细合同：`docs/ai/architecture.md` §3.3。
 
@@ -137,7 +137,7 @@
 
 ### 3.7 AgentAdapter 与模型翻译
 
-- Kilo、Claude Code、OpenCode、Roo、Copilot CLI 等 adapter 共用统一 runtime 合同。
+- Kilo、Claude Code、OpenCode、Zoo、Copilot CLI 等 adapter 共用统一 runtime 合同。
 - `ModelSpec` / `thinkingLevel` 在 adapter 内翻译到各 provider 原生字段。
 - 能力不支持时要显式降级，而不是静默忽略。
 - 详细合同：`docs/ai/architecture.md` §3.7、§3.7.3。
@@ -256,7 +256,7 @@
   与观测成本统计使用，替代当前 gateway 的固定成本估算。
 - Agent 配置转换按工具区分：opencode 已知 provider 走原生 models.dev、自定义
   provider 注入 `limit`/`cost`；如需 `OPENCODE_MODELS_PATH` 只能生成 run-local 小型
-  api.json，不能指向 SQLite/Redis 缓存。Kilo / Roo 自定义 OpenAI-compatible 必须注入
+  api.json，不能指向 SQLite/Redis 缓存。Kilo / Zoo 自定义 OpenAI-compatible 必须注入
   `contextWindow`/`maxTokens`/`supportsImages`/价格；Claude Code / Copilot CLI 无注入面，
   在 manifest 显式降级。
 - 详细合同：`docs/ai/architecture.md` §3.13；配置 schema 真源 `packages/core/src/config.ts`
