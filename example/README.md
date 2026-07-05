@@ -2,6 +2,12 @@
 
 This directory contains a ready-to-edit deployment configuration.
 
+> **Documentation site:** The user-facing documentation is being consolidated
+> into a static site at `docs/site/` (Astro Starlight, English + 简体中文),
+> planned for publication to GitHub Pages. Build and preview it locally with
+> `pnpm docs:dev`. Until then, this README remains the most complete
+> deployment reference.
+
 ## Quick Start (Docker Compose)
 
 ```bash

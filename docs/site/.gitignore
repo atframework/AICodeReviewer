@@ -1,0 +1,10 @@
+# Astro build output
+dist/
+.astro/
+
+# Dependencies (installed at workspace root via pnpm)
+node_modules/
+
+# Local environment
+.DS_Store
+*.log
