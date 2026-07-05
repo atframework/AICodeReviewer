@@ -45,6 +45,13 @@
 - 相比 Docusaurus，它更轻、更静态优先；相比 VitePress，它不引入 Vue 主栈；相比 Nextra，
   它不需要 Next.js 静态导出约束；相比 MkDocs，它更贴合当前 JS/TS monorepo。
 
+**已验证版本基线（2026-07 实测）**：Astro `7.0.6` / `@astrojs/starlight` `0.41.3`，本地 Node `24.16.0`。
+锁定 `astro: ^7`、`@astrojs/starlight: ^0.41`；Astro 7 官方要求 Node `>=22.12.0`，docs CI 使用 Node 24。实测要点：
+- `social` 配置在 Starlight v0.33+ 改为**数组**（不再是 `{ github: "..." }` 对象）。
+- `template` frontmatter 只接受 `doc` 或 `splash`（无 `landing`）。
+- sidebar slug 不含 `index` 段：`troubleshooting/index.md` 的 slug 是 `troubleshooting`。
+- i18n UI 覆盖文件名为 BCP-47 lang tag：`src/content/i18n/zh-CN.json`。
+
 ### 2.2 候选方案对比
 
 | 方案 | 官方能力摘要 | 适配性判断 |
@@ -200,6 +207,28 @@ GitHub Pages 发布需要在 `docs/site/astro.config.mjs` 中规划：
 建议 workflow 使用 Astro 官方 action 的 `path: docs/site`，或使用显式 pnpm 步骤后上传
 `docs/site/dist/`。仓库级脚本应保留 `pnpm docs:build` 作为本地和 CI 的共同入口。
 
+### 3.4 i18n 路由决策（M11-P1 已落地）
+
+公开文档站采用**全部带语言前缀**的对称路由结构：
+
+- English → `/en/...`，内容源 `src/content/docs/en/`。
+- 简体中文 → `/zh-cn/...`，内容源 `src/content/docs/zh-cn/`。
+- `defaultLocale: "en"` 仅控制 UI 字符串 fallback 和语言检测，**不**让 English 成为
+  无前缀的 root locale。
+
+选择对称前缀而非"English root + 中文前缀"的理由：
+
+- 结构对称，便于未来增加第三语言而不需要重构 URL。
+- 中英两套内容同等可见，便于审阅者一眼确认双语覆盖。
+- sidebar label 通过 `translations` map（BCP-47 lang tag，如 `"zh-CN"`）本地化；
+  页面标题来自各语言版本自身的 frontmatter `title`。
+
+i18n UI 覆盖：`src/content/i18n/zh-CN.json` 覆盖搜索、目录、上一页/下一页等 UI 字符串。
+Starlight 自带 ~35 种语言（含中文）的 UI 翻译，覆盖文件只需补充或改写需要的 key。
+
+中文内容**不是机翻**：按中文技术写作习惯重写，但所有配置块、命令、字段名、路径与英文版
+完全一致，并回查代码真源。
+
 ## 4. 信息架构
 
 ### 4.0 文档类型组织
@@ -285,10 +314,10 @@ GitHub Pages 发布需要在 `docs/site/astro.config.mjs` 中规划：
 
 页面：
 
-- 安装依赖：pnpm、Node 版本、Windows PowerShell 注意事项。
+- 安装依赖：pnpm、Node 版本（runtime `>=20`，docs/site `>=22.12.0`）、Windows PowerShell 注意事项。
 - Runtime 构建：`pnpm build` 或 Windows 下等价命令。
 - 类型检查、测试、markdownlint、eval fixture validation。
-- 文档站构建：`pnpm docs:build`。
+- 文档站构建：`pnpm docs:build`（先校验公开内容边界，再执行 Astro build）。
 - 文档站本地预览：`pnpm docs:preview`。
 
 ### 4.6 发布方法
@@ -372,8 +401,7 @@ GitHub Pages 发布需要在 `docs/site/astro.config.mjs` 中规划：
 - 配置字段、命令、endpoint、环境变量必须回查代码或示例，不能凭记忆补。
 - 代码块优先引用或同步自 `example/`，避免同一配置样例维护两份。
 - 内部 pitfall 只在用户会遇到时转化成排障条目，不暴露 agent 维护细节。
-- 默认首版用户文档建议 English-first，以匹配 `example/README.md` 和 GitHub Pages 公开访问；
-  中文文档可作为 Starlight i18n 后续阶段。
+- 中英双语并行（见 §3.4）；中文按技术写作重写，配置/命令/路径与英文版一致。
 
 ## 6. 视觉与交互要求
 
@@ -388,7 +416,7 @@ GitHub Pages 发布需要在 `docs/site/astro.config.mjs` 中规划：
 M11-P1 后建议至少具备：
 
 - `pnpm docs:check`: Astro/Starlight 类型与内容集合检查。
-- `pnpm docs:build`: 生成静态站点。
+- `pnpm docs:build`: 校验公开内容边界并生成静态站点。
 - `pnpm markdownlint`: 校验仓库 Markdown。
 - `pnpm format:check`: 校验格式。
 - 可选链接检查：后续引入 lychee 或等价工具，先从内部链接开始。
@@ -404,12 +432,12 @@ M11-P1 后建议至少具备：
 | 阶段 | 目标 | 产物 | 验收 |
 | --- | --- | --- | --- |
 | M11-P0 | 整理路线图并保存文档站计划 | `Plan.md`、本文件、`docs/ai/index.md` 入口 | markdownlint |
-| M11-P1 | 创建文档站子工程 | `docs/site`、根 scripts、CI 构建检查、GitHub Pages workflow 草案 | docs build/check 通过 |
-| M11-P2 | 落地信息架构骨架 | 首页和各章节占位页、导航、侧边栏 | 无断链，站点可预览 |
-| M11-P3 | 迁移 quick start 与示例 | 快速上手、基础示例、部署路径正文 | 用户可按文档跑通本地/Compose |
-| M11-P4 | 迁移配置与参考 | 配置、CLI、MCP、输出通道参考 | 字段/命令与代码真源一致 |
-| M11-P5 | 发布链路 | GitHub Pages workflow、`site/base`、发布说明 | 本地构建通过；线上需仓库权限 |
-| M11-P6 | 打磨与维护机制 | 搜索、SEO、链接检查、贡献规则 | CI 可阻止常见文档漂移 |
+| M11-P1 ✅ | 创建文档站子工程 | `docs/site`（Astro v7 / Starlight v0.41）、根 scripts、CI docs job、GitHub Pages workflow 草案 | `pnpm docs:build` 公开内容校验 + 构建通过（51 页） |
+| M11-P2 ✅ | 落地信息架构骨架 + 首批核心页 | 全章节双语占位页、导航、侧边栏；首页/快速上手/认证/输出通道四页中英双语正文 | 公开内容校验通过，站点可构建 |
+| M11-P3 | 迁移剩余配置与示例 | 配置各命名空间、CLI、MCP、VCS、IM 通道正文 | 字段/命令与代码真源一致 |
+| M11-P4 | 迁移部署与运维 | Docker、Podman、operations、troubleshooting 正文 | 用户可按文档跑通本地/Compose/生产 |
+| M11-P5 | 发布链路 | 启用 GitHub Pages workflow、`site/base`、发布说明 | 本地构建通过；线上需仓库权限 |
+| M11-P6 | 打磨与维护机制 | SEO、链接检查、贡献规则、配置字段覆盖校验 | CI 可阻止常见文档漂移 |
 
 ## 9. 风险与缓解
 
@@ -421,16 +449,25 @@ M11-P1 后建议至少具备：
 | `base` 配置错误 | GitHub Pages 子路径资源 404 | 在 `astro.config.mjs` 中显式处理项目页 base，并在 preview checklist 验证 |
 | 内部 AI 文档误发布 | 暴露无关维护细节，用户困惑 | 文档站只从用户内容目录发布，`docs/ai/*` 只作为内部来源 |
 | 内容一次性迁移过大 | 难审查、易过期 | 按 quick start、examples、config、operations、reference 分批迁移 |
-| 多语言过早引入 | 维护成本翻倍 | 首版 English-first，中文 i18n 作为后续阶段 |
 
 ## 10. 首次实现检查清单
 
-- 创建 `docs/site` Starlight 工程。
-- 增加 `pnpm-workspace.yaml` 的精确条目 `docs/site`。
-- 增加 root `docs:*` scripts。
-- 明确 root `build` 与 Dockerfile 的运行时构建边界。
-- 增加 Starlight `site/base` 配置占位。
-- 建立首页、快速上手、示例、配置、部署、运维、开发者文档、参考、排障导航骨架。
-- 增加 CI 文档构建检查。
-- 增加 GitHub Pages workflow 草案，先不要求真实发布。
-- 复核 `Plan.md`、`docs/ai/index.md`、`example/README.md` 是否需要同步入口。
+M11-P1 + M11-P2 已完成项（2026-07）：
+
+- ✅ 创建 `docs/site` Starlight 工程（Astro v7.0.6 / Starlight v0.41.3）。
+- ✅ `pnpm-workspace.yaml` 增加精确条目 `docs/site`（并加 `sharp` 到 `onlyBuiltDependencies`）。
+- ✅ 增加 root `docs:dev` / `docs:build` / `docs:preview` / `docs:check` scripts。
+- ✅ root `build` / `clean` 收紧为 `--filter "./packages/*"`，确保不触发文档站构建。
+- ✅ 复核 Dockerfile：`pnpm install --frozen-lockfile` 会静默跳过目录缺失的 workspace
+  importer（实测验证），runtime 镜像不会安装 Astro/Starlight。
+- ✅ Starlight `site` / `base` 配置 GitHub Pages 项目页
+  （`https://owent.github.io/AICodeReviewer/`）。
+- ✅ 全章节双语导航骨架（Getting Started / Configuration / Deployment /
+  Integrations / Reference / Troubleshooting / Development）。
+- ✅ 首批 4 个核心页中英双语正文（首页、快速上手、认证与密钥、输出通道）。
+- ✅ CI 新增独立 `docs` job（`pnpm docs:build`，含公开内容边界校验）。
+- ✅ GitHub Pages workflow 草案（`.github/workflows/docs.yml`，`withastro/action@v6`）。
+- ✅ i18n 路由：全部带前缀 `/en/` + `/zh-cn/`（见 §3.4）。
+- ✅ 同步 `Plan.md`、`docs/ai/index.md`、`example/README.md`、`AGENTS.md`。
+
+待后续阶段（P3-P6）：迁移剩余章节正文、启用真实发布、引入链接检查与配置字段覆盖校验。

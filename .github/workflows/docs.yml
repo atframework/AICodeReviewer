@@ -1,0 +1,60 @@
+name: Deploy docs
+
+# Build and deploy the AICodeReviewer documentation site (docs/site) to GitHub
+# Pages. The site is built with Astro Starlight and deployed as a project page
+# at https://owent.github.io/AICodeReviewer/ (see docs/site/astro.config.mjs).
+#
+# One-time setup (repository admin required):
+#   Settings -> Pages -> Source = "GitHub Actions"
+#
+# This workflow only runs on pushes to main so that publishing a doc change
+# requires going through a reviewed PR (the PR itself is validated by the
+# `docs` job in ci.yml). Triggering manually via workflow_dispatch is also
+# available for republishing without a code change.
+#
+# Action versions track the latest major (verified via GitHub Releases API,
+# 2026-07): withastro/action v6 internally uses checkout + upload-pages-artifact,
+# so we delegate the whole build step to it and only call actions/deploy-pages
+# ourselves to publish the Pages artifact.
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+# Permissions required by the official Astro action and deploy-pages:
+#   contents: read   — clone the repository
+#   pages: write     — push the Pages artifact
+#   id-token: write  — OIDC token for deploy-pages (required for Pages deploy)
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Avoid concurrent deploys clobbering the Pages environment.
+concurrency:
+  group: deploy-docs
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Build with Astro
+        uses: withastro/action@v6
+        with:
+          path: docs/site
+          node-version: 24
+          package-manager: pnpm@10.20.0
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5

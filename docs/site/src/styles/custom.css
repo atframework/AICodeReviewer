@@ -1,0 +1,25 @@
+/* AICodeReviewer docs site custom styles.
+ *
+ * Keep overrides minimal: Starlight's default theme already provides readable
+ * typography, dark mode, and responsive layout. Only add brand-aligned tweaks
+ * here. Target Starlight CSS custom properties where possible so dark/light
+ * themes both stay consistent.
+ */
+
+:root {
+  --aicr-accent-h: 212;
+  --aicr-accent-s: 92%;
+  --aicr-accent-l: 50%;
+}
+
+/* Slightly bolder accent for links and active nav items. */
+:root,
+[data-theme="light"] {
+  --sl-color-accent: hsl(var(--aicr-accent-h) var(--aicr-accent-s) 42%);
+  --sl-color-accent-low: hsl(var(--aicr-accent-h) var(--aicr-accent-s) 42% / 0.12);
+}
+
+[data-theme="dark"] {
+  --sl-color-accent: hsl(var(--aicr-accent-h) var(--aicr-accent-s) 60%);
+  --sl-color-accent-low: hsl(var(--aicr-accent-h) var(--aicr-accent-s) 60% / 0.16);
+}

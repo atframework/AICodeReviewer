@@ -11,6 +11,10 @@ export default tseslint.config(
       "**/node_modules/**",
       "build/**",
       "deploy/**",
+      // The docs site (docs/site) is an isolated Astro Starlight app with its
+      // own tsconfig and `astro check`; it is not runtime code and is excluded
+      // from the runtime Docker image. Do not lint it with the runtime config.
+      "docs/site/**",
     ],
   },
   js.configs.recommended,

@@ -53,6 +53,13 @@ Use this skill when updating AI-agent guidance, prompt assets, bridge files, or 
    - For retry-derived lessons, record only durable patterns: the trigger, root cause, and preferred fix. Skip one-off environment glitches, stale data, and facts that are obvious from nearby code.
    - Prefer links or references to existing docs or skills over copying long material into always-on prompts.
    - For agent CLI runtime changes, keep the repository source of truth in `.agents/skills/` and generate adapter-native copies or shims at materialization time; do not commit duplicate Kilo/Zoo/OpenCode/Claude skill bodies.
+   - The public user documentation site lives at `docs/site/` (`@aicr/docs-site`,
+     Astro Starlight, English + 简体中文). It is an isolated workspace package —
+     build it with `pnpm docs:build` (or `pnpm docs:check`) and never add it to
+     root `tsconfig.json` references or the runtime Docker image. Do not publish
+     internal `docs/ai/*` content to it; rewrite user-facing material from
+     `example/README.md`, `example/config.yaml`, the topic docs, and code truth.
+     See `docs/ai/documentation-site-plan.md` for the full plan.
 
 3. **Write compact, discoverable skills**
    - Keep skill folder names and frontmatter `name` values identical; use lowercase hyphenated names.

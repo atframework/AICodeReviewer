@@ -123,6 +123,12 @@ COPY --chown=node:node prompts ./prompts
 COPY --chown=node:node templates ./templates
 COPY --chown=node:node .markdownlint.json ./
 
+# NOTE: docs/site is a workspace package but its directory is intentionally not
+# COPYed into the runtime image. pnpm install silently skips workspace importers
+# whose directories are absent, so Astro/Starlight never enters the runtime
+# image. Do not add docs/site here. Root `pnpm build` is filtered to packages/*
+# (see package.json) and will not build the docs site.
+
 RUN pnpm install --frozen-lockfile \
   && mkdir -p packages/sandbox/node_modules packages/eval/node_modules
 RUN pnpm build

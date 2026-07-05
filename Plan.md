@@ -21,8 +21,9 @@
 ### 1.2 当前焦点
 
 - M0-M10 的主要实现已归档，当前没有新的运行时代码本地执行包。
-- 当前活跃方向是 M11：规划并后续落地可发布到 GitHub Pages 的用户文档站子工程。
-- 本轮只落地文档站建设计划，不生成用户文档正文，不创建实际站点脚手架。
+- 当前活跃方向是 M11：可发布到 GitHub Pages 的用户文档站子工程。M11-P1（脚手架）
+  和 M11-P2（信息架构骨架 + 首批核心页中英双语）已完成；下一步是 M11-P3 剩余章节
+  正文迁移。
 - 仍需真实外部系统验收的项目集中在 §8.4，避免散落在已完成里程碑描述中。
 
 ### 1.3 文档地图
@@ -32,6 +33,7 @@
 - `docs/ai/decisions.md`：长期有效决策索引。
 - `docs/ai/documentation-site-plan.md`：M11 文档站子工程建设计划。
 - `docs/ai/milestones/*.md`：已完成阶段归档。
+- `docs/site/`：M11 用户文档站子工程（Astro Starlight，中英双语），公开用户入口。
 - `docs/prompt-research.md`：默认评审 prompt 调研依据。
 - `docs/output-channels.md`：输出通道、模板与 MCP 输出工具合同。
 - `docs/podman.md`：Podman 沙箱与部署专题说明。
@@ -152,8 +154,15 @@
 ### 3.14 用户文档站
 
 - M11 目标是创建独立、可维护、可静态导出的用户文档站。
+- M11-P1（脚手架）和 M11-P2（骨架 + 首批核心页）已完成：基于 Astro v7 /
+  Starlight v0.41 的 `docs/site` 子工程接入 pnpm workspace；docs 构建要求
+  Node `>=22.12.0`，CI 含独立 Node 24 docs job，
+  GitHub Pages workflow 草案就绪，中英双语并行（全部带前缀 `/en/` + `/zh-cn/`）。
 - 选型、内容结构、工程集成、GitHub Pages 发布与验收计划见
   `docs/ai/documentation-site-plan.md`。
+- 边界：`docs/site` 不进根 `tsconfig.json` references；root `build` 已收紧为
+  `--filter "./packages/*"`；runtime Dockerfile 不复制 `docs/site`，Astro/Starlight
+  不进入运行时镜像。
 
 ## 4. 默认评审 Prompt 原则
 
@@ -190,8 +199,8 @@
 - 在 Linux/CI 等 `pnpm` 可直接执行的环境中，可使用等价的
   `pnpm lint/typecheck/test/markdownlint/build`。
 - `Plan.md` 与 `docs/**/*.md` 共同接受 markdownlint 校验。
-- M11 实施后应新增 `docs:build`、`docs:preview`、`docs:check` 或等价脚本，并在 CI 中
-  独立验证静态站点构建。
+- M11 已新增 `docs:build`、`docs:preview`、`docs:check`、`docs:dev` 脚本，CI 在
+  `.github/workflows/ci.yml` 的独立 `docs` job 中运行 `pnpm docs:build` 验证公开内容边界与静态站点构建。
 
 ## 8. 里程碑与执行顺序
 
@@ -211,26 +220,27 @@
 | M8 | 基本完成 | `docs/ai/milestones/M8.md` | 真实 LLM benchmark 留在 Backlog |
 | M9 | 基本完成 | `docs/ai/milestones/M9.md` | 不进入版本 bump / git tag |
 | M10 | 基本完成 | `docs/ai/milestones/M10.md` | 真实外部 Redis smoke/e2e 按需放入 Backlog |
-| M11 | 规划中 | `docs/ai/documentation-site-plan.md` | 按计划创建文档站子工程、导航与静态发布链路 |
+| M11 | 进行中 | `docs/ai/documentation-site-plan.md` | M11-P3 迁移剩余章节正文 |
 
 ### 8.2 当前执行包
 
-M11-P0 已在本轮执行：整理 `Plan.md`，并保存文档站建设计划。该执行包不生成用户文档
-正文，也不创建站点脚手架。
+M11-P1（脚手架）和 M11-P2（信息架构骨架 + 首批核心页中英双语）已完成：
+`docs/site` Starlight 工程、pnpm workspace 接入、CI docs job、GitHub Pages workflow
+草案、全章节双语占位页，以及首页/快速上手/认证与密钥/输出通道四页中英双语正文。
+本地 `pnpm docs:build`（公开内容校验 + Astro build）通过（51 页）。
 
-下一本地执行包建议为 M11-P1：创建 `docs/site` 文档站子工程，接入 pnpm workspace、
-根脚本、CI 文档构建检查和 GitHub Pages workflow 草案，同时确保运行时 Docker 镜像不打包
-文档站依赖。
+下一本地执行包建议为 M11-P3：迁移剩余章节正文（配置各命名空间、CLI、MCP、VCS、IM
+通道、Docker/Podman 部署、运维与排障），把双语占位页替换为完整正文。
 
 ### 8.3 本地优先执行队列
 
 | 项 | 说明 | 本地验收 |
 | --- | --- | --- |
-| M11-P1 文档站脚手架 | 使用 Astro Starlight 创建 `docs/site`，只放首页/导航占位和工程脚本 | `docs:build`、`docs:preview`、`markdownlint` |
-| M11-P2 信息架构落地 | 建立首页、快速上手、示例、配置、部署、运维、集成、参考、排障等目录骨架 | 站点导航无断链，页面仍为占位或迁移计划 |
-| M11-P3 内容迁移与改写 | 从 `example/README.md`、专题 docs 和代码真源改写用户文档正文 | markdownlint、站点构建、人工抽查关键流程 |
+| M11-P1 文档站脚手架 ✅ | Astro Starlight 创建 `docs/site`，接入 workspace、CI、Pages workflow 草案 | `pnpm docs:build` 公开内容校验 + 构建通过（51 页） |
+| M11-P2 信息架构骨架 + 首批核心页 ✅ | 全章节双语占位页 + 首页/快速上手/认证/输出通道四页中英双语正文 | 公开内容校验、站点构建和 markdownlint 通过 |
+| M11-P3 剩余章节正文迁移 | 配置、CLI、MCP、VCS、IM 通道、部署、运维、排障占位页替换为完整正文 | markdownlint、站点构建、人工抽查关键流程 |
 | M11-P4 配置/CLI 参考同步 | 从 `packages/core/src/config.ts` 和 CLI help 建立可校验参考页流程 | 生成或校验脚本可重复运行 |
-| M11-P5 发布链路 | 增加 GitHub Pages workflow、`site/base` 配置和发布说明 | 本地静态构建通过；线上发布需外部权限 |
+| M11-P5 发布链路 | 启用 GitHub Pages workflow、`site/base` 配置和发布说明 | 本地静态构建通过；线上发布需外部权限 |
 
 ### 8.4 Backlog（依赖外部系统或延后扩展）
 

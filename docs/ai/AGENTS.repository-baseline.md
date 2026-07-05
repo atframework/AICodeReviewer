@@ -3,7 +3,7 @@
 ## Current repository baseline
 
 - Workspace layout: pnpm monorepo with packages under `packages/*`; root TypeScript project references are declared in `tsconfig.json`.
-- Toolchain: Node `>=20`, pnpm `10.20.0`, TypeScript `NodeNext` with `strict` and `noUncheckedIndexedAccess`, ESLint 9, Vitest 3, Prettier 3, and `markdownlint-cli2`.
+- Toolchain: runtime packages support Node `>=20`; `docs/site` uses Astro 7 and requires Node `>=22.12.0` (CI docs job uses Node 24). The shared tooling baseline is pnpm `10.20.0`, TypeScript `NodeNext` with `strict` and `noUncheckedIndexedAccess`, ESLint 9, Vitest 3, Prettier 3, and `markdownlint-cli2`.
 - Tests live in `packages/*/test/**/*.test.ts`; coverage targets `packages/*/src/**/*.ts` and excludes `packages/*/src/index.ts`.
 - Shared root baseline files are `package.json`, `pnpm-workspace.yaml`, `tsconfig.json`, `tsconfig.base.json`, `eslint.config.mjs`, `vitest.config.ts`, `.markdownlint.json`, `.github/workflows/ci.yml`, and `deploy/Dockerfile`.
 - AI agent guidance uses `AGENTS.md` plus `.agents/skills/*/SKILL.md` as the canonical tool-neutral layer; `CLAUDE.md` is only a bridge that imports `AGENTS.md` for Claude Code.
