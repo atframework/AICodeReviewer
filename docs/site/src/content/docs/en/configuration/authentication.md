@@ -107,7 +107,7 @@ env is allowed for small internal deployments but is compared with a
 constant-time digest check, rate-limited, and never logged.
 
 :::note[Session TTL]
-The admin session TTL field is `session_ttl_seconds` (default `28800` = 8 hours).
+The admin session TTL field is `session_ttl_seconds` (default `86400` = 24 hours).
 A field named `session_ttl_minutes` is ignored.
 :::
 

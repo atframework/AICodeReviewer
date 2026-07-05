@@ -1,13 +1,219 @@
 ---
 title: VCS 提供商
-description: 集成 GitHub、Gitea/Forgejo、GitLab、Perforce (P4) 和 Subversion (SVN)。
-sidebar:
-  badge:
-    text: 待完善
-    variant: caution
+description: 将 GitHub、Gitea/Forgejo、GitLab、Perforce (P4) 和 Subversion (SVN) 接入 AICR。
 ---
 
-本页为占位页。将介绍每个 VCS 提供商：webhook 路由
-（`/webhooks/{gitea,forgejo,github,gitlab}`）、P4 与 SVN trigger 端点
-（`/triggers/{p4,svn}`）、按提供商的 secret 机制、文件过滤 glob，以及每个
-提供商对应的 managed-issue / PR-review 通道组合。
+AICR 从两类来源接入评审事件：
+
+- **Webhook 提供商** —— GitHub、Gitea、Forgejo、GitLab。它们 POST 到
+  `/webhooks/{gitea,forgejo,github,gitlab}`，由 HMAC 或 token 验证。
+- **Trigger 提供商** —— Perforce (P4)、Subversion (SVN)。VCS 服务端 hook 脚本把最小元数据
+  POST 到 `/triggers/{p4,svn}`，由 API key 鉴权；AICR 再用自己的 VCS 凭据拉取 diff。
+
+两者都归一为同一个 `ReviewEvent`。本页介绍配置和按提供商的接入步骤；各提供商的鉴权机制
+见[认证与密钥](/zh-cn/configuration/authentication/)。
+
+## Webhook 提供商
+
+### Gitea / Forgejo
+
+添加 trigger，并把仓库 webhook 指向 AICR。
+
+```yaml
+triggers:
+  - name: gitea
+    kind: gitea              # Forgejo 实例用 "forgejo"
+    base_url: https://git.example.com
+    token_env: AICR_GITEA_TOKEN                 # 出站（发评论、读文件）
+    webhook_secret_env: AICR_WEBHOOK_SECRET      # 入站（HMAC 校验）
+    # 可选文件过滤（省略 = 全部分析）：
+    # watch_path: ["src/", "include/"]
+    # include_cr_file: ["**/*.cpp", "**/*.h"]
+    # exclude_cr_file: ["**/*.gen.cpp"]
+```
+
+Gitea 中配置 webhook：
+
+1. **仓库 → Settings → Webhooks → Add Webhook → Gitea**
+2. **Target URL**：`http://<aicr-host>:8080/webhooks/gitea`
+3. **Content type**：`application/json`
+4. **Secret**：与 `AICR_WEBHOOK_SECRET` 相同的值
+5. **Events**：勾选 **Pull Request**。如需在指定 reviewer 时自动重审，还需启用
+   `pull_request_review_request` 事件；AICR 在 `review_requested` 动作上触发，
+   忽略 `review_request_removed`。
+
+### GitHub
+
+```yaml
+triggers:
+  - name: github
+    kind: github
+    base_url: https://github.com     # github.com 可省略；GitHub Enterprise 填 GHE URL
+    token_env: AICR_GITHUB_TOKEN
+    webhook_secret_env: AICR_GITHUB_WEBHOOK_SECRET
+```
+
+把仓库 webhook 指向 `http://<aicr-host>:8080/webhooks/github`，secret 设为与
+`AICR_GITHUB_WEBHOOK_SECRET` 相同的 HMAC 密钥，订阅 **Pull requests**。AICR 把
+`pull_request` 的 `review_requested` 动作当作 PR 重审 trigger。
+
+对于评论触发的重审，配置 `token_env` 以便 AICR 拉取 PR head/base SHA 和分支信息。若该拉取
+不可用，AICR 用评论 payload 中的 PR URL 作为去重标识，而不会把不相关的 PR 合并到 `unknown`
+目标。
+
+### GitLab
+
+```yaml
+triggers:
+  - name: gitlab
+    kind: gitlab
+    base_url: https://gitlab.com
+    token_env: AICR_GITLAB_TOKEN
+    webhook_secret_env: AICR_GITLAB_WEBHOOK_SECRET   # 以 x-gitlab-token 发送
+```
+
+GitLab 通过 token 比对（`x-gitlab-token` 头）校验入站 webhook，而非 HMAC。
+
+### 同一路由上的多 profile
+
+GitHub 和 GitLab 可以在**同一路由**上定义多个 trigger profile。当不同仓库需要不同的出站
+token、webhook secret 或文件过滤时，使用独立的 trigger 名称；AICR 根据已验证的凭据加上
+webhook payload 中的仓库 `full_name` 选择最终 profile。
+
+```yaml
+triggers:
+  - name: github-core
+    kind: github
+    token_env: AICR_GITHUB_CORE_TOKEN
+    webhook_secret_env: AICR_GITHUB_CORE_WEBHOOK_SECRET
+  - name: github-external
+    kind: github
+    token_env: AICR_GITHUB_EXTERNAL_TOKEN
+    webhook_secret_env: AICR_GITHUB_EXTERNAL_WEBHOOK_SECRET
+    include_cr_file: ["**/*.ts", "**/*.tsx"]
+
+workspaces:
+  instances:
+    core-repo:
+      source_repo: { trigger: github-core, repo: "my-org/core-repo" }
+    external-repo:
+      source_repo: { trigger: github-external, repo: "partner-org/external-repo" }
+```
+
+## Trigger 提供商
+
+Trigger 提供商不接收 VCS webhook。VCS 服务端 hook 把最小元数据（变更号、作者、client）
+POST 到 AICR，AICR 用**自己**配置的凭据拉取 diff。hook 端点由服务端 API key
+（`X-API-Key` 头）鉴权，而非 HMAC。
+
+### Perforce (P4)
+
+```yaml
+triggers:
+  - name: p4-main
+    kind: p4
+    port: "ssl:perforce.corp:1666"      # TLS 加 ssl: 前缀
+    user_env: AICR_P4USER
+    password_env: AICR_P4PASSWORD       # 密码或登录 ticket
+    depot_path: "//depot/main"
+    workspace: "aicr-p4-main"           # AICR 使用的 P4 client 名（仅用于分析）
+    change_url_template: "https://swarm.example.com/changes/{{revision}}"
+    watch_path: ["src/", "include/"]
+    include_cr_file: ["**/*.cpp", "**/*.h"]
+    exclude_cr_file: ["**/*.gen.cpp", "**/*.pb.h"]
+```
+
+用 `p4 triggers` 注册：
+
+```text
+aicr-review change-commit //depot/main/... "/path/to/p4-trigger.sh %change% %user% %client%"
+```
+
+保留 `%user%` 和 `%client%`——它们作为 changelist 作者和提交 client 转发给 AICR，用于报告
+归属。AICR 适配器配置的 P4 workspace 仅作分析 client，不作为对外的提交者元数据。
+
+把 `example/p4-trigger.sh` 复制到 **P4 服务端主机**（不是 AICR 容器），并在该主机设置
+`AICR_URL` + `AICR_API_KEY`。脚本默认**不**运行 `p4 describe`，避免 p4d 侧 SSL trust 提示
+阻塞提交。
+
+### Subversion (SVN)
+
+```yaml
+triggers:
+  - name: svn-main
+    kind: svn
+    repository_url: "https://svn.example.com/repos/project/trunk"  # 必填
+    username_env: AICR_SVN_USER         # 可选
+    password_env: AICR_SVN_PASSWORD     # 可选
+    trust_server_cert: false            # 除非外部固定 trust，否则保持 false
+    revision_url_template: "https://svn.example.com/viewvc/project?view=revision&revision={{revision}}"
+    watch_path: ["src/", "include/"]
+    include_cr_file: ["**/*.cpp", "**/*.h"]
+    exclude_cr_file: ["**/*.gen.cpp"]
+```
+
+`repository_url` 对 `/triggers/svn` **必填**。post-commit hook 只转发 revision 元数据；
+AICR 用服务端配置的 `repository_url` 加自己的 SVN 凭据拉取 diff。payload 中的仓库 URL 字段
+会被忽略，入站 hook 无法切换被评审的仓库。
+
+在 SVN 仓库 `hooks/` 目录安装 `post-commit`：
+
+```bash
+#!/bin/bash
+REPOS="$1"
+REV="$2"
+export AICR_URL="http://<aicr-host>:8080"
+export AICR_API_KEY="<与 server.auth.api_key_env 相同的值>"
+/path/to/svn-trigger.sh "$REPOS" "$REV"
+```
+
+把 `example/svn-trigger.sh` 复制到 SVN 服务端主机（需要 `jq` 和 `svnlook`，SVN 服务端环境
+自带）。
+
+## 文件过滤
+
+所有提供商共用同一套三级过滤流水线，在评审前应用到变更文件列表：
+
+```text
+全部变更文件 → watch_path → include_cr_file → exclude_cr_file → 待评审文件
+```
+
+| 字段 | 类型 | 行为 |
+| --- | --- | --- |
+| `watch_path` | `string[]` | 仅分析这些 depot/仓库相对子路径下的文件。省略 = 全部路径。 |
+| `include_cr_file` | `string[]` | glob 模式；文件**至少匹配一个**才会被分析。 |
+| `exclude_cr_file` | `string[]` | glob 模式；匹配**任意**模式的文件被**跳过**。 |
+
+glob 语法：
+
+- `**/*.cpp` —— 匹配 `foo.cpp`、`src/foo.cpp`、`a/b/c/foo.cpp`（任意深度）
+- `*.md` —— 匹配任意深度的文件 basename
+- `src/**` —— 匹配 `src/` 下所有内容
+- `**/*.pb.*` —— 匹配 `foo.pb.h`、`foo.pb.cc` 等
+
+## 通过评论手动重审
+
+在支持的 PR/MR 评论事件中，用户可以不推送新提交就请求一次新评审：
+
+- `/aicr review`
+- `/review`
+
+在 async 模式下，同一目标的重复命令会被合并：当前评审先完成，然后 AICR 用最新事件跑一次
+最终重审。
+
+## 非 PR 评审的目标链接
+
+内置模板渲染 `target.markdownLink` / `target.displayText`，不假设每次评审都是 PR。Git 提交
+链接由 `base_url` + 仓库 + revision 自动推导。P4 和 SVN 可以提供显式 URL 模板：
+
+```yaml
+triggers:
+  - name: p4-main
+    kind: p4
+    change_url_template: "https://swarm.example.com/changes/{{revision}}"
+  - name: svn-main
+    kind: svn
+    revision_url_template: "https://svn.example.com/viewvc/project?view=revision&revision={{revision}}"
+```
+
+模板变量在替换前做 URL 编码。
