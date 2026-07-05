@@ -4,18 +4,14 @@ import { join, relative } from "node:path";
 
 const docsRoot = fileURLToPath(new URL("../src/content/docs/", import.meta.url));
 
+// Guard the public/internal boundary called for by docs/ai/documentation-site-plan.md
+// §1.1 / §4.0: internal AI/roadmap/architecture docs and maintenance metadata must
+// not leak into published user pages. AGENTS.md and .agents/skills/ ARE allowed —
+// the contributor guide legitimately points contributors to them.
 const forbidden = [
   {
     pattern: /\bdocs\/ai\b/u,
     message: "internal AI/roadmap docs must not be referenced from public docs",
-  },
-  {
-    pattern: /\bAGENTS\.md\b/u,
-    message: "AI-facing repository guidance must be rewritten before publishing",
-  },
-  {
-    pattern: /\.agents\//u,
-    message: "agent skill paths must not be referenced from public docs",
   },
   {
     pattern: /\bMigration sources?:|迁移来源/u,

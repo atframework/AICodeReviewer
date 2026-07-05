@@ -101,7 +101,7 @@ workspaces:
 raw password env，但会用定长 digest 比较、限速，且绝不写入日志。
 
 :::note[Session TTL]
-管理员 session TTL 字段是 `session_ttl_seconds`（默认 `28800` = 8 小时）。
+管理员 session TTL 字段是 `session_ttl_seconds`（默认 `86400` = 24 小时）。
 名为 `session_ttl_minutes` 的字段会被忽略。
 :::
 

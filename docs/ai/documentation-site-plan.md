@@ -434,10 +434,10 @@ M11-P1 后建议至少具备：
 | M11-P0 | 整理路线图并保存文档站计划 | `Plan.md`、本文件、`docs/ai/index.md` 入口 | markdownlint |
 | M11-P1 ✅ | 创建文档站子工程 | `docs/site`（Astro v7 / Starlight v0.41）、根 scripts、CI docs job、GitHub Pages workflow 草案 | `pnpm docs:build` 公开内容校验 + 构建通过（51 页） |
 | M11-P2 ✅ | 落地信息架构骨架 + 首批核心页 | 全章节双语占位页、导航、侧边栏；首页/快速上手/认证/输出通道四页中英双语正文 | 公开内容校验通过，站点可构建 |
-| M11-P3 | 迁移剩余配置与示例 | 配置各命名空间、CLI、MCP、VCS、IM 通道正文 | 字段/命令与代码真源一致 |
-| M11-P4 | 迁移部署与运维 | Docker、Podman、operations、troubleshooting 正文 | 用户可按文档跑通本地/Compose/生产 |
+| M11-P3 ✅ | 全章节双语正文迁移 | 配置各命名空间、CLI、MCP、VCS/agent 集成、Docker/Podman 部署、运维、参考、排障、贡献指南全部替换为中英双语正文；新增公开/内部内容边界校验 | markdownlint、公开内容校验、站点构建、字段/命令抽查通过 |
+| M11-P4 | 配置/CLI 参考校验自动化 | 从 Zod schema 和 CLI help 建立可校验参考页流程 | 生成或校验脚本可重复运行 |
 | M11-P5 | 发布链路 | 启用 GitHub Pages workflow、`site/base`、发布说明 | 本地构建通过；线上需仓库权限 |
-| M11-P6 | 打磨与维护机制 | SEO、链接检查、贡献规则、配置字段覆盖校验 | CI 可阻止常见文档漂移 |
+| M11-P6 | 打磨与维护机制 | SEO、链接检查、贡献规则 | CI 可阻止常见文档漂移 |
 
 ## 9. 风险与缓解
 
@@ -452,7 +452,7 @@ M11-P1 后建议至少具备：
 
 ## 10. 首次实现检查清单
 
-M11-P1 + M11-P2 已完成项（2026-07）：
+M11-P1 + M11-P2 + M11-P3 已完成项（2026-07）：
 
 - ✅ 创建 `docs/site` Starlight 工程（Astro v7.0.6 / Starlight v0.41.3）。
 - ✅ `pnpm-workspace.yaml` 增加精确条目 `docs/site`（并加 `sharp` 到 `onlyBuiltDependencies`）。
@@ -468,6 +468,14 @@ M11-P1 + M11-P2 已完成项（2026-07）：
 - ✅ CI 新增独立 `docs` job（`pnpm docs:build`，含公开内容边界校验）。
 - ✅ GitHub Pages workflow 草案（`.github/workflows/docs.yml`，`withastro/action@v6`）。
 - ✅ i18n 路由：全部带前缀 `/en/` + `/zh-cn/`（见 §3.4）。
+- ✅ 全部占位页替换为中英双语完整正文（M11-P3）：配置各命名空间、CLI、MCP、VCS/agent
+  集成、Docker/Podman 部署、运维、参考、排障、贡献指南。
+- ✅ 新增 `docs/site/scripts/validate-public-content.mjs`，在 `astro build` 前校验公开页面
+  不引用内部 AI/路线图文档、不残留迁移来源维护元数据（`AGENTS.md` 和 `.agents/skills/`
+  允许引用，因为贡献者指南需要）。
+- ✅ 内容审查并修正错误：移除臆造的 `native-llm` agent kind（代码真值只有 kilo/opencode/
+  zoo/copilot-cli/claude-code）；`admin.session_ttl_seconds` 默认值修正为代码真值 86400
+  （24 小时）；`DOCKER_DOWNLOAD_MIRROR` 默认值修正并归类为 `deploy.sh` 变量而非 Dockerfile ARG。
 - ✅ 同步 `Plan.md`、`docs/ai/index.md`、`example/README.md`、`AGENTS.md`。
 
 待后续阶段（P3-P6）：迁移剩余章节正文、启用真实发布、引入链接检查与配置字段覆盖校验。
