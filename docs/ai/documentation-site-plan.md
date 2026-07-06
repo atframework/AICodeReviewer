@@ -479,6 +479,9 @@ M11-P1 + M11-P2 + M11-P3 已完成项（2026-07）：
 
 M11-P3 后续打磨（查缺补漏，2026-07）：
 
+- ✅ 修复站点根路径无主页问题：新增 `src/pages/index.astro`，在浏览器端按 `navigator.language`
+  自动跳转到 `/en/` 或 `/zh-cn/`，无 JS 时 fallback 到 meta refresh + 语言选择链接。
+  对称 i18n 路由下（所有 locale 带前缀），Starlight 不会在根路径生成页面，需要自定义路由页。
 - ✅ 三维度审查（代码真源一致性 / 链接与 IA 完整性 / 内容缺漏）覆盖全部 53 页。
 - ✅ 修正事实错误：`aicr.report_problem` 的 `message` 字段标为可选（代码为必填）；
   `aicr.fetch_more_context` / `aicr.try_blame` 的 `range` 字段名 `startLine`/`endLine`
