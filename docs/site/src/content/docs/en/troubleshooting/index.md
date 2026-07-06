@@ -198,24 +198,23 @@ rendering notes.
 **Symptom:** this documentation site (or any AICR web UI hosted on GitHub
 Pages) returns 404 for assets or deep links.
 
-**Diagnosis:** the Astro `site` and `base` are not set correctly for a
-project page. GitHub Pages project pages are served under
-`https://<user>.github.io/<repo>/`, so `base` must be the repo path with a
-leading and no trailing slash.
+**Diagnosis:** the Astro `site`, `base`, or `CNAME` setting no longer matches
+the production GitHub Pages target. This documentation site is served from the
+custom domain root at `https://aicr.atframe.work/`, so it must not use a
+project-page `base` path.
 
-**Fix:** in `astro.config.mjs`, set `site` to the host origin (no repo name)
-and `base` to the repo path:
+**Fix:** in `astro.config.mjs`, keep `site` on the custom domain and do not set
+`base`:
 
 ```js
 export default defineConfig({
-  site: "https://owent.github.io",
-  base: "/AICodeReviewer/",
+  site: "https://aicr.atframe.work",
   // ...
 });
 ```
 
-For a custom domain, set `site` to the domain, remove `base`, and add a
-`public/CNAME` file.
+Keep `public/CNAME` set to `aicr.atframe.work`, and configure repository
+Settings > Pages to publish from `gh-pages` / `/` with the same custom domain.
 
 ## Reviews hang or get progressively slower
 
