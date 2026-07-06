@@ -1,60 +1,84 @@
 name: Deploy docs
 
-# Build and deploy the AICodeReviewer documentation site (docs/site) to GitHub
-# Pages. The site is built with Astro Starlight and deployed as a project page
-# at https://owent.github.io/AICodeReviewer/ (see docs/site/astro.config.mjs).
+# Builds docs/site and publishes the generated static files to the gh-pages
+# branch. Repository Settings -> Pages should use "Deploy from a branch" with
+# branch "gh-pages" and folder "/".
 #
-# One-time setup (repository admin required):
-#   Settings -> Pages -> Source = "GitHub Actions"
-#
-# This workflow only runs on pushes to main so that publishing a doc change
-# requires going through a reviewed PR (the PR itself is validated by the
-# `docs` job in ci.yml). Triggering manually via workflow_dispatch is also
-# available for republishing without a code change.
-#
-# Action versions track the latest major (verified via GitHub Releases API,
-# 2026-07): withastro/action v6 internally uses checkout + upload-pages-artifact,
-# so we delegate the whole build step to it and only call actions/deploy-pages
-# ourselves to publish the Pages artifact.
+# This workflow uses a repository secret named DEPLOY_DOCUMENT_GH_PAGES_KEY.
+# The secret must contain an SSH private key whose public key is registered as
+# a deploy key with write access to this repository. This avoids the GitHub
+# Pages branch-publish limitation where pushes made with GITHUB_TOKEN do not
+# trigger a Pages build.
 
 on:
   push:
     branches:
       - main
+    paths:
+      - ".github/workflows/docs.yml"
+      - "docs/site/**"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
   workflow_dispatch:
 
-# Permissions required by the official Astro action and deploy-pages:
-#   contents: read   — clone the repository
-#   pages: write     — push the Pages artifact
-#   id-token: write  — OIDC token for deploy-pages (required for Pages deploy)
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
-# Avoid concurrent deploys clobbering the Pages environment.
 concurrency:
-  group: deploy-docs
+  group: deploy-docs-gh-pages
   cancel-in-progress: false
 
 jobs:
-  build:
+  build-and-publish:
+    name: Build and publish docs
     runs-on: ubuntu-latest
     steps:
-      - name: Build with Astro
-        uses: withastro/action@v6
-        with:
-          path: docs/site
-          node-version: 24
-          package-manager: pnpm@10.20.0
+      - name: Checkout
+        uses: actions/checkout@v7
 
-  deploy:
-    needs: build
-    runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v5
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 10.20.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build documentation site
+        run: pnpm docs:build
+
+      - name: Configure gh-pages SSH deploy key
+        shell: bash
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "${{ secrets.DEPLOY_DOCUMENT_GH_PAGES_KEY }}" > ~/.ssh/deploy_document_gh_pages_key
+          chmod 600 ~/.ssh/deploy_document_gh_pages_key
+          ssh-keyscan github.com >> ~/.ssh/known_hosts
+          cat >> ~/.ssh/config <<'EOF'
+          Host github.com
+            IdentityFile ~/.ssh/deploy_document_gh_pages_key
+            IdentitiesOnly yes
+          EOF
+
+      - name: Publish gh-pages branch
+        shell: bash
+        run: |
+          rm -rf build/gh-pages
+          mkdir -p build/gh-pages
+          rsync -a --delete docs/site/dist/ build/gh-pages/
+          touch build/gh-pages/.nojekyll
+
+          git -C build/gh-pages init --initial-branch=gh-pages
+          git -C build/gh-pages config user.name "github-actions[bot]"
+          git -C build/gh-pages config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git -C build/gh-pages remote add origin "git@github.com:${{ github.repository }}.git"
+          git -C build/gh-pages add --all
+          git -C build/gh-pages commit -m "Deploy docs from ${GITHUB_SHA}"
+          git -C build/gh-pages push --force origin gh-pages

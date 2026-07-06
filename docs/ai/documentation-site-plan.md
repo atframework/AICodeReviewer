@@ -193,19 +193,16 @@ GitHub Pages 发布需要在 `docs/site/astro.config.mjs` 中规划：
 - 静态输出目录：Astro 默认 `dist/`。
 - 公开环境变量只用于站点构建，不读取 AICR runtime secret。
 
-发布 workflow 建议使用 Astro 官方 action 或等价的显式步骤：
+发布 workflow 已采用显式 pnpm 步骤并发布到 `gh-pages` 分支：
 
 - checkout
-- setup pnpm / Node
+- setup pnpm / Node 24
 - install
 - `pnpm docs:build`
-- upload Pages artifact
-- deploy Pages
+- 用 `DEPLOY_DOCUMENT_GH_PAGES_KEY` SSH deploy key 配置写权限
+- 将 `docs/site/dist/` 作为 `.nojekyll` 静态快照强推到 `gh-pages`
 
-真实上线前还需要仓库 Settings > Pages 选择 GitHub Actions 作为 source。
-
-建议 workflow 使用 Astro 官方 action 的 `path: docs/site`，或使用显式 pnpm 步骤后上传
-`docs/site/dist/`。仓库级脚本应保留 `pnpm docs:build` 作为本地和 CI 的共同入口。
+真实上线前还需要仓库 Settings > Pages 选择 Deploy from a branch，发布源为 `gh-pages` / `/`。仓库级脚本保留 `pnpm docs:build` 作为本地和 CI 的共同入口。
 
 ### 3.4 i18n 路由决策（M11-P1 已落地）
 
@@ -436,7 +433,7 @@ M11-P1 后建议至少具备：
 | M11-P2 ✅ | 落地信息架构骨架 + 首批核心页 | 全章节双语占位页、导航、侧边栏；首页/快速上手/认证/输出通道四页中英双语正文 | 公开内容校验通过，站点可构建 |
 | M11-P3 ✅ | 全章节双语正文迁移 | 配置各命名空间、CLI、MCP、VCS/agent 集成、Docker/Podman 部署、运维、参考、排障、贡献指南全部替换为中英双语正文；新增公开/内部内容边界校验 | markdownlint、公开内容校验、站点构建、字段/命令抽查通过 |
 | M11-P4 | 配置/CLI 参考校验自动化 | 从 Zod schema 和 CLI help 建立可校验参考页流程 | 生成或校验脚本可重复运行 |
-| M11-P5 | 发布链路 | 启用 GitHub Pages workflow、`site/base`、发布说明 | 本地构建通过；线上需仓库权限 |
+| M11-P5 ✅ | 发布链路 | main 文档变更自动构建并通过 SSH deploy key 发布到 `gh-pages`；保留 `site/base` 项目页配置和发布说明 | `pnpm docs:build` 可本地验证；线上需 Pages source 指向 `gh-pages` / `/` |
 | M11-P6 | 打磨与维护机制 | SEO、链接检查、贡献规则 | CI 可阻止常见文档漂移 |
 
 ## 9. 风险与缓解
@@ -466,7 +463,7 @@ M11-P1 + M11-P2 + M11-P3 已完成项（2026-07）：
   Integrations / Reference / Troubleshooting / Development）。
 - ✅ 首批 4 个核心页中英双语正文（首页、快速上手、认证与密钥、输出通道）。
 - ✅ CI 新增独立 `docs` job（`pnpm docs:build`，含公开内容边界校验）。
-- ✅ GitHub Pages workflow 草案（`.github/workflows/docs.yml`，`withastro/action@v6`）。
+- ✅ GitHub Pages workflow（`.github/workflows/docs.yml`）：main 文档变更构建 `docs/site` 并用 `DEPLOY_DOCUMENT_GH_PAGES_KEY` 发布到 `gh-pages`。
 - ✅ i18n 路由：全部带前缀 `/en/` + `/zh-cn/`（见 §3.4）。
 - ✅ 全部占位页替换为中英双语完整正文（M11-P3）：配置各命名空间、CLI、MCP、VCS/agent
   集成、Docker/Podman 部署、运维、参考、排障、贡献指南。
@@ -499,5 +496,4 @@ M11-P3 后续打磨（查缺补漏，2026-07）：
 - ✅ `troubleshooting/index.md` 补充两条常见问题：dashboard admin 未配置、GitHub issue 写回
   403/404（token 权限与 App 重装）。
 
-待后续阶段（P5-P6）：启用真实 GitHub Pages 发布（需仓库权限）；引入链接检查、配置字段覆盖
-校验脚本、SEO 与贡献规则自动化。
+待后续阶段（P6）：引入链接检查、配置字段覆盖校验脚本、SEO 与贡献规则自动化；线上发布还需在 GitHub Pages 设置中确认 `gh-pages` / `/` 发布源。

@@ -2,11 +2,11 @@
 
 This directory contains a ready-to-edit deployment configuration.
 
-> **Documentation site:** The user-facing documentation is being consolidated
-> into a static site at `docs/site/` (Astro Starlight, English + 简体中文),
-> planned for publication to GitHub Pages. Build and preview it locally with
-> `pnpm docs:dev`. Until then, this README remains the most complete
-> deployment reference.
+> **Documentation site:** The user-facing documentation lives in `docs/site/`
+> (Astro Starlight, English + 简体中文). It is built with `pnpm docs:build`
+> and published from `main` doc changes to the `gh-pages` branch by
+> `.github/workflows/docs.yml`; local preview still uses `pnpm docs:dev`. This
+> README remains the copy-paste deployment reference.
 
 ## Quick Start (Docker Compose)
 
