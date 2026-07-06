@@ -149,3 +149,39 @@ export default defineConfig({
 **诊断：** 配置和 env 文件是挂载的，不是烘焙进镜像的，因此只在容器重启时重新加载。
 
 **修复：** `docker compose restart`（或重启本地 `serve` 进程）。只有代码变更才需要完整重建镜像。
+
+## Dashboard 显示需要配置 / admin 未配置
+
+**症状：** `/dashboard` 返回需要配置的页面，或 `POST /api/admin/login` 返回 401。
+
+**诊断：** 可观测性 dashboard 有**独立**的超级管理员登录（`admin.*`），与 webhook HMAC
+和 trigger API key 无关。如果 `config.yaml` 中未设置 `admin.username_env` 加
+`admin.password_env`（或 `admin.password_hash_env`），或引用的环境变量为空，dashboard
+会被禁用。
+
+**修复：** 设置三个 admin 环境变量并在 `config.yaml` 中引用：
+
+```yaml
+admin:
+  username_env: AICR_ADMIN_USERNAME
+  password_hash_env: AICR_ADMIN_PASSWORD_HASH   # sha256:<hex>，推荐
+  session_ttl_seconds: 86400                      # 24 小时；单位是秒，不是分钟
+```
+
+修改后重启容器。生产环境优先用 `password_hash_env`（`sha256:<hex>`），而非 raw `password_env`。
+
+## GitHub issue/评论写回失败（403 / 404）
+
+**症状：** `github_problem_issue` 或 `github_pr_review` 无法发布；日志显示 GitHub API 返回
+403 或 404。
+
+**诊断：** 对于回写仓库的 GitHub channel，`token_env`（或通道级覆盖）必须是**出站** API 凭据，
+且具有仓库 Issues 读写权限——它不是 webhook secret。在 GitHub webhook 事件列表中勾选
+**Issues** 或 **Issue comments** 只控制哪些**入站**事件被投递，**不授予** REST API 权限。
+
+**修复：**
+
+- 个人访问令牌：确保具有 `repo` scope（或目标仓库上的细粒度 `Issues: Read and write` 权限）。
+- GitHub App：更新仓库权限后，**重新安装或刷新安装**再重试——权限变更不会追溯应用到已有安装。
+- 确认 `triggers[].token_env` 或通道级覆盖引用的是出站凭据，而不是 `AICR_GITHUB_WEBHOOK_SECRET`。
+

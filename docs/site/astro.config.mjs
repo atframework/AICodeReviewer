@@ -74,6 +74,7 @@ export default defineConfig({
             { slug: "integrations/vcs-providers", translations: { "zh-CN": "VCS 提供商" } },
             { slug: "integrations/agent-adapters", translations: { "zh-CN": "Agent 适配器" } },
             { slug: "integrations/output-channels", translations: { "zh-CN": "输出通道" } },
+            { slug: "integrations/im-bots", translations: { "zh-CN": "IM 机器人" } },
             { slug: "integrations/mcp-tools", translations: { "zh-CN": "MCP 工具" } },
           ],
         },

@@ -155,7 +155,7 @@ workspace id 不能与保留键 `cache`、`defaults`、`instances` 冲突。
 | `outputs.routes.default` | object | — | 无规则匹配时应用的默认路由 |
 | `outputs.routes.rules[]` | array | `[]` | 有序路由规则 |
 | `outputs.routes.rules[].match.trigger` | string | — | 要匹配的 trigger 名 |
-| `outputs.routes.rules[].match.target_kind` | enum | — | 目标类型（`pull_request`、`merge_request`、`push`、`commit` 等）；`pr` 会被归一化为 `pull_request` |
+| `outputs.routes.rules[].match.target_kind` | enum | — | 目标类型（`pull_request`、`push`、`commit`、`issue`、`manual`、`scheduled`）；`pr` 会被归一化为 `pull_request`。GitLab MR 以 `pull_request` 报告。 |
 | `outputs.routes.rules[].line_comments` | string[] | — | 接收行评论输出的 channel 名 |
 | `outputs.routes.rules[].summary` | string[] | — | 接收 summary 输出的 channel 名 |
 

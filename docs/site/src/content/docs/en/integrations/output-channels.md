@@ -55,16 +55,17 @@ the request and feeds attribution back into a follow-up pass.
 ## Channel kinds
 
 Channel `kind` is a free-form string constrained by the output implementation
-registry (Zod validates the shape; the dispatcher resolves the kind). The
-kinds exercised in `example/config.yaml`:
+registry (Zod validates the shape; the dispatcher resolves the kind).
 
-| Kind | Renders to |
-| --- | --- |
-| `gitea_pr_review` / `github_pr_review` / `gitlab_mr_review` | PR/MR line comments + one managed summary comment |
-| `gitea_problem_issue` / `github_problem_issue` | Managed issues, one per problem (or consolidated), with lifecycle reconciliation |
-| `gitea_issue` / `github_issue` | Generic issue comments for non-PR targets |
-| `feishu_bot` | Feishu group bot card |
-| `wecom_bot` | WeCom group bot Markdown message |
+| Kind | Problem output | Summary output | Notes |
+| --- | --- | --- | --- |
+| `gitea_pr_review` | One consolidated PR review/comment body | PR review / configured summary publisher | Problems are buffered and flushed as one Markdown body; falls back to one issue comment on 403/422 |
+| `github_pr_review` | One consolidated PR review/comment body | PR review / configured summary publisher | Same buffer-and-flush as `gitea_pr_review`; falls back to issue comment on 403/422 |
+| `gitlab_mr_review` | MR discussion when `baseSha`/`headSha` available | MR note / configured summary publisher | Falls back to a general MR note when line anchoring is unavailable |
+| `gitea_problem_issue` / `github_problem_issue` | Collected for reconciliation | Creates / updates / resolves managed problem issues | Fingerprint stability matters most here; `github_problem_issue` uses string label names and `resolved_action` supports only `close` and `none` (GitHub has no issue delete API) |
+| `gitea_issue` / `github_issue` | Collected, rendered into an issue comment | Aggregated issue comment | Useful for push events or issue-based triage |
+| `feishu_bot` | Collected for aggregation | Interactive card (JSON 2.0 schema) | See [IM bots](/en/integrations/im-bots/) |
+| `wecom_bot` | Collected for aggregation | Markdown message | See [IM bots](/en/integrations/im-bots/) |
 
 :::note[Feishu cards use schema 2.0]
 Feishu card payloads set `card.schema = "2.0"` and place markdown under
@@ -72,6 +73,40 @@ Feishu card payloads set `card.schema = "2.0"` and place markdown under
 language-based code highlighting. AICR applies `toFeishuMarkdown()` before
 dispatch.
 :::
+
+:::note[PR-review problems are buffered]
+`gitea_pr_review` and `github_pr_review` buffer `publishProblem` calls and
+flush them as **one** consolidated Markdown reply when `publishSummary` is
+called. Do not expect one HTTP POST per problem or per-problem inline
+comments. If you configure a PR-review channel only under `line_comments`,
+the composite publisher must still call the summary flush, or buffered
+problems will be dropped.
+:::
+
+## Managed problem-issue lifecycle
+
+`gitea_problem_issue` and `github_problem_issue` reconcile stale managed
+issues across reviews. Key behaviors:
+
+- **Fingerprint stability.** Each problem carries a `fingerprint`. AICR tracks
+  open fingerprints in a hidden `aicr:problems` marker inside each managed
+  issue. When a previously-open fingerprint disappears, the issue is moved to
+  a Resolved section (and optionally closed).
+- **File-scope resolution guard.** A problem is only marked "resolved" when
+  the current review actually re-analyzed the file containing it. A review
+  triggered by a commit that touches unrelated files — or that finds nothing
+  — will **not** mark every previously-reported problem as resolved. Each
+  managed-issue body embeds `aicr:file=<path>` so the file is recoverable.
+- **Recent-issue cap.** Reconciliation lists only the most recent open issues,
+  capped by `review.problem_issue.max_recent_issues` (default 20, range 1–100,
+  overridable per workspace). Fingerprints outside the recent window are not
+  deduplicated or closed in that run.
+- **GitHub `resolved_action`.** Supports `close` and `none` only (GitHub has
+  no issue-delete API). Gitea additionally supports `delete`.
+
+See [Output channels config](/en/configuration/outputs/) for the
+`issue_mode`, `resolved_action`, `assign_committer`, `owners_file`, and
+severity-label fields.
 
 ## Routing
 
@@ -103,8 +138,10 @@ result, the run is recorded as skipped with
 ## Where to next
 
 - Full per-channel options and the IM Markdown transforms: see
-  [Output channels config](/en/configuration/outputs/) (planned).
+  [Output channels config](/en/configuration/outputs/).
 - Full MCP tool input schemas and the `.aicr-output-state.json` flow: see
-  [MCP tools](/en/integrations/mcp-tools/) (planned).
+  [MCP tools](/en/integrations/mcp-tools/).
 - Template variables for summary/problem rendering: see
-  [Template variables](/en/reference/template-variables/) (planned).
+  [Template variables](/en/reference/template-variables/).
+- Setting up Feishu or WeCom group bots: see
+  [IM bots](/en/integrations/im-bots/).

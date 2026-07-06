@@ -37,7 +37,7 @@ Report one actionable code-review problem anchored to a changed line.
 | `end_line` | no | int | End line for a range problem; rendered as `file:start-end` |
 | `severity` | yes | enum | `info`, `low`, `medium`, `high`, `critical` |
 | `category` | yes | string | Short problem family (`correctness`, `security`, `api-contract`, …); kept stable for grouping/dedupe |
-| `message` | no | string | Problem analysis: what is wrong, the trigger scenario, and the impact. This is the primary comment body |
+| `message` | yes | string | Problem analysis: what is wrong, the trigger scenario, and the impact. This is the primary comment body |
 | `suggestion` | no | string | Smallest plausible fix direction; may include a fenced `diff` patch |
 | `fingerprint` | no | string | Stable dedupe key; preserved in hidden comments where supported |
 
@@ -128,7 +128,7 @@ Request source context for a changed file or narrowly related repository file.
 | Field | Required | Type | Description |
 | --- | --- | --- | --- |
 | `path` | yes | string | Repository-relative path to fetch |
-| `range` | no | object | Optional line range (`startLine`, `endLine`) |
+| `range` | no | object | Optional line range (`start_line`, `end_line`) |
 | `reason` | yes | string | Why this context is needed for the review |
 
 Use it to close source-context gaps during review:
@@ -159,7 +159,7 @@ Request VCS-verified, best-effort line attribution without file content.
 | Field | Required | Type | Description |
 | --- | --- | --- | --- |
 | `path` | yes | string | Repository-relative path |
-| `range` | no | object | Optional line range (`startLine`, `endLine`) |
+| `range` | no | object | Optional line range (`start_line`, `end_line`) |
 | `reason` | yes | string | Why attribution is needed |
 
 Use it only when ownership, recent-change authorship, or revision provenance

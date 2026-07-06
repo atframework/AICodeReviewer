@@ -44,7 +44,7 @@ workspaces/<workspace_id>/templates/
 | `{{event.displayName}}` | 作者显示名（视情况可用） |
 | `{{event.url}}` | 原始事件 URL（视情况可用）；模板不应假定它一定是 PR/MR URL |
 | `{{event.title}}` | 事件标题（PR/MR 标题、commit message 主题、changelist 描述等，视情况可用） |
-| `{{target.kind}}` | 目标类型（`pull_request`、`merge_request`、`push`、`commit`、`changeset`、`revision`、`scheduled`、`manual`） |
+| `{{target.kind}}` | 目标类型（`pull_request`、`push`、`commit`、`issue`、`manual`、`scheduled`） |
 | `{{target.displayText}}` | 适用于任何事件类型的安全纯文本目标标签 |
 | `{{target.markdownLink}}` | 安全的 Markdown 目标链接；用它代替硬编码 `[View PR]` |
 | `{{target.url}}` | 目标 URL（视情况可用） |

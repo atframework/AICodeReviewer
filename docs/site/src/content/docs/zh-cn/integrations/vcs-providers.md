@@ -132,9 +132,35 @@ aicr-review change-commit //depot/main/... "/path/to/p4-trigger.sh %change% %use
 保留 `%user%` 和 `%client%`——它们作为 changelist 作者和提交 client 转发给 AICR，用于报告
 归属。AICR 适配器配置的 P4 workspace 仅作分析 client，不作为对外的提交者元数据。
 
-把 `example/p4-trigger.sh` 复制到 **P4 服务端主机**（不是 AICR 容器），并在该主机设置
-`AICR_URL` + `AICR_API_KEY`。脚本默认**不**运行 `p4 describe`，避免 p4d 侧 SSL trust 提示
-阻塞提交。
+把 `example/p4-trigger.sh` 复制到 **P4 服务端主机**（不是 AICR 容器），加可执行权限
+（`chmod +x`），并在该主机设置以下环境变量：
+
+| 变量 | 必填 | 说明 |
+| --- | --- | --- |
+| `AICR_URL` | 是 | AICR 服务地址，如 `http://10.64.8.2:8090` |
+| `AICR_API_KEY` | 是 | 必须与 `config.yaml` 中 `server.auth.api_key_env` 一致 |
+| `AICR_DEPOT_PATH` | 否 | depot 路径覆盖。留空则使用 `config.yaml` 中的服务端 `depot_path`。 |
+| `AICR_P4_COLLECT_FILES` | 否 | 默认 `0`。保持禁用，这样 p4d trigger 不运行 `p4 describe`，也不需要本地 `p4 trust`。 |
+| `AICR_P4PORT` | 否 | 仅当 `AICR_P4_COLLECT_FILES=1` 时必填；必须显式指定，如 `ssl:p4.example.com:1666`。 |
+| `AICR_P4USER` | 否 | 可选采集模式用户覆盖；否则脚本用 trigger `%user%`，再退到 `P4USER`（绝不隐式用 OS `root`）。 |
+| `AICR_P4CLIENT` | 否 | 可选采集模式 client 覆盖；否则用 trigger `%client%`，再退到 `P4CLIENT`。 |
+| `AICR_P4PASSWD` | 否 | 可选采集模式密码/ticket；仅当 P4 安全级别要求登录时，配合显式 service user 使用。 |
+| `AICR_P4_AUTO_TRUST` | 否 | 可选采集模式的 `1`/`true`；默认 `0`。否则以 trigger OS 用户身份执行一次 `p4 trust`。 |
+
+脚本默认**不**运行 `p4 describe`，避免 p4d 侧 SSL trust 提示阻塞提交。脚本在本地记录失败并以
+成功码退出，这样异步评审永远不会阻塞提交链路。
+
+服务启动后，可手动测试端点：
+
+```bash
+# 带 API key（启用 server.auth 时必填）：
+curl -X POST http://localhost:8080/triggers/p4 \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: YOUR_API_KEY" \
+  -d '{"change":"12345","user":"testuser","depot_path":"//depot/main","files":["//depot/main/src/main.cpp"]}'
+```
+
+成功响应返回 `{"accepted": true, ...}`。
 
 ### Subversion (SVN)
 
@@ -167,8 +193,22 @@ export AICR_API_KEY="<与 server.auth.api_key_env 相同的值>"
 /path/to/svn-trigger.sh "$REPOS" "$REV"
 ```
 
-把 `example/svn-trigger.sh` 复制到 SVN 服务端主机（需要 `jq` 和 `svnlook`，SVN 服务端环境
-自带）。
+把 `example/svn-trigger.sh` 复制到 SVN 服务端主机并加可执行权限（`chmod +x`）。脚本需要
+`jq` 和 `svnlook`（SVN 服务端环境自带）：`svnlook` 读取作者、日志信息和变更路径，脚本再
+把它们编码为 JSON 并 POST 到 `/triggers/svn`。脚本不发送仓库 URL——AICR 始终使用服务端配置的
+`repository_url`。
+
+服务启动后，可手动测试端点：
+
+```bash
+# 带 API key（启用 server.auth 时必填）：
+curl -X POST http://localhost:8080/triggers/svn \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: YOUR_API_KEY" \
+  -d '{"revision":"123","author":"testuser","files":["src/app.cpp"]}'
+```
+
+成功响应返回 `{"accepted": true, ...}`。
 
 ## 文件过滤
 

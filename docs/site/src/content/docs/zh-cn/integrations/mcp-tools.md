@@ -30,7 +30,7 @@ AICR 向评审 agent 暴露一个小而稳定的 MCP 工具集。agent 调用这
 | `end_line` | 否 | int | 范围问题的结束行；渲染为 `file:start-end` |
 | `severity` | 是 | enum | `info`、`low`、`medium`、`high`、`critical` |
 | `category` | 是 | string | 短问题族（`correctness`、`security`、`api-contract`…）；保持稳定以便分组/去重 |
-| `message` | 否 | string | 问题分析：错在哪、触发场景、影响。这是评论正文 |
+| `message` | 是 | string | 问题分析：错在哪、触发场景、影响。这是评论正文 |
 | `suggestion` | 否 | string | 最小 plausible 修复方向；可包含 fenced `diff` 补丁 |
 | `fingerprint` | 否 | string | 稳定的去重键；在支持的 channel 中保留在隐藏评论里 |
 
@@ -104,7 +104,7 @@ AICR 向评审 agent 暴露一个小而稳定的 MCP 工具集。agent 调用这
 | 字段 | 必填 | 类型 | 描述 |
 | --- | --- | --- | --- |
 | `path` | 是 | string | 要拉取的仓库相对路径 |
-| `range` | 否 | object | 可选行范围（`startLine`、`endLine`） |
+| `range` | 否 | object | 可选行范围（`start_line`、`end_line`） |
 | `reason` | 是 | string | 为什么评审需要这段上下文 |
 
 用于在评审中补齐源码上下文缺口：
@@ -127,7 +127,7 @@ AICR 向评审 agent 暴露一个小而稳定的 MCP 工具集。agent 调用这
 | 字段 | 必填 | 类型 | 描述 |
 | --- | --- | --- | --- |
 | `path` | 是 | string | 仓库相对路径 |
-| `range` | 否 | object | 可选行范围（`startLine`、`endLine`） |
+| `range` | 否 | object | 可选行范围（`start_line`、`end_line`） |
 | `reason` | 是 | string | 为什么需要归因 |
 
 仅当归属、最近变更作者或 revision 来源实质影响评审时使用。结果带 `status: ok | partial | not_found` 以及可用的行/revision/作者元数据——绝不含源码文本。如果当前 VCS 适配器没有归因后端，AICR 返回 `not_found`，而不是让模型猜测作者。

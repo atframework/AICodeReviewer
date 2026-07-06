@@ -169,7 +169,7 @@ Narrative: [Output channels and routing](/en/configuration/outputs/).
 | `outputs.routes.default` | object | — | Default route applied when no rule matches |
 | `outputs.routes.rules[]` | array | `[]` | Ordered routing rules |
 | `outputs.routes.rules[].match.trigger` | string | — | Trigger name to match |
-| `outputs.routes.rules[].match.target_kind` | enum | — | Target kind (`pull_request`, `merge_request`, `push`, `commit`, etc.); `pr` is normalized to `pull_request` |
+| `outputs.routes.rules[].match.target_kind` | enum | — | Target kind (`pull_request`, `push`, `commit`, `issue`, `manual`, `scheduled`); `pr` is normalized to `pull_request`. GitLab MRs are reported as `pull_request`. |
 | `outputs.routes.rules[].line_comments` | string[] | — | Channel names to receive line-comment output |
 | `outputs.routes.rules[].summary` | string[] | — | Channel names to receive summary output |
 

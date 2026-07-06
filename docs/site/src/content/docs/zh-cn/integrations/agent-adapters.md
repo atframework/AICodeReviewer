@@ -89,4 +89,30 @@ Copilot CLI 使用其订阅固定的 model catalog。没有注入接入面，对
 
 ## 选择 agent
 
-全局设置 `agent.default`，按 workspace 用 `workspaces.instances.<id>.agent.default` 覆盖，或用 `workspaces.defaults.agent.default` 为一组 workspace 设置默认值。适用于所有 agent kind 的超时、沙箱和上下文压缩字段参见 [Agent 与沙箱](/zh-cn/configuration/agent/)。
+全局设置 `agent.default`，按 workspace 用 `workspaces.instances.<id>.agent.default` 覆盖，或用
+`workspaces.defaults.agent.default` 为一组 workspace 设置默认值。适用于所有 agent kind 的超时、
+沙箱和上下文压缩字段参见 [Agent 与沙箱](/zh-cn/configuration/agent/)。
+
+### 该用哪个 agent？
+
+| Agent | 适用场景 | 注意事项 |
+| --- | --- | --- |
+| `kilo`（默认） | 经过验证、受支持的默认路径，端到端测试覆盖和生产硬化最充分。 | 需要声明 `contextWindow` 才能自动压缩——启用 `llm.model_catalog` 或在 overrides 里设置 `context_window`，否则大 PR 会溢出。 |
+| `claude-code` | 已以 Claude Code 为标准的团队；Anthropic 原生 model catalog。 | 默认自动压缩（委托给 Claude Code 内置行为）。catalog 只派生 `ANTHROPIC_MAX_TOKENS`，其余委托给 Claude Code 原生 catalog。 |
+| `opencode` | 开源优先的部署；自定义 OpenAI-compatible provider。 | 已知 provider 原生从 models.dev 解析。自定义 OpenAI-compatible provider 会注入 `limit`/`cost`，但需显式 provider 配置。 |
+| `zoo` | 以 Zoo Code 为主力工具的团队。 | 始终需要注入 `contextWindow`/`maxTokens`/`supportsImages`/价格——启用 model catalog。 |
+| `copilot-cli` | 使用 GitHub Copilot 订阅、希望零单次 LLM 成本的环境。 | 使用订阅固定的 catalog；不注入模型元数据。无对话级自动压缩接入面（`not_applicable`）。 |
+
+### 决策指引
+
+- **刚开始或不确定？** 用 `kilo`（默认）。它的生产验证最深，也是部署验证流程检查的 agent。
+- **大 PR 上下文溢出？** 无论选哪个 agent，都要确保模型声明了 `contextWindow`（通过
+  `llm.model_catalog` 或显式 `context_window` override）。否则 Kilo 和 Zoo 无法跟踪上下文用量，
+  会溢出而非自动压缩。若仍发生溢出，AICR 抛出 `AgentContextOverflowError`，附带模型上限、
+  请求 token 数和可操作指引——绝不会是泛化的 `review_orchestration_failed`。
+- **混用 agent？** `agent.default` 可按 workspace 覆盖，所以大多数仓库用 `kilo`、某个仓库用
+  `claude-code`，无需运行两个服务。
+
+能力缺口（vision、reasoning、结构化输出、工具调用）记录在每个 run 的 `manifest.json` 中，
+标记为 `injected`、`delegated` 或 `not_applicable`——绝不静默丢弃。
+

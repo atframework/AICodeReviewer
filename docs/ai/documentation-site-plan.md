@@ -478,4 +478,26 @@ M11-P1 + M11-P2 + M11-P3 已完成项（2026-07）：
   （24 小时）；`DOCKER_DOWNLOAD_MIRROR` 默认值修正并归类为 `deploy.sh` 变量而非 Dockerfile ARG。
 - ✅ 同步 `Plan.md`、`docs/ai/index.md`、`example/README.md`、`AGENTS.md`。
 
-待后续阶段（P3-P6）：迁移剩余章节正文、启用真实发布、引入链接检查与配置字段覆盖校验。
+M11-P3 后续打磨（查缺补漏，2026-07）：
+
+- ✅ 三维度审查（代码真源一致性 / 链接与 IA 完整性 / 内容缺漏）覆盖全部 53 页。
+- ✅ 修正事实错误：`aicr.report_problem` 的 `message` 字段标为可选（代码为必填）；
+  `aicr.fetch_more_context` / `aicr.try_blame` 的 `range` 字段名 `startLine`/`endLine`
+  改为代码真值 `start_line`/`end_line`；`target_kind` 和模板变量 `target.kind` 移除不存在的
+  `merge_request`/`changeset`/`revision`，补回 `issue`（与 `review-event.ts` enum 一致）。
+- ✅ 新增 `integrations/im-bots.md`（中英双语）：完整迁移飞书 + 企业微信 bot 配置（创建步骤、
+  环境变量、channel 配置、路由、飞书签名校验算法与 2.0 schema 渲染、企业微信 Markdown 限制），
+  并加入 sidebar。
+- ✅ 清除 `integrations/output-channels.md` 三处 `(planned)`/`（规划中）` 占位残留（目标页
+  均已存在）。
+- ✅ 充实 `output-channels.md`：补全 channel mapping 表（含 buffer-and-flush 行为、
+  403/422 fallback、GitHub `resolved_action` 限制）和托管 problem issue 生命周期内部机制
+  （fingerprint 稳定性、文件范围解决守卫、最近 issue 上限）。
+- ✅ 补充 `vcs-providers.md`：P4 trigger 脚本的 9 个环境变量表（`AICR_P4_COLLECT_FILES` 等）
+  和手动测试示例；SVN trigger 的 `jq`/`svnlook`/`chmod` 说明和手动测试示例。
+- ✅ 充实 `agent-adapters.md`：新增"Which agent should I use?"选型对比表和决策指引。
+- ✅ `troubleshooting/index.md` 补充两条常见问题：dashboard admin 未配置、GitHub issue 写回
+  403/404（token 权限与 App 重装）。
+
+待后续阶段（P5-P6）：启用真实 GitHub Pages 发布（需仓库权限）；引入链接检查、配置字段覆盖
+校验脚本、SEO 与贡献规则自动化。
