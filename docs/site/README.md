@@ -52,10 +52,10 @@ tag (e.g. `"zh-CN"`) in `astro.config.mjs`.
 
 ## Deployment target
 
-The site targets a GitHub Pages project page at
-`https://owent.github.io/AICodeReviewer/`. The `site` and `base` fields in
-`astro.config.mjs` encode that. To change to a custom domain, set `site` to the
-domain, remove `base`, and add a `public/CNAME` file.
+The site targets the GitHub Pages custom domain `https://aicr.atframe.work/`.
+The `site` field in `astro.config.mjs` encodes that origin, and no `base` is
+set because the site is published at the domain root. The `public/CNAME` file
+is copied into `gh-pages` so GitHub Pages keeps the custom domain binding.
 
 The GitHub Actions workflow at `.github/workflows/docs.yml` builds the site
 and publishes `docs/site/dist/` to the `gh-pages` branch. Real publishing

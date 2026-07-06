@@ -10,15 +10,13 @@ import starlight from "@astrojs/starlight";
 // `defaultLocale: "en"` only controls UI-string fallback and language detection,
 // it does NOT make English a root (non-prefixed) locale.
 //
-// Deployment target: GitHub Pages project page at
-//   https://owent.github.io/AICodeReviewer/
-// `site` is the host origin only (no repo name); `base` is the repo path with
-// leading and no trailing slash. Change both when moving to a custom domain
-// (set `site` to the domain and remove `base`, then add a public/CNAME file).
+// Deployment target: GitHub Pages custom domain at
+//   https://aicr.atframe.work/
+// `site` is the public origin. Do not set `base` while publishing at the
+// custom domain root; `public/CNAME` carries the domain into gh-pages.
 
 export default defineConfig({
-  site: "https://owent.github.io",
-  base: "/AICodeReviewer/",
+  site: "https://aicr.atframe.work",
   integrations: [
     starlight({
       title: "AICodeReviewer",

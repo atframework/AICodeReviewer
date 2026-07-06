@@ -188,8 +188,9 @@ Docker 构建边界：
 
 GitHub Pages 发布需要在 `docs/site/astro.config.mjs` 中规划：
 
-- `site`: 发布后的根 URL。
-- `base`: 项目页通常为 `/AICodeReviewer/`，用户或组织页可为 `/`。
+- `site`: 发布后的根 URL，当前为自定义域名 `https://aicr.atframe.work/`。
+- `base`: 自定义域名根路径发布时不设置 `base`；如以后改回项目页，再设置仓库路径。
+- `public/CNAME`: 写入 `aicr.atframe.work`，随静态产物复制到 `gh-pages`。
 - 静态输出目录：Astro 默认 `dist/`。
 - 公开环境变量只用于站点构建，不读取 AICR runtime secret。
 
@@ -202,7 +203,7 @@ GitHub Pages 发布需要在 `docs/site/astro.config.mjs` 中规划：
 - 用 `DEPLOY_DOCUMENT_GH_PAGES_KEY` SSH deploy key 配置写权限
 - 将 `docs/site/dist/` 作为 `.nojekyll` 静态快照强推到 `gh-pages`
 
-真实上线前还需要仓库 Settings > Pages 选择 Deploy from a branch，发布源为 `gh-pages` / `/`。仓库级脚本保留 `pnpm docs:build` 作为本地和 CI 的共同入口。
+真实上线前还需要仓库 Settings > Pages 选择 Deploy from a branch，发布源为 `gh-pages` / `/`，并把 custom domain 绑定到 `aicr.atframe.work`。仓库级脚本保留 `pnpm docs:build` 作为本地和 CI 的共同入口。
 
 ### 3.4 i18n 路由决策（M11-P1 已落地）
 
@@ -433,7 +434,7 @@ M11-P1 后建议至少具备：
 | M11-P2 ✅ | 落地信息架构骨架 + 首批核心页 | 全章节双语占位页、导航、侧边栏；首页/快速上手/认证/输出通道四页中英双语正文 | 公开内容校验通过，站点可构建 |
 | M11-P3 ✅ | 全章节双语正文迁移 | 配置各命名空间、CLI、MCP、VCS/agent 集成、Docker/Podman 部署、运维、参考、排障、贡献指南全部替换为中英双语正文；新增公开/内部内容边界校验 | markdownlint、公开内容校验、站点构建、字段/命令抽查通过 |
 | M11-P4 | 配置/CLI 参考校验自动化 | 从 Zod schema 和 CLI help 建立可校验参考页流程 | 生成或校验脚本可重复运行 |
-| M11-P5 ✅ | 发布链路 | main 文档变更自动构建并通过 SSH deploy key 发布到 `gh-pages`；保留 `site/base` 项目页配置和发布说明 | `pnpm docs:build` 可本地验证；线上需 Pages source 指向 `gh-pages` / `/` |
+| M11-P5 ✅ | 发布链路 | main 文档变更自动构建并通过 SSH deploy key 发布到 `gh-pages`；保留 `aicr.atframe.work` 自定义域名和发布说明 | `pnpm docs:build` 可本地验证；线上需 Pages source 指向 `gh-pages` / `/` 并绑定 custom domain |
 | M11-P6 | 打磨与维护机制 | SEO、链接检查、贡献规则 | CI 可阻止常见文档漂移 |
 
 ## 9. 风险与缓解
@@ -443,7 +444,7 @@ M11-P1 后建议至少具备：
 | 文档站依赖进入运行时镜像 | 镜像变大，部署构建变慢 | root build 过滤 runtime packages，Dockerfile 不复制 `docs/site` 到 runtime |
 | `docs/*` 被误作为 workspace 包 | 普通 Markdown 目录被当成 package，install/build 失败 | `pnpm-workspace.yaml` 使用精确条目 `docs/site` |
 | 配置参考和 Zod schema 漂移 | 用户照文档配置失败 | 建立 schema 字段覆盖检查或生成流程 |
-| `base` 配置错误 | GitHub Pages 子路径资源 404 | 在 `astro.config.mjs` 中显式处理项目页 base，并在 preview checklist 验证 |
+| 自定义域名或 `base` 配置漂移 | GitHub Pages 资源或深链接 404 | `astro.config.mjs` 固定 `site: "https://aicr.atframe.work"` 且不设置 `base`；`public/CNAME` 固定域名并在 preview checklist 验证 |
 | 内部 AI 文档误发布 | 暴露无关维护细节，用户困惑 | 文档站只从用户内容目录发布，`docs/ai/*` 只作为内部来源 |
 | 内容一次性迁移过大 | 难审查、易过期 | 按 quick start、examples、config、operations、reference 分批迁移 |
 
@@ -457,8 +458,8 @@ M11-P1 + M11-P2 + M11-P3 已完成项（2026-07）：
 - ✅ root `build` / `clean` 收紧为 `--filter "./packages/*"`，确保不触发文档站构建。
 - ✅ 复核 Dockerfile：`pnpm install --frozen-lockfile` 会静默跳过目录缺失的 workspace
   importer（实测验证），runtime 镜像不会安装 Astro/Starlight。
-- ✅ Starlight `site` / `base` 配置 GitHub Pages 项目页
-  （`https://owent.github.io/AICodeReviewer/`）。
+- ✅ Starlight `site` / `public/CNAME` 配置 GitHub Pages 自定义域名
+  （`https://aicr.atframe.work/`，不设置 `base`）。
 - ✅ 全章节双语导航骨架（Getting Started / Configuration / Deployment /
   Integrations / Reference / Troubleshooting / Development）。
 - ✅ 首批 4 个核心页中英双语正文（首页、快速上手、认证与密钥、输出通道）。

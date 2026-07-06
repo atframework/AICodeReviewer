@@ -120,19 +120,18 @@ podman ps || podman --storage-driver=overlay system migrate
 
 **症状：** 本文档站点（或任何托管在 GitHub Pages 的 AICR Web UI）对静态资源或深链接返回 404。
 
-**诊断：** Astro 的 `site` 和 `base` 没有为 project page 正确设置。GitHub Pages project page 服务在 `https://<user>.github.io/<repo>/` 下，因此 `base` 必须是带前导、无尾随斜杠的 repo 路径。
+**诊断：** Astro 的 `site`、`base` 或 `CNAME` 与生产 GitHub Pages 目标不一致。本文档站点发布在自定义域名根路径 `https://aicr.atframe.work/`，因此不能使用 project page 的 `base` 路径。
 
-**修复：** 在 `astro.config.mjs` 中把 `site` 设为主机 origin（不含 repo 名），`base` 设为 repo 路径：
+**修复：** 在 `astro.config.mjs` 中保留自定义域名 `site`，不要设置 `base`：
 
 ```js
 export default defineConfig({
-  site: "https://owent.github.io",
-  base: "/AICodeReviewer/",
+  site: "https://aicr.atframe.work",
   // ...
 });
 ```
 
-使用自定义域名时，把 `site` 设为域名，移除 `base`，并添加 `public/CNAME` 文件。
+保持 `public/CNAME` 为 `aicr.atframe.work`，并在仓库 Settings > Pages 中使用 `gh-pages` / `/` 发布源和同一个 custom domain。
 
 ## 评审挂起或越来越慢
 
