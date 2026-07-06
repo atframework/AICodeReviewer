@@ -1,0 +1,39 @@
+name: Stale issues
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  issues: write
+  pull-requests: read
+
+jobs:
+  stale:
+    name: Mark and close inactive issues
+    runs-on: ubuntu-latest
+    steps:
+      - name: Mark stale issues
+        uses: actions/stale@v10
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          days-before-issue-stale: 60
+          days-before-issue-close: 14
+          days-before-pr-stale: -1
+          days-before-pr-close: -1
+          stale-issue-label: "status: stale"
+          close-issue-label: "status: closed-stale"
+          close-issue-reason: not_planned
+          exempt-issue-labels: "do-not-stale,keep-open,pinned,security"
+          stale-issue-message: >
+            This issue has had no activity for 60 days and is marked stale.
+            Add the do-not-stale label or leave a comment if it should remain open.
+          close-issue-message: >
+            Closing this issue after 14 additional days without activity.
+            Reopen or comment if the issue is still relevant.
+          remove-issue-stale-when-updated: true
+          labels-to-remove-when-stale: "status: needs-triage,status: waiting-for-author"
+          labels-to-remove-when-unstale: "status: stale"
+          labels-to-add-when-unstale: "status: active"
+          operations-per-run: 100

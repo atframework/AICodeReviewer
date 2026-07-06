@@ -57,9 +57,11 @@ The site targets a GitHub Pages project page at
 `astro.config.mjs` encode that. To change to a custom domain, set `site` to the
 domain, remove `base`, and add a `public/CNAME` file.
 
-The GitHub Actions workflow at `.github/workflows/docs.yml` builds and deploys
-the site. Real publishing requires the repository's **Settings → Pages →
-Source = GitHub Actions**.
+The GitHub Actions workflow at `.github/workflows/docs.yml` builds the site
+and publishes `docs/site/dist/` to the `gh-pages` branch. Real publishing
+requires the repository secret `DEPLOY_DOCUMENT_GH_PAGES_KEY` to contain a
+writable SSH deploy key and the repository's **Settings → Pages → Source =
+Deploy from a branch**, branch `gh-pages`, folder `/`.
 
 ## Boundaries
 

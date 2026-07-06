@@ -4,11 +4,15 @@ on:
   push:
     branches:
       - main
-      - master
   pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   verify:
+    name: Runtime lint, typecheck, tests, build
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
