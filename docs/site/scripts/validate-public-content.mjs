@@ -2,7 +2,9 @@ import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { join, relative } from "node:path";
 
-const docsRoot = fileURLToPath(new URL("../src/content/docs/", import.meta.url));
+const docsRoot = fileURLToPath(
+  new URL("../src/content/docs/", import.meta.url),
+);
 
 // Guard the public/internal boundary called for by docs/ai/documentation-site-plan.md
 // §1.1 / §4.0: internal AI/roadmap/architecture docs and maintenance metadata must
@@ -24,7 +26,10 @@ function* walk(dir) {
     const path = join(dir, entry.name);
     if (entry.isDirectory()) {
       yield* walk(path);
-    } else if (entry.isFile() && (path.endsWith(".md") || path.endsWith(".mdx"))) {
+    } else if (
+      entry.isFile() &&
+      (path.endsWith(".md") || path.endsWith(".mdx"))
+    ) {
       yield path;
     }
   }

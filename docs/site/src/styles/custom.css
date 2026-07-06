@@ -16,50 +16,54 @@
 :root,
 [data-theme="light"] {
   --sl-color-accent: hsl(var(--aicr-accent-h) var(--aicr-accent-s) 42%);
-  --sl-color-accent-low: hsl(var(--aicr-accent-h) var(--aicr-accent-s) 42% / 0.12);
+  --sl-color-accent-low: hsl(
+    var(--aicr-accent-h) var(--aicr-accent-s) 42% / 0.12
+  );
 }
 
 [data-theme="dark"] {
   --sl-color-accent: hsl(var(--aicr-accent-h) var(--aicr-accent-s) 60%);
-  --sl-color-accent-low: hsl(var(--aicr-accent-h) var(--aicr-accent-s) 60% / 0.16);
+  --sl-color-accent-low: hsl(
+    var(--aicr-accent-h) var(--aicr-accent-s) 60% / 0.16
+  );
 }
 
-/* Fluid content width that scales with viewport.
+/* Full-bleed content width (no fixed max-width cap).
  *
- * Starlight defaults:
- *   --sl-content-width: 45rem   (regular pages with sidebar)
- *   --sl-content-width: 67.5rem (splash / no-sidebar, set by Page.astro)
+ * Starlight caps the content column by default (--sl-content-width: 45rem on
+ * regular pages, 67.5rem on splash pages), which leaves large empty gutters on
+ * 2.5K / 4K / ultra-wide displays. We drop the cap by setting the width to
+ * 100% — exactly what Starlight's own print stylesheet does. The content then
+ * fills the space between the sidebar and the table of contents on regular
+ * pages, and the full viewport on landing pages. On small screens the width
+ * naturally collapses to the viewport, so low resolutions are unaffected.
  *
- * On wide screens (2.5K / 4K) the default caps waste most of the viewport.
- * We use clamp() to grow the content column proportionally toward generous
- * maximums while keeping prose readable. Splash / landing pages (no sidebar,
- * no TOC) grow the most because their hero and card grids fill the extra
- * width; regular doc pages stay a touch narrower so paragraphs don't float
- * beside oversized empty gutters.
+ * Two knobs keep this readable at every resolution WITHOUT reintroducing a
+ * hard cap:
+ *   1. --sl-content-pad-x grows with the viewport so content keeps breathing
+ *      room and never hugs the screen edge.
+ *   2. On very large screens the root font-size scales up, so text stays
+ *      comfortably sized and line density reasonable while the whole UI grows
+ *      proportionally. (Media-query `rem` is measured against the initial 16px
+ *      root size, so these thresholds never shift when the root size changes.)
  */
 
-:root {
-  /* Regular pages (sidebar + TOC): fluid 45–100rem. */
-  --sl-content-width: clamp(45rem, 62vw, 100rem);
-}
-
-/* Splash / landing pages (no sidebar): fluid 50–155rem so the hero and
- * feature grids fill 2.5K / 4K displays instead of hugging the center. */
+:root,
 html:not([data-has-sidebar]) {
-  --sl-content-width: clamp(50rem, 84vw, 155rem);
+  --sl-content-width: 100%;
 }
 
-/* Grow horizontal padding in steps so content never hugs the viewport edge
+/* Grow horizontal padding in steps so full-width content keeps breathing room
  * on progressively larger screens (laptop -> 2.5K -> 4K -> ultra-wide). */
 @media (min-width: 72rem) {
   :root {
-    --sl-content-pad-x: 1.5rem;
+    --sl-content-pad-x: 2rem;
   }
 }
 
 @media (min-width: 100rem) {
   :root {
-    --sl-content-pad-x: 2.5rem;
+    --sl-content-pad-x: 3rem;
   }
 }
 
@@ -75,13 +79,40 @@ html:not([data-has-sidebar]) {
   }
 }
 
-/* Keep line length comfortable for prose on ultra-wide content columns:
- * text inside .sl-markdown-content gets a max reading width while tables,
- * code blocks, and card grids remain free to span the full column width. */
-@media (min-width: 80rem) {
-  .sl-markdown-content :where(p, li, blockquote, dd, dt) {
-    max-width: 78ch;
+/* Fluid typography for high-resolution displays. With no content-width cap,
+ * scaling the root font-size (instead of capping line length) is what keeps
+ * text comfortable and lines from running too long on 2.5K / 4K / 5K screens,
+ * and it scales spacing and the sidebars proportionally too. Standard
+ * 1080p / 1440p displays (<= 2560px = 160rem) are left completely untouched. */
+@media (min-width: 176rem) {
+  :root {
+    font-size: 106.25%; /* ~17px */
   }
+}
+
+@media (min-width: 224rem) {
+  :root {
+    font-size: 118.75%; /* ~19px */
+  }
+}
+
+@media (min-width: 300rem) {
+  :root {
+    font-size: 131.25%; /* ~21px */
+  }
+}
+
+/* Optional reading measure for prose. Defaults to `none` (full-width, no cap),
+ * so paragraphs and lists span the full column just like tables, code blocks,
+ * and card grids. Set `--aicr-prose-measure` to a value such as `90ch` if you
+ * later prefer to constrain long-form line length on wide screens; it will not
+ * affect tables, code, or card grids. */
+:root {
+  --aicr-prose-measure: none;
+}
+
+.sl-markdown-content :where(p, li, blockquote, dd, dt) {
+  max-width: var(--aicr-prose-measure);
 }
 
 /* ------------------------------------------------------------------ *
