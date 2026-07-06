@@ -101,7 +101,7 @@ workspace 配置文件不能写系统级字段；遵守 `cache` / `defaults` / `
 
 - 用 `pnpm docs:build` 本地构建并校验。构建会强制公开/内部边界：`src/content/docs/` 下的页面不得引用内部 AI/路线图文档树，也不得保留仅供维护者参考的迁移占记。
 - sidebar slug 省略 `index` 段（如 `troubleshooting/index.md` 的 slug 是 `troubleshooting`）。frontmatter `template` 只接受 `doc` 或 `splash`；Starlight `social` 是链接项数组。
-- 内容文件只用 `.md`（暂无 MDX）。
+- 内容页用 `.md`。两个首页（`en/index.mdx`、`zh-cn/index.mdx`）用 `.mdx`，以便渲染 Starlight 组件（hero frontmatter 加 `Card`、`CardGrid`、`LinkCard`、`Steps`、`Aside`）。MDX 由 Starlight 内置提供，无需额外集成；组件在纯 `.md` 中不会渲染。公开内容校验器同时扫描 `.md` 和 `.mdx`。
 - 交叉链接使用带 locale 前缀的路径（`/en/...`、`/zh-cn/...`）。
 
 当你改变配置 shape、输出合同或运行时行为时，请在同一次变更中更新两个 locale 的相关页面。

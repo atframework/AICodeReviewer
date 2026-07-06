@@ -31,22 +31,26 @@
  *   --sl-content-width: 67.5rem (splash / no-sidebar, set by Page.astro)
  *
  * On wide screens (2.5K / 4K) the default caps waste most of the viewport.
- * Here we use clamp() to grow the content column proportionally up to generous
- * maximums, while keeping a comfortable reading width on standard displays.
+ * We use clamp() to grow the content column proportionally toward generous
+ * maximums while keeping prose readable. Splash / landing pages (no sidebar,
+ * no TOC) grow the most because their hero and card grids fill the extra
+ * width; regular doc pages stay a touch narrower so paragraphs don't float
+ * beside oversized empty gutters.
  */
 
 :root {
-  /* Regular pages: fluid 45–90rem. */
-  --sl-content-width: clamp(45rem, 60vw, 90rem);
+  /* Regular pages (sidebar + TOC): fluid 45–100rem. */
+  --sl-content-width: clamp(45rem, 62vw, 100rem);
 }
 
-/* Splash / landing pages: wider than regular pages, fluid 50–120rem. */
+/* Splash / landing pages (no sidebar): fluid 50–155rem so the hero and
+ * feature grids fill 2.5K / 4K displays instead of hugging the center. */
 html:not([data-has-sidebar]) {
-  --sl-content-width: clamp(50rem, 75vw, 120rem);
+  --sl-content-width: clamp(50rem, 84vw, 155rem);
 }
 
-/* Increase horizontal padding on larger screens so content doesn't hug
- * the viewport edge. */
+/* Grow horizontal padding in steps so content never hugs the viewport edge
+ * on progressively larger screens (laptop -> 2.5K -> 4K -> ultra-wide). */
 @media (min-width: 72rem) {
   :root {
     --sl-content-pad-x: 1.5rem;
@@ -65,11 +69,47 @@ html:not([data-has-sidebar]) {
   }
 }
 
-/* Keep line-length comfortable for prose blocks on ultra-wide content
- * columns. Text inside .sl-markdown-content gets a max reading width
- * while code blocks and tables can span full column width. */
+@media (min-width: 200rem) {
+  :root {
+    --sl-content-pad-x: 6rem;
+  }
+}
+
+/* Keep line length comfortable for prose on ultra-wide content columns:
+ * text inside .sl-markdown-content gets a max reading width while tables,
+ * code blocks, and card grids remain free to span the full column width. */
 @media (min-width: 80rem) {
   .sl-markdown-content :where(p, li, blockquote, dd, dt) {
-    max-width: 75ch;
+    max-width: 78ch;
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ * Landing-page (splash) polish
+ * ------------------------------------------------------------------ */
+
+/* Let the inline SVG hero logo scale with the viewport and stay proportional
+ * on large displays instead of staying pinned at its intrinsic 208px size. */
+html:not([data-has-sidebar]) .hero .hero-html {
+  justify-content: center;
+}
+
+html:not([data-has-sidebar]) .hero .hero-html svg {
+  width: 100%;
+  max-width: clamp(11rem, 16vw, 20rem);
+  height: auto;
+}
+
+/* Give the feature card grid more room to add columns on wide screens so a
+ * 4K landing page shows three or four cards per row rather than two. */
+@media (min-width: 120rem) {
+  html:not([data-has-sidebar]) .sl-markdown-content .card-grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
+@media (min-width: 180rem) {
+  html:not([data-has-sidebar]) .sl-markdown-content .card-grid {
+    grid-template-columns: repeat(4, 1fr);
   }
 }

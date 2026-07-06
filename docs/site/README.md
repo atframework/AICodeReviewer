@@ -50,6 +50,13 @@ both `src/content/docs/en/<path>.md` and `src/content/docs/zh-cn/<path>.md`.
 Sidebar labels are localized via the `translations` map keyed by BCP-47 lang
 tag (e.g. `"zh-CN"`) in `astro.config.mjs`.
 
+Content pages use `.md`. The two localized landing pages (`en/index.mdx` and
+`zh-cn/index.mdx`) use `.mdx` so they can render Starlight components — hero
+frontmatter plus `Card`, `CardGrid`, `LinkCard`, `Steps`, and `Aside`. MDX
+ships with Starlight (no extra integration needed); those components do **not**
+render in plain `.md` (they leak as literal tags). `validate-public-content.mjs`
+scans both `.md` and `.mdx`.
+
 ## Deployment target
 
 The site targets the GitHub Pages custom domain `https://aicr.atframe.work/`.

@@ -24,7 +24,7 @@ function* walk(dir) {
     const path = join(dir, entry.name);
     if (entry.isDirectory()) {
       yield* walk(path);
-    } else if (entry.isFile() && path.endsWith(".md")) {
+    } else if (entry.isFile() && (path.endsWith(".md") || path.endsWith(".mdx"))) {
       yield path;
     }
   }
