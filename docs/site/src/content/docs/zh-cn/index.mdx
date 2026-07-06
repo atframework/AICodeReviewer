@@ -41,7 +41,13 @@ hero:
         rel: noopener
 ---
 
-import { Card, CardGrid, LinkCard, Steps, Aside } from '@astrojs/starlight/components';
+import {
+  Card,
+  CardGrid,
+  LinkCard,
+  Steps,
+  Aside,
+} from "@astrojs/starlight/components";
 
 **AICodeReviewer (AICR)** 是一个自托管服务，用于跨多个版本控制系统编排 AI
 代码评审。它把 webhook 和 trigger 归一到统一评审流水线，在你选定的沙箱内运行
@@ -56,12 +62,12 @@ agent 的自由文本 stdout 当成正式报告。
     agent 的自由文本 stdout 永远不会成为报告。
   </Card>
   <Card title="自带 agent" icon="puzzle">
-    Kilo Code、Claude Code、opencode、Zoo Code 和 Copilot CLI 共用一套运行时契约，
-    切换 agent 无需改写流水线。
+    Kilo Code、Claude Code、opencode、Zoo Code 和 Copilot CLI
+    共用一套运行时契约， 切换 agent 无需改写流水线。
   </Card>
   <Card title="所有 VCS，一条流水线" icon="code-branch">
-    GitHub、Gitea、Forgejo、GitLab 走 webhook；Perforce 和 Subversion 走 trigger。
-    全部归一为同一个 `ReviewEvent`。
+    GitHub、Gitea、Forgejo、GitLab 走 webhook；Perforce 和 Subversion 走
+    trigger。 全部归一为同一个 `ReviewEvent`。
   </Card>
   <Card title="默认安全" icon="padlock">
     仅拉取变更文件、只读源码挂载、allowlist 沙箱命令、每个边界的 secret 脱敏，
@@ -126,13 +132,13 @@ agent 的自由文本 stdout 当成正式报告。
 
 ## 支持的集成
 
-| 维度 | 选项 |
-| --- | --- |
+| 维度       | 选项                                                                                  |
+| ---------- | ------------------------------------------------------------------------------------- |
 | VCS 提供商 | GitHub、Gitea、Forgejo、GitLab（webhook）；Perforce (P4)、Subversion (SVN)（trigger） |
-| Agent CLI | Kilo Code、Claude Code、opencode、Zoo Code、Copilot CLI |
-| 输出通道 | PR/MR 行内评论与摘要、托管 problem issue、飞书机器人、企业微信机器人 |
-| 沙箱 | native、docker、podman、docker_socket（`k8s_pod`、`firecracker` 预留） |
-| 模型提供商 | 任意 OpenAI 兼容 API；models.dev 目录提供上下文窗口和定价元数据 |
+| Agent CLI  | Kilo Code、Claude Code、opencode、Zoo Code、Copilot CLI                               |
+| 输出通道   | PR/MR 行内评论与摘要、托管 problem issue、飞书机器人、企业微信机器人                  |
+| 沙箱       | native、docker、podman、docker_socket（`k8s_pod`、`firecracker` 预留）                |
+| 模型提供商 | 任意 OpenAI 兼容 API；models.dev 目录提供上下文窗口和定价元数据                       |
 
 ## 评审输出规范
 
@@ -142,21 +148,22 @@ agent 的自由文本 stdout 当成正式报告。
 
 **严重级别**是固定的五级刻度，让下游路由和分诊可预测：
 
-| 严重级别 | 含义 |
-| --- | --- |
+| 严重级别   | 含义                                               |
+| ---------- | -------------------------------------------------- |
 | `critical` | 合入前必须修复——数据丢失、安全漏洞、崩溃或数据损坏 |
-| `high` | 在现实条件下有真实影响的疑似 bug 或漏洞 |
-| `medium` | 值得处理的正确性、契约或性能风险 |
-| `low` | 轻微问题或代码异味；可延后处理 |
-| `info` | 提示性说明或观察，无需操作 |
+| `high`     | 在现实条件下有真实影响的疑似 bug 或漏洞            |
+| `medium`   | 值得处理的正确性、契约或性能风险                   |
+| `low`      | 轻微问题或代码异味；可延后处理                     |
+| `info`     | 提示性说明或观察，无需操作                         |
 
 **分类**把发现归入稳定的族，例如 `correctness`、`security`、`performance`、
 `api-contract` 和 `style`，从而让分组和去重跨 run 保持一致。
 
 <Aside type="tip" title="渲染与安全保证">
-  发现被渲染为规范 Markdown——IM 机器人收到真正的表格和代码块，而不是原始 stdout。
-  Secret 会从 prompt、日志和每个输出边界脱敏，评审也被引导去推理常见漏洞类别
-  （其中包括 OWASP Top 10）。
+  发现被渲染为规范 Markdown——IM 机器人收到真正的表格和代码块，而不是原始
+  stdout。 Secret 会从
+  prompt、日志和每个输出边界脱敏，评审也被引导去推理常见漏洞类别 （其中包括
+  OWASP Top 10）。
 </Aside>
 
 ## 设计原则

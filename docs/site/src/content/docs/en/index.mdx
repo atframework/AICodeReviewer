@@ -42,7 +42,13 @@ hero:
         rel: noopener
 ---
 
-import { Card, CardGrid, LinkCard, Steps, Aside } from '@astrojs/starlight/components';
+import {
+  Card,
+  CardGrid,
+  LinkCard,
+  Steps,
+  Aside,
+} from "@astrojs/starlight/components";
 
 **AICodeReviewer (AICR)** is a self-hosted service that orchestrates AI code
 review across your version-control systems. It normalizes webhooks and triggers
@@ -58,12 +64,12 @@ comments, managed issues, or IM bots — never as free-form agent stdout.
     deduplicates, and renders — free-form agent stdout never becomes the report.
   </Card>
   <Card title="Bring your own agent" icon="puzzle">
-    Kilo Code, Claude Code, opencode, Zoo Code, and Copilot CLI share one runtime
-    contract. Switch agents without rewriting your pipeline.
+    Kilo Code, Claude Code, opencode, Zoo Code, and Copilot CLI share one
+    runtime contract. Switch agents without rewriting your pipeline.
   </Card>
   <Card title="Every VCS, one pipeline" icon="code-branch">
-    GitHub, Gitea, Forgejo, and GitLab over webhooks; Perforce and Subversion over
-    triggers. All normalized into a single `ReviewEvent`.
+    GitHub, Gitea, Forgejo, and GitLab over webhooks; Perforce and Subversion
+    over triggers. All normalized into a single `ReviewEvent`.
   </Card>
   <Card title="Safe by default" icon="padlock">
     Scoped fetch of only changed files, read-only source mounts, allowlisted
@@ -139,12 +145,12 @@ comments, managed issues, or IM bots — never as free-form agent stdout.
 
 ## Supported integrations
 
-| Surface | Options |
-| --- | --- |
-| VCS providers | GitHub, Gitea, Forgejo, GitLab (webhooks); Perforce (P4), Subversion (SVN) (triggers) |
-| Agent CLIs | Kilo Code, Claude Code, opencode, Zoo Code, Copilot CLI |
-| Output channels | PR/MR line comments & summary, managed problem issues, Feishu bot, WeCom bot |
-| Sandboxes | native, docker, podman, docker_socket (`k8s_pod`, `firecracker` reserved) |
+| Surface         | Options                                                                               |
+| --------------- | ------------------------------------------------------------------------------------- |
+| VCS providers   | GitHub, Gitea, Forgejo, GitLab (webhooks); Perforce (P4), Subversion (SVN) (triggers) |
+| Agent CLIs      | Kilo Code, Claude Code, opencode, Zoo Code, Copilot CLI                               |
+| Output channels | PR/MR line comments & summary, managed problem issues, Feishu bot, WeCom bot          |
+| Sandboxes       | native, docker, podman, docker_socket (`k8s_pod`, `firecracker` reserved)             |
 | Model providers | Any OpenAI-compatible API; models.dev catalog for context window and pricing metadata |
 
 ## Review output standards
@@ -157,13 +163,13 @@ human-readable **message** (with an optional fix `suggestion`).
 **Severity** is a fixed five-level scale, so downstream routing and triage are
 predictable:
 
-| Severity | Meaning |
-| --- | --- |
+| Severity   | Meaning                                                                  |
+| ---------- | ------------------------------------------------------------------------ |
 | `critical` | Must fix before merge — data loss, security breach, crash, or corruption |
-| `high` | Likely bug or vulnerability with real impact under realistic conditions |
-| `medium` | Correctness, contract, or performance risk worth addressing |
-| `low` | Minor issue or smell; safe to defer |
-| `info` | Advisory note or observation, no action required |
+| `high`     | Likely bug or vulnerability with real impact under realistic conditions  |
+| `medium`   | Correctness, contract, or performance risk worth addressing              |
+| `low`      | Minor issue or smell; safe to defer                                      |
+| `info`     | Advisory note or observation, no action required                         |
 
 **Category** groups findings into stable families such as `correctness`,
 `security`, `performance`, `api-contract`, and `style`, which keeps grouping and
@@ -171,9 +177,9 @@ deduplication consistent across runs.
 
 <Aside type="tip" title="Rendering & security guarantees">
   Findings are rendered as proper Markdown — IM bots receive real tables and
-  code blocks, not raw stdout. Secrets are scrubbed from prompts, logs, and every
-  output boundary, and reviews are guided to reason about common vulnerability
-  classes (the OWASP Top 10 among them).
+  code blocks, not raw stdout. Secrets are scrubbed from prompts, logs, and
+  every output boundary, and reviews are guided to reason about common
+  vulnerability classes (the OWASP Top 10 among them).
 </Aside>
 
 ## Design principles
