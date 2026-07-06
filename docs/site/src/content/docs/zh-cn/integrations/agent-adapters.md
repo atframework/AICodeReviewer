@@ -115,4 +115,3 @@ Copilot CLI 使用其订阅固定的 model catalog。没有注入接入面，对
 
 能力缺口（vision、reasoning、结构化输出、工具调用）记录在每个 run 的 `manifest.json` 中，
 标记为 `injected`、`delegated` 或 `not_applicable`——绝不静默丢弃。
-

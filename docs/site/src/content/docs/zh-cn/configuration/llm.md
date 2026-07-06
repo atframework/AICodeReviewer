@@ -175,7 +175,7 @@ llm:
 
 | 后端 | 存储 | 说明 |
 | --- | --- | --- |
-| `sqlite`（默认） | 复用 `storage.database`（带键的 `model_catalog` 表）。仅做点查询；完整 `api.json` 仅在刷新时解析一次并逐行 upsert，读取时不再解析。 |
+| `sqlite`（默认） | 复用 `storage.database`（带键的 `model_catalog` 表）。 | 仅做点查询；完整 `api.json` 仅在刷新时解析一次并逐行 upsert，读取时不再解析。 |
 | `memory` | 进程内。 | 面向测试与本地开发，重启即丢失。 |
 | `redis` | 复用 `storage.cache.redis`。 | **要求** `storage.cache.kind: redis` **且** `storage.cache.redis.url_env` 可解析。跨环境共享 Redis 时请使用唯一的 `key_prefix`。见 [/zh-cn/configuration/storage/](/zh-cn/configuration/storage/)。 |
 

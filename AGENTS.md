@@ -129,7 +129,7 @@ These issues have been found and fixed in prior sessions. Before making changes,
 1. `node node_modules/eslint/bin/eslint.js .` (or `pnpm lint` on Linux)
 2. `node node_modules/typescript/bin/tsc -b tsconfig.json --pretty false` (or `pnpm typecheck`)
 3. `node node_modules/vitest/vitest.mjs run` (or `pnpm test`)
-4. `node node_modules/markdownlint-cli2/markdownlint-cli2.mjs "**/*.md" "!**/node_modules/**" "!**/dist/**" "!**/coverage/**"` (or `pnpm markdownlint`)
+4. `node node_modules/markdownlint-cli2/markdownlint-cli2.mjs` (or `pnpm markdownlint`)
 5. Build step (if applicable)
 6. When docs/site content changes: `pnpm docs:build` (or `pnpm docs:check`) to validate public-content boundaries and the Starlight site
 

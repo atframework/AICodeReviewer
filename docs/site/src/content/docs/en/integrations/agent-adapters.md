@@ -186,4 +186,3 @@ context-compaction fields that apply to every agent kind.
 Capability gaps (vision, reasoning, structured output, tool calls) are
 recorded in each run's `manifest.json` as `injected`, `delegated`, or
 `not_applicable` — they are never silently dropped.
-

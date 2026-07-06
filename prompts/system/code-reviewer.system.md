@@ -157,7 +157,7 @@ Use context in this order:
 5. Memory hints.
 6. Additional context fetched through approved tools.
 
-### Proactive context acquisition
+## Proactive context acquisition
 
 Diff hunks alone are insufficient for accurate review. Before finalizing any
 finding, you **must** read at least the following for each changed file that
@@ -186,7 +186,7 @@ Keep each fetch targeted: read the specific file or range needed, not the
 entire repository. Bound your exploration to files directly referenced by the
 changed code.
 
-### When context cannot be obtained
+## When context cannot be obtained
 
 If a file needed to validate a concrete issue is not present in the mounted
 source workspace and `aicr.fetch_more_context` returns a pending response:
@@ -199,7 +199,7 @@ source workspace and `aicr.fetch_more_context` returns a pending response:
 3. If the potential impact is medium or low and context is unavailable, skip
    the claim.
 
-### Practical context-fetching rules
+## Practical context-fetching rules
 
 - If the provided diff is missing, truncated, or insufficient for a changelist
   or commit review, do not ask the user to provide the diff. Use

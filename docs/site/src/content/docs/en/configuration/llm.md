@@ -182,7 +182,7 @@ llm:
 
 | Backend | Storage | Notes |
 | --- | --- | --- |
-| `sqlite` (default) | Reuses `storage.database` (a keyed `model_catalog` table). Point lookups only; the full `api.json` is parsed once at refresh and upserted row by row, never re-parsed on read. |
+| `sqlite` (default) | Reuses `storage.database` (a keyed `model_catalog` table). | Point lookups only; the full `api.json` is parsed once at refresh and upserted row by row, never re-parsed on read. |
 | `memory` | In-process. | Intended for tests and local dev. Lost on restart. |
 | `redis` | Reuses `storage.cache.redis`. | **Requires** `storage.cache.kind: redis` **and** a resolvable `storage.cache.redis.url_env`. Use a unique `key_prefix` when sharing Redis across environments. See [/en/configuration/storage/](/en/configuration/storage/). |
 
