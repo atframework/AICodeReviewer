@@ -33,7 +33,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Run CI verification
-        run: pnpm ci
+        run: pnpm run ci
 
   docs:
     name: Docs site build

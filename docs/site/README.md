@@ -1,4 +1,4 @@
-# AICodeReviewer Documentation Site
+# AICodeReviewer(AICR) Documentation Site
 
 This is the user-facing documentation site for AICodeReviewer, built with
 [Astro Starlight](https://starlight.astro.build/). It is an independent
