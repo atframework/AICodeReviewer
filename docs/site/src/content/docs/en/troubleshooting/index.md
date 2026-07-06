@@ -243,3 +243,49 @@ image, so they only reload on container restart.
 
 **Fix:** `docker compose restart` (or restart your local `serve` process). A
 full image rebuild is only needed for code changes.
+
+## Dashboard shows setup-required / admin not configured
+
+**Symptom:** `/dashboard` returns a setup-required page, or
+`POST /api/admin/login` returns 401.
+
+**Diagnosis:** the observability dashboard has a **separate** super-admin
+login (`admin.*`) that is independent of webhook HMAC and trigger API keys.
+If `admin.username_env` plus `admin.password_env` (or
+`admin.password_hash_env`) are not set in `config.yaml`, or the referenced
+env vars are empty, the dashboard is disabled.
+
+**Fix:** set the three admin env vars and reference them in `config.yaml`:
+
+```yaml
+admin:
+  username_env: AICR_ADMIN_USERNAME
+  password_hash_env: AICR_ADMIN_PASSWORD_HASH   # sha256:<hex>, preferred
+  session_ttl_seconds: 86400                      # 24 hours; the unit is seconds, not minutes
+```
+
+Restart the container after editing. Prefer `password_hash_env`
+(`sha256:<hex>`) over raw `password_env` for production.
+
+## GitHub issue/comment write-back fails with 403 / 404
+
+**Symptom:** `github_problem_issue` or `github_pr_review` cannot post; the
+log shows a 403 or 404 from the GitHub API.
+
+**Diagnosis:** the `token_env` (or channel-level override) for a GitHub
+channel that writes back to the repo must be an **outbound** API credential
+with repository Issues read/write permission — it is not the webhook secret.
+Selecting **Issues** or **Issue comments** in the GitHub webhook event list
+only controls which **inbound** events are delivered; it does **not** grant
+REST API permissions.
+
+**Fix:**
+
+- For a personal access token: ensure it has `repo` scope (or the fine-grained
+  `Issues: Read and write` permission on the target repo).
+- For a GitHub App: update the repository permission, then **reinstall or
+  refresh the installation** before retrying — permission changes do not
+  apply retroactively to existing installations.
+- Confirm the token referenced by `triggers[].token_env` or the channel-level
+  override is the outbound credential, not `AICR_GITHUB_WEBHOOK_SECRET`.
+

@@ -54,7 +54,7 @@ revision, scheduled, manual).
 | `{{event.displayName}}` | Author display name, when available |
 | `{{event.url}}` | Raw event URL, when available; templates must not assume this is always a PR/MR URL |
 | `{{event.title}}` | Event title (PR/MR title, commit message subject, changelist description), when available |
-| `{{target.kind}}` | Target kind (`pull_request`, `merge_request`, `push`, `commit`, `changeset`, `revision`, `scheduled`, `manual`) |
+| `{{target.kind}}` | Target kind (`pull_request`, `push`, `commit`, `issue`, `manual`, `scheduled`) |
 | `{{target.displayText}}` | Safe plain-text target label for any event kind |
 | `{{target.markdownLink}}` | Safe Markdown target link; use this instead of hard-coding `[View PR]` |
 | `{{target.url}}` | Target URL, when available |

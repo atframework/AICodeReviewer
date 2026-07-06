@@ -142,10 +142,36 @@ AICR as the changelist author and submitter client for report attribution. The
 AICR adapter's configured P4 workspace is only the analysis client and is not
 used as display-facing submitter metadata.
 
-Copy `example/p4-trigger.sh` to the **P4 server host** (not the AICR container)
-and set `AICR_URL` + `AICR_API_KEY` there. The script does not run
-`p4 describe` by default, preventing p4d-side SSL trust prompts from blocking
-submits.
+Copy `example/p4-trigger.sh` to the **P4 server host** (not the AICR container),
+make it executable (`chmod +x`), and set these environment variables there:
+
+| Variable | Required | Description |
+| --- | --- | --- |
+| `AICR_URL` | Yes | AICR server address, e.g. `http://10.64.8.2:8090` |
+| `AICR_API_KEY` | Yes | Must match `server.auth.api_key_env` in `config.yaml` |
+| `AICR_DEPOT_PATH` | No | Depot path override. Leave unset to use the server-side `depot_path` from `config.yaml`. |
+| `AICR_P4_COLLECT_FILES` | No | Default `0`. Keep disabled so the p4d trigger does not run `p4 describe` and does not require local `p4 trust`. |
+| `AICR_P4PORT` | No | Required only when `AICR_P4_COLLECT_FILES=1`; must be explicit, e.g. `ssl:p4.example.com:1666`. |
+| `AICR_P4USER` | No | Optional user override for the opt-in collect mode; otherwise the script uses trigger `%user%`, then `P4USER` (never implicit OS `root`). |
+| `AICR_P4CLIENT` | No | Optional client override for the opt-in collect mode; otherwise trigger `%client%`, then `P4CLIENT`. |
+| `AICR_P4PASSWD` | No | Optional password/ticket for the opt-in collect mode; use only with an explicit service user if your P4 security level requires login. |
+| `AICR_P4_AUTO_TRUST` | No | Optional `1`/`true` for the opt-in collect mode; default `0`. Otherwise run `p4 trust` once as the trigger OS user. |
+
+The script does **not** run `p4 describe` by default, preventing p4d-side SSL
+trust prompts from blocking submits. It logs failures locally and exits
+successfully so the async reviewer never blocks the submit path.
+
+Test the endpoint manually once the server is running:
+
+```bash
+# With API key (required when server.auth is enabled):
+curl -X POST http://localhost:8080/triggers/p4 \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: YOUR_API_KEY" \
+  -d '{"change":"12345","user":"testuser","depot_path":"//depot/main","files":["//depot/main/src/main.cpp"]}'
+```
+
+A successful response returns `{"accepted": true, ...}`.
 
 ### Subversion (SVN)
 
@@ -179,8 +205,23 @@ export AICR_API_KEY="<same value as server.auth.api_key_env>"
 /path/to/svn-trigger.sh "$REPOS" "$REV"
 ```
 
-Copy `example/svn-trigger.sh` to the SVN server host (it needs `jq` and
-`svnlook`, both present in the SVN server environment).
+Copy `example/svn-trigger.sh` to the SVN server host, make it executable
+(`chmod +x`). The script needs `jq` and `svnlook` (both present in the SVN
+server environment): `svnlook` reads author, log message, and changed paths,
+then the script encodes them as JSON and POSTs to `/triggers/svn`. It does not
+send a repository URL — AICR always uses the server-side `repository_url`.
+
+Test the endpoint manually once the server is running:
+
+```bash
+# With API key (required when server.auth is enabled):
+curl -X POST http://localhost:8080/triggers/svn \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: YOUR_API_KEY" \
+  -d '{"revision":"123","author":"testuser","files":["src/app.cpp"]}'
+```
+
+A successful response returns `{"accepted": true, ...}`.
 
 ## File filtering
 

@@ -157,3 +157,33 @@ Set `agent.default` globally, override per workspace with
 `workspaces.defaults.agent.default` for a workspace-set default. See
 [Agent and sandbox](/en/configuration/agent/) for the timeout, sandbox, and
 context-compaction fields that apply to every agent kind.
+
+### Which agent should I use?
+
+| Agent | Best for | Watch out for |
+| --- | --- | --- |
+| `kilo` (default) | The validated, supported default path. Best end-to-end test coverage and production hardening. | Needs a declared `contextWindow` to auto-compact — enable `llm.model_catalog` or set `context_window` in overrides, or large PRs will overflow. |
+| `claude-code` | Teams already standardizing on Claude Code; Anthropic-native model catalog. | Auto-compacts by default (delegated to Claude Code's built-in behavior). Only `ANTHROPIC_MAX_TOKENS` is derived from the catalog; the rest delegates to Claude Code's native catalog. |
+| `opencode` | Open-source-first setups; custom OpenAI-compatible providers. | Resolves known providers from models.dev natively. Custom OpenAI-compatible providers get `limit`/`cost` injected but need explicit provider config. |
+| `zoo` | Teams using Zoo Code as their primary tool. | Always needs `contextWindow`/`maxTokens`/`supportsImages`/pricing injected — enable the model catalog. |
+| `copilot-cli` | GitHub Copilot subscription environments where you want zero per-call LLM cost. | Uses the subscription's fixed catalog; no model metadata is injected. No conversation-level auto-compaction surface (`not_applicable`). |
+
+### Decision guide
+
+- **Starting out or unsure?** Use `kilo` (the default). It has the deepest
+  production validation and is the agent the deployment verification flow
+  checks against.
+- **Context overflow on large PRs?** Whichever agent you pick, ensure the
+  model declares a `contextWindow` (via `llm.model_catalog` or an explicit
+  `context_window` override). Without it, Kilo and Zoo cannot track context
+  usage and will overflow instead of auto-compacting. If an overflow still
+  occurs, AICR throws `AgentContextOverflowError` with the limit, requested
+  tokens, and actionable guidance — never a generic `review_orchestration_failed`.
+- **Mixing agents?** `agent.default` is overridable per workspace, so you can
+  run `kilo` for most repos and `claude-code` for a specific one without
+  running two servers.
+
+Capability gaps (vision, reasoning, structured output, tool calls) are
+recorded in each run's `manifest.json` as `injected`, `delegated`, or
+`not_applicable` — they are never silently dropped.
+
