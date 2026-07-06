@@ -287,4 +287,3 @@ REST API permissions.
   apply retroactively to existing installations.
 - Confirm the token referenced by `triggers[].token_env` or the channel-level
   override is the outbound credential, not `AICR_GITHUB_WEBHOOK_SECRET`.
-

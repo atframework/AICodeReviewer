@@ -183,4 +183,3 @@ admin:
 - 个人访问令牌：确保具有 `repo` scope（或目标仓库上的细粒度 `Issues: Read and write` 权限）。
 - GitHub App：更新仓库权限后，**重新安装或刷新安装**再重试——权限变更不会追溯应用到已有安装。
 - 确认 `triggers[].token_env` 或通道级覆盖引用的是出站凭据，而不是 `AICR_GITHUB_WEBHOOK_SECRET`。
-

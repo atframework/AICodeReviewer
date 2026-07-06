@@ -294,11 +294,13 @@ ssh -p "$SSH_PORT" -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no \
   再按需覆盖 `NODE_IMAGE`。Helm/yq 如果无法直连官方源，使用内部缓存
   覆盖 `HELM_APT_REPO`、`HELM_APT_KEY_URL`、`YQ_DOWNLOAD_BASE`。
 - **公网机构建代理（loopback + host 网络）**：公网机 `10.0.4.9` 上 `*:3128` 监听的是一个**可用 HTTP 转发代理**（实测经 `http://127.0.0.1:3128` 可代理到 npm/USTC ubuntu/Perforce 等）。`deploy.sh` 的构建代理自动探测会把监听端点解析成主网卡 IP，注入 `HTTP_PROXY=http://10.0.4.9:3128`；但该地址从 bridge 构建网络命名空间不可达，导致 `apt-get` 报 `Connection refused`、`ca-certificates has no installation candidate`。同时 Perforce APT 等下载在 bridge 直连时容易卡死（本机直连可达、容器内挂起，日志停在 `Get: … package.perforce.com … p4-cli` 无增长）。正确做法（已验证可用）：构建时显式用 loopback 代理 + host 网络，让构建容器经 `127.0.0.1:3128` 取包——
+
   ```bash
   HTTP_PROXY=http://127.0.0.1:3128 HTTPS_PROXY=http://127.0.0.1:3128 \
   NO_PROXY=127.0.0.1,localhost,::1,10.0.4.9 \
   AICR_DEPLOY_DIR=/home/tools/AICodeReviewer bash deploy.sh
   ```
+
   `deploy.sh` 检测到 loopback 代理会自动加 `--network=host`，使构建容器能访问宿主 loopback 上的代理。镜像内的运行时容器不需要该代理，故 `NO_PROXY` 必须包含 `127.0.0.1,localhost`，否则 `deploy.sh` 末尾的 `curl /healthz` 健康检查会误走代理。若想完全不走代理（仅当本机直连所有源都稳定时），需用一份把代理自动探测块（`if [ -z "$BUILD_HTTP_PROXY" ] && [ -z "$BUILD_HTTPS_PROXY" ]; then`）改为 `if false; then` 的 `deploy.sh` 副本构建。
 
 ## 8. 测试验收环境（与生产隔离）

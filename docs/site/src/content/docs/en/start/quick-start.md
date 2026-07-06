@@ -5,7 +5,7 @@ description: Get AICodeReviewer running locally or with Docker Compose and trigg
 
 This guide walks through the two fastest ways to run AICodeReviewer (AICR):
 [Docker Compose](#docker-compose) for a deployment-like setup, and
-[local Node.js](#local-node-js) for development. Pick one, then verify with a
+[local Node.js](#local-nodejs) for development. Pick one, then verify with a
 [health check](#verify-the-server-is-running) and a
 [dry-run review](#dry-run-a-review).
 

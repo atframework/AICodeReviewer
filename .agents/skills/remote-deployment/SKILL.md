@@ -10,7 +10,7 @@ Deploy AICR to the production server. The actual host, port, user, key path, and
 
 ## Remote Layout
 
-```
+```text
 <deploy-dir>/
   source/              # Build context for Dockerfile (copied from local repo)
   deploy/              # Dockerfile and deploy assets

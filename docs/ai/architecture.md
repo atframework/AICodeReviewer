@@ -780,4 +780,3 @@ models.dev 的 key 是 `<providerId>/<modelId>`（AI SDK 标识）。自定义 p
 - Podman / Docker 使用同一构建与运行合同，差异通过 engine 选择吸收。
 - 健康检查统一使用 `/healthz`。
 - 远程部署的操作性说明以 `example/README.md`、`docs/podman.md` 与仓库技能为准；`development/README.md` 是当前仓库操作约束，不是对外产品文档。
-

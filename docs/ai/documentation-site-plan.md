@@ -47,6 +47,7 @@
 
 **已验证版本基线（2026-07 实测）**：Astro `7.0.6` / `@astrojs/starlight` `0.41.3`，本地 Node `24.16.0`。
 锁定 `astro: ^7`、`@astrojs/starlight: ^0.41`；Astro 7 官方要求 Node `>=22.12.0`，docs CI 使用 Node 24。实测要点：
+
 - `social` 配置在 Starlight v0.33+ 改为**数组**（不再是 `{ github: "..." }` 对象）。
 - `template` frontmatter 只接受 `doc` 或 `splash`（无 `landing`）。
 - sidebar slug 不含 `index` 段：`troubleshooting/index.md` 的 slug 是 `troubleshooting`。

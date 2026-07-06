@@ -4,7 +4,7 @@ description: 在本地或 Docker Compose 运行 AICodeReviewer，并触发第一
 ---
 
 本指南介绍运行 AICodeReviewer (AICR) 最快的两种方式：[Docker Compose](#docker-compose)
-适合类生产环境，[本地 Node.js](#本地-node-js) 适合开发。选一种后，用
+适合类生产环境，[本地 Node.js](#本地-nodejs) 适合开发。选一种后，用
 [健康检查](#验证服务是否运行)和[dry-run 评审](#dry-run-评审)验证。
 
 ## Docker Compose

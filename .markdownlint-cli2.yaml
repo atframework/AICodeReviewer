@@ -1,0 +1,7 @@
+globs:
+  - "**/*.md"
+ignores:
+  - "**/node_modules/**"
+  - "**/dist/**"
+  - "**/coverage/**"
+  - "**/build/**"

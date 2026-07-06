@@ -17,7 +17,7 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "lint": "eslint . --max-warnings=0",
-    "markdownlint": "markdownlint-cli2 \"**/*.md\" \"!**/node_modules/**\" \"!**/dist/**\" \"!**/coverage/**\"",
+    "markdownlint": "markdownlint-cli2",
     "eval:validate": "node packages/cli/dist/index.js eval --validate-only",
     "test": "vitest run --coverage",
     "typecheck": "tsc -b tsconfig.json --pretty false",
