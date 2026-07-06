@@ -482,6 +482,12 @@ M11-P3 后续打磨（查缺补漏，2026-07）：
 - ✅ 修复站点根路径无主页问题：新增 `src/pages/index.astro`，在浏览器端按 `navigator.language`
   自动跳转到 `/en/` 或 `/zh-cn/`，无 JS 时 fallback 到 meta refresh + 语言选择链接。
   对称 i18n 路由下（所有 locale 带前缀），Starlight 不会在根路径生成页面，需要自定义路由页。
+- ✅ 中英文首页大幅丰富：新增"How it works/工作流程"五步流程、扩展核心特性从 4 条到 8 条、
+  6 张 CTA 卡片、补充"Design principles/设计原则"和模型提供商集成信息。
+- ✅ 全宽布局支持：`custom.css` 用 `clamp()` 实现流式内容宽度，regular 页 45–90rem、
+  splash 页 50–120rem，配合 prose 最大阅读宽度 `75ch`，适应 4K 分辨率。
+- ✅ 仓库根目录新增 `README.md`（含 CI/license/docs badge、项目介绍、关键特性、架构流程图、
+  quick start、包列表、贡献入口）和 `LICENSE`（MIT）。
 - ✅ 三维度审查（代码真源一致性 / 链接与 IA 完整性 / 内容缺漏）覆盖全部 53 页。
 - ✅ 修正事实错误：`aicr.report_problem` 的 `message` 字段标为可选（代码为必填）；
   `aicr.fetch_more_context` / `aicr.try_blame` 的 `range` 字段名 `startLine`/`endLine`

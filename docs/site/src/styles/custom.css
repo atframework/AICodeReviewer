@@ -23,3 +23,53 @@
   --sl-color-accent: hsl(var(--aicr-accent-h) var(--aicr-accent-s) 60%);
   --sl-color-accent-low: hsl(var(--aicr-accent-h) var(--aicr-accent-s) 60% / 0.16);
 }
+
+/* Fluid content width that scales with viewport.
+ *
+ * Starlight defaults:
+ *   --sl-content-width: 45rem   (regular pages with sidebar)
+ *   --sl-content-width: 67.5rem (splash / no-sidebar, set by Page.astro)
+ *
+ * On wide screens (2.5K / 4K) the default caps waste most of the viewport.
+ * Here we use clamp() to grow the content column proportionally up to generous
+ * maximums, while keeping a comfortable reading width on standard displays.
+ */
+
+:root {
+  /* Regular pages: fluid 45–90rem. */
+  --sl-content-width: clamp(45rem, 60vw, 90rem);
+}
+
+/* Splash / landing pages: wider than regular pages, fluid 50–120rem. */
+html:not([data-has-sidebar]) {
+  --sl-content-width: clamp(50rem, 75vw, 120rem);
+}
+
+/* Increase horizontal padding on larger screens so content doesn't hug
+ * the viewport edge. */
+@media (min-width: 72rem) {
+  :root {
+    --sl-content-pad-x: 1.5rem;
+  }
+}
+
+@media (min-width: 100rem) {
+  :root {
+    --sl-content-pad-x: 2.5rem;
+  }
+}
+
+@media (min-width: 140rem) {
+  :root {
+    --sl-content-pad-x: 4rem;
+  }
+}
+
+/* Keep line-length comfortable for prose blocks on ultra-wide content
+ * columns. Text inside .sl-markdown-content gets a max reading width
+ * while code blocks and tables can span full column width. */
+@media (min-width: 80rem) {
+  .sl-markdown-content :where(p, li, blockquote, dd, dt) {
+    max-width: 75ch;
+  }
+}
