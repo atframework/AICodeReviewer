@@ -484,8 +484,8 @@ M11-P3 后续打磨（查缺补漏，2026-07）：
   对称 i18n 路由下（所有 locale 带前缀），Starlight 不会在根路径生成页面，需要自定义路由页。
 - ✅ 中英文首页大幅丰富：新增"How it works/工作流程"五步流程、扩展核心特性从 4 条到 8 条、
   6 张 CTA 卡片、补充"Design principles/设计原则"和模型提供商集成信息。
-- ✅ 全宽布局支持：`custom.css` 用 `clamp()` 实现流式内容宽度，regular 页 45–90rem、
-  splash 页 50–120rem，配合 prose 最大阅读宽度 `75ch`，适应 4K 分辨率。
+- ✅ 全宽布局支持：`custom.css` 用 `clamp()` 实现流式内容宽度（regular 页、
+  splash 页分别设置，配合 prose 最大阅读宽度），适应 4K 分辨率（具体数值见 M11-P6）。
 - ✅ 仓库根目录新增 `README.md`（含 CI/license/docs badge、项目介绍、关键特性、架构流程图、
   quick start、包列表、贡献入口）和 `LICENSE`（MIT）。
 - ✅ 三维度审查（代码真源一致性 / 链接与 IA 完整性 / 内容缺漏）覆盖全部 53 页。
@@ -508,3 +508,23 @@ M11-P3 后续打磨（查缺补漏，2026-07）：
   403/404（token 权限与 App 重装）。
 
 待后续阶段（P6）：引入链接检查、配置字段覆盖校验脚本、SEO 与贡献规则自动化；线上发布还需在 GitHub Pages 设置中确认 `gh-pages` / `/` 发布源。
+
+M11-P6 打磨（首页组件修复 + 首页再丰富 + 4K 全宽 + README/logo，2026-07）：
+
+- ✅ 修复首页卡片渲染 bug：`en/index.md` / `zh-cn/index.md` 在 `.md` 文件里使用了
+  `<CardGrid>` / `<Card>` JSX 组件和 `import`，Astro 按纯 Markdown 处理，把它们当作字面
+  原始标签输出（无网格、无图标、title 属性不可见）。改为 `.mdx`（Starlight 内置 MDX，
+  `@astrojs/mdx` 为传递依赖，无需新增依赖），组件正常渲染；删除旧 `.md` 以避免路由冲突。
+- ✅ 首页改用 splash `hero`（title/tagline/actions + 内联 SVG logo）、`<Steps>` 工作流、
+  `<CardGrid>`/`<Card>` 特性亮点、`<LinkCard>` 导航、`<Aside>` 提示，并新增“评审输出规范”
+  章节（severity 五级表 + category 族 + 安全/渲染保证）。修正失效锚点 `#local-node-js` →
+  `#local-nodejs`。仅使用 Starlight 内置合法图标名（旧文件的 `key`/`terminal`/`seti:docker`
+  会导致构建失败）。
+- ✅ 4K 全宽增强：`custom.css` regular 页 `clamp(45rem,62vw,100rem)`、splash 页
+  `clamp(50rem,84vw,155rem)`，prose 阅读宽度 `78ch`，新增 200rem padding 档，
+  以及 splash 页 hero SVG 流式尺寸与 120rem/180rem 断点下 3/4 列卡片网格。
+- ✅ 新增 `docs/site/public/favicon.svg`（品牌 logo mark，同时作为站点 favicon 和 README logo）。
+- ✅ README.md 增强：logo、扩展 badge（CI/License/Node/TypeScript/Deploy/Docs/PRs Welcome）、
+  导航链接行、“Review output standards”和“Security”章节。
+- ✅ 同步更新：`validate-public-content.mjs` 扫描 `.md` + `.mdx`；`AGENTS.md` pitfall #59；
+  中英 `development/index.md` 的 MDX 说明；`docs/site/README.md`。

@@ -1,12 +1,26 @@
 <div align="center">
 
+<img src="docs/site/public/favicon.svg" alt="AICodeReviewer logo" width="112" height="112" />
+
 # AICodeReviewer
 
 **Self-hosted AI code review orchestration service**
 
+_Multi-VCS · bring-your-own-agent · structured findings · single container_
+
 [![CI](https://github.com/atframework/AICodeReviewer/actions/workflows/ci.yml/badge.svg)](https://github.com/atframework/AICodeReviewer/actions/workflows/ci.yml)
-[![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Docs](https://img.shields.io/badge/Docs-aicr.atframe.work-blue)](https://aicr.atframe.work/en/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Node.js](https://img.shields.io/badge/Node.js-%E2%89%A520-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![Deploy](https://img.shields.io/badge/Deploy-Docker%20%7C%20Podman-2496ED?logo=docker&logoColor=white)](https://aicr.atframe.work/en/deployment/docker/)
+[![Docs](https://img.shields.io/badge/Docs-aicr.atframe.work-2f6bff)](https://aicr.atframe.work/en/)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://aicr.atframe.work/en/development/)
+
+[Documentation](https://aicr.atframe.work/en/) ·
+[Quick Start](https://aicr.atframe.work/en/start/quick-start/) ·
+[Configuration](https://aicr.atframe.work/en/configuration/overview/) ·
+[Integrations](https://aicr.atframe.work/en/integrations/vcs-providers/) ·
+[中文文档](https://aicr.atframe.work/zh-cn/)
 
 </div>
 
@@ -75,6 +89,27 @@ pull-request comments, managed issues, or IM bots.
 4. Agent reports problems through MCP tools; the orchestrator flushes
    structured results to configured output channels.
 
+## Review output standards
+
+Every finding follows one contract, so reports stay consistent regardless of
+which agent produced them or which channel renders them. A problem always
+carries a **severity**, a **category**, a **file path**, a **line range**, and a
+human-readable **message** (plus an optional fix suggestion).
+
+| Severity | Meaning |
+|----------|---------|
+| `critical` | Must fix before merge — data loss, security breach, crash, or corruption |
+| `high` | Likely bug or vulnerability with real impact under realistic conditions |
+| `medium` | Correctness, contract, or performance risk worth addressing |
+| `low` | Minor issue or smell; safe to defer |
+| `info` | Advisory note or observation, no action required |
+
+Categories group findings into stable families such as `correctness`,
+`security`, `performance`, `api-contract`, and `style`. Findings render as
+proper Markdown — IM bots receive real tables and code blocks, never raw agent
+stdout. See [MCP tools](https://aicr.atframe.work/en/integrations/mcp-tools/)
+for the full report contract.
+
 ## Quick Start
 
 **Prerequisites:** Node.js ≥20, pnpm 10
@@ -132,6 +167,19 @@ Full documentation is available at **[aicr.atframe.work](https://aicr.atframe.wo
 | `packages/cli` | CLI entry point (`aicr` binary) |
 | `packages/eval` | Benchmark/evaluation fixture validation |
 | `docs/site` | Documentation site (Astro Starlight, bilingual) |
+
+## Security
+
+- Secrets are scrubbed from prompts, logs, and every output boundary; logging
+  never prints `.env` or config values.
+- The sandbox uses scoped VCS fetch (only changed files), read-only source
+  mounts, an allowlist of sandbox commands, and hard timeouts with
+  whole-process-tree cleanup.
+- Reviews are guided to reason about common vulnerability classes, including the
+  OWASP Top 10.
+
+Please report suspected vulnerabilities privately to the maintainers (for
+example via GitHub Security Advisories) rather than opening a public issue.
 
 ## Contributing
 

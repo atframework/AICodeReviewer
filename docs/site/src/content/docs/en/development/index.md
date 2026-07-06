@@ -144,7 +144,11 @@ keys, commands, paths, field names, and enum values identical across locales.
 - Sidebar slugs omit the `index` segment (e.g. `troubleshooting/index.md` has
   slug `troubleshooting`). Frontmatter `template` only accepts `doc` or
   `splash`; Starlight `social` is an array of link items.
-- Content files use `.md` only (no MDX).
+- Content pages use `.md`. The two landing pages (`en/index.mdx`,
+  `zh-cn/index.mdx`) use `.mdx` so they can render Starlight components (hero
+  frontmatter plus `Card`, `CardGrid`, `LinkCard`, `Steps`, `Aside`). MDX is
+  provided by Starlight with no extra integration; components never render in
+  plain `.md`. The public-content validator scans both `.md` and `.mdx`.
 - Cross-links use locale-prefixed paths (`/en/...`, `/zh-cn/...`).
 
 When you change a config shape, output contract, or runtime behavior, update

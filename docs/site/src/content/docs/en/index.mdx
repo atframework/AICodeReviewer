@@ -1,0 +1,235 @@
+---
+title: AICodeReviewer
+description: Self-hosted AI code review orchestration service for GitHub, Gitea/Forgejo, GitLab, Perforce, and Subversion.
+template: splash
+hero:
+  title: AICodeReviewer
+  tagline: >-
+    Self-hosted AI code review orchestration — one pipeline across every VCS,
+    your agent of choice, and structured findings routed to PRs, issues, and IM
+    bots instead of raw agent output.
+  image:
+    html: |
+      <svg role="img" aria-label="AICodeReviewer logo" width="208" height="208" viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <linearGradient id="aicrBg" x1="16" y1="12" x2="112" y2="116" gradientUnits="userSpaceOnUse">
+            <stop stop-color="#2f6bff" />
+            <stop offset="1" stop-color="#12b3e8" />
+          </linearGradient>
+        </defs>
+        <rect x="12" y="12" width="104" height="104" rx="24" fill="url(#aicrBg)" />
+        <path d="M52 46 L36 64 L52 82" fill="none" stroke="#ffffff" stroke-width="7" stroke-linecap="round" stroke-linejoin="round" />
+        <path d="M76 46 L92 64 L76 82" fill="none" stroke="#ffffff" stroke-width="7" stroke-linecap="round" stroke-linejoin="round" />
+        <path d="M68 40 L60 88" fill="none" stroke="#ffffff" stroke-width="7" stroke-linecap="round" opacity="0.55" />
+        <circle cx="100" cy="100" r="20" fill="#16a34a" stroke="#ffffff" stroke-width="5" />
+        <path d="M91 100 L98 107 L110 93" fill="none" stroke="#ffffff" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round" />
+      </svg>
+  actions:
+    - text: Quick start
+      link: /en/start/quick-start/
+      icon: rocket
+      variant: primary
+    - text: Deploy with Docker
+      link: /en/deployment/docker/
+      icon: server
+      variant: secondary
+    - text: View on GitHub
+      link: https://github.com/atframework/AICodeReviewer
+      icon: external
+      variant: minimal
+      attrs:
+        target: _blank
+        rel: noopener
+---
+
+import { Card, CardGrid, LinkCard, Steps, Aside } from '@astrojs/starlight/components';
+
+**AICodeReviewer (AICR)** is a self-hosted service that orchestrates AI code
+review across your version-control systems. It normalizes webhooks and triggers
+into a single review pipeline, runs the agent CLI of your choice inside a
+locked-down sandbox, and routes structured findings back to pull-request
+comments, managed issues, or IM bots — never as free-form agent stdout.
+
+## Why AICodeReviewer?
+
+<CardGrid>
+  <Card title="AICR owns the report contract" icon="approve-check-circle">
+    Agents report findings through a small, stable MCP tool set. AICR validates,
+    deduplicates, and renders — free-form agent stdout never becomes the report.
+  </Card>
+  <Card title="Bring your own agent" icon="puzzle">
+    Kilo Code, Claude Code, opencode, Zoo Code, and Copilot CLI share one runtime
+    contract. Switch agents without rewriting your pipeline.
+  </Card>
+  <Card title="Every VCS, one pipeline" icon="code-branch">
+    GitHub, Gitea, Forgejo, and GitLab over webhooks; Perforce and Subversion over
+    triggers. All normalized into a single `ReviewEvent`.
+  </Card>
+  <Card title="Safe by default" icon="padlock">
+    Scoped fetch of only changed files, read-only source mounts, allowlisted
+    sandbox commands, secret scrubbing at every boundary, and hard timeouts.
+  </Card>
+  <Card title="Cost & context aware" icon="analytics">
+    Automatic diff compression, per-run budget caps, LLM fallback chains, and a
+    dashboard that tracks tokens and cost per project and provider.
+  </Card>
+  <Card title="Self-hosted, single container" icon="server">
+    Server, queue worker, orchestrator, dashboard, and database run in one
+    process. Deploy with `docker run` or `podman run`; scale by adding workers.
+  </Card>
+</CardGrid>
+
+## How it works
+
+<Steps>
+
+1. **A webhook or trigger arrives** from your VCS (push, PR, or a manual
+   `/aicr review` command). AICR validates the request against your configured
+   HMAC secret or API key.
+
+2. **The VCS adapter fetches changes.** Only the changed files are pulled —
+   scoped fetch, not a full clone. For PRs the merge-base diff is computed; for
+   P4 and SVN the changelist or revision diff.
+
+3. **Diff compression** kicks in when the change set is too large for the
+   model's context window. AICR keeps the most relevant hunks and trims the rest.
+
+4. **The agent runs in a sandbox.** Your chosen agent CLI executes inside a
+   Docker or Podman container with the diff, your AI instructions, and the stable
+   MCP tool set — with read-only source mounts, allowlisted commands, and a hard
+   timeout that cleans up the whole process tree.
+
+5. **Structured findings are routed.** Problems become PR line comments (with
+   code context), managed issues (with lifecycle tracking and auto-close on fix),
+   or IM summary cards (Feishu/WeCom with proper rendering). The same
+   `aicr.report_problem` call drives all three.
+
+</Steps>
+
+## Key features
+
+- **One pipeline, many VCS.** GitHub, Gitea, Forgejo, and GitLab arrive over
+  webhooks; Perforce (P4) and Subversion (SVN) arrive over trigger endpoints.
+  All are normalized into one `ReviewEvent`.
+- **Bring your own agent.** Kilo Code, Claude Code, opencode, Zoo Code, and
+  Copilot CLI share one runtime contract. AICR translates `ModelSpec` into each
+  tool's native fields and records capability downgrades in the run manifest
+  instead of silently dropping them.
+- **AICR owns the report contract.** Agents emit findings through a small,
+  stable MCP tool set (`aicr.report_problem`, `aicr.publish_summary`,
+  `aicr.skip`, `aicr.fetch_more_context`, `aicr.try_blame`). The same problem
+  renders cleanly as a PR line comment, a managed issue, or an IM summary card.
+- **Safe by default.** Scoped VCS fetch (only changed files), read-only source
+  mounts, allowlisted sandbox commands, secret scrubbing at every boundary,
+  whole-process-tree timeout cleanup, and `--init` zombie reaping in the
+  service container.
+- **Context-aware compression.** Large diffs are automatically compressed before
+  hitting the model's context window. Per-model override thresholds let you tune
+  compression per provider without changing the review pipeline.
+- **Managed problem lifecycle.** Problems are tracked across runs with stable
+  fingerprints. When a file is re-reviewed and a problem is gone, its managed
+  issue is auto-closed. Resolution is guarded by file-scope — a review that
+  doesn't touch a file won't falsely close its issues.
+- **Built-in observability.** Dashboard with per-project stats, per-run token
+  estimates and cost breakdown, provider-level LLM usage tracking, daily
+  rollups, and a `/metrics` endpoint for Prometheus scraping.
+- **Retry and fallback.** Queue-level retry with exponential backoff. LLM
+  fallback chains route to the next provider when the primary fails or throttles.
+  Dead-letter queues capture persistently failing runs for later inspection.
+
+## Supported integrations
+
+| Surface | Options |
+| --- | --- |
+| VCS providers | GitHub, Gitea, Forgejo, GitLab (webhooks); Perforce (P4), Subversion (SVN) (triggers) |
+| Agent CLIs | Kilo Code, Claude Code, opencode, Zoo Code, Copilot CLI |
+| Output channels | PR/MR line comments & summary, managed problem issues, Feishu bot, WeCom bot |
+| Sandboxes | native, docker, podman, docker_socket (`k8s_pod`, `firecracker` reserved) |
+| Model providers | Any OpenAI-compatible API; models.dev catalog for context window and pricing metadata |
+
+## Review output standards
+
+Every finding follows one contract, so reports stay consistent no matter which
+agent produced them or which channel renders them. A problem always carries a
+**severity**, a **category**, a **file path**, a **line range**, and a
+human-readable **message** (with an optional fix `suggestion`).
+
+**Severity** is a fixed five-level scale, so downstream routing and triage are
+predictable:
+
+| Severity | Meaning |
+| --- | --- |
+| `critical` | Must fix before merge — data loss, security breach, crash, or corruption |
+| `high` | Likely bug or vulnerability with real impact under realistic conditions |
+| `medium` | Correctness, contract, or performance risk worth addressing |
+| `low` | Minor issue or smell; safe to defer |
+| `info` | Advisory note or observation, no action required |
+
+**Category** groups findings into stable families such as `correctness`,
+`security`, `performance`, `api-contract`, and `style`, which keeps grouping and
+deduplication consistent across runs.
+
+<Aside type="tip" title="Rendering & security guarantees">
+  Findings are rendered as proper Markdown — IM bots receive real tables and
+  code blocks, not raw stdout. Secrets are scrubbed from prompts, logs, and every
+  output boundary, and reviews are guided to reason about common vulnerability
+  classes (the OWASP Top 10 among them).
+</Aside>
+
+## Design principles
+
+- **Minimal assumptions.** AICR normalizes VCS inputs but doesn't guess your
+  workflow. Every behavior — skip policies, output routing, label management,
+  commit strategies — is configurable.
+- **Honest downgrades.** When an agent adapter or model doesn't support a
+  feature (e.g., structured output, reasoning), it's recorded in the run
+  manifest. Nothing is silently dropped.
+- **Single container.** The entire service — HTTP server, queue worker, agent
+  orchestrator, dashboard, and SQLite database — runs in one process. Deploy
+  with `docker run` or `podman run`; scale by adding workers behind a shared
+  database.
+- **Readable output.** Every problem includes a severity, category, file path,
+  line range, and human-readable message. IM bots receive properly rendered
+  Markdown tables and code blocks. No raw agent stdout makes it into a user-
+  facing notification.
+
+## Next steps
+
+<CardGrid>
+  <LinkCard
+    title="Quick start"
+    href="/en/start/quick-start/"
+    description="Run AICR locally or with Docker Compose and trigger your first review in minutes."
+  />
+  <LinkCard
+    title="Authentication & secrets"
+    href="/en/configuration/authentication/"
+    description="The three-layer model: webhook HMAC, server API key, and per-workspace key."
+  />
+  <LinkCard
+    title="LLM providers & models"
+    href="/en/configuration/llm/"
+    description="Configure OpenAI-compatible providers, model catalogs, retry, and budget caps."
+  />
+  <LinkCard
+    title="Agent & sandbox"
+    href="/en/configuration/agent/"
+    description="Choose an agent CLI, set timeouts, enable auto-compaction, and lock down the sandbox."
+  />
+  <LinkCard
+    title="Output channels & routing"
+    href="/en/integrations/output-channels/"
+    description="The MCP report tools, supported channel kinds, and how routing works."
+  />
+  <LinkCard
+    title="Deploy to production"
+    href="/en/deployment/docker/"
+    description="Single-container Docker or Podman, reverse-proxy TLS, and persistent volumes."
+  />
+</CardGrid>
+
+The fastest path to production is a single Docker or Podman container behind a
+reverse proxy, fed by a GitHub or Gitea webhook. See
+[Quick start](/en/start/quick-start/) to begin. If you are evaluating or
+contributing, the [local Node.js quick start](/en/start/quick-start/#local-nodejs)
+needs only `pnpm install` and `pnpm build`.
