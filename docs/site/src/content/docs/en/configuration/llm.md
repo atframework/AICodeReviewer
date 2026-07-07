@@ -184,7 +184,7 @@ llm:
 | --- | --- | --- |
 | `sqlite` (default) | Reuses `storage.database` (a keyed `model_catalog` table). | Point lookups only; the full `api.json` is parsed once at refresh and upserted row by row, never re-parsed on read. |
 | `memory` | In-process. | Intended for tests and local dev. Lost on restart. |
-| `redis` | Reuses `storage.cache.redis`. | **Requires** `storage.cache.kind: redis` **and** a resolvable `storage.cache.redis.url_env`. Use a unique `key_prefix` when sharing Redis across environments. See [/en/configuration/storage/](/en/configuration/storage/). |
+| `redis` | Reuses `storage.cache.redis`. | **Requires** `storage.cache.kind: redis` **and** a resolvable `storage.cache.redis.url_env`. Use a unique `key_prefix` when sharing Redis across environments. See [Storage](/en/configuration/storage/). |
 
 ### Resolution order
 
@@ -236,7 +236,7 @@ Choosing `cache.backend: redis` enables two validations at config-load time:
 - `storage.cache.redis.url_env` must resolve.
 
 If either is missing, the config is rejected with a pointer to the offending
-field. Configure both as described in [/en/configuration/storage/](/en/configuration/storage/).
+field. Configure both as described in [Storage](/en/configuration/storage/).
 :::
 
 ## How the catalog feeds the rest of the system
@@ -252,6 +252,6 @@ The resolved metadata is consumed by three subsystems:
    flag, and pricing are injected into the agent CLI's config so each runtime
    knows the model's limits. This is also why **agent context auto-compaction
    depends on a known context window** — see
-   [/en/configuration/agent/](/en/configuration/agent/) for the
+   [Agent and Sandbox](/en/configuration/agent/) for the
    `context_compaction` settings and the Kilo requirement that the window be
    known (enable the catalog or set `context_window` in `overrides`).

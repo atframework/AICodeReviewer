@@ -56,7 +56,7 @@ Redis is shared with the model catalog Redis backend
 (`llm.model_catalog.cache.backend: redis`). When the catalog uses Redis,
 `storage.cache.kind` **must** be `redis` and `redis.url_env` **must** resolve,
 otherwise the config is rejected at load time. See
-[/en/configuration/llm/](/en/configuration/llm/) for the catalog side.
+[LLM Providers and Models](/en/configuration/llm/) for the catalog side.
 
 :::tip[Sharing Redis across environments]
 When sharing one Redis across multiple environments, use a unique `key_prefix`

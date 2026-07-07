@@ -16,17 +16,17 @@ the table below as a jumping-off point.
 
 | Namespace | What it controls | Detail page |
 | --- | --- | --- |
-| `llm` | Providers, fallback chain, retry/backoff, spend budget, and the models.dev metadata catalog. | [/en/configuration/llm/](/en/configuration/llm/) |
-| `triggers` | One entry per VCS source (Gitea, GitHub, GitLab, P4, SVN) — inbound webhook/HMAC verification and outbound tokens. | [/en/configuration/authentication/](/en/configuration/authentication/) |
+| `llm` | Providers, fallback chain, retry/backoff, spend budget, and the models.dev metadata catalog. | [LLM Providers and Models](/en/configuration/llm/) |
+| `triggers` | One entry per VCS source (Gitea, GitHub, GitLab, P4, SVN) — inbound webhook/HMAC verification and outbound tokens. | [Authentication & secrets](/en/configuration/authentication/) |
 | `workspaces` | The repositories you review: source bindings, per-workspace overrides, and the clone cache. | this page |
-| `outputs` | Output channels (PR reviews, IM bots, managed issues), routing rules, and the zero-problem policy. | [/en/configuration/outputs/](/en/configuration/outputs/) |
-| `agent` | The agent CLI to drive, the per-run timeout, context auto-compaction, and the sandbox backend. | [/en/configuration/agent/](/en/configuration/agent/) |
+| `outputs` | Output channels (PR reviews, IM bots, managed issues), routing rules, and the zero-problem policy. | [Output Channels and Routing](/en/configuration/outputs/) |
+| `agent` | The agent CLI to drive, the per-run timeout, context auto-compaction, and the sandbox backend. | [Agent and Sandbox](/en/configuration/agent/) |
 | `review` | File filters, label management, the managed-problem-issue lifecycle cap, and reflection memory. | this page |
-| `queue` | In-memory or durable SQLite queue, worker concurrency, rate limits, and retry/dead-letter policy. | [/en/configuration/queue/](/en/configuration/queue/) |
-| `storage` | Database, cache, and object-store backends for observability, the model catalog, and future features. | [/en/configuration/storage/](/en/configuration/storage/) |
-| `compression` | AICR-side diff summarization that runs before the model sees a large task. | [/en/configuration/llm/](/en/configuration/llm/) (context dependency) |
-| `server` | HTTP listener and global API-key auth for `/triggers/*`. | [/en/configuration/authentication/](/en/configuration/authentication/) |
-| `admin` | Optional observability-dashboard super-admin login (separate from webhook/trigger auth). | [/en/configuration/authentication/](/en/configuration/authentication/) |
+| `queue` | In-memory or durable SQLite queue, worker concurrency, rate limits, and retry/dead-letter policy. | [Queue and Retry](/en/configuration/queue/) |
+| `storage` | Database, cache, and object-store backends for observability, the model catalog, and future features. | [Storage](/en/configuration/storage/) |
+| `compression` | AICR-side diff summarization that runs before the model sees a large task. | [LLM Providers and Models](/en/configuration/llm/) (context dependency) |
+| `server` | HTTP listener and global API-key auth for `/triggers/*`. | [Authentication & secrets](/en/configuration/authentication/) |
+| `admin` | Optional observability-dashboard super-admin login (separate from webhook/trigger auth). | [Authentication & secrets](/en/configuration/authentication/) |
 
 :::note[A minimal config]
 Only `llm`, at least one `triggers[]` entry, and at least one
@@ -133,18 +133,18 @@ Keep these rules in mind:
   in production).
 - Generate strong values with `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`.
 
-See [/en/configuration/authentication/](/en/configuration/authentication/) for
+See [Authentication & secrets](/en/configuration/authentication/) for
 how the three independent auth layers (webhook HMAC, server API key, workspace
 API key) combine.
 
 ## Where to go next
 
-- New to the project? Read [/en/configuration/llm/](/en/configuration/llm/)
+- New to the project? Read [LLM Providers and Models](/en/configuration/llm/)
   first — without a provider and fallback chain nothing runs.
 - Going to production? Configure a durable queue
-  ([/en/configuration/queue/](/en/configuration/queue/)), storage
-  ([/en/configuration/storage/](/en/configuration/storage/)), and the agent
-  sandbox ([/en/configuration/agent/](/en/configuration/agent/)).
+  ([Queue and Retry](/en/configuration/queue/)), storage
+  ([Storage](/en/configuration/storage/)), and the agent
+  sandbox ([Agent and Sandbox](/en/configuration/agent/)).
 - Tuning output behavior? See
-  [/en/configuration/outputs/](/en/configuration/outputs/) for channels,
+  [Output Channels and Routing](/en/configuration/outputs/) for channels,
   routing, the zero-problem policy, and managed-issue lifecycle limits.

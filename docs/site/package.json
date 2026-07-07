@@ -5,10 +5,11 @@
   "type": "module",
   "description": "AICodeReviewer user documentation site (Astro Starlight). Independent of the AICR runtime.",
   "scripts": {
-    "dev": "astro dev",
-    "build": "node scripts/validate-public-content.mjs && astro build",
-    "preview": "astro preview",
-    "check": "node scripts/validate-public-content.mjs && astro check",
+    "patch:astro-deps": "node scripts/patch-astro-deps.mjs",
+    "dev": "node scripts/patch-astro-deps.mjs && astro dev",
+    "build": "node scripts/patch-astro-deps.mjs && node scripts/validate-public-content.mjs && astro build",
+    "preview": "node scripts/patch-astro-deps.mjs && astro preview",
+    "check": "node scripts/patch-astro-deps.mjs && node scripts/validate-public-content.mjs && astro check",
     "validate:public-content": "node scripts/validate-public-content.mjs"
   },
   "dependencies": {

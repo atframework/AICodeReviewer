@@ -4,9 +4,9 @@
 
 # AICodeReviewer
 
-**Self-hosted AI code review orchestration service**
+<p><strong>Self-hosted AI code review orchestration service</strong></p>
 
-_Multi-VCS · bring-your-own-agent · structured findings · single container_
+<p><em>Multi-VCS · bring-your-own-agent · structured findings · single container</em></p>
 
 [![CI](https://github.com/atframework/AICodeReviewer/actions/workflows/ci.yml/badge.svg)](https://github.com/atframework/AICodeReviewer/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
@@ -56,7 +56,7 @@ pull-request comments, managed issues, or IM bots.
 
 ## How it works
 
-```
+```text
 ┌──────────┐    webhook/trigger    ┌──────────────┐
 │ GitHub   │ ────────────────────► │              │
 │ Gitea    │                       │  AICR Server │

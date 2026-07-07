@@ -51,7 +51,7 @@ SQLite 后端时）以及反思记忆条目。
 Redis 与模型目录的 Redis 后端（`llm.model_catalog.cache.backend: redis`）共用。
 当目录使用 Redis 时，`storage.cache.kind` **必须**为 `redis` 且
 `redis.url_env` **必须**可解析，否则配置在加载时即被拒绝。目录侧见
-[/zh-cn/configuration/llm/](/zh-cn/configuration/llm/)。
+[LLM 提供方与模型](/zh-cn/configuration/llm/)。
 
 :::tip[跨环境共享 Redis]
 在多个环境间共享同一个 Redis 时，请为每个环境使用唯一的 `key_prefix`，避免目录键
