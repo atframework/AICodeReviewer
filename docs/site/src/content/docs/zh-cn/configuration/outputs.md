@@ -242,6 +242,6 @@ triggers:
 ## 接下来看哪里
 
 - 完整的按通道字段约定，包括 agent 用来获取更多上下文的 MCP 工具约定，见
-  [/zh-cn/integrations/output-channels/](/zh-cn/integrations/output-channels/)。
+  [输出通道](/zh-cn/integrations/output-channels/)。
 - trigger 侧的 URL 模板与文件过滤器，见
-  [/zh-cn/integrations/vcs-providers/](/zh-cn/integrations/vcs-providers/)。
+  [VCS 提供商](/zh-cn/integrations/vcs-providers/)。

@@ -109,7 +109,7 @@ Kilo 仅在模型的 `contextWindow` 已知时才会自动压缩，这样 `thres
   （理想情况下同时设置 `max_output_tokens`）。
 
 窗口未知时，Kilo 压缩会静默地不生效。目录与覆盖字段见
-[/zh-cn/configuration/llm/](/zh-cn/configuration/llm/)。
+[LLM 提供方与模型](/zh-cn/configuration/llm/)。
 :::
 
 ## `agent.sandbox` —— 隔离后端
@@ -151,4 +151,4 @@ agent:
 `sandbox` 还可在 `workspaces.defaults.sandbox` 和
 `workspaces.instances.<id>.sandbox` 层覆盖（注意：实例级 `sandbox` 只能通过
 `workspaces.defaults` 提供，不能直接放在实例上——覆盖表见
-[/zh-cn/configuration/overview/](/zh-cn/configuration/overview/)）。
+[配置总览](/zh-cn/configuration/overview/)）。

@@ -256,6 +256,6 @@ triggers:
 
 - The full per-channel field contract, including the MCP tool contract that
   agents use to fetch more context, is in
-  [/en/integrations/output-channels/](/en/integrations/output-channels/).
+  [Output channels](/en/integrations/output-channels/).
 - For trigger-side URL templates and file filters, see
-  [/en/integrations/vcs-providers/](/en/integrations/vcs-providers/).
+  [VCS providers](/en/integrations/vcs-providers/).

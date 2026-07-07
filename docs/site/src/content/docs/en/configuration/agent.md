@@ -115,7 +115,7 @@ Kilo only auto-compacts when the model's `contextWindow` is known, so
   `llm.model_catalog.overrides` for the model.
 
 Without a known window, Kilo compaction silently stays inactive. See
-[/en/configuration/llm/](/en/configuration/llm/) for the catalog and override
+[LLM Providers and Models](/en/configuration/llm/) for the catalog and override
 fields.
 :::
 
@@ -161,5 +161,5 @@ agent:
 `sandbox` is also overridable at the `workspaces.defaults.sandbox` and
 `workspaces.instances.<id>.sandbox` layers (note: per-instance `sandbox` is only
 available via `workspaces.defaults`, not directly on an instance — see the
-override table on the [/en/configuration/overview/](/en/configuration/overview/)
+override table on the [Configuration Overview](/en/configuration/overview/)
 page).

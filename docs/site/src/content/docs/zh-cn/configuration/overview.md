@@ -13,17 +13,17 @@ workspace，并强调一条不能破坏的规则——**绝不要把密钥明文
 
 | 命名空间 | 控制内容 | 详情页 |
 | --- | --- | --- |
-| `llm` | 模型提供方、fallback 链、重试/退避、费用预算，以及 models.dev 元数据目录。 | [/zh-cn/configuration/llm/](/zh-cn/configuration/llm/) |
-| `triggers` | 每个 VCS 源（Gitea、GitHub、GitLab、P4、SVN）一个条目——入站 webhook/HMAC 校验与出站 token。 | [/zh-cn/configuration/authentication/](/zh-cn/configuration/authentication/) |
+| `llm` | 模型提供方、fallback 链、重试/退避、费用预算，以及 models.dev 元数据目录。 | [LLM 提供方与模型](/zh-cn/configuration/llm/) |
+| `triggers` | 每个 VCS 源（Gitea、GitHub、GitLab、P4、SVN）一个条目——入站 webhook/HMAC 校验与出站 token。 | [认证与密钥](/zh-cn/configuration/authentication/) |
 | `workspaces` | 你要评审的代码仓库：源绑定、按 workspace 覆盖，以及克隆缓存。 | 本页 |
-| `outputs` | 输出通道（PR review、IM 机器人、托管 issue）、路由规则，以及零问题策略。 | [/zh-cn/configuration/outputs/](/zh-cn/configuration/outputs/) |
-| `agent` | 驱动哪个 agent CLI、单次运行超时、上下文自动压缩，以及沙箱后端。 | [/zh-cn/configuration/agent/](/zh-cn/configuration/agent/) |
+| `outputs` | 输出通道（PR review、IM 机器人、托管 issue）、路由规则，以及零问题策略。 | [输出通道与路由](/zh-cn/configuration/outputs/) |
+| `agent` | 驱动哪个 agent CLI、单次运行超时、上下文自动压缩，以及沙箱后端。 | [Agent 与沙箱](/zh-cn/configuration/agent/) |
 | `review` | 文件过滤、label 管理、托管问题 issue 的生命周期上限，以及反思记忆。 | 本页 |
-| `queue` | 内存或持久化 SQLite 队列、worker 并发、限流，以及重试/死信策略。 | [/zh-cn/configuration/queue/](/zh-cn/configuration/queue/) |
-| `storage` | 数据库、缓存与对象存储后端，用于可观测性、模型目录及未来特性。 | [/zh-cn/configuration/storage/](/zh-cn/configuration/storage/) |
-| `compression` | AICR 侧的 diff 摘要，在模型看到大任务前先压缩。 | [/zh-cn/configuration/llm/](/zh-cn/configuration/llm/)（上下文依赖） |
-| `server` | HTTP 监听器与 `/triggers/*` 的全局 API key 鉴权。 | [/zh-cn/configuration/authentication/](/zh-cn/configuration/authentication/) |
-| `admin` | 可选的可观测性看板超级管理员登录（与 webhook/trigger 鉴权相互独立）。 | [/zh-cn/configuration/authentication/](/zh-cn/configuration/authentication/) |
+| `queue` | 内存或持久化 SQLite 队列、worker 并发、限流，以及重试/死信策略。 | [队列与重试](/zh-cn/configuration/queue/) |
+| `storage` | 数据库、缓存与对象存储后端，用于可观测性、模型目录及未来特性。 | [存储](/zh-cn/configuration/storage/) |
+| `compression` | AICR 侧的 diff 摘要，在模型看到大任务前先压缩。 | [LLM 提供方与模型](/zh-cn/configuration/llm/)（上下文依赖） |
+| `server` | HTTP 监听器与 `/triggers/*` 的全局 API key 鉴权。 | [认证与密钥](/zh-cn/configuration/authentication/) |
+| `admin` | 可选的可观测性看板超级管理员登录（与 webhook/trigger 鉴权相互独立）。 | [认证与密钥](/zh-cn/configuration/authentication/) |
 
 :::note[最小配置]
 要真正发起评审，只需要 `llm`、至少一个 `triggers[]` 条目，以及至少一个
@@ -124,14 +124,14 @@ AICR_LLM_API_KEY=sk-xxxxxxxxxxxxxxxx
   生成强随机值。
 
 三套相互独立的鉴权层（webhook HMAC、server API key、workspace API key）
-如何组合使用，见 [/zh-cn/configuration/authentication/](/zh-cn/configuration/authentication/)。
+如何组合使用，见 [认证与密钥](/zh-cn/configuration/authentication/)。
 
 ## 接下来看哪里
 
-- 刚接触本项目？先读 [/zh-cn/configuration/llm/](/zh-cn/configuration/llm/)——
+- 刚接触本项目？先读 [LLM 提供方与模型](/zh-cn/configuration/llm/)——
   没有提供方和 fallback 链什么都跑不起来。
-- 准备上生产？配置持久化队列（[/zh-cn/configuration/queue/](/zh-cn/configuration/queue/)）、
-  存储（[/zh-cn/configuration/storage/](/zh-cn/configuration/storage/)）以及
-  agent 沙箱（[/zh-cn/configuration/agent/](/zh-cn/configuration/agent/)）。
-- 调整输出行为？看 [/zh-cn/configuration/outputs/](/zh-cn/configuration/outputs/)，
+- 准备上生产？配置持久化队列（[队列与重试](/zh-cn/configuration/queue/)）、
+  存储（[存储](/zh-cn/configuration/storage/)）以及
+  agent 沙箱（[Agent 与沙箱](/zh-cn/configuration/agent/)）。
+- 调整输出行为？看 [输出通道与路由](/zh-cn/configuration/outputs/)，
   涵盖通道、路由、零问题策略，以及托管 issue 的生命周期上限。
