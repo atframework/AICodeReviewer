@@ -1,0 +1,89 @@
+---
+// Custom Starlight <head> that loads brand webfonts per locale.
+//
+// Goals (see docs/site/src/styles/custom.css for the matching font stacks):
+//   * English pages must NOT download heavy CJK fonts. They only pull the
+//     Latin families (Noto Sans + Noto Sans Mono from Google Fonts, and
+//     Maple Mono from jsDelivr/Fontsource).
+//   * Simplified-Chinese pages pull the CJK builds from the ZeoSeven Fonts
+//     (中文网字计划) CDN, which is reliable inside mainland China and streams
+//     only the glyph subsets each page actually renders (per-`unicode-range`
+//     `@font-face` chunks), so the multi-megabyte fonts never arrive in one blob.
+//
+// Every stylesheet is loaded non-render-blocking: the `preload` + `onload`
+// `rel` swap keeps the request off the critical path, `<noscript>` covers the
+// no-JS case, and each `@font-face` already ships `font-display: swap`, so text
+// paints immediately with the system fallback and swaps to the webfont once it
+// downloads. Large font files therefore never delay first paint.
+import Default from "@astrojs/starlight/components/Head.astro";
+
+// Routing is URL-prefixed (`/en/…`, `/zh-cn/…`), so the pathname alone tells us
+// the locale without relying on Starlight internals.
+const pathname = Astro.url.pathname;
+const isZh = pathname === "/zh-cn" || pathname.startsWith("/zh-cn/");
+
+// Google Fonts: Noto Sans (body Latin) + Noto Sans Mono (code fallback).
+const googleFontsHref =
+  "https://fonts.googleapis.com/css2?family=Noto+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Noto+Sans+Mono:wght@400;700&display=swap";
+// Fontsource on jsDelivr: Maple Mono (code, Latin subset only).
+const mapleMonoLatinHref =
+  "https://cdn.jsdelivr.net/npm/@fontsource/maple-mono@5.2.6/latin.css";
+// ZeoSeven Fonts CDN: 161 = Sarasa Gothic SC (body), 442 = Maple Mono NF CN (code).
+const sarasaGothicScHref = "https://fontsapi.zeoseven.com/161/main/result.css";
+const mapleMonoNfCnHref = "https://fontsapi.zeoseven.com/442/main/result.css";
+---
+
+<Default><slot /></Default>
+
+{
+  isZh ? (
+    <>
+      <link rel="preconnect" href="https://fontsapi.zeoseven.com" crossorigin />
+      <link
+        rel="preconnect"
+        href="https://fontsapi-storage.zeoseven.com"
+        crossorigin
+      />
+      <link
+        rel="preload"
+        as="style"
+        href={sarasaGothicScHref}
+        crossorigin
+        onload="this.onload=null;this.rel='stylesheet'"
+      />
+      <link
+        rel="preload"
+        as="style"
+        href={mapleMonoNfCnHref}
+        crossorigin
+        onload="this.onload=null;this.rel='stylesheet'"
+      />
+      <noscript>
+        <link rel="stylesheet" href={sarasaGothicScHref} />
+        <link rel="stylesheet" href={mapleMonoNfCnHref} />
+      </noscript>
+    </>
+  ) : (
+    <>
+      <link rel="preconnect" href="https://fonts.googleapis.com" />
+      <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+      <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin />
+      <link
+        rel="preload"
+        as="style"
+        href={googleFontsHref}
+        onload="this.onload=null;this.rel='stylesheet'"
+      />
+      <link
+        rel="preload"
+        as="style"
+        href={mapleMonoLatinHref}
+        onload="this.onload=null;this.rel='stylesheet'"
+      />
+      <noscript>
+        <link rel="stylesheet" href={googleFontsHref} />
+        <link rel="stylesheet" href={mapleMonoLatinHref} />
+      </noscript>
+    </>
+  )
+}

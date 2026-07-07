@@ -28,6 +28,41 @@
   );
 }
 
+/* ------------------------------------------------------------------ *
+ * Font families
+ *
+ * The webfonts themselves are loaded per locale in src/components/Head.astro
+ * (Latin-only on English pages, CJK from the ZeoSeven CDN on Chinese pages).
+ * Here we only wire the font *stacks* into Starlight's `--sl-font` (body/UI)
+ * and `--sl-font-mono` (code) custom properties. Every stack ends in a system
+ * fallback + generic family so pages stay readable if a CDN is blocked or a
+ * webfont has not arrived yet.
+ * ------------------------------------------------------------------ */
+
+:root {
+  /* Body / UI. Sarasa Gothic SC (loaded only on zh-cn pages) leads, then the
+   * Latin Noto Sans, then system fonts. On English pages Sarasa Gothic SC is
+   * intentionally not downloaded, so text falls through to Noto Sans. */
+  --sl-font:
+    "Sarasa Gothic SC", "Noto Sans", system-ui, -apple-system, "Segoe UI",
+    Roboto, "PingFang SC", "Microsoft YaHei", "Hiragino Sans GB", sans-serif;
+
+  /* Monospace (English / default): prefer locally-installed Maple Mono builds,
+   * then the webfont-backed "Maple Mono", then Latin mono fallbacks. */
+  --sl-font-mono:
+    "Maple Mono Normal NF", "Maple Mono NF", "Maple Mono Normal", "Maple Mono",
+    "Sarasa Mono SC", "Noto Sans Mono", Consolas, monospace;
+}
+
+/* Simplified-Chinese pages prefer the CN monospace builds, which carry the CJK
+ * glyphs (the webfont-backed "Maple Mono NF CN" is loaded for these pages). */
+:root[lang="zh-CN"] {
+  --sl-font-mono:
+    "Maple Mono Normal NF CN", "Maple Mono NF CN", "Maple Mono Normal CN",
+    "Maple Mono CN", "等距更纱黑体 SC", "Sarasa Mono SC",
+    "Noto Sans Mono CJK SC", "Noto Sans Mono SC", Consolas, monospace;
+}
+
 /* Full-bleed content width (no fixed max-width cap).
  *
  * Starlight caps the content column by default (--sl-content-width: 45rem on
