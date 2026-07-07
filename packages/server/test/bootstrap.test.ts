@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AppConfig } from "@aicr/core";
+import { computeScopeFingerprint } from "@aicr/outputs";
 import { closeStoreDb, createStoreDb, getProjectStats, hardDeleteExpiredProjects, insertReviewRun } from "@aicr/store";
 
 
@@ -1130,6 +1131,167 @@ describe("createOutputPublisherFromConfig", () => {
         delete process.env.GITEA_TOKEN;
       } else {
         process.env.GITEA_TOKEN = originalToken;
+      }
+    }
+  });
+
+  it("embeds a push-scoped consolidated fingerprint for push-triggered Gitea problem issues", async () => {
+    const calls: { url: string; init: { headers?: Record<string, string>; body?: string; method?: string } }[] = [];
+    vi.stubGlobal("fetch", async (url: string, init?: { headers?: Record<string, string>; body?: string; method?: string }) => {
+      calls.push({ url, init: init ?? {} });
+      return calls.length === 1 ? response([]) : response({ id: 88, number: 12 });
+    });
+
+    const originalToken = process.env.GITEA_TOKEN;
+    process.env.GITEA_TOKEN = "resolver-token";
+    try {
+      const config = makeConfig({
+        outputs: {
+          template_engine: "handlebars",
+          channels: [
+            {
+              name: "gitea-problem-issues",
+              kind: "gitea_problem_issue",
+              trigger: "gitea-internal",
+              marker_prefix: "[AICR Managed]",
+              marker_label: "aicr-managed",
+              resolved_action: "close",
+            },
+          ],
+        },
+      } as Partial<AppConfig>);
+      const publisher = createOutputPublisherFromConfig(
+        config,
+        "gitea-problem-issues",
+        undefined,
+        "test-workspace",
+        {
+          triggerName: "gitea-internal",
+          provider: "gitea",
+          workspaceId: "test-workspace",
+          targetKind: "push",
+          repoRef: "owent/example",
+          headSha: "push-head-sha",
+          branch: "main",
+          author: {},
+          reason: "gitea:push",
+        },
+      );
+      assertSummaryPublisher(publisher);
+
+      await publisher.publishSummary(
+        "",
+        [{ file: "src/app.ts", line: 3, severity: "high", category: "security", message: "Issue." }],
+      );
+
+      const createCall = calls.find(
+        (c) => c.url === "https://gitea.example.com/api/v1/repos/owent/example/issues" && c.init?.method === "POST",
+      );
+      expect(createCall).toBeDefined();
+      const body = JSON.parse(createCall?.init.body ?? "{}");
+      const expectedFingerprint = computeScopeFingerprint("gitea-problem-issues", "owent", "example", {
+        targetKind: "push",
+        headSha: "push-head-sha",
+        branch: "main",
+      });
+      const repoWideFingerprint = computeScopeFingerprint("gitea-problem-issues", "owent", "example");
+      expect(expectedFingerprint).not.toBe(repoWideFingerprint);
+      expect(body.body).toContain(`<!-- aicr:scope_fingerprint=${expectedFingerprint} -->`);
+      expect(body.body).not.toContain(`<!-- aicr:scope_fingerprint=${repoWideFingerprint} -->`);
+    } finally {
+      vi.unstubAllGlobals();
+      if (originalToken === undefined) {
+        delete process.env.GITEA_TOKEN;
+      } else {
+        process.env.GITEA_TOKEN = originalToken;
+      }
+    }
+  });
+
+  it("embeds a PR-number-scoped consolidated fingerprint stable across commits for GitHub problem issues", async () => {
+    const calls: { url: string; init: { headers?: Record<string, string>; body?: string; method?: string } }[] = [];
+    vi.stubGlobal("fetch", async (url: string, init?: { headers?: Record<string, string>; body?: string; method?: string }) => {
+      calls.push({ url, init: init ?? {} });
+      if (url.includes("/issues?state=open")) {
+        return response([]);
+      }
+      return response({ id: 600, number: 30, html_url: "https://github.com/my-org/my-repo/issues/30" });
+    });
+
+    const originalToken = process.env.GITHUB_TOKEN;
+    process.env.GITHUB_TOKEN = "gh-problem-token";
+    try {
+      const config = makeConfig({
+        triggers: [{ name: "github-saas", kind: "github", token_env: "GITHUB_TOKEN" }],
+        outputs: {
+          template_engine: "handlebars",
+          channels: [
+            {
+              name: "github-problem-issues",
+              kind: "github_problem_issue",
+              trigger: "github-saas",
+              marker_prefix: "[AICR]",
+              marker_label: "aicr-managed",
+            },
+          ],
+        },
+        workspaces: {
+          cache: { max_total_gb: 50, eviction: "lru", ttl_days: 30 },
+          defaults: {},
+          instances: {
+            "test-workspace": {
+              source_repo: { trigger: "github-saas", repo: "my-org/my-repo" },
+            },
+          },
+        },
+      } as Partial<AppConfig>);
+      const publisher = createOutputPublisherFromConfig(
+        config,
+        "github-problem-issues",
+        7,
+        "test-workspace",
+        {
+          triggerName: "github-saas",
+          provider: "github",
+          workspaceId: "test-workspace",
+          targetKind: "pull_request",
+          repoRef: "my-org/my-repo",
+          headSha: "commit-sha-1",
+          author: {},
+          reason: "github:pull_request",
+        },
+      );
+      assertSummaryPublisher(publisher);
+
+      await publisher.publishSummary(
+        "",
+        [{ file: "src/app.ts", line: 7, severity: "high", category: "correctness", message: "Issue." }],
+      );
+
+      const createCall = calls.find(
+        (c) => c.url.endsWith("/repos/my-org/my-repo/issues") && c.init?.method === "POST",
+      );
+      expect(createCall).toBeDefined();
+      const body = JSON.parse(createCall?.init.body ?? "{}");
+      const expectedFingerprint = computeScopeFingerprint("github-problem-issues", "my-org", "my-repo", {
+        targetKind: "pull_request",
+        pullNumber: 7,
+      });
+      // The PR scope must ignore the commit SHA so the same PR reuses one issue across commits.
+      expect(expectedFingerprint).toBe(
+        computeScopeFingerprint("github-problem-issues", "my-org", "my-repo", {
+          targetKind: "pull_request",
+          pullNumber: 7,
+          headSha: "commit-sha-2",
+        }),
+      );
+      expect(body.body).toContain(`<!-- aicr:scope_fingerprint=${expectedFingerprint} -->`);
+    } finally {
+      vi.unstubAllGlobals();
+      if (originalToken === undefined) {
+        delete process.env.GITHUB_TOKEN;
+      } else {
+        process.env.GITHUB_TOKEN = originalToken;
       }
     }
   });

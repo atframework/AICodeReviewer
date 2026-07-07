@@ -659,6 +659,13 @@ by listing only the most recent open issues. Configure the cap globally under
 `review.problem_issue.max_recent_issues` and override it per workspace when a
 repository needs a tighter or looser lifecycle scan.
 
+When `issue_mode` is `consolidated` (the default), AICR uses a **target-aware
+scope fingerprint** to group problems: push events key by batch (`headSha`),
+so different push batches and different committers stay in separate issues;
+pull-request events key by pull number, so a single PR issue is updated across
+every commit push. Manual, scheduled, and other non-push/non-PR targets fall
+back to a repo-wide scope.
+
 If one configured output channel cannot publish, AICR logs the channel failure
 and continues trying the remaining routed channels. A run where every dispatch
 attempt fails is reported as `skipped` with `skipReason: output_dispatch_failed`

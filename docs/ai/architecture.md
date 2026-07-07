@@ -333,9 +333,13 @@ AICR 采用**两层上下文管理**，两者互补：
 - 最近问题列表受 `review.problem_issue.max_recent_issues` 控制。
 - 零 problem 正常 review 的抑制逻辑，不能误伤错误报告、告警或生命周期回收。
 - 支持 `issue_mode` 控制创建策略：
-  - `consolidated`（默认）：一次分析的所有问题合并为一个 issue，基于 scope fingerprint（channel + repo）做生命周期管理。每次审查更新已有 issue 内容；零问题时按 `resolved_action` 关闭或删除。
+  - `consolidated`（默认）：一次分析的所有问题合并为一个 issue，基于 **target-aware scope fingerprint** 做生命周期管理。scope fingerprint 按审查目标区分，避免不同批次/不同提交者被合并到同一个 issue：
+    - **push 事件**：按批次（`channel + repo + headSha`，即每次 push 的 `after`）独立成 issue；同一次 push（可能包含多个 commit）的问题合进同一个 issue，不同批次/不同提交者的 push 互不合并。
+    - **pull request / MR**：按 PR 号（`channel + repo + pr_number`）归并；同一 PR 的多次提交与更新复用同一个 issue（无 PR 号时回退到 headSha）。
+    - **其他目标**（manual/scheduled 或未提供 `targetKind`）：回退到 `channel + repo`。
+    - 不同目标之间**不再互相清理或关闭**（已移除旧的 repo-wide 跨 scope 合并循环）。每次审查更新已有 issue 内容；零问题时按 `resolved_action` 关闭或删除。
   - `per_problem`：每个问题创建独立 issue，基于 fingerprint 做生命周期管理。
-  - `per_commit`：按 commit scope fingerprint（channel + repo + headSha）创建 issue，不同 commit 的问题相互独立，不自动关闭其他 commit 的 issue。
+  - `per_commit`：按 commit scope fingerprint（`channel + repo + headSha`）创建 issue，对所有目标一视同仁（PR 也会按每个 commit 拆分），不同 commit 的问题相互独立，不自动关闭其他 commit 的 issue。
 - `resolved_action` 支持：
   - `close`（默认）：关闭 issue。
   - `delete`：删除 issue（仅 Gitea）。
@@ -360,7 +364,7 @@ AICR 采用**两层上下文管理**，两者互补：
   - per_problem issue body 嵌入 `<!-- aicr:file=<path> -->` 标记；旧 body 通过解析 `Location: \`path:line\`` 回退。
   - consolidated issue 通过 `parseConsolidatedBodyProblemInfo`（per-fingerprint 文件信息）提取文件。
   - `isFileCoveredByReview(filePath, reviewedFiles)`：`reviewedFiles` 为空/未提供时返回 `true`（向后兼容）；`filePath` 无法确定且 `reviewedFiles` 非空时返回 `false`（保守不关闭）；文件在范围内返回 `true`。
-  - 守卫应用于：per_problem 解决循环、consolidated 空结果分支（`canResolveConsolidatedIssue`）、consolidated 分类（`categorizeProblems` via `previousFilesByFingerprint`）、consolidated 跨 scope 清理循环。consolidated 部分范围更新必须把未覆盖的旧 fingerprint 作为 retained open problem 写回 `open_problems` 和正文；如果旧 body 无法解析 retained fingerprint 的文件/元数据，则跳过本次重写，避免丢失追踪。
+  - 守卫应用于：per_problem 解决循环、consolidated 空结果分支（`canResolveConsolidatedIssue`）、consolidated 分类（`categorizeProblems` via `previousFilesByFingerprint`）。consolidated 部分范围更新必须把未覆盖的旧 fingerprint 作为 retained open problem 写回 `open_problems` 和正文；如果旧 body 无法解析 retained fingerprint 的文件/元数据，则跳过本次重写，避免丢失追踪。（target-aware 化后已移除旧的 repo-wide 跨 scope 清理循环，不同 push 批次 / 不同 PR 的 issue 不再互相关闭。）
 - GitHub managed problem issue 需要 `token_env` 指向具备 Issues read/write 权限的 PAT 或 GitHub App installation token；Webhook 的 `Issues` / `Issue comments` 事件订阅只控制入站事件，不授予 REST API 创建/更新 issue 的权限。
 
 ### 3.10 配置体系

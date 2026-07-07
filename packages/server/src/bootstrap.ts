@@ -1505,6 +1505,9 @@ export function createOutputPublisherFromConfig(
       ...(reviewedTag ? { reviewedTag } : {}),
       ref,
       ...(reviewEvent?.headSha ? { headSha: reviewEvent.headSha } : {}),
+      ...(reviewEvent?.targetKind ? { targetKind: reviewEvent.targetKind } : {}),
+      ...(pullNumber !== undefined ? { pullNumber } : {}),
+      ...(reviewEvent?.branch ? { branch: reviewEvent.branch } : {}),
     });
 
     return {
@@ -1653,6 +1656,9 @@ export function createOutputPublisherFromConfig(
       ...(reviewedTag ? { reviewedTag } : {}),
       ref,
       ...(reviewEvent?.headSha ? { headSha: reviewEvent.headSha } : {}),
+      ...(reviewEvent?.targetKind ? { targetKind: reviewEvent.targetKind } : {}),
+      ...(pullNumber !== undefined ? { pullNumber } : {}),
+      ...(reviewEvent?.branch ? { branch: reviewEvent.branch } : {}),
     });
 
     return {

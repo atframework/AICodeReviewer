@@ -199,7 +199,7 @@ workspaces:
 
 The `gitea_problem_issue` channel reconciles managed Gitea issues based on problem fingerprints. On every summary publish it creates issues for new fingerprints and applies `resolved_action` to open managed issues whose fingerprints disappeared from the latest analysis.
 
-By default, all problems from one review run are combined into a single issue (`issue_mode: consolidated`). When `issue_mode: per_problem` is set, each problem gets its own issue with fingerprint-based reconciliation. The consolidated issue is identified by a scope fingerprint (channel + owner + repo) and updated on subsequent reviews. When no problems are found, the consolidated issue is closed or deleted according to `resolved_action`.
+By default, all problems from one review run are combined into a single issue (`issue_mode: consolidated`). When `issue_mode: per_problem` is set, each problem gets its own issue with fingerprint-based reconciliation. The consolidated issue is identified by a **target-aware** scope fingerprint and updated on subsequent reviews: `push` events key by batch (channel + owner + repo + `headSha`), so different push batches and committers stay in separate issues; `pull_request`/MR events key by pull number (channel + owner + repo + pull number), so a single PR issue is updated across every commit (falling back to `headSha` when the number is unavailable); manual, scheduled, and other targets fall back to channel + owner + repo. Different targets no longer close each other's issues. When no problems are found, the consolidated issue for the current target is closed or deleted according to `resolved_action`.
 
 When updating an existing consolidated issue, the dispatcher tracks per-fingerprint resolution and protects against webhook replay:
 
@@ -229,7 +229,7 @@ Channel fields:
 | `marker_prefix` | Title prefix used to identify managed issues; defaults to `[AICR]` |
 | `marker_label` | Hidden body marker used to scope managed issues; defaults to `aicr-managed` |
 | `label_ids` | Existing Gitea label IDs to attach to every created issue |
-| `issue_mode` | `consolidated` (default) or `per_problem` |
+| `issue_mode` | `consolidated` (default), `per_problem`, or `per_commit` |
 | `resolved_action` | `none`, `close`, or `delete`; defaults to `close` |
 | `assign_committer` | Add the resolved review author as an assignee; defaults to `true` |
 | `owners_file` | Repository file to read for path owners; defaults to `OWNERS` |

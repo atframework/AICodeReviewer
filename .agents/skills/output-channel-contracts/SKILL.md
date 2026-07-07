@@ -75,7 +75,8 @@ All IM bot channels (`feishu_bot`, `wecom_bot`, and future channels such as `din
 ## Managed problem issue lifecycle
 
 - `gitea_problem_issue` and `github_problem_issue` channels support `issue_mode` to control creation strategy:
-  - `consolidated` (default): all problems from one review run are merged into a single issue, scope-fingerprint-based reconciliation. The scope fingerprint is derived from `channel + owner + repo`.
+  - `consolidated` (default): all problems from one review run are merged into a single issue, scope-fingerprint-based reconciliation. The scope fingerprint is **target-aware**: `push` events key by batch (`channel + owner + repo + headSha`), `pull_request`/MR events key by pull number (`channel + owner + repo + pr:number`, stable across commits; falls back to `headSha` when the number is unknown), and other targets (manual/scheduled or missing `targetKind`) fall back to `channel + owner + repo`. Different push batches and different PRs keep separate issues and no longer close each other (the old repo-wide cross-scope cleanup loop was removed). `bootstrap.ts` forwards `reviewEvent.targetKind`, the resolved `pullNumber`, and `reviewEvent.branch` into the dispatcher.
+  - `per_commit`: one issue per commit scope (`channel + owner + repo + headSha`) for all targets, fingerprint-based reconciliation.
   - `per_problem`: one issue per problem, fingerprint-based reconciliation.
 - In consolidated mode:
   - Title stays concise: single problem uses `per_problem` format; multiple problems append a representative summary from the highest-severity issue (e.g., `[AICR] [CRITICAL] 3 problems · SQL query uses unsanitized input`).
