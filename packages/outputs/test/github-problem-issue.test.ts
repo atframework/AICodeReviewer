@@ -1042,6 +1042,111 @@ describe("createGithubProblemIssueDispatcher", () => {
 	});
 });
 
+describe("consolidated target-aware scope fingerprint", () => {
+	const scopeArgs = ["github-issues", "my-org", "my-repo"] as const;
+
+	it("scopes push per batch and PR per pull number", () => {
+		const pushA = computeScopeFingerprint(...scopeArgs, { targetKind: "push", headSha: "aaa111" });
+		const pushB = computeScopeFingerprint(...scopeArgs, { targetKind: "push", headSha: "bbb222" });
+		const prSha1 = computeScopeFingerprint(...scopeArgs, { targetKind: "pull_request", headSha: "aaa111" });
+		const prSha2 = computeScopeFingerprint(...scopeArgs, { targetKind: "pull_request", headSha: "bbb222" });
+		const prNum7 = computeScopeFingerprint(...scopeArgs, { targetKind: "pull_request", pullNumber: 7 });
+		const prNum8 = computeScopeFingerprint(...scopeArgs, { targetKind: "pull_request", pullNumber: 8 });
+		const repoWide = computeScopeFingerprint(...scopeArgs);
+
+		expect(pushA).not.toBe(pushB);
+		expect(prSha1).not.toBe(prSha2);
+		expect(prNum7).not.toBe(prNum8);
+		// PR identity is stable across commits when the pull number is known.
+		expect(prNum7).toBe(computeScopeFingerprint(...scopeArgs, { targetKind: "pull_request", pullNumber: 7, headSha: "ccc333" }));
+		// Non-push/non-PR targets (manual/scheduled) keep the repo-wide scope.
+		expect(repoWide).toBe(computeScopeFingerprint(...scopeArgs, { targetKind: "manual" }));
+		// headSha without a target kind falls back to the per_commit scope (differs from repo-wide).
+		expect(computeScopeFingerprint(...scopeArgs, { headSha: "aaa111" })).not.toBe(repoWide);
+	});
+
+	it("keeps separate push batches in separate issues", async () => {
+		const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
+		const batch1Fp = computeScopeFingerprint("github-issues", "my-org", "my-repo", { targetKind: "push", headSha: "aaa111" });
+		const batch1Body = [
+			"<!-- aicr:managed=problem-issue -->",
+			"<!-- aicr:consolidated=true -->",
+			"<!-- aicr:channel=github-issues -->",
+			"<!-- aicr:label=aicr-managed -->",
+			`<!-- aicr:scope_fingerprint=${batch1Fp} -->`,
+			`<!-- aicr:commit=aaa111 -->`,
+			`<!-- aicr:open_problems=fp-sql -->`,
+			"",
+			"Batch 1 content",
+		].join("\n");
+
+		const dispatcher = createGithubProblemIssueDispatcher({
+			owner: "my-org",
+			repo: "my-repo",
+			channelName: "github-issues",
+			targetKind: "push",
+			headSha: "bbb222",
+			fetch: async (url, init) => {
+				calls.push({ url, init });
+				if (url.includes("/issues?state=open")) {
+					return response([{ number: 42, title: "[AICR] batch1", body: batch1Body, state: "open" }]);
+				}
+				return response({ id: 43, number: 43, html_url: "https://github.com/my-org/my-repo/issues/43" });
+			},
+		});
+
+		const results = await dispatcher.reconcileProblems([problem], "Batch 2 summary");
+
+		expect(results).toHaveLength(1);
+		expect(results[0]?.raw).toMatchObject({ action: "created_consolidated" });
+		expect(calls.filter((c) => c.init?.method === "PATCH")).toEqual([]);
+		const postCalls = calls.filter((c) => c.init?.method === "POST" && c.url.endsWith("/issues"));
+		expect(postCalls).toHaveLength(1);
+		const batch2Fp = computeScopeFingerprint("github-issues", "my-org", "my-repo", { targetKind: "push", headSha: "bbb222" });
+		const createdBody = JSON.parse(postCalls[0]?.init?.body ?? "{}");
+		expect(createdBody.body).toContain(`<!-- aicr:scope_fingerprint=${batch2Fp} -->`);
+	});
+
+	it("keeps one PR issue stable across commits", async () => {
+		const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
+		const prFp = computeScopeFingerprint("github-issues", "my-org", "my-repo", { targetKind: "pull_request", pullNumber: 7 });
+		const commit1Body = [
+			"<!-- aicr:managed=problem-issue -->",
+			"<!-- aicr:consolidated=true -->",
+			"<!-- aicr:channel=github-issues -->",
+			"<!-- aicr:label=aicr-managed -->",
+			`<!-- aicr:scope_fingerprint=${prFp} -->`,
+			`<!-- aicr:open_problems=fp-sql -->`,
+			"",
+			"Commit 1 content",
+		].join("\n");
+
+		const dispatcher = createGithubProblemIssueDispatcher({
+			owner: "my-org",
+			repo: "my-repo",
+			channelName: "github-issues",
+			targetKind: "pull_request",
+			pullNumber: 7,
+			headSha: "bbb222",
+			fetch: async (url, init) => {
+				calls.push({ url, init });
+				if (url.includes("/issues?state=open")) {
+					return response([{ number: 42, title: "[AICR] pr7", body: commit1Body, state: "open" }]);
+				}
+				return response({ id: 42, number: 42 });
+			},
+		});
+
+		const results = await dispatcher.reconcileProblems([problem], "Commit 2 summary");
+
+		expect(results).toHaveLength(1);
+		expect(results[0]?.raw).toMatchObject({ action: "updated_consolidated", issueNumber: 42 });
+		expect(calls.filter((c) => c.init?.method === "POST")).toEqual([]);
+		const patchCall = calls.find((c) => c.init?.method === "PATCH");
+		expect(patchCall).toBeDefined();
+	});
+});
+
 describe("isFileCoveredByReview", () => {
 	it("returns true when reviewedFiles is undefined (backward compat)", () => {
 		expect(isFileCoveredByReview("src/app.ts", undefined)).toBe(true);

@@ -429,7 +429,10 @@ outputs:
 
     # Gitea managed problem issues — create/close/delete issues per problem fingerprint.
     # Supports: assignees (committer + OWNERS), severity labels, Feishu notifications.
-    # Use issue_mode: consolidated to merge all problems from one review into a single issue.
+    # Use issue_mode: consolidated to merge all problems from one review into a
+    # single scope-aware issue: push reviews key by batch (headSha), PR reviews
+    # key by pull number (stable across commits). Different push batches maintain
+    # separate issues; a single PR issue stays updated across every commit push.
     #
     # - name: gitea-problem-issues
     #   kind: gitea_problem_issue
@@ -470,7 +473,10 @@ outputs:
 
     # GitHub managed problem issues — create/close issues per problem fingerprint.
     # GitHub does not support deleting issues; resolved_action can only be close or none.
-    # Use issue_mode: consolidated to merge all problems from one review into a single issue.
+    # Use issue_mode: consolidated to merge all problems from one review into a
+    # single scope-aware issue: push reviews key by batch (headSha), PR reviews
+    # key by pull number (stable across commits). Different push batches maintain
+    # separate issues; a single PR issue stays updated across every commit push.
     # Requires a GitHub trigger/channel token_env with Issues read/write permission;
     # enabling GitHub webhook "Issues" events is not an API permission grant.
     #

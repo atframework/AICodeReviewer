@@ -1615,6 +1615,9 @@ export interface GithubProblemIssueOptions {
 	readonly addOwnersAsAssignees?: boolean;
 	readonly ref?: string;
 	readonly headSha?: string;
+	readonly targetKind?: string;
+	readonly pullNumber?: number;
+	readonly branch?: string;
 	readonly severityLabelPrefix?: string;
 	readonly severityLabelColors?: Readonly<Record<string, string>>;
 	readonly notifyFeishu?: {
@@ -1706,6 +1709,22 @@ export function createGithubProblemIssueDispatcher(options: GithubProblemIssueOp
 	const severityLabelColors = options.severityLabelColors;
 	const repoPath = buildGithubRepoPath(baseUrl, options.owner, options.repo);
 	const headers = buildGithubHeaders(options.token);
+	const scopeInput: ScopeFingerprintScope = issueMode === "per_commit" && options.headSha
+		? { headSha: options.headSha }
+		: options.targetKind === "pull_request"
+			? {
+				targetKind: "pull_request",
+				...(options.pullNumber !== undefined ? { pullNumber: options.pullNumber } : {}),
+				...(options.headSha ? { headSha: options.headSha } : {}),
+			}
+			: options.targetKind === "push"
+				? {
+					targetKind: "push",
+					...(options.headSha ? { headSha: options.headSha } : {}),
+					...(options.branch ? { branch: options.branch } : {}),
+				}
+				: {};
+	const currentScopeFingerprint = computeScopeFingerprint(channel, options.owner, options.repo, scopeInput);
 
 	async function request(method: string, endpoint: string, body?: unknown): Promise<unknown> {
 		const response = await fetchImpl(endpoint, {
@@ -1946,7 +1965,7 @@ export function createGithubProblemIssueDispatcher(options: GithubProblemIssueOp
 		summary: string | undefined,
 		owners: OwnersConfig | undefined,
 	): Promise<DispatchResult> {
-		const scopeFingerprint = computeScopeFingerprint(channel, options.owner, options.repo);
+		const scopeFingerprint = currentScopeFingerprint;
 		const body: Record<string, unknown> = {
 			title: buildConsolidatedIssueTitle(problems, markerPrefix),
 			body: buildConsolidatedIssueBody(problems, { channel, markerLabel, scopeFingerprint, ...(summary ? { summary } : {}), ...(options.headSha ? { headSha: options.headSha } : {}) }),
@@ -2019,7 +2038,7 @@ export function createGithubProblemIssueDispatcher(options: GithubProblemIssueOp
 		summary: string | undefined,
 		categorization?: ConsolidatedIssueCategorization,
 	): Promise<DispatchResult> {
-		const scopeFingerprint = computeScopeFingerprint(channel, options.owner, options.repo);
+		const scopeFingerprint = currentScopeFingerprint;
 		const body: Record<string, unknown> = {
 			title: buildConsolidatedIssueTitle(getConsolidatedOpenProblems(problems, categorization), markerPrefix),
 			body: buildConsolidatedIssueBody(problems, {
@@ -2116,9 +2135,7 @@ export function createGithubProblemIssueDispatcher(options: GithubProblemIssueOp
 
 			if (issueMode === "consolidated" || issueMode === "per_commit") {
 				const existingIssues = await listManagedOpenIssues();
-				const scopeFingerprint = issueMode === "per_commit" && options.headSha
-					? computeScopeFingerprint(channel, options.owner, options.repo, options.headSha)
-					: computeScopeFingerprint(channel, options.owner, options.repo);
+				const scopeFingerprint = currentScopeFingerprint;
 				const existingConsolidated = existingIssues.find(
 					(issue) => issue.scopeFingerprint === scopeFingerprint,
 				);
@@ -2183,24 +2200,6 @@ export function createGithubProblemIssueDispatcher(options: GithubProblemIssueOp
 					}
 				} else {
 					results.push(await createConsolidatedIssue(problems, summary, owners));
-				}
-
-				if (issueMode === "consolidated") {
-					for (const issue of existingIssues) {
-						if (issue.scopeFingerprint === scopeFingerprint) {
-							continue;
-						}
-						if (!isConsolidatedManagedIssue(issue.body)) {
-							continue;
-						}
-						if (!canResolveConsolidatedIssue(issue.body, reviewedFiles)) {
-							continue;
-						}
-						const result = await resolveIssue(issue);
-						if (result) {
-							results.push(result);
-						}
-					}
 				}
 
 				return results;
@@ -2684,6 +2683,9 @@ export interface GiteaProblemIssueOptions {
 	readonly addOwnersAsAssignees?: boolean;
 	readonly ref?: string;
 	readonly headSha?: string;
+	readonly targetKind?: string;
+	readonly pullNumber?: number;
+	readonly branch?: string;
 	readonly severityLabelPrefix?: string;
 	readonly severityLabelColors?: Readonly<Record<string, string>>;
 	readonly notifyFeishu?: {
@@ -2830,19 +2832,38 @@ const MANAGED_ISSUE_TITLE_MAX_DISPLAY_WIDTH = 72;
 const MANAGED_ISSUE_LOCATION_MAX_DISPLAY_WIDTH = 32;
 const MANAGED_ISSUE_CORE_MIN_DISPLAY_WIDTH = 16;
 
-function isConsolidatedManagedIssue(body: string): boolean {
-	return body.includes(AICR_CONSOLIDATED_MARKER);
-}
-
 function extractConsolidatedScopeFingerprint(body: string): string | undefined {
 	const match = /<!--\s*aicr:scope_fingerprint=([^\s-][^\s]*)\s*-->/u.exec(body);
 	return match?.[1];
 }
 
-export function computeScopeFingerprint(channel: string, owner: string, repo: string, headSha?: string): string {
-	const raw = headSha
-		? `consolidated:${channel}:${owner}/${repo}:${headSha}`
-		: `consolidated:${channel}:${owner}/${repo}`;
+export interface ScopeFingerprintScope {
+	readonly targetKind?: string;
+	readonly pullNumber?: number;
+	readonly headSha?: string;
+	readonly branch?: string;
+}
+
+export function computeScopeFingerprint(channel: string, owner: string, repo: string, scope?: ScopeFingerprintScope): string {
+	const base = `consolidated:${channel}:${owner}/${repo}`;
+	let raw = base;
+	if (scope) {
+		if (scope.targetKind === "pull_request") {
+			if (scope.pullNumber !== undefined) {
+				raw = `${base}:pr:${scope.pullNumber}`;
+			} else if (scope.headSha) {
+				raw = `${base}:pr:${scope.headSha}`;
+			}
+		} else if (scope.targetKind === "push") {
+			if (scope.headSha) {
+				raw = `${base}:push:${scope.headSha}`;
+			} else if (scope.branch) {
+				raw = `${base}:push:${scope.branch}`;
+			}
+		} else if (scope.headSha) {
+			raw = `${base}:${scope.headSha}`;
+		}
+	}
 	return createHash("sha256").update(raw).digest("hex").slice(0, 16);
 }
 
@@ -3359,6 +3380,22 @@ export function createGiteaProblemIssueDispatcher(options: GiteaProblemIssueOpti
 	const headers: Record<string, string> = {
 		"content-type": "application/json",
 	};
+	const scopeInput: ScopeFingerprintScope = issueMode === "per_commit" && options.headSha
+		? { headSha: options.headSha }
+		: options.targetKind === "pull_request"
+			? {
+				targetKind: "pull_request",
+				...(options.pullNumber !== undefined ? { pullNumber: options.pullNumber } : {}),
+				...(options.headSha ? { headSha: options.headSha } : {}),
+			}
+			: options.targetKind === "push"
+				? {
+					targetKind: "push",
+					...(options.headSha ? { headSha: options.headSha } : {}),
+					...(options.branch ? { branch: options.branch } : {}),
+				}
+				: {};
+	const currentScopeFingerprint = computeScopeFingerprint(channel, options.owner, options.repo, scopeInput);
 	if (options.token) {
 		headers.authorization = `token ${options.token}`;
 	}
@@ -3680,7 +3717,7 @@ export function createGiteaProblemIssueDispatcher(options: GiteaProblemIssueOpti
 		summary: string | undefined,
 		owners: OwnersConfig | undefined,
 	): Promise<DispatchResult> {
-		const scopeFingerprint = computeScopeFingerprint(channel, options.owner, options.repo);
+		const scopeFingerprint = currentScopeFingerprint;
 		const body: Record<string, unknown> = {
 			title: buildConsolidatedIssueTitle(problems, markerPrefix),
 			body: buildConsolidatedIssueBody(problems, { channel, markerLabel, scopeFingerprint, ...(summary ? { summary } : {}), ...(options.headSha ? { headSha: options.headSha } : {}) }),
@@ -3753,7 +3790,7 @@ export function createGiteaProblemIssueDispatcher(options: GiteaProblemIssueOpti
 		summary: string | undefined,
 		categorization?: ConsolidatedIssueCategorization,
 	): Promise<DispatchResult> {
-		const scopeFingerprint = computeScopeFingerprint(channel, options.owner, options.repo);
+		const scopeFingerprint = currentScopeFingerprint;
 		const body: Record<string, unknown> = {
 			title: buildConsolidatedIssueTitle(getConsolidatedOpenProblems(problems, categorization), markerPrefix),
 			body: buildConsolidatedIssueBody(problems, {
@@ -3860,9 +3897,7 @@ export function createGiteaProblemIssueDispatcher(options: GiteaProblemIssueOpti
 
 			if (issueMode === "consolidated" || issueMode === "per_commit") {
 				const existingIssues = await listManagedOpenIssues();
-				const scopeFingerprint = issueMode === "per_commit" && options.headSha
-					? computeScopeFingerprint(channel, options.owner, options.repo, options.headSha)
-					: computeScopeFingerprint(channel, options.owner, options.repo);
+				const scopeFingerprint = currentScopeFingerprint;
 				const existingConsolidated = existingIssues.find(
 					(issue) => issue.scopeFingerprint === scopeFingerprint,
 				);
@@ -3927,24 +3962,6 @@ export function createGiteaProblemIssueDispatcher(options: GiteaProblemIssueOpti
 					}
 				} else {
 					results.push(await createConsolidatedIssue(problems, summary, owners));
-				}
-
-				if (issueMode === "consolidated") {
-					for (const issue of existingIssues) {
-						if (issue.scopeFingerprint === scopeFingerprint) {
-							continue;
-						}
-						if (!isConsolidatedManagedIssue(issue.body)) {
-							continue;
-						}
-						if (!canResolveConsolidatedIssue(issue.body, reviewedFiles)) {
-							continue;
-						}
-						const result = await resolveIssue(issue);
-						if (result) {
-							results.push(result);
-						}
-					}
 				}
 
 				return results;

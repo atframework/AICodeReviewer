@@ -1352,3 +1352,103 @@ describe("consolidated lifecycle file-scope guard", () => {
     expect(calls.filter((c) => c.init?.method === "PATCH")).toEqual([]);
   });
 });
+
+describe("consolidated target-aware scope fingerprint", () => {
+  const scopeArgs = ["aicr-issues", "owent", "example"] as const;
+
+  it("scopes push per batch and PR per pull number", () => {
+    const pushA = computeScopeFingerprint(...scopeArgs, { targetKind: "push", headSha: "aaa111" });
+    const pushB = computeScopeFingerprint(...scopeArgs, { targetKind: "push", headSha: "bbb222" });
+    const prNum7 = computeScopeFingerprint(...scopeArgs, { targetKind: "pull_request", pullNumber: 7 });
+    const prNum8 = computeScopeFingerprint(...scopeArgs, { targetKind: "pull_request", pullNumber: 8 });
+    const repoWide = computeScopeFingerprint(...scopeArgs);
+
+    expect(pushA).not.toBe(pushB);
+    expect(prNum7).not.toBe(prNum8);
+    expect(prNum7).toBe(computeScopeFingerprint(...scopeArgs, { targetKind: "pull_request", pullNumber: 7, headSha: "ccc333" }));
+    expect(repoWide).toBe(computeScopeFingerprint(...scopeArgs, { targetKind: "manual" }));
+  });
+
+  it("keeps separate push batches in separate issues", async () => {
+    const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
+    const batch1Fp = computeScopeFingerprint("aicr-issues", "owent", "example", { targetKind: "push", headSha: "aaa111" });
+    const batch1Body = [
+      "<!-- aicr:managed=problem-issue -->",
+      "<!-- aicr:consolidated=true -->",
+      "<!-- aicr:channel=aicr-issues -->",
+      "<!-- aicr:label=aicr-managed -->",
+      `<!-- aicr:scope_fingerprint=${batch1Fp} -->`,
+      `<!-- aicr:commit=aaa111 -->`,
+      `<!-- aicr:open_problems=fp-sql -->`,
+      "",
+      "Batch 1 content",
+    ].join("\n");
+
+    const dispatcher = createGiteaProblemIssueDispatcher({
+      baseUrl: "https://gitea.example",
+      owner: "owent",
+      repo: "example",
+      channelName: "aicr-issues",
+      targetKind: "push",
+      headSha: "bbb222",
+      fetch: async (url, init) => {
+        calls.push({ url, init });
+        if (url.includes("state=open")) {
+          return response([{ number: 42, title: "[AICR] batch1", body: batch1Body, state: "open" }]);
+        }
+        return response({ id: 43 });
+      },
+    });
+
+    const results = await dispatcher.reconcileProblems([problem], "Batch 2 summary");
+
+    expect(results).toHaveLength(1);
+    expect(results[0]?.raw).toMatchObject({ action: "created_consolidated" });
+    expect(calls.filter((c) => c.init?.method === "PATCH")).toEqual([]);
+    const postCalls = calls.filter((c) => c.init?.method === "POST" && c.url.endsWith("/issues"));
+    expect(postCalls).toHaveLength(1);
+    const batch2Fp = computeScopeFingerprint("aicr-issues", "owent", "example", { targetKind: "push", headSha: "bbb222" });
+    const createdBody = JSON.parse(postCalls[0]?.init?.body ?? "{}");
+    expect(createdBody.body).toContain(`<!-- aicr:scope_fingerprint=${batch2Fp} -->`);
+  });
+
+  it("keeps one PR issue stable across commits", async () => {
+    const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
+    const prFp = computeScopeFingerprint("aicr-issues", "owent", "example", { targetKind: "pull_request", pullNumber: 7 });
+    const commit1Body = [
+      "<!-- aicr:managed=problem-issue -->",
+      "<!-- aicr:consolidated=true -->",
+      "<!-- aicr:channel=aicr-issues -->",
+      "<!-- aicr:label=aicr-managed -->",
+      `<!-- aicr:scope_fingerprint=${prFp} -->`,
+      `<!-- aicr:open_problems=fp-sql -->`,
+      "",
+      "Commit 1 content",
+    ].join("\n");
+
+    const dispatcher = createGiteaProblemIssueDispatcher({
+      baseUrl: "https://gitea.example",
+      owner: "owent",
+      repo: "example",
+      channelName: "aicr-issues",
+      targetKind: "pull_request",
+      pullNumber: 7,
+      headSha: "bbb222",
+      fetch: async (url, init) => {
+        calls.push({ url, init });
+        if (url.includes("state=open")) {
+          return response([{ number: 42, title: "[AICR] pr7", body: commit1Body, state: "open" }]);
+        }
+        return response({ id: 42 });
+      },
+    });
+
+    const results = await dispatcher.reconcileProblems([problem], "Commit 2 summary");
+
+    expect(results).toHaveLength(1);
+    expect(results[0]?.raw).toMatchObject({ action: "updated_consolidated", issueNumber: 42 });
+    expect(calls.filter((c) => c.init?.method === "POST")).toEqual([]);
+    const patchCall = calls.find((c) => c.init?.method === "PATCH");
+    expect(patchCall).toBeDefined();
+  });
+});
