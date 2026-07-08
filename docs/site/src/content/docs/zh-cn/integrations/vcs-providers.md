@@ -53,9 +53,14 @@ triggers:
     webhook_secret_env: AICR_GITHUB_WEBHOOK_SECRET
 ```
 
-把仓库 webhook 指向 `http://<aicr-host>:8080/webhooks/github`，secret 设为与
-`AICR_GITHUB_WEBHOOK_SECRET` 相同的 HMAC 密钥，订阅 **Pull requests**。AICR 把
-`pull_request` 的 `review_requested` 动作当作 PR 重审 trigger。
+如果使用 GitHub App，在 App 设置中配置 **Webhook URL** 为
+`http://<aicr-host>:8080/webhooks/github`（或公网反向代理地址），**Webhook secret** 设为与
+`AICR_GITHUB_APP_WEBHOOK_SECRET` 相同的值，并在已选仓库中勾选 AICR 需要 review 的每个仓库。订阅事件：
+**Pull requests**、**Push**、**Issue comment**、**Issues**。AICR 把 `pull_request` 的
+`review_requested` 动作当作 PR 重审 trigger。
+
+如果不用 GitHub App，而是使用个人访问令牌（PAT），则为仓库添加 webhook，指向同样的 URL，
+secret 设为与 `AICR_GITHUB_WEBHOOK_SECRET` 相同的 HMAC 密钥，订阅 **Pull requests**。
 
 对于评论触发的重审，配置 `token_env`（或 GitHub App `app` 块——见下文）以便 AICR 拉取 PR
 head/base SHA 和分支信息。若该拉取不可用，AICR 用评论 payload 中的 PR URL 作为去重标识，而不会
@@ -76,7 +81,7 @@ triggers:
       private_key_env: AICR_GITHUB_APP_PRIVATE_KEY   # PEM 或 base64 PEM
       # private_key_path: /run/secrets/github-app.pem  # 替代：挂载的 .pem 文件
       # installation_id: "7890123"     # 可选；省略时按仓库自动解析
-    webhook_secret_env: AICR_GITHUB_WEBHOOK_SECRET
+    webhook_secret_env: AICR_GITHUB_APP_WEBHOOK_SECRET
 ```
 
 `app` 与 `token_env` 互斥。通道级 `token_env` 优先于 trigger 级 `app` token。trigger 的
@@ -86,6 +91,44 @@ clone，并为经此 trigger 路由的 GitHub 输出通道自动派生 REST API 
 Contents Read、Pull requests Read/Write、Issues Read/Write、Metadata Read。订阅事件：
 Pull request、Push、Issue comment、Issues。`installation` 和 `installation_repositories`
 事件返回 `202 unsupported_event`。
+
+请确认 App 已安装到仓库所属账号或组织，且每个仓库都包含在该安装的已选仓库中。未选中的仓库
+在 AICR 解析 installation token 时会返回 404。
+
+#### 创建 GitHub App
+
+1. **GitHub → Settings → Developer settings → GitHub Apps → New GitHub App**。
+2. **Webhook URL**：`http://<aicr-host>:8080/webhooks/github`；设置 webhook secret（存为
+   `AICR_GITHUB_APP_WEBHOOK_SECRET`）。
+3. **仓库权限**：Contents **Read-only**、Pull requests **Read and write**、Issues
+   **Read and write**、Metadata **Read-only**。
+4. **订阅事件**：Pull request、Push、Issue comment、Issues。
+5. **创建**后记录 **App ID**，并在 **Private keys** 处生成私钥（下载 `.pem` 文件）。
+6. **安装** App 并选择 AICR 需要 review 的仓库。
+
+将私钥 base64 编码后写入 `.env`：
+
+```bash
+# Linux
+base64 -w0 app.private-key.pem
+# macOS
+base64 -i app.private-key.pem
+# Windows PowerShell
+[Convert]::ToBase64String([IO.File]::ReadAllBytes('app.private-key.pem'))
+```
+
+存为 `AICR_GITHUB_APP_PRIVATE_KEY`。该环境变量接受原始 PEM 或 base64 PEM。
+
+#### GitHub PAT（遗留替代方案）
+
+如果无法使用 GitHub App，可创建个人访问令牌：
+
+- **Classic**：GitHub → Settings → Developer settings → Personal access tokens →
+  Tokens (classic) → 勾选 **`repo`** scope。
+- **Fine-grained**（推荐）：选择目标仓库，授予 Contents **Read-only**、Pull requests
+  **Read and write**、Issues **Read and write**、Metadata **Read-only**。
+
+令牌存为 `AICR_GITHUB_TOKEN`，并为每个仓库添加**仓库级 webhook**（PAT 没有 App 级 webhook）。
 
 ### GitLab
 

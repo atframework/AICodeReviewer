@@ -74,7 +74,14 @@ docker compose restart   # 或重启本地 serve 进程
 6. 保存。
 
 :::note[GitHub]
-对于 GitHub 仓库，把 webhook 指向 `/webhooks/github`，设置与 `AICR_GITHUB_WEBHOOK_SECRET` 相同的 HMAC 密钥，并订阅 **Pull requests**。AICR 把 `pull_request` 的 `review_requested` action 作为 PR re-review 触发器。
+如果使用 GitHub App，在 App 设置中配置 **Webhook URL** 为 `/webhooks/github`，
+**Webhook secret** 设为与 `AICR_GITHUB_APP_WEBHOOK_SECRET` 相同的值，并在已选仓库中
+勾选 AICR 需要 review 的每个仓库。订阅事件：**Pull requests**、**Push**、
+**Issue comment**、**Issues**。AICR 把 `pull_request` 的 `review_requested` action
+作为 PR 重审触发器。
+
+如果使用个人访问令牌，则为仓库添加 webhook 指向 `/webhooks/github`，设置同样的
+HMAC 密钥，并订阅 **Pull requests**。
 :::
 
 ## 3. 触发首次评审

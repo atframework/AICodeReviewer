@@ -103,9 +103,7 @@
 
 #### 3.2.1 GitHub App 认证（M12）
 
-> 状态：M12 已交付（P1–P4 本地闭环完成；P5 真实 App e2e 仍属 Backlog）。
-> 本节描述已落地的接口与边界。执行顺序见 `Plan.md` §8.2.1/§8.3，决策见
-> `docs/ai/decisions.md` D32。
+> 状态：M12 已完成。P1–P4 为本地实现闭环，P5 已部署到公网正式环境：`atframework-aicr` App 已安装到 `atframework` 和 `owent` 账号，生产 `config.yaml` 的两个 GitHub trigger 已切到 `app` 认证，App webhook secret 已同步，`owent/hiredis-happ` 已加入已选仓库，三个目标仓库均通过 token 解析验证。决策见 `docs/ai/decisions.md` D32。
 
 **动机与现状**：当前 GitHub 出站认证只消费一个静态字符串 token，在
 `packages/server/src/bootstrap.ts` 启动时经 `resolveEnv(token_env)` 解析一次且不刷新。

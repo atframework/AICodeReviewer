@@ -339,10 +339,16 @@ After the server is running, add a webhook to your Gitea repository:
    action and ignores `review_request_removed`.
 6. Save
 
-For GitHub repositories, point a repository webhook at
-`http://<aicr-host>:8080/webhooks/github`, set the same HMAC secret as
-`AICR_GITHUB_WEBHOOK_SECRET`, and subscribe to **Pull requests**. AICR handles
-the `pull_request` `review_requested` action as a PR re-review trigger.
+For GitHub repositories using a **GitHub App**, configure the App's webhook URL to
+`http://<aicr-host>:8080/webhooks/github` (or the public reverse-proxy URL), set
+its webhook secret to the same value as `AICR_GITHUB_APP_WEBHOOK_SECRET`, and
+select the repositories you want AICR to access. Subscribe the App to **Pull
+requests**, **Push**, **Issues**, and **Issue comment** events. AICR handles the
+`pull_request` `review_requested` action as a PR re-review trigger.
+
+If you continue to use a personal access token (PAT) instead of a GitHub App, point
+a repository webhook at the same URL, set the same HMAC secret as
+`AICR_GITHUB_WEBHOOK_SECRET`, and subscribe to **Pull requests**.
 
 ---
 
@@ -395,7 +401,7 @@ triggers:
       private_key_env: AICR_GITHUB_APP_PRIVATE_KEY   # PEM or base64 PEM in env
       # private_key_path: /run/secrets/github-app.pem  # alternative: mounted .pem file
       # installation_id: "7890123"           # optional; auto-resolved per repo if omitted
-    webhook_secret_env: AICR_GITHUB_WEBHOOK_SECRET
+    webhook_secret_env: AICR_GITHUB_APP_WEBHOOK_SECRET
     repos:
       - { match: "my-org/my-repo", workspace: github-my-repo }
 ```
@@ -415,6 +421,112 @@ Push, Issue comment, Issues. Webhook signature verification
 (`x-hub-signature-256` + webhook secret) works for both Apps and PATs.
 `installation` and `installation_repositories` webhook events are not review
 events and return `202 unsupported_event`.
+
+#### Creating the GitHub App
+
+1. Go to **GitHub → Settings → Developer settings → GitHub Apps → New GitHub
+   App**. (For organization-owned repos, use **Organization settings → Developer
+   settings → GitHub Apps → New GitHub App** so the App installs org-wide.)
+2. **GitHub App name**: any name (e.g. `my-org-aicr`).
+3. **Homepage URL**: your AICR public URL or any valid URL.
+4. **Webhook → Active**: check it.
+5. **Webhook URL**: `http://<aicr-host>:8080/webhooks/github` (or the public
+   reverse-proxy URL).
+6. **Webhook secret**: generate a strong secret (`node -e
+   "console.log(require('crypto').randomBytes(32).toString('hex'))"`) and paste
+   it. This value goes into `.env` as `AICR_GITHUB_APP_WEBHOOK_SECRET`.
+7. **Repository permissions**:
+   - Contents: **Read-only**
+   - Pull requests: **Read and write**
+   - Issues: **Read and write**
+   - Metadata: **Read-only** (required, auto-selected)
+8. **Subscribe to events**: check **Pull request**, **Push**, **Issue
+   comment**, **Issues**.
+9. **Where can this GitHub App be installed?** — choose **Only on this account**
+   (or **Any account** if repos span multiple accounts/orgs; the App must be
+   made public first).
+10. Click **Create GitHub App**.
+11. On the resulting **General** page, note **App ID** (numeric) and **Client
+    ID** (`Iv1.…` or `Iv2.…`). Either can be used as `app_id` / `client_id`.
+12. Scroll to **Private keys → Generate a private key**. A `.pem` file downloads
+    automatically — this is the **only** time GitHub shows it. Keep it safe.
+13. **Install the App**: visit the App's install URL (or **Settings → Integrations
+    → Applications → Install**) and select the repositories AICR should review.
+    A repository that is not selected will return `404` when AICR resolves the
+    installation token.
+
+#### Using the private key (PEM)
+
+AICR accepts the private key as either a mounted `.pem` file or a base64-encoded
+environment variable:
+
+- **`private_key_env`** (recommended for `.env`-based deployments): base64-encode
+  the `.pem` and store the result:
+
+  ```bash
+  # Linux / macOS
+  base64 -w0 app.private-key.pem        # Linux
+  base64 -i app.private-key.pem         # macOS
+
+  # Windows PowerShell
+  [Convert]::ToBase64String([IO.File]::ReadAllBytes('app.private-key.pem'))
+  ```
+
+  Put the output in `.env`:
+
+  ```bash
+  AICR_GITHUB_APP_PRIVATE_KEY=LS0tLS1CRUdJTi...
+  ```
+
+- **`private_key_path`** (alternative): mount the raw `.pem` file into the
+  container and reference its path. Useful when you prefer not to base64-encode.
+
+AICR accepts either raw PEM text or base64-encoded PEM in the env var, so both
+`-----BEGIN RSA PRIVATE KEY-----...` and `LS0tLS1CRUdJTi...` work. If you rotate
+the key, regenerate it in GitHub, update the env var, and restart the container.
+
+#### GitHub PAT authentication (legacy)
+
+A personal access token (PAT) is simpler to set up but does not auto-refresh and
+must be rotated manually. Use it when you cannot deploy a GitHub App:
+
+```yaml
+triggers:
+  - name: github
+    kind: github
+    base_url: https://github.com
+    token_env: AICR_GITHUB_TOKEN
+    webhook_secret_env: AICR_GITHUB_WEBHOOK_SECRET
+```
+
+**Creating a classic PAT:**
+
+1. Go to **GitHub → Settings → Developer settings → Personal access tokens →
+   Tokens (classic) → Generate new token (classic)**.
+2. Select the **`repo`** scope (covers Contents, Pull requests, Issues,
+   Metadata).
+3. Generate, copy the token (`ghp_…`), and store it in `.env` as
+   `AICR_GITHUB_TOKEN`.
+
+**Creating a fine-grained PAT** (recommended over classic for least-privilege):
+
+1. Go to **GitHub → Settings → Developer settings → Personal access tokens →
+   Fine-grained tokens → Generate new token**.
+2. **Repository access**: select **Only select repositories** and pick the repos
+   AICR will review.
+3. **Permissions → Repository permissions**:
+   - Contents: **Read-only**
+   - Pull requests: **Read and write**
+   - Issues: **Read and write**
+   - Metadata: **Read-only**
+4. Generate, copy the token (`github_pat_…`), and store it in `.env` as
+   `AICR_GITHUB_TOKEN`.
+
+> **Note**: when using a PAT instead of a GitHub App, you must add a
+> **repository-level webhook** to each repo (pointing at
+> `/webhooks/github`, with the HMAC secret) because a PAT has no App-level
+> webhook. A GitHub App's webhook is configured once on the App and covers all
+> installed repos.
 
 See `docs/ai/architecture.md` §3.2.1 for the contract and `Plan.md` §8.2.1.
 
@@ -551,24 +663,28 @@ omitted.
 ### Quick reference: which secrets go where
 
 ```text
-┌─────────────────────────────────────────────────────────────────────────┐
-│ .env (environment variables — never committed to git)                   │
-│                                                                         │
-│ ── Inbound: Webhook HMAC secrets (protect /webhooks/*) ──              │
-│ AICR_WEBHOOK_SECRET=7f3a...        ← shared with Gitea webhook config  │
-│ AICR_GITHUB_WEBHOOK_SECRET=b2c1... ← shared with GitHub webhook config │
-│ AICR_GITLAB_WEBHOOK_SECRET=d4e5... ← shared with GitLab webhook config │
-│                                                                         │
-│ ── Inbound: API key (protects /triggers/* like P4/SVN) ──              │
-│ AICR_API_KEY=c6d7e8f9...           ← p4-trigger.sh / svn-trigger.sh sends X-API-Key    │
-│                                                                         │
-│ ── Outbound: AICR calls external services ──                           │
-│ AICR_GITEA_TOKEN=4b5d...           ← AICR → Gitea API (post comments) │
-│ AICR_P4USER=p4-ci                  ← AICR → P4 server (fetch files)   │
-│ AICR_P4PASSWORD=vUF_...            ← AICR → P4 server (fetch files)   │
-│ AICR_FEISHU_SECRET=3Ob2...         ← AICR → Feishu API (send cards)   │
-│ AICR_LLM_API_KEY=sk-...            ← AICR → LLM API (completions)     │
-└─────────────────────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────────────────────┐
+│ .env (environment variables — never committed to git)                        │
+│                                                                            │
+│ ── Inbound: Webhook HMAC secrets (protect /webhooks/*) ──                │
+│ AICR_WEBHOOK_SECRET=7f3a...              ← shared with Gitea webhook     │
+│ AICR_GITHUB_APP_WEBHOOK_SECRET=b2c1...       ← shared with GitHub App      │
+│ AICR_GITLAB_WEBHOOK_SECRET=d4e5...           ← shared with GitLab webhook  │
+│                                                                            │
+│ ── Inbound: API key (protects /triggers/* like P4/SVN) ──                  │
+│ AICR_API_KEY=c6d7e8f9...                 ← p4-trigger.sh / svn-trigger.sh  │
+│                                                                            │
+│ ── Outbound: AICR calls external services ──                               │
+│ AICR_LLM_API_KEY=sk-...                    ← AICR → LLM API              │
+│ AICR_GITEA_TOKEN=4b5d...                   ← AICR → Gitea API            │
+│ AICR_P4USER=p4-ci                        ← AICR → P4 server            │
+│ AICR_P4PASSWORD=vUF_...                    ← AICR → P4 server            │
+│ AICR_FEISHU_SECRET=3Ob2...                 ← AICR → Feishu API           │
+│                                                                            │
+│ ── Outbound: GitHub App (recommended for GitHub) ──                        │
+│ AICR_GITHUB_APP_PRIVATE_KEY=LS0t...           ← base64 PEM                │
+│ AICR_GITHUB_TOKEN=ghp_...                  ← (legacy) GitHub PAT          │
+└────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ## File Reference
