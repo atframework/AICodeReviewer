@@ -521,6 +521,188 @@ describe("mergeConfigLayers", () => {
     }
   });
 
+  describe("GitHub App auth (M12 §3.2.1)", () => {
+    it("accepts a github trigger with app auth using app_id and private_key_env", () => {
+      const result = appConfigSchema.safeParse({
+        triggers: [
+          {
+            name: "github-app",
+            kind: "github",
+            app: {
+              app_id: "123456",
+              private_key_env: "AICR_GITHUB_APP_PRIVATE_KEY",
+            },
+          },
+        ],
+      });
+
+      expect(result.success).toBe(true);
+    });
+
+    it("accepts a github trigger with app auth using client_id, private_key_path and installation_id", () => {
+      const result = appConfigSchema.safeParse({
+        triggers: [
+          {
+            name: "github-app",
+            kind: "github",
+            app: {
+              client_id: "Iv1.0123456789abcdef",
+              private_key_path: "/run/secrets/github-app.pem",
+              installation_id: "7890123",
+            },
+          },
+        ],
+      });
+
+      expect(result.success).toBe(true);
+    });
+
+    it("accepts a github trigger with app_id as a numeric value", () => {
+      const result = appConfigSchema.safeParse({
+        triggers: [
+          {
+            name: "github-app",
+            kind: "github",
+            app: {
+              app_id: 123456,
+              private_key_env: "AICR_GITHUB_APP_PRIVATE_KEY",
+            },
+          },
+        ],
+      });
+
+      expect(result.success).toBe(true);
+    });
+
+    it("accepts a github trigger with token_env and no app (existing PAT path)", () => {
+      const result = appConfigSchema.safeParse({
+        triggers: [
+          {
+            name: "github-pat",
+            kind: "github",
+            token_env: "AICR_GITHUB_TOKEN",
+          },
+        ],
+      });
+
+      expect(result.success).toBe(true);
+    });
+
+    it("rejects a github trigger that specifies both token_env and app", () => {
+      const result = appConfigSchema.safeParse({
+        triggers: [
+          {
+            name: "github-app",
+            kind: "github",
+            token_env: "AICR_GITHUB_TOKEN",
+            app: {
+              app_id: "123456",
+              private_key_env: "AICR_GITHUB_APP_PRIVATE_KEY",
+            },
+          },
+        ],
+      });
+
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error.issues.some((i) => /mutually exclusive/iu.test(i.message))).toBe(true);
+      }
+    });
+
+    it("rejects a github trigger with app but no app_id or client_id", () => {
+      const result = appConfigSchema.safeParse({
+        triggers: [
+          {
+            name: "github-app",
+            kind: "github",
+            app: {
+              private_key_env: "AICR_GITHUB_APP_PRIVATE_KEY",
+            },
+          },
+        ],
+      });
+
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error.issues.some((i) => /app_id or client_id/iu.test(i.message))).toBe(true);
+      }
+    });
+
+    it("rejects a github trigger with app but no private_key_env or private_key_path", () => {
+      const result = appConfigSchema.safeParse({
+        triggers: [
+          {
+            name: "github-app",
+            kind: "github",
+            app: {
+              app_id: "123456",
+            },
+          },
+        ],
+      });
+
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error.issues.some((i) => /private_key_env or private_key_path/iu.test(i.message))).toBe(true);
+      }
+    });
+
+    it("rejects a github trigger with app that has both private_key_env and private_key_path", () => {
+      const result = appConfigSchema.safeParse({
+        triggers: [
+          {
+            name: "github-app",
+            kind: "github",
+            app: {
+              app_id: "123456",
+              private_key_env: "AICR_GITHUB_APP_PRIVATE_KEY",
+              private_key_path: "/run/secrets/github-app.pem",
+            },
+          },
+        ],
+      });
+
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error.issues.some((i) => /only one of private_key_env or private_key_path/iu.test(i.message))).toBe(true);
+      }
+    });
+
+    it("rejects app auth on a non-github trigger kind", () => {
+      const result = appConfigSchema.safeParse({
+        triggers: [
+          {
+            name: "gitea-app",
+            kind: "gitea",
+            app: {
+              app_id: "123456",
+              private_key_env: "AICR_GITHUB_APP_PRIVATE_KEY",
+            },
+          },
+        ],
+      });
+
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error.issues.some((i) => /only supported for kind: github/iu.test(i.message))).toBe(true);
+      }
+    });
+
+    it("rejects an empty app block (app: {})", () => {
+      const result = appConfigSchema.safeParse({
+        triggers: [
+          {
+            name: "github-app",
+            kind: "github",
+            app: {},
+          },
+        ],
+      });
+
+      expect(result.success).toBe(false);
+    });
+  });
+
   it("rejects workspace instances with unknown fields", () => {
     const result = appConfigSchema.safeParse({
       workspaces: {

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   computeWebhookSignature,
@@ -381,5 +381,156 @@ describe("translateWebhookToReviewEvent", () => {
     );
 
     expect(event?.workspaceId).toBe("projectx-pipeline");
+  });
+
+  it("returns null for installation events (not a review)", async () => {
+    const evicted: (number | undefined)[] = [];
+    const event = await translateWebhookToReviewEvent(
+      "github",
+      "installation",
+      {
+        action: "created",
+        installation: { id: 12345678 },
+        repository: { full_name: "owent/example" },
+      },
+      {
+        triggerName: "github",
+        workspaceId: "github-ws",
+        evictTokenCache: (installationId?: number) => { evicted.push(installationId); },
+      },
+    );
+
+    expect(event).toBeNull();
+    expect(evicted).toEqual([12345678]);
+  });
+
+  it("returns null for installation_repositories events and evicts cache", async () => {
+    const evicted: (number | undefined)[] = [];
+    const event = await translateWebhookToReviewEvent(
+      "github",
+      "installation_repositories",
+      {
+        action: "added",
+        installation: { id: 12345678 },
+        repositories_added: [{ full_name: "owent/example" }],
+      },
+      {
+        triggerName: "github",
+        workspaceId: "github-ws",
+        evictTokenCache: (installationId?: number) => { evicted.push(installationId); },
+      },
+    );
+
+    expect(event).toBeNull();
+    expect(evicted).toEqual([12345678]);
+  });
+
+  it("resolves an App installation token from payload for issue_comment PR enrichment", async () => {
+    const resolvedInstallationIds: number[] = [];
+    const config = {
+      triggerName: "github-app",
+      workspaceId: "github-ws",
+      appTokenResolver: async (installationId: number) => {
+        resolvedInstallationIds.push(installationId);
+        return "ghs_APPRESOLVEDTOKEN";
+      },
+    };
+
+    const fetchCalls: { url: string; auth: string }[] = [];
+    vi.stubGlobal("fetch", async (url: string | URL, init?: RequestInit) => {
+      const urlStr = typeof url === "string" ? url : url.toString();
+      const headers = init?.headers instanceof Headers
+        ? init.headers
+        : new Headers(init?.headers as Record<string, string>);
+      fetchCalls.push({ url: urlStr, auth: headers.get("Authorization") ?? "" });
+      return new Response(
+        JSON.stringify({
+          head: { sha: "head-from-api", ref: "feature/branch" },
+          base: { sha: "base-from-api" },
+          title: "PR from API",
+          html_url: "https://github.com/owent/example/pull/42",
+          user: { login: "pr-author" },
+        }),
+        { status: 200 },
+      );
+    });
+
+    try {
+      const event = await translateWebhookToReviewEvent(
+        "github",
+        "issue_comment",
+        {
+          action: "created",
+          repository: { full_name: "owent/example" },
+          sender: { login: "commenter" },
+          installation: { id: 9876543 },
+          issue: {
+            number: 42,
+            title: "Original title",
+            pull_request: {
+              url: "https://api.github.com/repos/owent/example/pulls/42",
+              html_url: "https://github.com/owent/example/pull/42",
+            },
+          },
+          comment: { body: "/aicr review", user: { login: "commenter" } },
+        },
+        config,
+      );
+
+      expect(resolvedInstallationIds).toEqual([9876543]);
+      expect(fetchCalls.length).toBe(1);
+      expect(fetchCalls[0]?.auth).toBe("Bearer ghs_APPRESOLVEDTOKEN");
+      expect(event).toMatchObject({
+        headSha: "head-from-api",
+        baseSha: "base-from-api",
+        title: "PR from API",
+        author: { username: "pr-author" },
+        branch: "feature/branch",
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("falls back to webhook payload when appTokenResolver fails", async () => {
+    const config = {
+      triggerName: "github-app",
+      workspaceId: "github-ws",
+      appTokenResolver: async () => {
+        throw new Error("App token resolution failed");
+      },
+    };
+
+    vi.stubGlobal("fetch", async () => new Response("{}", { status: 500 }));
+
+    try {
+      const event = await translateWebhookToReviewEvent(
+        "github",
+        "issue_comment",
+        {
+          action: "created",
+          repository: { full_name: "owent/example" },
+          sender: { login: "commenter" },
+          installation: { id: 9876543 },
+          issue: {
+            number: 42,
+            title: "Fallback title",
+            pull_request: {
+              url: "https://api.github.com/repos/owent/example/pulls/42",
+              html_url: "https://github.com/owent/example/pull/42",
+            },
+          },
+          comment: { body: "/aicr review", user: { login: "commenter" } },
+        },
+        config,
+      );
+
+      expect(event).toMatchObject({
+        title: "Fallback title",
+        url: "https://github.com/owent/example/pull/42",
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

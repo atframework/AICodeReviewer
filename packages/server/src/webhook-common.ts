@@ -16,6 +16,8 @@ export interface VcsWebhookConfig {
   readonly repoMappings?: readonly RepositoryWorkspaceMapping[];
   readonly token?: string;
   readonly baseUrl?: string;
+  readonly appTokenResolver?: (installationId: number) => Promise<string>;
+  readonly evictTokenCache?: (installationId?: number) => void;
 }
 
 export interface RepositoryWorkspaceMapping {

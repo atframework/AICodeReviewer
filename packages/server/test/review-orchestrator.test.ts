@@ -2066,7 +2066,7 @@ describe("runReviewOrchestration error paths", () => {
           llm,
           model,
           dryRun: false,
-          outputPublisherResolver: () => ({
+          outputPublisherResolver: async () => ({
             async publishProblem(problem) {
               publishedProblems.push(problem);
               return { channel: "resolved", status: "published", externalId: "42", raw: {} };

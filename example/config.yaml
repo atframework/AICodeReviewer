@@ -288,12 +288,11 @@ triggers:
   #   token_env: AICR_GITHUB_PARTNER_TOKEN
   #   webhook_secret_env: AICR_GITHUB_PARTNER_WEBHOOK_SECRET
 
-  # -- GitHub App authentication (PLANNED, M12 — not yet implemented) --
-  # Target shape only; the `app` block is NOT parsed yet. Today, outbound auth
-  # uses a static token via token_env (a PAT, or an externally minted GitHub App
-  # installation token that expires in ~1h and is not auto-refreshed). M12 adds
-  # native App auth: AICR signs an RS256 App JWT (node:crypto, zero new deps),
-  # exchanges it for an installation access token, and auto-refreshes it.
+  # -- GitHub App authentication (M12) --
+  # Native GitHub App auth: AICR signs an RS256 App JWT (node:crypto, zero new
+  # deps), exchanges it for an installation access token, and auto-refreshes it.
+  # This replaces the need to manually paste an installation token (expires ~1h)
+  # or a long-lived PAT. `app` and `token_env` are mutually exclusive.
   # See docs/ai/architecture.md §3.2.1 and Plan.md §8.2.1 for the contract.
   # - name: github-app
   #   kind: github

@@ -75,7 +75,7 @@ export interface ReviewSummaryPublishOptions {
 
 export type ReviewOutputPublisherResolver = (
   context: ReviewOrchestrationContext,
-) => ReviewOutputPublisher | undefined;
+) => Promise<ReviewOutputPublisher | undefined>;
 
 export type ReviewOrchestrationProvider = ReviewProvider;
 
@@ -92,7 +92,7 @@ export interface ServerReviewOrchestrationOptions {
   readonly forceSkillsResolver?: (workspaceId: string) => readonly string[] | undefined;
   readonly sourceRootResolver: (reviewEvent: ReviewEvent) => string | undefined;
   readonly vcs: DiffCapableVcsAdapter;
-  readonly vcsFactory?: (sourceRoot: string, context: ReviewOrchestrationContext) => DiffCapableVcsAdapter;
+  readonly vcsFactory?: (sourceRoot: string, context: ReviewOrchestrationContext) => Promise<DiffCapableVcsAdapter> | DiffCapableVcsAdapter;
   readonly llm: ChatCompletionClient;
   readonly model: ModelSpec;
   readonly outputPublisher?: ReviewOutputPublisher;
@@ -1496,7 +1496,7 @@ export async function runReviewOrchestration(
     id: context.reviewEvent.workspaceId,
     sourceDir: sourceRoot,
   };
-  const vcs = options.vcsFactory ? options.vcsFactory(sourceRoot, context) : options.vcs;
+  const vcs = options.vcsFactory ? await options.vcsFactory(sourceRoot, context) : options.vcs;
   const range = await vcs.listChanges(context.reviewEvent);
   const scopedTree = await vcs.fetchScoped(range, workspaceRef);
   const changedPaths = [
@@ -1852,7 +1852,7 @@ export async function runReviewOrchestration(
   const llmResult = completion.llmResult;
   const agentResult = completion.agentResult ?? lastAgentResult;
   const dispatchResults: DispatchResult[] = [];
-  const outputPublisher = options.outputPublisher ?? options.outputPublisherResolver?.(context);
+  const outputPublisher = options.outputPublisher ?? (await options.outputPublisherResolver?.(context));
 
   if (!options.dryRun && outputPublisher) {
     const resolver = outputPublisher.handlesRendering

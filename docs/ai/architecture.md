@@ -101,10 +101,11 @@
     `VcsAdapter.fetchAttribution`，再把结构化归因结果回灌 follow-up pass。没有 attribution backend
     的 adapter 返回 `not_found`，不得让模型猜测作者。
 
-#### 3.2.1 GitHub App 认证（M12 计划）
+#### 3.2.1 GitHub App 认证（M12）
 
-> 状态：M12 计划中的稳定合同。本节描述**将要构建**的接口与边界；未落地前不得在 example
-> 中把 App 认证包装成已实现能力。执行顺序见 `Plan.md` §8.2.1/§8.3，决策见 `docs/ai/decisions.md` D32。
+> 状态：M12 已交付（P1–P4 本地闭环完成；P5 真实 App e2e 仍属 Backlog）。
+> 本节描述已落地的接口与边界。执行顺序见 `Plan.md` §8.2.1/§8.3，决策见
+> `docs/ai/decisions.md` D32。
 
 **动机与现状**：当前 GitHub 出站认证只消费一个静态字符串 token，在
 `packages/server/src/bootstrap.ts` 启动时经 `resolveEnv(token_env)` 解析一次且不刷新。
@@ -140,23 +141,39 @@
 
 **注入点合同**（全部位于 `packages/server`，`vcs`/`outputs` 仍只接收字符串 token）：
 
-- **VCS**：`buildVcsAdapter` 在构造 git adapter 前按事件 `owner/repo` 解析当前 installation
-  token；`packages/vcs/src/git.ts` 的 `x-access-token:<token>@` 约定不变。一次 review 在
-  token 有效期内完成，故按事件解析一次即可。
+- **VCS**：`vcsFactory`（`packages/server/src/bootstrap.ts`）改为异步，在构造 git adapter 前按事件
+  `owner/repo` 解析当前 installation token；`packages/vcs/src/git.ts` 的 `x-access-token:<token>@`
+  约定不变。一次 review 在 token 有效期内完成，故按事件解析一次即可。
 - **输出**：`createOutputPublisherResolverFromConfig` 的 resolver 改为**异步**（返回
   `Promise<ReviewOutputPublisher | undefined>`），按事件解析一次 token 后把字符串传入各
   dispatcher；同步更新 `ReviewOutputPublisherResolver` 类型与两个调用点
-  （`packages/server/src/index.ts`、`packages/server/src/review-orchestrator.ts`）。
-- **Webhook PR 详情拉取**：`VcsWebhookConfig` 承载 App 认证；PR 详情 fetcher 用 payload 的
-  `installation.id`（schema 已 `.passthrough()`，直接读取）签发 token。App trigger 缺省静态
-  token 时，回退到 PR URL 作为去重身份的既有行为保持不变。
+  （`packages/server/src/index.ts`、`packages/server/src/review-orchestrator.ts`）。channel 级
+  `token_env` 优先于 trigger 级 `app` token。
+- **Webhook PR 详情拉取**：`VcsWebhookConfig` 承载 `appTokenResolver`（闭包到
+  `GithubAppTokenService`）；GitHub `issue_comment` 事件在
+  `translateGithubWebhookToReviewEvent` 中用 payload 的 `installation.id`（schema 已
+  `.passthrough()`，直接读取）签发 token，再传入共享的 `translateIssueCommentReviewCommand`。
+  App trigger 缺省静态 token 时，回退到 PR URL 作为去重身份的既有行为保持不变。
+- **`base_url` 语义统一**：GitHub trigger 的 `base_url` 语义是**主机**
+  （`https://github.com` 或 GHE 主机），供 App JWT 与 git clone 使用。GitHub REST
+  输出 dispatcher 需要 API base，由 server 层 `resolveGithubApiBaseUrl`
+  （`packages/server/src/github-app-token.ts`）统一派生：`https://github.com` →
+  `https://api.github.com`，GHE 主机 → `{host}/api/v3`；已是 `https://api.github.com`
+  或以 `/api/v3` 结尾的旧配置原样透传（向后兼容）。派生只作用于 GitHub 输出通道，
+  URL-template 链接仍用主机 `base_url`，gitea/gitlab dispatcher 不受影响。
+- 代码真源：`packages/server/src/github-app-token.ts`（`GithubAppTokenService`、
+  `resolveGithubAppTriggerAuth`、`createGithubAppTokenService`、`resolveGithubApiBaseUrl`）、
+  `packages/server/src/bootstrap.ts`（`createAppTokenServices`、`resolveTriggerTokenForContext`、
+  `buildWebhookConfigFromTrigger` 的 `appTokenResolver` 注入、GitHub 输出通道的
+  `githubApiBaseUrl` 派生）。
 
 **Webhook 事件与安全边界**：
 
 - `installation` / `installation_repositories` 事件不对应 review，返回
-  `202 unsupported_event`（可选：顺带失效对应 installation 的缓存 token/id）。
+  `202 unsupported_event`（`translateGithubWebhookToReviewEvent` 对未识别事件返回 `null`，
+  路由层据此返回 202）。
 - 签名校验（`x-hub-signature-256` + webhook secret）对 App 与 PAT 通用，不改动。
-- 文档需列出 App 最小权限与订阅事件：Contents `Read`、Pull requests `Read/Write`、
+- App 最小权限与订阅事件：Contents `Read`、Pull requests `Read/Write`、
   Issues `Read/Write`、Metadata `Read`；订阅 Pull request、Push、Issue comment、Issues。
 
 ### 3.3 Compression 与上下文管理

@@ -43,6 +43,30 @@ describe("secret-scrubber", () => {
 			expect(result.matches.some((f) => f.kind === "github_token")).toBe(true);
 		});
 
+		it("redacts GitHub App installation tokens (ghs_) — M12 regression", () => {
+			const result = scrubText(
+				'Authorization: token ghs_abcdefghijklmnopqrstuvwxyz01234567890123',
+			);
+			expect(result.text).toContain("<REDACTED:GITHUB_TOKEN>");
+			expect(result.text).not.toContain("ghs_");
+			expect(result.matches.some((f) => f.kind === "github_token")).toBe(true);
+		});
+
+		it("redacts GitHub App JWT tokens — M12 regression", () => {
+			const jwt = `eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.${"A".repeat(20)}.${"B".repeat(20)}`;
+			const result = scrubText(`Authorization: Bearer ${jwt}`);
+			expect(result.text).not.toContain(jwt);
+			expect(result.matches.some((f) => f.kind === "jwt")).toBe(true);
+		});
+
+		it("redacts GitHub App private key PEM headers — M12 regression", () => {
+			const result = scrubText(
+				"-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA...\n-----END RSA PRIVATE KEY-----",
+			);
+			expect(result.text).toContain("<REDACTED:PRIVATE_KEY>");
+			expect(result.matches.some((f) => f.kind === "private_key")).toBe(true);
+		});
+
 		it("redacts GitHub fine-grained tokens (github_pat_)", () => {
 			const result = scrubText(
 				'github_pat_11ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdefghijklmnopqrstuvwxyz',
