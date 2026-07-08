@@ -25,8 +25,10 @@
   M11-P2（骨架 + 首批核心页）、M11-P3（全章节双语正文迁移）和 M11-P5（发布 workflow）已完成；
   下一步是 Pages 设置核验与 M11-P6 打磨（链接检查、配置字段覆盖校验）。
 - 新增运行时方向是 M12：GitHub App 原生认证。M12-P1–P4（配置 schema、token 服务、三个注入点
-  接入、webhook 事件 + GHE + 文档）已完成；M12-P5（真实 App e2e）仍属 Backlog。基于
-  `node:crypto` 的 App JWT → installation token 自动签发与刷新已交付（零新增依赖）。执行包见
+  接入、webhook 事件 + GHE + 文档）已完成；M12-P5（真实 App e2e / 公网正式环境切换）已完成：
+  已将 `atframework-aicr` App 部署到公网正式环境，两个 GitHub trigger 已切到 `app` 认证，
+  webhook secret 已同步，`owent/hiredis-happ` 已加入 App 已选仓库并通过 token 解析验证。
+  基于 `node:crypto` 的 App JWT → installation token 自动签发与刷新已交付（零新增依赖）。执行包见
   §8.3，稳定合同见 `docs/ai/architecture.md` §3.2.1。
 - 仍需真实外部系统验收的项目集中在 §8.4，避免散落在已完成里程碑描述中。
 
@@ -228,7 +230,7 @@
 | M9 | 基本完成 | `docs/ai/milestones/M9.md` | 不进入版本 bump / git tag |
 | M10 | 基本完成 | `docs/ai/milestones/M10.md` | 真实外部 Redis smoke/e2e 按需放入 Backlog |
 | M11 | 进行中 | `docs/ai/documentation-site-plan.md` | Pages 设置核验；M11-P6 打磨 |
-| M12 | 基本完成 | 本文 §3.2.1 / `docs/ai/architecture.md` §3.2.1 | P1–P4 已交付；M12-P5 真实 App e2e 留在 Backlog |
+| M12 | 已完成 | 本文 §3.2.1 / `docs/ai/architecture.md` §3.2.1 | P1–P4 已交付；P5 公网正式环境切换完成，三个目标仓库均通过 token 解析验证，待一次真实 PR/push 完成最终 e2e 签收 |
 
 ### 8.2 当前执行包
 
@@ -262,7 +264,7 @@ README 增强 logo、扩展 badge、导航链接行、Review output standards / 
 `validate-public-content.mjs`（扫描 `.md`+`.mdx`）、`AGENTS.md` #59、中英 `development/index.md`、
 `docs/site/README.md`。下一本地执行包建议：链接检查、配置字段覆盖校验脚本、SEO 与贡献规则自动化。
 
-#### 8.2.1 M12 GitHub App 原生认证（P1–P4 已交付）
+#### 8.2.1 M12 GitHub App 原生认证（P1–P5 已完成）
 
 目标：在不引入新依赖的前提下，为 GitHub trigger 提供 GitHub App 原生认证，自动签发与
 刷新 installation access token，取代"手动粘贴会过期的 installation token"或长期 PAT 的现状。
@@ -296,7 +298,7 @@ README 增强 logo、扩展 badge、导航链接行、Review output standards / 
 - `packages/core/src/secret-scrubber.ts` 的 `gh[pousr]_` 模式已覆盖 installation token
   前缀 `ghs_`，App 私钥（PEM）由 `private_key` 规则覆盖、App JWT 由 `jwt` 规则覆盖。
 
-M12-P5（真实 App e2e）仍属 Backlog（见 §8.4）。详细合同见 `docs/ai/architecture.md` §3.2.1，
+M12-P5（真实 App e2e / 公网正式环境切换）已完成：已将 `atframework-aicr` App 部署到公网正式环境，`github-atframework`/`github-owent` trigger 已切到 `app` 认证，webhook secret 已同步，`owent/hiredis-happ` 已加入 App 已选仓库，三个目标仓库均通过 token 解析验证。详细合同见 `docs/ai/architecture.md` §3.2.1，
 决策见 `docs/ai/decisions.md` D32。
 
 ### 8.3 本地优先执行队列
@@ -324,7 +326,7 @@ M12-P5（真实 App e2e）仍属 Backlog（见 §8.4）。详细合同见 `docs/
 | `firecracker` sandbox 实现 | M9 | 需要 Firecracker 二进制和 API socket |
 | CI 真实 LLM eval benchmark | M8 | root CI 已运行 `aicr eval --validate-only`；真实 LLM benchmark 需要 CI secrets |
 | 文档站 Pages 设置核验 | M11 | workflow 已发布到 `gh-pages`；仍需 GitHub Settings > Pages 选择 `gh-pages` / `/` 后核验线上地址 |
-| GitHub App 真实仓库 e2e（M12-P5） | M12 | M12-P1…P4 代码完成后，需真实 GitHub App 注册 + 安装到目标仓库，验证 JWT → installation token → clone/PR 评论/issue 写回全链路；需 App 凭据与可写仓库 |
+| GitHub App 真实仓库全链路 e2e 签收（M12-P5 收尾） | M12 | M12-P5 公网正式环境部署已完成：App 已安装到 `atframework` 和 `owent` 账号，`github-atframework`/`github-owent` trigger 已切到 `app` 认证，webhook secret 已同步，`owent/hiredis-happ` 已加入已选仓库，三个目标仓库均通过 token 解析验证。仍建议通过一次真实 PR/push 完成最终端到端签收 |
 
 明确不做或暂不进入计划：跨 workspace 知识迁移；版本 bump / git tag；在 M11-P1 前生成
 用户文档正文。

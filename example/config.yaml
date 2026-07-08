@@ -280,7 +280,7 @@ triggers:
   #   kind: github
   #   base_url: https://github.com            # optional for github.com; set to GHE URL for GitHub Enterprise
   #   token_env: AICR_GITHUB_TOKEN            # outbound: personal access token (needs repo scope)
-  #   webhook_secret_env: AICR_GITHUB_WEBHOOK_SECRET  # inbound: HMAC-SHA256 secret
+  #   webhook_secret_env: AICR_GITHUB_APP_WEBHOOK_SECRET  # inbound: HMAC-SHA256 secret
   #   repos:                                  # optional: map specific repos to workspaces
   #     - { match: "my-org/my-repo", workspace: github-my-repo }
   # - name: github-partner

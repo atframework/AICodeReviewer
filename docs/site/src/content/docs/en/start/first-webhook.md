@@ -87,11 +87,14 @@ In the Gitea repository:
 6. Save.
 
 :::note[GitHub]
-For a GitHub repository, point the webhook at
-`/webhooks/github`, set the same HMAC secret as
-`AICR_GITHUB_WEBHOOK_SECRET`, and subscribe to **Pull requests**. AICR
-handles the `pull_request` `review_requested` action as a PR re-review
-trigger.
+If you use a GitHub App, configure the App's **Webhook URL** to
+`/webhooks/github`, set the **Webhook secret** to the same value as
+`AICR_GITHUB_APP_WEBHOOK_SECRET`, and select the repositories AICR should access.
+Subscribe to **Pull requests**, **Push**, **Issue comment**, and **Issues**. AICR
+handles the `pull_request` `review_requested` action as a PR re-review trigger.
+
+If you use a personal access token, point a repository webhook at `/webhooks/github`,
+set the same HMAC secret, and subscribe to **Pull requests**.
 :::
 
 ## 3. Trigger the first review

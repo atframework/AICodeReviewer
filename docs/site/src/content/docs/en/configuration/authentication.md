@@ -29,7 +29,7 @@ Each trigger kind uses a specific verification mechanism:
 | Trigger kind | Config field | Mechanism | HTTP header | Where to set on VCS |
 | --- | --- | --- | --- | --- |
 | `gitea` / `forgejo` | `webhook_secret_env` | HMAC-SHA256 | `x-gitea-signature-256` | Gitea webhook → Secret |
-| `github` | `webhook_secret_env` | HMAC-SHA256 | `x-hub-signature-256` | GitHub webhook → Secret |
+| `github` | `webhook_secret_env` | HMAC-SHA256 | `x-hub-signature-256` | GitHub App → Webhook secret (or repo-level webhook → Secret) |
 | `gitlab` | `webhook_secret_env` | Token comparison | `x-gitlab-token` | GitLab webhook → Secret token |
 | `p4` | `server.auth` | API key | `x-api-key` | `p4-trigger.sh` sends the key |
 | `svn` | `server.auth` | API key | `x-api-key` | `svn-trigger.sh` sends the key |
@@ -118,30 +118,36 @@ contain **only env var names**, never values. This keeps `config.yaml` safe to
 commit and review.
 
 ```text
-┌─────────────────────────────────────────────────────────────────────────┐
-│ .env (environment variables — never committed to git)                   │
-│                                                                         │
-│ ── Inbound: Webhook HMAC secrets (protect /webhooks/*) ──              │
-│ AICR_WEBHOOK_SECRET=7f3a...        ← shared with Gitea webhook config  │
-│ AICR_GITHUB_WEBHOOK_SECRET=b2c1... ← shared with GitHub webhook config │
-│ AICR_GITLAB_WEBHOOK_SECRET=d4e5... ← shared with GitLab webhook config │
-│                                                                         │
-│ ── Inbound: API key (protects /triggers/* like P4/SVN) ──              │
-│ AICR_API_KEY=c6d7e8f9...           ← p4-trigger.sh / svn-trigger.sh    │
-│                                                                         │
-│ ── Outbound: AICR calls external services ──                           │
-│ AICR_GITEA_TOKEN=4b5d...           ← AICR → Gitea API (post comments) │
-│ AICR_P4USER=p4-ci                  ← AICR → P4 server (fetch files)   │
-│ AICR_P4PASSWORD=vUF_...            ← AICR → P4 server (fetch files)   │
-│ AICR_FEISHU_SECRET=3Ob2...         ← AICR → Feishu API (send cards)   │
-│ AICR_LLM_API_KEY=sk-...            ← AICR → LLM API (completions)     │
-└─────────────────────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────────────────────┐
+│ .env (environment variables — never committed to git)                      │
+│                                                                            │
+│ ── Inbound: Webhook HMAC secrets (protect /webhooks/*) ──                  │
+│ AICR_WEBHOOK_SECRET=7f3a...              ← shared with Gitea webhook     │
+│ AICR_GITHUB_APP_WEBHOOK_SECRET=b2c1...     ← shared with GitHub App        │
+│ AICR_GITLAB_WEBHOOK_SECRET=d4e5...         ← shared with GitLab webhook    │
+│                                                                            │
+│ ── Inbound: API key (protects /triggers/* like P4/SVN) ──                │
+│ AICR_API_KEY=c6d7e8f9...                 ← p4-trigger.sh / svn-trigger.sh  │
+│                                                                            │
+│ ── Outbound: AICR calls external services ──                               │
+│ AICR_LLM_API_KEY=sk-...                    ← AICR → LLM API              │
+│ AICR_GITEA_TOKEN=4b5d...                   ← AICR → Gitea API              │
+│ AICR_P4USER=p4-ci                          ← AICR → P4 server            │
+│ AICR_P4PASSWORD=vUF_...                    ← AICR → P4 server            │
+│ AICR_FEISHU_SECRET=3Ob2...                 ← AICR → Feishu API           │
+│                                                                            │
+│ ── Outbound: GitHub App (recommended for GitHub) ──                      │
+│ AICR_GITHUB_APP_PRIVATE_KEY=LS0t...          ← base64 PEM, see below       │
+│ AICR_GITHUB_TOKEN=ghp_...                  ← (legacy) GitHub PAT         │
+└────────────────────────────────────────────────────────────────────────────┘
 ```
 
-For GitHub channels that write back to the repo, the `token_env` (or a
-channel-level override, or a trigger-level `app` block — see
-[VCS providers](/en/integrations/vcs-providers/)) must be an **outbound** API
-credential, not the webhook secret. `github_problem_issue` specifically needs
-repository Issues read/write permission. Selecting **Issues** or **Issue
-comments** in the GitHub webhook event list only controls which inbound events
-are delivered; it does not grant REST API permissions.
+For GitHub, the recommended outbound credential is a GitHub App. Put the
+private key (PEM or base64 PEM) in `AICR_GITHUB_APP_PRIVATE_KEY`, reference it
+with `triggers[].app.private_key_env`, and make sure every reviewed repository
+is selected in the App installation. A personal access token is still supported
+via `token_env` (or a channel-level override) for legacy setups, but it must be
+an **outbound** API credential, not the webhook secret. `github_problem_issue`
+specifically needs repository Issues read/write permission. Selecting **Issues**
+or **Issue comments** in the GitHub App/webhook event list only controls which
+inbound events are delivered; it does not grant REST API permissions.

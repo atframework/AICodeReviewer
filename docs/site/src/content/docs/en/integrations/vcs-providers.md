@@ -56,10 +56,16 @@ triggers:
     webhook_secret_env: AICR_GITHUB_WEBHOOK_SECRET
 ```
 
-Point a repository webhook at `http://<aicr-host>:8080/webhooks/github`, set the
-same HMAC secret as `AICR_GITHUB_WEBHOOK_SECRET`, and subscribe to **Pull
-requests**. AICR handles the `pull_request` `review_requested` action as a PR
-re-review trigger.
+If you use a GitHub App, configure the App's **Webhook URL** to
+`http://<aicr-host>:8080/webhooks/github` (or the public reverse-proxy URL), set
+the **Webhook secret** to the same value as `AICR_GITHUB_APP_WEBHOOK_SECRET`, and
+select every repository AICR should review. Subscribe to **Pull requests**,
+**Push**, **Issue comment**, and **Issues**. AICR handles the `pull_request`
+`review_requested` action as a PR re-review trigger.
+
+If you use a personal access token instead of a GitHub App, point a repository
+webhook at the same URL, set the same HMAC secret as `AICR_GITHUB_WEBHOOK_SECRET`,
+and subscribe to **Pull requests**.
 
 For comment-triggered re-reviews, configure `token_env` (or a GitHub App `app`
 block — see below) so AICR can fetch PR head/base SHA and branch details. If
@@ -81,7 +87,7 @@ triggers:
       private_key_env: AICR_GITHUB_APP_PRIVATE_KEY   # PEM or base64 PEM
       # private_key_path: /run/secrets/github-app.pem  # alternative: mounted .pem
       # installation_id: "7890123"     # optional; auto-resolved per repo if omitted
-    webhook_secret_env: AICR_GITHUB_WEBHOOK_SECRET
+    webhook_secret_env: AICR_GITHUB_APP_WEBHOOK_SECRET
 ```
 
 `app` and `token_env` are mutually exclusive. Channel-level `token_env` takes
@@ -93,6 +99,50 @@ unchanged. Minimum App permissions: Contents Read, Pull requests Read/Write,
 Issues Read/Write, Metadata Read. Subscribe to Pull request, Push, Issue
 comment, Issues. `installation` and `installation_repositories` events return
 `202 unsupported_event`.
+
+Make sure the App is installed on the account or organization that owns the
+repositories, and that each repository is included in the selected repositories
+of the installation. A repository that is not selected will return a 404 when
+AICR tries to resolve the installation token.
+
+#### Creating the GitHub App
+
+1. **GitHub → Settings → Developer settings → GitHub Apps → New GitHub App**.
+2. **Webhook URL**: `http://<aicr-host>:8080/webhooks/github`; set a webhook
+   secret (store it as `AICR_GITHUB_APP_WEBHOOK_SECRET`).
+3. **Repository permissions**: Contents **Read-only**, Pull requests
+   **Read and write**, Issues **Read and write**, Metadata **Read-only**.
+4. **Subscribe to events**: Pull request, Push, Issue comment, Issues.
+5. **Create**, then note the **App ID** and generate a **private key** (downloads
+   a `.pem`).
+6. **Install** the App and select the repositories AICR should review.
+
+Encode the private key as base64 for `.env`:
+
+```bash
+# Linux
+base64 -w0 app.private-key.pem
+# macOS
+base64 -i app.private-key.pem
+# Windows PowerShell
+[Convert]::ToBase64String([IO.File]::ReadAllBytes('app.private-key.pem'))
+```
+
+Store the result as `AICR_GITHUB_APP_PRIVATE_KEY`. AICR accepts raw PEM or
+base64 PEM in that env var.
+
+#### GitHub PAT (legacy alternative)
+
+If you cannot use a GitHub App, create a personal access token:
+
+- **Classic**: GitHub → Settings → Developer settings → Personal access tokens →
+  Tokens (classic) → select **`repo`** scope.
+- **Fine-grained** (recommended): select target repos and grant Contents
+  **Read-only**, Pull requests **Read and write**, Issues **Read and write**,
+  Metadata **Read-only**.
+
+Store the token as `AICR_GITHUB_TOKEN` and add a **repository-level webhook** to
+each repo (a PAT has no App-level webhook).
 
 ### GitLab
 

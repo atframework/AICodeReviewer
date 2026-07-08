@@ -85,16 +85,16 @@ LLM_TOKEN="$(yq -r '.llm.provider.xiaomimimo_token_plan.token' development/secre
 | Gitea              | watch path         | `.integration.gitea.watch_path`                   |
 | Gitea              | include files      | `.integration.gitea.include_cr_file`              |
 | Gitea              | exclude files      | `.integration.gitea.exclude_cr_file`              |
-| GitHub atframework | token              | `.integration.github-atframework.token`           |
-| GitHub atframework | webhook secret     | `.integration.github-atframework.webhook_secret`  |
-| GitHub atframework | watch path         | `.integration.github-atframework.watch_path`      |
-| GitHub atframework | include files      | `.integration.github-atframework.include_cr_file` |
-| GitHub atframework | exclude files      | `.integration.github-atframework.exclude_cr_file` |
-| GitHub owent       | token              | `.integration.github-owent.token`                 |
-| GitHub owent       | webhook secret     | `.integration.github-owent.webhook_secret`        |
-| GitHub owent       | watch path         | `.integration.github-owent.watch_path`            |
-| GitHub owent       | include files      | `.integration.github-owent.include_cr_file`       |
-| GitHub owent       | exclude files      | `.integration.github-owent.exclude_cr_file`       |
+| GitHub App (atframework/owent) | app_id             | `.integration.github-app-aicr.app_id`                        |
+| GitHub App (atframework/owent) | client_id          | `.integration.github-app-aicr.client_id`                     |
+| GitHub App (atframework/owent) | private key file   | `.integration.github-app-aicr.private_key_file`              |
+| GitHub App (atframework/owent) | webhook secret     | `.integration.github-app-aicr.webhook.secret`                  |
+| GitHub atframework | watch path         | `.integration.github-atframework.watch_path`                   |
+| GitHub atframework | include files      | `.integration.github-atframework.include_cr_file`              |
+| GitHub atframework | exclude files      | `.integration.github-atframework.exclude_cr_file`            |
+| GitHub owent       | watch path         | `.integration.github-owent.watch_path`                         |
+| GitHub owent       | include files      | `.integration.github-owent.include_cr_file`                    |
+| GitHub owent       | exclude files      | `.integration.github-owent.exclude_cr_file`                    |
 | P4                 | username           | `.integration.p4.username`                        |
 | P4                 | password           | `.integration.p4.password`                        |
 | P4                 | depot path         | `.integration.p4.depot_path`                      |
@@ -110,15 +110,16 @@ LLM_TOKEN="$(yq -r '.llm.provider.xiaomimimo_token_plan.token' development/secre
 
 ### GitHub repo → selector / trigger / workspace 映射
 
-| GitHub 仓库             | 本地 selector 组     | 远端 trigger         | 远端 workspace        | 说明                                |
-| ----------------------- | -------------------- | -------------------- | --------------------- | ----------------------------------- |
-| `atframework/atsf4g-co` | `github-atframework` | `github-atframework` | `github-atsf4g-co`    | 保持现有仓库，继续独立配置          |
-| `owent/libatapp`        | `github-owent`       | `github-owent`       | `github-libatapp`     | 新增仓库，独立 token/secret/filter  |
-| `owent/hiredis-happ`    | `github-owent`       | `github-owent`       | `github-hiredis-happ` | 复用 `github-owent` trigger/outputs |
+| GitHub 仓库             | 本地 selector 组     | 远端 trigger         | 远端 workspace        | 说明                                                                 |
+| ----------------------- | -------------------- | -------------------- | --------------------- | -------------------------------------------------------------------- |
+| `atframework/atsf4g-co` | `github-atframework` | `github-atframework` | `github-atsf4g-co`    | 使用统一 GitHub App `atframework-aicr` 认证；文件过滤保持独立 |
+| `owent/libatapp`        | `github-owent`       | `github-owent`       | `github-libatapp`     | 使用统一 GitHub App `atframework-aicr` 认证；文件过滤保持独立 |
+| `owent/hiredis-happ`    | `github-owent`       | `github-owent`       | `github-hiredis-happ` | 使用统一 GitHub App `atframework-aicr` 认证；文件过滤保持独立 |
 
 - `/webhooks/github` 现在允许挂多个 GitHub trigger profile；服务端会先按 webhook secret 校验，再按 `repository.full_name` 选择最终 trigger。
-- 不同 GitHub 仓库若使用不同 token、webhook secret、`watch_path`、`include_cr_file`、`exclude_cr_file`，不要继续复用同一个 trigger。
-- 远端 `.env` 需要同时保留 `GITHUB_ATFRAMEWORK_*` 与 `GITHUB_OWENT_*` 两组变量名；值仍从对应 selector 单独提取，禁止互相复用或打印原文。
+- 不同 GitHub 仓库若使用不同的 `watch_path`、`include_cr_file`、`exclude_cr_file`，仍可继续复用同一个 App 认证，但应使用独立 trigger 保证过滤规则隔离。
+- 远端 `.env` 统一使用 GitHub App 凭据：`AICR_GITHUB_APP_PRIVATE_KEY`（base64 PEM）和 `AICR_GITHUB_APP_WEBHOOK_SECRET`；旧的 `GITHUB_ATFRAMEWORK_*`/`GITHUB_OWENT_*` PAT 变量已移除。禁止互相复用或打印原文。
+- 已确认 `owent/hiredis-happ` 已加入 `owent` 账号的 App 已选仓库。
 
 ## 5. P4 操作边界
 

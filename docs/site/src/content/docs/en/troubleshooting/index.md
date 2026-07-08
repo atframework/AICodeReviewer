@@ -282,8 +282,11 @@ REST API permissions.
 
 - For a personal access token: ensure it has `repo` scope (or the fine-grained
   `Issues: Read and write` permission on the target repo).
-- For a GitHub App: update the repository permission, then **reinstall or
-  refresh the installation** before retrying — permission changes do not
-  apply retroactively to existing installations.
-- Confirm the token referenced by `triggers[].token_env` or the channel-level
-  override is the outbound credential, not `AICR_GITHUB_WEBHOOK_SECRET`.
+- For a GitHub App: confirm the App is installed on the target account/organization,
+  that every reviewed repository is selected in the installation, and that the App
+  has `Contents Read`, `Pull requests Read/Write`, and `Issues Read/Write` permissions.
+  Update the repository permission if needed, then **reinstall or refresh the
+  installation** before retrying — permission changes do not apply retroactively to
+  existing installations.
+- Confirm the outbound credential is the resolved GitHub App token or the PAT
+  referenced by `triggers[].token_env`, not `AICR_GITHUB_APP_WEBHOOK_SECRET`.

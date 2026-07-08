@@ -181,5 +181,8 @@ admin:
 **修复：**
 
 - 个人访问令牌：确保具有 `repo` scope（或目标仓库上的细粒度 `Issues: Read and write` 权限）。
-- GitHub App：更新仓库权限后，**重新安装或刷新安装**再重试——权限变更不会追溯应用到已有安装。
-- 确认 `triggers[].token_env` 或通道级覆盖引用的是出站凭据，而不是 `AICR_GITHUB_WEBHOOK_SECRET`。
+- GitHub App：确认 App 已安装到目标账号或组织，且每个被 review 的仓库都已包含在该安装的已选仓库中；同时确认 App 具有
+  `Contents Read`、`Pull requests Read/Write` 和 `Issues Read/Write` 权限。如有权限变更，
+  **重新安装或刷新安装**后再重试——权限变更不会追溯应用到已有安装。
+- 确认出站凭据是解析出的 GitHub App token 或 `triggers[].token_env` 引用的 PAT，而不是
+  `AICR_GITHUB_APP_WEBHOOK_SECRET`。

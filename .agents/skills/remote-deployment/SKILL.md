@@ -281,7 +281,9 @@ The `.env` file on remote contains secrets. **Never display its full contents in
 
 - `AICR_LLM_API_KEY` — LLM provider API key
 - `AICR_GITEA_TOKEN`, `AICR_WEBHOOK_SECRET` — Gitea integration
-- `AICR_GITHUB_TOKEN`, `AICR_GITHUB_WEBHOOK_SECRET` — GitHub integration
+- `AICR_GITHUB_APP_PRIVATE_KEY` — GitHub App private key (PEM or base64 PEM)
+- `AICR_GITHUB_APP_WEBHOOK_SECRET` — GitHub App webhook secret
+- `AICR_GITHUB_TOKEN` — (legacy) GitHub PAT fallback when a trigger still uses `token_env`
 - `AICR_P4USER`, `AICR_P4PASSWORD` — Perforce integration
 - `AICR_API_KEY` — Server API key for `/triggers/*`
 - `AICR_FEISHU_WEBHOOK`, `AICR_FEISHU_SECRET` — Feishu bot
@@ -312,7 +314,7 @@ The `.env` file must be ASCII or UTF-8 without BOM. Windows PowerShell 5.1 `>` r
 | `admin` sessions expire unexpectedly                               | Config used `session_ttl_minutes` instead of `session_ttl_seconds`                                               | Schema only recognizes `session_ttl_seconds` (default 28800 = 8 hours); `session_ttl_minutes` is silently ignored               |
 | Reviews `Agent kilo timed out after <N>ms` where N ≫ `agent.timeout_seconds`, retries get progressively slower | Orphaned agent worker processes (`.kilo`) survived a timeout kill and are accumulating, exhausting CPU (death spiral). Confirm with `podman exec aicr ps -eo pid,ppid,etime,comm \| grep kilo` (many PPID=1 rows = orphans) | Redeploy the fixed image (timeout now kills the whole process tree, including `setsid` workers, via a `/proc` PPID walk; outer container runs with `--init` so PID 1 reaps zombies). To recover immediately, `podman restart aicr` so the runtime reaps all orphaned processes, then verify with `podman logs --tail 50 aicr`. Do not remove `--init` from `deploy.sh` |
 | GitHub/GitLab/P4 issue events fail with `issue_triage_failed` / `fetch failed` | Issue triage only has a Gitea client but is being applied to non-Gitea issue events (provider not gated) | Redeploy the fixed image (triage is now provider-gated). No GitHub/GitLab triage client exists; non-Gitea workspaces must not rely on issue auto-close |
-| `github-managed-findings` (or `github_problem_issue`) returns 401/403   | The trigger's `token_env` token is expired, revoked, or lacks Issues read/write scope (webhook `Issues` event subscription does NOT grant REST issue create/update permission) | Rotate the PAT / refresh the GitHub App installation token with `repo`/`issues:write`; verify with `curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $TOKEN" https://api.github.com/user` (expect 200); restart container after updating `.env` |
+| `github-managed-findings` (or `github_problem_issue`) returns 401/403 | The outbound GitHub credential is expired, revoked, or lacks Issues read/write scope (webhook `Issues` event subscription does NOT grant REST issue create/update permission). With GitHub App auth, this means the App is not installed to the repository, the private key is wrong, or the App lacks `repo`/`issues:write` permissions | For `token_env`: rotate the PAT. For `app` auth: verify the App is installed on the target repo, the private key matches `AICR_GITHUB_APP_PRIVATE_KEY`, and the App has `repo` + `issues:write` permissions; trigger token refresh by restarting the container after updating `.env` |
 
 ### Podman `invalid internal status` deep-dive
 
