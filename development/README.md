@@ -126,7 +126,7 @@ LLM_TOKEN="$(yq -r '.llm.provider.xiaomimimo_token_plan.token' development/secre
 - P4 trigger 当前通过 AICR API Key 保护；`p4.webhook_secret` 为预留项。
 - P4 trigger 脚本：`example/p4-trigger.sh`。
 - 运行 trigger 时使用环境变量：
-  - `AICR_URL=https://aicr.x-ha.com:6023`
+  - `AICR_URL=<部署环境入口URL>`
   - `AICR_API_KEY` 通过 selector 提取并注入环境变量
   - `AICR_DEPOT_PATH` 通常可省略，默认使用服务端 `config.yaml` 的 P4 trigger `depot_path`
 - 只有一个脚本需要覆盖服务端 depot 配置时，才设置 `AICR_DEPOT_PATH`。
@@ -151,10 +151,10 @@ LLM_TOKEN="$(yq -r '.llm.provider.xiaomimimo_token_plan.token' development/secre
 
 ### Health check
 
-远程服务地址：`https://aicr.x-ha.com:6023`（反向代理到 `http://10.64.8.2:8090`）。
+远程服务地址：`<部署环境入口URL>`（反向代理到 `http://10.64.8.2:8090`）。
 
 ```bash
-curl -sf https://aicr.x-ha.com:6023/healthz
+curl -sf <部署环境入口URL>/healthz
 # 预期输出: ok
 ```
 
@@ -163,12 +163,12 @@ curl -sf https://aicr.x-ha.com:6023/healthz
 ### 7.1 公网正式环境
 
 - 远程服务器：内网ip `10.0.4.9` , 公网ip: `42.192.55.130`（公网域名 `aicr.x-ha.com`）
-- SSH 用户：通过 `yq '.deploy."aicr.w-oa.com:6023".ssh.user' development/secret/secret.yaml` 提取
-- SSH 端口：通过 `yq '.deploy."aicr.w-oa.com:6023".ssh.port' development/secret/secret.yaml` 提取
-- SSH key：通过 `yq '.deploy."aicr.w-oa.com:6023".ssh.key_file' development/secret/secret.yaml` 提取文件名（该值是远程主机路径；本地部署用同名私钥的本地镜像副本）
+- SSH 用户：通过 `yq '.deploy.normal.ssh.user' development/secret/secret.yaml` 提取
+- SSH 端口：通过 `yq '.deploy.normal.ssh.port' development/secret/secret.yaml` 提取
+- SSH key：通过 `yq '.deploy.normal.ssh.key_file' development/secret/secret.yaml` 提取文件名（该值是远程主机路径；本地部署用同名私钥的本地镜像副本）
 - **部署目录**：`/home/tools/AICodeReviewer`
 - 容器引擎：Podman
-- 反向代理：`https://aicr.x-ha.com:6023` → `http://10.0.4.9:8090`
+- 反向代理：<部署环境入口URL> → `http://10.0.4.9:8090`
 - 如果公网机本机监听了 TCP `3128`，`deploy.sh` 会自动探测这个 HTTP 代理并用于宿主下载与镜像构建；详细规则见下文“关于构建期 HTTP 代理”。
 
 ### 7.2 内网公共环境
@@ -262,11 +262,11 @@ ssh -p 36000 -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no \
 标准 SSH 选项（公网，连接参数全部从 `development/secret/secret.yaml` 提取，不硬编码 key 路径）：
 
 ```bash
-SSH_HOST="$(yq -r '.deploy."aicr.w-oa.com:6023".ssh.host' development/secret/secret.yaml)"  # aicr.x-ha.com
-SSH_PORT="$(yq -r '.deploy."aicr.w-oa.com:6023".ssh.port' development/secret/secret.yaml)"  # 36000
-SSH_USER="$(yq -r '.deploy."aicr.w-oa.com:6023".ssh.user' development/secret/secret.yaml)"  # tools
+SSH_HOST="$(yq -r '.deploy.normal.ssh.host' development/secret/secret.yaml)"  # aicr.x-ha.com
+SSH_PORT="$(yq -r '.deploy.normal.ssh.port' development/secret/secret.yaml)"  # 36000
+SSH_USER="$(yq -r '.deploy.normal.ssh.user' development/secret/secret.yaml)"  # tools
 # ssh.key_file 是远程主机上的路径（如 /home/tools/.ssh/<key>）；本机需把同名私钥镜像到本地后，用本地路径作为 -i
-SSH_KEY="$(yq -r '.deploy."aicr.w-oa.com:6023".ssh.key_file' development/secret/secret.yaml)"
+SSH_KEY="$(yq -r '.deploy.normal.ssh.key_file' development/secret/secret.yaml)"
 
 ssh -p "$SSH_PORT" -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no \
   -o User="$SSH_USER" -i "$SSH_KEY" "$SSH_HOST"
@@ -276,7 +276,7 @@ ssh -p "$SSH_PORT" -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no \
 
 ### 7.4 部署常见陷阱
 
-- **SSH key 选择**：以 `development/secret/secret.yaml` 的 `.deploy."aicr.w-oa.com:6023".ssh.key_file` 为准，提取文件名并用本地镜像副本作为 `-i`。不要用工作区的 `id_ed25519`（会被公网服务器拒绝）。若认证返回 `Permission denied (publickey)`，说明所选公钥尚未加入公网机 `~/.ssh/authorized_keys`，需先从已可登录的主机把该公钥追加进去。
+- **SSH key 选择**：以 `development/secret/secret.yaml` 的 `.deploy.normal.ssh.key_file` 为准，提取文件名并用本地镜像副本作为 `-i`。不要用工作区的 `id_ed25519`（会被公网服务器拒绝）。若认证返回 `Permission denied (publickey)`，说明所选公钥尚未加入公网机 `~/.ssh/authorized_keys`，需先从已可登录的主机把该公钥追加进去。
 - **`.env` 文件编码**：Windows PowerShell 5.1 的 `>` 重定向和 `Out-File` 默认 UTF-16 LE，远程容器无法读取。使用 `scp` 传输或远端 `printf` 写入。`deploy.sh` 会在启动前自动检测 UTF-16 编码并报错。
 - **Config-only 变更只需重启**：`config.yaml` 和 `.env` 通过 volume 挂载到容器，修改后执行 `podman restart aicr` 即可；只有代码变更才需要 `deploy.sh` 完整重建。
 - **外层容器必须保留 `--init`**：`deploy/deploy.sh` 用 `podman run -d --init` 启动服务。`--init` 让 `tini`/`catatonit` 作为 PID 1 回收被沙箱超时 kill 后 reparent 的 `.kilo` worker 僵尸（Kilo 会把 worker `setsid` 进独立 session，进程组信号杀不到，必须靠 `/proc` PPID 遍历 + PID 1 回收兜底）。删掉 `--init` 会让僵尸在 PID 1 下堆积（公网实测 31 个 `Z` 状态进程），并在退出窗口内拖慢重试形成死亡螺旋。若出现 `Agent kilo timed out after <N>ms` 且 N 远超 `agent.timeout_seconds`，先用 `podman exec aicr ps -eo pid,ppid,etime,comm | grep kilo` 确认是否有大量 PPID=1 的残留进程，再 `podman restart aicr` 清理并重新部署带修复的镜像。
@@ -487,7 +487,7 @@ podman start aicr caddy
 
 # 3. 验证本地和反向代理健康检查
 curl -sf http://127.0.0.1:8090/healthz
-curl -sf https://aicr.w-oa.com:6023/healthz
+curl -sf $(jq ".deploy.normal.url" ./development/secret/secret.yaml)/healthz
 ```
 
 **预防措施：**
