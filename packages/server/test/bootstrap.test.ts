@@ -1,3 +1,4 @@
+import { generateKeyPairSync } from "node:crypto";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -8,7 +9,7 @@ import type { AppConfig } from "@aicr/core";
 import { computeScopeFingerprint } from "@aicr/outputs";
 import { closeStoreDb, createStoreDb, getProjectStats, hardDeleteExpiredProjects, insertReviewRun } from "@aicr/store";
 
-
+import { GithubAppTokenService } from "../src/github-app-token.js";
 import {
   resolveModelSpecFromConfig,
   resolveGiteaWebhookConfig,
@@ -743,6 +744,58 @@ describe("createOutputPublisherFromConfig", () => {
       }
     }
   });
+
+  it("uses resolvedTriggerToken (GitHub App) when no token_env is configured", async () => {
+    const calls: { url: string; init: { headers?: Record<string, string>; body?: string } }[] = [];
+    vi.stubGlobal("fetch", async (url: string, init?: { headers?: Record<string, string>; body?: string }) => {
+      calls.push({ url, init: init ?? {} });
+      return response({ id: 987 });
+    });
+
+    try {
+      const config = makeConfig({
+        triggers: [{ name: "github-app", kind: "github", app: { app_id: "123456", private_key_env: "APP_KEY" } }],
+        outputs: {
+          template_engine: "handlebars",
+          channels: [{ name: "github-pr", kind: "github_pr_review", trigger: "github-app", review_update_strategy: "always_new" }],
+        },
+        workspaces: {
+          cache: { max_total_gb: 50, eviction: "lru", ttl_days: 30 },
+          defaults: {},
+          instances: {
+            "test-workspace": {
+              source_repo: { trigger: "github-app", repo: "owent/example" },
+            },
+          },
+        },
+      } as Partial<AppConfig>);
+      const publisher = createOutputPublisherFromConfig(
+        config,
+        "github-pr",
+        42,
+        "test-workspace",
+        undefined,
+        process.cwd(),
+        "ghs_APPINSTALLATIONTOKEN",
+      );
+
+      assertProblemPublisher(publisher);
+      await publisher.publishProblem({
+        file: "src/app.ts",
+        line: 7,
+        severity: "high",
+        category: "correctness",
+        message: "Issue.",
+      });
+      await publisher.publishSummary!("", []);
+
+      expect(calls[0]?.url).toBe("https://api.github.com/repos/owent/example/pulls/42/reviews");
+      expect(calls[0]?.init.headers).toMatchObject({ authorization: "Bearer ghs_APPINSTALLATIONTOKEN" });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
 
   it("creates a GitHub issue publisher from channel trigger and workspace", async () => {
     const calls: { url: string; init: { headers?: Record<string, string>; body?: string } }[] = [];
@@ -1597,7 +1650,7 @@ describe("createOutputPublisherResolverFromConfig", () => {
         },
       } as Partial<AppConfig>);
       const resolver = createOutputPublisherResolverFromConfig(config);
-      const publisher = resolver({
+      const publisher = await resolver({
         reviewEvent: {
           triggerName: "gitea-internal",
           provider: "gitea",
@@ -1626,6 +1679,104 @@ describe("createOutputPublisherResolverFromConfig", () => {
       } else {
         process.env.GITEA_TOKEN = originalToken;
       }
+    }
+  });
+
+  it("resolves a GitHub App installation token and passes it to the PR review dispatcher", async () => {
+    const { privateKey } = generateKeyPairSync("rsa", {
+      modulusLength: 2048,
+      publicKeyEncoding: { type: "spki", format: "pem" },
+      privateKeyEncoding: { type: "pkcs8", format: "pem" },
+    });
+
+    const appServiceCalls: string[] = [];
+    const appService = new GithubAppTokenService({
+      appId: "123456",
+      privateKey: privateKey.toString(),
+      fetchImpl: (async (url: string | URL) => {
+        const urlStr = typeof url === "string" ? url : url.toString();
+        appServiceCalls.push(urlStr);
+        if (urlStr.includes("/repos/owent/example/installation")) {
+          return response({ id: 424242 });
+        }
+        if (urlStr.includes("/app/installations/424242/access_tokens")) {
+          return response({
+            token: "ghs_APPWIRINGTOKEN",
+            expires_at: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+          });
+        }
+        return response({}, 404);
+      }) as typeof fetch,
+    });
+
+    const dispatcherCalls: { url: string; init: { headers?: Record<string, string> } }[] = [];
+    vi.stubGlobal("fetch", async (url: string, init?: { headers?: Record<string, string> }) => {
+      dispatcherCalls.push({ url, init: init ?? {} });
+      return response({ id: 987 });
+    });
+
+    try {
+      const config = makeConfig({
+        triggers: [
+          {
+            name: "github-app",
+            kind: "github",
+            base_url: "https://github.com",
+            app: { app_id: "123456", private_key_env: "APP_KEY" },
+          },
+        ],
+        outputs: {
+          template_engine: "handlebars",
+          channels: [
+            { name: "github-pr", kind: "github_pr_review", trigger: "github-app", review_update_strategy: "always_new" },
+          ],
+        },
+        workspaces: {
+          cache: { max_total_gb: 50, eviction: "lru", ttl_days: 30 },
+          defaults: {},
+          instances: {
+            "test-workspace": {
+              source_repo: { trigger: "github-app", repo: "owent/example" },
+              outputs: {
+                line_comments: ["github-pr"],
+                summary: ["github-pr"],
+              },
+            },
+          },
+        },
+      } as Partial<AppConfig>);
+
+      const resolver = createOutputPublisherResolverFromConfig(config, {
+        appTokenServices: new Map([["github-app", appService]]),
+      });
+      const publisher = await resolver({
+        reviewEvent: {
+          triggerName: "github-app",
+          provider: "github",
+          workspaceId: "test-workspace",
+          targetKind: "pull_request",
+          repoRef: "owent/example",
+          author: {},
+          reason: "github:opened",
+        },
+        payload: { pull_request: { number: 55 } },
+        provider: "github",
+        eventName: "pull_request",
+      });
+
+      assertSummaryPublisher(publisher);
+      await publisher.publishSummary("Review summary", [
+        { file: "src/app.ts", line: 7, severity: "high", category: "correctness", message: "Issue." },
+      ]);
+
+      // The App token service resolved the installation id then minted a token.
+      expect(appServiceCalls.some((url) => url.includes("/repos/owent/example/installation"))).toBe(true);
+      expect(appServiceCalls.some((url) => url.includes("/app/installations/424242/access_tokens"))).toBe(true);
+      // The PR review dispatcher used the App-resolved installation token, not a PAT.
+      expect(dispatcherCalls[0]?.url).toBe("https://api.github.com/repos/owent/example/pulls/55/reviews");
+      expect(dispatcherCalls[0]?.init.headers).toMatchObject({ authorization: "Bearer ghs_APPWIRINGTOKEN" });
+    } finally {
+      vi.unstubAllGlobals();
     }
   });
 
@@ -1666,7 +1817,7 @@ describe("createOutputPublisherResolverFromConfig", () => {
           },
         },
       } as Partial<AppConfig>);
-      const publisher = createOutputPublisherResolverFromConfig(config)({
+      const publisher = await createOutputPublisherResolverFromConfig(config)({
         reviewEvent: {
           triggerName: "gitea-internal",
           provider: "gitea",
@@ -1748,7 +1899,7 @@ describe("createOutputPublisherResolverFromConfig", () => {
           },
         },
       } as Partial<AppConfig>);
-      const publisher = createOutputPublisherResolverFromConfig(config)({
+      const publisher = await createOutputPublisherResolverFromConfig(config)({
         reviewEvent: {
           triggerName: "gitea-internal",
           provider: "gitea",
@@ -1834,7 +1985,7 @@ describe("createOutputPublisherResolverFromConfig", () => {
           },
         },
       } as Partial<AppConfig>);
-      const publisher = createOutputPublisherResolverFromConfig(config)({
+      const publisher = await createOutputPublisherResolverFromConfig(config)({
         reviewEvent: {
           triggerName: "github-saas",
           provider: "github",
@@ -1910,7 +2061,7 @@ describe("createOutputPublisherResolverFromConfig", () => {
           },
         },
       } as Partial<AppConfig>);
-      const publisher = createOutputPublisherResolverFromConfig(config)({
+      const publisher = await createOutputPublisherResolverFromConfig(config)({
         reviewEvent: {
           triggerName: "gitea-internal",
           provider: "gitea",
@@ -1979,7 +2130,7 @@ describe("createOutputPublisherResolverFromConfig", () => {
           },
         },
       } as Partial<AppConfig>);
-      const publisher = createOutputPublisherResolverFromConfig(config)({
+      const publisher = await createOutputPublisherResolverFromConfig(config)({
         reviewEvent: {
           triggerName: "gitea-internal",
           provider: "gitea",
@@ -2058,7 +2209,7 @@ describe("createOutputPublisherResolverFromConfig", () => {
           },
         },
       } as Partial<AppConfig>);
-      const publisher = createOutputPublisherResolverFromConfig(config)({
+      const publisher = await createOutputPublisherResolverFromConfig(config)({
         reviewEvent: {
           triggerName: "gitea-internal",
           provider: "gitea",
@@ -2135,7 +2286,7 @@ describe("createOutputPublisherResolverFromConfig", () => {
           },
         },
       } as Partial<AppConfig>);
-      const publisher = createOutputPublisherResolverFromConfig(config)({
+      const publisher = await createOutputPublisherResolverFromConfig(config)({
         reviewEvent: {
           triggerName: "gitea-internal",
           provider: "gitea",
@@ -2203,7 +2354,7 @@ describe("createOutputPublisherResolverFromConfig", () => {
           },
         },
       } as Partial<AppConfig>);
-      const publisher = createOutputPublisherResolverFromConfig(config)({
+      const publisher = await createOutputPublisherResolverFromConfig(config)({
         reviewEvent: {
           triggerName: "gitea-internal",
           provider: "gitea",
@@ -2263,7 +2414,7 @@ describe("createOutputPublisherResolverFromConfig", () => {
           },
         },
       } as Partial<AppConfig>);
-      const publisher = createOutputPublisherResolverFromConfig(config)({
+      const publisher = await createOutputPublisherResolverFromConfig(config)({
         reviewEvent: {
           triggerName: "gitea-internal",
           provider: "gitea",
@@ -2334,7 +2485,7 @@ describe("createOutputPublisherResolverFromConfig", () => {
           },
         },
       } as Partial<AppConfig>);
-      const publisher = createOutputPublisherResolverFromConfig(config)({
+      const publisher = await createOutputPublisherResolverFromConfig(config)({
         reviewEvent: {
           triggerName: "gitea-internal",
           provider: "gitea",
@@ -2423,7 +2574,7 @@ describe("createOutputPublisherResolverFromConfig", () => {
           },
         },
       } as Partial<AppConfig>);
-      const publisher = createOutputPublisherResolverFromConfig(config)({
+      const publisher = await createOutputPublisherResolverFromConfig(config)({
         reviewEvent: {
           triggerName: "gitea-internal",
           provider: "gitea",
@@ -2470,9 +2621,9 @@ describe("createOutputPublisherResolverFromConfig", () => {
     }
   });
 
-  it("returns undefined when pull number is not present", () => {
+  it("returns undefined when pull number is not present", async () => {
     const resolver = createOutputPublisherResolverFromConfig(makeConfig());
-    const publisher = resolver({
+    const publisher = await resolver({
       reviewEvent: {
         triggerName: "gitea-internal",
         provider: "gitea",

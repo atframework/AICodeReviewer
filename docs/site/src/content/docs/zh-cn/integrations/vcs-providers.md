@@ -57,9 +57,35 @@ triggers:
 `AICR_GITHUB_WEBHOOK_SECRET` 相同的 HMAC 密钥，订阅 **Pull requests**。AICR 把
 `pull_request` 的 `review_requested` 动作当作 PR 重审 trigger。
 
-对于评论触发的重审，配置 `token_env` 以便 AICR 拉取 PR head/base SHA 和分支信息。若该拉取
-不可用，AICR 用评论 payload 中的 PR URL 作为去重标识，而不会把不相关的 PR 合并到 `unknown`
-目标。
+对于评论触发的重审，配置 `token_env`（或 GitHub App `app` 块——见下文）以便 AICR 拉取 PR
+head/base SHA 和分支信息。若该拉取不可用，AICR 用评论 payload 中的 PR URL 作为去重标识，而不会
+把不相关的 PR 合并到 `unknown` 目标。
+
+#### GitHub App 认证（M12）
+
+除了静态 PAT，还可以配置 GitHub App，让 AICR 签发 RS256 JWT 并自动刷新 installation token
+（零新增依赖）：
+
+```yaml
+triggers:
+  - name: github-app
+    kind: github
+    base_url: https://github.com     # GHE：设为你的主机；API 推导为 {base_url}/api/v3
+    app:
+      app_id: "123456"                # 数字 App ID（或使用 client_id）
+      private_key_env: AICR_GITHUB_APP_PRIVATE_KEY   # PEM 或 base64 PEM
+      # private_key_path: /run/secrets/github-app.pem  # 替代：挂载的 .pem 文件
+      # installation_id: "7890123"     # 可选；省略时按仓库自动解析
+    webhook_secret_env: AICR_GITHUB_WEBHOOK_SECRET
+```
+
+`app` 与 `token_env` 互斥。通道级 `token_env` 优先于 trigger 级 `app` token。trigger 的
+`base_url` 语义是**主机**（`https://github.com` 或 GHE 主机）；AICR 用它签发 App JWT 与 git
+clone，并为经此 trigger 路由的 GitHub 输出通道自动派生 REST API base（`https://api.github.com`
+或 `{host}/api/v3`），已使用 `.../api/v3` 的旧配置原样保留。App 最小权限：
+Contents Read、Pull requests Read/Write、Issues Read/Write、Metadata Read。订阅事件：
+Pull request、Push、Issue comment、Issues。`installation` 和 `installation_repositories`
+事件返回 `202 unsupported_event`。
 
 ### GitLab
 

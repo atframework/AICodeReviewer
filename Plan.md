@@ -24,10 +24,10 @@
 - 当前活跃方向是 M11：可发布到 GitHub Pages 的用户文档站子工程。M11-P1（脚手架）、
   M11-P2（骨架 + 首批核心页）、M11-P3（全章节双语正文迁移）和 M11-P5（发布 workflow）已完成；
   下一步是 Pages 设置核验与 M11-P6 打磨（链接检查、配置字段覆盖校验）。
-- 新增运行时方向是 M12：GitHub App 原生认证。当前 GitHub 出站认证只支持静态 PAT /
-  预先获取的 installation token（启动时解析一次、不刷新），M12 引入基于 `node:crypto`
-  的 App JWT → installation token 自动签发与刷新（零新增依赖）。执行包见 §8.3，
-  稳定合同见 `docs/ai/architecture.md` §3.2.1。
+- 新增运行时方向是 M12：GitHub App 原生认证。M12-P1–P4（配置 schema、token 服务、三个注入点
+  接入、webhook 事件 + GHE + 文档）已完成；M12-P5（真实 App e2e）仍属 Backlog。基于
+  `node:crypto` 的 App JWT → installation token 自动签发与刷新已交付（零新增依赖）。执行包见
+  §8.3，稳定合同见 `docs/ai/architecture.md` §3.2.1。
 - 仍需真实外部系统验收的项目集中在 §8.4，避免散落在已完成里程碑描述中。
 
 ### 1.3 文档地图
@@ -86,8 +86,8 @@
 - Git、P4、SVN、GitHub、GitLab、Gitea/Forgejo 差异留在适配层。
 - `aicr.fetch_more_context` 与 `aicr.try_blame` 是只读上下文工具，详细边界见
   `docs/ai/architecture.md` §3.2、§3.9.2。
-- GitHub 出站认证支持静态 PAT / installation token；GitHub App 原生 JWT →
-  installation token 自动签发与刷新为 M12 计划，token 服务归属 `packages/server`，
+- GitHub 出站认证支持静态 PAT / installation token，以及 GitHub App 原生 JWT →
+  installation token 自动签发与刷新（M12 已交付）；token 服务归属 `packages/server`，
   `packages/vcs`、`packages/outputs` 继续只消费字符串 token，合同见
   `docs/ai/architecture.md` §3.2.1。
 
@@ -228,7 +228,7 @@
 | M9 | 基本完成 | `docs/ai/milestones/M9.md` | 不进入版本 bump / git tag |
 | M10 | 基本完成 | `docs/ai/milestones/M10.md` | 真实外部 Redis smoke/e2e 按需放入 Backlog |
 | M11 | 进行中 | `docs/ai/documentation-site-plan.md` | Pages 设置核验；M11-P6 打磨 |
-| M12 | 进行中 | 本文 §3.2.1 / `docs/ai/architecture.md` §3.2.1 | GitHub App 原生认证；M12-P1 配置 schema 为下一本地执行包 |
+| M12 | 基本完成 | 本文 §3.2.1 / `docs/ai/architecture.md` §3.2.1 | P1–P4 已交付；M12-P5 真实 App e2e 留在 Backlog |
 
 ### 8.2 当前执行包
 
@@ -262,17 +262,31 @@ README 增强 logo、扩展 badge、导航链接行、Review output standards / 
 `validate-public-content.mjs`（扫描 `.md`+`.mdx`）、`AGENTS.md` #59、中英 `development/index.md`、
 `docs/site/README.md`。下一本地执行包建议：链接检查、配置字段覆盖校验脚本、SEO 与贡献规则自动化。
 
-#### 8.2.1 M12 GitHub App 原生认证（计划中）
+#### 8.2.1 M12 GitHub App 原生认证（P1–P4 已交付）
 
 目标：在不引入新依赖的前提下，为 GitHub trigger 提供 GitHub App 原生认证，自动签发与
-刷新 installation access token，取代“手动粘贴会过期的 installation token”或长期 PAT 的现状。
+刷新 installation access token，取代"手动粘贴会过期的 installation token"或长期 PAT 的现状。
+
+已交付（M12-P1–P4）：
+
+- **P1 配置 schema**：`triggerSchema` 新增可选 `app` 块（`app_id`/`client_id`、
+  `private_key_env`/`private_key_path`、可选 `installation_id`）+ superRefine 校验
+  （`app` 与 `token_env` 互斥、`app_id`/`client_id` 至少其一、`private_key_env`/`private_key_path`
+  恰好其一、`app` 仅 `kind: github`）。
+- **P2 GithubAppTokenService**：`packages/server/src/github-app-token.ts` 用 `node:crypto`
+  签发 RS256 App JWT（`iat-60s`、`exp+540s`、`iss=app_id|client_id`），换取并缓存 installation
+  token（剩余 < 5min 刷新），按 `owner/repo` 动态解析并缓存 installation id；GHE `{base_url}/api/v3`；
+  401/403/404 可操作错误映射。
+- **P3 三个注入点**：`ReviewOutputPublisherResolver` 与 `vcsFactory` 改为异步；bootstrap 创建
+  `GithubAppTokenService` 实例 Map 并传入 resolver / vcsFactory / webhook config；channel 级
+  `token_env` 优先于 trigger 级 `app` token；`vcs`/`outputs` 保持只消费字符串 token。
+- **P4 webhook + GHE + 文档**：`installation`/`installation_repositories` 事件返回 `202
+  unsupported_event`；GHE `base_url` → `/api/v3`；`ghs_`/PEM/JWT 脱敏回归测试已补；定稿
+  `example/config.yaml`、`example/README.md`、`docs/ai/architecture.md` §3.2.1、`decisions.md` D32。
 
 关键调研结论（已验证）：
 
-- 当前所有 GitHub 出站认证只消费一个静态字符串 token，在 `packages/server/src/bootstrap.ts`
-  启动时通过 `resolveEnv(token_env)` 解析一次；`packages/vcs/src/git.ts` 已用
-  `x-access-token:<token>@` 约定，天然兼容 installation token。
-- 三个 token 注入点（VCS builder、output publisher resolver、webhook PR 详情拉取）全部在
+- 三个 token 注入点（VCS factory、output publisher resolver、webhook PR 详情拉取）全部在
   `packages/server`；因此 App token 服务归属 `packages/server`，`vcs`/`outputs` 保持只消费
   字符串 token 的合同不变（遵守公共模块平台中立原则）。
 - `node:crypto` 可直接做 RS256 JWT 签名（`crypto.createSign('RSA-SHA256')`），无需
@@ -280,12 +294,10 @@ README 增强 logo、扩展 badge、导航链接行、Review output standards / 
 - webhook payload schema 均为 `.passthrough()`，`installation.id` 可直接读取；
   签名校验（`x-hub-signature-256` + webhook secret）对 App 与 PAT 通用，不需改动。
 - `packages/core/src/secret-scrubber.ts` 的 `gh[pousr]_` 模式已覆盖 installation token
-  前缀 `ghs_`，App 私钥（PEM）由 `private_key` 规则覆盖、App JWT 由 `jwt` 规则覆盖；
-  M12 只需补回归测试，不新增脱敏规则。
+  前缀 `ghs_`，App 私钥（PEM）由 `private_key` 规则覆盖、App JWT 由 `jwt` 规则覆盖。
 
-拆分为本地可闭环的 M12-P1…P4（见 §8.3）+ 依赖真实 App 注册的 M12-P5 e2e（见 §8.4）。
-详细合同（配置 `app` 块、token 服务、installation 解析、GHE `/api/v3`、安全与权限最小化）
-见 `docs/ai/architecture.md` §3.2.1，决策见 `docs/ai/decisions.md` D32。
+M12-P5（真实 App e2e）仍属 Backlog（见 §8.4）。详细合同见 `docs/ai/architecture.md` §3.2.1，
+决策见 `docs/ai/decisions.md` D32。
 
 ### 8.3 本地优先执行队列
 
@@ -296,10 +308,10 @@ README 增强 logo、扩展 badge、导航链接行、Review output standards / 
 | M11-P3 全章节正文迁移 ✅ | 配置各命名空间、CLI、MCP、VCS/agent 集成、Docker/Podman 部署、运维、参考、排障、贡献指南占位页全部替换为中英双语正文 | markdownlint、公开内容校验、站点构建、字段/命令抽查通过 |
 | M11-P4 配置/CLI 参考校验自动化 | 从 `packages/core/src/config.ts` 和 CLI help 建立可校验参考页流程 | 生成或校验脚本可重复运行 |
 | M11-P5 发布链路 ✅ | main 文档变更触发 docs 构建并通过 `DEPLOY_DOCUMENT_GH_PAGES_KEY` 发布到 `gh-pages`；保留 `aicr.atframe.work` 自定义域名和发布说明 | `pnpm docs:build` 可本地验证；线上生效需仓库 Pages source 指向 `gh-pages` / `/` 并绑定自定义域名 |
-| M12-P1 GitHub App 配置 schema | `triggerSchema`（`packages/core/src/config.ts`）新增可选 `app` 块（`app_id`/`client_id`、`private_key_env`/`private_key_path`、可选 `installation_id`）+ superRefine 验证；同步 `config.test.ts`、`example/config.yaml`、文档 | `eslint` + `tsc` + `vitest` 通过；config 测覆盖合法/冲突/缺失三类用例 |
-| M12-P2 GithubAppTokenService | `packages/server/src/github-app-token.ts`：`node:crypto` RS256 JWT 签发、installation token 缓存/刷新（<5min 提前刷新）、repo→installation 解析与缓存、401/403/404 可操作错误映射 | 新增 `github-app-token.test.ts`（mock fetch + `generateKeyPairSync` 测密钥），JWT 结构/缓存/刷新/GHE base URL 均覆盖 |
-| M12-P3 注入三个 token 点 | 将 token 服务接入 `buildVcsAdapter`、`createOutputPublisherResolverFromConfig`（resolver 改异步）、webhook PR 详情拉取；vcs/outputs 保持字符串 token；补 `ghs_` 脱敏回归测试 | resolver 异步化后 2 个调用点（`index.ts`、`review-orchestrator.ts`）await；App/PAT 两条路径均有测覆盖 |
-| M12-P4 installation 事件 + GHE + 文档 | webhook `installation`/`installation_repositories` 返回 `202 unsupported_event`（可选逐出缓存）；GHE `base_url` → `/api/v3`；定稿 `example/README.md`、`docs/output-channels.md`、`architecture.md` §3.2.1、`decisions.md` D32 | markdownlint + 全量验证链通过；webhook 测覆盖 installation 事件与 id 提取 |
+| M12-P1 GitHub App 配置 schema ✅ | `triggerSchema`（`packages/core/src/config.ts`）新增可选 `app` 块（`app_id`/`client_id`、`private_key_env`/`private_key_path`、可选 `installation_id`）+ superRefine 验证；同步 `config.test.ts`、`example/config.yaml`、文档 | `eslint` + `tsc` + `vitest` 通过；config 测覆盖合法/冲突/缺失三类用例 |
+| M12-P2 GithubAppTokenService ✅ | `packages/server/src/github-app-token.ts`：`node:crypto` RS256 JWT 签发、installation token 缓存/刷新（<5min 提前刷新）、repo→installation 解析与缓存、401/403/404 可操作错误映射 | 新增 `github-app-token.test.ts`（mock fetch + `generateKeyPairSync` 测密钥），JWT 结构/缓存/刷新/GHE base URL 均覆盖 |
+| M12-P3 注入三个 token 点 ✅ | 将 token 服务接入 `vcsFactory`（改异步）、`createOutputPublisherResolverFromConfig`（resolver 改异步）、webhook PR 详情拉取（`appTokenResolver`）；vcs/outputs 保持字符串 token；补 `ghs_` 脱敏回归测试 | resolver 异步化后 2 个调用点（`index.ts`、`review-orchestrator.ts`）await；App/PAT 两条路径均有测覆盖 |
+| M12-P4 installation 事件 + GHE + 文档 ✅ | webhook `installation`/`installation_repositories` 返回 `202 unsupported_event`；GHE `base_url` → `/api/v3`；定稿 `example/README.md`、`docs/ai/architecture.md` §3.2.1、`decisions.md` D32 | markdownlint + 全量验证链通过；webhook 测覆盖 installation 事件与 id 提取 |
 
 ### 8.4 Backlog（依赖外部系统或延后扩展）
 

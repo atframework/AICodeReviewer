@@ -91,6 +91,12 @@ import { type AuthConfig } from "./auth.js";
 import { createReviewDeduplicator } from "./review-deduplicator.js";
 import { resolveAdminAuthConfig } from "./admin-auth.js";
 import {
+  createGithubAppTokenService,
+  resolveGithubAppTriggerAuth,
+  resolveGithubApiBaseUrl,
+} from "./github-app-token.js";
+import type { GithubAppTokenService } from "./github-app-token.js";
+import {
   createHttpModelCatalogFetcher,
   createMemoryModelCatalogBackend,
   createModelCatalogService,
@@ -556,6 +562,7 @@ export async function createSandboxBackendFromConfig(config: AppConfig): Promise
 export function resolveGiteaWebhookConfig(
   config: AppConfig,
   triggerName?: string,
+  appTokenServices?: ReadonlyMap<string, GithubAppTokenService>,
 ): VcsWebhookConfig | undefined {
   const trigger = triggerName
     ? config.triggers.find((t) => t.name === triggerName && (t.kind === "gitea" || t.kind === "forgejo"))
@@ -565,12 +572,13 @@ export function resolveGiteaWebhookConfig(
     return undefined;
   }
 
-  return buildWebhookConfigFromTrigger(config, trigger);
+  return buildWebhookConfigFromTrigger(config, trigger, appTokenServices);
 }
 
 function buildWebhookConfigFromTrigger(
   config: AppConfig,
   trigger: AppConfig["triggers"][number],
+  appTokenServices?: ReadonlyMap<string, GithubAppTokenService>,
 ): VcsWebhookConfig {
   const triggerConfig = trigger as Record<string, unknown>;
   const webhookSecretEnv = triggerConfig.webhook_secret_env as string | undefined;
@@ -580,6 +588,8 @@ function buildWebhookConfigFromTrigger(
   const baseUrl = triggerConfig.base_url as string | undefined;
   const workspaceId = resolveWorkspaceIdFromTrigger(config, trigger.name);
   const repoRef = resolveWorkspaceRepoRef(config, trigger.name, workspaceId) ?? resolveWorkspaceRepoRef(config, trigger.name);
+  const hasApp = isPlainObject(triggerConfig.app);
+  const appTokenService = hasApp ? appTokenServices?.get(trigger.name) : undefined;
 
   return {
     triggerName: trigger.name,
@@ -589,6 +599,8 @@ function buildWebhookConfigFromTrigger(
     ...(webhookSecret !== undefined ? { webhookSecret } : {}),
     ...(token !== undefined ? { token } : {}),
     ...(baseUrl !== undefined ? { baseUrl } : {}),
+    ...(appTokenService ? { appTokenResolver: (installationId: number) => appTokenService.getInstallationToken(installationId) } : {}),
+    ...(appTokenService ? { evictTokenCache: (installationId?: number) => appTokenService.evict(installationId) } : {}),
   };
 }
 
@@ -596,20 +608,22 @@ export function resolveGenericWebhookConfigs(
   config: AppConfig,
   kind: string,
   triggerName?: string,
+  appTokenServices?: ReadonlyMap<string, GithubAppTokenService>,
 ): readonly VcsWebhookConfig[] {
   const triggers = triggerName
     ? config.triggers.filter((trigger) => trigger.name === triggerName && trigger.kind === kind)
     : config.triggers.filter((trigger) => trigger.kind === kind);
 
-  return triggers.map((trigger) => buildWebhookConfigFromTrigger(config, trigger));
+  return triggers.map((trigger) => buildWebhookConfigFromTrigger(config, trigger, appTokenServices));
 }
 
 export function resolveGenericWebhookConfig(
   config: AppConfig,
   kind: string,
   triggerName?: string,
+  appTokenServices?: ReadonlyMap<string, GithubAppTokenService>,
 ): VcsWebhookConfig | undefined {
-  return resolveGenericWebhookConfigs(config, kind, triggerName)[0];
+  return resolveGenericWebhookConfigs(config, kind, triggerName, appTokenServices)[0];
 }
 
 function resolveTriggerRetryConfig(config: AppConfig): TriggerRetryConfig | undefined {
@@ -821,6 +835,7 @@ interface TargetUrlTemplateOptions {
 
 export interface OutputPublisherConfigOptions {
   readonly baseDir?: string;
+  readonly appTokenServices?: ReadonlyMap<string, GithubAppTokenService>;
 }
 
 function readNoProblemsAction(value: unknown): NoProblemsAction | undefined {
@@ -1255,6 +1270,7 @@ export function createOutputPublisherFromConfig(
   workspaceId?: string,
   reviewEvent?: ReviewEvent,
   baseDir = process.cwd(),
+  resolvedTriggerToken?: string,
 ): ReviewOutputPublisher | undefined {
   const channels = config.outputs.channels;
   if (channels.length === 0) {
@@ -1292,6 +1308,11 @@ export function createOutputPublisherFromConfig(
   const triggerConfig = (trigger ?? {}) as Record<string, unknown>;
   const baseUrl = (channelConfig.base_url as string | undefined) ??
     (triggerConfig.base_url as string | undefined);
+  // GitHub triggers carry `base_url` as the host (github.com / GHE host) for App
+  // JWT and git clone, but GitHub REST dispatchers need the API base. Derive it
+  // for GitHub channels only; leave `baseUrl` (host) for URL-template links and
+  // for gitea/gitlab dispatchers.
+  const githubApiBaseUrl = baseUrl ? resolveGithubApiBaseUrl(baseUrl) : undefined;
   const commitUrlTemplate = readString(channelConfig, "commit_url_template", "commitUrlTemplate") ??
     readString(triggerConfig, "commit_url_template", "commitUrlTemplate");
   const revisionUrlTemplate = readString(channelConfig, "revision_url_template", "revisionUrlTemplate") ??
@@ -1319,6 +1340,9 @@ export function createOutputPublisherFromConfig(
   const reviewedTag = workspaceLabels?.reviewed_tag ?? config.review.labels?.reviewed_tag;
   const tokenEnv = (channelConfig.token_env as string | undefined) ??
     (triggerConfig.token_env as string | undefined);
+  const resolvedToken = tokenEnv
+    ? (resolveEnv(tokenEnv) ?? "")
+    : (resolvedTriggerToken ?? "");
   const explicitOwner = channelConfig.owner as string | undefined;
   const explicitRepo = channelConfig.repo as string | undefined;
   const workspaceRepoRef = trigger
@@ -1347,7 +1371,7 @@ export function createOutputPublisherFromConfig(
 
     const dispatcher = createGiteaPullRequestReviewDispatcher({
       baseUrl,
-      ...(tokenEnv ? { token: resolveEnv(tokenEnv) ?? "" } : {}),
+      ...(resolvedToken ? { token: resolvedToken } : {}),
       owner,
       repo,
       pullNumber,
@@ -1384,8 +1408,8 @@ export function createOutputPublisherFromConfig(
     }
 
     const dispatcher = createGithubPullRequestReviewDispatcher({
-      ...(baseUrl ? { baseUrl } : {}),
-      ...(tokenEnv ? { token: resolveEnv(tokenEnv) ?? "" } : {}),
+      ...(githubApiBaseUrl ? { baseUrl: githubApiBaseUrl } : {}),
+      ...(resolvedToken ? { token: resolvedToken } : {}),
       owner,
       repo,
       pullNumber,
@@ -1422,8 +1446,8 @@ export function createOutputPublisherFromConfig(
     }
 
     const dispatcher = createGithubIssueDispatcher({
-      ...(baseUrl ? { baseUrl } : {}),
-      ...(tokenEnv ? { token: resolveEnv(tokenEnv) ?? "" } : {}),
+      ...(githubApiBaseUrl ? { baseUrl: githubApiBaseUrl } : {}),
+      ...(resolvedToken ? { token: resolvedToken } : {}),
       owner,
       repo,
       issueNumber: pullNumber,
@@ -1483,8 +1507,8 @@ export function createOutputPublisherFromConfig(
     const ref = reviewEvent?.headSha ?? "main";
 
     const dispatcher = createGithubProblemIssueDispatcher({
-      ...(baseUrl ? { baseUrl } : {}),
-      ...(tokenEnv ? { token: resolveEnv(tokenEnv) ?? "" } : {}),
+      ...(githubApiBaseUrl ? { baseUrl: githubApiBaseUrl } : {}),
+      ...(resolvedToken ? { token: resolvedToken } : {}),
       owner,
       repo,
       channelName: channel.name,
@@ -1538,7 +1562,7 @@ export function createOutputPublisherFromConfig(
 
     const dispatcher = createGitlabMergeRequestReviewDispatcher({
       ...(baseUrl ? { baseUrl } : {}),
-      ...(tokenEnv ? { token: resolveEnv(tokenEnv) ?? "" } : {}),
+      ...(resolvedToken ? { token: resolvedToken } : {}),
       projectId,
       mergeRequestIid,
       ...(reviewEvent?.baseSha ? { baseSha: reviewEvent.baseSha } : {}),
@@ -1574,7 +1598,7 @@ export function createOutputPublisherFromConfig(
 
     const dispatcher = createGiteaIssueDispatcher({
       baseUrl,
-      ...(tokenEnv ? { token: resolveEnv(tokenEnv) ?? "" } : {}),
+      ...(resolvedToken ? { token: resolvedToken } : {}),
       owner,
       repo,
       indexNumber: pullNumber,
@@ -1635,7 +1659,7 @@ export function createOutputPublisherFromConfig(
 
     const dispatcher = createGiteaProblemIssueDispatcher({
       baseUrl,
-      ...(tokenEnv ? { token: resolveEnv(tokenEnv) ?? "" } : {}),
+      ...(resolvedToken ? { token: resolvedToken } : {}),
       owner,
       repo,
       channelName: channel.name,
@@ -1818,13 +1842,51 @@ function resolveOutputChannelNames(
   return [];
 }
 
+async function resolveTriggerTokenForContext(
+  config: AppConfig,
+  context: ReviewOrchestrationContext,
+  appTokenServices?: ReadonlyMap<string, GithubAppTokenService>,
+): Promise<string | undefined> {
+  const triggerName = context.reviewEvent.triggerName;
+  if (!triggerName || !appTokenServices) {
+    return undefined;
+  }
+
+  const service = appTokenServices.get(triggerName);
+  if (!service) {
+    return undefined;
+  }
+
+  const trigger = config.triggers.find((t) => t.name === triggerName && t.kind === "github");
+  if (!trigger) {
+    return undefined;
+  }
+
+  const triggerConfig = trigger as Record<string, unknown>;
+  if (!isPlainObject(triggerConfig.app)) {
+    return undefined;
+  }
+
+  const parsed = parseRepoRef(context.reviewEvent.repoRef);
+  if (!parsed) {
+    return undefined;
+  }
+
+  return service.getInstallationTokenForRepo(parsed.owner, parsed.repo);
+}
+
 export function createOutputPublisherResolverFromConfig(
   config: AppConfig,
   options: OutputPublisherConfigOptions = {},
 ): ReviewOutputPublisherResolver {
-  return (context) => {
+  return async (context) => {
     const pullNumber = extractPullNumber(context.payload);
     const baseDir = options.baseDir ?? process.cwd();
+    const resolvedTriggerToken = await resolveTriggerTokenForContext(
+      config,
+      context,
+      options.appTokenServices,
+    );
     const linePublishers = resolveOutputChannelNames(config, context, "line_comments")
       .map((name): OutputPublisherEntry | undefined => {
         const publisher = createOutputPublisherFromConfig(
@@ -1834,6 +1896,7 @@ export function createOutputPublisherResolverFromConfig(
           context.reviewEvent.workspaceId,
           context.reviewEvent,
           baseDir,
+          resolvedTriggerToken,
         );
         return publisher ? { name, publisher } : undefined;
       })
@@ -1847,6 +1910,7 @@ export function createOutputPublisherResolverFromConfig(
           context.reviewEvent.workspaceId,
           context.reviewEvent,
           baseDir,
+          resolvedTriggerToken,
         );
         return publisher ? { name, publisher } : undefined;
       })
@@ -1911,6 +1975,7 @@ export function createVcsAdapterFromConfig(
   repositoryDir: string,
   triggerName?: string,
   repoRef?: string,
+  options?: { readonly resolvedToken?: string },
 ): GitVcsAdapter | P4VcsAdapter | SvnVcsAdapter {
   const p4Trigger = triggerName
     ? config.triggers.find((t) => t.name === triggerName && t.kind === "p4")
@@ -1989,7 +2054,9 @@ export function createVcsAdapterFromConfig(
     ?? (gitTriggerKind === "github" ? "https://github.com" : undefined);
   const remoteUrl = buildGitRemoteUrl(effectiveBaseUrl, repoRef);
   const tokenEnv = gitTriggerConfig?.token_env as string | undefined;
-  const token = tokenEnv ? resolveEnv(tokenEnv) : undefined;
+  const token = tokenEnv
+    ? resolveEnv(tokenEnv)
+    : options?.resolvedToken;
 
   return createGitVcsAdapter({
     repositoryDir: resolve(repositoryDir),
@@ -2182,11 +2249,35 @@ function resolveSummarizeModelFromConfig(config: AppConfig): ModelSpec | undefin
   return resolveModelSpecFromConfig(config, fallbackEntry.provider);
 }
 
+async function createAppTokenServices(config: AppConfig): Promise<Map<string, GithubAppTokenService>> {
+  const services = new Map<string, GithubAppTokenService>();
+  for (const trigger of config.triggers) {
+    if (trigger.kind !== "github") {
+      continue;
+    }
+    const triggerConfig = trigger as Record<string, unknown>;
+    if (!isPlainObject(triggerConfig.app)) {
+      continue;
+    }
+    try {
+      const auth = await resolveGithubAppTriggerAuth(triggerConfig, resolveEnv);
+      services.set(trigger.name, createGithubAppTokenService(auth));
+    } catch (error) {
+      throw new Error(
+        `Failed to initialize GitHub App token service for trigger "${trigger.name}": ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+  return services;
+}
+
 export async function bootstrapServerApp(options: BootstrapServerOptions): Promise<ServerAppOptions> {
   const { config, baseSystemPrompt, baseDir = process.cwd(), jobHandler } = options;
 
-  const giteaConfig = resolveGiteaWebhookConfig(config);
-  const githubConfigs = resolveGenericWebhookConfigs(config, "github");
+  const appTokenServices = await createAppTokenServices(config);
+
+  const giteaConfig = resolveGiteaWebhookConfig(config, undefined, appTokenServices);
+  const githubConfigs = resolveGenericWebhookConfigs(config, "github", undefined, appTokenServices);
   const gitlabConfigs = resolveGenericWebhookConfigs(config, "gitlab");
   const p4Config = resolveP4TriggerConfig(config);
   const svnConfig = resolveSvnTriggerConfig(config);
@@ -2320,12 +2411,20 @@ export async function bootstrapServerApp(options: BootstrapServerOptions): Promi
     },
     sourceRootResolver,
     vcs: createVcsAdapterFromConfig(config, baseDir),
-    vcsFactory: (sourceRoot: string, context: ReviewOrchestrationContext) =>
-      createVcsAdapterFromConfig(config, sourceRoot, context.reviewEvent.triggerName, context.reviewEvent.repoRef),
+    vcsFactory: async (sourceRoot: string, context: ReviewOrchestrationContext) => {
+      const resolvedToken = await resolveTriggerTokenForContext(config, context, appTokenServices);
+      return createVcsAdapterFromConfig(
+        config,
+        sourceRoot,
+        context.reviewEvent.triggerName,
+        context.reviewEvent.repoRef,
+        resolvedToken !== undefined ? { resolvedToken } : undefined,
+      );
+    },
     llm: llmClient,
     model,
     dryRun: false,
-    outputPublisherResolver: createOutputPublisherResolverFromConfig(config, { baseDir }),
+    outputPublisherResolver: createOutputPublisherResolverFromConfig(config, { baseDir, appTokenServices }),
     sandbox,
     agentAdapter,
     agentTimeoutMs: config.agent.timeout_seconds * 1000,

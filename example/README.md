@@ -358,33 +358,65 @@ The server translates those comments into normal `ReviewEvent` objects. In async
 mode, repeated commands for the same target are coalesced: the current review
 finishes first, then AICR runs one final re-review using the latest event.
 
-For GitHub PR comments, configure a trigger `token_env` so AICR can fetch PR
-head/base SHA and branch details. If that fetch is unavailable, AICR still uses
-the PR URL from the comment payload as the deduplication identity instead of
-collapsing unrelated PRs into an `unknown` target.
+For GitHub PR comments, configure a trigger `token_env` (or a GitHub App `app`
+block — see below) so AICR can fetch PR head/base SHA and branch details. If
+that fetch is unavailable, AICR still uses the PR URL from the comment payload
+as the deduplication identity instead of collapsing unrelated PRs into an
+`unknown` target.
 
 For GitHub output channels that write back to the repository, the same
-`token_env` (or a channel-level override) must be an outbound API credential,
-not the webhook secret. `github_problem_issue` specifically needs repository
-Issues read/write permission. Selecting **Issues** or **Issue comments** in the
-GitHub webhook event list only controls which inbound events are delivered to
-AICR; it does not grant REST API permissions. If you use a GitHub App, update
-the repository permission and reinstall/refresh the installation before retrying.
+`token_env` (or GitHub App `app` token, or a channel-level override) must be an
+outbound API credential, not the webhook secret. `github_problem_issue`
+specifically needs repository Issues read/write permission. Selecting **Issues**
+or **Issue comments** in the GitHub webhook event list only controls which
+inbound events are delivered to AICR; it does not grant REST API permissions.
+If you use a GitHub App, update the repository permission and reinstall/refresh
+the installation before retrying.
 
-### GitHub App authentication (planned, M12)
+### GitHub App authentication (M12)
 
-Today, GitHub outbound auth accepts only a static string via `token_env`: a
-personal access token, or a GitHub App **installation access token** you mint
-externally. Installation tokens expire in about one hour and AICR resolves the
-token once at startup without refreshing it, so a pasted installation token is
-not practical for a long-running server. Native GitHub App support is planned as
-milestone **M12**: a trigger-level `app` block (`app_id`/`client_id` plus
-`private_key_env`/`private_key_path`, optional `installation_id`) will let AICR
-sign an RS256 App JWT with `node:crypto` (no new dependencies), exchange it for
-an installation access token, and auto-refresh that token. Webhook signature
-verification (`x-hub-signature-256` + webhook secret) already works for Apps.
-See `docs/ai/architecture.md` §3.2.1 for the target contract and `Plan.md`
-§8.2.1 for the execution plan.
+GitHub outbound auth accepts either a static string via `token_env` (a personal
+access token) or a native GitHub App `app` block. The `app` block lets AICR
+sign an RS256 App JWT with `node:crypto` (zero new dependencies), exchange it
+for an installation access token, and auto-refresh that token before it expires
+(~1 hour). This replaces the impractical approach of pasting an externally
+minted installation token that expires.
+
+Configure a GitHub trigger with `app` auth:
+
+```yaml
+triggers:
+  - name: github-app
+    kind: github
+    base_url: https://github.com            # GHE: set to your host; API derived as {base_url}/api/v3
+    app:
+      app_id: "123456"                       # numeric App ID (or use client_id)
+      # client_id: "Iv1.0123456789abcdef"    # alternative issuer (GitHub-recommended)
+      private_key_env: AICR_GITHUB_APP_PRIVATE_KEY   # PEM or base64 PEM in env
+      # private_key_path: /run/secrets/github-app.pem  # alternative: mounted .pem file
+      # installation_id: "7890123"           # optional; auto-resolved per repo if omitted
+    webhook_secret_env: AICR_GITHUB_WEBHOOK_SECRET
+    repos:
+      - { match: "my-org/my-repo", workspace: github-my-repo }
+```
+
+`app` and `token_env` are mutually exclusive on the same trigger. If a channel
+has its own `token_env`, it takes priority over the trigger-level `app` token.
+
+The trigger `base_url` is the **host** (`https://github.com` or a GHE host); AICR
+uses it for the App JWT and git clone, and automatically derives the REST API
+base (`https://api.github.com` or `{host}/api/v3`) for GitHub output channels
+routed through this trigger. Configs that already point `base_url` at the API
+URL (for example `https://ghe.example.com/api/v3`) keep working unchanged.
+
+**App permissions** (minimum): Contents `Read`, Pull requests `Read/Write`,
+Issues `Read/Write`, Metadata `Read`. **Subscribe to events**: Pull request,
+Push, Issue comment, Issues. Webhook signature verification
+(`x-hub-signature-256` + webhook secret) works for both Apps and PATs.
+`installation` and `installation_repositories` webhook events are not review
+events and return `202 unsupported_event`.
+
+See `docs/ai/architecture.md` §3.2.1 for the contract and `Plan.md` §8.2.1.
 
 ## PR/MR Summary Update Strategy
 

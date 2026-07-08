@@ -139,8 +139,9 @@ commit and review.
 ```
 
 For GitHub channels that write back to the repo, the `token_env` (or a
-channel-level override) must be an **outbound** API credential, not the webhook
-secret. `github_problem_issue` specifically needs repository Issues read/write
-permission. Selecting **Issues** or **Issue comments** in the GitHub webhook
-event list only controls which inbound events are delivered; it does not grant
-REST API permissions.
+channel-level override, or a trigger-level `app` block — see
+[VCS providers](/en/integrations/vcs-providers/)) must be an **outbound** API
+credential, not the webhook secret. `github_problem_issue` specifically needs
+repository Issues read/write permission. Selecting **Issues** or **Issue
+comments** in the GitHub webhook event list only controls which inbound events
+are delivered; it does not grant REST API permissions.

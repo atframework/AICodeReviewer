@@ -208,6 +208,18 @@ const compressionSchema = z
   .passthrough()
   .optional();
 
+const githubAppIdSchema = z.union([z.string().min(1), z.number().int().positive()]);
+
+const githubAppAuthSchema = z
+  .object({
+    app_id: githubAppIdSchema.optional(),
+    client_id: z.string().min(1).optional(),
+    private_key_env: z.string().min(1).optional(),
+    private_key_path: z.string().min(1).optional(),
+    installation_id: githubAppIdSchema.optional(),
+  })
+  .passthrough();
+
 const triggerSchema = z
   .object({
     name: z.string().min(1),
@@ -218,6 +230,7 @@ const triggerSchema = z
     commit_url_template: z.string().min(1).optional(),
     revision_url_template: z.string().min(1).optional(),
     change_url_template: z.string().min(1).optional(),
+    app: githubAppAuthSchema.optional(),
   })
   .passthrough();
 
@@ -728,6 +741,67 @@ const appConfigSchema = z
         });
       }
     }
+
+    config.triggers.forEach((trigger, index) => {
+      const triggerConfig = trigger as Record<string, unknown>;
+      const tokenEnv = triggerConfig.token_env;
+      const hasTokenEnv = typeof tokenEnv === "string" && tokenEnv.length > 0;
+      const appConfig = trigger.app;
+      const hasApp = isPlainObject(appConfig);
+
+      if (trigger.kind !== "github") {
+        if (hasApp) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: `app auth is only supported for kind: github, not kind: ${trigger.kind}; see docs/ai/architecture.md §3.2.1`,
+            path: ["triggers", index, "app"],
+          });
+        }
+        return;
+      }
+
+      if (!hasApp) {
+        return;
+      }
+
+      const app = appConfig as Record<string, unknown>;
+      const hasAppId = app.app_id !== undefined && app.app_id !== "";
+      const hasClientId = app.client_id !== undefined && app.client_id !== "";
+      const hasPrivateKeyEnv = typeof app.private_key_env === "string" && app.private_key_env.length > 0;
+      const hasPrivateKeyPath = typeof app.private_key_path === "string" && app.private_key_path.length > 0;
+
+      if (!hasAppId && !hasClientId) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "github app auth requires at least one of app_id or client_id; see docs/ai/architecture.md §3.2.1",
+          path: ["triggers", index, "app", "app_id"],
+        });
+      }
+
+      if (!hasPrivateKeyEnv && !hasPrivateKeyPath) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "github app auth requires exactly one of private_key_env or private_key_path; see docs/ai/architecture.md §3.2.1",
+          path: ["triggers", index, "app", "private_key_env"],
+        });
+      }
+
+      if (hasPrivateKeyEnv && hasPrivateKeyPath) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "github app auth accepts only one of private_key_env or private_key_path, not both; see docs/ai/architecture.md §3.2.1",
+          path: ["triggers", index, "app", "private_key_path"],
+        });
+      }
+
+      if (hasTokenEnv) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "github trigger cannot specify both token_env and app; they are mutually exclusive outbound auth methods; see docs/ai/architecture.md §3.2.1",
+          path: ["triggers", index, "token_env"],
+        });
+      }
+    });
   });
 
 export type AppConfig = z.infer<typeof appConfigSchema>;

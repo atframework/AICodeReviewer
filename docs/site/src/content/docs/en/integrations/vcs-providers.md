@@ -61,10 +61,38 @@ same HMAC secret as `AICR_GITHUB_WEBHOOK_SECRET`, and subscribe to **Pull
 requests**. AICR handles the `pull_request` `review_requested` action as a PR
 re-review trigger.
 
-For comment-triggered re-reviews, configure `token_env` so AICR can fetch PR
-head/base SHA and branch details. If that fetch is unavailable, AICR uses the
-PR URL from the comment payload as the dedup identity instead of collapsing
-unrelated PRs into an `unknown` target.
+For comment-triggered re-reviews, configure `token_env` (or a GitHub App `app`
+block — see below) so AICR can fetch PR head/base SHA and branch details. If
+that fetch is unavailable, AICR uses the PR URL from the comment payload as the
+dedup identity instead of collapsing unrelated PRs into an `unknown` target.
+
+#### GitHub App authentication (M12)
+
+Instead of a static PAT, configure a GitHub App to let AICR sign an RS256 JWT
+and auto-refresh installation tokens (zero new dependencies):
+
+```yaml
+triggers:
+  - name: github-app
+    kind: github
+    base_url: https://github.com     # GHE: set to your host; API derived as {base_url}/api/v3
+    app:
+      app_id: "123456"                # numeric App ID (or use client_id)
+      private_key_env: AICR_GITHUB_APP_PRIVATE_KEY   # PEM or base64 PEM
+      # private_key_path: /run/secrets/github-app.pem  # alternative: mounted .pem
+      # installation_id: "7890123"     # optional; auto-resolved per repo if omitted
+    webhook_secret_env: AICR_GITHUB_WEBHOOK_SECRET
+```
+
+`app` and `token_env` are mutually exclusive. Channel-level `token_env` takes
+priority over the trigger-level `app` token. The trigger `base_url` is the host
+(`https://github.com` or a GHE host); AICR derives the REST API base
+(`https://api.github.com` or `{host}/api/v3`) for GitHub output channels routed
+through this trigger, and leaves configs that already use an `.../api/v3` URL
+unchanged. Minimum App permissions: Contents Read, Pull requests Read/Write,
+Issues Read/Write, Metadata Read. Subscribe to Pull request, Push, Issue
+comment, Issues. `installation` and `installation_repositories` events return
+`202 unsupported_event`.
 
 ### GitLab
 

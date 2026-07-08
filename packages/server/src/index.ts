@@ -50,6 +50,7 @@ import {
 import {
   runReviewOrchestration,
   summarizeReviewOrchestrationForWebhook,
+  type ReviewOutputPublisher,
   type ServerReviewOrchestrationOptions,
 } from "./review-orchestrator.js";
 
@@ -608,7 +609,19 @@ async function publishTriggerErrorReport(
   reason: string,
   message: string,
 ): Promise<void> {
-  const publisher = reviewOrchestrationOptions?.outputPublisherResolver?.(context) ?? reviewOrchestrationOptions?.outputPublisher;
+  let publisher: ReviewOutputPublisher | undefined;
+  try {
+    publisher = (await reviewOrchestrationOptions?.outputPublisherResolver?.(context)) ?? reviewOrchestrationOptions?.outputPublisher;
+  } catch (error) {
+    console.error(JSON.stringify({
+      level: "error",
+      msg: "failed to resolve output publisher for trigger error report",
+      runId,
+      reason,
+      error: toErrorMessage(error),
+    }));
+    return;
+  }
   if (!publisher?.publishSummary) {
     return;
   }
