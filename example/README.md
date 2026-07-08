@@ -371,6 +371,21 @@ GitHub webhook event list only controls which inbound events are delivered to
 AICR; it does not grant REST API permissions. If you use a GitHub App, update
 the repository permission and reinstall/refresh the installation before retrying.
 
+### GitHub App authentication (planned, M12)
+
+Today, GitHub outbound auth accepts only a static string via `token_env`: a
+personal access token, or a GitHub App **installation access token** you mint
+externally. Installation tokens expire in about one hour and AICR resolves the
+token once at startup without refreshing it, so a pasted installation token is
+not practical for a long-running server. Native GitHub App support is planned as
+milestone **M12**: a trigger-level `app` block (`app_id`/`client_id` plus
+`private_key_env`/`private_key_path`, optional `installation_id`) will let AICR
+sign an RS256 App JWT with `node:crypto` (no new dependencies), exchange it for
+an installation access token, and auto-refresh that token. Webhook signature
+verification (`x-hub-signature-256` + webhook secret) already works for Apps.
+See `docs/ai/architecture.md` §3.2.1 for the target contract and `Plan.md`
+§8.2.1 for the execution plan.
+
 ## PR/MR Summary Update Strategy
 
 `gitea_pr_review` and `github_pr_review` default to

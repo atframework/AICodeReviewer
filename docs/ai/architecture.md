@@ -101,6 +101,64 @@
     `VcsAdapter.fetchAttribution`，再把结构化归因结果回灌 follow-up pass。没有 attribution backend
     的 adapter 返回 `not_found`，不得让模型猜测作者。
 
+#### 3.2.1 GitHub App 认证（M12 计划）
+
+> 状态：M12 计划中的稳定合同。本节描述**将要构建**的接口与边界；未落地前不得在 example
+> 中把 App 认证包装成已实现能力。执行顺序见 `Plan.md` §8.2.1/§8.3，决策见 `docs/ai/decisions.md` D32。
+
+**动机与现状**：当前 GitHub 出站认证只消费一个静态字符串 token，在
+`packages/server/src/bootstrap.ts` 启动时经 `resolveEnv(token_env)` 解析一次且不刷新。
+用户可把外部生成的 GitHub App installation token 粘进 `token_env`，但 installation token
+约 1 小时过期，长期运行不可用。M12 引入 App 原生 JWT → installation token 的自动签发与刷新。
+
+**配置合同**（`packages/core/src/config.ts` `triggerSchema`，仅 `kind: github`）：
+
+- 在 trigger 上新增可选 `app` 子对象，与 `token_env` 互为出站认证方式（二选一）：
+  - `app_id`（数字 App ID）或 `client_id`（GitHub 现推荐的 issuer）至少提供其一。
+  - `private_key_env`（PEM 或 base64 PEM 存于环境变量）或 `private_key_path`
+    （挂载的 `.pem` 文件路径）恰好提供其一。
+  - `installation_id` 可选；缺省时按仓库动态解析并缓存。
+- `superRefine` 校验：`kind: github` 时允许 `token_env` 或 `app`；若给出 `app`，强制
+  `app_id`/`client_id` 至少其一且 `private_key_env`/`private_key_path` 恰好其一。
+- 出站 token 解析优先级不变：channel 级 `token_env` > trigger 级 `token_env`/`app`。
+- 新增配置字段必须同步 `packages/core/test/config.test.ts`、`example/config.yaml` 与本节。
+
+**Token 服务合同**（新增 `packages/server/src/github-app-token.ts`，零新增依赖）：
+
+- 用 `node:crypto`（`crypto.createSign('RSA-SHA256')`）签发 RS256 App JWT：
+  `iat = now - 60s`（容忍时钟偏移）、`exp = now + 540s`（< GitHub 10 分钟上限）、
+  `iss = app_id || client_id`。
+- `getInstallationToken(installationId)`：`POST {api}/app/installations/{id}/access_tokens`
+  带 `Authorization: Bearer <jwt>` 与 `Accept: application/vnd.github+json`；解析
+  `{ token, expires_at }`，按 installation id 在内存 Map 缓存，剩余有效期 < 5 分钟时刷新。
+- `resolveInstallationId(owner, repo)`：`GET {api}/repos/{owner}/{repo}/installation` 用 JWT
+  换 `id`，按 `owner/repo` 缓存，支持一个 App 装到多仓库而无需硬编码 installation id。
+- API base：github.com 用 `https://api.github.com`；GitHub Enterprise 由 trigger `base_url`
+  推导 `{base_url}/api/v3`。
+- 私钥与签发出的 token 绝不写日志/模板/输出；`secret-scrubber` 的 `gh[pousr]_` 已覆盖
+  installation token 前缀 `ghs_`，`private_key`/`jwt` 规则覆盖 PEM 与 App JWT。
+
+**注入点合同**（全部位于 `packages/server`，`vcs`/`outputs` 仍只接收字符串 token）：
+
+- **VCS**：`buildVcsAdapter` 在构造 git adapter 前按事件 `owner/repo` 解析当前 installation
+  token；`packages/vcs/src/git.ts` 的 `x-access-token:<token>@` 约定不变。一次 review 在
+  token 有效期内完成，故按事件解析一次即可。
+- **输出**：`createOutputPublisherResolverFromConfig` 的 resolver 改为**异步**（返回
+  `Promise<ReviewOutputPublisher | undefined>`），按事件解析一次 token 后把字符串传入各
+  dispatcher；同步更新 `ReviewOutputPublisherResolver` 类型与两个调用点
+  （`packages/server/src/index.ts`、`packages/server/src/review-orchestrator.ts`）。
+- **Webhook PR 详情拉取**：`VcsWebhookConfig` 承载 App 认证；PR 详情 fetcher 用 payload 的
+  `installation.id`（schema 已 `.passthrough()`，直接读取）签发 token。App trigger 缺省静态
+  token 时，回退到 PR URL 作为去重身份的既有行为保持不变。
+
+**Webhook 事件与安全边界**：
+
+- `installation` / `installation_repositories` 事件不对应 review，返回
+  `202 unsupported_event`（可选：顺带失效对应 installation 的缓存 token/id）。
+- 签名校验（`x-hub-signature-256` + webhook secret）对 App 与 PAT 通用，不改动。
+- 文档需列出 App 最小权限与订阅事件：Contents `Read`、Pull requests `Read/Write`、
+  Issues `Read/Write`、Metadata `Read`；订阅 Pull request、Push、Issue comment、Issues。
+
 ### 3.3 Compression 与上下文管理
 
 AICR 采用**两层上下文管理**，两者互补：
