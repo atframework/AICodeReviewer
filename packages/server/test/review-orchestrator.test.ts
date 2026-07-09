@@ -777,6 +777,99 @@ describe("runReviewOrchestration", () => {
     }
   });
 
+  it("does not double-collect problems when MCP state and agent stdout both contain them", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-mcp-dedup-"));
+
+    try {
+      await writeWorkspaceFile(tempDir, "src/app.ts", "const value = oldValue();\n");
+      const publishedProblems: ReviewProblem[] = [];
+      const sandbox: SandboxBackend = {
+        kind: "native",
+        async materializeFs(layout) {
+          await mkdir(layout.agentDir, { recursive: true });
+          await mkdir(layout.tmpDir, { recursive: true });
+          return { agentDir: layout.agentDir, tmpDir: layout.tmpDir, mountSpecs: [] };
+        },
+        async spawn(spawnOptions) {
+          const statePath = join(spawnOptions.cwd, ".aicr-output-state.json");
+          const problemData = {
+            file: "src/app.ts",
+            line: 1,
+            severity: "high",
+            category: "bug",
+            message: "Critical null pointer dereference.",
+          };
+          await writeFile(statePath, JSON.stringify({
+            problems: [problemData],
+            summaries: [{ markdown: "Found 1 problem." }],
+            contextRequests: [],
+          }), "utf8");
+          return {
+            exitCode: 0,
+            stdout: JSON.stringify({
+              problems: [problemData],
+              summary: "Found 1 problem.",
+            }),
+            stderr: "",
+            timedOut: false,
+            durationMs: 10,
+          };
+        },
+        async teardown() {},
+      };
+      const agentAdapter: AgentAdapter = {
+        kind: "kilo",
+        async detect() {
+          return { available: true, binary: "kilo" };
+        },
+        buildCommand() {
+          return ["kilo", "run", "--auto"];
+        },
+        async materializeConfig(_model, workingDir) {
+          return { configFiles: new Map(), envVars: {}, workingDir };
+        },
+      };
+
+      const result = await runReviewOrchestration(
+        {
+          reviewEvent: createReviewEventFixture(),
+          payload: {},
+          provider: "gitea",
+          eventName: "pull_request",
+        },
+        {
+          baseSystemPrompt: "<task>\n{{TASK_CONTEXT}}\n</task>",
+          sourceRootResolver: () => tempDir,
+          vcs: createVcs(tempDir),
+          llm: {
+            async complete() {
+              throw new Error("LLM path should not be used");
+            },
+          },
+          model,
+          sandbox,
+          agentAdapter,
+          outputPublisher: {
+            publishesProblems: true,
+            async publishProblem(problem) {
+              publishedProblems.push(problem);
+              return { channel: "test", status: "published", raw: {} };
+            },
+            async publishSummary() {
+              return { channel: "test", status: "published", raw: {} };
+            },
+          },
+        },
+      );
+
+      expect(result.status).toBe("published");
+      expect(result.problemCount).toBe(1);
+      expect(publishedProblems).toHaveLength(1);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("uses Kilo stream tool-call events as context requests when MCP state is absent", async () => {
     const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-kilo-stream-context-"));
 

@@ -136,6 +136,84 @@ describe("AicrOutputCollector", () => {
 });
 
 describe("AicrOutputCollector edge cases", () => {
+  it("deduplicates problems by fingerprint", () => {
+    const collector = new AicrOutputCollector();
+    const problem = {
+      file: "src/app.ts",
+      line: 12,
+      severity: "medium" as const,
+      category: "correctness",
+      message: "Validate the null branch before dereferencing.",
+    };
+
+    const result1 = collector.reportProblem(problem);
+    const result2 = collector.reportProblem(problem);
+    const result3 = collector.reportProblem({
+      ...problem,
+      suggestion: "Use optional chaining.",
+    });
+
+    expect(result1.problemCount).toBe(1);
+    expect(result2.problemCount).toBe(1);
+    expect(result3.problemCount).toBe(1);
+    expect(collector.snapshot().problems).toHaveLength(1);
+  });
+
+  it("deduplicates problems with explicit fingerprint", () => {
+    const collector = new AicrOutputCollector();
+    const fp = "my-explicit-fp";
+
+    collector.reportProblem({
+      file: "a.ts",
+      line: 1,
+      severity: "low",
+      category: "style",
+      message: "First variant of message.",
+      fingerprint: fp,
+    });
+    collector.reportProblem({
+      file: "b.ts",
+      line: 2,
+      severity: "high",
+      category: "security",
+      message: "Completely different problem.",
+      fingerprint: fp,
+    });
+
+    expect(collector.snapshot().problems).toHaveLength(1);
+  });
+
+  it("allows distinct problems and clears fingerprints on clearReviewOutputs", () => {
+    const collector = new AicrOutputCollector();
+    collector.reportProblem({
+      file: "a.ts",
+      line: 1,
+      severity: "low",
+      category: "style",
+      message: "First.",
+    });
+    collector.reportProblem({
+      file: "a.ts",
+      line: 1,
+      severity: "low",
+      category: "style",
+      message: "First.",
+    });
+
+    expect(collector.snapshot().problems).toHaveLength(1);
+
+    collector.clearReviewOutputs();
+
+    collector.reportProblem({
+      file: "a.ts",
+      line: 1,
+      severity: "low",
+      category: "style",
+      message: "First.",
+    });
+    expect(collector.snapshot().problems).toHaveLength(1);
+  });
+
   it("returns empty content when fetchMoreContext handler is not provided", async () => {
     const collector = new AicrOutputCollector();
     const tools = createAicrOutputToolRegistry(collector);
