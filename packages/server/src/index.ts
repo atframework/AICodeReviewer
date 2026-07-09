@@ -576,7 +576,11 @@ function shouldIgnoreByLabels(
   return matched.length > 0 ? matched : undefined;
 }
 
+type TriggerOutcome = "reviewed" | "triaged" | "prepared" | "skipped";
+
 interface TriggerProcessingResult {
+  readonly outcome: TriggerOutcome;
+  readonly skipReason?: string;
   readonly reviewPreparation?: ReturnType<typeof summarizePreparedReviewPromptForWebhook>;
   readonly reviewRun?: ReturnType<typeof summarizeReviewOrchestrationForWebhook>;
   readonly triage?: TriageResult;
@@ -765,11 +769,78 @@ async function runTriggerProcessing(
     }
   }
 
+  let outcome: TriggerOutcome;
+  let skipReason: string | undefined;
+  if (triageResult) {
+    outcome = "triaged";
+  } else if (reviewRun) {
+    outcome = "reviewed";
+  } else if (reviewPreparation) {
+    outcome = "prepared";
+  } else {
+    outcome = "skipped";
+    skipReason = resolveTriggerSkipReason(
+      reviewEvent,
+      provider,
+      issueTriageOptions,
+      reviewPreparationOptions,
+      reviewOrchestrationOptions,
+    );
+  }
+
   return {
+    outcome,
+    ...(skipReason ? { skipReason } : {}),
     ...(reviewPreparation ? { reviewPreparation } : {}),
     ...(reviewRun ? { reviewRun } : {}),
     ...(triageResult ? { triage: triageResult } : {}),
   };
+}
+
+function resolveTriggerSkipReason(
+  reviewEvent: ReviewEvent,
+  provider: ReviewProvider,
+  issueTriageOptions: IssueTriageRuntimeOptions | undefined,
+  reviewPreparationOptions: ServerReviewPreparationOptions | undefined,
+  reviewOrchestrationOptions: ServerReviewOrchestrationOptions | undefined,
+): string {
+  if (reviewEvent.targetKind === "issue") {
+    const triageEligible = provider === "gitea" || provider === "forgejo";
+    if (!triageEligible) {
+      return `issue_triage_unsupported_provider:${provider}`;
+    }
+    if (!issueTriageOptions) {
+      return "issue_triage_not_configured";
+    }
+    return "issue_triage_no_target_ref";
+  }
+  if (!reviewPreparationOptions && !reviewOrchestrationOptions) {
+    return "review_pipeline_not_configured";
+  }
+  return "no_review_target_resolved";
+}
+
+function buildTriggerEventLogFields(reviewEvent: ReviewEvent): Record<string, unknown> {
+  const fields: Record<string, unknown> = {
+    targetKind: reviewEvent.targetKind,
+    action: reviewEvent.reason,
+  };
+  const targetNumber = reviewEvent.changedFiles?.[0];
+  if (
+    targetNumber !== undefined &&
+    (reviewEvent.targetKind === "issue" || reviewEvent.targetKind === "pull_request")
+  ) {
+    fields.number = targetNumber;
+  }
+  if (reviewEvent.title) fields.title = reviewEvent.title;
+  if (reviewEvent.url) fields.url = reviewEvent.url;
+  if (reviewEvent.labels?.length) fields.labels = reviewEvent.labels;
+  if (reviewEvent.headSha) fields.headSha = reviewEvent.headSha;
+  if (reviewEvent.baseSha) fields.baseSha = reviewEvent.baseSha;
+  if (reviewEvent.branch) fields.branch = reviewEvent.branch;
+  if (reviewEvent.author?.username) fields.author = reviewEvent.author.username;
+  if (reviewEvent.author?.email) fields.authorEmail = reviewEvent.author.email;
+  return fields;
 }
 
 function recordCompletedReviewRun(
@@ -962,10 +1033,7 @@ function scheduleTriggerProcessing(
         triggerName: reviewEvent.triggerName,
         workspaceId: reviewEvent.workspaceId,
         repoRef: reviewEvent.repoRef,
-        ...(reviewEvent.headSha ? { headSha: reviewEvent.headSha } : {}),
-        ...(reviewEvent.branch ? { branch: reviewEvent.branch } : {}),
-        ...(reviewEvent.author?.username ? { author: reviewEvent.author.username } : {}),
-        ...(reviewEvent.author?.email ? { authorEmail: reviewEvent.author.email } : {}),
+        ...buildTriggerEventLogFields(reviewEvent),
       }));
       return runId;
     }
@@ -980,10 +1048,7 @@ function scheduleTriggerProcessing(
     triggerName: reviewEvent.triggerName,
     workspaceId: reviewEvent.workspaceId,
     repoRef: reviewEvent.repoRef,
-    ...(reviewEvent.headSha ? { headSha: reviewEvent.headSha } : {}),
-    ...(reviewEvent.branch ? { branch: reviewEvent.branch } : {}),
-    ...(reviewEvent.author?.username ? { author: reviewEvent.author.username } : {}),
-    ...(reviewEvent.author?.email ? { authorEmail: reviewEvent.author.email } : {}),
+    ...buildTriggerEventLogFields(reviewEvent),
   }));
 
   const maxAttempts = triggerRetry?.attempts ?? 1;
@@ -1032,17 +1097,18 @@ function scheduleTriggerProcessing(
       }
       console.info(JSON.stringify({
         level: "info",
-        msg: "trigger processing completed",
+        msg: result.outcome === "skipped"
+          ? "trigger processing skipped"
+          : "trigger processing completed",
         runId,
         provider,
         eventName,
         triggerName: reviewEvent.triggerName,
         workspaceId: reviewEvent.workspaceId,
         repoRef: reviewEvent.repoRef,
-        ...(reviewEvent.headSha ? { headSha: reviewEvent.headSha } : {}),
-        ...(reviewEvent.branch ? { branch: reviewEvent.branch } : {}),
-        ...(reviewEvent.author?.username ? { author: reviewEvent.author.username } : {}),
-        ...(reviewEvent.author?.email ? { authorEmail: reviewEvent.author.email } : {}),
+        outcome: result.outcome,
+        ...(result.skipReason ? { skipReason: result.skipReason } : {}),
+        ...buildTriggerEventLogFields(reviewEvent),
         ...(result.reviewRun ? { reviewRun: result.reviewRun } : {}),
         ...(result.triage ? { triage: result.triage } : {}),
       }));
@@ -1066,8 +1132,7 @@ function scheduleTriggerProcessing(
           triggerName: reviewEvent.triggerName,
           workspaceId: reviewEvent.workspaceId,
           repoRef: reviewEvent.repoRef,
-          ...(reviewEvent.headSha ? { headSha: reviewEvent.headSha } : {}),
-          ...(reviewEvent.branch ? { branch: reviewEvent.branch } : {}),
+          ...buildTriggerEventLogFields(reviewEvent),
           reason,
           error: message,
         }));
@@ -1086,10 +1151,7 @@ function scheduleTriggerProcessing(
         triggerName: reviewEvent.triggerName,
         workspaceId: reviewEvent.workspaceId,
         repoRef: reviewEvent.repoRef,
-        ...(reviewEvent.headSha ? { headSha: reviewEvent.headSha } : {}),
-        ...(reviewEvent.branch ? { branch: reviewEvent.branch } : {}),
-        ...(reviewEvent.author?.username ? { author: reviewEvent.author.username } : {}),
-        ...(reviewEvent.author?.email ? { authorEmail: reviewEvent.author.email } : {}),
+        ...buildTriggerEventLogFields(reviewEvent),
         reason,
         error: message,
         ...(maxAttempts > 1 ? { attempts: maxAttempts } : {}),
