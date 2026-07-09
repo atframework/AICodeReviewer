@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 export const mcpOutputPackageName = "@aicr/mcp-output";
 
 export type AicrOutputToolName =
@@ -135,6 +137,14 @@ function parseSkip(input: unknown): SkipInput {
 	return { reason: requireString(input.reason, "reason") };
 }
 
+function computeReportProblemFingerprint(problem: ReportProblemInput): string {
+	if (problem.fingerprint) {
+		return problem.fingerprint;
+	}
+	const raw = `${problem.file}:${problem.line}:${problem.category}:${problem.message}`;
+	return createHash("sha256").update(raw).digest("hex").slice(0, 16);
+}
+
 function parseRange(input: Record<string, unknown>, label: string): { readonly start_line?: number; readonly end_line?: number } | undefined {
 	const rawRange = input.range;
 	if (rawRange === undefined) {
@@ -176,12 +186,18 @@ function parseTryBlame(input: unknown): TryBlameInput {
 
 export class AicrOutputCollector {
 	private readonly problems: ReportProblemInput[] = [];
+	private readonly fingerprints: Set<string> = new Set();
 	private readonly summaries: PublishSummaryInput[] = [];
 	private readonly contextRequests: FetchMoreContextInput[] = [];
 	private readonly attributionRequests: TryBlameInput[] = [];
 	private skipReasonValue: string | undefined;
 
 	reportProblem(input: ReportProblemInput): { accepted: true; problemCount: number } {
+		const fp = computeReportProblemFingerprint(input);
+		if (this.fingerprints.has(fp)) {
+			return { accepted: true, problemCount: this.problems.length };
+		}
+		this.fingerprints.add(fp);
 		this.problems.push(input);
 		return { accepted: true, problemCount: this.problems.length };
 	}
@@ -209,6 +225,7 @@ export class AicrOutputCollector {
 
 	clearReviewOutputs(): void {
 		this.problems.length = 0;
+		this.fingerprints.clear();
 		this.summaries.length = 0;
 		this.skipReasonValue = undefined;
 	}

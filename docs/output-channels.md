@@ -182,6 +182,14 @@ Managed issue lifecycle reconciliation is intentionally bounded. Before closing 
 
 When a repository has more open managed problem issues than the limit, fingerprints outside the recent window are not deduplicated or closed in that run. Temporarily raise the limit, or run repeated scheduled reviews, when doing a one-time cleanup of a large backlog.
 
+## Problem deduplication
+
+Problems are deduplicated by fingerprint at every layer of the pipeline to prevent duplication in published output:
+
+1. **Collection**: `AicrOutputCollector.reportProblem` computes a fingerprint (explicit `fingerprint` field, or `sha256(file:line:category:message)[:16]` when absent) and skips duplicates. When the agent uses MCP output tools (writing `.aicr-output-state.json`), the orchestrator replays MCP state as the authoritative source and skips text re-parsing, preventing the same problems from being collected twice.
+2. **Dispatch**: `github_problem_issue` and `gitea_problem_issue` dispatchers call `dedupProblemsByFingerprint` on the input array before building issue bodies, ensuring that even if upstream dedup misses a case, the published issue body stays clean.
+3. **Reconciliation**: problem-issue `reconcileProblems` runs at most once per review (guarded by a per-publisher `reconciled` flag), so multiple summary entries in one review cannot trigger duplicate issue creation via a read-after-write gap.
+
 ```yaml
 review:
   problem_issue:

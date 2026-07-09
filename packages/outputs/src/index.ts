@@ -2122,8 +2122,9 @@ export function createGithubProblemIssueDispatcher(options: GithubProblemIssueOp
 	}
 
 	const dispatcher = {
-		async reconcileProblems(problems: readonly ReviewProblem[], summary?: string, reconcileOptions?: { readonly reviewedFiles?: readonly string[] }): Promise<readonly DispatchResult[]> {
+		async reconcileProblems(rawProblems: readonly ReviewProblem[], summary?: string, reconcileOptions?: { readonly reviewedFiles?: readonly string[] }): Promise<readonly DispatchResult[]> {
 			const reviewedFiles = reconcileOptions?.reviewedFiles;
+			const problems = dedupProblemsByFingerprint([...rawProblems]);
 			let owners: OwnersConfig | undefined;
 
 			if (addOwnersAsAssignees) {
@@ -3286,6 +3287,20 @@ function ensureProblemFingerprint(problem: ReviewProblem): ReviewProblem {
 	return problem.fingerprint ? problem : { ...problem, fingerprint: computeProblemFingerprint(problem) };
 }
 
+function dedupProblemsByFingerprint(problems: readonly ReviewProblem[]): readonly ReviewProblem[] {
+	const seen = new Set<string>();
+	const result: ReviewProblem[] = [];
+	for (const problem of problems) {
+		const fp = problem.fingerprint ?? computeProblemFingerprint(problem);
+		if (seen.has(fp)) {
+			continue;
+		}
+		seen.add(fp);
+		result.push(problem);
+	}
+	return result;
+}
+
 function buildManagedIssueBody(
 	problem: ReviewProblem,
 	options: {
@@ -3884,8 +3899,9 @@ export function createGiteaProblemIssueDispatcher(options: GiteaProblemIssueOpti
 	}
 
 	const dispatcher = {
-		async reconcileProblems(problems: readonly ReviewProblem[], summary?: string, reconcileOptions?: { readonly reviewedFiles?: readonly string[] }): Promise<readonly DispatchResult[]> {
+		async reconcileProblems(rawProblems: readonly ReviewProblem[], summary?: string, reconcileOptions?: { readonly reviewedFiles?: readonly string[] }): Promise<readonly DispatchResult[]> {
 			const reviewedFiles = reconcileOptions?.reviewedFiles;
+			const problems = dedupProblemsByFingerprint([...rawProblems]);
 			let owners: OwnersConfig | undefined;
 
 			if (addOwnersAsAssignees) {

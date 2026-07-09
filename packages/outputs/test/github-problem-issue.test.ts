@@ -487,6 +487,61 @@ describe("createGithubProblemIssueDispatcher", () => {
 		expect(body.body).toContain("#### MEDIUM (1)");
 	});
 
+	it("deduplicates problems by fingerprint in consolidated mode", async () => {
+		const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
+		const problem2: ReviewProblem = {
+			file: "src/utils.ts",
+			line: 30,
+			severity: "medium",
+			category: "performance",
+			message: "Inefficient loop detected.",
+		};
+		const dispatcher = createGithubProblemIssueDispatcher({
+			owner: "my-org",
+			repo: "my-repo",
+			channelName: "github-issues",
+			issueMode: "consolidated",
+			fetch: async (url, init) => {
+				calls.push({ url, init });
+				if (url.includes("/issues?state=open")) {
+					return response([]);
+				}
+				return response({ id: 500, number: 50 });
+			},
+		});
+
+		const results = await dispatcher.reconcileProblems([problem, problem, problem2, { ...problem2, suggestion: "Use a hash set." }], "Summary");
+
+		expect(results).toHaveLength(1);
+		expect(results[0]?.raw).toMatchObject({ action: "created_consolidated" });
+
+		const body = JSON.parse(
+			calls.find((c) => c.url.endsWith("/repos/my-org/my-repo/issues") && c.init?.method === "POST")?.init?.body ?? "{}",
+		);
+		expect(body.title).toBe("[AICR] [CRITICAL] 2 problems · SQL query uses unsanitized input");
+		expect(body.body).toContain("#### CRITICAL (1)");
+		expect(body.body).toContain("#### MEDIUM (1)");
+	});
+
+	it("deduplicates problems by fingerprint in per_problem mode", async () => {
+		const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
+		const dispatcher = createGithubProblemIssueDispatcher({
+			owner: "my-org",
+			repo: "my-repo",
+			issueMode: "per_problem",
+			fetch: async (url, init) => {
+				calls.push({ url, init });
+				return calls.length === 1 ? response([]) : response({ id: 99, number: 7 });
+			},
+		});
+
+		const results = await dispatcher.reconcileProblems([problem, problem, { ...problem, suggestion: "Different suggestion." }]);
+
+		expect(results).toHaveLength(1);
+		const createCalls = calls.filter((c) => c.url.endsWith("/repos/my-org/my-repo/issues") && c.init?.method === "POST");
+		expect(createCalls).toHaveLength(1);
+	});
+
 	it("consolidated mode updates existing issue on re-analysis", async () => {
 		const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
 		const scopeFp = computeScopeFingerprint("github-issues", "my-org", "my-repo");

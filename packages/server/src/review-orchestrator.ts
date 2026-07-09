@@ -1089,10 +1089,25 @@ async function collectCompletionOutputs(
         ),
       );
     }
+    // MCP state is authoritative when it contains review output (problems,
+    // summaries, or skip). Skip text re-parsing to avoid double-collecting the
+    // same problems that appear in both the MCP state file and the agent's
+    // stream text content.
+    if (hasFinalReviewOutput(completion.mcpState)) {
+      return mergeToolExecutionResults(...executions);
+    }
   } else if (completion.toolCallEvents && completion.toolCallEvents.length > 0) {
-    executions.push(await executeAicrToolCalls(completion.toolCallEvents, tools));
+    const toolCallResult = await executeAicrToolCalls(completion.toolCallEvents, tools);
+    executions.push(toolCallResult);
+    // Kilo stream tool-call events are authoritative when they produced review
+    // output. Skip text re-parsing for the same double-collect reason.
+    if (toolCallResult.reviewOutputCount > 0) {
+      return mergeToolExecutionResults(...executions);
+    }
   }
 
+  // Fall back to text-based parsing only when no structured output was collected
+  // via MCP state or stream tool-call events.
   executions.push(await callAicrTools(completion.llmResult.content, tools, options));
   return mergeToolExecutionResults(...executions);
 }

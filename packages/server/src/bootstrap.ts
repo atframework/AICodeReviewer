@@ -1534,6 +1534,7 @@ export function createOutputPublisherFromConfig(
       ...(reviewEvent?.branch ? { branch: reviewEvent.branch } : {}),
     });
 
+    let reconciled = false;
     return {
       handlesRendering: true,
       publishesProblems: false,
@@ -1543,6 +1544,10 @@ export function createOutputPublisherFromConfig(
         return { channel: channel.name, status: "published", raw: { collected: true } };
       },
       async publishSummary(summary: string, summaryProblems?: readonly ReviewProblem[], options?: ReviewSummaryPublishOptions): Promise<readonly DispatchResult[]> {
+        if (reconciled) {
+          return [];
+        }
+        reconciled = true;
         const renderedProblems = (summaryProblems ?? []).map((problem) => rendering.renderProblem(problem));
         return dispatcher.reconcileProblems(
           renderedProblems,
@@ -1685,6 +1690,7 @@ export function createOutputPublisherFromConfig(
       ...(reviewEvent?.branch ? { branch: reviewEvent.branch } : {}),
     });
 
+    let reconciled = false;
     return {
       handlesRendering: true,
       publishesProblems: false,
@@ -1694,6 +1700,10 @@ export function createOutputPublisherFromConfig(
         return { channel: channel.name, status: "published", raw: { collected: true } };
       },
       async publishSummary(summary: string, summaryProblems?: readonly ReviewProblem[], options?: ReviewSummaryPublishOptions): Promise<readonly DispatchResult[]> {
+        if (reconciled) {
+          return [];
+        }
+        reconciled = true;
         const renderedProblems = (summaryProblems ?? []).map((problem) => rendering.renderProblem(problem));
         return dispatcher.reconcileProblems(
           renderedProblems,
