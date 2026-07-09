@@ -2143,11 +2143,29 @@ export function createGithubProblemIssueDispatcher(options: GithubProblemIssueOp
 
 				const results: DispatchResult[] = [];
 
+				const currentFpSet = new Set<string>();
+				for (const problem of problems) {
+					currentFpSet.add(problem.fingerprint ?? computeProblemFingerprint(problem));
+				}
+
 				if (problems.length === 0) {
-					if (existingConsolidated && resolvedAction !== "none" && canResolveConsolidatedIssue(existingConsolidated.body, reviewedFiles)) {
-						const result = await resolveIssue(existingConsolidated);
-						if (result) {
-							results.push(result);
+					// Empty review: resolve all eligible managed consolidated issues (same + cross scope)
+					// whose files were covered by the current review.
+					if (resolvedAction !== "none") {
+						for (const issue of existingIssues) {
+							if (!issue.scopeFingerprint) continue;
+							if (issue.scopeFingerprint !== scopeFingerprint) {
+								const storedCommit = extractCommitFromIssueBody(issue.body);
+								if (storedCommit && options.headSha && storedCommit !== options.headSha) {
+									const isAtOrAfter = await verifyCommitAtOrAfter(request, repoPath, storedCommit, options.headSha);
+									if (isAtOrAfter === false) continue;
+								}
+							}
+							if (!canResolveConsolidatedIssue(issue.body, reviewedFiles)) continue;
+							const result = await resolveIssue(issue);
+							if (result) {
+								results.push(result);
+							}
 						}
 					}
 					return results;
@@ -2201,6 +2219,41 @@ export function createGithubProblemIssueDispatcher(options: GithubProblemIssueOp
 					}
 				} else {
 					results.push(await createConsolidatedIssue(problems, summary, owners));
+				}
+
+				// Cross-scope cleanup: resolve consolidated issues from other scopes (old push
+				// batches, different commits) when all their problems are gone and their files
+				// were covered. Also resolve same-scope duplicates from prior races.
+				if (resolvedAction !== "none") {
+					for (const issue of existingIssues) {
+						if (!issue.scopeFingerprint) continue;
+						if (issue.scopeFingerprint === scopeFingerprint) {
+							// Same-scope duplicate: close any issue that isn't the one we just updated
+							if (existingConsolidated && issue.number !== existingConsolidated.number) {
+								const result = await resolveIssue(issue);
+								if (result) {
+									results.push(result);
+								}
+							}
+							continue;
+						}
+						// Cross-scope: verify commit ancestry (skip if current commit is behind)
+						const storedCommit = extractCommitFromIssueBody(issue.body);
+						if (storedCommit && options.headSha && storedCommit !== options.headSha) {
+							const isAtOrAfter = await verifyCommitAtOrAfter(request, repoPath, storedCommit, options.headSha);
+							if (isAtOrAfter === false) continue;
+						}
+						// Skip if any stored fingerprint is still present in current review
+						const storedFingerprints = extractOpenProblemFingerprintsFromBody(issue.body);
+						if (storedFingerprints.size === 0) continue;
+						if ([...storedFingerprints].some((fp) => currentFpSet.has(fp))) continue;
+						// File-scope guard: only resolve if those files were re-reviewed
+						if (!canResolveConsolidatedIssue(issue.body, reviewedFiles)) continue;
+						const result = await resolveIssue(issue);
+						if (result) {
+							results.push(result);
+						}
+					}
 				}
 
 				return results;
@@ -3920,11 +3973,29 @@ export function createGiteaProblemIssueDispatcher(options: GiteaProblemIssueOpti
 
 				const results: DispatchResult[] = [];
 
+				const currentFpSet = new Set<string>();
+				for (const problem of problems) {
+					currentFpSet.add(problem.fingerprint ?? computeProblemFingerprint(problem));
+				}
+
 				if (problems.length === 0) {
-					if (existingConsolidated && resolvedAction !== "none" && canResolveConsolidatedIssue(existingConsolidated.body, reviewedFiles)) {
-						const result = await resolveIssue(existingConsolidated);
-						if (result) {
-							results.push(result);
+					// Empty review: resolve all eligible managed consolidated issues (same + cross scope)
+					// whose files were covered by the current review.
+					if (resolvedAction !== "none") {
+						for (const issue of existingIssues) {
+							if (!issue.scopeFingerprint) continue;
+							if (issue.scopeFingerprint !== scopeFingerprint) {
+								const storedCommit = extractCommitFromIssueBody(issue.body);
+								if (storedCommit && options.headSha && storedCommit !== options.headSha) {
+									const isAtOrAfter = await verifyCommitAtOrAfter(request, repoPath, storedCommit, options.headSha);
+									if (isAtOrAfter === false) continue;
+								}
+							}
+							if (!canResolveConsolidatedIssue(issue.body, reviewedFiles)) continue;
+							const result = await resolveIssue(issue);
+							if (result) {
+								results.push(result);
+							}
 						}
 					}
 					return results;
@@ -3978,6 +4049,41 @@ export function createGiteaProblemIssueDispatcher(options: GiteaProblemIssueOpti
 					}
 				} else {
 					results.push(await createConsolidatedIssue(problems, summary, owners));
+				}
+
+				// Cross-scope cleanup: resolve consolidated issues from other scopes (old push
+				// batches, different commits) when all their problems are gone and their files
+				// were covered. Also resolve same-scope duplicates from prior races.
+				if (resolvedAction !== "none") {
+					for (const issue of existingIssues) {
+						if (!issue.scopeFingerprint) continue;
+						if (issue.scopeFingerprint === scopeFingerprint) {
+							// Same-scope duplicate: close any issue that isn't the one we just updated
+							if (existingConsolidated && issue.number !== existingConsolidated.number) {
+								const result = await resolveIssue(issue);
+								if (result) {
+									results.push(result);
+								}
+							}
+							continue;
+						}
+						// Cross-scope: verify commit ancestry (skip if current commit is behind)
+						const storedCommit = extractCommitFromIssueBody(issue.body);
+						if (storedCommit && options.headSha && storedCommit !== options.headSha) {
+							const isAtOrAfter = await verifyCommitAtOrAfter(request, repoPath, storedCommit, options.headSha);
+							if (isAtOrAfter === false) continue;
+						}
+						// Skip if any stored fingerprint is still present in current review
+						const storedFingerprints = extractOpenProblemFingerprintsFromBody(issue.body);
+						if (storedFingerprints.size === 0) continue;
+						if ([...storedFingerprints].some((fp) => currentFpSet.has(fp))) continue;
+						// File-scope guard: only resolve if those files were re-reviewed
+						if (!canResolveConsolidatedIssue(issue.body, reviewedFiles)) continue;
+						const result = await resolveIssue(issue);
+						if (result) {
+							results.push(result);
+						}
+					}
 				}
 
 				return results;
