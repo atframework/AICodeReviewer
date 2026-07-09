@@ -1730,15 +1730,24 @@ describe("createServerApp", () => {
       },
       body: payload,
     });
-    const body = (await response.json()) as { accepted: boolean; error?: { reason?: string } };
+    const body = (await response.json()) as {
+      accepted: boolean;
+      outcome?: string;
+      skipReason?: string;
+      error?: { reason?: string };
+    };
 
     // Accepted (202) and, critically, the Gitea triage client is never called
-    // for a GitHub issue event, so no `fetch failed` surfaces.
+    // for a GitHub issue event, so no `fetch failed` surfaces. The processing
+    // outcome is reported as skipped with a reason that names the unsupported
+    // provider, so operators can confirm the skip is intentional.
     expect(response.status).toBe(202);
     expect(body.accepted).toBe(true);
     expect(giteaFetchCalls).toBe(0);
     expect(triageModelCalled).toBe(false);
     expect(body.error?.reason).not.toBe("issue_triage_failed");
+    expect(body.outcome).toBe("skipped");
+    expect(body.skipReason).toBe("issue_triage_unsupported_provider:github");
   });
 
   it("propagates operatorOverrides and memoryHints through review preparation", async () => {
