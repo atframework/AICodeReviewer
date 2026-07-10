@@ -27,11 +27,13 @@ user-invocable: false
    - Markdownlint
    - Build
    - Eval fixture validation (`aicr eval --validate-only`) after build
-4. Treat failures as baseline regressions; fix the root cause instead of broadening ignore patterns or weakening strict flags.
-5. Put temporary validation helpers, logs, and captured output under the repository `build/` directory (e.g. `build/tmp/`, `build/logs/`) instead of scattering scratch files in the repository root. Ensure the subdirectory exists before writing.
-6. If repository-wide conventions or AI-doc routing changed, update `../../../AGENTS.md`, `../../../docs/ai/AGENTS.repository-baseline.md`, `../../../docs/ai/index.md`, and any affected skills in the same change.
-7. When touching public/shared modules, verify generic entry points do not duplicate platform literal lists or expose platform-specific field names; platform names belong in config contracts, docs/examples, tests, and platform-specific adapters.
-8. Summarize which gates were run, which failed, and which shared files were touched.
+4. Run targeted checks while iterating, then restart the complete applicable sequence after the final edit. On Linux/CI, `pnpm ci` is the final runtime gate; on Windows, run the table commands in order because PowerShell may block pnpm's `.ps1` shim.
+5. Confirm each command actually exercised its target (for example, Markdownlint reports discovered files and Vitest reports test files/tests). A silent or no-op exit code 0 is not a passing gate.
+6. Treat failures as baseline regressions; fix the root cause instead of broadening ignore patterns or weakening strict flags.
+7. Put temporary validation helpers, logs, and captured output under the repository `build/` directory (e.g. `build/tmp/`, `build/logs/`) instead of scattering scratch files in the repository root. Ensure the subdirectory exists before writing.
+8. If repository-wide conventions or AI-doc routing changed, update `../../../AGENTS.md`, `../../../docs/ai/AGENTS.repository-baseline.md`, `../../../docs/ai/index.md`, and any affected skills in the same change.
+9. When touching public/shared modules, verify generic entry points do not duplicate platform literal lists or expose platform-specific field names; platform names belong in config contracts, docs/examples, tests, and platform-specific adapters.
+10. Summarize which gates were run, which failed, and which shared files were touched.
 
 ## Environment: Windows PowerShell workarounds
 
@@ -39,10 +41,10 @@ On Windows, PowerShell execution policy blocks `.ps1` scripts by default. Use `n
 
 | Tool         | Windows command                                                                                                             | Linux/CI command    |
 | ------------ | --------------------------------------------------------------------------------------------------------------------------- | ------------------- |
-| Lint         | `node node_modules/eslint/bin/eslint.js .`                                                                                  | `pnpm lint`         |
+| Lint         | `node node_modules/eslint/bin/eslint.js . --max-warnings=0`                                                                 | `pnpm lint`         |
 | Typecheck    | `node node_modules/typescript/bin/tsc -b tsconfig.json --pretty false`                                                      | `pnpm typecheck`    |
-| Test         | `node node_modules/vitest/vitest.mjs run`                                                                                   | `pnpm test`         |
-| Markdownlint | `node node_modules/markdownlint-cli2/markdownlint-cli2.mjs "**/*.md" "!**/node_modules/**" "!**/dist/**" "!**/coverage/**"` | `pnpm markdownlint` |
+| Test         | `node node_modules/vitest/vitest.mjs run --coverage`                                                                        | `pnpm test`         |
+| Markdownlint | `node node_modules/markdownlint-cli2/markdownlint-cli2-bin.mjs`                                                             | `pnpm markdownlint` |
 | Build        | `cmd /c "pnpm build"`                                                                                                       | `pnpm build`        |
 | Eval fixtures | `node packages/cli/dist/index.js eval --validate-only`                                                                      | `pnpm eval:validate` |
 

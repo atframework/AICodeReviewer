@@ -202,13 +202,13 @@
 ## 7. 测试与验证基线
 
 - 默认验证顺序：
-  1. `node node_modules/eslint/bin/eslint.js .`
+  1. `node node_modules/eslint/bin/eslint.js . --max-warnings=0`
   2. `node node_modules/typescript/bin/tsc -b tsconfig.json --pretty false`
-  3. `node node_modules/vitest/vitest.mjs run`
-  4. `node node_modules/markdownlint-cli2/markdownlint-cli2.mjs "**/*.md" "!**/node_modules/**" "!**/dist/**" "!**/coverage/**"`
-  5. 构建步骤
-- 在 Linux/CI 等 `pnpm` 可直接执行的环境中，可使用等价的
-  `pnpm lint/typecheck/test/markdownlint/build`。
+  3. `node node_modules/vitest/vitest.mjs run --coverage`
+  4. `node node_modules/markdownlint-cli2/markdownlint-cli2-bin.mjs`
+  5. `cmd /c "pnpm build"`
+  6. `node packages/cli/dist/index.js eval --validate-only`
+- 定向检查用于迭代定位；最后一次修改后必须重新运行全部适用门禁，并确认工具实际发现了预期文件或测试。在 Linux/CI 等 `pnpm` 可直接执行的环境中，最终 runtime 门禁以 `pnpm ci` 为准。
 - `Plan.md` 与 `docs/**/*.md` 共同接受 markdownlint 校验。
 - M11 已新增 `docs:build`、`docs:preview`、`docs:check`、`docs:dev` 脚本，CI 在
   `.github/workflows/ci.yml` 的独立 `docs` job 中运行 `pnpm docs:build` 验证公开内容边界与静态站点构建。
