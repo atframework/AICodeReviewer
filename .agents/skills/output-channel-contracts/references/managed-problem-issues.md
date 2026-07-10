@@ -1,6 +1,7 @@
 # Managed Problem Issue Lifecycle
 
 Read this when changing `gitea_problem_issue`, `github_problem_issue`, issue modes, scope fingerprints, resolved-action behavior, file-scope guards, or reconciliation tests.
+
 ## Managed problem issue lifecycle
 
 - `gitea_problem_issue` and `github_problem_issue` channels support `issue_mode` to control creation strategy:

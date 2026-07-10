@@ -69,7 +69,7 @@ Use this skill when updating AI-agent guidance, prompt assets, bridge files, or 
    - Ensure the Markdown body remains useful even if a client ignores nonstandard frontmatter.
 
 4. **Validate before finishing**
-   - Check markdown and frontmatter diagnostics for changed prompt and skill files.
+   - After the final AI-facing edit, run the repository's real Markdown gate from `../repository-baseline-validation/SKILL.md`; confirm it discovers the changed prompt, skill, and sibling reference files, then check frontmatter diagnostics.
    - Run a scoped whitespace/status check for changed prompt and skill files when practical.
    - Re-read representative files to ensure bridge files stay thin and skill routing points to the current skill.
    - For nested Git repositories, run status and whitespace checks from each affected repository root.

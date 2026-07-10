@@ -33,9 +33,11 @@ The complete fixed-issue checklist lives in `docs/ai/AGENTS.known-pitfalls.md`. 
 
 ## Default verification order
 
-1. `node node_modules/eslint/bin/eslint.js .` (or `pnpm lint` on Linux)
+Run targeted checks while iterating, then restart every applicable gate after the final edit. `pnpm ci` is the final runtime gate on Linux/CI; on Windows use the commands below in order. Confirm the tools report discovered files/tests—a silent or no-op exit code 0 is not a pass.
+
+1. `node node_modules/eslint/bin/eslint.js . --max-warnings=0` (or `pnpm lint` on Linux)
 2. `node node_modules/typescript/bin/tsc -b tsconfig.json --pretty false` (or `pnpm typecheck`)
-3. `node node_modules/vitest/vitest.mjs run` (or `pnpm test`)
-4. `node node_modules/markdownlint-cli2/markdownlint-cli2.mjs "**/*.md" "!**/node_modules/**" "!**/dist/**" "!**/coverage/**"` (or `pnpm markdownlint`)
-5. Build step (if applicable)
+3. `node node_modules/vitest/vitest.mjs run --coverage` (or `pnpm test`)
+4. `node node_modules/markdownlint-cli2/markdownlint-cli2-bin.mjs` (or `pnpm markdownlint`)
+5. `cmd /c "pnpm build"` (or `pnpm build`)
 6. Eval fixture validation after build: `node packages/cli/dist/index.js eval --validate-only` (or `pnpm eval:validate` on Linux/CI)

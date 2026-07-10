@@ -24,6 +24,7 @@
 - Prefer minimal edits; do not weaken lint, typecheck, test, or markdown gates just to get a change through.
 - For non-trivial work, make assumptions, tradeoffs, and success criteria explicit before editing; ask when ambiguity changes the implementation.
 - Keep solutions simple and surgical: no speculative features, broad refactors, or style churn outside the user-requested scope; clean up only code made unused by your changes.
+- After the final edit, run every repository gate applicable to the changed files. Targeted checks are iteration evidence, not a substitute for the complete applicable gate; do not claim completion while a required check is unrun, failing, blocked, or did not actually discover the expected files/tests.
 - When adding or removing a workspace package, update the package manifest, local `tsconfig.json`, and root `tsconfig.json` references together.
 - When code changes affect config shape, agent adapters, MCP tool contracts, output rendering, deployment behavior, or public workflow, update the matching `Plan.md` roadmap summary, relevant `docs/` modules, `example/config.yaml`, and `example/README.md` entries in the same change, or explicitly state why no doc/example update is needed.
 - **All temporary task artifacts must go under `build/`**: scratch scripts, debug logs, one-off reports, intermediate data, benchmark outputs, and any file produced during an agent session that is not a permanent part of the codebase must be written under `build/`. Never leave temporary files in the repository root, `eval/`, or any package directory. Use purposeful subdirectories: `build/tmp/` for ad-hoc data, `build/logs/` for captured output, and existing `build/deploy/` for deployment staging. Ensure the subdirectory exists before writing (`node -e "require('fs').mkdirSync('build/tmp',{recursive:true})"`). The `eval/` directory is reserved for permanent eval CLI test fixtures only; do not store task scratch files there.
@@ -34,9 +35,10 @@
 ## Environment notes
 
 - **Windows PowerShell execution policy**: `pnpm`, `npx`, and other `.ps1` scripts are blocked by default. Run Node-based CLI tools directly via `node`:
-  - Tests: `node node_modules/vitest/vitest.mjs run`
-  - Lint: `node node_modules/eslint/bin/eslint.js .`
+  - Tests: `node node_modules/vitest/vitest.mjs run --coverage`
+  - Lint: `node node_modules/eslint/bin/eslint.js . --max-warnings=0`
   - Typecheck: `node node_modules/typescript/bin/tsc -b tsconfig.json --pretty false`
+  - Markdownlint: `node node_modules/markdownlint-cli2/markdownlint-cli2-bin.mjs`
   - Build: Use `cmd /c "pnpm build"` or invoke the package build scripts directly.
   - Eval fixture validation after build: `node packages/cli/dist/index.js eval --validate-only`
 - PowerShell treats backticks as escapes/line continuations; avoid inline `node -e` snippets that contain JavaScript template literals or complex quote nesting. Prefer native PowerShell, a short script under `build/tmp/`, or quote-free Node snippets.
@@ -67,12 +69,15 @@ If a new recurring issue is found and fixed, add a concise entry to `docs/ai/AGE
 
 ## Default verification order
 
-1. `node node_modules/eslint/bin/eslint.js .` (or `pnpm lint` on Linux)
+For code, config, script, CI, or shared-tooling changes, `pnpm ci` is the final CI-equivalent gate on Linux; on Windows run the commands below in order after the final edit. Use individual or targeted commands during diagnosis, but do not treat them as a replacement for the applicable final gate.
+
+1. `node node_modules/eslint/bin/eslint.js . --max-warnings=0` (or `pnpm lint` on Linux)
 2. `node node_modules/typescript/bin/tsc -b tsconfig.json --pretty false` (or `pnpm typecheck`)
-3. `node node_modules/vitest/vitest.mjs run` (or `pnpm test`)
-4. `node node_modules/markdownlint-cli2/markdownlint-cli2.mjs` (or `pnpm markdownlint`)
-5. Build step (if applicable)
-6. When docs/site content changes: `pnpm docs:build` (or `pnpm docs:check`) to validate public-content boundaries and the Starlight site
+3. `node node_modules/vitest/vitest.mjs run --coverage` (or `pnpm test`)
+4. `node node_modules/markdownlint-cli2/markdownlint-cli2-bin.mjs` (or `pnpm markdownlint`)
+5. `cmd /c "pnpm build"` (or `pnpm build`)
+6. `node packages/cli/dist/index.js eval --validate-only` after build (or `pnpm eval:validate`)
+7. When docs/site content changes: `pnpm docs:build` (or `pnpm docs:check`) to validate public-content boundaries and the Starlight site
 
 ## Referenced prompt files
 

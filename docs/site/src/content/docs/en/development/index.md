@@ -47,8 +47,8 @@ pnpm build
 Run Node-based tools directly:
 
 ```powershell
-node node_modules/vitest/vitest.mjs run
-node node_modules/eslint/bin/eslint.js .
+node node_modules/vitest/vitest.mjs run --coverage
+node node_modules/eslint/bin/eslint.js . --max-warnings=0
 node node_modules/typescript/bin/tsc -b tsconfig.json --pretty false
 ```
 
@@ -60,15 +60,16 @@ inline `node -e` snippets with template literals.
 
 ## Test and validation matrix
 
-Run these before proposing a change. On Linux/CI use the `pnpm` scripts; on
-Windows PowerShell invoke the Node binaries directly as above.
+After the final edit, run every applicable gate before proposing a change and
+confirm it discovers the expected files or tests. On Linux/CI, `pnpm ci` is the
+final runtime gate; on Windows PowerShell invoke the Node binaries directly.
 
 | Step | Linux/CI | Windows PowerShell |
 | --- | --- | --- |
-| ESLint | `pnpm lint` | `node node_modules/eslint/bin/eslint.js .` |
+| ESLint | `pnpm lint` | `node node_modules/eslint/bin/eslint.js . --max-warnings=0` |
 | Typecheck | `pnpm typecheck` | `node node_modules/typescript/bin/tsc -b tsconfig.json --pretty false` |
-| Unit tests | `pnpm test` | `node node_modules/vitest/vitest.mjs run` |
-| Markdown lint | `pnpm markdownlint` | `node node_modules/markdownlint-cli2/markdownlint-cli2.mjs "**/*.md" "!**/node_modules/**" "!**/dist/**" "!**/coverage/**"` |
+| Unit tests | `pnpm test` | `node node_modules/vitest/vitest.mjs run --coverage` |
+| Markdown lint | `pnpm markdownlint` | `node node_modules/markdownlint-cli2/markdownlint-cli2-bin.mjs` |
 | Build | `pnpm build` | `cmd /c "pnpm build"` |
 | Eval fixture validation | `pnpm eval:validate` (after build) | `node packages/cli/dist/index.js eval --validate-only` |
 | Docs build | `pnpm docs:build` | `pnpm docs:build` |
