@@ -57,36 +57,12 @@ Do not use this skill for LLM prompt layering, agent runtime materialization, or
 - `gitea_problem_issue` applies both tags at issue creation time via `body.labels`.
 - All label fields support global → workspace-level override through `workspaces.defaults.review.labels` and `workspaces.instances.<id>.review.labels`.
 
-## IM bot message contracts
+## Detailed references
 
-All IM bot channels (`feishu_bot`, `wecom_bot`, and future channels such as `dingtalk_bot` or `slack_bot`) share a unified contract. Platform-specific differences (card vs markdown payload, mention dialect, signature algorithm) are absorbed by the dispatcher and `im-markdown.ts` transformer layers; the contracts below apply uniformly.
+Load these sibling files only when the task touches the named surface:
 
-- `publishAggregatedProblems` must include the full `problem.message` and `problem.suggestion` (when present) under each problem line.
-- IM reports stay sectioned as **Review target → Summary → Problems**; problem locations must come from structured `aicr.report_problem` data, not prose-only summaries.
-- Agent CLI free-form stdout is not a publishable final report; repair to structured JSON/XML tool calls before summary-channel dispatch.
-- If the repair result is still prose but explicitly says there are no actionable problems or no reviewable code, normalize it to `aicr.skip` (`lgtm` / `no_reviewable_code`) instead of publishing the generic format-repair fallback to IM.
-- Summary text that says issues were found is not a problem record. If `problemCount` is zero, repair or suppress the summary instead of letting `no_problems` policy hide actionable prose without locations. Do the same when skip/summary prose asks a human to provide diff/source context or attribution context; agents must request concrete files via `aicr.fetch_more_context` or verified line attribution via `aicr.try_blame`.
-- Built-in IM summaries must include the event username when present, rendering `@username (Display Name)` when both normalized username and display name are available. Platform-native mention tags (`<at>`, `<@user>`, etc.) are handled by the author-resolution layer via `MentionChannelKind`; templates render only the human-readable form.
-- `vcs.workspace` is submitter metadata captured from the event payload; do not substitute analysis/client workspaces from adapter configuration into user-visible IM output.
-- Long messages are truncated to 500 chars and suggestions to 300 chars with a `...` suffix to stay within platform card/message size limits.
-- The truncation helper is internal; do not expose truncation length as user-configurable fields without updating tests and docs.
-- Each IM platform uses a dedicated `toXxxMarkdown()` transformer in `packages/outputs/src/im-markdown.ts` to adapt generic Markdown to the platform's supported subset (e.g., Feishu cards flatten headings/tables, WeCom preserves headings, DingTalk converts tables to lists). When adding a new IM channel, implement a matching transformer before wiring the dispatcher.
-
-## Managed problem issue lifecycle
-
-- `gitea_problem_issue` and `github_problem_issue` channels support `issue_mode` to control creation strategy:
-  - `consolidated` (default): all problems from one review run are merged into a single issue, scope-fingerprint-based reconciliation. The scope fingerprint is **target-aware**: `push` events key by batch (`channel + owner + repo + headSha`), `pull_request`/MR events key by pull number (`channel + owner + repo + pr:number`, stable across commits; falls back to `headSha` when the number is unknown), and other targets (manual/scheduled or missing `targetKind`) fall back to `channel + owner + repo`. Different push batches and different PRs keep separate issues. `bootstrap.ts` forwards `reviewEvent.targetKind`, the resolved `pullNumber`, and `reviewEvent.branch` into the dispatcher. After handling the same-scope issue, `reconcileProblems` also runs a **cross-scope cleanup loop** that resolves consolidated issues from other scopes (old push batches) when their problems are no longer present, their files were re-reviewed, and commit ancestry confirms the current commit is newer. Same-scope duplicates from prior races are also resolved.
-  - `per_commit`: one issue per commit scope (`channel + owner + repo + headSha`) for all targets, fingerprint-based reconciliation.
-  - `per_problem`: one issue per problem, fingerprint-based reconciliation.
-- In consolidated mode:
-  - Title stays concise: single problem uses `per_problem` format; multiple problems append a representative summary from the highest-severity issue (e.g., `[AICR] [CRITICAL] 3 problems · SQL query uses unsanitized input`).
-  - Body groups problems by severity (critical → info).
-  - Labels use highest severity. Assignees are aggregated across all problems.
-  - On re-analysis: existing consolidated issue is updated (PATCH). If no problems: closed/deleted per `resolved_action`.
-  - Per-fingerprint resolution tracking: body includes `<!-- aicr:commit={headSha} -->`, `<!-- aicr:open_problems=... -->`, and per-problem `<!-- aicr:fp={fp} -->` markers. On update, the VCS compare API verifies commit ordering; resolved problems are shown in a collapsible "Resolved" section. Same-commit updates merge without resolving; older-commit updates are skipped; compare API failures degrade gracefully to a full replacement.
-- **File-scope resolution guard**: a managed problem is only marked "resolved" (and its issue closed) when the current review actually re-analyzed the file containing that problem. `reconcileProblems` receives `reviewedFiles` (the current review's `changedPaths`) via `ReviewSummaryPublishOptions.reviewedFiles` → `bootstrap.ts` `publishSummary` → 3rd argument. Per-problem issue bodies embed `<!-- aicr:file=<path> -->` (legacy bodies fall back to parsing ``Location: `path:line` ``). When `reviewedFiles` is provided and the file is NOT in scope (or cannot be determined), the problem stays open. Consolidated partial-scope updates must retain out-of-scope fingerprints in `open_problems` and the body; if the old body cannot map a retained fingerprint to a file, skip the rewrite instead of dropping it. When `reviewedFiles` is absent/empty, the original behavior is preserved.
-- `aicr.publish_summary.title` affects the rendered summary section in the issue body, not the managed issue title itself.
-- `gitea_problem_issue` applies auto_tag and reviewed_tag at issue creation time via `body.labels`.
+- `references/im-bot-message-contracts.md`: IM bot Markdown/card rendering, mentions, truncation, and structured-output repair rules.
+- `references/managed-problem-issues.md`: `gitea_problem_issue` / `github_problem_issue` lifecycle, issue modes, scope fingerprints, file-scope resolution guard, deduplication, and cleanup behavior.
 
 ## Pitfalls
 

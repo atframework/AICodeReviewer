@@ -13,6 +13,7 @@
 | 用户文档站计划 | `documentation-site-plan.md` | M11 `docs/site` 文档站子工程选型、信息架构、构建与发布计划 |
 | 公开用户文档站源 | `../site/` | M11 Astro Starlight 文档站工程（中英双语），发布到 GitHub Pages 的公开用户入口 |
 | AI 规则与技能来源 | `source-index.md` | 外部 Agent/Skills/MCP 文档核验记录、刷新触发条件与兼容性证据 |
+| 已知代码坑位 | `AGENTS.known-pitfalls.md` | 从根 `AGENTS.md` 拆出的按需清单；非平凡实现/审查前阅读 |
 | Agent Skills 索引 | `../../.agents/skills/README.md` | 仓库技能目录地图；只按需读取具体 `SKILL.md` |
 | 评审提示词设计依据 | `../prompt-research.md` | M0.5 调研与默认 prompt 设计 rationale |
 | 输出通道契约 | `../output-channels.md` | MCP 输出工具、模板变量、路由与 IM 行为 |
@@ -69,6 +70,7 @@
 - 已完成阶段的长篇总结放到 `milestones/*.md`。
 - 稳定设计细节放到 `architecture.md`，避免把大段合同反复复制到 `Plan.md`、skills 或提示词中。
 - 稳定决策放到 `decisions.md`，方便按主题按需读取。
+- 已修复的易回归问题放到 `AGENTS.known-pitfalls.md`，根 `AGENTS.md` 只保留读取条件和索引。
 - 代码/配置的最终真源仍然是实现本身，例如：
   - `packages/core/src/config.ts`
   - `packages/store/src/schema.ts`

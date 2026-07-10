@@ -24,7 +24,7 @@ Read `Plan.md` §8.1 (里程碑状态表) first to understand which milestones a
 
 ### Step 2: Check known pitfalls before making changes
 
-Read the "Known codebase pitfalls" section in `AGENTS.md`. These are issues found and fixed in prior sessions — do not reintroduce them. Key checks:
+Read `../../../docs/ai/AGENTS.known-pitfalls.md` when doing non-trivial implementation or review work. These are issues found and fixed in prior sessions — do not reintroduce them. Key checks:
 
 - Config schema fields from Plan.md §3.10 / `../../../docs/ai/architecture.md` §3.10 (compression, LLM, queue, review, workspaces)
 - Store schema columns from Plan.md §3.11 / `../../../docs/ai/architecture.md` §3.11 (triggerName, provider, providerModel)
@@ -80,7 +80,7 @@ For each matched category, verify both user-facing docs and example config snipp
 - Fix code issues first, then add tests.
 - When a fix changes config, agent behavior, MCP/output contracts, deployment, or public workflows, update the matching docs and examples (`Plan.md` roadmap summary, `docs/`, `example/config.yaml`, `example/README.md`) in the same change.
 - Always run the full verification chain after changes.
-- Update `AGENTS.md` "Known codebase pitfalls" if a new recurring issue is found.
+- Update `../../../docs/ai/AGENTS.known-pitfalls.md` if a new recurring issue is found.
 
 ### Step 7: Summarize
 

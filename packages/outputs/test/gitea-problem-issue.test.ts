@@ -1353,6 +1353,189 @@ describe("consolidated lifecycle file-scope guard", () => {
   });
 });
 
+describe("consolidated cross-scope cleanup for Gitea", () => {
+  const oldHeadSha = "a".repeat(40);
+  const newHeadSha = "b".repeat(40);
+  const oldScopeFp = computeScopeFingerprint("aicr-issues", "owent", "example", { targetKind: "push", headSha: oldHeadSha });
+
+  function buildOldConsolidatedBody(opts: { readonly fp: string; readonly file: string; readonly line: number; readonly category: string; readonly severity: string }): string {
+    return [
+      "<!-- aicr:managed=problem-issue -->",
+      "<!-- aicr:consolidated=true -->",
+      "<!-- aicr:channel=aicr-issues -->",
+      "<!-- aicr:label=aicr-managed -->",
+      `<!-- aicr:scope_fingerprint=${oldScopeFp} -->`,
+      `<!-- aicr:commit=${oldHeadSha} -->`,
+      `<!-- aicr:open_problems=${opts.fp} -->`,
+      "",
+      `#### ${opts.severity.toUpperCase()} (1)`,
+      "",
+      `**${opts.category}** \u2014 \`${opts.file}:${opts.line}\` <!-- aicr:fp=${opts.fp} -->`,
+      "",
+      "Old problem description.",
+    ].join("\n");
+  }
+
+  it("closes cross-scope consolidated issue when all its problems are gone and files were reviewed", async () => {
+    const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
+    const oldBody = buildOldConsolidatedBody({ fp: "fp-old", file: "src/auth.ts", line: 12, category: "security", severity: "critical" });
+    const newProblem: ReviewProblem = {
+      file: "src/utils.ts",
+      line: 30,
+      severity: "medium",
+      category: "performance",
+      message: "New issue.",
+      fingerprint: "fp-new",
+    };
+    const dispatcher = createGiteaProblemIssueDispatcher({
+      baseUrl: "https://gitea.example",
+      owner: "owent",
+      repo: "example",
+      channelName: "aicr-issues",
+      issueMode: "consolidated",
+      headSha: newHeadSha,
+      targetKind: "push",
+      resolvedAction: "close",
+      fetch: async (url, init) => {
+        calls.push({ url, init });
+        if (url.includes("/issues?")) return response([{ number: 40, title: "[AICR] Old", body: oldBody, state: "open" }]);
+        if (url.includes("/compare/")) return response({ status: "ahead" });
+        return response({ id: 50, number: 50 });
+      },
+    });
+
+    const results = await dispatcher.reconcileProblems([newProblem], "Summary", { reviewedFiles: ["src/auth.ts", "src/utils.ts"] });
+
+    const closeCall = calls.find((c) => c.url.includes("/issues/40") && c.init?.method === "PATCH" && JSON.parse(c.init?.body ?? "{}").state === "closed");
+    expect(closeCall).toBeDefined();
+    expect(results.some((r) => r.raw && typeof r.raw === "object" && (r.raw as Record<string, unknown>).action === "closed")).toBe(true);
+  });
+
+  it("does NOT close cross-scope issue when its files were NOT in the reviewed scope", async () => {
+    const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
+    const oldBody = buildOldConsolidatedBody({ fp: "fp-old", file: "src/auth.ts", line: 12, category: "security", severity: "critical" });
+    const newProblem: ReviewProblem = {
+      file: "src/utils.ts",
+      line: 30,
+      severity: "medium",
+      category: "performance",
+      message: "New issue.",
+      fingerprint: "fp-new",
+    };
+    const dispatcher = createGiteaProblemIssueDispatcher({
+      baseUrl: "https://gitea.example",
+      owner: "owent",
+      repo: "example",
+      channelName: "aicr-issues",
+      issueMode: "consolidated",
+      headSha: newHeadSha,
+      targetKind: "push",
+      resolvedAction: "close",
+      fetch: async (url, init) => {
+        calls.push({ url, init });
+        if (url.includes("/issues?")) return response([{ number: 40, title: "[AICR] Old", body: oldBody, state: "open" }]);
+        if (url.includes("/compare/")) return response({ status: "ahead" });
+        return response({ id: 50, number: 50 });
+      },
+    });
+
+    await dispatcher.reconcileProblems([newProblem], "Summary", { reviewedFiles: ["src/utils.ts"] });
+
+    const closeCall = calls.find((c) => c.url.includes("/issues/40") && c.init?.method === "PATCH" && JSON.parse(c.init?.body ?? "{}").state === "closed");
+    expect(closeCall).toBeUndefined();
+  });
+
+  it("does NOT close cross-scope issue when its problems are still present in the current review", async () => {
+    const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
+    const oldBody = buildOldConsolidatedBody({ fp: "fp-still-active", file: "src/auth.ts", line: 12, category: "security", severity: "critical" });
+    const sameProblem: ReviewProblem = {
+      file: "src/auth.ts",
+      line: 12,
+      severity: "critical",
+      category: "security",
+      message: "Still here.",
+      fingerprint: "fp-still-active",
+    };
+    const dispatcher = createGiteaProblemIssueDispatcher({
+      baseUrl: "https://gitea.example",
+      owner: "owent",
+      repo: "example",
+      channelName: "aicr-issues",
+      issueMode: "consolidated",
+      headSha: newHeadSha,
+      targetKind: "push",
+      resolvedAction: "close",
+      fetch: async (url, init) => {
+        calls.push({ url, init });
+        if (url.includes("/issues?")) return response([{ number: 40, title: "[AICR] Old", body: oldBody, state: "open" }]);
+        if (url.includes("/compare/")) return response({ status: "ahead" });
+        return response({ id: 50, number: 50 });
+      },
+    });
+
+    await dispatcher.reconcileProblems([sameProblem], "Summary", { reviewedFiles: ["src/auth.ts"] });
+
+    const closeCall = calls.find((c) => c.url.includes("/issues/40") && c.init?.method === "PATCH" && JSON.parse(c.init?.body ?? "{}").state === "closed");
+    expect(closeCall).toBeUndefined();
+  });
+
+  it("closes same-scope duplicate consolidated issues", async () => {
+    const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
+    const scopeFp = computeScopeFingerprint("aicr-issues", "owent", "example", { targetKind: "push", headSha: newHeadSha });
+    const body1 = [
+      "<!-- aicr:managed=problem-issue -->",
+      "<!-- aicr:consolidated=true -->",
+      "<!-- aicr:channel=aicr-issues -->",
+      "<!-- aicr:label=aicr-managed -->",
+      `<!-- aicr:scope_fingerprint=${scopeFp} -->`,
+      `<!-- aicr:commit=${newHeadSha} -->`,
+      "<!-- aicr:open_problems=fp-a -->",
+      "",
+      "#### HIGH (1)",
+      "",
+      "**bug** \u2014 `src/a.ts:1` <!-- aicr:fp=fp-a -->",
+      "",
+      "Bug.",
+    ].join("\n");
+    const body2 = body1.replace("src/a.ts:1", "src/a.ts:2");
+    const sameScopeProblem: ReviewProblem = {
+      file: "src/a.ts",
+      line: 1,
+      severity: "high",
+      category: "bug",
+      message: "Bug.",
+      fingerprint: "fp-a",
+    };
+    const dispatcher = createGiteaProblemIssueDispatcher({
+      baseUrl: "https://gitea.example",
+      owner: "owent",
+      repo: "example",
+      channelName: "aicr-issues",
+      issueMode: "consolidated",
+      headSha: newHeadSha,
+      targetKind: "push",
+      resolvedAction: "close",
+      fetch: async (url, init) => {
+        calls.push({ url, init });
+        if (url.includes("/issues?")) {
+          return response([
+            { number: 40, title: "[AICR] Dup 1", body: body1, state: "open" },
+            { number: 41, title: "[AICR] Dup 2", body: body2, state: "open" },
+          ]);
+        }
+        return response({ id: 40, number: 40 });
+      },
+    });
+
+    await dispatcher.reconcileProblems([sameScopeProblem], "Summary");
+
+    const closeCalls = calls.filter((c) =>
+      c.url.includes("/issues/41") && c.init?.method === "PATCH" && JSON.parse(c.init?.body ?? "{}").state === "closed",
+    );
+    expect(closeCalls).toHaveLength(1);
+  });
+});
+
 describe("consolidated target-aware scope fingerprint", () => {
   const scopeArgs = ["aicr-issues", "owent", "example"] as const;
 
