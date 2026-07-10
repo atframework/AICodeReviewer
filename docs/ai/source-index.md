@@ -11,9 +11,9 @@ This file records verified external sources for repository AI-agent guidance, Ag
 
 ## Last research pass
 
-- `last_checked`: 2026-07-02
-- Scope: AGENTS.md, Agent Skills, VS Code Copilot customization, Claude Code, Kilo, Zoo Code migration/runtime compatibility, Windsurf, OpenCode, OpenClaw, Hermes Agent, Google Antigravity, MCP, and skill registry/security guidance.
-- Result: Existing repository strategy is aligned: `AGENTS.md` remains canonical, repeatable procedures live under `.agents/skills/`, and Zoo Code support should use `zoo` as the AICR adapter/config kind while preserving the current upstream `roo` CLI and `.roo`/`.roomodes` compatibility paths.
+- `last_checked`: 2026-07-10
+- Scope: OpenAI Codex `AGENTS.md`, OpenAI Codex skills, Claude Code skills, Agent Skills progressive disclosure, and repository prompt/skill slimming.
+- Result: Existing repository strategy remains aligned: `AGENTS.md` stays canonical and short, repeatable workflows live under `.agents/skills/`, bulky fixed-issue checklists live in `docs/ai/AGENTS.known-pitfalls.md`, and skill-specific long contracts move to sibling `references/` files loaded on demand.
 
 ## Source records
 
@@ -21,12 +21,14 @@ This file records verified external sources for repository AI-agent guidance, Ag
 
 - Sources:
   - <https://agents.md/>
+  - <https://learn.chatgpt.com/docs/agent-configuration/agents-md>
 - Verified guidance:
   - `AGENTS.md` is a repository guide for coding agents, analogous to `README.md` for humans.
   - It should contain build/test commands, code style, project structure, security notes, and agent-specific conventions.
   - Nested `AGENTS.md` files can scope instructions to subtrees; user prompts still override repository files.
-- `last_checked`: 2026-05-18
-- `next_review`: 2026-08-18
+  - Codex layers global and project guidance, reading one instruction file per directory from repository root toward the current working directory; closer files override earlier guidance.
+- `last_checked`: 2026-07-10
+- `next_review`: 2026-10-10
 - `update_trigger`: Re-check when changing repository-wide instruction loading, adding nested instruction files, or adding support for a new AGENTS-aware client.
 
 ### Agent Skills open standard
@@ -40,15 +42,20 @@ This file records verified external sources for repository AI-agent guidance, Ag
   - <https://agentskills.io/skill-creation/evaluating-skills>
   - <https://agentskills.io/skill-creation/using-scripts>
   - <https://agentskills.io/llms.txt>
+  - <https://learn.chatgpt.com/docs/build-skills>
+  - <https://code.claude.com/docs/en/skills>
 - Verified guidance:
   - A skill is a directory containing `SKILL.md`.
   - Required frontmatter is `name` and `description`; folder name should match `name`.
   - Skill names should be lowercase alphanumeric with single hyphen separators and no leading/trailing/consecutive hyphens.
   - Descriptions are the activation surface; keep them concrete, trigger-oriented, and under 1024 characters.
   - Skills use progressive disclosure: metadata is listed first, `SKILL.md` loads on demand, and supporting files load only when needed.
+  - Codex starts with skill name, description, and file path; full `SKILL.md` loads only when the skill is selected, and many installed skills can cause descriptions to be shortened or omitted from the initial list.
+  - Keep each skill focused on one job, write imperative steps with explicit inputs/outputs, and test prompts against the description to confirm trigger behavior.
+  - Supporting files keep `SKILL.md` focused while detailed references, examples, or scripts load only when needed.
   - Scripts should be non-interactive, support `--help`, emit actionable errors, and keep output bounded.
-- `last_checked`: 2026-05-18
-- `next_review`: 2026-07-18
+- `last_checked`: 2026-07-10
+- `next_review`: 2026-10-10
 - `update_trigger`: Re-check before changing `SKILL.md` frontmatter shape, skill directory layout, script expectations, or skill activation descriptions.
 
 ### Karpathy-inspired coding-agent behavior
@@ -91,9 +98,10 @@ This file records verified external sources for repository AI-agent guidance, Ag
 - Verified guidance:
   - Claude Code reads `CLAUDE.md`; a thin `@AGENTS.md` bridge is an official compatibility pattern.
   - Claude Code Skills follow the Agent Skills model and load on demand.
+  - Skill descriptions need natural trigger keywords; supporting files are appropriate for large references and examples so `SKILL.md` stays focused.
   - Large `CLAUDE.md` files should be split or trimmed; duplicate global prompt bodies increase context cost and drift risk.
-- `last_checked`: 2026-05-18
-- `next_review`: 2026-07-18
+- `last_checked`: 2026-07-10
+- `next_review`: 2026-10-10
 - `update_trigger`: Re-check when changing `CLAUDE.md`, adding `.claude/` assets, or relying on Claude-specific frontmatter or plugin behavior.
 
 ### Kilo Code and Zoo Code

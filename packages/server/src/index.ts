@@ -825,12 +825,9 @@ function buildTriggerEventLogFields(reviewEvent: ReviewEvent): Record<string, un
     targetKind: reviewEvent.targetKind,
     action: reviewEvent.reason,
   };
-  const targetNumber = reviewEvent.changedFiles?.[0];
-  if (
-    targetNumber !== undefined &&
-    (reviewEvent.targetKind === "issue" || reviewEvent.targetKind === "pull_request")
-  ) {
-    fields.number = targetNumber;
+  const issueNumber = reviewEvent.targetKind === "issue" ? reviewEvent.changedFiles?.[0] : undefined;
+  if (issueNumber !== undefined) {
+    fields.number = issueNumber;
   }
   if (reviewEvent.title) fields.title = reviewEvent.title;
   if (reviewEvent.url) fields.url = reviewEvent.url;

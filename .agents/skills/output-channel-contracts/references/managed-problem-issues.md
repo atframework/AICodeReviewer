@@ -1,0 +1,18 @@
+# Managed Problem Issue Lifecycle
+
+Read this when changing `gitea_problem_issue`, `github_problem_issue`, issue modes, scope fingerprints, resolved-action behavior, file-scope guards, or reconciliation tests.
+## Managed problem issue lifecycle
+
+- `gitea_problem_issue` and `github_problem_issue` channels support `issue_mode` to control creation strategy:
+  - `consolidated` (default): all problems from one review run are merged into a single issue, scope-fingerprint-based reconciliation. The scope fingerprint is **target-aware**: `push` events key by batch (`channel + owner + repo + headSha`), `pull_request`/MR events key by pull number (`channel + owner + repo + pr:number`, stable across commits; falls back to `headSha` when the number is unknown), and other targets (manual/scheduled or missing `targetKind`) fall back to `channel + owner + repo`. Different push batches and different PRs keep separate issues. `bootstrap.ts` forwards `reviewEvent.targetKind`, the resolved `pullNumber`, and `reviewEvent.branch` into the dispatcher. After handling the same-scope issue, `reconcileProblems` also runs a **cross-scope cleanup loop** that resolves consolidated issues from other scopes (old push batches) when their problems are no longer present, their files were re-reviewed, and commit ancestry confirms the current commit is newer. Same-scope duplicates from prior races are also resolved.
+  - `per_commit`: one issue per commit scope (`channel + owner + repo + headSha`) for all targets, fingerprint-based reconciliation.
+  - `per_problem`: one issue per problem, fingerprint-based reconciliation.
+- In consolidated mode:
+  - Title stays concise: single problem uses `per_problem` format; multiple problems append a representative summary from the highest-severity issue (e.g., `[AICR] [CRITICAL] 3 problems · SQL query uses unsanitized input`).
+  - Body groups problems by severity (critical → info).
+  - Labels use highest severity. Assignees are aggregated across all problems.
+  - On re-analysis: existing consolidated issue is updated (PATCH). If no problems: closed/deleted per `resolved_action`.
+  - Per-fingerprint resolution tracking: body includes `<!-- aicr:commit={headSha} -->`, `<!-- aicr:open_problems=... -->`, and per-problem `<!-- aicr:fp={fp} -->` markers. On update, the VCS compare API verifies commit ordering; resolved problems are shown in a collapsible "Resolved" section. Same-commit updates merge without resolving; older-commit updates are skipped; compare API failures degrade gracefully to a full replacement.
+- **File-scope resolution guard**: a managed problem is only marked "resolved" (and its issue closed) when the current review actually re-analyzed the file containing that problem. `reconcileProblems` receives `reviewedFiles` (the current review's `changedPaths`) via `ReviewSummaryPublishOptions.reviewedFiles` → `bootstrap.ts` `publishSummary` → 3rd argument. Per-problem issue bodies embed `<!-- aicr:file=<path> -->` (legacy bodies fall back to parsing ``Location: `path:line` ``). When `reviewedFiles` is provided and the file is NOT in scope (or cannot be determined), the problem stays open. Consolidated partial-scope updates must retain out-of-scope fingerprints in `open_problems` and the body; if the old body cannot map a retained fingerprint to a file, skip the rewrite instead of dropping it. When `reviewedFiles` is absent/empty, the original behavior is preserved.
+- `aicr.publish_summary.title` affects the rendered summary section in the issue body, not the managed issue title itself.
+- `gitea_problem_issue` applies auto_tag and reviewed_tag at issue creation time via `body.labels`.

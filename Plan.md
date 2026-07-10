@@ -37,6 +37,7 @@
 - `docs/ai/index.md`：AI 文档总导航。
 - `docs/ai/architecture.md`：稳定架构与实现合同。
 - `docs/ai/decisions.md`：长期有效决策索引。
+- `docs/ai/AGENTS.known-pitfalls.md`：已修复的易回归坑位按需清单；非平凡实现/审查前阅读。
 - `docs/ai/documentation-site-plan.md`：M11 文档站子工程建设计划。
 - `docs/ai/milestones/*.md`：已完成阶段归档。
 - `docs/site/`：M11 用户文档站子工程（Astro Starlight，中英双语），公开用户入口。
@@ -70,6 +71,7 @@
 - `.agents/skills/*/SKILL.md` 是 canonical workflow 技能源。
 - 已完成阶段长文总结放到 `docs/ai/milestones/*.md`。
 - prompt/skill 只保留稳定约束和入口索引，不复制历史大段正文。
+- 易回归坑位和长合同进入 `docs/ai/AGENTS.known-pitfalls.md` 或 skill `references/`，主提示词只保留按需读取条件。
 
 ## 3. 核心组件摘要
 
