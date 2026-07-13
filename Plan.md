@@ -151,6 +151,10 @@
 - async trigger、失败报告、publisher 行为、dashboard 和 replay 统一落在可观测性合同里。
 - Dashboard 已覆盖 Overview / Projects / Providers / Runs 及 today/thisWeek/thisMonth/all
   时间维度；日汇总分区按 UTC day。
+- Token usage 按两条 review 路径区分口径：直连 LLM 路径透传 provider 真实 usage
+  （`usageSource: "llm_gateway"`）；agent（kilo）路径从 `step-finish` NDJSON 事件累加
+  （`usageSource: "agent_stdout"`）。本地 prompt 估算独立存于 `review_runs.prompt_token_estimate`，
+  不混入 `llm_usage`；agent 路径未捕获 usage 时 dashboard 旁显估算值并标注来源。
 
 ### 3.12 Reflection 与 memory
 

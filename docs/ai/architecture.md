@@ -232,6 +232,22 @@ AICR 采用**两层上下文管理**，两者互补：
   非缓存输入与输出价；只有完全无 catalog 价格时才回落到 `(tokens/1000)*0.002` 占位估算。`promptTokens`
   语义统一为“总输入（含缓存命中）”，由 provider extractor 归一化（Anthropic 把 `cache_read_input_tokens`
   折进 `promptTokens`），保证 `nonCachedInput = promptTokens - cachedPromptTokens` 在所有 provider 下成立。
+- **两条 review 路径的 usage 透传口径**：review 编排有两条调用路径，dashboard 的 token 统计必须正确区分。
+  直连 LLM 路径（无 `sandbox`+`agentAdapter`）调用 `options.llm.complete()`，返回的 `ChatCompletionResult.usage`
+  是 provider 真实上报值，经 `summarizeReviewOrchestrationForWebhook` → `ReviewOrchestrationWebhookSummary.llmUsage`
+  透传到 `persistReviewRunToStore`，写入 `llm_usage.tokens_in/out/total`（`usageSource: "llm_gateway"`）。
+  agent 路径（默认 `agent.default: "kilo"`）在子进程内消耗 token，**不经过本项目 gateway**；token 仅能从
+  agent stdout 的 JSON 流解析——kilo（基于 opencode）每个模型回合发一个 `step-finish` 事件，字段为
+  `tokens.{total,input,output,reasoning,cache.{read,write}}` 与 `cost`（浮点 USD）。kilo 的计数是**互斥**口径：
+  `input` 是非缓存输入，`cache.read/write` 单列，`total = input + output + reasoning + cache.read + cache.write`。
+  `extractKiloJsonStreamContent` 跨回合累加原始计数后，按项目统一约定折算成 `ChatCompletionUsage`：
+  `promptTokens = input + cache.read + cache.write`（含缓存的总输入）、`completionTokens = output + reasoning`
+  （含推理的总输出），从而保证 `promptTokens + completionTokens == total` 且
+  `nonCachedInput = promptTokens - cachedPromptTokens - cacheCreationTokens == input`，与直连路径口径一致；
+  挂到合成 `llmResult.usage`，`usageSource` 标为 `"agent_stdout"`。当 agent 路径未发出可解析的
+  usage 事件时（如非 kilo agent 或输出被截断），`llmUsage` 为 `undefined`，dashboard 的 `llm_usage` token 列
+  显示 0/—，同时 `review_runs.prompt_token_estimate`（本地 prompt 估算，独立存储、不混入 `llm_usage`）作为旁显
+  参考值。**不要把 `promptTokenEstimate` 当作真实 usage 写入 `llm_usage.tokensTotal`**——那是早期 bug 的根源。
 
 ### 3.6 Prompt Manager 与 AI 资产装配
 

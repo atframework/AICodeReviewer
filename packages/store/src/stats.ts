@@ -32,6 +32,7 @@ export interface ReviewRunInsert {
   compressed?: boolean | null;
   originalTokenEstimate?: number | null;
   compressedTokenEstimate?: number | null;
+  promptTokenEstimate?: number | null;
   diffFileCount?: number | null;
   changedFileCount?: number | null;
   problemCount?: number;
@@ -106,6 +107,7 @@ export function insertReviewRun(store: StoreDb, run: ReviewRunInsert): void {
     ...(run.compressed != null ? { compressed: run.compressed } : {}),
     ...(run.originalTokenEstimate != null ? { originalTokenEstimate: run.originalTokenEstimate } : {}),
     ...(run.compressedTokenEstimate != null ? { compressedTokenEstimate: run.compressedTokenEstimate } : {}),
+    ...(run.promptTokenEstimate != null ? { promptTokenEstimate: run.promptTokenEstimate } : {}),
     ...(run.diffFileCount != null ? { diffFileCount: run.diffFileCount } : {}),
     ...(run.changedFileCount != null ? { changedFileCount: run.changedFileCount } : {}),
     problemCount: run.problemCount ?? 0,
@@ -274,6 +276,8 @@ export interface TimeWindowStats {
   tokensTotalTotal: number;
   costUsdTotal: number;
   avgDurationMs: number | null;
+  /** Sum of per-run local prompt token estimates; the fallback shown when real usage is absent. */
+  promptTokenEstimateTotal: number;
 }
 
 export interface ProjectStats extends TimeWindowStats {
@@ -314,6 +318,7 @@ export function getOverviewStats(
       problemRunCount: sum(sql`CASE WHEN ${reviewRuns.problemCount} > 0 THEN 1 ELSE 0 END`),
       problemTotal: sum(reviewRuns.problemCount),
       avgDurationMs: avg(reviewRuns.durationMs),
+      promptTokenEstimateTotal: sum(reviewRuns.promptTokenEstimate),
     })
     .from(reviewRuns)
     .where(conditions.length > 0 ? and(...conditions) : undefined)
@@ -370,6 +375,7 @@ export function getOverviewStats(
     tokensTotalTotal: Number(llmBase?.tokensTotalTotal ?? 0),
     costUsdTotal: Number(llmBase?.costUsdTotal ?? 0),
     avgDurationMs: base?.avgDurationMs != null ? Math.round(Number(base.avgDurationMs)) : null,
+    promptTokenEstimateTotal: Number(base?.promptTokenEstimateTotal ?? 0),
   };
 }
 
@@ -395,6 +401,7 @@ export function getProjectStats(
       problemRunCount: sum(sql`CASE WHEN ${reviewRuns.problemCount} > 0 THEN 1 ELSE 0 END`),
       problemTotal: sum(reviewRuns.problemCount),
       avgDurationMs: avg(reviewRuns.durationMs),
+      promptTokenEstimateTotal: sum(reviewRuns.promptTokenEstimate),
     })
     .from(reviewRuns)
     .innerJoin(projects, eq(reviewRuns.projectId, projects.id))
@@ -474,6 +481,7 @@ export function getProjectStats(
     tokensTotalTotal: Number(llmByProject.get(row.projectId)?.tokensTotalTotal ?? 0),
     costUsdTotal: Number(llmByProject.get(row.projectId)?.costUsdTotal ?? 0),
     avgDurationMs: row.avgDurationMs != null ? Math.round(Number(row.avgDurationMs)) : null,
+    promptTokenEstimateTotal: Number(row.promptTokenEstimateTotal ?? 0),
   }));
 }
 

@@ -354,7 +354,11 @@ function renderOverviewStats(){
     {label:"Issues Created",value:formatNumber(s.issueCreatedCount)},
     {label:"Files Changed",value:formatNumber(s.filesChangedTotal),sub:"+"+formatNumber(s.linesAddedTotal)+" / -"+formatNumber(s.linesDeletedTotal)+" lines"},
     {label:"LLM Requests",value:formatNumber(s.llmRequestTotal)},
-    {label:"Total Tokens",value:formatNumber(s.tokensTotalTotal),sub:"In: "+formatNumber(s.tokensInTotal)+" / Out: "+formatNumber(s.tokensOutTotal)},
+    {label:"Total Tokens",value:formatNumber(s.tokensTotalTotal),sub:(s.tokensInTotal||s.tokensOutTotal)
+      ?("In: "+formatNumber(s.tokensInTotal)+" / Out: "+formatNumber(s.tokensOutTotal))
+      :((s.promptTokenEstimateTotal||0)>0
+        ?("~"+formatNumber(s.promptTokenEstimateTotal)+" est. (agent usage unavailable)")
+        :"In: 0 / Out: 0")},
     {label:"Est. Cost",value:formatCost(s.costUsdTotal)}
   ];
   el.innerHTML=cards.map(function(c){
@@ -372,9 +376,16 @@ function renderProviderTable(data){
     return;
   }
   el.innerHTML=src.map(function(p){
+    // When a provider has requests but zero tokens, usage was not captured (e.g. agent
+    // runs whose stdout carried no step-finish events). Show "—" to distinguish that from
+    // a genuine zero-token edge case.
+    var usageMissing=p.requestCount>0&&!p.tokensIn&&!p.tokensOut&&!p.tokensTotal;
+    var tokIn=usageMissing?"—":formatNumber(p.tokensIn);
+    var tokOut=usageMissing?"—":formatNumber(p.tokensOut);
+    var tokTotal=usageMissing?"—":formatNumber(p.tokensTotal);
     return "<tr><td>"+esc(p.providerId)+"</td><td>"+esc(p.modelId)+"</td><td>"+
-      formatNumber(p.requestCount)+"</td><td>"+formatNumber(p.tokensIn)+"</td><td>"+
-      formatNumber(p.tokensOut)+"</td><td>"+formatNumber(p.tokensTotal)+"</td><td>"+
+      formatNumber(p.requestCount)+"</td><td>"+tokIn+"</td><td>"+
+      tokOut+"</td><td>"+tokTotal+"</td><td>"+
       formatCost(p.costUsd)+"</td><td>"+formatNumber(p.retryCount+p.fallbackCount+p.failureCount)+"</td><td>"+
       formatDuration(p.avgLatencyMs)+"</td></tr>";
   }).join("");

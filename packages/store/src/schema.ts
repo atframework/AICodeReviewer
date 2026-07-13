@@ -46,6 +46,7 @@ export const reviewRuns = sqliteTable("review_runs", {
   compressed: integer("compressed", { mode: "boolean" }),
   originalTokenEstimate: integer("original_token_estimate"),
   compressedTokenEstimate: integer("compressed_token_estimate"),
+  promptTokenEstimate: integer("prompt_token_estimate"),
   diffFileCount: integer("diff_file_count"),
   changedFileCount: integer("changed_file_count"),
   problemCount: integer("problem_count").notNull().default(0),

@@ -81,6 +81,7 @@ describe("stats insert and query", () => {
       problemCount: 3,
       summaryCount: 1,
       dispatchCount: 2,
+      promptTokenEstimate: 850,
       codeMetrics: {
         filesChanged: 5,
         linesAdded: 100,
@@ -114,6 +115,9 @@ describe("stats insert and query", () => {
     expect(stats.tokensTotalTotal).toBe(1500);
     expect(stats.costUsdTotal).toBeCloseTo(0.05);
     expect(stats.avgDurationMs).toBe(5000);
+    // The local prompt estimate is stored separately from real llm_usage tokens so the
+    // dashboard can surface it as a fallback when agent runs cannot report real usage.
+    expect(stats.promptTokenEstimateTotal).toBe(850);
   });
 
   it("inserts a failed run", () => {

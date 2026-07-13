@@ -1090,6 +1090,85 @@ describe("runReviewOrchestration", () => {
     }
   });
 
+  it("recognizes kilo 7.x `tool` events (name under event.tool, input under event.state.input)", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-kilo-tool-event-"));
+
+    try {
+      await writeWorkspaceFile(tempDir, "src/app.ts", "const value = oldValue();\n");
+      // kilo >=7 emits tool calls as `tool` events with the tool name under `event.tool`
+      // (namespaced as <server>_<tool>) and the input under `event.state.input`. This must
+      // be recognized the same way as the legacy `tool_call`/`tool_use` events.
+      const kiloStream = [
+        {
+          type: "tool",
+          tool: "aicr-output_aicr_report_problem",
+          callID: "call_test",
+          state: {
+            status: "completed",
+            input: {
+              file: "src/app.ts",
+              line: 1,
+              severity: "high",
+              category: "correctness",
+              message: "Bug found via kilo 7.x tool event.",
+            },
+          },
+        },
+        { type: "step-finish", tokens: { input: 100, output: 5, total: 105 }, cost: 0 },
+      ].map((e) => JSON.stringify(e)).join("\n");
+      const sandbox: SandboxBackend = {
+        kind: "native",
+        async materializeFs(layout) {
+          await mkdir(layout.agentDir, { recursive: true });
+          await mkdir(layout.tmpDir, { recursive: true });
+          return { agentDir: layout.agentDir, tmpDir: layout.tmpDir, mountSpecs: [] };
+        },
+        async spawn() {
+          return { exitCode: 0, stdout: kiloStream, stderr: "", timedOut: false, durationMs: 7 };
+        },
+        async teardown() {},
+      };
+      const agentAdapter: AgentAdapter = {
+        kind: "kilo",
+        async detect() { return { available: true, binary: "kilo" }; },
+        buildCommand() { return ["kilo", "run", "--auto"]; },
+        async materializeConfig(_m, workingDir) {
+          return { configFiles: new Map(), envVars: {}, workingDir };
+        },
+      };
+
+      const result = await runReviewOrchestration(
+        {
+          reviewEvent: createReviewEventFixture(),
+          payload: {},
+          provider: "gitea",
+          eventName: "pull_request",
+        },
+        {
+          baseSystemPrompt: "<task>\n{{TASK_CONTEXT}}\n</task>",
+          sourceRootResolver: () => tempDir,
+          vcs: createVcs(tempDir),
+          llm: { async complete() { throw new Error("direct llm must not be called"); } },
+          model,
+          sandbox,
+          agentAdapter,
+          outputPublisher: {
+            async publishProblem() {
+              return { channel: "test", status: "published", externalId: "1", raw: {} };
+            },
+          },
+        },
+      );
+
+      expect(result.outputState.problems).toHaveLength(1);
+      expect(result.outputState.problems[0]?.message).toBe("Bug found via kilo 7.x tool event.");
+      expect(result.llmResult.usage?.promptTokens).toBe(100);
+      expect(result.llmResult.usage?.completionTokens).toBe(5);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("falls back to direct LLM when agent repair remains unstructured", async () => {
     const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-agent-direct-llm-fallback-"));
 
@@ -1367,6 +1446,206 @@ describe("summarizeReviewOrchestrationForWebhook", () => {
       expect(summary.skipReason).toBeUndefined();
       expect(summary.problemCount).toBe(1);
       expect(summary.dispatchCount).toBe(1);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("forwards real LLM usage through the summary on the direct LLM path", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-summary-usage-"));
+
+    try {
+      await writeWorkspaceFile(tempDir, "src/app.ts", "const ok = true;\n");
+      const llm: ChatCompletionClient = {
+        async complete(input) {
+          return {
+            providerId: input.model.providerId,
+            modelId: input.model.modelId,
+            content: JSON.stringify({ skipReason: "lgtm" }),
+            usage: {
+              promptTokens: 1234,
+              completionTokens: 56,
+              totalTokens: 1290,
+              cachedPromptTokens: 100,
+            },
+            raw: {},
+          };
+        },
+      };
+
+      const result = await runReviewOrchestration(
+        {
+          reviewEvent: createReviewEventFixture(),
+          payload: {},
+          provider: "gitea",
+          eventName: "pull_request",
+        },
+        {
+          baseSystemPrompt: "<task>\n{{TASK_CONTEXT}}\n</task>",
+          sourceRootResolver: () => tempDir,
+          vcs: createVcs(tempDir),
+          llm,
+          model,
+        },
+      );
+
+      const summary = summarizeReviewOrchestrationForWebhook(result);
+
+      expect(summary.llmUsage).toMatchObject({
+        promptTokens: 1234,
+        completionTokens: 56,
+        totalTokens: 1290,
+        cachedPromptTokens: 100,
+      });
+      expect(summary.usageSource).toBe("llm_gateway");
+      expect(summary.requestCount).toBe(1);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("aggregates kilo step-finish token events and tags usageSource as agent_stdout", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-kilo-step-finish-"));
+
+    try {
+      await writeWorkspaceFile(tempDir, "src/app.ts", "const ok = true;\n");
+      // Two step-finish events (two model turns); tokens must be summed across turns,
+      // matching kilo's real NDJSON schema (tokens.input/output/reasoning/total/cache.{read,write}, cost).
+      // Kilo's counters are DISJOINT: `input` is non-cached prompt tokens and
+      // `total = input + output + reasoning + cache.read + cache.write` (both events below are
+      // internally consistent). The text event carries a review payload so the run resolves to a skip.
+      const kiloStream = [
+        { type: "text", text: JSON.stringify({ skipReason: "lgtm" }) },
+        {
+          type: "step-finish",
+          reason: "tool-calls",
+          tokens: { total: 13952, input: 13193, output: 13, reasoning: 42, cache: { write: 0, read: 704 } },
+          cost: 0.001,
+        },
+        {
+          type: "step-finish",
+          reason: "stop",
+          tokens: { total: 5000, input: 4790, output: 200, reasoning: 0, cache: { write: 10, read: 0 } },
+          cost: 0.002,
+        },
+      ].map((e) => JSON.stringify(e)).join("\n");
+      const sandbox: SandboxBackend = {
+        kind: "native",
+        async materializeFs(layout) {
+          await mkdir(layout.agentDir, { recursive: true });
+          await mkdir(layout.tmpDir, { recursive: true });
+          return { agentDir: layout.agentDir, tmpDir: layout.tmpDir, mountSpecs: [] };
+        },
+        async spawn() {
+          return { exitCode: 0, stdout: kiloStream, stderr: "", timedOut: false, durationMs: 99 };
+        },
+        async teardown() {},
+      };
+      const agentAdapter: AgentAdapter = {
+        kind: "kilo",
+        async detect() { return { available: true, binary: "kilo" }; },
+        buildCommand() { return ["kilo", "run", "--auto"]; },
+        async materializeConfig(_m, workingDir) {
+          return { configFiles: new Map(), envVars: {}, workingDir };
+        },
+      };
+
+      const result = await runReviewOrchestration(
+        {
+          reviewEvent: createReviewEventFixture(),
+          payload: {},
+          provider: "gitea",
+          eventName: "pull_request",
+        },
+        {
+          baseSystemPrompt: "<task>\n{{TASK_CONTEXT}}\n</task>",
+          sourceRootResolver: () => tempDir,
+          vcs: createVcs(tempDir),
+          llm: { async complete() { throw new Error("direct llm must not be called"); } },
+          model,
+          sandbox,
+          agentAdapter,
+        },
+      );
+
+      const summary = summarizeReviewOrchestrationForWebhook(result);
+
+      // Kilo counters are folded into the project convention: promptTokens = input + cache
+      // read/write (total input incl. cache), completionTokens = output + reasoning.
+      // step1: prompt 13193+704+0=13897, completion 13+42=55; step2: prompt 4790+0+10=4800,
+      // completion 200+0=200. Sums: prompt 18697, completion 255, total 18952.
+      expect(summary.llmUsage).toMatchObject({
+        promptTokens: 13897 + 4800,
+        completionTokens: 55 + 200,
+        totalTokens: 13952 + 5000,
+        cachedPromptTokens: 704,
+        cacheCreationTokens: 10,
+      });
+      // In + Out must equal Total so the dashboard breakdown reconciles.
+      expect((summary.llmUsage?.promptTokens ?? 0) + (summary.llmUsage?.completionTokens ?? 0))
+        .toBe(summary.llmUsage?.totalTokens);
+      expect(summary.usageSource).toBe("agent_stdout");
+      expect(summary.requestCount).toBe(2);
+      expect(summary.estimatedCostUsd).toBeCloseTo(0.003, 5);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("omits llmUsage when an agent run emits no step-finish events", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-kilo-no-usage-"));
+
+    try {
+      await writeWorkspaceFile(tempDir, "src/app.ts", "const ok = true;\n");
+      // Stream has only a text event carrying a skipReason — no step-finish → no usage.
+      const kiloStream = [
+        { type: "text", text: JSON.stringify({ skipReason: "lgtm" }) },
+      ].map((e) => JSON.stringify(e)).join("\n");
+      const sandbox: SandboxBackend = {
+        kind: "native",
+        async materializeFs(layout) {
+          await mkdir(layout.agentDir, { recursive: true });
+          await mkdir(layout.tmpDir, { recursive: true });
+          return { agentDir: layout.agentDir, tmpDir: layout.tmpDir, mountSpecs: [] };
+        },
+        async spawn() {
+          return { exitCode: 0, stdout: kiloStream, stderr: "", timedOut: false, durationMs: 5 };
+        },
+        async teardown() {},
+      };
+      const agentAdapter: AgentAdapter = {
+        kind: "kilo",
+        async detect() { return { available: true, binary: "kilo" }; },
+        buildCommand() { return ["kilo", "run", "--auto"]; },
+        async materializeConfig(_m, workingDir) {
+          return { configFiles: new Map(), envVars: {}, workingDir };
+        },
+      };
+
+      const result = await runReviewOrchestration(
+        {
+          reviewEvent: createReviewEventFixture(),
+          payload: {},
+          provider: "gitea",
+          eventName: "pull_request",
+        },
+        {
+          baseSystemPrompt: "<task>\n{{TASK_CONTEXT}}\n</task>",
+          sourceRootResolver: () => tempDir,
+          vcs: createVcs(tempDir),
+          llm: { async complete() { throw new Error("direct llm must not be called"); } },
+          model,
+          sandbox,
+          agentAdapter,
+        },
+      );
+
+      const summary = summarizeReviewOrchestrationForWebhook(result);
+
+      // No usage captured: callers fall back to promptTokenEstimate.
+      expect(summary.llmUsage).toBeUndefined();
+      expect(summary.usageSource).toBeUndefined();
+      expect(summary.estimatedCostUsd).toBeUndefined();
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }
