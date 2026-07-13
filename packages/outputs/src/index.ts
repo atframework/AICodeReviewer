@@ -291,26 +291,6 @@ export function isFileCoveredByReview(
 	return reviewedFiles.some((reviewed) => normalizePath(reviewed) === target);
 }
 
-function canResolveConsolidatedIssue(
-	body: string,
-	reviewedFiles: readonly string[] | undefined,
-): boolean {
-	if (!reviewedFiles || reviewedFiles.length === 0) {
-		return true;
-	}
-	const storedFingerprints = extractOpenProblemFingerprintsFromBody(body);
-	if (storedFingerprints.size === 0) {
-		return false;
-	}
-	const problemInfo = parseConsolidatedBodyProblemInfo(body);
-	for (const fp of storedFingerprints) {
-		const file = problemInfo.get(fp)?.file;
-		if (!isFileCoveredByReview(file, reviewedFiles)) {
-			return false;
-		}
-	}
-	return true;
-}
 
 interface CategorizeGuard {
 	readonly reviewedFiles?: readonly string[];
@@ -377,6 +357,7 @@ function buildRetainedProblem(info: ParsedProblemInfo): ReviewProblem {
 	return {
 		file: info.file,
 		line: info.line,
+		...(info.endLine !== undefined ? { endLine: info.endLine } : {}),
 		severity: toProblemSeverity(info.severity),
 		category: info.category || "previously reported",
 		message: "This problem was reported by an earlier analysis. The current review did not re-analyze this file, so AICR is keeping it open until that file is reviewed again.",
@@ -2037,14 +2018,16 @@ export function createGithubProblemIssueDispatcher(options: GithubProblemIssueOp
 		problems: readonly ReviewProblem[],
 		summary: string | undefined,
 		categorization?: ConsolidatedIssueCategorization,
+		context?: ConsolidatedIssueUpdateContext,
 	): Promise<DispatchResult> {
-		const scopeFingerprint = currentScopeFingerprint;
+		const scopeFingerprint = context?.scopeFingerprint ?? currentScopeFingerprint;
+		const headSha = context?.headSha ?? options.headSha;
 		const body: Record<string, unknown> = {
 			title: buildConsolidatedIssueTitle(getConsolidatedOpenProblems(problems, categorization), markerPrefix),
 			body: buildConsolidatedIssueBody(problems, {
 				channel, markerLabel, scopeFingerprint,
 				...(summary ? { summary } : {}),
-				...(options.headSha ? { headSha: options.headSha } : {}),
+				...(headSha ? { headSha } : {}),
 				...(categorization ? { categorization } : {}),
 			}),
 		};
@@ -2142,37 +2125,54 @@ export function createGithubProblemIssueDispatcher(options: GithubProblemIssueOp
 				);
 
 				const results: DispatchResult[] = [];
+				const preparedProblems = problems.map(ensureProblemFingerprint);
 
-				const currentFpSet = new Set<string>();
-				for (const problem of problems) {
-					currentFpSet.add(problem.fingerprint ?? computeProblemFingerprint(problem));
-				}
+				if (preparedProblems.length === 0) {
+					if (resolvedAction === "none") return results;
 
-				if (problems.length === 0) {
-					// Empty review: resolve all eligible managed consolidated issues (same + cross scope)
-					// whose files were covered by the current review.
-					if (resolvedAction !== "none") {
-						for (const issue of existingIssues) {
-							if (!issue.scopeFingerprint) continue;
-							if (issue.scopeFingerprint !== scopeFingerprint) {
-								const storedCommit = extractCommitFromIssueBody(issue.body);
-								if (storedCommit && options.headSha && storedCommit !== options.headSha) {
-									const isAtOrAfter = await verifyCommitAtOrAfter(request, repoPath, storedCommit, options.headSha);
-									if (isAtOrAfter === false) continue;
-								}
-							}
-							if (!canResolveConsolidatedIssue(issue.body, reviewedFiles)) continue;
-							const result = await resolveIssue(issue);
-							if (result) {
-								results.push(result);
-							}
+					for (const issue of existingIssues) {
+						if (!issue.scopeFingerprint) continue;
+						const isCurrentScope = issue.scopeFingerprint === scopeFingerprint;
+						if (!isCurrentScope) {
+							if (issueMode !== "consolidated") continue;
+						if (!reviewedFiles || reviewedFiles.length === 0) continue;
+							if (!reviewedFiles || reviewedFiles.length === 0) continue;
+							const storedCommit = extractCommitFromIssueBody(issue.body);
+							if (!storedCommit || !options.headSha) continue;
+							const isAtOrAfter = await verifyCommitAtOrAfter(request, repoPath, storedCommit, options.headSha);
+							if (isAtOrAfter !== true) continue;
 						}
+
+						const prepared = prepareStoredConsolidatedReconciliation(issue.body, preparedProblems, reviewedFiles);
+						if (!prepared) {
+							if (isCurrentScope && (!reviewedFiles || reviewedFiles.length === 0)) {
+								const result = await resolveIssue(issue);
+								if (result) results.push(result);
+							}
+							continue;
+						}
+						if (prepared.categorization.resolvedFingerprints.size === 0) continue;
+						if (prepared.openProblems.length === 0) {
+							const result = await resolveIssue(issue);
+							if (result) results.push(result);
+							continue;
+						}
+
+						results.push(await updateConsolidatedIssue(
+							issue,
+							prepared.relevantCurrentProblems,
+							extractConsolidatedIssueSummary(issue.body),
+							prepared.categorization,
+							{
+								scopeFingerprint: issue.scopeFingerprint,
+								...(options.headSha ? { headSha: options.headSha } : {}),
+							},
+						));
 					}
 					return results;
 				}
 
 				if (existingConsolidated) {
-					const preparedProblems = problems.map(ensureProblemFingerprint);
 					const storedCommit = extractCommitFromIssueBody(existingConsolidated.body);
 					const storedFingerprints = extractOpenProblemFingerprintsFromBody(existingConsolidated.body);
 					const resolvedDetails = parseConsolidatedBodyProblemInfo(existingConsolidated.body);
@@ -2218,47 +2218,49 @@ export function createGithubProblemIssueDispatcher(options: GithubProblemIssueOp
 						results.push(await updateConsolidatedIssue(existingConsolidated, preparedProblems, summary));
 					}
 				} else {
-					results.push(await createConsolidatedIssue(problems, summary, owners));
+					results.push(await createConsolidatedIssue(preparedProblems, summary, owners));
 				}
 
-				// Cross-scope cleanup: resolve consolidated issues from other scopes (old push
-				// batches, different commits) when all their problems are gone and their files
-				// were covered. Also resolve same-scope duplicates from prior races.
 				if (resolvedAction !== "none") {
 					for (const issue of existingIssues) {
 						if (!issue.scopeFingerprint) continue;
 						if (issue.scopeFingerprint === scopeFingerprint) {
-							// Same-scope duplicate: close any issue that isn't the one we just updated
 							if (existingConsolidated && issue.number !== existingConsolidated.number) {
 								const result = await resolveIssue(issue);
-								if (result) {
-									results.push(result);
-								}
+								if (result) results.push(result);
 							}
 							continue;
 						}
-						// Cross-scope: verify commit ancestry (skip if current commit is behind)
+						if (issueMode !== "consolidated") continue;
+
 						const storedCommit = extractCommitFromIssueBody(issue.body);
-						if (storedCommit && options.headSha && storedCommit !== options.headSha) {
-							const isAtOrAfter = await verifyCommitAtOrAfter(request, repoPath, storedCommit, options.headSha);
-							if (isAtOrAfter === false) continue;
+						if (!storedCommit || !options.headSha) continue;
+						const isAtOrAfter = await verifyCommitAtOrAfter(request, repoPath, storedCommit, options.headSha);
+						if (isAtOrAfter !== true) continue;
+
+						const prepared = prepareStoredConsolidatedReconciliation(issue.body, preparedProblems, reviewedFiles);
+						if (!prepared || prepared.categorization.resolvedFingerprints.size === 0) continue;
+						if (prepared.openProblems.length === 0) {
+							const result = await resolveIssue(issue);
+							if (result) results.push(result);
+							continue;
 						}
-						// Skip if any stored fingerprint is still present in current review
-						const storedFingerprints = extractOpenProblemFingerprintsFromBody(issue.body);
-						if (storedFingerprints.size === 0) continue;
-						if ([...storedFingerprints].some((fp) => currentFpSet.has(fp))) continue;
-						// File-scope guard: only resolve if those files were re-reviewed
-						if (!canResolveConsolidatedIssue(issue.body, reviewedFiles)) continue;
-						const result = await resolveIssue(issue);
-						if (result) {
-							results.push(result);
-						}
+
+						results.push(await updateConsolidatedIssue(
+							issue,
+							prepared.relevantCurrentProblems,
+							extractConsolidatedIssueSummary(issue.body),
+							prepared.categorization,
+							{
+								scopeFingerprint: issue.scopeFingerprint,
+								...(options.headSha ? { headSha: options.headSha } : {}),
+							},
+						));
 					}
 				}
 
 				return results;
 			}
-
 			const preparedProblems = problems.map(ensureProblemFingerprint);
 
 			const currentFingerprints = new Set(preparedProblems.map((problem) => problem.fingerprint!));
@@ -2940,6 +2942,7 @@ interface ParsedProblemInfo {
 	readonly category: string;
 	readonly file: string;
 	readonly line: number;
+	readonly endLine?: number;
 }
 
 function parseConsolidatedBodyProblemInfo(body: string): Map<string, ParsedProblemInfo> {
@@ -2948,22 +2951,63 @@ function parseConsolidatedBodyProblemInfo(body: string): Map<string, ParsedProbl
 	for (const line of body.split("\n")) {
 		const sevMatch = /^####\s+(CRITICAL|HIGH|MEDIUM|LOW|INFO)\s+\(\d+\)\s*$/u.exec(line);
 		if (sevMatch) { currentSeverity = sevMatch[1] ?? ""; continue; }
-		const probMatch = /^\*\*([^*]+?)\*\*\s+[\u2014-]\s+`([^`]+):(\d+)`\s*(?:<!--\s*aicr:fp=([^\s>]+)\s*-->)?/u.exec(line);
-		if (probMatch && probMatch[4]) {
-			const fp = probMatch[4];
+		const problemHeadingPattern =
+			/^\*\*([^*]+?)\*\*\s+[\u2014-]\s+`([^`]+):(\d+)(?:-(\d+))?`\s*(?:<!--\s*aicr:fp=([^\s>]+)\s*-->)?/u;
+		const probMatch = problemHeadingPattern.exec(line);
+		if (probMatch && probMatch[5]) {
+			const fp = probMatch[5];
 			const category = probMatch[1]?.trim() ?? "";
 			const file = probMatch[2] ?? "";
 			const lineStr = probMatch[3];
+			const endLineStr = probMatch[4];
 			result.set(fp, {
 				fingerprint: fp,
 				severity: currentSeverity,
 				category,
 				file,
 				line: lineStr ? parseInt(lineStr, 10) : 0,
+				...(endLineStr ? { endLine: parseInt(endLineStr, 10) } : {}),
 			});
 		}
 	}
 	return result;
+}
+
+function extractConsolidatedIssueSummary(body: string): string | undefined {
+	const lines = body.split("\n");
+	const firstProblemIndex = lines.findIndex((line) => line.includes("<!-- aicr:fp="));
+	if (firstProblemIndex < 0) return undefined;
+
+	let severityIndex = -1;
+	for (let index = firstProblemIndex; index >= 0; index -= 1) {
+		if (/^####\s+(CRITICAL|HIGH|MEDIUM|LOW|INFO)\s+\(\d+\)\s*$/u.test(lines[index] ?? "")) {
+			severityIndex = index;
+			break;
+		}
+	}
+	if (severityIndex < 0) return undefined;
+
+	let separatorIndex = -1;
+	for (let index = severityIndex - 1; index >= 0; index -= 1) {
+		if ((lines[index] ?? "").trim() === "---") {
+			separatorIndex = index;
+			break;
+		}
+	}
+	if (separatorIndex < 0) return undefined;
+
+	let summaryStart = 0;
+	while (summaryStart < separatorIndex) {
+		const line = (lines[summaryStart] ?? "").trim();
+		if (line === "" || /^<!--\s*aicr:[^>]+-->$/u.test(line)) {
+			summaryStart += 1;
+			continue;
+		}
+		break;
+	}
+
+	const summary = lines.slice(summaryStart, separatorIndex).join("\n").trim();
+	return summary || undefined;
 }
 
 async function verifyCommitAtOrAfter(
@@ -3107,6 +3151,56 @@ function getConsolidatedOpenProblems(
 		: problems;
 }
 
+interface ConsolidatedIssueUpdateContext {
+	readonly scopeFingerprint: string;
+	readonly headSha?: string;
+}
+
+interface PreparedStoredConsolidatedReconciliation {
+	readonly relevantCurrentProblems: readonly ReviewProblem[];
+	readonly categorization: ConsolidatedIssueCategorization;
+	readonly openProblems: readonly ReviewProblem[];
+}
+
+function prepareStoredConsolidatedReconciliation(
+	body: string,
+	currentProblems: readonly ReviewProblem[],
+	reviewedFiles: readonly string[] | undefined,
+): PreparedStoredConsolidatedReconciliation | undefined {
+	const storedFingerprints = extractOpenProblemFingerprintsFromBody(body);
+	if (storedFingerprints.size === 0) return undefined;
+
+	const resolvedDetails = parseConsolidatedBodyProblemInfo(body);
+	const previousFilesByFingerprint = new Map<string, string>();
+	for (const [fingerprint, info] of resolvedDetails) {
+		previousFilesByFingerprint.set(fingerprint, info.file);
+	}
+
+	const relevantCurrentProblems = currentProblems.filter((problem) => {
+		const fingerprint = problem.fingerprint ?? computeProblemFingerprint(problem);
+		return storedFingerprints.has(fingerprint);
+	});
+	const categorized = categorizeProblems(relevantCurrentProblems, storedFingerprints, {
+		previousFilesByFingerprint,
+		...(reviewedFiles ? { reviewedFiles } : {}),
+	});
+	const retainedProblems = buildRetainedProblems(categorized.retainedFingerprints, resolvedDetails);
+	if (categorized.retainedFingerprints.size > retainedProblems.length) return undefined;
+
+	const categorization: ConsolidatedIssueCategorization = {
+		newProblems: categorized.newProblems,
+		stillOpenProblems: categorized.stillOpenProblems,
+		retainedProblems,
+		resolvedFingerprints: categorized.resolvedFingerprints,
+		resolvedDetails,
+	};
+	return {
+		relevantCurrentProblems,
+		categorization,
+		openProblems: getConsolidatedOpenProblems(relevantCurrentProblems, categorization),
+	};
+}
+
 function buildConsolidatedIssueBody(
 	problems: readonly ReviewProblem[],
 	options: {
@@ -3179,7 +3273,7 @@ function buildConsolidatedIssueBody(
 		for (const fp of cat.resolvedFingerprints) {
 			const info = cat.resolvedDetails.get(fp);
 			if (info) {
-				const location = `${info.file}:${info.line}`;
+				const location = info.endLine ? `${info.file}:${info.line}-${info.endLine}` : `${info.file}:${info.line}`;
 				sections.push(`- ~~**${info.severity} \u00b7 ${info.category}** \u2014 \`${location}\`~~ \u2705 Resolved`);
 			} else {
 				sections.push(`- ~~\`${fp}\`~~ \u2705 Resolved`);
@@ -3857,14 +3951,16 @@ export function createGiteaProblemIssueDispatcher(options: GiteaProblemIssueOpti
 		problems: readonly ReviewProblem[],
 		summary: string | undefined,
 		categorization?: ConsolidatedIssueCategorization,
+		context?: ConsolidatedIssueUpdateContext,
 	): Promise<DispatchResult> {
-		const scopeFingerprint = currentScopeFingerprint;
+		const scopeFingerprint = context?.scopeFingerprint ?? currentScopeFingerprint;
+		const headSha = context?.headSha ?? options.headSha;
 		const body: Record<string, unknown> = {
 			title: buildConsolidatedIssueTitle(getConsolidatedOpenProblems(problems, categorization), markerPrefix),
 			body: buildConsolidatedIssueBody(problems, {
 				channel, markerLabel, scopeFingerprint,
 				...(summary ? { summary } : {}),
-				...(options.headSha ? { headSha: options.headSha } : {}),
+				...(headSha ? { headSha } : {}),
 				...(categorization ? { categorization } : {}),
 			}),
 		};
@@ -3972,37 +4068,54 @@ export function createGiteaProblemIssueDispatcher(options: GiteaProblemIssueOpti
 				);
 
 				const results: DispatchResult[] = [];
+				const preparedProblems = problems.map(ensureProblemFingerprint);
 
-				const currentFpSet = new Set<string>();
-				for (const problem of problems) {
-					currentFpSet.add(problem.fingerprint ?? computeProblemFingerprint(problem));
-				}
+				if (preparedProblems.length === 0) {
+					if (resolvedAction === "none") return results;
 
-				if (problems.length === 0) {
-					// Empty review: resolve all eligible managed consolidated issues (same + cross scope)
-					// whose files were covered by the current review.
-					if (resolvedAction !== "none") {
-						for (const issue of existingIssues) {
-							if (!issue.scopeFingerprint) continue;
-							if (issue.scopeFingerprint !== scopeFingerprint) {
-								const storedCommit = extractCommitFromIssueBody(issue.body);
-								if (storedCommit && options.headSha && storedCommit !== options.headSha) {
-									const isAtOrAfter = await verifyCommitAtOrAfter(request, repoPath, storedCommit, options.headSha);
-									if (isAtOrAfter === false) continue;
-								}
-							}
-							if (!canResolveConsolidatedIssue(issue.body, reviewedFiles)) continue;
-							const result = await resolveIssue(issue);
-							if (result) {
-								results.push(result);
-							}
+					for (const issue of existingIssues) {
+						if (!issue.scopeFingerprint) continue;
+						const isCurrentScope = issue.scopeFingerprint === scopeFingerprint;
+						if (!isCurrentScope) {
+							if (issueMode !== "consolidated") continue;
+						if (!reviewedFiles || reviewedFiles.length === 0) continue;
+							if (!reviewedFiles || reviewedFiles.length === 0) continue;
+							const storedCommit = extractCommitFromIssueBody(issue.body);
+							if (!storedCommit || !options.headSha) continue;
+							const isAtOrAfter = await verifyCommitAtOrAfter(request, repoPath, storedCommit, options.headSha);
+							if (isAtOrAfter !== true) continue;
 						}
+
+						const prepared = prepareStoredConsolidatedReconciliation(issue.body, preparedProblems, reviewedFiles);
+						if (!prepared) {
+							if (isCurrentScope && (!reviewedFiles || reviewedFiles.length === 0)) {
+								const result = await resolveIssue(issue);
+								if (result) results.push(result);
+							}
+							continue;
+						}
+						if (prepared.categorization.resolvedFingerprints.size === 0) continue;
+						if (prepared.openProblems.length === 0) {
+							const result = await resolveIssue(issue);
+							if (result) results.push(result);
+							continue;
+						}
+
+						results.push(await updateConsolidatedIssue(
+							issue,
+							prepared.relevantCurrentProblems,
+							extractConsolidatedIssueSummary(issue.body),
+							prepared.categorization,
+							{
+								scopeFingerprint: issue.scopeFingerprint,
+								...(options.headSha ? { headSha: options.headSha } : {}),
+							},
+						));
 					}
 					return results;
 				}
 
 				if (existingConsolidated) {
-					const preparedProblems = problems.map(ensureProblemFingerprint);
 					const storedCommit = extractCommitFromIssueBody(existingConsolidated.body);
 					const storedFingerprints = extractOpenProblemFingerprintsFromBody(existingConsolidated.body);
 					const resolvedDetails = parseConsolidatedBodyProblemInfo(existingConsolidated.body);
@@ -4048,47 +4161,49 @@ export function createGiteaProblemIssueDispatcher(options: GiteaProblemIssueOpti
 						results.push(await updateConsolidatedIssue(existingConsolidated, preparedProblems, summary));
 					}
 				} else {
-					results.push(await createConsolidatedIssue(problems, summary, owners));
+					results.push(await createConsolidatedIssue(preparedProblems, summary, owners));
 				}
 
-				// Cross-scope cleanup: resolve consolidated issues from other scopes (old push
-				// batches, different commits) when all their problems are gone and their files
-				// were covered. Also resolve same-scope duplicates from prior races.
 				if (resolvedAction !== "none") {
 					for (const issue of existingIssues) {
 						if (!issue.scopeFingerprint) continue;
 						if (issue.scopeFingerprint === scopeFingerprint) {
-							// Same-scope duplicate: close any issue that isn't the one we just updated
 							if (existingConsolidated && issue.number !== existingConsolidated.number) {
 								const result = await resolveIssue(issue);
-								if (result) {
-									results.push(result);
-								}
+								if (result) results.push(result);
 							}
 							continue;
 						}
-						// Cross-scope: verify commit ancestry (skip if current commit is behind)
+						if (issueMode !== "consolidated") continue;
+
 						const storedCommit = extractCommitFromIssueBody(issue.body);
-						if (storedCommit && options.headSha && storedCommit !== options.headSha) {
-							const isAtOrAfter = await verifyCommitAtOrAfter(request, repoPath, storedCommit, options.headSha);
-							if (isAtOrAfter === false) continue;
+						if (!storedCommit || !options.headSha) continue;
+						const isAtOrAfter = await verifyCommitAtOrAfter(request, repoPath, storedCommit, options.headSha);
+						if (isAtOrAfter !== true) continue;
+
+						const prepared = prepareStoredConsolidatedReconciliation(issue.body, preparedProblems, reviewedFiles);
+						if (!prepared || prepared.categorization.resolvedFingerprints.size === 0) continue;
+						if (prepared.openProblems.length === 0) {
+							const result = await resolveIssue(issue);
+							if (result) results.push(result);
+							continue;
 						}
-						// Skip if any stored fingerprint is still present in current review
-						const storedFingerprints = extractOpenProblemFingerprintsFromBody(issue.body);
-						if (storedFingerprints.size === 0) continue;
-						if ([...storedFingerprints].some((fp) => currentFpSet.has(fp))) continue;
-						// File-scope guard: only resolve if those files were re-reviewed
-						if (!canResolveConsolidatedIssue(issue.body, reviewedFiles)) continue;
-						const result = await resolveIssue(issue);
-						if (result) {
-							results.push(result);
-						}
+
+						results.push(await updateConsolidatedIssue(
+							issue,
+							prepared.relevantCurrentProblems,
+							extractConsolidatedIssueSummary(issue.body),
+							prepared.categorization,
+							{
+								scopeFingerprint: issue.scopeFingerprint,
+								...(options.headSha ? { headSha: options.headSha } : {}),
+							},
+						));
 					}
 				}
 
 				return results;
 			}
-
 			const preparedProblems = problems.map(ensureProblemFingerprint);
 
 			const currentFingerprints = new Set(preparedProblems.map((problem) => problem.fingerprint!));
