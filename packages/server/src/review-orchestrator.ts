@@ -20,6 +20,7 @@ import type { RuntimeBundleInstruction, RuntimeBundleMcpServer, RuntimeBundleMcp
 import {
   type ChatCompletionClient,
   type ChatCompletionResult,
+  type ChatCompletionUsage,
   compressDiff,
   estimatePromptTokenCount,
   shouldTriggerCompression,
@@ -152,7 +153,32 @@ export interface ReviewOrchestrationResult {
   readonly compressed?: boolean;
   readonly originalTokenEstimate?: number;
   readonly compressedTokenEstimate?: number;
+  /** USD cost for the run (gateway-reported direct path; summed agent step costs otherwise). */
+  readonly estimatedCostUsd?: number;
+  /** Number of billable model turns captured (1 for the direct path; agent turns otherwise). */
+  readonly requestCount?: number;
+  /** Gateway retry/fallback counts (direct path only). */
+  readonly retryCount?: number;
+  readonly fallbackCount?: number;
 }
+
+export interface ReviewOrchestrationWebhookUsage {
+  readonly promptTokens?: number;
+  readonly completionTokens?: number;
+  readonly totalTokens?: number;
+  readonly cachedPromptTokens?: number;
+  readonly cacheCreationTokens?: number;
+}
+
+/**
+ * How token usage was obtained for a run.
+ * - `llm_gateway`: real usage from the direct LLM gateway response (always authoritative).
+ * - `agent_stdout`: aggregated from the external agent (kilo/opencode/...) step-finish events
+ *   parsed on stdout. Best-effort; may undercount if the agent emits no usage events.
+ * Omitted when no real usage was captured (agent path without parseable token events);
+ * callers should then fall back to `promptTokenEstimate` for a local estimate.
+ */
+export type ReviewOrchestrationUsageSource = "llm_gateway" | "agent_stdout";
 
 export interface ReviewOrchestrationWebhookSummary {
   readonly status: "dry_run" | "published" | "skipped";
@@ -172,6 +198,16 @@ export interface ReviewOrchestrationWebhookSummary {
     readonly providerId: string;
     readonly modelId: string;
   };
+  /** Real LLM usage when captured; absent for agent runs without parseable usage events. */
+  readonly llmUsage?: ReviewOrchestrationWebhookUsage;
+  /** USD cost from the gateway (direct path) or summed agent step costs (agent path). */
+  readonly estimatedCostUsd?: number;
+  /** Origin of `llmUsage`, so dashboards can distinguish authoritative vs best-effort figures. */
+  readonly usageSource?: ReviewOrchestrationUsageSource;
+  /** Number of billable LLM requests/turns captured (1 for the direct path; agent turns otherwise). */
+  readonly requestCount?: number;
+  readonly retryCount?: number;
+  readonly fallbackCount?: number;
 }
 
 interface ToolCallEnvelope {
@@ -213,6 +249,10 @@ interface ReviewCompletionResult {
   readonly agentResult?: SandboxSpawnResult;
   readonly mcpState?: AicrOutputState;
   readonly toolCallEvents?: readonly ToolCallEnvelope[];
+  /** USD cost for the completion (gateway-reported on the direct path; summed on the agent path). */
+  readonly estimatedCostUsd?: number;
+  /** Number of billable model turns captured (agent path only). */
+  readonly requestCount?: number;
 }
 
 function formatFilePath(file: { readonly oldPath?: string; readonly newPath?: string }): string {
@@ -377,12 +417,87 @@ interface KiloStreamExtractionResult {
   readonly content: string;
   readonly toolCallEvents: readonly ToolCallEnvelope[];
   readonly eventCounts: Readonly<Record<string, number>>;
+  /** Aggregated token usage from `step-finish` events, if any were emitted. */
+  readonly usage?: ChatCompletionUsage;
+  /** Aggregated USD cost from `step-finish` events (0 when kilo reports free steps). */
+  readonly costUsd?: number;
+  /** Number of billable model turns (step-finish events) observed. */
+  readonly stepCount: number;
+}
+
+/**
+ * Parses a finite, non-negative integer token count from a kilo step-finish event field.
+ * Returns undefined for missing/non-numeric values so the caller can skip aggregation.
+ */
+function readKiloTokenCount(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return undefined;
+  return Math.trunc(value);
+}
+
+interface KiloTokenTotals {
+  input: number;
+  output: number;
+  reasoning: number;
+  total: number;
+  cacheRead: number;
+  cacheWrite: number;
+}
+
+/**
+ * Aggregates token usage from one kilo `step-finish` event into the running totals.
+ *
+ * Kilo (built on opencode) emits, per model turn:
+ *   { "type": "step-finish", "tokens": { "total", "input", "output", "reasoning",
+ *                                        "cache": { "read", "write" } }, "cost": <usd> }
+ * A single review run typically contains many step-finish events (one per turn), so we
+ * sum them. Kilo's counters are DISJOINT: `input` is the NON-cached prompt tokens, and
+ * `cache.read`/`cache.write` are tracked separately, with
+ * `total = input + output + reasoning + cache.read + cache.write`. We store the raw
+ * counters here and let {@link extractKiloJsonStreamContent} fold them into the project-wide
+ * {@link ChatCompletionUsage} convention (promptTokens = total input including cache;
+ * completionTokens = total output including reasoning), so do NOT pre-collapse them.
+ */
+function accumulateKiloStepFinishUsage(
+  event: Record<string, unknown>,
+  totals: KiloTokenTotals,
+  costAccumulator: { cost: number },
+): boolean {
+  const tokens = event.tokens as Record<string, unknown> | undefined;
+  if (!tokens || typeof tokens !== "object") return false;
+  const input = readKiloTokenCount(tokens.input);
+  const output = readKiloTokenCount(tokens.output);
+  const reasoning = readKiloTokenCount(tokens.reasoning);
+  const total = readKiloTokenCount(tokens.total);
+  const cache = tokens.cache as Record<string, unknown> | undefined;
+  const cacheRead = readKiloTokenCount(cache?.read);
+  const cacheWrite = readKiloTokenCount(cache?.write);
+  if (
+    input === undefined && output === undefined && reasoning === undefined && total === undefined
+    && cacheRead === undefined && cacheWrite === undefined
+  ) {
+    return false;
+  }
+  if (input !== undefined) totals.input += input;
+  if (output !== undefined) totals.output += output;
+  if (reasoning !== undefined) totals.reasoning += reasoning;
+  if (total !== undefined) totals.total += total;
+  if (cacheRead !== undefined) totals.cacheRead += cacheRead;
+  if (cacheWrite !== undefined) totals.cacheWrite += cacheWrite;
+  // cost is a USD amount (float), not a token count — validate as a non-negative finite number.
+  if (typeof event.cost === "number" && Number.isFinite(event.cost) && event.cost >= 0) {
+    costAccumulator.cost += event.cost;
+  }
+  return true;
 }
 
 function extractKiloJsonStreamContent(stdout: string): KiloStreamExtractionResult {
   const textParts: string[] = [];
   const toolCallEvents: ToolCallEnvelope[] = [];
   const eventCounts: Record<string, number> = {};
+  const tokenTotals: KiloTokenTotals = { input: 0, output: 0, reasoning: 0, total: 0, cacheRead: 0, cacheWrite: 0 };
+  const costTotal = { cost: 0 };
+  let stepCount = 0;
+
   for (const line of stdout.split("\n")) {
     const trimmed = line.trim();
     if (!trimmed) continue;
@@ -408,6 +523,25 @@ function extractKiloJsonStreamContent(stdout: string): KiloStreamExtractionResul
         const errorData = event.error as Record<string, unknown> | undefined;
         const message = typeof errorData?.message === "string" ? errorData.message : JSON.stringify(event.error);
         throw new Error(`Kilo agent error: ${message}`);
+      } else if (event.type === "step-finish") {
+        if (accumulateKiloStepFinishUsage(event, tokenTotals, costTotal)) {
+          stepCount += 1;
+        }
+      } else if (
+        // kilo (>=7.x) emits tool calls as `tool` events with the tool name under `event.tool`
+        // and the input under `event.state.input`; older kilo/opencode used `tool_call`/`tool_use`
+        // with the name under `event.name` and input under `event.input`. Support both shapes.
+        event.type === "tool"
+        && typeof event.tool === "string"
+        && event.state !== undefined
+      ) {
+        const state = event.state as Record<string, unknown> | undefined;
+        const input = state?.input ?? event.input;
+        try {
+          toolCallEvents.push({ name: normalizeToolName(event.tool), input });
+        } catch {
+          // Not an aicr-* tool (e.g. read/glob/edit); ignore — only aicr tools are review outputs.
+        }
       } else if (
         (event.type === "tool_call" || event.type === "tool_use")
         && typeof event.name === "string"
@@ -429,10 +563,36 @@ function extractKiloJsonStreamContent(stdout: string): KiloStreamExtractionResul
       }
     }
   }
+
+  // Fold kilo's disjoint counters into the project-wide ChatCompletionUsage convention
+  // (matching the Anthropic/OpenAI extractors): promptTokens is the TOTAL input including
+  // cache read/write, and completionTokens is the TOTAL output including reasoning. This keeps
+  // `promptTokens + completionTokens == kilo total` and `nonCachedInput = promptTokens
+  // - cachedPromptTokens - cacheCreationTokens == kilo input`, so the gateway cost model and
+  // dashboard breakdown stay consistent across the direct and agent paths.
+  const promptTokens = tokenTotals.input + tokenTotals.cacheRead + tokenTotals.cacheWrite;
+  const completionTokens = tokenTotals.output + tokenTotals.reasoning;
+  const hasUsage = stepCount > 0
+    || promptTokens > 0
+    || completionTokens > 0
+    || tokenTotals.total > 0;
+  const usage: ChatCompletionUsage | undefined = hasUsage
+    ? {
+      promptTokens,
+      completionTokens,
+      totalTokens: tokenTotals.total > 0 ? tokenTotals.total : promptTokens + completionTokens,
+      ...(tokenTotals.cacheRead > 0 ? { cachedPromptTokens: tokenTotals.cacheRead } : {}),
+      ...(tokenTotals.cacheWrite > 0 ? { cacheCreationTokens: tokenTotals.cacheWrite } : {}),
+    }
+    : undefined;
+
   return {
     content: textParts.length > 0 ? textParts.join("\n") : stdout,
     toolCallEvents,
     eventCounts,
+    ...(usage ? { usage } : {}),
+    ...(stepCount > 0 ? { costUsd: costTotal.cost } : {}),
+    stepCount,
   };
 }
 
@@ -517,6 +677,9 @@ async function runAgentReview(
   const rawStdout = agentResult.stdout;
   let content: string;
   let kiloToolCalls: readonly ToolCallEnvelope[] = [];
+  let agentUsage: ChatCompletionUsage | undefined;
+  let agentCostUsd: number | undefined;
+  let agentStepCount = 0;
   if (isKiloAgent) {
     let extraction: KiloStreamExtractionResult;
     try {
@@ -534,13 +697,23 @@ async function runAgentReview(
     }
     content = extraction.content;
     kiloToolCalls = extraction.toolCallEvents;
-    if (Object.keys(extraction.eventCounts).length > 0 || kiloToolCalls.length > 0) {
+    agentUsage = extraction.usage;
+    agentCostUsd = extraction.costUsd;
+    agentStepCount = extraction.stepCount;
+    if (Object.keys(extraction.eventCounts).length > 0 || kiloToolCalls.length > 0 || agentStepCount > 0) {
       if (options.logThinking !== false) {
       console.info(JSON.stringify({
         level: "info",
         msg: "kilo agent stream stats",
         eventCounts: extraction.eventCounts,
         streamToolCallCount: kiloToolCalls.length,
+        usageCaptured: agentUsage !== undefined,
+        stepCount: agentStepCount,
+        ...(agentUsage ? {
+          tokensIn: agentUsage.promptTokens,
+          tokensOut: agentUsage.completionTokens,
+          tokensTotal: agentUsage.totalTokens,
+        } : {}),
         stdoutLength: rawStdout.length,
         extractedContentLength: content.length,
       }));
@@ -585,6 +758,10 @@ async function runAgentReview(
       providerId: options.model.providerId,
       modelId: options.model.modelId,
       content,
+      // Usage is only present when the agent path could parse it from stdout
+      // (e.g. kilo `step-finish` events). When absent, the webhook summary omits llmUsage
+      // and the dashboard falls back to promptTokenEstimate instead of reporting zeros.
+      ...(agentUsage ? { usage: agentUsage } : {}),
       raw: {
         agent: agentAdapter.kind,
         exitCode: agentResult.exitCode,
@@ -593,6 +770,11 @@ async function runAgentReview(
       },
     },
     agentResult,
+    // Cost/request-count flow alongside llmResult.usage; they are not part of the
+    // ChatCompletionResult type, so they live here and the summary extractor reads them
+    // from the orchestration result rather than from llmResult.
+    ...(agentCostUsd !== undefined ? { estimatedCostUsd: agentCostUsd } : {}),
+    ...(agentStepCount > 0 ? { requestCount: agentStepCount } : {}),
     ...(mcpState ? { mcpState } : {}),
     ...(kiloToolCalls.length > 0 ? { toolCallEvents: kiloToolCalls } : {}),
   };
@@ -2149,6 +2331,12 @@ export async function runReviewOrchestration(
     ...(compressed ? { compressed } : {}),
     ...(originalTokenEstimate !== undefined ? { originalTokenEstimate } : {}),
     ...(compressedTokenEstimate !== undefined ? { compressedTokenEstimate } : {}),
+    // Flow cost/request/retry through from the completion; the agent path sets
+    // estimatedCostUsd/requestCount on the completion, while the direct path carries
+    // estimatedCostUsd/retryCount/fallbackCount on the gateway result (read defensively
+    // by extractReviewRunUsage since the static type is ChatCompletionResult).
+    ...(completion.estimatedCostUsd !== undefined ? { estimatedCostUsd: completion.estimatedCostUsd } : {}),
+    ...(completion.requestCount !== undefined ? { requestCount: completion.requestCount } : {}),
   };
 
   if (options.postRunCallback) {
@@ -2187,9 +2375,67 @@ function buildOrchestratorVcsContext(reviewEvent: ReviewEvent): { branch?: strin
   return result;
 }
 
+/**
+ * Extracts real LLM usage from an orchestration result for webhook/store persistence.
+ *
+ * The direct-LLM path produces a {@link ChatCompletionResult} whose `usage` is the real
+ * provider-reported token usage; gateway cost/retry/fallback ride on the runtime object
+ * (fields not on the static `ChatCompletionResult` type — they belong to
+ * {@link LlmGatewayCallResult}), so the gateway-calling plumbing copies them onto the
+ * orchestration result's `estimatedCostUsd`/`retryCount`/`fallbackCount`.
+ *
+ * The agent path sets `llmResult.usage` only when step-finish events were parseable from the
+ * agent's stdout; otherwise `usage` is `undefined` and callers fall back to
+ * `promptTokenEstimate`.
+ */
+function extractReviewRunUsage(
+  result: ReviewOrchestrationResult,
+): {
+  readonly llmUsage?: ReviewOrchestrationWebhookUsage;
+  readonly usageSource?: ReviewOrchestrationUsageSource;
+  readonly estimatedCostUsd?: number;
+  readonly requestCount?: number;
+  readonly retryCount?: number;
+  readonly fallbackCount?: number;
+} {
+  const usage = result.llmResult.usage;
+  if (!usage) return {};
+  const isFiniteNumber = (v: unknown): v is number =>
+    typeof v === "number" && Number.isFinite(v);
+  const usageSource: ReviewOrchestrationUsageSource = result.agentResult
+    ? "agent_stdout"
+    : "llm_gateway";
+  // On the direct path the gateway-only fields are read from the runtime llmResult,
+  // since the static ChatCompletionResult type does not declare them.
+  const gatewayResult = result.llmResult as ChatCompletionResult & {
+    estimatedCostUsd?: unknown;
+    retryCount?: unknown;
+    fallbackCount?: unknown;
+  };
+  return {
+    llmUsage: {
+      ...(usage.promptTokens !== undefined ? { promptTokens: usage.promptTokens } : {}),
+      ...(usage.completionTokens !== undefined ? { completionTokens: usage.completionTokens } : {}),
+      ...(usage.totalTokens !== undefined ? { totalTokens: usage.totalTokens } : {}),
+      ...(usage.cachedPromptTokens !== undefined ? { cachedPromptTokens: usage.cachedPromptTokens } : {}),
+      ...(usage.cacheCreationTokens !== undefined ? { cacheCreationTokens: usage.cacheCreationTokens } : {}),
+    },
+    usageSource,
+    ...(result.estimatedCostUsd !== undefined
+      ? { estimatedCostUsd: result.estimatedCostUsd }
+      : isFiniteNumber(gatewayResult.estimatedCostUsd) ? { estimatedCostUsd: gatewayResult.estimatedCostUsd } : {}),
+    ...(isFiniteNumber(gatewayResult.retryCount) ? { retryCount: gatewayResult.retryCount } : {}),
+    ...(isFiniteNumber(gatewayResult.fallbackCount) ? { fallbackCount: gatewayResult.fallbackCount } : {}),
+    // The direct path is a single completion; the agent path reports one request per
+    // captured step (carried on the orchestration result by runAgentReview).
+    ...(result.requestCount !== undefined ? { requestCount: result.requestCount } : { requestCount: 1 }),
+  };
+}
+
 export function summarizeReviewOrchestrationForWebhook(
   result: ReviewOrchestrationResult,
 ): ReviewOrchestrationWebhookSummary {
+  const usage = extractReviewRunUsage(result);
   return {
     status: result.status,
     changedFileCount: result.changedFiles.length,
@@ -2205,5 +2451,11 @@ export function summarizeReviewOrchestrationForWebhook(
     ...(result.originalTokenEstimate !== undefined ? { originalTokenEstimate: result.originalTokenEstimate } : {}),
     ...(result.compressedTokenEstimate !== undefined ? { compressedTokenEstimate: result.compressedTokenEstimate } : {}),
     model: result.model,
+    ...(usage.llmUsage ? { llmUsage: usage.llmUsage } : {}),
+    ...(usage.usageSource ? { usageSource: usage.usageSource } : {}),
+    ...(usage.estimatedCostUsd !== undefined ? { estimatedCostUsd: usage.estimatedCostUsd } : {}),
+    ...(usage.requestCount !== undefined ? { requestCount: usage.requestCount } : {}),
+    ...(usage.retryCount !== undefined ? { retryCount: usage.retryCount } : {}),
+    ...(usage.fallbackCount !== undefined ? { fallbackCount: usage.fallbackCount } : {}),
   };
 }

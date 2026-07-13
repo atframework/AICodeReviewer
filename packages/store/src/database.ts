@@ -238,4 +238,13 @@ const MIGRATIONS = [
       ALTER TABLE reflection_memory ADD COLUMN occurrence_count INTEGER NOT NULL DEFAULT 1;
     `,
   },
+  {
+    // Persist the local prompt token estimate per run so the dashboard can surface it
+    // alongside real LLM usage. Real provider-reported usage lives in llm_usage; this column
+    // is the fallback signal shown when agent runs cannot report real tokens.
+    name: "005_review_run_prompt_estimate",
+    sql: `
+      ALTER TABLE review_runs ADD COLUMN prompt_token_estimate INTEGER;
+    `,
+  },
 ];

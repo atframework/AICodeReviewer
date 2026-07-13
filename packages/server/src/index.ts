@@ -913,6 +913,7 @@ function persistReviewRunToStore(
       compressed: reviewRun.compressed ?? null,
       originalTokenEstimate: reviewRun.originalTokenEstimate ?? null,
       compressedTokenEstimate: reviewRun.compressedTokenEstimate ?? null,
+      promptTokenEstimate: reviewRun.promptTokenEstimate,
       diffFileCount: reviewRun.diffFileCount ?? null,
       changedFileCount: reviewRun.changedFileCount ?? null,
       targetKind: reviewEvent.targetKind ?? null,
@@ -926,7 +927,16 @@ function persistReviewRunToStore(
       llmUsages: reviewRun.model ? [{
         providerId: reviewRun.model.providerId,
         modelId: reviewRun.model.modelId,
-        tokensTotal: reviewRun.promptTokenEstimate,
+        // Prefer real provider-reported usage; absent for agent runs without parseable
+        // step-finish events, in which case the store falls back to 0 and the dashboard
+        // surfaces promptTokenEstimate separately rather than mixing it in here.
+        ...(reviewRun.llmUsage?.promptTokens !== undefined ? { tokensIn: reviewRun.llmUsage.promptTokens } : {}),
+        ...(reviewRun.llmUsage?.completionTokens !== undefined ? { tokensOut: reviewRun.llmUsage.completionTokens } : {}),
+        ...(reviewRun.llmUsage?.totalTokens !== undefined ? { tokensTotal: reviewRun.llmUsage.totalTokens } : {}),
+        ...(reviewRun.estimatedCostUsd !== undefined ? { costUsd: reviewRun.estimatedCostUsd } : {}),
+        ...(reviewRun.requestCount !== undefined ? { requestCount: reviewRun.requestCount } : {}),
+        ...(reviewRun.retryCount !== undefined ? { retryCount: reviewRun.retryCount } : {}),
+        ...(reviewRun.fallbackCount !== undefined ? { fallbackCount: reviewRun.fallbackCount } : {}),
       }] : [],
     });
   } catch (err: unknown) {
