@@ -9,6 +9,7 @@
 - When updating AI-facing assets, read the existing `AGENTS.md`, referenced `AGENTS.*.md` files, and related skills first, then merge instead of appending near-duplicate content.
 - Keep milestone detail in `docs/ai/milestones/*.md`; do not duplicate large milestone summaries into prompts or skills, and do not use milestone IDs in prompt or skill names.
 - Treat `Plan.md` as the forward-looking roadmap only. When a task needs stable design details or completed-stage history, read `docs/ai/index.md` and follow its links on demand instead of expanding `Plan.md` again.
+- Treat `docs/superpowers/specs/` and `docs/superpowers/plans/` as active task artifacts: after implementation and validation complete and durable decisions are preserved in long-lived docs or skills, remove the completed files; keep unfinished work only.
 - Do not maintain duplicate global prompt bodies in `.github/copilot-instructions.md`, `CLAUDE.md`, Zoo Code `.roo/`, `.kilo/`, `opencode.json`, or other tool-private files. Tool-specific files may only bridge to `AGENTS.md` or add narrowly scoped behavior the shared file cannot express.
 
 ## Agent compatibility

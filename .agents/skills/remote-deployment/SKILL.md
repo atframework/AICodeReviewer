@@ -1,6 +1,6 @@
 ---
 name: remote-deployment
-description: "Use when: deploying AICR to a remote server, updating deployed config.yaml, syncing source files, or troubleshooting podman build/run issues; do not use for local development or CI pipeline changes."
+description: "Use when: deploying AICR to a remote server, repairing managed issue state after deployment, updating deployed config.yaml, syncing source files, or troubleshooting podman build/run issues; do not use for local development or CI pipeline changes."
 user-invocable: false
 ---
 
@@ -171,6 +171,19 @@ ssh ... <remote-host> "podman ps --filter name=aicr"
 # Recent logs
 ssh ... <remote-host> "podman logs --tail 50 aicr"
 ```
+
+### One-time managed GitHub issue repair
+
+Use the normal configured output path when possible. If a validated deployment still needs a one-time production state repair:
+
+1. Re-fetch every target issue immediately before writing and verify its state, managed markers, fingerprints, and body hash against explicit preconditions. Abort on drift.
+2. Resolve credentials from the exact output channel's `trigger` binding. Never select an arbitrary GitHub trigger when multiple App configurations exist.
+3. A connector or helper returning `403 Resource not accessible by integration` describes that writer's permission boundary, not necessarily the deployed App's. Inspect the returned error payload even when the transport call itself succeeded.
+4. If the deployed App is the approved fallback, mint its short-lived installation token inside the runtime with the existing `resolveGithubAppTriggerAuth` / `createGithubAppTokenService` path for that channel-bound trigger. Keep the token in memory; never print, persist, or copy it outside the process.
+5. Make writes idempotent: de-duplicate lifecycle comments, preserve unrelated body sections, and change only the preconditioned issues. Snapshot an unrelated issue before the repair and verify its state and body hash are unchanged afterward.
+6. Re-fetch all targets after writing and verify exact states, markers, fingerprints, comments, and the unrelated issue snapshot.
+
+For remote diagnostics, distinguish host tools from the runtime-image baseline: probe with `command -v rg` and fall back to portable tools on the host. If SSH output is buffered, inspect the remote build process or container state before classifying the command as hung.
 
 ### Rollback
 

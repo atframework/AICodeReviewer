@@ -70,6 +70,7 @@
 - 已完成阶段的长篇总结放到 `milestones/*.md`。
 - 稳定设计细节放到 `architecture.md`，避免把大段合同反复复制到 `Plan.md`、skills 或提示词中。
 - 稳定决策放到 `decisions.md`，方便按主题按需读取。
+- `docs/superpowers/specs/` 与 `docs/superpowers/plans/` 只保留进行中的任务资料；实现和验证完成且稳定结论已沉淀后，删除对应临时文件。
 - 已修复的易回归问题放到 `AGENTS.known-pitfalls.md`，根 `AGENTS.md` 只保留读取条件和索引。
 - 代码/配置的最终真源仍然是实现本身，例如：
   - `packages/core/src/config.ts`
