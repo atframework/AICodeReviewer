@@ -2023,7 +2023,12 @@ export function createGithubProblemIssueDispatcher(options: GithubProblemIssueOp
 		const scopeFingerprint = context?.scopeFingerprint ?? currentScopeFingerprint;
 		const headSha = context?.headSha ?? options.headSha;
 		const body: Record<string, unknown> = {
-			title: buildConsolidatedIssueTitle(getConsolidatedOpenProblems(problems, categorization), markerPrefix),
+			title: buildUpdatedConsolidatedIssueTitle(
+				existing.title,
+				problems,
+				markerPrefix,
+				categorization,
+			),
 			body: buildConsolidatedIssueBody(problems, {
 				channel, markerLabel, scopeFingerprint,
 				...(summary ? { summary } : {}),
@@ -3151,6 +3156,35 @@ function getConsolidatedOpenProblems(
 		: problems;
 }
 
+function buildUpdatedConsolidatedIssueTitle(
+	existingTitle: string,
+	problems: readonly ReviewProblem[],
+	markerPrefix: string,
+	categorization?: ConsolidatedIssueCategorization,
+): string {
+	const openProblems = getConsolidatedOpenProblems(problems, categorization);
+	const generatedTitle = buildConsolidatedIssueTitle(openProblems, markerPrefix);
+	if (
+		!categorization ||
+		openProblems.length === 0 ||
+		categorization.retainedProblems.length !== openProblems.length
+	) {
+		return generatedTitle;
+	}
+
+	const separator = " · ";
+	const existingSeparatorIndex = existingTitle.indexOf(separator);
+	const generatedSeparatorIndex = generatedTitle.indexOf(separator);
+	if (existingSeparatorIndex < 0 || generatedSeparatorIndex < 0) {
+		return generatedTitle;
+	}
+
+	return truncateIssueTitle(
+		`${generatedTitle.slice(0, generatedSeparatorIndex)}${existingTitle.slice(existingSeparatorIndex)}`,
+		MANAGED_ISSUE_TITLE_MAX_DISPLAY_WIDTH,
+	);
+}
+
 interface ConsolidatedIssueUpdateContext {
 	readonly scopeFingerprint: string;
 	readonly headSha?: string;
@@ -3956,7 +3990,12 @@ export function createGiteaProblemIssueDispatcher(options: GiteaProblemIssueOpti
 		const scopeFingerprint = context?.scopeFingerprint ?? currentScopeFingerprint;
 		const headSha = context?.headSha ?? options.headSha;
 		const body: Record<string, unknown> = {
-			title: buildConsolidatedIssueTitle(getConsolidatedOpenProblems(problems, categorization), markerPrefix),
+			title: buildUpdatedConsolidatedIssueTitle(
+				existing.title,
+				problems,
+				markerPrefix,
+				categorization,
+			),
 			body: buildConsolidatedIssueBody(problems, {
 				channel, markerLabel, scopeFingerprint,
 				...(summary ? { summary } : {}),
