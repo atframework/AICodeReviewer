@@ -1120,6 +1120,51 @@ describe("consolidated cross-scope cleanup", () => {
 		].join("\n");
 	}
 
+	interface StoredProblemFixture {
+		readonly fp: string;
+		readonly file: string;
+		readonly line: number;
+		readonly endLine?: number;
+		readonly category: string;
+		readonly severity: string;
+		readonly message?: string;
+	}
+
+	function buildStoredConsolidatedBody(
+		entries: readonly StoredProblemFixture[],
+	): string {
+		const sections = [
+			"<!-- aicr:managed=problem-issue -->",
+			"<!-- aicr:consolidated=true -->",
+			"<!-- aicr:channel=github-issues -->",
+			"<!-- aicr:label=aicr-managed -->",
+			`<!-- aicr:scope_fingerprint=${oldScopeFp} -->`,
+			`<!-- aicr:commit=${oldHeadSha} -->`,
+			`<!-- aicr:open_problems=${entries.map((entry) => entry.fp).join(",")} -->`,
+			"",
+			"## Historical summary",
+			"",
+			"Prior analysis summary.",
+			"",
+			"---",
+			"",
+		];
+		for (const entry of entries) {
+			const location = entry.endLine
+				? `${entry.file}:${entry.line}-${entry.endLine}`
+				: `${entry.file}:${entry.line}`;
+			sections.push(
+				`#### ${entry.severity.toUpperCase()} (1)`,
+				"",
+				`**${entry.category}** \u2014 \`${location}\` <!-- aicr:fp=${entry.fp} -->`,
+				"",
+				entry.message ?? "Old problem description.",
+				"",
+			);
+		}
+		return sections.join("\n");
+	}
+
 	it("closes cross-scope consolidated issue when all its problems are gone and files were reviewed", async () => {
 		const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
 		const oldBody = buildOldConsolidatedBody({ fp: "fp-old", file: "src/auth.ts", line: 12, category: "security", severity: "critical" });
@@ -1143,6 +1188,253 @@ describe("consolidated cross-scope cleanup", () => {
 		const closeCall = calls.find((c) => c.url.includes("/issues/40") && c.init?.method === "PATCH" && JSON.parse(c.init?.body ?? "{}").state === "closed");
 		expect(closeCall).toBeDefined();
 		expect(results.some((r) => r.raw && typeof r.raw === "object" && (r.raw as Record<string, unknown>).action === "closed")).toBe(true);
+	});
+
+	it("closes a cross-scope issue whose stored locations use line ranges", async () => {
+		const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
+		const oldBody = buildStoredConsolidatedBody([
+			{
+				fp: "fp-mq-1",
+				file: "src/mq_channel_manager.cpp",
+				line: 309,
+				endLine: 313,
+				category: "correctness",
+				severity: "high",
+			},
+			{
+				fp: "fp-mq-2",
+				file: "src/mq_channel_manager.cpp",
+				line: 712,
+				endLine: 715,
+				category: "correctness",
+				severity: "high",
+			},
+			{
+				fp: "fp-mq-3",
+				file: "src/mq_channel_manager.cpp",
+				line: 522,
+				endLine: 528,
+				category: "maintainability",
+				severity: "medium",
+			},
+		]);
+		const currentProblem: ReviewProblem = {
+			file: "src/current.cpp",
+			line: 10,
+			severity: "low",
+			category: "style",
+			message: "Current issue.",
+			fingerprint: "fp-current",
+		};
+		const dispatcher = createGithubProblemIssueDispatcher({
+			owner: "my-org",
+			repo: "my-repo",
+			channelName: "github-issues",
+			issueMode: "consolidated",
+			headSha: newHeadSha,
+			targetKind: "push",
+			resolvedAction: "close",
+			fetch: async (url, init) => {
+				calls.push({ url, init });
+				if (url.includes("/issues?state=open"))
+					return response([
+						{ number: 46, title: "[AICR] Old", body: oldBody, state: "open" },
+					]);
+				if (url.includes("/compare/")) return response({ status: "ahead" });
+				return response({ id: 50, number: 50 });
+			},
+		});
+
+		await dispatcher.reconcileProblems([currentProblem], "Current summary", {
+			reviewedFiles: ["src/mq_channel_manager.cpp", "src/current.cpp"],
+		});
+
+		const closeCall = calls.find(
+			(call) =>
+				call.url.includes("/issues/46") &&
+				call.init?.method === "PATCH" &&
+				JSON.parse(call.init.body ?? "{}").state === "closed",
+		);
+		expect(closeCall).toBeDefined();
+	});
+
+	it("partially resolves reviewed findings in an older scope and retains the others", async () => {
+		const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
+		const oldBody = buildStoredConsolidatedBody([
+			{
+				fp: "fp-orbit-stringify",
+				file: "src/OrbitRPCHandle.h",
+				line: 153,
+				category: "correctness",
+				severity: "high",
+			},
+			{
+				fp: "fp-orbit-concat",
+				file: "src/OrbitRPCHandle.h",
+				line: 154,
+				category: "correctness",
+				severity: "high",
+			},
+			{
+				fp: "fp-cmake",
+				file: "src/component-functions.cmake",
+				line: 327,
+				category: "build",
+				severity: "medium",
+			},
+		]);
+		const currentProblem: ReviewProblem = {
+			file: "src/current.cpp",
+			line: 10,
+			severity: "low",
+			category: "style",
+			message: "Current issue.",
+			fingerprint: "fp-current",
+		};
+		const dispatcher = createGithubProblemIssueDispatcher({
+			owner: "my-org",
+			repo: "my-repo",
+			channelName: "github-issues",
+			issueMode: "consolidated",
+			headSha: newHeadSha,
+			targetKind: "push",
+			resolvedAction: "close",
+			fetch: async (url, init) => {
+				calls.push({ url, init });
+				if (url.includes("/issues?state=open"))
+					return response([
+						{ number: 42, title: "[AICR] Old", body: oldBody, state: "open" },
+					]);
+				if (url.includes("/compare/")) return response({ status: "ahead" });
+				return response({ id: 47, number: 47 });
+			},
+		});
+
+		await dispatcher.reconcileProblems([currentProblem], "Current summary", {
+			reviewedFiles: ["src/component-functions.cmake", "src/current.cpp"],
+		});
+
+		const oldPatchCall = calls.find(
+			(call) =>
+				call.url.includes("/issues/42") && call.init?.method === "PATCH",
+		);
+		const oldPatch = JSON.parse(oldPatchCall?.init?.body ?? "{}");
+		expect(oldPatch.state).toBeUndefined();
+		expect(oldPatch.body).toContain(
+			"<!-- aicr:open_problems=fp-orbit-stringify,fp-orbit-concat -->",
+		);
+		expect(oldPatch.body).toContain("✅ Resolved (1)");
+		expect(oldPatch.body).toContain("src/component-functions.cmake:327");
+		expect(oldPatch.body).toContain("## Historical summary");
+		expect(oldPatch.body).not.toContain("aicr:open_problems=fp-current");
+		expect(
+			calls.some(
+				(call) => call.url.endsWith("/issues") && call.init?.method === "POST",
+			),
+		).toBe(true);
+	});
+
+	it("partially resolves an older scope during an empty review", async () => {
+		const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
+		const oldBody = buildStoredConsolidatedBody([
+			{
+				fp: "fp-unreviewed",
+				file: "src/unreviewed.ts",
+				line: 20,
+				category: "security",
+				severity: "high",
+			},
+			{
+				fp: "fp-reviewed",
+				file: "src/reviewed.ts",
+				line: 30,
+				category: "bug",
+				severity: "medium",
+			},
+		]);
+		const dispatcher = createGithubProblemIssueDispatcher({
+			owner: "my-org",
+			repo: "my-repo",
+			channelName: "github-issues",
+			issueMode: "consolidated",
+			headSha: newHeadSha,
+			targetKind: "push",
+			resolvedAction: "close",
+			fetch: async (url, init) => {
+				calls.push({ url, init });
+				if (url.includes("/issues?state=open"))
+					return response([
+						{ number: 42, title: "[AICR] Old", body: oldBody, state: "open" },
+					]);
+				if (url.includes("/compare/")) return response({ status: "ahead" });
+				return response({ id: 42, number: 42 });
+			},
+		});
+
+		await dispatcher.reconcileProblems([], undefined, {
+			reviewedFiles: ["src/reviewed.ts"],
+		});
+
+		const oldPatch = JSON.parse(
+			calls.find(
+				(call) =>
+					call.url.includes("/issues/42") && call.init?.method === "PATCH",
+			)?.init?.body ?? "{}",
+		);
+		expect(oldPatch.state).toBeUndefined();
+		expect(oldPatch.body).toContain(
+			"<!-- aicr:open_problems=fp-unreviewed -->",
+		);
+		expect(oldPatch.body).toContain("✅ Resolved (1)");
+	});
+
+	it("keeps different per-commit scopes independent", async () => {
+		const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
+		const oldBody = buildStoredConsolidatedBody([
+			{
+				fp: "fp-old",
+				file: "src/old.ts",
+				line: 12,
+				category: "bug",
+				severity: "high",
+			},
+		]);
+		const currentProblem: ReviewProblem = {
+			file: "src/current.ts",
+			line: 5,
+			severity: "low",
+			category: "style",
+			message: "Current issue.",
+			fingerprint: "fp-current",
+		};
+		const dispatcher = createGithubProblemIssueDispatcher({
+			owner: "my-org",
+			repo: "my-repo",
+			channelName: "github-issues",
+			issueMode: "per_commit",
+			headSha: newHeadSha,
+			resolvedAction: "close",
+			fetch: async (url, init) => {
+				calls.push({ url, init });
+				if (url.includes("/issues?state=open"))
+					return response([
+						{ number: 40, title: "[AICR] Old", body: oldBody, state: "open" },
+					]);
+				if (url.includes("/compare/")) return response({ status: "ahead" });
+				return response({ id: 50, number: 50 });
+			},
+		});
+
+		await dispatcher.reconcileProblems([currentProblem], "Current summary", {
+			reviewedFiles: ["src/old.ts", "src/current.ts"],
+		});
+
+		expect(
+			calls.some(
+				(call) =>
+					call.url.includes("/issues/40") && call.init?.method === "PATCH",
+			),
+		).toBe(false);
 	});
 
 	it("does NOT close cross-scope issue when its files were NOT in the reviewed scope", async () => {
