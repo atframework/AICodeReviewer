@@ -20,5 +20,5 @@ Read this when changing `gitea_problem_issue`, `github_problem_issue`, issue mod
 - `reviewedFiles` flows from `ReviewSummaryPublishOptions` through bootstrap to the third `reconcileProblems` argument. Do not remove or bypass it.
 - Per-problem bodies embed `<!-- aicr:file=<path> -->` and may parse legacy `Location: path:line`. Missing file metadata with scoped review input must remain unresolved.
 - Same-scope duplicate consolidated issues from prior races are resolved after the primary issue is updated.
-- Titles stay output-owned and concise; `aicr.publish_summary.title` only affects the summary rendered in the body.
+- Titles stay output-owned and concise; `aicr.publish_summary.title` only affects the summary rendered in the body. When every surviving problem is retained from an unreviewed file, refresh the generated severity/count/location prefix but preserve the existing descriptive suffix instead of promoting retained placeholder prose into the issue title.
 - Gitea applies `auto_tag` and `reviewed_tag` at issue creation through `body.labels`.

@@ -1303,7 +1303,7 @@ describe("consolidated cross-scope cleanup", () => {
 				calls.push({ url, init });
 				if (url.includes("/issues?state=open"))
 					return response([
-						{ number: 42, title: "[AICR] Old", body: oldBody, state: "open" },
+						{ number: 42, title: "[AICR] [HIGH] 3 problems · Orbit macro expansion", body: oldBody, state: "open" },
 					]);
 				if (url.includes("/compare/")) return response({ status: "ahead" });
 				return response({ id: 47, number: 47 });
@@ -1320,6 +1320,7 @@ describe("consolidated cross-scope cleanup", () => {
 		);
 		const oldPatch = JSON.parse(oldPatchCall?.init?.body ?? "{}");
 		expect(oldPatch.state).toBeUndefined();
+		expect(oldPatch.title).toBe("[AICR] [HIGH] 2 problems · Orbit macro expansion");
 		expect(oldPatch.body).toContain(
 			"<!-- aicr:open_problems=fp-orbit-stringify,fp-orbit-concat -->",
 		);
