@@ -9,6 +9,7 @@
 - AI agent guidance uses `AGENTS.md` plus `.agents/skills/*/SKILL.md` as the canonical tool-neutral layer; `CLAUDE.md` is only a bridge that imports `AGENTS.md` for Claude Code.
 - Prompt baseline assets currently live in `docs/prompt-research.md`, `docs/ai/milestones/M0.5.md`, and `prompts/system/code-reviewer.system.md`; keep them aligned and validate them with markdownlint when changed.
 - `Plan.md` is now roadmap-only. Use `docs/ai/index.md` to find detailed architecture, milestone history, and decision records on demand.
+- `docs/superpowers/specs/` and `docs/superpowers/plans/` hold active task artifacts, not completed history; remove a file after its implementation is verified and its durable decisions are merged into long-lived docs or skills.
 - Temporary repository artifacts such as scratch scripts, debug logs, ad hoc reports, and captured command output belong under `build/` subdirectories (`build/tmp/`, `build/logs/`, `build/deploy/`), not in the repository root. Ensure the subdirectory exists before writing.
 - Docker baseline now uses `ubuntu:24.04` as the distro base, copies the Node 22 userspace from `node:22-bookworm-slim`, installs `p4-cli` from Perforce's Ubuntu APT repo, includes Python pip/venv, Kubernetes/Helm/YAML tooling (`kubectl`, `helm`, Mike Farah `yq`), Podman/container clients (`podman`, `buildah`, `skopeo`), plus common build/debug/static-analysis tools, and normalizes Debian/Ubuntu command names so prompts can consistently refer to `fd` and `bat`.
 

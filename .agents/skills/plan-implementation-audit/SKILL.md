@@ -1,6 +1,6 @@
 ---
 name: plan-implementation-audit
-description: "Use when: comparing the current roadmap/docs with implementation, identifying gaps, fixing issues, or adding missing tests; do not use for unrelated feature work."
+description: "Use when: comparing roadmap/docs with implementation, auditing or retiring completed task plans/specs, identifying gaps, fixing issues, or adding missing tests; do not use for unrelated feature work."
 user-invocable: false
 ---
 
@@ -11,6 +11,7 @@ user-invocable: false
 - When asked to compare the roadmap/docs with current implementation.
 - When asked to find and fix issues in the current milestone.
 - When asked to add missing unit tests or improve coverage.
+- When asked to clean completed files from `docs/superpowers/specs/` or `docs/superpowers/plans/`.
 
 ## Do Not Use
 
@@ -82,7 +83,15 @@ For each matched category, verify both user-facing docs and example config snipp
 - Always run the full verification chain after changes.
 - Update `../../../docs/ai/AGENTS.known-pitfalls.md` if a new recurring issue is found.
 
-### Step 7: Summarize
+### Step 7: Retire completed task artifacts
+
+Treat `docs/superpowers/specs/` and `docs/superpowers/plans/` as active work, not an archive. For each cleanup candidate:
+
+1. Map its goals and acceptance criteria to current code, tests, documentation, deployment evidence when applicable, and git history; unchecked template boxes alone do not prove the work is unfinished.
+2. Search the repository for references and move any still-useful design decision into the authoritative long-lived doc or skill.
+3. Delete only files whose work is complete and whose durable content is preserved. Keep incomplete or still-referenced artifacts and report the missing evidence.
+
+### Step 8: Summarize
 
 Provide a table of: issue found, file location, fix applied, test added, and docs/examples updated or why no docs/examples were needed.
 
