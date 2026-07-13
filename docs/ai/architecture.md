@@ -406,38 +406,37 @@ AICR 采用**两层上下文管理**，两者互补：
 - 最近问题列表受 `review.problem_issue.max_recent_issues` 控制。
 - 零 problem 正常 review 的抑制逻辑，不能误伤错误报告、告警或生命周期回收。
 - 支持 `issue_mode` 控制创建策略：
-  - `consolidated`（默认）：一次分析的所有问题合并为一个 issue，基于 **target-aware scope fingerprint** 做生命周期管理。scope fingerprint 按审查目标区分，避免不同批次/不同提交者被合并到同一个 issue：
-    - **push 事件**：按批次（`channel + repo + headSha`，即每次 push 的 `after`）独立成 issue；同一次 push（可能包含多个 commit）的问题合进同一个 issue，不同批次/不同提交者的 push 互不合并。
-    - **pull request / MR**：按 PR 号（`channel + repo + pr_number`）归并；同一 PR 的多次提交与更新复用同一个 issue（无 PR 号时回退到 headSha）。
-    - **其他目标**（manual/scheduled 或未提供 `targetKind`）：回退到 `channel + repo`。
-    - 不同目标之间**不再互相清理或关闭**（已移除旧的 repo-wide 跨 scope 合并循环）。每次审查更新已有 issue 内容；零问题时按 `resolved_action` 关闭或删除。
+  - `consolidated`（默认）：一次分析的所有问题合并为一个 issue，基于 **target-aware scope fingerprint** 做生命周期管理。scope fingerprint 按审查目标区分：
+    - **push 事件**：按批次（`channel + repo + headSha`）独立成 issue；同一次 push 的问题合并，不同 push 不会合并。
+    - **pull request / MR**：按 PR 号（`channel + repo + pr_number`）归并；同一 PR 的更新复用同一个 issue（无 PR 号时回退到 headSha）。
+    - **其他目标**：manual/scheduled 或未提供 `targetKind` 时回退到 `channel + repo`。
+    - 当前 scope 创建或更新后，dispatcher 协调其他 consolidated scope 的旧 issue；这不是合并 scope，而是逐 fingerprint 回收已重新验证的问题。
   - `per_problem`：每个问题创建独立 issue，基于 fingerprint 做生命周期管理。
-  - `per_commit`：按 commit scope fingerprint（`channel + repo + headSha`）创建 issue，对所有目标一视同仁（PR 也会按每个 commit 拆分），不同 commit 的问题相互独立，不自动关闭其他 commit 的 issue。
+  - `per_commit`：按 commit scope fingerprint（`channel + repo + headSha`）创建 issue；不同 commit 的 issue 相互独立，禁止跨 scope 回收。
 - `resolved_action` 支持：
   - `close`（默认）：关闭 issue。
   - `delete`：删除 issue（仅 Gitea）。
-  - `mark_resolved`：在 issue 正文顶部添加 ✅ Resolved 标记并关闭，保留 issue 供历史追踪。
+  - `mark_resolved`：在 issue 正文顶部添加 ✅ Resolved 标记并关闭。
   - `none`：不执行任何操作。
 - consolidated 模式下 labels 使用最高严重级别，assignees 汇总所有关联负责人。
-- managed issue 标题由输出层生成，优先保持单行可读：
-  - `per_problem`：前缀 + 严重级别 + 缩短位置 + 简短摘要（如 `[AICR] [HIGH] src/app.ts:3 · Issue`）。
-  - `consolidated`：单问题复用 `per_problem` 格式；多问题使用前缀 + 最高严重级别 + 问题数 + 代表摘要（如 `[AICR] [CRITICAL] 3 problems · SQL query uses unsanitized input`）。
-- `aicr.publish_summary.title` 只影响 issue body 里的 summary heading，不直接控制 managed issue 标题。
+- managed issue 标题由输出层生成：
+  - `per_problem`：前缀 + 严重级别 + 缩短位置 + 简短摘要。
+  - `consolidated`：单问题复用 `per_problem` 格式；多问题使用前缀 + 最高严重级别 + 问题数 + 代表摘要。
+- `aicr.publish_summary.title` 只影响 issue body 里的 summary heading，不控制 managed issue 标题。
 - consolidated issue 支持 per-fingerprint 解决跟踪与 webhook 重放保护：
-  - issue body 包含隐藏标记 `<!-- aicr:commit={headSha} -->` 和 `<!-- aicr:open_problems=fp1,fp2 -->`，每个问题标题后嵌入 `<!-- aicr:fp={fp} -->`。
-  - 更新已有 consolidated issue 时，通过 VCS compare API 验证当前 commit 是否在存储 commit 之后：
-    - 当前 commit 在存储 commit 之后（`ahead` 或 `identical`）：执行完整分类（新增/仍存在/已解决），在 issue body 中显示 Resolved 折叠区。
-    - 相同 commit：仅合并新问题，不标记任何问题为已解决（避免 LLM 可变性误判）。
-    - 当前 commit 更旧（`behind` 或 `diverged`）：完全跳过更新（防止 webhook 重放）。
-    - compare API 失败或不可用：更新但不分类（fail-safe，不误标记已解决）。
-  - 向后兼容：缺少新标记的旧 issue body 在无 scoped `reviewedFiles` 时按原有逻辑全量替换；当 scoped `reviewedFiles` 存在且旧问题文件无法确定时，保守跳过关闭/重写。
+  - body 包含 `<!-- aicr:commit={headSha} -->`、`<!-- aicr:open_problems=fp1,fp2 -->` 和逐问题 `<!-- aicr:fp={fp} -->`；位置解析同时支持 `file:line` 与 `file:start-end`。
+  - 同 scope 更新通过 VCS compare 验证顺序：ahead 时分类；相同 commit 不解决问题；behind/diverged 时跳过；compare 失败时更新但不分类。
+  - 跨 scope 回收只用于 `consolidated`：必须同时存在存储 commit 与当前 head，并且 compare 明确确认当前 commit 位于存储 commit 之后；失败或未知结果都跳过。
+  - 旧 issue 只接收其原有 `open_problems` 中仍存在的当前 fingerprint。已覆盖且消失的 fingerprint 进入 Resolved，未覆盖的 fingerprint 保持 open；只有 open fingerprint 归零时才执行 `resolved_action`。
+  - 部分更新保留旧 scope fingerprint、当前验证 head 和原历史 summary；若 retained fingerprint 元数据无法解析，保守跳过重写。相同 scope 的竞态重复 issue 仍会回收。
+  - 缺少新标记的同 scope 旧 body 在无 scoped `reviewedFiles` 时保留兼容行为；有 scoped `reviewedFiles` 且旧文件无法确定时跳过关闭/重写。
 - 问题生命周期关闭必须由 reviewed file-scope 守卫：
-  - 只有当当前 review 实际重新分析了包含该问题的文件时，才允许标记"已解决"并关闭其 managed issue。
-  - `reconcileProblems` 通过第 3 参数 `{ reviewedFiles }` 接收当前 review 的 `changedPaths`（经 orchestrator → `ReviewSummaryPublishOptions.reviewedFiles` → bootstrap `publishSummary` 转发）。
-  - per_problem issue body 嵌入 `<!-- aicr:file=<path> -->` 标记；旧 body 通过解析 `Location: \`path:line\`` 回退。
-  - consolidated issue 通过 `parseConsolidatedBodyProblemInfo`（per-fingerprint 文件信息）提取文件。
-  - `isFileCoveredByReview(filePath, reviewedFiles)`：`reviewedFiles` 为空/未提供时返回 `true`（向后兼容）；`filePath` 无法确定且 `reviewedFiles` 非空时返回 `false`（保守不关闭）；文件在范围内返回 `true`。
-  - 守卫应用于：per_problem 解决循环、consolidated 空结果分支（`canResolveConsolidatedIssue`）、consolidated 分类（`categorizeProblems` via `previousFilesByFingerprint`）。consolidated 部分范围更新必须把未覆盖的旧 fingerprint 作为 retained open problem 写回 `open_problems` 和正文；如果旧 body 无法解析 retained fingerprint 的文件/元数据，则跳过本次重写，避免丢失追踪。（target-aware 化后已移除旧的 repo-wide 跨 scope 清理循环，不同 push 批次 / 不同 PR 的 issue 不再互相关闭。）
+  - 只有当前 review 实际重新分析了包含该问题的文件时，才允许标记已解决并关闭 managed issue。
+  - `reconcileProblems` 通过第 3 参数 `{ reviewedFiles }` 接收 `changedPaths`。
+  - per_problem body 嵌入 `<!-- aicr:file=<path> -->`；旧 body 解析 `Location: path:line` 回退。
+  - consolidated body 通过 `parseConsolidatedBodyProblemInfo` 提取逐 fingerprint 的单行/范围位置，再由 `prepareStoredConsolidatedReconciliation` 处理普通与空结果审查。
+  - `isFileCoveredByReview` 在 `reviewedFiles` 为空/未提供时兼容返回 true；文件不在非空 scope 或无法确定时返回 false。
+  - 部分更新把未覆盖的旧 fingerprint 作为 retained open problem 写回 `open_problems` 和正文；只有已覆盖且当前结果缺失的 fingerprint 才能进入 Resolved。
 - GitHub managed problem issue 需要 `token_env` 指向具备 Issues read/write 权限的 PAT 或 GitHub App installation token；Webhook 的 `Issues` / `Issue comments` 事件订阅只控制入站事件，不授予 REST API 创建/更新 issue 的权限。
 
 ### 3.10 配置体系

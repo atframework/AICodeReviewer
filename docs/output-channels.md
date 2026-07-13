@@ -205,26 +205,27 @@ workspaces:
 
 ## Managed Gitea problem issues
 
-The `gitea_problem_issue` channel reconciles managed Gitea issues based on problem fingerprints. On every summary publish it creates issues for new fingerprints and applies `resolved_action` to open managed issues whose fingerprints disappeared from the latest analysis.
+The `gitea_problem_issue` and `github_problem_issue` channels reconcile managed issues from problem fingerprints. A fingerprint is resolved only after the current review covers its file and no longer reports it.
 
-By default, all problems from one review run are combined into a single issue (`issue_mode: consolidated`). When `issue_mode: per_problem` is set, each problem gets its own issue with fingerprint-based reconciliation. The consolidated issue is identified by a **target-aware** scope fingerprint and updated on subsequent reviews: `push` events key by batch (channel + owner + repo + `headSha`), so different push batches and committers stay in separate issues; `pull_request`/MR events key by pull number (channel + owner + repo + pull number), so a single PR issue is updated across every commit (falling back to `headSha` when the number is unavailable); manual, scheduled, and other targets fall back to channel + owner + repo. When no problems are found, the consolidated issue for the current target is closed or deleted according to `resolved_action`.
+By default, one review is combined into a single issue (`issue_mode: consolidated`). `per_problem` creates one issue per finding. Consolidated scopes are target-aware: pushes key by `headSha`, PR/MR reviews key by pull number (falling back to `headSha`), and other targets use the repository scope.
 
-After handling the current-scope issue (create or update), the dispatcher also performs **cross-scope cleanup**: it iterates all open managed consolidated issues from other scopes (old push batches, different commits) and resolves them when all four conditions are met: (1) `resolved_action` is not `none`, (2) commit ancestry confirms the current commit is at or after the stored commit, (3) none of the issue's stored fingerprints are present in the current review, and (4) the file-scope guard confirms all stored files were re-reviewed. This prevents stale issues from accumulating when successive push events produce different scope fingerprints. Same-scope duplicates (multiple issues with identical scope fingerprint from a prior race) are also resolved during this pass.
+After handling the current scope, consolidated mode coordinates older scopes per fingerprint. Commit ancestry must be explicitly confirmed; behind, diverged, failed, or unknown comparisons cannot change an old scope. Current findings are filtered to fingerprints already owned by that issue, reviewed-and-missing fingerprints move to Resolved, and unreviewed fingerprints remain open. The old issue is patched while open fingerprints remain and receives `resolved_action` only when none remain. Its scope marker and historical summary are preserved, and current-scope-only fingerprints are never copied into it. Same-scope duplicates are still resolved. `per_commit` scopes are independent and never enter this cross-scope pass.
 
-When updating an existing consolidated issue, the dispatcher tracks per-fingerprint resolution and protects against webhook replay:
+When updating a consolidated issue:
 
-- The issue body includes hidden markers `<!-- aicr:commit={headSha} -->`, `<!-- aicr:open_problems=fp1,fp2 -->`, and `<!-- aicr:fp={fp} -->` after each problem heading.
-- On update, the VCS compare API verifies commit ordering. If the current commit is ahead, the dispatcher categorizes problems into new, still-open, and resolved, rendering a collapsible "Resolved" section in the body. If the same commit is analyzed again, no problems are marked resolved (preventing LLM output variability from causing false resolutions). If the current commit is behind, the update is skipped entirely. If the compare API fails, the body is updated without categorization.
-- Issues created before these markers are backward-compatible. When no scoped `reviewedFiles` is available, they may be replaced in full; when scoped `reviewedFiles` is present and the previous problem file cannot be determined, the dispatcher leaves the issue unchanged instead of dropping or resolving uncertain fingerprints.
+- The body includes `<!-- aicr:commit={headSha} -->`, `<!-- aicr:open_problems=fp1,fp2 -->`, and `<!-- aicr:fp={fp} -->` markers. Stored headings parse both `file:line` and `file:start-end`.
+- Same-scope updates categorize an ahead commit, refuse resolution on the same commit, skip behind/diverged commits, and update without classification when compare fails.
+- Cross-scope updates require both commits and a confirmed ancestry result. Compare failures skip the old scope.
+- Markerless bodies retain backward compatibility only in the current scope. With scoped `reviewedFiles`, missing stored metadata leaves the issue unchanged.
 
 ### File-scope resolution guard
 
-A managed problem is only marked "resolved" (and its issue closed) when the current review actually re-analyzed the file containing that problem. Without this guard, a review triggered by a commit that touches unrelated files — or that simply finds nothing — would silently mark every previously-reported problem as resolved and close its issue.
+A managed problem is only marked Resolved when the current review re-analyzed its file. An unrelated or empty review cannot close valid findings.
 
-- The orchestrator passes the current review's `changedPaths` as `reviewedFiles` through `ReviewSummaryPublishOptions` → `publishSummary` → `reconcileProblems`.
-- Per-problem issue bodies embed `<!-- aicr:file=<path> -->`; legacy bodies fall back to parsing `Location: \`path:line\``. Consolidated issues extract per-fingerprint file info from the body.
-- When `reviewedFiles` is provided and a problem's file is NOT in the reviewed scope (or cannot be determined), the problem is left open because it was not re-analyzed. In consolidated mode, out-of-scope fingerprints stay in `open_problems` and the issue body as retained open problems; if a retained fingerprint cannot be mapped back to a file, the dispatcher skips that rewrite instead of dropping it. When `reviewedFiles` is absent or empty, the original behavior is preserved for backward compatibility.
-
+- `changedPaths` flows as `reviewedFiles` through `ReviewSummaryPublishOptions` → `publishSummary` → `reconcileProblems`.
+- Per-problem bodies embed `<!-- aicr:file=<path> -->`; legacy bodies parse `Location: path:line`. Consolidated bodies store per-fingerprint single-line or range locations.
+- Partial updates retain out-of-scope fingerprints in `open_problems` and the body. If retained metadata is incomplete, the rewrite is skipped. Empty reviews use the same per-fingerprint path.
+- Absent or empty `reviewedFiles` preserves current-scope legacy behavior; it never authorizes cross-scope resolution.
 Managed issue titles are generated by the output layer to stay concise in GitHub/Gitea list views. `aicr.publish_summary.title` only affects the rendered summary content in the issue body; it does not replace the managed issue title. Current title policy:
 
 - `per_problem`: `marker_prefix + severity + shortened location + short first-sentence summary`
