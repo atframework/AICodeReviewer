@@ -68,13 +68,16 @@ LLM_TOKEN="$(yq -r '.llm.provider.xiaomimimo_token_plan.token' development/secre
 
 | 顺序 | baseURL selector                                 | token selector                                 | 模型              |
 | ---- | ------------------------------------------------ | ---------------------------------------------- | ----------------- |
-| 1    | `.llm.provider.zhipu.baseURL`                    | `.llm.provider.zhipu.token`                    | `glm-5.2`         |
+| 1    | `.llm.provider.kimi_coding.baseURL`              | `.llm.provider.kimi_coding.token`              | `k3`              |
 | 2    | `.llm.provider.kimi_coding.baseURL`              | `.llm.provider.kimi_coding.token`              | `kimi-for-coding` |
-| 3    | `.llm.provider.aliyun_coding_plan.baseURL`       | `.llm.provider.aliyun_coding_plan.token`       | `glm-5`           |
-| 4    | `.llm.provider.tencentcloud_coding_plan.baseURL` | `.llm.provider.tencentcloud_coding_plan.token` | `glm-5`           |
-| 5    | `.llm.provider.aliyun_coding_plan.baseURL`       | `.llm.provider.aliyun_coding_plan.token`       | `kimi-k2.5`       |
-| 6    | `.llm.provider.tencentcloud_coding_plan.baseURL` | `.llm.provider.tencentcloud_coding_plan.token` | `kimi-k2.5`       |
-| 7    | `.llm.provider.aliyun_coding_plan.baseURL`       | `.llm.provider.aliyun_coding_plan.token`       | `qwen3.6-plus`    |
+| 3    | `.llm.provider.zhipu.baseURL`                    | `.llm.provider.zhipu.token`                    | `glm-5.2`         |
+| 4    | `.llm.provider.aliyun_coding_plan.baseURL`       | `.llm.provider.aliyun_coding_plan.token`       | `glm-5`           |
+| 5    | `.llm.provider.tencentcloud_coding_plan.baseURL` | `.llm.provider.tencentcloud_coding_plan.token` | `glm-5`           |
+| 6    | `.llm.provider.aliyun_coding_plan.baseURL`       | `.llm.provider.aliyun_coding_plan.token`       | `kimi-k2.5`       |
+| 7    | `.llm.provider.tencentcloud_coding_plan.baseURL` | `.llm.provider.tencentcloud_coding_plan.token` | `kimi-k2.5`       |
+| 8    | `.llm.provider.aliyun_coding_plan.baseURL`       | `.llm.provider.aliyun_coding_plan.token`       | `qwen3.6-plus`    |
+
+- 公网 `kimi-coding` provider 已配置 `catalog_provider: kimi-for-coding`，并通过 `llm.model_catalog.overrides."kimi-coding/k3".context_window = 262144` 把 k3 上下文窗口限制为 256K（models.dev 目录值为 1M，override 优先）。
 
 ### VCS 与输出 selector
 
