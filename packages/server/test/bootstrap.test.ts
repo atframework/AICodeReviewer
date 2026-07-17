@@ -2037,6 +2037,77 @@ describe("createOutputPublisherResolverFromConfig", () => {
     }
   });
 
+  it("does not reconcile managed problem issues for trigger error reports", async () => {
+    const calls: { url: string; init: { body?: string; method?: string } }[] = [];
+    vi.stubGlobal("fetch", async (url: string, init?: { body?: string; method?: string }) => {
+      calls.push({ url, init: init ?? {} });
+      return response(url.includes("/issues?") ? [] : { id: 1, number: 1 });
+    });
+
+    const originalGithubToken = process.env.GITHUB_TOKEN;
+    process.env.GITHUB_TOKEN = "resolver-token";
+    try {
+      const config = makeConfig({
+        triggers: [{ name: "github-saas", kind: "github", token_env: "GITHUB_TOKEN" }],
+        outputs: {
+          template_engine: "handlebars",
+          channels: [
+            { name: "github-problem-issues", kind: "github_problem_issue", trigger: "github-saas" },
+          ],
+          routes: {
+            default: {},
+            rules: [
+              { match: { trigger: "github-saas", target_kind: "push" }, summary: ["github-problem-issues"] },
+            ],
+          },
+        },
+        workspaces: {
+          cache: { max_total_gb: 50, eviction: "lru", ttl_days: 30 },
+          defaults: {},
+          instances: {
+            "test-workspace": {
+              source_repo: { trigger: "github-saas", repo: "my-org/my-repo" },
+            },
+          },
+        },
+      } as Partial<AppConfig>);
+      const publisher = await createOutputPublisherResolverFromConfig(config)({
+        reviewEvent: {
+          triggerName: "github-saas",
+          provider: "github",
+          workspaceId: "test-workspace",
+          targetKind: "push",
+          repoRef: "my-org/my-repo",
+          headSha: "abcdef1234567890",
+          author: {},
+          reason: "github:push",
+        },
+        payload: {},
+        provider: "github",
+        eventName: "push",
+      });
+
+      expect(publisher).toBeDefined();
+      const errorResults = await publisher?.publishSummary?.(
+        "## AICodeReviewer trigger processing failed",
+        [],
+        { bypassNoProblemsPolicy: true, skipReconcile: true },
+      );
+      expect(errorResults).toEqual([]);
+      expect(calls.filter((call) => call.url.startsWith("https://api.github.com/"))).toEqual([]);
+
+      await publisher?.publishSummary?.("", [], { bypassNoProblemsPolicy: true });
+      expect(calls.some((call) => call.url.startsWith("https://api.github.com/"))).toBe(true);
+    } finally {
+      vi.unstubAllGlobals();
+      if (originalGithubToken === undefined) {
+        delete process.env.GITHUB_TOKEN;
+      } else {
+        process.env.GITHUB_TOKEN = originalGithubToken;
+      }
+    }
+  });
+
   it("resolves a problem issue lifecycle channel for push events", async () => {
     const calls: { url: string; init: { body?: string; method?: string } }[] = [];
     vi.stubGlobal("fetch", async (url: string, init?: { body?: string; method?: string }) => {
