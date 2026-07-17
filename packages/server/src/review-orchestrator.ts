@@ -70,6 +70,7 @@ export interface ReviewOutputPublisher {
 
 export interface ReviewSummaryPublishOptions {
 	readonly bypassNoProblemsPolicy?: boolean;
+	readonly skipReconcile?: boolean;
 	readonly title?: string;
 	readonly reviewedFiles?: readonly string[];
 }

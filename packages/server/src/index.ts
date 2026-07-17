@@ -644,7 +644,7 @@ async function publishTriggerErrorReport(
   ].join("\n");
 
   try {
-    await publisher.publishSummary(summary, [], { bypassNoProblemsPolicy: true });
+    await publisher.publishSummary(summary, [], { bypassNoProblemsPolicy: true, skipReconcile: true });
   } catch (error) {
     console.error(JSON.stringify({
       level: "error",

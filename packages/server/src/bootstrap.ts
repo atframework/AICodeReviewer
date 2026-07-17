@@ -1544,6 +1544,9 @@ export function createOutputPublisherFromConfig(
         return { channel: channel.name, status: "published", raw: { collected: true } };
       },
       async publishSummary(summary: string, summaryProblems?: readonly ReviewProblem[], options?: ReviewSummaryPublishOptions): Promise<readonly DispatchResult[]> {
+        if (options?.skipReconcile) {
+          return [];
+        }
         if (reconciled) {
           return [];
         }
@@ -1700,6 +1703,9 @@ export function createOutputPublisherFromConfig(
         return { channel: channel.name, status: "published", raw: { collected: true } };
       },
       async publishSummary(summary: string, summaryProblems?: readonly ReviewProblem[], options?: ReviewSummaryPublishOptions): Promise<readonly DispatchResult[]> {
+        if (options?.skipReconcile) {
+          return [];
+        }
         if (reconciled) {
           return [];
         }
