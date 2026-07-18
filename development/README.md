@@ -68,9 +68,9 @@ LLM_TOKEN="$(yq -r '.llm.provider.xiaomimimo_token_plan.token' development/secre
 
 | 顺序 | baseURL selector                                 | token selector                                 | 模型              |
 | ---- | ------------------------------------------------ | ---------------------------------------------- | ----------------- |
-| 1    | `.llm.provider.kimi_coding.baseURL`              | `.llm.provider.kimi_coding.token`              | `k3`              |
-| 2    | `.llm.provider.kimi_coding.baseURL`              | `.llm.provider.kimi_coding.token`              | `kimi-for-coding` |
-| 3    | `.llm.provider.zhipu.baseURL`                    | `.llm.provider.zhipu.token`                    | `glm-5.2`         |
+| 1    | `.llm.provider.zhipu.baseURL`                    | `.llm.provider.zhipu.token`                    | `glm-5.2`         |
+| 2    | `.llm.provider.kimi_coding.baseURL`              | `.llm.provider.kimi_coding.token`              | `k3`              |
+| 3    | `.llm.provider.kimi_coding.baseURL`              | `.llm.provider.kimi_coding.token`              | `kimi-for-coding` |
 | 4    | `.llm.provider.aliyun_coding_plan.baseURL`       | `.llm.provider.aliyun_coding_plan.token`       | `glm-5`           |
 | 5    | `.llm.provider.tencentcloud_coding_plan.baseURL` | `.llm.provider.tencentcloud_coding_plan.token` | `glm-5`           |
 | 6    | `.llm.provider.aliyun_coding_plan.baseURL`       | `.llm.provider.aliyun_coding_plan.token`       | `kimi-k2.5`       |
