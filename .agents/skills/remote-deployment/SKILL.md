@@ -29,7 +29,7 @@ ssh -p <ssh-port> -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no \
   -o User=<remote-user> -i <ssh-key> <remote-host>
 ```
 
-On Windows PowerShell, **do not use `&&` inside a single command string** — it fails with a parser error. Chain with `;` or use separate tool calls.
+On Windows PowerShell, **do not use `&&` inside a single command string** — it fails with a parser error. Chain with `;` or use separate tool calls. Avoid shell command substitution such as `$()` inside a double-quoted remote command too: PowerShell evaluates it locally before `ssh` runs. Prefer direct remote commands without substitution, or put the remote script in a local file and transfer it first.
 
 ## File Sync (Windows Host → Remote)
 

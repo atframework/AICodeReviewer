@@ -161,6 +161,8 @@ export interface ReviewOrchestrationResult {
   /** Gateway retry/fallback counts (direct path only). */
   readonly retryCount?: number;
   readonly fallbackCount?: number;
+  /** Origin of the run-wide aggregated usage. */
+  readonly usageSource?: ReviewOrchestrationUsageSource;
 }
 
 export interface ReviewOrchestrationWebhookUsage {
@@ -176,10 +178,11 @@ export interface ReviewOrchestrationWebhookUsage {
  * - `llm_gateway`: real usage from the direct LLM gateway response (always authoritative).
  * - `agent_stdout`: aggregated from the external agent (kilo/opencode/...) step-finish events
  *   parsed on stdout. Best-effort; may undercount if the agent emits no usage events.
+ * - `mixed`: the run used both agent stdout usage and a direct-LLM repair fallback.
  * Omitted when no real usage was captured (agent path without parseable token events);
  * callers should then fall back to `promptTokenEstimate` for a local estimate.
  */
-export type ReviewOrchestrationUsageSource = "llm_gateway" | "agent_stdout";
+export type ReviewOrchestrationUsageSource = "llm_gateway" | "agent_stdout" | "mixed";
 
 export interface ReviewOrchestrationWebhookSummary {
   readonly status: "dry_run" | "published" | "skipped";
@@ -254,6 +257,181 @@ interface ReviewCompletionResult {
   readonly estimatedCostUsd?: number;
   /** Number of billable model turns captured (agent path only). */
   readonly requestCount?: number;
+}
+
+type ConcreteReviewUsageSource = Exclude<ReviewOrchestrationUsageSource, "mixed">;
+
+interface ReviewRunMetricsAccumulator {
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  cachedPromptTokens: number;
+  cacheCreationTokens: number;
+  hasPromptTokens: boolean;
+  hasCompletionTokens: boolean;
+  hasTotalTokens: boolean;
+  hasCachedPromptTokens: boolean;
+  hasCacheCreationTokens: boolean;
+  usageSources: Set<ConcreteReviewUsageSource>;
+  estimatedCostUsd: number;
+  hasEstimatedCostUsd: boolean;
+  requestCount: number;
+  retryCount: number;
+  hasRetryCount: boolean;
+  fallbackCount: number;
+  hasFallbackCount: boolean;
+}
+
+interface ReviewRunMetrics {
+  readonly usage?: ChatCompletionUsage;
+  readonly usageSource?: ReviewOrchestrationUsageSource;
+  readonly estimatedCostUsd?: number;
+  readonly requestCount?: number;
+  readonly retryCount?: number;
+  readonly fallbackCount?: number;
+}
+
+function createReviewRunMetricsAccumulator(): ReviewRunMetricsAccumulator {
+  return {
+    promptTokens: 0,
+    completionTokens: 0,
+    totalTokens: 0,
+    cachedPromptTokens: 0,
+    cacheCreationTokens: 0,
+    hasPromptTokens: false,
+    hasCompletionTokens: false,
+    hasTotalTokens: false,
+    hasCachedPromptTokens: false,
+    hasCacheCreationTokens: false,
+    usageSources: new Set(),
+    estimatedCostUsd: 0,
+    hasEstimatedCostUsd: false,
+    requestCount: 0,
+    retryCount: 0,
+    hasRetryCount: false,
+    fallbackCount: 0,
+    hasFallbackCount: false,
+  };
+}
+
+function finiteNonNegativeMetric(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+/**
+ * Adds one completed model invocation to the run-wide metrics.
+ *
+ * A review can invoke the agent several times (initial pass, context/format repair) and can
+ * finally fall back to the direct LLM. Every invocation is billable, so retaining only the
+ * last {@link ReviewCompletionResult} silently drops all earlier usage.
+ */
+function accumulateReviewCompletionMetrics(
+  accumulator: ReviewRunMetricsAccumulator,
+  completion: ReviewCompletionResult,
+): void {
+  const usage = completion.llmResult.usage;
+  if (usage) {
+    const promptTokens = finiteNonNegativeMetric(usage.promptTokens);
+    const completionTokens = finiteNonNegativeMetric(usage.completionTokens);
+    const reportedTotalTokens = finiteNonNegativeMetric(usage.totalTokens);
+    const totalTokens = reportedTotalTokens
+      ?? (promptTokens !== undefined || completionTokens !== undefined
+        ? (promptTokens ?? 0) + (completionTokens ?? 0)
+        : undefined);
+    const cachedPromptTokens = finiteNonNegativeMetric(usage.cachedPromptTokens);
+    const cacheCreationTokens = finiteNonNegativeMetric(usage.cacheCreationTokens);
+
+    if (promptTokens !== undefined) {
+      accumulator.promptTokens += promptTokens;
+      accumulator.hasPromptTokens = true;
+    }
+    if (completionTokens !== undefined) {
+      accumulator.completionTokens += completionTokens;
+      accumulator.hasCompletionTokens = true;
+    }
+    if (totalTokens !== undefined) {
+      accumulator.totalTokens += totalTokens;
+      accumulator.hasTotalTokens = true;
+    }
+    if (cachedPromptTokens !== undefined) {
+      accumulator.cachedPromptTokens += cachedPromptTokens;
+      accumulator.hasCachedPromptTokens = true;
+    }
+    if (cacheCreationTokens !== undefined) {
+      accumulator.cacheCreationTokens += cacheCreationTokens;
+      accumulator.hasCacheCreationTokens = true;
+    }
+    if (
+      promptTokens !== undefined
+      || completionTokens !== undefined
+      || totalTokens !== undefined
+      || cachedPromptTokens !== undefined
+      || cacheCreationTokens !== undefined
+    ) {
+      accumulator.usageSources.add(completion.agentResult ? "agent_stdout" : "llm_gateway");
+    }
+  }
+
+  const gatewayResult = completion.llmResult as ChatCompletionResult & {
+    readonly estimatedCostUsd?: unknown;
+    readonly retryCount?: unknown;
+    readonly fallbackCount?: unknown;
+  };
+  const estimatedCostUsd = finiteNonNegativeMetric(
+    completion.agentResult ? completion.estimatedCostUsd : gatewayResult.estimatedCostUsd,
+  );
+  if (estimatedCostUsd !== undefined) {
+    accumulator.estimatedCostUsd += estimatedCostUsd;
+    accumulator.hasEstimatedCostUsd = true;
+  }
+
+  if (completion.agentResult) {
+    const requestCount = finiteNonNegativeMetric(completion.requestCount);
+    if (requestCount !== undefined) accumulator.requestCount += Math.trunc(requestCount);
+    return;
+  }
+
+  // One direct completion is one logical request; gateway retry/fallback attempts are tracked
+  // separately and must not replace the base request count.
+  accumulator.requestCount += 1;
+  const retryCount = finiteNonNegativeMetric(gatewayResult.retryCount);
+  if (retryCount !== undefined) {
+    accumulator.retryCount += Math.trunc(retryCount);
+    accumulator.hasRetryCount = true;
+  }
+  const fallbackCount = finiteNonNegativeMetric(gatewayResult.fallbackCount);
+  if (fallbackCount !== undefined) {
+    accumulator.fallbackCount += Math.trunc(fallbackCount);
+    accumulator.hasFallbackCount = true;
+  }
+}
+
+function finalizeReviewRunMetrics(accumulator: ReviewRunMetricsAccumulator): ReviewRunMetrics {
+  const hasUsage = accumulator.hasPromptTokens
+    || accumulator.hasCompletionTokens
+    || accumulator.hasTotalTokens
+    || accumulator.hasCachedPromptTokens
+    || accumulator.hasCacheCreationTokens;
+  const usageSource: ReviewOrchestrationUsageSource | undefined = accumulator.usageSources.size > 1
+    ? "mixed"
+    : accumulator.usageSources.values().next().value;
+
+  return {
+    ...(hasUsage ? {
+      usage: {
+        ...(accumulator.hasPromptTokens ? { promptTokens: accumulator.promptTokens } : {}),
+        ...(accumulator.hasCompletionTokens ? { completionTokens: accumulator.completionTokens } : {}),
+        ...(accumulator.hasTotalTokens ? { totalTokens: accumulator.totalTokens } : {}),
+        ...(accumulator.hasCachedPromptTokens ? { cachedPromptTokens: accumulator.cachedPromptTokens } : {}),
+        ...(accumulator.hasCacheCreationTokens ? { cacheCreationTokens: accumulator.cacheCreationTokens } : {}),
+      },
+    } : {}),
+    ...(usageSource ? { usageSource } : {}),
+    ...(accumulator.hasEstimatedCostUsd ? { estimatedCostUsd: accumulator.estimatedCostUsd } : {}),
+    ...(accumulator.requestCount > 0 ? { requestCount: accumulator.requestCount } : {}),
+    ...(accumulator.hasRetryCount ? { retryCount: accumulator.retryCount } : {}),
+    ...(accumulator.hasFallbackCount ? { fallbackCount: accumulator.fallbackCount } : {}),
+  };
 }
 
 function formatFilePath(file: { readonly oldPath?: string; readonly newPath?: string }): string {
@@ -1916,7 +2094,9 @@ export async function runReviewOrchestration(
     ],
     ...(options.contextCompaction ? { compaction: options.contextCompaction } : {}),
   };
+  const runMetricsAccumulator = createReviewRunMetricsAccumulator();
   let completion = await requestReviewCompletion(scopedTree.rootDir, llmSystemPrompt, options, undefined, bundleContext);
+  accumulateReviewCompletionMetrics(runMetricsAccumulator, completion);
   let lastAgentResult = completion.agentResult;
   const rawModelOutput = completion.llmResult.content;
   const allowNaturalLanguageSummary = completion.agentResult === undefined;
@@ -1983,6 +2163,7 @@ export async function runReviewOrchestration(
       },
       bundleContext,
     );
+    accumulateReviewCompletionMetrics(runMetricsAccumulator, completion);
     if (completion.agentResult) {
       lastAgentResult = completion.agentResult;
     }
@@ -2003,6 +2184,7 @@ export async function runReviewOrchestration(
         },
         bundleContext,
       );
+      accumulateReviewCompletionMetrics(runMetricsAccumulator, completion);
       if (completion.agentResult) {
         lastAgentResult = completion.agentResult;
       }
@@ -2037,6 +2219,7 @@ export async function runReviewOrchestration(
           prompt: buildContextFollowUpPrompt(changedPaths, repairExecution),
         },
       );
+      accumulateReviewCompletionMetrics(runMetricsAccumulator, completion);
       await collectCompletionOutputs(completion, tools, collector, { allowNaturalLanguageSummary: true });
       outputState = collector.snapshot();
 
@@ -2061,7 +2244,10 @@ export async function runReviewOrchestration(
     outputState = collector.snapshot();
   }
 
-  const llmResult = completion.llmResult;
+  const runMetrics = finalizeReviewRunMetrics(runMetricsAccumulator);
+  const llmResult: ChatCompletionResult = runMetrics.usage
+    ? { ...completion.llmResult, usage: runMetrics.usage }
+    : completion.llmResult;
   const agentResult = completion.agentResult ?? lastAgentResult;
   const dispatchResults: DispatchResult[] = [];
   const outputPublisher = options.outputPublisher ?? (await options.outputPublisherResolver?.(context));
@@ -2346,12 +2532,13 @@ export async function runReviewOrchestration(
     ...(compressed ? { compressed } : {}),
     ...(originalTokenEstimate !== undefined ? { originalTokenEstimate } : {}),
     ...(compressedTokenEstimate !== undefined ? { compressedTokenEstimate } : {}),
-    // Flow cost/request/retry through from the completion; the agent path sets
-    // estimatedCostUsd/requestCount on the completion, while the direct path carries
-    // estimatedCostUsd/retryCount/fallbackCount on the gateway result (read defensively
-    // by extractReviewRunUsage since the static type is ChatCompletionResult).
-    ...(completion.estimatedCostUsd !== undefined ? { estimatedCostUsd: completion.estimatedCostUsd } : {}),
-    ...(completion.requestCount !== undefined ? { requestCount: completion.requestCount } : {}),
+    // Every initial/follow-up/fallback completion is billable. Persist the run-wide sums,
+    // not merely the final completion that happened to produce the accepted review output.
+    ...(runMetrics.estimatedCostUsd !== undefined ? { estimatedCostUsd: runMetrics.estimatedCostUsd } : {}),
+    ...(runMetrics.requestCount !== undefined ? { requestCount: runMetrics.requestCount } : {}),
+    ...(runMetrics.retryCount !== undefined ? { retryCount: runMetrics.retryCount } : {}),
+    ...(runMetrics.fallbackCount !== undefined ? { fallbackCount: runMetrics.fallbackCount } : {}),
+    ...(runMetrics.usageSource ? { usageSource: runMetrics.usageSource } : {}),
   };
 
   if (options.postRunCallback) {
@@ -2399,9 +2586,10 @@ function buildOrchestratorVcsContext(reviewEvent: ReviewEvent): { branch?: strin
  * {@link LlmGatewayCallResult}), so the gateway-calling plumbing copies them onto the
  * orchestration result's `estimatedCostUsd`/`retryCount`/`fallbackCount`.
  *
- * The agent path sets `llmResult.usage` only when step-finish events were parseable from the
- * agent's stdout; otherwise `usage` is `undefined` and callers fall back to
- * `promptTokenEstimate`.
+ * The orchestration layer aggregates every initial/follow-up/fallback completion into
+ * `llmResult.usage` before this function runs. Agent usage is included only when step-finish
+ * events were parseable from stdout; otherwise callers still have `promptTokenEstimate` as a
+ * separately labelled local estimate.
  */
 function extractReviewRunUsage(
   result: ReviewOrchestrationResult,
@@ -2414,12 +2602,11 @@ function extractReviewRunUsage(
   readonly fallbackCount?: number;
 } {
   const usage = result.llmResult.usage;
-  if (!usage) return {};
   const isFiniteNumber = (v: unknown): v is number =>
     typeof v === "number" && Number.isFinite(v);
-  const usageSource: ReviewOrchestrationUsageSource = result.agentResult
-    ? "agent_stdout"
-    : "llm_gateway";
+  const usageSource: ReviewOrchestrationUsageSource | undefined = usage
+    ? result.usageSource ?? (result.agentResult ? "agent_stdout" : "llm_gateway")
+    : undefined;
   // On the direct path the gateway-only fields are read from the runtime llmResult,
   // since the static ChatCompletionResult type does not declare them.
   const gatewayResult = result.llmResult as ChatCompletionResult & {
@@ -2428,22 +2615,31 @@ function extractReviewRunUsage(
     fallbackCount?: unknown;
   };
   return {
-    llmUsage: {
-      ...(usage.promptTokens !== undefined ? { promptTokens: usage.promptTokens } : {}),
-      ...(usage.completionTokens !== undefined ? { completionTokens: usage.completionTokens } : {}),
-      ...(usage.totalTokens !== undefined ? { totalTokens: usage.totalTokens } : {}),
-      ...(usage.cachedPromptTokens !== undefined ? { cachedPromptTokens: usage.cachedPromptTokens } : {}),
-      ...(usage.cacheCreationTokens !== undefined ? { cacheCreationTokens: usage.cacheCreationTokens } : {}),
-    },
-    usageSource,
+    ...(usage ? {
+      llmUsage: {
+        ...(usage.promptTokens !== undefined ? { promptTokens: usage.promptTokens } : {}),
+        ...(usage.completionTokens !== undefined ? { completionTokens: usage.completionTokens } : {}),
+        ...(usage.totalTokens !== undefined ? { totalTokens: usage.totalTokens } : {}),
+        ...(usage.cachedPromptTokens !== undefined ? { cachedPromptTokens: usage.cachedPromptTokens } : {}),
+        ...(usage.cacheCreationTokens !== undefined ? { cacheCreationTokens: usage.cacheCreationTokens } : {}),
+      },
+    } : {}),
+    ...(usageSource ? { usageSource } : {}),
     ...(result.estimatedCostUsd !== undefined
       ? { estimatedCostUsd: result.estimatedCostUsd }
       : isFiniteNumber(gatewayResult.estimatedCostUsd) ? { estimatedCostUsd: gatewayResult.estimatedCostUsd } : {}),
-    ...(isFiniteNumber(gatewayResult.retryCount) ? { retryCount: gatewayResult.retryCount } : {}),
-    ...(isFiniteNumber(gatewayResult.fallbackCount) ? { fallbackCount: gatewayResult.fallbackCount } : {}),
+    ...(result.retryCount !== undefined
+      ? { retryCount: result.retryCount }
+      : isFiniteNumber(gatewayResult.retryCount) ? { retryCount: gatewayResult.retryCount } : {}),
+    ...(result.fallbackCount !== undefined
+      ? { fallbackCount: result.fallbackCount }
+      : isFiniteNumber(gatewayResult.fallbackCount) ? { fallbackCount: gatewayResult.fallbackCount } : {}),
     // The direct path is a single completion; the agent path reports one request per
-    // captured step (carried on the orchestration result by runAgentReview).
-    ...(result.requestCount !== undefined ? { requestCount: result.requestCount } : { requestCount: 1 }),
+    // captured step. New results carry a run-wide aggregate; the fallback preserves legacy
+    // manually-constructed direct-path results used by callers/tests.
+    ...(result.requestCount !== undefined
+      ? { requestCount: result.requestCount }
+      : usage && !result.agentResult ? { requestCount: 1 } : {}),
   };
 }
 

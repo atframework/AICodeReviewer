@@ -534,40 +534,77 @@ describe("runReviewOrchestration", () => {
           spawnCalls.push(spawnOptions);
           spawnCount += 1;
           if (spawnCount === 1) {
+            const usageEvents = Array.from({ length: 8 }, () => ({
+              type: "step_finish",
+              part: {
+                type: "step-finish",
+                tokens: { input: 86_250, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+                cost: 0,
+              },
+            }));
             return {
               exitCode: 0,
               stdout: [
-                "Looking at this diff, I need to understand the session iteration behavior.",
-                "Based on my analysis, let me report my findings.",
-                "审查完成。发现 1 个问题：提交前返回可能跳过必要状态。",
-              ].join("\n"),
+                {
+                  type: "text",
+                  part: {
+                    text: [
+                      "Looking at this diff, I need to understand the session iteration behavior.",
+                      "Based on my analysis, let me report my findings.",
+                      "审查完成。发现 1 个问题：提交前返回可能跳过必要状态。",
+                    ].join("\n"),
+                  },
+                },
+                ...usageEvents,
+              ].map((event) => JSON.stringify(event)).join("\n"),
               stderr: "",
               timedOut: false,
               durationMs: 10,
             };
           }
 
+          const repairUsage = [
+            { input: 15_431, output: 304 },
+            { input: 15_431, output: 304 },
+            { input: 15_431, output: 304 },
+            { input: 15_433, output: 305 },
+          ];
           return {
             exitCode: 0,
-            stdout: JSON.stringify({
-              toolCalls: [
-                {
-                  name: "aicr.report_problem",
-                  input: {
-                    file: "src/app.ts",
-                    line: 2,
-                    severity: "medium",
-                    category: "correctness",
-                    message: "新增路径在提交完成前返回，触发成功响应时可能跳过必要状态更新。",
-                    suggestion: "等待提交完成后再返回成功。",
-                  },
+            stdout: [
+              {
+                type: "text",
+                part: {
+                  text: JSON.stringify({
+                    toolCalls: [
+                      {
+                        name: "aicr.report_problem",
+                        input: {
+                          file: "src/app.ts",
+                          line: 2,
+                          severity: "medium",
+                          category: "correctness",
+                          message: "新增路径在提交完成前返回，触发成功响应时可能跳过必要状态更新。",
+                          suggestion: "等待提交完成后再返回成功。",
+                        },
+                      },
+                      {
+                        name: "aicr.publish_summary",
+                        input: { markdown: "结构化复查完成。发现 1 个问题。" },
+                      },
+                    ],
+                  }),
                 },
-                {
-                  name: "aicr.publish_summary",
-                  input: { markdown: "结构化复查完成。发现 1 个问题。" },
+              },
+              ...repairUsage.map((tokens) => ({
+                type: "step_finish",
+                part: {
+                  type: "step-finish",
+                  tokens: { ...tokens, reasoning: 0, cache: { read: 0, write: 0 } },
+                  cost: 0,
                 },
-              ],
-            }),
+              })),
+            ].map((event) => JSON.stringify(event)).join("\n"),
             stderr: "",
             timedOut: false,
             durationMs: 12,
@@ -639,6 +676,14 @@ describe("runReviewOrchestration", () => {
         severity: "medium",
         category: "correctness",
       });
+      expect(result.llmResult.usage).toMatchObject({
+        promptTokens: 690_000 + 61_726,
+        completionTokens: 1_217,
+        totalTokens: 690_000 + 61_726 + 1_217,
+      });
+      const webhookSummary = summarizeReviewOrchestrationForWebhook(result);
+      expect(webhookSummary.requestCount).toBe(12);
+      expect(webhookSummary.llmUsage?.totalTokens).toBe(752_943);
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }
@@ -1189,11 +1234,27 @@ describe("runReviewOrchestration", () => {
         async spawn(spawnOptions) {
           spawnCalls.push(spawnOptions);
           spawnCount += 1;
+          const text = spawnCount === 1
+            ? "Found a critical issue: the success path can return before committing state."
+            : "I still found a critical issue, but I am not emitting JSON.";
           return {
             exitCode: 0,
-            stdout: spawnCount === 1
-              ? "Found a critical issue: the success path can return before committing state."
-              : "I still found a critical issue, but I am not emitting JSON.",
+            stdout: [
+              { type: "text", part: { text } },
+              {
+                type: "step_finish",
+                part: {
+                  type: "step-finish",
+                  tokens: {
+                    input: spawnCount === 1 ? 1_000 : 2_000,
+                    output: spawnCount === 1 ? 10 : 20,
+                    reasoning: 0,
+                    cache: { read: 0, write: 0 },
+                  },
+                  cost: spawnCount === 1 ? 0.01 : 0.02,
+                },
+              },
+            ].map((event) => JSON.stringify(event)).join("\n"),
             stderr: "",
             timedOut: false,
             durationMs: 11,
@@ -1240,6 +1301,10 @@ describe("runReviewOrchestration", () => {
                 },
               ],
             }),
+            usage: { promptTokens: 300, completionTokens: 30, totalTokens: 330 },
+            estimatedCostUsd: 0.03,
+            retryCount: 1,
+            fallbackCount: 0,
             raw: {},
           };
         },
@@ -1282,6 +1347,19 @@ describe("runReviewOrchestration", () => {
       expect(spawnCalls).toHaveLength(2);
       expect(llmCalls).toBe(1);
       expect(summaryCalls[0]?.summary).toBe("Direct LLM structured repair completed. Found 1 critical issue.");
+      expect(result.llmResult.usage).toEqual({
+        promptTokens: 3_300,
+        completionTokens: 60,
+        totalTokens: 3_360,
+      });
+      const webhookSummary = summarizeReviewOrchestrationForWebhook(result);
+      expect(webhookSummary).toMatchObject({
+        usageSource: "mixed",
+        estimatedCostUsd: 0.06,
+        requestCount: 3,
+        retryCount: 1,
+        fallbackCount: 0,
+      });
       expect(summaryCalls[0]?.problems[0]).toMatchObject({
         file: "src/app.ts",
         line: 2,

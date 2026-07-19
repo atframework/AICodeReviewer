@@ -111,6 +111,10 @@ This file records verified external sources for repository AI-agent guidance, Ag
   - <https://kilo.ai/docs/customize/skills>
   - <https://kilo.ai/docs/customize/custom-instructions>
   - <https://docs.zoocode.dev/>
+  - <https://github.com/Kilo-Org/kilocode/blob/v7.2.40/packages/opencode/src/cli/cmd/run.ts>
+  - <https://github.com/Kilo-Org/kilocode/blob/v7.2.40/packages/opencode/src/session/message-v2.ts>
+  - <https://github.com/Kilo-Org/kilocode/blob/v7.2.40/packages/opencode/src/session/processor.ts>
+  - <https://github.com/Kilo-Org/kilocode/blob/v7.2.40/packages/opencode/src/session/session.ts>
   - <https://docs.zoocode.dev/getting-started/installing>
   - <https://docs.zoocode.dev/roo-to-zoo-migration>
   - <https://marketplace.visualstudio.com/items?itemName=ZooCodeOrganization.zoo-code>
@@ -120,12 +124,13 @@ This file records verified external sources for repository AI-agent guidance, Ag
   - <https://github.com/Zoo-Code-Org/Zoo-Code/blob/8d4ed32f0606a4c7f45aac959540508aeac0b0e2/src/core/config/CustomModesManager.ts>
 - Verified guidance:
   - Kilo Code supports repository-level instruction files and Agent Skills-compatible workflows.
+  - Kilo CLI v7.2.40 JSON run mode emits `step_finish` with the completed `step-finish` part. Each part is built from one model `finish-step` usage, with non-cached input, output excluding reasoning, reasoning, and cache read/write as disjoint counters; sum the events within a CLI run. AICR additionally sums every initial, repair, and direct-fallback completion across the whole review run.
   - Zoo Code is the maintained VS Code extension published as `ZooCodeOrganization.zoo-code`; official migration guidance imports an exported settings file from the older tool into Zoo Code.
   - Upstream Zoo Code source at `8d4ed32f0606a4c7f45aac959540508aeac0b0e2` currently keeps compatibility names: CLI program/bin is `roo`, user CLI config dir is `~/.roo`, and project rule/mode files use `.roomodes` plus `.roo/rules-*`. Do not invent `.zoo` paths or a `zoo` binary without re-checking upstream.
   - Keep shared instructions in the canonical repository layer and add tool-specific files only for narrow, necessary deltas.
-- `last_checked`: 2026-07-02
-- `next_review`: 2026-10-02
-- `update_trigger`: Re-check before changing the `zoo` adapter kind, Zoo CLI binary, `.roo`/`.roomodes` compatibility paths, `.kilo`/`.kilocode` path rules, or adapter-native skill materialization.
+- `last_checked`: 2026-07-19
+- `next_review`: 2026-10-19
+- `update_trigger`: Re-check before changing the pinned Kilo CLI version or JSON-stream parser, the `zoo` adapter kind, Zoo CLI binary, `.roo`/`.roomodes` compatibility paths, `.kilo`/`.kilocode` path rules, or adapter-native skill materialization.
 
 ### Windsurf
 
