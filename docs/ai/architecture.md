@@ -244,10 +244,14 @@ AICR 采用**两层上下文管理**，两者互补：
   `promptTokens = input + cache.read + cache.write`（含缓存的总输入）、`completionTokens = output + reasoning`
   （含推理的总输出），从而保证 `promptTokens + completionTokens == total` 且
   `nonCachedInput = promptTokens - cachedPromptTokens - cacheCreationTokens == input`，与直连路径口径一致；
-  挂到合成 `llmResult.usage`，`usageSource` 标为 `"agent_stdout"`。当 agent 路径未发出可解析的
-  usage 事件时（如非 kilo agent 或输出被截断），`llmUsage` 为 `undefined`，dashboard 的 `llm_usage` token 列
-  显示 0/—，同时 `review_runs.prompt_token_estimate`（本地 prompt 估算，独立存储、不混入 `llm_usage`）作为旁显
-  参考值。**不要把 `promptTokenEstimate` 当作真实 usage 写入 `llm_usage.tokensTotal`**——那是早期 bug 的根源。
+  挂到该次 completion 的 `llmResult.usage`。`runReviewOrchestration` 还必须把一次 review 内的首次调用、
+  上下文/格式修复调用和最终直连 LLM 兜底的 usage、cost、request/retry/fallback 全部累加到 run 级结果；
+  只保留最终 completion 会漏掉此前已经计费的绝大多数 token。usage 全来自 agent 时标记
+  `"agent_stdout"`，全来自直连 gateway 时标记 `"llm_gateway"`，两者都有时标记 `"mixed"`。
+  当 agent 路径未发出可解析的 usage 事件时（如非 kilo agent 或输出被截断），该次调用不臆造 usage；
+  若整个 run 都没有真实 usage，dashboard 的 `llm_usage` token 列显示 0/—，同时
+  `review_runs.prompt_token_estimate`（本地 prompt 估算，独立存储、不混入 `llm_usage`）作为旁显参考值。
+  **不要把 `promptTokenEstimate` 当作真实 usage 写入 `llm_usage.tokensTotal`**。
 
 ### 3.6 Prompt Manager 与 AI 资产装配
 

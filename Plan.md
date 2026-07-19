@@ -153,8 +153,10 @@
   时间维度；日汇总分区按 UTC day。
 - Token usage 按两条 review 路径区分口径：直连 LLM 路径透传 provider 真实 usage
   （`usageSource: "llm_gateway"`）；agent（kilo）路径从 `step-finish` NDJSON 事件累加
-  （`usageSource: "agent_stdout"`）。本地 prompt 估算独立存于 `review_runs.prompt_token_estimate`，
-  不混入 `llm_usage`；agent 路径未捕获 usage 时 dashboard 旁显估算值并标注来源。
+  （`usageSource: "agent_stdout"`）。一次 review 内的首次调用、上下文/格式修复与直连兜底均按 run
+  累加；agent 后又走直连兜底时标记 `usageSource: "mixed"`，不得只保留最终 completion。
+  本地 prompt 估算独立存于 `review_runs.prompt_token_estimate`，不混入 `llm_usage`；agent 路径未捕获
+  usage 时 dashboard 旁显估算值并标注来源。
 
 ### 3.12 Reflection 与 memory
 

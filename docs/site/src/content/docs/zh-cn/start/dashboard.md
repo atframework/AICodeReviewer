@@ -44,6 +44,10 @@ session TTL 字段是 `session_ttl_seconds`（默认 `86400` = 24 小时）。`s
 - **Providers**——按 provider+model 聚合：请求数、输入/输出 token、成本、重试/fallback/失败次数、平均延迟。
 - **Runs**——最近运行列表（通过 `?limit=` 最多 100 条）。
 
+用量按完整 review run 聚合，包括首次模型调用、上下文/格式修复调用以及最终直连 LLM 兜底。
+对 Kilo 而言，每个 `step_finish` 模型回合计为一次请求。本地 prompt 大小估算单独保存，只有拿不到
+真实 usage 时才作为参考显示，绝不会混入 provider token 总数。
+
 Projects 和 Providers 标签各自调用带时间窗口的 API
 （`GET /api/admin/stats/projects?since=` 和 `.../providers?since=`）。dashboard 以实时聚合为真源。
 

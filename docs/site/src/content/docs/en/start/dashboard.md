@@ -69,6 +69,12 @@ After logging in, the dashboard has four tabs:
   tokens, cost, retry/fallback/failure counts, average latency.
 - **Runs** — the most recent runs (up to 100 via `?limit=`).
 
+Usage is aggregated across the complete review run, including the initial model
+call, context or format-repair calls, and any final direct-LLM fallback. For
+Kilo, each `step_finish` model turn counts as one request. The locally estimated
+prompt size is kept separate and is shown only when real usage was unavailable;
+it is never mixed into provider token totals.
+
 The Projects and Providers tabs each call their own time-windowed API
 (`GET /api/admin/stats/projects?since=` and `.../providers?since=`). The
 dashboard queries real-time aggregation as the source of truth.
