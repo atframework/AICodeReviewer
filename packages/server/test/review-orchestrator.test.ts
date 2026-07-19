@@ -1114,7 +1114,10 @@ describe("runReviewOrchestration", () => {
             },
           },
         },
-        { type: "step-finish", tokens: { input: 100, output: 5, total: 105 }, cost: 0 },
+        {
+          type: "step_finish",
+          part: { type: "step-finish", tokens: { input: 100, output: 5, reasoning: 0, cache: { read: 0, write: 0 } }, cost: 0 },
+        },
       ].map((e) => JSON.stringify(e)).join("\n");
       const sandbox: SandboxBackend = {
         kind: "native",
@@ -1509,24 +1512,32 @@ describe("summarizeReviewOrchestrationForWebhook", () => {
 
     try {
       await writeWorkspaceFile(tempDir, "src/app.ts", "const ok = true;\n");
-      // Two step-finish events (two model turns); tokens must be summed across turns,
-      // matching kilo's real NDJSON schema (tokens.input/output/reasoning/total/cache.{read,write}, cost).
+      // Two step-finish events (two model turns) in current kilo's part-wrapped format.
+      // Kilo (>=7.x / opencode >=1.15) emits { type:"step_finish", part:{ type:"step-finish",
+      // tokens:{input,output,reasoning,cache:{read,write}}, cost } }. Tokens must be
+      // summed across turns and the field layout matches the actual NDJSON schema.
       // Kilo's counters are DISJOINT: `input` is non-cached prompt tokens and
-      // `total = input + output + reasoning + cache.read + cache.write` (both events below are
-      // internally consistent). The text event carries a review payload so the run resolves to a skip.
+      // total = input + output + reasoning + cache.read + cache.write.
+      // The text event carries a skipReason so the run resolves to a skip.
       const kiloStream = [
         { type: "text", text: JSON.stringify({ skipReason: "lgtm" }) },
         {
-          type: "step-finish",
-          reason: "tool-calls",
-          tokens: { total: 13952, input: 13193, output: 13, reasoning: 42, cache: { write: 0, read: 704 } },
-          cost: 0.001,
+          type: "step_finish",
+          part: {
+            type: "step-finish",
+            reason: "tool-calls",
+            tokens: { input: 13193, output: 13, reasoning: 42, cache: { write: 0, read: 704 } },
+            cost: 0.001,
+          },
         },
         {
-          type: "step-finish",
-          reason: "stop",
-          tokens: { total: 5000, input: 4790, output: 200, reasoning: 0, cache: { write: 10, read: 0 } },
-          cost: 0.002,
+          type: "step_finish",
+          part: {
+            type: "step-finish",
+            reason: "stop",
+            tokens: { input: 4790, output: 200, reasoning: 0, cache: { write: 10, read: 0 } },
+            cost: 0.002,
+          },
         },
       ].map((e) => JSON.stringify(e)).join("\n");
       const sandbox: SandboxBackend = {
@@ -1573,11 +1584,14 @@ describe("summarizeReviewOrchestrationForWebhook", () => {
       // Kilo counters are folded into the project convention: promptTokens = input + cache
       // read/write (total input incl. cache), completionTokens = output + reasoning.
       // step1: prompt 13193+704+0=13897, completion 13+42=55; step2: prompt 4790+0+10=4800,
-      // completion 200+0=200. Sums: prompt 18697, completion 255, total 18952.
+      // completion 200+0=200. Sums: prompt 18697, completion 255.
+      // totalTokens falls back to promptTokens+completionTokens=18952 since kilo's
+      // per-step tokens omit `total` (the aggregate total is only reported on the
+      // session summary, not on each step-finish event).
       expect(summary.llmUsage).toMatchObject({
         promptTokens: 13897 + 4800,
         completionTokens: 55 + 200,
-        totalTokens: 13952 + 5000,
+        totalTokens: 18697 + 255,
         cachedPromptTokens: 704,
         cacheCreationTokens: 10,
       });

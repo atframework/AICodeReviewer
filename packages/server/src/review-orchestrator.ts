@@ -418,11 +418,11 @@ interface KiloStreamExtractionResult {
   readonly content: string;
   readonly toolCallEvents: readonly ToolCallEnvelope[];
   readonly eventCounts: Readonly<Record<string, number>>;
-  /** Aggregated token usage from `step-finish` events, if any were emitted. */
+  /** Aggregated token usage from `step_finish` events, if any were emitted. */
   readonly usage?: ChatCompletionUsage;
-  /** Aggregated USD cost from `step-finish` events (0 when kilo reports free steps). */
+  /** Aggregated USD cost from `step_finish` events (0 when kilo reports free steps). */
   readonly costUsd?: number;
-  /** Number of billable model turns (step-finish events) observed. */
+  /** Number of billable model turns (step_finish events) observed. */
   readonly stepCount: number;
 }
 
@@ -447,9 +447,14 @@ interface KiloTokenTotals {
 /**
  * Aggregates token usage from one kilo `step-finish` event into the running totals.
  *
- * Kilo (built on opencode) emits, per model turn:
+ * Kilo (built on opencode) emits, per model turn, either the flat shape
  *   { "type": "step-finish", "tokens": { "total", "input", "output", "reasoning",
  *                                        "cache": { "read", "write" } }, "cost": <usd> }
+ * or the part-wrapped shape (current kilo >=7.x / opencode >=1.15)
+ *   { "type": "step_finish",
+ *     "part": { "type": "step-finish",
+ *               "tokens": { "input", "output", "reasoning", "cache": {"read","write"} },
+ *               "cost": <usd> }}
  * A single review run typically contains many step-finish events (one per turn), so we
  * sum them. Kilo's counters are DISJOINT: `input` is the NON-cached prompt tokens, and
  * `cache.read`/`cache.write` are tracked separately, with
@@ -463,7 +468,10 @@ function accumulateKiloStepFinishUsage(
   totals: KiloTokenTotals,
   costAccumulator: { cost: number },
 ): boolean {
-  const tokens = event.tokens as Record<string, unknown> | undefined;
+  // Current kilo wraps token data inside event.part; older flat format had it on event
+  // directly. Try both so we accept either shape.
+  const part = event.part as Record<string, unknown> | undefined;
+  const tokens = (part?.tokens ?? event.tokens) as Record<string, unknown> | undefined;
   if (!tokens || typeof tokens !== "object") return false;
   const input = readKiloTokenCount(tokens.input);
   const output = readKiloTokenCount(tokens.output);
@@ -485,8 +493,10 @@ function accumulateKiloStepFinishUsage(
   if (cacheRead !== undefined) totals.cacheRead += cacheRead;
   if (cacheWrite !== undefined) totals.cacheWrite += cacheWrite;
   // cost is a USD amount (float), not a token count — validate as a non-negative finite number.
-  if (typeof event.cost === "number" && Number.isFinite(event.cost) && event.cost >= 0) {
-    costAccumulator.cost += event.cost;
+  // Current kilo puts cost on `event.part.cost`; older flat format had it on `event.cost`.
+  const eventCost = part?.cost ?? event.cost;
+  if (typeof eventCost === "number" && Number.isFinite(eventCost) && eventCost >= 0) {
+    costAccumulator.cost += eventCost;
   }
   return true;
 }
@@ -524,7 +534,11 @@ function extractKiloJsonStreamContent(stdout: string): KiloStreamExtractionResul
         const errorData = event.error as Record<string, unknown> | undefined;
         const message = typeof errorData?.message === "string" ? errorData.message : JSON.stringify(event.error);
         throw new Error(`Kilo agent error: ${message}`);
-      } else if (event.type === "step-finish") {
+      } else if (
+        event.type === "step-finish"
+        || event.type === "step_finish"
+        || (event.part as Record<string, unknown> | undefined)?.type === "step-finish"
+      ) {
         if (accumulateKiloStepFinishUsage(event, tokenTotals, costTotal)) {
           stepCount += 1;
         }
@@ -760,7 +774,7 @@ async function runAgentReview(
       modelId: options.model.modelId,
       content,
       // Usage is only present when the agent path could parse it from stdout
-      // (e.g. kilo `step-finish` events). When absent, the webhook summary omits llmUsage
+      // (e.g. kilo `step_finish` events). When absent, the webhook summary omits llmUsage
       // and the dashboard falls back to promptTokenEstimate instead of reporting zeros.
       ...(agentUsage ? { usage: agentUsage } : {}),
       raw: {
