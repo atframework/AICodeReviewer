@@ -77,7 +77,6 @@ LLM_TOKEN="$(yq -r '.llm.provider.xiaomimimo_token_plan.token' development/secre
 | 7    | `.llm.provider.tencentcloud_coding_plan.baseURL` | `.llm.provider.tencentcloud_coding_plan.token` | `kimi-k2.5`       |
 | 8    | `.llm.provider.aliyun_coding_plan.baseURL`       | `.llm.provider.aliyun_coding_plan.token`       | `qwen3.6-plus`    |
 
-
 ### VCS 与输出 selector
 
 | 系统                           | 字段               | selector                                          |
