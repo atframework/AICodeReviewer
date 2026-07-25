@@ -69,7 +69,7 @@ LLM_TOKEN="$(yq -r '.llm.provider.xiaomimimo_token_plan.token' development/secre
 | 顺序 | baseURL selector                                 | token selector                                 | 模型              |
 | ---- | ------------------------------------------------ | ---------------------------------------------- | ----------------- |
 | 1    | `.llm.provider.zhipu.baseURL`                    | `.llm.provider.zhipu.token`                    | `glm-5.2`         |
-| 2    | `.llm.provider.kimi_coding.baseURL`              | `.llm.provider.kimi_coding.token`              | `k3`              |
+| 2    | `.llm.provider.kimi_coding.baseURL`              | `.llm.provider.kimi_coding.token`              | `k3-256k`         |
 | 3    | `.llm.provider.kimi_coding.baseURL`              | `.llm.provider.kimi_coding.token`              | `kimi-for-coding` |
 | 4    | `.llm.provider.aliyun_coding_plan.baseURL`       | `.llm.provider.aliyun_coding_plan.token`       | `glm-5`           |
 | 5    | `.llm.provider.tencentcloud_coding_plan.baseURL` | `.llm.provider.tencentcloud_coding_plan.token` | `glm-5`           |
@@ -77,44 +77,43 @@ LLM_TOKEN="$(yq -r '.llm.provider.xiaomimimo_token_plan.token' development/secre
 | 7    | `.llm.provider.tencentcloud_coding_plan.baseURL` | `.llm.provider.tencentcloud_coding_plan.token` | `kimi-k2.5`       |
 | 8    | `.llm.provider.aliyun_coding_plan.baseURL`       | `.llm.provider.aliyun_coding_plan.token`       | `qwen3.6-plus`    |
 
-- 公网 `kimi-coding` provider 已配置 `catalog_provider: kimi-for-coding`，并通过 `llm.model_catalog.overrides."kimi-coding/k3".context_window = 262144` 把 k3 上下文窗口限制为 256K（models.dev 目录值为 1M，override 优先）。
 
 ### VCS 与输出 selector
 
-| 系统               | 字段               | selector                                          |
-| ------------------ | ------------------ | ------------------------------------------------- |
-| Gitea              | token              | `.integration.gitea.token`                        |
-| Gitea              | webhook secret     | `.integration.gitea.webhook_secret`               |
-| Gitea              | watch path         | `.integration.gitea.watch_path`                   |
-| Gitea              | include files      | `.integration.gitea.include_cr_file`              |
-| Gitea              | exclude files      | `.integration.gitea.exclude_cr_file`              |
-| GitHub App (atframework/owent) | app_id             | `.integration.github-app-aicr.app_id`                        |
-| GitHub App (atframework/owent) | client_id          | `.integration.github-app-aicr.client_id`                     |
-| GitHub App (atframework/owent) | private key file   | `.integration.github-app-aicr.private_key_file`              |
-| GitHub App (atframework/owent) | webhook secret     | `.integration.github-app-aicr.webhook.secret`                  |
-| GitHub atframework | watch path         | `.integration.github-atframework.watch_path`                   |
-| GitHub atframework | include files      | `.integration.github-atframework.include_cr_file`              |
-| GitHub atframework | exclude files      | `.integration.github-atframework.exclude_cr_file`            |
-| GitHub owent       | watch path         | `.integration.github-owent.watch_path`                         |
-| GitHub owent       | include files      | `.integration.github-owent.include_cr_file`                    |
-| GitHub owent       | exclude files      | `.integration.github-owent.exclude_cr_file`                    |
-| P4                 | username           | `.integration.p4.username`                        |
-| P4                 | password           | `.integration.p4.password`                        |
-| P4                 | depot path         | `.integration.p4.depot_path`                      |
-| P4                 | port               | `.integration.p4.port`                            |
-| P4                 | analysis workspace | `.integration.p4.workspace`                       |
-| P4                 | watch path         | `.integration.p4.watch_path`                      |
-| P4                 | include files      | `.integration.p4.include_cr_file`                 |
-| P4                 | exclude files      | `.integration.p4.exclude_cr_file`                 |
-| Feishu robot       | webhook            | `.channel.feishu_robot.webhook`                   |
-| Feishu robot       | token              | `.channel.feishu_robot.token`                     |
-| 企业微信 robot     | webhook            | `.channel.wxwork_robot.webhook`                   |
-| AICR server        | global API key     | `.aicr.server.api_key`                            |
+| 系统                           | 字段               | selector                                          |
+| ------------------------------ | ------------------ | ------------------------------------------------- |
+| Gitea                          | token              | `.integration.gitea.token`                        |
+| Gitea                          | webhook secret     | `.integration.gitea.webhook_secret`               |
+| Gitea                          | watch path         | `.integration.gitea.watch_path`                   |
+| Gitea                          | include files      | `.integration.gitea.include_cr_file`              |
+| Gitea                          | exclude files      | `.integration.gitea.exclude_cr_file`              |
+| GitHub App (atframework/owent) | app_id             | `.integration.github-app-aicr.app_id`             |
+| GitHub App (atframework/owent) | client_id          | `.integration.github-app-aicr.client_id`          |
+| GitHub App (atframework/owent) | private key file   | `.integration.github-app-aicr.private_key_file`   |
+| GitHub App (atframework/owent) | webhook secret     | `.integration.github-app-aicr.webhook.secret`     |
+| GitHub atframework             | watch path         | `.integration.github-atframework.watch_path`      |
+| GitHub atframework             | include files      | `.integration.github-atframework.include_cr_file` |
+| GitHub atframework             | exclude files      | `.integration.github-atframework.exclude_cr_file` |
+| GitHub owent                   | watch path         | `.integration.github-owent.watch_path`            |
+| GitHub owent                   | include files      | `.integration.github-owent.include_cr_file`       |
+| GitHub owent                   | exclude files      | `.integration.github-owent.exclude_cr_file`       |
+| P4                             | username           | `.integration.p4.username`                        |
+| P4                             | password           | `.integration.p4.password`                        |
+| P4                             | depot path         | `.integration.p4.depot_path`                      |
+| P4                             | port               | `.integration.p4.port`                            |
+| P4                             | analysis workspace | `.integration.p4.workspace`                       |
+| P4                             | watch path         | `.integration.p4.watch_path`                      |
+| P4                             | include files      | `.integration.p4.include_cr_file`                 |
+| P4                             | exclude files      | `.integration.p4.exclude_cr_file`                 |
+| Feishu robot                   | webhook            | `.channel.feishu_robot.webhook`                   |
+| Feishu robot                   | token              | `.channel.feishu_robot.token`                     |
+| 企业微信 robot                 | webhook            | `.channel.wxwork_robot.webhook`                   |
+| AICR server                    | global API key     | `.aicr.server.api_key`                            |
 
 ### GitHub repo → selector / trigger / workspace 映射
 
-| GitHub 仓库             | 本地 selector 组     | 远端 trigger         | 远端 workspace        | 说明                                                                 |
-| ----------------------- | -------------------- | -------------------- | --------------------- | -------------------------------------------------------------------- |
+| GitHub 仓库             | 本地 selector 组     | 远端 trigger         | 远端 workspace        | 说明                                                          |
+| ----------------------- | -------------------- | -------------------- | --------------------- | ------------------------------------------------------------- |
 | `atframework/atsf4g-co` | `github-atframework` | `github-atframework` | `github-atsf4g-co`    | 使用统一 GitHub App `atframework-aicr` 认证；文件过滤保持独立 |
 | `owent/libatapp`        | `github-owent`       | `github-owent`       | `github-libatapp`     | 使用统一 GitHub App `atframework-aicr` 认证；文件过滤保持独立 |
 | `owent/hiredis-happ`    | `github-owent`       | `github-owent`       | `github-hiredis-happ` | 使用统一 GitHub App `atframework-aicr` 认证；文件过滤保持独立 |
