@@ -122,6 +122,8 @@
 
 - Kilo、Claude Code、OpenCode、Zoo、Copilot CLI 等 adapter 共用统一 runtime 合同。
 - `ModelSpec` / `thinkingLevel` 在 adapter 内翻译到 provider 原生字段。
+- Reasoning effort 档位 `minimal/low/medium/high/max`：direct-LLM 发送 `reasoning_effort`，
+  Kilo adapter 物化 `variants` 并以 `--variant` 运行（见 `docs/ai/architecture.md` §3.7.3）。
 - 能力不支持时在 manifest 显式降级，而不是静默忽略。
 
 ### 3.8 SandboxBackend

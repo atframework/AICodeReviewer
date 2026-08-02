@@ -451,6 +451,50 @@ describe("createOpenAICompatibleChatClient", () => {
     expect(body).not.toHaveProperty("response_format");
   });
 
+  it("uses defaultReasoningEffort when reasoningEffort is not set", async () => {
+    const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
+    const client = createOpenAICompatibleChatClient({
+      fetch: async (url, init) => {
+        calls.push({ url, init });
+        return jsonResponse({ choices: [{ message: { content: "ok" } }] });
+      },
+      apiKeyResolver: () => "key",
+    });
+
+    await client.complete({
+      model: {
+        ...model,
+        defaultReasoningEffort: "max",
+      },
+      messages: [{ role: "user", content: "hi" }],
+    });
+
+    const body = JSON.parse(calls[0]?.init?.body ?? "{}");
+    expect(body.reasoning_effort).toBe("max");
+  });
+
+  it("maps thinkingLevel max to reasoning_effort max", async () => {
+    const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
+    const client = createOpenAICompatibleChatClient({
+      fetch: async (url, init) => {
+        calls.push({ url, init });
+        return jsonResponse({ choices: [{ message: { content: "ok" } }] });
+      },
+      apiKeyResolver: () => "key",
+    });
+
+    await client.complete({
+      model: {
+        ...model,
+        thinkingLevel: "max",
+      },
+      messages: [{ role: "user", content: "hi" }],
+    });
+
+    const body = JSON.parse(calls[0]?.init?.body ?? "{}");
+    expect(body.reasoning_effort).toBe("max");
+  });
+
   it("uses the default OpenAI base URL when none is specified", async () => {
     const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
     const client = createOpenAICompatibleChatClient({

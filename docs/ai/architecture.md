@@ -334,6 +334,13 @@ AICR 采用**两层上下文管理**，两者互补：
 - 统一抽象 `ModelSpec` / `thinkingLevel` / provider 级覆盖配置。
 - 再按 provider 翻译为 Azure、Vertex、Bedrock、OpenAI-compatible、Anthropic、Gemini 等原生字段。
 - 可选字段传递时需注意 `exactOptionalPropertyTypes`，避免直接写入 `undefined`。
+- Reasoning effort 档位为 `minimal/low/medium/high/max`：direct-LLM 路径按
+  `reasoningEffort ?? defaultReasoningEffort ?? thinkingLevel` 解析为请求体
+  `reasoning_effort`（`thinkingLevel: max` 映射为 `max`）；Kilo adapter 会把
+  `supportedReasoningEfforts` ∪ `{defaultReasoningEffort, reasoningEffort}` 物化为
+  `.kilo/kilo.json` 模型条目的 `variants`，并在存在
+  `defaultReasoningEffort ?? reasoningEffort` 时给 `kilo run` 追加 `--variant <effort>`
+  （Kilo ≥7 的 `--variant` 只有在模型条目定义了同名 `variants` 时才会生效）。
 
 ### 3.8 SandboxBackend
 

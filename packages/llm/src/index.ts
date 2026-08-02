@@ -28,7 +28,7 @@ export type ModelStatus =
 	| "deprecated"
 	| "shutdown";
 
-export type ReasoningEffort = "minimal" | "low" | "medium" | "high";
+export type ReasoningEffort = "minimal" | "low" | "medium" | "high" | "max";
 
 export interface ModelSpec {
 	readonly providerKind: ModelProviderKind;
@@ -57,7 +57,7 @@ export interface ModelSpec {
 	readonly cacheControl?: "ephemeral" | "off";
 	readonly thinkingLevel?: "off" | "minimal" | "low" | "medium" | "high" | "max";
 	readonly thinkingBudgetTokens?: number;
-	readonly reasoningEffort?: "minimal" | "low" | "medium" | "high";
+	readonly reasoningEffort?: ReasoningEffort;
 	readonly thinking?: { readonly enabled: boolean; readonly budgetTokens?: number };
 	readonly responseFormat?: { readonly kind: "json_schema" | "json_object" | "text"; readonly schema?: unknown };
 	readonly toolChoice?: "auto" | "none" | "required" | { readonly name: string };
@@ -457,9 +457,10 @@ function thinkingLevelToReasoningEffort(level: ModelSpec["thinkingLevel"]): Mode
 			return "low";
 		case "medium":
 			return "medium";
-		case "high":
-		case "max":
-			return "high";
+	case "high":
+		return "high";
+	case "max":
+		return "max";
 		case "off":
 		case undefined:
 			return undefined;
@@ -499,7 +500,7 @@ function applyOpenAIParamFilters(body: Record<string, unknown>, model: ModelSpec
 
 function buildOpenAICompatibleBody(input: ChatCompletionInput): Record<string, unknown> {
 	const responseFormat = buildResponseFormat(input.model.responseFormat);
-	const reasoningEffort = input.model.reasoningEffort ?? thinkingLevelToReasoningEffort(input.model.thinkingLevel);
+	const reasoningEffort = input.model.reasoningEffort ?? input.model.defaultReasoningEffort ?? thinkingLevelToReasoningEffort(input.model.thinkingLevel);
 	const toolChoice = normalizeToolChoice(input.model.toolChoice);
 	const thinking = input.model.thinking;
 	const body: Record<string, unknown> = {

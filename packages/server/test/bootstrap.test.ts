@@ -424,6 +424,30 @@ describe("resolveModelSpecFromConfig", () => {
     expect(model.displayName).toBe("Azure deployment A");
     expect(model.modelLinks).toEqual({ docs: "https://example.com/model" });
   });
+
+  it("accepts max as a reasoning effort tier", () => {
+    const config = makeConfig({
+      llm: {
+        providers: [
+          {
+            id: "zhipu",
+            kind: "openai_compatible",
+            base_url: "https://open.bigmodel.cn/api/coding/paas/v4",
+            reasoning_effort: "max",
+            supported_reasoning_efforts: ["minimal", "low", "medium", "high", "max"],
+            default_reasoning_effort: "max",
+          },
+        ],
+        fallback_chain: [{ provider: "zhipu", model: "glm-5.2", role: "heavy" }],
+      },
+    } as Partial<AppConfig>);
+
+    const model = resolveModelSpecFromConfig(config);
+
+    expect(model.reasoningEffort).toBe("max");
+    expect(model.supportedReasoningEfforts).toEqual(["minimal", "low", "medium", "high", "max"]);
+    expect(model.defaultReasoningEffort).toBe("max");
+  });
 });
 
 describe("resolveGiteaWebhookConfig", () => {

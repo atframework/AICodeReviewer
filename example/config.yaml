@@ -14,6 +14,11 @@ llm:
       kind: openai_compatible # openai_compatible | azure_openai | anthropic | ollama | google_ai_studio | vertex_ai | bedrock | copilot
       base_url: https://api.openai.com/v1
       api_key_env: AICR_LLM_API_KEY # reads API key from $AICR_LLM_API_KEY
+      # reasoning_effort: high        # optional per-provider reasoning effort:
+      #                                 # minimal | low | medium | high | max
+      #                                 # Sent as reasoning_effort on direct LLM calls;
+      #                                 # for the Kilo agent it becomes `kilo run --variant`
+      #                                 # (variants are materialized into .kilo/kilo.json).
 
   fallback_chain:
     - provider: my-llm
@@ -84,6 +89,10 @@ llm:
   #       cost_input_per_mtok: 0.15              # USD per 1M tokens
   #       cost_output_per_mtok: 0.6
   #       display_name: "GPT-4o mini (via gateway)"
+  #       # supported_reasoning_efforts: [minimal, low, medium, high, max]
+  #       # default_reasoning_effort: max        # per-model default effort; direct LLM
+  #       #                                      # calls send reasoning_effort and the Kilo
+  #       #                                      # agent runs with `kilo run --variant max`
   #
   # To map a custom provider to a models.dev provider, add `catalog_provider`
   # (or `catalog_id`) to the provider entry under llm.providers above, e.g.:

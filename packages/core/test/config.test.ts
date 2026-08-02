@@ -1857,6 +1857,7 @@ describe("triage config", () => {
               supports_vision: true,
               supports_logprobs: true,
               supported_reasoning_efforts: ["low", "medium"],
+              default_reasoning_effort: "max",
               native_tool_capabilities: ["web_search"],
               provider_docs_url: "https://platform.openai.com/docs",
               model_links: { docs: "https://example.com/model" },
@@ -1887,6 +1888,7 @@ describe("triage config", () => {
       "low",
       "medium",
     ]);
+    expect(config.llm.model_catalog.overrides["openai/gpt-4o"]?.default_reasoning_effort).toBe("max");
     expect(config.llm.model_catalog.overrides["openai/gpt-4o"]?.native_tool_capabilities).toEqual(["web_search"]);
     expect(config.llm.model_catalog.overrides["openai/gpt-4o"]?.provider_docs_url).toBe(
       "https://platform.openai.com/docs",
