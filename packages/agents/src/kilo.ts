@@ -77,6 +77,30 @@ function buildKiloProviderOptions(model: ModelSpec): Record<string, unknown> {
   return options;
 }
 
+function buildKiloModelVariants(model: ModelSpec): Record<string, unknown> | undefined {
+  const efforts: string[] = [];
+  const push = (effort: string | undefined): void => {
+    if (effort && !efforts.includes(effort)) {
+      efforts.push(effort);
+    }
+  };
+  for (const effort of model.supportedReasoningEfforts ?? []) {
+    push(effort);
+  }
+  push(model.defaultReasoningEffort);
+  push(model.reasoningEffort);
+
+  if (efforts.length === 0) {
+    return undefined;
+  }
+
+  return Object.fromEntries(efforts.map((effort) => [effort, { reasoningEffort: effort }]));
+}
+
+function resolveKiloVariant(model: ModelSpec): string | undefined {
+  return model.defaultReasoningEffort ?? model.reasoningEffort;
+}
+
 function buildKiloCompaction(options: AgentMaterializeOptions): Record<string, unknown> | undefined {
   const compaction = options.compaction;
   if (!compaction) return undefined;
@@ -100,8 +124,12 @@ function buildKiloJsonConfig(
 ): Record<string, unknown> {
   const providerOptions = buildKiloProviderOptions(model);
   const modelInfo = buildKiloModelInfo(model);
+  const modelVariants = buildKiloModelVariants(model);
   const models: Record<string, unknown> = {
-    [model.modelId]: modelInfo ?? {},
+    [model.modelId]: {
+      ...(modelInfo ?? {}),
+      ...(modelVariants ? { variants: modelVariants } : {}),
+    },
   };
 
   const providerEntry: Record<string, unknown> = {
@@ -157,6 +185,10 @@ export function createKiloAdapter(options: KiloAdapterOptions = {}): AgentAdapte
 
       if (spawnOptions.model) {
         args.push("--model", formatKiloModel(spawnOptions.model));
+        const variant = resolveKiloVariant(spawnOptions.model);
+        if (variant) {
+          args.push("--variant", variant);
+        }
       }
 
       args.push("--dir", spawnOptions.workingDir);

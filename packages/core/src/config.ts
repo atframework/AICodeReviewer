@@ -86,7 +86,7 @@ const llmPerProviderOverridesSchema = z
   )
   .optional();
 
-const reasoningEffortSchema = z.enum(["minimal", "low", "medium", "high"]);
+const reasoningEffortSchema = z.enum(["minimal", "low", "medium", "high", "max"]);
 const modelStatusSchema = z.enum([
   "stable",
   "preview",

@@ -83,7 +83,7 @@ export interface LlmGatewayProviderConfig {
   readonly cacheControl?: "ephemeral" | "off";
   readonly thinkingLevel?: "off" | "minimal" | "low" | "medium" | "high" | "max";
   readonly thinkingBudgetTokens?: number;
-  readonly reasoningEffort?: "minimal" | "low" | "medium" | "high";
+  readonly reasoningEffort?: "minimal" | "low" | "medium" | "high" | "max";
   readonly thinking?: { readonly enabled: boolean; readonly budgetTokens?: number };
   readonly responseFormat?: { readonly kind: "json_schema" | "json_object" | "text"; readonly schema?: unknown };
   readonly toolChoice?: "auto" | "none" | "required" | { readonly name: string };

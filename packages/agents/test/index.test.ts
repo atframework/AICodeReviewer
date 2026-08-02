@@ -138,6 +138,55 @@ describe("createKiloAdapter", () => {
       expect(cmd[cmd.length - 1]).toBe("/ws");
       expect(cmd).not.toContain("do the thing");
     });
+
+    it("passes --variant from defaultReasoningEffort", () => {
+      const adapter = createKiloAdapter();
+      const cmd = adapter.buildCommand("review", {
+        workingDir: "/ws",
+        model: {
+          providerKind: "openai_compatible",
+          providerId: "zhipu",
+          modelId: "glm-5.2",
+          supportedReasoningEfforts: ["minimal", "low", "medium", "high", "max"],
+          defaultReasoningEffort: "max",
+        },
+      });
+
+      expect(cmd).toContain("--model");
+      expect(cmd).toContain("zhipu/glm-5.2");
+      expect(cmd).toContain("--variant");
+      expect(cmd[cmd.indexOf("--variant") + 1]).toBe("max");
+    });
+
+    it("falls back to reasoningEffort for --variant when no default is set", () => {
+      const adapter = createKiloAdapter();
+      const cmd = adapter.buildCommand("review", {
+        workingDir: "/ws",
+        model: {
+          providerKind: "openai_compatible",
+          providerId: "p",
+          modelId: "m",
+          reasoningEffort: "high",
+        },
+      });
+
+      expect(cmd).toContain("--variant");
+      expect(cmd[cmd.indexOf("--variant") + 1]).toBe("high");
+    });
+
+    it("omits --variant when no reasoning effort is configured", () => {
+      const adapter = createKiloAdapter();
+      const cmd = adapter.buildCommand("review", {
+        workingDir: "/ws",
+        model: {
+          providerKind: "openai_compatible",
+          providerId: "p",
+          modelId: "m",
+        },
+      });
+
+      expect(cmd).not.toContain("--variant");
+    });
   });
 
   describe("materializeConfig", () => {
@@ -271,6 +320,58 @@ describe("createKiloAdapter", () => {
 
       const parsed = JSON.parse(result.configFiles.get(".kilo/kilo.json") ?? "{}");
       expect(parsed.compaction).toBeUndefined();
+    });
+
+    it("emits reasoning effort variants into the model entry", async () => {
+      const adapter = createKiloAdapter();
+      const result = await adapter.materializeConfig(
+        {
+          providerKind: "openai_compatible",
+          providerId: "zhipu",
+          modelId: "glm-5.2",
+          supportedReasoningEfforts: ["minimal", "low", "medium", "high", "max"],
+          defaultReasoningEffort: "max",
+        },
+        "/tmp/test",
+      );
+
+      const parsed = JSON.parse(result.configFiles.get(".kilo/kilo.json") ?? "{}");
+      expect(parsed.provider["zhipu"]?.models?.["glm-5.2"]?.variants).toEqual({
+        minimal: { reasoningEffort: "minimal" },
+        low: { reasoningEffort: "low" },
+        medium: { reasoningEffort: "medium" },
+        high: { reasoningEffort: "high" },
+        max: { reasoningEffort: "max" },
+      });
+    });
+
+    it("emits a single variant from reasoningEffort alone", async () => {
+      const adapter = createKiloAdapter();
+      const result = await adapter.materializeConfig(
+        {
+          providerKind: "openai_compatible",
+          providerId: "p",
+          modelId: "m",
+          reasoningEffort: "high",
+        },
+        "/tmp/test",
+      );
+
+      const parsed = JSON.parse(result.configFiles.get(".kilo/kilo.json") ?? "{}");
+      expect(parsed.provider["p"]?.models?.["m"]?.variants).toEqual({
+        high: { reasoningEffort: "high" },
+      });
+    });
+
+    it("omits variants when no reasoning effort is configured", async () => {
+      const adapter = createKiloAdapter();
+      const result = await adapter.materializeConfig(
+        { providerKind: "openai_compatible", providerId: "p", modelId: "m" },
+        "/tmp/test",
+      );
+
+      const parsed = JSON.parse(result.configFiles.get(".kilo/kilo.json") ?? "{}");
+      expect(parsed.provider["p"]?.models?.["m"]).toEqual({});
     });
   });
 });

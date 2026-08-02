@@ -401,6 +401,7 @@ const reasoningEffortValues = new Set<ReasoningEffortValue>([
   "low",
   "medium",
   "high",
+  "max",
 ]);
 
 const modelStatusValues = new Set<ModelStatusValue>([
@@ -503,7 +504,8 @@ function resolveModelProviderFields(provider: AppConfig["llm"]["providers"][numb
     reasoningEffort === "minimal" ||
     reasoningEffort === "low" ||
     reasoningEffort === "medium" ||
-    reasoningEffort === "high"
+    reasoningEffort === "high" ||
+    reasoningEffort === "max"
   ) {
     fields.reasoningEffort = reasoningEffort;
   }
