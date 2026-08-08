@@ -9,6 +9,14 @@ export type AicrOutputToolName =
 	| "aicr.fetch_more_context"
 	| "aicr.try_blame";
 
+export const AICR_OUTPUT_TOOL_DESCRIPTIONS: Readonly<Record<AicrOutputToolName, string>> = {
+	"aicr.report_problem": "Report one concrete problem introduced or worsened by the change, anchored to a changed line with a realistic trigger. Call once per discrete issue; omit praise, style-only preferences, and speculation.",
+	"aicr.publish_summary": "Publish one concise final summary after all problem reports. Roll up the reported problems and material uncertainty; do not recap code that was checked and found correct or claim unreported problems.",
+	"aicr.skip": "End the review without other output when there are no actionable problems (lgtm) or no reviewable code (no_reviewable_code).",
+	"aicr.fetch_more_context": "Read a changed file or a narrowly related contract, caller, schema, or configuration needed to validate a finding. Omit range for the full file and give a specific reason.",
+	"aicr.try_blame": "Request best-effort VCS attribution for a bounded file range. This returns attribution metadata, not source content; do not infer authorship from prose.",
+};
+
 export type ProblemSeverity = "info" | "low" | "medium" | "high" | "critical";
 
 export interface ReportProblemInput {
@@ -276,7 +284,7 @@ export function createAicrOutputToolRegistry(
 	return [
 		{
 			name: "aicr.report_problem",
-			description: "Report one actionable code review problem anchored to a changed line.",
+			description: AICR_OUTPUT_TOOL_DESCRIPTIONS["aicr.report_problem"],
 			inputSchema: problemInputSchema,
 			async call(input: unknown) {
 				return collector.reportProblem(parseProblem(input));
@@ -284,7 +292,7 @@ export function createAicrOutputToolRegistry(
 		},
 		{
 			name: "aicr.publish_summary",
-			description: "Publish the review summary Markdown.",
+			description: AICR_OUTPUT_TOOL_DESCRIPTIONS["aicr.publish_summary"],
 			inputSchema: {
 				type: "object",
 				required: ["markdown"],
@@ -299,7 +307,7 @@ export function createAicrOutputToolRegistry(
 		},
 		{
 			name: "aicr.skip",
-			description: "Skip output when there are no actionable problems.",
+			description: AICR_OUTPUT_TOOL_DESCRIPTIONS["aicr.skip"],
 			inputSchema: {
 				type: "object",
 				required: ["reason"],
@@ -311,7 +319,7 @@ export function createAicrOutputToolRegistry(
 		},
 		{
 			name: "aicr.fetch_more_context",
-			description: "Request source context for a changed file or narrowly related repository file; omit range for the full file. If content is not returned immediately, AICR records the request, pulls it from VCS, and runs a follow-up pass.",
+			description: AICR_OUTPUT_TOOL_DESCRIPTIONS["aicr.fetch_more_context"],
 			inputSchema: {
 				type: "object",
 				required: ["path", "reason"],
@@ -331,7 +339,7 @@ export function createAicrOutputToolRegistry(
 		},
 		{
 			name: "aicr.try_blame",
-			description: "Request AICR-verified best-effort line attribution for a file or line range. Returns VCS blame/annotate metadata only, never source content.",
+			description: AICR_OUTPUT_TOOL_DESCRIPTIONS["aicr.try_blame"],
 			inputSchema: {
 				type: "object",
 				required: ["path", "reason"],

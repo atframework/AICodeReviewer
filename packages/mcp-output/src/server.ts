@@ -14,6 +14,7 @@ import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 
 import {
+	AICR_OUTPUT_TOOL_DESCRIPTIONS,
 	AicrOutputCollector,
 	type AicrOutputState,
 	type FetchMoreContextInput,
@@ -217,7 +218,7 @@ export function createAicrMcpServer(options: AicrMcpServerOptions = {}): AicrMcp
 	server.registerTool(
 		"aicr.report_problem",
 		{
-			description: "Report one actionable code review problem anchored to a changed line.",
+			description: AICR_OUTPUT_TOOL_DESCRIPTIONS["aicr.report_problem"],
 			inputSchema: reportProblemShape,
 		},
 		async (args: unknown) => {
@@ -251,7 +252,7 @@ export function createAicrMcpServer(options: AicrMcpServerOptions = {}): AicrMcp
 	server.registerTool(
 		"aicr.publish_summary",
 		{
-			description: "Publish the review summary Markdown.",
+			description: AICR_OUTPUT_TOOL_DESCRIPTIONS["aicr.publish_summary"],
 			inputSchema: publishSummaryShape,
 		},
 		async (args: unknown) => {
@@ -270,7 +271,7 @@ export function createAicrMcpServer(options: AicrMcpServerOptions = {}): AicrMcp
 	server.registerTool(
 		"aicr.skip",
 		{
-			description: "Skip output when there are no actionable problems.",
+			description: AICR_OUTPUT_TOOL_DESCRIPTIONS["aicr.skip"],
 			inputSchema: skipShape,
 		},
 		async (args: unknown) => {
@@ -286,7 +287,7 @@ export function createAicrMcpServer(options: AicrMcpServerOptions = {}): AicrMcp
 	server.registerTool(
 		"aicr.fetch_more_context",
 		{
-			description: "Request source context for a changed file or a related repository file (interface, type definition, caller, callee, schema, configuration). Omit range for the full file. Prefer reading the full changed file before analyzing individual hunks. For related files outside the change, tie the reason to a specific changed line or symbol. If content is not returned immediately, AICR records the request, pulls it from VCS, and runs a follow-up pass.",
+			description: AICR_OUTPUT_TOOL_DESCRIPTIONS["aicr.fetch_more_context"],
 			inputSchema: fetchMoreContextShape,
 		},
 		async (args: unknown) => {
@@ -311,7 +312,7 @@ export function createAicrMcpServer(options: AicrMcpServerOptions = {}): AicrMcp
 	server.registerTool(
 		"aicr.try_blame",
 		{
-			description: "Request AICR-verified best-effort line attribution for a file or line range. Returns VCS blame/annotate metadata only, never source content. The reviewed head revision is used by default.",
+			description: AICR_OUTPUT_TOOL_DESCRIPTIONS["aicr.try_blame"],
 			inputSchema: tryBlameShape,
 		},
 		async (args: unknown) => {

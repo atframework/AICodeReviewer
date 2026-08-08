@@ -95,7 +95,7 @@ agent:
 | Agent | 落点 |
 | --- | --- |
 | Kilo | `kilo.json` 中的 `compaction.{auto,threshold_percent,prune}`。 |
-| opencode | `.opencode/config.json` 中的 `compaction.{auto,prune}`。 |
+| opencode | `opencode.json`（工作目录根部，由 sandbox cwd/`--dir` 发现）中的 `compaction.{auto,prune}`。 |
 | Zoo | `.roo/settings.json` 中的 `autoCondenseContext` / `condenseContextPercentThreshold`。 |
 | Claude Code | 默认自动压缩（委托给其内置能力，不注入配置）。 |
 | Copilot CLI | 不适用（没有上下文管理接口）。 |

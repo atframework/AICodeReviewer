@@ -1734,10 +1734,305 @@ describe("summarizeReviewOrchestrationForWebhook", () => {
 
       const summary = summarizeReviewOrchestrationForWebhook(result);
 
-      // No usage captured: callers fall back to promptTokenEstimate.
+      // No usage captured: keep the separate prompt estimate, but do not fabricate
+      // billable llmUsage from it.
       expect(summary.llmUsage).toBeUndefined();
       expect(summary.usageSource).toBeUndefined();
       expect(summary.estimatedCostUsd).toBeUndefined();
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("parses current opencode tool_use and step_finish events", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-opencode-stream-"));
+
+    try {
+      await writeWorkspaceFile(tempDir, "src/app.ts", "const ok = true;\n");
+      const ndjsonStream = [
+        {
+          type: "tool_use",
+          part: {
+            type: "tool",
+            tool: "aicr-output_aicr_report_problem",
+            state: {
+              status: "completed",
+              input: {
+                file: "src/app.ts",
+                line: 1,
+                severity: "medium",
+                category: "correctness",
+                message: "OpenCode part-wrapped tool output.",
+              },
+            },
+          },
+        },
+        {
+          type: "step_finish",
+          part: {
+            type: "step-finish",
+            reason: "stop",
+            tokens: { input: 1000, output: 50, reasoning: 0, cache: { write: 0, read: 200 } },
+            cost: 0.005,
+          },
+        },
+      ].map((e) => JSON.stringify(e)).join("\n");
+      const sandbox: SandboxBackend = {
+        kind: "native",
+        async materializeFs(layout) {
+          await mkdir(layout.agentDir, { recursive: true });
+          await mkdir(layout.tmpDir, { recursive: true });
+          return { agentDir: layout.agentDir, tmpDir: layout.tmpDir, mountSpecs: [] };
+        },
+        async spawn() {
+          return { exitCode: 0, stdout: ndjsonStream, stderr: "", timedOut: false, durationMs: 9 };
+        },
+        async teardown() {},
+      };
+      const agentAdapter: AgentAdapter = {
+        kind: "opencode",
+        async detect() { return { available: true, binary: "opencode" }; },
+        buildCommand() { return ["opencode", "run", "--format", "json"]; },
+        async materializeConfig(_m, workingDir) {
+          return { configFiles: new Map(), envVars: {}, workingDir };
+        },
+      };
+
+      const result = await runReviewOrchestration(
+        {
+          reviewEvent: createReviewEventFixture(),
+          payload: {},
+          provider: "gitea",
+          eventName: "pull_request",
+        },
+        {
+          baseSystemPrompt: "<task>\n{{TASK_CONTEXT}}\n</task>",
+          sourceRootResolver: () => tempDir,
+          vcs: createVcs(tempDir),
+          llm: { async complete() { throw new Error("direct llm must not be called"); } },
+          model,
+          sandbox,
+          agentAdapter,
+          outputPublisher: {
+            async publishProblem() {
+              return { channel: "test", status: "published", externalId: "1", raw: {} };
+            },
+          },
+        },
+      );
+
+      expect(result.outputState.problems).toHaveLength(1);
+      expect(result.outputState.problems[0]?.message).toBe("OpenCode part-wrapped tool output.");
+      const summary = summarizeReviewOrchestrationForWebhook(result);
+      expect(summary.llmUsage).toMatchObject({
+        promptTokens: 1200,
+        completionTokens: 50,
+        totalTokens: 1250,
+        cachedPromptTokens: 200,
+      });
+      expect(summary.usageSource).toBe("agent_stdout");
+      expect(summary.estimatedCostUsd).toBeCloseTo(0.005, 5);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("unwraps the claude-code result envelope with usage, cost, and turn count", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-claude-envelope-"));
+
+    try {
+      await writeWorkspaceFile(tempDir, "src/app.ts", "const ok = true;\n");
+      // Claude Code `claude -p --output-format json` result envelope.
+      const envelope = JSON.stringify({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        result: JSON.stringify({ skipReason: "lgtm" }),
+        session_id: "ses-claude-1",
+        num_turns: 3,
+        total_cost_usd: 0.0123,
+        duration_ms: 4200,
+        usage: {
+          input_tokens: 800,
+          output_tokens: 120,
+          cache_read_input_tokens: 300,
+          cache_creation_input_tokens: 100,
+        },
+      });
+      const sandbox: SandboxBackend = {
+        kind: "native",
+        async materializeFs(layout) {
+          await mkdir(layout.agentDir, { recursive: true });
+          await mkdir(layout.tmpDir, { recursive: true });
+          return { agentDir: layout.agentDir, tmpDir: layout.tmpDir, mountSpecs: [] };
+        },
+        async spawn() {
+          return { exitCode: 0, stdout: envelope, stderr: "", timedOut: false, durationMs: 11 };
+        },
+        async teardown() {},
+      };
+      const agentAdapter: AgentAdapter = {
+        kind: "claude-code",
+        async detect() { return { available: true, binary: "claude" }; },
+        buildCommand() { return ["claude", "-p", "--output-format", "json"]; },
+        async materializeConfig(_m, workingDir) {
+          return { configFiles: new Map(), envVars: {}, workingDir };
+        },
+      };
+
+      const result = await runReviewOrchestration(
+        {
+          reviewEvent: createReviewEventFixture(),
+          payload: {},
+          provider: "gitea",
+          eventName: "pull_request",
+        },
+        {
+          baseSystemPrompt: "<task>\n{{TASK_CONTEXT}}\n</task>",
+          sourceRootResolver: () => tempDir,
+          vcs: createVcs(tempDir),
+          llm: { async complete() { throw new Error("direct llm must not be called"); } },
+          model,
+          sandbox,
+          agentAdapter,
+        },
+      );
+
+      expect(result.status).toBe("skipped");
+      expect(result.skipReason).toBe("lgtm");
+
+      const summary = summarizeReviewOrchestrationForWebhook(result);
+      expect(summary.llmUsage).toMatchObject({
+        promptTokens: 1200,
+        completionTokens: 120,
+        totalTokens: 1320,
+        cachedPromptTokens: 300,
+        cacheCreationTokens: 100,
+      });
+      expect(summary.usageSource).toBe("agent_stdout");
+      expect(summary.requestCount).toBe(3);
+      expect(summary.estimatedCostUsd).toBeCloseTo(0.0123, 5);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("throws on claude-code error envelopes and maps context overflow", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-claude-error-"));
+
+    try {
+      await writeWorkspaceFile(tempDir, "src/app.ts", "const ok = true;\n");
+      const envelope = JSON.stringify({
+        type: "result",
+        subtype: "error_max_turns",
+        is_error: true,
+        result: "Invalid request: prompt is too long: 300000 tokens > 200000 maximum",
+        session_id: "ses-claude-2",
+      });
+      const sandbox: SandboxBackend = {
+        kind: "native",
+        async materializeFs(layout) {
+          await mkdir(layout.agentDir, { recursive: true });
+          await mkdir(layout.tmpDir, { recursive: true });
+          return { agentDir: layout.agentDir, tmpDir: layout.tmpDir, mountSpecs: [] };
+        },
+        async spawn() {
+          return { exitCode: 0, stdout: envelope, stderr: "", timedOut: false, durationMs: 8 };
+        },
+        async teardown() {},
+      };
+      const agentAdapter: AgentAdapter = {
+        kind: "claude-code",
+        async detect() { return { available: true, binary: "claude" }; },
+        buildCommand() { return ["claude", "-p"]; },
+        async materializeConfig(_m, workingDir) {
+          return { configFiles: new Map(), envVars: {}, workingDir };
+        },
+      };
+
+      await expect(
+        runReviewOrchestration(
+          {
+            reviewEvent: createReviewEventFixture(),
+            payload: {},
+            provider: "gitea",
+            eventName: "pull_request",
+          },
+          {
+            baseSystemPrompt: "<task>\n{{TASK_CONTEXT}}\n</task>",
+            sourceRootResolver: () => tempDir,
+            vcs: createVcs(tempDir),
+            llm: { async complete() { throw new Error("direct llm must not be called"); } },
+            model,
+            sandbox,
+            agentAdapter,
+          },
+        ),
+      ).rejects.toThrow(/too long|overflow|exceeded/iu);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("passes aicr-output MCP config with a pinned AICR_OUTPUT_STATE_PATH to adapters", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-mcp-spawn-"));
+
+    try {
+      await writeWorkspaceFile(tempDir, "src/app.ts", "const ok = true;\n");
+      let capturedMcpServers: readonly { name: string; config: Record<string, unknown> }[] | undefined;
+      const sandbox: SandboxBackend = {
+        kind: "native",
+        async materializeFs(layout) {
+          await mkdir(layout.agentDir, { recursive: true });
+          await mkdir(layout.tmpDir, { recursive: true });
+          return { agentDir: layout.agentDir, tmpDir: layout.tmpDir, mountSpecs: [] };
+        },
+        async spawn() {
+          return {
+            exitCode: 0,
+            stdout: JSON.stringify({ skipReason: "lgtm" }),
+            stderr: "",
+            timedOut: false,
+            durationMs: 5,
+          };
+        },
+        async teardown() {},
+      };
+      const agentAdapter: AgentAdapter = {
+        kind: "claude-code",
+        async detect() { return { available: true, binary: "claude" }; },
+        buildCommand(_task, spawnOptions) {
+          capturedMcpServers = spawnOptions.mcpServers as typeof capturedMcpServers;
+          return ["claude", "-p"];
+        },
+        async materializeConfig(_m, workingDir) {
+          return { configFiles: new Map(), envVars: {}, workingDir };
+        },
+      };
+
+      await runReviewOrchestration(
+        {
+          reviewEvent: createReviewEventFixture(),
+          payload: {},
+          provider: "gitea",
+          eventName: "pull_request",
+        },
+        {
+          baseSystemPrompt: "<task>\n{{TASK_CONTEXT}}\n</task>",
+          sourceRootResolver: () => tempDir,
+          vcs: createVcs(tempDir),
+          llm: { async complete() { throw new Error("direct llm must not be called"); } },
+          model,
+          sandbox,
+          agentAdapter,
+        },
+      );
+
+      expect(capturedMcpServers).toBeDefined();
+      const aicrServer = capturedMcpServers?.find((server) => server.name === "aicr-output");
+      expect(aicrServer).toBeDefined();
+      const environment = aicrServer?.config.environment as Record<string, string> | undefined;
+      expect(environment?.AICR_OUTPUT_STATE_PATH).toContain(".aicr-output-state.json");
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }

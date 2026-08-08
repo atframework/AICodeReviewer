@@ -11,9 +11,9 @@ This file records verified external sources for repository AI-agent guidance, Ag
 
 ## Last research pass
 
-- `last_checked`: 2026-07-10
-- Scope: OpenAI Codex `AGENTS.md`, OpenAI Codex skills, Claude Code skills, Agent Skills progressive disclosure, and repository prompt/skill slimming.
-- Result: Existing repository strategy remains aligned: `AGENTS.md` stays canonical and short, repeatable workflows live under `.agents/skills/`, bulky fixed-issue checklists live in `docs/ai/AGENTS.known-pitfalls.md`, and skill-specific long contracts move to sibling `references/` files loaded on demand.
+- `last_checked`: 2026-08-09
+- Scope: agent framework/adapter surface refresh — Claude Code CLI reference + env-vars doc, OpenCode CLI/config/provider/model/MCP/skills docs and config schema, GitHub Copilot CLI command reference + skills/instructions docs, Kilo `kilo.json` configuration reference; verified every adapter flag/env/config path against current upstream docs instead of memory.
+- Result: `claude-code` uses headless print mode (`-p --output-format json`) and documented flags/env; `opencode` uses `--pure run --format json --auto --dir`, schema-valid project-root `opencode.json`, `provider/model` IDs, provider/model option nesting, and current `tool_use`/`step_finish` NDJSON envelopes; `copilot-cli` targets the current `copilot` programmatic CLI. Runtime bundles expose one active combined `AGENTS.md` instruction surface, canonical Agent Skills paths, native MCP wiring, and explicit `nativeSurfaces` manifest entries; source instruction copies remain audit-only. Orchestrator extracts real usage/cost and pins `AICR_OUTPUT_STATE_PATH`. The default review prompt now keeps findings-only restraint in one compact output-discipline section instead of repeating no-problem prose across sections.
 
 ## Source records
 
@@ -27,8 +27,9 @@ This file records verified external sources for repository AI-agent guidance, Ag
   - It should contain build/test commands, code style, project structure, security notes, and agent-specific conventions.
   - Nested `AGENTS.md` files can scope instructions to subtrees; user prompts still override repository files.
   - Codex layers global and project guidance, reading one instruction file per directory from repository root toward the current working directory; closer files override earlier guidance.
-- `last_checked`: 2026-07-10
-- `next_review`: 2026-10-10
+  - AGENTS.md is now stewarded by the Agentic AI Foundation (AAIF) under the Linux Foundation and is supported by 60k+ open-source projects and most major coding agents (Codex, Copilot coding agent, Cursor, Gemini CLI, Kilo Code, opencode, Aider, Augment, Windsurf, Zed, and others).
+- `last_checked`: 2026-08-08
+- `next_review`: 2026-11-08
 - `update_trigger`: Re-check when changing repository-wide instruction loading, adding nested instruction files, or adding support for a new AGENTS-aware client.
 
 ### Agent Skills open standard
@@ -57,6 +58,25 @@ This file records verified external sources for repository AI-agent guidance, Ag
 - `last_checked`: 2026-07-10
 - `next_review`: 2026-10-10
 - `update_trigger`: Re-check before changing `SKILL.md` frontmatter shape, skill directory layout, script expectations, or skill activation descriptions.
+
+### Code review agent design (Augment, Claude Code, OpenAI Codex, Qodo)
+
+- Sources:
+  - <https://www.augmentcode.com/blog/how-we-built-high-quality-ai-code-review-agent>
+  - <https://code.claude.com/docs/en/best-practices>
+  - <https://www.anthropic.com/engineering/writing-tools-for-agents>
+  - <https://developers.openai.com/blog/custom-code-review-rules-for-codex>
+  - <https://github.com/qodo-ai/pr-agent/blob/main/pr_agent/settings/pr_reviewer_prompts.toml>
+- Verified guidance:
+  - A review system prompt's primary tuning knob is the precision/recall tradeoff; pick high signal-to-noise explicitly, name the comment categories to avoid, and outline the review workflow steps (Augment).
+  - Keep the tool set small and non-overlapping; inject large inputs such as the diff deterministically instead of letting the agent re-retrieve them through tools (Augment, Anthropic).
+  - Tool descriptions are prompt engineering: unambiguous parameter names, usage constraints, and error/truncation messages that steer token-efficient next steps measurably improve tool use (Anthropic).
+  - A reviewer asked to find problems tends to report some even when the work is sound; instruct it to flag only defects that affect correctness or stated requirements and treat the rest as optional (Claude Code best practices).
+  - Repository review rules live in `AGENTS.md`, scoped root vs. nested, written as a consequential invariant plus a safe path, and cited in findings; evaluate rule-guided review on coverage, restraint, retention, and actionability (OpenAI Codex; rule-guided variants recovered 98% of required custom findings vs. 58.3% baseline).
+  - Diff hunks ending at an opening brace are a visible scope boundary, not incomplete code; do not question elements that may be defined elsewhere or suggest functionality that may already exist without reading the source; an empty findings list is acceptable (Qodo PR-Agent prompt).
+- `last_checked`: 2026-08-08
+- `next_review`: 2026-11-08
+- `update_trigger`: Re-check before changing the default review system prompt, `buildJsonToolContract()`, MCP tool descriptions, or the review eval fixtures.
 
 ### Karpathy-inspired coding-agent behavior
 
@@ -93,6 +113,8 @@ This file records verified external sources for repository AI-agent guidance, Ag
 - Sources:
   - <https://code.claude.com/docs/en/skills>
   - <https://code.claude.com/docs/en/memory>
+  - <https://code.claude.com/docs/en/cli-reference>
+  - <https://code.claude.com/docs/en/env-vars>
   - <https://code.claude.com/llms.txt>
   - <https://www.anthropic.com/engineering/equipping-agents-for-the-real-world-with-agent-skills>
 - Verified guidance:
@@ -100,9 +122,11 @@ This file records verified external sources for repository AI-agent guidance, Ag
   - Claude Code Skills follow the Agent Skills model and load on demand.
   - Skill descriptions need natural trigger keywords; supporting files are appropriate for large references and examples so `SKILL.md` stays focused.
   - Large `CLAUDE.md` files should be split or trimmed; duplicate global prompt bodies increase context cost and drift risk.
-- `last_checked`: 2026-07-10
-- `next_review`: 2026-10-10
-- `update_trigger`: Re-check when changing `CLAUDE.md`, adding `.claude/` assets, or relying on Claude-specific frontmatter or plugin behavior.
+  - Headless automation uses print mode: `claude -p` with the prompt as an argument or piped via stdin, `--output-format text|json|stream-json` (json emits a result envelope with `result`, `is_error`, `session_id`, `num_turns`, `total_cost_usd`, and `usage.{input,output,cache_read,cache_creation}_tokens`), `--model`, `--effort low|medium|high|xhigh|max`, `--max-turns`, `--max-budget-usd`, `--fallback-model`, `--add-dir`, `--append-system-prompt-file`, `--allowedTools`/`--disallowedTools`, `--permission-mode`/`--dangerously-skip-permissions` (sandboxed environments only), and `--mcp-config` (JSON string or file path) with `--strict-mcp-config` for MCP isolation. `--timeout`, `--cwd`, and `--thinking` are not general session flags.
+  - Environment surface includes `ANTHROPIC_API_KEY`, `ANTHROPIC_BASE_URL`, `ANTHROPIC_MODEL`, `ANTHROPIC_BETAS` (comma-separated beta headers), `CLAUDE_CODE_MAX_OUTPUT_TOKENS`, `CLAUDE_CODE_MAX_CONTEXT_TOKENS` (assumed context window override, useful for gateway/custom model IDs), `MAX_THINKING_TOKENS` (fixed thinking budget; ignored on adaptive-reasoning models unless `CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING=1`), `DISABLE_AUTO_COMPACT`, `DISABLE_AUTOUPDATER`, `DISABLE_TELEMETRY`, `DISABLE_ERROR_REPORTING`, and `CLAUDE_CODE_DISABLE_TERMINAL_TITLE` (skips print-mode title generation). `ANTHROPIC_VERSION`, `ANTHROPIC_MAX_TOKENS`, `ANTHROPIC_THINKING_BUDGET_TOKENS`, and `ANTHROPIC_BETA` do not exist in the Claude Code environment surface.
+- `last_checked`: 2026-08-08
+- `next_review`: 2026-11-08
+- `update_trigger`: Re-check when changing `CLAUDE.md`, adding `.claude/` assets, changing the claude-code adapter command line or env translation, or relying on Claude-specific frontmatter or plugin behavior.
 
 ### Kilo Code and Zoo Code
 
@@ -124,13 +148,14 @@ This file records verified external sources for repository AI-agent guidance, Ag
   - <https://github.com/Zoo-Code-Org/Zoo-Code/blob/8d4ed32f0606a4c7f45aac959540508aeac0b0e2/src/core/config/CustomModesManager.ts>
 - Verified guidance:
   - Kilo Code supports repository-level instruction files and Agent Skills-compatible workflows.
+  - `kilo.json` (project `.kilo/kilo.json` or root) supports the top-level `instructions` glob array for additional instruction files, `skills.paths` for extra Agent Skills discovery directories (layout `skills/<name>/SKILL.md`), and the `mcp` section (`{ "type": "local", "command": [...], "environment": {...} }` / `{ "type": "remote", "url": "..." }`); MCP tool permission keys are `{server}_{tool}` with glob support.
   - Kilo CLI v7.2.40 JSON run mode emits `step_finish` with the completed `step-finish` part. Each part is built from one model `finish-step` usage, with non-cached input, output excluding reasoning, reasoning, and cache read/write as disjoint counters; sum the events within a CLI run. AICR additionally sums every initial, repair, and direct-fallback completion across the whole review run.
   - Zoo Code is the maintained VS Code extension published as `ZooCodeOrganization.zoo-code`; official migration guidance imports an exported settings file from the older tool into Zoo Code.
   - Upstream Zoo Code source at `8d4ed32f0606a4c7f45aac959540508aeac0b0e2` currently keeps compatibility names: CLI program/bin is `roo`, user CLI config dir is `~/.roo`, and project rule/mode files use `.roomodes` plus `.roo/rules-*`. Do not invent `.zoo` paths or a `zoo` binary without re-checking upstream.
   - Keep shared instructions in the canonical repository layer and add tool-specific files only for narrow, necessary deltas.
-- `last_checked`: 2026-07-19
-- `next_review`: 2026-10-19
-- `update_trigger`: Re-check before changing the pinned Kilo CLI version or JSON-stream parser, the `zoo` adapter kind, Zoo CLI binary, `.roo`/`.roomodes` compatibility paths, `.kilo`/`.kilocode` path rules, or adapter-native skill materialization.
+- `last_checked`: 2026-08-08
+- `next_review`: 2026-11-08
+- `update_trigger`: Re-check before changing the pinned Kilo CLI version or JSON-stream parser, the `zoo` adapter kind, Zoo CLI binary, `.roo`/`.roomodes` compatibility paths, `.kilo`/`.kilocode` path rules, kilo.json `instructions`/`skills.paths`/`mcp` wiring, or adapter-native skill materialization.
 
 ### Windsurf
 
@@ -153,13 +178,40 @@ This file records verified external sources for repository AI-agent guidance, Ag
   - <https://opencode.ai/docs/rules/>
   - <https://opencode.ai/docs/agents/>
   - <https://opencode.ai/docs/skills/>
+  - <https://opencode.ai/docs/cli/>
+  - <https://opencode.ai/docs/mcp-servers/>
+  - <https://opencode.ai/docs/config/>
+  - <https://opencode.ai/docs/providers/>
+  - <https://opencode.ai/docs/models/>
+  - <https://opencode.ai/config.json>
+  - <https://github.com/anomalyco/opencode/blob/dev/packages/opencode/src/cli/cmd/run.ts>
 - Verified guidance:
-  - OpenCode supports project and global skills, including `.agents/skills/<name>/SKILL.md`.
-  - OpenCode skill frontmatter recognizes `name` and `description` as required fields; unknown fields are ignored.
-  - Skill access can be controlled by OpenCode permissions, but this repository should not commit `opencode.json` unless a real tool-specific policy is needed.
-- `last_checked`: 2026-05-18
-- `next_review`: 2026-07-18
-- `update_trigger`: Re-check when adding OpenCode agents, permissions, `.opencode/skills`, or `opencode.json` bridges.
+  - OpenCode supports project and global skills, including `.opencode/skills/<name>/SKILL.md`, `.claude/skills/<name>/SKILL.md`, and `.agents/skills/<name>/SKILL.md`.
+  - OpenCode skill frontmatter recognizes `name` and `description` as required fields; unknown fields are ignored; skill directory names must match `^[a-z0-9]+(-[a-z0-9]+)*$` and the frontmatter `name`.
+  - Skill access can be controlled by OpenCode permissions (`permission.skill` patterns in `opencode.json`), but this repository should not commit `opencode.json` unless a real tool-specific policy is needed.
+  - Non-interactive runs use `opencode run [message..]` with `--model`/`-m` in `provider/model` form, `--agent`, `--dir`, `--format default|json`, `--variant`, `--auto`, and session flags. JSON output is NDJSON with part-wrapped `text`/`tool_use` events and `step_finish` usage events. `--cwd` and `--timeout` are not `run` flags; stdin is accepted when no positional message is supplied.
+  - The project config file is `opencode.json` in the working-directory root (global: `~/.config/opencode/opencode.json`); `OPENCODE_CONFIG`, `OPENCODE_CONFIG_DIR`, and `OPENCODE_CONFIG_CONTENT` environment overrides exist. AICR relies on project discovery through the same sandbox cwd/`--dir` instead of setting `OPENCODE_CONFIG` to a host-only absolute path. The schema uses a `provider` object keyed by provider ID, nests models under each provider, nests transport/auth under provider `options` and request parameters under model `options`, and uses `{env:NAME}` interpolation.
+  - MCP servers are configured via the config `mcp` section: local servers `{ "type": "local", "command": [...], "enabled": true, "environment": {...} }`, remote servers `{ "type": "remote", "url": "..." }`; per-tool enable/disable is supported.
+- `last_checked`: 2026-08-09
+- `next_review`: 2026-11-09
+- `update_trigger`: Re-check when adding OpenCode agents, permissions, `.opencode/skills`, or `opencode.json` bridges, and before changing the opencode adapter command line or config materialization.
+
+### GitHub Copilot CLI
+
+- Sources:
+  - <https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-command-reference>
+  - <https://docs.github.com/en/copilot/how-tos/copilot-cli/use-copilot-cli/overview>
+  - <https://docs.github.com/en/copilot/how-tos/copilot-cli/customize-copilot/add-skills>
+- Verified guidance:
+  - The current CLI is the `copilot` binary; the legacy `gh copilot suggest` extension is deprecated and must not be targeted.
+  - Programmatic mode runs `copilot --prompt <text>` (exits after completion); `--silent` prints only the agent response, `--no-ask-user` disables the interactive question tool, `--allow-all-tools` is documented as required for programmatic use, and `--allow-all`/`--yolo` bundles tools+paths+URLs while `--allow-all-tools`/`--allow-all-paths` stay granular.
+  - Model selection uses `--model=<id>` or `COPILOT_MODEL`; reasoning effort uses `--effort low|medium|high|xhigh|max`; structured output uses `--output-format text|json` (json = JSONL events).
+  - Headless auth checks `COPILOT_GITHUB_TOKEN`, then `GH_TOKEN`, then `GITHUB_TOKEN`; classic PATs are unsupported.
+  - MCP servers merge with this precedence: `--additional-mcp-config` inline JSON (highest), plugin-provided, workspace `.mcp.json`/`.github/mcp.json`, then `~/.copilot/mcp-config.json`; local servers use `{ "type": "local", "command": ..., "args": [...], "tools": [...] }`.
+  - Repository custom instructions (`.github/copilot-instructions.md`, `.github/instructions/**`, `AGENTS.md`) load by default (`--no-custom-instructions` disables); project skills live in `.github/skills/`, `.claude/skills/`, or `.agents/skills/<name>/SKILL.md`; history auto-compacts near 95% of the token limit.
+- `last_checked`: 2026-08-08
+- `next_review`: 2026-11-08
+- `update_trigger`: Re-check before changing the copilot-cli adapter command line, auth env mapping, MCP wiring, or skills materialization for Copilot CLI.
 
 ### Model Context Protocol
 
@@ -246,9 +298,9 @@ This file records verified external sources for repository AI-agent guidance, Ag
   - HTTP API: `https://models.dev/api.json` (provider + serving view, keyed `<providerId>` → `models.<modelId>`), `https://models.dev/models.json` (provider-agnostic model facts), `https://models.dev/catalog.json` (both), `https://models.dev/logos/{provider}.svg`. Model IDs match the AI SDK identifiers.
   - Per-model fields include `name`, `family`, `attachment`, `reasoning`, `tool_call`, `structured_output`, `temperature`, `knowledge`, `release_date`, `last_updated`, `open_weights`, `license`, `links`, `weights`, `benchmarks`, `interleaved.field`, `cost.{input,output,reasoning,cache_read,cache_write,input_audio,output_audio}` (USD per **million** tokens), `limit.{context,input,output}`, `modalities.{input,output}`, and `status`. A stable search/web-search capability field was not verified in the current schema; treat search support as optional override-only until upstream documents it.
   - Cross-provider docs checked in this pass show additional capabilities that AICR should normalize when available or explicitly overridden: OpenAI exposes model tools such as functions, web search, file search, and computer use; Claude exposes max input/output tokens, capabilities objects, extended/adaptive thinking, provider-specific IDs and prompt caching; Gemini exposes function calling, Google Search grounding, URL context, file search, code execution, computer use, Live/audio, and model lifecycle labels; DeepSeek exposes thinking modes, JSON output, tool calls, cache-hit/cache-miss pricing, FIM/chat-prefix beta flags, and deprecated model aliases; GLM exposes thinking modes, function call, context caching, structured output, 128K/96K limits, and text modality; Kimi exposes multimodal input, tool use, JSON/schema response formats, prompt cache keys, thinking retention, and high-speed variants.
-  - Tool compatibility for config translation: opencode resolves known providers from models.dev automatically but requires manual `models.<id>.limit`/`cost` for custom `@ai-sdk/openai-compatible` providers, and honors `OPENCODE_MODELS_PATH` to point at a local `api.json`. Zoo Code and Kilo Code do not have a verified native models.dev ingestion surface for custom OpenAI-compatible providers in the checked sources; AICR injects manual model info (Context Window, Max Output Tokens, Image Support, Computer Use, Input/Output Price, prompt cache) until upstream documents a native catalog path. Claude Code and Copilot CLI rely on their own built-in model catalogs.
-- `last_checked`: 2026-07-02
-- `next_review`: 2026-10-02
+  - Tool compatibility for config translation: opencode resolves known providers from models.dev automatically. Custom `@ai-sdk/openai-compatible` providers require models under `provider.<provider-id>.models.<model-id>`; schema-valid manual entries use complete `limit.context`/`limit.output` and `cost.input`/`cost.output` pairs, plus supported attachment/reasoning/temperature/tool-call/interleaved/modality metadata. Zoo Code and Kilo Code do not have a verified native models.dev ingestion surface for custom OpenAI-compatible providers in the checked sources; AICR injects their native model-info fields. Claude Code and Copilot CLI rely on their own built-in model catalogs.
+- `last_checked`: 2026-08-09
+- `next_review`: 2026-11-09
 - `update_trigger`: Re-check before changing the model-catalog fetch URL, the api.json field mapping into `ModelSpec`, the per-tool config-injection strategy, or the build-time fallback snapshot source.
 
 ## Repository decisions from this pass

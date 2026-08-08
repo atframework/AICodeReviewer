@@ -186,6 +186,8 @@
 ## 4. 默认评审 Prompt 原则
 
 - 默认 system prompt 只保留稳定硬规则、输出协议与安全边界。
+- 评审输出以已验证的问题为中心；不展开无问题部分，无 actionable problem 时以
+  `aicr.skip` 完成，不用重复近义 prompt 段落强化同一规则。
 - 调研依据与样例保留在 `docs/prompt-research.md`。
 - repo-local AI 资产按路径与优先级按需装配，不整仓注入。
 - 工具合同由实现与注册表定义，不靠 prompt 发明字段。
@@ -228,7 +230,7 @@
 | 里程碑 | 状态 | 主要落点 | 下一步 |
 | --- | --- | --- | --- |
 | M0 | 已完成 | `docs/ai/milestones/M0.md` | 保持基线稳定 |
-| M0.5 | 已完成 | `docs/ai/milestones/M0.5.md`、`docs/prompt-research.md` | 继续为 prompt/runtime 变更提供依据 |
+| M0.5 | 已完成 | `docs/ai/milestones/M0.5.md`、`docs/prompt-research.md` | 维持高信号、findings-only 的默认输出纪律 |
 | M1 | 已完成 | `docs/ai/milestones/M1.md` | 作为最小 review 闭环基线 |
 | M2 | 已完成 | `docs/ai/milestones/M2.md` | 作为 agent/sandbox 基线 |
 | M3 | 已完成 | `docs/ai/milestones/M3.md` | 继续复用压缩、预算、队列与 scrubber 能力 |

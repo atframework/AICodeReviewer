@@ -44,12 +44,24 @@ export interface AgentAdapter {
   ): Promise<AgentMaterializeResult>;
 }
 
+export interface AgentSpawnMcpServer {
+  readonly name: string;
+  readonly config: Readonly<Record<string, unknown>>;
+}
+
 export interface AgentSpawnOptions {
   readonly workingDir: string;
   readonly timeoutMs?: number;
   readonly model?: ModelSpec;
   readonly autoApprove?: boolean;
   readonly task: string;
+  /**
+   * MCP servers materialized into the runtime bundle, so adapters that wire MCP via
+   * command-line flags (instead of config files) can emit adapter-native MCP config.
+   * The config shape is the canonical kilo/opencode form:
+   * `{ "type": "local", "command": [...] }` or `{ "type": "remote", "url": "..." }`.
+   */
+  readonly mcpServers?: readonly AgentSpawnMcpServer[];
 }
 
 export interface AgentProfileConfig {

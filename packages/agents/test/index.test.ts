@@ -525,7 +525,7 @@ describe("createAnthropicTranslator", () => {
     expect(result.envVars.ANTHROPIC_BASE_URL).toBe("https://api.anthropic.com");
   });
 
-  it("includes anthropicVersion env var", () => {
+  it("does not translate anthropicVersion (no such Claude Code env override)", () => {
     const translator = createAnthropicTranslator("p");
     const result = translator.translate({
       providerKind: "anthropic",
@@ -534,10 +534,10 @@ describe("createAnthropicTranslator", () => {
       anthropicVersion: "2025-01-01",
     });
 
-    expect(result.envVars.ANTHROPIC_VERSION).toBe("2025-01-01");
+    expect(result.envVars.ANTHROPIC_VERSION).toBeUndefined();
   });
 
-  it("includes anthropicBeta env var", () => {
+  it("includes anthropicBeta as comma-separated ANTHROPIC_BETAS", () => {
     const translator = createAnthropicTranslator("p");
     const result = translator.translate({
       providerKind: "anthropic",
@@ -546,10 +546,10 @@ describe("createAnthropicTranslator", () => {
       anthropicBeta: ["prompt-caching-tool", "output-128k"],
     });
 
-    expect(result.envVars.ANTHROPIC_BETA).toBe("prompt-caching-tool,output-128k");
+    expect(result.envVars.ANTHROPIC_BETAS).toBe("prompt-caching-tool,output-128k");
   });
 
-  it("includes thinking budget tokens env var", () => {
+  it("includes thinking budget via MAX_THINKING_TOKENS and pins adaptive thinking off", () => {
     const translator = createAnthropicTranslator("p");
     const result = translator.translate({
       providerKind: "anthropic",
@@ -558,11 +558,12 @@ describe("createAnthropicTranslator", () => {
       thinking: { enabled: true, budgetTokens: 4096 },
     });
 
-    expect(result.envVars.ANTHROPIC_THINKING_BUDGET_TOKENS).toBe("4096");
-    expect(result.cliFlags).toContain("--thinking");
+    expect(result.envVars.MAX_THINKING_TOKENS).toBe("4096");
+    expect(result.envVars.CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING).toBe("1");
+    expect(result.cliFlags).not.toContain("--thinking");
   });
 
-  it("includes max_tokens from extraParams", () => {
+  it("includes max_tokens from extraParams as CLAUDE_CODE_MAX_OUTPUT_TOKENS", () => {
     const translator = createAnthropicTranslator("p");
     const result = translator.translate({
       providerKind: "anthropic",
@@ -571,14 +572,31 @@ describe("createAnthropicTranslator", () => {
       extraParams: { max_tokens: 8192, temperature: 0.7 },
     });
 
-    expect(result.envVars.ANTHROPIC_MAX_TOKENS).toBe("8192");
+    expect(result.envVars.CLAUDE_CODE_MAX_OUTPUT_TOKENS).toBe("8192");
 
     const config = JSON.parse(result.configJson);
     expect(config.temperature).toBe(0.7);
     expect(config.max_tokens).toBe(8192);
   });
 
-  it("does not include thinking flag when thinking is not enabled", () => {
+  it("derives Claude Code limits and standalone thinking budget from ModelSpec", () => {
+    const translator = createAnthropicTranslator("p");
+    const result = translator.translate({
+      providerKind: "anthropic",
+      providerId: "p",
+      modelId: "claude-sonnet-4",
+      maxOutputTokens: 64_000,
+      contextWindow: 200_000,
+      thinkingBudgetTokens: 8_192,
+    });
+
+    expect(result.envVars.CLAUDE_CODE_MAX_OUTPUT_TOKENS).toBe("64000");
+    expect(result.envVars.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBe("200000");
+    expect(result.envVars.MAX_THINKING_TOKENS).toBe("8192");
+    expect(result.envVars.CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING).toBe("1");
+  });
+
+  it("does not include thinking env when thinking is not enabled", () => {
     const translator = createAnthropicTranslator("p");
     const result = translator.translate({
       providerKind: "anthropic",
@@ -587,6 +605,8 @@ describe("createAnthropicTranslator", () => {
       thinking: { enabled: false, budgetTokens: 4096 },
     });
 
+    expect(result.envVars.MAX_THINKING_TOKENS).toBeUndefined();
+    expect(result.envVars.CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING).toBeUndefined();
     expect(result.cliFlags).not.toContain("--thinking");
   });
 
@@ -760,7 +780,7 @@ describe("createClaudeCodeAdapter", () => {
   });
 
   describe("buildCommand", () => {
-    it("builds command with model and cwd", () => {
+    it("builds a print-mode command with model and JSON output", () => {
       const adapter = createClaudeCodeAdapter();
       const cmd = adapter.buildCommand("review this", {
         workingDir: "/workspace",
@@ -770,28 +790,104 @@ describe("createClaudeCodeAdapter", () => {
           providerId: "anthropic-prod",
           modelId: "claude-sonnet-4",
         },
+        task: "review this",
       });
 
       expect(cmd[0]).toBe("claude");
+      expect(cmd).toContain("-p");
+      expect(cmd).toContain("--output-format");
+      expect(cmd).toContain("json");
       expect(cmd).toContain("--model");
       expect(cmd).toContain("claude-sonnet-4");
-      expect(cmd).toContain("--cwd");
-      expect(cmd).toContain("/workspace");
+      expect(cmd).not.toContain("--cwd");
+      expect(cmd).not.toContain("--timeout");
+      expect(cmd).not.toContain("--thinking");
     });
 
-    it("passes the thinking flag when Anthropic thinking is enabled", () => {
+    it("passes --effort from defaultReasoningEffort and maps minimal to low", () => {
       const adapter = createClaudeCodeAdapter();
-      const cmd = adapter.buildCommand("review this", {
+      const highCmd = adapter.buildCommand("t", {
         workingDir: "/workspace",
         model: {
           providerKind: "anthropic",
-          providerId: "anthropic-prod",
-          modelId: "claude-sonnet-4",
-          thinking: { enabled: true, budgetTokens: 4096 },
+          providerId: "p",
+          modelId: "m",
+          defaultReasoningEffort: "high",
         },
+        task: "t",
+      });
+      expect(highCmd).toContain("--effort");
+      expect(highCmd).toContain("high");
+
+      const minimalCmd = adapter.buildCommand("t", {
+        workingDir: "/workspace",
+        model: {
+          providerKind: "anthropic",
+          providerId: "p",
+          modelId: "m",
+          reasoningEffort: "minimal",
+        },
+        task: "t",
+      });
+      expect(minimalCmd).toContain("--effort");
+      expect(minimalCmd).toContain("low");
+      expect(minimalCmd).not.toContain("minimal");
+    });
+
+    it("adds --dangerously-skip-permissions only when autoApprove is set", () => {
+      const adapter = createClaudeCodeAdapter();
+      const autoCmd = adapter.buildCommand("t", {
+        workingDir: "/workspace",
+        autoApprove: true,
+        task: "t",
+      });
+      expect(autoCmd).toContain("--dangerously-skip-permissions");
+
+      const manualCmd = adapter.buildCommand("t", {
+        workingDir: "/workspace",
+        task: "t",
+      });
+      expect(manualCmd).not.toContain("--dangerously-skip-permissions");
+    });
+
+    it("wires MCP servers via --mcp-config with strict isolation", () => {
+      const adapter = createClaudeCodeAdapter();
+      const cmd = adapter.buildCommand("t", {
+        workingDir: "/workspace",
+        task: "t",
+        autoApprove: true,
+        mcpServers: [
+          {
+            name: "aicr-output",
+            config: {
+              type: "local",
+              command: ["node", "/app/packages/mcp-output/dist/server.js"],
+              environment: { AICR_OUTPUT_STATE_PATH: "/workspace/agent/.aicr-output-state.json" },
+            },
+          },
+        ],
       });
 
-      expect(cmd).toContain("--thinking");
+      expect(cmd).toContain("--mcp-config");
+      expect(cmd).toContain("--strict-mcp-config");
+      const mcpIdx = cmd.indexOf("--mcp-config");
+      const mcpJson = JSON.parse(cmd[mcpIdx + 1]!);
+      expect(mcpJson.mcpServers["aicr-output"]).toEqual({
+        type: "stdio",
+        command: "node",
+        args: ["/app/packages/mcp-output/dist/server.js"],
+        env: { AICR_OUTPUT_STATE_PATH: "/workspace/agent/.aicr-output-state.json" },
+      });
+    });
+
+    it("omits MCP flags when no MCP servers are configured", () => {
+      const adapter = createClaudeCodeAdapter();
+      const cmd = adapter.buildCommand("t", {
+        workingDir: "/workspace",
+        task: "t",
+      });
+      expect(cmd).not.toContain("--mcp-config");
+      expect(cmd).not.toContain("--strict-mcp-config");
     });
   });
 
@@ -813,7 +909,7 @@ describe("createClaudeCodeAdapter", () => {
       expect(result.envVars.ANTHROPIC_BASE_URL).toBe("https://api.anthropic.com");
     });
 
-    it("returns advanced Anthropic env vars", async () => {
+    it("returns verified Claude Code env vars for advanced model options", async () => {
       const adapter = createClaudeCodeAdapter();
       const result = await adapter.materializeConfig(
         {
@@ -825,17 +921,66 @@ describe("createClaudeCodeAdapter", () => {
           anthropicBeta: ["prompt-caching", "output-128k"],
           thinking: { enabled: true, budgetTokens: 8192 },
           extraParams: { max_tokens: 16384 },
+          contextWindow: 200_000,
         },
         "/tmp/test",
       );
 
-      expect(result.envVars.ANTHROPIC_VERSION).toBe("2025-01-01");
-      expect(result.envVars.ANTHROPIC_BETA).toBe("prompt-caching,output-128k");
-      expect(result.envVars.ANTHROPIC_THINKING_BUDGET_TOKENS).toBe("8192");
-      expect(result.envVars.ANTHROPIC_MAX_TOKENS).toBe("16384");
+      expect(result.envVars.ANTHROPIC_VERSION).toBeUndefined();
+      expect(result.envVars.ANTHROPIC_BETAS).toBe("prompt-caching,output-128k");
+      expect(result.envVars.MAX_THINKING_TOKENS).toBe("8192");
+      expect(result.envVars.CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING).toBe("1");
+      expect(result.envVars.CLAUDE_CODE_MAX_OUTPUT_TOKENS).toBe("16384");
+      expect(result.envVars.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBe("200000");
     });
 
-    it("returns empty config when no API key env", async () => {
+    it("derives CLAUDE_CODE_MAX_OUTPUT_TOKENS from catalog maxOutputTokens", async () => {
+      const adapter = createClaudeCodeAdapter();
+      const result = await adapter.materializeConfig(
+        {
+          providerKind: "anthropic",
+          providerId: "p",
+          modelId: "m",
+          maxOutputTokens: 64000,
+        },
+        "/tmp/test",
+      );
+
+      expect(result.envVars.CLAUDE_CODE_MAX_OUTPUT_TOKENS).toBe("64000");
+    });
+
+    it("maps standalone thinkingBudgetTokens into the Claude Code budget env", async () => {
+      const adapter = createClaudeCodeAdapter();
+      const result = await adapter.materializeConfig(
+        {
+          providerKind: "anthropic",
+          providerId: "p",
+          modelId: "m",
+          thinkingBudgetTokens: 12_288,
+        },
+        "/tmp/test",
+      );
+
+      expect(result.envVars.MAX_THINKING_TOKENS).toBe("12288");
+      expect(result.envVars.CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING).toBe("1");
+    });
+
+    it("sets sandbox hygiene env vars and honors compaction opt-out", async () => {
+      const adapter = createClaudeCodeAdapter();
+      const result = await adapter.materializeConfig(
+        { providerKind: "anthropic", providerId: "p", modelId: "m" },
+        "/tmp/test",
+        { compaction: { auto: false } },
+      );
+
+      expect(result.envVars.DISABLE_AUTOUPDATER).toBe("1");
+      expect(result.envVars.DISABLE_TELEMETRY).toBe("1");
+      expect(result.envVars.DISABLE_ERROR_REPORTING).toBe("1");
+      expect(result.envVars.CLAUDE_CODE_DISABLE_TERMINAL_TITLE).toBe("1");
+      expect(result.envVars.DISABLE_AUTO_COMPACT).toBe("1");
+    });
+
+    it("returns no config files (env and CLI flags carry the configuration)", async () => {
       const adapter = createClaudeCodeAdapter();
       const result = await adapter.materializeConfig(
         {
@@ -846,7 +991,6 @@ describe("createClaudeCodeAdapter", () => {
         "/tmp/test",
       );
 
-      expect(Object.keys(result.envVars)).toHaveLength(0);
       expect(result.configFiles.size).toBe(0);
     });
   });
@@ -864,7 +1008,7 @@ describe("createCopilotCliAdapter", () => {
   });
 
   describe("buildCommand", () => {
-    it("builds gh copilot suggest command", () => {
+    it("builds a programmatic copilot command with prompt and silent output", () => {
       const adapter = createCopilotCliAdapter();
       const cmd = adapter.buildCommand("review this", {
         workingDir: "/workspace",
@@ -873,18 +1017,75 @@ describe("createCopilotCliAdapter", () => {
           providerId: "copilot",
           modelId: "gpt-4o",
         },
+        autoApprove: true,
+        task: "review this",
       });
 
-      expect(cmd[0]).toBe("gh");
-      expect(cmd).toContain("copilot");
-      expect(cmd).toContain("suggest");
-      expect(cmd).toContain("--cwd");
-      expect(cmd).toContain("/workspace");
+      expect(cmd[0]).toBe("copilot");
+      expect(cmd).toContain("--prompt");
+      expect(cmd).toContain("review this");
+      expect(cmd).toContain("--silent");
+      expect(cmd).toContain("--no-ask-user");
+      expect(cmd).toContain("--model=gpt-4o");
+      expect(cmd).toContain("--allow-all-tools");
+      expect(cmd).toContain("--allow-all-paths");
+      expect(cmd).not.toContain("suggest");
+      expect(cmd).not.toContain("--cwd");
+    });
+
+    it("omits permission bypass when autoApprove is not set", () => {
+      const adapter = createCopilotCliAdapter();
+      const cmd = adapter.buildCommand("t", {
+        workingDir: "/workspace",
+        task: "t",
+      });
+      expect(cmd).not.toContain("--allow-all-tools");
+      expect(cmd).not.toContain("--allow-all-paths");
+    });
+
+    it("passes --effort and maps minimal to low", () => {
+      const adapter = createCopilotCliAdapter();
+      const cmd = adapter.buildCommand("t", {
+        workingDir: "/workspace",
+        model: {
+          providerKind: "copilot",
+          providerId: "copilot",
+          modelId: "gpt-5",
+          reasoningEffort: "minimal",
+        },
+        task: "t",
+      });
+      expect(cmd).toContain("--effort=low");
+    });
+
+    it("wires MCP servers via --additional-mcp-config", () => {
+      const adapter = createCopilotCliAdapter();
+      const cmd = adapter.buildCommand("t", {
+        workingDir: "/workspace",
+        task: "t",
+        autoApprove: true,
+        mcpServers: [
+          {
+            name: "aicr-output",
+            config: { type: "local", command: ["node", "/app/packages/mcp-output/dist/server.js"] },
+          },
+        ],
+      });
+
+      const mcpArg = cmd.find((arg) => arg.startsWith("--additional-mcp-config="));
+      expect(mcpArg).toBeDefined();
+      const mcpJson = JSON.parse(mcpArg!.slice("--additional-mcp-config=".length));
+      expect(mcpJson.mcpServers["aicr-output"]).toEqual({
+        type: "local",
+        command: "node",
+        args: ["/app/packages/mcp-output/dist/server.js"],
+        tools: ["*"],
+      });
     });
   });
 
   describe("materializeConfig", () => {
-    it("returns GH_TOKEN env var when apiKeyEnv is set", async () => {
+    it("returns COPILOT_GITHUB_TOKEN env var when apiKeyEnv is set", async () => {
       const adapter = createCopilotCliAdapter();
       const result = await adapter.materializeConfig(
         {
@@ -896,7 +1097,7 @@ describe("createCopilotCliAdapter", () => {
         "/tmp/test",
       );
 
-      expect(result.envVars.GH_TOKEN).toBe("${GITHUB_TOKEN}");
+      expect(result.envVars.COPILOT_GITHUB_TOKEN).toBe("${GITHUB_TOKEN}");
     });
   });
 });
@@ -908,7 +1109,7 @@ describe("createOpencodeAdapter", () => {
   });
 
   describe("buildCommand", () => {
-    it("builds command with auto-approve and model", () => {
+    it("builds command with auto-approve, json format, dir, and model", () => {
       const adapter = createOpencodeAdapter();
       const cmd = adapter.buildCommand("review this", {
         workingDir: "/workspace",
@@ -918,13 +1119,52 @@ describe("createOpencodeAdapter", () => {
           providerId: "test-provider",
           modelId: "gpt-4o",
         },
+        task: "review this",
       });
 
       expect(cmd[0]).toBe("opencode");
+      expect(cmd[1]).toBe("--pure");
       expect(cmd).toContain("run");
       expect(cmd).toContain("--auto");
+      expect(cmd).toContain("--format");
+      expect(cmd).toContain("json");
       expect(cmd).toContain("--model");
-      expect(cmd).toContain("gpt-4o");
+      expect(cmd).toContain("test-provider/gpt-4o");
+      expect(cmd).toContain("--dir");
+      expect(cmd).toContain("/workspace");
+      expect(cmd).not.toContain("--cwd");
+      expect(cmd).not.toContain("--timeout");
+    });
+
+    it("passes --variant from defaultReasoningEffort", () => {
+      const adapter = createOpencodeAdapter();
+      const cmd = adapter.buildCommand("t", {
+        workingDir: "/workspace",
+        model: {
+          providerKind: "openai_compatible",
+          providerId: "p",
+          modelId: "m",
+          defaultReasoningEffort: "high",
+        },
+        task: "t",
+      });
+      expect(cmd).toContain("--variant");
+      expect(cmd).toContain("high");
+    });
+
+    it("does not duplicate an already provider-qualified model id", () => {
+      const adapter = createOpencodeAdapter();
+      const cmd = adapter.buildCommand("t", {
+        workingDir: "/workspace",
+        model: {
+          providerKind: "openai_compatible",
+          providerId: "openrouter",
+          modelId: "openrouter/moonshotai/kimi-k2",
+        },
+        task: "t",
+      });
+      expect(cmd).toContain("openrouter/moonshotai/kimi-k2");
+      expect(cmd).not.toContain("openrouter/openrouter/moonshotai/kimi-k2");
     });
   });
 
@@ -941,19 +1181,38 @@ describe("createOpencodeAdapter", () => {
             modelId: "gpt-4o",
             baseUrl: "https://api.openai.com/v1",
             apiKeyEnv: "OPENAI_API_KEY",
+            extraHeaders: { "X-Tenant": "review" },
             extraParams: { temperature: 0.7 },
+            extraBody: { safety: true },
+            timeoutMs: 120_000,
           },
           tempDir,
         );
 
-        expect(result.configFiles.has(".opencode/config.json")).toBe(true);
-        const configJson = result.configFiles.get(".opencode/config.json") ?? "{}";
+        expect(result.configFiles.has("opencode.json")).toBe(true);
+        const configJson = result.configFiles.get("opencode.json") ?? "{}";
         const parsed = JSON.parse(configJson);
-        expect(parsed.provider).toHaveLength(1);
-        expect(parsed.provider[0]?.name).toBe("openai-prod");
-        expect(parsed.provider[0]?.baseURL).toBe("https://api.openai.com/v1");
-        expect(parsed.provider[0]?.options?.temperature).toBe(0.7);
+        expect(parsed.$schema).toBe("https://opencode.ai/config.json");
+        expect(Array.isArray(parsed.provider)).toBe(false);
+        const provider = parsed.provider["openai-prod"];
+        expect(provider.npm).toBe("@ai-sdk/openai-compatible");
+        expect(provider.name).toBe("openai-prod");
+        expect(provider.options).toEqual({
+          baseURL: "https://api.openai.com/v1",
+          apiKey: "{env:OPENAI_API_KEY}",
+          headers: { "X-Tenant": "review" },
+          timeout: 120_000,
+        });
+        expect(provider.models["gpt-4o"].options).toEqual({
+          temperature: 0.7,
+          safety: true,
+        });
+        expect(parsed.models).toBeUndefined();
         expect(result.envVars.OPENAI_API_KEY).toBe("${OPENAI_API_KEY}");
+        expect(result.envVars.OPENCODE_CONFIG).toBeUndefined();
+        expect(result.envVars.OPENCODE_DISABLE_AUTOUPDATE).toBe("true");
+        expect(result.envVars.OPENCODE_DISABLE_TERMINAL_TITLE).toBe("true");
+        expect(result.envVars.OPENCODE_DISABLE_LSP_DOWNLOAD).toBe("true");
       } finally {
         await rm(tempDir, { recursive: true, force: true });
       }
@@ -967,7 +1226,7 @@ describe("createOpencodeAdapter", () => {
         { compaction: { auto: true, prune: true } },
       );
 
-      const parsed = JSON.parse(result.configFiles.get(".opencode/config.json") ?? "{}");
+      const parsed = JSON.parse(result.configFiles.get("opencode.json") ?? "{}");
       expect(parsed.compaction).toEqual({ auto: true, prune: true });
     });
 
@@ -979,7 +1238,7 @@ describe("createOpencodeAdapter", () => {
         { compaction: { auto: false } },
       );
 
-      const parsed = JSON.parse(result.configFiles.get(".opencode/config.json") ?? "{}");
+      const parsed = JSON.parse(result.configFiles.get("opencode.json") ?? "{}");
       expect(parsed.compaction).toEqual({ auto: false });
     });
   });
@@ -1147,7 +1406,7 @@ describe("materializeRuntimeBundle", () => {
       expect(result.manifest.instructions[0]?.kind).toBe("nearest_agents");
       expect(result.manifest.instructions[1]?.kind).toBe("root_agents");
 
-      const instrFile = await readFile(join(tempDir, "instructions", "src_AGENTS.md"), "utf8");
+      const instrFile = await readFile(join(tempDir, "instructions", "0_src_AGENTS.md"), "utf8");
       expect(instrFile).toBe("# Rules\nNo console.log");
 
       const rootInstrFile = await readFile(join(tempDir, "instructions", "root_agents_1.md"), "utf8");
@@ -1157,7 +1416,7 @@ describe("materializeRuntimeBundle", () => {
     }
   });
 
-  it("materializes skills as files in the skills directory", async () => {
+  it("materializes skills in the canonical .agents/skills/<name>/SKILL.md layout", async () => {
     const tempDir = await mkdtemp(join(tmpdir(), "aicr-bundle-skills-"));
 
     try {
@@ -1185,13 +1444,194 @@ describe("materializeRuntimeBundle", () => {
 
       expect(result.manifest.skills).toHaveLength(2);
       expect(result.manifest.skills[0]?.name).toBe("repository-baseline-validation");
-      expect(result.manifest.skills[1]?.name).toBe("plan-audit");
+      expect(result.manifest.skills[0]?.path).toBe(
+        ".agents/skills/repository-baseline-validation/SKILL.md",
+      );
+      expect(result.manifest.skills[1]?.path).toBe(".agents/skills/plan-audit/SKILL.md");
 
       const skillFile = await readFile(
-        join(tempDir, "skills", ".agents_skills_repository-baseline-validation_SKILL.md"),
+        join(tempDir, ".agents", "skills", "repository-baseline-validation", "SKILL.md"),
         "utf8",
       );
       expect(skillFile).toContain("repository-baseline-validation");
+
+      const kiloJson = JSON.parse(result.configFiles.get(".kilo/kilo.json") ?? "{}");
+      expect(kiloJson.skills).toEqual({ paths: [".agents/skills"] });
+      expect(result.manifest.nativeSurfaces?.skills).toContain(".agents/skills");
+      expect(result.manifest.nativeSurfaces?.skills).toContain("kilo.json:skills.paths");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects skill names that would overwrite the same normalized directory", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-bundle-skill-collision-"));
+
+    try {
+      await expect(materializeRuntimeBundle({
+        adapter: createKiloAdapter(),
+        model: baseModel,
+        workingDir: tempDir,
+        skills: [
+          { name: "Review Helper", description: "first", content: "first" },
+          { name: "review-helper", description: "second", content: "second" },
+        ],
+      })).rejects.toThrow(/collide after normalization/iu);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("materializes one combined AGENTS.md instruction surface for kilo", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-bundle-agentsmd-"));
+
+    try {
+      const adapter = createKiloAdapter();
+      const instructions: RuntimeBundleInstruction[] = [
+        { kind: "nearest_agents", label: "src/AGENTS.md", content: "# Rules\nNo console.log", path: "src/AGENTS.md" },
+        { kind: "root_agents", label: "AGENTS.md", content: "# Root rules" },
+      ];
+
+      const result = await materializeRuntimeBundle({
+        adapter,
+        model: baseModel,
+        workingDir: tempDir,
+        instructions,
+      });
+
+      const agentsMd = await readFile(join(tempDir, "AGENTS.md"), "utf8");
+      expect(agentsMd).toContain("## src/AGENTS.md (source: `src/AGENTS.md`)");
+      expect(agentsMd).toContain("# Rules\nNo console.log");
+      expect(agentsMd).toContain("## AGENTS.md");
+      expect(agentsMd).toContain("# Root rules");
+
+      const kiloJson = JSON.parse(result.configFiles.get(".kilo/kilo.json") ?? "{}");
+      expect(kiloJson.instructions).toBeUndefined();
+      expect(result.manifest.nativeSurfaces?.instructions).toEqual(["AGENTS.md"]);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("materializes CLAUDE.md import and .claude/skills copies for claude-code", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-bundle-claude-native-"));
+
+    try {
+      const adapter = createClaudeCodeAdapter();
+      const result = await materializeRuntimeBundle({
+        adapter,
+        model: {
+          providerKind: "anthropic",
+          providerId: "anthropic",
+          modelId: "claude-sonnet-4",
+        },
+        workingDir: tempDir,
+        instructions: [
+          { kind: "root_agents", label: "AGENTS.md", content: "# Root rules" },
+        ],
+        skills: [
+          {
+            name: "plan-audit",
+            description: "Audit plan vs implementation",
+            content: "---\nname: plan-audit\n---\n\n# Plan audit skill",
+          },
+        ],
+      });
+
+      const claudeMd = await readFile(join(tempDir, "CLAUDE.md"), "utf8");
+      expect(claudeMd).toBe("@AGENTS.md\n");
+
+      const claudeSkill = await readFile(
+        join(tempDir, ".claude", "skills", "plan-audit", "SKILL.md"),
+        "utf8",
+      );
+      expect(claudeSkill).toContain("plan-audit");
+
+      expect(result.manifest.nativeSurfaces?.instructions).toContain("AGENTS.md");
+      expect(result.manifest.nativeSurfaces?.instructions).toContain("CLAUDE.md");
+      expect(result.manifest.nativeSurfaces?.skills).toContain(".claude/skills");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("injects mcp and skill permission without duplicating AGENTS.md in opencode.json", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-bundle-opencode-"));
+
+    try {
+      const adapter = createOpencodeAdapter();
+      const mcpServers: RuntimeBundleMcpServer[] = [
+        {
+          name: "aicr-output",
+          config: { type: "local", command: ["node", "/app/packages/mcp-output/dist/server.js"] },
+        },
+      ];
+
+      const result = await materializeRuntimeBundle({
+        adapter,
+        model: baseModel,
+        workingDir: tempDir,
+        instructions: [
+          { kind: "root_agents", label: "AGENTS.md", content: "# Root rules" },
+        ],
+        skills: [
+          {
+            name: "plan-audit",
+            description: "Audit plan vs implementation",
+            content: "---\nname: plan-audit\n---\n\n# Plan audit skill",
+          },
+        ],
+        mcpServers,
+      });
+
+      const parsed = JSON.parse(result.configFiles.get("opencode.json") ?? "{}");
+      expect(parsed.mcp["aicr-output"]).toEqual({
+        enabled: true,
+        type: "local",
+        command: ["node", "/app/packages/mcp-output/dist/server.js"],
+      });
+      expect(parsed.instructions).toBeUndefined();
+      expect(parsed.permission).toEqual({ skill: { "*": "allow" } });
+      expect(result.manifest.nativeSurfaces?.instructions).toEqual(["AGENTS.md"]);
+      expect(result.manifest.nativeSurfaces?.mcp).toBe("config_file");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("records cli_flag MCP surface for claude-code and none for zoo", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-bundle-mcp-surface-"));
+
+    try {
+      const mcpServers: RuntimeBundleMcpServer[] = [
+        {
+          name: "aicr-output",
+          config: { type: "local", command: ["node", "/app/packages/mcp-output/dist/server.js"] },
+        },
+      ];
+
+      const claudeResult = await materializeRuntimeBundle({
+        adapter: createClaudeCodeAdapter(),
+        model: { providerKind: "anthropic", providerId: "p", modelId: "m" },
+        workingDir: join(tempDir, "claude"),
+        mcpServers,
+      });
+      expect(claudeResult.manifest.nativeSurfaces?.mcp).toBe("cli_flag");
+
+      const zooResult = await materializeRuntimeBundle({
+        adapter: createZooAdapter(),
+        model: baseModel,
+        workingDir: join(tempDir, "zoo"),
+        mcpServers,
+      });
+      expect(zooResult.manifest.nativeSurfaces?.mcp).toBe("none");
+
+      const noMcpResult = await materializeRuntimeBundle({
+        adapter: createKiloAdapter(),
+        model: baseModel,
+        workingDir: join(tempDir, "kilo"),
+      });
+      expect(noMcpResult.manifest.nativeSurfaces?.mcp).toBe("none");
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }
@@ -1326,6 +1766,29 @@ describe("materializeRuntimeBundle", () => {
       });
 
       expect(result.manifest.contextCompaction).toEqual({ enabled: true, mode: "delegated" });
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("records disabled delegated contextCompaction for claude-code opt-out", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-bundle-compaction-cc-off-"));
+
+    try {
+      const adapter = createClaudeCodeAdapter();
+      const result = await materializeRuntimeBundle({
+        adapter,
+        model: {
+          providerKind: "anthropic",
+          providerId: "anthropic",
+          modelId: "claude-sonnet-4",
+        },
+        workingDir: tempDir,
+        compaction: { auto: false },
+      });
+
+      expect(result.manifest.contextCompaction).toEqual({ enabled: false, mode: "delegated" });
+      expect(result.envVars.DISABLE_AUTO_COMPACT).toBe("1");
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }
@@ -1508,9 +1971,9 @@ describe("model metadata injection (M10 catalog)", () => {
   it("opencode injects models block for custom providers", async () => {
     const adapter = createOpencodeAdapter();
     const result = await adapter.materializeConfig(enrichedModel, "/tmp/test");
-    const parsed = JSON.parse(result.configFiles.get(".opencode/config.json") ?? "{}");
-    expect(parsed.models).toBeDefined();
-    const entry = parsed.models["custom-gateway"]?.["gpt-4o"];
+    const parsed = JSON.parse(result.configFiles.get("opencode.json") ?? "{}");
+    expect(parsed.models).toBeUndefined();
+    const entry = parsed.provider["custom-gateway"]?.models?.["gpt-4o"];
     expect(entry.limit.context).toBe(128000);
     expect(entry.limit.output).toBe(16384);
     expect(entry.cost.input).toBe(2.5);
@@ -1524,17 +1987,83 @@ describe("model metadata injection (M10 catalog)", () => {
       { providerKind: "anthropic", providerId: "anthropic", modelId: "claude-sonnet-4-5", contextWindow: 200000 },
       "/tmp/test",
     );
-    const parsed = JSON.parse(result.configFiles.get(".opencode/config.json") ?? "{}");
+    const parsed = JSON.parse(result.configFiles.get("opencode.json") ?? "{}");
     expect(parsed.models).toBeUndefined();
+    expect(parsed.provider.anthropic?.models).toBeUndefined();
   });
 
-  it("claude-code derives ANTHROPIC_MAX_TOKENS from catalog maxOutputTokens when not explicitly set", async () => {
+  it("opencode omits schema-invalid partial limit and cost blocks", async () => {
+    const adapter = createOpencodeAdapter();
+    const result = await adapter.materializeConfig(
+      {
+        providerKind: "openai_compatible",
+        providerId: "custom",
+        modelId: "partial",
+        contextWindow: 128_000,
+        costInputPerMTok: 1,
+      },
+      "/tmp/test",
+    );
+    const parsed = JSON.parse(result.configFiles.get("opencode.json") ?? "{}");
+    const entry = parsed.provider.custom.models.partial;
+    expect(entry.limit).toBeUndefined();
+    expect(entry.cost).toBeUndefined();
+  });
+
+  it("opencode maps custom model capabilities into its native model schema", async () => {
+    const adapter = createOpencodeAdapter();
+    const result = await adapter.materializeConfig(
+      {
+        providerKind: "openai_compatible",
+        providerId: "custom",
+        modelId: "capable",
+        supportsAttachment: true,
+        supportsReasoning: true,
+        supportsTemperature: false,
+        supportsToolCall: true,
+        supportsInterleavedReasoning: true,
+        interleavedReasoningField: "reasoning_content",
+        inputModalities: ["text", "image"],
+        outputModalities: ["text"],
+      },
+      "/tmp/test",
+    );
+    const parsed = JSON.parse(result.configFiles.get("opencode.json") ?? "{}");
+    expect(parsed.provider.custom.models.capable).toMatchObject({
+      attachment: true,
+      reasoning: true,
+      temperature: false,
+      tool_call: true,
+      interleaved: "reasoning_content",
+      modalities: { input: ["text", "image"], output: ["text"] },
+    });
+  });
+
+  it("opencode drops modality values that its config schema does not accept", async () => {
+    const adapter = createOpencodeAdapter();
+    const result = await adapter.materializeConfig(
+      {
+        providerKind: "openai_compatible",
+        providerId: "custom",
+        modelId: "modalities",
+        inputModalities: ["text", "repository"],
+        outputModalities: ["unknown"],
+      },
+      "/tmp/test",
+    );
+    const parsed = JSON.parse(result.configFiles.get("opencode.json") ?? "{}");
+    expect(parsed.provider.custom.models.modalities.modalities).toEqual({
+      input: ["text"],
+    });
+  });
+
+  it("claude-code derives CLAUDE_CODE_MAX_OUTPUT_TOKENS from catalog maxOutputTokens when not explicitly set", async () => {
     const adapter = createClaudeCodeAdapter();
     const result = await adapter.materializeConfig(
       { providerKind: "anthropic", providerId: "anthropic", modelId: "claude", maxOutputTokens: 64000 },
       "/tmp/test",
     );
-    expect(result.envVars.ANTHROPIC_MAX_TOKENS).toBe("64000");
+    expect(result.envVars.CLAUDE_CODE_MAX_OUTPUT_TOKENS).toBe("64000");
   });
 
   it("claude-code prefers explicit extraParams max_tokens over catalog", async () => {
@@ -1549,7 +2078,7 @@ describe("model metadata injection (M10 catalog)", () => {
       },
       "/tmp/test",
     );
-    expect(result.envVars.ANTHROPIC_MAX_TOKENS).toBe("8192");
+    expect(result.envVars.CLAUDE_CODE_MAX_OUTPUT_TOKENS).toBe("8192");
   });
 
   it("runtime bundle manifest records metadataInjection status and catalogSource", async () => {

@@ -281,8 +281,12 @@ AICR 采用**两层上下文管理**，两者互补：
   获取相关代码，不允许仅基于 diff 片段发表猜测性问题。
 - 当无法获取验证所需的上下文时：高影响问题可附带不确定性声明报告；中低影响问题
   应跳过。
-- `buildJsonToolContract()` 和 MCP `aicr.fetch_more_context` 工具描述已对齐
-  这一策略，在 JSON 格式指引和工具元数据层面都要求先读后报。
+- 默认 prompt 复用既有 mission、review policy 和 problem policy，并在单一
+  `<output_discipline>` 段收敛输出克制规则，避免用多个近义段落重复同一要求。
+- problem、summary 与 stdout 工作笔记都以发现的问题为中心，不枚举、不叙述检查过但没
+  问题的部分；无 actionable problem 时 `aicr.skip` 即完整输出。
+- `buildJsonToolContract()`、MCP `aicr.fetch_more_context` 等工具描述已对齐
+  这一策略，在 JSON 格式指引和工具元数据层面都要求先读后报、输出聚焦问题。
 
 #### 3.6.3 Agent Runtime Bundle
 
@@ -303,6 +307,12 @@ AICR 采用**两层上下文管理**，两者互补：
   - 用 stdout tool-call 作为兼容回退
 - MCP 工具名必须来自注册表，而不是从 prompt 文本反推。
 - Runtime bundle 当前默认物化本地 stdio `aicr-output` MCP server；`@aicr/mcp-output` 也支持显式启动的本地 Streamable HTTP endpoint（`--transport http`），复用同一工具注册表和 `.aicr-output-state.json` 合同。
+- 原生接入面接线（2026-08 起，对照各 CLI 当期官方文档核验）：
+  - **instructions**：合并写成工作目录根部 `AGENTS.md`（Kilo/OpenCode/Copilot CLI/Zoo 均原生自动加载）；Claude Code 另写 `CLAUDE.md`（内容为 `@AGENTS.md` 导入）。`instructions/` 保留逐来源副本供 manifest/审计使用，不再通过 Kilo/OpenCode `instructions` glob 重复加载同一内容；归一化后的文件或 skill 路径冲突直接报错，禁止静默覆盖。
+  - **skills**：统一物化为标准布局 `.agents/skills/<name>/SKILL.md`（OpenCode、Copilot CLI 原生发现；Kilo 经 kilo.json `skills.paths` 指向同一目录）；Claude Code 另写 `.claude/skills/<name>/SKILL.md` 副本。opencode.json 加 `permission.skill: {"*": "allow"}` 避免 headless 技能加载被交互确认卡住。
+  - **MCP**：kilo 经 `kilo.json` `mcp` 段、opencode 经 `opencode.json` `mcp` 段接线；Claude Code 经 `--mcp-config <inline-json> --strict-mcp-config`（与用户/项目 MCP 配置隔离）；Copilot CLI 经 `--additional-mcp-config=<inline-json>`。canonical `{type:"local",command:[...]}` 形态由 `packages/agents/src/mcp-config.ts` 转换为各家原生形态（claude stdio 的 `command`/`args` 拆分、copilot local 的 `command`/`args`/`tools`）。
+  - orchestrator 给 `aicr-output` server 注入 `AICR_OUTPUT_STATE_PATH` 绝对路径（native 沙箱用宿主 agent 目录，docker 沙箱固定 `/workspace/agent/...`），状态文件落点不再依赖宿主 CLI 拉起 MCP server 时的 cwd。
+  - manifest 增加 `nativeSurfaces.{instructions,skills,mcp}` 记录实际接线面；无原生面的 adapter（如 zoo 的 MCP）显式记为 `none` 而不是静默走 prompt-only。
 
 ### 3.7 AgentAdapter 与模型翻译
 
@@ -328,6 +338,12 @@ AICR 采用**两层上下文管理**，两者互补：
 - adapter 的输出要么是 MCP 工具调用结果，要么是兼容回退解析后的同构结果。
 - 工具调用与普通文本输出必须分流处理。
 - Zoo Code adapter 对外 `AgentKind` 使用 `zoo`；按 2026-07-02 核验的上游源码，CLI 二进制和项目配置路径仍沿用 `roo` / `.roo` / `.roomodes` 兼容面，因此不要臆造 `.zoo` 路径或 `zoo` 二进制。
+- 各 CLI 调用面（2026-08 对照当期官方文档核验；改动 adapter 前先复核官方 CLI 参考，不要沿用记忆里的 flag）：
+  - **Kilo**：`kilo run --auto --format json --dir <agentDir> [--model p/m] [--variant effort]`；NDJSON 事件流由 orchestrator 提取正文/工具调用/用量/成本。
+  - **OpenCode**：`opencode --pure run --format json --auto --dir <agentDir> [--model provider/model] [--variant effort]`（`--cwd`/`--timeout` 不是 `run` 的 flag，已移除；`--pure` 禁用 runtime bundle 之外的外部插件）；当前 JSON 流的 `text` / `tool_use` 数据位于 `part`，`step_finish` 承载 usage/cost，orchestrator 兼容解析这些事件。项目根 `opencode.json` 由 sandbox cwd/`--dir` 原生发现，不把 host absolute path 写进 `OPENCODE_CONFIG`。
+  - **Claude Code**：`claude -p --output-format json [--model] [--effort] [--dangerously-skip-permissions] [--mcp-config json --strict-mcp-config]`，prompt 经 stdin 管道传入；stdout 的 result 信封由 orchestrator 解出正文/`usage`/`total_cost_usd`/`num_turns`。`--timeout`/`--cwd`/`--thinking` 不是通用会话 flag（已移除）；thinking 预算走 `MAX_THINKING_TOKENS`（自适应推理模型需同时设 `CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING=1`），输出上限走 `CLAUDE_CODE_MAX_OUTPUT_TOKENS`，beta header 走 `ANTHROPIC_BETAS`；`ANTHROPIC_VERSION`/`ANTHROPIC_MAX_TOKENS`/`ANTHROPIC_THINKING_BUDGET_TOKENS`/`ANTHROPIC_BETA` 均不存在于 Claude Code 环境面。沙箱一次性 run 另设 `DISABLE_AUTOUPDATER`/`DISABLE_TELEMETRY`/`DISABLE_ERROR_REPORTING`/`CLAUDE_CODE_DISABLE_TERMINAL_TITLE`。
+  - **Copilot CLI**：面向当前 `copilot` 二进制（`gh copilot suggest` 扩展已弃用）：`copilot --prompt <task> --silent --no-ask-user --no-color --no-auto-update [--model=m] [--effort=e] [--allow-all-tools --allow-all-paths] [--additional-mcp-config=json]`；headless 认证用 `COPILOT_GITHUB_TOKEN`（优先级高于 `GH_TOKEN`/`GITHUB_TOKEN`）。
+  - effort 映射：AICR `minimal` 档对 Claude Code/Copilot CLI 均映射为 `low`（两家都接受 `low/medium/high/xhigh/max`）。
 
 #### 3.7.3 ModelSpec 翻译
 
@@ -803,10 +819,10 @@ models.dev 的 key 是 `<providerId>/<modelId>`（AI SDK 标识）。自定义 p
 
 | Adapter | 是否原生读 models.dev | 转换策略 |
 | --- | --- | --- |
-| **opencode** | 已知 provider 走 models.dev 自动解析；**自定义 `@ai-sdk/openai-compatible` provider 不自动解析** | 自定义 provider 注入 `models.<id>.limit.context`、`limit.output`、`cost.{input,output,cache_read,cache_write}`、`name`；如确需 `OPENCODE_MODELS_PATH`，只能指向 run `agent/` 目录下由 AICR 生成的 models.dev-compatible 小型 `api.json`，不能指向 SQLite/Redis 刷新缓存。命中 models.dev 已知 provider 时跳过注入。 |
+| **opencode** | 已知 provider 走 models.dev 自动解析；**自定义 `@ai-sdk/openai-compatible` provider 不自动解析** | 按官方 schema 生成 `provider.<provider-id>.models.<model-id>`；provider transport/auth 放 `.options`，模型请求参数放 model `.options`。自定义 model 仅在字段完整时注入 `limit.{context,output}` / `cost.{input,output}`，并按已知值注入 attachment/reasoning/temperature/tool-call/interleaved/modalities；命中 models.dev 已知 provider 时跳过重复 catalog metadata。 |
 | **Kilo Code** | 否（Cline/Zoo 同源生态） | OpenAI-compatible 自定义 provider 注入模型参数：`contextWindow`、`maxTokens`（输出上限）、`supportsImages`（视觉）、`supportsComputerUse`、`supportsPromptCache`、`inputPrice`、`outputPrice`、`cacheReadsPrice`、`cacheWritesPrice`。 |
 | **Zoo Code** | 否（未验证到原生 models.dev 读取面） | Zoo Code 当前 `.roo/settings.json` 兼容路径的 `apiConfiguration.openAiCustomModelInfo` 注入 `contextWindow`、`maxTokens`、`supportsImages`、`supportsComputerUse`、`supportsPromptCache`、`inputPrice`、`outputPrice`。 |
-| **Claude Code** | 否（依赖内置 Anthropic 目录 + 环境变量） | 无 file 级模型元数据面；有 `maxOutputTokens` 时设置 `ANTHROPIC_MAX_TOKENS`，上下文窗口/价格依赖 Anthropic 内置目录。能力缺失时在 manifest 显式降级。 |
+| **Claude Code** | 否（依赖内置 Anthropic 目录 + 环境变量） | 无 file 级模型元数据面；有 `maxOutputTokens` 时设置 `CLAUDE_CODE_MAX_OUTPUT_TOKENS`，有 `contextWindow` 时设置 `CLAUDE_CODE_MAX_CONTEXT_TOKENS`（对 gateway/自定义 model ID 修正 Claude Code 假定的上下文窗口），价格依赖 Anthropic 内置目录。能力缺失时在 manifest 显式降级。 |
 | **Copilot CLI** | 否（Copilot 订阅固定目录） | 模型目录由 Copilot 订阅固定，无注入面；记为 N/A 并在 manifest 标注。 |
 
 - 注入只在**自定义/未被工具原生解析**的 provider 路径发生；工具能自己从 models.dev
@@ -836,6 +852,8 @@ models.dev 的 key 是 `<providerId>/<modelId>`（AI SDK 标识）。自定义 p
 - repo-local AI 资产按路径和优先级按需装配，不直接把全量仓库文档塞进系统 prompt。
 - 删除行、旧代码、上下文缺失等高风险区域需要在 prompt 中显式约束，降低 hallucination。
 - 工具合同是真源；prompt 不应单方面扩展未实现的工具名或字段。
+- 输出以发现的问题为中心：无 actionable problem 时 `aicr.skip` 即完整输出；summary 只
+  框定已报问题，不枚举检查过但没问题的文件或方面。
 
 ## 6. 安全模型
 
