@@ -12,13 +12,25 @@ AICR 通过外部 agent CLI（以及内置的直连 LLM 路径）完成代码推
 每次 agent run，AICR 会向 run 的 `agent/` 目录写入完整、隔离的 bundle，并以该目录作为配置根运行 agent。bundle 包含：
 
 - LLM provider/model 配置（已翻译为 agent 的原生格式）。
-- 指向本地 `aicr-output` server 的 MCP 配置。
-- 生效中的 instructions（system prompt、repo-local 规则、已激活技能）。
-- 已激活技能（完整技能文件或精简摘要，取决于适配器能力）。
+- 指向本地 `aicr-output` server 的 MCP 配置（通过 agent 的原生 MCP 接入面接线：配置文件或 CLI flag）。
+- 一份合并后的 `AGENTS.md`（生效中的仓库 instructions）——这是所有受支持 CLI 都会原生发现的 instructions 文件。
+- 已激活技能（标准 Agent Skills 布局 `.agents/skills/<name>/SKILL.md`；需要不同根目录的 CLI 另有适配器原生副本）。
 - 环境变量注入。
-- 一个 `manifest.json`，记录哪些参数被注入、哪些委托给工具原生 catalog、哪些被降级——能力缺口可审计，而不是被静默丢弃。
+- 一个 `manifest.json`，记录哪些参数被注入、哪些委托给工具原生 catalog、哪些被降级，以及哪些原生接入面（instructions/技能/MCP）被接线——能力缺口可审计，而不是被静默丢弃。
 
-orchestrator 每次 run 调用一次 `materializeRuntimeBundle`，而不是修改任何全局配置。每个适配器再把 bundle 翻译成自己的文件布局（如 Kilo 的 `kilo.json`、opencode 的 `.opencode/`、Zoo Code 的 `.roo/`）。
+orchestrator 每次 run 调用一次 `materializeRuntimeBundle`，而不是修改任何全局配置。每个适配器再把 bundle 翻译成自己的文件布局（如 Kilo 的 `kilo.json`、opencode 的 `opencode.json`、Zoo Code 的 `.roo/`）。
+
+## 原生接入面接线
+
+instructions、技能和 `aicr-output` MCP server 会接线到各 agent 的原生发现面；run manifest 在 `nativeSurfaces` 下记录接线情况：
+
+| 接入面 | kilo | opencode | claude-code | copilot-cli | zoo |
+| --- | --- | --- | --- | --- | --- |
+| Instructions | `AGENTS.md`（自动加载） | `AGENTS.md`（自动加载） | 经 `CLAUDE.md` `@AGENTS.md` 导入 | `AGENTS.md`（自动加载） | `AGENTS.md` |
+| 技能 | `kilo.json` `skills.paths` → `.agents/skills` | `.agents/skills/<name>/SKILL.md` + `permission.skill` 放行 | `.claude/skills/<name>/SKILL.md` | `.agents/skills/<name>/SKILL.md` | `.agents/skills/<name>/SKILL.md`（资源） |
+| `aicr-output` MCP | `kilo.json` `mcp` | `opencode.json` `mcp` | `--mcp-config` + `--strict-mcp-config` CLI flag | `--additional-mcp-config` CLI flag | 无（仅 prompt 注入） |
+
+MCP 输出状态文件路径通过 server 环境里的 `AICR_OUTPUT_STATE_PATH` 钉死，因此无论宿主 CLI 以哪个工作目录拉起 MCP server，orchestrator 都能可靠收集上报的问题与摘要。
 
 ## ModelSpec 翻译
 
@@ -50,9 +62,9 @@ Kilo 只为声明了 `contextWindow` 的 model 自动压缩。如果禁用了 mo
 
 ### `opencode`
 
-opencode 对已知 provider 原生走 models.dev 解析。对于 opencode 无法解析的自定义 `@ai-sdk/openai-compatible` provider，AICR 会向 model 块注入 `limit.context`、`limit.output`、按 token 的 `cost` 以及 `name`。当 provider 命中 models.dev 已知 provider 时跳过注入，避免双写冲突。
+opencode 对已知 provider 原生走 models.dev 解析。对于 opencode 无法解析的自定义 `@ai-sdk/openai-compatible` provider，AICR 按 `provider.<provider-id>.models.<model-id>` 组织配置，并注入 schema 要求字段完整的 `limit` / `cost` 以及已知能力。当 provider 命中 models.dev 已知 provider 时跳过重复 catalog metadata，避免双写冲突。
 
-opencode 的原生压缩（`compaction.{auto,prune}`）写入 `.opencode/config.json`。
+agent 以 `opencode --pure run --format json --auto --dir <agent-dir> --model provider/model` 运行，解析 `part` 包裹的 `text` / `tool_use` 与 `step_finish` usage 事件。配置写入工作目录根部的 `opencode.json`，由 sandbox cwd/`--dir` 原生发现，避免把 host absolute path 带进容器；provider transport/auth 放在 provider `options`，模型请求参数放在 model `options`，API key 使用 `{env:NAME}` 引用。文件同时携带 `compaction.{auto,prune}`、`aicr-output` 的 `mcp` 段和 `permission.skill` 放行规则。逐来源 instruction 文件仅供审计，合并后的 `AGENTS.md` 是唯一生效的 instruction 面。`--pure` 禁用外部插件，一次性 run 同时关闭更新、标题和 LSP 下载副作用。
 
 ### `zoo`（Zoo Code）
 
@@ -62,13 +74,19 @@ Zoo Code 不读 models.dev，因此 AICR 会向 `apiConfiguration.openAiCustomMo
 
 ### `claude-code`（Claude Code）
 
-Claude Code 依赖内置的 Anthropic catalog 和环境变量；没有文件级 model-metadata 接入面。当解析出的 `ModelSpec` 有 `maxOutputTokens` 时，AICR 据此派生 `ANTHROPIC_MAX_TOKENS`。context window 和定价委托给 Claude Code 的原生 catalog。能力缺口在 manifest 中记录为 `delegated`。
+agent 以 headless 方式运行：`claude -p --output-format json`（print 模式，评审 prompt 经 stdin 管道传入），沙箱内加 `--dangerously-skip-permissions`，并通过 `--mcp-config`/`--strict-mcp-config` 把 `aicr-output` MCP server 与用户/项目级 MCP 配置隔离接线。JSON 结果信封让 orchestrator 拿到最终答复、逐轮 token 用量、USD 成本和轮数。reasoning effort 映射到 `--effort`（AICR 的 `minimal` 档映射为 `low`）。
 
-Claude Code 默认自动压缩，因此 AICR 不注入额外的压缩配置。
+Claude Code 依赖内置的 Anthropic catalog 和环境变量；没有文件级 model-metadata 接入面。环境变量翻译遵循当前的 Claude Code env-var 合同：`maxOutputTokens`（或显式 `extraParams.max_tokens`）派生 `CLAUDE_CODE_MAX_OUTPUT_TOKENS`，`contextWindow` 派生 `CLAUDE_CODE_MAX_CONTEXT_TOKENS`，显式 thinking 预算设置 `MAX_THINKING_TOKENS` 并加 `CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING`（否则固定预算在自适应推理模型上会被忽略），beta header 走 `ANTHROPIC_BETAS`。一次性沙箱 run 会禁用自更新、遥测和 print 模式的标题生成。context window 和定价委托给 Claude Code 的原生 catalog；能力缺口在 manifest 中记录为 `delegated`。
+
+instructions 经生成的 `CLAUDE.md`（`@AGENTS.md` 导入共享 instructions 文件）送达 Claude Code，技能物化到 `.claude/skills/<name>/SKILL.md`。
+
+Claude Code 默认自动压缩，因此 AICR 不注入额外的压缩配置（显式关闭时设置 `DISABLE_AUTO_COMPACT`）。
 
 ### `copilot-cli`（Copilot CLI）
 
-Copilot CLI 使用其订阅固定的 model catalog。没有注入接入面，对话级上下文管理为 `not_applicable`。AICR 在 manifest 中把模型记录为 `not_applicable`。
+适配器面向当前的 GitHub Copilot CLI（`copilot` 二进制），而不是已弃用的 `gh copilot suggest` 扩展。agent 以编程模式运行：`copilot --prompt <task> --silent --no-ask-user --allow-all-tools --allow-all-paths`，可选 `--model`、`--effort`（reasoning effort），`aicr-output` MCP server 通过 `--additional-mcp-config` 按 run 接线。headless 认证使用 `COPILOT_GITHUB_TOKEN`（CLI 优先级最高的认证环境变量）。
+
+Copilot CLI 使用其订阅固定的 model catalog。没有模型元数据注入接入面，对话级上下文管理为 `not_applicable`（CLI 接近 token 上限时自动压缩）。AICR 在 manifest 中把模型记录为 `not_applicable`。
 
 ## 直连 LLM 回退（不是 agent kind）
 
@@ -79,10 +97,10 @@ Copilot CLI 使用其订阅固定的 model catalog。没有注入接入面，对
 
 | 适配器 | 是否原生读 models.dev | 注入策略 |
 | --- | --- | --- |
-| opencode | 已知 provider 是；自定义 OpenAI-compatible provider 否 | 仅对自定义 provider 注入 `limit`/`cost`/`name` |
+| opencode | 已知 provider 是；自定义 OpenAI-compatible provider 否 | 使用 schema 原生 provider/model 嵌套；仅对自定义 provider 注入完整 `limit`/`cost` 对和已知能力 |
 | kilo | 否 | 注入 `contextWindow`、`maxTokens`、`supportsImages`、`supportsComputerUse`、`supportsPromptCache`、定价 |
 | zoo | 否 | 注入 `.roo/settings.json` 的 `openAiCustomModelInfo` |
-| claude-code | 否（内置 Anthropic catalog） | 派生 `ANTHROPIC_MAX_TOKENS`；其余委托 |
+| claude-code | 否（内置 Anthropic catalog） | 派生输出/上下文限制与显式 thinking budget；其余委托 |
 | copilot-cli | 否（固定订阅 catalog） | 不注入；记录为 N/A |
 
 注入只发生在自定义或未被工具原生解析的 provider 路径；当工具自己能从 models.dev 解析时，AICR 跳过注入以避免双写冲突。
@@ -98,8 +116,8 @@ Copilot CLI 使用其订阅固定的 model catalog。没有注入接入面，对
 | Agent | 适用场景 | 注意事项 |
 | --- | --- | --- |
 | `kilo`（默认） | 经过验证、受支持的默认路径，端到端测试覆盖和生产硬化最充分。 | 需要声明 `contextWindow` 才能自动压缩——启用 `llm.model_catalog` 或在 overrides 里设置 `context_window`，否则大 PR 会溢出。 |
-| `claude-code` | 已以 Claude Code 为标准的团队；Anthropic 原生 model catalog。 | 默认自动压缩（委托给 Claude Code 内置行为）。catalog 只派生 `ANTHROPIC_MAX_TOKENS`，其余委托给 Claude Code 原生 catalog。 |
-| `opencode` | 开源优先的部署；自定义 OpenAI-compatible provider。 | 已知 provider 原生从 models.dev 解析。自定义 OpenAI-compatible provider 会注入 `limit`/`cost`，但需显式 provider 配置。 |
+| `claude-code` | 已以 Claude Code 为标准的团队；Anthropic 原生 model catalog。 | 默认自动压缩（委托给 Claude Code 内置行为）。AICR 派生输出/上下文限制与显式 thinking budget，其余委托原生 catalog。 |
+| `opencode` | 开源优先的部署；自定义 OpenAI-compatible provider。 | 已知 provider 原生从 models.dev 解析；自定义 provider 需要显式且符合 schema 的 provider/model 配置。 |
 | `zoo` | 以 Zoo Code 为主力工具的团队。 | 始终需要注入 `contextWindow`/`maxTokens`/`supportsImages`/价格——启用 model catalog。 |
 | `copilot-cli` | 使用 GitHub Copilot 订阅、希望零单次 LLM 成本的环境。 | 使用订阅固定的 catalog；不注入模型元数据。无对话级自动压缩接入面（`not_applicable`）。 |
 

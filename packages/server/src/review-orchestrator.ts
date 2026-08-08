@@ -179,8 +179,9 @@ export interface ReviewOrchestrationWebhookUsage {
  * - `agent_stdout`: aggregated from the external agent (kilo/opencode/...) step-finish events
  *   parsed on stdout. Best-effort; may undercount if the agent emits no usage events.
  * - `mixed`: the run used both agent stdout usage and a direct-LLM repair fallback.
- * Omitted when no real usage was captured (agent path without parseable token events);
- * callers should then fall back to `promptTokenEstimate` for a local estimate.
+ * Omitted when no real usage was captured (agent path without parseable token events).
+ * `promptTokenEstimate` remains a separate planning metric and must not be presented
+ * as billable usage.
  */
 export type ReviewOrchestrationUsageSource = "llm_gateway" | "agent_stdout" | "mixed";
 
@@ -483,7 +484,9 @@ function buildJsonToolContract(): string {
     "If a needed file is not materialized or the MCP tool returns a pending/empty context response, stop making a final no-problem claim; request the concrete file through aicr.fetch_more_context so AICR can pull it from VCS and rerun the final pass.",
     "Never ask the user to provide diff or source context; request it through aicr.fetch_more_context with a concrete path and reason.",
     "Do not speculate. If you have not read the surrounding code, fetch it first. Every reported problem must be backed by code you have actually read.",
-    "If there are no actionable problems, or the changed file has no reviewable code, emit aicr.skip with a concise reason such as lgtm or no_reviewable_code.",
+    "Diff hunks may end at an opening brace or a statement that starts a new scope; treat that as a visible scope boundary, not as incomplete code.",
+    "Focus all output on validated problems. Do not narrate files, hunks, or areas that were checked and found correct — not in tool inputs, not in summaries, and not in notes.",
+    "If there are no actionable problems, or the changed file has no reviewable code, emit aicr.skip with a concise reason such as lgtm or no_reviewable_code; that skip is the complete output.",
     "If you found any actionable problem, emit one aicr.report_problem per problem; never mention found-problem counts only in a summary.",
     "When useful, add a short title to aicr.publish_summary input.title so summary channels can render a concise heading.",
     "Preferred shape:",
@@ -711,7 +714,7 @@ function extractKiloJsonStreamContent(stdout: string): KiloStreamExtractionResul
       } else if (event.type === "error") {
         const errorData = event.error as Record<string, unknown> | undefined;
         const message = typeof errorData?.message === "string" ? errorData.message : JSON.stringify(event.error);
-        throw new Error(`Kilo agent error: ${message}`);
+        throw new Error(`Agent stream error: ${message}`);
       } else if (
         event.type === "step-finish"
         || event.type === "step_finish"
@@ -735,23 +738,30 @@ function extractKiloJsonStreamContent(stdout: string): KiloStreamExtractionResul
         } catch {
           // Not an aicr-* tool (e.g. read/glob/edit); ignore — only aicr tools are review outputs.
         }
-      } else if (
-        (event.type === "tool_call" || event.type === "tool_use")
-        && typeof event.name === "string"
-        && event.input !== undefined
-      ) {
+      } else if (event.type === "tool_call" || event.type === "tool_use") {
+        // Current OpenCode JSON mode emits `{type:"tool_use", part:{tool,state}}`;
+        // older OpenCode/Kilo streams used top-level `name` and `input` fields.
+        const part = event.part as Record<string, unknown> | undefined;
+        const state = part?.state as Record<string, unknown> | undefined;
+        const toolName = typeof event.name === "string"
+          ? event.name
+          : typeof part?.tool === "string"
+            ? part.tool
+            : undefined;
+        const input = event.input ?? state?.input;
+        if (!toolName || input === undefined) continue;
         try {
-          toolCallEvents.push({ name: normalizeToolName(event.name), input: event.input });
+          toolCallEvents.push({ name: normalizeToolName(toolName), input });
         } catch {
           console.warn(JSON.stringify({
             level: "warn",
-            msg: "kilo stream tool call has unsupported name",
-            toolName: event.name,
+            msg: "agent stream tool call has unsupported name",
+            toolName,
           }));
         }
       }
     } catch (error) {
-      if (error instanceof Error && error.message.startsWith("Kilo agent error:")) {
+      if (error instanceof Error && error.message.startsWith("Agent stream error:")) {
         throw error;
       }
     }
@@ -789,6 +799,77 @@ function extractKiloJsonStreamContent(stdout: string): KiloStreamExtractionResul
   };
 }
 
+interface ClaudeResultExtraction {
+  readonly content: string;
+  readonly usage?: ChatCompletionUsage;
+  readonly costUsd?: number;
+  readonly numTurns?: number;
+  readonly sessionId?: string;
+}
+
+/**
+ * Unwraps the Claude Code `--output-format json` result envelope emitted by print
+ * mode (`claude -p`). Schema verified against code.claude.com/docs/en/cli-reference
+ * (2026-08): { type: "result", subtype, is_error, result, session_id, num_turns,
+ * total_cost_usd, duration_ms, usage: { input_tokens, output_tokens,
+ * cache_read_input_tokens, cache_creation_input_tokens, ... } }.
+ * Non-envelope stdout (older CLI, or plain text fallback) passes through unchanged
+ * so the downstream summary extraction still applies.
+ */
+function extractClaudeJsonResult(stdout: string): ClaudeResultExtraction {
+  const trimmed = stdout.trim();
+  if (!trimmed) {
+    return { content: stdout };
+  }
+  let envelope: Record<string, unknown>;
+  try {
+    envelope = JSON.parse(trimmed) as Record<string, unknown>;
+  } catch {
+    return { content: stdout };
+  }
+  if (envelope.type !== "result" || typeof envelope.result !== "string") {
+    return { content: stdout };
+  }
+  if (envelope.is_error === true) {
+    throw new Error(`Claude Code agent error: ${envelope.result}`);
+  }
+
+  const usageRaw = envelope.usage as Record<string, unknown> | undefined;
+  const readTokens = (key: string): number => {
+    const value = usageRaw?.[key];
+    return typeof value === "number" && Number.isFinite(value) && value >= 0 ? Math.trunc(value) : 0;
+  };
+  const input = readTokens("input_tokens");
+  const output = readTokens("output_tokens");
+  const cacheRead = readTokens("cache_read_input_tokens");
+  const cacheCreation = readTokens("cache_creation_input_tokens");
+  const promptTokens = input + cacheRead + cacheCreation;
+  const usage: ChatCompletionUsage | undefined = promptTokens > 0 || output > 0
+    ? {
+      promptTokens,
+      completionTokens: output,
+      totalTokens: promptTokens + output,
+      ...(cacheRead > 0 ? { cachedPromptTokens: cacheRead } : {}),
+      ...(cacheCreation > 0 ? { cacheCreationTokens: cacheCreation } : {}),
+    }
+    : undefined;
+
+  const numTurns = typeof envelope.num_turns === "number" && Number.isFinite(envelope.num_turns)
+    ? Math.trunc(envelope.num_turns)
+    : undefined;
+  const costUsd = typeof envelope.total_cost_usd === "number" && Number.isFinite(envelope.total_cost_usd)
+    ? envelope.total_cost_usd
+    : undefined;
+
+  return {
+    content: envelope.result,
+    ...(usage ? { usage } : {}),
+    ...(costUsd !== undefined ? { costUsd } : {}),
+    ...(numTurns !== undefined ? { numTurns } : {}),
+    ...(typeof envelope.session_id === "string" ? { sessionId: envelope.session_id } : {}),
+  };
+}
+
 async function runAgentReview(
   sourceRoot: string,
   task: string,
@@ -812,6 +893,26 @@ async function runAgentReview(
       tmpDir: dirs.tmpDir,
     });
     hostAgentDir = materializedFs.agentDir;
+    // Pin the MCP output-state file to an absolute sandbox-visible path so the
+    // aicr-output server lands it in the shared agent workspace regardless of the
+    // cwd the host CLI spawns MCP servers with (kilo/opencode inherit the session
+    // cwd; Claude Code and Copilot CLI do not guarantee that).
+    const sandboxAgentDir = agentWorkingDirForSandbox(sandbox, materializedFs.agentDir);
+    const outputStatePath = sandbox.kind === "native"
+      ? join(sandboxAgentDir, ".aicr-output-state.json")
+      : `${sandboxAgentDir}/.aicr-output-state.json`;
+    const mcpServers = bundleContext?.mcpServers?.map((server) => server.name === "aicr-output"
+      ? {
+        name: server.name,
+        config: {
+          ...server.config,
+          environment: {
+            ...(server.config.environment as Readonly<Record<string, string>> | undefined),
+            AICR_OUTPUT_STATE_PATH: outputStatePath,
+          },
+        },
+      }
+      : server);
     const bundle = await materializeRuntimeBundle({
       adapter: agentAdapter,
       model: options.model,
@@ -819,7 +920,7 @@ async function runAgentReview(
       ...(bundleContext?.instructions ? { instructions: bundleContext.instructions } : {}),
       ...(bundleContext?.skills ? { skills: bundleContext.skills } : {}),
       ...(bundleContext?.mcpTools ? { mcpTools: bundleContext.mcpTools } : {}),
-      ...(bundleContext?.mcpServers ? { mcpServers: bundleContext.mcpServers } : {}),
+      ...(mcpServers ? { mcpServers } : {}),
       ...(bundleContext?.compaction ? { compaction: bundleContext.compaction } : {}),
       ...(bundleContext?.runId ? { runId: bundleContext.runId } : {}),
     });
@@ -829,6 +930,7 @@ async function runAgentReview(
       model: options.model,
       autoApprove: true,
       task,
+      ...(mcpServers ? { mcpServers } : {}),
     };
     const command = agentAdapter.buildCommand(task, agentSpawnOptions);
     const stdin = agentAdapter.buildStdin
@@ -866,14 +968,18 @@ async function runAgentReview(
     );
   }
 
-  const isKiloAgent = agentAdapter.kind === "kilo";
+  // kilo and opencode emit the same NDJSON event stream (`--format json`; kilo is an
+  // opencode fork), so both go through the shared stream extraction. claude-code
+  // emits a single JSON result envelope from `claude -p --output-format json`.
+  const isNdjsonStreamAgent = agentAdapter.kind === "kilo" || agentAdapter.kind === "opencode";
+  const isClaudeEnvelopeAgent = agentAdapter.kind === "claude-code";
   const rawStdout = agentResult.stdout;
   let content: string;
   let kiloToolCalls: readonly ToolCallEnvelope[] = [];
   let agentUsage: ChatCompletionUsage | undefined;
   let agentCostUsd: number | undefined;
   let agentStepCount = 0;
-  if (isKiloAgent) {
+  if (isNdjsonStreamAgent) {
     let extraction: KiloStreamExtractionResult;
     try {
       extraction = extractKiloJsonStreamContent(rawStdout);
@@ -895,21 +1001,59 @@ async function runAgentReview(
     agentStepCount = extraction.stepCount;
     if (Object.keys(extraction.eventCounts).length > 0 || kiloToolCalls.length > 0 || agentStepCount > 0) {
       if (options.logThinking !== false) {
-      console.info(JSON.stringify({
-        level: "info",
-        msg: "kilo agent stream stats",
-        eventCounts: extraction.eventCounts,
-        streamToolCallCount: kiloToolCalls.length,
-        usageCaptured: agentUsage !== undefined,
-        stepCount: agentStepCount,
-        ...(agentUsage ? {
-          tokensIn: agentUsage.promptTokens,
-          tokensOut: agentUsage.completionTokens,
-          tokensTotal: agentUsage.totalTokens,
-        } : {}),
-        stdoutLength: rawStdout.length,
-        extractedContentLength: content.length,
-      }));
+        console.info(JSON.stringify({
+          level: "info",
+          msg: "agent stream stats",
+          agent: agentAdapter.kind,
+          eventCounts: extraction.eventCounts,
+          streamToolCallCount: kiloToolCalls.length,
+          usageCaptured: agentUsage !== undefined,
+          stepCount: agentStepCount,
+          ...(agentUsage ? {
+            tokensIn: agentUsage.promptTokens,
+            tokensOut: agentUsage.completionTokens,
+            tokensTotal: agentUsage.totalTokens,
+          } : {}),
+          stdoutLength: rawStdout.length,
+          extractedContentLength: content.length,
+        }));
+      }
+    }
+  } else if (isClaudeEnvelopeAgent) {
+    let extraction: ClaudeResultExtraction;
+    try {
+      extraction = extractClaudeJsonResult(rawStdout);
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      if (isContextOverflowMessage(msg)) {
+        throw new AgentContextOverflowError(
+          agentAdapter.kind,
+          msg,
+          detectContextOverflowDetails(msg),
+        );
+      }
+      throw error;
+    }
+    content = extraction.content;
+    agentUsage = extraction.usage;
+    agentCostUsd = extraction.costUsd;
+    agentStepCount = extraction.numTurns ?? 0;
+    if (agentUsage || agentStepCount > 0) {
+      if (options.logThinking !== false) {
+        console.info(JSON.stringify({
+          level: "info",
+          msg: "agent result envelope stats",
+          agent: agentAdapter.kind,
+          usageCaptured: agentUsage !== undefined,
+          numTurns: agentStepCount,
+          ...(extraction.sessionId ? { sessionId: extraction.sessionId } : {}),
+          ...(agentUsage ? {
+            tokensIn: agentUsage.promptTokens,
+            tokensOut: agentUsage.completionTokens,
+            tokensTotal: agentUsage.totalTokens,
+          } : {}),
+          stdoutLength: rawStdout.length,
+        }));
       }
     }
   } else {
@@ -931,14 +1075,14 @@ async function runAgentReview(
           ...(typeof parsed.skipReason === "string" ? { skipReason: parsed.skipReason } : {}),
         };
         if (options.logThinking !== false) {
-        console.info(JSON.stringify({
-          level: "info",
-          msg: "read MCP output state from agent workspace",
-          problemCount: mcpState.problems.length,
-          summaryCount: mcpState.summaries.length,
-          contextRequestCount: mcpState.contextRequests.length,
-          hasSkipReason: mcpState.skipReason !== undefined,
-        }));
+          console.info(JSON.stringify({
+            level: "info",
+            msg: "read MCP output state from agent workspace",
+            problemCount: mcpState.problems.length,
+            summaryCount: mcpState.summaries.length,
+            contextRequestCount: mcpState.contextRequests.length,
+            hasSkipReason: mcpState.skipReason !== undefined,
+          }));
         }
       }
     } catch {

@@ -91,10 +91,11 @@ How the lookup behaves:
   to a specific models.dev entry.
 
 Per-tool config translation differs by agent: opencode resolves known providers
-from models.dev natively (custom OpenAI-compatible providers get `limit`/`cost`
-injected); Kilo Code and Zoo Code always need `contextWindow` / `maxTokens` /
-`supportsImages` / pricing injected; Claude Code derives `ANTHROPIC_MAX_TOKENS`
-from the catalog and delegates the rest to its built-in Anthropic catalog;
+from models.dev natively; custom providers use its schema-native
+`provider.<provider>.models.<model>` structure and receive complete `limit` /
+`cost` pairs plus known capabilities. Kilo Code and Zoo Code need their native
+model-info fields injected. Claude Code derives output/context limits and
+explicit thinking budgets, then delegates the rest to its built-in catalog;
 Copilot CLI uses its subscription's fixed catalog and gets no injection. Each
 runtime bundle `manifest.json` records whether metadata was `injected`,
 `delegated` to the tool's native catalog, or `not_applicable`.
@@ -115,7 +116,7 @@ PRs and changelists:
    by default) injects each agent CLI's native conversation-compaction settings so
    long-running reviews summarize their own history before hitting the limit:
    - **Kilo**: `compaction.{auto,threshold_percent,prune}` in `kilo.json`.
-   - **opencode**: `compaction.{auto,prune}` in `.opencode/config.json`.
+   - **opencode**: `compaction.{auto,prune}` in `opencode.json` (working-directory root).
    - **Zoo**: `autoCondenseContext` / `condenseContextPercentThreshold` in Zoo Code's current `.roo/settings.json` compatibility path.
    - **Claude Code**: auto-compacts by default (no config injected).
    - **Copilot CLI**: not applicable.
@@ -234,7 +235,7 @@ Kilo Code is the primary deployment-test agent for AICodeReviewer. The repeatabl
 Use Kilo CLI for repeatable smoke tests after the Kilo Code check:
 
 ```bash
-kilo run --auto --model <model-id> --cwd <workspace-agent-dir> --timeout 600
+kilo run --auto --format json --model <model-id> --dir <workspace-agent-dir>
 ```
 
 The CLI smoke test must use the same model id and provider that AICR translates from `llm.providers` and `llm.fallback_chain`. If the CLI succeeds but Kilo Code fails, treat the deployment as not verified.

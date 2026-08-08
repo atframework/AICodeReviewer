@@ -1,5 +1,6 @@
 import type { ModelSpec } from "@aicr/llm";
 
+import { toCopilotCliMcpServersJson } from "./mcp-config.js";
 import type {
 	AgentAdapter,
 	AgentDetectResult,
@@ -13,7 +14,7 @@ export interface CopilotCliAdapterOptions {
 	readonly binary?: string;
 }
 
-const COPILOT_CLI_BINARY = "gh";
+const COPILOT_CLI_BINARY = "copilot";
 const COPILOT_CLI_VERSION_ARGS = ["--version"];
 
 async function detectBinary(
@@ -46,16 +47,54 @@ export function createCopilotCliAdapter(options: CopilotCliAdapterOptions = {}):
 			return detectBinary(binary, COPILOT_CLI_VERSION_ARGS);
 		},
 
+		// Programmatic mode (`-p/--prompt`) runs one prompt to completion and prints the
+		// agent response on stdout. Flag surface verified against the GitHub Copilot CLI
+		// command reference (docs.github.com, 2026-08); the legacy `gh copilot suggest`
+		// extension this adapter previously shelled out to is deprecated.
 		buildCommand(task: string, spawnOptions: AgentSpawnOptions): readonly string[] {
-			const args: string[] = [binary, "copilot", "suggest", "--target", "shell"];
+			const args: string[] = [
+				binary,
+				"--prompt", task,
+				// Response-only stdout so the orchestrator can treat stdout as the final
+				// answer without scraping usage statistics or banners.
+				"--silent",
+				// Autonomous run: the review agent must not stop to ask the user questions.
+				"--no-ask-user",
+				"--no-color",
+				"--no-auto-update",
+			];
 
 			if (spawnOptions.model?.modelId) {
-				args.push("--model", spawnOptions.model.modelId);
+				args.push(`--model=${spawnOptions.model.modelId}`);
 			}
 
-			args.push("--cwd", spawnOptions.workingDir);
+			// Copilot CLI --effort accepts low/medium/high/xhigh/max; AICR's "minimal"
+			// tier has no Copilot equivalent and maps to "low".
+			const effort = spawnOptions.model?.defaultReasoningEffort ?? spawnOptions.model?.reasoningEffort;
+			if (effort) {
+				args.push(`--effort=${effort === "minimal" ? "low" : effort}`);
+			}
+
+			if (spawnOptions.autoApprove) {
+				// `--allow-all-tools` is documented as required for programmatic use.
+				// URLs stay confirmation-gated: the review agent's context tools are
+				// served by the local MCP server, not the network.
+				args.push("--allow-all-tools", "--allow-all-paths");
+			}
+
+			const mcpConfigJson = spawnOptions.mcpServers && spawnOptions.mcpServers.length > 0
+				? toCopilotCliMcpServersJson(spawnOptions.mcpServers)
+				: undefined;
+			if (mcpConfigJson) {
+				args.push(`--additional-mcp-config=${mcpConfigJson}`);
+			}
 
 			return args;
+		},
+
+		// The prompt travels as the --prompt argument; nothing is piped.
+		buildStdin(): string {
+			return "";
 		},
 
 		async materializeConfig(
@@ -66,7 +105,9 @@ export function createCopilotCliAdapter(options: CopilotCliAdapterOptions = {}):
 			const envVars: Record<string, string> = {};
 
 			if (model.apiKeyEnv) {
-				envVars.GH_TOKEN = `\${${model.apiKeyEnv}}`;
+				// Highest-precedence Copilot CLI auth env for headless use
+				// (COPILOT_GITHUB_TOKEN > GH_TOKEN > GITHUB_TOKEN per the CLI reference).
+				envVars.COPILOT_GITHUB_TOKEN = `\${${model.apiKeyEnv}}`;
 			}
 
 			return {

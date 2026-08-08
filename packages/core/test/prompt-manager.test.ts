@@ -546,6 +546,9 @@ describe("assemblePrompt", () => {
     });
 
     expect(output.systemPrompt).toContain("<mission>");
+    expect(output.systemPrompt).toContain("<output_discipline>");
+    expect(output.systemPrompt).toContain("Do not enumerate or narrate files");
+    expect(output.systemPrompt).toContain("`aicr.skip(...)` is the");
     expect(output.systemPrompt).toContain("<tool_protocol>");
     expect(output.systemPrompt).toContain("<task_context>");
     expect(output.systemPrompt).toContain("Changed files: src/app.ts");

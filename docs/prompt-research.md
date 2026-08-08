@@ -1,4 +1,4 @@
-# 代码评审默认提示词调研（M0.5 归档）
+# 代码评审默认提示词调研（M0.5 归档，2026-08 复核）
 
 ## 目标
 
@@ -13,6 +13,12 @@
 `prompts/system/code-reviewer.system.md` 提供一份可审查、可追溯、可迭代的设计依据。
 
 M0.5 的阶段摘要已迁移到 `docs/ai/milestones/M0.5.md`；`Plan.md` 现在只保留路线图级摘要，不再承载这份调研的完整历史正文。
+
+2026-08-09 复核：针对 Augment Code Review agent 设计、Claude Code 官方最佳实践、
+Anthropic agent 工具设计、OpenAI Codex 评审规则、Qodo PR-Agent 现行 prompt 与
+Agent Skills 开放标准做了一轮再调研，结论已合并进下方对比表、逐项观察与采纳清单；
+本轮直接落改动是把默认 prompt 的高信号约束收敛到单一输出纪律段（以发现的问题为
+中心，不输出无问题部分的长篇说明），并把 MCP 工具描述集中为一个实现真源。
 
 ## 证据等级
 
@@ -66,6 +72,11 @@ M0.5 的阶段摘要已迁移到 `docs/ai/milestones/M0.5.md`；`Plan.md` 现在
 | Aider conventions | 约定文件与任务分离，read-only 加载 | 无固定 review 输出协议 | 不强调静默 | 通过 conventions 文件约束生成 | 以外部 conventions 文件补充上下文 | **采纳**：把 repo 约束作为独立、只读输入 |
 | Cursor / Claude Code 公开摘录 | 多强调角色、工具、分段 | 公开稳定资料不足 | 资料不足 | 资料不足 | 资料不足 | **暂不作为主依据** |
 | Kilo / OpenCode 内置 skills | 与本项目目标接近 | 公开稳定资料不足 | 资料不足 | 资料不足 | 资料不足 | **留待实现期实测补强** |
+| Augment Code Review agent（2026） | context engine + 工具 + prompt + guardrails 四件套 | 行级 findings + summary | 明确把 precision/recall 取舍作为 prompt 第一调档 | 窄工具、受限 shell、diff 确定性注入而非工具检索 | PR 之外的语义代码检索 + 仓库级/目录级分层 guidelines | **采纳**：precision-first 调档、评审工作流步骤、guardrails、离线（precision/recall/F1)+ 在线（每 PR 修复数、评论采纳率）双层评测 |
+| Claude Code 官方最佳实践（2026） | explore → plan → implement；子 agent 隔离上下文 | `-p` + stream-json 结构化 | `/clear`、auto-compact；静默优于噪音 | 对抗式复核警告：被要求找问题的 reviewer 总会"找到"问题，须明确只报影响正确性的缺陷 | CLAUDE.md 精简、skills 三级渐进披露 | **采纳**：反"为找问题而找问题"、验证循环、上下文是最稀缺资源；**不采纳**：交互式会话机制（rewind/checkpoint）进核心 prompt |
+| Anthropic agent 工具设计（2025-09） | 少而精、按工作流合并工具，避免功能重叠 | 命名空间前缀（如 `aicr.`）+ 高信号响应 | 截断与错误信息引导省 token 的下一步行为 | 工具描述即 prompt engineering，参数名无歧义 | 工具响应只回高信号字段 | **采纳**：工具描述工程化、命名空间、截断/错误引导；本项目 `aicr.*` 五点工具集与其"少而精"结论一致 |
+| OpenAI Codex 评审规则（2025-2026） | `AGENTS.md` 内 `## Code Review Rules`，finding 引用规则出处 | finding = 位置 + 规则引用 + 优先级 | restraint 是独立评测维度：干净变更不得产生 findings | 规则写法：consequential 不变量 + 安全路径；机械检查留给 CI | 根/嵌套 `AGENTS.md` 按变更路径生效（规则指导变体找回 98% vs 基线 58.3%） | **采纳**：评审规则作用域与"不变量 + 安全路径"写法、coverage/restraint/retention/actionability 四维评测 |
+| Qodo PR-Agent 现行 prompt（2026 核验） | system+user，diff hunk 带行号 | YAML schema，findings 数量上限 | 空 findings 合法；低严重度要求高置信 | hunk 以开括号结尾属可见 scope 边界，不得报"不完整"；不质疑他处定义的元素 | repo_context / extra_instructions / skills_context 槽位 | **采纳**：scope 边界规则、severity 如实不过度渲染、backtick 引用标识符 |
 
 ## 逐项观察
 
@@ -209,6 +220,93 @@ Aider 的 conventions 文档说明了一个很实用的模式：
 - 这些资料可以作为实现期 sanity check。
 - 若未来拿到稳定、可复核的官方资料，再补进本文件，不在当前阶段把它们写成硬规则。
 
+### Augment：评审 agent 质量 = 上下文 × agent 系统设计 × 评测闭环（2026-08 复核新增）
+
+Augment 公开的 review agent 设计（2026-03 发布、2026-06 更新）给出三个可直接落地的结论：
+
+- **prompt 的第一职责是调 precision/recall 取舍**：要么高信噪、要么全覆盖，必须显式选边；
+  同时要写明"避免哪些评论类别"（stylistic/nitpick）与推荐的工具使用模式、评审工作流步骤。
+- **大输入确定性注入，工具少而不重叠**：PR diff 等大输入直接注入 prompt，不让 agent 通过
+  工具二次检索；工具之间功能不重叠，避免模型选错工具。
+- **评测双层化**：离线 benchmark 用 precision/recall/F1 爬坡；在线用"每 PR 实际修复的问题数"
+  与"评论被采纳率"衡量真实价值。其生产数据（约 3.6 条评论/PR、45% 采纳率）说明
+  "少量高置信评论"是被真实团队接受的量级。
+
+**对本项目的影响**：
+
+- 默认 prompt 复用既有 mission/review/problem policy，在一个紧凑的
+  `<output_discipline>` 段集中表达 precision-first、零问题合法和 findings-only 约束，
+  不再以多个近义段落重复同一规则。
+- 现有五点工具集（report/summary/skip/fetch/blame）保持少而不重叠，不再扩张。
+- eval 方向后续可参考 coverage/restraint 双维度扩展固件。
+
+### Claude Code 官方最佳实践（2026-08 复核新增）
+
+Claude Code 官方最佳实践文档（2026 现行）中与评审 agent 直接相关的三点：
+
+- **上下文窗口是最稀缺资源**：性能随上下文填满而退化；指令文件要精简到"删掉就会出错"才保留。
+- **对抗式复核警告**：官方明确指出"被要求找问题的 reviewer 即使工作没问题也倾向于报告一些
+  gap"，并建议明确指示只报影响正确性或既定要求的缺陷、其余视为可选项。
+- **验证循环**：给 agent 一个能自行运行的检查（对评审 agent 而言即"读过真实代码再下结论"
+  这一可验证纪律）。
+
+**对本项目的影响**：
+
+- `<behavioral_self_checks>` 新增反"为找问题而找问题"条目；validate 步骤要求先尝试驳倒自己的
+  候选发现再发布。
+- 默认 prompt 继续控制体量，新增段落以合并同类规则代替堆叠。
+
+### Anthropic 工具设计（2026-08 复核新增）
+
+Anthropic《Writing effective tools for agents》（2025-09）的核心结论：
+
+- 工具是确定性系统与非确定性 agent 之间的合同，应按 agent 的"可达性"设计，而不是把 API
+  逐个包成工具。
+- 少而精：按高价值工作流合并工具，避免功能重叠；用命名空间（前缀）划清边界。
+- 工具响应只回高信号内容；大响应要分页/截断，且截断与错误信息要引导下一步更省 token 的行为。
+- **工具描述即 prompt engineering**：描述与参数名要无歧义，小改动可带来显著效果（SWE-bench
+  实测）。
+
+**对本项目的影响**：
+
+- `aicr.report_problem` / `aicr.publish_summary` / `aicr.skip` 的描述从一句话功能说明升级为
+  含使用约束的行为指引（每次调用一个离散问题、summary 只框定已报问题、skip 即完整输出），
+  in-process registry 与 stdio/HTTP MCP server 两面描述对齐。
+- `aicr.fetch_more_context` 描述统一为"相关文件类型枚举 + 全文件优先 + 原因绑定变更行"的
+  完整版本。
+
+### OpenAI Codex 评审规则（2026-08 复核新增）
+
+OpenAI 的 Codex Code Review 支持仓库在 `AGENTS.md` 中以 `## Code Review Rules` 编写评审规则，
+finding 会引用对应规则出处。其官方写作建议与评测结果：
+
+- 规则要从"consequential 且非显而易见的不变量"开始，写明不变量与安全路径；机械性检查留在 CI。
+- 规则按作用域放置：仓库级在根 `AGENTS.md`，服务级在嵌套 `AGENTS.md`；窄作用域减少规则间
+  互相抢注意力。
+- 评测四维度：coverage（该报的报出）、restraint（干净变更不误报）、retention（普通 bug 不丢）、
+  actionability（位置/规则/优先级齐全）。规则指导变体找回 98% 目标 finding，基线 58.3%。
+
+**对本项目的影响**：
+
+- 印证本项目 nearest `AGENTS.md` + path-specific instructions 的加载优先级设计；
+  repo-local 评审规则样本可按"不变量 + 安全路径"格式编写（见 `example/` 与 docs 示例）。
+- eval 固件后续可按 restraint 维度补充"干净变更零输出"回归。
+
+### Qodo PR-Agent 现行 prompt（2026-08 复核更新）
+
+Qodo 现行 `pr_reviewer_prompts.toml` 相比 M0.5 时核验的版本，新增/强化的细节：
+
+- hunk 以开括号或新作用域语句结尾时属"可见 scope 边界"，只分析可见代码，不得报"代码不完整"。
+- 不要质疑可能在代码库他处定义的元素（变量声明、import），也不要建议可能已存在的功能。
+- 评论构造：直接说明问题与现实触发场景；severity 如实，不过度渲染；特定输入/环境才触发的
+  问题要先说明前提；引用变量、路径用 backtick。
+- 空 findings 列表是可接受输出。
+
+**对本项目的影响**：
+
+- `<problem_policy>` 新增 scope 边界与 defined-elsewhere 两条防幻觉规则；
+  `<output_contract>` 新增 severity/scope 如实与 backtick 引用要求。
+
 ## 采纳清单
 
 ### 采纳
@@ -230,6 +328,15 @@ Aider 的 conventions 文档说明了一个很实用的模式：
    相关接口/类型定义、调用方/被调用方、配置和 schema，确保每个结论都基于
    实际代码而非 diff hunk 片段推理。禁止在未读取相关代码的情况下发表猜测性
    问题。
+10. **单一克制真源**：复用既有 mission/review/problem policy，在一个紧凑段落集中表达
+    precision-first、零问题合法和 findings-only，避免重复指令争抢上下文与注意力。
+11. **输出纪律**：所有评审输出（problem、summary、stdout 工作笔记）以发现的问题为
+    中心；不枚举、不叙述检查过但没问题的文件/方面；无问题时 `aicr.skip` 即完整输出。
+12. **scope 边界与 defined-elsewhere 防幻觉**：hunk 截断于开括号属可见边界；
+    他处可能定义的元素与可能已存在的功能，未读源码前不得质疑或建议。
+13. **工具描述工程化**：`aicr.report_problem` / `aicr.publish_summary` / `aicr.skip`
+    描述包含使用约束（离散问题、summary 只框定已报问题、skip 优先于"一切正常"summary），
+    registry 与 MCP server 共用一个描述常量，防止合同漂移。
 
 ### 拒绝
 
@@ -393,6 +500,8 @@ M1 接入 Prompt Manager 与最小 review 流程后，至少应使用下列样�
 8. **skills 延迟加载**：skill summary 进入主 prompt，但长正文仅按需 recall；
 9. **零 problem 场景**：确认输出 `aicr.skip(reason="lgtm")` 而非空洞 praise；
 10. **secret / injection 套件**：确认 diff 中伪造指令或 secret 不改变行为，也不出现在输出中。
+11. **scope 边界 hunk**：hunk 以开括号/新作用域语句结尾时不得报"代码不完整"或"缺少闭合"。
+12. **输出聚焦（restraint）**：干净变更不产生 summary 或逐文件"无问题"枚举输出。
 
 ## 对 `code-reviewer.system.md` 的直接要求
 
@@ -416,8 +525,11 @@ M1 接入 Prompt Manager 与最小 review 流程后，至少应使用下列样�
   `bat` / `jq` / `yq`，并把 `grep` / `find` / `cat` 视为兼容 fallback；
   Kubernetes/Helm 检查优先使用本地离线命令，避免默认触达真实集群。
 11. **强制主动读取上下文**：不允许仅基于 diff hunks 发表问题；必须在报告前
-  主动读取完整变更文件、接口/类型定义、调用方/被调用方、配置与 schema 等相关
-  代码，确保每个问题都基于实际阅读过的代码而非猜测。
+   主动读取完整变更文件、接口/类型定义、调用方/被调用方、配置与 schema 等相关
+   代码，确保每个问题都基于实际阅读过的代码而非猜测。
+12. **输出聚焦发现的问题**：problem、summary 与 stdout 工作笔记都不枚举、不叙述
+   检查过但没问题的部分；无 actionable problem 时 `aicr.skip` 即完整输出，不附
+   "一切正常"式 summary。
 
 ## 本轮采纳与下一步
 
@@ -449,14 +561,27 @@ M1 接入 Prompt Manager 与最小 review 流程后，至少应使用下列样�
   - <https://google.github.io/eng-practices/review/reviewer/standard.html>
   - <https://google.github.io/eng-practices/review/reviewer/>
 - PR-Agent review documentation
-  - <https://github.com/The-PR-Agent/pr-agent/blob/main/docs/docs/tools/review.md>
+  - <https://github.com/qodo-ai/pr-agent/blob/main/docs/docs/tools/review.md>
 - PR-Agent reviewer prompt template
-  - <https://github.com/The-PR-Agent/pr-agent/blob/main/pr_agent/settings/pr_reviewer_prompts.toml>
+  - <https://github.com/qodo-ai/pr-agent/blob/main/pr_agent/settings/pr_reviewer_prompts.toml>
 - Aider conventions documentation
   - <https://aider.chat/docs/usage/conventions.html>
 - CodeRabbit official docs snippets
   - <https://docs.coderabbit.ai/guides/code-review-overview>
   - <https://docs.coderabbit.ai/changelog>
+- Augment Code Review agent 设计（2026-08 复核）
+  - <https://www.augmentcode.com/blog/how-we-built-high-quality-ai-code-review-agent>
+- Claude Code 官方最佳实践（2026-08 复核）
+  - <https://code.claude.com/docs/en/best-practices>
+- Anthropic: Writing effective tools for agents（2026-08 复核）
+  - <https://www.anthropic.com/engineering/writing-tools-for-agents>
+- Anthropic: Agent Skills 与开放标准（2026-08 复核）
+  - <https://www.anthropic.com/engineering/equipping-agents-for-the-real-world-with-agent-skills>
+  - <https://agentskills.io/>
+- OpenAI Codex 自定义评审规则（2026-08 复核）
+  - <https://developers.openai.com/blog/custom-code-review-rules-for-codex>
+- AGENTS.md 标准（现由 Linux 基金会 Agentic AI Foundation 维护）
+  - <https://agents.md/>
 
 ### 辅助来源
 

@@ -9,6 +9,7 @@ export type {
   AgentAdapter,
   AgentCompactionOptions,
   AgentSpawnOptions,
+  AgentSpawnMcpServer,
   AgentProfileConfig,
   ModelConfigTranslation,
   ModelTranslator,
@@ -24,6 +25,10 @@ export { createOpencodeAdapter } from "./opencode.js";
 export type { OpencodeAdapterOptions } from "./opencode.js";
 export { createZooAdapter } from "./zoo.js";
 export type { ZooAdapterOptions } from "./zoo.js";
+export {
+  toClaudeCodeMcpServersJson,
+  toCopilotCliMcpServersJson,
+} from "./mcp-config.js";
 export {
   buildKiloModelInfo,
   buildOpencodeModelEntry,

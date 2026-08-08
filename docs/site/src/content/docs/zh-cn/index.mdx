@@ -159,6 +159,10 @@ agent 的自由文本 stdout 当成正式报告。
 **分类**把发现归入稳定的族，例如 `correctness`、`security`、`performance`、
 `api-contract` 和 `style`，从而让分组和去重跨 run 保持一致。
 
+评审是 **precision-first** 的：agent 只报告经过验证、可操作的问题，summary 只框定
+这些问题，而不会罗列"检查过但没发现异常"的部分。当没有可操作问题时，评审以显式
+skip 收尾，而不是发布一篇空洞的表扬式 summary。
+
 <Aside type="tip" title="渲染与安全保证">
   发现被渲染为规范 Markdown——IM 机器人收到真正的表格和代码块，而不是原始
   stdout。 Secret 会从

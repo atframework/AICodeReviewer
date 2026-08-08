@@ -91,30 +91,42 @@ export function createAnthropicTranslator(
         envVars.ANTHROPIC_BASE_URL = baseUrl;
       }
 
-      if (model.anthropicVersion) {
-        envVars.ANTHROPIC_VERSION = model.anthropicVersion;
-      }
+      // Verified against Claude Code env-vars docs (code.claude.com/docs/en/env-vars,
+      // 2026-08): ANTHROPIC_VERSION does not exist as an env override (the CLI sets the
+      // anthropic-version header itself), so model.anthropicVersion is intentionally
+      // not translated.
 
       if (model.anthropicBeta && model.anthropicBeta.length > 0) {
-        envVars.ANTHROPIC_BETA = model.anthropicBeta.join(",");
+        // Comma-separated list of anthropic-beta header values.
+        envVars.ANTHROPIC_BETAS = model.anthropicBeta.join(",");
       }
 
       if (model.extraParams?.max_tokens !== undefined) {
-        envVars.ANTHROPIC_MAX_TOKENS = String(model.extraParams.max_tokens);
+        envVars.CLAUDE_CODE_MAX_OUTPUT_TOKENS = String(model.extraParams.max_tokens);
+      } else if (model.maxOutputTokens !== undefined) {
+        envVars.CLAUDE_CODE_MAX_OUTPUT_TOKENS = String(model.maxOutputTokens);
       }
 
-      if (model.thinking?.enabled && model.thinking.budgetTokens !== undefined) {
-        envVars.ANTHROPIC_THINKING_BUDGET_TOKENS = String(model.thinking.budgetTokens);
+      const thinkingBudget = model.thinking?.enabled === false
+        ? undefined
+        : model.thinking?.budgetTokens ?? model.thinkingBudgetTokens;
+      if (thinkingBudget !== undefined) {
+        envVars.MAX_THINKING_TOKENS = String(thinkingBudget);
+        // A fixed budget is ignored on adaptive-reasoning models (Opus 4.6/Sonnet 4.6)
+        // unless adaptive thinking is disabled, so pin it off when a budget is explicit.
+        envVars.CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING = "1";
       }
 
       if (model.extraParams) {
         Object.assign(config, model.extraParams);
       }
 
-      const cliFlags = ["--model", model.modelId];
-      if (model.thinking?.enabled) {
-        cliFlags.push("--thinking");
+      if (model.contextWindow !== undefined) {
+        envVars.CLAUDE_CODE_MAX_CONTEXT_TOKENS = String(model.contextWindow);
       }
+
+      // Thinking has no CLI flag on Claude Code; MAX_THINKING_TOKENS above controls it.
+      const cliFlags = ["--model", model.modelId];
 
       return {
         providerId: providerLabel,

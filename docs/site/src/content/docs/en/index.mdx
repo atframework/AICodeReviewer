@@ -175,6 +175,11 @@ predictable:
 `security`, `performance`, `api-contract`, and `style`, which keeps grouping and
 deduplication consistent across runs.
 
+Reviews are **precision-first**: the agent reports only validated, actionable
+problems, and the summary frames those problems instead of narrating everything
+that was checked and found fine. When nothing actionable exists, the review
+closes with an intentional skip rather than a praise-filled summary.
+
 <Aside type="tip" title="Rendering & security guarantees">
   Findings are rendered as proper Markdown — IM bots receive real tables and
   code blocks, not raw stdout. Secrets are scrubbed from prompts, logs, and

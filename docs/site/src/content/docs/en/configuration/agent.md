@@ -101,7 +101,7 @@ Each agent CLI receives compaction config in its own format:
 | Agent | Where it lands |
 | --- | --- |
 | Kilo | `compaction.{auto,threshold_percent,prune}` in `kilo.json`. |
-| opencode | `compaction.{auto,prune}` in `.opencode/config.json`. |
+| opencode | `compaction.{auto,prune}` in `opencode.json` (working-directory root, discovered through sandbox cwd/`--dir`). |
 | Zoo | `autoCondenseContext` / `condenseContextPercentThreshold` in `.roo/settings.json`. |
 | Claude Code | Auto-compacts by default (delegated; no config injected). |
 | Copilot CLI | Not applicable (no context-management surface). |
