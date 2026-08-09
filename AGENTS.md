@@ -28,6 +28,7 @@
 - After the final edit, run every repository gate applicable to the changed files. Targeted checks are iteration evidence, not a substitute for the complete applicable gate; do not claim completion while a required check is unrun, failing, blocked, or did not actually discover the expected files/tests.
 - When adding or removing a workspace package, update the package manifest, local `tsconfig.json`, and root `tsconfig.json` references together.
 - When code changes affect config shape, agent adapters, MCP tool contracts, output rendering, deployment behavior, or public workflow, update the matching `Plan.md` roadmap summary, relevant `docs/` modules, `example/config.yaml`, and `example/README.md` entries in the same change, or explicitly state why no doc/example update is needed.
+- When writing or revising Markdown documentation (`docs/`, `docs/site/`, README, `example/`), follow `.agents/skills/docs-writing-style/SKILL.md`: verify every field, default, and behavior claim against code truth before writing, apply its bilingual de-AI style checklist, and keep both locales in sync.
 - **All temporary task artifacts must go under `build/`**: scratch scripts, debug logs, one-off reports, intermediate data, benchmark outputs, and any file produced during an agent session that is not a permanent part of the codebase must be written under `build/`. Never leave temporary files in the repository root, `eval/`, or any package directory. Use purposeful subdirectories: `build/tmp/` for ad-hoc data, `build/logs/` for captured output, and existing `build/deploy/` for deployment staging. Ensure the subdirectory exists before writing (`node -e "require('fs').mkdirSync('build/tmp',{recursive:true})"`). The `eval/` directory is reserved for permanent eval CLI test fixtures only; do not store task scratch files there.
 - Use `.github/instructions/*.instructions.md` only for path-specific rules; keep workspace-wide rules in this file.
 - Keep AI-facing assets concise: stable rules here, detailed shared context in `AGENTS.*.md`, and repeatable procedures in skills.
@@ -95,3 +96,4 @@ For code, config, script, CI, or shared-tooling changes, `pnpm ci` is the final 
 - `.agents/skills/agent-runtime-integration/SKILL.md`
 - `.agents/skills/output-channel-contracts/SKILL.md`
 - `.agents/skills/remote-deployment/SKILL.md`
+- `.agents/skills/docs-writing-style/SKILL.md`

@@ -15,6 +15,7 @@
 | AI 规则与技能来源 | `source-index.md` | 外部 Agent/Skills/MCP 文档核验记录、刷新触发条件与兼容性证据 |
 | 已知代码坑位 | `AGENTS.known-pitfalls.md` | 从根 `AGENTS.md` 拆出的按需清单；非平凡实现/审查前阅读 |
 | Agent Skills 索引 | `../../.agents/skills/README.md` | 仓库技能目录地图；只按需读取具体 `SKILL.md` |
+| 文档写作与去AI化风格 | `../../.agents/skills/docs-writing-style/SKILL.md` | 写/修订 Markdown 文档时的事实核验流程与中英禁忌清单 |
 | 评审提示词设计依据 | `../prompt-research.md` | M0.5 调研与默认 prompt 设计 rationale |
 | 输出通道契约 | `../output-channels.md` | MCP 输出工具、模板变量、路由与 IM 行为 |
 | Podman 沙箱说明 | `../podman.md` | Podman/rootless 部署和沙箱说明 |
