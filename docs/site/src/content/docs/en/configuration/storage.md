@@ -5,15 +5,16 @@ description: Configure the database, cache, and object storage backends.
 
 The `storage` namespace configures three independent backends — a database, a
 cache, and an object store — plus a retention policy. These back the
-observability dashboard, the model metadata catalog, reflection memory, and
-future features. The database is created automatically when admin auth is
-configured, when `llm.model_catalog` uses the SQLite backend, or when
-reflection memory is enabled.
+observability dashboard, the model metadata catalog, and reflection memory. The
+database is created automatically when admin auth is configured, when
+`llm.model_catalog` uses the SQLite backend, or when reflection memory is
+enabled.
 
-:::note[M8 runtime uses SQLite only]
-The M8 dashboard runtime currently uses **SQLite only**. PostgreSQL, Redis, and
-S3 are **reserved** for future multi-instance deployments — the fields exist
-and validate, but are not yet wired into runtime features.
+:::note[Backends are wired in to different degrees]
+Only `sqlite` is wired into the runtime database today (dashboard stats, model
+catalog, reflection memory); `postgres` is reserved. The `redis` cache is wired
+in and used by the model catalog's Redis backend. The `s3` object-store fields
+are reserved — they validate but nothing consumes them yet.
 :::
 
 ```yaml
@@ -87,8 +88,8 @@ features.
 
 ## Backends at a glance
 
-| Backend | Available now | Reserved | Notes |
+| Backend | Wired in | Reserved | Notes |
 | --- | --- | --- | --- |
 | database | `sqlite` | `postgres` | SQLite at `/app/data/aicr.sqlite` by default. |
-| cache | `memory`, `none` | `redis` | Redis reused by the model catalog Redis backend. |
+| cache | `memory`, `redis`, `none` | — | Redis reused by the model catalog Redis backend. |
 | object | `filesystem` | `s3` | Filesystem at `/app/data/objects` by default. |

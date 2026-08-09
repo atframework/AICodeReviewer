@@ -112,9 +112,9 @@ You can also trigger a manual re-review at any time by commenting on the PR:
 /aicr review
 ```
 
-In async mode, repeated `/aicr review` commands for the same target are
-coalesced: the in-flight review finishes first, then AICR runs one final
-re-review with the latest event.
+Repeated `/aicr review` commands for the same target are coalesced: the
+in-flight review finishes first, then AICR runs one final re-review with the
+latest event.
 
 ## 4. Verify the run was scheduled
 

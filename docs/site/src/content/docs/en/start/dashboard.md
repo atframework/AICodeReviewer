@@ -4,11 +4,11 @@ description: Enable the observability dashboard, navigate it, read /metrics, and
 ---
 
 AICR ships a built-in observability dashboard and a Prometheus metrics
-endpoint. The dashboard is a complement to (not a replacement for) an
-external time-series system — when none is configured, you still get basic
-statistics. This page expands on the [Quick start](/en/start/quick-start/)
-health check with how to enable admin login, navigate the dashboard, read
-`/metrics`, and locate run logs and snapshots.
+endpoint. The dashboard covers basic statistics on its own and complements an
+external time-series system when you have one. This page expands on the
+[Quick start](/en/start/quick-start/) health check with how to enable admin
+login, navigate the dashboard, read `/metrics`, and locate run logs and
+snapshots.
 
 ## Enabling admin login
 
@@ -42,9 +42,9 @@ or persists the raw password.
 
 When admin auth is configured, AICR initializes the SQLite store (at
 `storage.database.sqlite.path`, default `/app/data/aicr.sqlite`) that backs
-the dashboard. Postgres and Redis backends are reserved extension points;
-the dashboard runtime currently requires SQLite — startup fails loudly if
-`storage.database.kind` is not `sqlite` when the dashboard is enabled.
+the dashboard. Only `sqlite` is wired into the runtime database today
+(`postgres` is reserved) — startup fails loudly if `storage.database.kind` is
+not `sqlite` when the dashboard is enabled.
 
 ## Navigating the dashboard
 

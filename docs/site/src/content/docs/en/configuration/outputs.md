@@ -28,7 +28,7 @@ outputs:
 | Value | Description |
 | --- | --- |
 | `handlebars` (default) | Handlebars templates (`*.hbs`). Built-ins live in `templates/builtin/*.hbs`. |
-| `eta` | ETA templates. |
+| `eta` | Reserved — accepted by the schema, but only Handlebars is implemented; setting it has no effect. |
 
 Override templates per workspace by placing files under
 `workspaces/<workspace_id>/templates/`. Candidate file names are checked in
@@ -39,14 +39,18 @@ order: `<channel_name>.<kind>.md.hbs` → `<channel_name>.<kind>.hbs` →
 ## `outputs.no_problems` — zero-problem policy
 
 Decides whether a successful review with **no actionable problems** should
-notify each channel. Notification channels are quiet by default; lifecycle or
-audit channels can opt in to publish.
+notify each channel.
 
 | `action` | Behavior |
 | --- | --- |
-| `suppress` (default in the sample) | Do not notify when there are no problems. |
+| `suppress` | Do not notify when there are no problems. |
 | `publish` | Always notify, even with zero problems. |
 | `publish_if_summary` | Notify only if a non-empty summary was produced. |
+
+When nothing is configured, the default depends on the channel kind: managed
+problem-issue channels (`*_problem_issue`) default to `publish` — publishing is
+what drives stale issues to close; IM bots default to `publish_if_summary`;
+everything else defaults to `suppress`.
 
 The policy is set at three levels, each more specific:
 
@@ -88,7 +92,7 @@ fields are listed under each kind.
 | `name` | string | Unique channel id. |
 | `kind` | string | Channel kind (see list below). `gitea_finding_issue` is removed — use `gitea_problem_issue`. |
 | `trigger` | string | Trigger name this channel binds to (for VCS-backed kinds). |
-| `mention_author` | bool | @-mention the commit author in the message. |
+| `mention_author` | bool | @-mention the commit author in the message. Defaults to `true` for VCS PR/issue kinds and `false` for IM bots. |
 | `mention_fallback` | enum | `all` (mention everyone) or `skip` (no mention if author not found). |
 | `no_problems` | object | Per-channel zero-problem policy (see above). |
 | `commit_url_template` | string | Override commit link for push/commit targets. |
@@ -132,7 +136,10 @@ For `*_pr_review` / `*_mr_review` kinds:
 | --- | --- |
 | `auto` (default) | Try the PR review API first; fall back to issue comment on 403/422. |
 | `review` | Always use the PR review API, no fallback. |
-| `review_event` `COMMENT` (default) / `REQUEST_CHANGES` | Controls the review event type when using the review API. |
+| `comment` | Always post a plain issue comment, never the review API. |
+
+The companion `review_event` field controls the event type used with the review
+API: `COMMENT` (default) or `REQUEST_CHANGES`.
 
 ### PR review summary update strategy
 

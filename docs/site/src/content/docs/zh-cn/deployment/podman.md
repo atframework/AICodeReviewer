@@ -56,18 +56,8 @@ agent:
     engine: auto
 ```
 
-仅当需要提升隔离性或为特定 workspace 选择镜像时，才使用 workspace 覆盖：
-
-```yaml
-workspaces:
-  instances:
-    internal-python:
-      source_repo: { trigger: gitea-internal, repo: owent/example }
-      sandbox:
-        kind: podman
-        engine: podman
-        image: ghcr.io/example/python-review:latest
-```
+按 workspace 的 `sandbox` 覆盖会被 schema 接受，但当前运行时不会应用——所有 workspace
+共用全局 `agent.sandbox`。见 [Agent 与沙箱](/zh-cn/configuration/agent/)。
 
 ## 嵌套容器沙箱（AICR 运行在容器内）
 

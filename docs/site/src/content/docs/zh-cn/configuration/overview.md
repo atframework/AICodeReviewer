@@ -19,7 +19,7 @@ workspace，并强调一条不能破坏的规则——**绝不要把密钥明文
 | `outputs` | 输出通道（PR review、IM 机器人、托管 issue）、路由规则，以及零问题策略。 | [输出通道与路由](/zh-cn/configuration/outputs/) |
 | `agent` | 驱动哪个 agent CLI、单次运行超时、上下文自动压缩，以及沙箱后端。 | [Agent 与沙箱](/zh-cn/configuration/agent/) |
 | `review` | 文件过滤、label 管理、托管问题 issue 的生命周期上限，以及反思记忆。 | 本页 |
-| `queue` | 内存或持久化 SQLite 队列、worker 并发、限流，以及重试/死信策略。 | [队列与重试](/zh-cn/configuration/queue/) |
+| `queue` | 内存、SQLite 或 Redis 队列、worker 并发、限流，以及重试策略。 | [队列与重试](/zh-cn/configuration/queue/) |
 | `storage` | 数据库、缓存与对象存储后端，用于可观测性、模型目录及未来特性。 | [存储](/zh-cn/configuration/storage/) |
 | `compression` | AICR 侧的 diff 摘要，在模型看到大任务前先压缩。 | [LLM 提供方与模型](/zh-cn/configuration/llm/)（上下文依赖） |
 | `server` | HTTP 监听器与 `/triggers/*` 的全局 API key 鉴权。 | [认证与密钥](/zh-cn/configuration/authentication/) |
@@ -82,11 +82,15 @@ workspaces:
 | --- | :---: | :---: | :---: |
 | `review` | ✓ | ✓ | ✓ |
 | `outputs`（通道列表、`no_problems`、`channel_overrides`） | ✓ | ✓ | ✓ |
-| `agent.default` | ✓ | ✓ | ✓ |
-| `sandbox` | 经由 `agent.sandbox` | ✓ | ✓ |
+| `agent.default` | ✓ | ✓ * | ✓ * |
+| `sandbox` | 经由 `agent.sandbox` | ✓ * | ✓ * |
 | `prompt`（基础系统提示、`force_skills`） | — | ✓ | ✓ |
 | `auth`（按 workspace 的 API key） | 经由 `server.auth` | — | ✓ |
 | `compression`、`queue`、`storage`、`llm`、`server`、`admin`、`triggers` | ✓ | — | — |
+
+\* schema 接受 workspace 层的 `agent.default` 和 `sandbox`，但当前版本在启动时只按
+全局 `agent` 创建一份适配器和沙箱，workspace 层这两项设置了也不会生效。混用 agent
+或按 workspace 换沙箱镜像的需求要等后续版本。
 
 ## `.env` 与 `config.yaml` —— 密钥约定
 

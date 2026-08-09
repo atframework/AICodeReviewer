@@ -3,7 +3,8 @@ title: Dashboard 与日志
 description: 启用可观测性 dashboard、导航它、读取 /metrics，并定位 run 日志与快照。
 ---
 
-AICR 内置可观测性 dashboard 和 Prometheus metrics 端点。dashboard 是外部时序系统的补充（不是替代）——未配置外部系统时仍能提供基础统计。本页在[快速上手](/zh-cn/start/quick-start/)的健康检查基础上，介绍如何启用管理员登录、导航 dashboard、读取 `/metrics`，以及定位 run 日志和快照。
+AICR 内置可观测性 dashboard 和 Prometheus metrics 端点。dashboard 覆盖基础统计；
+有外部时序系统时两者可以互补。本页在[快速上手](/zh-cn/start/quick-start/)的健康检查基础上，介绍如何启用管理员登录、导航 dashboard、读取 `/metrics`，以及定位 run 日志和快照。
 
 ## 启用管理员登录
 
@@ -31,7 +32,7 @@ admin:
 session TTL 字段是 `session_ttl_seconds`（默认 `86400` = 24 小时）。`session_ttl_minutes` 字段会被静默忽略。密码比较使用固定长度 SHA-256 digest 和 `timingSafeEqual`；服务端永不打印或落盘密码原值。
 :::
 
-配置管理员认证后，AICR 初始化支撑 dashboard 的 SQLite store（位于 `storage.database.sqlite.path`，默认 `/app/data/aicr.sqlite`）。Postgres 和 Redis 后端是预留扩展位；dashboard 运行时当前要求 SQLite——启用 dashboard 而 `storage.database.kind` 不是 `sqlite` 时启动会显式失败。
+配置管理员认证后，AICR 初始化支撑 dashboard 的 SQLite store（位于 `storage.database.sqlite.path`，默认 `/app/data/aicr.sqlite`）。数据库后端目前只有 `sqlite` 接入运行时（`postgres` 是预留）——启用 dashboard 而 `storage.database.kind` 不是 `sqlite` 时启动会显式失败。
 
 ## 导航 dashboard
 

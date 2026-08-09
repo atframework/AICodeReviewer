@@ -72,7 +72,7 @@ block — see below) so AICR can fetch PR head/base SHA and branch details. If
 that fetch is unavailable, AICR uses the PR URL from the comment payload as the
 dedup identity instead of collapsing unrelated PRs into an `unknown` target.
 
-#### GitHub App authentication (M12)
+#### GitHub App authentication
 
 Instead of a static PAT, configure a GitHub App to let AICR sign an RS256 JWT
 and auto-refresh installation tokens (zero new dependencies):
@@ -331,9 +331,8 @@ pushing a new commit:
 - `/aicr review`
 - `/review`
 
-In async mode, repeated commands for the same target are coalesced: the
-current review finishes first, then AICR runs one final re-review using the
-latest event.
+Repeated commands for the same target are coalesced: the current review
+finishes first, then AICR runs one final re-review using the latest event.
 
 ## Target links for non-PR reviews
 

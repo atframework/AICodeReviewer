@@ -22,7 +22,7 @@ the table below as a jumping-off point.
 | `outputs` | Output channels (PR reviews, IM bots, managed issues), routing rules, and the zero-problem policy. | [Output Channels and Routing](/en/configuration/outputs/) |
 | `agent` | The agent CLI to drive, the per-run timeout, context auto-compaction, and the sandbox backend. | [Agent and Sandbox](/en/configuration/agent/) |
 | `review` | File filters, label management, the managed-problem-issue lifecycle cap, and reflection memory. | this page |
-| `queue` | In-memory or durable SQLite queue, worker concurrency, rate limits, and retry/dead-letter policy. | [Queue and Retry](/en/configuration/queue/) |
+| `queue` | In-memory, SQLite, or Redis queue, worker concurrency, rate limits, and retry policy. | [Queue and Retry](/en/configuration/queue/) |
 | `storage` | Database, cache, and object-store backends for observability, the model catalog, and future features. | [Storage](/en/configuration/storage/) |
 | `compression` | AICR-side diff summarization that runs before the model sees a large task. | [LLM Providers and Models](/en/configuration/llm/) (context dependency) |
 | `server` | HTTP listener and global API-key auth for `/triggers/*`. | [Authentication & secrets](/en/configuration/authentication/) |
@@ -89,11 +89,17 @@ sections each layer accepts.
 | --- | :---: | :---: | :---: |
 | `review` | ✓ | ✓ | ✓ |
 | `outputs` (channel lists, `no_problems`, `channel_overrides`) | ✓ | ✓ | ✓ |
-| `agent.default` | ✓ | ✓ | ✓ |
-| `sandbox` | via `agent.sandbox` | ✓ | ✓ |
+| `agent.default` | ✓ | ✓ * | ✓ * |
+| `sandbox` | via `agent.sandbox` | ✓ * | ✓ * |
 | `prompt` (base system prompt, `force_skills`) | — | ✓ | ✓ |
 | `auth` (per-workspace API key) | via `server.auth` | — | ✓ |
 | `compression`, `queue`, `storage`, `llm`, `server`, `admin`, `triggers` | ✓ | — | — |
+
+\* The schema accepts `agent.default` and `sandbox` at the workspace layers, but
+the current version builds a single adapter and sandbox from the global `agent`
+section at startup. Values set at the workspace layers are parsed but have no
+effect. Per-workspace agent mixing and sandbox images are planned for a later
+release.
 
 ## `.env` vs `config.yaml` — secrets convention
 

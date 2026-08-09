@@ -5,9 +5,9 @@ template: splash
 hero:
   title: AICodeReviewer
   tagline: >-
-    Self-hosted AI code review orchestration — one pipeline across every VCS,
-    your agent of choice, and structured findings routed to PRs, issues, and IM
-    bots instead of raw agent output.
+    Self-hosted AI code review orchestration. One intake for every VCS webhook
+    and trigger, your agent CLI of choice, and structured findings routed to PR
+    comments, issues, and IM bots.
   image:
     html: |
       <svg role="img" aria-label="AICodeReviewer logo" width="208" height="208" viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg">
@@ -52,22 +52,23 @@ import {
 
 **AICodeReviewer (AICR)** is a self-hosted service that orchestrates AI code
 review across your version-control systems. It normalizes webhooks and triggers
-into a single review pipeline, runs the agent CLI of your choice inside a
-locked-down sandbox, and routes structured findings back to pull-request
-comments, managed issues, or IM bots — never as free-form agent stdout.
+into one review pipeline, runs the agent CLI of your choice inside a locked-down
+sandbox, and routes structured findings back to pull-request comments, managed
+issues, or IM bots. Free-form agent stdout never becomes the report.
 
-## Why AICodeReviewer?
+## What AICR does
 
 <CardGrid>
-  <Card title="AICR owns the report contract" icon="approve-check-circle">
-    Agents report findings through a small, stable MCP tool set. AICR validates,
-    deduplicates, and renders — free-form agent stdout never becomes the report.
+  <Card title="Structured report contract" icon="approve-check-circle">
+    Agents report findings through a fixed MCP tool set. AICR validates,
+    deduplicates, and renders them. Free-form agent stdout never becomes the
+    report.
   </Card>
-  <Card title="Bring your own agent" icon="puzzle">
+  <Card title="Multiple agents" icon="puzzle">
     Kilo Code, Claude Code, opencode, Zoo Code, and Copilot CLI share one
     runtime contract. Switch agents without rewriting your pipeline.
   </Card>
-  <Card title="Every VCS, one pipeline" icon="code-branch">
+  <Card title="Multiple VCS" icon="code-branch">
     GitHub, Gitea, Forgejo, and GitLab over webhooks; Perforce and Subversion
     over triggers. All normalized into a single `ReviewEvent`.
   </Card>
@@ -75,13 +76,13 @@ comments, managed issues, or IM bots — never as free-form agent stdout.
     Scoped fetch of only changed files, read-only source mounts, allowlisted
     sandbox commands, secret scrubbing at every boundary, and hard timeouts.
   </Card>
-  <Card title="Cost & context aware" icon="analytics">
+  <Card title="Cost & context control" icon="analytics">
     Automatic diff compression, per-run budget caps, LLM fallback chains, and a
     dashboard that tracks tokens and cost per project and provider.
   </Card>
   <Card title="Self-hosted, single container" icon="server">
     Server, queue worker, orchestrator, dashboard, and database run in one
-    process. Deploy with `docker run` or `podman run`; scale by adding workers.
+    process. Deploy with `docker run` or `podman run`.
   </Card>
 </CardGrid>
 
@@ -117,31 +118,31 @@ comments, managed issues, or IM bots — never as free-form agent stdout.
 - **One pipeline, many VCS.** GitHub, Gitea, Forgejo, and GitLab arrive over
   webhooks; Perforce (P4) and Subversion (SVN) arrive over trigger endpoints.
   All are normalized into one `ReviewEvent`.
-- **Bring your own agent.** Kilo Code, Claude Code, opencode, Zoo Code, and
+- **Multiple agents.** Kilo Code, Claude Code, opencode, Zoo Code, and
   Copilot CLI share one runtime contract. AICR translates `ModelSpec` into each
   tool's native fields and records capability downgrades in the run manifest
   instead of silently dropping them.
-- **AICR owns the report contract.** Agents emit findings through a small,
-  stable MCP tool set (`aicr.report_problem`, `aicr.publish_summary`,
+- **Structured report contract.** Agents emit findings through a fixed MCP
+  tool set (`aicr.report_problem`, `aicr.publish_summary`,
   `aicr.skip`, `aicr.fetch_more_context`, `aicr.try_blame`). The same problem
-  renders cleanly as a PR line comment, a managed issue, or an IM summary card.
+  renders as a PR line comment, a managed issue, or an IM summary card.
 - **Safe by default.** Scoped VCS fetch (only changed files), read-only source
   mounts, allowlisted sandbox commands, secret scrubbing at every boundary,
   whole-process-tree timeout cleanup, and `--init` zombie reaping in the
   service container.
-- **Context-aware compression.** Large diffs are automatically compressed before
-  hitting the model's context window. Per-model override thresholds let you tune
-  compression per provider without changing the review pipeline.
+- **Context-aware compression.** Large diffs are compressed before they hit the
+  model's context window. Per-model override thresholds let you tune compression
+  per provider without changing the review pipeline.
 - **Managed problem lifecycle.** Problems are tracked across runs with stable
   fingerprints. When a file is re-reviewed and a problem is gone, its managed
-  issue is auto-closed. Resolution is guarded by file-scope — a review that
-  doesn't touch a file won't falsely close its issues.
+  issue is auto-closed. A file-scope guard keeps reviews that didn't touch a
+  file from closing its issues.
 - **Built-in observability.** Dashboard with per-project stats, per-run token
-  estimates and cost breakdown, provider-level LLM usage tracking, daily
-  rollups, and a `/metrics` endpoint for Prometheus scraping.
+  and cost breakdowns, provider-level LLM usage, daily rollups, and a
+  `/metrics` endpoint for Prometheus scraping.
 - **Retry and fallback.** Queue-level retry with exponential backoff. LLM
-  fallback chains route to the next provider when the primary fails or throttles.
-  Dead-letter queues capture persistently failing runs for later inspection.
+  fallback chains route to the next provider when the primary fails or
+  throttles.
 
 ## Supported integrations
 
@@ -178,27 +179,27 @@ deduplication consistent across runs.
 Reviews are **precision-first**: the agent reports only validated, actionable
 problems, and the summary frames those problems instead of narrating everything
 that was checked and found fine. When nothing actionable exists, the review
-closes with an intentional skip rather than a praise-filled summary.
+ends with an explicit skip instead of a praise-filled summary.
 
-<Aside type="tip" title="Rendering & security guarantees">
+<Aside type="tip" title="Rendering & security">
   Findings are rendered as proper Markdown — IM bots receive real tables and
-  code blocks, not raw stdout. Secrets are scrubbed from prompts, logs, and
-  every output boundary, and reviews are guided to reason about common
-  vulnerability classes (the OWASP Top 10 among them).
+  code blocks, never raw stdout. Secrets are scrubbed from prompts, logs, and
+  every output boundary. The review prompt guides the agent over common
+  vulnerability classes (including the OWASP Top 10).
 </Aside>
 
 ## Design principles
 
 - **Minimal assumptions.** AICR normalizes VCS inputs but doesn't guess your
-  workflow. Every behavior — skip policies, output routing, label management,
-  commit strategies — is configurable.
+  workflow. Skip policies, output routing, label management, and commit
+  strategies are all configurable.
 - **Honest downgrades.** When an agent adapter or model doesn't support a
   feature (e.g., structured output, reasoning), it's recorded in the run
   manifest. Nothing is silently dropped.
 - **Single container.** The entire service — HTTP server, queue worker, agent
   orchestrator, dashboard, and SQLite database — runs in one process. Deploy
-  with `docker run` or `podman run`; scale by adding workers behind a shared
-  database.
+  with `docker run` or `podman run`. For more throughput, multiple worker
+  processes can share one SQLite or Redis queue.
 - **Readable output.** Every problem includes a severity, category, file path,
   line range, and human-readable message. IM bots receive properly rendered
   Markdown tables and code blocks. No raw agent stdout makes it into a user-
@@ -241,6 +242,6 @@ closes with an intentional skip rather than a praise-filled summary.
 
 The fastest path to production is a single Docker or Podman container behind a
 reverse proxy, fed by a GitHub or Gitea webhook. See
-[Quick start](/en/start/quick-start/) to begin. If you are evaluating or
-contributing, the [local Node.js quick start](/en/start/quick-start/#local-nodejs)
+[Quick start](/en/start/quick-start/) to begin. For evaluation or contributing,
+the [local Node.js quick start](/en/start/quick-start/#local-nodejs)
 needs only `pnpm install` and `pnpm build`.

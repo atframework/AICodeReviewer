@@ -54,6 +54,9 @@ Narrative: [LLM providers and models](/en/configuration/llm/).
 | `llm.providers[].api_version` | string | — | API version (Azure, etc.) |
 | `llm.providers[].catalog_provider` | string | — | Override the models.dev provider id for catalog lookup |
 | `llm.providers[].catalog_id` | string | — | Override the models.dev `<provider>/<model>` id for catalog lookup |
+| `llm.providers[].reasoning_effort` | enum | — | Reasoning effort tier: `minimal`, `low`, `medium`, `high`, `max` (passthrough) |
+| `llm.providers[].thinking_level` | enum | — | Coarser thinking tier: `off`, `minimal`, `low`, `medium`, `high`, `max` (passthrough) |
+| `llm.providers[].thinking_budget_tokens` | int | — | Explicit thinking budget in tokens (passthrough) |
 | `llm.fallback_chain[]` | array | `[]` | Ordered provider/model entries tried on failure; each has `provider`, `model`, `role` (`light`/`heavy`/`any`) |
 | `llm.retry` | object | — | Per-call retry policy |
 | `llm.retry.max_attempts` | int > 0 | — | Max attempts per LLM call |
@@ -77,7 +80,7 @@ Narrative: [LLM providers and models](/en/configuration/llm/).
 | `llm.model_catalog.offline` | boolean | `false` | Never touch the network; use cache + bundled snapshot only |
 | `llm.model_catalog.apply_to_model_spec` | boolean | `true` | Merge catalog metadata into the resolved `ModelSpec` |
 | `llm.model_catalog.cache.backend` | enum | `sqlite` | Refresh cache backend; `redis` requires `storage.cache.kind: redis` + `redis.url_env` |
-| `llm.model_catalog.overrides` | map | `{}` | Hand-edited per-`<provider>/<model>` overrides; explicit values always win over catalog data |
+| `llm.model_catalog.overrides` | map | `{}` | Hand-edited per-`<provider>/<model>` overrides; explicit values always win over catalog data. Supports `supported_reasoning_efforts`, `default_reasoning_effort`, and more |
 
 ## `triggers`
 
@@ -112,17 +115,17 @@ Narrative: [Configuration overview](/en/configuration/overview/).
 | `workspaces.defaults` | object | `{}` | Defaults merged into every instance (sandbox, review, agent, outputs, prompt) |
 | `workspaces.defaults.sandbox` | object | — | Default sandbox config (see `agent.sandbox`) |
 | `workspaces.defaults.review` | object | — | Default review config (see `review`) |
-| `workspaces.defaults.agent.default` | enum | — | Default agent kind for this workspace set |
+| `workspaces.defaults.agent.default` | enum | — | Default agent kind for this workspace set (no runtime effect yet, see note below) |
 | `workspaces.defaults.outputs` | object | — | Default outputs (see `outputs` workspace fields) |
 | `workspaces.defaults.prompt.base_system_prompt_file` | string | — | Custom base system prompt file (deployment-root-relative) |
 | `workspaces.defaults.prompt.force_skills` | string[] | — | Skill names always activated, ignoring `Applies To` globs |
 | `workspaces.instances` | map | `{}` | Per-workspace instances keyed by workspace id |
 | `workspaces.instances.<id>.source_repo.trigger` | string | — | Trigger profile name |
 | `workspaces.instances.<id>.source_repo.repo` | string | — | Repository reference |
-| `workspaces.instances.<id>.agent.default` | enum | — | Agent kind override |
+| `workspaces.instances.<id>.agent.default` | enum | — | Agent kind override (no runtime effect yet, see note below) |
 | `workspaces.instances.<id>.review` | object | — | Review config override (see `review`) |
 | `workspaces.instances.<id>.outputs` | object | — | Outputs override |
-| `workspaces.instances.<id>.sandbox` | object | — | Sandbox override |
+| `workspaces.instances.<id>.sandbox` | object | — | Sandbox override (no runtime effect yet, see note below) |
 | `workspaces.instances.<id>.triage` | object | — | Issue triage override (Gitea/Forgejo only) |
 | `workspaces.instances.<id>.prompt` | object | — | Prompt override (same shape as `workspaces.defaults.prompt`) |
 | `workspaces.instances.<id>.auth.api_key_env` | string | — | Per-workspace API key env var |
@@ -131,13 +134,20 @@ Narrative: [Configuration overview](/en/configuration/overview/).
 Workspace ids must not collide with the reserved keys `cache`, `defaults`,
 `instances`.
 
+:::note[Workspace-layer `agent.default` / `sandbox` have no effect yet]
+The schema accepts `agent.default` and `sandbox` under `workspaces.defaults`
+and each instance, but the current version builds a single adapter and sandbox
+from the global `agent` section at startup. Workspace-layer values are parsed
+and validated but unused at runtime.
+:::
+
 ## `outputs`
 
 Narrative: [Output channels and routing](/en/configuration/outputs/).
 
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
-| `outputs.template_engine` | enum | `handlebars` | Template engine: `handlebars` or `eta` |
+| `outputs.template_engine` | enum | `handlebars` | Template engine. `eta` is accepted by the schema but unimplemented; only `handlebars` works |
 | `outputs.no_problems` | object | — | Global zero-problem policy |
 | `outputs.no_problems.action` | enum | — | `publish`, `suppress`, or `publish_if_summary` |
 | `outputs.channels[]` | array | `[]` | Output channel definitions |
@@ -181,7 +191,7 @@ Narrative: [Agent and sandbox](/en/configuration/agent/).
 | --- | --- | --- | --- |
 | `agent.default` | enum | `kilo` | Default agent kind |
 | `agent.timeout_seconds` | int > 0 | `600` | Hard per-run timeout; on timeout the whole process tree is killed |
-| `agent.auto_approve` | boolean | `true` | Auto-approve agent tool actions |
+| `agent.auto_approve` | boolean | `true` | Accepted by the schema, but the orchestrator always runs as `true`; setting `false` has no effect |
 | `agent.sandbox` | object | `{ kind: "docker", engine: "auto" }` | Sandbox backend |
 | `agent.sandbox.kind` | enum | — | Sandbox kind (see enum table) |
 | `agent.sandbox.engine` | enum | — | Container engine selection |
@@ -195,29 +205,29 @@ Narrative: [Agent and sandbox](/en/configuration/agent/).
 
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
-| `review.languages_auto_detect` | boolean | — | Auto-detect review languages |
-| `review.include` | string[] | — | Glob patterns to include |
-| `review.exclude` | string[] | — | Glob patterns to exclude |
-| `review.max_files` | int > 0 | — | Max files per review |
-| `review.max_patch_bytes` | int > 0 | — | Max patch size in bytes |
-| `review.incremental` | boolean | — | Incremental review |
-| `review.skip_lgtm` | boolean | — | Skip reviews that look clean |
-| `review.output_language` | string | — | Output language for summaries (e.g. `zh-CN`) |
-| `review.commit_strategy` | enum | — | `per_commit`, `aggregate`, `head_only` |
-| `review.log_thinking` | boolean | — | Log model thinking traces |
-| `review.git.allow_deepen` | boolean | — | Allow `git fetch --deepen` for shallow clones |
-| `review.labels.ignore` | string[] | — | Labels that skip review |
+| `review.languages_auto_detect` | boolean | `true` | Auto-detect review languages |
+| `review.include` | string[] | `["**/*"]` | Glob patterns to include |
+| `review.exclude` | string[] | `["**/vendor/**", "**/*.min.js", "**/*.lock"]` | Glob patterns to exclude |
+| `review.max_files` | int > 0 | `50` | Max files per review |
+| `review.max_patch_bytes` | int > 0 | `200000` | Max patch size in bytes |
+| `review.incremental` | boolean | `true` | Incremental review |
+| `review.skip_lgtm` | boolean | `true` | Skip reviews that look clean |
+| `review.output_language` | string | `zh-CN` | Output language for summaries |
+| `review.commit_strategy` | enum | `aggregate` | `per_commit`, `aggregate`, `head_only` |
+| `review.log_thinking` | boolean | `true` | Log orchestrator thinking/execution traces (set `false` to silence) |
+| `review.git.allow_deepen` | boolean | `false` | Allow `git fetch --deepen` for shallow clones |
+| `review.labels.ignore` | string[] | `["aicr:ignore", "aicr-ignore"]` | Labels that skip review |
 | `review.labels.auto_tag` | string | — | Fixed tag added when AICR starts |
 | `review.labels.reviewed_tag` | string | — | Tag added when review completes |
-| `review.problem_issue.max_recent_issues` | int 1–100 | — | Cap on recent managed issues reconciled per run |
+| `review.problem_issue.max_recent_issues` | int 1–100 | `20` | Cap on recent managed issues reconciled per run |
 | `review.fetch_extra.max_bytes` | int > 0 | — | Max bytes fetched per extra-context request |
 | `review.fetch_extra.max_files` | int > 0 | — | Max files fetched per extra-context request |
 | `review.fetch_extra.allow_paths` | string[] | — | Allowed path globs for extra-context fetch |
-| `review.reflection.enabled` | boolean | — | Enable reflection memory |
+| `review.reflection.enabled` | boolean | `false` | Enable reflection memory |
 | `review.reflection.mode` | enum | — | `off`, `light`, `thorough` |
 | `review.reflection.memory.max_size_kb` | int > 0 | — | Max memory size in KB |
 | `review.reflection.memory.max_entries` | int > 0 | — | Max memory entries |
-| `review.reflection.memory.retention_days` | int > 0 | — | Memory TTL in days |
+| `review.reflection.memory.retention_days` | int > 0 | `90` | Memory TTL in days |
 
 ## `queue`
 
@@ -225,17 +235,17 @@ Narrative: [Queue and retry](/en/configuration/queue/).
 
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
-| `queue.kind` | enum | `memory` | Queue backend |
-| `queue.sqlite.path` | string | — | SQLite queue DB path |
-| `queue.sqlite.lock_ttl_seconds` | int > 0 | — | Stale-running job reclaim TTL |
-| `queue.workers.concurrency` | int > 0 | — | Global worker concurrency |
-| `queue.workers.per_workspace_concurrency` | int > 0 | — | Per-workspace concurrency cap |
-| `queue.workers.lock_ttl_seconds` | int > 0 | — | Worker lock TTL |
+| `queue.kind` | enum | `memory` | Queue backend: `memory`, `sqlite`, `redis`; `rabbitmq` is reserved (warns and falls back to `memory`) |
+| `queue.sqlite.path` | string | `data/queue.sqlite` | SQLite queue DB path |
+| `queue.sqlite.lock_ttl_seconds` | int > 0 | `300` | Stale-running job reclaim TTL |
+| `queue.workers.concurrency` | int > 0 | `4` | Global worker concurrency |
+| `queue.workers.per_workspace_concurrency` | int > 0 | `1` | Per-workspace concurrency cap |
+| `queue.workers.lock_ttl_seconds` | int > 0 | `1800` | Worker lock TTL |
 | `queue.rate_limit.per_provider_rps` | map | — | Per-provider requests-per-second cap |
-| `queue.retry.attempts` | int > 0 | — | Trigger-level retry attempts (legacy `max_attempts` normalized) |
-| `queue.retry.backoff` | object | — | `kind`, `base_ms`, `max_ms`, `jitter` |
-| `queue.dead_letter.enabled` | boolean | — | Enable dead-letter handling |
-| `queue.dead_letter.max_age_hours` | int > 0 | — | Max age before dead-lettering |
+| `queue.retry.attempts` | int > 0 | `3` | Trigger-level retry attempts (legacy `max_attempts` normalized) |
+| `queue.retry.backoff` | object | `exponential`, 2000→60000ms with jitter | `kind`, `base_ms`, `max_ms`, `jitter` |
+| `queue.dead_letter.enabled` | boolean | — | Reserved — accepted by the schema but not consumed at runtime |
+| `queue.dead_letter.max_age_hours` | int > 0 | — | Reserved — accepted by the schema but not consumed at runtime |
 
 ## `storage`
 
@@ -263,16 +273,16 @@ Narrative: [Storage](/en/configuration/storage/).
 
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
-| `compression.trigger_tokens` | int > 0 | — | Token threshold that triggers diff compression |
-| `compression.max_input_ratio` | number 0–1 | — | Max input ratio before compression |
-| `compression.summarize_model_role` | string | — | Model role used for summarize stage (`light`/`heavy`/`any`) |
-| `compression.keep_hunks_top_k` | int > 0 | — | Number of highest-risk hunks to keep verbatim |
-| `compression.context_lines` | int > 0 | — | Context lines retained around kept hunks |
+| `compression.trigger_tokens` | int > 0 | derived from the model, see below | Token threshold that triggers diff compression |
+| `compression.max_input_ratio` | number 0–1 | `0.6` | Max input ratio before compression |
+| `compression.summarize_model_role` | string | `light` | Model role used for summarize stage (`light`/`heavy`/`any`) |
+| `compression.keep_hunks_top_k` | int > 0 | `30` | Number of highest-risk hunks to keep verbatim |
+| `compression.context_lines` | int > 0 | `5` | Context lines retained around kept hunks |
 | `compression.per_model_overrides` | map | — | Per-model `trigger_tokens` overrides |
 
 When `compression` is omitted, bootstrap derives a default
-`trigger_tokens = min(131072, floor(contextWindow × 0.6))` from the review
-model's context window.
+`trigger_tokens = min(131072, max(8192, floor(contextWindow × 0.6)))` from the
+review model's context window.
 
 ## `server`
 

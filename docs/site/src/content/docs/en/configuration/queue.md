@@ -1,16 +1,16 @@
 ---
 title: Queue and Retry
-description: Configure the in-memory or durable SQLite queue, worker concurrency, rate limits, and the retry/dead-letter policy.
+description: Configure the in-memory, SQLite, or Redis queue, worker concurrency, rate limits, and the retry policy.
 ---
 
 The `queue` namespace decides where review jobs wait, how many run at once,
-how fast they can call each provider, and what happens when a job keeps
-failing. The default is an in-memory queue; for production you should switch
-to the durable SQLite queue so jobs survive restarts.
+how fast they can call each provider, and how failures are retried. The default
+is an in-memory queue; for production you should switch to the durable SQLite
+queue so jobs survive restarts.
 
 ```yaml
 queue:
-  kind: memory              # memory (default) | sqlite | redis (reserved)
+  kind: sqlite              # memory (default) | sqlite | redis
 
   workers:
     concurrency: 4
@@ -22,16 +22,12 @@ queue:
       gitea-internal: 5
 
   retry:
-    attempts: 2
+    attempts: 3
     backoff:
       kind: exponential
-      base_ms: 5000
+      base_ms: 2000
       max_ms: 60000
       jitter: true
-
-  dead_letter:
-    enabled: true
-    max_age_hours: 72
 ```
 
 ## `queue.kind`
@@ -40,16 +36,27 @@ queue:
 | --- | --- |
 | `memory` (default) | In-process queue. Jobs are lost on restart. Fine for single-instance dev. |
 | `sqlite` | Durable queue that survives restarts (single process or multiple processes sharing the same file). Recommended for production. |
-| `redis` | Reserved — listed in the schema, not yet implemented. |
-| `rabbitmq` | Reserved — not yet implemented. |
+| `redis` | Durable queue backed by Redis, for multi-instance deployments. Options below. |
+| `rabbitmq` | Reserved — not implemented; setting it logs a warning and falls back to `memory`. |
+
+### `queue.redis` — Redis queue options
+
+Redis queue connection fields are accepted as passthrough keys:
+
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `url_env` | string | – | Name of the env var holding the Redis URL. |
+| `url` | string | – | Redis URL directly (or use `host` / `port` / `password` / `db`). |
+| `tls` | bool | `false` | Connect over TLS. |
+| `key_prefix` | string | `"aicr:"` | Key prefix for the queue. Use a unique value per environment when sharing Redis. |
 
 ## `queue.workers`
 
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
-| `concurrency` | int > 0 | – | Global worker concurrency (jobs running at once across the process). |
-| `per_workspace_concurrency` | int > 0 | – | Max jobs running concurrently per workspace. Use `1` to serialize per repo. |
-| `lock_ttl_seconds` | int > 0 | – | Stale-running reclaim TTL for the SQLite queue's running lock. |
+| `concurrency` | int > 0 | `4` | Global worker concurrency (jobs running at once across the process). |
+| `per_workspace_concurrency` | int > 0 | `1` | Max jobs running concurrently per workspace. Use `1` to serialize per repo. |
+| `lock_ttl_seconds` | int > 0 | `1800` | Worker job-lock TTL. |
 
 ## `queue.sqlite` — durable queue options
 
@@ -97,11 +104,11 @@ The canonical retry fields are **`attempts`** and **`backoff`**. The legacy
 
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
-| `attempts` | int > 0 | – | Total attempts including the first try. `1` = no retry. |
-| `backoff.kind` | enum | – | `exponential`, `linear`, or `constant`. |
-| `backoff.base_ms` | number > 0 | – | First/backoff base delay in ms. |
-| `backoff.max_ms` | number > 0 | – | Cap on a single backoff delay. |
-| `backoff.jitter` | bool | – | Add random jitter. |
+| `attempts` | int > 0 | `3` | Total attempts including the first try. `1` = no retry. |
+| `backoff.kind` | enum | `exponential` | `exponential`, `linear`, or `constant`. |
+| `backoff.base_ms` | number > 0 | `2000` | First/backoff base delay in ms. |
+| `backoff.max_ms` | number > 0 | `60000` | Cap on a single backoff delay. |
+| `backoff.jitter` | bool | `true` | Add random jitter. |
 
 ```yaml
 queue:
@@ -126,16 +133,10 @@ but new configs should not use them:
 
 `attempts` / `backoff` always take precedence when both are present.
 
-## `queue.dead_letter`
+## `queue.dead_letter` — reserved, no effect yet
 
-| Field | Type | Default | Description |
-| --- | --- | --- | --- |
-| `enabled` | bool | – | When `true`, jobs that exhaust their retries are parked for inspection instead of discarded. |
-| `max_age_hours` | int > 0 | – | Parked items older than this are pruned. |
-
-```yaml
-queue:
-  dead_letter:
-    enabled: true
-    max_age_hours: 72
-```
+The schema accepts `dead_letter.enabled` and `dead_letter.max_age_hours`, but
+the runtime does not consume them today: jobs that exhaust their retries are
+marked failed and recorded in the run history — there is no separate parking
+area. Both fields are reserved for a future release; setting them now changes
+nothing.

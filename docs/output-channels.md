@@ -23,7 +23,7 @@ The current in-process tool registry exposes these AICR tools to the review exec
 
 Memory and skill recall tools are tracked by the `Plan.md` roadmap and detailed in `docs/ai/architecture.md`; do not describe future tools as implemented until they exist in `packages/mcp-output` and tests.
 
-`@aicr/mcp-output` provides the in-process registry used by direct LLM/stdout-compatible runs, the stdio MCP server materialized into Kilo runtime bundles, and an optional local Streamable HTTP endpoint started with `aicr-mcp-server --transport http`. Runtime bundles still use stdio by default. Both server transports write `.aicr-output-state.json` in the isolated `agent/` directory after tool calls; the orchestrator reads that state, validates review outputs, executes recorded `aicr.fetch_more_context` requests through VCS context fetch, executes recorded `aicr.try_blame` requests through VCS attribution when the adapter supports it, and reruns a final pass with fetched content and attribution when needed.
+`@aicr/mcp-output` provides the in-process registry used by direct LLM/stdout-compatible runs, the stdio MCP server materialized into agent runtime bundles, and an optional local Streamable HTTP endpoint started with `aicr-mcp-server --transport http`. Runtime bundles still use stdio by default. Both server transports write `.aicr-output-state.json` in the isolated `agent/` directory after tool calls; the orchestrator reads that state, validates review outputs, executes recorded `aicr.fetch_more_context` requests through VCS context fetch, executes recorded `aicr.try_blame` requests through VCS attribution when the adapter supports it, and reruns a final pass with fetched content and attribution when needed.
 
 ## Problem schema
 
@@ -243,7 +243,7 @@ Channel fields:
 | `marker_label` | Hidden body marker used to scope managed issues; defaults to `aicr-managed` |
 | `label_ids` | Existing Gitea label IDs to attach to every created issue |
 | `issue_mode` | `consolidated` (default), `per_problem`, or `per_commit` |
-| `resolved_action` | `none`, `close`, or `delete`; defaults to `close` |
+| `resolved_action` | `none`, `close`, `mark_resolved`, or `delete`; defaults to `close` |
 | `assign_committer` | Add the resolved review author as an assignee; defaults to `true` |
 | `owners_file` | Repository file to read for path owners; defaults to `OWNERS` |
 | `add_owners_as_assignees` | Set to `true` to add matched OWNERS entries as assignees |
@@ -310,7 +310,7 @@ Key differences from `gitea_problem_issue`:
 - **Resolved action**: GitHub does not support deleting issues; `resolved_action` can be `close` (default), `mark_resolved`, or `none`. The `delete` option is not available.
 - **API headers**: `accept: application/vnd.github+json`, `x-github-api-version: 2022-11-28`, `authorization: Bearer <token>`.
 - **Base URL**: Defaults to `https://api.github.com`; for GitHub Enterprise, set to `https://ghe.example.com/api/v3`.
-- **Permissions**: the trigger or channel `token_env` must resolve to a token with repository Issues read/write access. Alternatively, a trigger-level `app` block (M12) lets AICR sign a GitHub App JWT and auto-refresh installation tokens — see `docs/ai/architecture.md` §3.2.1. Channel-level `token_env` takes priority over trigger-level `app` token. GitHub webhook event checkboxes such as **Issues** or **Issue comments** only subscribe AICR to inbound events; they do not grant REST API permissions. For GitHub Apps, update repository permissions and reinstall/refresh the installation after changing them. For fine-grained PATs, grant at least Metadata read plus Issues read/write for the target repository; add Contents read if AICR should read `OWNERS`.
+- **Permissions**: the trigger or channel `token_env` must resolve to a token with repository Issues read/write access. Alternatively, a trigger-level `app` block lets AICR sign a GitHub App JWT and auto-refresh installation tokens — see `docs/ai/architecture.md` §3.2.1. Channel-level `token_env` takes priority over trigger-level `app` token. GitHub webhook event checkboxes such as **Issues** or **Issue comments** only subscribe AICR to inbound events; they do not grant REST API permissions. For GitHub Apps, update repository permissions and reinstall/refresh the installation after changing them. For fine-grained PATs, grant at least Metadata read plus Issues read/write for the target repository; add Contents read if AICR should read `OWNERS`.
 - **Failure handling**: a GitHub issue API 403/404/5xx is recorded as a failed dispatch result and logged with the channel name. In a routed multi-channel setup, later channels (for example Feishu/WeCom notifications) are still attempted. If every dispatch attempt fails, the review run ends as `skipped` with `skipReason: output_dispatch_failed` instead of failing trigger processing.
 
 Channel fields:
@@ -369,7 +369,7 @@ Effective policy is resolved in this order, from low to high precedence:
 4. Workspace defaults: `workspaces.defaults.outputs.no_problems` and `workspaces.defaults.outputs.channel_overrides.<channel>.no_problems`.
 5. Per-project overrides: `workspaces.instances.<workspace_id>.outputs.no_problems` and `workspaces.instances.<workspace_id>.outputs.channel_overrides.<channel>.no_problems`.
 
-Use positive wording: `no_problems.action: publish|suppress`. Notification channels (IM bots, email) usually set `suppress`; lifecycle channels that need to close resolved managed issues may set `publish`. The removed `no_findings` spelling is rejected by config validation.
+Use positive wording: `no_problems.action: publish|suppress|publish_if_summary`. When nothing is configured, managed problem-issue channels default to `publish` (publishing drives stale issues to close), IM bots default to `publish_if_summary`, and everything else defaults to `suppress`. Lifecycle or audit channels can opt in to `publish` explicitly. The removed `no_findings` spelling is rejected by config validation.
 
 This is an output-layer policy. It does not replace `review.skip_lgtm`, and it must not suppress error reports or problem lifecycle reconciliation.
 
@@ -421,6 +421,8 @@ Candidate filenames are resolved in this order:
 2. `<channel-name>.<kind>.hbs`
 3. `<channel-kind>.<kind>.md.hbs`
 4. `<channel-kind>.<kind>.hbs`
+5. `<kind>.md.hbs`
+6. `<kind>.hbs`
 
 Common template variables:
 

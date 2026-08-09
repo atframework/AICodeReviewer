@@ -539,7 +539,7 @@ AICR 采用**两层上下文管理**，两者互补：
   - `storage.object.s3.region_env`、`access_key_id_env`、`secret_access_key_env`: 通过环境变量引用凭据和区域。
   - `storage.object.s3.force_path_style`: 支持 MinIO / RustFS 这类常见 S3-compatible 部署。
   - `storage.retention.deleted_project_grace_days`: 已删除项目统计硬删除宽限期。
-- 输出路由、模板、agent、queue、review 行为都支持全局 → workspace default → workspace instance 覆盖。
+- 输出路由、模板、queue、review 行为都支持全局 → workspace default → workspace instance 覆盖。`agent.default` 和 `sandbox` 的 workspace 层覆盖目前只被 schema 接受；bootstrap 只用全局 `agent` 创建一份适配器和沙箱，workspace 层这两项暂不生效。
 - 当配置 shape 变化时，要同步更新 schema 测试、示例配置、专题文档和 `Plan.md` 摘要。
 
 #### 3.10.1 Per-workspace prompt 覆盖

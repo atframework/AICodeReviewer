@@ -49,18 +49,7 @@ agent:
     engine: auto
 ```
 
-Use workspace overrides only to increase isolation or select a workspace-specific image:
-
-```yaml
-workspaces:
-  instances:
-    internal-python:
-      source_repo: { trigger: gitea-internal, repo: owent/example }
-      sandbox:
-        kind: podman
-        engine: podman
-        image: ghcr.io/example/python-review:latest
-```
+Per-workspace `sandbox` overrides are accepted by the schema but not applied by the current runtime — all workspaces share the global `agent.sandbox`.
 
 ## Nested container sandbox (AICR inside a container)
 

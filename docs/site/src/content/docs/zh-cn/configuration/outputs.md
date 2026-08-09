@@ -26,7 +26,7 @@ outputs:
 | 取值 | 说明 |
 | --- | --- |
 | `handlebars`（默认） | Handlebars 模板（`*.hbs`）。内置模板位于 `templates/builtin/*.hbs`。 |
-| `eta` | ETA 模板。 |
+| `eta` | 预留——schema 接受，但当前只有 Handlebars 实现，设置后不会生效。 |
 
 按 workspace 覆盖模板：把文件放在 `workspaces/<workspace_id>/templates/` 下。
 候选文件名按顺序匹配：`<channel_name>.<kind>.md.hbs` → `<channel_name>.<kind>.hbs`
@@ -35,14 +35,17 @@ outputs:
 
 ## `outputs.no_problems` —— 零问题策略
 
-决定一次成功且**无可操作问题**的评审是否通知每个通道。通知类通道默认安静；
-生命周期或审计类通道可以单独开启发布。
+决定一次成功且**无可操作问题**的评审是否通知每个通道。
 
 | `action` | 行为 |
 | --- | --- |
-| `suppress`（示例默认） | 无问题时不通知。 |
+| `suppress` | 无问题时不通知。 |
 | `publish` | 始终通知，即使零问题。 |
 | `publish_if_summary` | 仅在产生了非空摘要时通知。 |
+
+未显式配置时，默认值按 channel kind 区分：托管 problem issue 通道
+（`*_problem_issue`）默认 `publish`——必须走发布流程才能把已修复的 issue 关掉；
+IM 机器人默认 `publish_if_summary`；其余通道默认 `suppress`。
 
 策略分三层设置，越往下越具体：
 
@@ -83,7 +86,7 @@ workspaces:
 | `name` | string | 唯一的通道 id。 |
 | `kind` | string | 通道类型（见下表）。`gitea_finding_issue` 已移除，请用 `gitea_problem_issue`。 |
 | `trigger` | string | 该通道绑定的 trigger 名（用于依赖 VCS 的类型）。 |
-| `mention_author` | bool | 在消息中 @ 提交作者。 |
+| `mention_author` | bool | 在消息中 @ 提交作者。VCS PR/issue 类通道默认 `true`，IM 机器人默认 `false`。 |
 | `mention_fallback` | enum | `all`（@ 所有人）或 `skip`（找不到作者时不 @）。 |
 | `no_problems` | object | 按通道的零问题策略（见上）。 |
 | `commit_url_template` | string | 覆盖 push/commit 目标的提交链接。 |
@@ -127,7 +130,10 @@ workspaces:
 | --- | --- |
 | `auto`（默认） | 先尝试 PR review API；403/422 时回退到 issue 评论。 |
 | `review` | 始终使用 PR review API，不回退。 |
-| `review_event` `COMMENT`（默认）/ `REQUEST_CHANGES` | 使用 review API 时控制 review 事件类型。 |
+| `comment` | 始终发普通 issue 评论，不用 review API。 |
+
+与之配套的 `review_event` 字段控制 review API 使用的事件类型：`COMMENT`（默认）
+或 `REQUEST_CHANGES`。
 
 ### PR review 摘要更新策略
 

@@ -5,7 +5,7 @@ description: 配置 LLM 提供方、fallback 链、重试/退避、费用预算�
 
 `llm` 命名空间是 AICodeReviewer 的核心——没有提供方和至少一条 fallback 链条目，
 评审无法运行。本页覆盖 `llm.providers`、`llm.fallback_chain`、`llm.retry`、
-`llm.budget`，以及 M10 模型元数据目录（`llm.model_catalog`）。
+`llm.budget`，以及模型元数据目录（`llm.model_catalog`）。
 
 一个完整的最小示例：
 
@@ -50,11 +50,44 @@ llm:
 | `catalog_provider` | string | – | 将自定义 provider 映射到 models.dev 的 provider id（例如 `openai`）。 |
 | `catalog_id` | string | – | 显式 models.dev 查找 id（例如 `openai/gpt-4o-mini`），用于自定义别名。 |
 
+:::caution[直连客户端只覆盖部分 kind]
+AICR 直连调用（diff 压缩、结构化修复兜底）目前只实现了
+`openai_compatible`、`ollama`、`azure_openai`、`anthropic`、`google_ai_studio`
+五种客户端。`vertex_ai`、`bedrock`、`copilot` 只能通过对应的 agent CLI 使用；
+把它们配给压缩或兜底路径会在调用时报 not yet supported。
+:::
+
 :::tip[把自定义网关映射到目录]
 自定义的 OpenAI 兼容网关同样可以用上 models.dev 目录：在 provider 上设置
 `catalog_provider: openai`（按 `openai/<modelId>` 解析），或用
 `catalog_id: openai/gpt-4o-mini` 固定到具体条目。
 :::
+
+### 推理强度（reasoning effort）
+
+provider 条目还接受一组透传字段，用来控制推理模型的思考强度：
+
+| 字段 | 取值 | 说明 |
+| --- | --- | --- |
+| `reasoning_effort` | `minimal`、`low`、`medium`、`high`、`max` | 直连 LLM 调用时作为 `reasoning_effort` 发送；Kilo / opencode 适配器会物化为 `--variant`，Claude Code / Copilot CLI 映射为 `--effort`（`minimal` 档映射为 `low`）。 |
+| `thinking_level` | `off`、`minimal`、`low`、`medium`、`high`、`max` | 较高的抽象档位；未设 `reasoning_effort` 时按映射换算成 effort。 |
+| `thinking_budget_tokens` | int | 显式思考预算（token）。 |
+| `thinking.enabled` / `thinking.budget_tokens` | bool / int | Anthropic 风格的原生 thinking 配置。 |
+
+```yaml
+llm:
+  providers:
+    - id: my-llm
+      kind: openai_compatible
+      base_url: https://api.openai.com/v1
+      api_key_env: AICR_LLM_API_KEY
+      reasoning_effort: high
+```
+
+模型目录也可以按模型声明档位：`model_catalog.overrides."<provider>/<model>"` 下的
+`supported_reasoning_efforts`（该模型支持的档位列表）和
+`default_reasoning_effort`（未显式设置时的默认档）。解析优先级：provider 上的
+`reasoning_effort` → 目录的 `default_reasoning_effort` → `thinking_level` 换算值。
 
 ## `llm.fallback_chain[]` —— 哪个模型干什么活
 
@@ -126,9 +159,9 @@ llm:
     per_repo_daily_usd: 1.0
 ```
 
-## `llm.model_catalog` —— models.dev 元数据（M10，可选开启）
+## `llm.model_catalog` —— models.dev 元数据（可选开启）
 
-自 M10 起可用，**默认关闭**。开启后，AICodeReviewer 从
+**默认关闭**。开启后，AICodeReviewer 从
 [models.dev](https://models.dev/) 读取模型参数，这样你就不必逐 provider 手工维护
 context window、输出上限、能力标志和价格。这些值会喂给 diff 压缩阈值、
 `llm.budget` 费用核算，以及传给外部 agent CLI（Kilo、Zoo、opencode、Claude Code）
@@ -211,6 +244,8 @@ llm:
 | `supports_vision` | bool | 图像输入。 |
 | `supports_cache_prompt` | bool | 提示词缓存。 |
 | `supports_reasoning` | bool | 推理模型。 |
+| `supported_reasoning_efforts` | string[] | 该模型支持的推理强度档位（`minimal`…`max`）。 |
+| `default_reasoning_effort` | enum | 未显式设置 `reasoning_effort` 时使用的默认档位。 |
 | `supports_structured_output` | bool | 结构化/JSON 输出。 |
 | `display_name` | string | 友好显示名。 |
 | `family` | string | 模型家族。 |

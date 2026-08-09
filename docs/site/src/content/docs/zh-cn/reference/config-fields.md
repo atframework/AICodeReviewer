@@ -45,6 +45,9 @@ description: 全量配置字段参考，按顶层命名空间组织，并以 Zod
 | `llm.providers[].api_version` | string | — | API 版本（Azure 等） |
 | `llm.providers[].catalog_provider` | string | — | 覆盖 catalog 查询时的 models.dev provider id |
 | `llm.providers[].catalog_id` | string | — | 覆盖 catalog 查询时的 models.dev `<provider>/<model>` id |
+| `llm.providers[].reasoning_effort` | enum | — | 推理强度档位：`minimal`、`low`、`medium`、`high`、`max`（透传字段） |
+| `llm.providers[].thinking_level` | enum | — | 思考强度抽象档位：`off`、`minimal`、`low`、`medium`、`high`、`max`（透传字段） |
+| `llm.providers[].thinking_budget_tokens` | int | — | 显式思考预算 token 数（透传字段） |
 | `llm.fallback_chain[]` | array | `[]` | 失败时按序尝试的 provider/model 条目；每项有 `provider`、`model`、`role`（`light`/`heavy`/`any`） |
 | `llm.retry` | object | — | 单次调用重试策略 |
 | `llm.retry.max_attempts` | int > 0 | — | 单次 LLM 调用最大尝试次数 |
@@ -68,7 +71,7 @@ description: 全量配置字段参考，按顶层命名空间组织，并以 Zod
 | `llm.model_catalog.offline` | boolean | `false` | 永不访问网络；仅用缓存 + 打包快照 |
 | `llm.model_catalog.apply_to_model_spec` | boolean | `true` | 将 catalog 元数据合并进解析后的 `ModelSpec` |
 | `llm.model_catalog.cache.backend` | enum | `sqlite` | 刷新缓存后端；`redis` 需要 `storage.cache.kind: redis` + `redis.url_env` |
-| `llm.model_catalog.overrides` | map | `{}` | 手填的按 `<provider>/<model>` 覆盖；显式值始终优先于 catalog 数据 |
+| `llm.model_catalog.overrides` | map | `{}` | 手填的按 `<provider>/<model>` 覆盖；显式值始终优先于 catalog 数据。支持 `supported_reasoning_efforts`、`default_reasoning_effort` 等字段 |
 
 ## `triggers`
 
@@ -99,17 +102,17 @@ provider 专属字段（`webhook_secret_env`、`token_env`、`port`、`user_env`
 | `workspaces.defaults` | object | `{}` | 合并进每个 instance 的默认值（sandbox、review、agent、outputs、prompt） |
 | `workspaces.defaults.sandbox` | object | — | 默认 sandbox 配置（见 `agent.sandbox`） |
 | `workspaces.defaults.review` | object | — | 默认 review 配置（见 `review`） |
-| `workspaces.defaults.agent.default` | enum | — | 这组 workspace 的默认 agent kind |
+| `workspaces.defaults.agent.default` | enum | — | 这组 workspace 的默认 agent kind（当前版本运行时未生效，见下方说明） |
 | `workspaces.defaults.outputs` | object | — | 默认 outputs（见 `outputs` 的 workspace 字段） |
 | `workspaces.defaults.prompt.base_system_prompt_file` | string | — | 自定义 base system prompt 文件（相对于部署根目录） |
 | `workspaces.defaults.prompt.force_skills` | string[] | — | 始终激活的技能名，忽略 `Applies To` glob |
 | `workspaces.instances` | map | `{}` | 按 workspace id 组织的 instance |
 | `workspaces.instances.<id>.source_repo.trigger` | string | — | trigger profile 名 |
 | `workspaces.instances.<id>.source_repo.repo` | string | — | 仓库引用 |
-| `workspaces.instances.<id>.agent.default` | enum | — | agent kind 覆盖 |
+| `workspaces.instances.<id>.agent.default` | enum | — | agent kind 覆盖（当前版本运行时未生效，见下方说明） |
 | `workspaces.instances.<id>.review` | object | — | review 配置覆盖（见 `review`） |
 | `workspaces.instances.<id>.outputs` | object | — | outputs 覆盖 |
-| `workspaces.instances.<id>.sandbox` | object | — | sandbox 覆盖 |
+| `workspaces.instances.<id>.sandbox` | object | — | sandbox 覆盖（当前版本运行时未生效，见下方说明） |
 | `workspaces.instances.<id>.triage` | object | — | issue triage 覆盖（仅 Gitea/Forgejo） |
 | `workspaces.instances.<id>.prompt` | object | — | prompt 覆盖（形状同 `workspaces.defaults.prompt`） |
 | `workspaces.instances.<id>.auth.api_key_env` | string | — | workspace 级 API key 环境变量 |
@@ -117,13 +120,19 @@ provider 专属字段（`webhook_secret_env`、`token_env`、`port`、`user_env`
 
 workspace id 不能与保留键 `cache`、`defaults`、`instances` 冲突。
 
+:::note[workspace 层 `agent.default` / `sandbox` 当前不生效]
+schema 接受 `workspaces.defaults` 和实例上的 `agent.default` 与 `sandbox`，但当前版本
+启动时只按全局 `agent` 创建一份适配器和沙箱。workspace 层这两项会被解析和校验，
+运行时不会使用。
+:::
+
 ## `outputs`
 
 叙述：[输出通道与路由](/zh-cn/configuration/outputs/)。
 
 | 字段 | 类型 | 默认值 | 描述 |
 | --- | --- | --- | --- |
-| `outputs.template_engine` | enum | `handlebars` | 模板引擎：`handlebars` 或 `eta` |
+| `outputs.template_engine` | enum | `handlebars` | 模板引擎。`eta` 被 schema 接受但尚未实现，只有 `handlebars` 可用 |
 | `outputs.no_problems` | object | — | 全局零问题策略 |
 | `outputs.no_problems.action` | enum | — | `publish`、`suppress` 或 `publish_if_summary` |
 | `outputs.channels[]` | array | `[]` | 输出 channel 定义 |
@@ -167,7 +176,7 @@ workspace id 不能与保留键 `cache`、`defaults`、`instances` 冲突。
 | --- | --- | --- | --- |
 | `agent.default` | enum | `kilo` | 默认 agent kind |
 | `agent.timeout_seconds` | int > 0 | `600` | 单次 run 硬超时；超时时杀整棵进程树 |
-| `agent.auto_approve` | boolean | `true` | 自动批准 agent 工具动作 |
+| `agent.auto_approve` | boolean | `true` | schema 接受，但当前编排器固定按 `true` 处理，设为 `false` 不生效 |
 | `agent.sandbox` | object | `{ kind: "docker", engine: "auto" }` | 沙箱后端 |
 | `agent.sandbox.kind` | enum | — | sandbox kind（见枚举表） |
 | `agent.sandbox.engine` | enum | — | 容器引擎选择 |
@@ -181,29 +190,29 @@ workspace id 不能与保留键 `cache`、`defaults`、`instances` 冲突。
 
 | 字段 | 类型 | 默认值 | 描述 |
 | --- | --- | --- | --- |
-| `review.languages_auto_detect` | boolean | — | 自动检测评审语言 |
-| `review.include` | string[] | — | 包含的 glob 模式 |
-| `review.exclude` | string[] | — | 排除的 glob 模式 |
-| `review.max_files` | int > 0 | — | 单次评审最大文件数 |
-| `review.max_patch_bytes` | int > 0 | — | 最大 patch 字节数 |
-| `review.incremental` | boolean | — | 增量评审 |
-| `review.skip_lgtm` | boolean | — | 跳过看起来干净的评审 |
-| `review.output_language` | string | — | summary 输出语言（如 `zh-CN`） |
-| `review.commit_strategy` | enum | — | `per_commit`、`aggregate`、`head_only` |
-| `review.log_thinking` | boolean | — | 记录模型 thinking 轨迹 |
-| `review.git.allow_deepen` | boolean | — | 允许对浅克隆执行 `git fetch --deepen` |
-| `review.labels.ignore` | string[] | — | 跳过评审的 label |
+| `review.languages_auto_detect` | boolean | `true` | 自动检测评审语言 |
+| `review.include` | string[] | `["**/*"]` | 包含的 glob 模式 |
+| `review.exclude` | string[] | `["**/vendor/**", "**/*.min.js", "**/*.lock"]` | 排除的 glob 模式 |
+| `review.max_files` | int > 0 | `50` | 单次评审最大文件数 |
+| `review.max_patch_bytes` | int > 0 | `200000` | 最大 patch 字节数 |
+| `review.incremental` | boolean | `true` | 增量评审 |
+| `review.skip_lgtm` | boolean | `true` | 跳过看起来干净的评审 |
+| `review.output_language` | string | `zh-CN` | summary 输出语言 |
+| `review.commit_strategy` | enum | `aggregate` | `per_commit`、`aggregate`、`head_only` |
+| `review.log_thinking` | boolean | `true` | 记录编排器的 thinking/执行日志（设为 `false` 关闭） |
+| `review.git.allow_deepen` | boolean | `false` | 允许对浅克隆执行 `git fetch --deepen` |
+| `review.labels.ignore` | string[] | `["aicr:ignore", "aicr-ignore"]` | 跳过评审的 label |
 | `review.labels.auto_tag` | string | — | AICR 启动时附加的固定 tag |
 | `review.labels.reviewed_tag` | string | — | 评审完成时附加的 tag |
-| `review.problem_issue.max_recent_issues` | int 1–100 | — | 单次 run 对账的最近 managed issue 上限 |
+| `review.problem_issue.max_recent_issues` | int 1–100 | `20` | 单次 run 对账的最近 managed issue 上限 |
 | `review.fetch_extra.max_bytes` | int > 0 | — | 单次额外上下文请求的最大字节数 |
 | `review.fetch_extra.max_files` | int > 0 | — | 单次额外上下文请求的最大文件数 |
 | `review.fetch_extra.allow_paths` | string[] | — | 额外上下文拉取允许的路径 glob |
-| `review.reflection.enabled` | boolean | — | 启用 reflection memory |
+| `review.reflection.enabled` | boolean | `false` | 启用 reflection memory |
 | `review.reflection.mode` | enum | — | `off`、`light`、`thorough` |
 | `review.reflection.memory.max_size_kb` | int > 0 | — | memory 最大大小（KB） |
 | `review.reflection.memory.max_entries` | int > 0 | — | memory 最大条目数 |
-| `review.reflection.memory.retention_days` | int > 0 | — | memory TTL（天） |
+| `review.reflection.memory.retention_days` | int > 0 | `90` | memory TTL（天） |
 
 ## `queue`
 
@@ -211,17 +220,17 @@ workspace id 不能与保留键 `cache`、`defaults`、`instances` 冲突。
 
 | 字段 | 类型 | 默认值 | 描述 |
 | --- | --- | --- | --- |
-| `queue.kind` | enum | `memory` | 队列后端 |
-| `queue.sqlite.path` | string | — | SQLite 队列 DB 路径 |
-| `queue.sqlite.lock_ttl_seconds` | int > 0 | — | stale running job 回收 TTL |
-| `queue.workers.concurrency` | int > 0 | — | 全局 worker 并发 |
-| `queue.workers.per_workspace_concurrency` | int > 0 | — | 单 workspace 并发上限 |
-| `queue.workers.lock_ttl_seconds` | int > 0 | — | worker 锁 TTL |
+| `queue.kind` | enum | `memory` | 队列后端：`memory`、`sqlite`、`redis`；`rabbitmq` 预留（告警并回退到 `memory`） |
+| `queue.sqlite.path` | string | `data/queue.sqlite` | SQLite 队列 DB 路径 |
+| `queue.sqlite.lock_ttl_seconds` | int > 0 | `300` | stale running job 回收 TTL |
+| `queue.workers.concurrency` | int > 0 | `4` | 全局 worker 并发 |
+| `queue.workers.per_workspace_concurrency` | int > 0 | `1` | 单 workspace 并发上限 |
+| `queue.workers.lock_ttl_seconds` | int > 0 | `1800` | worker 锁 TTL |
 | `queue.rate_limit.per_provider_rps` | map | — | 按 provider 的每秒请求数上限 |
-| `queue.retry.attempts` | int > 0 | — | trigger 级重试次数（兼容旧 `max_attempts`） |
-| `queue.retry.backoff` | object | — | `kind`、`base_ms`、`max_ms`、`jitter` |
-| `queue.dead_letter.enabled` | boolean | — | 启用死信处理 |
-| `queue.dead_letter.max_age_hours` | int > 0 | — | 进入死信前的最大时长（小时） |
+| `queue.retry.attempts` | int > 0 | `3` | trigger 级重试次数（兼容旧 `max_attempts`） |
+| `queue.retry.backoff` | object | `exponential`，2000→60000ms，带 jitter | `kind`、`base_ms`、`max_ms`、`jitter` |
+| `queue.dead_letter.enabled` | boolean | — | 预留——schema 接受但运行时未消费 |
+| `queue.dead_letter.max_age_hours` | int > 0 | — | 预留——schema 接受但运行时未消费 |
 
 ## `storage`
 
@@ -249,15 +258,15 @@ workspace id 不能与保留键 `cache`、`defaults`、`instances` 冲突。
 
 | 字段 | 类型 | 默认值 | 描述 |
 | --- | --- | --- | --- |
-| `compression.trigger_tokens` | int > 0 | — | 触发 diff 压缩的 token 阈值 |
-| `compression.max_input_ratio` | number 0–1 | — | 压缩前的最大输入占比 |
-| `compression.summarize_model_role` | string | — | summarize 阶段使用的 model role（`light`/`heavy`/`any`） |
-| `compression.keep_hunks_top_k` | int > 0 | — | 原样保留的最高风险 hunk 数 |
-| `compression.context_lines` | int > 0 | — | 保留 hunk 周围的上下文行数 |
+| `compression.trigger_tokens` | int > 0 | 按模型派生，见下 | 触发 diff 压缩的 token 阈值 |
+| `compression.max_input_ratio` | number 0–1 | `0.6` | 压缩前的最大输入占比 |
+| `compression.summarize_model_role` | string | `light` | summarize 阶段使用的 model role（`light`/`heavy`/`any`） |
+| `compression.keep_hunks_top_k` | int > 0 | `30` | 原样保留的最高风险 hunk 数 |
+| `compression.context_lines` | int > 0 | `5` | 保留 hunk 周围的上下文行数 |
 | `compression.per_model_overrides` | map | — | 按 model 配置 `trigger_tokens` 覆盖 |
 
 当 `compression` 缺省时，bootstrap 会从 review model 的 context window 派生默认
-`trigger_tokens = min(131072, floor(contextWindow × 0.6))`。
+`trigger_tokens = min(131072, max(8192, floor(contextWindow × 0.6)))`。
 
 ## `server`
 

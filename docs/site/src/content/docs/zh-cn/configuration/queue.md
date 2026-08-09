@@ -4,12 +4,12 @@ description: 配置内存或持久化 SQLite 队列、worker 并发、限流，�
 ---
 
 `queue` 命名空间决定评审任务在哪里排队、同时跑多少个、对每个 provider 的调用多快、
-以及任务持续失败时怎么处理。默认是内存队列；生产环境建议切换到持久化 SQLite 队列，
+以及任务失败时怎么重试。默认是内存队列；生产环境建议切换到持久化 SQLite 队列，
 让任务在重启后仍然存在。
 
 ```yaml
 queue:
-  kind: memory              # memory（默认）| sqlite | redis（预留）
+  kind: sqlite              # memory（默认）| sqlite | redis
 
   workers:
     concurrency: 4
@@ -21,34 +21,41 @@ queue:
       gitea-internal: 5
 
   retry:
-    attempts: 2
+    attempts: 3
     backoff:
       kind: exponential
-      base_ms: 5000
+      base_ms: 2000
       max_ms: 60000
       jitter: true
-
-  dead_letter:
-    enabled: true
-    max_age_hours: 72
 ```
 
 ## `queue.kind`
 
 | 取值 | 说明 |
 | --- | --- |
-| `memory`（默认） | 进程内队列。重启即丢失。适合单实例开发。 |
-| `sqlite` | 持久化队列，重启后仍在（单进程或多个进程共享同一文件）。生产推荐。 |
-| `redis` | 预留——schema 中存在，尚未实现。 |
-| `rabbitmq` | 预留——尚未实现。 |
+| `memory`（默认） | 进程内队列，重启即丢失。适合单实例开发。 |
+| `sqlite` | 持久化队列，重启后仍在（单进程或多进程共享同一文件）。生产推荐。 |
+| `redis` | 持久化到 Redis，适合多实例部署。配置见下。 |
+| `rabbitmq` | 预留——尚未实现，配置了会告警并回退到 `memory`。 |
+
+### `queue.redis` —— Redis 队列选项
+
+Redis 队列的连接字段以透传方式接受：
+
+| 字段 | 类型 | 默认 | 说明 |
+| --- | --- | --- | --- |
+| `url_env` | string | – | 存放 Redis URL 的环境变量名。 |
+| `url` | string | – | 直接写 Redis URL（也可拆成 `host` / `port` / `password` / `db`）。 |
+| `tls` | bool | `false` | 使用 TLS 连接。 |
+| `key_prefix` | string | `"aicr:"` | 队列键前缀。共享 Redis 时请按环境取唯一值。 |
 
 ## `queue.workers`
 
 | 字段 | 类型 | 默认 | 说明 |
 | --- | --- | --- | --- |
-| `concurrency` | int > 0 | – | 全局 worker 并发（进程内同时运行的任务数）。 |
-| `per_workspace_concurrency` | int > 0 | – | 每个 workspace 同时运行的任务上限。设为 `1` 可按仓库串行。 |
-| `lock_ttl_seconds` | int > 0 | – | SQLite 队列运行锁的陈旧回收 TTL。 |
+| `concurrency` | int > 0 | `4` | 全局 worker 并发（进程内同时运行的任务数）。 |
+| `per_workspace_concurrency` | int > 0 | `1` | 每个 workspace 同时运行的任务上限。设为 `1` 可按仓库串行。 |
+| `lock_ttl_seconds` | int > 0 | `1800` | worker 任务锁 TTL。 |
 
 ## `queue.sqlite` —— 持久化队列选项
 
@@ -92,11 +99,11 @@ queue:
 
 | 字段 | 类型 | 默认 | 说明 |
 | --- | --- | --- | --- |
-| `attempts` | int > 0 | – | 总尝试次数（含首次）。`1` = 不重试。 |
-| `backoff.kind` | enum | – | `exponential`、`linear` 或 `constant`。 |
-| `backoff.base_ms` | number > 0 | – | 首次/基础退避延迟（毫秒）。 |
-| `backoff.max_ms` | number > 0 | – | 单次退避延迟上限。 |
-| `backoff.jitter` | bool | – | 是否加入随机抖动。 |
+| `attempts` | int > 0 | `3` | 总尝试次数（含首次）。`1` = 不重试。 |
+| `backoff.kind` | enum | `exponential` | `exponential`、`linear` 或 `constant`。 |
+| `backoff.base_ms` | number > 0 | `2000` | 首次/基础退避延迟（毫秒）。 |
+| `backoff.max_ms` | number > 0 | `60000` | 单次退避延迟上限。 |
+| `backoff.jitter` | bool | `true` | 是否加入随机抖动。 |
 
 ```yaml
 queue:
@@ -120,16 +127,8 @@ queue:
 
 两者同时存在时，`attempts` / `backoff` 始终优先。
 
-## `queue.dead_letter`
+## `queue.dead_letter` —— 预留，尚未生效
 
-| 字段 | 类型 | 默认 | 说明 |
-| --- | --- | --- | --- |
-| `enabled` | bool | – | 为 `true` 时，重试耗尽的任务会被停放以供排查，而不是直接丢弃。 |
-| `max_age_hours` | int > 0 | – | 早于该时长的停放项会被清理。 |
-
-```yaml
-queue:
-  dead_letter:
-    enabled: true
-    max_age_hours: 72
-```
+schema 接受 `dead_letter.enabled` 和 `dead_letter.max_age_hours` 两个字段，但当前
+运行时没有消费它们：重试耗尽的任务按失败处理并写入运行历史，没有独立的停放区。
+这两个字段保留给后续版本，现在配置不会产生任何行为。

@@ -5,8 +5,8 @@ description: Configure LLM providers, the fallback chain, retry/backoff, spend b
 
 The `llm` namespace is the heart of AICodeReviewer — without a provider and at
 least one fallback-chain entry, no review can run. This page covers
-`llm.providers`, `llm.fallback_chain`, `llm.retry`, `llm.budget`, and the M10
-model metadata catalog (`llm.model_catalog`).
+`llm.providers`, `llm.fallback_chain`, `llm.retry`, `llm.budget`, and the model
+metadata catalog (`llm.model_catalog`).
 
 A complete, minimal example:
 
@@ -52,12 +52,49 @@ config.
 | `catalog_provider` | string | – | Map a custom provider to a models.dev provider id (e.g. `openai`). |
 | `catalog_id` | string | – | Explicit models.dev lookup id (e.g. `openai/gpt-4o-mini`) for custom aliases. |
 
+:::caution[Direct clients cover only some kinds]
+AICR's direct LLM calls (diff compression, structured-repair fallback) currently
+ship clients for `openai_compatible`, `ollama`, `azure_openai`, `anthropic`, and
+`google_ai_studio` only. `vertex_ai`, `bedrock`, and `copilot` work through their
+agent CLIs; pointing compression or fallback paths at them fails with
+not-yet-supported errors.
+:::
+
 :::tip[Mapping custom gateways to the catalog]
 A custom OpenAI-compatible gateway can still benefit from the models.dev
 catalog: set `catalog_provider: openai` on the provider (resolved as
 `openai/<modelId>`), or pin a specific entry with `catalog_id:
 openai/gpt-4o-mini`.
 :::
+
+### Reasoning effort
+
+Provider entries also accept passthrough fields that control reasoning-model
+thinking effort:
+
+| Field | Values | Description |
+| --- | --- | --- |
+| `reasoning_effort` | `minimal`, `low`, `medium`, `high`, `max` | Sent as `reasoning_effort` on direct LLM calls. The Kilo and opencode adapters materialize it as `--variant`; Claude Code and Copilot CLI map it to `--effort` (a `minimal` tier maps to `low`). |
+| `thinking_level` | `off`, `minimal`, `low`, `medium`, `high`, `max` | Coarser tier; converted to an effort value when `reasoning_effort` is unset. |
+| `thinking_budget_tokens` | int | Explicit thinking budget in tokens. |
+| `thinking.enabled` / `thinking.budget_tokens` | bool / int | Anthropic-style native thinking config. |
+
+```yaml
+llm:
+  providers:
+    - id: my-llm
+      kind: openai_compatible
+      base_url: https://api.openai.com/v1
+      api_key_env: AICR_LLM_API_KEY
+      reasoning_effort: high
+```
+
+The model catalog can declare per-model tiers too:
+`supported_reasoning_efforts` (the tiers a model accepts) and
+`default_reasoning_effort` (used when nothing is set explicitly) under
+`model_catalog.overrides."<provider>/<model>"`. Resolution order: the provider's
+`reasoning_effort` → the catalog's `default_reasoning_effort` → the
+`thinking_level` conversion.
 
 ## `llm.fallback_chain[]` — which model does what
 
@@ -132,9 +169,9 @@ llm:
     per_repo_daily_usd: 1.0
 ```
 
-## `llm.model_catalog` — models.dev metadata (M10, opt-in)
+## `llm.model_catalog` — models.dev metadata (opt-in)
 
-Available since M10 and **disabled by default**. When enabled, AICodeReviewer
+**Disabled by default**. When enabled, AICodeReviewer
 reads model parameters from [models.dev](https://models.dev/) so you do not have
 to hand-maintain context windows, output limits, capability flags, and pricing
 per provider. These values feed diff-compression thresholds, `llm.budget` cost
@@ -221,6 +258,8 @@ The most useful override fields:
 | `supports_vision` | bool | Image input. |
 | `supports_cache_prompt` | bool | Prompt caching. |
 | `supports_reasoning` | bool | Reasoning models. |
+| `supported_reasoning_efforts` | string[] | Reasoning effort tiers the model accepts (`minimal`…`max`). |
+| `default_reasoning_effort` | enum | Tier used when no explicit `reasoning_effort` is set. |
 | `supports_structured_output` | bool | Structured/JSON output. |
 | `display_name` | string | Human-friendly label. |
 | `family` | string | Model family. |

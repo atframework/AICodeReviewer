@@ -46,9 +46,10 @@ node packages/cli/dist/index.js serve \
 
 | 参数 | 说明 |
 | --- | --- |
-| `--port <number>` | HTTP 监听端口（默认 8080） |
+| `--port <number>` | HTTP 监听端口（默认取 `server.port`，否则 8080） |
+| `--base-prompt <path>` | 基础 system prompt 模板路径（默认 `prompts/system/code-reviewer.system.md`） |
 
-服务暴露 `/healthz`、`/metrics`、`/dashboard`、`/api/admin/*`、`/webhooks/*`、
+服务暴露 `/healthz`、`/readyz`、`/metrics`、`/dashboard`、`/api/admin/*`、`/webhooks/*`、
 `/triggers/*`。各路由的鉴权方式见[认证与密钥](/zh-cn/configuration/authentication/)。
 
 ## review
@@ -78,6 +79,10 @@ node packages/cli/dist/index.js review \
 | `--url <url>` | PR / MR / commit URL |
 | `--author-username <u>` | 作者用户名 |
 | `--author-email <e>` | 作者邮箱 |
+| `--author-display-name <n>` | 作者显示名 |
+| `--operator-override <kv>` | 操作员覆盖项（可重复） |
+| `--memory-hint <text>` | 传给评审的 memory 提示（可重复） |
+| `--task-context <text>` | 额外任务上下文 |
 | `--dry-run` | 运行但不发布到输出通道 |
 | `--max-prompt-tokens <n>` | Prompt token 预算上限 |
 
@@ -98,6 +103,7 @@ node packages/cli/dist/index.js eval --eval-dir eval/
 | --- | --- |
 | `--eval-dir <path>` | 包含 eval JSON fixture 的目录 |
 | `--validate-only` | 仅校验 fixture，不加载 config 或 LLM |
+| `--base-prompt <path>` | 基础 system prompt 模板路径 |
 
 Fixture 位于 `eval/*.json`。根 CI 流水线在每次变更时运行 `pnpm eval:validate`
 （即 `eval --validate-only`）。
@@ -115,6 +121,8 @@ node packages/cli/dist/index.js replay \
 | 参数 | 说明 |
 | --- | --- |
 | `--run-id <id>` | 要回放的 run ID |
+| `--workspace <id>` | run 所在的 workspace（默认 `default`） |
+| `--source-root <path>` | 源码根目录 |
 
 ## memory
 
@@ -157,7 +165,7 @@ node packages/cli/dist/index.js lint \
 
 ## doctor
 
-打印环境诊断——Node 版本、解析到的二进制路径、沙箱引擎可用性和配置健全性。排障时建议
+以 JSON 打印环境诊断：当前工作目录、Node 版本和解析到的配置文件路径。排障时建议
 作为第一步。
 
 ```bash
