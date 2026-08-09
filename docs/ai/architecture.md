@@ -182,8 +182,10 @@ AICR 采用**两层上下文管理**，两者互补：
 
 - 压缩是 `summarize -> review` 两阶段，而不是简单截断 diff。
 - 触发阈值由 token 预算与输入占比共同决定。
-- 当 `compression` 配置缺失时，bootstrap 从 review model 的 `contextWindow` 派生默认阈值
-  （`min(131072, floor(contextWindow × 0.6))`），确保大型 PR/changelist 不会因为未配置而溢出。
+- 当 `compression` 配置缺失时，bootstrap 从 review model 的 `contextWindow` 派生默认配置
+  （`toDefaultCompressionConfig`：`trigger_tokens = min(131072, max(8192, floor(contextWindow × 0.6)))`，
+  无 `contextWindow` 时取 131072；`max_input_ratio: 0.6`、`keep_hunks_top_k: 30`、`context_lines: 5`），
+  确保大型 PR/changelist 不会因为未配置而溢出。
 - `estimateTokens` 需要正确处理 CJK 字符，避免低估上下文成本。
 - 压缩输出必须保留文件级摘要、关键 hunk 与足够的定位上下文。
 - 是否压缩、选择哪些 hunk、使用哪个 summarize model 都应可配置。
@@ -520,7 +522,16 @@ AICR 采用**两层上下文管理**，两者互补：
   完成（`SELECT ... LIMIT 1` 子查询 + `UPDATE` 在同一语句中原子执行），多个 worker 不会
   重复领取同一 job。`dequeue` 前自动 reclaim 超过 `lock_ttl_seconds`（默认 300s）的 stale
   running job，处理 worker 崩溃恢复。enqueue/dequeue/complete/fail/retry/dead-letter/purge
-  全部实现，backoff 复用 `computeBackoffDelay`，跨进程安全（WAL + busy_timeout）。
+   全部实现，backoff 复用 `computeBackoffDelay`，跨进程安全（WAL + busy_timeout）。
+- **Redis 队列（已接入）**：`queue.kind: "redis"` 使用 `packages/core/src/redis-queue.ts`。
+  连接参数读取 `queue.redis`（queue schema 为 `.passthrough()`，按原样透传）：`url_env` /
+  `url` / `host` / `port` / `password_env` / `password` / `db` / `tls` / `key_prefix`
+  （默认 `aicr:`）。`queue.kind: "rabbitmq"` 尚未实现：启动时告警并回退 memory 队列
+  （`packages/core/src/queue-factory.ts`）。
+- **dead-job 生命周期与 `queue.dead_letter` 的距离**：三种后端的队列合同都实现了
+  dead-job 操作（retry 耗尽置 `dead`、`getDeadJobs` / `requeueDead` / `purgeDead`），
+  但 server 侧当前不调用 requeue/purge，也不读 `queue.dead_letter`
+  （`enabled` / `max_age_hours`）——该配置只被 schema 接受，无消费方。
 - 计划中的内置观测首页认证配置与 trigger API key 分离；配置文件只保存 env var 名称，
   不保存超级管理员用户名/密码明文。密码哈希 env（如 `*_PASSWORD_HASH`，格式
   `sha256:<hex>`）优先且可单独使用；小型内网部署允许 raw password env，但必须

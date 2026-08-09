@@ -531,3 +531,15 @@ M11-P6 打磨（首页组件修复 + 首页再丰富 + 4K 全宽 + README/logo�
   导航链接行、“Review output standards”和“Security”章节。
 - ✅ 同步更新：`validate-public-content.mjs` 扫描 `.md` + `.mdx`；`AGENTS.md` pitfall #59；
   中英 `development/index.md` 的 MDX 说明；`docs/site/README.md`。
+
+M11 后续修订（全文事实核验 + 去AI化改写，2026-08）：
+
+- ✅ 以代码为真源逐项核对双语站点全部页面与 `docs/output-channels.md`、`docs/podman.md`：
+  修正 `queue.dead_letter` 无消费方、`queue.kind: rabbitmq` 未实现（告警回退 memory）、
+  `template_engine: eta` 未实现、workspace 层 `agent.default`/`sandbox` 覆盖不生效、
+  compression 派生阈值缺 `max(8192, ...)` 下界、`vertex_ai`/`bedrock`/`copilot` 无直连客户端、
+  `agent.timeout_seconds` 默认值、`no_problems` 按 kind 默认值、mention 默认值等漂移。
+- ✅ 按去AI化清单重写中英首页，并对其余页面做行文清理（删营销形容词、机械过渡、
+  空洞收尾段与预告句）；写作规则沉淀为 `.agents/skills/docs-writing-style/SKILL.md`，
+  并在根 `AGENTS.md` 挂了常驻规则。
+- ✅ 门禁：markdownlint、`pnpm docs:check`、`pnpm docs:build`（54 页）全部通过。
