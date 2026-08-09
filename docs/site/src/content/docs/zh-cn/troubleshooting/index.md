@@ -5,7 +5,8 @@ description: 常见问题及诊断与修复方法。
 
 本页是运行 AICR 时最常遇到的问题的 FAQ 式索引。每条都给出症状、诊断和修复。各组件的深入背景请跟随交叉链接。
 
-任何部署问题的第一步都可以是 [`doctor` CLI 命令](/zh-cn/reference/cli/#doctor)，它会打印 Node 版本、解析到的二进制路径、沙箱引擎可用性和配置健康度。
+任何部署问题的第一步都可以是 [`doctor` CLI 命令](/zh-cn/reference/cli/#doctor)，它会以
+JSON 打印当前工作目录、Node 版本和解析到的配置文件路径。
 
 ## Webhook 鉴权失败（HMAC 密钥不匹配）
 

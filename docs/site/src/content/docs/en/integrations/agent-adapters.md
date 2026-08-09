@@ -211,9 +211,11 @@ double-write conflicts.
 
 ## Choosing an agent
 
-Set `agent.default` globally, override per workspace with
-`workspaces.instances.<id>.agent.default`, or set
-`workspaces.defaults.agent.default` for a workspace-set default. See
+Set `agent.default` globally. The schema also accepts
+`workspaces.defaults.agent.default` and
+`workspaces.instances.<id>.agent.default`, but the current version builds one
+global adapter at startup — workspace-layer values are parsed but have no
+effect, so mixing agents needs a future release. See
 [Agent and sandbox](/en/configuration/agent/) for the timeout, sandbox, and
 context-compaction fields that apply to every agent kind.
 
@@ -237,10 +239,10 @@ context-compaction fields that apply to every agent kind.
   `context_window` override). Without it, Kilo and Zoo cannot track context
   usage and will overflow instead of auto-compacting. If an overflow still
   occurs, AICR throws `AgentContextOverflowError` with the limit, requested
-  tokens, and actionable guidance — never a generic `review_orchestration_failed`.
-- **Mixing agents?** `agent.default` is overridable per workspace, so you can
-  run `kilo` for most repos and `claude-code` for a specific one without
-  running two servers.
+  tokens, and actionable guidance — not a generic `review_orchestration_failed`.
+- **Mixing agents?** All workspaces share the global `agent.default` in the
+  current version; per-workspace agent overrides are parsed but not applied
+  yet.
 
 Capability gaps (vision, reasoning, structured output, tool calls) are
 recorded in each run's `manifest.json` as `injected`, `delegated`, or

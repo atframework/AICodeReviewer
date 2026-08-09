@@ -66,7 +66,7 @@ secret 设为与 `AICR_GITHUB_WEBHOOK_SECRET` 相同的 HMAC 密钥，订阅 **P
 head/base SHA 和分支信息。若该拉取不可用，AICR 用评论 payload 中的 PR URL 作为去重标识，而不会
 把不相关的 PR 合并到 `unknown` 目标。
 
-#### GitHub App 认证（M12）
+#### GitHub App 认证
 
 除了静态 PAT，还可以配置 GitHub App，让 AICR 签发 RS256 JWT 并自动刷新 installation token
 （零新增依赖）：
@@ -307,7 +307,7 @@ glob 语法：
 - `/aicr review`
 - `/review`
 
-在 async 模式下，同一目标的重复命令会被合并：当前评审先完成，然后 AICR 用最新事件跑一次
+同一目标的重复命令会被合并：当前评审先完成，然后 AICR 用最新事件跑一次
 最终重审。
 
 ## 非 PR 评审的目标链接

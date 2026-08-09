@@ -107,9 +107,10 @@ Copilot CLI 使用其订阅固定的 model catalog。没有模型元数据注入
 
 ## 选择 agent
 
-全局设置 `agent.default`，按 workspace 用 `workspaces.instances.<id>.agent.default` 覆盖，或用
-`workspaces.defaults.agent.default` 为一组 workspace 设置默认值。适用于所有 agent kind 的超时、
-沙箱和上下文压缩字段参见 [Agent 与沙箱](/zh-cn/configuration/agent/)。
+用全局 `agent.default` 设置。schema 也接受 `workspaces.defaults.agent.default` 和
+`workspaces.instances.<id>.agent.default`，但当前版本启动时只创建一份全局适配器，
+workspace 层的设置会被解析而不生效——混用 agent 需要等后续版本。适用于所有 agent kind
+的超时、沙箱和上下文压缩字段参见 [Agent 与沙箱](/zh-cn/configuration/agent/)。
 
 ### 该用哪个 agent？
 
@@ -127,9 +128,9 @@ Copilot CLI 使用其订阅固定的 model catalog。没有模型元数据注入
 - **大 PR 上下文溢出？** 无论选哪个 agent，都要确保模型声明了 `contextWindow`（通过
   `llm.model_catalog` 或显式 `context_window` override）。否则 Kilo 和 Zoo 无法跟踪上下文用量，
   会溢出而非自动压缩。若仍发生溢出，AICR 抛出 `AgentContextOverflowError`，附带模型上限、
-  请求 token 数和可操作指引——绝不会是泛化的 `review_orchestration_failed`。
-- **混用 agent？** `agent.default` 可按 workspace 覆盖，所以大多数仓库用 `kilo`、某个仓库用
-  `claude-code`，无需运行两个服务。
+  请求 token 数和可操作指引——不会是泛化的 `review_orchestration_failed`。
+- **想混用 agent？** 当前版本所有 workspace 共用全局 `agent.default`；workspace 层的
+  agent 覆盖尚未生效，混用需要等后续版本。
 
 能力缺口（vision、reasoning、结构化输出、工具调用）记录在每个 run 的 `manifest.json` 中，
 标记为 `injected`、`delegated` 或 `not_applicable`——绝不静默丢弃。

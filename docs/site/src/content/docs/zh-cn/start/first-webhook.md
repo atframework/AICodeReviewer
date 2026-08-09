@@ -96,7 +96,7 @@ HMAC 密钥，并订阅 **Pull requests**。
 /aicr review
 ```
 
-在 async 模式下，对同一 target 的重复 `/aicr review` 命令会被合并：当前评审先完成，然后 AICR 用最新事件跑一次最终 re-review。
+对同一 target 的重复 `/aicr review` 命令会被合并：当前评审先完成，然后 AICR 用最新事件跑一次最终 re-review。
 
 ## 4. 验证 run 已被调度
 

@@ -8,8 +8,8 @@ Each entry has a symptom, a diagnosis, and a fix. For deeper background on
 the moving parts, follow the cross-links.
 
 A good first step for any deployment issue is the
-[`doctor` CLI command](/en/reference/cli/#doctor), which prints Node version,
-resolved binary paths, sandbox-engine availability, and config sanity.
+[`doctor` CLI command](/en/reference/cli/#doctor), which prints the current
+working directory, Node version, and resolved config path as JSON.
 
 ## Webhook auth failure (HMAC secret mismatch)
 

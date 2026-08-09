@@ -4,13 +4,13 @@ description: 配置数据库、缓存与对象存储后端。
 ---
 
 `storage` 命名空间配置三个相互独立的后端——数据库、缓存和对象存储——外加一项保留
-策略。它们为可观测性看板、模型元数据目录、反思记忆以及未来特性提供支撑。当配置了
-admin 鉴权、`llm.model_catalog` 使用 SQLite 后端，或启用反思记忆时，数据库会自动
-创建。
+策略。它们支撑可观测性看板、模型元数据目录和反思记忆。当配置了 admin 鉴权、
+`llm.model_catalog` 使用 SQLite 后端，或启用反思记忆时，数据库会自动创建。
 
-:::note[M8 运行时仅使用 SQLite]
-M8 看板运行时目前**仅支持 SQLite**。PostgreSQL、Redis 与 S3 为未来多实例部署
-**预留**——这些字段存在并通过校验，但尚未接入运行时特性。
+:::note[各后端的接入程度不同]
+数据库目前只有 `sqlite` 接入了运行时（dashboard 统计、模型目录、反思记忆），
+`postgres` 是预留。缓存的 `redis` 已接入，供模型目录的 Redis 后端使用。
+对象存储的 `s3` 字段是预留——能通过校验，但运行时还没有消费它们。
 :::
 
 ```yaml
@@ -81,8 +81,8 @@ S3 字段为**预留**——会通过校验，但尚未被运行时特性使用�
 
 ## 后端一览
 
-| 后端 | 当前可用 | 预留 | 说明 |
+| 后端 | 已接入运行时 | 预留 | 说明 |
 | --- | --- | --- | --- |
 | database | `sqlite` | `postgres` | 默认 SQLite 位于 `/app/data/aicr.sqlite`。 |
-| cache | `memory`、`none` | `redis` | Redis 与模型目录 Redis 后端共用。 |
+| cache | `memory`、`redis`、`none` | — | Redis 与模型目录 Redis 后端共用。 |
 | object | `filesystem` | `s3` | 默认 filesystem 位于 `/app/data/objects`。 |

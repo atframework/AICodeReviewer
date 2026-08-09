@@ -48,10 +48,11 @@ node packages/cli/dist/index.js serve \
 
 | Flag | Description |
 | --- | --- |
-| `--port <number>` | HTTP listen port (default: 8080) |
+| `--port <number>` | HTTP listen port (default: `server.port` from config, else 8080) |
+| `--base-prompt <path>` | Base system prompt file (default `prompts/system/code-reviewer.system.md`) |
 
-The server exposes `/healthz`, `/metrics`, `/dashboard`, `/api/admin/*`,
-`/webhooks/*`, and `/triggers/*`. See [Authentication &
+The server exposes `/healthz`, `/readyz`, `/metrics`, `/dashboard`,
+`/api/admin/*`, `/webhooks/*`, and `/triggers/*`. See [Authentication &
 secrets](/en/configuration/authentication/) for how each route is protected.
 
 ## review
@@ -82,6 +83,10 @@ node packages/cli/dist/index.js review \
 | `--url <url>` | PR / MR / commit URL |
 | `--author-username <u>` | Author username |
 | `--author-email <e>` | Author email |
+| `--author-display-name <n>` | Author display name |
+| `--operator-override <kv>` | Operator override (repeatable) |
+| `--memory-hint <text>` | Memory hint passed to the review (repeatable) |
+| `--task-context <text>` | Extra task context |
 | `--dry-run` | Run without publishing to output channels |
 | `--max-prompt-tokens <n>` | Maximum prompt token budget |
 
@@ -102,6 +107,7 @@ node packages/cli/dist/index.js eval --eval-dir eval/
 | --- | --- |
 | `--eval-dir <path>` | Directory containing eval JSON fixtures |
 | `--validate-only` | Validate fixtures without loading config or LLM |
+| `--base-prompt <path>` | Path to base system prompt template |
 
 Fixtures live under `eval/*.json`. The root CI pipeline runs
 `pnpm eval:validate` (= `eval --validate-only`) on every change.
@@ -120,6 +126,8 @@ node packages/cli/dist/index.js replay \
 | Flag | Description |
 | --- | --- |
 | `--run-id <id>` | Run ID to replay |
+| `--workspace <id>` | Workspace the run belongs to (default `default`) |
+| `--source-root <path>` | Source root directory |
 
 ## memory
 
@@ -164,9 +172,9 @@ node packages/cli/dist/index.js lint \
 
 ## doctor
 
-Print environment diagnostics — Node version, resolved binary paths, sandbox
-engine availability, and config sanity. Useful first step when troubleshooting
-a deployment.
+Print environment diagnostics as JSON: the current working directory, the Node
+version, and the resolved config path. Useful first step when troubleshooting a
+deployment.
 
 ```bash
 node packages/cli/dist/index.js doctor --config example/config.yaml

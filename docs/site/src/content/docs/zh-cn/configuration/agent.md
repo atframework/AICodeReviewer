@@ -10,7 +10,7 @@ AICodeReviewer 会在沙箱内驱动一个外部 agent CLI（默认 Kilo Code）
 ```yaml
 agent:
   default: kilo
-  timeout_seconds: 300
+  timeout_seconds: 600
   auto_approve: true
   context_compaction:
     auto: true
@@ -35,14 +35,15 @@ agent:
 `AgentKind`。
 :::
 
-`agent.default` 也可以在 `workspaces.defaults.agent.default` 和
-`workspaces.instances.<id>.agent.default` 这两层覆盖。
+schema 也接受 `workspaces.defaults.agent.default` 和
+`workspaces.instances.<id>.agent.default`，但当前版本启动时只按全局
+`agent.default` 创建一份适配器——workspace 层的设置会被解析，不会生效。
 
 ## `agent.timeout_seconds` —— 单次运行的硬上限
 
 ```yaml
 agent:
-  timeout_seconds: 300   # 生产环境对大型 PR 常用 600
+  timeout_seconds: 600   # 默认值；小 PR 为主的环境可以调低
 ```
 
 这是**单次 agent 跑一轮的硬上限**。超时触发时，沙箱会杀掉**整棵进程树**——
@@ -64,8 +65,8 @@ agent:
   auto_approve: true
 ```
 
-为 `true`（默认）时，AICodeReviewer 会在沙箱化的评审范围内自动批准 agent 提议的
-工具动作。仅在需要逐步检查每个动作的调试流程中才设为 `false`。
+当前版本的编排器固定按 `true` 处理：schema 接受该字段，但设为 `false` 不会生效。
+字段保留给未来的逐步审批调试模式。
 
 ## `agent.context_compaction` —— 运行时侧的历史压缩
 
@@ -148,7 +149,6 @@ agent:
     engine: podman
 ```
 
-`sandbox` 还可在 `workspaces.defaults.sandbox` 和
-`workspaces.instances.<id>.sandbox` 层覆盖（注意：实例级 `sandbox` 只能通过
-`workspaces.defaults` 提供，不能直接放在实例上——覆盖表见
-[配置总览](/zh-cn/configuration/overview/)）。
+`sandbox` 在 schema 里也可放在 `workspaces.defaults` 和 `workspaces.instances.<id>`
+两层，但与 `agent.default` 一样，当前运行时只使用全局 `agent.sandbox`，workspace 层
+设置不会生效（覆盖表见[配置总览](/zh-cn/configuration/overview/)）。

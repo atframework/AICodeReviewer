@@ -47,9 +47,11 @@ your existing Prometheus/Grafana stack alongside `/healthz` for liveness.
 ## SQLite store
 
 The built-in store is SQLite + Drizzle at `storage.database.sqlite.path`
-(default `/app/data/aicr.sqlite`). The config schema already reserves
-Postgres, Redis cache, and S3-compatible object storage under top-level
-`storage.*`, but the dashboard runtime currently uses **SQLite only**.
+(default `/app/data/aicr.sqlite`). The schema also reserves Postgres and
+S3-compatible object storage under top-level `storage.*`, but the dashboard
+runtime currently uses **SQLite only**. The `redis` cache kind is wired in and
+used by the model catalog's Redis backend; see
+[Storage](/en/configuration/storage/).
 
 Keep secrets in `.env`; `config.yaml` should contain env-var names only.
 

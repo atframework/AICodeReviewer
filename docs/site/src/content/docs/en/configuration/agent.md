@@ -11,7 +11,7 @@ sandbox backend that isolates the agent from the host.
 ```yaml
 agent:
   default: kilo
-  timeout_seconds: 300
+  timeout_seconds: 600
   auto_approve: true
   context_compaction:
     auto: true
@@ -36,14 +36,16 @@ agent:
 explicitly validating that adapter.
 :::
 
-`agent.default` can also be overridden at the `workspaces.defaults.agent.default`
-and `workspaces.instances.<id>.agent.default` layers.
+The schema also accepts `agent.default` at the `workspaces.defaults.agent.default`
+and `workspaces.instances.<id>.agent.default` layers, but the current version
+builds a single adapter from the global value at startup — workspace-layer values
+are parsed but have no effect.
 
 ## `agent.timeout_seconds` — hard per-run cap
 
 ```yaml
 agent:
-  timeout_seconds: 300   # production commonly uses 600 for large PRs
+  timeout_seconds: 600   # the default; lower it for small-PR environments
 ```
 
 This is a **hard cap on a single agent pass**. When the timeout fires, the
@@ -68,9 +70,9 @@ agent:
   auto_approve: true
 ```
 
-When `true` (the default), AICodeReviewer auto-approves the agent's proposed
-tool actions within the sandboxed review scope. Set to `false` only for
-debugging flows where you want to inspect each action.
+The current orchestrator always behaves as if this were `true`: the schema
+accepts the field, but setting `false` has no effect. It is reserved for a
+future step-by-step approval debugging mode.
 
 ## `agent.context_compaction` — runtime-side history compaction
 
@@ -158,8 +160,8 @@ agent:
     engine: podman
 ```
 
-`sandbox` is also overridable at the `workspaces.defaults.sandbox` and
-`workspaces.instances.<id>.sandbox` layers (note: per-instance `sandbox` is only
-available via `workspaces.defaults`, not directly on an instance — see the
-override table on the [Configuration Overview](/en/configuration/overview/)
-page).
+The schema also accepts `sandbox` at the `workspaces.defaults` and
+`workspaces.instances.<id>` layers, but like `agent.default` the runtime
+currently uses only the global `agent.sandbox` — workspace-layer values have no
+effect (see the override table on the
+[Configuration Overview](/en/configuration/overview/) page).
