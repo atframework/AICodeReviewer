@@ -243,7 +243,7 @@ Narrative: [Queue and retry](/en/configuration/queue/).
 | `queue.workers.lock_ttl_seconds` | int > 0 | `1800` | Worker lock TTL |
 | `queue.rate_limit.per_provider_rps` | map | — | Per-provider requests-per-second cap |
 | `queue.retry.attempts` | int > 0 | `3` | Trigger-level retry attempts (legacy `max_attempts` normalized) |
-| `queue.retry.backoff` | object | `exponential`, 2000→60000ms with jitter | `kind`, `base_ms`, `max_ms`, `jitter` |
+| `queue.retry.backoff` | object | `exponential`, 5000→60000ms with jitter | `kind`, `base_ms`, `max_ms`, `jitter` |
 | `queue.dead_letter.enabled` | boolean | — | Reserved — accepted by the schema but not consumed at runtime |
 | `queue.dead_letter.max_age_hours` | int > 0 | — | Reserved — accepted by the schema but not consumed at runtime |
 

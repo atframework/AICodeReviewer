@@ -1,3 +1,4 @@
+import { isTransientIoError, withTransientIoRetry } from "@aicr/core";
 import type { ChatCompletionClient, ModelSpec } from "@aicr/llm";
 
 export interface IssueDetails {
@@ -46,6 +47,15 @@ export interface TriageResult {
   readonly commentPosted: boolean;
   readonly closeSkippedReason?: "action_not_allowed" | "category_not_allowed" | "dry_run" | "missing_repository";
   readonly llmResponse: string;
+}
+
+class NonRetryableTriageSideEffectError extends Error {
+  readonly retryable = false;
+
+  constructor(message: string, cause: unknown) {
+    super(message, { cause });
+    this.name = "NonRetryableTriageSideEffectError";
+  }
 }
 
 export interface GiteaApiClientOptions {
@@ -114,18 +124,26 @@ export class GiteaApiClient {
       headers.authorization = `token ${this.token}`;
     }
 
-    const response = await this.fetchImpl(`${this.baseUrl}${path}`, {
-      method,
-      headers,
-      ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
-    });
+    const idempotentMethod = method.toUpperCase() !== "POST";
+    return withTransientIoRetry(
+      async () => {
+        const response = await this.fetchImpl(`${this.baseUrl}${path}`, {
+          method,
+          headers,
+          ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+        });
 
-    if (!response.ok) {
-      const text = await response.text();
-      throw new Error(`Gitea API ${method} ${path} returned ${response.status}: ${text}`);
-    }
+        if (!response.ok) {
+          const text = await response.text();
+          const error = new Error(`Gitea API ${method} ${path} returned ${response.status}: ${text}`);
+          (error as Error & { status?: number }).status = response.status;
+          throw error;
+        }
 
-    return response.json();
+        return response.json();
+      },
+      { isRetryable: (error) => idempotentMethod && isTransientIoError(error) },
+    );
   }
 
   async getIssue(owner: string, repo: string, number: number): Promise<IssueDetails> {
@@ -440,7 +458,7 @@ export async function triageIssue(
         commentPosted = true;
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        throw new Error(`Failed to post triage comment: ${message}`);
+        throw new NonRetryableTriageSideEffectError(`Failed to post triage comment: ${message}`, error);
       }
 
       try {
@@ -452,7 +470,10 @@ export async function triageIssue(
         closed = true;
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        throw new Error(`Failed to close ${issue.isPullRequest ? "pull request" : "issue"}: ${message}`);
+        throw new NonRetryableTriageSideEffectError(
+          `Failed to close ${issue.isPullRequest ? "pull request" : "issue"}: ${message}`,
+          error,
+        );
       }
     }
   }

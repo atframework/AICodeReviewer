@@ -3,7 +3,7 @@ import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
 
-import { normalizeChangedPath, normalizePath, type ReviewEvent } from "@aicr/core";
+import { normalizeChangedPath, normalizePath, withTransientIoRetry, type ReviewEvent } from "@aicr/core";
 
 import {
   buildAttributionEntry,
@@ -298,11 +298,13 @@ export class GitVcsAdapter implements VcsAdapter {
   }
 
   private async runGit(args: readonly string[]): Promise<GitCommandResult> {
-    try {
-      return await this.git(this.buildGitArgs(args));
-    } catch (error) {
-      throw redactGitError(error);
-    }
+    return withTransientIoRetry(async () => {
+      try {
+        return await this.git(this.buildGitArgs(args));
+      } catch (error) {
+        throw redactGitError(error);
+      }
+    });
   }
 
   private async isGitRepository(): Promise<boolean> {

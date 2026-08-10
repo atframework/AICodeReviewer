@@ -566,6 +566,7 @@ export {
 	createResilientChatClient,
 	DailyBudgetTracker,
 	extractModelPricing,
+	isContextOverflowError,
 	LlmBudgetExceededError,
 	LlmFallbackExhaustedError,
 	type LlmGatewayBudgetConfig,

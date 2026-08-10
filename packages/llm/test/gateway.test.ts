@@ -222,6 +222,53 @@ describe("createResilientChatClient", () => {
 		expect(result.retryCount).toBe(1);
 	});
 
+	it("retries raw connection failures and succeeds without fallback", async () => {
+		const okResult: ChatCompletionResult = {
+			providerId: "openai-prod",
+			modelId: "gpt-test",
+			content: "ok after reconnect",
+			usage: { promptTokens: 5, completionTokens: 2, totalTokens: 7 },
+			raw: {},
+		};
+		const sharedClient = makeToggleClient([new TypeError("fetch failed"), okResult]);
+
+		const gateway = createResilientChatClient(
+			makeOptions({
+				clientFactory: () => sharedClient,
+				retry: { maxAttempts: 3, backoff: { kind: "constant", baseMs: 1, jitter: false } },
+			}),
+		);
+
+		const result = await gateway.complete({ model: baseModel, messages: [] });
+		expect(result.content).toBe("ok after reconnect");
+		expect(result.retryCount).toBe(1);
+		expect(result.fallbackCount).toBe(0);
+	});
+
+	it("falls back when the primary keeps failing with connection errors", async () => {
+		const connectionError = new TypeError("fetch failed", {
+			cause: Object.assign(new Error("connect timeout"), { code: "UND_ERR_CONNECT_TIMEOUT" }),
+		});
+
+		const gateway = createResilientChatClient(
+			makeOptions({
+				clientFactory: (model) => {
+					if (model.providerId === "openai-prod") {
+						return makeFailingClient(connectionError);
+					}
+
+					return makeClient({ providerId: "anthropic-prod", modelId: "claude-test", content: "fallback ok", raw: {} });
+				},
+				retry: { maxAttempts: 2, backoff: { kind: "constant", baseMs: 1, jitter: false } },
+			}),
+		);
+
+		const result = await gateway.complete({ model: baseModel, messages: [] });
+		expect(result.content).toBe("fallback ok");
+		expect(result.fallbackCount).toBe(1);
+		expect(result.retryCount).toBe(1);
+	});
+
 	it("treats maxAttempts as total provider calls and does not sleep after the final attempt", async () => {
 		const rateLimitError = new LlmProviderError("rate limited", { status: 429 });
 		let primaryCalls = 0;

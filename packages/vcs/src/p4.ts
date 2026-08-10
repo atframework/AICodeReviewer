@@ -3,7 +3,7 @@ import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
 
-import { normalizeChangedPath, normalizePath, type ReviewEvent } from "@aicr/core";
+import { normalizeChangedPath, normalizePath, withTransientIoRetry, type ReviewEvent } from "@aicr/core";
 
 import {
   buildAttributionEntry,
@@ -297,22 +297,24 @@ export class P4VcsAdapter implements VcsAdapter {
   }
 
   private async runP4(args: readonly string[]): Promise<P4CommandResult> {
-    try {
-      return await this.runP4Once(args);
-    } catch (error) {
-      if (!this.password || this.loginAttempted || !isP4AuthenticationError(error)) {
-        throw error;
-      }
+    return withTransientIoRetry(async () => {
+      try {
+        return await this.runP4Once(args);
+      } catch (error) {
+        if (!this.password || this.loginAttempted || !isP4AuthenticationError(error)) {
+          throw error;
+        }
 
-      await this.login();
-      return this.runP4Once(args);
-    }
+        await this.login();
+        return this.runP4Once(args);
+      }
+    });
   }
 
   async login(): Promise<void> {
     if (!this.password) return;
-    this.loginAttempted = true;
     await this.p4Login(this.buildBaseArgs(), this.password, this.buildEnv());
+    this.loginAttempted = true;
   }
 
   async listChanges(ev: ReviewEvent): Promise<ChangeRange> {

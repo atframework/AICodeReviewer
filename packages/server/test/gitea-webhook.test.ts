@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
-import type { ChatCompletionClient, ModelSpec } from "@aicr/llm";
+import { LlmFallbackExhaustedError, type ChatCompletionClient, type ModelSpec } from "@aicr/llm";
 import type { ReviewProblem } from "@aicr/outputs";
 import { parseUnifiedDiff, type ChangeRange } from "@aicr/vcs";
 import { describe, expect, it, vi } from "vitest";
@@ -213,7 +213,7 @@ describe("createServerApp", () => {
     const infoSpy = vi.spyOn(console, "info").mockImplementation(() => undefined);
     const sourceRootResolver = vi.fn()
       .mockImplementationOnce(() => {
-        throw new Error("transient preparation failure");
+        throw new Error("fetch failed");
       })
       .mockReturnValue(undefined);
     try {
@@ -270,6 +270,329 @@ describe("createServerApp", () => {
       warnSpy.mockRestore();
       infoSpy.mockRestore();
       vi.useRealTimers();
+    }
+  });
+
+  it("retries transient async trigger failures three times by default", async () => {
+    vi.useFakeTimers();
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => undefined);
+    const sourceRootResolver = vi.fn()
+      .mockImplementationOnce(() => {
+        const error = new Error("deadline exceeded");
+        error.name = "TimeoutError";
+        throw error;
+      })
+      .mockImplementationOnce(() => {
+        const error = new Error("deadline exceeded");
+        error.name = "TimeoutError";
+        throw error;
+      })
+      .mockReturnValue(undefined);
+    try {
+      const app = createServerApp({
+        gitea: {
+          triggerName: "gitea-internal",
+          workspaceId: "gitea-internal-owent-example",
+          webhookSecret,
+        },
+        asyncTriggers: true,
+        reviewPreparation: {
+          baseSystemPrompt: "test",
+          sourceRootResolver,
+        },
+      });
+      const payload = JSON.stringify({
+        action: "opened",
+        repository: { full_name: "owent/example" },
+        sender: { login: "owent" },
+        pull_request: {
+          html_url: "https://gitea.internal.corp/owent/example/pulls/42",
+          base: { sha: "base-sha" },
+          head: { sha: "head-sha" },
+        },
+      });
+
+      const response = await app.request("/webhooks/gitea", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-gitea-event": "pull_request",
+          "x-gitea-signature": sign(payload),
+        },
+        body: payload,
+      });
+
+      expect(response.status).toBe(202);
+      await vi.runOnlyPendingTimersAsync();
+      expect(sourceRootResolver).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(5100);
+      expect(sourceRootResolver).toHaveBeenCalledTimes(2);
+
+      await vi.advanceTimersByTimeAsync(10100);
+      expect(sourceRootResolver).toHaveBeenCalledTimes(3);
+    } finally {
+      warnSpy.mockRestore();
+      infoSpy.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not retry context-overflow failures", async () => {
+    vi.useFakeTimers();
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => undefined);
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-server-overflow-"));
+    try {
+      await writeWorkspaceFile(tempDir, "AGENTS.md", "# Root\n");
+      await writeWorkspaceFile(tempDir, "src/app.ts", "const ok = false;\nreturn ok;\n");
+      const overflowError = new Error("context length exceeded");
+      overflowError.name = "AgentContextOverflowError";
+      const complete = vi.fn().mockRejectedValue(overflowError);
+      const llm: ChatCompletionClient = { complete };
+      const model: ModelSpec = {
+        providerKind: "openai_compatible",
+        providerId: "openai-prod",
+        modelId: "gpt-test",
+      };
+      const app = createServerApp({
+        gitea: {
+          triggerName: "gitea-internal",
+          workspaceId: "ws",
+          webhookSecret,
+        },
+        asyncTriggers: true,
+        triggerRetry: {
+          attempts: 3,
+          backoff: { kind: "constant", base_ms: 5, max_ms: 5, jitter: false },
+        },
+        reviewOrchestration: {
+          baseSystemPrompt: "test",
+          sourceRootResolver: () => tempDir,
+          vcs: {
+            kind: "git",
+            async listChanges(): Promise<ChangeRange> {
+              return { baseRevision: "base-sha", headRevision: "head-sha", files: ["src/app.ts"] };
+            },
+            async fetchScoped(range, ws) {
+              return { workspaceId: ws.id, rootDir: tempDir, fetchedFiles: [...range.files] };
+            },
+            async diff() {
+              return parseUnifiedDiff(
+                [
+                  "diff --git a/src/app.ts b/src/app.ts",
+                  "--- a/src/app.ts",
+                  "+++ b/src/app.ts",
+                  "@@ -1 +1,2 @@",
+                  " const ok = true;",
+                  "+return false;",
+                ].join("\n"),
+              );
+            },
+          },
+          llm,
+          model,
+        },
+      });
+      const payload = JSON.stringify({
+        action: "opened",
+        repository: { full_name: "owent/example" },
+        sender: { login: "owent" },
+        pull_request: {
+          html_url: "https://gitea.internal.corp/owent/example/pulls/42",
+          base: { sha: "base-sha" },
+          head: { sha: "head-sha" },
+        },
+      });
+
+      const response = await app.request("/webhooks/gitea", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-gitea-event": "pull_request",
+          "x-gitea-signature": sign(payload),
+        },
+        body: payload,
+      });
+
+      expect(response.status).toBe(202);
+      await vi.waitFor(() => {
+        expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("context_overflow"));
+      }, { timeout: 2000, interval: 5 });
+      expect(complete).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(complete).toHaveBeenCalledTimes(1);
+      expect(warnSpy).not.toHaveBeenCalledWith(expect.stringContaining("trigger processing failed, retrying"));
+    } finally {
+      warnSpy.mockRestore();
+      errorSpy.mockRestore();
+      infoSpy.mockRestore();
+      vi.useRealTimers();
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not retry deterministic non-IO failures", async () => {
+    vi.useFakeTimers();
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => undefined);
+    const sourceRootResolver = vi.fn().mockImplementation(() => {
+      throw new Error("workspace directory /nope does not exist");
+    });
+    try {
+      const app = createServerApp({
+        gitea: {
+          triggerName: "gitea-internal",
+          workspaceId: "gitea-internal-owent-example",
+          webhookSecret,
+        },
+        asyncTriggers: true,
+        triggerRetry: {
+          attempts: 3,
+          backoff: { kind: "constant", base_ms: 5, max_ms: 5, jitter: false },
+        },
+        reviewPreparation: {
+          baseSystemPrompt: "test",
+          sourceRootResolver,
+        },
+      });
+      const payload = JSON.stringify({
+        action: "opened",
+        repository: { full_name: "owent/example" },
+        sender: { login: "owent" },
+        pull_request: {
+          html_url: "https://gitea.internal.corp/owent/example/pulls/42",
+          base: { sha: "base-sha" },
+          head: { sha: "head-sha" },
+        },
+      });
+
+      const response = await app.request("/webhooks/gitea", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-gitea-event": "pull_request",
+          "x-gitea-signature": sign(payload),
+        },
+        body: payload,
+      });
+
+      expect(response.status).toBe(202);
+      await vi.runOnlyPendingTimersAsync();
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(sourceRootResolver).toHaveBeenCalledTimes(1);
+      expect(warnSpy).not.toHaveBeenCalledWith(expect.stringContaining("trigger processing failed, retrying"));
+      const failureLog = errorSpy.mock.calls
+        .map(([entry]) => JSON.parse(String(entry)) as Record<string, unknown>)
+        .find((entry) => entry.msg === "trigger processing failed");
+      expect(failureLog?.attempts).toBeUndefined();
+    } finally {
+      warnSpy.mockRestore();
+      errorSpy.mockRestore();
+      infoSpy.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it("classifies a fallback-exhausted context overflow as context_overflow and does not retry", async () => {
+    vi.useFakeTimers();
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => undefined);
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-server-overflow-fallback-"));
+    try {
+      await writeWorkspaceFile(tempDir, "AGENTS.md", "# Root\n");
+      await writeWorkspaceFile(tempDir, "src/app.ts", "const ok = false;\nreturn ok;\n");
+      const model: ModelSpec = {
+        providerKind: "openai_compatible",
+        providerId: "openai-prod",
+        modelId: "gpt-test",
+      };
+      const exhausted = new LlmFallbackExhaustedError(
+        new Error("maximum context length exceeded"),
+        [model],
+      );
+      const complete = vi.fn().mockRejectedValue(exhausted);
+      const llm: ChatCompletionClient = { complete };
+      const app = createServerApp({
+        gitea: {
+          triggerName: "gitea-internal",
+          workspaceId: "ws",
+          webhookSecret,
+        },
+        asyncTriggers: true,
+        triggerRetry: {
+          attempts: 3,
+          backoff: { kind: "constant", base_ms: 5, max_ms: 5, jitter: false },
+        },
+        reviewOrchestration: {
+          baseSystemPrompt: "test",
+          sourceRootResolver: () => tempDir,
+          vcs: {
+            kind: "git",
+            async listChanges(): Promise<ChangeRange> {
+              return { baseRevision: "base-sha", headRevision: "head-sha", files: ["src/app.ts"] };
+            },
+            async fetchScoped(range, ws) {
+              return { workspaceId: ws.id, rootDir: tempDir, fetchedFiles: [...range.files] };
+            },
+            async diff() {
+              return parseUnifiedDiff(
+                [
+                  "diff --git a/src/app.ts b/src/app.ts",
+                  "--- a/src/app.ts",
+                  "+++ b/src/app.ts",
+                  "@@ -1 +1,2 @@",
+                  " const ok = true;",
+                  "+return false;",
+                ].join("\n"),
+              );
+            },
+          },
+          llm,
+          model,
+        },
+      });
+      const payload = JSON.stringify({
+        action: "opened",
+        repository: { full_name: "owent/example" },
+        sender: { login: "owent" },
+        pull_request: {
+          html_url: "https://gitea.internal.corp/owent/example/pulls/42",
+          base: { sha: "base-sha" },
+          head: { sha: "head-sha" },
+        },
+      });
+
+      const response = await app.request("/webhooks/gitea", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-gitea-event": "pull_request",
+          "x-gitea-signature": sign(payload),
+        },
+        body: payload,
+      });
+
+      expect(response.status).toBe(202);
+      await vi.waitFor(() => {
+        expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("context_overflow"));
+      }, { timeout: 2000, interval: 5 });
+      expect(complete).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(complete).toHaveBeenCalledTimes(1);
+      expect(warnSpy).not.toHaveBeenCalledWith(expect.stringContaining("trigger processing failed, retrying"));
+    } finally {
+      warnSpy.mockRestore();
+      errorSpy.mockRestore();
+      infoSpy.mockRestore();
+      vi.useRealTimers();
+      await rm(tempDir, { recursive: true, force: true });
     }
   });
 

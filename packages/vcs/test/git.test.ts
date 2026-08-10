@@ -1041,4 +1041,82 @@ describe("GitVcsAdapter.fetchAttribution", () => {
       ),
     ).rejects.toThrow("network unreachable");
   });
+
+  it("retries transient network failures when syncing the repository", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-git-sync-retry-"));
+    try {
+      let cloneAttempts = 0;
+      const git: GitCommandRunner = async (args) => {
+        if (args[0] === "clone") {
+          cloneAttempts += 1;
+          if (cloneAttempts === 1) {
+            throw new Error("fatal: unable to access 'https://example/repo.git/': Could not resolve host: example");
+          }
+          return { stdout: "", stderr: "" };
+        }
+        if (args[2] === "rev-parse") {
+          throw new Error("not a git repository");
+        }
+        if (args[2] === "fetch") {
+          return { stdout: "", stderr: "" };
+        }
+        if (args[2] === "diff") {
+          return { stdout: "src/app.ts\n", stderr: "" };
+        }
+        throw new Error(`unexpected git call: ${args.join(" ")}`);
+      };
+      const adapter = createGitVcsAdapter({ repositoryDir: join(tempDir, "repo"), remoteUrl: "https://example/repo.git", git });
+      const event = createReviewEvent({
+        triggerName: "manual",
+        provider: "manual",
+        workspaceId: "ws",
+        targetKind: "manual",
+        repoRef: "owent/example",
+        baseSha: "base",
+        headSha: "head",
+        author: { username: "owent" },
+        reason: "manual:test",
+      });
+
+      const range = await adapter.listChanges(event);
+      expect(range.files).toEqual(["src/app.ts"]);
+      expect(cloneAttempts).toBe(2);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not retry non-transient clone failures", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-git-sync-noretry-"));
+    try {
+      let cloneAttempts = 0;
+      const git: GitCommandRunner = async (args) => {
+        if (args[0] === "clone") {
+          cloneAttempts += 1;
+          throw new Error("fatal: repository 'https://example/nope.git/' not found");
+        }
+        if (args[2] === "rev-parse") {
+          throw new Error("not a git repository");
+        }
+        return { stdout: "", stderr: "" };
+      };
+      const adapter = createGitVcsAdapter({ repositoryDir: join(tempDir, "repo"), remoteUrl: "https://example/nope.git", git });
+      const event = createReviewEvent({
+        triggerName: "manual",
+        provider: "manual",
+        workspaceId: "ws",
+        targetKind: "manual",
+        repoRef: "owent/example",
+        baseSha: "base",
+        headSha: "head",
+        author: { username: "owent" },
+        reason: "manual:test",
+      });
+
+      await expect(adapter.listChanges(event)).rejects.toThrow("not found");
+      expect(cloneAttempts).toBe(1);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
 });

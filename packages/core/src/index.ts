@@ -1,4 +1,5 @@
 export * from "./config.js";
+export * from "./io-retry.js";
 export * from "./markdown-fixer.js";
 export * from "./observability.js";
 export * from "./prompt-manager.js";

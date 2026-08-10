@@ -26,7 +26,7 @@ llm:
       role: any # any | light | heavy
 
   retry:
-    max_attempts: 3
+    max_attempts: 3 # retries + fallback also cover connection failures (fetch failed, timeouts)
     backoff:
       kind: exponential
       base_ms: 1000
@@ -580,7 +580,8 @@ queue:
   #     gitea-internal: 5
 
   # retry:
-  #   attempts: 2          # Retry once on transient failures (default: 1 = no retry)
+  #   attempts: 3          # Retries for transient failures (timeouts, connection errors).
+  #                        # Default: 3. Permanent failures (e.g. context overflow) never retry.
   #   backoff:
   #     kind: exponential  # exponential | linear | constant
   #     base_ms: 5000

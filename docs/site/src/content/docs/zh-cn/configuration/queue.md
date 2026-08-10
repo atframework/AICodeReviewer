@@ -101,14 +101,23 @@ queue:
 | --- | --- | --- | --- |
 | `attempts` | int > 0 | `3` | 总尝试次数（含首次）。`1` = 不重试。 |
 | `backoff.kind` | enum | `exponential` | `exponential`、`linear` 或 `constant`。 |
-| `backoff.base_ms` | number > 0 | `2000` | 首次/基础退避延迟（毫秒）。 |
+| `backoff.base_ms` | number > 0 | `5000` | 首次/基础退避延迟（毫秒）。 |
 | `backoff.max_ms` | number > 0 | `60000` | 单次退避延迟上限。 |
 | `backoff.jitter` | bool | `true` | 是否加入随机抖动。 |
+
+trigger 级重试用于吸收瞬时 IO 失败（超时、连接重置、DNS 抖动、HTTP 408/5xx）。
+只有被分类为瞬时的错误才会重试；确定性失败——尤其是 `context_overflow`——
+无论 `attempts` 是多少都不会重试。更细粒度的重试发生在下一层：LLM provider
+调用、输出渠道 fetch、VCS CLI 网络操作、GitHub App token 交换与 issue triage
+API 客户端，各自对瞬时 IO 错误按短指数退避最多重试 3 次，之后才把整个
+trigger run 判为失败。输出与 triage 层只对幂等方法重试；非幂等 POST 永不重试，
+响应丢失不会导致 issue 或评论重复。HTTP 429 交由 LLM gateway 按 `Retry-After`
+处理。
 
 ```yaml
 queue:
   retry:
-    attempts: 2              # 瞬时失败重试一次（1 = 不重试）
+    attempts: 3              # 瞬时失败重试（1 = 不重试）
     backoff:
       kind: exponential
       base_ms: 5000

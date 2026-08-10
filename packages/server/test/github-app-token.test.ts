@@ -204,6 +204,72 @@ describe("GithubAppTokenService", () => {
         });
       });
     });
+
+    it("retries transient connection failures before minting the token", async () => {
+      let callCount = 0;
+      const fetchImpl = (async () => {
+        callCount++;
+        if (callCount === 1) {
+          throw new TypeError("fetch failed");
+        }
+        return new Response(
+          JSON.stringify({
+            token: "ghs_AFTERRETRY",
+            expires_at: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+          }),
+          { status: 201 },
+        );
+      }) as typeof fetch;
+      const service = new GithubAppTokenService({
+        appId: "123456",
+        privateKey: keyPair.privateKey,
+        fetchImpl,
+      });
+
+      await expect(service.getInstallationToken(7)).resolves.toBe("ghs_AFTERRETRY");
+      expect(callCount).toBe(2);
+    });
+
+    it("retries transient HTTP statuses on the token exchange", async () => {
+      let callCount = 0;
+      const fetchImpl = (async () => {
+        callCount++;
+        if (callCount <= 2) {
+          return new Response("{}", { status: 503 });
+        }
+        return new Response(
+          JSON.stringify({
+            token: "ghs_AFTER503",
+            expires_at: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+          }),
+          { status: 201 },
+        );
+      }) as typeof fetch;
+      const service = new GithubAppTokenService({
+        appId: "123456",
+        privateKey: keyPair.privateKey,
+        fetchImpl,
+      });
+
+      await expect(service.getInstallationToken(7)).resolves.toBe("ghs_AFTER503");
+      expect(callCount).toBe(3);
+    });
+
+    it("does not retry permanent HTTP statuses on the token exchange", async () => {
+      let callCount = 0;
+      const fetchImpl = (async () => {
+        callCount++;
+        return new Response("{}", { status: 404 });
+      }) as typeof fetch;
+      const service = new GithubAppTokenService({
+        appId: "123456",
+        privateKey: keyPair.privateKey,
+        fetchImpl,
+      });
+
+      await expect(service.getInstallationToken(7)).rejects.toThrow("404");
+      expect(callCount).toBe(1);
+    });
   });
 
   describe("installation resolution", () => {

@@ -345,4 +345,38 @@ describe("SvnVcsAdapter.fetchAttribution", () => {
       ),
     ).rejects.toThrow("must stay within the configured repository_url");
   });
+
+  it("retries transient connection failures and then lists changes", async () => {
+    let diffAttempts = 0;
+    const svn: SvnCommandRunner = async (args) => {
+      if (args.includes("--summarize")) {
+        diffAttempts += 1;
+        if (diffAttempts === 1) {
+          throw new Error("svn: E175002: Unable to connect to a repository at URL 'https://svn.example.com'\nsvn: E175002: Connection timed out");
+        }
+        return { stdout: `M       ${repositoryUrl}/src/app.ts\n`, stderr: "" };
+      }
+      return { stdout: "", stderr: "" };
+    };
+    const adapter = createSvnVcsAdapter({ repositoryDir: "C:/repo", repositoryUrl, svn });
+
+    const range = await adapter.listChanges(makeEvent());
+    expect(range.files).toEqual(["src/app.ts"]);
+    expect(diffAttempts).toBe(2);
+  });
+
+  it("does not retry permanent svn failures", async () => {
+    let diffAttempts = 0;
+    const svn: SvnCommandRunner = async (args) => {
+      if (args.includes("--summarize")) {
+        diffAttempts += 1;
+        throw new Error("svn: E160013: File not found: revision '12', path '/trunk'");
+      }
+      return { stdout: "", stderr: "" };
+    };
+    const adapter = createSvnVcsAdapter({ repositoryDir: "C:/repo", repositoryUrl, svn });
+
+    await expect(adapter.listChanges(makeEvent())).rejects.toThrow("E160013");
+    expect(diffAttempts).toBe(1);
+  });
 });

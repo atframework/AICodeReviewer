@@ -1,3 +1,5 @@
+import { isTransientIoError } from "@aicr/core";
+
 import {
   LlmProviderError,
   type ChatCompletionClient,
@@ -240,7 +242,7 @@ function computeBackoffDelay(
   return Math.min(delay, maxMs);
 }
 
-function isContextOverflowError(error: unknown): boolean {
+export function isContextOverflowError(error: unknown): boolean {
   if (!(error instanceof Error)) {
     return false;
   }
@@ -257,7 +259,7 @@ function isFallbackEligibleError(error: unknown): boolean {
 
   if (isContextOverflowError(error)) return true;
   if (error instanceof Error && error.name === "AbortError") return true;
-  if (error instanceof Error && error.name === "TimeoutError") return true;
+  if (isTransientIoError(error)) return true;
 
   return false;
 }
