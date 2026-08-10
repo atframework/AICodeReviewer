@@ -516,6 +516,24 @@ AICR 采用**两层上下文管理**，两者互补：
   - `outputs.routes`
 - `queue.retry` 的规范字段是 `attempts` 与 `backoff`；旧配置中的
   `max_attempts` / `backoff_seconds` 仅作为兼容输入归一化，新增示例不要继续使用。
+  未配置时 `attempts` 默认 3（针对超时、连接失败等瞬时 IO 错误）；`context_overflow`
+  属于确定性失败，永远不重试。
+- **瞬时 IO 错误重试（分层）**：共享分类器与有界重试助手在
+  `packages/core/src/io-retry.ts`（`isTransientIoError` / `withTransientIoRetry`，
+  默认 3 次、指数退避 500ms 起、封顶 5s、带抖动，退避复用 `queue.ts` 的
+  `computeBackoffDelay`）。分类覆盖 Node/undici 错误码
+  （ETIMEDOUT/ECONNRESET/ECONNREFUSED/ENOTFOUND/EAI_AGAIN/UND_ERR_* 等）、
+  `TimeoutError`、HTTP 408 与全部 5xx、以及 git/p4/svn CLI stderr 中的网络短语
+  （Could not resolve host、Connection timed out、Connect to server failed 等），
+  并沿 `cause` 链递归；HTTP 429 刻意排除（`Retry-After` 须由 LLM gateway 层处理）。
+  应用点：LLM gateway（连接失败纳入 retry/fallback 资格）、
+  outputs `defaultFetch`（全部分发调用点共享，含瞬时 HTTP 状态重试）、
+  VCS `runGit`/`runP4`/`runSvn`、GitHub App token 交换、issue triage Gitea 客户端、
+  trigger 级 `queue.retry`（默认 3 次，仅重试分类为瞬时的错误）。
+  输出与 triage 层仅对幂等方法重试，非幂等 POST 不重试（响应丢失不会重复建单/重复评论）。
+  永久性错误（4xx、文件不存在、revision 非法、p4 trust 指纹变更、context overflow）
+  不重试；直发 LLM 路径的 context overflow（`LlmFallbackExhaustedError` 包裹溢出错误）
+  也会归类为 `context_overflow` 而不重试。
 - **SQLite durable queue（P4 已落地）**：`queue.kind: "sqlite"` 使用原生 `better-sqlite3` 实现
   durable queue（`packages/core/src/sqlite-queue.ts`），`review_queue_jobs` 表存储 job 状态、
   attempt、backoff、available_at、worker_id。原子 claim 通过单条 `UPDATE ... RETURNING`

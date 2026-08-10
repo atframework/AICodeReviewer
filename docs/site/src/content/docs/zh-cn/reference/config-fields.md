@@ -228,7 +228,7 @@ schema 接受 `workspaces.defaults` 和实例上的 `agent.default` 与 `sandbox
 | `queue.workers.lock_ttl_seconds` | int > 0 | `1800` | worker 锁 TTL |
 | `queue.rate_limit.per_provider_rps` | map | — | 按 provider 的每秒请求数上限 |
 | `queue.retry.attempts` | int > 0 | `3` | trigger 级重试次数（兼容旧 `max_attempts`） |
-| `queue.retry.backoff` | object | `exponential`，2000→60000ms，带 jitter | `kind`、`base_ms`、`max_ms`、`jitter` |
+| `queue.retry.backoff` | object | `exponential`，5000→60000ms，带 jitter | `kind`、`base_ms`、`max_ms`、`jitter` |
 | `queue.dead_letter.enabled` | boolean | — | 预留——schema 接受但运行时未消费 |
 | `queue.dead_letter.max_age_hours` | int > 0 | — | 预留——schema 接受但运行时未消费 |
 

@@ -1,6 +1,8 @@
 import { createSign } from "node:crypto";
 import { readFile } from "node:fs/promises";
 
+import { withTransientIoRetry } from "@aicr/core";
+
 const GITHUB_API_BASE = "https://api.github.com";
 const GITHUB_API_VERSION = "2022-11-28";
 const JWT_SKEW_SECONDS = 60;
@@ -140,56 +142,62 @@ export class GithubAppTokenService {
   }
 
   private async fetchInstallationToken(installationId: number): Promise<string> {
-    const jwt = this.signAppJwt();
-    const url = `${this.apiBaseUrl}/app/installations/${installationId}/access_tokens`;
-    const response = await this.fetchImpl(url, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${jwt}`,
-        Accept: "application/vnd.github+json",
-        "X-GitHub-Api-Version": GITHUB_API_VERSION,
-      },
+    return withTransientIoRetry(async () => {
+      const jwt = this.signAppJwt();
+      const url = `${this.apiBaseUrl}/app/installations/${installationId}/access_tokens`;
+      const response = await this.fetchImpl(url, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${jwt}`,
+          Accept: "application/vnd.github+json",
+          "X-GitHub-Api-Version": GITHUB_API_VERSION,
+        },
+      });
+
+      if (!response.ok) {
+        await response.text();
+        throw mapGithubAppError(response.status, installationId);
+      }
+
+      const body = (await response.json()) as { token?: string; expires_at?: string };
+      if (!body.token) {
+        throw new Error(`GitHub App installation token response missing token field for installation ${installationId}.`);
+      }
+
+      const expiresAt = body.expires_at ? new Date(body.expires_at) : undefined;
+      if (expiresAt) {
+        this.tokenCache.set(installationId, { token: body.token, expiresAt });
+      }
+
+      return body.token;
     });
-
-    if (!response.ok) {
-      throw mapGithubAppError(response.status, installationId);
-    }
-
-    const body = (await response.json()) as { token?: string; expires_at?: string };
-    if (!body.token) {
-      throw new Error(`GitHub App installation token response missing token field for installation ${installationId}.`);
-    }
-
-    const expiresAt = body.expires_at ? new Date(body.expires_at) : undefined;
-    if (expiresAt) {
-      this.tokenCache.set(installationId, { token: body.token, expiresAt });
-    }
-
-    return body.token;
   }
 
   private async fetchInstallationId(owner: string, repo: string): Promise<number> {
-    const jwt = this.signAppJwt();
-    const url = `${this.apiBaseUrl}/repos/${owner}/${repo}/installation`;
-    const response = await this.fetchImpl(url, {
-      method: "GET",
-      headers: {
-        Authorization: `Bearer ${jwt}`,
-        Accept: "application/vnd.github+json",
-        "X-GitHub-Api-Version": GITHUB_API_VERSION,
-      },
+    return withTransientIoRetry(async () => {
+      const jwt = this.signAppJwt();
+      const url = `${this.apiBaseUrl}/repos/${owner}/${repo}/installation`;
+      const response = await this.fetchImpl(url, {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${jwt}`,
+          Accept: "application/vnd.github+json",
+          "X-GitHub-Api-Version": GITHUB_API_VERSION,
+        },
+      });
+
+      if (!response.ok) {
+        await response.text();
+        throw mapGithubAppError(response.status, undefined, owner, repo);
+      }
+
+      const body = (await response.json()) as { id?: number };
+      if (typeof body.id !== "number") {
+        throw new Error(`GitHub App installation lookup for ${owner}/${repo} returned no installation id.`);
+      }
+
+      return body.id;
     });
-
-    if (!response.ok) {
-      throw mapGithubAppError(response.status, undefined, owner, repo);
-    }
-
-    const body = (await response.json()) as { id?: number };
-    if (typeof body.id !== "number") {
-      throw new Error(`GitHub App installation lookup for ${owner}/${repo} returned no installation id.`);
-    }
-
-    return body.id;
   }
 }
 
@@ -239,22 +247,24 @@ function mapGithubAppError(
   repo?: string,
 ): Error {
   const target = owner && repo ? `${owner}/${repo}` : `installation ${installationId}`;
+  let message: string;
   switch (status) {
     case 401:
-      return new Error(
-        `GitHub App JWT rejected (401). Verify app_id/client_id and private_key are correct and the key has not been rotated.`,
-      );
+      message = `GitHub App JWT rejected (401). Verify app_id/client_id and private_key are correct and the key has not been rotated.`;
+      break;
     case 403:
-      return new Error(
-        `GitHub App request forbidden (403) for ${target}. Ensure the App is installed and has required permissions (Contents Read, Pull requests Read/Write, Issues Read/Write, Metadata Read).`,
-      );
+      message = `GitHub App request forbidden (403) for ${target}. Ensure the App is installed and has required permissions (Contents Read, Pull requests Read/Write, Issues Read/Write, Metadata Read).`;
+      break;
     case 404:
-      return new Error(
-        `GitHub App installation not found (404) for ${target}. Verify the App is installed to the repository.`,
-      );
+      message = `GitHub App installation not found (404) for ${target}. Verify the App is installed to the repository.`;
+      break;
     default:
-      return new Error(`GitHub App API request failed (${status}) for ${target}.`);
+      message = `GitHub App API request failed (${status}) for ${target}.`;
+      break;
   }
+  const error = new Error(message);
+  (error as Error & { status?: number }).status = status;
+  return error;
 }
 
 export function decodePrivateKey(raw: string): string {

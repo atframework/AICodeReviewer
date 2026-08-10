@@ -109,7 +109,7 @@
 ### 3.5 LLM Gateway、Fallback 与预算
 
 - LLM 调用通过统一 gateway 进入 provider client。
-- bounded retry、fallback chain、预算、速率限制与队列 retry 分层治理。
+- bounded retry、fallback chain、预算、速率限制与队列 retry 分层治理；瞬时 IO 错误（超时、连接失败、HTTP 408/5xx）在 LLM gateway、输出分发、VCS CLI、token 交换与 trigger 级共享 `io-retry` 分类器统一重试（HTTP 429 由 gateway 按 Retry-After 单独处理，输出与 triage 层的非幂等 POST 不重试），确定性失败（4xx、context overflow 等）不重试。
 - 成本估算按非缓存输入、缓存命中、缓存写入、输出 token 类别计费。
 
 ### 3.6 Prompt Manager 与 AI 资产装配

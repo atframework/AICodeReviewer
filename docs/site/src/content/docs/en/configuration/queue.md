@@ -106,14 +106,25 @@ The canonical retry fields are **`attempts`** and **`backoff`**. The legacy
 | --- | --- | --- | --- |
 | `attempts` | int > 0 | `3` | Total attempts including the first try. `1` = no retry. |
 | `backoff.kind` | enum | `exponential` | `exponential`, `linear`, or `constant`. |
-| `backoff.base_ms` | number > 0 | `2000` | First/backoff base delay in ms. |
+| `backoff.base_ms` | number > 0 | `5000` | First/backoff base delay in ms. |
 | `backoff.max_ms` | number > 0 | `60000` | Cap on a single backoff delay. |
 | `backoff.jitter` | bool | `true` | Add random jitter. |
+
+Trigger-level retry exists to absorb transient IO failures (timeouts, connection
+resets, DNS blips, HTTP 408/5xx). Only errors classified as transient are retried;
+deterministic failures — most notably `context_overflow` — are never retried,
+regardless of `attempts`. Finer-grained retries also happen one layer down: LLM
+provider calls, output-channel fetches, VCS CLI network operations, GitHub App
+token exchange, and the issue-triage API client each retry transient IO errors up
+to 3 times with a short exponential backoff before an error can fail the whole
+trigger run. At the output and triage layers only idempotent methods retry;
+non-idempotent POSTs never do, so a lost response can never duplicate an issue or
+comment. HTTP 429 is left to the LLM gateway, which honors `Retry-After`.
 
 ```yaml
 queue:
   retry:
-    attempts: 2              # retry once on transient failures (1 = no retry)
+    attempts: 3              # transient-failure retries (1 = no retry)
     backoff:
       kind: exponential
       base_ms: 5000

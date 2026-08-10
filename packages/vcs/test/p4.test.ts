@@ -309,6 +309,41 @@ Affected files ...
       expect(range.files).toContain("src/foo.cpp");
     });
 
+    it("retries login after a transient login transport failure", async () => {
+      let describeAttempts = 0;
+      let loginCalls = 0;
+      let loggedIn = false;
+      const mockP4: P4CommandRunner = async (args) => {
+        if (args.join(" ").includes("describe -s 12345")) {
+          describeAttempts += 1;
+          if (!loggedIn) {
+            throw new Error("Perforce password (P4PASSWD) invalid or unset.");
+          }
+          return { stdout: describeOutput, stderr: "" };
+        }
+        return { stdout: "", stderr: "" };
+      };
+      const adapter = new P4VcsAdapter({
+        repositoryDir: "/tmp/test",
+        depot: "//depot/main",
+        password: "secret-password",
+        p4: mockP4,
+        p4Login: async () => {
+          loginCalls += 1;
+          if (loginCalls === 1) {
+            throw new TypeError("fetch failed");
+          }
+          loggedIn = true;
+          return { stdout: "User logged in.", stderr: "" };
+        },
+      });
+
+      const range = await adapter.listChanges(makeEvent());
+      expect(range.files).toContain("src/foo.cpp");
+      expect(loginCalls).toBe(2);
+      expect(describeAttempts).toBe(3);
+    });
+
     it("filters files by watch path", async () => {
       const mockP4 = createMockP4Runner({
         "describe -s 12345": { stdout: describeOutput, stderr: "" },
@@ -793,5 +828,45 @@ describe("P4VcsAdapter.fetchAttribution", () => {
         { id: "ws", sourceDir: "/tmp/test/source" },
       ),
     ).rejects.toThrow("must stay within");
+  });
+
+  it("retries transient connection failures in describe", async () => {
+    let describeAttempts = 0;
+    const p4: P4CommandRunner = async (args) => {
+      const key = args.join(" ");
+      if (key.includes("describe")) {
+        describeAttempts += 1;
+        if (describeAttempts === 1) {
+          throw new Error("Perforce client error:\n\tConnect to server failed; check $P4PORT.\n\tTCP connect to perforce:1666 failed.");
+        }
+        return { stdout: "Change 12345 by u@c on 2026/05/07 10:00:00\n\n\tTest\n\nAffected files ...\n\n... //depot/main/src/foo.cpp#2 edit\n", stderr: "" };
+      }
+      return { stdout: "", stderr: "" };
+    };
+    const adapter = new P4VcsAdapter({ repositoryDir: "/tmp/test", depot: "//depot/main", p4 });
+
+    const range = await adapter.listChanges(makeEvent());
+    expect(range.headRevision).toBe("12345");
+    expect(range.files).toContain("src/foo.cpp");
+    expect(describeAttempts).toBe(2);
+  });
+
+  it("does not retry the p4 trust-identification failure", async () => {
+    let describeAttempts = 0;
+    const p4: P4CommandRunner = async (args) => {
+      const key = args.join(" ");
+      if (key.includes("describe")) {
+        describeAttempts += 1;
+        throw new Error(
+          "Command failed: p4 describe -s 12345\n******* WARNING P4PORT IDENTIFICATION HAS CHANGED! *******\nTo allow connection use the 'p4 trust' command.\n",
+        );
+      }
+      return { stdout: "", stderr: "" };
+    };
+    const adapter = new P4VcsAdapter({ repositoryDir: "/tmp/test", depot: "//depot/main", p4 });
+
+    const range = await adapter.listChanges(makeEvent());
+    expect(range.files).toEqual([]);
+    expect(describeAttempts).toBe(1);
   });
 });

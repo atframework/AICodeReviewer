@@ -125,8 +125,11 @@ llm:
 
 ## `llm.retry` — transient-failure handling
 
-Applied to LLM calls that fail with a transient error (rate limit, 5xx,
-network). Per-provider overrides are supported via
+Applied to LLM calls that fail with a transient error: HTTP 429/5xx, context
+overflow (routed to the fallback chain), caller-side abort/timeout, and
+connection-level failures (`fetch failed`, connect timeouts, DNS, socket
+errors). Non-transient provider errors (4xx other than 429) fail immediately.
+Per-provider overrides are supported via
 `llm.per_provider_overrides` (a map of provider id → `{ max_attempts,
 give_up_after_seconds }`).
 

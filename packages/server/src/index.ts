@@ -14,6 +14,7 @@ import { insertReviewRun } from "@aicr/store";
 const globalMetrics: AicrMetrics = createAicrMetrics();
 
 import {
+  isTransientIoError,
   prepareReviewPrompt,
   type PreparedReviewPrompt,
   type QueueWorker,
@@ -21,6 +22,7 @@ import {
   type ReviewQueue,
   type ReviewProvider,
 } from "@aicr/core";
+import { isContextOverflowError, LlmFallbackExhaustedError } from "@aicr/llm";
 import type { ReviewDeduplicator } from "./review-deduplicator.js";
 import {
   extractWebhookRepositoryRef,
@@ -591,8 +593,9 @@ class TriggerProcessingError extends Error {
     readonly reason: string,
     message: string,
     readonly status: number,
+    cause?: unknown,
   ) {
-    super(message);
+    super(message, cause !== undefined ? { cause } : undefined);
     this.name = "TriggerProcessingError";
   }
 }
@@ -701,7 +704,7 @@ async function runTriggerProcessing(
         }
       }
     } catch (error) {
-      throw new TriggerProcessingError("issue_triage_failed", toErrorMessage(error), 500);
+      throw new TriggerProcessingError("issue_triage_failed", toErrorMessage(error), 500, error);
     }
   }
 
@@ -744,7 +747,7 @@ async function runTriggerProcessing(
         reviewPreparation = summarizePreparedReviewPromptForWebhook(prepared);
       }
     } catch (error) {
-      throw new TriggerProcessingError("review_preparation_failed", toErrorMessage(error), 500);
+      throw new TriggerProcessingError("review_preparation_failed", toErrorMessage(error), 500, error);
     }
   }
 
@@ -764,8 +767,10 @@ async function runTriggerProcessing(
     } catch (error) {
       const reason = error instanceof Error && error.name === "AgentContextOverflowError"
         ? "context_overflow"
-        : "review_orchestration_failed";
-      throw new TriggerProcessingError(reason, toErrorMessage(error), 500);
+        : error instanceof LlmFallbackExhaustedError && isContextOverflowError(error.lastError)
+          ? "context_overflow"
+          : "review_orchestration_failed";
+      throw new TriggerProcessingError(reason, toErrorMessage(error), 500, error);
     }
   }
 
@@ -1058,7 +1063,7 @@ function scheduleTriggerProcessing(
     ...buildTriggerEventLogFields(reviewEvent),
   }));
 
-  const maxAttempts = triggerRetry?.attempts ?? 1;
+  const maxAttempts = triggerRetry?.attempts ?? 3;
   const backoffBaseMs = triggerRetry?.backoff?.base_ms ?? 5000;
   const backoffMaxMs = triggerRetry?.backoff?.max_ms ?? 60000;
   const backoffKind = triggerRetry?.backoff?.kind ?? "exponential";
@@ -1124,8 +1129,16 @@ function scheduleTriggerProcessing(
       const durationMs = Date.now() - startMs;
       const reason = error instanceof TriggerProcessingError ? error.reason : "trigger_processing_failed";
       const message = toErrorMessage(error);
+      // TriggerProcessingError.status is the local webhook response status, not
+      // an upstream IO status. Classify the preserved cause and use the message
+      // only for legacy/custom errors that have no cause.
+      const retryTarget = error instanceof TriggerProcessingError
+        ? error.cause ?? new Error(error.message)
+        : error;
+      const retryable = reason !== "context_overflow"
+        && isTransientIoError(retryTarget);
 
-      if (attemptNumber < maxAttempts) {
+      if (retryable && attemptNumber < maxAttempts) {
         const delayMs = computeBackoff(backoffBaseMs, backoffMaxMs, attemptNumber, backoffKind, backoffJitter);
         console.warn(JSON.stringify({
           level: "warn",
@@ -1161,7 +1174,7 @@ function scheduleTriggerProcessing(
         ...buildTriggerEventLogFields(reviewEvent),
         reason,
         error: message,
-        ...(maxAttempts > 1 ? { attempts: maxAttempts } : {}),
+        ...(attemptNumber > 1 ? { attempts: attemptNumber } : {}),
       }));
       void publishTriggerErrorReport(context, reviewOrchestrationOptions, runId, reason, message);
       onCompleted();

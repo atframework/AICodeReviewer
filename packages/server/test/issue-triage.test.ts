@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { isTransientIoError } from "@aicr/core";
 import {
   GiteaApiClient,
   triageIssue,
@@ -225,6 +226,93 @@ describe("GiteaApiClient", () => {
     await client.getIssue("owner", "repo", 1);
     expect(capturedHeaders?.authorization).toBe("token my-secret-token");
   });
+
+  it("retries transient connection failures before fetching an issue", async () => {
+    let callCount = 0;
+    const client = new GiteaApiClient({
+      baseUrl: "https://gitea.example.com",
+      fetch: async () => {
+        callCount++;
+        if (callCount === 1) {
+          throw new TypeError("fetch failed");
+        }
+        return {
+          ok: true,
+          status: 200,
+          async json() {
+            return { title: "t", body: "b", state: "open", user: {}, comments: 0, labels: [] };
+          },
+          async text() { return "{}"; },
+        };
+      },
+    });
+
+    await client.getIssue("owner", "repo", 42);
+    expect(callCount).toBe(2);
+  });
+
+  it("retries transient HTTP statuses and does not retry permanent ones", async () => {
+    let transientCalls = 0;
+    const transientClient = new GiteaApiClient({
+      baseUrl: "https://gitea.example.com",
+      fetch: async () => {
+        transientCalls++;
+        if (transientCalls === 1) {
+          return {
+            ok: false,
+            status: 503,
+            async json() { return {}; },
+            async text() { return "busy"; },
+          };
+        }
+        return {
+          ok: true,
+          status: 200,
+          async json() { return { title: "t", body: "b", state: "open", user: {}, comments: 0, labels: [] }; },
+          async text() { return "{}"; },
+        };
+      },
+    });
+
+    await transientClient.getIssue("owner", "repo", 42);
+    expect(transientCalls).toBe(2);
+
+    let permanentCalls = 0;
+    const permanentClient = new GiteaApiClient({
+      baseUrl: "https://gitea.example.com",
+      fetch: async () => {
+        permanentCalls++;
+        return {
+          ok: false,
+          status: 404,
+          async json() { return {}; },
+          async text() { return "not found"; },
+        };
+      },
+    });
+
+    await expect(permanentClient.getIssue("owner", "repo", 42)).rejects.toThrow("returned 404");
+    expect(permanentCalls).toBe(1);
+  });
+
+  it("does not retry POST comment requests on transient statuses", async () => {
+    let callCount = 0;
+    const client = new GiteaApiClient({
+      baseUrl: "https://gitea.example.com",
+      fetch: async () => {
+        callCount++;
+        return {
+          ok: false,
+          status: 503,
+          async json() { return {}; },
+          async text() { return "busy"; },
+        };
+      },
+    });
+
+    await expect(client.postIssueComment("owner", "repo", 42, "triage note")).rejects.toThrow("returned 503");
+    expect(callCount).toBe(1);
+  });
 });
 
 describe("parseTriageDecision", () => {
@@ -353,6 +441,51 @@ describe("triageIssue", () => {
     expect(result.commentPosted).toBe(true);
     expect(postedComment).toContain("Auto-triage result");
     expect(postedComment).toContain("spam");
+  });
+
+  it("marks failures after posting a triage comment as unsafe to replay", async () => {
+    const issue = createMockIssue({
+      number: 1,
+      title: "Spam",
+      body: "spam",
+      url: "https://gitea.example.com/owner/repo/issues/1",
+    });
+    const llm = createMockLlm('{"action":"close","reason":"Spam","category":"spam"}');
+    let commentCalls = 0;
+    let closeCalls = 0;
+    const client = new GiteaApiClient({
+      baseUrl: "https://gitea.example.com",
+      fetch: async (_input, init) => {
+        if (init?.method === "POST") {
+          commentCalls += 1;
+          return {
+            ok: true,
+            status: 201,
+            async json() { return { id: 100 }; },
+            async text() { return "{}"; },
+          };
+        }
+        closeCalls += 1;
+        return {
+          ok: false,
+          status: 503,
+          async json() { return {}; },
+          async text() { return "busy"; },
+        };
+      },
+    });
+
+    let caught: unknown;
+    try {
+      await triageIssue(issue, { llm, model: testModel, giteaClient: client });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(Error);
+    expect(isTransientIoError(caught)).toBe(false);
+    expect(commentCalls).toBe(1);
+    expect(closeCalls).toBe(3);
   });
 
   it("closes a PR that is invalid", async () => {

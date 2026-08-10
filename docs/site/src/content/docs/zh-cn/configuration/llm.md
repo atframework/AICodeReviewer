@@ -117,7 +117,9 @@ llm:
 
 ## `llm.retry` —— 瞬时失败处理
 
-作用于因瞬时错误（限流、5xx、网络）失败的 LLM 调用。可通过
+作用于因瞬时错误失败的 LLM 调用：HTTP 429/5xx、上下文溢出（进入 fallback 链）、
+调用方中止/超时，以及连接级失败（`fetch failed`、连接超时、DNS、socket 错误）。
+非瞬时的 provider 错误（429 以外的 4xx）立即失败。可通过
 `llm.per_provider_overrides`（provider id → `{ max_attempts,
 give_up_after_seconds }` 的映射）按 provider 覆盖。
 

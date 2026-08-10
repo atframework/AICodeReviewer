@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-import { normalizePath } from "@aicr/core";
+import { isTransientIoError, isTransientIoHttpStatus, normalizePath, withTransientIoRetry } from "@aicr/core";
 
 import { renderMarkdownCodeFence } from "./template-engine.js";
 import { toFeishuMarkdown, toWeComMarkdown } from "./im-markdown.js";
@@ -567,7 +567,25 @@ function defaultFetch(): FetchLike {
 		throw new TypeError("No global fetch implementation is available.");
 	}
 
-	return candidate as unknown as FetchLike;
+	const baseFetch = candidate as unknown as FetchLike;
+	return (url, init) => {
+		const attempts = 3;
+		const idempotentMethod = (init?.method ?? "GET").toUpperCase() !== "POST";
+		return withTransientIoRetry(
+			async (attempt) => {
+				const response = await baseFetch(url, init);
+				if (idempotentMethod && attempt < attempts && isTransientIoHttpStatus(response.status)) {
+					await response.text();
+					throw new OutputDispatchError(`Transient upstream HTTP ${response.status}.`, { status: response.status });
+				}
+				return response;
+			},
+			{
+				attempts,
+				isRetryable: (error) => idempotentMethod && isTransientIoError(error),
+			},
+		);
+	};
 }
 
 function encodePathSegment(value: string): string {

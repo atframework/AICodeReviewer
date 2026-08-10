@@ -3,7 +3,7 @@ import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
 
-import { normalizeChangedPath, normalizePath, type ReviewEvent } from "@aicr/core";
+import { normalizeChangedPath, normalizePath, withTransientIoRetry, type ReviewEvent } from "@aicr/core";
 
 import {
   buildAttributionEntry,
@@ -217,21 +217,23 @@ export class SvnVcsAdapter implements VcsAdapter {
   }
 
   private async runSvn(args: readonly string[]): Promise<SvnCommandResult> {
-    try {
-      return await this.svn([...this.buildBaseArgs(), ...args]);
-    } catch (error) {
-      const source = error as { readonly stdout?: unknown; readonly stderr?: unknown };
-      const sanitized = new Error(redactSvnSecret(error instanceof Error ? error.message : String(error), this.password));
-      sanitized.name = error instanceof Error ? error.name : "Error";
-      const target = sanitized as Error & Record<string, unknown>;
-      if (typeof source.stdout === "string") {
-        target.stdout = redactSvnSecret(source.stdout, this.password);
+    return withTransientIoRetry(async () => {
+      try {
+        return await this.svn([...this.buildBaseArgs(), ...args]);
+      } catch (error) {
+        const source = error as { readonly stdout?: unknown; readonly stderr?: unknown };
+        const sanitized = new Error(redactSvnSecret(error instanceof Error ? error.message : String(error), this.password));
+        sanitized.name = error instanceof Error ? error.name : "Error";
+        const target = sanitized as Error & Record<string, unknown>;
+        if (typeof source.stdout === "string") {
+          target.stdout = redactSvnSecret(source.stdout, this.password);
+        }
+        if (typeof source.stderr === "string") {
+          target.stderr = redactSvnSecret(source.stderr, this.password);
+        }
+        throw sanitized;
       }
-      if (typeof source.stderr === "string") {
-        target.stderr = redactSvnSecret(source.stderr, this.password);
-      }
-      throw sanitized;
-    }
+    });
   }
 
   private targetForPath(path = ""): string {
