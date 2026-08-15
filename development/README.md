@@ -68,7 +68,7 @@ LLM_TOKEN="$(yq -r '.llm.provider.xiaomimimo_token_plan.token' development/secre
 
 | 顺序 | baseURL selector                                 | token selector                                 | 模型              |
 | ---- | ------------------------------------------------ | ---------------------------------------------- | ----------------- |
-| 1    | `.llm.provider.zhipu.baseURL`                    | `.llm.provider.zhipu.token`                    | `glm-5.2`         |
+| 1    | `.llm.provider.zhipu.baseURL`                    | `.llm.provider.zhipu.token`                    | `glm-5.3`         |
 | 2    | `.llm.provider.kimi_coding.baseURL`              | `.llm.provider.kimi_coding.token`              | `k3-256k`         |
 | 3    | `.llm.provider.kimi_coding.baseURL`              | `.llm.provider.kimi_coding.token`              | `kimi-for-coding` |
 | 4    | `.llm.provider.aliyun_coding_plan.baseURL`       | `.llm.provider.aliyun_coding_plan.token`       | `glm-5`           |
