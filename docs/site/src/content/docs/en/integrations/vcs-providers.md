@@ -209,6 +209,14 @@ triggers:
     exclude_cr_file: ["**/*.gen.cpp", "**/*.pb.h"]
 ```
 
+When `port` uses the `ssl:` prefix and the fingerprint is not trusted yet (first
+connection or a server key rotation, reported as `P4PORT IDENTIFICATION HAS
+CHANGED`), the server-side adapter runs `p4 trust -y` once and retries the
+command, so no manual trust step is needed inside the AICR container. The
+fingerprint goes to the runtime user's default trust file; set the `P4TRUST`
+environment variable to change the path. Auto-trust skips fingerprint
+verification — only use it on networks you already trust.
+
 Register the trigger with `p4 triggers`:
 
 ```text

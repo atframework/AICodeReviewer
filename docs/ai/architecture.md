@@ -74,6 +74,7 @@
 - P4 需要支持：
   - `describe` / `print` / `diff`
   - ticket/password 失败后的非交互 `p4 login` 重试
+  - SSL 指纹未信任（首次连接提示或 `P4PORT IDENTIFICATION HAS CHANGED`）时自动 `p4 trust -y` 并重试一次；`p4 login` 遇到 trust 提示走同一修复路径。trust 错误在瞬时 IO 分类中仍属永久错误，不靠重试分类器兜底。
   - basename 级别 glob 过滤
   - trigger payload 中的提交者用户名与 client/workspace 透传
   - `aicr.fetch_more_context` 请求未在 scoped tree 中的相关文件时，按当前 revision 执行最小 VCS 补拉并回灌工作区：git 适配器用 `git show <revision>:<path>`，P4 适配器在配置 depot 内用 `p4 print <path>@<revision>`，均不扩大成全仓同步；仓库中确实不存在的路径（或子模块 gitlink）会被拒绝作为"停止重试该路径"的信号
