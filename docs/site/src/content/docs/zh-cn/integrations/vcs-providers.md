@@ -192,6 +192,11 @@ triggers:
     exclude_cr_file: ["**/*.gen.cpp", "**/*.pb.h"]
 ```
 
+`port` 使用 `ssl:` 前缀时，服务端适配器在指纹未被信任时（首次连接或服务器密钥轮换，报
+`P4PORT IDENTIFICATION HAS CHANGED`）会自动执行一次 `p4 trust -y` 并重试该命令，不需要在 AICR
+容器内手动 trust。指纹写入运行用户的默认 trust 文件，可用 `P4TRUST` 环境变量改路径。自动信任不做
+指纹比对，只在可信内网使用。
+
 用 `p4 triggers` 注册：
 
 ```text

@@ -1039,6 +1039,12 @@ triggers:
       - "**/*.pb.h"
 ```
 
+When `port` uses the `ssl:` prefix and the server fingerprint is not trusted
+yet (first connection or a key rotation), the AICR server-side adapter runs
+`p4 trust -y` once and retries the command, so no manual trust step is needed
+in the container. The fingerprint is written to the runtime user's default
+trust file; set `P4TRUST` to override the path.
+
 Add a workspace that references the P4 trigger:
 
 ```yaml

@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-DEPLOY_DIR="${AICR_DEPLOY_DIR:-/data/disk2/AICodeReviewer}"
+DEPLOY_DIR="${AICR_DEPLOY_DIR:-$HOME/AICodeReviewer}"
 IMAGE_NAME="${AICR_IMAGE_NAME:-aicr:latest}"
 HOST_PORT="${AICR_HOST_PORT:-8090}"
 CONTAINER_PORT="${AICR_CONTAINER_PORT:-8080}"

@@ -118,6 +118,10 @@ function isP4AuthenticationError(error: unknown): boolean {
   return /P4PASSWD|Perforce password|not logged in|login required|session has expired|ticket.*expired/iu.test(getErrorText(error));
 }
 
+function isP4TrustError(error: unknown): boolean {
+  return /P4PORT IDENTIFICATION HAS CHANGED|authenticity of '.*' can't be established|use the 'p4 trust' command/iu.test(getErrorText(error));
+}
+
 function isFileNotFoundError(error: unknown): boolean {
   return typeof error === "object"
     && error !== null
@@ -298,22 +302,48 @@ export class P4VcsAdapter implements VcsAdapter {
 
   private async runP4(args: readonly string[]): Promise<P4CommandResult> {
     return withTransientIoRetry(async () => {
-      try {
-        return await this.runP4Once(args);
-      } catch (error) {
-        if (!this.password || this.loginAttempted || !isP4AuthenticationError(error)) {
-          throw error;
-        }
+      let trustRetried = false;
+      for (;;) {
+        try {
+          return await this.runP4Once(args);
+        } catch (error) {
+          if (isP4TrustError(error) && !trustRetried) {
+            trustRetried = true;
+            await this.trust();
+            continue;
+          }
 
-        await this.login();
-        return this.runP4Once(args);
+          if (!this.password || this.loginAttempted || !isP4AuthenticationError(error)) {
+            throw error;
+          }
+
+          await this.login();
+        }
       }
     });
   }
 
+  private async trust(): Promise<void> {
+    console.warn(JSON.stringify({
+      level: "warn",
+      msg: "p4 server fingerprint untrusted; running p4 trust -y",
+      port: this.port,
+      user: this.user,
+    }));
+    await this.p4([...this.buildBaseArgs(), "trust", "-y"], this.buildEnv());
+  }
+
   async login(): Promise<void> {
     if (!this.password) return;
-    await this.p4Login(this.buildBaseArgs(), this.password, this.buildEnv());
+    try {
+      await this.p4Login(this.buildBaseArgs(), this.password, this.buildEnv());
+    } catch (error) {
+      if (!isP4TrustError(error)) {
+        throw error;
+      }
+      await this.trust();
+      await this.p4Login(this.buildBaseArgs(), this.password, this.buildEnv());
+    }
     this.loginAttempted = true;
   }
 
