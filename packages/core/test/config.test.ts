@@ -330,6 +330,18 @@ describe("mergeConfigLayers", () => {
 
     expect(result.success).toBe(false);
   });
+
+  it("accepts the pi and oh-my-pi agent kinds", () => {
+    for (const kind of ["pi", "oh-my-pi"] as const) {
+      const result = appConfigSchema.safeParse({
+        agent: { default: kind },
+      });
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.agent.default).toBe(kind);
+      }
+    }
+  });
   it("rejects non-positive max_total_gb", () => {
     const result = appConfigSchema.safeParse({
       workspaces: {

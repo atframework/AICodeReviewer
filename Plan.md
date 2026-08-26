@@ -30,6 +30,10 @@
   webhook secret 已同步，`owent/hiredis-happ` 已加入 App 已选仓库并通过 token 解析验证。
   基于 `node:crypto` 的 App JWT → installation token 自动签发与刷新已交付（零新增依赖）。执行包见
   §8.3，稳定合同见 `docs/ai/architecture.md` §3.2.1。
+- 新增运行时方向是 M13：pi 与 oh-my-pi（omp）agent 集成及参考最佳实践对齐。目标是把两个 CLI
+  纳入 `packages/agents` 适配层，并将其已验证做法（配置目录 env 隔离、显式 project trust、
+  模型目录元数据注入、原生 `.agents/skills` 发现、扩展桥接 MCP）沉淀进架构与文档。已核验调研
+  结论与执行包见 §8.2.2。
 - 仍需真实外部系统验收的项目集中在 §8.4，避免散落在已完成里程碑描述中。
 
 ### 1.3 文档地图
@@ -243,6 +247,7 @@
 | M10 | 基本完成 | `docs/ai/milestones/M10.md` | 真实外部 Redis smoke/e2e 按需放入 Backlog |
 | M11 | 进行中 | `docs/ai/documentation-site-plan.md` | Pages 设置核验；M11-P6 打磨 |
 | M12 | 已完成 | 本文 §3.2.1 / `docs/ai/architecture.md` §3.2.1 | P1–P4 已交付；P5 公网正式环境切换完成，三个目标仓库均通过 token 解析验证，待一次真实 PR/push 完成最终 e2e 签收 |
+| M13 | 已完成 | 本文 §8.2.2 | P1–P5 全部交付，全量门禁通过（1885 tests / eslint / tsc / markdownlint / build / eval / docs:build） |
 
 ### 8.2 当前执行包
 
@@ -313,6 +318,75 @@ README 增强 logo、扩展 badge、导航链接行、Review output standards / 
 M12-P5（真实 App e2e / 公网正式环境切换）已完成：已将 `atframework-aicr` App 部署到公网正式环境，`github-atframework`/`github-owent` trigger 已切到 `app` 认证，webhook secret 已同步，`owent/hiredis-happ` 已加入 App 已选仓库，三个目标仓库均通过 token 解析验证。详细合同见 `docs/ai/architecture.md` §3.2.1，
 决策见 `docs/ai/decisions.md` D32。
 
+#### 8.2.2 M13 pi + oh-my-pi agent 集成与最佳实践对齐（全部完成）
+
+目标：把 pi（`@earendil-works/pi-coding-agent`，binary `pi`）与 oh-my-pi（`@oh-my-pi/pi-coding-agent`，
+binary `omp`，pi 的 fork）纳入 `packages/agents` 适配层与参考 agent 集，并把两者已验证的做法
+（配置目录 env 隔离、显式 project trust、模型目录元数据注入、原生 `.agents/skills` 发现、
+pi 的扩展桥接 MCP 哲学）沉淀进架构、prompts、skills 与文档。
+
+关键调研结论（均经官方文档核验，来源与核验日期记入 `docs/ai/source-index.md`）：
+
+- **headless 契约**：pi 用 `pi --mode json --approve --no-session [--model provider/id] [--thinking <level>] -- "<task>"`；
+  omp 用 `omp -p --mode json --auto-approve --no-session [--model provider/id] [--thinking <level>] -- "<task>"`。
+  两者输出同族 NDJSON 事件流（`session` 头 + `agent_start`/`turn_*`/`message_*`/`tool_execution_*`/
+  `compaction_*`）；token usage 权威值在 `message_end.message.usage`（`input/output/cacheRead/cacheWrite/
+  totalTokens/cost.total`，cost 为按 USD/1M tokens 单价折算的美元值），`message_update` 顶层是累计快照，
+  只能用其一求和，不能混用。工具调用从 `tool_execution_start`（`toolName`/`args`）采集。
+- **配置目录隔离**：两者都认 `PI_CODING_AGENT_DIR`（pi 默认 `~/.pi/agent`，omp 默认 `~/.omp/agent`），
+  指向 bundle 内目录即可获得 models/settings/extensions/sessions 的整体隔离，等价于 kilo/opencode 的
+  隔离 HOME 效果；pi 另需 `PI_OFFLINE=1`（关更新检查/包检查/安装遥测）与 `PI_TELEMETRY=0`。
+  该 env 值是沙箱内路径，必须由 orchestrator 在已知沙箱 workdir 后注入（同 `AICR_OUTPUT_STATE_PATH`
+  的注入模式），不能由适配器在 host 侧物化。
+- **模型目录注入**：pi `models.json` 与 omp `models.yml` 都是 `{providers:{<id>:{baseUrl, api, apiKey,
+  headers?, authHeader?, models:[{id, name, reasoning, input, cost{input,output,cacheRead,cacheWrite},
+  contextWindow, maxTokens}]}}}`；`api` 取值已核验（`openai-completions`/`anthropic-messages`/
+  `google-generative-ai`/`azure-openai-responses`/`google-vertex`/`bedrock-converse-stream` 等）。
+  密钥不落盘：pi 用 `$ENV`/`${ENV}` 插值，omp 把 `apiKey` 值先当 env 名解析（omp 另有 `auth: none`
+  免 key）。v1 只支持 `openai_compatible`/`ollama`/`anthropic`/`google_ai_studio` 四种 provider kind
+  （baseUrl + apiKey 足够）；`azure_openai`/`vertex_ai`/`bedrock`/`copilot` 的凭据与参数管线未核验，
+  适配器在 materializeConfig 抛出带可操作指引的错误，不猜配置。
+- **MCP 面差异**：omp 原生支持 MCP（用户级 `$PI_CODING_AGENT_DIR/mcp.json`：`{mcpServers:{<name>:
+  {command, args?, env?}}}` stdio 或 `{type:"http"|"sse", url, headers?}`，支持 `${VAR}` 展开与
+  env 名间接），工具以 `mcp__<server>_<tool>`（小写、非字母数字转下划线）暴露，现有
+  `normalizeToolName` 正则天然兼容。pi **明确不做内置 MCP**（官方哲学），官方路径是 TypeScript 扩展：
+  由 runtime bundle 生成 `<configDir>/extensions/aicr-output.ts`（用户级扩展不受 project trust 门控，
+  async factory 会在首个模型调用前被 await），扩展内用 node stdio JSON-RPC 桥接 aicr-output server，
+  以 `pi_aicr_*` 名 `registerTool`（`Type.Unsafe` 透传 MCP inputSchema），该命名命中现有
+  `<prefix>_aicr_<tool>` 归一化正则。
+- **指令与 skills 面**：两者都原生加载 cwd/父级 `AGENTS.md`、原生发现项目 `.agents/skills/<name>/SKILL.md`，
+  与 bundle 现有物化布局零拷贝兼容。pi 对项目 `.agents/skills` 有 trust 门控，headless 下必须
+  `--approve` 才会加载（bundle 目录完全由 AICR 物化，trust 安全）；omp 无此门控。pi 在原生沙箱下
+  可能额外读到宿主 `~/.agents/skills`（`PI_CODING_AGENT_DIR` 不覆盖该路径），记为已知限制，
+  生产容器沙箱不受影响。
+- **compaction 注入**：pi 经 settings.json `compaction.enabled`（无 threshold/prune 字段，记 delegated）；
+  omp 经 config.yml `compaction.enabled` + `compaction.thresholdPercent`（有原生字段，记 injected）；
+  manifest `contextCompaction.{enabled,mode}` 语义不变。
+- **任务文本传输**：两者 json/print 模式的已文档化形态都是位置参数；adapter 提供
+  `buildStdin() => ""` 防止 orchestrator 默认把任务再管道进 stdin 造成双写。Windows 原生沙箱
+  32k argv 上限记为已知坑位（生产路径是 Linux 容器沙箱，ARG_MAX 远高于此）。
+
+执行包：
+
+- **M13-P1 调研与计划落盘 ✅**：外部文档核验 + 仓库契约确认；更新 `Plan.md`、`docs/ai/index.md`
+  里程碑表、`docs/ai/source-index.md` 研究记录。
+- **M13-P2 pi 适配器 ✅**：新增 `packages/agents/src/pi.ts`；`types.ts` AgentKind 加 `"pi"`；
+  `factory.ts` 注册；`runtime-bundle.ts` 为 pi 生成桥接扩展并把 `nativeSurfaces.mcp` 枚举扩出
+  `"extension"`；`review-orchestrator.ts` 注入 `PI_CODING_AGENT_DIR` 并新增 pi/omp 共用的
+  NDJSON 提取器；`config.ts` agentKindSchema 加 `"pi"`。
+- **M13-P3 omp 适配器 ✅**：新增 `packages/agents/src/oh-my-pi.ts` 与共享模块
+  `packages/agents/src/pi-family.ts`；`mcp-config.ts` 新增
+  `toOhMyPiMcpServersJson`；`runtime-bundle.ts` 接线 `.omp-agent/{config.yml,models.yml,mcp.json}`；
+  AgentKind/schema/factory 同步加 `"oh-my-pi"`。
+- **M13-P4 文档与 AI 资产 ✅**：`docs/ai/architecture.md` §3.6.3/§3.7.2/§3.13.5、`decisions.md` 新增 D33、
+  `AGENTS.known-pitfalls.md` 新增 #74、`docs/prompt-research.md` pi/omp 参考段、
+  `agent-runtime-integration` SKILL.md 适配器段落、根 `AGENTS.md` 兼容性段、`README.md` 包列表、
+  `example/config.yaml`+`example/README.md`、`docs/site` 中英 agent 集成页与 config-fields 参考、
+  `source-index.md` 研究记录与 pi/omp 来源条目。
+- **M13-P5 门禁收尾 ✅**：两适配器单测（argv/materialize 文件内容/env/compaction/MCP 转换器/
+  提取器/normalizeToolName/config schema/bundle 分支/orchestrator env 注入）落地，随后
+  eslint/tsc/vitest（81 文件 1885 用例）/markdownlint/build/eval/docs:build 全链通过。
+
 ### 8.3 本地优先执行队列
 
 | 项 | 说明 | 本地验收 |
@@ -326,6 +400,11 @@ M12-P5（真实 App e2e / 公网正式环境切换）已完成：已将 `atframe
 | M12-P2 GithubAppTokenService ✅ | `packages/server/src/github-app-token.ts`：`node:crypto` RS256 JWT 签发、installation token 缓存/刷新（<5min 提前刷新）、repo→installation 解析与缓存、401/403/404 可操作错误映射 | 新增 `github-app-token.test.ts`（mock fetch + `generateKeyPairSync` 测密钥），JWT 结构/缓存/刷新/GHE base URL 均覆盖 |
 | M12-P3 注入三个 token 点 ✅ | 将 token 服务接入 `vcsFactory`（改异步）、`createOutputPublisherResolverFromConfig`（resolver 改异步）、webhook PR 详情拉取（`appTokenResolver`）；vcs/outputs 保持字符串 token；补 `ghs_` 脱敏回归测试 | resolver 异步化后 2 个调用点（`index.ts`、`review-orchestrator.ts`）await；App/PAT 两条路径均有测覆盖 |
 | M12-P4 installation 事件 + GHE + 文档 ✅ | webhook `installation`/`installation_repositories` 返回 `202 unsupported_event`；GHE `base_url` → `/api/v3`；定稿 `example/README.md`、`docs/ai/architecture.md` §3.2.1、`decisions.md` D32 | markdownlint + 全量验证链通过；webhook 测覆盖 installation 事件与 id 提取 |
+| M13-P1 pi/omp 调研与计划 ✅ | 官方文档核验（pi：json/models/custom-provider/extensions/settings/environment-variables/README；omp：cli-reference/config-usage/models/mcp-config/mcp-runtime-lifecycle/compaction/skills）+ 仓库契约确认；Plan.md 与 index.md 计划落盘 | `docs/ai/source-index.md` 含 2026-08-26 研究记录；markdownlint 通过 |
+| M13-P2 pi 适配器 ✅ | `packages/agents/src/pi.ts` + runtime-bundle 桥接扩展 + orchestrator 注入/提取 + config schema | 单测覆盖命令/物化/提取/env 注入；eslint + tsc + vitest 通过 |
+| M13-P3 omp 适配器 ✅ | `packages/agents/src/oh-my-pi.ts` + `toOhMyPiMcpServersJson` + bundle/orchestrator/schema 接线 | 单测覆盖；eslint + tsc + vitest 通过 |
+| M13-P4 文档与 AI 资产 ✅ | architecture/decisions/pitfalls/prompt-research/skill/AGENTS.md/README/example/docs-site 中英 | markdownlint + `docs:build` 公开内容校验通过 |
+| M13-P5 门禁收尾 ✅ | 全量验证链 + eval fixtures + source-index 定稿 | lint/typecheck/test/markdownlint/build/eval 全过 |
 
 ### 8.4 Backlog（依赖外部系统或延后扩展）
 

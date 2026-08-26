@@ -25,9 +25,16 @@ export { createOpencodeAdapter } from "./opencode.js";
 export type { OpencodeAdapterOptions } from "./opencode.js";
 export { createZooAdapter } from "./zoo.js";
 export type { ZooAdapterOptions } from "./zoo.js";
+export { createPiAdapter } from "./pi.js";
+export type { PiAdapterOptions } from "./pi.js";
+export { PI_AGENT_DIR_NAME } from "./pi.js";
+export { createOhMyPiAdapter } from "./oh-my-pi.js";
+export type { OhMyPiAdapterOptions } from "./oh-my-pi.js";
+export { OMP_AGENT_DIR_NAME } from "./oh-my-pi.js";
 export {
   toClaudeCodeMcpServersJson,
   toCopilotCliMcpServersJson,
+  toOhMyPiMcpServersJson,
 } from "./mcp-config.js";
 export {
   buildKiloModelInfo,

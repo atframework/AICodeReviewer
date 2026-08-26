@@ -23,10 +23,10 @@
     "@aicr/sandbox": "workspace:*",
     "@aicr/store": "workspace:*",
     "@aicr/vcs": "workspace:*",
-    "hono": "^4.13.2",
+    "hono": "^4.13.4",
     "zod": "^3.25.76"
   },
   "optionalDependencies": {
-    "ioredis": "^5.11.1"
+    "ioredis": "^6.0.0"
   }
 }

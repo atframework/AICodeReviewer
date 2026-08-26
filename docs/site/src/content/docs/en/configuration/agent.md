@@ -30,10 +30,19 @@ agent:
 | `zoo` | Zoo Code adapter. Set only when validating that adapter. |
 | `copilot-cli` | GitHub Copilot CLI adapter. |
 | `claude-code` | Claude Code adapter. |
+| `pi` | pi (`@earendil-works/pi-coding-agent`) adapter. Requires catalog-supplied `context_window` / `max_output_tokens`. |
+| `oh-my-pi` | oh-my-pi (`omp`, pi fork) adapter. Same model-metadata requirements as `pi`. |
 
 :::note[Stick with the default]
 `kilo` is the validated default. Switch to another `AgentKind` only when you are
-explicitly validating that adapter.
+explicitly validating that adapter. The `pi` and `oh-my-pi` adapters support the
+provider kinds `openai_compatible`, `ollama`, `anthropic`, and
+`google_ai_studio`, and both require the model's context window and output-token
+limit — enable `llm.model_catalog` (or set overrides) before using them. Neither
+the AICR runtime image nor the default agent sandbox image ships the `pi`/`omp`
+binaries: using these kinds requires a custom sandbox image with the matching
+CLI installed (and the binaries are on the sandbox command allowlist by
+default).
 :::
 
 The schema also accepts `agent.default` at the `workspaces.defaults.agent.default`
@@ -107,6 +116,8 @@ Each agent CLI receives compaction config in its own format:
 | Zoo | `autoCondenseContext` / `condenseContextPercentThreshold` in `.roo/settings.json`. |
 | Claude Code | Auto-compacts by default (delegated; no config injected). |
 | Copilot CLI | Not applicable (no context-management surface). |
+| pi | `compaction.enabled` in `settings.json` (pi has no threshold/prune fields; those stay delegated to pi defaults). |
+| oh-my-pi | `compaction.enabled` plus `compaction.thresholdPercent` in `config.yml`. |
 
 :::caution[Kilo needs a known context window]
 Kilo only auto-compacts when the model's `contextWindow` is known, so

@@ -11,7 +11,9 @@ import {
   createKiloAdapter,
   createClaudeCodeAdapter,
   createCopilotCliAdapter,
+  createOhMyPiAdapter,
   createOpencodeAdapter,
+  createPiAdapter,
   createZooAdapter,
   createOpenAICompatibleTranslator,
   createAnthropicTranslator,
@@ -19,6 +21,7 @@ import {
   createBedrockTranslator,
   createAgentAdapter,
   materializeRuntimeBundle,
+  toOhMyPiMcpServersJson,
 } from "../src/index.js";
 import type { RuntimeBundleInstruction, RuntimeBundleSkill, RuntimeBundleMcpTool, RuntimeBundleMcpServer } from "../src/index.js";
 
@@ -52,6 +55,16 @@ describe("createAgentAdapter", () => {
   it("creates a claude-code adapter", () => {
     const adapter = createAgentAdapter({ kind: "claude-code" });
     expect(adapter.kind).toBe("claude-code");
+  });
+
+  it("creates a pi adapter", () => {
+    const adapter = createAgentAdapter({ kind: "pi" });
+    expect(adapter.kind).toBe("pi");
+  });
+
+  it("creates an oh-my-pi adapter", () => {
+    const adapter = createAgentAdapter({ kind: "oh-my-pi" });
+    expect(adapter.kind).toBe("oh-my-pi");
   });
 
   it("passes binary option to kilo adapter", () => {
@@ -2161,6 +2174,448 @@ describe("model metadata injection (M10 catalog)", () => {
         workingDir: tempDir,
       });
       expect(result.manifest.model.metadataInjection).toBe("delegated");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+});
+
+const piFamilyModel: ModelSpec = {
+  providerKind: "openai_compatible",
+  providerId: "test-provider",
+  modelId: "gpt-4o",
+  baseUrl: "https://gateway.example.com/v1",
+  apiKeyEnv: "AICR_TEST_API_KEY",
+  contextWindow: 128000,
+  maxOutputTokens: 16384,
+  supportsReasoning: true,
+  supportsVision: true,
+  costInputPerMTok: 2.5,
+  costOutputPerMTok: 10,
+  costCacheReadPerMTok: 0.25,
+  costCacheWritePerMTok: 2.5,
+};
+
+describe("createPiAdapter", () => {
+  it("builds the documented --mode json command with trust and ephemeral session", () => {
+    const adapter = createPiAdapter();
+    const command = adapter.buildCommand("review this diff", {
+      workingDir: "/tmp/agent",
+      task: "review this diff",
+      model: piFamilyModel,
+    });
+    expect(command).toEqual([
+      "pi",
+      "--mode", "json",
+      "--approve",
+      "--no-session",
+      "--model", "test-provider/gpt-4o",
+      "--",
+      "review this diff",
+    ]);
+  });
+
+  it("passes --thinking from reasoning effort", () => {
+    const adapter = createPiAdapter();
+    const command = adapter.buildCommand("t", {
+      workingDir: "/tmp/agent",
+      task: "t",
+      model: { ...piFamilyModel, defaultReasoningEffort: "high" as const },
+    });
+    expect(command).toContain("--thinking");
+    expect(command[command.indexOf("--thinking") + 1]).toBe("high");
+  });
+
+  it("keeps stdin empty so the prompt is never double-fed", () => {
+    const adapter = createPiAdapter();
+    expect(adapter.buildStdin?.("task", { workingDir: "/tmp/agent", task: "task" })).toBe("");
+  });
+
+  it("materializes models.json and settings.json with env-indirected credentials", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-pi-materialize-"));
+    try {
+      const adapter = createPiAdapter();
+      const result = await adapter.materializeConfig(piFamilyModel, tempDir, {
+        compaction: { auto: true, thresholdPercent: 85 },
+      });
+
+      const modelsJson = JSON.parse(result.configFiles.get(".pi-agent/models.json") ?? "{}");
+      const provider = modelsJson.providers["test-provider"];
+      expect(provider.baseUrl).toBe("https://gateway.example.com/v1");
+      expect(provider.api).toBe("openai-completions");
+      expect(provider.apiKey).toBe("$AICR_TEST_API_KEY");
+      expect(provider.models).toHaveLength(1);
+      expect(provider.models[0]).toMatchObject({
+        id: "gpt-4o",
+        reasoning: true,
+        input: ["text", "image"],
+        contextWindow: 128000,
+        maxTokens: 16384,
+        cost: { input: 2.5, output: 10, cacheRead: 0.25, cacheWrite: 2.5 },
+      });
+
+      // pi settings.json has no threshold_percent field; only the on/off state is injected.
+      const settings = JSON.parse(result.configFiles.get(".pi-agent/settings.json") ?? "{}");
+      expect(settings).toEqual({ compaction: { enabled: true } });
+
+      expect(result.envVars.PI_OFFLINE).toBe("1");
+      expect(result.envVars.PI_TELEMETRY).toBe("0");
+      expect(result.envVars.AICR_TEST_API_KEY).toBe("${AICR_TEST_API_KEY}");
+
+      const written = await readFile(join(tempDir, ".pi-agent", "models.json"), "utf8");
+      expect(JSON.parse(written).providers["test-provider"].api).toBe("openai-completions");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("maps anthropic provider kind to anthropic-messages with the default endpoint", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-pi-anthropic-"));
+    try {
+      const adapter = createPiAdapter();
+      const model: ModelSpec = {
+        providerKind: "anthropic",
+        providerId: "anthropic-main",
+        modelId: "claude-sonnet-4-5",
+        apiKeyEnv: "ANTHROPIC_API_KEY",
+        contextWindow: 200000,
+        maxOutputTokens: 64000,
+      };
+      const result = await adapter.materializeConfig(model, tempDir);
+      const modelsJson = JSON.parse(result.configFiles.get(".pi-agent/models.json") ?? "{}");
+      expect(modelsJson.providers["anthropic-main"].api).toBe("anthropic-messages");
+      expect(modelsJson.providers["anthropic-main"].baseUrl).toBe("https://api.anthropic.com");
+      expect(modelsJson.providers["anthropic-main"].models[0].input).toEqual(["text"]);
+      expect(modelsJson.providers["anthropic-main"].models[0].cost).toEqual({
+        input: 0, output: 0, cacheRead: 0, cacheWrite: 0,
+      });
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("writes a placeholder apiKey for keyless providers", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-pi-ollama-"));
+    try {
+      const adapter = createPiAdapter();
+      const model: ModelSpec = {
+        providerKind: "ollama",
+        providerId: "local-ollama",
+        modelId: "qwen2.5-coder",
+        contextWindow: 32768,
+        maxOutputTokens: 8192,
+      };
+      const result = await adapter.materializeConfig(model, tempDir);
+      const modelsJson = JSON.parse(result.configFiles.get(".pi-agent/models.json") ?? "{}");
+      expect(modelsJson.providers["local-ollama"].baseUrl).toBe("http://127.0.0.1:11434/v1");
+      expect(modelsJson.providers["local-ollama"].apiKey).toBe("aicr-local-no-auth");
+      expect(result.envVars.AICR_TEST_API_KEY).toBeUndefined();
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects provider kinds without a verified custom-provider pipeline", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-pi-unsupported-"));
+    try {
+      const adapter = createPiAdapter();
+      const model: ModelSpec = {
+        providerKind: "copilot",
+        providerId: "copilot",
+        modelId: "gpt-4o",
+        contextWindow: 128000,
+        maxOutputTokens: 16384,
+      };
+      await expect(adapter.materializeConfig(model, tempDir)).rejects.toThrow(/does not support/iu);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("fails with actionable guidance when catalog limits are unknown", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-pi-nolimits-"));
+    try {
+      const adapter = createPiAdapter();
+      const model: ModelSpec = {
+        providerKind: "openai_compatible",
+        providerId: "test-provider",
+        modelId: "mystery-model",
+        baseUrl: "https://gateway.example.com/v1",
+      };
+      await expect(adapter.materializeConfig(model, tempDir)).rejects.toThrow(/model_catalog/iu);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("omits compaction settings when no compaction options are provided", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-pi-nocompact-"));
+    try {
+      const adapter = createPiAdapter();
+      const result = await adapter.materializeConfig(piFamilyModel, tempDir);
+      const settings = JSON.parse(result.configFiles.get(".pi-agent/settings.json") ?? "{}");
+      expect(settings).toEqual({});
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("injects compaction enabled=false when auto compaction is off", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-pi-compactoff-"));
+    try {
+      const adapter = createPiAdapter();
+      const result = await adapter.materializeConfig(piFamilyModel, tempDir, {
+        compaction: { auto: false },
+      });
+      const settings = JSON.parse(result.configFiles.get(".pi-agent/settings.json") ?? "{}");
+      expect(settings).toEqual({ compaction: { enabled: false } });
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("createOhMyPiAdapter", () => {
+  it("builds the documented -p --mode json command", () => {
+    const adapter = createOhMyPiAdapter();
+    const command = adapter.buildCommand("review this diff", {
+      workingDir: "/tmp/agent",
+      task: "review this diff",
+      model: { ...piFamilyModel, defaultReasoningEffort: "medium" as const },
+    });
+    expect(command).toEqual([
+      "omp",
+      "-p",
+      "--mode", "json",
+      "--auto-approve",
+      "--no-session",
+      "--model", "test-provider/gpt-4o",
+      "--thinking", "medium",
+      "--",
+      "review this diff",
+    ]);
+  });
+
+  it("materializes models.yml with env-name apiKey indirection", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-omp-materialize-"));
+    try {
+      const adapter = createOhMyPiAdapter();
+      const result = await adapter.materializeConfig(piFamilyModel, tempDir, {
+        compaction: { auto: true, thresholdPercent: 90 },
+      });
+
+      const modelsYaml = result.configFiles.get(".omp-agent/models.yml") ?? "";
+      expect(modelsYaml).toContain("providers:");
+      expect(modelsYaml).toContain('"test-provider":');
+      expect(modelsYaml).toContain('baseUrl: "https://gateway.example.com/v1"');
+      expect(modelsYaml).toContain('api: "openai-completions"');
+      expect(modelsYaml).toContain('apiKey: "AICR_TEST_API_KEY"');
+      expect(modelsYaml).toContain('- id: "gpt-4o"');
+      expect(modelsYaml).toContain("reasoning: true");
+      expect(modelsYaml).toContain('input: ["text", "image"]');
+      expect(modelsYaml).toContain("contextWindow: 128000");
+      expect(modelsYaml).toContain("maxTokens: 16384");
+
+      const configYaml = result.configFiles.get(".omp-agent/config.yml") ?? "";
+      expect(configYaml).toContain("compaction:");
+      expect(configYaml).toContain("enabled: true");
+      expect(configYaml).toContain("thresholdPercent: 90");
+
+      expect(result.envVars.AICR_TEST_API_KEY).toBe("${AICR_TEST_API_KEY}");
+
+      const written = await readFile(join(tempDir, ".omp-agent", "models.yml"), "utf8");
+      expect(written).toBe(modelsYaml);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("marks keyless providers as auth none", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-omp-keyless-"));
+    try {
+      const adapter = createOhMyPiAdapter();
+      const model: ModelSpec = {
+        providerKind: "ollama",
+        providerId: "local-ollama",
+        modelId: "qwen2.5-coder",
+        contextWindow: 32768,
+        maxOutputTokens: 8192,
+      };
+      const result = await adapter.materializeConfig(model, tempDir);
+      const modelsYaml = result.configFiles.get(".omp-agent/models.yml") ?? "";
+      expect(modelsYaml).toContain('auth: "none"');
+      expect(modelsYaml).not.toContain("apiKey");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects provider kinds without a verified custom-provider pipeline", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-omp-unsupported-"));
+    try {
+      const adapter = createOhMyPiAdapter();
+      const model: ModelSpec = {
+        providerKind: "bedrock",
+        providerId: "aws",
+        modelId: "claude-sonnet-4",
+        contextWindow: 200000,
+        maxOutputTokens: 64000,
+      };
+      await expect(adapter.materializeConfig(model, tempDir)).rejects.toThrow(/does not support/iu);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("toOhMyPiMcpServersJson", () => {
+  it("converts local and remote servers to the omp mcp.json shape", () => {
+    const json = toOhMyPiMcpServersJson([
+      {
+        name: "aicr-output",
+        config: {
+          type: "local",
+          command: ["node", "/app/packages/mcp-output/dist/server.js"],
+          environment: { AICR_OUTPUT_STATE_PATH: "/workspace/agent/.aicr-output-state.json" },
+        },
+      },
+      {
+        name: "remote-docs",
+        config: { type: "remote", url: "https://mcp.example.com/mcp", headers: { "X-Key": "k" } },
+      },
+    ]);
+    expect(json).toBeDefined();
+    const parsed = JSON.parse(json!);
+    expect(parsed.mcpServers["aicr-output"]).toEqual({
+      command: "node",
+      args: ["/app/packages/mcp-output/dist/server.js"],
+      env: { AICR_OUTPUT_STATE_PATH: "/workspace/agent/.aicr-output-state.json" },
+    });
+    expect(parsed.mcpServers["remote-docs"]).toEqual({
+      type: "http",
+      url: "https://mcp.example.com/mcp",
+      headers: { "X-Key": "k" },
+    });
+  });
+
+  it("returns undefined when nothing converts", () => {
+    expect(toOhMyPiMcpServersJson([])).toBeUndefined();
+  });
+});
+
+describe("runtime bundle pi/oh-my-pi wiring", () => {
+  const aicrMcpServer: RuntimeBundleMcpServer = {
+    name: "aicr-output",
+    config: {
+      type: "local",
+      command: ["node", "/app/packages/mcp-output/dist/server.js"],
+      environment: { AICR_OUTPUT_STATE_PATH: "/workspace/agent/.aicr-output-state.json" },
+    },
+  };
+
+  it("generates the MCP bridge extension for pi and records the extension surface", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-bundle-pi-"));
+    try {
+      const result = await materializeRuntimeBundle({
+        adapter: createPiAdapter(),
+        model: piFamilyModel,
+        workingDir: tempDir,
+        instructions: [{ kind: "root_agents", label: "AGENTS.md", content: "# Rules" }],
+        skills: [{
+          name: "repo-checks",
+          description: "Repo checks",
+          content: "---\nname: repo-checks\n---\n\n# Repo checks",
+        }],
+        mcpTools: [{ name: "aicr.skip", description: "skip" }],
+        mcpServers: [aicrMcpServer],
+        compaction: { auto: true, thresholdPercent: 80 },
+      });
+
+      const bridge = result.configFiles.get(".pi-agent/extensions/aicr-output.ts") ?? "";
+      expect(bridge).toContain("AICR_PI_MCP_SERVERS");
+      expect(bridge).toContain("pi.registerTool");
+      expect(bridge).toContain('"pi_"');
+      const bridgeOnDisk = await readFile(join(tempDir, ".pi-agent", "extensions", "aicr-output.ts"), "utf8");
+      expect(bridgeOnDisk).toBe(bridge);
+
+      const specJson = result.envVars.AICR_PI_MCP_SERVERS;
+      expect(specJson).toBeDefined();
+      const specs = JSON.parse(specJson!);
+      expect(specs).toEqual([{
+        name: "aicr-output",
+        command: ["node", "/app/packages/mcp-output/dist/server.js"],
+        environment: { AICR_OUTPUT_STATE_PATH: "/workspace/agent/.aicr-output-state.json" },
+      }]);
+
+      expect(result.manifest.nativeSurfaces?.mcp).toBe("extension");
+      expect(result.manifest.nativeSurfaces?.instructions).toContain("AGENTS.md");
+      expect(result.manifest.nativeSurfaces?.skills).toContain(".agents/skills");
+      expect(result.manifest.model.metadataInjection).toBe("injected");
+      expect(result.manifest.contextCompaction).toEqual({ enabled: true, mode: "injected" });
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("skips the pi bridge when no MCP servers are configured", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-bundle-pi-nomcp-"));
+    try {
+      const result = await materializeRuntimeBundle({
+        adapter: createPiAdapter(),
+        model: piFamilyModel,
+        workingDir: tempDir,
+      });
+      expect(result.configFiles.has(".pi-agent/extensions/aicr-output.ts")).toBe(false);
+      expect(result.envVars.AICR_PI_MCP_SERVERS).toBeUndefined();
+      expect(result.manifest.nativeSurfaces?.mcp).toBe("none");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("reports mcp surface none when pi servers never materialize a bridge", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-bundle-pi-remote-"));
+    try {
+      const result = await materializeRuntimeBundle({
+        adapter: createPiAdapter(),
+        model: piFamilyModel,
+        workingDir: tempDir,
+        mcpServers: [{
+          name: "remote-docs",
+          config: { type: "remote", url: "https://mcp.example.com/mcp" },
+        }],
+      });
+      // Remote-only servers are not bridged (the extension spawns stdio children),
+      // so the manifest must not claim an extension surface.
+      expect(result.configFiles.has(".pi-agent/extensions/aicr-output.ts")).toBe(false);
+      expect(result.envVars.AICR_PI_MCP_SERVERS).toBeUndefined();
+      expect(result.manifest.nativeSurfaces?.mcp).toBe("none");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("writes .omp-agent/mcp.json for oh-my-pi and records the config_file surface", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-bundle-omp-"));
+    try {
+      const result = await materializeRuntimeBundle({
+        adapter: createOhMyPiAdapter(),
+        model: piFamilyModel,
+        workingDir: tempDir,
+        mcpServers: [aicrMcpServer],
+        compaction: { auto: true },
+      });
+
+      const mcpJson = JSON.parse(result.configFiles.get(".omp-agent/mcp.json") ?? "{}");
+      expect(mcpJson.mcpServers["aicr-output"]).toEqual({
+        command: "node",
+        args: ["/app/packages/mcp-output/dist/server.js"],
+        env: { AICR_OUTPUT_STATE_PATH: "/workspace/agent/.aicr-output-state.json" },
+      });
+      const onDisk = await readFile(join(tempDir, ".omp-agent", "mcp.json"), "utf8");
+      expect(JSON.parse(onDisk)).toEqual(mcpJson);
+      expect(result.manifest.nativeSurfaces?.mcp).toBe("config_file");
+      expect(result.manifest.model.metadataInjection).toBe("injected");
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }

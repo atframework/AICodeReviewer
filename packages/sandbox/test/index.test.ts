@@ -26,6 +26,8 @@ describe("@aicr/sandbox", () => {
       expect(ALLOWED_COMMANDS.has("node")).toBe(true);
       expect(ALLOWED_COMMANDS.has("kilo")).toBe(true);
       expect(ALLOWED_COMMANDS.has("zoo")).toBe(true);
+      expect(ALLOWED_COMMANDS.has("pi")).toBe(true);
+      expect(ALLOWED_COMMANDS.has("omp")).toBe(true);
       expect(ALLOWED_COMMANDS.has("rm")).toBe(false);
       expect(ALLOWED_COMMANDS.has("sudo")).toBe(false);
     });

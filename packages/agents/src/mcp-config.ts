@@ -61,6 +61,38 @@ export function toClaudeCodeMcpServersJson(
 }
 
 /**
+ * Converts the canonical MCP server config into the oh-my-pi shape used by
+ * `~/.omp/agent/mcp.json` (resolved through PI_CODING_AGENT_DIR): local servers
+ * become `stdio` entries with a string command plus args array; remote servers
+ * become `http` entries. Verified against omp docs/mcp-config.md (2026-08).
+ */
+export function toOhMyPiMcpServersJson(
+  servers: readonly AgentSpawnMcpServer[],
+): string | undefined {
+  const converted: Record<string, unknown> = {};
+  for (const server of servers) {
+    const local = asLocal(server.config);
+    if (local) {
+      converted[server.name] = {
+        command: local.command[0],
+        args: local.command.slice(1),
+        ...(local.environment ? { env: local.environment } : {}),
+      };
+      continue;
+    }
+    const remote = asRemote(server.config);
+    if (remote) {
+      converted[server.name] = {
+        type: "http",
+        url: remote.url,
+        ...(remote.headers ? { headers: remote.headers } : {}),
+      };
+    }
+  }
+  if (Object.keys(converted).length === 0) return undefined;
+  return JSON.stringify({ mcpServers: converted });
+}
+/**
  * Converts the canonical MCP server config into the GitHub Copilot CLI shape used by
  * `--additional-mcp-config` and mcp-config.json: local servers keep the `local` type
  * with a string command plus args array and default to all tools exposed.

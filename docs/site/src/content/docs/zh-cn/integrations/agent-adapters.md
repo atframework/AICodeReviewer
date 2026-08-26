@@ -24,13 +24,13 @@ orchestrator 每次 run 调用一次 `materializeRuntimeBundle`，而不是修�
 
 instructions、技能和 `aicr-output` MCP server 会接线到各 agent 的原生发现面；run manifest 在 `nativeSurfaces` 下记录接线情况：
 
-| 接入面 | kilo | opencode | claude-code | copilot-cli | zoo |
-| --- | --- | --- | --- | --- | --- |
-| Instructions | `AGENTS.md`（自动加载） | `AGENTS.md`（自动加载） | 经 `CLAUDE.md` `@AGENTS.md` 导入 | `AGENTS.md`（自动加载） | `AGENTS.md` |
-| 技能 | `kilo.json` `skills.paths` → `.agents/skills` | `.agents/skills/<name>/SKILL.md` + `permission.skill` 放行 | `.claude/skills/<name>/SKILL.md` | `.agents/skills/<name>/SKILL.md` | `.agents/skills/<name>/SKILL.md`（资源） |
-| `aicr-output` MCP | `kilo.json` `mcp` | `opencode.json` `mcp` | `--mcp-config` + `--strict-mcp-config` CLI flag | `--additional-mcp-config` CLI flag | 无（仅 prompt 注入） |
+| 接入面 | kilo | opencode | claude-code | copilot-cli | zoo | pi | oh-my-pi |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Instructions | `AGENTS.md`（自动加载） | `AGENTS.md`（自动加载） | 经 `CLAUDE.md` `@AGENTS.md` 导入 | `AGENTS.md`（自动加载） | `AGENTS.md` | `AGENTS.md`（自动加载） | `AGENTS.md`（自动加载） |
+| 技能 | `kilo.json` `skills.paths` → `.agents/skills` | `.agents/skills/<name>/SKILL.md` + `permission.skill` 放行 | `.claude/skills/<name>/SKILL.md` | `.agents/skills/<name>/SKILL.md` | `.agents/skills/<name>/SKILL.md`（资源） | `.agents/skills/<name>/SKILL.md`（需 `--approve`） | `.agents/skills/<name>/SKILL.md` |
+| `aicr-output` MCP | `kilo.json` `mcp` | `opencode.json` `mcp` | `--mcp-config` + `--strict-mcp-config` CLI flag | `--additional-mcp-config` CLI flag | 无（仅 prompt 注入） | 生成的扩展 `.pi-agent/extensions/aicr-output.ts`（pi 无内置 MCP） | `$PI_CODING_AGENT_DIR/mcp.json` |
 
-MCP 输出状态文件路径通过 server 环境里的 `AICR_OUTPUT_STATE_PATH` 钉死，因此无论宿主 CLI 以哪个工作目录拉起 MCP server，orchestrator 都能可靠收集上报的问题与摘要。
+MCP 输出状态文件路径通过 server 环境里的 `AICR_OUTPUT_STATE_PATH` 钉死，因此无论宿主 CLI 以哪个工作目录拉起 MCP server，orchestrator 都能可靠收集上报的问题与摘要。对 pi 与 oh-my-pi，orchestrator 同样以沙箱可见路径注入 `PI_CODING_AGENT_DIR`（run `agent/` 目录下的 `.pi-agent` / `.omp-agent`）。
 
 ## ModelSpec 翻译
 
@@ -88,9 +88,21 @@ Claude Code 默认自动压缩，因此 AICR 不注入额外的压缩配置（�
 
 Copilot CLI 使用其订阅固定的 model catalog。没有模型元数据注入接入面，对话级上下文管理为 `not_applicable`（CLI 接近 token 上限时自动压缩）。AICR 在 manifest 中把模型记录为 `not_applicable`。
 
+### `pi`
+
+适配器面向 pi CLI（`@earendil-works/pi-coding-agent`，`pi` 二进制）。agent 以 `pi --mode json --approve --no-session --model provider/id -- <task>` 运行，评审 prompt 作为位置参数传入，stdin 保持为空。`--approve` 信任按 run 物化的 bundle 目录，使 pi 加载其中的项目级 `.agents/skills`；bundle 完全由 AICR 物化且一次性，信任它是安全的。`PI_OFFLINE=1` 与 `PI_TELEMETRY=0` 为一次性 run 关闭更新检查与安装遥测。
+
+配置目录通过 `PI_CODING_AGENT_DIR` 隔离，指向 bundle 的 `.pi-agent/`（自定义 provider 写入 `models.json`，压缩开关写入 `settings.json`）。pi 上游明确**不内置 MCP client**，因此 runtime bundle 生成一个 TypeScript 扩展（`extensions/aicr-output.ts`），把本地 stdio `aicr-output` MCP server 桥接为名为 `pi_aicr_*` 的 pi 工具；manifest 把它如实记录为 `extension` 接入面，而不是伪装成配置文件接线。reasoning effort 与 pi 的 `--thinking` 档位一一对应，直接透传。
+
+pi 的自定义模型条目必填 `contextWindow` 与 `maxTokens`：请启用 `llm.model_catalog`（或设置 overrides）让这些限额可解析——适配器在缺失时会抛出带指引的错误，而不是编造数值。支持的 provider kind 为 `openai_compatible`、`ollama`、`anthropic`、`google_ai_studio`；其余 kind 会显式报错，不猜测未核验的认证管线。发布镜像未内置 `pi` 二进制，使用该 kind 需要自带安装此 CLI 的自定义沙箱镜像。
+
+### `oh-my-pi`（omp）
+
+oh-my-pi 是 pi 的 fork（`omp` 二进制），与 pi 共用同一 JSON 事件流、`PI_CODING_AGENT_DIR` 隔离和模型 catalog 要求（镜像要求同 pi：需自定义沙箱镜像安装 `omp`）。运行形态为 `omp -p --mode json --auto-approve --no-session --model provider/id -- <task>`。与 pi 不同，它有**原生 MCP 接入面**：AICR 写 `.omp-agent/mcp.json`（manifest 记为 `config_file`），`aicr-output` 工具以 `mcp__aicr_output_aicr_*` 形态出现。自定义 provider 写入 `.omp-agent/models.yml`（`apiKey` 先按 env 名解析，keyless provider 用 `auth: none`），压缩配置写入 `.omp-agent/config.yml`（`compaction.enabled` + `compaction.thresholdPercent`）。
+
 ## 直连 LLM 回退（不是 agent kind）
 
-当 agent CLI 即便经过结构化修复 pass 也无法产出结构化输出时，orchestrator 可以回退到直接调用 LLM gateway。这是内部回退机制，**不是**可配置的 `agent.default` 值——合法的 `agent.default` 值只有 `kilo`、`opencode`、`zoo`、`copilot-cli` 和 `claude-code`。orchestrator 计算
+当 agent CLI 即便经过结构化修复 pass 也无法产出结构化输出时，orchestrator 可以回退到直接调用 LLM gateway。这是内部回退机制，**不是**可配置的 `agent.default` 值——合法的 `agent.default` 值只有 `kilo`、`opencode`、`zoo`、`copilot-cli`、`claude-code`、`pi` 和 `oh-my-pi`。orchestrator 计算
 `maxPromptTokens = floor(contextWindow × 0.6)`，让 prompt manager 在预算内裁剪 memory hints、技能和 instructions；diff 本身由 AICR 侧的压缩阶段处理。
 
 ## Model catalog 注入差异汇总
@@ -101,6 +113,8 @@ Copilot CLI 使用其订阅固定的 model catalog。没有模型元数据注入
 | kilo | 否 | 注入 `contextWindow`、`maxTokens`、`supportsImages`、`supportsComputerUse`、`supportsPromptCache`、定价 |
 | zoo | 否 | 注入 `.roo/settings.json` 的 `openAiCustomModelInfo` |
 | claude-code | 否（内置 Anthropic catalog） | 派生输出/上下文限制与显式 thinking budget；其余委托 |
+| pi | 否 | `$PI_CODING_AGENT_DIR/models.json` 写自定义 provider；`contextWindow`/`maxTokens` 必填（缺失时报错并给指引）；`apiKey` 用 `$ENV` 引用 |
+| oh-my-pi | 否 | `$PI_CODING_AGENT_DIR/models.yml` 写自定义 provider；限额同样必填；`apiKey` 按 env 名解析或用 `auth: none` |
 | copilot-cli | 否（固定订阅 catalog） | 不注入；记录为 N/A |
 
 注入只发生在自定义或未被工具原生解析的 provider 路径；当工具自己能从 models.dev 解析时，AICR 跳过注入以避免双写冲突。
@@ -121,6 +135,8 @@ workspace 层的设置会被解析而不生效——混用 agent 需要等后续
 | `opencode` | 开源优先的部署；自定义 OpenAI-compatible provider。 | 已知 provider 原生从 models.dev 解析；自定义 provider 需要显式且符合 schema 的 provider/model 配置。 |
 | `zoo` | 以 Zoo Code 为主力工具的团队。 | 始终需要注入 `contextWindow`/`maxTokens`/`supportsImages`/价格——启用 model catalog。 |
 | `copilot-cli` | 使用 GitHub Copilot 订阅、希望零单次 LLM 成本的环境。 | 使用订阅固定的 catalog；不注入模型元数据。无对话级自动压缩接入面（`not_applicable`）。 |
+| `pi` | 偏好极简、可扩展的 pi 运行时；接受扩展桥接工具的团队。 | 要求 catalog 提供 `contextWindow`/`maxTokens`；仅支持 `openai_compatible`/`ollama`/`anthropic`/`google_ai_studio`；MCP 经生成的扩展接入，不是配置文件。 |
+| `oh-my-pi` | 需要原生 MCP（`mcp.json`）与更细压缩配置的 pi 系运行时。 | 模型元数据与 provider kind 要求同 `pi`。 |
 
 ### 决策指引
 

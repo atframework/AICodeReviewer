@@ -45,16 +45,18 @@ Instructions, skills, and the `aicr-output` MCP server are wired into each
 agent's native discovery surfaces; the run manifest records the wiring under
 `nativeSurfaces`:
 
-| Surface | kilo | opencode | claude-code | copilot-cli | zoo |
-| --- | --- | --- | --- | --- | --- |
-| Instructions | `AGENTS.md` (auto-loaded) | `AGENTS.md` (auto-loaded) | `AGENTS.md` via `CLAUDE.md` `@AGENTS.md` import | `AGENTS.md` (auto-loaded) | `AGENTS.md` |
-| Skills | `kilo.json` `skills.paths` → `.agents/skills` | `.agents/skills/<name>/SKILL.md` + `permission.skill` allow | `.claude/skills/<name>/SKILL.md` | `.agents/skills/<name>/SKILL.md` | `.agents/skills/<name>/SKILL.md` (resource) |
-| `aicr-output` MCP | `kilo.json` `mcp` | `opencode.json` `mcp` | `--mcp-config` + `--strict-mcp-config` CLI flags | `--additional-mcp-config` CLI flag | none (prompt-only) |
+| Surface | kilo | opencode | claude-code | copilot-cli | zoo | pi | oh-my-pi |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Instructions | `AGENTS.md` (auto-loaded) | `AGENTS.md` (auto-loaded) | `AGENTS.md` via `CLAUDE.md` `@AGENTS.md` import | `AGENTS.md` (auto-loaded) | `AGENTS.md` | `AGENTS.md` (auto-loaded) | `AGENTS.md` (auto-loaded) |
+| Skills | `kilo.json` `skills.paths` → `.agents/skills` | `.agents/skills/<name>/SKILL.md` + `permission.skill` allow | `.claude/skills/<name>/SKILL.md` | `.agents/skills/<name>/SKILL.md` | `.agents/skills/<name>/SKILL.md` (resource) | `.agents/skills/<name>/SKILL.md` (requires `--approve`) | `.agents/skills/<name>/SKILL.md` |
+| `aicr-output` MCP | `kilo.json` `mcp` | `opencode.json` `mcp` | `--mcp-config` + `--strict-mcp-config` CLI flags | `--additional-mcp-config` CLI flag | none (prompt-only) | generated extension `.pi-agent/extensions/aicr-output.ts` (pi has no built-in MCP) | `$PI_CODING_AGENT_DIR/mcp.json` |
 
 The MCP output-state file path is pinned via `AICR_OUTPUT_STATE_PATH` in the
 server environment, so the orchestrator reliably collects reported problems
 and summaries regardless of which working directory the host CLI spawns MCP
-servers with.
+servers with. For pi and oh-my-pi, the orchestrator likewise injects
+`PI_CODING_AGENT_DIR` with the sandbox-visible config directory
+(`.pi-agent` / `.omp-agent` under the run's `agent/` dir).
 
 ## ModelSpec translation
 
@@ -183,14 +185,54 @@ injection surface for model metadata, and conversation-level context
 management is `not_applicable` (the CLI auto-compacts near the token limit).
 AICR records the model as `not_applicable` in the manifest.
 
+### `pi`
+
+The adapter targets the pi CLI (`@earendil-works/pi-coding-agent`, `pi`
+binary). The agent runs as `pi --mode json --approve --no-session --model
+provider/id -- <task>` with the review prompt as a positional argument and an
+empty stdin. `--approve` trusts the per-run bundle directory so pi loads its
+project-level `.agents/skills`; the bundle is fully materialized by AICR and
+ephemeral, so trusting it is safe. `PI_OFFLINE=1` and `PI_TELEMETRY=0` disable
+update checks and install telemetry for the one-shot run.
+
+The config directory is isolated through `PI_CODING_AGENT_DIR`, pointed at the
+bundle's `.pi-agent/` (custom providers in `models.json`, compaction on/off in
+`settings.json`). pi has **no built-in MCP client** by upstream design, so the
+runtime bundle generates a small TypeScript extension
+(`extensions/aicr-output.ts`) that bridges the local stdio `aicr-output` MCP
+server into pi tools named `pi_aicr_*`; the manifest records this as the
+`extension` MCP surface rather than pretending pi reads a config file. Reasoning
+effort maps 1:1 onto pi's `--thinking` levels.
+
+pi's custom-model entries require `contextWindow` and `maxTokens`: enable
+`llm.model_catalog` (or set overrides) so those limits resolve — the adapter
+fails with actionable guidance instead of fabricating them. Supported provider
+kinds are `openai_compatible`, `ollama`, `anthropic`, and `google_ai_studio`;
+other kinds fail visibly rather than guessing unverified auth plumbing. The
+shipped images do not install the `pi` binary, so this kind needs a custom
+sandbox image with the CLI present.
+
+### `oh-my-pi` (omp)
+
+oh-my-pi is a pi fork (`omp` binary) with the same JSON event stream, the same
+`PI_CODING_AGENT_DIR` isolation, and the same model-catalog requirements (and,
+like pi, it needs a custom sandbox image with the `omp` CLI installed). It
+runs as `omp -p --mode json --auto-approve --no-session --model provider/id --
+<task>`. Unlike pi it has a **native MCP surface**: AICR writes
+`.omp-agent/mcp.json` (manifest surface `config_file`) and the `aicr-output`
+tools appear as `mcp__aicr_output_aicr_*`. Custom providers go to
+`.omp-agent/models.yml` (env-name-first `apiKey`, `auth: none` for keyless
+providers) and compaction to `.omp-agent/config.yml`
+(`compaction.enabled` + `compaction.thresholdPercent`).
+
 ## Direct-LLM fallback (not an agent kind)
 
 When an agent CLI cannot produce structured output even after a structured
 repair pass, the orchestrator can fall back to calling the LLM gateway
 directly. This is an internal fallback, **not** a configurable `agent.default`
 value — the valid `agent.default` values are exactly `kilo`, `opencode`,
-`zoo`, `copilot-cli`, and
-`claude-code`. The orchestrator computes
+`zoo`, `copilot-cli`, `claude-code`, `pi`, and `oh-my-pi`. The orchestrator
+computes
 `maxPromptTokens = floor(contextWindow × 0.6)` and lets the prompt manager
 trim memory hints, skills, and instructions to fit; the diff itself is
 compressed by the AICR-side compression stage.
@@ -203,6 +245,8 @@ compressed by the AICR-side compression stage.
 | kilo | No | Inject `contextWindow`, `maxTokens`, `supportsImages`, `supportsComputerUse`, `supportsPromptCache`, pricing |
 | zoo | No | Inject into `.roo/settings.json` `openAiCustomModelInfo` |
 | claude-code | No (built-in Anthropic catalog) | Derive `CLAUDE_CODE_MAX_OUTPUT_TOKENS`; delegate the rest |
+| pi | No | Custom provider in `$PI_CODING_AGENT_DIR/models.json`; `contextWindow`/`maxTokens` required (fail with guidance if unknown); `$ENV` apiKey references |
+| oh-my-pi | No | Custom provider in `$PI_CODING_AGENT_DIR/models.yml`; same required limits; env-name `apiKey` or `auth: none` |
 | copilot-cli | No (fixed subscription catalog) | No injection; recorded as N/A |
 
 Injection only happens for custom or unresolved provider paths; when the tool
@@ -228,6 +272,8 @@ context-compaction fields that apply to every agent kind.
 | `opencode` | Open-source-first setups; custom OpenAI-compatible providers. | Resolves known providers from models.dev natively. Custom providers need explicit schema-valid provider/model configuration. |
 | `zoo` | Teams using Zoo Code as their primary tool. | Always needs `contextWindow`/`maxTokens`/`supportsImages`/pricing injected — enable the model catalog. |
 | `copilot-cli` | GitHub Copilot subscription environments where you want zero per-call LLM cost. | Uses the subscription's fixed catalog; no model metadata is injected. No conversation-level auto-compaction surface (`not_applicable`). |
+| `pi` | Minimal, hackable pi runtime; teams that want extension-bridged tooling. | Requires catalog-supplied `contextWindow`/`maxTokens`; only `openai_compatible`/`ollama`/`anthropic`/`google_ai_studio` provider kinds; MCP arrives via a generated extension, not a config file. |
+| `oh-my-pi` | pi-family runtime with native MCP (`mcp.json`) and finer compaction knobs. | Same model-metadata and provider-kind requirements as `pi`. |
 
 ### Decision guide
 

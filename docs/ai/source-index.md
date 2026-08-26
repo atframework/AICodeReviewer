@@ -11,9 +11,9 @@ This file records verified external sources for repository AI-agent guidance, Ag
 
 ## Last research pass
 
-- `last_checked`: 2026-08-09
-- Scope: agent framework/adapter surface refresh — Claude Code CLI reference + env-vars doc, OpenCode CLI/config/provider/model/MCP/skills docs and config schema, GitHub Copilot CLI command reference + skills/instructions docs, Kilo `kilo.json` configuration reference; verified every adapter flag/env/config path against current upstream docs instead of memory.
-- Result: `claude-code` uses headless print mode (`-p --output-format json`) and documented flags/env; `opencode` uses `--pure run --format json --auto --dir`, schema-valid project-root `opencode.json`, `provider/model` IDs, provider/model option nesting, and current `tool_use`/`step_finish` NDJSON envelopes; `copilot-cli` targets the current `copilot` programmatic CLI. Runtime bundles expose one active combined `AGENTS.md` instruction surface, canonical Agent Skills paths, native MCP wiring, and explicit `nativeSurfaces` manifest entries; source instruction copies remain audit-only. Orchestrator extracts real usage/cost and pins `AICR_OUTPUT_STATE_PATH`. The default review prompt now keeps findings-only restraint in one compact output-discipline section instead of repeating no-problem prose across sections.
+- `last_checked`: 2026-08-26
+- Scope: M13 pi + oh-my-pi integration — pi README/CLI reference + `docs/{json,models,custom-provider,extensions,settings,environment-variables}.md`, omp README + `docs/{cli-reference,config-usage,models,mcp-config,mcp-runtime-lifecycle,compaction,skills}.md`; verified every adapter flag/env/config path against current upstream docs instead of memory.
+- Result: `pi` uses `--mode json --approve --no-session` with a positional prompt, custom providers via `$PI_CODING_AGENT_DIR/models.json` (`apiKey: "$ENV"` interpolation), `PI_OFFLINE=1`/`PI_TELEMETRY=0`, and a generated user-level extension (`extensions/aicr-output.ts`) that bridges the AICR MCP stdio server into `pi_aicr_*` tools because pi has no built-in MCP by design. `oh-my-pi` uses `-p --mode json --auto-approve --no-session`, custom providers via `$PI_CODING_AGENT_DIR/models.yml` (env-name-first `apiKey`, `auth: none` for keyless), native MCP via `$PI_CODING_AGENT_DIR/mcp.json` exposing `mcp__<server>_<tool>` names, and config.yml `compaction.{enabled,thresholdPercent}`. Both discover project `.agents/skills/` and `AGENTS.md` natively; both get `PI_CODING_AGENT_DIR` injected with the sandbox-visible bundle path by the orchestrator.
 
 ## Source records
 
@@ -213,6 +213,50 @@ This file records verified external sources for repository AI-agent guidance, Ag
 - `next_review`: 2026-11-08
 - `update_trigger`: Re-check before changing the copilot-cli adapter command line, auth env mapping, MCP wiring, or skills materialization for Copilot CLI.
 
+### pi (earendil-works)
+
+- Sources:
+  - <https://github.com/earendil-works/pi> (README with full CLI reference)
+  - <https://raw.githubusercontent.com/earendil-works/pi/main/packages/coding-agent/docs/json.md>
+  - <https://raw.githubusercontent.com/earendil-works/pi/main/packages/coding-agent/docs/models.md>
+  - <https://raw.githubusercontent.com/earendil-works/pi/main/packages/coding-agent/docs/custom-provider.md>
+  - <https://raw.githubusercontent.com/earendil-works/pi/main/packages/coding-agent/docs/extensions.md>
+  - <https://raw.githubusercontent.com/earendil-works/pi/main/packages/coding-agent/docs/settings.md>
+  - <https://raw.githubusercontent.com/earendil-works/pi/main/packages/coding-agent/docs/environment-variables.md>
+- Verified guidance:
+  - Headless machine output is `pi --mode json "<prompt>"` (positional prompt after `--` is the documented form; print mode additionally merges piped stdin, JSON mode stdin is not documented). Events are NDJSON: a `session` header, then `agent_start`/`turn_*`/`message_*`/`tool_execution_*`/`compaction_*`. Authoritative per-message usage is `message_end.message.usage` (`input`/`output`/`cacheRead`/`cacheWrite`/`totalTokens`/`cost.total`, disjoint counters); `message_update.usage` is a cumulative snapshot — never sum both.
+  - Model selection: `--model provider/id[:thinking]`, `--thinking off|minimal|low|medium|high|xhigh|max`, `--api-key`. AICR reasoning efforts map 1:1 onto pi thinking levels.
+  - Custom providers live in `$PI_CODING_AGENT_DIR/models.json` (`{providers:{<id>:{baseUrl, api, apiKey, headers?, authHeader?, models:[{id, name, reasoning, input, cost, contextWindow, maxTokens}]}}}`); `apiKey` interpolates `$ENV`/`${ENV}`/`!command`; `api` values include `openai-completions`, `anthropic-messages`, `google-generative-ai`, `azure-openai-responses`, `google-vertex`, `bedrock-converse-stream`. Model entries require `contextWindow`/`maxTokens`.
+  - `PI_CODING_AGENT_DIR` redirects the whole config dir (models/settings/extensions/sessions); `PI_OFFLINE=1` disables update checks, package update checks, and install/update telemetry; `PI_TELEMETRY=0` opts out separately. `--no-session` keeps runs ephemeral.
+  - Project `.pi/` resources and project `.agents/skills` are trust-gated; headless modes apply `defaultProjectTrust` (`ask`/`never` ignore) unless `--approve`/`-a` is passed. Context files (cwd/ancestor `AGENTS.md`/`CLAUDE.md`) load regardless of trust; `--no-context-files` disables.
+  - pi ships **no built-in MCP client** by explicit design; the documented path is a TypeScript extension using `pi.registerTool({name, label, description, parameters (typebox), execute})`. Extensions under `$PI_CODING_AGENT_DIR/extensions/` are user-level (no project trust needed), are transpiled by jiti, may import `typebox` and node builtins, and async factories are awaited before startup — so a stdio JSON-RPC bridge can register MCP tools before the first model call. `Type.Unsafe(rawJsonSchema)` passes MCP `inputSchema` through unchanged.
+  - pi also discovers user-level `~/.agents/skills/`, which `PI_CODING_AGENT_DIR` does not redirect; on the native sandbox this can leak host user skills into a run (container sandboxes are unaffected).
+- `last_checked`: 2026-08-26
+- `next_review`: 2026-11-26
+- `update_trigger`: Re-check before changing the pi adapter command line, the generated MCP bridge extension, `models.json`/`settings.json` materialization, or the `--approve` trust decision.
+
+### oh-my-pi (omp)
+
+- Sources:
+  - <https://github.com/can1357/oh-my-pi> (README)
+  - <https://raw.githubusercontent.com/can1357/oh-my-pi/main/docs/cli-reference.md>
+  - <https://raw.githubusercontent.com/can1357/oh-my-pi/main/docs/config-usage.md>
+  - <https://raw.githubusercontent.com/can1357/oh-my-pi/main/docs/models.md>
+  - <https://raw.githubusercontent.com/can1357/oh-my-pi/main/docs/mcp-config.md>
+  - <https://raw.githubusercontent.com/can1357/oh-my-pi/main/docs/mcp-runtime-lifecycle.md>
+  - <https://raw.githubusercontent.com/can1357/oh-my-pi/main/docs/compaction.md>
+  - <https://raw.githubusercontent.com/can1357/oh-my-pi/main/docs/skills.md>
+- Verified guidance:
+  - omp is a pi fork; headless machine output is `omp -p --mode json "<prompt>"` with the same NDJSON event family and the same `message_end.message.usage` shape, so one extractor serves both adapters.
+  - Launch flags: `--model <provider/id[:level]>`, `--thinking off|minimal|low|medium|high|xhigh|max|auto`, `--auto-approve`, `--no-session`, `--cwd`, `--config <file>` (repeatable), `--no-skills`/`--no-rules`/`--no-extensions`.
+  - `PI_CODING_AGENT_DIR` redirects the default profile's agent dir (`config.yml`, `models.yml`, `mcp.json`, sessions); `PI_CONFIG_FILES` overlays extra config files. `models.yml` has only a top-level `providers:` map (unknown root keys fail validation); `apiKey` resolves as an env-var name first, then as a literal; `auth: none` marks keyless providers; model entries accept `contextWindow`/`maxTokens`/`cost`/`reasoning`/`input`.
+  - Native MCP: user-level `$PI_CODING_AGENT_DIR/mcp.json` or project `.omp/mcp.json`, `{mcpServers:{<name>:{command, args?, env?}}}` for stdio (default) and `{type:"http"|"sse", url, headers?}` for remote; `${VAR}` expansion at discovery and env-name indirection at connect. MCP tools are exposed as `mcp__<server>_<tool>` with components lowercased and sanitized to letters/underscores — the AICR `<prefix>_aicr_<tool>` normalization rule matches these names unchanged. Headless sessions await full MCP discovery before startup.
+  - Compaction settings: `compaction.enabled` (true), `compaction.thresholdPercent` (-1 = reserve-based auto), `compaction.keepRecentTokens`, `compaction.methodOrder` and more; AICR injects `enabled` and `thresholdPercent` only.
+  - Skills: native providers include `.omp/skills/` and the `agents` provider for `.agents/skills/<name>/SKILL.md` (user and project), matching the canonical AICR bundle layout without copies.
+- `last_checked`: 2026-08-26
+- `next_review`: 2026-11-26
+- `update_trigger`: Re-check before changing the omp adapter command line, `models.yml`/`config.yml`/`mcp.json` materialization, or the MCP tool-name normalization rule.
+
 ### Model Context Protocol
 
 - Sources:
@@ -308,5 +352,7 @@ This file records verified external sources for repository AI-agent guidance, Ag
 - Keep `AGENTS.md` as the only always-on canonical repository instruction file.
 - Keep `CLAUDE.md` as a thin bridge using `@AGENTS.md`; do not add a duplicated Claude prompt body.
 - Keep `.agents/skills/` as the canonical skill source and use `.agents/skills/README.md` only as a compact index.
-- Do not add `.github/copilot-instructions.md`, `.claude/`, Zoo Code `.roo/`, `.kilo/`, `.opencode/`, `.agents/rules/`, or other tool-private files unless a future task has a concrete tool-specific need.
+- Do not add `.github/copilot-instructions.md`, `.claude/`, Zoo Code `.roo/`, `.kilo/`, `.opencode/`, `.agents/rules/`, `.pi/`, `.omp/`, or other tool-private files unless a future task has a concrete tool-specific need.
+- pi and oh-my-pi adapters never persist provider secrets: models.json uses `$ENV` interpolation, models.yml uses env-name-first `apiKey`; the orchestrator injects `PI_CODING_AGENT_DIR` with the sandbox-visible path, and pi receives its MCP bridge spec via `AICR_PI_MCP_SERVERS` instead of baked-in paths.
+- pi/omp v1 supports the verified provider kinds (`openai_compatible`, `ollama`, `anthropic`, `google_ai_studio`); other provider kinds fail visibly with guidance instead of guessing unverified auth plumbing.
 - Treat MCP and skill marketplace integrations as security-sensitive surfaces: record sources, use allowlists, keep secrets out of committed files, and prefer dry-run or pending-review flows for automated writes.

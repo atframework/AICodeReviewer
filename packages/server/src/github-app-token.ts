@@ -135,6 +135,7 @@ export class GithubAppTokenService {
     } catch (error) {
       throw new Error(
         `Failed to sign GitHub App JWT with the configured private key: ${error instanceof Error ? error.message : String(error)}. Verify the PEM is valid and matches the App's key pair.`,
+        { cause: error },
       );
     }
 
@@ -305,6 +306,7 @@ export async function resolvePrivateKey(
     } catch (error) {
       throw new Error(
         `Failed to read GitHub App private_key_path "${privateKeyPath}": ${error instanceof Error ? error.message : String(error)}.`,
+        { cause: error },
       );
     }
   }

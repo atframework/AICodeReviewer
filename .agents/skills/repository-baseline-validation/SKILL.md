@@ -39,14 +39,14 @@ user-invocable: false
 
 On Windows, PowerShell execution policy blocks `.ps1` scripts by default. Use `node` to invoke CLI tools directly:
 
-| Tool         | Windows command                                                                                                             | Linux/CI command    |
+| Tool | Windows command | Linux/CI command |
 | ------------ | --------------------------------------------------------------------------------------------------------------------------- | ------------------- |
-| Lint         | `node node_modules/eslint/bin/eslint.js . --max-warnings=0`                                                                 | `pnpm lint`         |
-| Typecheck    | `node node_modules/typescript/bin/tsc -b tsconfig.json --pretty false`                                                      | `pnpm typecheck`    |
-| Test         | `node node_modules/vitest/vitest.mjs run --coverage`                                                                        | `pnpm test`         |
-| Markdownlint | `node node_modules/markdownlint-cli2/markdownlint-cli2-bin.mjs`                                                             | `pnpm markdownlint` |
-| Build        | `cmd /c "pnpm build"`                                                                                                       | `pnpm build`        |
-| Eval fixtures | `node packages/cli/dist/index.js eval --validate-only`                                                                      | `pnpm eval:validate` |
+| Lint | `node node_modules/eslint/bin/eslint.js . --max-warnings=0` | `pnpm lint` |
+| Typecheck | `node node_modules/typescript/bin/tsc -b tsconfig.json --pretty false` | `pnpm typecheck` |
+| Test | `node node_modules/vitest/vitest.mjs run --coverage` | `pnpm test` |
+| Markdownlint | `node node_modules/markdownlint-cli2/markdownlint-cli2-bin.mjs` | `pnpm markdownlint` |
+| Build | `cmd /c "pnpm build"` | `pnpm build` |
+| Eval fixtures | `node packages/cli/dist/index.js eval --validate-only` | `pnpm eval:validate` |
 
 Always try the `node` direct invocation first if `pnpm` or `npx` fails with a PowerShell security error.
 
