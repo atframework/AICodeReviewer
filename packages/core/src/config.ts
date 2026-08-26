@@ -328,7 +328,7 @@ const sandboxSchema = z
     image: z.string().min(1).optional(),
   })
   .strict();
-const agentKindSchema = z.enum(["kilo", "opencode", "zoo", "copilot-cli", "claude-code"]);
+const agentKindSchema = z.enum(["kilo", "opencode", "zoo", "copilot-cli", "claude-code", "pi", "oh-my-pi"]);
 
 const contextCompactionSchema = z
   .object({

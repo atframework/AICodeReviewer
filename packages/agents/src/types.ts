@@ -1,6 +1,6 @@
 import type { ModelSpec } from "@aicr/llm";
 
-export type AgentKind = "kilo" | "opencode" | "zoo" | "copilot-cli" | "claude-code";
+export type AgentKind = "kilo" | "opencode" | "zoo" | "copilot-cli" | "claude-code" | "pi" | "oh-my-pi";
 
 export interface AgentDetectResult {
   readonly available: boolean;

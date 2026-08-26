@@ -14,7 +14,7 @@ description: 全量配置字段参考，按顶层命名空间组织，并以 Zod
 | 概念 | 枚举值 |
 | --- | --- |
 | Trigger `kind` | `gitea`、`forgejo`、`github`、`gitlab`、`p4`、`svn`、`scheduled`、`manual` |
-| Agent `kind` | `kilo`、`opencode`、`zoo`、`copilot-cli`、`claude-code` |
+| Agent `kind` | `kilo`、`opencode`、`zoo`、`copilot-cli`、`claude-code`、`pi`、`oh-my-pi` |
 | Sandbox `kind` | `native`、`docker`、`podman`、`docker_socket`、`k8s_pod`、`firecracker` |
 | Sandbox `engine` | `auto`、`docker`、`podman` |
 | Queue `kind` | `memory`、`sqlite`、`redis`、`rabbitmq`（预留） |

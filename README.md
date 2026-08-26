@@ -39,10 +39,10 @@ pull-request comments, managed issues, or IM bots.
 - **Multi-VCS support** — GitHub, Gitea, Forgejo, and GitLab via webhooks;
   Perforce (P4) and Subversion (SVN) via trigger endpoints. All normalized
   into one `ReviewEvent`.
-- **Bring your own agent** — Kilo Code, Claude Code, opencode, Zoo Code, and
-  Copilot CLI share one runtime contract. AICR translates your `ModelSpec`
-  into each tool's native fields and records capability downgrades in the run
-  manifest.
+- **Bring your own agent** — Kilo Code, Claude Code, opencode, Zoo Code,
+  Copilot CLI, pi, and oh-my-pi share one runtime contract. AICR translates
+  your `ModelSpec` into each tool's native fields and records capability
+  downgrades in the run manifest.
 - **Structured reports** — Agents emit findings through a small, stable MCP
   tool set. The same problem renders cleanly as a PR line comment, a managed
   issue, or an IM summary card.
@@ -97,7 +97,7 @@ carries a **severity**, a **category**, a **file path**, a **line range**, and a
 human-readable **message** (plus an optional fix suggestion).
 
 | Severity | Meaning |
-|----------|---------|
+| ---------- | --------- |
 | `critical` | Must fix before merge — data loss, security breach, crash, or corruption |
 | `high` | Likely bug or vulnerability with real impact under realistic conditions |
 | `medium` | Correctness, contract, or performance risk worth addressing |
@@ -142,7 +142,7 @@ for local Node.js, Docker Compose, and your first review walkthrough.
 Full documentation is available at **[aicr.atframe.work](https://aicr.atframe.work/en/)**:
 
 | Section | Topics |
-|---------|--------|
+| --------- | -------- |
 | [Getting Started](https://aicr.atframe.work/en/start/quick-start/) | Quick start, Docker Compose, first webhook, dry-run, dashboard |
 | [Configuration](https://aicr.atframe.work/en/configuration/overview/) | LLM, agent, sandbox, outputs, storage, queue |
 | [Integrations](https://aicr.atframe.work/en/integrations/vcs-providers/) | VCS providers, agent adapters, output channels, IM bots, MCP tools |
@@ -154,10 +154,10 @@ Full documentation is available at **[aicr.atframe.work](https://aicr.atframe.wo
 ## Repository Structure
 
 | Package | Description |
-|---------|-------------|
+| --------- | ------------- |
 | `packages/core` | Shared config schemas, utilities, logging, token estimation |
 | `packages/llm` | LLM gateway, provider routing, model catalog, compression |
-| `packages/agents` | Agent CLI adapter layer (Kilo, opencode, Zoo, Claude Code, Copilot CLI) |
+| `packages/agents` | Agent CLI adapter layer (Kilo, opencode, Zoo, Claude Code, Copilot CLI, pi, oh-my-pi) |
 | `packages/sandbox` | Agent execution sandbox (native, docker, podman) |
 | `packages/vcs` | VCS adapters (Git, Gitea, GitHub, GitLab, P4, SVN) |
 | `packages/outputs` | Output rendering (PR comments, IM cards, problem issues) |

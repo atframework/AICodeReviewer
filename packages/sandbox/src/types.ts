@@ -117,6 +117,8 @@ export const ALLOWED_COMMANDS: ReadonlySet<string> = new Set([
   "copilot",
   "roo",
   "opencode",
+  "pi",
+  "omp",
 ]);
 
 export const DEFAULT_SANDBOX_IMAGE = "ghcr.io/owent/aicr-agent:latest";

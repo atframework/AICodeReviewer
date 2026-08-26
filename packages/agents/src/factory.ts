@@ -2,7 +2,9 @@ import type { AgentAdapter, AgentKind } from "./types.js";
 import { createClaudeCodeAdapter } from "./claude-code.js";
 import { createCopilotCliAdapter } from "./copilot-cli.js";
 import { createKiloAdapter } from "./kilo.js";
+import { createOhMyPiAdapter } from "./oh-my-pi.js";
 import { createOpencodeAdapter } from "./opencode.js";
+import { createPiAdapter } from "./pi.js";
 import { createZooAdapter } from "./zoo.js";
 
 export interface CreateAgentOptions {
@@ -36,6 +38,16 @@ export function createAgentAdapter(options: CreateAgentOptions): AgentAdapter {
       const claudeOpts = options.binary ? { binary: options.binary } : {};
       return createClaudeCodeAdapter(claudeOpts);
     }
+
+    case "pi": {
+      const piOpts = options.binary ? { binary: options.binary } : {};
+      return createPiAdapter(piOpts);
+    }
+
+    case "oh-my-pi": {
+      const ompOpts = options.binary ? { binary: options.binary } : {};
+      return createOhMyPiAdapter(ompOpts);
+    }
   }
 
   const exhaustive: never = options.kind;
@@ -52,4 +64,8 @@ export { createOpencodeAdapter } from "./opencode.js";
 export type { OpencodeAdapterOptions } from "./opencode.js";
 export { createZooAdapter } from "./zoo.js";
 export type { ZooAdapterOptions } from "./zoo.js";
+export { createPiAdapter } from "./pi.js";
+export type { PiAdapterOptions } from "./pi.js";
+export { createOhMyPiAdapter } from "./oh-my-pi.js";
+export type { OhMyPiAdapterOptions } from "./oh-my-pi.js";
 export { createOpenAICompatibleTranslator } from "./model-translator.js";

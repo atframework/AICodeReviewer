@@ -96,7 +96,10 @@ from models.dev natively; custom providers use its schema-native
 `cost` pairs plus known capabilities. Kilo Code and Zoo Code need their native
 model-info fields injected. Claude Code derives output/context limits and
 explicit thinking budgets, then delegates the rest to its built-in catalog;
-Copilot CLI uses its subscription's fixed catalog and gets no injection. Each
+pi and oh-my-pi get a custom-provider entry (`$PI_CODING_AGENT_DIR/models.json`
+or `models.yml`) whose model entries require `contextWindow` / `maxTokens` —
+keep `llm.model_catalog` enabled so those limits resolve; Copilot CLI uses its
+subscription's fixed catalog and gets no injection. Each
 runtime bundle `manifest.json` records whether metadata was `injected`,
 `delegated` to the tool's native catalog, or `not_applicable`.
 
@@ -120,6 +123,8 @@ PRs and changelists:
    - **Zoo**: `autoCondenseContext` / `condenseContextPercentThreshold` in Zoo Code's current `.roo/settings.json` compatibility path.
    - **Claude Code**: auto-compacts by default (no config injected).
    - **Copilot CLI**: not applicable.
+   - **pi**: `compaction.enabled` in `settings.json` (threshold/prune delegated to pi defaults).
+   - **oh-my-pi**: `compaction.{enabled,thresholdPercent}` in `config.yml`.
 
    **Important:** Kilo only auto-compacts for models that declare a `contextWindow`.
    If the model catalog is disabled and no `context_window` override is set, Kilo

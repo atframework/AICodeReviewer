@@ -29,10 +29,17 @@ agent:
 | `zoo` | Zoo Code 适配器。仅在验证该适配器时设置。 |
 | `copilot-cli` | GitHub Copilot CLI 适配器。 |
 | `claude-code` | Claude Code 适配器。 |
+| `pi` | pi（`@earendil-works/pi-coding-agent`）适配器。要求 catalog 提供 `context_window` / `max_output_tokens`。 |
+| `oh-my-pi` | oh-my-pi（`omp`，pi 的 fork）适配器。模型元数据要求与 `pi` 相同。 |
 
 :::note[沿用默认值]
 `kilo` 是经过验证的默认值。只有在你明确要验证某个适配器时才切换到其他
-`AgentKind`。
+`AgentKind`。`pi` 与 `oh-my-pi` 适配器支持 `openai_compatible`、`ollama`、
+`anthropic`、`google_ai_studio` 四种 provider kind，且两者都要求模型的上下文
+窗口与输出 token 上限已知——使用前请先启用 `llm.model_catalog`（或设置
+overrides）。AICR 运行时镜像与默认 agent 沙箱镜像均未内置 `pi`/`omp` 二进制：
+使用这两个 kind 需要自带安装了对应 CLI 的自定义沙箱镜像（这两个二进制默认已在
+沙箱命令白名单中）。
 :::
 
 schema 也接受 `workspaces.defaults.agent.default` 和
@@ -100,6 +107,8 @@ agent:
 | Zoo | `.roo/settings.json` 中的 `autoCondenseContext` / `condenseContextPercentThreshold`。 |
 | Claude Code | 默认自动压缩（委托给其内置能力，不注入配置）。 |
 | Copilot CLI | 不适用（没有上下文管理接口）。 |
+| pi | `settings.json` 中的 `compaction.enabled`（pi 没有 threshold/prune 字段，这两项委托给 pi 默认行为）。 |
+| oh-my-pi | `config.yml` 中的 `compaction.enabled` 与 `compaction.thresholdPercent`。 |
 
 :::caution[Kilo 需要已知 context window]
 Kilo 仅在模型的 `contextWindow` 已知时才会自动压缩，这样 `threshold_percent` 才

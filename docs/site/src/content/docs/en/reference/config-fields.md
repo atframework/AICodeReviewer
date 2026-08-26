@@ -20,7 +20,7 @@ quick lookup.
 | Concept | Enum values |
 | --- | --- |
 | Trigger `kind` | `gitea`, `forgejo`, `github`, `gitlab`, `p4`, `svn`, `scheduled`, `manual` |
-| Agent `kind` | `kilo`, `opencode`, `zoo`, `copilot-cli`, `claude-code` |
+| Agent `kind` | `kilo`, `opencode`, `zoo`, `copilot-cli`, `claude-code`, `pi`, `oh-my-pi` |
 | Sandbox `kind` | `native`, `docker`, `podman`, `docker_socket`, `k8s_pod`, `firecracker` |
 | Sandbox `engine` | `auto`, `docker`, `podman` |
 | Queue `kind` | `memory`, `sqlite`, `redis`, `rabbitmq` (reserved) |

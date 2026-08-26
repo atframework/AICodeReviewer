@@ -2283,6 +2283,7 @@ async function createAppTokenServices(config: AppConfig): Promise<Map<string, Gi
     } catch (error) {
       throw new Error(
         `Failed to initialize GitHub App token service for trigger "${trigger.name}": ${error instanceof Error ? error.message : String(error)}`,
+        { cause: error },
       );
     }
   }

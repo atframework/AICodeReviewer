@@ -15,7 +15,7 @@ import {
   type ScrubMatch,
 } from "@aicr/core";
 import type { AgentAdapter, AgentCompactionOptions, AgentSpawnOptions } from "@aicr/agents";
-import { materializeRuntimeBundle } from "@aicr/agents";
+import { materializeRuntimeBundle, OMP_AGENT_DIR_NAME, PI_AGENT_DIR_NAME } from "@aicr/agents";
 import type { RuntimeBundleInstruction, RuntimeBundleMcpServer, RuntimeBundleMcpTool, RuntimeBundleSkill } from "@aicr/agents";
 import {
   type ChatCompletionClient,
@@ -586,6 +586,26 @@ function agentWorkingDirForSandbox(sandbox: SandboxBackend, hostAgentDir: string
   return sandbox.kind === "native" ? hostAgentDir : "/workspace/agent";
 }
 
+/**
+ * pi and oh-my-pi both isolate their whole config dir through PI_CODING_AGENT_DIR.
+ * The value must be the sandbox-visible path (fixed /workspace/agent for container
+ * sandboxes), so it is injected here — like AICR_OUTPUT_STATE_PATH — instead of in
+ * adapter envVars, which only know host-side paths.
+ */
+function agentConfigDirEnvVars(
+  kind: string,
+  sandboxAgentDir: string,
+  sandboxIsNative: boolean,
+): Record<string, string> {
+  const subdir = kind === "pi" ? PI_AGENT_DIR_NAME : kind === "oh-my-pi" ? OMP_AGENT_DIR_NAME : undefined;
+  if (!subdir) {
+    return {};
+  }
+  return {
+    PI_CODING_AGENT_DIR: sandboxIsNative ? join(sandboxAgentDir, subdir) : `${sandboxAgentDir}/${subdir}`,
+  };
+}
+
 interface AgentBundleContext {
   instructions?: readonly RuntimeBundleInstruction[];
   skills?: readonly RuntimeBundleSkill[];
@@ -799,6 +819,125 @@ function extractKiloJsonStreamContent(stdout: string): KiloStreamExtractionResul
   };
 }
 
+interface PiStreamExtractionResult {
+  readonly content: string;
+  readonly toolCallEvents: readonly ToolCallEnvelope[];
+  readonly eventCounts: Readonly<Record<string, number>>;
+  /** Aggregated token usage from assistant `message_end` events, if any were emitted. */
+  readonly usage?: ChatCompletionUsage;
+  /** Aggregated USD cost from assistant message `usage.cost.total`. */
+  readonly costUsd?: number;
+  /** Number of assistant messages (model turns) observed. */
+  readonly stepCount: number;
+}
+
+function readPiUsageCount(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? Math.trunc(value) : 0;
+}
+
+/**
+ * pi / oh-my-pi `--mode json` stream extraction. Both CLIs emit the same NDJSON
+ * AgentSessionEvent stream (omp is a pi fork; verified against pi docs/json.md and
+ * omp docs/rpc.md, 2026-08): a `session` header line, then agent/turn/message/tool
+ * events. The authoritative per-message usage rides on `message_end.message.usage`
+ * ({input, output, cacheRead, cacheWrite, totalTokens, cost{total}}) with pi's
+ * disjoint counters (input excludes cache); the cumulative snapshot on
+ * `message_update` is ignored so nothing is double counted. Tool calls come from
+ * `tool_execution_start` ({toolName, args}); bridged/MCP tool names
+ * (`pi_aicr_*`, `mcp__aicr_output_aicr_*`) are normalized by normalizeToolName.
+ */
+function extractPiJsonStreamContent(stdout: string): PiStreamExtractionResult {
+  const textParts: string[] = [];
+  const toolCallEvents: ToolCallEnvelope[] = [];
+  const eventCounts: Record<string, number> = {};
+  const totals = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
+  let costUsd = 0;
+  let stepCount = 0;
+  let lastStopReason: string | undefined;
+  let lastErrorMessage: string | undefined;
+
+  for (const line of stdout.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    let event: Record<string, unknown>;
+    try {
+      event = JSON.parse(trimmed) as Record<string, unknown>;
+    } catch {
+      continue;
+    }
+    const eventType = typeof event.type === "string" ? event.type : "unknown";
+    eventCounts[eventType] = (eventCounts[eventType] ?? 0) + 1;
+
+    if (eventType === "message_end") {
+      const message = event.message as Record<string, unknown> | undefined;
+      if (!message || message.role !== "assistant") continue;
+      stepCount += 1;
+      const blocks = Array.isArray(message.content) ? message.content : [];
+      for (const block of blocks) {
+        const b = block as Record<string, unknown> | undefined;
+        if (b?.type === "text" && typeof b.text === "string" && b.text.length > 0) {
+          textParts.push(b.text);
+        }
+      }
+      const usage = message.usage as Record<string, unknown> | undefined;
+      if (usage) {
+        totals.input += readPiUsageCount(usage.input);
+        totals.output += readPiUsageCount(usage.output);
+        totals.cacheRead += readPiUsageCount(usage.cacheRead);
+        totals.cacheWrite += readPiUsageCount(usage.cacheWrite);
+        totals.total += readPiUsageCount(usage.totalTokens);
+        const cost = usage.cost as Record<string, unknown> | undefined;
+        const costTotal = cost?.total;
+        if (typeof costTotal === "number" && Number.isFinite(costTotal) && costTotal >= 0) {
+          costUsd += costTotal;
+        }
+      }
+      lastStopReason = typeof message.stopReason === "string" ? message.stopReason : undefined;
+      lastErrorMessage = lastStopReason === "error" && typeof message.errorMessage === "string"
+        ? message.errorMessage
+        : undefined;
+    } else if (eventType === "tool_execution_start") {
+      const toolName = event.toolName;
+      if (typeof toolName === "string") {
+        try {
+          toolCallEvents.push({ name: normalizeToolName(toolName), input: event.args });
+        } catch {
+          // Built-in pi/omp tools (read/bash/edit/...) are not review outputs; ignore.
+        }
+      }
+    }
+  }
+
+  // A terminal assistant error means the run failed even when the CLI exited 0;
+  // surface it so context-overflow classification and retries work like kilo's
+  // top-level `error` event.
+  if (lastStopReason === "error") {
+    throw new Error(`Agent stream error: ${lastErrorMessage ?? "assistant message ended with stopReason=error"}`);
+  }
+
+  const promptTokens = totals.input + totals.cacheRead + totals.cacheWrite;
+  const completionTokens = totals.output;
+  const hasUsage = stepCount > 0 || promptTokens > 0 || completionTokens > 0 || totals.total > 0;
+  const usage: ChatCompletionUsage | undefined = hasUsage
+    ? {
+      promptTokens,
+      completionTokens,
+      totalTokens: totals.total > 0 ? totals.total : promptTokens + completionTokens,
+      ...(totals.cacheRead > 0 ? { cachedPromptTokens: totals.cacheRead } : {}),
+      ...(totals.cacheWrite > 0 ? { cacheCreationTokens: totals.cacheWrite } : {}),
+    }
+    : undefined;
+
+  return {
+    content: textParts.length > 0 ? textParts.join("\n") : stdout,
+    toolCallEvents,
+    eventCounts,
+    ...(usage ? { usage } : {}),
+    ...(stepCount > 0 ? { costUsd } : {}),
+    stepCount,
+  };
+}
+
 interface ClaudeResultExtraction {
   readonly content: string;
   readonly usage?: ChatCompletionUsage;
@@ -937,6 +1076,7 @@ async function runAgentReview(
       ? agentAdapter.buildStdin(task, agentSpawnOptions)
       : task;
     const env = resolveEnvPlaceholders(bundle.envVars);
+    Object.assign(env, agentConfigDirEnvVars(agentAdapter.kind, sandboxAgentDir, sandbox.kind === "native"));
 
     await rm(join(materializedFs.agentDir, ".aicr-output-state.json"), { force: true });
 
@@ -969,9 +1109,11 @@ async function runAgentReview(
   }
 
   // kilo and opencode emit the same NDJSON event stream (`--format json`; kilo is an
-  // opencode fork), so both go through the shared stream extraction. claude-code
-  // emits a single JSON result envelope from `claude -p --output-format json`.
+  // opencode fork), so both go through the shared stream extraction. pi and oh-my-pi
+  // emit the pi-family NDJSON event stream (`--mode json`; omp is a pi fork).
+  // claude-code emits a single JSON result envelope from `claude -p --output-format json`.
   const isNdjsonStreamAgent = agentAdapter.kind === "kilo" || agentAdapter.kind === "opencode";
+  const isPiStreamAgent = agentAdapter.kind === "pi" || agentAdapter.kind === "oh-my-pi";
   const isClaudeEnvelopeAgent = agentAdapter.kind === "claude-code";
   const rawStdout = agentResult.stdout;
   let content: string;
@@ -983,6 +1125,46 @@ async function runAgentReview(
     let extraction: KiloStreamExtractionResult;
     try {
       extraction = extractKiloJsonStreamContent(rawStdout);
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      if (isContextOverflowMessage(msg)) {
+        throw new AgentContextOverflowError(
+          agentAdapter.kind,
+          msg,
+          detectContextOverflowDetails(msg),
+        );
+      }
+      throw error;
+    }
+    content = extraction.content;
+    kiloToolCalls = extraction.toolCallEvents;
+    agentUsage = extraction.usage;
+    agentCostUsd = extraction.costUsd;
+    agentStepCount = extraction.stepCount;
+    if (Object.keys(extraction.eventCounts).length > 0 || kiloToolCalls.length > 0 || agentStepCount > 0) {
+      if (options.logThinking !== false) {
+        console.info(JSON.stringify({
+          level: "info",
+          msg: "agent stream stats",
+          agent: agentAdapter.kind,
+          eventCounts: extraction.eventCounts,
+          streamToolCallCount: kiloToolCalls.length,
+          usageCaptured: agentUsage !== undefined,
+          stepCount: agentStepCount,
+          ...(agentUsage ? {
+            tokensIn: agentUsage.promptTokens,
+            tokensOut: agentUsage.completionTokens,
+            tokensTotal: agentUsage.totalTokens,
+          } : {}),
+          stdoutLength: rawStdout.length,
+          extractedContentLength: content.length,
+        }));
+      }
+    }
+  } else if (isPiStreamAgent) {
+    let extraction: PiStreamExtractionResult;
+    try {
+      extraction = extractPiJsonStreamContent(rawStdout);
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
       if (isContextOverflowMessage(msg)) {

@@ -14,7 +14,7 @@
 
 ## Agent compatibility
 
-- Treat `AGENTS.md` plus `.agents/skills/*/SKILL.md` as the canonical, tool-neutral layer for VS Code Copilot, Copilot CLI, Codex, Claude Code, Kilo Code, Zoo Code, Kilo CLI, opencode, and similar agents.
+- Treat `AGENTS.md` plus `.agents/skills/*/SKILL.md` as the canonical, tool-neutral layer for VS Code Copilot, Copilot CLI, Codex, Claude Code, Kilo Code, Zoo Code, Kilo CLI, pi, oh-my-pi, opencode, and similar agents.
 - Prefer one canonical rule over parallel copies. If a client needs a private format, make it a small pointer to the canonical source or a path-scoped delta.
 - Use path-specific instructions only when a rule should not load for the whole repository. Keep Copilot `.github/instructions/*.instructions.md`, Claude `.claude/rules/`, Zoo Code `.roo/rules/`, Kilo rules, and opencode `instructions` entries aligned by intent if they are added later.
 - Skills must follow the Agent Skills shape: directory name equals frontmatter `name`, `description` states what the skill does and when not to use it, and detailed references/scripts/assets load only on demand.

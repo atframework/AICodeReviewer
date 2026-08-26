@@ -18,8 +18,5 @@
     "@aicr/core": "workspace:*",
     "@aicr/store": "workspace:*",
     "handlebars": "^4.7.9"
-  },
-  "devDependencies": {
-    "@types/handlebars": "^4.1.0"
   }
 }

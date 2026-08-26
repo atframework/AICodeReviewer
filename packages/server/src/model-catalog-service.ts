@@ -188,6 +188,7 @@ async function loadRedisClient(url: string): Promise<RedisModelCatalogClient> {
 	} catch (error) {
 		throw new Error(
 			`ioredis is required for llm.model_catalog.cache.backend 'redis'. Install optional dependencies or use 'sqlite'/'memory'. Cause: ${error instanceof Error ? error.message : String(error)}`,
+			{ cause: error },
 		);
 	}
 }

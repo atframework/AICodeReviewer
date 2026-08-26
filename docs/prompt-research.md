@@ -307,6 +307,37 @@ Qodo 现行 `pr_reviewer_prompts.toml` 相比 M0.5 时核验的版本，新增/�
 - `<problem_policy>` 新增 scope 边界与 defined-elsewhere 两条防幻觉规则；
   `<output_contract>` 新增 severity/scope 如实与 backtick 引用要求。
 
+### pi 与 oh-my-pi：最小内核 + 显式信任的 agent 运行时（2026-08-26 核验新增）
+
+pi（`earendil-works/pi`）与其 fork oh-my-pi（`can1357/oh-my-pi`，binary `omp`）是两个把
+"agent 运行时该内置什么"收敛到很小的 CLI，2026-08 对照上游文档核验的设计要点：
+
+- **指令与 skills 面与开放标准完全对齐**：两者都原生加载 cwd/祖先 `AGENTS.md`、原生发现
+  `.agents/skills/<name>/SKILL.md`。pi 对项目级 `.pi/` 资源和项目 `.agents/skills` 做显式
+  project trust 门控（headless 需 `--approve` 才加载），上下文文件则不受 trust 影响——
+  信任边界画在"可执行/可注入能力"上，而不是画在文本指令上。omp 无此门控。
+- **pi 明确不内置 MCP**：官方立场是"MCP 变化太快，写个几十行的 TypeScript 扩展比内置
+  client 更可控"，并提供 `pi.registerTool` + jiti 转译 + 启动前 await async factory 的
+  扩展机制。这把 MCP 接入面从"CLI flag / 配置文件"扩展出第三种形态：生成式扩展代码。
+- **omp 走反方向**：同一内核上加了原生 MCP（`mcp.json` 用户/项目双层发现、stdio+http/sse、
+  env 名间接与 `${VAR}` 展开）与更细的 compaction 配置面
+  （`thresholdPercent`/`keepRecentTokens`/`methodOrder`），工具以 `mcp__<server>_<tool>`
+  命名后进入统一注册表。
+- **两者都有机器可读一等公民输出**：`--mode json` 的 NDJSON 事件流（session 头、
+  message/tool/turn/compaction 事件），`message_end.message.usage` 承载权威 token 与成本，
+  头部 session 事件携带 id/cwd 便于审计对账。
+
+**对本项目的影响**：
+
+- 印证 runtime bundle 的 canonical 布局选择：`AGENTS.md` + `.agents/skills/` 对 pi/omp
+  零拷贝即可生效，和 Kilo（skills.paths 指向同一目录）形成同一布局的多面消费。
+- manifest `nativeSurfaces.mcp` 从 `config_file|cli_flag|none` 扩出 `extension`，
+  如实记录 pi 的桥接形态，不伪装成原生 MCP。
+- pi 的 trust 模型提示：headless 自动化里"approve 什么"应是 bundle 目录（AICR 完全物化、
+  一次性）而不是被评审仓库本身；`--approve` 只授予 bundle 作用域。
+- pi 自定义 provider 的 `apiKey: "$ENV"` 与 omp 的 env 名间接都验证了"密钥不进落盘配置"
+  的注入纪律，与 kilo 的 `{env:NAME}`/opencode 的 env 插值同构。
+
 ## 采纳清单
 
 ### 采纳
@@ -582,6 +613,16 @@ M1 接入 Prompt Manager 与最小 review 流程后，至少应使用下列样�
   - <https://developers.openai.com/blog/custom-code-review-rules-for-codex>
 - AGENTS.md 标准（现由 Linux 基金会 Agentic AI Foundation 维护）
   - <https://agents.md/>
+- pi agent runtime（2026-08-26 核验）
+  - <https://github.com/earendil-works/pi>
+  - <https://raw.githubusercontent.com/earendil-works/pi/main/packages/coding-agent/docs/extensions.md>
+  - <https://raw.githubusercontent.com/earendil-works/pi/main/packages/coding-agent/docs/custom-provider.md>
+  - <https://raw.githubusercontent.com/earendil-works/pi/main/packages/coding-agent/docs/json.md>
+- oh-my-pi（pi fork，2026-08-26 核验）
+  - <https://github.com/can1357/oh-my-pi>
+  - <https://raw.githubusercontent.com/can1357/oh-my-pi/main/docs/mcp-config.md>
+  - <https://raw.githubusercontent.com/can1357/oh-my-pi/main/docs/compaction.md>
+  - <https://raw.githubusercontent.com/can1357/oh-my-pi/main/docs/skills.md>
 
 ### 辅助来源
 

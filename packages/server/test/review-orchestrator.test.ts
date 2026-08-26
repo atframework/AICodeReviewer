@@ -1837,6 +1837,286 @@ describe("summarizeReviewOrchestrationForWebhook", () => {
     }
   });
 
+  it("parses pi --mode json events: bridged tool calls, message_end usage, config dir env", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-pi-stream-"));
+
+    try {
+      await writeWorkspaceFile(tempDir, "src/app.ts", "const ok = true;\n");
+      // pi/omp NDJSON: session header + agent/turn/message/tool events. Usage is the
+      // authoritative per-message `message_end.message.usage` (disjoint counters:
+      // input excludes cache; totalTokens = input+output+cacheRead+cacheWrite).
+      const summaryText = JSON.stringify({
+        toolCalls: [{ name: "aicr.publish_summary", input: { markdown: "structured summary" } }],
+      });
+      const piStream = [
+        { type: "session", version: 3, id: "s1", timestamp: "2026-08-26T00:00:00Z", cwd: "/workspace/agent" },
+        { type: "agent_start" },
+        {
+          type: "tool_execution_start",
+          toolCallId: "t1",
+          toolName: "pi_aicr_output_aicr_report_problem",
+          args: {
+            file: "src/app.ts",
+            line: 1,
+            severity: "medium",
+            category: "correctness",
+            message: "pi bridged tool call.",
+          },
+        },
+        {
+          type: "message_end",
+          message: {
+            role: "assistant",
+            content: [],
+            stopReason: "toolUse",
+            usage: {
+              input: 1000, output: 50, cacheRead: 200, cacheWrite: 20, totalTokens: 1270,
+              cost: { input: 0.001, output: 0.0005, cacheRead: 0.0001, cacheWrite: 0.0001, total: 0.0017 },
+            },
+          },
+        },
+        {
+          type: "message_end",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: summaryText }],
+            stopReason: "stop",
+            usage: {
+              input: 500, output: 30, cacheRead: 0, cacheWrite: 0, totalTokens: 530,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.0005 },
+            },
+          },
+        },
+        { type: "agent_end", messages: [] },
+      ].map((e) => JSON.stringify(e)).join("\n");
+      const spawnCalls: SandboxSpawnOptions[] = [];
+      const sandbox: SandboxBackend = {
+        kind: "native",
+        async materializeFs(layout) {
+          await mkdir(layout.agentDir, { recursive: true });
+          await mkdir(layout.tmpDir, { recursive: true });
+          return { agentDir: layout.agentDir, tmpDir: layout.tmpDir, mountSpecs: [] };
+        },
+        async spawn(spawnOptions) {
+          spawnCalls.push(spawnOptions);
+          return { exitCode: 0, stdout: piStream, stderr: "", timedOut: false, durationMs: 9 };
+        },
+        async teardown() {},
+      };
+      const agentAdapter: AgentAdapter = {
+        kind: "pi",
+        async detect() { return { available: true, binary: "pi" }; },
+        buildCommand() { return ["pi", "--mode", "json"]; },
+        buildStdin() { return ""; },
+        async materializeConfig(_m, workingDir) {
+          return { configFiles: new Map(), envVars: {}, workingDir };
+        },
+      };
+
+      const result = await runReviewOrchestration(
+        {
+          reviewEvent: createReviewEventFixture(),
+          payload: {},
+          provider: "gitea",
+          eventName: "pull_request",
+        },
+        {
+          baseSystemPrompt: "<task>\n{{TASK_CONTEXT}}\n</task>",
+          sourceRootResolver: () => tempDir,
+          vcs: createVcs(tempDir),
+          llm: { async complete() { throw new Error("direct llm must not be called"); } },
+          model,
+          sandbox,
+          agentAdapter,
+          outputPublisher: {
+            async publishProblem() {
+              return { channel: "test", status: "published", externalId: "1", raw: {} };
+            },
+          },
+        },
+      );
+
+      expect(result.outputState.problems).toHaveLength(1);
+      expect(result.outputState.problems[0]?.message).toBe("pi bridged tool call.");
+      const summary = summarizeReviewOrchestrationForWebhook(result);
+      // prompt = (1000+200+20) + (500+0+0); completion = 50+30; total = 1270+530.
+      expect(summary.llmUsage).toMatchObject({
+        promptTokens: 1720,
+        completionTokens: 80,
+        totalTokens: 1800,
+        cachedPromptTokens: 200,
+        cacheCreationTokens: 20,
+      });
+      expect(summary.usageSource).toBe("agent_stdout");
+      expect(summary.estimatedCostUsd).toBeCloseTo(0.0022, 5);
+
+      // PI_CODING_AGENT_DIR is injected with the sandbox-visible bundle config dir,
+      // and the pi MCP bridge spec arrives via AICR_PI_MCP_SERVERS.
+      const agentSpawn = spawnCalls[0];
+      const agentDir = String(agentSpawn?.cwd ?? "");
+      expect(agentSpawn?.env?.PI_CODING_AGENT_DIR).toBe(join(agentDir, ".pi-agent"));
+      const bridgeSpecs = JSON.parse(String(agentSpawn?.env?.AICR_PI_MCP_SERVERS ?? "[]"));
+      expect(bridgeSpecs).toHaveLength(1);
+      expect(bridgeSpecs[0].name).toBe("aicr-output");
+      expect(bridgeSpecs[0].environment.AICR_OUTPUT_STATE_PATH).toBe(
+        join(agentDir, ".aicr-output-state.json"),
+      );
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("normalizes oh-my-pi mcp__ tool names and points PI_CODING_AGENT_DIR at .omp-agent", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-omp-stream-"));
+
+    try {
+      await writeWorkspaceFile(tempDir, "src/app.ts", "const ok = true;\n");
+      const skipText = JSON.stringify({ skipReason: "lgtm" });
+      const ompStream = [
+        { type: "session", version: 3, id: "s2", timestamp: "2026-08-26T00:00:00Z", cwd: "/workspace/agent" },
+        {
+          type: "tool_execution_start",
+          toolCallId: "t1",
+          toolName: "mcp__aicr_output_aicr_report_problem",
+          args: {
+            file: "src/app.ts",
+            line: 1,
+            severity: "low",
+            category: "correctness",
+            message: "omp native MCP tool call.",
+          },
+        },
+        {
+          type: "message_end",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: skipText }],
+            stopReason: "stop",
+            usage: { input: 42, output: 7, cacheRead: 0, cacheWrite: 0, totalTokens: 49 },
+          },
+        },
+      ].map((e) => JSON.stringify(e)).join("\n");
+      const spawnCalls: SandboxSpawnOptions[] = [];
+      const sandbox: SandboxBackend = {
+        kind: "native",
+        async materializeFs(layout) {
+          await mkdir(layout.agentDir, { recursive: true });
+          await mkdir(layout.tmpDir, { recursive: true });
+          return { agentDir: layout.agentDir, tmpDir: layout.tmpDir, mountSpecs: [] };
+        },
+        async spawn(spawnOptions) {
+          spawnCalls.push(spawnOptions);
+          return { exitCode: 0, stdout: ompStream, stderr: "", timedOut: false, durationMs: 7 };
+        },
+        async teardown() {},
+      };
+      const agentAdapter: AgentAdapter = {
+        kind: "oh-my-pi",
+        async detect() { return { available: true, binary: "omp" }; },
+        buildCommand() { return ["omp", "-p", "--mode", "json"]; },
+        buildStdin() { return ""; },
+        async materializeConfig(_m, workingDir) {
+          return { configFiles: new Map(), envVars: {}, workingDir };
+        },
+      };
+
+      const result = await runReviewOrchestration(
+        {
+          reviewEvent: createReviewEventFixture(),
+          payload: {},
+          provider: "gitea",
+          eventName: "pull_request",
+        },
+        {
+          baseSystemPrompt: "<task>\n{{TASK_CONTEXT}}\n</task>",
+          sourceRootResolver: () => tempDir,
+          vcs: createVcs(tempDir),
+          llm: { async complete() { throw new Error("direct llm must not be called"); } },
+          model,
+          sandbox,
+          agentAdapter,
+          outputPublisher: {
+            async publishProblem() {
+              return { channel: "test", status: "published", externalId: "1", raw: {} };
+            },
+          },
+        },
+      );
+
+      expect(result.outputState.problems).toHaveLength(1);
+      expect(result.outputState.problems[0]?.message).toBe("omp native MCP tool call.");
+      const agentSpawn = spawnCalls[0];
+      expect(agentSpawn?.env?.PI_CODING_AGENT_DIR).toBe(join(String(agentSpawn?.cwd ?? ""), ".omp-agent"));
+      expect(agentSpawn?.env?.AICR_PI_MCP_SERVERS).toBeUndefined();
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("turns a terminal pi assistant error into a context-overflow error when it matches", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-pi-overflow-"));
+
+    try {
+      await writeWorkspaceFile(tempDir, "src/app.ts", "const ok = true;\n");
+      const piStream = [
+        { type: "session", version: 3, id: "s3", timestamp: "2026-08-26T00:00:00Z", cwd: "/workspace/agent" },
+        {
+          type: "message_end",
+          message: {
+            role: "assistant",
+            content: [],
+            stopReason: "error",
+            errorMessage: "context_length_exceeded: prompt is too long",
+          },
+        },
+        { type: "agent_end", messages: [] },
+      ].map((e) => JSON.stringify(e)).join("\n");
+      const sandbox: SandboxBackend = {
+        kind: "native",
+        async materializeFs(layout) {
+          await mkdir(layout.agentDir, { recursive: true });
+          await mkdir(layout.tmpDir, { recursive: true });
+          return { agentDir: layout.agentDir, tmpDir: layout.tmpDir, mountSpecs: [] };
+        },
+        async spawn() {
+          return { exitCode: 0, stdout: piStream, stderr: "", timedOut: false, durationMs: 6 };
+        },
+        async teardown() {},
+      };
+      const agentAdapter: AgentAdapter = {
+        kind: "pi",
+        async detect() { return { available: true, binary: "pi" }; },
+        buildCommand() { return ["pi", "--mode", "json"]; },
+        buildStdin() { return ""; },
+        async materializeConfig(_m, workingDir) {
+          return { configFiles: new Map(), envVars: {}, workingDir };
+        },
+      };
+
+      await expect(
+        runReviewOrchestration(
+          {
+            reviewEvent: createReviewEventFixture(),
+            payload: {},
+            provider: "gitea",
+            eventName: "pull_request",
+          },
+          {
+            baseSystemPrompt: "{{TASK_CONTEXT}}",
+            sourceRootResolver: () => tempDir,
+            vcs: createVcs(tempDir),
+            llm: { async complete() { throw new Error("direct llm must not be called"); } },
+            model,
+            sandbox,
+            agentAdapter,
+          },
+        ),
+      ).rejects.toThrow(/context window overflow/iu);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("unwraps the claude-code result envelope with usage, cost, and turn count", async () => {
     const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-claude-envelope-"));
 

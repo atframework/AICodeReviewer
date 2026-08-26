@@ -9,7 +9,11 @@ import {
 	buildZooCustomModelInfo,
 	isOpenCodeCustomProvider,
 } from "./model-metadata.js";
-import type { AgentAdapter, AgentCompactionOptions, AgentKind } from "./types.js";
+import { toOhMyPiMcpServersJson } from "./mcp-config.js";
+import { OMP_MCP_CONFIG_PATH } from "./oh-my-pi.js";
+import { PI_MCP_BRIDGE_EXTENSION_PATH, PI_MCP_SERVERS_ENV } from "./pi.js";
+import { renderPiMcpBridgeExtension } from "./pi-mcp-bridge.js";
+import type { AgentAdapter, AgentCompactionOptions, AgentKind, AgentSpawnMcpServer } from "./types.js";
 
 export interface RuntimeBundleInstruction {
   readonly kind: string;
@@ -84,7 +88,7 @@ export interface RuntimeBundleManifest {
   readonly nativeSurfaces?: {
     readonly instructions: readonly string[];
     readonly skills: readonly string[];
-    readonly mcp: "config_file" | "cli_flag" | "none";
+    readonly mcp: "config_file" | "cli_flag" | "extension" | "none";
   };
 }
 
@@ -166,6 +170,11 @@ function computeMetadataInjection(kind: AgentKind, model: ModelSpec): "injected"
       return "delegated";
     case "copilot-cli":
       return "not_applicable";
+    case "pi":
+    case "oh-my-pi":
+      // Both CLIs get an explicit custom-provider entry (contextWindow/maxTokens are
+      // mandatory there), so metadata is always injected or materializeConfig throws.
+      return "injected";
     default:
       return "delegated";
   }
@@ -179,6 +188,8 @@ function computeContextCompactionManifest(
     case "kilo":
     case "zoo":
     case "opencode":
+    case "pi":
+    case "oh-my-pi":
       return { enabled: !!compaction?.auto, mode: "injected" };
     case "claude-code":
       return { enabled: compaction?.auto !== false, mode: "delegated" };
@@ -338,6 +349,51 @@ export async function materializeRuntimeBundle(
     }
   }
 
+  let piBridgeWritten = false;
+  if (adapter.kind === "pi" && input.mcpServers?.length) {
+    // pi has no built-in MCP client; the generated extension bridges the canonical
+    // local (stdio) servers via pi.registerTool. Remote servers are not bridged —
+    // AICR only ever materializes the local aicr-output server.
+    const specs: Array<{
+      name: string;
+      command: readonly string[];
+      environment?: Readonly<Record<string, string>>;
+    }> = [];
+    for (const server of input.mcpServers) {
+      const command = server.config.command;
+      if (
+        server.config.type === "local"
+        && Array.isArray(command)
+        && command.length > 0
+        && command.every((part): part is string => typeof part === "string")
+      ) {
+        const environment = server.config.environment as Readonly<Record<string, string>> | undefined;
+        specs.push({ name: server.name, command, ...(environment ? { environment } : {}) });
+      }
+    }
+    if (specs.length > 0) {
+      const bridgeContent = renderPiMcpBridgeExtension();
+      const bridgeAbsPath = join(workingDir, PI_MCP_BRIDGE_EXTENSION_PATH);
+      await mkdir(join(bridgeAbsPath, ".."), { recursive: true });
+      await writeFile(bridgeAbsPath, bridgeContent, "utf8");
+      allConfigFiles.set(PI_MCP_BRIDGE_EXTENSION_PATH, bridgeContent);
+      allEnvVars[PI_MCP_SERVERS_ENV] = JSON.stringify(specs);
+      piBridgeWritten = true;
+    }
+  }
+
+  let ompMcpWritten = false;
+  if (adapter.kind === "oh-my-pi" && input.mcpServers?.length) {
+    const mcpJson = toOhMyPiMcpServersJson(input.mcpServers as readonly AgentSpawnMcpServer[]);
+    if (mcpJson) {
+      const mcpAbsPath = join(workingDir, OMP_MCP_CONFIG_PATH);
+      await mkdir(join(mcpAbsPath, ".."), { recursive: true });
+      await writeFile(mcpAbsPath, mcpJson, "utf8");
+      allConfigFiles.set(OMP_MCP_CONFIG_PATH, mcpJson);
+      ompMcpWritten = true;
+    }
+  }
+
   const instructionSurfaces: string[] = [];
   const skillSurfaces: string[] = [];
   if (instructions.length > 0) {
@@ -351,13 +407,20 @@ export async function materializeRuntimeBundle(
     if (adapter.kind === "opencode") skillSurfaces.push("opencode.json:permission.skill");
   }
   const hasMcpServers = (input.mcpServers?.length ?? 0) > 0;
-  const mcpSurface: "config_file" | "cli_flag" | "none" = !hasMcpServers
-    ? "none"
-    : adapter.kind === "kilo" || adapter.kind === "opencode"
-      ? "config_file"
-      : adapter.kind === "claude-code" || adapter.kind === "copilot-cli"
-        ? "cli_flag"
-        : "none";
+  // pi/omp surfaces reflect actual materialization, not just intent: a pi bundle
+  // with only remote MCP servers gets no bridge, and an omp bundle whose servers
+  // all fail conversion gets no mcp.json — both must report "none".
+  const mcpSurface: "config_file" | "cli_flag" | "extension" | "none" = adapter.kind === "pi"
+    ? (piBridgeWritten ? "extension" : "none")
+    : adapter.kind === "oh-my-pi"
+      ? (ompMcpWritten ? "config_file" : "none")
+      : !hasMcpServers
+        ? "none"
+        : adapter.kind === "kilo" || adapter.kind === "opencode"
+          ? "config_file"
+          : adapter.kind === "claude-code" || adapter.kind === "copilot-cli"
+            ? "cli_flag"
+            : "none";
 
   const manifest: RuntimeBundleManifest = {
     version: 1,
