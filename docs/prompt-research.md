@@ -317,8 +317,10 @@ pi（`earendil-works/pi`）与其 fork oh-my-pi（`can1357/oh-my-pi`，binary `o
   project trust 门控（headless 需 `--approve` 才加载），上下文文件则不受 trust 影响——
   信任边界画在"可执行/可注入能力"上，而不是画在文本指令上。omp 无此门控。
 - **pi 明确不内置 MCP**：官方立场是"MCP 变化太快，写个几十行的 TypeScript 扩展比内置
-  client 更可控"，并提供 `pi.registerTool` + jiti 转译 + 启动前 await async factory 的
-  扩展机制。这把 MCP 接入面从"CLI flag / 配置文件"扩展出第三种形态：生成式扩展代码。
+  client 更可控"，并提供 `pi.registerTool` + jiti 转译的扩展机制。factory 可能在无 session
+  场景运行，不能直接启动长生命周期资源；bridge 应在 factory 中注册 handler，在
+  `session_start` 启动并发现工具、在 `session_shutdown` 回收。这把 MCP 接入面从
+  "CLI flag / 配置文件"扩展出第三种形态：生成式扩展代码。
 - **omp 走反方向**：同一内核上加了原生 MCP（`mcp.json` 用户/项目双层发现、stdio+http/sse、
   env 名间接与 `${VAR}` 展开）与更细的 compaction 配置面
   （`thresholdPercent`/`keepRecentTokens`/`methodOrder`），工具以 `mcp__<server>_<tool>`

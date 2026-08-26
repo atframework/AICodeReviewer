@@ -203,6 +203,8 @@ AICR 采用**两层上下文管理**，两者互补：
     `llm.model_catalog`（或在 `overrides` 中设置 `context_window`）让 contextWindow 注入 model 信息。
   - **opencode**：`compaction.auto` / `prune`。
   - **Zoo**：`autoCondenseContext` / `condenseContextPercentThreshold`，写入 Zoo Code 当前 `.roo/settings.json` 兼容路径。
+  - **pi**：只注入 `settings.json` 的 `compaction.enabled`；触发时机与阈值由 CLI 管理，manifest 记为 delegated。
+  - **oh-my-pi**：注入 `config.yml` 的 `compaction.enabled` / `thresholdPercent`，manifest 记为 injected。
   - **Claude Code**：默认自动压缩（delegated，不注入额外配置）。
   - **Copilot CLI**：无上下文管理面（not_applicable）。
 - manifest 记录 `contextCompaction.{enabled,mode}`（`injected` / `delegated` / `not_applicable`）。
@@ -314,7 +316,7 @@ AICR 采用**两层上下文管理**，两者互补：
 - 原生接入面接线（2026-08 起，对照各 CLI 当期官方文档核验）：
   - **instructions**：合并写成工作目录根部 `AGENTS.md`（Kilo/OpenCode/Copilot CLI/Zoo 均原生自动加载；pi 在 trust 判定之前也加载 cwd/祖先 `AGENTS.md`，oh-my-pi 经规则发现原生加载）；Claude Code 另写 `CLAUDE.md`（内容为 `@AGENTS.md` 导入）。`instructions/` 保留逐来源副本供 manifest/审计使用，不再通过 Kilo/OpenCode `instructions` glob 重复加载同一内容；归一化后的文件或 skill 路径冲突直接报错，禁止静默覆盖。
   - **skills**：统一物化为标准布局 `.agents/skills/<name>/SKILL.md`（OpenCode、Copilot CLI、oh-my-pi 原生发现；Kilo 经 kilo.json `skills.paths` 指向同一目录；pi 原生发现但项目级 skills 受 trust 门控，headless 必须 `--approve` 才会加载——bundle 目录完全由 AICR 物化，trust 是安全的）；Claude Code 另写 `.claude/skills/<name>/SKILL.md` 副本。opencode.json 加 `permission.skill: {"*": "allow"}` 避免 headless 技能加载被交互确认卡住。
-  - **MCP**：kilo 经 `kilo.json` `mcp` 段、opencode 经 `opencode.json` `mcp` 段接线；Claude Code 经 `--mcp-config <inline-json> --strict-mcp-config`（与用户/项目 MCP 配置隔离）；Copilot CLI 经 `--additional-mcp-config=<inline-json>`；oh-my-pi 原生支持 MCP，经 `$PI_CODING_AGENT_DIR/mcp.json` 接线（工具以 `mcp__<server>_<tool>` 暴露，命中现有 `<prefix>_aicr_<tool>` 归一化规则）；**pi 无内置 MCP（上游明确的设计决策）**，runtime bundle 生成用户级扩展 `.pi-agent/extensions/aicr-output.ts`（用户级扩展不受 project trust 门控，async factory 在首个模型调用前被 await），扩展内用 stdio JSON-RPC 桥接 `aicr-output` server 并以 `pi_aicr_<tool>` 注册（同样命中归一化规则），server 规格经 `AICR_PI_MCP_SERVERS` env 传入扩展。canonical `{type:"local",command:[...]}` 形态由 `packages/agents/src/mcp-config.ts` 转换为各家原生形态（claude stdio 的 `command`/`args` 拆分、copilot local 的 `command`/`args`/`tools`、omp 的 `command`+`args`+`env` / http `url`+`headers`）。
+  - **MCP**：kilo 经 `kilo.json` `mcp` 段、opencode 经 `opencode.json` `mcp` 段接线；Claude Code 经 `--mcp-config <inline-json> --strict-mcp-config`（与用户/项目 MCP 配置隔离）；Copilot CLI 经 `--additional-mcp-config=<inline-json>`；oh-my-pi 原生支持 MCP，经 `$PI_CODING_AGENT_DIR/mcp.json` 接线（工具以 `mcp__<server>_<tool>` 暴露，命中现有 `<prefix>_aicr_<tool>` 归一化规则）；**pi 无内置 MCP（上游明确的设计决策）**，runtime bundle 生成用户级扩展 `.pi-agent/extensions/aicr-output.ts`。扩展 factory 只注册生命周期 handler；`session_start` 中启动 stdio JSON-RPC 子进程、完成发现并以 `pi_aicr_<tool>` 注册，`session_shutdown` 回收子进程。server 规格经 `AICR_PI_MCP_SERVERS` env 传入扩展。canonical `{type:"local",command:[...]}` 形态由 `packages/agents/src/mcp-config.ts` 转换为各家原生形态（claude stdio 的 `command`/`args` 拆分、copilot local 的 `command`/`args`/`tools`、omp 的 `command`+`args`+`env` / http `url`+`headers`）。
   - orchestrator 给 `aicr-output` server 注入 `AICR_OUTPUT_STATE_PATH` 绝对路径（native 沙箱用宿主 agent 目录，docker 沙箱固定 `/workspace/agent/...`），状态文件落点不再依赖宿主 CLI 拉起 MCP server 时的 cwd。同一注入模式用于 pi/oh-my-pi 的 `PI_CODING_AGENT_DIR`：其值必须是沙箱可见路径（容器固定 `/workspace/agent/.pi-agent` 或 `.omp-agent`），由 orchestrator 在已知沙箱 workdir 后注入，而不是由适配器在 host 侧物化。
   - manifest 增加 `nativeSurfaces.{instructions,skills,mcp}` 记录实际接线面；无原生面的 adapter（如 zoo 的 MCP）显式记为 `none` 而不是静默走 prompt-only。
 

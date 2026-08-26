@@ -7,10 +7,14 @@
   "scripts": {
     "patch:astro-deps": "node scripts/patch-astro-deps.mjs",
     "dev": "node scripts/patch-astro-deps.mjs && astro dev",
-    "build": "node scripts/patch-astro-deps.mjs && node scripts/validate-public-content.mjs && astro build",
+    "build": "node scripts/patch-astro-deps.mjs && node --test scripts/validation-helpers.test.mjs && node scripts/validate-public-content.mjs && node scripts/validate-config-reference.mjs && node scripts/validate-cli-reference.mjs && node scripts/validate-internal-links.mjs && astro build",
     "preview": "node scripts/patch-astro-deps.mjs && astro preview",
-    "check": "node scripts/patch-astro-deps.mjs && node scripts/validate-public-content.mjs && astro check",
-    "validate:public-content": "node scripts/validate-public-content.mjs"
+    "check": "node scripts/patch-astro-deps.mjs && node --test scripts/validation-helpers.test.mjs && node scripts/validate-public-content.mjs && node scripts/validate-config-reference.mjs && node scripts/validate-cli-reference.mjs && node scripts/validate-internal-links.mjs && astro check",
+    "test:validators": "node --test scripts/validation-helpers.test.mjs",
+    "validate:public-content": "node scripts/validate-public-content.mjs",
+    "validate:config-reference": "node scripts/validate-config-reference.mjs",
+    "validate:cli-reference": "node scripts/validate-cli-reference.mjs",
+    "validate:internal-links": "node scripts/validate-internal-links.mjs"
   },
   "dependencies": {
     "@astrojs/starlight": "^0.41.8",
@@ -22,6 +26,6 @@
     "typescript": "^5.9.3"
   },
   "engines": {
-    "node": ">=22.12.0"
+    "node": ">=23.6.0"
   }
 }

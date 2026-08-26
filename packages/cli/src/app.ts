@@ -67,6 +67,10 @@ Options:
   --url <url>             PR / MR / commit URL
   --author-username <u>   Author username
   --author-email <e>      Author email
+  --author-display-name <n> Author display name
+  --operator-override <kv> Operator override (repeatable)
+  --memory-hint <text>    Memory hint passed to the review (repeatable)
+  --task-context <text>   Extra task context
   --dry-run               Run review without publishing to output channels
   --port <number>         HTTP listen port (serve command, default: 8080)
   --max-prompt-tokens <n> Maximum prompt token budget

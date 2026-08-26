@@ -7,19 +7,35 @@ AICR service.
 
 ## Quick commands
 
-Run from the repository root with Node.js `>=22.12.0` (Astro 7 requirement):
+Run from the repository root with Node.js `>=23.6.0`. Astro 7 itself supports
+Node `>=22.12.0`, but the source-backed config validator needs Node's native
+TypeScript stripping, which became available in Node 23.6:
 
 ```bash
 pnpm docs:dev       # local dev server with hot reload
-pnpm docs:build     # public-content validation + static build -> docs/site/dist/
+pnpm docs:build     # validation gates + static build -> docs/site/dist/
 pnpm docs:preview   # preview the built site locally
-pnpm docs:check     # public-content validation + Astro diagnostics
+pnpm docs:check     # validation gates + Astro diagnostics
 ```
 
 All four scripts filter to `@aicr/docs-site`, so they never build runtime
-packages. `docs:build` and `docs:check` also run
-`scripts/validate-public-content.mjs` before Astro. That guard prevents public
-pages from publishing internal AI/roadmap paths or migration-source notes.
+packages. `docs:build` and `docs:check` run the validation scripts in
+`scripts/` before Astro; each one is also invocable on its own via
+`pnpm --filter @aicr/docs-site validate:<name>`.
+
+## Validation gates
+
+| Script | Enforces |
+| --- | --- |
+| `validate-public-content.mjs` | Public pages must not reference internal AI/roadmap paths or carry migration-source notes. |
+| `validate-config-reference.mjs` | `en/zh-cn reference/config-fields.md` must cover every settable field of the Zod schema in `packages/core/src/config.ts` (and list no invented fields); the shared enum table must match schema enum options; both locales must list the same field set. Imports the schema from TypeScript source via Node type stripping, so it never validates against a stale build. |
+| `validate-cli-reference.mjs` | `en/zh-cn reference/cli.md` must match the commands and flags the CLI actually dispatches (`packages/cli/src/app.ts` parseArgs options), and `helpText` must list exactly the accepted flags. |
+| `validate-internal-links.mjs` | Every site-absolute link, MDX `href`, and anchor must resolve to a content page route, a `public/` asset, or a heading id; every sidebar slug must exist in both locales and every page must appear in the sidebar. |
+
+`validate-config-reference.mjs` requires Node `>=23.6` (native TypeScript type
+stripping); the CI docs job uses Node 24, matching `engines.node >=23.6.0`.
+`validation-helpers.test.mjs` covers the config-subtree and relative-route
+resolution rules before these four validators run.
 
 ## Directory layout
 

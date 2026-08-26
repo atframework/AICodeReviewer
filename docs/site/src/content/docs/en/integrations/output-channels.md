@@ -97,8 +97,8 @@ issues across reviews. Key behaviors:
   triggered by a commit that touches unrelated files — or that finds nothing
   — will **not** mark every previously-reported problem as resolved. Each
   managed-issue body embeds `aicr:file=<path>` so the file is recoverable.
-- **Recent-issue cap.** Reconciliation lists only the most recent open issues,
-  capped by `review.problem_issue.max_recent_issues` (default 20, range 1–100,
+- **Recent-issue cap.** Reconciliation lists only open issues (`state=open`),
+  capped by `review.problem_issue.max_recent_issues` (default 30, range 1–200,
   overridable per workspace). Fingerprints outside the recent window are not
   deduplicated or closed in that run.
 - **GitHub `resolved_action`.** Supports `close` and `none` only (GitHub has

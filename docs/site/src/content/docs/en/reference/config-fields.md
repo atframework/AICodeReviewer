@@ -96,6 +96,12 @@ Narrative: [VCS providers](/en/integrations/vcs-providers/).
 | `triggers[].commit_url_template` | string | — | URL template for commit links (variables are URL-encoded) |
 | `triggers[].revision_url_template` | string | — | URL template for revision links |
 | `triggers[].change_url_template` | string | — | URL template for changelist links (P4 Swarm, etc.) |
+| `triggers[].app` | object | — | GitHub App auth block; `kind: github` only, mutually exclusive with `token_env` |
+| `triggers[].app.app_id` | string \| int | — | GitHub App ID (at least one of this or `client_id`) |
+| `triggers[].app.client_id` | string | — | GitHub App client ID (alternative to `app_id`) |
+| `triggers[].app.private_key_env` | string | — | Env var holding the App private key PEM (exactly one of this or `private_key_path`) |
+| `triggers[].app.private_key_path` | string | — | Path to the App private key PEM file (exactly one of this or `private_key_env`) |
+| `triggers[].app.installation_id` | string \| int | — | Fixed installation id; resolved per `owner/repo` when omitted |
 
 Provider-specific fields (`webhook_secret_env`, `token_env`, `port`,
 `user_env`, `password_env`, `depot_path`, `workspace`, `repository_url`) are
@@ -219,7 +225,7 @@ Narrative: [Agent and sandbox](/en/configuration/agent/).
 | `review.labels.ignore` | string[] | `["aicr:ignore", "aicr-ignore"]` | Labels that skip review |
 | `review.labels.auto_tag` | string | — | Fixed tag added when AICR starts |
 | `review.labels.reviewed_tag` | string | — | Tag added when review completes |
-| `review.problem_issue.max_recent_issues` | int 1–100 | `20` | Cap on recent managed issues reconciled per run |
+| `review.problem_issue.max_recent_issues` | int 1–200 | `30` | Cap on recent open managed issues reconciled per run |
 | `review.fetch_extra.max_bytes` | int > 0 | — | Max bytes fetched per extra-context request |
 | `review.fetch_extra.max_files` | int > 0 | — | Max files fetched per extra-context request |
 | `review.fetch_extra.allow_paths` | string[] | — | Allowed path globs for extra-context fetch |

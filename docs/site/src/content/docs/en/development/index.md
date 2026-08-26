@@ -33,7 +33,9 @@ runtime `Dockerfile` does not copy `docs/site`.
 
 Requirements:
 
-- Node.js `>= 20` (Node 22 userspace is used by the deployment image).
+- Node.js `>= 20` for the runtime (the deployment image uses Node 22 userspace).
+- Node.js `>= 23.6` for `docs:build` / `docs:check`; the source-backed config
+  validator relies on native TypeScript stripping. The docs CI job uses Node 24.
 - pnpm.
 
 ```bash
@@ -107,7 +109,10 @@ The Zod schema in `packages/core/src/config.ts` is the source of truth.
 3. Update `example/config.yaml` with a commented example.
 4. Update the relevant narrative page under `docs/site/src/content/docs/.../configuration/`
    and the field table in
-   [Configuration fields](/en/reference/config-fields/).
+   [Configuration fields](/en/reference/config-fields/) — in **both** locales.
+   `pnpm docs:build` fails if the table misses a schema field, documents an
+   invented field, or the two locales drift apart, so the gate tells you what
+   is missing.
 5. If the field changes runtime behavior, update `example/README.md` and the
    matching topical doc.
 
@@ -138,10 +143,12 @@ The docs site is bilingual (English under `.../en/`, 简体中文 under
 `.../zh-cn/`). Every user-facing page exists in both locales; keep config
 keys, commands, paths, field names, and enum values identical across locales.
 
-- Build and validate locally with `pnpm docs:build`. The build enforces the
-  public/internal boundary: pages under `src/content/docs/` must not reference
-  the internal AI/roadmap documentation tree or carry migration-source
-  maintenance notes.
+- Build and validate locally with `pnpm docs:build`. The build runs four
+  validation gates: the public/internal boundary (pages under
+  `src/content/docs/` must not reference the internal AI/roadmap documentation
+  tree or carry migration-source maintenance notes), config-field coverage of
+  the Zod schema, CLI command/flag consistency with `packages/cli`, and
+  internal link/anchor resolution including sidebar coverage.
 - Sidebar slugs omit the `index` segment (e.g. `troubleshooting/index.md` has
   slug `troubleshooting`). Frontmatter `template` only accepts `doc` or
   `splash`; Starlight `social` is an array of link items.

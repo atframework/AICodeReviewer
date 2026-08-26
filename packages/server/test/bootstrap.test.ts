@@ -995,7 +995,7 @@ describe("createOutputPublisherFromConfig", () => {
       expect(body.title).toBe("[AICR] [HIGH] src/app.ts:7 · Issue");
       expect(body.title).not.toContain("Focused summary title");
       expect(body.body).toContain("Focused summary title");
-      expect(calls[0]?.url).toBe("https://api.github.com/repos/my-org/my-repo/issues?state=open&sort=updated&direction=desc&per_page=20&page=1");
+      expect(calls[0]?.url).toBe("https://api.github.com/repos/my-org/my-repo/issues?state=open&sort=updated&direction=desc&per_page=30&page=1");
     } finally {
       vi.unstubAllGlobals();
       if (originalToken === undefined) {
@@ -1193,7 +1193,7 @@ describe("createOutputPublisherFromConfig", () => {
       );
 
       expect(Array.isArray(results)).toBe(true);
-      expect(calls[0]?.url).toBe("https://gitea.example.com/api/v1/repos/owent/example/issues?state=open&type=issues&limit=20&page=1");
+      expect(calls[0]?.url).toBe("https://gitea.example.com/api/v1/repos/owent/example/issues?state=open&type=issues&limit=30&page=1");
       expect(calls[1]?.url).toBe("https://gitea.example.com/api/v1/repos/owent/example/issues");
       expect(calls[1]?.init.headers).toMatchObject({ authorization: "token resolver-token" });
       const body = JSON.parse(calls[1]?.init.body ?? "{}");
@@ -2043,7 +2043,7 @@ describe("createOutputPublisherResolverFromConfig", () => {
       expect(String((results?.[0]?.raw as { hint?: unknown } | undefined)?.hint)).toContain("webhook event subscriptions");
       expect(results?.[1]).toMatchObject({ channel: "feishu-team", status: "published" });
       expect(calls.map((call) => call.url)).toEqual([
-        "https://api.github.com/repos/my-org/my-repo/issues?state=open&sort=updated&direction=desc&per_page=20&page=1",
+        "https://api.github.com/repos/my-org/my-repo/issues?state=open&sort=updated&direction=desc&per_page=30&page=1",
         "https://open.feishu.cn/hook/success",
       ]);
     } finally {

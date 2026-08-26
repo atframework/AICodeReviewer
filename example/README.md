@@ -844,7 +844,7 @@ remain visible without poisoning the trigger queue.
 ```yaml
 review:
   problem_issue:
-    max_recent_issues: 20  # default; valid range is 1..100
+    max_recent_issues: 30  # default; valid range is 1..200
 
 workspaces:
   instances:

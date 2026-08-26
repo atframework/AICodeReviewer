@@ -87,7 +87,7 @@ describe("createGithubProblemIssueDispatcher", () => {
 		expect(results).toHaveLength(1);
 		expect(results[0]?.externalId).toBe("99");
 
-		expect(calls[0]?.url).toBe("https://api.github.com/repos/my-org/my-repo/issues?state=open&sort=updated&direction=desc&per_page=20&page=1");
+		expect(calls[0]?.url).toBe("https://api.github.com/repos/my-org/my-repo/issues?state=open&sort=updated&direction=desc&per_page=30&page=1");
 		expect(calls[1]?.url).toBe("https://api.github.com/repos/my-org/my-repo/issues");
 		expect(calls[1]?.init?.headers).toMatchObject({
 			authorization: "Bearer gh-token",
@@ -157,7 +157,7 @@ describe("createGithubProblemIssueDispatcher", () => {
 		expect(results).toHaveLength(1);
 		expect(results[0]?.raw).toMatchObject({ action: "closed", issueNumber: 42 });
 		expect(calls.map((call) => `${call.init?.method ?? "GET"} ${call.url}`)).toEqual([
-			"GET https://api.github.com/repos/my-org/my-repo/issues?state=open&sort=updated&direction=desc&per_page=20&page=1",
+			"GET https://api.github.com/repos/my-org/my-repo/issues?state=open&sort=updated&direction=desc&per_page=30&page=1",
 			"POST https://api.github.com/repos/my-org/my-repo/issues/42/comments",
 			"PATCH https://api.github.com/repos/my-org/my-repo/issues/42",
 			"GET https://api.github.com/repos/my-org/my-repo/issues/42",
@@ -183,6 +183,68 @@ describe("createGithubProblemIssueDispatcher", () => {
 		expect(calls).toEqual([
 			"https://api.github.com/repos/my-org/my-repo/issues?state=open&sort=updated&direction=desc&per_page=7&page=1",
 		]);
+	});
+
+	it("paginates the managed issue window when the limit exceeds the GitHub page cap", async () => {
+		const calls: string[] = [];
+		const fullPage = Array.from({ length: 100 }, (_, index) => ({
+			number: index + 1,
+			title: "unrelated issue",
+			body: "not managed",
+			state: "open",
+		}));
+		const dispatcher = createGithubProblemIssueDispatcher({
+			owner: "my-org",
+			repo: "my-repo",
+			issueMode: "per_problem",
+			maxRecentIssues: 200,
+			fetch: async (url) => {
+				calls.push(url);
+				return response(calls.length === 1 ? fullPage : fullPage.slice(0, 37));
+			},
+		});
+
+		await dispatcher.reconcileProblems([]);
+
+		expect(calls).toEqual([
+			"https://api.github.com/repos/my-org/my-repo/issues?state=open&sort=updated&direction=desc&per_page=100&page=1",
+			"https://api.github.com/repos/my-org/my-repo/issues?state=open&sort=updated&direction=desc&per_page=100&page=2",
+		]);
+	});
+
+	it("does not reconcile issues beyond a partial final GitHub page window", async () => {
+		const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
+		const unrelatedPage = Array.from({ length: 100 }, (_, index) => ({
+			number: index + 1,
+			title: "unrelated issue",
+			body: "not managed",
+			state: "open",
+		}));
+		const dispatcher = createGithubProblemIssueDispatcher({
+			owner: "my-org",
+			repo: "my-repo",
+			issueMode: "per_problem",
+			maxRecentIssues: 101,
+			fetch: async (url, init) => {
+				calls.push({ url, init });
+				if (url.endsWith("&page=1")) {
+					return response(unrelatedPage);
+				}
+				if (url.endsWith("&page=2")) {
+					return response([
+						{ number: 101, title: "[AICR] in window", body: managedBody, state: "open" },
+						{ number: 102, title: "[AICR] out of window", body: managedBody, state: "open" },
+					]);
+				}
+				return response({ id: calls.length });
+			},
+		});
+
+		const results = await dispatcher.reconcileProblems([]);
+
+		expect(results).toHaveLength(1);
+		expect(results[0]?.raw).toMatchObject({ action: "closed", issueNumber: 101 });
+		expect(calls.some((call) => call.url.includes("/issues/102"))).toBe(false);
 	});
 
 	it("skips resolvedAction none for stale issues", async () => {

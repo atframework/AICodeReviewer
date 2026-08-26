@@ -87,6 +87,12 @@ description: 全量配置字段参考，按顶层命名空间组织，并以 Zod
 | `triggers[].commit_url_template` | string | — | commit 链接的 URL 模板（变量会做 URL 编码） |
 | `triggers[].revision_url_template` | string | — | revision 链接的 URL 模板 |
 | `triggers[].change_url_template` | string | — | changelist 链接的 URL 模板（P4 Swarm 等） |
+| `triggers[].app` | object | — | GitHub App 认证块；仅 `kind: github`，与 `token_env` 互斥 |
+| `triggers[].app.app_id` | string \| int | — | GitHub App ID（与 `client_id` 至少填一个） |
+| `triggers[].app.client_id` | string | — | GitHub App client ID（`app_id` 的替代项） |
+| `triggers[].app.private_key_env` | string | — | 持有 App 私钥 PEM 的环境变量（与 `private_key_path` 恰好填一个） |
+| `triggers[].app.private_key_path` | string | — | App 私钥 PEM 文件路径（与 `private_key_env` 恰好填一个） |
+| `triggers[].app.installation_id` | string \| int | — | 固定 installation id；缺省时按 `owner/repo` 动态解析 |
 
 provider 专属字段（`webhook_secret_env`、`token_env`、`port`、`user_env`、`password_env`、`depot_path`、`workspace`、`repository_url`）通过 `passthrough` 校验接受，文档见[VCS 提供商](/zh-cn/integrations/vcs-providers/)与[认证与密钥](/zh-cn/configuration/authentication/)。
 
@@ -204,7 +210,7 @@ schema 接受 `workspaces.defaults` 和实例上的 `agent.default` 与 `sandbox
 | `review.labels.ignore` | string[] | `["aicr:ignore", "aicr-ignore"]` | 跳过评审的 label |
 | `review.labels.auto_tag` | string | — | AICR 启动时附加的固定 tag |
 | `review.labels.reviewed_tag` | string | — | 评审完成时附加的 tag |
-| `review.problem_issue.max_recent_issues` | int 1–100 | `20` | 单次 run 对账的最近 managed issue 上限 |
+| `review.problem_issue.max_recent_issues` | int 1–200 | `30` | 单次 run 对账的最近 open managed issue 上限 |
 | `review.fetch_extra.max_bytes` | int > 0 | — | 单次额外上下文请求的最大字节数 |
 | `review.fetch_extra.max_files` | int > 0 | — | 单次额外上下文请求的最大文件数 |
 | `review.fetch_extra.allow_paths` | string[] | — | 额外上下文拉取允许的路径 glob |

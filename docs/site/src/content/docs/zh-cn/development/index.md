@@ -26,7 +26,9 @@ description: 仓库布局、开发环境搭建、测试与验证矩阵，以及�
 
 要求：
 
-- Node.js `>= 20`（部署镜像使用 Node 22 userspace）。
+- AICR runtime 使用 Node.js `>= 20`（部署镜像使用 Node 22 userspace）。
+- `docs:build` / `docs:check` 使用 Node.js `>= 23.6`；源码配置校验器依赖
+  Node 原生 TypeScript stripping。文档 CI job 使用 Node 24。
 - pnpm。
 
 ```bash
@@ -80,7 +82,7 @@ PowerShell 5.1 的 `>` 重定向和 `Out-File` 默认 UTF-16 LE 编码；需要�
 1. 更新 schema（以及任何 `superRefine` 跨字段校验）。
 2. 在 `packages/core/test/config.test.ts` 加或更新测试。
 3. 在 `example/config.yaml` 加带注释的示例。
-4. 更新 `docs/site/src/content/docs/.../configuration/` 下相关叙述页，以及[配置字段参考](/zh-cn/reference/config-fields/)中的字段表。
+4. 更新 `docs/site/src/content/docs/.../configuration/` 下相关叙述页，以及[配置字段参考](/zh-cn/reference/config-fields/)中的字段表——**两个 locale 都要改**。字段表漏掉 schema 字段、写了不存在的字段、或中英两表漂移时，`pnpm docs:build` 会直接失败并指出缺什么。
 5. 如果字段改变运行时行为，更新 `example/README.md` 和对应专题文档。
 
 workspace 配置文件不能写系统级字段；遵守 `cache` / `defaults` / `instances` 三段式 shape 和 global → workspace-default → workspace-instance 的覆盖顺序。
@@ -99,7 +101,7 @@ workspace 配置文件不能写系统级字段；遵守 `cache` / `defaults` / `
 
 文档站点是双语的（English 在 `.../en/`，简体中文 在 `.../zh-cn/`）。每个面向用户的页面都同时存在于两个 locale；请保持配置键、命令、路径、字段名和枚举值在不同 locale 间完全一致。
 
-- 用 `pnpm docs:build` 本地构建并校验。构建会强制公开/内部边界：`src/content/docs/` 下的页面不得引用内部 AI/路线图文档树，也不得保留仅供维护者参考的迁移占记。
+- 用 `pnpm docs:build` 本地构建并校验。构建会依次运行四道校验：公开/内部边界（`src/content/docs/` 下的页面不得引用内部 AI/路线图文档树，也不得保留仅供维护者参考的迁移占记）、配置字段表对 Zod schema 的覆盖、CLI 命令/flag 与 `packages/cli` 实现的一致性、内部链接/锚点解析（含 sidebar 覆盖）。
 - sidebar slug 省略 `index` 段（如 `troubleshooting/index.md` 的 slug 是 `troubleshooting`）。frontmatter `template` 只接受 `doc` 或 `splash`；Starlight `social` 是链接项数组。
 - 内容页用 `.md`。两个首页（`en/index.mdx`、`zh-cn/index.mdx`）用 `.mdx`，以便渲染 Starlight 组件（hero frontmatter 加 `Card`、`CardGrid`、`LinkCard`、`Steps`、`Aside`）。MDX 由 Starlight 内置提供，无需额外集成；组件在纯 `.md` 中不会渲染。公开内容校验器同时扫描 `.md` 和 `.mdx`。
 - 交叉链接使用带 locale 前缀的路径（`/en/...`、`/zh-cn/...`）。

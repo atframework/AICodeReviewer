@@ -1,8 +1,9 @@
+import { EventEmitter } from "node:events";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { ModelSpec } from "@aicr/llm";
 
@@ -2226,6 +2227,18 @@ describe("createPiAdapter", () => {
     expect(command[command.indexOf("--thinking") + 1]).toBe("high");
   });
 
+  it("prefers an explicit reasoning effort over the catalog default", () => {
+    const model = {
+      ...piFamilyModel,
+      reasoningEffort: "high" as const,
+      defaultReasoningEffort: "low" as const,
+    };
+    for (const adapter of [createPiAdapter(), createOhMyPiAdapter()]) {
+      const command = adapter.buildCommand("t", { workingDir: "/tmp/agent", task: "t", model });
+      expect(command[command.indexOf("--thinking") + 1]).toBe("high");
+    }
+  });
+
   it("keeps stdin empty so the prompt is never double-fed", () => {
     const adapter = createPiAdapter();
     expect(adapter.buildStdin?.("task", { workingDir: "/tmp/agent", task: "task" })).toBe("");
@@ -2500,6 +2513,22 @@ describe("toOhMyPiMcpServersJson", () => {
 
   it("returns undefined when nothing converts", () => {
     expect(toOhMyPiMcpServersJson([])).toBeUndefined();
+    expect(toOhMyPiMcpServersJson([{
+      name: "malformed",
+      config: { type: "local", command: ["node", 42, "server.js"] },
+    }])).toBeUndefined();
+    expect(toOhMyPiMcpServersJson([{
+      name: "empty-command",
+      config: { type: "local", command: ["  "] },
+    }])).toBeUndefined();
+    expect(toOhMyPiMcpServersJson([{
+      name: "malformed-env",
+      config: { type: "local", command: ["node", "server.js"], environment: { TOKEN: 42 } },
+    }])).toBeUndefined();
+    expect(toOhMyPiMcpServersJson([{
+      name: "malformed-headers",
+      config: { type: "remote", url: "https://mcp.example", headers: { authorization: 42 } },
+    }])).toBeUndefined();
   });
 });
 
@@ -2551,7 +2580,7 @@ describe("runtime bundle pi/oh-my-pi wiring", () => {
       expect(result.manifest.nativeSurfaces?.instructions).toContain("AGENTS.md");
       expect(result.manifest.nativeSurfaces?.skills).toContain(".agents/skills");
       expect(result.manifest.model.metadataInjection).toBe("injected");
-      expect(result.manifest.contextCompaction).toEqual({ enabled: true, mode: "injected" });
+      expect(result.manifest.contextCompaction).toEqual({ enabled: true, mode: "delegated" });
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }
@@ -2616,6 +2645,89 @@ describe("runtime bundle pi/oh-my-pi wiring", () => {
       expect(JSON.parse(onDisk)).toEqual(mcpJson);
       expect(result.manifest.nativeSurfaces?.mcp).toBe("config_file");
       expect(result.manifest.model.metadataInjection).toBe("injected");
+      expect(result.manifest.contextCompaction).toEqual({ enabled: true, mode: "injected" });
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("starts the generated pi MCP bridge only from session_start and stops it on shutdown", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-bundle-pi-lifecycle-"));
+    try {
+      const result = await materializeRuntimeBundle({
+        adapter: createPiAdapter(),
+        model: piFamilyModel,
+        workingDir: tempDir,
+        mcpServers: [aicrMcpServer],
+      });
+      const bridge = result.configFiles.get(".pi-agent/extensions/aicr-output.ts") ?? "";
+      expect(bridge).toContain('Buffer.byteLength(this.buffer, "utf8")');
+
+      const stdout = new EventEmitter() as EventEmitter & { setEncoding: ReturnType<typeof vi.fn> };
+      stdout.setEncoding = vi.fn();
+      const stdin = new EventEmitter() as EventEmitter & {
+        write: (payload: string) => boolean;
+      };
+      const kill = vi.fn();
+      const child = Object.assign(new EventEmitter(), { stdout, stdin, kill });
+      stdin.write = (payload: string): boolean => {
+        const request = JSON.parse(payload) as { id?: number; method: string };
+        if (request.id === undefined) return true;
+        const response = request.method === "tools/list"
+          ? {
+            tools: [{
+              name: "aicr_skip",
+              description: "skip",
+              inputSchema: { type: "object", properties: {} },
+            }],
+          }
+          : request.method === "tools/call"
+            ? { content: [{ type: "text", text: "ok" }] }
+            : {};
+        queueMicrotask(() => stdout.emit("data", `${JSON.stringify({ jsonrpc: "2.0", id: request.id, result: response })}\n`));
+        return true;
+      };
+      const spawn = vi.fn(() => child);
+      const processStub = {
+        env: {
+          AICR_PI_MCP_SERVERS: JSON.stringify([{
+            name: "aicr-output",
+            command: ["node", "server.js"],
+          }]),
+        },
+        on: vi.fn(),
+      };
+      const executableSource = bridge
+        .replace('import { spawn } from "node:child_process";', "const spawn = injectedSpawn;")
+        .replace('import { Type } from "typebox";', "const Type = { Unsafe: (schema) => schema };")
+        .replace("export default function aicrOutputBridge", "function aicrOutputBridge")
+        .concat("\nreturn aicrOutputBridge;");
+      const loadFactory = new Function("injectedSpawn", "process", executableSource) as (
+        injectedSpawn: typeof spawn,
+        injectedProcess: typeof processStub,
+      ) => (pi: {
+        on: (event: string, handler: () => void | Promise<void>) => void;
+        registerTool: (tool: { name: string; execute: (id: string, params: unknown) => Promise<unknown> }) => void;
+      }) => void;
+      const factory = loadFactory(spawn, processStub);
+      const handlers = new Map<string, () => void | Promise<void>>();
+      const tools: Array<{ name: string; execute: (id: string, params: unknown) => Promise<unknown> }> = [];
+
+      factory({
+        on: (event, handler) => handlers.set(event, handler),
+        registerTool: (tool) => tools.push(tool),
+      });
+
+      expect(spawn).not.toHaveBeenCalled();
+      await handlers.get("session_start")?.();
+      expect(spawn).toHaveBeenCalledTimes(1);
+      expect(tools.map((tool) => tool.name)).toEqual(["pi_aicr_output_aicr_skip"]);
+      await expect(tools[0]?.execute("call-1", {})).resolves.toEqual({
+        content: [{ type: "text", text: "ok" }],
+      });
+
+      await handlers.get("session_shutdown")?.();
+      expect(kill).toHaveBeenCalledTimes(1);
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }
