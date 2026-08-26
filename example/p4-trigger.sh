@@ -109,7 +109,7 @@ collect_changed_files() {
   if [ -n "$p4_client" ]; then p4_args+=(-c "$p4_client"); fi
 
   if [ "${AICR_P4_AUTO_TRUST:-0}" = "1" ] || [ "${AICR_P4_AUTO_TRUST:-}" = "true" ]; then
-    p4 "${p4_args[@]}" trust -y >/dev/null 2>&1 || log "WARNING: p4 trust -y failed for $p4_port"
+    p4 "${p4_args[@]}" trust -y -f >/dev/null 2>&1 || log "WARNING: p4 trust -y -f failed for $p4_port"
   fi
 
   local describe_output

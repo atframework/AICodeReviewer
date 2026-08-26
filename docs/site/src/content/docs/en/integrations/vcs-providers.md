@@ -202,7 +202,7 @@ triggers:
     user_env: AICR_P4USER
     password_env: AICR_P4PASSWORD       # password or login ticket
     depot_path: "//depot/main"
-    workspace: "aicr-p4-main"           # P4 client name used by AICR (analysis only)
+    workspace: "aicr-p4-main"           # P4 client name used by AICR (analysis only; auto-created if deleted server-side)
     change_url_template: "https://swarm.example.com/changes/{{revision}}"
     watch_path: ["src/", "include/"]
     include_cr_file: ["**/*.cpp", "**/*.h"]
@@ -212,10 +212,19 @@ triggers:
 When `port` uses the `ssl:` prefix and the fingerprint is not trusted yet (first
 connection or a server key rotation, reported as `P4PORT IDENTIFICATION HAS
 CHANGED`), the server-side adapter runs `p4 trust -y` once and retries the
-command, so no manual trust step is needed inside the AICR container. The
+command, so no manual trust step is needed inside the AICR container. A rotated
+key produces a mismatched fingerprint, which `p4 trust -y` refuses to replace;
+the adapter then falls back to `p4 trust -y -f` to force the replacement. The
 fingerprint goes to the runtime user's default trust file; set the `P4TRUST`
 environment variable to change the path. Auto-trust skips fingerprint
 verification — only use it on networks you already trust.
+
+If the configured `workspace` client was deleted on the P4 server (`Client
+'<name>' unknown - use 'client' command to create it.`), the adapter recreates
+it with a minimal read-only spec (`p4 client -i`, Root set to the AICR workspace
+directory, View mapping `<depot_path>/...`) and retries the command once. AICR
+never runs `p4 sync`, so the client record only needs to exist for commands
+that take `-c`.
 
 Register the trigger with `p4 triggers`:
 

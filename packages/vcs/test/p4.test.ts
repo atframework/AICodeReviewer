@@ -6,7 +6,7 @@ import { describe, it, expect } from "vitest";
 
 import { createReviewEvent, type ReviewEvent } from "@aicr/core";
 
-import { createP4VcsAdapter, P4VcsAdapter, type P4CommandResult, type P4CommandRunner } from "../src/p4.js";
+import { createP4VcsAdapter, P4VcsAdapter, type P4CommandResult, type P4CommandRunner, type P4StdinRunner } from "../src/p4.js";
 import type { ChangeRange } from "../src/contracts.js";
 
 function createMockP4Runner(responses: Record<string, P4CommandResult>) {
@@ -867,6 +867,230 @@ Affected files ...
     expect(loginCalls).toBe(2);
     expect(describeAttempts).toBe(2);
     expect(range.files).toContain("src/foo.cpp");
+  });
+
+  it("forces trust replacement with -f when p4 trust -y fails on a changed fingerprint", async () => {
+    let describeAttempts = 0;
+    const trustCalls: string[][] = [];
+    const p4: P4CommandRunner = async (args) => {
+      const key = args.join(" ");
+      if (key.includes("trust -y")) {
+        trustCalls.push([...args]);
+        if (!args.includes("-f")) {
+          throw new Error(
+            "Command failed: p4 trust -y\n******* WARNING P4PORT IDENTIFICATION HAS CHANGED! *******\nThe fingerprint for the mismatched key sent to your client is\nB8:11:A9:3C\n",
+          );
+        }
+        return { stdout: "", stderr: "" };
+      }
+      if (key.includes("describe")) {
+        describeAttempts += 1;
+        if (describeAttempts === 1) {
+          throw new Error(
+            "Command failed: p4 describe -s 12345\n******* WARNING P4PORT IDENTIFICATION HAS CHANGED! *******\nTo allow connection use the 'p4 trust' command.\n",
+          );
+        }
+        return { stdout: describeOutput, stderr: "" };
+      }
+      return { stdout: "", stderr: "" };
+    };
+    const adapter = new P4VcsAdapter({
+      repositoryDir: "/tmp/test",
+      depot: "//depot/main",
+      port: "ssl:perforce:1666",
+      user: "svc-aicr",
+      workspace: "aicr-p4-main",
+      p4,
+    });
+
+    const range = await adapter.listChanges(makeEvent());
+    expect(trustCalls).toEqual([
+      ["-p", "ssl:perforce:1666", "-u", "svc-aicr", "-c", "aicr-p4-main", "trust", "-y"],
+      ["-p", "ssl:perforce:1666", "-u", "svc-aicr", "-c", "aicr-p4-main", "trust", "-y", "-f"],
+    ]);
+    expect(describeAttempts).toBe(2);
+    expect(range.files).toContain("src/foo.cpp");
+  });
+
+  it("recreates a deleted client workspace via p4 client -i and retries describe", async () => {
+    let describeAttempts = 0;
+    const stdinCalls: Array<{ args: string[]; stdin: string }> = [];
+    const p4: P4CommandRunner = async (args) => {
+      const key = args.join(" ");
+      if (key.includes("describe")) {
+        describeAttempts += 1;
+        if (describeAttempts === 1) {
+          throw new Error(
+            "Command failed: p4 describe -s 12345\nClient 'aicr-p4-main' unknown - use 'client' command to create it.\n",
+          );
+        }
+        return { stdout: describeOutput, stderr: "" };
+      }
+      return { stdout: "", stderr: "" };
+    };
+    const p4Stdin: P4StdinRunner = async (args, stdin) => {
+      stdinCalls.push({ args: [...args], stdin });
+      return { stdout: "Client aicr-p4-main saved.", stderr: "" };
+    };
+    const adapter = new P4VcsAdapter({
+      repositoryDir: "/tmp/test",
+      depot: "//depot/main",
+      port: "ssl:perforce:1666",
+      user: "svc-aicr",
+      workspace: "aicr-p4-main",
+      p4,
+      p4Stdin,
+    });
+
+    const range = await adapter.listChanges(makeEvent());
+    expect(stdinCalls).toHaveLength(1);
+    expect(stdinCalls[0]!.args).toEqual([
+      "-p", "ssl:perforce:1666", "-u", "svc-aicr", "-c", "aicr-p4-main", "client", "-i",
+    ]);
+    expect(stdinCalls[0]!.stdin).toContain("Client: aicr-p4-main");
+    expect(stdinCalls[0]!.stdin).toContain("Owner: svc-aicr");
+    expect(stdinCalls[0]!.stdin).toContain("Root: ");
+    expect(stdinCalls[0]!.stdin).toContain("\t//depot/main/... //aicr-p4-main/...");
+    expect(describeAttempts).toBe(2);
+    expect(range.files).toContain("src/foo.cpp");
+  });
+
+  it("falls back to empty files when client recreation fails", async () => {
+    let describeAttempts = 0;
+    let stdinCalls = 0;
+    const p4: P4CommandRunner = async (args) => {
+      if (args.join(" ").includes("describe")) {
+        describeAttempts += 1;
+        throw new Error("Client 'aicr-p4-main' unknown - use 'client' command to create it.");
+      }
+      return { stdout: "", stderr: "" };
+    };
+    const p4Stdin: P4StdinRunner = async () => {
+      stdinCalls += 1;
+      throw new Error("p4 client -i failed: permission denied");
+    };
+    const adapter = new P4VcsAdapter({
+      repositoryDir: "/tmp/test",
+      depot: "//depot/main",
+      workspace: "aicr-p4-main",
+      p4,
+      p4Stdin,
+    });
+
+    const range = await adapter.listChanges(makeEvent());
+    expect(range.files).toEqual([]);
+    expect(stdinCalls).toBe(1);
+    expect(describeAttempts).toBe(1);
+  });
+
+  it("recreates the client only once per runP4 call when the client stays unknown", async () => {
+    let describeAttempts = 0;
+    let stdinCalls = 0;
+    const p4: P4CommandRunner = async (args) => {
+      if (args.join(" ").includes("describe")) {
+        describeAttempts += 1;
+        throw new Error("Client 'aicr-p4-main' unknown - use 'client' command to create it.");
+      }
+      return { stdout: "", stderr: "" };
+    };
+    const p4Stdin: P4StdinRunner = async () => {
+      stdinCalls += 1;
+      return { stdout: "Client aicr-p4-main saved.", stderr: "" };
+    };
+    const adapter = new P4VcsAdapter({
+      repositoryDir: "/tmp/test",
+      depot: "//depot/main",
+      workspace: "aicr-p4-main",
+      p4,
+      p4Stdin,
+    });
+
+    const range = await adapter.listChanges(makeEvent());
+    expect(range.files).toEqual([]);
+    expect(stdinCalls).toBe(1);
+    expect(describeAttempts).toBe(2);
+  });
+
+  it("does not attempt client recreation when no workspace is configured", async () => {
+    let describeAttempts = 0;
+    let stdinCalls = 0;
+    const p4: P4CommandRunner = async (args) => {
+      if (args.join(" ").includes("describe")) {
+        describeAttempts += 1;
+        throw new Error("Client 'aicr-p4-main' unknown - use 'client' command to create it.");
+      }
+      return { stdout: "", stderr: "" };
+    };
+    const p4Stdin: P4StdinRunner = async () => {
+      stdinCalls += 1;
+      return { stdout: "", stderr: "" };
+    };
+    const adapter = new P4VcsAdapter({
+      repositoryDir: "/tmp/test",
+      depot: "//depot/main",
+      p4,
+      p4Stdin,
+    });
+
+    const range = await adapter.listChanges(makeEvent());
+    expect(range.files).toEqual([]);
+    expect(stdinCalls).toBe(0);
+    expect(describeAttempts).toBe(1);
+  });
+
+  it("does not recreate the client when the unknown-client text only appears in stdout", async () => {
+    let stdinCalls = 0;
+    const p4: P4CommandRunner = async (args) => {
+      if (args.join(" ").includes("describe")) {
+        const error = new Error("Command failed: p4 describe -s 12345\nChange 12345 is unknown.");
+        Object.assign(error, {
+          stdout: "Change 12346 by user@other-client on 2026/05/08 10:00:00\n\n\tfix Client 'aicr-p4-main' unknown - use 'client' command to create it.\n",
+          stderr: "Change 12345 is unknown.",
+        });
+        throw error;
+      }
+      return { stdout: "", stderr: "" };
+    };
+    const p4Stdin: P4StdinRunner = async () => {
+      stdinCalls += 1;
+      return { stdout: "", stderr: "" };
+    };
+    const adapter = new P4VcsAdapter({
+      repositoryDir: "/tmp/test",
+      depot: "//depot/main",
+      workspace: "aicr-p4-main",
+      p4,
+      p4Stdin,
+    });
+
+    const range = await adapter.listChanges(makeEvent());
+    expect(range.files).toEqual([]);
+    expect(stdinCalls).toBe(0);
+  });
+
+  it("does not recreate the client when the unknown client is not the configured one", async () => {
+    let stdinCalls = 0;
+    const p4: P4CommandRunner = async (args) => {
+      if (args.join(" ").includes("describe")) {
+        throw new Error("Client 'someone-else' unknown - use 'client' command to create it.");
+      }
+      return { stdout: "", stderr: "" };
+    };
+    const p4Stdin: P4StdinRunner = async () => {
+      stdinCalls += 1;
+      return { stdout: "", stderr: "" };
+    };
+    const adapter = new P4VcsAdapter({
+      repositoryDir: "/tmp/test",
+      depot: "//depot/main",
+      workspace: "aicr-p4-main",
+      p4,
+      p4Stdin,
+    });
+
+    const range = await adapter.listChanges(makeEvent());
+    expect(range.files).toEqual([]);
+    expect(stdinCalls).toBe(0);
   });
 });
 

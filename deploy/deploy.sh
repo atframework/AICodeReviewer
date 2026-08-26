@@ -405,7 +405,7 @@ done
 
 P4_PORT="$(sed -n '/name: p4-main/,$p' "$DEPLOY_DIR/config.yaml" | sed -n 's/^[[:space:]]*port:[[:space:]]*["'"'"']\{0,1\}\([^"'"'"']*\)["'"'"']\{0,1\}.*/\1/p' | head -1)"
 if [ -n "$P4_PORT" ] && "$ENGINE_CMD" "${ENGINE_ARGS[@]}" exec "$CONTAINER_NAME" test -x /usr/bin/p4 >/dev/null 2>&1; then
-  "$ENGINE_CMD" "${ENGINE_ARGS[@]}" exec "$CONTAINER_NAME" p4 -p "$P4_PORT" trust -y >/dev/null 2>&1 || true
+  "$ENGINE_CMD" "${ENGINE_ARGS[@]}" exec "$CONTAINER_NAME" p4 -p "$P4_PORT" trust -y -f >/dev/null 2>&1 || true
 fi
 
 # Check health
