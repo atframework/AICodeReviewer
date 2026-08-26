@@ -46,7 +46,7 @@
   它不需要 Next.js 静态导出约束；相比 MkDocs，它更贴合当前 JS/TS monorepo。
 
 **已验证版本基线（2026-07 实测）**：Astro `7.0.6` / `@astrojs/starlight` `0.41.3`，本地 Node `24.16.0`。
-锁定 `astro: ^7`、`@astrojs/starlight: ^0.41`；Astro 7 官方要求 Node `>=22.12.0`，docs CI 使用 Node 24。实测要点：
+锁定 `astro: ^7`、`@astrojs/starlight: ^0.41`；Astro 7 官方要求 Node `>=22.12.0`，但源码配置校验依赖 Node 原生 TypeScript stripping，因此 `docs/site` 的实际下限是 Node `>=23.6.0`，docs CI 使用 Node 24。实测要点：
 
 - `social` 配置在 Starlight v0.33+ 改为**数组**（不再是 `{ github: "..." }` 对象）。
 - `template` frontmatter 只接受 `doc` 或 `splash`（无 `landing`）。
@@ -313,7 +313,7 @@ Starlight 自带 ~35 种语言（含中文）的 UI 翻译，覆盖文件只需�
 
 页面：
 
-- 安装依赖：pnpm、Node 版本（runtime `>=20`，docs/site `>=22.12.0`）、Windows PowerShell 注意事项。
+- 安装依赖：pnpm、Node 版本（runtime `>=20`，docs/site `>=23.6.0`）、Windows PowerShell 注意事项。
 - Runtime 构建：`pnpm build` 或 Windows 下等价命令。
 - 类型检查、测试、markdownlint、eval fixture validation。
 - 文档站构建：`pnpm docs:build`（先校验公开内容边界，再执行 Astro build）。
@@ -420,11 +420,16 @@ M11-P1 后建议至少具备：
 - `pnpm format:check`: 校验格式。
 - 可选链接检查：后续引入 lychee 或等价工具，先从内部链接开始。
 
-文档站内容迁移阶段还需要：
+文档站内容迁移阶段还需要（M11-P4 已全部落地，随 `pnpm docs:build` / `docs:check` 运行）：
 
-- 配置参考字段覆盖检查。
-- CLI help 和文档命令示例一致性检查。
-- `example/config.yaml` 关键片段和文档示例一致性检查。
+- 配置参考字段覆盖检查：`docs/site/scripts/validate-config-reference.mjs` 直接从
+  `packages/core/src/config.ts` 源码导入 Zod schema（Node 原生 type stripping，无新依赖、
+  不依赖 dist 构建），双向校验双语字段表与共享枚举表。
+- CLI help 和文档命令示例一致性检查：`docs/site/scripts/validate-cli-reference.mjs` 从
+  `packages/cli/src/app.ts` 提取 parseArgs 选项、dispatch 命令与 helpText 三方比对。
+- 内部链接检查：`docs/site/scripts/validate-internal-links.mjs` 校验站内链接、锚点、
+  静态资源与 sidebar 双向覆盖（零依赖，替代外部 lychee 路线的第一步）。
+- `example/config.yaml` 关键片段和文档示例一致性检查：仍未自动化，保持人工抽查。
 
 ## 8. 分阶段执行计划
 
@@ -434,9 +439,9 @@ M11-P1 后建议至少具备：
 | M11-P1 ✅ | 创建文档站子工程 | `docs/site`（Astro v7 / Starlight v0.41）、根 scripts、CI docs job、GitHub Pages workflow 草案 | `pnpm docs:build` 公开内容校验 + 构建通过（51 页） |
 | M11-P2 ✅ | 落地信息架构骨架 + 首批核心页 | 全章节双语占位页、导航、侧边栏；首页/快速上手/认证/输出通道四页中英双语正文 | 公开内容校验通过，站点可构建 |
 | M11-P3 ✅ | 全章节双语正文迁移 | 配置各命名空间、CLI、MCP、VCS/agent 集成、Docker/Podman 部署、运维、参考、排障、贡献指南全部替换为中英双语正文；新增公开/内部内容边界校验 | markdownlint、公开内容校验、站点构建、字段/命令抽查通过 |
-| M11-P4 | 配置/CLI 参考校验自动化 | 从 Zod schema 和 CLI help 建立可校验参考页流程 | 生成或校验脚本可重复运行 |
+| M11-P4 ✅ | 配置/CLI 参考校验自动化 | `docs/site/scripts/` 三个零依赖校验器（config reference、CLI reference、internal links）接入 `docs:build`/`docs:check` | `pnpm docs:build` 全链通过；阴性测试（注入坏链接/坏锚点）确认可检出 |
 | M11-P5 ✅ | 发布链路 | main 文档变更自动构建并通过 SSH deploy key 发布到 `gh-pages`；保留 `aicr.atframe.work` 自定义域名和发布说明 | `pnpm docs:build` 可本地验证；线上需 Pages source 指向 `gh-pages` / `/` 并绑定 custom domain |
-| M11-P6 | 打磨与维护机制 | SEO、链接检查、贡献规则 | CI 可阻止常见文档漂移 |
+| M11-P6 | 打磨与维护机制 | 内部链接检查已随 M11-P4 落地；剩余 SEO 与贡献规则自动化 | CI 可阻止常见文档漂移（链接/锚点/字段覆盖/CLI 一致性已阻止） |
 
 ## 9. 风险与缓解
 
@@ -507,7 +512,7 @@ M11-P3 后续打磨（查缺补漏，2026-07）：
 - ✅ `troubleshooting/index.md` 补充两条常见问题：dashboard admin 未配置、GitHub issue 写回
   403/404（token 权限与 App 重装）。
 
-待后续阶段（P6）：引入链接检查、配置字段覆盖校验脚本、SEO 与贡献规则自动化；线上发布还需在 GitHub Pages 设置中确认 `gh-pages` / `/` 发布源。
+待后续阶段（P6）：SEO 与贡献规则自动化；线上发布还需在 GitHub Pages 设置中确认 `gh-pages` / `/` 发布源。（链接检查与配置字段覆盖校验已随 M11-P4 落地。）
 
 M11-P6 打磨（首页组件修复 + 首页再丰富 + 4K 全宽 + README/logo，2026-07）：
 
@@ -543,3 +548,22 @@ M11 后续修订（全文事实核验 + 去AI化改写，2026-08）：
   空洞收尾段与预告句）；写作规则沉淀为 `.agents/skills/docs-writing-style/SKILL.md`，
   并在根 `AGENTS.md` 挂了常驻规则。
 - ✅ 门禁：markdownlint、`pnpm docs:check`、`pnpm docs:build`（54 页）全部通过。
+
+M11-P4 配置/CLI 参考校验自动化（2026-08）：
+
+- ✅ `docs/site/scripts/validate-config-reference.mjs`：经 `ts-source-hooks.mjs` 解析钩子
+  （`.js` → `.ts` 源映射）+ Node 原生 type stripping 直接导入 `appConfigSchema`，遍历
+  Zod 树收集全部可寻址节点；双向校验双语 `reference/config-fields.md`（schema 叶子字段
+  必须有精确行或显式允许的子树汇总行、文档行不得臆造、双 locale 字段集相等、枚举参考表按序等于
+  schema 枚举）。passthrough 接受但未声明的字段走显式允许清单（清单过期即报错）。
+- ✅ `docs/site/scripts/validate-cli-reference.mjs`：从 `packages/cli/src/app.ts` 源码提取
+  parseArgs 选项（大括号深度扫描）、dispatch 命令与 helpText；校验 helpText ↔ parseArgs、
+  helpText ↔ 双语 `reference/cli.md` 三方一致。
+- ✅ `docs/site/scripts/validate-internal-links.mjs`：53 页站内链接/MDX href/锚点（GitHub
+  slug 规则，保留 CJK、去重后缀）/`public/` 静态资源解析 + sidebar slug 双向覆盖校验。
+- ✅ 接入 `docs/site/package.json` 的 `build`/`check` 链与独立 `validate:*` 脚本；
+  CI docs job（Node 24）自动生效，无新增依赖、不改 lockfile。
+- ✅ 修复真实漂移：双语参考表补 `triggers[].app`（M12 GitHub App 认证块）6 行；
+  CLI helpText 补 `--author-display-name`/`--operator-override`/`--memory-hint`/
+  `--task-context`。
+- ✅ 同步 `Plan.md`、本文件、`docs/site/README.md`、中英 `development/index.md`。

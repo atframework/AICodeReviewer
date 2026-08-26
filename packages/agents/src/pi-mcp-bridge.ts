@@ -4,8 +4,9 @@
  * pi has no built-in MCP client (an explicit upstream design decision); the
  * documented integration path is a TypeScript extension. The generated file lives
  * at `<PI_CODING_AGENT_DIR>/extensions/aicr-output.ts`, a user-level location that
- * loads without project trust, and pi awaits async extension factories before the
- * first model call, so bridged tools are registered before turn one.
+ * loads without project trust. The factory only registers lifecycle handlers;
+ * long-lived MCP processes start from pi's awaited `session_start` event and are
+ * stopped on `session_shutdown`.
  *
  * Tool names are exposed as `pi_<server>_<tool>` (sanitized to [A-Za-z0-9_]), which
  * the orchestrator's normalizeToolName maps back to canonical `aicr.*` names via the
@@ -68,6 +69,7 @@ class StdioMcpClient {
     });
     this.child.stdout.setEncoding("utf8");
     this.child.stdout.on("data", (chunk) => this.onData(chunk));
+    this.child.stdin.on("error", (err) => this.failAll(err));
     this.child.on("error", (err) => this.failAll(err));
     this.child.on("exit", (code, signal) => {
       this.failAll(new Error("MCP server " + this.spec.name + " exited (code=" + code + ", signal=" + signal + ")"));
@@ -79,7 +81,7 @@ class StdioMcpClient {
       return;
     }
     this.buffer += chunk;
-    if (this.buffer.length > MAX_BUFFER_BYTES) {
+    if (Buffer.byteLength(this.buffer, "utf8") > MAX_BUFFER_BYTES) {
       this.failAll(new Error("MCP server " + this.spec.name + " exceeded the maximum message buffer"));
       this.dispose();
       return;
@@ -172,6 +174,7 @@ class StdioMcpClient {
   }
 
   dispose() {
+    this.failAll(new Error("MCP server " + this.spec.name + " was stopped"));
     try {
       this.child.kill();
     } catch {
@@ -188,7 +191,7 @@ function toToolResultText(result) {
   return text.length > 0 ? text : JSON.stringify(result === undefined ? null : result);
 }
 
-export default async function aicrOutputBridge(pi) {
+export default function aicrOutputBridge(pi) {
   const raw = process.env[SERVERS_ENV];
   if (!raw) {
     return;
@@ -205,50 +208,62 @@ export default async function aicrOutputBridge(pi) {
   }
 
   const clients = [];
+  let startPromise;
   const killAll = () => {
-    for (const client of clients) {
+    for (const client of clients.splice(0)) {
       client.dispose();
+    }
+    startPromise = undefined;
+  };
+  const startAll = async () => {
+    for (const spec of specs) {
+      if (!spec || !Array.isArray(spec.command) || spec.command.length === 0 || typeof spec.command[0] !== "string") {
+        continue;
+      }
+      const client = new StdioMcpClient(spec);
+      clients.push(client);
+      try {
+        await client.initialize();
+        const tools = await client.listTools();
+        for (const tool of tools) {
+          if (!tool || typeof tool.name !== "string") {
+            continue;
+          }
+          pi.registerTool({
+            name: bridgeToolName(spec.name, tool.name),
+            label: spec.name + ":" + tool.name,
+            description: (typeof tool.description === "string" && tool.description.length > 0
+              ? tool.description
+              : tool.name) + " (AICR tool " + tool.name + ")",
+            parameters: Type.Unsafe(
+              tool.inputSchema && typeof tool.inputSchema === "object" ? tool.inputSchema : { type: "object" },
+            ),
+            execute: async (_toolCallId, params) => {
+              const result = await client.callTool(tool.name, params);
+              const out = { content: [{ type: "text", text: toToolResultText(result) }] };
+              if (result && result.isError === true) {
+                out.isError = true;
+              }
+              return out;
+            },
+          });
+        }
+      } catch (error) {
+        logBridgeError("server " + spec.name + " failed to initialize:", error);
+        client.dispose();
+        const index = clients.indexOf(client);
+        if (index >= 0) {
+          clients.splice(index, 1);
+        }
+      }
     }
   };
+  const ensureStarted = () => {
+    startPromise ||= startAll();
+    return startPromise;
+  };
+  pi.on("session_start", ensureStarted);
   pi.on("session_shutdown", killAll);
   process.on("exit", killAll);
-
-  for (const spec of specs) {
-    if (!spec || !Array.isArray(spec.command) || spec.command.length === 0 || typeof spec.command[0] !== "string") {
-      continue;
-    }
-    const client = new StdioMcpClient(spec);
-    try {
-      await client.initialize();
-      const tools = await client.listTools();
-      clients.push(client);
-      for (const tool of tools) {
-        if (!tool || typeof tool.name !== "string") {
-          continue;
-        }
-        pi.registerTool({
-          name: bridgeToolName(spec.name, tool.name),
-          label: spec.name + ":" + tool.name,
-          description: (typeof tool.description === "string" && tool.description.length > 0
-            ? tool.description
-            : tool.name) + " (AICR tool " + tool.name + ")",
-          parameters: Type.Unsafe(
-            tool.inputSchema && typeof tool.inputSchema === "object" ? tool.inputSchema : { type: "object" },
-          ),
-          execute: async (_toolCallId, params) => {
-            const result = await client.callTool(tool.name, params);
-            const out = { content: [{ type: "text", text: toToolResultText(result) }] };
-            if (result && result.isError === true) {
-              out.isError = true;
-            }
-            return out;
-          },
-        });
-      }
-    } catch (error) {
-      logBridgeError("server " + spec.name + " failed to initialize:", error);
-      client.dispose();
-    }
-  }
 }
 `;

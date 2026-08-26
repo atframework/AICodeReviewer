@@ -1882,7 +1882,7 @@ describe("summarizeReviewOrchestrationForWebhook", () => {
             content: [{ type: "text", text: summaryText }],
             stopReason: "stop",
             usage: {
-              input: 500, output: 30, cacheRead: 0, cacheWrite: 0, totalTokens: 530,
+              input: 500, output: 30, cacheRead: 0, cacheWrite: 0,
               cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.0005 },
             },
           },
@@ -1890,6 +1890,7 @@ describe("summarizeReviewOrchestrationForWebhook", () => {
         { type: "agent_end", messages: [] },
       ].map((e) => JSON.stringify(e)).join("\n");
       const spawnCalls: SandboxSpawnOptions[] = [];
+      let bundleManifest: { envKeys?: string[] } | undefined;
       const sandbox: SandboxBackend = {
         kind: "native",
         async materializeFs(layout) {
@@ -1899,6 +1900,9 @@ describe("summarizeReviewOrchestrationForWebhook", () => {
         },
         async spawn(spawnOptions) {
           spawnCalls.push(spawnOptions);
+          bundleManifest = JSON.parse(await readFile(join(spawnOptions.cwd, "manifest.json"), "utf8")) as {
+            envKeys?: string[];
+          };
           return { exitCode: 0, stdout: piStream, stderr: "", timedOut: false, durationMs: 9 };
         },
         async teardown() {},
@@ -1955,12 +1959,82 @@ describe("summarizeReviewOrchestrationForWebhook", () => {
       const agentSpawn = spawnCalls[0];
       const agentDir = String(agentSpawn?.cwd ?? "");
       expect(agentSpawn?.env?.PI_CODING_AGENT_DIR).toBe(join(agentDir, ".pi-agent"));
+      expect(bundleManifest?.envKeys).toContain("PI_CODING_AGENT_DIR");
       const bridgeSpecs = JSON.parse(String(agentSpawn?.env?.AICR_PI_MCP_SERVERS ?? "[]"));
       expect(bridgeSpecs).toHaveLength(1);
       expect(bridgeSpecs[0].name).toBe("aicr-output");
       expect(bridgeSpecs[0].environment.AICR_OUTPUT_STATE_PATH).toBe(
         join(agentDir, ".aicr-output-state.json"),
       );
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not synthesize pi usage or cost when assistant messages omit usage", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-pi-no-usage-"));
+
+    try {
+      await writeWorkspaceFile(tempDir, "src/app.ts", "const ok = true;\n");
+      const piStream = [
+        { type: "session", version: 3, id: "s-no-usage", cwd: "/workspace/agent" },
+        {
+          type: "message_end",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: JSON.stringify({ skipReason: "lgtm" }) }],
+            stopReason: "stop",
+          },
+        },
+      ].map((event) => JSON.stringify(event)).join("\n");
+      const sandbox: SandboxBackend = {
+        kind: "native",
+        async materializeFs(layout) {
+          await mkdir(layout.agentDir, { recursive: true });
+          await mkdir(layout.tmpDir, { recursive: true });
+          return { agentDir: layout.agentDir, tmpDir: layout.tmpDir, mountSpecs: [] };
+        },
+        async spawn() {
+          return { exitCode: 0, stdout: piStream, stderr: "", timedOut: false, durationMs: 4 };
+        },
+        async teardown() {},
+      };
+      const agentAdapter: AgentAdapter = {
+        kind: "pi",
+        async detect() { return { available: true, binary: "pi" }; },
+        buildCommand() { return ["pi", "--mode", "json"]; },
+        buildStdin() { return ""; },
+        async materializeConfig(_m, workingDir) {
+          return { configFiles: new Map(), envVars: {}, workingDir };
+        },
+      };
+
+      const result = await runReviewOrchestration(
+        {
+          reviewEvent: createReviewEventFixture(),
+          payload: {},
+          provider: "gitea",
+          eventName: "pull_request",
+        },
+        {
+          baseSystemPrompt: "{{TASK_CONTEXT}}",
+          sourceRootResolver: () => tempDir,
+          vcs: createVcs(tempDir),
+          llm: { async complete() { throw new Error("direct llm must not be called"); } },
+          model,
+          sandbox,
+          agentAdapter,
+          logThinking: false,
+        },
+      );
+
+      expect(result.llmResult.usage).toBeUndefined();
+      expect(result.estimatedCostUsd).toBeUndefined();
+      expect(result.requestCount).toBe(1);
+      expect(summarizeReviewOrchestrationForWebhook(result)).not.toMatchObject({
+        llmUsage: expect.anything(),
+        estimatedCostUsd: expect.anything(),
+      });
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }

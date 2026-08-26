@@ -210,7 +210,7 @@ review:
 ```yaml
 review:
   problem_issue:
-    max_recent_issues: 20   # 默认；有效范围 1..100
+    max_recent_issues: 30   # 默认；有效范围 1..200
 
 workspaces:
   instances:

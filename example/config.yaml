@@ -709,9 +709,9 @@ review:
     auto_tag: "aicr"
     reviewed_tag: "aicr:reviewed"
   # Managed problem issue lifecycle scan cap. AICR lists only the most recent
-  # open managed issues before closing stale ones. Range: 1..100, default: 20.
+  # open managed issues before closing stale ones. Range: 1..200, default: 30.
   problem_issue:
-    max_recent_issues: 20
+    max_recent_issues: 30
   # Reflection memory: learn abstract patterns from past reviews in the same workspace.
   # Enabled by default when admin auth + store are configured.
   # Stored memory is scrubbed and abstract: category/severity/file type/scope,

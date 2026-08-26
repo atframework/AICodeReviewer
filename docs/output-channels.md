@@ -174,11 +174,12 @@ pending re-review and runs after the current review completes.
 
 Managed issue lifecycle reconciliation is intentionally bounded. Before closing or deleting stale managed issues, AICR lists only the most recent open issues up to the effective `review.problem_issue.max_recent_issues` value:
 
-- Default: `20`.
-- Supported range: `1` to `100`.
+- Default: `30`.
+- Supported range: `1` to `200`.
 - Precedence: global `review.problem_issue.max_recent_issues`, then `workspaces.defaults.review.problem_issue.max_recent_issues`, then `workspaces.instances.<workspace_id>.review.problem_issue.max_recent_issues`.
-- GitHub uses the repository issues API with `sort=updated`, `direction=desc`, `per_page=<limit>`, and `page=1`.
-- Gitea/Forgejo uses the repository issues API with `type=issues`, `limit=<limit>`, and `page=1` for broad version compatibility.
+- Only open issues are listed (`state=open`).
+- GitHub uses the repository issues API with `sort=updated`, `direction=desc`, and pages of up to `per_page=100` until the configured window is covered.
+- Gitea/Forgejo uses the repository issues API with `type=issues` and pages of up to `limit=50` (the server default `MAX_RESPONSE_ITEMS`) until the configured window is covered.
 
 When a repository has more open managed problem issues than the limit, fingerprints outside the recent window are not deduplicated or closed in that run. Temporarily raise the limit, or run repeated scheduled reviews, when doing a one-time cleanup of a large backlog.
 
@@ -193,7 +194,7 @@ Problems are deduplicated by fingerprint at every layer of the pipeline to preve
 ```yaml
 review:
   problem_issue:
-    max_recent_issues: 20
+    max_recent_issues: 30
 
 workspaces:
   instances:

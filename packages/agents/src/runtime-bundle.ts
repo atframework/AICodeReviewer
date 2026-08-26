@@ -188,9 +188,12 @@ function computeContextCompactionManifest(
     case "kilo":
     case "zoo":
     case "opencode":
-    case "pi":
     case "oh-my-pi":
       return { enabled: !!compaction?.auto, mode: "injected" };
+    case "pi":
+      // pi only accepts the enable/disable switch from AICR; threshold and
+      // compaction timing remain owned by the CLI.
+      return { enabled: !!compaction?.auto, mode: "delegated" };
     case "claude-code":
       return { enabled: compaction?.auto !== false, mode: "delegated" };
     case "copilot-cli":

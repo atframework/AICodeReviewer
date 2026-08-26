@@ -10,11 +10,20 @@ import {
   type ReviewProblem,
 } from "../src/index.js";
 
-function response(body: unknown, status = 200): Awaited<ReturnType<FetchLike>> {
+function response(
+  body: unknown,
+  status = 200,
+  responseHeaders: Readonly<Record<string, string>> = {},
+): Awaited<ReturnType<FetchLike>> {
   return {
     ok: status >= 200 && status < 300,
     status,
     statusText: status === 200 ? "OK" : "Error",
+    headers: {
+      get(name) {
+        return responseHeaders[name.toLowerCase()] ?? null;
+      },
+    },
     async json() {
       return body;
     },
@@ -66,7 +75,7 @@ describe("createGiteaProblemIssueDispatcher", () => {
 
     expect(results).toHaveLength(1);
     expect(results[0]?.externalId).toBe("99");
-    expect(calls[0]?.url).toBe("https://gitea.example/api/v1/repos/owent/example/issues?state=open&type=issues&limit=20&page=1");
+    expect(calls[0]?.url).toBe("https://gitea.example/api/v1/repos/owent/example/issues?state=open&type=issues&limit=30&page=1");
     expect(calls[1]?.url).toBe("https://gitea.example/api/v1/repos/owent/example/issues");
     expect(calls[1]?.init?.headers).toMatchObject({ authorization: "token token-value" });
     const body = JSON.parse(calls[1]?.init?.body ?? "{}");
@@ -133,7 +142,7 @@ describe("createGiteaProblemIssueDispatcher", () => {
     expect(results).toHaveLength(1);
     expect(results[0]?.raw).toMatchObject({ action: "closed", issueNumber: 42 });
     expect(calls.map((call) => `${call.init?.method ?? "GET"} ${call.url}`)).toEqual([
-      "GET https://gitea.example/api/v1/repos/owent/example/issues?state=open&type=issues&limit=20&page=1",
+      "GET https://gitea.example/api/v1/repos/owent/example/issues?state=open&type=issues&limit=30&page=1",
       "POST https://gitea.example/api/v1/repos/owent/example/issues/42/comments",
       "PATCH https://gitea.example/api/v1/repos/owent/example/issues/42",
       "GET https://gitea.example/api/v1/repos/owent/example/issues/42",
@@ -160,6 +169,77 @@ describe("createGiteaProblemIssueDispatcher", () => {
     expect(calls).toEqual([
       "https://gitea.example/api/v1/repos/owent/example/issues?state=open&type=issues&limit=7&page=1",
     ]);
+  });
+
+  it("paginates the managed issue window when the limit exceeds the Gitea page size", async () => {
+    const calls: string[] = [];
+    const fullPage = Array.from({ length: 50 }, (_, index) => ({
+      number: index + 1,
+      title: "unrelated issue",
+      body: "not managed",
+      state: "open",
+    }));
+    const dispatcher = createGiteaProblemIssueDispatcher({
+      baseUrl: "https://gitea.example",
+      owner: "owent",
+      repo: "example",
+      issueMode: "per_problem",
+      maxRecentIssues: 200,
+      fetch: async (url) => {
+        calls.push(url);
+        return response(calls.length < 4 ? fullPage : fullPage.slice(0, 20));
+      },
+    });
+
+    await dispatcher.reconcileProblems([]);
+
+    expect(calls).toEqual([
+      "https://gitea.example/api/v1/repos/owent/example/issues?state=open&type=issues&limit=50&page=1",
+      "https://gitea.example/api/v1/repos/owent/example/issues?state=open&type=issues&limit=50&page=2",
+      "https://gitea.example/api/v1/repos/owent/example/issues?state=open&type=issues&limit=50&page=3",
+      "https://gitea.example/api/v1/repos/owent/example/issues?state=open&type=issues&limit=50&page=4",
+    ]);
+  });
+
+  it("honors a partial final window when the Gitea server clamps page size", async () => {
+    const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
+    const serverClampedPage = Array.from({ length: 20 }, (_, index) => ({
+      number: index + 1,
+      title: "unrelated issue",
+      body: "not managed",
+      state: "open",
+    }));
+    const dispatcher = createGiteaProblemIssueDispatcher({
+      baseUrl: "https://gitea.example",
+      owner: "owent",
+      repo: "example",
+      issueMode: "per_problem",
+      maxRecentIssues: 51,
+      fetch: async (url, init) => {
+        calls.push({ url, init });
+        if (url.includes("page=1")) {
+          return response(serverClampedPage, 200, { link: '<https://gitea.example/page=2>; rel="next"' });
+        }
+        if (url.includes("page=2")) {
+          return response(serverClampedPage, 200, { link: '<https://gitea.example/page=3>; rel="next"' });
+        }
+        if (url.includes("page=3")) {
+          return response([
+            ...serverClampedPage.slice(0, 10),
+            { number: 51, title: "[AICR] in window", body: managedBody, state: "open" },
+            { number: 52, title: "[AICR] out of window", body: managedBody, state: "open" },
+          ]);
+        }
+        return response({ id: calls.length });
+      },
+    });
+
+    const results = await dispatcher.reconcileProblems([]);
+
+    expect(results).toHaveLength(1);
+    expect(results[0]?.raw).toMatchObject({ action: "closed", issueNumber: 51 });
+    expect(calls.some((call) => call.url.includes("/issues/52"))).toBe(false);
+    expect(calls.filter((call) => call.url.includes("?state=open"))).toHaveLength(3);
   });
 
   it("deletes stale managed issues when configured", async () => {

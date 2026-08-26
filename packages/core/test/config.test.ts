@@ -852,9 +852,10 @@ describe("mergeConfigLayers", () => {
     expect(resolveWorkspaceConfig(merged, "defaulted-workspace").review?.problem_issue?.max_recent_issues).toBe(30);
   });
 
-  it("rejects managed problem issue fetch limits outside the supported API page size", () => {
+  it("rejects managed problem issue fetch limits outside the supported range", () => {
     expect(appConfigSchema.safeParse({ review: { problem_issue: { max_recent_issues: 0 } } }).success).toBe(false);
-    expect(appConfigSchema.safeParse({ review: { problem_issue: { max_recent_issues: 101 } } }).success).toBe(false);
+    expect(appConfigSchema.safeParse({ review: { problem_issue: { max_recent_issues: 201 } } }).success).toBe(false);
+    expect(appConfigSchema.safeParse({ review: { problem_issue: { max_recent_issues: 200 } } }).success).toBe(true);
   });
 
   it("accepts review reflection modes from Plan §3.12", () => {

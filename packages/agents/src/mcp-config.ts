@@ -12,17 +12,41 @@ interface CanonicalRemoteServer {
   readonly headers?: Readonly<Record<string, string>>;
 }
 
+function isStringRecord(value: unknown): value is Readonly<Record<string, string>> {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    Object.values(value).every((entry) => typeof entry === "string")
+  );
+}
+
 function asLocal(config: Readonly<Record<string, unknown>>): CanonicalLocalServer | undefined {
   if (config.type !== "local" || !Array.isArray(config.command)) return undefined;
-  const command = (config.command as unknown[]).filter((part): part is string => typeof part === "string");
-  if (command.length === 0) return undefined;
-  const environment = config.environment as Readonly<Record<string, string>> | undefined;
+  const [executable] = config.command;
+  if (
+    typeof executable !== "string" ||
+    executable.trim().length === 0 ||
+    !config.command.every((part): part is string => typeof part === "string") ||
+    (config.environment !== undefined && !isStringRecord(config.environment))
+  ) {
+    return undefined;
+  }
+  const command = config.command;
+  const environment = config.environment;
   return { type: "local", command, ...(environment ? { environment } : {}) };
 }
 
 function asRemote(config: Readonly<Record<string, unknown>>): CanonicalRemoteServer | undefined {
-  if (config.type !== "remote" || typeof config.url !== "string") return undefined;
-  const headers = config.headers as Readonly<Record<string, string>> | undefined;
+  if (
+    config.type !== "remote" ||
+    typeof config.url !== "string" ||
+    config.url.trim().length === 0 ||
+    (config.headers !== undefined && !isStringRecord(config.headers))
+  ) {
+    return undefined;
+  }
+  const headers = config.headers;
   return { type: "remote", url: config.url, ...(headers ? { headers } : {}) };
 }
 

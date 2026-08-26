@@ -393,7 +393,7 @@ const reviewSchema = z
       .optional(),
     problem_issue: z
       .object({
-        max_recent_issues: z.number().int().min(1).max(100).optional(),
+        max_recent_issues: z.number().int().min(1).max(200).optional(),
       })
       .strict()
       .optional(),

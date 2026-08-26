@@ -831,8 +831,8 @@ interface PiStreamExtractionResult {
   readonly stepCount: number;
 }
 
-function readPiUsageCount(value: unknown): number {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? Math.trunc(value) : 0;
+function readPiUsageCount(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? Math.trunc(value) : undefined;
 }
 
 /**
@@ -852,6 +852,8 @@ function extractPiJsonStreamContent(stdout: string): PiStreamExtractionResult {
   const eventCounts: Record<string, number> = {};
   const totals = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
   let costUsd = 0;
+  let usageObserved = false;
+  let costObserved = false;
   let stepCount = 0;
   let lastStopReason: string | undefined;
   let lastErrorMessage: string | undefined;
@@ -881,14 +883,32 @@ function extractPiJsonStreamContent(stdout: string): PiStreamExtractionResult {
       }
       const usage = message.usage as Record<string, unknown> | undefined;
       if (usage) {
-        totals.input += readPiUsageCount(usage.input);
-        totals.output += readPiUsageCount(usage.output);
-        totals.cacheRead += readPiUsageCount(usage.cacheRead);
-        totals.cacheWrite += readPiUsageCount(usage.cacheWrite);
-        totals.total += readPiUsageCount(usage.totalTokens);
+        const input = readPiUsageCount(usage.input);
+        const output = readPiUsageCount(usage.output);
+        const cacheRead = readPiUsageCount(usage.cacheRead);
+        const cacheWrite = readPiUsageCount(usage.cacheWrite);
+        const total = readPiUsageCount(usage.totalTokens);
+        if (
+          input !== undefined
+          || output !== undefined
+          || cacheRead !== undefined
+          || cacheWrite !== undefined
+          || total !== undefined
+        ) {
+          usageObserved = true;
+          const computedTotal = (input ?? 0) + (output ?? 0) + (cacheRead ?? 0) + (cacheWrite ?? 0);
+          totals.input += input ?? 0;
+          totals.output += output ?? 0;
+          totals.cacheRead += cacheRead ?? 0;
+          totals.cacheWrite += cacheWrite ?? 0;
+          // Some compatible emitters omit totalTokens on individual messages.
+          // Fall back per message so a later reported total cannot hide that usage.
+          totals.total += total ?? computedTotal;
+        }
         const cost = usage.cost as Record<string, unknown> | undefined;
         const costTotal = cost?.total;
         if (typeof costTotal === "number" && Number.isFinite(costTotal) && costTotal >= 0) {
+          costObserved = true;
           costUsd += costTotal;
         }
       }
@@ -917,12 +937,11 @@ function extractPiJsonStreamContent(stdout: string): PiStreamExtractionResult {
 
   const promptTokens = totals.input + totals.cacheRead + totals.cacheWrite;
   const completionTokens = totals.output;
-  const hasUsage = stepCount > 0 || promptTokens > 0 || completionTokens > 0 || totals.total > 0;
-  const usage: ChatCompletionUsage | undefined = hasUsage
+  const usage: ChatCompletionUsage | undefined = usageObserved
     ? {
       promptTokens,
       completionTokens,
-      totalTokens: totals.total > 0 ? totals.total : promptTokens + completionTokens,
+      totalTokens: totals.total,
       ...(totals.cacheRead > 0 ? { cachedPromptTokens: totals.cacheRead } : {}),
       ...(totals.cacheWrite > 0 ? { cacheCreationTokens: totals.cacheWrite } : {}),
     }
@@ -933,7 +952,7 @@ function extractPiJsonStreamContent(stdout: string): PiStreamExtractionResult {
     toolCallEvents,
     eventCounts,
     ...(usage ? { usage } : {}),
-    ...(stepCount > 0 ? { costUsd } : {}),
+    ...(costObserved ? { costUsd } : {}),
     stepCount,
   };
 }
@@ -1040,6 +1059,11 @@ async function runAgentReview(
     const outputStatePath = sandbox.kind === "native"
       ? join(sandboxAgentDir, ".aicr-output-state.json")
       : `${sandboxAgentDir}/.aicr-output-state.json`;
+    const configDirEnvVars = agentConfigDirEnvVars(
+      agentAdapter.kind,
+      sandboxAgentDir,
+      sandbox.kind === "native",
+    );
     const mcpServers = bundleContext?.mcpServers?.map((server) => server.name === "aicr-output"
       ? {
         name: server.name,
@@ -1060,6 +1084,7 @@ async function runAgentReview(
       ...(bundleContext?.skills ? { skills: bundleContext.skills } : {}),
       ...(bundleContext?.mcpTools ? { mcpTools: bundleContext.mcpTools } : {}),
       ...(mcpServers ? { mcpServers } : {}),
+      ...(Object.keys(configDirEnvVars).length > 0 ? { extraEnvVars: configDirEnvVars } : {}),
       ...(bundleContext?.compaction ? { compaction: bundleContext.compaction } : {}),
       ...(bundleContext?.runId ? { runId: bundleContext.runId } : {}),
     });
@@ -1076,7 +1101,6 @@ async function runAgentReview(
       ? agentAdapter.buildStdin(task, agentSpawnOptions)
       : task;
     const env = resolveEnvPlaceholders(bundle.envVars);
-    Object.assign(env, agentConfigDirEnvVars(agentAdapter.kind, sandboxAgentDir, sandbox.kind === "native"));
 
     await rm(join(materializedFs.agentDir, ".aicr-output-state.json"), { force: true });
 

@@ -63,7 +63,7 @@ export function resolvePiFamilyBaseUrl(model: ModelSpec): string | undefined {
  * ReasoningEffort set is a strict subset, so values pass through unchanged.
  */
 export function resolvePiFamilyThinking(model: ModelSpec): string | undefined {
-  return model.defaultReasoningEffort ?? model.reasoningEffort;
+  return model.reasoningEffort ?? model.defaultReasoningEffort;
 }
 
 function buildPiFamilyInputModalities(model: ModelSpec): string[] {

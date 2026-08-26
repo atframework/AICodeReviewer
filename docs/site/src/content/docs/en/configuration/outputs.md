@@ -220,7 +220,7 @@ issues by listing only the most recent open issues. The cap lives under
 ```yaml
 review:
   problem_issue:
-    max_recent_issues: 20   # default; valid range is 1..100
+    max_recent_issues: 30   # default; valid range is 1..200
 
 workspaces:
   instances:

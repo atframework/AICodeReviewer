@@ -91,6 +91,9 @@ export interface ResponseLike {
 	readonly ok: boolean;
 	readonly status: number;
 	readonly statusText: string;
+	readonly headers?: {
+		get(name: string): string | null;
+	};
 	json(): Promise<unknown>;
 	text(): Promise<string>;
 }
@@ -1583,8 +1586,13 @@ export type ProblemIssueMode = "per_problem" | "consolidated" | "per_commit";
 
 export type GithubProblemIssueResolvedAction = "none" | "close" | "mark_resolved";
 
-const DEFAULT_MANAGED_ISSUE_FETCH_LIMIT = 20;
-const MAX_MANAGED_ISSUE_FETCH_LIMIT = 100;
+const DEFAULT_MANAGED_ISSUE_FETCH_LIMIT = 30;
+const MAX_MANAGED_ISSUE_FETCH_LIMIT = 200;
+// GitHub caps `per_page` at 100; Gitea/Forgejo caps `limit` at MAX_RESPONSE_ITEMS
+// (server default 50). Page through the configured window with these sizes so a
+// limit above the platform cap is still honored.
+const GITHUB_ISSUE_PAGE_SIZE = 100;
+const GITEA_ISSUE_PAGE_SIZE = 50;
 
 function normalizeManagedIssueFetchLimit(limit: number | undefined): number {
 	if (limit === undefined || !Number.isFinite(limit)) {
@@ -1862,15 +1870,26 @@ export function createGithubProblemIssueDispatcher(options: GithubProblemIssueOp
 	}
 
 	async function listManagedOpenIssues(): Promise<readonly ManagedGithubIssue[]> {
-		const params = new URLSearchParams({
-			state: "open",
-			sort: "updated",
-			direction: "desc",
-			per_page: String(maxRecentIssues),
-			page: "1",
-		});
-		const raw = await request("GET", `${repoPath}/issues?${params.toString()}`);
-		return parseManagedGithubIssues(raw, markerPrefix, markerLabel);
+		const pageSize = Math.min(GITHUB_ISSUE_PAGE_SIZE, maxRecentIssues);
+		const maxPages = Math.ceil(maxRecentIssues / pageSize);
+		const issues: ManagedGithubIssue[] = [];
+		for (let page = 1; page <= maxPages; page += 1) {
+			const params = new URLSearchParams({
+				state: "open",
+				sort: "updated",
+				direction: "desc",
+				per_page: String(pageSize),
+				page: String(page),
+			});
+			const raw = await request("GET", `${repoPath}/issues?${params.toString()}`);
+			const remainingWindow = maxRecentIssues - (page - 1) * pageSize;
+			const windowedRaw = Array.isArray(raw) ? raw.slice(0, remainingWindow) : raw;
+			issues.push(...parseManagedGithubIssues(windowedRaw, markerPrefix, markerLabel));
+			if (!Array.isArray(raw) || raw.length < pageSize) {
+				break;
+			}
+		}
+		return issues;
 	}
 
 	function resolveAssignees(problem: ReviewProblem, owners: OwnersConfig | undefined): string[] {
@@ -3616,7 +3635,7 @@ export function createGiteaProblemIssueDispatcher(options: GiteaProblemIssueOpti
 
 	const severityLabelCache = new Map<string, number>();
 
-	async function request(method: string, endpoint: string, body?: unknown): Promise<unknown> {
+	async function checkedRequest(method: string, endpoint: string, body?: unknown): Promise<ResponseLike> {
 		const response = await fetchImpl(endpoint, {
 			method,
 			headers,
@@ -3629,6 +3648,11 @@ export function createGiteaProblemIssueDispatcher(options: GiteaProblemIssueOpti
 				responseBody: await response.text(),
 			});
 		}
+		return response;
+	}
+
+	async function request(method: string, endpoint: string, body?: unknown): Promise<unknown> {
+		const response = await checkedRequest(method, endpoint, body);
 
 		if (response.status === 204) {
 			return {};
@@ -3830,14 +3854,37 @@ export function createGiteaProblemIssueDispatcher(options: GiteaProblemIssueOpti
 	}
 
 	async function listManagedOpenIssues(): Promise<readonly ManagedGiteaIssue[]> {
-		const params = new URLSearchParams({
-			state: "open",
-			type: "issues",
-			limit: String(maxRecentIssues),
-			page: "1",
-		});
-		const raw = await request("GET", `${repoPath}/issues?${params.toString()}`);
-		return parseManagedIssues(raw, markerPrefix, markerLabel);
+		const pageSize = Math.min(GITEA_ISSUE_PAGE_SIZE, maxRecentIssues);
+		const issues: ManagedGiteaIssue[] = [];
+		let listedCount = 0;
+		// Gitea/Forgejo can clamp the requested limit through the instance-level
+		// MAX_RESPONSE_ITEMS setting. A short non-empty page therefore is not a
+		// reliable end-of-list signal; continue until an empty page or the configured
+		// raw issue window is reached. maxRecentIssues also bounds the worst-case
+		// number of requests when an instance returns one item per page.
+		for (let page = 1; listedCount < maxRecentIssues && page <= maxRecentIssues; page += 1) {
+			const params = new URLSearchParams({
+				state: "open",
+				type: "issues",
+				limit: String(pageSize),
+				page: String(page),
+			});
+			const response = await checkedRequest("GET", `${repoPath}/issues?${params.toString()}`);
+			const raw = response.status === 204 ? {} : await response.json();
+			if (!Array.isArray(raw)) {
+				break;
+			}
+			const remainingWindow = maxRecentIssues - listedCount;
+			const windowedRaw = raw.slice(0, remainingWindow);
+			issues.push(...parseManagedIssues(windowedRaw, markerPrefix, markerLabel));
+			listedCount += windowedRaw.length;
+			const linkHeader = response.headers?.get("link");
+			const hasNextPage = linkHeader ? /\brel="?next"?/iu.test(linkHeader) : undefined;
+			if (raw.length === 0 || (raw.length < pageSize && hasNextPage !== true)) {
+				break;
+			}
+		}
+		return issues;
 	}
 
 	function resolveAssignees(problem: ReviewProblem, owners: OwnersConfig | undefined): string[] {

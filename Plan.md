@@ -22,8 +22,10 @@
 
 - M0-M10 的主要实现已归档，当前没有新的运行时代码本地执行包。
 - 当前活跃方向是 M11：可发布到 GitHub Pages 的用户文档站子工程。M11-P1（脚手架）、
-  M11-P2（骨架 + 首批核心页）、M11-P3（全章节双语正文迁移）和 M11-P5（发布 workflow）已完成；
-  下一步是 Pages 设置核验与 M11-P6 打磨（链接检查、配置字段覆盖校验）。
+  M11-P2（骨架 + 首批核心页）、M11-P3（全章节双语正文迁移）、M11-P5（发布 workflow）和
+  M11-P4（配置/CLI 参考校验自动化）已完成；M11-P6 的内部链接检查已随 M11-P4 落地
+  （`docs/site/scripts/` 四道校验接入 `pnpm docs:build`/`docs:check`）。剩余：
+  Pages 设置核验（外部）与 SEO/贡献规则自动化。
 - 新增运行时方向是 M12：GitHub App 原生认证。M12-P1–P4（配置 schema、token 服务、三个注入点
   接入、webhook 事件 + GHE + 文档）已完成；M12-P5（真实 App e2e / 公网正式环境切换）已完成：
   已将 `atframework-aicr` App 部署到公网正式环境，两个 GitHub trigger 已切到 `app` 认证，
@@ -225,7 +227,8 @@
 - 定向检查用于迭代定位；最后一次修改后必须重新运行全部适用门禁，并确认工具实际发现了预期文件或测试。在 Linux/CI 等 `pnpm` 可直接执行的环境中，最终 runtime 门禁以 `pnpm ci` 为准。
 - `Plan.md` 与 `docs/**/*.md` 共同接受 markdownlint 校验。
 - M11 已新增 `docs:build`、`docs:preview`、`docs:check`、`docs:dev` 脚本，CI 在
-  `.github/workflows/ci.yml` 的独立 `docs` job 中运行 `pnpm docs:build` 验证公开内容边界与静态站点构建。
+  `.github/workflows/ci.yml` 的独立 `docs` job 中运行 `pnpm docs:build`：先执行四道校验
+  （公开内容边界、配置字段覆盖、CLI 参考一致性、内部链接/锚点），再做静态站点构建。
 
 ## 8. 里程碑与执行顺序
 
@@ -279,7 +282,18 @@ sidebar/TOC 之间、splash 填满视口），渐进 padding + ≥176/224/300rem
 新增 `docs/site/public/favicon.svg`（logo/favicon）。
 README 增强 logo、扩展 badge、导航链接行、Review output standards / Security 章节。同步更新
 `validate-public-content.mjs`（扫描 `.md`+`.mdx`）、`AGENTS.md` #59、中英 `development/index.md`、
-`docs/site/README.md`。下一本地执行包建议：链接检查、配置字段覆盖校验脚本、SEO 与贡献规则自动化。
+`docs/site/README.md`。
+
+M11-P4 配置/CLI 参考校验自动化已落地（2026-08）：`docs/site/scripts/` 新增三个零依赖校验器并接入
+`pnpm docs:build` / `docs:check` 链（CI docs job 自动生效）。`validate-config-reference.mjs` 经
+Node 原生 type stripping 直接从 `packages/core/src/config.ts` 源码导入 Zod schema 做 introspection，
+双向校验 `en/zh-cn reference/config-fields.md` 字段表（schema 字段全覆盖、无臆造字段、双 locale
+一致、枚举参考表与 schema 枚举相等）；`validate-cli-reference.mjs` 从 `packages/cli/src/app.ts`
+提取 parseArgs 选项、dispatch 命令与 helpText，三方校验 `reference/cli.md` 双语页；
+`validate-internal-links.mjs`（M11-P6 项）校验全部站内链接、锚点、静态资源与 sidebar 双向覆盖。
+落地时修复的真实漂移：`triggers[].app`（M12 GitHub App 认证块）缺失于参考表（双语已补），
+CLI helpText 缺 `--author-display-name`/`--operator-override`/`--memory-hint`/`--task-context`
+四个已接受 flags（已补）。剩余本地项：SEO 与贡献规则自动化；线上项：Pages 设置核验。
 
 #### 8.2.1 M12 GitHub App 原生认证（P1–P5 已完成）
 
@@ -350,10 +364,10 @@ pi 的扩展桥接 MCP 哲学）沉淀进架构、prompts、skills 与文档。
   {command, args?, env?}}}` stdio 或 `{type:"http"|"sse", url, headers?}`，支持 `${VAR}` 展开与
   env 名间接），工具以 `mcp__<server>_<tool>`（小写、非字母数字转下划线）暴露，现有
   `normalizeToolName` 正则天然兼容。pi **明确不做内置 MCP**（官方哲学），官方路径是 TypeScript 扩展：
-  由 runtime bundle 生成 `<configDir>/extensions/aicr-output.ts`（用户级扩展不受 project trust 门控，
-  async factory 会在首个模型调用前被 await），扩展内用 node stdio JSON-RPC 桥接 aicr-output server，
-  以 `pi_aicr_*` 名 `registerTool`（`Type.Unsafe` 透传 MCP inputSchema），该命名命中现有
-  `<prefix>_aicr_<tool>` 归一化正则。
+  由 runtime bundle 生成 `<configDir>/extensions/aicr-output.ts`（用户级扩展不受 project trust 门控）；
+  factory 只注册生命周期 handler，扩展在 `session_start` 中启动并完成 node stdio JSON-RPC 发现，
+  以 `pi_aicr_*` 名 `registerTool`（`Type.Unsafe` 透传 MCP inputSchema），并在 `session_shutdown`
+  回收子进程；该命名命中现有 `<prefix>_aicr_<tool>` 归一化正则。
 - **指令与 skills 面**：两者都原生加载 cwd/父级 `AGENTS.md`、原生发现项目 `.agents/skills/<name>/SKILL.md`，
   与 bundle 现有物化布局零拷贝兼容。pi 对项目 `.agents/skills` 有 trust 门控，headless 下必须
   `--approve` 才会加载（bundle 目录完全由 AICR 物化，trust 安全）；omp 无此门控。pi 在原生沙箱下
@@ -394,7 +408,7 @@ pi 的扩展桥接 MCP 哲学）沉淀进架构、prompts、skills 与文档。
 | M11-P1 文档站脚手架 ✅ | Astro Starlight 创建 `docs/site`，接入 workspace、CI、Pages workflow 草案 | `pnpm docs:build` 公开内容校验 + 构建通过（51 页） |
 | M11-P2 信息架构骨架 + 首批核心页 ✅ | 全章节双语占位页 + 首页/快速上手/认证/输出通道四页中英双语正文 | 公开内容校验、站点构建和 markdownlint 通过 |
 | M11-P3 全章节正文迁移 ✅ | 配置各命名空间、CLI、MCP、VCS/agent 集成、Docker/Podman 部署、运维、参考、排障、贡献指南占位页全部替换为中英双语正文 | markdownlint、公开内容校验、站点构建、字段/命令抽查通过 |
-| M11-P4 配置/CLI 参考校验自动化 | 从 `packages/core/src/config.ts` 和 CLI help 建立可校验参考页流程 | 生成或校验脚本可重复运行 |
+| M11-P4 配置/CLI 参考校验自动化 ✅ | `docs/site/scripts/validate-config-reference.mjs` + `validate-cli-reference.mjs` + `validate-internal-links.mjs` 接入 `docs:build`/`docs:check`；schema↔参考页双向覆盖、CLI help↔parseArgs↔参考页三方一致、站内链接/锚点/sidebar 校验 | `pnpm docs:build` 全链通过（54 页）；曾注入坏链接/坏锚点的阴性测试确认能抓到漂移 |
 | M11-P5 发布链路 ✅ | main 文档变更触发 docs 构建并通过 `DEPLOY_DOCUMENT_GH_PAGES_KEY` 发布到 `gh-pages`；保留 `aicr.atframe.work` 自定义域名和发布说明 | `pnpm docs:build` 可本地验证；线上生效需仓库 Pages source 指向 `gh-pages` / `/` 并绑定自定义域名 |
 | M12-P1 GitHub App 配置 schema ✅ | `triggerSchema`（`packages/core/src/config.ts`）新增可选 `app` 块（`app_id`/`client_id`、`private_key_env`/`private_key_path`、可选 `installation_id`）+ superRefine 验证；同步 `config.test.ts`、`example/config.yaml`、文档 | `eslint` + `tsc` + `vitest` 通过；config 测覆盖合法/冲突/缺失三类用例 |
 | M12-P2 GithubAppTokenService ✅ | `packages/server/src/github-app-token.ts`：`node:crypto` RS256 JWT 签发、installation token 缓存/刷新（<5min 提前刷新）、repo→installation 解析与缓存、401/403/404 可操作错误映射 | 新增 `github-app-token.test.ts`（mock fetch + `generateKeyPairSync` 测密钥），JWT 结构/缓存/刷新/GHE base URL 均覆盖 |
