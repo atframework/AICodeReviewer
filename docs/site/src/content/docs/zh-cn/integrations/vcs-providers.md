@@ -185,7 +185,7 @@ triggers:
     user_env: AICR_P4USER
     password_env: AICR_P4PASSWORD       # 密码或登录 ticket
     depot_path: "//depot/main"
-    workspace: "aicr-p4-main"           # AICR 使用的 P4 client 名（仅用于分析）
+    workspace: "aicr-p4-main"           # AICR 使用的 P4 client 名（仅用于分析；服务器端被删后会自动重建）
     change_url_template: "https://swarm.example.com/changes/{{revision}}"
     watch_path: ["src/", "include/"]
     include_cr_file: ["**/*.cpp", "**/*.h"]
@@ -194,8 +194,14 @@ triggers:
 
 `port` 使用 `ssl:` 前缀时，服务端适配器在指纹未被信任时（首次连接或服务器密钥轮换，报
 `P4PORT IDENTIFICATION HAS CHANGED`）会自动执行一次 `p4 trust -y` 并重试该命令，不需要在 AICR
-容器内手动 trust。指纹写入运行用户的默认 trust 文件，可用 `P4TRUST` 环境变量改路径。自动信任不做
-指纹比对，只在可信内网使用。
+容器内手动 trust。密钥轮换产生的是不匹配指纹，`p4 trust -y` 会拒绝替换，此时适配器退到
+`p4 trust -y -f` 强制替换。指纹写入运行用户的默认 trust 文件，可用 `P4TRUST` 环境变量改路径。
+自动信任不做指纹比对，只在可信内网使用。
+
+如果配置的 `workspace` client 在 P4 服务器上被删除（报
+`Client '<name>' unknown - use 'client' command to create it.`），适配器会用最小只读 spec
+自动重建（`p4 client -i`，Root 指向 AICR workspace 目录，View 映射 `<depot_path>/...`），并对原
+命令重试一次。AICR 不执行 `p4 sync`，client 记录只需存在即可满足带 `-c` 的命令。
 
 用 `p4 triggers` 注册：
 

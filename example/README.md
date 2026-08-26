@@ -1031,7 +1031,7 @@ triggers:
     user_env: AICR_P4USER                 # env var for P4 username
     password_env: AICR_P4PASSWORD         # env var for P4 password or ticket
     depot_path: "//depot/main"            # depot or stream path
-    workspace: "aicr-p4-main"             # P4 workspace/client name
+    workspace: "aicr-p4-main"             # P4 workspace/client name (auto-created if deleted on the server)
     # File filtering (all optional, omit = analyze everything)
     watch_path:
       - "src/"
@@ -1047,8 +1047,12 @@ triggers:
 When `port` uses the `ssl:` prefix and the server fingerprint is not trusted
 yet (first connection or a key rotation), the AICR server-side adapter runs
 `p4 trust -y` once and retries the command, so no manual trust step is needed
-in the container. The fingerprint is written to the runtime user's default
-trust file; set `P4TRUST` to override the path.
+in the container. A rotated key yields a mismatched fingerprint that
+`p4 trust -y` refuses to replace; the adapter falls back to `p4 trust -y -f`.
+The fingerprint is written to the runtime user's default trust file; set
+`P4TRUST` to override the path. If the configured `workspace` client was
+deleted on the server (`Client '<name>' unknown`), the adapter recreates it
+with a minimal read-only client spec (`p4 client -i`) and retries the command.
 
 Add a workspace that references the P4 trigger:
 

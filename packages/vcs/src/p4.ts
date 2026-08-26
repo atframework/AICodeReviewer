@@ -42,6 +42,12 @@ export type P4LoginRunner = (
   env?: Readonly<Record<string, string>>,
 ) => Promise<P4CommandResult>;
 
+export type P4StdinRunner = (
+  args: readonly string[],
+  stdin: string,
+  env?: Readonly<Record<string, string>>,
+) => Promise<P4CommandResult>;
+
 export interface P4VcsAdapterOptions {
   readonly repositoryDir: string;
   readonly port?: string;
@@ -54,6 +60,7 @@ export interface P4VcsAdapterOptions {
   readonly excludeCrFile?: readonly string[];
   readonly p4?: P4CommandRunner;
   readonly p4Login?: P4LoginRunner;
+  readonly p4Stdin?: P4StdinRunner;
 }
 
 async function defaultP4Runner(
@@ -77,8 +84,16 @@ async function defaultP4LoginRunner(
   password: string,
   env: Readonly<Record<string, string>> = {},
 ): Promise<P4CommandResult> {
+  return defaultP4StdinRunner([...args, "login"], `${password}\n`, env);
+}
+
+async function defaultP4StdinRunner(
+  args: readonly string[],
+  stdin: string,
+  env: Readonly<Record<string, string>> = {},
+): Promise<P4CommandResult> {
   return new Promise((resolvePromise, reject) => {
-    const child = spawn("p4", [...args, "login"], {
+    const child = spawn("p4", [...args], {
       env: { ...process.env, ...env },
       stdio: ["pipe", "pipe", "pipe"],
     });
@@ -97,11 +112,11 @@ async function defaultP4LoginRunner(
         return;
       }
 
-      const error = new Error(`p4 login failed with exit code ${code ?? "unknown"}. ${stderr || stdout}`);
+      const error = new Error(`p4 ${args.join(" ")} failed with exit code ${code ?? "unknown"}. ${stderr || stdout}`);
       Object.assign(error, result, { code });
       reject(error);
     });
-    child.stdin.end(`${password}\n`);
+    child.stdin.end(stdin);
   });
 }
 
@@ -120,6 +135,26 @@ function isP4AuthenticationError(error: unknown): boolean {
 
 function isP4TrustError(error: unknown): boolean {
   return /P4PORT IDENTIFICATION HAS CHANGED|authenticity of '.*' can't be established|use the 'p4 trust' command/iu.test(getErrorText(error));
+}
+
+function isP4FingerprintChangedError(error: unknown): boolean {
+  return /P4PORT IDENTIFICATION HAS CHANGED/iu.test(getErrorText(error));
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function getErrorDiagnosticText(error: unknown): string {
+  const candidate = error as { readonly stderr?: unknown };
+  return [
+    error instanceof Error ? error.message : String(error),
+    typeof candidate.stderr === "string" ? candidate.stderr : "",
+  ].join("\n");
+}
+
+function isP4ClientUnknownError(error: unknown, client: string): boolean {
+  return new RegExp(`Client '${escapeRegExp(client)}' unknown`, "iu").test(getErrorDiagnosticText(error));
 }
 
 function isFileNotFoundError(error: unknown): boolean {
@@ -267,6 +302,7 @@ export class P4VcsAdapter implements VcsAdapter {
   private readonly excludeCrFile: readonly string[] | undefined;
   private readonly p4: P4CommandRunner;
   private readonly p4Login: P4LoginRunner;
+  private readonly p4Stdin: P4StdinRunner;
   private loginAttempted = false;
 
   constructor(options: P4VcsAdapterOptions) {
@@ -281,6 +317,7 @@ export class P4VcsAdapter implements VcsAdapter {
     this.excludeCrFile = options.excludeCrFile;
     this.p4 = options.p4 ?? defaultP4Runner;
     this.p4Login = options.p4Login ?? defaultP4LoginRunner;
+    this.p4Stdin = options.p4Stdin ?? defaultP4StdinRunner;
   }
 
   private buildBaseArgs(): string[] {
@@ -303,6 +340,7 @@ export class P4VcsAdapter implements VcsAdapter {
   private async runP4(args: readonly string[]): Promise<P4CommandResult> {
     return withTransientIoRetry(async () => {
       let trustRetried = false;
+      let clientRecreated = false;
       for (;;) {
         try {
           return await this.runP4Once(args);
@@ -310,6 +348,12 @@ export class P4VcsAdapter implements VcsAdapter {
           if (isP4TrustError(error) && !trustRetried) {
             trustRetried = true;
             await this.trust();
+            continue;
+          }
+
+          if (this.clientWorkspace && !clientRecreated && isP4ClientUnknownError(error, this.clientWorkspace)) {
+            clientRecreated = true;
+            await this.recreateClientWorkspace();
             continue;
           }
 
@@ -330,7 +374,56 @@ export class P4VcsAdapter implements VcsAdapter {
       port: this.port,
       user: this.user,
     }));
-    await this.p4([...this.buildBaseArgs(), "trust", "-y"], this.buildEnv());
+    try {
+      await this.p4([...this.buildBaseArgs(), "trust", "-y"], this.buildEnv());
+    } catch (error) {
+      if (!isP4FingerprintChangedError(error)) {
+        throw error;
+      }
+      console.warn(JSON.stringify({
+        level: "warn",
+        msg: "p4 fingerprint changed; forcing replacement with p4 trust -y -f",
+        port: this.port,
+        user: this.user,
+      }));
+      await this.p4([...this.buildBaseArgs(), "trust", "-y", "-f"], this.buildEnv());
+    }
+  }
+
+  private buildClientSpec(client: string): string {
+    const depotBase = this.depot?.replace(/\/+$/u, "") ?? "";
+    const viewDepot = depotBase.startsWith("//") ? depotBase : "//depot";
+    const lines = [
+      `Client: ${client}`,
+      ...(this.user ? [`Owner: ${this.user}`] : []),
+      "Description: Auto-created by AICR for read-only analysis.",
+      `Root: ${this.repositoryDir}`,
+      "Options: noallwrite noclobber nocompress unlocked nomodtime normdir",
+      "LineEnd: local",
+      "View:",
+      `\t${viewDepot}/... //${client}/...`,
+      "",
+    ];
+    return lines.join("\n");
+  }
+
+  private async recreateClientWorkspace(): Promise<void> {
+    const client = this.clientWorkspace;
+    if (!client) {
+      return;
+    }
+    console.warn(JSON.stringify({
+      level: "warn",
+      msg: "p4 client workspace unknown on server; recreating via p4 client -i",
+      port: this.port,
+      user: this.user,
+      client,
+    }));
+    await this.p4Stdin(
+      [...this.buildBaseArgs(), "client", "-i"],
+      this.buildClientSpec(client),
+      this.buildEnv(),
+    );
   }
 
   async login(): Promise<void> {

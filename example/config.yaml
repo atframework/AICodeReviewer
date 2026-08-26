@@ -339,7 +339,7 @@ triggers:
   #   user_env: AICR_P4USER                # outbound: env var for P4 username
   #   password_env: AICR_P4PASSWORD        # outbound: env var for P4 password or login ticket
   #   depot_path: "//depot/main"           # depot or stream path to analyze
-  #   workspace: "aicr-p4-main"            # P4 workspace/client name used by AICR
+  #   workspace: "aicr-p4-main"            # P4 workspace/client name used by AICR (auto-created if deleted on the server)
   #   change_url_template: "https://swarm.example.com/changes/{{revision}}"  # optional target link in reports
   #   # AICR initially prints only changed files. During review, agents may use
   #   # aicr.fetch_more_context to fetch full changed files or narrowly related
