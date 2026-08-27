@@ -634,9 +634,9 @@ queue:
 # explicitly validating that adapter. Set to "native-llm" only for direct-LLM
 # debugging. pi/oh-my-pi additionally require the model's context_window and
 # max_output_tokens (enable llm.model_catalog or set overrides), support the
-# provider kinds openai_compatible, ollama, anthropic, and google_ai_studio,
-# and need a custom agent sandbox image with the `pi`/`omp` CLI installed
-# (the shipped images only install Kilo).
+# provider kinds openai_compatible, ollama, anthropic, and google_ai_studio.
+# The deploy/Dockerfile runtime image ships pinned Kilo and `omp` CLIs for the
+# native sandbox; other sandbox images need the matching CLI preinstalled.
 # Agent sandboxes expose scoped source read-only and AICR MCP tools. If an
 # agent needs more code to validate a changed line, it should inspect mounted
 # files with read-only commands or call aicr.fetch_more_context for a concrete

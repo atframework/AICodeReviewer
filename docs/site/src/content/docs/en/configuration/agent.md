@@ -40,11 +40,11 @@ agent:
 explicitly validating that adapter. The `pi` and `oh-my-pi` adapters support the
 provider kinds `openai_compatible`, `ollama`, `anthropic`, and
 `google_ai_studio`, and both require the model's context window and output-token
-limit — enable `llm.model_catalog` (or set overrides) before using them. Neither
-the AICR runtime image nor the default agent sandbox image ships the `pi`/`omp`
-binaries: using these kinds requires a custom sandbox image with the matching
-CLI installed (and the binaries are on the sandbox command allowlist by
-default).
+limit — enable `llm.model_catalog` (or set overrides) before using them. The
+runtime image built from `deploy/Dockerfile` ships pinned Kilo and `omp` CLIs,
+which covers the native sandbox inside that image; any other sandbox image needs
+the matching CLI preinstalled (the binaries are on the sandbox command allowlist
+by default).
 :::
 
 The schema also accepts `agent.default` at the `workspaces.defaults.agent.default`

@@ -280,7 +280,9 @@ fi
 
 # Build the image
 echo "=== Building AICR image ==="
-BUILD_ARGS=(--build-arg NPM_STRICT_SSL=false)
+# CLI_REFRESH busts the build cache for the unpinned agent-CLI install layers
+# (kilo/bun/omp), so "latest" is actually re-resolved on every build.
+BUILD_ARGS=(--build-arg NPM_STRICT_SSL=false --build-arg "CLI_REFRESH=$(date +%Y%m%d%H%M%S)")
 if [ -n "$BUILD_NETWORK_MODE" ]; then
   BUILD_ARGS+=("--network=${BUILD_NETWORK_MODE}")
 fi
