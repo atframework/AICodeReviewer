@@ -565,6 +565,7 @@ function extractUsage(raw: unknown): ChatCompletionUsage | undefined {
 export {
 	createResilientChatClient,
 	DailyBudgetTracker,
+	estimateCost,
 	extractModelPricing,
 	isContextOverflowError,
 	LlmBudgetExceededError,

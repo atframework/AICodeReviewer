@@ -1,4 +1,6 @@
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { existsSync } from "node:fs";
 import { readFile, rm } from "node:fs/promises";
 
 import {
@@ -14,7 +16,7 @@ import {
   type ReviewProvider,
   type ScrubMatch,
 } from "@aicr/core";
-import type { AgentAdapter, AgentCompactionOptions, AgentSpawnOptions } from "@aicr/agents";
+import type { AgentAdapter, AgentCompactionOptions, AgentSpawnOptions, AgentWebSearchOptions } from "@aicr/agents";
 import { materializeRuntimeBundle, OMP_AGENT_DIR_NAME, PI_AGENT_DIR_NAME } from "@aicr/agents";
 import type { RuntimeBundleInstruction, RuntimeBundleMcpServer, RuntimeBundleMcpTool, RuntimeBundleSkill } from "@aicr/agents";
 import {
@@ -22,7 +24,9 @@ import {
   type ChatCompletionResult,
   type ChatCompletionUsage,
   compressDiff,
+  estimateCost,
   estimatePromptTokenCount,
+  extractModelPricing,
   shouldTriggerCompression,
   type CompressionConfig,
   type ModelSpec,
@@ -111,6 +115,12 @@ export interface ServerReviewOrchestrationOptions {
   readonly agentAdapter?: AgentAdapter;
   readonly agentTimeoutMs?: number;
   readonly contextCompaction?: AgentCompactionOptions;
+  /**
+   * Agent web search control. omp/kilo/opencode materialize config-level rules
+   * (manifest `injected`); claude-code/copilot-cli map only the enable switch onto
+   * CLI flags (`delegated`); zoo/pi have no built-in search tool (`not_applicable`).
+   */
+  readonly webSearch?: AgentWebSearchOptions;
   readonly scrubSecrets?: boolean;
   readonly taskContextBuilder?: (
     reviewEvent: ReviewEvent,
@@ -587,23 +597,94 @@ function agentWorkingDirForSandbox(sandbox: SandboxBackend, hostAgentDir: string
 }
 
 /**
- * pi and oh-my-pi both isolate their whole config dir through PI_CODING_AGENT_DIR.
- * The value must be the sandbox-visible path (fixed /workspace/agent for container
- * sandboxes), so it is injected here — like AICR_OUTPUT_STATE_PATH — instead of in
- * adapter envVars, which only know host-side paths.
+ * Resolves the aicr-output MCP server script relative to this compiled module so
+ * native sandboxes (which share host paths) spawn a server that actually exists.
+ * Container sandboxes keep the runtime-image path (`/app/...`) baked into the
+ * bundle context instead.
+ */
+function resolveNativeMcpOutputServerScript(): string {
+  return resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "mcp-output", "dist", "server.js");
+}
+
+/**
+ * Rewrites the aicr-output MCP server command for the sandbox kind in use. The
+ * bundle context carries the runtime-image path (`/app/packages/...`) that only
+ * exists inside container sandboxes; on a native sandbox that command fails to
+ * start and the agent silently loses its native MCP surface (falling back to the
+ * stdout JSON contract), so point it at the real module-relative script instead.
+ */
+function adaptMcpServersForSandbox(
+  servers: readonly RuntimeBundleMcpServer[] | undefined,
+  sandbox: SandboxBackend,
+  outputStatePath: string,
+): readonly RuntimeBundleMcpServer[] | undefined {
+  if (!servers) return undefined;
+  const nativeServerScript = sandbox.kind === "native" ? resolveNativeMcpOutputServerScript() : undefined;
+  if (nativeServerScript !== undefined && !existsSync(nativeServerScript)) {
+    console.warn(JSON.stringify({
+      level: "warn",
+      msg: "native sandbox aicr-output MCP server script missing; agent MCP surface will fail to start",
+      path: nativeServerScript,
+    }));
+  }
+  return servers.map((server) => {
+    if (server.name !== "aicr-output") return server;
+    const config = { ...server.config } as Record<string, unknown>;
+    const command = Array.isArray(config.command) ? [...config.command] : undefined;
+    if (nativeServerScript !== undefined && command !== undefined) {
+      const scriptIndex = command.findIndex((part) => typeof part === "string" && /mcp-output\/dist\/server\.js$/u.test(part));
+      if (scriptIndex >= 0) {
+        command[scriptIndex] = nativeServerScript;
+        config.command = command;
+      }
+    }
+    return {
+      name: server.name,
+      config: {
+        ...config,
+        environment: {
+          ...(config.environment as Readonly<Record<string, string>> | undefined),
+          AICR_OUTPUT_STATE_PATH: outputStatePath,
+        },
+      },
+    };
+  });
+}
+
+/**
+ * Per-agent config-dir isolation env vars. Values must be sandbox-visible paths
+ * (fixed /workspace/agent for container sandboxes), so they are injected here —
+ * like AICR_OUTPUT_STATE_PATH — instead of in adapter envVars, which only know
+ * host-side paths.
+ *
+ * - pi/oh-my-pi: PI_CODING_AGENT_DIR redirects the whole config dir.
+ * - kilo: the project `.kilo/kilo.json` is discovered via cwd traversal, but the
+ *   global `$XDG_CONFIG_HOME/kilo/` config still loads and is schema-strict — an
+ *   unrecognized key in a developer's global config hard-fails the run. The data
+ *   dir (`$XDG_DATA_HOME/kilo/`) holds the session SQLite database whose drizzle
+ *   migrations are not idempotent, so a stale host DB from another kilo version
+ *   also hard-fails (`table project already exists`). Redirect both XDG dirs to
+ *   bundle-local paths so headless reviews stay hermetic and never touch the
+ *   developer's global kilo state (verified kilo v7.2.40 `config/config.ts` +
+ *   `global/index.ts`).
  */
 function agentConfigDirEnvVars(
   kind: string,
   sandboxAgentDir: string,
   sandboxIsNative: boolean,
 ): Record<string, string> {
-  const subdir = kind === "pi" ? PI_AGENT_DIR_NAME : kind === "oh-my-pi" ? OMP_AGENT_DIR_NAME : undefined;
-  if (!subdir) {
-    return {};
+  const joinPath = (segment: string): string =>
+    sandboxIsNative ? join(sandboxAgentDir, segment) : `${sandboxAgentDir}/${segment}`;
+  if (kind === "pi" || kind === "oh-my-pi") {
+    return { PI_CODING_AGENT_DIR: joinPath(kind === "pi" ? PI_AGENT_DIR_NAME : OMP_AGENT_DIR_NAME) };
   }
-  return {
-    PI_CODING_AGENT_DIR: sandboxIsNative ? join(sandboxAgentDir, subdir) : `${sandboxAgentDir}/${subdir}`,
-  };
+  if (kind === "kilo") {
+    return {
+      XDG_CONFIG_HOME: joinPath(".aicr-xdg-config"),
+      XDG_DATA_HOME: joinPath(".aicr-xdg-data"),
+    };
+  }
+  return {};
 }
 
 interface AgentBundleContext {
@@ -612,6 +693,7 @@ interface AgentBundleContext {
   mcpTools?: readonly RuntimeBundleMcpTool[];
   mcpServers?: readonly RuntimeBundleMcpServer[];
   compaction?: AgentCompactionOptions;
+  webSearch?: AgentWebSearchOptions;
   runId?: string;
 }
 
@@ -1064,18 +1146,7 @@ async function runAgentReview(
       sandboxAgentDir,
       sandbox.kind === "native",
     );
-    const mcpServers = bundleContext?.mcpServers?.map((server) => server.name === "aicr-output"
-      ? {
-        name: server.name,
-        config: {
-          ...server.config,
-          environment: {
-            ...(server.config.environment as Readonly<Record<string, string>> | undefined),
-            AICR_OUTPUT_STATE_PATH: outputStatePath,
-          },
-        },
-      }
-      : server);
+    const mcpServers = adaptMcpServersForSandbox(bundleContext?.mcpServers, sandbox, outputStatePath);
     const bundle = await materializeRuntimeBundle({
       adapter: agentAdapter,
       model: options.model,
@@ -1086,6 +1157,7 @@ async function runAgentReview(
       ...(mcpServers ? { mcpServers } : {}),
       ...(Object.keys(configDirEnvVars).length > 0 ? { extraEnvVars: configDirEnvVars } : {}),
       ...(bundleContext?.compaction ? { compaction: bundleContext.compaction } : {}),
+      ...(bundleContext?.webSearch ? { webSearch: bundleContext.webSearch } : {}),
       ...(bundleContext?.runId ? { runId: bundleContext.runId } : {}),
     });
     const agentSpawnOptions: AgentSpawnOptions = {
@@ -1095,6 +1167,7 @@ async function runAgentReview(
       autoApprove: true,
       task,
       ...(mcpServers ? { mcpServers } : {}),
+      ...(bundleContext?.webSearch ? { webSearch: bundleContext.webSearch } : {}),
     };
     const command = agentAdapter.buildCommand(task, agentSpawnOptions);
     const stdin = agentAdapter.buildStdin
@@ -1296,6 +1369,17 @@ async function runAgentReview(
     }
   }
 
+  // Agent-reported cost is only trustworthy when the agent CLI could price the
+  // model (AICR injects catalog pricing into the agent config; a missing catalog
+  // materializes as 0, which the CLI faithfully echoes). A zero/absent report
+  // with real parsed usage therefore falls back to AICR's own estimate so
+  // llm_usage.cost_usd never records a billed run as free.
+  const reportableCostUsd = agentCostUsd !== undefined && agentCostUsd > 0
+    ? agentCostUsd
+    : agentUsage
+      ? estimateCost(agentUsage, extractModelPricing(options.model))
+      : agentCostUsd;
+
   return {
     llmResult: {
       providerId: options.model.providerId,
@@ -1316,7 +1400,7 @@ async function runAgentReview(
     // Cost/request-count flow alongside llmResult.usage; they are not part of the
     // ChatCompletionResult type, so they live here and the summary extractor reads them
     // from the orchestration result rather than from llmResult.
-    ...(agentCostUsd !== undefined ? { estimatedCostUsd: agentCostUsd } : {}),
+    ...(reportableCostUsd !== undefined ? { estimatedCostUsd: reportableCostUsd } : {}),
     ...(agentStepCount > 0 ? { requestCount: agentStepCount } : {}),
     ...(mcpState ? { mcpState } : {}),
     ...(kiloToolCalls.length > 0 ? { toolCallEvents: kiloToolCalls } : {}),
@@ -2443,6 +2527,7 @@ export async function runReviewOrchestration(
       },
     ],
     ...(options.contextCompaction ? { compaction: options.contextCompaction } : {}),
+    ...(options.webSearch ? { webSearch: options.webSearch } : {}),
   };
   const runMetricsAccumulator = createReviewRunMetricsAccumulator();
   let completion = await requestReviewCompletion(scopedTree.rootDir, llmSystemPrompt, options, undefined, bundleContext);

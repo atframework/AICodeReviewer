@@ -15,6 +15,8 @@ agent:
   context_compaction:
     auto: true
     prune: true
+  web_search:
+    enabled: false
   sandbox:
     kind: docker
     engine: auto
@@ -121,6 +123,76 @@ Kilo 仅在模型的 `contextWindow` 已知时才会自动压缩，这样 `thres
 窗口未知时，Kilo 压缩会静默地不生效。目录与覆盖字段见
 [LLM 提供方与模型](/zh-cn/configuration/llm/)。
 :::
+
+## `agent.web_search` —— agent 网页搜索控制
+
+omp 自带内置 `web_search` 工具且默认启用；kilo、opencode、claude-code、
+copilot-cli 同样自带搜索工具，且在自动批准模式下默认可达。AICR 始终物化显式
+开关（本节默认 `false`），因此评审默认保持封闭，运维显式开启后才放行。开启后，
+agent 可以把评审上下文（代码片段、符号、报错文本）作为查询发给所配置的搜索
+引擎——这是一个数据治理决策，不只是功能开关。
+
+| 字段 | 类型 | 默认 | 说明 |
+| --- | --- | --- | --- |
+| `enabled` | bool | `false` | 物化 agent 原生 allow/deny 开关；omp 自身默认 `web_search.enabled: true`。 |
+| `providers` | string 数组 | `[]` | omp 使用完整有序链；kilo 只接受 `exa`；opencode 选择首个 `exa`/`parallel`。 |
+| `exclude` | string 数组 | `[]` | 从链路中剔除的 provider id → `providers.webSearchExclude`。 |
+| `timeout_seconds` | int (1–300) | – | 单 provider 传输超时 → `providers.webSearchTimeoutSeconds`（omp 默认 60）。 |
+| `credentials.<provider>` | string | – | 该 provider 凭据在 AICR 宿主机上的环境变量名；仅启用搜索的 adapter 会以 `${VAR}` 引用注入原生环境变量。 |
+| `searxng.endpoint` | string | – | 自托管 SearXNG 端点（查询保留在内网）。 |
+| `searxng.categories` / `searxng.engines` / `searxng.language` | string | – | 可选的 SearXNG 结果过滤。 |
+| `searxng.safesearch` | int (0–2) | – | SearXNG 安全搜索级别。 |
+
+```yaml
+agent:
+  web_search:
+    enabled: true
+    providers: ["tavily", "duckduckgo"]
+    exclude: ["google", "ecosia", "mojeek"]   # 浏览器型抓取器
+    timeout_seconds: 30
+    credentials:
+      tavily: AICR_SEARCH_TAVILY_KEY           # -> TAVILY_API_KEY=${AICR_SEARCH_TAVILY_KEY}
+      searxng_basic_username: AICR_SEARCH_SEARXNG_USERNAME
+      searxng_basic_password: AICR_SEARCH_SEARXNG_PASSWORD
+    searxng:
+      endpoint: https://searxng.internal:8080
+      language: zh-CN
+```
+
+`credentials` 的键仅限已验证 omp 原生环境变量名的 provider：`tavily`、`brave`、
+`exa`、`jina`、`kagi`、`parallel`、`kimi`、`perplexity`、`zai`、`xai`、
+`anthropic`（搜索专用 key，独立于聊天 key）、`tinyfish`、`firecrawl`、
+`searxng_token`、`searxng_basic_username`、`searxng_basic_password`。仅支持 OAuth
+存储的 provider（gemini/codex/perplexity OAuth）
+无法在每次运行临时生成的 agent 目录内完成认证，不支持。
+
+免凭据抓取器（`duckduckgo`、`startpage`）无需 key；浏览器型（`google`、
+`ecosia`、`mojeek`）首次使用会尝试下载 Chromium，在锁网的容器里会失败并消耗
+provider 超时——建议排除。
+
+### 各 agent 的映射
+
+oh-my-pi 的接口面最完整；其余 agent 各取其 CLI 暴露的能力，用不到的字段以启动
+告警 + manifest 审计记录的方式跳过：
+
+| Agent | 开关 | Provider / 凭据 | manifest mode |
+| --- | --- | --- | --- |
+| oh-my-pi | `config.yml` 的 `web_search.enabled` | 完整 provider 链、16 个凭据 env 名、SearXNG | `injected` |
+| kilo | `kilo.json` 的 `permission.websearch: allow/deny` + `KILO_ENABLE_EXA` 激活 env | 仅 Exa（`credentials.exa` → `EXA_API_KEY`） | `injected` |
+| opencode | `opencode.json` 的 `permission.websearch` + 激活 env 与 `OPENCODE_WEBSEARCH_PROVIDER` | 首个列出的 Exa 或 Parallel；只注入所选后端凭据 | `injected` |
+| claude-code | 禁用时追加 `--disallowedTools WebSearch` | 无（Anthropic 自有后端） | `delegated` |
+| copilot-cli | 禁用时追加 `--excluded-tools=web_search,web_fetch` | 无（Copilot 订阅后端） | `delegated` |
+| zoo / pi | — | 无内置搜索工具 | `not_applicable` |
+
+kilo、claude-code、copilot-cli 以自动批准方式运行，其内置搜索工具在无显式拒绝
+开关时默认可达；正是这个显式 deny 开关保证了评审的封闭性。一份全局
+`agent.web_search` 配置可以同时服务混合 workspace——某个 agent 不支持的 provider id
+与字段会被跳过并告警，而不是让整个运行失败。禁用搜索时不会注入任何搜索凭据 env。
+
+除 web search 之外，kilo 评审也不会读取开发者的全局 kilo 状态：AICR 会把
+`XDG_CONFIG_HOME`/`XDG_DATA_HOME` 重定向到每次运行的 bundle 内目录，因此宿主
+`~/.config/kilo` 配置里的未识别键或其他 kilo 版本留下的过期会话数据库都不会
+导致运行失败。
 
 ## `agent.sandbox` —— 隔离后端
 

@@ -134,6 +134,53 @@ PRs and changelists:
    actionable guidance instead of a generic failure. See
    `docs/ai/architecture.md` §3.3.2.
 
+## Agent web search (per-agent mapping)
+
+Several agent CLIs ship built-in search tools, and auto-approval leaves them
+reachable by default — omp even enables its `web_search` tool out of the box
+(credential-free scrapers included). AICR's `agent.web_search` section
+(disabled by default) always materializes the explicit switch, so reviews stay
+hermetic unless an operator opts in. Enabling it means the agent can send
+review-context queries (code snippets, symbols, error text) to the configured
+search engines — treat this as a data-governance decision.
+
+| Agent | Switch lands as | Providers / credentials | Manifest mode |
+| --- | --- | --- | --- |
+| oh-my-pi | `web_search.enabled` + `providers.webSearch*` + `searxng.*` in `config.yml` | Full chain; 16 credential env names | `injected` |
+| kilo | `permission.websearch: allow/deny` in `kilo.json` + `KILO_ENABLE_EXA` activation env | Exa only (`credentials.exa` → `EXA_API_KEY`) | `injected` |
+| opencode | `permission.websearch` in `opencode.json` + activation and `OPENCODE_WEBSEARCH_PROVIDER` env | First listed Exa or Parallel provider; only its credential is injected | `injected` |
+| claude-code | `--disallowedTools WebSearch` when disabled | None (Anthropic-owned backend) | `delegated` |
+| copilot-cli | `--excluded-tools=web_search,web_fetch` when disabled | None (Copilot subscription backend) | `delegated` |
+| zoo / pi | — | No built-in search tool | `not_applicable` |
+
+- `credentials` maps a provider id to the env var name holding its API key on
+  the AICR host (for example `tavily: AICR_SEARCH_TAVILY_KEY`). The adapter
+  injects the agent-native env var (`TAVILY_API_KEY`, `EXA_API_KEY`, ...) as a
+  `${VAR}` reference, so secrets never persist in the runtime bundle. Supported
+  ids: `tavily`, `brave`, `exa`, `jina`, `kagi`, `parallel`, `kimi`,
+  `perplexity`, `zai`, `xai`, `anthropic` (search-only key), `tinyfish`,
+  `firecrawl`, `searxng_token`, `searxng_basic_username`,
+  `searxng_basic_password`; `exa`/`parallel` also serve kilo/opencode, the rest
+  are omp-only, and OAuth-only providers (gemini/codex/perplexity
+  OAuth) cannot authenticate inside the ephemeral per-run agent dir.
+- `searxng` configures a self-hosted SearXNG endpoint (queries stay inside your
+  network, omp only). The three `searxng_*` credential ids provide bearer-token
+  or HTTP Basic authentication through env-name references.
+- Custom-provider kilo sessions only offer the `websearch` tool to the model
+  when `KILO_ENABLE_EXA=1` is set (kilo v7.2.40 registry gate); the adapter
+  materializes it automatically for enabled runs. Copilot CLI's `--deny-url`
+  layer cannot gate `web_search` (it covers shell/web-fetch only), which is why
+  the off switch removes the tools from the model's toolset instead.
+- Credential-free scrapers (`duckduckgo`, `startpage`) work without keys;
+  browser-backed ones (`google`, `ecosia`, `mojeek`) attempt a Chromium download
+  on first use, which fails in locked-down containers and burns provider
+  timeout — prefer excluding them.
+- One global `agent.web_search` block can serve mixed-agent workspaces. Kilo
+  accepts only `exa`; opencode selects the first listed `exa`/`parallel` entry.
+  Unsupported provider ids and fields are skipped with a startup warning and
+  audited in the runtime-bundle manifest (`webSearch.{enabled,mode}`) instead of
+  failing the run. Disabled runs do not receive any search credentials.
+
 ## Runtime Image Baseline
 
 The deployment image intentionally uses `ubuntu:24.04` as the distro base and

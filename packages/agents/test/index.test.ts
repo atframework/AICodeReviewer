@@ -259,6 +259,29 @@ describe("createKiloAdapter", () => {
       expect(result.envVars.KILO_API_KEY).toBe("${OPENAI_API_KEY}");
       expect(result.envVars.KILO_API_KEY_P).toBe("${OPENAI_API_KEY}");
     });
+    it("writes an {env:NAME} apiKey reference instead of the literal secret", async () => {
+      // kilo's config loader substitutes {env:VAR} from the spawned process env
+      // (v7.2.40 `config/variable.ts`), so the secret never persists in the bundle.
+      process.env.OPENAI_API_KEY = "sk-literal-must-not-persist";
+      try {
+        const adapter = createKiloAdapter();
+        const result = await adapter.materializeConfig(
+          {
+            providerKind: "openai_compatible",
+            providerId: "p",
+            modelId: "m",
+            apiKeyEnv: "OPENAI_API_KEY",
+          },
+          "/tmp/test",
+        );
+
+        const parsed = JSON.parse(result.configFiles.get(".kilo/kilo.json") ?? "{}");
+        expect(parsed.provider.p?.options?.apiKey).toBe("{env:OPENAI_API_KEY}");
+        expect(result.configFiles.get(".kilo/kilo.json")).not.toContain("sk-literal-must-not-persist");
+      } finally {
+        delete process.env.OPENAI_API_KEY;
+      }
+    });
 
     it("writes kilo.json to the working directory", async () => {
       const tempDir = await mkdtemp(join(tmpdir(), "aicr-kilo-adapter-"));
@@ -334,6 +357,101 @@ describe("createKiloAdapter", () => {
 
       const parsed = JSON.parse(result.configFiles.get(".kilo/kilo.json") ?? "{}");
       expect(parsed.compaction).toBeUndefined();
+    });
+
+    it("injects websearch permission deny and EXA credential env for web search", async () => {
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const adapter = createKiloAdapter();
+        const result = await adapter.materializeConfig(
+          { providerKind: "openai_compatible", providerId: "p", modelId: "m" },
+          "/tmp/test",
+          {
+            webSearch: {
+              enabled: true,
+              credentials: { exa: "AICR_SEARCH_EXA_KEY" },
+            },
+          },
+        );
+
+        const parsed = JSON.parse(result.configFiles.get(".kilo/kilo.json") ?? "{}");
+        expect(parsed.permission).toEqual({ websearch: "allow" });
+        expect(result.envVars.EXA_API_KEY).toBe("${AICR_SEARCH_EXA_KEY}");
+        // Custom providers only see the websearch tool with the activation flag.
+        expect(result.envVars.KILO_ENABLE_EXA).toBe("1");
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+
+    it("denies websearch permission for hermetic web search default", async () => {
+      const adapter = createKiloAdapter();
+      const result = await adapter.materializeConfig(
+        { providerKind: "openai_compatible", providerId: "p", modelId: "m" },
+        "/tmp/test",
+        { webSearch: { enabled: false, credentials: { exa: "AICR_SEARCH_EXA_KEY" } } },
+      );
+
+      const parsed = JSON.parse(result.configFiles.get(".kilo/kilo.json") ?? "{}");
+      expect(parsed.permission).toEqual({ websearch: "deny" });
+      expect(result.envVars.EXA_API_KEY).toBeUndefined();
+      expect(result.envVars.KILO_ENABLE_EXA).toBeUndefined();
+    });
+
+    it("accepts the Exa provider selector without an unsupported-field warning", async () => {
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const adapter = createKiloAdapter();
+        await adapter.materializeConfig(
+          { providerKind: "openai_compatible", providerId: "p", modelId: "m" },
+          "/tmp/test",
+          { webSearch: { enabled: true, providers: ["exa"] } },
+        );
+        expect(warnSpy).not.toHaveBeenCalled();
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+
+    it("allows websearch but warns and skips unsupported fields", async () => {
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const adapter = createKiloAdapter();
+        const result = await adapter.materializeConfig(
+          { providerKind: "openai_compatible", providerId: "p", modelId: "m" },
+          "/tmp/test",
+          {
+            webSearch: {
+              enabled: true,
+              providers: ["tavily"],
+              timeoutSeconds: 30,
+              credentials: { tavily: "AICR_SEARCH_TAVILY_KEY" },
+              searxng: { endpoint: "https://searxng.internal:8080" },
+            },
+          },
+        );
+
+        const parsed = JSON.parse(result.configFiles.get(".kilo/kilo.json") ?? "{}");
+        expect(parsed.permission).toEqual({ websearch: "allow" });
+        // tavily credentials cannot map onto kilo's Exa-only surface: skipped, warned.
+        expect(result.envVars.EXA_API_KEY).toBeUndefined();
+        const warnings = warnSpy.mock.calls.map((call) => String(call[0]));
+        expect(warnings.some((entry) => entry.includes("web_search fields not supported"))).toBe(true);
+        expect(warnings.some((entry) => entry.includes("credentials.tavily"))).toBe(true);
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+
+    it("omits websearch permission when no web search options are provided", async () => {
+      const adapter = createKiloAdapter();
+      const result = await adapter.materializeConfig(
+        { providerKind: "openai_compatible", providerId: "p", modelId: "m" },
+        "/tmp/test",
+      );
+
+      const parsed = JSON.parse(result.configFiles.get(".kilo/kilo.json") ?? "{}");
+      expect(parsed.permission).toBeUndefined();
     });
 
     it("emits reasoning effort variants into the model entry", async () => {
@@ -864,6 +982,60 @@ describe("createClaudeCodeAdapter", () => {
       expect(manualCmd).not.toContain("--dangerously-skip-permissions");
     });
 
+    it("disables WebSearch via --disallowedTools when web search is disabled", () => {
+      const adapter = createClaudeCodeAdapter();
+      const disabledCmd = adapter.buildCommand("t", {
+        workingDir: "/workspace",
+        autoApprove: true,
+        task: "t",
+        webSearch: { enabled: false },
+      });
+      const denyIndex = disabledCmd.indexOf("--disallowedTools");
+      expect(denyIndex).toBeGreaterThanOrEqual(0);
+      expect(disabledCmd[denyIndex + 1]).toBe("WebSearch");
+
+      const enabledCmd = adapter.buildCommand("t", {
+        workingDir: "/workspace",
+        autoApprove: true,
+        task: "t",
+        webSearch: { enabled: true },
+      });
+      expect(enabledCmd).not.toContain("--disallowedTools");
+
+      const unsetCmd = adapter.buildCommand("t", { workingDir: "/workspace", task: "t" });
+      expect(unsetCmd).not.toContain("--disallowedTools");
+    });
+
+    it("warns about web search fields claude-code cannot consume", async () => {
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const adapter = createClaudeCodeAdapter();
+        await adapter.materializeConfig(
+          {
+            providerKind: "anthropic",
+            providerId: "anthropic",
+            modelId: "claude-sonnet-4",
+          },
+          "/tmp/test",
+          {
+            webSearch: {
+              enabled: true,
+              providers: ["tavily"],
+              credentials: { tavily: "AICR_SEARCH_TAVILY_KEY" },
+              searxng: { endpoint: "https://searxng.internal:8080" },
+              timeoutSeconds: 30,
+            },
+          },
+        );
+        const warnings = warnSpy.mock.calls.map((call) => String(call[0]));
+        expect(warnings.some((entry) => entry.includes("web_search fields not supported"))).toBe(true);
+        expect(warnings.some((entry) => entry.includes("credentials.tavily"))).toBe(true);
+        expect(warnings.some((entry) => entry.includes("searxng"))).toBe(true);
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+
     it("wires MCP servers via --mcp-config with strict isolation", () => {
       const adapter = createClaudeCodeAdapter();
       const cmd = adapter.buildCommand("t", {
@@ -1072,6 +1244,47 @@ describe("createCopilotCliAdapter", () => {
       expect(cmd).toContain("--effort=low");
     });
 
+    it("removes web tools via --excluded-tools when web search is disabled", () => {
+      const adapter = createCopilotCliAdapter();
+      const disabledCmd = adapter.buildCommand("t", {
+        workingDir: "/workspace",
+        task: "t",
+        autoApprove: true,
+        webSearch: { enabled: false },
+      });
+      expect(disabledCmd).toContain("--excluded-tools=web_search,web_fetch");
+
+      const enabledCmd = adapter.buildCommand("t", {
+        workingDir: "/workspace",
+        task: "t",
+        autoApprove: true,
+        webSearch: { enabled: true },
+      });
+      expect(enabledCmd).not.toContain("--excluded-tools=web_search,web_fetch");
+    });
+
+    it("warns about web search fields copilot-cli cannot consume", async () => {
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const adapter = createCopilotCliAdapter();
+        await adapter.materializeConfig(
+          { providerKind: "copilot", providerId: "copilot", modelId: "gpt-5" },
+          "/tmp/test",
+          {
+            webSearch: {
+              enabled: true,
+              providers: ["tavily"],
+              credentials: { tavily: "AICR_SEARCH_TAVILY_KEY" },
+            },
+          },
+        );
+        const warnings = warnSpy.mock.calls.map((call) => String(call[0]));
+        expect(warnings.some((entry) => entry.includes("web_search fields not supported"))).toBe(true);
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+
     it("wires MCP servers via --additional-mcp-config", () => {
       const adapter = createCopilotCliAdapter();
       const cmd = adapter.buildCommand("t", {
@@ -1179,6 +1392,115 @@ describe("createOpencodeAdapter", () => {
       });
       expect(cmd).toContain("openrouter/moonshotai/kimi-k2");
       expect(cmd).not.toContain("openrouter/openrouter/moonshotai/kimi-k2");
+    });
+  });
+
+  describe("web search", () => {
+    it("denies websearch permission and skips activation env when disabled", async () => {
+      const tempDir = await mkdtemp(join(tmpdir(), "aicr-opencode-ws-off-"));
+      try {
+        const adapter = createOpencodeAdapter();
+        const result = await adapter.materializeConfig(
+          { providerKind: "openai_compatible", providerId: "p", modelId: "m" },
+          tempDir,
+          { webSearch: { enabled: false, credentials: { exa: "AICR_SEARCH_EXA_KEY" } } },
+        );
+
+        const parsed = JSON.parse(result.configFiles.get("opencode.json") ?? "{}");
+        expect(parsed.permission).toEqual({ websearch: "deny" });
+        expect(result.envVars.OPENCODE_ENABLE_EXA).toBeUndefined();
+        expect(result.envVars.OPENCODE_ENABLE_PARALLEL).toBeUndefined();
+        expect(result.envVars.OPENCODE_WEBSEARCH_PROVIDER).toBeUndefined();
+        expect(result.envVars.EXA_API_KEY).toBeUndefined();
+      } finally {
+        await rm(tempDir, { recursive: true, force: true });
+      }
+    });
+
+    it("enables websearch with Exa activation and credential env", async () => {
+      const tempDir = await mkdtemp(join(tmpdir(), "aicr-opencode-ws-exa-"));
+      try {
+        const adapter = createOpencodeAdapter();
+        const result = await adapter.materializeConfig(
+          { providerKind: "openai_compatible", providerId: "p", modelId: "m" },
+          tempDir,
+          {
+            webSearch: {
+              enabled: true,
+              credentials: { exa: "AICR_SEARCH_EXA_KEY" },
+            },
+          },
+        );
+
+        const parsed = JSON.parse(result.configFiles.get("opencode.json") ?? "{}");
+        expect(parsed.permission).toEqual({ websearch: "allow" });
+        expect(result.envVars.OPENCODE_ENABLE_EXA).toBe("1");
+        expect(result.envVars.OPENCODE_WEBSEARCH_PROVIDER).toBe("exa");
+        expect(result.envVars.EXA_API_KEY).toBe("${AICR_SEARCH_EXA_KEY}");
+      } finally {
+        await rm(tempDir, { recursive: true, force: true });
+      }
+    });
+
+    it("selects the first supported listed backend and injects only its credential", async () => {
+      const tempDir = await mkdtemp(join(tmpdir(), "aicr-opencode-ws-parallel-"));
+      try {
+        const adapter = createOpencodeAdapter();
+        const result = await adapter.materializeConfig(
+          { providerKind: "openai_compatible", providerId: "p", modelId: "m" },
+          tempDir,
+          {
+            webSearch: {
+              enabled: true,
+              providers: ["parallel", "exa"],
+              credentials: {
+                parallel: "AICR_SEARCH_PARALLEL_KEY",
+                exa: "AICR_SEARCH_EXA_KEY",
+              },
+            },
+          },
+        );
+
+        expect(result.envVars.OPENCODE_ENABLE_PARALLEL).toBe("1");
+        expect(result.envVars.OPENCODE_ENABLE_EXA).toBeUndefined();
+        expect(result.envVars.OPENCODE_WEBSEARCH_PROVIDER).toBe("parallel");
+        expect(result.envVars.PARALLEL_API_KEY).toBe("${AICR_SEARCH_PARALLEL_KEY}");
+        expect(result.envVars.EXA_API_KEY).toBeUndefined();
+      } finally {
+        await rm(tempDir, { recursive: true, force: true });
+      }
+    });
+
+    it("warns about searxng and unsupported credentials while enabling", async () => {
+      const tempDir = await mkdtemp(join(tmpdir(), "aicr-opencode-ws-warn-"));
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const adapter = createOpencodeAdapter();
+        const result = await adapter.materializeConfig(
+          { providerKind: "openai_compatible", providerId: "p", modelId: "m" },
+          tempDir,
+          {
+            webSearch: {
+              enabled: true,
+              providers: ["tavily"],
+              exclude: ["google"],
+              timeoutSeconds: 30,
+              credentials: { tavily: "AICR_SEARCH_TAVILY_KEY" },
+              searxng: { endpoint: "https://searxng.internal:8080" },
+            },
+          },
+        );
+
+        expect(result.envVars.OPENCODE_ENABLE_EXA).toBe("1");
+        expect(result.envVars.TAVILY_API_KEY).toBeUndefined();
+        const warnings = warnSpy.mock.calls.map((call) => String(call[0]));
+        expect(warnings.some((entry) => entry.includes("providers.tavily"))).toBe(true);
+        expect(warnings.some((entry) => entry.includes("credentials.tavily"))).toBe(true);
+        expect(warnings.some((entry) => entry.includes("searxng"))).toBe(true);
+      } finally {
+        warnSpy.mockRestore();
+        await rm(tempDir, { recursive: true, force: true });
+      }
     });
   });
 
@@ -1805,6 +2127,66 @@ describe("materializeRuntimeBundle", () => {
       expect(result.envVars.DISABLE_AUTO_COMPACT).toBe("1");
     } finally {
       await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("records injected webSearch for oh-my-pi and not_applicable for other agents", async () => {
+    const ompDir = await mkdtemp(join(tmpdir(), "aicr-bundle-websearch-omp-"));
+    const kiloDir = await mkdtemp(join(tmpdir(), "aicr-bundle-websearch-kilo-"));
+    try {
+      const ompResult = await materializeRuntimeBundle({
+        adapter: createOhMyPiAdapter(),
+        model: {
+          providerKind: "openai_compatible",
+          providerId: "p",
+          modelId: "m",
+          contextWindow: 128000,
+          maxOutputTokens: 16384,
+        },
+        workingDir: ompDir,
+        webSearch: { enabled: true, providers: ["tavily"] },
+      });
+      expect(ompResult.manifest.webSearch).toEqual({ enabled: true, mode: "injected" });
+      const ompConfig = ompResult.configFiles.get(".omp-agent/config.yml") ?? "";
+      expect(ompConfig).toContain("web_search:");
+      expect(ompConfig).toContain("enabled: true");
+
+      const ompOff = await materializeRuntimeBundle({
+        adapter: createOhMyPiAdapter(),
+        model: {
+          providerKind: "openai_compatible",
+          providerId: "p",
+          modelId: "m",
+          contextWindow: 128000,
+          maxOutputTokens: 16384,
+        },
+        workingDir: ompDir,
+        webSearch: { enabled: false },
+      });
+      expect(ompOff.manifest.webSearch).toEqual({ enabled: false, mode: "injected" });
+
+      const kiloResult = await materializeRuntimeBundle({
+        adapter: createKiloAdapter(),
+        model: baseModel,
+        workingDir: kiloDir,
+        webSearch: { enabled: true },
+      });
+      expect(kiloResult.manifest.webSearch).toEqual({ enabled: true, mode: "injected" });
+
+      const claudeResult = await materializeRuntimeBundle({
+        adapter: createClaudeCodeAdapter(),
+        model: {
+          providerKind: "anthropic",
+          providerId: "anthropic",
+          modelId: "claude-sonnet-4",
+        },
+        workingDir: kiloDir,
+        webSearch: { enabled: false },
+      });
+      expect(claudeResult.manifest.webSearch).toEqual({ enabled: false, mode: "delegated" });
+    } finally {
+      await rm(ompDir, { recursive: true, force: true });
+      await rm(kiloDir, { recursive: true, force: true });
     }
   });
 
@@ -2475,6 +2857,93 @@ describe("createOhMyPiAdapter", () => {
         maxOutputTokens: 64000,
       };
       await expect(adapter.materializeConfig(model, tempDir)).rejects.toThrow(/does not support/iu);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("materializes web_search settings and credential env indirection into config.yml", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-omp-websearch-"));
+    try {
+      const adapter = createOhMyPiAdapter();
+      const result = await adapter.materializeConfig(piFamilyModel, tempDir, {
+        webSearch: {
+          enabled: true,
+          providers: ["tavily", "duckduckgo"],
+          exclude: ["google", "ecosia"],
+          timeoutSeconds: 30,
+          credentials: {
+            tavily: "AICR_SEARCH_TAVILY_KEY",
+            searxng_token: "AICR_SEARCH_SEARXNG_TOKEN",
+            searxng_basic_username: "AICR_SEARCH_SEARXNG_USERNAME",
+            searxng_basic_password: "AICR_SEARCH_SEARXNG_PASSWORD",
+          },
+          searxng: {
+            endpoint: "https://searxng.internal:8080",
+            categories: "it",
+            language: "zh-CN",
+            safesearch: 1,
+          },
+        },
+      });
+
+      const configYaml = result.configFiles.get(".omp-agent/config.yml") ?? "";
+      expect(configYaml).toContain("web_search:");
+      expect(configYaml).toContain("enabled: true");
+      expect(configYaml).toContain("providers:");
+      expect(configYaml).toContain('webSearchOrder: ["tavily", "duckduckgo"]');
+      expect(configYaml).toContain('webSearchExclude: ["google", "ecosia"]');
+      expect(configYaml).toContain("webSearchTimeoutSeconds: 30");
+      expect(configYaml).toContain("searxng:");
+      expect(configYaml).toContain('endpoint: "https://searxng.internal:8080"');
+      expect(configYaml).toContain('categories: "it"');
+      expect(configYaml).toContain('language: "zh-CN"');
+      expect(configYaml).toContain("safesearch: 1");
+
+      // omp-native env names carry ${VAR} references to the operator-side names;
+      // no secret literal ever lands in the bundle.
+      expect(result.envVars.TAVILY_API_KEY).toBe("${AICR_SEARCH_TAVILY_KEY}");
+      expect(result.envVars.SEARXNG_TOKEN).toBe("${AICR_SEARCH_SEARXNG_TOKEN}");
+      expect(result.envVars.SEARXNG_BASIC_USERNAME).toBe("${AICR_SEARCH_SEARXNG_USERNAME}");
+      expect(result.envVars.SEARXNG_BASIC_PASSWORD).toBe("${AICR_SEARCH_SEARXNG_PASSWORD}");
+
+      const written = await readFile(join(tempDir, ".omp-agent", "config.yml"), "utf8");
+      expect(written).toBe(configYaml);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("writes the explicit web_search disable switch (omp defaults it to enabled)", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-omp-websearch-off-"));
+    try {
+      const adapter = createOhMyPiAdapter();
+      const result = await adapter.materializeConfig(piFamilyModel, tempDir, {
+        webSearch: {
+          enabled: false,
+          credentials: { tavily: "AICR_SEARCH_TAVILY_KEY" },
+        },
+      });
+      const configYaml = result.configFiles.get(".omp-agent/config.yml") ?? "";
+      expect(configYaml).toContain("web_search:");
+      expect(configYaml).toContain("enabled: false");
+      expect(configYaml).not.toContain("webSearchOrder");
+      expect(result.envVars.TAVILY_API_KEY).toBeUndefined();
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects web search credential providers without a verified omp env name", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-omp-websearch-bad-"));
+    try {
+      const adapter = createOhMyPiAdapter();
+      await expect(adapter.materializeConfig(piFamilyModel, tempDir, {
+        webSearch: {
+          enabled: true,
+          credentials: { gemini_oauth: "SOME_KEY" },
+        },
+      })).rejects.toThrow(/web search credential provider "gemini_oauth" is not supported/u);
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }

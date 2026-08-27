@@ -16,6 +16,8 @@ agent:
   context_compaction:
     auto: true
     prune: true
+  web_search:
+    enabled: false
   sandbox:
     kind: docker
     engine: auto
@@ -131,6 +133,82 @@ Without a known window, Kilo compaction silently stays inactive. See
 [LLM Providers and Models](/en/configuration/llm/) for the catalog and override
 fields.
 :::
+
+## `agent.web_search` — agent web search control
+
+omp ships a built-in `web_search` tool and enables it by default; kilo,
+opencode, claude-code, and copilot-cli likewise ship built-in search tools that
+auto-approval leaves reachable. AICR always materializes the explicit switch
+(the section defaults to `false`), so reviews stay hermetic unless an operator
+opts in. Enabling it lets the agent send review-context queries — code
+snippets, symbols, error text — to the configured search engines, which makes
+this a data-governance decision, not just a feature toggle.
+
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `enabled` | bool | `false` | Materialize the agent-native allow/deny switch; omp itself defaults `web_search.enabled` to `true`. |
+| `providers` | string array | `[]` | omp uses the full ordered chain; kilo accepts only `exa`; opencode selects the first `exa`/`parallel` entry. |
+| `exclude` | string array | `[]` | Provider ids removed from the chain → `providers.webSearchExclude`. |
+| `timeout_seconds` | int (1–300) | – | Per-provider transport timeout → `providers.webSearchTimeoutSeconds` (omp default 60). |
+| `credentials.<provider>` | string | – | Env var name holding that provider's credential on the AICR host; only enabled adapters inject the native env var via a `${VAR}` reference. |
+| `searxng.endpoint` | string | – | Self-hosted SearXNG endpoint (keeps queries inside your network). |
+| `searxng.categories` / `searxng.engines` / `searxng.language` | string | – | Optional SearXNG result filters. |
+| `searxng.safesearch` | int (0–2) | – | SearXNG safe-search level. |
+
+```yaml
+agent:
+  web_search:
+    enabled: true
+    providers: ["tavily", "duckduckgo"]
+    exclude: ["google", "ecosia", "mojeek"]   # browser-backed scrapers
+    timeout_seconds: 30
+    credentials:
+      tavily: AICR_SEARCH_TAVILY_KEY           # -> TAVILY_API_KEY=${AICR_SEARCH_TAVILY_KEY}
+      searxng_basic_username: AICR_SEARCH_SEARXNG_USERNAME
+      searxng_basic_password: AICR_SEARCH_SEARXNG_PASSWORD
+    searxng:
+      endpoint: https://searxng.internal:8080
+      language: en
+```
+
+The `credentials` keys are limited to providers with a verified
+omp-native env var: `tavily`, `brave`, `exa`, `jina`, `kagi`, `parallel`,
+`kimi`, `perplexity`, `zai`, `xai`, `anthropic` (search-only key, independent
+of the chat key), `tinyfish`, `firecrawl`, `searxng_token`,
+`searxng_basic_username`, and `searxng_basic_password`. OAuth-stored
+providers (gemini/codex/perplexity OAuth) cannot authenticate inside the
+ephemeral per-run agent directory and are unsupported.
+
+Credential-free scrapers (`duckduckgo`, `startpage`) work without keys;
+browser-backed ones (`google`, `ecosia`, `mojeek`) attempt a Chromium download
+on first use, which fails in locked-down containers and burns provider timeout —
+prefer excluding them.
+
+### Per-agent mapping
+
+oh-my-pi has the richest surface; the other agents map what their CLI exposes
+and ignore the rest with a startup warning plus a manifest audit entry:
+
+| Agent | Switch | Providers / credentials | Manifest mode |
+| --- | --- | --- | --- |
+| oh-my-pi | `web_search.enabled` in `config.yml` | Full provider chain, 16 credential env names, SearXNG | `injected` |
+| kilo | `permission.websearch: allow/deny` in `kilo.json` + `KILO_ENABLE_EXA` activation env | Exa only (`credentials.exa` → `EXA_API_KEY`) | `injected` |
+| opencode | `permission.websearch` in `opencode.json` + activation and `OPENCODE_WEBSEARCH_PROVIDER` env | First listed Exa or Parallel provider; only its credential is injected | `injected` |
+| claude-code | `--disallowedTools WebSearch` when disabled | None (Anthropic-owned backend) | `delegated` |
+| copilot-cli | `--excluded-tools=web_search,web_fetch` when disabled | None (Copilot subscription backend) | `delegated` |
+| zoo / pi | — | No built-in search tool | `not_applicable` |
+
+kilo, claude-code, and copilot-cli run with auto-approval, so their built-in
+search tools are otherwise reachable by default; the explicit deny switch is
+what keeps reviews hermetic. A single global `agent.web_search` block can serve
+mixed workspaces — unsupported provider ids and fields are skipped with a
+warning instead of failing the run. Disabled runs receive no search credential
+env vars.
+
+Independent of web search, kilo reviews never read the developer's global kilo
+state: AICR redirects `XDG_CONFIG_HOME`/`XDG_DATA_HOME` into the per-run bundle,
+so an unrecognized key in a host `~/.config/kilo` config or a stale session
+database from another kilo version cannot break a run.
 
 ## `agent.sandbox` — isolation backend
 

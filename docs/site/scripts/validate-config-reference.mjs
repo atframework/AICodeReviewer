@@ -206,6 +206,7 @@ const DOCUMENTED_SUBTREE_SUMMARIES = new Set([
   "llm.retry.backoff",
   "llm.per_provider_overrides",
   "llm.model_catalog.overrides",
+  "agent.web_search.credentials",
   "outputs.channels[].no_problems",
   "outputs.channels[].severity_label_colors",
   "outputs.channels[].notify_feishu",

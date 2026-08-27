@@ -12,6 +12,7 @@ import type {
   AgentMaterializeResult,
   AgentSpawnOptions,
 } from "./types.js";
+import { buildWebSearchCredentialEnvVars, warnUnsupportedWebSearchFields } from "./web-search.js";
 
 export interface KiloAdapterOptions {
   readonly binary?: string;
@@ -19,6 +20,29 @@ export interface KiloAdapterOptions {
 
 const KILO_BINARY = "kilo";
 const KILO_VERSION_ARGS = ["--version"];
+
+/**
+ * kilo's built-in `websearch` tool calls the Exa hosted MCP
+ * (`https://mcp.exa.ai/mcp`; `EXA_API_KEY` switches it to keyed usage, otherwise
+ * anonymous). Verified against Kilo-Org/kilocode v7.2.40 `tool/websearch.ts`,
+ * `tool/mcp-exa.ts`, and `config/permission.ts` (`permission.websearch` is a
+ * known allow/deny/ask key). With AICR's custom providers the tool is only
+ * offered to the model when the `KILO_ENABLE_EXA` runtime flag is set
+ * (`tool/registry.ts`: `providerID === kilo || Flag.KILO_ENABLE_EXA`), so enabled
+ * runs must materialize that activation env alongside the permission rule.
+ */
+const KILO_WEB_SEARCH_CREDENTIAL_ENV_NAMES: Readonly<Record<string, string>> = {
+  exa: "EXA_API_KEY",
+};
+
+const KILO_WEB_SEARCH_FIELD_SUPPORT = {
+  providers: true,
+  providerIds: ["exa"],
+  exclude: false,
+  timeout: false,
+  credentials: Object.keys(KILO_WEB_SEARCH_CREDENTIAL_ENV_NAMES),
+  searxng: false,
+};
 
 async function detectBinary(
   binary: string,
@@ -47,11 +71,11 @@ function buildKiloProviderOptions(model: ModelSpec): Record<string, unknown> {
     options.baseURL = model.baseUrl;
   }
 
+  // `{env:NAME}` is substituted by kilo's config loader (`config/variable.ts`)
+  // from the spawned process env, so the secret never persists in the per-run
+  // bundle (same convention as the opencode adapter).
   if (model.apiKeyEnv) {
-    const apiKey = process.env[model.apiKeyEnv];
-    if (apiKey) {
-      options.apiKey = apiKey;
-    }
+    options.apiKey = `{env:${model.apiKeyEnv}}`;
   }
 
   if (model.organization) {
@@ -148,6 +172,16 @@ function buildKiloJsonConfig(
     config.compaction = compactionSection;
   }
 
+  // `--auto` auto-approves every permission prompt, so kilo's Exa-backed
+  // websearch tool is otherwise reachable by default; an explicit config rule is
+  // the only reliable switch (deny always wins over auto-approve).
+  if (options?.webSearch) {
+    config.permission = {
+      ...((config.permission as Readonly<Record<string, unknown>> | undefined) ?? {}),
+      websearch: options.webSearch.enabled ? "allow" : "deny",
+    };
+  }
+
   if (mcpServers && Object.keys(mcpServers).length > 0) {
     config.mcp = { ...mcpServers };
   }
@@ -206,6 +240,8 @@ export function createKiloAdapter(options: KiloAdapterOptions = {}): AgentAdapte
       const kiloDir = join(workingDir, ".kilo");
       await mkdir(kiloDir, { recursive: true });
 
+      warnUnsupportedWebSearchFields("kilo", options?.webSearch, KILO_WEB_SEARCH_FIELD_SUPPORT);
+
       const kiloJsonConfig = buildKiloJsonConfig(model, undefined, options);
       const kiloJsonContent = JSON.stringify(kiloJsonConfig, null, 2);
 
@@ -217,6 +253,15 @@ export function createKiloAdapter(options: KiloAdapterOptions = {}): AgentAdapte
         envVars.KILO_API_KEY = `\${${model.apiKeyEnv}}`;
         envVars[`KILO_API_KEY_${sanitizeEnvSuffix(model.providerId)}`] = `\${${model.apiKeyEnv}}`;
       }
+      // Custom-provider sessions only offer the websearch tool to the model when
+      // this flag is set; keep it absent for disabled/hermetic runs.
+      if (options?.webSearch?.enabled) {
+        envVars.KILO_ENABLE_EXA = "1";
+      }
+      Object.assign(envVars, buildWebSearchCredentialEnvVars(
+        options?.webSearch,
+        KILO_WEB_SEARCH_CREDENTIAL_ENV_NAMES,
+      ));
 
       return {
         configFiles: new Map([

@@ -28,8 +28,34 @@ export interface AgentCompactionOptions {
   readonly prune?: boolean;
 }
 
+export interface AgentWebSearchSearxngOptions {
+  readonly endpoint?: string;
+  readonly categories?: string;
+  readonly engines?: string;
+  readonly language?: string;
+  readonly safesearch?: number;
+}
+
+export interface AgentWebSearchOptions {
+  readonly enabled: boolean;
+  /** Ordered provider ids: full chain for omp, supported-backend selector for kilo/opencode. */
+  readonly providers?: readonly string[];
+  /** omp search provider ids removed from the chain (`providers.webSearchExclude`). */
+  readonly exclude?: readonly string[];
+  /** Per-provider search transport timeout in seconds (`providers.webSearchTimeoutSeconds`, omp caps at 300). */
+  readonly timeoutSeconds?: number;
+  /**
+   * Credential provider id -> env var name that holds the secret on the AICR host.
+   * Each supporting adapter injects its native env var with a `${VAR}` reference;
+   * disabled runs inject none, and secrets never persist in the runtime bundle.
+   */
+  readonly credentials?: Readonly<Record<string, string>>;
+  readonly searxng?: AgentWebSearchSearxngOptions;
+}
+
 export interface AgentMaterializeOptions {
   readonly compaction?: AgentCompactionOptions;
+  readonly webSearch?: AgentWebSearchOptions;
 }
 
 export interface AgentAdapter {
@@ -62,6 +88,11 @@ export interface AgentSpawnOptions {
    * `{ "type": "local", "command": [...] }` or `{ "type": "remote", "url": "..." }`.
    */
   readonly mcpServers?: readonly AgentSpawnMcpServer[];
+  /**
+   * Web search control for adapters whose only surface is the command line
+   * (claude-code `--disallowedTools`, copilot-cli `--excluded-tools`).
+   */
+  readonly webSearch?: AgentWebSearchOptions;
 }
 
 export interface AgentProfileConfig {

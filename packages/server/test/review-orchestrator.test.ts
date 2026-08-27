@@ -371,7 +371,13 @@ describe("runReviewOrchestration", () => {
       expect(result.llmResult.raw).toMatchObject({ agent: "kilo", stderr: "agent log" });
       expect(spawnCalls).toHaveLength(1);
       expect(spawnCalls[0]?.stdin).toContain("Diff:");
-      expect(spawnCalls[0]?.env).toEqual({ AICR_AGENT_TOKEN: "resolved-token" });
+      const xdgRoot = String(spawnCalls[0]?.cwd ?? "");
+      expect(spawnCalls[0]?.env).toEqual({
+        AICR_AGENT_TOKEN: "resolved-token",
+        // kilo global config/data isolation rides the same injection as PI_CODING_AGENT_DIR.
+        XDG_CONFIG_HOME: join(xdgRoot, ".aicr-xdg-config"),
+        XDG_DATA_HOME: join(xdgRoot, ".aicr-xdg-data"),
+      });
       expect(spawnCalls[0]?.timeoutMs).toBe(30_000);
       expect(teardownCount).toBe(1);
     } finally {
@@ -1684,6 +1690,73 @@ describe("summarizeReviewOrchestrationForWebhook", () => {
     }
   });
 
+  it("redirects XDG config/data dirs to bundle-local paths for kilo runs", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-kilo-xdg-"));
+
+    try {
+      await writeWorkspaceFile(tempDir, "src/app.ts", "const ok = true;\n");
+      // kilo schema-strictly validates the global $XDG_CONFIG_HOME/kilo config too,
+      // so the orchestrator must redirect it away from the developer's host config.
+      const kiloStream = [{ type: "text", text: JSON.stringify({ skipReason: "lgtm" }) }]
+        .map((e) => JSON.stringify(e))
+        .join("\n");
+      const spawnCalls: SandboxSpawnOptions[] = [];
+      let bundleManifest: { envKeys?: string[] } | undefined;
+      const sandbox: SandboxBackend = {
+        kind: "native",
+        async materializeFs(layout) {
+          await mkdir(layout.agentDir, { recursive: true });
+          await mkdir(layout.tmpDir, { recursive: true });
+          return { agentDir: layout.agentDir, tmpDir: layout.tmpDir, mountSpecs: [] };
+        },
+        async spawn(spawnOptions) {
+          spawnCalls.push(spawnOptions);
+          bundleManifest = JSON.parse(await readFile(join(spawnOptions.cwd, "manifest.json"), "utf8")) as {
+            envKeys?: string[];
+          };
+          return { exitCode: 0, stdout: kiloStream, stderr: "", timedOut: false, durationMs: 9 };
+        },
+        async teardown() {},
+      };
+      const agentAdapter: AgentAdapter = {
+        kind: "kilo",
+        async detect() { return { available: true, binary: "kilo" }; },
+        buildCommand() { return ["kilo", "run", "--auto"]; },
+        async materializeConfig(_m, workingDir) {
+          return { configFiles: new Map(), envVars: {}, workingDir };
+        },
+      };
+
+      await runReviewOrchestration(
+        {
+          reviewEvent: createReviewEventFixture(),
+          payload: {},
+          provider: "gitea",
+          eventName: "pull_request",
+        },
+        {
+          baseSystemPrompt: "<task>\n{{TASK_CONTEXT}}\n</task>",
+          sourceRootResolver: () => tempDir,
+          vcs: createVcs(tempDir),
+          llm: { async complete() { throw new Error("direct llm must not be called"); } },
+          model,
+          sandbox,
+          agentAdapter,
+        },
+      );
+
+      const agentSpawn = spawnCalls[0];
+      const agentDir = String(agentSpawn?.cwd ?? "");
+      expect(agentSpawn?.env?.XDG_CONFIG_HOME).toBe(join(agentDir, ".aicr-xdg-config"));
+      expect(agentSpawn?.env?.XDG_DATA_HOME).toBe(join(agentDir, ".aicr-xdg-data"));
+      expect(bundleManifest?.envKeys).toContain("XDG_DATA_HOME");
+      expect(agentSpawn?.env?.PI_CODING_AGENT_DIR).toBeUndefined();
+      expect(bundleManifest?.envKeys).toContain("XDG_CONFIG_HOME");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("omits llmUsage when an agent run emits no step-finish events", async () => {
     const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-kilo-no-usage-"));
 
@@ -2109,6 +2182,7 @@ describe("summarizeReviewOrchestrationForWebhook", () => {
           model,
           sandbox,
           agentAdapter,
+          webSearch: { enabled: true, providers: ["tavily"], timeoutSeconds: 30 },
           outputPublisher: {
             async publishProblem() {
               return { channel: "test", status: "published", externalId: "1", raw: {} };
@@ -2122,6 +2196,170 @@ describe("summarizeReviewOrchestrationForWebhook", () => {
       const agentSpawn = spawnCalls[0];
       expect(agentSpawn?.env?.PI_CODING_AGENT_DIR).toBe(join(String(agentSpawn?.cwd ?? ""), ".omp-agent"));
       expect(agentSpawn?.env?.AICR_PI_MCP_SERVERS).toBeUndefined();
+      // The webSearch option rides the same bundle path as compaction and lands in
+      // the audited runtime-bundle manifest next to the agent workspace.
+      const ompManifest = JSON.parse(
+        await readFile(join(String(agentSpawn?.cwd ?? ""), "manifest.json"), "utf8"),
+      ) as { webSearch?: { enabled: boolean; mode: string } };
+      expect(ompManifest.webSearch).toEqual({ enabled: true, mode: "injected" });
+      // Native sandboxes share host paths, so the generated mcp.json must point at the
+      // module-relative aicr-output server script, not the container-image /app path.
+      const ompMcpJson = JSON.parse(
+        await readFile(join(String(agentSpawn?.cwd ?? ""), ".omp-agent", "mcp.json"), "utf8"),
+      ) as { mcpServers: Record<string, { command: string; args: string[]; env: Record<string, string> }> };
+      const aicrOutputServer = ompMcpJson.mcpServers["aicr-output"];
+      expect(aicrOutputServer?.command).toBe("node");
+      expect(aicrOutputServer?.args?.[0]).toMatch(/mcp-output[/\\]dist[/\\]server\.js$/u);
+      expect(aicrOutputServer?.args?.[0]).not.toContain("/app/");
+      expect(aicrOutputServer?.env?.AICR_OUTPUT_STATE_PATH).toBe(
+        join(String(agentSpawn?.cwd ?? ""), ".aicr-output-state.json"),
+      );
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("estimates oh-my-pi cost from usage when the CLI echoes placeholder zero cost", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-omp-cost-"));
+
+    try {
+      await writeWorkspaceFile(tempDir, "src/app.ts", "const ok = true;\n");
+      const ompStream = [
+        { type: "session", version: 3, id: "s-cost", timestamp: "2026-08-26T00:00:00Z", cwd: "/workspace/agent" },
+        {
+          type: "message_end",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: JSON.stringify({ skipReason: "lgtm" }) }],
+            stopReason: "stop",
+            usage: {
+              input: 1000,
+              output: 100,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 1100,
+              cost: { total: 0 },
+            },
+          },
+        },
+      ].map((e) => JSON.stringify(e)).join("\n");
+      const sandbox: SandboxBackend = {
+        kind: "native",
+        async materializeFs(layout) {
+          await mkdir(layout.agentDir, { recursive: true });
+          await mkdir(layout.tmpDir, { recursive: true });
+          return { agentDir: layout.agentDir, tmpDir: layout.tmpDir, mountSpecs: [] };
+        },
+        async spawn() {
+          return { exitCode: 0, stdout: ompStream, stderr: "", timedOut: false, durationMs: 5 };
+        },
+        async teardown() {},
+      };
+      const agentAdapter: AgentAdapter = {
+        kind: "oh-my-pi",
+        async detect() { return { available: true, binary: "omp" }; },
+        buildCommand() { return ["omp", "-p", "--mode", "json"]; },
+        buildStdin() { return ""; },
+        async materializeConfig(_m, workingDir) {
+          return { configFiles: new Map(), envVars: {}, workingDir };
+        },
+      };
+
+      const result = await runReviewOrchestration(
+        {
+          reviewEvent: createReviewEventFixture(),
+          payload: {},
+          provider: "gitea",
+          eventName: "pull_request",
+        },
+        {
+          baseSystemPrompt: "<task>\n{{TASK_CONTEXT}}\n</task>",
+          sourceRootResolver: () => tempDir,
+          vcs: createVcs(tempDir),
+          llm: { async complete() { throw new Error("direct llm must not be called"); } },
+          // No catalog pricing: the agent echo of 0 must fall back to the documented
+          // (tokens/1000)*0.002 placeholder instead of recording the run as free.
+          model,
+          sandbox,
+          agentAdapter,
+        },
+      );
+
+      expect(result.estimatedCostUsd).toBeCloseTo(0.0022, 6);
+      expect(result.requestCount).toBe(1);
+      expect(result.llmResult.usage?.promptTokens).toBe(1000);
+      expect(result.llmResult.usage?.completionTokens).toBe(100);
+      expect(result.llmResult.usage?.totalTokens).toBe(1100);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("prefers agent-reported cost over the usage-derived estimate for oh-my-pi", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-omp-cost-real-"));
+
+    try {
+      await writeWorkspaceFile(tempDir, "src/app.ts", "const ok = true;\n");
+      const ompStream = [
+        { type: "session", version: 3, id: "s-cost2", timestamp: "2026-08-26T00:00:00Z", cwd: "/workspace/agent" },
+        {
+          type: "message_end",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: JSON.stringify({ skipReason: "lgtm" }) }],
+            stopReason: "stop",
+            usage: {
+              input: 1000,
+              output: 100,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 1100,
+              cost: { total: 0.05 },
+            },
+          },
+        },
+      ].map((e) => JSON.stringify(e)).join("\n");
+      const sandbox: SandboxBackend = {
+        kind: "native",
+        async materializeFs(layout) {
+          await mkdir(layout.agentDir, { recursive: true });
+          await mkdir(layout.tmpDir, { recursive: true });
+          return { agentDir: layout.agentDir, tmpDir: layout.tmpDir, mountSpecs: [] };
+        },
+        async spawn() {
+          return { exitCode: 0, stdout: ompStream, stderr: "", timedOut: false, durationMs: 5 };
+        },
+        async teardown() {},
+      };
+      const agentAdapter: AgentAdapter = {
+        kind: "oh-my-pi",
+        async detect() { return { available: true, binary: "omp" }; },
+        buildCommand() { return ["omp", "-p", "--mode", "json"]; },
+        buildStdin() { return ""; },
+        async materializeConfig(_m, workingDir) {
+          return { configFiles: new Map(), envVars: {}, workingDir };
+        },
+      };
+
+      const result = await runReviewOrchestration(
+        {
+          reviewEvent: createReviewEventFixture(),
+          payload: {},
+          provider: "gitea",
+          eventName: "pull_request",
+        },
+        {
+          baseSystemPrompt: "<task>\n{{TASK_CONTEXT}}\n</task>",
+          sourceRootResolver: () => tempDir,
+          vcs: createVcs(tempDir),
+          llm: { async complete() { throw new Error("direct llm must not be called"); } },
+          model,
+          sandbox,
+          agentAdapter,
+        },
+      );
+
+      expect(result.estimatedCostUsd).toBe(0.05);
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }

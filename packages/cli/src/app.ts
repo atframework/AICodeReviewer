@@ -422,6 +422,7 @@ export async function runCli(
             ...(orchestration.agentAdapter ? { agentAdapter: orchestration.agentAdapter } : {}),
             ...(orchestration.agentTimeoutMs !== undefined ? { agentTimeoutMs: orchestration.agentTimeoutMs } : {}),
             ...(orchestration.contextCompaction ? { contextCompaction: orchestration.contextCompaction } : {}),
+            ...(orchestration.webSearch ? { webSearch: orchestration.webSearch } : {}),
             ...(orchestration.compression ? { compression: orchestration.compression } : {}),
             ...(orchestration.summarizeModel ? { summarizeModel: orchestration.summarizeModel } : {}),
             ...(orchestration.summarizeClient ? { summarizeClient: orchestration.summarizeClient } : {}),

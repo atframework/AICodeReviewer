@@ -9,6 +9,7 @@ import type {
 	AgentMaterializeResult,
 	AgentSpawnOptions,
 } from "./types.js";
+import { warnUnsupportedWebSearchFields } from "./web-search.js";
 
 export interface ClaudeCodeAdapterOptions {
 	readonly binary?: string;
@@ -75,6 +76,13 @@ export function createClaudeCodeAdapter(options: ClaudeCodeAdapterOptions = {}):
 				args.push("--dangerously-skip-permissions");
 			}
 
+			// Deny rules outrank permission-mode auto-allowing, so an explicit
+			// disallow is the reliable off switch for the Anthropic-backed WebSearch
+			// tool (engine/provider itself is not configurable).
+			if (spawnOptions.webSearch?.enabled === false) {
+				args.push("--disallowedTools", "WebSearch");
+			}
+
 			// Wire AICR output MCP tools natively and isolate the run from user/project
 			// MCP configuration so review output tooling is deterministic.
 			const mcpConfigJson = spawnOptions.mcpServers && spawnOptions.mcpServers.length > 0
@@ -93,6 +101,16 @@ export function createClaudeCodeAdapter(options: ClaudeCodeAdapterOptions = {}):
 			options?: AgentMaterializeOptions,
 		): Promise<AgentMaterializeResult> {
 			const envVars: Record<string, string> = {};
+
+			// Claude Code's WebSearch runs on Anthropic's own backend: only the
+			// enable switch (buildCommand `--disallowedTools WebSearch`) is mappable.
+			warnUnsupportedWebSearchFields("claude-code", options?.webSearch, {
+				providers: false,
+				exclude: false,
+				timeout: false,
+				credentials: [],
+				searxng: false,
+			});
 
 			if (model.apiKeyEnv) {
 				envVars.ANTHROPIC_API_KEY = `\${${model.apiKeyEnv}}`;

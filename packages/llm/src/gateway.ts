@@ -349,7 +349,13 @@ function finiteTokenCount(value: number | undefined): number {
   return value;
 }
 
-function estimateCost(usage: ChatCompletionUsage | undefined, pricing?: ModelPricing): number {
+/**
+ * Estimates the USD cost of one completion from token-category usage and model
+ * pricing. With no catalog pricing at all it falls back to the documented
+ * `(tokens/1000) * 0.002` placeholder so cost surfaces never read as exactly
+ * free just because pricing metadata is missing.
+ */
+export function estimateCost(usage: ChatCompletionUsage | undefined, pricing?: ModelPricing): number {
   if (!usage) return 0;
   const inputTokens = finiteTokenCount(usage.promptTokens);
   const outputTokens = finiteTokenCount(usage.completionTokens);

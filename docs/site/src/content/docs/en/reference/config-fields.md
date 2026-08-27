@@ -206,6 +206,18 @@ Narrative: [Agent and sandbox](/en/configuration/agent/).
 | `agent.context_compaction.auto` | boolean | `true` | Enable auto-compaction |
 | `agent.context_compaction.threshold_percent` | int 1–100 | — | Compaction trigger threshold |
 | `agent.context_compaction.prune` | boolean | `true` | Prune compacted history |
+| `agent.web_search` | object | `{ enabled: false }` | Built-in search tool control per agent (omp/kilo/opencode config-level, claude-code/copilot-cli switch-only, zoo/pi none); AICR always materializes the explicit switch |
+| `agent.web_search.enabled` | boolean | `false` | Enable the agent's built-in web search tool for reviews (omp `web_search.enabled`; kilo/opencode permission + activation env; claude-code/copilot-cli CLI switch) |
+| `agent.web_search.providers` | string[] | `[]` | Ordered providers: full omp chain; kilo accepts `exa`; opencode selects the first `exa`/`parallel` |
+| `agent.web_search.exclude` | string[] | `[]` | Provider ids removed from the search chain → `providers.webSearchExclude` |
+| `agent.web_search.timeout_seconds` | int 1–300 | — | Per-provider transport timeout → `providers.webSearchTimeoutSeconds` |
+| `agent.web_search.credentials` | map | `{}` | Search credential id → host env var name; enabled adapters inject supported native env vars via `${VAR}` references |
+| `agent.web_search.searxng` | object | — | Self-hosted SearXNG settings (keeps queries inside your network) |
+| `agent.web_search.searxng.endpoint` | string | — | SearXNG endpoint URL |
+| `agent.web_search.searxng.categories` | string | — | SearXNG categories filter |
+| `agent.web_search.searxng.engines` | string | — | SearXNG engines filter |
+| `agent.web_search.searxng.language` | string | — | SearXNG language filter |
+| `agent.web_search.searxng.safesearch` | int 0–2 | — | SearXNG safe-search level |
 
 ## `review`
 

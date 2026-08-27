@@ -208,6 +208,26 @@ AICR 采用**两层上下文管理**，两者互补：
   - **Claude Code**：默认自动压缩（delegated，不注入额外配置）。
   - **Copilot CLI**：无上下文管理面（not_applicable）。
 - manifest 记录 `contextCompaction.{enabled,mode}`（`injected` / `delegated` / `not_applicable`）。
+- `agent.web_search`（默认关闭）治理各 agent 内置搜索工具：omp 自身默认启用 web_search 且免凭据
+  抓取器（duckduckgo/startpage 等）开箱可用，kilo/opencode/claude-code/copilot-cli 也各自内置搜索
+  工具且在 `--auto`/skip-permissions/allow-all 自动批准下默认可达，因此 AICR 对支持配置面的 agent
+  **始终**物化显式开关保证评审默认封闭。映射面：omp 写 `config.yml` 的 `web_search.enabled` +
+  `providers.webSearchOrder/webSearchExclude/webSearchTimeoutSeconds` + 自托管 `searxng.*`；kilo 写
+  `kilo.json` 的 `permission.websearch: allow/deny` 并以 `KILO_ENABLE_EXA=1` 激活（只接受 Exa；
+  v7.2.40 registry 仅 kilo provider 或该 flag 下才向模型提供工具）；opencode 写 `opencode.json` 的
+  `permission.websearch`，按 `providers` 顺序选择第一个 Exa/Parallel，并以对应的
+  `OPENCODE_ENABLE_*` + `OPENCODE_WEBSEARCH_PROVIDER` 激活（未列 provider 时仅有 Parallel
+  凭据才选 Parallel，否则选 Exa）；claude-code 禁用时追加 `--disallowedTools WebSearch`
+  （引擎为 Anthropic 自有后端）；
+  copilot-cli 禁用时追加 `--excluded-tools=web_search,web_fetch`（Copilot 订阅后端；`--deny-url`
+  只门控 shell/web-fetch，管不到 `web_search`，verified v1.0.80）。凭据走 env 名间接
+  寻址：`credentials` 把 provider id 映射到宿主机 env 名（如 `tavily: AICR_SEARCH_TAVILY_KEY`），
+  adapter 注入 agent 原生 env（`TAVILY_API_KEY`/`EXA_API_KEY`/`PARALLEL_API_KEY` 等）的 `${VAR}`
+  引用，密钥不落盘，且禁用搜索时不注入任何搜索凭据；仅支持已验证 env 名的 provider（OAuth 型在每次运行临时生成的
+  `PI_CODING_AGENT_DIR` 内无 auth store，天然不可用）。单个 agent 用不到的字段以启动告警 +
+  manifest 降级的方式跳过（不硬失败，便于一份全局配置服务混合 agent 的 workspace）。manifest 记录
+  `webSearch.{enabled,mode}`（omp/kilo/opencode 为 `injected`，claude-code/copilot-cli 为
+  `delegated`（仅开关、引擎归 CLI 自有后端），zoo/pi 为 `not_applicable`）。
 - 当 agent 运行仍然触发上下文溢出（例如首轮 task 本身已超限），orchestrator 检测到
   `ContextOverflowError` / `context length exceeded` 模式后抛出 `AgentContextOverflowError`，
   携带 model limit、requested tokens 与可操作修复建议（启用 model_catalog / 配置 compression /
@@ -254,6 +274,11 @@ AICR 采用**两层上下文管理**，两者互补：
   上下文/格式修复调用和最终直连 LLM 兜底的 usage、cost、request/retry/fallback 全部累加到 run 级结果；
   只保留最终 completion 会漏掉此前已经计费的绝大多数 token。usage 全来自 agent 时标记
   `"agent_stdout"`，全来自直连 gateway 时标记 `"llm_gateway"`，两者都有时标记 `"mixed"`。
+  agent 路径的 `estimatedCostUsd` 取 agent 上报的 cost（kilo `step-finish` cost、pi/omp
+  `message_end.message.usage.cost.total`、Claude `total_cost_usd`）；当上报值为 0 或缺失而 usage 可解析时，
+  回落到 AICR 自算的 `estimateCost(usage, extractModelPricing(model))`（与 gateway 同一实现，含无价格时的
+  `(tokens/1000)*0.002` 占位估算），避免注入 models.json/models.yml 的占位 cost 0 被原样记账为免费。
+  订阅制 provider（如 models.dev 的 `zhipuai-coding-plan`）每 token 价格本就是 0，此时 0 是真值而非占位。
   当 agent 路径未发出可解析的 usage 事件时（如非 kilo agent 或输出被截断），该次调用不臆造 usage；
   若整个 run 都没有真实 usage，dashboard 的 `llm_usage` token 列显示 0/—，同时
   `review_runs.prompt_token_estimate`（本地 prompt 估算，独立存储、不混入 `llm_usage`）作为旁显参考值。
@@ -317,7 +342,7 @@ AICR 采用**两层上下文管理**，两者互补：
   - **instructions**：合并写成工作目录根部 `AGENTS.md`（Kilo/OpenCode/Copilot CLI/Zoo 均原生自动加载；pi 在 trust 判定之前也加载 cwd/祖先 `AGENTS.md`，oh-my-pi 经规则发现原生加载）；Claude Code 另写 `CLAUDE.md`（内容为 `@AGENTS.md` 导入）。`instructions/` 保留逐来源副本供 manifest/审计使用，不再通过 Kilo/OpenCode `instructions` glob 重复加载同一内容；归一化后的文件或 skill 路径冲突直接报错，禁止静默覆盖。
   - **skills**：统一物化为标准布局 `.agents/skills/<name>/SKILL.md`（OpenCode、Copilot CLI、oh-my-pi 原生发现；Kilo 经 kilo.json `skills.paths` 指向同一目录；pi 原生发现但项目级 skills 受 trust 门控，headless 必须 `--approve` 才会加载——bundle 目录完全由 AICR 物化，trust 是安全的）；Claude Code 另写 `.claude/skills/<name>/SKILL.md` 副本。opencode.json 加 `permission.skill: {"*": "allow"}` 避免 headless 技能加载被交互确认卡住。
   - **MCP**：kilo 经 `kilo.json` `mcp` 段、opencode 经 `opencode.json` `mcp` 段接线；Claude Code 经 `--mcp-config <inline-json> --strict-mcp-config`（与用户/项目 MCP 配置隔离）；Copilot CLI 经 `--additional-mcp-config=<inline-json>`；oh-my-pi 原生支持 MCP，经 `$PI_CODING_AGENT_DIR/mcp.json` 接线（工具以 `mcp__<server>_<tool>` 暴露，命中现有 `<prefix>_aicr_<tool>` 归一化规则）；**pi 无内置 MCP（上游明确的设计决策）**，runtime bundle 生成用户级扩展 `.pi-agent/extensions/aicr-output.ts`。扩展 factory 只注册生命周期 handler；`session_start` 中启动 stdio JSON-RPC 子进程、完成发现并以 `pi_aicr_<tool>` 注册，`session_shutdown` 回收子进程。server 规格经 `AICR_PI_MCP_SERVERS` env 传入扩展。canonical `{type:"local",command:[...]}` 形态由 `packages/agents/src/mcp-config.ts` 转换为各家原生形态（claude stdio 的 `command`/`args` 拆分、copilot local 的 `command`/`args`/`tools`、omp 的 `command`+`args`+`env` / http `url`+`headers`）。
-  - orchestrator 给 `aicr-output` server 注入 `AICR_OUTPUT_STATE_PATH` 绝对路径（native 沙箱用宿主 agent 目录，docker 沙箱固定 `/workspace/agent/...`），状态文件落点不再依赖宿主 CLI 拉起 MCP server 时的 cwd。同一注入模式用于 pi/oh-my-pi 的 `PI_CODING_AGENT_DIR`：其值必须是沙箱可见路径（容器固定 `/workspace/agent/.pi-agent` 或 `.omp-agent`），由 orchestrator 在已知沙箱 workdir 后注入，而不是由适配器在 host 侧物化。
+  - orchestrator 给 `aicr-output` server 注入 `AICR_OUTPUT_STATE_PATH` 绝对路径（native 沙箱用宿主 agent 目录，docker 沙箱固定 `/workspace/agent/...`），状态文件落点不再依赖宿主 CLI 拉起 MCP server 时的 cwd。server 脚本路径同样按沙箱类型改写：容器沙箱用 runtime 镜像内的 `/app/packages/mcp-output/dist/server.js`，native 沙箱改写为相对本模块解析的宿主 `packages/mcp-output/dist/server.js`（`adaptMcpServersForSandbox`），否则 MCP server 在 native 沙箱内启动失败、agent 静默退化为 stdout JSON 合同。同一注入模式用于 pi/oh-my-pi 的 `PI_CODING_AGENT_DIR`：其值必须是沙箱可见路径（容器固定 `/workspace/agent/.pi-agent` 或 `.omp-agent`），由 orchestrator 在已知沙箱 workdir 后注入，而不是由适配器在 host 侧物化。
   - manifest 增加 `nativeSurfaces.{instructions,skills,mcp}` 记录实际接线面；无原生面的 adapter（如 zoo 的 MCP）显式记为 `none` 而不是静默走 prompt-only。
 
 ### 3.7 AgentAdapter 与模型翻译
@@ -517,6 +542,7 @@ AICR 采用**两层上下文管理**，两者互补：
   - `review.reflection.memory`
   - `workspaces.defaults.agent`
   - `agent.context_compaction`（auto / threshold_percent / prune，见 §3.3.2）
+  - `agent.web_search`（enabled / providers / exclude / timeout_seconds / credentials / searxng，各 agent 映射见 §3.3.2）
   - `workspaces.defaults.prompt.base_system_prompt_file`
   - `workspaces.defaults.prompt.force_skills`
   - `outputs.channels[].mention_fallback`

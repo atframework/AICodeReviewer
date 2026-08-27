@@ -8,6 +8,8 @@ export type {
   AgentSpawnResult,
   AgentAdapter,
   AgentCompactionOptions,
+  AgentWebSearchOptions,
+  AgentWebSearchSearxngOptions,
   AgentSpawnOptions,
   AgentSpawnMcpServer,
   AgentProfileConfig,
@@ -30,7 +32,12 @@ export type { PiAdapterOptions } from "./pi.js";
 export { PI_AGENT_DIR_NAME } from "./pi.js";
 export { createOhMyPiAdapter } from "./oh-my-pi.js";
 export type { OhMyPiAdapterOptions } from "./oh-my-pi.js";
-export { OMP_AGENT_DIR_NAME } from "./oh-my-pi.js";
+export { OMP_AGENT_DIR_NAME, OMP_WEB_SEARCH_CREDENTIAL_ENV_NAMES, buildOmpWebSearchEnvVars } from "./oh-my-pi.js";
+export {
+  buildWebSearchCredentialEnvVars,
+  warnUnsupportedWebSearchFields,
+  type WebSearchFieldSupport,
+} from "./web-search.js";
 export {
   toClaudeCodeMcpServersJson,
   toCopilotCliMcpServersJson,

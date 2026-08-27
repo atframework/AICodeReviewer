@@ -131,6 +131,14 @@
 - Reasoning effort 档位 `minimal/low/medium/high/max`：direct-LLM 发送 `reasoning_effort`，
   Kilo adapter 物化 `variants` 并以 `--variant` 运行（见 `docs/ai/architecture.md` §3.7.3）。
 - 能力不支持时在 manifest 显式降级，而不是静默忽略。
+- `agent.web_search`（默认关闭）治理各 agent 内置搜索工具：始终物化显式开关保证评审封闭默认，
+  按 agent 映射——omp 走 `config.yml`（enabled + provider 链 + SearXNG），kilo 走
+  `permission.websearch` + `KILO_ENABLE_EXA` 激活，opencode 走 `permission.websearch` +
+  首个受支持 provider 的 `OPENCODE_ENABLE_*`/`OPENCODE_WEBSEARCH_PROVIDER`，claude-code/copilot-cli 仅 CLI 开关
+  （`--disallowedTools WebSearch` / `--excluded-tools=web_search,web_fetch`），zoo/pi 无内置搜索。
+  启用时凭据经 env 名间接寻址注入 agent 原生 env（`TAVILY_API_KEY` 等），密钥不落盘；禁用时不注入
+  搜索凭据。manifest 记录 `webSearch.{enabled,mode}`（`injected`/`delegated`/`not_applicable`），
+  不支持的 provider id/字段告警跳过。长期设计与验收证据见 `docs/ai/milestones/M13.1.md`。
 
 ### 3.8 SandboxBackend
 
@@ -251,6 +259,7 @@
 | M11 | 进行中 | `docs/ai/documentation-site-plan.md` | Pages 设置核验；M11-P6 打磨 |
 | M12 | 已完成 | 本文 §3.2.1 / `docs/ai/architecture.md` §3.2.1 | P1–P4 已交付；P5 公网正式环境切换完成，三个目标仓库均通过 token 解析验证，待一次真实 PR/push 完成最终 e2e 签收 |
 | M13 | 已完成 | 本文 §8.2.2 | P1–P5 全部交付，全量门禁通过（1885 tests / eslint / tsc / markdownlint / build / eval / docs:build） |
+| M13.1 | 已完成 | `docs/ai/milestones/M13.1.md` | agent web search 治理、provider 选择、凭据隔离与 WSL 集成验证通过 |
 
 ### 8.2 当前执行包
 

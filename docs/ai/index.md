@@ -65,6 +65,7 @@
 | M11 文档站子工程 | 进行中 | `documentation-site-plan.md` |
 | M12 GitHub App 认证 | 已完成 | `../../Plan.md` §8.2.1 / `architecture.md` §3.2.1 |
 | M13 pi + oh-my-pi 集成 | 已完成 | `../../Plan.md` §8.2.2 |
+| M13.1 agent web search 治理 | 已完成 | `milestones/M13.1.md` |
 | 本地优先队列 P0-P12 | 已完成 | `milestones/local-priority-queue.md` |
 
 ## 维护规则
