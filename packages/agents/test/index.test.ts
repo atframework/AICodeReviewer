@@ -1471,6 +1471,34 @@ describe("createOpencodeAdapter", () => {
       }
     });
 
+    it("falls back to the credentialed backend when providers lists no supported id", async () => {
+      // `providers` names no exa/parallel entry; with only parallel credentialed the
+      // backend must resolve to parallel and only its credential is injected.
+      const tempDir = await mkdtemp(join(tmpdir(), "aicr-opencode-ws-cred-fallback-"));
+      try {
+        const adapter = createOpencodeAdapter();
+        const result = await adapter.materializeConfig(
+          { providerKind: "openai_compatible", providerId: "p", modelId: "m" },
+          tempDir,
+          {
+            webSearch: {
+              enabled: true,
+              providers: ["tavily"],
+              credentials: { parallel: "AICR_SEARCH_PARALLEL_KEY" },
+            },
+          },
+        );
+
+        expect(result.envVars.OPENCODE_ENABLE_PARALLEL).toBe("1");
+        expect(result.envVars.OPENCODE_ENABLE_EXA).toBeUndefined();
+        expect(result.envVars.OPENCODE_WEBSEARCH_PROVIDER).toBe("parallel");
+        expect(result.envVars.PARALLEL_API_KEY).toBe("${AICR_SEARCH_PARALLEL_KEY}");
+        expect(result.envVars.EXA_API_KEY).toBeUndefined();
+      } finally {
+        await rm(tempDir, { recursive: true, force: true });
+      }
+    });
+
     it("warns about searxng and unsupported credentials while enabling", async () => {
       const tempDir = await mkdtemp(join(tmpdir(), "aicr-opencode-ws-warn-"));
       const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -2820,6 +2848,23 @@ describe("createOhMyPiAdapter", () => {
 
       const written = await readFile(join(tempDir, ".omp-agent", "models.yml"), "utf8");
       expect(written).toBe(modelsYaml);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("passes extra headers through into models.yml", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-omp-headers-"));
+    try {
+      const adapter = createOhMyPiAdapter();
+      const result = await adapter.materializeConfig(
+        { ...piFamilyModel, extraHeaders: { "X-Tenant-Id": "tenant-42" } },
+        tempDir,
+      );
+
+      const modelsYaml = result.configFiles.get(".omp-agent/models.yml") ?? "";
+      expect(modelsYaml).toContain("headers:");
+      expect(modelsYaml).toContain('"X-Tenant-Id": "tenant-42"');
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }
