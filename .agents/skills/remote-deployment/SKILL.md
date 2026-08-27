@@ -138,8 +138,11 @@ If the kind name changed, update it in the remote config **before** running `dep
 
 ```bash
 # 1. Sync source files to remote source/
-# 2. Update config.yaml if needed
-# 3. Run deploy script on remote
+# 2. Refresh build assets: deploy.sh builds from <deploy-dir>/deploy/, not source/deploy/
+ssh -p <ssh-port> ... <remote-host> \
+  "cd <deploy-dir> && cp -rf source/deploy/. deploy/ && cp source/deploy/deploy.sh deploy.sh"
+# 3. Update config.yaml if needed
+# 4. Run deploy script on remote
 ssh -p <ssh-port> ... <remote-host> "cd <deploy-dir>; bash deploy.sh"
 ```
 
@@ -149,6 +152,11 @@ The `deploy.sh` script:
 2. Stops and removes old `aicr` container
 3. Starts new container with volume mounts and env vars
 4. Runs health check on `http://127.0.0.1:<host-port>/healthz`
+
+**Stopping a running `deploy.sh` over SSH:** a literal pattern like
+`pkill -f 'bash deploy.sh'` also matches the caller's own SSH remote command
+line and kills the session mid-command. Use a bracketed regex that cannot match
+its own text, e.g. `pkill -f 'bash deploy[.]sh'`.
 
 If the deploy host listens on TCP `3128` and no explicit `HTTP_PROXY` /
 `HTTPS_PROXY` is exported, `deploy.sh` auto-detects that host-side HTTP proxy
@@ -329,6 +337,9 @@ The `.env` file must be ASCII or UTF-8 without BOM. Windows PowerShell 5.1 `>` r
 | GitHub/GitLab/P4 issue events fail with `issue_triage_failed` / `fetch failed` | Issue triage only has a Gitea client but is being applied to non-Gitea issue events (provider not gated) | Redeploy the fixed image (triage is now provider-gated). No GitHub/GitLab triage client exists; non-Gitea workspaces must not rely on issue auto-close |
 | `github-managed-findings` (or `github_problem_issue`) returns 401/403 | The outbound GitHub credential is expired, revoked, or lacks Issues read/write scope (webhook `Issues` event subscription does NOT grant REST issue create/update permission). With GitHub App auth, this means the App is not installed to the repository, the private key is wrong, or the App lacks `repo`/`issues:write` permissions | For `token_env`: rotate the PAT. For `app` auth: verify the App is installed on the target repo, the private key matches `AICR_GITHUB_APP_PRIVATE_KEY`, and the App has `repo` + `issues:write` permissions; trigger token refresh by restarting the container after updating `.env` |
 | `podman restart` fails with `pasta failed ... Failed to bind port <N> (Address already in use)` and the container stays stopped (Exited 143) | Rootless pasta network re-init races the old container's port release during restart | Wait for the port to free (`ss -tlnp \| grep <port>` shows none), then `podman --storage-driver=overlay start aicr`; verify `/healthz`. Prefer `podman stop` + `start` over `restart` for config-only changes on this host |
+| Image builds "successfully" but a new Dockerfile feature (e.g. an agent CLI) is missing from the container | `deploy.sh` builds with `-f <deploy-dir>/deploy/Dockerfile`, not `source/deploy/Dockerfile`; the root copy was never refreshed after syncing source | After extracting source, refresh build assets before running `deploy.sh`: `cp -rf source/deploy/. deploy/ && cp source/deploy/deploy.sh deploy.sh`; verify with `grep` for the expected new step in `<deploy-dir>/deploy/Dockerfile` and in `deploy-run-latest.log` |
+| `omp --version` fails with `/usr/bin/env: 'bun': No such file or directory` | The `@oh-my-pi/pi-coding-agent` npm bundle is a Bun binary-bundle (`Bun.spawn`, `import.meta.require`) and requires the Bun runtime (`engines: bun >= 1.3.14`), which Node cannot execute | Install pinned `bun` globally from the registry before omp (its `@oven/bun-linux-x64` platform package flows through the same mirror/proxy); see `deploy/Dockerfile` |
+| Build hangs >15 min on `npm install @oh-my-pi/pi-coding-agent` inside `podman build` | The optional dep `onnxruntime-node` runs `node ./script/install` postinstall whose downloads stall indefinitely behind restrictive egress (0 established proxy connections, idle process) | Build installs omp with `npm install --global --ignore-scripts ...` (see `deploy/Dockerfile`); only omp's non-essential local-embedding features degrade. To unstick a live hang: kill deploy.sh + `podman build` (use bracketed pkill patterns) and rebuild — cached layers make the retry fast |
 
 ### Podman `invalid internal status` deep-dive
 

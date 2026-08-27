@@ -39,9 +39,9 @@ agent:
 `AgentKind`。`pi` 与 `oh-my-pi` 适配器支持 `openai_compatible`、`ollama`、
 `anthropic`、`google_ai_studio` 四种 provider kind，且两者都要求模型的上下文
 窗口与输出 token 上限已知——使用前请先启用 `llm.model_catalog`（或设置
-overrides）。AICR 运行时镜像与默认 agent 沙箱镜像均未内置 `pi`/`omp` 二进制：
-使用这两个 kind 需要自带安装了对应 CLI 的自定义沙箱镜像（这两个二进制默认已在
-沙箱命令白名单中）。
+overrides）。由 `deploy/Dockerfile` 构建的运行时镜像内置固定版本的 Kilo 与
+`omp` CLI，覆盖该镜像内的 native 沙箱路径；其他沙箱镜像需要预装对应 CLI
+（这两个二进制默认已在沙箱命令白名单中）。
 :::
 
 schema 也接受 `workspaces.defaults.agent.default` 和

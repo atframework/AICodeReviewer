@@ -267,7 +267,7 @@ Kilo Code is the primary deployment-test agent for AICodeReviewer. The repeatabl
 
 ### Prerequisites
 
-- Kilo Code installed for interactive verification. The deployment image installs `@kilocode/cli` so the service container has the `kilo` binary for automated runs.
+- Kilo Code installed for interactive verification. The deployment image installs `@kilocode/cli` (plus pinned `@oh-my-pi/pi-coding-agent`) so the service container has the `kilo`/`omp` binaries for automated runs.
 - `agent.default: kilo` in `config.yaml`.
 - A test Gitea/GitHub/GitLab PR or a P4 changelist that routes to a non-production output channel.
 - Required secrets loaded through environment variables; do not copy token values into `config.yaml` or prompts.

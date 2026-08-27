@@ -318,7 +318,26 @@ RUN set -eux; \
 
 WORKDIR /app
 
-RUN npm install --global @kilocode/cli@7.2.40 --registry="${NPM_REGISTRY}" --strict-ssl="${NPM_STRICT_SSL}"
+# Agent CLIs are installed unpinned so every build ships the latest published
+# release. CLI_REFRESH is a cache-buster: deploy.sh passes a build timestamp so
+# these layers never come from the build cache (otherwise the first "latest"
+# would be served forever). Version-specific behavior notes live in
+# docs/ai/AGENTS.known-pitfalls.md as "verified against vX" records.
+ARG CLI_REFRESH=0
+RUN echo "cli refresh: ${CLI_REFRESH}" \
+  && npm install --global @kilocode/cli --registry="${NPM_REGISTRY}" --strict-ssl="${NPM_STRICT_SSL}"
+
+# oh-my-pi (`omp`) ships alongside Kilo so `agent.default: oh-my-pi` works with
+# the native sandbox inside this runtime image; container sandbox images are
+# separate and do not include it. Its bundle requires the Bun runtime
+# (engines: bun >= 1.3.14), installed from the registry so the platform binary
+# uses the same mirror/proxy path as the rest of the image.
+RUN npm install --global bun --registry="${NPM_REGISTRY}" --strict-ssl="${NPM_STRICT_SSL}"
+# --ignore-scripts skips onnxruntime-node's optional postinstall download,
+# which stalls indefinitely behind restrictive egress and only powers omp's
+# non-essential local-embedding features; everything else in the tree ships
+# prebuilt binaries via registry packages.
+RUN npm install --global --ignore-scripts @oh-my-pi/pi-coding-agent --registry="${NPM_REGISTRY}" --strict-ssl="${NPM_STRICT_SSL}"
 
 COPY --from=build --chown=node:node /app/packages/cli/package.json ./packages/cli/package.json
 COPY --from=build --chown=node:node /app/packages/core/package.json ./packages/core/package.json
