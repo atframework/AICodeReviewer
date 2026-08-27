@@ -1228,6 +1228,73 @@ describe("mergeConfigLayers", () => {
     expect(result.success).toBe(false);
   });
 
+  it("defaults agent.web_search to disabled with empty provider lists", () => {
+    const result = appConfigSchema.safeParse({});
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.agent.web_search.enabled).toBe(false);
+      expect(result.data.agent.web_search.providers).toEqual([]);
+      expect(result.data.agent.web_search.exclude).toEqual([]);
+      expect(result.data.agent.web_search.credentials).toEqual({});
+      expect(result.data.agent.web_search.searxng).toBeUndefined();
+    }
+  });
+
+  it("accepts a full agent.web_search configuration", () => {
+    const result = appConfigSchema.safeParse({
+      agent: {
+        web_search: {
+          enabled: true,
+          providers: ["tavily", "duckduckgo"],
+          exclude: ["google", "ecosia", "mojeek"],
+          timeout_seconds: 30,
+          credentials: {
+            tavily: "AICR_SEARCH_TAVILY_KEY",
+            searxng_token: "AICR_SEARCH_SEARXNG_TOKEN",
+            searxng_basic_username: "AICR_SEARCH_SEARXNG_USERNAME",
+            searxng_basic_password: "AICR_SEARCH_SEARXNG_PASSWORD",
+          },
+          searxng: {
+            endpoint: "https://searxng.internal:8080",
+            categories: "it",
+            language: "zh-CN",
+            safesearch: 1,
+          },
+        },
+      },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const webSearch = result.data.agent.web_search;
+      expect(webSearch.enabled).toBe(true);
+      expect(webSearch.providers).toEqual(["tavily", "duckduckgo"]);
+      expect(webSearch.exclude).toEqual(["google", "ecosia", "mojeek"]);
+      expect(webSearch.timeout_seconds).toBe(30);
+      expect(webSearch.credentials.tavily).toBe("AICR_SEARCH_TAVILY_KEY");
+      expect(webSearch.credentials.searxng_basic_password).toBe("AICR_SEARCH_SEARXNG_PASSWORD");
+      expect(webSearch.searxng?.endpoint).toBe("https://searxng.internal:8080");
+      expect(webSearch.searxng?.safesearch).toBe(1);
+    }
+  });
+
+  it("rejects agent.web_search with unknown credential providers or out-of-range values", () => {
+    expect(appConfigSchema.safeParse({
+      agent: { web_search: { credentials: { gemini_oauth: "SOME_KEY" } } },
+    }).success).toBe(false);
+    expect(appConfigSchema.safeParse({
+      agent: { web_search: { timeout_seconds: 301 } },
+    }).success).toBe(false);
+    expect(appConfigSchema.safeParse({
+      agent: { web_search: { timeout_seconds: 0 } },
+    }).success).toBe(false);
+    expect(appConfigSchema.safeParse({
+      agent: { web_search: { searxng: { safesearch: 3 } } },
+    }).success).toBe(false);
+    expect(appConfigSchema.safeParse({
+      agent: { web_search: { unknown_field: true } },
+    }).success).toBe(false);
+  });
+
   it("accepts queue workers, rate_limit, retry, and dead_letter from Plan §3.10", () => {
     const result = appConfigSchema.safeParse({
       queue: {

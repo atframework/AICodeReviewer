@@ -338,6 +338,56 @@ const contextCompactionSchema = z
   })
   .strict();
 
+/**
+ * Credential providers whose omp-native env var name is verified for AICR
+ * env-name indirection (omp 18.0.6, `docs/tools/web_search.md` + binary strings;
+ * `packages/agents/src/oh-my-pi.ts` holds the env-name mapping and must stay in
+ * sync). OAuth-stored providers (perplexity/gemini/codex OAuth) are excluded:
+ * the per-run `PI_CODING_AGENT_DIR` bundle has no auth store.
+ */
+const agentWebSearchCredentialProviderSchema = z.enum([
+  "tavily",
+  "brave",
+  "exa",
+  "jina",
+  "kagi",
+  "parallel",
+  "kimi",
+  "perplexity",
+  "zai",
+  "xai",
+  "anthropic",
+  "tinyfish",
+  "firecrawl",
+  "searxng_token",
+  "searxng_basic_username",
+  "searxng_basic_password",
+]);
+
+const agentWebSearchSearxngSchema = z
+  .object({
+    endpoint: z.string().min(1).optional(),
+    categories: z.string().min(1).optional(),
+    engines: z.string().min(1).optional(),
+    language: z.string().min(1).optional(),
+    safesearch: z.number().int().min(0).max(2).optional(),
+  })
+  .strict();
+
+const agentWebSearchSchema = z
+  .object({
+    enabled: z.boolean().default(false),
+    providers: z.array(z.string().min(1)).default([]),
+    exclude: z.array(z.string().min(1)).default([]),
+    timeout_seconds: z.number().int().min(1).max(300).optional(),
+    credentials: z
+      .record(agentWebSearchCredentialProviderSchema, z.string().min(1))
+      .default({}),
+    searxng: agentWebSearchSearxngSchema.optional(),
+  })
+  .strict()
+  .default({ enabled: false, providers: [], exclude: [], credentials: {} });
+
 const triageSchema = z
   .object({
     enabled: z.boolean().default(false),
@@ -665,6 +715,7 @@ const appConfigSchema = z
         auto_approve: z.boolean().default(true),
         sandbox: sandboxSchema.default({ kind: "docker", engine: "auto" }),
         context_compaction: contextCompactionSchema.default({ auto: true, prune: true }),
+        web_search: agentWebSearchSchema,
       })
       .strict()
       .default({
@@ -673,6 +724,7 @@ const appConfigSchema = z
         auto_approve: true,
         sandbox: { kind: "docker", engine: "auto" },
         context_compaction: { auto: true, prune: true },
+        web_search: { enabled: false, providers: [], exclude: [], credentials: {} },
       }),
     compression: compressionSchema,
     review: reviewSchema.default({

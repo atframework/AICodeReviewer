@@ -191,6 +191,18 @@ schema 接受 `workspaces.defaults` 和实例上的 `agent.default` 与 `sandbox
 | `agent.context_compaction.auto` | boolean | `true` | 启用自动压缩 |
 | `agent.context_compaction.threshold_percent` | int 1–100 | — | 压缩触发阈值 |
 | `agent.context_compaction.prune` | boolean | `true` | 修剪压缩后的历史 |
+| `agent.web_search` | object | `{ enabled: false }` | 各 agent 内置搜索工具的控制（omp/kilo/opencode 配置级，claude-code/copilot-cli 仅开关，zoo/pi 无）；AICR 始终物化显式开关 |
+| `agent.web_search.enabled` | boolean | `false` | 为评审启用 agent 内置搜索工具（omp `web_search.enabled`；kilo/opencode permission + 激活 env；claude-code/copilot-cli CLI 开关） |
+| `agent.web_search.providers` | string[] | `[]` | 有序 provider：omp 使用完整链；kilo 仅接受 `exa`；opencode 选择首个 `exa`/`parallel` |
+| `agent.web_search.exclude` | string[] | `[]` | 从搜索链路剔除的 provider id → `providers.webSearchExclude` |
+| `agent.web_search.timeout_seconds` | int 1–300 | — | 单 provider 传输超时 → `providers.webSearchTimeoutSeconds` |
+| `agent.web_search.credentials` | map | `{}` | 搜索凭据 id → 宿主 env 名；启用搜索的 adapter 通过 `${VAR}` 引用注入所支持的原生 env |
+| `agent.web_search.searxng` | object | — | 自托管 SearXNG 设置（查询保留在内网） |
+| `agent.web_search.searxng.endpoint` | string | — | SearXNG 端点 URL |
+| `agent.web_search.searxng.categories` | string | — | SearXNG 分类过滤 |
+| `agent.web_search.searxng.engines` | string | — | SearXNG 引擎过滤 |
+| `agent.web_search.searxng.language` | string | — | SearXNG 语言过滤 |
+| `agent.web_search.searxng.safesearch` | int 0–2 | — | SearXNG 安全搜索级别 |
 
 ## `review`
 

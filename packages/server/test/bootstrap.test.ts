@@ -2783,6 +2783,49 @@ describe("bootstrapServerApp", () => {
       expect(result.reviewOrchestration?.sandbox?.kind).toBe("native");
       expect(result.reviewOrchestration?.agentAdapter?.kind).toBe("kilo");
       expect(result.reviewOrchestration?.agentTimeoutMs).toBe(600_000);
+      // Hand-built AppConfig literals (like makeConfig) omit web_search; bootstrap
+      // must degrade to the schema default instead of crashing.
+      expect(result.reviewOrchestration?.webSearch).toEqual({ enabled: false });
+    } finally {
+      if (originalKey === undefined) {
+        delete process.env.OPENAI_API_KEY;
+      } else {
+        process.env.OPENAI_API_KEY = originalKey;
+      }
+    }
+  });
+
+  it("maps agent.web_search into the review orchestration webSearch option", async () => {
+    const originalKey = process.env.OPENAI_API_KEY;
+    process.env.OPENAI_API_KEY = "test-key";
+    try {
+      const base = makeConfig();
+      const config = makeConfig({
+        agent: {
+          ...base.agent,
+          web_search: {
+            enabled: true,
+            providers: ["tavily", "duckduckgo"],
+            exclude: ["google"],
+            timeout_seconds: 30,
+            credentials: { tavily: "AICR_SEARCH_TAVILY_KEY" },
+            searxng: { endpoint: "https://searxng.internal:8080", safesearch: 1 },
+          },
+        },
+      });
+      const result = await bootstrapServerApp({
+        config,
+        baseSystemPrompt: "test prompt",
+      });
+
+      expect(result.reviewOrchestration?.webSearch).toEqual({
+        enabled: true,
+        providers: ["tavily", "duckduckgo"],
+        exclude: ["google"],
+        timeoutSeconds: 30,
+        credentials: { tavily: "AICR_SEARCH_TAVILY_KEY" },
+        searxng: { endpoint: "https://searxng.internal:8080", safesearch: 1 },
+      });
     } finally {
       if (originalKey === undefined) {
         delete process.env.OPENAI_API_KEY;

@@ -672,6 +672,49 @@ agent:
     auto: true # enable auto-compaction in supported agent runtimes
     # threshold_percent: 80 # compact at 80% of the model context window (Kilo)
     prune: true # prune old tool outputs between turns (Kilo/opencode)
+  # Agent built-in web search control. omp enables web_search by default, and
+  # kilo/opencode/claude-code/copilot-cli ship search tools that auto-approval
+  # leaves reachable; AICR materializes the explicit switch per agent so reviews
+  # stay hermetic unless an operator opts in. Enabled runs let the agent send
+  # review-context queries to the configured search engines — treat this as a
+  # data-governance decision. Per-agent mapping (unsupported fields warn+skip,
+  # manifest records the mode): omp = full chain (config.yml), kilo = Exa via
+  # kilo.json permission.websearch, opencode = first listed Exa/Parallel provider
+  # via opencode.json permission + OPENCODE_* env, claude-code = --disallowedTools WebSearch
+  # switch only (Anthropic backend), copilot-cli = --excluded-tools=
+  # web_search,web_fetch switch only (Copilot backend), zoo/pi = none.
+  web_search:
+    enabled: false
+    # providers: ["tavily", "duckduckgo"]  # -> omp providers.webSearchOrder;
+    #   kilo accepts only exa; opencode selects the first exa/parallel entry.
+    #   known omp ids: perplexity, gemini, anthropic, codex, xai, zai, exa,
+    #   tinyfish, jina, kagi, tavily, firecrawl, brave, kimi, parallel,
+    #   synthetic, searxng, startpage, duckduckgo, ecosia, google, mojeek,
+    #   public. omp ignores unknown ids. Credential-free scrapers
+    #   (duckduckgo/startpage) need no credentials; browser-backed ones
+    #   (google/ecosia/mojeek) try to download Chromium on first use.
+    # exclude: ["google", "ecosia", "mojeek"]  # -> providers.webSearchExclude
+    # timeout_seconds: 30  # per-provider transport timeout (1..300, omp default 60)
+    # credentials map a provider to the ENV VAR NAME holding its API key on the
+    # AICR host; the adapter injects the agent-native env var (e.g. TAVILY_API_KEY
+    # for omp, EXA_API_KEY/PARALLEL_API_KEY for kilo/opencode) as a ${VAR}
+    # reference, so secrets never land in the runtime bundle.
+    # Supported: tavily, brave, exa, jina, kagi, parallel, kimi, perplexity,
+    # zai, xai, anthropic (search-only key), tinyfish, firecrawl, searxng_token,
+    # searxng_basic_username, searxng_basic_password.
+    # exa/parallel serve omp AND kilo/opencode; the rest are omp-only.
+    # OAuth-only providers (gemini/codex/perplexity OAuth) cannot authenticate
+    # inside the ephemeral per-run agent dir.
+    # credentials:
+    #   tavily: AICR_SEARCH_TAVILY_KEY
+    #   exa: AICR_SEARCH_EXA_KEY
+    #   searxng_basic_username: AICR_SEARCH_SEARXNG_USERNAME
+    #   searxng_basic_password: AICR_SEARCH_SEARXNG_PASSWORD
+    # searxng:  # self-hosted SearXNG keeps queries inside your network
+    #   endpoint: https://searxng.internal:8080
+    #   categories: it
+    #   language: zh-CN
+    #   safesearch: 1
   sandbox:
     # For deploy.sh + AICR_ENABLE_CONTAINER_SANDBOX with a mounted Podman
     # socket, prefer kind: podman and engine: podman. Docker-compatible mode

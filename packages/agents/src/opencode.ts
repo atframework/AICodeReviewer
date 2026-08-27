@@ -12,6 +12,7 @@ import type {
 	AgentMaterializeResult,
 	AgentSpawnOptions,
 } from "./types.js";
+import { buildWebSearchCredentialEnvVars, warnUnsupportedWebSearchFields } from "./web-search.js";
 
 export interface OpencodeAdapterOptions {
 	readonly binary?: string;
@@ -21,6 +22,44 @@ const OPENCODE_BINARY = "opencode";
 const OPENCODE_VERSION_ARGS = ["--version"];
 export const OPENCODE_CONFIG_FILE = "opencode.json";
 const OPENCODE_CONFIG_SCHEMA = "https://opencode.ai/config.json";
+
+/**
+ * opencode's `websearch` tool fans out to the Exa or Parallel hosted MCP backend.
+ * With AICR's custom providers the tool only activates when one of the
+ * `OPENCODE_ENABLE_{EXA,PARALLEL}` env vars is set; the ordered provider choice
+ * is pinned through `OPENCODE_WEBSEARCH_PROVIDER`. `EXA_API_KEY` and
+ * `PARALLEL_API_KEY` enable keyed usage. Verified against opencode.ai/docs/tools
+ * and anomalyco/opencode `tool/websearch.ts` (2026-08-27).
+ */
+const OPENCODE_WEB_SEARCH_CREDENTIAL_ENV_NAMES: Readonly<Record<string, string>> = {
+	exa: "EXA_API_KEY",
+	parallel: "PARALLEL_API_KEY",
+};
+
+const OPENCODE_WEB_SEARCH_FIELD_SUPPORT = {
+	providers: true,
+	providerIds: ["exa", "parallel"],
+	exclude: false,
+	timeout: false,
+	credentials: Object.keys(OPENCODE_WEB_SEARCH_CREDENTIAL_ENV_NAMES),
+	searxng: false,
+};
+
+/**
+ * Coarse engine selection: opencode exposes only an Exa-vs-Parallel activation
+ * switch, so the configured provider chain collapses to whichever backend the
+ * operator actually credentialed or listed first.
+ */
+function resolveOpencodeSearchBackend(
+	webSearch: AgentMaterializeOptions["webSearch"],
+): "exa" | "parallel" {
+	const listed = webSearch?.providers?.find((provider) => provider === "exa" || provider === "parallel");
+	if (listed) return listed;
+	const hasExaCredential = webSearch?.credentials?.exa !== undefined;
+	const hasParallelCredential = webSearch?.credentials?.parallel !== undefined;
+	if (hasParallelCredential && !hasExaCredential) return "parallel";
+	return "exa";
+}
 
 async function detectBinary(
 	binary: string,
@@ -149,6 +188,8 @@ export function createOpencodeAdapter(options: OpencodeAdapterOptions = {}): Age
 		): Promise<AgentMaterializeResult> {
 			await mkdir(workingDir, { recursive: true });
 
+			warnUnsupportedWebSearchFields("opencode", options?.webSearch, OPENCODE_WEB_SEARCH_FIELD_SUPPORT);
+
 			const providerConfig = buildOpencodeProviderConfig(model);
 			const configJson: Record<string, unknown> = {
 				$schema: OPENCODE_CONFIG_SCHEMA,
@@ -160,6 +201,15 @@ export function createOpencodeAdapter(options: OpencodeAdapterOptions = {}): Age
 			const compactionSection = buildOpencodeCompaction(options ?? {});
 			if (compactionSection) {
 				configJson.compaction = compactionSection;
+			}
+
+			// Explicit permission rule: `--auto` only auto-approves prompts, while a
+			// config deny reliably keeps the hosted-backend websearch tool unreachable.
+			if (options?.webSearch) {
+				configJson.permission = {
+					...((configJson.permission as Readonly<Record<string, unknown>> | undefined) ?? {}),
+					websearch: options.webSearch.enabled ? "allow" : "deny",
+				};
 			}
 
 			// The documented project config location is `opencode.json` in the working
@@ -180,6 +230,20 @@ export function createOpencodeAdapter(options: OpencodeAdapterOptions = {}): Age
 			envVars.OPENCODE_DISABLE_AUTOUPDATE = "true";
 			envVars.OPENCODE_DISABLE_TERMINAL_TITLE = "true";
 			envVars.OPENCODE_DISABLE_LSP_DOWNLOAD = "true";
+			// Custom-provider sessions only register the websearch tool when one of
+			// these activation envs is set; keep it absent for disabled/hermetic runs.
+			if (options?.webSearch?.enabled) {
+				const backend = resolveOpencodeSearchBackend(options.webSearch);
+				envVars[backend === "parallel" ? "OPENCODE_ENABLE_PARALLEL" : "OPENCODE_ENABLE_EXA"] = "1";
+				// Current OpenCode uses this explicit override when both hosted
+				// backends are available; older versions ignore it and still honor the
+				// single activation flag above.
+				envVars.OPENCODE_WEBSEARCH_PROVIDER = backend;
+				Object.assign(envVars, buildWebSearchCredentialEnvVars(
+					options.webSearch,
+					{ [backend]: OPENCODE_WEB_SEARCH_CREDENTIAL_ENV_NAMES[backend]! },
+				));
+			}
 
 			return {
 				configFiles: new Map([

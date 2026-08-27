@@ -9,6 +9,7 @@ import type {
 	AgentMaterializeResult,
 	AgentSpawnOptions,
 } from "./types.js";
+import { warnUnsupportedWebSearchFields } from "./web-search.js";
 
 export interface CopilotCliAdapterOptions {
 	readonly binary?: string;
@@ -82,6 +83,14 @@ export function createCopilotCliAdapter(options: CopilotCliAdapterOptions = {}):
 				args.push("--allow-all-tools", "--allow-all-paths");
 			}
 
+			// URL permissions (`--deny-url`) gate only shell and web-fetch traffic —
+			// `web_search` is not covered; the documented way to remove the built-in
+			// web tools from the model's toolset is `--excluded-tools` (Copilot CLI
+			// docs "Allowing tools", verified against v1.0.80 `copilot help permissions`).
+			if (spawnOptions.webSearch?.enabled === false) {
+				args.push("--excluded-tools=web_search,web_fetch");
+			}
+
 			const mcpConfigJson = spawnOptions.mcpServers && spawnOptions.mcpServers.length > 0
 				? toCopilotCliMcpServersJson(spawnOptions.mcpServers)
 				: undefined;
@@ -100,9 +109,19 @@ export function createCopilotCliAdapter(options: CopilotCliAdapterOptions = {}):
 		async materializeConfig(
 			model: ModelSpec,
 			workingDir: string,
-			_options?: AgentMaterializeOptions,
+			options?: AgentMaterializeOptions,
 		): Promise<AgentMaterializeResult> {
 			const envVars: Record<string, string> = {};
+
+			// Copilot CLI web tools run on the Copilot subscription backend: only the
+			// enable switch (buildCommand `--excluded-tools`) is mappable.
+			warnUnsupportedWebSearchFields("copilot-cli", options?.webSearch, {
+				providers: false,
+				exclude: false,
+				timeout: false,
+				credentials: [],
+				searxng: false,
+			});
 
 			if (model.apiKeyEnv) {
 				// Highest-precedence Copilot CLI auth env for headless use

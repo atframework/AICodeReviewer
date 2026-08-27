@@ -13,7 +13,7 @@ import { toOhMyPiMcpServersJson } from "./mcp-config.js";
 import { OMP_MCP_CONFIG_PATH } from "./oh-my-pi.js";
 import { PI_MCP_BRIDGE_EXTENSION_PATH, PI_MCP_SERVERS_ENV } from "./pi.js";
 import { renderPiMcpBridgeExtension } from "./pi-mcp-bridge.js";
-import type { AgentAdapter, AgentCompactionOptions, AgentKind, AgentSpawnMcpServer } from "./types.js";
+import type { AgentAdapter, AgentCompactionOptions, AgentKind, AgentSpawnMcpServer, AgentWebSearchOptions } from "./types.js";
 
 export interface RuntimeBundleInstruction {
   readonly kind: string;
@@ -50,6 +50,7 @@ export interface RuntimeBundleInput {
   readonly mcpServers?: readonly RuntimeBundleMcpServer[];
   readonly extraEnvVars?: Readonly<Record<string, string>>;
   readonly compaction?: AgentCompactionOptions;
+  readonly webSearch?: AgentWebSearchOptions;
   readonly runId?: string;
 }
 
@@ -77,6 +78,16 @@ export interface RuntimeBundleManifest {
   readonly mcpTools: readonly string[];
   readonly envKeys: readonly string[];
   readonly contextCompaction?: {
+    readonly enabled: boolean;
+    readonly mode: "injected" | "delegated" | "not_applicable";
+  };
+  /**
+   * Web search control audit. omp/kilo/opencode materialize config-level control
+   * (`injected`); claude-code/copilot-cli only map the enable switch onto a CLI
+   * flag while the search engine stays owned by the CLI's own backend
+   * (`delegated`); zoo/pi have no built-in search tool (`not_applicable`).
+   */
+  readonly webSearch?: {
     readonly enabled: boolean;
     readonly mode: "injected" | "delegated" | "not_applicable";
   };
@@ -203,6 +214,25 @@ function computeContextCompactionManifest(
   }
 }
 
+function computeWebSearchManifest(
+  kind: AgentKind,
+  webSearch: AgentWebSearchOptions | undefined,
+): { readonly enabled: boolean; readonly mode: "injected" | "delegated" | "not_applicable" } {
+  switch (kind) {
+    case "oh-my-pi":
+    case "kilo":
+    case "opencode":
+      return { enabled: !!webSearch?.enabled, mode: "injected" };
+    case "claude-code":
+    case "copilot-cli":
+      // Switch-only control via CLI flags; the search engine itself is owned by
+      // the CLI's own backend (Anthropic / Copilot subscription).
+      return { enabled: !!webSearch?.enabled, mode: "delegated" };
+    default:
+      return { enabled: false, mode: "not_applicable" };
+  }
+}
+
 export async function materializeRuntimeBundle(
   input: RuntimeBundleInput,
 ): Promise<RuntimeBundleResult> {
@@ -210,6 +240,7 @@ export async function materializeRuntimeBundle(
 
   const materialized = await adapter.materializeConfig(model, workingDir, {
     ...(input.compaction ? { compaction: input.compaction } : {}),
+    ...(input.webSearch ? { webSearch: input.webSearch } : {}),
   });
 
   const allConfigFiles = new Map(materialized.configFiles);
@@ -441,6 +472,7 @@ export async function materializeRuntimeBundle(
     mcpTools: mcpToolNames,
     envKeys: Object.keys(allEnvVars),
     contextCompaction: computeContextCompactionManifest(adapter.kind, input.compaction),
+    webSearch: computeWebSearchManifest(adapter.kind, input.webSearch),
     nativeSurfaces: {
       instructions: instructionSurfaces,
       skills: skillSurfaces,

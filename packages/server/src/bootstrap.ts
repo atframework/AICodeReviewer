@@ -2456,6 +2456,42 @@ export async function bootstrapServerApp(options: BootstrapServerOptions): Promi
         ? { prune: config.agent.context_compaction.prune }
         : {}),
     },
+    webSearch: {
+      enabled: config.agent.web_search?.enabled ?? false,
+      ...(config.agent.web_search !== undefined && config.agent.web_search.providers.length > 0
+        ? { providers: config.agent.web_search.providers }
+        : {}),
+      ...(config.agent.web_search !== undefined && config.agent.web_search.exclude.length > 0
+        ? { exclude: config.agent.web_search.exclude }
+        : {}),
+      ...(config.agent.web_search?.timeout_seconds !== undefined
+        ? { timeoutSeconds: config.agent.web_search.timeout_seconds }
+        : {}),
+      ...(config.agent.web_search !== undefined && Object.keys(config.agent.web_search.credentials).length > 0
+        ? { credentials: config.agent.web_search.credentials }
+        : {}),
+      ...(config.agent.web_search?.searxng
+        ? {
+          searxng: {
+            ...(config.agent.web_search.searxng.endpoint !== undefined
+              ? { endpoint: config.agent.web_search.searxng.endpoint }
+              : {}),
+            ...(config.agent.web_search.searxng.categories !== undefined
+              ? { categories: config.agent.web_search.searxng.categories }
+              : {}),
+            ...(config.agent.web_search.searxng.engines !== undefined
+              ? { engines: config.agent.web_search.searxng.engines }
+              : {}),
+            ...(config.agent.web_search.searxng.language !== undefined
+              ? { language: config.agent.web_search.searxng.language }
+              : {}),
+            ...(config.agent.web_search.searxng.safesearch !== undefined
+              ? { safesearch: config.agent.web_search.searxng.safesearch }
+              : {}),
+          },
+        }
+        : {}),
+    },
     ignoreLabelsResolver: (workspaceId) => {
       try {
         const workspace = resolveWorkspaceConfig(config, workspaceId);

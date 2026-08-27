@@ -123,8 +123,9 @@ This file records verified external sources for repository AI-agent guidance, Ag
   - Skill descriptions need natural trigger keywords; supporting files are appropriate for large references and examples so `SKILL.md` stays focused.
   - Large `CLAUDE.md` files should be split or trimmed; duplicate global prompt bodies increase context cost and drift risk.
   - Headless automation uses print mode: `claude -p` with the prompt as an argument or piped via stdin, `--output-format text|json|stream-json` (json emits a result envelope with `result`, `is_error`, `session_id`, `num_turns`, `total_cost_usd`, and `usage.{input,output,cache_read,cache_creation}_tokens`), `--model`, `--effort low|medium|high|xhigh|max`, `--max-turns`, `--max-budget-usd`, `--fallback-model`, `--add-dir`, `--append-system-prompt-file`, `--allowedTools`/`--disallowedTools`, `--permission-mode`/`--dangerously-skip-permissions` (sandboxed environments only), and `--mcp-config` (JSON string or file path) with `--strict-mcp-config` for MCP isolation. `--timeout`, `--cwd`, and `--thinking` are not general session flags.
+  - Built-in `WebSearch`/`WebFetch` tools are permission-ruled (`--allowedTools`/`--disallowedTools WebSearch`, settings `permissions.allow/deny`; deny rules outrank permission-mode auto-allowing, verified against code.claude.com/docs/en/tools 2026-08-27). The search engine is Anthropic's own backend — no provider/credential surface.
   - Environment surface includes `ANTHROPIC_API_KEY`, `ANTHROPIC_BASE_URL`, `ANTHROPIC_MODEL`, `ANTHROPIC_BETAS` (comma-separated beta headers), `CLAUDE_CODE_MAX_OUTPUT_TOKENS`, `CLAUDE_CODE_MAX_CONTEXT_TOKENS` (assumed context window override, useful for gateway/custom model IDs), `MAX_THINKING_TOKENS` (fixed thinking budget; ignored on adaptive-reasoning models unless `CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING=1`), `DISABLE_AUTO_COMPACT`, `DISABLE_AUTOUPDATER`, `DISABLE_TELEMETRY`, `DISABLE_ERROR_REPORTING`, and `CLAUDE_CODE_DISABLE_TERMINAL_TITLE` (skips print-mode title generation). `ANTHROPIC_VERSION`, `ANTHROPIC_MAX_TOKENS`, `ANTHROPIC_THINKING_BUDGET_TOKENS`, and `ANTHROPIC_BETA` do not exist in the Claude Code environment surface.
-- `last_checked`: 2026-08-08
+- `last_checked`: 2026-08-27
 - `next_review`: 2026-11-08
 - `update_trigger`: Re-check when changing `CLAUDE.md`, adding `.claude/` assets, changing the claude-code adapter command line or env translation, or relying on Claude-specific frontmatter or plugin behavior.
 
@@ -139,6 +140,10 @@ This file records verified external sources for repository AI-agent guidance, Ag
   - <https://github.com/Kilo-Org/kilocode/blob/v7.2.40/packages/opencode/src/session/message-v2.ts>
   - <https://github.com/Kilo-Org/kilocode/blob/v7.2.40/packages/opencode/src/session/processor.ts>
   - <https://github.com/Kilo-Org/kilocode/blob/v7.2.40/packages/opencode/src/session/session.ts>
+  - <https://github.com/Kilo-Org/kilocode/blob/v7.2.40/packages/opencode/src/tool/websearch.ts>
+  - <https://github.com/Kilo-Org/kilocode/blob/v7.2.40/packages/opencode/src/tool/mcp-exa.ts>
+  - <https://github.com/Kilo-Org/kilocode/blob/v7.2.40/packages/opencode/src/tool/registry.ts>
+  - <https://github.com/Kilo-Org/kilocode/blob/v7.2.40/packages/opencode/src/config/variable.ts>
   - <https://docs.zoocode.dev/getting-started/installing>
   - <https://docs.zoocode.dev/roo-to-zoo-migration>
   - <https://marketplace.visualstudio.com/items?itemName=ZooCodeOrganization.zoo-code>
@@ -148,14 +153,15 @@ This file records verified external sources for repository AI-agent guidance, Ag
   - <https://github.com/Zoo-Code-Org/Zoo-Code/blob/8d4ed32f0606a4c7f45aac959540508aeac0b0e2/src/core/config/CustomModesManager.ts>
 - Verified guidance:
   - Kilo Code supports repository-level instruction files and Agent Skills-compatible workflows.
-  - `kilo.json` (project `.kilo/kilo.json` or root) supports the top-level `instructions` glob array for additional instruction files, `skills.paths` for extra Agent Skills discovery directories (layout `skills/<name>/SKILL.md`), and the `mcp` section (`{ "type": "local", "command": [...], "environment": {...} }` / `{ "type": "remote", "url": "..." }`); MCP tool permission keys are `{server}_{tool}` with glob support.
+  - `kilo.json` (project `.kilo/kilo.json` or root) supports the top-level `instructions` glob array for additional instruction files, `skills.paths` for extra Agent Skills discovery directories (layout `skills/<name>/SKILL.md`), and the `mcp` section (`{ "type": "local", "command": [...] }` / `{ "type": "remote", "url": "..." }`); MCP tool permission keys are `{server}_{tool}` with glob support.
+  - Built-in web search (verified in v7.2.40 source, cross-checked on master 7.5.5): the `websearch` tool calls the Exa hosted MCP (`https://mcp.exa.ai/mcp`; `EXA_API_KEY` switches to keyed usage, `tool/mcp-exa.ts`) and is only offered to the model for the `kilo` provider or when the `KILO_ENABLE_EXA` runtime flag is truthy (`tool/registry.ts`: `providerID === ProviderID.kilo || Flag.KILO_ENABLE_EXA`; flag.ts: `KILO_ENABLE_EXA || KILO_EXPERIMENTAL || KILO_EXPERIMENTAL_EXA`) — custom OpenAI-compatible providers therefore need the `KILO_ENABLE_EXA=1` activation env. The off switch is `kilo.json` `permission.websearch: "allow" | "deny" | "ask"` (explicit key in `config/permission.ts`); a config deny outranks `--auto` auto-approval and also strips the tool from the model toolset (`Permission.disabled` in `session/llm.ts`). Master adds a `web_search: true` config bypass, a `KILO_ENABLE_PARALLEL` flag, and `KILO_WEBSEARCH_PROVIDER=exa|parallel|kilo-exa` routing (`tool/mcp-websearch.ts`); v7.2.40 (the version pinned in `deploy/Dockerfile`) is Exa-only. Zoo Code (pinned `8d4ed32f`) has no built-in web search tool — only an open proposal (#1280) to bundle a default-disabled Exa MCP endpoint.
   - Kilo CLI v7.2.40 JSON run mode emits `step_finish` with the completed `step-finish` part. Each part is built from one model `finish-step` usage, with non-cached input, output excluding reasoning, reasoning, and cache read/write as disjoint counters; sum the events within a CLI run. AICR additionally sums every initial, repair, and direct-fallback completion across the whole review run.
   - Zoo Code is the maintained VS Code extension published as `ZooCodeOrganization.zoo-code`; official migration guidance imports an exported settings file from the older tool into Zoo Code.
   - Upstream Zoo Code source at `8d4ed32f0606a4c7f45aac959540508aeac0b0e2` currently keeps compatibility names: CLI program/bin is `roo`, user CLI config dir is `~/.roo`, and project rule/mode files use `.roomodes` plus `.roo/rules-*`. Do not invent `.zoo` paths or a `zoo` binary without re-checking upstream.
   - Keep shared instructions in the canonical repository layer and add tool-specific files only for narrow, necessary deltas.
-- `last_checked`: 2026-08-08
+- `last_checked`: 2026-08-27
 - `next_review`: 2026-11-08
-- `update_trigger`: Re-check before changing the pinned Kilo CLI version or JSON-stream parser, the `zoo` adapter kind, Zoo CLI binary, `.roo`/`.roomodes` compatibility paths, `.kilo`/`.kilocode` path rules, kilo.json `instructions`/`skills.paths`/`mcp` wiring, or adapter-native skill materialization.
+- `update_trigger`: Re-check before changing the pinned Kilo CLI version or JSON-stream parser, the `zoo` adapter kind, Zoo CLI binary, `.roo`/`.roomodes` compatibility paths, `.kilo`/`.kilocode` path rules, kilo.json `instructions`/`skills.paths`/`mcp` wiring, adapter-native skill materialization, or the websearch permission/activation mapping (`KILO_ENABLE_EXA`, `permission.websearch`).
 
 ### Windsurf
 
@@ -185,6 +191,7 @@ This file records verified external sources for repository AI-agent guidance, Ag
   - <https://opencode.ai/docs/models/>
   - <https://opencode.ai/config.json>
   - <https://github.com/anomalyco/opencode/blob/dev/packages/opencode/src/cli/cmd/run.ts>
+  - <https://github.com/anomalyco/opencode/blob/dev/packages/opencode/src/tool/websearch.ts>
 - Verified guidance:
   - OpenCode supports project and global skills, including `.opencode/skills/<name>/SKILL.md`, `.claude/skills/<name>/SKILL.md`, and `.agents/skills/<name>/SKILL.md`.
   - OpenCode skill frontmatter recognizes `name` and `description` as required fields; unknown fields are ignored; skill directory names must match `^[a-z0-9]+(-[a-z0-9]+)*$` and the frontmatter `name`.
@@ -192,7 +199,8 @@ This file records verified external sources for repository AI-agent guidance, Ag
   - Non-interactive runs use `opencode run [message..]` with `--model`/`-m` in `provider/model` form, `--agent`, `--dir`, `--format default|json`, `--variant`, `--auto`, and session flags. JSON output is NDJSON with part-wrapped `text`/`tool_use` events and `step_finish` usage events. `--cwd` and `--timeout` are not `run` flags; stdin is accepted when no positional message is supplied.
   - The project config file is `opencode.json` in the working-directory root (global: `~/.config/opencode/opencode.json`); `OPENCODE_CONFIG`, `OPENCODE_CONFIG_DIR`, and `OPENCODE_CONFIG_CONTENT` environment overrides exist. AICR relies on project discovery through the same sandbox cwd/`--dir` instead of setting `OPENCODE_CONFIG` to a host-only absolute path. The schema uses a `provider` object keyed by provider ID, nests models under each provider, nests transport/auth under provider `options` and request parameters under model `options`, and uses `{env:NAME}` interpolation.
   - MCP servers are configured via the config `mcp` section: local servers `{ "type": "local", "command": [...], "enabled": true, "environment": {...} }`, remote servers `{ "type": "remote", "url": "..." }`; per-tool enable/disable is supported.
-- `last_checked`: 2026-08-09
+  - Built-in web tools (verified 2026-08-27 against opencode.ai/docs/tools and anomalyco/opencode `tool/websearch.ts`): `webfetch` (URL fetch) and `websearch` (Exa or Parallel hosted MCP backend). `websearch` is active with the OpenCode provider or a truthy `OPENCODE_ENABLE_EXA`/`OPENCODE_ENABLE_PARALLEL` env; `OPENCODE_WEBSEARCH_PROVIDER` explicitly selects `exa` or `parallel`, and `permission.webfetch`/`permission.websearch` (`allow`/`deny`/`ask`) in `opencode.json` gates access. Credentials: `EXA_API_KEY` switches Exa to keyed usage (`https://mcp.exa.ai/mcp?exaApiKey=...`), `PARALLEL_API_KEY` sends `Authorization: Bearer` to Parallel; keyless anonymous fallback exists.
+- `last_checked`: 2026-08-27
 - `next_review`: 2026-11-09
 - `update_trigger`: Re-check when adding OpenCode agents, permissions, `.opencode/skills`, or `opencode.json` bridges, and before changing the opencode adapter command line or config materialization.
 
@@ -209,7 +217,8 @@ This file records verified external sources for repository AI-agent guidance, Ag
   - Headless auth checks `COPILOT_GITHUB_TOKEN`, then `GH_TOKEN`, then `GITHUB_TOKEN`; classic PATs are unsupported.
   - MCP servers merge with this precedence: `--additional-mcp-config` inline JSON (highest), plugin-provided, workspace `.mcp.json`/`.github/mcp.json`, then `~/.copilot/mcp-config.json`; local servers use `{ "type": "local", "command": ..., "args": [...], "tools": [...] }`.
   - Repository custom instructions (`.github/copilot-instructions.md`, `.github/instructions/**`, `AGENTS.md`) load by default (`--no-custom-instructions` disables); project skills live in `.github/skills/`, `.claude/skills/`, or `.agents/skills/<name>/SKILL.md`; history auto-compacts near 95% of the token limit.
-- `last_checked`: 2026-08-08
+  - Built-in web tools (verified 2026-08-27 against docs.github.com CLI reference + v1.0.80 `copilot help permissions`): native `web_search` and `web_fetch` tools ship in the binary (no MCP required). `--deny-tool` accepts only `kind(argument)` permission patterns (kinds: `shell`/`write`/`read`/`memory`/`url`/MCP server name — no web kind), and the URL layer (`--deny-url`) gates only shell and web-fetch traffic, NOT `web_search`; the documented way to remove the built-in web tools from the model's toolset is `--excluded-tools=web_search,web_fetch`. The search backend is the Copilot subscription — no provider/credential surface.
+- `last_checked`: 2026-08-27
 - `next_review`: 2026-11-08
 - `update_trigger`: Re-check before changing the copilot-cli adapter command line, auth env mapping, MCP wiring, or skills materialization for Copilot CLI.
 
@@ -246,6 +255,8 @@ This file records verified external sources for repository AI-agent guidance, Ag
   - <https://raw.githubusercontent.com/can1357/oh-my-pi/main/docs/mcp-runtime-lifecycle.md>
   - <https://raw.githubusercontent.com/can1357/oh-my-pi/main/docs/compaction.md>
   - <https://raw.githubusercontent.com/can1357/oh-my-pi/main/docs/skills.md>
+  - <https://github.com/can1357/oh-my-pi/blob/main/docs/tools/web_search.md>
+  - <https://raw.githubusercontent.com/can1357/oh-my-pi/main/docs/environment-variables.md>
 - Verified guidance:
   - omp is a pi fork; headless machine output is `omp -p --mode json "<prompt>"` with the same NDJSON event family and the same `message_end.message.usage` shape, so one extractor serves both adapters.
   - Launch flags: `--model <provider/id[:level]>`, `--thinking off|minimal|low|medium|high|xhigh|max|auto`, `--auto-approve`, `--no-session`, `--cwd`, `--config <file>` (repeatable), `--no-skills`/`--no-rules`/`--no-extensions`.
@@ -253,9 +264,11 @@ This file records verified external sources for repository AI-agent guidance, Ag
   - Native MCP: user-level `$PI_CODING_AGENT_DIR/mcp.json` or project `.omp/mcp.json`, `{mcpServers:{<name>:{command, args?, env?}}}` for stdio (default) and `{type:"http"|"sse", url, headers?}` for remote; `${VAR}` expansion at discovery and env-name indirection at connect. MCP tools are exposed as `mcp__<server>_<tool>` with components lowercased and sanitized to letters/underscores — the AICR `<prefix>_aicr_<tool>` normalization rule matches these names unchanged. Headless sessions await full MCP discovery before startup.
   - Compaction settings: `compaction.enabled` (true), `compaction.thresholdPercent` (-1 = reserve-based auto), `compaction.keepRecentTokens`, `compaction.methodOrder` and more; AICR injects `enabled` and `thresholdPercent` only.
   - Skills: native providers include `.omp/skills/` and the `agents` provider for `.agents/skills/<name>/SKILL.md` (user and project), matching the canonical AICR bundle layout without copies.
-- `last_checked`: 2026-08-26
+  - Web search settings (verified with `omp config list` on 18.0.6): the built-in `web_search` tool is gated by `web_search.enabled` (**default true**; credential-free scrapers duckduckgo/startpage work with no configuration); the provider chain is controlled by `providers.webSearchOrder` / `providers.webSearchExclude` (unknown ids ignored) and `providers.webSearchTimeoutSeconds` (default 60, capped 300); self-hosted SearXNG uses `searxng.{endpoint,token,basicUsername,basicPassword,categories,engines,language,safesearch}`. Credential env names verified in `docs/tools/web_search.md`, `docs/environment-variables.md`, and a binary string scan: `TAVILY_API_KEY`, `BRAVE_API_KEY`, `EXA_API_KEY`, `JINA_API_KEY`, `KAGI_API_KEY`, `PARALLEL_API_KEY`, `KIMI_SEARCH_API_KEY` / `MOONSHOT_SEARCH_API_KEY`, `PERPLEXITY_API_KEY`, `ZAI_API_KEY`, `XAI_API_KEY`, `ANTHROPIC_SEARCH_API_KEY` (search-only, independent of chat auth), `TINYFISH_API_KEY`, `FIRECRAWL_API_KEY`, `SEARXNG_ENDPOINT` / `SEARXNG_TOKEN` / `SEARXNG_BASIC_USERNAME` / `SEARXNG_BASIC_PASSWORD`. OAuth-stored providers (perplexity/gemini/codex OAuth in `agent.db`) cannot authenticate when `PI_CODING_AGENT_DIR` is an ephemeral per-run directory.
+  - Empirically verified with omp 18.0.6 on WSL (native sandbox, 2026-08-27): the `xd://` hashline surface routes MCP tool calls — model turns emit `tool_execution_start` with `toolName: "write"` and `args.path: "xd://mcp__aicr_output_<tool>"`, plus a `notice` event listing the mounted `mcp__aicr_output_*` tools at session start; there is no `tool_execution_start` whose `toolName` is the raw MCP tool name. Stream-level `toolCallEvents` therefore stay empty and the MCP state file stays authoritative. `message_end.message.usage` counters (`input`/`output`/`cacheRead`/`cacheWrite`/`totalTokens`, `output` includes `reasoningTokens`) are disjoint and sum exactly to `totalTokens`.
+- `last_checked`: 2026-08-27
 - `next_review`: 2026-11-26
-- `update_trigger`: Re-check before changing the omp adapter command line, `models.yml`/`config.yml`/`mcp.json` materialization, or the MCP tool-name normalization rule.
+- `update_trigger`: Re-check before changing the omp adapter command line, `models.yml`/`config.yml`/`mcp.json` materialization, the MCP tool-name normalization rule, or the web-search settings/credential env mapping (`web_search.enabled` default, provider id list, `TAVILY_API_KEY`-style env names, or the `agent.web_search` schema in `packages/core/src/config.ts`).
 
 ### Model Context Protocol
 
