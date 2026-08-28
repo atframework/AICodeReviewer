@@ -38,7 +38,7 @@ AICR 向评审 agent 暴露一个小而稳定的 MCP 工具集。agent 调用这
 
 - `aicr.report_problem` **不**接受 agent 自报的归因。当分析需要作者或 revision 上下文时，调用 `aicr.try_blame`；AICR 会通过事件元数据、provider API 或配置的 VCS 适配器校验归因，再回灌。归因仅作参考上下文，永远不会成为 problem fingerprint 的一部分。
 - 用 `message` 讲分析，用 `suggestion` 给修复。如果补丁有用，把小型 fenced `diff` 放进 `suggestion`，而不是新增字段。
-- Git 类 channel 可能用 AICR 派生的代码引用片段（取自已解析的 diff）来丰富 problem。这不会给工具加字段——agent 仍应只报告上面的稳定 schema。
+- Git 类 channel 可能用 AICR 派生的代码引用片段（取自已解析的 diff）补充 problem 的上下文。这不会给工具加字段——agent 仍应只报告上面的稳定 schema。
 
 示例：
 

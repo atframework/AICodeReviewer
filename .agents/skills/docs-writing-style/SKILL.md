@@ -86,6 +86,12 @@ Constructions to avoid:
 Prefer imperative instructions and concrete defaults, paths, and commands over
 adjectives; mix short sentences with occasional longer ones.
 
+A machine-checkable subset of the §3/§4 word bans is enforced by
+`docs/site/scripts/validate-bilingual-consistency.mjs` on every
+`pnpm docs:build`; the unambiguous words fail the build, context-dependent
+bans stay human-reviewed. This skill remains the rationale source and the
+full contract.
+
 ## 5. Revision workflow
 
 1. List the claims the page makes: fields, defaults, behaviors, commands.

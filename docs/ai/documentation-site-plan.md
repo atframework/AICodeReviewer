@@ -429,6 +429,14 @@ M11-P1 后建议至少具备：
   `packages/cli/src/app.ts` 提取 parseArgs 选项、dispatch 命令与 helpText 三方比对。
 - 内部链接检查：`docs/site/scripts/validate-internal-links.mjs` 校验站内链接、锚点、
   静态资源与 sidebar 双向覆盖（零依赖，替代外部 lychee 路线的第一步）。
+- SEO 元数据检查（M11-P6 落地）：`docs/site/scripts/validate-seo.mjs` 校验双语页面
+  `title`/`description` 非空与长度区间（CJK 感知宽度）、`public/robots.txt` 的
+  Sitemap 行、starlight `head` 中 og:image/twitter:image 接线与已提交的 1200x630
+  `og-image.png`。
+- 双语一致性检查（M11-P6 落地）：`docs/site/scripts/validate-bilingual-consistency.mjs`
+  校验两个 locale 页面集合相同、每对页面代码块数量相同、代码块内机器 token
+  （配置键/环境变量/flag/路径）一致、`.mdx` 代码块带语言标记、正文不出现
+  docs-writing-style 禁用词的可机检子集。
 - `example/config.yaml` 关键片段和文档示例一致性检查：仍未自动化，保持人工抽查。
 
 ## 8. 分阶段执行计划
@@ -441,7 +449,7 @@ M11-P1 后建议至少具备：
 | M11-P3 ✅ | 全章节双语正文迁移 | 配置各命名空间、CLI、MCP、VCS/agent 集成、Docker/Podman 部署、运维、参考、排障、贡献指南全部替换为中英双语正文；新增公开/内部内容边界校验 | markdownlint、公开内容校验、站点构建、字段/命令抽查通过 |
 | M11-P4 ✅ | 配置/CLI 参考校验自动化 | `docs/site/scripts/` 三个零依赖校验器（config reference、CLI reference、internal links）接入 `docs:build`/`docs:check` | `pnpm docs:build` 全链通过；阴性测试（注入坏链接/坏锚点）确认可检出 |
 | M11-P5 ✅ | 发布链路 | main 文档变更自动构建并通过 SSH deploy key 发布到 `gh-pages`；保留 `aicr.atframe.work` 自定义域名和发布说明 | `pnpm docs:build` 可本地验证；线上需 Pages source 指向 `gh-pages` / `/` 并绑定 custom domain |
-| M11-P6 | 打磨与维护机制 | 内部链接检查已随 M11-P4 落地；剩余 SEO 与贡献规则自动化 | CI 可阻止常见文档漂移（链接/锚点/字段覆盖/CLI 一致性已阻止） |
+| M11-P6 ✅ | 打磨与维护机制 | 内部链接检查随 M11-P4 落地；SEO 与贡献规则自动化已落地（`validate-seo.mjs`、`validate-bilingual-consistency.mjs`、`robots.txt`、1200x630 `og-image.png` + 生成脚本） | `pnpm docs:build` 全链通过（54 页）；10 项阴性测试确认每类漂移可检出 |
 
 ## 9. 风险与缓解
 
@@ -512,7 +520,7 @@ M11-P3 后续打磨（查缺补漏，2026-07）：
 - ✅ `troubleshooting/index.md` 补充两条常见问题：dashboard admin 未配置、GitHub issue 写回
   403/404（token 权限与 App 重装）。
 
-待后续阶段（P6）：SEO 与贡献规则自动化；线上发布还需在 GitHub Pages 设置中确认 `gh-pages` / `/` 发布源。（链接检查与配置字段覆盖校验已随 M11-P4 落地。）
+线上发布还需在 GitHub Pages 设置中确认 `gh-pages` / `/` 发布源。（链接检查与配置字段覆盖校验已随 M11-P4 落地；SEO 与贡献规则自动化已随 M11-P6 落地，见下节。）
 
 M11-P6 打磨（首页组件修复 + 首页再丰富 + 4K 全宽 + README/logo，2026-07）：
 
@@ -566,4 +574,34 @@ M11-P4 配置/CLI 参考校验自动化（2026-08）：
 - ✅ 修复真实漂移：双语参考表补 `triggers[].app`（M12 GitHub App 认证块）6 行；
   CLI helpText 补 `--author-display-name`/`--operator-override`/`--memory-hint`/
   `--task-context`。
+
 - ✅ 同步 `Plan.md`、本文件、`docs/site/README.md`、中英 `development/index.md`。
+
+M11-P6 SEO 与贡献规则自动化（2026-08）：
+
+- ✅ SEO 基础设施：新增 `public/robots.txt`（`User-agent: *` + `Sitemap: <site>/sitemap-index.xml`）、
+  `public/og-image.png`（1200x630 Open Graph 标准尺寸，品牌 SVG 经已提交的 `sharp` 直接依赖
+  渲染；`scripts/generate-og-image.mjs` 为手动再生成入口，不进构建链，产物提交进仓库）、
+  `astro.config.mjs` starlight `head` 补 og:image/twitter:image 及 alt。调研确认 Starlight 0.41
+  已自动产出 canonical、hreflang（en/zh-CN/x-default）、og:title/description/url/locale、
+  `twitter:card: summary_large_image` 与 sitemap-index，但**从不生成 og:image**、也不写
+  robots.txt——两者是仅存的 SEO 缺口。
+- ✅ `docs/site/scripts/validate-seo.mjs`：双语每页 `title`/`description` 非空且
+  CJK 感知显示宽度合规（description 40–320、title ≤60）；robots.txt 的 Sitemap 行与
+  `site` 一致；og:image/twitter:image 接线指向已提交的 1200x630 PNG（IHDR 解析校验尺寸）。
+- ✅ `docs/site/scripts/validate-bilingual-consistency.mjs`：两个 locale 页面文件集合相同；
+  每对页面代码块数量相同；代码块内机器 token（`key:`/`ENV_VAR`/`--flag`/`/abs/path`，注释剥离后）
+  跨 locale 一致——翻译注释、占位符值与 locale 专属示例值（如 `language: zh-CN`）合法放行；
+  `.mdx` 代码块必须带语言标记（markdownlint MD040 的 glob 只覆盖 `*.md`）；正文禁用
+  docs-writing-style 禁词表的可机检子集（无歧义词；核心/进行等上下文相关词留人工审查）。
+- ✅ `validation-helpers.mjs` 扩展 displayWidth/extractFrontmatter/frontmatterValue/
+  extractFencedBlocks/stripCommentLines/extractMachineTokens/pngDimensions，单测 9 项全过。
+- ✅ 内容修正：3 条过短中文 description（storage/cli/troubleshooting）按页面真实内容重写；
+  `zh-cn/integrations/mcp-tools.md` 禁用词"丰富"改写。
+- ✅ 接入 `docs/site/package.json` `build`/`check` 链与 `validate:seo`/
+  `validate:bilingual-consistency`/`generate:og-image` 独立脚本；CI docs job 自动生效。
+- ✅ 验证：`pnpm docs:build` 全链通过（54 页）；dist 产物核验（og:image/twitter:image meta、
+  robots.txt、og-image.png、Sitemap 行均就位）；10 项阴性测试（短描述/缺描述/超长标题/
+  robots 漂移/og:image URL 漂移/token 漂移/代码块数量漂移/中英禁词/文件集合漂移）全部可检出；
+  markdownlint 通过。同步 `docs/site/README.md`、中英 `development/index.md`、
+  `.agents/skills/docs-writing-style/SKILL.md`。

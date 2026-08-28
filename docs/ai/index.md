@@ -62,7 +62,7 @@
 | M8 | 基本完成 | `milestones/M8.md` |
 | M9 | 基本完成 | `milestones/M9.md` |
 | M10 | 基本完成 | `milestones/M10.md` |
-| M11 文档站子工程 | 进行中 | `documentation-site-plan.md` |
+| M11 文档站子工程 | 基本完成（仅剩线上 Pages 设置核验） | `documentation-site-plan.md` |
 | M12 GitHub App 认证 | 已完成 | `../../Plan.md` §8.2.1 / `architecture.md` §3.2.1 |
 | M13 pi + oh-my-pi 集成 | 已完成 | `../../Plan.md` §8.2.2 |
 | M13.1 agent web search 治理 | 已完成 | `milestones/M13.1.md` |

@@ -7,14 +7,17 @@
   "scripts": {
     "patch:astro-deps": "node scripts/patch-astro-deps.mjs",
     "dev": "node scripts/patch-astro-deps.mjs && astro dev",
-    "build": "node scripts/patch-astro-deps.mjs && node --test scripts/validation-helpers.test.mjs && node scripts/validate-public-content.mjs && node scripts/validate-config-reference.mjs && node scripts/validate-cli-reference.mjs && node scripts/validate-internal-links.mjs && astro build",
+    "build": "node scripts/patch-astro-deps.mjs && node --test scripts/validation-helpers.test.mjs && node scripts/validate-public-content.mjs && node scripts/validate-config-reference.mjs && node scripts/validate-cli-reference.mjs && node scripts/validate-internal-links.mjs && node scripts/validate-seo.mjs && node scripts/validate-bilingual-consistency.mjs && astro build",
     "preview": "node scripts/patch-astro-deps.mjs && astro preview",
-    "check": "node scripts/patch-astro-deps.mjs && node --test scripts/validation-helpers.test.mjs && node scripts/validate-public-content.mjs && node scripts/validate-config-reference.mjs && node scripts/validate-cli-reference.mjs && node scripts/validate-internal-links.mjs && astro check",
+    "check": "node scripts/patch-astro-deps.mjs && node --test scripts/validation-helpers.test.mjs && node scripts/validate-public-content.mjs && node scripts/validate-config-reference.mjs && node scripts/validate-cli-reference.mjs && node scripts/validate-internal-links.mjs && node scripts/validate-seo.mjs && node scripts/validate-bilingual-consistency.mjs && astro check",
     "test:validators": "node --test scripts/validation-helpers.test.mjs",
     "validate:public-content": "node scripts/validate-public-content.mjs",
     "validate:config-reference": "node scripts/validate-config-reference.mjs",
     "validate:cli-reference": "node scripts/validate-cli-reference.mjs",
-    "validate:internal-links": "node scripts/validate-internal-links.mjs"
+    "validate:internal-links": "node scripts/validate-internal-links.mjs",
+    "validate:seo": "node scripts/validate-seo.mjs",
+    "validate:bilingual-consistency": "node scripts/validate-bilingual-consistency.mjs",
+    "generate:og-image": "node scripts/generate-og-image.mjs"
   },
   "dependencies": {
     "@astrojs/starlight": "^0.41.8",
