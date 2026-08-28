@@ -224,7 +224,7 @@ Narrative: [Agent and sandbox](/en/configuration/agent/).
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
 | `agent.default` | enum | `kilo` | Default agent kind |
-| `agent.timeout_seconds` | int > 0 | `600` | Hard per-run timeout; on timeout the whole process tree is killed |
+| `agent.timeout_seconds` | int > 0 | `1200` | Hard per-run timeout; on timeout the whole process tree is killed |
 | `agent.auto_approve` | boolean | `true` | Accepted by the schema, but the orchestrator always runs as `true`; setting `false` has no effect |
 | `agent.sandbox` | object | `{ kind: "docker", engine: "auto" }` | Sandbox backend |
 | `agent.sandbox.kind` | enum | — | Sandbox kind (see enum table) |

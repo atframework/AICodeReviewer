@@ -795,7 +795,7 @@ const appConfigSchema = z
     agent: z
       .object({
         default: agentKindSchema.default("kilo"),
-        timeout_seconds: z.number().int().positive().default(600),
+        timeout_seconds: z.number().int().positive().default(1200),
         auto_approve: z.boolean().default(true),
         sandbox: sandboxSchema.default({ kind: "docker", engine: "auto" }),
         context_compaction: contextCompactionSchema.default({ auto: true, prune: true }),
@@ -804,7 +804,7 @@ const appConfigSchema = z
       .strict()
       .default({
         default: "kilo",
-        timeout_seconds: 600,
+        timeout_seconds: 1200,
         auto_approve: true,
         sandbox: { kind: "docker", engine: "auto" },
         context_compaction: { auto: true, prune: true },

@@ -109,7 +109,7 @@ describe("mergeConfigLayers", () => {
     const merged = mergeConfigLayers({});
 
     expect(merged.agent.default).toBe("kilo");
-    expect(merged.agent.timeout_seconds).toBe(600);
+    expect(merged.agent.timeout_seconds).toBe(1200);
     expect(merged.agent.auto_approve).toBe(true);
     expect(merged.agent.sandbox.kind).toBe("docker");
     expect(merged.agent.sandbox.engine).toBe("auto");

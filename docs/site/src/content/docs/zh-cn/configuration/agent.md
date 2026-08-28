@@ -10,7 +10,7 @@ AICodeReviewer 会在沙箱内驱动一个外部 agent CLI（默认 Kilo Code）
 ```yaml
 agent:
   default: kilo
-  timeout_seconds: 600
+  timeout_seconds: 1200
   auto_approve: true
   context_compaction:
     auto: true
@@ -52,7 +52,7 @@ schema 也接受 `workspaces.defaults.agent.default` 和
 
 ```yaml
 agent:
-  timeout_seconds: 600   # 默认值；小 PR 为主的环境可以调低
+  timeout_seconds: 1200  # 默认值；小 PR 为主的环境可以调低
 ```
 
 这是**单次 agent 跑一轮的硬上限**。超时触发时，沙箱会杀掉**整棵进程树**——

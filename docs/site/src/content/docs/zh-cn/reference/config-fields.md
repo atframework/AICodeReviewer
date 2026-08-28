@@ -209,7 +209,7 @@ schema 接受 `workspaces.defaults` 和实例上的 `agent.default` 与 `sandbox
 | 字段 | 类型 | 默认值 | 描述 |
 | --- | --- | --- | --- |
 | `agent.default` | enum | `kilo` | 默认 agent kind |
-| `agent.timeout_seconds` | int > 0 | `600` | 单次 run 硬超时；超时时杀整棵进程树 |
+| `agent.timeout_seconds` | int > 0 | `1200` | 单次 run 硬超时；超时时杀整棵进程树 |
 | `agent.auto_approve` | boolean | `true` | schema 接受，但当前编排器固定按 `true` 处理，设为 `false` 不生效 |
 | `agent.sandbox` | object | `{ kind: "docker", engine: "auto" }` | 沙箱后端 |
 | `agent.sandbox.kind` | enum | — | sandbox kind（见枚举表） |

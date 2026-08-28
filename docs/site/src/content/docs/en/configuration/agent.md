@@ -11,7 +11,7 @@ sandbox backend that isolates the agent from the host.
 ```yaml
 agent:
   default: kilo
-  timeout_seconds: 600
+  timeout_seconds: 1200
   auto_approve: true
   context_compaction:
     auto: true
@@ -56,7 +56,7 @@ are parsed but have no effect.
 
 ```yaml
 agent:
-  timeout_seconds: 600   # the default; lower it for small-PR environments
+  timeout_seconds: 1200  # the default; lower it for small-PR environments
 ```
 
 This is a **hard cap on a single agent pass**. When the timeout fires, the
