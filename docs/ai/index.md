@@ -62,10 +62,11 @@
 | M8 | 基本完成 | `milestones/M8.md` |
 | M9 | 基本完成 | `milestones/M9.md` |
 | M10 | 基本完成 | `milestones/M10.md` |
-| M11 文档站子工程 | 基本完成（仅剩线上 Pages 设置核验） | `documentation-site-plan.md` |
-| M12 GitHub App 认证 | 已完成 | `../../Plan.md` §8.2.1 / `architecture.md` §3.2.1 |
-| M13 pi + oh-my-pi 集成 | 已完成 | `../../Plan.md` §8.2.2 |
+| M11 文档站子工程 | 已完成（Pages 已上线：`aicr.atframe.work`，2026-08-28 核验） | `documentation-site-plan.md` |
+| M12 GitHub App 认证 | 已完成 | `milestones/M12.md` / `architecture.md` §3.2.1 |
+| M13 pi + oh-my-pi 集成 | 已完成 | `milestones/M13.md` |
 | M13.1 agent web search 治理 | 已完成 | `milestones/M13.1.md` |
+| M14 多源上下文聚合 | 已完成 | `milestones/M14.md` / `architecture.md` §3.2.2 |
 | 本地优先队列 P0-P12 | 已完成 | `milestones/local-priority-queue.md` |
 
 ## 维护规则

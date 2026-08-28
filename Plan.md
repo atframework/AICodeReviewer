@@ -13,30 +13,17 @@
 
 - 本文件只回答“现在做什么、下一步做什么、哪些仍未完成”。
 - 已完成内容只保留一行状态和归档链接；实现细节读 `docs/ai/index.md` 后按需跳转。
-- 未完成内容分为两类：本地可闭环执行包和依赖外部系统的 Backlog。
-- 已完成阶段中残留的未验收项必须移到 Backlog，不再和“已完成”正文交叉表述。
+- 未完成内容统一收进 §8.3 Backlog，并显式标注所依赖的外部条件。
 - 当代码、配置、输出合同、部署或公共 workflow 变化时，同步更新相关 `docs/`、
   `example/` 与本计划摘要；若无需更新，变更说明里写明原因。
 
 ### 1.2 当前焦点
 
-- M0-M10 的主要实现已归档，当前没有新的运行时代码本地执行包。
-- 当前活跃方向是 M11：可发布到 GitHub Pages 的用户文档站子工程。M11-P1（脚手架）、
-  M11-P2（骨架 + 首批核心页）、M11-P3（全章节双语正文迁移）、M11-P5（发布 workflow）、
-  M11-P4（配置/CLI 参考校验自动化）和 M11-P6（SEO 与贡献规则自动化，2026-08）已完成；
-  六道校验（公开内容边界、配置字段覆盖、CLI 一致性、内部链接/锚点、SEO 元数据、双语一致性）
-  全部接入 `pnpm docs:build`/`docs:check`。剩余：仅 Pages 设置核验（外部）。
-- 新增运行时方向是 M12：GitHub App 原生认证。M12-P1–P4（配置 schema、token 服务、三个注入点
-  接入、webhook 事件 + GHE + 文档）已完成；M12-P5（真实 App e2e / 公网正式环境切换）已完成：
-  已将 `atframework-aicr` App 部署到公网正式环境，两个 GitHub trigger 已切到 `app` 认证，
-  webhook secret 已同步，`owent/hiredis-happ` 已加入 App 已选仓库并通过 token 解析验证。
-  基于 `node:crypto` 的 App JWT → installation token 自动签发与刷新已交付（零新增依赖）。执行包见
-  §8.3，稳定合同见 `docs/ai/architecture.md` §3.2.1。
-- 新增运行时方向是 M13：pi 与 oh-my-pi（omp）agent 集成及参考最佳实践对齐。目标是把两个 CLI
-  纳入 `packages/agents` 适配层，并将其已验证做法（配置目录 env 隔离、显式 project trust、
-  模型目录元数据注入、原生 `.agents/skills` 发现、扩展桥接 MCP）沉淀进架构与文档。已核验调研
-  结论与执行包见 §8.2.2。
-- 仍需真实外部系统验收的项目集中在 §8.4，避免散落在已完成里程碑描述中。
+- M0–M13.1 全部里程碑已交付（M6/M8/M9/M10 留有个别外部验收项，见 §8.3）。
+- M14 多源上下文聚合已交付：workspace 级 `context_repositories` 声明式配置 + 每次 run
+  全新物化 + 容器沙箱只读挂载（`docs/ai/architecture.md` §3.2.2、`docs/ai/milestones/M14.md`）。
+- 当前没有其他新的运行时代码本地执行包；剩余工作全部依赖外部系统或外部事件，
+  集中列在 §8.3，避免散落在已完成里程碑描述中。
 
 ### 1.3 文档地图
 
@@ -59,17 +46,15 @@
 - 核心实现使用 TypeScript / Node，仓库使用 pnpm workspace。
 - review 流程长期主路径是“服务编排 + AgentAdapter + Sandbox + Output Pipeline”。
 - 单容器自托管是主部署路径，Podman 与 Docker 平等支持。
-- 用户文档站计划采用 Node/pnpm 生态的静态站点生成方案，避免引入独立 Python/Ruby
-  工具链作为主路径。
+- 用户文档站使用 Node/pnpm 生态的静态站点方案（Astro Starlight），不引入独立
+  Python/Ruby 工具链作为主路径。
 
 ### 2.2 目录与 workspace 布局
 
 - 运行时代码包继续放在 `packages/*`。
 - runtime workspace 采用 `workspaces/<workspace_id>/` 扁平布局。
-- 未来文档站子工程建议放在 `docs/site`，作为 `docs/` 下的“文档应用”接入 pnpm workspace；
-  它不应被误加入根 `tsconfig.json` 的运行时代码 project references。
-- 若新增 `docs/site`，必须同时规划精确 workspace 条目、根 scripts、CI、Docker build 过滤边界和发布 workflow，
-  避免文档站依赖进入运行时镜像。
+- `docs/site` 文档站作为 `docs/` 下的“文档应用”接入 pnpm workspace；不进入根
+  `tsconfig.json` 运行时代码 project references，依赖不进入运行时镜像。
 
 ### 2.3 AI 资产组织原则
 
@@ -77,7 +62,8 @@
 - `.agents/skills/*/SKILL.md` 是 canonical workflow 技能源。
 - 已完成阶段长文总结放到 `docs/ai/milestones/*.md`。
 - prompt/skill 只保留稳定约束和入口索引，不复制历史大段正文。
-- 易回归坑位和长合同进入 `docs/ai/AGENTS.known-pitfalls.md` 或 skill `references/`，主提示词只保留按需读取条件。
+- 易回归坑位和长合同进入 `docs/ai/AGENTS.known-pitfalls.md` 或 skill `references/`，
+  主提示词只保留按需读取条件。
 
 ## 3. 核心组件摘要
 
@@ -100,6 +86,8 @@
   installation token 自动签发与刷新（M12 已交付）；token 服务归属 `packages/server`，
   `packages/vcs`、`packages/outputs` 继续只消费字符串 token，合同见
   `docs/ai/architecture.md` §3.2.1。
+- 多源上下文聚合（M14）：workspace 级 `context_repositories` 声明辅助仓库，每次 run
+  全新物化并以只读挂载暴露给 agent 沙箱，合同见 `docs/ai/architecture.md` §3.2.2。
 
 ### 3.3 Compression 与上下文管理
 
@@ -115,7 +103,10 @@
 ### 3.5 LLM Gateway、Fallback 与预算
 
 - LLM 调用通过统一 gateway 进入 provider client。
-- bounded retry、fallback chain、预算、速率限制与队列 retry 分层治理；瞬时 IO 错误（超时、连接失败、HTTP 408/5xx）在 LLM gateway、输出分发、VCS CLI、token 交换与 trigger 级共享 `io-retry` 分类器统一重试（HTTP 429 由 gateway 按 Retry-After 单独处理，输出与 triage 层的非幂等 POST 不重试），确定性失败（4xx、context overflow 等）不重试。
+- bounded retry、fallback chain、预算、速率限制与队列 retry 分层治理；瞬时 IO 错误
+  （超时、连接失败、HTTP 408/5xx）由共享 `io-retry` 分类器统一重试（HTTP 429 由
+  gateway 按 Retry-After 单独处理；输出与 triage 层的非幂等 POST 不重试），确定性
+  失败（4xx、context overflow 等）不重试。
 - 成本估算按非缓存输入、缓存命中、缓存写入、输出 token 类别计费。
 
 ### 3.6 Prompt Manager 与 AI 资产装配
@@ -126,23 +117,19 @@
 
 ### 3.7 AgentAdapter 与模型翻译
 
-- Kilo、Claude Code、OpenCode、Zoo、Copilot CLI 等 adapter 共用统一 runtime 合同。
+- Kilo、Claude Code、OpenCode、Zoo、Copilot CLI、pi、oh-my-pi 等 adapter 共用统一
+  runtime 合同。
 - `ModelSpec` / `thinkingLevel` 在 adapter 内翻译到 provider 原生字段。
 - Reasoning effort 档位 `minimal/low/medium/high/max`：direct-LLM 发送 `reasoning_effort`，
   Kilo adapter 物化 `variants` 并以 `--variant` 运行（见 `docs/ai/architecture.md` §3.7.3）。
 - 能力不支持时在 manifest 显式降级，而不是静默忽略。
-- `agent.web_search`（默认关闭）治理各 agent 内置搜索工具：始终物化显式开关保证评审封闭默认，
-  按 agent 映射——omp 走 `config.yml`（enabled + provider 链 + SearXNG），kilo 走
-  `permission.websearch` + `KILO_ENABLE_EXA` 激活，opencode 走 `permission.websearch` +
-  首个受支持 provider 的 `OPENCODE_ENABLE_*`/`OPENCODE_WEBSEARCH_PROVIDER`，claude-code/copilot-cli 仅 CLI 开关
-  （`--disallowedTools WebSearch` / `--excluded-tools=web_search,web_fetch`），zoo/pi 无内置搜索。
-  启用时凭据经 env 名间接寻址注入 agent 原生 env（`TAVILY_API_KEY` 等），密钥不落盘；禁用时不注入
-  搜索凭据。manifest 记录 `webSearch.{enabled,mode}`（`injected`/`delegated`/`not_applicable`），
-  不支持的 provider id/字段告警跳过。长期设计与验收证据见 `docs/ai/milestones/M13.1.md`。
+- `agent.web_search`（默认关闭）治理各 agent 内置搜索工具：始终物化显式开关保证评审
+  封闭默认，启用时凭据经 env 名间接寻址注入，密钥不落盘；manifest 记录
+  `webSearch.{enabled,mode}`。设计与验收见 `docs/ai/milestones/M13.1.md`。
 
 ### 3.8 SandboxBackend
 
-- native、docker、podman 是当前主路径；`k8s_pod`、`firecracker` 仍为预留扩展。
+- native、docker、podman 是当前主路径；`k8s_pod`、`firecracker` 仍为预留扩展（见 §8.3）。
 - 容器后端必须执行 allowlist、只读源码挂载、隔离 cwd、env-file 外置和超时治理。
 - 进程超时必须杀整棵进程树；外层容器必须用 `--init` 回收僵尸进程。
 
@@ -167,12 +154,8 @@
 - async trigger、失败报告、publisher 行为、dashboard 和 replay 统一落在可观测性合同里。
 - Dashboard 已覆盖 Overview / Projects / Providers / Runs 及 today/thisWeek/thisMonth/all
   时间维度；日汇总分区按 UTC day。
-- Token usage 按两条 review 路径区分口径：直连 LLM 路径透传 provider 真实 usage
-  （`usageSource: "llm_gateway"`）；agent（kilo）路径从 `step-finish` NDJSON 事件累加
-  （`usageSource: "agent_stdout"`）。一次 review 内的首次调用、上下文/格式修复与直连兜底均按 run
-  累加；agent 后又走直连兜底时标记 `usageSource: "mixed"`，不得只保留最终 completion。
-  本地 prompt 估算独立存于 `review_runs.prompt_token_estimate`，不混入 `llm_usage`；agent 路径未捕获
-  usage 时 dashboard 旁显估算值并标注来源。
+- Token usage 按 review 路径区分口径（`llm_gateway` / `agent_stdout` / `mixed`），本地
+  prompt 估算独立存放、不混入 `llm_usage`；细节见 `docs/ai/architecture.md` §3.11。
 
 ### 3.12 Reflection 与 memory
 
@@ -187,15 +170,13 @@
 
 ### 3.14 用户文档站
 
-- M11 目标是创建独立、可维护、可静态导出的用户文档站。
-- M11-P1（脚手架）、M11-P2（骨架 + 首批核心页）和 M11-P3（全章节双语正文）已完成：
-  基于 Astro v7 / Starlight v0.41 的 `docs/site` 子工程接入 pnpm workspace，CI 含
-  独立 docs job（`pnpm docs:build`，含公开/内部内容边界校验），GitHub Pages workflow 已切到 `gh-pages` 分支发布链路（使用 `DEPLOY_DOCUMENT_GH_PAGES_KEY` SSH deploy key），中英双语并行（全部带前缀 `/en/` + `/zh-cn/`），全部章节双语正文已落地。
-- 选型、内容结构、工程集成、GitHub Pages 发布与验收计划见
-  `docs/ai/documentation-site-plan.md`。
-- 边界：`docs/site` 不进根 `tsconfig.json` references；root `build` 已收紧为
-  `--filter "./packages/*"`；runtime Dockerfile 不复制 `docs/site`，Astro/Starlight
-  不进入运行时镜像。
+- M11 已完成：`docs/site`（Astro v7 / Starlight）接入 pnpm workspace 与 CI docs job，
+  中英双语全章节正文落地，六道校验（公开内容边界、配置字段覆盖、CLI 一致性、内部
+  链接/锚点、SEO 元数据、双语一致性）接入 `pnpm docs:build`/`docs:check`，GitHub Pages
+  发布链路已上线核验（`aicr.atframe.work`，2026-08-28）。
+- 选型、内容结构、工程集成与验收记录见 `docs/ai/documentation-site-plan.md`。
+- 边界：`docs/site` 不进根 `tsconfig.json` references；root `build` 只构建
+  `./packages/*`；runtime Dockerfile 不复制 `docs/site`。
 
 ## 4. 默认评审 Prompt 原则
 
@@ -208,11 +189,9 @@
 
 ## 5. 用户入口与专题文档
 
-- 当前用户入口仍以 `example/README.md`、`docs/output-channels.md`、`docs/podman.md`
-  和代码示例为主。
-- M11 完成后，GitHub Pages 文档站将成为对外用户入口；仓库内 `docs/ai/*` 继续承担
-  内部架构、路线图和 agent 维护上下文。
-- 文档站不应直接发布全部 `docs/ai/*` 内容，避免把内部路线图、agent 规则和运维细节混入
+- GitHub Pages 文档站（`aicr.atframe.work`）是对外用户入口；仓库内 `docs/ai/*`
+  继续承担内部架构、路线图和 agent 维护上下文。
+- 文档站不直接发布 `docs/ai/*` 内容，避免把内部路线图、agent 规则和运维细节混入
   用户手册。
 
 ## 6. 安全与运营基线
@@ -232,227 +211,62 @@
   4. `node node_modules/markdownlint-cli2/markdownlint-cli2-bin.mjs`
   5. `cmd /c "pnpm build"`
   6. `node packages/cli/dist/index.js eval --validate-only`
-- 定向检查用于迭代定位；最后一次修改后必须重新运行全部适用门禁，并确认工具实际发现了预期文件或测试。在 Linux/CI 等 `pnpm` 可直接执行的环境中，最终 runtime 门禁以 `pnpm ci` 为准。
+- 定向检查用于迭代定位；最后一次修改后必须重新运行全部适用门禁，并确认工具实际
+  发现了预期文件或测试。在 Linux/CI 等 `pnpm` 可直接执行的环境中，最终 runtime 门禁
+  以 `pnpm ci` 为准。
 - `Plan.md` 与 `docs/**/*.md` 共同接受 markdownlint 校验。
-- M11 已新增 `docs:build`、`docs:preview`、`docs:check`、`docs:dev` 脚本，CI 在
-  `.github/workflows/ci.yml` 的独立 `docs` job 中运行 `pnpm docs:build`：先执行六道校验
-  （公开内容边界、配置字段覆盖、CLI 参考一致性、内部链接/锚点、SEO 元数据、双语一致性），
-  再做静态站点构建。
+- CI 在 `.github/workflows/ci.yml` 的独立 `docs` job 中运行 `pnpm docs:build`：先执行
+  六道校验，再做静态站点构建。
 
 ## 8. 里程碑与执行顺序
 
 ### 8.1 当前状态
 
-| 里程碑 | 状态 | 主要落点 | 下一步 |
+| 里程碑 | 状态 | 归档 | 备注 |
 | --- | --- | --- | --- |
 | M0 | 已完成 | `docs/ai/milestones/M0.md` | 保持基线稳定 |
-| M0.5 | 已完成 | `docs/ai/milestones/M0.5.md`、`docs/prompt-research.md` | 维持高信号、findings-only 的默认输出纪律 |
-| M1 | 已完成 | `docs/ai/milestones/M1.md` | 作为最小 review 闭环基线 |
-| M2 | 已完成 | `docs/ai/milestones/M2.md` | 作为 agent/sandbox 基线 |
-| M3 | 已完成 | `docs/ai/milestones/M3.md` | 继续复用压缩、预算、队列与 scrubber 能力 |
-| M4 | 已完成 | `docs/ai/milestones/M4.md` | 继续扩展模板、路由与 attribution |
-| M5 | 已完成 | `docs/ai/milestones/M5.md` | 保持 runtime bundle 与 MCP transport 合同稳定 |
-| M6 | 部分完成 | `docs/ai/milestones/M6.md` | GitLab/SVN 真实仓库 e2e 留在 Backlog |
+| M0.5 | 已完成 | `docs/ai/milestones/M0.5.md`、`docs/prompt-research.md` | 维持高信号、findings-only 输出纪律 |
+| M1 | 已完成 | `docs/ai/milestones/M1.md` | 最小 review 闭环基线 |
+| M2 | 已完成 | `docs/ai/milestones/M2.md` | agent/sandbox 基线 |
+| M3 | 已完成 | `docs/ai/milestones/M3.md` | 压缩、预算、队列与 scrubber 能力 |
+| M4 | 已完成 | `docs/ai/milestones/M4.md` | 模板、路由与 attribution |
+| M5 | 已完成 | `docs/ai/milestones/M5.md` | runtime bundle 与 MCP transport 合同 |
+| M6 | 部分完成 | `docs/ai/milestones/M6.md` | 未验收项见 §8.3 |
 | M7 | 已完成 | `docs/ai/milestones/M7.md` | 跨 workspace 知识迁移明确不做 |
-| M8 | 基本完成 | `docs/ai/milestones/M8.md` | 真实 LLM benchmark 留在 Backlog |
-| M9 | 基本完成 | `docs/ai/milestones/M9.md` | 不进入版本 bump / git tag |
-| M10 | 基本完成 | `docs/ai/milestones/M10.md` | 真实外部 Redis smoke/e2e 按需放入 Backlog |
-| M11 | 基本完成 | `docs/ai/documentation-site-plan.md` | 本地项已全部完成；仅剩 Pages 设置核验（外部） |
-| M12 | 已完成 | 本文 §3.2.1 / `docs/ai/architecture.md` §3.2.1 | P1–P4 已交付；P5 公网正式环境切换完成，三个目标仓库均通过 token 解析验证，待一次真实 PR/push 完成最终 e2e 签收 |
-| M13 | 已完成 | 本文 §8.2.2 | P1–P5 全部交付，全量门禁通过（1885 tests / eslint / tsc / markdownlint / build / eval / docs:build） |
-| M13.1 | 已完成 | `docs/ai/milestones/M13.1.md` | agent web search 治理、provider 选择、凭据隔离与 WSL 集成验证通过 |
+| M8 | 基本完成 | `docs/ai/milestones/M8.md` | 未验收项见 §8.3 |
+| M9 | 基本完成 | `docs/ai/milestones/M9.md` | 不进入版本 bump / git tag；扩展沙箱见 §8.3 |
+| M10 | 基本完成 | `docs/ai/milestones/M10.md` | 真实外部 Redis smoke/e2e 按需 |
+| M11 | 已完成 | `docs/ai/documentation-site-plan.md` | Pages 已上线（`aicr.atframe.work`，2026-08-28 核验） |
+| M12 | 已完成 | `docs/ai/milestones/M12.md` | 生产 push 全链路已签收；PR 路径待自然触发，见 §8.3 |
+| M13 | 已完成 | `docs/ai/milestones/M13.md` | pi/omp 适配与最佳实践对齐全量交付 |
+| M13.1 | 已完成 | `docs/ai/milestones/M13.1.md` | agent web search 治理与 WSL 集成验证通过 |
+| M14 | 已完成 | `docs/ai/milestones/M14.md` | 多源上下文聚合（`context_repositories` 物化 + 只读挂载） |
 
 ### 8.2 当前执行包
 
-M11-P1（脚手架）、M11-P2（骨架 + 首批核心页）和 M11-P3（全章节双语正文迁移）已完成：
-`docs/site` Starlight 工程、pnpm workspace 接入、CI docs job、GitHub Pages workflow
-草案，全部章节中英双语正文（首页、快速上手、认证、配置各命名空间、VCS/agent/MCP
-集成、Docker/Podman 部署、运维、CLI/配置字段/模板变量参考、排障、贡献指南）。
-本地 `pnpm docs:build`（公开内容边界校验 + Astro build）通过（51 页），markdownlint
-通过。已修正内容审查发现的错误（移除臆造的 `native-llm` agent kind、session_ttl 默认值
-86400、`DOCKER_DOWNLOAD_MIRROR` 默认值与分类）。
+无活跃本地执行包。M11-P1–P6、M12-P1–P5、M13-P1–P5 全部交付并归档：
 
-M11-P4 打磨（根路由首页修复 + 首页丰富 + 全宽布局 + README）：对称 i18n 路由下 Starlight 不生成 `/`
-路径页面，已新增 `src/pages/index.astro` 执行浏览器语言检测跳转（中文 → `/zh-cn/`，其他 → `/en/`），
-无 JS 时回退到 meta refresh + 语言选择链接。中英文首页大幅丰富（新增工作流程、扩展核心特性、设计原则），
-`custom.css` 用 `clamp()` 实现流式内容宽度适应 4K 分辨率。仓库根目录新增 `README.md`
-（CI/license/docs badge、项目介绍、关键特性、架构流程图、quick start、包列表、贡献入口）
-和 `LICENSE`（MIT）。
+- M11 执行与验收记录：`docs/ai/documentation-site-plan.md`。
+- M12 交付与生产验收证据：`docs/ai/milestones/M12.md`；稳定合同
+  `docs/ai/architecture.md` §3.2.1。
+- M13 调研结论与交付面：`docs/ai/milestones/M13.md`。
 
-规则自动化。M11-P5 发布 workflow 已落地；线上生效仍需仓库 Settings > Pages 选择 `gh-pages` / `/` 作为发布源。
+后续工作只来自 §8.3 Backlog 的外部条件触发，或新方向的立项。
 
-M11-P6 打磨（首页组件修复 + 4K 全宽 + README/logo）：修复首页在 `.md` 中误用
-`<CardGrid>`/`<Card>` JSX 组件（Astro 按纯 Markdown 处理，输出为字面原始标签，卡片、图标、
-title 全部失效）的渲染 bug——改为 `.mdx`（Starlight 内置 MDX，`@astrojs/mdx` 为传递依赖，
-无需新增依赖），首页改用 splash `hero`（内联 SVG logo）+ `<Steps>` + `<CardGrid>` +
-`<LinkCard>` + 新增“评审输出规范”章节，并修正失效锚点。`custom.css` 采用全出血布局
-（`--sl-content-width: 100%`，移除 max-width 上限，与 Starlight 打印样式一致；regular 填满
-sidebar/TOC 之间、splash 填满视口），渐进 padding + ≥176/224/300rem 按比例放大 root 字号
-保障高分辨率可读，prose 经 `--aicr-prose-measure`（默认 `none`）可选恢复阅读宽度。
-新增 `docs/site/public/favicon.svg`（logo/favicon）。
-README 增强 logo、扩展 badge、导航链接行、Review output standards / Security 章节。同步更新
-`validate-public-content.mjs`（扫描 `.md`+`.mdx`）、`AGENTS.md` #59、中英 `development/index.md`、
-`docs/site/README.md`。
+### 8.3 Backlog（依赖外部系统或延后扩展）
 
-M11-P4 配置/CLI 参考校验自动化已落地（2026-08）：`docs/site/scripts/` 新增三个零依赖校验器并接入
-`pnpm docs:build` / `docs:check` 链（CI docs job 自动生效）。`validate-config-reference.mjs` 经
-Node 原生 type stripping 直接从 `packages/core/src/config.ts` 源码导入 Zod schema 做 introspection，
-双向校验 `en/zh-cn reference/config-fields.md` 字段表（schema 字段全覆盖、无臆造字段、双 locale
-一致、枚举参考表与 schema 枚举相等）；`validate-cli-reference.mjs` 从 `packages/cli/src/app.ts`
-提取 parseArgs 选项、dispatch 命令与 helpText，三方校验 `reference/cli.md` 双语页；
-`validate-internal-links.mjs`（M11-P6 项）校验全部站内链接、锚点、静态资源与 sidebar 双向覆盖。
-落地时修复的真实漂移：`triggers[].app`（M12 GitHub App 认证块）缺失于参考表（双语已补），
-CLI helpText 缺 `--author-display-name`/`--operator-override`/`--memory-hint`/`--task-context`
-四个已接受 flags（已补）。M11-P6 SEO 与贡献规则自动化亦已完成（2026-08）：新增
-`validate-seo.mjs`（双语 title/description 非空与长度区间、robots.txt Sitemap 行、og:image 接线
-与 1200x630 资产校验）与 `validate-bilingual-consistency.mjs`（页面集合/代码块数量/机器 token
-跨 locale 一致、`.mdx` fence 语言标记、禁用词可机检子集），配套 `public/robots.txt`、
-`og-image.png`（`generate:og-image` 手动再生成）与 starlight `head` og:image/twitter:image 接线，
-10 项阴性测试确认每类漂移可检出。剩余线上项：Pages 设置核验。
+| 项 | 来源 | 状态 | 依赖的外部条件 |
+| --- | --- | --- | --- |
+| GitLab 真实仓库 e2e | M6 | 代码已实现 | 可用的真实 GitLab 环境（实例 + 测试仓库 + token） |
+| SVN 真实仓库 e2e | M6 | adapter 与 trigger 合同层已实现 | 真实 SVN 仓库及 hook 部署环境 |
+| GitHub App `pull_request` 事件生产行使 | M12 | push 路径已签收；注入点有单测覆盖 | 目标仓库出现首次自然 PR（被动等待，无需准备环境） |
+| CI 真实 LLM eval benchmark | M8 | `aicr eval --validate-only` 已入 CI | CI secrets 中配置真实 LLM provider 凭据与预算 |
+| `k8s_pod` sandbox 实现 | M9 | 预留扩展，未实现 | 可用 Kubernetes 集群 + 引入 `@kubernetes/client-node` 依赖的决策 |
+| `firecracker` sandbox 实现 | M9 | 预留扩展，未实现 | Firecracker 二进制与 API socket 运行环境 |
 
-#### 8.2.1 M12 GitHub App 原生认证（P1–P5 已完成）
+明确不做或暂不进入计划：跨 workspace 知识迁移；版本 bump / git tag。
 
-目标：在不引入新依赖的前提下，为 GitHub trigger 提供 GitHub App 原生认证，自动签发与
-刷新 installation access token，取代"手动粘贴会过期的 installation token"或长期 PAT 的现状。
-
-已交付（M12-P1–P4）：
-
-- **P1 配置 schema**：`triggerSchema` 新增可选 `app` 块（`app_id`/`client_id`、
-  `private_key_env`/`private_key_path`、可选 `installation_id`）+ superRefine 校验
-  （`app` 与 `token_env` 互斥、`app_id`/`client_id` 至少其一、`private_key_env`/`private_key_path`
-  恰好其一、`app` 仅 `kind: github`）。
-- **P2 GithubAppTokenService**：`packages/server/src/github-app-token.ts` 用 `node:crypto`
-  签发 RS256 App JWT（`iat-60s`、`exp+540s`、`iss=app_id|client_id`），换取并缓存 installation
-  token（剩余 < 5min 刷新），按 `owner/repo` 动态解析并缓存 installation id；GHE `{base_url}/api/v3`；
-  401/403/404 可操作错误映射。
-- **P3 三个注入点**：`ReviewOutputPublisherResolver` 与 `vcsFactory` 改为异步；bootstrap 创建
-  `GithubAppTokenService` 实例 Map 并传入 resolver / vcsFactory / webhook config；channel 级
-  `token_env` 优先于 trigger 级 `app` token；`vcs`/`outputs` 保持只消费字符串 token。
-- **P4 webhook + GHE + 文档**：`installation`/`installation_repositories` 事件返回 `202
-  unsupported_event`；GHE `base_url` → `/api/v3`；`ghs_`/PEM/JWT 脱敏回归测试已补；定稿
-  `example/config.yaml`、`example/README.md`、`docs/ai/architecture.md` §3.2.1、`decisions.md` D32。
-
-关键调研结论（已验证）：
-
-- 三个 token 注入点（VCS factory、output publisher resolver、webhook PR 详情拉取）全部在
-  `packages/server`；因此 App token 服务归属 `packages/server`，`vcs`/`outputs` 保持只消费
-  字符串 token 的合同不变（遵守公共模块平台中立原则）。
-- `node:crypto` 可直接做 RS256 JWT 签名（`crypto.createSign('RSA-SHA256')`），无需
-  `jsonwebtoken` / `@octokit/auth-app` 等新依赖。
-- webhook payload schema 均为 `.passthrough()`，`installation.id` 可直接读取；
-  签名校验（`x-hub-signature-256` + webhook secret）对 App 与 PAT 通用，不需改动。
-- `packages/core/src/secret-scrubber.ts` 的 `gh[pousr]_` 模式已覆盖 installation token
-  前缀 `ghs_`，App 私钥（PEM）由 `private_key` 规则覆盖、App JWT 由 `jwt` 规则覆盖。
-
-M12-P5（真实 App e2e / 公网正式环境切换）已完成：已将 `atframework-aicr` App 部署到公网正式环境，`github-atframework`/`github-owent` trigger 已切到 `app` 认证，webhook secret 已同步，`owent/hiredis-happ` 已加入 App 已选仓库，三个目标仓库均通过 token 解析验证。详细合同见 `docs/ai/architecture.md` §3.2.1，
-决策见 `docs/ai/decisions.md` D32。
-
-#### 8.2.2 M13 pi + oh-my-pi agent 集成与最佳实践对齐（全部完成）
-
-目标：把 pi（`@earendil-works/pi-coding-agent`，binary `pi`）与 oh-my-pi（`@oh-my-pi/pi-coding-agent`，
-binary `omp`，pi 的 fork）纳入 `packages/agents` 适配层与参考 agent 集，并把两者已验证的做法
-（配置目录 env 隔离、显式 project trust、模型目录元数据注入、原生 `.agents/skills` 发现、
-pi 的扩展桥接 MCP 哲学）沉淀进架构、prompts、skills 与文档。
-
-关键调研结论（均经官方文档核验，来源与核验日期记入 `docs/ai/source-index.md`）：
-
-- **headless 契约**：pi 用 `pi --mode json --approve --no-session [--model provider/id] [--thinking <level>] -- "<task>"`；
-  omp 用 `omp -p --mode json --auto-approve --no-session [--model provider/id] [--thinking <level>] -- "<task>"`。
-  两者输出同族 NDJSON 事件流（`session` 头 + `agent_start`/`turn_*`/`message_*`/`tool_execution_*`/
-  `compaction_*`）；token usage 权威值在 `message_end.message.usage`（`input/output/cacheRead/cacheWrite/
-  totalTokens/cost.total`，cost 为按 USD/1M tokens 单价折算的美元值），`message_update` 顶层是累计快照，
-  只能用其一求和，不能混用。工具调用从 `tool_execution_start`（`toolName`/`args`）采集。
-- **配置目录隔离**：两者都认 `PI_CODING_AGENT_DIR`（pi 默认 `~/.pi/agent`，omp 默认 `~/.omp/agent`），
-  指向 bundle 内目录即可获得 models/settings/extensions/sessions 的整体隔离，等价于 kilo/opencode 的
-  隔离 HOME 效果；pi 另需 `PI_OFFLINE=1`（关更新检查/包检查/安装遥测）与 `PI_TELEMETRY=0`。
-  该 env 值是沙箱内路径，必须由 orchestrator 在已知沙箱 workdir 后注入（同 `AICR_OUTPUT_STATE_PATH`
-  的注入模式），不能由适配器在 host 侧物化。
-- **模型目录注入**：pi `models.json` 与 omp `models.yml` 都是 `{providers:{<id>:{baseUrl, api, apiKey,
-  headers?, authHeader?, models:[{id, name, reasoning, input, cost{input,output,cacheRead,cacheWrite},
-  contextWindow, maxTokens}]}}}`；`api` 取值已核验（`openai-completions`/`anthropic-messages`/
-  `google-generative-ai`/`azure-openai-responses`/`google-vertex`/`bedrock-converse-stream` 等）。
-  密钥不落盘：pi 用 `$ENV`/`${ENV}` 插值，omp 把 `apiKey` 值先当 env 名解析（omp 另有 `auth: none`
-  免 key）。v1 只支持 `openai_compatible`/`ollama`/`anthropic`/`google_ai_studio` 四种 provider kind
-  （baseUrl + apiKey 足够）；`azure_openai`/`vertex_ai`/`bedrock`/`copilot` 的凭据与参数管线未核验，
-  适配器在 materializeConfig 抛出带可操作指引的错误，不猜配置。
-- **MCP 面差异**：omp 原生支持 MCP（用户级 `$PI_CODING_AGENT_DIR/mcp.json`：`{mcpServers:{<name>:
-  {command, args?, env?}}}` stdio 或 `{type:"http"|"sse", url, headers?}`，支持 `${VAR}` 展开与
-  env 名间接），工具以 `mcp__<server>_<tool>`（小写、非字母数字转下划线）暴露，现有
-  `normalizeToolName` 正则天然兼容。pi **明确不做内置 MCP**（官方哲学），官方路径是 TypeScript 扩展：
-  由 runtime bundle 生成 `<configDir>/extensions/aicr-output.ts`（用户级扩展不受 project trust 门控）；
-  factory 只注册生命周期 handler，扩展在 `session_start` 中启动并完成 node stdio JSON-RPC 发现，
-  以 `pi_aicr_*` 名 `registerTool`（`Type.Unsafe` 透传 MCP inputSchema），并在 `session_shutdown`
-  回收子进程；该命名命中现有 `<prefix>_aicr_<tool>` 归一化正则。
-- **指令与 skills 面**：两者都原生加载 cwd/父级 `AGENTS.md`、原生发现项目 `.agents/skills/<name>/SKILL.md`，
-  与 bundle 现有物化布局零拷贝兼容。pi 对项目 `.agents/skills` 有 trust 门控，headless 下必须
-  `--approve` 才会加载（bundle 目录完全由 AICR 物化，trust 安全）；omp 无此门控。pi 在原生沙箱下
-  可能额外读到宿主 `~/.agents/skills`（`PI_CODING_AGENT_DIR` 不覆盖该路径），记为已知限制，
-  生产容器沙箱不受影响。
-- **compaction 注入**：pi 经 settings.json `compaction.enabled`（无 threshold/prune 字段，记 delegated）；
-  omp 经 config.yml `compaction.enabled` + `compaction.thresholdPercent`（有原生字段，记 injected）；
-  manifest `contextCompaction.{enabled,mode}` 语义不变。
-- **任务文本传输**：两者 json/print 模式的已文档化形态都是位置参数；adapter 提供
-  `buildStdin() => ""` 防止 orchestrator 默认把任务再管道进 stdin 造成双写。Windows 原生沙箱
-  32k argv 上限记为已知坑位（生产路径是 Linux 容器沙箱，ARG_MAX 远高于此）。
-
-执行包：
-
-- **M13-P1 调研与计划落盘 ✅**：外部文档核验 + 仓库契约确认；更新 `Plan.md`、`docs/ai/index.md`
-  里程碑表、`docs/ai/source-index.md` 研究记录。
-- **M13-P2 pi 适配器 ✅**：新增 `packages/agents/src/pi.ts`；`types.ts` AgentKind 加 `"pi"`；
-  `factory.ts` 注册；`runtime-bundle.ts` 为 pi 生成桥接扩展并把 `nativeSurfaces.mcp` 枚举扩出
-  `"extension"`；`review-orchestrator.ts` 注入 `PI_CODING_AGENT_DIR` 并新增 pi/omp 共用的
-  NDJSON 提取器；`config.ts` agentKindSchema 加 `"pi"`。
-- **M13-P3 omp 适配器 ✅**：新增 `packages/agents/src/oh-my-pi.ts` 与共享模块
-  `packages/agents/src/pi-family.ts`；`mcp-config.ts` 新增
-  `toOhMyPiMcpServersJson`；`runtime-bundle.ts` 接线 `.omp-agent/{config.yml,models.yml,mcp.json}`；
-  AgentKind/schema/factory 同步加 `"oh-my-pi"`。
-- **M13-P4 文档与 AI 资产 ✅**：`docs/ai/architecture.md` §3.6.3/§3.7.2/§3.13.5、`decisions.md` 新增 D33、
-  `AGENTS.known-pitfalls.md` 新增 #74、`docs/prompt-research.md` pi/omp 参考段、
-  `agent-runtime-integration` SKILL.md 适配器段落、根 `AGENTS.md` 兼容性段、`README.md` 包列表、
-  `example/config.yaml`+`example/README.md`、`docs/site` 中英 agent 集成页与 config-fields 参考、
-  `source-index.md` 研究记录与 pi/omp 来源条目。
-- **M13-P5 门禁收尾 ✅**：两适配器单测（argv/materialize 文件内容/env/compaction/MCP 转换器/
-  提取器/normalizeToolName/config schema/bundle 分支/orchestrator env 注入）落地，随后
-  eslint/tsc/vitest（81 文件 1885 用例）/markdownlint/build/eval/docs:build 全链通过。
-
-### 8.3 本地优先执行队列
-
-| 项 | 说明 | 本地验收 |
-| --- | --- | --- |
-| M11-P1 文档站脚手架 ✅ | Astro Starlight 创建 `docs/site`，接入 workspace、CI、Pages workflow 草案 | `pnpm docs:build` 公开内容校验 + 构建通过（51 页） |
-| M11-P2 信息架构骨架 + 首批核心页 ✅ | 全章节双语占位页 + 首页/快速上手/认证/输出通道四页中英双语正文 | 公开内容校验、站点构建和 markdownlint 通过 |
-| M11-P3 全章节正文迁移 ✅ | 配置各命名空间、CLI、MCP、VCS/agent 集成、Docker/Podman 部署、运维、参考、排障、贡献指南占位页全部替换为中英双语正文 | markdownlint、公开内容校验、站点构建、字段/命令抽查通过 |
-| M11-P4 配置/CLI 参考校验自动化 ✅ | `docs/site/scripts/validate-config-reference.mjs` + `validate-cli-reference.mjs` + `validate-internal-links.mjs` 接入 `docs:build`/`docs:check`；schema↔参考页双向覆盖、CLI help↔parseArgs↔参考页三方一致、站内链接/锚点/sidebar 校验 | `pnpm docs:build` 全链通过（54 页）；曾注入坏链接/坏锚点的阴性测试确认能抓到漂移 |
-| M11-P5 发布链路 ✅ | main 文档变更触发 docs 构建并通过 `DEPLOY_DOCUMENT_GH_PAGES_KEY` 发布到 `gh-pages`；保留 `aicr.atframe.work` 自定义域名和发布说明 | `pnpm docs:build` 可本地验证；线上生效需仓库 Pages source 指向 `gh-pages` / `/` 并绑定自定义域名 |
-| M11-P6 SEO 与贡献规则自动化 ✅ | `validate-seo.mjs`（title/description 长度区间、robots.txt Sitemap 行、og:image 接线 + 1200x630 资产）+ `validate-bilingual-consistency.mjs`（页面集合/代码块数/机器 token/`.mdx` fence 语言/禁用词子集）+ `public/robots.txt`、`og-image.png`、`generate:og-image`、starlight `head` 接线 | `pnpm docs:build` 六道校验全链通过（54 页）；10 项阴性测试全部可检出；markdownlint 通过 |
-| M12-P1 GitHub App 配置 schema ✅ | `triggerSchema`（`packages/core/src/config.ts`）新增可选 `app` 块（`app_id`/`client_id`、`private_key_env`/`private_key_path`、可选 `installation_id`）+ superRefine 验证；同步 `config.test.ts`、`example/config.yaml`、文档 | `eslint` + `tsc` + `vitest` 通过；config 测覆盖合法/冲突/缺失三类用例 |
-| M12-P2 GithubAppTokenService ✅ | `packages/server/src/github-app-token.ts`：`node:crypto` RS256 JWT 签发、installation token 缓存/刷新（<5min 提前刷新）、repo→installation 解析与缓存、401/403/404 可操作错误映射 | 新增 `github-app-token.test.ts`（mock fetch + `generateKeyPairSync` 测密钥），JWT 结构/缓存/刷新/GHE base URL 均覆盖 |
-| M12-P3 注入三个 token 点 ✅ | 将 token 服务接入 `vcsFactory`（改异步）、`createOutputPublisherResolverFromConfig`（resolver 改异步）、webhook PR 详情拉取（`appTokenResolver`）；vcs/outputs 保持字符串 token；补 `ghs_` 脱敏回归测试 | resolver 异步化后 2 个调用点（`index.ts`、`review-orchestrator.ts`）await；App/PAT 两条路径均有测覆盖 |
-| M12-P4 installation 事件 + GHE + 文档 ✅ | webhook `installation`/`installation_repositories` 返回 `202 unsupported_event`；GHE `base_url` → `/api/v3`；定稿 `example/README.md`、`docs/ai/architecture.md` §3.2.1、`decisions.md` D32 | markdownlint + 全量验证链通过；webhook 测覆盖 installation 事件与 id 提取 |
-| M13-P1 pi/omp 调研与计划 ✅ | 官方文档核验（pi：json/models/custom-provider/extensions/settings/environment-variables/README；omp：cli-reference/config-usage/models/mcp-config/mcp-runtime-lifecycle/compaction/skills）+ 仓库契约确认；Plan.md 与 index.md 计划落盘 | `docs/ai/source-index.md` 含 2026-08-26 研究记录；markdownlint 通过 |
-| M13-P2 pi 适配器 ✅ | `packages/agents/src/pi.ts` + runtime-bundle 桥接扩展 + orchestrator 注入/提取 + config schema | 单测覆盖命令/物化/提取/env 注入；eslint + tsc + vitest 通过 |
-| M13-P3 omp 适配器 ✅ | `packages/agents/src/oh-my-pi.ts` + `toOhMyPiMcpServersJson` + bundle/orchestrator/schema 接线 | 单测覆盖；eslint + tsc + vitest 通过 |
-| M13-P4 文档与 AI 资产 ✅ | architecture/decisions/pitfalls/prompt-research/skill/AGENTS.md/README/example/docs-site 中英 | markdownlint + `docs:build` 公开内容校验通过 |
-| M13-P5 门禁收尾 ✅ | 全量验证链 + eval fixtures + source-index 定稿 | lint/typecheck/test/markdownlint/build/eval 全过 |
-
-### 8.4 Backlog（依赖外部系统或延后扩展）
-
-| 项 | 来源里程碑 | 说明 |
-| --- | --- | --- |
-| GitLab 真实仓库 e2e | M6 | 代码已实现，待真实 GitLab 环境 |
-| SVN 真实仓库 e2e | M6 | 基础 VCS adapter 与 trigger 合同层已实现；仍需真实 SVN 仓库和 hook 部署验证 |
-| 专用多源上下文聚合 | M6/M7 | 当前 `fetch_more_context` 部分覆盖；无外部仓库选择器需求时先不扩大范围 |
-| `k8s_pod` sandbox 实现 | M9 | 需要 Kubernetes 集群和 `@kubernetes/client-node` |
-| `firecracker` sandbox 实现 | M9 | 需要 Firecracker 二进制和 API socket |
-| CI 真实 LLM eval benchmark | M8 | root CI 已运行 `aicr eval --validate-only`；真实 LLM benchmark 需要 CI secrets |
-| 文档站 Pages 设置核验 | M11 | workflow 已发布到 `gh-pages`；仍需 GitHub Settings > Pages 选择 `gh-pages` / `/` 后核验线上地址 |
-| GitHub App 真实仓库全链路 e2e 签收（M12-P5 收尾） | M12 | M12-P5 公网正式环境部署已完成：App 已安装到 `atframework` 和 `owent` 账号，`github-atframework`/`github-owent` trigger 已切到 `app` 认证，webhook secret 已同步，`owent/hiredis-happ` 已加入已选仓库，三个目标仓库均通过 token 解析验证。仍建议通过一次真实 PR/push 完成最终端到端签收 |
-
-明确不做或暂不进入计划：跨 workspace 知识迁移；版本 bump / git tag；在 M11-P1 前生成
-用户文档正文。
-
-### 8.5 已完成阶段归档
+### 8.4 已完成阶段归档
 
 - `docs/ai/milestones/M0.md`
 - `docs/ai/milestones/M0.5.md`
@@ -466,6 +280,10 @@ pi 的扩展桥接 MCP 哲学）沉淀进架构、prompts、skills 与文档。
 - `docs/ai/milestones/M8.md`
 - `docs/ai/milestones/M9.md`
 - `docs/ai/milestones/M10.md`
+- `docs/ai/milestones/M12.md`
+- `docs/ai/milestones/M13.md`
+- `docs/ai/milestones/M13.1.md`
+- `docs/ai/milestones/M14.md`
 - `docs/ai/milestones/local-priority-queue.md`
 
 ## 9. 稳定决策索引

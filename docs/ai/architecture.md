@@ -67,7 +67,7 @@
   - 在需要时获取额外上下文或归因
 - 公共路径与对象工具函数放在 `packages/core/src/utils.ts`，不要在其他模块复制实现。
 - Git 默认浅拉取并允许在闸门下 deepen；P4 / SVN 保持 provider 原生方式。
-- 多源上下文默认关闭：只有显式 `repository` selector 或 alias 才访问辅助仓库。
+- 多源上下文默认关闭：只有 workspace 配置显式声明 `context_repositories` alias 才物化辅助仓库，合同见 §3.2.2。
 - `normalizePath` 必须统一反斜杠、压缩重复斜杠并去除前导 `./`。
 - `isPlainObject` 必须拒绝 `Date`、`RegExp` 等内建类实例。
 - Git blame / P4 annotate / SVN blame 等 attribution 能力属于 best-effort 上下文工具，不应污染默认 fingerprint。
@@ -175,6 +175,64 @@
 - 签名校验（`x-hub-signature-256` + webhook secret）对 App 与 PAT 通用，不改动。
 - App 最小权限与订阅事件：Contents `Read`、Pull requests `Read/Write`、
   Issues `Read/Write`、Metadata `Read`；订阅 Pull request、Push、Issue comment、Issues。
+
+#### 3.2.2 多源上下文聚合（M14，context_repositories）
+
+**动机**：评审经常需要引用主仓库之外的共享库/契约仓库（内部 SDK、协议定义、公共配置）。
+M6 起合同层就预留了“显式 selector/alias 才访问辅助仓库”的边界，M14 把它落成
+workspace 级声明式配置 + 只读挂载。
+
+**配置合同**（`packages/core/src/config.ts`，`workspaces.defaults` 与
+`workspaces.instances.<id>` 均可声明 `context_repositories` 数组；merge 语义为整体替换）：
+
+- 每项必填 `alias`（path-safe：`^[A-Za-z0-9][A-Za-z0-9._-]*$`，同一 workspace 内唯一）与
+  `kind`（`git` / `p4` / `svn`）；schema 按 kind 强制必填字段并拒绝跨 kind 字段：
+  - `git`：`url`（必填）、`ref`（branch/tag，缺省远端默认分支）、`token_env`
+    （仅 http(s) 认证，env 名间接寻址）。
+  - `svn`：`repository_url`（必填）、`revision`（可选 pin）。
+  - `p4`：`depot_path`（必填，通常以 `/...` 结尾）、`port`、`user_env`、
+    `ticket_env`/`password_env`、`revision`（changelist pin）。
+  - 通用：`max_mb`（可选，默认 512；物化后超上限即判失败并清理）。
+- 连接信息只能来自 `config.yaml`；trigger payload 任何字段都不能注入或改写辅助仓库
+  （与 SVN trigger “configured repository_url wins” 同一原则）。
+
+**物化合同**（`packages/vcs/src/context-repos.ts` `materializeContextRepositories`）：
+
+- 每次 run 在确认存在变更文件后全新物化（先 wipe 再拉取），不做跨 run 缓存；
+  目标目录 `<workspaces root>/<workspace_id>/context-repos/<alias>`；物化前清扫
+  不在当前配置 alias 集合内的残留目录，失败 alias 的目录在 catch 中清理。
+- git：`git clone --depth 1 [--branch <ref>]`；token 经 `GIT_CONFIG_COUNT/KEY/VALUE`
+  环境变量注入 `http.extraHeader`（scheme 与 adapter 一致用 `token`），既不进 argv
+  进程表也不写入 `.git/config`；clone 每次重试前重建空目录，避免部分检出导致重试必败。
+- svn：`svn export --quiet --non-interactive --no-auth-cache [--revision N]`；
+  未 pin 时 best-effort 用 `svn info --show-item revision` 记录远端 HEAD。
+- p4：与 adapter 共享 `isP4TrustError`/`isP4FingerprintChangedError`/`isP4DeleteAction`/
+  `isP4AuthenticationError` 判定（`packages/vcs/src/p4.ts` 导出）；任意命令遇 trust 错误
+  先 `p4 trust -y`、指纹变更回退 `p4 trust -y -f` 后重试一次，认证失败（含 session/ticket
+  过期）且配置了 password/ticket 时 `p4 login`（stdin 送密）后重试一次；用
+  `p4 files -e <depot>[@rev]` 列文件（跳过 delete/`move/delete`），以有界并发
+  （4）逐文件 `p4 print -q` 按字节原样导出（buffer stdout，支持 binary），
+  **不执行 `p4 sync`**；文件数上限 5000，字节在导出循环内累计、超 `max_mb` 立即中止。
+- 所有 VCS 子进程带 10 分钟超时（SIGKILL）；多仓库以有界并发（3）物化；
+  CLI 调用经共享 `withTransientIoRetry` 分类器重试瞬时 IO 错误。
+- 单仓库失败隔离：告警 + 结果记 `status: failed`，不阻塞评审，其余仓库照常物化；
+  失败的 alias 不出现在挂载与 prompt 中。
+- 物化后统计 fileCount/totalBytes；超过 `max_mb` 判失败并删除目录，错误信息给出
+  可操作指引（收窄 depot_path/repository_url/ref 或调大 max_mb）。
+
+**暴露面**（`packages/server/src/review-orchestrator.ts`）：
+
+- 仅 agent 路径（`sandbox` + `agentAdapter`）物化；直连 LLM 路径不物化（无 shell 可消费）。
+- 容器沙箱经 `extraMounts` 只读挂载到 `/workspace/context-repos/<alias>`；native 沙箱
+  直接读 host 路径。每个 agent pass（含修复/上下文 follow-up）都带同一组挂载。
+- task prompt 在 diff 之后列出可用 alias、kind、已解析 revision 与沙箱路径，并约束
+  “problem 仍必须锚定本次变更文件，辅助仓库只作 supporting evidence”。
+- `aicr.fetch_more_context` 合同不变，仍只服务主仓库；辅助仓库内容经只读文件系统访问。
+- `ReviewOrchestrationResult.contextRepositories` 记录每个 alias 的
+  status/resolvedRevision/fileCount/totalBytes，并经 `summarizeReviewOrchestrationForWebhook`
+  进入 webhook 响应与 run 快照，供可观测性与排障。
+- 注意：`workspaces.cache.max_total_gb` 当前无运行时执行，`context-repos` 目录不受其约束；
+  运维需按 workspace 数 × `max_mb` 估算 `/app/workspaces` 卷容量。
 
 ### 3.3 Compression 与上下文管理
 
@@ -435,6 +493,7 @@ AICR 采用**两层上下文管理**，两者互补：
 - 如果 Agent 结构化修复后的自由文本明确表示“无问题 / 无可审查代码”，orchestrator 会归一为 `aicr.skip`，避免把格式修复失败的 fallback 文案发布到 IM；若仍无法解析且不属于无问题语义，则改走直连 LLM 修复兜底。
 - Summary 中声称“发现问题”但没有 `aicr.report_problem` 记录时，也视为未满足输出合同并触发结构化修复，避免 `problemCount=0` 的问题被 `no_problems` 策略静默压掉。
 - Skip reason 或 summary 要求人类补 diff/source context，或声称无法访问完整仓库/源码而无法验证时，orchestrator 也会修复为“只读命令检查已物化源码、`aicr.fetch_more_context` 补拉具体路径，或 `aicr.try_blame` 请求 VCS 归因”的流程，并在拿到上下文后要求最终结构化输出。
+- 同一轮既产出 problem 又有待满足的上下文请求时（例如问题报告同时列出“待 VCS 拉取后复核”事项），orchestrator 在该轮结束后执行补拉并强制再跑一轮 follow-up pass：清除临时的 problems/summary，把拉到的内容回灌 prompt，要求逐条复核并重新输出最终 problems，不得把“待确认”原文直接发布结案。仅存在失败（非法或仓库中不存在）的上下文请求时不触发复核轮；follow-up pass 自身再次申请并成功拉到上下文时，同样再补一轮（单次编排最多三轮）。
 - `aicr.fetch_more_context` 可用于缺失/过窄 diff 下的完整变更文件，以及为验证变更行所必需的窄范围相关文件；problem 仍必须锚定到本次变更的文件与行。
 - IM 通知保持 `Review target` / `Summary` / `Problems` 分段结构，问题位置必须来自 `aicr.report_problem.file` 与 `line`。
 - 复合输出 publisher 必须隔离单通道发布失败：某个 channel（例如 GitHub issue API 403）失败时记录 `DispatchResult.status=failed` 和告警日志，继续尝试后续 channel；只有成功发布的 dispatch 才使 run 状态成为 `published`，若全部 dispatch 都失败则 run 以 `skipped/output_dispatch_failed` 结束，而不是把触发器升级为 `review_orchestration_failed`。

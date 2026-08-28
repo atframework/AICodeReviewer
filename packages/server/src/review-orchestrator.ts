@@ -11,6 +11,7 @@ import {
   prepareReviewPrompt,
   scrubPromptMessages,
   scrubText,
+  type ContextRepositoryConfig,
   type PreparedReviewPrompt,
   type ReviewEvent,
   type ReviewProvider,
@@ -54,8 +55,17 @@ import {
   type MentionChannelKind,
 } from "@aicr/outputs";
 import type { DispatchResult, ReviewProblem } from "@aicr/outputs";
-import type { SandboxBackend, SandboxSpawnResult } from "@aicr/sandbox";
-import type { AttributionRequest, ChangeRange, ExtraContextRequest, ParsedDiff, VcsAdapter } from "@aicr/vcs";
+import type { SandboxBackend, SandboxMountSpec, SandboxSpawnResult } from "@aicr/sandbox";
+import {
+  materializeContextRepositories,
+  type AttributionRequest,
+  type ChangeRange,
+  type ContextRepoMaterialization,
+  type ExtraContextRequest,
+  type MaterializeContextReposOptions,
+  type ParsedDiff,
+  type VcsAdapter,
+} from "@aicr/vcs";
 
 export interface DiffCapableVcsAdapter extends VcsAdapter {
   diff?(range: ChangeRange, options?: { readonly contextLines?: number }): Promise<ParsedDiff>;
@@ -121,6 +131,19 @@ export interface ServerReviewOrchestrationOptions {
    * CLI flags (`delegated`); zoo/pi have no built-in search tool (`not_applicable`).
    */
   readonly webSearch?: AgentWebSearchOptions;
+  /**
+   * Workspace-level auxiliary context repositories (`context_repositories`),
+   * resolved per run because the workspace is only known from the review event.
+   * Materialized once per run into `<workspace>/context-repos/<alias>` and
+   * mounted read-only for agent sandboxes; the direct-LLM path ignores them.
+   */
+  readonly contextRepositoriesResolver?: (
+    workspaceId: string,
+  ) => readonly ContextRepositoryConfig[] | undefined;
+  /** Test seam; defaults to the VCS CLI materializer in @aicr/vcs. */
+  readonly contextRepoMaterializer?: (
+    options: MaterializeContextReposOptions,
+  ) => Promise<readonly ContextRepoMaterialization[]>;
   readonly scrubSecrets?: boolean;
   readonly taskContextBuilder?: (
     reviewEvent: ReviewEvent,
@@ -173,6 +196,8 @@ export interface ReviewOrchestrationResult {
   readonly fallbackCount?: number;
   /** Origin of the run-wide aggregated usage. */
   readonly usageSource?: ReviewOrchestrationUsageSource;
+  /** Per-alias materialization outcome when workspace context_repositories ran. */
+  readonly contextRepositories?: readonly ContextRepoMaterialization[];
 }
 
 export interface ReviewOrchestrationWebhookUsage {
@@ -223,6 +248,16 @@ export interface ReviewOrchestrationWebhookSummary {
   readonly requestCount?: number;
   readonly retryCount?: number;
   readonly fallbackCount?: number;
+  /** Per-alias auxiliary context repository materialization outcome, when configured. */
+  readonly contextRepositories?: readonly {
+    readonly alias: string;
+    readonly kind: string;
+    readonly status: "ok" | "failed";
+    readonly resolvedRevision?: string;
+    readonly fileCount?: number;
+    readonly totalBytes?: number;
+    readonly error?: string;
+  }[];
 }
 
 interface ToolCallEnvelope {
@@ -513,11 +548,13 @@ function buildTaskContext(
   changedPaths: readonly string[],
   diff: ParsedDiff | undefined,
   outputLanguage?: string,
+  contextReposSection?: string,
 ): string {
   const lines = [
     buildReviewTaskContext(reviewEvent, changedPaths),
     "",
     formatParsedDiffForPrompt(diff),
+    ...(contextReposSection ? ["", contextReposSection] : []),
     "",
     buildJsonToolContract(),
   ];
@@ -527,14 +564,60 @@ function buildTaskContext(
   return lines.join("\n");
 }
 
-function deriveWorkspaceRuntimeDirs(sourceRoot: string): { agentDir: string; tmpDir: string } {
+function deriveWorkspaceRoot(sourceRoot: string): string {
   const sourceParent = dirname(sourceRoot);
-  const workspaceRoot = basename(sourceParent) === "source" ? dirname(sourceParent) : sourceRoot;
+  return basename(sourceParent) === "source" ? dirname(sourceParent) : sourceRoot;
+}
+
+function deriveWorkspaceRuntimeDirs(sourceRoot: string): { agentDir: string; tmpDir: string } {
+  const workspaceRoot = deriveWorkspaceRoot(sourceRoot);
 
   return {
     agentDir: join(workspaceRoot, "agent"),
     tmpDir: join(workspaceRoot, "tmp"),
   };
+}
+
+async function materializeWorkspaceContextRepos(
+  options: ServerReviewOrchestrationOptions,
+  sourceRoot: string,
+  workspaceId: string,
+): Promise<readonly ContextRepoMaterialization[]> {
+  const repos = options.contextRepositoriesResolver?.(workspaceId);
+  if (!options.sandbox || !options.agentAdapter || !repos?.length) {
+    return [];
+  }
+
+  const materializer = options.contextRepoMaterializer ?? materializeContextRepositories;
+  return materializer({
+    contextReposRoot: join(deriveWorkspaceRoot(sourceRoot), "context-repos"),
+    repos,
+  });
+}
+
+function contextRepoSandboxPath(mount: ContextRepoMaterialization, sandbox?: SandboxBackend): string {
+  return !sandbox || sandbox.kind === "native"
+    ? mount.hostDir
+    : `/workspace/context-repos/${mount.alias}`;
+}
+
+function buildContextReposPromptSection(
+  mounts: readonly ContextRepoMaterialization[],
+  sandbox?: SandboxBackend,
+): string | undefined {
+  if (mounts.length === 0) {
+    return undefined;
+  }
+
+  const lines = [
+    "Auxiliary context repositories (read-only reference copies configured by the operator):",
+    ...mounts.map((mount) =>
+      `- ${mount.alias} (${mount.kind}${mount.resolvedRevision ? `, revision ${mount.resolvedRevision}` : ""}): ${contextRepoSandboxPath(mount, sandbox)}`
+    ),
+    "Inspect them with read-only shell tools (rg, bat) when a change depends on their API, types, or contracts. " +
+      "Reported problems must still reference files changed in this review; cite auxiliary repositories only as supporting evidence.",
+  ];
+  return lines.join("\n");
 }
 
 const CONTEXT_OVERFLOW_RE =
@@ -1136,6 +1219,7 @@ async function runAgentReview(
   task: string,
   options: ServerReviewOrchestrationOptions,
   bundleContext?: AgentBundleContext,
+  contextRepoMounts?: readonly ContextRepoMaterialization[],
 ): Promise<ReviewCompletionResult & { readonly agentResult: SandboxSpawnResult }> {
   const sandbox = options.sandbox;
   const agentAdapter = options.agentAdapter;
@@ -1148,10 +1232,16 @@ async function runAgentReview(
   let hostAgentDir: string | undefined;
 
   try {
+    const extraMounts: SandboxMountSpec[] = (contextRepoMounts ?? []).map((mount) => ({
+      hostPath: mount.hostDir,
+      containerPath: `/workspace/context-repos/${mount.alias}`,
+      readOnly: true,
+    }));
     const materializedFs = await sandbox.materializeFs({
       sourceDir: sourceRoot,
       agentDir: dirs.agentDir,
       tmpDir: dirs.tmpDir,
+      ...(extraMounts.length > 0 ? { extraMounts } : {}),
     });
     hostAgentDir = materializedFs.agentDir;
     // Pin the MCP output-state file to an absolute sandbox-visible path so the
@@ -1457,6 +1547,7 @@ async function requestReviewCompletion(
   options: ServerReviewOrchestrationOptions,
   followUp?: ReviewCompletionFollowUp,
   bundleContext?: AgentBundleContext,
+  contextRepoMounts?: readonly ContextRepoMaterialization[],
 ): Promise<ReviewCompletionResult> {
   if (options.sandbox && options.agentAdapter) {
     const task = followUp
@@ -1472,7 +1563,7 @@ async function requestReviewCompletion(
           followUp.prompt,
         ].join("\n")
       : systemPrompt;
-    return runAgentReview(sourceRoot, task, options, bundleContext);
+    return runAgentReview(sourceRoot, task, options, bundleContext, contextRepoMounts);
   }
 
   return requestDirectLlmCompletion(systemPrompt, options, followUp);
@@ -2001,6 +2092,12 @@ function outputRequestsMissingContext(state: AicrOutputState): boolean {
     || state.summaries.some((summary) => MISSING_CONTEXT_REQUEST_RE.test(summary.markdown));
 }
 
+function hasFetchedContextResponses(execution: ToolCallExecutionResult): boolean {
+  return execution.contextResponses.some(
+    (response) => response.error === undefined && response.path !== undefined,
+  );
+}
+
 function classifyUnstructuredNoActionableOutput(content: string): NoActionableSkipReason | undefined {
   const text = stripReasoningBlocks(content).trim();
   if (!text || MISSING_CONTEXT_REQUEST_RE.test(text)) {
@@ -2047,28 +2144,40 @@ function classifyNoActionableReviewResult(
 function buildContextFollowUpPrompt(
   changedPaths: readonly string[],
   execution: ToolCallExecutionResult,
-  options: { readonly summaryOnlyClaimsProblems?: boolean; readonly missingContextRequest?: boolean } = {},
+  options: {
+    readonly summaryOnlyClaimsProblems?: boolean;
+    readonly missingContextRequest?: boolean;
+    readonly reportedProblemsPendingContext?: boolean;
+  } = {},
 ): string {
   const sections: string[] = [
     options.summaryOnlyClaimsProblems
       ? "The previous output claimed actionable problems in a summary but did not emit any aicr.report_problem records."
       : options.missingContextRequest
         ? "The previous output asked for diff/source context instead of using the available AICR context tools."
-        : "The previous output did not include parseable final review problems, summary, or skip reason.",
+        : options.reportedProblemsPendingContext
+          ? "The previous output reported problems while its aicr.fetch_more_context requests were still pending; AICR has now fetched that context from VCS."
+          : "The previous output did not include parseable final review problems, summary, or skip reason.",
     "Use the original task plus the context below to finish the review now.",
     "Return one JSON object only. Prefer problems plus summary; if there are no actionable problems or no reviewable code, call aicr.skip with a concise reason such as lgtm or no_reviewable_code.",
     "If you found any actionable problem, emit one aicr.report_problem entry per problem with file and line; do not mention problem counts only in a summary.",
     "Use aicr.fetch_more_context only for a concrete changed file or a narrowly related repository file; never ask the user to provide diff or source context.",
     "Use aicr.try_blame only for VCS-verified line attribution; do not guess authors from prose, usernames, or commit summaries.",
-    "",
-    "Changed files:",
-    ...changedPaths.map((path) => `- ${path}`),
   ];
+
+  if (options.reportedProblemsPendingContext) {
+    sections.push(
+      "",
+      "Re-verify every previously reported problem and any pending verification items against the fetched context. Re-emit each problem that remains valid, corrected if the fetched context changes details; do not silently drop confirmed problems.",
+    );
+  }
+
+  sections.push("", "Changed files:", ...changedPaths.map((path) => `- ${path}`));
 
   if (execution.contextResponses.length > 0) {
     sections.push(
       "",
-      "AICR fetched the requested context below. Any previous summary or skip output emitted before this context was treated as provisional.",
+      "AICR fetched the requested context below. Any previous problems, summary, or skip output emitted before this context was treated as provisional.",
     );
   }
 
@@ -2419,6 +2528,10 @@ export async function runReviewOrchestration(
       scrubMatches: [],
     };
   }
+
+  const contextRepoResults = await materializeWorkspaceContextRepos(options, sourceRoot, context.reviewEvent.workspaceId);
+  const contextRepoMounts = contextRepoResults.filter((entry) => entry.status === "ok");
+  const contextReposSection = buildContextReposPromptSection(contextRepoMounts, options.sandbox);
   let diff: ParsedDiff | undefined;
   if (vcs.diff) {
     try {
@@ -2446,7 +2559,7 @@ export async function runReviewOrchestration(
     }
   }
   const rawTaskContext = options.taskContextBuilder?.(context.reviewEvent, changedPaths, diff) ??
-    buildTaskContext(context.reviewEvent, changedPaths, diff, options.outputLanguage);
+    buildTaskContext(context.reviewEvent, changedPaths, diff, options.outputLanguage, contextReposSection);
 
   let compressed = false;
   let originalTokenEstimate: number | undefined;
@@ -2473,6 +2586,7 @@ export async function runReviewOrchestration(
           buildReviewTaskContext(context.reviewEvent, changedPaths),
           "",
           compressionResult.compactDiff,
+          ...(contextReposSection ? ["", contextReposSection] : []),
           "",
           buildJsonToolContract(),
         ];
@@ -2577,7 +2691,7 @@ export async function runReviewOrchestration(
     ...(options.webSearch ? { webSearch: options.webSearch } : {}),
   };
   const runMetricsAccumulator = createReviewRunMetricsAccumulator();
-  let completion = await requestReviewCompletion(scopedTree.rootDir, llmSystemPrompt, options, undefined, bundleContext);
+  let completion = await requestReviewCompletion(scopedTree.rootDir, llmSystemPrompt, options, undefined, bundleContext, contextRepoMounts);
   accumulateReviewCompletionMetrics(runMetricsAccumulator, completion);
   let lastAgentResult = completion.agentResult;
   const rawModelOutput = completion.llmResult.content;
@@ -2588,10 +2702,15 @@ export async function runReviewOrchestration(
     ? classifyUnstructuredNoActionableOutput(rawModelOutput)
     : undefined;
   const summaryOnlyProblemClaim = summaryOnlyClaimsActionableProblems(outputState);
-  const contextNeedsFinalPass = outputState.problems.length === 0 && (
+  // Context requests are only satisfied after the round that asked for them,
+  // so problems reported alongside pending fetches were produced without the
+  // fetched content and must be re-verified in a follow-up pass.
+  const reportedProblemsPendingContext = outputState.problems.length > 0
+    && hasFetchedContextResponses(toolExecution);
+  const contextNeedsFinalPass = reportedProblemsPendingContext || (outputState.problems.length === 0 && (
     toolExecution.contextResponses.length > 0 ||
     toolExecution.invalidContextRequestCount > 0
-  );
+  ));
   const missingContextRequest = outputRequestsMissingContext(outputState);
   const shouldRepairModelOutput = !initialNoActionSkipReason && (summaryOnlyProblemClaim
     || contextNeedsFinalPass
@@ -2641,9 +2760,11 @@ export async function runReviewOrchestration(
         prompt: buildContextFollowUpPrompt(changedPaths, toolExecution, {
           ...(summaryOnlyProblemClaim ? { summaryOnlyClaimsProblems: true } : {}),
           ...(missingContextRequest ? { missingContextRequest: true } : {}),
+          ...(reportedProblemsPendingContext ? { reportedProblemsPendingContext: true } : {}),
         }),
       },
       bundleContext,
+      contextRepoMounts,
     );
     accumulateReviewCompletionMetrics(runMetricsAccumulator, completion);
     if (completion.agentResult) {
@@ -2654,7 +2775,10 @@ export async function runReviewOrchestration(
     });
     outputState = collector.snapshot();
 
-    if (outputState.problems.length === 0 && repairExecution.contextResponses.length > 0) {
+    const repairProblemsPendingContext = outputState.problems.length > 0
+      && hasFetchedContextResponses(repairExecution);
+    if (repairProblemsPendingContext
+      || (outputState.problems.length === 0 && repairExecution.contextResponses.length > 0)) {
       collector.clearReviewOutputs();
       completion = await requestReviewCompletion(
         scopedTree.rootDir,
@@ -2662,9 +2786,12 @@ export async function runReviewOrchestration(
         options,
         {
           previousOutput: completion.llmResult.content,
-          prompt: buildContextFollowUpPrompt(changedPaths, repairExecution),
+          prompt: buildContextFollowUpPrompt(changedPaths, repairExecution, {
+            ...(repairProblemsPendingContext ? { reportedProblemsPendingContext: true } : {}),
+          }),
         },
         bundleContext,
+        contextRepoMounts,
       );
       accumulateReviewCompletionMetrics(runMetricsAccumulator, completion);
       if (completion.agentResult) {
@@ -3021,6 +3148,7 @@ export async function runReviewOrchestration(
     ...(runMetrics.retryCount !== undefined ? { retryCount: runMetrics.retryCount } : {}),
     ...(runMetrics.fallbackCount !== undefined ? { fallbackCount: runMetrics.fallbackCount } : {}),
     ...(runMetrics.usageSource ? { usageSource: runMetrics.usageSource } : {}),
+    ...(contextRepoResults.length > 0 ? { contextRepositories: contextRepoResults } : {}),
   };
 
   if (options.postRunCallback) {
@@ -3150,5 +3278,18 @@ export function summarizeReviewOrchestrationForWebhook(
     ...(usage.requestCount !== undefined ? { requestCount: usage.requestCount } : {}),
     ...(usage.retryCount !== undefined ? { retryCount: usage.retryCount } : {}),
     ...(usage.fallbackCount !== undefined ? { fallbackCount: usage.fallbackCount } : {}),
+    ...(result.contextRepositories && result.contextRepositories.length > 0
+      ? {
+          contextRepositories: result.contextRepositories.map((entry) => ({
+            alias: entry.alias,
+            kind: entry.kind,
+            status: entry.status,
+            ...(entry.resolvedRevision ? { resolvedRevision: entry.resolvedRevision } : {}),
+            ...(entry.fileCount !== undefined ? { fileCount: entry.fileCount } : {}),
+            ...(entry.totalBytes !== undefined ? { totalBytes: entry.totalBytes } : {}),
+            ...(entry.error ? { error: entry.error } : {}),
+          })),
+        }
+      : {}),
   };
 }

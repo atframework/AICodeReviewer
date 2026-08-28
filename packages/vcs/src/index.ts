@@ -1,4 +1,5 @@
 export const vcsPackageName = "@aicr/vcs";
+export * from "./context-repos.js";
 export * from "./contracts.js";
 export * from "./diff.js";
 export * from "./git.js";

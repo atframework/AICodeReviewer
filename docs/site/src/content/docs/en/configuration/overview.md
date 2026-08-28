@@ -92,6 +92,7 @@ sections each layer accepts.
 | `agent.default` | ✓ | ✓ * | ✓ * |
 | `sandbox` | via `agent.sandbox` | ✓ * | ✓ * |
 | `prompt` (base system prompt, `force_skills`) | — | ✓ | ✓ |
+| `context_repositories` (auxiliary context repositories) | — | ✓ | ✓ |
 | `auth` (per-workspace API key) | via `server.auth` | — | ✓ |
 | `compression`, `queue`, `storage`, `llm`, `server`, `admin`, `triggers` | ✓ | — | — |
 
@@ -100,6 +101,15 @@ the current version builds a single adapter and sandbox from the global `agent`
 section at startup. Values set at the workspace layers are parsed but have no
 effect. Per-workspace agent mixing and sandbox images are planned for a later
 release.
+
+`context_repositories` declares auxiliary repositories the reviewer may consult
+(shared libraries, protocol contracts, and so on): each review materializes a
+fresh copy under `<workspace>/context-repos/<alias>` once changed files are
+known, exposes it to the agent as the read-only mount
+`/workspace/context-repos/<alias>` in container sandboxes, isolates per-repo
+failures from the review, and enforces the `max_mb` size cap (default 512). An
+instance list replaces the `defaults` list wholesale. Field details live in the
+[config field reference](/en/reference/config-fields/#workspaces).
 
 ## `.env` vs `config.yaml` — secrets convention
 

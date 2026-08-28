@@ -189,7 +189,7 @@ export function parseGitBlamePorcelain(stdout: string): AttributionEntry[] {
   return entries;
 }
 
-function redactGitSecrets(text: string): string {
+export function redactGitSecrets(text: string): string {
   return text
     .replace(/(http\.extraHeader=Authorization:\s*(?:token|bearer)\s+)[^\s'"\],]+/giu, "$1***")
     .replace(/(Authorization:\s*(?:token|bearer)\s+)[^\s'"\],]+/giu, "$1***")

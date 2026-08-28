@@ -1601,6 +1601,109 @@ it("rejects system-only fields in workspace config files per Plan §3.10", () =>
   });
 });
 
+describe("workspaces context_repositories", () => {
+  it("accepts git, p4 and svn context repositories with their kind-specific fields", () => {
+    const result = appConfigSchema.safeParse({
+      workspaces: {
+        instances: {
+          "main-workspace": {
+            context_repositories: [
+              { alias: "shared-lib", kind: "git", url: "https://github.com/org/shared-lib.git", ref: "main", token_env: "SHARED_LIB_TOKEN" },
+              { alias: "perforce-lib", kind: "p4", port: "ssl:p4.example.com:1666", user_env: "P4USER", ticket_env: "P4TICKET", depot_path: "//depot/lib/...", revision: "6244" },
+              { alias: "svn-lib", kind: "svn", repository_url: "https://svn.example.com/repos/lib/trunk", revision: 1234, max_mb: 128 },
+            ],
+          },
+        },
+      },
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it("supports context_repositories in workspaces.defaults merged into instances", () => {
+    const merged = mergeConfigLayers({
+      workspaces: {
+        defaults: {
+          context_repositories: [
+            { alias: "shared-lib", kind: "git", url: "https://github.com/org/shared-lib.git" },
+          ],
+        },
+        instances: {
+          "main-workspace": {},
+        },
+      },
+    });
+
+    const workspace = resolveWorkspaceConfig(merged, "main-workspace");
+    expect(workspace.context_repositories).toHaveLength(1);
+    expect(workspace.context_repositories?.[0]?.alias).toBe("shared-lib");
+  });
+
+  it("replaces defaults context_repositories wholesale when an instance defines its own", () => {
+    const merged = mergeConfigLayers({
+      workspaces: {
+        defaults: {
+          context_repositories: [
+            { alias: "default-lib", kind: "git", url: "https://github.com/org/default-lib.git" },
+          ],
+        },
+        instances: {
+          "main-workspace": {
+            context_repositories: [
+              { alias: "instance-lib", kind: "svn", repository_url: "https://svn.example.com/repos/lib" },
+            ],
+          },
+        },
+      },
+    });
+
+    const workspace = resolveWorkspaceConfig(merged, "main-workspace");
+    expect(workspace.context_repositories?.map((repo) => repo.alias)).toEqual(["instance-lib"]);
+  });
+
+  it.each([
+    ["git without url", { alias: "lib", kind: "git" }],
+    ["svn without repository_url", { alias: "lib", kind: "svn" }],
+    ["p4 without depot_path", { alias: "lib", kind: "p4" }],
+    ["git with svn-only repository_url", { alias: "lib", kind: "git", url: "https://example.com/a.git", repository_url: "https://svn.example.com/r" }],
+    ["svn with git-only token_env", { alias: "lib", kind: "svn", repository_url: "https://svn.example.com/r", token_env: "TOKEN" }],
+    ["p4 with git-only url", { alias: "lib", kind: "p4", depot_path: "//depot/lib/...", url: "https://example.com/a.git" }],
+    ["unknown field", { alias: "lib", kind: "git", url: "https://example.com/a.git", branch: "main" }],
+    ["alias with slash", { alias: "org/lib", kind: "git", url: "https://example.com/a.git" }],
+    ["alias with leading dot", { alias: ".hidden", kind: "git", url: "https://example.com/a.git" }],
+  ])("rejects %s", (_label, repo) => {
+    const result = appConfigSchema.safeParse({
+      workspaces: {
+        instances: {
+          "main-workspace": { context_repositories: [repo] },
+        },
+      },
+    });
+
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects duplicate context repository aliases within one workspace", () => {
+    const result = appConfigSchema.safeParse({
+      workspaces: {
+        instances: {
+          "main-workspace": {
+            context_repositories: [
+              { alias: "lib", kind: "git", url: "https://example.com/a.git" },
+              { alias: "lib", kind: "svn", repository_url: "https://svn.example.com/r" },
+            ],
+          },
+        },
+      },
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues.some((issue) => /duplicate context repository alias/u.test(issue.message))).toBe(true);
+    }
+  });
+});
+
 describe("server config", () => {
   it("provides defaults for server config", () => {
     const result = appConfigSchema.parse({});
