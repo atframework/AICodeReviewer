@@ -143,12 +143,17 @@ The docs site is bilingual (English under `.../en/`, 简体中文 under
 `.../zh-cn/`). Every user-facing page exists in both locales; keep config
 keys, commands, paths, field names, and enum values identical across locales.
 
-- Build and validate locally with `pnpm docs:build`. The build runs four
+- Build and validate locally with `pnpm docs:build`. The build runs six
   validation gates: the public/internal boundary (pages under
   `src/content/docs/` must not reference the internal AI/roadmap documentation
   tree or carry migration-source maintenance notes), config-field coverage of
-  the Zod schema, CLI command/flag consistency with `packages/cli`, and
-  internal link/anchor resolution including sidebar coverage.
+  the Zod schema, CLI command/flag consistency with `packages/cli`, internal
+  link/anchor resolution including sidebar coverage, SEO metadata (every page
+  needs a non-empty `title`/`description` within length bounds, plus the
+  committed `robots.txt` and 1200x630 `og-image.png`), and bilingual
+  consistency (same page set in both locales, identical code-fence counts and
+  machine tokens — config keys, env vars, flags, paths — and no banned filler
+  words).
 - Sidebar slugs omit the `index` segment (e.g. `troubleshooting/index.md` has
   slug `troubleshooting`). Frontmatter `template` only accepts `doc` or
   `splash`; Starlight `social` is an array of link items.

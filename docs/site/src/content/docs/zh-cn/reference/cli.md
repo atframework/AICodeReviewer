@@ -1,6 +1,6 @@
 ---
 title: CLI 命令
-description: aicr CLI 全部子命令与参数参考。
+description: aicr CLI 全部子命令与参数参考：serve、review、eval、replay 与全局选项。
 ---
 
 `aicr` CLI（由 `packages/cli` 构建）是服务、一次性评审、eval、replay、memory 查看和模板

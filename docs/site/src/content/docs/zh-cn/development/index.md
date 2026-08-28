@@ -101,7 +101,7 @@ workspace 配置文件不能写系统级字段；遵守 `cache` / `defaults` / `
 
 文档站点是双语的（English 在 `.../en/`，简体中文 在 `.../zh-cn/`）。每个面向用户的页面都同时存在于两个 locale；请保持配置键、命令、路径、字段名和枚举值在不同 locale 间完全一致。
 
-- 用 `pnpm docs:build` 本地构建并校验。构建会依次运行四道校验：公开/内部边界（`src/content/docs/` 下的页面不得引用内部 AI/路线图文档树，也不得保留仅供维护者参考的迁移占记）、配置字段表对 Zod schema 的覆盖、CLI 命令/flag 与 `packages/cli` 实现的一致性、内部链接/锚点解析（含 sidebar 覆盖）。
+- 用 `pnpm docs:build` 本地构建并校验。构建会依次运行六道校验：公开/内部边界（`src/content/docs/` 下的页面不得引用内部 AI/路线图文档树，也不得保留仅供维护者参考的迁移占记）、配置字段表对 Zod schema 的覆盖、CLI 命令/flag 与 `packages/cli` 实现的一致性、内部链接/锚点解析（含 sidebar 覆盖）、SEO 元数据（每个页面都需要非空且长度合规的 `title`/`description`，以及已提交的 `robots.txt` 和 1200x630 `og-image.png`）、双语一致性（两个 locale 页面集合相同、代码块数量与机器 token——配置键、环境变量、flag、路径——一致，且不出现禁用填充词）。
 - sidebar slug 省略 `index` 段（如 `troubleshooting/index.md` 的 slug 是 `troubleshooting`）。frontmatter `template` 只接受 `doc` 或 `splash`；Starlight `social` 是链接项数组。
 - 内容页用 `.md`。两个首页（`en/index.mdx`、`zh-cn/index.mdx`）用 `.mdx`，以便渲染 Starlight 组件（hero frontmatter 加 `Card`、`CardGrid`、`LinkCard`、`Steps`、`Aside`）。MDX 由 Starlight 内置提供，无需额外集成；组件在纯 `.md` 中不会渲染。公开内容校验器同时扫描 `.md` 和 `.mdx`。
 - 交叉链接使用带 locale 前缀的路径（`/en/...`、`/zh-cn/...`）。

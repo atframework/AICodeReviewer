@@ -180,6 +180,44 @@ export default defineConfig({
           href: "https://github.com/atframework/AICodeReviewer",
         },
       ],
+      // Social preview image (Open Graph / Twitter). Starlight always emits
+      // `twitter:card: summary_large_image` but never generates an image, so
+      // point both standards at the committed public/og-image.png.
+      // validate-seo.mjs guards the URL, the file, and its 1200x630 size.
+      head: [
+        {
+          tag: "meta",
+          attrs: {
+            property: "og:image",
+            content: "https://aicr.atframe.work/og-image.png",
+          },
+        },
+        { tag: "meta", attrs: { property: "og:image:width", content: "1200" } },
+        { tag: "meta", attrs: { property: "og:image:height", content: "630" } },
+        {
+          tag: "meta",
+          attrs: {
+            property: "og:image:alt",
+            content:
+              "AICodeReviewer — self-hosted AI code review orchestration service",
+          },
+        },
+        {
+          tag: "meta",
+          attrs: {
+            name: "twitter:image",
+            content: "https://aicr.atframe.work/og-image.png",
+          },
+        },
+        {
+          tag: "meta",
+          attrs: {
+            name: "twitter:image:alt",
+            content:
+              "AICodeReviewer — self-hosted AI code review orchestration service",
+          },
+        },
+      ],
     }),
   ],
 });

@@ -1,6 +1,6 @@
 ---
 title: 存储
-description: 配置数据库、缓存与对象存储后端。
+description: 配置 storage 命名空间下的 database、cache、object 三类后端与 retention 保留策略。
 ---
 
 `storage` 命名空间配置三个相互独立的后端——数据库、缓存和对象存储——外加一项保留

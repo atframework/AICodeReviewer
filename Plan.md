@@ -22,10 +22,10 @@
 
 - M0-M10 的主要实现已归档，当前没有新的运行时代码本地执行包。
 - 当前活跃方向是 M11：可发布到 GitHub Pages 的用户文档站子工程。M11-P1（脚手架）、
-  M11-P2（骨架 + 首批核心页）、M11-P3（全章节双语正文迁移）、M11-P5（发布 workflow）和
-  M11-P4（配置/CLI 参考校验自动化）已完成；M11-P6 的内部链接检查已随 M11-P4 落地
-  （`docs/site/scripts/` 四道校验接入 `pnpm docs:build`/`docs:check`）。剩余：
-  Pages 设置核验（外部）与 SEO/贡献规则自动化。
+  M11-P2（骨架 + 首批核心页）、M11-P3（全章节双语正文迁移）、M11-P5（发布 workflow）、
+  M11-P4（配置/CLI 参考校验自动化）和 M11-P6（SEO 与贡献规则自动化，2026-08）已完成；
+  六道校验（公开内容边界、配置字段覆盖、CLI 一致性、内部链接/锚点、SEO 元数据、双语一致性）
+  全部接入 `pnpm docs:build`/`docs:check`。剩余：仅 Pages 设置核验（外部）。
 - 新增运行时方向是 M12：GitHub App 原生认证。M12-P1–P4（配置 schema、token 服务、三个注入点
   接入、webhook 事件 + GHE + 文档）已完成；M12-P5（真实 App e2e / 公网正式环境切换）已完成：
   已将 `atframework-aicr` App 部署到公网正式环境，两个 GitHub trigger 已切到 `app` 认证，
@@ -235,8 +235,9 @@
 - 定向检查用于迭代定位；最后一次修改后必须重新运行全部适用门禁，并确认工具实际发现了预期文件或测试。在 Linux/CI 等 `pnpm` 可直接执行的环境中，最终 runtime 门禁以 `pnpm ci` 为准。
 - `Plan.md` 与 `docs/**/*.md` 共同接受 markdownlint 校验。
 - M11 已新增 `docs:build`、`docs:preview`、`docs:check`、`docs:dev` 脚本，CI 在
-  `.github/workflows/ci.yml` 的独立 `docs` job 中运行 `pnpm docs:build`：先执行四道校验
-  （公开内容边界、配置字段覆盖、CLI 参考一致性、内部链接/锚点），再做静态站点构建。
+  `.github/workflows/ci.yml` 的独立 `docs` job 中运行 `pnpm docs:build`：先执行六道校验
+  （公开内容边界、配置字段覆盖、CLI 参考一致性、内部链接/锚点、SEO 元数据、双语一致性），
+  再做静态站点构建。
 
 ## 8. 里程碑与执行顺序
 
@@ -256,7 +257,7 @@
 | M8 | 基本完成 | `docs/ai/milestones/M8.md` | 真实 LLM benchmark 留在 Backlog |
 | M9 | 基本完成 | `docs/ai/milestones/M9.md` | 不进入版本 bump / git tag |
 | M10 | 基本完成 | `docs/ai/milestones/M10.md` | 真实外部 Redis smoke/e2e 按需放入 Backlog |
-| M11 | 进行中 | `docs/ai/documentation-site-plan.md` | Pages 设置核验；M11-P6 打磨 |
+| M11 | 基本完成 | `docs/ai/documentation-site-plan.md` | 本地项已全部完成；仅剩 Pages 设置核验（外部） |
 | M12 | 已完成 | 本文 §3.2.1 / `docs/ai/architecture.md` §3.2.1 | P1–P4 已交付；P5 公网正式环境切换完成，三个目标仓库均通过 token 解析验证，待一次真实 PR/push 完成最终 e2e 签收 |
 | M13 | 已完成 | 本文 §8.2.2 | P1–P5 全部交付，全量门禁通过（1885 tests / eslint / tsc / markdownlint / build / eval / docs:build） |
 | M13.1 | 已完成 | `docs/ai/milestones/M13.1.md` | agent web search 治理、provider 选择、凭据隔离与 WSL 集成验证通过 |
@@ -302,7 +303,12 @@ Node 原生 type stripping 直接从 `packages/core/src/config.ts` 源码导入 
 `validate-internal-links.mjs`（M11-P6 项）校验全部站内链接、锚点、静态资源与 sidebar 双向覆盖。
 落地时修复的真实漂移：`triggers[].app`（M12 GitHub App 认证块）缺失于参考表（双语已补），
 CLI helpText 缺 `--author-display-name`/`--operator-override`/`--memory-hint`/`--task-context`
-四个已接受 flags（已补）。剩余本地项：SEO 与贡献规则自动化；线上项：Pages 设置核验。
+四个已接受 flags（已补）。M11-P6 SEO 与贡献规则自动化亦已完成（2026-08）：新增
+`validate-seo.mjs`（双语 title/description 非空与长度区间、robots.txt Sitemap 行、og:image 接线
+与 1200x630 资产校验）与 `validate-bilingual-consistency.mjs`（页面集合/代码块数量/机器 token
+跨 locale 一致、`.mdx` fence 语言标记、禁用词可机检子集），配套 `public/robots.txt`、
+`og-image.png`（`generate:og-image` 手动再生成）与 starlight `head` og:image/twitter:image 接线，
+10 项阴性测试确认每类漂移可检出。剩余线上项：Pages 设置核验。
 
 #### 8.2.1 M12 GitHub App 原生认证（P1–P5 已完成）
 
@@ -419,6 +425,7 @@ pi 的扩展桥接 MCP 哲学）沉淀进架构、prompts、skills 与文档。
 | M11-P3 全章节正文迁移 ✅ | 配置各命名空间、CLI、MCP、VCS/agent 集成、Docker/Podman 部署、运维、参考、排障、贡献指南占位页全部替换为中英双语正文 | markdownlint、公开内容校验、站点构建、字段/命令抽查通过 |
 | M11-P4 配置/CLI 参考校验自动化 ✅ | `docs/site/scripts/validate-config-reference.mjs` + `validate-cli-reference.mjs` + `validate-internal-links.mjs` 接入 `docs:build`/`docs:check`；schema↔参考页双向覆盖、CLI help↔parseArgs↔参考页三方一致、站内链接/锚点/sidebar 校验 | `pnpm docs:build` 全链通过（54 页）；曾注入坏链接/坏锚点的阴性测试确认能抓到漂移 |
 | M11-P5 发布链路 ✅ | main 文档变更触发 docs 构建并通过 `DEPLOY_DOCUMENT_GH_PAGES_KEY` 发布到 `gh-pages`；保留 `aicr.atframe.work` 自定义域名和发布说明 | `pnpm docs:build` 可本地验证；线上生效需仓库 Pages source 指向 `gh-pages` / `/` 并绑定自定义域名 |
+| M11-P6 SEO 与贡献规则自动化 ✅ | `validate-seo.mjs`（title/description 长度区间、robots.txt Sitemap 行、og:image 接线 + 1200x630 资产）+ `validate-bilingual-consistency.mjs`（页面集合/代码块数/机器 token/`.mdx` fence 语言/禁用词子集）+ `public/robots.txt`、`og-image.png`、`generate:og-image`、starlight `head` 接线 | `pnpm docs:build` 六道校验全链通过（54 页）；10 项阴性测试全部可检出；markdownlint 通过 |
 | M12-P1 GitHub App 配置 schema ✅ | `triggerSchema`（`packages/core/src/config.ts`）新增可选 `app` 块（`app_id`/`client_id`、`private_key_env`/`private_key_path`、可选 `installation_id`）+ superRefine 验证；同步 `config.test.ts`、`example/config.yaml`、文档 | `eslint` + `tsc` + `vitest` 通过；config 测覆盖合法/冲突/缺失三类用例 |
 | M12-P2 GithubAppTokenService ✅ | `packages/server/src/github-app-token.ts`：`node:crypto` RS256 JWT 签发、installation token 缓存/刷新（<5min 提前刷新）、repo→installation 解析与缓存、401/403/404 可操作错误映射 | 新增 `github-app-token.test.ts`（mock fetch + `generateKeyPairSync` 测密钥），JWT 结构/缓存/刷新/GHE base URL 均覆盖 |
 | M12-P3 注入三个 token 点 ✅ | 将 token 服务接入 `vcsFactory`（改异步）、`createOutputPublisherResolverFromConfig`（resolver 改异步）、webhook PR 详情拉取（`appTokenResolver`）；vcs/outputs 保持字符串 token；补 `ghs_` 脱敏回归测试 | resolver 异步化后 2 个调用点（`index.ts`、`review-orchestrator.ts`）await；App/PAT 两条路径均有测覆盖 |

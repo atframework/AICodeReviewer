@@ -2219,6 +2219,209 @@ describe("summarizeReviewOrchestrationForWebhook", () => {
     }
   });
 
+  it("accepts a completed oh-my-pi stream when the process lingers past the timeout", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-omp-timeout-grace-"));
+
+    try {
+      await writeWorkspaceFile(tempDir, "src/app.ts", "const ok = true;\n");
+      const skipText = JSON.stringify({ skipReason: "lgtm" });
+      // Full pi-family stream including the terminal agent_end marker: the review
+      // content is complete even though the (killed) process never exited.
+      const ompStream = [
+        { type: "session", version: 3, id: "s-grace", timestamp: "2026-08-26T00:00:00Z", cwd: "/workspace/agent" },
+        {
+          type: "message_end",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: skipText }],
+            stopReason: "stop",
+            usage: { input: 10, output: 5, cacheRead: 0, cacheWrite: 0, totalTokens: 15 },
+          },
+        },
+        { type: "agent_end", messages: [] },
+      ].map((e) => JSON.stringify(e)).join("\n");
+      const sandbox: SandboxBackend = {
+        kind: "native",
+        async materializeFs(layout) {
+          await mkdir(layout.agentDir, { recursive: true });
+          await mkdir(layout.tmpDir, { recursive: true });
+          return { agentDir: layout.agentDir, tmpDir: layout.tmpDir, mountSpecs: [] };
+        },
+        async spawn() {
+          return { exitCode: null, stdout: ompStream, stderr: "", timedOut: true, durationMs: 600_079 };
+        },
+        async teardown() {},
+      };
+      const agentAdapter: AgentAdapter = {
+        kind: "oh-my-pi",
+        async detect() { return { available: true, binary: "omp" }; },
+        buildCommand() { return ["omp", "-p", "--mode", "json"]; },
+        buildStdin() { return ""; },
+        async materializeConfig(_m, workingDir) {
+          return { configFiles: new Map(), envVars: {}, workingDir };
+        },
+      };
+
+      const result = await runReviewOrchestration(
+        {
+          reviewEvent: createReviewEventFixture(),
+          payload: {},
+          provider: "gitea",
+          eventName: "pull_request",
+        },
+        {
+          baseSystemPrompt: "<task>\n{{TASK_CONTEXT}}\n</task>",
+          sourceRootResolver: () => tempDir,
+          vcs: createVcs(tempDir),
+          llm: { async complete() { throw new Error("direct llm must not be called"); } },
+          model,
+          sandbox,
+          agentAdapter,
+          agentTimeoutMs: 600_000,
+        },
+      );
+
+      expect(result.outputState.skipReason).toBe("lgtm");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("still fails a timed-out oh-my-pi run when the stream has no agent_end marker", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-omp-timeout-fatal-"));
+
+    try {
+      await writeWorkspaceFile(tempDir, "src/app.ts", "const ok = true;\n");
+      // Partial stream: the agent was killed mid-run, so the output is not safe
+      // to treat as a completed review.
+      const partialStream = [
+        { type: "session", version: 3, id: "s-partial", timestamp: "2026-08-26T00:00:00Z", cwd: "/workspace/agent" },
+        { type: "message_start", message: { role: "assistant" } },
+      ].map((e) => JSON.stringify(e)).join("\n");
+      const sandbox: SandboxBackend = {
+        kind: "native",
+        async materializeFs(layout) {
+          await mkdir(layout.agentDir, { recursive: true });
+          await mkdir(layout.tmpDir, { recursive: true });
+          return { agentDir: layout.agentDir, tmpDir: layout.tmpDir, mountSpecs: [] };
+        },
+        async spawn() {
+          return { exitCode: null, stdout: partialStream, stderr: "", timedOut: true, durationMs: 600_079 };
+        },
+        async teardown() {},
+      };
+      const agentAdapter: AgentAdapter = {
+        kind: "oh-my-pi",
+        async detect() { return { available: true, binary: "omp" }; },
+        buildCommand() { return ["omp", "-p", "--mode", "json"]; },
+        buildStdin() { return ""; },
+        async materializeConfig(_m, workingDir) {
+          return { configFiles: new Map(), envVars: {}, workingDir };
+        },
+      };
+
+      await expect(runReviewOrchestration(
+        {
+          reviewEvent: createReviewEventFixture(),
+          payload: {},
+          provider: "gitea",
+          eventName: "pull_request",
+        },
+        {
+          baseSystemPrompt: "<task>\n{{TASK_CONTEXT}}\n</task>",
+          sourceRootResolver: () => tempDir,
+          vcs: createVcs(tempDir),
+          llm: { async complete() { throw new Error("direct llm must not be called"); } },
+          model,
+          sandbox,
+          agentAdapter,
+          agentTimeoutMs: 600_000,
+        },
+      )).rejects.toThrow(/timed out/u);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("caps the raw-stdout fallback so repair follow-up argv stays under MAX_ARG_STRLEN", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-omp-e2big-"));
+
+    try {
+      await writeWorkspaceFile(tempDir, "src/app.ts", "const ok = true;\n");
+      // 200 KiB of non-NDJSON junk: nothing parses, so the extractor falls back
+      // to raw stdout. Uncapped, that fallback embedded into the repair task
+      // would blow past the 128 KiB per-argument limit (spawn E2BIG).
+      const junkStdout = `${"x".repeat(200 * 1024)}\n`;
+      const skipText = JSON.stringify({ skipReason: "lgtm" });
+      const repairStream = [
+        {
+          type: "message_end",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: skipText }],
+            stopReason: "stop",
+            usage: { input: 10, output: 5, cacheRead: 0, cacheWrite: 0, totalTokens: 15 },
+          },
+        },
+        { type: "agent_end", messages: [] },
+      ].map((e) => JSON.stringify(e)).join("\n");
+      const spawnCalls: SandboxSpawnOptions[] = [];
+      const sandbox: SandboxBackend = {
+        kind: "native",
+        async materializeFs(layout) {
+          await mkdir(layout.agentDir, { recursive: true });
+          await mkdir(layout.tmpDir, { recursive: true });
+          return { agentDir: layout.agentDir, tmpDir: layout.tmpDir, mountSpecs: [] };
+        },
+        async spawn(spawnOptions) {
+          spawnCalls.push(spawnOptions);
+          if (spawnCalls.length === 1) {
+            return { exitCode: 0, stdout: junkStdout, stderr: "", timedOut: false, durationMs: 12 };
+          }
+          return { exitCode: 0, stdout: repairStream, stderr: "", timedOut: false, durationMs: 12 };
+        },
+        async teardown() {},
+      };
+      const agentAdapter: AgentAdapter = {
+        kind: "oh-my-pi",
+        async detect() { return { available: true, binary: "omp" }; },
+        buildCommand(task) { return ["omp", "-p", "--mode", "json", "--", task]; },
+        buildStdin() { return ""; },
+        async materializeConfig(_m, workingDir) {
+          return { configFiles: new Map(), envVars: {}, workingDir };
+        },
+      };
+
+      const result = await runReviewOrchestration(
+        {
+          reviewEvent: createReviewEventFixture(),
+          payload: {},
+          provider: "gitea",
+          eventName: "pull_request",
+        },
+        {
+          baseSystemPrompt: "<task>\n{{TASK_CONTEXT}}\n</task>",
+          sourceRootResolver: () => tempDir,
+          vcs: createVcs(tempDir),
+          llm: { async complete() { throw new Error("direct llm must not be called"); } },
+          model,
+          sandbox,
+          agentAdapter,
+          agentTimeoutMs: 30_000,
+        },
+      );
+
+      expect(result.outputState.skipReason).toBe("lgtm");
+      expect(spawnCalls.length).toBeGreaterThanOrEqual(2);
+      const repairTask = spawnCalls[1]?.command.at(-1) ?? "";
+      expect(repairTask).toContain("bytes truncated");
+      // Linux MAX_ARG_STRLEN: any single argv string beyond 128 KiB fails with E2BIG.
+      expect(Buffer.byteLength(repairTask, "utf8")).toBeLessThan(128 * 1024);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("estimates oh-my-pi cost from usage when the CLI echoes placeholder zero cost", async () => {
     const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-omp-cost-"));
 

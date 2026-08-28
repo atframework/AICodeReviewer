@@ -892,7 +892,7 @@ function extractKiloJsonStreamContent(stdout: string): KiloStreamExtractionResul
     : undefined;
 
   return {
-    content: textParts.length > 0 ? textParts.join("\n") : stdout,
+    content: textParts.length > 0 ? textParts.join("\n") : tailCapUtf8(stdout, RAW_STDOUT_FALLBACK_MAX_BYTES),
     toolCallEvents,
     eventCounts,
     ...(usage ? { usage } : {}),
@@ -913,7 +913,28 @@ interface PiStreamExtractionResult {
   readonly stepCount: number;
 }
 
+/**
+ * Hard byte budgets for agent-output text that gets embedded into follow-up
+ * spawn arguments. Linux rejects any single argv/env string beyond
+ * MAX_ARG_STRLEN (128 KiB) with E2BIG, and pi-family tasks travel as one
+ * positional argument — an uncapped raw-stdout fallback (stdout can exceed
+ * 1 MiB) would make the repair follow-up spawn fail outright. Truncation keeps
+ * the tail, where agent conclusions live.
+ */
+const RAW_STDOUT_FALLBACK_MAX_BYTES = 48_000;
+const FOLLOW_UP_PREVIOUS_OUTPUT_MAX_BYTES = 65_536;
+
+function tailCapUtf8(text: string, maxBytes: number): string {
+  const bytes = new TextEncoder().encode(text);
+  if (bytes.length <= maxBytes) {
+    return text;
+  }
+  const omitted = bytes.length - maxBytes;
+  return `[... ${omitted} bytes truncated ...]\n${new TextDecoder("utf-8").decode(bytes.subarray(omitted))}`;
+}
+
 function readPiUsageCount(value: unknown): number | undefined {
+
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? Math.trunc(value) : undefined;
 }
 
@@ -1030,7 +1051,7 @@ function extractPiJsonStreamContent(stdout: string): PiStreamExtractionResult {
     : undefined;
 
   return {
-    content: textParts.length > 0 ? textParts.join("\n") : stdout,
+    content: textParts.length > 0 ? textParts.join("\n") : tailCapUtf8(stdout, RAW_STDOUT_FALLBACK_MAX_BYTES),
     toolCallEvents,
     eventCounts,
     ...(usage ? { usage } : {}),
@@ -1188,11 +1209,25 @@ async function runAgentReview(
     await sandbox.teardown();
   }
 
-  if (agentResult.timedOut) {
+  // kilo and opencode emit the same NDJSON event stream (`--format json`; kilo is an
+  // opencode fork), so both go through the shared stream extraction. pi and oh-my-pi
+  // emit the pi-family NDJSON event stream (`--mode json`; omp is a pi fork).
+  // claude-code emits a single JSON result envelope from `claude -p --output-format json`.
+  const isNdjsonStreamAgent = agentAdapter.kind === "kilo" || agentAdapter.kind === "opencode";
+  const isPiStreamAgent = agentAdapter.kind === "pi" || agentAdapter.kind === "oh-my-pi";
+  const isClaudeEnvelopeAgent = agentAdapter.kind === "claude-code";
+
+  // A timeout is only fatal when the agent never finished its output stream.
+  // pi-family CLIs can linger past the hard cap after emitting their terminal
+  // `agent_end` event (bun/MCP child teardown); killing them then would discard
+  // a complete review. Their timeout decision is therefore deferred to the
+  // stream-parsing branch below, which checks the terminal marker. Other kinds
+  // keep failing fast — their streams carry no authoritative end marker.
+  if (agentResult.timedOut && !isPiStreamAgent) {
     throw new Error(`Agent ${agentAdapter.kind} timed out after ${agentResult.durationMs}ms.`);
   }
 
-  if (agentResult.exitCode !== 0) {
+  if (!agentResult.timedOut && agentResult.exitCode !== 0) {
     if (isContextOverflowMessage(agentResult.stderr)) {
       throw new AgentContextOverflowError(
         agentAdapter.kind,
@@ -1205,13 +1240,6 @@ async function runAgentReview(
     );
   }
 
-  // kilo and opencode emit the same NDJSON event stream (`--format json`; kilo is an
-  // opencode fork), so both go through the shared stream extraction. pi and oh-my-pi
-  // emit the pi-family NDJSON event stream (`--mode json`; omp is a pi fork).
-  // claude-code emits a single JSON result envelope from `claude -p --output-format json`.
-  const isNdjsonStreamAgent = agentAdapter.kind === "kilo" || agentAdapter.kind === "opencode";
-  const isPiStreamAgent = agentAdapter.kind === "pi" || agentAdapter.kind === "oh-my-pi";
-  const isClaudeEnvelopeAgent = agentAdapter.kind === "claude-code";
   const rawStdout = agentResult.stdout;
   let content: string;
   let kiloToolCalls: readonly ToolCallEnvelope[] = [];
@@ -1278,6 +1306,22 @@ async function runAgentReview(
     agentUsage = extraction.usage;
     agentCostUsd = extraction.costUsd;
     agentStepCount = extraction.stepCount;
+    if (agentResult.timedOut) {
+      const agentEndSeen = (extraction.eventCounts["agent_end"] ?? 0) > 0;
+      if (!agentEndSeen) {
+        throw new Error(`Agent ${agentAdapter.kind} timed out after ${agentResult.durationMs}ms.`);
+      }
+      if (options.logThinking !== false) {
+        console.warn(JSON.stringify({
+          level: "warn",
+          msg: "agent process lingered past timeout after completing its output stream; accepting captured output",
+          agent: agentAdapter.kind,
+          durationMs: agentResult.durationMs,
+          stdoutLength: rawStdout.length,
+          extractedContentLength: content.length,
+        }));
+      }
+    }
     if (Object.keys(extraction.eventCounts).length > 0 || kiloToolCalls.length > 0 || agentStepCount > 0) {
       if (options.logThinking !== false) {
         console.info(JSON.stringify({
@@ -1420,7 +1464,10 @@ async function requestReviewCompletion(
           systemPrompt,
           "",
           "Previous model output:",
-          followUp.previousOutput,
+          // The task travels as one positional argv string for pi-family agents;
+          // an uncapped prior output (e.g. a raw-stdout fallback) would exceed
+          // MAX_ARG_STRLEN and the repair spawn would fail with E2BIG.
+          tailCapUtf8(followUp.previousOutput, FOLLOW_UP_PREVIOUS_OUTPUT_MAX_BYTES),
           "",
           followUp.prompt,
         ].join("\n")
