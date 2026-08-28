@@ -28,6 +28,7 @@ quick lookup.
 | Storage `cache.kind` | `memory`, `redis`, `none` |
 | Storage `object.kind` | `filesystem`, `s3` |
 | Model catalog `cache.backend` | `sqlite`, `redis`, `memory` |
+| Context repository `kind` | `git`, `p4`, `svn` |
 | LLM provider `kind` | `openai_compatible`, `azure_openai`, `anthropic`, `vertex_ai`, `bedrock`, `google_ai_studio`, `ollama`, `copilot` |
 
 :::note[Channel `kind` is free-form]
@@ -118,13 +119,26 @@ Narrative: [Configuration overview](/en/configuration/overview/).
 | `workspaces.cache.max_total_gb` | number > 0 | `50` | Max total workspace cache size in GB |
 | `workspaces.cache.eviction` | enum | `lru` | Eviction policy: `lru`, `mru`, `ttl` |
 | `workspaces.cache.ttl_days` | int > 0 | `30` | TTL in days for `ttl` eviction |
-| `workspaces.defaults` | object | `{}` | Defaults merged into every instance (sandbox, review, agent, outputs, prompt) |
+| `workspaces.defaults` | object | `{}` | Defaults merged into every instance (sandbox, review, agent, outputs, prompt, context_repositories) |
 | `workspaces.defaults.sandbox` | object | — | Default sandbox config (see `agent.sandbox`) |
 | `workspaces.defaults.review` | object | — | Default review config (see `review`) |
 | `workspaces.defaults.agent.default` | enum | — | Default agent kind for this workspace set (no runtime effect yet, see note below) |
 | `workspaces.defaults.outputs` | object | — | Default outputs (see `outputs` workspace fields) |
 | `workspaces.defaults.prompt.base_system_prompt_file` | string | — | Custom base system prompt file (deployment-root-relative) |
 | `workspaces.defaults.prompt.force_skills` | string[] | — | Skill names always activated, ignoring `Applies To` globs |
+| `workspaces.defaults.context_repositories[].alias` | string | — | Path-safe alias (`^[A-Za-z0-9][A-Za-z0-9._-]*$`, unique per workspace) |
+| `workspaces.defaults.context_repositories[].kind` | enum | — | `git`, `p4`, `svn` |
+| `workspaces.defaults.context_repositories[].url` | string | — | Git repository URL (required for `kind: git`) |
+| `workspaces.defaults.context_repositories[].ref` | string | — | Git branch/tag pin |
+| `workspaces.defaults.context_repositories[].token_env` | string | — | Env var name holding the git http(s) token |
+| `workspaces.defaults.context_repositories[].repository_url` | string | — | SVN repository URL (required for `kind: svn`) |
+| `workspaces.defaults.context_repositories[].revision` | string \| int | — | Revision pin for svn/p4 |
+| `workspaces.defaults.context_repositories[].port` | string | — | P4 port |
+| `workspaces.defaults.context_repositories[].user_env` | string | — | Env var name holding the P4 user |
+| `workspaces.defaults.context_repositories[].ticket_env` | string | — | Env var name holding the P4 ticket |
+| `workspaces.defaults.context_repositories[].password_env` | string | — | Env var name holding the P4 password |
+| `workspaces.defaults.context_repositories[].depot_path` | string | — | P4 depot path (required for `kind: p4`) |
+| `workspaces.defaults.context_repositories[].max_mb` | int > 0 | `512` | Per-repository post-materialization size cap in MB |
 | `workspaces.instances` | map | `{}` | Per-workspace instances keyed by workspace id |
 | `workspaces.instances.<id>.source_repo.trigger` | string | — | Trigger profile name |
 | `workspaces.instances.<id>.source_repo.repo` | string | — | Repository reference |
@@ -134,11 +148,25 @@ Narrative: [Configuration overview](/en/configuration/overview/).
 | `workspaces.instances.<id>.sandbox` | object | — | Sandbox override (no runtime effect yet, see note below) |
 | `workspaces.instances.<id>.triage` | object | — | Issue triage override (Gitea/Forgejo only) |
 | `workspaces.instances.<id>.prompt` | object | — | Prompt override (same shape as `workspaces.defaults.prompt`) |
+| `workspaces.instances.<id>.context_repositories[].alias` | string | — | Path-safe alias (`^[A-Za-z0-9][A-Za-z0-9._-]*$`, unique per workspace); names the mount path |
+| `workspaces.instances.<id>.context_repositories[].kind` | enum | — | `git`, `p4`, `svn` |
+| `workspaces.instances.<id>.context_repositories[].url` | string | — | Git repository URL (required for `kind: git`) |
+| `workspaces.instances.<id>.context_repositories[].ref` | string | — | Git branch/tag pin (defaults to the remote default branch) |
+| `workspaces.instances.<id>.context_repositories[].token_env` | string | — | Env var name holding the git http(s) token (injected via `http.extraHeader`, never written to disk) |
+| `workspaces.instances.<id>.context_repositories[].repository_url` | string | — | SVN repository URL (required for `kind: svn`) |
+| `workspaces.instances.<id>.context_repositories[].revision` | string \| int | — | Revision pin for svn/p4 (defaults to latest) |
+| `workspaces.instances.<id>.context_repositories[].port` | string | — | P4 port (e.g. `ssl:p4.example.com:1666`) |
+| `workspaces.instances.<id>.context_repositories[].user_env` | string | — | Env var name holding the P4 user |
+| `workspaces.instances.<id>.context_repositories[].ticket_env` | string | — | Env var name holding the P4 ticket |
+| `workspaces.instances.<id>.context_repositories[].password_env` | string | — | Env var name holding the P4 password (alternative to `ticket_env`) |
+| `workspaces.instances.<id>.context_repositories[].depot_path` | string | — | P4 depot path (required for `kind: p4`, usually ending in `/...`) |
+| `workspaces.instances.<id>.context_repositories[].max_mb` | int > 0 | `512` | Per-repository post-materialization size cap in MB; exceeding it fails and cleans up |
 | `workspaces.instances.<id>.auth.api_key_env` | string | — | Per-workspace API key env var |
 | `workspaces.instances.<id>.auth.enabled` | boolean | `true` | Toggle per-workspace API key |
 
 Workspace ids must not collide with the reserved keys `cache`, `defaults`,
-`instances`.
+`instances`. When an instance defines its own `context_repositories`, the list
+replaces `workspaces.defaults` wholesale instead of merging per entry.
 
 :::note[Workspace-layer `agent.default` / `sandbox` have no effect yet]
 The schema accepts `agent.default` and `sandbox` under `workspaces.defaults`

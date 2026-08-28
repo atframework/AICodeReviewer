@@ -819,6 +819,29 @@ workspaces:
       #   base_system_prompt_file: "prompts/system/strict-reviewer.system.md"
       #   force_skills:                     # always activate these skills regardless of glob matching
       #     - "security-audit"
+      # Auxiliary context repositories (optional): materialized fresh each review
+      # into <workspace>/context-repos/<alias> and mounted read-only for the
+      # agent sandbox at /workspace/context-repos/<alias> so the reviewer can
+      # inspect shared libraries/contracts with rg/bat. Problems must still
+      # reference files changed in the primary repository.
+      # context_repositories:
+      #   - alias: shared-lib               # path-safe, unique per workspace
+      #     kind: git
+      #     url: "https://github.com/my-org/shared-lib.git"
+      #     ref: main                       # branch/tag pin (default: remote HEAD)
+      #     token_env: SHARED_LIB_TOKEN     # http(s) auth via http.extraHeader; never written to disk
+      #     max_mb: 512                     # post-materialization size cap (default 512)
+      #   - alias: protocol-spec
+      #     kind: svn
+      #     repository_url: "https://svn.example.com/repos/protocol/trunk"
+      #     revision: 1234                  # optional pin (default: latest)
+      #   - alias: perforce-lib
+      #     kind: p4
+      #     port: "ssl:p4.example.com:1666"
+      #     user_env: P4USER
+      #     ticket_env: P4TICKET
+      #     depot_path: "//depot/lib/..."
+      #     revision: 6244                  # optional changelist pin
 
     # P4 workspace — uncomment when p4-main trigger is enabled
     # p4-main:

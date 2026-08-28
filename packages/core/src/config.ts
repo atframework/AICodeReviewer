@@ -473,6 +473,89 @@ const reviewSchema = z
   })
   .passthrough();
 
+const contextRepositoryAliasSchema = z
+  .string()
+  .min(1)
+  .regex(/^[A-Za-z0-9][A-Za-z0-9._-]*$/u, {
+    message: "context repository alias must be path-safe (letters, digits, '.', '_', '-'; no slashes)",
+  });
+
+const contextRepositorySchema = z
+  .object({
+    alias: contextRepositoryAliasSchema,
+    kind: z.enum(["git", "p4", "svn"]),
+    url: z.string().min(1).optional(),
+    ref: z.string().min(1).optional(),
+    token_env: z.string().min(1).optional(),
+    repository_url: z.string().min(1).optional(),
+    revision: z.union([z.string().min(1), z.number().int().positive()]).optional(),
+    port: z.string().min(1).optional(),
+    user_env: z.string().min(1).optional(),
+    ticket_env: z.string().min(1).optional(),
+    password_env: z.string().min(1).optional(),
+    depot_path: z.string().min(1).optional(),
+    max_mb: z.number().int().positive().optional(),
+  })
+  .strict()
+  .superRefine((repo, ctx) => {
+    const forbid = (fields: readonly string[], allowedBy: string) => {
+      for (const field of fields) {
+        if (repo[field as keyof typeof repo] !== undefined) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: `context_repositories field '${field}' is only valid for kind: ${allowedBy}; see docs/ai/architecture.md §3.2.2`,
+            path: [field],
+          });
+        }
+      }
+    };
+
+    if (repo.kind === "git") {
+      if (!repo.url) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "kind: git context repository requires url; see docs/ai/architecture.md §3.2.2",
+          path: ["url"],
+        });
+      }
+      forbid(["repository_url", "revision", "port", "user_env", "ticket_env", "password_env", "depot_path"], "svn/p4");
+    } else if (repo.kind === "svn") {
+      if (!repo.repository_url) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "kind: svn context repository requires repository_url; see docs/ai/architecture.md §3.2.2",
+          path: ["repository_url"],
+        });
+      }
+      forbid(["url", "ref", "token_env", "port", "user_env", "ticket_env", "password_env", "depot_path"], "git/p4");
+    } else {
+      if (!repo.depot_path) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "kind: p4 context repository requires depot_path; see docs/ai/architecture.md §3.2.2",
+          path: ["depot_path"],
+        });
+      }
+      forbid(["url", "ref", "token_env", "repository_url"], "git/svn");
+    }
+  });
+
+const contextRepositoriesSchema = z
+  .array(contextRepositorySchema)
+  .superRefine((repos, ctx) => {
+    const seen = new Set<string>();
+    repos.forEach((repo, index) => {
+      if (seen.has(repo.alias)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `duplicate context repository alias '${repo.alias}'; aliases must be unique per workspace`,
+          path: [index, "alias"],
+        });
+      }
+      seen.add(repo.alias);
+    });
+  });
+
 const workspacePromptSchema = z
   .object({
     base_system_prompt_file: z.string().min(1).optional(),
@@ -501,6 +584,7 @@ const workspaceInstanceSchema = z
     sandbox: sandboxSchema.optional(),
     triage: triageSchema.optional(),
     prompt: workspacePromptSchema,
+    context_repositories: contextRepositoriesSchema.optional(),
     auth: z
       .object({
         api_key_env: z.string().min(1).optional(),
@@ -760,6 +844,7 @@ const appConfigSchema = z
               .optional(),
             outputs: workspaceOutputsSchema.optional(),
             prompt: workspacePromptSchema,
+            context_repositories: contextRepositoriesSchema.optional(),
           })
           .strict()
           .default({}),
@@ -860,6 +945,7 @@ export type AppConfig = z.infer<typeof appConfigSchema>;
 export type AppConfigInput = Record<string, unknown>;
 export type WorkspaceConfig = z.infer<typeof workspaceInstanceSchema>;
 export type WorkspaceConfigFile = z.infer<typeof workspaceConfigFileSchema>;
+export type ContextRepositoryConfig = z.infer<typeof contextRepositorySchema>;
 
 function mergeValue(base: unknown, override: unknown): unknown {
   if (override === undefined) {

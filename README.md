@@ -51,6 +51,10 @@ pull-request comments, managed issues, or IM bots.
 - **Safe sandbox** — Scoped VCS fetch (only changed files), read-only source
   mounts, allowlisted sandbox commands, whole-process-tree timeout cleanup,
   and `--init` zombie reaping in the service container.
+- **Multi-source context** — Optional per-workspace `context_repositories`
+  (git/P4/SVN) materialize fresh each review and mount read-only into the
+  agent sandbox, so reviewers can verify changes against shared libraries and
+  contract repositories.
 - **Observability** — Built-in dashboard with per-project stats, LLM cost
   tracking, and `/metrics` endpoint for Prometheus scraping.
 

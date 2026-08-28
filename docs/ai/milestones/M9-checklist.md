@@ -72,7 +72,7 @@ This checklist tracks the remaining M9 deliverables before the release can be co
 
 ## Post-M9 Backlog
 
-The following items are intentionally deferred past M9. `Plan.md` §8.4 is the
+The following items are intentionally deferred past M9. `Plan.md` §8.3 is the
 current source of truth for this list.
 
 1. **GitLab real e2e**: Needs a real GitLab repository with webhook access.

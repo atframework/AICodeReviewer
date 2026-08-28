@@ -390,6 +390,198 @@ describe("runReviewOrchestration", () => {
     }
   });
 
+  it("materializes workspace context repositories, mounts them read-only, and lists them in the task prompt", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-context-repos-"));
+
+    try {
+      const sourceRoot = join(tempDir, "workspaces", "ws", "source", "repo");
+      await writeWorkspaceFile(sourceRoot, "src/app.ts", "const ok = true;\n");
+      const auxHostDir = join(tempDir, "workspaces", "ws", "context-repos", "shared-lib");
+      await mkdir(auxHostDir, { recursive: true });
+
+      const materializeCalls: { contextReposRoot: string; repos: readonly unknown[] }[] = [];
+      const materializedLayouts: { extraMounts?: readonly unknown[] }[] = [];
+      const sandbox: SandboxBackend = {
+        kind: "docker",
+        async materializeFs(layout) {
+          materializedLayouts.push(layout);
+          await mkdir(layout.agentDir, { recursive: true });
+          await mkdir(layout.tmpDir, { recursive: true });
+          return { agentDir: layout.agentDir, tmpDir: layout.tmpDir, mountSpecs: [] };
+        },
+        async spawn() {
+          return {
+            exitCode: 0,
+            stdout: JSON.stringify({ skipReason: "lgtm" }),
+            stderr: "",
+            timedOut: false,
+            durationMs: 5,
+          };
+        },
+        async teardown() {},
+      };
+      const agentAdapter: AgentAdapter = {
+        kind: "kilo",
+        async detect() {
+          return { available: true, binary: "kilo" };
+        },
+        buildCommand() {
+          return ["kilo", "run"];
+        },
+        async materializeConfig(_model, workingDir) {
+          return { configFiles: new Map(), envVars: {}, workingDir };
+        },
+      };
+      const llm: ChatCompletionClient = {
+        async complete() {
+          throw new Error("LLM path should not be used when agent+sandbox are provided");
+        },
+      };
+
+      const contextRepositories = [
+        { alias: "shared-lib", kind: "git" as const, url: "https://github.com/org/shared-lib.git", ref: "main" },
+        { alias: "broken-lib", kind: "svn" as const, repository_url: "https://svn.example.com/repos/broken" },
+      ];
+
+      let agentTask = "";
+      const capturingAdapter: AgentAdapter = {
+        ...agentAdapter,
+        buildCommand(task, spawnOptions) {
+          agentTask = task;
+          return agentAdapter.buildCommand(task, spawnOptions);
+        },
+      };
+
+      const result = await runReviewOrchestration(
+        {
+          reviewEvent: createReviewEventFixture(),
+          payload: {},
+          provider: "gitea",
+          eventName: "pull_request",
+        },
+        {
+          baseSystemPrompt: "<task>\n{{TASK_CONTEXT}}\n</task>",
+          sourceRootResolver: () => sourceRoot,
+          vcs: createVcs(sourceRoot),
+          llm,
+          model,
+          sandbox,
+          agentAdapter: capturingAdapter,
+          contextRepositoriesResolver: (workspaceId) =>
+            workspaceId === "ws" ? contextRepositories : undefined,
+          contextRepoMaterializer: async (materializeOptions) => {
+            materializeCalls.push(materializeOptions);
+            return [
+              {
+                alias: "shared-lib",
+                kind: "git",
+                hostDir: auxHostDir,
+                status: "ok",
+                resolvedRevision: "abc123",
+                fileCount: 3,
+                totalBytes: 1024,
+              },
+              {
+                alias: "broken-lib",
+                kind: "svn",
+                hostDir: join(tempDir, "workspaces", "ws", "context-repos", "broken-lib"),
+                status: "failed",
+                error: "connection refused",
+              },
+            ];
+          },
+        },
+      );
+
+      expect(result.status).toBe("skipped");
+      expect(materializeCalls).toHaveLength(1);
+      expect(materializeCalls[0]?.contextReposRoot).toBe(join(tempDir, "workspaces", "ws", "context-repos"));
+      expect(materializeCalls[0]?.repos).toEqual(contextRepositories);
+
+      const extraMounts = materializedLayouts[0]?.extraMounts ?? [];
+      expect(extraMounts).toEqual([
+        {
+          hostPath: auxHostDir,
+          containerPath: "/workspace/context-repos/shared-lib",
+          readOnly: true,
+        },
+      ]);
+
+      expect(agentTask).toContain("Auxiliary context repositories");
+      expect(agentTask).toContain("/workspace/context-repos/shared-lib");
+      expect(agentTask).toContain("abc123");
+      expect(agentTask).not.toContain("broken-lib");
+
+      expect(result.contextRepositories).toHaveLength(2);
+      expect(result.contextRepositories?.[1]?.status).toBe("failed");
+
+      const webhookSummary = summarizeReviewOrchestrationForWebhook(result);
+      expect(webhookSummary.contextRepositories).toEqual([
+        {
+          alias: "shared-lib",
+          kind: "git",
+          status: "ok",
+          resolvedRevision: "abc123",
+          fileCount: 3,
+          totalBytes: 1024,
+        },
+        {
+          alias: "broken-lib",
+          kind: "svn",
+          status: "failed",
+          error: "connection refused",
+        },
+      ]);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("skips context repository materialization on the direct-LLM path", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-context-repos-direct-"));
+
+    try {
+      await writeWorkspaceFile(tempDir, "src/app.ts", "const ok = true;\n");
+      const materializer = vi.fn();
+      const llm: ChatCompletionClient = {
+        async complete() {
+          return {
+            providerId: model.providerId,
+            modelId: model.modelId,
+            content: JSON.stringify({ skipReason: "lgtm" }),
+            raw: null,
+          };
+        },
+      };
+
+      const result = await runReviewOrchestration(
+        {
+          reviewEvent: createReviewEventFixture(),
+          payload: {},
+          provider: "gitea",
+          eventName: "pull_request",
+        },
+        {
+          baseSystemPrompt: "<task>\n{{TASK_CONTEXT}}\n</task>",
+          sourceRootResolver: () => tempDir,
+          vcs: createVcs(tempDir),
+          llm,
+          model,
+          contextRepositoriesResolver: () => [
+            { alias: "shared-lib", kind: "git", url: "https://github.com/org/shared-lib.git" },
+          ],
+          contextRepoMaterializer: materializer,
+        },
+      );
+
+      expect(result.status).toBe("skipped");
+      expect(materializer).not.toHaveBeenCalled();
+      expect(result.contextRepositories).toBeUndefined();
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("detects context overflow in kilo agent JSON stream and throws AgentContextOverflowError", async () => {
     const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-agent-overflow-stream-"));
 
@@ -823,6 +1015,129 @@ describe("runReviewOrchestration", () => {
       expect(attributionCalls).toEqual(["src/app.ts"]);
       expect(spawnCalls).toHaveLength(2);
       expect(publishedProblems[0]?.file).toBe("src/app.ts");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("re-verifies MCP state problems against fetched context in a follow-up pass", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-mcp-problem-context-follow-up-"));
+
+    try {
+      await writeWorkspaceFile(tempDir, "src/app.ts", "const value = oldValue();\ncommitBeforeReturn();\n");
+      const fetchExtraCalls: string[] = [];
+      const vcs: DiffCapableVcsAdapter = {
+        ...createVcs(tempDir),
+        async fetchExtraContext(req) {
+          fetchExtraCalls.push(req.path);
+          return { path: req.path, content: "export function relatedContract(): boolean;\n" };
+        },
+      };
+      const spawnCalls: SandboxSpawnOptions[] = [];
+      let spawnCount = 0;
+      const sandbox: SandboxBackend = {
+        kind: "native",
+        async materializeFs(layout) {
+          await mkdir(layout.agentDir, { recursive: true });
+          await mkdir(layout.tmpDir, { recursive: true });
+          return { agentDir: layout.agentDir, tmpDir: layout.tmpDir, mountSpecs: [] };
+        },
+        async spawn(spawnOptions) {
+          spawnCalls.push(spawnOptions);
+          spawnCount += 1;
+          const statePath = join(spawnOptions.cwd, ".aicr-output-state.json");
+          if (spawnCount === 1) {
+            await writeFile(statePath, JSON.stringify({
+              problems: [
+                {
+                  file: "src/app.ts",
+                  line: 2,
+                  severity: "high",
+                  category: "correctness",
+                  message: "Reported while the related contract was still pending fetch; to be re-verified.",
+                },
+              ],
+              summaries: [{ markdown: "发现 1 个问题，另有待复核事项（上下文受限）。" }],
+              contextRequests: [
+                { path: "src/related.ts", reason: "需要相关接口契约复核已报告的问题。" },
+              ],
+            }), "utf8");
+            return { exitCode: 0, stdout: "", stderr: "", timedOut: false, durationMs: 10 };
+          }
+
+          expect(spawnOptions.stdin).toContain("reported problems while its aicr.fetch_more_context requests were still pending");
+          expect(spawnOptions.stdin).toContain("Fetched context:");
+          expect(spawnOptions.stdin).toContain("--- src/related.ts ---");
+          expect(spawnOptions.stdin).toContain("relatedContract");
+          await writeFile(statePath, JSON.stringify({
+            problems: [
+              {
+                file: "src/app.ts",
+                line: 2,
+                severity: "high",
+                category: "correctness",
+                message: "Confirmed against the fetched contract: the changed call violates it.",
+              },
+            ],
+            summaries: [{ markdown: "补拉契约后确认 1 个问题。" }],
+            contextRequests: [],
+          }), "utf8");
+          return { exitCode: 0, stdout: "", stderr: "", timedOut: false, durationMs: 12 };
+        },
+        async teardown() {},
+      };
+      const agentAdapter: AgentAdapter = {
+        kind: "kilo",
+        async detect() {
+          return { available: true, binary: "kilo" };
+        },
+        buildCommand() {
+          return ["kilo", "run", "--auto"];
+        },
+        async materializeConfig(_model, workingDir) {
+          return { configFiles: new Map(), envVars: {}, workingDir };
+        },
+      };
+      const publishedProblems: ReviewProblem[] = [];
+
+      const result = await runReviewOrchestration(
+        {
+          reviewEvent: createReviewEventFixture(),
+          payload: {},
+          provider: "gitea",
+          eventName: "pull_request",
+        },
+        {
+          baseSystemPrompt: "<task>\n{{TASK_CONTEXT}}\n</task>",
+          sourceRootResolver: () => tempDir,
+          vcs,
+          llm: {
+            async complete() {
+              throw new Error("LLM path should not be used when agent produces MCP state outputs");
+            },
+          },
+          model,
+          sandbox,
+          agentAdapter,
+          outputPublisher: {
+            async publishProblem(problem) {
+              publishedProblems.push(problem);
+              return { channel: "test", status: "published", raw: {} };
+            },
+            async publishSummary() {
+              return { channel: "test", status: "published", raw: {} };
+            },
+          },
+        },
+      );
+
+      expect(result.status).toBe("published");
+      expect(result.problemCount).toBe(1);
+      expect(result.summaryCount).toBe(1);
+      expect(result.contextRequestCount).toBe(1);
+      expect(fetchExtraCalls).toEqual(["src/related.ts"]);
+      expect(spawnCalls).toHaveLength(2);
+      expect(publishedProblems[0]?.message).toBe("Confirmed against the fetched contract: the changed call violates it.");
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }
@@ -4399,6 +4714,321 @@ describe("runReviewOrchestration error paths", () => {
     }
   });
 
+  it("re-verifies reported problems against fetched context in a follow-up pass", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-problem-context-follow-up-"));
+
+    try {
+      await writeWorkspaceFile(tempDir, "src/app.ts", "const value = oldValue();\ncommitBeforeReturn();\n");
+      const fetchExtraCalls: string[] = [];
+      const vcs: DiffCapableVcsAdapter = {
+        ...createVcs(tempDir),
+        async fetchExtraContext(req) {
+          fetchExtraCalls.push(req.path);
+          return { path: req.path, content: "export function relatedContract(): boolean;\n" };
+        },
+      };
+      let completeCalls = 0;
+      const llm: ChatCompletionClient = {
+        async complete(input) {
+          completeCalls += 1;
+          if (completeCalls === 1) {
+            return {
+              providerId: input.model.providerId,
+              modelId: input.model.modelId,
+              content: JSON.stringify({
+                toolCalls: [
+                  {
+                    name: "aicr.fetch_more_context",
+                    input: {
+                      path: "src/related.ts",
+                      reason: "Need the related API contract to confirm the reported problem.",
+                    },
+                  },
+                  {
+                    name: "aicr.report_problem",
+                    input: {
+                      file: "src/app.ts",
+                      line: 2,
+                      severity: "high",
+                      category: "correctness",
+                      message: "Reported while the related contract was still pending fetch; to be re-verified.",
+                    },
+                  },
+                ],
+              }),
+              raw: {},
+            };
+          }
+
+          expect(input.messages[2]?.content).toContain("reported problems while its aicr.fetch_more_context requests were still pending");
+          expect(input.messages[2]?.content).toContain("Fetched context:");
+          expect(input.messages[2]?.content).toContain("--- src/related.ts ---");
+          expect(input.messages[2]?.content).toContain("relatedContract");
+          return {
+            providerId: input.model.providerId,
+            modelId: input.model.modelId,
+            content: JSON.stringify({
+              problems: [
+                {
+                  file: "src/app.ts",
+                  line: 2,
+                  severity: "high",
+                  category: "correctness",
+                  message: "Confirmed against the fetched contract: the changed call violates it.",
+                },
+              ],
+              summary: "Fetched context confirmed 1 issue.",
+            }),
+            raw: {},
+          };
+        },
+      };
+      const publishedProblems: ReviewProblem[] = [];
+      const summaryCalls: string[] = [];
+
+      const result = await runReviewOrchestration(
+        {
+          reviewEvent: createReviewEventFixture(),
+          payload: {},
+          provider: "gitea",
+          eventName: "pull_request",
+        },
+        {
+          baseSystemPrompt: "<task>\n{{TASK_CONTEXT}}\n</task>",
+          sourceRootResolver: () => tempDir,
+          vcs,
+          llm,
+          model,
+          outputPublisher: {
+            publishesProblems: true,
+            async publishProblem(problem) {
+              publishedProblems.push(problem);
+              return { channel: "test", status: "published", raw: {} };
+            },
+            async publishSummary(summary) {
+              summaryCalls.push(summary);
+              return { channel: "test", status: "published", raw: {} };
+            },
+          },
+        },
+      );
+
+      expect(result.status).toBe("published");
+      expect(result.problemCount).toBe(1);
+      expect(result.summaryCount).toBe(1);
+      expect(result.contextRequestCount).toBe(1);
+      expect(completeCalls).toBe(2);
+      expect(fetchExtraCalls).toEqual(["src/related.ts"]);
+      expect(publishedProblems[0]?.message).toBe("Confirmed against the fetched contract: the changed call violates it.");
+      expect(summaryCalls[0]).toBe("Fetched context confirmed 1 issue.");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("runs a third pass when the follow-up itself reports problems plus new context requests", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-problem-context-third-pass-"));
+
+    try {
+      await writeWorkspaceFile(tempDir, "src/app.ts", "const value = oldValue();\ncommitBeforeReturn();\n");
+      const fetchExtraCalls: string[] = [];
+      const vcs: DiffCapableVcsAdapter = {
+        ...createVcs(tempDir),
+        async fetchExtraContext(req) {
+          fetchExtraCalls.push(req.path);
+          return { path: req.path, content: `export const ${req.path.endsWith("caller.ts") ? "callerProof" : "relatedContract"} = true;\n` };
+        },
+      };
+      let completeCalls = 0;
+      const llm: ChatCompletionClient = {
+        async complete(input) {
+          completeCalls += 1;
+          if (completeCalls === 1) {
+            return {
+              providerId: input.model.providerId,
+              modelId: input.model.modelId,
+              content: JSON.stringify({
+                toolCalls: [
+                  {
+                    name: "aicr.fetch_more_context",
+                    input: { path: "src/related.ts", reason: "Need the related API contract." },
+                  },
+                  {
+                    name: "aicr.report_problem",
+                    input: {
+                      file: "src/app.ts",
+                      line: 2,
+                      severity: "high",
+                      category: "correctness",
+                      message: "Provisional problem pending related contract.",
+                    },
+                  },
+                ],
+              }),
+              raw: {},
+            };
+          }
+          if (completeCalls === 2) {
+            expect(input.messages[2]?.content).toContain("--- src/related.ts ---");
+            return {
+              providerId: input.model.providerId,
+              modelId: input.model.modelId,
+              content: JSON.stringify({
+                toolCalls: [
+                  {
+                    name: "aicr.fetch_more_context",
+                    input: { path: "src/caller.ts", reason: "Need the caller to finish verification." },
+                  },
+                  {
+                    name: "aicr.report_problem",
+                    input: {
+                      file: "src/app.ts",
+                      line: 2,
+                      severity: "high",
+                      category: "correctness",
+                      message: "Contract checked; still need the caller.",
+                    },
+                  },
+                ],
+              }),
+              raw: {},
+            };
+          }
+
+          expect(input.messages[2]?.content).toContain("reported problems while its aicr.fetch_more_context requests were still pending");
+          expect(input.messages[2]?.content).toContain("--- src/caller.ts ---");
+          return {
+            providerId: input.model.providerId,
+            modelId: input.model.modelId,
+            content: JSON.stringify({
+              problems: [
+                {
+                  file: "src/app.ts",
+                  line: 2,
+                  severity: "high",
+                  category: "correctness",
+                  message: "Final confirmation after caller context.",
+                },
+              ],
+              summary: "Third pass confirmed 1 issue.",
+            }),
+            raw: {},
+          };
+        },
+      };
+      const publishedProblems: ReviewProblem[] = [];
+
+      const result = await runReviewOrchestration(
+        {
+          reviewEvent: createReviewEventFixture(),
+          payload: {},
+          provider: "gitea",
+          eventName: "pull_request",
+        },
+        {
+          baseSystemPrompt: "<task>\n{{TASK_CONTEXT}}\n</task>",
+          sourceRootResolver: () => tempDir,
+          vcs,
+          llm,
+          model,
+          outputPublisher: {
+            publishesProblems: true,
+            async publishProblem(problem) {
+              publishedProblems.push(problem);
+              return { channel: "test", status: "published", raw: {} };
+            },
+            async publishSummary() {
+              return { channel: "test", status: "published", raw: {} };
+            },
+          },
+        },
+      );
+
+      expect(result.status).toBe("published");
+      expect(result.problemCount).toBe(1);
+      expect(result.contextRequestCount).toBe(2);
+      expect(completeCalls).toBe(3);
+      expect(fetchExtraCalls).toEqual(["src/related.ts", "src/caller.ts"]);
+      expect(publishedProblems[0]?.message).toBe("Final confirmation after caller context.");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps reported problems without a follow-up when the context fetch is invalid", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-problem-invalid-fetch-"));
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    try {
+      await writeWorkspaceFile(tempDir, "src/app.ts", "const ok = true;\n");
+      let completeCalls = 0;
+      const publishedProblems: ReviewProblem[] = [];
+      const llm: ChatCompletionClient = {
+        async complete(input) {
+          completeCalls += 1;
+          return {
+            providerId: input.model.providerId,
+            modelId: input.model.modelId,
+            content: JSON.stringify({
+              toolCalls: [
+                {
+                  name: "aicr.fetch_more_context",
+                  input: { path: "", reason: "need more context but no file was selected" },
+                },
+                {
+                  name: "aicr.report_problem",
+                  input: {
+                    file: "src/app.ts",
+                    line: 1,
+                    severity: "high",
+                    category: "correctness",
+                    message: "Diff-visible problem; missing context stated in the report.",
+                  },
+                },
+              ],
+            }),
+            raw: {},
+          };
+        },
+      };
+
+      const result = await runReviewOrchestration(
+        {
+          reviewEvent: createReviewEventFixture(),
+          payload: {},
+          provider: "gitea",
+          eventName: "pull_request",
+        },
+        {
+          baseSystemPrompt: "<task>\n{{TASK_CONTEXT}}\n</task>",
+          sourceRootResolver: () => tempDir,
+          vcs: createVcs(tempDir),
+          llm,
+          model,
+          outputPublisher: {
+            publishesProblems: true,
+            async publishProblem(problem) {
+              publishedProblems.push(problem);
+              return { channel: "test", status: "published", raw: {} };
+            },
+            async publishSummary() {
+              return { channel: "test", status: "published", raw: {} };
+            },
+          },
+        },
+      );
+
+      expect(result.status).toBe("published");
+      expect(result.problemCount).toBe(1);
+      expect(completeCalls).toBe(1);
+      expect(publishedProblems[0]?.message).toBe("Diff-visible problem; missing context stated in the report.");
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("ignored invalid fetch_more_context tool call"));
+    } finally {
+      warnSpy.mockRestore();
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("repairs missing-diff skip output by fetching changed-file context", async () => {
     const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-missing-diff-repair-"));
 
@@ -4514,8 +5144,30 @@ describe("runReviewOrchestration error paths", () => {
         },
       };
       const publishedProblems: ReviewProblem[] = [];
+      let completeCalls = 0;
       const llm: ChatCompletionClient = {
         async complete(input) {
+          completeCalls += 1;
+          if (completeCalls > 1) {
+            return {
+              providerId: input.model.providerId,
+              modelId: input.model.modelId,
+              content: JSON.stringify({
+                problems: [
+                  {
+                    file: "src/app.ts",
+                    line: 2,
+                    severity: "low",
+                    category: "correctness",
+                    message: "Issue after context fetch.",
+                  },
+                ],
+                summary: "Context fetched; issue confirmed.",
+              }),
+              raw: {},
+            };
+          }
+
           return {
             providerId: input.model.providerId,
             modelId: input.model.modelId,
@@ -4565,6 +5217,7 @@ describe("runReviewOrchestration error paths", () => {
 
       expect(result.problemCount).toBe(1);
       expect(result.contextRequestCount).toBe(1);
+      expect(completeCalls).toBe(2);
       expect(fetchExtraCalls).toEqual(["src/app.ts"]);
       expect(publishedProblems[0]?.file).toBe("src/app.ts");
       expect(publishedProblems[0]?.line).toBe(2);

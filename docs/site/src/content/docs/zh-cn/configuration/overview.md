@@ -85,12 +85,19 @@ workspaces:
 | `agent.default` | ✓ | ✓ * | ✓ * |
 | `sandbox` | 经由 `agent.sandbox` | ✓ * | ✓ * |
 | `prompt`（基础系统提示、`force_skills`） | — | ✓ | ✓ |
+| `context_repositories`（辅助上下文仓库） | — | ✓ | ✓ |
 | `auth`（按 workspace 的 API key） | 经由 `server.auth` | — | ✓ |
 | `compression`、`queue`、`storage`、`llm`、`server`、`admin`、`triggers` | ✓ | — | — |
 
 \* schema 接受 workspace 层的 `agent.default` 和 `sandbox`，但当前版本在启动时只按
 全局 `agent` 创建一份适配器和沙箱，workspace 层这两项设置了也不会生效。混用 agent
 或按 workspace 换沙箱镜像的需求要等后续版本。
+
+`context_repositories` 声明评审时可引用的辅助仓库（共享库、协议契约等）：每次评审
+在确认存在变更文件后全新物化到 `<workspace>/context-repos/<alias>`，容器沙箱内以只读
+挂载 `/workspace/context-repos/<alias>` 暴露给 agent，单仓库失败不阻塞评审，
+`max_mb`（默认 512）限制物化体积。instance 的列表整体替换 `defaults` 的列表。
+字段细节见[配置字段参考](/zh-cn/reference/config-fields/#workspaces)。
 
 ## `.env` 与 `config.yaml` —— 密钥约定
 

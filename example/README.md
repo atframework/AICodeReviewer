@@ -132,7 +132,55 @@ PRs and changelists:
    or set `context_window` in overrides.** If an overflow still occurs, AICR
    throws `AgentContextOverflowError` with the model limit, requested tokens, and
    actionable guidance instead of a generic failure. See
-   `docs/ai/architecture.md` §3.3.2.
+    `docs/ai/architecture.md` §3.3.2.
+
+## Auxiliary context repositories (multi-source context)
+
+Reviews often depend on code outside the primary repository (shared libraries,
+protocol definitions, internal SDKs). Declare auxiliary repositories per
+workspace and AICR materializes a fresh read-only copy each review:
+
+```yaml
+workspaces:
+  instances:
+    my-repo:
+      context_repositories:
+        - alias: shared-lib            # path-safe, unique per workspace
+          kind: git
+          url: "https://github.com/my-org/shared-lib.git"
+          ref: main                    # branch/tag pin (default: remote HEAD)
+          token_env: SHARED_LIB_TOKEN  # http(s) only; injected via http.extraHeader, never persisted
+        - alias: protocol-spec
+          kind: svn
+          repository_url: "https://svn.example.com/repos/protocol/trunk"
+          revision: 1234               # optional pin
+        - alias: perforce-lib
+          kind: p4
+          port: "ssl:p4.example.com:1666"
+          user_env: P4USER
+          ticket_env: P4TICKET
+          depot_path: "//depot/lib/..."
+```
+
+Behavior contract (see `docs/ai/architecture.md` §3.2.2):
+
+- Materialization runs once per review after changed files are known:
+  git `clone --depth 1`, svn `export --no-auth-cache`, p4 `files -e` +
+  `print -q` (never `p4 sync`). v1 does not cache across runs.
+- Container sandboxes get each repository as a read-only mount at
+  `/workspace/context-repos/<alias>`; the native sandbox reads the host path
+  directly. The task prompt lists the available aliases and revisions.
+- Only the agent path (sandbox + agent CLI) materializes these repositories;
+  the direct-LLM path has no shell to read them and skips materialization.
+- A failing repository is isolated (warning + `status: failed` in the run
+  result); the review continues without it. `max_mb` (default 512) caps the
+  materialized size.
+- Connection details come only from `config.yaml`; webhook payloads cannot
+  inject or rewrite auxiliary repositories. Reported problems must still
+  reference files changed in the primary repository — auxiliary repositories
+  are supporting evidence only.
+- `workspaces.defaults.context_repositories` sets a default list; an instance
+  list replaces it wholesale.
 
 ## Agent web search (per-agent mapping)
 
@@ -581,7 +629,7 @@ triggers:
 > webhook. A GitHub App's webhook is configured once on the App and covers all
 > installed repos.
 
-See `docs/ai/architecture.md` §3.2.1 for the contract and `Plan.md` §8.2.1.
+See `docs/ai/architecture.md` §3.2.1 for the contract and `docs/ai/milestones/M12.md` for delivery evidence.
 
 ## PR/MR Summary Update Strategy
 

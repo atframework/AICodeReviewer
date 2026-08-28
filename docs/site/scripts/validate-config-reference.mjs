@@ -321,6 +321,7 @@ const enumConceptPaths = [
   "storage.cache.kind",
   "storage.object.kind",
   "llm.model_catalog.cache.backend",
+  "workspaces.instances.<id>.context_repositories[].kind",
   "llm.providers[].kind",
 ];
 

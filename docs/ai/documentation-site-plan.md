@@ -1,7 +1,7 @@
 # AICodeReviewer 文档站建设计划
 
-> 本文件是 M11 的执行计划，只规划文档站子工程、内容结构、工程集成和发布流程。
-> 现阶段不生成用户文档正文，也不创建站点脚手架。
+> 本文件是 M11 的执行计划与执行记录：文档站子工程选型、内容结构、工程集成、发布流程
+> 和线上核验结论。M11 已全部完成，站点发布在 `aicr.atframe.work`。
 
 ## 1. 目标与非目标
 
@@ -520,7 +520,9 @@ M11-P3 后续打磨（查缺补漏，2026-07）：
 - ✅ `troubleshooting/index.md` 补充两条常见问题：dashboard admin 未配置、GitHub issue 写回
   403/404（token 权限与 App 重装）。
 
-线上发布还需在 GitHub Pages 设置中确认 `gh-pages` / `/` 发布源。（链接检查与配置字段覆盖校验已随 M11-P4 落地；SEO 与贡献规则自动化已随 M11-P6 落地，见下节。）
+线上发布已核验（2026-08-28）：GitHub Pages 发布源为 `gh-pages` / `/`，自定义域名
+`aicr.atframe.work` 生效，站点返回 200。详见文末"M11 线上核验"一节。（链接检查与配置字段
+覆盖校验已随 M11-P4 落地；SEO 与贡献规则自动化已随 M11-P6 落地，见下节。）
 
 M11-P6 打磨（首页组件修复 + 首页再丰富 + 4K 全宽 + README/logo，2026-07）：
 
@@ -605,3 +607,17 @@ M11-P6 SEO 与贡献规则自动化（2026-08）：
   robots 漂移/og:image URL 漂移/token 漂移/代码块数量漂移/中英禁词/文件集合漂移）全部可检出；
   markdownlint 通过。同步 `docs/site/README.md`、中英 `development/index.md`、
   `.agents/skills/docs-writing-style/SKILL.md`。
+
+## M11 线上核验（2026-08-28）
+
+- ✅ GitHub Pages 设置：发布源 `gh-pages` / `/`（Deploy from a branch），自定义域名
+  `aicr.atframe.work` 已绑定，构建状态 `built`。
+- ✅ 线上可用性：`https://aicr.atframe.work/` 与 `http://aicr.atframe.work/` 均返回 200；
+  根路径为语言检测跳转页（`/en/`、`/zh-cn/`，无 JS 时回退 meta refresh），行为与设计一致。
+- ✅ 发布链路：main 文档变更 → Deploy docs workflow（`DEPLOY_DOCUMENT_GH_PAGES_KEY`
+  推送 `gh-pages`）→ Pages build，最近三次均成功；线上页面 `Last-Modified`
+  （2026-08-28T06:48:15Z）与 main 最新 Deploy docs 构建一致。
+- 备注：域名经 Cloudflare 代理（`Server: cloudflare`），访客 HTTPS 由 Cloudflare 终结；
+  GitHub Pages 源站 `https_enforced` 当前为关闭，如需源站级 http→https 重定向可在
+  Settings > Pages 开启（当前不阻塞任何验收项）。
+- 至此 M11 全部完成，无剩余本地项或线上项。

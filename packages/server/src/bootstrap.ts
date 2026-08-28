@@ -2500,6 +2500,13 @@ export async function bootstrapServerApp(options: BootstrapServerOptions): Promi
         return config.review.labels?.ignore ?? ["aicr:ignore", "aicr-ignore"];
       }
     },
+    contextRepositoriesResolver: (workspaceId: string) => {
+      try {
+        return resolveWorkspaceConfig(config, workspaceId).context_repositories;
+      } catch {
+        return undefined;
+      }
+    },
     ...(reflectionEnabled
       ? {
           memoryHintsResolver: async (workspaceId: string): Promise<readonly string[]> => {

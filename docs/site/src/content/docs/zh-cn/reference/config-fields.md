@@ -22,6 +22,7 @@ description: 全量配置字段参考，按顶层命名空间组织，并以 Zod
 | Storage `cache.kind` | `memory`、`redis`、`none` |
 | Storage `object.kind` | `filesystem`、`s3` |
 | Model catalog `cache.backend` | `sqlite`、`redis`、`memory` |
+| Context repository `kind` | `git`、`p4`、`svn` |
 | LLM provider `kind` | `openai_compatible`、`azure_openai`、`anthropic`、`vertex_ai`、`bedrock`、`google_ai_studio`、`ollama`、`copilot` |
 
 :::note[Channel `kind` 是自由字符串]
@@ -105,13 +106,26 @@ provider 专属字段（`webhook_secret_env`、`token_env`、`port`、`user_env`
 | `workspaces.cache.max_total_gb` | number > 0 | `50` | workspace 缓存总大小上限（GB） |
 | `workspaces.cache.eviction` | enum | `lru` | 淘汰策略：`lru`、`mru`、`ttl` |
 | `workspaces.cache.ttl_days` | int > 0 | `30` | `ttl` 淘汰的 TTL（天） |
-| `workspaces.defaults` | object | `{}` | 合并进每个 instance 的默认值（sandbox、review、agent、outputs、prompt） |
+| `workspaces.defaults` | object | `{}` | 合并进每个 instance 的默认值（sandbox、review、agent、outputs、prompt、context_repositories） |
 | `workspaces.defaults.sandbox` | object | — | 默认 sandbox 配置（见 `agent.sandbox`） |
 | `workspaces.defaults.review` | object | — | 默认 review 配置（见 `review`） |
 | `workspaces.defaults.agent.default` | enum | — | 这组 workspace 的默认 agent kind（当前版本运行时未生效，见下方说明） |
 | `workspaces.defaults.outputs` | object | — | 默认 outputs（见 `outputs` 的 workspace 字段） |
 | `workspaces.defaults.prompt.base_system_prompt_file` | string | — | 自定义 base system prompt 文件（相对于部署根目录） |
 | `workspaces.defaults.prompt.force_skills` | string[] | — | 始终激活的技能名，忽略 `Applies To` glob |
+| `workspaces.defaults.context_repositories[].alias` | string | — | path-safe 别名（`^[A-Za-z0-9][A-Za-z0-9._-]*$`，同 workspace 内唯一） |
+| `workspaces.defaults.context_repositories[].kind` | enum | — | `git`、`p4`、`svn` |
+| `workspaces.defaults.context_repositories[].url` | string | — | git 仓库 URL（`kind: git` 必填） |
+| `workspaces.defaults.context_repositories[].ref` | string | — | git branch/tag pin |
+| `workspaces.defaults.context_repositories[].token_env` | string | — | git http(s) 认证 token 的环境变量名 |
+| `workspaces.defaults.context_repositories[].repository_url` | string | — | SVN 仓库 URL（`kind: svn` 必填） |
+| `workspaces.defaults.context_repositories[].revision` | string \| int | — | svn/p4 的版本 pin |
+| `workspaces.defaults.context_repositories[].port` | string | — | P4 端口 |
+| `workspaces.defaults.context_repositories[].user_env` | string | — | P4 用户名的环境变量名 |
+| `workspaces.defaults.context_repositories[].ticket_env` | string | — | P4 ticket 的环境变量名 |
+| `workspaces.defaults.context_repositories[].password_env` | string | — | P4 密码的环境变量名 |
+| `workspaces.defaults.context_repositories[].depot_path` | string | — | P4 depot 路径（`kind: p4` 必填） |
+| `workspaces.defaults.context_repositories[].max_mb` | int > 0 | `512` | 单仓库物化后大小上限（MB） |
 | `workspaces.instances` | map | `{}` | 按 workspace id 组织的 instance |
 | `workspaces.instances.<id>.source_repo.trigger` | string | — | trigger profile 名 |
 | `workspaces.instances.<id>.source_repo.repo` | string | — | 仓库引用 |
@@ -121,10 +135,24 @@ provider 专属字段（`webhook_secret_env`、`token_env`、`port`、`user_env`
 | `workspaces.instances.<id>.sandbox` | object | — | sandbox 覆盖（当前版本运行时未生效，见下方说明） |
 | `workspaces.instances.<id>.triage` | object | — | issue triage 覆盖（仅 Gitea/Forgejo） |
 | `workspaces.instances.<id>.prompt` | object | — | prompt 覆盖（形状同 `workspaces.defaults.prompt`） |
+| `workspaces.instances.<id>.context_repositories[].alias` | string | — | path-safe 别名（`^[A-Za-z0-9][A-Za-z0-9._-]*$`，同 workspace 内唯一）；挂载路径用其命名 |
+| `workspaces.instances.<id>.context_repositories[].kind` | enum | — | `git`、`p4`、`svn` |
+| `workspaces.instances.<id>.context_repositories[].url` | string | — | git 仓库 URL（`kind: git` 必填） |
+| `workspaces.instances.<id>.context_repositories[].ref` | string | — | git branch/tag pin（缺省远端默认分支） |
+| `workspaces.instances.<id>.context_repositories[].token_env` | string | — | git http(s) 认证 token 的环境变量名（经 `http.extraHeader` 注入，不落盘） |
+| `workspaces.instances.<id>.context_repositories[].repository_url` | string | — | SVN 仓库 URL（`kind: svn` 必填） |
+| `workspaces.instances.<id>.context_repositories[].revision` | string \| int | — | svn/p4 的版本 pin（缺省取最新） |
+| `workspaces.instances.<id>.context_repositories[].port` | string | — | P4 端口（如 `ssl:p4.example.com:1666`） |
+| `workspaces.instances.<id>.context_repositories[].user_env` | string | — | P4 用户名的环境变量名 |
+| `workspaces.instances.<id>.context_repositories[].ticket_env` | string | — | P4 ticket 的环境变量名 |
+| `workspaces.instances.<id>.context_repositories[].password_env` | string | — | P4 密码的环境变量名（与 `ticket_env` 同义入口） |
+| `workspaces.instances.<id>.context_repositories[].depot_path` | string | — | P4 depot 路径（`kind: p4` 必填，通常以 `/...` 结尾） |
+| `workspaces.instances.<id>.context_repositories[].max_mb` | int > 0 | `512` | 单仓库物化后大小上限（MB），超限判失败并清理 |
 | `workspaces.instances.<id>.auth.api_key_env` | string | — | workspace 级 API key 环境变量 |
 | `workspaces.instances.<id>.auth.enabled` | boolean | `true` | 切换 workspace 级 API key |
 
 workspace id 不能与保留键 `cache`、`defaults`、`instances` 冲突。
+instance 定义自己的 `context_repositories` 时整体替换 `workspaces.defaults` 中的列表，不逐项合并。
 
 :::note[workspace 层 `agent.default` / `sandbox` 当前不生效]
 schema 接受 `workspaces.defaults` 和实例上的 `agent.default` 与 `sandbox`，但当前版本

@@ -129,15 +129,15 @@ function getErrorText(error: unknown): string {
   ].join("\n");
 }
 
-function isP4AuthenticationError(error: unknown): boolean {
+export function isP4AuthenticationError(error: unknown): boolean {
   return /P4PASSWD|Perforce password|not logged in|login required|session has expired|ticket.*expired/iu.test(getErrorText(error));
 }
 
-function isP4TrustError(error: unknown): boolean {
+export function isP4TrustError(error: unknown): boolean {
   return /P4PORT IDENTIFICATION HAS CHANGED|authenticity of '.*' can't be established|use the 'p4 trust' command/iu.test(getErrorText(error));
 }
 
-function isP4FingerprintChangedError(error: unknown): boolean {
+export function isP4FingerprintChangedError(error: unknown): boolean {
   return /P4PORT IDENTIFICATION HAS CHANGED/iu.test(getErrorText(error));
 }
 
@@ -188,7 +188,7 @@ function isP4AddAction(action: string | undefined): boolean {
   return action === "add" || action === "branch" || action === "move/add";
 }
 
-function isP4DeleteAction(action: string | undefined): boolean {
+export function isP4DeleteAction(action: string | undefined): boolean {
   return action === "delete" || action === "move/delete";
 }
 
