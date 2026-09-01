@@ -14,6 +14,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   runReviewOrchestration,
+  shouldUseAgentTaskFile,
   summarizeReviewOrchestrationForWebhook,
   formatParsedDiffForPrompt,
   type DiffCapableVcsAdapter,
@@ -2732,6 +2733,160 @@ describe("summarizeReviewOrchestrationForWebhook", () => {
       expect(repairTask).toContain("bytes truncated");
       // Linux MAX_ARG_STRLEN: any single argv string beyond 128 KiB fails with E2BIG.
       expect(Buffer.byteLength(repairTask, "utf8")).toBeLessThan(128 * 1024);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("uses platform-aware argv limits for task-file handoff", () => {
+    expect(shouldUseAgentTaskFile("x".repeat(24_001), "argv", "native", "win32")).toBe(true);
+    expect(shouldUseAgentTaskFile("x".repeat(24_001), "argv", "native", "linux")).toBe(false);
+    expect(shouldUseAgentTaskFile("审".repeat(32_001), "argv", "native", "linux")).toBe(true);
+    expect(shouldUseAgentTaskFile("x".repeat(160 * 1024), "stdin", "native", "linux")).toBe(false);
+    expect(shouldUseAgentTaskFile("x".repeat(24_001), "argv", "docker", "win32")).toBe(false);
+  });
+
+  it("hands an oversized initial task off via a workspace file so argv spawns stay under MAX_ARG_STRLEN", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-argv-task-"));
+
+    try {
+      await writeWorkspaceFile(tempDir, "src/app.ts", "const ok = true;\n");
+      // A huge changelist diff lands verbatim in the initial task; pi/omp pass
+      // the task as one positional argv string, and Linux rejects any single
+      // argv string beyond 128 KiB with spawn E2BIG.
+      const hugePrompt = ["{{TASK_CONTEXT}}", "", "y".repeat(160 * 1024)].join("\n");
+      const skipStream = [
+        {
+          type: "message_end",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: JSON.stringify({ skipReason: "lgtm" }) }],
+            stopReason: "stop",
+            usage: { input: 10, output: 5, cacheRead: 0, cacheWrite: 0, totalTokens: 15 },
+          },
+        },
+        { type: "agent_end", messages: [] },
+      ].map((e) => JSON.stringify(e)).join("\n");
+      const spawnCalls: SandboxSpawnOptions[] = [];
+      const sandbox: SandboxBackend = {
+        kind: "native",
+        async materializeFs(layout) {
+          await mkdir(layout.agentDir, { recursive: true });
+          await mkdir(layout.tmpDir, { recursive: true });
+          return { agentDir: layout.agentDir, tmpDir: layout.tmpDir, mountSpecs: [] };
+        },
+        async spawn(spawnOptions) {
+          spawnCalls.push(spawnOptions);
+          return { exitCode: 0, stdout: skipStream, stderr: "", timedOut: false, durationMs: 12 };
+        },
+        async teardown() {},
+      };
+      const agentAdapter: AgentAdapter = {
+        kind: "oh-my-pi",
+        taskTransport: "argv",
+        async detect() { return { available: true, binary: "omp" }; },
+        buildCommand(task) { return ["omp", "-p", "--mode", "json", "--", task]; },
+        buildStdin() { return ""; },
+        async materializeConfig(_m, workingDir) {
+          return { configFiles: new Map(), envVars: {}, workingDir };
+        },
+      };
+
+      const result = await runReviewOrchestration(
+        {
+          reviewEvent: createReviewEventFixture(),
+          payload: {},
+          provider: "gitea",
+          eventName: "pull_request",
+        },
+        {
+          baseSystemPrompt: hugePrompt,
+          sourceRootResolver: () => tempDir,
+          vcs: createVcs(tempDir),
+          llm: { async complete() { throw new Error("direct llm must not be called"); } },
+          model,
+          sandbox,
+          agentAdapter,
+          agentTimeoutMs: 30_000,
+        },
+      );
+
+      expect(result.outputState.skipReason).toBe("lgtm");
+      expect(spawnCalls.length).toBeGreaterThanOrEqual(1);
+      const spawnedTask = spawnCalls[0]?.command.at(-1) ?? "";
+      expect(spawnedTask).toContain("was written to");
+      expect(Buffer.byteLength(spawnedTask, "utf8")).toBeLessThan(128 * 1024);
+      const handedOffTask = await readFile(join(tempDir, "agent", ".aicr-task.md"), "utf8");
+      expect(handedOffTask).toContain("y".repeat(1024));
+      expect(Buffer.byteLength(handedOffTask, "utf8")).toBeGreaterThan(160 * 1024);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("removes a stale task handoff file when the current argv task fits", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-argv-task-cleanup-"));
+
+    try {
+      await writeWorkspaceFile(tempDir, "src/app.ts", "const ok = true;\n");
+      await writeWorkspaceFile(tempDir, "agent/.aicr-task.md", "stale task");
+      const skipStream = [
+        {
+          type: "message_end",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: JSON.stringify({ skipReason: "lgtm" }) }],
+            stopReason: "stop",
+            usage: { input: 10, output: 5, cacheRead: 0, cacheWrite: 0, totalTokens: 15 },
+          },
+        },
+        { type: "agent_end", messages: [] },
+      ].map((e) => JSON.stringify(e)).join("\n");
+      const sandbox: SandboxBackend = {
+        kind: "native",
+        async materializeFs(layout) {
+          await mkdir(layout.agentDir, { recursive: true });
+          await mkdir(layout.tmpDir, { recursive: true });
+          return { agentDir: layout.agentDir, tmpDir: layout.tmpDir, mountSpecs: [] };
+        },
+        async spawn() {
+          return { exitCode: 0, stdout: skipStream, stderr: "", timedOut: false, durationMs: 12 };
+        },
+        async teardown() {},
+      };
+      const agentAdapter: AgentAdapter = {
+        kind: "oh-my-pi",
+        taskTransport: "argv",
+        async detect() { return { available: true, binary: "omp" }; },
+        buildCommand(task) { return ["omp", "-p", "--mode", "json", "--", task]; },
+        buildStdin() { return ""; },
+        async materializeConfig(_m, workingDir) {
+          return { configFiles: new Map(), envVars: {}, workingDir };
+        },
+      };
+
+      const result = await runReviewOrchestration(
+        {
+          reviewEvent: createReviewEventFixture(),
+          payload: {},
+          provider: "gitea",
+          eventName: "pull_request",
+        },
+        {
+          baseSystemPrompt: "{{TASK_CONTEXT}}",
+          sourceRootResolver: () => tempDir,
+          vcs: createVcs(tempDir),
+          llm: { async complete() { throw new Error("direct llm must not be called"); } },
+          model,
+          sandbox,
+          agentAdapter,
+          agentTimeoutMs: 30_000,
+        },
+      );
+
+      expect(result.outputState.skipReason).toBe("lgtm");
+      await expect(readFile(join(tempDir, "agent", ".aicr-task.md"), "utf8"))
+        .rejects.toMatchObject({ code: "ENOENT" });
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }

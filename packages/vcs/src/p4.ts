@@ -3,7 +3,7 @@ import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
 
-import { normalizeChangedPath, normalizePath, withTransientIoRetry, type ReviewEvent } from "@aicr/core";
+import { normalizeChangedPath, normalizePath, isTransientIoError, withTransientIoRetry, type ReviewEvent } from "@aicr/core";
 
 import {
   buildAttributionEntry,
@@ -141,6 +141,33 @@ export function isP4FingerprintChangedError(error: unknown): boolean {
   return /P4PORT IDENTIFICATION HAS CHANGED/iu.test(getErrorText(error));
 }
 
+// p4 surfaces network failures as plain stderr text (non-zero exit), not as
+// Node error codes, so the generic transient-IO matcher misses them. These
+// patterns cover the p4 CLI's network/transport phrasing so runP4 retries
+// brief server/network blips instead of failing the whole review.
+const P4_TRANSIENT_NETWORK_RES: readonly RegExp[] = [
+  /\bTCP (?:connect|receive|send)\b[^\r\n]*\bfailed\b/iu,
+  /\bconnect to server failed\b/iu,
+  /\bbroken pipe\b/iu,
+  /\bconnection (?:reset|closed|refused|timed out)\b/iu,
+  /\boperation timed out\b/iu,
+  /\bnetwork is unreachable\b/iu,
+  /\bno route to host\b/iu,
+  /\bhost (?:is\s+)?unreachable\b/iu,
+  /\bSSL (?:connect|negotiation|read|write|shutdown) failed\b/iu,
+];
+
+export function isP4TransientNetworkError(error: unknown): boolean {
+  // Inspect diagnostics only. A partially successful describe/print can carry
+  // arbitrary changelist text on stdout, including a quoted error string.
+  const text = getErrorDiagnosticText(error);
+  return P4_TRANSIENT_NETWORK_RES.some((pattern) => pattern.test(text));
+}
+
+function isP4RetryableError(error: unknown): boolean {
+  return isP4TransientNetworkError(error) || isTransientIoError(error);
+}
+
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -151,6 +178,10 @@ function getErrorDiagnosticText(error: unknown): string {
     error instanceof Error ? error.message : String(error),
     typeof candidate.stderr === "string" ? candidate.stderr : "",
   ].join("\n");
+}
+
+function isP4NoSuchFileError(error: unknown): boolean {
+  return /\bno such file(?:\(s\))?(?:[.!]|\s|$)/iu.test(getErrorDiagnosticText(error));
 }
 
 function isP4ClientUnknownError(error: unknown, client: string): boolean {
@@ -364,6 +395,18 @@ export class P4VcsAdapter implements VcsAdapter {
           await this.login();
         }
       }
+    }, {
+      isRetryable: isP4RetryableError,
+      onRetry: (error, nextAttempt, delayMs) => {
+        console.warn(JSON.stringify({
+          level: "warn",
+          msg: "transient p4 network failure; retrying",
+          command: args[0],
+          nextAttempt,
+          delayMs,
+          error: getErrorText(error).slice(0, 300),
+        }));
+      },
     });
   }
 
@@ -474,6 +517,9 @@ export class P4VcsAdapter implements VcsAdapter {
         files: filtered,
       };
     } catch (error) {
+      if (isP4RetryableError(error)) {
+        throw error;
+      }
       console.warn(JSON.stringify({
         level: "warn",
         msg: "p4 describe -s failed in listChanges",
@@ -524,7 +570,9 @@ export class P4VcsAdapter implements VcsAdapter {
         fetchedFiles.push(safeLocalPath);
       } catch (error) {
         const errorText = getErrorText(error);
-        if (/no such file\(s\)/iu.test(errorText)) {
+        if (isP4NoSuchFileError(error)) {
+          // The file is genuinely gone at this revision (e.g. deleted and
+          // re-added later); skipping it is correct.
           console.warn(JSON.stringify({
             level: "warn",
             msg: "p4 print failed: file not found at revision",
@@ -532,15 +580,12 @@ export class P4VcsAdapter implements VcsAdapter {
             localPath: normalizedPath,
             error: errorText.slice(0, 500),
           }));
-        } else {
-          console.warn(JSON.stringify({
-            level: "warn",
-            msg: "p4 print failed",
-            depotPath: `${depotPath}@${revision}`,
-            localPath: normalizedPath,
-            error: errorText.slice(0, 500),
-          }));
+          continue;
         }
+        // Anything else (network failures after retries, auth, permission)
+        // must fail the run visibly instead of yielding a hollow review over
+        // missing content.
+        throw error;
       }
     }
 
@@ -595,8 +640,7 @@ export class P4VcsAdapter implements VcsAdapter {
       const result = await this.runP4(["annotate", "-c", annotateTarget]);
       annotateStdout = result.stdout;
     } catch (error) {
-      const errorText = getErrorText(error);
-      if (/no such file\(s\)/iu.test(errorText)) {
+      if (isP4NoSuchFileError(error)) {
         return { path: normalizedPath, status: "not_found", entries: [] };
       }
       throw error;
@@ -670,6 +714,9 @@ export class P4VcsAdapter implements VcsAdapter {
       }
       return filtered;
     } catch (error) {
+      if (isP4RetryableError(error)) {
+        throw error;
+      }
       console.warn(JSON.stringify({
         level: "warn",
         msg: "p4 describe -du failed",

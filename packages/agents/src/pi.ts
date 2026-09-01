@@ -76,6 +76,9 @@ export function createPiAdapter(options: PiAdapterOptions = {}): AgentAdapter {
   return {
     kind: "pi" as AgentKind,
 
+    // The task is one positional argv string (`-- <task>`).
+    taskTransport: "argv",
+
     async detect(): Promise<AgentDetectResult> {
       return detectBinary(binary, PI_VERSION_ARGS);
     },

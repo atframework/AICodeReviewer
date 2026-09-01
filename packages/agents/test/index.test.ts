@@ -1196,6 +1196,7 @@ describe("createCopilotCliAdapter", () => {
   describe("buildCommand", () => {
     it("builds a programmatic copilot command with prompt and silent output", () => {
       const adapter = createCopilotCliAdapter();
+      expect(adapter.taskTransport).toBe("argv");
       const cmd = adapter.buildCommand("review this", {
         workingDir: "/workspace",
         model: {
@@ -2610,6 +2611,7 @@ const piFamilyModel: ModelSpec = {
 describe("createPiAdapter", () => {
   it("builds the documented --mode json command with trust and ephemeral session", () => {
     const adapter = createPiAdapter();
+    expect(adapter.taskTransport).toBe("argv");
     const command = adapter.buildCommand("review this diff", {
       workingDir: "/tmp/agent",
       task: "review this diff",
@@ -2801,6 +2803,7 @@ describe("createPiAdapter", () => {
 describe("createOhMyPiAdapter", () => {
   it("builds the documented -p --mode json command", () => {
     const adapter = createOhMyPiAdapter();
+    expect(adapter.taskTransport).toBe("argv");
     const command = adapter.buildCommand("review this diff", {
       workingDir: "/tmp/agent",
       task: "review this diff",

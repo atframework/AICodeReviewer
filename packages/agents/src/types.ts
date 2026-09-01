@@ -60,6 +60,13 @@ export interface AgentMaterializeOptions {
 
 export interface AgentAdapter {
   readonly kind: AgentKind;
+  /**
+   * How the review task reaches the CLI: as one positional/flag argv string
+   * ("argv"; pi, oh-my-pi, copilot-cli) or piped via stdin ("stdin"; default).
+   * Linux limits each argv string to 128 KiB and Windows caps the full command
+   * line at roughly 32K UTF-16 code units, so oversized tasks use file handoff.
+   */
+  readonly taskTransport?: "argv" | "stdin";
   detect(): Promise<AgentDetectResult>;
   buildCommand(task: string, options: AgentSpawnOptions): readonly string[];
   buildStdin?(task: string, options: AgentSpawnOptions): string;
