@@ -435,6 +435,7 @@ AICR 采用**两层上下文管理**，两者互补：
   - **pi**：`pi --mode json --approve --no-session [--model provider/id] [--thinking level] -- <task>`；prompt 走位置参数，适配器 `buildStdin()` 返回空串避免 stdin 双写。`--approve` 让 bundle 目录的项目级 `.agents/skills` 在 headless 下通过 trust 门控；`--no-session` 保持一次性 run 无会话残留。配置目录隔离靠 orchestrator 注入的 `PI_CODING_AGENT_DIR`（指向 bundle `.pi-agent/`，含 models.json/settings.json/桥接扩展），另设 `PI_OFFLINE=1`（关更新检查与安装遥测）/`PI_TELEMETRY=0`。
   - **oh-my-pi**（pi fork）：`omp -p --mode json --auto-approve --no-session [--model provider/id] [--thinking level] -- <task>`；同样位置参数 + 空 stdin。`PI_CODING_AGENT_DIR` 指向 bundle `.omp-agent/`（models.yml/config.yml/mcp.json），原生 MCP 与 `.agents/skills` 发现无需额外 trust 处理。
   - pi 与 oh-my-pi 输出同族 NDJSON 事件流（`session` 头 + `agent_start`/`turn_*`/`message_*`/`tool_execution_*`/`compaction_*`），orchestrator 用共享提取器：正文取 `message_end` 的 assistant 文本块，usage 只聚合 `message_end.message.usage`（disjoint 计数器，与 kilo 同款折叠），工具调用取 `tool_execution_start` 的 `toolName`/`args`；`message_update` 的累计快照不混入求和。终态 assistant 消息 `stopReason: "error"` 时抛出 `Agent stream error`，让上下文溢出分类与 kilo 顶层 `error` 事件行为一致。
+  - 把 task 放进单个参数的 adapter 通过 `taskTransport: "argv"` 声明传输方式。orchestrator 在任务超过平台安全预算时把完整内容写入 bundle 根部 `.aicr-task.md`，仅传递要求读取该文件的短 prompt；每轮运行先删除旧交接文件。Linux 的单参数上限是 128 KiB，Windows native 的完整命令行上限约 32K UTF-16 code units，因此两条路径使用不同安全预算。stdin adapter 不走文件交接。
   - effort 映射：AICR `minimal` 档对 Claude Code/Copilot CLI 均映射为 `low`（两家都接受 `low/medium/high/xhigh/max`）；pi/oh-my-pi 原生接受 `off/minimal/low/medium/high/xhigh/max`，AICR 档位直接透传，无映射损耗。
 
 #### 3.7.3 ModelSpec 翻译

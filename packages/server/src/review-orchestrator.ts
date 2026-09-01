@@ -1,7 +1,7 @@
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { existsSync } from "node:fs";
-import { readFile, rm } from "node:fs/promises";
+import { readFile, rm, writeFile } from "node:fs/promises";
 
 import {
   buildReviewTaskContext,
@@ -1007,6 +1007,35 @@ interface PiStreamExtractionResult {
 const RAW_STDOUT_FALLBACK_MAX_BYTES = 48_000;
 const FOLLOW_UP_PREVIOUS_OUTPUT_MAX_BYTES = 65_536;
 
+/** Safe budgets leave room for the binary and the adapters' other flags. */
+const TASK_ARGV_SAFE_MAX_BYTES = 96_000;
+const WINDOWS_TASK_ARGV_SAFE_MAX_CODE_UNITS = 24_000;
+const TASK_HANDOFF_FILE_NAME = ".aicr-task.md";
+
+function utf8ByteLength(text: string): number {
+  return new TextEncoder().encode(text).length;
+}
+
+export function shouldUseAgentTaskFile(
+  task: string,
+  taskTransport: AgentAdapter["taskTransport"],
+  sandboxKind: SandboxBackend["kind"],
+  platform: NodeJS.Platform = process.platform,
+): boolean {
+  if (taskTransport !== "argv") {
+    return false;
+  }
+
+  // CreateProcessW caps the full command line at roughly 32K UTF-16 code
+  // units. Container backends run Linux even when the server host is Windows.
+  if (sandboxKind === "native" && platform === "win32") {
+    return task.length > WINDOWS_TASK_ARGV_SAFE_MAX_CODE_UNITS;
+  }
+
+  // Linux caps each individual argv/env string at MAX_ARG_STRLEN (128 KiB).
+  return utf8ByteLength(task) > TASK_ARGV_SAFE_MAX_BYTES;
+}
+
 function tailCapUtf8(text: string, maxBytes: number): string {
   const bytes = new TextEncoder().encode(text);
   if (bytes.length <= maxBytes) {
@@ -1258,6 +1287,22 @@ async function runAgentReview(
       sandbox.kind === "native",
     );
     const mcpServers = adaptMcpServersForSandbox(bundleContext?.mcpServers, sandbox, outputStatePath);
+    let effectiveTask = task;
+    const useTaskFile = shouldUseAgentTaskFile(
+      task,
+      agentAdapter.taskTransport,
+      sandbox.kind,
+    );
+    let sandboxTaskPath: string | undefined;
+    if (useTaskFile) {
+      sandboxTaskPath = sandbox.kind === "native"
+        ? join(sandboxAgentDir, TASK_HANDOFF_FILE_NAME)
+        : `${sandboxAgentDir}/${TASK_HANDOFF_FILE_NAME}`;
+      effectiveTask = [
+        `The full review task exceeded the maximum command-line argument size and was written to ${sandboxTaskPath}.`,
+        "Read that file completely before doing anything else, then follow its instructions exactly.",
+      ].join("\n");
+    }
     const bundle = await materializeRuntimeBundle({
       adapter: agentAdapter,
       model: options.model,
@@ -1271,19 +1316,31 @@ async function runAgentReview(
       ...(bundleContext?.webSearch ? { webSearch: bundleContext.webSearch } : {}),
       ...(bundleContext?.runId ? { runId: bundleContext.runId } : {}),
     });
+    const taskFilePath = join(materializedFs.agentDir, TASK_HANDOFF_FILE_NAME);
+    await rm(taskFilePath, { force: true });
+    if (useTaskFile && sandboxTaskPath) {
+      await writeFile(taskFilePath, task, "utf8");
+      console.warn(JSON.stringify({
+        level: "warn",
+        msg: "task exceeds safe argv size; handing the full task off via a workspace file",
+        agent: agentAdapter.kind,
+        taskBytes: utf8ByteLength(task),
+        taskFile: sandboxTaskPath,
+      }));
+    }
     const agentSpawnOptions: AgentSpawnOptions = {
       workingDir: agentWorkingDirForSandbox(sandbox, bundle.workingDir),
       ...(options.agentTimeoutMs !== undefined ? { timeoutMs: options.agentTimeoutMs } : {}),
       model: options.model,
       autoApprove: true,
-      task,
+      task: effectiveTask,
       ...(mcpServers ? { mcpServers } : {}),
       ...(bundleContext?.webSearch ? { webSearch: bundleContext.webSearch } : {}),
     };
-    const command = agentAdapter.buildCommand(task, agentSpawnOptions);
+    const command = agentAdapter.buildCommand(effectiveTask, agentSpawnOptions);
     const stdin = agentAdapter.buildStdin
-      ? agentAdapter.buildStdin(task, agentSpawnOptions)
-      : task;
+      ? agentAdapter.buildStdin(effectiveTask, agentSpawnOptions)
+      : effectiveTask;
     const env = resolveEnvPlaceholders(bundle.envVars);
 
     await rm(join(materializedFs.agentDir, ".aicr-output-state.json"), { force: true });

@@ -53,5 +53,6 @@ Always try the `node` direct invocation first if `pnpm` or `npx` fails with a Po
 ## Classify Windows environment blockers
 
 - If Vitest fails before test collection with esbuild/Vite `ensureServiceIsRunning` and `spawn EPERM`, rerun the exact command where child-process spawning is permitted. Count the gate only when Vitest reports the expected test files/tests; otherwise report it as blocked, not as a product test failure or a pass.
+- If the Windows launcher fails before command execution with error 1312 or 1920, retry the checks sequentially in one `cmd.exe` session. Do not classify the launcher failure as a product or test failure.
 - If `cmd /c "pnpm build"` stalls without starting package build children, stop only processes created by that invocation, inspect the actual `package.json` scripts, and run their exact Node equivalents. A direct local equivalent is diagnostic evidence; require Linux/CI or container `pnpm build` success before claiming the package-script gate passed.
 - If `pnpm docs:build` fails only in a restricted launcher, reproduce it in the normal build environment before adding a dependency patch. Patch only failures reproduced by the real docs build, following the independent, idempotent, shape-guarded contract in `../../../docs/ai/AGENTS.known-pitfalls.md`.

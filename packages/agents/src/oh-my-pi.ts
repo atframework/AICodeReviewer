@@ -194,6 +194,9 @@ export function createOhMyPiAdapter(options: OhMyPiAdapterOptions = {}): AgentAd
   return {
     kind: "oh-my-pi" as AgentKind,
 
+    // The task is one positional argv string (`-- <task>`).
+    taskTransport: "argv",
+
     async detect(): Promise<AgentDetectResult> {
       return detectBinary(binary, OMP_VERSION_ARGS);
     },

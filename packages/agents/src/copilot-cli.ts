@@ -44,6 +44,9 @@ export function createCopilotCliAdapter(options: CopilotCliAdapterOptions = {}):
 	return {
 		kind: "copilot-cli" as AgentKind,
 
+		// The task is the --prompt argv string.
+		taskTransport: "argv",
+
 		async detect(): Promise<AgentDetectResult> {
 			return detectBinary(binary, COPILOT_CLI_VERSION_ARGS);
 		},

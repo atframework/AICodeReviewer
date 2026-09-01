@@ -6,7 +6,14 @@ import { describe, it, expect } from "vitest";
 
 import { createReviewEvent, type ReviewEvent } from "@aicr/core";
 
-import { createP4VcsAdapter, P4VcsAdapter, type P4CommandResult, type P4CommandRunner, type P4StdinRunner } from "../src/p4.js";
+import {
+  createP4VcsAdapter,
+  isP4TransientNetworkError,
+  P4VcsAdapter,
+  type P4CommandResult,
+  type P4CommandRunner,
+  type P4StdinRunner,
+} from "../src/p4.js";
 import type { ChangeRange } from "../src/contracts.js";
 
 function createMockP4Runner(responses: Record<string, P4CommandResult>) {
@@ -143,6 +150,26 @@ Affected files ...
 -old
 +new
 `;
+
+describe("isP4TransientNetworkError", () => {
+  it.each([
+    "TCP connect to p4.example.com:1666 failed.",
+    "TCP receive on 10.0.0.1:1666 failed.",
+    "SSL negotiation failed.",
+    "Broken pipe",
+  ])("recognizes p4 transport diagnostic: %s", (message) => {
+    expect(isP4TransientNetworkError(new Error(message))).toBe(true);
+  });
+
+  it("ignores transport-looking text that appears only in command stdout", () => {
+    const error = Object.assign(new Error("p4 describe failed"), {
+      stdout: "Changelist description: TCP connect to p4.example.com:1666 failed.",
+      stderr: "Access denied.",
+    });
+
+    expect(isP4TransientNetworkError(error)).toBe(false);
+  });
+});
 
 describe("P4VcsAdapter", () => {
   describe("constructor", () => {
@@ -371,26 +398,31 @@ Affected files ...
 
   describe("fetchScoped", () => {
     it("fetches files via p4 print", async () => {
-      const mockP4 = createMockP4Runner({
-        "print -q": { stdout: "file content here", stderr: "" },
-      });
-      const adapter = new P4VcsAdapter({
-        repositoryDir: "/tmp/test",
-        depot: "//depot/main",
-        p4: mockP4,
-      });
+      const tempDir = await mkdtemp(join(tmpdir(), "aicr-p4-fetch-"));
+      try {
+        const mockP4 = createMockP4Runner({
+          "print -q": { stdout: "file content here", stderr: "" },
+        });
+        const adapter = new P4VcsAdapter({
+          repositoryDir: tempDir,
+          depot: "//depot/main",
+          p4: mockP4,
+        });
 
-      const range: ChangeRange = {
-        headRevision: "12345",
-        files: ["src/foo.cpp"],
-      };
+        const range: ChangeRange = {
+          headRevision: "12345",
+          files: ["src/foo.cpp"],
+        };
 
-      const result = await adapter.fetchScoped(range, {
-        id: "test-ws",
-        sourceDir: "/tmp/test/source",
-      });
+        const result = await adapter.fetchScoped(range, {
+          id: "test-ws",
+          sourceDir: join(tempDir, "source"),
+        });
 
-      expect(result.fetchedFiles).toContain("src/foo.cpp");
+        expect(result.fetchedFiles).toContain("src/foo.cpp");
+      } finally {
+        await rm(tempDir, { recursive: true, force: true });
+      }
     });
 
     it("returns empty when no revision", async () => {
@@ -406,29 +438,34 @@ Affected files ...
     });
 
     it("skips files that fail to print", async () => {
-      const mockP4 = async (args: readonly string[]): Promise<P4CommandResult> => {
-        if (args.join(" ").includes("missing.cpp")) {
-          throw new Error("no such file");
-        }
-        return { stdout: "content", stderr: "" };
-      };
-      const adapter = new P4VcsAdapter({
-        repositoryDir: "/tmp/test",
-        depot: "//depot/main",
-        p4: mockP4,
-      });
+      const tempDir = await mkdtemp(join(tmpdir(), "aicr-p4-partial-fetch-"));
+      try {
+        const mockP4 = async (args: readonly string[]): Promise<P4CommandResult> => {
+          if (args.join(" ").includes("missing.cpp")) {
+            throw new Error("no such file");
+          }
+          return { stdout: "content", stderr: "" };
+        };
+        const adapter = new P4VcsAdapter({
+          repositoryDir: tempDir,
+          depot: "//depot/main",
+          p4: mockP4,
+        });
 
-      const range: ChangeRange = {
-        headRevision: "12345",
-        files: ["src/exists.cpp", "src/missing.cpp"],
-      };
+        const range: ChangeRange = {
+          headRevision: "12345",
+          files: ["src/exists.cpp", "src/missing.cpp"],
+        };
 
-      const result = await adapter.fetchScoped(range, {
-        id: "test-ws",
-        sourceDir: "/tmp/test/source",
-      });
+        const result = await adapter.fetchScoped(range, {
+          id: "test-ws",
+          sourceDir: join(tempDir, "source"),
+        });
 
-      expect(result.fetchedFiles).toEqual(["src/exists.cpp"]);
+        expect(result.fetchedFiles).toEqual(["src/exists.cpp"]);
+      } finally {
+        await rm(tempDir, { recursive: true, force: true });
+      }
     });
 
     it("removes stale destination files before p4 print failures", async () => {
@@ -459,6 +496,85 @@ Affected files ...
       } finally {
         await rm(tempDir, { recursive: true, force: true });
       }
+    });
+
+    it("retries bare p4 TCP transport failures during print", async () => {
+      const tempDir = await mkdtemp(join(tmpdir(), "aicr-p4-retry-"));
+      try {
+        let printAttempts = 0;
+        const mockP4 = async (args: readonly string[]): Promise<P4CommandResult> => {
+          if (args.join(" ").includes("print")) {
+            printAttempts += 1;
+            if (printAttempts === 1) {
+              throw new Error("TCP connect to p4.example.com:1666 failed.");
+            }
+            return { stdout: "content", stderr: "" };
+          }
+          return { stdout: "", stderr: "" };
+        };
+        const adapter = new P4VcsAdapter({
+          repositoryDir: tempDir,
+          depot: "//depot/main",
+          p4: mockP4,
+        });
+
+        const result = await adapter.fetchScoped(
+          { headRevision: "12345", files: ["src/foo.cpp"] },
+          { id: "test-ws", sourceDir: join(tempDir, "source") },
+        );
+
+        expect(result.fetchedFiles).toEqual(["src/foo.cpp"]);
+        expect(printAttempts).toBe(2);
+      } finally {
+        await rm(tempDir, { recursive: true, force: true });
+      }
+    });
+
+    it("fails the fetch when p4 print keeps hitting network failures after retries", async () => {
+      let printAttempts = 0;
+      const mockP4 = async (args: readonly string[]): Promise<P4CommandResult> => {
+        if (args.join(" ").includes("print")) {
+          printAttempts += 1;
+          throw new Error("TCP receive on perforce:1666 failed.");
+        }
+        return { stdout: "", stderr: "" };
+      };
+      const adapter = new P4VcsAdapter({
+        repositoryDir: "/tmp/test",
+        depot: "//depot/main",
+        p4: mockP4,
+      });
+
+      await expect(adapter.fetchScoped(
+        { headRevision: "12345", files: ["src/foo.cpp"] },
+        { id: "test-ws", sourceDir: "/tmp/test/source" },
+      )).rejects.toThrow(/TCP receive/u);
+      expect(printAttempts).toBe(3);
+    });
+
+    it("fails the fetch immediately on non-network p4 print errors instead of skipping files", async () => {
+      let printAttempts = 0;
+      const mockP4 = async (args: readonly string[]): Promise<P4CommandResult> => {
+        if (args.join(" ").includes("print")) {
+          printAttempts += 1;
+          throw Object.assign(new Error("p4 print failed: access denied"), {
+            stdout: "file content quoting: no such file(s).",
+            stderr: "Access denied: user lacks permission",
+          });
+        }
+        return { stdout: "", stderr: "" };
+      };
+      const adapter = new P4VcsAdapter({
+        repositoryDir: "/tmp/test",
+        depot: "//depot/main",
+        p4: mockP4,
+      });
+
+      await expect(adapter.fetchScoped(
+        { headRevision: "12345", files: ["src/foo.cpp"] },
+        { id: "test-ws", sourceDir: "/tmp/test/source" },
+      )).rejects.toMatchObject({ stderr: "Access denied: user lacks permission" });
+      expect(printAttempts).toBe(1);
     });
   });
 
@@ -619,6 +735,23 @@ Affected files ...
       expect(result.files).toEqual([]);
     });
 
+    it("rethrows persistent p4 diff network failures after retries", async () => {
+      let describeAttempts = 0;
+      const mockP4 = async (): Promise<P4CommandResult> => {
+        describeAttempts += 1;
+        throw new Error("TCP receive on p4.example.com:1666 failed.");
+      };
+      const adapter = new P4VcsAdapter({
+        repositoryDir: "/tmp/test",
+        depot: "//depot/main",
+        p4: mockP4,
+      });
+
+      await expect(adapter.diff({ headRevision: "99999", files: ["a.cpp"] }))
+        .rejects.toThrow(/TCP receive/u);
+      expect(describeAttempts).toBe(3);
+    });
+
     it("handles empty diff output gracefully", async () => {
       const mockP4 = createMockP4Runner({
         "describe -du 12345": {
@@ -777,14 +910,14 @@ Affected files ...
     expect(range.files).toContain("src/foo.cpp");
   });
 
-  it("falls back to empty files when p4 trust -y fails", async () => {
+  it("rethrows a persistent p4 trust network failure after retries", async () => {
     let describeAttempts = 0;
     let trustCalls = 0;
     const p4: P4CommandRunner = async (args) => {
       const key = args.join(" ");
       if (key.includes("trust -y")) {
         trustCalls += 1;
-        throw new Error("p4 trust -y failed: TCP connect to perforce:1666 failed.");
+        throw new Error("p4 trust -y failed: TCP connect to p4.example.com:1666 failed.");
       }
       if (key.includes("describe")) {
         describeAttempts += 1;
@@ -796,10 +929,9 @@ Affected files ...
     };
     const adapter = new P4VcsAdapter({ repositoryDir: "/tmp/test", depot: "//depot/main", p4 });
 
-    const range = await adapter.listChanges(makeEvent());
-    expect(range.files).toEqual([]);
-    expect(trustCalls).toBe(1);
-    expect(describeAttempts).toBe(1);
+    await expect(adapter.listChanges(makeEvent())).rejects.toThrow(/TCP connect/u);
+    expect(trustCalls).toBe(3);
+    expect(describeAttempts).toBe(3);
   });
 
   it("auto-trusts once per runP4 call and does not loop when the fingerprint keeps failing", async () => {
