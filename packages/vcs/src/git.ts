@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
@@ -125,6 +126,109 @@ function isGitBlameMissingError(error: unknown): boolean {
 }
 
 const GIT_BLAME_HEADER_RE = /^([0-9a-f]{4,64})\s+\d+\s+(\d+)(?:\s+\d+)?$/u;
+
+const LS_TREE_ENTRY_RE = /^(\d{6})\s+(\S+)\s+([0-9a-fA-F]+)\t(.+)$/u;
+
+interface GitlinkEntry {
+  readonly path: string;
+  readonly commit: string;
+}
+
+export function parseLsTreeGitlinks(stdout: string): GitlinkEntry[] {
+  const entries: GitlinkEntry[] = [];
+  for (const line of stdout.split(/\r?\n/u)) {
+    const match = LS_TREE_ENTRY_RE.exec(line);
+    if (!match) {
+      continue;
+    }
+    const [, mode, , commit, entryPath] = match;
+    if (mode === "160000" && commit && entryPath) {
+      entries.push({ path: entryPath, commit });
+    }
+  }
+  return entries;
+}
+
+export function parseGitmodulesUrl(content: string, submodulePath: string): string | undefined {
+  let sectionPath: string | undefined;
+  let sectionUrl: string | undefined;
+  let matchedUrl: string | undefined;
+
+  const flush = (): void => {
+    if (sectionPath === submodulePath && sectionUrl) {
+      matchedUrl = sectionUrl;
+    }
+    sectionPath = undefined;
+    sectionUrl = undefined;
+  };
+
+  for (const line of content.split(/\r?\n/u)) {
+    if (/^\s*\[submodule\s/u.test(line)) {
+      flush();
+      continue;
+    }
+    const pair = /^\s*(path|url)\s*=\s*(\S.*?)\s*$/u.exec(line);
+    if (!pair) {
+      continue;
+    }
+    if (pair[1] === "path") {
+      sectionPath = pair[2];
+    } else {
+      sectionUrl = pair[2];
+    }
+  }
+  flush();
+  return matchedUrl;
+}
+
+export function resolveRelativeGitUrl(
+  remoteUrl: string | undefined,
+  submoduleUrl: string,
+): string {
+  if (!/^\.\.?(?:\/|$)/u.test(submoduleUrl)) {
+    return submoduleUrl;
+  }
+  if (!remoteUrl) {
+    return submoduleUrl;
+  }
+
+  const scpLike = /^([^\s/@]+@[^\s/:]+:)(.+)$/u.exec(remoteUrl);
+  if (scpLike) {
+    const segments = (scpLike[2] as string).split("/");
+    for (const part of submoduleUrl.split("/")) {
+      if (part === "..") {
+        segments.pop();
+      } else if (part !== ".") {
+        segments.push(part);
+      }
+    }
+    return `${scpLike[1] as string}${segments.join("/")}`;
+  }
+
+  try {
+    const base = remoteUrl.endsWith("/") ? remoteUrl : `${remoteUrl}/`;
+    return new URL(submoduleUrl, base).toString();
+  } catch {
+    return submoduleUrl;
+  }
+}
+
+function formatLsTreeListing(stdout: string): string[] {
+  const lines: string[] = [];
+  for (const line of stdout.split(/\r?\n/u)) {
+    const match = LS_TREE_ENTRY_RE.exec(line);
+    if (!match) {
+      continue;
+    }
+    const [, mode, type, , entryPath] = match;
+    if (!entryPath) {
+      continue;
+    }
+    const label = mode === "160000" ? "submodule" : type === "tree" ? "dir" : "file";
+    lines.push(`- ${label}: ${entryPath}`);
+  }
+  return lines;
+}
 
 export function parseGitBlamePorcelain(stdout: string): AttributionEntry[] {
   const entries: AttributionEntry[] = [];
@@ -256,6 +360,7 @@ export class GitVcsAdapter implements VcsAdapter {
   private readonly remoteUrl: string | undefined;
   private readonly token: string | undefined;
   private repositorySynced = false;
+  private readonly submoduleSyncedDirs = new Set<string>();
 
   constructor(options: GitVcsAdapterOptions) {
     this.repositoryDir = resolve(options.repositoryDir);
@@ -297,8 +402,12 @@ export class GitVcsAdapter implements VcsAdapter {
     return ["-c", `http.extraHeader=Authorization: token ${this.token}`, ...args];
   }
 
-  private async runGit(args: readonly string[]): Promise<GitCommandResult> {
+  private async runGit(
+    args: readonly string[],
+    options?: { readonly beforeAttempt?: () => Promise<void> },
+  ): Promise<GitCommandResult> {
     return withTransientIoRetry(async () => {
+      await options?.beforeAttempt?.();
       try {
         return await this.git(this.buildGitArgs(args));
       } catch (error) {
@@ -307,9 +416,9 @@ export class GitVcsAdapter implements VcsAdapter {
     });
   }
 
-  private async isGitRepository(): Promise<boolean> {
+  private async isGitRepository(dir: string = this.repositoryDir): Promise<boolean> {
     try {
-      const result = await this.runGit(["-C", this.repositoryDir, "rev-parse", "--is-inside-work-tree"]);
+      const result = await this.runGit(["-C", dir, "rev-parse", "--is-inside-work-tree"]);
       return result.stdout.trim() === "true";
     } catch {
       return false;
@@ -442,6 +551,218 @@ export class GitVcsAdapter implements VcsAdapter {
     };
   }
 
+  private async listGitlinkEntries(revision: string, path: string): Promise<GitlinkEntry[]> {
+    try {
+      const result = await this.runGit([
+        "-C",
+        this.repositoryDir,
+        "ls-tree",
+        revision,
+        "--",
+        normalizePath(path),
+      ]);
+      return parseLsTreeGitlinks(result.stdout);
+    } catch {
+      return [];
+    }
+  }
+
+  private async findGitlinkForPath(revision: string, normalizedPath: string): Promise<GitlinkEntry | undefined> {
+    const candidates = [normalizedPath];
+    let ancestor = normalizedPath;
+    while (ancestor.includes("/")) {
+      ancestor = ancestor.slice(0, ancestor.lastIndexOf("/"));
+      candidates.push(ancestor);
+    }
+
+    for (const candidate of candidates) {
+      const entries = await this.listGitlinkEntries(revision, candidate);
+      const hit = entries.find(
+        (entry) => entry.path === normalizedPath || normalizedPath.startsWith(`${entry.path}/`),
+      );
+      if (hit) {
+        return hit;
+      }
+    }
+    return undefined;
+  }
+
+  private async readSubmoduleUrl(revision: string, submodulePath: string): Promise<string | undefined> {
+    try {
+      const result = await this.runGit([
+        "-C",
+        this.repositoryDir,
+        "show",
+        `${revision}:.gitmodules`,
+      ]);
+      return parseGitmodulesUrl(result.stdout, submodulePath);
+    } catch {
+      return undefined;
+    }
+  }
+
+  private submoduleCacheDir(url: string): string {
+    const key = createHash("sha256").update(url).digest("hex").slice(0, 16);
+    return join(dirname(this.repositoryDir), ".aicr-submodules", key);
+  }
+
+  private authenticatedSubmoduleUrl(url: string): string {
+    if (!this.token) {
+      return url;
+    }
+    const parsed = parseHttpRemoteUrl(url);
+    if (!parsed) {
+      return url;
+    }
+    const remoteHost = this.remoteUrl ? parseHttpRemoteUrl(this.remoteUrl)?.host : undefined;
+    if (remoteHost && parsed.host !== remoteHost) {
+      // Never leak the superproject token to a different host.
+      return url;
+    }
+    parsed.username = "x-access-token";
+    parsed.password = this.token;
+    return parsed.toString();
+  }
+
+  private async ensureSubmoduleRepo(url: string): Promise<string> {
+    const dir = this.submoduleCacheDir(url);
+    const authUrl = this.authenticatedSubmoduleUrl(url);
+
+    if (await this.isGitRepository(dir)) {
+      if (!this.submoduleSyncedDirs.has(dir)) {
+        await this.runGit(["-C", dir, "remote", "set-url", "origin", authUrl]);
+        await this.runGit(["-C", dir, "fetch", "--prune", "origin"]);
+        this.submoduleSyncedDirs.add(dir);
+      }
+      return dir;
+    }
+
+    await mkdir(dirname(dir), { recursive: true });
+    await this.runGit(["clone", "--no-checkout", authUrl, dir], {
+      // git clone accepts an existing empty directory; remove the target so
+      // each transient-failure retry starts from a clean slate after a
+      // partial clone.
+      beforeAttempt: async () => {
+        await rm(dir, { recursive: true, force: true });
+      },
+    });
+    this.submoduleSyncedDirs.add(dir);
+    return dir;
+  }
+
+  private async ensureSubmoduleCommit(dir: string, commit: string): Promise<boolean> {
+    try {
+      await this.runGit(["-C", dir, "cat-file", "-e", `${commit}^{commit}`]);
+      return true;
+    } catch {
+      // The pinned commit may be unreachable from advertised refs (e.g. an
+      // old force-pushed branch); ask the server for it directly.
+    }
+    try {
+      await this.runGit(["-C", dir, "fetch", "--depth", "1", "origin", commit]);
+      await this.runGit(["-C", dir, "cat-file", "-e", `${commit}^{commit}`]);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private buildSubmoduleNote(
+    revision: string,
+    requestedPath: string,
+    gitlink: GitlinkEntry,
+    submoduleUrl: string | undefined,
+    detail: string,
+  ): string {
+    const lines = [
+      gitlink.path === requestedPath
+        ? `"${requestedPath}" is a git submodule (gitlink) at revision ${revision}.`
+        : `"${requestedPath}" is inside the git submodule "${gitlink.path}" at revision ${revision}.`,
+      `The submodule "${gitlink.path}" is pinned at commit ${gitlink.commit}.`,
+    ];
+    if (submoduleUrl) {
+      lines.push(`Submodule URL from .gitmodules: ${submoduleUrl}`);
+    }
+    lines.push(detail, "Do not retry aicr.fetch_more_context for this path.");
+    return `${lines.join("\n")}\n`;
+  }
+
+  private async fetchSubmoduleContext(
+    revision: string,
+    requestedPath: string,
+    gitlink: GitlinkEntry,
+  ): Promise<string> {
+    const submoduleUrl = await this.readSubmoduleUrl(revision, gitlink.path);
+    const relativePath = requestedPath === gitlink.path
+      ? ""
+      : requestedPath.slice(gitlink.path.length + 1);
+
+    if (!submoduleUrl) {
+      return this.buildSubmoduleNote(
+        revision,
+        requestedPath,
+        gitlink,
+        submoduleUrl,
+        "No submodule URL is recorded in .gitmodules at this revision, so AICR cannot fetch its contents automatically.",
+      );
+    }
+
+    const resolvedUrl = resolveRelativeGitUrl(this.remoteUrl, submoduleUrl);
+    let repoDir: string;
+    try {
+      repoDir = await this.ensureSubmoduleRepo(resolvedUrl);
+    } catch (error) {
+      return this.buildSubmoduleNote(
+        revision,
+        requestedPath,
+        gitlink,
+        submoduleUrl,
+        `Automatic fetch of the submodule repository failed after retries: ${redactGitSecrets(error instanceof Error ? error.message : String(error))}`,
+      );
+    }
+
+    if (!(await this.ensureSubmoduleCommit(repoDir, gitlink.commit))) {
+      return this.buildSubmoduleNote(
+        revision,
+        requestedPath,
+        gitlink,
+        submoduleUrl,
+        `The pinned commit is not reachable from the submodule remote; its history may have been rewritten.`,
+      );
+    }
+
+    if (relativePath === "") {
+      const listing = await this.runGit(["-C", repoDir, "ls-tree", gitlink.commit]);
+      const entries = formatLsTreeListing(listing.stdout);
+      return [
+        `"${requestedPath}" is a git submodule (gitlink) at revision ${revision}; AICR fetched the submodule repository automatically.`,
+        `The submodule "${gitlink.path}" is pinned at commit ${gitlink.commit}.`,
+        `Submodule URL from .gitmodules: ${submoduleUrl}`,
+        "Root entries at the pinned commit:",
+        ...entries,
+        `Request a specific file inside the submodule (e.g. "${gitlink.path}/<file>") through aicr.fetch_more_context to read its content at this pinned commit.`,
+      ].join("\n") + "\n";
+    }
+
+    try {
+      const result = await this.runGit([
+        "-C",
+        repoDir,
+        "show",
+        `${gitlink.commit}:${normalizePath(relativePath)}`,
+      ]);
+      return result.stdout;
+    } catch {
+      return this.buildSubmoduleNote(
+        revision,
+        requestedPath,
+        gitlink,
+        submoduleUrl,
+        `"${relativePath}" does not exist in the submodule at the pinned commit.`,
+      );
+    }
+  }
+
   async fetchExtraContext(req: ExtraContextRequest, ws: WorkspaceRef): Promise<ExtraContextResult> {
     const workspaceSourceDir = resolve(ws.sourceDir);
     const normalizedPath = normalizeChangedPath(workspaceSourceDir, req.path);
@@ -461,13 +782,27 @@ export class GitVcsAdapter implements VcsAdapter {
       if (!isFileNotFoundError(error) || !req.revision) {
         throw error;
       }
-      const result = await this.runGit([
-        "-C",
-        this.repositoryDir,
-        "show",
-        `${req.revision}:${normalizePath(normalizedPath)}`,
-      ]);
-      content = result.stdout;
+      try {
+        const result = await this.runGit([
+          "-C",
+          this.repositoryDir,
+          "show",
+          `${req.revision}:${normalizePath(normalizedPath)}`,
+        ]);
+        content = result.stdout;
+      } catch (showError) {
+        // `git show <rev>:<path>` always fails for submodule gitlinks
+        // ("fatal: bad object") because a gitlink is not a blob in the
+        // superproject. Detect the gitlink and fetch the submodule
+        // repository automatically (with transient-failure retries) so the
+        // agent gets real content instead of an opaque orchestrator warning
+        // loop ("ignored invalid fetch_more_context tool call").
+        const gitlink = await this.findGitlinkForPath(req.revision, normalizedPath);
+        if (!gitlink) {
+          throw showError;
+        }
+        content = await this.fetchSubmoduleContext(req.revision, normalizedPath, gitlink);
+      }
       await mkdir(dirname(destinationPath), { recursive: true });
       await writeFile(destinationPath, content, "utf8");
     }

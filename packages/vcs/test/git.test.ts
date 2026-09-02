@@ -5,7 +5,7 @@ import { join, resolve } from "node:path";
 import { createReviewEvent } from "@aicr/core";
 import { describe, expect, it } from "vitest";
 
-import { createGitVcsAdapter, type GitCommandRunner } from "../src/git.js";
+import { createGitVcsAdapter, resolveRelativeGitUrl, type GitCommandRunner } from "../src/git.js";
 
 describe("GitVcsAdapter", () => {
   it("rejects a non-positive deepenBy value", () => {
@@ -482,6 +482,404 @@ describe("GitVcsAdapter", () => {
       await rm(tempDir, { recursive: true, force: true });
     }
   });
+
+  it("fetches the submodule repository automatically for a gitlink path", async () => {
+    // Mirrors production: the agent asked for atframework/libatbus, which is a
+    // submodule gitlink (mode 160000) in the superproject. `git show
+    // <rev>:<path>` fails with "fatal: bad object"; AICR must clone the
+    // submodule at the pinned commit and answer with its root listing instead
+    // of letting the orchestrator log "ignored invalid fetch_more_context
+    // tool call" while the agent retries.
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-git-extra-gitlink-"));
+
+    try {
+      const sourceDir = join(tempDir, "source");
+      await mkdir(sourceDir, { recursive: true });
+      const cloneCalls: string[][] = [];
+      const git: GitCommandRunner = async (args) => {
+        const last = args.at(-1);
+        if (last === "abc123:atframework/libatbus") {
+          throw new Error("fatal: bad object abc123:atframework/libatbus");
+        }
+        if (last === "abc123:.gitmodules") {
+          return {
+            stdout: '[submodule "libatbus"]\n\tpath = atframework/libatbus\n\turl = https://github.com/atframework/libatbus.git\n',
+            stderr: "",
+          };
+        }
+        if (args.includes("ls-tree") && last === "atframework/libatbus") {
+          return {
+            stdout: "160000 commit 37852fb67088162f9d8ad49f33324af7d9bce31e\tatframework/libatbus\n",
+            stderr: "",
+          };
+        }
+        if (args.includes("rev-parse")) {
+          throw new Error("not a git repository");
+        }
+        if (args.includes("clone")) {
+          cloneCalls.push([...args]);
+          return { stdout: "", stderr: "" };
+        }
+        if (args.includes("cat-file")) {
+          return { stdout: "", stderr: "" };
+        }
+        if (args.includes("ls-tree") && last === "37852fb67088162f9d8ad49f33324af7d9bce31e") {
+          return {
+            stdout: [
+              "100644 blob aaa111\tCMakeLists.txt",
+              "040000 tree bbb222\tinclude",
+              "040000 tree ccc333\tsrc",
+            ].join("\n") + "\n",
+            stderr: "",
+          };
+        }
+        throw new Error(`unexpected git call: ${args.join(" ")}`);
+      };
+      const adapter = createGitVcsAdapter({ repositoryDir: join(tempDir, "repo"), git });
+
+      const result = await adapter.fetchExtraContext(
+        { path: "atframework/libatbus", revision: "abc123", reason: "check the submodule" },
+        { id: "ws", sourceDir },
+      );
+
+      expect(cloneCalls).toHaveLength(1);
+      expect(cloneCalls[0]).toContain("https://github.com/atframework/libatbus.git");
+      expect(result.path).toBe("atframework/libatbus");
+      expect(result.content).toContain("fetched the submodule repository automatically");
+      expect(result.content).toContain("pinned at commit 37852fb67088162f9d8ad49f33324af7d9bce31e");
+      expect(result.content).toContain("https://github.com/atframework/libatbus.git");
+      expect(result.content).toContain("- file: CMakeLists.txt");
+      expect(result.content).toContain("- dir: include");
+      await expect(
+        readFile(join(sourceDir, "atframework", "libatbus"), "utf8"),
+      ).resolves.toBe(result.content);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("reads a file inside a submodule from the auto-fetched pinned commit", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-git-extra-gitlink-inner-"));
+
+    try {
+      const sourceDir = join(tempDir, "source");
+      await mkdir(sourceDir, { recursive: true });
+      const cloneCalls: string[][] = [];
+      const git: GitCommandRunner = async (args) => {
+        const last = args.at(-1);
+        if (last === "abc123:atframework/libatbus/include/foo.h") {
+          throw new Error("fatal: bad object abc123:atframework/libatbus/include/foo.h");
+        }
+        if (last === "abc123:.gitmodules") {
+          return {
+            stdout: '[submodule "libatbus"]\n\tpath = atframework/libatbus\n\turl = ../libatbus.git\n',
+            stderr: "",
+          };
+        }
+        if (args.includes("ls-tree") && args.includes("abc123")) {
+          if (last === "atframework/libatbus") {
+            return {
+              stdout: "160000 commit deadbeefdeadbeefdeadbeefdeadbeefdeadbeef\tatframework/libatbus\n",
+              stderr: "",
+            };
+          }
+          return { stdout: "", stderr: "" };
+        }
+        if (args.includes("rev-parse")) {
+          throw new Error("not a git repository");
+        }
+        if (args.includes("clone")) {
+          cloneCalls.push([...args]);
+          return { stdout: "", stderr: "" };
+        }
+        if (args.includes("cat-file")) {
+          return { stdout: "", stderr: "" };
+        }
+        if (last === "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef:include/foo.h") {
+          return { stdout: "#pragma once\nint foo();\n", stderr: "" };
+        }
+        throw new Error(`unexpected git call: ${args.join(" ")}`);
+      };
+      const adapter = createGitVcsAdapter({
+        repositoryDir: join(tempDir, "repo"),
+        remoteUrl: "https://github.com/atframework/libatapp.git",
+        token: "secret-token",
+        git,
+      });
+
+      const result = await adapter.fetchExtraContext(
+        { path: "atframework/libatbus/include/foo.h", revision: "abc123", reason: "read a submodule header" },
+        { id: "ws", sourceDir },
+      );
+
+      expect(result.content).toBe("#pragma once\nint foo();\n");
+      await expect(
+        readFile(join(sourceDir, "atframework", "libatbus", "include", "foo.h"), "utf8"),
+      ).resolves.toBe("#pragma once\nint foo();\n");
+      // The relative .gitmodules URL resolves against the superproject remote
+      // and the same-host token is embedded for authentication.
+      expect(cloneCalls).toHaveLength(1);
+      expect(cloneCalls[0]).toContain("https://x-access-token:secret-token@github.com/atframework/libatbus.git");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not leak the superproject token to a different submodule host", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-git-extra-gitlink-host-"));
+
+    try {
+      const sourceDir = join(tempDir, "source");
+      await mkdir(sourceDir, { recursive: true });
+      const cloneCalls: string[][] = [];
+      const git: GitCommandRunner = async (args) => {
+        const last = args.at(-1);
+        if (last === "abc123:ext/lib") {
+          throw new Error("fatal: bad object abc123:ext/lib");
+        }
+        if (last === "abc123:.gitmodules") {
+          return {
+            stdout: '[submodule "lib"]\n\tpath = ext/lib\n\turl = https://other.example.com/lib.git\n',
+            stderr: "",
+          };
+        }
+        if (args.includes("ls-tree") && args.includes("abc123")) {
+          return { stdout: "160000 commit deadbeefdeadbeefdeadbeefdeadbeefdeadbeef\text/lib\n", stderr: "" };
+        }
+        if (args.includes("rev-parse")) {
+          throw new Error("not a git repository");
+        }
+        if (args.includes("clone")) {
+          cloneCalls.push([...args]);
+          return { stdout: "", stderr: "" };
+        }
+        if (args.includes("cat-file") || args.includes("ls-tree")) {
+          return { stdout: "", stderr: "" };
+        }
+        throw new Error(`unexpected git call: ${args.join(" ")}`);
+      };
+      const adapter = createGitVcsAdapter({
+        repositoryDir: join(tempDir, "repo"),
+        remoteUrl: "https://github.com/atframework/libatapp.git",
+        token: "secret-token",
+        git,
+      });
+
+      await adapter.fetchExtraContext(
+        { path: "ext/lib", revision: "abc123", reason: "check external submodule" },
+        { id: "ws", sourceDir },
+      );
+
+      expect(cloneCalls).toHaveLength(1);
+      expect(cloneCalls[0]).toContain("https://other.example.com/lib.git");
+      expect(cloneCalls[0].join(" ")).not.toContain("secret-token");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("retries the submodule clone after a transient failure", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-git-extra-gitlink-retry-"));
+
+    try {
+      const sourceDir = join(tempDir, "source");
+      await mkdir(sourceDir, { recursive: true });
+      let cloneAttempts = 0;
+      const git: GitCommandRunner = async (args) => {
+        const last = args.at(-1);
+        if (last === "abc123:ext/lib") {
+          throw new Error("fatal: bad object abc123:ext/lib");
+        }
+        if (last === "abc123:.gitmodules") {
+          return { stdout: '[submodule "lib"]\n\tpath = ext/lib\n\turl = https://github.com/o/lib.git\n', stderr: "" };
+        }
+        if (args.includes("ls-tree") && args.includes("abc123")) {
+          return { stdout: "160000 commit deadbeefdeadbeefdeadbeefdeadbeefdeadbeef\text/lib\n", stderr: "" };
+        }
+        if (args.includes("rev-parse")) {
+          throw new Error("not a git repository");
+        }
+        if (args.includes("clone")) {
+          cloneAttempts += 1;
+          if (cloneAttempts === 1) {
+            throw new Error("error: RPC failed; curl 56 GnuTLS recv error, early EOF");
+          }
+          return { stdout: "", stderr: "" };
+        }
+        if (args.includes("cat-file") || args.includes("ls-tree")) {
+          return { stdout: "", stderr: "" };
+        }
+        throw new Error(`unexpected git call: ${args.join(" ")}`);
+      };
+      const adapter = createGitVcsAdapter({ repositoryDir: join(tempDir, "repo"), git });
+
+      const result = await adapter.fetchExtraContext(
+        { path: "ext/lib", revision: "abc123", reason: "check submodule" },
+        { id: "ws", sourceDir },
+      );
+
+      expect(cloneAttempts).toBe(2);
+      expect(result.content).toContain("fetched the submodule repository automatically");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("falls back to a scrubbed note when the submodule fetch ultimately fails", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-git-extra-gitlink-fail-"));
+
+    try {
+      const sourceDir = join(tempDir, "source");
+      await mkdir(sourceDir, { recursive: true });
+      const git: GitCommandRunner = async (args) => {
+        const last = args.at(-1);
+        if (last === "abc123:ext/lib") {
+          throw new Error("fatal: bad object abc123:ext/lib");
+        }
+        if (last === "abc123:.gitmodules") {
+          return { stdout: '[submodule "lib"]\n\tpath = ext/lib\n\turl = https://github.com/o/lib.git\n', stderr: "" };
+        }
+        if (args.includes("ls-tree") && args.includes("abc123")) {
+          return { stdout: "160000 commit deadbeefdeadbeefdeadbeefdeadbeefdeadbeef\text/lib\n", stderr: "" };
+        }
+        if (args.includes("rev-parse")) {
+          throw new Error("not a git repository");
+        }
+        if (args.includes("clone")) {
+          throw new Error("fatal: unable to access 'https://x-access-token:secret-token@github.com/o/lib.git/': The requested URL returned error: 403");
+        }
+        throw new Error(`unexpected git call: ${args.join(" ")}`);
+      };
+      const adapter = createGitVcsAdapter({
+        repositoryDir: join(tempDir, "repo"),
+        remoteUrl: "https://github.com/atframework/libatapp.git",
+        token: "secret-token",
+        git,
+      });
+
+      const result = await adapter.fetchExtraContext(
+        { path: "ext/lib", revision: "abc123", reason: "check submodule" },
+        { id: "ws", sourceDir },
+      );
+
+      expect(result.content).toContain("failed after retries");
+      expect(result.content).toContain("Do not retry aicr.fetch_more_context");
+      expect(result.content).not.toContain("secret-token");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("notes when the pinned submodule commit is unreachable", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-git-extra-gitlink-nocommit-"));
+
+    try {
+      const sourceDir = join(tempDir, "source");
+      await mkdir(sourceDir, { recursive: true });
+      const git: GitCommandRunner = async (args) => {
+        const last = args.at(-1);
+        if (last === "abc123:ext/lib") {
+          throw new Error("fatal: bad object abc123:ext/lib");
+        }
+        if (last === "abc123:.gitmodules") {
+          return { stdout: '[submodule "lib"]\n\tpath = ext/lib\n\turl = https://github.com/o/lib.git\n', stderr: "" };
+        }
+        if (args.includes("ls-tree") && args.includes("abc123")) {
+          return { stdout: "160000 commit deadbeefdeadbeefdeadbeefdeadbeefdeadbeef\text/lib\n", stderr: "" };
+        }
+        if (args.includes("rev-parse")) {
+          throw new Error("not a git repository");
+        }
+        if (args.includes("clone")) {
+          return { stdout: "", stderr: "" };
+        }
+        if (args.includes("cat-file") || args.includes("fetch")) {
+          throw new Error("fatal: git upload-pack: not our ref deadbeefdeadbeefdeadbeefdeadbeefdeadbeef");
+        }
+        throw new Error(`unexpected git call: ${args.join(" ")}`);
+      };
+      const adapter = createGitVcsAdapter({ repositoryDir: join(tempDir, "repo"), git });
+
+      const result = await adapter.fetchExtraContext(
+        { path: "ext/lib", revision: "abc123", reason: "check submodule" },
+        { id: "ws", sourceDir },
+      );
+
+      expect(result.content).toContain("not reachable");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("returns a submodule note when no URL is recorded in .gitmodules", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-git-extra-gitlink-nourl-"));
+
+    try {
+      const sourceDir = join(tempDir, "source");
+      await mkdir(sourceDir, { recursive: true });
+      const git: GitCommandRunner = async (args) => {
+        const last = args.at(-1);
+        if (last === "abc123:atframework/libatbus/include/foo.h") {
+          throw new Error("fatal: bad object abc123:atframework/libatbus/include/foo.h");
+        }
+        if (last === "abc123:.gitmodules") {
+          throw new Error("fatal: path '.gitmodules' does not exist in 'abc123'");
+        }
+        if (args.includes("ls-tree")) {
+          if (last === "atframework/libatbus") {
+            return {
+              stdout: "160000 commit deadbeefdeadbeefdeadbeefdeadbeefdeadbeef\tatframework/libatbus\n",
+              stderr: "",
+            };
+          }
+          return { stdout: "", stderr: "" };
+        }
+        throw new Error(`unexpected git call: ${args.join(" ")}`);
+      };
+      const adapter = createGitVcsAdapter({ repositoryDir: join(tempDir, "repo"), git });
+
+      const result = await adapter.fetchExtraContext(
+        { path: "atframework/libatbus/include/foo.h", revision: "abc123", reason: "read a submodule header" },
+        { id: "ws", sourceDir },
+      );
+
+      expect(result.content).toContain('is inside the git submodule "atframework/libatbus"');
+      expect(result.content).toContain("pinned at commit deadbeefdeadbeefdeadbeefdeadbeefdeadbeef");
+      expect(result.content).toContain("No submodule URL is recorded");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rethrows the git show error for a path missing at the revision", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-git-extra-missing-"));
+
+    try {
+      const sourceDir = join(tempDir, "source");
+      await mkdir(sourceDir, { recursive: true });
+      const git: GitCommandRunner = async (args) => {
+        const last = args.at(-1);
+        if (last === "abc123:src/gone.ts") {
+          throw new Error("fatal: path 'src/gone.ts' does not exist in 'abc123'");
+        }
+        if (args.includes("ls-tree")) {
+          return { stdout: "", stderr: "" };
+        }
+        throw new Error(`unexpected git call: ${args.join(" ")}`);
+      };
+      const adapter = createGitVcsAdapter({ repositoryDir: join(tempDir, "repo"), git });
+
+      await expect(
+        adapter.fetchExtraContext(
+          { path: "src/gone.ts", revision: "abc123", reason: "read a removed file" },
+          { id: "ws", sourceDir },
+        ),
+      ).rejects.toThrow("does not exist in 'abc123'");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
 
   it("reads the persisted file on the second fetchExtraContext without git show", async () => {
     const tempDir = await mkdtemp(join(tmpdir(), "aicr-git-extra-persist-"));
@@ -1118,5 +1516,25 @@ describe("GitVcsAdapter.fetchAttribution", () => {
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("resolveRelativeGitUrl", () => {
+  it("passes absolute and scp-like submodule URLs through", () => {
+    expect(resolveRelativeGitUrl("https://github.com/a/b.git", "https://github.com/c/d.git")).toBe("https://github.com/c/d.git");
+    expect(resolveRelativeGitUrl("https://github.com/a/b.git", "git@github.com:c/d.git")).toBe("git@github.com:c/d.git");
+  });
+
+  it("resolves relative URLs against an http remote", () => {
+    expect(resolveRelativeGitUrl("https://github.com/atframework/libatapp.git", "../libatbus.git")).toBe("https://github.com/atframework/libatbus.git");
+    expect(resolveRelativeGitUrl("https://git.example.com/group/sub/proj.git", "../../other/x.git")).toBe("https://git.example.com/group/other/x.git");
+  });
+
+  it("resolves relative URLs against an scp-like remote", () => {
+    expect(resolveRelativeGitUrl("git@github.com:atframework/libatapp.git", "../libatbus.git")).toBe("git@github.com:atframework/libatbus.git");
+  });
+
+  it("returns the submodule URL unchanged when no remote is known", () => {
+    expect(resolveRelativeGitUrl(undefined, "../libatbus.git")).toBe("../libatbus.git");
   });
 });

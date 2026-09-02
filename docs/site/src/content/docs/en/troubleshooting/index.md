@@ -138,9 +138,16 @@ rejection is the signal to stop retrying the path.
 
 **Fix:**
 
-- git: AICR falls back to `git show <revision>:<path>`; if that still fails,
-  the path genuinely does not exist at the revision (or is a submodule
-  gitlink) and the agent should stop retrying it.
+- git: AICR falls back to `git show <revision>:<path>`. If the path is a
+  submodule gitlink (or inside one), AICR automatically clones/fetches the
+  submodule repository into a local cache (with transient-failure retries),
+  checks out nothing, and answers from the pinned commit — a root listing
+  for the gitlink path itself, or file content for paths inside it. If the
+  submodule cannot be fetched (no `.gitmodules` URL, unreachable pinned
+  commit, or fetch failure after retries), AICR returns an explanatory note
+  and the agent should stop retrying the path. If the path has no tree
+  entry at all at the revision, the request is rejected; that rejection is
+  the signal to stop retrying it.
 - P4: related files are fetched with `p4 print <path>@<revision>` inside the
   configured depot; paths outside the depot are rejected.
 - SVN: related files are fetched from `<repository_url>/<path>@<revision>`;
