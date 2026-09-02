@@ -86,7 +86,7 @@ outputs:
 
 **修复：**
 
-- git：AICR 回退到 `git show <revision>:<path>`；如果仍失败，说明该路径在该 revision 确实不存在（或是子模块 gitlink），agent 应停止重试。
+- git：AICR 回退到 `git show <revision>:<path>`。如果该路径是子模块 gitlink（或位于子模块内），AICR 会自动把子模块仓库 clone/fetch 到本地缓存（带瞬时失败重试，不做 checkout），并按 pin 的 commit 应答——gitlink 路径本身返回根目录清单，子模块内路径直接返回文件内容。如果子模块无法拉取（`.gitmodules` 无 URL、pin 的 commit 不可达、重试后仍失败），AICR 返回说明性内容，agent 应停止重试该路径。如果该路径在该 revision 的树中完全不存在，请求会被拒绝——这个拒绝就是"停止重试该路径"的信号。
 - P4：相关文件在配置的 depot 内用 `p4 print <path>@<revision>` 拉取；depot 外路径被拒绝。
 - SVN：相关文件从 `<repository_url>/<path>@<revision>` 拉取；配置 `repository_url` 之外的 URL 被拒绝。
 
