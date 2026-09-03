@@ -18,6 +18,7 @@ This directory is the repository's canonical Agent Skills surface. Agents should
 | `agent-runtime-integration` | Implementing or auditing agent CLI runtime materialization, LLM config translation, MCP tool mapping, prompt layering, or skill merging. | Ordinary review logic or output rendering changes. |
 | `ai-agent-maintenance` | Auditing, creating, or optimizing AI agent prompts, bridge files, skills, `SKILL.md` metadata, or cross-tool compatibility. | Ordinary feature edits that leave AI-facing assets unchanged. |
 | `docs-writing-style` | Writing, revising, or reviewing repository Markdown documentation where claims must match code truth and prose must follow the bilingual de-AI checklist. | Code comments, commit messages, or historical milestone archives. |
+| `modern-cli-toolkit` | Shell/terminal work (search, lookup, replace, JSON/YAML/CSV, archives, downloads, diffs, logs, benchmarks) or writing prompts/skills that recommend shell tools. | Pure code edits with no shell work. |
 | `output-channel-contracts` | Changing output channel config, no-problems behavior, templates, target links, author mentions, or dispatch contracts. | Agent runtime or VCS fetch internals. |
 | `plan-implementation-audit` | Comparing roadmap/docs with implementation, finding gaps, fixing milestone issues, or adding missing tests. | Unrelated feature work. |
 | `remote-deployment` | Deploying AICR to a remote server, syncing deployed source/config, or troubleshooting podman deployment. | Local development or CI-only changes. |

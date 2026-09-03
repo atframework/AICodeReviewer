@@ -45,10 +45,12 @@ Agent Skills 开放标准做了一轮再调研，结论已合并进下方对比�
 6. **静默优先**：如果没有明确、可执行的问题，宁可 `skip`，也不要输出“看起来不错”式噪音。
 7. **上下文最小化**：默认 prompt 只加载摘要和槽位；长篇 repo-local 文档与 skill 正文按需 recall。
 8. **shell 检查工具要与 runtime baseline 对齐**：当 runtime 明确提供
-  `rg` / `fd` / `bat` / `jq` / `yq` 时，prompt 应优先引导 agent 使用这些
-  高性能只读工具；`grep` / `find` / `cat` 保留为兼容兜底，而不是默认首选。
-  对 Kubernetes/Helm 资产，优先使用本地离线的 `helm template`、`helm lint`
-  和 `kubectl kustomize`，除非任务明确要求访问真实集群。
+   `rg` / `fd` / `bat` / `jq` / `yq` 等现代高性能工具时，prompt 应优先引导
+   agent 使用这些只读工具；完整工具清单与 agent 最佳实践见
+   `.agents/skills/modern-cli-toolkit/`。`grep` / `find` / `cat` 保留为兼容
+   兜底，而不是默认首选。
+   对 Kubernetes/Helm 资产，优先使用本地离线的 `helm template`、`helm lint`
+   和 `kubectl kustomize`，除非任务明确要求访问真实集群。
 
 ### 不应照搬的做法
 
@@ -355,7 +357,8 @@ pi（`earendil-works/pi`）与其 fork oh-my-pi（`can1357/oh-my-pi`，binary `o
 6. **不确定性显式化**：高影响但上下文不足的问题可以报，但必须说明不确定点。
 7. **默认高信号档位**：默认不展开大量 nit 与风格评论。
 8. **现代 shell 工具优先但不脱离现实**：只有当运行时明确内置
-   `rg` / `fd` / `bat` / `jq` / `yq` 以及本地 `helm` / `kubectl` 检查时才
+   `rg` / `fd` / `bat` / `jq` / `yq` 等现代工具（完整清单见
+   `.agents/skills/modern-cli-toolkit/`）以及本地 `helm` / `kubectl` 检查时才
    把它们写成默认首选，并保留 `grep` / `find` / `cat` 作为可移植 fallback。
 9. **主动上下文获取优先于猜测**：在报告任何问题前，必须先读取完整变更文件、
    相关接口/类型定义、调用方/被调用方、配置和 schema，确保每个结论都基于

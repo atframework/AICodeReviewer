@@ -729,11 +729,11 @@ describe("mergeConfigLayers", () => {
     expect(result.success).toBe(false);
   });
 
-  it("accepts LLM fallback chain entries with valid roles", () => {
+  it("accepts LLM model chain entries with valid roles", () => {
     const result = appConfigSchema.safeParse({
       llm: {
         providers: [{ id: "openai-prod", kind: "openai_compatible" }],
-        fallback_chain: [
+        model_chain: [
           { provider: "openai-prod", model: "gpt-4o-mini", role: "light" },
           { provider: "openai-prod", model: "gpt-4o", role: "heavy" },
           { provider: "ollama-local", model: "qwen2.5:14b", role: "any" },
@@ -744,11 +744,11 @@ describe("mergeConfigLayers", () => {
     expect(result.success).toBe(true);
   });
 
-  it("rejects LLM fallback chain entries with invalid roles", () => {
+  it("rejects LLM model chain entries with invalid roles", () => {
     const result = appConfigSchema.safeParse({
       llm: {
         providers: [{ id: "openai-prod", kind: "openai_compatible" }],
-        fallback_chain: [
+        model_chain: [
           { provider: "openai-prod", model: "gpt-4o", role: "super" },
         ],
       },
@@ -757,11 +757,27 @@ describe("mergeConfigLayers", () => {
     expect(result.success).toBe(false);
   });
 
-  it("accepts a dedicated triage fallback chain and leaves it undefined when absent", () => {
-    const withChain = appConfigSchema.safeParse({
+  it("rejects legacy fallback_chain keys renamed to model_chain", () => {
+    const legacyPrimary = appConfigSchema.safeParse({
       llm: {
         providers: [{ id: "openai-prod", kind: "openai_compatible" }],
         fallback_chain: [
+          { provider: "openai-prod", model: "gpt-4o", role: "heavy" },
+        ],
+      },
+    });
+
+    expect(legacyPrimary.success).toBe(false);
+    if (!legacyPrimary.success) {
+      expect(legacyPrimary.error.issues[0]?.message).toContain(
+        "llm.fallback_chain was renamed to llm.model_chain",
+      );
+    }
+
+    const legacyTriage = appConfigSchema.safeParse({
+      llm: {
+        providers: [{ id: "openai-prod", kind: "openai_compatible" }],
+        model_chain: [
           { provider: "openai-prod", model: "gpt-4o", role: "heavy" },
         ],
         triage_fallback_chain: [
@@ -770,9 +786,30 @@ describe("mergeConfigLayers", () => {
       },
     });
 
+    expect(legacyTriage.success).toBe(false);
+    if (!legacyTriage.success) {
+      expect(legacyTriage.error.issues[0]?.message).toContain(
+        "llm.triage_fallback_chain was renamed to llm.triage_model_chain",
+      );
+    }
+  });
+
+  it("accepts a dedicated triage model chain and leaves it undefined when absent", () => {
+    const withChain = appConfigSchema.safeParse({
+      llm: {
+        providers: [{ id: "openai-prod", kind: "openai_compatible" }],
+        model_chain: [
+          { provider: "openai-prod", model: "gpt-4o", role: "heavy" },
+        ],
+        triage_model_chain: [
+          { provider: "openai-prod", model: "gpt-4o-mini", role: "light" },
+        ],
+      },
+    });
+
     expect(withChain.success).toBe(true);
     if (withChain.success) {
-      expect(withChain.data.llm.triage_fallback_chain).toEqual([
+      expect(withChain.data.llm.triage_model_chain).toEqual([
         { provider: "openai-prod", model: "gpt-4o-mini", role: "light" },
       ]);
     }
@@ -780,7 +817,7 @@ describe("mergeConfigLayers", () => {
     const withoutChain = appConfigSchema.safeParse({
       llm: {
         providers: [{ id: "openai-prod", kind: "openai_compatible" }],
-        fallback_chain: [
+        model_chain: [
           { provider: "openai-prod", model: "gpt-4o", role: "heavy" },
         ],
       },
@@ -788,15 +825,15 @@ describe("mergeConfigLayers", () => {
 
     expect(withoutChain.success).toBe(true);
     if (withoutChain.success) {
-      expect(withoutChain.data.llm.triage_fallback_chain).toBeUndefined();
+      expect(withoutChain.data.llm.triage_model_chain).toBeUndefined();
     }
   });
 
-  it("rejects triage fallback chain entries with invalid roles", () => {
+  it("rejects triage model chain entries with invalid roles", () => {
     const result = appConfigSchema.safeParse({
       llm: {
         providers: [{ id: "openai-prod", kind: "openai_compatible" }],
-        triage_fallback_chain: [
+        triage_model_chain: [
           { provider: "openai-prod", model: "gpt-4o-mini", role: "super" },
         ],
       },

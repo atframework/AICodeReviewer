@@ -57,12 +57,13 @@ plain `docker run`, point your own probe at `http://localhost:8080/healthz`.
 
 ## Runtime image baseline
 
-The image intentionally uses `ubuntu:24.04` as the distro base and copies the
-Node 22 userspace from the official `node:22-bookworm-slim` image. This keeps
-Node on an official LTS userspace while letting AICR install the **official
-Perforce Ubuntu APT package (`p4-cli`)**. The Perforce package needs glibc and
-the Ubuntu package layout — building the whole base on the slim Node image would
-not give you that.
+The image intentionally uses `debian:trixie-slim` as the distro base and copies
+the Node LTS userspace from the official `node:lts-trixie-slim` image (currently
+Node 24), so the build and runtime stages share one Debian trixie baseline. AICR
+still installs the **official Perforce APT package (`p4-cli`)**: Perforce only
+publishes Ubuntu codename repos (newest verified: noble), and that build runs
+unchanged on trixie's newer glibc. The Perforce package needs glibc and the
+Debian-family package layout — an Alpine-style base would not give you that.
 
 ### Tool list
 
@@ -71,7 +72,12 @@ The runtime tool baseline, grouped by job:
 | Group | Tools |
 | --- | --- |
 | VCS | `git`, `git-lfs`, `subversion`, `p4` |
-| Search & inspection | `rg`, `fd`, `bat`, `jq`, `tree`, `universal-ctags` |
+| Search & inspection | `rg`, `fd`, `bat`, `eza`, `jq`, `tree`, `erd`, `dust`, `duf`, `hexyl`, `universal-ctags` |
+| Text & structured data | `sd`, `ugrep`, Mike Farah `yq`, `jaq`, `miller` |
+| Diff & logs | `delta`, `difft`, `lnav`, `tspin` |
+| Download & network | `aria2`, `xh`, `doggo` |
+| Process, watch & benchmark | `procs`, `watchexec`, `hyperfine`, `fzf` |
+| Compression & archives | `pigz`, `zstd`, `ouch` |
 | Kubernetes & YAML | `kubectl`, `helm`, Mike Farah `yq`; use `kubectl kustomize` for Kustomize overlays when a standalone `kustomize` binary is not required |
 | Container clients | `podman`, `buildah`, `skopeo`, plus an optional Docker static CLI for Docker-compatible socket workflows |
 | Build & static analysis | `build-essential`, `cmake`, `ninja`, `pkg-config`, `clang`, `clang-format`, `clang-tidy`, `cppcheck` |
@@ -80,8 +86,19 @@ The runtime tool baseline, grouped by job:
 | Data & sync | `sqlite3`, `rsync`, `xxd`, `bsdextrautils` |
 | Patch & archive | `diffutils`, `patch`, `unzip`, `zip`, `xz`, `tar`, `gzip`, `bzip2`, `zstd`, `lz4` |
 
-On Debian/Ubuntu the distro packages expose `fdfind` and `batcat`. The image
-adds compatibility symlinks (`fd`, `bat`) so agent prompts can consistently refer
+Most modern CLI tools come straight from the Debian trixie apt repositories.
+Tools that trixie does not package (`doggo`, `jaq`, `difftastic`, `ouch`,
+`watchexec`, `erdtree` → `erd`) or packages only in older versions (`dust`,
+`xh`, `procs`, `tailspin` → `tspin`) are installed as pinned upstream GitHub
+release static binaries on `amd64`/`arm64`; other architectures skip that
+layer. `tokei`, `qsv`, and `plocate` are deliberately excluded: tokei has no
+upstream binaries since v13 and the trixie package is stuck at the 2023
+release 12.1.2, qsv's static binary is too heavy (~100 MB) next to the already
+included `miller`, and plocate needs an `updatedb` index that containers never
+build.
+
+The Debian packages expose `fdfind` and `batcat`. The image adds
+compatibility symlinks (`fd`, `bat`) so agent prompts can consistently refer
 to those names. The container also ships `p4` directly, so deployment no longer
 depends on bind-mounting a host-side Perforce binary.
 
@@ -93,10 +110,10 @@ a different version.
 
 | Build arg | Default | Purpose |
 | --- | --- | --- |
-| `BASE_IMAGE` | `ubuntu:24.04` | Distro base for build and runtime stages |
-| `NODE_IMAGE` | `node:22-bookworm-slim` | Official Node 22 image used as the Node userspace source. Omit/leave default when the host already rewrites registry pulls through a global mirror |
-| `APT_MIRROR` | *(empty)* | Ubuntu apt mirror root, e.g. `http://mirrors.ustc.edu.cn/ubuntu` |
-| `PERFORCE_APT_DISTRO` | `noble` | Ubuntu codename for the Perforce APT repo |
+| `BASE_IMAGE` | `debian:trixie-slim` | Distro base for build and runtime stages |
+| `NODE_IMAGE` | `node:lts-trixie-slim` | Official Node LTS image used as the Node userspace source (currently Node 24). Omit/leave default when the host already rewrites registry pulls through a global mirror |
+| `APT_MIRROR` | *(empty)* | Debian apt main archive root, e.g. `http://mirrors.ustc.edu.cn/debian`; security entries are derived by appending `-security` |
+| `PERFORCE_APT_DISTRO` | `noble` | Ubuntu codename for the Perforce APT repo (Perforce only publishes Ubuntu dists; the noble build runs on trixie) |
 | `NPM_REGISTRY` | `https://registry.npmjs.org` | npm/pnpm registry |
 | `NPM_STRICT_SSL` | `true` | Set to `false` when using an HTTP mirror |
 | `PIP_INDEX_URL` | `https://pypi.org/simple` | pip simple index URL |
@@ -106,6 +123,7 @@ a different version.
 | `HELM_APT_KEY_URL` | `https://packages.buildkite.com/helm-linux/helm-debian/gpgkey` | Helm repo signing key |
 | `YQ_VERSION` | `v4.53.2` | Mike Farah `yq` release version |
 | `YQ_DOWNLOAD_BASE` | `https://github.com/mikefarah/yq/releases/download` | `yq` release download base |
+| `GH_RELEASE_PREFIX` | *(empty)* | Optional URL prefix applied to the GitHub release downloads of the pinned static CLI tools (dust, xh, doggo, jaq, difftastic, ouch, procs, watchexec, tailspin, erdtree). Set a ghproxy-style prefix or internal cache root when github.com is unreachable |
 
 The following is a `deploy.sh` environment variable (not a Dockerfile `ARG`),
 used only when the nested container sandbox downloads the optional Docker
@@ -120,20 +138,23 @@ static CLI:
 New setups should use `APT_MIRROR`.
 :::
 
-### USTC mirror notes (arm64 vs amd64)
+### USTC mirror notes
 
-USTC mirror docs recommend `http://mirrors.ustc.edu.cn/ubuntu` for `amd64`/`i386`,
-while `arm64`/`armhf`/`ppc64el`/`s390x` should use
-`http://mirrors.ustc.edu.cn/ubuntu-ports`. `deploy/Dockerfile` rewrites **both**
-the standard Ubuntu `archive`/`security` entries **and** the `ports.ubuntu.com`
-variants before the first `apt-get update`, so a single HTTP mirror value works
-for both architectures without a pre-bootstrap CA fetch.
+`APT_MIRROR` points at the Debian main archive root (for example
+`http://mirrors.ustc.edu.cn/debian`); `deploy/Dockerfile` derives the security
+entries by appending `-security` (`http://mirrors.ustc.edu.cn/debian-security`)
+and rewrites **both** the deb822 `debian.sources` format **and** a legacy
+`sources.list` before the first `apt-get update`, so a single HTTP mirror value
+works without a pre-bootstrap CA fetch. All Debian release architectures share
+one archive root — there is no `ubuntu-ports`-style split.
 
 For Tencent mirrors, the Kubernetes path is `kubernetes_new` (set via
-`KUBERNETES_APT_REPO_BASE`). No dedicated `mirrors.tencent.com/helm/` or
-`mirrors.tencent.com/yq/` endpoint is verified — for fully internal builds,
-point the Helm/yq args at an internal cache that preserves the same repository
-layout.
+`KUBERNETES_APT_REPO_BASE`). No dedicated `mirrors.tencent.com/helm/`,
+`mirrors.tencent.com/yq/`, or GitHub release endpoint is verified — for fully
+internal builds, point the Helm/yq args at an internal cache that preserves the
+same repository layout, and set `GH_RELEASE_PREFIX` to a mirror prefix (or rely
+on the `deploy.sh` build-proxy autodetect) for the pinned static CLI tools
+fetched from GitHub releases.
 
 ## Extra CAs for corporate proxies
 

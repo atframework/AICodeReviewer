@@ -48,7 +48,7 @@ Narrative: [LLM providers and models](/en/configuration/llm/).
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
 | `llm.providers[]` | array | `[]` | LLM provider connections; each has `id`, `kind`, and optional `base_url`, `api_key_env`, `api_version`, `catalog_provider`, `catalog_id` |
-| `llm.providers[].id` | string | — | Provider identifier referenced from `fallback_chain` |
+| `llm.providers[].id` | string | — | Provider identifier referenced from `model_chain` |
 | `llm.providers[].kind` | enum | — | Provider kind (see LLM provider enum above) |
 | `llm.providers[].base_url` | URL | — | Provider API base URL |
 | `llm.providers[].api_key_env` | string | — | Env var name holding the API key |
@@ -58,8 +58,8 @@ Narrative: [LLM providers and models](/en/configuration/llm/).
 | `llm.providers[].reasoning_effort` | enum | — | Reasoning effort tier: `minimal`, `low`, `medium`, `high`, `max` (passthrough) |
 | `llm.providers[].thinking_level` | enum | — | Coarser thinking tier: `off`, `minimal`, `low`, `medium`, `high`, `max` (passthrough) |
 | `llm.providers[].thinking_budget_tokens` | int | — | Explicit thinking budget in tokens (passthrough) |
-| `llm.fallback_chain[]` | array | `[]` | Ordered provider/model entries tried on failure; each has `provider`, `model`, `role` (`light`/`heavy`/`any`) |
-| `llm.triage_fallback_chain[]` | array | inherit | Optional chain for Git-service issue triage and resolved-problem verification; first entry is the default. Absent or empty inherits `llm.fallback_chain` |
+| `llm.model_chain[]` | array | `[]` | Ordered provider/model entries; the first is the default route, later entries are tried on failure. Each has `provider`, `model`, `role` (`light`/`heavy`/`any`) |
+| `llm.triage_model_chain[]` | array | inherit | Optional chain for Git-service issue triage and resolved-problem verification; first entry is the default. Absent or empty inherits `llm.model_chain` |
 | `llm.retry` | object | — | Per-call retry policy |
 | `llm.retry.max_attempts` | int > 0 | — | Max attempts per LLM call |
 | `llm.retry.respect_retry_after` | boolean | — | Honor `Retry-After` headers |

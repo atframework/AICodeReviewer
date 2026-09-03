@@ -53,10 +53,11 @@ docker run -d \
 
 ## 运行时镜像基线
 
-镜像有意采用 `ubuntu:24.04` 作为发行版基线，并从官方 `node:22-bookworm-slim` 镜像拷贝 Node 22
-用户态。这样既让 Node 保持在官方 LTS 用户态上，又能让 AICR 安装**官方 Perforce Ubuntu APT 包
-（`p4-cli`）**。Perforce 包需要 glibc 和 Ubuntu 的包布局 — 如果把整个基线都构建在精简的 Node
-镜像上，是拿不到这些的。
+镜像有意采用 `debian:trixie-slim` 作为发行版基线，并从官方 `node:lts-trixie-slim` 镜像拷贝
+Node LTS 用户态（当前为 Node 24），构建与运行两个阶段共享同一 Debian trixie 基线。AICR 仍安装
+**官方 Perforce APT 包（`p4-cli`）**：Perforce 只发布 Ubuntu 代号仓库（已验证最新为 noble），
+该构建可直接运行在 trixie 更新版 glibc 上。Perforce 包需要 glibc 和 Debian 系的包布局 —
+Alpine 风格的基线满足不了这一点。
 
 ### 工具列表
 
@@ -65,7 +66,12 @@ docker run -d \
 | 分组 | 工具 |
 | --- | --- |
 | 版本控制 | `git`、`git-lfs`、`subversion`、`p4` |
-| 搜索与检视 | `rg`、`fd`、`bat`、`jq`、`tree`、`universal-ctags` |
+| 搜索与检视 | `rg`、`fd`、`bat`、`eza`、`jq`、`tree`、`erd`、`dust`、`duf`、`hexyl`、`universal-ctags` |
+| 文本与结构化数据 | `sd`、`ugrep`、Mike Farah `yq`、`jaq`、`miller` |
+| diff 与日志 | `delta`、`difft`、`lnav`、`tspin` |
+| 下载与网络 | `aria2`、`xh`、`doggo` |
+| 进程、监听与基准 | `procs`、`watchexec`、`hyperfine`、`fzf` |
+| 压缩与归档 | `pigz`、`zstd`、`ouch` |
 | Kubernetes 与 YAML | `kubectl`、`helm`、Mike Farah `yq`；当不需要独立的 `kustomize` 二进制时，使用 `kubectl kustomize` 处理 Kustomize overlays |
 | 容器客户端 | `podman`、`buildah`、`skopeo`，外加一个可选的 Docker 静态 CLI，用于 Docker 兼容 socket 工作流 |
 | 构建与静态分析 | `build-essential`、`cmake`、`ninja`、`pkg-config`、`clang`、`clang-format`、`clang-tidy`、`cppcheck` |
@@ -74,7 +80,15 @@ docker run -d \
 | 数据与同步 | `sqlite3`、`rsync`、`xxd`、`bsdextrautils` |
 | 补丁与归档 | `diffutils`、`patch`、`unzip`、`zip`、`xz`、`tar`、`gzip`、`bzip2`、`zstd`、`lz4` |
 
-在 Debian/Ubuntu 上，发行版包提供的是 `fdfind` 和 `batcat`。镜像添加了兼容性符号链接
+大多数现代 CLI 工具直接来自 Debian trixie apt 仓库。trixie 未收录的工具
+（`doggo`、`jaq`、`difftastic`、`ouch`、`watchexec`、`erdtree` → `erd`）以及 trixie
+只有旧版的工具（`dust`、`xh`、`procs`、`tailspin` → `tspin`）在 `amd64`/`arm64` 上以
+固定版本从上游 GitHub Releases 静态二进制安装；其他架构跳过该层。`tokei`、`qsv`、
+`plocate` 有意排除：tokei 自 v13 起上游不再发布二进制，且 trixie 包停留在 2023 年的
+12.1.2；qsv 静态二进制约 100 MB，对已内置的 `miller` 来说过重；plocate 需要容器内
+永远不会构建的 `updatedb` 索引。
+
+Debian 包提供的是 `fdfind` 和 `batcat`。镜像添加了兼容性符号链接
 （`fd`、`bat`），这样 agent 的提示词就能一致地引用这些名字。容器还直接内置了 `p4`，因此部署
 不再依赖 bind-mount 宿主侧的 Perforce 二进制。
 
@@ -85,10 +99,10 @@ docker run -d \
 
 | 构建参数 | 默认值 | 用途 |
 | --- | --- | --- |
-| `BASE_IMAGE` | `ubuntu:24.04` | 构建与运行时阶段的发行版基线 |
-| `NODE_IMAGE` | `node:22-bookworm-slim` | 作为 Node 用户态来源的官方 Node 22 镜像。当宿主已经通过全局镜像源重写 registry 拉取时，可省略/保持默认 |
-| `APT_MIRROR` | *(空)* | Ubuntu apt 镜像根，例如 `http://mirrors.ustc.edu.cn/ubuntu` |
-| `PERFORCE_APT_DISTRO` | `noble` | Perforce APT 仓库对应的 Ubuntu 代号 |
+| `BASE_IMAGE` | `debian:trixie-slim` | 构建与运行时阶段的发行版基线 |
+| `NODE_IMAGE` | `node:lts-trixie-slim` | 作为 Node 用户态来源的官方 Node LTS 镜像（当前为 Node 24）。当宿主已经通过全局镜像源重写 registry 拉取时，可省略/保持默认 |
+| `APT_MIRROR` | *(空)* | Debian apt 主档案镜像根，例如 `http://mirrors.ustc.edu.cn/debian`；security 条目自动追加 `-security` 后缀 |
+| `PERFORCE_APT_DISTRO` | `noble` | Perforce APT 仓库的 Ubuntu 代号（Perforce 只发布 Ubuntu 源，noble 构建可在 trixie 上运行） |
 | `NPM_REGISTRY` | `https://registry.npmjs.org` | npm/pnpm registry |
 | `NPM_STRICT_SSL` | `true` | 使用 HTTP 镜像时设为 `false` |
 | `PIP_INDEX_URL` | `https://pypi.org/simple` | pip simple index URL |
@@ -98,6 +112,7 @@ docker run -d \
 | `HELM_APT_KEY_URL` | `https://packages.buildkite.com/helm-linux/helm-debian/gpgkey` | Helm 仓库签名密钥 |
 | `YQ_VERSION` | `v4.53.2` | Mike Farah `yq` 发布版本 |
 | `YQ_DOWNLOAD_BASE` | `https://github.com/mikefarah/yq/releases/download` | `yq` release 下载基址 |
+| `GH_RELEASE_PREFIX` | *(空)* | 作用于固定版本静态 CLI 工具（dust、xh、doggo、jaq、difftastic、ouch、procs、watchexec、tailspin、erdtree）GitHub release 下载的 URL 前缀；github.com 不可达时设置为 ghproxy 风格前缀或内部缓存根 |
 
 以下是 `deploy.sh` 的环境变量（不是 Dockerfile `ARG`），仅在嵌套容器沙箱下载可选 Docker 静态 CLI 时使用：
 
@@ -109,17 +124,20 @@ docker run -d \
 `APK_MIRROR` 仍被接受，作为 `APT_MIRROR` 的向后兼容别名。新部署应使用 `APT_MIRROR`。
 :::
 
-### USTC 镜像说明（arm64 与 amd64）
+### USTC 镜像说明
 
-USTC 镜像文档建议：`amd64`/`i386` 使用 `http://mirrors.ustc.edu.cn/ubuntu`，而
-`arm64`/`armhf`/`ppc64el`/`s390x` 应使用 `http://mirrors.ustc.edu.cn/ubuntu-ports`。
-`deploy/Dockerfile` 在第一次 `apt-get update` **之前**会同时重写标准的 Ubuntu
-`archive`/`security` 条目**以及** `ports.ubuntu.com` 变体，因此一个 HTTP 镜像值即可同时
-适用于两种架构，无需提前引导 CA。
+`APT_MIRROR` 指向 Debian 主档案根（例如 `http://mirrors.ustc.edu.cn/debian`）；
+`deploy/Dockerfile` 会把 security 条目派生为同一镜像根加 `-security` 后缀
+（`http://mirrors.ustc.edu.cn/debian-security`），并在第一次 `apt-get update` **之前**
+同时重写 deb822 格式的 `debian.sources` **和**旧式 `sources.list`，因此一个 HTTP 镜像值
+即可工作，无需提前引导 CA。Debian 所有 release 架构共用一个档案根 — 没有 Ubuntu
+`ubuntu-ports` 那样的架构分流。
 
 对于腾讯云镜像，Kubernetes 路径为 `kubernetes_new`（通过 `KUBERNETES_APT_REPO_BASE` 设置）。
-未验证有专门的 `mirrors.tencent.com/helm/` 或 `mirrors.tencent.com/yq/` 端点 — 如果要完全在内网构建，
-请把 Helm/yq 参数指向一个保留相同仓库布局的内部缓存。
+未验证有专门的 `mirrors.tencent.com/helm/`、`mirrors.tencent.com/yq/` 或 GitHub release 端点 —
+如果要完全在内网构建，请把 Helm/yq 参数指向一个保留相同仓库布局的内部缓存，并设置
+`GH_RELEASE_PREFIX` 为镜像前缀（或依赖 `deploy.sh` 的构建期代理自动探测）来覆盖从 GitHub
+Releases 下载的固定版本静态 CLI 工具。
 
 ## 企业代理的额外 CA
 

@@ -202,8 +202,8 @@ const PASSTHROUGH_DOCUMENTED_FIELDS = new Set([
 // every leaf. Keeping the list explicit prevents a generic object row such as
 // `llm.retry` from silently hiding a newly added child field.
 const DOCUMENTED_SUBTREE_SUMMARIES = new Set([
-  "llm.fallback_chain[]",
-  "llm.triage_fallback_chain[]",
+  "llm.model_chain[]",
+  "llm.triage_model_chain[]",
   "llm.retry.backoff",
   "llm.per_provider_overrides",
   "llm.model_catalog.overrides",

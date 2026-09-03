@@ -2,7 +2,13 @@ packages:
   - "packages/*"
   - "docs/site"
 overrides:
-  better-sqlite3: 12.11.1
+  # better-sqlite3 13.x bundles N-API prebuilds (prebuilds/<platform>.node) and
+  # needs no compile step; 12.x required prebuild-install downloads that break
+  # behind restricted egress. Pin cross-package so manifests stay in sync.
+  better-sqlite3: 13.0.3
 onlyBuiltDependencies:
-  - better-sqlite3
   - sharp
+ignoredBuiltDependencies:
+  # pnpm auto-runs `node-gyp rebuild` for packages shipping binding.gyp;
+  # skip it for better-sqlite3 — runtime loads the bundled prebuild instead.
+  - better-sqlite3

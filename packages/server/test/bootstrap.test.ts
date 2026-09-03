@@ -110,7 +110,7 @@ function makeConfig(overrides: Partial<AppConfig> = {}): AppConfig {
           api_key_env: "OPENAI_API_KEY",
         },
       ],
-      fallback_chain: [
+      model_chain: [
         { provider: "openai-prod", model: "gpt-4o", role: "heavy" },
       ],
       model_catalog: {
@@ -284,14 +284,14 @@ describe("resolveModelSpecFromConfig", () => {
     expect(model.apiKeyEnv).toBe("OPENAI_API_KEY");
   });
 
-  it("uses the first fallback_chain entry as the default model route", () => {
+  it("uses the first model_chain entry as the default model route", () => {
     const config = makeConfig({
       llm: {
         providers: [
           { id: "ollama-local", kind: "ollama", base_url: "http://localhost:11434/v1" },
           { id: "openai-prod", kind: "openai_compatible", base_url: "https://api.openai.com/v1" },
         ],
-        fallback_chain: [{ provider: "openai-prod", model: "gpt-4o", role: "heavy" }],
+        model_chain: [{ provider: "openai-prod", model: "gpt-4o", role: "heavy" }],
       },
     } as Partial<AppConfig>);
 
@@ -302,11 +302,11 @@ describe("resolveModelSpecFromConfig", () => {
     expect(model.baseUrl).toBe("https://api.openai.com/v1");
   });
 
-  it("throws when the first fallback_chain provider is not configured", () => {
+  it("throws when the first model_chain provider is not configured", () => {
     const config = makeConfig({
       llm: {
         providers: [{ id: "openai-prod", kind: "openai_compatible" }],
-        fallback_chain: [{ provider: "missing-provider", model: "gpt-4o", role: "heavy" }],
+        model_chain: [{ provider: "missing-provider", model: "gpt-4o", role: "heavy" }],
       },
     } as Partial<AppConfig>);
 
@@ -317,7 +317,7 @@ describe("resolveModelSpecFromConfig", () => {
     const config = makeConfig({
       llm: {
         providers: [{ id: "p1", kind: "ollama" }],
-        fallback_chain: [],
+        model_chain: [],
       },
     } as Partial<AppConfig>);
     const model = resolveModelSpecFromConfig(config);
@@ -327,7 +327,7 @@ describe("resolveModelSpecFromConfig", () => {
 
   it("throws when no providers are configured", () => {
     const config = makeConfig({
-      llm: { providers: [], fallback_chain: [] },
+      llm: { providers: [], model_chain: [] },
     } as Partial<AppConfig>);
 
     expect(() => resolveModelSpecFromConfig(config)).toThrow("No LLM providers configured");
@@ -346,7 +346,7 @@ describe("resolveModelSpecFromConfig", () => {
           { id: "p1", kind: "openai_compatible" },
           { id: "p2", kind: "ollama", base_url: "http://localhost:11434/v1" },
         ],
-        fallback_chain: [{ provider: "p2", model: "llama3", role: "any" }],
+        model_chain: [{ provider: "p2", model: "llama3", role: "any" }],
       },
     } as Partial<AppConfig>);
     const model = resolveModelSpecFromConfig(config, "p2");
@@ -390,7 +390,7 @@ describe("resolveModelSpecFromConfig", () => {
             model_links: { docs: "https://example.com/model" },
           },
         ],
-        fallback_chain: [{ provider: "azure-prod", model: "deployment-a", role: "heavy" }],
+        model_chain: [{ provider: "azure-prod", model: "deployment-a", role: "heavy" }],
       },
     } as Partial<AppConfig>);
 
@@ -439,7 +439,7 @@ describe("resolveModelSpecFromConfig", () => {
             default_reasoning_effort: "max",
           },
         ],
-        fallback_chain: [{ provider: "zhipu", model: "glm-5.2", role: "heavy" }],
+        model_chain: [{ provider: "zhipu", model: "glm-5.2", role: "heavy" }],
       },
     } as Partial<AppConfig>);
 
@@ -466,8 +466,8 @@ describe("resolveIssueTriageModelSpecFromConfig", () => {
         providers: [
           { id: "openai-prod", kind: "openai_compatible", base_url: "https://api.openai.com/v1" },
         ],
-        fallback_chain: [{ provider: "openai-prod", model: "gpt-4o", role: "heavy" }],
-        triage_fallback_chain: [],
+        model_chain: [{ provider: "openai-prod", model: "gpt-4o", role: "heavy" }],
+        triage_model_chain: [],
       },
     } as Partial<AppConfig>);
     const model = resolveIssueTriageModelSpecFromConfig(config);
@@ -476,15 +476,15 @@ describe("resolveIssueTriageModelSpecFromConfig", () => {
     expect(model.modelId).toBe("gpt-4o");
   });
 
-  it("uses the first triage_fallback_chain entry as the triage model route", () => {
+  it("uses the first triage_model_chain entry as the triage model route", () => {
     const config = makeConfig({
       llm: {
         providers: [
           { id: "openai-prod", kind: "openai_compatible", base_url: "https://api.openai.com/v1" },
           { id: "ollama-local", kind: "ollama", base_url: "http://localhost:11434/v1" },
         ],
-        fallback_chain: [{ provider: "openai-prod", model: "gpt-4o", role: "heavy" }],
-        triage_fallback_chain: [
+        model_chain: [{ provider: "openai-prod", model: "gpt-4o", role: "heavy" }],
+        triage_model_chain: [
           { provider: "ollama-local", model: "qwen2.5:14b", role: "light" },
           { provider: "openai-prod", model: "gpt-4o-mini", role: "any" },
         ],
@@ -497,12 +497,12 @@ describe("resolveIssueTriageModelSpecFromConfig", () => {
     expect(model.baseUrl).toBe("http://localhost:11434/v1");
   });
 
-  it("throws when the first triage_fallback_chain provider is not configured", () => {
+  it("throws when the first triage_model_chain provider is not configured", () => {
     const config = makeConfig({
       llm: {
         providers: [{ id: "openai-prod", kind: "openai_compatible" }],
-        fallback_chain: [{ provider: "openai-prod", model: "gpt-4o", role: "heavy" }],
-        triage_fallback_chain: [
+        model_chain: [{ provider: "openai-prod", model: "gpt-4o", role: "heavy" }],
+        triage_model_chain: [
           { provider: "missing-provider", model: "gpt-4o-mini", role: "light" },
         ],
       },
@@ -3126,8 +3126,8 @@ describe("bootstrapServerApp", () => {
               api_key_env: "OPENAI_API_KEY",
             },
           ],
-          fallback_chain: [{ provider: "openai-prod", model: "gpt-4o", role: "heavy" }],
-          triage_fallback_chain: [
+          model_chain: [{ provider: "openai-prod", model: "gpt-4o", role: "heavy" }],
+          triage_model_chain: [
             { provider: "openai-prod", model: "gpt-4o-mini", role: "light" },
           ],
         },
@@ -3664,7 +3664,7 @@ describe("resolveP4TriggerConfig", () => {
           providers: [
             { id: "openai-prod", kind: "openai_compatible", base_url: "https://api.openai.com/v1", api_key_env: "OPENAI_API_KEY", catalog_provider: "openai" },
           ],
-          fallback_chain: [{ provider: "openai-prod", model: "gpt-4o", role: "heavy" }],
+          model_chain: [{ provider: "openai-prod", model: "gpt-4o", role: "heavy" }],
           model_catalog: {
             enabled: true,
             source_url: "https://models.dev/api.json",
@@ -3704,7 +3704,7 @@ describe("resolveP4TriggerConfig", () => {
           providers: [
             { id: "openai-prod", kind: "openai_compatible", base_url: "https://api.openai.com/v1", api_key_env: "OPENAI_API_KEY" },
           ],
-          fallback_chain: [{ provider: "openai-prod", model: "gpt-4o", role: "heavy" }],
+          model_chain: [{ provider: "openai-prod", model: "gpt-4o", role: "heavy" }],
           model_catalog: {
             enabled: true,
             source_url: "https://models.dev/api.json",
@@ -3747,7 +3747,7 @@ describe("resolveP4TriggerConfig", () => {
           providers: [
             { id: "openai-prod", kind: "openai_compatible", base_url: "https://api.openai.com/v1", api_key_env: "OPENAI_API_KEY" },
           ],
-          fallback_chain: [{ provider: "openai-prod", model: "gpt-4o-mini", role: "heavy" }],
+          model_chain: [{ provider: "openai-prod", model: "gpt-4o-mini", role: "heavy" }],
           model_catalog: {
             enabled: true,
             source_url: "https://models.dev/api.json",
@@ -3787,7 +3787,7 @@ describe("resolveP4TriggerConfig", () => {
           providers: [
             { id: "openai-prod", kind: "openai_compatible", base_url: "https://api.openai.com/v1", api_key_env: "OPENAI_API_KEY", catalog_provider: "openai" },
           ],
-          fallback_chain: [{ provider: "openai-prod", model: "gpt-4o-mini", role: "heavy" }],
+          model_chain: [{ provider: "openai-prod", model: "gpt-4o-mini", role: "heavy" }],
           model_catalog: {
             enabled: true,
             source_url: "https://models.dev/api.json",

@@ -91,7 +91,7 @@ LLM_TOKEN="$(yq -r '.llm.provider.xiaomimimo_token_plan.token' development/secre
 | 8    | `.llm.provider.tencentcloud_coding_plan.baseURL` | `.llm.provider.tencentcloud_coding_plan.token` | `kimi-k2.5`       |
 | 9    | `.llm.provider.aliyun_coding_plan.baseURL`       | `.llm.provider.aliyun_coding_plan.token`       | `qwen3.6-plus`    |
 
-- 远端 `config.yaml` 通过 `llm.triage_fallback_chain` 落地该优先级：首条目 `zhipu` / `glm-5.3-flash` 为默认模型，其后按上表顺序追加代码分析的整条链作为 fallback；该字段缺省时自动沿用 `llm.fallback_chain`。
+- 远端 `config.yaml` 通过 `llm.triage_model_chain` 落地该优先级：首条目 `zhipu` / `glm-5.3-flash` 为默认模型，其后按上表顺序追加代码分析的整条链作为 fallback；该字段缺省时自动沿用 `llm.model_chain`。
 - 适用面：Git 服务 issue/PR 的 triage 关闭决策，以及支持增量生命周期的 PR/MR 已解决问题复核和 `gitea_problem_issue` / `github_problem_issue` 的关闭或标记已解决。指纹、文件覆盖范围和提交祖先检查先生成候选，只有该模型链明确确认后才执行 destructive lifecycle action；调用失败、输出缺失或上下文不足时保持 open。
 - `glm-5.3-flash` 已确认存在于 2026-09-02 刷新的 models.dev 打包快照 `zhipuai-coding-plan`（1M context / 131072 max output，订阅制价格为 0）；`zhipu` provider 需保持 `catalog_provider: zhipuai-coding-plan`（上游已把 `zhipu` id 改名，见 `docs/ai/AGENTS.known-pitfalls.md` #73）。模型端点是否可用仍以部署环境实测为准。
 
@@ -204,21 +204,23 @@ curl -sf <部署环境入口URL>/healthz
 
 ### 7.3 镜像源配置（国内部署必填）
 
-构建镜像时默认使用 `ubuntu:24.04` + 官方 `node:22-bookworm-slim`
-userspace。国内环境建议切换 Ubuntu apt、Kubernetes apt、npm、PyPI/pip
+构建镜像时默认使用 `debian:trixie-slim` + 官方 `node:lts-trixie-slim`
+userspace（当前为 Node 24 LTS），两个阶段共享同一 Debian 13 基线。
+国内环境建议切换 Debian apt、Kubernetes apt、npm、PyPI/pip
 和 Docker static 下载源；如果目标机已经统一配置容器 registry mirror，通常
 不必单独设置 `NODE_IMAGE`，只有需要覆盖默认拉取策略时再显式指定。
-这样既能保留官方 Perforce Ubuntu APT 支持，又避免因切回 Alpine /
-Wolfi 而失去 `p4-cli` 的可安装性。
+Perforce 官方 APT 仓库只发布 Ubuntu 代号源（已验证最新为 noble），其
+`p4-cli` 构建可直接运行在 trixie 更新版 glibc 上；这样既保留官方 Perforce
+包支持，又避免因切回 Alpine / Wolfi 而失去 `p4-cli` 的可安装性。
 
 `deploy.sh` 与 `Dockerfile` 读取以下环境变量：
 
 | 环境变量                      | 用途                                  | 默认值                                                         | 国内/镜像建议                                                      |
 | ----------------------------- | ------------------------------------- | -------------------------------------------------------------- | ------------------------------------------------------------------ |
-| `BASE_IMAGE`                  | Ubuntu 24.04 兼容基础镜像             | `ubuntu:24.04`                                                 | 保持默认，或替换为自建/缓存的 Ubuntu 24.04 mirror                  |
-| `NODE_IMAGE`                  | Node 22 userspace 来源镜像            | `node:22-bookworm-slim`                                        | 默认不设置；如需显式覆盖，再填镜像仓库地址                         |
-| `APT_MIRROR`                  | Ubuntu apt 包源                       | （使用镜像内置源）                                             | `http://mirrors.ustc.edu.cn/ubuntu`                                |
-| `PERFORCE_APT_DISTRO`         | Perforce apt 仓库发行版代号           | `noble`                                                        | `noble`                                                            |
+| `BASE_IMAGE`                  | Debian 13 (trixie) 基础镜像           | `debian:trixie-slim`                                           | 保持默认，或替换为自建/缓存的 Debian trixie mirror                 |
+| `NODE_IMAGE`                  | Node LTS userspace 来源镜像           | `node:lts-trixie-slim`                                         | 默认不设置；如需显式覆盖，再填镜像仓库地址                         |
+| `APT_MIRROR`                  | Debian apt 主档案包源                 | （使用镜像内置源）                                             | `http://mirrors.ustc.edu.cn/debian`（security 自动加 `-security`） |
+| `PERFORCE_APT_DISTRO`         | Perforce apt 仓库 Ubuntu 代号         | `noble`                                                        | `noble`（Perforce 只发布 Ubuntu 源，勿改成 Debian 代号）           |
 | `NPM_REGISTRY`                | pnpm/npm registry                     | `https://registry.npmjs.org`                                   | `http://mirrors.tencent.com/npm/`                                  |
 | `NPM_STRICT_SSL`              | npm strict-ssl                        | `true`                                                         | `false`（HTTP 镜像必须）                                           |
 | `PIP_INDEX_URL`               | Python pip simple index               | `https://pypi.org/simple`                                      | `https://mirrors.tencent.com/pypi/simple`                          |
@@ -229,19 +231,22 @@ Wolfi 而失去 `p4-cli` 的可安装性。
 | `HELM_APT_KEY_URL`            | Helm apt signing key                  | `https://packages.buildkite.com/helm-linux/helm-debian/gpgkey` | 与 `HELM_APT_REPO` 的内部缓存配套                                  |
 | `YQ_VERSION`                  | Mike Farah `yq` 版本                  | `v4.53.2`                                                      | 按需固定                                                           |
 | `YQ_DOWNLOAD_BASE`            | `yq` GitHub release 下载根路径        | `https://github.com/mikefarah/yq/releases/download`            | 腾讯源未提供 yq 专用镜像；保留默认或替换为内部缓存                 |
+| `GH_RELEASE_PREFIX`           | GitHub release 静态工具下载 URL 前缀  | （空，直连 github.com）                                        | ghproxy 风格前缀或内部缓存；只影响新增的固定版本静态 CLI 工具      |
 | `DOCKER_DOWNLOAD_MIRROR`      | Docker 静态二进制下载（容器嵌套沙箱） | `https://download.docker.com/linux/static/stable/x86_64`       | `https://mirrors.tencent.com/docker-ce/linux/static/stable/x86_64` |
 
-> **关于 `BASE_IMAGE`**：默认使用 `ubuntu:24.04`，因为官方 Perforce 包仓库支持 Ubuntu APT，且 `p4-cli` 不适合依赖 Alpine / Wolfi / 非 glibc 发行版。`BASE_IMAGE` 只建议替换为 Ubuntu 24.04 的镜像仓库地址，不建议再切回 Alpine / Chainguard / Wolfi。
+> **关于 `BASE_IMAGE`**：默认使用 `debian:trixie-slim`，与 `node:lts-trixie-slim` 共享同一发行版基线（Node 24 LTS userspace 可直接拷贝）。官方 Perforce 包仓库只提供 Ubuntu 代号 APT 源（已验证最新为 noble），其 `p4-cli` 面向旧版 glibc 构建，可在 trixie 的 glibc 2.41 上正常运行；`p4-cli` 不适合依赖 Alpine / Wolfi / 非 glibc 发行版。`BASE_IMAGE` 只建议替换为 Debian trixie 的镜像仓库地址，不建议再切回 Alpine / Chainguard / Wolfi。
 >
-> **关于 `NODE_IMAGE`**：如果目标机已经在 Podman/Docker 侧统一配置了容器 registry mirror，保持默认 `node:22-bookworm-slim` 即可，不必在每次部署时额外导出 `NODE_IMAGE`；只有需要按任务覆盖拉取源时再显式设置。
+> **关于 `NODE_IMAGE`**：如果目标机已经在 Podman/Docker 侧统一配置了容器 registry mirror，保持默认 `node:lts-trixie-slim` 即可，不必在每次部署时额外导出 `NODE_IMAGE`；只有需要按任务覆盖拉取源时再显式设置。
 >
-> **关于 `APT_MIRROR`**：`deploy.sh` 仍接受旧的 `APK_MIRROR` 变量作为兼容别名，但新文档统一使用 `APT_MIRROR`。当前国内示例改为使用 USTC 的 HTTP Ubuntu 镜像：`amd64/i386` 使用 `http://mirrors.ustc.edu.cn/ubuntu`，其他架构按 USTC `ubuntu-ports` 文档改为 `http://mirrors.ustc.edu.cn/ubuntu-ports`。Dockerfile 会在首次 `apt-get update` 之前同时兼容替换 `archive.ubuntu.com`、`security.ubuntu.com` 与 `ports.ubuntu.com/ubuntu-ports`（含 `sources.list` / `ubuntu.sources` 两种格式），因此不再需要先回官方源安装 `ca-certificates`。
+> **关于 `APT_MIRROR`**：`deploy.sh` 仍接受旧的 `APK_MIRROR` 变量作为兼容别名，但新文档统一使用 `APT_MIRROR`。值指向 Debian 主档案根（例如 `http://mirrors.ustc.edu.cn/debian`）；Dockerfile 会把 `debian-security` 条目自动改写为同一镜像根加 `-security` 后缀（如 `http://mirrors.ustc.edu.cn/debian-security`），并同时兼容 `debian.sources`（deb822）与旧式 `sources.list` 两种格式，因此不再需要先回官方源安装 `ca-certificates`。Debian 所有 release 架构共用一个档案根，没有 Ubuntu `ubuntu-ports` 那样的架构分流。
 >
 > **关于额外企业 CA**：如果目标机通过企业代理或本地缓存访问外部 HTTPS 仓库（例如 `package.perforce.com`、Helm Buildkite 源或 GitHub release），请把目标机 `/usr/local/share/ca-certificates/*.crt` 复制到构建上下文的 `deploy/extra-ca/`。Dockerfile 会在联网前把这些额外根证书安装进镜像信任链。
 >
 > **关于 `PIP_INDEX_URL`**：Dockerfile 会把该值写入 `/etc/pip.conf` 并设置 `PIP_INDEX_URL` 环境变量；腾讯 PyPI 镜像必须包含 `/pypi/simple` 路径。
 >
 > **关于 Kubernetes/Helm/yq**：Dockerfile 使用官方 Kubernetes apt 源安装 `kubectl`，国内示例切换到腾讯 `kubernetes_new`；Helm 官方文档当前列出的 Debian/Ubuntu apt 源由 Buildkite 托管，Mike Farah `yq` 官方建议下载预编译二进制。腾讯镜像站已验证没有 `/helm/` 与 `/yq/` 专用入口，如需全内网构建，请用内部缓存覆盖 `HELM_APT_REPO`、`HELM_APT_KEY_URL` 与 `YQ_DOWNLOAD_BASE`。
+>
+> **关于现代 CLI 静态工具**：Debian trixie apt 已覆盖 `rg`、`fd`、`bat`、`sd`、`eza`、`duf`、`hyperfine`、`hexyl`、`miller`、`git-delta`、`lnav`、`ugrep`、`pigz`、`aria2`、`fzf` 等现代工具；`doggo`、`jaq`、`difftastic`、`ouch`、`watchexec`、`erdtree` 在 trixie 没有包，而 `dust`、`xh`、`procs`、`tailspin` 的 trixie 包版本偏旧，这些统一由 Dockerfile 以固定版本从 GitHub Releases 安装静态二进制（仅 amd64/arm64）。国内直连 github.com 受限时，设置 `GH_RELEASE_PREFIX` 为 ghproxy 风格前缀或内部缓存（例如 `GH_RELEASE_PREFIX=https://<mirror>/`），或依赖 `deploy.sh` 的构建代理自动探测。`tokei`（上游自 v13 起不再发布二进制，trixie apt 只有停留在 2023 年的 12.1.2）、`qsv`（musl 静态二进制约 104MB，过重，CSV 由 `miller` 覆盖）、`plocate`（容器内不会构建 updatedb 索引）有意不装进镜像。
 >
 > **关于 Podman socket**：运行时镜像现在内置 `podman` CLI，并继续支持可选 Docker static CLI。`AICR_ENABLE_CONTAINER_SANDBOX=true` 时，`deploy.sh` 会挂载宿主 Podman socket，同时设置 `CONTAINER_HOST`（Podman 原生客户端）和 `DOCKER_HOST`（Docker 兼容客户端）。容器内不需要启动 Podman daemon；真正创建/管理子容器的是宿主 Podman socket。
 >
@@ -252,8 +257,8 @@ Wolfi 而失去 `p4-cli` 的可安装性。
 国内部署完整示例：
 
 ```bash
-export BASE_IMAGE=ubuntu:24.04
-export APT_MIRROR=http://mirrors.ustc.edu.cn/ubuntu
+export BASE_IMAGE=debian:trixie-slim
+export APT_MIRROR=http://mirrors.ustc.edu.cn/debian
 export PERFORCE_APT_DISTRO=noble
 export NPM_REGISTRY=http://mirrors.tencent.com/npm/
 export NPM_STRICT_SSL=false
@@ -304,8 +309,9 @@ ssh -p "$SSH_PORT" -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no \
 - **外层容器必须保留 `--init`**：`deploy/deploy.sh` 用 `podman run -d --init` 启动服务。`--init` 让 `tini`/`catatonit` 作为 PID 1 回收被沙箱超时 kill 后 reparent 的 `.kilo` worker 僵尸（Kilo 会把 worker `setsid` 进独立 session，进程组信号杀不到，必须靠 `/proc` PPID 遍历 + PID 1 回收兜底）。删掉 `--init` 会让僵尸在 PID 1 下堆积（公网实测 31 个 `Z` 状态进程），并在退出窗口内拖慢重试形成死亡螺旋。若出现 `Agent kilo timed out after <N>ms` 且 N 远超 `agent.timeout_seconds`，先用 `podman exec aicr ps -eo pid,ppid,etime,comm | grep kilo` 确认是否有大量 PPID=1 的残留进程，再 `podman restart aicr` 清理并重新部署带修复的镜像。
 - **Admin session TTL**：`adminAuthSchema` 使用 `session_ttl_seconds`（默认 28800 = 8 小时），不是 `session_ttl_minutes`。设置 `minutes` 字段会被静默忽略。
 - **pnpm 10.x 原生模块**：必须通过 `pnpm-workspace.yaml` 的 `onlyBuiltDependencies: [better-sqlite3]` 授权构建，不能用 `pnpm config set` 或 `--allow-build`。
-- **P4 运行时基线**：运行时镜像默认固定在 `ubuntu:24.04` + `p4-cli`
-  官方 APT 安装链路。若替换 `BASE_IMAGE`，只建议使用 Ubuntu 24.04 的
+- **P4 运行时基线**：运行时镜像默认固定在 `debian:trixie-slim` +
+  Perforce 官方 APT（Ubuntu `noble` 代号源）安装 `p4-cli` 的链路。
+  若替换 `BASE_IMAGE`，只建议使用 Debian trixie 的
   registry mirror；切回 Alpine / Chainguard / Wolfi 会直接破坏 `p4`
   可安装性和当前工具基线。
 - **公网环境 `podman build` 网络限制**：公网环境 `apt-get`、Perforce APT
@@ -315,7 +321,7 @@ ssh -p "$SSH_PORT" -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no \
   `DOCKER_DOWNLOAD_MIRROR`。如果目标机没有统一配置容器 registry mirror，
   再按需覆盖 `NODE_IMAGE`。Helm/yq 如果无法直连官方源，使用内部缓存
   覆盖 `HELM_APT_REPO`、`HELM_APT_KEY_URL`、`YQ_DOWNLOAD_BASE`。
-- **公网机构建代理（loopback + host 网络）**：公网机 `10.0.4.9` 上 `*:3128` 监听的是一个**可用 HTTP 转发代理**（实测经 `http://127.0.0.1:3128` 可代理到 npm/USTC ubuntu/Perforce 等）。`deploy.sh` 的构建代理自动探测会把监听端点解析成主网卡 IP，注入 `HTTP_PROXY=http://10.0.4.9:3128`；但该地址从 bridge 构建网络命名空间不可达，导致 `apt-get` 报 `Connection refused`、`ca-certificates has no installation candidate`。同时 Perforce APT 等下载在 bridge 直连时容易卡死（本机直连可达、容器内挂起，日志停在 `Get: … package.perforce.com … p4-cli` 无增长）。正确做法（已验证可用）：构建时显式用 loopback 代理 + host 网络，让构建容器经 `127.0.0.1:3128` 取包——
+- **公网机构建代理（loopback + host 网络）**：公网机 `10.0.4.9` 上 `*:3128` 监听的是一个**可用 HTTP 转发代理**（实测经 `http://127.0.0.1:3128` 可代理到 npm/USTC debian/Perforce 等）。`deploy.sh` 的构建代理自动探测会把监听端点解析成主网卡 IP，注入 `HTTP_PROXY=http://10.0.4.9:3128`；但该地址从 bridge 构建网络命名空间不可达，导致 `apt-get` 报 `Connection refused`、`ca-certificates has no installation candidate`。同时 Perforce APT 等下载在 bridge 直连时容易卡死（本机直连可达、容器内挂起，日志停在 `Get: … package.perforce.com … p4-cli` 无增长）。正确做法（已验证可用）：构建时显式用 loopback 代理 + host 网络，让构建容器经 `127.0.0.1:3128` 取包——
 
   ```bash
   HTTP_PROXY=http://127.0.0.1:3128 HTTPS_PROXY=http://127.0.0.1:3128 \

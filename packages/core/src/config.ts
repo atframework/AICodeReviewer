@@ -39,7 +39,7 @@ const llmProviderSchema = z
   })
   .passthrough();
 
-const llmFallbackEntrySchema = z
+const llmModelChainEntrySchema = z
   .object({
     provider: z.string().min(1),
     model: z.string().min(1),
@@ -717,15 +717,15 @@ const appConfigSchema = z
     llm: z
       .object({
         providers: z.array(llmProviderSchema).default([]),
-        fallback_chain: z.array(llmFallbackEntrySchema).default([]),
-        triage_fallback_chain: z.array(llmFallbackEntrySchema).optional(),
+        model_chain: z.array(llmModelChainEntrySchema).default([]),
+        triage_model_chain: z.array(llmModelChainEntrySchema).optional(),
         retry: llmRetrySchema,
         per_provider_overrides: llmPerProviderOverridesSchema,
         budget: llmBudgetSchema,
         model_catalog: modelCatalogSchema,
       })
       .passthrough()
-      .default({ providers: [], fallback_chain: [] }),
+      .default({ providers: [], model_chain: [] }),
     triggers: z.array(triggerSchema).default([]),
     outputs: z
       .object({
@@ -860,6 +860,19 @@ const appConfigSchema = z
   })
   .strict()
   .superRefine((config, ctx) => {
+    const llmRaw = config.llm as Record<string, unknown>;
+    for (const legacyKey of ["fallback_chain", "triage_fallback_chain"] as const) {
+      if (legacyKey in llmRaw) {
+        const renamedTo =
+          legacyKey === "fallback_chain" ? "model_chain" : "triage_model_chain";
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `llm.${legacyKey} was renamed to llm.${renamedTo}; rename the key in your config file`,
+          path: ["llm", legacyKey],
+        });
+      }
+    }
+
     const catalog = config.llm.model_catalog;
     if (catalog.enabled && catalog.cache.backend === "redis") {
       if (config.storage.cache.kind !== "redis") {

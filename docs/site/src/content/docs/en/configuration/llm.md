@@ -1,11 +1,11 @@
 ---
 title: LLM Providers and Models
-description: Configure LLM providers, the fallback chain, retry/backoff, spend budget, and the opt-in models.dev metadata catalog.
+description: Configure LLM providers, the model chain, retry/backoff, spend budget, and the opt-in models.dev metadata catalog.
 ---
 
 The `llm` namespace is the heart of AICodeReviewer — without a provider and at
-least one fallback-chain entry, no review can run. This page covers
-`llm.providers`, `llm.fallback_chain`, `llm.triage_fallback_chain`, `llm.retry`,
+least one model-chain entry, no review can run. This page covers
+`llm.providers`, `llm.model_chain`, `llm.triage_model_chain`, `llm.retry`,
 `llm.budget`, and the model metadata catalog (`llm.model_catalog`).
 
 A complete, minimal example:
@@ -18,7 +18,7 @@ llm:
       base_url: https://api.openai.com/v1
       api_key_env: AICR_LLM_API_KEY
 
-  fallback_chain:
+  model_chain:
     - provider: my-llm
       model: gpt-4o-mini
       role: any
@@ -39,12 +39,12 @@ llm:
 ## `llm.providers[]` — connection definitions
 
 Each provider entry describes one LLM endpoint. The `id` is what every other
-section (the fallback chain, the model catalog) references; it is local to your
+section (the model chain, the model catalog) references; it is local to your
 config.
 
 | Field | Type | Required | Description |
 | --- | --- | :---: | --- |
-| `id` | string | ✓ | Unique provider id used by `fallback_chain` and the catalog. |
+| `id` | string | ✓ | Unique provider id used by `model_chain` and the catalog. |
 | `kind` | enum | ✓ | Provider protocol. One of `openai_compatible`, `azure_openai`, `anthropic`, `vertex_ai`, `bedrock`, `google_ai_studio`, `ollama`, `copilot`. |
 | `base_url` | string (URL) | – | API base URL. Optional for some hosted kinds. |
 | `api_key_env` | string | – | Name of the env var holding the API key. Never inline the key. |
@@ -96,12 +96,13 @@ The model catalog can declare per-model tiers too:
 `reasoning_effort` → the catalog's `default_reasoning_effort` → the
 `thinking_level` conversion.
 
-## `llm.fallback_chain[]` — which model does what
+## `llm.model_chain[]` — which model does what
 
-The fallback chain is an ordered list of `(provider, model, role)` triples.
-Roles let you split work between a fast/cheap "light" model (used for diff
-compression and per-file summaries) and a "heavy" model (the main reviewer).
-`any` is used when no role is specified.
+The model chain is an ordered list of `(provider, model, role)` triples. The
+first entry is the default route; on failure the gateway walks the rest of the
+chain in order. Roles let you split work between a fast/cheap "light" model
+(used for diff compression and per-file summaries) and a "heavy" model (the
+main reviewer). `any` is used when no role is specified.
 
 | Field | Type | Required | Description |
 | --- | --- | :---: | --- |
@@ -111,7 +112,7 @@ compression and per-file summaries) and a "heavy" model (the main reviewer).
 
 ```yaml
 llm:
-  fallback_chain:
+  model_chain:
     - provider: my-llm
       model: gpt-4o-mini
       role: light          # diff compression, per-file summaries
@@ -123,18 +124,18 @@ llm:
       role: any            # fallback for any role
 ```
 
-## `llm.triage_fallback_chain[]` — separate route for lifecycle analysis
+## `llm.triage_model_chain[]` — separate route for lifecycle analysis
 
 Git-service issue triage and resolved-problem verification use the first
-`fallback_chain` entry as their model and walk the same chain on failure,
-exactly like code analysis. Set `triage_fallback_chain` to give these lifecycle
-analyses their own default model and fallback list; entries have the same
-`provider` / `model` / `role` shape as `fallback_chain`. When the field is
-absent or empty, they reuse `fallback_chain` unchanged.
+`model_chain` entry as their model and walk the same chain on failure,
+exactly like code analysis. Set `triage_model_chain` to give these lifecycle
+analyses their own default model and failover list; entries have the same
+`provider` / `model` / `role` shape as `model_chain`. When the field is
+absent or empty, they reuse `model_chain` unchanged.
 
 ```yaml
 llm:
-  triage_fallback_chain:
+  triage_model_chain:
     - provider: my-llm
       model: gpt-4o-mini   # lifecycle-analysis default model
       role: light
@@ -156,7 +157,7 @@ it is identity reconciliation, not a claim that a code problem was fixed.
 ## `llm.retry` — transient-failure handling
 
 Applied to LLM calls that fail with a transient error: HTTP 429/5xx, context
-overflow (routed to the fallback chain), caller-side abort/timeout, and
+overflow (routed down the model chain), caller-side abort/timeout, and
 connection-level failures (`fetch failed`, connect timeouts, DNS, socket
 errors). Non-transient provider errors (4xx other than 429) fail immediately.
 Per-provider overrides are supported via

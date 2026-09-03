@@ -20,18 +20,18 @@ llm:
       #                                 # for the Kilo agent it becomes `kilo run --variant`
       #                                 # (variants are materialized into .kilo/kilo.json).
 
-  fallback_chain:
+  model_chain:
     - provider: my-llm
       model: gpt-4o-mini # change to your model
       role: any # any | light | heavy
 
-  # Optional: dedicated default model + fallback list for issue triage and
+  # Optional: dedicated default model + failover list for issue triage and
   # resolution verification. This covers Git-service close decisions, PR/MR
   # resolved markers on channels that support incremental lifecycle, and
   # managed problem-issue close/mark-resolved actions.
-  # Entries use the same provider/model/role shape as fallback_chain.
-  # When omitted or empty, these analyses reuse fallback_chain above.
-  # triage_fallback_chain:
+  # Entries use the same provider/model/role shape as model_chain.
+  # When omitted or empty, these analyses reuse model_chain above.
+  # triage_model_chain:
   #   - provider: my-llm
   #     model: gpt-4o-mini
   #     role: light
@@ -623,7 +623,7 @@ queue:
 #   - keep_hunks_top_k:    number of highest-risk hunks to retain verbatim
 #                          (default 30)
 #   - context_lines:       context lines around retained hunks (default 5)
-#   - summarize_model_role: fallback_chain role used for per-file summaries
+#   - summarize_model_role: model_chain role used for per-file summaries
 #                          (default "light"; falls back to first chain entry)
 #   - per_model_overrides: per-model trigger_tokens overrides, keyed
 #                          "<providerKind>:<modelId>"
