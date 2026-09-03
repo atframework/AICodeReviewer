@@ -2409,6 +2409,13 @@ export async function bootstrapServerApp(options: BootstrapServerOptions): Promi
   if (catalogService) {
     model = catalogService.enrichModelSpec(model);
   }
+  const agentModelChain: ModelSpec[] = config.llm.model_chain.length > 0
+    ? config.llm.model_chain.map((entry, index) => {
+      if (index === 0) return model;
+      const candidate = resolveModelSpecFromChain(config.llm.providers, [entry]);
+      return catalogService ? catalogService.enrichModelSpec(candidate) : candidate;
+    })
+    : [model];
   const retryConfig = toGatewayRetry(config.llm.retry);
   const budgetConfig = toGatewayBudget(config.llm.budget);
   const perProviderOverrides = toGatewayPerProviderOverrides(config.llm.per_provider_overrides);
@@ -2507,6 +2514,7 @@ export async function bootstrapServerApp(options: BootstrapServerOptions): Promi
     },
     llm: llmClient,
     model,
+    agentModelChain,
     dryRun: false,
     outputPublisherResolver: createOutputPublisherResolverFromConfig(config, {
       baseDir,

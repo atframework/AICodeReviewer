@@ -99,8 +99,11 @@ The model catalog can declare per-model tiers too:
 ## `llm.model_chain[]` — which model does what
 
 The model chain is an ordered list of `(provider, model, role)` triples. The
-first entry is the default route; on failure the gateway walks the rest of the
-chain in order. Roles let you split work between a fast/cheap "light" model
+first entry is the default route; eligible failures walk the rest of the chain
+in order. Direct calls do this in the LLM gateway. Agent-backed reviews also
+switch on explicit account-balance, billing-cycle, spend-limit, or plan-quota
+exhaustion and rematerialize the agent runtime for the next model. Roles let
+you split work between a fast/cheap "light" model
 (used for diff compression and per-file summaries) and a "heavy" model (the
 main reviewer). `any` is used when no role is specified.
 
@@ -159,7 +162,12 @@ it is identity reconciliation, not a claim that a code problem was fixed.
 Applied to LLM calls that fail with a transient error: HTTP 429/5xx, context
 overflow (routed down the model chain), caller-side abort/timeout, and
 connection-level failures (`fetch failed`, connect timeouts, DNS, socket
-errors). Non-transient provider errors (4xx other than 429) fail immediately.
+errors). A clear depleted balance, billing-cycle allowance, plan quota, or
+spend limit skips retries for the current model and immediately tries the next
+`model_chain` entry; this includes providers that report the condition as 400
+or 402. A generic 429, `RESOURCE_EXHAUSTED`, throttling, or capacity message is
+still treated as transient and does not trigger immediate quota failover.
+Other non-transient provider errors fail immediately.
 Per-provider overrides are supported via
 `llm.per_provider_overrides` (a map of provider id → `{ max_attempts,
 give_up_after_seconds }`).

@@ -169,7 +169,8 @@ export class LlmFallbackExhaustedError extends Error {
   readonly attemptedModels: readonly ModelSpec[];
 
   constructor(lastError: unknown, attemptedModels: readonly ModelSpec[]) {
-    super(`LLM fallback chain exhausted after ${attemptedModels.length} attempt(s).`);
+    const lastErrorMessage = lastError instanceof Error ? lastError.message : String(lastError);
+    super(`LLM fallback chain exhausted after ${attemptedModels.length} attempt(s). Last error: ${lastErrorMessage}`);
     this.name = "LlmFallbackExhaustedError";
     this.lastError = lastError;
     this.attemptedModels = attemptedModels;
@@ -251,7 +252,90 @@ export function isContextOverflowError(error: unknown): boolean {
   return /context(?:_|\s|-)?(?:length|window|overflow)|maximum context|too many tokens/iu.test(message);
 }
 
+function collectErrorText(error: unknown): string {
+  const parts: string[] = [];
+  const visited = new Set<unknown>();
+  let current: unknown = error;
+
+  for (let depth = 0; current !== undefined && current !== null && depth < 6; depth++) {
+    if (visited.has(current)) break;
+    visited.add(current);
+
+    if (typeof current === "string") {
+      parts.push(current);
+      break;
+    }
+
+    if (current instanceof Error) {
+      parts.push(current.name, current.message);
+      if (current instanceof LlmProviderError && current.responseBody) {
+        parts.push(current.responseBody);
+      }
+      current = (current as Error & { readonly cause?: unknown }).cause;
+      continue;
+    }
+
+    if (typeof current === "object") {
+      try {
+        parts.push(JSON.stringify(current));
+      } catch {
+        parts.push(String(current));
+      }
+      current = (current as { readonly cause?: unknown }).cause;
+      continue;
+    }
+
+    parts.push(String(current));
+    break;
+  }
+
+  return parts.join("\n");
+}
+
+/**
+ * Identifies account/billing/plan quota exhaustion that retrying the same model cannot fix.
+ *
+ * HTTP 429 and `RESOURCE_EXHAUSTED` are deliberately insufficient: several providers use
+ * them for short-lived request-rate or shared-capacity pressure. Callers may move to the next
+ * configured model immediately only when a provider code or message explicitly identifies a
+ * depleted balance, spend cap, or time-window allowance.
+ */
+export function isLlmQuotaExhaustedError(error: unknown): boolean {
+  const text = collectErrorText(error);
+  if (!text) return false;
+
+  const durableQuotaCodePatterns = [
+    /\b(?:credit_balance_exhausted|insufficient_quota|billing_hard_limit_reached)\b/iu,
+    /\b(?:organization_spend_limit_exceeded|project_spend_limit_exceeded|organization_usage_limit_exceeded)\b/iu,
+    /\b(?:enforced_spend_limit_reached|quota_exceeded|quota_exhausted|insufficient_balance)\b/iu,
+    /\b(?:servicequotaexceededexception|throttling\.allocationquota|(?:free_)?resource_pack_exhausted)\b/iu,
+  ];
+  if (durableQuotaCodePatterns.some((pattern) => pattern.test(text))) {
+    return true;
+  }
+
+  // Zhipu distinguishes durable account/plan limits from rate (1302), load (1305),
+  // model permission (1311), and fair-use throttling (1313).
+  if (/(?:\b(?:type|code|error_code)\b\s*[=:]\s*["']?)(?:1113|1308|1309|1310|1314|1316|1317|1318|1319|1320|1321)\b/iu.test(text)) {
+    return true;
+  }
+
+  return [
+    /\b(?:insufficient|depleted|exhausted)\s+(?:account\s+)?(?:balance|credits?)\b/iu,
+    /\b(?:credit|account)\s+balance\s+(?:is\s+)?(?:depleted|exhausted|insufficient)\b/iu,
+    /\b(?:daily|weekly|monthly|annual|5[- ]hour|7[- ]day|spend|credit)\b.{0,48}\blimit\b.{0,32}\b(?:reached|exceeded|exhausted)\b/iu,
+    /\b(?:reached|exceeded|exhausted)\b.{0,32}\b(?:daily|weekly|monthly|annual|spend|credit)\b.{0,48}\blimit\b/iu,
+    /\breached\b.{0,32}\b(?:specified\s+)?api\s+usage\s+limits?\b/iu,
+    /\b(?:api\s+)?usage\s+limit\b.{0,48}\b(?:month|week|day|billing\s+cycle|reset)\b/iu,
+    /\b(?:hour|week|month)\s+allocated\s+quota\s+exceeded\b/iu,
+    /\b(?:premium\s+request|usage)\s+(?:allowance|credits?)\s+(?:is\s+)?(?:depleted|exhausted|used\s+up)\b/iu,
+    /\b(?:used|consumed)\s+(?:all|every)\b.{0,24}\b(?:credits?|premium\s+requests?)\b/iu,
+    /(?:余额不足|账户已欠费|账号已欠费|额度.{0,16}(?:耗尽|用尽|已用完|不足)|已达到.{0,24}(?:使用|消费)上限|限额将在.{0,80}重置|套餐已?(?:到期|失效))/u,
+  ].some((pattern) => pattern.test(text));
+}
+
 function isFallbackEligibleError(error: unknown): boolean {
+  if (isLlmQuotaExhaustedError(error)) return true;
   if (error instanceof LlmProviderError) {
     if (error.status === 429) return true;
     if (error.status && error.status >= 500) return true;
@@ -468,6 +552,9 @@ export function createResilientChatClient(options: LlmGatewayOptions): LlmGatewa
 
             if (!isFallbackEligibleError(error)) {
               throw error;
+            }
+            if (isLlmQuotaExhaustedError(error)) {
+              break;
             }
 
             const hasRetryAttemptRemaining = attempt + 1 < maxAttempts;

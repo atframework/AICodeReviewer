@@ -24,6 +24,12 @@ llm:
     - provider: my-llm
       model: gpt-4o-mini # change to your model
       role: any # any | light | heavy
+    # Add later entries in failover order. A clear account/plan quota exhaustion
+    # skips same-model retry and rematerializes the agent runtime with the next entry.
+    # Generic 429 throttling/capacity errors still follow llm.retry first.
+    # - provider: backup-llm
+    #   model: backup-model
+    #   role: any
 
   # Optional: dedicated default model + failover list for issue triage and
   # resolution verification. This covers Git-service close decisions, PR/MR

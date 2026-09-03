@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
 	createResilientChatClient,
+	isLlmQuotaExhaustedError,
 	LlmFallbackExhaustedError,
 	LlmProviderError,
 	type ChatCompletionClient,
@@ -10,6 +11,69 @@ import {
 	type LlmGatewayOptions,
 	type ModelSpec,
 } from "../src/index.js";
+
+describe("isLlmQuotaExhaustedError", () => {
+	it.each([
+		[
+			"OpenAI insufficient_quota",
+			new LlmProviderError("Request failed", {
+				status: 429,
+				responseBody: JSON.stringify({ error: { code: "insufficient_quota" } }),
+			}),
+		],
+		[
+			"Anthropic enforced spend limit",
+			new LlmProviderError("Your organization has reached its monthly spend limit", {
+				status: 400,
+				responseBody: JSON.stringify({ error: { type: "enforced_spend_limit_reached" } }),
+			}),
+		],
+		[
+			"Anthropic custom spend limit message",
+			new LlmProviderError("Your organization has reached the specified API usage limits", { status: 400 }),
+		],
+		[
+			"Google daily quota",
+			new LlmProviderError("Resource exhausted", {
+				status: 429,
+				responseBody: JSON.stringify({ error: { status: "RESOURCE_EXHAUSTED", reason: "quota_exceeded" } }),
+			}),
+		],
+		[
+			"AWS Bedrock service quota",
+			new LlmProviderError("Service quota for your account has been exceeded", {
+				status: 400,
+				responseBody: JSON.stringify({ __type: "ServiceQuotaExceededException" }),
+			}),
+		],
+		[
+			"DeepSeek balance",
+			new LlmProviderError("Insufficient Balance", { status: 402 }),
+		],
+		[
+			"Alibaba monthly allocation",
+			new LlmProviderError("Allocated quota exceeded: Month allocated quota exceeded", { status: 429 }),
+		],
+		[
+			"Zhipu coding-plan limit from production",
+			new Error(
+				"Agent stream error: 429 您已达到每周/每月使用上限，您的限额将在 2026-09-04 11:18:14 重置。 (type=1310)",
+			),
+		],
+	])("recognizes %s", (_name, error) => {
+		expect(isLlmQuotaExhaustedError(error)).toBe(true);
+	});
+
+	it.each([
+		["generic HTTP 429", new LlmProviderError("rate limit exceeded", { status: 429 })],
+		["Google capacity exhaustion", new Error("429 RESOURCE_EXHAUSTED: model capacity is temporarily unavailable")],
+		["Azure token rate", new Error("Requests to the ChatCompletions operation have exceeded token rate limit")],
+		["Zhipu concurrency limit", new Error("429 请求数超过了限制 (type=1302)")],
+		["context overflow", new Error("maximum context length exceeded")],
+	])("does not classify %s as exhausted account quota", (_name, error) => {
+		expect(isLlmQuotaExhaustedError(error)).toBe(false);
+	});
+});
 
 const baseModel: ModelSpec = {
 	providerKind: "openai_compatible",
@@ -193,6 +257,42 @@ describe("createResilientChatClient", () => {
 		expect(elapsed).toBeLessThan(100);
 	});
 
+	it("moves directly to the next model when account quota is exhausted", async () => {
+		const quotaError = new LlmProviderError("Insufficient Balance", { status: 402 });
+		const fallbackResult: ChatCompletionResult = {
+			providerId: "anthropic-prod",
+			modelId: "claude-test",
+			content: "fallback ok",
+			raw: {},
+		};
+		let primaryCalls = 0;
+
+		const gateway = createResilientChatClient(
+			makeOptions({
+				clientFactory: (currentModel) => {
+					if (currentModel.providerId === "openai-prod") {
+						return {
+							async complete(): Promise<ChatCompletionResult> {
+								primaryCalls++;
+								throw quotaError;
+							},
+						};
+					}
+
+					return makeClient(fallbackResult);
+				},
+				retry: { maxAttempts: 3, backoff: { kind: "constant", baseMs: 1, jitter: false } },
+			}),
+		);
+
+		const result = await gateway.complete({ model: baseModel, messages: [] });
+
+		expect(result.content).toBe("fallback ok");
+		expect(result.retryCount).toBe(0);
+		expect(result.fallbackCount).toBe(1);
+		expect(primaryCalls).toBe(1);
+	});
+
 	it("falls back after retry attempts are exhausted", async () => {
 		const rateLimitError = new LlmProviderError("rate limited", { status: 429 });
 		const fallbackResult: ChatCompletionResult = {
@@ -317,9 +417,11 @@ describe("createResilientChatClient", () => {
 			}),
 		);
 
-		await expect(gateway.complete({ model: baseModel, messages: [] })).rejects.toBeInstanceOf(
-			LlmFallbackExhaustedError,
-		);
+		await expect(gateway.complete({ model: baseModel, messages: [] })).rejects.toMatchObject({
+			name: LlmFallbackExhaustedError.name,
+			message: expect.stringContaining("fallback failed"),
+			lastError: fallbackError,
+		});
 	});
 
 	it("calls onFallback callback when switching models", async () => {

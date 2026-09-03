@@ -28,6 +28,8 @@ import {
   estimateCost,
   estimatePromptTokenCount,
   extractModelPricing,
+  isLlmQuotaExhaustedError,
+  LlmFallbackExhaustedError,
   shouldTriggerCompression,
   type CompressionConfig,
   type ModelSpec,
@@ -112,6 +114,8 @@ export interface ServerReviewOrchestrationOptions {
   readonly vcsFactory?: (sourceRoot: string, context: ReviewOrchestrationContext) => Promise<DiffCapableVcsAdapter> | DiffCapableVcsAdapter;
   readonly llm: ChatCompletionClient;
   readonly model: ModelSpec;
+  /** Ordered models available to agent-backed reviews; the first entry is the normal route. */
+  readonly agentModelChain?: readonly ModelSpec[];
   readonly outputPublisher?: ReviewOutputPublisher;
   readonly outputPublisherResolver?: ReviewOutputPublisherResolver;
   readonly changedPathsResolver?: (context: ReviewOrchestrationContext) => readonly string[] | undefined;
@@ -192,7 +196,7 @@ export interface ReviewOrchestrationResult {
   readonly estimatedCostUsd?: number;
   /** Number of billable model turns captured (1 for the direct path; agent turns otherwise). */
   readonly requestCount?: number;
-  /** Gateway retry/fallback counts (direct path only). */
+  /** Gateway retry count (direct path only) and cross-model fallback count (both paths). */
   readonly retryCount?: number;
   readonly fallbackCount?: number;
   /** Origin of the run-wide aggregated usage. */
@@ -304,6 +308,8 @@ interface ReviewCompletionResult {
   readonly estimatedCostUsd?: number;
   /** Number of billable model turns captured (agent path only). */
   readonly requestCount?: number;
+  /** Number of ordered model-chain transitions made for this completion. */
+  readonly fallbackCount?: number;
 }
 
 type ConcreteReviewUsageSource = Exclude<ReviewOrchestrationUsageSource, "mixed">;
@@ -435,6 +441,11 @@ function accumulateReviewCompletionMetrics(
   if (completion.agentResult) {
     const requestCount = finiteNonNegativeMetric(completion.requestCount);
     if (requestCount !== undefined) accumulator.requestCount += Math.trunc(requestCount);
+    const fallbackCount = finiteNonNegativeMetric(completion.fallbackCount);
+    if (fallbackCount !== undefined) {
+      accumulator.fallbackCount += Math.trunc(fallbackCount);
+      accumulator.hasFallbackCount = true;
+    }
     return;
   }
 
@@ -1621,10 +1632,71 @@ async function requestReviewCompletion(
           followUp.prompt,
         ].join("\n")
       : systemPrompt;
-    return runAgentReview(sourceRoot, task, options, bundleContext, contextRepoMounts);
+    return runAgentReviewWithQuotaFallback(sourceRoot, task, options, bundleContext, contextRepoMounts);
   }
 
   return requestDirectLlmCompletion(systemPrompt, options, followUp);
+}
+
+function isSameModel(left: ModelSpec, right: ModelSpec): boolean {
+  return left.providerId === right.providerId && left.modelId === right.modelId;
+}
+
+function resolveAgentModelCandidates(options: ServerReviewOrchestrationOptions): readonly ModelSpec[] {
+  const configured = options.agentModelChain;
+  if (!configured || configured.length === 0) return [options.model];
+
+  const currentIndex = configured.findIndex((candidate) => isSameModel(candidate, options.model));
+  if (currentIndex >= 0) return configured.slice(currentIndex);
+
+  return [options.model, ...configured.filter((candidate) => !isSameModel(candidate, options.model))];
+}
+
+async function runAgentReviewWithQuotaFallback(
+  sourceRoot: string,
+  task: string,
+  options: ServerReviewOrchestrationOptions,
+  bundleContext?: AgentBundleContext,
+  contextRepoMounts?: readonly ContextRepoMaterialization[],
+): Promise<ReviewCompletionResult> {
+  const candidates = resolveAgentModelCandidates(options);
+  const attemptedModels: ModelSpec[] = [];
+
+  for (let index = 0; index < candidates.length; index++) {
+    const currentModel = candidates[index]!;
+    attemptedModels.push(currentModel);
+    try {
+      const completion = await runAgentReview(
+        sourceRoot,
+        task,
+        { ...options, model: currentModel },
+        bundleContext,
+        contextRepoMounts,
+      );
+      return index > 0 ? { ...completion, fallbackCount: index } : completion;
+    } catch (error) {
+      if (!isLlmQuotaExhaustedError(error)) throw error;
+
+      const nextModel = candidates[index + 1];
+      if (!nextModel) {
+        if (candidates.length === 1) throw error;
+        throw new LlmFallbackExhaustedError(error, attemptedModels);
+      }
+
+      console.warn(JSON.stringify({
+        level: "warn",
+        msg: "agent model quota exhausted; switching to next configured model",
+        agent: options.agentAdapter?.kind,
+        fromProvider: currentModel.providerId,
+        fromModel: currentModel.modelId,
+        toProvider: nextModel.providerId,
+        toModel: nextModel.modelId,
+        error: error instanceof Error ? error.message : String(error),
+      }));
+    }
+  }
+
+  throw new LlmFallbackExhaustedError(new Error("Agent model chain was empty."), attemptedModels);
 }
 
 async function requestDirectLlmCompletion(

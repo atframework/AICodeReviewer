@@ -93,7 +93,9 @@ llm:
 ## `llm.model_chain[]` —— 哪个模型干什么活
 
 模型链是一个有序的 `(provider, model, role)` 三元组列表。首条目是默认路由，
-失败时由网关按顺序切换到后续条目。通过 role 可以把
+符合故障转移条件的失败会按顺序切换到后续条目：直连调用由 LLM gateway 执行；
+Agent 评审遇到明确的账户余额、计费周期、spend limit 或套餐额度耗尽时也会切换，
+并为下一个模型重新物化 Agent runtime。通过 role 可以把
 工作拆分到快速便宜的 "light" 模型（用于 diff 压缩和逐文件摘要）和 "heavy" 模型
 （主评审器）之间；未指定 role 时使用 `any`。
 
@@ -147,7 +149,10 @@ llm:
 
 作用于因瞬时错误失败的 LLM 调用：HTTP 429/5xx、上下文溢出（沿模型链切换）、
 调用方中止/超时，以及连接级失败（`fetch failed`、连接超时、DNS、socket 错误）。
-非瞬时的 provider 错误（429 以外的 4xx）立即失败。可通过
+明确的余额不足、计费周期额度、套餐额度或 spend limit 会跳过当前模型的重试，立即尝试
+下一条 `model_chain`；有些 provider 会用 400 或 402 上报这类错误。普通 429、
+`RESOURCE_EXHAUSTED`、throttling 或容量不足仍属于瞬时错误，不能触发立即额度切换。
+其他非瞬时 provider 错误立即失败。可通过
 `llm.per_provider_overrides`（provider id → `{ max_attempts,
 give_up_after_seconds }` 的映射）按 provider 覆盖。
 

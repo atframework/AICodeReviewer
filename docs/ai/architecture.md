@@ -308,6 +308,14 @@ AICR 采用**两层上下文管理**，两者互补：
 - LLM 调用经统一 gateway 进入 provider client。
 - 单次调用层支持 bounded retry，尊重 `Retry-After`。
 - provider fallback chain 与队列 retry 是两层不同机制，不要混用。
+- provider 明确返回余额不足、周期额度耗尽、套餐失效或 spend limit 时，继续重试同一模型
+  不会恢复服务：gateway 立即切到 `llm.model_chain` 下一条；普通 429、
+  `RESOURCE_EXHAUSTED`、throttling 或共享容量不足仍按 bounded retry 处理，不能仅凭 HTTP
+  状态码误判为长期额度耗尽。400/402 也可能携带明确额度错误，必须按业务码和消息分类。
+- agent 路径不经过 gateway，因此 orchestrator 必须对 CLI 的终端流事件、错误信封和非零退出
+  采用同一保守分类；命中后以完整充实的下一条 `ModelSpec` 重新物化 runtime bundle 并重跑，
+  成功结果记录实际 provider/model 与跨模型 `fallbackCount`。所有候选耗尽时保留最后一个原始
+  错误到 `LlmFallbackExhaustedError`，方便 webhook 日志定位真正的额度原因。
 - 每日预算、每 provider 覆盖与速率限制独立配置。
 - provider 兼容层要对外暴露统一模型抽象，而不是把厂商字段散落到上层编排代码。
 - **按 token 类别的成本估算**：`ChatCompletionUsage` 携带 `cachedPromptTokens`（缓存命中的输入）

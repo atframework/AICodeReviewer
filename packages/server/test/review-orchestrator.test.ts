@@ -3102,6 +3102,104 @@ describe("summarizeReviewOrchestrationForWebhook", () => {
     }
   });
 
+  it("switches to the next agent model after a terminal quota-exhaustion error", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-pi-quota-fallback-"));
+
+    try {
+      await writeWorkspaceFile(tempDir, "src/app.ts", "const ok = true;\n");
+      const quotaStream = [
+        {
+          type: "message_end",
+          message: {
+            role: "assistant",
+            content: [],
+            stopReason: "error",
+            errorMessage: "429 您已达到每周/每月使用上限，您的限额将在 2026-09-04 11:18:14 重置。 (type=1310)",
+          },
+        },
+        { type: "agent_end", messages: [] },
+      ].map((event) => JSON.stringify(event)).join("\n");
+      const successStream = [
+        {
+          type: "message_end",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: JSON.stringify({ skipReason: "lgtm" }) }],
+            stopReason: "stop",
+          },
+        },
+        { type: "agent_end", messages: [] },
+      ].map((event) => JSON.stringify(event)).join("\n");
+      const materializedModels: ModelSpec[] = [];
+      let spawnCount = 0;
+      const sandbox: SandboxBackend = {
+        kind: "native",
+        async materializeFs(layout) {
+          await mkdir(layout.agentDir, { recursive: true });
+          await mkdir(layout.tmpDir, { recursive: true });
+          return { agentDir: layout.agentDir, tmpDir: layout.tmpDir, mountSpecs: [] };
+        },
+        async spawn() {
+          spawnCount++;
+          return {
+            exitCode: 0,
+            stdout: spawnCount === 1 ? quotaStream : successStream,
+            stderr: "",
+            timedOut: false,
+            durationMs: 5,
+          };
+        },
+        async teardown() {},
+      };
+      const agentAdapter: AgentAdapter = {
+        kind: "pi",
+        async detect() { return { available: true, binary: "pi" }; },
+        buildCommand() { return ["pi", "--mode", "json"]; },
+        buildStdin() { return ""; },
+        async materializeConfig(currentModel, workingDir) {
+          materializedModels.push(currentModel);
+          return { configFiles: new Map(), envVars: {}, workingDir };
+        },
+      };
+      const fallbackModel: ModelSpec = {
+        providerKind: "anthropic",
+        providerId: "anthropic-prod",
+        modelId: "claude-sonnet-test",
+      };
+
+      const result = await runReviewOrchestration(
+        {
+          reviewEvent: createReviewEventFixture(),
+          payload: {},
+          provider: "gitea",
+          eventName: "pull_request",
+        },
+        {
+          baseSystemPrompt: "{{TASK_CONTEXT}}",
+          sourceRootResolver: () => tempDir,
+          vcs: createVcs(tempDir),
+          llm: { async complete() { throw new Error("direct llm must not be called"); } },
+          model,
+          agentModelChain: [model, fallbackModel],
+          sandbox,
+          agentAdapter,
+        },
+      );
+
+      expect(materializedModels.map((entry) => [entry.providerId, entry.modelId])).toEqual([
+        ["openai-prod", "gpt-test"],
+        ["anthropic-prod", "claude-sonnet-test"],
+      ]);
+      expect(spawnCount).toBe(2);
+      expect(result.status).toBe("skipped");
+      expect(result.model).toEqual({ providerId: "anthropic-prod", modelId: "claude-sonnet-test" });
+      expect(result.fallbackCount).toBe(1);
+      expect(summarizeReviewOrchestrationForWebhook(result).fallbackCount).toBe(1);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("unwraps the claude-code result envelope with usage, cost, and turn count", async () => {
     const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-claude-envelope-"));
 

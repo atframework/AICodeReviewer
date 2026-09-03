@@ -17,6 +17,42 @@ This file records verified external sources for repository AI-agent guidance, Ag
 
 ## Source records
 
+### LLM quota exhaustion and transient throttling
+
+- Sources:
+  - <https://developers.openai.com/api/docs/guides/error-codes>
+  - <https://platform.claude.com/docs/en/api/errors>
+  - <https://platform.claude.com/docs/en/api/rate-limits>
+  - <https://ai.google.dev/gemini-api/docs/api-errors>
+  - <https://learn.microsoft.com/en-us/azure/foundry/openai/how-to/quota>
+  - <https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/deploy/error-code-429>
+  - <https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_InvokeModel.html>
+  - <https://docs.bigmodel.cn/cn/api/api-code>
+  - <https://api-docs.deepseek.com/zh-cn/quick_start/error_codes/>
+  - <https://help.aliyun.com/en/model-studio/coding-plan-faq>
+  - <https://docs.github.com/en/copilot/concepts/usage-limits>
+- Verified guidance:
+  - HTTP status alone cannot select an immediate fallback. OpenAI, Gemini, Azure,
+    Vertex, Bedrock, and coding-plan APIs reuse 429 for rate or capacity pressure;
+    Anthropic and Bedrock can report durable spend/service-quota exhaustion as 400,
+    and DeepSeek uses 402 for insufficient balance.
+  - Durable machine signals include OpenAI `insufficient_quota` and spend/usage-limit
+    codes, Anthropic `enforced_spend_limit_reached`, Gemini `quota_exceeded`, Bedrock
+    `ServiceQuotaExceededException`, and Alibaba allocation-quota errors. Generic
+    `RESOURCE_EXHAUSTED`, `ThrottlingException`, or rate-limit messages remain retryable.
+  - Zhipu 1302 is rate limiting and 1305 is model load, while 1113, 1308-1310, 1314,
+    and 1316-1321 identify account debt, time-window exhaustion, expired plans, or
+    spend caps. The production incident's `type=1310` is therefore an immediate
+    model-chain failover signal.
+  - Agent CLIs may surface these conditions through terminal stream events or process
+    stderr instead of typed HTTP exceptions, so classification must examine bounded
+    nested error text without treating a successful model response as an error.
+- `last_checked`: 2026-09-03
+- `next_review`: 2026-12-03
+- `update_trigger`: Re-check when a provider changes quota error codes/messages, when
+  adding a provider kind, or before broadening `isLlmQuotaExhaustedError` to match a
+  generic status or phrase.
+
 ### AGENTS.md standard
 
 - Sources:
