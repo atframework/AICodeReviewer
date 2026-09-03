@@ -754,3 +754,51 @@ describe("createGithubPullRequestReviewDispatcher (update_existing)", () => {
     expect(body.body).toContain("<!-- aicr:scope=github-pr-secondary -->");
   });
 });
+
+describe("createGithubPullRequestReviewDispatcher resolution analysis", () => {
+  it("retains a disappeared problem when the model does not confirm resolution", async () => {
+    const metadata = Buffer.from(JSON.stringify([{
+      fingerprint: "fp-old",
+      severity: "medium",
+      category: "correctness",
+      file: "src/old.ts",
+      line: 4,
+      message: "The previous branch can return an invalid value.",
+    }]), "utf8").toString("base64");
+    const existingBody = [
+      "<!-- aicr:managed=pr-review -->",
+      "<!-- aicr:scope=github_pr_review -->",
+      "<!-- aicr:problems=fp-old -->",
+      `<!-- aicr:problem-meta=${metadata} -->`,
+      "",
+      "## AI Code Review",
+    ].join("\n");
+    const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
+    const analyzed: ReviewProblem[][] = [];
+    const dispatcher = createGithubPullRequestReviewDispatcher({
+      owner: "owent",
+      repo: "example",
+      pullNumber: 10,
+      reviewUpdateStrategy: "update_existing",
+      resolutionAnalyzer: async (candidates) => {
+        analyzed.push([...candidates]);
+        return new Set();
+      },
+      fetch: async (url, init) => {
+        calls.push({ url, init });
+        return !init?.method || init.method === "GET"
+          ? response([{ id: 80, body: existingBody }])
+          : response({ id: 80 });
+      },
+    });
+
+    await dispatcher.publishSummary!("Updated", [], { reviewedFiles: ["src/old.ts"] });
+
+    expect(analyzed).toHaveLength(1);
+    expect(analyzed[0]?.[0]?.fingerprint).toBe("fp-old");
+    const patchCall = calls.find((call) => call.init?.method === "PATCH");
+    const body = JSON.parse(patchCall?.init?.body ?? "{}").body as string;
+    expect(body).toContain("<!-- aicr:problems=fp-old -->");
+    expect(body).not.toContain("Resolved (1)");
+  });
+});

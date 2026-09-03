@@ -103,6 +103,21 @@ subscription's fixed catalog and gets no injection. Each
 runtime bundle `manifest.json` records whether metadata was `injected`,
 `delegated` to the tool's native catalog, or `not_applicable`.
 
+### Dedicated lifecycle-analysis model chain
+
+Set `llm.triage_fallback_chain` when Git-service issue triage and
+resolved-problem verification should use a different default model or fallback
+order from code analysis. Entries have the same `provider`, `model`, and `role`
+shape as `llm.fallback_chain`. If the field is absent or empty, AICR reuses the
+code-analysis chain unchanged.
+
+The lifecycle chain covers issue/PR triage, Resolved markers in incremental
+Gitea/GitHub PR summaries, and close/mark-resolved actions for
+`gitea_problem_issue` and `github_problem_issue`. Fingerprint disappearance,
+reviewed-file coverage, and commit ancestry only select candidates. Missing
+source, invalid model output, an LLM failure, or any decision other than an
+explicit confirmation keeps the problem open.
+
 ## Context management (diff compression + agent auto-compaction)
 
 AICR uses two complementary layers to prevent context-window overflows on large
@@ -637,7 +652,8 @@ See `docs/ai/architecture.md` §3.2.1 for the contract and `docs/ai/milestones/M
 `review_update_strategy: update_existing`. AICR manages one scoped summary
 comment per channel, identified by hidden `aicr:managed`, `aicr:scope`, and
 `aicr:problems` markers. Later runs update the same comment, keep still-open
-issues visible, and move disappeared fingerprints into a Resolved section.
+issues visible, and ask the lifecycle-analysis model to verify disappeared
+fingerprints against current source before moving them into a Resolved section.
 
 Set `review_update_strategy: always_new` on a PR review channel if you prefer a
 new summary comment for every run.
@@ -922,6 +938,13 @@ review:
 by listing only the most recent open issues. Configure the cap globally under
 `review.problem_issue.max_recent_issues` and override it per workspace when a
 repository needs a tighter or looser lifecycle scan.
+
+Closing and mark-resolved actions use `llm.triage_fallback_chain` (or inherit
+`llm.fallback_chain`). File coverage and commit ancestry are checked first; the
+issue remains open unless the model then confirms the old diagnostic is fixed
+in the current source. Same-scope race duplicates are still cleaned up without
+model analysis because they represent duplicate managed identities, not a code
+resolution decision.
 
 When `issue_mode` is `consolidated` (the default), AICR uses a **target-aware
 scope fingerprint** to group problems: push events key by batch (`headSha`),

@@ -25,6 +25,17 @@ llm:
       model: gpt-4o-mini # change to your model
       role: any # any | light | heavy
 
+  # Optional: dedicated default model + fallback list for issue triage and
+  # resolution verification. This covers Git-service close decisions, PR/MR
+  # resolved markers on channels that support incremental lifecycle, and
+  # managed problem-issue close/mark-resolved actions.
+  # Entries use the same provider/model/role shape as fallback_chain.
+  # When omitted or empty, these analyses reuse fallback_chain above.
+  # triage_fallback_chain:
+  #   - provider: my-llm
+  #     model: gpt-4o-mini
+  #     role: light
+
   retry:
     max_attempts: 3 # retries + fallback also cover connection failures (fetch failed, timeouts)
     backoff:

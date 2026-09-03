@@ -504,8 +504,8 @@ AICR 采用**两层上下文管理**，两者互补：
 - PR/MR review 通道（`gitea_pr_review`、`github_pr_review`）支持 `review_update_strategy` 配置：
   - `always_new`：每次推送创建新的 review/comment。
   - `update_existing`（默认）：查找 PR 上已有的 AICR 管理的 summary comment，通过 PATCH 更新而非新建。
-- 更新模式下 summary comment 使用 HTML 注释标记（`<!-- aicr:managed=pr-review -->`、`<!-- aicr:problems=fp1,fp2 -->`）做身份识别与 fingerprint 跟踪。
-- 问题分三类呈现：**Still Open**（指纹在旧 comment 和当前均存在）、**New**（仅当前存在，标注引入 commit）、**Resolved**（仅旧 comment 存在，标记 ✅ 不删除）。Resolved 项优先显示元数据标题，旧 comment 无元数据时显示可读占位而不是 raw fingerprint。
+- 更新模式下 summary comment 使用 HTML 注释标记（`<!-- aicr:managed=pr-review -->`、`<!-- aicr:problems=fp1,fp2 -->`）做身份识别与 fingerprint 跟踪；`problem-meta` 同时保留旧诊断、位置和范围，供后续语义复核。
+- 问题分三类呈现：**Still Open**（指纹在旧 comment 和当前均存在）、**New**（仅当前存在，标注引入 commit）、**Resolved**（旧指纹消失且生命周期模型明确确认已修复，标记 ✅ 不删除）。旧指纹消失只生成候选：文件不在当前 review、旧元数据不足、模型调用失败或输出未确认时继续列为 open。Resolved 项优先显示元数据标题，旧 comment 无元数据时显示可读占位而不是 raw fingerprint。
 - `publishProblem` 只缓冲问题；`publishSummary` 将所有问题、summary 和代码引用集中到一个 Markdown reply body。即使 PR review 通道只配置在 `line_comments` 路由下，也必须通过 summary flush 发布，避免缓冲问题丢失。
 - 配置字段：`outputs.channels[].review_update_strategy`，类型 `always_new | update_existing`。
 
@@ -564,16 +564,16 @@ AICR 采用**两层上下文管理**，两者互补：
   - body 包含 `<!-- aicr:commit={headSha} -->`、`<!-- aicr:open_problems=fp1,fp2 -->` 和逐问题 `<!-- aicr:fp={fp} -->`；位置解析同时支持 `file:line` 与 `file:start-end`。
   - 同 scope 更新通过 VCS compare 验证顺序：ahead 时分类；相同 commit 不解决问题；behind/diverged 时跳过；compare 失败时更新但不分类。
   - 跨 scope 回收只用于 `consolidated`：必须同时存在存储 commit 与当前 head，并且 compare 明确确认当前 commit 位于存储 commit 之后；失败或未知结果都跳过。
-  - 旧 issue 只接收其原有 `open_problems` 中仍存在的当前 fingerprint。已覆盖且消失的 fingerprint 进入 Resolved，未覆盖的 fingerprint 保持 open；只有 open fingerprint 归零时才执行 `resolved_action`。
+  - 旧 issue 只接收其原有 `open_problems` 中仍存在的当前 fingerprint。已覆盖且消失的 fingerprint 先进入待复核集合，只有 `llm.triage_fallback_chain`（缺省继承代码分析链）明确确认后才进入 Resolved；未覆盖、诊断元数据不足或复核失败的 fingerprint 保持 open。只有 open fingerprint 归零时才执行 `resolved_action`。
   - 部分更新保留旧 scope fingerprint、当前验证 head 和原历史 summary；若 retained fingerprint 元数据无法解析，保守跳过重写。相同 scope 的竞态重复 issue 仍会回收。
-  - 缺少新标记的同 scope 旧 body 在无 scoped `reviewedFiles` 时保留兼容行为；有 scoped `reviewedFiles` 且旧文件无法确定时跳过关闭/重写。
-- 问题生命周期关闭必须由 reviewed file-scope 守卫：
+  - 缺少新标记或原诊断的旧 body 在启用生命周期模型时无法安全复核，保持 open；不同 scope 也不使用旧版整 issue 回收捷径。
+- 问题生命周期关闭必须同时通过 reviewed file-scope 守卫与模型复核：
   - 只有当前 review 实际重新分析了包含该问题的文件时，才允许标记已解决并关闭 managed issue。
   - `reconcileProblems` 通过第 3 参数 `{ reviewedFiles }` 接收 `changedPaths`。
   - per_problem body 嵌入 `<!-- aicr:file=<path> -->`；旧 body 解析 `Location: path:line` 回退。
   - consolidated body 通过 `parseConsolidatedBodyProblemInfo` 提取逐 fingerprint 的单行/范围位置，再由 `prepareStoredConsolidatedReconciliation` 处理普通与空结果审查。
   - `isFileCoveredByReview` 在 `reviewedFiles` 为空/未提供时兼容返回 true；文件不在非空 scope 或无法确定时返回 false。
-  - 部分更新把未覆盖的旧 fingerprint 作为 retained open problem 写回 `open_problems` 和正文；只有已覆盖且当前结果缺失的 fingerprint 才能进入 Resolved。
+  - 部分更新把未覆盖或模型未确认的旧 fingerprint 作为 retained open problem 写回 `open_problems` 和正文；只有已覆盖、当前结果缺失且模型明确确认的 fingerprint 才能进入 Resolved。
 - GitHub managed problem issue 需要 `token_env` 指向具备 Issues read/write 权限的 PAT 或 GitHub App installation token；Webhook 的 `Issues` / `Issue comments` 事件订阅只控制入站事件，不授予 REST API 创建/更新 issue 的权限。
 
 ### 3.10 配置体系
@@ -588,6 +588,7 @@ AICR 采用**两层上下文管理**，两者互补：
 - 需要长期保持覆盖完整性的关键配置包括：
   - `compression`
   - `llm.fallback_chain`
+  - `llm.triage_fallback_chain`
   - `llm.retry`
   - `llm.budget`
   - `llm.per_provider_overrides`
@@ -867,7 +868,7 @@ AICR 采用**两层上下文管理**，两者互补：
 远端，只用本地结构化缓存 + 打包保底快照。每条解析结果都标注来源
 （`override` / `cache` / `remote` / `bundled` / `config`），写入 run 快照便于观测和排障。
 
-`bootstrapServerApp` 已把 store 初始化条件扩展为：admin auth、`llm.model_catalog` SQLite 后端、reflection memory 任一持久化需求都会创建 `StoreDb`。模型解析顺序保持为“初始化 catalog service → `ensureRefreshed()` → 解析并充实 primary / fallback / summarize `ModelSpec` → 创建 LLM gateway / runtime bundle”，避免 `resolveModelSpecFromConfig()` 早于 store 初始化而拿不到 catalog。
+`bootstrapServerApp` 已把 store 初始化条件扩展为：admin auth、`llm.model_catalog` SQLite 后端、reflection memory 任一持久化需求都会创建 `StoreDb`。模型解析顺序保持为“初始化 catalog service → `ensureRefreshed()` → 解析并充实 primary / fallback / summarize / triage `ModelSpec` → 创建 LLM gateway / runtime bundle”，避免 `resolveModelSpecFromConfig()` 早于 store 初始化而拿不到 catalog。issue triage 与 resolved-problem verifier 的模型都由 `resolveIssueTriageModelSpecFromConfig()` 解析：配置了 `llm.triage_fallback_chain` 时用其首条目并创建独立的 resilient client（共用 retry / budget / per_provider_overrides / pricing），否则直接复用代码分析的 `model` 与 `llmClient`。输出层只负责确定性候选与 fail-closed 生命周期；server 注入的 `createProblemResolutionAnalyzer()` 在当前物化源码上做批量语义复核，并在同一 run 内按 fingerprint 缓存结果，避免多个输出通道重复调用。
 
 #### 3.13.3 解析链（providerId + modelId → catalog 条目）
 

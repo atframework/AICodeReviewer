@@ -1,6 +1,9 @@
+import { readFileSync } from "node:fs";
+
 import { describe, expect, it } from "vitest";
 
 import type { ModelSpec } from "../src/index.js";
+import { getModelCatalogBundledSnapshotPath } from "../src/index.js";
 import {
 	mapCatalogEntryToModelSpecFields,
 	parseModelsDevApiJson,
@@ -287,5 +290,32 @@ describe("mapCatalogEntryToModelSpecFields", () => {
 		const fields = mapCatalogEntryToModelSpecFields(entry, "bundled");
 		expect(fields.supportsSearch).toBeUndefined();
 		expect(fields.supportsStreaming).toBeUndefined();
+	});
+});
+
+describe("bundled models.dev snapshot (refresh regression guard)", () => {
+	const snapshot = parseModelsDevApiJson(
+		JSON.parse(readFileSync(getModelCatalogBundledSnapshotPath(), "utf8")),
+	);
+
+	it("keeps production zhipu coding-plan models resolvable via catalog_provider hint", () => {
+		// Upstream renamed the `zhipu` provider id (see AGENTS.known-pitfalls.md);
+		// the production zhipu provider pins catalog_provider: zhipuai-coding-plan.
+		const hints = { catalogProvider: "zhipuai-coding-plan" };
+		const glm53 = resolveCatalogEntry(snapshot, "zhipu", "glm-5.3", hints);
+		expect(glm53?.matchStrategy).toBe("catalog_provider");
+		expect(glm53?.entry.contextWindow).toBe(1_000_000);
+
+		const flash = resolveCatalogEntry(snapshot, "zhipu", "glm-5.3-flash", hints);
+		expect(flash?.matchStrategy).toBe("catalog_provider");
+		expect(flash?.entry.contextWindow).toBe(1_000_000);
+		expect(flash?.entry.maxOutputTokens).toBe(131_072);
+		expect(flash?.entry.supportsReasoning).toBe(true);
+	});
+
+	it("does not direct-match the legacy zhipu provider id after the upstream rename", () => {
+		// If a future refresh restores a `zhipu` provider id, revisit whether the
+		// production catalog_provider pin is still required.
+		expect(resolveCatalogEntry(snapshot, "zhipu", "glm-5.3")?.matchStrategy).not.toBe("direct");
 	});
 });

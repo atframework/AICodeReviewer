@@ -41,6 +41,7 @@ import {
   createGithubProblemIssueDispatcher,
   createFeishuBotDispatcher,
   createWeComBotDispatcher,
+  type ProblemResolutionAnalyzer,
   type ReviewProblem,
   type DispatchResult,
   toTemplateProblem,
@@ -86,6 +87,7 @@ import type { P4TriggerConfig } from "./p4-webhook.js";
 import type { SvnTriggerConfig } from "./svn-webhook.js";
 import { GiteaApiClient } from "./issue-triage.js";
 import type { IssueTriageRuntimeOptions, WorkspaceIssueTriagePolicy } from "./issue-triage.js";
+import { createProblemResolutionAnalyzer } from "./problem-resolution.js";
 import type { ServerAppOptions, ServerReviewOrchestrationOptions, TriggerRetryConfig } from "./index.js";
 import { type AuthConfig } from "./auth.js";
 import { createReviewDeduplicator } from "./review-deduplicator.js";
@@ -171,15 +173,20 @@ function extractPullNumber(payload: unknown): number | undefined {
   return typeof payload.number === "number" ? payload.number : undefined;
 }
 
-export function resolveModelSpecFromConfig(config: AppConfig, providerId?: string): ModelSpec {
-  const providers = config.llm.providers;
+type LlmFallbackChain = AppConfig["llm"]["fallback_chain"];
+
+function resolveModelSpecFromChain(
+  providers: AppConfig["llm"]["providers"],
+  chain: LlmFallbackChain,
+  providerId?: string,
+): ModelSpec {
   if (providers.length === 0) {
     throw new TypeError("No LLM providers configured.");
   }
 
   const fallbackEntry = providerId
-    ? config.llm.fallback_chain.find((entry) => entry.provider === providerId)
-    : config.llm.fallback_chain[0];
+    ? chain.find((entry) => entry.provider === providerId)
+    : chain[0];
   const provider = fallbackEntry
     ? providers.find((p) => p.id === fallbackEntry.provider)
     : providerId
@@ -199,6 +206,19 @@ export function resolveModelSpecFromConfig(config: AppConfig, providerId?: strin
     modelId,
     ...resolveModelProviderFields(provider),
   };
+}
+
+export function resolveModelSpecFromConfig(config: AppConfig, providerId?: string): ModelSpec {
+  return resolveModelSpecFromChain(config.llm.providers, config.llm.fallback_chain, providerId);
+}
+
+export function resolveIssueTriageModelSpecFromConfig(config: AppConfig): ModelSpec {
+  const triageChain = config.llm.triage_fallback_chain;
+  if (triageChain && triageChain.length > 0) {
+    return resolveModelSpecFromChain(config.llm.providers, triageChain);
+  }
+
+  return resolveModelSpecFromConfig(config);
 }
 
 function readString(raw: Record<string, unknown>, ...keys: readonly string[]): string | undefined {
@@ -838,6 +858,10 @@ interface TargetUrlTemplateOptions {
 export interface OutputPublisherConfigOptions {
   readonly baseDir?: string;
   readonly appTokenServices?: ReadonlyMap<string, GithubAppTokenService>;
+  readonly resolutionAnalyzerFactory?: (
+    sourceRoot: string,
+    context: ReviewOrchestrationContext,
+  ) => ProblemResolutionAnalyzer;
 }
 
 function readNoProblemsAction(value: unknown): NoProblemsAction | undefined {
@@ -1273,6 +1297,7 @@ export function createOutputPublisherFromConfig(
   reviewEvent?: ReviewEvent,
   baseDir = process.cwd(),
   resolvedTriggerToken?: string,
+  resolutionAnalyzer?: ProblemResolutionAnalyzer,
 ): ReviewOutputPublisher | undefined {
   const channels = config.outputs.channels;
   if (channels.length === 0) {
@@ -1386,6 +1411,7 @@ export function createOutputPublisherFromConfig(
       ...(channelReviewEvent ? { reviewEvent: channelReviewEvent } : {}),
       ...(channelReviewUpdateStrategy ? { reviewUpdateStrategy: channelReviewUpdateStrategy } : {}),
       ...(headSha ? { headSha } : {}),
+      ...(resolutionAnalyzer ? { resolutionAnalyzer } : {}),
     });
 
     return {
@@ -1398,7 +1424,11 @@ export function createOutputPublisherFromConfig(
       ...(dispatcher.publishSummary ? {
         async publishSummary(summary: string, problems?: readonly ReviewProblem[], options?: ReviewSummaryPublishOptions): Promise<DispatchResult> {
           const renderedProblems = (problems ?? []).map((problem) => rendering.renderProblem(problem));
-          return dispatcher.publishSummary!(rendering.renderSummary(summary, renderedProblems, options?.title), renderedProblems);
+          return dispatcher.publishSummary!(
+            rendering.renderSummary(summary, renderedProblems, options?.title),
+            renderedProblems,
+            options?.reviewedFiles ? { reviewedFiles: options.reviewedFiles } : undefined,
+          );
         },
       } : {}),
     };
@@ -1424,6 +1454,7 @@ export function createOutputPublisherFromConfig(
       ...(channelReviewEvent ? { reviewEvent: channelReviewEvent } : {}),
       ...(channelReviewUpdateStrategy ? { reviewUpdateStrategy: channelReviewUpdateStrategy } : {}),
       ...(headSha ? { headSha } : {}),
+      ...(resolutionAnalyzer ? { resolutionAnalyzer } : {}),
     });
 
     return {
@@ -1436,7 +1467,11 @@ export function createOutputPublisherFromConfig(
       ...(dispatcher.publishSummary ? {
         async publishSummary(summary: string, problems?: readonly ReviewProblem[], options?: ReviewSummaryPublishOptions): Promise<DispatchResult> {
           const renderedProblems = (problems ?? []).map((problem) => rendering.renderProblem(problem));
-          return dispatcher.publishSummary!(rendering.renderSummary(summary, renderedProblems, options?.title), renderedProblems);
+          return dispatcher.publishSummary!(
+            rendering.renderSummary(summary, renderedProblems, options?.title),
+            renderedProblems,
+            options?.reviewedFiles ? { reviewedFiles: options.reviewedFiles } : undefined,
+          );
         },
       } : {}),
     };
@@ -1529,6 +1564,7 @@ export function createOutputPublisherFromConfig(
       ...(notifyFeishuWebhookUrl ? { notifyFeishu: { webhookUrl: notifyFeishuWebhookUrl, ...(notifyFeishuSecret ? { secret: notifyFeishuSecret } : {}) } } : {}),
       ...(autoTag ? { autoTag } : {}),
       ...(reviewedTag ? { reviewedTag } : {}),
+      ...(resolutionAnalyzer ? { resolutionAnalyzer } : {}),
       ref,
       ...(reviewEvent?.headSha ? { headSha: reviewEvent.headSha } : {}),
       ...(reviewEvent?.targetKind ? { targetKind: reviewEvent.targetKind } : {}),
@@ -1688,6 +1724,7 @@ export function createOutputPublisherFromConfig(
       ...(notifyFeishuWebhookUrl ? { notifyFeishu: { webhookUrl: notifyFeishuWebhookUrl, ...(notifyFeishuSecret ? { secret: notifyFeishuSecret } : {}) } } : {}),
       ...(autoTag ? { autoTag } : {}),
       ...(reviewedTag ? { reviewedTag } : {}),
+      ...(resolutionAnalyzer ? { resolutionAnalyzer } : {}),
       ref,
       ...(reviewEvent?.headSha ? { headSha: reviewEvent.headSha } : {}),
       ...(reviewEvent?.targetKind ? { targetKind: reviewEvent.targetKind } : {}),
@@ -1897,13 +1934,17 @@ export function createOutputPublisherResolverFromConfig(
   config: AppConfig,
   options: OutputPublisherConfigOptions = {},
 ): ReviewOutputPublisherResolver {
-  return async (context) => {
+  return async (context, runtime) => {
     const pullNumber = extractPullNumber(context.payload);
     const baseDir = options.baseDir ?? process.cwd();
     const resolvedTriggerToken = await resolveTriggerTokenForContext(
       config,
       context,
       options.appTokenServices,
+    );
+    const resolutionAnalyzer = options.resolutionAnalyzerFactory?.(
+      runtime?.sourceRoot ?? baseDir,
+      context,
     );
     const linePublishers = resolveOutputChannelNames(config, context, "line_comments")
       .map((name): OutputPublisherEntry | undefined => {
@@ -1915,6 +1956,7 @@ export function createOutputPublisherResolverFromConfig(
           context.reviewEvent,
           baseDir,
           resolvedTriggerToken,
+          resolutionAnalyzer,
         );
         return publisher ? { name, publisher } : undefined;
       })
@@ -1929,6 +1971,7 @@ export function createOutputPublisherResolverFromConfig(
           context.reviewEvent,
           baseDir,
           resolvedTriggerToken,
+          resolutionAnalyzer,
         );
         return publisher ? { name, publisher } : undefined;
       })
@@ -2204,7 +2247,10 @@ function buildGatewayModelPricing(
       pricing[key] = extracted;
     }
   };
-  for (const entry of config.llm.fallback_chain) {
+  for (const entry of [
+    ...config.llm.fallback_chain,
+    ...(config.llm.triage_fallback_chain ?? []),
+  ]) {
     const provider = config.llm.providers.find((p) => p.id === entry.provider);
     if (provider) {
       collect(provider, entry.model);
@@ -2379,6 +2425,25 @@ export async function bootstrapServerApp(options: BootstrapServerOptions): Promi
     ...(gatewayModelPricing ? { modelPricing: gatewayModelPricing } : {}),
   });
 
+  const triageChain = config.llm.triage_fallback_chain;
+  let triageModel = model;
+  let triageLlmClient = llmClient;
+  if (triageChain && triageChain.length > 0) {
+    triageModel = resolveIssueTriageModelSpecFromConfig(config);
+    if (catalogService) {
+      triageModel = catalogService.enrichModelSpec(triageModel);
+    }
+    triageLlmClient = createResilientChatClient({
+      clientFactory: createLlmClientFromModelSpec,
+      providers: toGatewayProviders(config.llm.providers),
+      fallbackChain: toGatewayFallbackChain(triageChain),
+      ...(retryConfig ? { retry: retryConfig } : {}),
+      ...(budgetConfig ? { budget: budgetConfig } : {}),
+      ...(perProviderOverrides ? { perProviderOverrides } : {}),
+      ...(gatewayModelPricing ? { modelPricing: gatewayModelPricing } : {}),
+    });
+  }
+
   const compressionConfig = toCompressionConfig(config.compression) ?? toDefaultCompressionConfig(model);
   let summarizeModel = resolveSummarizeModelFromConfig(config);
   if (catalogService && summarizeModel) {
@@ -2443,7 +2508,15 @@ export async function bootstrapServerApp(options: BootstrapServerOptions): Promi
     llm: llmClient,
     model,
     dryRun: false,
-    outputPublisherResolver: createOutputPublisherResolverFromConfig(config, { baseDir, appTokenServices }),
+    outputPublisherResolver: createOutputPublisherResolverFromConfig(config, {
+      baseDir,
+      appTokenServices,
+      resolutionAnalyzerFactory: (sourceRoot) => createProblemResolutionAnalyzer({
+        llm: triageLlmClient,
+        model: triageModel,
+        sourceRoot,
+      }),
+    }),
     sandbox,
     agentAdapter,
     agentTimeoutMs: config.agent.timeout_seconds * 1000,
@@ -2606,7 +2679,7 @@ export async function bootstrapServerApp(options: BootstrapServerOptions): Promi
     });
   }
 
-  const triageOptions = resolveIssueTriageOptions(config, llmClient, model);
+  const triageOptions = resolveIssueTriageOptions(config, triageLlmClient, triageModel);
   const authConfig = resolveAuthConfig(config);
   const githubOption = toServerWebhookOption(githubConfigs);
   const gitlabOption = toServerWebhookOption(gitlabConfigs);

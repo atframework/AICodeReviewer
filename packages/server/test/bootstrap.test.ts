@@ -12,6 +12,7 @@ import { closeStoreDb, createStoreDb, getProjectStats, hardDeleteExpiredProjects
 import { GithubAppTokenService } from "../src/github-app-token.js";
 import {
   resolveModelSpecFromConfig,
+  resolveIssueTriageModelSpecFromConfig,
   resolveGiteaWebhookConfig,
   resolveGenericWebhookConfigs,
   resolveP4TriggerConfig,
@@ -447,6 +448,69 @@ describe("resolveModelSpecFromConfig", () => {
     expect(model.reasoningEffort).toBe("max");
     expect(model.supportedReasoningEfforts).toEqual(["minimal", "low", "medium", "high", "max"]);
     expect(model.defaultReasoningEffort).toBe("max");
+  });
+});
+
+describe("resolveIssueTriageModelSpecFromConfig", () => {
+  it("inherits the code-analysis default model when no triage chain is configured", () => {
+    const config = makeConfig();
+    const model = resolveIssueTriageModelSpecFromConfig(config);
+
+    expect(model.providerId).toBe("openai-prod");
+    expect(model.modelId).toBe("gpt-4o");
+  });
+
+  it("inherits the code-analysis default model when the triage chain is empty", () => {
+    const config = makeConfig({
+      llm: {
+        providers: [
+          { id: "openai-prod", kind: "openai_compatible", base_url: "https://api.openai.com/v1" },
+        ],
+        fallback_chain: [{ provider: "openai-prod", model: "gpt-4o", role: "heavy" }],
+        triage_fallback_chain: [],
+      },
+    } as Partial<AppConfig>);
+    const model = resolveIssueTriageModelSpecFromConfig(config);
+
+    expect(model.providerId).toBe("openai-prod");
+    expect(model.modelId).toBe("gpt-4o");
+  });
+
+  it("uses the first triage_fallback_chain entry as the triage model route", () => {
+    const config = makeConfig({
+      llm: {
+        providers: [
+          { id: "openai-prod", kind: "openai_compatible", base_url: "https://api.openai.com/v1" },
+          { id: "ollama-local", kind: "ollama", base_url: "http://localhost:11434/v1" },
+        ],
+        fallback_chain: [{ provider: "openai-prod", model: "gpt-4o", role: "heavy" }],
+        triage_fallback_chain: [
+          { provider: "ollama-local", model: "qwen2.5:14b", role: "light" },
+          { provider: "openai-prod", model: "gpt-4o-mini", role: "any" },
+        ],
+      },
+    } as Partial<AppConfig>);
+    const model = resolveIssueTriageModelSpecFromConfig(config);
+
+    expect(model.providerId).toBe("ollama-local");
+    expect(model.modelId).toBe("qwen2.5:14b");
+    expect(model.baseUrl).toBe("http://localhost:11434/v1");
+  });
+
+  it("throws when the first triage_fallback_chain provider is not configured", () => {
+    const config = makeConfig({
+      llm: {
+        providers: [{ id: "openai-prod", kind: "openai_compatible" }],
+        fallback_chain: [{ provider: "openai-prod", model: "gpt-4o", role: "heavy" }],
+        triage_fallback_chain: [
+          { provider: "missing-provider", model: "gpt-4o-mini", role: "light" },
+        ],
+      },
+    } as Partial<AppConfig>);
+
+    expect(() => resolveIssueTriageModelSpecFromConfig(config)).toThrow(
+      'LLM provider "missing-provider" not found',
+    );
   });
 });
 
@@ -2716,6 +2780,80 @@ describe("createOutputPublisherResolverFromConfig", () => {
     }
   });
 
+  it("passes the scoped source root and lifecycle analyzer into PR reconciliation", async () => {
+    const metadata = Buffer.from(JSON.stringify([{
+      fingerprint: "fp-old",
+      severity: "high",
+      category: "correctness",
+      file: "src/old.ts",
+      line: 7,
+      message: "The old branch can return stale data.",
+    }]), "utf8").toString("base64");
+    const existingBody = [
+      "<!-- aicr:managed=pr-review -->",
+      "<!-- aicr:scope=gitea-pr -->",
+      "<!-- aicr:problems=fp-old -->",
+      `<!-- aicr:problem-meta=${metadata} -->`,
+    ].join("\n");
+    const calls: { url: string; init?: { readonly method?: string; readonly body?: string } }[] = [];
+    vi.stubGlobal("fetch", async (url: string, init?: { readonly method?: string; readonly body?: string }) => {
+      calls.push({ url, init });
+      return !init?.method || init.method === "GET"
+        ? response([{ id: 91, body: existingBody }])
+        : response({ id: 91 });
+    });
+    try {
+      const config = makeConfig({
+        outputs: {
+          template_engine: "handlebars",
+          channels: [
+            { name: "gitea-pr", kind: "gitea_pr_review", trigger: "gitea-internal", review_update_strategy: "update_existing" },
+          ],
+        },
+        workspaces: {
+          cache: { max_total_gb: 50, eviction: "lru", ttl_days: 30 },
+          defaults: {},
+          instances: {
+            "test-workspace": {
+              source_repo: { trigger: "gitea-internal", repo: "owent/example" },
+              outputs: { summary: ["gitea-pr"] },
+            },
+          },
+        },
+      } as Partial<AppConfig>);
+      const resolutionAnalyzer = vi.fn(async () => new Set(["fp-old"]));
+      const resolutionAnalyzerFactory = vi.fn(() => resolutionAnalyzer);
+      const resolver = createOutputPublisherResolverFromConfig(config, { resolutionAnalyzerFactory });
+      const publisher = await resolver({
+        reviewEvent: {
+          triggerName: "gitea-internal",
+          provider: "gitea",
+          workspaceId: "test-workspace",
+          targetKind: "pull_request",
+          repoRef: "owent/example",
+          author: {},
+          reason: "gitea:synchronize",
+        },
+        payload: { pull_request: { number: 77 } },
+        provider: "gitea",
+        eventName: "pull_request",
+      }, { sourceRoot: "D:\\scoped\\source" });
+
+      assertSummaryPublisher(publisher);
+      await publisher.publishSummary("", [], {
+        reviewedFiles: ["src/old.ts"],
+        bypassNoProblemsPolicy: true,
+      });
+
+      expect(resolutionAnalyzerFactory).toHaveBeenCalledWith("D:\\scoped\\source", expect.any(Object));
+      expect(resolutionAnalyzer).toHaveBeenCalledOnce();
+      const patchCall = calls.find((call) => call.init?.method === "PATCH");
+      expect(JSON.parse(patchCall?.init?.body ?? "{}").body).toContain("Resolved (1)");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("returns undefined when pull number is not present", async () => {
     const resolver = createOutputPublisherResolverFromConfig(makeConfig());
     const publisher = await resolver({
@@ -2944,6 +3082,64 @@ describe("bootstrapServerApp", () => {
         dryRun: true,
       });
       expect(result.issueTriage?.giteaClient).toBeDefined();
+    } finally {
+      if (originalKey === undefined) {
+        delete process.env.OPENAI_API_KEY;
+      } else {
+        process.env.OPENAI_API_KEY = originalKey;
+      }
+    }
+  });
+
+  it("wires the dedicated triage model and inherits the review model when unconfigured", async () => {
+    const originalKey = process.env.OPENAI_API_KEY;
+    process.env.OPENAI_API_KEY = "test-key";
+    try {
+      const triageWorkspace = {
+        cache: { max_total_gb: 50, eviction: "lru", ttl_days: 30 },
+        defaults: {},
+        instances: {
+          "test-workspace": {
+            source_repo: { trigger: "gitea-internal", repo: "owent/example" },
+            triage: { enabled: true },
+          },
+        },
+      };
+
+      const inheritedConfig = makeConfig({
+        workspaces: triageWorkspace,
+      } as Partial<AppConfig>);
+      const inherited = await bootstrapServerApp({
+        config: inheritedConfig,
+        baseSystemPrompt: "test",
+      });
+      expect(inherited.issueTriage?.model.modelId).toBe("gpt-4o");
+      expect(inherited.issueTriage?.model.providerId).toBe("openai-prod");
+
+      const dedicatedConfig = makeConfig({
+        llm: {
+          providers: [
+            {
+              id: "openai-prod",
+              kind: "openai_compatible",
+              base_url: "https://api.openai.com/v1",
+              api_key_env: "OPENAI_API_KEY",
+            },
+          ],
+          fallback_chain: [{ provider: "openai-prod", model: "gpt-4o", role: "heavy" }],
+          triage_fallback_chain: [
+            { provider: "openai-prod", model: "gpt-4o-mini", role: "light" },
+          ],
+        },
+        workspaces: triageWorkspace,
+      } as Partial<AppConfig>);
+      const dedicated = await bootstrapServerApp({
+        config: dedicatedConfig,
+        baseSystemPrompt: "test",
+      });
+      expect(dedicated.issueTriage?.model.modelId).toBe("gpt-4o-mini");
+      expect(dedicated.issueTriage?.model.providerId).toBe("openai-prod");
+      expect(dedicated.issueTriage?.llm).toBeDefined();
     } finally {
       if (originalKey === undefined) {
         delete process.env.OPENAI_API_KEY;

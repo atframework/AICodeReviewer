@@ -50,6 +50,7 @@ description: 全量配置字段参考，按顶层命名空间组织，并以 Zod
 | `llm.providers[].thinking_level` | enum | — | 思考强度抽象档位：`off`、`minimal`、`low`、`medium`、`high`、`max`（透传字段） |
 | `llm.providers[].thinking_budget_tokens` | int | — | 显式思考预算 token 数（透传字段） |
 | `llm.fallback_chain[]` | array | `[]` | 失败时按序尝试的 provider/model 条目；每项有 `provider`、`model`、`role`（`light`/`heavy`/`any`） |
+| `llm.triage_fallback_chain[]` | array | 继承 | Git 服务 issue triage 与已解决问题复核的可选链；首条目为默认模型。缺省或为空时继承 `llm.fallback_chain` |
 | `llm.retry` | object | — | 单次调用重试策略 |
 | `llm.retry.max_attempts` | int > 0 | — | 单次 LLM 调用最大尝试次数 |
 | `llm.retry.respect_retry_after` | boolean | — | 遵守 `Retry-After` 响应头 |

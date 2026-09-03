@@ -59,6 +59,7 @@ Narrative: [LLM providers and models](/en/configuration/llm/).
 | `llm.providers[].thinking_level` | enum | — | Coarser thinking tier: `off`, `minimal`, `low`, `medium`, `high`, `max` (passthrough) |
 | `llm.providers[].thinking_budget_tokens` | int | — | Explicit thinking budget in tokens (passthrough) |
 | `llm.fallback_chain[]` | array | `[]` | Ordered provider/model entries tried on failure; each has `provider`, `model`, `role` (`light`/`heavy`/`any`) |
+| `llm.triage_fallback_chain[]` | array | inherit | Optional chain for Git-service issue triage and resolved-problem verification; first entry is the default. Absent or empty inherits `llm.fallback_chain` |
 | `llm.retry` | object | — | Per-call retry policy |
 | `llm.retry.max_attempts` | int > 0 | — | Max attempts per LLM call |
 | `llm.retry.respect_retry_after` | boolean | — | Honor `Retry-After` headers |

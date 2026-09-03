@@ -2012,3 +2012,121 @@ describe("consolidated target-aware scope fingerprint", () => {
     expect(patchCall).toBeDefined();
   });
 });
+
+describe("managed issue resolution analysis", () => {
+  const analyzableBody = [
+    "<!-- aicr:managed=problem-issue -->",
+    "<!-- aicr:channel=aicr-issues -->",
+    "<!-- aicr:label=aicr-managed -->",
+    "<!-- aicr:fingerprint=fp-old -->",
+    "<!-- aicr:file=src/old.ts -->",
+    "",
+    "**HIGH · correctness**",
+    "",
+    "The old branch can return stale data.",
+    "",
+    "Location: `src/old.ts:9`",
+  ].join("\n");
+
+  it("closes a dropped per-problem issue only after model confirmation", async () => {
+    const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
+    const candidates: ReviewProblem[][] = [];
+    const dispatcher = createGiteaProblemIssueDispatcher({
+      baseUrl: "https://gitea.example",
+      owner: "owent",
+      repo: "example",
+      channelName: "aicr-issues",
+      issueMode: "per_problem",
+      resolvedAction: "close",
+      resolutionAnalyzer: async (input) => {
+        candidates.push([...input]);
+        return new Set(["fp-old"]);
+      },
+      fetch: async (url, init) => {
+        calls.push({ url, init });
+        if (url.includes("/issues?") && (!init?.method || init.method === "GET")) {
+          return response([{ number: 31, title: "[AICR] old", body: analyzableBody, state: "open" }]);
+        }
+        return response({ id: 31, number: 31 });
+      },
+    });
+
+    const results = await dispatcher.reconcileProblems([], undefined, { reviewedFiles: ["src/old.ts"] });
+
+    expect(candidates[0]?.[0]).toMatchObject({
+      fingerprint: "fp-old",
+      file: "src/old.ts",
+      message: "The old branch can return stale data.",
+    });
+    expect(results[0]?.raw).toMatchObject({ action: "closed", issueNumber: 31 });
+    expect(calls.some((call) => call.init?.method === "PATCH")).toBe(true);
+  });
+
+  it("keeps a dropped per-problem issue open when the model is uncertain", async () => {
+    const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
+    const dispatcher = createGiteaProblemIssueDispatcher({
+      baseUrl: "https://gitea.example",
+      owner: "owent",
+      repo: "example",
+      channelName: "aicr-issues",
+      issueMode: "per_problem",
+      resolvedAction: "mark_resolved",
+      resolutionAnalyzer: async () => new Set(),
+      fetch: async (url, init) => {
+        calls.push({ url, init });
+        return response([{ number: 31, title: "[AICR] old", body: analyzableBody, state: "open" }]);
+      },
+    });
+
+    await expect(dispatcher.reconcileProblems([], undefined, { reviewedFiles: ["src/old.ts"] })).resolves.toEqual([]);
+    expect(calls).toHaveLength(1);
+  });
+
+  it("applies model confirmation before closing a consolidated PR issue", async () => {
+    const scope = computeScopeFingerprint("aicr-issues", "owent", "example", {
+      targetKind: "pull_request",
+      pullNumber: 7,
+    });
+    const body = [
+      "<!-- aicr:managed=problem-issue -->",
+      "<!-- aicr:consolidated=true -->",
+      "<!-- aicr:channel=aicr-issues -->",
+      "<!-- aicr:label=aicr-managed -->",
+      `<!-- aicr:scope_fingerprint=${scope} -->`,
+      "<!-- aicr:commit=old-head -->",
+      "<!-- aicr:open_problems=fp-old -->",
+      "",
+      "#### HIGH (1)",
+      "",
+      "**correctness** — `src/old.ts:9` <!-- aicr:fp=fp-old -->",
+      "",
+      "The old branch can return stale data.",
+    ].join("\n");
+    const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
+    const dispatcher = createGiteaProblemIssueDispatcher({
+      baseUrl: "https://gitea.example",
+      owner: "owent",
+      repo: "example",
+      channelName: "aicr-issues",
+      issueMode: "consolidated",
+      targetKind: "pull_request",
+      pullNumber: 7,
+      headSha: "new-head",
+      resolutionAnalyzer: async (candidates) => {
+        expect(candidates[0]?.message).toBe("The old branch can return stale data.");
+        return new Set(["fp-old"]);
+      },
+      fetch: async (url, init) => {
+        calls.push({ url, init });
+        if (url.includes("/issues?") && (!init?.method || init.method === "GET")) {
+          return response([{ number: 32, title: "[AICR] old", body, state: "open" }]);
+        }
+        return response({ id: 32, number: 32 });
+      },
+    });
+
+    const results = await dispatcher.reconcileProblems([], undefined, { reviewedFiles: ["src/old.ts"] });
+
+    expect(results[0]?.raw).toMatchObject({ action: "closed", issueNumber: 32 });
+  });
+});
