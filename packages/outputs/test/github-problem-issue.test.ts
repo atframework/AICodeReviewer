@@ -2079,6 +2079,40 @@ describe("consolidated lifecycle file-scope guard", () => {
 	});
 });
 
+describe("GitHub managed issue resolution analysis", () => {
+	it("does not close a dropped issue unless the model confirms it is resolved", async () => {
+		const body = [
+			"<!-- aicr:managed=problem-issue -->",
+			"<!-- aicr:channel=github-issues -->",
+			"<!-- aicr:label=aicr-managed -->",
+			"<!-- aicr:fingerprint=fp-old -->",
+			"<!-- aicr:file=src/old.ts -->",
+			"",
+			"**HIGH · correctness**",
+			"",
+			"The old branch can return stale data.",
+			"",
+			"Location: `src/old.ts:9`",
+		].join("\n");
+		const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
+		const dispatcher = createGithubProblemIssueDispatcher({
+			owner: "my-org",
+			repo: "my-repo",
+			channelName: "github-issues",
+			issueMode: "per_problem",
+			resolvedAction: "close",
+			resolutionAnalyzer: async () => new Set(),
+			fetch: async (url, init) => {
+				calls.push({ url, init });
+				return response([{ number: 91, title: "[AICR] old", body, state: "open" }]);
+			},
+		});
+
+		await expect(dispatcher.reconcileProblems([], undefined, { reviewedFiles: ["src/old.ts"] })).resolves.toEqual([]);
+		expect(calls).toHaveLength(1);
+	});
+});
+
 describe("markdownlint compliance of generated bodies", () => {
 	function assertNoViolations(body: string, label: string): void {
 		const violations: string[] = [];

@@ -4,8 +4,9 @@ description: 配置 LLM 提供方、fallback 链、重试/退避、费用预算�
 ---
 
 `llm` 命名空间是 AICodeReviewer 的核心——没有提供方和至少一条 fallback 链条目，
-评审无法运行。本页覆盖 `llm.providers`、`llm.fallback_chain`、`llm.retry`、
-`llm.budget`，以及模型元数据目录（`llm.model_catalog`）。
+评审无法运行。本页覆盖 `llm.providers`、`llm.fallback_chain`、
+`llm.triage_fallback_chain`、`llm.retry`、`llm.budget`，以及模型元数据目录
+（`llm.model_catalog`）。
 
 一个完整的最小示例：
 
@@ -114,6 +115,32 @@ llm:
       model: gpt-4o-mini
       role: any            # 任意 role 的兜底
 ```
+
+## `llm.triage_fallback_chain[]` —— 生命周期分析的独立模型路由
+
+Git 服务 issue triage 与已解决问题复核默认和代码分析共用模型：以
+`fallback_chain` 首条目作为模型，失败时沿同一条链切换。配置
+`triage_fallback_chain` 可以为这些生命周期分析指定独立的默认模型和 fallback
+列表，条目结构与 `fallback_chain` 相同（`provider` / `model` / `role`）。该字段
+缺省或为空时仍使用 `fallback_chain`。
+
+```yaml
+llm:
+  triage_fallback_chain:
+    - provider: my-llm
+      model: gpt-4o-mini   # 生命周期分析默认模型
+      role: light
+    - provider: my-llm
+      model: gpt-4o        # 生命周期分析 fallback
+      role: any
+```
+
+该链与主链共用 `llm.retry`、`llm.budget`、`llm.per_provider_overrides` 和模型目录
+充实。它适用于 issue/PR triage、Gitea/GitHub PR 增量 summary 的 Resolved 标记，
+以及 `gitea_problem_issue` / `github_problem_issue` 的关闭或标记已解决。
+指纹消失、审查文件覆盖范围和提交祖先关系只生成候选；模型明确确认后才执行生命周期
+动作。源码缺失、输出不完整或 LLM 调用失败时保持 open。同 scope 的竞态重复 issue
+仍按身份确定性清理，因为这不是对代码问题已修复的判断。
 
 ## `llm.retry` —— 瞬时失败处理
 

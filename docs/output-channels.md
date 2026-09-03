@@ -120,7 +120,7 @@ If a run has problems but records `skipReason="no_output_publisher"`, no summary
 | `gitea_issue` | Collected, then rendered into an issue comment | Aggregated issue comment | Useful for push events or issue-based triage |
 | `gitea_problem_issue` | Collected for reconciliation | Creates, updates, or resolves managed problem issues | Fingerprint stability matters most here |
 | `github_issue` | Collected, then rendered into an issue comment | Aggregated issue comment | Same as `gitea_issue` but for GitHub repositories |
-| `github_problem_issue` | Collected for reconciliation | Creates or resolves managed GitHub issues | Like `gitea_problem_issue` but uses string label names; `resolved_action` supports `close` and `none` only (GitHub has no issue delete API) |
+| `github_problem_issue` | Collected for reconciliation | Creates or resolves managed GitHub issues | Like `gitea_problem_issue` but uses string label names; `resolved_action` supports `close`, `mark_resolved`, and `none` (GitHub has no issue delete API) |
 | `feishu_bot` | Collected for aggregation | Interactive card Markdown (JSON 2.0 schema) | Renders sectioned `Review target` / `Summary` / `Problems` blocks. Cards are sent with `card.schema = "2.0"` so headings, tables, inline code (`code`), and fenced code blocks with language-based syntax highlighting render natively; each problem includes severity, category, `Location: file:line`, and truncated message/suggestion; built-in summaries render `@username (Display Name)` when both are available |
 | `wecom_bot` | Collected for aggregation | Markdown message | Same sectioned content as Feishu; messages are truncated to 500 chars and suggestions to 300 chars to stay within size limits; built-in summaries render `@username (Display Name)` when both are available |
 
@@ -142,17 +142,21 @@ Managed summary comments always include these hidden markers:
   the same PR from overwriting each other.
 - `<!-- aicr:problems=fp1,fp2 -->` tracks the current problem fingerprints.
 - `<!-- aicr:problem-meta=BASE64_JSON -->` stores per-problem metadata
-  (severity, category, file, line) so resolved issues can be rendered with
-  readable titles instead of raw fingerprint hashes.
+  (severity, category, file, line/range, and a bounded original diagnostic) so
+  resolution can be verified against current source and rendered
+  with readable titles instead of raw fingerprint hashes.
 
 When updating a managed comment, AICR renders current problems as open issues
-with stable anchor IDs, keeps previously open fingerprints as still-open when
-they remain, and lists missing fingerprints in a Resolved section. Each resolved
-item shows its original title (`[SEVERITY] category — file:line`) when metadata
-is available. Legacy comments without metadata render a readable
-`Previously reported issue` placeholder instead of exposing the raw fingerprint.
-The fingerprint parser tolerates legacy marker formatting with whitespace such
-as `fp1, fp2`.
+with stable anchor IDs and keeps fingerprints that remain. A missing old
+fingerprint becomes a candidate only when its file was reviewed; the lifecycle
+model configured by `llm.triage_fallback_chain` must then explicitly confirm it
+is fixed in the current source before AICR lists it in Resolved. An absent/empty
+triage chain inherits `llm.fallback_chain`. Missing legacy diagnostics, missing
+source, incomplete model output, or an LLM failure retains the item as open.
+Each confirmed item shows its original title (`[SEVERITY] category — file:line`)
+when metadata is available. Legacy comments without metadata use readable
+placeholders instead of raw fingerprint hashes. The fingerprint parser tolerates
+legacy marker formatting with whitespace such as `fp1, fp2`.
 
 Problem dispatching for PR/MR review channels is batched: `publishProblem`
 buffers each problem internally; `publishSummary` flushes all buffered problems
@@ -206,26 +210,26 @@ workspaces:
 
 ## Managed Gitea problem issues
 
-The `gitea_problem_issue` and `github_problem_issue` channels reconcile managed issues from problem fingerprints. A fingerprint is resolved only after the current review covers its file and no longer reports it.
+The `gitea_problem_issue` and `github_problem_issue` channels reconcile managed issues from problem fingerprints. A fingerprint becomes a resolution candidate only after the current review covers its file and no longer reports it; it is resolved only when the lifecycle model explicitly confirms the fix against current source.
 
 By default, one review is combined into a single issue (`issue_mode: consolidated`). `per_problem` creates one issue per finding. Consolidated scopes are target-aware: pushes key by `headSha`, PR/MR reviews key by pull number (falling back to `headSha`), and other targets use the repository scope.
 
-After handling the current scope, consolidated mode coordinates older scopes per fingerprint. Commit ancestry must be explicitly confirmed; behind, diverged, failed, or unknown comparisons cannot change an old scope. Current findings are filtered to fingerprints already owned by that issue, reviewed-and-missing fingerprints move to Resolved, and unreviewed fingerprints remain open. The old issue is patched while open fingerprints remain and receives `resolved_action` only when none remain. Its scope marker and historical summary are preserved, and current-scope-only fingerprints are never copied into it. Same-scope duplicates are still resolved. `per_commit` scopes are independent and never enter this cross-scope pass.
+After handling the current scope, consolidated mode coordinates older scopes per fingerprint. Commit ancestry must be explicitly confirmed; behind, diverged, failed, or unknown comparisons cannot change an old scope. Current findings are filtered to fingerprints already owned by that issue. Reviewed-and-missing fingerprints go through model verification, while unreviewed or unconfirmed fingerprints remain open. The old issue is patched while open fingerprints remain and receives `resolved_action` only when none remain. Its scope marker and historical summary are preserved, and current-scope-only fingerprints are never copied into it. Same-scope race duplicates are still cleaned up deterministically because that is identity reconciliation, not a claim that a code finding was fixed. `per_commit` scopes are independent and never enter this cross-scope pass.
 
 When updating a consolidated issue:
 
 - The body includes `<!-- aicr:commit={headSha} -->`, `<!-- aicr:open_problems=fp1,fp2 -->`, and `<!-- aicr:fp={fp} -->` markers. Stored headings parse both `file:line` and `file:start-end`.
 - Same-scope updates categorize an ahead commit, refuse resolution on the same commit, skip behind/diverged commits, and update without classification when compare fails.
 - Cross-scope updates require both commits and a confirmed ancestry result. Compare failures skip the old scope.
-- Markerless bodies retain backward compatibility only in the current scope. With scoped `reviewedFiles`, missing stored metadata leaves the issue unchanged.
+- Markerless bodies or entries without the original diagnostic cannot be verified and remain open when lifecycle analysis is active.
 
-### File-scope resolution guard
+### File-scope and model resolution guards
 
-A managed problem is only marked Resolved when the current review re-analyzed its file. An unrelated or empty review cannot close valid findings.
+A managed problem is only marked Resolved when the current review re-analyzed its file and the lifecycle model confirms the fix. An unrelated, failed, or uncertain review cannot close valid findings.
 
 - `changedPaths` flows as `reviewedFiles` through `ReviewSummaryPublishOptions` → `publishSummary` → `reconcileProblems`.
 - Per-problem bodies embed `<!-- aicr:file=<path> -->`; legacy bodies parse `Location: path:line`. Consolidated bodies store per-fingerprint single-line or range locations.
-- Partial updates retain out-of-scope fingerprints in `open_problems` and the body. If retained metadata is incomplete, the rewrite is skipped. Empty reviews use the same per-fingerprint path.
+- Partial updates retain out-of-scope or model-unconfirmed fingerprints in `open_problems` and the body. If retained metadata is incomplete, the rewrite is skipped. Empty reviews use the same per-fingerprint path.
 - Absent or empty `reviewedFiles` preserves current-scope legacy behavior; it never authorizes cross-scope resolution.
 - Trigger-error reports (`publishTriggerErrorReport`, fired when a trigger exhausts retries) never drive lifecycle reconciliation: they pass `ReviewSummaryPublishOptions.skipReconcile`, so the `github_problem_issue` / `gitea_problem_issue` wrappers skip `reconcileProblems` entirely. A failed/timed-out analysis has an empty problem list but is not a "no problems found" result, so it must not resolve or close managed issues. `bypassNoProblemsPolicy` is still set so the failure notice reaches IM/review-comment channels.
 Managed issue titles are generated by the output layer to stay concise in GitHub/Gitea list views. `aicr.publish_summary.title` only affects the rendered summary content in the issue body; it does not replace the managed issue title. Current title policy:
@@ -299,7 +303,7 @@ outputs:
 
 ## Managed GitHub problem issues
 
-The `github_problem_issue` channel works identically to `gitea_problem_issue` but targets the GitHub REST API. It reconciles managed GitHub issues based on problem fingerprints using string label names (not numeric IDs). On every summary publish it creates issues for new fingerprints and applies `resolved_action` to open managed issues whose fingerprints disappeared.
+The `github_problem_issue` channel works identically to `gitea_problem_issue` but targets the GitHub REST API. It reconciles managed GitHub issues based on problem fingerprints using string label names (not numeric IDs). On every summary publish it creates issues for new fingerprints and applies `resolved_action` only to disappeared fingerprints confirmed by lifecycle analysis.
 
 Like the Gitea variant, it supports `issue_mode: consolidated` to merge all problems from one review into a single issue.
 

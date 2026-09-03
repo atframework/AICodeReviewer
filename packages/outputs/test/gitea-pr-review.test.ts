@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   createGiteaPullRequestReviewDispatcher,
@@ -862,5 +862,121 @@ describe("createGiteaPullRequestReviewDispatcher (update_existing)", () => {
     expect(patchCall).toBeDefined();
     const body = JSON.parse(patchCall?.init?.body ?? "{}");
     expect(body.body).toContain("<!-- aicr:scope=gitea-pr-custom -->");
+  });
+});
+
+describe("createGiteaPullRequestReviewDispatcher resolution analysis", () => {
+  function existingManagedBody(): string {
+    const metadata = Buffer.from(JSON.stringify([{
+      fingerprint: "fp-old",
+      severity: "high",
+      category: "correctness",
+      file: "src/old.ts",
+      line: 7,
+      message: "The old implementation can return stale data.",
+    }]), "utf8").toString("base64");
+    return [
+      "<!-- aicr:managed=pr-review -->",
+      "<!-- aicr:scope=gitea_pr_review -->",
+      "<!-- aicr:problems=fp-old -->",
+      `<!-- aicr:problem-meta=${metadata} -->`,
+      "",
+      "## AI Code Review",
+    ].join("\n");
+  }
+
+  it("marks only model-confirmed candidates resolved", async () => {
+    const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
+    const resolutionAnalyzer = vi.fn(async (candidates: readonly ReviewProblem[]) => {
+      expect(candidates).toMatchObject([{
+        fingerprint: "fp-old",
+        file: "src/old.ts",
+        message: "The old implementation can return stale data.",
+      }]);
+      return new Set(["fp-old"]);
+    });
+    const dispatcher = createGiteaPullRequestReviewDispatcher({
+      baseUrl: "https://gitea.example",
+      owner: "owent",
+      repo: "example",
+      pullNumber: 10,
+      reviewUpdateStrategy: "update_existing",
+      resolutionAnalyzer,
+      fetch: async (url, init) => {
+        calls.push({ url, init });
+        return !init?.method || init.method === "GET"
+          ? response([{ id: 70, body: existingManagedBody() }])
+          : response({ id: 70 });
+      },
+    });
+
+    await dispatcher.publishSummary!("Updated", [], { reviewedFiles: ["src/old.ts"] });
+
+    expect(resolutionAnalyzer).toHaveBeenCalledOnce();
+    const patchCall = calls.find((call) => call.init?.method === "PATCH");
+    const body = JSON.parse(patchCall?.init?.body ?? "{}").body as string;
+    expect(body).toContain("Resolved (1)");
+    expect(body).toContain("<!-- aicr:problems= -->");
+  });
+
+  it("keeps candidates open when resolution is not confirmed", async () => {
+    const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
+    const dispatcher = createGiteaPullRequestReviewDispatcher({
+      baseUrl: "https://gitea.example",
+      owner: "owent",
+      repo: "example",
+      pullNumber: 10,
+      reviewUpdateStrategy: "update_existing",
+      resolutionAnalyzer: async () => new Set(),
+      fetch: async (url, init) => {
+        calls.push({ url, init });
+        return !init?.method || init.method === "GET"
+          ? response([{ id: 71, body: existingManagedBody() }])
+          : response({ id: 71 });
+      },
+    });
+
+    await dispatcher.publishSummary!("Updated", [], { reviewedFiles: ["src/old.ts"] });
+
+    const patchCall = calls.find((call) => call.init?.method === "PATCH");
+    const body = JSON.parse(patchCall?.init?.body ?? "{}").body as string;
+    expect(body).toContain("<!-- aicr:problems=fp-old -->");
+    expect(body).toContain("resolution not confirmed");
+    expect(body).not.toContain("Resolved (1)");
+  });
+
+  it("preserves legacy fingerprints when diagnostic metadata is unavailable", async () => {
+    const existingBody = [
+      "<!-- aicr:managed=pr-review -->",
+      "<!-- aicr:scope=gitea_pr_review -->",
+      "<!-- aicr:problems=fp-legacy -->",
+      "",
+      "## AI Code Review",
+    ].join("\n");
+    const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
+    const resolutionAnalyzer = vi.fn(async () => new Set(["fp-legacy"]));
+    const dispatcher = createGiteaPullRequestReviewDispatcher({
+      baseUrl: "https://gitea.example",
+      owner: "owent",
+      repo: "example",
+      pullNumber: 10,
+      reviewUpdateStrategy: "update_existing",
+      resolutionAnalyzer,
+      fetch: async (url, init) => {
+        calls.push({ url, init });
+        return !init?.method || init.method === "GET"
+          ? response([{ id: 72, body: existingBody }])
+          : response({ id: 72 });
+      },
+    });
+
+    await dispatcher.publishSummary!("Updated", [], { reviewedFiles: ["src/old.ts"] });
+
+    expect(resolutionAnalyzer).not.toHaveBeenCalled();
+    const patchCall = calls.find((call) => call.init?.method === "PATCH");
+    const body = JSON.parse(patchCall?.init?.body ?? "{}").body as string;
+    expect(body).toContain("<!-- aicr:problems=fp-legacy -->");
+    expect(body).toContain("Previously reported issue");
+    expect(body).not.toContain("Resolved (1)");
   });
 });

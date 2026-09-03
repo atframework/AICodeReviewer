@@ -203,6 +203,7 @@ const PASSTHROUGH_DOCUMENTED_FIELDS = new Set([
 // `llm.retry` from silently hiding a newly added child field.
 const DOCUMENTED_SUBTREE_SUMMARIES = new Set([
   "llm.fallback_chain[]",
+  "llm.triage_fallback_chain[]",
   "llm.retry.backoff",
   "llm.per_provider_overrides",
   "llm.model_catalog.overrides",

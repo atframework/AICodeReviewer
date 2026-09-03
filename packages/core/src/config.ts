@@ -718,6 +718,7 @@ const appConfigSchema = z
       .object({
         providers: z.array(llmProviderSchema).default([]),
         fallback_chain: z.array(llmFallbackEntrySchema).default([]),
+        triage_fallback_chain: z.array(llmFallbackEntrySchema).optional(),
         retry: llmRetrySchema,
         per_provider_overrides: llmPerProviderOverridesSchema,
         budget: llmBudgetSchema,

@@ -5,8 +5,8 @@ description: Configure LLM providers, the fallback chain, retry/backoff, spend b
 
 The `llm` namespace is the heart of AICodeReviewer — without a provider and at
 least one fallback-chain entry, no review can run. This page covers
-`llm.providers`, `llm.fallback_chain`, `llm.retry`, `llm.budget`, and the model
-metadata catalog (`llm.model_catalog`).
+`llm.providers`, `llm.fallback_chain`, `llm.triage_fallback_chain`, `llm.retry`,
+`llm.budget`, and the model metadata catalog (`llm.model_catalog`).
 
 A complete, minimal example:
 
@@ -122,6 +122,36 @@ llm:
       model: gpt-4o-mini
       role: any            # fallback for any role
 ```
+
+## `llm.triage_fallback_chain[]` — separate route for lifecycle analysis
+
+Git-service issue triage and resolved-problem verification use the first
+`fallback_chain` entry as their model and walk the same chain on failure,
+exactly like code analysis. Set `triage_fallback_chain` to give these lifecycle
+analyses their own default model and fallback list; entries have the same
+`provider` / `model` / `role` shape as `fallback_chain`. When the field is
+absent or empty, they reuse `fallback_chain` unchanged.
+
+```yaml
+llm:
+  triage_fallback_chain:
+    - provider: my-llm
+      model: gpt-4o-mini   # lifecycle-analysis default model
+      role: light
+    - provider: my-llm
+      model: gpt-4o        # lifecycle-analysis fallback
+      role: any
+```
+
+The chain shares `llm.retry`, `llm.budget`, `llm.per_provider_overrides`, and
+model-catalog enrichment with the main chain. It applies to issue/PR triage,
+resolved markers in incremental Gitea/GitHub PR summaries, and
+`gitea_problem_issue` / `github_problem_issue` close or mark-resolved actions.
+Fingerprint disappearance, reviewed-file coverage, and commit ancestry produce
+resolution candidates; the lifecycle action runs only for candidates the model
+explicitly confirms. Missing source, incomplete output, or an LLM failure keeps
+the candidate open. Same-scope duplicate cleanup remains deterministic because
+it is identity reconciliation, not a claim that a code problem was fixed.
 
 ## `llm.retry` — transient-failure handling
 

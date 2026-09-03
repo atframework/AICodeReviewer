@@ -91,6 +91,7 @@ export interface ReviewSummaryPublishOptions {
 
 export type ReviewOutputPublisherResolver = (
   context: ReviewOrchestrationContext,
+  runtime?: { readonly sourceRoot: string },
 ) => Promise<ReviewOutputPublisher | undefined>;
 
 export type ReviewOrchestrationProvider = ReviewProvider;
@@ -2916,7 +2917,10 @@ export async function runReviewOrchestration(
     : completion.llmResult;
   const agentResult = completion.agentResult ?? lastAgentResult;
   const dispatchResults: DispatchResult[] = [];
-  const outputPublisher = options.outputPublisher ?? (await options.outputPublisherResolver?.(context));
+  const outputPublisher = options.outputPublisher ?? (await options.outputPublisherResolver?.(
+    context,
+    { sourceRoot: scopedTree.rootDir },
+  ));
 
   if (!options.dryRun && outputPublisher) {
     const resolver = outputPublisher.handlesRendering
