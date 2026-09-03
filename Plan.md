@@ -105,8 +105,11 @@
 - LLM 调用通过统一 gateway 进入 provider client。
 - bounded retry、fallback chain、预算、速率限制与队列 retry 分层治理；瞬时 IO 错误
   （超时、连接失败、HTTP 408/5xx）由共享 `io-retry` 分类器统一重试（HTTP 429 由
-  gateway 按 Retry-After 单独处理；输出与 triage 层的非幂等 POST 不重试），确定性
-  失败（4xx、context overflow 等）不重试。
+  gateway 按 Retry-After 单独处理；输出与 triage 层的非幂等 POST 不重试）。明确的
+  账户余额、套餐周期或 spend-limit 耗尽不重试当前模型，立即沿 `llm.model_chain` 切换；
+  普通限流/容量型 429 仍按退避策略处理，其他确定性 4xx 不重试。
+- Agent CLI 路径从终端事件、错误信封或进程错误中识别同一组额度耗尽信号，切换时用下一条
+  `ModelSpec` 重新物化整套 runtime bundle 后重跑本次任务；最终模型和 fallback 计数进入 run 摘要。
 - Git 服务 issue triage 与已解决问题复核可用 `llm.triage_model_chain` 配置独立的
   默认模型与 fallback 列表；PR/MR 增量评论的 Resolved 标记、托管 problem issue 的
   `close` / `mark_resolved` 复核使用同一条链，缺省或空列表时沿用代码分析的

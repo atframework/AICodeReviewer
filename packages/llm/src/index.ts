@@ -568,6 +568,7 @@ export {
 	estimateCost,
 	extractModelPricing,
 	isContextOverflowError,
+	isLlmQuotaExhaustedError,
 	LlmBudgetExceededError,
 	LlmFallbackExhaustedError,
 	type LlmGatewayBudgetConfig,

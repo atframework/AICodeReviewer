@@ -103,6 +103,22 @@ subscription's fixed catalog and gets no injection. Each
 runtime bundle `manifest.json` records whether metadata was `injected`,
 `delegated` to the tool's native catalog, or `not_applicable`.
 
+### Model-chain quota failover
+
+`llm.model_chain` is also the ordered failover list for both direct LLM calls
+and agent-backed reviews. When a provider explicitly reports an exhausted
+account balance, billing-cycle allowance, spend limit, or plan quota, AICR
+skips another attempt on that model and retries the same task with the next
+entry. Agent-backed reviews rematerialize the complete runtime bundle for that
+entry, so provider credentials, model limits, reasoning settings, and pricing
+stay aligned with the model that actually runs. The completed run reports that
+provider/model and increments `fallbackCount`.
+
+A bare HTTP 429 is not enough to identify depleted quota. Providers also use
+429 or `RESOURCE_EXHAUSTED` for short-lived rate limits and shared-capacity
+pressure; those errors keep the configured `llm.retry` and `Retry-After`
+behavior before model-chain fallback.
+
 ### Dedicated lifecycle-analysis model chain
 
 Set `llm.triage_model_chain` when Git-service issue triage and

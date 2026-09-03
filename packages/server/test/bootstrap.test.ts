@@ -2916,6 +2916,7 @@ describe("bootstrapServerApp", () => {
       expect(result.reviewOrchestration).toBeDefined();
       expect(result.reviewOrchestration?.baseSystemPrompt).toBe("test prompt");
       expect(result.reviewOrchestration?.model.providerId).toBe("openai-prod");
+      expect(result.reviewOrchestration?.agentModelChain?.map((entry) => entry.modelId)).toEqual(["gpt-4o"]);
       expect(result.reviewOrchestration?.dryRun).toBe(false);
       expect(typeof result.reviewOrchestration?.outputPublisherResolver).toBe("function");
       expect(result.reviewOrchestration?.sandbox?.kind).toBe("native");
@@ -2924,6 +2925,63 @@ describe("bootstrapServerApp", () => {
       // Hand-built AppConfig literals (like makeConfig) omit web_search; bootstrap
       // must degrade to the schema default instead of crashing.
       expect(result.reviewOrchestration?.webSearch).toEqual({ enabled: false });
+    } finally {
+      if (originalKey === undefined) {
+        delete process.env.OPENAI_API_KEY;
+      } else {
+        process.env.OPENAI_API_KEY = originalKey;
+      }
+    }
+  });
+
+  it("passes the complete ordered model chain to agent orchestration", async () => {
+    const originalKey = process.env.OPENAI_API_KEY;
+    process.env.OPENAI_API_KEY = "test-key";
+    try {
+      const config = makeConfig({
+        llm: {
+          providers: [
+            {
+              id: "openai-prod",
+              kind: "openai_compatible",
+              base_url: "https://api.openai.com/v1",
+              api_key_env: "OPENAI_API_KEY",
+            },
+            {
+              id: "anthropic-prod",
+              kind: "anthropic",
+              base_url: "https://api.anthropic.com",
+              api_key_env: "ANTHROPIC_API_KEY",
+            },
+          ],
+          model_chain: [
+            { provider: "openai-prod", model: "gpt-primary", role: "heavy" },
+            { provider: "openai-prod", model: "gpt-secondary", role: "any" },
+            { provider: "anthropic-prod", model: "claude-fallback", role: "any" },
+          ],
+          model_catalog: {
+            enabled: false,
+            source_url: "https://models.dev/api.json",
+            refresh_interval_hours: 24,
+            fetch_timeout_ms: 10000,
+            offline: false,
+            apply_to_model_spec: true,
+            cache: { backend: "sqlite" },
+            overrides: {},
+          },
+        },
+      });
+
+      const result = await bootstrapServerApp({ config, baseSystemPrompt: "test prompt" });
+
+      expect(result.reviewOrchestration?.agentModelChain?.map((entry) => [
+        entry.providerId,
+        entry.modelId,
+      ])).toEqual([
+        ["openai-prod", "gpt-primary"],
+        ["openai-prod", "gpt-secondary"],
+        ["anthropic-prod", "claude-fallback"],
+      ]);
     } finally {
       if (originalKey === undefined) {
         delete process.env.OPENAI_API_KEY;
