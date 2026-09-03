@@ -105,10 +105,10 @@ runtime bundle `manifest.json` records whether metadata was `injected`,
 
 ### Dedicated lifecycle-analysis model chain
 
-Set `llm.triage_fallback_chain` when Git-service issue triage and
+Set `llm.triage_model_chain` when Git-service issue triage and
 resolved-problem verification should use a different default model or fallback
 order from code analysis. Entries have the same `provider`, `model`, and `role`
-shape as `llm.fallback_chain`. If the field is absent or empty, AICR reuses the
+shape as `llm.model_chain`. If the field is absent or empty, AICR reuses the
 code-analysis chain unchanged.
 
 The lifecycle chain covers issue/PR triage, Resolved markers in incremental
@@ -246,15 +246,22 @@ search engines — treat this as a data-governance decision.
 
 ## Runtime Image Baseline
 
-The deployment image intentionally uses `ubuntu:24.04` as the distro base and
-copies the Node 22 userspace from the official `node:22-bookworm-slim` image.
-This keeps the Node runtime on an official LTS userspace while allowing AICR to
-install the official Perforce Ubuntu APT package (`p4-cli`).
+The deployment image intentionally uses `debian:trixie-slim` as the distro base
+and copies the Node LTS userspace from the official `node:lts-trixie-slim` image
+(currently Node 24), so both stages share one Debian trixie baseline. Perforce
+only publishes Ubuntu APT repos; its noble `p4-cli` build runs unchanged on
+trixie's newer glibc, so the official Perforce package stays installable.
 
 The runtime tool baseline includes:
 
 - VCS: `git`, `git-lfs`, `subversion`, `p4`
-- Search and inspection: `rg`, `fd`, `bat`, `jq`, `tree`, `universal-ctags`
+- Search and inspection: `rg`, `fd`, `bat`, `eza`, `jq`, `tree`, `erd`,
+  `dust`, `duf`, `hexyl`, `universal-ctags`
+- Text and structured data: `sd`, `ugrep`, `yq`, `jaq`, `miller`
+- Diff and logs: `delta`, `difft`, `lnav`, `tspin`
+- Download and network: `aria2`, `xh`, `doggo`
+- Process, watch, and benchmark: `procs`, `watchexec`, `hyperfine`, `fzf`
+- Compression and archives: `pigz`, `zstd`, `ouch`
 - Kubernetes and YAML: `kubectl`, `helm`, Mike Farah `yq`; use
   `kubectl kustomize` for Kustomize overlays when a standalone `kustomize`
   binary is not required
@@ -271,16 +278,26 @@ The runtime tool baseline includes:
 - Patch and archive helpers: `diffutils`, `patch`, `unzip`, `zip`, `xz`,
   `tar`, `gzip`, `bzip2`, `zstd`, `lz4`
 
-On Debian/Ubuntu, distro packages expose `fdfind` and `batcat`. The image adds
+Most modern CLI tools come from the Debian trixie apt repositories. Tools that
+trixie does not package (`doggo`, `jaq`, `difftastic`, `ouch`, `watchexec`,
+`erdtree` → `erd`) or packages only in older versions (`dust`, `xh`, `procs`,
+`tailspin` → `tspin`) are installed as pinned upstream GitHub release static
+binaries on `amd64`/`arm64`; other architectures skip that layer. `tokei` is
+intentionally absent (upstream publishes no binaries since v13 and the trixie
+package is stuck at the 2023 release 12.1.2), `qsv` is absent (its ~100 MB
+static binary is too heavy; `miller` covers CSV work), and `plocate` is absent
+(its `updatedb` index is never built inside a container).
+
+The Debian packages expose `fdfind` and `batcat`. The image adds
 compatibility symlinks so agent guidance can consistently refer to `fd` and
 `bat`. The container also ships `p4` directly, so deployment no longer depends
 on bind-mounting a host-side Perforce binary.
 
 Optional build args for `deploy/Dockerfile` / `deploy.sh`:
 
-- `BASE_IMAGE=ubuntu:24.04`
-- `NODE_IMAGE=node:22-bookworm-slim` (optional; omit this when the target host already rewrites registry pulls through a global mirror)
-- `APT_MIRROR=http://mirrors.ustc.edu.cn/ubuntu`
+- `BASE_IMAGE=debian:trixie-slim`
+- `NODE_IMAGE=node:lts-trixie-slim` (optional; omit this when the target host already rewrites registry pulls through a global mirror)
+- `APT_MIRROR=http://mirrors.ustc.edu.cn/debian`
 - `PERFORCE_APT_DISTRO=noble`
 - `NPM_REGISTRY=http://mirrors.tencent.com/npm/`
 - `PIP_INDEX_URL=https://mirrors.tencent.com/pypi/simple`
@@ -290,6 +307,9 @@ Optional build args for `deploy/Dockerfile` / `deploy.sh`:
 - `HELM_APT_KEY_URL=https://packages.buildkite.com/helm-linux/helm-debian/gpgkey`
 - `YQ_VERSION=v4.53.2`
 - `YQ_DOWNLOAD_BASE=https://github.com/mikefarah/yq/releases/download`
+- `GH_RELEASE_PREFIX=` (empty = direct GitHub; set a ghproxy-style prefix or
+  internal cache root for networks that cannot reach github.com — applies to
+  the pinned static CLI tools; yq still uses `YQ_DOWNLOAD_BASE`)
 - `DOCKER_DOWNLOAD_MIRROR=https://mirrors.tencent.com/docker-ce/linux/static/stable/x86_64`
 
 `deploy.sh` still accepts the old `APK_MIRROR` environment variable as a
@@ -302,17 +322,20 @@ now auto-detects it and uses it for host-side downloads plus `podman build` /
 proxy automatically switches the build to host networking so Dockerfile
 downloads can still reach `127.0.0.1:3128`.
 
-USTC mirror docs recommend `http://mirrors.ustc.edu.cn/ubuntu` for
-`amd64/i386`, while `arm64`/`armhf`/`ppc64el`/`s390x` should use
-`http://mirrors.ustc.edu.cn/ubuntu-ports`. `deploy/Dockerfile` rewrites both
-the standard Ubuntu `archive/security` entries and the `ports.ubuntu.com`
-variants before the first `apt-get update`, so the HTTP mirror works without a
-pre-bootstrap CA fetch.
+`APT_MIRROR` points at the Debian main archive root (for example
+`http://mirrors.ustc.edu.cn/debian`); `deploy/Dockerfile` derives the security
+entries by appending `-security` (`http://mirrors.ustc.edu.cn/debian-security`)
+and rewrites both the deb822 `debian.sources` format and a legacy
+`sources.list` before the first `apt-get update`, so the HTTP mirror works
+without a pre-bootstrap CA fetch. All Debian release architectures share one
+archive root — there is no `ubuntu-ports`-style split.
 
 Tencent mirrors provide the Kubernetes `kubernetes_new` apt path used above.
-No dedicated `mirrors.tencent.com/helm/` or `mirrors.tencent.com/yq/` endpoint
-was verified; for fully internal builds, point the Helm/yq args at an internal
-cache that preserves the same repository layout.
+No dedicated `mirrors.tencent.com/helm/`, `mirrors.tencent.com/yq/`, or GitHub
+release endpoint was verified; for fully internal builds, point the Helm/yq
+args at an internal cache that preserves the same repository layout, and set
+`GH_RELEASE_PREFIX` to a mirror prefix (or rely on the `deploy.sh` build-proxy
+autodetect) for the pinned static CLI tools downloaded from GitHub releases.
 
 If your deployment host reaches external HTTPS repositories through a corporate
 proxy or local mirror with a private root CA, copy the required `.crt` files
@@ -321,7 +344,7 @@ extra certificates before fetching external keys, npm packages, or release
 artifacts.
 
 If the target host already configures Podman/Docker registry mirrors globally,
-leave `NODE_IMAGE` unset and let the default `node:22-bookworm-slim` pull flow
+leave `NODE_IMAGE` unset and let the default `node:lts-trixie-slim` pull flow
 use that host-level configuration.
 
 ## Kilo Code Deployment Verification
@@ -339,7 +362,7 @@ Kilo Code is the primary deployment-test agent for AICodeReviewer. The repeatabl
 
 1. Start AICR locally or in the deployment environment.
 2. In Kilo Code, run a review task against the same workspace that the service will use.
-3. Confirm that AICR materializes Kilo provider config under the run `agent/` directory and injects the model provider from `llm.fallback_chain`.
+3. Confirm that AICR materializes Kilo provider config under the run `agent/` directory and injects the model provider from `llm.model_chain`.
 4. Confirm Kilo receives the default stdio `aicr-output` MCP server config in the materialized `.kilo/kilo.json`, calls AICR tools, and writes `.aicr-output-state.json` in the run `agent/` directory. `aicr.fetch_more_context` requests should either return already mounted source content or be replayed by the orchestrator through VCS fetch; `aicr.try_blame` requests should be replayed through VCS attribution when supported. Both return paths feed a final follow-up pass.
 5. Trigger the review through the normal entry point, such as `/webhooks/gitea` or `/triggers/p4`.
 6. Verify the AICR log contains a scheduled run and a completed `reviewRun` with a non-zero `dispatchCount` when an output route is configured.
@@ -353,7 +376,7 @@ Use Kilo CLI for repeatable smoke tests after the Kilo Code check:
 kilo run --auto --format json --model <model-id> --dir <workspace-agent-dir>
 ```
 
-The CLI smoke test must use the same model id and provider that AICR translates from `llm.providers` and `llm.fallback_chain`. If the CLI succeeds but Kilo Code fails, treat the deployment as not verified.
+The CLI smoke test must use the same model id and provider that AICR translates from `llm.providers` and `llm.model_chain`. If the CLI succeeds but Kilo Code fails, treat the deployment as not verified.
 
 For transport-level MCP smoke tests outside Kilo, build first and run `node packages/mcp-output/dist/server.js --transport http --host 127.0.0.1 --port 3000`. This starts the same AICR output tools over a local Streamable HTTP endpoint; production Kilo runtime bundles still use local stdio MCP unless an adapter explicitly chooses HTTP.
 
@@ -939,8 +962,8 @@ by listing only the most recent open issues. Configure the cap globally under
 `review.problem_issue.max_recent_issues` and override it per workspace when a
 repository needs a tighter or looser lifecycle scan.
 
-Closing and mark-resolved actions use `llm.triage_fallback_chain` (or inherit
-`llm.fallback_chain`). File coverage and commit ancestry are checked first; the
+Closing and mark-resolved actions use `llm.triage_model_chain` (or inherit
+`llm.model_chain`). File coverage and commit ancestry are checked first; the
 issue remains open unless the model then confirms the old diagnostic is fixed
 in the current source. Same-scope race duplicates are still cleaned up without
 model analysis because they represent duplicate managed identities, not a code

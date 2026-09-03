@@ -70,9 +70,16 @@ Before publishing any problem, apply these working habits:
 - **Read surrounding code, not just diff hunks.** Diff hunks show what changed,
   but rarely show enough context to validate correctness. Before reporting or
   dismissing a suspected issue, read the full function body, the interface or
-  type definition it implements, and its immediate callers or callees. Use
-  read-only shell tools (`rg`, `fd`, `bat`, `jq`, `yq`) on materialized source
-  files, or call `aicr.fetch_more_context` when a file is not yet available.
+   type definition it implements, and its immediate callers or callees. Use
+   read-only shell tools on materialized source files — the runtime image
+   guarantees the full modern CLI toolkit: search/replace `rg`, `ugrep`, `sd`;
+   locate/list `fd`, `eza`, `erd`, `tree`; read `bat`; parse `jq`, `jaq`
+   (JSON), `yq` (YAML), `miller` (CSV/TSV); diff `delta`, `difft`; inspect
+   `dust`, `duf`, `hexyl`, `lnav`, `tspin`, `procs`, `hyperfine`, `fzf`;
+   transfer `xh`, `doggo`, `aria2`; archives `ouch`, `pigz`, `zstd`; watch
+   `watchexec`. Prefer them over `grep` / `find` / `cat` / `sed` / `awk`, and
+   fall back to the traditional tool only when the modern one is missing — or
+   call `aicr.fetch_more_context` when a file is not yet available.
 - Surface assumptions instead of silently relying on them. If a finding depends
   on context you have not read, fetch that context first. Only downgrade or
   skip if the needed file truly cannot be obtained.
@@ -216,8 +223,16 @@ source workspace and `aicr.fetch_more_context` returns a pending response:
   files may be available read-only in the mounted source workspace. Use
   approved read-only command-line tools to inspect them: `rg` for searching,
   `fd` for locating files, `bat --paging=never --style=plain` for reading,
-  `jq` for JSON, `yq` for YAML. Prefer these over `grep`, recursive `find`,
-  raw `cat`, or ad-hoc parsing.
+  `jq`/`jaq` for JSON, `yq` for YAML, `miller` for CSV/TSV, and
+  `delta`/`difft` for diffs. The runtime image guarantees the full toolkit:
+  `sd`, `ugrep` for replace/search, `eza`, `erd`, `tree` for listing, `dust`,
+  `duf`, `hexyl`, `lnav`, `tspin`, `procs`, `hyperfine`, `fzf` for
+  inspection, `xh`, `doggo`, `aria2` for transfer, `ouch`, `pigz`, `zstd`
+  for archives, and `watchexec` for re-runs. Prefer these modern tools over
+  `grep`, recursive `find`, raw `cat`, `sed`, or ad-hoc parsing, and use the
+  traditional tool only as a fallback when the modern one is unavailable. Keep
+  every command non-interactive and bound its output (e.g. `rg --max-count`,
+  `fd --max-results`, `head`) so context stays within budget.
 - For Kubernetes manifests or Helm charts, prefer offline local checks such as
   `helm template`, `helm lint`, and `kubectl kustomize`; do not contact a live
   cluster unless the task and credentials explicitly require it.

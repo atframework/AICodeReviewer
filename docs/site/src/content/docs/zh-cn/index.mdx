@@ -74,7 +74,7 @@ agent CLI，再把结构化结果路由回 PR 评论、托管 issue 或 IM 机�
     以及硬超时清理。
   </Card>
   <Card title="成本与上下文控制" icon="analytics">
-    自动 diff 压缩、按 run 的预算上限、LLM fallback 链，dashboard 按项目和
+    自动 diff 压缩、按 run 的预算上限、LLM 模型链，dashboard 按项目和
     provider 统计 token 与成本。
   </Card>
   <Card title="自托管、单容器" icon="server">
@@ -127,7 +127,7 @@ agent CLI，再把结构化结果路由回 PR 评论、托管 issue 或 IM 机�
   run 不会误关该文件上的 issue。
 - **内置可观测性。** Dashboard 提供按项目统计、按 run 的 token 与成本明细、
   provider 级 LLM 用量、每日汇总，以及供 Prometheus 抓取的 `/metrics` 端点。
-- **重试与降级。** 队列级重试带指数退避。LLM fallback 链在主 provider 失败或
+- **重试与降级。** 队列级重试带指数退避。LLM 模型链在主 provider 失败或
   限流时切到下一个。
 
 ## 支持的集成

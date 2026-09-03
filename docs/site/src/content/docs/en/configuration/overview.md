@@ -16,7 +16,7 @@ the table below as a jumping-off point.
 
 | Namespace | What it controls | Detail page |
 | --- | --- | --- |
-| `llm` | Providers, fallback chain, retry/backoff, spend budget, and the models.dev metadata catalog. | [LLM Providers and Models](/en/configuration/llm/) |
+| `llm` | Providers, the model chain, retry/backoff, spend budget, and the models.dev metadata catalog. | [LLM Providers and Models](/en/configuration/llm/) |
 | `triggers` | One entry per VCS source (Gitea, GitHub, GitLab, P4, SVN) — inbound webhook/HMAC verification and outbound tokens. | [Authentication & secrets](/en/configuration/authentication/) |
 | `workspaces` | The repositories you review: source bindings, per-workspace overrides, and the clone cache. | this page |
 | `outputs` | Output channels (PR reviews, IM bots, managed issues), routing rules, and the zero-problem policy. | [Output Channels and Routing](/en/configuration/outputs/) |
@@ -156,7 +156,7 @@ API key) combine.
 ## Where to go next
 
 - New to the project? Read [LLM Providers and Models](/en/configuration/llm/)
-  first — without a provider and fallback chain nothing runs.
+  first — without a provider and a model chain nothing runs.
 - Going to production? Configure a durable queue
   ([Queue and Retry](/en/configuration/queue/)), storage
   ([Storage](/en/configuration/storage/)), and the agent

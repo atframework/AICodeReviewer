@@ -360,6 +360,43 @@ This file records verified external sources for repository AI-agent guidance, Ag
 - `next_review`: 2026-11-09
 - `update_trigger`: Re-check before changing the model-catalog fetch URL, the api.json field mapping into `ModelSpec`, the per-tool config-injection strategy, or the build-time fallback snapshot source.
 
+### Modern CLI tool availability and release artifacts
+
+- Sources:
+  - <https://packages.ubuntu.com/> (suite `noble` package searches; pre-trixie baseline)
+  - Live `apt-cache policy` / `apt-cache show` inside `debian:trixie-slim` via WSL podman (2026-09-03; default `debian.sources` deb822, `Components: main` only)
+  - <https://package.perforce.com/apt/ubuntu/dists/> (directory listing)
+  - GitHub Releases API `repos/<owner>/<repo>/releases/latest` for `bootandy/dust`, `XAMPPRocky/tokei`, `ducaale/xh`, `mr-karan/doggo`, `01mf02/jaq`, `Wilfred/difftastic`, `ouch-org/ouch`, `dalance/procs`, `watchexec/watchexec`, `bensadeh/tailspin`, `solidiquis/erdtree`, `dathere/qsv`
+- Verified guidance:
+  - Debian 13 (trixie) apt with `Components: main` only carries every runtime apt package in `deploy/Dockerfile` (zero missing in the live container check), including `ripgrep` 14.1.1, `fd-find` 10.2.0, `bat` 0.25.0, `sd` 1.0.0, `eza` 0.21.0, `duf` 0.8.1, `hyperfine` 1.19.0, `hexyl` 0.8.0, `miller` 6.13.0, `git-delta` 0.18.2, `lnav` 0.12.4, `ugrep` 7.4.2, `fzf` 0.60.3, `universal-ctags`, `podman`/`buildah`/`skopeo`. Trixie newly packages `du-dust` 1.2.0, `tokei` 12.1.2, `xh` 0.24.0, `procs` 0.14.10, `tailspin` 5.4.2, and `plocate` 1.1.23 (Ubuntu 24.04 noble had none of these); it still lacks `doggo`, `jaq`, `qsv`, `ouch`, `difftastic`, `watchexec`, and `erdtree`.
+  - The image keeps pinned static builds for `dust` (v1.2.5 > trixie 1.2.0), `xh` (v0.26.2 > 0.24.0), `procs` (v0.14.12 > 0.14.10), and `tailspin` (7.0.0 > 5.4.2) because the pinned versions are newer and reproducible across arches.
+  - Pinned static-binary releases and archive layouts verified against live artifacts: `dust` v1.2.5, `xh` v0.26.2, `doggo` v1.4.0 (root binary), `jaq` v3.1.1 (raw binary; aarch64 is gnu-only), `difftastic` 0.70.0 (root `difft`; aarch64 is gnu-only; ~120 MB uncompressed), `ouch` 0.8.2 (no `v` tag prefix), `procs` v0.14.12 (zip, root binary), `watchexec` v2.7.0 (asset names strip the `v`), `tailspin` 7.0.0 (no `v` prefix; binary is `tspin`), `erdtree` v3.1.2 (root `erd`).
+  - `tokei` publishes no release binaries since v13.0.0 (v13.0.0/v14.0.0 have zero assets; last binaries at v12.1.2) and trixie apt carries only that stale 12.1.2; `qsv` 22.0.1 musl zip is ~104 MB compressed. Both are excluded from the runtime image along with `plocate` (no `updatedb` index in containers).
+  - Perforce's APT repo publishes only Ubuntu codename dists (`bionic`, `focal`, `jammy`, `noble`, `precise`, `trusty`, `xenial` — verified 2026-09-03); there is no Debian dist, so `PERFORCE_APT_DISTRO` stays an Ubuntu codename (`noble`) on the Debian trixie base and the noble `p4-cli` build (glibc 2.39) runs on trixie's glibc 2.41.
+  - Tencent mirror endpoints verified absent for Helm apt, yq, and GitHub releases; GitHub release downloads accept a URL prefix override (`GH_RELEASE_PREFIX`) for ghproxy-style mirrors or internal caches. For Debian apt, China mirrors share the layout `<root>/debian` + `<root>/debian-security` (USTC, TUNA, Aliyun, Tencent), so the Dockerfile derives the security entries by appending `-security` to `APT_MIRROR`.
+- `last_checked`: 2026-09-03
+- `next_review`: 2026-12-03
+- `update_trigger`: Re-check when bumping the pinned `*_VERSION` args in `deploy/Dockerfile`, when the distro base changes, or when adding/removing a tool in the runtime image baseline.
+
+### PowerShell 7+ behavior for Windows shell work
+
+- Sources:
+  - <https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_pwsh>
+  - <https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_quoting_rules>
+  - <https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_parsing>
+  - <https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_preference_variables>
+  - Empirical probes on 2026-09-03 against PowerShell 7.6.5 and Windows PowerShell 5.1 on the maintainer host.
+- Verified guidance:
+  - Edition differences visible to agents (all verified live): 5.1 rejects `&&`/`||` at parse time (whole script fails), aliases `curl`/`wget` to `Invoke-WebRequest`, defaults redirection/`Out-File` to UTF-16LE, and has no `$PSNativeCommandArgumentPassing` (always Legacy). 7.6.5 resolves `curl` to `curl.exe`, has no `wget` alias, defaults `$PSNativeCommandArgumentPassing` to `Windows`, and writes UTF-8 without BOM.
+  - `pwsh -Command` collapses a native command's non-zero exit code to `1` unless the command text ends with `exit $LASTEXITCODE` (verified: `cmd /c exit 7` yields outer `$LASTEXITCODE` 1 without the explicit exit, 9 with `exit 9` semantics).
+  - `Select-String` returns `Microsoft.PowerShell.Commands.MatchInfo` objects (`.Line` holds the text); `ConvertTo-Json` truncates nesting past depth 2 with only a warning; `& { ... } | ...` pipes statement-block output.
+  - `powershell.exe` on the maintainer host blocks unsigned scripts by execution policy (`UnauthorizedAccess`) while `pwsh.exe` 7.6.5 runs them; the `node`-direct CLI workaround in `AGENTS.md` is edition-independent and stays valid.
+  - `where` resolves to the `Where-Object` alias (7.x verified); `find` resolves to `find.exe`; prefer full cmdlet names or modern tool binaries over short aliases.
+  - Outer-shell `$` expansion inside double-quoted inline commands breaks inner PowerShell variables (observed live in this session); write probe scripts under `build/tmp/` instead of stacking quote layers.
+- `last_checked`: 2026-09-03
+- `next_review`: 2026-12-03
+- `update_trigger`: Re-check when updating Windows shell guidance in `AGENTS.md` or `.agents/skills/modern-cli-toolkit/references/powershell-for-agents.md`, when the minimum supported PowerShell version changes, or when Microsoft revises `$PSNativeCommandArgumentPassing` defaults.
+
 ## Repository decisions from this pass
 
 - Keep `AGENTS.md` as the only always-on canonical repository instruction file.

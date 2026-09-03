@@ -45,15 +45,24 @@
   - Eval fixture validation after build: `node packages/cli/dist/index.js eval --validate-only`
 - PowerShell treats backticks as escapes/line continuations; avoid inline `node -e` snippets that contain JavaScript template literals or complex quote nesting. Prefer native PowerShell, a short script under `build/tmp/`, or quote-free Node snippets.
 - If `pnpm` is available in the environment (e.g., CI Linux runner), prefer `pnpm` over the `node` workaround; for eval fixture validation use `pnpm eval:validate` after `pnpm build`.
+- **Windows shell baseline**: run PowerShell work in the latest PowerShell 7+ (`pwsh.exe`), never the legacy Windows PowerShell 5.1 console — 5.1 rejects `&&` at parse time, aliases `curl`/`wget` to `Invoke-WebRequest`, writes redirection as UTF-16LE, and always uses Legacy native-argument quoting. Spawn fresh processes with `pwsh.exe -NoLogo -NoProfile`; do not nest `cmd.exe`, Git Bash, or WSL shells unless the task requires it. Prefer modern CLI tools (see below); when none fits, use native PowerShell syntax with full cmdlet names — avoid Unix aliases and ambiguous names (`cat`, `find`, `where`, `ps`, `sort`, `curl` differ across editions). Single quotes unless expansion is needed, `${name}` for ambiguous boundaries, backtick escapes inside double quotes, here-strings (`@" ... "@`) for multiline text (never Bash heredocs), and `& { ... } | ...` to pipe statement blocks. On failure, check the command, path, quoting, and `$LASTEXITCODE` before anything else — do not switch shells. The full verified rule set lives in `.agents/skills/modern-cli-toolkit/references/powershell-for-agents.md`.
+- **Modern CLI tool preference**: when initializing AI agent prompts/skills or running shell work, prefer modern high-performance tools over traditional Unix tools whenever they exist locally — probe with `command -v` and fall back to the traditional tool only when the modern one is missing (e.g. `rg` → `grep`, `fd` → `find`, `sd` → `sed`, `bat` → `cat`, `jq`/`yq`/`miller` → ad-hoc parsing). The full cross-platform tool catalog, install channels, and agent best practices live in `.agents/skills/modern-cli-toolkit/`.
 - **Linux review/runtime shell baseline**: The deployed review image ships
-  `git`, `git-lfs`, `subversion`, `p4`, `rg`, `fd`, `bat`, `jq`, `tree`,
-  `yq`, `kubectl`, `helm`, `podman`, `buildah`, `skopeo`, `python3`/`pip`/`venv`,
-  `build-essential`, `cmake`, `ninja`, `clang`, `clang-format`, `clang-tidy`,
-  `cppcheck`, `gdb`, `valgrind`, `shellcheck`, `strace`, `lsof`, `sqlite3`,
-  `rsync`, and `universal-ctags`. Prefer `rg` over `grep`, `fd` over recursive
-  `find`, `bat --paging=never --style=plain` over raw `cat` for human
-  inspection, `jq` for JSON, and `yq` for YAML. Use POSIX fallbacks only when
-  exact flags or host portability are required.
+  VCS tools (`git`, `git-lfs`, `subversion`, `p4`); modern CLI tools
+  (`rg`, `fd`, `sd`, `bat`, `eza`, `jq`, `yq`, `jaq`, `miller`, `delta`,
+  `difft`, `tree`, `erd`, `dust`, `duf`, `hexyl`, `hyperfine`, `lnav`,
+  `ugrep`, `pigz`, `zstd`, `aria2`, `fzf`, `xh`, `doggo`, `ouch`, `procs`,
+  `watchexec`, `tspin`); Kubernetes/YAML tools (`kubectl`, `helm`);
+  container clients (`podman`, `buildah`, `skopeo`); Python
+  (`python3`/`pip`/`venv`); and build/debug/static-analysis tools
+  (`build-essential`, `cmake`, `ninja`, `clang`, `clang-format`,
+  `clang-tidy`, `cppcheck`, `gdb`, `valgrind`, `shellcheck`, `strace`,
+  `lsof`, `sqlite3`, `rsync`, `universal-ctags`). Inside this image the
+  modern tools are guaranteed — no availability probe needed. Prefer `rg`
+  over `grep`, `fd` over recursive `find`, `bat --paging=never
+  --style=plain` over raw `cat` for human inspection, `jq` for JSON, and
+  `yq` for YAML. Use POSIX fallbacks only when exact flags or host
+  portability are required.
 
 ## Known codebase pitfalls
 
@@ -94,6 +103,7 @@ For code, config, script, CI, or shared-tooling changes, `pnpm ci` is the final 
 - `.agents/skills/ai-agent-maintenance/SKILL.md`
 - `.agents/skills/plan-implementation-audit/SKILL.md`
 - `.agents/skills/agent-runtime-integration/SKILL.md`
+- `.agents/skills/modern-cli-toolkit/SKILL.md`
 - `.agents/skills/output-channel-contracts/SKILL.md`
 - `.agents/skills/remote-deployment/SKILL.md`
 - `.agents/skills/docs-writing-style/SKILL.md`

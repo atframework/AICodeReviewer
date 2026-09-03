@@ -69,18 +69,28 @@ describe("deploy assets", () => {
     expect(dockerfile).toContain("if getent passwd 1000 >/dev/null; then useradd --gid node --create-home --shell /bin/bash node; else useradd --uid 1000 --gid node --create-home --shell /bin/bash node; fi;");
   });
 
-  it("rewrites Ubuntu apt sources before the first apt update and supports ports variants", () => {
+  it("rewrites Debian apt sources before the first apt update and derives the security mirror", () => {
     const dockerfile = readRepoFile("deploy/Dockerfile");
 
     const buildStage = dockerfile.split("# ---------- Runtime stage ----------")[0] ?? dockerfile;
     const mirrorSwitchIndex = buildStage.indexOf('MIRROR="${APT_MIRROR:-${APK_MIRROR:-}}"; \\');
     const noninteractiveIndex = buildStage.indexOf("export DEBIAN_FRONTEND=noninteractive; \\");
     const firstAptUpdateIndex = buildStage.indexOf("apt-get update; \\");
+    const securityRuleIndex = buildStage.indexOf("s|http://deb.debian.org/debian-security|${MIRROR}-security|g");
+    const mainRuleIndex = buildStage.indexOf("s|http://deb.debian.org/debian|${MIRROR}|g");
 
     expect(dockerfile).toContain("COPY deploy/extra-ca/ /usr/local/share/ca-certificates/");
-    expect(dockerfile).toContain('s|//ports.ubuntu.com/\\? |//ports.ubuntu.com/ubuntu-ports |g');
-    expect(dockerfile).toContain("s|http://ports.ubuntu.com/ubuntu-ports|${MIRROR}|g");
-    expect(dockerfile).toContain("s|https://ports.ubuntu.com/ubuntu-ports|${MIRROR}|g");
+    expect(dockerfile).toContain('MIRROR="${MIRROR%/}"; \\');
+    expect(dockerfile).toContain("/etc/apt/sources.list.d/debian.sources");
+    expect(dockerfile).toContain("s|http://deb.debian.org/debian-security|${MIRROR}-security|g");
+    expect(dockerfile).toContain("s|https://deb.debian.org/debian-security|${MIRROR}-security|g");
+    expect(dockerfile).toContain("s|http://deb.debian.org/debian|${MIRROR}|g");
+    expect(dockerfile).toContain("s|https://deb.debian.org/debian|${MIRROR}|g");
+    expect(dockerfile).not.toContain("ubuntu.sources");
+    expect(dockerfile).not.toContain("ports.ubuntu.com");
+    expect(securityRuleIndex).toBeGreaterThan(-1);
+    expect(mainRuleIndex).toBeGreaterThan(-1);
+    expect(securityRuleIndex).toBeLessThan(mainRuleIndex);
     expect(mirrorSwitchIndex).toBeGreaterThan(-1);
     expect(noninteractiveIndex).toBeGreaterThan(-1);
     expect(firstAptUpdateIndex).toBeGreaterThan(-1);

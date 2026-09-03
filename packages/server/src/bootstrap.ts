@@ -173,11 +173,11 @@ function extractPullNumber(payload: unknown): number | undefined {
   return typeof payload.number === "number" ? payload.number : undefined;
 }
 
-type LlmFallbackChain = AppConfig["llm"]["fallback_chain"];
+type LlmModelChain = AppConfig["llm"]["model_chain"];
 
 function resolveModelSpecFromChain(
   providers: AppConfig["llm"]["providers"],
-  chain: LlmFallbackChain,
+  chain: LlmModelChain,
   providerId?: string,
 ): ModelSpec {
   if (providers.length === 0) {
@@ -209,11 +209,11 @@ function resolveModelSpecFromChain(
 }
 
 export function resolveModelSpecFromConfig(config: AppConfig, providerId?: string): ModelSpec {
-  return resolveModelSpecFromChain(config.llm.providers, config.llm.fallback_chain, providerId);
+  return resolveModelSpecFromChain(config.llm.providers, config.llm.model_chain, providerId);
 }
 
 export function resolveIssueTriageModelSpecFromConfig(config: AppConfig): ModelSpec {
-  const triageChain = config.llm.triage_fallback_chain;
+  const triageChain = config.llm.triage_model_chain;
   if (triageChain && triageChain.length > 0) {
     return resolveModelSpecFromChain(config.llm.providers, triageChain);
   }
@@ -2196,7 +2196,7 @@ function toGatewayPerProviderOverrides(
 }
 
 function toGatewayFallbackChain(
-  chain: AppConfig["llm"]["fallback_chain"],
+  chain: AppConfig["llm"]["model_chain"],
 ): readonly LlmGatewayFallbackEntry[] {
   return chain.map((entry) => ({
     provider: entry.provider,
@@ -2248,8 +2248,8 @@ function buildGatewayModelPricing(
     }
   };
   for (const entry of [
-    ...config.llm.fallback_chain,
-    ...(config.llm.triage_fallback_chain ?? []),
+    ...config.llm.model_chain,
+    ...(config.llm.triage_model_chain ?? []),
   ]) {
     const provider = config.llm.providers.find((p) => p.id === entry.provider);
     if (provider) {
@@ -2303,10 +2303,10 @@ function resolveSummarizeModelFromConfig(config: AppConfig): ModelSpec | undefin
   const providers = config.llm.providers;
   if (providers.length === 0) return undefined;
 
-  const fallbackEntry = config.llm.fallback_chain.find((entry) => entry.role === summarizeRole);
+  const fallbackEntry = config.llm.model_chain.find((entry) => entry.role === summarizeRole);
   if (!fallbackEntry) {
-    return config.llm.fallback_chain.length > 0
-      ? resolveModelSpecFromConfig(config, config.llm.fallback_chain[0]!.provider)
+    return config.llm.model_chain.length > 0
+      ? resolveModelSpecFromConfig(config, config.llm.model_chain[0]!.provider)
       : undefined;
   }
 
@@ -2418,14 +2418,14 @@ export async function bootstrapServerApp(options: BootstrapServerOptions): Promi
   const llmClient = createResilientChatClient({
     clientFactory: createLlmClientFromModelSpec,
     providers: toGatewayProviders(config.llm.providers),
-    fallbackChain: toGatewayFallbackChain(config.llm.fallback_chain),
+    fallbackChain: toGatewayFallbackChain(config.llm.model_chain),
     ...(retryConfig ? { retry: retryConfig } : {}),
     ...(budgetConfig ? { budget: budgetConfig } : {}),
     ...(perProviderOverrides ? { perProviderOverrides } : {}),
     ...(gatewayModelPricing ? { modelPricing: gatewayModelPricing } : {}),
   });
 
-  const triageChain = config.llm.triage_fallback_chain;
+  const triageChain = config.llm.triage_model_chain;
   let triageModel = model;
   let triageLlmClient = llmClient;
   if (triageChain && triageChain.length > 0) {

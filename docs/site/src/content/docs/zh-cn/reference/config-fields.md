@@ -39,7 +39,7 @@ description: 全量配置字段参考，按顶层命名空间组织，并以 Zod
 | 字段 | 类型 | 默认值 | 描述 |
 | --- | --- | --- | --- |
 | `llm.providers[]` | array | `[]` | LLM provider 连接；每项有 `id`、`kind`，以及可选的 `base_url`、`api_key_env`、`api_version`、`catalog_provider`、`catalog_id` |
-| `llm.providers[].id` | string | — | 被 `fallback_chain` 引用的 provider 标识 |
+| `llm.providers[].id` | string | — | 被 `model_chain` 引用的 provider 标识 |
 | `llm.providers[].kind` | enum | — | provider kind（见上方 LLM provider 枚举） |
 | `llm.providers[].base_url` | URL | — | provider API base URL |
 | `llm.providers[].api_key_env` | string | — | 持有 API key 的环境变量名 |
@@ -49,8 +49,8 @@ description: 全量配置字段参考，按顶层命名空间组织，并以 Zod
 | `llm.providers[].reasoning_effort` | enum | — | 推理强度档位：`minimal`、`low`、`medium`、`high`、`max`（透传字段） |
 | `llm.providers[].thinking_level` | enum | — | 思考强度抽象档位：`off`、`minimal`、`low`、`medium`、`high`、`max`（透传字段） |
 | `llm.providers[].thinking_budget_tokens` | int | — | 显式思考预算 token 数（透传字段） |
-| `llm.fallback_chain[]` | array | `[]` | 失败时按序尝试的 provider/model 条目；每项有 `provider`、`model`、`role`（`light`/`heavy`/`any`） |
-| `llm.triage_fallback_chain[]` | array | 继承 | Git 服务 issue triage 与已解决问题复核的可选链；首条目为默认模型。缺省或为空时继承 `llm.fallback_chain` |
+| `llm.model_chain[]` | array | `[]` | 有序 provider/model 条目；首条目为默认路由，失败时按序尝试后续条目。每项有 `provider`、`model`、`role`（`light`/`heavy`/`any`） |
+| `llm.triage_model_chain[]` | array | 继承 | Git 服务 issue triage 与已解决问题复核的可选链；首条目为默认模型。缺省或为空时继承 `llm.model_chain` |
 | `llm.retry` | object | — | 单次调用重试策略 |
 | `llm.retry.max_attempts` | int > 0 | — | 单次 LLM 调用最大尝试次数 |
 | `llm.retry.respect_retry_after` | boolean | — | 遵守 `Retry-After` 响应头 |

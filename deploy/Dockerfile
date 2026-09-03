@@ -3,12 +3,16 @@
 # =============================================================================
 #
 # Configurable build args (for domestic/China deployment):
-#   BASE_IMAGE   — Distro base image for build/runtime stages (default: ubuntu:24.04)
-#   NODE_IMAGE   — Official Node.js image used as the Node 22 userspace source
-#                  (default: node:22-bookworm-slim)
-#   APT_MIRROR   — Ubuntu apt mirror root (e.g. http://mirrors.ustc.edu.cn/ubuntu)
+#   BASE_IMAGE   — Distro base image for build/runtime stages (default: debian:trixie-slim)
+#   NODE_IMAGE   — Official Node.js image used as the Node LTS userspace source
+#                  (default: node:lts-trixie-slim, currently Node 24)
+#   APT_MIRROR   — Debian apt mirror root for the main archive; security
+#                  entries are derived by appending "-security"
+#                  (e.g. http://mirrors.ustc.edu.cn/debian)
 #   APK_MIRROR   — Deprecated alias for APT_MIRROR (kept for backward compatibility)
-#   PERFORCE_APT_DISTRO — Ubuntu codename for Perforce APT repo (default: noble)
+#   PERFORCE_APT_DISTRO — Ubuntu codename for the Perforce APT repo (default:
+#                  noble). Perforce only publishes Ubuntu dists; the noble
+#                  p4-cli build runs unchanged on trixie's newer glibc.
 #   NPM_REGISTRY — npm/pnpm registry (e.g. http://mirrors.tencent.com/npm/)
 #   NPM_STRICT_SSL — Set to false when using HTTP mirrors
 #   PIP_INDEX_URL — pip simple index URL (e.g. https://mirrors.tencent.com/pypi/simple)
@@ -18,10 +22,16 @@
 #   KUBERNETES_APT_REPO_VERSION — Kubernetes minor repo for kubectl (default: v1.36)
 #   HELM_APT_REPO / HELM_APT_KEY_URL — Helm Debian package repo and signing key
 #   YQ_VERSION / YQ_DOWNLOAD_BASE — Mike Farah yq release version and download base
+#   GH_RELEASE_PREFIX — Optional URL prefix for GitHub release downloads of the
+#                  pinned static CLI tools (e.g. https://mirror.example.com/ for
+#                  ghproxy-style mirrors or an internal cache; default: direct)
+#   *_VERSION    — Pinned upstream versions for the static CLI tools installed
+#                  from GitHub releases (dust, xh, doggo, jaq, difftastic, ouch,
+#                  procs, watchexec, tailspin, erdtree)
 # =============================================================================
 
-ARG NODE_IMAGE=node:22-bookworm-slim
-ARG BASE_IMAGE=ubuntu:24.04
+ARG NODE_IMAGE=node:lts-trixie-slim
+ARG BASE_IMAGE=debian:trixie-slim
 FROM ${NODE_IMAGE} AS node-base
 
 # ---------- Build stage ----------
@@ -50,32 +60,24 @@ RUN set -eux; \
   export DEBIAN_FRONTEND=noninteractive; \
   export DEBCONF_NONINTERACTIVE_SEEN=true; \
   MIRROR="${APT_MIRROR:-${APK_MIRROR:-}}"; \
+  MIRROR="${MIRROR%/}"; \
   if [ -n "${MIRROR}" ]; then \
-  if [ -f /etc/apt/sources.list.d/ubuntu.sources ]; then \
+  if [ -f /etc/apt/sources.list.d/debian.sources ]; then \
   sed -i \
-  -e "s|http://archive.ubuntu.com/ubuntu|${MIRROR}|g" \
-  -e "s|http://security.ubuntu.com/ubuntu|${MIRROR}|g" \
-  -e "s|https://archive.ubuntu.com/ubuntu|${MIRROR}|g" \
-  -e "s|https://security.ubuntu.com/ubuntu|${MIRROR}|g" \
-  -e "s|http://ports.ubuntu.com/ubuntu-ports|${MIRROR}|g" \
-  -e "s|https://ports.ubuntu.com/ubuntu-ports|${MIRROR}|g" \
-  /etc/apt/sources.list.d/ubuntu.sources; \
+  -e "s|http://deb.debian.org/debian-security|${MIRROR}-security|g" \
+  -e "s|https://deb.debian.org/debian-security|${MIRROR}-security|g" \
+  -e "s|http://deb.debian.org/debian|${MIRROR}|g" \
+  -e "s|https://deb.debian.org/debian|${MIRROR}|g" \
+  /etc/apt/sources.list.d/debian.sources; \
   fi; \
   if [ -f /etc/apt/sources.list ]; then \
   sed -i \
-  -e 's|//ports.ubuntu.com/\? |//ports.ubuntu.com/ubuntu-ports |g' \
-  -e "s|http://archive.ubuntu.com/ubuntu|${MIRROR}|g" \
-  -e "s|http://security.ubuntu.com/ubuntu|${MIRROR}|g" \
-  -e "s|https://archive.ubuntu.com/ubuntu|${MIRROR}|g" \
-  -e "s|https://security.ubuntu.com/ubuntu|${MIRROR}|g" \
-  -e "s|http://ports.ubuntu.com/ubuntu-ports|${MIRROR}|g" \
-  -e "s|https://ports.ubuntu.com/ubuntu-ports|${MIRROR}|g" \
+  -e "s|http://deb.debian.org/debian-security|${MIRROR}-security|g" \
+  -e "s|https://deb.debian.org/debian-security|${MIRROR}-security|g" \
+  -e "s|http://deb.debian.org/debian|${MIRROR}|g" \
+  -e "s|https://deb.debian.org/debian|${MIRROR}|g" \
   /etc/apt/sources.list; \
   fi; \
-  fi; \
-  if [ -f /etc/apt/sources.list.d/ubuntu.sources ] \
-  && ! grep -q '^Components: .*universe' /etc/apt/sources.list.d/ubuntu.sources; then \
-  sed -i 's/^Components: \(.*\)$/Components: \1 universe/' /etc/apt/sources.list.d/ubuntu.sources; \
   fi; \
   apt-get update; \
   apt-get install -y --no-install-recommends ca-certificates; \
@@ -149,6 +151,17 @@ ARG HELM_APT_REPO=https://packages.buildkite.com/helm-linux/helm-debian/any/
 ARG HELM_APT_KEY_URL=https://packages.buildkite.com/helm-linux/helm-debian/gpgkey
 ARG YQ_VERSION=v4.53.2
 ARG YQ_DOWNLOAD_BASE=https://github.com/mikefarah/yq/releases/download
+ARG GH_RELEASE_PREFIX=
+ARG DUST_VERSION=v1.2.5
+ARG XH_VERSION=v0.26.2
+ARG DOGGO_VERSION=v1.4.0
+ARG JAQ_VERSION=v3.1.1
+ARG DIFFTASTIC_VERSION=0.70.0
+ARG OUCH_VERSION=0.8.2
+ARG PROCS_VERSION=v0.14.12
+ARG WATCHEXEC_VERSION=v2.7.0
+ARG TAILSPIN_VERSION=7.0.0
+ARG ERDTREE_VERSION=v3.1.2
 ENV NODE_ENV=production
 ENV npm_config_registry=${NPM_REGISTRY}
 ENV npm_config_strict_ssl=${NPM_STRICT_SSL}
@@ -164,32 +177,24 @@ RUN set -eux; \
   export DEBIAN_FRONTEND=noninteractive; \
   export DEBCONF_NONINTERACTIVE_SEEN=true; \
   MIRROR="${APT_MIRROR:-${APK_MIRROR:-}}"; \
+  MIRROR="${MIRROR%/}"; \
   if [ -n "${MIRROR}" ]; then \
-  if [ -f /etc/apt/sources.list.d/ubuntu.sources ]; then \
+  if [ -f /etc/apt/sources.list.d/debian.sources ]; then \
   sed -i \
-  -e "s|http://archive.ubuntu.com/ubuntu|${MIRROR}|g" \
-  -e "s|http://security.ubuntu.com/ubuntu|${MIRROR}|g" \
-  -e "s|https://archive.ubuntu.com/ubuntu|${MIRROR}|g" \
-  -e "s|https://security.ubuntu.com/ubuntu|${MIRROR}|g" \
-  -e "s|http://ports.ubuntu.com/ubuntu-ports|${MIRROR}|g" \
-  -e "s|https://ports.ubuntu.com/ubuntu-ports|${MIRROR}|g" \
-  /etc/apt/sources.list.d/ubuntu.sources; \
+  -e "s|http://deb.debian.org/debian-security|${MIRROR}-security|g" \
+  -e "s|https://deb.debian.org/debian-security|${MIRROR}-security|g" \
+  -e "s|http://deb.debian.org/debian|${MIRROR}|g" \
+  -e "s|https://deb.debian.org/debian|${MIRROR}|g" \
+  /etc/apt/sources.list.d/debian.sources; \
   fi; \
   if [ -f /etc/apt/sources.list ]; then \
   sed -i \
-  -e 's|//ports.ubuntu.com/\? |//ports.ubuntu.com/ubuntu-ports |g' \
-  -e "s|http://archive.ubuntu.com/ubuntu|${MIRROR}|g" \
-  -e "s|http://security.ubuntu.com/ubuntu|${MIRROR}|g" \
-  -e "s|https://archive.ubuntu.com/ubuntu|${MIRROR}|g" \
-  -e "s|https://security.ubuntu.com/ubuntu|${MIRROR}|g" \
-  -e "s|http://ports.ubuntu.com/ubuntu-ports|${MIRROR}|g" \
-  -e "s|https://ports.ubuntu.com/ubuntu-ports|${MIRROR}|g" \
+  -e "s|http://deb.debian.org/debian-security|${MIRROR}-security|g" \
+  -e "s|https://deb.debian.org/debian-security|${MIRROR}-security|g" \
+  -e "s|http://deb.debian.org/debian|${MIRROR}|g" \
+  -e "s|https://deb.debian.org/debian|${MIRROR}|g" \
   /etc/apt/sources.list; \
   fi; \
-  fi; \
-  if [ -f /etc/apt/sources.list.d/ubuntu.sources ] \
-  && ! grep -q '^Components: .*universe' /etc/apt/sources.list.d/ubuntu.sources; then \
-  sed -i 's/^Components: \(.*\)$/Components: \1 universe/' /etc/apt/sources.list.d/ubuntu.sources; \
   fi; \
   apt-get update; \
   apt-get install -y --no-install-recommends \
@@ -208,11 +213,15 @@ RUN set -eux; \
   chmod a+r /etc/apt/keyrings/kubernetes-apt-keyring.gpg; \
   curl -fsSL "${HELM_APT_KEY_URL}" | gpg --dearmor -o /usr/share/keyrings/helm.gpg; \
   chmod a+r /usr/share/keyrings/helm.gpg; \
+  # Perforce's APT repo only publishes Ubuntu codename dists (verified: the
+  # newest is noble); the noble p4-cli build runs unchanged on trixie's newer
+  # glibc, so the repo path stays apt/ubuntu.
   echo "deb [signed-by=/usr/share/keyrings/perforce.gpg] https://package.perforce.com/apt/ubuntu ${PERFORCE_APT_DISTRO} release" > /etc/apt/sources.list.d/perforce.list; \
   echo "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] ${KUBERNETES_APT_REPO} /" > /etc/apt/sources.list.d/kubernetes.list; \
   echo "deb [signed-by=/usr/share/keyrings/helm.gpg] ${HELM_APT_REPO} any main" > /etc/apt/sources.list.d/helm-stable-debian.list; \
   apt-get update; \
   apt-get install -y --no-install-recommends \
+  aria2 \
   bat \
   buildah \
   bsdextrautils \
@@ -225,28 +234,37 @@ RUN set -eux; \
   cppcheck \
   diffutils \
   dnsutils \
+  duf \
+  eza \
   fd-find \
   file \
+  fzf \
   gawk \
   gdb \
   git \
+  git-delta \
   git-lfs \
   gzip \
   helm \
+  hexyl \
+  hyperfine \
   inotify-tools \
   iproute2 \
   iputils-ping \
   jq \
   kubectl \
   less \
+  lnav \
   lsof \
   lz4 \
+  miller \
   netcat-openbsd \
   ninja-build \
   openssh-client \
   openssl \
   p4-cli \
   patch \
+  pigz \
   pkg-config \
   podman \
   procps \
@@ -260,6 +278,7 @@ RUN set -eux; \
   python3-wheel \
   ripgrep \
   rsync \
+  sd \
   sed \
   shellcheck \
   skopeo \
@@ -270,6 +289,7 @@ RUN set -eux; \
   tcpdump \
   time \
   tree \
+  ugrep \
   universal-ctags \
   unzip \
   valgrind \
@@ -306,7 +326,7 @@ RUN set -eux; \
   echo 'disable-pip-version-check = true'; \
   } > /etc/pip.conf
 
-# Normalize Debian/Ubuntu command names so prompts and skills can consistently
+# Normalize Debian command names so prompts and skills can consistently
 # refer to `fd` / `bat` even though the distro packages ship `fdfind` / `batcat`.
 RUN set -eux; \
   if command -v fdfind >/dev/null 2>&1; then \
@@ -315,6 +335,63 @@ RUN set -eux; \
   if command -v batcat >/dev/null 2>&1; then \
   ln -sf "$(command -v batcat)" /usr/local/bin/bat; \
   fi
+
+# Modern CLI tools installed from pinned upstream GitHub release static
+# binaries: either unpackaged in Debian trixie (doggo, jaq, difftastic, ouch,
+# watchexec, erdtree) or deliberately newer than the trixie apt build (dust,
+# xh, procs, tailspin). Pinned versions keep builds reproducible; bump the
+# *_VERSION args above to upgrade. Upstream only publishes amd64/arm64 Linux
+# artifacts, so other architectures skip this layer.
+# GH_RELEASE_PREFIX optionally prefixes every release URL for ghproxy-style
+# mirrors or internal caches on networks that cannot reach github.com directly
+# (the deploy.sh build-proxy autodetect also covers these downloads).
+RUN set -eux; \
+  arch="$(dpkg --print-architecture)"; \
+  case "${arch}" in \
+  amd64) tarch=x86_64; jaq_asset=jaq-x86_64-unknown-linux-musl; difft_target=x86_64-unknown-linux-musl ;; \
+  arm64) tarch=aarch64; jaq_asset=jaq-aarch64-unknown-linux-gnu; difft_target=aarch64-unknown-linux-gnu ;; \
+  *) echo "Skipping GitHub-release CLI extras on unsupported arch: ${arch}"; exit 0 ;; \
+  esac; \
+  mkdir -p /tmp/mtcli; \
+  cd /tmp/mtcli; \
+  gh_dl() { curl -fsSL "${GH_RELEASE_PREFIX}https://github.com/$1/releases/download/$2/$3" -o "$3"; }; \
+  gh_dl bootandy/dust "${DUST_VERSION}" "dust-${DUST_VERSION}-${tarch}-unknown-linux-musl.tar.gz"; \
+  tar xzf "dust-${DUST_VERSION}-${tarch}-unknown-linux-musl.tar.gz"; \
+  install -m 0755 "dust-${DUST_VERSION}-${tarch}-unknown-linux-musl/dust" /usr/local/bin/dust; \
+  gh_dl ducaale/xh "${XH_VERSION}" "xh-${XH_VERSION}-${tarch}-unknown-linux-musl.tar.gz"; \
+  tar xzf "xh-${XH_VERSION}-${tarch}-unknown-linux-musl.tar.gz"; \
+  install -m 0755 "xh-${XH_VERSION}-${tarch}-unknown-linux-musl/xh" /usr/local/bin/xh; \
+  gh_dl mr-karan/doggo "${DOGGO_VERSION}" "doggo-linux-${tarch}.tar.gz"; \
+  mkdir -p doggo-pkg; \
+  tar xzf "doggo-linux-${tarch}.tar.gz" -C doggo-pkg; \
+  install -m 0755 doggo-pkg/doggo /usr/local/bin/doggo; \
+  gh_dl 01mf02/jaq "${JAQ_VERSION}" "${jaq_asset}"; \
+  install -m 0755 "${jaq_asset}" /usr/local/bin/jaq; \
+  gh_dl Wilfred/difftastic "${DIFFTASTIC_VERSION}" "difft-${difft_target}.tar.gz"; \
+  mkdir -p difft-pkg; \
+  tar xzf "difft-${difft_target}.tar.gz" -C difft-pkg; \
+  install -m 0755 difft-pkg/difft /usr/local/bin/difft; \
+  gh_dl ouch-org/ouch "${OUCH_VERSION}" "ouch-${tarch}-unknown-linux-musl.tar.gz"; \
+  tar xzf "ouch-${tarch}-unknown-linux-musl.tar.gz"; \
+  install -m 0755 "ouch-${tarch}-unknown-linux-musl/ouch" /usr/local/bin/ouch; \
+  gh_dl dalance/procs "${PROCS_VERSION}" "procs-${PROCS_VERSION}-${tarch}-linux.zip"; \
+  mkdir -p procs-pkg; \
+  unzip -q "procs-${PROCS_VERSION}-${tarch}-linux.zip" -d procs-pkg; \
+  install -m 0755 procs-pkg/procs /usr/local/bin/procs; \
+  gh_dl watchexec/watchexec "${WATCHEXEC_VERSION}" "watchexec-${WATCHEXEC_VERSION#v}-${tarch}-unknown-linux-musl.tar.xz"; \
+  tar xJf "watchexec-${WATCHEXEC_VERSION#v}-${tarch}-unknown-linux-musl.tar.xz"; \
+  install -m 0755 "watchexec-${WATCHEXEC_VERSION#v}-${tarch}-unknown-linux-musl/watchexec" /usr/local/bin/watchexec; \
+  gh_dl bensadeh/tailspin "${TAILSPIN_VERSION}" "tailspin-${tarch}-unknown-linux-musl.tar.gz"; \
+  mkdir -p tailspin-pkg; \
+  tar xzf "tailspin-${tarch}-unknown-linux-musl.tar.gz" -C tailspin-pkg; \
+  install -m 0755 tailspin-pkg/tspin /usr/local/bin/tspin; \
+  ln -sf /usr/local/bin/tspin /usr/local/bin/tailspin; \
+  gh_dl solidiquis/erdtree "${ERDTREE_VERSION}" "erd-${ERDTREE_VERSION}-${tarch}-unknown-linux-musl.tar.gz"; \
+  mkdir -p erd-pkg; \
+  tar xzf "erd-${ERDTREE_VERSION}-${tarch}-unknown-linux-musl.tar.gz" -C erd-pkg; \
+  install -m 0755 erd-pkg/erd /usr/local/bin/erd; \
+  cd /; \
+  rm -rf /tmp/mtcli
 
 WORKDIR /app
 

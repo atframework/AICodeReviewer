@@ -366,7 +366,8 @@ AICR 采用**两层上下文管理**，两者互补：
 
 - Diff hunks 不够用于准确评审。默认 prompt 强制要求 agent 在报告任何问题前
   主动读取完整变更文件、接口/类型定义、调用方/被调用方、配置和 schema。
-- agent 必须使用 `aicr.fetch_more_context` 或 shell 只读工具（`rg`、`fd`、`bat`）
+- agent 必须使用 `aicr.fetch_more_context` 或 shell 只读工具（`rg`、`fd`、`bat`
+  等现代工具，完整清单见 `.agents/skills/modern-cli-toolkit/`）
   获取相关代码，不允许仅基于 diff 片段发表猜测性问题。
 - 当无法获取验证所需的上下文时：高影响问题可附带不确定性声明报告；中低影响问题
   应跳过。
@@ -564,7 +565,7 @@ AICR 采用**两层上下文管理**，两者互补：
   - body 包含 `<!-- aicr:commit={headSha} -->`、`<!-- aicr:open_problems=fp1,fp2 -->` 和逐问题 `<!-- aicr:fp={fp} -->`；位置解析同时支持 `file:line` 与 `file:start-end`。
   - 同 scope 更新通过 VCS compare 验证顺序：ahead 时分类；相同 commit 不解决问题；behind/diverged 时跳过；compare 失败时更新但不分类。
   - 跨 scope 回收只用于 `consolidated`：必须同时存在存储 commit 与当前 head，并且 compare 明确确认当前 commit 位于存储 commit 之后；失败或未知结果都跳过。
-  - 旧 issue 只接收其原有 `open_problems` 中仍存在的当前 fingerprint。已覆盖且消失的 fingerprint 先进入待复核集合，只有 `llm.triage_fallback_chain`（缺省继承代码分析链）明确确认后才进入 Resolved；未覆盖、诊断元数据不足或复核失败的 fingerprint 保持 open。只有 open fingerprint 归零时才执行 `resolved_action`。
+  - 旧 issue 只接收其原有 `open_problems` 中仍存在的当前 fingerprint。已覆盖且消失的 fingerprint 先进入待复核集合，只有 `llm.triage_model_chain`（缺省继承代码分析链）明确确认后才进入 Resolved；未覆盖、诊断元数据不足或复核失败的 fingerprint 保持 open。只有 open fingerprint 归零时才执行 `resolved_action`。
   - 部分更新保留旧 scope fingerprint、当前验证 head 和原历史 summary；若 retained fingerprint 元数据无法解析，保守跳过重写。相同 scope 的竞态重复 issue 仍会回收。
   - 缺少新标记或原诊断的旧 body 在启用生命周期模型时无法安全复核，保持 open；不同 scope 也不使用旧版整 issue 回收捷径。
 - 问题生命周期关闭必须同时通过 reviewed file-scope 守卫与模型复核：
@@ -587,8 +588,8 @@ AICR 采用**两层上下文管理**，两者互补：
 - 当多个 GitHub / GitLab trigger 共用同一路由时，`workspaces.instances.<id>.source_repo.trigger` 必须显式绑定到对应 trigger profile；不同 repo 需要独立 token / webhook secret / 文件过滤规则时，不应复用同一个 trigger 名称。
 - 需要长期保持覆盖完整性的关键配置包括：
   - `compression`
-  - `llm.fallback_chain`
-  - `llm.triage_fallback_chain`
+  - `llm.model_chain`
+  - `llm.triage_model_chain`
   - `llm.retry`
   - `llm.budget`
   - `llm.per_provider_overrides`
@@ -868,7 +869,7 @@ AICR 采用**两层上下文管理**，两者互补：
 远端，只用本地结构化缓存 + 打包保底快照。每条解析结果都标注来源
 （`override` / `cache` / `remote` / `bundled` / `config`），写入 run 快照便于观测和排障。
 
-`bootstrapServerApp` 已把 store 初始化条件扩展为：admin auth、`llm.model_catalog` SQLite 后端、reflection memory 任一持久化需求都会创建 `StoreDb`。模型解析顺序保持为“初始化 catalog service → `ensureRefreshed()` → 解析并充实 primary / fallback / summarize / triage `ModelSpec` → 创建 LLM gateway / runtime bundle”，避免 `resolveModelSpecFromConfig()` 早于 store 初始化而拿不到 catalog。issue triage 与 resolved-problem verifier 的模型都由 `resolveIssueTriageModelSpecFromConfig()` 解析：配置了 `llm.triage_fallback_chain` 时用其首条目并创建独立的 resilient client（共用 retry / budget / per_provider_overrides / pricing），否则直接复用代码分析的 `model` 与 `llmClient`。输出层只负责确定性候选与 fail-closed 生命周期；server 注入的 `createProblemResolutionAnalyzer()` 在当前物化源码上做批量语义复核，并在同一 run 内按 fingerprint 缓存结果，避免多个输出通道重复调用。
+`bootstrapServerApp` 已把 store 初始化条件扩展为：admin auth、`llm.model_catalog` SQLite 后端、reflection memory 任一持久化需求都会创建 `StoreDb`。模型解析顺序保持为“初始化 catalog service → `ensureRefreshed()` → 解析并充实 primary / fallback / summarize / triage `ModelSpec` → 创建 LLM gateway / runtime bundle”，避免 `resolveModelSpecFromConfig()` 早于 store 初始化而拿不到 catalog。issue triage 与 resolved-problem verifier 的模型都由 `resolveIssueTriageModelSpecFromConfig()` 解析：配置了 `llm.triage_model_chain` 时用其首条目并创建独立的 resilient client（共用 retry / budget / per_provider_overrides / pricing），否则直接复用代码分析的 `model` 与 `llmClient`。输出层只负责确定性候选与 fail-closed 生命周期；server 注入的 `createProblemResolutionAnalyzer()` 在当前物化源码上做批量语义复核，并在同一 run 内按 fingerprint 缓存结果，避免多个输出通道重复调用。
 
 #### 3.13.3 解析链（providerId + modelId → catalog 条目）
 

@@ -77,7 +77,7 @@ issues, or IM bots. Free-form agent stdout never becomes the report.
     sandbox commands, secret scrubbing at every boundary, and hard timeouts.
   </Card>
   <Card title="Cost & context control" icon="analytics">
-    Automatic diff compression, per-run budget caps, LLM fallback chains, and a
+    Automatic diff compression, per-run budget caps, LLM model chains, and a
     dashboard that tracks tokens and cost per project and provider.
   </Card>
   <Card title="Self-hosted, single container" icon="server">
@@ -141,7 +141,7 @@ issues, or IM bots. Free-form agent stdout never becomes the report.
   and cost breakdowns, provider-level LLM usage, daily rollups, and a
   `/metrics` endpoint for Prometheus scraping.
 - **Retry and fallback.** Queue-level retry with exponential backoff. LLM
-  fallback chains route to the next provider when the primary fails or
+  model chains route to the next provider when the primary fails or
   throttles.
 
 ## Supported integrations

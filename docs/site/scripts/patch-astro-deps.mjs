@@ -1,12 +1,28 @@
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const require = createRequire(import.meta.url);
 const astroRequire = createRequire(require.resolve("astro/package.json"));
 const cssTreePackageJson = astroRequire.resolve("css-tree/package.json");
 const cssTreeSourceMap = join(dirname(cssTreePackageJson), "lib/generator/sourceMap.js");
-const starlightRequire = createRequire(require.resolve("@astrojs/starlight"));
+
+// @astrojs/starlight >= 0.42 dropped the CJS root export, so resolving the
+// package entry with createRequire fails (ERR_PACKAGE_PATH_NOT_EXPORTED).
+// Prefer the exported ./package.json subpath; fall back to the pnpm symlink's
+// real path when the exports map does not expose it either.
+const siteRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+
+function resolveStarlightPackageJson() {
+  try {
+    return require.resolve("@astrojs/starlight/package.json");
+  } catch {
+    return realpathSync(join(siteRoot, "node_modules", "@astrojs", "starlight", "package.json"));
+  }
+}
+
+const starlightRequire = createRequire(resolveStarlightPackageJson());
 const fontkittenEntry = starlightRequire.resolve("fontkitten");
 
 const originalImport =

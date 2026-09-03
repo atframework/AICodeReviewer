@@ -13,7 +13,7 @@ workspace，并强调一条不能破坏的规则——**绝不要把密钥明文
 
 | 命名空间 | 控制内容 | 详情页 |
 | --- | --- | --- |
-| `llm` | 模型提供方、fallback 链、重试/退避、费用预算，以及 models.dev 元数据目录。 | [LLM 提供方与模型](/zh-cn/configuration/llm/) |
+| `llm` | 模型提供方、模型链、重试/退避、费用预算，以及 models.dev 元数据目录。 | [LLM 提供方与模型](/zh-cn/configuration/llm/) |
 | `triggers` | 每个 VCS 源（Gitea、GitHub、GitLab、P4、SVN）一个条目——入站 webhook/HMAC 校验与出站 token。 | [认证与密钥](/zh-cn/configuration/authentication/) |
 | `workspaces` | 你要评审的代码仓库：源绑定、按 workspace 覆盖，以及克隆缓存。 | 本页 |
 | `outputs` | 输出通道（PR review、IM 机器人、托管 issue）、路由规则，以及零问题策略。 | [输出通道与路由](/zh-cn/configuration/outputs/) |
@@ -140,7 +140,7 @@ AICR_LLM_API_KEY=sk-xxxxxxxxxxxxxxxx
 ## 接下来看哪里
 
 - 刚接触本项目？先读 [LLM 提供方与模型](/zh-cn/configuration/llm/)——
-  没有提供方和 fallback 链什么都跑不起来。
+  没有提供方和模型链什么都跑不起来。
 - 准备上生产？配置持久化队列（[队列与重试](/zh-cn/configuration/queue/)）、
   存储（[存储](/zh-cn/configuration/storage/)）以及
   agent 沙箱（[Agent 与沙箱](/zh-cn/configuration/agent/)）。

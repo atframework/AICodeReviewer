@@ -328,6 +328,9 @@ fi
 if [ -n "${YQ_DOWNLOAD_BASE:-}" ]; then
   BUILD_ARGS+=(--build-arg "YQ_DOWNLOAD_BASE=${YQ_DOWNLOAD_BASE}")
 fi
+if [ -n "${GH_RELEASE_PREFIX:-}" ]; then
+  BUILD_ARGS+=(--build-arg "GH_RELEASE_PREFIX=${GH_RELEASE_PREFIX}")
+fi
 APT_MIRROR_VALUE="${APT_MIRROR:-${APK_MIRROR:-}}"
 if [ -n "${APT_MIRROR_VALUE}" ]; then
   BUILD_ARGS+=(--build-arg "APT_MIRROR=${APT_MIRROR_VALUE}")

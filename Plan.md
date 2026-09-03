@@ -107,10 +107,10 @@
   （超时、连接失败、HTTP 408/5xx）由共享 `io-retry` 分类器统一重试（HTTP 429 由
   gateway 按 Retry-After 单独处理；输出与 triage 层的非幂等 POST 不重试），确定性
   失败（4xx、context overflow 等）不重试。
-- Git 服务 issue triage 与已解决问题复核可用 `llm.triage_fallback_chain` 配置独立的
+- Git 服务 issue triage 与已解决问题复核可用 `llm.triage_model_chain` 配置独立的
   默认模型与 fallback 列表；PR/MR 增量评论的 Resolved 标记、托管 problem issue 的
   `close` / `mark_resolved` 复核使用同一条链，缺省或空列表时沿用代码分析的
-  `llm.fallback_chain`。指纹、审查文件范围与提交祖先关系只生成候选；模型未明确确认时
+  `llm.model_chain`。指纹、审查文件范围与提交祖先关系只生成候选；模型未明确确认时
   保持 open。
 - 成本估算按非缓存输入、缓存命中、缓存写入、输出 token 类别计费。
 
@@ -310,6 +310,8 @@
 - 首选单容器自托管，HTTP 入站由反向代理处理 TLS。
 - 持久化保留 `config.yaml`、`.env`、workspace 数据、数据库和日志目录。
 - Podman / Docker 使用同一构建与运行合同，差异由 engine 选择吸收。
+- 运行时镜像内置现代 CLI 工具基线（`rg`/`fd`/`sd`/`bat`/`eza`/`jq`/`yq`/`miller`/`delta`/`difft` 等），
+  清单与 agent 使用规则见 `.agents/skills/modern-cli-toolkit/`。
 - 健康检查统一使用 `/healthz`。
 - 部署与验收入口：`example/README.md`、`docs/podman.md` 与相关 skill。
 - M11 文档站发布走静态站点构建与 `gh-pages` 分支 workflow，不改变 AICR 服务运行时镜像。

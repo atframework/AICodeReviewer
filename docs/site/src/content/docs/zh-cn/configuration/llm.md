@@ -1,11 +1,11 @@
 ---
 title: LLM 提供方与模型
-description: 配置 LLM 提供方、fallback 链、重试/退避、费用预算，以及可选开启的 models.dev 元数据目录。
+description: 配置 LLM 提供方、模型链、重试/退避、费用预算，以及可选开启的 models.dev 元数据目录。
 ---
 
-`llm` 命名空间是 AICodeReviewer 的核心——没有提供方和至少一条 fallback 链条目，
-评审无法运行。本页覆盖 `llm.providers`、`llm.fallback_chain`、
-`llm.triage_fallback_chain`、`llm.retry`、`llm.budget`，以及模型元数据目录
+`llm` 命名空间是 AICodeReviewer 的核心——没有提供方和至少一条模型链条目，
+评审无法运行。本页覆盖 `llm.providers`、`llm.model_chain`、
+`llm.triage_model_chain`、`llm.retry`、`llm.budget`，以及模型元数据目录
 （`llm.model_catalog`）。
 
 一个完整的最小示例：
@@ -18,7 +18,7 @@ llm:
       base_url: https://api.openai.com/v1
       api_key_env: AICR_LLM_API_KEY
 
-  fallback_chain:
+  model_chain:
     - provider: my-llm
       model: gpt-4o-mini
       role: any
@@ -38,12 +38,12 @@ llm:
 
 ## `llm.providers[]` —— 连接定义
 
-每个 provider 条目描述一个 LLM 端点。`id` 是其他 section（fallback 链、模型目录）
+每个 provider 条目描述一个 LLM 端点。`id` 是其他 section（模型链、模型目录）
 引用它时使用的名字，仅在你的配置内有效。
 
 | 字段 | 类型 | 必填 | 说明 |
 | --- | --- | :---: | --- |
-| `id` | string | ✓ | 唯一的 provider id，供 `fallback_chain` 与目录引用。 |
+| `id` | string | ✓ | 唯一的 provider id，供 `model_chain` 与目录引用。 |
 | `kind` | enum | ✓ | 提供方协议。取值：`openai_compatible`、`azure_openai`、`anthropic`、`vertex_ai`、`bedrock`、`google_ai_studio`、`ollama`、`copilot`。 |
 | `base_url` | string (URL) | – | API 基础 URL，部分托管类型可省略。 |
 | `api_key_env` | string | – | 存放 API key 的环境变量名。绝不内联 key。 |
@@ -90,9 +90,10 @@ llm:
 `default_reasoning_effort`（未显式设置时的默认档）。解析优先级：provider 上的
 `reasoning_effort` → 目录的 `default_reasoning_effort` → `thinking_level` 换算值。
 
-## `llm.fallback_chain[]` —— 哪个模型干什么活
+## `llm.model_chain[]` —— 哪个模型干什么活
 
-fallback 链是一个有序的 `(provider, model, role)` 三元组列表。通过 role 可以把
+模型链是一个有序的 `(provider, model, role)` 三元组列表。首条目是默认路由，
+失败时由网关按顺序切换到后续条目。通过 role 可以把
 工作拆分到快速便宜的 "light" 模型（用于 diff 压缩和逐文件摘要）和 "heavy" 模型
 （主评审器）之间；未指定 role 时使用 `any`。
 
@@ -104,7 +105,7 @@ fallback 链是一个有序的 `(provider, model, role)` 三元组列表。通�
 
 ```yaml
 llm:
-  fallback_chain:
+  model_chain:
     - provider: my-llm
       model: gpt-4o-mini
       role: light          # diff 压缩、逐文件摘要
@@ -116,17 +117,17 @@ llm:
       role: any            # 任意 role 的兜底
 ```
 
-## `llm.triage_fallback_chain[]` —— 生命周期分析的独立模型路由
+## `llm.triage_model_chain[]` —— 生命周期分析的独立模型路由
 
 Git 服务 issue triage 与已解决问题复核默认和代码分析共用模型：以
-`fallback_chain` 首条目作为模型，失败时沿同一条链切换。配置
-`triage_fallback_chain` 可以为这些生命周期分析指定独立的默认模型和 fallback
-列表，条目结构与 `fallback_chain` 相同（`provider` / `model` / `role`）。该字段
-缺省或为空时仍使用 `fallback_chain`。
+`model_chain` 首条目作为模型，失败时沿同一条链切换。配置
+`triage_model_chain` 可以为这些生命周期分析指定独立的默认模型和 fallback
+列表，条目结构与 `model_chain` 相同（`provider` / `model` / `role`）。该字段
+缺省或为空时仍使用 `model_chain`。
 
 ```yaml
 llm:
-  triage_fallback_chain:
+  triage_model_chain:
     - provider: my-llm
       model: gpt-4o-mini   # 生命周期分析默认模型
       role: light
@@ -144,7 +145,7 @@ llm:
 
 ## `llm.retry` —— 瞬时失败处理
 
-作用于因瞬时错误失败的 LLM 调用：HTTP 429/5xx、上下文溢出（进入 fallback 链）、
+作用于因瞬时错误失败的 LLM 调用：HTTP 429/5xx、上下文溢出（沿模型链切换）、
 调用方中止/超时，以及连接级失败（`fetch failed`、连接超时、DNS、socket 错误）。
 非瞬时的 provider 错误（429 以外的 4xx）立即失败。可通过
 `llm.per_provider_overrides`（provider id → `{ max_attempts,

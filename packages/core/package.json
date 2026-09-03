@@ -17,8 +17,8 @@
   },
   "dependencies": {
     "@opentelemetry/api": "^1.9.1",
-    "@opentelemetry/exporter-trace-otlp-http": "0.221.0",
-    "@opentelemetry/sdk-node": "^0.221.0",
+    "@opentelemetry/exporter-trace-otlp-http": "0.222.0",
+    "@opentelemetry/sdk-node": "^0.222.0",
     "pino": "^10.3.1",
     "yaml": "^2.9.0",
     "zod": "^3.25.76"
@@ -27,8 +27,8 @@
     "@types/better-sqlite3": "^9.6.0"
   },
   "optionalDependencies": {
-    "better-sqlite3": "^12.11.1",
-    "bullmq": "^6.2.1",
+    "better-sqlite3": "13.0.3",
+    "bullmq": "^6.3.4",
     "ioredis": "^6.0.0"
   }
 }
