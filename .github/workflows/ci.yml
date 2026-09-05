@@ -26,7 +26,10 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: 20
+          # better-sqlite3 13 requires Node >=22; Node 20 silently kills the
+          # vitest forks of every sqlite-importing test file. Keep in sync with
+          # engines.node and the docs job / deployment image (Node 24 LTS).
+          node-version: 24
           cache: pnpm
 
       - name: Install dependencies

@@ -117,20 +117,6 @@ first_listening_tcp_endpoint() {
   printf '%s' "$endpoint"
 }
 
-detect_primary_ipv4() {
-  local detected_ip=""
-
-  if command -v ip >/dev/null 2>&1; then
-    detected_ip="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for (i = 1; i <= NF; i++) if ($i == "src") { print $(i + 1); exit }}')"
-  fi
-
-  if [ -z "$detected_ip" ]; then
-    detected_ip="$(hostname -I 2>/dev/null | awk '{for (i = 1; i <= NF; i++) if ($i ~ /^[0-9]+\./) { print $i; exit }}')"
-  fi
-
-  printf '%s' "$detected_ip"
-}
-
 auto_detect_build_proxy_url() {
   local endpoint=""
   local host_value=""
@@ -141,7 +127,10 @@ auto_detect_build_proxy_url() {
   host_value="$(extract_host_from_endpoint "$endpoint")"
   case "$host_value" in
     ""|"*"|"0.0.0.0"|"::")
-      host_value="$(detect_primary_ipv4)"
+      # A wildcard listener also accepts loopback. Prefer 127.0.0.1 over the
+      # primary IPv4: the proxy may refuse the container bridge subnet (ACL),
+      # while 127.0.0.1 always works once the build switches to host networking.
+      host_value="127.0.0.1"
       ;;
   esac
 

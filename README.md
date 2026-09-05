@@ -10,7 +10,7 @@
 
 [![CI](https://github.com/atframework/AICodeReviewer/actions/workflows/ci.yml/badge.svg)](https://github.com/atframework/AICodeReviewer/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Node.js](https://img.shields.io/badge/Node.js-%E2%89%A520-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
+[![Node.js](https://img.shields.io/badge/Node.js-%E2%89%A522-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![Deploy](https://img.shields.io/badge/Deploy-Docker%20%7C%20Podman-2496ED?logo=docker&logoColor=white)](https://aicr.atframe.work/en/deployment/docker/)
 [![Docs](https://img.shields.io/badge/Docs-aicr.atframe.work-2f6bff)](https://aicr.atframe.work/en/)
@@ -116,7 +116,7 @@ for the full report contract.
 
 ## Quick Start
 
-**Prerequisites:** Node.js ≥20, pnpm 10
+**Prerequisites:** Node.js ≥22, pnpm 10
 
 ```bash
 git clone https://github.com/atframework/AICodeReviewer.git
