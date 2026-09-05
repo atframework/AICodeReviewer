@@ -20,27 +20,26 @@ llm:
       #                                 # for the Kilo agent it becomes `kilo run --variant`
       #                                 # (variants are materialized into .kilo/kilo.json).
 
+  # Define reusable groups. Priority is the list order within each group.
   model_chain:
-    - provider: my-llm
-      model: gpt-4o-mini # change to your model
-      role: any # any | light | heavy
-    # Add later entries in failover order. A clear account/plan quota exhaustion
-    # skips same-model retry and rematerializes the agent runtime with the next entry.
-    # Generic 429 throttling/capacity errors still follow llm.retry first.
-    # - provider: backup-llm
-    #   model: backup-model
-    #   role: any
+    default:
+      - provider: my-llm
+        model: gpt-4o-mini # change to your model
+        role: any # required: any | light | heavy
+    thorough:
+      - { provider: my-llm, model: gpt-4o, role: heavy }
+      - { provider: my-llm, model: gpt-4o-mini, role: light }
+    lifecycle:
+      - { provider: my-llm, model: gpt-4o-mini, role: light }
+      - { provider: my-llm, model: gpt-4o, role: any }
 
-  # Optional: dedicated default model + failover list for issue triage and
-  # resolution verification. This covers Git-service close decisions, PR/MR
-  # resolved markers on channels that support incremental lifecycle, and
-  # managed problem-issue close/mark-resolved actions.
-  # Entries use the same provider/model/role shape as model_chain.
-  # When omitted or empty, these analyses reuse model_chain above.
-  # triage_model_chain:
-  #   - provider: my-llm
-  #     model: gpt-4o-mini
-  #     role: light
+  default_model_chain: default
+  # Optional group for issue triage and resolved-problem verification.
+  # Omit at all levels to reuse each workspace's main group and client.
+  # triage_model_chain: lifecycle
+  # Both selectors can be overridden by workspaces.defaults / instances.<id>.
+  # Quota exhaustion skips same-model retry and uses the next entry in the
+  # selected group, rematerializing the agent runtime. Generic 429 follows retry.
 
   retry:
     max_attempts: 3 # retries + fallback also cover connection failures (fetch failed, timeouts)
@@ -803,6 +802,8 @@ workspaces:
     ttl_days: 30
 
   defaults:
+    model_chain: default
+    # triage_model_chain: lifecycle
     outputs:
       no_problems: { action: suppress }
     # prompt:                           # per-workspace prompt overrides (see instances below)
@@ -813,6 +814,8 @@ workspaces:
   instances:
     # Gitea workspace
     my-repo:
+      # model_chain: thorough
+      # triage_model_chain: lifecycle
       source_repo:
         trigger: gitea # references trigger name above
         repo: "my-org/my-repo" # owner/repo on your Gitea

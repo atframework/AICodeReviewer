@@ -49,8 +49,10 @@ description: 全量配置字段参考，按顶层命名空间组织，并以 Zod
 | `llm.providers[].reasoning_effort` | enum | — | 推理强度档位：`minimal`、`low`、`medium`、`high`、`max`（透传字段） |
 | `llm.providers[].thinking_level` | enum | — | 思考强度抽象档位：`off`、`minimal`、`low`、`medium`、`high`、`max`（透传字段） |
 | `llm.providers[].thinking_budget_tokens` | int | — | 显式思考预算 token 数（透传字段） |
-| `llm.model_chain[]` | array | `[]` | 有序 provider/model 条目；首条目为默认路由，失败时按序尝试后续条目。每项有 `provider`、`model`、`role`（`light`/`heavy`/`any`） |
-| `llm.triage_model_chain[]` | array | 继承 | Git 服务 issue triage 与已解决问题复核的可选链；首条目为默认模型。缺省或为空时继承 `llm.model_chain` |
+| `llm.model_chain` | map | `{}` | 分组名到有序模型列表的映射 |
+| `llm.model_chain.<id>[]` | array | — | 非空列表；首项为默认模型，其余项按序切换。每项有 `provider`、`model`、`role`（`light`/`heavy`/`any`） |
+| `llm.default_model_chain` | string | `default` | 全局主链组名；已配置分组时必须存在 |
+| `llm.triage_model_chain` | string | 继承 | 生命周期分析组名；缺省继承当前 workspace 主链 |
 | `llm.retry` | object | — | 单次调用重试策略 |
 | `llm.retry.max_attempts` | int > 0 | — | 单次 LLM 调用最大尝试次数 |
 | `llm.retry.respect_retry_after` | boolean | — | 遵守 `Retry-After` 响应头 |
@@ -110,6 +112,8 @@ provider 专属字段（`webhook_secret_env`、`token_env`、`port`、`user_env`
 | `workspaces.defaults` | object | `{}` | 合并进每个 instance 的默认值（sandbox、review、agent、outputs、prompt、context_repositories） |
 | `workspaces.defaults.sandbox` | object | — | 默认 sandbox 配置（见 `agent.sandbox`） |
 | `workspaces.defaults.review` | object | — | 默认 review 配置（见 `review`） |
+| `workspaces.defaults.model_chain` | string | 继承 | 覆盖主链组名，引用 `llm.model_chain` |
+| `workspaces.defaults.triage_model_chain` | string | 继承 | 覆盖生命周期分析组名；各层均未配置时使用该 workspace 主链 |
 | `workspaces.defaults.agent.default` | enum | — | 这组 workspace 的默认 agent kind（当前版本运行时未生效，见下方说明） |
 | `workspaces.defaults.outputs` | object | — | 默认 outputs（见 `outputs` 的 workspace 字段） |
 | `workspaces.defaults.prompt.base_system_prompt_file` | string | — | 自定义 base system prompt 文件（相对于部署根目录） |
@@ -130,6 +134,8 @@ provider 专属字段（`webhook_secret_env`、`token_env`、`port`、`user_env`
 | `workspaces.instances` | map | `{}` | 按 workspace id 组织的 instance |
 | `workspaces.instances.<id>.source_repo.trigger` | string | — | trigger profile 名 |
 | `workspaces.instances.<id>.source_repo.repo` | string | — | 仓库引用 |
+| `workspaces.instances.<id>.model_chain` | string | 继承 | 覆盖主链组名，引用 `llm.model_chain` |
+| `workspaces.instances.<id>.triage_model_chain` | string | 继承 | 覆盖生命周期分析组名；各层均未配置时使用该 workspace 主链 |
 | `workspaces.instances.<id>.agent.default` | enum | — | agent kind 覆盖（当前版本运行时未生效，见下方说明） |
 | `workspaces.instances.<id>.review` | object | — | review 配置覆盖（见 `review`） |
 | `workspaces.instances.<id>.outputs` | object | — | outputs 覆盖 |

@@ -3,8 +3,7 @@ title: LLM Providers and Models
 description: Configure LLM providers, the model chain, retry/backoff, spend budget, and the opt-in models.dev metadata catalog.
 ---
 
-The `llm` namespace is the heart of AICodeReviewer — without a provider and at
-least one model-chain entry, no review can run. This page covers
+Configure providers and named model groups in the `llm` namespace. This page covers
 `llm.providers`, `llm.model_chain`, `llm.triage_model_chain`, `llm.retry`,
 `llm.budget`, and the model metadata catalog (`llm.model_catalog`).
 
@@ -19,9 +18,11 @@ llm:
       api_key_env: AICR_LLM_API_KEY
 
   model_chain:
-    - provider: my-llm
-      model: gpt-4o-mini
-      role: any
+    default:
+      - provider: my-llm
+        model: gpt-4o-mini
+        role: any
+  default_model_chain: default
 
   retry:
     max_attempts: 3
@@ -96,66 +97,91 @@ The model catalog can declare per-model tiers too:
 `reasoning_effort` → the catalog's `default_reasoning_effort` → the
 `thinking_level` conversion.
 
-## `llm.model_chain[]` — which model does what
+## `llm.model_chain` — named model groups
 
-The model chain is an ordered list of `(provider, model, role)` triples. The
-first entry is the default route; eligible failures walk the rest of the chain
-in order. Direct calls do this in the LLM gateway. Agent-backed reviews also
-switch on explicit account-balance, billing-cycle, spend-limit, or plan-quota
-exhaustion and rematerialize the agent runtime for the next model. Roles let
-you split work between a fast/cheap "light" model
-(used for diff compression and per-file summaries) and a "heavy" model (the
-main reviewer). `any` is used when no role is specified.
+`llm.model_chain` maps group names to ordered model lists. Each group must
+contain at least one entry. The first entry is primary; later entries are
+tried in list order. Group declaration order has no effect on priority.
+`llm.default_model_chain` selects the global default group and defaults to
+`default`. When groups are configured, that global default must exist.
+A workspace's `model_chain` selects a complete group.
 
 | Field | Type | Required | Description |
 | --- | --- | :---: | --- |
 | `provider` | string | ✓ | Must match a `providers[].id`. |
 | `model` | string | ✓ | Model id passed to the provider. |
-| `role` | enum | ✓ | `light`, `heavy`, or `any`. |
+| `role` | enum | ✓ | `light`, `heavy`, or `any`; must be explicit. |
+
+The primary model is always the group's first entry. Compression summaries
+use the first entry in the selected main group matching
+`compression.summarize_model_role` (default `light`), or the first entry if
+none matches. Models sharing a provider remain distinct entries. Direct
+calls fail over through the gateway. Agent reviews rematerialize the runtime
+for the next entry after explicit account or plan quota exhaustion. Both
+paths stay within the selected group.
+
+This example omits the existing `llm.providers` and workspace source bindings:
 
 ```yaml
 llm:
   model_chain:
-    - provider: my-llm
-      model: gpt-4o-mini
-      role: light          # diff compression, per-file summaries
-    - provider: my-llm
-      model: gpt-4o
-      role: heavy          # main reviewer
-    - provider: my-llm
-      model: gpt-4o-mini
-      role: any            # fallback for any role
+    default:
+      - { provider: my-llm, model: gpt-4o, role: heavy }
+      - { provider: my-llm, model: gpt-4o-mini, role: light }
+    fast:
+      - { provider: my-llm, model: gpt-4o-mini, role: any }
+    lifecycle:
+      - { provider: my-llm, model: gpt-4o-mini, role: light }
+      - { provider: my-llm, model: gpt-4o, role: any }
+  default_model_chain: default
+  triage_model_chain: lifecycle
+
+workspaces:
+  defaults:
+    model_chain: default
+  instances:
+    service-a:
+      model_chain: default
+      triage_model_chain: lifecycle
+    service-b:
+      model_chain: fast
+      triage_model_chain: fast
 ```
 
-## `llm.triage_model_chain[]` — separate route for lifecycle analysis
+Main-group precedence is `workspaces.instances.<id>.model_chain` →
+`workspaces.defaults.model_chain` → `llm.default_model_chain`.
+Automatically generated workspaces without an explicit instance also inherit
+workspace defaults. Config-layer merging replaces a same-named group's model
+list wholesale and preserves the other groups.
 
-Git-service issue triage and resolved-problem verification use the first
-`model_chain` entry as their model and walk the same chain on failure,
-exactly like code analysis. Set `triage_model_chain` to give these lifecycle
-analyses their own default model and failover list; entries have the same
-`provider` / `model` / `role` shape as `model_chain`. When the field is
-absent or empty, they reuse `model_chain` unchanged.
+## `llm.triage_model_chain` — lifecycle analysis group
 
-```yaml
-llm:
-  triage_model_chain:
-    - provider: my-llm
-      model: gpt-4o-mini   # lifecycle-analysis default model
-      role: light
-    - provider: my-llm
-      model: gpt-4o        # lifecycle-analysis fallback
-      role: any
-```
+`triage_model_chain` is a group name referencing the same `llm.model_chain`
+definitions. Precedence is `workspaces.instances.<id>.triage_model_chain` →
+`workspaces.defaults.triage_model_chain` → `llm.triage_model_chain` → the
+workspace's main group. When omitted at every layer, triage reuses the main
+model and client. To override a global triage selection and use a workspace's
+main group, explicitly select that same group name.
 
-The chain shares `llm.retry`, `llm.budget`, `llm.per_provider_overrides`, and
-model-catalog enrichment with the main chain. It applies to issue/PR triage,
-resolved markers in incremental Gitea/GitHub PR summaries, and
-`gitea_problem_issue` / `github_problem_issue` close or mark-resolved actions.
-Fingerprint disappearance, reviewed-file coverage, and commit ancestry produce
-resolution candidates; the lifecycle action runs only for candidates the model
-explicitly confirms. Missing source, incomplete output, or an LLM failure keeps
-the candidate open. Same-scope duplicate cleanup remains deterministic because
-it is identity reconciliation, not a claim that a code problem was fixed.
+The selected group supplies the model list and failover order for issue
+triage and resolved-problem verification. `llm.retry`, `llm.budget`,
+`llm.per_provider_overrides`, and model-catalog settings remain global.
+This covers Gitea/Forgejo issue/PR triage, Resolved markers in incremental
+Gitea/GitHub PR summaries, and `gitea_problem_issue` / `github_problem_issue`
+close or mark-resolved actions. Fingerprint disappearance, reviewed-file
+coverage, and commit ancestry only produce candidates; the model must
+explicitly confirm a resolution. Missing source, incomplete output, or LLM
+failure keeps the problem open.
+
+### Migrating array configurations
+
+Move the old `llm.model_chain` array to `llm.model_chain.default`. Move an
+old `llm.triage_model_chain` array to another group, such as
+`llm.model_chain.lifecycle`, and set `llm.triage_model_chain: lifecycle`.
+Remove an old empty triage list to inherit the main group. Old arrays, empty
+groups, empty references, and unknown group references fail validation.
+Provider-only configurations retain the first-provider / `gpt-4o-mini`
+fallback; production configs should declare groups explicitly.
 
 ## `llm.retry` — transient-failure handling
 

@@ -248,6 +248,7 @@ export interface WorkspaceIssueTriagePolicy {
 
 export interface IssueTriageRuntimeOptions extends IssueTriageOptions {
   readonly workspacePolicies?: Readonly<Record<string, WorkspaceIssueTriagePolicy>>;
+  readonly modelOptionsResolver?: (workspaceId: string) => Pick<IssueTriageOptions, "llm" | "model">;
 }
 
 const DEFAULT_CLOSE_CATEGORIES: readonly TriageDecision["category"][] = ["spam", "invalid"];

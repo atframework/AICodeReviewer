@@ -110,9 +110,12 @@ function makeConfig(overrides: Partial<AppConfig> = {}): AppConfig {
           api_key_env: "OPENAI_API_KEY",
         },
       ],
-      model_chain: [
-        { provider: "openai-prod", model: "gpt-4o", role: "heavy" },
-      ],
+      default_model_chain: "default",
+      model_chain: {
+        default: [
+          { provider: "openai-prod", model: "gpt-4o", role: "heavy" },
+        ],
+      },
       model_catalog: {
         enabled: false,
         source_url: "https://models.dev/api.json",
@@ -291,7 +294,8 @@ describe("resolveModelSpecFromConfig", () => {
           { id: "ollama-local", kind: "ollama", base_url: "http://localhost:11434/v1" },
           { id: "openai-prod", kind: "openai_compatible", base_url: "https://api.openai.com/v1" },
         ],
-        model_chain: [{ provider: "openai-prod", model: "gpt-4o", role: "heavy" }],
+        default_model_chain: "default",
+        model_chain: { default: [{ provider: "openai-prod", model: "gpt-4o", role: "heavy" }] },
       },
     } as Partial<AppConfig>);
 
@@ -306,7 +310,8 @@ describe("resolveModelSpecFromConfig", () => {
     const config = makeConfig({
       llm: {
         providers: [{ id: "openai-prod", kind: "openai_compatible" }],
-        model_chain: [{ provider: "missing-provider", model: "gpt-4o", role: "heavy" }],
+        default_model_chain: "default",
+        model_chain: { default: [{ provider: "missing-provider", model: "gpt-4o", role: "heavy" }] },
       },
     } as Partial<AppConfig>);
 
@@ -317,7 +322,8 @@ describe("resolveModelSpecFromConfig", () => {
     const config = makeConfig({
       llm: {
         providers: [{ id: "p1", kind: "ollama" }],
-        model_chain: [],
+        default_model_chain: "default",
+        model_chain: {},
       },
     } as Partial<AppConfig>);
     const model = resolveModelSpecFromConfig(config);
@@ -327,7 +333,7 @@ describe("resolveModelSpecFromConfig", () => {
 
   it("throws when no providers are configured", () => {
     const config = makeConfig({
-      llm: { providers: [], model_chain: [] },
+      llm: { providers: [], default_model_chain: "default", model_chain: {} },
     } as Partial<AppConfig>);
 
     expect(() => resolveModelSpecFromConfig(config)).toThrow("No LLM providers configured");
@@ -346,7 +352,8 @@ describe("resolveModelSpecFromConfig", () => {
           { id: "p1", kind: "openai_compatible" },
           { id: "p2", kind: "ollama", base_url: "http://localhost:11434/v1" },
         ],
-        model_chain: [{ provider: "p2", model: "llama3", role: "any" }],
+        default_model_chain: "default",
+        model_chain: { default: [{ provider: "p2", model: "llama3", role: "any" }] },
       },
     } as Partial<AppConfig>);
     const model = resolveModelSpecFromConfig(config, "p2");
@@ -390,7 +397,8 @@ describe("resolveModelSpecFromConfig", () => {
             model_links: { docs: "https://example.com/model" },
           },
         ],
-        model_chain: [{ provider: "azure-prod", model: "deployment-a", role: "heavy" }],
+        default_model_chain: "default",
+        model_chain: { default: [{ provider: "azure-prod", model: "deployment-a", role: "heavy" }] },
       },
     } as Partial<AppConfig>);
 
@@ -439,7 +447,8 @@ describe("resolveModelSpecFromConfig", () => {
             default_reasoning_effort: "max",
           },
         ],
-        model_chain: [{ provider: "zhipu", model: "glm-5.2", role: "heavy" }],
+        default_model_chain: "default",
+        model_chain: { default: [{ provider: "zhipu", model: "glm-5.2", role: "heavy" }] },
       },
     } as Partial<AppConfig>);
 
@@ -452,6 +461,36 @@ describe("resolveModelSpecFromConfig", () => {
 });
 
 describe("resolveIssueTriageModelSpecFromConfig", () => {
+  it("resolves workspace, workspace-default, global and inherited groups in order", () => {
+    const base = makeConfig();
+    const group = (model: string) => [{ provider: "openai-prod", model, role: "any" as const }];
+    const config = makeConfig({
+      llm: {
+        ...base.llm,
+        model_chain: { default: group("global"), team: group("team"), fast: group("fast"), special: group("special") },
+        triage_model_chain: "fast",
+      },
+      workspaces: {
+        ...base.workspaces,
+        defaults: { model_chain: "team", triage_model_chain: "team" },
+        instances: { one: {}, two: { model_chain: "special", triage_model_chain: "fast" } },
+      },
+    });
+    expect(resolveModelSpecFromConfig(config, undefined, "one").modelId).toBe("team");
+    expect(resolveModelSpecFromConfig(config, undefined, "two").modelId).toBe("special");
+    expect(resolveIssueTriageModelSpecFromConfig(config, "one").modelId).toBe("team");
+    expect(resolveIssueTriageModelSpecFromConfig(config, "two").modelId).toBe("fast");
+    delete config.workspaces.defaults.triage_model_chain;
+    expect(resolveIssueTriageModelSpecFromConfig(config, "one").modelId).toBe("fast");
+    delete config.llm.triage_model_chain;
+    expect(resolveIssueTriageModelSpecFromConfig(config, "one").modelId).toBe("team");
+    delete config.workspaces.defaults.model_chain;
+    config.llm.default_model_chain = "special";
+    expect(resolveModelSpecFromConfig(config, undefined, "unlisted").modelId).toBe("special");
+    expect(resolveIssueTriageModelSpecFromConfig(config, "unlisted").modelId).toBe("special");
+    config.workspaces.instances.one!.model_chain = "missing";
+    expect(() => resolveModelSpecFromConfig(config, undefined, "one")).toThrow('Model chain group "missing"');
+  });
   it("inherits the code-analysis default model when no triage chain is configured", () => {
     const config = makeConfig();
     const model = resolveIssueTriageModelSpecFromConfig(config);
@@ -460,14 +499,15 @@ describe("resolveIssueTriageModelSpecFromConfig", () => {
     expect(model.modelId).toBe("gpt-4o");
   });
 
-  it("inherits the code-analysis default model when the triage chain is empty", () => {
+  it("inherits the code-analysis default model when the triage reference is undefined", () => {
     const config = makeConfig({
       llm: {
         providers: [
           { id: "openai-prod", kind: "openai_compatible", base_url: "https://api.openai.com/v1" },
         ],
-        model_chain: [{ provider: "openai-prod", model: "gpt-4o", role: "heavy" }],
-        triage_model_chain: [],
+        default_model_chain: "default",
+        model_chain: { default: [{ provider: "openai-prod", model: "gpt-4o", role: "heavy" }] },
+        triage_model_chain: undefined,
       },
     } as Partial<AppConfig>);
     const model = resolveIssueTriageModelSpecFromConfig(config);
@@ -483,11 +523,17 @@ describe("resolveIssueTriageModelSpecFromConfig", () => {
           { id: "openai-prod", kind: "openai_compatible", base_url: "https://api.openai.com/v1" },
           { id: "ollama-local", kind: "ollama", base_url: "http://localhost:11434/v1" },
         ],
-        model_chain: [{ provider: "openai-prod", model: "gpt-4o", role: "heavy" }],
-        triage_model_chain: [
-          { provider: "ollama-local", model: "qwen2.5:14b", role: "light" },
-          { provider: "openai-prod", model: "gpt-4o-mini", role: "any" },
-        ],
+        default_model_chain: "default",
+        model_chain: {
+          default: [
+            { provider: "openai-prod", model: "gpt-4o", role: "heavy" },
+          ],
+          triage: [
+            { provider: "ollama-local", model: "qwen2.5:14b", role: "light" },
+            { provider: "openai-prod", model: "gpt-4o-mini", role: "any" },
+          ],
+        },
+        triage_model_chain: "triage",
       },
     } as Partial<AppConfig>);
     const model = resolveIssueTriageModelSpecFromConfig(config);
@@ -501,10 +547,16 @@ describe("resolveIssueTriageModelSpecFromConfig", () => {
     const config = makeConfig({
       llm: {
         providers: [{ id: "openai-prod", kind: "openai_compatible" }],
-        model_chain: [{ provider: "openai-prod", model: "gpt-4o", role: "heavy" }],
-        triage_model_chain: [
-          { provider: "missing-provider", model: "gpt-4o-mini", role: "light" },
-        ],
+        default_model_chain: "default",
+        model_chain: {
+          default: [
+            { provider: "openai-prod", model: "gpt-4o", role: "heavy" },
+          ],
+          triage: [
+            { provider: "missing-provider", model: "gpt-4o-mini", role: "light" },
+          ],
+        },
+        triage_model_chain: "triage",
       },
     } as Partial<AppConfig>);
 
@@ -2903,6 +2955,178 @@ describe("buildSourceRootResolver", () => {
 });
 
 describe("bootstrapServerApp", () => {
+  it("verifies resolved problems with the workspace triage group", async () => {
+    const scratchRoot = join(process.cwd(), "build", "tmp");
+    await mkdir(scratchRoot, { recursive: true });
+    const sourceRoot = await mkdtemp(join(scratchRoot, "workspace-resolution-"));
+    await writeFile(join(sourceRoot, "fixed.ts"), "const value = 1;\n", "utf8");
+    const metadata = Buffer.from(JSON.stringify([{
+      fingerprint: "fp-old", file: "fixed.ts", line: 1, severity: "high",
+      category: "correctness", message: "The old code can return stale data.",
+    }]), "utf8").toString("base64");
+    const existingBody = [
+      "<!-- aicr:managed=pr-review -->", "<!-- aicr:scope=gitea-pr -->",
+      "<!-- aicr:problems=fp-old -->", `<!-- aicr:problem-meta=${metadata} -->`,
+    ].join("\n");
+    const models: string[] = [];
+    let patchedBody = "";
+    vi.stubEnv("OPENAI_API_KEY", "test-key");
+    vi.stubGlobal("fetch", async (url: string, init?: { method?: string; body?: string }) => {
+      if (url.startsWith("https://api.openai.com/")) {
+        models.push(JSON.parse(init?.body ?? "{}").model as string);
+        return response({ choices: [{ message: { content: JSON.stringify({ decisions: [
+          { fingerprint: "fp-old", resolved: true, reason: "The current source is fixed." },
+        ] }) } }] });
+      }
+      if (init?.method === "PATCH") patchedBody = JSON.parse(init.body ?? "{}").body as string;
+      return !init?.method || init.method === "GET"
+        ? response([{ id: 91, body: existingBody }]) : response({ id: 91 });
+    });
+    try {
+      const base = makeConfig();
+      const config = makeConfig({
+        llm: {
+          ...base.llm,
+          model_chain: {
+            ...base.llm.model_chain,
+            lifecycle: [{ provider: "openai-prod", model: "workspace-verifier", role: "light" }],
+          },
+          triage_model_chain: "default",
+        },
+        outputs: {
+          template_engine: "handlebars",
+          channels: [{ name: "gitea-pr", kind: "gitea_pr_review", trigger: "gitea-internal", review_update_strategy: "update_existing" }],
+        },
+        workspaces: {
+          ...base.workspaces,
+          instances: {
+            "test-workspace": {
+              source_repo: { trigger: "gitea-internal", repo: "owent/example" },
+              triage_model_chain: "lifecycle",
+              outputs: { summary: ["gitea-pr"] },
+            },
+          },
+        },
+      } as Partial<AppConfig>);
+      const app = await bootstrapServerApp({ config, baseSystemPrompt: "test" });
+      const publisher = await app.reviewOrchestration!.outputPublisherResolver!({
+        reviewEvent: {
+          triggerName: "gitea-internal", provider: "gitea", workspaceId: "test-workspace",
+          targetKind: "pull_request", repoRef: "owent/example", author: {}, reason: "gitea:synchronize",
+        },
+        payload: { pull_request: { number: 77 } }, provider: "gitea", eventName: "pull_request",
+      }, { sourceRoot });
+      assertSummaryPublisher(publisher);
+      await publisher.publishSummary("", [], { reviewedFiles: ["fixed.ts"], bypassNoProblemsPolicy: true });
+      expect(models).toEqual(["workspace-verifier"]);
+      expect(patchedBody).toContain("Resolved (1)");
+    } finally {
+      vi.unstubAllGlobals();
+      vi.unstubAllEnvs();
+      await rm(sourceRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("isolates workspace fallback order, summary models and lifecycle routes with catalog metadata", async () => {
+    vi.stubEnv("OPENAI_API_KEY", "test-key");
+    const requests: string[] = [];
+    vi.stubGlobal("fetch", async (_url: string, init: { body?: string }) => {
+      const request = JSON.parse(init.body ?? "{}") as { model: string };
+      requests.push(request.model);
+      if (request.model === "team-primary" || request.model === "triage-primary") {
+        return new Response(JSON.stringify({ error: { code: "insufficient_quota", message: "Account quota exhausted" } }), { status: 429 });
+      }
+      return response({ choices: [{ message: { content: "ok" } }], usage: { prompt_tokens: 10, completion_tokens: 2 } });
+    });
+    try {
+      const base = makeConfig();
+      const entry = (model: string, role: "heavy" | "light" | "any" = "any") => ({ provider: "openai-prod", model, role });
+      const config = makeConfig({
+        llm: {
+          ...base.llm,
+          model_chain: {
+            default: [entry("global")],
+            team: [entry("team-primary", "heavy"), entry("team-summary", "light"), entry("team-backup")],
+            fast: [entry("fast")],
+            lifecycle: [entry("triage-primary"), entry("triage-backup")],
+          },
+          model_catalog: {
+            ...base.llm.model_catalog,
+            enabled: true,
+            offline: true,
+            cache: { backend: "memory" },
+            overrides: {
+              "openai-prod/team-primary": { context_window: 32768 },
+              "openai-prod/team-summary": { context_window: 16384, cost_input_per_mtok: 1 },
+              "openai-prod/triage-backup": { cost_input_per_mtok: 2 },
+            },
+          },
+        },
+        workspaces: {
+          ...base.workspaces,
+          defaults: {},
+          instances: {
+            one: { model_chain: "team", triage_model_chain: "lifecycle", triage: { enabled: true } },
+            two: { model_chain: "fast", triage: { enabled: true } },
+          },
+        },
+      } as Partial<AppConfig>);
+      const app = await bootstrapServerApp({ config, baseSystemPrompt: "test" });
+      const first = app.reviewOrchestration!.modelOptionsResolver!("one");
+      const second = app.reviewOrchestration!.modelOptionsResolver!("two");
+      expect(first.model.modelId).toBe("team-primary");
+      expect(first.model.contextWindow).toBe(32768);
+      expect(first.compression?.triggerTokens).toBe(Math.floor(32768 * 0.6));
+      expect(first.agentModelChain?.map((candidate) => candidate.modelId)).toEqual(["team-primary", "team-summary", "team-backup"]);
+      expect(first.agentModelChain?.[1]?.contextWindow).toBe(16384);
+      expect(first.summarizeModel?.modelId).toBe("team-summary");
+      expect(first.summarizeModel?.contextWindow).toBe(16384);
+      expect(second.agentModelChain?.map((candidate) => candidate.modelId)).toEqual(["fast"]);
+      const triage = app.issueTriage!.modelOptionsResolver!("one");
+      const inherited = app.issueTriage!.modelOptionsResolver!("two");
+      expect(triage.model.modelId).toBe("triage-primary");
+      expect(inherited.model).toBe(second.model);
+      expect(inherited.llm).toBe(second.llm);
+      const complete = (route: typeof triage) => route.llm.complete({ model: route.model, messages: [{ role: "user", content: "test" }] });
+      const reviewResult = await complete(first);
+      expect(reviewResult.modelId).toBe("team-summary");
+      expect(requests.splice(0)).toEqual(["team-primary", "team-summary"]);
+      const triageResult = await complete(triage);
+      expect(triageResult.modelId).toBe("triage-backup");
+      expect(requests.splice(0)).toEqual(["triage-primary", "triage-backup"]);
+      await complete(second);
+      expect(requests).toEqual(["fast"]);
+      expect(app.reviewOrchestration!.model.modelId).toBe("global");
+    } finally {
+      vi.unstubAllGlobals();
+      vi.unstubAllEnvs();
+    }
+  });
+  it("keeps the provider-only fallback when no model chain groups are configured", async () => {
+    vi.stubEnv("OPENAI_API_KEY", "test-key");
+    try {
+      const base = makeConfig();
+      const config = makeConfig({
+        llm: {
+          ...base.llm,
+          default_model_chain: "default",
+          model_chain: {},
+        },
+      } as Partial<AppConfig>);
+      const app = await bootstrapServerApp({ config, baseSystemPrompt: "test" });
+      const route = app.reviewOrchestration!.modelOptionsResolver!("unlisted-workspace");
+      expect(route).toBe(app.reviewOrchestration!.modelOptionsResolver!());
+      expect(route.model.providerId).toBe("openai-prod");
+      expect(route.model.modelId).toBe("gpt-4o-mini");
+      expect(route.agentModelChain).toEqual([route.model]);
+      expect(route.summarizeModel).toBeUndefined();
+      expect(route.summarizeClient).toBeUndefined();
+      expect(route.compression?.triggerTokens).toBe(131072);
+      expect(app.reviewOrchestration!.model).toEqual(route.model);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
   it("returns ServerAppOptions with orchestration", async () => {
     const originalKey = process.env.OPENAI_API_KEY;
     process.env.OPENAI_API_KEY = "test-key";
@@ -2954,11 +3178,14 @@ describe("bootstrapServerApp", () => {
               api_key_env: "ANTHROPIC_API_KEY",
             },
           ],
-          model_chain: [
-            { provider: "openai-prod", model: "gpt-primary", role: "heavy" },
-            { provider: "openai-prod", model: "gpt-secondary", role: "any" },
-            { provider: "anthropic-prod", model: "claude-fallback", role: "any" },
-          ],
+          default_model_chain: "default",
+          model_chain: {
+            default: [
+              { provider: "openai-prod", model: "gpt-primary", role: "heavy" },
+              { provider: "openai-prod", model: "gpt-secondary", role: "any" },
+              { provider: "anthropic-prod", model: "claude-fallback", role: "any" },
+            ],
+          },
           model_catalog: {
             enabled: false,
             source_url: "https://models.dev/api.json",
@@ -3184,10 +3411,16 @@ describe("bootstrapServerApp", () => {
               api_key_env: "OPENAI_API_KEY",
             },
           ],
-          model_chain: [{ provider: "openai-prod", model: "gpt-4o", role: "heavy" }],
-          triage_model_chain: [
-            { provider: "openai-prod", model: "gpt-4o-mini", role: "light" },
-          ],
+          default_model_chain: "default",
+          model_chain: {
+            default: [
+              { provider: "openai-prod", model: "gpt-4o", role: "heavy" },
+            ],
+            triage: [
+              { provider: "openai-prod", model: "gpt-4o-mini", role: "light" },
+            ],
+          },
+          triage_model_chain: "triage",
         },
         workspaces: triageWorkspace,
       } as Partial<AppConfig>);
@@ -3722,7 +3955,8 @@ describe("resolveP4TriggerConfig", () => {
           providers: [
             { id: "openai-prod", kind: "openai_compatible", base_url: "https://api.openai.com/v1", api_key_env: "OPENAI_API_KEY", catalog_provider: "openai" },
           ],
-          model_chain: [{ provider: "openai-prod", model: "gpt-4o", role: "heavy" }],
+          default_model_chain: "default",
+          model_chain: { default: [{ provider: "openai-prod", model: "gpt-4o", role: "heavy" }] },
           model_catalog: {
             enabled: true,
             source_url: "https://models.dev/api.json",
@@ -3762,7 +3996,8 @@ describe("resolveP4TriggerConfig", () => {
           providers: [
             { id: "openai-prod", kind: "openai_compatible", base_url: "https://api.openai.com/v1", api_key_env: "OPENAI_API_KEY" },
           ],
-          model_chain: [{ provider: "openai-prod", model: "gpt-4o", role: "heavy" }],
+          default_model_chain: "default",
+          model_chain: { default: [{ provider: "openai-prod", model: "gpt-4o", role: "heavy" }] },
           model_catalog: {
             enabled: true,
             source_url: "https://models.dev/api.json",
@@ -3805,7 +4040,8 @@ describe("resolveP4TriggerConfig", () => {
           providers: [
             { id: "openai-prod", kind: "openai_compatible", base_url: "https://api.openai.com/v1", api_key_env: "OPENAI_API_KEY" },
           ],
-          model_chain: [{ provider: "openai-prod", model: "gpt-4o-mini", role: "heavy" }],
+          default_model_chain: "default",
+          model_chain: { default: [{ provider: "openai-prod", model: "gpt-4o-mini", role: "heavy" }] },
           model_catalog: {
             enabled: true,
             source_url: "https://models.dev/api.json",
@@ -3845,7 +4081,8 @@ describe("resolveP4TriggerConfig", () => {
           providers: [
             { id: "openai-prod", kind: "openai_compatible", base_url: "https://api.openai.com/v1", api_key_env: "OPENAI_API_KEY", catalog_provider: "openai" },
           ],
-          model_chain: [{ provider: "openai-prod", model: "gpt-4o-mini", role: "heavy" }],
+          default_model_chain: "default",
+          model_chain: { default: [{ provider: "openai-prod", model: "gpt-4o-mini", role: "heavy" }] },
           model_catalog: {
             enabled: true,
             source_url: "https://models.dev/api.json",

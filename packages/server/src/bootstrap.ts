@@ -173,7 +173,24 @@ function extractPullNumber(payload: unknown): number | undefined {
   return typeof payload.number === "number" ? payload.number : undefined;
 }
 
-type LlmModelChain = AppConfig["llm"]["model_chain"];
+type LlmModelChain = AppConfig["llm"]["model_chain"][string];
+
+function resolveModelChainNames(config: AppConfig, workspaceId?: string) {
+  const workspace = workspaceId ? config.workspaces.instances[workspaceId] : undefined;
+  const modelChain = workspace?.model_chain ?? config.workspaces.defaults.model_chain
+    ?? config.llm.default_model_chain ?? "default";
+  const triageModelChain = workspace?.triage_model_chain ?? config.workspaces.defaults.triage_model_chain
+    ?? config.llm.triage_model_chain ?? modelChain;
+  return { modelChain, triageModelChain };
+}
+
+function resolveModelChain(config: AppConfig, name: string): LlmModelChain {
+  if (Object.hasOwn(config.llm.model_chain, name)) {
+    return config.llm.model_chain[name]!;
+  }
+  if (name === "default" && Object.keys(config.llm.model_chain).length === 0) return [];
+  throw new TypeError(`Model chain group "${name}" is not defined in llm.model_chain.`);
+}
 
 function resolveModelSpecFromChain(
   providers: AppConfig["llm"]["providers"],
@@ -208,17 +225,14 @@ function resolveModelSpecFromChain(
   };
 }
 
-export function resolveModelSpecFromConfig(config: AppConfig, providerId?: string): ModelSpec {
-  return resolveModelSpecFromChain(config.llm.providers, config.llm.model_chain, providerId);
+export function resolveModelSpecFromConfig(config: AppConfig, providerId?: string, workspaceId?: string): ModelSpec {
+  const { modelChain } = resolveModelChainNames(config, workspaceId);
+  return resolveModelSpecFromChain(config.llm.providers, resolveModelChain(config, modelChain), providerId);
 }
 
-export function resolveIssueTriageModelSpecFromConfig(config: AppConfig): ModelSpec {
-  const triageChain = config.llm.triage_model_chain;
-  if (triageChain && triageChain.length > 0) {
-    return resolveModelSpecFromChain(config.llm.providers, triageChain);
-  }
-
-  return resolveModelSpecFromConfig(config);
+export function resolveIssueTriageModelSpecFromConfig(config: AppConfig, workspaceId?: string): ModelSpec {
+  const { triageModelChain } = resolveModelChainNames(config, workspaceId);
+  return resolveModelSpecFromChain(config.llm.providers, resolveModelChain(config, triageModelChain));
 }
 
 function readString(raw: Record<string, unknown>, ...keys: readonly string[]): string | undefined {
@@ -2196,7 +2210,7 @@ function toGatewayPerProviderOverrides(
 }
 
 function toGatewayFallbackChain(
-  chain: AppConfig["llm"]["model_chain"],
+  chain: LlmModelChain,
 ): readonly LlmGatewayFallbackEntry[] {
   return chain.map((entry) => ({
     provider: entry.provider,
@@ -2247,10 +2261,7 @@ function buildGatewayModelPricing(
       pricing[key] = extracted;
     }
   };
-  for (const entry of [
-    ...config.llm.model_chain,
-    ...(config.llm.triage_model_chain ?? []),
-  ]) {
+  for (const entry of Object.values(config.llm.model_chain).flat()) {
     const provider = config.llm.providers.find((p) => p.id === entry.provider);
     if (provider) {
       collect(provider, entry.model);
@@ -2298,19 +2309,13 @@ function toDefaultCompressionConfig(model: ModelSpec): CompressionConfig {
   };
 }
 
-function resolveSummarizeModelFromConfig(config: AppConfig): ModelSpec | undefined {
+function resolveSummarizeModelFromChain(config: AppConfig, chain: LlmModelChain): ModelSpec | undefined {
   const summarizeRole = config.compression?.summarize_model_role ?? "light";
   const providers = config.llm.providers;
   if (providers.length === 0) return undefined;
 
-  const fallbackEntry = config.llm.model_chain.find((entry) => entry.role === summarizeRole);
-  if (!fallbackEntry) {
-    return config.llm.model_chain.length > 0
-      ? resolveModelSpecFromConfig(config, config.llm.model_chain[0]!.provider)
-      : undefined;
-  }
-
-  return resolveModelSpecFromConfig(config, fallbackEntry.provider);
+  const entry = chain.find((candidate) => candidate.role === summarizeRole) ?? chain[0];
+  return entry ? resolveModelSpecFromChain(providers, [entry]) : undefined;
 }
 
 async function createAppTokenServices(config: AppConfig): Promise<Map<string, GithubAppTokenService>> {
@@ -2405,61 +2410,64 @@ export async function bootstrapServerApp(options: BootstrapServerOptions): Promi
     await catalogService.ensureRefreshed();
   }
 
-  let model = resolveModelSpecFromConfig(config);
-  if (catalogService) {
-    model = catalogService.enrichModelSpec(model);
-  }
-  const agentModelChain: ModelSpec[] = config.llm.model_chain.length > 0
-    ? config.llm.model_chain.map((entry, index) => {
-      if (index === 0) return model;
-      const candidate = resolveModelSpecFromChain(config.llm.providers, [entry]);
-      return catalogService ? catalogService.enrichModelSpec(candidate) : candidate;
-    })
-    : [model];
   const retryConfig = toGatewayRetry(config.llm.retry);
   const budgetConfig = toGatewayBudget(config.llm.budget);
   const perProviderOverrides = toGatewayPerProviderOverrides(config.llm.per_provider_overrides);
   const gatewayModelPricing = catalogService
     ? buildGatewayModelPricing(catalogService, config)
     : undefined;
-  const llmClient = createResilientChatClient({
-    clientFactory: createLlmClientFromModelSpec,
-    providers: toGatewayProviders(config.llm.providers),
-    fallbackChain: toGatewayFallbackChain(config.llm.model_chain),
-    ...(retryConfig ? { retry: retryConfig } : {}),
-    ...(budgetConfig ? { budget: budgetConfig } : {}),
-    ...(perProviderOverrides ? { perProviderOverrides } : {}),
-    ...(gatewayModelPricing ? { modelPricing: gatewayModelPricing } : {}),
-  });
-
-  const triageChain = config.llm.triage_model_chain;
-  let triageModel = model;
-  let triageLlmClient = llmClient;
-  if (triageChain && triageChain.length > 0) {
-    triageModel = resolveIssueTriageModelSpecFromConfig(config);
-    if (catalogService) {
-      triageModel = catalogService.enrichModelSpec(triageModel);
-    }
-    triageLlmClient = createResilientChatClient({
+  const modelRoutes = new Map<string, ReturnType<typeof createModelRoute>>();
+  function createModelRoute(name: string) {
+    const chain = resolveModelChain(config, name);
+    const enrich = (candidate: ModelSpec): ModelSpec =>
+      catalogService ? catalogService.enrichModelSpec(candidate) : candidate;
+    const model = enrich(resolveModelSpecFromChain(config.llm.providers, chain));
+    const agentModelChain = chain.length > 0
+      ? chain.map((entry, index) => index === 0 ? model : enrich(resolveModelSpecFromChain(config.llm.providers, [entry])))
+      : [model];
+    const llm = createResilientChatClient({
       clientFactory: createLlmClientFromModelSpec,
       providers: toGatewayProviders(config.llm.providers),
-      fallbackChain: toGatewayFallbackChain(triageChain),
+      fallbackChain: toGatewayFallbackChain(chain),
       ...(retryConfig ? { retry: retryConfig } : {}),
       ...(budgetConfig ? { budget: budgetConfig } : {}),
       ...(perProviderOverrides ? { perProviderOverrides } : {}),
       ...(gatewayModelPricing ? { modelPricing: gatewayModelPricing } : {}),
     });
+    const summaryCandidate = resolveSummarizeModelFromChain(config, chain);
+    const summarizeModel = summaryCandidate ? enrich(summaryCandidate) : undefined;
+    return {
+      llm,
+      model,
+      agentModelChain,
+      compression: toCompressionConfig(config.compression) ?? toDefaultCompressionConfig(model),
+      ...(summarizeModel ? { summarizeModel, summarizeClient: createLlmClientFromModelSpec(summarizeModel) } : {}),
+    };
   }
-
-  const compressionConfig = toCompressionConfig(config.compression) ?? toDefaultCompressionConfig(model);
-  let summarizeModel = resolveSummarizeModelFromConfig(config);
-  if (catalogService && summarizeModel) {
-    summarizeModel = catalogService.enrichModelSpec(summarizeModel);
+  function getModelRoute(name: string) {
+    let route = modelRoutes.get(name);
+    if (!route) {
+      route = createModelRoute(name);
+      modelRoutes.set(name, route);
+    }
+    return route;
+  }
+  const modelOptionsResolver = (workspaceId?: string) =>
+    getModelRoute(resolveModelChainNames(config, workspaceId).modelChain);
+  const triageModelOptionsResolver = (workspaceId?: string) => {
+    const { llm, model } = getModelRoute(resolveModelChainNames(config, workspaceId).triageModelChain);
+    return { llm, model };
+  };
+  const defaultRoute = modelOptionsResolver();
+  const defaultTriageRoute = triageModelOptionsResolver();
+  // Resolve every configured workspace while the catalog backend is open.
+  for (const workspaceId of Object.keys(config.workspaces.instances)) {
+    modelOptionsResolver(workspaceId);
+    triageModelOptionsResolver(workspaceId);
   }
   if (catalogBackendToClose?.close) {
     await catalogBackendToClose.close();
   }
-  const summarizeClient = summarizeModel ? createLlmClientFromModelSpec(summarizeModel) : undefined;
 
   const sourceRootResolver = buildSourceRootResolver(baseDir);
   const sandbox = await createSandboxBackendFromConfig(config);
@@ -2512,16 +2520,14 @@ export async function bootstrapServerApp(options: BootstrapServerOptions): Promi
         resolvedToken !== undefined ? { resolvedToken } : undefined,
       );
     },
-    llm: llmClient,
-    model,
-    agentModelChain,
+    ...defaultRoute,
+    modelOptionsResolver,
     dryRun: false,
     outputPublisherResolver: createOutputPublisherResolverFromConfig(config, {
       baseDir,
       appTokenServices,
-      resolutionAnalyzerFactory: (sourceRoot) => createProblemResolutionAnalyzer({
-        llm: triageLlmClient,
-        model: triageModel,
+      resolutionAnalyzerFactory: (sourceRoot, context) => createProblemResolutionAnalyzer({
+        ...triageModelOptionsResolver(context.reviewEvent.workspaceId),
         sourceRoot,
       }),
     }),
@@ -2662,9 +2668,6 @@ export async function bootstrapServerApp(options: BootstrapServerOptions): Promi
           },
         }
       : {}),
-    ...(compressionConfig ? { compression: compressionConfig } : {}),
-    ...(summarizeModel ? { summarizeModel } : {}),
-    ...(summarizeClient ? { summarizeClient } : {}),
     ...(config.review.output_language ? { outputLanguage: config.review.output_language } : {}),
     ...(config.review.log_thinking === false ? { logThinking: false } : {}),
   };
@@ -2687,7 +2690,7 @@ export async function bootstrapServerApp(options: BootstrapServerOptions): Promi
     });
   }
 
-  const triageOptions = resolveIssueTriageOptions(config, triageLlmClient, triageModel);
+  const triageOptions = resolveIssueTriageOptions(config, defaultTriageRoute.llm, defaultTriageRoute.model);
   const authConfig = resolveAuthConfig(config);
   const githubOption = toServerWebhookOption(githubConfigs);
   const gitlabOption = toServerWebhookOption(gitlabConfigs);
@@ -2701,7 +2704,7 @@ export async function bootstrapServerApp(options: BootstrapServerOptions): Promi
     ...(p4Config ? { p4: p4Config } : {}),
     ...(svnConfig ? { svn: svnConfig } : {}),
     reviewOrchestration: orchestrationOptions,
-    ...(triageOptions ? { issueTriage: triageOptions } : {}),
+    ...(triageOptions ? { issueTriage: { ...triageOptions, modelOptionsResolver: triageModelOptionsResolver } } : {}),
     queue,
     ...(worker ? { worker } : {}),
     ...(config.server.path_prefix ? { pathPrefix: config.server.path_prefix } : {}),

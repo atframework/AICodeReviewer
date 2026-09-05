@@ -105,8 +105,12 @@ runtime bundle `manifest.json` records whether metadata was `injected`,
 
 ### Model-chain quota failover
 
-`llm.model_chain` is also the ordered failover list for both direct LLM calls
-and agent-backed reviews. When a provider explicitly reports an exhausted
+`llm.model_chain` defines named, ordered model groups.
+`llm.default_model_chain` selects the global main group (default: `default`).
+Both `workspaces.defaults.model_chain` and
+`workspaces.instances.<id>.model_chain` can select another group, with the
+instance taking precedence. Direct LLM calls and agent-backed reviews use
+only the selected group for failover. When a provider explicitly reports an exhausted
 account balance, billing-cycle allowance, spend limit, or plan quota, AICR
 skips another attempt on that model and retries the same task with the next
 entry. Agent-backed reviews rematerialize the complete runtime bundle for that
@@ -123,9 +127,50 @@ behavior before model-chain fallback.
 
 Set `llm.triage_model_chain` when Git-service issue triage and
 resolved-problem verification should use a different default model or fallback
-order from code analysis. Entries have the same `provider`, `model`, and `role`
-shape as `llm.model_chain`. If the field is absent or empty, AICR reuses the
-code-analysis chain unchanged.
+order from code analysis. Set it to a group name in `llm.model_chain`.
+`workspaces.defaults.triage_model_chain` overrides the global selection;
+`workspaces.instances.<id>.triage_model_chain` overrides both. If omitted
+at every layer, AICR reuses that workspace's main model and client.
+To override a global triage group with the workspace main group, select the
+same name explicitly.
+
+```yaml
+llm:
+  model_chain:
+    default:
+      - { provider: my-llm, model: gpt-4o, role: heavy }
+      - { provider: my-llm, model: gpt-4o-mini, role: light }
+    fast:
+      - { provider: my-llm, model: gpt-4o-mini, role: any }
+    lifecycle:
+      - { provider: my-llm, model: gpt-4o-mini, role: light }
+      - { provider: my-llm, model: gpt-4o, role: any }
+  default_model_chain: default
+  triage_model_chain: lifecycle
+
+workspaces:
+  defaults:
+    model_chain: default
+  instances:
+    service-a:
+      model_chain: default
+      triage_model_chain: lifecycle
+    service-b:
+      model_chain: fast
+      triage_model_chain: fast
+```
+
+The snippet omits providers and source bindings. Each group must be non-empty;
+its first entry is primary. Compression summaries select the first entry
+matching `compression.summarize_model_role` within the workspace main group
+(default: `light`), or use that group's first entry. Group declaration order
+does not select the default. Missing groups and empty references fail
+validation. Retry, budget, provider overrides, and model catalog remain global.
+
+For migration, move the old main array to `llm.model_chain.default`. Move a
+triage array to `llm.model_chain.lifecycle` and set
+`llm.triage_model_chain: lifecycle`; remove an old empty triage array to
+inherit. Both old array fields now fail with migration guidance.
 
 The lifecycle chain covers issue/PR triage, Resolved markers in incremental
 Gitea/GitHub PR summaries, and close/mark-resolved actions for
@@ -978,8 +1023,8 @@ by listing only the most recent open issues. Configure the cap globally under
 `review.problem_issue.max_recent_issues` and override it per workspace when a
 repository needs a tighter or looser lifecycle scan.
 
-Closing and mark-resolved actions use `llm.triage_model_chain` (or inherit
-`llm.model_chain`). File coverage and commit ancestry are checked first; the
+Closing and mark-resolved actions use the workspace-resolved
+`triage_model_chain` group (or inherit its main group). File coverage and commit ancestry are checked first; the
 issue remains open unless the model then confirms the old diagnostic is fixed
 in the current source. Same-scope race duplicates are still cleaned up without
 model analysis because they represent duplicate managed identities, not a code

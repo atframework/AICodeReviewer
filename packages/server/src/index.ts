@@ -696,6 +696,7 @@ async function runTriggerProcessing(
           const workspacePolicy = issueTriageOptions.workspacePolicies?.[reviewEvent.workspaceId];
           triageResult = await triageIssue(issue, {
             ...issueTriageOptions,
+            ...issueTriageOptions.modelOptionsResolver?.(reviewEvent.workspaceId),
             ...(workspacePolicy?.actions ? { actions: workspacePolicy.actions } : {}),
             ...(workspacePolicy?.categoriesClose ? { categoriesClose: workspacePolicy.categoriesClose } : {}),
             ...(workspacePolicy?.dryRun !== undefined ? { dryRun: workspacePolicy.dryRun } : {}),

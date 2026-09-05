@@ -116,6 +116,11 @@ export interface ServerReviewOrchestrationOptions {
   readonly model: ModelSpec;
   /** Ordered models available to agent-backed reviews; the first entry is the normal route. */
   readonly agentModelChain?: readonly ModelSpec[];
+  /** Resolve once per run; all model-dependent options belong to that workspace. */
+  readonly modelOptionsResolver?: (workspaceId: string) => Pick<
+    ServerReviewOrchestrationOptions,
+    "llm" | "model" | "agentModelChain" | "compression" | "summarizeModel" | "summarizeClient"
+  >;
   readonly outputPublisher?: ReviewOutputPublisher;
   readonly outputPublisherResolver?: ReviewOutputPublisherResolver;
   readonly changedPathsResolver?: (context: ReviewOrchestrationContext) => readonly string[] | undefined;
@@ -2597,6 +2602,9 @@ export async function runReviewOrchestration(
   context: ReviewOrchestrationContext,
   options: ServerReviewOrchestrationOptions,
 ): Promise<ReviewOrchestrationResult> {
+  if (options.modelOptionsResolver) {
+    options = { ...options, ...options.modelOptionsResolver(context.reviewEvent.workspaceId) };
+  }
   const sourceRoot = options.sourceRootResolver(context.reviewEvent);
   if (!sourceRoot) {
     throw new TypeError("Review orchestration requires a source root.");

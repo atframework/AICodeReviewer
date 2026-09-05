@@ -89,12 +89,19 @@ sections each layer accepts.
 | --- | :---: | :---: | :---: |
 | `review` | ✓ | ✓ | ✓ |
 | `outputs` (channel lists, `no_problems`, `channel_overrides`) | ✓ | ✓ | ✓ |
+| `model_chain` (main group) | via `llm.default_model_chain` | ✓ | ✓ |
+| `triage_model_chain` (lifecycle group) | via `llm.triage_model_chain` | ✓ | ✓ |
 | `agent.default` | ✓ | ✓ * | ✓ * |
 | `sandbox` | via `agent.sandbox` | ✓ * | ✓ * |
 | `prompt` (base system prompt, `force_skills`) | — | ✓ | ✓ |
 | `context_repositories` (auxiliary context repositories) | — | ✓ | ✓ |
 | `auth` (per-workspace API key) | via `server.auth` | — | ✓ |
 | `compression`, `queue`, `storage`, `llm`, `server`, `admin`, `triggers` | ✓ | — | — |
+
+Define groups once in `llm.model_chain`; workspaces reference group names.
+The main group controls reviews, agent failover, and compression summaries.
+Triage inherits that workspace's main group when omitted at every layer.
+See the [model group example](/en/configuration/llm/).
 
 \* The schema accepts `agent.default` and `sandbox` at the workspace layers, but
 the current version builds a single adapter and sandbox from the global `agent`

@@ -733,11 +733,13 @@ describe("mergeConfigLayers", () => {
     const result = appConfigSchema.safeParse({
       llm: {
         providers: [{ id: "openai-prod", kind: "openai_compatible" }],
-        model_chain: [
-          { provider: "openai-prod", model: "gpt-4o-mini", role: "light" },
-          { provider: "openai-prod", model: "gpt-4o", role: "heavy" },
-          { provider: "ollama-local", model: "qwen2.5:14b", role: "any" },
-        ],
+        model_chain: {
+          default: [
+            { provider: "openai-prod", model: "gpt-4o-mini", role: "light" },
+            { provider: "openai-prod", model: "gpt-4o", role: "heavy" },
+            { provider: "ollama-local", model: "qwen2.5:14b", role: "any" },
+          ],
+        },
       },
     });
 
@@ -748,9 +750,11 @@ describe("mergeConfigLayers", () => {
     const result = appConfigSchema.safeParse({
       llm: {
         providers: [{ id: "openai-prod", kind: "openai_compatible" }],
-        model_chain: [
-          { provider: "openai-prod", model: "gpt-4o", role: "super" },
-        ],
+        model_chain: {
+          default: [
+            { provider: "openai-prod", model: "gpt-4o", role: "super" },
+          ],
+        },
       },
     });
 
@@ -777,9 +781,11 @@ describe("mergeConfigLayers", () => {
     const legacyTriage = appConfigSchema.safeParse({
       llm: {
         providers: [{ id: "openai-prod", kind: "openai_compatible" }],
-        model_chain: [
-          { provider: "openai-prod", model: "gpt-4o", role: "heavy" },
-        ],
+        model_chain: {
+          default: [
+            { provider: "openai-prod", model: "gpt-4o", role: "heavy" },
+          ],
+        },
         triage_fallback_chain: [
           { provider: "openai-prod", model: "gpt-4o-mini", role: "light" },
         ],
@@ -798,28 +804,31 @@ describe("mergeConfigLayers", () => {
     const withChain = appConfigSchema.safeParse({
       llm: {
         providers: [{ id: "openai-prod", kind: "openai_compatible" }],
-        model_chain: [
-          { provider: "openai-prod", model: "gpt-4o", role: "heavy" },
-        ],
-        triage_model_chain: [
-          { provider: "openai-prod", model: "gpt-4o-mini", role: "light" },
-        ],
+        model_chain: {
+          default: [
+            { provider: "openai-prod", model: "gpt-4o", role: "heavy" },
+          ],
+          triage: [
+            { provider: "openai-prod", model: "gpt-4o-mini", role: "light" },
+          ],
+        },
+        triage_model_chain: "triage",
       },
     });
 
     expect(withChain.success).toBe(true);
     if (withChain.success) {
-      expect(withChain.data.llm.triage_model_chain).toEqual([
-        { provider: "openai-prod", model: "gpt-4o-mini", role: "light" },
-      ]);
+      expect(withChain.data.llm.triage_model_chain).toBe("triage");
     }
 
     const withoutChain = appConfigSchema.safeParse({
       llm: {
         providers: [{ id: "openai-prod", kind: "openai_compatible" }],
-        model_chain: [
-          { provider: "openai-prod", model: "gpt-4o", role: "heavy" },
-        ],
+        model_chain: {
+          default: [
+            { provider: "openai-prod", model: "gpt-4o", role: "heavy" },
+          ],
+        },
       },
     });
 
@@ -829,17 +838,91 @@ describe("mergeConfigLayers", () => {
     }
   });
 
-  it("rejects triage model chain entries with invalid roles", () => {
+  it.each(["model_chain", "triage_model_chain"])("rejects legacy llm.%s arrays with migration guidance", (field) => {
     const result = appConfigSchema.safeParse({
       llm: {
         providers: [{ id: "openai-prod", kind: "openai_compatible" }],
-        triage_model_chain: [
-          { provider: "openai-prod", model: "gpt-4o-mini", role: "super" },
+        [field]: [
+          { provider: "openai-prod", model: "gpt-4o-mini", role: "light" },
         ],
       },
     });
 
     expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues[0]?.path).toEqual(["llm", field]);
+      expect(result.error.issues[0]?.message).toContain("llm.model_chain.");
+    }
+  });
+
+  it("merges named groups and workspace references without combining model lists", () => {
+    const entry = { provider: "p", model: "review", role: "heavy" };
+    const config = mergeConfigLayers({
+      llm: { model_chain: { default: [entry], fast: [{ ...entry, model: "fast" }] } },
+      workspaces: {
+        defaults: { model_chain: "default", triage_model_chain: "fast" },
+        instances: { one: {}, two: { model_chain: "fast", triage_model_chain: "default" } },
+      },
+    }, {
+      llm: { model_chain: { fast: [{ ...entry, model: "replacement" }] } },
+    });
+    expect(config.llm.default_model_chain).toBe("default");
+    expect(config.llm.model_chain.default).toEqual([entry]);
+    expect(config.llm.model_chain.fast).toEqual([{ ...entry, model: "replacement" }]);
+    expect(resolveWorkspaceConfig(config, "one")).toMatchObject({ model_chain: "default", triage_model_chain: "fast" });
+    expect(resolveWorkspaceConfig(config, "two")).toMatchObject({ model_chain: "fast", triage_model_chain: "default" });
+    expect(workspaceConfigFileSchema.parse({ model_chain: "fast", triage_model_chain: "default" }))
+      .toEqual({ model_chain: "fast", triage_model_chain: "default" });
+  });
+
+  it.each([
+    ["llm", "default_model_chain"],
+    ["llm", "triage_model_chain"],
+    ["workspaces", "defaults", "model_chain"],
+    ["workspaces", "defaults", "triage_model_chain"],
+    ["workspaces", "instances", "one", "model_chain"],
+    ["workspaces", "instances", "one", "triage_model_chain"],
+  ])("rejects unknown group references at %j", (...path) => {
+    const config: Record<string, unknown> = {
+      llm: { model_chain: { default: [{ provider: "p", model: "m", role: "any" }] } },
+      workspaces: { defaults: {}, instances: { one: {} } },
+    };
+    let target = config;
+    for (const part of path.slice(0, -1)) target = target[part] as Record<string, unknown>;
+    target[path.at(-1)!] = "missing";
+    const result = appConfigSchema.safeParse(config);
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues).toContainEqual(expect.objectContaining({ path, message: 'Model chain group "missing" is not defined in llm.model_chain' }));
+    }
+  });
+
+  it.each([{ default: [] }, { "": [{ provider: "p", model: "m", role: "any" }] }, { " default ": [{ provider: "p", model: "m", role: "any" }] }])(
+    "rejects empty groups and empty group names: %j", (groups) => {
+      expect(appConfigSchema.safeParse({ llm: { model_chain: groups } }).success).toBe(false);
+    },
+  );
+
+  it("selects a named global default without requiring a group literally named default", () => {
+    const config = appConfigSchema.parse({ llm: {
+      model_chain: { custom: [{ provider: "p", model: "m", role: "any" }] },
+      default_model_chain: "custom",
+    } });
+    expect(config.llm.default_model_chain).toBe("custom");
+    expect(config.llm.model_chain.default).toBeUndefined();
+  });
+
+  it("rejects named groups when the implicit default group does not exist", () => {
+    const result = appConfigSchema.safeParse({
+      llm: { model_chain: { custom: [{ provider: "p", model: "m", role: "any" }] } },
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues).toContainEqual(expect.objectContaining({
+        path: ["llm", "default_model_chain"],
+        message: 'Model chain group "default" is not defined in llm.model_chain',
+      }));
+    }
   });
 
   it("accepts LLM retry configuration from Plan §3.5", () => {

@@ -1908,14 +1908,102 @@ describe("createServerApp", () => {
     expect(body.reviewEvent?.changedFiles).toBeUndefined();
   });
 
-  it("runs issue triage when issue event and triage options are provided", async () => {
+  it("runs issue triage with the workspace model and client", async () => {
     let triageModelCalled = false;
     const mockLlm: ChatCompletionClient = {
-      async complete() {
+      async complete(input) {
         triageModelCalled = true;
+        expect(input.model.modelId).toBe("workspace-triage");
         return {
           providerId: "test",
           modelId: "test",
+          content: '{"action":"keep_open","reason":"Valid bug","category":"valid"}',
+          raw: {},
+        };
+      },
+    };
+    const mockFetch = async () => ({
+      ok: true,
+      status: 200,
+      async json() {
+        return {
+          title: "Bug report",
+          body: "Something is broken",
+          state: "open",
+          user: { login: "reporter" },
+          html_url: "https://gitea.example.com/owent/example/issues/10",
+          created_at: "2026-01-01T00:00:00Z",
+          comments: 0,
+          labels: [],
+        };
+      },
+      async text() { return "{}"; },
+    });
+    const { GiteaApiClient } = await import("../src/issue-triage.js");
+    const giteaClient = new GiteaApiClient({
+      baseUrl: "https://gitea.example.com",
+      token: "test-token",
+      fetch: mockFetch,
+    });
+    const modelOptionsResolver = vi.fn(() => ({
+      llm: mockLlm,
+      model: { providerKind: "openai_compatible" as const, providerId: "test", modelId: "workspace-triage" },
+    }));
+    const app = createServerApp({
+      gitea: {
+        triggerName: "gitea-internal",
+        workspaceId: "ws",
+        webhookSecret,
+      },
+      issueTriage: {
+        llm: { complete: async () => { throw new Error("global triage client should not run"); } },
+        model: { providerKind: "openai_compatible", providerId: "test", modelId: "test" },
+        modelOptionsResolver,
+        giteaClient,
+      },
+    });
+    const payload = JSON.stringify({
+      action: "opened",
+      repository: { full_name: "owent/example" },
+      sender: { login: "owent" },
+      issue: {
+        number: 10,
+        title: "Bug report",
+        html_url: "https://gitea.example.com/owent/example/issues/10",
+      },
+    });
+
+    const response = await app.request("/webhooks/gitea", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-gitea-event": "issues",
+        "x-gitea-signature": sign(payload),
+      },
+      body: payload,
+    });
+    const body = (await response.json()) as {
+      accepted: boolean;
+      triage?: { decision?: { action?: string; category?: string }; closed?: boolean };
+    };
+
+    expect(response.status).toBe(202);
+    expect(body.accepted).toBe(true);
+    expect(triageModelCalled).toBe(true);
+    expect(modelOptionsResolver).toHaveBeenCalledWith("ws");
+    expect(body.triage?.decision?.action).toBe("keep_open");
+    expect(body.triage?.closed).toBe(false);
+  });
+
+  it("runs issue triage with the configured model and client when no resolver is provided", async () => {
+    let triageModelCalled = false;
+    const mockLlm: ChatCompletionClient = {
+      async complete(input) {
+        triageModelCalled = true;
+        expect(input.model.modelId).toBe("global-triage");
+        return {
+          providerId: "test",
+          modelId: "global-triage",
           content: '{"action":"keep_open","reason":"Valid bug","category":"valid"}',
           raw: {},
         };
@@ -1952,7 +2040,7 @@ describe("createServerApp", () => {
       },
       issueTriage: {
         llm: mockLlm,
-        model: { providerKind: "openai_compatible", providerId: "test", modelId: "test" },
+        model: { providerKind: "openai_compatible", providerId: "test", modelId: "global-triage" },
         giteaClient,
       },
     });
@@ -1987,6 +2075,7 @@ describe("createServerApp", () => {
     expect(body.triage?.decision?.action).toBe("keep_open");
     expect(body.triage?.closed).toBe(false);
   });
+
 
   it("skips issue triage for GitHub issue events when the triage client is Gitea-only", async () => {
     let triageModelCalled = false;

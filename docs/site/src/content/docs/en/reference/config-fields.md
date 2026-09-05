@@ -58,8 +58,10 @@ Narrative: [LLM providers and models](/en/configuration/llm/).
 | `llm.providers[].reasoning_effort` | enum | — | Reasoning effort tier: `minimal`, `low`, `medium`, `high`, `max` (passthrough) |
 | `llm.providers[].thinking_level` | enum | — | Coarser thinking tier: `off`, `minimal`, `low`, `medium`, `high`, `max` (passthrough) |
 | `llm.providers[].thinking_budget_tokens` | int | — | Explicit thinking budget in tokens (passthrough) |
-| `llm.model_chain[]` | array | `[]` | Ordered provider/model entries; the first is the default route, later entries are tried on failure. Each has `provider`, `model`, `role` (`light`/`heavy`/`any`) |
-| `llm.triage_model_chain[]` | array | inherit | Optional chain for Git-service issue triage and resolved-problem verification; first entry is the default. Absent or empty inherits `llm.model_chain` |
+| `llm.model_chain` | map | `{}` | Group names mapped to ordered model lists |
+| `llm.model_chain.<id>[]` | array | — | Non-empty list; first entry is primary, later entries are tried in order. Each has `provider`, `model`, `role` (`light`/`heavy`/`any`) |
+| `llm.default_model_chain` | string | `default` | Global main-group name; must exist when groups are configured |
+| `llm.triage_model_chain` | string | inherit | Lifecycle-analysis group name; omitted inherits the current workspace main group |
 | `llm.retry` | object | — | Per-call retry policy |
 | `llm.retry.max_attempts` | int > 0 | — | Max attempts per LLM call |
 | `llm.retry.respect_retry_after` | boolean | — | Honor `Retry-After` headers |
@@ -123,6 +125,8 @@ Narrative: [Configuration overview](/en/configuration/overview/).
 | `workspaces.defaults` | object | `{}` | Defaults merged into every instance (sandbox, review, agent, outputs, prompt, context_repositories) |
 | `workspaces.defaults.sandbox` | object | — | Default sandbox config (see `agent.sandbox`) |
 | `workspaces.defaults.review` | object | — | Default review config (see `review`) |
+| `workspaces.defaults.model_chain` | string | inherit | Main-group override referencing `llm.model_chain` |
+| `workspaces.defaults.triage_model_chain` | string | inherit | Lifecycle-group override; if absent at all layers, uses this workspace's main group |
 | `workspaces.defaults.agent.default` | enum | — | Default agent kind for this workspace set (no runtime effect yet, see note below) |
 | `workspaces.defaults.outputs` | object | — | Default outputs (see `outputs` workspace fields) |
 | `workspaces.defaults.prompt.base_system_prompt_file` | string | — | Custom base system prompt file (deployment-root-relative) |
@@ -143,6 +147,8 @@ Narrative: [Configuration overview](/en/configuration/overview/).
 | `workspaces.instances` | map | `{}` | Per-workspace instances keyed by workspace id |
 | `workspaces.instances.<id>.source_repo.trigger` | string | — | Trigger profile name |
 | `workspaces.instances.<id>.source_repo.repo` | string | — | Repository reference |
+| `workspaces.instances.<id>.model_chain` | string | inherit | Main-group override referencing `llm.model_chain` |
+| `workspaces.instances.<id>.triage_model_chain` | string | inherit | Lifecycle-group override; if absent at all layers, uses this workspace's main group |
 | `workspaces.instances.<id>.agent.default` | enum | — | Agent kind override (no runtime effect yet, see note below) |
 | `workspaces.instances.<id>.review` | object | — | Review config override (see `review`) |
 | `workspaces.instances.<id>.outputs` | object | — | Outputs override |
