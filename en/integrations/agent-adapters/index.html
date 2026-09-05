@@ -1,0 +1,428 @@
+<!DOCTYPE html><html lang="en" dir="ltr" data-theme="dark" data-has-toc data-has-sidebar class="astro-fdaztlf2"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/><title>Agent adapters | AICodeReviewer</title><link rel="canonical" href="https://aicr.atframe.work/en/integrations/agent-adapters/"/><link rel="alternate" hreflang="en" href="https://aicr.atframe.work/en/integrations/agent-adapters/"/><link rel="alternate" hreflang="zh-CN" href="https://aicr.atframe.work/zh-cn/integrations/agent-adapters/"/><link rel="alternate" hreflang="x-default" href="https://aicr.atframe.work/en/integrations/agent-adapters/"/><link rel="sitemap" href="/sitemap-index.xml"/><link rel="shortcut icon" href="/favicon.svg" type="image/svg+xml"/><meta name="generator" content="Astro v7.2.10"/><meta name="generator" content="Starlight v0.42.0"/><meta property="og:title" content="Agent adapters"/><meta property="og:type" content="article"/><meta property="og:url" content="https://aicr.atframe.work/en/integrations/agent-adapters/"/><meta property="og:locale" content="en"/><meta property="og:description" content="The supported agent CLIs and how AICR translates models, instructions, and MCP tools into each one's runtime bundle."/><meta property="og:site_name" content="AICodeReviewer"/><meta name="twitter:card" content="summary_large_image"/><meta name="description" content="The supported agent CLIs and how AICR translates models, instructions, and MCP tools into each one's runtime bundle."/><meta property="og:image" content="https://aicr.atframe.work/og-image.png"/><meta property="og:image:width" content="1200"/><meta property="og:image:height" content="630"/><meta property="og:image:alt" content="AICodeReviewer — self-hosted AI code review orchestration service"/><meta name="twitter:image" content="https://aicr.atframe.work/og-image.png"/><meta name="twitter:image:alt" content="AICodeReviewer — self-hosted AI code review orchestration service"/><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin><link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Noto+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400&amp;family=Noto+Sans+Mono:wght@400;700&amp;display=swap" onload="this.onload=null;this.rel='stylesheet'"><link rel="preload" as="style" href="https://cdn.jsdelivr.net/npm/@fontsource/maple-mono@5.2.6/latin.css" onload="this.onload=null;this.rel='stylesheet'"><noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400&amp;family=Noto+Sans+Mono:wght@400;700&amp;display=swap"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/maple-mono@5.2.6/latin.css"></noscript><script>
+	window.StarlightThemeProvider = (() => {
+		const storedTheme =
+			typeof localStorage !== 'undefined' && localStorage.getItem('starlight-theme');
+		const theme =
+			storedTheme ||
+			(window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+		document.documentElement.dataset.theme = theme === 'light' ? 'light' : 'dark';
+		return {
+			updatePickers(theme = storedTheme || 'auto') {
+				document.querySelectorAll('starlight-theme-select').forEach((picker) => {
+					const select = picker.querySelector('select');
+					if (select) select.value = theme;
+					/** @type {HTMLTemplateElement | null} */
+					const tmpl = document.querySelector(`#theme-icons`);
+					const newIcon = tmpl && tmpl.content.querySelector('.' + theme);
+					if (newIcon) {
+						const oldIcon = picker.querySelector('svg.label-icon');
+						if (oldIcon) {
+							oldIcon.replaceChildren(...newIcon.cloneNode(true).childNodes);
+						}
+					}
+				});
+			},
+		};
+	})();
+</script><template id="theme-icons"><svg aria-hidden="true" class="light astro-673pctzy" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M5 12a1 1 0 0 0-1-1H3a1 1 0 0 0 0 2h1a1 1 0 0 0 1-1Zm.64 5-.71.71a1 1 0 0 0 0 1.41 1 1 0 0 0 1.41 0l.71-.71A1 1 0 0 0 5.64 17ZM12 5a1 1 0 0 0 1-1V3a1 1 0 0 0-2 0v1a1 1 0 0 0 1 1Zm5.66 2.34a1 1 0 0 0 .7-.29l.71-.71a1 1 0 1 0-1.41-1.41l-.66.71a1 1 0 0 0 0 1.41 1 1 0 0 0 .66.29Zm-12-.29a1 1 0 0 0 1.41 0 1 1 0 0 0 0-1.41l-.71-.71a1.004 1.004 0 1 0-1.43 1.41l.73.71ZM21 11h-1a1 1 0 0 0 0 2h1a1 1 0 0 0 0-2Zm-2.64 6A1 1 0 0 0 17 18.36l.71.71a1 1 0 0 0 1.41 0 1 1 0 0 0 0-1.41l-.76-.66ZM12 6.5a5.5 5.5 0 1 0 5.5 5.5A5.51 5.51 0 0 0 12 6.5Zm0 9a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7Zm0 3.5a1 1 0 0 0-1 1v1a1 1 0 0 0 2 0v-1a1 1 0 0 0-1-1Z"/></svg><svg aria-hidden="true" class="dark astro-673pctzy" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M21.64 13a1 1 0 0 0-1.05-.14 8.049 8.049 0 0 1-3.37.73 8.15 8.15 0 0 1-8.14-8.1 8.59 8.59 0 0 1 .25-2A1 1 0 0 0 8 2.36a10.14 10.14 0 1 0 14 11.69 1 1 0 0 0-.36-1.05Zm-9.5 6.69A8.14 8.14 0 0 1 7.08 5.22v.27a10.15 10.15 0 0 0 10.14 10.14 9.784 9.784 0 0 0 2.1-.22 8.11 8.11 0 0 1-7.18 4.32v-.04Z"/></svg><svg aria-hidden="true" class="auto astro-673pctzy" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M21 14h-1V7a3 3 0 0 0-3-3H7a3 3 0 0 0-3 3v7H3a1 1 0 0 0-1 1v2a3 3 0 0 0 3 3h14a3 3 0 0 0 3-3v-2a1 1 0 0 0-1-1ZM6 7a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v7H6V7Zm14 10a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-1h16v1Z"/></svg></template><link rel="stylesheet" href="/_astro/print.ehPL0gv-.css" media="print"><link rel="stylesheet" href="/_astro/common.DdkP9Xle.css"><style>@layer starlight.components{.card:where(.astro-wsvutctv){--sl-card-border:var(--sl-color-purple);--sl-card-bg:var(--sl-color-purple-low);border:1px solid var(--sl-color-gray-5);background-color:var(--sl-color-black);flex-direction:column;gap:clamp(.5rem,.125rem + 1vw,1rem);padding:clamp(1rem,.125rem + 3vw,2.5rem)}.card:where(.astro-wsvutctv):nth-child(4n+1){--sl-card-border:var(--sl-color-orange);--sl-card-bg:var(--sl-color-orange-low)}.card:where(.astro-wsvutctv):nth-child(4n+3){--sl-card-border:var(--sl-color-green);--sl-card-bg:var(--sl-color-green-low)}.card:where(.astro-wsvutctv):nth-child(4n+4){--sl-card-border:var(--sl-color-red);--sl-card-bg:var(--sl-color-red-low)}.card:where(.astro-wsvutctv):nth-child(4n+5){--sl-card-border:var(--sl-color-blue);--sl-card-bg:var(--sl-color-blue-low)}.title:where(.astro-wsvutctv){font-weight:600;font-size:var(--sl-text-h4);color:var(--sl-color-white);line-height:var(--sl-line-height-headings);align-items:center;gap:1rem}.card:where(.astro-wsvutctv) .icon:where(.astro-wsvutctv){border:1px solid var(--sl-card-border);background-color:var(--sl-card-bg);border-radius:.25rem;flex-shrink:0;padding:.2em}.card:where(.astro-wsvutctv) .body:where(.astro-wsvutctv){font-size:clamp(var(--sl-text-sm), calc(.5rem + 1vw), var(--sl-text-body));margin:0}.card-grid:where(.astro-civ4uk4b){grid-template-columns:100%;gap:1rem;display:grid}.card-grid:where(.astro-civ4uk4b)>*{margin-top:0!important}@media (width>=50rem){.card-grid:where(.astro-civ4uk4b){grid-template-columns:1fr 1fr;gap:1.5rem}.stagger:where(.astro-civ4uk4b){--stagger-height:5rem;padding-bottom:var(--stagger-height)}.stagger:where(.astro-civ4uk4b)>:nth-child(2n){transform:translateY(var(--stagger-height))}}.sl-link-card:where(.astro-3lld4lja){border:1px solid var(--sl-color-gray-5);box-shadow:var(--sl-shadow-sm);border-radius:.5rem;grid-template-columns:1fr auto;gap:.5rem;padding:1rem;display:grid;position:relative}a:where(.astro-3lld4lja){line-height:var(--sl-line-height-headings);text-decoration:none}a:where(.astro-3lld4lja):before{content:"";position:absolute;inset:0}.stack:where(.astro-3lld4lja){flex-direction:column;gap:.5rem}.title:where(.astro-3lld4lja){color:var(--sl-color-white);font-weight:600;font-size:var(--sl-text-lg)}.description:where(.astro-3lld4lja){color:var(--sl-color-gray-3);line-height:1.5}.icon:where(.astro-3lld4lja){color:var(--sl-color-gray-3)}.sl-link-card:where(.astro-3lld4lja):hover{background:var(--sl-color-gray-7,var(--sl-color-gray-6));border-color:var(--sl-color-gray-2)}.sl-link-card:where(.astro-3lld4lja):hover .icon:where(.astro-3lld4lja){color:var(--sl-color-white)}.sl-steps{--bullet-size:calc(var(--sl-line-height) * 1rem);--bullet-margin:.375rem;counter-reset:steps-counter var(--sl-steps-start,0);padding-inline-start:0;list-style:none}.sl-steps>li{counter-increment:steps-counter;padding-inline-start:calc(var(--bullet-size) + 1rem);min-height:calc(var(--bullet-size) + var(--bullet-margin));padding-bottom:1px;position:relative}.sl-steps>li+li{margin-top:0}.sl-steps>li:before{content:counter(steps-counter);top:0;width:var(--bullet-size);height:var(--bullet-size);line-height:var(--bullet-size);font-size:var(--sl-text-xs);text-align:center;color:var(--sl-color-white);background-color:var(--sl-color-gray-6);box-shadow:inset 0 0 0 1px var(--sl-color-gray-5);border-radius:99rem;font-weight:600;position:absolute;inset-inline-start:0}.sl-steps>li:after{--guide-width:1px;content:"";top:calc(var(--bullet-size) + var(--bullet-margin));bottom:var(--bullet-margin);width:var(--guide-width);background-color:var(--sl-color-hairline-light);position:absolute;inset-inline-start:calc((var(--bullet-size) - var(--guide-width)) / 2)}}@layer starlight.content{.sl-steps>li>:first-child{--lh:calc(1em * var(--sl-line-height));--shift-y:calc(.5 * (var(--bullet-size) - var(--lh)));transform:translateY(var(--shift-y));margin-bottom:var(--shift-y)}.sl-steps>li>:first-child:where(h1,h2,h3,h4,h5,h6){--lh:calc(1em * var(--sl-line-height-headings))}@supports (--prop:1lh){.sl-steps>li>:first-child{--lh:1lh}}}
+@layer starlight.components{svg:where(.astro-673pctzy){color:var(--sl-icon-color);font-size:var(--sl-icon-size,1em);width:1em;height:1em}}
+</style><script type="module" src="/_astro/page.Dwipeu-R.js"></script></head><body class="astro-fdaztlf2"><a class="sl-skip-link astro-xilb3ueq" href="#_top">Skip to content</a><div class="page sl-flex astro-upyan42w"><header class="header astro-upyan42w"><div class="header astro-cnk4lpc2"><div class="title-wrapper sl-flex astro-cnk4lpc2"><a href="/en" class="site-title sl-flex astro-twlpxy5w"><span class="astro-twlpxy5w" translate="no">AICodeReviewer</span></a></div><div class="sl-flex print:hidden astro-cnk4lpc2"><site-search class="astro-cnk4lpc2 astro-o3dxmaxf" data-translations="{&quot;placeholder&quot;:&quot;Search&quot;}"><button data-open-modal disabled aria-label="Search" aria-keyshortcuts="Control+K" class="astro-o3dxmaxf"><svg aria-hidden="true" class="astro-o3dxmaxf astro-673pctzy" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M21.71 20.29 18 16.61A9 9 0 1 0 16.61 18l3.68 3.68a.999.999 0 0 0 1.42 0 1 1 0 0 0 0-1.39ZM11 18a7 7 0 1 1 0-14 7 7 0 0 1 0 14Z"/></svg><span class="sl-hidden md:sl-block astro-o3dxmaxf" aria-hidden="true">Search</span><kbd class="sl-hidden md:sl-flex astro-o3dxmaxf" style="display: none;"><kbd class="astro-o3dxmaxf">Ctrl</kbd><kbd class="astro-o3dxmaxf">K</kbd></kbd></button><dialog style="padding:0" aria-label="Search" class="astro-o3dxmaxf"><div class="dialog-frame sl-flex astro-o3dxmaxf"><button data-close-modal class="sl-flex md:sl-hidden astro-o3dxmaxf">Cancel</button><div class="search-container astro-o3dxmaxf"><div id="starlight__search" class="astro-o3dxmaxf"></div></div></div></dialog></site-search><script>
+	(() => {
+		const openBtn = document.querySelector('button[data-open-modal]');
+		const shortcut = openBtn?.querySelector('kbd');
+		if (!openBtn || !(shortcut instanceof HTMLElement)) return;
+		const platformKey = shortcut.querySelector('kbd');
+		if (platformKey && /(Mac|iPhone|iPod|iPad)/i.test(navigator.platform)) {
+			platformKey.textContent = '⌘';
+			openBtn.setAttribute('aria-keyshortcuts', 'Meta+K');
+		}
+		shortcut.style.display = '';
+	})();
+</script><script type="module" src="/_astro/Search.astro_astro_type_script_index_0_lang.Bbh0UEtI.js"></script></div><div class="sl-hidden md:sl-flex print:hidden right-group astro-cnk4lpc2"><div class="sl-flex social-icons astro-cnk4lpc2"><a href="https://github.com/atframework/AICodeReviewer" rel="me" class="sl-flex astro-qs4rz75q"><span class="sr-only astro-qs4rz75q">GitHub</span><svg aria-hidden="true" class="astro-qs4rz75q astro-673pctzy" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M12 .3a12 12 0 0 0-3.8 23.38c.6.12.83-.26.83-.57L9 21.07c-3.34.72-4.04-1.61-4.04-1.61-.55-1.39-1.34-1.76-1.34-1.76-1.08-.74.09-.73.09-.73 1.2.09 1.83 1.24 1.83 1.24 1.08 1.83 2.81 1.3 3.5 1 .1-.78.42-1.31.76-1.61-2.67-.3-5.47-1.33-5.47-5.93 0-1.31.47-2.38 1.24-3.22-.14-.3-.54-1.52.1-3.18 0 0 1-.32 3.3 1.23a11.5 11.5 0 0 1 6 0c2.28-1.55 3.29-1.23 3.29-1.23.64 1.66.24 2.88.12 3.18a4.65 4.65 0 0 1 1.23 3.22c0 4.61-2.8 5.63-5.48 5.92.42.36.81 1.1.81 2.22l-.01 3.29c0 .31.2.69.82.57A12 12 0 0 0 12 .3Z"/></svg></a></div><starlight-theme-select><label style="--sl-select-width: 6.25em" class="astro-k3asimwp"><span class="sr-only astro-k3asimwp">Select theme</span><svg aria-hidden="true" class="icon label-icon astro-k3asimwp astro-673pctzy" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M21 14h-1V7a3 3 0 0 0-3-3H7a3 3 0 0 0-3 3v7H3a1 1 0 0 0-1 1v2a3 3 0 0 0 3 3h14a3 3 0 0 0 3-3v-2a1 1 0 0 0-1-1ZM6 7a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v7H6V7Zm14 10a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-1h16v1Z"/></svg><select autocomplete="off" class="astro-k3asimwp"><option value="dark" class="astro-k3asimwp">Dark</option><option value="light" class="astro-k3asimwp">Light</option><option value="auto" selected class="astro-k3asimwp">Auto</option></select><svg aria-hidden="true" class="icon caret astro-k3asimwp astro-673pctzy" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M17 9.17a1 1 0 0 0-1.41 0L12 12.71 8.46 9.17a1 1 0 1 0-1.41 1.42l4.24 4.24a1.002 1.002 0 0 0 1.42 0L17 10.59a1.002 1.002 0 0 0 0-1.42Z"/></svg></label></starlight-theme-select><script>
+	StarlightThemeProvider.updatePickers();
+</script><script type="module">var e=`starlight-theme`,t=e=>e===`auto`||e===`dark`||e===`light`?e:`auto`,n=()=>t(typeof localStorage<`u`&&localStorage.getItem(e));function r(t){typeof localStorage<`u`&&localStorage.setItem(e,t===`light`||t===`dark`?t:``)}var i=()=>matchMedia(`(prefers-color-scheme: light)`).matches?`light`:`dark`;function a(e){StarlightThemeProvider.updatePickers(e),document.documentElement.dataset.theme=e===`auto`?i():e,r(e)}matchMedia(`(prefers-color-scheme: light)`).addEventListener(`change`,()=>{n()===`auto`&&a(`auto`)});var o=class extends HTMLElement{constructor(){super(),a(n()),this.querySelector(`select`)?.addEventListener(`change`,e=>{e.currentTarget instanceof HTMLSelectElement&&a(t(e.currentTarget.value))})}};customElements.define(`starlight-theme-select`,o);</script><starlight-lang-select><label style="--sl-select-width: 7em" class="astro-k3asimwp"><span class="sr-only astro-k3asimwp">Select language</span><svg aria-hidden="true" class="icon label-icon astro-k3asimwp astro-673pctzy" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path fill-rule="evenodd" d="M8.516 3a.94.94 0 0 0-.941.94v1.15H2.94a.94.94 0 1 0 0 1.882h7.362a7.422 7.422 0 0 1-1.787 3.958 7.42 7.42 0 0 1-1.422-2.425.94.94 0 1 0-1.774.627 9.303 9.303 0 0 0 1.785 3.043 7.422 7.422 0 0 1-4.164 1.278.94.94 0 1 0 0 1.881 9.303 9.303 0 0 0 5.575-1.855 9.303 9.303 0 0 0 4.11 1.74l-.763 1.525a.968.968 0 0 0-.016.034l-1.385 2.77a.94.94 0 1 0 1.683.841l1.133-2.267h5.806l1.134 2.267a.94.94 0 0 0 1.683-.841l-1.385-2.769a.95.95 0 0 0-.018-.036l-3.476-6.951a.94.94 0 0 0-1.682 0l-1.82 3.639a7.423 7.423 0 0 1-3.593-1.256 9.303 9.303 0 0 0 2.27-5.203h1.894a.94.94 0 0 0 0-1.881H9.456V3.94A.94.94 0 0 0 8.516 3Zm6.426 11.794a1.068 1.068 0 0 1-.02.039l-.703 1.407h3.924l-1.962-3.924-1.24 2.478Z" clip-rule="evenodd"/></svg><select autocomplete="off" class="astro-k3asimwp"><option value="/en/integrations/agent-adapters/" selected class="astro-k3asimwp">English</option><option value="/zh-cn/integrations/agent-adapters/" class="astro-k3asimwp">简体中文</option></select><svg aria-hidden="true" class="icon caret astro-k3asimwp astro-673pctzy" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M17 9.17a1 1 0 0 0-1.41 0L12 12.71 8.46 9.17a1 1 0 1 0-1.41 1.42l4.24 4.24a1.002 1.002 0 0 0 1.42 0L17 10.59a1.002 1.002 0 0 0 0-1.42Z"/></svg></label></starlight-lang-select><script type="module">var e=class extends HTMLElement{constructor(){super();let e=this.querySelector(`select`);e&&(e.addEventListener(`change`,e=>{e.currentTarget instanceof HTMLSelectElement&&(window.location.pathname=e.currentTarget.value)}),window.addEventListener(`pageshow`,t=>{if(!t.persisted)return;let n=e.querySelector(`option[selected]`)?.index;n!==e.selectedIndex&&(e.selectedIndex=n??0)}))}};customElements.define(`starlight-lang-select`,e);</script></div></div></header><nav class="sidebar print:hidden astro-upyan42w" aria-label="Main"><button popovertarget="starlight__sidebar" class="sl-menu-button sl-flex md:sl-hidden print:hidden astro-p3p5haht"><svg aria-hidden="true" class="open-menu astro-p3p5haht astro-673pctzy" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M3 8h18a1 1 0 1 0 0-2H3a1 1 0 0 0 0 2Zm18 8H3a1 1 0 0 0 0 2h18a1 1 0 0 0 0-2Zm0-5H3a1 1 0 0 0 0 2h18a1 1 0 0 0 0-2Z"/></svg><svg aria-hidden="true" class="close-menu astro-p3p5haht astro-673pctzy" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="m13.41 12 6.3-6.29a1.004 1.004 0 1 0-1.42-1.42L12 10.59l-6.29-6.3a1.004 1.004 0 0 0-1.42 1.42l6.3 6.29-6.3 6.29a1 1 0 0 0 0 1.42.998.998 0 0 0 1.42 0l6.29-6.3 6.29 6.3a.999.999 0 0 0 1.42 0 1 1 0 0 0 0-1.42L13.41 12Z"/></svg><span class="sr-only astro-p3p5haht">Menu</span></button><script type="module">var e=class extends HTMLElement{constructor(){super(),matchMedia(`(min-width: 50em)`).addEventListener(`change`,()=>this.hidePopover()),this.addEventListener(`toggle`,({newState:e})=>this.trapFocus(e===`open`))}trapFocus(e){document.querySelectorAll(`.main-frame, .sl-skip-link`).forEach(t=>{t.toggleAttribute(`inert`,e)})}};customElements.define(`sl-sidebar-pane`,e);</script><sl-sidebar-pane popover id="starlight__sidebar" class="sidebar-pane astro-upyan42w"><div class="sidebar-content sl-flex astro-upyan42w"><sl-sidebar-state-persist data-hash="0pm5ntb" class="astro-jzs26nh6"><script aria-hidden="true">
+		(() => {
+			try {
+				if (!matchMedia('(min-width: 50em)').matches) return;
+				/** @type {HTMLElement | null} */
+				const target = document.querySelector('sl-sidebar-state-persist');
+				const state = JSON.parse(sessionStorage.getItem('sl-sidebar-state') || '0');
+				if (!target || !state || target.dataset.hash !== state.hash) return;
+				window._starlightScrollRestore = state.scroll;
+				customElements.define(
+					'sl-sidebar-restore',
+					class SidebarRestore extends HTMLElement {
+						connectedCallback() {
+							try {
+								const idx = parseInt(this.dataset.index || '');
+								const details = this.closest('details');
+								if (details && typeof state.open[idx] === 'boolean') details.open = state.open[idx];
+							} catch {}
+						}
+					}
+				);
+			} catch {}
+		})();
+	</script><ul class="top-level astro-7wa6eztl"><li class="astro-7wa6eztl"><details open class="astro-7wa6eztl"><summary class="astro-7wa6eztl"><span class="group-label astro-7wa6eztl"><span class="large astro-7wa6eztl">Getting Started</span></span><svg aria-hidden="true" class="caret astro-7wa6eztl astro-673pctzy" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.25rem;"><path d="m14.83 11.29-4.24-4.24a1 1 0 1 0-1.42 1.41L12.71 12l-3.54 3.54a1 1 0 0 0 0 1.41 1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.24-4.24a1.002 1.002 0 0 0 0-1.42Z"/></svg></summary><sl-sidebar-restore data-index="0"></sl-sidebar-restore><ul class="astro-7wa6eztl"><li class="astro-7wa6eztl"><a href="/en/start/quick-start/" class="astro-7wa6eztl"><span class="astro-7wa6eztl">Quick start</span></a></li><li class="astro-7wa6eztl"><a href="/en/start/docker-compose/" class="astro-7wa6eztl"><span class="astro-7wa6eztl">Docker Compose deployment</span></a></li><li class="astro-7wa6eztl"><a href="/en/start/first-webhook/" class="astro-7wa6eztl"><span class="astro-7wa6eztl">Your first webhook review</span></a></li><li class="astro-7wa6eztl"><a href="/en/start/dry-run/" class="astro-7wa6eztl"><span class="astro-7wa6eztl">Dry-run review</span></a></li><li class="astro-7wa6eztl"><a href="/en/start/dashboard/" class="astro-7wa6eztl"><span class="astro-7wa6eztl">Dashboard and logs</span></a></li></ul></details></li><li class="astro-7wa6eztl"><details open class="astro-7wa6eztl"><summary class="astro-7wa6eztl"><span class="group-label astro-7wa6eztl"><span class="large astro-7wa6eztl">Configuration</span></span><svg aria-hidden="true" class="caret astro-7wa6eztl astro-673pctzy" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.25rem;"><path d="m14.83 11.29-4.24-4.24a1 1 0 1 0-1.42 1.41L12.71 12l-3.54 3.54a1 1 0 0 0 0 1.41 1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.24-4.24a1.002 1.002 0 0 0 0-1.42Z"/></svg></summary><sl-sidebar-restore data-index="1"></sl-sidebar-restore><ul class="astro-7wa6eztl"><li class="astro-7wa6eztl"><a href="/en/configuration/overview/" class="astro-7wa6eztl"><span class="astro-7wa6eztl">Configuration Overview</span></a></li><li class="astro-7wa6eztl"><a href="/en/configuration/authentication/" class="astro-7wa6eztl"><span class="astro-7wa6eztl">Authentication &amp; secrets</span></a></li><li class="astro-7wa6eztl"><a href="/en/configuration/llm/" class="astro-7wa6eztl"><span class="astro-7wa6eztl">LLM Providers and Models</span></a></li><li class="astro-7wa6eztl"><a href="/en/configuration/agent/" class="astro-7wa6eztl"><span class="astro-7wa6eztl">Agent and Sandbox</span></a></li><li class="astro-7wa6eztl"><a href="/en/configuration/outputs/" class="astro-7wa6eztl"><span class="astro-7wa6eztl">Output Channels and Routing</span></a></li><li class="astro-7wa6eztl"><a href="/en/configuration/storage/" class="astro-7wa6eztl"><span class="astro-7wa6eztl">Storage</span></a></li><li class="astro-7wa6eztl"><a href="/en/configuration/queue/" class="astro-7wa6eztl"><span class="astro-7wa6eztl">Queue and Retry</span></a></li></ul></details></li><li class="astro-7wa6eztl"><details open class="astro-7wa6eztl"><summary class="astro-7wa6eztl"><span class="group-label astro-7wa6eztl"><span class="large astro-7wa6eztl">Deployment</span></span><svg aria-hidden="true" class="caret astro-7wa6eztl astro-673pctzy" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.25rem;"><path d="m14.83 11.29-4.24-4.24a1 1 0 1 0-1.42 1.41L12.71 12l-3.54 3.54a1 1 0 0 0 0 1.41 1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.24-4.24a1.002 1.002 0 0 0 0-1.42Z"/></svg></summary><sl-sidebar-restore data-index="2"></sl-sidebar-restore><ul class="astro-7wa6eztl"><li class="astro-7wa6eztl"><a href="/en/deployment/docker/" class="astro-7wa6eztl"><span class="astro-7wa6eztl">Docker Deployment</span></a></li><li class="astro-7wa6eztl"><a href="/en/deployment/podman/" class="astro-7wa6eztl"><span class="astro-7wa6eztl">Podman / Rootless</span></a></li><li class="astro-7wa6eztl"><a href="/en/deployment/operations/" class="astro-7wa6eztl"><span class="astro-7wa6eztl">Operations and Security</span></a></li></ul></details></li><li class="astro-7wa6eztl"><details open class="astro-7wa6eztl"><summary class="astro-7wa6eztl"><span class="group-label astro-7wa6eztl"><span class="large astro-7wa6eztl">Integrations</span></span><svg aria-hidden="true" class="caret astro-7wa6eztl astro-673pctzy" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.25rem;"><path d="m14.83 11.29-4.24-4.24a1 1 0 1 0-1.42 1.41L12.71 12l-3.54 3.54a1 1 0 0 0 0 1.41 1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.24-4.24a1.002 1.002 0 0 0 0-1.42Z"/></svg></summary><sl-sidebar-restore data-index="3"></sl-sidebar-restore><ul class="astro-7wa6eztl"><li class="astro-7wa6eztl"><a href="/en/integrations/vcs-providers/" class="astro-7wa6eztl"><span class="astro-7wa6eztl">VCS providers</span></a></li><li class="astro-7wa6eztl"><a href="/en/integrations/agent-adapters/" aria-current="page" class="astro-7wa6eztl"><span class="astro-7wa6eztl">Agent adapters</span></a></li><li class="astro-7wa6eztl"><a href="/en/integrations/output-channels/" class="astro-7wa6eztl"><span class="astro-7wa6eztl">Output channels</span></a></li><li class="astro-7wa6eztl"><a href="/en/integrations/im-bots/" class="astro-7wa6eztl"><span class="astro-7wa6eztl">IM bots</span></a></li><li class="astro-7wa6eztl"><a href="/en/integrations/mcp-tools/" class="astro-7wa6eztl"><span class="astro-7wa6eztl">MCP tools</span></a></li></ul></details></li><li class="astro-7wa6eztl"><details open class="astro-7wa6eztl"><summary class="astro-7wa6eztl"><span class="group-label astro-7wa6eztl"><span class="large astro-7wa6eztl">Reference</span></span><svg aria-hidden="true" class="caret astro-7wa6eztl astro-673pctzy" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.25rem;"><path d="m14.83 11.29-4.24-4.24a1 1 0 1 0-1.42 1.41L12.71 12l-3.54 3.54a1 1 0 0 0 0 1.41 1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.24-4.24a1.002 1.002 0 0 0 0-1.42Z"/></svg></summary><sl-sidebar-restore data-index="4"></sl-sidebar-restore><ul class="astro-7wa6eztl"><li class="astro-7wa6eztl"><a href="/en/reference/cli/" class="astro-7wa6eztl"><span class="astro-7wa6eztl">CLI commands</span></a></li><li class="astro-7wa6eztl"><a href="/en/reference/config-fields/" class="astro-7wa6eztl"><span class="astro-7wa6eztl">Configuration field reference</span></a></li><li class="astro-7wa6eztl"><a href="/en/reference/template-variables/" class="astro-7wa6eztl"><span class="astro-7wa6eztl">Template variables</span></a></li></ul></details></li><li class="astro-7wa6eztl"><details open class="astro-7wa6eztl"><summary class="astro-7wa6eztl"><span class="group-label astro-7wa6eztl"><span class="large astro-7wa6eztl">Troubleshooting</span></span><svg aria-hidden="true" class="caret astro-7wa6eztl astro-673pctzy" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.25rem;"><path d="m14.83 11.29-4.24-4.24a1 1 0 1 0-1.42 1.41L12.71 12l-3.54 3.54a1 1 0 0 0 0 1.41 1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.24-4.24a1.002 1.002 0 0 0 0-1.42Z"/></svg></summary><sl-sidebar-restore data-index="5"></sl-sidebar-restore><ul class="astro-7wa6eztl"><li class="astro-7wa6eztl"><a href="/en/troubleshooting/" class="astro-7wa6eztl"><span class="astro-7wa6eztl">Troubleshooting</span></a></li></ul></details></li><li class="astro-7wa6eztl"><details open class="astro-7wa6eztl"><summary class="astro-7wa6eztl"><span class="group-label astro-7wa6eztl"><span class="large astro-7wa6eztl">Development</span></span><svg aria-hidden="true" class="caret astro-7wa6eztl astro-673pctzy" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.25rem;"><path d="m14.83 11.29-4.24-4.24a1 1 0 1 0-1.42 1.41L12.71 12l-3.54 3.54a1 1 0 0 0 0 1.41 1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.24-4.24a1.002 1.002 0 0 0 0-1.42Z"/></svg></summary><sl-sidebar-restore data-index="6"></sl-sidebar-restore><ul class="astro-7wa6eztl"><li class="astro-7wa6eztl"><a href="/en/development/" class="astro-7wa6eztl"><span class="astro-7wa6eztl">Contributing</span></a></li></ul></details></li></ul><script aria-hidden="true">
+		(() => {
+			const scroller = document.getElementById('starlight__sidebar');
+			if (!window._starlightScrollRestore || !scroller) return;
+			scroller.scrollTop = window._starlightScrollRestore;
+			delete window._starlightScrollRestore;
+		})();
+	</script></sl-sidebar-state-persist><div class="md:sl-hidden"><div class="mobile-preferences sl-flex astro-eby4scfg"><div class="social-icons astro-eby4scfg"><a href="https://github.com/atframework/AICodeReviewer" rel="me" class="sl-flex astro-qs4rz75q"><span class="sr-only astro-qs4rz75q">GitHub</span><svg aria-hidden="true" class="astro-qs4rz75q astro-673pctzy" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M12 .3a12 12 0 0 0-3.8 23.38c.6.12.83-.26.83-.57L9 21.07c-3.34.72-4.04-1.61-4.04-1.61-.55-1.39-1.34-1.76-1.34-1.76-1.08-.74.09-.73.09-.73 1.2.09 1.83 1.24 1.83 1.24 1.08 1.83 2.81 1.3 3.5 1 .1-.78.42-1.31.76-1.61-2.67-.3-5.47-1.33-5.47-5.93 0-1.31.47-2.38 1.24-3.22-.14-.3-.54-1.52.1-3.18 0 0 1-.32 3.3 1.23a11.5 11.5 0 0 1 6 0c2.28-1.55 3.29-1.23 3.29-1.23.64 1.66.24 2.88.12 3.18a4.65 4.65 0 0 1 1.23 3.22c0 4.61-2.8 5.63-5.48 5.92.42.36.81 1.1.81 2.22l-.01 3.29c0 .31.2.69.82.57A12 12 0 0 0 12 .3Z"/></svg></a></div><starlight-theme-select><label style="--sl-select-width: 6.25em" class="astro-k3asimwp"><span class="sr-only astro-k3asimwp">Select theme</span><svg aria-hidden="true" class="icon label-icon astro-k3asimwp astro-673pctzy" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M21 14h-1V7a3 3 0 0 0-3-3H7a3 3 0 0 0-3 3v7H3a1 1 0 0 0-1 1v2a3 3 0 0 0 3 3h14a3 3 0 0 0 3-3v-2a1 1 0 0 0-1-1ZM6 7a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v7H6V7Zm14 10a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-1h16v1Z"/></svg><select autocomplete="off" class="astro-k3asimwp"><option value="dark" class="astro-k3asimwp">Dark</option><option value="light" class="astro-k3asimwp">Light</option><option value="auto" selected class="astro-k3asimwp">Auto</option></select><svg aria-hidden="true" class="icon caret astro-k3asimwp astro-673pctzy" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M17 9.17a1 1 0 0 0-1.41 0L12 12.71 8.46 9.17a1 1 0 1 0-1.41 1.42l4.24 4.24a1.002 1.002 0 0 0 1.42 0L17 10.59a1.002 1.002 0 0 0 0-1.42Z"/></svg></label></starlight-theme-select><script>
+	StarlightThemeProvider.updatePickers();
+</script><starlight-lang-select><label style="--sl-select-width: 7em" class="astro-k3asimwp"><span class="sr-only astro-k3asimwp">Select language</span><svg aria-hidden="true" class="icon label-icon astro-k3asimwp astro-673pctzy" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path fill-rule="evenodd" d="M8.516 3a.94.94 0 0 0-.941.94v1.15H2.94a.94.94 0 1 0 0 1.882h7.362a7.422 7.422 0 0 1-1.787 3.958 7.42 7.42 0 0 1-1.422-2.425.94.94 0 1 0-1.774.627 9.303 9.303 0 0 0 1.785 3.043 7.422 7.422 0 0 1-4.164 1.278.94.94 0 1 0 0 1.881 9.303 9.303 0 0 0 5.575-1.855 9.303 9.303 0 0 0 4.11 1.74l-.763 1.525a.968.968 0 0 0-.016.034l-1.385 2.77a.94.94 0 1 0 1.683.841l1.133-2.267h5.806l1.134 2.267a.94.94 0 0 0 1.683-.841l-1.385-2.769a.95.95 0 0 0-.018-.036l-3.476-6.951a.94.94 0 0 0-1.682 0l-1.82 3.639a7.423 7.423 0 0 1-3.593-1.256 9.303 9.303 0 0 0 2.27-5.203h1.894a.94.94 0 0 0 0-1.881H9.456V3.94A.94.94 0 0 0 8.516 3Zm6.426 11.794a1.068 1.068 0 0 1-.02.039l-.703 1.407h3.924l-1.962-3.924-1.24 2.478Z" clip-rule="evenodd"/></svg><select autocomplete="off" class="astro-k3asimwp"><option value="/en/integrations/agent-adapters/" selected class="astro-k3asimwp">English</option><option value="/zh-cn/integrations/agent-adapters/" class="astro-k3asimwp">简体中文</option></select><svg aria-hidden="true" class="icon caret astro-k3asimwp astro-673pctzy" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M17 9.17a1 1 0 0 0-1.41 0L12 12.71 8.46 9.17a1 1 0 1 0-1.41 1.42l4.24 4.24a1.002 1.002 0 0 0 1.42 0L17 10.59a1.002 1.002 0 0 0 0-1.42Z"/></svg></label></starlight-lang-select></div></div></div></sl-sidebar-pane></nav><div class="main-frame astro-upyan42w"><script type="module">var e=document.getElementById(`starlight__sidebar`),t=e?.querySelector(`sl-sidebar-state-persist`),n=`sl-sidebar-state`,r=()=>{let r=[],i=t?.dataset.hash||``;try{let e=sessionStorage.getItem(n),t=JSON.parse(e||`{}`);Array.isArray(t.open)&&t.hash===i&&(r=t.open)}catch{}return{hash:i,open:r,scroll:e?.scrollTop||0}},i=e=>{try{sessionStorage.setItem(n,JSON.stringify(e))}catch{}},a=()=>i(r()),o=(e,t)=>{let n=r();n.open[t]=e,i(n)};t?.addEventListener(`click`,e=>{if(!(e.target instanceof Element))return;let t=e.target.closest(`summary`)?.closest(`details`);if(!t)return;let n=t.querySelector(`sl-sidebar-restore`),r=parseInt(n?.dataset.index||``);isNaN(r)||o(!t.open,r)}),addEventListener(`visibilitychange`,()=>{document.visibilityState===`hidden`&&a()});</script><div class="lg:sl-flex astro-7wlvjofa"><aside class="right-sidebar-container print:hidden astro-7wlvjofa"><div class="right-sidebar astro-7wlvjofa"><div class="lg:sl-hidden astro-bvq4mwh5"><mobile-starlight-toc data-min-h="2" data-max-h="3" class="astro-zzyq25ap"><nav aria-labelledby="starlight__on-this-page--mobile" class="astro-zzyq25ap"><details id="starlight__mobile-toc" class="astro-zzyq25ap"><summary id="starlight__on-this-page--mobile" class="sl-flex astro-zzyq25ap"><span class="toggle sl-flex astro-zzyq25ap">On this page<svg aria-hidden="true" class="caret astro-zzyq25ap astro-673pctzy" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1rem;"><path d="m14.83 11.29-4.24-4.24a1 1 0 1 0-1.42 1.41L12.71 12l-3.54 3.54a1 1 0 0 0 0 1.41 1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.24-4.24a1.002 1.002 0 0 0 0-1.42Z"/></svg></span><span class="display-current astro-zzyq25ap"></span></summary><div class="dropdown astro-zzyq25ap"><ul class="isMobile astro-ry7uv4i5" style="--depth: 0;"><li style="--depth: 0;" class="astro-ry7uv4i5"><a href="#_top" style="--depth: 0;" class="astro-ry7uv4i5"><span style="--depth: 0;" class="astro-ry7uv4i5">Overview</span></a></li><li style="--depth: 0;" class="astro-ry7uv4i5"><a href="#how-a-runtime-bundle-is-materialized" style="--depth: 0;" class="astro-ry7uv4i5"><span style="--depth: 0;" class="astro-ry7uv4i5">How a runtime bundle is materialized</span></a></li><li style="--depth: 0;" class="astro-ry7uv4i5"><a href="#native-surface-wiring" style="--depth: 0;" class="astro-ry7uv4i5"><span style="--depth: 0;" class="astro-ry7uv4i5">Native surface wiring</span></a></li><li style="--depth: 0;" class="astro-ry7uv4i5"><a href="#modelspec-translation" style="--depth: 0;" class="astro-ry7uv4i5"><span style="--depth: 0;" class="astro-ry7uv4i5">ModelSpec translation</span></a></li><li style="--depth: 0;" class="astro-ry7uv4i5"><a href="#capability-downgrade" style="--depth: 0;" class="astro-ry7uv4i5"><span style="--depth: 0;" class="astro-ry7uv4i5">Capability downgrade</span></a></li><li style="--depth: 0;" class="astro-ry7uv4i5"><a href="#supported-agent-kinds" style="--depth: 0;" class="astro-ry7uv4i5"><span style="--depth: 0;" class="astro-ry7uv4i5">Supported agent kinds</span></a><ul class="isMobile astro-ry7uv4i5" style="--depth: 1;"><li style="--depth: 1;" class="astro-ry7uv4i5"><a href="#kilo-kilo-code" style="--depth: 1;" class="astro-ry7uv4i5"><span style="--depth: 1;" class="astro-ry7uv4i5">kilo (Kilo Code)</span></a></li><li style="--depth: 1;" class="astro-ry7uv4i5"><a href="#opencode" style="--depth: 1;" class="astro-ry7uv4i5"><span style="--depth: 1;" class="astro-ry7uv4i5">opencode</span></a></li><li style="--depth: 1;" class="astro-ry7uv4i5"><a href="#zoo-zoo-code" style="--depth: 1;" class="astro-ry7uv4i5"><span style="--depth: 1;" class="astro-ry7uv4i5">zoo (Zoo Code)</span></a></li><li style="--depth: 1;" class="astro-ry7uv4i5"><a href="#claude-code-claude-code" style="--depth: 1;" class="astro-ry7uv4i5"><span style="--depth: 1;" class="astro-ry7uv4i5">claude-code (Claude Code)</span></a></li><li style="--depth: 1;" class="astro-ry7uv4i5"><a href="#copilot-cli-copilot-cli" style="--depth: 1;" class="astro-ry7uv4i5"><span style="--depth: 1;" class="astro-ry7uv4i5">copilot-cli (Copilot CLI)</span></a></li><li style="--depth: 1;" class="astro-ry7uv4i5"><a href="#pi" style="--depth: 1;" class="astro-ry7uv4i5"><span style="--depth: 1;" class="astro-ry7uv4i5">pi</span></a></li><li style="--depth: 1;" class="astro-ry7uv4i5"><a href="#oh-my-pi-omp" style="--depth: 1;" class="astro-ry7uv4i5"><span style="--depth: 1;" class="astro-ry7uv4i5">oh-my-pi (omp)</span></a></li></ul></li><li style="--depth: 0;" class="astro-ry7uv4i5"><a href="#direct-llm-fallback-not-an-agent-kind" style="--depth: 0;" class="astro-ry7uv4i5"><span style="--depth: 0;" class="astro-ry7uv4i5">Direct-LLM fallback (not an agent kind)</span></a></li><li style="--depth: 0;" class="astro-ry7uv4i5"><a href="#model-catalog-injection-summary" style="--depth: 0;" class="astro-ry7uv4i5"><span style="--depth: 0;" class="astro-ry7uv4i5">Model catalog injection summary</span></a></li><li style="--depth: 0;" class="astro-ry7uv4i5"><a href="#choosing-an-agent" style="--depth: 0;" class="astro-ry7uv4i5"><span style="--depth: 0;" class="astro-ry7uv4i5">Choosing an agent</span></a><ul class="isMobile astro-ry7uv4i5" style="--depth: 1;"><li style="--depth: 1;" class="astro-ry7uv4i5"><a href="#which-agent-should-i-use" style="--depth: 1;" class="astro-ry7uv4i5"><span style="--depth: 1;" class="astro-ry7uv4i5">Which agent should I use?</span></a></li><li style="--depth: 1;" class="astro-ry7uv4i5"><a href="#decision-guide" style="--depth: 1;" class="astro-ry7uv4i5"><span style="--depth: 1;" class="astro-ry7uv4i5">Decision guide</span></a></li></ul></li></ul></div></details></nav></mobile-starlight-toc><script type="module" src="/_astro/MobileTableOfContents.astro_astro_type_script_index_0_lang.BcSo_yiZ.js"></script></div><div class="right-sidebar-panel sl-hidden lg:sl-block astro-bvq4mwh5"><div class="sl-container astro-bvq4mwh5"><starlight-toc data-min-h="2" data-max-h="3"><nav aria-labelledby="starlight__on-this-page"><h2 id="starlight__on-this-page">On this page</h2><ul class="astro-ry7uv4i5" style="--depth: 0;"><li style="--depth: 0;" class="astro-ry7uv4i5"><a href="#_top" style="--depth: 0;" class="astro-ry7uv4i5"><span style="--depth: 0;" class="astro-ry7uv4i5">Overview</span></a></li><li style="--depth: 0;" class="astro-ry7uv4i5"><a href="#how-a-runtime-bundle-is-materialized" style="--depth: 0;" class="astro-ry7uv4i5"><span style="--depth: 0;" class="astro-ry7uv4i5">How a runtime bundle is materialized</span></a></li><li style="--depth: 0;" class="astro-ry7uv4i5"><a href="#native-surface-wiring" style="--depth: 0;" class="astro-ry7uv4i5"><span style="--depth: 0;" class="astro-ry7uv4i5">Native surface wiring</span></a></li><li style="--depth: 0;" class="astro-ry7uv4i5"><a href="#modelspec-translation" style="--depth: 0;" class="astro-ry7uv4i5"><span style="--depth: 0;" class="astro-ry7uv4i5">ModelSpec translation</span></a></li><li style="--depth: 0;" class="astro-ry7uv4i5"><a href="#capability-downgrade" style="--depth: 0;" class="astro-ry7uv4i5"><span style="--depth: 0;" class="astro-ry7uv4i5">Capability downgrade</span></a></li><li style="--depth: 0;" class="astro-ry7uv4i5"><a href="#supported-agent-kinds" style="--depth: 0;" class="astro-ry7uv4i5"><span style="--depth: 0;" class="astro-ry7uv4i5">Supported agent kinds</span></a><ul class="astro-ry7uv4i5" style="--depth: 1;"><li style="--depth: 1;" class="astro-ry7uv4i5"><a href="#kilo-kilo-code" style="--depth: 1;" class="astro-ry7uv4i5"><span style="--depth: 1;" class="astro-ry7uv4i5">kilo (Kilo Code)</span></a></li><li style="--depth: 1;" class="astro-ry7uv4i5"><a href="#opencode" style="--depth: 1;" class="astro-ry7uv4i5"><span style="--depth: 1;" class="astro-ry7uv4i5">opencode</span></a></li><li style="--depth: 1;" class="astro-ry7uv4i5"><a href="#zoo-zoo-code" style="--depth: 1;" class="astro-ry7uv4i5"><span style="--depth: 1;" class="astro-ry7uv4i5">zoo (Zoo Code)</span></a></li><li style="--depth: 1;" class="astro-ry7uv4i5"><a href="#claude-code-claude-code" style="--depth: 1;" class="astro-ry7uv4i5"><span style="--depth: 1;" class="astro-ry7uv4i5">claude-code (Claude Code)</span></a></li><li style="--depth: 1;" class="astro-ry7uv4i5"><a href="#copilot-cli-copilot-cli" style="--depth: 1;" class="astro-ry7uv4i5"><span style="--depth: 1;" class="astro-ry7uv4i5">copilot-cli (Copilot CLI)</span></a></li><li style="--depth: 1;" class="astro-ry7uv4i5"><a href="#pi" style="--depth: 1;" class="astro-ry7uv4i5"><span style="--depth: 1;" class="astro-ry7uv4i5">pi</span></a></li><li style="--depth: 1;" class="astro-ry7uv4i5"><a href="#oh-my-pi-omp" style="--depth: 1;" class="astro-ry7uv4i5"><span style="--depth: 1;" class="astro-ry7uv4i5">oh-my-pi (omp)</span></a></li></ul></li><li style="--depth: 0;" class="astro-ry7uv4i5"><a href="#direct-llm-fallback-not-an-agent-kind" style="--depth: 0;" class="astro-ry7uv4i5"><span style="--depth: 0;" class="astro-ry7uv4i5">Direct-LLM fallback (not an agent kind)</span></a></li><li style="--depth: 0;" class="astro-ry7uv4i5"><a href="#model-catalog-injection-summary" style="--depth: 0;" class="astro-ry7uv4i5"><span style="--depth: 0;" class="astro-ry7uv4i5">Model catalog injection summary</span></a></li><li style="--depth: 0;" class="astro-ry7uv4i5"><a href="#choosing-an-agent" style="--depth: 0;" class="astro-ry7uv4i5"><span style="--depth: 0;" class="astro-ry7uv4i5">Choosing an agent</span></a><ul class="astro-ry7uv4i5" style="--depth: 1;"><li style="--depth: 1;" class="astro-ry7uv4i5"><a href="#which-agent-should-i-use" style="--depth: 1;" class="astro-ry7uv4i5"><span style="--depth: 1;" class="astro-ry7uv4i5">Which agent should I use?</span></a></li><li style="--depth: 1;" class="astro-ry7uv4i5"><a href="#decision-guide" style="--depth: 1;" class="astro-ry7uv4i5"><span style="--depth: 1;" class="astro-ry7uv4i5">Decision guide</span></a></li></ul></li></ul></nav></starlight-toc><script type="module" src="/_astro/TableOfContents.astro_astro_type_script_index_0_lang.Csloo1VZ.js"></script></div></div></div></aside><div class="main-pane astro-7wlvjofa"><main data-pagefind-body class="astro-fdaztlf2" lang="en" dir="ltr"><div class="content-panel astro-fgvho7h3"><div class="sl-container astro-fgvho7h3"><h1 id="_top" class="astro-byy5ziij">Agent adapters</h1></div></div><div class="content-panel astro-fgvho7h3"><div class="sl-container astro-fgvho7h3"><div class="sl-markdown-content"><p>AICR does code reasoning through external agent CLIs (and a built-in
+direct-LLM path). Each agent kind is wrapped by an <code dir="auto">AgentAdapter</code> that turns
+AICR’s provider-neutral model spec into the agent’s native configuration. The
+adapter also materializes an isolated runtime bundle per run, so AICR never
+mutates your global agent CLI config directory.</p>
+<p>For the config fields referenced here, see
+<a href="/en/configuration/agent/">Agent and sandbox</a>. For the MCP tools the agent
+calls back into, see <a href="/en/integrations/mcp-tools/">MCP tools</a>.</p>
+<div class="sl-heading-wrapper level-h2"><h2 id="how-a-runtime-bundle-is-materialized">How a runtime bundle is materialized</h2><a class="sl-anchor-link" href="#how-a-runtime-bundle-is-materialized"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “How a runtime bundle is materialized”</span></a></div>
+<p>For every agent run, AICR writes a complete, isolated bundle into the run’s
+<code dir="auto">agent/</code> directory and runs the agent with that directory as its config root.
+The bundle contains:</p>
+<ul>
+<li>The LLM provider/model configuration, translated to the agent’s native
+format.</li>
+<li>The MCP configuration pointing at the local <code dir="auto">aicr-output</code> server, wired
+through the agent’s native MCP surface (config file or CLI flags).</li>
+<li>A combined <code dir="auto">AGENTS.md</code> with the effective repository instructions — the one
+instruction file every supported CLI discovers natively.</li>
+<li>Activated skills in the canonical Agent Skills layout
+(<code dir="auto">.agents/skills/&lt;name&gt;/SKILL.md</code>), plus adapter-native copies where the CLI
+needs a different root.</li>
+<li>Environment-variable injection.</li>
+<li>A <code dir="auto">manifest.json</code> recording exactly what was injected, what was delegated
+to the tool’s native catalog, what was downgraded, and which native
+surfaces (instructions/skills/MCP) were wired — so capability gaps are
+auditable rather than silently dropped.</li>
+</ul>
+<p>The orchestrator calls <code dir="auto">materializeRuntimeBundle</code> once per run instead of
+mutating any global config. Each adapter then translates the bundle into its
+own file layout (for example Kilo’s <code dir="auto">kilo.json</code>, opencode’s <code dir="auto">opencode.json</code>,
+Zoo Code’s <code dir="auto">.roo/</code>).</p>
+<div class="sl-heading-wrapper level-h2"><h2 id="native-surface-wiring">Native surface wiring</h2><a class="sl-anchor-link" href="#native-surface-wiring"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “Native surface wiring”</span></a></div>
+<p>Instructions, skills, and the <code dir="auto">aicr-output</code> MCP server are wired into each
+agent’s native discovery surfaces; the run manifest records the wiring under
+<code dir="auto">nativeSurfaces</code>:</p>
+<table>
+<thead>
+<tr>
+<th>Surface</th>
+<th>kilo</th>
+<th>opencode</th>
+<th>claude-code</th>
+<th>copilot-cli</th>
+<th>zoo</th>
+<th>pi</th>
+<th>oh-my-pi</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Instructions</td>
+<td><code dir="auto">AGENTS.md</code> (auto-loaded)</td>
+<td><code dir="auto">AGENTS.md</code> (auto-loaded)</td>
+<td><code dir="auto">AGENTS.md</code> via <code dir="auto">CLAUDE.md</code> <code dir="auto">@AGENTS.md</code> import</td>
+<td><code dir="auto">AGENTS.md</code> (auto-loaded)</td>
+<td><code dir="auto">AGENTS.md</code></td>
+<td><code dir="auto">AGENTS.md</code> (auto-loaded)</td>
+<td><code dir="auto">AGENTS.md</code> (auto-loaded)</td>
+</tr>
+<tr>
+<td>Skills</td>
+<td><code dir="auto">kilo.json</code> <code dir="auto">skills.paths</code> → <code dir="auto">.agents/skills</code></td>
+<td><code dir="auto">.agents/skills/&lt;name&gt;/SKILL.md</code> + <code dir="auto">permission.skill</code> allow</td>
+<td><code dir="auto">.claude/skills/&lt;name&gt;/SKILL.md</code></td>
+<td><code dir="auto">.agents/skills/&lt;name&gt;/SKILL.md</code></td>
+<td><code dir="auto">.agents/skills/&lt;name&gt;/SKILL.md</code> (resource)</td>
+<td><code dir="auto">.agents/skills/&lt;name&gt;/SKILL.md</code> (requires <code dir="auto">--approve</code>)</td>
+<td><code dir="auto">.agents/skills/&lt;name&gt;/SKILL.md</code></td>
+</tr>
+<tr>
+<td><code dir="auto">aicr-output</code> MCP</td>
+<td><code dir="auto">kilo.json</code> <code dir="auto">mcp</code></td>
+<td><code dir="auto">opencode.json</code> <code dir="auto">mcp</code></td>
+<td><code dir="auto">--mcp-config</code> + <code dir="auto">--strict-mcp-config</code> CLI flags</td>
+<td><code dir="auto">--additional-mcp-config</code> CLI flag</td>
+<td>none (prompt-only)</td>
+<td>generated extension <code dir="auto">.pi-agent/extensions/aicr-output.ts</code> (pi has no built-in MCP)</td>
+<td><code dir="auto">$PI_CODING_AGENT_DIR/mcp.json</code></td>
+</tr>
+</tbody>
+</table>
+<p>The MCP output-state file path is pinned via <code dir="auto">AICR_OUTPUT_STATE_PATH</code> in the
+server environment, so the orchestrator reliably collects reported problems
+and summaries regardless of which working directory the host CLI spawns MCP
+servers with. For pi and oh-my-pi, the orchestrator likewise injects
+<code dir="auto">PI_CODING_AGENT_DIR</code> with the sandbox-visible config directory
+(<code dir="auto">.pi-agent</code> / <code dir="auto">.omp-agent</code> under the run’s <code dir="auto">agent/</code> dir).</p>
+<div class="sl-heading-wrapper level-h2"><h2 id="modelspec-translation">ModelSpec translation</h2><a class="sl-anchor-link" href="#modelspec-translation"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “ModelSpec translation”</span></a></div>
+<p>AICR holds a single provider-neutral <code dir="auto">ModelSpec</code> (context window, max
+input/output tokens, capability flags, pricing, reasoning effort, etc.).
+Each adapter translates <code dir="auto">ModelSpec</code> plus the optional <code dir="auto">thinkingLevel</code> into
+the provider-native fields the agent CLI expects (Azure, Vertex, Bedrock,
+OpenAI-compatible, Anthropic, Gemini, etc.).</p>
+<p>When the <a href="/en/configuration/llm/">model catalog</a> is enabled, AICR enriches
+<code dir="auto">ModelSpec</code> from models.dev before translation. Explicit values you write in
+<code dir="auto">llm.providers[]</code> and <code dir="auto">model_catalog.overrides</code> always win over catalog data;
+missing fields are never fabricated.</p>
+<div class="sl-heading-wrapper level-h2"><h2 id="capability-downgrade">Capability downgrade</h2><a class="sl-anchor-link" href="#capability-downgrade"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “Capability downgrade”</span></a></div>
+<p>When an adapter cannot express a capability natively, it does <strong>not</strong> silently
+drop it. Instead the runtime bundle <code dir="auto">manifest.json</code> records the downgrade
+mode for that capability:</p>
+<ul>
+<li><code dir="auto">injected</code> — AICR wrote the value into the agent’s native config.</li>
+<li><code dir="auto">delegated</code> — the agent CLI resolves it from its own built-in catalog.</li>
+<li><code dir="auto">not_applicable</code> — the agent has no surface for this capability.</li>
+</ul>
+<p>This makes every model-translation decision auditable from the run snapshot.</p>
+<div class="sl-heading-wrapper level-h2"><h2 id="supported-agent-kinds">Supported agent kinds</h2><a class="sl-anchor-link" href="#supported-agent-kinds"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “Supported agent kinds”</span></a></div>
+<div class="sl-heading-wrapper level-h3"><h3 id="kilo-kilo-code"><code dir="auto">kilo</code> (Kilo Code)</h3><a class="sl-anchor-link" href="#kilo-kilo-code"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “kilo (Kilo Code)”</span></a></div>
+<p>The primary deployment-test agent. AICR materializes Kilo’s <code dir="auto">kilo.json</code> with
+the LLM provider config, the local stdio <code dir="auto">aicr-output</code> MCP server, skills,
+instructions, and <code dir="auto">compaction.{auto,threshold_percent,prune}</code> conversation
+settings.</p>
+<p>Kilo does not read models.dev, so for OpenAI-compatible custom providers AICR
+injects <code dir="auto">contextWindow</code>, <code dir="auto">maxTokens</code>, <code dir="auto">supportsImages</code>,
+<code dir="auto">supportsComputerUse</code>, <code dir="auto">supportsPromptCache</code>, and per-million-token pricing
+into the model info block.</p>
+<aside aria-label="Kilo compaction needs a context window" class="starlight-aside starlight-aside--caution"><p class="starlight-aside__title" aria-hidden="true"><svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" class="starlight-aside__icon"><path d="M12 16a1 1 0 1 0 0 2 1 1 0 0 0 0-2Zm10.67 1.47-8.05-14a3 3 0 0 0-5.24 0l-8 14A3 3 0 0 0 3.94 22h16.12a3 3 0 0 0 2.61-4.53Zm-1.73 2a1 1 0 0 1-.88.51H3.94a1 1 0 0 1-.88-.51 1 1 0 0 1 0-1l8-14a1 1 0 0 1 1.78 0l8.05 14a1 1 0 0 1 .05 1.02v-.02ZM12 8a1 1 0 0 0-1 1v4a1 1 0 0 0 2 0V9a1 1 0 0 0-1-1Z"/></svg>Kilo compaction needs a context window</p><div class="starlight-aside__content"><p>Kilo only auto-compacts for models that declare a <code dir="auto">contextWindow</code>. If the
+model catalog is disabled and no <code dir="auto">context_window</code> override is set, Kilo
+silently skips compaction and large PRs overflow. <strong>Always enable
+<code dir="auto">llm.model_catalog</code> or set <code dir="auto">context_window</code> in overrides.</strong> See
+<a href="/en/troubleshooting/">Troubleshooting</a>.</p></div></aside>
+<div class="sl-heading-wrapper level-h3"><h3 id="opencode"><code dir="auto">opencode</code></h3><a class="sl-anchor-link" href="#opencode"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “opencode”</span></a></div>
+<p>opencode resolves known providers from models.dev natively. For custom
+<code dir="auto">@ai-sdk/openai-compatible</code> providers that opencode cannot resolve, AICR puts
+models under <code dir="auto">provider.&lt;provider-id&gt;.models.&lt;model-id&gt;</code> and injects complete
+schema-valid <code dir="auto">limit</code>/<code dir="auto">cost</code> pairs plus supported model capabilities. Injection
+is skipped when the provider hits a models.dev known provider, avoiding
+double-write conflicts.</p>
+<p>The agent runs as <code dir="auto">opencode --pure run --format json --auto --dir &lt;agent-dir&gt;</code> with
+<code dir="auto">--model provider/model</code> and emits part-wrapped <code dir="auto">text</code> / <code dir="auto">tool_use</code> events plus
+<code dir="auto">step_finish</code> usage events. Configuration is written to <code dir="auto">opencode.json</code> in the
+working-directory root and discovered through the sandbox cwd/<code dir="auto">--dir</code> (avoiding
+a host-only config path inside containers); provider transport and auth live
+under provider <code dir="auto">options</code>, model request parameters live under model
+<code dir="auto">options</code>, and API keys use <code dir="auto">{env:NAME}</code> references. The file also carries
+<code dir="auto">compaction.{auto,prune}</code>, the <code dir="auto">mcp</code> section for <code dir="auto">aicr-output</code>, and a
+<code dir="auto">permission.skill</code> allow rule. Per-source instruction files remain audit
+artifacts; the combined <code dir="auto">AGENTS.md</code> is the single active instruction surface.
+<code dir="auto">--pure</code> disables external plugins, and update/title/LSP-download side effects
+are disabled for this one-shot run.</p>
+<div class="sl-heading-wrapper level-h3"><h3 id="zoo-zoo-code"><code dir="auto">zoo</code> (Zoo Code)</h3><a class="sl-anchor-link" href="#zoo-zoo-code"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “zoo (Zoo Code)”</span></a></div>
+<p>The Zoo Code adapter exposes <code dir="auto">AgentKind: "zoo"</code>. The CLI binary and project
+config paths still use the upstream <code dir="auto">roo</code> / <code dir="auto">.roo</code> / <code dir="auto">.roomodes</code> compatibility
+surface, so AICR writes its config into Zoo Code’s current <code dir="auto">.roo/settings.json</code>
+path rather than inventing a <code dir="auto">.zoo</code> path.</p>
+<p>Zoo Code does not read models.dev, so AICR injects <code dir="auto">contextWindow</code>,
+<code dir="auto">maxTokens</code>, <code dir="auto">supportsImages</code>, <code dir="auto">supportsComputerUse</code>, <code dir="auto">supportsPromptCache</code>,
+<code dir="auto">inputPrice</code>, and <code dir="auto">outputPrice</code> into <code dir="auto">apiConfiguration.openAiCustomModelInfo</code>.
+Native auto-condense settings (<code dir="auto">autoCondenseContext</code>,
+<code dir="auto">condenseContextPercentThreshold</code>) are written into the same settings file.</p>
+<div class="sl-heading-wrapper level-h3"><h3 id="claude-code-claude-code"><code dir="auto">claude-code</code> (Claude Code)</h3><a class="sl-anchor-link" href="#claude-code-claude-code"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “claude-code (Claude Code)”</span></a></div>
+<p>The agent runs headless as <code dir="auto">claude -p --output-format json</code> (print mode, with
+the review prompt piped via stdin) plus <code dir="auto">--dangerously-skip-permissions</code>
+inside the sandbox and <code dir="auto">--mcp-config</code>/<code dir="auto">--strict-mcp-config</code> to wire the
+<code dir="auto">aicr-output</code> MCP server in isolation from user/project MCP config. The JSON
+result envelope gives the orchestrator the final answer, per-turn token
+usage, USD cost, and turn count. Reasoning effort maps to <code dir="auto">--effort</code> (AICR’s
+<code dir="auto">minimal</code> tier maps to <code dir="auto">low</code>).</p>
+<p>Claude Code relies on its built-in Anthropic catalog and environment
+variables; there is no file-level model-metadata surface. The environment
+translation follows the current Claude Code env-var contract:
+<code dir="auto">maxOutputTokens</code> (or explicit <code dir="auto">extraParams.max_tokens</code>) derives
+<code dir="auto">CLAUDE_CODE_MAX_OUTPUT_TOKENS</code>, <code dir="auto">contextWindow</code> derives
+<code dir="auto">CLAUDE_CODE_MAX_CONTEXT_TOKENS</code>, an explicit thinking budget sets
+<code dir="auto">MAX_THINKING_TOKENS</code> plus <code dir="auto">CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING</code> (fixed
+budgets are ignored on adaptive-reasoning models otherwise), and beta headers
+go through <code dir="auto">ANTHROPIC_BETAS</code>. Self-update, telemetry, and print-mode title
+generation are disabled for one-shot sandbox runs. Context window and pricing
+are otherwise delegated to Claude Code’s native catalog; capability gaps are
+recorded as <code dir="auto">delegated</code> in the manifest.</p>
+<p>Instructions reach Claude Code through a generated <code dir="auto">CLAUDE.md</code> that
+<code dir="auto">@AGENTS.md</code>-imports the shared instructions file, and skills are
+materialized to <code dir="auto">.claude/skills/&lt;name&gt;/SKILL.md</code>.</p>
+<p>Claude Code auto-compacts by default, so AICR does not inject additional
+compaction config (opting out sets <code dir="auto">DISABLE_AUTO_COMPACT</code>).</p>
+<div class="sl-heading-wrapper level-h3"><h3 id="copilot-cli-copilot-cli"><code dir="auto">copilot-cli</code> (Copilot CLI)</h3><a class="sl-anchor-link" href="#copilot-cli-copilot-cli"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “copilot-cli (Copilot CLI)”</span></a></div>
+<p>The adapter targets the current GitHub Copilot CLI (<code dir="auto">copilot</code> binary), not
+the deprecated <code dir="auto">gh copilot suggest</code> extension. The agent runs programmatically
+as <code dir="auto">copilot --prompt &lt;task&gt; --silent --no-ask-user --allow-all-tools --allow-all-paths</code>, with <code dir="auto">--model</code>, <code dir="auto">--effort</code> (reasoning effort), and the
+<code dir="auto">aicr-output</code> MCP server wired per run via <code dir="auto">--additional-mcp-config</code>.
+Headless auth uses <code dir="auto">COPILOT_GITHUB_TOKEN</code> (the CLI’s highest-precedence auth
+environment variable).</p>
+<p>Copilot CLI uses its subscription’s fixed model catalog. There is no
+injection surface for model metadata, and conversation-level context
+management is <code dir="auto">not_applicable</code> (the CLI auto-compacts near the token limit).
+AICR records the model as <code dir="auto">not_applicable</code> in the manifest.</p>
+<div class="sl-heading-wrapper level-h3"><h3 id="pi"><code dir="auto">pi</code></h3><a class="sl-anchor-link" href="#pi"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “pi”</span></a></div>
+<p>The adapter targets the pi CLI (<code dir="auto">@earendil-works/pi-coding-agent</code>, <code dir="auto">pi</code>
+binary). The agent runs as <code dir="auto">pi --mode json --approve --no-session --model provider/id -- &lt;task&gt;</code> with the review prompt as a positional argument and an
+empty stdin. <code dir="auto">--approve</code> trusts the per-run bundle directory so pi loads its
+project-level <code dir="auto">.agents/skills</code>; the bundle is fully materialized by AICR and
+ephemeral, so trusting it is safe. <code dir="auto">PI_OFFLINE=1</code> and <code dir="auto">PI_TELEMETRY=0</code> disable
+update checks and install telemetry for the one-shot run.</p>
+<p>The config directory is isolated through <code dir="auto">PI_CODING_AGENT_DIR</code>, pointed at the
+bundle’s <code dir="auto">.pi-agent/</code> (custom providers in <code dir="auto">models.json</code>, compaction on/off in
+<code dir="auto">settings.json</code>). pi has <strong>no built-in MCP client</strong> by upstream design, so the
+runtime bundle generates a small TypeScript extension
+(<code dir="auto">extensions/aicr-output.ts</code>) that bridges the local stdio <code dir="auto">aicr-output</code> MCP
+server into pi tools named <code dir="auto">pi_aicr_*</code>; the manifest records this as the
+<code dir="auto">extension</code> MCP surface rather than pretending pi reads a config file. Reasoning
+effort maps 1:1 onto pi’s <code dir="auto">--thinking</code> levels.</p>
+<p>pi’s custom-model entries require <code dir="auto">contextWindow</code> and <code dir="auto">maxTokens</code>: enable
+<code dir="auto">llm.model_catalog</code> (or set overrides) so those limits resolve — the adapter
+fails with actionable guidance instead of fabricating them. Supported provider
+kinds are <code dir="auto">openai_compatible</code>, <code dir="auto">ollama</code>, <code dir="auto">anthropic</code>, and <code dir="auto">google_ai_studio</code>;
+other kinds fail visibly rather than guessing unverified auth plumbing. The
+shipped images do not install the <code dir="auto">pi</code> binary, so this kind needs a custom
+sandbox image with the CLI present.</p>
+<div class="sl-heading-wrapper level-h3"><h3 id="oh-my-pi-omp"><code dir="auto">oh-my-pi</code> (omp)</h3><a class="sl-anchor-link" href="#oh-my-pi-omp"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “oh-my-pi (omp)”</span></a></div>
+<p>oh-my-pi is a pi fork (<code dir="auto">omp</code> binary) with the same JSON event stream, the same
+<code dir="auto">PI_CODING_AGENT_DIR</code> isolation, and the same model-catalog requirements (and,
+like pi, it needs a custom sandbox image with the <code dir="auto">omp</code> CLI installed). It
+runs as <code dir="auto">omp -p --mode json --auto-approve --no-session --model provider/id -- &lt;task&gt;</code>. Unlike pi it has a <strong>native MCP surface</strong>: AICR writes
+<code dir="auto">.omp-agent/mcp.json</code> (manifest surface <code dir="auto">config_file</code>) and the <code dir="auto">aicr-output</code>
+tools appear as <code dir="auto">mcp__aicr_output_aicr_*</code>. Custom providers go to
+<code dir="auto">.omp-agent/models.yml</code> (env-name-first <code dir="auto">apiKey</code>, <code dir="auto">auth: none</code> for keyless
+providers) and compaction to <code dir="auto">.omp-agent/config.yml</code>
+(<code dir="auto">compaction.enabled</code> + <code dir="auto">compaction.thresholdPercent</code>).</p>
+<div class="sl-heading-wrapper level-h2"><h2 id="direct-llm-fallback-not-an-agent-kind">Direct-LLM fallback (not an agent kind)</h2><a class="sl-anchor-link" href="#direct-llm-fallback-not-an-agent-kind"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “Direct-LLM fallback (not an agent kind)”</span></a></div>
+<p>When an agent CLI cannot produce structured output even after a structured
+repair pass, the orchestrator can fall back to calling the LLM gateway
+directly. This is an internal fallback, <strong>not</strong> a configurable <code dir="auto">agent.default</code>
+value — the valid <code dir="auto">agent.default</code> values are exactly <code dir="auto">kilo</code>, <code dir="auto">opencode</code>,
+<code dir="auto">zoo</code>, <code dir="auto">copilot-cli</code>, <code dir="auto">claude-code</code>, <code dir="auto">pi</code>, and <code dir="auto">oh-my-pi</code>. The orchestrator
+computes
+<code dir="auto">maxPromptTokens = floor(contextWindow × 0.6)</code> and lets the prompt manager
+trim memory hints, skills, and instructions to fit; the diff itself is
+compressed by the AICR-side compression stage.</p>
+<div class="sl-heading-wrapper level-h2"><h2 id="model-catalog-injection-summary">Model catalog injection summary</h2><a class="sl-anchor-link" href="#model-catalog-injection-summary"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “Model catalog injection summary”</span></a></div>
+<table>
+<thead>
+<tr>
+<th>Adapter</th>
+<th>Reads models.dev natively?</th>
+<th>Injection strategy</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>opencode</td>
+<td>Known providers yes; custom OpenAI-compatible providers no</td>
+<td>Use schema-native provider/model nesting; inject complete <code dir="auto">limit</code>/<code dir="auto">cost</code> pairs and supported capabilities for custom providers only</td>
+</tr>
+<tr>
+<td>kilo</td>
+<td>No</td>
+<td>Inject <code dir="auto">contextWindow</code>, <code dir="auto">maxTokens</code>, <code dir="auto">supportsImages</code>, <code dir="auto">supportsComputerUse</code>, <code dir="auto">supportsPromptCache</code>, pricing</td>
+</tr>
+<tr>
+<td>zoo</td>
+<td>No</td>
+<td>Inject into <code dir="auto">.roo/settings.json</code> <code dir="auto">openAiCustomModelInfo</code></td>
+</tr>
+<tr>
+<td>claude-code</td>
+<td>No (built-in Anthropic catalog)</td>
+<td>Derive <code dir="auto">CLAUDE_CODE_MAX_OUTPUT_TOKENS</code>; delegate the rest</td>
+</tr>
+<tr>
+<td>pi</td>
+<td>No</td>
+<td>Custom provider in <code dir="auto">$PI_CODING_AGENT_DIR/models.json</code>; <code dir="auto">contextWindow</code>/<code dir="auto">maxTokens</code> required (fail with guidance if unknown); <code dir="auto">$ENV</code> apiKey references</td>
+</tr>
+<tr>
+<td>oh-my-pi</td>
+<td>No</td>
+<td>Custom provider in <code dir="auto">$PI_CODING_AGENT_DIR/models.yml</code>; same required limits; env-name <code dir="auto">apiKey</code> or <code dir="auto">auth: none</code></td>
+</tr>
+<tr>
+<td>copilot-cli</td>
+<td>No (fixed subscription catalog)</td>
+<td>No injection; recorded as N/A</td>
+</tr>
+</tbody>
+</table>
+<p>Injection only happens for custom or unresolved provider paths; when the tool
+resolves the model from models.dev itself, AICR skips injection to avoid
+double-write conflicts.</p>
+<div class="sl-heading-wrapper level-h2"><h2 id="choosing-an-agent">Choosing an agent</h2><a class="sl-anchor-link" href="#choosing-an-agent"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “Choosing an agent”</span></a></div>
+<p>Set <code dir="auto">agent.default</code> globally. The schema also accepts
+<code dir="auto">workspaces.defaults.agent.default</code> and
+<code dir="auto">workspaces.instances.&lt;id&gt;.agent.default</code>, but the current version builds one
+global adapter at startup — workspace-layer values are parsed but have no
+effect, so mixing agents needs a future release. See
+<a href="/en/configuration/agent/">Agent and sandbox</a> for the timeout, sandbox, and
+context-compaction fields that apply to every agent kind.</p>
+<div class="sl-heading-wrapper level-h3"><h3 id="which-agent-should-i-use">Which agent should I use?</h3><a class="sl-anchor-link" href="#which-agent-should-i-use"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “Which agent should I use?”</span></a></div>
+<table>
+<thead>
+<tr>
+<th>Agent</th>
+<th>Best for</th>
+<th>Watch out for</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code dir="auto">kilo</code> (default)</td>
+<td>The validated, supported default path. Best end-to-end test coverage and production hardening.</td>
+<td>Needs a declared <code dir="auto">contextWindow</code> to auto-compact — enable <code dir="auto">llm.model_catalog</code> or set <code dir="auto">context_window</code> in overrides, or large PRs will overflow.</td>
+</tr>
+<tr>
+<td><code dir="auto">claude-code</code></td>
+<td>Teams already standardizing on Claude Code; Anthropic-native model catalog.</td>
+<td>Auto-compacts by default (delegated to Claude Code’s built-in behavior). AICR derives output/context limits and explicit thinking budgets; the rest delegates to Claude Code’s native catalog.</td>
+</tr>
+<tr>
+<td><code dir="auto">opencode</code></td>
+<td>Open-source-first setups; custom OpenAI-compatible providers.</td>
+<td>Resolves known providers from models.dev natively. Custom providers need explicit schema-valid provider/model configuration.</td>
+</tr>
+<tr>
+<td><code dir="auto">zoo</code></td>
+<td>Teams using Zoo Code as their primary tool.</td>
+<td>Always needs <code dir="auto">contextWindow</code>/<code dir="auto">maxTokens</code>/<code dir="auto">supportsImages</code>/pricing injected — enable the model catalog.</td>
+</tr>
+<tr>
+<td><code dir="auto">copilot-cli</code></td>
+<td>GitHub Copilot subscription environments where you want zero per-call LLM cost.</td>
+<td>Uses the subscription’s fixed catalog; no model metadata is injected. No conversation-level auto-compaction surface (<code dir="auto">not_applicable</code>).</td>
+</tr>
+<tr>
+<td><code dir="auto">pi</code></td>
+<td>Minimal, hackable pi runtime; teams that want extension-bridged tooling.</td>
+<td>Requires catalog-supplied <code dir="auto">contextWindow</code>/<code dir="auto">maxTokens</code>; only <code dir="auto">openai_compatible</code>/<code dir="auto">ollama</code>/<code dir="auto">anthropic</code>/<code dir="auto">google_ai_studio</code> provider kinds; MCP arrives via a generated extension, not a config file.</td>
+</tr>
+<tr>
+<td><code dir="auto">oh-my-pi</code></td>
+<td>pi-family runtime with native MCP (<code dir="auto">mcp.json</code>) and finer compaction knobs.</td>
+<td>Same model-metadata and provider-kind requirements as <code dir="auto">pi</code>.</td>
+</tr>
+</tbody>
+</table>
+<div class="sl-heading-wrapper level-h3"><h3 id="decision-guide">Decision guide</h3><a class="sl-anchor-link" href="#decision-guide"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “Decision guide”</span></a></div>
+<ul>
+<li><strong>Starting out or unsure?</strong> Use <code dir="auto">kilo</code> (the default). It has the deepest
+production validation and is the agent the deployment verification flow
+checks against.</li>
+<li><strong>Context overflow on large PRs?</strong> Whichever agent you pick, ensure the
+model declares a <code dir="auto">contextWindow</code> (via <code dir="auto">llm.model_catalog</code> or an explicit
+<code dir="auto">context_window</code> override). Without it, Kilo and Zoo cannot track context
+usage and will overflow instead of auto-compacting. If an overflow still
+occurs, AICR throws <code dir="auto">AgentContextOverflowError</code> with the limit, requested
+tokens, and actionable guidance — not a generic <code dir="auto">review_orchestration_failed</code>.</li>
+<li><strong>Mixing agents?</strong> All workspaces share the global <code dir="auto">agent.default</code> in the
+current version; per-workspace agent overrides are parsed but not applied
+yet.</li>
+</ul>
+<p>Capability gaps (vision, reasoning, structured output, tool calls) are
+recorded in each run’s <code dir="auto">manifest.json</code> as <code dir="auto">injected</code>, <code dir="auto">delegated</code>, or
+<code dir="auto">not_applicable</code> — they are never silently dropped.</p>
+</div><footer class="sl-flex astro-ahsqgg2z"><div class="meta sl-flex astro-ahsqgg2z"></div><div class="pagination-links print:hidden astro-r74zygmb" dir="ltr"><a href="/en/integrations/vcs-providers/" rel="prev" class="astro-r74zygmb"><svg aria-hidden="true" class="astro-r74zygmb astro-673pctzy" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.5rem;"><path d="M17 11H9.41l3.3-3.29a1.004 1.004 0 1 0-1.42-1.42l-5 5a1 1 0 0 0-.21.33 1 1 0 0 0 0 .76 1 1 0 0 0 .21.33l5 5a1.002 1.002 0 0 0 1.639-.325 1 1 0 0 0-.219-1.095L9.41 13H17a1 1 0 0 0 0-2Z"/></svg><span class="astro-r74zygmb">Previous<br class="astro-r74zygmb"><span class="link-title astro-r74zygmb">VCS providers</span></span></a><a href="/en/integrations/output-channels/" rel="next" class="astro-r74zygmb"><svg aria-hidden="true" class="astro-r74zygmb astro-673pctzy" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.5rem;"><path d="M17.92 11.62a1.001 1.001 0 0 0-.21-.33l-5-5a1.003 1.003 0 1 0-1.42 1.42l3.3 3.29H7a1 1 0 0 0 0 2h7.59l-3.3 3.29a1.002 1.002 0 0 0 .325 1.639 1 1 0 0 0 1.095-.219l5-5a1 1 0 0 0 .21-.33 1 1 0 0 0 0-.76Z"/></svg><span class="astro-r74zygmb">Next<br class="astro-r74zygmb"><span class="link-title astro-r74zygmb">Output channels</span></span></a></div></footer></div></div></main></div></div></div></div></body></html>
