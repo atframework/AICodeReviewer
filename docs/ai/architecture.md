@@ -9,7 +9,7 @@
 
 ### 2.1 技术栈基线
 
-- 核心实现使用 TypeScript / Node 20。
+- 核心实现使用 TypeScript / Node 22+（下限由 `better-sqlite3` 13 的 engines 决定）。
 - 工作区用 pnpm 管理，TypeScript project references 负责跨包构建。
 - LLM 直连与外部 Agent CLI 两条路径并存，但长期主路径是“服务编排 + AgentAdapter + Sandbox”。
 - 运行环境以单容器自托管为主，Podman 与 Docker 平等支持。

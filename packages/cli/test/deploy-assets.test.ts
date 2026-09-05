@@ -35,6 +35,12 @@ describe("deploy assets", () => {
     expect(script).toContain('BUILD_NETWORK_MODE="host"');
     expect(script).toContain('BUILD_ARGS+=(--http-proxy=true)');
     expect(script).toContain('BUILD_ARGS+=(--build-arg "HTTP_PROXY=${BUILD_HTTP_PROXY}" --build-arg "http_proxy=${BUILD_HTTP_PROXY}")');
+
+    // A wildcard listener (e.g. *:3128) may refuse the container bridge subnet;
+    // it always accepts loopback, which the build reaches via --network=host.
+    const wildcardCaseIndex = script.indexOf('"*"|"0.0.0.0"|"::")');
+    expect(wildcardCaseIndex).toBeGreaterThan(-1);
+    expect(script.slice(wildcardCaseIndex, wildcardCaseIndex + 500)).toContain('host_value="127.0.0.1"');
   });
 
   it("removes the optional Docker CLI placeholder from runtime images when it is empty", () => {

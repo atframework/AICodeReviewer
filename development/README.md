@@ -252,7 +252,7 @@ Perforce 官方 APT 仓库只发布 Ubuntu 代号源（已验证最新为 noble�
 >
 > **关于 `DOCKER_DOWNLOAD_MIRROR`**：仅当 `AICR_ENABLE_CONTAINER_SANDBOX=true` 且需要 Docker 兼容 CLI 时才需要下载 Docker 静态二进制；使用 `sandbox.kind: podman`/`engine: podman` 可直接走镜像内置 Podman CLI。
 >
-> **关于构建期 HTTP 代理**：`deploy.sh` 会优先使用已显式导出的 `HTTP_PROXY`、`HTTPS_PROXY`、`NO_PROXY`（或对应小写变量）。如果这些变量都没有设置，但部署宿主机正在监听 TCP `3128`，脚本会自动探测该代理并把宿主侧下载（例如 Docker static CLI）以及 `podman build` / `docker build` 的联网步骤切到 `http://<宿主机IP或域名>:3128`。如果代理只绑定到 loopback（如 `127.0.0.1:3128`），脚本会在构建时临时切换到 `--network=host`，保证 Dockerfile 中的 `apt`、`curl`、`npm`、`pip`、`yq` 下载同样能命中这个代理，而不会把代理地址永久写进最终镜像。
+> **关于构建期 HTTP 代理**：`deploy.sh` 会优先使用已显式导出的 `HTTP_PROXY`、`HTTPS_PROXY`、`NO_PROXY`（或对应小写变量）。如果这些变量都没有设置，但部署宿主机正在监听 TCP `3128`，脚本会自动探测该代理并把宿主侧下载（例如 Docker static CLI）以及 `podman build` / `docker build` 的联网步骤切到 `http://<宿主机IP或域名>:3128`。如果代理只绑定到 loopback 或绑定通配符地址（如 `127.0.0.1:3128` 或 `*:3128`），脚本会把代理地址规范为 `http://127.0.0.1:3128` 并在构建时临时切换到 `--network=host`，保证 Dockerfile 中的 `apt`、`curl`、`npm`、`pip`、`yq` 下载能命中这个代理——通配符监听并不等于容器网段可连（代理 ACL 可能拒绝 bridge 子网，2026-09 公网机实测 `*:3128` 拒绝容器网段导致 pnpm ECONNREFUSED），而 loopback 在 host 网络命名空间下始终可用。脚本不会把代理地址永久写进最终镜像。
 
 国内部署完整示例：
 

@@ -26,7 +26,8 @@ description: 仓库布局、开发环境搭建、测试与验证矩阵，以及�
 
 要求：
 
-- AICR runtime 使用 Node.js `>= 20`（部署镜像使用 Node 22 userspace）。
+- AICR runtime 使用 Node.js `>= 22`（`better-sqlite3` 13 的硬性要求；部署镜像
+  使用 Node 24 LTS userspace）。
 - `docs:build` / `docs:check` 使用 Node.js `>= 23.6`；源码配置校验器依赖
   Node 原生 TypeScript stripping。文档 CI job 使用 Node 24。
 - pnpm。

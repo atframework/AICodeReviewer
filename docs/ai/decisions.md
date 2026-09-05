@@ -14,7 +14,7 @@
 | ID | 议题 | 决策 | 当前落点 |
 | --- | --- | --- | --- |
 | D1 | 部署形态 | 单容器自托管为主，Helm chart 为可选；常驻进程监听 HTTP 端口接收所有 VCS 的 webhook / trigger script POST。 | `Plan.md` §11、`deploy/Dockerfile`、`deploy/deploy.sh` |
-| D2 | 核心语言 | 选 TypeScript（Node 20 / Bun 友好），与目标 Agent CLI、MCP 与 `ai-sdk` 生态对齐。 | `Plan.md` §2.1 |
+| D2 | 核心语言 | 选 TypeScript（Node 22+ / Bun 友好），与目标 Agent CLI、MCP 与 `ai-sdk` 生态对齐。 | `Plan.md` §2.1 |
 | D3 | AST / 语法服务 | 当前不内置；通过 Context Provider 插件接口预留扩展位。 | `docs/ai/architecture.md` §10.1 |
 | D4 | 审批流 | 当前不实现；通过 Output Pipeline 中间件 + Run 状态机扩展预留口子。 | `docs/ai/architecture.md` §10.2 |
 | D5 | Workspace 目录布局 | 使用扁平、自包含布局 `workspaces/<workspace_id>/{source,prompts,skills,memory,templates,...}`。 | `Plan.md` §2.2、`docs/ai/architecture.md` §3.10 |

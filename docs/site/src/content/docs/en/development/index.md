@@ -33,7 +33,8 @@ runtime `Dockerfile` does not copy `docs/site`.
 
 Requirements:
 
-- Node.js `>= 20` for the runtime (the deployment image uses Node 22 userspace).
+- Node.js `>= 22` for the runtime (`better-sqlite3` 13 requires it; the
+  deployment image uses Node 24 LTS userspace).
 - Node.js `>= 23.6` for `docs:build` / `docs:check`; the source-backed config
   validator relies on native TypeScript stripping. The docs CI job uses Node 24.
 - pnpm.
