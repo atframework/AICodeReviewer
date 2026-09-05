@@ -149,10 +149,11 @@ Managed summary comments always include these hidden markers:
 When updating a managed comment, AICR renders current problems as open issues
 with stable anchor IDs and keeps fingerprints that remain. A missing old
 fingerprint becomes a candidate only when its file was reviewed; the lifecycle
-model configured by `llm.triage_model_chain` must then explicitly confirm it
-is fixed in the current source before AICR lists it in Resolved. An absent/empty
-triage chain inherits `llm.model_chain`. Missing legacy diagnostics, missing
-source, incomplete model output, or an LLM failure retains the item as open.
+model selected by the workspace-resolved `triage_model_chain` group must then
+explicitly confirm it is fixed in the current source before AICR lists it in
+Resolved. Triage inherits the workspace main group when no layer selects one.
+Missing legacy diagnostics, missing source, incomplete model output, or an LLM
+failure retains the item as open.
 Each confirmed item shows its original title (`[SEVERITY] category — file:line`)
 when metadata is available. Legacy comments without metadata use readable
 placeholders instead of raw fingerprint hashes. The fingerprint parser tolerates

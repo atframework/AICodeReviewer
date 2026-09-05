@@ -596,8 +596,10 @@ AICR 采用**两层上下文管理**，两者互补：
 - 当多个 GitHub / GitLab trigger 共用同一路由时，`workspaces.instances.<id>.source_repo.trigger` 必须显式绑定到对应 trigger profile；不同 repo 需要独立 token / webhook secret / 文件过滤规则时，不应复用同一个 trigger 名称。
 - 需要长期保持覆盖完整性的关键配置包括：
   - `compression`
-  - `llm.model_chain`
-  - `llm.triage_model_chain`
+  - `llm.model_chain`（分组名到非空有序列表）
+  - `llm.default_model_chain`（全局主链组名，默认 `default`）
+  - `llm.triage_model_chain`（可选生命周期分析组名）
+  - `workspaces.defaults` / `workspaces.instances.<id>` 的 `model_chain` / `triage_model_chain` 分组引用
   - `llm.retry`
   - `llm.budget`
   - `llm.per_provider_overrides`
@@ -877,7 +879,7 @@ AICR 采用**两层上下文管理**，两者互补：
 远端，只用本地结构化缓存 + 打包保底快照。每条解析结果都标注来源
 （`override` / `cache` / `remote` / `bundled` / `config`），写入 run 快照便于观测和排障。
 
-`bootstrapServerApp` 已把 store 初始化条件扩展为：admin auth、`llm.model_catalog` SQLite 后端、reflection memory 任一持久化需求都会创建 `StoreDb`。模型解析顺序保持为“初始化 catalog service → `ensureRefreshed()` → 解析并充实 primary / fallback / summarize / triage `ModelSpec` → 创建 LLM gateway / runtime bundle”，避免 `resolveModelSpecFromConfig()` 早于 store 初始化而拿不到 catalog。issue triage 与 resolved-problem verifier 的模型都由 `resolveIssueTriageModelSpecFromConfig()` 解析：配置了 `llm.triage_model_chain` 时用其首条目并创建独立的 resilient client（共用 retry / budget / per_provider_overrides / pricing），否则直接复用代码分析的 `model` 与 `llmClient`。输出层只负责确定性候选与 fail-closed 生命周期；server 注入的 `createProblemResolutionAnalyzer()` 在当前物化源码上做批量语义复核，并在同一 run 内按 fingerprint 缓存结果，避免多个输出通道重复调用。
+`bootstrapServerApp` 已把 store 初始化条件扩展为：admin auth、`llm.model_catalog` SQLite 后端、reflection memory 任一持久化需求都会创建 `StoreDb`。模型解析顺序保持为“初始化 catalog service → `ensureRefreshed()` → 解析并充实 primary / fallback / summarize / triage `ModelSpec` → 创建 LLM gateway / runtime bundle”，避免 `resolveModelSpecFromConfig()` 早于 store 初始化而拿不到 catalog。issue triage 与 resolved-problem verifier 的模型都由 `resolveIssueTriageModelSpecFromConfig()` 解析：`llm.model_chain` 定义命名有序模型组，主链引用按 workspace instance → workspace defaults → `llm.default_model_chain`（默认 `default`）解析；triage 引用按 instance → defaults → `llm.triage_model_chain` → 当前 workspace 主链解析。bootstrap 按组缓存 enriched `ModelSpec`、agent 故障切换列表和 resilient client（共用 retry / budget / per_provider_overrides / pricing 配置），在每次 review、issue triage 和 resolution verification 中按 workspace 选择，避免跨组切换；继承主链时复用同一模型与 client。压缩摘要从当前主链组内选第一个匹配 role 的具体条目，避免同 provider 的多个模型被混淆。分组为空、引用不存在、旧数组形式均在 schema 阶段报错；分层配置合并时同名组的列表整体替换。输出层只负责确定性候选与 fail-closed 生命周期；server 注入的 `createProblemResolutionAnalyzer()` 在当前物化源码上做批量语义复核，并在同一 run 内按 fingerprint 缓存结果，避免多个输出通道重复调用。
 
 #### 3.13.3 解析链（providerId + modelId → catalog 条目）
 

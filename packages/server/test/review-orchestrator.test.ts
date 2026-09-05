@@ -98,6 +98,46 @@ function createVcs(sourceRoot: string): DiffCapableVcsAdapter {
 }
 
 describe("runReviewOrchestration", () => {
+  it("selects a workspace model and client once without mutating concurrent runs", async () => {
+    const scratchRoot = join(process.cwd(), "build", "tmp");
+    await mkdir(scratchRoot, { recursive: true });
+    const sourceRoot = await mkdtemp(join(scratchRoot, "model-groups-"));
+    try {
+      await writeWorkspaceFile(sourceRoot, "src/app.ts", "const value = 1;\n");
+      const calls: string[] = [];
+      const resolver = vi.fn((workspaceId: string) => ({
+        model: { ...model, modelId: workspaceId },
+        llm: {
+          async complete(input: Parameters<ChatCompletionClient["complete"]>[0]) {
+            expect(input.model.modelId).toBe(workspaceId);
+            calls.push(workspaceId);
+            return { providerId: model.providerId, modelId: workspaceId, content: '{"skipReason":"lgtm"}', raw: {} };
+          },
+        },
+      }));
+      const options = {
+        baseSystemPrompt: "Review the diff.",
+        sourceRootResolver: () => sourceRoot,
+        vcs: createVcs(sourceRoot),
+        model,
+        llm: { complete: vi.fn<ChatCompletionClient["complete"]>() },
+        modelOptionsResolver: resolver,
+      };
+      const results = await Promise.all(["one", "two"].map((workspaceId) => runReviewOrchestration({
+        reviewEvent: { ...createReviewEventFixture(), workspaceId },
+        payload: {},
+        provider: "gitea",
+        eventName: "pull_request",
+      }, options)));
+      expect(results.map((result) => result.model.modelId)).toEqual(["one", "two"]);
+      expect(calls.sort()).toEqual(["one", "two"]);
+      expect(resolver).toHaveBeenCalledTimes(2);
+      expect(options.llm.complete).not.toHaveBeenCalled();
+      expect(options.model).toBe(model);
+    } finally {
+      await rm(sourceRoot, { recursive: true, force: true });
+    }
+  });
   it("runs VCS, prompt preparation, LLM JSON tool output, collector, and publisher", async () => {
     const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-orchestrator-"));
 

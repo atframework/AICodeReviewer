@@ -47,6 +47,15 @@ const llmModelChainEntrySchema = z
   })
   .passthrough();
 
+const modelChainReferenceSchema = z
+  .string({
+    invalid_type_error: "Model chain references must be group names; move the model list into llm.model_chain.<group> and reference that group",
+  })
+  .min(1)
+  .refine((name) => name.trim() === name, {
+    message: "Model chain group names must not have leading or trailing whitespace",
+  });
+
 const llmRetrySchema = z
   .object({
     max_attempts: z.number().int().positive().optional(),
@@ -566,6 +575,8 @@ const workspacePromptSchema = z
 
 const workspaceInstanceSchema = z
   .object({
+    model_chain: modelChainReferenceSchema.optional(),
+    triage_model_chain: modelChainReferenceSchema.optional(),
     source_repo: z
       .object({
         trigger: z.string().min(1),
@@ -717,15 +728,20 @@ const appConfigSchema = z
     llm: z
       .object({
         providers: z.array(llmProviderSchema).default([]),
-        model_chain: z.array(llmModelChainEntrySchema).default([]),
-        triage_model_chain: z.array(llmModelChainEntrySchema).optional(),
+        model_chain: z.record(
+          modelChainReferenceSchema,
+          z.array(llmModelChainEntrySchema).min(1),
+          { invalid_type_error: "llm.model_chain must be a mapping of group names to model lists; move the old array to llm.model_chain.default" },
+        ).default({}),
+        default_model_chain: modelChainReferenceSchema.default("default"),
+        triage_model_chain: modelChainReferenceSchema.optional(),
         retry: llmRetrySchema,
         per_provider_overrides: llmPerProviderOverridesSchema,
         budget: llmBudgetSchema,
         model_catalog: modelCatalogSchema,
       })
       .passthrough()
-      .default({ providers: [], model_chain: [] }),
+      .default({ providers: [], model_chain: {} }),
     triggers: z.array(triggerSchema).default([]),
     outputs: z
       .object({
@@ -835,6 +851,8 @@ const appConfigSchema = z
           .default({ max_total_gb: 50, eviction: "lru", ttl_days: 30 }),
         defaults: z
           .object({
+            model_chain: modelChainReferenceSchema.optional(),
+            triage_model_chain: modelChainReferenceSchema.optional(),
             sandbox: sandboxSchema.optional(),
             review: reviewSchema.optional(),
             agent: z
@@ -870,6 +888,27 @@ const appConfigSchema = z
           message: `llm.${legacyKey} was renamed to llm.${renamedTo}; rename the key in your config file`,
           path: ["llm", legacyKey],
         });
+      }
+    }
+
+    const checkModelChainReference = (name: string | undefined, path: string[]): void => {
+      if (name !== undefined && !Object.hasOwn(config.llm.model_chain, name)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `Model chain group "${name}" is not defined in llm.model_chain`,
+          path,
+        });
+      }
+    };
+    // Preserve provider-only configurations, but never infer a group from map order.
+    if (Object.keys(config.llm.model_chain).length > 0 || config.llm.default_model_chain !== "default") {
+      checkModelChainReference(config.llm.default_model_chain, ["llm", "default_model_chain"]);
+    }
+    checkModelChainReference(config.llm.triage_model_chain, ["llm", "triage_model_chain"]);
+    for (const field of ["model_chain", "triage_model_chain"] as const) {
+      checkModelChainReference(config.workspaces.defaults[field], ["workspaces", "defaults", field]);
+      for (const [workspaceId, instance] of Object.entries(config.workspaces.instances)) {
+        checkModelChainReference(instance[field], ["workspaces", "instances", workspaceId, field]);
       }
     }
 

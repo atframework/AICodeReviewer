@@ -110,11 +110,13 @@
   普通限流/容量型 429 仍按退避策略处理，其他确定性 4xx 不重试。
 - Agent CLI 路径从终端事件、错误信封或进程错误中识别同一组额度耗尽信号，切换时用下一条
   `ModelSpec` 重新物化整套 runtime bundle 后重跑本次任务；最终模型和 fallback 计数进入 run 摘要。
-- Git 服务 issue triage 与已解决问题复核可用 `llm.triage_model_chain` 配置独立的
-  默认模型与 fallback 列表；PR/MR 增量评论的 Resolved 标记、托管 problem issue 的
-  `close` / `mark_resolved` 复核使用同一条链，缺省或空列表时沿用代码分析的
-  `llm.model_chain`。指纹、审查文件范围与提交祖先关系只生成候选；模型未明确确认时
-  保持 open。
+- `llm.model_chain` 定义命名模型组，`llm.default_model_chain` 选择全局主链。
+  workspace defaults / instances 可用 `model_chain` 选择不同组；主模型、agent
+  故障切换和压缩摘要都在所选组内解析。旧数组配置报迁移错误。
+- `triage_model_chain` 在 llm、workspace defaults / instances 层引用同一组定义，
+  越具体的层优先；均未配置时继承当前 workspace 主链。Git 服务 issue triage、
+  PR/MR 增量评论的 Resolved 标记与托管 problem issue 的 `close` / `mark_resolved`
+  使用此组复核。指纹、文件范围和提交祖先关系只生成候选；模型未确认时保持 open。
 - 成本估算按非缓存输入、缓存命中、缓存写入、输出 token 类别计费。
 
 ### 3.6 Prompt Manager 与 AI 资产装配

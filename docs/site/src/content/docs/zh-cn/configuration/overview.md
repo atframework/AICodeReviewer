@@ -82,12 +82,18 @@ workspaces:
 | --- | :---: | :---: | :---: |
 | `review` | ✓ | ✓ | ✓ |
 | `outputs`（通道列表、`no_problems`、`channel_overrides`） | ✓ | ✓ | ✓ |
+| `model_chain`（主链分组） | 经由 `llm.default_model_chain` | ✓ | ✓ |
+| `triage_model_chain`（生命周期分析分组） | 经由 `llm.triage_model_chain` | ✓ | ✓ |
 | `agent.default` | ✓ | ✓ * | ✓ * |
 | `sandbox` | 经由 `agent.sandbox` | ✓ * | ✓ * |
 | `prompt`（基础系统提示、`force_skills`） | — | ✓ | ✓ |
 | `context_repositories`（辅助上下文仓库） | — | ✓ | ✓ |
 | `auth`（按 workspace 的 API key） | 经由 `server.auth` | — | ✓ |
 | `compression`、`queue`、`storage`、`llm`、`server`、`admin`、`triggers` | ✓ | — | — |
+
+分组定义统一放在 `llm.model_chain`；workspace 只填分组名。主链用于审查、
+agent 故障切换和压缩摘要；triage 各层都未配置时继承该 workspace 的主链。
+完整示例见[模型分组配置](/zh-cn/configuration/llm/)。
 
 \* schema 接受 workspace 层的 `agent.default` 和 `sandbox`，但当前版本在启动时只按
 全局 `agent` 创建一份适配器和沙箱，workspace 层这两项设置了也不会生效。混用 agent

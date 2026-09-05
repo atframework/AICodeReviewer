@@ -91,7 +91,7 @@ LLM_TOKEN="$(yq -r '.llm.provider.xiaomimimo_token_plan.token' development/secre
 | 8    | `.llm.provider.tencentcloud_coding_plan.baseURL` | `.llm.provider.tencentcloud_coding_plan.token` | `kimi-k2.5`       |
 | 9    | `.llm.provider.aliyun_coding_plan.baseURL`       | `.llm.provider.aliyun_coding_plan.token`       | `qwen3.6-plus`    |
 
-- 远端 `config.yaml` 通过 `llm.triage_model_chain` 落地该优先级：首条目 `zhipu` / `glm-5.3-flash` 为默认模型，其后按上表顺序追加代码分析的整条链作为 fallback；该字段缺省时自动沿用 `llm.model_chain`。
+- 部署时将该优先级写入 `llm.model_chain.lifecycle`：首条目 `zhipu` / `glm-5.3-flash` 为默认模型，其后按上表顺序追加代码分析的整条链作为 fallback，再设置 `llm.triage_model_chain: lifecycle`。workspace defaults / instances 可用同名字段覆盖分组选择；各层均未配置时继承该 workspace 的主链组。旧数组配置需要先迁移，不能直接用于新版本。
 - 适用面：Git 服务 issue/PR 的 triage 关闭决策，以及支持增量生命周期的 PR/MR 已解决问题复核和 `gitea_problem_issue` / `github_problem_issue` 的关闭或标记已解决。指纹、文件覆盖范围和提交祖先检查先生成候选，只有该模型链明确确认后才执行 destructive lifecycle action；调用失败、输出缺失或上下文不足时保持 open。
 - `glm-5.3-flash` 已确认存在于 2026-09-02 刷新的 models.dev 打包快照 `zhipuai-coding-plan`（1M context / 131072 max output，订阅制价格为 0）；`zhipu` provider 需保持 `catalog_provider: zhipuai-coding-plan`（上游已把 `zhipu` id 改名，见 `docs/ai/AGENTS.known-pitfalls.md` #73）。模型端点是否可用仍以部署环境实测为准。
 

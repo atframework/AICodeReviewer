@@ -3,8 +3,7 @@ title: LLM 提供方与模型
 description: 配置 LLM 提供方、模型链、重试/退避、费用预算，以及可选开启的 models.dev 元数据目录。
 ---
 
-`llm` 命名空间是 AICodeReviewer 的核心——没有提供方和至少一条模型链条目，
-评审无法运行。本页覆盖 `llm.providers`、`llm.model_chain`、
+在 `llm` 命名空间配置提供方和命名模型组。本页覆盖 `llm.providers`、`llm.model_chain`、
 `llm.triage_model_chain`、`llm.retry`、`llm.budget`，以及模型元数据目录
 （`llm.model_catalog`）。
 
@@ -19,9 +18,11 @@ llm:
       api_key_env: AICR_LLM_API_KEY
 
   model_chain:
-    - provider: my-llm
-      model: gpt-4o-mini
-      role: any
+    default:
+      - provider: my-llm
+        model: gpt-4o-mini
+        role: any
+  default_model_chain: default
 
   retry:
     max_attempts: 3
@@ -90,60 +91,80 @@ llm:
 `default_reasoning_effort`（未显式设置时的默认档）。解析优先级：provider 上的
 `reasoning_effort` → 目录的 `default_reasoning_effort` → `thinking_level` 换算值。
 
-## `llm.model_chain[]` —— 哪个模型干什么活
+## `llm.model_chain` —— 命名模型组
 
-模型链是一个有序的 `(provider, model, role)` 三元组列表。首条目是默认路由，
-符合故障转移条件的失败会按顺序切换到后续条目：直连调用由 LLM gateway 执行；
-Agent 评审遇到明确的账户余额、计费周期、spend limit 或套餐额度耗尽时也会切换，
-并为下一个模型重新物化 Agent runtime。通过 role 可以把
-工作拆分到快速便宜的 "light" 模型（用于 diff 压缩和逐文件摘要）和 "heavy" 模型
-（主评审器）之间；未指定 role 时使用 `any`。
+`llm.model_chain` 是“分组名 → 有序模型列表”的映射。每组至少有一个条目，
+首条目是主模型，后续条目按列表顺序尝试；分组声明顺序不影响优先级。
+`llm.default_model_chain` 选择全局默认组，默认值为 `default`。
+配置了分组时，全局默认组必须存在。workspace 的 `model_chain` 选择整组模型。
 
 | 字段 | 类型 | 必填 | 说明 |
 | --- | --- | :---: | --- |
 | `provider` | string | ✓ | 必须匹配某个 `providers[].id`。 |
 | `model` | string | ✓ | 传给 provider 的 model id。 |
-| `role` | enum | ✓ | `light`、`heavy` 或 `any`。 |
+| `role` | enum | ✓ | `light`、`heavy` 或 `any`，必须显式填写。 |
+
+主模型始终取组内第一项。压缩摘要使用当前主链组内第一个匹配
+`compression.summarize_model_role`（默认 `light`）的条目，找不到时使用第一项。
+同一 provider 的多个模型也按条目区分。直连调用由 gateway 执行故障切换；
+Agent 评审遇到明确的余额或套餐额度耗尽时，用下一项模型重新物化 runtime。
+两条路径都只在选定组内切换。
+
+下面省略已配置的 `llm.providers` 和 workspace 的源绑定：
 
 ```yaml
 llm:
   model_chain:
-    - provider: my-llm
-      model: gpt-4o-mini
-      role: light          # diff 压缩、逐文件摘要
-    - provider: my-llm
-      model: gpt-4o
-      role: heavy          # 主评审器
-    - provider: my-llm
-      model: gpt-4o-mini
-      role: any            # 任意 role 的兜底
+    default:
+      - { provider: my-llm, model: gpt-4o, role: heavy }
+      - { provider: my-llm, model: gpt-4o-mini, role: light }
+    fast:
+      - { provider: my-llm, model: gpt-4o-mini, role: any }
+    lifecycle:
+      - { provider: my-llm, model: gpt-4o-mini, role: light }
+      - { provider: my-llm, model: gpt-4o, role: any }
+  default_model_chain: default
+  triage_model_chain: lifecycle
+
+workspaces:
+  defaults:
+    model_chain: default
+  instances:
+    service-a:
+      model_chain: default
+      triage_model_chain: lifecycle
+    service-b:
+      model_chain: fast
+      triage_model_chain: fast
 ```
 
-## `llm.triage_model_chain[]` —— 生命周期分析的独立模型路由
+主链选择优先级为 `workspaces.instances.<id>.model_chain` →
+`workspaces.defaults.model_chain` → `llm.default_model_chain`。
+自动生成、未显式列出的 workspace 同样继承 workspace defaults。
+分层合并配置时，同名组的模型列表整体替换，其他组保留。
 
-Git 服务 issue triage 与已解决问题复核默认和代码分析共用模型：以
-`model_chain` 首条目作为模型，失败时沿同一条链切换。配置
-`triage_model_chain` 可以为这些生命周期分析指定独立的默认模型和 fallback
-列表，条目结构与 `model_chain` 相同（`provider` / `model` / `role`）。该字段
-缺省或为空时仍使用 `model_chain`。
+## `llm.triage_model_chain` —— 生命周期分析分组
 
-```yaml
-llm:
-  triage_model_chain:
-    - provider: my-llm
-      model: gpt-4o-mini   # 生命周期分析默认模型
-      role: light
-    - provider: my-llm
-      model: gpt-4o        # 生命周期分析 fallback
-      role: any
-```
+`triage_model_chain` 填分组名，引用同一份 `llm.model_chain` 定义。
+选择优先级为 `workspaces.instances.<id>.triage_model_chain` →
+`workspaces.defaults.triage_model_chain` → `llm.triage_model_chain` →
+当前 workspace 的主链。所有层都未配置时，直接复用主链的模型和 client。
+要覆盖全局 triage 选择并共用某 workspace 的主链，请显式填相同分组名。
 
-该链与主链共用 `llm.retry`、`llm.budget`、`llm.per_provider_overrides` 和模型目录
-充实。它适用于 issue/PR triage、Gitea/GitHub PR 增量 summary 的 Resolved 标记，
-以及 `gitea_problem_issue` / `github_problem_issue` 的关闭或标记已解决。
-指纹消失、审查文件覆盖范围和提交祖先关系只生成候选；模型明确确认后才执行生命周期
-动作。源码缺失、输出不完整或 LLM 调用失败时保持 open。同 scope 的竞态重复 issue
-仍按身份确定性清理，因为这不是对代码问题已修复的判断。
+所选组决定 issue triage 和已解决问题复核的模型列表与故障切换顺序；
+`llm.retry`、`llm.budget`、`llm.per_provider_overrides` 和模型目录仍全局共享。
+这包括 Gitea/Forgejo issue/PR triage、Gitea/GitHub PR 增量 summary 的 Resolved
+标记，以及 `gitea_problem_issue` / `github_problem_issue` 的关闭或标记已解决。
+指纹消失、审查文件范围和提交祖先关系只生成候选；模型明确确认后才执行动作。
+源码缺失、输出不完整或 LLM 失败时保持 open。
+
+### 从旧数组配置迁移
+
+把旧 `llm.model_chain` 数组移到 `llm.model_chain.default`。
+把旧 `llm.triage_model_chain` 数组移到另一个组（例如 `llm.model_chain.lifecycle`），
+再设置 `llm.triage_model_chain: lifecycle`。原 triage 是空列表时，删除该字段以继承主链。
+旧数组、空组、空引用和不存在的分组引用都会使配置校验失败。
+provider-only 配置仍保留原有首 provider / `gpt-4o-mini` 兜底；生产配置应显式声明分组。
 
 ## `llm.retry` —— 瞬时失败处理
 
