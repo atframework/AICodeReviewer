@@ -327,7 +327,8 @@ AICR 采用**两层上下文管理**，两者互补：
 - **两条 review 路径的 usage 透传口径**：review 编排有两条调用路径，dashboard 的 token 统计必须正确区分。
   直连 LLM 路径（无 `sandbox`+`agentAdapter`）调用 `options.llm.complete()`，返回的 `ChatCompletionResult.usage`
   是 provider 真实上报值，经 `summarizeReviewOrchestrationForWebhook` → `ReviewOrchestrationWebhookSummary.llmUsage`
-  透传到 `persistReviewRunToStore`，写入 `llm_usage.tokens_in/out/total`（`usageSource: "llm_gateway"`）。
+  透传到 `persistReviewRunToStore`，写入 `llm_usage.tokens_in/out/total` 及缓存拆分列
+  `cached_tokens`/`cache_creation_tokens`（`usageSource: "llm_gateway"`）。
   agent 路径（默认 `agent.default: "kilo"`）在子进程内消耗 token，**不经过本项目 gateway**；token 仅能从
   agent stdout 的 JSON 流解析——kilo（基于 opencode）每个模型回合发一个 `step-finish` 事件，字段为
   `tokens.{total,input,output,reasoning,cache.{read,write}}` 与 `cost`（浮点 USD）。kilo 的计数是**互斥**口径：
@@ -722,7 +723,10 @@ AICR 采用**两层上下文管理**，两者互补：
   - `review_runs`：run 事实表，含 provider、model、status、problem/summary/dispatch 计数、
     duration、skip reason、compression 标记、token 估算、target 元数据。
   - `code_metrics`：每 run 的文件变更数、增删行数、分析字节数。
-  - `llm_usage`：每 run 的 provider+model 级请求数、token 数、成本、重试/fallback/失败次数、延迟。
+  - `llm_usage`：每 run 的 provider+model 级请求数、token 数、缓存命中/写入 token
+    （`cached_tokens`/`cache_creation_tokens`，均已含在 `tokens_in` 内；命中率 =
+    `cached_tokens / tokens_in`，未命中输入 = `tokens_in - cached_tokens -
+    cache_creation_tokens`）、成本、重试/fallback/失败次数、延迟。
   - `output_events`：每 run 的 channel dispatch 事件，含 issue/comment 创建标记。
   - `daily_rollups`：按 `project_id + UTC 日期(YYYY-MM-DD)` 聚合的物化视图表。
     每次 run 完成持久化（`insertReviewRun`）或写入 output event（`insertOutputEvents`）时，
@@ -751,14 +755,15 @@ AICR 采用**两层上下文管理**，两者互补：
   Projects 与 Providers 标签各自独立支持时间维度切换，按需调用
   `GET /stats/projects?since=` 与 `GET /stats/providers?since=`。
 - 首屏统计包含：总 review 次数、成功/失败/跳过次数、发现问题的 run 次数、
-  problem 总数、创建 issue 数、分析代码量、LLM 请求数、输入/输出/总 token、估算成本、平均 duration。
+  problem 总数、创建 issue 数、分析代码量、LLM 请求数、输入/输出/总 token、
+  prompt 缓存命中率（命中/未命中 token 拆分）、估算成本、平均 duration。
 - 工程级维度按 project 聚合：Projects 面板以表格展示各工程的 reviewCount、successCount、
   failureCount、skipCount、problemTotal、issueCreatedCount、filesChangedTotal、
-  linesAddedTotal / linesDeletedTotal、llmRequestTotal、tokensTotalTotal、costUsdTotal、
-  avgDurationMs；支持 today/thisWeek/thisMonth/all 筛选。
+  linesAddedTotal / linesDeletedTotal、llmRequestTotal、tokensTotalTotal、
+  cachedTokensInTotal（含命中率）、costUsdTotal、avgDurationMs；支持 today/thisWeek/thisMonth/all 筛选。
 - provider+model 维度：Providers 面板以表格展示各 provider+model 的 requestCount、
-  tokensIn、tokensOut、tokensTotal、costUsd、retryCount+fallbackCount+failureCount、
-  avgLatencyMs；支持 today/thisWeek/thisMonth/all 筛选。
+  tokensIn、tokensOut、tokensTotal、cachedTokensIn/cacheCreationTokens（含命中率）、
+  costUsd、retryCount+fallbackCount+failureCount、avgLatencyMs；支持 today/thisWeek/thisMonth/all 筛选。
 - Store DB 仅在 `adminAuthConfig` 可用时初始化（即设置了 `AICR_ADMIN_USERNAME` +
   `AICR_ADMIN_PASSWORD`，或设置 `AICR_ADMIN_USERNAME` + `AICR_ADMIN_PASSWORD_HASH`）。
   `bootstrapServerApp` 解析 admin auth config 后创建 `StoreDb` 实例，并注入

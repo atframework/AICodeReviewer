@@ -106,12 +106,22 @@ describe("observability API", () => {
       startedAt: new Date(),
       durationMs: 1000,
       problemCount: 2,
+      llmUsages: [{
+        providerId: "openai",
+        modelId: "gpt-4o",
+        tokensIn: 1000,
+        tokensOut: 200,
+        tokensTotal: 1200,
+        cachedTokens: 600,
+      }],
     });
 
     const res = await fetchApi("/stats");
     expect(res.status).toBe(200);
     const data = await res.json();
     expect(data.overview.reviewCount).toBe(1);
+    expect(data.overview.cachedTokensInTotal).toBe(600);
+    expect(data.overview.cacheCreationTokensTotal).toBe(0);
     expect(data.overview.problemTotal).toBe(2);
     expect(data.today).toBeDefined();
     expect(data.thisWeek).toBeDefined();
@@ -229,6 +239,8 @@ describe("observability API", () => {
         tokensIn: 100,
         tokensOut: 50,
         tokensTotal: 150,
+        cachedTokens: 40,
+        cacheCreationTokens: 10,
       }],
     });
 
@@ -237,6 +249,8 @@ describe("observability API", () => {
     const data = await res.json();
     expect(data.length).toBe(1);
     expect(data[0].providerId).toBe("openai");
+    expect(data[0].cachedTokensIn).toBe(40);
+    expect(data[0].cacheCreationTokens).toBe(10);
   });
 
   it("GET /stats/providers filters provider stats by since query", async () => {

@@ -87,6 +87,8 @@ export const llmUsage = sqliteTable("llm_usage", {
   fallbackCount: integer("fallback_count").notNull().default(0),
   failureCount: integer("failure_count").notNull().default(0),
   latencyMs: integer("latency_ms"),
+  cachedTokens: integer("cached_tokens").notNull().default(0),
+  cacheCreationTokens: integer("cache_creation_tokens").notNull().default(0),
 });
 
 export const outputEvents = sqliteTable("output_events", {
@@ -122,6 +124,8 @@ export const dailyRollups = sqliteTable("daily_rollups", {
   tokensIn: integer("tokens_in").notNull().default(0),
   tokensOut: integer("tokens_out").notNull().default(0),
   tokensTotal: integer("tokens_total").notNull().default(0),
+  cachedTokens: integer("cached_tokens").notNull().default(0),
+  cacheCreationTokens: integer("cache_creation_tokens").notNull().default(0),
   costUsd: real("cost_usd"),
 });
 

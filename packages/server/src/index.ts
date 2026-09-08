@@ -939,6 +939,8 @@ function persistReviewRunToStore(
         ...(reviewRun.llmUsage?.promptTokens !== undefined ? { tokensIn: reviewRun.llmUsage.promptTokens } : {}),
         ...(reviewRun.llmUsage?.completionTokens !== undefined ? { tokensOut: reviewRun.llmUsage.completionTokens } : {}),
         ...(reviewRun.llmUsage?.totalTokens !== undefined ? { tokensTotal: reviewRun.llmUsage.totalTokens } : {}),
+        ...(reviewRun.llmUsage?.cachedPromptTokens !== undefined ? { cachedTokens: reviewRun.llmUsage.cachedPromptTokens } : {}),
+        ...(reviewRun.llmUsage?.cacheCreationTokens !== undefined ? { cacheCreationTokens: reviewRun.llmUsage.cacheCreationTokens } : {}),
         ...(reviewRun.estimatedCostUsd !== undefined ? { costUsd: reviewRun.estimatedCostUsd } : {}),
         ...(reviewRun.requestCount !== undefined ? { requestCount: reviewRun.requestCount } : {}),
         ...(reviewRun.retryCount !== undefined ? { retryCount: reviewRun.retryCount } : {}),

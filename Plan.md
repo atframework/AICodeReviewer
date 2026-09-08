@@ -166,6 +166,9 @@
   时间维度；日汇总分区按 UTC day。
 - Token usage 按 review 路径区分口径（`llm_gateway` / `agent_stdout` / `mixed`），本地
   prompt 估算独立存放、不混入 `llm_usage`；细节见 `docs/ai/architecture.md` §3.11。
+- `llm_usage` 拆分记录 prompt 缓存命中/写入 token（`cached_tokens` /
+  `cache_creation_tokens`，迁移 `006_llm_usage_cache_tokens`），dashboard 的
+  Overview / Projects / Providers 显式展示命中率（`cached_tokens / tokens_in`）。
 
 ### 3.12 Reflection 与 memory
 

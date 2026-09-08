@@ -247,4 +247,19 @@ const MIGRATIONS = [
       ALTER TABLE review_runs ADD COLUMN prompt_token_estimate INTEGER;
     `,
   },
+  {
+    // Provider-reported prompt cache split. cached_tokens = cache-hit input tokens,
+    // cache_creation_tokens = cache-write input tokens (Anthropic cache creation, kilo
+    // cache.write); both are already included in tokens_in, so non-cached input =
+    // tokens_in - cached_tokens - cache_creation_tokens and the dashboard hit rate is
+    // cached_tokens / tokens_in. daily_rollups gets the same columns so the pre-aggregated
+    // cache stays a faithful rollup of the raw signal.
+    name: "006_llm_usage_cache_tokens",
+    sql: `
+      ALTER TABLE llm_usage ADD COLUMN cached_tokens INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE llm_usage ADD COLUMN cache_creation_tokens INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE daily_rollups ADD COLUMN cached_tokens INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE daily_rollups ADD COLUMN cache_creation_tokens INTEGER NOT NULL DEFAULT 0;
+    `,
+  },
 ];

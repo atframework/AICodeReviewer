@@ -40,14 +40,17 @@ session TTL 字段是 `session_ttl_seconds`（默认 `86400` = 24 小时）。`s
 
 登录后，dashboard 有四个标签：
 
-- **Overview**——总评审次数、成功/失败/跳过次数、发现问题的 run 次数、problem 总数、创建 issue 数、分析代码量、LLM 请求数、输入/输出/总 token、估算成本、平均 duration。时间窗口选择器切换 today / this week / this month / all（均按 UTC）。
-- **Projects**——按 project 聚合（`workspaceId + triggerName + repoRef`）：评审/成功/失败/跳过次数、problem 总数、创建 issue 数、变更文件数、增删行数、LLM 请求数、token、成本、平均 duration。软删除的 project 在宽限期内仍可见，并用 `isActive` 标记。
-- **Providers**——按 provider+model 聚合：请求数、输入/输出 token、成本、重试/fallback/失败次数、平均延迟。
+- **Overview**——总评审次数、成功/失败/跳过次数、发现问题的 run 次数、problem 总数、创建 issue 数、分析代码量、LLM 请求数、输入/输出/总 token、prompt 缓存命中率（含命中/未命中 token 拆分）、估算成本、平均 duration。时间窗口选择器切换 today / this week / this month / all（均按 UTC）。
+- **Projects**——按 project 聚合（`workspaceId + triggerName + repoRef`）：评审/成功/失败/跳过次数、problem 总数、创建 issue 数、变更文件数、增删行数、LLM 请求数、token、缓存命中 token 与命中率、成本、平均 duration。软删除的 project 在宽限期内仍可见，并用 `isActive` 标记。
+- **Providers**——按 provider+model 聚合：请求数、输入/输出 token、缓存命中 token 与命中率、成本、重试/fallback/失败次数、平均延迟。
 - **Runs**——最近运行列表（通过 `?limit=` 最多 100 条）。
 
 用量按完整 review run 聚合，包括首次模型调用、上下文/格式修复调用以及最终直连 LLM 兜底。
 对 Kilo 而言，每个 `step_finish` 模型回合计为一次请求。本地 prompt 大小估算单独保存，只有拿不到
 真实 usage 时才作为参考显示，绝不会混入 provider token 总数。
+
+缓存命中 token 已含在输入总量内：命中率 = `命中 token / 输入 token`，未命中输入 =
+`输入 - 命中 - 缓存写入` token。provider 尚未上报非零输入的 usage 时命中率显示 `—`。
 
 Projects 和 Providers 标签各自调用带时间窗口的 API
 （`GET /api/admin/stats/projects?since=` 和 `.../providers?since=`）。dashboard 以实时聚合为真源。

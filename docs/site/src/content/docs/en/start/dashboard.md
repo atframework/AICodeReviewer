@@ -57,16 +57,18 @@ After logging in, the dashboard has four tabs:
 
 - **Overview** — total reviews, success/failure/skip counts, runs that found
   problems, total problems, issues created, code analyzed, LLM requests,
-  input/output/total tokens, estimated cost, average duration. A time-window
+  input/output/total tokens, prompt cache hit rate with the hit/miss token
+  split, estimated cost, average duration. A time-window
   selector switches between today / this week / this month / all (all in
   UTC).
 - **Projects** — per-project aggregates (`workspaceId + triggerName +
   repoRef`): review/success/failure/skip counts, problem totals, issues
-  created, files changed, lines added/deleted, LLM requests, tokens, cost,
-  average duration. Soft-deleted projects stay visible during their grace
-  period and are flagged `isActive`.
+  created, files changed, lines added/deleted, LLM requests, tokens, cache-hit
+  tokens and hit rate, cost, average duration. Soft-deleted projects stay
+  visible during their grace period and are flagged `isActive`.
 - **Providers** — per-provider+model aggregates: request count, input/output
-  tokens, cost, retry/fallback/failure counts, average latency.
+  tokens, cache-hit tokens and hit rate, cost, retry/fallback/failure counts,
+  average latency.
 - **Runs** — the most recent runs (up to 100 via `?limit=`).
 
 Usage is aggregated across the complete review run, including the initial model
@@ -74,6 +76,11 @@ call, context or format-repair calls, and any final direct-LLM fallback. For
 Kilo, each `step_finish` model turn counts as one request. The locally estimated
 prompt size is kept separate and is shown only when real usage was unavailable;
 it is never mixed into provider token totals.
+
+Cached tokens are part of the input total: the hit rate is
+`cached tokens / input tokens`, and the non-cached input is
+`input - cached - cache-write` tokens. The rate shows `—` until a provider
+reports usage with a non-zero input.
 
 The Projects and Providers tabs each call their own time-windowed API
 (`GET /api/admin/stats/projects?since=` and `.../providers?since=`). The

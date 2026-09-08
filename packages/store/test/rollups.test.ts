@@ -46,7 +46,7 @@ function seed(): { projA: number; projB: number } {
     startedAt: at(DAY1),
     problemCount: 3,
     codeMetrics: { filesChanged: 5, linesAdded: 50, linesDeleted: 20, bytesAnalyzed: 1024 },
-    llmUsages: [{ providerId: "openai", modelId: "gpt-4o", requestCount: 2, tokensIn: 1000, tokensOut: 500, tokensTotal: 1500, costUsd: 0.02 }],
+    llmUsages: [{ providerId: "openai", modelId: "gpt-4o", requestCount: 2, tokensIn: 1000, tokensOut: 500, tokensTotal: 1500, cachedTokens: 600, cacheCreationTokens: 50, costUsd: 0.02 }],
   });
   insertReviewRun(store, {
     id: "run-a2",
@@ -116,6 +116,8 @@ describe("daily rollups", () => {
       tokensIn: 1000,
       tokensOut: 500,
       tokensTotal: 1500,
+      cachedTokens: 600,
+      cacheCreationTokens: 50,
     });
     expect(aDay1!.costUsd).toBeCloseTo(0.02);
 
@@ -221,6 +223,8 @@ describe("daily rollups", () => {
       tokensIn: rows.reduce((a, r) => a + r.tokensIn, 0),
       tokensOut: rows.reduce((a, r) => a + r.tokensOut, 0),
       tokensTotal: rows.reduce((a, r) => a + r.tokensTotal, 0),
+      cachedTokens: rows.reduce((a, r) => a + r.cachedTokens, 0),
+      cacheCreationTokens: rows.reduce((a, r) => a + r.cacheCreationTokens, 0),
     };
 
     const [realtime] = getProjectStats(store).filter((p) => p.projectId === projA);
@@ -239,6 +243,8 @@ describe("daily rollups", () => {
       tokensIn: realtime!.tokensInTotal,
       tokensOut: realtime!.tokensOutTotal,
       tokensTotal: realtime!.tokensTotalTotal,
+      cachedTokens: realtime!.cachedTokensInTotal,
+      cacheCreationTokens: realtime!.cacheCreationTokensTotal,
     });
     expect(sumCost).toBeCloseTo(realtime!.costUsdTotal);
   });

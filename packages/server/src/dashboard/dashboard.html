@@ -122,6 +122,7 @@ tr:hover td{background:rgba(59,130,246,0.05)}
 <th style="text-align:right">Lines (+/-)</th>
 <th style="text-align:right">LLM Req</th>
 <th style="text-align:right">Tokens</th>
+<th style="text-align:right">Cache Hit</th>
 <th style="text-align:right">Cost</th>
 <th style="text-align:right">Avg Dur</th>
 </tr>
@@ -139,7 +140,7 @@ tr:hover td{background:rgba(59,130,246,0.05)}
 </div>
 <div id="provider-loading" style="display:none;color:var(--muted);font-size:0.875rem;margin-bottom:0.5rem">Loading...</div>
 <table>
-<thead><tr><th>Provider</th><th>Model</th><th>Requests</th><th>Tokens In</th><th>Tokens Out</th><th>Total Tokens</th><th>Cost (USD)</th><th>Retries/Fails</th><th>Avg Latency</th></tr></thead>
+<thead><tr><th>Provider</th><th>Model</th><th>Requests</th><th>Tokens In</th><th>Tokens Out</th><th>Total Tokens</th><th>Cache Hit</th><th>Cost (USD)</th><th>Retries/Fails</th><th>Avg Latency</th></tr></thead>
 <tbody id="provider-table"></tbody>
 </table>
 </div>
@@ -189,6 +190,8 @@ function formatNumber(n){return n==null?"-":n.toLocaleString()}
 function formatCost(n){return n==null?"-":"$"+n.toFixed(4)}
 function formatDuration(ms){if(ms==null)return"-";if(ms<1000)return ms+"ms";return(ms/1000).toFixed(1)+"s"}
 function formatTime(d){if(!d)return"-";return new Date(d).toLocaleString()}
+function cacheHitRate(cached,tokensIn){return tokensIn>0?(cached/tokensIn*100).toFixed(1)+"%":"—"}
+function formatCacheHit(cached,tokensIn){return tokensIn>0?formatNumber(cached)+" ("+cacheHitRate(cached,tokensIn)+")":"—"}
 function statusBadge(s){var m={succeeded:"success",published:"success",failed:"failure",skipped:"skip",queued:"running"};return '<span class="badge badge-'+(m[s]||"skip")+'">'+esc(s)+"</span>"}
 
 async function apiFetch(path,opts){
@@ -301,7 +304,7 @@ async function loadProjectStats(w){
     renderProjectTable();
   }catch(ex){
     var tbody=document.getElementById("project-table");
-    if(tbody)tbody.innerHTML='<tr><td colspan="13" style="text-align:center;color:var(--muted)">Error loading data</td></tr>';
+    if(tbody)tbody.innerHTML='<tr><td colspan="14" style="text-align:center;color:var(--muted)">Error loading data</td></tr>';
   }finally{
     if(el)el.style.display="none";
   }
@@ -318,7 +321,7 @@ async function loadProviderStats(w){
     renderProviderTable();
   }catch(ex){
     var tbody=document.getElementById("provider-table");
-    if(tbody)tbody.innerHTML='<tr><td colspan="9" style="text-align:center;color:var(--muted)">Error loading data</td></tr>';
+    if(tbody)tbody.innerHTML='<tr><td colspan="10" style="text-align:center;color:var(--muted)">Error loading data</td></tr>';
   }finally{
     if(el)el.style.display="none";
   }
@@ -359,6 +362,9 @@ function renderOverviewStats(){
       :((s.promptTokenEstimateTotal||0)>0
         ?("~"+formatNumber(s.promptTokenEstimateTotal)+" est. (agent usage unavailable)")
         :"In: 0 / Out: 0")},
+    {label:"Cache Hit Rate",value:cacheHitRate(s.cachedTokensInTotal||0,s.tokensInTotal||0),sub:(s.tokensInTotal||0)>0
+      ?("Hit: "+formatNumber(s.cachedTokensInTotal||0)+" / Miss: "+formatNumber(Math.max(0,(s.tokensInTotal||0)-(s.cachedTokensInTotal||0)-(s.cacheCreationTokensTotal||0))))
+      :null},
     {label:"Est. Cost",value:formatCost(s.costUsdTotal)}
   ];
   el.innerHTML=cards.map(function(c){
@@ -372,7 +378,7 @@ function renderProviderTable(data){
   var el=document.getElementById("provider-table");
   var src=data||providerStatsData;
   if(!src||src.length===0){
-    el.innerHTML='<tr><td colspan="9" style="text-align:center;color:var(--muted)">No data</td></tr>';
+    el.innerHTML='<tr><td colspan="10" style="text-align:center;color:var(--muted)">No data</td></tr>';
     return;
   }
   el.innerHTML=src.map(function(p){
@@ -383,9 +389,10 @@ function renderProviderTable(data){
     var tokIn=usageMissing?"—":formatNumber(p.tokensIn);
     var tokOut=usageMissing?"—":formatNumber(p.tokensOut);
     var tokTotal=usageMissing?"—":formatNumber(p.tokensTotal);
+    var cacheHit=usageMissing?"—":formatCacheHit(p.cachedTokensIn||0,p.tokensIn||0);
     return "<tr><td>"+esc(p.providerId)+"</td><td>"+esc(p.modelId)+"</td><td>"+
       formatNumber(p.requestCount)+"</td><td>"+tokIn+"</td><td>"+
-      tokOut+"</td><td>"+tokTotal+"</td><td>"+
+      tokOut+"</td><td>"+tokTotal+"</td><td>"+cacheHit+"</td><td>"+
       formatCost(p.costUsd)+"</td><td>"+formatNumber(p.retryCount+p.fallbackCount+p.failureCount)+"</td><td>"+
       formatDuration(p.avgLatencyMs)+"</td></tr>";
   }).join("");
@@ -415,7 +422,7 @@ function renderProjectTable(data){
   var el=document.getElementById("project-table");
   var src=data||projectStatsData;
   if(!src||src.length===0){
-    el.innerHTML='<tr><td colspan="13" style="text-align:center;color:var(--muted)">No project data</td></tr>';
+    el.innerHTML='<tr><td colspan="14" style="text-align:center;color:var(--muted)">No project data</td></tr>';
     return;
   }
   el.innerHTML=src.map(function(p){
@@ -433,6 +440,7 @@ function renderProjectTable(data){
       '<td style="text-align:right">+'+formatNumber(p.linesAddedTotal)+" / -"+formatNumber(p.linesDeletedTotal)+"</td>"+
       '<td style="text-align:right">'+formatNumber(p.llmRequestTotal)+"</td>"+
       '<td style="text-align:right">'+formatNumber(p.tokensTotalTotal)+"</td>"+
+      '<td style="text-align:right">'+formatCacheHit(p.cachedTokensInTotal||0,p.tokensInTotal||0)+"</td>"+
       '<td style="text-align:right">'+formatCost(p.costUsdTotal)+"</td>"+
       '<td style="text-align:right">'+formatDuration(p.avgDurationMs)+"</td></tr>";
   }).join("");

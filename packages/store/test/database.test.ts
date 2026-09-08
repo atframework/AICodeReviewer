@@ -96,6 +96,8 @@ describe("stats insert and query", () => {
         tokensIn: 1000,
         tokensOut: 500,
         tokensTotal: 1500,
+        cachedTokens: 400,
+        cacheCreationTokens: 100,
         costUsd: 0.05,
         latencyMs: 3000,
       }],
@@ -113,6 +115,8 @@ describe("stats insert and query", () => {
     expect(stats.tokensInTotal).toBe(1000);
     expect(stats.tokensOutTotal).toBe(500);
     expect(stats.tokensTotalTotal).toBe(1500);
+    expect(stats.cachedTokensInTotal).toBe(400);
+    expect(stats.cacheCreationTokensTotal).toBe(100);
     expect(stats.costUsdTotal).toBeCloseTo(0.05);
     expect(stats.avgDurationMs).toBe(5000);
     // The local prompt estimate is stored separately from real llm_usage tokens so the
@@ -240,6 +244,7 @@ describe("stats insert and query", () => {
         tokensIn: 300,
         tokensOut: 150,
         tokensTotal: 450,
+        cachedTokens: 120,
         costUsd: 0.03,
       }],
     });
@@ -265,6 +270,8 @@ describe("stats insert and query", () => {
       tokensInTotal: 300,
       tokensOutTotal: 150,
       tokensTotalTotal: 450,
+      cachedTokensInTotal: 120,
+      cacheCreationTokensTotal: 0,
     });
     expect(project!.costUsdTotal).toBeCloseTo(0.03);
   });
@@ -280,7 +287,7 @@ describe("stats insert and query", () => {
       status: "succeeded",
       startedAt: new Date(),
       llmUsages: [
-        { providerId: "openai", modelId: "gpt-4o", tokensIn: 100, tokensOut: 50, tokensTotal: 150, costUsd: 0.01 },
+        { providerId: "openai", modelId: "gpt-4o", tokensIn: 100, tokensOut: 50, tokensTotal: 150, cachedTokens: 40, cacheCreationTokens: 10, costUsd: 0.01 },
         { providerId: "anthropic", modelId: "claude-3", tokensIn: 200, tokensOut: 100, tokensTotal: 300 },
       ],
     });
@@ -290,6 +297,11 @@ describe("stats insert and query", () => {
     const openai = providers.find((p) => p.providerId === "openai");
     expect(openai).toBeDefined();
     expect(openai!.tokensTotal).toBe(150);
+    expect(openai!.cachedTokensIn).toBe(40);
+    expect(openai!.cacheCreationTokens).toBe(10);
+    const anthropic = providers.find((p) => p.providerId === "anthropic");
+    expect(anthropic!.cachedTokensIn).toBe(0);
+    expect(anthropic!.cacheCreationTokens).toBe(0);
     expect(openai!.costUsd).toBeCloseTo(0.01);
   });
 

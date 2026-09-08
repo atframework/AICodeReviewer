@@ -62,6 +62,10 @@ export interface LlmUsageInsert {
   tokensIn?: number;
   tokensOut?: number;
   tokensTotal?: number;
+  /** Cache-hit input tokens; already included in `tokensIn`. */
+  cachedTokens?: number;
+  /** Cache-write input tokens (Anthropic cache creation, kilo cache.write); already included in `tokensIn`. */
+  cacheCreationTokens?: number;
   costUsd?: number;
   retryCount?: number;
   fallbackCount?: number;
@@ -142,6 +146,8 @@ export function insertReviewRun(store: StoreDb, run: ReviewRunInsert): void {
         tokensIn: usage.tokensIn ?? 0,
         tokensOut: usage.tokensOut ?? 0,
         tokensTotal: usage.tokensTotal ?? 0,
+        cachedTokens: usage.cachedTokens ?? 0,
+        cacheCreationTokens: usage.cacheCreationTokens ?? 0,
         ...(usage.costUsd != null ? { costUsd: usage.costUsd } : {}),
         retryCount: usage.retryCount ?? 0,
         fallbackCount: usage.fallbackCount ?? 0,
@@ -274,6 +280,10 @@ export interface TimeWindowStats {
   tokensInTotal: number;
   tokensOutTotal: number;
   tokensTotalTotal: number;
+  /** Sum of cache-hit input tokens; already included in `tokensInTotal`. */
+  cachedTokensInTotal: number;
+  /** Sum of cache-write input tokens; already included in `tokensInTotal`. */
+  cacheCreationTokensTotal: number;
   costUsdTotal: number;
   avgDurationMs: number | null;
   /** Sum of per-run local prompt token estimates; the fallback shown when real usage is absent. */
@@ -296,6 +306,10 @@ export interface ProviderModelStats {
   tokensIn: number;
   tokensOut: number;
   tokensTotal: number;
+  /** Cache-hit input tokens; already included in `tokensIn`. */
+  cachedTokensIn: number;
+  /** Cache-write input tokens; already included in `tokensIn`. */
+  cacheCreationTokens: number;
   costUsd: number | null;
   retryCount: number;
   fallbackCount: number;
@@ -350,6 +364,8 @@ export function getOverviewStats(
       tokensInTotal: sum(llmUsage.tokensIn),
       tokensOutTotal: sum(llmUsage.tokensOut),
       tokensTotalTotal: sum(llmUsage.tokensTotal),
+      cachedTokensInTotal: sum(llmUsage.cachedTokens),
+      cacheCreationTokensTotal: sum(llmUsage.cacheCreationTokens),
       costUsdTotal: sum(llmUsage.costUsd),
     })
     .from(llmUsage)
@@ -373,6 +389,8 @@ export function getOverviewStats(
     tokensInTotal: Number(llmBase?.tokensInTotal ?? 0),
     tokensOutTotal: Number(llmBase?.tokensOutTotal ?? 0),
     tokensTotalTotal: Number(llmBase?.tokensTotalTotal ?? 0),
+    cachedTokensInTotal: Number(llmBase?.cachedTokensInTotal ?? 0),
+    cacheCreationTokensTotal: Number(llmBase?.cacheCreationTokensTotal ?? 0),
     costUsdTotal: Number(llmBase?.costUsdTotal ?? 0),
     avgDurationMs: base?.avgDurationMs != null ? Math.round(Number(base.avgDurationMs)) : null,
     promptTokenEstimateTotal: Number(base?.promptTokenEstimateTotal ?? 0),
@@ -444,6 +462,8 @@ export function getProjectStats(
       tokensInTotal: sum(llmUsage.tokensIn),
       tokensOutTotal: sum(llmUsage.tokensOut),
       tokensTotalTotal: sum(llmUsage.tokensTotal),
+      cachedTokensInTotal: sum(llmUsage.cachedTokens),
+      cacheCreationTokensTotal: sum(llmUsage.cacheCreationTokens),
       costUsdTotal: sum(llmUsage.costUsd),
     })
     .from(llmUsage)
@@ -479,6 +499,8 @@ export function getProjectStats(
     tokensInTotal: Number(llmByProject.get(row.projectId)?.tokensInTotal ?? 0),
     tokensOutTotal: Number(llmByProject.get(row.projectId)?.tokensOutTotal ?? 0),
     tokensTotalTotal: Number(llmByProject.get(row.projectId)?.tokensTotalTotal ?? 0),
+    cachedTokensInTotal: Number(llmByProject.get(row.projectId)?.cachedTokensInTotal ?? 0),
+    cacheCreationTokensTotal: Number(llmByProject.get(row.projectId)?.cacheCreationTokensTotal ?? 0),
     costUsdTotal: Number(llmByProject.get(row.projectId)?.costUsdTotal ?? 0),
     avgDurationMs: row.avgDurationMs != null ? Math.round(Number(row.avgDurationMs)) : null,
     promptTokenEstimateTotal: Number(row.promptTokenEstimateTotal ?? 0),
@@ -499,6 +521,8 @@ export function getProviderModelStats(
       tokensIn: sum(llmUsage.tokensIn),
       tokensOut: sum(llmUsage.tokensOut),
       tokensTotal: sum(llmUsage.tokensTotal),
+      cachedTokensIn: sum(llmUsage.cachedTokens),
+      cacheCreationTokens: sum(llmUsage.cacheCreationTokens),
       costUsd: sum(llmUsage.costUsd),
       retryCount: sum(llmUsage.retryCount),
       fallbackCount: sum(llmUsage.fallbackCount),
@@ -519,6 +543,8 @@ export function getProviderModelStats(
     tokensIn: Number(row.tokensIn),
     tokensOut: Number(row.tokensOut),
     tokensTotal: Number(row.tokensTotal),
+    cachedTokensIn: Number(row.cachedTokensIn),
+    cacheCreationTokens: Number(row.cacheCreationTokens),
     costUsd: row.costUsd != null ? Number(row.costUsd) : null,
     retryCount: Number(row.retryCount),
     fallbackCount: Number(row.fallbackCount),
@@ -628,6 +654,8 @@ export interface DailyRollupRow {
   tokensIn: number;
   tokensOut: number;
   tokensTotal: number;
+  cachedTokens: number;
+  cacheCreationTokens: number;
   costUsd: number | null;
 }
 
@@ -697,6 +725,8 @@ export function recomputeDailyRollup(
       tokensIn: sum(llmUsage.tokensIn),
       tokensOut: sum(llmUsage.tokensOut),
       tokensTotal: sum(llmUsage.tokensTotal),
+      cachedTokens: sum(llmUsage.cachedTokens),
+      cacheCreationTokens: sum(llmUsage.cacheCreationTokens),
       costUsd: sum(llmUsage.costUsd),
     })
     .from(llmUsage)
@@ -726,6 +756,8 @@ export function recomputeDailyRollup(
         tokensIn: Number(llmBase?.tokensIn ?? 0),
         tokensOut: Number(llmBase?.tokensOut ?? 0),
         tokensTotal: Number(llmBase?.tokensTotal ?? 0),
+        cachedTokens: Number(llmBase?.cachedTokens ?? 0),
+        cacheCreationTokens: Number(llmBase?.cacheCreationTokens ?? 0),
         costUsd: llmBase?.costUsd != null ? Number(llmBase.costUsd) : null,
       })
       .run();
@@ -766,6 +798,8 @@ export function getDailyRollups(
     tokensIn: row.tokensIn,
     tokensOut: row.tokensOut,
     tokensTotal: row.tokensTotal,
+    cachedTokens: row.cachedTokens,
+    cacheCreationTokens: row.cacheCreationTokens,
     costUsd: row.costUsd,
   }));
 }
