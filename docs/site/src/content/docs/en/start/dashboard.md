@@ -69,7 +69,10 @@ After logging in, the dashboard has four tabs:
 - **Providers** — per-provider+model aggregates: request count, input/output
   tokens, cache-hit tokens and hit rate, cost, retry/fallback/failure counts,
   average latency.
-- **Runs** — the most recent runs (up to 100 via `?limit=`).
+- **Runs** — the most recent 100 runs, paged 20 at a time with Prev/Next. Each row
+  shows real token usage when captured: total tokens with the cache-hit and
+  non-cached input split and the hit rate; `—` when the run reported no
+  parseable usage.
 
 Usage is aggregated across the complete review run, including the initial model
 call, context or format-repair calls, and any final direct-LLM fallback. For
@@ -83,8 +86,10 @@ Cached tokens are part of the input total: the hit rate is
 reports usage with a non-zero input.
 
 The Projects and Providers tabs each call their own time-windowed API
-(`GET /api/admin/stats/projects?since=` and `.../providers?since=`). The
-dashboard queries real-time aggregation as the source of truth.
+(`GET /api/admin/stats/projects?since=` and `.../providers?since=`). The Runs
+tab fetches the latest 100 runs from `GET /api/admin/runs?limit=100` and pages
+them in the browser. The dashboard queries real-time aggregation as the source
+of truth.
 
 ## The admin API
 
@@ -97,7 +102,7 @@ All endpoints except `/login` require `Authorization: Bearer <token>`.
 | `GET /api/admin/stats` | Overview + today/this-week/this-month windows, projects, providers, recent runs |
 | `GET /api/admin/stats/projects?since=` | Per-project aggregates |
 | `GET /api/admin/stats/providers?since=` | Per-provider+model aggregates |
-| `GET /api/admin/runs?limit=` | Recent run list (1..100) |
+| `GET /api/admin/runs?limit=` | Recent run list (1..100), each with token usage incl. the cache hit split |
 
 ## `/metrics`
 

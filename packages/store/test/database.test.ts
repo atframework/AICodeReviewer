@@ -365,12 +365,26 @@ describe("stats insert and query", () => {
         status: i === 4 ? "failed" : "succeeded",
         startedAt: new Date(Date.now() - i * 1000),
         problemCount: i,
+        ...(i === 0 ? {
+          llmUsages: [
+            { providerId: "openai", modelId: "gpt-4o", tokensIn: 1000, tokensOut: 200, tokensTotal: 1200, cachedTokens: 600 },
+            { providerId: "openai", modelId: "gpt-4o", tokensIn: 500, tokensOut: 100, tokensTotal: 600, cachedTokens: 300, cacheCreationTokens: 100 },
+          ],
+        } : {}),
       });
     }
 
     const runs = getRecentRuns(store, 3);
     expect(runs.length).toBe(3);
     expect(runs[0]!.id).toBe("run-0");
+    expect(runs[0]!.llmUsage).toEqual({
+      tokensIn: 1500,
+      tokensOut: 300,
+      tokensTotal: 1800,
+      cachedTokens: 900,
+      cacheCreationTokens: 100,
+    });
+    expect(runs[1]!.llmUsage).toBeUndefined();
   });
 
   it("updates run status", () => {

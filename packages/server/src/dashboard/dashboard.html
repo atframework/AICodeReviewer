@@ -146,8 +146,14 @@ tr:hover td{background:rgba(59,130,246,0.05)}
 </div>
 
 <div id="tab-runs" class="tab-content">
+<div id="runs-loading" style="display:none;color:var(--muted);font-size:0.875rem;margin-bottom:0.5rem">Loading...</div>
+<div style="margin-bottom:1rem;display:flex;gap:0.5rem;align-items:center">
+<button class="btn btn-sm btn-ghost" id="runs-prev" onclick="prevRunsPage()">Prev</button>
+<span id="runs-page-info" style="font-size:0.8125rem;color:var(--muted)"></span>
+<button class="btn btn-sm btn-ghost" id="runs-next" onclick="nextRunsPage()">Next</button>
+</div>
 <table>
-<thead><tr><th>ID</th><th>Time</th><th>Workspace</th><th>Trigger</th><th>Provider</th><th>Model</th><th>Status</th><th>Problems</th><th>Duration</th></tr></thead>
+<thead><tr><th>ID</th><th>Time</th><th>Workspace</th><th>Trigger</th><th>Provider</th><th>Model</th><th>Status</th><th>Problems</th><th>Tokens</th><th>Duration</th></tr></thead>
 <tbody id="runs-table"></tbody>
 </table>
 </div>
@@ -165,6 +171,9 @@ var currentProjectWindow="today";
 var currentProviderWindow="today";
 var projectStatsData=null;
 var providerStatsData=null;
+var runsData=null;
+var runsPage=1;
+var RUNS_PAGE_SIZE=20;
 
 function $(s){return document.querySelector(s)}
 function $$(s){return document.querySelectorAll(s)}
@@ -192,6 +201,14 @@ function formatDuration(ms){if(ms==null)return"-";if(ms<1000)return ms+"ms";retu
 function formatTime(d){if(!d)return"-";return new Date(d).toLocaleString()}
 function cacheHitRate(cached,tokensIn){return tokensIn>0?(cached/tokensIn*100).toFixed(1)+"%":"—"}
 function formatCacheHit(cached,tokensIn){return tokensIn>0?formatNumber(cached)+" ("+cacheHitRate(cached,tokensIn)+")":"—"}
+function runTokensCell(r){
+  var u=r.llmUsage;
+  if(!u||(!u.tokensIn&&!u.tokensOut&&!u.tokensTotal))return"—";
+  var miss=Math.max(0,(u.tokensIn||0)-(u.cachedTokens||0)-(u.cacheCreationTokens||0));
+  return '<div>'+formatNumber(u.tokensTotal)+'</div><div style="font-size:0.75rem;color:var(--muted)">hit '+
+    formatNumber(u.cachedTokens||0)+" · miss "+formatNumber(miss)+
+    " ("+cacheHitRate(u.cachedTokens||0,u.tokensIn||0)+")</div>";
+}
 function statusBadge(s){var m={succeeded:"success",published:"success",failed:"failure",skipped:"skip",queued:"running"};return '<span class="badge badge-'+(m[s]||"skip")+'">'+esc(s)+"</span>"}
 
 async function apiFetch(path,opts){
@@ -266,6 +283,7 @@ function switchTab(t){
   document.querySelectorAll(".tab-content").forEach(function(el){el.classList.toggle("active",el.id==="tab-"+t)});
   if(t==="projects"&&!projectStatsData)loadProjectStats(currentProjectWindow);
   if(t==="providers"&&!providerStatsData)loadProviderStats(currentProviderWindow);
+  if(t==="runs"&&!runsData)loadRuns();
 }
 
 function getSinceForWindow(w){
@@ -327,15 +345,60 @@ async function loadProviderStats(w){
   }
 }
 
+async function loadRuns(){
+  var el=document.getElementById("runs-loading");
+  if(el)el.style.display="block";
+  try{
+    var r=await apiFetch("api/admin/runs?limit=100");
+    runsData=await r.json();
+    renderRunsPage();
+  }catch(ex){
+    var tbody=document.getElementById("runs-table");
+    if(tbody)tbody.innerHTML='<tr><td colspan="10" style="text-align:center;color:var(--muted)">Error loading data</td></tr>';
+  }finally{
+    if(el)el.style.display="none";
+  }
+}
+
+function runsPageCount(){
+  return Math.max(1,Math.ceil(((runsData||[]).length)/RUNS_PAGE_SIZE));
+}
+
+function renderRunsPage(){
+  var total=(runsData||[]).length;
+  var totalPages=runsPageCount();
+  if(runsPage>totalPages)runsPage=totalPages;
+  var start=(runsPage-1)*RUNS_PAGE_SIZE;
+  renderRunsTable((runsData||[]).slice(start,start+RUNS_PAGE_SIZE));
+  var info=document.getElementById("runs-page-info");
+  if(info)info.textContent=total+" runs · page "+runsPage+" / "+totalPages;
+  var prev=document.getElementById("runs-prev");
+  var next=document.getElementById("runs-next");
+  if(prev)prev.disabled=runsPage<=1;
+  if(next)next.disabled=runsPage>=totalPages;
+}
+
+function prevRunsPage(){
+  if(runsPage>1){runsPage--;renderRunsPage()}
+}
+
+function nextRunsPage(){
+  if(runsPage<runsPageCount()){runsPage++;renderRunsPage()}
+}
+
 function renderDashboard(){
   if(!currentData)return;
   renderOverviewStats();
-  renderRunsTable(currentData.recentRuns);
+  if(runsData)renderRunsPage();
+  else renderRunsTable(currentData.recentRuns);
   if(document.getElementById("tab-projects").classList.contains("active")){
     loadProjectStats(currentProjectWindow);
   }
   if(document.getElementById("tab-providers").classList.contains("active")){
     loadProviderStats(currentProviderWindow);
+  }
+  if(document.getElementById("tab-runs").classList.contains("active")){
+    loadRuns();
   }
 }
 
@@ -401,7 +464,7 @@ function renderProviderTable(data){
 function renderRunsTable(runs,target,compact){
   var el=target||document.getElementById("runs-table");
   if(!runs||runs.length===0){
-    el.innerHTML='<tr><td colspan="'+(compact?6:9)+'" style="text-align:center;color:var(--muted)">No runs</td></tr>';
+    el.innerHTML='<tr><td colspan="'+(compact?6:10)+'" style="text-align:center;color:var(--muted)">No runs</td></tr>';
     return;
   }
   el.innerHTML=runs.map(function(r){
@@ -414,7 +477,7 @@ function renderRunsTable(runs,target,compact){
       esc(r.workspaceId)+"</td><td>"+esc(r.triggerName||"-")+"</td><td>"+
       esc(r.provider||"-")+"</td><td>"+esc(r.providerModel||"-")+"</td><td>"+
       statusBadge(r.status)+"</td><td>"+formatNumber(r.problemCount)+"</td><td>"+
-      formatDuration(r.durationMs)+"</td></tr>";
+      runTokensCell(r)+"</td><td>"+formatDuration(r.durationMs)+"</td></tr>";
   }).join("");
 }
 

@@ -59,6 +59,18 @@
 - 去重只影响 async 调度层，不影响 review orchestration 本身的业务逻辑；sync 模式不受此机制影响。
 - 代码真源：`packages/server/src/review-deduplicator.ts`；集成点在 `packages/server/src/index.ts` 的 `scheduleTriggerProcessing` 中。
 
+2026-09-08 源码核验：上述自动触发路径当前由内存 timer 直接启动，未经过
+`ReviewQueue`；bootstrap 仅在显式传入 `jobHandler` 时构造 worker，CLI serve 未传入。
+因此已有 SQLite/Redis queue adapter 不代表自动 webhook 审查已持久入队。
+默认延迟、多组按星期配置的有效时段、来源排除及连续提交分组仍为
+[待实施设计](../superpowers/specs/2026-09-08-auto-commit-scheduling-design.md)，
+其中提交来源分组键用于区分提交方及任务上下文，P4 必须至少匹配 User+Client；
+来源排除支持 glob/regex，区别于现有文件过滤。生产接线、来源快照、排除分隔点、
+批次完整性和恢复要求见该文档，不属于当前运行时合同。
+跨通知合并按 stream 汇总到期成员后才封存 batch；通知只保存 receipt/成员关联，不能
+每条通知单独触发分析。设计中的 A1–A3、A4–A5、B1 三条通知应得到 A1–A5、B1 两批，
+重叠通知不得把已归属批次的成员重新入队；没有通知覆盖的提交不主动补扫。
+
 ### 3.2 VCS Adapter 与 scoped fetch
 
 - VCS adapter 维持统一三段式合同：
@@ -744,7 +756,8 @@ AICR 采用**两层上下文管理**，两者互补：
     project 列表、provider+model 统计、最近 20 条 run。
   - `GET /stats/projects`：按 project 聚合统计，支持 `?since=` ISO 日期筛选。
   - `GET /stats/providers`：按 provider+model 聚合统计，支持 `?since=` 筛选。
-  - `GET /runs`：最近 run 列表，支持 `?limit=` (1..100)。
+  - `GET /runs`：最近 run 列表，支持 `?limit=` (1..100)。每条 run 附带跨 `llm_usage`
+    行聚合的 `llmUsage`（输入/输出/总量与缓存命中/写入拆分）；未记录 usage 时省略该字段。
   所有端点（`/login` 除外）需 `Authorization: Bearer <token>` 头。
 - Dashboard SPA 嵌入于 `/dashboard` 和 `/` 路径，由 `packages/server/src/dashboard/dashboard.html`
   提供。深色主题、登录表单、选项卡视图（overview / projects / providers / runs）。
@@ -753,7 +766,8 @@ AICR 采用**两层上下文管理**，两者互补：
   应重定向到带前缀的 dashboard 入口。
   Overview 标签有时间窗口选择器（today / this week / this month / all）；
   Projects 与 Providers 标签各自独立支持时间维度切换，按需调用
-  `GET /stats/projects?since=` 与 `GET /stats/providers?since=`。
+  `GET /stats/projects?since=` 与 `GET /stats/providers?since=`；Runs 标签首次进入时
+  调用 `GET /runs?limit=100` 拉取最近 100 条并前端分页（每页 20 条，Prev/Next）。
 - 首屏统计包含：总 review 次数、成功/失败/跳过次数、发现问题的 run 次数、
   problem 总数、创建 issue 数、分析代码量、LLM 请求数、输入/输出/总 token、
   prompt 缓存命中率（命中/未命中 token 拆分）、估算成本、平均 duration。

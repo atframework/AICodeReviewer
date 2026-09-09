@@ -22,8 +22,10 @@
 - M0–M13.1 全部里程碑已交付（M6/M8/M9/M10 留有个别外部验收项，见 §8.3）。
 - M14 多源上下文聚合已交付：workspace 级 `context_repositories` 声明式配置 + 每次 run
   全新物化 + 容器沙箱只读挂载（`docs/ai/architecture.md` §3.2.2、`docs/ai/milestones/M14.md`）。
-- 当前没有其他新的运行时代码本地执行包；剩余工作全部依赖外部系统或外部事件，
-  集中列在 §8.3，避免散落在已完成里程碑描述中。
+- 自动 commit 调度优化处于设计阶段，尚未实现：默认延迟 2 分钟、全局/workspace
+  多组按星期配置的执行时段、按提交来源分组键合并连续提交（P4 至少 User+Client）、
+  跨通知合并/成员去重、来源排除规则（glob/regex）。设计、执行计划与测试入口见 §8.2。
+- 既有里程碑剩余的外部系统验收集中列在 §8.3。
 
 ### 1.3 文档地图
 
@@ -168,7 +170,7 @@
   prompt 估算独立存放、不混入 `llm_usage`；细节见 `docs/ai/architecture.md` §3.11。
 - `llm_usage` 拆分记录 prompt 缓存命中/写入 token（`cached_tokens` /
   `cache_creation_tokens`，迁移 `006_llm_usage_cache_tokens`），dashboard 的
-  Overview / Projects / Providers 显式展示命中率（`cached_tokens / tokens_in`）。
+  Overview / Projects / Providers / Recent Runs 显式展示命中率（`cached_tokens / tokens_in`）。
 
 ### 3.12 Reflection 与 memory
 
@@ -257,14 +259,25 @@
 
 ### 8.2 当前执行包
 
-无活跃本地执行包。M11-P1–P6、M12-P1–P5、M13-P1–P5 全部交付并归档：
+自动 commit 调度优化：**文档设计阶段，尚未实现**。当前自动 webhook 审查仍通过内存
+timer 启动，实施需包含生产队列接线，不能只增加 queue 字段。
+
+- [设计方案](docs/superpowers/specs/2026-09-08-auto-commit-scheduling-design.md)：
+  配置继承、延迟/多组周计划、跨通知来源分组/排除/成员去重、memory/SQLite/Redis、批次 diff 与恢复合同。
+- [实施计划](docs/superpowers/plans/2026-09-08-auto-commit-scheduling-plan.md)：
+  P0–P6 依赖、三通知两批次的强制验收、变更落点、文档/AI 资产/example 同步和迁移步骤。
+- [测试矩阵](docs/superpowers/plans/2026-09-08-auto-commit-scheduling-tests.md)：
+  时间边界、跨 VCS 归因、后端一致性、崩溃恢复、端到端及性能验收。
+
+本轮只编写文档；新配置暂不进入可运行示例或已发布功能说明。
+M11-P1–P6、M12-P1–P5、M13-P1–P5 已交付并归档：
 
 - M11 执行与验收记录：`docs/ai/documentation-site-plan.md`。
 - M12 交付与生产验收证据：`docs/ai/milestones/M12.md`；稳定合同
   `docs/ai/architecture.md` §3.2.1。
 - M13 调研结论与交付面：`docs/ai/milestones/M13.md`。
 
-后续工作只来自 §8.3 Backlog 的外部条件触发，或新方向的立项。
+上述新执行包之外的后续工作见 §8.3 Backlog。
 
 ### 8.3 Backlog（依赖外部系统或延后扩展）
 

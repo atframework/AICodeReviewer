@@ -43,7 +43,7 @@ session TTL 字段是 `session_ttl_seconds`（默认 `86400` = 24 小时）。`s
 - **Overview**——总评审次数、成功/失败/跳过次数、发现问题的 run 次数、problem 总数、创建 issue 数、分析代码量、LLM 请求数、输入/输出/总 token、prompt 缓存命中率（含命中/未命中 token 拆分）、估算成本、平均 duration。时间窗口选择器切换 today / this week / this month / all（均按 UTC）。
 - **Projects**——按 project 聚合（`workspaceId + triggerName + repoRef`）：评审/成功/失败/跳过次数、problem 总数、创建 issue 数、变更文件数、增删行数、LLM 请求数、token、缓存命中 token 与命中率、成本、平均 duration。软删除的 project 在宽限期内仍可见，并用 `isActive` 标记。
 - **Providers**——按 provider+model 聚合：请求数、输入/输出 token、缓存命中 token 与命中率、成本、重试/fallback/失败次数、平均延迟。
-- **Runs**——最近运行列表（通过 `?limit=` 最多 100 条）。
+- **Runs**——最近 100 条运行记录，每页 20 条，用 Prev/Next 翻页。每行展示真实 token 用量：总 token、命中/未命中输入拆分与命中率；run 未上报可解析 usage 时显示 `—`。
 
 用量按完整 review run 聚合，包括首次模型调用、上下文/格式修复调用以及最终直连 LLM 兜底。
 对 Kilo 而言，每个 `step_finish` 模型回合计为一次请求。本地 prompt 大小估算单独保存，只有拿不到
@@ -53,7 +53,8 @@ session TTL 字段是 `session_ttl_seconds`（默认 `86400` = 24 小时）。`s
 `输入 - 命中 - 缓存写入` token。provider 尚未上报非零输入的 usage 时命中率显示 `—`。
 
 Projects 和 Providers 标签各自调用带时间窗口的 API
-（`GET /api/admin/stats/projects?since=` 和 `.../providers?since=`）。dashboard 以实时聚合为真源。
+（`GET /api/admin/stats/projects?since=` 和 `.../providers?since=`）。Runs 标签通过
+`GET /api/admin/runs?limit=100` 拉取最近 100 条并在浏览器内分页。dashboard 以实时聚合为真源。
 
 ## 管理 API
 
@@ -66,7 +67,7 @@ Projects 和 Providers 标签各自调用带时间窗口的 API
 | `GET /api/admin/stats` | overview + today/this-week/this-month 窗口、projects、providers、最近 run |
 | `GET /api/admin/stats/projects?since=` | 按 project 聚合 |
 | `GET /api/admin/stats/providers?since=` | 按 provider+model 聚合 |
-| `GET /api/admin/runs?limit=` | 最近 run 列表（1..100） |
+| `GET /api/admin/runs?limit=` | 最近 run 列表（1..100），含 token 用量与缓存命中拆分 |
 
 ## `/metrics`
 

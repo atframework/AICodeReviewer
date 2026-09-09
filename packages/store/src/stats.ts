@@ -1,4 +1,4 @@
-import { and, desc, eq, gte, lt, lte, sql, sum, count, avg } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, lt, lte, sql, sum, count, avg } from "drizzle-orm";
 
 import type { StoreDb } from "./database.js";
 import {
@@ -553,10 +553,17 @@ export function getProviderModelStats(
   }));
 }
 
-export function getRecentRuns(
-  store: StoreDb,
-  limit: number,
-): Array<{
+export interface RecentRunTokenUsage {
+  tokensIn: number;
+  tokensOut: number;
+  tokensTotal: number;
+  /** Cache-hit input tokens; already included in `tokensIn`. */
+  cachedTokens: number;
+  /** Cache-write input tokens; already included in `tokensIn`. */
+  cacheCreationTokens: number;
+}
+
+export interface RecentRunStats {
   id: string;
   workspaceId: string;
   triggerName: string | null;
@@ -567,8 +574,15 @@ export function getRecentRuns(
   durationMs: number | null;
   startedAt: Date | null;
   targetKind: string | null;
-}> {
-  return store.db
+  /** Real LLM usage summed across the run's llm_usage rows; absent when none were recorded. */
+  llmUsage?: RecentRunTokenUsage;
+}
+
+export function getRecentRuns(
+  store: StoreDb,
+  limit: number,
+): RecentRunStats[] {
+  const runs = store.db
     .select({
       id: reviewRuns.id,
       workspaceId: reviewRuns.workspaceId,
@@ -586,6 +600,43 @@ export function getRecentRuns(
     .orderBy(desc(reviewRuns.startedAt))
     .limit(limit)
     .all();
+
+  if (runs.length === 0) {
+    return runs;
+  }
+
+  const usageRows = store.db
+    .select({
+      runId: llmUsage.runId,
+      tokensIn: sum(llmUsage.tokensIn),
+      tokensOut: sum(llmUsage.tokensOut),
+      tokensTotal: sum(llmUsage.tokensTotal),
+      cachedTokens: sum(llmUsage.cachedTokens),
+      cacheCreationTokens: sum(llmUsage.cacheCreationTokens),
+    })
+    .from(llmUsage)
+    .where(inArray(llmUsage.runId, runs.map((run) => run.id)))
+    .groupBy(llmUsage.runId)
+    .all();
+
+  const usageByRun = new Map(usageRows.map((row) => [row.runId, row]));
+
+  return runs.map((run) => {
+    const usage = usageByRun.get(run.id);
+    if (!usage) {
+      return run;
+    }
+    return {
+      ...run,
+      llmUsage: {
+        tokensIn: Number(usage.tokensIn),
+        tokensOut: Number(usage.tokensOut),
+        tokensTotal: Number(usage.tokensTotal),
+        cachedTokens: Number(usage.cachedTokens),
+        cacheCreationTokens: Number(usage.cacheCreationTokens),
+      },
+    };
+  });
 }
 
 export function softDeleteMissingProjects(

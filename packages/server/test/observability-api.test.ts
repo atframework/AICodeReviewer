@@ -310,10 +310,18 @@ describe("observability API", () => {
       eventId: "evt",
       workspaceId: "ws-1",
       triggerName: "gitea",
-      provider: null,
-      providerModel: null,
+      provider: "openai",
+      providerModel: "gpt-4o",
       status: "succeeded",
       startedAt: new Date(),
+      llmUsages: [{
+        providerId: "openai",
+        modelId: "gpt-4o",
+        tokensIn: 1000,
+        tokensOut: 200,
+        tokensTotal: 1200,
+        cachedTokens: 600,
+      }],
     });
 
     const res = await fetchApi("/runs");
@@ -321,6 +329,13 @@ describe("observability API", () => {
     const data = await res.json();
     expect(data.length).toBe(1);
     expect(data[0].id).toBe("run-1");
+    expect(data[0].llmUsage).toEqual({
+      tokensIn: 1000,
+      tokensOut: 200,
+      tokensTotal: 1200,
+      cachedTokens: 600,
+      cacheCreationTokens: 0,
+    });
   });
 
   it("GET /runs clamps invalid limits to the default", async () => {

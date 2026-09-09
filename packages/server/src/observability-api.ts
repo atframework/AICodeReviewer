@@ -9,6 +9,7 @@ import {
   type TimeWindowStats,
   type ProjectStats,
   type ProviderModelStats,
+  type RecentRunStats,
 } from "@aicr/store";
 
 import type { AdminAuthConfig } from "./admin-auth.js";
@@ -31,18 +32,7 @@ interface DashboardStats {
   thisMonth: TimeWindowStats;
   projects: ProjectStats[];
   providerModels: ProviderModelStats[];
-  recentRuns: Array<{
-    id: string;
-    workspaceId: string;
-    triggerName: string | null;
-    provider: string | null;
-    providerModel: string | null;
-    status: string;
-    problemCount: number;
-    durationMs: number | null;
-    startedAt: Date | null;
-    targetKind: string | null;
-  }>;
+  recentRuns: RecentRunStats[];
   timezone: string;
 }
 

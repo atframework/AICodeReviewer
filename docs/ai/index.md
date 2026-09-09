@@ -7,6 +7,7 @@
 | 想知道什么 | 优先阅读 | 说明 |
 | --- | --- | --- |
 | 当前正在做什么 | `../../Plan.md` | 只保留当前路线图、活跃里程碑、下一执行包和简版架构摘要 |
+| 自动提交调度设计（未实现） | [设计](../superpowers/specs/2026-09-08-auto-commit-scheduling-design.md)、[执行计划](../superpowers/plans/2026-09-08-auto-commit-scheduling-plan.md)、[测试矩阵](../superpowers/plans/2026-09-08-auto-commit-scheduling-tests.md) | 延迟、多组周计划、跨通知来源分组/成员去重、来源排除（glob/regex）；P4 至少 User+Client |
 | 稳定架构与合同 | `architecture.md` | 详细设计，按 `Plan.md` 的章节编号保留稳定引用点 |
 | 已完成里程碑历史 | `milestones/*.md` | 完成项沉淀与交付面，避免反复塞回 `Plan.md` |
 | 稳定决策与取舍 | `decisions.md` | 归档 D1-D31 等长期有效决策 |
