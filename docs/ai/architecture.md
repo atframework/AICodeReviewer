@@ -91,9 +91,12 @@
   来源字段支持后续补齐，但冲突不能被重投递清除；范围重写证据始终属于最早覆盖通知。
   已消费或排除成员与重写范围相交时，剩余成员以 `exclusion_scope_conflict` 失败，避免扩大净 diff。
   批次 diff：Git 端点 `base..head`，P4 `diff2` 端点 file revision（已对真实 p4d 2025.1
-  核验：枚举趟权威给出文件集合，`-u` 趟只供文本 hunk；add/delete 条目用 `p4 print` 取存活
+  核验：`diff2 -Od -q` 只枚举有差异的文件头，供文件列举与 diff 共用；不能只列批次 head
+  的文件。过滤候选文件后逐文件读取 `-u` 文本 hunk；add/delete 条目用 `p4 print` 取存活
   端点内容合成单 hunk，二进制（NUL 探测）与空内容保持无 hunk 但不丢条目，print 失败明确
-  报错而非误判无变更；print 次数有界 ≤ add/delete 块数）。
+  报错而非误判无变更；print 次数有界 ≤ 过滤后的 add/delete 块数）。P4 diff 异常在模型
+  调用前向上抛出，不能以缺失 diff 的审查结果标记 `lgtm`。参数语义见
+  [P4 diff2 文档](https://help.perforce.com/helix-core/server-apps/cmdref/current/Content/CmdRef/p4_diff2.html)。
 
 ### 3.2 VCS Adapter 与 scoped fetch
 

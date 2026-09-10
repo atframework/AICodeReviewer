@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { createReviewEvent } from "@aicr/core";
 
 import { P4VcsAdapter, type P4CommandResult, type P4CommandRunner } from "../src/p4.js";
 
@@ -164,13 +165,14 @@ describe("P4VcsAdapter batch net diff (diff2)", () => {
       files: ["src/a.txt", "src/b.txt", "bin.dat"],
     });
 
-    // Two scoped diff2 commands (enumeration, then -u) plus one endpoint
+    // Compact enumeration, then one -u per selected text pair and one endpoint
     // print per add/delete pair; never describe, never a whole-server //...
     // scan, and never the rejected @=N form.
     expect(callLog).toEqual([
-      "diff2 //depot/...@1 //depot/...@3",
-      "diff2 -u //depot/...@1 //depot/...@3",
+      "diff2 -Od -q //depot/...@1 //depot/...@3",
       "print -q //depot/bin.dat@3",
+      "diff2 -u //depot/src/a.txt@1 //depot/src/a.txt@3",
+      "diff2 -u //depot/src/b.txt@1 //depot/src/b.txt@3",
     ]);
     expect(callLog.every((call) => !call.includes("@="))).toBe(true);
 
@@ -214,7 +216,7 @@ describe("P4VcsAdapter batch net diff (diff2)", () => {
     // No content pairs → the -u pass is skipped entirely; one endpoint
     // print per add/delete pair in enumeration order.
     expect(callLog).toEqual([
-      "diff2 //depot/...@1 //depot/...@5",
+      "diff2 -Od -q //depot/...@1 //depot/...@5",
       "print -q //depot/bin.dat@5",
       "print -q //depot/src/a.txt@1",
       "print -q //depot/src/b.txt@1",
@@ -268,9 +270,9 @@ describe("P4VcsAdapter batch net diff (diff2)", () => {
     // `Binary files ... differ` line is tolerated; the add prints its
     // endpoint content.
     expect(callLog).toEqual([
-      "diff2 //depot/...@5 //depot/...@8",
-      "diff2 -u //depot/...@5 //depot/...@8",
+      "diff2 -Od -q //depot/...@5 //depot/...@8",
       "print -q //depot/docs/b.md@8",
+      "diff2 -u //depot/src/renamed/a.txt@5 //depot/src/renamed/a.txt@8",
     ]);
 
     const byPath = new Map(result.files.map((file) => [file.newPath ?? file.oldPath, file]));
@@ -296,7 +298,7 @@ describe("P4VcsAdapter batch net diff (diff2)", () => {
     // Binary pair + add + identical: no text content pair → one diff2 call
     // plus the add's endpoint print.
     expect(callLog).toEqual([
-      "diff2 //depot/...@5 //depot/...@7",
+      "diff2 -Od -q //depot/...@5 //depot/...@7",
       "print -q //depot/docs/b.md@7",
     ]);
     const byPath = new Map(result.files.map((file) => [file.newPath ?? file.oldPath, file]));
@@ -306,10 +308,20 @@ describe("P4VcsAdapter batch net diff (diff2)", () => {
     expect(byPath.get("docs/b.md")?.hunks[0]?.lines).toEqual([expect.objectContaining({ kind: "add" })]);
   });
   it("filters the scoped diff2 result to the candidate member files", async () => {
-    const { p4 } = createRunner({
-      diff2: (args) => args.includes("-u")
-        ? { stdout: diff2Unified1to3, stderr: "" }
-        : { stdout: diff2Range1to3, stderr: "" },
+    const { p4, callLog } = createRunner({
+      diff2: (args) => {
+        if (args.includes("-u")) {
+          if (args.some((arg) => arg.includes("...") || arg.includes("src/b.txt"))) {
+            throw new Error("excluded file exceeds stdout maxBuffer");
+          }
+          return { stdout: diff2Unified1to3, stderr: "" };
+        }
+        if (!args.includes("-Od") || !args.includes("-q")) {
+          throw new Error("identical depot headers exceed stdout maxBuffer");
+        }
+        return { stdout: diff2Range1to3, stderr: "" };
+      },
+      print: () => { throw new Error("excluded binary exceeds stdout maxBuffer"); },
     });
     const adapter = makeAdapter(p4);
 
@@ -320,6 +332,40 @@ describe("P4VcsAdapter batch net diff (diff2)", () => {
     });
 
     expect(result.files.map((file) => file.newPath ?? file.oldPath)).toEqual(["src/a.txt"]);
+    expect(result.files[0]?.hunks).toHaveLength(1);
+    expect(callLog).toEqual([
+      "diff2 -Od -q //depot/...@1 //depot/...@3",
+      "diff2 -u //depot/src/a.txt@1 //depot/src/a.txt@3",
+    ]);
+  });
+
+  it("lists the whole batch range when its head only changes excluded files", async () => {
+    const { p4, callLog } = createRunner({
+      diff2: () => ({ stdout: diff2Range1to3, stderr: "" }),
+      describe: () => ({ stdout: "... //depot/bin.dat#1 add\n", stderr: "" }),
+    });
+    const adapter = new P4VcsAdapter({
+      repositoryDir: "/tmp/test", depot: "//depot", p4,
+      watchPath: ["src"], includeCrFile: ["**/*.txt"], excludeCrFile: ["**/b.txt"],
+    });
+    const result = await adapter.listChanges(createReviewEvent({
+      triggerName: "p4", provider: "p4", workspaceId: "ws", targetKind: "commit",
+      author: { username: "alice" }, reason: "auto-commit:batch:test",
+      repoRef: "//depot", baseSha: "1", headSha: "3", changedFiles: ["bin.dat"],
+    }));
+    expect(result).toEqual({ baseRevision: "1", headRevision: "3", files: ["src/a.txt"] });
+    expect(callLog).toEqual(["diff2 -Od -q //depot/...@1 //depot/...@3"]);
+  });
+
+  it("propagates batch file enumeration failure instead of reporting no changed files", async () => {
+    const { p4 } = createRunner({
+      diff2: () => { throw new Error("stdout maxBuffer length exceeded"); },
+    });
+    await expect(makeAdapter(p4).listChanges(createReviewEvent({
+      triggerName: "p4", provider: "p4", workspaceId: "ws", targetKind: "commit",
+      author: { username: "alice" }, reason: "auto-commit:batch:test",
+      repoRef: "//depot", baseSha: "1", headSha: "3",
+    }))).rejects.toThrow("stdout maxBuffer length exceeded");
   });
 
   it("throws when the -u pass drops a content pair reported by enumeration", async () => {

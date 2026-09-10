@@ -747,6 +747,15 @@ export class P4VcsAdapter implements VcsAdapter {
       throw new RangeError("P4 listChanges requires headSha (changelist number).");
     }
 
+    if (ev.baseSha && ev.baseSha !== changeNumber) {
+      const blocks = await this.listBatchDiffBlocks(ev.baseSha, changeNumber);
+      return {
+        baseRevision: ev.baseSha,
+        headRevision: changeNumber,
+        files: this.applyFilters(blocks.map((block) => this.toLocalPath(block.depotPath))),
+      };
+    }
+
     const eventFiles = ev.changedFiles
       ? ev.changedFiles.map((f) => this.toLocalPath(f))
       : undefined;
@@ -994,9 +1003,9 @@ export class P4VcsAdapter implements VcsAdapter {
   }
 
   /**
-   * Net diff of a multi-CL batch over the configured depot scope (never
-   * `//...` — that would scan the whole server), filtered to the candidate
-   * member files afterwards. Verified against real p4d 2025.1:
+   * Net diff of a batch over the configured depot scope (never `//...`).
+   * Enumerate only differing headers with -Od -q; filter candidates before
+   * reading per-file hunks or endpoint content. Verified against real p4d:
    * - `path@=N` is rejected ("A revision range cannot be used here"); the
    *   state-as-of-changelist syntax is `path@N`, and `@0` is the empty
    *   depot state before CL1.
@@ -1010,8 +1019,8 @@ export class P4VcsAdapter implements VcsAdapter {
    * - Add/delete entries get their hunk synthesized from `p4 print` of the
    *   surviving endpoint revision (design §6: 按已核验动作和端点内容转换);
    *   binary or empty endpoints keep the hunkless header entry.
-   * The pass-1 enumeration is therefore authoritative for the file set and
-   * actions; pass 2 (`-u`, only when content pairs exist) supplies hunks.
+   * The enumeration is authoritative for both listChanges and the diff file
+   * set/actions; per-file -u supplies only the selected text hunks.
    * Missing endpoint CLs, permission-hidden files, and transport failures
    * propagate — a failed batch read must never be mistaken for "no
    * changes".
@@ -1021,35 +1030,17 @@ export class P4VcsAdapter implements VcsAdapter {
     headRevision: string,
     files: readonly string[],
   ): Promise<ParsedDiff> {
-    if (!/^\d+$/u.test(baseRevision) || !/^\d+$/u.test(headRevision)) {
-      throw new RangeError(
-        `P4 batch diff requires numeric changelist endpoints, got base "${baseRevision}" head "${headRevision}".`,
-      );
-    }
-    const depotBase = this.depot?.replace(/\/+$/u, "");
-    if (!depotBase) {
-      throw new RangeError(
-        "P4 batch diff requires a configured depot scope (options.depot); refusing to diff2 the whole server.",
-      );
-    }
-    const scope = `${depotBase}/...`;
-    const enumerated = await this.runP4(["diff2", `${scope}@${baseRevision}`, `${scope}@${headRevision}`]);
-    const blocks = parseP4Diff2Pairs(enumerated.stdout, baseRevision, headRevision);
-    if (blocks.length === 0) {
-      return { files: [] };
-    }
-
-    let unifiedByPath: ReadonlyMap<string, readonly string[]> = new Map();
-    if (blocks.some((block) => block.kind === "content")) {
-      const unified = await this.runP4(["diff2", "-u", `${scope}@${baseRevision}`, `${scope}@${headRevision}`]);
-      unifiedByPath = parseP4Diff2Unified(unified.stdout, baseRevision, headRevision);
-    }
-
+    const allowed = files.length > 0 ? new Set(files.map((file) => this.toLocalPath(file))) : undefined;
+    const blocks = (await this.listBatchDiffBlocks(baseRevision, headRevision))
+      .filter((block) => !allowed || allowed.has(this.toLocalPath(block.depotPath)));
     const unifiedLines: string[] = [];
     for (const block of blocks) {
-      const localPath = this.depotToLocalPath(block.depotPath) ?? normalizePath(block.depotPath);
+      const localPath = this.toLocalPath(block.depotPath);
       if (block.kind === "content") {
-        const hunks = unifiedByPath.get(block.depotPath);
+        const unified = await this.runP4([
+          "diff2", "-u", `${block.depotPath}@${baseRevision}`, `${block.depotPath}@${headRevision}`,
+        ]);
+        const hunks = parseP4Diff2Unified(unified.stdout, baseRevision, headRevision).get(block.depotPath);
         if (!hunks) {
           throw new Error(
             `p4 diff2 @${baseRevision}..@${headRevision} inconsistency: content pair "${block.depotPath}" missing from -u output.`,
@@ -1070,6 +1061,25 @@ export class P4VcsAdapter implements VcsAdapter {
       appendSyntheticUnifiedHeaders(unifiedLines, localPath, block.action);
     }
     return this.filterDiffToRange(parseUnifiedDiff(unifiedLines.join("\n")), files);
+  }
+
+  private async listBatchDiffBlocks(baseRevision: string, headRevision: string): Promise<P4Diff2Block[]> {
+    if (!/^\d+$/u.test(baseRevision) || !/^\d+$/u.test(headRevision)) {
+      throw new RangeError(
+        `P4 batch diff requires numeric changelist endpoints, got base "${baseRevision}" head "${headRevision}".`,
+      );
+    }
+    const depotBase = this.depot?.replace(/\/+$/u, "");
+    if (!depotBase) {
+      throw new RangeError(
+        "P4 batch diff requires a configured depot scope (options.depot); refusing to diff2 the whole server.",
+      );
+    }
+    const scope = `${depotBase}/...`;
+    // A large depot's identical headers alone can exceed maxBuffer. Enumerate
+    // differing headers only, then fetch content after candidate filtering.
+    const enumerated = await this.runP4(["diff2", "-Od", "-q", `${scope}@${baseRevision}`, `${scope}@${headRevision}`]);
+    return parseP4Diff2Pairs(enumerated.stdout, baseRevision, headRevision);
   }
 
   private parseDescribeOutput(stdout: string): string[] {

@@ -5828,6 +5828,39 @@ describe("runReviewOrchestration error paths", () => {
     }
   });
 
+  it.each(["stdout maxBuffer length exceeded", "TCP receive on p4.example.com:1666 failed."])(
+    "fails before model calls and publishing when P4 diff fails: %s", async (message) => {
+      const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-p4-diff-fails-"));
+      try {
+        const failure = new Error(message);
+        const vcs: DiffCapableVcsAdapter = {
+          ...createVcs(tempDir), kind: "p4",
+          async diff() { throw failure; },
+        };
+        const complete = vi.fn();
+        const publishProblem = vi.fn();
+        const publishSummary = vi.fn();
+        await expect(runReviewOrchestration({
+          reviewEvent: createReviewEvent({
+            triggerName: "p4", provider: "p4", workspaceId: "ws", targetKind: "commit",
+            author: { username: "alice" }, reason: "auto-commit:batch:test",
+            repoRef: "//depot", baseSha: "1", headSha: "3",
+          }),
+          payload: {}, provider: "p4", eventName: "change-commit",
+        }, {
+          baseSystemPrompt: "Review changes", sourceRootResolver: () => tempDir, vcs,
+          llm: { complete }, model,
+          outputPublisher: { publishProblem, publishSummary },
+        })).rejects.toBe(failure);
+        expect(complete).not.toHaveBeenCalled();
+        expect(publishProblem).not.toHaveBeenCalled();
+        expect(publishSummary).not.toHaveBeenCalled();
+      } finally {
+        await rm(tempDir, { recursive: true, force: true });
+      }
+    },
+  );
+
   it("continues with changed paths when VCS diff fails", async () => {
     const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-diff-fails-"));
 

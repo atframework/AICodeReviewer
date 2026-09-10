@@ -2698,6 +2698,9 @@ export async function runReviewOrchestration(
         headSha: context.reviewEvent.headSha,
         error: error instanceof Error ? error.message : String(error),
       }));
+      if (vcs.kind === "p4") {
+        throw error;
+      }
       diff = undefined;
     }
   }

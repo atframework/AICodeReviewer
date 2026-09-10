@@ -784,7 +784,7 @@ Affected files ...
 
     it("marks a no-trailing-newline endpoint like git does", async () => {
       const mockP4 = createMockP4Runner({
-        "diff2 //depot/main/...@1 //depot/main/...@5": {
+        "diff2 -Od -q //depot/main/...@1 //depot/main/...@5": {
           stdout: "==== <none> - //depot/main/src/new.txt#1 ====\n",
           stderr: "",
         },
@@ -798,7 +798,7 @@ Affected files ...
 
     it("keeps a hunkless entry for binary endpoint content", async () => {
       const mockP4 = createMockP4Runner({
-        "diff2 //depot/main/...@1 //depot/main/...@5": {
+        "diff2 -Od -q //depot/main/...@1 //depot/main/...@5": {
           stdout: "==== <none> - //depot/main/bin.dat#1 ====\n",
           stderr: "",
         },
