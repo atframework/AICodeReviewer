@@ -188,7 +188,7 @@ curl -sf <部署环境入口URL>/healthz
 - SSH key：通过 `yq '.deploy.normal.ssh.key_file' development/secret/secret.yaml` 提取文件名（该值是远程主机路径；本地部署用同名私钥的本地镜像副本）
 - **部署目录**：`/home/tools/AICodeReviewer`
 - 容器引擎：Podman
-- 启动方式：systemd user 服务（quadlet）。部署用 `AICR_ENABLE_SYSTEMD=true bash deploy.sh`，由 podlet 生成 `~/.config/containers/systemd/aicr.container`（`--restart unless-stopped` 映射为 `Restart=always`，`--wanted-by default.target` + Linger 实现开机自启）。崩溃自动拉起、开机自启均由 `aicr.service` 负责；日常管理用 `systemctl --user status|restart|stop aicr.service`，不要再手工 `podman run -d` 起同名容器。podlet/quadlet 仅支持 podman 引擎；`AICR_ENGINE` 为 docker 等其他引擎时脚本会告警并回退到 `<engine> run -d`，不会生成 systemd 服务。
+- 启动方式：systemd user 服务（quadlet）。部署用 `AICR_ENABLE_SYSTEMD=true bash deploy.sh`，由 podlet 生成 `~/.config/containers/systemd/aicr.container`（`--restart unless-stopped` 映射为 `Restart=always`，`--wanted-by default.target` + Linger 实现开机自启）。崩溃自动拉起、开机自启均由 `aicr.service` 负责；日常管理用 `systemctl --user status|restart|stop aicr.service`，不要再手工 `podman run -d` 起同名容器。podlet/quadlet 仅支持 podman 引擎；`AICR_ENGINE` 为 docker 等其他引擎时脚本会告警并回退到 `<engine> run -d`，不会生成 systemd 服务。docker 引擎主机也可选 `AICR_ENABLE_COMPOSE=true`（默认关闭）：deploy.sh 按 `<engine> compose` → `docker compose` → `docker-compose` 顺序发现 CLI，生成 `<部署目录>/docker-compose.yaml`（`restart: unless-stopped` + `init: true` + healthcheck，每次部署重写）后 `up -d` 保活；找不到 compose CLI 时告警回退 `<engine> run -d`。`AICR_ENABLE_COMPOSE` 与 `AICR_ENABLE_SYSTEMD` 互斥，同设会直接报错退出。
 - 反向代理：<部署环境入口URL> → `http://10.0.4.9:8090`
 - 如果公网机本机监听了 TCP `3128`，`deploy.sh` 会自动探测这个 HTTP 代理并用于宿主下载与镜像构建；详细规则见下文“关于构建期 HTTP 代理”。
 

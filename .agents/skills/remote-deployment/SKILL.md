@@ -170,6 +170,20 @@ Host reference:
 `systemctl --user status|stop|start|restart <container>.service`; never start
 a competing `podman run -d` container with the same name alongside it.
 
+**docker-compose keepalive (optional, default off):** run deploys with
+`AICR_ENABLE_COMPOSE=true` on docker-engine hosts. `deploy.sh` resolves the
+compose CLI in the order `<engine> compose` → `docker compose` →
+`docker-compose` (with no CLI it warns and falls back to `<engine> run -d`),
+regenerates `$DEPLOY_DIR/docker-compose.yaml` from the same structured pieces
+as the plain run args (`restart: unless-stopped`, `init: true`, bind mounts,
+`env_file`, healthcheck), and runs `<compose> -p <container> -f <file> up -d`.
+Crash restart comes from the engine's restart policy; a rootful dockerd also
+starts `unless-stopped` containers when the daemon boots. Manage with
+`<compose> -p <container> -f <file> ps|logs|restart|down`.
+`AICR_ENABLE_COMPOSE` and `AICR_ENABLE_SYSTEMD` are mutually exclusive —
+setting both aborts the deploy with an error. The generated file is
+overwritten on every deploy; edit `deploy.sh`, not the file.
+
 **Stopping a running `deploy.sh` over SSH:** a literal pattern like
 `pkill -f 'bash deploy.sh'` also matches the caller's own SSH remote command
 line and kills the session mid-command. Use a bracketed regex that cannot match
