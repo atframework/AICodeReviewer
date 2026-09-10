@@ -1,6 +1,5 @@
 // Validate the docs-site configuration field reference against the Zod schema
-// code source of truth (docs/ai/documentation-site-plan.md §7 "配置参考字段
-// 覆盖检查", M11-P4).
+// code source of truth. Contract: docs/ai/milestones/M11.md.
 //
 // Checks, for both locales (en + zh-cn) of reference/config-fields.md:
 //   1. Schema -> docs: every settable leaf field in `appConfigSchema` must be
@@ -223,6 +222,8 @@ const DOCUMENTED_SUBTREE_SUMMARIES = new Set([
   "workspaces.instances.<id>.sandbox",
   "workspaces.instances.<id>.triage",
   "workspaces.instances.<id>.prompt",
+  "review.auto_commit.schedule.rules[]",
+  "review.auto_commit.exclude_sources[]",
 ]);
 
 function normalizeDocPath(value) {

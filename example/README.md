@@ -44,6 +44,69 @@ node packages/cli/dist/index.js serve \
   --port 8080
 ```
 
+## Automatic commit scheduling
+
+Git push, P4 `change-commit`, and SVN `post-commit` notifications receive a
+`202` response with `processing.receiptId` after storage accepts them. The
+default delay is 120 seconds from first receipt; duplicate notifications do
+not restart it. Use `queue.kind: sqlite` or `redis` to retain pending work
+across restarts. The memory backend loses its queue on process exit.
+
+The following schedule allows weekday evenings and mornings, plus all weekend:
+
+```yaml
+review:
+  auto_commit:
+    delay_seconds: 120
+    schedule:
+      timezone: Asia/Shanghai
+      rules:
+        - days: [mon, tue, wed, thu, fri]
+          windows:
+            - { start: "00:00", end: "13:00" }
+            - { start: "18:00", end: "24:00" }
+        - days: [sat, sun]
+          windows:
+            - { start: "00:00", end: "24:00" }
+    exclude_sources:
+      - id: git-ci
+        vcs: git
+        match:
+          author_email: { regex: "^ci@", ignore_case: true }
+      - id: p4-ci-client
+        vcs: p4
+        match:
+          client: { glob: "ci-*" }
+```
+
+Set the same `review.auto_commit` fields under `workspaces.defaults` or
+`workspaces.instances.<id>` to override global settings. `schedule` and
+`exclude_sources` each replace their inherited value as a whole. An empty
+`schedule.rules` removes time restrictions; an empty `exclude_sources` removes
+exclusions. Omitted schedules allow all times; omitted timezones use UTC.
+Windows include their start and exclude their end. An overnight window belongs
+to its starting weekday. Already running reviews may finish after a window closes.
+
+A **submission source** means raw Git author name + email, P4 changelist
+User + Client, or SVN `svn:author`, within one configured repository and stream.
+Consecutive, due commits from that source can merge across notifications,
+up to 50 per batch. Notifications covering `A1–A3`, `A4–A5`, and `B1` produce
+`[A1–A5]` and `[B1]` when both A ranges are due before sealing. Each commit
+belongs to one batch; later notifications cannot regroup it. P4/SVN hooks cover
+only the named revision, and do not discover intervening unnotified revisions.
+
+Exclusion rules use OR between rules and AND between fields. Git accepts
+`author_name`, `author_email`, `committer_name`, and `committer_email`; P4 accepts
+`user` and `client`; SVN accepts `author`. Each field uses either `glob` or
+RE2 `regex`. Missing required evidence is retried with a bounded budget, then
+marked failed; it never silently passes an exclusion rule.
+
+Completed execution checkpoints recover local result accounting without
+repeating analysis or remote publication. An interrupted execution without a
+completed checkpoint, or an incomplete publication, stops automatic replay
+with `execution_outcome_unknown` and requires operator inspection. A dead batch
+holds its stream until handled; inspect it before manually initiating a new review.
+
 ## Eval Fixture Validation
 
 The root CI pipeline validates benchmark fixtures without requiring LLM secrets:

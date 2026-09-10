@@ -4,6 +4,7 @@ import { parse as parseYaml } from "yaml";
 import { z } from "zod";
 
 import { reviewTargetKindSchema } from "./review-event.js";
+import { autoCommitConfigSchema } from "./auto-commit-policy.js";
 import { isPlainObject } from "./utils.js";
 
 export const workspaceRootKeys = ["cache", "defaults", "instances"] as const;
@@ -435,6 +436,7 @@ const reviewSchema = z
     skip_lgtm: z.boolean().optional(),
     output_language: z.string().min(1).optional(),
     commit_strategy: z.enum(["per_commit", "aggregate", "head_only"]).optional(),
+    auto_commit: autoCommitConfigSchema.optional(),
     log_thinking: z.boolean().optional(),
     git: z
       .object({
@@ -812,7 +814,7 @@ const appConfigSchema = z
     agent: z
       .object({
         default: agentKindSchema.default("kilo"),
-        timeout_seconds: z.number().int().positive().default(1200),
+        timeout_seconds: z.number().int().positive().default(1800),
         auto_approve: z.boolean().default(true),
         sandbox: sandboxSchema.default({ kind: "docker", engine: "auto" }),
         context_compaction: contextCompactionSchema.default({ auto: true, prune: true }),
@@ -821,7 +823,7 @@ const appConfigSchema = z
       .strict()
       .default({
         default: "kilo",
-        timeout_seconds: 1200,
+        timeout_seconds: 1800,
         auto_approve: true,
         sandbox: { kind: "docker", engine: "auto" },
         context_compaction: { auto: true, prune: true },

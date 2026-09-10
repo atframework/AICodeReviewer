@@ -59,7 +59,7 @@ Use this skill when updating AI-agent guidance, prompt assets, bridge files, or 
      root `tsconfig.json` references or the runtime Docker image. Do not publish
      internal `docs/ai/*` content to it; rewrite user-facing material from
      `example/README.md`, `example/config.yaml`, the topic docs, and code truth.
-     See `docs/ai/documentation-site-plan.md` for the full plan.
+     See `docs/ai/milestones/M11.md` for document-site boundaries and acceptance history.
 
 3. **Write compact, discoverable skills**
    - Keep skill folder names and frontmatter `name` values identical; use lowercase hyphenated names.

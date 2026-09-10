@@ -30,6 +30,59 @@ queue:
       jitter: true
 ```
 
+## Automatic commit schedules
+
+Git push, P4 `change-commit`, and SVN `post-commit` events wait 120 seconds by
+default. `review.auto_commit` controls this delay, allowed weekly windows, and
+source exclusions. Set it globally, in `workspaces.defaults.review`, or in
+`workspaces.instances.<id>.review`. The nearest `schedule` or `exclude_sources`
+replaces the inherited value as a whole.
+
+```yaml
+review:
+  auto_commit:
+    delay_seconds: 120
+    schedule:
+      timezone: Asia/Shanghai
+      rules:
+        - days: [mon, tue, wed, thu, fri]
+          windows:
+            - { start: "00:00", end: "13:00" }
+            - { start: "18:00", end: "24:00" }
+        - days: [sat, sun]
+          windows:
+            - { start: "00:00", end: "24:00" }
+    exclude_sources:
+      - id: ci-client
+        vcs: p4
+        match:
+          client: { glob: "ci-*" }
+```
+
+Rules are combined by union. Windows include their start and exclude their
+end; overnight windows belong to their starting weekday. Omitted schedules or
+`schedule.rules: []` allow all times. The default timezone is UTC. Running
+reviews may finish after the window closes. `exclude_sources: []` clears
+inherited exclusions; rules use OR, fields within a rule use AND, and each
+field accepts either `glob` or RE2 `regex`.
+
+A submission source is raw Git author name + email, P4 User + Client, or SVN
+`svn:author`, scoped to the repository and stream. Consecutive due commits may
+merge across notifications, up to 50 members per batch. Notifications covering
+`A1–A3`, `A4–A5`, and `B1` yield `[A1–A5]` and `[B1]` when all are due before
+sealing. Duplicate notifications never restart the delay or regroup sealed
+members. P4/SVN hooks cover only their named revision. Missing exclusion evidence
+uses bounded retries and then fails the member; it cannot silently allow it.
+
+Receipts, batch membership, and execution checkpoints use the `queue.kind`
+backend. Memory state is lost on restart. A completed checkpoint recovers local
+result accounting without rerunning analysis or publication. Interrupted or
+partially published work requires operator inspection (`execution_outcome_unknown`);
+its dead batch holds the stream. Remote publication has no automatic per-target
+recovery. Each scheduler executes one batch at a time; across consumers the global
+cap uses `queue.workers.concurrency` (1 when the workers block is absent), with
+one active batch per workspace.
+
 ## `queue.kind`
 
 | Value | Description |

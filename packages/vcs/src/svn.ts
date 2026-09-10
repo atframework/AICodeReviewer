@@ -15,6 +15,9 @@ import type {
   AttributionRequest,
   AttributionResult,
   ChangeRange,
+  CommitMetadataPage,
+  CommitMetadataQuery,
+  CommitMetadataRecord,
   ExtraContextRequest,
   ExtraContextResult,
   ScopedTree,
@@ -166,6 +169,74 @@ function buildRevisionArgs(range: ChangeRange): string[] {
   }
 
   throw new RangeError("SVN diff requires headRevision or a base/head revision pair.");
+}
+
+function getSvnErrorText(error: unknown): string {
+  const candidate = error as { readonly stdout?: unknown; readonly stderr?: unknown };
+  return [
+    error instanceof Error ? error.message : String(error),
+    typeof candidate.stdout === "string" ? candidate.stdout : "",
+    typeof candidate.stderr === "string" ? candidate.stderr : "",
+  ].join("\n");
+}
+
+function decodeXmlEntities(text: string): string {
+  return text.replace(/&(lt|gt|amp|quot|apos|#\d+|#x[0-9a-fA-F]+);/gu, (entity, body: string) => {
+    switch (body) {
+      case "lt":
+        return "<";
+      case "gt":
+        return ">";
+      case "amp":
+        return "&";
+      case "quot":
+        return '"';
+      case "apos":
+        return "'";
+      default: {
+        const codePoint = body.startsWith("#x")
+          ? Number.parseInt(body.slice(2), 16)
+          : Number.parseInt(body.slice(1), 10);
+        return Number.isFinite(codePoint) && codePoint >= 0 && codePoint <= 0x10ffff
+          ? String.fromCodePoint(codePoint)
+          : entity;
+      }
+    }
+  });
+}
+
+interface SvnLogEntry {
+  readonly revision: string;
+  readonly author: string | undefined;
+  readonly paths: readonly string[];
+}
+
+/**
+ * Parses `svn log --xml -v` output. `svn:author` is unset on commits made
+ * without an authenticated user; a missing, self-closing, or empty <author>
+ * element maps to undefined — never a substituted default.
+ */
+function parseSvnLogMetadata(stdout: string): SvnLogEntry[] {
+  const entries: SvnLogEntry[] = [];
+  const logentryRe = /<logentry\b[^>]*\brevision="(\d+)"[^>]*>([\s\S]*?)<\/logentry>/gu;
+  for (const match of stdout.matchAll(logentryRe)) {
+    const body = match[2] ?? "";
+    const authorMatch = /<author>([\s\S]*?)<\/author>/u.exec(body);
+    const author = authorMatch ? decodeXmlEntities(authorMatch[1] ?? "") : undefined;
+    const paths: string[] = [];
+    const pathsMatch = /<paths>([\s\S]*?)<\/paths>/u.exec(body);
+    if (pathsMatch) {
+      for (const pathMatch of (pathsMatch[1] ?? "").matchAll(/<path\b[^>]*>([\s\S]*?)<\/path>/gu)) {
+        paths.push(decodeXmlEntities(pathMatch[1] ?? ""));
+      }
+    }
+    entries.push({
+      revision: match[1] ?? "",
+      author: author !== undefined && author.length > 0 ? author : undefined,
+      paths,
+    });
+  }
+  return entries;
 }
 
 function redactSvnSecret(text: string, secret: string | undefined): string {
@@ -451,6 +522,123 @@ export class SvnVcsAdapter implements VcsAdapter {
     ]);
 
     return parseUnifiedDiff(result.stdout);
+  }
+
+  /**
+   * Bounded commit-history metadata read for auto-commit scheduling (design
+   * §6.1). `svn log` emits entries in traversal order, so `-r LOW:HIGH`
+   * walks the range oldest-first and `--limit` caps from the range start;
+   * a HIGH:LOW traversal would page from the head side and could not resume
+   * without gaps. The `--limit maxRecords + 1` entry detects whether the
+   * range continues past the page, and entries are additionally re-sorted
+   * ascending client-side so record order never depends on server traversal
+   * direction. Verified against a real SlikSVN 1.14.5 repository
+   * (svn-live-repo.test.ts): `--limit` with an explicit `-r LOW:HIGH`
+   * traverses ascending, and a deleted svn:author revprop surfaces as a
+   * missing <author> element (revprop changes need a pre-revprop-change
+   * hook, E165006). A URL pegged at `@head` keeps the scope readable
+   * even if it was moved or deleted after head. Read failures (missing URL,
+   * authorization-hidden history, unknown endpoint revision — svn E160013,
+   * E170001, E175002, E200009, …) surface as `unavailable` with the error
+   * text, never as a silently empty range.
+   */
+  async listCommitMetadataPage(query: CommitMetadataQuery): Promise<CommitMetadataPage> {
+    if (!/^\d+$/u.test(query.headRevision)) {
+      throw new RangeError(`Invalid SVN metadata head revision "${query.headRevision}".`);
+    }
+    if (query.baseRevision !== undefined && !/^\d+$/u.test(query.baseRevision)) {
+      throw new RangeError(`Invalid SVN metadata base revision "${query.baseRevision}".`);
+    }
+    if (query.cursor !== undefined && !/^\d+$/u.test(query.cursor)) {
+      throw new RangeError(`Invalid SVN metadata cursor "${query.cursor}".`);
+    }
+
+    // The page covers (low - 1, head]: cursor resumes after the last emitted
+    // revision, base is exclusive, and a base-less query walks from r1.
+    const head = Number(query.headRevision);
+    const low = query.cursor !== undefined
+      ? Number(query.cursor) + 1
+      : query.baseRevision !== undefined
+        ? Number(query.baseRevision) + 1
+        : 1;
+    if (low > head) {
+      return { vcs: "svn", records: [], status: "complete" };
+    }
+
+    let entries: SvnLogEntry[];
+    try {
+      const result = await this.runSvn([
+        "log",
+        "--xml",
+        "-v",
+        "--limit",
+        String(query.maxRecords + 1),
+        "-r",
+        `${low}:${head}`,
+        `${query.scopeRef}@${query.headRevision}`,
+      ]);
+      if (!/<log[\s>]/u.test(result.stdout)) {
+        return {
+          vcs: "svn",
+          records: [],
+          status: "unavailable",
+          unavailableReason: `unexpected svn log --xml output: ${result.stdout.slice(0, 200)}`,
+        };
+      }
+      entries = parseSvnLogMetadata(result.stdout);
+    } catch (error) {
+      return {
+        vcs: "svn",
+        records: [],
+        status: "unavailable",
+        unavailableReason: getSvnErrorText(error),
+      };
+    }
+
+    entries = entries
+      .slice(0, query.maxRecords + 1)
+      .sort((a, b) => Number(a.revision) - Number(b.revision));
+    const pageEntries = entries.slice(0, query.maxRecords);
+    if (pageEntries.length === 0) {
+      return { vcs: "svn", records: [], status: "complete" };
+    }
+
+    const records: CommitMetadataRecord[] = [];
+    let bytes = 0;
+    let truncated = false;
+    for (const entry of pageEntries) {
+      const paths: string[] = [];
+      for (const path of entry.paths) {
+        if (bytes + path.length + 16 > query.maxBytes) {
+          truncated = true;
+          break;
+        }
+        bytes += path.length + 16;
+        paths.push(path);
+      }
+      bytes += 160;
+      if (bytes > query.maxBytes && records.length > 0) {
+        truncated = true;
+        break;
+      }
+      records.push({
+        revision: entry.revision,
+        orderKey: entry.revision.padStart(12, "0"),
+        parents: [],
+        ...(entry.author !== undefined ? { svnAuthor: entry.author } : {}),
+        changedPaths: paths,
+      });
+    }
+
+    const hasMore = entries.length > records.length || truncated;
+    const last = records[records.length - 1];
+    const nextCursor = hasMore ? last?.revision ?? String(low - 1) : undefined;
+    return {
+      vcs: "svn",
+      records,
+      ...(nextCursor !== undefined ? { nextCursor } : {}),
+      status: nextCursor !== undefined ? "partial" : "complete",
+    };
   }
 }
 

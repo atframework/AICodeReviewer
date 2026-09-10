@@ -1,5 +1,5 @@
-// Validate internal links across the docs site (M11-P6 "链接检查：先从内部
-// 链接开始" in docs/ai/documentation-site-plan.md §7). No external link
+// Validate internal links across the docs site; contract: docs/ai/milestones/M11.md.
+// No external link
 // checking and no new dependencies — this walks the content sources directly.
 //
 // Checks:

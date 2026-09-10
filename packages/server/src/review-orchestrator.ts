@@ -103,6 +103,10 @@ export interface ReviewOrchestrationContext {
   readonly payload: unknown;
   readonly provider: ReviewOrchestrationProvider;
   readonly eventName: string;
+  /** Stable identity supplied by a persisted automatic-commit batch. */
+  readonly runId?: string;
+  readonly additionalTaskContext?: string;
+  readonly signal?: AbortSignal;
 }
 
 export interface ServerReviewOrchestrationOptions {
@@ -2602,6 +2606,7 @@ export async function runReviewOrchestration(
   context: ReviewOrchestrationContext,
   options: ServerReviewOrchestrationOptions,
 ): Promise<ReviewOrchestrationResult> {
+  context.signal?.throwIfAborted();
   if (options.modelOptionsResolver) {
     options = { ...options, ...options.modelOptionsResolver(context.reviewEvent.workspaceId) };
   }
@@ -2736,6 +2741,10 @@ export async function runReviewOrchestration(
     }
   }
 
+  if (context.additionalTaskContext) {
+    taskContext += `\n\n${context.additionalTaskContext}`;
+  }
+
   const resolvedBasePrompt = await (async () => {
     if (options.baseSystemPromptResolver) {
       const resolved = await options.baseSystemPromptResolver(context.reviewEvent.workspaceId);
@@ -2798,6 +2807,7 @@ export async function runReviewOrchestration(
     },
   );
   const bundleContext: AgentBundleContext = {
+    ...(context.runId ? { runId: context.runId } : {}),
     instructions: preparedPrompt.discovery.instructions.map((instruction) => ({
       kind: instruction.kind,
       label: instruction.label,
@@ -2829,6 +2839,7 @@ export async function runReviewOrchestration(
     ...(options.webSearch ? { webSearch: options.webSearch } : {}),
   };
   const runMetricsAccumulator = createReviewRunMetricsAccumulator();
+  context.signal?.throwIfAborted();
   let completion = await requestReviewCompletion(scopedTree.rootDir, llmSystemPrompt, options, undefined, bundleContext, contextRepoMounts);
   accumulateReviewCompletionMetrics(runMetricsAccumulator, completion);
   let lastAgentResult = completion.agentResult;
@@ -2997,6 +3008,8 @@ export async function runReviewOrchestration(
     : completion.llmResult;
   const agentResult = completion.agentResult ?? lastAgentResult;
   const dispatchResults: DispatchResult[] = [];
+  // A worker that lost its lease must never start publication afterwards.
+  context.signal?.throwIfAborted();
   const outputPublisher = options.outputPublisher ?? (await options.outputPublisherResolver?.(
     context,
     { sourceRoot: scopedTree.rootDir },

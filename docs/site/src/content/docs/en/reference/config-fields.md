@@ -231,7 +231,7 @@ Narrative: [Agent and sandbox](/en/configuration/agent/).
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
 | `agent.default` | enum | `kilo` | Default agent kind |
-| `agent.timeout_seconds` | int > 0 | `1200` | Hard per-run timeout; on timeout the whole process tree is killed |
+| `agent.timeout_seconds` | int > 0 | `1800` | Hard per-run timeout; on timeout the whole process tree is killed |
 | `agent.auto_approve` | boolean | `true` | Accepted by the schema, but the orchestrator always runs as `true`; setting `false` has no effect |
 | `agent.sandbox` | object | `{ kind: "docker", engine: "auto" }` | Sandbox backend |
 | `agent.sandbox.kind` | enum | — | Sandbox kind (see enum table) |
@@ -281,6 +281,10 @@ Narrative: [Agent and sandbox](/en/configuration/agent/).
 | `review.reflection.memory.max_size_kb` | int > 0 | — | Max memory size in KB |
 | `review.reflection.memory.max_entries` | int > 0 | — | Max memory entries |
 | `review.reflection.memory.retention_days` | int > 0 | `90` | Memory TTL in days |
+| `review.auto_commit.delay_seconds` | int 0–31536000 | `120` | First-receive delay before an automatic commit becomes due; `0` disables the wait |
+| `review.auto_commit.schedule.timezone` | string | `UTC` | IANA timezone for the execution schedule |
+| `review.auto_commit.schedule.rules[]` | object[] | — | Weekly rule groups (`days` weekday set + `windows` `HH:mm` ranges, union across groups); `rules: []` lifts all weekly limits |
+| `review.auto_commit.exclude_sources[]` | object[] | — | Bot/CI source exclusion rules (`id`, `vcs`, `match` field matchers with exactly one of `glob`/`regex`); `[]` clears inherited rules |
 
 ## `queue`
 

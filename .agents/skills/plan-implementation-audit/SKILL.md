@@ -21,14 +21,14 @@ user-invocable: false
 
 ### Step 1: Understand current milestone status
 
-Read `Plan.md` §8.1 (里程碑状态表) first to understand which milestones are complete, in-progress, or not started. Then read `../../../docs/ai/index.md` to locate the detailed architecture, decision, and completed-milestone docs you actually need. Focus audit on in-progress milestones.
+Read `Plan.md` current status and local/external work tables first. Then read `../../../docs/ai/index.md` to locate the detailed architecture, decision, and completed-milestone docs you actually need. Separate local implementation and loopback-service acceptance from deployment-specific validation; an external service label alone is not proof that all work is blocked.
 
 ### Step 2: Check known pitfalls before making changes
 
 Read `../../../docs/ai/AGENTS.known-pitfalls.md` when doing non-trivial implementation or review work. These are issues found and fixed in prior sessions — do not reintroduce them. Key checks:
 
-- Config schema fields from Plan.md §3.10 / `../../../docs/ai/architecture.md` §3.10 (compression, LLM, queue, review, workspaces)
-- Store schema columns from Plan.md §3.11 / `../../../docs/ai/architecture.md` §3.11 (triggerName, provider, providerModel)
+- Config schema fields from `../../../docs/ai/architecture.md` §3.10 (compression, LLM, queue, review, workspaces)
+- Store schema columns from `../../../docs/ai/architecture.md` §3.11 (triggerName, provider, providerModel)
 - `isPlainObject` rejecting Date/RegExp
 - `normalizePath` compressing consecutive slashes
 - `estimateTokens` handling CJK characters
@@ -53,13 +53,14 @@ Use the environment-appropriate commands (see AGENTS.md "Environment notes"):
 
 For each in-progress milestone, check:
 
-1. **Schema completeness**: Do Zod schemas in `config.ts` match Plan.md §3.10 / `docs/ai/architecture.md` §3.10? Does `store/schema.ts` match §3.11?
+1. **Schema completeness**: Do Zod schemas in `config.ts` match `docs/ai/architecture.md` §3.10? Does `store/schema.ts` match §3.11?
 2. **Test coverage**: Are there test files for every source file? Are error paths, edge cases, and alternative formats covered?
 3. **Code correctness**: Do implementations match the contracts described in the roadmap summaries and detailed docs?
+   - Follow persisted fields through their consumers: a schema column alone does not prove recovery works. Exercise fresh-process retry budgets, partial pages, expired leases, and configuration changes through the scheduler/runtime, then run the shared store contract against real backends. Separate local checkpoint recovery from remote publication guarantees.
 4. **Agent runtime consistency**: If agent adapters changed, do tests cover model translation, MCP config materialization, three-layer skill/instruction merging (system built-in → user common → project/repo-local), isolated HOME/env handling, and stdout fallback behavior?
 5. **Context tool boundaries**: If VCS context tools changed, do they preserve scoped fetch, path allowlists, multi-repo selector validation, and no full recursive submodule fetch by default?
 6. **Output policy correctness**: If output routing or templates changed, do tests cover global → channel → workspace `no_problems` overrides, mixed-channel suppression/publishing, and commit/revision target links without misleading `View PR` labels?
-7. **Document sync**: Did the change touch config shape, agent adapters, MCP/output contracts, output rendering, deployment behavior, or review orchestration semantics without updating `Plan.md`, `docs/ai/architecture.md`, `example/config.yaml`, or `example/README.md`? See Step 5 for the mandatory sync checklist.
+7. **Document sync**: Did the change touch config shape, agent adapters, MCP/output contracts, output rendering, deployment behavior, or review orchestration semantics without updating the relevant roadmap item, `docs/ai/architecture.md`, `example/config.yaml`, or `example/README.md`? See Step 5 for the mandatory sync checklist.
 
 ### Step 5: Document sync check (mandatory)
 
@@ -67,12 +68,12 @@ Before declaring a change complete, verify documentation alignment:
 
 - **Start from the actual changed files** → Inspect `git diff --name-only`, `git show --name-only`, or the task's explicit file list. Map each changed source/config/test file to its public contract surfaces before deciding docs are unnecessary.
 
-1. **Config shape changes** → Update `Plan.md` §3.10 summary, `docs/ai/architecture.md` §3.10, `packages/core/test/config.test.ts`, and `example/config.yaml`.
-2. **Store schema changes** → Update `Plan.md` §3.11 summary, `docs/ai/architecture.md` §3.11, and `packages/store/test/schema.test.ts`.
+1. **Config shape changes** → Update `docs/ai/architecture.md` §3.10, `packages/core/test/config.test.ts`, and `example/config.yaml`; keep only unfinished work in `Plan.md`.
+2. **Store schema changes** → Update `docs/ai/architecture.md` §3.11 and the matching store tests; keep only unfinished work in `Plan.md`.
 3. **Agent adapter / MCP tool contract changes** → Update `docs/ai/architecture.md` §3.6–3.7, `docs/output-channels.md`, and relevant skill files.
 4. **Output rendering or channel behavior changes** → Update `docs/ai/architecture.md` §3.9, `docs/output-channels.md`, `example/config.yaml`, and `example/README.md`.
-5. **Review orchestration semantics changes** (deduplication, update strategy, comment commands) → Update `docs/ai/architecture.md` §3.1/§3.9, `Plan.md` §3.1/§3.9, and example docs.
-6. **Deployment or public workflow changes** → Update `example/README.md`, `docs/podman.md`, and `Plan.md` §11.
+5. **Review orchestration semantics changes** (deduplication, update strategy, comment commands) → Update `docs/ai/architecture.md` §3.1/§3.9, the affected `Plan.md` task, and example docs.
+6. **Deployment or public workflow changes** → Update `example/README.md`, `docs/podman.md`, and the deployment acceptance item in `Plan.md`.
 
 For each matched category, verify both user-facing docs and example config snippets. If a change genuinely requires no doc update, explicitly state the reason in the change summary. Do not skip this check silently.
 
@@ -81,6 +82,7 @@ For each matched category, verify both user-facing docs and example config snipp
 - Fix code issues first, then add tests.
 - When a fix changes config, agent behavior, MCP/output contracts, deployment, or public workflows, update the matching docs and examples (`Plan.md` roadmap summary, `docs/`, `example/config.yaml`, `example/README.md`) in the same change.
 - Always run the full verification chain after changes.
+- Conformance fixtures must use the public record contract. For example, derive an auto-commit stream ID with `computeStreamId(receipt)`; an extra `streamId` property retained by the memory backend is absent from SQLite receipts and is not part of the interface.
 - Update `../../../docs/ai/AGENTS.known-pitfalls.md` if a new recurring issue is found.
 
 ### Step 7: Retire completed task artifacts

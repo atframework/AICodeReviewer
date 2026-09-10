@@ -86,6 +86,25 @@ Changes that affect config shape, agent adapters, MCP tool contracts, output
 rendering, deployment behavior, or public workflow must update the matching
 docs, `example/config.yaml`, and `example/README.md` in the same change.
 
+### Local service integration tests
+
+These tests can use disposable local services without production credentials:
+
+| Variable | Requirement and coverage |
+| --- | --- |
+| `AICR_SVN_TEST_EXECUTABLE` | Absolute path to `svn`, with `svnadmin` and `svnserve` in the same directory. Enables real repository metadata tests and a post-commit hook → authenticated HTTP → SQLite scheduling test. |
+| `AICR_REDIS_TEST_URL` | URL of a local test Redis. Enables automatic-commit storage and model-catalog persistence tests; the catalog test uses its own random key prefix. |
+
+Set the variables before running the test command above. Without them, the
+corresponding integration tests are skipped. SVN fixtures live under `build/tmp/`
+and the hook test stops its own daemon. These tests do not call an LLM or publish
+reviews to remote systems. Deployment-specific authentication and networking
+still need separate acceptance.
+
+`packages/core/test/config-examples.test.ts` always validates the deployment
+config and complete automatic-commit YAML examples in the example README and
+both queue guides. Other documentation snippets are not yet covered by this test.
+
 ## Adding a package
 
 1. Create the package directory under `packages/<name>/` with its own

@@ -11,7 +11,7 @@ import {
   type ProviderModelStats,
   type RecentRunStats,
 } from "@aicr/store";
-
+import type { AutoCommitStore } from "@aicr/core";
 import type { AdminAuthConfig } from "./admin-auth.js";
 import {
   createAdminAuthMiddleware,
@@ -23,6 +23,8 @@ export interface ObservabilityApiOptions {
   readonly store: StoreDb;
   readonly adminAuth: AdminAuthConfig;
   readonly timezone?: string;
+  /** Auto-commit receipt store; enables the receipt query endpoint. */
+  readonly autoCommitStore?: AutoCommitStore;
 }
 
 interface DashboardStats {
@@ -182,5 +184,22 @@ export function createObservabilityApi(options: ObservabilityApiOptions): Hono {
     return c.json(runs);
   });
 
+
+  if (options.autoCommitStore) {
+    const autoCommitStore = options.autoCommitStore;
+    // Receipt detail stays behind admin auth: it carries source identities
+    // and routing fields that must not become a public high-cardinality
+    api.get("/auto-commit/receipts/:id", authMiddleware, async (c) => {
+      const receiptId = c.req.param("id");
+      if (!receiptId) {
+        return c.json({ error: "bad_request", message: "receipt id required" }, 400);
+      }
+      const result = await autoCommitStore.getReceipt(receiptId);
+      if (!result) {
+        return c.json({ error: "not_found", message: `unknown receipt ${receiptId}` }, 404);
+      }
+      return c.json(result);
+    });
+  }
   return api;
 }

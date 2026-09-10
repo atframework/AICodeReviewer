@@ -9,6 +9,21 @@ This document is the user-facing module for AICodeReviewer report output. Keep i
 - The same reported problem must render cleanly as a VCS line comment, an issue entry, or an IM summary card.
 - The contract stays small and stable so Kilo Code, Zoo Code, OpenCode, Claude Code, and other adapters can all emit the same shape.
 
+## Automatic commit batch publication
+
+Automatic commits publish one review result per sealed batch. The review uses
+the batch's fixed run ID, endpoints, and full member list, even when several
+webhook receipts contributed members. A receipt URL is reused only when it
+names the batch head; other targets are derived by the normal link resolver.
+
+The executor saves a checkpoint before analysis and a result checkpoint after
+orchestration returns. A `completed` checkpoint permits local result accounting
+to resume without calling the LLM or output publishers again. A `started` or
+`publication_pending` checkpoint requires operator inspection and ends automatic
+replay with `execution_outcome_unknown`. Publication failures must not be treated
+as successful batch completion. There is no automatic per-target publication
+recovery yet; remote side effects and the local checkpoint are not one transaction.
+
 ## Implemented MCP-style tools
 
 The current in-process tool registry exposes these AICR tools to the review executor:

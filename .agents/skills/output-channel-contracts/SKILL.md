@@ -66,6 +66,7 @@ Load these sibling files only when the task touches the named surface:
 
 ## Pitfalls
 
+- Automatic commit batches reuse a fixed run ID and range. A completed execution checkpoint may replay local accounting only; started or publication-pending checkpoints require inspection. Test raw publisher/LLM call counts after recovery, and never infer remote exactly-once delivery from a local lease or outbox.
 - Do not conflate `review.skip_lgtm` with output routing; the former guides review behavior, the latter decides dispatch per channel.
 - Do not use a single composite `publishEmptySummary` boolean when different channels have different policies.
 - Do not expose provider-specific URL assumptions in generic templates; derive target links before rendering.

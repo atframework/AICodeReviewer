@@ -1,9 +1,9 @@
 # AICodeReviewer 架构与实现合同
 
 这份文档承接原先 `Plan.md` 里稳定、细节化、不会每轮都变的设计说明。
-`Plan.md` 现在只保留当前路线图、活跃里程碑、下一执行包和简版摘要；需要深挖时，再按需读取这里。
+`Plan.md` 只保留当前状态、本地下一步、外部验收与预留扩展；需要设计细节时按需读取这里。
 
-为降低引用迁移成本，本页尽量沿用 `Plan.md` 的章节编号语义，尤其是 `3.x` 系列合同。
+本页的章节编号是稳定合同引用点，独立于路线图的章节与任务顺序。
 
 ## 2. 技术方向与仓库组织
 
@@ -59,17 +59,41 @@
 - 去重只影响 async 调度层，不影响 review orchestration 本身的业务逻辑；sync 模式不受此机制影响。
 - 代码真源：`packages/server/src/review-deduplicator.ts`；集成点在 `packages/server/src/index.ts` 的 `scheduleTriggerProcessing` 中。
 
-2026-09-08 源码核验：上述自动触发路径当前由内存 timer 直接启动，未经过
-`ReviewQueue`；bootstrap 仅在显式传入 `jobHandler` 时构造 worker，CLI serve 未传入。
-因此已有 SQLite/Redis queue adapter 不代表自动 webhook 审查已持久入队。
-默认延迟、多组按星期配置的有效时段、来源排除及连续提交分组仍为
-[待实施设计](../superpowers/specs/2026-09-08-auto-commit-scheduling-design.md)，
-其中提交来源分组键用于区分提交方及任务上下文，P4 必须至少匹配 User+Client；
-来源排除支持 glob/regex，区别于现有文件过滤。生产接线、来源快照、排除分隔点、
-批次完整性和恢复要求见该文档，不属于当前运行时合同。
-跨通知合并按 stream 汇总到期成员后才封存 batch；通知只保存 receipt/成员关联，不能
-每条通知单独触发分析。设计中的 A1–A3、A4–A5、B1 三条通知应得到 A1–A5、B1 两批，
-重叠通知不得把已归属批次的成员重新入队；没有通知覆盖的提交不主动补扫。
+2026-09-09 实现核验：自动提交事件（Git 服务 push、P4 `change-commit`、SVN
+`post-commit`）统一走持久接收与调度，不再由内存 timer 直接启动：
+
+- 接收：`handleReviewOrchestration` 按 provider+事件名+targetKind 分类，命中自动提交即调用
+  `AutoCommitRuntime.accept`（`packages/server/src/auto-commit-runtime.ts`）原子写入 receipt，
+  成功返回 202 与 `processing.receiptId`（`runId` 同值，语义为接收回执编号），持久化失败返回
+  可重试 503；PR/评论/issue/手工路径不变。deliveryKey 始终哈希 provider、事件、trigger、
+  workspace、repo、scope 与投递头（无投递头时使用 coverage），同一投递可分别进入多个 workspace。
+- 存储：`createAutoCommitStoreFromConfig` 跟随 `queue.kind` 选择 memory/SQLite/Redis 后端；
+  memory 的非持久性在启动日志显式可见。receipt/成员/批次/租约/outbox 合同在
+  `packages/core/src/auto-commit-store.ts`，三后端共享 conformance 场景。
+- 调度：`AutoCommitScheduler`（`packages/server/src/auto-commit-scheduler.ts`）单去抖 timer
+  按最早到期信号唤醒，扩展（有界 VCS 元数据页 + 来源快照 + 排除判定）→ 组批封存 →
+  窗口内派发执行；执行桥 `createAutoCommitBatchExecutor` 以固定 runId、成员列表和端点调用
+  `runReviewOrchestration`。扩展前固定 `assemblyCutSeq`，持续新通知不阻止旧批次前进。
+  日历下限和元数据重试预算持久化；元数据读取及每次执行前重新检查时段，停机等待当前执行结束。
+  三后端原子限制全局和 workspace 执行并发，默认各为 1；bootstrap 的全局上限读取
+  `queue.workers.concurrency`（未设置时为 1）。租约过期禁止旧消费者写完成状态和检查点。
+  已保存 `completed` 检查点只重试本地结果记账；`started`/`publication_pending` 表示执行或
+  发布结果不确定，终结为 dead 并要求人工核查，不自动重跑 LLM/非幂等 POST。dead 批次仍占住
+  stream。外部发布尚无跨进程事务或逐目标恢复回执，不能承诺端到端 exactly-once。
+- 配置：`review.auto_commit`（global/defaults/instance 三层）支持 `delay_seconds`（默认 120）、
+  多组 `days+windows` 周计划（整体替换、`rules: []` 清除限制、默认 UTC）、`exclude_sources`
+  glob/RE2 来源排除；workspace schedule 不跨层深合并。
+- 跨通知合并按 stream 汇总到期成员后才封存 batch；通知只保存 receipt/成员关联，不能
+  每条通知单独触发分析。设计中的 A1–A3、A4–A5、B1 三条通知得到 A1–A5、B1 两批，
+  重叠通知不把已归属批次的成员重新入队；没有通知覆盖的提交不主动补扫。
+  P4 分组键至少匹配 User+Client；SVN `svn:author` 按可变性做来源快照与冲突阻断。
+  P4/SVN 单条 hook 只覆盖所报 revision，批次基线为首个 revision 的前一编号。
+  来源字段支持后续补齐，但冲突不能被重投递清除；范围重写证据始终属于最早覆盖通知。
+  已消费或排除成员与重写范围相交时，剩余成员以 `exclusion_scope_conflict` 失败，避免扩大净 diff。
+  批次 diff：Git 端点 `base..head`，P4 `diff2` 端点 file revision（已对真实 p4d 2025.1
+  核验：枚举趟权威给出文件集合，`-u` 趟只供文本 hunk；add/delete 条目用 `p4 print` 取存活
+  端点内容合成单 hunk，二进制（NUL 探测）与空内容保持无 hunk 但不丢条目，print 失败明确
+  报错而非误判无变更；print 次数有界 ≤ add/delete 块数）。
 
 ### 3.2 VCS Adapter 与 scoped fetch
 
@@ -97,7 +121,9 @@
   `include_cr_file`、`exclude_cr_file` 与 P4 adapter 使用同一过滤语义。
   `aicr.fetch_more_context` 对未物化相关文件回拉
   `<repository_url>/<path>@revision` 等价内容，并拒绝配置 `repository_url` 外的 URL。
-  真实 SVN 仓库 e2e 与入站触发脚本/端点仍属 Backlog。
+  自动提交元数据页已过真实 `file://` 仓库实测（M15）；本机 `svnserve` 的真实
+  post-commit hook、带认证 HTTP 入口、SQLite 调度、跨通知合批和重投去重也已验收
+  （`milestones/local-priority-queue.md`）。部署环境的账户、ACL 和 HTTP 认证仍待验收。
 - **归因（attribution）能力**是 best-effort 上下文工具，通过 `VcsAdapter` 上的**可选**
   `fetchAttribution(req, ws)` 方法提供，不污染默认 fingerprint，也不强制每个 adapter 实现
   （provider API 路径与 mock adapter 可省略）：

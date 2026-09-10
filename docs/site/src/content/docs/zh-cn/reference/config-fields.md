@@ -216,7 +216,7 @@ schema 接受 `workspaces.defaults` 和实例上的 `agent.default` 与 `sandbox
 | 字段 | 类型 | 默认值 | 描述 |
 | --- | --- | --- | --- |
 | `agent.default` | enum | `kilo` | 默认 agent kind |
-| `agent.timeout_seconds` | int > 0 | `1200` | 单次 run 硬超时；超时时杀整棵进程树 |
+| `agent.timeout_seconds` | int > 0 | `1800` | 单次 run 硬超时；超时时杀整棵进程树 |
 | `agent.auto_approve` | boolean | `true` | schema 接受，但当前编排器固定按 `true` 处理，设为 `false` 不生效 |
 | `agent.sandbox` | object | `{ kind: "docker", engine: "auto" }` | 沙箱后端 |
 | `agent.sandbox.kind` | enum | — | sandbox kind（见枚举表） |
@@ -266,6 +266,10 @@ schema 接受 `workspaces.defaults` 和实例上的 `agent.default` 与 `sandbox
 | `review.reflection.memory.max_size_kb` | int > 0 | — | memory 最大大小（KB） |
 | `review.reflection.memory.max_entries` | int > 0 | — | memory 最大条目数 |
 | `review.reflection.memory.retention_days` | int > 0 | `90` | memory TTL（天） |
+| `review.auto_commit.delay_seconds` | int 0–31536000 | `120` | 自动提交首次接收后的固定延迟；`0` 表示不等待 |
+| `review.auto_commit.schedule.timezone` | string | `UTC` | 执行时段使用的 IANA 时区 |
+| `review.auto_commit.schedule.rules[]` | object[] | — | 周计划规则组（`days` 星期集合 + `windows` `HH:mm` 时间段，组间取并集）；`rules: []` 解除全部周限制 |
+| `review.auto_commit.exclude_sources[]` | object[] | — | 机器人/CI 来源排除规则（`id`、`vcs`、`match` 字段匹配器，`glob`/`regex` 二选一）；`[]` 清除继承规则 |
 
 ## `queue`
 

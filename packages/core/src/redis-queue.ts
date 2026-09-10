@@ -136,11 +136,16 @@ export async function createRedisQueue(options: RedisQueueOptions): Promise<Revi
       };
 
       const bullJob = await queue.add("review", jobData, {
+        ...(opts.id !== undefined ? { jobId: opts.id } : {}),
         attempts: opts.maxAttempts ?? 3,
         backoff: {
           type: backoffConfig.kind === "constant" ? "fixed" : backoffConfig.kind,
           delay: backoffConfig.baseMs,
         },
+        // BullMQ `delay` guarantees not-before, not exact wake time.
+        ...(opts.availableAt !== undefined
+          ? { delay: Math.max(0, opts.availableAt - Date.now()) }
+          : {}),
       });
 
       return {

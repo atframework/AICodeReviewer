@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
+import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { ZodError } from "zod";
 
 import { createAicrMetrics, formatPrometheusMetrics, recordReviewResult } from "./metrics.js";
@@ -22,8 +23,9 @@ import {
   type ReviewQueue,
   type ReviewProvider,
 } from "@aicr/core";
-import { isContextOverflowError, LlmFallbackExhaustedError } from "@aicr/llm";
 import type { ReviewDeduplicator } from "./review-deduplicator.js";
+import type { AutoCommitStore } from "@aicr/core";
+import { isContextOverflowError, LlmFallbackExhaustedError } from "@aicr/llm";
 import {
   extractWebhookRepositoryRef,
   matchesWebhookRepo,
@@ -55,8 +57,28 @@ import {
   type ReviewOutputPublisher,
   type ServerReviewOrchestrationOptions,
 } from "./review-orchestrator.js";
+import {
+  isAutomaticCommitEvent,
+  type AutoCommitAcceptor,
+} from "./auto-commit-runtime.js";
 
 type GenericWebhookProvider = "github" | "gitlab";
+
+/** Provider delivery-id headers used for receipt deduplication. */
+function deliveryIdForProvider(c: Context, provider: ReviewProvider): string | undefined {
+  switch (provider) {
+    case "github":
+      return c.req.header("x-github-delivery");
+    case "gitlab":
+      return c.req.header("x-gitlab-event-uuid");
+    case "gitea":
+      return c.req.header("x-gitea-delivery");
+    case "forgejo":
+      return c.req.header("x-forgejo-delivery") ?? c.req.header("x-gitea-delivery");
+    default:
+      return undefined;
+  }
+}
 type GenericWebhookConfigInput = VcsWebhookConfig | readonly VcsWebhookConfig[];
 
 export interface TriggerRetryConfig {
@@ -89,6 +111,16 @@ export interface ServerAppOptions {
   readonly runsDir?: string;
   readonly metrics?: AicrMetrics;
   readonly observability?: ObservabilityApiOptions;
+  /**
+   * Automatic-commit receive path. When present, push/change-commit/
+   * post-commit events are persisted as receipts and scheduled through the
+   * auto-commit store instead of the in-memory timer path.
+   */
+  readonly autoCommit?: AutoCommitAcceptor;
+  /** Auto-commit receipt store backing the admin receipt query API. */
+  readonly autoCommitStore?: AutoCommitStore;
+  /** Stop receipt execution, drain the active batch, then close its store. */
+  readonly closeAutoCommit?: () => Promise<void>;
   readonly store?: StoreDb;
 }
 
@@ -140,6 +172,7 @@ function registerGiteaLikeWebhook(
   metrics: AicrMetrics,
   store: StoreDb | undefined,
   triggerRetry?: TriggerRetryConfig,
+  autoCommit?: AutoCommitAcceptor,
 ): void {
   app.post(path, async (c) => {
     if (!config) {
@@ -207,7 +240,7 @@ function registerGiteaLikeWebhook(
       return c.json({ accepted: false, reason: "ignored_by_label", provider, eventName, matchedLabels: ignoredLabels }, 200);
     }
 
-    return handleReviewOrchestration(c, provider, eventName, decoded, reviewEvent, reviewPreparationOptions, reviewOrchestrationOptions, issueTriageOptions, asyncTriggers, deduplicator, runsDir, metrics, store, triggerRetry);
+    return handleReviewOrchestration(c, provider, eventName, decoded, reviewEvent, reviewPreparationOptions, reviewOrchestrationOptions, issueTriageOptions, asyncTriggers, deduplicator, runsDir, metrics, store, triggerRetry, autoCommit);
   });
 }
 
@@ -222,6 +255,7 @@ function registerP4Trigger(
   metrics: AicrMetrics,
   store: StoreDb | undefined,
   triggerRetry?: TriggerRetryConfig,
+  autoCommit?: AutoCommitAcceptor,
 ): void {
   app.post("/triggers/p4", async (c) => {
     if (!config) {
@@ -298,6 +332,7 @@ function registerP4Trigger(
       metrics,
       store,
       triggerRetry,
+      autoCommit,
     );
   });
 }
@@ -313,6 +348,7 @@ function registerSvnTrigger(
   metrics: AicrMetrics,
   store: StoreDb | undefined,
   triggerRetry?: TriggerRetryConfig,
+  autoCommit?: AutoCommitAcceptor,
 ): void {
   app.post("/triggers/svn", async (c) => {
     if (!config) {
@@ -396,6 +432,7 @@ function registerSvnTrigger(
       metrics,
       store,
       triggerRetry,
+      autoCommit,
     );
   });
 }
@@ -491,6 +528,7 @@ function registerGenericWebhook(
   metrics: AicrMetrics,
   store: StoreDb | undefined,
   triggerRetry?: TriggerRetryConfig,
+  autoCommit?: AutoCommitAcceptor,
 ): void {
   app.post(path, async (c) => {
     const configs = normalizeGenericWebhookConfigs(config);
@@ -561,8 +599,7 @@ function registerGenericWebhook(
     if (ignoredLabels) {
       return c.json({ accepted: false, reason: "ignored_by_label", provider, eventName, matchedLabels: ignoredLabels }, 200);
     }
-
-    return handleReviewOrchestration(c, provider, eventName, decoded, reviewEvent, reviewPreparationOptions, reviewOrchestrationOptions, issueTriageOptions, asyncTriggers, deduplicator, runsDir, metrics, store, triggerRetry);
+    return handleReviewOrchestration(c, provider, eventName, decoded, reviewEvent, reviewPreparationOptions, reviewOrchestrationOptions, issueTriageOptions, asyncTriggers, deduplicator, runsDir, metrics, store, triggerRetry, autoCommit);
   });
 }
 
@@ -578,9 +615,9 @@ function shouldIgnoreByLabels(
   return matched.length > 0 ? matched : undefined;
 }
 
-type TriggerOutcome = "reviewed" | "triaged" | "prepared" | "skipped";
+export type TriggerOutcome = "reviewed" | "triaged" | "prepared" | "skipped";
 
-interface TriggerProcessingResult {
+export interface TriggerProcessingResult {
   readonly outcome: TriggerOutcome;
   readonly skipReason?: string;
   readonly reviewPreparation?: ReturnType<typeof summarizePreparedReviewPromptForWebhook>;
@@ -592,7 +629,7 @@ class TriggerProcessingError extends Error {
   constructor(
     readonly reason: string,
     message: string,
-    readonly status: number,
+    readonly status: ContentfulStatusCode,
     cause?: unknown,
   ) {
     super(message, cause !== undefined ? { cause } : undefined);
@@ -659,7 +696,7 @@ async function publishTriggerErrorReport(
   }
 }
 
-async function runTriggerProcessing(
+export async function runTriggerProcessing(
   provider: ReviewProvider,
   eventName: string,
   decoded: unknown,
@@ -885,13 +922,14 @@ async function saveCompletedRunSnapshot(
   }
 }
 
-function persistReviewRunToStore(
+export function persistReviewRunToStore(
   store: StoreDb | undefined,
   runId: string,
   reviewEvent: ReviewEvent,
   reviewRun: NonNullable<TriggerProcessingResult["reviewRun"]>,
   durationMs: number,
   startMs: number,
+  strict = false,
 ): void {
   if (!store) return;
   try {
@@ -948,6 +986,7 @@ function persistReviewRunToStore(
       }] : [],
     });
   } catch (err: unknown) {
+    if (strict) throw err;
     console.warn(JSON.stringify({
       level: "warn",
       msg: "failed to persist review run to store",
@@ -1190,8 +1229,7 @@ function scheduleTriggerProcessing(
 }
 
 async function handleReviewOrchestration(
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  c: any,
+  c: Context,
   provider: ReviewProvider,
   eventName: string,
   decoded: unknown,
@@ -1205,7 +1243,50 @@ async function handleReviewOrchestration(
   metrics: AicrMetrics,
   store: StoreDb | undefined,
   triggerRetry?: TriggerRetryConfig,
+  autoCommit?: AutoCommitAcceptor,
 ): Promise<Response> {
+  // Automatic commit events (push/change-commit/post-commit) take the
+  // persistent receive path: one bounded write, then 202 with the receipt.
+  // PR/issue/comment/manual flows keep the existing direct/async handling.
+  if (autoCommit && isAutomaticCommitEvent(reviewEvent, eventName)) {
+    try {
+      const deliveryId = deliveryIdForProvider(c, provider);
+      const result = await autoCommit.accept({
+        provider,
+        eventName,
+        reviewEvent,
+        ...(deliveryId ? { deliveryId } : {}),
+        now: Date.now(),
+      });
+      return c.json({
+        accepted: true,
+        provider,
+        eventName,
+        reviewEvent,
+        processing: {
+          mode: "queued",
+          // runId is retained as the receive-receipt number (design §7.1);
+          // one push may split into several runs and several pushes may
+          // merge into one, so it no longer denotes an execution unit.
+          runId: result.receipt.receiptId,
+          receiptId: result.receipt.receiptId,
+          status: result.duplicate ? "duplicate" : "queued",
+        },
+      }, 202);
+    } catch (error) {
+      // Persistence failure is a retryable 503 — never a false acceptance.
+      return c.json(
+        {
+          accepted: false,
+          reason: "auto_commit_receive_failed",
+          provider,
+          eventName,
+          message: toErrorMessage(error),
+        },
+        503,
+      );
+    }
+  }
   if (asyncTriggers) {
     const runId = scheduleTriggerProcessing(
       provider,
@@ -1330,9 +1411,11 @@ function mountRoutes(app: Hono, options: ServerAppOptions): void {
   app.get("/readyz", (c) => c.text("ready"));
   app.get("/metrics", (c) => c.text(formatPrometheusMetrics(metrics)));
   registerDashboardRoutes(app, options);
-
   if (options.observability) {
-    const observabilityApi = createObservabilityApi(options.observability);
+    const observabilityApi = createObservabilityApi({
+      ...options.observability,
+      ...(options.autoCommitStore ? { autoCommitStore: options.autoCommitStore } : {}),
+    });
     app.route("/api/admin", observabilityApi);
   }
 
@@ -1357,6 +1440,7 @@ function mountRoutes(app: Hono, options: ServerAppOptions): void {
     metrics,
     options.store,
     options.triggerRetry,
+    options.autoCommit,
   );
   registerGiteaLikeWebhook(
     app,
@@ -1372,6 +1456,7 @@ function mountRoutes(app: Hono, options: ServerAppOptions): void {
     metrics,
     options.store,
     options.triggerRetry,
+    options.autoCommit,
   );
   registerGenericWebhook(
     app,
@@ -1387,6 +1472,7 @@ function mountRoutes(app: Hono, options: ServerAppOptions): void {
     metrics,
     options.store,
     options.triggerRetry,
+    options.autoCommit,
   );
   registerGenericWebhook(
     app,
@@ -1402,6 +1488,7 @@ function mountRoutes(app: Hono, options: ServerAppOptions): void {
     metrics,
     options.store,
     options.triggerRetry,
+    options.autoCommit,
   );
   registerP4Trigger(
     app,
@@ -1414,6 +1501,7 @@ function mountRoutes(app: Hono, options: ServerAppOptions): void {
     metrics,
     options.store,
     options.triggerRetry,
+    options.autoCommit,
   );
   registerSvnTrigger(
     app,
@@ -1426,6 +1514,7 @@ function mountRoutes(app: Hono, options: ServerAppOptions): void {
     metrics,
     options.store,
     options.triggerRetry,
+    options.autoCommit,
   );
 }
 
@@ -1434,6 +1523,15 @@ export {
   runReviewOrchestration,
   summarizeReviewOrchestrationForWebhook,
 } from "./review-orchestrator.js";
+export {
+  AutoCommitRuntime,
+  isAutomaticCommitEvent,
+} from "./auto-commit-runtime.js";
+export type {
+  AutoCommitAcceptor,
+  AutoCommitAcceptInput,
+  AutoCommitRuntimeOptions,
+} from "./auto-commit-runtime.js";
 export type {
   DiffCapableVcsAdapter,
   ReviewOrchestrationResult,

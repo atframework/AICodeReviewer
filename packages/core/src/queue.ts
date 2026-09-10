@@ -25,6 +25,13 @@ export interface QueueEnqueueOptions {
   readonly triggerName: string;
   readonly maxAttempts?: number;
   readonly backoff?: QueueBackoffConfig;
+  /**
+   * Explicit job id for deterministic enqueue (dispatch dedup). When set,
+   * enqueueing an existing id returns the existing job instead of a duplicate.
+   */
+  readonly id?: string;
+  /** Absolute UTC ms before which the job must not be dequeued (first delay / reschedule). */
+  readonly availableAt?: number;
 }
 
 export interface QueueDequeueOptions {
@@ -109,9 +116,13 @@ export function createInMemoryQueue(): ReviewQueue {
 
   return {
     kind: "memory",
-
     async enqueue<T>(data: T, options: QueueEnqueueOptions): Promise<QueueJob<T>> {
-      const id = nextId();
+      const id = options.id ?? nextId();
+      const existing = jobs.get(id);
+      if (existing) {
+        // Deterministic re-enqueue of the same id is a no-op (dispatch dedup).
+        return existing as QueueJob<T>;
+      }
       const job: InternalQueueJob = {
         id,
         workspaceId: options.workspaceId,
@@ -122,6 +133,7 @@ export function createInMemoryQueue(): ReviewQueue {
         status: "queued",
         enqueuedAt: Date.now(),
         backoff: options.backoff ?? DEFAULT_BACKOFF,
+        ...(options.availableAt !== undefined ? { availableAt: options.availableAt } : {}),
       };
       jobs.set(id, job);
       pending.push(id);

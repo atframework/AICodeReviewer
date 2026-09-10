@@ -1,6 +1,5 @@
 // Validate the docs-site CLI reference against the CLI implementation
-// (docs/ai/documentation-site-plan.md §7 "CLI help 和文档命令示例一致性检
-// 查", M11-P4).
+// Contract and acceptance history: docs/ai/milestones/M11.md.
 //
 // The CLI (packages/cli/src/app.ts) is a hand-rolled parseArgs dispatcher:
 //   - accepted flags are the keys of the `parseArgs({ options: {...} })` object;

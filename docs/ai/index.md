@@ -6,12 +6,12 @@
 
 | 想知道什么 | 优先阅读 | 说明 |
 | --- | --- | --- |
-| 当前正在做什么 | `../../Plan.md` | 只保留当前路线图、活跃里程碑、下一执行包和简版架构摘要 |
-| 自动提交调度设计（未实现） | [设计](../superpowers/specs/2026-09-08-auto-commit-scheduling-design.md)、[执行计划](../superpowers/plans/2026-09-08-auto-commit-scheduling-plan.md)、[测试矩阵](../superpowers/plans/2026-09-08-auto-commit-scheduling-tests.md) | 延迟、多组周计划、跨通知来源分组/成员去重、来源排除（glob/regex）；P4 至少 User+Client |
-| 稳定架构与合同 | `architecture.md` | 详细设计，按 `Plan.md` 的章节编号保留稳定引用点 |
+| 当前正在做什么 | `../../Plan.md` | 当前状态、本地下一步、外部验收与预留扩展 |
+| 自动提交调度（M15，已完成） | [里程碑](milestones/M15.md)、`architecture.md` §3.1.1、`decisions.md` D35 | 延迟、多组周计划、跨通知来源分组/成员去重、来源排除（glob/regex）；P4 至少 User+Client；Git/Redis/P4/SVN 均有真实环境实测 |
+| 稳定架构与合同 | `architecture.md` | 详细设计和稳定章节引用；不依赖路线图章节编号 |
 | 已完成里程碑历史 | `milestones/*.md` | 完成项沉淀与交付面，避免反复塞回 `Plan.md` |
-| 稳定决策与取舍 | `decisions.md` | 归档 D1-D31 等长期有效决策 |
-| 用户文档站计划 | `documentation-site-plan.md` | M11 `docs/site` 文档站子工程选型、信息架构、构建与发布计划 |
+| 稳定决策与取舍 | `decisions.md` | 长期有效决策及其实现入口 |
+| 用户文档站交付 | [M11](milestones/M11.md) | 文档工程边界、内容分层、校验器和历史发布验收 |
 | 公开用户文档站源 | `../site/` | M11 Astro Starlight 文档站工程（中英双语），发布到 GitHub Pages 的公开用户入口 |
 | AI 规则与技能来源 | `source-index.md` | 外部 Agent/Skills/MCP 文档核验记录、刷新触发条件与兼容性证据 |
 | 已知代码坑位 | `AGENTS.known-pitfalls.md` | 从根 `AGENTS.md` 拆出的按需清单；非平凡实现/审查前阅读 |
@@ -61,18 +61,19 @@
 | M6 | 部分完成 | `milestones/M6.md` |
 | M7 | 已完成 | `milestones/M7.md` |
 | M8 | 基本完成 | `milestones/M8.md` |
-| M9 | 基本完成 | `milestones/M9.md` |
-| M10 | 基本完成 | `milestones/M10.md` |
-| M11 文档站子工程 | 已完成（Pages 已上线：`aicr.atframe.work`，2026-08-28 核验） | `documentation-site-plan.md` |
+| M9 | 核心交付完成，预留扩展见路线图 | `milestones/M9.md` |
+| M10 | 已交付，真实本机 Redis 已验收 | `milestones/M10.md` |
+| M11 文档站子工程 | 已完成（2026-08-28 线上记录；本轮仅本地验证） | `milestones/M11.md` |
 | M12 GitHub App 认证 | 已完成 | `milestones/M12.md` / `architecture.md` §3.2.1 |
 | M13 pi + oh-my-pi 集成 | 已完成 | `milestones/M13.md` |
 | M13.1 agent web search 治理 | 已完成 | `milestones/M13.1.md` |
 | M14 多源上下文聚合 | 已完成 | `milestones/M14.md` / `architecture.md` §3.2.2 |
-| 本地优先队列 P0-P12 | 已完成 | `milestones/local-priority-queue.md` |
+| M15 自动提交调度 | 已完成 | `milestones/M15.md` / `architecture.md` §3.1.1 / `decisions.md` D35 |
+| 本地优先队列 P0-P15 | 已完成 | `milestones/local-priority-queue.md` |
 
 ## 维护规则
 
-- `Plan.md` 只保留当前路线图、活跃风险、下一执行包和简要设计摘要。
+- `Plan.md` 只保留当前状态、本地下一步、外部验收与预留扩展。
 - 已完成阶段的长篇总结放到 `milestones/*.md`。
 - 稳定设计细节放到 `architecture.md`，避免把大段合同反复复制到 `Plan.md`、skills 或提示词中。
 - 稳定决策放到 `decisions.md`，方便按主题按需读取。

@@ -1,5 +1,5 @@
-// Validate SEO metadata for the docs site (M11-P6 "SEO 自动化" in
-// docs/ai/documentation-site-plan.md §8). Zero dependencies.
+// Validate SEO metadata for the docs site; contract: docs/ai/milestones/M11.md.
+// Zero dependencies.
 //
 // Starlight already emits canonical URLs, hreflang alternates, og:title /
 // og:description / og:url, twitter:card, and the sitemap whenever `site` is

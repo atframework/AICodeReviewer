@@ -114,8 +114,8 @@ export async function createSqliteQueue(options: SqliteQueueOptions): Promise<Re
   const reclaimIntervalMs = Math.min(RECLAIM_INTERVAL_MS, Math.floor(lockTtlMs / 2));
 
   const stmtEnqueue = db.prepare(
-    `INSERT INTO review_queue_jobs (id, seq, workspace_id, trigger_name, data, attempt, max_attempts, status, enqueued_at, backoff)
-     VALUES (@id, (SELECT COALESCE(MAX(seq), 0) + 1 FROM review_queue_jobs), @workspace_id, @trigger_name, @data, 0, @max_attempts, 'queued', @enqueued_at, @backoff)
+    `INSERT INTO review_queue_jobs (id, seq, workspace_id, trigger_name, data, attempt, max_attempts, status, enqueued_at, available_at, backoff)
+     VALUES (@id, (SELECT COALESCE(MAX(seq), 0) + 1 FROM review_queue_jobs), @workspace_id, @trigger_name, @data, 0, @max_attempts, 'queued', @enqueued_at, @available_at, @backoff)
      RETURNING *`,
   );
   const stmtGet = db.prepare(`SELECT * FROM review_queue_jobs WHERE id = ?`);
@@ -194,7 +194,14 @@ export async function createSqliteQueue(options: SqliteQueueOptions): Promise<Re
     kind: "sqlite",
 
     async enqueue<T>(data: T, opts: QueueEnqueueOptions): Promise<QueueJob<T>> {
-      const id = randomUUID();
+      if (opts.id !== undefined) {
+        const existing = stmtGet.get(opts.id) as QueueRow | undefined;
+        if (existing) {
+          // Deterministic re-enqueue of the same id is a no-op (dispatch dedup).
+          return rowToJob<T>(existing);
+        }
+      }
+      const id = opts.id ?? randomUUID();
       const now = Date.now();
       const backoff = opts.backoff ?? DEFAULT_QUEUE_BACKOFF;
       const row = stmtEnqueue.get({
@@ -204,6 +211,7 @@ export async function createSqliteQueue(options: SqliteQueueOptions): Promise<Re
         data: JSON.stringify(data),
         max_attempts: opts.maxAttempts ?? DEFAULT_MAX_ATTEMPTS,
         enqueued_at: now,
+        available_at: opts.availableAt ?? null,
         backoff: JSON.stringify(backoff),
       }) as QueueRow;
       return rowToJob<T>(row);

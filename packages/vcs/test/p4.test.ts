@@ -779,6 +779,51 @@ Affected files ...
     });
   });
 
+  describe("diffBatch (multi-CL endpoint diff)", () => {
+    const batchRange = { baseRevision: "1", headRevision: "5" } as const;
+
+    it("marks a no-trailing-newline endpoint like git does", async () => {
+      const mockP4 = createMockP4Runner({
+        "diff2 //depot/main/...@1 //depot/main/...@5": {
+          stdout: "==== <none> - //depot/main/src/new.txt#1 ====\n",
+          stderr: "",
+        },
+        "print -q //depot/main/src/new.txt@5": { stdout: "alpha", stderr: "" },
+      });
+      const adapter = new P4VcsAdapter({ repositoryDir: "/tmp/test", depot: "//depot/main", p4: mockP4 });
+
+      const result = await adapter.diff({ ...batchRange, files: ["src/new.txt"] });
+      expect(result.files[0]?.hunks[0]?.lines.map((line) => line.kind)).toEqual(["add", "no_newline"]);
+    });
+
+    it("keeps a hunkless entry for binary endpoint content", async () => {
+      const mockP4 = createMockP4Runner({
+        "diff2 //depot/main/...@1 //depot/main/...@5": {
+          stdout: "==== <none> - //depot/main/bin.dat#1 ====\n",
+          stderr: "",
+        },
+        "print -q //depot/main/bin.dat@5": { stdout: "PK\0\u0003\u0004binary-bytes", stderr: "" },
+      });
+      const adapter = new P4VcsAdapter({ repositoryDir: "/tmp/test", depot: "//depot/main", p4: mockP4 });
+
+      const result = await adapter.diff({ ...batchRange, files: ["bin.dat"] });
+      expect(result.files).toHaveLength(1);
+      expect(result.files[0]?.status).toBe("added");
+      expect(result.files[0]?.hunks).toEqual([]);
+    });
+
+    it("fails loudly when the endpoint print fails (never a silent no-change)", async () => {
+      const mockP4 = async (args: readonly string[]): Promise<P4CommandResult> => {
+        if (args[0] === "print") throw new Error("permission denied");
+        return { stdout: "==== <none> - //depot/main/src/new.txt#1 ====\n", stderr: "" };
+      };
+      const adapter = new P4VcsAdapter({ repositoryDir: "/tmp/test", depot: "//depot/main", p4: mockP4 });
+
+      await expect(adapter.diff({ ...batchRange, files: ["src/new.txt"] })).rejects.toThrow(/permission denied/u);
+    });
+
+  });
+
   describe("buildBaseArgs", () => {
     it("includes port and user when set", async () => {
       const capturedArgs: string[][] = [];

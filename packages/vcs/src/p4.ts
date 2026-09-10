@@ -15,6 +15,9 @@ import type {
   AttributionRequest,
   AttributionResult,
   ChangeRange,
+  CommitMetadataPage,
+  CommitMetadataQuery,
+  CommitMetadataRecord,
   ExtraContextRequest,
   ExtraContextResult,
   ScopedTree,
@@ -294,6 +297,91 @@ export function parseP4DescribeForAttribution(
   return map;
 }
 
+/**
+ * Hard enumeration cap for one `p4 changes` metadata read. `p4 changes`
+ * lists newest-first and has no ascending mode, so an ascending page can
+ * only be cut from a complete enumeration of the range; the cap turns a
+ * pathological range into an explicit `unavailable` blocker instead of an
+ * unbounded read (mirrors the git adapter, design G08).
+ */
+const P4_METADATA_ENUM_CAP = 100_000;
+
+/**
+ * Minimum maxBytes budget below which the per-page `p4 describe -s` path
+ * read is skipped entirely — a smaller budget cannot hold a meaningful
+ * path summary, and changedPaths is advisory (continuity and source
+ * fields never depend on it).
+ */
+const P4_METADATA_MIN_DESCRIBE_BYTES = 4096;
+
+interface P4ChangeMetadataEntry {
+  readonly change: string;
+  readonly user?: string;
+  readonly client?: string;
+}
+
+/**
+ * Parse `p4 changes -s submitted` output lines of the documented form
+ * `Change N on YYYY/MM/DD by user@client 'desc'`. User and Client are
+ * parsed separately (design §6.1); an empty or missing identity part maps
+ * to `undefined` — never a substituted default.
+ */
+function parseP4ChangesMetadata(stdout: string): P4ChangeMetadataEntry[] {
+  const entries: P4ChangeMetadataEntry[] = [];
+  for (const line of stdout.split(/\r?\n/u)) {
+    const headerMatch = /^Change (\d+) on /u.exec(line);
+    const change = headerMatch?.[1];
+    if (!change) {
+      continue;
+    }
+    const identityMatch = /^Change \d+ on \S+ by (\S+) '/u.exec(line);
+    const identity = identityMatch?.[1];
+    let user: string | undefined;
+    let client: string | undefined;
+    if (identity !== undefined) {
+      const atIndex = identity.indexOf("@");
+      if (atIndex >= 0) {
+        user = identity.slice(0, atIndex) || undefined;
+        client = identity.slice(atIndex + 1) || undefined;
+      }
+    }
+    entries.push({
+      change,
+      ...(user !== undefined ? { user } : {}),
+      ...(client !== undefined ? { client } : {}),
+    });
+  }
+  return entries;
+}
+
+/**
+ * Parse batched `p4 describe -s C1 C2 ...` output into per-changelist
+ * depot paths (`... //depot/path#rev action` lines under each
+ * `Change N by user@client on ...` header). Paths stay in raw depot form.
+ */
+function parseP4DescribeFilePaths(stdout: string): ReadonlyMap<string, readonly string[]> {
+  const byChange = new Map<string, string[]>();
+  let current: string[] | undefined;
+  for (const line of stdout.split(/\r?\n/u)) {
+    const headerMatch = /^Change (\d+) by /u.exec(line);
+    const change = headerMatch?.[1];
+    if (change) {
+      current = [];
+      byChange.set(change, current);
+      continue;
+    }
+    if (!current) {
+      continue;
+    }
+    const fileMatch = /^\.\.\. (\/\/[^#\s]+)#\d+ /u.exec(line);
+    const path = fileMatch?.[1];
+    if (path) {
+      current.push(path);
+    }
+  }
+  return byChange;
+}
+
 function appendSyntheticUnifiedHeaders(
   target: string[],
   localPath: string,
@@ -317,6 +405,176 @@ function appendSyntheticUnifiedHeaders(
 
   target.push(`--- a/${localPath}`);
   target.push(`+++ b/${localPath}`);
+}
+
+/**
+ * Synthesize a unified add/delete entry from the surviving endpoint's
+ * content. `p4 diff2` never emits content for a `<none>` endpoint (verified
+ * against p4d 2025.1: the `-u` pass omits add/delete pairs entirely), so
+ * the batch path prints the endpoint revision to keep added/deleted code
+ * reviewable (design §6: 按已核验动作和端点内容转换). Binary payloads
+ * (NUL probe) keep a hunkless entry, as do empty files — matching git's
+ * representation of those cases.
+ */
+function appendEndpointContentEntry(
+  target: string[],
+  localPath: string,
+  action: "add" | "delete",
+  content: string,
+): void {
+  appendSyntheticUnifiedHeaders(target, localPath, action);
+  if (content.length === 0 || content.includes("\0")) {
+    return;
+  }
+
+  const normalized = content.replace(/\r\n/gu, "\n");
+  const hasTrailingNewline = normalized.endsWith("\n");
+  const body = hasTrailingNewline ? normalized.slice(0, -1) : normalized;
+  const lines = body.split("\n");
+  const marker = action === "add" ? "+" : "-";
+  target.push(
+    action === "add"
+      ? `@@ -0,0 +1,${lines.length} @@`
+      : `@@ -1,${lines.length} +0,0 @@`,
+  );
+  for (const line of lines) {
+    target.push(`${marker}${line}`);
+  }
+  if (!hasTrailingNewline) {
+    target.push("\\ No newline at end of file");
+  }
+}
+
+/**
+ * One `====` pair from default `p4 diff2` output (verified against p4d
+ * 2025.1). `kind: "content"` blocks carry content differences (hunks are
+ * read from the `-u` pass); add/delete blocks have a `<none>` endpoint and
+ * get their content synthesized from `p4 print` of the surviving endpoint
+ * (see `appendEndpointContentEntry`); everything else (binary,
+ * filetype-only change) keeps a hunkless entry so the net diff never
+ * silently drops the file.
+ */
+interface P4Diff2Block {
+  readonly depotPath: string;
+  readonly kind: "content" | "endpoint";
+  readonly action: "add" | "delete" | undefined;
+}
+
+/**
+ * Parse default (non-`-u`) `p4 diff2` output. Header form observed on p4d
+ * 2025.1 (paths may contain spaces; `#` is illegal in p4 filenames):
+ * `==== <none> - //path#N ====`, `==== //path#M - <none> ====`,
+ * `==== //path#M (text) - //path#N (text) ==== content`.
+ * Ed-script payload lines of content blocks are skipped — hunks come from
+ * the `-u` pass. Any unrecognized header or non-empty output without
+ * headers is a loud parse failure, never an silently empty diff.
+ */
+function parseP4Diff2Pairs(stdout: string, baseRevision: string, headRevision: string): P4Diff2Block[] {
+  // Closing marker is `====` normally but `===` when the right endpoint is
+  // `<none>` (byte-verified p4d 2025.1 quirk).
+  const headerPattern =
+    /^==== (?:(<none>)|(\/\/.+?)#(\d+)(?: \(([^)]*)\))?) - (?:(<none>)|(\/\/.+?)#(\d+)(?: \(([^)]*)\))?) ={3,4}(?:\s+(.*))?$/u;
+  const blocks: P4Diff2Block[] = [];
+  for (const line of stdout.split(/\r?\n/u)) {
+    if (!line.startsWith("==== ")) {
+      continue;
+    }
+    const match = headerPattern.exec(line);
+    if (!match) {
+      throw new Error(
+        `p4 diff2 @${baseRevision}..@${headRevision} parse failure: unrecognized header "${line.slice(0, 200)}".`,
+      );
+    }
+    const [, oldNone, oldPath, , oldType, newNone, newPath, , newType, summary] = match;
+    if (oldNone && newNone) {
+      throw new Error(
+        `p4 diff2 @${baseRevision}..@${headRevision} parse failure: both endpoints <none> in "${line.slice(0, 200)}".`,
+      );
+    }
+    // `identical` pairs (same file revision at both endpoints, observed on
+    // p4d 2025.1 for wildcard ranges) are not changes.
+    if (summary === "identical") {
+      continue;
+    }
+    const depotPath = newPath ?? oldPath;
+    if (!depotPath) {
+      continue;
+    }
+    // Binary pairs keep a hunkless entry even when the summary says
+    // `content` (real payload: `(... files differ ...)`); the -u pass
+    // cannot represent them.
+    const binary = [oldType, newType].some((type) => type?.includes("binary"));
+    if (!oldNone && !newNone && !binary && summary === "content") {
+      blocks.push({ depotPath, kind: "content", action: undefined });
+      continue;
+    }
+    blocks.push({
+      depotPath,
+      kind: "endpoint",
+      action: oldNone ? "add" : newNone ? "delete" : undefined,
+    });
+  }
+  if (blocks.length === 0 && stdout.trim().length > 0) {
+    throw new Error(
+      `p4 diff2 @${baseRevision}..@${headRevision} parse failure: output has no file headers: `
+      + stdout.slice(0, 300).replaceAll("\n", " "),
+    );
+  }
+  return blocks;
+}
+
+/**
+ * Parse `p4 diff2 -u` output into per-file hunk lines keyed by depot path.
+ * Real p4d 2025.1 emits `--- //path\t<timestamp>` / `+++ //path\t<timestamp>`
+ * headers (no `====` separators, no `#rev` suffixes) followed by `@@`
+ * sections; add/delete/binary pairs never appear. The returned lines start
+ * at the first `@@`; callers add git-style `---`/`+++` headers themselves.
+ */
+function parseP4Diff2Unified(
+  stdout: string,
+  baseRevision: string,
+  headRevision: string,
+): ReadonlyMap<string, readonly string[]> {
+  const byPath = new Map<string, string[]>();
+  let currentPath: string | undefined;
+  let sawPlus = false;
+  for (const line of stdout.split(/\r?\n/u)) {
+    const minusMatch = /^--- ((?:\/\/).+?)(?:#\d+)?(?:\t.*)?$/u.exec(line);
+    if (minusMatch?.[1]) {
+      currentPath = minusMatch[1];
+      sawPlus = false;
+      if (!byPath.has(currentPath)) {
+        byPath.set(currentPath, []);
+      }
+      continue;
+    }
+    if (/^\+\+\+ /u.test(line)) {
+      const plusMatch = /^\+\+\+ ((?:\/\/).+?)(?:#\d+)?(?:\t.*)?$/u.exec(line);
+      if (!plusMatch?.[1] || plusMatch[1] !== currentPath) {
+        throw new Error(
+          `p4 diff2 -u @${baseRevision}..@${headRevision} parse failure: +++ header "${line.slice(0, 200)}" does not match the preceding --- header.`,
+        );
+      }
+      sawPlus = true;
+      continue;
+    }
+    // Binary pairs appear as a bare `Binary files X and Y differ` line
+    // outside any ---/+++ block (verified on p4d 2025.1); the pair itself
+    // is already a hunkless entry from the enumeration pass.
+    if (/^Binary files \/\/.+ and \/\/.+ differ$/u.test(line)) {
+      continue;
+    }
+    if (currentPath === undefined || !sawPlus) {
+      if (line.trim().length > 0) {
+        throw new Error(
+          `p4 diff2 -u @${baseRevision}..@${headRevision} parse failure: content before first file header: "${line.slice(0, 200)}".`,
+        );
+      }
+      continue;
+    }
+    byPath.get(currentPath)?.push(line);
+  }
+  return byPath;
 }
 
 export class P4VcsAdapter implements VcsAdapter {
@@ -693,6 +951,14 @@ export class P4VcsAdapter implements VcsAdapter {
       return { files: [] };
     }
 
+    // Batch path (design §6.5/G03): a distinct base changelist means a
+    // multi-CL batch. describe -du covers only the single head CL and
+    // would drop earlier member CLs, so the net diff must come from the
+    // endpoint file revisions via diff2.
+    if (range.baseRevision && range.baseRevision !== revision) {
+      return this.diffBatch(range.baseRevision, revision, range.files);
+    }
+
     try {
       const result = await this.runP4([
         "describe",
@@ -727,6 +993,85 @@ export class P4VcsAdapter implements VcsAdapter {
     }
   }
 
+  /**
+   * Net diff of a multi-CL batch over the configured depot scope (never
+   * `//...` — that would scan the whole server), filtered to the candidate
+   * member files afterwards. Verified against real p4d 2025.1:
+   * - `path@=N` is rejected ("A revision range cannot be used here"); the
+   *   state-as-of-changelist syntax is `path@N`, and `@0` is the empty
+   *   depot state before CL1.
+   * - Default (non-`-u`) output enumerates every pair with `====` headers,
+   *   including add/delete (`<none>` endpoint) and binary pairs; content
+   *   differences follow in ed-script form.
+   * - `-u` output carries unified hunks only for content-change pairs;
+   *   add/delete/binary pairs are omitted entirely, so `-u` can never be
+   *   the only source — a batch whose members only add files would
+   *   otherwise look like "no changes" (design G03).
+   * - Add/delete entries get their hunk synthesized from `p4 print` of the
+   *   surviving endpoint revision (design §6: 按已核验动作和端点内容转换);
+   *   binary or empty endpoints keep the hunkless header entry.
+   * The pass-1 enumeration is therefore authoritative for the file set and
+   * actions; pass 2 (`-u`, only when content pairs exist) supplies hunks.
+   * Missing endpoint CLs, permission-hidden files, and transport failures
+   * propagate — a failed batch read must never be mistaken for "no
+   * changes".
+   */
+  private async diffBatch(
+    baseRevision: string,
+    headRevision: string,
+    files: readonly string[],
+  ): Promise<ParsedDiff> {
+    if (!/^\d+$/u.test(baseRevision) || !/^\d+$/u.test(headRevision)) {
+      throw new RangeError(
+        `P4 batch diff requires numeric changelist endpoints, got base "${baseRevision}" head "${headRevision}".`,
+      );
+    }
+    const depotBase = this.depot?.replace(/\/+$/u, "");
+    if (!depotBase) {
+      throw new RangeError(
+        "P4 batch diff requires a configured depot scope (options.depot); refusing to diff2 the whole server.",
+      );
+    }
+    const scope = `${depotBase}/...`;
+    const enumerated = await this.runP4(["diff2", `${scope}@${baseRevision}`, `${scope}@${headRevision}`]);
+    const blocks = parseP4Diff2Pairs(enumerated.stdout, baseRevision, headRevision);
+    if (blocks.length === 0) {
+      return { files: [] };
+    }
+
+    let unifiedByPath: ReadonlyMap<string, readonly string[]> = new Map();
+    if (blocks.some((block) => block.kind === "content")) {
+      const unified = await this.runP4(["diff2", "-u", `${scope}@${baseRevision}`, `${scope}@${headRevision}`]);
+      unifiedByPath = parseP4Diff2Unified(unified.stdout, baseRevision, headRevision);
+    }
+
+    const unifiedLines: string[] = [];
+    for (const block of blocks) {
+      const localPath = this.depotToLocalPath(block.depotPath) ?? normalizePath(block.depotPath);
+      if (block.kind === "content") {
+        const hunks = unifiedByPath.get(block.depotPath);
+        if (!hunks) {
+          throw new Error(
+            `p4 diff2 @${baseRevision}..@${headRevision} inconsistency: content pair "${block.depotPath}" missing from -u output.`,
+          );
+        }
+        unifiedLines.push(`diff --git a/${localPath} b/${localPath}`);
+        unifiedLines.push(`--- a/${localPath}`);
+        unifiedLines.push(`+++ b/${localPath}`);
+        unifiedLines.push(...hunks);
+        continue;
+      }
+      if (block.action === "add" || block.action === "delete") {
+        const endpointRevision = block.action === "add" ? headRevision : baseRevision;
+        const printed = await this.runP4(["print", "-q", `${block.depotPath}@${endpointRevision}`]);
+        appendEndpointContentEntry(unifiedLines, localPath, block.action, printed.stdout);
+        continue;
+      }
+      appendSyntheticUnifiedHeaders(unifiedLines, localPath, block.action);
+    }
+    return this.filterDiffToRange(parseUnifiedDiff(unifiedLines.join("\n")), files);
+  }
+
   private parseDescribeOutput(stdout: string): string[] {
     const files: string[] = [];
     const lines = stdout.split(/\r?\n/u);
@@ -747,6 +1092,7 @@ export class P4VcsAdapter implements VcsAdapter {
 
     return files;
   }
+
 
   private depotToLocalPath(depotPath: string): string | undefined {
     const depotBase = this.depot?.replace(/\/+$/u, "") ?? "";
@@ -895,6 +1241,127 @@ export class P4VcsAdapter implements VcsAdapter {
     }
 
     return parseUnifiedDiff(unifiedLines.join("\n"));
+  }
+
+  /**
+   * Bounded submitted-changelist metadata read for auto-commit scheduling
+   * (design §6.1). The range `(base, head]` (or `(_, head]` without base)
+   * is enumerated with one scope-limited `p4 changes -s submitted`, then
+   * the page slice is read oldest-first; the cursor carries the last
+   * emitted CL so the next page resumes at cursor+1 without overlap. CL
+   * numbers are monotonic, so the padded CL is a globally sortable order
+   * key. User and Client come from the changelist record itself (never
+   * `-u`/`-c` filtered, never substituted); changed paths are an advisory
+   * summary from one batched `p4 describe -s` under the byte budget.
+   */
+  async listCommitMetadataPage(query: CommitMetadataQuery): Promise<CommitMetadataPage> {
+    if (!/^\/\//u.test(query.scopeRef)) {
+      throw new RangeError(`P4 metadata scope "${query.scopeRef}" must be a depot path (//...).`);
+    }
+    if (!/^\d+$/u.test(query.headRevision)) {
+      throw new RangeError(`P4 metadata headRevision "${query.headRevision}" must be a changelist number.`);
+    }
+    if (query.baseRevision !== undefined && !/^\d+$/u.test(query.baseRevision)) {
+      throw new RangeError(`P4 metadata baseRevision "${query.baseRevision}" must be a changelist number.`);
+    }
+    if (query.maxRecords < 1) {
+      throw new RangeError("P4 metadata maxRecords must be at least 1.");
+    }
+
+    let rangeBase = query.baseRevision;
+    if (query.cursor !== undefined) {
+      if (!/^\d+$/u.test(query.cursor)) {
+        throw new RangeError(`Invalid P4 metadata cursor "${query.cursor}".`);
+      }
+      // Resume after the last emitted CL: the cursor becomes the exclusive
+      // lower endpoint, so the next page starts at cursor+1 with no overlap.
+      rangeBase = query.cursor;
+    }
+
+    if (rangeBase !== undefined && Number(rangeBase) >= Number(query.headRevision)) {
+      return { vcs: "p4", records: [], status: "complete" };
+    }
+
+    // Real p4d rejects a bare depot path with a revision range
+    // ("//depot - must refer to client ... or a depot"); the range needs a
+    // wildcard filespec (verified against p4d 2025.1).
+    const scopeBase = query.scopeRef.replace(/\/\.\.\.$/u, "").replace(/\/+$/u, "");
+    const range = rangeBase !== undefined
+      ? `${scopeBase}/...@>${rangeBase},@<=${query.headRevision}`
+      : `${scopeBase}/...@<=${query.headRevision}`;
+
+    let listed: P4CommandResult;
+    try {
+      listed = await this.runP4(["changes", "-s", "submitted", "-m", String(P4_METADATA_ENUM_CAP), range]);
+    } catch (error) {
+      // Permission-hidden history, unreadable scopes, or transport/auth
+      // failures are explicit blockers — never an empty range (design G08).
+      return {
+        vcs: "p4",
+        records: [],
+        status: "unavailable",
+        unavailableReason: getErrorDiagnosticText(error).slice(0, 500),
+      };
+    }
+
+    const enumerated = parseP4ChangesMetadata(listed.stdout);
+    if (enumerated.length >= P4_METADATA_ENUM_CAP) {
+      return {
+        vcs: "p4",
+        records: [],
+        status: "unavailable",
+        unavailableReason: `range ${range} exceeds the ${P4_METADATA_ENUM_CAP}-changelist enumeration cap`,
+      };
+    }
+    // p4 changes lists newest-first; the page walks oldest-first.
+    enumerated.reverse();
+    const pageEntries = enumerated.slice(0, query.maxRecords);
+
+    let pathsByChange: ReadonlyMap<string, readonly string[]> = new Map();
+    if (pageEntries.length > 0 && query.maxBytes >= P4_METADATA_MIN_DESCRIBE_BYTES) {
+      try {
+        const described = await this.runP4(["describe", "-s", ...pageEntries.map((entry) => entry.change)]);
+        pathsByChange = parseP4DescribeFilePaths(described.stdout);
+      } catch {
+        // changedPaths is advisory: a failed describe must not break
+        // continuity or the recorded source fields.
+      }
+    }
+
+    const records: CommitMetadataRecord[] = [];
+    let bytes = 0;
+    let budgetExhausted = false;
+    for (const entry of pageEntries) {
+      bytes += 160;
+      const paths: string[] = [];
+      if (!budgetExhausted) {
+        for (const path of pathsByChange.get(entry.change) ?? []) {
+          if (bytes + path.length + 16 > query.maxBytes) {
+            budgetExhausted = true;
+            break;
+          }
+          bytes += path.length + 16;
+          paths.push(path);
+        }
+      }
+      records.push({
+        revision: entry.change,
+        orderKey: entry.change.padStart(12, "0"),
+        parents: [],
+        ...(entry.user !== undefined ? { p4User: entry.user } : {}),
+        ...(entry.client !== undefined ? { p4Client: entry.client } : {}),
+        changedPaths: paths,
+      });
+    }
+
+    const hasMore = enumerated.length > pageEntries.length;
+    const last = records[records.length - 1];
+    return {
+      vcs: "p4",
+      records,
+      ...(hasMore && last ? { nextCursor: last.revision } : {}),
+      status: hasMore ? "partial" : "complete",
+    };
   }
 
   private applyFilters(files: string[]): string[] {

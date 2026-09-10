@@ -1,4 +1,10 @@
+import { dirname, join } from "node:path";
+
 import type { AppConfig } from "./config.js";
+import type { AutoCommitStore } from "./auto-commit-store.js";
+import { createMemoryAutoCommitStore } from "./memory-auto-commit-store.js";
+import { createRedisAutoCommitStore } from "./redis-auto-commit-store.js";
+import { createSqliteAutoCommitStore } from "./sqlite-auto-commit-store.js";
 import { createInMemoryQueue, type ReviewQueue } from "./queue.js";
 import { createRedisQueue, type RedisQueueOptions } from "./redis-queue.js";
 import { createSqliteQueue, type SqliteQueueOptions } from "./sqlite-queue.js";
@@ -59,6 +65,33 @@ export async function createQueueFromConfig(config: AppConfig): Promise<ReviewQu
 		}
 		default:
 			return createInMemoryQueue();
+	}
+}
+
+/**
+ * Auto-commit receipt/member/batch store follows the queue backend so one
+ * deployment keeps one persistence story (design §7.1): sqlite and redis are
+ * durable, memory only proves this-process receipt and must stay visible as
+ * such. RabbitMQ has no implemented backend anywhere, so it shares the
+ * in-memory fallback exactly like the review queue.
+ */
+export async function createAutoCommitStoreFromConfig(config: AppConfig): Promise<AutoCommitStore> {
+	switch (config.queue.kind) {
+		case "redis": {
+			const redisOptions = toRedisQueueOptions(config);
+			return createRedisAutoCommitStore({
+				connection: redisOptions.connection,
+				...(redisOptions.keyPrefix ? { keyPrefix: redisOptions.keyPrefix } : {}),
+			});
+		}
+		case "sqlite": {
+			const sqliteOptions = toSqliteQueueOptions(config);
+			return createSqliteAutoCommitStore({
+				path: join(dirname(sqliteOptions.path), "auto-commit.sqlite"),
+			});
+		}
+		default:
+			return createMemoryAutoCommitStore();
 	}
 }
 

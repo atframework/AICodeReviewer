@@ -68,6 +68,19 @@ PowerShell 5.1 的 `>` 重定向和 `Out-File` 默认 UTF-16 LE 编码；需要�
 
 影响配置 shape、agent 适配器、MCP 工具合同、输出渲染、部署行为或公开工作流的变更，必须在同一次变更中更新对应文档、`example/config.yaml` 和 `example/README.md`。
 
+### 本地服务集成测试
+
+以下测试可使用本机临时服务，无需生产凭据：
+
+| 变量 | 要求与覆盖范围 |
+| --- | --- |
+| `AICR_SVN_TEST_EXECUTABLE` | `svn` 的绝对路径，同目录提供 `svnadmin` 和 `svnserve`。启用真实仓库元数据测试，以及 post-commit hook → 带认证 HTTP → SQLite 调度测试。 |
+| `AICR_REDIS_TEST_URL` | 本机测试 Redis 的 URL。启用自动提交存储和模型目录持久化测试；目录测试使用独立随机键前缀。 |
+
+运行上面的测试命令前设置变量；未设置时，对应集成测试会跳过。SVN fixture 位于 `build/tmp/`，hook 测试会停止自己启动的服务。这些测试不调用 LLM，也不向远端系统发布 review；部署专属的认证和网络仍需单独验收。
+
+`packages/core/test/config-examples.test.ts` 始终校验部署配置，以及 example README 和中英文 queue 指南中的完整自动提交 YAML 示例。该测试尚未覆盖其他文档片段。
+
 ## 新增 package
 
 1. 在 `packages/<name>/` 下创建包目录，包含自己的 `package.json`、`tsconfig.json`、`src/` 和 `test/`。

@@ -64,6 +64,7 @@ import {
   type GitVcsAdapter,
   type P4VcsAdapter,
   type SvnVcsAdapter,
+  type VcsAdapter,
 } from "@aicr/vcs";
 import {
   createStoreDb,
@@ -89,6 +90,13 @@ import { GiteaApiClient } from "./issue-triage.js";
 import type { IssueTriageRuntimeOptions, WorkspaceIssueTriagePolicy } from "./issue-triage.js";
 import { createProblemResolutionAnalyzer } from "./problem-resolution.js";
 import type { ServerAppOptions, ServerReviewOrchestrationOptions, TriggerRetryConfig } from "./index.js";
+import { persistReviewRunToStore } from "./index.js";
+import { type AutoCommitStore, type StreamKeyInput } from "@aicr/core";
+import { createAutoCommitStoreFromConfig } from "@aicr/core";
+import { AutoCommitRuntime, createAutoCommitBatchExecutor } from "./auto-commit-runtime.js";
+import {
+  AutoCommitScheduler,
+} from "./auto-commit-scheduler.js";
 import { type AuthConfig } from "./auth.js";
 import { createReviewDeduplicator } from "./review-deduplicator.js";
 import { resolveAdminAuthConfig } from "./admin-auth.js";
@@ -2610,7 +2618,7 @@ export async function bootstrapServerApp(options: BootstrapServerOptions): Promi
       ? {
           postRunCallback: async (result: ReviewOrchestrationResult, ctx: ReviewOrchestrationContext): Promise<void> => {
             const workspaceId = ctx.reviewEvent.workspaceId;
-            const runId = ctx.reviewEvent.headSha ?? String(Date.now());
+            const runId = ctx.runId ?? ctx.reviewEvent.headSha ?? String(Date.now());
             const reflectionInput = {
               workspaceId,
               runId,
@@ -2690,6 +2698,13 @@ export async function bootstrapServerApp(options: BootstrapServerOptions): Promi
     });
   }
 
+  const autoCommitPipeline = await createAutoCommitPipeline({
+    config,
+    baseDir,
+    orchestrationOptions,
+    ...(store ? { reviewStore: store } : {}),
+  });
+
   const triageOptions = resolveIssueTriageOptions(config, defaultTriageRoute.llm, defaultTriageRoute.model);
   const authConfig = resolveAuthConfig(config);
   const githubOption = toServerWebhookOption(githubConfigs);
@@ -2712,6 +2727,11 @@ export async function bootstrapServerApp(options: BootstrapServerOptions): Promi
     asyncTriggers: true,
     deduplicator: createReviewDeduplicator(),
     ...(triggerRetry ? { triggerRetry } : {}),
+    // Automatic commit events persist as receipts and run through the
+    // scheduler; PR/issue/comment/manual flows keep the existing paths.
+    autoCommit: autoCommitPipeline.runtime,
+    autoCommitStore: autoCommitPipeline.store,
+    closeAutoCommit: autoCommitPipeline.close,
     ...(observability ? { observability } : {}),
     ...(store ? { store } : {}),
   };
@@ -2786,5 +2806,103 @@ function resolveIssueTriageOptions(
     model,
     giteaClient,
     workspacePolicies,
+  };
+}
+
+/**
+ * Automatic-commit pipeline (design §7): one persistent store following the
+ * queue backend, the receive-path runtime, and the single debounced
+ * scheduler loop. The scheduler starts on construction like the queue
+ * worker; its leases, reservations, and outbox claims expire, so process
+ * kill is a safe stop and restart resumes without member loss.
+ */
+async function createAutoCommitPipeline(deps: {
+  readonly config: AppConfig;
+  readonly baseDir: string;
+  readonly orchestrationOptions: ServerReviewOrchestrationOptions;
+  readonly reviewStore?: StoreDb;
+}): Promise<{
+  readonly runtime: AutoCommitRuntime;
+  readonly scheduler: AutoCommitScheduler;
+  readonly store: AutoCommitStore;
+  readonly close: () => Promise<void>;
+}> {
+  const { config, baseDir, orchestrationOptions } = deps;
+  const store = await createAutoCommitStoreFromConfig(config);
+  if (config.queue.kind === "memory" || config.queue.kind === "rabbitmq") {
+    console.warn(JSON.stringify({
+      level: "warn",
+      msg: "auto-commit store is in-memory: a 202 receipt only proves this process accepted the event; receipts do not survive restart",
+      queueBackend: config.queue.kind,
+    }));
+  }
+
+  const getPolicyLayers = (workspaceId: string) => ({
+    global: config.review.auto_commit,
+    defaults: config.workspaces.defaults.review?.auto_commit,
+    instance: config.workspaces.instances[workspaceId]?.review?.auto_commit,
+  });
+
+  const schedulerHolder: { scheduler?: AutoCommitScheduler } = {};
+  const runtime = new AutoCommitRuntime({
+    store,
+    getPolicyLayers,
+    onAccepted: () => schedulerHolder.scheduler?.kick(),
+  });
+
+  const triggerByName = new Map(config.triggers.map((trigger) => [trigger.name, trigger]));
+  const adapterCache = new Map<string, GitVcsAdapter | P4VcsAdapter | SvnVcsAdapter>();
+  const getAdapter = (stream: StreamKeyInput) => {
+    const trigger = triggerByName.get(stream.triggerName);
+    if (!trigger) {
+      return undefined;
+    }
+    // The namespace prefixes provider identity; the remainder is the
+    // original-case repo/depot reference the adapter needs for remote URLs.
+    const repoRef = stream.sourceNamespace.slice(stream.sourceNamespace.indexOf(":") + 1);
+    const cacheKey = `${stream.triggerName} ${repoRef}`;
+    let adapter = adapterCache.get(cacheKey);
+    if (!adapter) {
+      adapter = createVcsAdapterFromConfig(config, baseDir, stream.triggerName, repoRef || undefined);
+      adapterCache.set(cacheKey, adapter);
+    }
+    return typeof adapter.listCommitMetadataPage === "function"
+      ? (adapter as VcsAdapter & { listCommitMetadataPage: NonNullable<VcsAdapter["listCommitMetadataPage"]> })
+      : undefined;
+  };
+
+  const executeBatch = createAutoCommitBatchExecutor({
+    store,
+    orchestrationOptions,
+    persistResult: (runId, result) => {
+      const reviewStore = deps.reviewStore;
+      if (!reviewStore) return;
+      // One atomic local transaction includes usage and rollup rows. A
+      // recovered completed checkpoint can safely retry this accounting.
+      reviewStore.sqlite.transaction(() => {
+        if (reviewStore.sqlite.prepare("SELECT id FROM review_runs WHERE id = ?").get(runId)) return;
+        persistReviewRunToStore(reviewStore, runId, result.reviewEvent, result.reviewRun,
+          result.durationMs, result.startedAt, true);
+      })();
+    },
+  });
+  const scheduler = new AutoCommitScheduler({
+    store,
+    getPolicy: (workspaceId) => runtime.policyFor(workspaceId),
+    getAdapter,
+    executeBatch,
+    globalConcurrency: config.queue.workers?.concurrency ?? 1,
+    perWorkspaceConcurrency: 1,
+  });
+  schedulerHolder.scheduler = scheduler;
+  scheduler.start();
+  return {
+    runtime,
+    scheduler,
+    store,
+    close: async () => {
+      await scheduler.stopAndDrain();
+      store.close?.();
+    },
   };
 }

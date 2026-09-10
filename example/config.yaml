@@ -681,8 +681,9 @@ agent:
   # leaving orphaned workers behind. The orchestrator may run several passes
   # (initial + context-repair + direct-LLM fallback), so the wall-clock per
   # review can be a few times this value. Keep it comfortably above the slowest
-  # expected single pass; raise it for large PRs (production uses 1200).
-  timeout_seconds: 300
+  # expected single pass; lower it for small-PR environments (1800 = 30 minutes
+  # is the built-in default).
+  timeout_seconds: 1800
   auto_approve: true
   context_compaction:
     auto: true # enable auto-compaction in supported agent runtimes
@@ -760,6 +761,38 @@ review:
   commit_strategy: aggregate # aggregate | per_commit | head_only
   git:
     allow_deepen: true
+  # Automatic commit scheduling (push / P4 change-commit / SVN post-commit).
+  # Events persist as receipts in the queue-backend store, wait delay_seconds,
+  # then merge contiguous same-source commits into one review batch. Manual
+  # reviews, PR/MR, comments, and issue triage are never delayed or merged.
+  # All fields support global → workspace defaults → workspace instance layers;
+  # schedule replaces wholesale at the nearest layer that sets it.
+  # auto_commit:
+  #   delay_seconds: 120        # 0 disables the first-receive wait (max: 31536000)
+  #   schedule:                 # restrict when new batches may start; omitted = always allowed
+  #     timezone: Asia/Shanghai # IANA name, default UTC
+  #     rules:                  # union across groups; rules: [] clears all weekly limits
+  #       - days: [mon, tue, wed, thu, fri]
+  #         windows:
+  #           - { start: "00:00", end: "13:00" }
+  #           - { start: "18:00", end: "24:00" } # skip the afternoon peak
+  #       - days: [sat, sun]
+  #         windows:
+  #           - { start: "00:00", end: "24:00" }
+  #   exclude_sources:          # skip bot/CI commits; rules OR, fields AND; [] clears inherited rules
+  #     - id: ci-bot
+  #       vcs: git              # git fields: author_name/author_email/committer_name/committer_email
+  #       match:
+  #         author_name: { glob: "*[bot]" }        # exactly one of glob/regex per field
+  #         author_email: { regex: "^ci@", ignore_case: true }
+  #     - id: p4-autobuild
+  #       vcs: p4               # p4 fields: user, client; svn field: author
+  #       match:
+  #         user: { glob: "build*" }
+  #     - id: p4-ci-client
+  #       vcs: p4
+  #       match:
+  #         client: { glob: "ci-*" }
   # AICR label management — skip review if PR/MR/issue has these labels,
   # and auto-tag targets when review starts/completes.
   # All fields support global → workspace-level override.

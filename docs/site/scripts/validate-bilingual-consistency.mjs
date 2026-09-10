@@ -1,6 +1,5 @@
-// Enforce the documented bilingual contribution rules (M11-P6 "贡献规则自动化"
-// in docs/ai/documentation-site-plan.md §8; rules recorded in
-// .agents/skills/docs-writing-style/SKILL.md §1 and §3.4 of the site plan).
+// Enforce bilingual contribution rules from .agents/skills/docs-writing-style/SKILL.md.
+// Contract and acceptance history: docs/ai/milestones/M11.md.
 // Zero dependencies.
 //
 // Checks, for every page pair under src/content/docs/{en,zh-cn}/:

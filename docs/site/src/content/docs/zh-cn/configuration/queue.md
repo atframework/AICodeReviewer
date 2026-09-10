@@ -29,6 +29,51 @@ queue:
       jitter: true
 ```
 
+## 自动提交调度
+
+Git push、P4 `change-commit`、SVN `post-commit` 默认等待 120 秒。
+`review.auto_commit` 配置延迟、每周可执行时段和来源排除规则，可放在全局、
+`workspaces.defaults.review` 或 `workspaces.instances.<id>.review` 下。
+最近一层的 `schedule` 或 `exclude_sources` 整体替换继承值。
+
+```yaml
+review:
+  auto_commit:
+    delay_seconds: 120
+    schedule:
+      timezone: Asia/Shanghai
+      rules:
+        - days: [mon, tue, wed, thu, fri]
+          windows:
+            - { start: "00:00", end: "13:00" }
+            - { start: "18:00", end: "24:00" }
+        - days: [sat, sun]
+          windows:
+            - { start: "00:00", end: "24:00" }
+    exclude_sources:
+      - id: ci-client
+        vcs: p4
+        match:
+          client: { glob: "ci-*" }
+```
+
+多组时段取并集，包含开始时间、不包含结束时间；跨午夜时段归属于开始的星期。
+省略 schedule 或设置 `schedule.rules: []` 都表示全天可用，默认时区为 UTC。
+已经开始的分析可以在时段关闭后完成。`exclude_sources: []` 清除继承的排除规则；
+规则之间为 OR，同一规则内的字段为 AND，每个字段可选 `glob` 或 RE2 `regex`。
+
+“提交来源”在仓库和 stream 范围内按 Git 原始 author name + email、P4 User + Client、
+SVN `svn:author` 区分。同来源连续且到期的提交可跨通知合并，每批最多 50 个成员。
+通知分别覆盖 `A1–A3`、`A4–A5`、`B1`，且封存前都已到期时，得到 `[A1–A5]` 和 `[B1]`。
+重复通知不会重置延迟，也不会重新分配已封存成员。P4/SVN hook 只覆盖所报 revision。
+排除判定所需的来源证据缺失时，有界重试后将成员标记为失败，不会默认放行。
+
+接收回执、批次成员关系和执行检查点使用 `queue.kind` 对应的后端，memory 重启会丢失。
+完成检查点仅恢复本地结果记账，不重跑分析或发布。执行中断或部分发布的任务需要人工
+核查（`execution_outcome_unknown`），其 dead 批次会占住 stream。尚无自动逐目标发布恢复。
+每个调度器逐批执行；多消费者间的全局上限取 `queue.workers.concurrency`（省略 workers
+块时为 1），每个 workspace 同时最多执行一批。
+
 ## `queue.kind`
 
 | 取值 | 说明 |

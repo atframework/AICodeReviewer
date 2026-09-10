@@ -16,6 +16,9 @@ import type {
   AttributionRequest,
   AttributionResult,
   ChangeRange,
+  CommitMetadataQuery,
+  CommitMetadataRecord,
+  CommitMetadataPage,
   ExtraContextRequest,
   ExtraContextResult,
   ScopedTree,
@@ -23,7 +26,6 @@ import type {
   WorkspaceRef,
 } from "./contracts.js";
 import { parseUnifiedDiff, type ParsedDiff } from "./diff.js";
-
 export interface GitCommandResult {
   readonly stdout: string;
   readonly stderr: string;
@@ -228,6 +230,55 @@ function formatLsTreeListing(stdout: string): string[] {
     lines.push(`- ${label}: ${entryPath}`);
   }
   return lines;
+}
+
+interface GitLogMetadataEntry {
+  readonly sha: string;
+  readonly parents: readonly string[];
+  readonly authorName?: string;
+  readonly authorEmail?: string;
+  readonly committerName?: string;
+  readonly committerEmail?: string;
+  readonly paths: readonly string[];
+}
+
+/**
+ * Parses `git log --format=%x1e%H%x1f%P%x1f%an%x1f%ae%x1f%cn%x1f%ce
+ * --name-only` output: one `\x1e`-prefixed record per commit, header fields
+ * `\x1f`-separated on the first line, changed paths on following non-empty
+ * lines. Author/committer values are raw (`%an` family), never mailmapped.
+ */
+export function parseGitLogMetadata(stdout: string): GitLogMetadataEntry[] {
+  const entries: GitLogMetadataEntry[] = [];
+  for (const chunk of stdout.split("\x1e")) {
+    const trimmed = chunk.replace(/^\r?\n/u, "").replace(/\r?\n$/u, "");
+    if (trimmed.length === 0) {
+      continue;
+    }
+    const lines = trimmed.split(/\r?\n/u);
+    const header = lines[0] ?? "";
+    const fields = header.split("\x1f");
+    if (fields.length < 6 || !/^[0-9a-f]{4,64}$/iu.test(fields[0] ?? "")) {
+      continue;
+    }
+    const parents = (fields[1] ?? "").split(/\s+/u).filter((value) => value.length > 0);
+    const emptyToUndefined = (value: string | undefined): string | undefined =>
+      value !== undefined && value.length > 0 ? value : undefined;
+    const authorName = emptyToUndefined(fields[2]);
+    const authorEmail = emptyToUndefined(fields[3]);
+    const committerName = emptyToUndefined(fields[4]);
+    const committerEmail = emptyToUndefined(fields[5]);
+    entries.push({
+      sha: fields[0] ?? "",
+      parents,
+      ...(authorName !== undefined ? { authorName } : {}),
+      ...(authorEmail !== undefined ? { authorEmail } : {}),
+      ...(committerName !== undefined ? { committerName } : {}),
+      ...(committerEmail !== undefined ? { committerEmail } : {}),
+      paths: lines.slice(1).filter((line) => line.trim().length > 0),
+    });
+  }
+  return entries;
 }
 
 export function parseGitBlamePorcelain(stdout: string): AttributionEntry[] {
@@ -901,6 +952,196 @@ export class GitVcsAdapter implements VcsAdapter {
 
     return parseUnifiedDiff(result.stdout);
   }
+
+  /**
+   * Bounded first-parent history read for auto-commit scheduling (design
+   * §6.1). Walks `base..head` (or from `head`'s root when base is omitted)
+   * oldest-first with raw `%an/%ae/%cn/%ce` — never the mailmap-rewritten
+   * `%aN/%aE/%cN/%cE` forms. Order keys are ABSOLUTE history positions
+   * (`git rev-list --first-parent --count <sha>`), so out-of-order webhook
+   * deliveries still order by true history rather than arrival (design
+   * §5.2). The cursor carries the last emitted sha and its absolute
+   * position; resuming re-derives the remaining range from that sha.
+   * Side-branch commits of merges are excluded by `--first-parent`; merges
+   * themselves keep their full parent list.
+   */
+  async listCommitMetadataPage(query: CommitMetadataQuery): Promise<CommitMetadataPage> {
+    await this.syncRepository();
+
+    let startIndex = 1;
+    let rangeBase = query.baseRevision;
+    let historyRewrite: boolean | undefined;
+    if (query.cursor) {
+      const [cursorSha = "", indexText, rewriteFlag] = query.cursor.split(":");
+      const cursorIndex = Number(indexText);
+      if (!/^[0-9a-f]{4,64}$/iu.test(cursorSha) || !Number.isInteger(cursorIndex) || cursorIndex < 1) {
+        throw new RangeError(`Invalid git metadata cursor "${query.cursor}".`);
+      }
+      if (rewriteFlag !== undefined && rewriteFlag !== "rewrite" && rewriteFlag !== "linear") {
+        throw new RangeError(`Invalid git metadata cursor "${query.cursor}".`);
+      }
+      historyRewrite = rewriteFlag === undefined ? undefined : rewriteFlag === "rewrite";
+      rangeBase = cursorSha;
+      startIndex = cursorIndex;
+    } else if (rangeBase) {
+      // Absolute first-parent position of the base; page records continue
+      // from basePosition + 1. `rev-list --count` is one cheap SHA-only walk.
+      try {
+        const counted = await this.runRevisionRangeCommand([
+          "-C",
+          this.repositoryDir,
+          "rev-list",
+          "--first-parent",
+          "--count",
+          rangeBase,
+        ]);
+        const basePosition = Number(counted.stdout.trim());
+        if (!Number.isSafeInteger(basePosition) || basePosition < 0) {
+          throw new Error(`unexpected rev-list count "${counted.stdout.trim()}"`);
+        }
+        startIndex = basePosition + 1;
+      } catch (error) {
+        return {
+          vcs: "git",
+          records: [],
+          status: "unavailable",
+          unavailableReason: getGitErrorText(error),
+        };
+      }
+    }
+    // `git log --max-count` is applied BEFORE `--reverse`, so a single
+    // oldest-first log command cannot page correctly. Read the SHA list of
+    // the range first (oldest-first, SHA-only output — cheap even for large
+    // incremental ranges), then fetch metadata for exactly the page slice
+    // with `--no-walk`. A hard enumeration cap turns a pathological range
+    // into an explicit blocker instead of an unbounded read (design G08).
+    const range = rangeBase ? `${rangeBase}..${query.headRevision}` : query.headRevision;
+    const GIT_METADATA_ENUM_CAP = 100_000;
+    let shas: string[];
+    try {
+      const listing = await this.runRevisionRangeCommand([
+        "-C",
+        this.repositoryDir,
+        "rev-list",
+        "--first-parent",
+        "--reverse",
+        `--max-count=${GIT_METADATA_ENUM_CAP}`,
+        range,
+      ]);
+      shas = listing.stdout.split(/\r?\n/u).filter((line) => /^[0-9a-f]{4,64}$/iu.test(line));
+      if (shas.length >= GIT_METADATA_ENUM_CAP) {
+        return {
+          vcs: "git",
+          records: [],
+          status: "unavailable",
+          unavailableReason: `range ${range} exceeds the ${GIT_METADATA_ENUM_CAP}-commit enumeration cap`,
+        };
+      }
+    } catch (error) {
+      // Missing endpoints, exhausted shallow history, or unreadable objects
+      // are explicit blockers — never an empty range (design G08).
+      return {
+        vcs: "git",
+        records: [],
+        status: "unavailable",
+        unavailableReason: getGitErrorText(error),
+      };
+    }
+
+    // A rewind to an ancestor has no newly reachable commits, but it still
+    // changes the notified endpoints. Keep the head as a rewrite observation.
+    if (!query.cursor && query.baseRevision && shas.length === 0) {
+      const endpoints = await this.runRevisionRangeCommand([
+        "-C", this.repositoryDir, "rev-parse", `${query.baseRevision}^{commit}`, `${query.headRevision}^{commit}`,
+      ]);
+      const [baseSha, headSha] = endpoints.stdout.trim().split(/\r?\n/u);
+      historyRewrite = baseSha !== headSha;
+      if (historyRewrite && headSha) shas = [headSha];
+    }
+    const pageShas = shas.slice(0, query.maxRecords);
+    if (pageShas.length === 0) {
+      return { vcs: "git", records: [], status: "complete", ...(historyRewrite !== undefined ? { historyRewrite } : {}) };
+    }
+
+    const metadata = await this.runRevisionRangeCommand([
+      "-C",
+      this.repositoryDir,
+      "log",
+      "--no-walk",
+      "--format=%x1e%H%x1f%P%x1f%an%x1f%ae%x1f%cn%x1f%ce",
+      "--name-only",
+      ...pageShas,
+    ]);
+    const parsed = parseGitLogMetadata(metadata.stdout);
+    const bySha = new Map(parsed.map((entry) => [entry.sha, entry]));
+    if (!query.cursor && query.baseRevision && historyRewrite === undefined) {
+      const resolved = await this.runRevisionRangeCommand([
+        "-C", this.repositoryDir, "rev-parse", "--verify", `${query.baseRevision}^{commit}`,
+      ]);
+      const first = bySha.get(pageShas[0]!);
+      if (first) historyRewrite = first.parents[0] !== resolved.stdout.trim();
+    }
+    if (!query.cursor && historyRewrite) {
+      const counted = await this.runRevisionRangeCommand([
+        "-C", this.repositoryDir, "rev-list", "--first-parent", "--count", query.headRevision,
+      ]);
+      startIndex = Number(counted.stdout.trim()) - shas.length + 1;
+    }
+
+    const records: CommitMetadataRecord[] = [];
+    let bytes = 0;
+    let truncated = false;
+    for (const [offset, sha] of pageShas.entries()) {
+      const entry = bySha.get(sha);
+      if (!entry) {
+        return {
+          vcs: "git",
+          records: [],
+          status: "unavailable",
+          unavailableReason: `metadata missing for enumerated commit ${sha}`,
+        };
+      }
+      const orderKey = String(startIndex + offset).padStart(12, "0");
+      const paths: string[] = [];
+      for (const path of entry.paths) {
+        if (bytes + path.length + 16 > query.maxBytes) {
+          truncated = true;
+          break;
+        }
+        bytes += path.length + 16;
+        paths.push(path);
+      }
+      bytes += 160;
+      if (bytes > query.maxBytes && records.length > 0) {
+        truncated = true;
+        break;
+      }
+      records.push({
+        revision: entry.sha,
+        ...(historyRewrite !== undefined ? { historyRewrite } : {}),
+        orderKey,
+        parents: entry.parents,
+        ...(entry.authorName !== undefined ? { authorName: entry.authorName } : {}),
+        ...(entry.authorEmail !== undefined ? { authorEmail: entry.authorEmail } : {}),
+        ...(entry.committerName !== undefined ? { committerName: entry.committerName } : {}),
+        ...(entry.committerEmail !== undefined ? { committerEmail: entry.committerEmail } : {}),
+        changedPaths: paths,
+      });
+    }
+
+    const hasMore = shas.length > pageShas.length || truncated;
+    const last = records[records.length - 1];
+    const rangeFlag = historyRewrite === undefined ? "" : historyRewrite ? ":rewrite" : ":linear";
+    const nextCursor = hasMore ? `${last?.revision ?? rangeBase ?? ""}:${startIndex + records.length}${rangeFlag}` : undefined;
+    return {
+      vcs: "git",
+      records,
+      ...(historyRewrite !== undefined ? { historyRewrite } : {}),
+      ...(nextCursor ? { nextCursor } : {}),
+      status: nextCursor ? "partial" : "complete",
+    };
+  }
+
 }
 
 export function createGitVcsAdapter(options: GitVcsAdapterOptions): GitVcsAdapter {
