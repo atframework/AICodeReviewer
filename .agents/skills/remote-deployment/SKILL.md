@@ -153,6 +153,23 @@ The `deploy.sh` script:
 3. Starts new container with volume mounts and env vars
 4. Runs health check on `http://127.0.0.1:<host-port>/healthz`
 
+**Systemd-managed start (public production host):** run deploys with
+`AICR_ENABLE_SYSTEMD=true`. Instead of `podman run -d`, `deploy.sh` then stops
+the existing `<container>.service`, generates a quadlet
+`~/.config/containers/systemd/<container>.container` via podlet
+(`podman run --rm ghcr.io/containers/podlet:latest --install --wanted-by default.target --wants network-online.target --after network-online.target podman run --name <container> ...`),
+runs `systemctl --user daemon-reload`, and starts `<container>.service`.
+systemd restarts the container after crashes (`--restart unless-stopped` in
+the podlet args maps to `Restart=always` — never drop it, podlet emits
+`Restart=no` without it) and starts it at boot (rootless needs
+`loginctl show-user <user> --property=Linger` = `yes`). podlet/quadlet is
+podman-only: with `AICR_ENGINE=docker` (or any non-podman engine) the script
+prints a warning and falls back to `<engine> run -d` instead of failing.
+Host reference:
+`/home/tools/setup/traefik/create-traefik-pod.sh`. Manage the service with
+`systemctl --user status|stop|start|restart <container>.service`; never start
+a competing `podman run -d` container with the same name alongside it.
+
 **Stopping a running `deploy.sh` over SSH:** a literal pattern like
 `pkill -f 'bash deploy.sh'` also matches the caller's own SSH remote command
 line and kills the session mid-command. Use a bracketed regex that cannot match
@@ -203,7 +220,13 @@ For remote diagnostics, distinguish host tools from the runtime-image baseline: 
    ssh ... <remote-host> "$ENGINE_CMD images --filter reference='aicr:previous'"
    ```
 
-2. Stop the failed container and start one from the previous image:
+2. When the container is systemd-managed (`AICR_ENABLE_SYSTEMD=true`), stop the service first so `Restart=always` does not resurrect the new container mid-rollback:
+
+   ```bash
+   ssh ... <remote-host> "systemctl --user stop <container-name>.service"
+   ```
+
+3. Stop the failed container and start one from the previous image:
 
    ```bash
    ssh ... <remote-host> "\
@@ -220,11 +243,15 @@ For remote diagnostics, distinguish host tools from the runtime-image baseline: 
 
    **Important**: `deploy.sh` uses bind mounts from `<deploy-dir>/data/*`, not named volumes.
 
-3. Verify health:
+4. Verify health:
 
    ```bash
    curl -sf "http://127.0.0.1:<host-port>/healthz"
    ```
+
+   The rollback container runs outside systemd on purpose; the next
+   `AICR_ENABLE_SYSTEMD=true bash deploy.sh` regenerates the quadlet and
+   returns the deployment to service management.
 
 ### Container sandbox deployment (optional)
 
@@ -316,7 +343,7 @@ The `.env` file must be ASCII or UTF-8 without BOM. Windows PowerShell 5.1 `>` r
 
 ### Config-only changes
 
-`config.yaml` and `.env` are volume-mounted into the container. After editing either, restart the container (`podman restart <name>`) — no image rebuild needed.
+`config.yaml` and `.env` are volume-mounted into the container. After editing either, restart the container — no image rebuild needed. On systemd-managed hosts use `systemctl --user restart <container>.service` (or `stop` + `start`); on plain `podman run -d` deployments use `podman restart <name>`.
 
 ## Common Failures and Recovery
 
@@ -336,7 +363,8 @@ The `.env` file must be ASCII or UTF-8 without BOM. Windows PowerShell 5.1 `>` r
 | Reviews `Agent kilo timed out after <N>ms` where N ≫ `agent.timeout_seconds`, retries get progressively slower | Orphaned agent worker processes (`.kilo`) survived a timeout kill and are accumulating, exhausting CPU (death spiral). Confirm with `podman exec aicr ps -eo pid,ppid,etime,comm \| grep kilo` (many PPID=1 rows = orphans) | Redeploy the fixed image (timeout now kills the whole process tree, including `setsid` workers, via a `/proc` PPID walk; outer container runs with `--init` so PID 1 reaps zombies). To recover immediately, `podman restart aicr` so the runtime reaps all orphaned processes, then verify with `podman logs --tail 50 aicr`. Do not remove `--init` from `deploy.sh` |
 | GitHub/GitLab/P4 issue events fail with `issue_triage_failed` / `fetch failed` | Issue triage only has a Gitea client but is being applied to non-Gitea issue events (provider not gated) | Redeploy the fixed image (triage is now provider-gated). No GitHub/GitLab triage client exists; non-Gitea workspaces must not rely on issue auto-close |
 | `github-managed-findings` (or `github_problem_issue`) returns 401/403 | The outbound GitHub credential is expired, revoked, or lacks Issues read/write scope (webhook `Issues` event subscription does NOT grant REST issue create/update permission). With GitHub App auth, this means the App is not installed to the repository, the private key is wrong, or the App lacks `repo`/`issues:write` permissions | For `token_env`: rotate the PAT. For `app` auth: verify the App is installed on the target repo, the private key matches `AICR_GITHUB_APP_PRIVATE_KEY`, and the App has `repo` + `issues:write` permissions; trigger token refresh by restarting the container after updating `.env` |
-| `podman restart` fails with `pasta failed ... Failed to bind port <N> (Address already in use)` and the container stays stopped (Exited 143) | Rootless pasta network re-init races the old container's port release during restart | Wait for the port to free (`ss -tlnp \| grep <port>` shows none), then `podman --storage-driver=overlay start aicr`; verify `/healthz`. Prefer `podman stop` + `start` over `restart` for config-only changes on this host |
+| `podman restart` fails with `pasta failed ... Failed to bind port <N> (Address already in use)` and the container stays stopped (Exited 143) | Rootless pasta network re-init races the old container's port release during restart | Wait for the port to free (`ss -tlnp \| grep <port>` shows none), then `podman --storage-driver=overlay start aicr`; verify `/healthz`. Prefer `podman stop` + `start` over `restart` for config-only changes on this host — or `systemctl --user restart aicr.service` when systemd-managed |
+| systemd-managed container does not come back after a crash (`systemctl --user show <name>.service -p Restart` prints `Restart=no`) | The quadlet was generated without a `--restart` flag in the podlet `podman run` args; podlet emits `Restart=no` by default | Keep `--restart unless-stopped` in the podlet args (deploy.sh does), regenerate the quadlet, `systemctl --user daemon-reload`, then verify `Restart=always` |
 | Image builds "successfully" but a new Dockerfile feature (e.g. an agent CLI) is missing from the container | `deploy.sh` builds with `-f <deploy-dir>/deploy/Dockerfile`, not `source/deploy/Dockerfile`; the root copy was never refreshed after syncing source | After extracting source, refresh build assets before running `deploy.sh`: `cp -rf source/deploy/. deploy/ && cp source/deploy/deploy.sh deploy.sh`; verify with `grep` for the expected new step in `<deploy-dir>/deploy/Dockerfile` and in `deploy-run-latest.log` |
 | `omp --version` fails with `/usr/bin/env: 'bun': No such file or directory` | The `@oh-my-pi/pi-coding-agent` npm bundle is a Bun binary-bundle (`Bun.spawn`, `import.meta.require`) and requires the Bun runtime (`engines: bun >= 1.3.14`), which Node cannot execute | Install pinned `bun` globally from the registry before omp (its `@oven/bun-linux-x64` platform package flows through the same mirror/proxy); see `deploy/Dockerfile` |
 | Build hangs >15 min on `npm install @oh-my-pi/pi-coding-agent` inside `podman build` | The optional dep `onnxruntime-node` runs `node ./script/install` postinstall whose downloads stall indefinitely behind restrictive egress (0 established proxy connections, idle process) | Build installs omp with `npm install --global --ignore-scripts ...` (see `deploy/Dockerfile`); only omp's non-essential local-embedding features degrade. To unstick a live hang: kill deploy.sh + `podman build` (use bracketed pkill patterns) and rebuild — cached layers make the retry fast |

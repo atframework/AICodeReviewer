@@ -188,6 +188,7 @@ curl -sf <部署环境入口URL>/healthz
 - SSH key：通过 `yq '.deploy.normal.ssh.key_file' development/secret/secret.yaml` 提取文件名（该值是远程主机路径；本地部署用同名私钥的本地镜像副本）
 - **部署目录**：`/home/tools/AICodeReviewer`
 - 容器引擎：Podman
+- 启动方式：systemd user 服务（quadlet）。部署用 `AICR_ENABLE_SYSTEMD=true bash deploy.sh`，由 podlet 生成 `~/.config/containers/systemd/aicr.container`（`--restart unless-stopped` 映射为 `Restart=always`，`--wanted-by default.target` + Linger 实现开机自启）。崩溃自动拉起、开机自启均由 `aicr.service` 负责；日常管理用 `systemctl --user status|restart|stop aicr.service`，不要再手工 `podman run -d` 起同名容器。podlet/quadlet 仅支持 podman 引擎；`AICR_ENGINE` 为 docker 等其他引擎时脚本会告警并回退到 `<engine> run -d`，不会生成 systemd 服务。
 - 反向代理：<部署环境入口URL> → `http://10.0.4.9:8090`
 - 如果公网机本机监听了 TCP `3128`，`deploy.sh` 会自动探测这个 HTTP 代理并用于宿主下载与镜像构建；详细规则见下文“关于构建期 HTTP 代理”。
 
@@ -303,7 +304,7 @@ ssh -p "$SSH_PORT" -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no \
 
 - **SSH key 选择**：以 `development/secret/secret.yaml` 的 `.deploy.normal.ssh.key_file` 为准，提取文件名并用本地镜像副本作为 `-i`。不要用工作区的 `id_ed25519`（会被公网服务器拒绝）。若认证返回 `Permission denied (publickey)`，说明所选公钥尚未加入公网机 `~/.ssh/authorized_keys`，需先从已可登录的主机把该公钥追加进去。
 - **`.env` 文件编码**：Windows PowerShell 5.1 的 `>` 重定向和 `Out-File` 默认 UTF-16 LE，远程容器无法读取。使用 `scp` 传输或远端 `printf` 写入。`deploy.sh` 会在启动前自动检测 UTF-16 编码并报错。
-- **Config-only 变更只需重启**：`config.yaml` 和 `.env` 通过 volume 挂载到容器，修改后执行 `podman restart aicr` 即可；只有代码变更才需要 `deploy.sh` 完整重建。
+- **Config-only 变更只需重启**：`config.yaml` 和 `.env` 通过 volume 挂载到容器，修改后重启即可；只有代码变更才需要 `deploy.sh` 完整重建。公网（systemd 管理）用 `systemctl --user restart aicr.service`；内网（plain `podman run -d`）用 `podman stop` + `podman start`（避开 pasta restart 竞态）。
 - **`deploy/` 目录必须随源码刷新**：`deploy.sh` 用 `-f <部署目录>/deploy/Dockerfile` 构建，不是 `source/deploy/Dockerfile`。同步源码后需执行 `cp -rf source/deploy/. deploy/ && cp source/deploy/deploy.sh deploy.sh`，否则改动 Dockerfile（如新增 CLI 安装步骤）不会进入镜像——公网实测出现过新镜像静默缺少 oh-my-pi 的情况。运行时镜像内置 Kilo、Bun 与 oh-my-pi 且**不钉版本**（每次构建装最新发布版；`deploy.sh` 传入 `CLI_REFRESH` 时间戳破除构建缓存，否则首次的 latest 会被缓存永久复用）；omp 的 bundle 必须以 Bun 运行（Node 跑不起来），其 npm 安装使用 `--ignore-scripts` 跳过 `onnxruntime-node` 在受限出口下会无限卡死的 postinstall（仅影响 omp 本地嵌入等非必需特性）。版本相关行为核验记录见 `docs/ai/AGENTS.known-pitfalls.md` 的 "verified against vX" 条目。
 - **SSH 远程终止构建任务**：直接 `pkill -f 'bash deploy.sh'` 会匹配到本地 ssh 命令自身导致会话被杀。用方括号正则规避自匹配，如 `pkill -f 'bash deploy[.]sh'`。
 - **外层容器必须保留 `--init`**：`deploy/deploy.sh` 用 `podman run -d --init` 启动服务。`--init` 让 `tini`/`catatonit` 作为 PID 1 回收被沙箱超时 kill 后 reparent 的 `.kilo` worker 僵尸（Kilo 会把 worker `setsid` 进独立 session，进程组信号杀不到，必须靠 `/proc` PPID 遍历 + PID 1 回收兜底）。删掉 `--init` 会让僵尸在 PID 1 下堆积（公网实测 31 个 `Z` 状态进程），并在退出窗口内拖慢重试形成死亡螺旋。若出现 `Agent kilo timed out after <N>ms` 且 N 远超 `agent.timeout_seconds`，先用 `podman exec aicr ps -eo pid,ppid,etime,comm | grep kilo` 确认是否有大量 PPID=1 的残留进程，再 `podman restart aicr` 清理并重新部署带修复的镜像。
@@ -529,7 +530,7 @@ curl -sf $(jq ".deploy.normal.url" ./development/secret/secret.yaml)/healthz
   fi
   ```
 
-- 考虑将 AICR 容器注册为 systemd user service（`podman generate systemd`），避免依赖手动 `podman start`。
+- 公网环境的 AICR 容器已由 systemd user 服务管理（quadlet，`AICR_ENABLE_SYSTEMD=true bash deploy.sh` 生成，参考 `/home/tools/setup/traefik/create-traefik-pod.sh` 的 podlet 模式），崩溃自动拉起、开机自启不再依赖手动 `podman start`。podlet 的 `podman run` 参数必须保留 `--restart unless-stopped`，否则生成的 unit 是 `Restart=no`，崩溃不会拉起；用 `systemctl --user show aicr.service -p Restart` 核验。
 
 ## 12. 命令执行守则
 
