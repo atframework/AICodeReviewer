@@ -831,6 +831,91 @@ review:
 #     api_key_env: AICR_WORKSPACE_API_KEY  # env var with a per-workspace key
 #     enabled: true
 # ---------------------------------------------------------------------------
+# PLANNED ONLY: multi-project workspace rules and work_path expressions.
+# These fields are NOT accepted by the current schema. Keep them commented.
+# Design: docs/superpowers/specs/2026-09-11-workspace-config-management.md
+# Plans: docs/superpowers/plans/2026-09-11-workspace-config-{implementation,tests}.md
+#
+# Planned definition (under workspaces.instances; source_repo is exclusive):
+#   shared-services:
+#     match:
+#       - id: github-services
+#         triggers: [github-main]
+#         source:
+#           repo_ref: { glob: "acme/service-*" }
+#     work_path: '{{segment trigger.name}}/{{segment github.owner}}/{{segment github.repository}}'
+#     model_chain: thorough
+# A rule can match many projects. The same definition's match entries are OR;
+# fields within an entry are AND. Use exact, glob, OR regex, never several.
+# Glob: * = any characters INCLUDING /, ? = one Unicode code point.
+# Regex: RE2 syntax, substring match unless anchored with ^ and $.
+# Default matching is case-sensitive; ignore_case does not rewrite identity.
+# Old triggers[].repos[].match retains its existing exact/suffix semantics.
+#
+# Planned Handlebars path helpers (independent of output message templates):
+#   {{segment source.repository}}       one portable path segment
+#   {{segment (default git.branch "unscoped")}}  explicit missing-value fallback
+#   {{hash source.project_key}}         fixed SHA-256 identity text
+#   {{segment (lower source.namespace)}} display-path casing only
+# Blocks, partials, lookup, arbitrary JS, prototype access and env access
+# are forbidden. Optional variables are null; use default when needed.
+# Payload-derived variables must use segment/hash before path interpolation.
+# Output must be relative; no .., absolute paths, drive letters, UNC or \.
+# Planned final root = workspaces.root / rendered work_path / instance_id.
+# The fixed instance_id suffix isolates projects even if rendered paths match.
+# Per-run source/agent/tmp/context-repos directories stay isolated below it.
+# Default work_path = '{{workspace.id}}'. Old definitions retain legacy layout.
+#
+# Planned common variables (not a license to read raw webhook payloads):
+#   trigger: name, kind, host (host optional, no credentials)
+#   source: vcs, repo_ref, repository, namespace, project_key, branch, ref
+#   workspace: id (definition), instance_id (resolved project identity)
+#   event: provider, kind, name, action, target_id, base_revision,
+#          head_revision, actor
+# Branch/ref and event details may be null. Issue events have no implicit branch.
+#
+# Git sources (GitHub, GitLab, Gitea, Forgejo):
+#   git: owner, repository, full_name, namespace, branch, ref, base_branch,
+#        head_branch, default_branch, head_repository, head_owner
+#   github: owner, repository, repository_id, full_name, branch, base_branch,
+#           head_branch, pull_number, issue_number, installation_id
+#   gitea / forgejo: owner, repository, repository_id, full_name, branch,
+#                   base_branch, head_branch, pull_number, issue_number
+#   gitlab: namespace, project, project_id, path_with_namespace, branch,
+#           source_branch, target_branch, source_project_id, target_project_id,
+#           merge_request_iid, issue_iid
+# PR/MR project identity uses the target repository; head/source are separate.
+# GitLab namespace retains all subgroups. Provider IDs are optional strings.
+# Tag refs are not branch names. No top-level owner/repository aliases.
+#
+# P4 variables:
+#   p4: server, depot, depot_path, stream, stream_name, client, service_client,
+#       user, change, scope
+# client/user mean VCS-verified changelist submitter fields. service_client
+# is AICR's own client. stream is optional for classic clients and must come
+# from verified metadata or an exact configured binding, never a path guess.
+# Example planned P4 path:
+#   '{{segment trigger.name}}/{{segment p4.depot}}/{{segment (default p4.stream "classic")}}'
+# Metadata queries run in the background, after a durable receipt is accepted.
+#
+# SVN variables:
+#   svn: repository_url, repository_root, repository_uuid, repository,
+#        project_path, branch, revision, author
+# root/uuid come from svn info XML. branch/project_path require explicitly
+# configured project roots; do not infer trunk/branches from any arbitrary URL.
+#
+# Other entrypoints:
+#   manual: request_id, requested_workspace, requested_by
+#   scheduled: job_id, schedule_id, scheduled_at, timezone
+# Scheduled fields require a trusted scheduled-event envelope. This proposal
+# does not add a new periodic trigger engine; unsupported UI options stay disabled.
+#
+# Planned database configuration sources use immutable revisions and retain
+# explicit file settings as read-only. Newly accepted tasks use a published
+# revision; queued/running tasks keep their accepted snapshot. Bootstrap
+# connections, admin auth, secret allowlists and workspace root remain file-only.
+# SQLite/PostgreSQL/Redis migrations are planned, not available through this
+# example yet. See the design for field availability, UI and migration details.
 workspaces:
   cache:
     max_total_gb: 10

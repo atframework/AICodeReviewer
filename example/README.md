@@ -44,6 +44,22 @@ node packages/cli/dist/index.js serve \
   --port 8080
 ```
 
+## Planned workspace and configuration management
+
+Multi-project workspace rules, path expressions, database-managed settings,
+and automatic migrations are in the
+[design proposal](../docs/superpowers/specs/2026-09-11-workspace-config-management.md).
+The [implementation plan](../docs/superpowers/plans/2026-09-11-workspace-config-implementation.md)
+and [test plan](../docs/superpowers/plans/2026-09-11-workspace-config-tests.md)
+track the remaining work. These features are not implemented in this release.
+
+The planned variable and helper reference is included as comments above
+`workspaces` in `config.yaml`. Do not enable those fields yet. The proposal
+keeps explicit file settings read-only, adds database settings through the
+management page, and applies published revisions to newly accepted tasks.
+SQLite, PostgreSQL, and Redis migration work is planned; the current built-in
+relational store supports SQLite only.
+
 ## Automatic commit scheduling
 
 Git push, P4 `change-commit`, and SVN `post-commit` notifications receive a

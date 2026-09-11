@@ -7,6 +7,7 @@
 | 想知道什么 | 优先阅读 | 说明 |
 | --- | --- | --- |
 | 当前正在做什么 | `../../Plan.md` | 当前状态、本地下一步、外部验收与预留扩展 |
+| Workspace 多工程、动态配置和迁移（仅设计，待实现） | [设计](../superpowers/specs/2026-09-11-workspace-config-management.md)、[执行计划](../superpowers/plans/2026-09-11-workspace-config-implementation.md)、[测试计划](../superpowers/plans/2026-09-11-workspace-config-tests.md) | 文件来源只读、数据库配置管理、Handlebars 路径变量、运行配置版本与 SQLite/PostgreSQL/Redis 迁移；不代表现版能力 |
 | 自动提交调度（M15，已完成） | [里程碑](milestones/M15.md)、`architecture.md` §3.1.1、`decisions.md` D35 | 延迟、多组周计划、跨通知来源分组/成员去重、来源排除（glob/regex）；P4 至少 User+Client；Git/Redis/P4/SVN 均有真实环境实测 |
 | 稳定架构与合同 | `architecture.md` | 详细设计和稳定章节引用；不依赖路线图章节编号 |
 | 已完成里程碑历史 | `milestones/*.md` | 完成项沉淀与交付面，避免反复塞回 `Plan.md` |
