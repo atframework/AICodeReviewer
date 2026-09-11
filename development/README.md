@@ -127,18 +127,36 @@ LLM_TOKEN="$(yq -r '.llm.provider.xiaomimimo_token_plan.token' development/secre
 | 企业微信 robot                 | webhook            | `.channel.wxwork_robot.webhook`                   |
 | AICR server                    | global API key     | `.aicr.server.api_key`                            |
 
-### GitHub repo → selector / trigger / workspace 映射
+### GitHub repo → trigger / workspace 映射
 
-| GitHub 仓库             | 本地 selector 组     | 远端 trigger         | 远端 workspace        | 说明                                                          |
-| ----------------------- | -------------------- | -------------------- | --------------------- | ------------------------------------------------------------- |
-| `atframework/atsf4g-co` | `github-atframework` | `github-atframework` | `github-atsf4g-co`    | 使用统一 GitHub App `atframework-aicr` 认证；文件过滤保持独立 |
-| `owent/libatapp`        | `github-owent`       | `github-owent`       | `github-libatapp`     | 使用统一 GitHub App `atframework-aicr` 认证；文件过滤保持独立 |
-| `owent/hiredis-happ`    | `github-owent`       | `github-owent`       | `github-hiredis-happ` | 使用统一 GitHub App `atframework-aicr` 认证；文件过滤保持独立 |
+公网正式环境所有 GitHub 仓库统一走单个 GitHub App trigger `github`（App `atframework-aicr` 认证），`repos` 为显式白名单，每个仓库映射到独立 workspace；文件过滤规则在 trigger 上统一配置。
 
-- `/webhooks/github` 现在允许挂多个 GitHub trigger profile；服务端会先按 webhook secret 校验，再按 `repository.full_name` 选择最终 trigger。
-- 不同 GitHub 仓库若使用不同的 `watch_path`、`include_cr_file`、`exclude_cr_file`，仍可继续复用同一个 App 认证，但应使用独立 trigger 保证过滤规则隔离。
-- 远端 `.env` 统一使用 GitHub App 凭据：`AICR_GITHUB_APP_PRIVATE_KEY`（base64 PEM）和 `AICR_GITHUB_APP_WEBHOOK_SECRET`；旧的 `GITHUB_ATFRAMEWORK_*`/`GITHUB_OWENT_*` PAT 变量已移除。禁止互相复用或打印原文。
-- 已确认 `owent/hiredis-happ` 已加入 `owent` 账号的 App 已选仓库。
+| GitHub 仓库                           | 远端 workspace                    |
+| ------------------------------------- | --------------------------------- |
+| `atframework/atsf4g-co`               | `github-atsf4g-co`                |
+| `atframework/atsf4g-go`               | `github-atsf4g-go`                |
+| `atframework/robot-go`                | `github-robot-go`                 |
+| `atframework/atdtool`                 | `github-atdtool`                  |
+| `atframework/atframe-utils-go`        | `github-atframe-utils-go`         |
+| `atframework/generate-for-pb`         | `github-generate-for-pb`          |
+| `atframework/libatapp-go`             | `github-libatapp-go`              |
+| `atframework/libatbus-go`             | `github-libatbus-go`              |
+| `xresloader/upload-to-github-release` | `github-upload-to-github-release` |
+| `owent/hiredis-happ`                  | `github-hiredis-happ`             |
+| `owent/libcopp`                       | `github-libcopp`                  |
+| `owent/atframe_utils`                 | `github-atframe-utils`            |
+| `owent/libatbus`                      | `github-libatbus`                 |
+| `owent/libatapp`                      | `github-libatapp`                 |
+| `owent/cmake-toolset`                 | `github-cmake-toolset`            |
+| `owent/xresconv-gui`                  | `github-xresconv-gui`             |
+| `owent/xresconv-cli`                  | `github-xresconv-cli`             |
+| `owent/xresloader`                    | `github-xresloader`               |
+| `owent/xres-code-generator`           | `github-xres-code-generator`      |
+| `owent/xresloader-protocol`           | `github-xresloader-protocol`      |
+
+- `/webhooks/github` 允许挂多个 GitHub trigger profile；服务端会先按 webhook secret 校验，再按 `repository.full_name` 选择最终 trigger。当前生产只用单 trigger；只有当不同仓库需要不同 `watch_path`、`include_cr_file`、`exclude_cr_file` 或凭据时才再拆分为独立 trigger。
+- 远端 `.env` 统一使用 GitHub App 凭据：`AICR_GITHUB_APP_PRIVATE_KEY`（base64 PEM）和 `AICR_GITHUB_APP_WEBHOOK_SECRET`；无 PAT 变量。禁止互相复用或打印原文。
+- App 安装必须实际覆盖白名单仓库，否则该仓库事件不会投递、API 调用也会 403。2026-09-11 实测安装覆盖：`atframework` 安装仅含 `atsf4g-co`、`atsf4g-go`；`owent` 安装仅含 `atframe_utils`、`hiredis-happ`、`libatapp`、`libatbus`、`libcopp`；`xresloader` 组织尚未安装 App。新增仓库需先在 GitHub 侧把仓库加入对应安装（或在 xresloader 组织安装 App），再同步上表与远端配置。
 
 ## 5. P4 操作边界
 

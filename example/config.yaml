@@ -296,17 +296,20 @@ triggers:
     #   - "**/*.pb.go"
 
   # -- GitHub webhook trigger --
+  # repos is an explicit allowlist: once any GitHub trigger declares repos (or
+  # resolves a single-repo binding from its workspaces), events from unlisted
+  # repositories are answered 202 repository_not_configured after signature
+  # verification. A trigger with no repo constraints at all acts as a catch-all.
   # You can define multiple GitHub triggers on the same /webhooks/github route
   # when different repositories need different outbound tokens, webhook secrets,
-  # or file filters. When more than one GitHub trigger is configured, AICR
-  # selects the final trigger profile by verified webhook credential and
-  # repository full_name before it creates the ReviewEvent.
+  # or file filters; AICR then selects the final trigger profile by verified
+  # webhook credential and repository full_name before it creates the ReviewEvent.
   # - name: github
   #   kind: github
   #   base_url: https://github.com            # optional for github.com; set to GHE URL for GitHub Enterprise
   #   token_env: AICR_GITHUB_TOKEN            # outbound: personal access token (needs repo scope)
   #   webhook_secret_env: AICR_GITHUB_APP_WEBHOOK_SECRET  # inbound: HMAC-SHA256 secret
-  #   repos:                                  # optional: map specific repos to workspaces
+  #   repos:                                  # optional allowlist: map specific repos to workspaces
   #     - { match: "my-org/my-repo", workspace: github-my-repo }
   # - name: github-partner
   #   kind: github

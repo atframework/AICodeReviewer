@@ -1256,6 +1256,126 @@ describe("createServerApp", () => {
     expect(body.reason).toBe("repository_not_configured");
   });
 
+  it("routes a listed repository to its mapped workspace on a single GitHub trigger", async () => {
+    const app = createServerApp({
+      github: {
+        triggerName: "github",
+        workspaceId: "github-atsf4g-co",
+        webhookSecret,
+        repoMappings: [
+          { match: "atframework/atsf4g-co", workspace: "github-atsf4g-co" },
+          { match: "owent/libatapp", workspace: "github-libatapp" },
+        ],
+      },
+    });
+    const payload = JSON.stringify({
+      action: "opened",
+      repository: {
+        full_name: "owent/libatapp",
+      },
+      pull_request: {
+        html_url: "https://github.com/owent/libatapp/pull/7",
+        base: { sha: "base-sha" },
+        head: { sha: "head-sha" },
+      },
+    });
+
+    const response = await app.request("/webhooks/github", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-github-event": "pull_request",
+        "x-hub-signature-256": `sha256=${signWithSecret(payload, webhookSecret)}`,
+      },
+      body: payload,
+    });
+    const body = (await response.json()) as {
+      accepted: boolean;
+      reviewEvent?: { triggerName?: string; workspaceId?: string; repoRef?: string };
+    };
+
+    expect(response.status).toBe(202);
+    expect(body.accepted).toBe(true);
+    expect(body.reviewEvent).toMatchObject({
+      triggerName: "github",
+      workspaceId: "github-libatapp",
+      repoRef: "owent/libatapp",
+    });
+  });
+
+  it("returns repository_not_configured for an unlisted repository on a single constrained GitHub trigger", async () => {
+    const app = createServerApp({
+      github: {
+        triggerName: "github",
+        workspaceId: "github-atsf4g-co",
+        webhookSecret,
+        repoMappings: [{ match: "atframework/atsf4g-co", workspace: "github-atsf4g-co" }],
+      },
+    });
+    const payload = JSON.stringify({
+      action: "opened",
+      repository: {
+        full_name: "someone/else",
+      },
+      pull_request: {
+        base: { sha: "base-sha" },
+        head: { sha: "head-sha" },
+      },
+    });
+
+    const response = await app.request("/webhooks/github", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-github-event": "pull_request",
+        "x-hub-signature-256": `sha256=${signWithSecret(payload, webhookSecret)}`,
+      },
+      body: payload,
+    });
+    const body = (await response.json()) as { accepted: boolean; reason?: string };
+
+    expect(response.status).toBe(202);
+    expect(body.accepted).toBe(false);
+    expect(body.reason).toBe("repository_not_configured");
+  });
+
+  it("rejects an unlisted repository with an invalid signature on a single constrained GitHub trigger", async () => {
+    const app = createServerApp({
+      github: {
+        triggerName: "github",
+        workspaceId: "github-atsf4g-co",
+        webhookSecret,
+        repoMappings: [{ match: "atframework/atsf4g-co", workspace: "github-atsf4g-co" }],
+      },
+    });
+    const payload = JSON.stringify({
+      action: "opened",
+      repository: {
+        full_name: "someone/else",
+      },
+      pull_request: {
+        base: { sha: "base-sha" },
+        head: { sha: "head-sha" },
+      },
+    });
+
+    const response = await app.request("/webhooks/github", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-github-event": "pull_request",
+        "x-hub-signature-256": "sha256=deadbeef",
+      },
+      body: payload,
+    });
+    const body = (await response.json()) as { accepted: boolean; reason?: string };
+
+    expect(response.status).toBe(401);
+    expect(body.accepted).toBe(false);
+    expect(body.reason).toBe("invalid_signature");
+  });
+
+
   it("rejects a GitHub webhook when the signature is invalid", async () => {
     const app = createServerApp({
       github: {

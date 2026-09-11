@@ -39,7 +39,7 @@
 - 入站面包含：`/webhooks/*`、`/triggers/*`、手工触发、定时触发。
 - 所有入口都应收敛到统一 `ReviewEvent`，避免在公共模块暴露平台私有字段名。
 - 触发器需要在**鉴权/签名校验通过后**再创建 run。
-- GitHub / GitLab 这类共享 webhook 路由允许挂多个同类 trigger profile；服务端需要先按请求凭据确认候选 trigger，再按仓库标识选择最终 profile，避免把不同仓库的 secret、token 或过滤规则混用。
+- GitHub / GitLab 这类共享 webhook 路由允许挂多个同类 trigger profile；服务端需要先按请求凭据确认候选 trigger，再按仓库标识选择最终 profile，避免把不同仓库的 secret、token 或过滤规则混用。仓库过滤不只发生在多 profile 场景：只要任一 profile 声明了 `repos`（或解析出单仓库 `repoRef`）约束，单个 profile 也会按仓库标识执行白名单过滤，未列出的仓库在签名校验通过后返回 `202 repository_not_configured`；只有完全未声明仓库约束的 profile 才作为 catch-all 接收全部仓库事件。
 - Review request 事件属于主动 re-review 入口：GitHub `pull_request` 的 `review_requested` action 与 Gitea/Forgejo `pull_request_review_request` 的 `review_requested` action 都归一为 PR `ReviewEvent`；`review_request_removed` 不创建 review run。
 - Webhook 实现必须保持平台边界清晰：共用签名校验、repo mapping、payload schema 与 ReviewEvent 构造放在 `packages/server/src/webhook-common.ts`；Gitea/Forgejo、GitHub、GitLab 的事件语义分别放在对应平台文件；`webhook-translator.ts` 只负责按 provider 分发。
 - 当开启 async 语义时，入口应尽快返回 `202` 与 `runId`，后台完成 review。

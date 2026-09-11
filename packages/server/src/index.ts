@@ -479,7 +479,12 @@ function selectGenericWebhookConfig(
 ): { readonly config?: VcsWebhookConfig; readonly reason?: "invalid_signature" | "repository_not_configured" } {
   const repoRef = decoded === undefined ? undefined : extractWebhookRepositoryRef(provider, decoded);
 
-  if (configs.length > 1 && repoRef) {
+  // Repo scoping applies when several profiles share the route OR any profile
+  // declares repo constraints: a single constrained profile must reject
+  // unlisted repositories instead of acting as a catch-all.
+  const repoScopeEnforced = configs.length > 1 ||
+    configs.some((entry) => entry.repoRef !== undefined || (entry.repoMappings?.length ?? 0) > 0);
+  if (repoRef && repoScopeEnforced) {
     const repoScopedConfigs = configs.filter((entry) => matchesWebhookRepo(entry, repoRef));
     if (repoScopedConfigs.length > 0) {
       const verifiedRepoConfigs = repoScopedConfigs.filter((entry) =>
