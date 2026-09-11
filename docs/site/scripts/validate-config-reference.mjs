@@ -224,6 +224,7 @@ const DOCUMENTED_SUBTREE_SUMMARIES = new Set([
   "workspaces.instances.<id>.prompt",
   "review.auto_commit.schedule.rules[]",
   "review.auto_commit.exclude_sources[]",
+  "review.pull_request.schedule.rules[]",
 ]);
 
 function normalizeDocPath(value) {

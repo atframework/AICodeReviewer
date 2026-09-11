@@ -5,7 +5,7 @@ import { join } from "node:path";
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { AppConfig } from "@aicr/core";
+import { isAllowedInstant, type AppConfig } from "@aicr/core";
 import { computeScopeFingerprint } from "@aicr/outputs";
 import { closeStoreDb, createStoreDb, getProjectStats, hardDeleteExpiredProjects, insertReviewRun } from "@aicr/store";
 
@@ -3155,6 +3155,34 @@ describe("bootstrapServerApp", () => {
       } else {
         process.env.OPENAI_API_KEY = originalKey;
       }
+    }
+  });
+
+  it("wires PR schedule inheritance and whole-object workspace overrides", async () => {
+    vi.stubEnv("OPENAI_API_KEY", "test-key");
+    const restricted = { timezone: "Asia/Shanghai", rules: [{
+      days: ["mon", "tue", "wed", "thu", "fri"],
+      windows: [{ start: "00:00", end: "08:40" }, { start: "12:00", end: "13:40" }, { start: "18:00", end: "24:00" }],
+    }] };
+    const base = makeConfig();
+    try {
+      const fallback = await bootstrapServerApp({ config: makeConfig({
+        review: { ...base.review, auto_commit: { schedule: restricted } },
+      }), baseSystemPrompt: "test" });
+      const blocked = Date.parse("2026-09-11T13:54:36+08:00");
+      expect(isAllowedInstant(fallback.getExecutionSchedule!("test", "pull_request")!, blocked)).toBe(false);
+      expect(isAllowedInstant(fallback.getExecutionSchedule!("test", "commit")!, blocked)).toBe(false);
+      const override = await bootstrapServerApp({ config: makeConfig({
+        review: { ...base.review, auto_commit: { schedule: restricted }, pull_request: { schedule: restricted } },
+        workspaces: { ...base.workspaces, instances: { custom: { review: { pull_request: { schedule: { rules: [] } } } } } },
+      }), baseSystemPrompt: "test" });
+      expect(isAllowedInstant(override.getExecutionSchedule!("custom", "pull_request")!, blocked)).toBe(true);
+      expect(isAllowedInstant(override.getExecutionSchedule!("custom", "commit")!, blocked)).toBe(false);
+      expect(isAllowedInstant(override.getExecutionSchedule!("other", "pull_request")!, blocked)).toBe(false);
+      await fallback.closeAutoCommit?.();
+      await override.closeAutoCommit?.();
+    } finally {
+      vi.unstubAllEnvs();
     }
   });
 

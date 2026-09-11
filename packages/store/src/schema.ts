@@ -91,6 +91,52 @@ export const llmUsage = sqliteTable("llm_usage", {
   cacheCreationTokens: integer("cache_creation_tokens").notNull().default(0),
 });
 
+export const webhookEventDecisionValues = [
+  "executed",
+  "deferred",
+  "queued",
+  "duplicate",
+  "deduplicated",
+  "ignored",
+  "rejected",
+] as const;
+
+export type WebhookEventDecision = (typeof webhookEventDecisionValues)[number];
+
+export const webhookEvents = sqliteTable("webhook_events", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  receivedAt: integer("received_at", { mode: "timestamp_ms" }).notNull(),
+  provider: text("provider"),
+  eventName: text("event_name"),
+  workspaceId: text("workspace_id"),
+  triggerName: text("trigger_name"),
+  repoRef: text("repo_ref"),
+  targetKind: text("target_kind"),
+  targetUrl: text("target_url"),
+  branch: text("branch"),
+  decision: text("decision").$type<WebhookEventDecision>().notNull(),
+  reason: text("reason"),
+  detail: text("detail"),
+});
+
+export const reviewDeferralStatusValues = ["pending", "claimed"] as const;
+
+export type ReviewDeferralStatus = (typeof reviewDeferralStatusValues)[number];
+
+export const reviewDeferrals = sqliteTable("review_deferrals", {
+  dedupKey: text("dedup_key").primaryKey(),
+  workspaceId: text("workspace_id").notNull(),
+  provider: text("provider").notNull(),
+  eventName: text("event_name").notNull(),
+  reviewEvent: text("review_event").notNull(),
+  payload: text("payload"),
+  notBefore: integer("not_before", { mode: "timestamp_ms" }).notNull(),
+  status: text("status").$type<ReviewDeferralStatus>().notNull().default("pending"),
+  attempts: integer("attempts").notNull().default(0),
+  createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+  updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
+});
+
 export const outputEvents = sqliteTable("output_events", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   runId: text("run_id")

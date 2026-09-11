@@ -10,6 +10,9 @@ import {
   reflectionMemory,
   modelCatalog,
   modelCatalogSource,
+  webhookEvents,
+  webhookEventDecisionValues,
+  reviewDeferrals,
   runStatusValues,
 } from "../src/schema.js";
 
@@ -167,6 +170,64 @@ describe("outputEvents schema", () => {
         "issueCreated",
         "commentCreated",
         "timestamp",
+      ]),
+    );
+  });
+});
+
+describe("webhookEvents schema", () => {
+  it("defines the receipt-time decision values", () => {
+    expect(webhookEventDecisionValues).toEqual([
+      "executed",
+      "deferred",
+      "queued",
+      "duplicate",
+      "deduplicated",
+      "ignored",
+      "rejected",
+    ]);
+  });
+
+  it("defines the expected column names", () => {
+    const columns = webhookEvents[Symbol.for("drizzle:Columns")] as Record<string, unknown>;
+    const columnNames = Object.keys(columns);
+    expect(columnNames).toEqual(
+      expect.arrayContaining([
+        "id",
+        "receivedAt",
+        "provider",
+        "eventName",
+        "workspaceId",
+        "triggerName",
+        "repoRef",
+        "targetKind",
+        "targetUrl",
+        "branch",
+        "decision",
+        "reason",
+        "detail",
+      ]),
+    );
+  });
+});
+
+describe("reviewDeferrals schema", () => {
+  it("defines the expected column names", () => {
+    const columns = reviewDeferrals[Symbol.for("drizzle:Columns")] as Record<string, unknown>;
+    const columnNames = Object.keys(columns);
+    expect(columnNames).toEqual(
+      expect.arrayContaining([
+        "dedupKey",
+        "workspaceId",
+        "provider",
+        "eventName",
+        "reviewEvent",
+        "payload",
+        "notBefore",
+        "status",
+        "attempts",
+        "createdAt",
+        "updatedAt",
       ]),
     );
   });

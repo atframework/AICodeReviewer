@@ -383,10 +383,21 @@ if ! "$ENGINE_CMD" "${ENGINE_ARGS[@]}" ps >/dev/null 2>&1; then
     echo "=== Preflight: $ENGINE_CMD migrate with ${ENGINE_ARGS[*]} ==="
     "$ENGINE_CMD" "${ENGINE_ARGS[@]}" system migrate
   else
-    echo "ERROR: $ENGINE_CMD ps failed; automatic storage migration is only supported for Podman."
-    "$ENGINE_CMD" ps
+    echo "ERROR: $ENGINE_CMD is not responding; aborting before build." >&2
     exit 1
   fi
+fi
+
+# Guard: the model-catalog snapshot is tracked in Git LFS. A source tree synced
+# via `git archive` or from a clone without `git lfs pull` ships a 130-byte
+# pointer instead of the real JSON, which would silently disable the bundled
+# catalog fallback inside the image. Fail fast with an actionable message.
+MODEL_CATALOG_SNAPSHOT="$DEPLOY_DIR/source/packages/llm/assets/model-catalog/models-dev.json"
+if [ -f "$MODEL_CATALOG_SNAPSHOT" ] && head -c 44 "$MODEL_CATALOG_SNAPSHOT" | grep -q "version https://git-lfs"; then
+  echo "ERROR: $MODEL_CATALOG_SNAPSHOT is a Git LFS pointer, not the real snapshot." >&2
+  echo "       Run 'git lfs pull' on the source checkout and re-sync with the tar workflow" >&2
+  echo "       (never 'git archive' — it does not smudge LFS files)." >&2
+  exit 1
 fi
 
 # Preserve the previous image for rollback before overwriting the tag

@@ -4,6 +4,7 @@ export * from "./sqlite-auto-commit-store.js";
 export * from "./redis-auto-commit-store.js";
 export * from "./auto-commit-identity.js";
 export * from "./auto-commit-policy.js";
+export * from "./pull-request-policy.js";
 export * from "./weekly-schedule.js";
 export * from "./auto-commit-store.js";
 export * from "./memory-auto-commit-store.js";

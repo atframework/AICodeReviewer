@@ -767,12 +767,23 @@ review:
   # Automatic commit scheduling (push / P4 change-commit / SVN post-commit).
   # Events persist as receipts in the queue-backend store, wait delay_seconds,
   # then merge contiguous same-source commits into one review batch. Manual
-  # reviews, PR/MR, comments, and issue triage are never delayed or merged.
+  # reviews, PR/MR, comments, and issue triage are never merged, and
+  # delay_seconds does not apply to them.
   # All fields support global → workspace defaults → workspace instance layers;
   # schedule replaces wholesale at the nearest layer that sets it.
   # auto_commit:
   #   delay_seconds: 120        # 0 disables the first-receive wait (max: 31536000)
-  #   schedule:                 # restrict when new batches may start; omitted = always allowed
+  #   schedule:                 # weekly execution window; omitted = always allowed.
+  #                             # Gates auto-commit batch starts and async issue
+  #                             # triage; async PR/MR events (including comment
+  #                             # review commands, whose target kind is
+  #                             # pull_request) follow pull_request.schedule when
+  #                             # set and fall back to this schedule otherwise:
+  #                             # outside the windows the first attempt and every
+  #                             # retry wait for the next window. In-progress runs
+  #                             # always finish. With storage.database + admin
+  #                             # configured, deferrals persist and resume after a
+  #                             # restart; otherwise they are held in process memory.
   #     timezone: Asia/Shanghai # IANA name, default UTC
   #     rules:                  # union across groups; rules: [] clears all weekly limits
   #       - days: [mon, tue, wed, thu, fri]
@@ -796,6 +807,25 @@ review:
   #       vcs: p4
   #       match:
   #         client: { glob: "ci-*" }
+  # PR/MR review scheduling (pull_request target events, including review
+  # commands posted as comments). Same shape as auto_commit.schedule but with
+  # no receive delay or commit batching; unset at all layers = fall back to the resolved
+  # auto_commit.schedule. Outside the windows the event defers to the next
+  # allowed instant; a deferred comment command posts a reply stating the
+  # scheduled start. Repeated deferred events replace the same target's pending
+  # envelope. Every actual attempt rechecks the window; running reviews can finish.
+  # pull_request:
+  #   schedule:
+  #     timezone: Asia/Shanghai # IANA name, default UTC
+  #     rules:                  # union across groups; rules: [] clears all weekly limits
+  #       - days: [mon, tue, wed, thu, fri]
+  #         windows:
+  #           - { start: "00:00", end: "08:40" }
+  #           - { start: "12:00", end: "13:40" }
+  #           - { start: "18:00", end: "24:00" } # skip the weekday afternoon peak
+  #       - days: [sat, sun]
+  #         windows:
+  #           - { start: "00:00", end: "24:00" }
   # AICR label management — skip review if PR/MR/issue has these labels,
   # and auto-tag targets when review starts/completes.
   # All fields support global → workspace-level override.

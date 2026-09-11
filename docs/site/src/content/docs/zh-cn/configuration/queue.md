@@ -59,8 +59,46 @@ review:
 
 多组时段取并集，包含开始时间、不包含结束时间；跨午夜时段归属于开始的星期。
 省略 schedule 或设置 `schedule.rules: []` 都表示全天可用，默认时区为 UTC。
-已经开始的分析可以在时段关闭后完成。`exclude_sources: []` 清除继承的排除规则；
+已经开始的分析可以在时段关闭后完成。时段同样约束异步 PR/MR、issue、评论处理：
+窗口外到达的事件把首次尝试和每次重试推迟到下一窗口，日志为
+`trigger processing deferred by execution window`。
+`exclude_sources: []` 清除继承的排除规则；
 规则之间为 OR，同一规则内的字段为 AND，每个字段可选 `glob` 或 RE2 `regex`。
+
+## PR/MR 执行时段
+
+PR/MR 分析可以使用独立的周计划，配置形状与 `review.auto_commit.schedule`
+相同，放在 `review.pull_request.schedule` 下，同样支持三层（全局、
+`workspaces.defaults.review`、`workspaces.instances.<id>.review`；
+最近一层的 `schedule` 整体替换继承值）：
+
+```yaml
+review:
+  pull_request:
+    schedule:
+      timezone: Asia/Shanghai
+      rules:
+        - days: [mon, tue, wed, thu, fri]
+          windows:
+            - { start: "00:00", end: "13:00" }
+            - { start: "18:00", end: "24:00" }
+        - days: [sat, sun]
+          windows:
+            - { start: "00:00", end: "24:00" }
+```
+
+各层都未设置 `review.pull_request.schedule` 时，PR/MR 事件回退到解析后的
+`review.auto_commit.schedule`；两者都未设置时不做任何时段限制。时段只门控
+自动 PR 事件和评论命令触发的评审——评论命令被推迟时会在 PR/MR 上回复一条
+说明计划开始时间的评论。PR/MR 没有首次接收延迟，也不组装提交批次。
+
+窗口外到达的事件由延期注册表接管，而不是裸定时器。配置了可观测存储
+（`storage.database` 加 `admin`，见仪表盘页面）时，延期会持久化并在重启后
+恢复；同一目标的重复事件会替换保存的事件内容，只评审最新状态，且恢复时刻
+不会提前。没有存储时延期退化为进程内存，重启即丢失，与异步触发路径的其余
+状态一致。
+等待中的目标不占用正在运行的去重标记。安排定时器和实际开始尝试时都会检查窗口，
+进程暂停或时钟跳变后也要重新检查。已经开始的分析可以在窗口关闭后完成。
 
 “提交来源”在仓库和 stream 范围内按 Git 原始 author name + email、P4 User + Client、
 SVN `svn:author` 区分。同来源连续且到期的提交可跨通知合并，每批最多 50 个成员。

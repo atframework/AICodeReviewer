@@ -6,6 +6,7 @@ import {
   getProjectStats,
   getProviderModelStats,
   getRecentRuns,
+  getRecentWebhookEvents,
   type TimeWindowStats,
   type ProjectStats,
   type ProviderModelStats,
@@ -182,6 +183,15 @@ export function createObservabilityApi(options: ObservabilityApiOptions): Hono {
     const limit = parseLimit(c.req.query("limit"));
     const runs = getRecentRuns(options.store, limit);
     return c.json(runs);
+  });
+
+  // Receipt-time webhook/trigger event log backing the dashboard Events
+  // panel. Same retention contract as Recent Runs: the store keeps the
+  // latest 100 entries and the client pages 20 per page.
+  api.get("/events", authMiddleware, async (c) => {
+    const limit = parseLimit(c.req.query("limit"));
+    const events = getRecentWebhookEvents(options.store, limit);
+    return c.json(events);
   });
 
 

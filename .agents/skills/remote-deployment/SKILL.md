@@ -53,7 +53,18 @@ ssh -p <ssh-port> ... <remote-host> `
   "cd <deploy-dir> && rm -rf source/* && mkdir -p source && tar xzf aicr-deploy-latest.tar.gz -C source && rm -f aicr-deploy-latest.tar.gz"
 ```
 
-If many files changed, sync the entire `packages/` tree or use `git archive` from the local repo.
+If many files changed, sync the entire `packages/` tree. Never use
+`git archive` to produce the remote source: the model-catalog snapshot
+(`packages/llm/assets/model-catalog/models-dev.json`) is tracked in Git LFS
+and `git archive` does not smudge LFS files, so the image would contain a
+130-byte pointer and the bundled catalog fallback would silently stop working.
+Always run `git lfs pull` on the local checkout before creating the tarball;
+`deploy.sh` aborts early if the synced snapshot is an LFS pointer.
+Keep every CI/docs/image checkout on `lfs: true`; tracking an asset alone does
+not hydrate a clean build checkout. For existing assets use targeted
+`git add --renormalize -- <path>`; history migration and force-push require
+separate authorization. Verify both the pointer in the index and the hydrated
+working-tree file before packaging.
 
 ## Config Updates
 
@@ -372,6 +383,7 @@ The `.env` file must be ASCII or UTF-8 without BOM. Windows PowerShell 5.1 `>` r
 | `podman ps` fails with `invalid internal status` | Rootless storage driver init failure (custom `rootless_storage_path` in `/etc/containers/storage.conf`) | `podman --storage-driver=overlay system migrate`, then `podman start <containers>` |
 | Container sandbox fails with "permission denied" on socket | Missing `--group-add keep-groups`, missing `CONTAINER_HOST`, or SELinux label blocking the mounted Podman socket | Ensure `AICR_ENABLE_CONTAINER_SANDBOX=true` in deploy.sh; verify `systemctl --user status podman.socket` is active |
 | Build fails at `COPY deploy/docker-static` after clean source sync | Optional Docker static binary placeholder missing from `source/deploy/` | Use current `deploy.sh`; it creates a placeholder when nested sandboxing is disabled and downloads the real binary when enabled |
+| `deploy.sh` aborts with "is a Git LFS pointer" | Source tarball was produced by `git archive` or a clone that never ran `git lfs pull` | Run `git lfs pull` locally, re-create the tar from the working tree, re-sync; never package with `git archive` |
 | `.env` UTF-16 encoding causes container startup failure | PowerShell `>` redirect wrote `.env` as UTF-16 LE | Use `scp` or remote `printf`; `deploy.sh` auto-detects and rejects UTF-16 `.env` files |
 | `admin` sessions expire unexpectedly | Config used `session_ttl_minutes` instead of `session_ttl_seconds` | Schema only recognizes `session_ttl_seconds` (default 28800 = 8 hours); `session_ttl_minutes` is silently ignored |
 | Reviews `Agent kilo timed out after <N>ms` where N ≫ `agent.timeout_seconds`, retries get progressively slower | Orphaned agent worker processes (`.kilo`) survived a timeout kill and are accumulating, exhausting CPU (death spiral). Confirm with `podman exec aicr ps -eo pid,ppid,etime,comm \| grep kilo` (many PPID=1 rows = orphans) | Redeploy the fixed image (timeout now kills the whole process tree, including `setsid` workers, via a `/proc` PPID walk; outer container runs with `--init` so PID 1 reaps zombies). To recover immediately, `podman restart aicr` so the runtime reaps all orphaned processes, then verify with `podman logs --tail 50 aicr`. Do not remove `--init` from `deploy.sh` |

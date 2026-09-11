@@ -8,6 +8,11 @@ Use Podman when the deployment environment prefers rootless, daemonless containe
 
 ## Rootless local setup
 
+Before building from a checkout, run `git lfs pull`. The bundled model catalog
+and PNG resources use LFS; `deploy.sh` rejects a model-catalog pointer file.
+Sync the populated working tree with the tar workflow. CI and image publishing
+must use `actions/checkout` with `lfs: true`.
+
 Install Podman with your platform package manager, then verify the CLI is visible to the service user:
 
 ```bash

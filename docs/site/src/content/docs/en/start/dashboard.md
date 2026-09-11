@@ -53,14 +53,15 @@ configured, the route returns the dashboard shell with a setup-required
 prompt instead of a 404; if `path_prefix` is set, the root paths redirect to
 the prefixed entry.
 
-After logging in, the dashboard has four tabs:
+After logging in, the dashboard has five tabs:
 
 - **Overview** — total reviews, success/failure/skip counts, runs that found
   problems, total problems, issues created, code analyzed, LLM requests,
   input/output/total tokens, prompt cache hit rate with the hit/miss token
   split, estimated cost, average duration. A time-window
   selector switches between today / this week / this month / all (all in
-  UTC).
+  UTC). The Recent activity table includes the same per-run token total,
+  cache hit/miss split, and hit rate as the Runs tab.
 - **Projects** — per-project aggregates (`workspaceId + triggerName +
   repoRef`): review/success/failure/skip counts, problem totals, issues
   created, files changed, lines added/deleted, LLM requests, tokens, cache-hit
@@ -73,6 +74,14 @@ After logging in, the dashboard has four tabs:
   shows real token usage when captured: total tokens with the cache-hit and
   non-cached input split and the hit rate; `—` when the run reported no
   parseable usage.
+- **Events** — the most recent 100 received webhook/trigger events, paged 20
+  at a time. Each row shows the receipt-time decision: `executed` (started
+  immediately), `queued`/`duplicate` (auto-commit receipt), `deferred`
+  (execution window, with the scheduled resume instant), `deduplicated`
+  (merged into a pending re-review), `ignored` (label, unsupported event, or
+  unconfigured repository), or `rejected` (bad signature, invalid payload,
+  missing configuration), with the reason and details such as matched labels
+  or the receipt id.
 
 Usage is aggregated across the complete review run, including the initial model
 call, context or format-repair calls, and any final direct-LLM fallback. For
@@ -88,10 +97,15 @@ reports usage with a non-zero input.
 The Projects and Providers tabs each call their own time-windowed API
 (`GET /api/admin/stats/projects?since=` and `.../providers?since=`). The Runs
 tab fetches the latest 100 runs from `GET /api/admin/runs?limit=100` and pages
-them in the browser. The dashboard queries real-time aggregation as the source
+them in the browser; the Events tab does the same against
+`GET /api/admin/events?limit=100`, whose store keeps only the newest 100
+entries. The dashboard queries real-time aggregation as the source
 of truth.
 
 ## The admin API
+
+Queued commit events show a **not before** time: receipt delay and execution
+windows set the earliest eligible start; existing work can postpone it further.
 
 All endpoints except `/login` require `Authorization: Bearer <token>`.
 
@@ -103,6 +117,7 @@ All endpoints except `/login` require `Authorization: Bearer <token>`.
 | `GET /api/admin/stats/projects?since=` | Per-project aggregates |
 | `GET /api/admin/stats/providers?since=` | Per-provider+model aggregates |
 | `GET /api/admin/runs?limit=` | Recent run list (1..100), each with token usage incl. the cache hit split |
+| `GET /api/admin/events?limit=` | Recent webhook/trigger event log (1..100), each with the receipt-time decision and reason |
 
 ## `/metrics`
 

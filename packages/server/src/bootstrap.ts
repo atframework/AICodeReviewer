@@ -93,12 +93,14 @@ import type { ServerAppOptions, ServerReviewOrchestrationOptions, TriggerRetryCo
 import { persistReviewRunToStore } from "./index.js";
 import { type AutoCommitStore, type StreamKeyInput } from "@aicr/core";
 import { createAutoCommitStoreFromConfig } from "@aicr/core";
+import { resolvePullRequestSchedule } from "@aicr/core";
 import { AutoCommitRuntime, createAutoCommitBatchExecutor } from "./auto-commit-runtime.js";
 import {
   AutoCommitScheduler,
 } from "./auto-commit-scheduler.js";
 import { type AuthConfig } from "./auth.js";
 import { createReviewDeduplicator } from "./review-deduplicator.js";
+import { ReviewDeferralManager } from "./deferral-manager.js";
 import { resolveAdminAuthConfig } from "./admin-auth.js";
 import {
   createGithubAppTokenService,
@@ -2728,10 +2730,28 @@ export async function bootstrapServerApp(options: BootstrapServerOptions): Promi
     deduplicator: createReviewDeduplicator(),
     ...(triggerRetry ? { triggerRetry } : {}),
     // Automatic commit events persist as receipts and run through the
-    // scheduler; PR/issue/comment/manual flows keep the existing paths.
+    // scheduler; PR/issue/comment/manual flows run on the async path below.
     autoCommit: autoCommitPipeline.runtime,
     autoCommitStore: autoCommitPipeline.store,
     closeAutoCommit: autoCommitPipeline.close,
+    // PR/MR events prefer their own `review.pull_request.schedule`; when no
+    // layer sets it they fall back to the resolved auto-commit schedule, and
+    // every other async target kind uses the auto-commit schedule directly.
+    getExecutionSchedule: (workspaceId: string, targetKind?: string) => {
+      if (targetKind === "pull_request") {
+        const pullRequestSchedule = resolvePullRequestSchedule(
+          config.review.pull_request,
+          config.workspaces.defaults.review?.pull_request,
+          config.workspaces.instances[workspaceId]?.review?.pull_request,
+        );
+        if (pullRequestSchedule) {
+          return pullRequestSchedule;
+        }
+      }
+      return autoCommitPipeline.runtime.policyFor(workspaceId).schedule;
+    },
+    // Window-deferred async events persist here so a restart resumes them.
+    deferralManager: new ReviewDeferralManager({ ...(store ? { store } : {}) }),
     ...(observability ? { observability } : {}),
     ...(store ? { store } : {}),
   };

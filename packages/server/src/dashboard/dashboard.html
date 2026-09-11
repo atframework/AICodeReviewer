@@ -83,6 +83,7 @@ tr:hover td{background:rgba(59,130,246,0.05)}
 <div class="tab" data-tab="projects" onclick="switchTab('projects')">Projects</div>
 <div class="tab" data-tab="providers" onclick="switchTab('providers')">LLM Providers</div>
 <div class="tab" data-tab="runs" onclick="switchTab('runs')">Recent Runs</div>
+<div class="tab" data-tab="events" onclick="switchTab('events')">Events</div>
 </div>
 
 <div id="tab-overview" class="tab-content active">
@@ -95,7 +96,7 @@ tr:hover td{background:rgba(59,130,246,0.05)}
 <div id="overview-stats" class="stats-grid"></div>
 <div class="section-title">Recent Activity</div>
 <table>
-<thead><tr><th>Time</th><th>Workspace</th><th>Provider</th><th>Status</th><th>Problems</th><th>Duration</th></tr></thead>
+<thead><tr><th>Time</th><th>Workspace</th><th>Provider</th><th>Status</th><th>Problems</th><th>Tokens</th><th>Duration</th></tr></thead>
 <tbody id="overview-recent"></tbody>
 </table>
 </div>
@@ -158,6 +159,19 @@ tr:hover td{background:rgba(59,130,246,0.05)}
 </table>
 </div>
 
+<div id="tab-events" class="tab-content">
+<div id="events-loading" style="display:none;color:var(--muted);font-size:0.875rem;margin-bottom:0.5rem">Loading...</div>
+<div style="margin-bottom:1rem;display:flex;gap:0.5rem;align-items:center">
+<button class="btn btn-sm btn-ghost" id="events-prev" onclick="prevEventsPage()">Prev</button>
+<span id="events-page-info" style="font-size:0.8125rem;color:var(--muted)"></span>
+<button class="btn btn-sm btn-ghost" id="events-next" onclick="nextEventsPage()">Next</button>
+</div>
+<table>
+<thead><tr><th>Time</th><th>Provider</th><th>Event</th><th>Workspace</th><th>Repo</th><th>Target</th><th>Decision</th><th>Reason</th></tr></thead>
+<tbody id="events-table"></tbody>
+</table>
+</div>
+
 </div>
 </div>
 
@@ -174,6 +188,9 @@ var providerStatsData=null;
 var runsData=null;
 var runsPage=1;
 var RUNS_PAGE_SIZE=20;
+var eventsData=null;
+var eventsPage=1;
+var EVENTS_PAGE_SIZE=20;
 
 function $(s){return document.querySelector(s)}
 function $$(s){return document.querySelectorAll(s)}
@@ -210,6 +227,15 @@ function runTokensCell(r){
     " ("+cacheHitRate(u.cachedTokens||0,u.tokensIn||0)+")</div>";
 }
 function statusBadge(s){var m={succeeded:"success",published:"success",failed:"failure",skipped:"skip",queued:"running"};return '<span class="badge badge-'+(m[s]||"skip")+'">'+esc(s)+"</span>"}
+function decisionBadge(d){var m={executed:"success",queued:"running",deferred:"running",duplicate:"skip",deduplicated:"skip",ignored:"skip",rejected:"failure"};return '<span class="badge badge-'+(m[d]||"skip")+'">'+esc(d)+"</span>"}
+function eventReasonCell(e){
+  var d=e.detail||{};
+  if(e.decision==="deferred"&&d.resumeAt)return '<div>'+esc(e.reason||"")+'</div><div style="font-size:0.75rem;color:var(--muted)">until '+formatTime(d.resumeAt)+"</div>";
+  if(e.reason==="ignored_by_label"&&d.matchedLabels)return esc(e.reason)+' <span style="font-size:0.75rem;color:var(--muted)">['+esc(d.matchedLabels.join(", "))+"]</span>";
+  if((e.decision==="queued"||e.decision==="duplicate")&&d.receiptId)return '<div>'+esc(e.reason||"")+'</div><div style="font-size:0.75rem;color:var(--muted)">receipt '+esc(String(d.receiptId).slice(0,8))+(d.notBefore?' · not before '+formatTime(d.notBefore):'')+"</div>";
+  if(d.message)return '<div>'+esc(e.reason||"")+'</div><div style="font-size:0.75rem;color:var(--muted)">'+esc(String(d.message).slice(0,120))+"</div>";
+  return esc(e.reason||"—");
+}
 
 async function apiFetch(path,opts){
   var headers=Object.assign({},(opts&&opts.headers)||{});
@@ -284,6 +310,7 @@ function switchTab(t){
   if(t==="projects"&&!projectStatsData)loadProjectStats(currentProjectWindow);
   if(t==="providers"&&!providerStatsData)loadProviderStats(currentProviderWindow);
   if(t==="runs"&&!runsData)loadRuns();
+  if(t==="events"&&!eventsData)loadEvents();
 }
 
 function getSinceForWindow(w){
@@ -386,6 +413,63 @@ function nextRunsPage(){
   if(runsPage<runsPageCount()){runsPage++;renderRunsPage()}
 }
 
+async function loadEvents(){
+  var el=document.getElementById("events-loading");
+  if(el)el.style.display="block";
+  try{
+    var r=await apiFetch("api/admin/events?limit=100");
+    eventsData=await r.json();
+    renderEventsPage();
+  }catch(ex){
+    var tbody=document.getElementById("events-table");
+    if(tbody)tbody.innerHTML='<tr><td colspan="8" style="text-align:center;color:var(--muted)">Error loading data</td></tr>';
+  }finally{
+    if(el)el.style.display="none";
+  }
+}
+
+function eventsPageCount(){
+  return Math.max(1,Math.ceil(((eventsData||[]).length)/EVENTS_PAGE_SIZE));
+}
+
+function renderEventsPage(){
+  var total=(eventsData||[]).length;
+  var totalPages=eventsPageCount();
+  if(eventsPage>totalPages)eventsPage=totalPages;
+  var start=(eventsPage-1)*EVENTS_PAGE_SIZE;
+  renderEventsTable((eventsData||[]).slice(start,start+EVENTS_PAGE_SIZE));
+  var info=document.getElementById("events-page-info");
+  if(info)info.textContent=total+" events · page "+eventsPage+" / "+totalPages;
+  var prev=document.getElementById("events-prev");
+  var next=document.getElementById("events-next");
+  if(prev)prev.disabled=eventsPage<=1;
+  if(next)next.disabled=eventsPage>=totalPages;
+}
+
+function prevEventsPage(){
+  if(eventsPage>1){eventsPage--;renderEventsPage()}
+}
+
+function nextEventsPage(){
+  if(eventsPage<eventsPageCount()){eventsPage++;renderEventsPage()}
+}
+
+function renderEventsTable(events){
+  var el=document.getElementById("events-table");
+  if(!events||events.length===0){
+    el.innerHTML='<tr><td colspan="8" style="text-align:center;color:var(--muted)">No events</td></tr>';
+    return;
+  }
+  el.innerHTML=events.map(function(e){
+    var target=e.targetKind||"-";
+    if(e.branch)target+=" · "+e.branch;
+    return "<tr><td>"+formatTime(e.receivedAt)+"</td><td>"+esc(e.provider||"-")+"</td><td>"+
+      esc(e.eventName||"-")+"</td><td>"+esc(e.workspaceId||"-")+"</td><td>"+
+      esc(e.repoRef||"-")+"</td><td>"+esc(target)+"</td><td>"+
+      decisionBadge(e.decision)+"</td><td>"+eventReasonCell(e)+"</td></tr>";
+  }).join("");
+}
+
 function renderDashboard(){
   if(!currentData)return;
   renderOverviewStats();
@@ -399,6 +483,9 @@ function renderDashboard(){
   }
   if(document.getElementById("tab-runs").classList.contains("active")){
     loadRuns();
+  }
+  if(document.getElementById("tab-events").classList.contains("active")){
+    loadEvents();
   }
 }
 
@@ -464,14 +551,14 @@ function renderProviderTable(data){
 function renderRunsTable(runs,target,compact){
   var el=target||document.getElementById("runs-table");
   if(!runs||runs.length===0){
-    el.innerHTML='<tr><td colspan="'+(compact?6:10)+'" style="text-align:center;color:var(--muted)">No runs</td></tr>';
+    el.innerHTML='<tr><td colspan="'+(compact?7:10)+'" style="text-align:center;color:var(--muted)">No runs</td></tr>';
     return;
   }
   el.innerHTML=runs.map(function(r){
     if(compact){
       return "<tr><td>"+formatTime(r.startedAt)+"</td><td>"+esc(r.workspaceId)+"</td><td>"+
         esc(r.provider||"-")+"</td><td>"+statusBadge(r.status)+"</td><td>"+
-        formatNumber(r.problemCount)+"</td><td>"+formatDuration(r.durationMs)+"</td></tr>";
+        formatNumber(r.problemCount)+"</td><td>"+runTokensCell(r)+"</td><td>"+formatDuration(r.durationMs)+"</td></tr>";
     }
     return "<tr><td>"+esc(r.id.slice(0,8))+"</td><td>"+formatTime(r.startedAt)+"</td><td>"+
       esc(r.workspaceId)+"</td><td>"+esc(r.triggerName||"-")+"</td><td>"+

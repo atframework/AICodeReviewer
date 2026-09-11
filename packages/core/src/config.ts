@@ -4,7 +4,8 @@ import { parse as parseYaml } from "yaml";
 import { z } from "zod";
 
 import { reviewTargetKindSchema } from "./review-event.js";
-import { autoCommitConfigSchema } from "./auto-commit-policy.js";
+import { autoCommitConfigSchema, type AutoCommitConfig } from "./auto-commit-policy.js";
+import { pullRequestConfigSchema, type PullRequestConfig } from "./pull-request-policy.js";
 import { isPlainObject } from "./utils.js";
 
 export const workspaceRootKeys = ["cache", "defaults", "instances"] as const;
@@ -425,7 +426,50 @@ const triageSchema = z
   .passthrough()
   .default({ enabled: false, actions: ["close"], categories_close: ["spam", "invalid"], events: ["issues"], dry_run: false });
 
-const reviewSchema = z
+/**
+ * Explicit portable shape of the `review` section. The schema below is reused
+ * at three layers of the app config; without a named type the serialized
+ * declaration triples every nested union and exceeds the compiler's
+ * declaration-emit limit (TS7056).
+ */
+export interface ReviewConfig {
+  languages_auto_detect?: boolean | undefined;
+  include?: string[] | undefined;
+  exclude?: string[] | undefined;
+  max_files?: number | undefined;
+  max_patch_bytes?: number | undefined;
+  incremental?: boolean | undefined;
+  skip_lgtm?: boolean | undefined;
+  output_language?: string | undefined;
+  commit_strategy?: "per_commit" | "aggregate" | "head_only" | undefined;
+  auto_commit?: AutoCommitConfig | undefined;
+  pull_request?: PullRequestConfig | undefined;
+  log_thinking?: boolean | undefined;
+  git?: { allow_deepen?: boolean | undefined } | undefined;
+  labels?: {
+    ignore?: string[] | undefined;
+    auto_tag?: string | undefined;
+    reviewed_tag?: string | undefined;
+  } | undefined;
+  problem_issue?: { max_recent_issues?: number | undefined } | undefined;
+  fetch_extra?: {
+    max_bytes?: number | undefined;
+    max_files?: number | undefined;
+    allow_paths?: string[] | undefined;
+  } | undefined;
+  reflection?: {
+    enabled?: boolean | undefined;
+    mode?: "off" | "light" | "thorough" | undefined;
+    memory?: {
+      max_size_kb?: number | undefined;
+      max_entries?: number | undefined;
+      retention_days?: number | undefined;
+    } | undefined;
+  } | undefined;
+  [key: string]: unknown;
+}
+
+const reviewSchema: z.ZodType<ReviewConfig> = z
   .object({
     languages_auto_detect: z.boolean().optional(),
     include: z.array(z.string()).optional(),
@@ -437,6 +481,7 @@ const reviewSchema = z
     output_language: z.string().min(1).optional(),
     commit_strategy: z.enum(["per_commit", "aggregate", "head_only"]).optional(),
     auto_commit: autoCommitConfigSchema.optional(),
+    pull_request: pullRequestConfigSchema.optional(),
     log_thinking: z.boolean().optional(),
     git: z
       .object({

@@ -103,6 +103,24 @@ exclusions. Omitted schedules allow all times; omitted timezones use UTC.
 Windows include their start and exclude their end. An overnight window belongs
 to its starting weekday. Already running reviews may finish after a window closes.
 
+The window gates every execution path. Outside it, automatic-commit batches
+do not start, and asynchronous pull-request, issue, and comment processing
+defers the first attempt and every retry to the next window (logged as
+`trigger processing deferred by execution window` with the resume instant).
+Repeated events for the same target merge into one pending re-review while a
+run is deferred. With the observability store configured (`storage.database`
+plus `admin`), deferrals persist and resume after a restart; otherwise they
+are held in process memory and a restart drops them.
+
+Pull-request events can use their own window via `review.pull_request.schedule`
+(same shape as `auto_commit.schedule`, no receive delay or commit batching; unset everywhere
+falls back to the auto-commit schedule). A deferred `/aicr review` comment
+command posts a reply on the PR/MR stating the scheduled start.
+Repeated outside-window events replace the pending target's envelope. The timer
+and each actual attempt check the window; an already running analysis may finish
+after it closes. The Events panel shows receipt decisions and scheduled times;
+queued commits show an earliest eligible time, not a guaranteed start time.
+
 A **submission source** means raw Git author name + email, P4 changelist
 User + Client, or SVN `svn:author`, within one configured repository and stream.
 Consecutive, due commits from that source can merge across notifications,

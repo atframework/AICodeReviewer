@@ -285,6 +285,8 @@ Narrative: [Agent and sandbox](/en/configuration/agent/).
 | `review.auto_commit.schedule.timezone` | string | `UTC` | IANA timezone for the execution schedule |
 | `review.auto_commit.schedule.rules[]` | object[] | — | Weekly rule groups (`days` weekday set + `windows` `HH:mm` ranges, union across groups); `rules: []` lifts all weekly limits |
 | `review.auto_commit.exclude_sources[]` | object[] | — | Bot/CI source exclusion rules (`id`, `vcs`, `match` field matchers with exactly one of `glob`/`regex`); `[]` clears inherited rules |
+| `review.pull_request.schedule.timezone` | string | `UTC` | IANA timezone for the PR/MR execution schedule |
+| `review.pull_request.schedule.rules[]` | object[] | — | Weekly rule groups for PR/MR review (`days` weekday set + `windows` `HH:mm` ranges, union across groups); `rules: []` lifts all weekly limits; unset everywhere falls back to `review.auto_commit.schedule` |
 
 ## `queue`
 

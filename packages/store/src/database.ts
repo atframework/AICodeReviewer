@@ -262,4 +262,55 @@ const MIGRATIONS = [
       ALTER TABLE daily_rollups ADD COLUMN cache_creation_tokens INTEGER NOT NULL DEFAULT 0;
     `,
   },
+  {
+    // Append-only log of received webhook/trigger events with the receipt-time
+    // decision (executed/deferred/queued/duplicate/deduplicated/ignored/rejected).
+    // Not part of daily rollups; retention is capped by pruneWebhookEvents.
+    name: "007_webhook_events",
+    sql: `
+      CREATE TABLE IF NOT EXISTS webhook_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        received_at INTEGER NOT NULL,
+        provider TEXT,
+        event_name TEXT,
+        workspace_id TEXT,
+        trigger_name TEXT,
+        repo_ref TEXT,
+        target_kind TEXT,
+        target_url TEXT,
+        branch TEXT,
+        decision TEXT NOT NULL,
+        reason TEXT,
+        detail TEXT
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_webhook_events_received
+        ON webhook_events(received_at);
+    `,
+  },
+  {
+    // Execution-window deferrals for the async trigger path (PR/MR, issue,
+    // comment flows). One row per dedup target; the latest event replaces the
+    // stored envelope while `not_before` never moves earlier. `claimed` rows
+    // are reset to `pending` on startup so a restart cannot strand a deferral.
+    name: "008_review_deferrals",
+    sql: `
+      CREATE TABLE IF NOT EXISTS review_deferrals (
+        dedup_key TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        provider TEXT NOT NULL,
+        event_name TEXT NOT NULL,
+        review_event TEXT NOT NULL,
+        payload TEXT,
+        not_before INTEGER NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending',
+        attempts INTEGER NOT NULL DEFAULT 0,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_review_deferrals_due
+        ON review_deferrals(status, not_before);
+    `,
+  },
 ];

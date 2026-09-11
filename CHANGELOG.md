@@ -9,7 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **M8**: `@aicr/eval` package with minimal evaluation framework (`runEval`, `EvalExample`, message-pattern matching).
+- **M16**: `review.pull_request.schedule` — optional weekly execution window for PR/MR analysis (including comment review commands), same shape as `review.auto_commit.schedule`, resolved across global/defaults/instance layers with wholesale replacement; falls back to the resolved auto-commit schedule when unset at all layers.
+- **M16**: Persistent deferral registry (`ReviewDeferralManager` + `review_deferrals` store table, migration `008`): webhook events arriving outside the execution window are persisted by dedup key and resume after a restart (claimed rows reset to pending); without the observability store deferrals fall back to in-process memory timers.
+- **M16**: Deferred comment review commands now post a reply on the PR/MR stating the scheduled start time (`bypassNoProblemsPolicy`, once per deferral).
+- **M16**: Webhook event log (`webhook_events` store table, migration `007`, retention 100) recorded across all webhook processors with dispositions (processed/deferred/deduplicated/rejected/ignored/error), exposed via `GET /api/admin/events` and a new Dashboard Events tab (20 per page).
+- **M16**: Dashboard Overview recent-activity table gains a Tokens column (total tokens + cache hit rate).
 - **M8**: OTel OTLP HTTP trace exporter configuration in `@aicr/core` (`createOtelSdk` reads `OTEL_EXPORTER_OTLP_ENDPOINT` and `OTEL_EXPORTER_OTLP_HEADERS`).
 - **M8**: Prometheus metrics endpoint (`/metrics`) with counters (`aicr_reviews_total`, `aicr_reviews_skipped_total`, `aicr_reviews_failed_total`, `aicr_problems_total`) and histogram (`aicr_review_duration_seconds`).
 - **M8**: Run snapshot persistence to `runs/<run_id>/run.json` via `saveRunSnapshot`, configurable through `ServerAppOptions.runsDir`.
@@ -40,6 +44,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **M16**: Execution-window deferrals (the M15 in-memory behavior) are now persisted when the observability store is configured, so deferred PR/MR events survive restarts and never resume earlier than the next allowed instant; the comment-command deferral notice is posted once per deferral.
+- **Repo**: `packages/llm/assets/models-dev.json` is now tracked via Git LFS (`.gitattributes` + history rewrite); fresh clones require `git lfs` installed.
 - **M5**: `Plan.md` current execution package updated to reflect actual delivery status (runtime bundle, MCP config injection, agent repair, MCP state file reading marked delivered).
 - **Plan**: `Plan.md` milestone table updated: M5→基本完成, M6→部分完成 (GitHub e2e 验收, GitLab/SVN→Backlog), M8→大部分完成 (OTel 接入, eval CLI 添加), M9→进行中. Low-priority items moved to explicit Backlog section.
 - **Docs**: `Note.md` moved to `development/README.md`; all references updated across skills and docs.
@@ -47,6 +53,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **M15**: `review.auto_commit.schedule` now also gates asynchronous PR/MR, issue, and comment processing. Previously only automatic-commit batches were window-gated, so PR events ran immediately at any hour (observed in production: a `pull_request` run executed 13:54–14:31 inside a configured 13:40–18:00 gap). Outside the windows the first attempt and every retry now defer to the next allowed instant, logged as `trigger processing deferred by execution window`; deferral is in-memory like the rest of the async trigger path.
 - **M8**: Prometheus review duration histogram now keeps cumulative bucket/sum/count values while bounding only the raw duration sample buffer.
 - **M8**: Inline webhook review processing now records metrics and persists run snapshots consistently with async processing.
 - **M9**: Podman `invalid internal status` root cause identified and fixed on production server (`podman --storage-driver=overlay system migrate`).

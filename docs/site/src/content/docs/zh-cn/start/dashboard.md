@@ -38,12 +38,13 @@ session TTL 字段是 `session_ttl_seconds`（默认 `86400` = 24 小时）。`s
 
 访问 `http://<aicr-host>:8080/dashboard`（或 `/`）。即使尚未配置管理员环境变量，该路由也会返回 dashboard 外壳并显示 setup-required 提示而不是 404；如果设置了 `path_prefix`，根路径会重定向到带前缀的入口。
 
-登录后，dashboard 有四个标签：
+登录后，dashboard 有五个标签：
 
-- **Overview**——总评审次数、成功/失败/跳过次数、发现问题的 run 次数、problem 总数、创建 issue 数、分析代码量、LLM 请求数、输入/输出/总 token、prompt 缓存命中率（含命中/未命中 token 拆分）、估算成本、平均 duration。时间窗口选择器切换 today / this week / this month / all（均按 UTC）。
+- **Overview**——总评审次数、成功/失败/跳过次数、发现问题的 run 次数、problem 总数、创建 issue 数、分析代码量、LLM 请求数、输入/输出/总 token、prompt 缓存命中率（含命中/未命中 token 拆分）、估算成本、平均 duration。时间窗口选择器切换 today / this week / this month / all（均按 UTC）。Recent activity 表格与 Runs 标签一样展示每条 run 的总 token、缓存命中/未命中拆分与命中率。
 - **Projects**——按 project 聚合（`workspaceId + triggerName + repoRef`）：评审/成功/失败/跳过次数、problem 总数、创建 issue 数、变更文件数、增删行数、LLM 请求数、token、缓存命中 token 与命中率、成本、平均 duration。软删除的 project 在宽限期内仍可见，并用 `isActive` 标记。
 - **Providers**——按 provider+model 聚合：请求数、输入/输出 token、缓存命中 token 与命中率、成本、重试/fallback/失败次数、平均延迟。
 - **Runs**——最近 100 条运行记录，每页 20 条，用 Prev/Next 翻页。每行展示真实 token 用量：总 token、命中/未命中输入拆分与命中率；run 未上报可解析 usage 时显示 `—`。
+- **Events**——最近收到的 100 条 webhook/trigger 事件，每页 20 条。每行展示接收时刻的处理决定：`executed`（立即执行）、`queued`/`duplicate`（auto-commit 回执）、`deferred`（执行窗口延期，含计划恢复时刻）、`deduplicated`（合并进待重审）、`ignored`（label 忽略、不支持的事件、仓库未配置）或 `rejected`（签名无效、payload 非法、触发器未配置），以及原因和细节（命中的 label、回执 id 等）。
 
 用量按完整 review run 聚合，包括首次模型调用、上下文/格式修复调用以及最终直连 LLM 兜底。
 对 Kilo 而言，每个 `step_finish` 模型回合计为一次请求。本地 prompt 大小估算单独保存，只有拿不到
@@ -54,9 +55,13 @@ session TTL 字段是 `session_ttl_seconds`（默认 `86400` = 24 小时）。`s
 
 Projects 和 Providers 标签各自调用带时间窗口的 API
 （`GET /api/admin/stats/projects?since=` 和 `.../providers?since=`）。Runs 标签通过
-`GET /api/admin/runs?limit=100` 拉取最近 100 条并在浏览器内分页。dashboard 以实时聚合为真源。
+`GET /api/admin/runs?limit=100` 拉取最近 100 条并在浏览器内分页；Events 标签同样通过
+`GET /api/admin/events?limit=100` 拉取，其存储只保留最新 100 条。dashboard 以实时聚合为真源。
 
 ## 管理 API
+
+提交事件的 **not before** 表示首次接收延迟和执行窗口共同决定的最早可执行时间，
+已有任务仍可能让实际开始时间更晚。
 
 除 `/login` 外所有端点都需要 `Authorization: Bearer <token>`。
 
@@ -68,6 +73,7 @@ Projects 和 Providers 标签各自调用带时间窗口的 API
 | `GET /api/admin/stats/projects?since=` | 按 project 聚合 |
 | `GET /api/admin/stats/providers?since=` | 按 provider+model 聚合 |
 | `GET /api/admin/runs?limit=` | 最近 run 列表（1..100），含 token 用量与缓存命中拆分 |
+| `GET /api/admin/events?limit=` | 最近 webhook/trigger 事件日志（1..100），含接收时刻的处理决定与原因 |
 
 ## `/metrics`
 

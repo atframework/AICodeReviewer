@@ -52,6 +52,11 @@ Always try the `node` direct invocation first if `pnpm` or `npx` fails with a Po
 
 ## Classify Windows environment blockers
 
+- Existing tests can use absolute fixture paths outside the workspace. If the
+  sandbox rejects those writes with `EPERM`, retain the failing log and rerun
+  the same gate with approved fixture access; do not weaken assertions or
+  alter unrelated adapter behavior to make the restricted run pass.
+
 - If `CreateProcessAsUserW` fails with access denied before PowerShell starts, inspect the launcher path (a WindowsApps `pwsh.exe` alias can be blocked). Keep PowerShell 7+ and request the exact check through the supported sandbox escalation; do not switch to PowerShell 5.1 or classify the launcher error as a product failure.
 
 - If Vitest fails before test collection with esbuild/Vite `ensureServiceIsRunning` and `spawn EPERM`, rerun the exact command where child-process spawning is permitted. Count the gate only when Vitest reports the expected test files/tests; otherwise report it as blocked, not as a product test failure or a pass.

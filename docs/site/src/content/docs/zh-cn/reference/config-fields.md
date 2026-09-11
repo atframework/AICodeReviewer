@@ -270,6 +270,8 @@ schema 接受 `workspaces.defaults` 和实例上的 `agent.default` 与 `sandbox
 | `review.auto_commit.schedule.timezone` | string | `UTC` | 执行时段使用的 IANA 时区 |
 | `review.auto_commit.schedule.rules[]` | object[] | — | 周计划规则组（`days` 星期集合 + `windows` `HH:mm` 时间段，组间取并集）；`rules: []` 解除全部周限制 |
 | `review.auto_commit.exclude_sources[]` | object[] | — | 机器人/CI 来源排除规则（`id`、`vcs`、`match` 字段匹配器，`glob`/`regex` 二选一）；`[]` 清除继承规则 |
+| `review.pull_request.schedule.timezone` | string | `UTC` | PR/MR 执行时段使用的 IANA 时区 |
+| `review.pull_request.schedule.rules[]` | object[] | — | PR/MR 评审的周计划规则组（`days` 星期集合 + `windows` `HH:mm` 时间段，组间取并集）；`rules: []` 解除全部周限制；各层均未设置时回退到 `review.auto_commit.schedule` |
 
 ## `queue`
 

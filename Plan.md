@@ -6,9 +6,10 @@
 
 ## 1. 当前状态
 
-M0–M15 的核心交付已归档；待验收的外部场景与预留扩展列在下文，不能据此宣称已全覆盖。
+M0–M16 的核心交付已归档；待验收的外部场景与预留扩展列在下文，不能据此宣称已全覆盖。
 自动提交调度的跨通知合并、三后端存储和恢复边界见
-[M15](docs/ai/milestones/M15.md)，多源上下文聚合见 [M14](docs/ai/milestones/M14.md)。
+[M15](docs/ai/milestones/M15.md)，多源上下文聚合见 [M14](docs/ai/milestones/M14.md)；
+PR/MR 执行时段、持久化延期与事件面板见 [M16](docs/ai/milestones/M16.md)。
 
 2026-09-10 已推进的本地验收：真实 svnserve + post-commit hook 到持久调度、
 模型目录 Redis 新连接重载，以及部署配置/双语自动提交示例的 schema 校验。
@@ -57,6 +58,7 @@ Redis 同时覆盖独立配置源及现有调度/缓存格式迁移；memory 只
 | SVN 部署环境 | file:// 仓库及本机 svnserve、认证 HTTP hook、SQLite 调度、真实 diff | 目标服务器上的 hook 账户/PATH、网络 ACL，以及实际使用的 HTTP(S)/认证方式 |
 | Redis 部署环境 | 自动调度和模型目录均已通过本机真实 Redis | 仅部署特定的 Redis 版本、ACL/TLS、网络中断及持久化配置需要现场验证 |
 | GitHub App pull_request 生产路径 | push 已签收，PR token 注入有单测 | 目标仓库自然出现 PR 后核验入站、分析和发布；不为验收代用户创建 PR |
+| PR/MR 避峰恢复生产路径 | 正式环境已部署并验证 PR 配置、管理 API、迁移和产物哈希；隔离容器验证七个时间边界及恢复 | 仍需窗口外自然事件持久化及下一窗口恢复的运行证据；不主动制造分析或通知 |
 | CI 真实 LLM benchmark | 6 个 eval fixtures 的离线校验已入 CI | CI secrets、provider 凭据和明确调用预算 |
 | 自动批次远端对账 | 执行检查点与未知结果保护；逐目标协议待实现 | 对应 publisher 的查询/幂等协议及测试目标；在本地协议实现后验收 |
 

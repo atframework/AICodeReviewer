@@ -16,7 +16,9 @@ const globalMetrics: AicrMetrics = createAicrMetrics();
 
 import {
   isTransientIoError,
+  nextAllowedInstant,
   prepareReviewPrompt,
+  type CompiledWeeklySchedule,
   type PreparedReviewPrompt,
   type QueueWorker,
   type ReviewEvent,
@@ -61,6 +63,13 @@ import {
   isAutomaticCommitEvent,
   type AutoCommitAcceptor,
 } from "./auto-commit-runtime.js";
+import {
+  recordWebhookEvent,
+  webhookEventFields,
+} from "./webhook-events.js";
+import type {
+  ReviewDeferralManager,
+} from "./deferral-manager.js";
 
 type GenericWebhookProvider = "github" | "gitlab";
 
@@ -121,6 +130,23 @@ export interface ServerAppOptions {
   readonly autoCommitStore?: AutoCommitStore;
   /** Stop receipt execution, drain the active batch, then close its store. */
   readonly closeAutoCommit?: () => Promise<void>;
+  /**
+   * Weekly execution-window lookup. Receives the workspace and the event's
+   * targetKind: pull_request events prefer the resolved
+   * `review.pull_request.schedule` and fall back to the resolved
+   * `review.auto_commit.schedule`; every other async target kind uses the
+   * auto-commit schedule directly. Async trigger processing (PR/issue/comment
+   * flows) defers the first attempt and every retry to the next allowed
+   * instant; automatic-commit receipts are gated separately by the scheduler.
+   * Omitted = every instant is allowed.
+   */
+  readonly getExecutionSchedule?: (workspaceId: string, targetKind?: string) => CompiledWeeklySchedule | undefined;
+  /**
+   * Execution-window deferral registry for the async trigger path. When
+   * present, window-deferred events persist (or memorize) and resume through
+   * it instead of a bare setTimeout, so a restart can recover them.
+   */
+  readonly deferralManager?: ReviewDeferralManager;
   readonly store?: StoreDb;
 }
 
@@ -173,9 +199,12 @@ function registerGiteaLikeWebhook(
   store: StoreDb | undefined,
   triggerRetry?: TriggerRetryConfig,
   autoCommit?: AutoCommitAcceptor,
+  getExecutionSchedule?: (workspaceId: string, targetKind?: string) => CompiledWeeklySchedule | undefined,
+  deferralManager?: ReviewDeferralManager,
 ): void {
   app.post(path, async (c) => {
     if (!config) {
+      recordWebhookEvent(store, { provider, decision: "rejected", reason: "trigger_not_configured" });
       return c.json({ accepted: false, reason: "trigger_not_configured", provider }, 503);
     }
 
@@ -184,6 +213,7 @@ function registerGiteaLikeWebhook(
       c.req.header("x-gitea-signature-256") ?? c.req.header("x-gitea-signature") ?? undefined;
 
     if (!verifyWebhookSignature(payload, config.webhookSecret, signature)) {
+      recordWebhookEvent(store, { provider, decision: "rejected", reason: "invalid_signature" });
       return c.json({ accepted: false, reason: "invalid_signature", provider }, 401);
     }
 
@@ -194,6 +224,7 @@ function registerGiteaLikeWebhook(
       : normalizedEventName;
 
     if (!eventName) {
+      recordWebhookEvent(store, { provider, decision: "rejected", reason: "missing_event_name" });
       return c.json({ accepted: false, reason: "missing_event_name", provider }, 400);
     }
 
@@ -206,6 +237,7 @@ function registerGiteaLikeWebhook(
     })();
 
     if (decoded === undefined) {
+      recordWebhookEvent(store, { provider, eventName, decision: "rejected", reason: "invalid_json" });
       return c.json({ accepted: false, reason: "invalid_json", provider }, 400);
     }
 
@@ -214,6 +246,13 @@ function registerGiteaLikeWebhook(
       reviewEvent = await translateWebhookToReviewEvent(provider, eventName, decoded, config);
     } catch (error) {
       if (error instanceof ZodError) {
+        recordWebhookEvent(store, {
+          provider,
+          eventName,
+          decision: "rejected",
+          reason: "invalid_payload",
+          detail: { issues: error.issues.map((issue) => ({ path: issue.path, message: issue.message })) },
+        });
         return c.json(
           {
             accepted: false,
@@ -232,15 +271,24 @@ function registerGiteaLikeWebhook(
     }
 
     if (!reviewEvent) {
+      recordWebhookEvent(store, { provider, eventName, decision: "ignored", reason: "unsupported_event" });
       return c.json({ accepted: false, reason: "unsupported_event", provider, eventName }, 202);
     }
 
     const ignoredLabels = shouldIgnoreByLabels(reviewEvent, reviewOrchestrationOptions?.ignoreLabelsResolver);
     if (ignoredLabels) {
+      recordWebhookEvent(store, {
+        provider,
+        eventName,
+        decision: "ignored",
+        reason: "ignored_by_label",
+        detail: { matchedLabels: ignoredLabels },
+        ...webhookEventFields(reviewEvent),
+      });
       return c.json({ accepted: false, reason: "ignored_by_label", provider, eventName, matchedLabels: ignoredLabels }, 200);
     }
 
-    return handleReviewOrchestration(c, provider, eventName, decoded, reviewEvent, reviewPreparationOptions, reviewOrchestrationOptions, issueTriageOptions, asyncTriggers, deduplicator, runsDir, metrics, store, triggerRetry, autoCommit);
+    return handleReviewOrchestration(c, provider, eventName, decoded, reviewEvent, reviewPreparationOptions, reviewOrchestrationOptions, issueTriageOptions, asyncTriggers, deduplicator, runsDir, metrics, store, triggerRetry, autoCommit, getExecutionSchedule, deferralManager);
   });
 }
 
@@ -256,9 +304,12 @@ function registerP4Trigger(
   store: StoreDb | undefined,
   triggerRetry?: TriggerRetryConfig,
   autoCommit?: AutoCommitAcceptor,
+  getExecutionSchedule?: (workspaceId: string, targetKind?: string) => CompiledWeeklySchedule | undefined,
+  deferralManager?: ReviewDeferralManager,
 ): void {
   app.post("/triggers/p4", async (c) => {
     if (!config) {
+      recordWebhookEvent(store, { provider: "p4", decision: "rejected", reason: "trigger_not_configured" });
       return c.json({ accepted: false, reason: "trigger_not_configured", provider: "p4" }, 503);
     }
 
@@ -270,6 +321,7 @@ function registerP4Trigger(
       try {
         payload = JSON.parse(rawPayload) as unknown;
       } catch {
+        recordWebhookEvent(store, { provider: "p4", decision: "rejected", reason: "invalid_json" });
         return c.json({ accepted: false, reason: "invalid_json", provider: "p4" }, 400);
       }
     } else {
@@ -301,6 +353,13 @@ function registerP4Trigger(
       reviewEvent = translateP4TriggerToReviewEvent(payload, config);
     } catch (error) {
       if (error instanceof ZodError) {
+        recordWebhookEvent(store, {
+          provider: "p4",
+          eventName: "change-commit",
+          decision: "rejected",
+          reason: "invalid_payload",
+          detail: { issues: error.issues.map((issue) => ({ path: issue.path, message: issue.message })) },
+        });
         return c.json(
           {
             accepted: false,
@@ -318,6 +377,7 @@ function registerP4Trigger(
     }
 
     if (!reviewEvent) {
+      recordWebhookEvent(store, { provider: "p4", eventName: "change-commit", decision: "rejected", reason: "missing_changelist" });
       return c.json({ accepted: false, reason: "missing_changelist", provider: "p4" }, 400);
     }
 
@@ -333,6 +393,8 @@ function registerP4Trigger(
       store,
       triggerRetry,
       autoCommit,
+      getExecutionSchedule,
+      deferralManager,
     );
   });
 }
@@ -349,9 +411,12 @@ function registerSvnTrigger(
   store: StoreDb | undefined,
   triggerRetry?: TriggerRetryConfig,
   autoCommit?: AutoCommitAcceptor,
+  getExecutionSchedule?: (workspaceId: string, targetKind?: string) => CompiledWeeklySchedule | undefined,
+  deferralManager?: ReviewDeferralManager,
 ): void {
   app.post("/triggers/svn", async (c) => {
     if (!config) {
+      recordWebhookEvent(store, { provider: "svn", decision: "rejected", reason: "trigger_not_configured" });
       return c.json({ accepted: false, reason: "trigger_not_configured", provider: "svn" }, 503);
     }
 
@@ -363,6 +428,7 @@ function registerSvnTrigger(
       try {
         payload = JSON.parse(rawPayload) as unknown;
       } catch {
+        recordWebhookEvent(store, { provider: "svn", decision: "rejected", reason: "invalid_json" });
         return c.json({ accepted: false, reason: "invalid_json", provider: "svn" }, 400);
       }
     } else {
@@ -403,6 +469,13 @@ function registerSvnTrigger(
       reviewEvent = translateSvnTriggerToReviewEvent(payload, config);
     } catch (error) {
       if (error instanceof ZodError) {
+        recordWebhookEvent(store, {
+          provider: "svn",
+          eventName: "post-commit",
+          decision: "rejected",
+          reason: "invalid_payload",
+          detail: { issues: error.issues.map((issue) => ({ path: issue.path, message: issue.message })) },
+        });
         return c.json(
           {
             accepted: false,
@@ -420,6 +493,7 @@ function registerSvnTrigger(
     }
 
     if (!reviewEvent) {
+      recordWebhookEvent(store, { provider: "svn", eventName: "post-commit", decision: "rejected", reason: "missing_revision" });
       return c.json({ accepted: false, reason: "missing_revision", provider: "svn" }, 400);
     }
 
@@ -433,6 +507,8 @@ function registerSvnTrigger(
       store,
       triggerRetry,
       autoCommit,
+      getExecutionSchedule,
+      deferralManager,
     );
   });
 }
@@ -534,10 +610,13 @@ function registerGenericWebhook(
   store: StoreDb | undefined,
   triggerRetry?: TriggerRetryConfig,
   autoCommit?: AutoCommitAcceptor,
+  getExecutionSchedule?: (workspaceId: string, targetKind?: string) => CompiledWeeklySchedule | undefined,
+  deferralManager?: ReviewDeferralManager,
 ): void {
   app.post(path, async (c) => {
     const configs = normalizeGenericWebhookConfigs(config);
     if (configs.length === 0) {
+      recordWebhookEvent(store, { provider, decision: "rejected", reason: "trigger_not_configured" });
       return c.json({ accepted: false, reason: "trigger_not_configured", provider }, 503);
     }
 
@@ -557,6 +636,11 @@ function registerGenericWebhook(
     const selected = selectGenericWebhookConfig(provider, payload, decoded, configs, credential);
     if (!selected.config) {
       const status = selected.reason === "repository_not_configured" ? 202 : 401;
+      recordWebhookEvent(store, {
+        provider,
+        decision: selected.reason === "repository_not_configured" ? "ignored" : "rejected",
+        reason: selected.reason ?? "invalid_signature",
+      });
       return c.json({ accepted: false, reason: selected.reason, provider }, status);
     }
 
@@ -567,10 +651,12 @@ function registerGenericWebhook(
       : c.req.header("x-gitlab-event");
 
     if (!eventName) {
+      recordWebhookEvent(store, { provider, decision: "rejected", reason: "missing_event_name" });
       return c.json({ accepted: false, reason: "missing_event_name", provider }, 400);
     }
 
     if (decoded === undefined) {
+      recordWebhookEvent(store, { provider, eventName, decision: "rejected", reason: "invalid_json" });
       return c.json({ accepted: false, reason: "invalid_json", provider }, 400);
     }
 
@@ -579,6 +665,13 @@ function registerGenericWebhook(
       reviewEvent = await translateWebhookToReviewEvent(provider, eventName, decoded, webhookConfig);
     } catch (error) {
       if (error instanceof ZodError) {
+        recordWebhookEvent(store, {
+          provider,
+          eventName,
+          decision: "rejected",
+          reason: "invalid_payload",
+          detail: { issues: error.issues.map((issue) => ({ path: issue.path, message: issue.message })) },
+        });
         return c.json(
           {
             accepted: false,
@@ -597,14 +690,23 @@ function registerGenericWebhook(
     }
 
     if (!reviewEvent) {
+      recordWebhookEvent(store, { provider, eventName, decision: "ignored", reason: "unsupported_event" });
       return c.json({ accepted: false, reason: "unsupported_event", provider, eventName }, 202);
     }
 
     const ignoredLabels = shouldIgnoreByLabels(reviewEvent, reviewOrchestrationOptions?.ignoreLabelsResolver);
     if (ignoredLabels) {
+      recordWebhookEvent(store, {
+        provider,
+        eventName,
+        decision: "ignored",
+        reason: "ignored_by_label",
+        detail: { matchedLabels: ignoredLabels },
+        ...webhookEventFields(reviewEvent),
+      });
       return c.json({ accepted: false, reason: "ignored_by_label", provider, eventName, matchedLabels: ignoredLabels }, 200);
     }
-    return handleReviewOrchestration(c, provider, eventName, decoded, reviewEvent, reviewPreparationOptions, reviewOrchestrationOptions, issueTriageOptions, asyncTriggers, deduplicator, runsDir, metrics, store, triggerRetry, autoCommit);
+    return handleReviewOrchestration(c, provider, eventName, decoded, reviewEvent, reviewPreparationOptions, reviewOrchestrationOptions, issueTriageOptions, asyncTriggers, deduplicator, runsDir, metrics, store, triggerRetry, autoCommit, getExecutionSchedule, deferralManager);
   });
 }
 
@@ -1060,6 +1162,113 @@ function computeBackoff(
   return Math.min(Math.round(delay), maxMs);
 }
 
+/**
+ * Reply on the PR/MR when a comment-command review is deferred by the
+ * execution window, telling the requester when the run will start. Uses the
+ * same output-publisher channel as trigger error reports; failures only log.
+ */
+async function publishDeferralNotice(
+  context: {
+    readonly reviewEvent: ReviewEvent;
+    readonly payload: unknown;
+    readonly provider: ReviewProvider;
+    readonly eventName: string;
+  },
+  reviewOrchestrationOptions: ServerReviewOrchestrationOptions | undefined,
+  runId: string,
+  resumeAtMs: number,
+  timezone: string | undefined,
+): Promise<void> {
+  let publisher: ReviewOutputPublisher | undefined;
+  try {
+    publisher = (await reviewOrchestrationOptions?.outputPublisherResolver?.(context)) ?? reviewOrchestrationOptions?.outputPublisher;
+  } catch (error) {
+    console.error(JSON.stringify({
+      level: "error",
+      msg: "failed to resolve output publisher for deferral notice",
+      runId,
+      error: toErrorMessage(error),
+    }));
+    return;
+  }
+  if (!publisher?.publishSummary) {
+    return;
+  }
+
+  const resumeAt = new Date(resumeAtMs);
+  const summary = [
+    "## AICodeReviewer review deferred",
+    "",
+    "This review request was received outside the configured execution window and will start at the next allowed instant.",
+    "",
+    `- scheduled start: ${resumeAt.toISOString()}${timezone ? ` (${timezone})` : ""}`,
+    `- runId: ${runId}`,
+    `- provider: ${context.provider}`,
+    `- event: ${context.eventName}`,
+    `- trigger: ${context.reviewEvent.triggerName}`,
+    `- workspace: ${context.reviewEvent.workspaceId}`,
+    `- repo: ${context.reviewEvent.repoRef}`,
+  ].join("\n");
+
+  try {
+    await publisher.publishSummary(summary, [], { bypassNoProblemsPolicy: true, skipReconcile: true });
+  } catch (error) {
+    console.error(JSON.stringify({
+      level: "error",
+      msg: "failed to publish deferral notice",
+      runId,
+      error: toErrorMessage(error),
+    }));
+  }
+}
+
+/** Node setTimeout clamps delays above the signed 32-bit range; stay below. */
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
+
+/**
+ * Clamp a planned timer delay so the attempt starts inside the workspace
+ * execution window. A planned instant that is already allowed is returned
+ * unchanged; otherwise the attempt waits for the next window to open. The
+ * schedule is consulted only through this helper, so the retry path and the
+ * first-attempt path share one gate.
+ */
+function clampDelayToExecutionWindow(
+  schedule: CompiledWeeklySchedule | undefined,
+  plannedDelayMs: number,
+  now: number,
+): { delayMs: number; resumeAt: number; deferred: boolean } {
+  const plannedAt = now + Math.max(0, plannedDelayMs);
+  if (!schedule) {
+    return { delayMs: Math.max(0, plannedDelayMs), resumeAt: plannedAt, deferred: false };
+  }
+  const resumeAt = nextAllowedInstant(schedule, plannedAt);
+  return {
+    delayMs: Math.min(Math.max(0, resumeAt - now), MAX_TIMER_DELAY_MS),
+    resumeAt,
+    deferred: resumeAt > plannedAt,
+  };
+}
+
+export type TriggerDisposition = "scheduled" | "deduplicated" | "deferred";
+
+export interface TriggerSchedulingResult {
+  readonly runId: string;
+  readonly disposition: TriggerDisposition;
+  /** Next allowed instant (ms epoch) when disposition is "deferred". */
+  readonly resumeAt?: number;
+}
+
+export interface TriggerSchedulingExtras {
+  readonly getExecutionSchedule?: (workspaceId: string, targetKind?: string) => CompiledWeeklySchedule | undefined;
+  readonly deferralManager?: ReviewDeferralManager;
+  /**
+   * Internal: set when re-entering from a fired deferral timer. The window
+   * clamp still applies (a window that closed during a process pause simply
+   * re-defers), but the comment-command deferral notice is not re-published.
+   */
+  readonly deferralResume?: boolean;
+}
+
 function scheduleTriggerProcessing(
   provider: ReviewProvider,
   eventName: string,
@@ -1073,11 +1282,19 @@ function scheduleTriggerProcessing(
   runsDir: string | undefined,
   store: StoreDb | undefined,
   triggerRetry?: TriggerRetryConfig,
-): string {
+  extras?: TriggerSchedulingExtras,
+): TriggerSchedulingResult {
   const runId = randomUUID();
   const context = { reviewEvent, payload: decoded, provider, eventName };
+  // Resolved once per scheduling round: config is static for the process
+  // lifetime, and every timer this function arms passes through the window
+  // clamp below.
+  const executionSchedule = extras?.getExecutionSchedule?.(reviewEvent.workspaceId, reviewEvent.targetKind);
+  const initial = clampDelayToExecutionWindow(executionSchedule, 0, Date.now());
 
-  if (deduplicator) {
+  // Persist outside-window arrivals even when another review is still
+  // running. Waiting must not acquire or release that run's dedup ownership.
+  if (deduplicator && !(initial.deferred && extras?.deferralManager)) {
     const dedupKey = deduplicator.computeKey(reviewEvent);
     const canSchedule = deduplicator.trySchedule(reviewEvent);
     if (!canSchedule) {
@@ -1094,7 +1311,7 @@ function scheduleTriggerProcessing(
         repoRef: reviewEvent.repoRef,
         ...buildTriggerEventLogFields(reviewEvent),
       }));
-      return runId;
+      return { runId, disposition: "deduplicated" };
     }
   }
 
@@ -1133,11 +1350,24 @@ function scheduleTriggerProcessing(
         runsDir,
         store,
         triggerRetry,
+        extras,
       );
     }
   }
 
   function runAttempt(attemptNumber: number): void {
+    // Timers may fire after a pause or clock adjustment. Check the actual
+    // start instant too, including retries and the no-manager fallback.
+    const windowed = clampDelayToExecutionWindow(executionSchedule, 0, Date.now());
+    if (windowed.deferred) {
+      if (attemptNumber === 1 && extras?.deferralManager) {
+        extras.deferralManager.defer({ provider, eventName, decoded, reviewEvent }, windowed.resumeAt);
+        onCompleted();
+      } else {
+        setTimeout(() => runAttempt(attemptNumber), windowed.delayMs);
+      }
+      return;
+    }
     const startMs = Date.now();
     void runTriggerProcessing(
       provider,
@@ -1186,14 +1416,20 @@ function scheduleTriggerProcessing(
         && isTransientIoError(retryTarget);
 
       if (retryable && attemptNumber < maxAttempts) {
-        const delayMs = computeBackoff(backoffBaseMs, backoffMaxMs, attemptNumber, backoffKind, backoffJitter);
+        const backoffMs = computeBackoff(backoffBaseMs, backoffMaxMs, attemptNumber, backoffKind, backoffJitter);
+        // Retries start new work: clamp the planned backoff to the execution
+        // window instead of letting a window close mid-retry-chain.
+        const windowed = clampDelayToExecutionWindow(executionSchedule, backoffMs, Date.now());
         console.warn(JSON.stringify({
           level: "warn",
           msg: "trigger processing failed, retrying",
           runId,
           attempt: attemptNumber,
           maxAttempts,
-          nextRetryInMs: delayMs,
+          nextRetryInMs: windowed.delayMs,
+          ...(windowed.deferred
+            ? { windowDeferred: true, resumeAt: new Date(windowed.resumeAt).toISOString() }
+            : {}),
           provider,
           eventName,
           triggerName: reviewEvent.triggerName,
@@ -1203,7 +1439,7 @@ function scheduleTriggerProcessing(
           reason,
           error: message,
         }));
-        setTimeout(() => runAttempt(attemptNumber + 1), delayMs);
+        setTimeout(() => runAttempt(attemptNumber + 1), windowed.delayMs);
         return;
       }
 
@@ -1228,9 +1464,42 @@ function scheduleTriggerProcessing(
     });
   }
 
+  if (initial.deferred) {
+    console.info(JSON.stringify({
+      level: "info",
+      msg: "trigger processing deferred by execution window",
+      runId,
+      deferMs: initial.delayMs,
+      resumeAt: new Date(initial.resumeAt).toISOString(),
+      provider,
+      eventName,
+      triggerName: reviewEvent.triggerName,
+      workspaceId: reviewEvent.workspaceId,
+      repoRef: reviewEvent.repoRef,
+      ...buildTriggerEventLogFields(reviewEvent),
+    }));
+    // Persist (or memorize) through the deferral manager when available so a
+    // restart can recover the pending run; otherwise the bare timer below is
+    // the pre-persistence in-memory behavior.
+    if (extras?.deferralManager) {
+      extras.deferralManager.defer({ provider, eventName, decoded, reviewEvent }, initial.resumeAt);
+    } else {
+      setTimeout(() => runAttempt(1), initial.delayMs);
+    }
+    // A comment-command review is an explicit user request: reply on the
+    // PR/MR with the scheduled start so the requester is not left guessing.
+    // Resumed deferrals already notified on first receipt.
+    if (!extras?.deferralResume && reviewEvent.reason.endsWith(":comment_review")) {
+      void publishDeferralNotice(context, reviewOrchestrationOptions, runId, initial.resumeAt, executionSchedule?.timezone);
+    }
+    return { runId, disposition: "deferred", resumeAt: initial.resumeAt };
+  }
+  // A fresh in-window event supersedes any deferral still pending for the
+  // same target: this execution reviews the newest state.
+  extras?.deferralManager?.cancel(reviewEvent);
   setTimeout(() => runAttempt(1), 0);
 
-  return runId;
+  return { runId, disposition: "scheduled" };
 }
 
 async function handleReviewOrchestration(
@@ -1249,6 +1518,8 @@ async function handleReviewOrchestration(
   store: StoreDb | undefined,
   triggerRetry?: TriggerRetryConfig,
   autoCommit?: AutoCommitAcceptor,
+  getExecutionSchedule?: (workspaceId: string, targetKind?: string) => CompiledWeeklySchedule | undefined,
+  deferralManager?: ReviewDeferralManager,
 ): Promise<Response> {
   // Automatic commit events (push/change-commit/post-commit) take the
   // persistent receive path: one bounded write, then 202 with the receipt.
@@ -1262,6 +1533,22 @@ async function handleReviewOrchestration(
         reviewEvent,
         ...(deliveryId ? { deliveryId } : {}),
         now: Date.now(),
+      });
+      recordWebhookEvent(store, {
+        provider,
+        eventName,
+        decision: result.duplicate ? "duplicate" : "queued",
+        detail: {
+          receiptId: result.receipt.receiptId,
+          // Eligibility is a lower bound: metadata, earlier batches and
+          // capacity can delay execution further.
+          notBefore: new Date(clampDelayToExecutionWindow(
+            getExecutionSchedule?.(reviewEvent.workspaceId, reviewEvent.targetKind),
+            0,
+            Math.max(Date.now(), result.receipt.firstAcceptedAt + result.receipt.delaySeconds * 1000),
+          ).resumeAt).toISOString(),
+        },
+        ...webhookEventFields(reviewEvent),
       });
       return c.json({
         accepted: true,
@@ -1280,6 +1567,14 @@ async function handleReviewOrchestration(
       }, 202);
     } catch (error) {
       // Persistence failure is a retryable 503 — never a false acceptance.
+      recordWebhookEvent(store, {
+        provider,
+        eventName,
+        decision: "rejected",
+        reason: "auto_commit_receive_failed",
+        detail: { message: toErrorMessage(error) },
+        ...webhookEventFields(reviewEvent),
+      });
       return c.json(
         {
           accepted: false,
@@ -1293,7 +1588,7 @@ async function handleReviewOrchestration(
     }
   }
   if (asyncTriggers) {
-    const runId = scheduleTriggerProcessing(
+    const scheduled = scheduleTriggerProcessing(
       provider,
       eventName,
       decoded,
@@ -1306,7 +1601,38 @@ async function handleReviewOrchestration(
       runsDir,
       store,
       triggerRetry,
+      { ...(getExecutionSchedule ? { getExecutionSchedule } : {}), ...(deferralManager ? { deferralManager } : {}) },
     );
+
+    if (scheduled.disposition === "deferred") {
+      recordWebhookEvent(store, {
+        provider,
+        eventName,
+        decision: "deferred",
+        reason: "execution_window",
+        detail: {
+          runId: scheduled.runId,
+          ...(scheduled.resumeAt ? { resumeAt: new Date(scheduled.resumeAt).toISOString() } : {}),
+        },
+        ...webhookEventFields(reviewEvent),
+      });
+    } else if (scheduled.disposition === "deduplicated") {
+      recordWebhookEvent(store, {
+        provider,
+        eventName,
+        decision: "deduplicated",
+        detail: { runId: scheduled.runId },
+        ...webhookEventFields(reviewEvent),
+      });
+    } else {
+      recordWebhookEvent(store, {
+        provider,
+        eventName,
+        decision: "executed",
+        detail: { mode: "background", runId: scheduled.runId },
+        ...webhookEventFields(reviewEvent),
+      });
+    }
 
     return c.json({
       accepted: true,
@@ -1315,8 +1641,9 @@ async function handleReviewOrchestration(
       reviewEvent,
       processing: {
         mode: "background",
-        runId,
-        status: "scheduled",
+        runId: scheduled.runId,
+        status: scheduled.disposition,
+        ...(scheduled.resumeAt ? { resumeAt: new Date(scheduled.resumeAt).toISOString() } : {}),
       },
     }, 202);
   }
@@ -1339,6 +1666,14 @@ async function handleReviewOrchestration(
     recordReviewResult(metrics, { status: "failed", durationMs });
     const reason = error instanceof TriggerProcessingError ? error.reason : "trigger_processing_failed";
     const status = error instanceof TriggerProcessingError ? error.status : 500;
+    recordWebhookEvent(store, {
+      provider,
+      eventName,
+      decision: "rejected",
+      reason,
+      detail: { mode: "inline", runId, message: toErrorMessage(error) },
+      ...webhookEventFields(reviewEvent),
+    });
     return c.json(
       {
         accepted: false,
@@ -1357,6 +1692,14 @@ async function handleReviewOrchestration(
     await saveCompletedRunSnapshot(runsDir, runId, reviewEvent, result.reviewRun);
     persistReviewRunToStore(store, runId, reviewEvent, result.reviewRun, durationMs, startMs);
   }
+
+  recordWebhookEvent(store, {
+    provider,
+    eventName,
+    decision: "executed",
+    detail: { mode: "inline", runId, outcome: result.outcome },
+    ...webhookEventFields(reviewEvent),
+  });
 
   return c.json({
     accepted: true,
@@ -1446,6 +1789,8 @@ function mountRoutes(app: Hono, options: ServerAppOptions): void {
     options.store,
     options.triggerRetry,
     options.autoCommit,
+    options.getExecutionSchedule,
+    options.deferralManager,
   );
   registerGiteaLikeWebhook(
     app,
@@ -1462,6 +1807,8 @@ function mountRoutes(app: Hono, options: ServerAppOptions): void {
     options.store,
     options.triggerRetry,
     options.autoCommit,
+    options.getExecutionSchedule,
+    options.deferralManager,
   );
   registerGenericWebhook(
     app,
@@ -1478,6 +1825,8 @@ function mountRoutes(app: Hono, options: ServerAppOptions): void {
     options.store,
     options.triggerRetry,
     options.autoCommit,
+    options.getExecutionSchedule,
+    options.deferralManager,
   );
   registerGenericWebhook(
     app,
@@ -1494,6 +1843,8 @@ function mountRoutes(app: Hono, options: ServerAppOptions): void {
     options.store,
     options.triggerRetry,
     options.autoCommit,
+    options.getExecutionSchedule,
+    options.deferralManager,
   );
   registerP4Trigger(
     app,
@@ -1507,6 +1858,8 @@ function mountRoutes(app: Hono, options: ServerAppOptions): void {
     options.store,
     options.triggerRetry,
     options.autoCommit,
+    options.getExecutionSchedule,
+    options.deferralManager,
   );
   registerSvnTrigger(
     app,
@@ -1520,7 +1873,38 @@ function mountRoutes(app: Hono, options: ServerAppOptions): void {
     options.store,
     options.triggerRetry,
     options.autoCommit,
+    options.getExecutionSchedule,
+    options.deferralManager,
   );
+
+  // Deferred events resume through the same scheduling path they arrived on,
+  // with the window clamp still in force; recovery re-arms whatever a
+  // previous process left pending.
+  const deferralManager = options.deferralManager;
+  if (deferralManager) {
+    deferralManager.resumeHandler = (target) => {
+      scheduleTriggerProcessing(
+        target.provider,
+        target.eventName,
+        target.decoded,
+        target.reviewEvent,
+        options.reviewPreparation,
+        options.reviewOrchestration,
+        options.issueTriage,
+        options.deduplicator,
+        metrics,
+        runsDir,
+        options.store,
+        options.triggerRetry,
+        {
+          ...(options.getExecutionSchedule ? { getExecutionSchedule: options.getExecutionSchedule } : {}),
+          deferralManager,
+          deferralResume: true,
+        },
+      );
+    };
+    deferralManager.recover();
+  }
 }
 
 export {
@@ -1582,6 +1966,20 @@ export type {
   ReviewDeduplicator,
   DeduplicationTarget,
 } from "./review-deduplicator.js";
+
+export {
+  ReviewDeferralManager,
+  computeDeferralKey,
+} from "./deferral-manager.js";
+export type {
+  DeferredTriggerTarget,
+  DeferralResumeHandler,
+  ReviewDeferralManagerOptions,
+} from "./deferral-manager.js";
+export {
+  recordWebhookEvent,
+  webhookEventFields,
+} from "./webhook-events.js";
 
 export {
   GiteaApiClient,

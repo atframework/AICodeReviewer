@@ -69,7 +69,7 @@ Workspace 多工程匹配、数据库配置管理与自动迁移的新方案见
 - 接收：`handleReviewOrchestration` 按 provider+事件名+targetKind 分类，命中自动提交即调用
   `AutoCommitRuntime.accept`（`packages/server/src/auto-commit-runtime.ts`）原子写入 receipt，
   成功返回 202 与 `processing.receiptId`（`runId` 同值，语义为接收回执编号），持久化失败返回
-  可重试 503；PR/评论/issue/手工路径不变。deliveryKey 始终哈希 provider、事件、trigger、
+  可重试 503；PR/评论/issue/手工路径仍走直接处理，不写入 receipt。deliveryKey 始终哈希 provider、事件、trigger、
   workspace、repo、scope 与投递头（无投递头时使用 coverage），同一投递可分别进入多个 workspace。
 - 存储：`createAutoCommitStoreFromConfig` 跟随 `queue.kind` 选择 memory/SQLite/Redis 后端；
   memory 的非持久性在启动日志显式可见。receipt/成员/批次/租约/outbox 合同在
@@ -84,9 +84,30 @@ Workspace 多工程匹配、数据库配置管理与自动迁移的新方案见
   已保存 `completed` 检查点只重试本地结果记账；`started`/`publication_pending` 表示执行或
   发布结果不确定，终结为 dead 并要求人工核查，不自动重跑 LLM/非幂等 POST。dead 批次仍占住
   stream。外部发布尚无跨进程事务或逐目标恢复回执，不能承诺端到端 exactly-once。
+- 直接路径（PR/MR、issue、评论命令）复用同一周计划：async 触发处理把首次尝试和每次重试的
+  定时器经 `clampDelayToExecutionWindow`（`packages/server/src/index.ts`）钳制到
+  `nextAllowedInstant`，窗口外到达的事件记录 `trigger processing deferred by execution window`
+  日志并推迟到下一窗口打开；每次真正开始尝试前再次检查当前时间，防止进程暂停或时钟跳变越窗。
+  窗口外的新事件持久化替换同目标信封，不占用正在运行的去重标记；窗口内运行期间的事件排队重审。
+  同步（`asyncTriggers: false`）嵌入模式立即执行，不做推迟。
+  bootstrap 经 `getExecutionSchedule(workspaceId, targetKind)` 接入该路径：pull_request 事件
+  优先使用 `review.pull_request.schedule`（三层整体替换解析，见 `pull-request-policy.ts`），
+  各层均未设置时回退到 `AutoCommitRuntime.policyFor(workspaceId).schedule`，其余 target kind
+  始终使用后者；PR/MR 无首次接收延迟、不组装提交批次。
+- 窗口外延期由 `ReviewDeferralManager`（`packages/server/src/deferral-manager.ts`）接管：
+  有可观测 store 时事件信封（provider/eventName/payload/ReviewEvent）按 dedup key 持久化到
+  `review_deferrals` 表并武装单定时器，同目标新事件替换信封且 `not_before` 不提前；定时器
+  使用存储返回的时间武装定时器。触发后原子 claim，经 `resumeHandler` 重新进入常规调度，
+  交接成功后只删除仍为 claimed 的行，不删除交接时再次延期的 pending 行；读取或交接异常
+  保留任务重试，写入失败时读取最新内存回退。启动恢复把 claimed 重置为 pending 并重新武装全部
+  定时器。执行开始后的结果（含内存重试链）归 run 生命周期管理，与既有异步路径同级。
+  无 store 时退化为进程内存定时器，重启即丢失。窗口内到达的新事件通过 `cancel` 取代同目标
+  的待执行延期。评论命令（reason 以 `:comment_review` 结尾）被延期时复用 output publisher
+  在 PR/MR 回复一条说明计划开始时间的评论（`bypassNoProblemsPolicy`，只发一次）。
 - 配置：`review.auto_commit`（global/defaults/instance 三层）支持 `delay_seconds`（默认 120）、
   多组 `days+windows` 周计划（整体替换、`rules: []` 清除限制、默认 UTC）、`exclude_sources`
-  glob/RE2 来源排除；workspace schedule 不跨层深合并。
+  glob/RE2 来源排除；workspace schedule 不跨层深合并。`review.pull_request.schedule` 形状相同
+  （仅 `timezone` + `rules`），同样三层整体替换。
 - 跨通知合并按 stream 汇总到期成员后才封存 batch；通知只保存 receipt/成员关联，不能
   每条通知单独触发分析。设计中的 A1–A3、A4–A5、B1 三条通知得到 A1–A5、B1 两批，
   重叠通知不把已归属批次的成员重新入队；没有通知覆盖的提交不主动补扫。
@@ -762,7 +783,7 @@ AICR 采用**两层上下文管理**，两者互补：
   `runs/<run_id>/run.json` 仍用于审计与问题排查，但不作为统计聚合查询真源。
 - Postgres 和 Redis 后端为预留扩展位，当前仅实现 SQLite；当 admin dashboard 启用且
   `storage.database.kind` 不是 `sqlite` 时，启动必须失败并给出清晰错误，不能静默落回 SQLite。
-- 统计 schema 包含六张表：
+- 统计 schema 包含八张表：
   - `projects`：由 `workspaceId + triggerName + repoRef` 派生的 project identity，
     含 `deleted_at` 软删除标记。
   - `review_runs`：run 事实表，含 provider、model、status、problem/summary/dispatch 计数、
@@ -782,6 +803,14 @@ AICR 采用**两层上下文管理**，两者互补：
     Dashboard 查询当前仍以实时聚合为主路径，`daily_rollups` 作为预聚合缓存供后续切换；
     任何未来会修改 run/output 事实的写入路径（例如 `updateRunStatus` 接入生产）也必须
     触发对应分区的 `recomputeDailyRollup`，否则该缓存会与实时聚合不一致。
+  - `webhook_events`：webhook/trigger 事件的接收时刻日志（Events 面板真源），含 provider、
+    事件名、workspace/trigger/repo/target 溯源字段、decision（executed/deferred/queued/
+    duplicate/deduplicated/ignored/rejected）、reason 与 JSON detail（命中 label、
+    resumeAt、receiptId 等）。只记录接收时刻的决定，不写逐次重试结果；每次插入后由
+    `pruneWebhookEvents` 裁剪到最新 100 条；不参与 `recomputeDailyRollup`。
+  - `review_deferrals`：执行窗口延期的队列状态（见 §3.1.1 直接路径段），按 dedup key
+    单条记录目标事件信封与 `not_before`；pending→claimed 原子迁移，执行开始时删除，
+    启动恢复把 claimed 重置为 pending 并重新武装定时器。
 - Admin API 端点（Hono 子路由 `/api/admin`）：
   - `POST /login`：验证用户名/密码，返回 session token + 过期时间。
   - `POST /logout`：撤销 session token。
@@ -791,16 +820,21 @@ AICR 采用**两层上下文管理**，两者互补：
   - `GET /stats/providers`：按 provider+model 聚合统计，支持 `?since=` 筛选。
   - `GET /runs`：最近 run 列表，支持 `?limit=` (1..100)。每条 run 附带跨 `llm_usage`
     行聚合的 `llmUsage`（输入/输出/总量与缓存命中/写入拆分）；未记录 usage 时省略该字段。
+  - `GET /events`：最近 webhook/trigger 事件日志（`webhook_events` 表），支持
+    `?limit=` (1..100)，detail 以解析后的 JSON 返回。
   所有端点（`/login` 除外）需 `Authorization: Bearer <token>` 头。
 - Dashboard SPA 嵌入于 `/dashboard` 和 `/` 路径，由 `packages/server/src/dashboard/dashboard.html`
-  提供。深色主题、登录表单、选项卡视图（overview / projects / providers / runs）。
+  提供。深色主题、登录表单、选项卡视图（overview / projects / providers / runs / events）。
   即使尚未配置 admin env，`/` 与 `/dashboard` 也必须返回 dashboard shell，并显示
   setup-required 提示而不是 404；若启用了 `path_prefix`，顶层 `/` 与 `/dashboard`
   应重定向到带前缀的 dashboard 入口。
-  Overview 标签有时间窗口选择器（today / this week / this month / all）；
+  Overview 标签有时间窗口选择器（today / this week / this month / all），Recent activity
+  表与 Runs 标签同样展示每条 run 的 token 总量、缓存命中/未命中拆分与命中率；
   Projects 与 Providers 标签各自独立支持时间维度切换，按需调用
   `GET /stats/projects?since=` 与 `GET /stats/providers?since=`；Runs 标签首次进入时
-  调用 `GET /runs?limit=100` 拉取最近 100 条并前端分页（每页 20 条，Prev/Next）。
+  调用 `GET /runs?limit=100` 拉取最近 100 条并前端分页（每页 20 条，Prev/Next）；
+  Events 标签同样以 `GET /events?limit=100` + 前端分页（每页 20 条）展示接收时刻的
+  事件与处理决定。
 - 首屏统计包含：总 review 次数、成功/失败/跳过次数、发现问题的 run 次数、
   problem 总数、创建 issue 数、分析代码量、LLM 请求数、输入/输出/总 token、
   prompt 缓存命中率（命中/未命中 token 拆分）、估算成本、平均 duration。

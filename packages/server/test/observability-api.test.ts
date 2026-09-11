@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 import { createStoreDb, closeStoreDb, type StoreDb, softDeleteMissingProjects } from "@aicr/store";
-import { insertReviewRun } from "@aicr/store";
+import { insertReviewRun, insertWebhookEvent } from "@aicr/store";
 import type { ObservabilityApiOptions } from "../src/observability-api.js";
 import { createObservabilityApi } from "../src/observability-api.js";
 import type { AdminAuthConfig } from "../src/admin-auth.js";
@@ -356,5 +356,58 @@ describe("observability API", () => {
     expect(res.status).toBe(200);
     const data = await res.json();
     expect(data.length).toBe(20);
+  });
+
+  it("GET /events returns recent webhook events newest-first with parsed detail", async () => {
+    insertWebhookEvent(store, {
+      receivedAt: new Date(1_000),
+      provider: "gitea",
+      eventName: "pull_request",
+      workspaceId: "ws-1",
+      triggerName: "gitea-main",
+      repoRef: "owent/example",
+      targetKind: "pull_request",
+      decision: "deferred",
+      reason: "execution_window",
+      detail: { resumeAt: "2026-09-14T12:00:00.000Z" },
+    });
+    insertWebhookEvent(store, {
+      receivedAt: new Date(2_000),
+      provider: "github",
+      eventName: "pull_request",
+      decision: "rejected",
+      reason: "invalid_signature",
+    });
+
+    const res = await fetchApi("/events");
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(data).toHaveLength(2);
+    expect(data[0].provider).toBe("github");
+    expect(data[0].decision).toBe("rejected");
+    expect(data[0].detail).toBeNull();
+    expect(data[1].decision).toBe("deferred");
+    expect(data[1].reason).toBe("execution_window");
+    expect(data[1].detail).toEqual({ resumeAt: "2026-09-14T12:00:00.000Z" });
+  });
+
+  it("GET /events clamps limits like /runs", async () => {
+    for (let i = 0; i < 30; i++) {
+      insertWebhookEvent(store, {
+        receivedAt: new Date(i),
+        provider: "gitlab",
+        decision: "executed",
+      });
+    }
+
+    const res = await fetchApi("/events?limit=not-a-number");
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(data.length).toBe(20);
+  });
+
+  it("GET /events requires auth", async () => {
+    const res = await app.fetch(new Request("http://localhost/events"));
+    expect(res.status).toBe(401);
   });
 });

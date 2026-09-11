@@ -62,9 +62,53 @@ review:
 Rules are combined by union. Windows include their start and exclude their
 end; overnight windows belong to their starting weekday. Omitted schedules or
 `schedule.rules: []` allow all times. The default timezone is UTC. Running
-reviews may finish after the window closes. `exclude_sources: []` clears
-inherited exclusions; rules use OR, fields within a rule use AND, and each
-field accepts either `glob` or RE2 `regex`.
+reviews may finish after the window closes. The window also gates asynchronous
+pull-request, issue, and comment processing: outside it the first attempt and
+every retry wait for the next window, logged as `trigger processing deferred
+by execution window`. `exclude_sources: []` clears inherited exclusions; rules
+use OR, fields within a rule use AND, and each field accepts either `glob` or
+RE2 `regex`.
+
+## Pull request schedules
+
+PR/MR analysis can use its own weekly window with the same shape as
+`review.auto_commit.schedule`, under `review.pull_request.schedule` at any of
+the three layers (global, `workspaces.defaults.review`,
+`workspaces.instances.<id>.review`; the nearest `schedule` replaces the
+inherited one as a whole):
+
+```yaml
+review:
+  pull_request:
+    schedule:
+      timezone: Asia/Shanghai
+      rules:
+        - days: [mon, tue, wed, thu, fri]
+          windows:
+            - { start: "00:00", end: "13:00" }
+            - { start: "18:00", end: "24:00" }
+        - days: [sat, sun]
+          windows:
+            - { start: "00:00", end: "24:00" }
+```
+
+When no layer sets `review.pull_request.schedule`, pull-request events fall
+back to the resolved `review.auto_commit.schedule`; when neither is set,
+every instant is allowed. Only automatic pull-request events and
+comment-triggered review commands are gated — a deferred comment command
+posts a reply on the PR/MR stating the scheduled start. There is no
+first-receive delay or commit batching for pull requests.
+
+Outside the window the event is held by the deferral registry instead of a
+bare timer. With the observability store configured (`storage.database` plus
+`admin`, see the dashboard page), deferrals persist and resume after a
+restart; repeated events for the same target replace the stored envelope so
+only the newest state is reviewed, and the resume instant never moves
+earlier. Without the store, deferrals fall back to process memory and a
+restart drops them, matching the rest of the asynchronous trigger path.
+Waiting targets do not hold a running-review deduplication slot. Both timer
+scheduling and the actual attempt check the window, including after a process
+pause or clock change. Already running analyses can finish outside the window.
 
 A submission source is raw Git author name + email, P4 User + Client, or SVN
 `svn:author`, scoped to the repository and stream. Consecutive due commits may
