@@ -1921,13 +1921,13 @@ function resolveOutputChannelNames(
   return [];
 }
 
-async function resolveTriggerTokenForContext(
+async function resolveGithubAppInstallationToken(
   config: AppConfig,
-  context: ReviewOrchestrationContext,
-  appTokenServices?: ReadonlyMap<string, GithubAppTokenService>,
+  appTokenServices: ReadonlyMap<string, GithubAppTokenService> | undefined,
+  triggerName: string | undefined,
+  repoRef: string | undefined,
 ): Promise<string | undefined> {
-  const triggerName = context.reviewEvent.triggerName;
-  if (!triggerName || !appTokenServices) {
+  if (!triggerName || !repoRef || !appTokenServices) {
     return undefined;
   }
 
@@ -1946,12 +1946,25 @@ async function resolveTriggerTokenForContext(
     return undefined;
   }
 
-  const parsed = parseRepoRef(context.reviewEvent.repoRef);
+  const parsed = parseRepoRef(repoRef);
   if (!parsed) {
     return undefined;
   }
 
   return service.getInstallationTokenForRepo(parsed.owner, parsed.repo);
+}
+
+async function resolveTriggerTokenForContext(
+  config: AppConfig,
+  context: ReviewOrchestrationContext,
+  appTokenServices?: ReadonlyMap<string, GithubAppTokenService>,
+): Promise<string | undefined> {
+  return resolveGithubAppInstallationToken(
+    config,
+    appTokenServices,
+    context.reviewEvent.triggerName,
+    context.reviewEvent.repoRef,
+  );
 }
 
 export function createOutputPublisherResolverFromConfig(
@@ -2060,7 +2073,11 @@ export function createVcsAdapterFromConfig(
   repositoryDir: string,
   triggerName?: string,
   repoRef?: string,
-  options?: { readonly resolvedToken?: string },
+  options?: {
+    readonly resolvedToken?: string;
+    readonly tokenProvider?: () => Promise<string | undefined> | string | undefined;
+    readonly alwaysFetch?: boolean;
+  },
 ): GitVcsAdapter | P4VcsAdapter | SvnVcsAdapter {
   const p4Trigger = triggerName
     ? config.triggers.find((t) => t.name === triggerName && t.kind === "p4")
@@ -2148,6 +2165,8 @@ export function createVcsAdapterFromConfig(
     allowDeepen: config.review.git?.allow_deepen ?? false,
     ...(remoteUrl ? { remoteUrl } : {}),
     ...(token ? { token } : {}),
+    ...(options?.tokenProvider ? { tokenProvider: options.tokenProvider } : {}),
+    ...(options?.alwaysFetch ? { alwaysFetch: true } : {}),
   });
 }
 
@@ -2704,6 +2723,7 @@ export async function bootstrapServerApp(options: BootstrapServerOptions): Promi
     config,
     baseDir,
     orchestrationOptions,
+    appTokenServices,
     ...(store ? { reviewStore: store } : {}),
   });
 
@@ -2841,13 +2861,14 @@ async function createAutoCommitPipeline(deps: {
   readonly baseDir: string;
   readonly orchestrationOptions: ServerReviewOrchestrationOptions;
   readonly reviewStore?: StoreDb;
+  readonly appTokenServices?: ReadonlyMap<string, GithubAppTokenService>;
 }): Promise<{
   readonly runtime: AutoCommitRuntime;
   readonly scheduler: AutoCommitScheduler;
   readonly store: AutoCommitStore;
   readonly close: () => Promise<void>;
 }> {
-  const { config, baseDir, orchestrationOptions } = deps;
+  const { config, baseDir, orchestrationOptions, appTokenServices } = deps;
   const store = await createAutoCommitStoreFromConfig(config);
   if (config.queue.kind === "memory" || config.queue.kind === "rabbitmq") {
     console.warn(JSON.stringify({
@@ -2880,10 +2901,43 @@ async function createAutoCommitPipeline(deps: {
     // The namespace prefixes provider identity; the remainder is the
     // original-case repo/depot reference the adapter needs for remote URLs.
     const repoRef = stream.sourceNamespace.slice(stream.sourceNamespace.indexOf(":") + 1);
-    const cacheKey = `${stream.triggerName} ${repoRef}`;
+    // The cache key must include the workspace: two workspaces watching the
+    // same trigger+repo each get their own adapter bound to their own clone
+    // directory — sharing one adapter would clone workspace B's events into
+    // workspace A's directory.
+    const cacheKey = `${stream.workspaceId} ${stream.triggerName} ${repoRef}`;
     let adapter = adapterCache.get(cacheKey);
     if (!adapter) {
-      adapter = createVcsAdapterFromConfig(config, baseDir, stream.triggerName, repoRef || undefined);
+      // The metadata adapter must clone into the per-workspace source root —
+      // the same layout buildSourceRootResolver produces — never baseDir
+      // (process cwd): inside the runtime image cwd is the read-only /app,
+      // so a clone attempt there fails with EACCES and poisons the receipt
+      // with a terminal metadata error. The adapter is long-lived, so it
+      // re-fetches on every sync (alwaysFetch) and resolves GitHub App
+      // installation tokens lazily per sync (tokenProvider) — a cached static
+      // token expires after an hour and would break every later expansion.
+      const metadataDir = resolve(
+        baseDir,
+        "workspaces",
+        stream.workspaceId,
+        "source",
+        repoRef.replace(/[/:]/g, "_"),
+      );
+      adapter = createVcsAdapterFromConfig(
+        config,
+        metadataDir,
+        stream.triggerName,
+        repoRef || undefined,
+        {
+          alwaysFetch: true,
+          tokenProvider: () => resolveGithubAppInstallationToken(
+            config,
+            appTokenServices,
+            stream.triggerName,
+            repoRef || undefined,
+          ),
+        },
+      );
       adapterCache.set(cacheKey, adapter);
     }
     return typeof adapter.listCommitMetadataPage === "function"

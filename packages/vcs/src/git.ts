@@ -42,6 +42,20 @@ export interface GitVcsAdapterOptions {
   readonly remote?: string;
   readonly remoteUrl?: string;
   readonly token?: string;
+  /**
+   * Resolve a fresh token immediately before every repository sync. Long-lived
+   * adapters (auto-commit scheduler) outlive short-lived credentials such as
+   * GitHub App installation tokens, so the token must be re-resolved per sync
+   * instead of captured once at construction. Takes precedence over `token`
+   * for the HTTPS clone/fetch URL when it resolves a value.
+   */
+  readonly tokenProvider?: () => Promise<string | undefined> | string | undefined;
+  /**
+   * Re-fetch from the remote on every sync instead of only the first one.
+   * Long-lived metadata consumers (auto-commit scheduler) must see history
+   * that arrived after the first sync; per-run adapters keep the default.
+   */
+  readonly alwaysFetch?: boolean;
 }
 
 export interface GitDiffOptions {
@@ -410,6 +424,8 @@ export class GitVcsAdapter implements VcsAdapter {
   private readonly remote: string;
   private readonly remoteUrl: string | undefined;
   private readonly token: string | undefined;
+  private readonly tokenProvider: GitVcsAdapterOptions["tokenProvider"];
+  private readonly alwaysFetch: boolean;
   private repositorySynced = false;
   private readonly submoduleSyncedDirs = new Set<string>();
 
@@ -422,14 +438,23 @@ export class GitVcsAdapter implements VcsAdapter {
     this.remote = options.remote ?? "origin";
     this.remoteUrl = options.remoteUrl;
     this.token = options.token;
+    this.tokenProvider = options.tokenProvider;
+    this.alwaysFetch = options.alwaysFetch ?? false;
 
     if (!Number.isInteger(this.deepenBy) || this.deepenBy < 1) {
       throw new RangeError("deepenBy must be a positive integer.");
     }
   }
 
-  private authenticatedRemoteUrl(): string | undefined {
-    if (!this.remoteUrl || !this.token) {
+  private async resolveSyncToken(): Promise<string | undefined> {
+    if (!this.tokenProvider) {
+      return this.token;
+    }
+    return (await this.tokenProvider()) ?? this.token;
+  }
+
+  private authenticatedRemoteUrl(token: string | undefined): string | undefined {
+    if (!this.remoteUrl || !token) {
       return this.remoteUrl;
     }
 
@@ -439,7 +464,7 @@ export class GitVcsAdapter implements VcsAdapter {
     }
 
     url.username = "x-access-token";
-    url.password = this.token;
+    url.password = token;
     return url.toString();
   }
 
@@ -477,11 +502,14 @@ export class GitVcsAdapter implements VcsAdapter {
   }
 
   private async syncRepository(): Promise<void> {
-    if (!this.remoteUrl || this.repositorySynced) {
+    if (!this.remoteUrl) {
+      return;
+    }
+    if (this.repositorySynced && !this.alwaysFetch) {
       return;
     }
 
-    const authUrl = this.authenticatedRemoteUrl();
+    const authUrl = this.authenticatedRemoteUrl(await this.resolveSyncToken());
 
     if (await this.isGitRepository()) {
       if (authUrl) {

@@ -22,6 +22,13 @@ Workspace 多工程匹配、数据库配置管理与自动迁移的新方案见
 
 - 工作目录以 `workspaces/<workspace_id>/` 扁平布局组织。
 - 每个 workspace 自包含 `source/`、`agent/`、`tmp/` 等运行目录。
+- 克隆隔离是硬合同：仓库克隆固定在 `workspaces/<workspace_id>/source/<repo 清洗名>/`
+  （`buildSourceRootResolver`，`/`、`:` 清洗为 `_`），git 子模块缓存在其旁的
+  `source/.aicr-submodules/<url hash>/`，run 物化、context-repos、agent/tmp 全部派生自同一
+  workspace 根。任何按 trigger+repo 缓存 adapter 或目录的结构都必须把 workspaceId 计入键；
+  两个 workspace 监听同一仓库时各自持有独立克隆，互不读写。P4/SVN 元数据走服务端命令
+  （`changes`/`log`/`diff2`/`print`），不在本地落代码；P4 client 名由 trigger 配置显式指定，
+  多个 AICR workspace 共用一个 p4 trigger 时应为各自配置不同的 client 名。
 - AI 维护资产分三层：
   - 平台/产品内置层
   - 用户/运营公共层

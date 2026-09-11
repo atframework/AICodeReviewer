@@ -1,11 +1,13 @@
 import { generateKeyPairSync } from "node:crypto";
+import { execFileSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { isAllowedInstant, type AppConfig } from "@aicr/core";
+import { createReviewEvent, isAllowedInstant, type AppConfig } from "@aicr/core";
 import { computeScopeFingerprint } from "@aicr/outputs";
 import { closeStoreDb, createStoreDb, getProjectStats, hardDeleteExpiredProjects, insertReviewRun } from "@aicr/store";
 
@@ -3945,6 +3947,150 @@ describe("resolveP4TriggerConfig", () => {
       await rm(tmpDir, { recursive: true, force: true });
     }
   });
+
+  it("bootstrapServerApp expands git auto-commit receipts through a workspace-local clone", async () => {
+    const tmpDir = await mkdtemp(join(tmpdir(), "aicr-bootstrap-autocommit-git-"));
+    let result: Awaited<ReturnType<typeof bootstrapServerApp>> | undefined;
+    try {
+      const git = (args: readonly string[], cwd: string): string =>
+        execFileSync("git", [...args], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+      const workDir = join(tmpDir, "remote-work");
+      const remotesRoot = join(tmpDir, "remotes");
+      await mkdir(join(remotesRoot, "owent"), { recursive: true });
+      await mkdir(workDir, { recursive: true });
+      git(["init", "-b", "main"], workDir);
+      git(["config", "user.email", "ci@example.com"], workDir);
+      git(["config", "user.name", "CI Bot"], workDir);
+      await writeFile(join(workDir, "a.txt"), "one\n", "utf8");
+      git(["add", "a.txt"], workDir);
+      git(["commit", "-m", "c1"], workDir);
+      await writeFile(join(workDir, "a.txt"), "two\n", "utf8");
+      git(["commit", "-am", "c2"], workDir);
+      const base = git(["rev-parse", "HEAD~1"], workDir).trim();
+      const head = git(["rev-parse", "HEAD"], workDir).trim();
+      git(["clone", "--bare", workDir, join(remotesRoot, "owent", "example.git")], tmpDir);
+
+      // The metadata adapter must clone from <base_url>/<repo>.git into the
+      // per-workspace source root — never process cwd. Two workspaces watching
+      // the same trigger+repo must each get their own clone; the adapter cache
+      // is keyed by workspace so neither reuses the other's directory. The
+      // exclusion rule marks every member excluded so expansion is proven
+      // without any batch reaching the LLM.
+      const config = makeConfig({
+        triggers: [
+          {
+            name: "gitea-internal",
+            kind: "gitea",
+            base_url: remotesRoot.replace(/\\/g, "/"),
+            token_env: "GITEA_TOKEN",
+            webhook_secret_env: "GITEA_SECRET",
+          },
+        ],
+        review: {
+          ...makeConfig().review,
+          auto_commit: {
+            delay_seconds: 0,
+            exclude_sources: [
+              { id: "all", vcs: "git", match: { author_name: { glob: "CI Bot" } } },
+            ],
+          },
+        },
+        workspaces: {
+          cache: { max_total_gb: 50, eviction: "lru", ttl_days: 30 },
+          defaults: {},
+          instances: {
+            "test-workspace": {
+              source_repo: { trigger: "gitea-internal", repo: "owent/example" },
+            },
+            "test-workspace-2": {
+              source_repo: { trigger: "gitea-internal", repo: "owent/example" },
+            },
+          },
+        },
+      } as Partial<AppConfig>);
+
+      result = await bootstrapServerApp({
+        config,
+        baseSystemPrompt: "test",
+        baseDir: tmpDir,
+      });
+
+      const accepted = await result.autoCommit!.accept({
+        provider: "gitea",
+        eventName: "push",
+        reviewEvent: createReviewEvent({
+          triggerName: "gitea-internal",
+          provider: "gitea",
+          workspaceId: "test-workspace",
+          targetKind: "push",
+          repoRef: "owent/example",
+          baseSha: base,
+          headSha: head,
+          branch: "main",
+          author: {},
+          reason: "gitea:push",
+        }),
+        now: Date.now(),
+      });
+      expect(accepted.duplicate).toBe(false);
+      const acceptedSecond = await result.autoCommit!.accept({
+        provider: "gitea",
+        eventName: "push",
+        reviewEvent: createReviewEvent({
+          triggerName: "gitea-internal",
+          provider: "gitea",
+          workspaceId: "test-workspace-2",
+          targetKind: "push",
+          repoRef: "owent/example",
+          baseSha: base,
+          headSha: head,
+          branch: "main",
+          author: {},
+          reason: "gitea:push",
+        }),
+        now: Date.now(),
+      });
+      expect(acceptedSecond.duplicate).toBe(false);
+
+      const waitForExpansion = async (streamId: string, receiptSeq: number): Promise<number> => {
+        const deadline = Date.now() + 30000;
+        let coverageCursor = 0;
+        while (Date.now() < deadline) {
+          const headRow = await result!.autoCommitStore!.readStreamHead(streamId);
+          coverageCursor = headRow?.coverageCursor ?? 0;
+          if (coverageCursor >= receiptSeq) {
+            break;
+          }
+          await new Promise((resolve) => setTimeout(resolve, 250));
+        }
+        return coverageCursor;
+      };
+      expect(
+        await waitForExpansion(accepted.receipt.streamId, accepted.receipt.receiptSeq),
+      ).toBeGreaterThanOrEqual(accepted.receipt.receiptSeq);
+      expect(
+        await waitForExpansion(acceptedSecond.receipt.streamId, acceptedSecond.receipt.receiptSeq),
+      ).toBeGreaterThanOrEqual(acceptedSecond.receipt.receiptSeq);
+
+      const receipt = await result.autoCommitStore!.getReceipt(accepted.receipt.receiptId);
+      expect(receipt?.receipt.metadataTerminalError).toBeNull();
+      const receiptSecond = await result.autoCommitStore!.getReceipt(acceptedSecond.receipt.receiptId);
+      expect(receiptSecond?.receipt.metadataTerminalError).toBeNull();
+      const cloneDir = join(tmpDir, "workspaces", "test-workspace", "source", "owent_example");
+      const cloneDirSecond = join(tmpDir, "workspaces", "test-workspace-2", "source", "owent_example");
+      expect(existsSync(join(cloneDir, ".git"))).toBe(true);
+      expect(existsSync(join(cloneDirSecond, ".git"))).toBe(true);
+      expect(cloneDir).not.toBe(cloneDirSecond);
+    } finally {
+      if (result?.closeAutoCommit) {
+        await result.closeAutoCommit();
+      }
+      if (result?.store) {
+        closeStoreDb(result.store);
+      }
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  }, 60000);
 
   it("bootstrapServerApp does not initialize store when admin auth env vars are missing", async () => {
     const tmpDir = await mkdtemp(join(tmpdir(), "aicr-bootstrap-no-obs-"));

@@ -267,6 +267,87 @@ describe("GitVcsAdapter", () => {
     ]);
   });
 
+  it("re-resolves the token provider and re-fetches on every sync when alwaysFetch is enabled", async () => {
+    const calls: string[][] = [];
+    const tokens = ["inst-token-1", "inst-token-2"];
+    let providerCalls = 0;
+    const git: GitCommandRunner = async (args) => {
+      calls.push([...args]);
+      if (args[2] === "rev-parse") {
+        return { stdout: "true\n", stderr: "" };
+      }
+      if (args[2] === "diff") {
+        return { stdout: "src/app.ts\n", stderr: "" };
+      }
+      return { stdout: "", stderr: "" };
+    };
+    const adapter = createGitVcsAdapter({
+      repositoryDir: "C:/repo",
+      git,
+      remoteUrl: "https://github.com/atframework/atsf4g-co.git",
+      alwaysFetch: true,
+      tokenProvider: async () => tokens[providerCalls++],
+    });
+    const event = createReviewEvent({
+      triggerName: "github",
+      provider: "github",
+      workspaceId: "ws",
+      targetKind: "push",
+      repoRef: "atframework/atsf4g-co",
+      baseSha: "base",
+      headSha: "head",
+      author: {},
+      reason: "github:push",
+    });
+
+    await adapter.listChanges(event);
+    await adapter.listChanges(event);
+
+    const setUrlCalls = calls.filter((call) => call[2] === "remote" && call[3] === "set-url");
+    expect(setUrlCalls.length).toBe(2);
+    expect(setUrlCalls[0]?.join(" ")).toContain("x-access-token:inst-token-1@github.com");
+    expect(setUrlCalls[1]?.join(" ")).toContain("x-access-token:inst-token-2@github.com");
+    const pruneFetches = calls.filter((call) => call[2] === "fetch" && call.includes("--prune"));
+    expect(pruneFetches.length).toBe(2);
+    expect(providerCalls).toBe(2);
+  });
+
+  it("syncs only once per adapter by default", async () => {
+    const calls: string[][] = [];
+    const git: GitCommandRunner = async (args) => {
+      calls.push([...args]);
+      if (args[2] === "rev-parse") {
+        return { stdout: "true\n", stderr: "" };
+      }
+      if (args[2] === "diff") {
+        return { stdout: "src/app.ts\n", stderr: "" };
+      }
+      return { stdout: "", stderr: "" };
+    };
+    const adapter = createGitVcsAdapter({
+      repositoryDir: "C:/repo",
+      git,
+      remoteUrl: "https://git.example.com/owent/example.git",
+    });
+    const event = createReviewEvent({
+      triggerName: "gitea",
+      provider: "gitea",
+      workspaceId: "ws",
+      targetKind: "push",
+      repoRef: "owent/example",
+      baseSha: "base",
+      headSha: "head",
+      author: {},
+      reason: "gitea:push",
+    });
+
+    await adapter.listChanges(event);
+    await adapter.listChanges(event);
+
+    const pruneFetches = calls.filter((call) => call[2] === "fetch" && call.includes("--prune"));
+    expect(pruneFetches.length).toBe(1);
+  });
+
   it("clones with embedded token in remote URL when token is provided", async () => {
     const tempDir = await mkdtemp(join(tmpdir(), "aicr-git-auth-url-"));
     const repositoryDir = join(tempDir, "source", "atsf4g-co");
