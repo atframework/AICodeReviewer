@@ -1,5 +1,5 @@
 import { createReviewEvent } from "@aicr/core";
-import { closeStoreDb, createStoreDb, getReviewDeferral, listPendingReviewDeferrals, type StoreDb } from "@aicr/store";
+import { closeStoreDb, createStoreDb, getReviewDeferral, listPendingReviewDeferrals, type ReviewDeferralRow, type StoreDb } from "@aicr/store";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { computeDeferralKey, ReviewDeferralManager, type DeferredTriggerTarget } from "../src/deferral-manager.js";
@@ -22,11 +22,11 @@ describe("deferral failure and deadline recovery", () => {
     vi.setSystemTime(0);
     vi.spyOn(console, "warn").mockImplementation(() => undefined);
   });
-  afterEach(() => {
+  afterEach(async () => {
     vi.clearAllTimers();
     vi.useRealTimers();
     vi.restoreAllMocks();
-    closeStoreDb(store);
+    (await closeStoreDb(store));
   });
 
   it.each([true, false])("keeps the latest envelope without moving the timer earlier (persistent=%s)", async (persistent) => {
@@ -39,7 +39,7 @@ describe("deferral failure and deadline recovery", () => {
     expect(resume).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
     expect(resume).toHaveBeenCalledExactlyOnceWith(target("latest"));
-    expect(listPendingReviewDeferrals(store)).toEqual([]);
+    expect((await listPendingReviewDeferrals(store))).toEqual([]);
   });
 
   it("uses the latest memory fallback when an upsert fails over an older persisted row", async () => {
@@ -51,7 +51,7 @@ describe("deferral failure and deadline recovery", () => {
     manager.defer(target("latest"), 100);
     await vi.advanceTimersByTimeAsync(100);
     expect(resume).toHaveBeenCalledExactlyOnceWith(target("latest"));
-    expect(getReviewDeferral(store, computeDeferralKey(target().reviewEvent))).toBeUndefined();
+    expect((await getReviewDeferral(store, computeDeferralKey(target().reviewEvent)))).toBeUndefined();
   });
 
   it("does not discard a durable event when reading fails transiently", async () => {
@@ -62,7 +62,7 @@ describe("deferral failure and deadline recovery", () => {
     vi.spyOn(store.db, "select").mockImplementationOnce(() => { throw new Error("database busy"); });
     await vi.advanceTimersByTimeAsync(100);
     expect(resume).not.toHaveBeenCalled();
-    expect(listPendingReviewDeferrals(store)).toHaveLength(1);
+    expect((await listPendingReviewDeferrals(store))).toHaveLength(1);
     await vi.advanceTimersByTimeAsync(5000);
     expect(resume).toHaveBeenCalledOnce();
   });
@@ -70,17 +70,21 @@ describe("deferral failure and deadline recovery", () => {
   it("retains a claimed row until the scheduling handoff succeeds", async () => {
     const manager = new ReviewDeferralManager({ store });
     const key = computeDeferralKey(target().reviewEvent);
+    // The manager treats the handler as synchronous: the throw must stay
+    // synchronous, so capture the claimed-row read and assert on it below.
+    let claimedRow: Promise<ReviewDeferralRow | undefined> | undefined;
     const resume = vi.fn().mockImplementationOnce(() => {
-      expect(getReviewDeferral(store, key)?.status).toBe("claimed");
+      claimedRow = getReviewDeferral(store, key);
       throw new Error("handoff failed");
     });
     manager.resumeHandler = resume;
     manager.defer(target(), 100);
     await vi.advanceTimersByTimeAsync(100);
-    expect(getReviewDeferral(store, key)?.status).toBe("pending");
+    expect((await claimedRow!)?.status).toBe("claimed");
+    expect((await getReviewDeferral(store, key))?.status).toBe("pending");
     await vi.advanceTimersByTimeAsync(5000);
     expect(resume).toHaveBeenCalledTimes(2);
-    expect(getReviewDeferral(store, key)).toBeUndefined();
+    expect((await getReviewDeferral(store, key))).toBeUndefined();
   });
 
   it("preserves a replacement row when the resume handler re-defers", async () => {
@@ -89,10 +93,10 @@ describe("deferral failure and deadline recovery", () => {
     manager.resumeHandler = resume;
     manager.defer(target(), 100);
     await vi.advanceTimersByTimeAsync(100);
-    expect(listPendingReviewDeferrals(store)).toHaveLength(1);
+    expect((await listPendingReviewDeferrals(store))).toHaveLength(1);
     await vi.advanceTimersByTimeAsync(900);
     expect(resume).toHaveBeenLastCalledWith(target("new"));
-    expect(listPendingReviewDeferrals(store)).toEqual([]);
+    expect((await listPendingReviewDeferrals(store))).toEqual([]);
   });
 
   it("re-arms long waits instead of executing at Node's maximum timer delay", async () => {
@@ -116,6 +120,6 @@ describe("deferral failure and deadline recovery", () => {
     manager.defer(other, 100);
     await vi.advanceTimersByTimeAsync(100);
     expect(resume).toHaveBeenCalledExactlyOnceWith(other);
-    expect(listPendingReviewDeferrals(store)).toEqual([]);
+    expect((await listPendingReviewDeferrals(store))).toEqual([]);
   });
 });

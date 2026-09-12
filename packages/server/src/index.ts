@@ -9,8 +9,9 @@ import { saveRunSnapshot } from "./run-snapshot.js";
 import type { AicrMetrics } from "./metrics.js";
 import { createObservabilityApi, type ObservabilityApiOptions } from "./observability-api.js";
 import { getDashboardHtml } from "./dashboard/index.js";
+import type { ConfigStore } from "@aicr/core";
 import type { StoreDb } from "@aicr/store";
-import { insertReviewRun } from "@aicr/store";
+import { insertReviewRun, insertReviewRunOnce } from "@aicr/store";
 
 const globalMetrics: AicrMetrics = createAicrMetrics();
 
@@ -177,6 +178,11 @@ export interface ServerAppOptions {
    */
   readonly deferralManager?: ReviewDeferralManager;
   readonly store?: StoreDb;
+  /**
+   * Durable admin-session ConfigStore (P2). Exposed so shutdown/tests can
+   * close its handle; the Bearer surface never sees it.
+   */
+  readonly sessionStore?: ConfigStore;
   /**
    * In-memory registry of currently running analyses backing the dashboard
    * Live panel (`GET /api/admin/runs/live`). Bootstrap wires the same
@@ -1394,15 +1400,15 @@ async function saveCompletedRunSnapshot(
   }
 }
 
-export function persistReviewRunToStore(
+export async function persistReviewRunToStore(
   store: StoreDb | undefined,
   runId: string,
   reviewEvent: ReviewEvent,
   reviewRun: NonNullable<TriggerProcessingResult["reviewRun"]>,
   durationMs: number,
   startMs: number,
-  strict = false,
-): void {
+  options: { strict?: boolean; idempotent?: boolean } = {},
+): Promise<void> {
   if (!store) return;
   try {
     const status = reviewRun.status === "published"
@@ -1410,7 +1416,8 @@ export function persistReviewRunToStore(
       : reviewRun.status === "skipped"
         ? "skipped"
         : "skipped";
-    insertReviewRun(store, {
+    const insert = options.idempotent ? insertReviewRunOnce : insertReviewRun;
+    await insert(store, {
       id: runId,
       eventId: runId,
       workspaceId: reviewEvent.workspaceId,
@@ -1460,7 +1467,7 @@ export function persistReviewRunToStore(
       }] : [],
     });
   } catch (err: unknown) {
-    if (strict) throw err;
+    if (options.strict) throw err;
     console.warn(JSON.stringify({
       level: "warn",
       msg: "failed to persist review run to store",
@@ -1470,17 +1477,17 @@ export function persistReviewRunToStore(
   }
 }
 
-function persistFailedRunToStore(
+async function persistFailedRunToStore(
   store: StoreDb | undefined,
   runId: string,
   reviewEvent: ReviewEvent,
   durationMs: number,
   startMs: number,
   error: unknown,
-): void {
+): Promise<void> {
   if (!store) return;
   try {
-    insertReviewRun(store, {
+    await insertReviewRun(store, {
       id: runId,
       eventId: runId,
       workspaceId: reviewEvent.workspaceId,
@@ -1751,7 +1758,7 @@ function scheduleTriggerProcessing(
       if (result.reviewRun) {
         recordCompletedReviewRun(metrics, result.reviewRun, durationMs);
         void saveCompletedRunSnapshot(runsDir, runId, reviewEvent, result.reviewRun);
-        persistReviewRunToStore(store, runId, reviewEvent, result.reviewRun, durationMs, startMs);
+        void persistReviewRunToStore(store, runId, reviewEvent, result.reviewRun, durationMs, startMs);
       }
       console.info(JSON.stringify({
         level: "info",
@@ -1813,7 +1820,7 @@ function scheduleTriggerProcessing(
       }
 
       recordReviewResult(metrics, { status: "failed", durationMs });
-      persistFailedRunToStore(store, runId, reviewEvent, durationMs, startMs, error);
+      void persistFailedRunToStore(store, runId, reviewEvent, durationMs, startMs, error);
       console.error(JSON.stringify({
         level: "error",
         msg: "trigger processing failed",
@@ -2102,7 +2109,7 @@ async function handleReviewOrchestration(
   if (result.reviewRun) {
     recordCompletedReviewRun(metrics, result.reviewRun, durationMs);
     await saveCompletedRunSnapshot(runsDir, runId, reviewEvent, result.reviewRun);
-    persistReviewRunToStore(store, runId, reviewEvent, result.reviewRun, durationMs, startMs);
+    await persistReviewRunToStore(store, runId, reviewEvent, result.reviewRun, durationMs, startMs);
   }
 
   recordWebhookEvent(store, {
@@ -2328,7 +2335,7 @@ function mountRoutes(app: Hono, options: ServerAppOptions): void {
         },
       );
     };
-    deferralManager.recover();
+    void deferralManager.recover();
   }
 }
 

@@ -1,6 +1,6 @@
 import { and, desc, eq, gte, inArray, lt, lte, sql, sum, count, avg } from "drizzle-orm";
 
-import type { StoreDb } from "./database.js";
+import type { SqliteStoreDb, StoreDb } from "./database.js";
 import {
   projects,
   reviewRuns,
@@ -10,6 +10,20 @@ import {
   dailyRollups,
   type RunStatus,
 } from "./schema.js";
+import {
+  getDailyRollupsPg,
+  getOverviewStatsPg,
+  getProjectStatsPg,
+  getProviderModelStatsPg,
+  getRecentRunsPg,
+  hardDeleteExpiredProjectsPg,
+  insertOutputEventsPg,
+  insertReviewRunOncePg,
+  insertReviewRunPg,
+  recomputeDailyRollupPg,
+  softDeleteMissingProjectsPg,
+  updateRunStatusPg,
+} from "./stats.pg.js";
 
 export interface ReviewRunInsert {
   id: string;
@@ -85,7 +99,35 @@ export interface OutputEventInsert {
   timestamp?: Date;
 }
 
-export function insertReviewRun(store: StoreDb, run: ReviewRunInsert): void {
+export async function insertReviewRun(store: StoreDb, run: ReviewRunInsert): Promise<void> {
+  if (store.kind === "postgres") {
+    return insertReviewRunPg(store, run);
+  }
+  insertReviewRunSqlite(store, run);
+}
+
+/**
+ * Atomic dedup variant for checkpoint recovery: records the run only when its
+ * id is absent. Returns false when the run was already recorded, so a
+ * recovered completed checkpoint can safely retry the accounting.
+ */
+export async function insertReviewRunOnce(store: StoreDb, run: ReviewRunInsert): Promise<boolean> {
+  if (store.kind === "postgres") {
+    return insertReviewRunOncePg(store, run);
+  }
+  return store.sqlite.transaction(() => {
+    const existing = store.db
+      .select({ id: reviewRuns.id })
+      .from(reviewRuns)
+      .where(eq(reviewRuns.id, run.id))
+      .get();
+    if (existing) return false;
+    insertReviewRunSqlite(store, run);
+    return true;
+  })();
+}
+
+function insertReviewRunSqlite(store: SqliteStoreDb, run: ReviewRunInsert): void {
   const projectId = upsertProject(store, {
     workspaceId: run.workspaceId,
     triggerName: run.triggerName ?? "",
@@ -163,14 +205,17 @@ export function insertReviewRun(store: StoreDb, run: ReviewRunInsert): void {
     }
   }
 
-  recomputeDailyRollup(store, projectId, toUtcDateString(startedAt));
+  recomputeDailyRollupSqlite(store, projectId, toUtcDateString(startedAt));
 }
 
-export function insertOutputEvents(
+export async function insertOutputEvents(
   store: StoreDb,
   runId: string,
   events: OutputEventInsert[],
-): void {
+): Promise<void> {
+  if (store.kind === "postgres") {
+    return insertOutputEventsPg(store, runId, events);
+  }
   for (const event of events) {
     store.db.insert(outputEvents).values({
       runId,
@@ -188,11 +233,11 @@ export function insertOutputEvents(
     .where(eq(reviewRuns.id, runId))
     .get();
   if (run) {
-    recomputeDailyRollup(store, run.projectId, toUtcDateString(run.startedAt ?? new Date()));
+    recomputeDailyRollupSqlite(store, run.projectId, toUtcDateString(run.startedAt ?? new Date()));
   }
 }
 
-export function updateRunStatus(
+export async function updateRunStatus(
   store: StoreDb,
   runId: string,
   status: RunStatus,
@@ -208,7 +253,10 @@ export function updateRunStatus(
     tokensOut?: number;
     finishedAt?: Date;
   },
-): void {
+): Promise<void> {
+  if (store.kind === "postgres") {
+    return updateRunStatusPg(store, runId, status, extra);
+  }
   store.db
     .update(reviewRuns)
     .set({
@@ -229,7 +277,7 @@ export function updateRunStatus(
 }
 
 function upsertProject(
-  store: StoreDb,
+  store: SqliteStoreDb,
   identity: { workspaceId: string; triggerName: string; repoRef: string; displayName?: string | null },
 ): number {
   const existing = store.db
@@ -323,10 +371,14 @@ export interface ProviderModelStats {
   avgLatencyMs: number | null;
 }
 
-export function getOverviewStats(
+export async function getOverviewStats(
   store: StoreDb,
   since?: Date,
-): TimeWindowStats {
+): Promise<TimeWindowStats> {
+  if (store.kind === "postgres") {
+    return getOverviewStatsPg(store, since);
+  }
+
   const conditions = since ? [gte(reviewRuns.startedAt, since)] : [];
 
   const base = store.db
@@ -403,10 +455,14 @@ export function getOverviewStats(
   };
 }
 
-export function getProjectStats(
+export async function getProjectStats(
   store: StoreDb,
   since?: Date,
-): ProjectStats[] {
+): Promise<ProjectStats[]> {
+  if (store.kind === "postgres") {
+    return getProjectStatsPg(store, since);
+  }
+
   const runConditions = since ? [gte(reviewRuns.startedAt, since)] : [];
   const whereClause = runConditions.length > 0 ? and(...runConditions) : undefined;
 
@@ -513,10 +569,14 @@ export function getProjectStats(
   }));
 }
 
-export function getProviderModelStats(
+export async function getProviderModelStats(
   store: StoreDb,
   since?: Date,
-): ProviderModelStats[] {
+): Promise<ProviderModelStats[]> {
+  if (store.kind === "postgres") {
+    return getProviderModelStatsPg(store, since);
+  }
+
   const conditions = since ? [gte(reviewRuns.startedAt, since)] : [];
 
   const rows = store.db
@@ -592,10 +652,14 @@ export interface RecentRunStats {
   llmUsage?: RecentRunTokenUsage;
 }
 
-export function getRecentRuns(
+export async function getRecentRuns(
   store: StoreDb,
   limit: number,
-): RecentRunStats[] {
+): Promise<RecentRunStats[]> {
+  if (store.kind === "postgres") {
+    return getRecentRunsPg(store, limit);
+  }
+
   const runs = store.db
     .select({
       id: reviewRuns.id,
@@ -657,11 +721,15 @@ export function getRecentRuns(
   });
 }
 
-export function softDeleteMissingProjects(
+export async function softDeleteMissingProjects(
   store: StoreDb,
   activeIdentities: ReadonlyArray<{ workspaceId: string; triggerName: string; repoRef: string }>,
   activeMatchWorkspaceIds: readonly string[] = [],
-): number {
+): Promise<number> {
+  if (store.kind === "postgres") {
+    return softDeleteMissingProjectsPg(store, activeIdentities, activeMatchWorkspaceIds);
+  }
+
   if (activeIdentities.length === 0 && activeMatchWorkspaceIds.length === 0) {
     const result = store.db
       .update(projects)
@@ -693,10 +761,14 @@ export function softDeleteMissingProjects(
   return Number(result.changes);
 }
 
-export function hardDeleteExpiredProjects(
+export async function hardDeleteExpiredProjects(
   store: StoreDb,
   graceDays: number,
-): number {
+): Promise<number> {
+  if (store.kind === "postgres") {
+    return hardDeleteExpiredProjectsPg(store, graceDays);
+  }
+
   const cutoffMs = Date.now() - graceDays * 24 * 60 * 60 * 1000;
 
   const result = store.sqlite
@@ -733,13 +805,24 @@ export interface DailyRollupRow {
   costUsd: number | null;
 }
 
-function dayRange(date: string): { start: Date; end: Date } {
+export function dayRange(date: string): { start: Date; end: Date } {
   const start = new Date(Date.parse(`${date}T00:00:00.000Z`));
   return { start, end: new Date(start.getTime() + 24 * 60 * 60 * 1000) };
 }
 
-export function recomputeDailyRollup(
+export async function recomputeDailyRollup(
   store: StoreDb,
+  projectId: number,
+  date: string,
+): Promise<void> {
+  if (store.kind === "postgres") {
+    return recomputeDailyRollupPg(store, projectId, date);
+  }
+  recomputeDailyRollupSqlite(store, projectId, date);
+}
+
+function recomputeDailyRollupSqlite(
+  store: SqliteStoreDb,
   projectId: number,
   date: string,
 ): void {
@@ -838,10 +921,14 @@ export function recomputeDailyRollup(
   })();
 }
 
-export function getDailyRollups(
+export async function getDailyRollups(
   store: StoreDb,
   filter?: { projectId?: number; since?: string; until?: string },
-): DailyRollupRow[] {
+): Promise<DailyRollupRow[]> {
+  if (store.kind === "postgres") {
+    return getDailyRollupsPg(store, filter);
+  }
+
   const conditions = [];
   if (filter?.projectId != null) conditions.push(eq(dailyRollups.projectId, filter.projectId));
   if (filter?.since) conditions.push(gte(dailyRollups.date, filter.since));

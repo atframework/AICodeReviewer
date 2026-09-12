@@ -368,6 +368,7 @@ Narrative: [Storage](/en/configuration/storage/).
 | `storage.database.kind` | enum | `sqlite` | Database backend (`sqlite` or `postgres`) |
 | `storage.database.sqlite.path` | string | `/app/data/aicr.sqlite` | SQLite DB path |
 | `storage.database.postgres.url_env` | string | — | Postgres connection-string env var |
+| `storage.database.migrate` | enum | `auto` | Startup schema-migration mode (`auto` applies, `verify` checks config and business schemas) |
 | `storage.cache.kind` | enum | `memory` | Cache backend |
 | `storage.cache.redis.url_env` | string | — | Redis connection-string env var |
 | `storage.cache.ttl_seconds` | int > 0 | — | Cache TTL |

@@ -2,6 +2,15 @@ import { eq } from "drizzle-orm";
 
 import { modelCatalog, modelCatalogSource } from "./schema.js";
 import type { StoreDb } from "./database.js";
+import {
+	getModelCatalogEntriesByModelIdPg,
+	getModelCatalogEntryPg,
+	getModelCatalogSourceMetaPg,
+	listModelCatalogEntriesPg,
+	listModelCatalogSourceMetasPg,
+	setModelCatalogSourceMetaPg,
+	upsertModelCatalogEntriesPg,
+} from "./model-catalog.pg.js";
 
 export interface ModelCatalogRecord {
 	readonly catalogId: string;
@@ -18,7 +27,7 @@ export interface ModelCatalogSourceMeta {
 	readonly etag?: string;
 }
 
-function toRecord(row: {
+export function toModelCatalogRecord(row: {
 	catalogId: string;
 	providerId: string;
 	modelId: string;
@@ -36,25 +45,42 @@ function toRecord(row: {
 	};
 }
 
-export function getModelCatalogEntry(store: StoreDb, catalogId: string): ModelCatalogRecord | undefined {
+export async function getModelCatalogEntry(store: StoreDb, catalogId: string): Promise<ModelCatalogRecord | undefined> {
+	if (store.kind === "postgres") {
+		return getModelCatalogEntryPg(store, catalogId);
+	}
 	const row = store.db
 		.select()
 		.from(modelCatalog)
 		.where(eq(modelCatalog.catalogId, catalogId))
 		.get();
-	return row ? toRecord(row) : undefined;
+	return row ? toModelCatalogRecord(row) : undefined;
 }
 
-export function getModelCatalogEntriesByModelId(store: StoreDb, modelId: string): ModelCatalogRecord[] {
+export async function getModelCatalogEntriesByModelId(store: StoreDb, modelId: string): Promise<ModelCatalogRecord[]> {
+	if (store.kind === "postgres") {
+		return getModelCatalogEntriesByModelIdPg(store, modelId);
+	}
 	const rows = store.db
 		.select()
 		.from(modelCatalog)
 		.where(eq(modelCatalog.modelId, modelId))
 		.all();
-	return rows.map((row) => toRecord(row));
+	return rows.map((row) => toModelCatalogRecord(row));
 }
 
-export function upsertModelCatalogEntries(store: StoreDb, records: readonly ModelCatalogRecord[]): void {
+export async function listModelCatalogEntries(store: StoreDb): Promise<ModelCatalogRecord[]> {
+	if (store.kind === "postgres") {
+		return listModelCatalogEntriesPg(store);
+	}
+	const rows = store.db.select().from(modelCatalog).all();
+	return rows.map((row) => toModelCatalogRecord(row));
+}
+
+export async function upsertModelCatalogEntries(store: StoreDb, records: readonly ModelCatalogRecord[]): Promise<void> {
+	if (store.kind === "postgres") {
+		return upsertModelCatalogEntriesPg(store, records);
+	}
 	if (records.length === 0) return;
 	store.db.transaction((tx) => {
 		for (const record of records) {
@@ -83,7 +109,10 @@ export function upsertModelCatalogEntries(store: StoreDb, records: readonly Mode
 	});
 }
 
-export function getModelCatalogSourceMeta(store: StoreDb, sourceUrl: string): ModelCatalogSourceMeta | undefined {
+export async function getModelCatalogSourceMeta(store: StoreDb, sourceUrl: string): Promise<ModelCatalogSourceMeta | undefined> {
+	if (store.kind === "postgres") {
+		return getModelCatalogSourceMetaPg(store, sourceUrl);
+	}
 	const row = store.db
 		.select()
 		.from(modelCatalogSource)
@@ -97,7 +126,22 @@ export function getModelCatalogSourceMeta(store: StoreDb, sourceUrl: string): Mo
 	};
 }
 
-export function setModelCatalogSourceMeta(store: StoreDb, meta: ModelCatalogSourceMeta): void {
+export async function listModelCatalogSourceMetas(store: StoreDb): Promise<ModelCatalogSourceMeta[]> {
+	if (store.kind === "postgres") {
+		return listModelCatalogSourceMetasPg(store);
+	}
+	const rows = store.db.select().from(modelCatalogSource).all();
+	return rows.map((row) => ({
+		sourceUrl: row.sourceUrl,
+		lastRefreshedAt: row.lastRefreshedAt,
+		...(row.etag ? { etag: row.etag } : {}),
+	}));
+}
+
+export async function setModelCatalogSourceMeta(store: StoreDb, meta: ModelCatalogSourceMeta): Promise<void> {
+	if (store.kind === "postgres") {
+		return setModelCatalogSourceMetaPg(store, meta);
+	}
 	const value = {
 		sourceUrl: meta.sourceUrl,
 		lastRefreshedAt: meta.lastRefreshedAt,

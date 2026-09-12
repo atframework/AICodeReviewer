@@ -21,6 +21,7 @@ node packages/cli/dist/index.js <command> [options]
 | [`eval`](#eval) | 对配置的 LLM 运行评测基准 |
 | [`replay`](#replay) | 回放已存储的评审 run 脚手架 |
 | [`memory`](#memory) | 查看或清除 workspace memory |
+| [`migrate`](#migrate) | 查看或应用 schema 迁移账本 |
 | [`lint`](#lint) | 校验模板或配置脚手架 |
 | [`doctor`](#doctor) | 打印环境诊断信息 |
 | `help` | 显示帮助信息 |
@@ -146,6 +147,30 @@ node packages/cli/dist/index.js memory clear --workspace <id> --scope false-posi
 | `--all` | `memory show` 时包含完整文件内容 |
 
 `memory` 子命令：`show`（默认）、`clear`。
+
+## migrate
+
+在不启动服务的情况下查看或应用部署数据库(`storage.database`)的 schema
+迁移账本。该命令与服务启动使用同一个 migration runner;
+`storage.database.migrate` 控制启动行为(`auto` / `verify`)。
+
+```bash
+node packages/cli/dist/index.js migrate --check \
+  --config example/config.yaml
+```
+
+| 标志 | 说明 |
+| --- | --- |
+| `--status` | 只读账本报告(JSON)。退出码 0。 |
+| `--check` | 只读门禁。干净退出 0,有待执行迁移退出 1,checksum 漂移或未知更高 schema 退出 2。 |
+| `--apply` | 应用待执行迁移。成功退出 0;账本不安全(漂移/更高 schema)退出 2。 |
+
+`--status`、`--check`、`--apply` 必须且只能指定一个。`--status` 与
+`--check` 不会创建或修改数据库文件。checksum 漂移与未知更高 schema 永不
+自动修复(退出码 2)。`sqlite` 与 `postgres` 均报告并升级 `config` 和 `store`
+命名空间，仅配置账本最新不足以通过检查。SQLite 相对路径以命令工作目录解析，
+`--apply` 创建缺失的父目录。PostgreSQL 使用 `postgres.url_env`，以
+`postgres.url` 为回退。连接失败同样退出 2；status/check 不创建 schema 或表。
 
 ## lint
 

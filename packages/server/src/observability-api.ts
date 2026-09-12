@@ -18,12 +18,16 @@ import {
   createAdminAuthMiddleware,
   createAdminSession,
   revokeAdminSession,
+  type AdminAuthContext,
+  type AdminSessionStore,
 } from "./admin-auth.js";
 import type { LiveRunRegistry } from "./live-runs.js";
 
 export interface ObservabilityApiOptions {
   readonly store: StoreDb;
   readonly adminAuth: AdminAuthConfig;
+  /** Durable admin sessions (P2): sha256-hashed, TTL-bound, multi-process. */
+  readonly sessionStore: AdminSessionStore;
   readonly timezone?: string;
   /** Auto-commit receipt store; enables the receipt query endpoint. */
   readonly autoCommitStore?: AutoCommitStore;
@@ -82,7 +86,8 @@ function getLoginAttemptKey(username: string, forwardedFor: string | undefined):
 
 export function createObservabilityApi(options: ObservabilityApiOptions): Hono {
   const api = new Hono();
-  const authMiddleware = createAdminAuthMiddleware(options.adminAuth);
+  const authContext: AdminAuthContext = { config: options.adminAuth, sessions: options.sessionStore };
+  const authMiddleware = createAdminAuthMiddleware(authContext);
   const loginFailures = new Map<string, LoginFailureState>();
 
   function isLoginRateLimited(key: string): boolean {
@@ -118,7 +123,7 @@ export function createObservabilityApi(options: ObservabilityApiOptions): Hono {
       return c.json({ error: "rate_limited", message: "Too many failed login attempts" }, 429);
     }
 
-    const session = createAdminSession(options.adminAuth, body.username, body.password);
+    const session = await createAdminSession(authContext, body.username, body.password);
     if (!session) {
       recordLoginFailure(loginAttemptKey);
       return c.json({ error: "unauthorized", message: "Invalid credentials" }, 401);
@@ -133,7 +138,7 @@ export function createObservabilityApi(options: ObservabilityApiOptions): Hono {
     const authorization = c.req.header("authorization");
     if (authorization) {
       const token = authorization.slice("bearer ".length);
-      revokeAdminSession(token);
+      await revokeAdminSession(authContext, token);
     }
     return c.json({ ok: true });
   });
@@ -142,13 +147,13 @@ export function createObservabilityApi(options: ObservabilityApiOptions): Hono {
     const tz = options.timezone ?? "UTC";
     const windows = getTimeWindows();
 
-    const overview = getOverviewStats(options.store);
-    const today = getOverviewStats(options.store, windows.today);
-    const thisWeek = getOverviewStats(options.store, windows.thisWeek);
-    const thisMonth = getOverviewStats(options.store, windows.thisMonth);
-    const projects = getProjectStats(options.store);
-    const providerModels = getProviderModelStats(options.store);
-    const recentRuns = getRecentRuns(options.store, 20);
+    const overview = await getOverviewStats(options.store);
+    const today = await getOverviewStats(options.store, windows.today);
+    const thisWeek = await getOverviewStats(options.store, windows.thisWeek);
+    const thisMonth = await getOverviewStats(options.store, windows.thisMonth);
+    const projects = await getProjectStats(options.store);
+    const providerModels = await getProviderModelStats(options.store);
+    const recentRuns = await getRecentRuns(options.store, 20);
 
     const result: DashboardStats = {
       overview,
@@ -169,7 +174,7 @@ export function createObservabilityApi(options: ObservabilityApiOptions): Hono {
     if (sinceDate === null) {
       return c.json({ error: "bad_request", message: "since must be a valid date" }, 400);
     }
-    const projects = getProjectStats(options.store, sinceDate);
+    const projects = await getProjectStats(options.store, sinceDate);
     return c.json(projects);
   });
 
@@ -178,13 +183,13 @@ export function createObservabilityApi(options: ObservabilityApiOptions): Hono {
     if (sinceDate === null) {
       return c.json({ error: "bad_request", message: "since must be a valid date" }, 400);
     }
-    const providers = getProviderModelStats(options.store, sinceDate);
+    const providers = await getProviderModelStats(options.store, sinceDate);
     return c.json(providers);
   });
 
   api.get("/runs", authMiddleware, async (c) => {
     const limit = parseLimit(c.req.query("limit"));
-    const runs = getRecentRuns(options.store, limit);
+    const runs = await getRecentRuns(options.store, limit);
     return c.json(runs);
   });
 
@@ -204,7 +209,7 @@ export function createObservabilityApi(options: ObservabilityApiOptions): Hono {
   // latest 100 entries and the client pages 20 per page.
   api.get("/events", authMiddleware, async (c) => {
     const limit = parseLimit(c.req.query("limit"));
-    const events = getRecentWebhookEvents(options.store, limit);
+    const events = await getRecentWebhookEvents(options.store, limit);
     return c.json(events);
   });
 

@@ -836,11 +836,13 @@ AICR 采用**两层上下文管理**，两者互补：
   不保存超级管理员用户名/密码明文。密码哈希 env（如 `*_PASSWORD_HASH`，格式
   `sha256:<hex>`）优先且可单独使用；小型内网部署允许 raw password env，但必须
   固定长度 digest 比较、限速并禁止进入日志、snapshot 或 metrics label。
-- 计划中的数据库、缓存和对象存储配置必须使用顶层 `storage` 命名空间，供观测、队列、
-  artifact、runtime 等能力复用，不复用 `queue.kind` 或 `workspaces.cache`：
-  - `storage.database.kind`: `sqlite`（默认）或 `postgres`。
+- 数据库、缓存和对象存储配置必须使用顶层 `storage` 命名空间,供观测、队列、
+  artifact、runtime 等能力复用,不复用 `queue.kind` 或 `workspaces.cache`:
+  - `storage.database.kind`: `sqlite`(默认)或 `postgres`,两者均已接入运行时
+    (stats/catalog/reflection/deferral/webhook-events,pg 后端见 §3.14)。
   - `storage.database.sqlite.path`: 默认 `/app/data/aicr.sqlite`。
   - `storage.database.postgres.url_env`: 指向 Postgres 连接串环境变量。
+  - `storage.database.migrate`: `auto`(默认)/`verify`,启动期 schema 迁移模式(§3.14)。
   - `storage.cache.kind`: `memory`（默认）、`redis` 或 `none`。
   - `storage.cache.redis.url_env`: 指向 Redis 连接串环境变量。
   - `storage.object.kind`: `filesystem`（默认）或 `s3`。
@@ -1206,6 +1208,82 @@ models.dev 的 key 是 `<providerId>/<modelId>`（AI SDK 标识）。自定义 p
   让 Dashboard 成本统计基于真实价格而非固定估算；catalog 刷新失败回退时记录告警。
 - 安全：fetch 只取公开元数据，不含 secret；遵守全局 `http_proxy`；缓存写在
   `storage.database` / `storage.cache`，不写进只读 source/agent 挂载；解析前校验 JSON 结构。
+
+### 3.14 配置存储与 schema 迁移(ConfigStore / MigrationRunner)
+
+- 代码真源:`packages/core/src/config-store.ts`(backend 中立异步合同)、
+  `config-store.ts` 内的 memory 实现、`sqlite-config-store.ts`、`redis-config-store.ts`、
+  `pg-config-store.ts`;选择器 `config-store-factory.ts` 由 `storage.database` 决定,
+  不在每个消费方各自分叉。管理端 session 经同一合同持久化
+  (`packages/server/src/admin-auth.ts` 只存 token 哈希 + TTL,支持跨副本登出)。
+- 合同要点:每 namespace 的 CAS head(`commitChangeset` 携带 `baseRevision` +
+  `operationId`,同 operationId 重试返回同 revision,同 ID 不同内容拒绝);不可变
+  revision 文档与原子 audit;runtime snapshot 记录(pin/refcount,GC 不清除被引用
+  快照);generation 以十进制字符串出 Redis/PG API,守住 2^53 精度。
+  operation 重试同时比较文档、fileDigest 与 formatVersion;快照幂等比较
+  namespace、文件摘要、数据库版本、resolver 版本和实际有效配置。
+- Redis 后端(`redis-config-store.ts`):单 hash-tag 槽位、不可变 revision 键 +
+  ZSET 分页、operation 去重键、session PEXPIREAT;配置提交和快照/binding 多步写入走 Lua,
+  先校验全部索引类型与 generation 上限,
+  head 最后提交(redis 事务不回滚);代际计数器提供并发 fencing。没有租约式
+  分阶段迁移:发布是单 Lua 原子提交,M09/M10 的保护目标由 CAS + 代际计数承担。
+- schema 版本由 `MigrationRunner`(`packages/core/src/migration-runner.ts`)按
+  namespace 账本(`schema_migrations`:namespace/id/checksum/from/to/appVersion/
+  appliedAt)协调;启动路径 `storage.database.migrate`:`auto` 应用待执行步骤,
+  `verify` 只校验并在缺失/落后/漂移/未知高版本时拒绝启动。CLI
+  `aicr migrate --status|--check|--apply` 与启动共用同一 runner;status/check 严格
+  只读(不建文件、不建账本表),退出码 0/1/2 = 干净/待执行/不安全。checksum 漂移
+  与未知高版本、非连续账本永远拒绝写入(M16),不自动修复。CLI 同时处理
+  SQLite/PostgreSQL 的 config/store 命名空间;两个 PostgreSQL namespace 共用
+  advisory 锁,创建账本也在锁和事务内。
+- 业务 StoreDb 双后端:`packages/store` 的 sqlite 分支保留 legacy `_migrations`
+  (001–006 文本冻结,append-only,新增步只允许追加;M02 用该前缀构建真实旧账本
+  fixture);postgres 分支经 `pg-migrations.ts` 复用同一 MigrationRunner
+  (`pg_advisory` 会话锁包住 CREATE SCHEMA + 迁移)。pg 低权限部署在启动期得到有界
+  `store_unavailable`,不创建半套表(M08)。
+- 尚未接线:运行时 generation 固定(P4)、配置管理 API(P5)与管理表单(P6)
+  仍为设计项;运行时消费的仍是 YAML 文件来源(P3 合并/发布服务已在 core
+  落地,见 §3.15)。
+
+### 3.15 配置来源合并、路由图与发布服务(config-source / config-compiler / config-publish)
+
+- 代码真源:`packages/core/src/config-source.ts`(原文→合并→单次 schema 解析
+  管线)、`config-compiler.ts`(执行图)、`config-publish.ts`(prepare/CAS/install)、
+  `config-preview.ts`(无副作用预览与 readiness)。全部为纯函数 + 显式 store
+  参数,无文件/网络/env 副作用。
+- 合并合同:文件显式配置优先并锁定(实体锁 + 全局叶字段锁),数据库补充;
+  文件实体遮蔽同名的数据库记录(shadowed 可见、可导出、可删除,不报错);
+  显式空数组/false/0 是有效声明,与缺省区分;defaults 只在单次最终解析时
+  应用一次。每字段 provenance(file/database/default)可查询。
+- changeset 词汇:`create/update/delete/rename/set-enabled` 操作实体集合
+  (providers/model_groups/triggers/channels/workspaces/routes),`set/unset`
+  操作全局叶路径;实体值经 capability 校验(§P0 字段矩阵),文件拥有的实体
+  与锁定的叶路径返回 `file_owned`;引用修改与被引用实体必须同一 changeset
+  提交,发布后逐项解析 provider/model_group/trigger/channel/workspace 引用,
+  缺失即 `invalid_reference`,整批不提交。
+- 执行图:`compileExecutionGraph` 把 v2 `routing.rules`(显式 priority、AND
+  条件 + OR 列表、空数组关闭、缺省继承)与旧 `outputs.routes` 兼容图统一为
+  同一 resolveRouteForEvent/resolveAnalysisSelection/resolveOutputChannels
+  入口;同 trigger 受两代路由声明控制是 `routing_conflict`,优先级同分且结果
+  冲突是 `ambiguous_route`(由 stableSerialize 比较 workspace/analysis/outputs
+  判定),一个事件至多匹配一条规则,无隐式 fan-out 与隐式回退。分析参数按
+  全局 → workspace defaults → 实例 → 路由规则四层合并,数组整体替换。
+- 发布事务:prepare 纯函数(结构校验 + 引用解析 + 图编译 + capability/secret
+  检查;不评审、不建 webhook、不调模型、不拉镜像);`commitChangeset` CAS 是
+  线性化点(revision + audit + head 原子,三后端等价);commit 后 snapshot 写入
+  或本机 generation install 失败返回 `committed_activating`,不谎报 rollback;
+  operationId 可查询已提交结果(响应丢失恢复),旧操作重试不得激活已被替换的
+  revision。contentHash 是稳定 JSON 的 SHA-256;快照 ID 同时绑定 namespace、
+  revision、fileDigest、formatVersion 与 resolver 版本。audit diff 只含实体名与全局
+  路径,不含值。restore 以历史 revision 文档重跑当前文件锁/capability/secret
+  校验后发布为更高 revision,保留历史 formatVersion,审计与当前版本比较。
+- preview/readiness:`previewConfigChangeset` 返回与真实发布相同的校验结论与
+  影响视图(零写库),空库 baseRevision 为 null,affected 使用合并后的有效值;
+  `previewConfigRoute` 复用准入同一路径函数,显式路由仍须通过 workspace 准入,
+  layout 由实际 binding 决定,输出规则命中、
+  workspace 绑定、完整最终目录、模型组与输出 channel;`diagnoseConfigReadiness`
+  报告 disabled/store_unavailable/empty/file_config_mismatch/snapshot_missing/
+  ready 六态。
 
 ## 4. 默认评审 Prompt 合同
 

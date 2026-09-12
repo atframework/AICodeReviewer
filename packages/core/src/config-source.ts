@@ -1307,6 +1307,8 @@ export function applyConfigChangeset(
         globals = next;
         break;
       }
+      default:
+        throw new ConfigError("invalid_field_type", "Unknown changeset operation.");
     }
   }
 

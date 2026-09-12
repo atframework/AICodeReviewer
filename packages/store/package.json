@@ -15,10 +15,13 @@
     "build": "tsc -p tsconfig.json"
   },
   "dependencies": {
+    "@aicr/core": "workspace:*",
     "better-sqlite3": "13.0.3",
-    "drizzle-orm": "^0.45.2"
+    "drizzle-orm": "^0.45.2",
+    "pg": "^8.23.0"
   },
   "devDependencies": {
-    "@types/better-sqlite3": "^9.6.0"
+    "@types/better-sqlite3": "^9.6.0",
+    "@types/pg": "^8.23.1"
   }
 }

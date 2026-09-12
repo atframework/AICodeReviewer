@@ -65,9 +65,17 @@ export const CONFIG_ERROR_CODES = [
   "revision_invalid",
   "snapshot_invalid",
   // routing outcomes (P3+)
+  "routing_invalid",
+  "routing_conflict",
   "ambiguous_route",
   "repository_not_configured",
   "no_route",
+  // config store / migration (P2)
+  "operation_conflict",
+  "store_unavailable",
+  "binding_conflict",
+  "schema_version_unsupported",
+  "migration_failed",
 ] as const;
 
 export type ConfigErrorCode = (typeof CONFIG_ERROR_CODES)[number];

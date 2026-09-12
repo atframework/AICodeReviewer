@@ -39,6 +39,7 @@ import {
 } from "@aicr/eval";
 
 import { installFileLogTeeFromEnv } from "./log-file.js";
+import { runMigrateCommand } from "./migrate.js";
 
 const helpText = `AICodeReviewer CLI
 
@@ -51,6 +52,7 @@ Commands:
   eval     Run evaluation benchmarks against configured LLM
   replay   Replay a stored review run scaffold
   memory   Inspect or clear workspace memory scaffold
+  migrate  Schema ledger: --status (report), --check (gate), --apply
   lint     Validate templates or config scaffold
   doctor   Print environment diagnostics
   help     Show this message
@@ -85,6 +87,9 @@ Options:
   --channel-kind <kind>   Output channel kind for lint sample context
   --eval-dir <path>       Directory containing eval JSON fixtures (eval command)
   --validate-only         Validate eval fixtures without loading config or LLM (eval command)
+  --status                Read-only schema ledger report (migrate command)
+  --check                 Read-only ledger gate: exit 0 clean, 1 pending, 2 unsafe (migrate command)
+  --apply                 Apply pending schema migrations (migrate command)
   --help, -h              Show this message
   --version, -v           Show version
 `;
@@ -250,6 +255,9 @@ export async function runCli(
           "channel-kind": { type: "string" },
           "eval-dir": { type: "string" },
           "validate-only": { type: "boolean" },
+          status: { type: "boolean" },
+          check: { type: "boolean" },
+          apply: { type: "boolean" },
         },
       });
     } catch (error) {
@@ -676,6 +684,28 @@ export async function runCli(
       const message = error instanceof Error ? error.message : String(error);
       stderr.write(`aicr memory show failed: ${message}\n`);
       return 1;
+    }
+  }
+
+  if (command === "migrate") {
+    const modes = [values.status, values.check, values.apply].filter(Boolean).length;
+    if (modes !== 1) {
+      stderr.write("aicr migrate requires exactly one of --status, --check, or --apply.\n");
+      return 2;
+    }
+    const mode = values.status ? "status" : values.check ? "check" : "apply";
+    try {
+      return await runMigrateCommand({
+        cwd,
+        configPath: values.config,
+        mode,
+        stdout,
+        stderr,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      stderr.write(`aicr migrate failed: ${message}\n`);
+      return 2;
     }
   }
 

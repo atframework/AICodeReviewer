@@ -2,6 +2,16 @@ import { asc, eq, sql } from "drizzle-orm";
 
 import type { StoreDb } from "./database.js";
 import { reviewDeferrals, type ReviewDeferralStatus } from "./schema.js";
+import {
+  claimReviewDeferralPg,
+  completeReviewDeferralPg,
+  deleteReviewDeferralPg,
+  getReviewDeferralPg,
+  listPendingReviewDeferralsPg,
+  releaseReviewDeferralPg,
+  resetClaimedReviewDeferralsPg,
+  upsertReviewDeferralPg,
+} from "./review-deferrals.pg.js";
 
 export interface ReviewDeferralUpsert {
   dedupKey: string;
@@ -35,7 +45,10 @@ export interface ReviewDeferralRow {
  * reviewed), while `not_before` never moves earlier than the already pending
  * instant. The caller must arm its timer using the returned stored deadline.
  */
-export function upsertReviewDeferral(store: StoreDb, deferral: ReviewDeferralUpsert): ReviewDeferralRow {
+export async function upsertReviewDeferral(store: StoreDb, deferral: ReviewDeferralUpsert): Promise<ReviewDeferralRow> {
+  if (store.kind === "postgres") {
+    return upsertReviewDeferralPg(store, deferral);
+  }
   const now = new Date();
   return store.db
     .insert(reviewDeferrals)
@@ -68,18 +81,27 @@ export function upsertReviewDeferral(store: StoreDb, deferral: ReviewDeferralUps
     .get();
 }
 
-export function getReviewDeferral(store: StoreDb, dedupKey: string): ReviewDeferralRow | undefined {
+export async function getReviewDeferral(store: StoreDb, dedupKey: string): Promise<ReviewDeferralRow | undefined> {
+  if (store.kind === "postgres") {
+    return getReviewDeferralPg(store, dedupKey);
+  }
   return store.db.select().from(reviewDeferrals).where(eq(reviewDeferrals.dedupKey, dedupKey)).get();
 }
 
 /** Release only this claim after a failed handoff; other targets keep their ownership. */
-export function releaseReviewDeferral(store: StoreDb, dedupKey: string): void {
+export async function releaseReviewDeferral(store: StoreDb, dedupKey: string): Promise<void> {
+  if (store.kind === "postgres") {
+    return releaseReviewDeferralPg(store, dedupKey);
+  }
   store.db.update(reviewDeferrals).set({ status: "pending", updatedAt: new Date() })
     .where(sql`${reviewDeferrals.dedupKey} = ${dedupKey} AND ${reviewDeferrals.status} = 'claimed'`).run();
 }
 
 /** A handler may re-defer the target; never delete its replacement pending row. */
-export function completeReviewDeferral(store: StoreDb, dedupKey: string): void {
+export async function completeReviewDeferral(store: StoreDb, dedupKey: string): Promise<void> {
+  if (store.kind === "postgres") {
+    return completeReviewDeferralPg(store, dedupKey);
+  }
   store.db.delete(reviewDeferrals)
     .where(sql`${reviewDeferrals.dedupKey} = ${dedupKey} AND ${reviewDeferrals.status} = 'claimed'`).run();
 }
@@ -89,10 +111,13 @@ export function completeReviewDeferral(store: StoreDb, dedupKey: string): void {
  * undefined when the row is missing or already claimed, so a fired timer
  * racing a cancellation or a duplicate resume is a safe no-op.
  */
-export function claimReviewDeferral(
+export async function claimReviewDeferral(
   store: StoreDb,
   dedupKey: string,
-): ReviewDeferralRow | undefined {
+): Promise<ReviewDeferralRow | undefined> {
+  if (store.kind === "postgres") {
+    return claimReviewDeferralPg(store, dedupKey);
+  }
   const rows = store.db
     .update(reviewDeferrals)
     .set({
@@ -107,11 +132,17 @@ export function claimReviewDeferral(
 }
 
 /** Terminal transition: execution has started and owns the outcome from here. */
-export function deleteReviewDeferral(store: StoreDb, dedupKey: string): void {
+export async function deleteReviewDeferral(store: StoreDb, dedupKey: string): Promise<void> {
+  if (store.kind === "postgres") {
+    return deleteReviewDeferralPg(store, dedupKey);
+  }
   store.db.delete(reviewDeferrals).where(eq(reviewDeferrals.dedupKey, dedupKey)).run();
 }
 
-export function listPendingReviewDeferrals(store: StoreDb): ReviewDeferralRow[] {
+export async function listPendingReviewDeferrals(store: StoreDb): Promise<ReviewDeferralRow[]> {
+  if (store.kind === "postgres") {
+    return listPendingReviewDeferralsPg(store);
+  }
   return store.db
     .select()
     .from(reviewDeferrals)
@@ -124,7 +155,10 @@ export function listPendingReviewDeferrals(store: StoreDb): ReviewDeferralRow[] 
  * Startup recovery: a process that stopped between claim and execution start
  * must not strand the deferral, so every claimed row becomes pending again.
  */
-export function resetClaimedReviewDeferrals(store: StoreDb): number {
+export async function resetClaimedReviewDeferrals(store: StoreDb): Promise<number> {
+  if (store.kind === "postgres") {
+    return resetClaimedReviewDeferralsPg(store);
+  }
   const result = store.db
     .update(reviewDeferrals)
     .set({ status: "pending", updatedAt: new Date() })

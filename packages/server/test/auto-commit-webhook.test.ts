@@ -3,7 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { createMemoryAutoCommitStore, createReviewEvent } from "@aicr/core";
+import { createMemoryAutoCommitStore, createReviewEvent, createMemoryConfigStore } from "@aicr/core";
 import { closeStoreDb, createStoreDb } from "@aicr/store";
 import { describe, expect, it, vi } from "vitest";
 
@@ -436,8 +436,9 @@ describe("auto-commit receipt query API", () => {
       });
 
       const adminAuth = { username: "admin", password: "test-password", sessionTtlSeconds: 3600 };
-      const api = createObservabilityApi({ store: storeDb, adminAuth, autoCommitStore });
-      const session = createAdminSession(adminAuth, "admin", "test-password");
+      const sessionStore = createMemoryConfigStore();
+      const api = createObservabilityApi({ store: storeDb, adminAuth, sessionStore, autoCommitStore });
+      const session = await createAdminSession({ config: adminAuth, sessions: sessionStore }, "admin", "test-password");
       const authHeader = { Authorization: `Bearer ${session!.token}` };
 
       const unauthenticated = await api.fetch(new Request(`http://localhost/auto-commit/receipts/${accepted.receipt.receiptId}`));

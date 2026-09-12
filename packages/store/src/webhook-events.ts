@@ -2,6 +2,11 @@ import { desc, sql } from "drizzle-orm";
 
 import type { StoreDb } from "./database.js";
 import { webhookEvents, type WebhookEventDecision } from "./schema.js";
+import {
+  getRecentWebhookEventsPg,
+  insertWebhookEventPg,
+  pruneWebhookEventsPg,
+} from "./webhook-events.pg.js";
 
 /**
  * Cap on stored webhook event rows. The dashboard Events panel mirrors the
@@ -43,7 +48,10 @@ export interface RecentWebhookEvent {
   detail: unknown;
 }
 
-export function insertWebhookEvent(store: StoreDb, event: WebhookEventInsert): void {
+export async function insertWebhookEvent(store: StoreDb, event: WebhookEventInsert): Promise<void> {
+  if (store.kind === "postgres") {
+    return insertWebhookEventPg(store, event);
+  }
   store.db
     .insert(webhookEvents)
     .values({
@@ -62,13 +70,16 @@ export function insertWebhookEvent(store: StoreDb, event: WebhookEventInsert): v
     })
     .run();
 
-  pruneWebhookEvents(store);
+  await pruneWebhookEvents(store);
 }
 
-export function pruneWebhookEvents(
+export async function pruneWebhookEvents(
   store: StoreDb,
   keep: number = WEBHOOK_EVENTS_RETENTION_LIMIT,
-): number {
+): Promise<number> {
+  if (store.kind === "postgres") {
+    return pruneWebhookEventsPg(store, keep);
+  }
   const result = store.db
     .delete(webhookEvents)
     .where(
@@ -78,7 +89,10 @@ export function pruneWebhookEvents(
   return Number(result.changes);
 }
 
-export function getRecentWebhookEvents(store: StoreDb, limit: number): RecentWebhookEvent[] {
+export async function getRecentWebhookEvents(store: StoreDb, limit: number): Promise<RecentWebhookEvent[]> {
+  if (store.kind === "postgres") {
+    return getRecentWebhookEventsPg(store, limit);
+  }
   const rows = store.db
     .select()
     .from(webhookEvents)
@@ -99,11 +113,11 @@ export function getRecentWebhookEvents(store: StoreDb, limit: number): RecentWeb
     branch: row.branch,
     decision: row.decision,
     reason: row.reason,
-    detail: parseDetail(row.detail),
+    detail: parseWebhookDetail(row.detail),
   }));
 }
 
-function parseDetail(raw: string | null): unknown {
+export function parseWebhookDetail(raw: string | null): unknown {
   if (!raw) return null;
   try {
     return JSON.parse(raw) as unknown;

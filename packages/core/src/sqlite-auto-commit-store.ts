@@ -92,7 +92,8 @@ const SCHEMA_SQL = `
     metadata_attempts INTEGER NOT NULL DEFAULT 0,
     metadata_next_attempt_at INTEGER,
     metadata_terminal_error TEXT,
-    resolution TEXT
+    resolution TEXT,
+    config_snapshot_id TEXT
   );
   CREATE INDEX IF NOT EXISTS idx_auto_commit_receipts_stream
     ON auto_commit_receipts(stream_id, receipt_seq);
@@ -202,7 +203,8 @@ const SCHEMA_SQL = `
     lease_expiry INTEGER,
     last_error TEXT,
     created_at INTEGER NOT NULL,
-    execution_checkpoint TEXT
+    execution_checkpoint TEXT,
+    config_snapshot_id TEXT
   );
   CREATE INDEX IF NOT EXISTS idx_auto_commit_batches_lease
     ON auto_commit_batches(status, lease_expiry) WHERE status = 'running';
@@ -240,6 +242,7 @@ interface ReceiptRow {
   metadata_next_attempt_at: number | null;
   metadata_terminal_error: string | null;
   resolution: string | null;
+  config_snapshot_id: string | null;
 }
 
 interface RoutingReceiptRow {
@@ -332,6 +335,7 @@ interface BatchRow {
   last_error: string | null;
   created_at: number;
   execution_checkpoint: string | null;
+  config_snapshot_id: string | null;
 }
 
 interface OutboxRow {
@@ -405,6 +409,7 @@ function rowToReceipt(row: ReceiptRow): AutoCommitReceipt {
     metadataNextAttemptAt: row.metadata_next_attempt_at,
     metadataTerminalError: row.metadata_terminal_error,
     resolution: row.resolution === null ? null : (JSON.parse(row.resolution) as AutoCommitReceipt["resolution"]),
+    configSnapshotId: row.config_snapshot_id,
   };
 }
 
@@ -493,6 +498,7 @@ function rowToBatch(row: BatchRow): CommitBatchRecord {
     leaseExpiry: row.lease_expiry,
     lastError: row.last_error,
     createdAt: row.created_at,
+    configSnapshotId: row.config_snapshot_id,
   };
 }
 
@@ -602,6 +608,27 @@ export async function createSqliteAutoCommitStore(
           }
           version = 6;
         }
+        if (version === 6) {
+          // v6 → v7: receipts and batches gain the admission-time config
+          // snapshot reference (P2). Old rows read as NULL — legacy records
+          // never pin a config snapshot, so the GC treats them as no
+          // reference, exactly matching pre-upgrade behavior.
+          // SCHEMA_SQL already carries the columns, so guard like the v3 → v4
+          // checkpoint step (fresh files stamp v7 without running this chain).
+          const receiptCols = db
+            .prepare("PRAGMA table_info(auto_commit_receipts)")
+            .all() as { name: string }[];
+          if (!receiptCols.some((column) => column.name === "config_snapshot_id")) {
+            db.exec("ALTER TABLE auto_commit_receipts ADD COLUMN config_snapshot_id TEXT");
+          }
+          const batchCols = db
+            .prepare("PRAGMA table_info(auto_commit_batches)")
+            .all() as { name: string }[];
+          if (!batchCols.some((column) => column.name === "config_snapshot_id")) {
+            db.exec("ALTER TABLE auto_commit_batches ADD COLUMN config_snapshot_id TEXT");
+          }
+          version = 7;
+        }
         if (version !== AUTO_COMMIT_STORE_SCHEMA_VERSION) {
           throw new Error(
             `Unsupported auto-commit store schema version ${meta.schema_version}; expected ${AUTO_COMMIT_STORE_SCHEMA_VERSION}.`,
@@ -633,11 +660,11 @@ export async function createSqliteAutoCommitStore(
     `INSERT INTO auto_commit_receipts (
        receipt_id, receipt_seq, delivery_key, stream_id, workspace_id, trigger_name, provider, vcs,
        source_namespace, scope_ref, history_generation, coverage, envelope, first_accepted_at,
-       delay_seconds, policy_version, metadata_cursor, resolution
+       delay_seconds, policy_version, metadata_cursor, resolution, config_snapshot_id
      ) VALUES (
        @receipt_id, @receipt_seq, @delivery_key, @stream_id, @workspace_id, @trigger_name, @provider, @vcs,
        @source_namespace, @scope_ref, @history_generation, @coverage, @envelope, @first_accepted_at,
-       @delay_seconds, @policy_version, NULL, @resolution
+       @delay_seconds, @policy_version, NULL, @resolution, @config_snapshot_id
      )`,
   );
   const stmtMemberById = db.prepare(
@@ -795,6 +822,7 @@ export async function createSqliteAutoCommitStore(
         resolution: input.resolution === undefined || input.resolution === null
           ? null
           : JSON.stringify(input.resolution),
+        config_snapshot_id: input.configSnapshotId ?? null,
       });
 
       const stream = stmtStreamHead.get(streamId) as StreamHeadRow | undefined;
@@ -844,6 +872,7 @@ export async function createSqliteAutoCommitStore(
         metadataNextAttemptAt: null,
         metadataTerminalError: null,
         resolution: input.resolution ?? null,
+        configSnapshotId: input.configSnapshotId ?? null,
       };
       return { receipt, duplicate: false };
     },
@@ -1251,11 +1280,12 @@ export async function createSqliteAutoCommitStore(
          batch_id, run_id, stream_id, workspace_id, trigger_name, vcs, source_namespace, scope_ref,
          history_generation, source_key, members, base, head, exclusion_policy_version,
          config_policy_version, status, attempt, max_attempts, retry_not_before, lease_token,
-         lease_owner, lease_expiry, last_error, created_at
+         lease_owner, lease_expiry, last_error, created_at, config_snapshot_id
        ) VALUES (
          @batch_id, @run_id, @stream_id, @workspace_id, @trigger_name, @vcs, @source_namespace, @scope_ref,
          @history_generation, @source_key, @members, @base, @head, @exclusion_policy_version,
-         @config_policy_version, 'dispatch_pending', 0, @max_attempts, NULL, NULL, NULL, NULL, NULL, @created_at
+         @config_policy_version, 'dispatch_pending', 0, @max_attempts, NULL, NULL, NULL, NULL, NULL, @created_at,
+         @config_snapshot_id
        )`,
       ).run({
         batch_id: input.batchId,
@@ -1275,6 +1305,7 @@ export async function createSqliteAutoCommitStore(
         config_policy_version: input.configPolicyVersion,
         max_attempts: input.maxAttempts,
         created_at: input.now,
+        config_snapshot_id: input.configSnapshotId ?? null,
       });
       db.prepare(
         `INSERT INTO auto_commit_outbox (batch_id, status, next_attempt_at, claim_token, claim_expiry)
@@ -1576,6 +1607,25 @@ export async function createSqliteAutoCommitStore(
       input: AcceptReceiptInput,
     ): Promise<AcceptReceiptResult> {
       return txAcceptReceipt.immediate(input) as AcceptReceiptResult;
+    },
+
+    async listActiveConfigSnapshotIds(_now: number): Promise<readonly string[]> {
+      // Receipts pin while any owned member is still pending; batches pin
+      // until they reach a terminal status. Dead stays pinned: the P1 manual
+      // recovery path may re-execute the batch against its admission config.
+      const rows = db.prepare(
+        `SELECT config_snapshot_id AS id FROM auto_commit_batches
+          WHERE config_snapshot_id IS NOT NULL AND status NOT IN ('completed', 'skipped')
+         UNION
+         SELECT r.config_snapshot_id AS id FROM auto_commit_receipts r
+          WHERE r.config_snapshot_id IS NOT NULL
+            AND EXISTS (
+              SELECT 1 FROM auto_commit_receipt_members rm
+                JOIN auto_commit_members m ON m.member_id = rm.member_id
+               WHERE rm.receipt_id = r.receipt_id AND m.status = 'pending'
+            )`,
+      ).all() as { id: string }[];
+      return rows.map((row) => row.id);
     },
 
     async acceptRoutingReceipt(

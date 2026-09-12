@@ -234,6 +234,7 @@ export function createMemoryAutoCommitStore(): AutoCommitStore {
         metadataNextAttemptAt: null,
         metadataTerminalError: null,
         resolution: input.resolution ?? null,
+        configSnapshotId: input.configSnapshotId ?? null,
         envelope: input.envelope,
         firstAcceptedAt: input.now,
         delaySeconds: input.delaySeconds,
@@ -284,6 +285,23 @@ export function createMemoryAutoCommitStore(): AutoCommitStore {
         };
       recomputeStreamNotBefore(streamId);
       return { receipt, duplicate: false };
+    },
+
+    async listActiveConfigSnapshotIds(_now: number): Promise<readonly string[]> {
+      const ids = new Set<string>();
+      for (const receipt of receipts.values()) {
+        if (receipt.configSnapshotId === null) continue;
+        const memberIds = [...(memberIdsByReceipt.get(receipt.receiptId) ?? [])];
+        const hasPending = memberIds.some((memberId) => members.get(memberId)?.record.status === "pending");
+        if (hasPending) ids.add(receipt.configSnapshotId);
+      }
+      for (const batch of batches.values()) {
+        if (batch.record.configSnapshotId === null) continue;
+        if (batch.record.status !== "completed" && batch.record.status !== "skipped") {
+          ids.add(batch.record.configSnapshotId);
+        }
+      }
+      return [...ids];
     },
 
     async acceptRoutingReceipt(
@@ -908,6 +926,7 @@ export function createMemoryAutoCommitStore(): AutoCommitStore {
         head: input.head,
         exclusionPolicyVersion: input.exclusionPolicyVersion,
         configPolicyVersion: input.configPolicyVersion,
+        configSnapshotId: input.configSnapshotId ?? null,
         status: "dispatch_pending",
         attempt: 0,
         maxAttempts: input.maxAttempts,

@@ -10,9 +10,8 @@ import {
 	type ModelSpec,
 } from "@aicr/llm";
 import {
-	getModelCatalogEntriesByModelId,
-	getModelCatalogEntry,
-	getModelCatalogSourceMeta,
+	listModelCatalogEntries,
+	listModelCatalogSourceMetas,
 	setModelCatalogSourceMeta,
 	upsertModelCatalogEntries,
 	type ModelCatalogRecord,
@@ -356,36 +355,116 @@ export async function createRedisModelCatalogBackend(options: RedisModelCatalogB
 	};
 }
 
-export function createSqliteModelCatalogBackend(store: StoreDb): ModelCatalogBackend {
+/**
+ * Store-backed catalog cache (sqlite or postgres StoreDb). Mirrors the redis
+ * backend's contract: entries are read from an in-memory snapshot loaded at
+ * creation, writes update the snapshot synchronously and persist in the
+ * background (`flushPending` surfaces write failures). This keeps
+ * ModelCatalogBackend's sync read interface — and therefore
+ * ModelCatalogService.resolve() — unchanged while the store itself is async.
+ */
+export async function createStoreModelCatalogBackend(store: StoreDb): Promise<ModelCatalogBackend> {
+	const entries = new Map<string, ModelCatalogEntry>();
+	const sources = new Map<string, CatalogSource>();
+	const modelIndex = new Map<string, Set<string>>();
+	const metaBySource = new Map<string, ModelCatalogSourceMetaView>();
+	const pendingWrites: Promise<Error | undefined>[] = [];
+
+	function rememberWrite(promise: Promise<unknown>): void {
+		pendingWrites.push(
+			promise.then(
+				() => undefined,
+				(error: unknown) => (error instanceof Error ? error : new Error(String(error))),
+			),
+		);
+	}
+
+	async function flushPending(): Promise<void> {
+		while (pendingWrites.length > 0) {
+			const batch = pendingWrites.splice(0);
+			const results = await Promise.all(batch);
+			const firstError = results.find((result): result is Error => result instanceof Error);
+			if (firstError) throw firstError;
+		}
+	}
+
+	function addToModelIndex(entry: ModelCatalogEntry): void {
+		let ids = modelIndex.get(entry.modelId);
+		if (!ids) {
+			ids = new Set<string>();
+			modelIndex.set(entry.modelId, ids);
+		}
+		ids.add(entry.catalogId);
+	}
+
+	function removeFromModelIndex(modelId: string, catalogId: string): void {
+		const ids = modelIndex.get(modelId);
+		if (!ids) return;
+		ids.delete(catalogId);
+		if (ids.size === 0) modelIndex.delete(modelId);
+	}
+
+	function cacheEntry(entry: ModelCatalogEntry, source: CatalogSource): void {
+		const previous = entries.get(entry.catalogId);
+		if (previous && previous.modelId !== entry.modelId) {
+			removeFromModelIndex(previous.modelId, entry.catalogId);
+		}
+		entries.set(entry.catalogId, entry);
+		sources.set(entry.catalogId, source);
+		addToModelIndex(entry);
+	}
+
+	for (const record of await listModelCatalogEntries(store)) {
+		cacheEntry(recordToEntry(record), sourceFromString(record.source));
+	}
+	for (const meta of await listModelCatalogSourceMetas(store)) {
+		metaBySource.set(meta.sourceUrl, {
+			lastRefreshedAt: meta.lastRefreshedAt,
+			...(meta.etag ? { etag: meta.etag } : {}),
+		});
+	}
+
 	return {
 		getEntry(catalogId: string): ModelCatalogBackendEntry | undefined {
-			const record = getModelCatalogEntry(store, catalogId);
-			if (!record) return undefined;
-			return { entry: recordToEntry(record), source: sourceFromString(record.source) };
+			const entry = entries.get(catalogId);
+			if (!entry) return undefined;
+			return { entry, source: sources.get(catalogId) ?? "cache" };
 		},
 		getEntriesByModelId(modelId: string): ModelCatalogBackendEntry[] {
-			return getModelCatalogEntriesByModelId(store, modelId).map((record) => ({
-				entry: recordToEntry(record),
-				source: sourceFromString(record.source),
-			}));
+			const ids = modelIndex.get(modelId);
+			if (!ids) return [];
+			return [...ids].flatMap((catalogId) => {
+				const entry = entries.get(catalogId);
+				return entry ? [{ entry, source: sources.get(catalogId) ?? "cache" }] : [];
+			});
 		},
-		upsertMany(entries: readonly ModelCatalogEntry[], source: CatalogSource): void {
+		upsertMany(records: readonly ModelCatalogEntry[], source: CatalogSource): void {
+			if (records.length === 0) return;
 			const fetchedAt = new Date();
-			upsertModelCatalogEntries(
-				store,
-				entries.map((entry) => entryToRecord(entry, source, fetchedAt)),
+			for (const entry of records) {
+				cacheEntry(entry, source);
+			}
+			rememberWrite(
+				upsertModelCatalogEntries(
+					store,
+					records.map((entry) => entryToRecord(entry, source, fetchedAt)),
+				),
 			);
 		},
 		getSourceMeta(sourceUrl: string): ModelCatalogSourceMetaView | undefined {
-			return getModelCatalogSourceMeta(store, sourceUrl);
+			return metaBySource.get(sourceUrl);
 		},
 		setSourceMeta(sourceUrl: string, meta: ModelCatalogSourceMetaView): void {
-			setModelCatalogSourceMeta(store, {
-				sourceUrl,
-				lastRefreshedAt: meta.lastRefreshedAt,
-				...(meta.etag ? { etag: meta.etag } : {}),
-			});
+			metaBySource.set(sourceUrl, meta);
+			rememberWrite(
+				setModelCatalogSourceMeta(store, {
+					sourceUrl,
+					lastRefreshedAt: meta.lastRefreshedAt,
+					...(meta.etag ? { etag: meta.etag } : {}),
+				}),
+			);
 		},
+		flushPending,
 	};
 }
 

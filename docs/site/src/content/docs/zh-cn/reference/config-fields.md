@@ -341,6 +341,7 @@ schema 接受 `workspaces.defaults` 和实例上的 `agent.default` 与 `sandbox
 | `storage.database.kind` | enum | `sqlite` | 数据库后端（`sqlite` 或 `postgres`） |
 | `storage.database.sqlite.path` | string | `/app/data/aicr.sqlite` | SQLite DB 路径 |
 | `storage.database.postgres.url_env` | string | — | Postgres 连接串环境变量 |
+| `storage.database.migrate` | enum | `auto` | 启动 schema 迁移模式（`auto` 应用、`verify` 检查配置与业务 schema） |
 | `storage.cache.kind` | enum | `memory` | 缓存后端 |
 | `storage.cache.redis.url_env` | string | — | Redis 连接串环境变量 |
 | `storage.cache.ttl_seconds` | int > 0 | — | 缓存 TTL |

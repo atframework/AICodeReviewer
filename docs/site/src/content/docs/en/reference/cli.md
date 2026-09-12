@@ -23,6 +23,7 @@ way. Show help at any time with `--help` / `-h`.
 | [`eval`](#eval) | Run evaluation benchmarks against the configured LLM |
 | [`replay`](#replay) | Replay a stored review run scaffold |
 | [`memory`](#memory) | Inspect or clear workspace memory |
+| [`migrate`](#migrate) | Inspect or apply the schema migration ledger |
 | [`lint`](#lint) | Validate templates or config scaffold |
 | [`doctor`](#doctor) | Print environment diagnostics |
 | `help` | Show the help message |
@@ -152,6 +153,32 @@ node packages/cli/dist/index.js memory clear --workspace <id> --scope false-posi
 | `--all` | Include full file contents in `memory show` |
 
 `memory` subcommands: `show` (default), `clear`.
+
+## migrate
+
+Inspect or apply the schema migration ledger of the deployment database
+(`storage.database`) without starting the server. The command runs the same
+migration runner the server uses at startup; `storage.database.migrate`
+controls the startup behavior (`auto` / `verify`).
+
+```bash
+node packages/cli/dist/index.js migrate --check   --config example/config.yaml
+```
+
+| Flag | Description |
+| --- | --- |
+| `--status` | Read-only ledger report (JSON). Exit 0. |
+| `--check` | Read-only gate. Exit 0 when clean, 1 when migrations are pending, 2 on checksum drift or a newer unknown schema. |
+| `--apply` | Apply pending migrations. Exit 0 on success; 2 when the ledger is unsafe (drift / newer schema). |
+
+Exactly one of `--status`, `--check`, `--apply` is required. `--status` and
+`--check` never create or modify the database file. Checksum drift and
+unknown newer schemas are never auto-repaired (exit 2). Both `sqlite` and
+`postgres` report and upgrade the `config` and `store` namespaces. A clean
+config ledger alone is insufficient. SQLite relative paths resolve from the
+command working directory; `--apply` creates missing parent directories.
+PostgreSQL uses `postgres.url_env`, with `postgres.url` as a fallback.
+Connection failures also exit 2. Status/check do not create schemas or tables.
 
 ## lint
 

@@ -7,9 +7,11 @@ import { join } from "node:path";
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { createReviewEvent, isAllowedInstant, type AppConfig } from "@aicr/core";
+import { createConfigStoreFromDatabaseConfig, createReviewEvent, isAllowedInstant, type AppConfig } from "@aicr/core";
 import { computeScopeFingerprint } from "@aicr/outputs";
 import { closeStoreDb, createStoreDb, getProjectStats, hardDeleteExpiredProjects, insertReviewRun } from "@aicr/store";
+import type * as aicrStore from "@aicr/store";
+import type * as aicrCore from "@aicr/core";
 
 import { GithubAppTokenService } from "../src/github-app-token.js";
 import {
@@ -81,6 +83,17 @@ const redisMock = vi.hoisted(() => {
 });
 
 vi.mock("ioredis", () => ({ default: redisMock.MockRedis }));
+
+// Pass-through wrappers: behavior is identical to the real modules, but the
+// lifecycle tests below can observe close calls on bootstrap-opened handles.
+vi.mock("@aicr/store", async (importOriginal) => {
+  const original = await importOriginal<typeof aicrStore>();
+  return { ...original, closeStoreDb: vi.fn(original.closeStoreDb) };
+});
+vi.mock("@aicr/core", async (importOriginal) => {
+  const original = await importOriginal<typeof aicrCore>();
+  return { ...original, createConfigStoreFromDatabaseConfig: vi.fn(original.createConfigStoreFromDatabaseConfig) };
+});
 
 beforeEach(() => {
   redisMock.stores.clear();
@@ -3840,8 +3853,11 @@ describe("resolveP4TriggerConfig", () => {
     } finally {
       delete process.env.AICR_ADMIN_USERNAME;
       delete process.env.AICR_ADMIN_PASSWORD;
+      if (result?.sessionStore) {
+        await result.sessionStore.close();
+      }
       if (result?.store) {
-        closeStoreDb(result.store);
+        (await closeStoreDb(result.store));
       }
       await rm(tmpDir, { recursive: true, force: true });
     }
@@ -3878,14 +3894,17 @@ describe("resolveP4TriggerConfig", () => {
     } finally {
       delete process.env.AICR_ADMIN_USERNAME;
       delete process.env.AICR_ADMIN_PASSWORD;
+      if (result?.sessionStore) {
+        await result.sessionStore.close();
+      }
       if (result?.store) {
-        closeStoreDb(result.store);
+        (await closeStoreDb(result.store));
       }
       await rm(tmpDir, { recursive: true, force: true });
     }
   });
 
-  it("bootstrapServerApp rejects non-sqlite observability store backends until implemented", async () => {
+  it("bootstrapServerApp rejects a postgres observability store without a resolvable URL", async () => {
     const tmpDir = await mkdtemp(join(tmpdir(), "aicr-bootstrap-postgres-"));
     process.env.AICR_ADMIN_USERNAME = "admin";
     process.env.AICR_ADMIN_PASSWORD = "secret";
@@ -3905,8 +3924,97 @@ describe("resolveP4TriggerConfig", () => {
       } as Partial<AppConfig>);
 
       await expect(bootstrapServerApp({ config, baseSystemPrompt: "test", baseDir: tmpDir })).rejects.toThrow(
-        "currently supports sqlite only",
+        "storage.database.kind 'postgres' requires storage.database.postgres.url_env to resolve to a PostgreSQL URL.",
       );
+    } finally {
+      delete process.env.AICR_ADMIN_USERNAME;
+      delete process.env.AICR_ADMIN_PASSWORD;
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("sweeps expired admin sessions periodically and stops when the session store closes", async () => {
+    const tmpDir = await mkdtemp(join(tmpdir(), "aicr-bootstrap-sweep-"));
+    process.env.AICR_ADMIN_USERNAME = "admin";
+    process.env.AICR_ADMIN_PASSWORD = "secret";
+    vi.useFakeTimers();
+    let result: Awaited<ReturnType<typeof bootstrapServerApp>> | undefined;
+    try {
+      const config = makeConfig({
+        admin: {
+          username_env: "AICR_ADMIN_USERNAME",
+          password_env: "AICR_ADMIN_PASSWORD",
+        },
+        storage: {
+          database: { kind: "sqlite" as const, sqlite: { path: join(tmpDir, "obs.db") } },
+          cache: { kind: "memory" as const },
+          object: { kind: "filesystem" as const },
+          retention: { deleted_project_grace_days: 7 },
+        },
+      } as Partial<AppConfig>);
+
+      result = await bootstrapServerApp({ config, baseSystemPrompt: "test", baseDir: tmpDir });
+      const sweepSpy = vi.spyOn(result.sessionStore!, "deleteExpiredAdminSessions");
+
+      await vi.advanceTimersByTimeAsync(15 * 60 * 1000);
+      expect(sweepSpy).toHaveBeenCalled();
+
+      await result.sessionStore!.close();
+      sweepSpy.mockClear();
+      await vi.advanceTimersByTimeAsync(45 * 60 * 1000);
+      expect(sweepSpy).not.toHaveBeenCalled();
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+      delete process.env.AICR_ADMIN_USERNAME;
+      delete process.env.AICR_ADMIN_PASSWORD;
+      if (result?.store) {
+        (await closeStoreDb(result.store));
+      }
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("releases opened stores in reverse order when the build fails after session store creation", async () => {
+    const tmpDir = await mkdtemp(join(tmpdir(), "aicr-bootstrap-failure-"));
+    process.env.AICR_ADMIN_USERNAME = "admin";
+    process.env.AICR_ADMIN_PASSWORD = "secret";
+    // The queue sqlite path sits under a regular file: createQueueFromConfig
+    // fails deterministically AFTER the session store was opened.
+    await mkdir(tmpDir, { recursive: true });
+    await writeFile(join(tmpDir, "blocked"), "x");
+    const closeStoreDbMock = vi.mocked(closeStoreDb);
+    const factoryMock = vi.mocked(createConfigStoreFromDatabaseConfig);
+    const realFactory = factoryMock.getMockImplementation()!;
+    closeStoreDbMock.mockClear();
+    let sessionCloseCalls = 0;
+    factoryMock.mockImplementationOnce(async (database, envLookup) => {
+      const store = await realFactory(database, envLookup);
+      const realClose = store.close;
+      store.close = (() => {
+        sessionCloseCalls += 1;
+        return realClose.call(store);
+      }) as typeof store.close;
+      return store;
+    });
+    try {
+      const config = makeConfig({
+        admin: {
+          username_env: "AICR_ADMIN_USERNAME",
+          password_env: "AICR_ADMIN_PASSWORD",
+        },
+        queue: { kind: "sqlite", sqlite: { path: join(tmpDir, "blocked", "queue.sqlite") } } as AppConfig["queue"],
+        storage: {
+          database: { kind: "sqlite" as const, sqlite: { path: join(tmpDir, "obs.db") } },
+          cache: { kind: "memory" as const },
+          object: { kind: "filesystem" as const },
+          retention: { deleted_project_grace_days: 7 },
+        },
+      } as Partial<AppConfig>);
+
+      await expect(bootstrapServerApp({ config, baseSystemPrompt: "test", baseDir: tmpDir })).rejects.toThrow();
+      expect(sessionCloseCalls).toBe(1);
+      expect(closeStoreDbMock).toHaveBeenCalledTimes(1);
     } finally {
       delete process.env.AICR_ADMIN_USERNAME;
       delete process.env.AICR_ADMIN_PASSWORD;
@@ -3922,7 +4030,7 @@ describe("resolveP4TriggerConfig", () => {
     let result: Awaited<ReturnType<typeof bootstrapServerApp>> | undefined;
     const seedStore = createStoreDb(dbPath);
     try {
-      insertReviewRun(seedStore, {
+      (await insertReviewRun(seedStore, {
         id: "run-active",
         eventId: "evt-active",
         workspaceId: "active-workspace",
@@ -3932,8 +4040,8 @@ describe("resolveP4TriggerConfig", () => {
         providerModel: null,
         status: "succeeded",
         startedAt: new Date(),
-      });
-      insertReviewRun(seedStore, {
+      }));
+      (await insertReviewRun(seedStore, {
         id: "run-removed",
         eventId: "evt-removed",
         workspaceId: "removed-workspace",
@@ -3943,8 +4051,8 @@ describe("resolveP4TriggerConfig", () => {
         providerModel: null,
         status: "succeeded",
         startedAt: new Date(),
-      });
-      closeStoreDb(seedStore);
+      }));
+      (await closeStoreDb(seedStore));
 
       const config = makeConfig({
         admin: {
@@ -3975,7 +4083,7 @@ describe("resolveP4TriggerConfig", () => {
         baseDir: tmpDir,
       });
 
-      const projects = getProjectStats(result.store!);
+      const projects = (await getProjectStats(result.store!));
       expect(projects.length).toBe(2);
       const byWorkspace = new Map(projects.map((p) => [p.workspaceId, p]));
       expect(byWorkspace.get("active-workspace")?.isActive).toBe(true);
@@ -3984,10 +4092,13 @@ describe("resolveP4TriggerConfig", () => {
       delete process.env.AICR_ADMIN_USERNAME;
       delete process.env.AICR_ADMIN_PASSWORD;
       if (seedStore.sqlite.open) {
-        closeStoreDb(seedStore);
+        (await closeStoreDb(seedStore));
+      }
+      if (result?.sessionStore) {
+        await result.sessionStore.close();
       }
       if (result?.store) {
-        closeStoreDb(result.store);
+        (await closeStoreDb(result.store));
       }
       await rm(tmpDir, { recursive: true, force: true });
     }
@@ -4001,7 +4112,7 @@ describe("resolveP4TriggerConfig", () => {
     let result: Awaited<ReturnType<typeof bootstrapServerApp>> | undefined;
     const seedStore = createStoreDb(dbPath);
     try {
-      insertReviewRun(seedStore, {
+      (await insertReviewRun(seedStore, {
         id: "run-removed-a",
         eventId: "evt-removed-a",
         workspaceId: "removed-workspace-a",
@@ -4011,8 +4122,8 @@ describe("resolveP4TriggerConfig", () => {
         providerModel: null,
         status: "succeeded",
         startedAt: new Date(),
-      });
-      insertReviewRun(seedStore, {
+      }));
+      (await insertReviewRun(seedStore, {
         id: "run-removed-b",
         eventId: "evt-removed-b",
         workspaceId: "removed-workspace-b",
@@ -4022,8 +4133,8 @@ describe("resolveP4TriggerConfig", () => {
         providerModel: null,
         status: "succeeded",
         startedAt: new Date(),
-      });
-      closeStoreDb(seedStore);
+      }));
+      (await closeStoreDb(seedStore));
 
       const config = makeConfig({
         admin: {
@@ -4050,20 +4161,23 @@ describe("resolveP4TriggerConfig", () => {
         baseDir: tmpDir,
       });
 
-      const projects = getProjectStats(result.store!);
+      const projects = (await getProjectStats(result.store!));
       expect(projects.length).toBe(2);
       expect(projects.every((p) => p.isActive === false)).toBe(true);
 
-      hardDeleteExpiredProjects(result.store!, 0);
-      expect(getProjectStats(result.store!).length).toBe(0);
+      (await hardDeleteExpiredProjects(result.store!, 0));
+      expect((await getProjectStats(result.store!)).length).toBe(0);
     } finally {
       delete process.env.AICR_ADMIN_USERNAME;
       delete process.env.AICR_ADMIN_PASSWORD;
       if (seedStore.sqlite.open) {
-        closeStoreDb(seedStore);
+        (await closeStoreDb(seedStore));
+      }
+      if (result?.sessionStore) {
+        await result.sessionStore.close();
       }
       if (result?.store) {
-        closeStoreDb(result.store);
+        (await closeStoreDb(result.store));
       }
       await rm(tmpDir, { recursive: true, force: true });
     }
@@ -4206,8 +4320,11 @@ describe("resolveP4TriggerConfig", () => {
       if (result?.closeAutoCommit) {
         await result.closeAutoCommit();
       }
+      if (result?.sessionStore) {
+        await result.sessionStore.close();
+      }
       if (result?.store) {
-        closeStoreDb(result.store);
+        (await closeStoreDb(result.store));
       }
       await rm(tmpDir, { recursive: true, force: true });
     }
@@ -4274,7 +4391,7 @@ describe("resolveP4TriggerConfig", () => {
       expect(result.store).toBeDefined();
       expect(result.observability).toBeUndefined();
       if (result.store) {
-        closeStoreDb(result.store);
+        (await closeStoreDb(result.store));
       }
     } finally {
       await rm(tmpDir, { recursive: true, force: true });

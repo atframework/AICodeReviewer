@@ -116,8 +116,8 @@ beforeEach(() => {
   store = createStoreDb(join(tmpDir, "test.db"));
 });
 
-afterEach(() => {
-  closeStoreDb(store);
+afterEach(async () => {
+  (await closeStoreDb(store));
   if (existsSync(tmpDir)) {
     rmSync(tmpDir, { recursive: true, force: true });
   }
@@ -147,12 +147,12 @@ describe("persistent review deferrals", () => {
       expect(body.processing?.status).toBe("deferred");
       expect(body.processing?.resumeAt).toBe(MONDAY_WINDOW_OPEN);
 
-      const pending = listPendingReviewDeferrals(store);
+      const pending = (await listPendingReviewDeferrals(store));
       expect(pending).toHaveLength(1);
       expect(pending[0]!.notBefore.getTime()).toBe(Date.parse(MONDAY_WINDOW_OPEN));
       expect(pending[0]!.reviewEvent).toContain("feature-42");
 
-      const events = getRecentWebhookEvents(store, 10);
+      const events = (await getRecentWebhookEvents(store, 10));
       expect(events).toHaveLength(1);
       expect(events[0]!.decision).toBe("deferred");
       expect(events[0]!.reason).toBe("execution_window");
@@ -161,15 +161,15 @@ describe("persistent review deferrals", () => {
 
       const updated = await postGitea(app, giteaPrPayload("latest-head"), "pull_request");
       expect((await updated.json() as { processing: { status: string } }).processing.status).toBe("deferred");
-      expect(listPendingReviewDeferrals(store)).toHaveLength(1);
-      expect(listPendingReviewDeferrals(store)[0]!.reviewEvent).toContain("latest-head");
+      expect((await listPendingReviewDeferrals(store))).toHaveLength(1);
+      expect((await listPendingReviewDeferrals(store))[0]!.reviewEvent).toContain("latest-head");
 
       await vi.advanceTimersByTimeAsync(FRIDAY_TO_MONDAY_MS);
       await vi.runOnlyPendingTimersAsync();
 
       expect(sourceRootResolver).toHaveBeenCalledTimes(1);
       expect(sourceRootResolver.mock.calls[0]?.[0]).toMatchObject({ headSha: "latest-head" });
-      expect(listPendingReviewDeferrals(store)).toHaveLength(0);
+      expect((await listPendingReviewDeferrals(store))).toHaveLength(0);
     } finally {
       vi.clearAllTimers();
       vi.useRealTimers();
@@ -198,7 +198,7 @@ describe("persistent review deferrals", () => {
       url: "https://gitea.internal.corp/owent/example/pulls/43",
       branch: "feature-43",
     };
-    upsertReviewDeferral(store, {
+    (await upsertReviewDeferral(store, {
       dedupKey: computeDeferralKey(pendingEvent as never),
       workspaceId: "ws",
       provider: "gitea",
@@ -206,8 +206,8 @@ describe("persistent review deferrals", () => {
       reviewEvent: JSON.stringify(pendingEvent),
       payload: JSON.stringify(reviewEvent),
       notBefore: new Date(Date.parse(MONDAY_WINDOW_OPEN)),
-    });
-    upsertReviewDeferral(store, {
+    }));
+    (await upsertReviewDeferral(store, {
       dedupKey: computeDeferralKey(claimedEvent as never),
       workspaceId: "ws",
       provider: "gitea",
@@ -215,9 +215,9 @@ describe("persistent review deferrals", () => {
       reviewEvent: JSON.stringify(claimedEvent),
       payload: JSON.stringify(reviewEvent),
       notBefore: new Date(Date.parse(MONDAY_WINDOW_OPEN)),
-    });
+    }));
     // Simulate a process that stopped mid-resume: claimed but never executed.
-    expect(claimReviewDeferral(store, computeDeferralKey(claimedEvent as never))).toBeDefined();
+    expect((await claimReviewDeferral(store, computeDeferralKey(claimedEvent as never)))).toBeDefined();
 
     vi.useFakeTimers();
     vi.setSystemTime(Date.parse(FRIDAY_AFTER_WINDOW));
@@ -237,6 +237,11 @@ describe("persistent review deferrals", () => {
         store,
       });
 
+      // Recovery runs through the async store queue; flush the microtask chain.
+      for (let i = 0; i < 10; i += 1) {
+        await Promise.resolve();
+      }
+
       const recoveryLog = infoSpy.mock.calls
         .map(([entry]) => entry)
         .find((entry) => typeof entry === "string" && entry.includes("recovered review deferrals"));
@@ -248,7 +253,7 @@ describe("persistent review deferrals", () => {
       await vi.runOnlyPendingTimersAsync();
 
       expect(seen.sort()).toEqual(["feature-42", "feature-43"]);
-      expect(listPendingReviewDeferrals(store)).toHaveLength(0);
+      expect((await listPendingReviewDeferrals(store))).toHaveLength(0);
     } finally {
       vi.clearAllTimers();
       vi.useRealTimers();
@@ -272,14 +277,14 @@ describe("persistent review deferrals", () => {
       });
 
       await postGitea(app, giteaPrPayload("old-head"), "pull_request");
-      expect(listPendingReviewDeferrals(store)).toHaveLength(1);
+      expect((await listPendingReviewDeferrals(store))).toHaveLength(1);
 
       // The window opens and a newer event for the same PR arrives before the
       // deferral timer had a chance to fire.
       vi.setSystemTime(Date.parse(MONDAY_WINDOW_OPEN));
       const response = await postGitea(app, giteaPrPayload("new-head"), "pull_request");
       expect(response.status).toBe(202);
-      expect(listPendingReviewDeferrals(store)).toHaveLength(0);
+      expect((await listPendingReviewDeferrals(store))).toHaveLength(0);
 
       await vi.runOnlyPendingTimersAsync();
       // Exactly one execution: the fresh event. The stale deferral is gone.
@@ -314,7 +319,7 @@ describe("persistent review deferrals", () => {
       await postGitea(app, giteaPrPayload("old-head"), "pull_request");
       await postGitea(app, giteaPrPayload("new-head"), "pull_request");
 
-      const pending = listPendingReviewDeferrals(store);
+      const pending = (await listPendingReviewDeferrals(store));
       expect(pending).toHaveLength(1);
       expect(pending[0]!.reviewEvent).toContain("new-head");
 
@@ -459,7 +464,7 @@ describe("webhook event recording", () => {
       await postGitea(app, giteaPushPayload(), "push");
       await vi.runOnlyPendingTimersAsync();
 
-      const events = getRecentWebhookEvents(store, 10);
+      const events = (await getRecentWebhookEvents(store, 10));
       const decisions = events.map((event) => `${event.decision}:${event.reason ?? ""}`);
       expect(decisions).toEqual([
         "queued:",
@@ -506,7 +511,7 @@ describe("webhook event recording", () => {
       const response = await postGitea(app, payload, "pull_request");
       expect(response.status).toBe(200);
 
-      const events = getRecentWebhookEvents(store, 10);
+      const events = (await getRecentWebhookEvents(store, 10));
       expect(events).toHaveLength(1);
       expect(events[0]!.decision).toBe("ignored");
       expect(events[0]!.reason).toBe("ignored_by_label");

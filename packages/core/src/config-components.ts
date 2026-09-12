@@ -690,9 +690,10 @@ export const CONFIG_FIELD_INVENTORY: readonly ConfigFieldSpec[] = [
   g("admin.session_ttl_seconds", { t: "ZodNumber", d: 86400, own: "bootstrap", con: "packages/server/src/admin-auth.ts", wir: true, ui: "number" }),
 
   // ------------------------------------------------------- storage (bootstrap)
-  g("storage.database.kind", { t: "ZodEnum", d: "sqlite", own: "bootstrap", cap: "postgres requires the P2 store service", con: "packages/server/src/bootstrap.ts store wiring", wir: true, st: "postgres kind is rejected at bootstrap until P2", ui: "select" }),
+  g("storage.database.kind", { t: "ZodEnum", d: "sqlite", own: "bootstrap", cap: "postgres requires the P2 store service", con: "packages/server/src/bootstrap.ts store wiring", wir: true, st: "sqlite/postgres both wired by the P2 store service", ui: "select" }),
   g("storage.database.sqlite.path", { t: "ZodString", d: "/app/data/aicr.sqlite", own: "bootstrap", con: "packages/store/src/database.ts", wir: true, ui: "text" }),
-  g("storage.database.postgres.url_env", { t: "ZodString", own: "bootstrap", wir: false, st: "schema-only until the P2 PostgreSQL store", ui: "secret-ref" }),
+  g("storage.database.migrate", { t: "ZodEnum", d: "auto", own: "bootstrap", con: "packages/core/src/config-store-factory.ts + packages/cli/src/migrate.ts", wir: true, st: "auto/verify startup gate (M19)", ui: "select" }),
+  g("storage.database.postgres.url_env", { t: "ZodString", own: "bootstrap", con: "packages/core/src/config-store-factory.ts + packages/store pg backend", wir: true, st: "wired by the P2 PostgreSQL store", ui: "secret-ref" }),
   g("storage.cache.kind", { t: "ZodEnum", d: "memory", own: "bootstrap", con: "packages/server/src/bootstrap.ts catalog cache", wir: true, ui: "select" }),
   g("storage.cache.redis.url_env", { t: "ZodString", own: "bootstrap", con: "packages/server/src/bootstrap.ts redis wiring", wir: true, ui: "secret-ref" }),
   g("storage.cache.ttl_seconds", { t: "ZodNumber", own: "bootstrap", wir: false, st: "schema-only; no consumer reads the cache TTL", ui: "number" }),

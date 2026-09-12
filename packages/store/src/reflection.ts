@@ -2,6 +2,11 @@ import { eq, and, lt, desc } from "drizzle-orm";
 
 import { reflectionMemory } from "./schema.js";
 import type { StoreDb } from "./database.js";
+import {
+  compactReflectionMemoryPg,
+  readReflectionMemoryPg,
+  writeReflectionMemoryPg,
+} from "./reflection.pg.js";
 
 export interface ReflectionMemoryEntry {
   readonly workspaceId: string;
@@ -17,6 +22,9 @@ export async function writeReflectionMemory(
   store: StoreDb,
   entries: readonly ReflectionMemoryEntry[],
 ): Promise<void> {
+  if (store.kind === "postgres") {
+    return writeReflectionMemoryPg(store, entries);
+  }
   if (entries.length === 0) return;
 
   for (const entry of entries) {
@@ -62,6 +70,9 @@ export async function readReflectionMemory(
   workspaceId: string,
   options?: { limit?: number },
 ): Promise<ReflectionMemoryEntry[]> {
+  if (store.kind === "postgres") {
+    return readReflectionMemoryPg(store, workspaceId, options);
+  }
   const limit = options?.limit ?? 50;
   const now = Date.now();
 
@@ -94,6 +105,9 @@ export async function compactReflectionMemory(
   workspaceId: string,
   options?: { retentionDays?: number; maxEntries?: number },
 ): Promise<number> {
+  if (store.kind === "postgres") {
+    return compactReflectionMemoryPg(store, workspaceId, options);
+  }
   const retentionDays = options?.retentionDays ?? 90;
   const maxEntries = options?.maxEntries ?? 500;
   let deleted = 0;

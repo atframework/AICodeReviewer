@@ -9,10 +9,13 @@ import type { ObservabilityApiOptions } from "../src/observability-api.js";
 import { createObservabilityApi } from "../src/observability-api.js";
 import { createLiveRunRegistry } from "../src/live-runs.js";
 import type { AdminAuthConfig } from "../src/admin-auth.js";
-import { createAdminSession } from "../src/admin-auth.js";
+import { createMemoryConfigStore } from "@aicr/core";
+
+import { createAdminSession, type AdminAuthContext } from "../src/admin-auth.js";
 
 let tmpDir: string;
 let store: StoreDb;
+let sessionStore: ReturnType<typeof createMemoryConfigStore>;
 let app: ReturnType<typeof createObservabilityApi>;
 let authToken: string;
 
@@ -27,14 +30,17 @@ beforeEach(async () => {
   mkdirSync(tmpDir, { recursive: true });
   store = createStoreDb(join(tmpDir, "test.db"));
 
+  sessionStore = createMemoryConfigStore();
   const options: ObservabilityApiOptions = {
     store,
     adminAuth: ADMIN_CONFIG,
+    sessionStore,
   };
 
   app = createObservabilityApi(options);
 
-  const session = createAdminSession(ADMIN_CONFIG, "admin", "test-password");
+  const authContext: AdminAuthContext = { config: ADMIN_CONFIG, sessions: sessionStore };
+  const session = await createAdminSession(authContext, "admin", "test-password");
   authToken = session!.token;
 });
 
@@ -391,7 +397,7 @@ describe("observability API", () => {
       headCommittedAt: "2026-09-10T08:00:00.000Z",
       metrics: { promptTokens: 1000, totalTokens: 1200, cachedPromptTokens: 600, requestCount: 3 },
     });
-    const liveApp = createObservabilityApi({ store, adminAuth: ADMIN_CONFIG, liveRuns: registry });
+    const liveApp = createObservabilityApi({ store, adminAuth: ADMIN_CONFIG, sessionStore, liveRuns: registry });
 
     const res = await liveApp.fetch(new Request("http://localhost/runs/live", {
       headers: { Authorization: `Bearer ${authToken}` },

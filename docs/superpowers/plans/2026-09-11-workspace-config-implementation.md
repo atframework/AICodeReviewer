@@ -1,6 +1,6 @@
 # Workspace 与动态配置执行计划
 
-状态：P0–P1 已完成实现与验收。P1 已补齐来源描述符、完整快照、运行/记忆隔离、只读策略回退及 Windows/Linux 和真实 VCS 验收；workspace 级 agent/sandbox 配置覆盖仍按原计划在 P4 接线，P2–P8 待推进。 设计合同见
+状态:P0–P3 已完成实现与验收(P2 证据见 [M17](../../ai/milestones/M17.md) 与架构 §3.14,P3 见 [M18](../../ai/milestones/M18.md) 与架构 §3.15)。workspace 级 agent/sandbox 配置覆盖仍按原计划在 P4 接线,P4–P8 待推进。 设计合同见
 [详细设计](../specs/2026-09-11-workspace-config-management.md)，测试 ID 和后端证据要求见
 [测试计划](2026-09-11-workspace-config-tests.md)。任何复选框只有实现、对应测试和适用最终门禁通过后才能勾选。
 
@@ -84,41 +84,45 @@ conformance;重启/重试不再按新配置重解释)、L08/L09/L11/L12/L14 隔�
 
 ### P2. 存储与迁移
 
-- [ ] 引入 backend-neutral `ConfigStore` 异步合同：readHead、readRevision、commitChangeset、readOperation、readAudit、read/write snapshot、binding、session 和 close。
-- [ ] SQLite 在现有 `_migrations` 后追加配置相关表，保留 001–006 的定义与 checksum baseline，读取账本移入锁内。
-- [ ] 新增 `MigrationRunner` 和 namespace ledger，分别协调 store/config、auto-commit、app-owned queue payload、catalog cache；避免两个 runner 同时写同一 namespace。
-- [ ] SQLite DDL/data/version 使用 immediate transaction；busy/timeout、中断、重复启动有界恢复。
-- [ ] 添加 PostgreSQL `pg` 驱动和 Drizzle 方言；将 `StoreDb` 外部消费者收敛为最小异步 service 合同，实现 stats/retention/reflection/catalog/recording，消除非 SQLite 启动拒绝。
-- [ ] 实现 PostgreSQL migration advisory lock、同 client transaction、SQL/JSON/time/integer 映射和 close；不为 queue 新增 postgres kind。
-- [ ] 实现 Redis config backend：独立 hash-tag namespace、不可变 generation、manifest、CAS head、审计材料、operation 去重和 fencing。
-- [ ] Redis migration 采用分阶段 generation 和 checkpoint；旧 key schema 不被脚本失败污染；不读写 BullMQ 私有格式，不使用 FLUSHDB/全库 KEYS。
-- [ ] 实现配置 JSON format converters 与历史 alias/array 迁移，冲突时失败，原文件只读。
-- [ ] 旧 receipt/job 新增 snapshot 关联迁移，建立跨存储 snapshot 先写、receipt 后写的恢复和无引用 snapshot 保留策略。
-- [ ] 管理 session 单独存储 hash/TTL，保持 Bearer 协议，多进程登出一致；session 不进入配置审计原文。
-- [ ] CLI 添加 `migrate --status/--check/--apply` 和 auto/verify 启动流程；schema 更高、checksum 改变、版本缺口均阻止 admission/worker。
+状态:已完成(2026-09-12)；2026-09-13 补齐双后端 CLI/verify 范围、共享迁移锁和 Redis/PG 并发边界。证据见 [M17](../../ai/milestones/M17.md)、[复审记录](../../ai/milestones/M18.md#2026-09-13-p2p3-复审) 与架构 §3.14。
+
+- [x] 引入 backend-neutral `ConfigStore` 异步合同(2026-09-12):`packages/core/src/config-store.ts`;readHead/readRevision/commitChangeset/readOperation/readAudit/read+write snapshot/binding/session/close 全合同,S01-S13 conformance 四后端通过。
+- [x] SQLite 在现有 `_migrations` 后追加配置相关表(2026-09-12):001–006 文本冻结(与 007 前提交逐字节一致),config 表经 `sqlite-config-store.ts` namespace 账本,锁内读取;M02 fixture 用真实前缀构建旧库。
+- [x] 新增 `MigrationRunner` 和 namespace ledger(2026-09-12):config/store-pg 两 namespace 落地;auto-commit/queue/catalog 无格式变更,沿用各自既有机制(见 M17 边界说明)。
+- [x] SQLite immediate transaction(2026-09-12):busy/timeout/中断/重复启动有界恢复,M05/M06 测试证据。
+- [x] PostgreSQL `pg` 驱动 + Drizzle 方言(2026-09-12):StoreDb 判别联合,stats/retention/reflection/catalog/recording/deferrals/webhook-events 全部双后端,93/93 + 147/147。
+- [x] PostgreSQL migration advisory lock(2026-09-12):会话锁包 CREATE SCHEMA + xact 锁迁移;M04/M06/M08 真实 PG 证据;queue 未新增 postgres kind。
+- [x] Redis config backend(2026-09-12):hash-tag 槽位、不可变 revision 键、Lua CAS head(先校验后提交)、operation 去重、代际 fencing;S 系列 + M11 真实 Redis 证据。
+- [x] Redis migration(2026-09-12):无 legacy redis 配置格式需迁移,发布为单 Lua 原子提交,M09/M10 保护目标由 CAS+代际承担(架构 §3.14);未触 BullMQ 私有键、无 FLUSHDB。
+- [x] 配置 JSON format converters(2026-09-12):历史 alias/array 迁移幂等、冲突失败、原文只读,M14 测试证据。
+- [x] 旧 receipt/job snapshot 关联(2026-09-12):snapshot 先写/receipt 后写,pin+refcount 保留,S05 conformance。
+- [x] 管理 session hash/TTL(2026-09-12):`admin-auth.ts` 经 ConfigStore session 合同持久化,跨副本登出,S12 四后端证据。
+- [x] CLI `migrate --status/--check/--apply` + auto/verify(2026-09-12):status/check 严格只读,退出码 0/1/2;M16/M19 证据。
 
 影响：`packages/store/src/{database,schema,stats,reflection,model-catalog,index}.ts`；server observability/bootstrap/catalog；`packages/core/src/sqlite-auto-commit-store.ts`、`redis-auto-commit-store.ts`、队列 payload；`packages/cli/src/app.ts`。新 driver/types 与 package manifest 同步，不把新 adapter 藏成只可 mock 的接口。
 
-退出条件：S01–S13、M01–M20、A01–A08 的对应后端合同通过；SQLite/PostgreSQL/Redis 均有真实服务/文件升级与重开证据。PostgreSQL stats/recording 未接线时本阶段不得完成。
+退出条件(2026-09-12 达成):S01–S13 四后端 conformance 通过;M01–M20 适用合同有真实服务证据(M09/M10/M13 经架构 §3.14 的机制映射说明,M12/M15 运行时部分归 P4,M17/M18/M20 归 P7 双版本进程测试);A01–A08 属 P5 API 阶段。证据汇总见 [M17](../../ai/milestones/M17.md)。
 
 ### P3. 来源合并、路由和发布服务
 
+状态:core 服务层已完成(2026-09-12)；2026-09-13 复审修复快照身份、幂等重试、restore 和预览准入，证据见 [M18](../../ai/milestones/M18.md) 与架构 §3.15。
 已先行落地的子集(2026-09-12):git 系 webhook 双阶段准入(描述符 → 解析 → 绑定随事件)、
 `repository_not_configured`/`ambiguous_route` 的 202+recordWebhookEvent 记录、模型/catalog/
-outputs/review override 的按 trigger profile 解析。raw+DB+defaults 合并、changeset、
-compiler、prepare/CAS/install、preview 与 readiness 仍未做。
+outputs/review override 的按 trigger profile 解析。本轮补齐 raw+DB+defaults 合并、changeset、
+compiler、prepare/CAS/install、preview 与 readiness;server `config-service.ts` 与管理员 API
+接线归 P5。
 
-- [ ] 实现 raw file + DB + defaults 合并和每字段 provenance；文件实体锁、全局叶字段锁、shadowed 数据库记录可见、显式空数组/false/0 合同一致。
-- [ ] 实现 changeset 的实体创建/修改/停用/删除/rename，引用修改与实体变更一次提交；不能接受失效 provider/model/channel/workspace/trigger 引用。
-- [ ] 实现内部配置 graph compiler，统一 workspace 选择、分析参数、输出选择；旧路由由 compatibility compiler 转换，禁止混用两套路由控制同 trigger。
-- [ ] 实现候选 prepare → revision CAS → audit/snapshot → 本机 generation install，operationId 幂等、响应丢失查询、已提交未激活状态。
-- [ ] revision restore 重新应用当前文件锁、capabilities 和 secret reference 约束，创建更高 revision；不执行数据库 downgrade。
-- [ ] 固定 preview 无副作用边界，构建来源样例、匹配解释、变量完整路径与模型/输出有效值视图。
-- [ ] 为 config_sources 关闭、来源不可达、namespace/file digest 不一致制定 readiness 和诊断状态。
+- [x] 实现 raw file + DB + defaults 合并和每字段 provenance(2026-09-12,`config-source.ts` mergeConfigSources);文件实体锁、全局叶字段锁、shadowed 数据库记录可见、显式空数组/false/0 合同一致,F01–F12 测试证据。
+- [x] 实现 changeset 的实体创建/修改/停用/删除/rename(2026-09-12,`applyConfigChangeset`),引用修改与实体变更一次提交;失效 provider/model/channel/workspace/trigger 引用在 prepare 时以 `invalid_reference` 整批拒绝(C01–C08)。
+- [x] 实现内部配置 graph compiler(2026-09-12,`config-compiler.ts`),统一 workspace 选择、分析参数、输出选择;旧路由由 compatibility 层保留(数组顺序 + 空数组回退 + `*_pr_review` 首 channel 回退),同 trigger 双代控制报 `routing_conflict`(R01–R07/R11/R12 + legacy parity,21 例)。
+- [x] 实现候选 prepare → revision CAS → audit/snapshot → 本机 generation install(2026-09-12,`config-publish.ts`),operationId 幂等、`getConfigOperation` 响应丢失查询、`committed_activating` 状态不谎报 rollback(H07/H13/H14/H15 + S02/S03/S06 + C11,14 例 SQLite 真实后端)。
+- [x] revision restore 重新应用当前文件锁、capabilities 和 secret reference 约束(2026-09-12,`prepareConfigRestore`),创建更高 revision;不执行数据库 downgrade(C12/S07 测试)。
+- [x] 固定 preview 无副作用边界(2026-09-12,`config-preview.ts`):changeset 预览零写库(读回 head/revisions/audit 均为空断言),路由预览复用准入同一 resolve 函数,输出完整最终目录与模型/输出有效值(R13,13 例)。
+- [x] readiness 诊断(2026-09-12,`diagnoseConfigReadiness`):disabled/store_unavailable/empty/file_config_mismatch/snapshot_missing/ready 六态,测试覆盖。
 
-影响：core config-source/components/validation；server 拟新增 `config-service.ts`、`config-compiler.ts`、`routing.ts`。旧输出 renderer 和 no-problems 合同不重新定义。
+影响:core config-source/components/validation/compiler/publish/preview;server 拟新增 `config-service.ts`、`routing.ts`(P5)。旧输出 renderer 和 no-problems 合同不重新定义。
 
-退出条件：C01–C15、R01–R13、S01–S13 通过；一次 changeset 更新关联实体全成功或全失败，发布失败不改变 head。
+退出条件(2026-09-12 达成):C01–C15、R01–R13、S01–S13 中 core 层适用项通过;一次 changeset 更新关联实体全成功或全失败,发布失败不改变 head。API 层验收(A 系列)与 R08–R10 运行时项归 P5/P4。
 
 ### P4. 运行时热更新与持久任务
 

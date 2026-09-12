@@ -1,4 +1,19 @@
+/**
+ * Admin session authentication (P2 item 97).
+ *
+ * Sessions are durable and multi-process consistent: only the sha256 hash of
+ * the bearer token is persisted (S12 — a token is never stored plaintext),
+ * with the TTL enforced at read time. Login on one replica is visible to all
+ * others, and logout revokes immediately everywhere because both operations
+ * hit the shared session store (any ConfigStore backend).
+ *
+ * The Bearer wire protocol is unchanged: clients see opaque tokens and the
+ * same 401 responses; only the storage layer moved off the process-local Map.
+ */
+
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+
+import type { AdminSessionRecord } from "@aicr/core";
 import type { Context, Next } from "hono";
 
 export interface AdminAuthConfig {
@@ -13,14 +28,37 @@ export interface AdminSession {
   readonly expiresAt: number;
 }
 
-const SESSION_TOKEN_BYTES = 32;
-const sessions = new Map<string, AdminSession>();
+/**
+ * Durable session storage. Structurally the session slice of the core
+ * ConfigStore contract; any backend (memory/sqlite/postgres/redis) satisfies
+ * it, which keeps tests on the memory backend honest about the same semantics.
+ */
+export interface AdminSessionStore {
+  saveAdminSession(record: AdminSessionRecord): Promise<void>;
+  readAdminSession(tokenHash: string, now: number): Promise<AdminSessionRecord | null>;
+  deleteAdminSession(tokenHash: string): Promise<void>;
+  deleteExpiredAdminSessions(now: number, limit?: number): Promise<number>;
+}
 
+export interface AdminAuthContext {
+  readonly config: AdminAuthConfig;
+  readonly sessions: AdminSessionStore;
+  /** Injectable clock; defaults to wall time. */
+  readonly now?: (() => number) | undefined;
+}
+
+const SESSION_TOKEN_BYTES = 32;
 const BEARER_PREFIX = "bearer ";
 const SHA256_PREFIX = "sha256:";
+const EXPIRED_SWEEP_LIMIT = 500;
 
 function hashPassword(password: string): string {
   return `${SHA256_PREFIX}${createHash("sha256").update(password).digest("hex")}`;
+}
+
+/** Token identity seen by the store; the plaintext token never persists. */
+export function hashAdminSessionToken(token: string): string {
+  return createHash("sha256").update(token).digest("hex");
 }
 
 function constantTimeStringEqual(left: string, right: string): boolean {
@@ -34,7 +72,16 @@ function verifyPassword(input: string, stored: string, storedIsHash: boolean): b
   return constantTimeStringEqual(inputSecret, stored);
 }
 
-export function createAdminSession(config: AdminAuthConfig, username: string, password: string): AdminSession | null {
+function clockOf(context: AdminAuthContext): () => number {
+  return context.now ?? Date.now;
+}
+
+export async function createAdminSession(
+  context: AdminAuthContext,
+  username: string,
+  password: string,
+): Promise<AdminSession | null> {
+  const { config } = context;
   if (username !== config.username) return null;
 
   const storedSecret = config.passwordHash ?? config.password;
@@ -42,29 +89,26 @@ export function createAdminSession(config: AdminAuthConfig, username: string, pa
   if (!verifyPassword(password, storedSecret, config.passwordHash !== undefined)) return null;
 
   const token = randomBytes(SESSION_TOKEN_BYTES).toString("hex");
-  const session: AdminSession = {
-    token,
-    expiresAt: Date.now() + config.sessionTtlSeconds * 1000,
-  };
-  sessions.set(token, session);
-  return session;
+  const now = clockOf(context)();
+  const expiresAt = now + config.sessionTtlSeconds * 1000;
+  await context.sessions.saveAdminSession({
+    tokenHash: hashAdminSessionToken(token),
+    createdAt: now,
+    expiresAt,
+  });
+  return { token, expiresAt };
 }
 
-export function validateAdminSession(token: string): boolean {
-  const session = sessions.get(token);
-  if (!session) return false;
-  if (Date.now() > session.expiresAt) {
-    sessions.delete(token);
-    return false;
-  }
-  return true;
+export async function validateAdminSession(context: AdminAuthContext, token: string): Promise<boolean> {
+  const record = await context.sessions.readAdminSession(hashAdminSessionToken(token), clockOf(context)());
+  return record !== null;
 }
 
-export function revokeAdminSession(token: string): void {
-  sessions.delete(token);
+export async function revokeAdminSession(context: AdminAuthContext, token: string): Promise<void> {
+  await context.sessions.deleteAdminSession(hashAdminSessionToken(token));
 }
 
-export function createAdminAuthMiddleware(_config: AdminAuthConfig) {
+export function createAdminAuthMiddleware(context: AdminAuthContext) {
   return async (c: Context, next: Next): Promise<Response | void> => {
     const authorization = c.req.header("authorization");
     if (!authorization || !authorization.toLowerCase().startsWith(BEARER_PREFIX)) {
@@ -72,7 +116,7 @@ export function createAdminAuthMiddleware(_config: AdminAuthConfig) {
     }
 
     const token = authorization.slice(BEARER_PREFIX.length);
-    if (!validateAdminSession(token)) {
+    if (!(await validateAdminSession(context, token))) {
       return c.json({ error: "unauthorized", message: "Invalid or expired session." }, 401);
     }
 
@@ -80,13 +124,9 @@ export function createAdminAuthMiddleware(_config: AdminAuthConfig) {
   };
 }
 
-export function cleanupExpiredSessions(): void {
-  const now = Date.now();
-  for (const [token, session] of sessions) {
-    if (now > session.expiresAt) {
-      sessions.delete(token);
-    }
-  }
+/** Bounded sweep of expired rows; reads already treat expired as absent. */
+export async function cleanupExpiredSessions(context: AdminAuthContext): Promise<number> {
+  return context.sessions.deleteExpiredAdminSessions(clockOf(context)(), EXPIRED_SWEEP_LIMIT);
 }
 
 export function resolveAdminAuthConfig(

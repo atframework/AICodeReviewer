@@ -11,10 +11,11 @@ database is created automatically when admin auth is configured, when
 enabled.
 
 :::note[Backends are wired in to different degrees]
-Only `sqlite` is wired into the runtime database today (dashboard stats, model
-catalog, reflection memory); `postgres` is reserved. The `redis` cache is wired
-in and used by the model catalog's Redis backend. The `s3` object-store fields
-are reserved — they validate but nothing consumes them yet.
+Both `sqlite` and `postgres` are wired into the runtime database (dashboard
+stats, model catalog, reflection memory, review deferrals, webhook events).
+The `redis` cache is wired in and used by the model catalog's Redis backend.
+The `s3` object-store fields are reserved — they validate but nothing consumes
+them yet.
 :::
 
 ```yaml
@@ -37,13 +38,21 @@ storage:
 
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
-| `kind` | enum | `sqlite` | `sqlite` (available) or `postgres` (reserved). |
+| `kind` | enum | `sqlite` | `sqlite` or `postgres`. |
 | `sqlite.path` | string | `/app/data/aicr.sqlite` | SQLite database file path. |
-| `postgres.url_env` | string | – | Name of the env var holding the Postgres connection URL. **Reserved** for future multi-instance deployments. |
+| `postgres.url_env` | string | – | Name of the env var holding the Postgres connection URL. |
+| `migrate` | enum | `auto` | Startup schema mode: `auto` applies pending steps; `verify` refuses a missing, pending, drifted or newer schema without applying migrations. |
 
 The SQLite database is created automatically when needed. It stores the
 observability stats, the keyed `model_catalog` table (when the catalog uses
-the SQLite backend), and reflection memory entries.
+the SQLite backend), reflection memory entries, deferred reviews, received
+webhook events, and the dynamic-config revision/session tables. The Postgres
+backend serves the same contracts through a dedicated schema. Schema upgrades
+use `schema_migrations` for config and PostgreSQL business tables; SQLite
+business tables retain their historical name-only `_migrations` ledger.
+`aicr migrate --status|--check|--apply` inspects or upgrades both `config` and
+`store` namespaces on SQLite and PostgreSQL without starting the server (see
+[CLI Reference](/en/reference/cli/)).
 
 ## `storage.cache`
 
@@ -90,6 +99,6 @@ features.
 
 | Backend | Wired in | Reserved | Notes |
 | --- | --- | --- | --- |
-| database | `sqlite` | `postgres` | SQLite at `/app/data/aicr.sqlite` by default. |
+| database | `sqlite`, `postgres` | — | SQLite at `/app/data/aicr.sqlite` by default; Postgres via `postgres.url_env`. |
 | cache | `memory`, `redis`, `none` | — | Redis reused by the model catalog Redis backend. |
 | object | `filesystem` | `s3` | Filesystem at `/app/data/objects` by default. |

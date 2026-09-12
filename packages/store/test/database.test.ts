@@ -3,7 +3,7 @@ import { mkdirSync, rmSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
-import { createStoreDb, closeStoreDb, type StoreDb } from "../src/database.js";
+import { createStoreDb, closeStoreDb, type SqliteStoreDb } from "../src/database.js";
 import {
   insertReviewRun,
   getOverviewStats,
@@ -22,41 +22,41 @@ import {
 } from "../src/reflection.js";
 
 let tmpDir: string;
-let store: StoreDb;
+let store: SqliteStoreDb;
 
-beforeEach(() => {
+beforeEach(async () => {
   tmpDir = join(tmpdir(), `aicr-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
   mkdirSync(tmpDir, { recursive: true });
   store = createStoreDb(join(tmpDir, "test.db"));
 });
 
-afterEach(() => {
-  closeStoreDb(store);
+afterEach(async () => {
+  (await closeStoreDb(store));
   if (existsSync(tmpDir)) {
     rmSync(tmpDir, { recursive: true, force: true });
   }
 });
 
 describe("store database", () => {
-  it("upgrades existing runs with nullable VCS metadata and reopens idempotently", () => {
-    insertReviewRun(store, { id: "old-run", eventId: "evt", workspaceId: "ws", status: "succeeded",
-      branch: "main", headSha: "old-sha" });
+  it("upgrades existing runs with nullable VCS metadata and reopens idempotently", async () => {
+    (await insertReviewRun(store, { id: "old-run", eventId: "evt", workspaceId: "ws", status: "succeeded",
+      branch: "main", headSha: "old-sha" }));
     store.sqlite.exec(`
       ALTER TABLE review_runs DROP COLUMN vcs_kind;
       ALTER TABLE review_runs DROP COLUMN head_committed_at;
       DELETE FROM _migrations WHERE name = '009_review_run_vcs_stamp';
     `);
-    closeStoreDb(store);
+    (await closeStoreDb(store));
     store = createStoreDb(join(tmpDir, "test.db"));
-    expect(getRecentRuns(store, 1)[0]).toMatchObject({ id: "old-run", branch: "main", headSha: "old-sha",
+    expect((await getRecentRuns(store, 1))[0]).toMatchObject({ id: "old-run", branch: "main", headSha: "old-sha",
       vcsKind: null, headCommittedAt: null });
-    closeStoreDb(store);
+    (await closeStoreDb(store));
     store = createStoreDb(join(tmpDir, "test.db"));
     expect(store.sqlite.prepare("SELECT COUNT(*) AS n FROM _migrations WHERE name = ?")
       .get("009_review_run_vcs_stamp")).toEqual({ n: 1 });
-    expect(getRecentRuns(store, 1)).toHaveLength(1);
+    expect((await getRecentRuns(store, 1))).toHaveLength(1);
   });
-  it("creates and initializes database with migrations", () => {
+  it("creates and initializes database with migrations", async () => {
     const tables = store.sqlite
       .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
       .all()
@@ -70,13 +70,13 @@ describe("store database", () => {
     expect(tables).toContain("_migrations");
   });
 
-  it("enables WAL mode", () => {
+  it("enables WAL mode", async () => {
     const result = store.sqlite.pragma("journal_mode");
     const row = result[0] as Record<string, string>;
     expect(row.journal_mode).toBe("wal");
   });
 
-  it("enables foreign keys", () => {
+  it("enables foreign keys", async () => {
     const result = store.sqlite.pragma("foreign_keys");
     const row = result[0] as Record<string, number>;
     expect(row.foreign_keys).toBe(1);
@@ -84,8 +84,8 @@ describe("store database", () => {
 });
 
 describe("stats insert and query", () => {
-  it("inserts a review run and queries overview stats", () => {
-    insertReviewRun(store, {
+  it("inserts a review run and queries overview stats", async () => {
+    (await insertReviewRun(store, {
       id: "run-1",
       eventId: "evt-1",
       workspaceId: "ws-1",
@@ -119,9 +119,9 @@ describe("stats insert and query", () => {
         costUsd: 0.05,
         latencyMs: 3000,
       }],
-    });
+    }));
 
-    const stats = getOverviewStats(store);
+    const stats = (await getOverviewStats(store));
     expect(stats.reviewCount).toBe(1);
     expect(stats.successCount).toBe(1);
     expect(stats.failureCount).toBe(0);
@@ -142,8 +142,8 @@ describe("stats insert and query", () => {
     expect(stats.promptTokenEstimateTotal).toBe(850);
   });
 
-  it("inserts a failed run", () => {
-    insertReviewRun(store, {
+  it("inserts a failed run", async () => {
+    (await insertReviewRun(store, {
       id: "run-fail",
       eventId: "evt-fail",
       workspaceId: "ws-1",
@@ -155,19 +155,19 @@ describe("stats insert and query", () => {
       finishedAt: new Date(),
       durationMs: 1000,
       error: "Something went wrong",
-    });
+    }));
 
-    const stats = getOverviewStats(store);
+    const stats = (await getOverviewStats(store));
     expect(stats.reviewCount).toBe(1);
     expect(stats.failureCount).toBe(1);
     expect(stats.successCount).toBe(0);
   });
 
-  it("queries time-windowed stats", () => {
+  it("queries time-windowed stats", async () => {
     const now = new Date();
     const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000);
 
-    insertReviewRun(store, {
+    (await insertReviewRun(store, {
       id: "run-old",
       eventId: "evt-old",
       workspaceId: "ws-1",
@@ -179,9 +179,9 @@ describe("stats insert and query", () => {
       finishedAt: yesterday,
       durationMs: 100,
       problemCount: 1,
-    });
+    }));
 
-    insertReviewRun(store, {
+    (await insertReviewRun(store, {
       id: "run-new",
       eventId: "evt-new",
       workspaceId: "ws-1",
@@ -193,18 +193,18 @@ describe("stats insert and query", () => {
       finishedAt: now,
       durationMs: 200,
       problemCount: 2,
-    });
+    }));
 
-    const all = getOverviewStats(store);
+    const all = (await getOverviewStats(store));
     expect(all.reviewCount).toBe(2);
 
-    const today = getOverviewStats(store, new Date(now.getTime() - 12 * 60 * 60 * 1000));
+    const today = (await getOverviewStats(store, new Date(now.getTime() - 12 * 60 * 60 * 1000)));
     expect(today.reviewCount).toBe(1);
     expect(today.problemTotal).toBe(2);
   });
 
-  it("queries project stats", () => {
-    insertReviewRun(store, {
+  it("queries project stats", async () => {
+    (await insertReviewRun(store, {
       id: "run-1",
       eventId: "evt-1",
       workspaceId: "ws-1",
@@ -215,9 +215,9 @@ describe("stats insert and query", () => {
       status: "succeeded",
       startedAt: new Date(),
       problemCount: 5,
-    });
+    }));
 
-    insertReviewRun(store, {
+    (await insertReviewRun(store, {
       id: "run-2",
       eventId: "evt-2",
       workspaceId: "ws-2",
@@ -228,15 +228,15 @@ describe("stats insert and query", () => {
       status: "succeeded",
       startedAt: new Date(),
       problemCount: 0,
-    });
+    }));
 
-    const projects = getProjectStats(store);
+    const projects = (await getProjectStats(store));
     expect(projects.length).toBe(2);
     expect(projects.map((project) => project.repoRef).sort()).toEqual(["owner/repo-a", "owner/repo-b"]);
   });
 
-  it("queries project stats with code, output, and LLM aggregates", () => {
-    insertReviewRun(store, {
+  it("queries project stats with code, output, and LLM aggregates", async () => {
+    (await insertReviewRun(store, {
       id: "run-project-aggregates",
       eventId: "evt-project-aggregates",
       workspaceId: "ws-1",
@@ -265,13 +265,13 @@ describe("stats insert and query", () => {
         cachedTokens: 120,
         costUsd: 0.03,
       }],
-    });
+    }));
 
-    insertOutputEvents(store, "run-project-aggregates", [
+    (await insertOutputEvents(store, "run-project-aggregates", [
       { channelKind: "gitea_problem_issue", eventType: "issue_created", issueCreated: true },
-    ]);
+    ]));
 
-    const [project] = getProjectStats(store);
+    const [project] = (await getProjectStats(store));
     expect(project).toMatchObject({
       workspaceId: "ws-1",
       triggerName: "gitea",
@@ -294,8 +294,8 @@ describe("stats insert and query", () => {
     expect(project!.costUsdTotal).toBeCloseTo(0.03);
   });
 
-  it("queries provider+model stats", () => {
-    insertReviewRun(store, {
+  it("queries provider+model stats", async () => {
+    (await insertReviewRun(store, {
       id: "run-1",
       eventId: "evt-1",
       workspaceId: "ws-1",
@@ -308,9 +308,9 @@ describe("stats insert and query", () => {
         { providerId: "openai", modelId: "gpt-4o", tokensIn: 100, tokensOut: 50, tokensTotal: 150, cachedTokens: 40, cacheCreationTokens: 10, costUsd: 0.01 },
         { providerId: "anthropic", modelId: "claude-3", tokensIn: 200, tokensOut: 100, tokensTotal: 300 },
       ],
-    });
+    }));
 
-    const providers = getProviderModelStats(store);
+    const providers = (await getProviderModelStats(store));
     expect(providers.length).toBe(2);
     const openai = providers.find((p) => p.providerId === "openai");
     expect(openai).toBeDefined();
@@ -323,10 +323,10 @@ describe("stats insert and query", () => {
     expect(openai!.costUsd).toBeCloseTo(0.01);
   });
 
-  it("queries provider+model stats filtered by since window", () => {
+  it("queries provider+model stats filtered by since window", async () => {
     const oldDate = new Date(Date.now() - 10 * 24 * 60 * 60 * 1000);
     const recentDate = new Date();
-    insertReviewRun(store, {
+    (await insertReviewRun(store, {
       id: "run-old",
       eventId: "evt-old",
       workspaceId: "ws-1",
@@ -338,8 +338,8 @@ describe("stats insert and query", () => {
       llmUsages: [
         { providerId: "openai", modelId: "gpt-4o", tokensIn: 100, tokensOut: 50, tokensTotal: 150, costUsd: 0.01 },
       ],
-    });
-    insertReviewRun(store, {
+    }));
+    (await insertReviewRun(store, {
       id: "run-recent",
       eventId: "evt-recent",
       workspaceId: "ws-1",
@@ -352,10 +352,10 @@ describe("stats insert and query", () => {
         { providerId: "openai", modelId: "gpt-4o", tokensIn: 500, tokensOut: 200, tokensTotal: 700, costUsd: 0.05 },
         { providerId: "anthropic", modelId: "claude-3", tokensIn: 300, tokensOut: 100, tokensTotal: 400 },
       ],
-    });
+    }));
 
     const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
-    const providers = getProviderModelStats(store, since);
+    const providers = (await getProviderModelStats(store, since));
     const openai = providers.find((p) => p.providerId === "openai");
     expect(openai).toBeDefined();
     expect(openai!.requestCount).toBe(1);
@@ -365,15 +365,15 @@ describe("stats insert and query", () => {
     expect(anthropic).toBeDefined();
     expect(anthropic!.tokensTotal).toBe(400);
 
-    const allTime = getProviderModelStats(store);
+    const allTime = (await getProviderModelStats(store));
     const openaiAll = allTime.find((p) => p.providerId === "openai");
     expect(openaiAll!.requestCount).toBe(2);
     expect(openaiAll!.tokensTotal).toBe(850);
   });
 
-  it("queries recent runs", () => {
+  it("queries recent runs", async () => {
     for (let i = 0; i < 5; i++) {
-      insertReviewRun(store, {
+      (await insertReviewRun(store, {
         id: `run-${i}`,
         eventId: `evt-${i}`,
         workspaceId: "ws-1",
@@ -389,10 +389,10 @@ describe("stats insert and query", () => {
             { providerId: "openai", modelId: "gpt-4o", tokensIn: 500, tokensOut: 100, tokensTotal: 600, cachedTokens: 300, cacheCreationTokens: 100 },
           ],
         } : {}),
-      });
+      }));
     }
 
-    const runs = getRecentRuns(store, 3);
+    const runs = (await getRecentRuns(store, 3));
     expect(runs.length).toBe(3);
     expect(runs[0]!.id).toBe("run-0");
     expect(runs[0]!.llmUsage).toEqual({
@@ -405,8 +405,8 @@ describe("stats insert and query", () => {
     expect(runs[1]!.llmUsage).toBeUndefined();
   });
 
-  it("round-trips the VCS stamp on recent runs", () => {
-    insertReviewRun(store, {
+  it("round-trips the VCS stamp on recent runs", async () => {
+    (await insertReviewRun(store, {
       id: "run-stamped",
       eventId: "evt-stamped",
       workspaceId: "ws-1",
@@ -419,8 +419,8 @@ describe("stats insert and query", () => {
       headSha: "0123456789abcdef",
       vcsKind: "git",
       headCommittedAt: new Date("2026-09-01T08:30:00.000Z"),
-    });
-    insertReviewRun(store, {
+    }));
+    (await insertReviewRun(store, {
       id: "run-unstamped",
       eventId: "evt-unstamped",
       workspaceId: "ws-1",
@@ -429,9 +429,9 @@ describe("stats insert and query", () => {
       providerModel: "gpt-4o",
       status: "succeeded",
       startedAt: new Date(),
-    });
+    }));
 
-    const runs = getRecentRuns(store, 2);
+    const runs = (await getRecentRuns(store, 2));
     const stamped = runs.find((run) => run.id === "run-stamped");
     expect(stamped).toMatchObject({
       branch: "main",
@@ -448,8 +448,8 @@ describe("stats insert and query", () => {
     });
   });
 
-  it("updates run status", () => {
-    insertReviewRun(store, {
+  it("updates run status", async () => {
+    (await insertReviewRun(store, {
       id: "run-update",
       eventId: "evt",
       workspaceId: "ws-1",
@@ -458,22 +458,22 @@ describe("stats insert and query", () => {
       providerModel: null,
       status: "queued",
       startedAt: new Date(),
-    });
+    }));
 
-    updateRunStatus(store, "run-update", "succeeded", {
+    (await updateRunStatus(store, "run-update", "succeeded", {
       problemCount: 2,
       durationMs: 3000,
       finishedAt: new Date(),
-    });
+    }));
 
-    const runs = getRecentRuns(store, 10);
+    const runs = (await getRecentRuns(store, 10));
     const updated = runs.find((r) => r.id === "run-update");
     expect(updated).toBeDefined();
     expect(updated!.status).toBe("succeeded");
   });
 
-  it("inserts and queries output events", () => {
-    insertReviewRun(store, {
+  it("inserts and queries output events", async () => {
+    (await insertReviewRun(store, {
       id: "run-oe",
       eventId: "evt",
       workspaceId: "ws-1",
@@ -482,12 +482,12 @@ describe("stats insert and query", () => {
       providerModel: null,
       status: "succeeded",
       startedAt: new Date(),
-    });
+    }));
 
-    insertOutputEvents(store, "run-oe", [
+    (await insertOutputEvents(store, "run-oe", [
       { channelKind: "gitea_pr_review", eventType: "problem_comment", commentCreated: true },
       { channelKind: "gitea_problem_issue", eventType: "issue_created", issueCreated: true },
-    ]);
+    ]));
 
     const count = store.sqlite
       .prepare("SELECT COUNT(*) as cnt FROM output_events WHERE run_id = ?")
@@ -497,8 +497,8 @@ describe("stats insert and query", () => {
 });
 
 describe("project lifecycle", () => {
-  it("soft-deletes projects not in active set", () => {
-    insertReviewRun(store, {
+  it("soft-deletes projects not in active set", async () => {
+    (await insertReviewRun(store, {
       id: "run-1",
       eventId: "evt",
       workspaceId: "ws-old",
@@ -507,24 +507,24 @@ describe("project lifecycle", () => {
       providerModel: null,
       status: "succeeded",
       startedAt: new Date(),
-    });
+    }));
 
-    const deleted = softDeleteMissingProjects(store, [
+    const deleted = (await softDeleteMissingProjects(store, [
       { workspaceId: "ws-active", triggerName: "active-trigger", repoRef: "" },
-    ]);
+    ]));
     expect(deleted).toBe(1);
 
-    const projects = getProjectStats(store);
+    const projects = (await getProjectStats(store));
     expect(projects.length).toBe(1);
     expect(projects[0].workspaceId).toBe("ws-old");
     expect(projects[0].isActive).toBe(false);
 
-    hardDeleteExpiredProjects(store, 0);
-    expect(getProjectStats(store).length).toBe(0);
+    (await hardDeleteExpiredProjects(store, 0));
+    expect((await getProjectStats(store)).length).toBe(0);
   });
 
-  it("hard-deletes expired projects", () => {
-    insertReviewRun(store, {
+  it("hard-deletes expired projects", async () => {
+    (await insertReviewRun(store, {
       id: "run-1",
       eventId: "evt",
       workspaceId: "ws-expired",
@@ -533,22 +533,22 @@ describe("project lifecycle", () => {
       providerModel: null,
       status: "succeeded",
       startedAt: new Date(),
-    });
+    }));
 
-    softDeleteMissingProjects(store, []);
+    (await softDeleteMissingProjects(store, []));
 
     const beforeCount = store.sqlite.prepare("SELECT COUNT(*) as cnt FROM projects WHERE deleted_at IS NOT NULL").get() as Record<string, number>;
     expect(beforeCount.cnt).toBe(1);
 
-    const hardDeleted = hardDeleteExpiredProjects(store, 0);
+    const hardDeleted = (await hardDeleteExpiredProjects(store, 0));
     expect(hardDeleted).toBe(1);
 
     const count = store.sqlite.prepare("SELECT COUNT(*) as cnt FROM projects").get() as Record<string, number>;
     expect(count.cnt).toBe(0);
   });
 
-  it("preserves active projects during soft delete", () => {
-    insertReviewRun(store, {
+  it("preserves active projects during soft delete", async () => {
+    (await insertReviewRun(store, {
       id: "run-1",
       eventId: "evt",
       workspaceId: "ws-1",
@@ -557,21 +557,21 @@ describe("project lifecycle", () => {
       providerModel: null,
       status: "succeeded",
       startedAt: new Date(),
-    });
+    }));
 
-    const deleted = softDeleteMissingProjects(store, [
+    const deleted = (await softDeleteMissingProjects(store, [
       { workspaceId: "ws-1", triggerName: "gitea", repoRef: "" },
-    ]);
+    ]));
     expect(deleted).toBe(0);
 
-    const projects = getProjectStats(store);
+    const projects = (await getProjectStats(store));
     expect(projects.length).toBe(1);
     expect(projects[0].isActive).toBe(true);
   });
 });
 
 describe("reflection memory", () => {
-  it("creates the reflection_memory table via migration", () => {
+  it("creates the reflection_memory table via migration", async () => {
     const tables = store.sqlite
       .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
       .all()

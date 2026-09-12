@@ -1,4 +1,4 @@
-import type { StoreDb } from "@aicr/store";
+import type { ReviewDeferralRow, StoreDb } from "@aicr/store";
 import {
   claimReviewDeferral,
   completeReviewDeferral,
@@ -65,6 +65,16 @@ export function computeDeferralKey(reviewEvent: ReviewEvent): string {
  * - resume claims atomically then acknowledges the handoff — once execution starts,
  *   the run lifecycle (review_runs) owns the outcome, retries included;
  * - startup recovery resets claimed rows to pending and re-arms every timer.
+ *
+ * The store contract is async (sqlite or postgres). Store operations run
+ * through one serialized queue so their relative order matches the previous
+ * synchronous call order; in-memory bookkeeping (deadlines, timers, memory
+ * fallback targets) still updates synchronously, and a generation token per
+ * key drops stale async continuations superseded by cancel/defer. On
+ * postgres the upsert itself joins the queue — concurrent same-key upserts
+ * race the not-before clamp — while on sqlite the upsert body still issues
+ * synchronously (the visibility contract below) and only its continuation
+ * queues.
  */
 export class ReviewDeferralManager {
   /** Re-entry point wired by the server app once route options are known. */
@@ -74,18 +84,32 @@ export class ReviewDeferralManager {
   private readonly timers = new Map<string, NodeJS.Timeout>();
   private readonly memoryTargets = new Map<string, DeferredTriggerTarget>();
   private readonly deadlines = new Map<string, number>();
+  private readonly generations = new Map<string, symbol>();
+  private storeQueue: Promise<void> = Promise.resolve();
+  private stopped = false;
 
   constructor(options: ReviewDeferralManagerOptions) {
     this.store = options.store;
   }
 
+  /** Serializes async store operations to preserve the previous sync ordering. */
+  private enqueue(op: () => Promise<void>): void {
+    const result = this.storeQueue.then(op, op);
+    this.storeQueue = result.catch(() => {});
+  }
+
   /** Persist (or memorize) a deferral and arm its wake-up timer. */
   defer(target: DeferredTriggerTarget, notBeforeMs: number): void {
+    if (this.stopped) return;
     const key = computeDeferralKey(target.reviewEvent);
     notBeforeMs = Math.max(notBeforeMs, this.deadlines.get(key) ?? 0);
+    const generation = Symbol(key);
+    this.generations.set(key, generation);
+    this.deadlines.set(key, notBeforeMs);
     if (this.store) {
-      try {
-        const row = upsertReviewDeferral(this.store, {
+      const store = this.store;
+      const issueUpsert = (): Promise<ReviewDeferralRow> =>
+        upsertReviewDeferral(store, {
           dedupKey: key,
           workspaceId: target.reviewEvent.workspaceId,
           provider: target.provider,
@@ -94,23 +118,45 @@ export class ReviewDeferralManager {
           payload: safeSerialize(target.decoded),
           notBefore: new Date(notBeforeMs),
         });
-        notBeforeMs = row.notBefore.getTime();
-        this.memoryTargets.delete(key);
-      } catch (error) {
-        // Persistence failure must not lose the event: fall back to memory.
-        console.warn(JSON.stringify({
-          level: "warn",
-          msg: "failed to persist review deferral, deferring in memory only",
-          workspaceId: target.reviewEvent.workspaceId,
-          repoRef: target.reviewEvent.repoRef,
-          error: toErrorMessage(error),
-        }));
-        this.memoryTargets.set(key, target);
+      const settle = async (persisted: Promise<ReviewDeferralRow>): Promise<void> => {
+        try {
+          const row = await persisted;
+          if (this.generations.get(key) === generation) {
+            this.memoryTargets.delete(key);
+            this.armTimer(key, row.notBefore.getTime());
+          }
+        } catch (error) {
+          // Persistence failure must not lose the event: fall back to memory.
+          console.warn(JSON.stringify({
+            level: "warn",
+            msg: "failed to persist review deferral, deferring in memory only",
+            workspaceId: target.reviewEvent.workspaceId,
+            repoRef: target.reviewEvent.repoRef,
+            error: toErrorMessage(error),
+          }));
+          if (this.generations.get(key) === generation) {
+            this.memoryTargets.set(key, target);
+            this.armTimer(key, notBeforeMs);
+          }
+        }
+      };
+      if (store.kind === "postgres") {
+        // PG: the upsert joins the serialized queue so consecutive defer()
+        // calls for one key observe each other's row — issued concurrently,
+        // they race the not-before clamp and can resurrect an earlier wake.
+        this.enqueue(() => settle(issueUpsert()));
+      } else {
+        // Issue the upsert immediately: on the sqlite backend the body
+        // executes synchronously, so a defer() call leaves a visible row just
+        // like the pre-async store contract (raw-sql consumers/tests rely on
+        // it). Only the continuation joins the queue.
+        const persisted = issueUpsert();
+        this.enqueue(() => settle(persisted));
       }
     } else {
       this.memoryTargets.set(key, target);
+      this.armTimer(key, notBeforeMs);
     }
-    this.armTimer(key, notBeforeMs);
   }
 
   /**
@@ -120,29 +166,41 @@ export class ReviewDeferralManager {
   cancel(reviewEvent: ReviewEvent): void {
     const key = computeDeferralKey(reviewEvent);
     this.clearTimer(key);
+    this.generations.delete(key);
     this.memoryTargets.delete(key);
     this.deadlines.delete(key);
     if (this.store) {
-      try {
-        deleteReviewDeferral(this.store, key);
-      } catch (error) {
-        console.warn(JSON.stringify({
-          level: "warn",
-          msg: "failed to delete superseded review deferral",
-          workspaceId: reviewEvent.workspaceId,
-          repoRef: reviewEvent.repoRef,
-          error: toErrorMessage(error),
-        }));
+      const store = this.store;
+      const settle = async (deleted: Promise<void>): Promise<void> => {
+        try {
+          await deleted;
+        } catch (error) {
+          console.warn(JSON.stringify({
+            level: "warn",
+            msg: "failed to delete superseded review deferral",
+            workspaceId: reviewEvent.workspaceId,
+            repoRef: reviewEvent.repoRef,
+            error: toErrorMessage(error),
+          }));
+        }
+      };
+      if (store.kind === "sqlite") {
+        // Match synchronous SQLite upserts: a later defer must survive this
+        // cancellation even when queued continuations have not run yet.
+        const deleted = deleteReviewDeferral(store, key);
+        this.enqueue(() => settle(deleted));
+      } else {
+        this.enqueue(() => settle(deleteReviewDeferral(store, key)));
       }
     }
   }
 
   /** Startup recovery: un-stick claimed rows and re-arm every pending timer. */
-  recover(): void {
-    if (!this.store) return;
+  async recover(): Promise<void> {
+    if (!this.store || this.stopped) return;
     try {
-      const reset = resetClaimedReviewDeferrals(this.store);
-      const pending = listPendingReviewDeferrals(this.store);
+      const reset = await resetClaimedReviewDeferrals(this.store);
+      const pending = await listPendingReviewDeferrals(this.store);
       if (reset > 0 || pending.length > 0) {
         console.info(JSON.stringify({
           level: "info",
@@ -152,6 +210,7 @@ export class ReviewDeferralManager {
         }));
       }
       for (const row of pending) {
+        this.generations.set(row.dedupKey, Symbol(row.dedupKey));
         this.armTimer(row.dedupKey, row.notBefore.getTime());
       }
     } catch (error) {
@@ -165,6 +224,8 @@ export class ReviewDeferralManager {
 
   /** Clear all armed timers (shutdown). Persisted rows survive for recover(). */
   stop(): void {
+    this.stopped = true;
+    this.generations.clear();
     for (const timer of this.timers.values()) {
       clearTimeout(timer);
     }
@@ -172,6 +233,7 @@ export class ReviewDeferralManager {
   }
 
   private armTimer(key: string, notBeforeMs: number): void {
+    if (this.stopped) return;
     this.clearTimer(key);
     this.deadlines.set(key, notBeforeMs);
     const delay = Math.min(Math.max(0, notBeforeMs - Date.now()), MAX_TIMER_DELAY_MS);
@@ -192,6 +254,7 @@ export class ReviewDeferralManager {
   }
 
   private resume(key: string): void {
+    if (this.stopped) return;
     this.timers.delete(key);
     const deadline = this.deadlines.get(key) ?? 0;
     if (deadline > Date.now()) {
@@ -199,55 +262,64 @@ export class ReviewDeferralManager {
       return;
     }
     if (!this.resumeHandler) return;
-    try {
-      const target = this.takeTarget(key);
-      if (!target) {
-        if (!this.timers.has(key)) this.deadlines.delete(key);
-        return;
-      }
-      this.resumeHandler(target);
-      // A cleanup failure after handoff must not launch a second review.
+    const handler = this.resumeHandler;
+    const generation = this.generations.get(key);
+    const current = (): boolean => !this.stopped && this.generations.get(key) === generation;
+    this.enqueue(async () => {
+      if (!current()) return;
       try {
-        if (this.store) completeReviewDeferral(this.store, key);
+        const target = await this.takeTarget(key);
+        if (!current()) return;
+        if (!target) {
+          if (!this.timers.has(key)) this.deadlines.delete(key);
+          return;
+        }
+        handler(target);
+        // A cleanup failure after handoff must not launch a second review.
+        try {
+          if (this.store) await completeReviewDeferral(this.store, key);
+        } catch (error) {
+          console.warn(JSON.stringify({ level: "warn", msg: "failed to acknowledge review deferral", error: toErrorMessage(error) }));
+        }
+        if (!this.timers.has(key)) {
+          this.memoryTargets.delete(key);
+          this.deadlines.delete(key);
+        }
       } catch (error) {
-        console.warn(JSON.stringify({ level: "warn", msg: "failed to acknowledge review deferral", error: toErrorMessage(error) }));
-      }
-      if (!this.timers.has(key)) {
-        this.memoryTargets.delete(key);
-        this.deadlines.delete(key);
-      }
-    } catch (error) {
-      console.warn(JSON.stringify({ level: "warn", msg: "failed to resume review deferral, retrying", error: toErrorMessage(error) }));
-      try {
-        if (this.store) releaseReviewDeferral(this.store, key);
-      } catch {
-        // Recovery resets claims after a restart; retry the read meanwhile.
-      } finally {
+        if (!current()) return;
+        console.warn(JSON.stringify({ level: "warn", msg: "failed to resume review deferral, retrying", error: toErrorMessage(error) }));
+        try {
+          if (this.store) await releaseReviewDeferral(this.store, key);
+        } catch {
+          // Recovery resets claims after a restart; retry the read meanwhile.
+        }
         this.armTimer(key, Date.now() + 5000);
       }
-    }
+    });
   }
 
-  private takeTarget(key: string): DeferredTriggerTarget | undefined {
+  private async takeTarget(key: string): Promise<DeferredTriggerTarget | undefined> {
     // A failed upsert may leave an older database row. The fallback holds
     // the latest envelope and must take precedence over that row.
     const memoryTarget = this.memoryTargets.get(key);
     if (memoryTarget) {
-      try {
-        if (this.store) deleteReviewDeferral(this.store, key);
-      } catch {
-        // Persistence is unavailable; the in-memory handoff can still run.
+      if (this.store) {
+        try {
+          await deleteReviewDeferral(this.store, key);
+        } catch {
+          // Persistence is unavailable; the in-memory handoff can still run.
+        }
       }
       return memoryTarget;
     }
     if (!this.store) return undefined;
 
-    const stored = getReviewDeferral(this.store, key);
+    const stored = await getReviewDeferral(this.store, key);
     if (stored && stored.notBefore.getTime() > Date.now()) {
       this.armTimer(key, stored.notBefore.getTime());
       return undefined;
     }
-    const row = claimReviewDeferral(this.store, key);
+    const row = await claimReviewDeferral(this.store, key);
     if (!row) return undefined;
 
     try {
@@ -266,7 +338,7 @@ export class ReviewDeferralManager {
         error: toErrorMessage(error),
       }));
       try {
-        deleteReviewDeferral(this.store, key);
+        await deleteReviewDeferral(this.store, key);
       } catch {
         // best effort
       }

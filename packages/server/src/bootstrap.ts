@@ -9,7 +9,9 @@ import {
   loadSystemPromptTemplate,
   resolveWorkspaceConfig,
   reviewMemoryScope,
+  createConfigStoreFromDatabaseConfig,
   type AppConfig,
+  type ConfigStore,
   type ReviewEvent,
 } from "@aicr/core";
 import { createQueueWorker, type QueueJobHandler, type QueueWorker } from "@aicr/core";
@@ -69,6 +71,7 @@ import {
   type VcsAdapter,
 } from "@aicr/vcs";
 import {
+  closeStoreDb,
   createStoreDb,
   hardDeleteExpiredProjects,
   readReflectionMemory,
@@ -105,7 +108,7 @@ import {
 import { type AuthConfig } from "./auth.js";
 import { createReviewDeduplicator } from "./review-deduplicator.js";
 import { ReviewDeferralManager } from "./deferral-manager.js";
-import { resolveAdminAuthConfig } from "./admin-auth.js";
+import { cleanupExpiredSessions, resolveAdminAuthConfig } from "./admin-auth.js";
 import {
   createGithubAppTokenService,
   resolveGithubAppTriggerAuth,
@@ -116,8 +119,8 @@ import {
   createHttpModelCatalogFetcher,
   createMemoryModelCatalogBackend,
   createModelCatalogService,
+  createStoreModelCatalogBackend,
   createRedisModelCatalogBackend,
-  createSqliteModelCatalogBackend,
   MODEL_CATALOG_FIELD_KEY_MAP,
   MODEL_CATALOG_HINT_KEY_MAP,
   type ModelCatalogBackend,
@@ -2455,7 +2458,53 @@ async function createAppTokenServices(config: AppConfig): Promise<Map<string, Gi
   return services;
 }
 
+/** Resources bootstrap opens and must release when a later build step fails. */
+interface BootstrapOpenedResources {
+  store: StoreDb | undefined;
+  sessionStore: ConfigStore | undefined;
+  catalogBackend: ModelCatalogBackend | undefined;
+  closeAutoCommit: (() => Promise<void>) | undefined;
+}
+
+/**
+ * Expired-admin-session sweep cadence (P2). Session reads already treat
+ * expired rows as absent, so the periodic sweep only bounds table growth.
+ */
+const ADMIN_SESSION_SWEEP_INTERVAL_MS = 15 * 60 * 1000;
+
+function logBootstrapCloseFailure(resource: string, error: unknown): void {
+  console.warn(JSON.stringify({
+    level: "warn",
+    msg: "failed to release resource after bootstrap failure",
+    resource,
+    error: error instanceof Error ? error.message : String(error),
+  }));
+}
+
 export async function bootstrapServerApp(options: BootstrapServerOptions): Promise<ServerAppOptions> {
+  // A failure mid-build must not leak what earlier steps opened: release in
+  // reverse creation order, then rethrow the original error.
+  const opened: BootstrapOpenedResources = { store: undefined, sessionStore: undefined, catalogBackend: undefined, closeAutoCommit: undefined };
+  try {
+    return await bootstrapServerAppCore(options, opened);
+  } catch (error) {
+    if (opened.closeAutoCommit !== undefined) {
+      await opened.closeAutoCommit().catch((closeError: unknown) => logBootstrapCloseFailure("autoCommit", closeError));
+    }
+    if (opened.sessionStore !== undefined) {
+      await opened.sessionStore.close().catch((closeError: unknown) => logBootstrapCloseFailure("sessionStore", closeError));
+    }
+    if (opened.catalogBackend?.close !== undefined) {
+      await opened.catalogBackend.close().catch((closeError: unknown) => logBootstrapCloseFailure("catalogBackend", closeError));
+    }
+    if (opened.store !== undefined) {
+      await closeStoreDb(opened.store).catch((closeError: unknown) => logBootstrapCloseFailure("store", closeError));
+    }
+    throw error;
+  }
+}
+
+async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: BootstrapOpenedResources): Promise<ServerAppOptions> {
   const { config, baseSystemPrompt, baseDir = process.cwd(), jobHandler } = options;
 
   const appTokenServices = await createAppTokenServices(config);
@@ -2478,29 +2527,40 @@ export async function bootstrapServerApp(options: BootstrapServerOptions): Promi
   const needsStore = !!adminAuthConfig || catalogNeedsStore || reflectionNeedsStore;
 
   let store: StoreDb | undefined;
+  let sessionStore: ConfigStore | undefined;
   let observability: ObservabilityApiOptions | undefined;
   let liveRunRegistry: LiveRunRegistry | undefined;
 
   if (needsStore) {
-    if (config.storage.database.kind !== "sqlite") {
-      throw new TypeError(
-        `storage.database.kind=${config.storage.database.kind} is configured, but the built-in store currently supports sqlite only.`,
-      );
+    if (config.storage.database.kind === "postgres") {
+      const pgConfig = (config.storage.database.postgres ?? {}) as Record<string, unknown>;
+      const pgUrlEnv = typeof pgConfig.url_env === "string" ? pgConfig.url_env : undefined;
+      const pgUrl = (pgUrlEnv ? resolveEnv(pgUrlEnv) : undefined)
+        ?? (typeof pgConfig.url === "string" ? pgConfig.url : undefined);
+      if (!pgUrl) {
+        throw new TypeError(
+          "storage.database.kind 'postgres' requires storage.database.postgres.url_env to resolve to a PostgreSQL URL.",
+        );
+      }
+      store = await createStoreDb({ kind: "postgres", url: pgUrl, migrationMode: config.storage.database.migrate });
+    } else {
+      store = await createStoreDb({ kind: "sqlite", path: config.storage.database.sqlite.path, migrationMode: config.storage.database.migrate });
     }
-    store = createStoreDb(config.storage.database.sqlite.path);
   }
+  opened.store = store;
 
   let catalogService: ModelCatalogService | undefined;
   let catalogBackendToClose: ModelCatalogBackend | undefined;
   if (catalogEnabled && catalogConfig) {
     let catalogBackend: ModelCatalogBackend | undefined;
     if (catalogConfig.cache.backend === "sqlite") {
-      catalogBackend = store ? createSqliteModelCatalogBackend(store) : undefined;
+      catalogBackend = store ? await createStoreModelCatalogBackend(store) : undefined;
     } else if (catalogConfig.cache.backend === "memory") {
       catalogBackend = createMemoryModelCatalogBackend();
     } else if (catalogConfig.cache.backend === "redis") {
       catalogBackend = await createRedisModelCatalogBackend(toRedisModelCatalogBackendOptions(config));
       catalogBackendToClose = catalogBackend;
+      opened.catalogBackend = catalogBackend;
     }
     const providerHints: ModelCatalogProviderHint[] = config.llm.providers.map((provider) => {
       const raw = provider as Record<string, unknown>;
@@ -2584,6 +2644,8 @@ export async function bootstrapServerApp(options: BootstrapServerOptions): Promi
   }
   if (catalogBackendToClose?.close) {
     await catalogBackendToClose.close();
+    // Released mid-build; the failure wrapper must not close it twice.
+    opened.catalogBackend = undefined;
   }
 
   const sourceRootResolver = (reviewEvent: ReviewEvent): string =>
@@ -2593,14 +2655,39 @@ export async function bootstrapServerApp(options: BootstrapServerOptions): Promi
 
   if (adminAuthConfig && store) {
     const activeProjectIdentities = buildActiveProjectIdentities(config);
-    softDeleteMissingProjects(store, activeProjectIdentities,
+    await softDeleteMissingProjects(store, activeProjectIdentities,
       Object.entries(config.workspaces.instances).filter(([, instance]) => instance.match !== undefined).map(([id]) => id));
-    hardDeleteExpiredProjects(store, config.storage.retention.deleted_project_grace_days);
+    await hardDeleteExpiredProjects(store, config.storage.retention.deleted_project_grace_days);
 
     liveRunRegistry = createLiveRunRegistry();
+    // Durable admin sessions ride the deployment database (P2 item 97):
+    // sha256-hashed tokens, TTL at read time, logout visible to every replica.
+    sessionStore = await createConfigStoreFromDatabaseConfig(config.storage.database, resolveEnv);
+    opened.sessionStore = sessionStore;
+    // Bounded sweep of expired session rows (P2): production never called
+    // cleanupExpiredSessions, so admin_sessions grew without bound. The
+    // timer is unref'd — it must never hold the process open — and closing
+    // the store stops the sweep (close owns the lifecycle).
+    const sessions = sessionStore;
+    const sessionSweep = setInterval(() => {
+      void cleanupExpiredSessions({ config: adminAuthConfig, sessions }).catch((error: unknown) => {
+        console.warn(JSON.stringify({
+          level: "warn",
+          msg: "failed to sweep expired admin sessions",
+          error: error instanceof Error ? error.message : String(error),
+        }));
+      });
+    }, ADMIN_SESSION_SWEEP_INTERVAL_MS);
+    sessionSweep.unref();
+    const closeSessions = sessionStore.close.bind(sessionStore);
+    sessionStore.close = async () => {
+      clearInterval(sessionSweep);
+      await closeSessions();
+    };
     observability = {
       store,
       adminAuth: adminAuthConfig,
+      sessionStore,
       liveRuns: liveRunRegistry,
     };
   }
@@ -2821,6 +2908,7 @@ export async function bootstrapServerApp(options: BootstrapServerOptions): Promi
     workspaceRuntime,
     ...(store ? { reviewStore: store } : {}),
   });
+  opened.closeAutoCommit = autoCommitPipeline.close;
 
   const triageOptions = resolveIssueTriageOptions(config, defaultTriageRoute.llm, defaultTriageRoute.model);
   const authConfig = resolveAuthConfig(config);
@@ -2883,6 +2971,7 @@ export async function bootstrapServerApp(options: BootstrapServerOptions): Promi
     // Window-deferred async events persist here so a restart resumes them.
     deferralManager: new ReviewDeferralManager({ ...(store ? { store } : {}) }),
     ...(observability ? { observability } : {}),
+    ...(sessionStore ? { sessionStore } : {}),
     ...(liveRunRegistry ? { liveRuns: liveRunRegistry } : {}),
     ...(store ? { store } : {}),
   };
@@ -3105,16 +3194,13 @@ async function createAutoCommitPipeline(deps: {
   const executeBatch = createAutoCommitBatchExecutor({
     store,
     orchestrationOptions,
-    persistResult: (runId, result) => {
+    persistResult: async (runId, result) => {
       const reviewStore = deps.reviewStore;
       if (!reviewStore) return;
-      // One atomic local transaction includes usage and rollup rows. A
+      // One atomic dedup + write includes usage and rollup rows. A
       // recovered completed checkpoint can safely retry this accounting.
-      reviewStore.sqlite.transaction(() => {
-        if (reviewStore.sqlite.prepare("SELECT id FROM review_runs WHERE id = ?").get(runId)) return;
-        persistReviewRunToStore(reviewStore, runId, result.reviewEvent, result.reviewRun,
-          result.durationMs, result.startedAt, true);
-      })();
+      await persistReviewRunToStore(reviewStore, runId, result.reviewEvent, result.reviewRun,
+        result.durationMs, result.startedAt, { strict: true, idempotent: true });
     },
   });
   const scheduler = new AutoCommitScheduler({

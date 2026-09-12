@@ -761,6 +761,12 @@ export const serverSchema = z
 export const storageDatabaseSchema = z
   .object({
     kind: z.enum(["sqlite", "postgres"]).default("sqlite"),
+    /**
+     * Startup migration mode (P2/M19): `auto` applies pending schema steps
+     * through the shared MigrationRunner at open; `verify` refuses to start
+     * when the ledger is behind, drifted, or newer than this program.
+     */
+    migrate: z.enum(["auto", "verify"]).default("auto"),
     sqlite: z
       .object({
         path: z.string().min(1).default("/app/data/aicr.sqlite"),
@@ -968,7 +974,69 @@ export const workspacesConfigSchema = z
   })
   .strict();
 
-const appConfigSchema = z
+// ---------------------------------------------------------------------------
+// v2 routing rules (spec §6). The v1 file schema does NOT accept `routing`;
+// the merged effective document (file + database, format version 2) may carry
+// it when database route records exist. Route records narrow trigger-admitted
+// traffic; they can never widen a trigger's repository authorization, because
+// admission runs before route selection.
+// ---------------------------------------------------------------------------
+
+/** Analysis overrides allowed on a routing rule (spec §6; inheritable subset). */
+export const routingRuleAnalysisSchema = z
+  .object({
+    model_chain: modelChainReferenceSchema.optional(),
+    triage_model_chain: modelChainReferenceSchema.optional(),
+    agent: workspaceAgentSelectionSchema.optional(),
+    sandbox: sandboxSchema.optional(),
+    review: reviewSchema.optional(),
+    compression: compressionSchema.optional(),
+  })
+  .strict();
+
+/** Output channel selection on a routing rule; `[]` explicitly closes a kind. */
+export const routingRuleOutputsSchema = z
+  .object({
+    line_comments: z.array(z.string().min(1)).optional(),
+    summary: z.array(z.string().min(1)).optional(),
+  })
+  .strict();
+
+export const routingRuleMatchSchema = z
+  .object({
+    triggers: z.array(z.string().min(1)).min(1).optional(),
+    target_kinds: z.array(reviewTargetKindSchema).min(1).optional(),
+    source: z
+      .object({
+        repo_ref: configMatcherSchema.optional(),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict();
+
+export const routingRuleSchema = z
+  .object({
+    id: z.string().min(1),
+    enabled: z.boolean().default(true),
+    priority: z.number().int().default(0),
+    match: routingRuleMatchSchema.optional(),
+    workspace: z.string().min(1),
+    analysis: routingRuleAnalysisSchema.optional(),
+    outputs: routingRuleOutputsSchema.optional(),
+  })
+  .strict();
+
+export const routingConfigSchema = z
+  .object({
+    rules: z.array(routingRuleSchema).default([]),
+  })
+  .strict();
+
+export type RoutingRule = z.infer<typeof routingRuleSchema>;
+export type RoutingConfig = z.infer<typeof routingConfigSchema>;
+
+const appConfigObjectSchema = z
   .object({
     storage: storageSchema,
     admin: adminAuthSchema,
@@ -1003,8 +1071,11 @@ const appConfigSchema = z
       instances: {},
     }),
   })
-  .strict()
-  .superRefine((config, ctx) => {
+  .strict();
+
+type AppConfigRefinementTarget = z.infer<typeof appConfigObjectSchema>;
+
+const appConfigRefinement = (config: AppConfigRefinementTarget, ctx: z.RefinementCtx): void => {
     const llmRaw = config.llm as Record<string, unknown>;
     for (const legacyKey of ["fallback_chain", "triage_fallback_chain"] as const) {
       if (legacyKey in llmRaw) {
@@ -1149,7 +1220,27 @@ const appConfigSchema = z
         });
       }
     });
-  });
+};
+
+const appConfigSchema = appConfigObjectSchema.superRefine(appConfigRefinement);
+
+/**
+ * v2 effective document schema: same object + refinement plus the optional
+ * `routing` section. Used to validate a merged file+database effective
+ * document at format version 2; plain config files stay on the v1 schema
+ * (`routing` is rejected there as an unknown key, spec §6).
+ */
+export const effectiveConfigV2Schema = appConfigObjectSchema
+  .extend({ routing: routingConfigSchema.optional() })
+  .strict()
+  .superRefine(appConfigRefinement);
+
+export type EffectiveConfigV2 = z.infer<typeof effectiveConfigV2Schema>;
+
+/** Parses an effective (merged) config document at the given format version. */
+export function parseEffectiveConfig(input: unknown, formatVersion = 1): EffectiveConfigV2 {
+  return (formatVersion >= 2 ? effectiveConfigV2Schema : appConfigSchema).parse(input) as EffectiveConfigV2;
+}
 
 export type AppConfig = z.infer<typeof appConfigSchema>;
 export type AppConfigInput = Record<string, unknown>;

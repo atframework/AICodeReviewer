@@ -1,6 +1,6 @@
 # Workspace 与动态配置测试计划
 
-状态：P0–P1 已完成；P2–P8 跨层验收仍待实施。P1 当前证据见下方验收索引，历史批次统计保留其原始范围。
+状态：P0–P3 已完成；P4–P8 跨层验收仍待实施。P2 证据(2026-09-12):F/C/B/U 系列、S01–S13 四后端 conformance、M01–M20 适用后端合同,映射与边界见 [M17](../../ai/milestones/M17.md);P3 证据(2026-09-12):R01–R07/R11/R12 + legacy parity(config-compiler.test.ts 21 例)、S02/S03/S06/H07/H13–H15/C02/C03/C11/C12(config-publish.test.ts 14 例,SQLite 真实后端)、R13 零副作用 preview 与 readiness 六态(config-preview.test.ts 13 例),见 [M18](../../ai/milestones/M18.md);P1 证据见下方验收索引。
 合同见 [详细设计](../specs/2026-09-11-workspace-config-management.md)，阶段见
 [执行计划](2026-09-11-workspace-config-implementation.md)。
 
@@ -21,6 +21,12 @@
 临时 DB、fixture 仓库、截图、日志放 `build/tmp/`、`build/logs/`；永久输入 fixture 放对应包 `test/fixtures/`。PostgreSQL 用专用 schema/database，Redis 用随机前缀，仅清理当前测试资源，禁止 FLUSHDB 和清理未知实例。
 
 ### 当前证据边界
+
+2026-09-13 P2/P3 复审新增 74 项测试，覆盖快照跨 namespace、重试输入变更、
+预览准入、缺失 revision、restore、非连续迁移账本、双命名空间 CLI/verify、
+Redis WRONGTYPE/OOM/代际精度及 PostgreSQL 并发去重/汇总。代码与环境映射见
+[M18 复审记录](../../ai/milestones/M18.md#2026-09-13-p2p3-复审)。OOM 使用
+`AICR_REDIS_OOM_TEST_URL` 的独立实例，仅换逻辑 DB 不构成隔离。
 
 | 实现与测试 | 已覆盖 | 尚待验收 |
 | --- | --- | --- |

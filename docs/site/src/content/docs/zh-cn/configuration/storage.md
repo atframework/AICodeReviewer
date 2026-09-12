@@ -9,7 +9,7 @@ description: 配置 storage 命名空间下的 database、cache、object 三类�
 
 :::note[各后端的接入程度不同]
 数据库目前只有 `sqlite` 接入了运行时（dashboard 统计、模型目录、反思记忆），
-`postgres` 是预留。缓存的 `redis` 已接入，供模型目录的 Redis 后端使用。
+`sqlite` 与 `postgres` 都已接入运行时数据库（仪表盘统计、模型目录、反思记忆、评审延期、webhook 事件）。缓存的 `redis` 已接入，供模型目录的 Redis 后端使用。
 对象存储的 `s3` 字段是预留——能通过校验，但运行时还没有消费它们。
 :::
 
@@ -33,12 +33,17 @@ storage:
 
 | 字段 | 类型 | 默认 | 说明 |
 | --- | --- | --- | --- |
-| `kind` | enum | `sqlite` | `sqlite`（可用）或 `postgres`（预留）。 |
+| `kind` | enum | `sqlite` | `sqlite` 或 `postgres`。 |
 | `sqlite.path` | string | `/app/data/aicr.sqlite` | SQLite 数据库文件路径。 |
-| `postgres.url_env` | string | – | 存放 Postgres 连接 URL 的环境变量名。为未来多实例部署**预留**。 |
+| `postgres.url_env` | string | – | 存放 Postgres 连接 URL 的环境变量名。 |
+| `migrate` | enum | `auto` | 启动 schema 模式：`auto` 应用待执行步骤；`verify` 在 schema 缺失、落后、漂移或版本过高时拒绝启动，不执行迁移。 |
 
 SQLite 数据库按需自动创建，存放可观测性统计、带键的 `model_catalog` 表（当目录使用
-SQLite 后端时）以及反思记忆条目。
+SQLite 后端时）、反思记忆、延期审查、webhook 事件与配置版本/session。
+PostgreSQL 支持相同业务合同。配置表和 PostgreSQL 业务表使用带 checksum 的
+`schema_migrations`；SQLite 业务表保留历史名称账本 `_migrations`。
+`aicr migrate --status|--check|--apply` 在两个后端均检查或升级 `config` 与
+`store` 命名空间，无需启动服务，见 [CLI 参考](/zh-cn/reference/cli/)。
 
 ## `storage.cache`
 
@@ -83,6 +88,6 @@ S3 字段为**预留**——会通过校验，但尚未被运行时特性使用�
 
 | 后端 | 已接入运行时 | 预留 | 说明 |
 | --- | --- | --- | --- |
-| database | `sqlite` | `postgres` | 默认 SQLite 位于 `/app/data/aicr.sqlite`。 |
+| database | `sqlite`、`postgres` | — | 默认 SQLite 位于 `/app/data/aicr.sqlite`；Postgres 经 `postgres.url_env`。 |
 | cache | `memory`、`redis`、`none` | — | Redis 与模型目录 Redis 后端共用。 |
 | object | `filesystem` | `s3` | 默认 filesystem 位于 `/app/data/objects`。 |

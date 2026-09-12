@@ -299,6 +299,7 @@ local receipt = {
   metadataNextAttemptAt = cjson.null,
   metadataTerminalError = cjson.null,
   resolution = input.resolution or cjson.null,
+  configSnapshotId = input.configSnapshotId or cjson.null,
 }
 redis.call("SET", kDelivery(input.deliveryKey), input.receiptId)
 redis.call("HSET", kReceipt(input.receiptId), "data", cjson.encode(receipt))
@@ -821,6 +822,7 @@ local batch = {
   head = input.head,
   exclusionPolicyVersion = input.exclusionPolicyVersion,
   configPolicyVersion = input.configPolicyVersion,
+  configSnapshotId = input.configSnapshotId or cjson.null,
   status = "dispatch_pending",
   attempt = 0,
   maxAttempts = input.maxAttempts,
@@ -1077,7 +1079,13 @@ function toReceipt(stored: StoredReceipt): AutoCommitReceipt {
     metadataNextAttemptAt: receipt.metadataNextAttemptAt ?? null,
     metadataTerminalError: receipt.metadataTerminalError ?? null,
     resolution: receipt.resolution ?? null,
+    configSnapshotId: receipt.configSnapshotId ?? null,
   };
+}
+
+/** Blobs written before the snapshot field existed decode as undefined. */
+function toBatch(stored: CommitBatchRecord): CommitBatchRecord {
+  return { ...stored, configSnapshotId: stored.configSnapshotId ?? null };
 }
 
 /** Redis Lua cjson encodes an empty table as {}, including decoded JSON []. */
@@ -1207,6 +1215,39 @@ export async function createRedisAutoCommitStore(
       const result = JSON.parse(raw) as { duplicate: boolean; receipt: string };
       const stored = JSON.parse(result.receipt) as StoredReceipt;
       return { receipt: toReceipt(stored), duplicate: result.duplicate };
+    },
+
+    async listActiveConfigSnapshotIds(_now: number): Promise<readonly string[]> {
+      // Retention sweeps are rare background work, so an honest SCAN over the
+      // deployment prefix beats maintaining a second index to keep consistent.
+      const ids = new Set<string>();
+      let cursor = "0";
+      const batchKeys: string[] = [];
+      const receiptKeys: string[] = [];
+      do {
+        const [next, keys] = (await redis.scan(cursor, "MATCH", `${P}*`, "COUNT", 200)) as [string, string[]];
+        cursor = next;
+        for (const key of keys) {
+          if (key.startsWith(`${P}batch:`)) batchKeys.push(key);
+          // receipt:<id> only; receipt:<id>:members carries no snapshot data.
+          if (key.startsWith(`${P}receipt:`) && !key.endsWith(":members")) receiptKeys.push(key);
+        }
+      } while (cursor !== "0");
+
+      const batches = await hgetJsonMany<CommitBatchRecord>(batchKeys);
+      for (const batch of batches) {
+        if (batch?.configSnapshotId == null) continue;
+        if (batch.status !== "completed" && batch.status !== "skipped") ids.add(batch.configSnapshotId);
+      }
+
+      const receipts = await hgetJsonMany<StoredReceipt>(receiptKeys);
+      for (const receipt of receipts) {
+        if (receipt?.configSnapshotId == null) continue;
+        const memberIds = (await redis.zrange(`${P}receipt:${receipt.receiptId}:members`, 0, -1)) as string[];
+        const members = await hgetJsonMany<{ record: { status: string } }>(memberIds.map((id) => `${P}member:${id}`));
+        if (members.some((member) => member?.record.status === "pending")) ids.add(receipt.configSnapshotId);
+      }
+      return [...ids];
     },
 
     async acceptRoutingReceipt(
@@ -1715,7 +1756,7 @@ export async function createRedisAutoCommitStore(
       for (let i = 0; i < batchIds.length; i += 1) {
         const batch = batches[i];
         if (batch) {
-          claimed.push({ batch, claimToken: raw[i * 2 + 1] as string });
+          claimed.push({ batch: toBatch(batch), claimToken: raw[i * 2 + 1] as string });
         }
       }
       return claimed;
@@ -1870,7 +1911,8 @@ return 1
     },
 
     async readBatch(batchId: string): Promise<CommitBatchRecord | undefined> {
-      return hgetJson<CommitBatchRecord>(`${P}batch:${batchId}`);
+      const batch = await hgetJson<CommitBatchRecord>(`${P}batch:${batchId}`);
+      return batch === undefined ? undefined : toBatch(batch);
     },
 
     async getReceipt(

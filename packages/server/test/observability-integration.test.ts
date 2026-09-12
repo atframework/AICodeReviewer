@@ -277,7 +277,7 @@ describe("server observability integration", () => {
       expect(response.status).toBe(202);
       expect(body.accepted).toBe(true);
 
-      const runs = getRecentRuns(store, 10);
+      const runs = (await getRecentRuns(store, 10));
       expect(runs.length).toBe(1);
       expect(runs[0]!.workspaceId).toBe("ws");
       expect(runs[0]!.status).toBe("succeeded");
@@ -288,7 +288,7 @@ describe("server observability integration", () => {
         .get("ws") as Record<string, string>;
       expect(project.repo_ref).toBe("owent/example");
     } finally {
-      closeStoreDb(store);
+      (await closeStoreDb(store));
       await rm(tempDir, { recursive: true, force: true });
       await rm(runsDir, { recursive: true, force: true });
     }

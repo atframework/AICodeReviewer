@@ -33,9 +33,9 @@ export function webhookEventFields(
  */
 export function recordWebhookEvent(store: StoreDb | undefined, entry: WebhookEventInsert): void {
   if (!store) return;
-  try {
-    insertWebhookEvent(store, entry);
-  } catch (error) {
+  // Fire-and-forget: the store contract is async, but recording must never
+  // block or fail the webhook decision path; failures surface as a warning.
+  void insertWebhookEvent(store, entry).catch((error: unknown) => {
     console.warn(JSON.stringify({
       level: "warn",
       msg: "failed to record webhook event",
@@ -45,5 +45,5 @@ export function recordWebhookEvent(store: StoreDb | undefined, entry: WebhookEve
       reason: entry.reason ?? undefined,
       error: toErrorMessage(error),
     }));
-  }
+  });
 }

@@ -202,6 +202,69 @@ export function runAutoCommitStoreConformance(factory: StoreFactory): void {
       ).toBeDefined();
     });
 
+    it("pins admission config snapshots through the receipt → batch lifecycle (P2)", async () => {
+      const store = await factory.makeStore();
+
+      // Admission: the pending receipt pins its config snapshot.
+      const accepted = await store.acceptReceipt(
+        receiptInput({ configSnapshotId: "snap-a", delaySeconds: 0 }),
+      );
+      expect(accepted.receipt.configSnapshotId).toBe("snap-a");
+      const streamId = computeStreamId(accepted.receipt);
+      const metadata = membersOf(["A1"], 1);
+      await store.applyMetadataPage({
+        streamId,
+        receiptId: accepted.receipt.receiptId,
+        members: metadata,
+        now: T0,
+      });
+      expect(await store.listActiveConfigSnapshotIds(T0)).toEqual(["snap-a"]);
+
+      // Seal moves the pin from the receipt to the batch.
+      const member = (await store.readPendingMembers(streamId, null, 1)).items[0]!;
+      await store.applyExclusionVerdicts({
+        streamId,
+        verdicts: [{ memberId: member.memberId, state: "allowed", policyVersion: "pol-1" }],
+        now: T0,
+      });
+      const reservation = await store.acquireStreamReservation(streamId, "scheduler", 60_000, T0);
+      expect(
+        await store.sealBatch({
+          streamId,
+          reservationToken: reservation!.token,
+          expectedStreamVersion: reservation!.version,
+          batchId: "batch-snap",
+          runId: "run-snap",
+          members: [{ memberId: member.memberId, revision: "A1", sourceKey: metadata[0]!.sourceSnapshot.sourceKey! }],
+          base: "A0",
+          head: "A1",
+          sourceKey: metadata[0]!.sourceSnapshot.sourceKey!,
+          exclusionPolicyVersion: "rules-v1",
+          configPolicyVersion: "pol-1",
+          configSnapshotId: "snap-a",
+          maxAttempts: 2,
+          now: T0,
+        }),
+      ).toEqual({ kind: "sealed" });
+      expect(await store.listActiveConfigSnapshotIds(T0)).toEqual(["snap-a"]);
+      const batch = await store.readBatch("batch-snap");
+      expect(batch?.configSnapshotId).toBe("snap-a");
+
+      // Completion releases the pin; dead would keep it for manual recovery.
+      const [claim] = await store.claimDispatch(T0, "worker", 1);
+      await store.confirmDispatch(claim!.batch.batchId, claim!.claimToken, T0);
+      const lease = await store.startBatchExecution("batch-snap", "w", 1_000, T0, { global: 1, workspace: 1 });
+      await store.completeBatch("batch-snap", lease!, { outcome: "completed" }, T0 + 1);
+      expect(await store.listActiveConfigSnapshotIds(T0)).toEqual([]);
+    });
+
+    it("never pins snapshots for legacy receipts without a reference", async () => {
+      const store = await factory.makeStore();
+      const accepted = await store.acceptReceipt(receiptInput({ delaySeconds: 0 }));
+      expect(accepted.receipt.configSnapshotId).toBeNull();
+      expect(await store.listActiveConfigSnapshotIds(T0)).toEqual([]);
+    });
+
     it("recovers dispatch-confirmed batches without consuming an execution attempt", async () => {
       const store = await factory.makeStore();
       await prepareBatch(store, "queued-crash");

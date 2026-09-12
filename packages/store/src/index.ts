@@ -1,5 +1,8 @@
 export * from "./schema.js";
+export * as pgSchema from "./schema.pg.js";
 export * from "./database.js";
+export * from "./pg-migrations.js";
+export * from "./sqlite-migrations.js";
 export * from "./stats.js";
 export * from "./webhook-events.js";
 export * from "./review-deferrals.js";

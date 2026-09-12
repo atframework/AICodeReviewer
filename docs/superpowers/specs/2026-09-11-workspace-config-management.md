@@ -1,6 +1,6 @@
 # Workspace 规则、动态配置与数据库迁移设计
 
-状态：P0–P1 已完成实现与验收。P1 已补齐来源描述符、完整快照、运行/记忆隔离、只读策略回退及 Windows/Linux 和真实 VCS 验收；workspace 级 agent/sandbox 配置覆盖仍按原计划在 P4 接线，P2–P8 待推进。 下文未交付部分仍为目标合同，证据以[测试计划](../plans/2026-09-11-workspace-config-tests.md)为准。
+状态:P0–P3 已完成实现与验收(P2 证据见 [M17](../../ai/milestones/M17.md)、P3 见 [M18](../../ai/milestones/M18.md) 与架构 §3.14/§3.15);workspace 级 agent/sandbox 配置覆盖与运行时版本接线按原计划在 P4,P4–P8 待推进。 下文未交付部分仍为目标合同,证据以[测试计划](../plans/2026-09-11-workspace-config-tests.md)为准。
 源码核对基线为 `e609cd7`;外部资料核对日期为 2026-09-11。
 
 执行入口：[执行计划](../plans/2026-09-11-workspace-config-implementation.md)、
@@ -440,7 +440,10 @@ interface ConfigUiField {
 5. 校验当前 head 的全部实体和引用，创建有效 runtime snapshot，再启动 admission/worker。
 6. release 锁并记录耗时/结果。失败保留原 active revision；只提供健康/诊断，不启动会使用错误配置的分析。
 
-`mode: auto` 默认用于普通部署；`verify` 适合独立迁移 Job 先运行。后续 CLI 拟增 `aicr migrate --status`、`--check`、`--apply`，前两项只读，`--apply` 与启动共用 runner。不自动执行 destructive down migration。
+`storage.database.migrate: auto` 默认用于普通部署；`verify` 适合独立迁移 Job 先运行。
+已交付的 `aicr migrate --status`、`--check`、`--apply` 同时处理 SQLite/PostgreSQL
+的 config/store 命名空间；前两项只读，`--apply` 与启动复用迁移计划和事务/锁合同。
+缺失、漂移或非连续账本不得假报最新；不自动执行 destructive down migration。
 
 ### 9.3 后端合同
 

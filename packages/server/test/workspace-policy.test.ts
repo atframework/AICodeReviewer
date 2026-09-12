@@ -53,8 +53,8 @@ describe("workspace policy and memory isolation (W01/L13)", () => {
       expect((await readReflectionMemory(store, reviewMemoryScope(event("instance-b")))).map((entry) => entry.content)).toEqual(["instance-b"]);
       expect(await readReflectionMemory(store, "services")).toEqual([]);
       store.sqlite.prepare("INSERT INTO projects (workspace_id, trigger_name, repo_ref, created_at) VALUES (?, ?, ?, ?)").run("services", "primary", "group/a", Date.now());
-      expect(softDeleteMissingProjects(store, [], ["services"])).toBe(0);
-      expect(softDeleteMissingProjects(store, [], [])).toBe(1);
+      expect(await softDeleteMissingProjects(store, [], ["services"])).toBe(0);
+      expect(await softDeleteMissingProjects(store, [], [])).toBe(1);
     } finally { store.sqlite.close(); }
   });
 });

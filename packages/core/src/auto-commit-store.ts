@@ -38,7 +38,7 @@ import { deriveSourceKey } from "./auto-commit-identity.js";
 import type { WorkspaceResolution } from "./config-resolution.js";
 import type { ReviewEvent } from "./review-event.js";
 
-export const AUTO_COMMIT_STORE_SCHEMA_VERSION = 6;
+export const AUTO_COMMIT_STORE_SCHEMA_VERSION = 7;
 
 // ---------------------------------------------------------------------------
 // Receipts and members
@@ -73,6 +73,13 @@ export interface AcceptReceiptInput {
    * back to deriving the layout from the event fields).
    */
   readonly resolution?: WorkspaceResolution | null;
+  /**
+   * Runtime config snapshot pinned at admission (P2): the snapshot row MUST
+   * be committed to the ConfigStore before this accept call, so a crash can
+   * never leave a receipt pointing at a missing snapshot (write order:
+   * snapshot first, receipt second). Null for legacy/pre-upgrade rows.
+   */
+  readonly configSnapshotId?: string | null;
 }
 
 export interface AutoCommitReceipt {
@@ -104,6 +111,8 @@ export interface AutoCommitReceipt {
   readonly metadataTerminalError: string | null;
   /** Frozen admission resolution snapshot; null for legacy/pre-upgrade rows. */
   readonly resolution: WorkspaceResolution | null;
+  /** Admission-time config snapshot reference; null for legacy/pre-upgrade rows. */
+  readonly configSnapshotId: string | null;
 }
 
 export interface AcceptReceiptResult {
@@ -321,6 +330,13 @@ export interface SealBatchInput {
   readonly exclusionPolicyVersion: string;
   readonly configPolicyVersion: string;
   readonly maxAttempts: number;
+  /**
+   * Config snapshot executed by this batch. The assembler passes the shared
+   * snapshot when every member receipt pinned the same one; null means
+   * legacy or mixed-snapshot membership (P3 groups batches on snapshot
+   * boundaries so this is always set for new config-managed deployments).
+   */
+  readonly configSnapshotId?: string | null;
   readonly now: number;
 }
 
@@ -358,6 +374,8 @@ export interface CommitBatchRecord {
   readonly head: string;
   readonly exclusionPolicyVersion: string;
   readonly configPolicyVersion: string;
+  /** Config snapshot this batch executes against; null for legacy rows. */
+  readonly configSnapshotId: string | null;
   readonly status: CommitBatchStatus;
   readonly attempt: number;
   readonly maxAttempts: number;
@@ -419,6 +437,16 @@ export interface AutoCommitStore {
   readonly backendKind: string;
 
   acceptReceipt(input: AcceptReceiptInput): Promise<AcceptReceiptResult>;
+
+  /**
+   * Snapshot ids this store still depends on (P2 retention source):
+   * snapshots referenced by receipts that own at least one pending member,
+   * plus snapshots referenced by batches in a non-terminal status
+   * (completed/skipped release their pin; dead keeps it because manual
+   * recovery may re-execute the batch). The config snapshot GC subtracts
+   * this set from its reclaim candidates.
+   */
+  listActiveConfigSnapshotIds(now: number): Promise<readonly string[]>;
   /**
    * Persist a routing-stage intake whose workspace binding requires metadata
    * unavailable at receive time. Atomic and idempotent per `routingKey`;

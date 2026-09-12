@@ -275,7 +275,7 @@ describe("createSqliteAutoCommitStore persistence", () => {
       const verify = new Database(first.dbPath);
       expect(
         verify.prepare("SELECT schema_version FROM auto_commit_meta").get(),
-      ).toEqual({ schema_version: 6 });
+      ).toEqual({ schema_version: 7 });
       expect(
         verify.prepare("PRAGMA table_info(auto_commit_receipts)").all(),
       ).toEqual(

@@ -113,6 +113,32 @@ Sources: `packages/store/src/schema.ts`, `database.ts`, store tests, architectur
 - `daily_rollups` use the UTC day of run start. Every mutation of its underlying
   run/metrics/usage/output data must recompute the affected partition through
   `recomputeDailyRollup`; real-time queries do not prove the cached rollup is fresh.
+- Unique-violation dedup must name the constraint it tolerates. Catching any
+  `23505` as "already exists" in `stats.pg.ts` misread a concurrent projects
+  upsert race as a persisted run and silently dropped the run's accounting;
+  tolerate only the target PK and put the whole multi-write unit (project
+  upsert, run, metrics, usage, rollup) in one transaction so checkpoint
+  retries replay atomically — the same shape as the sqlite branch.
+- Check-then-act across two statements is a race even when "the sweep just
+  ran". Snapshot deletion is one conditional `DELETE ... WHERE pinned=0 AND
+  ref_count=0` (rowCount/changes decides; re-SELECT only to distinguish
+  idempotent-miss from still-referenced), and `writeSnapshot` is
+  `ON CONFLICT DO NOTHING`/`INSERT OR IGNORE` + re-read hash check. SELECT →
+  act windows let a late pin land between GC's check and delete (spec §7.2).
+- Redis CAS scripts derive the next sequence in-script from the value they
+  just validated (`local n = tonumber(active or '0') + 1`); never trust a
+  caller-side pre-read, which can be stale the moment CAS passes and would
+  overwrite an immutable revision or rewind the head.
+- `migrate=verify` and CLI status/check are read-only: probe ledger existence
+  (`to_regclass`/`tableExists`) and compute all-pending instead of running
+  `ensureLedger`; `CREATE SCHEMA` belongs to the auto branch only. A verify
+  that writes DDL breaks least-privilege accounts and the "no half-upgraded
+  state" boundary.
+- `applyConfigChangeset` accepts only the exported op union
+  (`create/update/delete/rename/set-enabled/set/unset`); there is no `upsert`.
+  Unknown op names fail with `invalid_field_type` before publication; P5
+  must additionally validate the complete request shape. A misspelled op
+  must never become a successful empty commit (`config-source.ts`).
 
 ## Live and final usage
 
@@ -140,3 +166,39 @@ Sources: `packages/server/src/review-orchestrator.ts`, `live-runs.ts`,
   Note Hook places `merge_request` at the payload root. Route retries must enter
   `readNextWake` in every backend and reuse frozen events without a new VCS query
   (`routing-admission.test.ts`, `auto-commit-store-conformance.ts`).
+
+- Redis live tests measure the whole shared keyspace: `SCAN MATCH <prefix>`
+  still walks every key, so a dev instance with thousands of leftover test
+  keys makes `scanCount: 1` pagination tests exceed their timeout while the
+  same file passes standalone. Use a fresh disposable test instance or clean
+  only test-owned prefixes; never use `FLUSHDB` or raise the timeout
+  (`model-catalog-redis-live.test.ts`).
+- Redis Lua errors do not roll back earlier writes. Validate all index key
+  types and generation bounds before mutation; read large HINCRBY results
+  back as decimal strings (`redis-config-store.test.ts`). OOM injection must
+  use `AICR_REDIS_OOM_TEST_URL` on a separate instance: CONFIG is server-wide.
+- PostgreSQL migrations for config and business tables share the schema and
+  ledger, so they need the same lock before ledger creation. Check both
+  namespaces in CLI/verify; preserve SQLite's name-only historical ledger
+  (`migration-review.test.ts`, `migrate.test.ts`).
+- PostgreSQL recording errors from Drizzle wrap the driver error in `cause`;
+  dedupe only `review_runs_pkey`. Serialize rollup reads inside the transaction
+  with `FOR NO KEY UPDATE`, compatible with concurrent FK `KEY SHARE` locks
+  (`pg-store.test.ts` concurrent duplicate and rollup cases).
+- `tsc -b` trusts dist timestamps: after changing an exported signature,
+  a consumer package can compile against the stale `.d.ts` and report phantom
+  arity errors. Rebuild the producer with `tsc -b packages/<producer> --force`
+  before suspecting the consumer.
+- ESM builds have no bare `require`: resolve optional native deps through
+  `createRequire(import.meta.url).resolve("<pkg>")` and createRequire the
+  resolved entry (`packages/cli/src/migrate.ts` better-sqlite3 pattern).
+  `require.resolve` under top-level await throws `ERR_AMBIGUOUS_MODULE_SYNTAX`.
+- better-sqlite3 opens create the file: a "read-only" probe that opens the
+  path already mutates the deployment. True read-only status needs
+  `new Database(path, { readonly: true })` plus a missing-file branch that
+  reports all-pending without touching disk (M19 contract in
+  `packages/cli/src/migrate.ts`).
+- Historical-DDL fixtures must use frozen migration text: verify append-only
+  against git history (`git show <pre-append>:<file>`) and slice the shipped
+  array, never label current schema with old version tags (M02,
+  `packages/store/test/store-migration-fixture.test.ts`).

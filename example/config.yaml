@@ -158,8 +158,12 @@ llm:
 #     kind: sqlite
 #     sqlite:
 #       path: /app/data/aicr.sqlite
-#     # postgres:
-#     #   url_env: AICR_DATABASE_URL  # reserved for future multi-instance deployments
+#     # postgres:                       # wired: same stats/catalog/reflection/deferral contracts
+#     #   url_env: AICR_DATABASE_URL
+#     # migrate: auto                   # auto | verify — startup schema-migration mode;
+#                                       # `verify` refuses to boot a behind/drifted ledger,
+#                                       # apply both config/store migrations before using verify.
+#                                       # Inspect or apply out-of-band: aicr migrate --status|--check|--apply
 #   cache:
 #     kind: memory                    # memory | redis | none
 #     # redis:
@@ -989,12 +993,14 @@ review:
 # Scheduled fields require a trusted scheduled-event envelope. This proposal
 # does not add a new periodic trigger engine; unsupported UI options stay disabled.
 #
-# Planned database configuration sources use immutable revisions and retain
-# explicit file settings as read-only. Newly accepted tasks use a published
-# revision; queued/running tasks keep their accepted snapshot. Bootstrap
-# connections, admin auth, secret allowlists and workspace root remain file-only.
-# SQLite/PostgreSQL/Redis migrations are planned, not available through this
-# example yet. See the design for field availability, UI and migration details.
+# Database configuration sources (revisions, audit, sessions, bindings,
+# snapshots) now have storage backends for SQLite, PostgreSQL and Redis, a
+# checksummed migration ledger and the `aicr migrate` CLI; admin sessions are
+# persisted in the configured config store. Still planned: source merging and
+# publication (P3), runtime pinning of published revisions (P4), the config
+# admin API (P5) and the management form (P6) — until those land, YAML remains
+# the only consumed configuration source. Bootstrap connections, admin auth,
+# secret allowlists and workspace root remain file-only by design.
 workspaces:
   cache:
     max_total_gb: 10

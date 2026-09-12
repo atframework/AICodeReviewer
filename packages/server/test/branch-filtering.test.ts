@@ -275,12 +275,12 @@ describe("PR comment commands and ignored-event side effects", () => {
       expect(schedule).not.toHaveBeenCalled();
       expect(defer).not.toHaveBeenCalled();
       expect(pipeline).not.toHaveBeenCalled();
-      expect(getRecentWebhookEvents(store, 10)).toMatchObject([{
+      expect(await getRecentWebhookEvents(store, 10)).toMatchObject([{
         workspaceId: "restricted", decision: "ignored", reason: "target_branch_not_watched", detail: { branch: "dev" },
       }]);
     } finally {
       deferrals.stop();
-      closeStoreDb(store);
+      await closeStoreDb(store);
     }
   });
 });

@@ -3,7 +3,7 @@ import { mkdirSync, rmSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
-import { createStoreDb, closeStoreDb, type StoreDb } from "../src/database.js";
+import { createStoreDb, closeStoreDb, type SqliteStoreDb } from "../src/database.js";
 import {
   insertWebhookEvent,
   getRecentWebhookEvents,
@@ -12,23 +12,23 @@ import {
 } from "../src/webhook-events.js";
 
 let tmpDir: string;
-let store: StoreDb;
+let store: SqliteStoreDb;
 
-beforeEach(() => {
+beforeEach(async () => {
   tmpDir = join(tmpdir(), `aicr-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
   mkdirSync(tmpDir, { recursive: true });
   store = createStoreDb(join(tmpDir, "test.db"));
 });
 
-afterEach(() => {
-  closeStoreDb(store);
+afterEach(async () => {
+  (await closeStoreDb(store));
   if (existsSync(tmpDir)) {
     rmSync(tmpDir, { recursive: true, force: true });
   }
 });
 
 describe("webhook events", () => {
-  it("creates the webhook_events table via migrations", () => {
+  it("creates the webhook_events table via migrations", async () => {
     const tables = store.sqlite
       .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
       .all()
@@ -36,8 +36,8 @@ describe("webhook events", () => {
     expect(tables).toContain("webhook_events");
   });
 
-  it("inserts an event and returns it newest-first with parsed detail", () => {
-    insertWebhookEvent(store, {
+  it("inserts an event and returns it newest-first with parsed detail", async () => {
+    (await insertWebhookEvent(store, {
       receivedAt: new Date(1_000),
       provider: "github",
       eventName: "pull_request",
@@ -50,16 +50,16 @@ describe("webhook events", () => {
       decision: "deferred",
       reason: "execution_window",
       detail: { resumeAt: 5_000, noticePublished: true },
-    });
-    insertWebhookEvent(store, {
+    }));
+    (await insertWebhookEvent(store, {
       receivedAt: new Date(2_000),
       provider: "gitea",
       eventName: "push",
       decision: "queued",
       reason: null,
-    });
+    }));
 
-    const events = getRecentWebhookEvents(store, 20);
+    const events = (await getRecentWebhookEvents(store, 20));
     expect(events).toHaveLength(2);
     expect(events[0]!.provider).toBe("gitea");
     expect(events[0]!.decision).toBe("queued");
@@ -68,25 +68,25 @@ describe("webhook events", () => {
     expect(events[1]!.detail).toEqual({ resumeAt: 5_000, noticePublished: true });
   });
 
-  it("defaults receivedAt to now and tolerates invalid detail JSON", () => {
-    insertWebhookEvent(store, { decision: "rejected", reason: "invalid_signature" });
-    const before = getRecentWebhookEvents(store, 1)[0]!;
+  it("defaults receivedAt to now and tolerates invalid detail JSON", async () => {
+    (await insertWebhookEvent(store, { decision: "rejected", reason: "invalid_signature" }));
+    const before = (await getRecentWebhookEvents(store, 1))[0]!;
     expect(before.receivedAt.getTime()).toBeGreaterThan(0);
 
     store.sqlite.prepare("UPDATE webhook_events SET detail = ? WHERE id = ?").run("not-json", before.id);
-    const after = getRecentWebhookEvents(store, 1)[0]!;
+    const after = (await getRecentWebhookEvents(store, 1))[0]!;
     expect(after.detail).toBeNull();
   });
 
-  it("prunes rows beyond the retention limit on insert", () => {
+  it("prunes rows beyond the retention limit on insert", async () => {
     for (let i = 0; i < WEBHOOK_EVENTS_RETENTION_LIMIT + 25; i += 1) {
-      insertWebhookEvent(store, {
+      (await insertWebhookEvent(store, {
         receivedAt: new Date(i),
         provider: "gitlab",
         decision: "executed",
-      });
+      }));
     }
-    const events = getRecentWebhookEvents(store, WEBHOOK_EVENTS_RETENTION_LIMIT + 50);
+    const events = (await getRecentWebhookEvents(store, WEBHOOK_EVENTS_RETENTION_LIMIT + 50));
     expect(events).toHaveLength(WEBHOOK_EVENTS_RETENTION_LIMIT);
     const count = store.sqlite.prepare("SELECT COUNT(*) AS n FROM webhook_events").get() as { n: number };
     expect(count.n).toBe(WEBHOOK_EVENTS_RETENTION_LIMIT);
@@ -94,19 +94,19 @@ describe("webhook events", () => {
     expect(oldest.receivedAt.getTime()).toBe(25);
   });
 
-  it("pruneWebhookEvents deletes older rows beyond an explicit keep count", () => {
+  it("pruneWebhookEvents deletes older rows beyond an explicit keep count", async () => {
     for (let i = 0; i < 10; i += 1) {
-      insertWebhookEvent(store, { receivedAt: new Date(i), decision: "ignored" });
+      (await insertWebhookEvent(store, { receivedAt: new Date(i), decision: "ignored" }));
     }
-    const deleted = pruneWebhookEvents(store, 3);
+    const deleted = (await pruneWebhookEvents(store, 3));
     expect(deleted).toBe(7);
-    expect(getRecentWebhookEvents(store, 10)).toHaveLength(3);
+    expect((await getRecentWebhookEvents(store, 10))).toHaveLength(3);
   });
 
-  it("honours the query limit", () => {
+  it("honours the query limit", async () => {
     for (let i = 0; i < 30; i += 1) {
-      insertWebhookEvent(store, { receivedAt: new Date(i), decision: "executed" });
+      (await insertWebhookEvent(store, { receivedAt: new Date(i), decision: "executed" }));
     }
-    expect(getRecentWebhookEvents(store, 20)).toHaveLength(20);
+    expect((await getRecentWebhookEvents(store, 20))).toHaveLength(20);
   });
 });
