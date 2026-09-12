@@ -18,6 +18,7 @@ import {
   isTransientIoError,
   nextAllowedInstant,
   prepareReviewPrompt,
+  vcsKindForProvider,
   type CompiledWeeklySchedule,
   type PreparedReviewPrompt,
   type QueueWorker,
@@ -26,6 +27,7 @@ import {
   type ReviewProvider,
 } from "@aicr/core";
 import type { ReviewDeduplicator } from "./review-deduplicator.js";
+import type { LiveRunRegistry } from "./live-runs.js";
 import type { AutoCommitStore } from "@aicr/core";
 import { isContextOverflowError, LlmFallbackExhaustedError } from "@aicr/llm";
 import {
@@ -148,6 +150,12 @@ export interface ServerAppOptions {
    */
   readonly deferralManager?: ReviewDeferralManager;
   readonly store?: StoreDb;
+  /**
+   * In-memory registry of currently running analyses backing the dashboard
+   * Live panel (`GET /api/admin/runs/live`). Bootstrap wires the same
+   * instance into `reviewOrchestration.liveRuns` so runs report themselves.
+   */
+  readonly liveRuns?: LiveRunRegistry;
 }
 
 export interface ServerReviewPreparationOptions {
@@ -811,6 +819,8 @@ export async function runTriggerProcessing(
   reviewPreparationOptions: ServerReviewPreparationOptions | undefined,
   reviewOrchestrationOptions: ServerReviewOrchestrationOptions | undefined,
   issueTriageOptions: IssueTriageRuntimeOptions | undefined,
+  /** Identity of the scheduled execution; threaded into orchestration for live-run reporting. */
+  execution?: { readonly runId: string; readonly attempt?: number },
 ): Promise<TriggerProcessingResult> {
   let triageResult: TriageResult | undefined;
   // The triage client speaks the Gitea/Forgejo API, so only Gitea-family issue
@@ -905,6 +915,12 @@ export async function runTriggerProcessing(
           payload: decoded,
           provider,
           eventName,
+          ...(execution
+            ? {
+              runId: execution.runId,
+              ...(execution.attempt !== undefined ? { attempt: execution.attempt } : {}),
+            }
+            : {}),
         },
         reviewOrchestrationOptions,
       );
@@ -1070,7 +1086,9 @@ export function persistReviewRunToStore(
       targetKind: reviewEvent.targetKind ?? null,
       targetUrl: reviewEvent.url ?? null,
       branch: reviewEvent.branch ?? null,
-      headSha: reviewEvent.headSha ?? null,
+      headSha: reviewRun.headSha ?? reviewEvent.headSha ?? null,
+      vcsKind: reviewRun.vcsKind ?? vcsKindForProvider(reviewEvent.provider) ?? null,
+      headCommittedAt: reviewRun.headCommittedAt ? new Date(reviewRun.headCommittedAt) : null,
       codeMetrics: {
         filesChanged: reviewRun.changedFileCount,
         filesAnalyzed: reviewRun.diffFileCount,
@@ -1130,6 +1148,7 @@ function persistFailedRunToStore(
       targetUrl: reviewEvent.url ?? null,
       branch: reviewEvent.branch ?? null,
       headSha: reviewEvent.headSha ?? null,
+      vcsKind: vcsKindForProvider(reviewEvent.provider) ?? null,
     });
   } catch (err: unknown) {
     console.warn(JSON.stringify({
@@ -1377,6 +1396,7 @@ function scheduleTriggerProcessing(
       reviewPreparationOptions,
       reviewOrchestrationOptions,
       issueTriageOptions,
+      { runId, attempt: attemptNumber },
     ).then((result) => {
       const durationMs = Date.now() - startMs;
       if (result.reviewRun) {
@@ -1660,6 +1680,7 @@ async function handleReviewOrchestration(
       reviewPreparationOptions,
       reviewOrchestrationOptions,
       issueTriageOptions,
+      { runId, attempt: 1 },
     );
   } catch (error) {
     const durationMs = Date.now() - startMs;
@@ -1763,6 +1784,7 @@ function mountRoutes(app: Hono, options: ServerAppOptions): void {
     const observabilityApi = createObservabilityApi({
       ...options.observability,
       ...(options.autoCommitStore ? { autoCommitStore: options.autoCommitStore } : {}),
+      ...(options.liveRuns ? { liveRuns: options.liveRuns } : {}),
     });
     app.route("/api/admin", observabilityApi);
   }

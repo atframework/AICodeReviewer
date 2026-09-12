@@ -128,7 +128,10 @@ llm:
 #   - /api/admin/stats    — overview + time-window statistics
 #   - /api/admin/stats/projects  — per-project stats
 #   - /api/admin/stats/providers — per-provider+model stats
-#   - /api/admin/runs     — recent run list
+#   - /api/admin/runs     — recent run list (branch + revision + commit time per run)
+#   - /api/admin/runs/live — active worker slots, tasks, tokens/requests/cost in this process
+# Live refresh defaults to manual; its 5/15/30/60s selector needs no server config.
+#   - /api/admin/events   — recent webhook/trigger event log
 # All admin endpoints (except /login) require a Bearer session token.
 #
 # admin:

@@ -123,6 +123,7 @@ import {
   type RedisModelCatalogBackendOptions,
 } from "./model-catalog-service.js";
 import type { ObservabilityApiOptions } from "./observability-api.js";
+import { createLiveRunRegistry, type LiveRunRegistry } from "./live-runs.js";
 import type {
   ReviewDispatchResult,
   ReviewOrchestrationContext,
@@ -2392,6 +2393,7 @@ export async function bootstrapServerApp(options: BootstrapServerOptions): Promi
 
   let store: StoreDb | undefined;
   let observability: ObservabilityApiOptions | undefined;
+  let liveRunRegistry: LiveRunRegistry | undefined;
 
   if (needsStore) {
     if (config.storage.database.kind !== "sqlite") {
@@ -2507,9 +2509,11 @@ export async function bootstrapServerApp(options: BootstrapServerOptions): Promi
     softDeleteMissingProjects(store, activeProjectIdentities);
     hardDeleteExpiredProjects(store, config.storage.retention.deleted_project_grace_days);
 
+    liveRunRegistry = createLiveRunRegistry();
     observability = {
       store,
       adminAuth: adminAuthConfig,
+      liveRuns: liveRunRegistry,
     };
   }
 
@@ -2699,6 +2703,7 @@ export async function bootstrapServerApp(options: BootstrapServerOptions): Promi
       : {}),
     ...(config.review.output_language ? { outputLanguage: config.review.output_language } : {}),
     ...(config.review.log_thinking === false ? { logThinking: false } : {}),
+    ...(liveRunRegistry ? { liveRuns: liveRunRegistry } : {}),
   };
 
   const queue = await createQueueFromConfig(config);
@@ -2773,6 +2778,7 @@ export async function bootstrapServerApp(options: BootstrapServerOptions): Promi
     // Window-deferred async events persist here so a restart resumes them.
     deferralManager: new ReviewDeferralManager({ ...(store ? { store } : {}) }),
     ...(observability ? { observability } : {}),
+    ...(liveRunRegistry ? { liveRuns: liveRunRegistry } : {}),
     ...(store ? { store } : {}),
   };
 }

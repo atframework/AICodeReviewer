@@ -17,6 +17,22 @@ This file records verified external sources for repository AI-agent guidance, Ag
 
 ## Source records
 
+### Completed-turn usage for the Live dashboard
+
+- Sources:
+  - <https://github.com/anomalyco/opencode/blob/dev/packages/opencode/src/cli/cmd/run.ts>
+  - <https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/docs/json.md>
+  - <https://github.com/can1357/oh-my-pi/blob/main/packages/coding-agent/src/modes/print-mode.ts>
+- Verified guidance: OpenCode emits `step_finish` on a completed step;
+  pi/omp emit the authoritative assistant message in `message_end`.
+  Incremental live accounting must ignore `message_update` and replace its
+  invocation preview with the final total rather than adding both.
+  Kilo retains the existing compatibility parser; this pass did not refresh
+  its upstream source because the pinned source URL was unavailable.
+- `last_checked`: 2026-09-12
+- `next_review`: 2026-12-12
+- `update_trigger`: Agent CLI output-mode changes or live usage parser changes.
+
 ### LLM quota exhaustion and transient throttling
 
 - Sources:

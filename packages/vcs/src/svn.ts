@@ -208,7 +208,27 @@ function decodeXmlEntities(text: string): string {
 interface SvnLogEntry {
   readonly revision: string;
   readonly author: string | undefined;
+  /** Commit time (`svn:date`) normalized to ISO-8601 UTC; undefined when the revprop is unset. */
+  readonly date: string | undefined;
   readonly paths: readonly string[];
+}
+
+/**
+ * Normalizes the `svn log --xml` `<date>` value (`2026-09-01T00:00:00.000000Z`)
+ * to canonical ISO-8601 UTC with millisecond precision. A malformed or missing
+ * value maps to undefined rather than throwing.
+ */
+function normalizeSvnLogDate(raw: string | undefined): string | undefined {
+  if (!raw) {
+    return undefined;
+  }
+  const match = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d+))?Z$/u.exec(raw.trim());
+  if (!match) {
+    return undefined;
+  }
+  const millis = (match[2] ?? "0").padEnd(3, "0").slice(0, 3);
+  const parsed = Date.parse(`${match[1]}.${millis}Z`);
+  return Number.isNaN(parsed) ? undefined : new Date(parsed).toISOString();
 }
 
 /**
@@ -223,6 +243,7 @@ function parseSvnLogMetadata(stdout: string): SvnLogEntry[] {
     const body = match[2] ?? "";
     const authorMatch = /<author>([\s\S]*?)<\/author>/u.exec(body);
     const author = authorMatch ? decodeXmlEntities(authorMatch[1] ?? "") : undefined;
+    const dateMatch = /<date>([\s\S]*?)<\/date>/u.exec(body);
     const paths: string[] = [];
     const pathsMatch = /<paths>([\s\S]*?)<\/paths>/u.exec(body);
     if (pathsMatch) {
@@ -233,6 +254,7 @@ function parseSvnLogMetadata(stdout: string): SvnLogEntry[] {
     entries.push({
       revision: match[1] ?? "",
       author: author !== undefined && author.length > 0 ? author : undefined,
+      date: normalizeSvnLogDate(dateMatch?.[1]),
       paths,
     });
   }
@@ -639,6 +661,31 @@ export class SvnVcsAdapter implements VcsAdapter {
       ...(nextCursor !== undefined ? { nextCursor } : {}),
       status: nextCursor !== undefined ? "partial" : "complete",
     };
+  }
+
+  /**
+   * Commit time (`svn:date`) of one revision, read with a pegged `svn log`
+   * against the monitored root so the revision resolves even after the path
+   * moved. Advisory: read failures and unset revprops map to `undefined`.
+   */
+  async fetchRevisionCommittedAt(revision: string): Promise<string | undefined> {
+    if (!/^\d+$/u.test(revision)) {
+      return undefined;
+    }
+    try {
+      const result = await this.runSvn([
+        "log",
+        "--xml",
+        "--limit",
+        "1",
+        "-r",
+        `${revision}:${revision}`,
+        `${this.targetForPath()}@${revision}`,
+      ]);
+      return parseSvnLogMetadata(result.stdout)[0]?.date;
+    } catch {
+      return undefined;
+    }
   }
 }
 

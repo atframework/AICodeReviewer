@@ -45,13 +45,28 @@ tr:hover td{background:rgba(59,130,246,0.05)}
 .badge-failure{background:rgba(239,68,68,0.15);color:var(--red)}
 .badge-skip{background:rgba(234,179,8,0.15);color:var(--yellow)}
 .badge-running{background:rgba(59,130,246,0.15);color:var(--accent)}
+.badge-analyzing{background:rgba(249,115,22,0.15);color:var(--orange)}
 .mono{font-family:"SF Mono","Fira Code",monospace;font-size:0.8125rem}
+.cell-sub{font-size:0.75rem;color:var(--muted)}
+.toolbar{display:flex;gap:0.5rem;align-items:center;margin-bottom:1rem;flex-wrap:wrap}
+.toolbar select{padding:0.375rem 0.5rem;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:0.8125rem}
+.toolbar .indicator{font-size:0.75rem;color:var(--muted)}
 .tabs{display:flex;gap:0;margin-bottom:1rem;border-bottom:1px solid var(--border)}
 .tab{padding:0.5rem 1rem;cursor:pointer;color:var(--muted);font-size:0.875rem;border-bottom:2px solid transparent;transition:all 0.15s}
 .tab:hover{color:var(--text)}
 .tab.active{color:var(--accent);border-bottom-color:var(--accent)}
 .tab-content{display:none}
 .tab-content.active{display:block}
+.table-scroll{overflow-x:auto}
+.live-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,380px),1fr));gap:1rem}
+.live-card{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:1rem;min-width:0;overflow-wrap:anywhere}
+.live-heading{display:flex;justify-content:space-between;gap:0.5rem;margin-bottom:0.5rem}
+.live-metrics{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0.75rem;margin-top:1rem}
+.live-metrics dt{font-size:0.75rem;color:var(--muted)}
+.live-metrics dd{font-size:0.875rem}
+.live-card a{color:var(--accent)}
+.tabs{overflow-x:auto;white-space:nowrap}
+@media(max-width:640px){.header{flex-wrap:wrap;gap:0.5rem}.content{padding:0.75rem}.header-actions{flex-wrap:wrap}}
 </style>
 </head>
 <body>
@@ -79,14 +94,32 @@ tr:hover td{background:rgba(59,130,246,0.05)}
 <div class="content">
 
 <div class="tabs">
-<div class="tab active" data-tab="overview" onclick="switchTab('overview')">Overview</div>
+<div class="tab active" data-tab="live" onclick="switchTab('live')">Live</div>
+<div class="tab" data-tab="overview" onclick="switchTab('overview')">Overview</div>
 <div class="tab" data-tab="projects" onclick="switchTab('projects')">Projects</div>
 <div class="tab" data-tab="providers" onclick="switchTab('providers')">LLM Providers</div>
 <div class="tab" data-tab="runs" onclick="switchTab('runs')">Recent Runs</div>
 <div class="tab" data-tab="events" onclick="switchTab('events')">Events</div>
 </div>
 
-<div id="tab-overview" class="tab-content active">
+<div id="tab-live" class="tab-content active">
+<div class="toolbar">
+<button id="live-refresh" class="btn btn-sm btn-ghost" onclick="loadLiveRuns()">Refresh</button>
+<label class="indicator" for="live-auto">Auto-refresh</label>
+<select id="live-auto" onchange="setLiveAuto()">
+<option value="0" selected>Off (manual)</option>
+<option value="5000">Every 5s</option>
+<option value="15000">Every 15s</option>
+<option value="30000">Every 30s</option>
+<option value="60000">Every 60s</option>
+</select>
+<span id="live-indicator" class="indicator" role="status" aria-live="polite"></span>
+</div>
+<div id="live-table" class="live-grid"></div>
+<div class="cell-sub" style="margin-top:0.5rem">Workers are active analysis slots in this server process. Usage updates after completed model turns for streaming agents, or when other invocations finish. Unreported usage stays unavailable; prompt estimates are separate. Entries disappear when an execution settles or the server restarts.</div>
+</div>
+
+<div id="tab-overview" class="tab-content">
 <div id="time-selector" style="margin-bottom:1rem;display:flex;gap:0.5rem">
 <button class="btn btn-sm btn-ghost active" data-window="today" onclick="selectWindow('today')">Today</button>
 <button class="btn btn-sm btn-ghost" data-window="week" onclick="selectWindow('week')">This Week</button>
@@ -95,10 +128,10 @@ tr:hover td{background:rgba(59,130,246,0.05)}
 </div>
 <div id="overview-stats" class="stats-grid"></div>
 <div class="section-title">Recent Activity</div>
-<table>
-<thead><tr><th>Time</th><th>Workspace</th><th>Provider</th><th>Status</th><th>Problems</th><th>Tokens</th><th>Duration</th></tr></thead>
+<div class="table-scroll"><table>
+<thead><tr><th>Time</th><th>Workspace</th><th>Revision</th><th>Provider</th><th>Status</th><th>Problems</th><th>Tokens</th><th>Duration</th></tr></thead>
 <tbody id="overview-recent"></tbody>
-</table>
+</table></div>
 </div>
 
 <div id="tab-projects" class="tab-content">
@@ -109,7 +142,7 @@ tr:hover td{background:rgba(59,130,246,0.05)}
 <button class="btn btn-sm btn-ghost" data-pwin="all" onclick="selectProjectWindow('all')">All Time</button>
 </div>
 <div id="project-loading" style="display:none;color:var(--muted);font-size:0.875rem;margin-bottom:0.5rem">Loading...</div>
-<table>
+<div class="table-scroll"><table>
 <thead>
 <tr>
 <th>Project</th>
@@ -129,7 +162,7 @@ tr:hover td{background:rgba(59,130,246,0.05)}
 </tr>
 </thead>
 <tbody id="project-table"></tbody>
-</table>
+</table></div>
 </div>
 
 <div id="tab-providers" class="tab-content">
@@ -140,10 +173,10 @@ tr:hover td{background:rgba(59,130,246,0.05)}
 <button class="btn btn-sm btn-ghost" data-prwin="all" onclick="selectProviderWindow('all')">All Time</button>
 </div>
 <div id="provider-loading" style="display:none;color:var(--muted);font-size:0.875rem;margin-bottom:0.5rem">Loading...</div>
-<table>
+<div class="table-scroll"><table>
 <thead><tr><th>Provider</th><th>Model</th><th>Requests</th><th>Tokens In</th><th>Tokens Out</th><th>Total Tokens</th><th>Cache Hit</th><th>Cost (USD)</th><th>Retries/Fails</th><th>Avg Latency</th></tr></thead>
 <tbody id="provider-table"></tbody>
-</table>
+</table></div>
 </div>
 
 <div id="tab-runs" class="tab-content">
@@ -153,10 +186,10 @@ tr:hover td{background:rgba(59,130,246,0.05)}
 <span id="runs-page-info" style="font-size:0.8125rem;color:var(--muted)"></span>
 <button class="btn btn-sm btn-ghost" id="runs-next" onclick="nextRunsPage()">Next</button>
 </div>
-<table>
-<thead><tr><th>ID</th><th>Time</th><th>Workspace</th><th>Trigger</th><th>Provider</th><th>Model</th><th>Status</th><th>Problems</th><th>Tokens</th><th>Duration</th></tr></thead>
+<div class="table-scroll"><table>
+<thead><tr><th>ID</th><th>Time</th><th>Workspace</th><th>Trigger</th><th>Revision</th><th>Provider</th><th>Model</th><th>Status</th><th>Problems</th><th>Tokens</th><th>Duration</th></tr></thead>
 <tbody id="runs-table"></tbody>
-</table>
+</table></div>
 </div>
 
 <div id="tab-events" class="tab-content">
@@ -166,10 +199,10 @@ tr:hover td{background:rgba(59,130,246,0.05)}
 <span id="events-page-info" style="font-size:0.8125rem;color:var(--muted)"></span>
 <button class="btn btn-sm btn-ghost" id="events-next" onclick="nextEventsPage()">Next</button>
 </div>
-<table>
+<div class="table-scroll"><table>
 <thead><tr><th>Time</th><th>Provider</th><th>Event</th><th>Workspace</th><th>Repo</th><th>Target</th><th>Decision</th><th>Reason</th></tr></thead>
 <tbody id="events-table"></tbody>
-</table>
+</table></div>
 </div>
 
 </div>
@@ -191,6 +224,12 @@ var RUNS_PAGE_SIZE=20;
 var eventsData=null;
 var eventsPage=1;
 var EVENTS_PAGE_SIZE=20;
+var liveData=null;
+var liveServerSkewMs=0;
+var liveAutoTimer=null;
+var liveTickTimer=null;
+var liveRequest=null;
+var liveGeneration=0;
 
 function $(s){return document.querySelector(s)}
 function $$(s){return document.querySelectorAll(s)}
@@ -215,7 +254,27 @@ function configureDisabledDashboard(){
 function formatNumber(n){return n==null?"-":n.toLocaleString()}
 function formatCost(n){return n==null?"-":"$"+n.toFixed(4)}
 function formatDuration(ms){if(ms==null)return"-";if(ms<1000)return ms+"ms";return(ms/1000).toFixed(1)+"s"}
+function formatElapsed(ms){if(ms<0)ms=0;var s=Math.floor(ms/1000);if(s<60)return s+"s";var m=Math.floor(s/60);s%=60;if(m<60)return m+"m "+s+"s";return Math.floor(m/60)+"h "+(m%60)+"m"}
 function formatTime(d){if(!d)return"-";return new Date(d).toLocaleString()}
+function formatRevisionShort(r){
+  var sha=r.headSha;
+  if(!sha)return null;
+  var kind=r.vcsKind;
+  if(kind==="svn")return "r"+sha;
+  if(kind==="p4")return "CL "+sha;
+  if(kind==="git")return /^[0-9a-f]{11,64}$/i.test(sha)?sha.slice(0,8):sha;
+  return sha;
+}
+function revisionContent(r){
+  var rev=formatRevisionShort(r);
+  if(!r.branch&&!rev)return"—";
+  var titleAttr=r.headSha?' title="'+escAttr(r.headSha)+'"':"";
+  var line1=(r.branch?esc(r.branch)+" ":"")+(rev?'<span class="mono"'+titleAttr+">"+esc(rev)+"</span>":"");
+  var line2='<div class="cell-sub">Committed '+(r.headCommittedAt?formatTime(r.headCommittedAt):"—")+"</div>";
+  return line1+line2;
+}
+function revisionCell(r){return"<td>"+revisionContent(r)+"</td>"}
+function escAttr(s){return esc(s).replaceAll('"',"&quot;").replaceAll("'","&#39;")}
 function cacheHitRate(cached,tokensIn){return tokensIn>0?(cached/tokensIn*100).toFixed(1)+"%":"—"}
 function formatCacheHit(cached,tokensIn){return tokensIn>0?formatNumber(cached)+" ("+cacheHitRate(cached,tokensIn)+")":"—"}
 function runTokensCell(r){
@@ -238,10 +297,11 @@ function eventReasonCell(e){
 }
 
 async function apiFetch(path,opts){
+  var token=authToken;
   var headers=Object.assign({},(opts&&opts.headers)||{});
   if(authToken)headers["Authorization"]="Bearer "+authToken;
   var r=await fetch(path,Object.assign({},opts||{},{headers:headers}));
-  if(r.status===401){logout();throw new Error("unauthorized")}
+  if(r.status===401){if(token===authToken)logout();throw new Error("unauthorized")}
   return r;
 }
 
@@ -275,17 +335,25 @@ function showDashboard(){
   document.getElementById("login-view").style.display="none";
   document.getElementById("dashboard-view").style.display="block";
   refreshStats();
+  if(document.getElementById("tab-live").classList.contains("active"))startLiveTicker();
 }
 
 function logout(){
   authToken=null;
   localStorage.removeItem("aicr_token");
+  stopLiveTicker();
+  stopLiveRefresh();
+  liveData=null;
+  document.getElementById("live-auto").value="0";
+  document.getElementById("live-table").innerHTML="";
+  document.getElementById("live-indicator").textContent="";
   document.getElementById("login-view").style.display="flex";
   document.getElementById("dashboard-view").style.display="none";
 }
 
 async function refreshStats(){
   if(!authToken)return;
+  if(liveIsVisible())loadLiveRuns();
   var ind=document.getElementById("refresh-indicator");
   ind.textContent="Loading...";
   try{
@@ -311,6 +379,8 @@ function switchTab(t){
   if(t==="providers"&&!providerStatsData)loadProviderStats(currentProviderWindow);
   if(t==="runs"&&!runsData)loadRuns();
   if(t==="events"&&!eventsData)loadEvents();
+  if(t==="live"){loadLiveRuns();startLiveTicker();}
+  else {stopLiveTicker();stopLiveRefresh();}
 }
 
 function getSinceForWindow(w){
@@ -381,7 +451,7 @@ async function loadRuns(){
     renderRunsPage();
   }catch(ex){
     var tbody=document.getElementById("runs-table");
-    if(tbody)tbody.innerHTML='<tr><td colspan="10" style="text-align:center;color:var(--muted)">Error loading data</td></tr>';
+    if(tbody)tbody.innerHTML='<tr><td colspan="11" style="text-align:center;color:var(--muted)">Error loading data</td></tr>';
   }finally{
     if(el)el.style.display="none";
   }
@@ -470,6 +540,141 @@ function renderEventsTable(events){
   }).join("");
 }
 
+function phaseBadge(p){
+  var m={preparing:"running",analyzing:"analyzing",publishing:"success"};
+  return '<span class="badge badge-'+(m[p]||"running")+'">'+esc(p)+"</span>";
+}
+
+async function loadLiveRuns(){
+  if(!liveIsVisible()||liveRequest)return;
+  if(liveAutoTimer){clearTimeout(liveAutoTimer);liveAutoTimer=null}
+  var ind=document.getElementById("live-indicator");
+  var button=document.getElementById("live-refresh");
+  var request={controller:new AbortController(),generation:liveGeneration,token:authToken};
+  liveRequest=request;
+  if(button)button.disabled=true;
+  if(ind)ind.textContent="Loading...";
+  var timeout=setTimeout(function(){request.controller.abort()},30000);
+  try{
+    var r=await apiFetch("api/admin/runs/live",{signal:request.controller.signal,cache:"no-store"});
+    if(!r.ok)throw new Error("HTTP "+r.status);
+    var data=await r.json();
+    if(request.generation!==liveGeneration||request.token!==authToken)return;
+    if(!data||!Array.isArray(data.runs)||!Number.isFinite(Date.parse(data.serverTime)))throw new Error("Invalid live response");
+    liveServerSkewMs=new Date(data.serverTime).getTime()-Date.now();
+    liveData=data.runs;
+    renderLiveTable();
+    if(ind)ind.textContent=liveData.length+" running · Updated "+new Date().toLocaleTimeString();
+  }catch(ex){
+    if(request.generation!==liveGeneration||request.token!==authToken)return;
+    if(liveData===null)document.getElementById("live-table").textContent="Running analyses unavailable";
+    if(ind)ind.textContent="Refresh failed: "+ex.message+(liveData!==null?" · Displayed snapshot is stale":"");
+  }finally{
+    clearTimeout(timeout);
+    if(liveRequest===request){
+      liveRequest=null;
+      if(button)button.disabled=false;
+      scheduleLiveRefresh();
+    }
+  }
+}
+
+function liveTokensCell(r){
+  var m=r.metrics||{};
+  if(m.promptTokens==null&&m.completionTokens==null&&m.totalTokens==null){
+    if(r.promptTokenEstimate!=null)return'Usage unavailable<div class="cell-sub">~'+formatNumber(r.promptTokenEstimate)+" est. prompt</div>";
+    return"—";
+  }
+  var miss=Math.max(0,(m.promptTokens||0)-(m.cachedPromptTokens||0)-(m.cacheCreationTokens||0));
+  var total=m.totalTokens==null?(m.promptTokens||0)+(m.completionTokens||0):m.totalTokens;
+  return '<div>'+formatNumber(total)+'</div><div class="cell-sub">in '+formatNumber(m.promptTokens)+' · out '+formatNumber(m.completionTokens)+'</div><div class="cell-sub">hit '+
+    formatNumber(m.cachedPromptTokens||0)+" · miss "+formatNumber(miss)+
+    " · write "+formatNumber(m.cacheCreationTokens||0)+"</div>";
+}
+
+function renderLiveTable(){
+  var el=document.getElementById("live-table");
+  if(!el)return;
+  var runs=liveData||[];
+  if(runs.length===0){
+    el.innerHTML='<div class="cell-sub">No running analyses</div>';
+    return;
+  }
+  el.innerHTML=runs.map(function(r){
+    var head='<div class="live-heading"><strong>Worker '+esc(String(r.workerId||"—"))+'</strong>'+phaseBadge(r.phase)+'</div>'+
+      '<div><strong>'+esc(r.workspaceId)+"</strong> / "+esc(r.triggerName||"-")+"</div>"+
+      '<div class="cell-sub">'+esc(r.repoRef||"")+"</div>";
+    var task=esc(r.title||r.targetKind||r.eventName||"Analysis");
+    if(/^https?:\/\//i.test(r.url||""))task='<a href="'+escAttr(r.url)+'" target="_blank" rel="noopener noreferrer">'+task+'</a>';
+    head+='<div>'+task+'</div><div class="cell-sub mono">Run '+esc(r.runId||"—")+'</div>';
+    var tags=[];
+    if(r.source==="auto_commit")tags.push('<span class="badge badge-skip">auto-commit</span>');
+    if(r.source==="webhook")tags.push('<span class="badge badge-skip">webhook</span>');
+    if((r.attempt||1)>1)tags.push('<span class="badge badge-running">attempt '+esc(String(r.attempt))+"</span>");
+    if(tags.length)head+='<div class="cell-sub">'+tags.join(" ")+"</div>";
+    var model='<div>'+esc(r.modelProviderId)+" / "+esc(r.modelId)+"</div>"+(r.agentKind?'<div class="cell-sub">'+esc(r.agentKind)+"</div>":"");
+    var started=formatTime(r.startedAt)+'<div class="cell-sub" data-live-elapsed data-started="'+escAttr(r.startedAt)+'"></div>';
+    var m=r.metrics||{};
+    var cacheHit=m.promptTokens?cacheHitRate(m.cachedPromptTokens||0,m.promptTokens):"—";
+    var req=m.requestCount==null?"—":formatNumber(m.requestCount);
+    var cost=m.estimatedCostUsd==null?"—":formatCost(m.estimatedCostUsd);
+    var requests=req+'<div class="cell-sub">Retries '+formatNumber(m.retryCount)+' · Fallbacks '+formatNumber(m.fallbackCount)+'</div>';
+    return '<article class="live-card">'+head+'<div>'+revisionContent(r)+'</div><dl class="live-metrics">'+
+      liveMetric("Model / Agent",model)+liveMetric("Started / Elapsed",started)+
+      liveMetric("Tokens",liveTokensCell(r))+liveMetric("Cache Hit",cacheHit)+
+      liveMetric("LLM Requests",requests)+liveMetric("Estimated Cost",cost)+
+      '</dl><div class="cell-sub">Usage updated '+(r.metricsUpdatedAt?formatTime(r.metricsUpdatedAt):"—")+
+      (m.usageSource?' · '+esc(m.usageSource):'')+(r.compressed?' · Prompt compressed':'')+'</div></article>';
+  }).join("");
+  tickLiveElapsed();
+}
+function liveMetric(label,value){return '<div><dt>'+label+'</dt><dd>'+value+'</dd></div>'}
+
+function tickLiveElapsed(){
+  document.querySelectorAll("[data-live-elapsed]").forEach(function(el){
+    var started=new Date(el.getAttribute("data-started")).getTime();
+    if(isNaN(started)){el.textContent="";return}
+    el.textContent=formatElapsed(Date.now()+liveServerSkewMs-started)+" elapsed";
+  });
+}
+
+function startLiveTicker(){
+  stopLiveTicker();
+  liveTickTimer=setInterval(tickLiveElapsed,1000);
+}
+
+function stopLiveTicker(){
+  if(liveTickTimer){clearInterval(liveTickTimer);liveTickTimer=null}
+}
+
+function setLiveAuto(){
+  if(liveAutoTimer){clearTimeout(liveAutoTimer);liveAutoTimer=null}
+  scheduleLiveRefresh();
+}
+
+function liveIsVisible(){
+  return !!authToken&&!document.hidden&&document.getElementById("tab-live").classList.contains("active");
+}
+
+function scheduleLiveRefresh(){
+  var sel=document.getElementById("live-auto");
+  var ms=sel?parseInt(sel.value,10)||0:0;
+  if(liveAutoTimer){clearTimeout(liveAutoTimer);liveAutoTimer=null}
+  if(ms>0&&liveIsVisible()&&!liveRequest)liveAutoTimer=setTimeout(loadLiveRuns,ms);
+}
+
+function stopLiveRefresh(){
+  liveGeneration++;
+  if(liveAutoTimer){clearTimeout(liveAutoTimer);liveAutoTimer=null}
+  if(liveRequest){liveRequest.controller.abort();liveRequest=null}
+  document.getElementById("live-refresh").disabled=false;
+}
+
+document.addEventListener("visibilitychange",function(){
+  if(document.hidden){stopLiveRefresh();stopLiveTicker()}
+  else if(liveIsVisible()){startLiveTicker();scheduleLiveRefresh()}
+});
+
 function renderDashboard(){
   if(!currentData)return;
   renderOverviewStats();
@@ -551,18 +756,18 @@ function renderProviderTable(data){
 function renderRunsTable(runs,target,compact){
   var el=target||document.getElementById("runs-table");
   if(!runs||runs.length===0){
-    el.innerHTML='<tr><td colspan="'+(compact?7:10)+'" style="text-align:center;color:var(--muted)">No runs</td></tr>';
+    el.innerHTML='<tr><td colspan="'+(compact?8:11)+'" style="text-align:center;color:var(--muted)">No runs</td></tr>';
     return;
   }
   el.innerHTML=runs.map(function(r){
     if(compact){
-      return "<tr><td>"+formatTime(r.startedAt)+"</td><td>"+esc(r.workspaceId)+"</td><td>"+
-        esc(r.provider||"-")+"</td><td>"+statusBadge(r.status)+"</td><td>"+
+      return "<tr><td>"+formatTime(r.startedAt)+"</td><td>"+esc(r.workspaceId)+"</td>"+
+        revisionCell(r)+"<td>"+esc(r.provider||"-")+"</td><td>"+statusBadge(r.status)+"</td><td>"+
         formatNumber(r.problemCount)+"</td><td>"+runTokensCell(r)+"</td><td>"+formatDuration(r.durationMs)+"</td></tr>";
     }
     return "<tr><td>"+esc(r.id.slice(0,8))+"</td><td>"+formatTime(r.startedAt)+"</td><td>"+
-      esc(r.workspaceId)+"</td><td>"+esc(r.triggerName||"-")+"</td><td>"+
-      esc(r.provider||"-")+"</td><td>"+esc(r.providerModel||"-")+"</td><td>"+
+      esc(r.workspaceId)+"</td><td>"+esc(r.triggerName||"-")+"</td>"+
+      revisionCell(r)+"<td>"+esc(r.provider||"-")+"</td><td>"+esc(r.providerModel||"-")+"</td><td>"+
       statusBadge(r.status)+"</td><td>"+formatNumber(r.problemCount)+"</td><td>"+
       runTokensCell(r)+"</td><td>"+formatDuration(r.durationMs)+"</td></tr>";
   }).join("");

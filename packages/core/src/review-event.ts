@@ -55,6 +55,22 @@ export type ReviewActor = z.infer<typeof reviewActorSchema>;
 export type ReviewProvider = z.infer<typeof reviewProviderSchema>;
 export type ReviewTargetKind = z.infer<typeof reviewTargetKindSchema>;
 
+/** VCS family behind a review provider; undefined for providers with no VCS (manual/scheduled). */
+export type ReviewVcsKind = "git" | "svn" | "p4";
+
+export function vcsKindForProvider(provider: ReviewProvider): ReviewVcsKind | undefined {
+  if (provider === "p4") {
+    return "p4";
+  }
+  if (provider === "svn") {
+    return "svn";
+  }
+  if (provider === "gitea" || provider === "forgejo" || provider === "github" || provider === "gitlab") {
+    return "git";
+  }
+  return undefined;
+}
+
 export function createReviewEvent(input: ReviewEvent): ReviewEvent {
   return reviewEventSchema.parse(input);
 }

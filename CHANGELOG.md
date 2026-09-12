@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Dashboard Live tab: responsive worker cards with task/run identity, revision, phase, model, start/elapsed time, tokens, cache hit/miss/write counts, requests, retries/fallbacks, cost, and usage update time. Kilo/OpenCode and pi/omp report completed turns through advisory sandbox stdout callbacks. Refresh defaults to manual; optional polling is serialized, pauses when hidden, and marks failed snapshots stale. Execution IDs isolate overlapping attempts.
+- Run VCS stamp: `review_runs` gains `vcs_kind` and `head_committed_at` (migration `009_review_run_vcs_stamp`); the orchestrator resolves the head commit time via the new advisory `VcsAdapter.fetchRevisionCommittedAt` (git `git log --format=%cI`, svn `svn log --xml`, p4 `p4 -ztag describe -s`), and the Overview recent-activity and Runs tables show branch + short revision (git short sha, SVN `r<N>`, P4 `CL <N>`) + commit time.
+- GitLab webhook branch mapping: push events map `ref` to `ReviewEvent.branch` and merge-request events map `object_attributes.source_branch`.
 - **M16**: `review.pull_request.schedule` — optional weekly execution window for PR/MR analysis (including comment review commands), same shape as `review.auto_commit.schedule`, resolved across global/defaults/instance layers with wholesale replacement; falls back to the resolved auto-commit schedule when unset at all layers.
 - **M16**: Persistent deferral registry (`ReviewDeferralManager` + `review_deferrals` store table, migration `008`): webhook events arriving outside the execution window are persisted by dedup key and resume after a restart (claimed rows reset to pending); without the observability store deferrals fall back to in-process memory timers.
 - **M16**: Deferred comment review commands now post a reply on the PR/MR stating the scheduled start time (`bypassNoProblemsPolicy`, once per deferral).

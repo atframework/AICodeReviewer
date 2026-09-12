@@ -313,4 +313,16 @@ const MIGRATIONS = [
         ON review_deferrals(status, not_before);
     `,
   },
+  {
+    // VCS stamp of the analyzed head revision for the dashboard Recent Runs /
+    // Recent Activity panels: the VCS family (git/svn/p4, drives revision
+    // formatting) and the head commit time resolved best-effort at run time
+    // (null when the adapter could not read it). Both are display-only and
+    // never feed rollups.
+    name: "009_review_run_vcs_stamp",
+    sql: `
+      ALTER TABLE review_runs ADD COLUMN vcs_kind TEXT;
+      ALTER TABLE review_runs ADD COLUMN head_committed_at INTEGER;
+    `,
+  },
 ];

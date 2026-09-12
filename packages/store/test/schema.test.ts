@@ -66,6 +66,8 @@ describe("reviewRuns schema", () => {
         "targetUrl",
         "branch",
         "headSha",
+        "vcsKind",
+        "headCommittedAt",
       ]),
     );
   });

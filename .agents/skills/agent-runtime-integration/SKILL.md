@@ -69,6 +69,9 @@ Do not use this skill for VCS implementation details, output channel rendering, 
    - Add MCP client/schema tests when adding or changing tools.
    - Add prompt/skill snapshot tests when changing instruction layering.
    - Run markdownlint for changed AI-facing assets.
+   - For live usage, test split stdout records before process exit and final
+     totals after exit. Reuse the completed-turn parsers, ignore cumulative
+     deltas, and never add a streamed preview to the same final invocation.
 
 ## Pitfalls
 

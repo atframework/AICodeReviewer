@@ -53,15 +53,33 @@ configured, the route returns the dashboard shell with a setup-required
 prompt instead of a 404; if `path_prefix` is set, the root paths redirect to
 the prefixed entry.
 
-After logging in, the dashboard has five tabs:
+After logging in, the dashboard has six tabs:
 
+- **Live** — analyses running right now in this server process. Responsive cards show
+  the worker slot, run ID, task title, attempt, workspace/trigger/repo, branch and revision (git short sha,
+  SVN `r<N>`, P4 `CL <N>`; hover for the full revision) with the commit time
+  when resolved, the model and agent, the phase (preparing → analyzing →
+  publishing), the start time with a live elapsed counter, cumulative tokens
+  with input/output and cache hit/miss/write counts (or `~N est. prompt` when
+  usage is unavailable), cache hit rate, LLM request count, retry/fallback counts,
+  estimated cost, and the usage update time. Worker numbers identify active
+  analysis slots in this process; a released slot can serve a later run.
+  Kilo/OpenCode and pi/oh-my-pi update usage after each completed model turn;
+  other agents and direct LLM calls update when the invocation finishes.
+  Entries disappear when an execution
+  settles or the server restarts. A Refresh button reloads on demand, and the
+  auto-refresh selector (default **Off (manual)**) polls every 5/15/30/60
+  seconds after the previous request finishes. Polling pauses outside the Live
+  tab and while the browser page is hidden; logout resets it to manual.
+  A failed refresh labels retained data as stale.
 - **Overview** — total reviews, success/failure/skip counts, runs that found
   problems, total problems, issues created, code analyzed, LLM requests,
   input/output/total tokens, prompt cache hit rate with the hit/miss token
   split, estimated cost, average duration. A time-window
   selector switches between today / this week / this month / all (all in
   UTC). The Recent activity table includes the same per-run token total,
-  cache hit/miss split, and hit rate as the Runs tab.
+  cache hit/miss split, and hit rate as the Runs tab, plus the branch and
+  short revision with the commit time.
 - **Projects** — per-project aggregates (`workspaceId + triggerName +
   repoRef`): review/success/failure/skip counts, problem totals, issues
   created, files changed, lines added/deleted, LLM requests, tokens, cache-hit
@@ -73,7 +91,8 @@ After logging in, the dashboard has five tabs:
 - **Runs** — the most recent 100 runs, paged 20 at a time with Prev/Next. Each row
   shows real token usage when captured: total tokens with the cache-hit and
   non-cached input split and the hit rate; `—` when the run reported no
-  parseable usage.
+  parseable usage. The Revision column shows the branch, the short revision,
+  and the commit time when the VCS adapter could resolve it.
 - **Events** — the most recent 100 received webhook/trigger events, paged 20
   at a time. Each row shows the receipt-time decision: `executed` (started
   immediately), `queued`/`duplicate` (auto-commit receipt), `deferred`
@@ -99,8 +118,19 @@ The Projects and Providers tabs each call their own time-windowed API
 tab fetches the latest 100 runs from `GET /api/admin/runs?limit=100` and pages
 them in the browser; the Events tab does the same against
 `GET /api/admin/events?limit=100`, whose store keeps only the newest 100
-entries. The dashboard queries real-time aggregation as the source
-of truth.
+entries. The Live tab polls `GET /api/admin/runs/live`, which reads an
+in-memory registry of the current process. Completed runs are available in
+Recent Runs, subject to its retention limit. The dashboard queries real-time aggregation
+as the source of truth.
+
+Branch, revision, and commit time come from the run's VCS stamp: the branch
+travels with the webhook event; the analyzed head revision and VCS family
+come from the adapter's resolved range and kind. The commit time is resolved
+best-effort by the VCS adapter after the scoped fetch (`git log`, `svn log`,
+or `p4 describe`). Git uses the committer date; SVN uses `svn:date`; P4 shows
+the submit time only for submitted changelists. Times display in the browser's
+local timezone. Unavailable commit times show `—`; legacy or unknown VCS kinds
+retain the full revision without guessing a hash format.
 
 ## The admin API
 
@@ -116,7 +146,8 @@ All endpoints except `/login` require `Authorization: Bearer <token>`.
 | `GET /api/admin/stats` | Overview + today/this-week/this-month windows, projects, providers, recent runs |
 | `GET /api/admin/stats/projects?since=` | Per-project aggregates |
 | `GET /api/admin/stats/providers?since=` | Per-provider+model aggregates |
-| `GET /api/admin/runs?limit=` | Recent run list (1..100), each with token usage incl. the cache hit split |
+| `GET /api/admin/runs?limit=` | Recent run list (1..100), each with token usage incl. the cache hit split and the VCS stamp |
+| `GET /api/admin/runs/live` | Currently running analyses from the in-process registry: phase, elapsed start time, cumulative tokens/requests/cost |
 | `GET /api/admin/events?limit=` | Recent webhook/trigger event log (1..100), each with the receipt-time decision and reason |
 
 ## `/metrics`

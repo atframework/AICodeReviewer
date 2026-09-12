@@ -2,6 +2,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { existsSync } from "node:fs";
 import { readFile, rm, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 
 import {
   buildReviewTaskContext,
@@ -11,9 +12,11 @@ import {
   prepareReviewPrompt,
   scrubPromptMessages,
   scrubText,
+  vcsKindForProvider,
   type ContextRepositoryConfig,
   type PreparedReviewPrompt,
   type ReviewEvent,
+  type ReviewVcsKind,
   type ReviewProvider,
   type ScrubMatch,
 } from "@aicr/core";
@@ -69,6 +72,8 @@ import {
   type VcsAdapter,
 } from "@aicr/vcs";
 
+import type { LiveRunMetrics, LiveRunRegistry, LiveRunSource } from "./live-runs.js";
+
 export interface DiffCapableVcsAdapter extends VcsAdapter {
   diff?(range: ChangeRange, options?: { readonly contextLines?: number }): Promise<ParsedDiff>;
 }
@@ -105,6 +110,10 @@ export interface ReviewOrchestrationContext {
   readonly eventName: string;
   /** Stable identity supplied by a persisted automatic-commit batch. */
   readonly runId?: string;
+  /** Execution path feeding the run; defaults to "webhook" for live-run reporting. */
+  readonly runSource?: LiveRunSource;
+  /** 1-based attempt counter when the caller retries with the same runId. */
+  readonly attempt?: number;
   readonly additionalTaskContext?: string;
   readonly signal?: AbortSignal;
 }
@@ -174,6 +183,12 @@ export interface ServerReviewOrchestrationOptions {
   readonly ignoreLabelsResolver?: (workspaceId: string) => readonly string[];
   readonly outputLanguage?: string;
   readonly logThinking?: boolean;
+  /**
+   * Optional in-memory registry of currently running analyses backing the
+   * dashboard Live panel. When present, the run registers on entry, updates
+   * its phase/metrics at completion boundaries, and deregisters on settle.
+   */
+  readonly liveRuns?: LiveRunRegistry;
 }
 
 export interface ReviewOrchestrationResult {
@@ -212,6 +227,10 @@ export interface ReviewOrchestrationResult {
   readonly usageSource?: ReviewOrchestrationUsageSource;
   /** Per-alias materialization outcome when workspace context_repositories ran. */
   readonly contextRepositories?: readonly ContextRepoMaterialization[];
+  /** Commit time of the analyzed head revision (ISO-8601 UTC), when the VCS adapter resolved it. */
+  readonly headCommittedAt?: string;
+  readonly headSha?: string;
+  readonly vcsKind?: ReviewVcsKind;
 }
 
 export interface ReviewOrchestrationWebhookUsage {
@@ -272,6 +291,10 @@ export interface ReviewOrchestrationWebhookSummary {
     readonly totalBytes?: number;
     readonly error?: string;
   }[];
+  /** Commit time of the analyzed head revision (ISO-8601 UTC), when the VCS adapter resolved it. */
+  readonly headCommittedAt?: string;
+  readonly headSha?: string;
+  readonly vcsKind?: ReviewVcsKind;
 }
 
 interface ToolCallEnvelope {
@@ -799,6 +822,59 @@ interface AgentBundleContext {
   compaction?: AgentCompactionOptions;
   webSearch?: AgentWebSearchOptions;
   runId?: string;
+  progress?: ReviewProgress;
+}
+
+interface ReviewProgress {
+  modelStarted(model: ModelSpec, agentKind?: string): void;
+  agentUsage(completion: ReviewCompletionResult): void;
+}
+
+/** Decode complete usage records once, keeping no raw transcript in the registry. */
+function createAgentUsageObserver(
+  kind: string,
+  model: ModelSpec,
+  progress: ReviewProgress,
+): (chunk: string) => void {
+  const accumulator = createReviewRunMetricsAccumulator();
+  const agentResult: SandboxSpawnResult = { stdout: "", stderr: "", exitCode: null, timedOut: false, durationMs: 0 };
+  let pending = "";
+  let droppingLine = false;
+  return (chunk) => {
+    const lines = (pending + chunk).split("\n");
+    pending = lines.pop() ?? "";
+    for (const line of lines) {
+      if (droppingLine) { droppingLine = false; continue; }
+      if (line.length > 1_048_576) continue;
+      try {
+        const event = JSON.parse(line) as Record<string, unknown> | null;
+        if (!event) continue;
+        const kilo = kind === "kilo" || kind === "opencode";
+        if (kilo ? event.type !== "step_finish" && event.type !== "step-finish"
+          : event.type !== "message_end") continue;
+        const extraction = kilo ? extractKiloJsonStreamContent(line) : extractPiJsonStreamContent(line);
+        if (extraction.stepCount === 0) continue;
+        accumulateReviewCompletionMetrics(accumulator, {
+          agentResult,
+          llmResult: { providerId: model.providerId, modelId: model.modelId, content: "", raw: null,
+            ...(extraction.usage ? { usage: extraction.usage } : {}) },
+          requestCount: extraction.stepCount,
+          ...(extraction.costUsd !== undefined ? { estimatedCostUsd: extraction.costUsd } : {}),
+        });
+        const metrics = finalizeReviewRunMetrics(accumulator);
+        progress.agentUsage({
+          agentResult,
+          llmResult: { providerId: model.providerId, modelId: model.modelId, content: "", raw: null,
+            ...(metrics.usage ? { usage: metrics.usage } : {}) },
+          ...(metrics.requestCount !== undefined ? { requestCount: metrics.requestCount } : {}),
+          ...(metrics.estimatedCostUsd !== undefined ? { estimatedCostUsd: metrics.estimatedCostUsd } : {}),
+        });
+      } catch {
+        // Partial/invalid telemetry is advisory; final output parsing remains authoritative.
+      }
+    }
+    if (pending.length > 1_048_576) { pending = ""; droppingLine = true; }
+  };
 }
 
 interface KiloStreamExtractionResult {
@@ -853,7 +929,7 @@ interface KiloTokenTotals {
 function accumulateKiloStepFinishUsage(
   event: Record<string, unknown>,
   totals: KiloTokenTotals,
-  costAccumulator: { cost: number },
+  costAccumulator: { cost: number; observed: boolean },
 ): boolean {
   // Current kilo wraps token data inside event.part; older flat format had it on event
   // directly. Try both so we accept either shape.
@@ -876,7 +952,7 @@ function accumulateKiloStepFinishUsage(
   if (input !== undefined) totals.input += input;
   if (output !== undefined) totals.output += output;
   if (reasoning !== undefined) totals.reasoning += reasoning;
-  if (total !== undefined) totals.total += total;
+  totals.total += total ?? (input ?? 0) + (output ?? 0) + (reasoning ?? 0) + (cacheRead ?? 0) + (cacheWrite ?? 0);
   if (cacheRead !== undefined) totals.cacheRead += cacheRead;
   if (cacheWrite !== undefined) totals.cacheWrite += cacheWrite;
   // cost is a USD amount (float), not a token count — validate as a non-negative finite number.
@@ -884,6 +960,7 @@ function accumulateKiloStepFinishUsage(
   const eventCost = part?.cost ?? event.cost;
   if (typeof eventCost === "number" && Number.isFinite(eventCost) && eventCost >= 0) {
     costAccumulator.cost += eventCost;
+    costAccumulator.observed = true;
   }
   return true;
 }
@@ -893,7 +970,7 @@ function extractKiloJsonStreamContent(stdout: string): KiloStreamExtractionResul
   const toolCallEvents: ToolCallEnvelope[] = [];
   const eventCounts: Record<string, number> = {};
   const tokenTotals: KiloTokenTotals = { input: 0, output: 0, reasoning: 0, total: 0, cacheRead: 0, cacheWrite: 0 };
-  const costTotal = { cost: 0 };
+  const costTotal = { cost: 0, observed: false };
   let stepCount = 0;
 
   for (const line of stdout.split("\n")) {
@@ -1000,7 +1077,7 @@ function extractKiloJsonStreamContent(stdout: string): KiloStreamExtractionResul
     toolCallEvents,
     eventCounts,
     ...(usage ? { usage } : {}),
-    ...(stepCount > 0 ? { costUsd: costTotal.cost } : {}),
+    ...(costTotal.observed ? { costUsd: costTotal.cost } : {}),
     stepCount,
   };
 }
@@ -1277,6 +1354,12 @@ async function runAgentReview(
     throw new TypeError("Agent review requires both sandbox and agentAdapter options.");
   }
 
+  bundleContext?.progress?.modelStarted(options.model, agentAdapter.kind);
+  const streamsUsage = ["kilo", "opencode", "pi", "oh-my-pi"].includes(agentAdapter.kind);
+  const onStdout = bundleContext?.progress && streamsUsage
+    ? createAgentUsageObserver(agentAdapter.kind, options.model, bundleContext.progress)
+    : undefined;
+
   const dirs = deriveWorkspaceRuntimeDirs(sourceRoot);
   let agentResult: SandboxSpawnResult | undefined;
   let hostAgentDir: string | undefined;
@@ -1372,6 +1455,7 @@ async function runAgentReview(
       ...(Object.keys(env).length > 0 ? { env } : {}),
       ...(options.agentTimeoutMs !== undefined ? { timeoutMs: options.agentTimeoutMs } : {}),
       stdin,
+      ...(onStdout ? { onStdout } : {}),
     });
   } finally {
     await sandbox.teardown();
@@ -1644,7 +1728,7 @@ async function requestReviewCompletion(
     return runAgentReviewWithQuotaFallback(sourceRoot, task, options, bundleContext, contextRepoMounts);
   }
 
-  return requestDirectLlmCompletion(systemPrompt, options, followUp);
+  return requestDirectLlmCompletion(systemPrompt, options, followUp, bundleContext?.progress);
 }
 
 function isSameModel(left: ModelSpec, right: ModelSpec): boolean {
@@ -1712,7 +1796,9 @@ async function requestDirectLlmCompletion(
   systemPrompt: string,
   options: ServerReviewOrchestrationOptions,
   followUp?: ReviewCompletionFollowUp,
+  progress?: ReviewProgress,
 ): Promise<{ readonly llmResult: ChatCompletionResult }> {
+  progress?.modelStarted(options.model);
   const messages = followUp
     ? [
         { role: "system" as const, content: systemPrompt },
@@ -2610,6 +2696,68 @@ export async function runReviewOrchestration(
   if (options.modelOptionsResolver) {
     options = { ...options, ...options.modelOptionsResolver(context.reviewEvent.workspaceId) };
   }
+
+  const registry = options.liveRuns;
+  if (!registry) {
+    return executeReviewOrchestration(context, options);
+  }
+
+  const { reviewEvent } = context;
+  const runId = context.runId ?? randomUUID();
+  const vcsKind = vcsKindForProvider(reviewEvent.provider);
+  const executionId = registry.start({
+    runId,
+    source: context.runSource ?? "webhook",
+    provider: reviewEvent.provider,
+    eventName: context.eventName,
+    workspaceId: reviewEvent.workspaceId,
+    triggerName: reviewEvent.triggerName ?? null,
+    repoRef: reviewEvent.repoRef,
+    targetKind: reviewEvent.targetKind,
+    ...(reviewEvent.branch ? { branch: reviewEvent.branch } : {}),
+    ...(reviewEvent.headSha ? { headSha: reviewEvent.headSha } : {}),
+    ...(vcsKind ? { vcsKind } : {}),
+    ...(reviewEvent.title ? { title: reviewEvent.title } : {}),
+    ...(reviewEvent.url ? { url: reviewEvent.url } : {}),
+    modelProviderId: options.model.providerId,
+    modelId: options.model.modelId,
+    ...(options.agentAdapter ? { agentKind: options.agentAdapter.kind } : {}),
+    attempt: context.attempt ?? 1,
+  });
+  try {
+    return await executeReviewOrchestration(context, options, { registry, executionId });
+  } finally {
+    registry.finish(executionId);
+  }
+}
+
+interface LiveRunHandle {
+  readonly registry: LiveRunRegistry;
+  readonly executionId: string;
+}
+
+function liveRunMetricsFromAccumulator(accumulator: ReviewRunMetricsAccumulator): LiveRunMetrics {
+  const metrics = finalizeReviewRunMetrics(accumulator);
+  const usage = metrics.usage;
+  return {
+    ...(usage?.promptTokens !== undefined ? { promptTokens: usage.promptTokens } : {}),
+    ...(usage?.completionTokens !== undefined ? { completionTokens: usage.completionTokens } : {}),
+    ...(usage?.totalTokens !== undefined ? { totalTokens: usage.totalTokens } : {}),
+    ...(usage?.cachedPromptTokens !== undefined ? { cachedPromptTokens: usage.cachedPromptTokens } : {}),
+    ...(usage?.cacheCreationTokens !== undefined ? { cacheCreationTokens: usage.cacheCreationTokens } : {}),
+    ...(metrics.estimatedCostUsd !== undefined ? { estimatedCostUsd: metrics.estimatedCostUsd } : {}),
+    ...(metrics.requestCount !== undefined ? { requestCount: metrics.requestCount } : {}),
+    ...(metrics.retryCount !== undefined ? { retryCount: metrics.retryCount } : {}),
+    ...(metrics.fallbackCount !== undefined ? { fallbackCount: metrics.fallbackCount } : {}),
+    ...(metrics.usageSource !== undefined ? { usageSource: metrics.usageSource } : {}),
+  };
+}
+
+async function executeReviewOrchestration(
+  context: ReviewOrchestrationContext,
+  options: ServerReviewOrchestrationOptions,
+  liveRun?: LiveRunHandle,
+): Promise<ReviewOrchestrationResult> {
   const sourceRoot = options.sourceRootResolver(context.reviewEvent);
   if (!sourceRoot) {
     throw new TypeError("Review orchestration requires a source root.");
@@ -2622,6 +2770,20 @@ export async function runReviewOrchestration(
   const vcs = options.vcsFactory ? await options.vcsFactory(sourceRoot, context) : options.vcs;
   const range = await vcs.listChanges(context.reviewEvent);
   const scopedTree = await vcs.fetchScoped(range, workspaceRef);
+  let headCommittedAt: string | undefined;
+  try {
+    const timestamp = range.headRevision && await vcs.fetchRevisionCommittedAt?.(range.headRevision);
+    if (timestamp && Number.isFinite(Date.parse(timestamp))) headCommittedAt = new Date(timestamp).toISOString();
+  } catch {
+    // Custom adapters must not turn a missing display stamp into a failed review.
+  }
+  const vcsKind = vcs.kind === "git" ? "git" : vcsKindForProvider(vcs.kind);
+  const revisionStamp = {
+    ...(range.headRevision ? { headSha: range.headRevision } : {}),
+    ...(vcsKind ? { vcsKind } : {}),
+    ...(headCommittedAt ? { headCommittedAt } : {}),
+  };
+  liveRun?.registry.update(liveRun.executionId, revisionStamp);
   const changedPaths = [
     ...(options.changedPathsResolver?.(context) ?? range.files ?? context.reviewEvent.changedFiles ?? []),
   ];
@@ -2669,6 +2831,7 @@ export async function runReviewOrchestration(
       dispatchResults: [],
       llmResult: { providerId: options.model.providerId, modelId: options.model.modelId, content: "", raw: null },
       scrubMatches: [],
+      ...revisionStamp,
     };
   }
 
@@ -2780,6 +2943,10 @@ export async function runReviewOrchestration(
     ...(resolvedMemoryHints.length > 0 ? { memoryHints: resolvedMemoryHints } : {}),
     ...(effectiveMaxPromptTokens !== undefined ? { maxPromptTokens: effectiveMaxPromptTokens } : {}),
   });
+  liveRun?.registry.update(liveRun.executionId, {
+    promptTokenEstimate: preparedPrompt.prompt.tokenEstimate,
+    ...(compressed ? { compressed } : {}),
+  });
 
   const enableScrub = options.scrubSecrets !== false;
   const allScrubMatches: ScrubMatch[] = [];
@@ -2809,7 +2976,21 @@ export async function runReviewOrchestration(
       return vcs.fetchAttribution(toAttributionRequest(request, range.headRevision), workspaceRef);
     },
   );
+  const runMetricsAccumulator = createReviewRunMetricsAccumulator();
   const bundleContext: AgentBundleContext = {
+    ...(liveRun ? { progress: {
+      modelStarted: (selected: ModelSpec, agentKind?: string) => {
+        liveRun.registry.update(liveRun.executionId, {
+          modelProviderId: selected.providerId, modelId: selected.modelId, agentKind: agentKind ?? null,
+        });
+      },
+      agentUsage: (partial: ReviewCompletionResult) => {
+        // Preview the invocation on top of settled invocations; never commit it twice.
+        const preview = { ...runMetricsAccumulator, usageSources: new Set(runMetricsAccumulator.usageSources) };
+        accumulateReviewCompletionMetrics(preview, partial);
+        liveRun.registry.update(liveRun.executionId, { metrics: liveRunMetricsFromAccumulator(preview) });
+      },
+    } } : {}),
     ...(context.runId ? { runId: context.runId } : {}),
     instructions: preparedPrompt.discovery.instructions.map((instruction) => ({
       kind: instruction.kind,
@@ -2841,10 +3022,19 @@ export async function runReviewOrchestration(
     ...(options.contextCompaction ? { compaction: options.contextCompaction } : {}),
     ...(options.webSearch ? { webSearch: options.webSearch } : {}),
   };
-  const runMetricsAccumulator = createReviewRunMetricsAccumulator();
+  // Final completion replaces the preview with the authoritative invocation total.
+  const accumulateCompletion = (finished: ReviewCompletionResult): void => {
+    accumulateReviewCompletionMetrics(runMetricsAccumulator, finished);
+    liveRun?.registry.update(liveRun.executionId, {
+      metrics: liveRunMetricsFromAccumulator(runMetricsAccumulator),
+      modelProviderId: finished.llmResult.providerId,
+      modelId: finished.llmResult.modelId,
+    });
+  };
   context.signal?.throwIfAborted();
+  liveRun?.registry.update(liveRun.executionId, { phase: "analyzing" });
   let completion = await requestReviewCompletion(scopedTree.rootDir, llmSystemPrompt, options, undefined, bundleContext, contextRepoMounts);
-  accumulateReviewCompletionMetrics(runMetricsAccumulator, completion);
+  accumulateCompletion(completion);
   let lastAgentResult = completion.agentResult;
   const rawModelOutput = completion.llmResult.content;
   const allowNaturalLanguageSummary = completion.agentResult === undefined;
@@ -2918,7 +3108,7 @@ export async function runReviewOrchestration(
       bundleContext,
       contextRepoMounts,
     );
-    accumulateReviewCompletionMetrics(runMetricsAccumulator, completion);
+    accumulateCompletion(completion);
     if (completion.agentResult) {
       lastAgentResult = completion.agentResult;
     }
@@ -2945,7 +3135,7 @@ export async function runReviewOrchestration(
         bundleContext,
         contextRepoMounts,
       );
-      accumulateReviewCompletionMetrics(runMetricsAccumulator, completion);
+      accumulateCompletion(completion);
       if (completion.agentResult) {
         lastAgentResult = completion.agentResult;
       }
@@ -2979,8 +3169,9 @@ export async function runReviewOrchestration(
           previousOutput: completion.llmResult.content,
           prompt: buildContextFollowUpPrompt(changedPaths, repairExecution),
         },
+        bundleContext.progress,
       );
-      accumulateReviewCompletionMetrics(runMetricsAccumulator, completion);
+      accumulateCompletion(completion);
       await collectCompletionOutputs(completion, tools, collector, { allowNaturalLanguageSummary: true });
       outputState = collector.snapshot();
 
@@ -3013,6 +3204,10 @@ export async function runReviewOrchestration(
   const dispatchResults: DispatchResult[] = [];
   // A worker that lost its lease must never start publication afterwards.
   context.signal?.throwIfAborted();
+  liveRun?.registry.update(liveRun.executionId, {
+    phase: "publishing",
+    metrics: liveRunMetricsFromAccumulator(runMetricsAccumulator),
+  });
   const outputPublisher = options.outputPublisher ?? (await options.outputPublisherResolver?.(
     context,
     { sourceRoot: scopedTree.rootDir },
@@ -3306,6 +3501,7 @@ export async function runReviewOrchestration(
     ...(runMetrics.fallbackCount !== undefined ? { fallbackCount: runMetrics.fallbackCount } : {}),
     ...(runMetrics.usageSource ? { usageSource: runMetrics.usageSource } : {}),
     ...(contextRepoResults.length > 0 ? { contextRepositories: contextRepoResults } : {}),
+    ...revisionStamp,
   };
 
   if (options.postRunCallback) {
@@ -3448,5 +3644,8 @@ export function summarizeReviewOrchestrationForWebhook(
           })),
         }
       : {}),
+    ...(result.headCommittedAt ? { headCommittedAt: result.headCommittedAt } : {}),
+    ...(result.headSha ? { headSha: result.headSha } : {}),
+    ...(result.vcsKind ? { vcsKind: result.vcsKind } : {}),
   };
 }

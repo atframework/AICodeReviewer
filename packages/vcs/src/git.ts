@@ -1170,6 +1170,36 @@ export class GitVcsAdapter implements VcsAdapter {
     };
   }
 
+  /**
+   * Committer date (`%cI`) of one revision in the synced clone. Advisory:
+   * unreadable revisions (absent fork-MR heads, exhausted shallow history)
+   * resolve to `undefined`; the deepen retry is inherited for `allow_deepen`
+   * setups so a truncated local history does not hide the stamp.
+   */
+  async fetchRevisionCommittedAt(revision: string): Promise<string | undefined> {
+    try {
+      await this.syncRepository();
+      const result = await this.runRevisionRangeCommand([
+        "-C",
+        this.repositoryDir,
+        "log",
+        "-1",
+        "--format=%cI",
+        "--end-of-options",
+        revision,
+        "--",
+      ]);
+      const committedAt = result.stdout.trim();
+      const parsed = Date.parse(committedAt);
+      if (!committedAt || Number.isNaN(parsed)) {
+        return undefined;
+      }
+      return new Date(parsed).toISOString();
+    } catch {
+      return undefined;
+    }
+  }
+
 }
 
 export function createGitVcsAdapter(options: GitVcsAdapterOptions): GitVcsAdapter {

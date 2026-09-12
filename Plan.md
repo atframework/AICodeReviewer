@@ -10,6 +10,8 @@ M0–M16 的核心交付已归档；待验收的外部场景与预留扩展列�
 自动提交调度的跨通知合并、三后端存储和恢复边界见
 [M15](docs/ai/milestones/M15.md)，多源上下文聚合见 [M14](docs/ai/milestones/M14.md)；
 PR/MR 执行时段、持久化延期与事件面板见 [M16](docs/ai/milestones/M16.md)。
+当前 Observability 的 VCS 提交信息、worker 活动视图及用量刷新边界见
+[架构 §3.11](docs/ai/architecture.md#311-run-状态与可观测性)。
 
 2026-09-10 已推进的本地验收：真实 svnserve + post-commit hook 到持久调度、
 模型目录 Redis 新连接重载，以及部署配置/双语自动提交示例的 schema 校验。

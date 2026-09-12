@@ -7,6 +7,7 @@ import { createStoreDb, closeStoreDb, type StoreDb, softDeleteMissingProjects } 
 import { insertReviewRun, insertWebhookEvent } from "@aicr/store";
 import type { ObservabilityApiOptions } from "../src/observability-api.js";
 import { createObservabilityApi } from "../src/observability-api.js";
+import { createLiveRunRegistry } from "../src/live-runs.js";
 import type { AdminAuthConfig } from "../src/admin-auth.js";
 import { createAdminSession } from "../src/admin-auth.js";
 
@@ -336,6 +337,100 @@ describe("observability API", () => {
       cachedTokens: 600,
       cacheCreationTokens: 0,
     });
+  });
+
+  it("GET /runs exposes branch, revision, VCS kind and commit time", async () => {
+    const committed = new Date("2026-09-10T08:00:00.000Z");
+    insertReviewRun(store, {
+      id: "run-vcs",
+      eventId: "evt",
+      workspaceId: "ws-1",
+      triggerName: "gitea",
+      provider: "openai",
+      providerModel: "gpt-4o",
+      status: "succeeded",
+      startedAt: new Date(),
+      branch: "main",
+      headSha: "0123456789abcdef0123456789abcdef01234567",
+      vcsKind: "git",
+      headCommittedAt: committed,
+    });
+
+    const res = await fetchApi("/runs");
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(data.length).toBe(1);
+    expect(data[0].branch).toBe("main");
+    expect(data[0].headSha).toBe("0123456789abcdef0123456789abcdef01234567");
+    expect(data[0].vcsKind).toBe("git");
+    expect(data[0].headCommittedAt).toBe(committed.toISOString());
+  });
+
+  it("GET /runs/live returns registry entries with server time", async () => {
+    const registry = createLiveRunRegistry();
+    const executionId = registry.start({
+      runId: "live-1",
+      source: "auto_commit",
+      provider: "gitea",
+      eventName: "push",
+      workspaceId: "ws-1",
+      triggerName: "nightly",
+      repoRef: "org/repo",
+      targetKind: "push",
+      branch: "main",
+      headSha: "0123456789abcdef0123456789abcdef01234567",
+      vcsKind: "git",
+      modelProviderId: "openai",
+      modelId: "gpt-4o",
+      agentKind: "opencode",
+      attempt: 2,
+    });
+    registry.update(executionId, {
+      phase: "analyzing",
+      promptTokenEstimate: 5000,
+      headCommittedAt: "2026-09-10T08:00:00.000Z",
+      metrics: { promptTokens: 1000, totalTokens: 1200, cachedPromptTokens: 600, requestCount: 3 },
+    });
+    const liveApp = createObservabilityApi({ store, adminAuth: ADMIN_CONFIG, liveRuns: registry });
+
+    const res = await liveApp.fetch(new Request("http://localhost/runs/live", {
+      headers: { Authorization: `Bearer ${authToken}` },
+    }));
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(data.serverTime).toBeDefined();
+    expect(data.runs.length).toBe(1);
+    expect(data.runs[0].runId).toBe("live-1");
+    expect(data.runs[0].executionId).toBe(executionId);
+    expect(data.runs[0].workerId).toBe(1);
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
+    expect(data.runs[0].source).toBe("auto_commit");
+    expect(data.runs[0].phase).toBe("analyzing");
+    expect(data.runs[0].branch).toBe("main");
+    expect(data.runs[0].vcsKind).toBe("git");
+    expect(data.runs[0].headCommittedAt).toBe("2026-09-10T08:00:00.000Z");
+    expect(data.runs[0].attempt).toBe(2);
+    expect(data.runs[0].promptTokenEstimate).toBe(5000);
+    expect(data.runs[0].metrics).toEqual({ promptTokens: 1000, totalTokens: 1200, cachedPromptTokens: 600, requestCount: 3 });
+
+    registry.finish(executionId);
+    const empty = await liveApp.fetch(new Request("http://localhost/runs/live", {
+      headers: { Authorization: `Bearer ${authToken}` },
+    }));
+    expect((await empty.json()).runs).toEqual([]);
+  });
+
+  it("GET /runs/live returns an empty list without a registry", async () => {
+    const res = await fetchApi("/runs/live");
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(data.runs).toEqual([]);
+    expect(data.serverTime).toBeDefined();
+  });
+
+  it("GET /runs/live requires auth", async () => {
+    const res = await app.fetch(new Request("http://localhost/runs/live"));
+    expect(res.status).toBe(401);
   });
 
   it("GET /runs clamps invalid limits to the default", async () => {

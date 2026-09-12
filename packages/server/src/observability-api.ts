@@ -19,6 +19,7 @@ import {
   createAdminSession,
   revokeAdminSession,
 } from "./admin-auth.js";
+import type { LiveRunRegistry } from "./live-runs.js";
 
 export interface ObservabilityApiOptions {
   readonly store: StoreDb;
@@ -26,6 +27,8 @@ export interface ObservabilityApiOptions {
   readonly timezone?: string;
   /** Auto-commit receipt store; enables the receipt query endpoint. */
   readonly autoCommitStore?: AutoCommitStore;
+  /** In-memory registry of currently running analyses; enables the live-runs endpoint. */
+  readonly liveRuns?: LiveRunRegistry;
 }
 
 interface DashboardStats {
@@ -183,6 +186,17 @@ export function createObservabilityApi(options: ObservabilityApiOptions): Hono {
     const limit = parseLimit(c.req.query("limit"));
     const runs = getRecentRuns(options.store, limit);
     return c.json(runs);
+  });
+
+  // Currently executing analyses from the in-process live-run registry.
+  // Streaming agents report completed turns; other invocations report on exit.
+  // Entries vanish on settle or restart; completed runs appear in /runs.
+  api.get("/runs/live", authMiddleware, async (c) => {
+    c.header("Cache-Control", "no-store");
+    return c.json({
+      serverTime: new Date().toISOString(),
+      runs: options.liveRuns?.list() ?? [],
+    });
   });
 
   // Receipt-time webhook/trigger event log backing the dashboard Events

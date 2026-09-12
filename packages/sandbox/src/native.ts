@@ -66,8 +66,14 @@ export function createNativeSandboxBackend(
           });
         };
 
-        proc.stdout.on("data", (chunk: Buffer) => {
-          stdout += chunk.toString("utf8");
+        proc.stdout.setEncoding("utf8");
+        proc.stdout.on("data", (chunk: string) => {
+          stdout += chunk;
+          try {
+            spawnOptions.onStdout?.(chunk);
+          } catch {
+            // Observability must not interrupt the child or its timeout cleanup.
+          }
         });
 
         proc.stderr.on("data", (chunk: Buffer) => {

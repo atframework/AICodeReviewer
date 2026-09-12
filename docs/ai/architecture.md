@@ -142,6 +142,13 @@ Workspace 多工程匹配、数据库配置管理与自动迁移的新方案见
 - `normalizePath` 必须统一反斜杠、压缩重复斜杠并去除前导 `./`。
 - `isPlainObject` 必须拒绝 `Date`、`RegExp` 等内建类实例。
 - Git blame / P4 annotate / SVN blame 等 attribution 能力属于 best-effort 上下文工具，不应污染默认 fingerprint。
+- 提交时间解析是可选的 advisory 方法 `fetchRevisionCommittedAt(revision)`：orchestrator 在
+  scoped fetch 后对 `headRevision` 调用一次，结果写入 `review_runs.head_committed_at` 供
+  Dashboard 展示；契约约定**永不抛错**，解析失败返回 `undefined`。实现：git 用
+  `git log -1 --format=%cI --end-of-options <rev> --`（浅克隆会按需 deepen），SVN 用
+  `svn log --xml --limit 1 -r N:N <url>@N` 取 `<date>`，P4 用 `p4 -ztag describe -s N`
+  取 submitted changelist 的 `... time <epoch>`，pending 不作为提交时间。
+  mock adapter 与 provider API 路径可以不实现，列保持 NULL；orchestrator 同样隔离查询异常。
 - P4 需要支持：
   - `describe` / `print` / `diff`
   - ticket/password 失败后的非交互 `p4 login` 重试
@@ -794,7 +801,10 @@ AICR 采用**两层上下文管理**，两者互补：
   - `projects`：由 `workspaceId + triggerName + repoRef` 派生的 project identity，
     含 `deleted_at` 软删除标记。
   - `review_runs`：run 事实表，含 provider、model、status、problem/summary/dispatch 计数、
-    duration、skip reason、compression 标记、token 估算、target 元数据。
+    duration、skip reason、compression 标记、token 估算、target 元数据，以及 VCS stamp：
+    `branch`（事件携带的分支/ref）、`head_sha`（adapter 解析的 git sha / SVN revision / P4 changelist）、
+    `vcs_kind`（git/svn/p4，取执行 adapter 类型；未执行时从事件 provider 映射）、`head_committed_at`
+    （adapter 尽力解析的提交时间，解析失败为 NULL）。
   - `code_metrics`：每 run 的文件变更数、增删行数、分析字节数。
   - `llm_usage`：每 run 的 provider+model 级请求数、token 数、缓存命中/写入 token
     （`cached_tokens`/`cache_creation_tokens`，均已含在 `tokens_in` 内；命中率 =
@@ -827,21 +837,38 @@ AICR 采用**两层上下文管理**，两者互补：
   - `GET /stats/providers`：按 provider+model 聚合统计，支持 `?since=` 筛选。
   - `GET /runs`：最近 run 列表，支持 `?limit=` (1..100)。每条 run 附带跨 `llm_usage`
     行聚合的 `llmUsage`（输入/输出/总量与缓存命中/写入拆分）；未记录 usage 时省略该字段。
+    同时返回 VCS stamp（`branch`/`headSha`/`vcsKind`/`headCommittedAt`）。
+  - `GET /runs/live`：当前正在执行的分析列表，来自进程内 `LiveRunRegistry`，返回
+    `{ serverTime, runs }`，禁止 HTTP 缓存。每条 entry 含 runId、独立 executionId、
+    workerId（本进程活动分析槽位）、source（webhook/auto_commit）、attempt、
+    workspace/trigger/repo、VCS stamp、model provider/modelId/agentKind、phase
+    （preparing→analyzing→publishing）、startedAt、promptTokenEstimate/compressed，以及
+    累计 metrics（tokens、缓存命中/写入、请求数、重试/fallback、成本）、metricsUpdatedAt。
+    未注入 registry 时返回空列表。
   - `GET /events`：最近 webhook/trigger 事件日志（`webhook_events` 表），支持
     `?limit=` (1..100)，detail 以解析后的 JSON 返回。
   所有端点（`/login` 除外）需 `Authorization: Bearer <token>` 头。
 - Dashboard SPA 嵌入于 `/dashboard` 和 `/` 路径，由 `packages/server/src/dashboard/dashboard.html`
-  提供。深色主题、登录表单、选项卡视图（overview / projects / providers / runs / events）。
+  提供。深色主题、登录表单、选项卡视图（live / overview / projects / providers / runs / events）。
   即使尚未配置 admin env，`/` 与 `/dashboard` 也必须返回 dashboard shell，并显示
   setup-required 提示而不是 404；若启用了 `path_prefix`，顶层 `/` 与 `/dashboard`
   应重定向到带前缀的 dashboard 入口。
   Overview 标签有时间窗口选择器（today / this week / this month / all），Recent activity
   表与 Runs 标签同样展示每条 run 的 token 总量、缓存命中/未命中拆分与命中率；
+  两处 run 表还带 Revision 列：分支 + 缩写 revision（git 短 sha、SVN `r<N>`、P4 `CL <N>`，
+  鼠标悬停显示完整 revision）+ 浏览器本地时区的提交时间，缺失时间显示 `—`；
+  `vcs_kind` 未知时保留完整 revision，属性值单独转义引号；
   Projects 与 Providers 标签各自独立支持时间维度切换，按需调用
   `GET /stats/projects?since=` 与 `GET /stats/providers?since=`；Runs 标签首次进入时
   调用 `GET /runs?limit=100` 拉取最近 100 条并前端分页（每页 20 条，Prev/Next）；
   Events 标签同样以 `GET /events?limit=100` + 前端分页（每页 20 条）展示接收时刻的
-  事件与处理决定。
+  事件与处理决定。Live 标签（首个选项卡）调用 `GET /runs/live`，用响应式 worker 卡片展示
+  槽位编号、run ID、任务、attempt、workspace/trigger/repo、Revision、model、phase、
+  开始时间与 elapsed、累计 token、缓存命中率、LLM 请求数、重试/fallback、成本及用量更新时间。
+  尚无 usage 时单独显示 `~N est. prompt`，不伪装成已消耗 token。
+  Refresh 默认手动，可选前次请求结束后 5/15/30/60 秒轮询；禁止重叠请求，离开 Live 或
+  隐藏页面暂停，退出登录清空快照与定时器。失败时标注快照过期，旧 session 响应不覆盖新状态。
+  elapsed 每秒本地跳动，用响应里的 `serverTime` 校正客户端时钟偏差。
 - 首屏统计包含：总 review 次数、成功/失败/跳过次数、发现问题的 run 次数、
   problem 总数、创建 issue 数、分析代码量、LLM 请求数、输入/输出/总 token、
   prompt 缓存命中率（命中/未命中 token 拆分）、估算成本、平均 duration。
@@ -856,6 +883,16 @@ AICR 采用**两层上下文管理**，两者互补：
   `AICR_ADMIN_PASSWORD`，或设置 `AICR_ADMIN_USERNAME` + `AICR_ADMIN_PASSWORD_HASH`）。
   `bootstrapServerApp` 解析 admin auth config 后创建 `StoreDb` 实例，并注入
   `ServerAppOptions.store` 和 `observability`。
+- `LiveRunRegistry`（`packages/server/src/live-runs.ts`）是同一条件下创建的进程内 Map。
+  `runReviewOrchestration` 在入口 `start()`、finally `finish()`；更新/清理用独立 executionId，
+  同一 runId 的重叠 attempt 各占一个 worker 槽位，旧执行不影响新执行。槽位释放后可复用，
+  不表示操作系统线程或其他服务实例。registry 同时注入 API 与 orchestration options。
+  native/Docker/Podman 的 `SandboxSpawnOptions.onStdout` 提供解码后的只读流，观察回调失败
+  不改变子进程结果。Kilo/OpenCode 的 `step_finish`、pi/omp 的 assistant `message_end`
+  复用最终解析器生成每轮 usage 预览；不累计 `message_update`，未闭合行最多缓存 1 MiB 字符。
+  最终调用结果替换预览，再计入整个 run，避免双计。其他格式和直连 LLM 完成后才更新；
+  直连 gateway 内部的 retry/fallback 模型在返回前不可见。条目随执行结束或重启消失，
+  已完成的 run 走 `review_runs` 表。
 - Review run 持久化通过 `persistReviewRunToStore`（成功）和 `persistFailedRunToStore`
   （失败）函数在 `scheduleTriggerProcessing` 和 `handleReviewOrchestration` 中调用。
 - `/metrics` 保持低基数、进程累计语义；高基数查询走 SQLite 持久库。

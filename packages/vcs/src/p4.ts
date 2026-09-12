@@ -1374,6 +1374,31 @@ export class P4VcsAdapter implements VcsAdapter {
     };
   }
 
+  /**
+   * Submit time of one changelist from `p4 -ztag describe -s` (`... time
+   * <epoch-seconds>` — unambiguous, unlike the server-local text header).
+   * Advisory: unknown changelists and unreadable output map to `undefined`.
+   */
+  async fetchRevisionCommittedAt(revision: string): Promise<string | undefined> {
+    if (!/^\d+$/u.test(revision)) {
+      return undefined;
+    }
+    try {
+      const result = await this.runP4(["-ztag", "describe", "-s", revision]);
+      if (!/^\.\.\. status submitted\r?$/mu.test(result.stdout)) {
+        return undefined;
+      }
+      const match = /^\.\.\. time (\d+)\r?$/mu.exec(result.stdout);
+      const epochSeconds = match?.[1];
+      if (!epochSeconds) {
+        return undefined;
+      }
+      return new Date(Number(epochSeconds) * 1000).toISOString();
+    } catch {
+      return undefined;
+    }
+  }
+
   private applyFilters(files: string[]): string[] {
     let result = filterFilesByWatchPath(files, this.watchPath);
     result = filterFilesByPatterns(result, this.includeCrFile, this.excludeCrFile);

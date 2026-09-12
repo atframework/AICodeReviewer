@@ -1458,8 +1458,42 @@ describe("createServerApp", () => {
       targetKind: "pull_request",
       baseSha: "base-sha-gitlab",
       headSha: "head-sha-gitlab",
+      branch: "feature/aicr",
       url: "https://gitlab.example.com/owent/example/-/merge_requests/77",
     });
+  });
+
+  it("maps a GitLab push webhook ref to the branch field", async () => {
+    const app = createServerApp({
+      gitlab: {
+        triggerName: "gitlab-self-hosted",
+        workspaceId: "gitlab-owent-example",
+        webhookSecret,
+      },
+    });
+    const payload = JSON.stringify({
+      before: "before-sha",
+      after: "after-sha",
+      ref: "refs/heads/main",
+      project: { path_with_namespace: "owent/example" },
+      user_username: "owent",
+    });
+
+    const response = await app.request("/webhooks/gitlab", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-gitlab-event": "Push Hook",
+        "x-gitlab-token": webhookSecret,
+      },
+      body: payload,
+    });
+    const body = (await response.json()) as { reviewEvent?: { targetKind?: string; branch?: string; headSha?: string } };
+
+    expect(response.status).toBe(202);
+    expect(body.reviewEvent?.targetKind).toBe("push");
+    expect(body.reviewEvent?.branch).toBe("main");
+    expect(body.reviewEvent?.headSha).toBe("after-sha");
   });
 
   it("uses GitLab last_commit id as head revision when diff refs are absent", async () => {

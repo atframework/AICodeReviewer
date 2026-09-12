@@ -23,6 +23,7 @@ import {
   type ReviewOutputPublisher,
   type ReviewSummaryPublishOptions,
 } from "../src/review-orchestrator.js";
+import { createLiveRunRegistry } from "../src/live-runs.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -98,6 +99,96 @@ function createVcs(sourceRoot: string): DiffCapableVcsAdapter {
 }
 
 describe("runReviewOrchestration", () => {
+  it.each(["kilo", "opencode", "pi", "oh-my-pi"] as const)(
+    "streams completed %s turns before process exit without counting them twice",
+    async (kind) => {
+      await mkdir("build/tmp", { recursive: true });
+      const sourceRoot = await mkdtemp(join(process.cwd(), "build/tmp/live-stream-"));
+      const registry = createLiveRunRegistry();
+      let finalPreview: unknown;
+      try {
+        await writeWorkspaceFile(sourceRoot, "src/app.ts", "const ok = true;\n");
+        const isKilo = kind === "kilo" || kind === "opencode";
+        const steps = [1, 2].map((turn) => isKilo
+          ? { type: "step_finish", part: { type: "step-finish", tokens: {
+            input: 100, output: 20, cache: { read: 40, write: 10 },
+            ...(turn === 1 ? { total: 170 } : {}),
+          }, cost: 0.002 } }
+          : { type: "message_end", message: { role: "assistant", stopReason: "stop",
+            content: turn === 2 ? [{ type: "text", text: '{"skipReason":"lgtm"}' }] : [],
+            usage: { input: 100, output: 20, cacheRead: 40, cacheWrite: 10, totalTokens: 170, cost: { total: 0.002 } },
+          } });
+        const stdout = [...steps, ...(isKilo ? [{ type: "text", text: '{"skipReason":"lgtm"}' }] : [{ type: "agent_end" }])]
+          .map((event) => JSON.stringify(event)).join("\n");
+        const sandbox: SandboxBackend = {
+          kind: "native",
+          async materializeFs(layout) {
+            await mkdir(layout.agentDir, { recursive: true });
+            await mkdir(layout.tmpDir, { recursive: true });
+            return { ...layout, mountSpecs: [] };
+          },
+          async spawn(options) {
+            expect(options.onStdout).toBeTypeOf("function");
+            expect(registry.list()[0]).toMatchObject({ workerId: 1, phase: "analyzing", agentKind: kind });
+            const first = JSON.stringify(steps[0]);
+            options.onStdout!(first.slice(0, 17));
+            expect(registry.list()[0]!.metrics).toEqual({});
+            options.onStdout!(first.slice(17) + "\r\n");
+            expect(registry.list()[0]!.metrics).toMatchObject({ totalTokens: 170, requestCount: 1 });
+            // Ignore cumulative deltas and bound a malformed unterminated record.
+            options.onStdout!('null\n{"type":"message_update","message":{"usage":{"input":99999}}}\n');
+            options.onStdout!("x".repeat(1_048_577));
+            options.onStdout!("discarded tail\n" + JSON.stringify(steps[1]) + "\n");
+            expect(registry.list()[0]!.metrics).toMatchObject({
+              promptTokens: 300, completionTokens: 40, totalTokens: 340,
+              cachedPromptTokens: 80, cacheCreationTokens: 20, requestCount: 2, estimatedCostUsd: 0.004,
+            });
+            expect(registry.list()[0]!.metricsUpdatedAt).toBeDefined();
+            return { stdout, stderr: "", exitCode: 0, timedOut: false, durationMs: 10 };
+          },
+          async teardown() {},
+        };
+        const result = await runReviewOrchestration({
+          reviewEvent: createReviewEventFixture(), provider: "gitea", eventName: "pull_request", payload: {},
+        }, {
+          baseSystemPrompt: "Review", sourceRootResolver: () => sourceRoot, vcs: createVcs(sourceRoot), model,
+          llm: { complete: async () => { throw new Error("unexpected direct call"); } }, sandbox, liveRuns: registry,
+          agentAdapter: { kind, detect: async () => ({ available: true, binary: kind }), buildCommand: () => [kind],
+            materializeConfig: async (_model, workingDir) => ({ configFiles: new Map(), envVars: {}, workingDir }) },
+          postRunCallback: async () => {
+            finalPreview = registry.list()[0]!.metrics;
+          },
+        });
+        expect(result.requestCount).toBe(2);
+        expect(finalPreview).toMatchObject({ totalTokens: 340, requestCount: 2 });
+        expect(result.llmResult.usage?.totalTokens).toBe(340);
+        expect(registry.size).toBe(0);
+      } finally {
+        await rm(sourceRoot, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("keeps commit metadata advisory and clears a failed execution", async () => {
+    await mkdir("build/tmp", { recursive: true });
+    const sourceRoot = await mkdtemp(join(process.cwd(), "build/tmp/live-failure-"));
+    const registry = createLiveRunRegistry();
+    try {
+      await writeWorkspaceFile(sourceRoot, "src/app.ts", "const ok = true;\n");
+      const complete = vi.fn().mockRejectedValue(new Error("provider failed"));
+      await expect(runReviewOrchestration({
+        reviewEvent: createReviewEventFixture(), provider: "gitea", eventName: "pull_request", payload: {},
+      }, {
+        baseSystemPrompt: "Review", sourceRootResolver: () => sourceRoot, model, liveRuns: registry, llm: { complete },
+        vcs: { ...createVcs(sourceRoot), fetchRevisionCommittedAt: async () => { throw new Error("VCS unavailable"); } },
+      })).rejects.toThrow("provider failed");
+      expect(complete).toHaveBeenCalledOnce();
+      expect(registry.size).toBe(0);
+    } finally {
+      await rm(sourceRoot, { recursive: true, force: true });
+    }
+  });
+
   it("selects a workspace model and client once without mutating concurrent runs", async () => {
     const scratchRoot = join(process.cwd(), "build", "tmp");
     await mkdir(scratchRoot, { recursive: true });
@@ -138,6 +229,105 @@ describe("runReviewOrchestration", () => {
       await rm(sourceRoot, { recursive: true, force: true });
     }
   });
+  it("tracks a live run through the registry and resolves the head commit time", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-live-runs-"));
+    try {
+      await writeWorkspaceFile(tempDir, "src/app.ts", "const value = 1;\n");
+      const registry = createLiveRunRegistry();
+      const committedAt = "2026-09-10T08:00:00.000Z";
+      const observed: { phase: string; estimate?: number; committedAt?: string; vcsKind?: string }[] = [];
+      const vcs = {
+        ...createVcs(tempDir),
+        async fetchRevisionCommittedAt(revision: string): Promise<string | undefined> {
+          expect(revision).toBe("head");
+          return committedAt;
+        },
+      };
+      const llm: ChatCompletionClient = {
+        async complete(input) {
+          const live = registry.list();
+          expect(live).toHaveLength(1);
+          observed.push({
+            phase: live[0]!.phase,
+            estimate: live[0]!.promptTokenEstimate,
+            committedAt: live[0]!.headCommittedAt,
+            vcsKind: live[0]!.vcsKind,
+          });
+          return { providerId: input.model.providerId, modelId: input.model.modelId, content: '{"skipReason":"lgtm"}', raw: {} };
+        },
+      };
+
+      const result = await runReviewOrchestration(
+        {
+          reviewEvent: createReviewEventFixture(),
+          payload: {},
+          provider: "gitea",
+          eventName: "pull_request",
+          runId: "run-live-1",
+          runSource: "webhook",
+          attempt: 3,
+        },
+        {
+          baseSystemPrompt: "Review the diff.",
+          sourceRootResolver: () => tempDir,
+          vcs,
+          llm,
+          model,
+          liveRuns: registry,
+        },
+      );
+
+      expect(observed).toHaveLength(1);
+      expect(observed[0]!.phase).toBe("analyzing");
+      expect(observed[0]!.estimate).toBeGreaterThan(0);
+      expect(observed[0]!.committedAt).toBe(committedAt);
+      expect(observed[0]!.vcsKind).toBe("git");
+      expect(registry.list()).toEqual([]);
+      expect(result.headCommittedAt).toBe(committedAt);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("omits the commit time when the adapter cannot resolve it", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-live-runs-none-"));
+    try {
+      await writeWorkspaceFile(tempDir, "src/app.ts", "const value = 1;\n");
+      const vcs = {
+        ...createVcs(tempDir),
+        async fetchRevisionCommittedAt(): Promise<string | undefined> {
+          return undefined;
+        },
+      };
+      const llm: ChatCompletionClient = {
+        async complete(input) {
+          return { providerId: input.model.providerId, modelId: input.model.modelId, content: '{"skipReason":"lgtm"}', raw: {} };
+        },
+      };
+
+      const result = await runReviewOrchestration(
+        {
+          reviewEvent: createReviewEventFixture(),
+          payload: {},
+          provider: "gitea",
+          eventName: "pull_request",
+        },
+        {
+          baseSystemPrompt: "Review the diff.",
+          sourceRootResolver: () => tempDir,
+          vcs,
+          llm,
+          model,
+        },
+      );
+
+      expect(result.headCommittedAt).toBeUndefined();
+      expect(summarizeReviewOrchestrationForWebhook(result, "pull_request").headCommittedAt).toBeUndefined();
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("runs VCS, prompt preparation, LLM JSON tool output, collector, and publisher", async () => {
     const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-orchestrator-"));
 
@@ -3144,6 +3334,7 @@ describe("summarizeReviewOrchestrationForWebhook", () => {
 
   it("switches to the next agent model after a terminal quota-exhaustion error", async () => {
     const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-pi-quota-fallback-"));
+    const registry = createLiveRunRegistry();
 
     try {
       await writeWorkspaceFile(tempDir, "src/app.ts", "const ok = true;\n");
@@ -3198,6 +3389,7 @@ describe("summarizeReviewOrchestrationForWebhook", () => {
         buildStdin() { return ""; },
         async materializeConfig(currentModel, workingDir) {
           materializedModels.push(currentModel);
+          expect(registry.list()[0]).toMatchObject({ modelProviderId: currentModel.providerId, modelId: currentModel.modelId });
           return { configFiles: new Map(), envVars: {}, workingDir };
         },
       };
@@ -3221,6 +3413,7 @@ describe("summarizeReviewOrchestrationForWebhook", () => {
           llm: { async complete() { throw new Error("direct llm must not be called"); } },
           model,
           agentModelChain: [model, fallbackModel],
+          liveRuns: registry,
           sandbox,
           agentAdapter,
         },

@@ -38,6 +38,24 @@ afterEach(() => {
 });
 
 describe("store database", () => {
+  it("upgrades existing runs with nullable VCS metadata and reopens idempotently", () => {
+    insertReviewRun(store, { id: "old-run", eventId: "evt", workspaceId: "ws", status: "succeeded",
+      branch: "main", headSha: "old-sha" });
+    store.sqlite.exec(`
+      ALTER TABLE review_runs DROP COLUMN vcs_kind;
+      ALTER TABLE review_runs DROP COLUMN head_committed_at;
+      DELETE FROM _migrations WHERE name = '009_review_run_vcs_stamp';
+    `);
+    closeStoreDb(store);
+    store = createStoreDb(join(tmpDir, "test.db"));
+    expect(getRecentRuns(store, 1)[0]).toMatchObject({ id: "old-run", branch: "main", headSha: "old-sha",
+      vcsKind: null, headCommittedAt: null });
+    closeStoreDb(store);
+    store = createStoreDb(join(tmpDir, "test.db"));
+    expect(store.sqlite.prepare("SELECT COUNT(*) AS n FROM _migrations WHERE name = ?")
+      .get("009_review_run_vcs_stamp")).toEqual({ n: 1 });
+    expect(getRecentRuns(store, 1)).toHaveLength(1);
+  });
   it("creates and initializes database with migrations", () => {
     const tables = store.sqlite
       .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
@@ -385,6 +403,49 @@ describe("stats insert and query", () => {
       cacheCreationTokens: 100,
     });
     expect(runs[1]!.llmUsage).toBeUndefined();
+  });
+
+  it("round-trips the VCS stamp on recent runs", () => {
+    insertReviewRun(store, {
+      id: "run-stamped",
+      eventId: "evt-stamped",
+      workspaceId: "ws-1",
+      triggerName: "gitea",
+      provider: "openai",
+      providerModel: "gpt-4o",
+      status: "succeeded",
+      startedAt: new Date(),
+      branch: "main",
+      headSha: "0123456789abcdef",
+      vcsKind: "git",
+      headCommittedAt: new Date("2026-09-01T08:30:00.000Z"),
+    });
+    insertReviewRun(store, {
+      id: "run-unstamped",
+      eventId: "evt-unstamped",
+      workspaceId: "ws-1",
+      triggerName: "gitea",
+      provider: "openai",
+      providerModel: "gpt-4o",
+      status: "succeeded",
+      startedAt: new Date(),
+    });
+
+    const runs = getRecentRuns(store, 2);
+    const stamped = runs.find((run) => run.id === "run-stamped");
+    expect(stamped).toMatchObject({
+      branch: "main",
+      headSha: "0123456789abcdef",
+      vcsKind: "git",
+      headCommittedAt: new Date("2026-09-01T08:30:00.000Z"),
+    });
+    const unstamped = runs.find((run) => run.id === "run-unstamped");
+    expect(unstamped).toMatchObject({
+      branch: null,
+      headSha: null,
+      vcsKind: null,
+      headCommittedAt: null,
+    });
   });
 
   it("updates run status", () => {

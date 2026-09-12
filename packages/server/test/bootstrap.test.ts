@@ -3140,6 +3140,7 @@ describe("bootstrapServerApp", () => {
       });
 
       expect(result.reviewOrchestration).toBeDefined();
+      expect(result.reviewOrchestration?.liveRuns).toBeUndefined();
       expect(result.reviewOrchestration?.baseSystemPrompt).toBe("test prompt");
       expect(result.reviewOrchestration?.model.providerId).toBe("openai-prod");
       expect(result.reviewOrchestration?.agentModelChain?.map((entry) => entry.modelId)).toEqual(["gpt-4o"]);
@@ -3716,6 +3717,8 @@ describe("resolveP4TriggerConfig", () => {
       expect(result.store).toBeDefined();
       expect(result.observability).toBeDefined();
       expect(result.observability!.store).toBe(result.store);
+      expect(result.observability!.liveRuns).toBeDefined();
+      expect(result.reviewOrchestration?.liveRuns).toBe(result.observability!.liveRuns);
     } finally {
       delete process.env.AICR_ADMIN_USERNAME;
       delete process.env.AICR_ADMIN_PASSWORD;

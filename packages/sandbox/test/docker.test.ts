@@ -8,6 +8,17 @@ import { describe, expect, it } from "vitest";
 import { preflightSandbox, createDockerSandboxBackend } from "../src/docker.js";
 
 describe("createDockerSandboxBackend", () => {
+  it.each(["docker", "podman", "docker_socket"] as const)("forwards stdout observers for %s", async (kind) => {
+    const chunks: string[] = [];
+    const backend = createDockerSandboxBackend({ kind, commandRunner: async (_engine, _args, options) => {
+      options?.onStdout?.("turn complete\n");
+      return { stdout: "turn complete\n", stderr: "", exitCode: 0 };
+    } });
+    const result = await backend.spawn({ command: ["node", "-v"], cwd: process.cwd(),
+      onStdout: (chunk) => chunks.push(chunk) });
+    expect(chunks).toEqual(["turn complete\n"]);
+    expect(result.stdout).toBe(chunks.join(""));
+  });
   it("creates a backend with kind 'docker'", () => {
     const backend = createDockerSandboxBackend();
     expect(backend.kind).toBe("docker");

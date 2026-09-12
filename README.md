@@ -55,9 +55,10 @@ pull-request comments, managed issues, or IM bots.
   (git/P4/SVN) materialize fresh each review and mount read-only into the
   agent sandbox, so reviewers can verify changes against shared libraries and
   contract repositories.
-- **Observability** — Built-in dashboard with per-project stats, LLM cost and
-  prompt cache hit-rate tracking, and `/metrics` endpoint for Prometheus
-  scraping.
+- **Observability** — Built-in dashboard with a live view of running analyses
+  (worker/task, phase, tokens, cache hit rate, requests, cost), per-project stats,
+  branch/revision/commit-time stamps when available, manual or optional automatic
+  refresh, and `/metrics` endpoint for Prometheus scraping.
 
 ## How it works
 

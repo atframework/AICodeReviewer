@@ -14,6 +14,8 @@ export interface SandboxSpawnOptions {
   readonly env?: Readonly<Record<string, string>>;
   readonly timeoutMs?: number;
   readonly stdin?: string;
+  /** Advisory decoded stdout chunks; observers must not affect process execution. */
+  readonly onStdout?: (chunk: string) => void;
 }
 
 export interface SandboxSpawnResult {

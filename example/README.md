@@ -863,6 +863,12 @@ Set `admin.username_env` plus either `admin.password_env` or
 - `POST /api/admin/login` returns a Bearer session token.
 - `GET /api/admin/stats` returns all-time, today, this-week, and this-month
   statistics, plus project/provider/recent-run data.
+- `GET /api/admin/runs` lists recent runs with branch, revision, and commit
+  time; `GET /api/admin/runs/live` lists analyses currently running in this
+  process (worker slot, run ID, task, phase, cumulative tokens/requests/cost).
+  Live cards update usage per completed turn for Kilo/OpenCode and pi/oh-my-pi;
+  other invocations report on completion. Refresh defaults to manual, with
+  optional 5/15/30/60-second polling while Live is visible.
 
 The current built-in store is SQLite + Drizzle at
 `storage.database.sqlite.path` (default `/app/data/aicr.sqlite`). The schema

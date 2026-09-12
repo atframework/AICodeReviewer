@@ -28,6 +28,7 @@ interface ContainerCommandResult {
 interface ContainerCommandOptions {
   readonly timeoutMs?: number;
   readonly stdin?: string;
+  readonly onStdout?: (chunk: string) => void;
 }
 
 export type ContainerCommandRunner = (
@@ -48,10 +49,7 @@ export interface DockerSandboxOptions {
 const execContainerCommand: ContainerCommandRunner = async function execContainerCommand(
   engine,
   args: readonly string[],
-  options?: {
-    readonly timeoutMs?: number;
-    readonly stdin?: string;
-  },
+  options?: ContainerCommandOptions,
 ): Promise<{ readonly stdout: string; readonly stderr: string; readonly exitCode: number | null }> {
   const { spawn } = await import("node:child_process");
 
@@ -78,8 +76,14 @@ const execContainerCommand: ContainerCommandRunner = async function execContaine
       resolvePromise({ stdout, stderr, exitCode });
     };
 
-    proc.stdout.on("data", (chunk: Buffer) => {
-      stdout += chunk.toString("utf8");
+    proc.stdout.setEncoding("utf8");
+    proc.stdout.on("data", (chunk: string) => {
+      stdout += chunk;
+      try {
+        options?.onStdout?.(chunk);
+      } catch {
+        // Advisory observers cannot change the container result.
+      }
     });
 
     proc.stderr.on("data", (chunk: Buffer) => {
@@ -202,6 +206,7 @@ export function createDockerSandboxBackend(options: DockerSandboxOptions = {}): 
         result = await commandRunner(containerCli, dockerArgs, {
           timeoutMs: effectiveTimeout,
           ...(spawnOptions.stdin ? { stdin: spawnOptions.stdin } : {}),
+          ...(spawnOptions.onStdout ? { onStdout: spawnOptions.onStdout } : {}),
         });
       } finally {
         await cleanupEnvFiles();

@@ -43,6 +43,10 @@ export interface ReviewRunInsert {
   targetUrl?: string | null;
   branch?: string | null;
   headSha?: string | null;
+  /** VCS family of the analyzed revision ("git" | "svn" | "p4"); null when unknown. */
+  vcsKind?: string | null;
+  /** Commit time of the analyzed head revision; null when unresolved. */
+  headCommittedAt?: Date | null;
   codeMetrics?: CodeMetricsInsert;
   llmUsages?: LlmUsageInsert[];
 }
@@ -122,6 +126,8 @@ export function insertReviewRun(store: StoreDb, run: ReviewRunInsert): void {
     ...(run.targetUrl ? { targetUrl: run.targetUrl } : {}),
     ...(run.branch ? { branch: run.branch } : {}),
     ...(run.headSha ? { headSha: run.headSha } : {}),
+    ...(run.vcsKind ? { vcsKind: run.vcsKind } : {}),
+    ...(run.headCommittedAt ? { headCommittedAt: run.headCommittedAt } : {}),
   }).run();
 
   if (run.codeMetrics) {
@@ -574,6 +580,14 @@ export interface RecentRunStats {
   durationMs: number | null;
   startedAt: Date | null;
   targetKind: string | null;
+  /** Branch/ref of the analyzed code when the event carried one (git-family flows). */
+  branch: string | null;
+  /** Analyzed head revision: git sha, SVN revision number, or P4 changelist. */
+  headSha: string | null;
+  /** VCS family of `headSha` ("git" | "svn" | "p4"); null for legacy rows and unknown providers. */
+  vcsKind: string | null;
+  /** Commit time of `headSha`, resolved best-effort at run time; null when unavailable. */
+  headCommittedAt: Date | null;
   /** Real LLM usage summed across the run's llm_usage rows; absent when none were recorded. */
   llmUsage?: RecentRunTokenUsage;
 }
@@ -594,6 +608,10 @@ export function getRecentRuns(
       durationMs: reviewRuns.durationMs,
       startedAt: reviewRuns.startedAt,
       targetKind: reviewRuns.targetKind,
+      branch: reviewRuns.branch,
+      headSha: reviewRuns.headSha,
+      vcsKind: reviewRuns.vcsKind,
+      headCommittedAt: reviewRuns.headCommittedAt,
     })
     .from(reviewRuns)
     .innerJoin(projects, eq(reviewRuns.projectId, projects.id))

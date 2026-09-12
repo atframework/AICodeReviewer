@@ -126,6 +126,14 @@ export interface VcsAdapter {
    * unaffected).
    */
   listCommitMetadataPage?(query: CommitMetadataQuery): Promise<CommitMetadataPage>;
+  /**
+   * Best-effort commit time for one revision, normalized to an ISO-8601 UTC
+   * string: git committer date (`%cI`), SVN `svn:date`, P4 changelist `time`.
+   * Advisory by contract: implementations return `undefined` when the
+   * revision or its timestamp is unreadable instead of throwing, so callers
+   * can stamp observability records without risking the review itself.
+   */
+  fetchRevisionCommittedAt?(revision: string): Promise<string | undefined>;
   fetchScoped(range: ChangeRange, ws: WorkspaceRef): Promise<ScopedTree>;
   fetchExtraContext(req: ExtraContextRequest, ws: WorkspaceRef): Promise<ExtraContextResult>;
   fetchAttribution?(req: AttributionRequest, ws: WorkspaceRef): Promise<AttributionResult>;

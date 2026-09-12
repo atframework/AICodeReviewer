@@ -5,6 +5,7 @@ import {
   actorSchema,
   containsReviewCommand,
   extractLabelNames,
+  extractRefBranch,
   normalizeActor,
   resolveWorkspaceIdForRepo,
   type VcsWebhookConfig,
@@ -62,6 +63,7 @@ const gitlabPushPayloadSchema = z
   .object({
     before: z.string().min(1).optional(),
     after: z.string().min(1).optional(),
+    ref: z.string().min(1).optional(),
     project: z
       .object({
         path_with_namespace: z.string().min(1),
@@ -167,11 +169,13 @@ export async function translateGitlabWebhookToReviewEvent(
       reason: `${provider}:${parsed.object_attributes.action ?? "merge_request"}`,
       rawEventName: eventName,
       ...(mrLabels.length > 0 ? { labels: mrLabels } : {}),
+      ...(parsed.object_attributes.source_branch ? { branch: parsed.object_attributes.source_branch } : {}),
     });
   }
 
   if (eventName === "Push Hook" || eventName === "git_push") {
     const parsed = gitlabPushPayloadSchema.parse(payload);
+    const branch = extractRefBranch(parsed);
 
     return createReviewEvent({
       triggerName: config.triggerName,
@@ -187,6 +191,7 @@ export async function translateGitlabWebhookToReviewEvent(
       },
       reason: `${provider}:push`,
       rawEventName: eventName,
+      ...(branch ? { branch } : {}),
     });
   }
 

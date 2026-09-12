@@ -38,12 +38,13 @@ session TTL 字段是 `session_ttl_seconds`（默认 `86400` = 24 小时）。`s
 
 访问 `http://<aicr-host>:8080/dashboard`（或 `/`）。即使尚未配置管理员环境变量，该路由也会返回 dashboard 外壳并显示 setup-required 提示而不是 404；如果设置了 `path_prefix`，根路径会重定向到带前缀的入口。
 
-登录后，dashboard 有五个标签：
+登录后，dashboard 有六个标签：
 
-- **Overview**——总评审次数、成功/失败/跳过次数、发现问题的 run 次数、problem 总数、创建 issue 数、分析代码量、LLM 请求数、输入/输出/总 token、prompt 缓存命中率（含命中/未命中 token 拆分）、估算成本、平均 duration。时间窗口选择器切换 today / this week / this month / all（均按 UTC）。Recent activity 表格与 Runs 标签一样展示每条 run 的总 token、缓存命中/未命中拆分与命中率。
+- **Live**——当前服务进程中正在执行的分析。卡片随屏幕宽度排列，展示 worker 槽位、run ID、任务标题、attempt、workspace/trigger/repo、分支和 revision（git 短 sha、SVN `r<N>`、P4 `CL <N>`，悬停显示完整 revision）、提交时间、model 与 agent、phase（preparing → analyzing → publishing）、开始时间及耗时。指标包括输入/输出 token、缓存命中/未命中/写入量、命中率、LLM 请求数、重试/fallback 次数、估算成本及用量更新时间；usage 缺失时单独显示 `~N est. prompt`。worker 编号代表本进程的活动分析槽位，任务结束后可复用。Kilo/OpenCode 和 pi/oh-my-pi 每完成一个模型回合便更新用量，其他 agent 和直连 LLM 在调用结束时更新。执行结束或服务重启后条目消失。Refresh 手动刷新；自动刷新默认 **Off (manual)**，可选前次请求结束后每 5/15/30/60 秒刷新。离开 Live 或隐藏浏览器页面时暂停，退出登录恢复手动模式；刷新失败时保留的快照标为过期。
+- **Overview**——总评审次数、成功/失败/跳过次数、发现问题的 run 次数、problem 总数、创建 issue 数、分析代码量、LLM 请求数、输入/输出/总 token、prompt 缓存命中率（含命中/未命中 token 拆分）、估算成本、平均 duration。时间窗口选择器切换 today / this week / this month / all（均按 UTC）。Recent activity 表格与 Runs 标签一样展示每条 run 的总 token、缓存命中/未命中拆分与命中率，外加分支、缩写 revision 与提交时间。
 - **Projects**——按 project 聚合（`workspaceId + triggerName + repoRef`）：评审/成功/失败/跳过次数、problem 总数、创建 issue 数、变更文件数、增删行数、LLM 请求数、token、缓存命中 token 与命中率、成本、平均 duration。软删除的 project 在宽限期内仍可见，并用 `isActive` 标记。
 - **Providers**——按 provider+model 聚合：请求数、输入/输出 token、缓存命中 token 与命中率、成本、重试/fallback/失败次数、平均延迟。
-- **Runs**——最近 100 条运行记录，每页 20 条，用 Prev/Next 翻页。每行展示真实 token 用量：总 token、命中/未命中输入拆分与命中率；run 未上报可解析 usage 时显示 `—`。
+- **Runs**——最近 100 条运行记录，每页 20 条，用 Prev/Next 翻页。每行展示真实 token 用量：总 token、命中/未命中输入拆分与命中率；run 未上报可解析 usage 时显示 `—`。Revision 列展示分支、缩写 revision，以及 VCS adapter 解析成功时的提交时间。
 - **Events**——最近收到的 100 条 webhook/trigger 事件，每页 20 条。每行展示接收时刻的处理决定：`executed`（立即执行）、`queued`/`duplicate`（auto-commit 回执）、`deferred`（执行窗口延期，含计划恢复时刻）、`deduplicated`（合并进待重审）、`ignored`（label 忽略、不支持的事件、仓库未配置）或 `rejected`（签名无效、payload 非法、触发器未配置），以及原因和细节（命中的 label、回执 id 等）。
 
 用量按完整 review run 聚合，包括首次模型调用、上下文/格式修复调用以及最终直连 LLM 兜底。
@@ -56,7 +57,15 @@ session TTL 字段是 `session_ttl_seconds`（默认 `86400` = 24 小时）。`s
 Projects 和 Providers 标签各自调用带时间窗口的 API
 （`GET /api/admin/stats/projects?since=` 和 `.../providers?since=`）。Runs 标签通过
 `GET /api/admin/runs?limit=100` 拉取最近 100 条并在浏览器内分页；Events 标签同样通过
-`GET /api/admin/events?limit=100` 拉取，其存储只保留最新 100 条。dashboard 以实时聚合为真源。
+`GET /api/admin/events?limit=100` 拉取，其存储只保留最新 100 条。Live 标签轮询
+`GET /api/admin/runs/live`，读取当前进程的内存注册表。已结束的 run 可在 Recent Runs
+的保留范围内查询。dashboard 以实时聚合为真源。
+
+分支随 webhook 事件携带，实际分析的 head revision 和 VCS 类型来自 adapter 解析的范围和类型。
+提交时间由 VCS adapter 在 scoped fetch 后尽力解析（`git log` / `svn log` / `p4 describe`）：
+Git 取 committer date，SVN 取 `svn:date`，P4 仅对 submitted changelist 展示提交时间。
+时间按浏览器本地时区显示。无法解析的提交时间显示 `—`；旧记录或未知 VCS 类型保留完整
+revision，不按字符串形状猜测 hash 格式。
 
 ## 管理 API
 
@@ -72,7 +81,8 @@ Projects 和 Providers 标签各自调用带时间窗口的 API
 | `GET /api/admin/stats` | overview + today/this-week/this-month 窗口、projects、providers、最近 run |
 | `GET /api/admin/stats/projects?since=` | 按 project 聚合 |
 | `GET /api/admin/stats/providers?since=` | 按 provider+model 聚合 |
-| `GET /api/admin/runs?limit=` | 最近 run 列表（1..100），含 token 用量与缓存命中拆分 |
+| `GET /api/admin/runs?limit=` | 最近 run 列表（1..100），含 token 用量、缓存命中拆分与 VCS stamp |
+| `GET /api/admin/runs/live` | 进程内注册表中正在执行的分析：phase、开始时间、累计 token/请求数/成本 |
 | `GET /api/admin/events?limit=` | 最近 webhook/trigger 事件日志（1..100），含接收时刻的处理决定与原因 |
 
 ## `/metrics`

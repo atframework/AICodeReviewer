@@ -79,6 +79,18 @@ async function heartbeatLineCount(file: string): Promise<number> {
 }
 
 describe("createNativeSandboxBackend", () => {
+  it("delivers decoded stdout before exit and isolates observer failures", async () => {
+    const backend = createNativeSandboxBackend();
+    const chunks: string[] = [];
+    const result = await backend.spawn({
+      command: ["node", "-e", "const b=Buffer.from('你好');process.stdout.write(b.subarray(0,2));setTimeout(()=>process.stdout.write(b.subarray(2)),30)"],
+      cwd: process.cwd(), timeoutMs: 5000,
+      onStdout(chunk) { chunks.push(chunk); throw new Error("observer failed"); },
+    });
+    expect(result.exitCode).toBe(0);
+    expect(chunks.join("")).toBe("你好");
+    expect(result.stdout).toBe("你好");
+  });
   it("has kind 'native'", () => {
     expect(createNativeSandboxBackend().kind).toBe("native");
   });

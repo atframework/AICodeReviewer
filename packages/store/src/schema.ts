@@ -57,6 +57,10 @@ export const reviewRuns = sqliteTable("review_runs", {
   targetUrl: text("target_url"),
   branch: text("branch"),
   headSha: text("head_sha"),
+  /** VCS family of the analyzed revision ("git" | "svn" | "p4"); drives revision formatting. */
+  vcsKind: text("vcs_kind"),
+  /** Commit time of the analyzed head revision, when the VCS adapter could resolve it. */
+  headCommittedAt: integer("head_committed_at", { mode: "timestamp_ms" }),
 });
 
 export const codeMetrics = sqliteTable("code_metrics", {
