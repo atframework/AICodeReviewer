@@ -237,6 +237,128 @@ describe("runCli", () => {
     }
   });
 
+  it("denies a manual --workspace outside the trigger's permitted rules (W09)", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-cli-manual-deny-"));
+    try {
+      await writeWorkspaceFile(
+        tempDir,
+        "prompts/system/code-reviewer.system.md",
+        "<task>\n{{TASK_CONTEXT}}\n</task>\n",
+      );
+      await writeWorkspaceFile(
+        tempDir,
+        "config.yaml",
+        [
+          "triggers:",
+          "  - { name: manual-ops, kind: manual }",
+          "workspaces:",
+          "  instances:",
+          "    services:",
+          "      match:",
+          "        - triggers: [manual-ops]",
+          "          source:",
+          "            repo_ref: { glob: \"acme/*\" }",
+          "    secrets:",
+          "      match:",
+          "        - triggers: [manual-ops]",
+          "          source:",
+          "            repo_ref: { exact: \"acme/vault\" }",
+          "",
+        ].join("\n"),
+      );
+      const stdout = new MemoryWriter();
+      const stderr = new MemoryWriter();
+      const exitCode = await runCli(
+        ["review", "--repo", "acme/service-a", "--trigger", "manual-ops", "--workspace", "secrets", "--dry-run"],
+        { cwd: tempDir, stdout, stderr },
+      );
+      expect(exitCode).toBe(1);
+      expect(stderr.output).toContain('workspace "secrets" is not permitted for trigger "manual-ops"');
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("requires --workspace to settle an ambiguous manual route (W08)", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-cli-manual-ambiguous-"));
+    try {
+      await writeWorkspaceFile(
+        tempDir,
+        "prompts/system/code-reviewer.system.md",
+        "<task>\n{{TASK_CONTEXT}}\n</task>\n",
+      );
+      await writeWorkspaceFile(
+        tempDir,
+        "config.yaml",
+        [
+          "triggers:",
+          "  - { name: manual-ops, kind: manual }",
+          "workspaces:",
+          "  instances:",
+          "    services:",
+          "      match:",
+          "        - triggers: [manual-ops]",
+          "          source:",
+          "            repo_ref: { glob: \"acme/service-*\" }",
+          "    platform:",
+          "      match:",
+          "        - triggers: [manual-ops]",
+          "          source:",
+          "            repo_ref: { glob: \"acme/*\" }",
+          "",
+        ].join("\n"),
+      );
+      const stdout = new MemoryWriter();
+      const stderr = new MemoryWriter();
+      const exitCode = await runCli(
+        ["review", "--repo", "acme/service-a", "--trigger", "manual-ops", "--dry-run"],
+        { cwd: tempDir, stdout, stderr },
+      );
+      expect(exitCode).toBe(1);
+      expect(stderr.output).toContain("matches several workspaces");
+      expect(stderr.output).toContain("--workspace");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a manual run whose source matches no rule (W09)", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-cli-manual-nomatch-"));
+    try {
+      await writeWorkspaceFile(
+        tempDir,
+        "prompts/system/code-reviewer.system.md",
+        "<task>\n{{TASK_CONTEXT}}\n</task>\n",
+      );
+      await writeWorkspaceFile(
+        tempDir,
+        "config.yaml",
+        [
+          "triggers:",
+          "  - { name: manual-ops, kind: manual }",
+          "workspaces:",
+          "  instances:",
+          "    services:",
+          "      match:",
+          "        - triggers: [manual-ops]",
+          "          source:",
+          "            repo_ref: { glob: \"acme/*\" }",
+          "",
+        ].join("\n"),
+      );
+      const stdout = new MemoryWriter();
+      const stderr = new MemoryWriter();
+      const exitCode = await runCli(
+        ["review", "--repo", "other/repo", "--trigger", "manual-ops", "--dry-run"],
+        { cwd: tempDir, stdout, stderr },
+      );
+      expect(exitCode).toBe(1);
+      expect(stderr.output).toContain('source "other/repo" matches no workspace rule');
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("returns an error when --max-prompt-tokens is not a positive integer", async () => {
     const stdout = new MemoryWriter();
     const stderr = new MemoryWriter();
@@ -288,6 +410,11 @@ describe("runCli", () => {
   it("lint validates a config file and reports checked resources", async () => {
     const tempDir = await mkdtemp(join(tmpdir(), "aicr-cli-lint-config-"));
     try {
+      await writeWorkspaceFile(
+        tempDir,
+        "prompts/system/code-reviewer.system.md",
+        "<task>\n{{TASK_CONTEXT}}\n</task>\n",
+      );
       await writeWorkspaceFile(
         tempDir,
         "config.yaml",

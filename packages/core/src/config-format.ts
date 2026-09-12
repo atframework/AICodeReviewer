@@ -28,6 +28,9 @@ export const CONFIG_FORMAT_VERSION_PLANNED = 2;
 // Error codes
 // ---------------------------------------------------------------------------
 
+/** Shared reasoning effort enum; canonical home here to keep this module a leaf. */
+export const reasoningEffortSchema = z.enum(["minimal", "low", "medium", "high", "max"]);
+
 export const CONFIG_ERROR_CODES = [
   // raw source stage
   "malformed_yaml",
@@ -41,6 +44,9 @@ export const CONFIG_ERROR_CODES = [
   "invalid_secret_env",
   "entity_id_mismatch",
   "config_path_invalid",
+  "invalid_field_type",
+  "match_rule_invalid",
+  "unsupported_capability",
   // changeset / publish
   "entity_not_found",
   "entity_exists",
@@ -404,6 +410,8 @@ export type PathTemplateHelper = (typeof PATH_TEMPLATE_HELPERS)[number];
 
 export const PATH_TEMPLATE_LIMITS = {
   maxLengthBytes: 4096,
+  maxOutputBytes: 4096,
+  maxSegmentBytes: 255,
   maxAstNodes: 256,
   maxAstDepth: 8,
 } as const;
@@ -415,7 +423,7 @@ export const PATH_TEMPLATE_LIMITS = {
 /** Reserved root keys of the `workspaces` section; shared with config.ts. */
 export const workspaceRootKeys = ["cache", "defaults", "instances"] as const;
 
-const reservedWorkspaceIds: Record<string, true> = { cache: true, defaults: true, instances: true };
+const reservedWorkspaceIds: Record<string, true> = { cache: true, defaults: true, instances: true, root: true };
 
 /** v2 definition id contract; v1 ids are not renamed automatically. */
 export const WORKSPACE_DEFINITION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;

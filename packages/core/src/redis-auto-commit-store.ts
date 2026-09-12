@@ -48,6 +48,9 @@ import {
 import type {
   AcceptReceiptInput,
   AcceptReceiptResult,
+  AcceptRoutingReceiptInput,
+  AcceptRoutingReceiptResult,
+  FrozenScopeResolution,
   ApplyMetadataPageInput,
   ApplyMetadataPageResult,
   AutoCommitReceipt,
@@ -61,6 +64,7 @@ import type {
   NextWake,
   Page,
   ReceiptQueryResult,
+  RoutingReceiptRecord,
   SealBatchInput,
   SealBatchResult,
   StreamHead,
@@ -163,6 +167,9 @@ local K_IDX_WS_NB = P.."idx:ws:notBefore"
 local K_IDX_OUTBOX = P.."idx:outbox"
 local K_IDX_LEASE = P.."idx:lease"
 local K_IDX_RUNNING = P.."idx:running"
+local function kRouting(id) return P.."routing:"..id end
+local function kRoutingKey(key) return P.."routingkey:"..key end
+local K_IDX_ROUTING_DUE = P.."idx:routing:due"
 local function kWsRunning(ws) return P.."ws:"..ws..":running" end
 local function isNull(v) return v == nil or v == cjson.null end
 local function pendingSortKey(rec)
@@ -291,6 +298,7 @@ local receipt = {
   metadataAttempts = 0,
   metadataNextAttemptAt = cjson.null,
   metadataTerminalError = cjson.null,
+  resolution = input.resolution or cjson.null,
 }
 redis.call("SET", kDelivery(input.deliveryKey), input.receiptId)
 redis.call("HSET", kReceipt(input.receiptId), "data", cjson.encode(receipt))
@@ -336,6 +344,116 @@ if redis.call("HEXISTS", kWs(ws), "data") == 0 then
 end
 streamRecompute(sid)
 return cjson.encode({ duplicate = false, receipt = cjson.encode(receipt) })
+`;
+
+const LUA_ACCEPT_ROUTING =
+  LUA_PRELUDE +
+  `
+local input = cjson.decode(ARGV[2])
+local existing = redis.call("GET", kRoutingKey(input.routingKey))
+if existing then
+  local rdata = redis.call("HGET", kRouting(existing), "data")
+  if rdata then
+    return cjson.encode({ duplicate = true, receipt = rdata })
+  end
+end
+local record = {
+  routingId = input.routingId,
+  routingKey = input.routingKey,
+  provider = input.provider,
+  triggerName = input.triggerName,
+  envelope = input.envelope,
+  parentDeliveryId = input.parentDeliveryId or cjson.null,
+  firstAcceptedAt = input.now,
+  attempts = 0,
+  nextAttemptAt = cjson.null,
+  terminalError = cjson.null,
+  convertedReceiptIds = {},
+  completedAt = cjson.null,
+  note = cjson.null,
+  resolution = cjson.null,
+}
+redis.call("SET", kRoutingKey(input.routingKey), input.routingId)
+redis.call("HSET", kRouting(input.routingId), "data", cjson.encode(record))
+redis.call("ZADD", K_IDX_ROUTING_DUE, input.now, input.routingId)
+return cjson.encode({ duplicate = false, receipt = cjson.encode(record) })
+`;
+
+const LUA_ROUTING_FAILURE =
+  LUA_PRELUDE +
+  `
+local routingId = ARGV[2]
+local error = ARGV[3]
+local retryAt = ARGV[4]
+local rdata = redis.call("HGET", kRouting(routingId), "data")
+if not rdata then
+  return "missing"
+end
+local record = cjson.decode(rdata)
+if not isNull(record.terminalError) or not isNull(record.completedAt) then
+  return "settled"
+end
+record.attempts = (record.attempts or 0) + 1
+if retryAt == "terminal" then
+  record.terminalError = error
+  redis.call("ZREM", K_IDX_ROUTING_DUE, routingId)
+else
+  record.nextAttemptAt = tonumber(retryAt)
+  redis.call("ZADD", K_IDX_ROUTING_DUE, tonumber(retryAt), routingId)
+end
+redis.call("HSET", kRouting(routingId), "data", cjson.encode(record))
+return "ok"
+`;
+
+const LUA_ROUTING_RESOLUTION =
+  LUA_PRELUDE +
+  `
+local routingId = ARGV[2]
+local resolution = ARGV[3]
+local rdata = redis.call("HGET", kRouting(routingId), "data")
+if not rdata then
+  return cjson.encode({ status = "missing" })
+end
+local record = cjson.decode(rdata)
+-- V14: first interpretation wins; a retried/concurrent attempt reads back
+-- the frozen value instead of re-resolving against changed config.
+if isNull(record.resolution) then
+  record.resolution = cjson.decode(resolution)
+  redis.call("HSET", kRouting(routingId), "data", cjson.encode(record))
+end
+return cjson.encode({ status = "ok", receipt = cjson.encode(record) })
+`;
+
+const LUA_ROUTING_CONVERSION =
+  LUA_PRELUDE +
+  `
+local routingId = ARGV[2]
+local input = cjson.decode(ARGV[3])
+local now = tonumber(ARGV[4])
+local rdata = redis.call("HGET", kRouting(routingId), "data")
+if not rdata then
+  return cjson.encode({ status = "missing" })
+end
+local record = cjson.decode(rdata)
+local seen = {}
+for _, id in ipairs(record.convertedReceiptIds or {}) do
+  seen[id] = true
+end
+for _, id in ipairs(input.addedReceiptIds or {}) do
+  if not seen[id] then
+    table.insert(record.convertedReceiptIds, id)
+    seen[id] = true
+  end
+end
+if input.complete == true and isNull(record.completedAt) then
+  record.completedAt = now
+  redis.call("ZREM", K_IDX_ROUTING_DUE, routingId)
+end
+if input.note then
+  record.note = input.note
+end
+redis.call("HSET", kRouting(routingId), "data", cjson.encode(record))
+return cjson.encode({ status = "ok", receipt = cjson.encode(record) })
 `;
 
 const LUA_APPLY_METADATA_PAGE =
@@ -958,6 +1076,22 @@ function toReceipt(stored: StoredReceipt): AutoCommitReceipt {
     metadataAttempts: receipt.metadataAttempts ?? 0,
     metadataNextAttemptAt: receipt.metadataNextAttemptAt ?? null,
     metadataTerminalError: receipt.metadataTerminalError ?? null,
+    resolution: receipt.resolution ?? null,
+  };
+}
+
+/** Normalize routing blobs written before later field additions existed. */
+function toRoutingReceipt(stored: RoutingReceiptRecord): RoutingReceiptRecord {
+  return {
+    ...stored,
+    parentDeliveryId: stored.parentDeliveryId ?? null,
+    attempts: stored.attempts ?? 0,
+    nextAttemptAt: stored.nextAttemptAt ?? null,
+    terminalError: stored.terminalError ?? null,
+    convertedReceiptIds: stored.convertedReceiptIds ?? [],
+    completedAt: stored.completedAt ?? null,
+    note: stored.note ?? null,
+    resolution: stored.resolution ?? null,
   };
 }
 
@@ -1066,6 +1200,105 @@ export async function createRedisAutoCommitStore(
       const result = JSON.parse(raw) as { duplicate: boolean; receipt: string };
       const stored = JSON.parse(result.receipt) as StoredReceipt;
       return { receipt: toReceipt(stored), duplicate: result.duplicate };
+    },
+
+    async acceptRoutingReceipt(
+      input: AcceptRoutingReceiptInput,
+    ): Promise<AcceptRoutingReceiptResult> {
+      const payload = { ...input, routingId: randomUUID() };
+      const raw = (await evalScript(
+        LUA_ACCEPT_ROUTING,
+        P,
+        JSON.stringify(payload),
+      )) as string;
+      const result = JSON.parse(raw) as { duplicate: boolean; receipt: string };
+      const record = JSON.parse(result.receipt) as RoutingReceiptRecord;
+      return { receipt: toRoutingReceipt(record), duplicate: result.duplicate };
+    },
+
+    async readDueRoutingReceipts(
+      now: number,
+      limit: number,
+    ): Promise<readonly RoutingReceiptRecord[]> {
+      const ids = (await redis.zrangebyscore(
+        `${P}idx:routing:due`,
+        "-inf",
+        now,
+        "LIMIT",
+        0,
+        limit,
+      )) as string[];
+      const records: RoutingReceiptRecord[] = [];
+      for (const id of ids) {
+        const data = (await redis.hget(`${P}routing:${id}`, "data")) as string | null;
+        if (data !== null) {
+          records.push(toRoutingReceipt(JSON.parse(data) as RoutingReceiptRecord));
+        }
+      }
+      records.sort((a, b) => a.firstAcceptedAt - b.firstAcceptedAt);
+      return records;
+    },
+
+    async getRoutingReceipt(
+      routingId: string,
+    ): Promise<RoutingReceiptRecord | undefined> {
+      const data = (await redis.hget(`${P}routing:${routingId}`, "data")) as string | null;
+      return data !== null ? toRoutingReceipt(JSON.parse(data) as RoutingReceiptRecord) : undefined;
+    },
+
+    async recordRoutingReceiptFailure(
+      routingId: string,
+      error: string,
+      retryAt: number | null,
+    ): Promise<void> {
+      await evalScript(
+        LUA_ROUTING_FAILURE,
+        P,
+        routingId,
+        error,
+        retryAt === null ? "terminal" : String(retryAt),
+      );
+    },
+
+    async recordRoutingReceiptResolution(
+      routingId: string,
+      resolution: readonly FrozenScopeResolution[],
+      _now: number,
+    ): Promise<RoutingReceiptRecord> {
+      const raw = (await evalScript(
+        LUA_ROUTING_RESOLUTION,
+        P,
+        routingId,
+        JSON.stringify(resolution),
+      )) as string;
+      const result = JSON.parse(raw) as { status: string; receipt?: string };
+      if (result.status !== "ok" || result.receipt === undefined) {
+        throw new Error(`Unknown routing receipt ${routingId}.`);
+      }
+      return toRoutingReceipt(JSON.parse(result.receipt) as RoutingReceiptRecord);
+    },
+
+    async recordRoutingReceiptConversion(
+      routingId: string,
+      input: {
+        readonly addedReceiptIds?: readonly string[];
+        readonly complete?: boolean;
+        readonly note?: string;
+      },
+      now: number,
+    ): Promise<RoutingReceiptRecord> {
+      const raw = (await evalScript(
+        LUA_ROUTING_CONVERSION,
+        P,
+        routingId,
+        JSON.stringify(input),
+        String(now),
+      )) as string;
+      const result = JSON.parse(raw) as { status: string; receipt?: string };
+      if (result.status !== "ok" || result.receipt === undefined) {
+        throw new Error(`Unknown routing receipt ${routingId}.`);
+      }
+      return toRoutingReceipt(JSON.parse(result.receipt) as RoutingReceiptRecord);
     },
 
     async applyMetadataPage(
@@ -1664,11 +1897,12 @@ return 1
     },
 
     async readNextWake(): Promise<NextWake | undefined> {
-      const [wsMin, outboxMin, leaseMin] = (await Promise.all([
+      const [wsMin, outboxMin, leaseMin, routingMin] = (await Promise.all([
         redis.zrange(`${P}idx:ws:notBefore`, 0, 0, "WITHSCORES"),
         redis.zrange(`${P}idx:outbox`, 0, 0, "WITHSCORES"),
         redis.zrange(`${P}idx:lease`, 0, 0, "WITHSCORES"),
-      ])) as [string[], string[], string[]];
+        redis.zrange(`${P}idx:routing:due`, 0, 0, "WITHSCORES"),
+      ])) as [string[], string[], string[], string[]];
       let best: NextWake | undefined;
       const consider = (entry: string[], reason: NextWake["reason"]) => {
         if (entry.length < 2) return;
@@ -1680,6 +1914,7 @@ return 1
       consider(wsMin, "delay");
       consider(outboxMin, "outbox_dispatch");
       consider(leaseMin, "lease_reclaim");
+      consider(routingMin, "routing_resolution");
       return best;
     },
 

@@ -10,8 +10,10 @@ import {
   loadConfigFile,
   loadSystemPromptTemplate,
   prepareReviewPrompt,
+  projectEventResolution,
   reviewProviderSchema,
   summarizePreparedReviewPrompt,
+  vcsKindForProvider,
   type ReviewProvider,
 } from "@aicr/core";
 import {
@@ -23,6 +25,7 @@ import {
 import {
   bootstrapServerApp,
   createServerApp,
+  createWorkspaceRuntime,
   runReviewOrchestration,
   serveAsync,
   summarizeReviewOrchestrationForWebhook,
@@ -357,7 +360,7 @@ export async function runCli(
         return 1;
       }
       const reviewProvider: ReviewProvider = parsedProvider.data;
-      const reviewEvent = createReviewEvent({
+      let reviewEvent = createReviewEvent({
         triggerName: values.trigger ?? "manual-cli",
         provider: reviewProvider,
         workspaceId: values.workspace ?? "manual-workspace",
@@ -387,6 +390,58 @@ export async function runCli(
         } catch {
           stderr.write(`aicr review --dry-run requires a valid config file at ${configPath}\n`);
           return 1;
+        }
+
+        // Manual explicit-route admission (W08/W09): when the named trigger
+        // is configured, the operator's --workspace is validated against the
+        // trigger's match rules for this source; a valid request never
+        // widens the trigger's permitted scope. Triggers absent from the
+        // config keep the legacy direct-workspace behavior.
+        const triggerName = reviewEvent.triggerName;
+        if (config.triggers.some((entry) => entry.name === triggerName)) {
+          const runtime = createWorkspaceRuntime(config, cwd);
+          const resolution = runtime.resolveForSource(
+            triggerName,
+            {
+              vcs: vcsKindForProvider(reviewProvider) ?? reviewProvider,
+              repo_ref: reviewEvent.repoRef,
+              branch: reviewEvent.branch ?? null,
+              ref: reviewEvent.headSha ?? null,
+            },
+            {
+              manual: {
+                request_id: null,
+                requested_workspace: values.workspace ?? null,
+                requested_by: null,
+              },
+            },
+            values.workspace !== undefined ? { workspaceId: values.workspace } : undefined,
+          );
+          if (resolution.kind === "route_denied") {
+            stderr.write(
+              `aicr review: workspace "${resolution.definitionId}" is not permitted for trigger "${triggerName}" (${resolution.reason}).\n`,
+            );
+            return 1;
+          }
+          if (resolution.kind === "no_match") {
+            stderr.write(
+              `aicr review: source "${reviewEvent.repoRef}" matches no workspace rule for trigger "${triggerName}".\n`,
+            );
+            return 1;
+          }
+          if (resolution.kind === "ambiguous") {
+            stderr.write(
+              `aicr review: source "${reviewEvent.repoRef}" matches several workspaces (${resolution.definitionIds.join(", ")}); pass --workspace to select one.\n`,
+            );
+            return 1;
+          }
+          if (resolution.kind === "match" || resolution.kind === "legacy_binding") {
+            reviewEvent = createReviewEvent({
+              ...reviewEvent,
+              workspaceId: resolution.definitionId,
+              resolution: projectEventResolution(resolution),
+            });
+          }
         }
 
         const serverOptions = await bootstrapServerApp({

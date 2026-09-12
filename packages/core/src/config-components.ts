@@ -187,7 +187,15 @@ export function collectSchemaFieldPaths(root: z.ZodTypeAny): readonly SchemaFiel
         if (inner instanceof z.ZodObject) {
           // Strip/strict objects carry a ZodNever catchall; anything else is
           // an opaque managed surface (passthrough or explicit catchall).
-          return (inner._def.catchall as z.ZodTypeAny)._def.typeName !== z.ZodFirstPartyTypeKind.ZodNever;
+          if ((inner._def.catchall as z.ZodTypeAny)._def.typeName !== z.ZodFirstPartyTypeKind.ZodNever) {
+            return true;
+          }
+          // Strict objects are value leaves only when every field is a
+          // primitive scalar (e.g. the exact/glob/regex matcher alternatives);
+          // otherwise the union mixes structural containers and stays guarded.
+          return Object.values(inner.shape as Record<string, z.ZodTypeAny>).every((field) =>
+            PRIMITIVE_LEAF_TYPES.has(unwrapSchema(field).schema._def.typeName as string),
+          );
         }
         // Open maps (e.g. tool_choice function payloads) are opaque too.
         return inner instanceof z.ZodRecord;
@@ -540,7 +548,7 @@ function contextRepositoryRows(): ConfigFieldSpec[] {
 // Catalog metadata fields. The same key set appears as declared leaves under
 // llm.model_catalog.overrides.* and as consumed passthrough keys on provider
 // records (MODEL_CATALOG_FIELD_KEY_MAP, bootstrap applyModelCatalogProviderFields).
-const MODEL_CATALOG_FIELD_ROWS: readonly (readonly [string, string, ConfigUiControlKind])[] = [
+export const MODEL_CATALOG_FIELD_ROWS: readonly (readonly [string, string, ConfigUiControlKind])[] = [
   ["catalog_id", "ZodString", "text"],
   ["context_window", "ZodNumber", "number"],
   ["max_input_tokens", "ZodNumber", "number"],
@@ -907,6 +915,11 @@ export const CONFIG_FIELD_INVENTORY: readonly ConfigFieldSpec[] = [
   row("workspaces.instances.*.triage_model_chain", WORKSPACE_ONLY, "llm.triage_model_chain", { t: "ZodString", own: "entity", ent: "workspace", res: "resolveModelChainNames", con: "packages/server/src/bootstrap.ts:resolveModelChainNames", wir: true, ui: "select" }),
   row("workspaces.instances.*.source_repo.trigger", WORKSPACE_ONLY, undefined, { t: "ZodString", own: "entity", ent: "workspace", cap: "legacy exact binding; mutually exclusive with v2 match", res: "resolveWorkspaceIdFromTrigger", con: "packages/server/src/bootstrap.ts:resolveWorkspaceIdFromTrigger", wir: true, ui: "select", tid: "W10" }),
   row("workspaces.instances.*.source_repo.repo", WORKSPACE_ONLY, undefined, { t: "ZodString", own: "entity", ent: "workspace", res: "resolveWorkspaceIdFromTrigger", con: "packages/server/src/bootstrap.ts:resolveWorkspaceIdFromTrigger", wir: true, ui: "text", tid: "W10" }),
+  g("workspaces.root", { t: "ZodString", own: "entity", ent: "workspace", cap: "layout root for v2 isolated instances; relative paths resolve against the server base directory", st: "schema-accepted at P1a; runtime consumers land in P1b", wir: false, ui: "text", tid: "L01" }),
+  row("workspaces.instances.*.match[].id", WORKSPACE_ONLY, undefined, { t: "ZodString", own: "entity", ent: "workspace", st: "schema-accepted at P1a; matcher runtime wiring lands in P1b", wir: false, ui: "text", tid: "W01" }),
+  row("workspaces.instances.*.match[].triggers", WORKSPACE_ONLY, undefined, { t: "ZodString[]", own: "entity", ent: "workspace", st: "schema-accepted at P1a; trigger reference validation is live, runtime matching lands in P1b", wir: false, ui: "multiselect", tid: "W01" }),
+  row("workspaces.instances.*.match[].source.*", WORKSPACE_ONLY, undefined, { t: "union", own: "entity", ent: "workspace", cap: "source field allowlist + budgets enforced (config-matcher)", st: "schema-accepted at P1a; runtime matching lands in P1b", wir: false, ui: "matcher", tid: "W01" }),
+  row("workspaces.instances.*.work_path", WORKSPACE_ONLY, undefined, { t: "ZodString", own: "entity", ent: "workspace", cap: "compiled at parse with AST whitelist", st: "schema-accepted at P1a; runtime consumers land in P1b", wir: false, ui: "path-template", tid: "L01" }),
   row("workspaces.instances.*.agent.default", WORKSPACE_ONLY, "agent.default", { t: "ZodEnum", own: "entity", ent: "workspace", wir: false, st: "schema-only; workspace-layer agent.default has no consumer", ui: "select", tid: "H03" }),
   row("workspaces.instances.*.triage.enabled", WORKSPACE_ONLY, undefined, { t: "ZodBoolean", d: false, own: "entity", ent: "workspace", res: "resolveIssueTriageOptions", con: "packages/server/src/bootstrap.ts:resolveIssueTriageOptions", wir: true, ui: "toggle" }),
   row("workspaces.instances.*.triage.actions", WORKSPACE_ONLY, undefined, { t: "ZodEnum[]", d: ["close"], own: "entity", ent: "workspace", res: "resolveIssueTriageOptions", con: "packages/server/src/bootstrap.ts:resolveIssueTriageOptions", wir: true, ui: "multiselect" }),

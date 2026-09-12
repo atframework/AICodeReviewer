@@ -19,6 +19,9 @@ import { computeMemberId, computeStreamId } from "./auto-commit-identity.js";
 import type {
   AcceptReceiptInput,
   AcceptReceiptResult,
+  AcceptRoutingReceiptInput,
+  AcceptRoutingReceiptResult,
+  FrozenScopeResolution,
   ApplyMetadataPageInput,
   ApplyMetadataPageResult,
   AutoCommitReceipt,
@@ -33,6 +36,7 @@ import type {
   NextWake,
   Page,
   ReceiptQueryResult,
+  RoutingReceiptRecord,
   SealBatchInput,
   SealBatchResult,
   StreamHead,
@@ -78,6 +82,8 @@ function toStreamHead(state: StreamState): StreamHead {
 export function createMemoryAutoCommitStore(): AutoCommitStore {
   const receipts = new Map<string, ReceiptState>();
   const receiptIdsByDelivery = new Map<string, string>();
+  const routingReceipts = new Map<string, RoutingReceiptRecord>();
+  const routingIdsByKey = new Map<string, string>();
   const members = new Map<string, MemberState>();
   const memberIdsByStream = new Map<string, Set<string>>();
   const receiptIdsByStream = new Map<string, Set<string>>();
@@ -227,6 +233,7 @@ export function createMemoryAutoCommitStore(): AutoCommitStore {
         metadataAttempts: 0,
         metadataNextAttemptAt: null,
         metadataTerminalError: null,
+        resolution: input.resolution ?? null,
         envelope: input.envelope,
         firstAcceptedAt: input.now,
         delaySeconds: input.delaySeconds,
@@ -277,6 +284,122 @@ export function createMemoryAutoCommitStore(): AutoCommitStore {
         };
       recomputeStreamNotBefore(streamId);
       return { receipt, duplicate: false };
+    },
+
+    async acceptRoutingReceipt(
+      input: AcceptRoutingReceiptInput,
+    ): Promise<AcceptRoutingReceiptResult> {
+      const existingId = routingIdsByKey.get(input.routingKey);
+      if (existingId) {
+        const existing = routingReceipts.get(existingId);
+        if (existing) {
+          return { receipt: existing, duplicate: true };
+        }
+      }
+      const record: RoutingReceiptRecord = {
+        routingId: randomUUID(),
+        routingKey: input.routingKey,
+        provider: input.provider,
+        triggerName: input.triggerName,
+        envelope: input.envelope,
+        parentDeliveryId: input.parentDeliveryId ?? null,
+        firstAcceptedAt: input.now,
+        attempts: 0,
+        nextAttemptAt: null,
+        terminalError: null,
+        convertedReceiptIds: [],
+        completedAt: null,
+        note: null,
+        resolution: null,
+      };
+      routingReceipts.set(record.routingId, record);
+      routingIdsByKey.set(record.routingKey, record.routingId);
+      return { receipt: record, duplicate: false };
+    },
+
+    async readDueRoutingReceipts(
+      now: number,
+      limit: number,
+    ): Promise<readonly RoutingReceiptRecord[]> {
+      const due: RoutingReceiptRecord[] = [];
+      for (const record of routingReceipts.values()) {
+        if (record.terminalError !== null || record.completedAt !== null) {
+          continue;
+        }
+        if (record.nextAttemptAt !== null && record.nextAttemptAt > now) {
+          continue;
+        }
+        due.push(record);
+      }
+      due.sort((a, b) => a.firstAcceptedAt - b.firstAcceptedAt);
+      return due.slice(0, limit);
+    },
+
+    async getRoutingReceipt(
+      routingId: string,
+    ): Promise<RoutingReceiptRecord | undefined> {
+      return routingReceipts.get(routingId);
+    },
+
+    async recordRoutingReceiptFailure(
+      routingId: string,
+      error: string,
+      retryAt: number | null,
+    ): Promise<void> {
+      const record = routingReceipts.get(routingId);
+      if (!record || record.terminalError !== null || record.completedAt !== null) {
+        return;
+      }
+      routingReceipts.set(routingId, {
+        ...record,
+        attempts: record.attempts + 1,
+        nextAttemptAt: retryAt,
+        terminalError: retryAt === null ? error : null,
+      });
+    },
+
+    async recordRoutingReceiptResolution(
+      routingId: string,
+      resolution: readonly FrozenScopeResolution[],
+      _now: number,
+    ): Promise<RoutingReceiptRecord> {
+      const record = routingReceipts.get(routingId);
+      if (!record) {
+        throw new Error(`Unknown routing receipt ${routingId}.`);
+      }
+      if (record.resolution !== null) {
+        return record;
+      }
+      const updated: RoutingReceiptRecord = { ...record, resolution };
+      routingReceipts.set(routingId, updated);
+      return updated;
+    },
+
+    async recordRoutingReceiptConversion(
+      routingId: string,
+      input: {
+        readonly addedReceiptIds?: readonly string[];
+        readonly complete?: boolean;
+        readonly note?: string;
+      },
+      now: number,
+    ): Promise<RoutingReceiptRecord> {
+      const record = routingReceipts.get(routingId);
+      if (!record) {
+        throw new Error(`Unknown routing receipt ${routingId}.`);
+      }
+      const ids = new Set(record.convertedReceiptIds);
+      for (const id of input.addedReceiptIds ?? []) {
+        ids.add(id);
+      }
+      const updated: RoutingReceiptRecord = {
+        ...record,
+        convertedReceiptIds: [...ids],
+        completedAt: input.complete === true ? record.completedAt ?? now : record.completedAt,
+        note: input.note ?? record.note,
+      };
+      routingReceipts.set(routingId, updated);
+      return updated;
     },
 
     async applyMetadataPage(
@@ -1205,6 +1328,11 @@ export function createMemoryAutoCommitStore(): AutoCommitStore {
       };
       for (const head of workspaceHeads.values()) {
         consider(head.notBefore, "delay");
+      }
+      for (const receipt of routingReceipts.values()) {
+        if (receipt.completedAt === null && receipt.terminalError === null) {
+          consider(receipt.nextAttemptAt ?? receipt.firstAcceptedAt, "routing_resolution");
+        }
       }
       for (const entry of outbox.values()) {
         if (entry.entry.status === "pending") {

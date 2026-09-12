@@ -1,6 +1,6 @@
 # Workspace 与动态配置测试计划
 
-状态：P0 基础层已有测试，P1–P8 跨层验收仍待实施。下列矩阵是完整验收目标；纯函数覆盖其中一部分不代表该 ID 的全部断言完成。
+状态：P0 基础层、P1 的 Git 准入/布局和 P4/SVN 路由收据已有测试；P1 剩余项与 P2–P8 跨层验收仍待实施。下列矩阵是完整验收目标；部分断言通过不代表该 ID 全部完成。
 合同见 [详细设计](../specs/2026-09-11-workspace-config-management.md)，阶段见
 [执行计划](2026-09-11-workspace-config-implementation.md)。
 
@@ -26,8 +26,17 @@
 | --- | --- | --- |
 | `config-source.test.ts`、`config-review.test.ts` | 来源合并/文件锁、shadowed 视图、实体 CRUD、数组模型组、写前原型键校验、转换无副作用、raw YAML 边界 | F01/F02 的数据库初始化、F09 的重启流程、F11/C02/C03/C09 的原子引用与发布、C10–C13 的服务端实施 |
 | `config-format.test.ts` | revision/namespace/generation、matcher 形状与 UTF-8 大小、路径转义、稳定哈希、实例身份、B05 snapshot 分类 | P1 的 matcher 编译、路径 AST、P2/P4 的存储和任务接线 |
-| `config-components.test.ts` | U24 声明字段、默认值、workspace 实体所有权及 schema-only 标记的一致性 | passthrough 类型化能力校验、P6 UI registry/映射函数和四项覆盖率 |
+| `config-components.test.ts` | U24 声明字段、默认值、workspace 实体所有权及 schema-only 标记的一致性 | P6 UI registry/映射函数和四项覆盖率 |
+| `config-capabilities.test.ts` | passthrough 类型化 DTO、kind×字段能力矩阵、9 种 channel kind、`resolved_action` 逐 kind 取值、changeset 接入、catalog 键 parity | 文件配置侧能力提示(P5/UI)、P6 UI registry/映射函数和四项覆盖率 |
 | `config-examples.test.ts`、`config.test.ts`、静态 YAML fixtures | 当前示例加载、旧格式转换及现有配置兼容；fixture b01–b05 为输入编号 | B02 compatibility graph、B04 CLI 无额外数据库、B06–B10 跨层行为 |
+| `config-matcher.test.ts`、`config-path-template.test.ts`、`config-workspace.test.ts` | RE2/glob/exact matcher、模板 AST 白名单与渲染校验、match 互斥/trigger 引用/歧义、instance identity、legacy/isolated_v2 布局纯层 | matcher 在存储/API 层的复用、L13/L14 平台样例 |
+| `config-resolution.test.ts` | 描述符字段目录、legacy 优先、规则 OR/字段 AND、多定义歧义、provider 变量范围与 W01/W02/W07/W10 纯层 | p4/svn/manual/scheduled 描述符产出 |
+| `source-descriptors.test.ts`（server） | V01 github push/PR/issue、V03 gitlab 多级 namespace/MR/note、V04 gitea、V05 tag push branch=null | V02/V06–V14 事件矩阵 |
+| `workspace-runtime.test.ts`（server） | legacy 布局与 `buildSourceRootResolver` 字节对等、isolated_v2 实例隔离、workspaces.root 覆盖、接受/执行渲染一致（W01/W10/L13 子集） | W04–W06/W08/W09/W11/W12、真实文件系统布局 |
+| `webhook-match-resolution.test.ts`（server） | 四类 Git 真实签名 payload：hit/miss/ambiguous、repository/namespace、legacy、多 profile secret、鉴权先行与持久 binding | H 系列配置热更新 |
+
+| `routing-admission.test.ts`、auto-commit conformance | P4 多范围/depot、SVN 显式根、路径不完整阻断、冻结事件离线重放、持久重试/wake 与幂等转交 | 真实 Redis/P4/SVN、多副本故障矩阵与完整描述符 |
+| `review-orchestrator.test.ts` | 并发目录、模型回退中的源码、直连成功/失败/空变更清理、非法 runId、未知 owner 保留 | HOME/跨主机隔离与 L13 完整回退 |
 
 2026-09-12 审查新增的首批 35 项边界测试在修复前 31 项失败，修复后全部通过。
 另补 4 项空映射覆盖边界，修复前均失败。此次累计新增 117 项测试。
@@ -43,9 +52,20 @@
 | eval validate | 6 个离线 fixtures 通过，未调用真实 LLM |
 | docs:check / docs:build | 通过；Astro 0 errors、0 warnings、11 hints；构建 54 页 |
 
+2026-09-12 第二批（P1 git 系 webhook 接线）最终验证，同环境：
+
+| 门禁 | 结果 |
+| --- | --- |
+| ESLint、TypeScript、正式 build | 全部通过 |
+| 完整 Vitest coverage | 117 个文件通过、6 个跳过；2819 项通过、6 项跳过，无失败（server 743 项，含 27 项新准入/布局/描述符用例） |
+| Markdown | 122 个文件，无问题 |
+| eval validate / docs:check / docs:build | 通过；构建 54 页 |
+
 日志位于 `build/logs/workspace-config-review-final-*.log`。6 个环境选择用例因未配置
 `AICR_REDIS_TEST_URL`、`AICR_SVN_TEST_EXECUTABLE`、`AICR_P4D_TEST_EXECUTABLE`
 而跳过；本次未执行 Redis/SVN/P4 实服务用例，也未实现或验收新的配置后端、迁移、UI。
+
+本轮 P1 审查先以新增回归确认失败，再修复实现；迭代记录在 `build/logs/p1-review-red.log`、`p1-review-routing-red.log`，最终全门禁记录在 `build/logs/p1-review-final-*.log`。最终统计以该组日志为准，上表历史数字不代表当前树。
 
 ## 2. 配置与来源合并
 

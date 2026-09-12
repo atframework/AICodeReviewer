@@ -1,4 +1,5 @@
 import { execFile, spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
@@ -586,6 +587,13 @@ export class P4VcsAdapter implements VcsAdapter {
   private readonly password: string | undefined;
   private readonly clientWorkspace: string | undefined;
   private readonly depot: string | undefined;
+  /**
+   * Effective depot scope this adapter fetches/diffs against (options.depot
+   * as bound by the factory from the event repoRef). Diagnostic surface for
+   * scope-routing correctness; undefined means "no depot bound" and batch
+   * diff refuses to run.
+   */
+  readonly boundScope: string | undefined;
   private readonly watchPath: readonly string[] | undefined;
   private readonly includeCrFile: readonly string[] | undefined;
   private readonly excludeCrFile: readonly string[] | undefined;
@@ -599,8 +607,15 @@ export class P4VcsAdapter implements VcsAdapter {
     this.port = options.port;
     this.user = options.user;
     this.password = options.password;
-    this.clientWorkspace = options.workspace;
+    // L11: one server-side client per (configured workspace, client root).
+    // Two AICR workspaces (or hosts) sharing the same trigger config would
+    // otherwise rewrite each other's client Root while a run is in flight.
+    // The suffix is stable, so restarts reuse the same client.
+    this.clientWorkspace = options.workspace
+      ? `${options.workspace}-${createHash("sha256").update(this.repositoryDir).digest("hex").slice(0, 10)}`
+      : undefined;
     this.depot = options.depot;
+    this.boundScope = options.depot;
     this.watchPath = options.watchPath;
     this.includeCrFile = options.includeCrFile;
     this.excludeCrFile = options.excludeCrFile;
@@ -1361,6 +1376,7 @@ export class P4VcsAdapter implements VcsAdapter {
         ...(entry.user !== undefined ? { p4User: entry.user } : {}),
         ...(entry.client !== undefined ? { p4Client: entry.client } : {}),
         changedPaths: paths,
+        ...(!pathsByChange.has(entry.change) || budgetExhausted ? { changedPathsComplete: false } : {}),
       });
     }
 

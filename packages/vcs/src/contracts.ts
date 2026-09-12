@@ -76,6 +76,8 @@ export interface CommitMetadataQuery {
  * identities, or platform display names.
  */
 export interface CommitMetadataRecord {
+  /** False when changedPaths was truncated or path lookup failed. */
+  readonly changedPathsComplete?: boolean;
   readonly revision: string;
   /** Git range evidence, computed before pagination/filtering. Omitted means unknown. */
   readonly historyRewrite?: boolean;

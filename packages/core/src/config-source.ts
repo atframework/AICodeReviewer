@@ -15,6 +15,7 @@ import {
   type ConfigEntityRef,
   type ConfigPath,
 } from "./config-format.js";
+import { validateEntityCapabilities } from "./config-capabilities.js";
 import { isPlainObject } from "./utils.js";
 import type { AppConfigInput } from "./config.js";
 
@@ -606,6 +607,9 @@ export function validateDatabaseDocument(
           entity: { kind, id: record.name },
         });
       }
+      // Publish-time typed DTO + kind capability gate for passthrough
+      // collections (provider/trigger/channel); unknown extension keys pass.
+      validateEntityCapabilities(kind, record.value);
       const existing = seenNames.get(record.name);
       if (existing !== undefined) {
         throw new ConfigError(

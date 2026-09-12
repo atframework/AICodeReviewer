@@ -23,6 +23,9 @@ import {
 import type {
   AcceptReceiptInput,
   AcceptReceiptResult,
+  AcceptRoutingReceiptInput,
+  AcceptRoutingReceiptResult,
+  FrozenScopeResolution,
   ApplyMetadataPageInput,
   ApplyMetadataPageResult,
   AutoCommitReceipt,
@@ -37,6 +40,7 @@ import type {
   Page,
   ReceiptCoverage,
   ReceiptQueryResult,
+  RoutingReceiptRecord,
   SealBatchInput,
   SealBatchResult,
   StreamHead,
@@ -87,10 +91,28 @@ const SCHEMA_SQL = `
     metadata_cursor TEXT,
     metadata_attempts INTEGER NOT NULL DEFAULT 0,
     metadata_next_attempt_at INTEGER,
-    metadata_terminal_error TEXT
+    metadata_terminal_error TEXT,
+    resolution TEXT
   );
   CREATE INDEX IF NOT EXISTS idx_auto_commit_receipts_stream
     ON auto_commit_receipts(stream_id, receipt_seq);
+
+  CREATE TABLE IF NOT EXISTS auto_commit_routing_receipts (
+    routing_id TEXT PRIMARY KEY,
+    routing_key TEXT NOT NULL UNIQUE,
+    provider TEXT NOT NULL,
+    trigger_name TEXT NOT NULL,
+    envelope TEXT NOT NULL,
+    parent_delivery_id TEXT,
+    first_accepted_at INTEGER NOT NULL,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    next_attempt_at INTEGER,
+    terminal_error TEXT,
+    converted_receipt_ids TEXT NOT NULL DEFAULT '[]',
+    completed_at INTEGER,
+    note TEXT,
+    resolution TEXT
+  );
 
   CREATE TABLE IF NOT EXISTS auto_commit_members (
     member_id TEXT PRIMARY KEY,
@@ -217,6 +239,24 @@ interface ReceiptRow {
   metadata_attempts: number;
   metadata_next_attempt_at: number | null;
   metadata_terminal_error: string | null;
+  resolution: string | null;
+}
+
+interface RoutingReceiptRow {
+  routing_id: string;
+  routing_key: string;
+  provider: string;
+  trigger_name: string;
+  envelope: string;
+  parent_delivery_id: string | null;
+  first_accepted_at: number;
+  attempts: number;
+  next_attempt_at: number | null;
+  terminal_error: string | null;
+  converted_receipt_ids: string;
+  completed_at: number | null;
+  note: string | null;
+  resolution: string | null;
 }
 
 interface MemberRow {
@@ -322,6 +362,27 @@ async function loadBetterSqlite3(): Promise<SqliteModule> {
   }
 }
 
+function rowToRoutingReceipt(row: RoutingReceiptRow): RoutingReceiptRecord {
+  return {
+    routingId: row.routing_id,
+    routingKey: row.routing_key,
+    provider: row.provider,
+    triggerName: row.trigger_name,
+    envelope: JSON.parse(row.envelope) as unknown,
+    parentDeliveryId: row.parent_delivery_id,
+    firstAcceptedAt: row.first_accepted_at,
+    attempts: row.attempts,
+    nextAttemptAt: row.next_attempt_at,
+    terminalError: row.terminal_error,
+    convertedReceiptIds: JSON.parse(row.converted_receipt_ids) as string[],
+    completedAt: row.completed_at,
+    note: row.note,
+    resolution: row.resolution === null
+      ? null
+      : (JSON.parse(row.resolution) as RoutingReceiptRecord["resolution"]),
+  };
+}
+
 function rowToReceipt(row: ReceiptRow): AutoCommitReceipt {
   return {
     receiptId: row.receipt_id,
@@ -343,6 +404,7 @@ function rowToReceipt(row: ReceiptRow): AutoCommitReceipt {
     metadataAttempts: row.metadata_attempts,
     metadataNextAttemptAt: row.metadata_next_attempt_at,
     metadataTerminalError: row.metadata_terminal_error,
+    resolution: row.resolution === null ? null : (JSON.parse(row.resolution) as AutoCommitReceipt["resolution"]),
   };
 }
 
@@ -499,6 +561,47 @@ export async function createSqliteAutoCommitStore(
           }
           version = 4;
         }
+        if (version === 4) {
+          // v4 → v5: receipts gain the frozen admission resolution snapshot;
+          // the routing-receipt stage (spec §5.2) gets its own table. Old rows
+          // read as NULL resolution (recompute fallback), matching legacy
+          // routing exactly.
+          db.exec(`
+        ALTER TABLE auto_commit_receipts ADD COLUMN resolution TEXT;
+        CREATE TABLE IF NOT EXISTS auto_commit_routing_receipts (
+          routing_id TEXT PRIMARY KEY,
+          routing_key TEXT NOT NULL UNIQUE,
+          provider TEXT NOT NULL,
+          trigger_name TEXT NOT NULL,
+          envelope TEXT NOT NULL,
+          parent_delivery_id TEXT,
+          first_accepted_at INTEGER NOT NULL,
+          attempts INTEGER NOT NULL DEFAULT 0,
+          next_attempt_at INTEGER,
+          terminal_error TEXT,
+          converted_receipt_ids TEXT NOT NULL DEFAULT '[]',
+          completed_at INTEGER,
+          note TEXT
+        );
+      `);
+          version = 5;
+        }
+        if (version === 5) {
+          // v5 → v6: routing receipts freeze their per-scope interpretation
+          // (V14) so restarts never re-resolve against changed config. NULL =
+          // not yet interpreted (or a pre-V14 record), which resolves once
+          // and then freezes like any new intake. SCHEMA_SQL already carries
+          // the column, so guard like the v3 → v4 checkpoint step.
+          const columns = db
+            .prepare("PRAGMA table_info(auto_commit_routing_receipts)")
+            .all() as { name: string }[];
+          if (!columns.some((column) => column.name === "resolution")) {
+            db.exec(
+              "ALTER TABLE auto_commit_routing_receipts ADD COLUMN resolution TEXT",
+            );
+          }
+          version = 6;
+        }
         if (version !== AUTO_COMMIT_STORE_SCHEMA_VERSION) {
           throw new Error(
             `Unsupported auto-commit store schema version ${meta.schema_version}; expected ${AUTO_COMMIT_STORE_SCHEMA_VERSION}.`,
@@ -530,11 +633,11 @@ export async function createSqliteAutoCommitStore(
     `INSERT INTO auto_commit_receipts (
        receipt_id, receipt_seq, delivery_key, stream_id, workspace_id, trigger_name, provider, vcs,
        source_namespace, scope_ref, history_generation, coverage, envelope, first_accepted_at,
-       delay_seconds, policy_version, metadata_cursor
+       delay_seconds, policy_version, metadata_cursor, resolution
      ) VALUES (
        @receipt_id, @receipt_seq, @delivery_key, @stream_id, @workspace_id, @trigger_name, @provider, @vcs,
        @source_namespace, @scope_ref, @history_generation, @coverage, @envelope, @first_accepted_at,
-       @delay_seconds, @policy_version, NULL
+       @delay_seconds, @policy_version, NULL, @resolution
      )`,
   );
   const stmtMemberById = db.prepare(
@@ -689,6 +792,9 @@ export async function createSqliteAutoCommitStore(
         first_accepted_at: input.now,
         delay_seconds: input.delaySeconds,
         policy_version: input.policyVersion,
+        resolution: input.resolution === undefined || input.resolution === null
+          ? null
+          : JSON.stringify(input.resolution),
       });
 
       const stream = stmtStreamHead.get(streamId) as StreamHeadRow | undefined;
@@ -737,8 +843,95 @@ export async function createSqliteAutoCommitStore(
         metadataAttempts: 0,
         metadataNextAttemptAt: null,
         metadataTerminalError: null,
+        resolution: input.resolution ?? null,
       };
       return { receipt, duplicate: false };
+    },
+  );
+
+  const txAcceptRoutingReceipt = db.transaction(
+    (input: AcceptRoutingReceiptInput): AcceptRoutingReceiptResult => {
+      const existing = db.prepare(
+        `SELECT * FROM auto_commit_routing_receipts WHERE routing_key = ?`,
+      ).get(input.routingKey) as RoutingReceiptRow | undefined;
+      if (existing) {
+        return { receipt: rowToRoutingReceipt(existing), duplicate: true };
+      }
+      const routingId = randomUUID();
+      db.prepare(
+        `INSERT INTO auto_commit_routing_receipts (
+           routing_id, routing_key, provider, trigger_name, envelope, parent_delivery_id,
+           first_accepted_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      ).run(
+        routingId,
+        input.routingKey,
+        input.provider,
+        input.triggerName,
+        JSON.stringify(input.envelope) ?? "null",
+        input.parentDeliveryId ?? null,
+        input.now,
+      );
+      const row = db.prepare(
+        `SELECT * FROM auto_commit_routing_receipts WHERE routing_id = ?`,
+      ).get(routingId) as RoutingReceiptRow;
+      return { receipt: rowToRoutingReceipt(row), duplicate: false };
+    },
+  );
+
+  const txRoutingResolution = db.transaction(
+    (
+      routingId: string,
+      resolution: readonly FrozenScopeResolution[],
+    ): RoutingReceiptRecord => {
+      // Set-if-null: the first interpretation wins; concurrent/retried
+      // attempts read back the frozen value (V14).
+      db.prepare(
+        `UPDATE auto_commit_routing_receipts
+            SET resolution = ?
+          WHERE routing_id = ? AND resolution IS NULL`,
+      ).run(JSON.stringify(resolution), routingId);
+      const row = db.prepare(
+        `SELECT * FROM auto_commit_routing_receipts WHERE routing_id = ?`,
+      ).get(routingId) as RoutingReceiptRow | undefined;
+      if (!row) {
+        throw new Error(`Unknown routing receipt ${routingId}.`);
+      }
+      return rowToRoutingReceipt(row);
+    },
+  );
+
+  const txRoutingConversion = db.transaction(
+    (
+      routingId: string,
+      input: {
+        readonly addedReceiptIds?: readonly string[];
+        readonly complete?: boolean;
+        readonly note?: string;
+      },
+      now: number,
+    ): RoutingReceiptRecord => {
+      const row = db.prepare(
+        `SELECT * FROM auto_commit_routing_receipts WHERE routing_id = ?`,
+      ).get(routingId) as RoutingReceiptRow | undefined;
+      if (!row) {
+        throw new Error(`Unknown routing receipt ${routingId}.`);
+      }
+      const ids = new Set(JSON.parse(row.converted_receipt_ids) as string[]);
+      for (const id of input.addedReceiptIds ?? []) {
+        ids.add(id);
+      }
+      const completedAt =
+        input.complete === true ? row.completed_at ?? now : row.completed_at;
+      db.prepare(
+        `UPDATE auto_commit_routing_receipts
+            SET converted_receipt_ids = ?, completed_at = ?, note = COALESCE(?, note)
+          WHERE routing_id = ?`,
+      ).run(JSON.stringify([...ids]), completedAt, input.note ?? null, routingId);
+      const updated = db.prepare(
+        `SELECT * FROM auto_commit_routing_receipts WHERE routing_id = ?`,
+      ).get(routingId) as RoutingReceiptRow;
+      return rowToRoutingReceipt(updated);
     },
   );
 
@@ -1385,6 +1578,69 @@ export async function createSqliteAutoCommitStore(
       return txAcceptReceipt.immediate(input) as AcceptReceiptResult;
     },
 
+    async acceptRoutingReceipt(
+      input: AcceptRoutingReceiptInput,
+    ): Promise<AcceptRoutingReceiptResult> {
+      return txAcceptRoutingReceipt.immediate(input) as AcceptRoutingReceiptResult;
+    },
+
+    async readDueRoutingReceipts(
+      now: number,
+      limit: number,
+    ): Promise<readonly RoutingReceiptRecord[]> {
+      const rows = db.prepare(
+        `SELECT * FROM auto_commit_routing_receipts
+          WHERE terminal_error IS NULL AND completed_at IS NULL
+            AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
+          ORDER BY first_accepted_at ASC
+          LIMIT ?`,
+      ).all(now, limit) as RoutingReceiptRow[];
+      return rows.map(rowToRoutingReceipt);
+    },
+
+    async getRoutingReceipt(
+      routingId: string,
+    ): Promise<RoutingReceiptRecord | undefined> {
+      const row = db.prepare(
+        `SELECT * FROM auto_commit_routing_receipts WHERE routing_id = ?`,
+      ).get(routingId) as RoutingReceiptRow | undefined;
+      return row ? rowToRoutingReceipt(row) : undefined;
+    },
+
+    async recordRoutingReceiptFailure(
+      routingId: string,
+      error: string,
+      retryAt: number | null,
+    ): Promise<void> {
+      db.prepare(
+        `UPDATE auto_commit_routing_receipts
+            SET attempts = attempts + 1,
+                next_attempt_at = ?,
+                terminal_error = CASE WHEN ? THEN ? ELSE terminal_error END
+          WHERE routing_id = ? AND terminal_error IS NULL AND completed_at IS NULL`,
+      ).run(retryAt, retryAt === null ? 1 : 0, error, routingId);
+    },
+
+    async recordRoutingReceiptResolution(
+      routingId: string,
+      resolution: readonly FrozenScopeResolution[],
+      _now: number,
+    ): Promise<RoutingReceiptRecord> {
+      return txRoutingResolution(routingId, resolution);
+    },
+
+    async recordRoutingReceiptConversion(
+      routingId: string,
+      input: {
+        readonly addedReceiptIds?: readonly string[];
+        readonly complete?: boolean;
+        readonly note?: string;
+      },
+      now: number,
+    ): Promise<RoutingReceiptRecord> {
+      return txRoutingConversion.immediate(routingId, input, now) as RoutingReceiptRecord;
+    },
+
     async applyMetadataPage(
       input: ApplyMetadataPageInput,
     ): Promise<ApplyMetadataPageResult> {
@@ -1826,6 +2082,11 @@ export async function createSqliteAutoCommitStore(
         at: number | null;
       };
       consider(headWake.at, "delay");
+      const routingWake = db.prepare(
+        `SELECT MIN(COALESCE(next_attempt_at, first_accepted_at)) AS at
+           FROM auto_commit_routing_receipts WHERE completed_at IS NULL AND terminal_error IS NULL`,
+      ).get() as { at: number | null };
+      consider(routingWake.at, "routing_resolution");
       const outboxWake = db
         .prepare(
           `SELECT MIN(next_attempt_at) AS at FROM auto_commit_outbox WHERE status = 'pending'`,

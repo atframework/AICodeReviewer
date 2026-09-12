@@ -33,11 +33,28 @@ consumers in `packages/server/src/bootstrap.ts`.
   end-to-end coverage. Separate pure validation from reference checks, CAS,
   activation and recovery; retain unfinished plan artifacts. The U24 walker
   uses Zod 3 metadata for auditing, not as a runtime UI renderer.
+- Legacy single-profile Gitea/Forgejo routes never enforced repository
+  scoping; multi-profile selection must keep that catch-all for profiles
+  without `match` resolvers, or existing deployments start returning
+  `repository_not_configured`. GitHub/GitLab profiles with `repos`/`repoRef`
+  constraints always scoped — preserve both semantics per route family
+  (`selectWebhookConfigWithScope` legacyRepoScope).
+- Workspace layout paths are specified with `/` separators; convert to host
+  form with `resolve()` at the runtime boundary. Joining segments with the
+  host separator breaks byte-parity with the legacy `buildSourceRootResolver`
+  derivation on Windows.
 - Workspace-layer `sandbox`, `agent.web_search.*` per-adapter coverage, and
   several trigger/channel kind-conditional fields are schema-only: acceptance
   is not runtime effect. `packages/core/src/config-components.ts` (U24 gate)
-  is the wiring inventory; verify the bootstrap consumer before documenting a
-  field as working.
+  is the wiring inventory; `config-capabilities.ts` holds the
+  consumer-verified kind×field matrix and typed DTOs used at publish
+  (`invalid_field_type` / `unsupported_capability`). Verify the bootstrap
+  consumer before documenting a field as working; keep both tables in sync.
+- `config-format.ts` must stay a leaf module. `config.ts` → `config-source.ts`
+  → `config-capabilities.ts` forms the dependency chain; a shared enum placed
+  in `config.ts` and imported by `config-capabilities.ts` causes a circular
+  TDZ failure at import time. Shared primitives (e.g. `reasoningEffortSchema`)
+  live in `config-format.ts` and are re-exported.
 - `llm.model_chain` contains named, nonempty ordered groups. Main selection is
   instance → workspace defaults → `llm.default_model_chain`; triage is instance
   → defaults → `llm.triage_model_chain` → workspace main group. Apply it to direct
@@ -81,6 +98,12 @@ Sources: `packages/store/src/schema.ts`, `database.ts`, store tests, architectur
 
 - Add migrations with schema changes and select new columns in read APIs such as
   `getRecentRuns`; a stored column omitted by the query renders blank downstream.
+- The auto-commit store runs `SCHEMA_SQL` (`CREATE TABLE IF NOT EXISTS`) for
+  every database before the version ladder, so a column added to the base
+  schema makes the matching `ALTER TABLE` fail with "duplicate column" on
+  older files. Guard such steps with `PRAGMA table_info` like the v3→v4
+  checkpoint and v5→v6 routing-resolution migrations in
+  `packages/core/src/sqlite-auto-commit-store.ts`.
 - Old-schema tests must reproduce the actual prior DDL, removing all later
   columns before stamping its version. Migration DDL and the version write must
   be atomic. Verify preserved receipts and reopening, and update derived state
@@ -110,3 +133,10 @@ Sources: `packages/server/src/review-orchestrator.ts`, `live-runs.ts`,
   not fail review, pending P4 changes have no submit time, and webhook translators
   preserve branch. Dashboard polls serialize, stop when hidden/logged out, reject
   stale responses, surface HTTP errors, and escape revision attributes.
+
+- A descriptor unit test does not prove webhook routing. Exercise each provider
+  through authenticated translation and durable intake, assert a non-first
+  workspace and the pinned binding (`webhook-match-resolution.test.ts`). GitLab
+  Note Hook places `merge_request` at the payload root. Route retries must enter
+  `readNextWake` in every backend and reuse frozen events without a new VCS query
+  (`routing-admission.test.ts`, `auto-commit-store-conformance.ts`).

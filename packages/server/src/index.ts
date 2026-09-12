@@ -25,6 +25,9 @@ import {
   type ReviewEvent,
   type ReviewQueue,
   type ReviewProvider,
+
+  isConfigError,
+  type WorkspaceResolution,
 } from "@aicr/core";
 import type { ReviewDeduplicator } from "./review-deduplicator.js";
 import type { LiveRunRegistry } from "./live-runs.js";
@@ -37,13 +40,19 @@ import {
   type VcsWebhookConfig,
   verifyWebhookSignature,
 } from "./webhook-translator.js";
+import { describeWebhookSource } from "./source-descriptors.js";
 import {
+  buildP4RoutingEnvelope,
   enrichP4ReviewEvent,
+  p4ProfileConsistentWithPayload,
   translateP4TriggerToReviewEvent,
+  type P4RoutingEnvelope,
   type P4TriggerConfig,
 } from "./p4-webhook.js";
 import {
+  buildSvnRoutingEnvelope,
   translateSvnTriggerToReviewEvent,
+  type SvnRoutingEnvelope,
   type SvnTriggerConfig,
 } from "./svn-webhook.js";
 import {
@@ -103,12 +112,12 @@ export interface TriggerRetryConfig {
 }
 
 export interface ServerAppOptions {
-  readonly gitea?: VcsWebhookConfig;
-  readonly forgejo?: VcsWebhookConfig;
+  readonly gitea?: GenericWebhookConfigInput;
+  readonly forgejo?: GenericWebhookConfigInput;
   readonly github?: GenericWebhookConfigInput;
   readonly gitlab?: GenericWebhookConfigInput;
-  readonly p4?: P4TriggerConfig;
-  readonly svn?: SvnTriggerConfig;
+  readonly p4?: P4TriggerConfig | readonly P4TriggerConfig[];
+  readonly svn?: SvnTriggerConfig | readonly SvnTriggerConfig[];
   readonly reviewPreparation?: ServerReviewPreparationOptions;
   readonly reviewOrchestration?: ServerReviewOrchestrationOptions;
   readonly issueTriage?: IssueTriageRuntimeOptions;
@@ -210,11 +219,33 @@ function summarizePreparedReviewPromptForWebhook(preparation: PreparedReviewProm
   };
 }
 
+/**
+ * Maps workspace-resolution failures during translation to the observable
+ * 202-ignored contract (spec §6: never a silent first-workspace fallback).
+ * Returns undefined for unrelated errors so the caller keeps its handling.
+ */
+function mapWorkspaceResolutionError(
+  c: Context,
+  error: unknown,
+  provider: string,
+  eventName: string | undefined,
+  store: StoreDb | undefined,
+): Response | undefined {
+  if (!isConfigError(error)) {
+    return undefined;
+  }
+  if (!["repository_not_configured", "no_route", "ambiguous_route", "template_invalid", "matcher_invalid"].includes(error.code)) {
+    return undefined;
+  }
+  recordWebhookEvent(store, { provider, eventName: eventName ?? null, decision: "ignored", reason: error.code, detail: { message: error.message } });
+  return c.json({ accepted: false, reason: error.code, provider, eventName }, 202);
+}
+
 function registerGiteaLikeWebhook(
   app: Hono,
   provider: "gitea" | "forgejo",
   path: string,
-  config: VcsWebhookConfig | undefined,
+  config: GenericWebhookConfigInput | undefined,
   reviewPreparationOptions: ServerReviewPreparationOptions | undefined,
   reviewOrchestrationOptions: ServerReviewOrchestrationOptions | undefined,
   issueTriageOptions: IssueTriageRuntimeOptions | undefined,
@@ -231,7 +262,8 @@ function registerGiteaLikeWebhook(
   getPullRequestTargetBranches?: (workspaceId: string) => readonly string[] | undefined,
 ): void {
   app.post(path, async (c) => {
-    if (!config) {
+    const configs = normalizeGenericWebhookConfigs(config);
+    if (configs.length === 0) {
       recordWebhookEvent(store, { provider, decision: "rejected", reason: "trigger_not_configured" });
       return c.json({ accepted: false, reason: "trigger_not_configured", provider }, 503);
     }
@@ -240,10 +272,26 @@ function registerGiteaLikeWebhook(
     const signature =
       c.req.header("x-gitea-signature-256") ?? c.req.header("x-gitea-signature") ?? undefined;
 
-    if (!verifyWebhookSignature(payload, config.webhookSecret, signature)) {
-      recordWebhookEvent(store, { provider, decision: "rejected", reason: "invalid_signature" });
-      return c.json({ accepted: false, reason: "invalid_signature", provider }, 401);
+    const decoded: unknown = (() => {
+      try {
+        return JSON.parse(payload) as unknown;
+      } catch {
+        return undefined;
+      }
+    })();
+
+    const selected = selectWebhookConfigWithScope(provider, decoded, configs, (entry) =>
+      verifyWebhookSignature(payload, entry.webhookSecret, signature), { legacyRepoScope: false });
+    if (!selected.config) {
+      const status = selected.reason === "invalid_signature" ? 401 : 202;
+      recordWebhookEvent(store, {
+        provider,
+        decision: selected.reason === "invalid_signature" ? "rejected" : "ignored",
+        reason: selected.reason ?? "invalid_signature",
+      });
+      return c.json({ accepted: false, reason: selected.reason, provider }, status);
     }
+    const selectedConfig = selected.config;
 
     const normalizedEventName = c.req.header("x-gitea-event");
     const eventTypeName = c.req.header("x-gitea-event-type");
@@ -256,14 +304,6 @@ function registerGiteaLikeWebhook(
       return c.json({ accepted: false, reason: "missing_event_name", provider }, 400);
     }
 
-    const decoded: unknown = (() => {
-      try {
-        return JSON.parse(payload) as unknown;
-      } catch {
-        return undefined;
-      }
-    })();
-
     if (decoded === undefined) {
       recordWebhookEvent(store, { provider, eventName, decision: "rejected", reason: "invalid_json" });
       return c.json({ accepted: false, reason: "invalid_json", provider }, 400);
@@ -271,8 +311,12 @@ function registerGiteaLikeWebhook(
 
     let reviewEvent;
     try {
-      reviewEvent = await translateWebhookToReviewEvent(provider, eventName, decoded, config);
+      reviewEvent = await translateWebhookToReviewEvent(provider, eventName, decoded, selectedConfig);
     } catch (error) {
+      const resolutionResponse = mapWorkspaceResolutionError(c, error, provider, eventName, store);
+      if (resolutionResponse !== undefined) {
+        return resolutionResponse;
+      }
       if (error instanceof ZodError) {
         recordWebhookEvent(store, {
           provider,
@@ -320,9 +364,61 @@ function registerGiteaLikeWebhook(
   });
 }
 
+interface RoutingCandidate {
+  readonly triggerName: string;
+  readonly resolveWorkspace: unknown;
+}
+
+/**
+ * Persists routing-stage receipts for match-referenced p4/svn profiles
+ * (spec §5.2): durable write first, 202 after; a failed write is a retryable
+ * 503, never a false acceptance (W14).
+ */
+async function admitRoutingReceipts(args: {
+  readonly provider: "p4" | "svn";
+  readonly candidates: readonly RoutingCandidate[];
+  readonly envelope: {
+    readonly revision: string;
+    readonly depotPath?: string;
+    readonly user?: string;
+    readonly client?: string;
+    readonly files?: readonly string[];
+  };
+  readonly eventName: string;
+  readonly autoCommit: AutoCommitAcceptor | undefined;
+  readonly store: StoreDb | undefined;
+  readonly now: number;
+}): Promise<readonly string[] | null> {
+  if (args.candidates.length === 0) {
+    return [];
+  }
+  if (args.autoCommit?.acceptRouting === undefined) {
+    return null;
+  }
+  const routingIds: string[] = [];
+  for (const candidate of args.candidates) {
+    const result = await args.autoCommit.acceptRouting({
+      provider: args.provider,
+      triggerName: candidate.triggerName,
+      eventName: args.eventName,
+      envelope: args.envelope,
+      now: args.now,
+    });
+    routingIds.push(result.receipt.routingId);
+    recordWebhookEvent(args.store, {
+      provider: args.provider,
+      eventName: args.eventName,
+      decision: "queued",
+      reason: "routing_pending",
+      detail: { routingId: result.receipt.routingId, duplicate: result.duplicate },
+    });
+  }
+  return routingIds;
+}
+
 function registerP4Trigger(
   app: Hono,
-  config: P4TriggerConfig | undefined,
+  config: P4TriggerConfig | readonly P4TriggerConfig[] | undefined,
   reviewPreparationOptions: ServerReviewPreparationOptions | undefined,
   reviewOrchestrationOptions: ServerReviewOrchestrationOptions | undefined,
   asyncTriggers: boolean,
@@ -338,7 +434,8 @@ function registerP4Trigger(
   getPullRequestTargetBranches?: (workspaceId: string) => readonly string[] | undefined,
 ): void {
   app.post("/triggers/p4", async (c) => {
-    if (!config) {
+    const configs = Array.isArray(config) ? config : config ? [config] : [];
+    if (configs.length === 0) {
       recordWebhookEvent(store, { provider: "p4", decision: "rejected", reason: "trigger_not_configured" });
       return c.json({ accepted: false, reason: "trigger_not_configured", provider: "p4" }, 503);
     }
@@ -378,9 +475,95 @@ function registerP4Trigger(
       };
     }
 
+    let routingEnvelope: P4RoutingEnvelope | null;
+    try {
+      routingEnvelope = buildP4RoutingEnvelope(payload);
+    } catch (error) {
+      if (error instanceof ZodError) {
+        recordWebhookEvent(store, {
+          provider: "p4",
+          eventName: "change-commit",
+          decision: "rejected",
+          reason: "invalid_payload",
+          detail: { issues: error.issues.map((issue) => ({ path: issue.path, message: issue.message })) },
+        });
+        return c.json({ accepted: false, reason: "invalid_payload", provider: "p4" }, 400);
+      }
+      throw error;
+    }
+
+    let singleConfig = configs[0]!;
+    if (routingEnvelope) {
+      const candidates = configs.filter((entry) => p4ProfileConsistentWithPayload(entry, routingEnvelope));
+      const routingCandidates = candidates.filter((entry) => entry.resolveWorkspace !== undefined);
+      const legacyCandidates = candidates.filter((entry) => entry.resolveWorkspace === undefined);
+      if (legacyCandidates.length === 1) singleConfig = legacyCandidates[0]!;
+      if (candidates.length === 0) {
+        recordWebhookEvent(store, { provider: "p4", eventName: "change-commit", decision: "ignored", reason: "repository_not_configured" });
+        return c.json({ accepted: false, reason: "repository_not_configured", provider: "p4" }, 202);
+      }
+      if (!(legacyCandidates.length === 1 && routingCandidates.length === 0)) {
+        if (!autoCommit) return c.json({ accepted: false, reason: "trigger_not_configured", provider: "p4" }, 503);
+        let routingIds: readonly string[] | null;
+        try {
+          routingIds = await admitRoutingReceipts({
+            provider: "p4",
+            candidates: routingCandidates,
+            envelope: routingEnvelope,
+            eventName: "change-commit",
+            autoCommit,
+            store,
+            now: Date.now(),
+          });
+        } catch (error) {
+          recordWebhookEvent(store, {
+            provider: "p4",
+            eventName: "change-commit",
+            decision: "rejected",
+            reason: "persistence_failed",
+            detail: { message: error instanceof Error ? error.message : String(error) },
+          });
+          return c.json({ accepted: false, reason: "persistence_failed", provider: "p4" }, 503);
+        }
+        if (routingIds === null) {
+          recordWebhookEvent(store, { provider: "p4", eventName: "change-commit", decision: "rejected", reason: "trigger_not_configured" });
+          return c.json({ accepted: false, reason: "trigger_not_configured", provider: "p4" }, 503);
+        }
+        const receipts: { receiptId: string; duplicate: boolean }[] = [];
+        try {
+          for (const legacy of legacyCandidates) {
+            const legacyEvent = translateP4TriggerToReviewEvent(payload, legacy);
+            if (!legacyEvent) continue;
+            const enriched = await enrichP4ReviewEvent(legacyEvent, legacy);
+            const accepted = await autoCommit.accept({
+              provider: "p4",
+              eventName: "change-commit",
+              reviewEvent: enriched,
+              now: Date.now(),
+            });
+            receipts.push({ receiptId: accepted.receipt.receiptId, duplicate: accepted.duplicate });
+          }
+        } catch {
+          recordWebhookEvent(store, { provider: "p4", eventName: "change-commit", decision: "rejected", reason: "persistence_failed" });
+          return c.json({ accepted: false, reason: "persistence_failed", provider: "p4" }, 503);
+        }
+        return c.json(
+          {
+            accepted: true,
+            provider: "p4",
+            processing: {
+              ...(routingIds.length > 0 ? { routingIds } : {}),
+              ...(receipts.length > 0 ? { receipts } : {}),
+            },
+          },
+          202,
+        );
+      }
+    }
+
     let reviewEvent;
     try {
-      reviewEvent = translateP4TriggerToReviewEvent(payload, config);
+      reviewEvent = translateP4TriggerToReviewEvent(payload, singleConfig);
     } catch (error) {
       if (error instanceof ZodError) {
         recordWebhookEvent(store, {
@@ -411,7 +594,7 @@ function registerP4Trigger(
       return c.json({ accepted: false, reason: "missing_changelist", provider: "p4" }, 400);
     }
 
-    reviewEvent = await enrichP4ReviewEvent(reviewEvent, config);
+    reviewEvent = await enrichP4ReviewEvent(reviewEvent, singleConfig);
 
     const decoded = payload;
 
@@ -433,7 +616,7 @@ function registerP4Trigger(
 
 function registerSvnTrigger(
   app: Hono,
-  config: SvnTriggerConfig | undefined,
+  config: SvnTriggerConfig | readonly SvnTriggerConfig[] | undefined,
   reviewPreparationOptions: ServerReviewPreparationOptions | undefined,
   reviewOrchestrationOptions: ServerReviewOrchestrationOptions | undefined,
   asyncTriggers: boolean,
@@ -449,7 +632,8 @@ function registerSvnTrigger(
   getPullRequestTargetBranches?: (workspaceId: string) => readonly string[] | undefined,
 ): void {
   app.post("/triggers/svn", async (c) => {
-    if (!config) {
+    const configs = Array.isArray(config) ? config : config ? [config] : [];
+    if (configs.length === 0) {
       recordWebhookEvent(store, { provider: "svn", decision: "rejected", reason: "trigger_not_configured" });
       return c.json({ accepted: false, reason: "trigger_not_configured", provider: "svn" }, 503);
     }
@@ -498,9 +682,89 @@ function registerSvnTrigger(
       };
     }
 
+    let routingEnvelope: SvnRoutingEnvelope | null;
+    try {
+      routingEnvelope = buildSvnRoutingEnvelope(payload);
+    } catch (error) {
+      if (error instanceof ZodError) {
+        recordWebhookEvent(store, {
+          provider: "svn",
+          eventName: "post-commit",
+          decision: "rejected",
+          reason: "invalid_payload",
+          detail: { issues: error.issues.map((issue) => ({ path: issue.path, message: issue.message })) },
+        });
+        return c.json({ accepted: false, reason: "invalid_payload", provider: "svn" }, 400);
+      }
+      throw error;
+    }
+
+    if (routingEnvelope) {
+      const candidates = configs;
+      const routingCandidates = candidates.filter((entry) => entry.resolveWorkspace !== undefined);
+      const legacyCandidates = candidates.filter((entry) => entry.resolveWorkspace === undefined);
+      if (!(legacyCandidates.length === 1 && routingCandidates.length === 0 && configs.length === 1)) {
+        if (!autoCommit) return c.json({ accepted: false, reason: "trigger_not_configured", provider: "svn" }, 503);
+        let routingIds: readonly string[] | null;
+        try {
+          routingIds = await admitRoutingReceipts({
+            provider: "svn",
+            candidates: routingCandidates,
+            envelope: routingEnvelope,
+            eventName: "post-commit",
+            autoCommit,
+            store,
+            now: Date.now(),
+          });
+        } catch (error) {
+          recordWebhookEvent(store, {
+            provider: "svn",
+            eventName: "post-commit",
+            decision: "rejected",
+            reason: "persistence_failed",
+            detail: { message: error instanceof Error ? error.message : String(error) },
+          });
+          return c.json({ accepted: false, reason: "persistence_failed", provider: "svn" }, 503);
+        }
+        if (routingIds === null) {
+          recordWebhookEvent(store, { provider: "svn", eventName: "post-commit", decision: "rejected", reason: "trigger_not_configured" });
+          return c.json({ accepted: false, reason: "trigger_not_configured", provider: "svn" }, 503);
+        }
+        const receipts: { receiptId: string; duplicate: boolean }[] = [];
+        try {
+          for (const legacy of legacyCandidates) {
+            const legacyEvent = translateSvnTriggerToReviewEvent(payload, legacy);
+            if (!legacyEvent) continue;
+            const accepted = await autoCommit.accept({
+              provider: "svn",
+              eventName: "post-commit",
+              reviewEvent: legacyEvent,
+              now: Date.now(),
+            });
+            receipts.push({ receiptId: accepted.receipt.receiptId, duplicate: accepted.duplicate });
+          }
+        } catch {
+          recordWebhookEvent(store, { provider: "svn", eventName: "post-commit", decision: "rejected", reason: "persistence_failed" });
+          return c.json({ accepted: false, reason: "persistence_failed", provider: "svn" }, 503);
+        }
+        return c.json(
+          {
+            accepted: true,
+            provider: "svn",
+            processing: {
+              ...(routingIds.length > 0 ? { routingIds } : {}),
+              ...(receipts.length > 0 ? { receipts } : {}),
+            },
+          },
+          202,
+        );
+      }
+    }
+
+    const singleConfig = configs[0]!;
     let reviewEvent;
     try {
-      reviewEvent = translateSvnTriggerToReviewEvent(payload, config);
+      reviewEvent = translateSvnTriggerToReviewEvent(payload, singleConfig);
     } catch (error) {
       if (error instanceof ZodError) {
         recordWebhookEvent(store, {
@@ -582,53 +846,104 @@ function matchesGenericWebhookCredential(
   return !config.webhookSecret || credential === config.webhookSecret;
 }
 
+type WebhookConfigSelection = {
+  readonly config?: VcsWebhookConfig;
+  readonly reason?: "invalid_signature" | "repository_not_configured" | "ambiguous_route" | "template_invalid" | "matcher_invalid";
+};
+
+function selectWebhookConfigWithScope(
+  ...args: Parameters<typeof selectWebhookConfigWithScopeUnchecked>
+): WebhookConfigSelection {
+  try {
+    return selectWebhookConfigWithScopeUnchecked(...args);
+  } catch (error) {
+    // Event-dependent nulls/byte budgets can fail after config compilation.
+    // Preserve the observable ignored-admission contract without persistence.
+    if (isConfigError(error) && (error.code === "template_invalid" || error.code === "matcher_invalid")) {
+      return { reason: error.code };
+    }
+    throw error;
+  }
+}
+
+/**
+ * Shared profile selection (P1b): credential verification, legacy repo
+ * scoping, and match-rule admission. A repo listed only by
+ * `workspaces.instances.*.match` rules scopes configs the same way a legacy
+ * repoRef/repoMappings constraint does; several rule hits across one profile
+ * report `ambiguous_route` instead of a silent pick (W07).
+ */
+function selectWebhookConfigWithScopeUnchecked(
+  provider: ReviewProvider,
+  decoded: unknown,
+  configs: readonly VcsWebhookConfig[],
+  credentialMatches: (config: VcsWebhookConfig) => boolean,
+  options?: { readonly legacyRepoScope?: boolean },
+): WebhookConfigSelection {
+  // Never execute source matching or templates for an unauthenticated body.
+  const authenticated = configs.filter(credentialMatches);
+  if (authenticated.length === 0) {
+    return { reason: "invalid_signature" };
+  }
+  const repoRef = decoded === undefined ? undefined : extractWebhookRepositoryRef(provider, decoded);
+  const descriptor = decoded === undefined ? undefined : describeWebhookSource(provider, decoded);
+
+  const matchResolution = (entry: VcsWebhookConfig): WorkspaceResolution | undefined =>
+    descriptor === undefined || entry.resolveWorkspace === undefined
+      ? undefined
+      : entry.resolveWorkspace(descriptor.source, descriptor.event);
+
+  // github/gitlab historically enforce repo scope whenever a profile
+  // declares constraints; the gitea route never scoped single legacy
+  // profiles, so constraints alone must not newly reject their events (W10).
+  // Match resolvers and multi-profile routes always enforce scope.
+  const legacyRepoScope = options?.legacyRepoScope !== false;
+  const repoScopeEnforced = configs.length > 1 ||
+    configs.some((entry) =>
+      entry.resolveWorkspace !== undefined ||
+      (legacyRepoScope && (entry.repoRef !== undefined || (entry.repoMappings?.length ?? 0) > 0)));
+
+  let candidates = authenticated;
+  if (repoRef !== undefined && repoScopeEnforced) {
+    const scoped = authenticated.filter((entry) => {
+      if (matchesWebhookRepo(entry, repoRef)) {
+        return true;
+      }
+      const resolution = matchResolution(entry);
+      // Ambiguity must survive scoping so it can be reported, not swallowed.
+      return resolution?.kind === "match" || resolution?.kind === "ambiguous";
+    });
+    if (scoped.length === 0) {
+      // Preserve the legacy contract: credentials valid for a different
+      // constrained repository do not authenticate the target profile.
+      return { reason: configs.some((entry) => matchesWebhookRepo(entry, repoRef))
+        ? "invalid_signature" : "repository_not_configured" };
+    }
+    candidates = scoped;
+  }
+
+  const verifiedCandidates = candidates.filter(credentialMatches);
+  if (verifiedCandidates.length === 0) {
+    return { reason: "invalid_signature" };
+  }
+
+  const selected = verifiedCandidates[0]!;
+  const resolution = matchResolution(selected);
+  if (resolution?.kind === "ambiguous") {
+    return { reason: "ambiguous_route" };
+  }
+  return { config: selected };
+}
+
 function selectGenericWebhookConfig(
   provider: GenericWebhookProvider,
   payload: string,
   decoded: unknown,
   configs: readonly VcsWebhookConfig[],
   credential: string | undefined,
-): { readonly config?: VcsWebhookConfig; readonly reason?: "invalid_signature" | "repository_not_configured" } {
-  const repoRef = decoded === undefined ? undefined : extractWebhookRepositoryRef(provider, decoded);
-
-  // Repo scoping applies when several profiles share the route OR any profile
-  // declares repo constraints: a single constrained profile must reject
-  // unlisted repositories instead of acting as a catch-all.
-  const repoScopeEnforced = configs.length > 1 ||
-    configs.some((entry) => entry.repoRef !== undefined || (entry.repoMappings?.length ?? 0) > 0);
-  if (repoRef && repoScopeEnforced) {
-    const repoScopedConfigs = configs.filter((entry) => matchesWebhookRepo(entry, repoRef));
-    if (repoScopedConfigs.length > 0) {
-      const verifiedRepoConfigs = repoScopedConfigs.filter((entry) =>
-        matchesGenericWebhookCredential(provider, payload, entry, credential),
-      );
-      const verifiedRepoConfig = verifiedRepoConfigs[0];
-
-      return verifiedRepoConfig
-        ? { config: verifiedRepoConfig }
-        : { reason: "invalid_signature" };
-    }
-
-    const verifiedConfigs = configs.filter((entry) =>
-      matchesGenericWebhookCredential(provider, payload, entry, credential),
-    );
-    return verifiedConfigs.length > 0
-      ? { reason: "repository_not_configured" }
-      : { reason: "invalid_signature" };
-  }
-
-  const verifiedConfigs = configs.filter((entry) =>
-    matchesGenericWebhookCredential(provider, payload, entry, credential),
-  );
-
-  if (verifiedConfigs.length === 0) {
-    return { reason: "invalid_signature" };
-  }
-
-  const verifiedConfig = verifiedConfigs[0];
-  return verifiedConfig
-    ? { config: verifiedConfig }
-    : { reason: "invalid_signature" };
+): WebhookConfigSelection {
+  return selectWebhookConfigWithScope(provider, decoded, configs, (entry) =>
+    matchesGenericWebhookCredential(provider, payload, entry, credential));
 }
 
 function registerGenericWebhook(
@@ -673,10 +988,10 @@ function registerGenericWebhook(
 
     const selected = selectGenericWebhookConfig(provider, payload, decoded, configs, credential);
     if (!selected.config) {
-      const status = selected.reason === "repository_not_configured" ? 202 : 401;
+      const status = selected.reason === "invalid_signature" ? 401 : 202;
       recordWebhookEvent(store, {
         provider,
-        decision: selected.reason === "repository_not_configured" ? "ignored" : "rejected",
+        decision: selected.reason === "invalid_signature" ? "rejected" : "ignored",
         reason: selected.reason ?? "invalid_signature",
       });
       return c.json({ accepted: false, reason: selected.reason, provider }, status);
@@ -702,6 +1017,10 @@ function registerGenericWebhook(
     try {
       reviewEvent = await translateWebhookToReviewEvent(provider, eventName, decoded, webhookConfig);
     } catch (error) {
+      const resolutionResponse = mapWorkspaceResolutionError(c, error, provider, eventName, store);
+      if (resolutionResponse !== undefined) {
+        return resolutionResponse;
+      }
       if (error instanceof ZodError) {
         recordWebhookEvent(store, {
           provider,
@@ -2057,6 +2376,9 @@ export type { BootstrapServerOptions } from "./bootstrap.js";
 
 export { serve, serveAsync } from "./node-serve.js";
 export type { ServeOptions } from "./node-serve.js";
+
+export { createWorkspaceRuntime } from "./workspace-runtime.js";
+export type { WorkspaceRuntime, WorkspaceRuntimeEvent } from "./workspace-runtime.js";
 
 export type { ObservabilityApiOptions } from "./observability-api.js";
 export type { AdminAuthConfig } from "./admin-auth.js";

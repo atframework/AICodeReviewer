@@ -8,9 +8,10 @@ import {
   extractRefBranch,
   isBranchCreateOrDeletePush,
   normalizeActor,
-  resolveWorkspaceIdForRepo,
+  resolveWorkspaceForRepo,
   type VcsWebhookConfig,
 } from "./webhook-common.js";
+import { describeWebhookSource } from "./source-descriptors.js";
 
 type GitlabProvider = Extract<ReviewProvider, "gitlab">;
 
@@ -138,7 +139,7 @@ export async function translateGitlabWebhookToReviewEvent(
     return createReviewEvent({
       triggerName: config.triggerName,
       provider,
-      workspaceId: resolveWorkspaceIdForRepo(config, parsed.project.path_with_namespace),
+      ...resolveWorkspaceForRepo(config, parsed.project.path_with_namespace, describeWebhookSource(provider, parsed)),
       targetKind: "pull_request",
       repoRef: parsed.project.path_with_namespace,
       baseSha: mr.diff_refs?.base_sha ?? mr.target_branch,
@@ -160,7 +161,7 @@ export async function translateGitlabWebhookToReviewEvent(
     return createReviewEvent({
       triggerName: config.triggerName,
       provider,
-      workspaceId: resolveWorkspaceIdForRepo(config, parsed.project.path_with_namespace),
+      ...resolveWorkspaceForRepo(config, parsed.project.path_with_namespace, describeWebhookSource(provider, parsed)),
       targetKind: "pull_request",
       repoRef: parsed.project.path_with_namespace,
       baseSha: parsed.object_attributes.diff_refs?.base_sha ?? parsed.object_attributes.target_branch ?? parsed.object_attributes.source?.default_branch,
@@ -186,7 +187,7 @@ export async function translateGitlabWebhookToReviewEvent(
     return createReviewEvent({
       triggerName: config.triggerName,
       provider,
-      workspaceId: resolveWorkspaceIdForRepo(config, parsed.project.path_with_namespace),
+      ...resolveWorkspaceForRepo(config, parsed.project.path_with_namespace, describeWebhookSource(provider, parsed)),
       targetKind: "push",
       repoRef: parsed.project.path_with_namespace,
       baseSha: parsed.before,

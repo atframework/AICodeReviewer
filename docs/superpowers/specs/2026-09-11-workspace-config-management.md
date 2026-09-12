@@ -1,6 +1,6 @@
 # Workspace 规则、动态配置与数据库迁移设计
 
-状态：P0 的解析、合并、changeset 和字段清单已有实现及回归测试；passthrough 字段的类型化能力校验仍待补全。其余阶段尚未实施，下文 API、存储、UI 和迁移名称仍为拟定合同。当前证据以[测试计划](../plans/2026-09-11-workspace-config-tests.md)为准。
+状态：P0 基础层和 P1 子集已有实现与回归，包括 Git 匹配准入、P4/SVN 路由收据及冻结 binding。P1 尚缺完整 P4/SVN 描述符、HOME 隔离、旧 prompts/skills 回退的完整验收及真实多工程场景；workspace 级 agent/sandbox 接线随 P4 推进，P2–P8 仍未完成。 下文未交付部分仍为目标合同，证据以[测试计划](../plans/2026-09-11-workspace-config-tests.md)为准。
 源码核对基线为 `e609cd7`;外部资料核对日期为 2026-09-11。
 
 执行入口：[执行计划](../plans/2026-09-11-workspace-config-implementation.md)、
@@ -228,9 +228,9 @@ provider adapter 提供统一 `variableDescriptors()`：字段名、类型、事
 
 只允许纯变量、上述 helper 和受限子表达式；不支持 block、partial、decorator、`lookup`、`log`、动态 helper、`@data`、`../`、原型属性或任意 JS。禁止 `constructor`、`prototype`、`__proto__` 路径。直接输出事件变量必须包在 `segment`/`hash` 中，固定安全的 `workspace.id/instance_id` 除外。
 
-AST 校验后以 `strict: true`、`knownHelpersOnly: true`、`noEscape: true` 编译，显式保持原型访问关闭。`noEscape` 用于避免 HTML 实体污染路径；安全来自白名单与路径校验 [1], [2]。表达式长度上限 4 KiB、AST 256 节点、深度 8；超限在发布阶段拒绝，实际变量超限在接收或后台解析阶段明确报错。
+AST 校验后以 `strict: true`、`knownHelpersOnly: true`、`noEscape: true` 编译，显式保持原型访问关闭。`noEscape` 用于避免 HTML 实体污染路径；安全来自白名单与路径校验 [1], [2]。helper 参数个数固定，`default` 的第二参数必须为标量字面量，输出必须包在 `segment/hash` 内；拒绝 hash arguments。表达式长度上限 4 KiB、AST 256 节点、深度 8；超限在发布阶段拒绝，实际变量超限在接收或后台解析阶段明确报错。
 
-对最终路径同时执行 `path.resolve`/`path.relative` 边界检查以及已有父目录的 realpath 检查。拒绝指向根外的 symlink/junction；执行前重新验证，agent 不得写 workspace 根及其父目录。Node 的 `resolve` 会被绝对路径重置，仅调用 resolve 不构成包含性检查 [18]。组件长度和总路径长度按主机能力验证，Windows 与 Linux 单独测试。
+对最终路径同时执行 `path.resolve`/`path.relative` 边界检查以及已有父目录的 realpath 检查。拒绝指向根外的 symlink/junction；执行前重新验证，agent 不得写 workspace 根及其父目录。Node 的 `resolve` 会被绝对路径重置，仅调用 resolve 不构成包含性检查 [18]。渲染后的相对路径上限 4096 UTF-8 字节，单段上限 255 UTF-8 字节；文字路径段同样拒绝 Windows 设备名（含扩展名）、非法字符和尾随点/空格。实际完整路径还受主机能力限制，Windows 与 Linux 单独验收。
 
 ### 5.5 运行实例、目录和隔离
 
@@ -238,7 +238,7 @@ AST 校验后以 `strict: true`、`knownHelpersOnly: true`、`noEscape: true` �
 
 最终工作根为 `<workspaces.root>/<rendered work_path>/<workspaceInstanceId>`。固定实例后缀防止多个仓库模板结果相同时共用源码、memory 或可写运行目录；预览必须展示完整最终路径，不只展示模板片段。默认 work_path 为 `{{workspace.id}}`。
 
-传递显式 `WorkspaceLayout`：`instanceRoot`、`sourceRoot`、`agentDir`、`tmpDir`、`contextReposDir`、`templatesDir`。每次执行写入 `runs/<runId>/` 下的 source/agent/tmp/context-repos；仓库缓存可另行复用，但可变 Git checkout、P4 client root、MCP state、HOME/XDG 不共享。P4 实际服务 client 需按 instance/run 唯一化或持有互斥租约，不能同时修改同一 client spec。
+传递显式 `WorkspaceLayout`：`instanceRoot`、`sourceRoot`、`agentDir`、`tmpDir`、`contextReposDir`、`templatesDir`。每次执行写入 `runs/<runId>/` 下的 source/agent/tmp/context-repos；运行目录由整次 orchestration 持有，模型回退、上下文复核和发布结束后才清理。陈旧目录仅在记录的本机 owner 进程已退出时回收，未知或其他主机 owner 保留。仓库缓存可另行复用，但可变 Git checkout、P4 client root、MCP state、HOME/XDG 不共享。P4 实际服务 client 需按 instance/run 唯一化或持有互斥租约，不能同时修改同一 client spec。
 
 模型组和 review defaults 继承策略 ID；reflection、源码缓存、运行目录按工程实例隔离；现有 per-workspace 并发默认仍作用于 definition，另以实例可写目录租约防止冲突。统计保留原 workspace ID/repoRef，并增加 instance ID。`softDeleteMissingProjects` 必须根据存活 definition/binding 判断，不能把通配规则下没有写入静态配置的工程视为已删除。
 
@@ -526,3 +526,5 @@ Redis revision 构建、审计材料和 migration metadata 应在不可变 gener
 [16]: https://help.perforce.com/helix-core/server-apps/cmdref/current/Content/CmdRef/p4_client.html
 [17]: https://svnbook.red-bean.com/en/1.8/svn.ref.svn.c.info.html
 [18]: https://nodejs.org/api/path.html
+
+2026-09-12 P1 审查补充核对：[Handlebars 参数与子表达式](https://handlebarsjs.com/guide/expressions.html)、[编译选项](https://handlebarsjs.com/api-reference/compilation.html)、[Windows 文件名规则](https://learn.microsoft.com/en-us/windows/win32/fileio/naming-a-file)、[GitLab Webhook 事件](https://docs.gitlab.com/user/project/integrations/webhook_events/)。

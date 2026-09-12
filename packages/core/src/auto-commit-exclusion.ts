@@ -26,8 +26,9 @@
  *   and retries with a bound instead of analyzing or faking an exclusion.
  */
 
-import { RE2 } from "re2-wasm";
 import { z } from "zod";
+
+import { compileConfigRegex, globToConfigRegexSource } from "./config-matcher.js";
 
 export const AUTO_COMMIT_EXCLUSION_LIMITS = {
   maxRules: 128,
@@ -47,37 +48,11 @@ export type ExclusionField = (typeof EXCLUSION_VCS_FIELDS)[ExclusionVcs][number]
 
 const utf8 = new TextEncoder();
 
-function globToRegexSource(glob: string): string {
-  let source = "";
-  let pendingStar = false;
-  for (const char of glob) {
-    if (char === "*") {
-      pendingStar = true;
-      continue;
-    }
-    if (pendingStar) {
-      source += "[\\s\\S]*";
-      pendingStar = false;
-    }
-    source += char === "?" ? "[\\s\\S]" : escapeRegexChar(char);
-  }
-  if (pendingStar) {
-    source += "[\\s\\S]*";
-  }
-  return `^(?:${source})$`;
-}
-
-function escapeRegexChar(char: string): string {
-  return /[\\^$.|?*+()[\]{}]/u.test(char) ? `\\${char}` : char;
-}
-
 /** Compile one matcher to RE2; throws on invalid or unsupported patterns. */
 function compileMatcher(matcher: ExclusionMatcherConfig): (value: string) => boolean {
-  const flags = matcher.ignore_case === true ? "iu" : "u";
   const source =
-    matcher.glob !== undefined ? globToRegexSource(matcher.glob) : (matcher.regex as string);
-  const compiled = new RE2(source, flags);
-  return (value: string) => compiled.test(value);
+    matcher.glob !== undefined ? globToConfigRegexSource(matcher.glob) : (matcher.regex as string);
+  return compileConfigRegex(source, matcher.ignore_case === true);
 }
 
 const exclusionMatcherSchema = z

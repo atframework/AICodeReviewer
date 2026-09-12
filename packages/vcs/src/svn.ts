@@ -270,6 +270,12 @@ export class SvnVcsAdapter implements VcsAdapter {
 
   private readonly repositoryDir: string;
   private readonly repositoryUrl: string | undefined;
+  /**
+   * Effective repository URL this adapter queries (options.repositoryUrl as
+   * bound by the factory from the event repoRef — project-root scope URLs
+   * included). Diagnostic surface for scope-routing correctness.
+   */
+  readonly boundScope: string | undefined;
   private readonly username: string | undefined;
   private readonly password: string | undefined;
   private readonly trustServerCert: boolean;
@@ -282,6 +288,7 @@ export class SvnVcsAdapter implements VcsAdapter {
   constructor(options: SvnVcsAdapterOptions) {
     this.repositoryDir = resolve(options.repositoryDir);
     this.repositoryUrl = options.repositoryUrl;
+    this.boundScope = options.repositoryUrl;
     this.username = options.username;
     this.password = options.password;
     this.trustServerCert = options.trustServerCert ?? false;

@@ -56,9 +56,22 @@ Sources: `packages/sandbox/src/types.ts`, `native.ts`, `docker.ts`,
   engine. Adapter mocks do not exercise the sandbox allowlist.
 - Keep container env files on the host outside source/agent/tmp mounts and remove
   them after each run. Materialized config contains env references, never keys.
+- All mutable per-run state lives under one `runs/<runId>/` root
+  (source/agent/tmp/context-repos); the shared sourceRoot is a pure repo
+  cache. Tests that read run artifacts (task handoff, manifest, mcp.json)
+  after the orchestration completes break because the root is cleaned in
+  the orchestration `finally` (never after one model call): capture them inside the fake sandbox `spawn`, and honor
+  `ws.sourceDir` in fake VCS adapters like the real ones do
+  (`packages/server/test/review-orchestrator.test.ts` L09/L12 cases).
 - For stdin use spawn-based runners; `execFile` has no synchronous-style `input`
   option. Preserve optional-property semantics when constructing adapter options.
 - Timeout kills the entire descendant tree: Linux `/proc` PPID traversal catches
   `setsid` escapees that process-group signals miss; Windows uses tree termination.
   Keep TERM→KILL escalation and the stdio-destroy/force-resolve backstop. Validate
   inherited-stdio and Linux setsid regressions; outer containers retain `--init`.
+
+- Directory mtime does not track nested writes. Reap stale run roots only when
+  their recorded owner belongs to this host and its PID is provably dead; preserve
+  unknown/remote owners. Reserve a fresh root before VCS writes and verify source,
+  context and agent paths before use and cleanup. Test real source sentinels during
+  fallback and direct-path failures (`review-orchestrator.test.ts`).

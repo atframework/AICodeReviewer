@@ -106,6 +106,7 @@ provider 专属字段（`webhook_secret_env`、`token_env`、`port`、`user_env`
 
 | 字段 | 类型 | 默认值 | 描述 |
 | --- | --- | --- | --- |
+| `workspaces.root` | string | — | workspace 实例的目录布局根;相对路径按 server base 目录解析。默认 `<baseDir>/workspaces`默认值 `<baseDir>/workspaces` |
 | `workspaces.cache.max_total_gb` | number > 0 | `50` | workspace 缓存总大小上限（GB） |
 | `workspaces.cache.eviction` | enum | `lru` | 淘汰策略：`lru`、`mru`、`ttl` |
 | `workspaces.cache.ttl_days` | int > 0 | `30` | `ttl` 淘汰的 TTL（天） |
@@ -134,6 +135,14 @@ provider 专属字段（`webhook_secret_env`、`token_env`、`port`、`user_env`
 | `workspaces.instances` | map | `{}` | 按 workspace id 组织的 instance |
 | `workspaces.instances.<id>.source_repo.trigger` | string | — | trigger profile 名 |
 | `workspaces.instances.<id>.source_repo.repo` | string | — | 仓库引用 |
+| `workspaces.instances.<id>.match[]` | array | — | 多工程匹配规则(规则间 OR,规则内字段 AND),与 `source_repo` 互斥。git 系 webhook(GitHub/GitLab/Gitea/Forgejo)接受期匹配已生效;p4/svn/manual 变量随对应来源适配器落地(见下方说明) |
+| `workspaces.instances.<id>.match[].id` | string | — | 可选规则 id,同一 definition 内唯一 |
+| `workspaces.instances.<id>.match[].triggers` | string[] | — | trigger 名称,每个名称必须存在于 `triggers[]` |
+| `workspaces.instances.<id>.match[].source.<id>.exact` | string | — | 来源字段(`vcs`、`repo_ref`、`repository`、`namespace`、`project_key`、`branch`、`ref`)的大小写敏感精确匹配,`exact`/`glob`/`regex` 三选一 |
+| `workspaces.instances.<id>.match[].source.<id>.glob` | string | — | 全字段 glob,`*` 可跨 `/`,`?` 匹配一个码点,无 extglob/花括号/字符类语义 |
+| `workspaces.instances.<id>.match[].source.<id>.regex` | string | — | RE2 正则,未用 `^`/`$` 锚定时为子串匹配 |
+| `workspaces.instances.<id>.match[].source.<id>.ignore_case` | boolean | — | 仅匹配时折叠大小写,不改写身份 |
+| `workspaces.instances.<id>.work_path` | string | — | Handlebars 路径模板(AST 白名单,仅 `segment`/`default`/`hash`/`lower`,输出必须是相对 `/` 路径),需配合 `match`,默认 `{{workspace.id}}` |
 | `workspaces.instances.<id>.model_chain` | string | 继承 | 覆盖主链组名，引用 `llm.model_chain` |
 | `workspaces.instances.<id>.triage_model_chain` | string | 继承 | 覆盖生命周期分析组名；各层均未配置时使用该 workspace 主链 |
 | `workspaces.instances.<id>.agent.default` | enum | — | agent kind 覆盖（当前版本运行时未生效，见下方说明） |
@@ -160,6 +169,25 @@ provider 专属字段（`webhook_secret_env`、`token_env`、`port`、`user_env`
 
 workspace id 不能与保留键 `cache`、`defaults`、`instances` 冲突。
 instance 定义自己的 `context_repositories` 时整体替换 `workspaces.defaults` 中的列表，不逐项合并。
+
+:::note[多工程匹配与隔离目录]
+GitHub/GitLab/Gitea/Forgejo 先鉴权再匹配；repository/namespace 保留 subgroup。
+未命中返回 `202 repository_not_configured`，多定义命中返回 `202 ambiguous_route`。
+命中后的 binding 固定在事件和自动提交 receipt 上，配置改变后执行仍复用该绑定。
+
+P4/SVN match profile 先持久化 routing receipt 再返回 202；后台将配置 scope 与验证后的
+变更路径求交集。路径缺失或截断时重试，范围外事件不创建审查；冻结事件重放时不再查 VCS。
+
+匹配实例使用 `workspaces.root/work_path/instance_id`，每次运行的 source/agent/tmp/context-repos
+位于 `runs/<runId>/`，模型回退和复核结束后随整次审查清理。legacy 缓存保留原路径，
+match 元数据缓存使用 `.metadata/<hash>`。HOME 隔离尚未完成。
+
+模板只允许 `segment/default/hash/lower`；`default` 必须包在 `segment/hash` 中，
+fallback 必须是字面量，禁止 hash arguments。provider 变量必须适用于全部匹配的 trigger kind。
+渲染路径最多 4096 UTF-8 字节、单段最多 255 字节；拒绝 Windows 设备名（含扩展名）、
+非法字符及尾随点/空格。三个 `manual.*` 字段来自受信 CLI 输入；`p4.*`、`svn.*`、
+`scheduled.*` 描述符仍不可用，路径中禁止使用 `event.*`。
+:::
 
 :::note[workspace 层 `agent.default` / `sandbox` 当前不生效]
 schema 接受 `workspaces.defaults` 和实例上的 `agent.default` 与 `sandbox`，但当前版本

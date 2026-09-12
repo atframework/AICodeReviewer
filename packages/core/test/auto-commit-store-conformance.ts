@@ -1433,6 +1433,167 @@ export function runAutoCommitStoreConformance(factory: StoreFactory): void {
       });
       expect((await store.readStreamHead(streamId))?.notBefore).toBe(floorAt);
     });
+
+    it("accepts routing receipts idempotently per routing key (W14)", async () => {
+      const store = await factory.makeStore();
+      const first = await store.acceptRoutingReceipt({
+        routingKey: "p4:delivery-1",
+        provider: "p4",
+        triggerName: "p4-main",
+        envelope: { change: "12345" },
+        parentDeliveryId: "delivery-1",
+        now: T0,
+      });
+      expect(first.duplicate).toBe(false);
+      expect(first.receipt.firstAcceptedAt).toBe(T0);
+      expect(first.receipt.attempts).toBe(0);
+      expect(first.receipt.convertedReceiptIds).toEqual([]);
+      expect(first.receipt.completedAt).toBeNull();
+
+      const replay = await store.acceptRoutingReceipt({
+        routingKey: "p4:delivery-1",
+        provider: "p4",
+        triggerName: "p4-main",
+        envelope: { change: "12345" },
+        now: T0 + 60_000,
+      });
+      expect(replay.duplicate).toBe(true);
+      expect(replay.receipt.routingId).toBe(first.receipt.routingId);
+      expect(replay.receipt.firstAcceptedAt).toBe(T0);
+
+      const other = await store.acceptRoutingReceipt({
+        routingKey: "p4:delivery-2",
+        provider: "p4",
+        triggerName: "p4-main",
+        envelope: { change: "12346" },
+        now: T0,
+      });
+      expect(other.duplicate).toBe(false);
+      expect(other.receipt.routingId).not.toBe(first.receipt.routingId);
+
+      // Single-record reads: any state, unknown ids miss cleanly.
+      const fetched = await store.getRoutingReceipt(first.receipt.routingId);
+      expect(fetched?.routingKey).toBe("p4:delivery-1");
+      expect(fetched?.firstAcceptedAt).toBe(T0);
+      expect(await store.getRoutingReceipt("routing-missing")).toBeUndefined();
+    });
+
+    it("includes pending routing retries in durable wake selection", async () => {
+      const store = await factory.makeStore();
+      const later = await store.acceptRoutingReceipt({ routingKey: "routing-later", provider: "p4", triggerName: "p4", envelope: { revision: "2" }, now: T0 + 10 });
+      const earlier = await store.acceptRoutingReceipt({ routingKey: "routing-earlier", provider: "p4", triggerName: "p4", envelope: { revision: "1" }, now: T0 });
+      expect((await store.readDueRoutingReceipts(T0 + 10, 1))[0]?.routingId).toBe(earlier.receipt.routingId);
+      expect(await store.readNextWake()).toEqual({ at: T0, reason: "routing_resolution" });
+      await store.recordRoutingReceiptFailure(earlier.receipt.routingId, "retry", T0 + 1000);
+      expect(await store.readNextWake()).toEqual({ at: T0 + 10, reason: "routing_resolution" });
+      await store.recordRoutingReceiptConversion(later.receipt.routingId, { complete: true }, T0 + 20);
+      expect(await store.readNextWake()).toEqual({ at: T0 + 1000, reason: "routing_resolution" });
+      await store.recordRoutingReceiptFailure(earlier.receipt.routingId, "terminal", null);
+      expect(await store.readNextWake()).toBeUndefined();
+    });
+
+    it("schedules routing resolution with durable backoff and terminal failure (V08)", async () => {
+      const store = await factory.makeStore();
+      const accepted = await store.acceptRoutingReceipt({
+        routingKey: "svn:delivery-1",
+        provider: "svn",
+        triggerName: "svn-main",
+        envelope: { revision: "42" },
+        now: T0,
+      });
+      const id = accepted.receipt.routingId;
+      expect((await store.readDueRoutingReceipts(T0, 10)).map((r) => r.routingId)).toContain(id);
+
+      // Backoff: not due before the retry instant, due again at it.
+      await store.recordRoutingReceiptFailure(id, "svn info timed out", T0 + 5000);
+      expect(await store.readDueRoutingReceipts(T0 + 4000, 10)).toEqual([]);
+      expect((await store.readDueRoutingReceipts(T0 + 5000, 10)).map((r) => r.routingId)).toContain(id);
+      const retried = (await store.readDueRoutingReceipts(T0 + 5000, 10)).find((r) => r.routingId === id);
+      expect(retried?.attempts).toBe(1);
+      expect(retried?.terminalError).toBeNull();
+
+      // Terminal failure leaves the due set forever but keeps the record.
+      await store.recordRoutingReceiptFailure(id, "svn info conflict", null);
+      expect(await store.readDueRoutingReceipts(T0 + 60_000, 10)).toEqual([]);
+      const terminal = await store.getRoutingReceipt(id);
+      expect(terminal?.terminalError).toBe("svn info conflict");
+      expect(terminal?.completedAt).toBeNull();
+    });
+
+    it("records routing conversions idempotently and completes exactly once (W14)", async () => {
+      const store = await factory.makeStore();
+      const accepted = await store.acceptRoutingReceipt({
+        routingKey: "p4:delivery-9",
+        provider: "p4",
+        triggerName: "p4-main",
+        envelope: { change: "99" },
+        parentDeliveryId: "delivery-9",
+        now: T0,
+      });
+      const id = accepted.receipt.routingId;
+
+      const step1 = await store.recordRoutingReceiptConversion(id, { addedReceiptIds: ["r-1"] }, T0 + 1);
+      expect(step1.convertedReceiptIds).toEqual(["r-1"]);
+      expect(step1.completedAt).toBeNull();
+      expect((await store.readDueRoutingReceipts(T0 + 1, 10)).map((r) => r.routingId)).toContain(id);
+
+      // Crash-and-rerun: the same conversion adds nothing twice.
+      const step2 = await store.recordRoutingReceiptConversion(id, { addedReceiptIds: ["r-1", "r-2"] }, T0 + 2);
+      expect(step2.convertedReceiptIds).toEqual(["r-1", "r-2"]);
+
+      const done = await store.recordRoutingReceiptConversion(id, { complete: true, note: "resolved" }, T0 + 3);
+      expect(done.completedAt).toBe(T0 + 3);
+      expect(done.note).toBe("resolved");
+      expect(await store.readDueRoutingReceipts(T0 + 60_000, 10)).toEqual([]);
+
+      // Late duplicate completion keeps the original timestamp.
+      const again = await store.recordRoutingReceiptConversion(id, { complete: true }, T0 + 99_999);
+      expect(again.completedAt).toBe(T0 + 3);
+    });
+
+    it("freezes the routing interpretation once: later writes never overwrite (V14)", async () => {
+      const store = await factory.makeStore();
+      const accepted = await store.acceptRoutingReceipt({
+        routingKey: "p4:delivery-77",
+        provider: "p4",
+        triggerName: "p4-main",
+        envelope: { revision: "100" },
+        now: T0,
+      });
+      const id = accepted.receipt.routingId;
+      expect(accepted.receipt.resolution).toBeNull();
+
+      const first = await store.recordRoutingReceiptResolution(id, [
+        { repoRef: "//depot/a", outcome: "match", resolution: { kind: "match", definitionId: "ws-a" } },
+        { repoRef: "//depot/b", outcome: "no_match", note: "no match rule" },
+      ], T0 + 1);
+      expect(first.resolution).toHaveLength(2);
+
+      // A retried/concurrent interpretation under changed config must not win.
+      const second = await store.recordRoutingReceiptResolution(id, [
+        { repoRef: "//depot/a", outcome: "no_match", note: "config changed" },
+      ], T0 + 2);
+      expect(second.resolution).toEqual(first.resolution);
+      expect((await store.getRoutingReceipt(id))?.resolution).toEqual(first.resolution);
+    });
+
+    it("freezes the admission resolution snapshot on receipts (V14)", async () => {
+      const store = await factory.makeStore();
+      const resolution = { kind: "legacy_binding", definitionId: "ws1" } as const;
+      const accepted = await store.acceptReceipt(receiptInput({ resolution }));
+      expect(accepted.receipt.resolution).toEqual(resolution);
+
+      // Replay with a different resolution keeps the frozen original.
+      const replay = await store.acceptReceipt(
+        receiptInput({ resolution: { kind: "legacy_binding", definitionId: "other" }, now: T0 + 60_000 }),
+      );
+      expect(replay.duplicate).toBe(true);
+      expect(replay.receipt.resolution).toEqual(resolution);
+
+      // Legacy accepts without a resolution read as null (recompute fallback).
+      const legacy = await store.acceptReceipt(receiptInput({ deliveryKey: "gitea:delivery-2" }));
+      expect(legacy.receipt.resolution).toBeNull();
+    });
   });
 }
 

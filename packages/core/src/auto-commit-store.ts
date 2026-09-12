@@ -35,8 +35,10 @@ import type {
   SourceSnapshot,
 } from "./auto-commit-identity.js";
 import { deriveSourceKey } from "./auto-commit-identity.js";
+import type { WorkspaceResolution } from "./config-resolution.js";
+import type { ReviewEvent } from "./review-event.js";
 
-export const AUTO_COMMIT_STORE_SCHEMA_VERSION = 4;
+export const AUTO_COMMIT_STORE_SCHEMA_VERSION = 6;
 
 // ---------------------------------------------------------------------------
 // Receipts and members
@@ -64,6 +66,13 @@ export interface AcceptReceiptInput {
   /** Policy version resolved at acceptance time. */
   readonly policyVersion: string;
   readonly now: number;
+  /**
+   * Admission-time workspace resolution snapshot (V14): frozen at first
+   * acceptance so restarts and later config edits never reinterpret the
+   * binding. Null for legacy routing and pre-upgrade rows (execution falls
+   * back to deriving the layout from the event fields).
+   */
+  readonly resolution?: WorkspaceResolution | null;
 }
 
 export interface AutoCommitReceipt {
@@ -93,11 +102,86 @@ export interface AutoCommitReceipt {
   readonly metadataAttempts: number;
   readonly metadataNextAttemptAt: number | null;
   readonly metadataTerminalError: string | null;
+  /** Frozen admission resolution snapshot; null for legacy/pre-upgrade rows. */
+  readonly resolution: WorkspaceResolution | null;
 }
 
 export interface AcceptReceiptResult {
   readonly receipt: AutoCommitReceipt;
   /** True when the delivery key was already accepted (idempotent replay). */
+  readonly duplicate: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Routing receipts (pending workspace resolution, spec §5.2)
+// ---------------------------------------------------------------------------
+
+/**
+ * Minimal durable intake for sources whose workspace binding needs metadata
+ * that is not available at HTTP receive time (P4 stream/client, SVN
+ * UUID/paths). The route persists this record before answering 202 and the
+ * background resolver converts it into formal auto-commit receipts.
+ *
+ * Identity: `routingKey` is the stable delivery identity of the routing-stage
+ * notification; redelivery returns the original record untouched. Conversion
+ * is idempotent — formal receipt delivery keys derive deterministically from
+ * the routing key (+ scope), so re-running conversion never creates a second
+ * formal receipt (W14), and scoped splits keep `parentDeliveryId` traceable
+ * to the intake (W15).
+ */
+export interface AcceptRoutingReceiptInput {
+  readonly routingKey: string;
+  readonly provider: string;
+  readonly triggerName: string;
+  /** Minimal replayable intake envelope (no credentials, no raw request body). */
+  readonly envelope: unknown;
+  /** Provider delivery id shared by every scoped split of this intake. */
+  readonly parentDeliveryId?: string | null;
+  readonly now: number;
+}
+
+/**
+ * Frozen per-scope interpretation of one routing intake (V14). Written once
+ * on the first attempt that reaches workspace resolution; later attempts and
+ * post-restart recovery MUST reuse it instead of re-resolving against
+ * possibly-changed workspace config.
+ */
+export interface FrozenScopeResolution {
+  readonly repoRef: string;
+  readonly branch?: string;
+  readonly outcome: "match" | "legacy_binding" | "no_match" | "ambiguous" | "unbound" | "route_denied";
+  /** Admission resolution snapshot when outcome is match/legacy_binding; opaque to the store. */
+  readonly resolution?: unknown;
+  /** Verified event frozen with the scope, so retries need no new VCS query. */
+  readonly reviewEvent?: ReviewEvent;
+  readonly note?: string;
+}
+
+export interface RoutingReceiptRecord {
+  readonly routingId: string;
+  readonly routingKey: string;
+  readonly provider: string;
+  readonly triggerName: string;
+  readonly envelope: unknown;
+  readonly parentDeliveryId: string | null;
+  readonly firstAcceptedAt: number;
+  /** Durable resolution attempts; terminal when `terminalError` is set. */
+  readonly attempts: number;
+  readonly nextAttemptAt: number | null;
+  readonly terminalError: string | null;
+  /** Formal receipt ids created by conversion (deduped, append-only). */
+  readonly convertedReceiptIds: readonly string[];
+  /** Set when the resolver finished (with or without producing receipts). */
+  readonly completedAt: number | null;
+  /** Human-readable resolution outcome (e.g. no_match reason). */
+  readonly note: string | null;
+  /** Frozen per-scope interpretation (V14); null until first interpretation. */
+  readonly resolution: readonly FrozenScopeResolution[] | null;
+}
+
+export interface AcceptRoutingReceiptResult {
+  readonly receipt: RoutingReceiptRecord;
+  /** True when the routing key was already accepted (idempotent replay). */
   readonly duplicate: boolean;
 }
 
@@ -292,6 +376,7 @@ export interface DispatchOutboxEntry {
 }
 
 export interface BatchExecutionCheckpoint {
+
   readonly phase: "started" | "completed" | "publication_pending";
   readonly result?: unknown;
 }
@@ -323,7 +408,7 @@ export interface ReceiptQueryResult {
 export interface NextWake {
   /** Raw earliest bound across streams/outbox/leases, or null when idle. */
   readonly at: number;
-  readonly reason: SchedulingWaitReason | "outbox_dispatch" | "lease_reclaim";
+  readonly reason: SchedulingWaitReason | "outbox_dispatch" | "lease_reclaim" | "routing_resolution";
 }
 
 // ---------------------------------------------------------------------------
@@ -334,6 +419,60 @@ export interface AutoCommitStore {
   readonly backendKind: string;
 
   acceptReceipt(input: AcceptReceiptInput): Promise<AcceptReceiptResult>;
+  /**
+   * Persist a routing-stage intake whose workspace binding requires metadata
+   * unavailable at receive time. Atomic and idempotent per `routingKey`;
+   * replay returns the original record without resetting `firstAcceptedAt`.
+   */
+  acceptRoutingReceipt(
+    input: AcceptRoutingReceiptInput,
+  ): Promise<AcceptRoutingReceiptResult>;
+
+  /**
+   * Routing receipts awaiting resolution: not terminal, not completed, and
+   * due (`nextAttemptAt` null or ≤ now), in acceptance order.
+   */
+  readDueRoutingReceipts(
+    now: number,
+    limit: number,
+  ): Promise<readonly RoutingReceiptRecord[]>;
+
+  /** Single routing receipt by id, in any state (completed/terminal included). */
+  getRoutingReceipt(routingId: string): Promise<RoutingReceiptRecord | undefined>;
+
+  /** Increment durable resolution attempts; null retryAt makes this failure terminal. */
+  recordRoutingReceiptFailure(
+    routingId: string,
+    error: string,
+    retryAt: number | null,
+  ): Promise<void>;
+
+  /**
+   * Record conversion progress: appended formal receipt ids are deduped
+   * (re-running conversion after a crash never duplicates), `complete` marks
+   * the intake fully resolved so it leaves the due set. The optional note
+   * documents outcomes that produce no formal receipt (e.g. no_match).
+   */
+  /**
+   * Freeze the per-scope interpretation (V14). Set-if-null: a concurrent or
+   * retried attempt never overwrites the first interpretation; the returned
+   * record carries the authoritative frozen value.
+   */
+  recordRoutingReceiptResolution(
+    routingId: string,
+    resolution: readonly FrozenScopeResolution[],
+    now: number,
+  ): Promise<RoutingReceiptRecord>;
+
+  recordRoutingReceiptConversion(
+    routingId: string,
+    input: {
+      readonly addedReceiptIds?: readonly string[];
+      readonly complete?: boolean;
+      readonly note?: string;
+    },
+    now: number,
+  ): Promise<RoutingReceiptRecord>;
 
   applyMetadataPage(
     input: ApplyMetadataPageInput,

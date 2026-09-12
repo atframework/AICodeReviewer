@@ -1,15 +1,20 @@
 import {
   createReviewEvent,
   hashStructured,
+  projectEventResolution,
   resolveAutoCommitPolicy,
   reviewProviderSchema,
   type AcceptReceiptResult,
+  type AcceptRoutingReceiptInput,
+  type AcceptRoutingReceiptResult,
   type AutoCommitStore,
   type AutoCommitVcsKind,
   type ReceiptCoverage,
   type ResolvedAutoCommitPolicy,
   type ReviewEvent,
+  type ReviewEventResolution,
   type ReviewProvider,
+  type WorkspaceResolution,
 } from "@aicr/core";
 import type { BatchExecutionContext } from "./auto-commit-scheduler.js";
 import {
@@ -33,11 +38,37 @@ export interface AutoCommitAcceptInput {
   readonly reviewEvent: ReviewEvent;
   /** Provider delivery id when the webhook supplied one. */
   readonly deliveryId?: string;
+  /** Frozen admission resolution snapshot persisted with the receipt (V14). */
+  readonly resolution?: WorkspaceResolution | null;
+  readonly now: number;
+}
+
+/**
+ * Routing-stage intake for sources whose workspace binding needs metadata
+ * unavailable at receive time (spec §5.2). Persisted before the 202; the
+ * background resolver converts it into formal receipts.
+ */
+export interface AutoCommitRoutingInput {
+  readonly provider: "p4" | "svn";
+  readonly triggerName: string;
+  /** Provider event name (change-commit/post-commit). */
+  readonly eventName: string;
+  /** Minimal replayable intake envelope (no credentials, no raw body). */
+  readonly envelope: {
+    readonly revision: string;
+    readonly depotPath?: string;
+    readonly user?: string;
+    readonly client?: string;
+    readonly files?: readonly string[];
+  };
+  /** Provider delivery id when the intake supplied one. */
+  readonly deliveryId?: string;
   readonly now: number;
 }
 
 export interface AutoCommitAcceptor {
   accept(input: AutoCommitAcceptInput): Promise<AcceptReceiptResult>;
+  acceptRouting?(input: AutoCommitRoutingInput): Promise<AcceptRoutingReceiptResult>;
 }
 
 type AutoCommitConfigLayer = Parameters<typeof resolveAutoCommitPolicy>[0];
@@ -174,8 +205,45 @@ export class AutoCommitRuntime implements AutoCommitAcceptor {
       },
       delaySeconds: policy.delaySeconds,
       policyVersion: policy.policyVersion,
+      ...(input.resolution !== undefined
+        ? { resolution: input.resolution }
+        : reviewEvent.resolution !== undefined
+          ? { resolution: reviewEvent.resolution.kind === "match" ? { ...reviewEvent.resolution, variables: {} } : reviewEvent.resolution }
+          : {}),
       now: input.now,
     });
+    this.onAccepted?.();
+    return result;
+  }
+
+  async acceptRouting(
+    input: AutoCommitRoutingInput,
+  ): Promise<AcceptRoutingReceiptResult> {
+    // The routing identity covers exactly the reported revision on this
+    // trigger profile; conversion derives formal delivery keys from the
+    // routing key (+ scope), so re-running conversion is idempotent (W14).
+    const routingKey = hashStructured([
+      "aicr-routing",
+      1,
+      input.provider,
+      input.triggerName,
+      input.envelope.depotPath ?? "",
+      input.deliveryId
+        ? ["delivery", input.deliveryId]
+        : ["coverage", input.envelope.revision],
+    ]);
+    const acceptInput: AcceptRoutingReceiptInput = {
+      routingKey,
+      provider: input.provider,
+      triggerName: input.triggerName,
+      // eventName rides inside the persisted envelope: the routing record
+      // has no dedicated column and the resolver needs it to rebuild the
+      // formal ReviewEvent.
+      envelope: { ...input.envelope, eventName: input.eventName },
+      ...(input.deliveryId !== undefined ? { parentDeliveryId: input.deliveryId } : {}),
+      now: input.now,
+    };
+    const result = await this.store.acceptRoutingReceipt(acceptInput);
     this.onAccepted?.();
     return result;
   }
@@ -199,6 +267,19 @@ export interface AutoCommitExecutionResult {
   readonly reviewRun: ReviewOrchestrationWebhookSummary;
   readonly startedAt: number;
   readonly durationMs: number;
+}
+
+/** Frozen receipt resolution projected onto the event snapshot (V14). */
+function eventResolutionFromReceipt(
+  resolution: WorkspaceResolution | null,
+): ReviewEventResolution | undefined {
+  if (resolution === null) {
+    return undefined;
+  }
+  if (resolution.kind === "legacy_binding" || resolution.kind === "match") {
+    return projectEventResolution(resolution);
+  }
+  return undefined;
 }
 
 /** Reconstruct routing from the sealed range and authoritative source evidence. */
@@ -248,6 +329,11 @@ export function reviewEventForBatch(
     ...(envelope.sourcePath ? { sourcePath: envelope.sourcePath } : {}),
     ...(batch.vcs === "p4" && known("client")
       ? { submitterWorkspace: known("client") }
+      : {}),
+    // V14: the frozen admission resolution travels with the receipt, so a
+    // restart never reinterprets the binding from later-edited config.
+    ...(eventResolutionFromReceipt(receipt.resolution) !== undefined
+      ? { resolution: eventResolutionFromReceipt(receipt.resolution) }
       : {}),
   });
 }

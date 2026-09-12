@@ -2,6 +2,7 @@ import { resolve } from "node:path";
 
 import {
   fixAndValidateMarkdown,
+  hashStructured,
   isPlainObject,
   createMultiProviderRateLimiter,
   createQueueFromConfig,
@@ -84,6 +85,8 @@ import {
 } from "@aicr/core";
 
 import type { VcsWebhookConfig } from "./webhook-common.js";
+import { RoutingReceiptResolver } from "./routing-resolver.js";
+import { createWorkspaceRuntime, type WorkspaceRuntime } from "./workspace-runtime.js";
 import type { P4TriggerConfig } from "./p4-webhook.js";
 import type { SvnTriggerConfig } from "./svn-webhook.js";
 import { GiteaApiClient } from "./issue-triage.js";
@@ -610,22 +613,34 @@ export function resolveGiteaWebhookConfig(
   config: AppConfig,
   triggerName?: string,
   appTokenServices?: ReadonlyMap<string, GithubAppTokenService>,
+  workspaceRuntime?: WorkspaceRuntime,
 ): VcsWebhookConfig | undefined {
-  const trigger = triggerName
-    ? config.triggers.find((t) => t.name === triggerName && (t.kind === "gitea" || t.kind === "forgejo"))
-    : config.triggers.find((t) => t.kind === "gitea" || t.kind === "forgejo");
+  return resolveGiteaLikeWebhookConfigs(config, "gitea", triggerName, appTokenServices, workspaceRuntime)[0];
+}
 
-  if (!trigger) {
-    return undefined;
-  }
-
-  return buildWebhookConfigFromTrigger(config, trigger, appTokenServices);
+/**
+ * Every gitea-like trigger profile of one kind (P1b: all profiles are
+ * selectable per request, not just the first). The gitea route additionally
+ * serves forgejo triggers for backward compatibility.
+ */
+export function resolveGiteaLikeWebhookConfigs(
+  config: AppConfig,
+  kind: "gitea" | "forgejo",
+  triggerName?: string,
+  appTokenServices?: ReadonlyMap<string, GithubAppTokenService>,
+  workspaceRuntime?: WorkspaceRuntime,
+): readonly VcsWebhookConfig[] {
+  const kinds: readonly string[] = kind === "gitea" ? ["gitea", "forgejo"] : ["forgejo"];
+  const triggers = config.triggers.filter((trigger) =>
+    kinds.includes(trigger.kind) && (triggerName === undefined || trigger.name === triggerName));
+  return triggers.map((trigger) => buildWebhookConfigFromTrigger(config, trigger, appTokenServices, workspaceRuntime));
 }
 
 function buildWebhookConfigFromTrigger(
   config: AppConfig,
   trigger: AppConfig["triggers"][number],
   appTokenServices?: ReadonlyMap<string, GithubAppTokenService>,
+  workspaceRuntime?: WorkspaceRuntime,
 ): VcsWebhookConfig {
   const triggerConfig = trigger as Record<string, unknown>;
   const webhookSecretEnv = triggerConfig.webhook_secret_env as string | undefined;
@@ -648,6 +663,9 @@ function buildWebhookConfigFromTrigger(
     ...(baseUrl !== undefined ? { baseUrl } : {}),
     ...(appTokenService ? { appTokenResolver: (installationId: number) => appTokenService.getInstallationToken(installationId) } : {}),
     ...(appTokenService ? { evictTokenCache: (installationId?: number) => appTokenService.evict(installationId) } : {}),
+    ...(workspaceRuntime?.isMatchReferenced(trigger.name)
+      ? { resolveWorkspace: (source, event) => workspaceRuntime.resolveForSource(trigger.name, source, event) }
+      : {}),
   };
 }
 
@@ -656,12 +674,13 @@ export function resolveGenericWebhookConfigs(
   kind: string,
   triggerName?: string,
   appTokenServices?: ReadonlyMap<string, GithubAppTokenService>,
+  workspaceRuntime?: WorkspaceRuntime,
 ): readonly VcsWebhookConfig[] {
   const triggers = triggerName
     ? config.triggers.filter((trigger) => trigger.name === triggerName && trigger.kind === kind)
     : config.triggers.filter((trigger) => trigger.kind === kind);
 
-  return triggers.map((trigger) => buildWebhookConfigFromTrigger(config, trigger, appTokenServices));
+  return triggers.map((trigger) => buildWebhookConfigFromTrigger(config, trigger, appTokenServices, workspaceRuntime));
 }
 
 export function resolveGenericWebhookConfig(
@@ -711,73 +730,107 @@ function resolveTriggerRetryConfig(config: AppConfig): TriggerRetryConfig | unde
   };
 }
 
+export function resolveP4TriggerConfigs(
+  config: AppConfig,
+  triggerName?: string,
+  workspaceRuntime?: WorkspaceRuntime,
+): readonly P4TriggerConfig[] {
+  const triggers = triggerName
+    ? config.triggers.filter((t) => t.name === triggerName && t.kind === "p4")
+    : config.triggers.filter((t) => t.kind === "p4");
+
+  return triggers.map((trigger): P4TriggerConfig => {
+    const triggerConfig = trigger as Record<string, unknown>;
+    const port = triggerConfig.port as string | undefined;
+    const userEnv = triggerConfig.user_env as string | undefined;
+    const ticketEnv = triggerConfig.ticket_env as string | undefined;
+    const passwordEnv = triggerConfig.password_env as string | undefined;
+    const user = userEnv ? resolveEnv(userEnv) : undefined;
+    const rawPassword = passwordEnv ? resolveEnv(passwordEnv) : ticketEnv ? resolveEnv(ticketEnv) : undefined;
+    const depot = triggerConfig.depot_path as string | undefined;
+    const streams = triggerConfig.streams as string[] | undefined;
+    const workspace = triggerConfig.workspace as string | undefined;
+    const watchPath = triggerConfig.watch_path as string[] | undefined;
+    const includeCrFile = triggerConfig.include_cr_file as string[] | undefined;
+    const excludeCrFile = triggerConfig.exclude_cr_file as string[] | undefined;
+
+    return {
+      triggerName: trigger.name,
+      workspaceId: resolveWorkspaceIdFromTrigger(config, trigger.name),
+      ...(port ? { port } : {}),
+      ...(user ? { user } : {}),
+      ...(rawPassword ? { password: rawPassword } : {}),
+      // depot stays the legacy single-scope fallback; streams keeps the full
+      // configured list so resolution/factory never truncate to the first.
+      ...(streams?.[0] ? { depot: streams[0] } : depot ? { depot } : {}),
+      ...(streams && streams.length > 0 ? { streams } : {}),
+      ...(workspace ? { workspace } : {}),
+      ...(watchPath ? { watchPath } : {}),
+      ...(includeCrFile ? { includeCrFile } : {}),
+      ...(excludeCrFile ? { excludeCrFile } : {}),
+      ...(workspaceRuntime?.isMatchReferenced(trigger.name)
+        ? { resolveWorkspace: (source, event) => workspaceRuntime.resolveForSource(trigger.name, source, event) }
+        : {}),
+    };
+  });
+}
+
 export function resolveP4TriggerConfig(
   config: AppConfig,
   triggerName?: string,
+  workspaceRuntime?: WorkspaceRuntime,
 ): P4TriggerConfig | undefined {
-  const trigger = triggerName
-    ? config.triggers.find((t) => t.name === triggerName && t.kind === "p4")
-    : config.triggers.find((t) => t.kind === "p4");
+  return resolveP4TriggerConfigs(config, triggerName, workspaceRuntime)[0];
+}
 
-  if (!trigger) {
-    return undefined;
+export function resolveSvnTriggerConfigs(
+  config: AppConfig,
+  triggerName?: string,
+  workspaceRuntime?: WorkspaceRuntime,
+): readonly SvnTriggerConfig[] {
+  const triggers = triggerName
+    ? config.triggers.filter((t) => t.name === triggerName && t.kind === "svn")
+    : config.triggers.filter((t) => t.kind === "svn");
+
+  const configs: SvnTriggerConfig[] = [];
+  for (const trigger of triggers) {
+    const triggerConfig = trigger as Record<string, unknown>;
+    const repositoryUrl = typeof triggerConfig.repository_url === "string"
+      ? triggerConfig.repository_url.trim()
+      : "";
+    if (!repositoryUrl) {
+      continue;
+    }
+    const rawRoots = Array.isArray(triggerConfig.project_roots)
+      ? (triggerConfig.project_roots as readonly Record<string, unknown>[])
+      : undefined;
+    const projectRoots = rawRoots
+      ?.filter((root) => typeof root?.prefix === "string" && typeof root?.project === "string")
+      .map((root) => ({
+        prefix: String(root.prefix),
+        project: String(root.project),
+        ...(typeof root.branch === "string" ? { branch: root.branch } : {}),
+      }))
+      .filter((root) => root.prefix.startsWith("/"));
+    configs.push({
+      triggerName: trigger.name,
+      workspaceId: resolveWorkspaceIdFromTrigger(config, trigger.name),
+      repositoryUrl,
+      ...(projectRoots && projectRoots.length > 0 ? { projectRoots } : {}),
+      ...(workspaceRuntime?.isMatchReferenced(trigger.name)
+        ? { resolveWorkspace: (source, event) => workspaceRuntime.resolveForSource(trigger.name, source, event) }
+        : {}),
+    });
   }
-
-  const triggerConfig = trigger as Record<string, unknown>;
-  const port = triggerConfig.port as string | undefined;
-  const userEnv = triggerConfig.user_env as string | undefined;
-  const ticketEnv = triggerConfig.ticket_env as string | undefined;
-  const passwordEnv = triggerConfig.password_env as string | undefined;
-  const user = userEnv ? resolveEnv(userEnv) : undefined;
-  const rawPassword = passwordEnv ? resolveEnv(passwordEnv) : ticketEnv ? resolveEnv(ticketEnv) : undefined;
-  const depot = triggerConfig.depot_path as string | undefined;
-  const streams = triggerConfig.streams as string[] | undefined;
-  const workspace = triggerConfig.workspace as string | undefined;
-  const watchPath = triggerConfig.watch_path as string[] | undefined;
-  const includeCrFile = triggerConfig.include_cr_file as string[] | undefined;
-  const excludeCrFile = triggerConfig.exclude_cr_file as string[] | undefined;
-
-  return {
-    triggerName: trigger.name,
-    workspaceId: resolveWorkspaceIdFromTrigger(config, trigger.name),
-    ...(port ? { port } : {}),
-    ...(user ? { user } : {}),
-    ...(rawPassword ? { password: rawPassword } : {}),
-    ...(depot ? { depot } : {}),
-    ...(streams?.[0] ? { depot: streams[0] } : {}),
-    ...(workspace ? { workspace } : {}),
-    ...(watchPath ? { watchPath } : {}),
-    ...(includeCrFile ? { includeCrFile } : {}),
-    ...(excludeCrFile ? { excludeCrFile } : {}),
-  };
+  return configs;
 }
 
 export function resolveSvnTriggerConfig(
   config: AppConfig,
   triggerName?: string,
+  workspaceRuntime?: WorkspaceRuntime,
 ): SvnTriggerConfig | undefined {
-  const trigger = triggerName
-    ? config.triggers.find((t) => t.name === triggerName && t.kind === "svn")
-    : config.triggers.find((t) => t.kind === "svn");
-
-  if (!trigger) {
-    return undefined;
-  }
-
-  const triggerConfig = trigger as Record<string, unknown>;
-  const repositoryUrl = typeof triggerConfig.repository_url === "string"
-    ? triggerConfig.repository_url.trim()
-    : "";
-
-  if (!repositoryUrl) {
-    return undefined;
-  }
-
-  return {
-    triggerName: trigger.name,
-    workspaceId: resolveWorkspaceIdFromTrigger(config, trigger.name),
-    repositoryUrl,
-  };
+  return resolveSvnTriggerConfigs(config, triggerName, workspaceRuntime)[0];
 }
 
 export function resolveAuthConfig(config: AppConfig): AuthConfig | undefined {
@@ -2103,14 +2156,19 @@ export function createVcsAdapterFromConfig(
         : undefined;
     const user = userEnv ? resolveEnv(userEnv) : undefined;
 
+    // Scope binding: the event repoRef is the authoritative depot scope
+    // (routing-derived receipts carry the per-scope depot path; legacy
+    // payloads may override depot_path). Configured depot/streams[0] is only
+    // the fallback when the event carries no usable scope.
+    const scopeDepot = repoRef !== undefined && repoRef.startsWith("//") ? repoRef : undefined;
+    const boundDepot = scopeDepot ?? streams?.[0] ?? depot;
     return createP4VcsAdapter({
       repositoryDir: resolve(repositoryDir),
       ...(port ? { port } : {}),
       ...(user ? { user } : {}),
       ...(password ? { password } : {}),
       ...(workspace ? { workspace } : {}),
-      ...(depot ? { depot } : {}),
-      ...(streams?.[0] ? { depot: streams[0] } : {}),
+      ...(boundDepot ? { depot: boundDepot } : {}),
       ...(watchPath ? { watchPath } : {}),
       ...(includeCrFile ? { includeCrFile } : {}),
       ...(excludeCrFile ? { excludeCrFile } : {}),
@@ -2135,9 +2193,21 @@ export function createVcsAdapterFromConfig(
     const excludeCrFile = triggerConfig.exclude_cr_file as string[] | undefined;
     const trustServerCert = triggerConfig.trust_server_cert === true;
 
+    // Scope binding: routing-derived svn events carry the project-root
+    // scope URL (repository_url + prefix) as repoRef; bind the adapter to
+    // it so log/diff run against the project scope, not the repo root.
+    const scopeUrl =
+      repoRef !== undefined && repositoryUrl !== undefined &&
+      (repoRef === repositoryUrl || repoRef.startsWith(`${repositoryUrl.replace(/\/+$/u, "")}/`))
+        ? repoRef
+        : undefined;
     return createSvnVcsAdapter({
       repositoryDir: resolve(repositoryDir),
-      ...(repositoryUrl ? { repositoryUrl } : {}),
+      ...(scopeUrl !== undefined
+        ? { repositoryUrl: scopeUrl }
+        : repositoryUrl !== undefined
+          ? { repositoryUrl }
+          : {}),
       ...(username ? { username } : {}),
       ...(password ? { password } : {}),
       ...(trustServerCert ? { trustServerCert } : {}),
@@ -2375,12 +2445,14 @@ export async function bootstrapServerApp(options: BootstrapServerOptions): Promi
   const { config, baseSystemPrompt, baseDir = process.cwd(), jobHandler } = options;
 
   const appTokenServices = await createAppTokenServices(config);
+  const workspaceRuntime = createWorkspaceRuntime(config, baseDir);
 
-  const giteaConfig = resolveGiteaWebhookConfig(config, undefined, appTokenServices);
-  const githubConfigs = resolveGenericWebhookConfigs(config, "github", undefined, appTokenServices);
-  const gitlabConfigs = resolveGenericWebhookConfigs(config, "gitlab");
-  const p4Config = resolveP4TriggerConfig(config);
-  const svnConfig = resolveSvnTriggerConfig(config);
+  const giteaConfigs = resolveGiteaLikeWebhookConfigs(config, "gitea", undefined, appTokenServices, workspaceRuntime);
+  const forgejoConfigs = resolveGiteaLikeWebhookConfigs(config, "forgejo", undefined, appTokenServices, workspaceRuntime);
+  const githubConfigs = resolveGenericWebhookConfigs(config, "github", undefined, appTokenServices, workspaceRuntime);
+  const gitlabConfigs = resolveGenericWebhookConfigs(config, "gitlab", undefined, undefined, workspaceRuntime);
+  const p4Configs = resolveP4TriggerConfigs(config, undefined, workspaceRuntime);
+  const svnConfigs = resolveSvnTriggerConfigs(config, undefined, workspaceRuntime);
 
   const adminAuthConfig = resolveAdminAuthConfig(config as unknown as Record<string, unknown>, resolveEnv);
   const catalogConfig = config.llm?.model_catalog;
@@ -2500,7 +2572,9 @@ export async function bootstrapServerApp(options: BootstrapServerOptions): Promi
     await catalogBackendToClose.close();
   }
 
-  const sourceRootResolver = buildSourceRootResolver(baseDir);
+  const sourceRootResolver = (reviewEvent: ReviewEvent): string =>
+    workspaceRuntime.layoutForEvent(reviewEvent).sourceRoot;
+  const runtimeDirsResolver = (reviewEvent: ReviewEvent) => workspaceRuntime.layoutForEvent(reviewEvent);
   const sandbox = await createSandboxBackendFromConfig(config);
   const agentAdapter = resolveAgentAdapterFromConfig(config);
 
@@ -2542,6 +2616,7 @@ export async function bootstrapServerApp(options: BootstrapServerOptions): Promi
       }
     },
     sourceRootResolver,
+    runtimeDirsResolver,
     vcs: createVcsAdapterFromConfig(config, baseDir),
     vcsFactory: async (sourceRoot: string, context: ReviewOrchestrationContext) => {
       const resolvedToken = await resolveTriggerTokenForContext(config, context, appTokenServices);
@@ -2729,22 +2804,26 @@ export async function bootstrapServerApp(options: BootstrapServerOptions): Promi
     baseDir,
     orchestrationOptions,
     appTokenServices,
+    workspaceRuntime,
     ...(store ? { reviewStore: store } : {}),
   });
 
   const triageOptions = resolveIssueTriageOptions(config, defaultTriageRoute.llm, defaultTriageRoute.model);
   const authConfig = resolveAuthConfig(config);
+  const giteaOption = toServerWebhookOption(giteaConfigs);
+  const forgejoOption = toServerWebhookOption(forgejoConfigs);
   const githubOption = toServerWebhookOption(githubConfigs);
   const gitlabOption = toServerWebhookOption(gitlabConfigs);
 
   const triggerRetry = resolveTriggerRetryConfig(config);
 
   return {
-    ...(giteaConfig ? { gitea: giteaConfig } : {}),
+    ...(giteaOption ? { gitea: giteaOption } : {}),
+    ...(forgejoOption ? { forgejo: forgejoOption } : {}),
     ...(githubOption ? { github: githubOption } : {}),
     ...(gitlabOption ? { gitlab: gitlabOption } : {}),
-    ...(p4Config ? { p4: p4Config } : {}),
-    ...(svnConfig ? { svn: svnConfig } : {}),
+    ...(p4Configs.length > 0 ? { p4: p4Configs } : {}),
+    ...(svnConfigs.length > 0 ? { svn: svnConfigs } : {}),
     reviewOrchestration: orchestrationOptions,
     ...(triageOptions ? { issueTriage: { ...triageOptions, modelOptionsResolver: triageModelOptionsResolver } } : {}),
     queue,
@@ -2880,13 +2959,14 @@ async function createAutoCommitPipeline(deps: {
   readonly orchestrationOptions: ServerReviewOrchestrationOptions;
   readonly reviewStore?: StoreDb;
   readonly appTokenServices?: ReadonlyMap<string, GithubAppTokenService>;
+  readonly workspaceRuntime: WorkspaceRuntime;
 }): Promise<{
   readonly runtime: AutoCommitRuntime;
   readonly scheduler: AutoCommitScheduler;
   readonly store: AutoCommitStore;
   readonly close: () => Promise<void>;
 }> {
-  const { config, baseDir, orchestrationOptions, appTokenServices } = deps;
+  const { config, orchestrationOptions, appTokenServices, workspaceRuntime } = deps;
   const store = await createAutoCommitStoreFromConfig(config);
   if (config.queue.kind === "memory" || config.queue.kind === "rabbitmq") {
     console.warn(JSON.stringify({
@@ -2934,13 +3014,11 @@ async function createAutoCommitPipeline(deps: {
       // re-fetches on every sync (alwaysFetch) and resolves GitHub App
       // installation tokens lazily per sync (tokenProvider) — a cached static
       // token expires after an hour and would break every later expansion.
-      const metadataDir = resolve(
-        baseDir,
-        "workspaces",
-        stream.workspaceId,
-        "source",
-        repoRef.replace(/[/:]/g, "_"),
-      );
+      // Metadata queries precede admission and have no branch/template
+      // context. Keep caches independent of event-dependent work_path.
+      const metadataDir = config.workspaces.instances[stream.workspaceId]?.match === undefined
+        ? workspaceRuntime.layoutForEvent({ triggerName: stream.triggerName, workspaceId: stream.workspaceId, repoRef }).sourceRoot
+        : resolve(workspaceRuntime.workspacesRoot, ".metadata", hashStructured([stream.triggerName, stream.workspaceId, stream.vcs, repoRef]));
       adapter = createVcsAdapterFromConfig(
         config,
         metadataDir,
@@ -2963,6 +3041,53 @@ async function createAutoCommitPipeline(deps: {
       : undefined;
   };
 
+  // Stage C resolver (spec §5.2): converts durable p4/svn routing receipts
+  // into formal receipts during the scheduler tick. Adapter lookups are
+  // cached per trigger — the p4/svn metadata queries hit the server
+  // directly, no per-scope adapter instances needed.
+  const routingAdapterCache = new Map<string, GitVcsAdapter | P4VcsAdapter | SvnVcsAdapter>();
+  const routingResolver = new RoutingReceiptResolver({
+    store,
+    config,
+    runtime,
+    workspaceRuntime,
+    adapterFor: (triggerName, provider) => {
+      if (provider !== "p4" && provider !== "svn") {
+        return undefined;
+      }
+      let adapter = routingAdapterCache.get(triggerName);
+      if (!adapter) {
+        const metadataDir = resolve(workspaceRuntime.workspacesRoot, ".metadata", hashStructured(["routing", triggerName, provider]));
+        adapter = createVcsAdapterFromConfig(config, metadataDir, triggerName, undefined, {});
+        routingAdapterCache.set(triggerName, adapter);
+      }
+      return adapter;
+    },
+    profileFor: (triggerName, provider) => {
+      if (provider === "p4") {
+        const profile = resolveP4TriggerConfigs(config, triggerName, workspaceRuntime)[0];
+        return profile
+          ? {
+              workspaceId: profile.workspaceId,
+              ...(profile.streams ? { scopes: profile.streams } : {}),
+              ...(profile.depot ? { depotPath: profile.depot } : {}),
+            }
+          : undefined;
+      }
+      if (provider === "svn") {
+        const profile = resolveSvnTriggerConfigs(config, triggerName, workspaceRuntime)[0];
+        return profile
+          ? {
+              workspaceId: profile.workspaceId,
+              repositoryUrl: profile.repositoryUrl,
+              ...(profile.projectRoots ? { projectRoots: profile.projectRoots } : {}),
+            }
+          : undefined;
+      }
+      return undefined;
+    },
+  });
+
   const executeBatch = createAutoCommitBatchExecutor({
     store,
     orchestrationOptions,
@@ -2982,6 +3107,7 @@ async function createAutoCommitPipeline(deps: {
     store,
     getPolicy: (workspaceId) => runtime.policyFor(workspaceId),
     getAdapter,
+    routingResolver,
     executeBatch,
     globalConcurrency: config.queue.workers?.concurrency ?? 1,
     perWorkspaceConcurrency: 1,

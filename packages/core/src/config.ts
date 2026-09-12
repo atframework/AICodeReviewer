@@ -4,6 +4,8 @@ import { parse as parseYaml } from "yaml";
 import { z } from "zod";
 
 import { reviewTargetKindSchema } from "./review-event.js";
+import { CONFIG_MATCHER_LIMITS, configMatcherSchema, reasoningEffortSchema } from "./config-format.js";
+import { validateWorkspaceDefinitions } from "./config-workspace.js";
 import { autoCommitConfigSchema, type AutoCommitConfig } from "./auto-commit-policy.js";
 import { pullRequestConfigSchema, type PullRequestConfig } from "./pull-request-policy.js";
 import { isPlainObject } from "./utils.js";
@@ -51,7 +53,6 @@ export const llmProviderSchema = z
   })
   .passthrough();
 
-export const reasoningEffortSchema = z.enum(["minimal", "low", "medium", "high", "max"]);
 
 /**
  * Request-level overrides on a single model-chain entry (spec §4.2). Accepted
@@ -670,6 +671,27 @@ export const workspaceAgentSelectionSchema = z
   })
   .strict();
 
+/**
+ * One workspace match rule (spec §5.1): rules are OR-ed; triggers/source
+ * conditions inside a rule are AND-ed; array triggers are OR-ed. At least one
+ * condition is required.
+ */
+export const workspaceMatchRuleSchema = z
+  .object({
+    id: z.string().min(1).optional(),
+    triggers: z.array(z.string().min(1)).min(1).optional(),
+    source: z.record(z.string().min(1), configMatcherSchema).optional(),
+  })
+  .strict()
+  .superRefine((rule, ctx) => {
+    if (rule.triggers === undefined && rule.source === undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "match rule must set at least one of triggers or source",
+      });
+    }
+  });
+
 export const workspaceInstanceSchema = z
   .object({
     model_chain: modelChainReferenceSchema.optional(),
@@ -681,6 +703,10 @@ export const workspaceInstanceSchema = z
       })
       .strict()
       .optional(),
+    // v2 multi-project form (spec §5.1); mutually exclusive with source_repo,
+    // enforced together with trigger references by validateWorkspaceDefinitions.
+    match: z.array(workspaceMatchRuleSchema).max(CONFIG_MATCHER_LIMITS.maxRulesPerGroup).optional(),
+    work_path: z.string().min(1).optional(),
     agent: workspaceAgentSelectionSchema.optional(),
     review: reviewSchema.optional(),
     outputs: workspaceOutputsSchema.optional(),
@@ -929,6 +955,11 @@ export const workspacesDefaultsSchema = z
 
 export const workspacesConfigSchema = z
   .object({
+    // Layout root for workspace instances (spec §5.5). Relative paths resolve
+    // against the server base directory; when unset the historical
+    // `<baseDir>/workspaces` root is used. Consumed by the runtime matcher
+    // wiring (P1b).
+    root: z.string().min(1).optional(),
     cache: workspacesCacheSchema.default({ max_total_gb: 50, eviction: "lru", ttl_days: 30 }),
     defaults: workspacesDefaultsSchema.default({}),
     instances: z.record(workspaceIdSchema, workspaceInstanceSchema).default({}),
@@ -1198,6 +1229,7 @@ export function parseConfigDocumentText(text: string, options?: ParseRawConfigOp
   const { document, changes } = convertLegacyConfigDocument(raw.root);
   const config = appConfigSchema.parse(document);
   assertNoSecretEnvIssues(config);
+  validateWorkspaceDefinitions(config);
   return {
     config,
     changes,
@@ -1220,3 +1252,5 @@ export async function loadWorkspaceConfigFile(path: string): Promise<WorkspaceCo
 }
 
 export { appConfigSchema, workspaceConfigFileSchema };
+
+export { reasoningEffortSchema };

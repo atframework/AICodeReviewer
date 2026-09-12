@@ -16,6 +16,15 @@ import {
 } from "../src/p4.js";
 import type { ChangeRange } from "../src/contracts.js";
 
+// L11: the effective client is `<workspace>-<sha256(root)[0:10]>`; fake
+// servers echo the received `-c` value, like a real p4d would.
+function clientFromArgs(args: readonly string[]): string {
+  const index = args.indexOf("-c");
+  return index >= 0 ? String(args[index + 1]) : "";
+}
+
+const derivedClientPattern = /^[A-Za-z0-9_-]+-[0-9a-f]{10}$/u;
+
 function createMockP4Runner(responses: Record<string, P4CommandResult>) {
   return async (args: readonly string[]): Promise<P4CommandResult> => {
     const key = args.join(" ");
@@ -848,7 +857,30 @@ Affected files ...
       expect(baseArgs).toContain("-u");
       expect(baseArgs).toContain("testuser");
       expect(baseArgs).toContain("-c");
-      expect(baseArgs).toContain("test-ws");
+      const client = baseArgs[baseArgs.indexOf("-c") + 1];
+      expect(client).toMatch(derivedClientPattern);
+      expect(client).toMatch(/^test-ws-/u);
+    });
+
+    it("derives one server client per (workspace, root) so parallel workspaces never share a Root (L11)", async () => {
+      const seen: string[] = [];
+      const mockP4: P4CommandRunner = async (args) => {
+        seen.push(String(args[args.indexOf("-c") + 1]));
+        return { stdout: describeOutput, stderr: "" };
+      };
+      const make = (repositoryDir: string) => new P4VcsAdapter({
+        repositoryDir, depot: "//depot/main", port: "perforce:1666", user: "u", workspace: "svc", p4: mockP4,
+      });
+
+      // Same configured workspace + same root → same client (restart reuse).
+      await make("/ws/alpha").listChanges(makeEvent());
+      await make("/ws/alpha").listChanges(makeEvent());
+      // Different roots → different clients: no run rewrites another's Root.
+      await make("/ws/beta").listChanges(makeEvent());
+
+      expect(seen[0]).toBe(seen[1]);
+      expect(seen[0]).not.toBe(seen[2]);
+      for (const client of seen) expect(client).toMatch(/^svc-[0-9a-f]{10}$/u);
     });
 
     it("passes configured password as P4PASSWD environment", async () => {
@@ -922,7 +954,11 @@ Affected files ...
     });
 
     const range = await adapter.listChanges(makeEvent());
-    expect(trustCalls).toEqual([["-p", "ssl:perforce:1666", "-u", "svc-aicr", "-c", "aicr-p4-main", "trust", "-y"]]);
+    expect(trustCalls).toHaveLength(1);
+    expect(trustCalls[0]!.slice(0, 4)).toEqual(["-p", "ssl:perforce:1666", "-u", "svc-aicr"]);
+    expect(trustCalls[0]![4]).toBe("-c");
+    expect(trustCalls[0]![5]).toMatch(derivedClientPattern);
+    expect(trustCalls[0]!.slice(6)).toEqual(["trust", "-y"]);
     expect(describeAttempts).toBe(2);
     expect(range.files).toContain("src/foo.cpp");
   });
@@ -1081,10 +1117,14 @@ Affected files ...
     });
 
     const range = await adapter.listChanges(makeEvent());
-    expect(trustCalls).toEqual([
-      ["-p", "ssl:perforce:1666", "-u", "svc-aicr", "-c", "aicr-p4-main", "trust", "-y"],
-      ["-p", "ssl:perforce:1666", "-u", "svc-aicr", "-c", "aicr-p4-main", "trust", "-y", "-f"],
-    ]);
+    expect(trustCalls).toHaveLength(2);
+    for (const [index, suffix] of [[0, ["trust", "-y"]], [1, ["trust", "-y", "-f"]]] as const) {
+      const call = trustCalls[index]!;
+      expect(call.slice(0, 4)).toEqual(["-p", "ssl:perforce:1666", "-u", "svc-aicr"]);
+      expect(call[4]).toBe("-c");
+      expect(call[5]).toMatch(derivedClientPattern);
+      expect(call.slice(6)).toEqual(suffix);
+    }
     expect(describeAttempts).toBe(2);
     expect(range.files).toContain("src/foo.cpp");
   });
@@ -1098,7 +1138,7 @@ Affected files ...
         describeAttempts += 1;
         if (describeAttempts === 1) {
           throw new Error(
-            "Command failed: p4 describe -s 12345\nClient 'aicr-p4-main' unknown - use 'client' command to create it.\n",
+            `Command failed: p4 describe -s 12345\nClient '${clientFromArgs(args)}' unknown - use 'client' command to create it.\n`,
           );
         }
         return { stdout: describeOutput, stderr: "" };
@@ -1121,13 +1161,16 @@ Affected files ...
 
     const range = await adapter.listChanges(makeEvent());
     expect(stdinCalls).toHaveLength(1);
-    expect(stdinCalls[0]!.args).toEqual([
-      "-p", "ssl:perforce:1666", "-u", "svc-aicr", "-c", "aicr-p4-main", "client", "-i",
-    ]);
-    expect(stdinCalls[0]!.stdin).toContain("Client: aicr-p4-main");
+    const clientArgs = stdinCalls[0]!.args;
+    expect(clientArgs.slice(0, 4)).toEqual(["-p", "ssl:perforce:1666", "-u", "svc-aicr"]);
+    expect(clientArgs[4]).toBe("-c");
+    const effectiveClient = clientArgs[5]!;
+    expect(effectiveClient).toMatch(derivedClientPattern);
+    expect(clientArgs.slice(6)).toEqual(["client", "-i"]);
+    expect(stdinCalls[0]!.stdin).toContain(`Client: ${effectiveClient}`);
     expect(stdinCalls[0]!.stdin).toContain("Owner: svc-aicr");
     expect(stdinCalls[0]!.stdin).toContain("Root: ");
-    expect(stdinCalls[0]!.stdin).toContain("\t//depot/main/... //aicr-p4-main/...");
+    expect(stdinCalls[0]!.stdin).toContain(`\t//depot/main/... //${effectiveClient}/...`);
     expect(describeAttempts).toBe(2);
     expect(range.files).toContain("src/foo.cpp");
   });
@@ -1138,7 +1181,7 @@ Affected files ...
     const p4: P4CommandRunner = async (args) => {
       if (args.join(" ").includes("describe")) {
         describeAttempts += 1;
-        throw new Error("Client 'aicr-p4-main' unknown - use 'client' command to create it.");
+        throw new Error(`Client '${clientFromArgs(args)}' unknown - use 'client' command to create it.`);
       }
       return { stdout: "", stderr: "" };
     };
@@ -1166,7 +1209,7 @@ Affected files ...
     const p4: P4CommandRunner = async (args) => {
       if (args.join(" ").includes("describe")) {
         describeAttempts += 1;
-        throw new Error("Client 'aicr-p4-main' unknown - use 'client' command to create it.");
+        throw new Error(`Client '${clientFromArgs(args)}' unknown - use 'client' command to create it.`);
       }
       return { stdout: "", stderr: "" };
     };
@@ -1194,7 +1237,7 @@ Affected files ...
     const p4: P4CommandRunner = async (args) => {
       if (args.join(" ").includes("describe")) {
         describeAttempts += 1;
-        throw new Error("Client 'aicr-p4-main' unknown - use 'client' command to create it.");
+        throw new Error(`Client '${clientFromArgs(args)}' unknown - use 'client' command to create it.`);
       }
       return { stdout: "", stderr: "" };
     };

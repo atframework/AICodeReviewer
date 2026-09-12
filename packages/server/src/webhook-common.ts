@@ -1,12 +1,21 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 
 import {
+  ConfigError,
   createReviewEvent,
+  projectEventResolution,
+  triggerKindToVcs,
+  workspaceAmbiguityError,
   type ReviewActor,
   type ReviewEvent,
   type ReviewProvider,
+  type WorkspaceResolution,
+  type WorkspaceResolutionEventContext,
+  type WorkspaceSourceValues,
 } from "@aicr/core";
 import { z } from "zod";
+
+import { branchFromGitRef, describeWebhookSource } from "./source-descriptors.js";
 
 export interface VcsWebhookConfig {
   readonly triggerName: string;
@@ -18,6 +27,15 @@ export interface VcsWebhookConfig {
   readonly baseUrl?: string;
   readonly appTokenResolver?: (installationId: number) => Promise<string>;
   readonly evictTokenCache?: (installationId?: number) => void;
+  /**
+   * Match-rule resolver bound to the validated config (P1b). Present when
+   * the trigger participates in `workspaces.instances.*.match` resolution;
+   * the receive path calls it after repo/repoMappings checks miss.
+   */
+  readonly resolveWorkspace?: (
+    source: WorkspaceSourceValues,
+    event?: WorkspaceResolutionEventContext,
+  ) => WorkspaceResolution;
 }
 
 export interface RepositoryWorkspaceMapping {
@@ -247,14 +265,75 @@ export function matchesWebhookRepo(config: VcsWebhookConfig, repoRef: string): b
   }) ?? false;
 }
 
-export function resolveWorkspaceIdForRepo(config: VcsWebhookConfig, repoRef: string): string {
+export interface WorkspaceIdResolutionContext {
+  readonly source?: WorkspaceSourceValues | undefined;
+  readonly event?: WorkspaceResolutionEventContext | undefined;
+}
+
+/**
+ * Resolves the workspace definition id for one repository. Legacy precedence
+ * is preserved exactly: trigger-level `repos[].match` mappings win, then the
+ * bootstrap-bound `workspaceId`. When neither applies and the trigger is
+ * match-referenced, `workspaces.instances.*.match` rules decide: a single
+ * hit resolves the definition, zero hits throw `repository_not_configured`
+ * (never the first workspace), several hits throw `ambiguous_route` (W07).
+ */
+export function resolveWorkspaceIdForRepo(
+  config: VcsWebhookConfig,
+  repoRef: string,
+  context?: WorkspaceIdResolutionContext,
+): string {
+  return resolveWorkspaceForRepo(config, repoRef, context).workspaceId;
+}
+
+/** The selected binding travels with the event through queueing and replay. */
+export function resolveWorkspaceForRepo(
+  config: VcsWebhookConfig,
+  repoRef: string,
+  context?: WorkspaceIdResolutionContext,
+): Pick<ReviewEvent, "workspaceId" | "resolution"> {
   const normalizedRepo = normalizeRepositoryRef(repoRef);
   const matched = config.repoMappings?.find((mapping) => {
     const normalizedMatch = normalizeRepositoryRef(mapping.match);
     return normalizedRepo === normalizedMatch || normalizedRepo.endsWith(`/${normalizedMatch}`);
   });
+  if (matched !== undefined) {
+    return { workspaceId: matched.workspace, resolution: { kind: "legacy_binding", definitionId: matched.workspace } };
+  }
 
-  return matched?.workspace ?? config.workspaceId;
+  // An explicit trigger-level repo binding always wins over match rules —
+  // the legacy contract routes repoRef-equal events to the bound workspace
+  // unconditionally.
+  if (config.repoRef !== undefined && normalizedRepo === normalizeRepositoryRef(config.repoRef)) {
+    return { workspaceId: config.workspaceId, resolution: { kind: "legacy_binding", definitionId: config.workspaceId } };
+  }
+
+  if (config.resolveWorkspace !== undefined && context?.source !== undefined) {
+    const resolution = config.resolveWorkspace(context.source, context.event);
+    switch (resolution.kind) {
+      case "legacy_binding":
+      case "match":
+        return { workspaceId: resolution.definitionId, resolution: projectEventResolution(resolution) };
+      case "ambiguous":
+        throw workspaceAmbiguityError(resolution.definitionIds);
+      case "no_match":
+        throw new ConfigError(
+          "repository_not_configured",
+          `Repository "${repoRef}" is not matched by any workspace rule for trigger "${config.triggerName}".`,
+        );
+      case "unbound":
+        break;
+      case "route_denied":
+        // Webhook flows never request an explicit route; a denied result
+        // here means the repository is outside every permitted rule.
+        throw new ConfigError(
+          "repository_not_configured",
+          `Repository "${repoRef}" is not permitted on trigger "${config.triggerName}".`,
+        );
+    }
+  }
+
+  return { workspaceId: config.workspaceId };
 }
 
 export function extractRefBranch(payload: Record<string, unknown>): string | undefined {
@@ -363,11 +442,16 @@ export function createPullRequestReviewEvent(
 ): ReviewEvent {
   const prLabels = extractLabelNames(parsed.pull_request.labels);
   const targetBranch = parsed.pull_request.base.ref;
+  const headBranch = extractPrBranch(parsed.pull_request) ?? null;
+  const vcs = triggerKindToVcs(provider) ?? "git";
 
   return createReviewEvent({
     triggerName: config.triggerName,
     provider,
-    workspaceId: resolveWorkspaceIdForRepo(config, parsed.repository.full_name),
+    ...resolveWorkspaceForRepo(config, parsed.repository.full_name, {
+      source: { vcs, repo_ref: parsed.repository.full_name, branch: headBranch, ref: null },
+      event: { ...describeWebhookSource(provider, parsed)?.event, base_branch: targetBranch ?? null, head_branch: headBranch },
+    }),
     targetKind: "pull_request",
     repoRef: parsed.repository.full_name,
     baseSha: parsed.pull_request.base.sha,
@@ -406,11 +490,16 @@ export function createPushReviewEvent(
   }
 
   const changedFiles = collectPushChangedFiles(parsed);
+  const rawRef = (parsed as Record<string, unknown>).ref;
+  const ref = typeof rawRef === "string" && rawRef.length > 0 ? rawRef : null;
+  const vcs = triggerKindToVcs(provider) ?? "git";
 
   return createReviewEvent({
     triggerName: config.triggerName,
     provider,
-    workspaceId: resolveWorkspaceIdForRepo(config, parsed.repository.full_name),
+    ...resolveWorkspaceForRepo(config, parsed.repository.full_name, {
+      source: { vcs, repo_ref: parsed.repository.full_name, branch: branchFromGitRef(ref ?? undefined), ref },
+    }),
     targetKind: "push",
     repoRef: parsed.repository.full_name,
     baseSha: parsed.before,
@@ -432,11 +521,14 @@ export function createIssueReviewEvent(
 ): ReviewEvent {
   const issueNumber = parsed.issue?.number;
   const issueLabels = extractLabelNames(parsed.issue?.labels);
+  const vcs = triggerKindToVcs(provider) ?? "git";
 
   return createReviewEvent({
     triggerName: config.triggerName,
     provider,
-    workspaceId: resolveWorkspaceIdForRepo(config, parsed.repository.full_name),
+    ...resolveWorkspaceForRepo(config, parsed.repository.full_name, {
+      source: { vcs, repo_ref: parsed.repository.full_name, branch: null, ref: null },
+    }),
     targetKind: "issue",
     repoRef: parsed.repository.full_name,
     author: normalizeActor(parsed.sender ?? parsed.issue?.user),
@@ -494,10 +586,15 @@ export async function translateIssueCommentReviewCommand(
     }
   }
 
+  const vcs = triggerKindToVcs(provider) ?? "git";
+
   return createReviewEvent({
     triggerName: config.triggerName,
     provider,
-    workspaceId: resolveWorkspaceIdForRepo(config, parsed.repository.full_name),
+    ...resolveWorkspaceForRepo(config, parsed.repository.full_name, {
+      source: { vcs, repo_ref: parsed.repository.full_name, branch: branch ?? null, ref: null },
+      event: { base_branch: targetBranch ?? null, head_branch: branch ?? null },
+    }),
     targetKind: "pull_request",
     repoRef: parsed.repository.full_name,
     ...(baseSha ? { baseSha } : {}),

@@ -36,13 +36,19 @@ Workspace 多工程匹配、数据库配置管理与自动迁移的新方案见
 
 - 工作目录以 `workspaces/<workspace_id>/` 扁平布局组织。
 - 每个 workspace 自包含 `source/`、`agent/`、`tmp/` 等运行目录。
+- 运行隔离是硬合同（L09）：每次 run 的所有可变状态写入单一 `runs/<runId>/` 根
+  （source/agent/tmp/context-repos），共享 sourceRoot 只作仓库缓存；同工程并行 run
+  互不覆盖。布局目录经 symlink/junction 越界校验（执行前与物化后各一次，L08）；
+  崩溃遗留的 run 目录由引用保护 + 24h 陈旧阈值回收（L12），活动 run 永不误删。
 - 克隆隔离是硬合同：仓库克隆固定在 `workspaces/<workspace_id>/source/<repo 清洗名>/`
   （`buildSourceRootResolver`，`/`、`:` 清洗为 `_`），git 子模块缓存在其旁的
   `source/.aicr-submodules/<url hash>/`，run 物化、context-repos、agent/tmp 全部派生自同一
   workspace 根。任何按 trigger+repo 缓存 adapter 或目录的结构都必须把 workspaceId 计入键；
   两个 workspace 监听同一仓库时各自持有独立克隆，互不读写。P4/SVN 元数据走服务端命令
-  （`changes`/`log`/`diff2`/`print`），不在本地落代码；P4 client 名由 trigger 配置显式指定，
-  多个 AICR workspace 共用一个 p4 trigger 时应为各自配置不同的 client 名。
+  （`changes`/`log`/`diff2`/`print`），不在本地落代码；P4 client 名按 trigger 配置的
+  `workspace` 值加 client root 哈希后缀派生（`<workspace>-<sha256(root)[:10]>`），同一
+  (workspace, root) 重启复用、不同 root 永不共享 server 端 client spec，多实例/多主机
+  共用一个 p4d 时也不会互改 Root（L11）。
 - AI 维护资产分三层：
   - 平台/产品内置层
   - 用户/运营公共层
@@ -64,7 +70,8 @@ Workspace 多工程匹配、数据库配置管理与自动迁移的新方案见
 - 入站面包含：`/webhooks/*`、`/triggers/*`、手工触发、定时触发。
 - 所有入口都应收敛到统一 `ReviewEvent`，避免在公共模块暴露平台私有字段名。
 - 触发器需要在**鉴权/签名校验通过后**再创建 run。
-- GitHub / GitLab 这类共享 webhook 路由允许挂多个同类 trigger profile；服务端需要先按请求凭据确认候选 trigger，再按仓库标识选择最终 profile，避免把不同仓库的 secret、token 或过滤规则混用。仓库过滤不只发生在多 profile 场景：只要任一 profile 声明了 `repos`（或解析出单仓库 `repoRef`）约束，单个 profile 也会按仓库标识执行白名单过滤，未列出的仓库在签名校验通过后返回 `202 repository_not_configured`；只有完全未声明仓库约束的 profile 才作为 catch-all 接收全部仓库事件。
+- Git 系四类 webhook(GitHub/GitLab/Gitea/Forgejo)都允许挂多个同类 trigger profile;服务端先按请求凭据确认候选 profile,再按仓库标识与 workspace `match` 规则选择,避免把不同仓库的 secret、token 或过滤规则混用。GitHub/GitLab 的历史语义:只要任一 profile 声明了 `repos`(或解析出单仓库 `repoRef`)约束,单个 profile 也按仓库白名单过滤,未列出的仓库在签名校验通过后返回 `202 repository_not_configured`;完全未声明约束的 profile 作为 catch-all。Gitea/Forgejo 的历史单 profile 路由不做仓库过滤,该语义保留:只有声明了 `match` 规则(经 `resolveWorkspace` 解析器)或同路由挂多个 profile 时才执行范围过滤。
+- workspace `match` 规则执行两阶段准入:接受阶段在签名校验后用验证过的 payload 构造来源描述符并解析定义——无命中返回 `202 repository_not_configured`,多个 definition 命中返回 `202 ambiguous_route`,两者都经 `recordWebhookEvent` 记为 `ignored`;单命中把 `WorkspaceResolution` 的 definition 与 binding（instanceId、workPath）随 `ReviewEvent.resolution` 固定,执行期复用绑定路径,同一 `work_path` 模板对同一事件必须渲染出同一路径。显式 `source_repo`/`repos[].match` 绑定优先于 `match` 规则(legacy 优先级不变);`match` 与 `source_repo` 互斥由 schema 保证。
 - Review request 事件属于主动 re-review 入口：GitHub `pull_request` 的 `review_requested` action 与 Gitea/Forgejo `pull_request_review_request` 的 `review_requested` action 都归一为 PR `ReviewEvent`；`review_request_removed` 不创建 review run。
 - Webhook 实现必须保持平台边界清晰：共用签名校验、repo mapping、payload schema 与 ReviewEvent 构造放在 `packages/server/src/webhook-common.ts`；Gitea/Forgejo、GitHub、GitLab 的事件语义分别放在对应平台文件；`webhook-translator.ts` 只负责按 provider 分发。
 - 当开启 async 语义时，入口应尽快返回 `202` 与 `runId`，后台完成 review。
@@ -72,7 +79,7 @@ Workspace 多工程匹配、数据库配置管理与自动迁移的新方案见
 - P4 trigger 只负责最小 metadata POST；服务端负责拉取和补足 diff/describe。
 - SVN trigger 同样只负责最小 metadata POST（revision、author、可选 changed_files）；服务端使用配置的 `repository_url` 与 `svn diff --summarize` / `svn cat` 拉取实际 diff。
 - 提交者可见元数据必须来自事件或 provider/VCS 查询结果，不能回退成分析用 workspace 或 agent 本地环境。
-- **Issue triage 仅支持 Gitea/Forgejo 且必须按事件 provider 族门控**：`resolveIssueTriageOptions`（`packages/server/src/bootstrap.ts`）只构造单个 `GiteaApiClient`（同时兼容 Gitea 与 Forgejo），因此 `packages/server/src/index.ts` 的 triage 分支只在 issue 事件的 `provider` 属于 `"gitea"`/`"forgejo"` 时执行，跳过 GitHub/GitLab/P4/SVN。门控依据**事件 provider 族**，而不是 trigger `kind` 派生的标签：Forgejo-kind trigger 实际由 `/webhooks/gitea` 路由提供服务（`options.forgejo` 从不填充，只填充 `options.gitea`），其事件带 `provider: "gitea"`，用 trigger kind 做相等比较会静默跳过 Forgejo triage。否则 GitHub/GitLab/P4 的 issue 事件会被 Gitea 客户端处理，指向内部不可达或语义不兼容的 URL，每次都以 `issue_triage_failed` / `fetch failed` 失败。当前不存在 GitHub triage 客户端，未新增对应 client 前不要把非 Gitea workspace 接入 triage。
+- **Issue triage 仅支持 Gitea/Forgejo 且必须按事件 provider 族门控**：`resolveIssueTriageOptions`（`packages/server/src/bootstrap.ts`）只构造单个 `GiteaApiClient`（同时兼容 Gitea 与 Forgejo），因此 `packages/server/src/index.ts` 的 triage 分支只在 issue 事件的 `provider` 属于 `"gitea"`/`"forgejo"` 时执行，跳过 GitHub/GitLab/P4/SVN。门控依据**事件 provider 族**，而不是 trigger `kind` 派生的标签：早期版本 Forgejo-kind trigger 只由 `/webhooks/gitea` 路由服务且事件带 `provider: "gitea"`；现在 forgejo profile 注册进 `/webhooks/forgejo`(事件 `provider: "forgejo"`),旧 gitea 路由上的 Forgejo 部署仍上报 `provider: "gitea"`——用 trigger kind 做相等比较会静默跳过 Forgejo triage。否则 GitHub/GitLab/P4 的 issue 事件会被 Gitea 客户端处理，指向内部不可达或语义不兼容的 URL，每次都以 `issue_triage_failed` / `fetch failed` 失败。当前不存在 GitHub triage 客户端，未新增对应 client 前不要把非 Gitea workspace 接入 triage。
 
 #### 3.1.1 Review 去重与合并
 
@@ -92,6 +99,21 @@ Workspace 多工程匹配、数据库配置管理与自动迁移的新方案见
   成功返回 202 与 `processing.receiptId`（`runId` 同值，语义为接收回执编号），持久化失败返回
   可重试 503；PR/评论/issue/手工路径仍走直接处理，不写入 receipt。deliveryKey 始终哈希 provider、事件、trigger、
   workspace、repo、scope 与投递头（无投递头时使用 coverage），同一投递可分别进入多个 workspace。
+- 路由准入（p4/svn 多 scope，2026-09-12 实现核验）：match 引用的 p4/svn trigger 不在 HTTP 内联
+  抓取元数据；路由按 `(provider, triggerName, revision)` 幂等写入 routing receipt（202 返回
+  `processing.routingIds`，重投递返回原记录），profile 与提交摘要不一致时 202
+  `repository_not_configured`。调度 tick 先跑 `RoutingReceiptResolver`
+  （`packages/server/src/routing-resolver.ts`）：以 `listCommitMetadataPage` 有界拉取该 CL/r 的
+  元数据（P4 查询全部配置 scope，描述路径缺失或截断阻断转换），按 p4 streams∩变更路径、svn project_roots∩变更路径切分 scope；无交集不回退第一 scope 或仓库根，经
+  `WorkspaceRuntime.resolveForSource` 解析后用 delivery id `routing:{routingKey}:{scopeRef}`
+  调 `AutoCommitRuntime.accept`——HTTP 重放、调度重放、跨进程重复全部塌缩为同一正式 receipt
+  （W14）。`no_match`/`ambiguous`/profile 移除以 note 完成路由记录，不丢弃、不谎报接收；
+  元数据失败按指数退避重试，预算耗尽转 terminal 且记录可查（W13）。逐 scope 解释在首次
+  到达 workspace 解析时与验证后的 ReviewEvent 一并固化进 routing receipt（`recordRoutingReceiptResolution`
+  set-if-null，V14）：已固化事件重试时不再查 VCS；持久 routing retry 计入三后端 readNextWake。配置变更不导致同一 intake 前后
+  绑定到不同 workspace。resolution 固定进
+  receipt 与 ReviewEvent（`resolution` 字段），执行目录由 `layoutForEvent` 直接使用固定结果，
+  不再依赖接收与执行之间的配置不变性。legacy 单 profile 路由保持逐字节旧行为。
 - 存储：`createAutoCommitStoreFromConfig` 跟随 `queue.kind` 选择 memory/SQLite/Redis 后端；
   memory 的非持久性在启动日志显式可见。receipt/成员/批次/租约/outbox 合同在
   `packages/core/src/auto-commit-store.ts`，三后端共享 conformance 场景。
@@ -713,9 +735,33 @@ AICR 采用**两层上下文管理**，两者互补：
   `unset` 只移除数据库 override，文件有效值保持不变。
 - `config-format.ts` 提供版本、错误码、revision、matcher 形状与实例身份的纯合同；
   matcher 编译、路径 AST、存储 CAS、引用完整性、API 和热发布仍待后续阶段。
-  `config-components.ts` 的 U24 检查声明字段、默认值和实体所有权；passthrough 清单
-  尚不能替代类型化能力校验。模型条目 `overrides` 只接受请求字段且尚未接线。
+  `config-components.ts` 的 U24 检查声明字段、默认值和实体所有权。
+  `config-capabilities.ts` 在 `validateDatabaseDocument` 发布路径上执行已知 passthrough
+  字段的类型化 DTO 校验与 kind×字段能力检查：9 种可发布 channel kind、provider 连接字段
+  按 vertex_ai/bedrock/anthropic 归组、trigger 文件过滤与 `app` 按 kind 限定、
+  `resolved_action` 逐 kind 取值；错误码 `invalid_field_type` / `unsupported_capability`,
+  未知扩展键保留不拒绝。catalog 提示键与字段清单 parity 由测试锁定。
+  模型条目 `overrides` 只接受请求字段且尚未接线。
   设计与阶段边界见[workspace 配置设计](../superpowers/specs/2026-09-11-workspace-config-management.md)。
+- P1a 的 `config-matcher.ts` 把 RE2/glob 编译收敛为共享纯函数(`auto-commit-exclusion` 行为
+  不变,`autoCommitGlobToRegexSource` 为共享实现别名),新增 exact matcher 与来源字段目录
+  (`vcs`/`repo_ref`/`repository`/`namespace`/`project_key`/`branch`/`ref`);`config-path-template.ts`
+  提供隔离 Handlebars 实例、AST 白名单(仅 `segment`/`default`/`hash`/`lower`,禁 block/partial/
+  lookup/原型/this)与渲染输出校验(相对路径、禁 `..`/绝对/盘符/UNC/反斜杠);`config-workspace.ts`
+  提供 match 校验(`source_repo` 互斥、trigger 引用、相同规则歧义、规则/字节预算)、
+  `WorkspaceBinding`(instance_id = sha256(definition/trigger/vcs/canonicalProjectKey))与
+  `legacy_v1`/`isolated_v2` 布局(legacy 镜像现行 `workspaces/<id>/source/<repoRef_>` 派生)。
+  schema 新增 `workspaces.instances.*.match[]/work_path` 与 `workspaces.root`,错误码新增
+  `matcher_invalid`/`template_invalid`/`match_rule_invalid`。
+- P1b 起 git 系 webhook 的运行时匹配已接线:`packages/core/src/config-resolution.ts` 定义
+  来源变量/主机字段与解析矩阵（legacy 绑定优先、规则 OR/字段 AND；多定义命中报歧义）,
+  `source-descriptors.ts` 只从签名校验后的 payload 提取 GitHub/GitLab/Gitea/Forgejo 描述符
+  (tag ref 的 branch 为 null、GitLab namespace 保留子组),`workspace-runtime.ts` 统一
+  admission/翻译/执行三处的布局解析(`isolated_v2` = `workspaces.root`/`work_path`/`instance_id`,
+  段编码后实例根仍带 sha256 后缀;布局合同为 `/` 分隔,runtime 边界转主机分隔符)。
+  布局经 `ReviewEvent.resolution.binding` 传到 orchestrator；match 元数据缓存独立位于
+  `.metadata/<hash>`，legacy 缓存保持原位置。`p4.*`/`svn.*`/`scheduled.*` 仍不可用，
+  `manual.*` 的三个字段来自受信 CLI 输入。HOME 隔离与旧 prompts/skills 全部回退仍待验收。
 - `workspaces` 采用三段式：
   - `workspaces.cache`
   - `workspaces.defaults`

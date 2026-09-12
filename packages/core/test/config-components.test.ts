@@ -125,8 +125,22 @@ describe("collectSchemaFieldPaths", () => {
   it("fails closed on schema constructs it does not understand", () => {
     const weird = z.object({ u: z.discriminatedUnion("kind", [z.object({ kind: z.literal("a") })]) });
     expect(() => collectSchemaFieldPaths(weird)).toThrow(TypeError);
-    const strictUnion = z.object({ u: z.union([z.object({ a: z.string() }).strict(), z.string()]) });
-    expect(() => collectSchemaFieldPaths(strictUnion)).toThrow(TypeError);
+    const nestedUnion = z.object({
+      u: z.union([z.object({ a: z.object({ b: z.string() }).strict() }).strict(), z.object({ c: z.string() }).strict()]),
+    });
+    expect(() => collectSchemaFieldPaths(nestedUnion)).toThrow(TypeError);
+  });
+
+  it("classifies unions of primitive-only strict objects as value leaves", () => {
+    const matcherLike = z.object({
+      u: z.union([
+        z.object({ exact: z.string() }).strict(),
+        z.object({ glob: z.string(), ignore_case: z.boolean().optional() }).strict(),
+      ]),
+    });
+    const leaves = collectSchemaFieldPaths(matcherLike);
+    expect(leaves.map((leaf) => leaf.path)).toEqual(["u"]);
+    expect(leaves[0]?.typeName).toBe("union");
   });
 
   it("captures enum options and inherited object-level defaults", () => {

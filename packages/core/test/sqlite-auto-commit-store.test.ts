@@ -210,11 +210,13 @@ describe("createSqliteAutoCommitStore persistence", () => {
       ALTER TABLE auto_commit_receipts DROP COLUMN metadata_attempts;
       ALTER TABLE auto_commit_receipts DROP COLUMN metadata_next_attempt_at;
       ALTER TABLE auto_commit_receipts DROP COLUMN metadata_terminal_error;
+      ALTER TABLE auto_commit_receipts DROP COLUMN resolution;
       ALTER TABLE auto_commit_stream_heads DROP COLUMN latest_receipt_seq;
       ALTER TABLE auto_commit_stream_heads DROP COLUMN assembly_cut_seq;
       ALTER TABLE auto_commit_stream_heads DROP COLUMN assembly_at;
       ALTER TABLE auto_commit_stream_heads DROP COLUMN resume_not_before;
       ALTER TABLE auto_commit_batches DROP COLUMN execution_checkpoint;
+      DROP TABLE auto_commit_routing_receipts;
     `);
     raw
       .prepare(`UPDATE auto_commit_meta SET schema_version = 1 WHERE id = 1`)
@@ -247,6 +249,8 @@ describe("createSqliteAutoCommitStore persistence", () => {
         raw.exec(
           "ALTER TABLE auto_commit_batches DROP COLUMN execution_checkpoint",
         );
+      raw.exec("ALTER TABLE auto_commit_receipts DROP COLUMN resolution");
+      raw.exec("DROP TABLE auto_commit_routing_receipts");
       raw.exec("UPDATE auto_commit_meta SET schema_version = 3 WHERE id = 1");
       raw.close();
       const migrated = await openStore(first.dir);
@@ -257,7 +261,22 @@ describe("createSqliteAutoCommitStore persistence", () => {
       const verify = new Database(first.dbPath);
       expect(
         verify.prepare("SELECT schema_version FROM auto_commit_meta").get(),
-      ).toEqual({ schema_version: 4 });
+      ).toEqual({ schema_version: 6 });
+      expect(
+        verify.prepare("PRAGMA table_info(auto_commit_receipts)").all(),
+      ).toEqual(
+        expect.arrayContaining([expect.objectContaining({ name: "resolution" })]),
+      );
+      expect(
+        verify
+          .prepare("SELECT name FROM sqlite_master WHERE name = 'auto_commit_routing_receipts'")
+          .all(),
+      ).toHaveLength(1);
+      expect(
+        verify.prepare("PRAGMA table_info(auto_commit_routing_receipts)").all(),
+      ).toEqual(
+        expect.arrayContaining([expect.objectContaining({ name: "resolution" })]),
+      );
       expect(
         verify.prepare("PRAGMA table_info(auto_commit_batches)").all(),
       ).toEqual(

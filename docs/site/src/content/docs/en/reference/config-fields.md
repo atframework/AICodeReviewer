@@ -119,6 +119,7 @@ Narrative: [Configuration overview](/en/configuration/overview/).
 
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
+| `workspaces.root` | string | — | Layout root for workspace instances; relative paths resolve against the server base directory. Default: `<baseDir>/workspaces` |
 | `workspaces.cache.max_total_gb` | number > 0 | `50` | Max total workspace cache size in GB |
 | `workspaces.cache.eviction` | enum | `lru` | Eviction policy: `lru`, `mru`, `ttl` |
 | `workspaces.cache.ttl_days` | int > 0 | `30` | TTL in days for `ttl` eviction |
@@ -147,6 +148,14 @@ Narrative: [Configuration overview](/en/configuration/overview/).
 | `workspaces.instances` | map | `{}` | Per-workspace instances keyed by workspace id |
 | `workspaces.instances.<id>.source_repo.trigger` | string | — | Trigger profile name |
 | `workspaces.instances.<id>.source_repo.repo` | string | — | Repository reference |
+| `workspaces.instances.<id>.match[]` | array | — | Multi-project match rules (OR-ed; fields within a rule are AND-ed). Mutually exclusive with `source_repo`. Admission-time matching is live for git webhooks (GitHub/GitLab/Gitea/Forgejo); P4/SVN use background routing receipts (see note below) |
+| `workspaces.instances.<id>.match[].id` | string | — | Optional rule id; unique per definition |
+| `workspaces.instances.<id>.match[].triggers` | string[] | — | Trigger profile names; every name must exist in `triggers[]` |
+| `workspaces.instances.<id>.match[].source.<id>.exact` | string | — | Case-sensitive plain equality on the source field (`vcs`, `repo_ref`, `repository`, `namespace`, `project_key`, `branch`, or `ref`); exactly one of `exact` / `glob` / `regex` per matcher |
+| `workspaces.instances.<id>.match[].source.<id>.glob` | string | — | Full-field glob; `*` crosses `/`, `?` matches one code point; no extglob/brace/class semantics |
+| `workspaces.instances.<id>.match[].source.<id>.regex` | string | — | RE2 regex; substring match unless anchored with `^` / `$` |
+| `workspaces.instances.<id>.match[].source.<id>.ignore_case` | boolean | — | Case folding for matching only; never rewrites identity |
+| `workspaces.instances.<id>.work_path` | string | — | Handlebars path template (whitelisted AST: `segment`/`default`/`hash`/`lower` helpers only; output must be a relative `/` path). Requires `match`. Default: `{{workspace.id}}` |
 | `workspaces.instances.<id>.model_chain` | string | inherit | Main-group override referencing `llm.model_chain` |
 | `workspaces.instances.<id>.triage_model_chain` | string | inherit | Lifecycle-group override; if absent at all layers, uses this workspace's main group |
 | `workspaces.instances.<id>.agent.default` | enum | — | Agent kind override (no runtime effect yet, see note below) |
@@ -174,6 +183,32 @@ Narrative: [Configuration overview](/en/configuration/overview/).
 Workspace ids must not collide with the reserved keys `cache`, `defaults`,
 `instances`. When an instance defines its own `context_repositories`, the list
 replaces `workspaces.defaults` wholesale instead of merging per entry.
+
+:::note[Multi-project matching and isolated directories]
+GitHub/GitLab/Gitea/Forgejo verify credentials before matching. Source repository
+and namespace preserve subgroup paths. No rule hit returns
+`202 repository_not_configured`; multiple definition hits return
+`202 ambiguous_route`. A hit pins its binding on the event and automatic-commit
+receipt. Execution reuses that binding after configuration changes.
+
+P4/SVN match profiles persist a routing receipt before returning 202. Background
+resolution intersects configured scopes with verified changed paths. Missing or
+truncated path evidence retries; events outside configured scopes produce no
+review. Frozen events replay without querying VCS again.
+
+Matched instances use `workspaces.root/work_path/instance_id`, with each run's
+source/agent/tmp/context-repos under `runs/<runId>/`. Cleanup follows the entire
+review, including model fallback and follow-ups. Legacy cache paths stay intact;
+match metadata caches use `.metadata/<hash>`. HOME isolation is not complete.
+
+Templates allow only `segment/default/hash/lower`. Wrap `default` inside
+`segment/hash` and provide a literal fallback; hash arguments are rejected.
+Provider variables must exist for every matched trigger kind. Rendered paths
+are limited to 4096 UTF-8 bytes and each segment to 255; Windows device names
+(including extensions), reserved characters and trailing dots/spaces are rejected.
+The three `manual.*` fields come from trusted CLI input. `p4.*`, `svn.*` and
+`scheduled.*` descriptors remain unavailable; `event.*` is forbidden in paths.
+:::
 
 :::note[Workspace-layer `agent.default` / `sandbox` have no effect yet]
 The schema accepts `agent.default` and `sandbox` under `workspaces.defaults`

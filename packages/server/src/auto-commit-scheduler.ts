@@ -75,6 +75,12 @@ export interface AutoCommitSchedulerOptions {
   readonly dispatchRetryBaseMs?: number;
   /** Workspace/stream heads scanned per tick (bounded, never full scans). */
   readonly streamScanLimit?: number;
+  /**
+   * Routing-stage resolver (spec §5.2 stage C): converts pending p4/svn
+   * routing receipts into formal receipts before expansion runs. Returns
+   * the earliest pending retryAt for precise re-arming.
+   */
+  readonly routingResolver?: { resolveDue(now: number): Promise<number | undefined> };
   /** Idle safety poll when no wake signal exists (not per-item polling). */
   readonly idlePollMs?: number;
   readonly globalConcurrency?: number;
@@ -121,10 +127,12 @@ export class AutoCommitScheduler {
   private readonly store: AutoCommitStore;
   private readonly getPolicy: AutoCommitSchedulerOptions["getPolicy"];
   private readonly getAdapter: AutoCommitSchedulerOptions["getAdapter"];
+  private readonly routingResolver: AutoCommitSchedulerOptions["routingResolver"];
   private readonly executeBatch: AutoCommitSchedulerOptions["executeBatch"];
   private readonly now: () => number;
   private readonly options: SchedulerTuning;
   private timer: NodeJS.Timeout | null = null;
+  private routingWake: number | undefined = undefined;
   private running = false;
   private ticking = false;
   private pendingKick = false;
@@ -135,6 +143,7 @@ export class AutoCommitScheduler {
     this.store = options.store;
     this.getPolicy = options.getPolicy;
     this.getAdapter = options.getAdapter;
+    this.routingResolver = options.routingResolver;
     this.executeBatch = options.executeBatch;
     this.now = options.now ?? Date.now;
     this.options = {
@@ -227,6 +236,11 @@ export class AutoCommitScheduler {
     });
     try {
       const now = this.now();
+      // Stage C first: routing receipts become formal receipts the same
+      // tick, so p4/svn admissions reach expansion without extra latency.
+      // A routing failure must never kill the tick loop (F10); per-record
+      // retries are already persisted by the resolver.
+      this.routingWake = await this.routingResolver?.resolveDue(now).catch(() => undefined);
       await this.store.reclaimExpiredBatchLeases(
         now,
         this.options.streamScanLimit,
@@ -240,8 +254,14 @@ export class AutoCommitScheduler {
           this.arm(0);
         } else {
           const wake = await this.store.readNextWake().catch(() => undefined);
+          const storeWake = wake ? wake.at - this.now() : undefined;
+          const routingWake = this.routingWake !== undefined ? this.routingWake - this.now() : undefined;
+          const delay =
+            storeWake === undefined ? routingWake
+            : routingWake === undefined ? storeWake
+            : Math.min(storeWake, routingWake);
           this.arm(
-            wake ? Math.max(0, wake.at - this.now()) : this.options.idlePollMs,
+            delay !== undefined ? Math.max(0, delay) : this.options.idlePollMs,
           );
         }
       } finally {

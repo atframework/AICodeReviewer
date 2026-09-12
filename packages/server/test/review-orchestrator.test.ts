@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { existsSync } from "node:fs";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -99,6 +100,40 @@ function createVcs(sourceRoot: string): DiffCapableVcsAdapter {
 }
 
 describe("runReviewOrchestration", () => {
+  it.each(["success", "failure", "empty"])("cleans direct review directories after %s", async (outcome) => {
+    await mkdir("build/tmp", { recursive: true });
+    const root = await mkdtemp(join(process.cwd(), "build/tmp/direct-cleanup-"));
+    let runRoot: string | undefined;
+    try {
+      const vcs = { ...createVcs(root), async fetchScoped(range: ChangeRange, ws: { id: string; sourceDir: string }) {
+        runRoot = dirname(ws.sourceDir);
+        await writeWorkspaceFile(ws.sourceDir, "src/app.ts", "const sentinel = true;\n");
+        return { workspaceId: ws.id, rootDir: ws.sourceDir, fetchedFiles: [...range.files] };
+      } };
+      if (outcome === "empty") vcs.listChanges = async () => ({ baseRevision: "base", headRevision: "head", files: [] });
+      const review = runReviewOrchestration({ reviewEvent: createReviewEventFixture(), provider: "gitea", eventName: "pull_request", payload: {} }, {
+        baseSystemPrompt: "Review", sourceRootResolver: () => root, vcs, model,
+        llm: { complete: async () => {
+          expect(await readFile(join(runRoot!, "source/src/app.ts"), "utf8")).toContain("sentinel");
+          if (outcome === "failure") throw new Error("completion failed");
+          return { providerId: model.providerId, modelId: model.modelId, content: '{"skipReason":"lgtm"}', raw: null };
+        } },
+      });
+      if (outcome === "failure") await expect(review).rejects.toThrow("completion failed");
+      else await review;
+      expect(runRoot).toBeDefined();
+      expect(existsSync(runRoot!)).toBe(false);
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  it.each([".", ".."])("rejects a dot run id before touching the workspace: %s", async (runId) => {
+    const listChanges = vi.fn();
+    await expect(runReviewOrchestration({ reviewEvent: createReviewEventFixture(), provider: "gitea", eventName: "pull_request", payload: {}, runId }, {
+      baseSystemPrompt: "Review", sourceRootResolver: () => "build/tmp/untouched", vcs: { ...createVcs("unused"), listChanges }, model,
+      llm: { complete: async () => { throw new Error("unused"); } },
+    })).rejects.toThrow("non-dot directory");
+    expect(listChanges).not.toHaveBeenCalled();
+  });
   it.each(["kilo", "opencode", "pi", "oh-my-pi"] as const)(
     "streams completed %s turns before process exit without counting them twice",
     async (kind) => {
@@ -168,6 +203,253 @@ describe("runReviewOrchestration", () => {
       }
     },
   );
+
+  it("isolates agent/tmp dirs per parallel run of the same project (L09)", async () => {
+    await mkdir("build/tmp", { recursive: true });
+    const baseDir = await mkdtemp(join(process.cwd(), "build/tmp/l09-"));
+    const sourceRoot = join(baseDir, "source");
+    const layout = {
+      kind: "isolated_v2" as const,
+      instanceRoot: baseDir,
+      sourceRoot,
+      agentDir: join(baseDir, "agent"),
+      tmpDir: join(baseDir, "tmp"),
+      contextReposDir: join(baseDir, "context-repos"),
+      templatesDir: join(baseDir, "templates"),
+    };
+    const layouts: { agentDir: string; tmpDir: string }[] = [];
+    const fetchedSources: string[] = [];
+    try {
+      await writeWorkspaceFile(sourceRoot, "src/app.ts", "const ok = true;\n");
+      const sandbox: SandboxBackend = {
+        kind: "native",
+        async materializeFs(l) {
+          layouts.push({ agentDir: l.agentDir, tmpDir: l.tmpDir });
+          fetchedSources.push(String(l.sourceDir));
+          await mkdir(l.agentDir, { recursive: true });
+          await mkdir(l.tmpDir, { recursive: true });
+          return { ...l, mountSpecs: [] };
+        },
+        async spawn() {
+          return {
+            stdout: JSON.stringify({ type: "text", text: '{"skipReason":"lgtm"}' }),
+            stderr: "",
+            exitCode: 0,
+            timedOut: false,
+            durationMs: 5,
+          };
+        },
+        async teardown() {},
+      };
+      const agentAdapter = {
+        kind: "kilo" as const,
+        detect: async () => ({ available: true, binary: "kilo" }),
+        buildCommand: () => ["kilo"],
+        materializeConfig: async (_model: unknown, workingDir: string) => ({ configFiles: new Map(), envVars: {}, workingDir }),
+      };
+      const makeOptions = () => ({
+        baseSystemPrompt: "Review",
+        sourceRootResolver: () => sourceRoot,
+        runtimeDirsResolver: () => layout,
+        // Honor ws.sourceDir like the real adapters: materialization lands in
+        // the per-run source checkout, never the shared cache root.
+        vcs: {
+          ...createVcs(sourceRoot),
+          fetchScoped: async (range: ChangeRange, ws: { id: string; sourceDir: string }) => ({
+            workspaceId: ws.id, rootDir: ws.sourceDir, fetchedFiles: [...range.files],
+          }),
+        },
+        model,
+        llm: { complete: async () => { throw new Error("unexpected direct call"); } },
+        sandbox,
+        agentAdapter,
+      });
+
+      const [a, b] = await Promise.all([
+        runReviewOrchestration(
+          { reviewEvent: createReviewEventFixture(), provider: "gitea", eventName: "pull_request", payload: {}, runId: "run-a" },
+          makeOptions(),
+        ),
+        runReviewOrchestration(
+          { reviewEvent: createReviewEventFixture(), provider: "gitea", eventName: "pull_request", payload: {}, runId: "run-b" },
+          makeOptions(),
+        ),
+      ]);
+      expect(a.outputState.skipReason).toBe("lgtm");
+      expect(b.outputState.skipReason).toBe("lgtm");
+
+      expect(layouts).toHaveLength(2);
+      const dirsA = layouts.find((l) => l.agentDir.includes("run-a"));
+      const dirsB = layouts.find((l) => l.agentDir.includes("run-b"));
+      // Each run got its own root under the shared instance layout (spec §5.5).
+      expect(dirsA?.agentDir).toBe(join(baseDir, "runs", "run-a", "agent"));
+      expect(dirsA?.tmpDir).toBe(join(baseDir, "runs", "run-a", "tmp"));
+      expect(dirsB?.agentDir).toBe(join(baseDir, "runs", "run-b", "agent"));
+      expect(dirsB?.tmpDir).toBe(join(baseDir, "runs", "run-b", "tmp"));
+      // Source checkouts are per-run too: the shared sourceRoot stays a pure cache.
+      expect(fetchedSources.sort()).toEqual([
+        join(baseDir, "runs", "run-a", "source"),
+        join(baseDir, "runs", "run-b", "source"),
+      ].sort());
+      // Run roots are cleaned up after completion; the instance layout stays.
+      expect(existsSync(join(baseDir, "runs", "run-a"))).toBe(false);
+      expect(existsSync(join(baseDir, "runs", "run-b"))).toBe(false);
+    } finally {
+      await rm(baseDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a workspace layout whose agentDir escapes the instance root via a junction (L08)", async () => {
+    await mkdir("build/tmp", { recursive: true });
+    const baseDir = await mkdtemp(join(process.cwd(), "build/tmp/l08-"));
+    const outsideDir = join(baseDir, "outside");
+    const sourceRoot = join(baseDir, "instance", "source");
+    try {
+      await writeWorkspaceFile(sourceRoot, "src/app.ts", "const ok = true;\n");
+      await mkdir(outsideDir, { recursive: true });
+      // Junction works without elevation on Windows; symlink elsewhere.
+      const linkType = process.platform === "win32" ? "junction" : "dir";
+      const { symlink } = await import("node:fs/promises");
+      await symlink(outsideDir, join(baseDir, "instance", "agent"), linkType);
+      const layout = {
+        kind: "isolated_v2" as const,
+        instanceRoot: join(baseDir, "instance"),
+        sourceRoot,
+        agentDir: join(baseDir, "instance", "agent"),
+        tmpDir: join(baseDir, "instance", "tmp"),
+        contextReposDir: join(baseDir, "instance", "context-repos"),
+        templatesDir: join(baseDir, "instance", "templates"),
+      };
+      const sandbox: SandboxBackend = {
+        kind: "native",
+        async materializeFs() { throw new Error("must not materialize an escaping layout"); },
+        async spawn() { throw new Error("must not spawn"); },
+        async teardown() {},
+      };
+      const agentAdapter = {
+        kind: "kilo" as const,
+        detect: async () => ({ available: true, binary: "kilo" }),
+        buildCommand: () => ["kilo"],
+        materializeConfig: async (_model: unknown, workingDir: string) => ({ configFiles: new Map(), envVars: {}, workingDir }),
+      };
+      await expect(runReviewOrchestration(
+        { reviewEvent: createReviewEventFixture(), provider: "gitea", eventName: "pull_request", payload: {}, runId: "run-l08" },
+        {
+          baseSystemPrompt: "Review", sourceRootResolver: () => sourceRoot, runtimeDirsResolver: () => layout,
+          vcs: createVcs(sourceRoot), model, sandbox, agentAdapter,
+          llm: { complete: async () => { throw new Error("unexpected"); } },
+        },
+      )).rejects.toThrow(/escapes instanceRoot/u);
+    } finally {
+      await rm(baseDir, { recursive: true, force: true });
+    }
+  });
+
+  it("reaps stale orphaned run dirs but never an active run's dir (L12/L14)", async () => {
+    await mkdir("build/tmp", { recursive: true });
+    const baseDir = await mkdtemp(join(process.cwd(), "build/tmp/l12-"));
+    const sourceRoot = join(baseDir, "source");
+    const layout = {
+      kind: "isolated_v2" as const,
+      instanceRoot: baseDir,
+      sourceRoot,
+      agentDir: join(baseDir, "agent"),
+      tmpDir: join(baseDir, "tmp"),
+      contextReposDir: join(baseDir, "context-repos"),
+      templatesDir: join(baseDir, "templates"),
+    };
+    try {
+      await writeWorkspaceFile(sourceRoot, "src/app.ts", "const ok = true;\n");
+      // Crash orphans: one stale (mtime 2 days ago), one fresh.
+      const staleDir = join(baseDir, "runs", "orphan-stale");
+      const freshDir = join(baseDir, "runs", "orphan-fresh");
+      await writeWorkspaceFile(staleDir, "state.json", "{}");
+      const { hostname } = await import("node:os");
+      await writeWorkspaceFile(staleDir, ".aicr-run-owner.json", JSON.stringify({ host: hostname(), pid: 2147483647 }));
+      await writeWorkspaceFile(freshDir, "state.json", "{}");
+      const unknownOwnerDir = join(baseDir, "runs", "unknown-owner-stale");
+      await writeWorkspaceFile(unknownOwnerDir, "state.json", "{}");
+      const twoDaysAgo = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
+      const { utimes } = await import("node:fs/promises");
+      await utimes(staleDir, twoDaysAgo, twoDaysAgo);
+      await utimes(unknownOwnerDir, twoDaysAgo, twoDaysAgo);
+
+      let secondSpawnObservedStale = false;
+      let spawnCount = 0;
+      const sandbox: SandboxBackend = {
+        kind: "native",
+        async materializeFs(l) {
+          await mkdir(l.agentDir, { recursive: true });
+          await mkdir(l.tmpDir, { recursive: true });
+          return { ...l, mountSpecs: [] };
+        },
+        async spawn() {
+          spawnCount += 1;
+          if (spawnCount === 2) {
+            // While run-b is active, run-a's scope is registered and the
+            // stale orphan was reaped at run-b's admission.
+            secondSpawnObservedStale = !existsSync(staleDir);
+            expect(existsSync(unknownOwnerDir)).toBe(true);
+            expect(existsSync(join(baseDir, "runs", "run-a"))).toBe(true);
+          }
+          return {
+            stdout: JSON.stringify({ type: "text", text: '{"skipReason":"lgtm"}' }),
+            stderr: "", exitCode: 0, timedOut: false, durationMs: 5,
+          };
+        },
+        async teardown() {},
+      };
+      const agentAdapter = {
+        kind: "kilo" as const,
+        detect: async () => ({ available: true, binary: "kilo" }),
+        buildCommand: () => ["kilo"],
+        materializeConfig: async (_model: unknown, workingDir: string) => ({ configFiles: new Map(), envVars: {}, workingDir }),
+      };
+      const makeOptions = () => ({
+        baseSystemPrompt: "Review",
+        sourceRootResolver: () => sourceRoot,
+        runtimeDirsResolver: () => layout,
+        // Honor ws.sourceDir like the real adapters: materialization lands in
+        // the per-run source checkout, never the shared cache root.
+        vcs: {
+          ...createVcs(sourceRoot),
+          fetchScoped: async (range: ChangeRange, ws: { id: string; sourceDir: string }) => ({
+            workspaceId: ws.id, rootDir: ws.sourceDir, fetchedFiles: [...range.files],
+          }),
+        },
+        model,
+        llm: { complete: async () => { throw new Error("unexpected"); } },
+        sandbox,
+        agentAdapter,
+      });
+
+      // run-a starts first and stays in flight while run-b is admitted.
+      const slowSpawn = sandbox.spawn.bind(sandbox);
+      sandbox.spawn = async () => {
+        if (spawnCount === 0) await new Promise((resolve) => setTimeout(resolve, 150));
+        return slowSpawn();
+      };
+      const [a, b] = await Promise.all([
+        runReviewOrchestration(
+          { reviewEvent: createReviewEventFixture(), provider: "gitea", eventName: "pull_request", payload: {}, runId: "run-a" },
+          makeOptions(),
+        ),
+        runReviewOrchestration(
+          { reviewEvent: createReviewEventFixture(), provider: "gitea", eventName: "pull_request", payload: {}, runId: "run-b" },
+          makeOptions(),
+        ),
+      ]);
+      expect(a.outputState.skipReason).toBe("lgtm");
+      expect(b.outputState.skipReason).toBe("lgtm");
+
+      expect(secondSpawnObservedStale).toBe(true);
+      expect(existsSync(staleDir)).toBe(false);
+      // The fresh orphan (not yet stale) survives.
+      expect(existsSync(freshDir)).toBe(true);
+    } finally {
+      await rm(baseDir, { recursive: true, force: true });
+    }
+  });
 
   it("keeps commit metadata advisory and clears a failed execution", async () => {
     await mkdir("build/tmp", { recursive: true });
@@ -726,7 +1008,9 @@ describe("runReviewOrchestration", () => {
 
       expect(result.status).toBe("skipped");
       expect(materializeCalls).toHaveLength(1);
-      expect(materializeCalls[0]?.contextReposRoot).toBe(join(tempDir, "workspaces", "ws", "context-repos"));
+      // L09: context repos materialize under the per-run root, not the shared workspace dir.
+      const contextRoot = materializeCalls[0]?.contextReposRoot ?? "";
+      expect(contextRoot.replace(/\\/gu, "/")).toMatch(/workspaces\/ws\/agent\/runs\/[^/]+\/context-repos$/u);
       expect(materializeCalls[0]?.repos).toEqual(contextRepositories);
 
       const extraMounts = materializedLayouts[0]?.extraMounts ?? [];
@@ -2690,6 +2974,10 @@ describe("summarizeReviewOrchestrationForWebhook", () => {
         },
       ].map((e) => JSON.stringify(e)).join("\n");
       const spawnCalls: SandboxSpawnOptions[] = [];
+      // Per-run dirs are cleaned after the run (L09): bundle artifacts are
+      // captured where the agent would read them, inside spawn.
+      let ompManifest: { webSearch?: { enabled: boolean; mode: string } } | undefined;
+      let aicrOutputServer: { command: string; args: string[]; env: Record<string, string> } | undefined;
       const sandbox: SandboxBackend = {
         kind: "native",
         async materializeFs(layout) {
@@ -2699,6 +2987,13 @@ describe("summarizeReviewOrchestrationForWebhook", () => {
         },
         async spawn(spawnOptions) {
           spawnCalls.push(spawnOptions);
+          ompManifest = JSON.parse(
+            await readFile(join(spawnOptions.cwd, "manifest.json"), "utf8"),
+          ) as { webSearch?: { enabled: boolean; mode: string } };
+          const ompMcpJson = JSON.parse(
+            await readFile(join(spawnOptions.cwd, ".omp-agent", "mcp.json"), "utf8"),
+          ) as { mcpServers: Record<string, { command: string; args: string[]; env: Record<string, string> }> };
+          aicrOutputServer = ompMcpJson.mcpServers["aicr-output"];
           return { exitCode: 0, stdout: ompStream, stderr: "", timedOut: false, durationMs: 7 };
         },
         async teardown() {},
@@ -2744,16 +3039,9 @@ describe("summarizeReviewOrchestrationForWebhook", () => {
       expect(agentSpawn?.env?.AICR_PI_MCP_SERVERS).toBeUndefined();
       // The webSearch option rides the same bundle path as compaction and lands in
       // the audited runtime-bundle manifest next to the agent workspace.
-      const ompManifest = JSON.parse(
-        await readFile(join(String(agentSpawn?.cwd ?? ""), "manifest.json"), "utf8"),
-      ) as { webSearch?: { enabled: boolean; mode: string } };
-      expect(ompManifest.webSearch).toEqual({ enabled: true, mode: "injected" });
+      expect(ompManifest?.webSearch).toEqual({ enabled: true, mode: "injected" });
       // Native sandboxes share host paths, so the generated mcp.json must point at the
       // module-relative aicr-output server script, not the container-image /app path.
-      const ompMcpJson = JSON.parse(
-        await readFile(join(String(agentSpawn?.cwd ?? ""), ".omp-agent", "mcp.json"), "utf8"),
-      ) as { mcpServers: Record<string, { command: string; args: string[]; env: Record<string, string> }> };
-      const aicrOutputServer = ompMcpJson.mcpServers["aicr-output"];
       expect(aicrOutputServer?.command).toBe("node");
       expect(aicrOutputServer?.args?.[0]).toMatch(/mcp-output[/\\]dist[/\\]server\.js$/u);
       expect(aicrOutputServer?.args?.[0]).not.toContain("/app/");
@@ -2998,6 +3286,8 @@ describe("summarizeReviewOrchestrationForWebhook", () => {
         { type: "agent_end", messages: [] },
       ].map((e) => JSON.stringify(e)).join("\n");
       const spawnCalls: SandboxSpawnOptions[] = [];
+      let handedOffTask = "";
+      let handedOffBytes = 0;
       const sandbox: SandboxBackend = {
         kind: "native",
         async materializeFs(layout) {
@@ -3007,6 +3297,10 @@ describe("summarizeReviewOrchestrationForWebhook", () => {
         },
         async spawn(spawnOptions) {
           spawnCalls.push(spawnOptions);
+          // The per-run dir is cleaned after the run (L09); the handoff
+          // contract is observed where the agent would read it — at runtime.
+          handedOffTask = await readFile(join(spawnOptions.cwd, ".aicr-task.md"), "utf8");
+          handedOffBytes = Buffer.byteLength(handedOffTask, "utf8");
           return { exitCode: 0, stdout: skipStream, stderr: "", timedOut: false, durationMs: 12 };
         },
         async teardown() {},
@@ -3046,9 +3340,8 @@ describe("summarizeReviewOrchestrationForWebhook", () => {
       const spawnedTask = spawnCalls[0]?.command.at(-1) ?? "";
       expect(spawnedTask).toContain("was written to");
       expect(Buffer.byteLength(spawnedTask, "utf8")).toBeLessThan(128 * 1024);
-      const handedOffTask = await readFile(join(tempDir, "agent", ".aicr-task.md"), "utf8");
       expect(handedOffTask).toContain("y".repeat(1024));
-      expect(Buffer.byteLength(handedOffTask, "utf8")).toBeGreaterThan(160 * 1024);
+      expect(handedOffBytes).toBeGreaterThan(160 * 1024);
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }
@@ -3059,7 +3352,7 @@ describe("summarizeReviewOrchestrationForWebhook", () => {
 
     try {
       await writeWorkspaceFile(tempDir, "src/app.ts", "const ok = true;\n");
-      await writeWorkspaceFile(tempDir, "agent/.aicr-task.md", "stale task");
+      // Seed stale state when materializing the owned run, as on a follow-up.
       const skipStream = [
         {
           type: "message_end",
@@ -3079,7 +3372,9 @@ describe("summarizeReviewOrchestrationForWebhook", () => {
           await mkdir(layout.tmpDir, { recursive: true });
           return { agentDir: layout.agentDir, tmpDir: layout.tmpDir, mountSpecs: [] };
         },
-        async spawn() {
+        async spawn(spawnOptions) {
+          await expect(readFile(join(spawnOptions.cwd, ".aicr-task.md"), "utf8"))
+            .rejects.toMatchObject({ code: "ENOENT" });
           return { exitCode: 0, stdout: skipStream, stderr: "", timedOut: false, durationMs: 12 };
         },
         async teardown() {},
@@ -3091,6 +3386,7 @@ describe("summarizeReviewOrchestrationForWebhook", () => {
         buildCommand(task) { return ["omp", "-p", "--mode", "json", "--", task]; },
         buildStdin() { return ""; },
         async materializeConfig(_m, workingDir) {
+          await writeWorkspaceFile(workingDir, ".aicr-task.md", "stale task");
           return { configFiles: new Map(), envVars: {}, workingDir };
         },
       };
@@ -3101,6 +3397,7 @@ describe("summarizeReviewOrchestrationForWebhook", () => {
           payload: {},
           provider: "gitea",
           eventName: "pull_request",
+          runId: "run-stale",
         },
         {
           baseSystemPrompt: "{{TASK_CONTEXT}}",
@@ -3115,8 +3412,6 @@ describe("summarizeReviewOrchestrationForWebhook", () => {
       );
 
       expect(result.outputState.skipReason).toBe("lgtm");
-      await expect(readFile(join(tempDir, "agent", ".aicr-task.md"), "utf8"))
-        .rejects.toMatchObject({ code: "ENOENT" });
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }
@@ -3362,6 +3657,7 @@ describe("summarizeReviewOrchestrationForWebhook", () => {
         { type: "agent_end", messages: [] },
       ].map((event) => JSON.stringify(event)).join("\n");
       const materializedModels: ModelSpec[] = [];
+      let fetchedSource: string | undefined;
       let spawnCount = 0;
       const sandbox: SandboxBackend = {
         kind: "native",
@@ -3372,6 +3668,7 @@ describe("summarizeReviewOrchestrationForWebhook", () => {
         },
         async spawn() {
           spawnCount++;
+          expect(await readFile(join(fetchedSource!, "src/app.ts"), "utf8")).toBe("const ok = true;\n");
           return {
             exitCode: 0,
             stdout: spawnCount === 1 ? quotaStream : successStream,
@@ -3409,7 +3706,14 @@ describe("summarizeReviewOrchestrationForWebhook", () => {
         {
           baseSystemPrompt: "{{TASK_CONTEXT}}",
           sourceRootResolver: () => tempDir,
-          vcs: createVcs(tempDir),
+          vcs: {
+            ...createVcs(tempDir),
+            async fetchScoped(range, ws) {
+              fetchedSource = ws.sourceDir;
+              await writeWorkspaceFile(ws.sourceDir, "src/app.ts", "const ok = true;\n");
+              return { workspaceId: ws.id, rootDir: ws.sourceDir, fetchedFiles: [...range.files] };
+            },
+          },
           llm: { async complete() { throw new Error("direct llm must not be called"); } },
           model,
           agentModelChain: [model, fallbackModel],
@@ -3424,6 +3728,7 @@ describe("summarizeReviewOrchestrationForWebhook", () => {
         ["anthropic-prod", "claude-sonnet-test"],
       ]);
       expect(spawnCount).toBe(2);
+      expect(existsSync(fetchedSource!)).toBe(false);
       expect(result.status).toBe("skipped");
       expect(result.model).toEqual({ providerId: "anthropic-prod", modelId: "claude-sonnet-test" });
       expect(result.fallbackCount).toBe(1);

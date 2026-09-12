@@ -1,7 +1,8 @@
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { existsSync } from "node:fs";
-import { readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { hostname } from "node:os";
 import { randomUUID } from "node:crypto";
 
 import {
@@ -19,6 +20,7 @@ import {
   type ReviewVcsKind,
   type ReviewProvider,
   type ScrubMatch,
+  type WorkspaceLayout,
 } from "@aicr/core";
 import type { AgentAdapter, AgentCompactionOptions, AgentSpawnOptions, AgentWebSearchOptions } from "@aicr/agents";
 import { materializeRuntimeBundle, OMP_AGENT_DIR_NAME, PI_AGENT_DIR_NAME } from "@aicr/agents";
@@ -123,6 +125,12 @@ export interface ServerReviewOrchestrationOptions {
   readonly baseSystemPromptResolver?: (workspaceId: string) => Promise<string | undefined> | string | undefined;
   readonly forceSkillsResolver?: (workspaceId: string) => readonly string[] | undefined;
   readonly sourceRootResolver: (reviewEvent: ReviewEvent) => string | undefined;
+  /**
+   * Explicit workspace layout resolver (P1b). When present, its layout wins
+   * over the source-dir-name inference (deriveWorkspaceRoot) so isolated_v2
+   * instances never rely on path-shape conventions.
+   */
+  readonly runtimeDirsResolver?: (reviewEvent: ReviewEvent) => WorkspaceLayout | undefined;
   readonly vcs: DiffCapableVcsAdapter;
   readonly vcsFactory?: (sourceRoot: string, context: ReviewOrchestrationContext) => Promise<DiffCapableVcsAdapter> | DiffCapableVcsAdapter;
   readonly llm: ChatCompletionClient;
@@ -626,6 +634,8 @@ async function materializeWorkspaceContextRepos(
   options: ServerReviewOrchestrationOptions,
   sourceRoot: string,
   workspaceId: string,
+  runtimeDirs?: WorkspaceLayout,
+  contextReposDir?: string,
 ): Promise<readonly ContextRepoMaterialization[]> {
   const repos = options.contextRepositoriesResolver?.(workspaceId);
   if (!options.sandbox || !options.agentAdapter || !repos?.length) {
@@ -634,7 +644,7 @@ async function materializeWorkspaceContextRepos(
 
   const materializer = options.contextRepoMaterializer ?? materializeContextRepositories;
   return materializer({
-    contextReposRoot: join(deriveWorkspaceRoot(sourceRoot), "context-repos"),
+    contextReposRoot: contextReposDir ?? runtimeDirs?.contextReposDir ?? join(deriveWorkspaceRoot(sourceRoot), "context-repos"),
     repos,
   });
 }
@@ -1341,12 +1351,145 @@ function extractClaudeJsonResult(stdout: string): ClaudeResultExtraction {
   };
 }
 
+/**
+ * L09 run isolation (spec §5.5): every run gets one root `runs/<runId>/` with
+ * its own source checkout, agentDir, tmpDir, and context-repos. Two parallel
+ * runs of the same project therefore never overwrite each other's
+ * materialized source, task handoff, runtime bundle, MCP output state, or
+ * kilo/pi session stores (XDG/PI redirects are agentDir-relative and inherit
+ * the isolation). The shared sourceRoot stays a pure repo cache (object
+ * store / client root), written only by metadata-level operations. HOME
+ * isolation still needs a provider-specific credential migration contract.
+ */
 async function runAgentReview(
   sourceRoot: string,
   task: string,
   options: ServerReviewOrchestrationOptions,
   bundleContext?: AgentBundleContext,
   contextRepoMounts?: readonly ContextRepoMaterialization[],
+  runDirs?: RunDirs,
+  containmentRoot?: string,
+): Promise<ReviewCompletionResult & { readonly agentResult: SandboxSpawnResult }> {
+  const dirs = runDirs ?? computeRunDirs(undefined, sourceRoot,
+    (bundleContext?.runId ?? randomUUID()).replace(/[^A-Za-z0-9._-]+/gu, "_"));
+  return runAgentReviewInDirs(sourceRoot, task, options, dirs, bundleContext, contextRepoMounts, containmentRoot);
+}
+
+// L12: directory mtime does not track writes to nested files. Reap only
+// stale roots whose recorded owner on this host is provably no longer alive.
+const RUN_DIR_STALE_MS = 24 * 60 * 60 * 1000;
+const RUN_OWNER_FILE = ".aicr-run-owner.json";
+const activeRunDirs = new Set<string>();
+
+/** All mutable per-run state lives under one root: source/agent/tmp/context-repos. */
+interface RunDirs {
+  readonly root: string;
+  readonly sourceDir: string;
+  readonly agentDir: string;
+  readonly tmpDir: string;
+  readonly contextReposDir: string;
+}
+
+function computeRunDirs(runtimeDirs: WorkspaceLayout | undefined, sourceRoot: string, runScope: string): RunDirs {
+  // L09 (spec §5.5): every run writes source/agent/tmp/context-repos under
+  // `runs/<runId>/`; the repo cache may be shared, mutable checkouts never.
+  const root = runtimeDirs !== undefined
+    ? join(runtimeDirs.instanceRoot, "runs", runScope)
+    : join(deriveWorkspaceRuntimeDirs(sourceRoot).agentDir, "runs", runScope);
+  return {
+    root,
+    sourceDir: join(root, "source"),
+    agentDir: join(root, "agent"),
+    tmpDir: join(root, "tmp"),
+    contextReposDir: join(root, "context-repos"),
+  };
+}
+
+async function reapStaleRunDirs(runsDir: string): Promise<void> {
+  let entries;
+  try {
+    entries = await readdir(runsDir, { withFileTypes: true });
+  } catch {
+    return; // no runs parent yet
+  }
+  const now = Date.now();
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const dir = join(runsDir, entry.name);
+    if (activeRunDirs.has(dir)) continue;
+    try {
+      const info = await stat(dir);
+      if (now - info.mtimeMs < RUN_DIR_STALE_MS) continue;
+      const owner = JSON.parse(await readFile(join(dir, RUN_OWNER_FILE), "utf8")) as { host?: unknown; pid?: unknown };
+      if (owner.host !== hostname() || typeof owner.pid !== "number" || !Number.isInteger(owner.pid) || owner.pid <= 0) continue;
+      try {
+        process.kill(owner.pid, 0);
+        continue;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ESRCH") continue;
+      }
+      const realParent = await realpathContaining(runsDir);
+      const realDir = await realpathContaining(dir);
+      if (!isWithinRoot(realParent, realDir) || realParent === realDir) continue;
+      await rm(dir, { recursive: true, force: true });
+    } catch {
+      // best effort: a racing creator or permission issue must not fail reviews
+    }
+  }
+}
+
+/** Realpath of the nearest existing ancestor, with the unresolved suffix re-appended. */
+async function realpathContaining(path: string): Promise<string> {
+  const suffix: string[] = [];
+  let current = path;
+  for (;;) {
+    try {
+      const resolved = await realpath(current);
+      return suffix.length === 0 ? resolved : join(resolved, ...suffix.reverse());
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      const parent = dirname(current);
+      if (parent === current) throw error;
+      suffix.push(basename(current));
+      current = parent;
+    }
+  }
+}
+
+function isWithinRoot(root: string, target: string): boolean {
+  const fold = (value: string) => (process.platform === "win32" ? value.toLowerCase() : value);
+  const rel = relative(fold(root), fold(target));
+  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+}
+
+async function assertWorkspaceLayoutContained(layout: {
+  readonly instanceRoot: string; readonly agentDir: string; readonly tmpDir: string;
+  readonly contextReposDir: string; readonly templatesDir: string;
+  readonly sourceRoot?: string; readonly workspacesRoot?: string;
+}): Promise<void> {
+  const root = await realpathContaining(layout.instanceRoot);
+  if (layout.workspacesRoot && !isWithinRoot(await realpathContaining(layout.workspacesRoot), root)) {
+    throw new Error(`workspace instanceRoot escapes workspacesRoot via symlink/junction: ${layout.instanceRoot}`);
+  }
+  for (const [name, dir] of [
+    ["sourceRoot", layout.sourceRoot],
+    ["agentDir", layout.agentDir], ["tmpDir", layout.tmpDir],
+    ["contextReposDir", layout.contextReposDir], ["templatesDir", layout.templatesDir],
+  ] as const) {
+    if (dir !== undefined && !isWithinRoot(root, await realpathContaining(dir))) {
+      throw new Error(`workspace layout ${name} escapes instanceRoot via symlink/junction: ${dir}`);
+    }
+  }
+}
+
+async function runAgentReviewInDirs(
+  sourceRoot: string,
+  task: string,
+  options: ServerReviewOrchestrationOptions,
+  dirs: { readonly agentDir: string; readonly tmpDir: string },
+  bundleContext?: AgentBundleContext,
+  contextRepoMounts?: readonly ContextRepoMaterialization[],
+  containmentRoot?: string,
 ): Promise<ReviewCompletionResult & { readonly agentResult: SandboxSpawnResult }> {
   const sandbox = options.sandbox;
   const agentAdapter = options.agentAdapter;
@@ -1360,7 +1503,6 @@ async function runAgentReview(
     ? createAgentUsageObserver(agentAdapter.kind, options.model, bundleContext.progress)
     : undefined;
 
-  const dirs = deriveWorkspaceRuntimeDirs(sourceRoot);
   let agentResult: SandboxSpawnResult | undefined;
   let hostAgentDir: string | undefined;
 
@@ -1376,6 +1518,14 @@ async function runAgentReview(
       tmpDir: dirs.tmpDir,
       ...(extraMounts.length > 0 ? { extraMounts } : {}),
     });
+    if (containmentRoot) {
+      // L08 re-verify: a symlink swapped in between check and creation is caught here.
+      for (const [name, dir] of [["sourceDir", sourceRoot], ["agentDir", materializedFs.agentDir], ["tmpDir", materializedFs.tmpDir]] as const) {
+        if (!isWithinRoot(containmentRoot, await realpathContaining(dir))) {
+          throw new Error(`materialized ${name} escapes instanceRoot via symlink/junction: ${dir}`);
+        }
+      }
+    }
     hostAgentDir = materializedFs.agentDir;
     // Pin the MCP output-state file to an absolute sandbox-visible path so the
     // aicr-output server lands it in the shared agent workspace regardless of the
@@ -1710,6 +1860,8 @@ async function requestReviewCompletion(
   followUp?: ReviewCompletionFollowUp,
   bundleContext?: AgentBundleContext,
   contextRepoMounts?: readonly ContextRepoMaterialization[],
+  runDirs?: RunDirs,
+  containmentRoot?: string,
 ): Promise<ReviewCompletionResult> {
   if (options.sandbox && options.agentAdapter) {
     const task = followUp
@@ -1725,7 +1877,7 @@ async function requestReviewCompletion(
           followUp.prompt,
         ].join("\n")
       : systemPrompt;
-    return runAgentReviewWithQuotaFallback(sourceRoot, task, options, bundleContext, contextRepoMounts);
+    return runAgentReviewWithQuotaFallback(sourceRoot, task, options, bundleContext, contextRepoMounts, runDirs, containmentRoot);
   }
 
   return requestDirectLlmCompletion(systemPrompt, options, followUp, bundleContext?.progress);
@@ -1751,6 +1903,8 @@ async function runAgentReviewWithQuotaFallback(
   options: ServerReviewOrchestrationOptions,
   bundleContext?: AgentBundleContext,
   contextRepoMounts?: readonly ContextRepoMaterialization[],
+  runDirs?: RunDirs,
+  containmentRoot?: string,
 ): Promise<ReviewCompletionResult> {
   const candidates = resolveAgentModelCandidates(options);
   const attemptedModels: ModelSpec[] = [];
@@ -1765,6 +1919,8 @@ async function runAgentReviewWithQuotaFallback(
         { ...options, model: currentModel },
         bundleContext,
         contextRepoMounts,
+        runDirs,
+        containmentRoot,
       );
       return index > 0 ? { ...completion, fallbackCount: index } : completion;
     } catch (error) {
@@ -2725,7 +2881,9 @@ export async function runReviewOrchestration(
     attempt: context.attempt ?? 1,
   });
   try {
-    return await executeReviewOrchestration(context, options, { registry, executionId });
+    // Propagate the registry runId so the per-run directory scope (L09)
+    // matches the id operators see in the live-run view.
+    return await executeReviewOrchestration({ ...context, runId }, options, { registry, executionId });
   } finally {
     registry.finish(executionId);
   }
@@ -2758,18 +2916,85 @@ async function executeReviewOrchestration(
   options: ServerReviewOrchestrationOptions,
   liveRun?: LiveRunHandle,
 ): Promise<ReviewOrchestrationResult> {
-  const sourceRoot = options.sourceRootResolver(context.reviewEvent);
+  const runtimeDirs = options.runtimeDirsResolver?.(context.reviewEvent);
+  const sourceRoot = runtimeDirs?.sourceRoot ?? options.sourceRootResolver(context.reviewEvent);
   if (!sourceRoot) {
     throw new TypeError("Review orchestration requires a source root.");
   }
 
+  // L08: reject workspace layouts whose directories escape the instance root
+  // through a symlink/junction, and re-verify after materialization (TOCTOU).
+  if (runtimeDirs) {
+    await assertWorkspaceLayoutContained(runtimeDirs);
+  }
+  // L09: one run root per orchestration; the shared sourceRoot stays a pure
+  // repo cache and the run's mutable source checkout materializes under
+  // `runs/<runId>/source`, so parallel runs of one project never overwrite
+  // each other's source/agent/tmp/MCP/HOME-XDG/context state.
+  const runId = context.runId ?? randomUUID();
+  const runScope = runId.replace(/[^A-Za-z0-9._-]+/gu, "_");
+  if (runScope === "" || runScope === "." || runScope === "..") throw new Error("runId must name one non-dot directory");
+  const runDirs = computeRunDirs(runtimeDirs, sourceRoot, runScope);
+  const containmentRoot = runtimeDirs ? await realpathContaining(runtimeDirs.instanceRoot) : undefined;
+  if (containmentRoot && !isWithinRoot(containmentRoot, await realpathContaining(runDirs.root))) {
+    throw new Error(`run directory escapes instanceRoot via symlink/junction: ${runDirs.root}`);
+  }
+
+  // One owner spans fetch, all model attempts, follow-ups and publication.
+  // Per-model cleanup would delete source/context before the next attempt.
+  if (activeRunDirs.has(runDirs.root)) {
+    throw new Error(`run directory is already active: ${runDirs.root}`);
+  }
+  activeRunDirs.add(runDirs.root);
+  let ownsRunRoot = false;
+  try {
+    await reapStaleRunDirs(dirname(runDirs.root));
+    if (containmentRoot) {
+      for (const dir of [runDirs.sourceDir, runDirs.agentDir, runDirs.tmpDir, runDirs.contextReposDir]) {
+        if (!isWithinRoot(containmentRoot, await realpathContaining(dir))) {
+          throw new Error(`run directory escapes instanceRoot via symlink/junction: ${dir}`);
+        }
+      }
+    }
+    await mkdir(dirname(runDirs.root), { recursive: true });
+    await mkdir(runDirs.root); // EEXIST prevents cross-process reuse of a live run.
+    ownsRunRoot = true;
+    await writeFile(join(runDirs.root, RUN_OWNER_FILE), JSON.stringify({ host: hostname(), pid: process.pid }), { flag: "wx" });
+    return await executeReviewInRunDirs(context, options, sourceRoot, runDirs, containmentRoot, runtimeDirs, liveRun);
+  } finally {
+    activeRunDirs.delete(runDirs.root);
+    // Verify again before recursive cleanup; an escaping junction must never
+    // redirect cleanup to an unrelated workspace.
+    const realRunsRoot = await realpathContaining(dirname(runDirs.root)).catch(() => undefined);
+    const realRunRoot = await realpathContaining(runDirs.root).catch(() => undefined);
+    if (ownsRunRoot && realRunsRoot && realRunRoot && isWithinRoot(realRunsRoot, realRunRoot) && realRunsRoot !== realRunRoot &&
+        (!containmentRoot || isWithinRoot(containmentRoot, realRunRoot))) {
+      await rm(runDirs.root, { recursive: true, force: true }).catch(() => {});
+    }
+  }
+}
+
+async function executeReviewInRunDirs(
+  context: ReviewOrchestrationContext,
+  options: ServerReviewOrchestrationOptions,
+  sourceRoot: string,
+  runDirs: RunDirs,
+  containmentRoot: string | undefined,
+  runtimeDirs: WorkspaceLayout | undefined,
+  liveRun?: LiveRunHandle,
+): Promise<ReviewOrchestrationResult> {
+  const runId = context.runId ?? basename(runDirs.root);
+
   const workspaceRef = {
     id: context.reviewEvent.workspaceId,
-    sourceDir: sourceRoot,
+    sourceDir: runDirs.sourceDir,
   };
   const vcs = options.vcsFactory ? await options.vcsFactory(sourceRoot, context) : options.vcs;
   const range = await vcs.listChanges(context.reviewEvent);
   const scopedTree = await vcs.fetchScoped(range, workspaceRef);
+  if (containmentRoot && !isWithinRoot(containmentRoot, await realpathContaining(scopedTree.rootDir))) {
+    throw new Error(`materialized sourceDir escapes instanceRoot via symlink/junction: ${scopedTree.rootDir}`);
+  }
   let headCommittedAt: string | undefined;
   try {
     const timestamp = range.headRevision && await vcs.fetchRevisionCommittedAt?.(range.headRevision);
@@ -2835,8 +3060,17 @@ async function executeReviewOrchestration(
     };
   }
 
-  const contextRepoResults = await materializeWorkspaceContextRepos(options, sourceRoot, context.reviewEvent.workspaceId);
+  const contextRepoResults = await materializeWorkspaceContextRepos(
+    options,
+    sourceRoot,
+    context.reviewEvent.workspaceId,
+    runtimeDirs,
+    runDirs.contextReposDir,
+  );
   const contextRepoMounts = contextRepoResults.filter((entry) => entry.status === "ok");
+  if (containmentRoot && !isWithinRoot(containmentRoot, await realpathContaining(runDirs.contextReposDir))) {
+    throw new Error(`materialized contextReposDir escapes instanceRoot via symlink/junction: ${runDirs.contextReposDir}`);
+  }
   const contextReposSection = buildContextReposPromptSection(contextRepoMounts, options.sandbox);
   let diff: ParsedDiff | undefined;
   if (vcs.diff) {
@@ -2991,7 +3225,9 @@ async function executeReviewOrchestration(
         liveRun.registry.update(liveRun.executionId, { metrics: liveRunMetricsFromAccumulator(preview) });
       },
     } } : {}),
-    ...(context.runId ? { runId: context.runId } : {}),
+    // Always set: the per-run directory scope derives from it (L09); the
+    // value matches the runDirs scope computed at orchestration start.
+    runId,
     instructions: preparedPrompt.discovery.instructions.map((instruction) => ({
       kind: instruction.kind,
       label: instruction.label,
@@ -3033,7 +3269,16 @@ async function executeReviewOrchestration(
   };
   context.signal?.throwIfAborted();
   liveRun?.registry.update(liveRun.executionId, { phase: "analyzing" });
-  let completion = await requestReviewCompletion(scopedTree.rootDir, llmSystemPrompt, options, undefined, bundleContext, contextRepoMounts);
+  let completion = await requestReviewCompletion(
+    scopedTree.rootDir,
+    llmSystemPrompt,
+    options,
+    undefined,
+    bundleContext,
+    contextRepoMounts,
+    runDirs,
+    containmentRoot,
+  );
   accumulateCompletion(completion);
   let lastAgentResult = completion.agentResult;
   const rawModelOutput = completion.llmResult.content;
@@ -3107,6 +3352,8 @@ async function executeReviewOrchestration(
       },
       bundleContext,
       contextRepoMounts,
+      runDirs,
+      containmentRoot,
     );
     accumulateCompletion(completion);
     if (completion.agentResult) {
@@ -3134,6 +3381,8 @@ async function executeReviewOrchestration(
         },
         bundleContext,
         contextRepoMounts,
+        runDirs,
+        containmentRoot,
       );
       accumulateCompletion(completion);
       if (completion.agentResult) {

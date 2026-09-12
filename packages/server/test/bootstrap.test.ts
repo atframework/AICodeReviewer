@@ -2936,6 +2936,73 @@ describe("createVcsAdapterFromConfig", () => {
 
     expect(adapter.kind).toBe("git");
   });
+
+  it("binds the p4 adapter to the event scope, not the first configured stream", () => {
+    const config = makeConfig({
+      triggers: [
+        {
+          name: "p4-main",
+          kind: "p4",
+          depot_path: "//depot/legacy",
+          streams: ["//depot/main", "//depot/dev"],
+        } as AppConfig["triggers"][number],
+      ],
+    });
+
+    // Routing-derived event for //depot/dev: the adapter must fetch/diff
+    // that scope, not streams[0] or depot_path.
+    const scoped = createVcsAdapterFromConfig(config, "/tmp/test", "p4-main", "//depot/dev");
+    expect(scoped.kind).toBe("p4");
+    expect((scoped as { boundScope?: string }).boundScope).toBe("//depot/dev");
+
+    // No event scope: the configured streams[0] fallback is preserved.
+    const fallback = createVcsAdapterFromConfig(config, "/tmp/test", "p4-main");
+    expect((fallback as { boundScope?: string }).boundScope).toBe("//depot/main");
+
+    // A non-depot repoRef (no // prefix) never overrides the config.
+    const odd = createVcsAdapterFromConfig(config, "/tmp/test", "p4-main", "not-a-depot");
+    expect((odd as { boundScope?: string }).boundScope).toBe("//depot/main");
+  });
+
+  it("binds the svn adapter to the project-root scope URL from the event", () => {
+    const config = makeConfig({
+      triggers: [
+        {
+          name: "svn-main",
+          kind: "svn",
+          repository_url: "http://svn.example.com/repo",
+          project_roots: [{ prefix: "/projectA", project: "project-a" }],
+        } as AppConfig["triggers"][number],
+      ],
+    });
+
+    const scoped = createVcsAdapterFromConfig(
+      config,
+      "/tmp/test",
+      "svn-main",
+      "http://svn.example.com/repo/projectA",
+    );
+    expect(scoped.kind).toBe("svn");
+    expect((scoped as { boundScope?: string }).boundScope).toBe("http://svn.example.com/repo/projectA");
+
+    // Legacy event (repoRef === repository_url) binds the same URL.
+    const legacy = createVcsAdapterFromConfig(
+      config,
+      "/tmp/test",
+      "svn-main",
+      "http://svn.example.com/repo",
+    );
+    expect((legacy as { boundScope?: string }).boundScope).toBe("http://svn.example.com/repo");
+
+    // A foreign URL never leaks into the adapter.
+    const foreign = createVcsAdapterFromConfig(
+      config,
+      "/tmp/test",
+      "svn-main",
+      "http://evil.example.com/other",
+    );
+    expect((foreign as { boundScope?: string }).boundScope).toBe("http://svn.example.com/repo");
+  });
 });
 
 describe("buildSourceRootResolver", () => {
