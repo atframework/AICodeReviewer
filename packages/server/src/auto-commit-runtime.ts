@@ -54,12 +54,15 @@ export interface AutoCommitRuntimeOptions {
   readonly onAccepted?: () => void;
 }
 
-/** push / change-commit / post-commit are the only automatic events. */
+/** Git push (including GitLab aliases) / change-commit / post-commit only. */
 export function isAutomaticCommitEvent(
   reviewEvent: ReviewEvent,
   eventName: string,
 ): boolean {
-  if (eventName === "push") return reviewEvent.targetKind === "push";
+  if (eventName === "push"
+    || (reviewEvent.provider === "gitlab" && (eventName === "Push Hook" || eventName === "git_push"))) {
+    return reviewEvent.targetKind === "push";
+  }
   return eventName === "change-commit" || eventName === "post-commit";
 }
 

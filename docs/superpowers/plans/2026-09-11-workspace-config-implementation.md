@@ -157,7 +157,7 @@ P1/P2 在合同确定后可独立推进；P4/P5 共享发布和 snapshot 合同�
 - [ ] `example/config.yaml` 将本轮 planned 注释转为 schema 可执行配置，变量/helper 目录生成校验；`example/README.md` 增加 UI 管理、路由预览、升级命令和冲突优先级。
 - [ ] 更新 `docs/site/src/content/docs/{en,zh-cn}/configuration/{overview,llm,agent,outputs,storage,queue}.md`、`start/dashboard.md`、`reference/{config-fields,template-variables,cli}.md`、`integrations/{vcs-providers,agent-adapters,output-channels}.md` 和部署运维页，两种语言同次同步。
 - [ ] 更新 `docs/ai/architecture.md` 的 workspace、运行时、配置、存储合同，决策写入 `docs/ai/decisions.md`；源码链接和字段目录保持真实。
-- [ ] 更新 `.agents/skills/agent-runtime-integration/`、`output-channel-contracts/`、`plan-implementation-audit/` 中实际受影响的运行时/路由/版本验证规则；如出现已修复可复发错误，写入 `AGENTS.known-pitfalls.md`，不复制整份设计到根提示词。
+- [ ] 更新 `.agents/skills/agent-runtime-integration/`、`output-channel-contracts/`、`plan-implementation-audit/` 中实际受影响的运行时/路由/版本验证规则；如出现已修复可复发错误，通过 `AGENTS.known-pitfalls.md` 导航写入对应专题，不复制整份设计到根提示词。
 - [ ] 审查 `prompts/system/code-reviewer.system.md` 是否仍写死旧 source/agent 布局；只在需要改变实际 agent 运行指导时更新，不把数据库管理操作灌入 review prompt。
 - [ ] Linux 执行 `pnpm ci`；Windows 按 AGENTS.md 顺序执行 lint、typecheck、完整 coverage、markdownlint、build、eval validate。docs/site 改动另跑 docs:check/docs:build；新增 browser/真实后端 suite 纳入对应最终 gate。
 - [ ] 对最终 diff 做 `git diff --check`、链接/示例字段/双语一致性检查，记录实际发现的测试文件数、通过/失败/跳过数与 backend 版本。

@@ -14,6 +14,14 @@
  * pull_request-target events, including comment commands, are gated this way;
  * the schedule never merges or batches PR events, and there is no
  * first-receive delay equivalent to `delay_seconds`.
+ *
+ * `include_target_branches` is a receive-side allowlist on the PR/MR target
+ * (base) branch: the nearest layer that sets it wins wholesale and `[]`
+ * clears the inherited list back to all branches. When the resolved list is
+ * non-empty, pull_request events whose `reviewEvent.targetBranch` is not
+ * listed are ignored at receive time; events with an unknown target branch
+ * (comment-command enrichment failure) are allowed through. Push, issue, and
+ * manual/scheduled flows are never filtered.
  */
 
 import { z } from "zod";
@@ -27,6 +35,7 @@ import {
 
 export interface PullRequestConfig {
   readonly schedule?: AutoCommitScheduleConfig | undefined;
+  readonly include_target_branches?: readonly string[] | undefined;
 }
 
 // Explicit annotation keeps the app config schema's serialized declaration
@@ -34,6 +43,7 @@ export interface PullRequestConfig {
 export const pullRequestConfigSchema: z.ZodType<PullRequestConfig> = z
   .object({
     schedule: autoCommitScheduleSchema.optional(),
+    include_target_branches: z.array(z.string().min(1)).optional(),
   })
   .strict();
 
@@ -69,4 +79,27 @@ export function resolvePullRequestSchedule(
   }
   scheduleCache.set(cacheKey, compiled);
   return compiled;
+}
+
+/**
+ * Resolve the effective PR/MR target-branch allowlist from the three
+ * configuration layers. The nearest layer that sets `include_target_branches`
+ * wins wholesale; an explicit `[]` clears the inherited list, so resolution
+ * returns `undefined` (every target branch is accepted) when no layer sets a
+ * non-empty list.
+ */
+export function resolvePullRequestTargetBranches(
+  globalPullRequest: PullRequestConfig | undefined,
+  defaultsPullRequest: PullRequestConfig | undefined,
+  instancePullRequest: PullRequestConfig | undefined,
+): readonly string[] | undefined {
+  const branches =
+    instancePullRequest?.include_target_branches
+    ?? defaultsPullRequest?.include_target_branches
+    ?? globalPullRequest?.include_target_branches;
+  if (!branches || branches.length === 0) {
+    return undefined;
+  }
+
+  return Object.freeze([...branches]);
 }

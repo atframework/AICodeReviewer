@@ -6,6 +6,7 @@ import {
   containsReviewCommand,
   extractLabelNames,
   extractRefBranch,
+  isBranchCreateOrDeletePush,
   normalizeActor,
   resolveWorkspaceIdForRepo,
   type VcsWebhookConfig,
@@ -148,6 +149,7 @@ export async function translateGitlabWebhookToReviewEvent(
       rawEventName: eventName,
       ...(mrLabels.length > 0 ? { labels: mrLabels } : {}),
       branch: mr.source_branch,
+      ...(mr.target_branch ? { targetBranch: mr.target_branch } : {}),
     });
   }
 
@@ -170,11 +172,15 @@ export async function translateGitlabWebhookToReviewEvent(
       rawEventName: eventName,
       ...(mrLabels.length > 0 ? { labels: mrLabels } : {}),
       ...(parsed.object_attributes.source_branch ? { branch: parsed.object_attributes.source_branch } : {}),
+      ...(parsed.object_attributes.target_branch ? { targetBranch: parsed.object_attributes.target_branch } : {}),
     });
   }
 
   if (eventName === "Push Hook" || eventName === "git_push") {
     const parsed = gitlabPushPayloadSchema.parse(payload);
+    if (isBranchCreateOrDeletePush(parsed)) {
+      return null;
+    }
     const branch = extractRefBranch(parsed);
 
     return createReviewEvent({

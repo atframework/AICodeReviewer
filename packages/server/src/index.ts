@@ -144,6 +144,24 @@ export interface ServerAppOptions {
    */
   readonly getExecutionSchedule?: (workspaceId: string, targetKind?: string) => CompiledWeeklySchedule | undefined;
   /**
+   * Branch allowlist lookup for automatic commit events, resolved from the
+   * layered `review.auto_commit.include_branches` config. When the resolved
+   * list is non-empty, push/change-commit/post-commit events whose branch is
+   * not listed are ignored at receive time (decision `branch_not_watched`);
+   * branchless events (P4/SVN hooks) are not filtered. Omitted = every
+   * branch is accepted.
+   */
+  readonly getAutoCommitBranches?: (workspaceId: string) => readonly string[] | undefined;
+  /**
+   * Target-branch allowlist lookup for PR/MR analysis, resolved from the
+   * layered `review.pull_request.include_target_branches` config. When the
+   * resolved list is non-empty, pull_request events whose `targetBranch`
+   * (base branch) is not listed are ignored at receive time (decision
+   * `target_branch_not_watched`); events with an unknown target branch are
+   * allowed through. Omitted = every target branch is accepted.
+   */
+  readonly getPullRequestTargetBranches?: (workspaceId: string) => readonly string[] | undefined;
+  /**
    * Execution-window deferral registry for the async trigger path. When
    * present, window-deferred events persist (or memorize) and resume through
    * it instead of a bare setTimeout, so a restart can recover them.
@@ -209,6 +227,8 @@ function registerGiteaLikeWebhook(
   autoCommit?: AutoCommitAcceptor,
   getExecutionSchedule?: (workspaceId: string, targetKind?: string) => CompiledWeeklySchedule | undefined,
   deferralManager?: ReviewDeferralManager,
+  getAutoCommitBranches?: (workspaceId: string) => readonly string[] | undefined,
+  getPullRequestTargetBranches?: (workspaceId: string) => readonly string[] | undefined,
 ): void {
   app.post(path, async (c) => {
     if (!config) {
@@ -296,7 +316,7 @@ function registerGiteaLikeWebhook(
       return c.json({ accepted: false, reason: "ignored_by_label", provider, eventName, matchedLabels: ignoredLabels }, 200);
     }
 
-    return handleReviewOrchestration(c, provider, eventName, decoded, reviewEvent, reviewPreparationOptions, reviewOrchestrationOptions, issueTriageOptions, asyncTriggers, deduplicator, runsDir, metrics, store, triggerRetry, autoCommit, getExecutionSchedule, deferralManager);
+    return handleReviewOrchestration(c, provider, eventName, decoded, reviewEvent, reviewPreparationOptions, reviewOrchestrationOptions, issueTriageOptions, asyncTriggers, deduplicator, runsDir, metrics, store, triggerRetry, autoCommit, getExecutionSchedule, deferralManager, getAutoCommitBranches, getPullRequestTargetBranches);
   });
 }
 
@@ -314,6 +334,8 @@ function registerP4Trigger(
   autoCommit?: AutoCommitAcceptor,
   getExecutionSchedule?: (workspaceId: string, targetKind?: string) => CompiledWeeklySchedule | undefined,
   deferralManager?: ReviewDeferralManager,
+  getAutoCommitBranches?: (workspaceId: string) => readonly string[] | undefined,
+  getPullRequestTargetBranches?: (workspaceId: string) => readonly string[] | undefined,
 ): void {
   app.post("/triggers/p4", async (c) => {
     if (!config) {
@@ -403,6 +425,8 @@ function registerP4Trigger(
       autoCommit,
       getExecutionSchedule,
       deferralManager,
+      getAutoCommitBranches,
+      getPullRequestTargetBranches,
     );
   });
 }
@@ -421,6 +445,8 @@ function registerSvnTrigger(
   autoCommit?: AutoCommitAcceptor,
   getExecutionSchedule?: (workspaceId: string, targetKind?: string) => CompiledWeeklySchedule | undefined,
   deferralManager?: ReviewDeferralManager,
+  getAutoCommitBranches?: (workspaceId: string) => readonly string[] | undefined,
+  getPullRequestTargetBranches?: (workspaceId: string) => readonly string[] | undefined,
 ): void {
   app.post("/triggers/svn", async (c) => {
     if (!config) {
@@ -517,6 +543,8 @@ function registerSvnTrigger(
       autoCommit,
       getExecutionSchedule,
       deferralManager,
+      getAutoCommitBranches,
+      getPullRequestTargetBranches,
     );
   });
 }
@@ -620,6 +648,8 @@ function registerGenericWebhook(
   autoCommit?: AutoCommitAcceptor,
   getExecutionSchedule?: (workspaceId: string, targetKind?: string) => CompiledWeeklySchedule | undefined,
   deferralManager?: ReviewDeferralManager,
+  getAutoCommitBranches?: (workspaceId: string) => readonly string[] | undefined,
+  getPullRequestTargetBranches?: (workspaceId: string) => readonly string[] | undefined,
 ): void {
   app.post(path, async (c) => {
     const configs = normalizeGenericWebhookConfigs(config);
@@ -714,7 +744,7 @@ function registerGenericWebhook(
       });
       return c.json({ accepted: false, reason: "ignored_by_label", provider, eventName, matchedLabels: ignoredLabels }, 200);
     }
-    return handleReviewOrchestration(c, provider, eventName, decoded, reviewEvent, reviewPreparationOptions, reviewOrchestrationOptions, issueTriageOptions, asyncTriggers, deduplicator, runsDir, metrics, store, triggerRetry, autoCommit, getExecutionSchedule, deferralManager);
+    return handleReviewOrchestration(c, provider, eventName, decoded, reviewEvent, reviewPreparationOptions, reviewOrchestrationOptions, issueTriageOptions, asyncTriggers, deduplicator, runsDir, metrics, store, triggerRetry, autoCommit, getExecutionSchedule, deferralManager, getAutoCommitBranches, getPullRequestTargetBranches);
   });
 }
 
@@ -1540,7 +1570,49 @@ async function handleReviewOrchestration(
   autoCommit?: AutoCommitAcceptor,
   getExecutionSchedule?: (workspaceId: string, targetKind?: string) => CompiledWeeklySchedule | undefined,
   deferralManager?: ReviewDeferralManager,
+  getAutoCommitBranches?: (workspaceId: string) => readonly string[] | undefined,
+  getPullRequestTargetBranches?: (workspaceId: string) => readonly string[] | undefined,
 ): Promise<Response> {
+  // Branch allowlist gate for automatic commit events: a workspace that
+  // resolves `review.auto_commit.include_branches` only accepts receipts for
+  // the listed branches. The check runs before persistence so off-branch
+  // pushes leave no receipts behind; PR/issue/comment flows are unaffected,
+  // and branchless hooks (P4/SVN) cannot be misclassified.
+  if (isAutomaticCommitEvent(reviewEvent, eventName) && reviewEvent.branch) {
+    const watchedBranches = getAutoCommitBranches?.(reviewEvent.workspaceId);
+    if (watchedBranches && watchedBranches.length > 0 && !watchedBranches.includes(reviewEvent.branch)) {
+      recordWebhookEvent(store, {
+        provider,
+        eventName,
+        decision: "ignored",
+        reason: "branch_not_watched",
+        detail: { branch: reviewEvent.branch },
+        ...webhookEventFields(reviewEvent),
+      });
+      return c.json({ accepted: false, reason: "branch_not_watched", provider, eventName, branch: reviewEvent.branch }, 200);
+    }
+  }
+  // Target-branch allowlist gate for PR/MR analysis: a workspace that
+  // resolves `review.pull_request.include_target_branches` only analyzes
+  // PRs/MRs whose base branch is listed. The check runs at receive time,
+  // before dedup/scheduling, so off-target PRs leave no runs behind; push,
+  // issue, and manual flows are unaffected. An unknown target branch
+  // (comment-command enrichment failure) fails open so an explicit user
+  // command is never dropped by a transient fetch error.
+  if (reviewEvent.targetKind === "pull_request" && reviewEvent.targetBranch) {
+    const watchedTargetBranches = getPullRequestTargetBranches?.(reviewEvent.workspaceId);
+    if (watchedTargetBranches && watchedTargetBranches.length > 0 && !watchedTargetBranches.includes(reviewEvent.targetBranch)) {
+      recordWebhookEvent(store, {
+        provider,
+        eventName,
+        decision: "ignored",
+        reason: "target_branch_not_watched",
+        detail: { branch: reviewEvent.targetBranch },
+        ...webhookEventFields(reviewEvent),
+      });
+      return c.json({ accepted: false, reason: "target_branch_not_watched", provider, eventName, branch: reviewEvent.targetBranch }, 200);
+    }
+  }
   // Automatic commit events (push/change-commit/post-commit) take the
   // persistent receive path: one bounded write, then 202 with the receipt.
   // PR/issue/comment/manual flows keep the existing direct/async handling.
@@ -1813,6 +1885,8 @@ function mountRoutes(app: Hono, options: ServerAppOptions): void {
     options.autoCommit,
     options.getExecutionSchedule,
     options.deferralManager,
+    options.getAutoCommitBranches,
+    options.getPullRequestTargetBranches,
   );
   registerGiteaLikeWebhook(
     app,
@@ -1831,6 +1905,8 @@ function mountRoutes(app: Hono, options: ServerAppOptions): void {
     options.autoCommit,
     options.getExecutionSchedule,
     options.deferralManager,
+    options.getAutoCommitBranches,
+    options.getPullRequestTargetBranches,
   );
   registerGenericWebhook(
     app,
@@ -1849,6 +1925,8 @@ function mountRoutes(app: Hono, options: ServerAppOptions): void {
     options.autoCommit,
     options.getExecutionSchedule,
     options.deferralManager,
+    options.getAutoCommitBranches,
+    options.getPullRequestTargetBranches,
   );
   registerGenericWebhook(
     app,
@@ -1867,6 +1945,8 @@ function mountRoutes(app: Hono, options: ServerAppOptions): void {
     options.autoCommit,
     options.getExecutionSchedule,
     options.deferralManager,
+    options.getAutoCommitBranches,
+    options.getPullRequestTargetBranches,
   );
   registerP4Trigger(
     app,
@@ -1882,6 +1962,8 @@ function mountRoutes(app: Hono, options: ServerAppOptions): void {
     options.autoCommit,
     options.getExecutionSchedule,
     options.deferralManager,
+    options.getAutoCommitBranches,
+    options.getPullRequestTargetBranches,
   );
   registerSvnTrigger(
     app,
@@ -1897,6 +1979,8 @@ function mountRoutes(app: Hono, options: ServerAppOptions): void {
     options.autoCommit,
     options.getExecutionSchedule,
     options.deferralManager,
+    options.getAutoCommitBranches,
+    options.getPullRequestTargetBranches,
   );
 
   // Deferred events resume through the same scheduling path they arrived on,

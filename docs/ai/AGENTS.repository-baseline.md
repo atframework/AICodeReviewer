@@ -1,45 +1,50 @@
-# Repository Baseline Context
+# Repository Baseline and Validation
 
-## Current repository baseline
+Read when selecting final checks or changing build/CI/workspace tooling.
+Current versions and scripts live in `package.json`, `pnpm-workspace.yaml`,
+package manifests, and `.github/workflows/`; do not maintain a second version list.
 
-- Workspace layout: pnpm monorepo with packages under `packages/*`; root TypeScript project references are declared in `tsconfig.json`.
-- Toolchain: runtime packages require Node `>=22` (the `better-sqlite3` 13 floor; the CI verify job and the docs job both use Node 24); `docs/site` uses Astro 7 and requires Node `>=23.6.0` (native TypeScript stripping). The shared tooling baseline is pnpm `10.20.0`, TypeScript `NodeNext` with `strict` and `noUncheckedIndexedAccess`, ESLint 10, Vitest 4, Prettier 3, and `markdownlint-cli2`.
-- Tests live in `packages/*/test/**/*.test.ts`; coverage targets `packages/*/src/**/*.ts` and excludes `packages/*/src/index.ts`.
-- Shared root baseline files are `package.json`, `pnpm-workspace.yaml`, `tsconfig.json`, `tsconfig.base.json`, `eslint.config.mjs`, `vitest.config.ts`, `.markdownlint.json`, `.github/workflows/ci.yml`, `.github/workflows/docs.yml`, `.github/workflows/publish-image.yml`, `.github/workflows/stale.yml`, and `deploy/Dockerfile`.
-- AI agent guidance uses `AGENTS.md` plus `.agents/skills/*/SKILL.md` as the canonical tool-neutral layer; `CLAUDE.md` is only a bridge that imports `AGENTS.md` for Claude Code.
-- Prompt baseline assets currently live in `docs/prompt-research.md`, `docs/ai/milestones/M0.5.md`, and `prompts/system/code-reviewer.system.md`; keep them aligned and validate them with markdownlint when changed.
-- `Plan.md` contains current status, local next steps, external acceptance, and reserved extensions. Use `docs/ai/index.md` to find detailed architecture and completed records (including M11); stable contracts use architecture section references, not roadmap section numbers.
-- `docs/superpowers/specs/` and `docs/superpowers/plans/` hold active task artifacts, not completed history; remove a file after its implementation is verified and its durable decisions are merged into long-lived docs or skills.
-- Temporary repository artifacts such as scratch scripts, debug logs, ad hoc reports, and captured command output belong under `build/` subdirectories (`build/tmp/`, `build/logs/`, `build/deploy/`), not in the repository root. Ensure the subdirectory exists before writing.
-- Docker baseline now uses `debian:trixie-slim` as the distro base, copies the Node LTS userspace from `node:lts-trixie-slim` (currently Node 24; both stages share the same Debian 13 base), installs `p4-cli` from Perforce's APT repo using the Ubuntu `noble` codename (Perforce publishes only Ubuntu dists; the noble build runs on trixie's newer glibc), includes Python pip/venv, Kubernetes/Helm/YAML tooling (`kubectl`, `helm`, Mike Farah `yq`), Podman/container clients (`podman`, `buildah`, `skopeo`), plus common build/debug/static-analysis tools, and normalizes Debian command names so prompts can consistently refer to `fd` and `bat`. The image also ships the modern CLI toolkit: trixie apt provides `sd`, `eza`, `duf`, `hyperfine`, `hexyl`, `miller`, `git-delta`, `lnav`, `ugrep`, `pigz`, `aria2`, and `fzf` on top of `ripgrep`/`fd`/`bat`/`jq`/`zstd`; `dust`, `xh`, `doggo`, `jaq`, `difftastic`, `ouch`, `procs`, `watchexec`, `tailspin` (`tspin`), and `erdtree` (`erd`) are pinned GitHub release static binaries (amd64/arm64 only, `GH_RELEASE_PREFIX` mirror override) — either unpackaged in trixie or deliberately newer than the trixie apt build. The full catalog and agent usage rules live in `.agents/skills/modern-cli-toolkit/`.
+## Applicable gates
 
-## Change heuristics
+| Changed surface | Final checks after the last edit |
+| --- | --- |
+| Maintenance Markdown, skills, bridge files, internal navigation | Repository Markdown gate; metadata/reference checks for AI assets; `git diff --check` |
+| Runtime review prompt | Full runtime sequence below; prompt assembly and output-contract checks |
+| Code, config, scripts, CI, Docker, shared tooling | Full runtime sequence below; additional checks for the changed contract |
+| `docs/site` content/config/validators or dependencies affecting that site | Applicable checks above, plus `pnpm docs:build` (and `docs:check` when its types/components change) |
+| Config schema documented by the site | Full runtime sequence plus `pnpm docs:check` to verify source-derived field/enum references |
 
-- If a change touches shared tooling, CI, Docker, root docs, or workspace topology, run the repository validation flow.
-- When adding or removing packages, update package manifests, local `tsconfig.json` files, and root `tsconfig.json` references together.
-- When behavior changes touch config shape, agent adapters, MCP tool contracts, output rendering, deployment, or public workflows, update `Plan.md` roadmap summaries, the relevant `docs/` module, and `example/config.yaml` / `example/README.md` together.
-- When writing or revising Markdown documentation, follow `.agents/skills/docs-writing-style/SKILL.md`: verify every field, default, and command against code truth, then apply the bilingual de-AI style checklist.
-- If a task needs temporary helpers or captured output during repository maintenance, place them under `build/` subdirectories (`build/tmp/`, `build/logs/`) instead of creating root-level scratch files.
-- Keep AI-facing assets concise: stable repository rules belong in `AGENTS.md`, repeatable workflows belong in `.agents/skills/`, historical stage detail belongs in `docs/ai/milestones/`, and fixed regression checklists belong in `docs/ai/AGENTS.known-pitfalls.md`.
-- When updating AI-facing assets, merge with existing guidance instead of appending near-duplicate sections.
-- Keep tool-private AI files as tiny bridges or scoped deltas; do not copy the full `AGENTS.md` body into Copilot, Claude, Kilo, Zoo, opencode, or similar client-specific locations.
-- When updating the default review prompt, keep `docs/prompt-research.md`, `docs/ai/milestones/M0.5.md`, `prompts/system/code-reviewer.system.md`, and the relevant `Plan.md` roadmap summary in sync so future agents see both rationale and current contract.
-- When changing runtime shell-tool guidance or the deployment image baseline,
-  sync `AGENTS.md`, `prompts/system/code-reviewer.system.md`,
-  `docs/output-channels.md`, `development/README.md`, and `example/README.md`
-  together so agents only prefer tools that the shipped image guarantees.
+## Runtime sequence
 
-## Known pitfalls (fixed, do not reintroduce)
+Linux/CI: `pnpm ci`. Windows: use PowerShell 7+ and execute these in order;
+Node entrypoints avoid blocked `.ps1` shims. The build uses the package manager's
+Windows shim through `cmd` as an explicit exception.
 
-The complete fixed-issue checklist lives in `docs/ai/AGENTS.known-pitfalls.md`. Read it before non-trivial implementation, review, or AI-asset maintenance work so there is a single source of truth and no duplicate lists to keep in sync.
+| Order | Windows command | Linux command |
+| --- | --- | --- |
+| 1 | `node node_modules/eslint/bin/eslint.js . --max-warnings=0` | `pnpm lint` |
+| 2 | `node node_modules/typescript/bin/tsc -b tsconfig.json --pretty false` | `pnpm typecheck` |
+| 3 | `node node_modules/vitest/vitest.mjs run --coverage` | `pnpm test` |
+| 4 | `node node_modules/markdownlint-cli2/markdownlint-cli2-bin.mjs` | `pnpm markdownlint` |
+| 5 | `cmd /c "pnpm build"` | `pnpm build` |
+| 6 | `node packages/cli/dist/index.js eval --validate-only` | `pnpm eval:validate` |
 
-## Default verification order
+For site commands on Windows use `cmd /c "pnpm docs:build"` / `docs:check`.
+Run eval validation after build. Offline fixture validation does not exercise a
+real LLM; do not describe it as a model-quality benchmark.
 
-Run targeted checks while iterating, then restart every applicable gate after the final edit. `pnpm ci` is the final runtime gate on Linux/CI; on Windows use the commands below in order. Confirm the tools report discovered files/tests—a silent or no-op exit code 0 is not a pass.
+## Discovery and boundaries
 
-1. `node node_modules/eslint/bin/eslint.js . --max-warnings=0` (or `pnpm lint` on Linux)
-2. `node node_modules/typescript/bin/tsc -b tsconfig.json --pretty false` (or `pnpm typecheck`)
-3. `node node_modules/vitest/vitest.mjs run --coverage` (or `pnpm test`)
-4. `node node_modules/markdownlint-cli2/markdownlint-cli2-bin.mjs` (or `pnpm markdownlint`)
-5. `cmd /c "pnpm build"` (or `pnpm build`)
-6. Eval fixture validation after build: `node packages/cli/dist/index.js eval --validate-only` (or `pnpm eval:validate` on Linux/CI)
+- Tests: `packages/*/test/**/*.test.ts`; coverage: runtime package sources, with
+  exclusions defined by `vitest.config.ts`.
+- Markdown: `.markdownlint-cli2.yaml` includes hidden prompt/skill references and
+  ignores generated output. Invoke the `-bin.mjs` entrypoint, not the library
+  module, and confirm discovered file counts.
+- Root build/clean select `./packages/*`; `docs/site` is a separate workspace
+  application with its own public-content validators and CI job.
+- Inspect native dependency engine/build constraints in the manifests and
+  workspace YAML. Hydrate LFS assets before packaging. Detailed traps belong in
+  [build/docs pitfalls](pitfalls/AGENTS.build-and-docs.md).
+- A targeted pass does not replace this applicable final sequence. Preserve
+  failure logs, inspect missing test workers, and distinguish environment
+  restrictions from failed assertions.

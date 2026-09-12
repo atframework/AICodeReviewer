@@ -217,6 +217,7 @@ describe("translateWebhookToReviewEvent comment commands", () => {
     expect(result?.title).toBe("MR Title");
     expect(result?.reason).toBe("gitlab:comment_review");
     expect(result?.branch).toBe("feature");
+    expect(result?.targetBranch).toBe("main");
     expect(result?.labels).toEqual(["bug"]);
   });
 

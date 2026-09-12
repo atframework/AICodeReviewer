@@ -65,6 +65,14 @@ review:
 `exclude_sources: []` 清除继承的排除规则；
 规则之间为 OR，同一规则内的字段为 AND，每个字段可选 `glob` 或 RE2 `regex`。
 
+`include_branches` 是同一批自动提交事件的接收侧分支白名单：解析出非空
+列表时，未列分支的推送在接收时直接忽略且不持久化 receipt。最近一层整体
+胜出，`[]` 清除后回到接受全部分支。PR/MR、评论、issue 流程永不过滤，
+无分支的 P4/SVN hook 也不受此检查影响。
+填写 `main` 或 `release/1.x` 这样的完整分支名，不带 `refs/heads/` 前缀；
+匹配区分大小写，不展开 glob 或正则表达式。GitLab `Push Hook` 也走同一筛选和
+持久化队列。before/after SHA 全零的分支创建、删除通知会被忽略。
+
 ## PR/MR 执行时段
 
 PR/MR 分析可以使用独立的周计划，配置形状与 `review.auto_commit.schedule`
@@ -91,6 +99,22 @@ review:
 `review.auto_commit.schedule`；两者都未设置时不做任何时段限制。时段只门控
 自动 PR 事件和评论命令触发的评审——评论命令被推迟时会在 PR/MR 上回复一条
 说明计划开始时间的评论。PR/MR 没有首次接收延迟，也不组装提交批次。
+
+`review.pull_request.include_target_branches` 把 PR/MR 分析限制在列出的目标
+（base）分支——例如 `[main]` 只分析合入 `main` 的 PR/MR。同样三层整体替换，
+`[]` 清除后回到全部目标分支。目标分支未知的事件（评论命令的 PR 详情拉取
+失败）放行；push、issue 和手动流程永不过滤。
+目标分支同样按完整名称区分大小写匹配。允许缺失 ref；webhook 中明确传入空字符串
+或非字符串 ref 会作为无效请求拒绝。两个列表只在接收时应用，不重新筛选已接收任务。
+
+```yaml
+workspaces:
+  instances:
+    atframe-utils:
+      review:
+        pull_request:
+          include_target_branches: [main]
+```
 
 窗口外到达的事件由延期注册表接管，而不是裸定时器。配置了可观测存储
 （`storage.database` 加 `admin`，见仪表盘页面）时，延期会持久化并在重启后

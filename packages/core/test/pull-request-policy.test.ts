@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
 
+import { appConfigSchema } from "../src/config.js";
 import { isAllowedInstant } from "../src/weekly-schedule.js";
-import { pullRequestConfigSchema, resolvePullRequestSchedule } from "../src/pull-request-policy.js";
+import {
+  pullRequestConfigSchema,
+  resolvePullRequestSchedule,
+  resolvePullRequestTargetBranches,
+} from "../src/pull-request-policy.js";
 
 const WEEKDAY_PEAK_FREE_SCHEDULE = {
   timezone: "Asia/Shanghai",
@@ -43,6 +48,97 @@ describe("pullRequestConfigSchema", () => {
         schedule: { timezone: "Mars/Olympus", rules: [] },
       }),
     ).toThrow(/invalid IANA timezone/u);
+  });
+  it("validates include_target_branches entries", () => {
+    expect(pullRequestConfigSchema.parse({ include_target_branches: ["main"] })).toEqual({
+      include_target_branches: ["main"],
+    });
+    expect(pullRequestConfigSchema.parse({ include_target_branches: [] })).toEqual({
+      include_target_branches: [],
+    });
+    expect(() => pullRequestConfigSchema.parse({ include_target_branches: [""] })).toThrow();
+    expect(() => pullRequestConfigSchema.parse({ include_target_branches: "main" })).toThrow();
+  });
+});
+
+describe("resolvePullRequestTargetBranches", () => {
+  it("resolves parsed config per field without resetting inherited schedules or other workspaces", () => {
+    const config = appConfigSchema.parse({
+      review: { pull_request: { include_target_branches: ["main"], schedule: WEEKDAY_PEAK_FREE_SCHEDULE } },
+      workspaces: {
+        defaults: { review: { pull_request: { include_target_branches: ["dev"] } } },
+        instances: {
+          scheduled: { review: { pull_request: { schedule: { rules: [] } } } },
+          cleared: { review: { pull_request: { include_target_branches: [] } } },
+          restricted: { review: { pull_request: { include_target_branches: ["release/1.x"] } } },
+        },
+      },
+    });
+    const global = config.review.pull_request;
+    const defaults = config.workspaces.defaults.review?.pull_request;
+    const instance = (name: string) => config.workspaces.instances[name]?.review?.pull_request;
+    expect(resolvePullRequestTargetBranches(global, defaults, instance("scheduled"))).toEqual(["dev"]);
+    expect(resolvePullRequestSchedule(global, defaults, instance("scheduled"))?.unrestricted).toBe(true);
+    expect(resolvePullRequestTargetBranches(global, defaults, instance("cleared"))).toBeUndefined();
+    expect(resolvePullRequestSchedule(global, defaults, instance("cleared"))?.timezone).toBe("Asia/Shanghai");
+    expect(resolvePullRequestTargetBranches(global, defaults, instance("restricted"))).toEqual(["release/1.x"]);
+    expect(resolvePullRequestTargetBranches(global, defaults, undefined)).toEqual(["dev"]);
+  });
+
+  it("allows defaults to clear the global list even when the instance only sets a schedule", () => {
+    expect(resolvePullRequestTargetBranches(
+      { include_target_branches: ["main"] },
+      { include_target_branches: [] },
+      { schedule: { rules: [] } },
+    )).toBeUndefined();
+  });
+
+  it.each(["global", "defaults", "instance"])("rejects malformed allowlists at the %s config layer", (layer) => {
+    const review = { pull_request: { include_target_branches: [1] } };
+    const input = layer === "global" ? { review }
+      : { workspaces: layer === "defaults" ? { defaults: { review } } : { instances: { repo: { review } } } };
+    const result = appConfigSchema.safeParse(input);
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues).toEqual(expect.arrayContaining([
+        expect.objectContaining({ path: expect.arrayContaining(["pull_request", "include_target_branches", 0]) }),
+      ]));
+    }
+  });
+
+  it("returns undefined when no layer sets an allowlist", () => {
+    expect(resolvePullRequestTargetBranches(undefined, undefined, undefined)).toBeUndefined();
+    expect(resolvePullRequestTargetBranches({}, {}, {})).toBeUndefined();
+  });
+
+  it("prefers the instance layer over defaults over global with no merge", () => {
+    expect(
+      resolvePullRequestTargetBranches(
+        { include_target_branches: ["main"] },
+        { include_target_branches: ["dev"] },
+        { include_target_branches: ["release/1.x"] },
+      ),
+    ).toEqual(["release/1.x"]);
+    expect(
+      resolvePullRequestTargetBranches(
+        { include_target_branches: ["main"] },
+        { include_target_branches: ["dev"] },
+        undefined,
+      ),
+    ).toEqual(["dev"]);
+    expect(
+      resolvePullRequestTargetBranches({ include_target_branches: ["main"] }, undefined, undefined),
+    ).toEqual(["main"]);
+  });
+
+  it("clears an inherited allowlist with an explicit empty array", () => {
+    expect(
+      resolvePullRequestTargetBranches(
+        { include_target_branches: ["main"] },
+        { include_target_branches: ["dev"] },
+        { include_target_branches: [] },
+      ),
+    ).toBeUndefined();
   });
 });
 

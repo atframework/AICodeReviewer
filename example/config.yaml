@@ -810,6 +810,11 @@ review:
   #       vcs: p4
   #       match:
   #         client: { glob: "ci-*" }
+  #   include_branches:         # exact, case-sensitive names without refs/heads/ (no glob/regex);
+  #     - main                  # nearest layer wins wholesale; [] clears back to all branches.
+  #                             # When non-empty, pushes to unlisted branches are ignored at
+  #                             # receive time (no receipt persisted); PR/MR/comment flows are
+  #                             # unaffected and branchless P4/SVN hooks are never filtered.
   # PR/MR review scheduling (pull_request target events, including review
   # commands posted as comments). Same shape as auto_commit.schedule but with
   # no receive delay or commit batching; unset at all layers = fall back to the resolved
@@ -829,6 +834,11 @@ review:
   #       - days: [sat, sun]
   #         windows:
   #           - { start: "00:00", end: "24:00" }
+  #   include_target_branches:  # exact, case-sensitive PR/MR target (base) names (no glob/regex);
+  #     - main                  # nearest layer wins wholesale; [] clears back to all branches.
+  #                             # PRs/MRs targeting unlisted branches are ignored at receive
+  #                             # time; an unknown target branch (comment-command enrichment
+  #                             # failure) is allowed; push/issue/manual flows are unaffected.
   # AICR label management — skip review if PR/MR/issue has these labels,
   # and auto-tag targets when review starts/completes.
   # All fields support global → workspace-level override.

@@ -69,6 +69,128 @@ describe("createServerApp", () => {
     expect(body.reviewEvent?.headSha).toBe("head-sha");
   });
 
+  it("ignores a pull_request whose target branch is outside the workspace allowlist", async () => {
+    const app = createServerApp({
+      gitea: {
+        triggerName: "gitea-internal",
+        workspaceId: "gitea-internal-owent-example",
+        webhookSecret,
+      },
+      getPullRequestTargetBranches: () => ["main"],
+    });
+    const payload = JSON.stringify({
+      action: "opened",
+      repository: { full_name: "owent/example" },
+      sender: { login: "owent" },
+      pull_request: {
+        html_url: "https://gitea.internal.corp/owent/example/pulls/43",
+        base: { sha: "base-sha", ref: "dev" },
+        head: { sha: "head-sha", ref: "feature/x" },
+      },
+    });
+
+    const response = await app.request("/webhooks/gitea", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-gitea-event": "pull_request",
+        "x-gitea-signature": sign(payload),
+      },
+      body: payload,
+    });
+    const body = (await response.json()) as {
+      accepted: boolean;
+      reason?: string;
+      branch?: string;
+      reviewEvent?: unknown;
+    };
+
+    expect(response.status).toBe(200);
+    expect(body.accepted).toBe(false);
+    expect(body.reason).toBe("target_branch_not_watched");
+    expect(body.branch).toBe("dev");
+    expect(body.reviewEvent).toBeUndefined();
+  });
+
+  it("accepts a pull_request targeting a watched branch and maps targetBranch", async () => {
+    const app = createServerApp({
+      gitea: {
+        triggerName: "gitea-internal",
+        workspaceId: "gitea-internal-owent-example",
+        webhookSecret,
+      },
+      getPullRequestTargetBranches: () => ["main"],
+    });
+    const payload = JSON.stringify({
+      action: "opened",
+      repository: { full_name: "owent/example" },
+      sender: { login: "owent" },
+      pull_request: {
+        html_url: "https://gitea.internal.corp/owent/example/pulls/42",
+        base: { sha: "base-sha", ref: "main" },
+        head: { sha: "head-sha", ref: "feature/x" },
+      },
+    });
+
+    const response = await app.request("/webhooks/gitea", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-gitea-event": "pull_request",
+        "x-gitea-signature": sign(payload),
+      },
+      body: payload,
+    });
+    const body = (await response.json()) as {
+      accepted: boolean;
+      reviewEvent?: { targetBranch?: string; branch?: string };
+    };
+
+    expect(response.status).toBe(202);
+    expect(body.accepted).toBe(true);
+    expect(body.reviewEvent?.targetBranch).toBe("main");
+    expect(body.reviewEvent?.branch).toBe("feature/x");
+  });
+
+  it("fails open when the pull_request payload carries no base ref", async () => {
+    const app = createServerApp({
+      gitea: {
+        triggerName: "gitea-internal",
+        workspaceId: "gitea-internal-owent-example",
+        webhookSecret,
+      },
+      getPullRequestTargetBranches: () => ["main"],
+    });
+    const payload = JSON.stringify({
+      action: "opened",
+      repository: { full_name: "owent/example" },
+      sender: { login: "owent" },
+      pull_request: {
+        html_url: "https://gitea.internal.corp/owent/example/pulls/42",
+        base: { sha: "base-sha" },
+        head: { sha: "head-sha" },
+      },
+    });
+
+    const response = await app.request("/webhooks/gitea", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-gitea-event": "pull_request",
+        "x-gitea-signature": sign(payload),
+      },
+      body: payload,
+    });
+    const body = (await response.json()) as {
+      accepted: boolean;
+      reviewEvent?: { targetBranch?: string };
+    };
+
+    expect(response.status).toBe(202);
+    expect(body.accepted).toBe(true);
+    expect(body.reviewEvent?.targetBranch).toBeUndefined();
+  });
+
   it("enriches a Gitea /aicr review comment on a pull request with fetched PR details", async () => {
     const prApiUrl = "https://gitea.internal.corp/api/v1/repos/owent/example/pulls/42";
     const fetchSpy = vi
@@ -132,6 +254,7 @@ describe("createServerApp", () => {
           headSha?: string;
           baseSha?: string;
           branch?: string;
+          targetBranch?: string;
           reason?: string;
           title?: string;
         };
@@ -144,6 +267,7 @@ describe("createServerApp", () => {
       expect(body.reviewEvent?.headSha).toBe("comment-head-sha");
       expect(body.reviewEvent?.baseSha).toBe("comment-base-sha");
       expect(body.reviewEvent?.branch).toBe("feature/login");
+      expect(body.reviewEvent?.targetBranch).toBe("main");
       expect(body.reviewEvent?.reason).toBe("gitea:comment_review");
       expect(body.reviewEvent?.title).toBe("Fix the login bug");
     } finally {
@@ -1459,8 +1583,54 @@ describe("createServerApp", () => {
       baseSha: "base-sha-gitlab",
       headSha: "head-sha-gitlab",
       branch: "feature/aicr",
+      targetBranch: "main",
       url: "https://gitlab.example.com/owent/example/-/merge_requests/77",
     });
+  });
+
+  it("ignores a GitLab merge request targeting an unwatched branch", async () => {
+    const app = createServerApp({
+      gitlab: {
+        triggerName: "gitlab-self-hosted",
+        workspaceId: "gitlab-owent-example",
+        webhookSecret,
+      },
+      getPullRequestTargetBranches: () => ["main"],
+    });
+    const payload = JSON.stringify({
+      object_attributes: {
+        iid: 78,
+        action: "open",
+        source_branch: "feature/aicr",
+        target_branch: "develop",
+        diff_refs: { base_sha: "base-sha-gitlab", head_sha: "head-sha-gitlab" },
+        url: "https://gitlab.example.com/owent/example/-/merge_requests/78",
+      },
+      project: { path_with_namespace: "owent/example" },
+      user: { username: "owent" },
+    });
+
+    const response = await app.request("/webhooks/gitlab", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-gitlab-event": "Merge Request Hook",
+        "x-gitlab-token": webhookSecret,
+      },
+      body: payload,
+    });
+    const body = (await response.json()) as {
+      accepted: boolean;
+      reason?: string;
+      branch?: string;
+      reviewEvent?: unknown;
+    };
+
+    expect(response.status).toBe(200);
+    expect(body.accepted).toBe(false);
+    expect(body.reason).toBe("target_branch_not_watched");
+    expect(body.branch).toBe("develop");
+    expect(body.reviewEvent).toBeUndefined();
   });
 
   it("maps a GitLab push webhook ref to the branch field", async () => {

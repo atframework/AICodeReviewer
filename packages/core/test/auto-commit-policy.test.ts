@@ -134,6 +134,52 @@ describe("layered resolution (C01–C04)", () => {
     expect(resolved.exclusions.rules).toHaveLength(0);
   });
 
+  it("resolves include_branches nearest-first with no cross-layer merge", () => {
+    expect(policy(undefined, undefined, undefined).includeBranches).toBeUndefined();
+    expect(policy({ include_branches: ["main"] }).includeBranches).toEqual(["main"]);
+    expect(
+      policy({ include_branches: ["main"] }, { include_branches: ["dev"] }).includeBranches,
+    ).toEqual(["dev"]);
+    expect(
+      policy(
+        { include_branches: ["main"] },
+        { include_branches: ["dev"] },
+        { include_branches: ["release/1.x"] },
+      ).includeBranches,
+    ).toEqual(["release/1.x"]);
+  });
+
+  it("clears an inherited branch allowlist with an explicit empty array", () => {
+    const resolved = policy(
+      { include_branches: ["main"] },
+      { include_branches: ["dev"] },
+      { include_branches: [] },
+    );
+    expect(resolved.includeBranches).toBeUndefined();
+  });
+
+  it("keeps policyVersion stable when only include_branches changes", () => {
+    const a = policy(undefined, undefined, undefined);
+    const b = policy({ include_branches: ["main"] }, undefined, undefined);
+    expect(a.policyVersion).toBe(b.policyVersion);
+  });
+
+  it("preserves inherited branch filtering when an instance only overrides delay or schedule", () => {
+    const resolved = policy(
+      { include_branches: ["main"] },
+      { include_branches: ["release/1.x"], delay_seconds: 25 },
+      { schedule: { rules: [] } },
+    );
+    expect(resolved.includeBranches).toEqual(["release/1.x"]);
+    expect(resolved.delaySeconds).toBe(25);
+    expect(resolved.schedule.unrestricted).toBe(true);
+    expect(policy(
+      { include_branches: ["main"] },
+      { include_branches: [] },
+      { delay_seconds: 0 },
+    ).includeBranches).toBeUndefined();
+  });
+
   it("changes policyVersion when the effective exclusion set changes", () => {
     const rule = {
       id: "bots",
@@ -202,6 +248,14 @@ describe("schema validation (C05/C06/C09/C10)", () => {
     ).toBe(false);
   });
 
+  it("validates include_branches entries (B01)", () => {
+    expect(autoCommitConfigSchema.safeParse({ include_branches: ["main"] }).success).toBe(true);
+    expect(autoCommitConfigSchema.safeParse({ include_branches: [] }).success).toBe(true);
+    expect(autoCommitConfigSchema.safeParse({ include_branches: [""] }).success).toBe(false);
+    expect(autoCommitConfigSchema.safeParse({ include_branches: "main" }).success).toBe(false);
+    expect(autoCommitConfigSchema.safeParse({ include_branches: [1] }).success).toBe(false);
+  });
+
   it("parses auto_commit at all three config layers (C01 surface)", () => {
     const parsed = appConfigSchema.parse({
       review: { auto_commit: { delay_seconds: 300 } },
@@ -215,6 +269,20 @@ describe("schema validation (C05/C06/C09/C10)", () => {
     expect(parsed.review.auto_commit?.delay_seconds).toBe(300);
     expect(parsed.workspaces.defaults.review?.auto_commit?.delay_seconds).toBe(180);
     expect(parsed.workspaces.instances.game?.review?.auto_commit?.delay_seconds).toBe(120);
+  });
+
+  it("parses include_branches through the app config surface (B01 surface)", () => {
+    const parsed = appConfigSchema.parse({
+      workspaces: {
+        instances: {
+          game: { review: { auto_commit: { include_branches: ["main", "release/1.x"] } } },
+        },
+      },
+    });
+    expect(parsed.workspaces.instances.game?.review?.auto_commit?.include_branches).toEqual([
+      "main",
+      "release/1.x",
+    ]);
   });
 });
 

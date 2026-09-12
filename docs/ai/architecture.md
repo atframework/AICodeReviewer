@@ -9,6 +9,20 @@ Workspace 多工程匹配、数据库配置管理与自动迁移的新方案见
 [进行中的设计](../superpowers/specs/2026-09-11-workspace-config-management.md)。
 该方案尚未实现，不替代本页现有合同；执行和测试入口见 [Plan.md](../../Plan.md)。
 
+## 按需阅读
+
+本文件保留稳定章节锚点供代码、skills 和历史引用。先用 `rg -n "^#{2,4} "`
+定位标题，再读取对应章节；无需通读。跨主题入口见 [文档导航](index.md)。
+
+| 主题 | 章节 |
+| --- | --- |
+| 触发、调度、延期 | §3.1 |
+| VCS、认证、多源上下文 | §3.2 |
+| 压缩、LLM、模型目录 | §3.3、§3.5、§3.13 |
+| Prompt、skills、adapter、sandbox | §3.6–3.8、§4 |
+| 输出、MCP、模板、问题生命周期 | §3.9 |
+| 配置、store、observability、reflection | §3.10–3.12 |
+
 ## 2. 技术方向与仓库组织
 
 ### 2.1 技术栈基线
@@ -115,6 +129,22 @@ Workspace 多工程匹配、数据库配置管理与自动迁移的新方案见
   多组 `days+windows` 周计划（整体替换、`rules: []` 清除限制、默认 UTC）、`exclude_sources`
   glob/RE2 来源排除；workspace schedule 不跨层深合并。`review.pull_request.schedule` 形状相同
   （仅 `timezone` + `rules`），同样三层整体替换。
+- `include_branches`（同三层、最近层整体胜出、`[]` 清除继承回全部分支）是接收侧分支白名单：
+  解析出非空列表时，仅接受 `reviewEvent.branch` 在列的自动提交事件（在 `autoCommit.accept`
+  之前判定，未列分支不落 receipt，记 `ignored`/`branch_not_watched`，回 200）；
+  PR/issue/comment 流程不受影响，无分支事件（P4/SVN hook）永不过滤；不进入
+  `policyVersion`，已封存 receipt 不回溯。
+  名称区分大小写、精确匹配，不带 `refs/heads/`，不展开 glob/regex；GitLab 原生
+  `Push Hook` 与兼容入口 `git_push` 也按 push 接入此筛选及持久化队列。Git 平台的
+  before/after SHA 全零通知统一忽略，避免将分支创建、删除作为可分析范围。
+- `review.pull_request.include_target_branches`（同三层、同语义）是 PR/MR 分析的目标
+  （base）分支白名单：`ReviewEvent.targetBranch` 由 Gitea/GitHub `pull_request.base.ref`、
+  GitLab `object_attributes.target_branch` 及评论命令 PR 详情 enrichment 的 `base.ref`
+  映射；解析出非空列表时目标分支未列出的 pull_request 事件在接收时忽略（记
+  `ignored`/`target_branch_not_watched`，回 200，不产生 run），目标分支未知
+  （enrichment 失败）时放行，push/issue/手动流程永不过滤。
+  目标分支同样精确匹配；webhook 提供的 ref 必须是非空字符串，不能把无效类型当作
+  缺失值放行。两个列表仅管接收，已接收的 receipt 和延期事件不重新筛选。
 - 跨通知合并按 stream 汇总到期成员后才封存 batch；通知只保存 receipt/成员关联，不能
   每条通知单独触发分析。设计中的 A1–A3、A4–A5、B1 三条通知得到 A1–A5、B1 两批，
   重叠通知不把已归属批次的成员重新入队；没有通知覆盖的提交不主动补扫。
@@ -434,7 +464,9 @@ AICR 采用**两层上下文管理**，两者互补：
 ### 3.6 Prompt Manager 与 AI 资产装配
 
 - 常驻仓库规则只放在 `AGENTS.md`；`AGENTS.md` 与 `.agents/skills/` 是跨工具共享真源。
-- 详细、可复用的 workflow 放在 `.agents/skills/*/SKILL.md`。
+- 任务流程放在 `.agents/skills/*/SKILL.md`；较长合同按具体触发条件读取引用。
+- 坑点和来源入口只做主题导航，不要求通读全部条目；验证命令统一放在
+  `AGENTS.repository-baseline.md`。
 - Claude / Zoo / Kilo / Copilot 等私有格式只做桥接，不维护重复正文；共享规则写在
   canonical 层，工具私有文件只保留最小差异。
 - 历史阶段说明放在 `docs/ai/milestones/*.md`。

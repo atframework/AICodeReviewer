@@ -3189,6 +3189,52 @@ describe("bootstrapServerApp", () => {
     }
   });
 
+  it("wires the layered auto-commit branch allowlist through getAutoCommitBranches", async () => {
+    vi.stubEnv("OPENAI_API_KEY", "test-key");
+    const base = makeConfig();
+    try {
+      const app = await bootstrapServerApp({ config: makeConfig({
+        review: { ...base.review, auto_commit: { include_branches: ["trunk"] } },
+        workspaces: {
+          ...base.workspaces,
+          instances: {
+            mainonly: { review: { auto_commit: { include_branches: ["main"] } } },
+            cleared: { review: { auto_commit: { include_branches: [] } } },
+          },
+        },
+      }), baseSystemPrompt: "test" });
+      expect(app.getAutoCommitBranches?.("mainonly")).toEqual(["main"]);
+      expect(app.getAutoCommitBranches?.("cleared")).toBeUndefined();
+      expect(app.getAutoCommitBranches?.("other")).toEqual(["trunk"]);
+      await app.closeAutoCommit?.();
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("wires the layered pull_request target-branch allowlist through getPullRequestTargetBranches", async () => {
+    vi.stubEnv("OPENAI_API_KEY", "test-key");
+    const base = makeConfig();
+    try {
+      const app = await bootstrapServerApp({ config: makeConfig({
+        review: { ...base.review, pull_request: { include_target_branches: ["trunk"] } },
+        workspaces: {
+          ...base.workspaces,
+          instances: {
+            mainonly: { review: { pull_request: { include_target_branches: ["main"] } } },
+            cleared: { review: { pull_request: { include_target_branches: [] } } },
+          },
+        },
+      }), baseSystemPrompt: "test" });
+      expect(app.getPullRequestTargetBranches?.("mainonly")).toEqual(["main"]);
+      expect(app.getPullRequestTargetBranches?.("cleared")).toBeUndefined();
+      expect(app.getPullRequestTargetBranches?.("other")).toEqual(["trunk"]);
+      await app.closeAutoCommit?.();
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("passes the complete ordered model chain to agent orchestration", async () => {
     const originalKey = process.env.OPENAI_API_KEY;
     process.env.OPENAI_API_KEY = "test-key";

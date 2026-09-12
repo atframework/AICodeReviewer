@@ -69,6 +69,16 @@ by execution window`. `exclude_sources: []` clears inherited exclusions; rules
 use OR, fields within a rule use AND, and each field accepts either `glob` or
 RE2 `regex`.
 
+`include_branches` is a receive-side branch allowlist for the same automatic
+commit events: when the resolved list is non-empty, pushes to unlisted branches
+are ignored at receive time without persisting a receipt. The nearest layer
+wins wholesale and `[]` clears back to all branches. PR/MR, comment, and issue
+flows are never filtered, and branchless P4/SVN hooks bypass the check.
+Use exact, case-sensitive branch names such as `main` or `release/1.x`, without
+the `refs/heads/` prefix; glob patterns and regular expressions are not expanded.
+GitLab `Push Hook` events use this same filter and persistent queue. Branch
+creation/deletion notifications with an all-zero before/after SHA are ignored.
+
 ## Pull request schedules
 
 PR/MR analysis can use its own weekly window with the same shape as
@@ -98,6 +108,25 @@ every instant is allowed. Only automatic pull-request events and
 comment-triggered review commands are gated — a deferred comment command
 posts a reply on the PR/MR stating the scheduled start. There is no
 first-receive delay or commit batching for pull requests.
+
+`review.pull_request.include_target_branches` restricts PR/MR analysis to the
+listed target (base) branches — for example `[main]` analyzes only PRs/MRs
+that merge into `main`. It follows the same three-layer wholesale replacement
+and `[]` clears back to all branches. Events whose target branch is unknown
+(a failed PR-detail fetch for a comment command) are allowed through; push,
+issue, and manual flows are never filtered.
+Target branch names also use exact, case-sensitive matching. A missing ref is
+allowed; a supplied empty or non-string webhook ref is rejected as invalid.
+These lists apply at reception and do not re-filter previously accepted work.
+
+```yaml
+workspaces:
+  instances:
+    atframe-utils:
+      review:
+        pull_request:
+          include_target_branches: [main]
+```
 
 Outside the window the event is held by the deferral registry instead of a
 bare timer. With the observability store configured (`storage.database` plus

@@ -1,110 +1,32 @@
 ---
 name: plan-implementation-audit
-description: "Use when: comparing roadmap/docs with implementation, auditing or retiring completed task plans/specs, identifying gaps, fixing issues, or adding missing tests; do not use for unrelated feature work."
+description: "Compare roadmap or design claims with implementation and retire completed task artifacts; skip unrelated feature work or ordinary test additions."
 user-invocable: false
 ---
 
 # Plan Implementation Audit
 
-## When to Use
+1. Read the relevant unfinished item in `Plan.md`. Use
+   [the documentation map](../../../docs/ai/index.md) for corresponding contracts
+   and decisions; consult milestones only when acceptance history matters.
+2. Map each acceptance claim to code, configuration wiring, consumer behavior,
+   and meaningful tests. A schema field or mock alone does not establish runtime
+   behavior. Load only matching [pitfall topics](../../../docs/ai/AGENTS.known-pitfalls.md).
+3. Separate local implementation, real local-backend acceptance, and deployment
+   evidence. An external service label does not block local work that can be
+   verified independently. State gaps and a plan before fixing them.
+4. Trace persistence through recovery: fresh process, expired lease, partial
+   pages, retry budgets, config changes, and actual downstream call counts.
+   Use public records in conformance fixtures (`computeStreamId(receipt)` instead
+   of adding a memory-only property). Local checkpoints cannot prove remote
+   exactly-once publication. See [scheduling](../../../docs/ai/pitfalls/AGENTS.scheduling.md).
+5. Map the actual diff to docs/examples and update affected contracts in the same
+   change. For runtime or output work select the corresponding specialized skill;
+   do not copy its checklist here. Run the applicable final baseline gates.
+6. Retire a `docs/superpowers/{specs,plans}/` file only when implementation,
+   validation, and durable decisions are accounted for. Search inbound links and
+   update them first. Unchecked template boxes alone do not prove incompleteness;
+   retain tasks with missing evidence. Keep `Plan.md` forward-looking.
 
-- When asked to compare the roadmap/docs with current implementation.
-- When asked to find and fix issues in the current milestone.
-- When asked to add missing unit tests or improve coverage.
-- When asked to clean completed files from `docs/superpowers/specs/` or `docs/superpowers/plans/`.
-
-## Do Not Use
-
-- For feature work that does not involve roadmap/document comparison.
-
-## Procedure
-
-### Step 1: Understand current milestone status
-
-Read `Plan.md` current status and local/external work tables first. Then read `../../../docs/ai/index.md` to locate the detailed architecture, decision, and completed-milestone docs you actually need. Separate local implementation and loopback-service acceptance from deployment-specific validation; an external service label alone is not proof that all work is blocked.
-
-### Step 2: Check known pitfalls before making changes
-
-Read `../../../docs/ai/AGENTS.known-pitfalls.md` when doing non-trivial implementation or review work. These are issues found and fixed in prior sessions — do not reintroduce them. Key checks:
-
-- Config schema fields from `../../../docs/ai/architecture.md` §3.10 (compression, LLM, queue, review, workspaces)
-- Store schema columns from `../../../docs/ai/architecture.md` §3.11 (triggerName, provider, providerModel)
-- `isPlainObject` rejecting Date/RegExp
-- `normalizePath` compressing consecutive slashes
-- `estimateTokens` handling CJK characters
-- Prompt manager conflict detection
-- MCP tool contracts in `../../../docs/ai/architecture.md` §3.9 and `../../../docs/output-channels.md`, including `aicr.report_problem`, `aicr.publish_summary`, `aicr.fetch_more_context`, `aicr.try_blame`, and only-advertise-when-implemented planned tools such as memory/skill recall
-- Output channel policy in `../../../docs/ai/architecture.md` §3.9/§3.10 and `../../../docs/output-channels.md`, including per-channel `no_problems` resolution and non-PR/MR target link rendering
-- Agent Runtime Bundle responsibilities from `../../../docs/ai/architecture.md` §3.6.3 / §3.7: LLM config, MCP config, instructions, skills, env vars, and manifest must be audited together
-- Review orchestrator status logic when `dryRun=false`
-- No unused imports
-- DRY utility functions from `packages/core/src/utils.ts`
-
-### Step 3: Run baseline verification
-
-Use the environment-appropriate commands (see AGENTS.md "Environment notes"):
-
-1. Lint
-2. Typecheck
-3. Tests
-4. Markdownlint (if docs changed)
-
-### Step 4: Identify gaps
-
-For each in-progress milestone, check:
-
-1. **Schema completeness**: Do Zod schemas in `config.ts` match `docs/ai/architecture.md` §3.10? Does `store/schema.ts` match §3.11?
-2. **Test coverage**: Are there test files for every source file? Are error paths, edge cases, and alternative formats covered?
-3. **Code correctness**: Do implementations match the contracts described in the roadmap summaries and detailed docs?
-   - Follow persisted fields through their consumers: a schema column alone does not prove recovery works. Exercise fresh-process retry budgets, partial pages, expired leases, and configuration changes through the scheduler/runtime, then run the shared store contract against real backends. Separate local checkpoint recovery from remote publication guarantees.
-4. **Agent runtime consistency**: If agent adapters changed, do tests cover model translation, MCP config materialization, three-layer skill/instruction merging (system built-in → user common → project/repo-local), isolated HOME/env handling, and stdout fallback behavior?
-5. **Context tool boundaries**: If VCS context tools changed, do they preserve scoped fetch, path allowlists, multi-repo selector validation, and no full recursive submodule fetch by default?
-6. **Output policy correctness**: If output routing or templates changed, do tests cover global → channel → workspace `no_problems` overrides, mixed-channel suppression/publishing, and commit/revision target links without misleading `View PR` labels?
-7. **Document sync**: Did the change touch config shape, agent adapters, MCP/output contracts, output rendering, deployment behavior, or review orchestration semantics without updating the relevant roadmap item, `docs/ai/architecture.md`, `example/config.yaml`, or `example/README.md`? See Step 5 for the mandatory sync checklist.
-
-### Step 5: Document sync check (mandatory)
-
-Before declaring a change complete, verify documentation alignment:
-
-- **Start from the actual changed files** → Inspect `git diff --name-only`, `git show --name-only`, or the task's explicit file list. Map each changed source/config/test file to its public contract surfaces before deciding docs are unnecessary.
-
-1. **Config shape changes** → Update `docs/ai/architecture.md` §3.10, `packages/core/test/config.test.ts`, and `example/config.yaml`; keep only unfinished work in `Plan.md`.
-2. **Store schema changes** → Update `docs/ai/architecture.md` §3.11 and the matching store tests; keep only unfinished work in `Plan.md`.
-3. **Agent adapter / MCP tool contract changes** → Update `docs/ai/architecture.md` §3.6–3.7, `docs/output-channels.md`, and relevant skill files.
-4. **Output rendering or channel behavior changes** → Update `docs/ai/architecture.md` §3.9, `docs/output-channels.md`, `example/config.yaml`, and `example/README.md`.
-5. **Review orchestration semantics changes** (deduplication, update strategy, comment commands) → Update `docs/ai/architecture.md` §3.1/§3.9, the affected `Plan.md` task, and example docs.
-6. **Deployment or public workflow changes** → Update `example/README.md`, `docs/podman.md`, and the deployment acceptance item in `Plan.md`.
-
-For each matched category, verify both user-facing docs and example config snippets. If a change genuinely requires no doc update, explicitly state the reason in the change summary. Do not skip this check silently.
-
-### Step 6: Fix and test
-
-- Fix code issues first, then add tests.
-- When a fix changes config, agent behavior, MCP/output contracts, deployment, or public workflows, update the matching docs and examples (`Plan.md` roadmap summary, `docs/`, `example/config.yaml`, `example/README.md`) in the same change.
-- Always run the full verification chain after changes.
-- Conformance fixtures must use the public record contract. For example, derive an auto-commit stream ID with `computeStreamId(receipt)`; an extra `streamId` property retained by the memory backend is absent from SQLite receipts and is not part of the interface.
-- Update `../../../docs/ai/AGENTS.known-pitfalls.md` if a new recurring issue is found.
-
-### Step 7: Retire completed task artifacts
-
-Treat `docs/superpowers/specs/` and `docs/superpowers/plans/` as active work, not an archive. For each cleanup candidate:
-
-1. Map its goals and acceptance criteria to current code, tests, documentation, deployment evidence when applicable, and git history; unchecked template boxes alone do not prove the work is unfinished.
-2. Search the repository for references and move any still-useful design decision into the authoritative long-lived doc or skill.
-3. Delete only files whose work is complete and whose durable content is preserved. Keep incomplete or still-referenced artifacts and report the missing evidence.
-
-### Step 8: Summarize
-
-Provide a table of: issue found, file location, fix applied, test added, and docs/examples updated or why no docs/examples were needed.
-
-## Common test gaps to check
-
-| Package            | Common gaps                                                                                                                                                 |
-| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `@aicr/llm`        | Error paths (missing choices/message), default base URLs, organization header, extra params                                                                 |
-| `@aicr/outputs`    | `renderProblemMarkdown` variants (no suggestion, no fingerprint, with endLine), target link templates for PR and non-PR events, no-auth dispatch            |
-| `@aicr/mcp-output` | `fetchMoreContext` without handler, individual validation edge cases, tool schema/name drift                                                                |
-| `@aicr/server`     | Alternative LLM output format (problems/summary/skipReason), removed finding aliases rejection, invalid JSON, status logic, per-channel no-problems routing |
-| `@aicr/vcs`        | Multi-file diffs, copied files, context-only hunks, empty diffs                                                                                             |
-| `@aicr/agents`     | Runtime bundle materialization, model config, MCP tools, native skills, isolated env, manifest; must have tests even for simple exports                     |
-| `@aicr/sandbox`    | Must have at least `test/index.test.ts` even if only exporting a constant                                                                                   |
+Report each material gap with its source, fix or remaining work, and validation.
+Do not require one test file per source file; test observable contracts and risks.

@@ -22,9 +22,9 @@ function sign(payload: string): string {
   return createHmac("sha256", webhookSecret).update(payload).digest("hex");
 }
 
-function giteaPushPayload(): string {
+function giteaPushPayload(ref = "refs/heads/main"): string {
   return JSON.stringify({
-    ref: "refs/heads/main",
+    ref,
     before: "1111111111111111111111111111111111111111",
     after: "2222222222222222222222222222222222222222",
     repository: { full_name: "owent/example" },
@@ -91,6 +91,90 @@ describe("auto-commit webhook wiring", () => {
     const streamHead = await store.readStreamHead(receipt!.receipt.streamId);
     expect(streamHead?.streamId).toBe(receipt!.receipt.streamId);
     expect(await store.readNextWake()).toBeDefined();
+  });
+
+  it("ignores a push to a branch outside the workspace allowlist before persistence", async () => {
+    const acceptSpy = vi.fn(async (_input: AutoCommitAcceptInput) => {
+      throw new Error("accept must not be called for an off-branch push");
+    });
+    const acceptor: AutoCommitAcceptor = { accept: acceptSpy };
+    const app = createServerApp({
+      gitea: { triggerName: "gitea-internal", workspaceId: "ws-main", webhookSecret },
+      autoCommit: acceptor,
+      getAutoCommitBranches: () => ["main"],
+    });
+
+    const payload = giteaPushPayload("refs/heads/dev");
+    const response = await app.request("/webhooks/gitea", {
+      method: "POST",
+      headers: giteaHeaders(payload, "push"),
+      body: payload,
+    });
+    const body = (await response.json()) as {
+      accepted: boolean;
+      reason?: string;
+      branch?: string;
+    };
+
+    expect(response.status).toBe(200);
+    expect(body.accepted).toBe(false);
+    expect(body.reason).toBe("branch_not_watched");
+    expect(body.branch).toBe("dev");
+    expect(acceptSpy).not.toHaveBeenCalled();
+  });
+
+  it("accepts a push to a watched branch when an allowlist is configured", async () => {
+    const store = createMemoryAutoCommitStore();
+    const runtime = new AutoCommitRuntime({
+      store,
+      getPolicyLayers: () => ({}),
+    });
+    const app = createServerApp({
+      gitea: { triggerName: "gitea-internal", workspaceId: "ws-main", webhookSecret },
+      autoCommit: runtime,
+      getAutoCommitBranches: () => ["main"],
+    });
+
+    const payload = giteaPushPayload();
+    const response = await app.request("/webhooks/gitea", {
+      method: "POST",
+      headers: giteaHeaders(payload, "push"),
+      body: payload,
+    });
+    const body = (await response.json()) as { accepted: boolean; processing?: QueuedProcessing };
+
+    expect(response.status).toBe(202);
+    expect(body.accepted).toBe(true);
+    expect(body.processing?.status).toBe("queued");
+  });
+
+  it("never filters branchless P4 hooks against the branch allowlist", async () => {
+    const store = createMemoryAutoCommitStore();
+    const runtime = new AutoCommitRuntime({
+      store,
+      getPolicyLayers: () => ({}),
+    });
+    const app = createServerApp({
+      p4: {
+        triggerName: "p4-main",
+        workspaceId: "ws-p4",
+        port: "ssl:p4.example.com:1666",
+        user: "swarm",
+        ticket: "ticket",
+      },
+      autoCommit: runtime,
+      getAutoCommitBranches: () => ["main"],
+    });
+
+    const response = await app.request("/triggers/p4", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ change: "1024", user: "alice" }),
+    });
+    const body = (await response.json()) as { accepted: boolean; processing?: QueuedProcessing };
+
+    expect(response.status).toBe(202);
+    expect(body.processing?.mode).toBe("queued");
   });
 
   it("deduplicates a redelivered push on the deterministic delivery key", async () => {
@@ -251,6 +335,7 @@ describe("auto-commit webhook wiring", () => {
       store,
       getPolicyLayers: () => ({}),
     });
+    const branchLookup = vi.fn(() => ["main"]);
     const app = createServerApp({
       svn: {
         triggerName: "svn-main",
@@ -258,6 +343,7 @@ describe("auto-commit webhook wiring", () => {
         repositoryUrl: "https://svn.example.com/repos/project",
       },
       autoCommit: runtime,
+      getAutoCommitBranches: branchLookup,
     });
 
     const response = await app.request("/triggers/svn", {
@@ -272,6 +358,7 @@ describe("auto-commit webhook wiring", () => {
     const receipt = await store.getReceipt(body.processing!.receiptId!);
     expect(receipt?.receipt.vcs).toBe("svn");
     expect(receipt?.receipt.coverage).toEqual({ kind: "single", revision: "421" });
+    expect(branchLookup).not.toHaveBeenCalled();
   });
 });
 

@@ -14,6 +14,10 @@
  *   is never consulted.
  * - `exclude_sources`: nearest explicitly set array wins wholesale; `[]`
  *   clears inherited rules. Rule semantics live in auto-commit-exclusion.ts.
+ * - `include_branches`: nearest explicitly set array wins wholesale; `[]`
+ *   clears the inherited allowlist (back to all branches). When the resolved
+ *   list is non-empty, only automatic commit events whose `reviewEvent.branch`
+ *   is listed are accepted; branchless events (P4/SVN hooks) are not filtered.
  *
  * Defaults are filled only after layered selection, so a layer that sets only
  * `schedule` does not reset an inherited `delay_seconds`. Validation is strict:
@@ -110,6 +114,7 @@ export const autoCommitConfigSchema = z
       .optional(),
     schedule: autoCommitScheduleSchema.optional(),
     exclude_sources: autoCommitExcludeSourcesSchema.optional(),
+    include_branches: z.array(z.string().min(1)).optional(),
   })
   .strict();
 
@@ -120,6 +125,12 @@ export interface ResolvedAutoCommitPolicy {
   readonly delaySeconds: number;
   readonly schedule: CompiledWeeklySchedule;
   readonly exclusions: CompiledExclusionPolicy;
+  /**
+   * Branch allowlist for automatic commit events; `undefined` accepts every
+   * branch. Receive-side filter only — receipts already accepted stay valid,
+   * so this never joins `policyVersion`.
+   */
+  readonly includeBranches: readonly string[] | undefined;
   /**
    * Hash of the canonical resolved policy. Sealed batches pin the exclusion
    * version; pending members are re-decided when this version changes.
@@ -190,6 +201,11 @@ export function resolveAutoCommitPolicy(
     () => compileExclusionRules((exclusionConfig ?? []) as ExclusionRuleConfig[]),
   );
 
+  const branchConfig = pickLayer((layer) => layer?.include_branches, nearestFirst);
+  const includeBranches = branchConfig && branchConfig.length > 0
+    ? Object.freeze([...branchConfig])
+    : undefined;
+
   const policyVersion = createHash("sha256")
     .update(
       JSON.stringify(["auto-commit-policy", 1, delaySeconds, schedule.canonical, exclusions.canonical]),
@@ -197,5 +213,5 @@ export function resolveAutoCommitPolicy(
     .digest("hex")
     .slice(0, 16);
 
-  return { delaySeconds, schedule, exclusions, policyVersion };
+  return { delaySeconds, schedule, exclusions, includeBranches, policyVersion };
 }

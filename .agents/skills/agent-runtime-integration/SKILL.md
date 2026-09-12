@@ -1,91 +1,41 @@
 ---
 name: agent-runtime-integration
-description: "Use when: implementing or auditing agent CLI runtime materialization, LLM config translation, MCP tool mapping, prompt/instruction layering, and skills merging; do not use for ordinary review logic or output rendering changes."
+description: "Maintain agent CLI bundles, model/MCP config translation, prompt layers, and skills; skip ordinary review logic or output rendering."
 user-invocable: false
 ---
 
 # Agent Runtime Integration
 
-Use this skill when work touches how AICR prepares an external AI agent CLI before a review run.
+1. Trace the affected path through `packages/agents/src/types.ts`, the target
+   adapter, `runtime-bundle.ts`, server orchestration, and their tests. Consult
+   architecture §3.6–3.8 only for the corresponding contract.
+2. Before changing a CLI flag or generated config, refresh that adapter's
+   [external source record](../../../docs/ai/source-index.md) and verify current
+   upstream schema/help. Local fixtures alone can encode an invented contract.
+3. Treat model config, MCP, instructions, skills, env/mounts and manifest as one
+   per-run materialization. Write into the isolated bundle; secrets remain env
+   references and developer-global config is untouched.
+4. Keep protected rules above common/project layers. Materialize canonical skills
+   into native surfaces as needed, expose one active instruction surface, reject
+   path collisions, and record dropped/unsupported capabilities in the manifest.
+5. Validate generated files, sandbox-visible paths, env, manifest, and actual
+   context/output collection. Use current registry names and implemented tools;
+   stdout JSON/XML is a compatibility fallback to native MCP.
 
-## Scope
+The current bundle copies `SKILL.md` bodies, not their sibling references.
+Repository references must be read from the source checkout (or fetched by a
+concrete repository-relative context request); do not assume bundle-local links
+work or move required runtime safety/output rules behind them.
 
-This workflow covers the per-run runtime bundle assembled for Kilo, Zoo, OpenCode, Copilot CLI, Claude Code, or another adapter:
+## Load by changed contract
 
-- LLM provider/model config translated from `ModelSpec`.
-- AICR MCP tool registration and per-agent MCP config files.
-- Three-layer prompts/instructions: AICR built-in protected rules, user/operator common rules, and project/workspace/repo-local rules.
-- Three-layer skills: AICR protected skills, user/operator common skills, and project/workspace/repo-local skills.
-- Sandbox mounts, environment variables, and audit manifests.
+| Change | Reference / source |
+| --- | --- |
+| Prompt discovery, instruction precedence, MCP replay/repair, sandbox processes | [Review runtime](../../../docs/ai/pitfalls/AGENTS.review-runtime.md); prompt-manager, runtime-bundle, mcp-output tests |
+| Adapter config, native skills, MCP, compaction, web search, argv, usage parser | [Agent adapters](../../../docs/ai/pitfalls/AGENTS.agent-adapters.md); target adapter and sandbox tests |
+| Model catalog, workspace groups, quota fallback, live/final usage | [Config and state](../../../docs/ai/pitfalls/AGENTS.config-and-state.md); model-metadata, catalog-service, orchestration tests |
 
-Do not use this skill for VCS implementation details, output channel rendering, or package scaffold changes unless they are needed to validate the runtime bundle.
-
-## Procedure
-
-1. **Read current contracts first**
-   - `../../../docs/ai/architecture.md` §3.6, §3.7, §3.9, and §3.13 (model metadata catalog).
-   - `../../../Plan.md` current status when roadmap status or remaining milestone scope matters.
-   - `../../../packages/agents/src/types.ts` and the target adapter implementation.
-   - `../../../packages/mcp-output/src/index.ts` for the authoritative AICR tool registry.
-   - `../../../packages/core/src/prompt-manager.ts` for instruction and skill discovery rules.
-   - `../../../packages/core/src/config.ts` (`llm.model_catalog`), `../../../packages/llm/src/model-catalog.ts` (parser/normalizer), `../../../packages/server/src/model-catalog-service.ts` (refresh/fallback/enrichment), and `../../../packages/agents/src/model-metadata.ts` (per-adapter injection) when model parameters/pricing are in scope.
-
-2. **Build one runtime bundle, not parallel configs**
-   - Treat model config, MCP tools, instructions, skills, mounts, env vars, and manifest as one atomic materialization step.
-   - Write only under the run/workspace `agent/` directory or an isolated HOME/XDG directory.
-   - Never mutate a developer's global Kilo, Zoo, OpenCode, Claude Code, or Copilot CLI config.
-
-3. **Map MCP tools from the registry**
-   - Generate adapter-native MCP config from `createAicrOutputToolRegistry()` and any implemented context tools.
-   - Stable current tools are `aicr.report_problem`, `aicr.publish_summary`, `aicr.skip`, `aicr.fetch_more_context`, and `aicr.try_blame`.
-   - `aicr.fetch_more_context` may fetch full changed files when the diff is missing/truncated and narrowly related repository files when needed to validate a changed line; keep requests bounded by path/range/reason.
-   - `aicr.try_blame` may request VCS-verified, best-effort attribution when ownership or revision provenance materially affects review reasoning; keep requests bounded by path/range/reason and never ask the model to infer authorship.
-   - Do not advertise planned tools such as `aicr.recall_memory` or `aicr.recall_skill` until schema, server, client tests, and prompt guidance exist.
-   - Keep JSON/XML stdout tool-call parsing only as a compatibility fallback when MCP is unavailable.
-   - Wire the `aicr-output` server through each adapter's native MCP surface: kilo `kilo.json` `mcp`, opencode `opencode.json` `mcp`, Claude Code `--mcp-config`+`--strict-mcp-config`, Copilot CLI `--additional-mcp-config`, oh-my-pi `$PI_CODING_AGENT_DIR/mcp.json` (canonical `{type:"local",command:[...]}` is converted per tool by `packages/agents/src/mcp-config.ts`); pi has no built-in MCP by upstream design, so the runtime bundle generates the user-level extension `.pi-agent/extensions/aicr-output.ts` (stdio JSON-RPC bridge, tools registered as `pi_aicr_*`, server spec via `AICR_PI_MCP_SERVERS`) and records manifest `nativeSurfaces.mcp: "extension"`. Its factory only registers lifecycle handlers: start and await discovery in `session_start`, then stop child processes in `session_shutdown`. Adapters without a native surface degrade visibly via manifest `nativeSurfaces.mcp: "none"`. The orchestrator pins `AICR_OUTPUT_STATE_PATH` in the server environment so the state file lands in the shared agent workspace regardless of the host CLI's MCP spawn cwd. Re-verify each CLI's current flags/env against its official reference before editing an adapter (see `docs/ai/source-index.md`).
-
-4. **Merge instructions and skills deterministically**
-   - Preserve AICR protected output/security instructions above workspace and repo-local instructions.
-   - Merge layers in this visible order: system built-in → user/operator common → project/workspace/repo-local.
-   - Resolve conflicts with this precedence: protected hard rules always win; then the most specific project/path rule; then user/operator common; then compatibility aliases.
-   - Load repo-local AGENTS/path instructions and skills only when they match the current review paths or approved extra context.
-   - Resolve same-name skill conflicts by priority; record dropped or renamed skills in the manifest.
-   - Materialize canonical Agent Skills into adapter-native locations when supported, while keeping `.agents/skills/<name>/SKILL.md` as the source of truth.
-   - If an adapter lacks native skill support, inject active skill summaries into the prompt and expose full skill files as read-only resources or files.
-
-5. **Translate adapter capabilities explicitly**
-   - For each adapter, document and test whether it supports model config, MCP config, native skills, repo instruction files, isolated HOME, and stdout fallback.
-   - If a capability is unsupported, degrade visibly in the manifest and tests instead of silently dropping it.
-   - Apply resolved model metadata from the model catalog (§3.13) per tool. The shared builders live in `packages/agents/src/model-metadata.ts`; each adapter's `materializeConfig` calls the right one, and `materializeRuntimeBundle` records `manifest.model.metadataInjection` (`injected` / `delegated` / `not_applicable`) plus `catalogSource`:
-     - **opencode** resolves known providers from models.dev natively. Define providers as the schema-required object keyed by provider ID; put custom `@ai-sdk/openai-compatible` / `ollama` models under `provider.<provider-id>.models.<model-id>`, provider transport/auth under `.options`, and model request parameters under the model's `.options`. Inject only complete schema-valid `limit`/`cost` pairs plus supported capabilities for custom providers (via `buildOpencodeModelEntry`). Use `{env:NAME}` inside `opencode.json` and `provider/model` on `--model`; known providers get no redundant catalog metadata.
-     - **Kilo Code** and **Zoo Code** do not have a verified native models.dev ingestion surface for custom OpenAI-compatible providers, so inject `contextWindow` / `maxTokens` / `supportsImages` / `supportsComputerUse` / `supportsPromptCache` / `inputPrice` / `outputPrice` (Kilo also `cacheReadsPrice` / `cacheWritesPrice`) via `buildKiloModelInfo` / `buildZooCustomModelInfo`.
-     - **Claude Code** derives `CLAUDE_CODE_MAX_OUTPUT_TOKENS` from `model.maxOutputTokens` (explicit `extraParams.max_tokens` wins) and `CLAUDE_CODE_MAX_CONTEXT_TOKENS` from `model.contextWindow`; an explicit thinking budget sets `MAX_THINKING_TOKENS` + `CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING=1`, betas go to `ANTHROPIC_BETAS`; the rest is delegated to its built-in Anthropic catalog. (Names verified against the Claude Code env-vars doc — `ANTHROPIC_MAX_TOKENS`, `ANTHROPIC_THINKING_BUDGET_TOKENS`, `ANTHROPIC_BETA`, and `ANTHROPIC_VERSION` are not part of its environment surface.)
-     - **Copilot CLI** has no injection surface → `not_applicable`.
-     - **pi / oh-my-pi** share the pi-family custom-provider schema (`{providers:{<id>:{baseUrl, api, apiKey, models:[...]}}}`) via `packages/agents/src/pi-family.ts`: pi writes `$PI_CODING_AGENT_DIR/models.json` (`apiKey: "$ENV"` interpolation; keyless gets a harmless literal), omp writes `models.yml` (`apiKey` resolves env names first; keyless uses `auth: none`). Both require `contextWindow`/`maxTokens` per model entry — when the catalog cannot supply them, `materializeConfig` throws with `llm.model_catalog` guidance instead of fabricating limits; unknown cost fields materialize as 0 (CLI display only). Only the verified provider kinds (`openai_compatible`/`ollama`/`anthropic`/`google_ai_studio`) map to a native `api`; other kinds throw visibly. Reasoning efforts pass through unchanged as pi `--thinking` levels.
-   - Price values injected into Kilo/Zoo/opencode are USD per 1M tokens (the models.dev native unit); keep them consistent across tools.
-
-6. **Validate the runtime bundle**
-   - Add adapter tests that assert generated file paths, file contents, env vars, and manifest entries.
-   - Add MCP client/schema tests when adding or changing tools.
-   - Add prompt/skill snapshot tests when changing instruction layering.
-   - Run markdownlint for changed AI-facing assets.
-   - For live usage, test split stdout records before process exit and final
-     totals after exit. Reuse the completed-turn parsers, ignore cumulative
-     deltas, and never add a streamed preview to the same final invocation.
-
-## Pitfalls
-
-- Do not duplicate skill bodies into tool-private config trees as committed source; generate shims or materialized copies per run.
-- Do not let prompt text be the source of truth for tool names; the MCP registry is authoritative.
-- Do not expose arbitrary external MCP servers directly to the agent; route them through AICR allowlists and context tools.
-- Do not include secrets in generated config files; use env placeholders and sandbox env injection.
-- Do not accept summaries that claim actionable problems without `aicr.report_problem` records, or skip/summary prose that asks humans for diff/source context; trigger structured repair so locations and context requests remain machine-readable.
-- Do not treat MCP state `contextRequests` or `attributionRequests` as passive metadata. Replay them through the VCS-backed `aicr.fetch_more_context` / `aicr.try_blame` handlers, feed returned context into a follow-up pass, and clear stale `.aicr-output-state.json` before each agent run.
-- If an agent repair retry still cannot produce structured output, fall back to direct LLM repair; but when the prose explicitly says there are no actionable problems or no reviewable code, normalize to `aicr.skip` rather than publishing a generic fallback summary.
-- Do not double-inject model metadata when the target tool already resolves it from models.dev (opencode known providers), and do not fabricate values the catalog is missing: user-supplied `llm.providers[]` fields always win over catalog data, and missing fields stay unset rather than guessed.
-- Do not duplicate the same active instruction through both the runtime `AGENTS.md` and a Kilo/OpenCode `instructions` glob. Keep the per-source copies under `instructions/` for manifest/audit purposes, but expose one native instruction surface per adapter. Normalize generated skill paths before writing and fail on collisions instead of silently overwriting a different skill.
-- **Context auto-compaction must be injected per adapter.** `agent.context_compaction` (default enabled) flows through `RuntimeBundleInput.compaction` → `materializeConfig(model, workingDir, options)` → each adapter's native format: Kilo `compaction.{auto,threshold_percent,prune}`, opencode `compaction.{auto,prune}`, Zoo `autoCondenseContext`/`condenseContextPercentThreshold` in Zoo Code's current `.roo/settings.json` compatibility path, pi `settings.json` `compaction.enabled` (no threshold/prune surface — delegated), omp `config.yml` `compaction.{enabled,thresholdPercent}`. Claude Code delegates (auto-compacts by default); Copilot CLI is not applicable. The manifest records `contextCompaction.{enabled,mode}`. Kilo only tracks models that declare `contextWindow` — always enable `llm.model_catalog` or set `context_window` so compaction activates. When an agent overflows anyway, `runAgentReview` throws `AgentContextOverflowError` with actionable guidance; never let a raw `review_orchestration_failed` surface for a context overflow.
-- **Agent web search must stay hermetic by default.** Several CLIs ship built-in search tools that auto-approval leaves reachable: omp enables `web_search` out of the box (credential-free scrapers included); kilo v7.2.40 only offers its Exa-backed `websearch` to the model for the kilo provider or with `KILO_ENABLE_EXA` set (`tool/registry.ts` gate) — enabled custom-provider runs must inject `KILO_ENABLE_EXA=1`; opencode activates `websearch` through Exa or Parallel; claude-code leaves `WebSearch` on under skip-permissions; copilot-cli's `web_search`/`web_fetch` ride `--allow-all-tools`. `--auto`/skip-permissions only auto-answer prompts — an explicit deny still wins, so `agent.web_search` (default disabled) materializes: omp `config.yml` `web_search.enabled` + `providers.webSearch*` + `searxng.*`; kilo `kilo.json` `permission.websearch` + `KILO_ENABLE_EXA=1` activation env when enabled (+ `EXA_API_KEY`); opencode `opencode.json` `permission.websearch` + the first supported `providers` entry (`exa`/`parallel`) through `OPENCODE_ENABLE_*` and `OPENCODE_WEBSEARCH_PROVIDER`; claude-code `--disallowedTools WebSearch`; copilot-cli `--excluded-tools=web_search,web_fetch` (its `--deny-tool` has no web kind and `--deny-url` gates only shell/web-fetch, never `web_search` — toolset removal is the only reliable switch, verified v1.0.80). Credentials are env-name-indirected into agent-native env vars (`TAVILY_API_KEY`, `EXA_API_KEY` — shared by omp/kilo/opencode — `PARALLEL_API_KEY`, ...) as `${VAR}` references: secrets never persist in the bundle, disabled runs receive no search credentials, and OAuth-only providers are unsupported in ephemeral bundles. Fields and provider ids an agent cannot consume are skipped via `warnUnsupportedWebSearchFields` (`packages/agents/src/web-search.ts`) instead of failing, and the manifest records `webSearch.{enabled,mode}` (`injected` omp/kilo/opencode, `delegated` claude-code/copilot-cli, `not_applicable` zoo/pi). Keep `OMP_WEB_SEARCH_CREDENTIAL_ENV_NAMES` in sync with the `agent.web_search.credentials` enum in `packages/core/src/config.ts`, and keep switch-only adapters' flags reading `AgentSpawnOptions.webSearch` (the orchestrator passes it next to `mcpServers`).
-- **pi/oh-my-pi sandbox contracts.** The task text is a positional argument after `--` and `buildStdin()` returns `""` (stdin reading in `--mode json` is undocumented; double-feeding the prompt is a real failure mode). `PI_CODING_AGENT_DIR` is injected by the orchestrator with the sandbox-visible path (same pattern as `AICR_OUTPUT_STATE_PATH`), never a host path from the adapter. pi headless runs pass `--approve` so the bundle's project-level `.agents/skills` pass its trust gate — safe because the bundle dir is fully AICR-materialized and ephemeral. pi/omp usage extraction aggregates only `message_end.message.usage`; the `message_update` cumulative snapshot must not be summed alongside it.
-- **Single-argv task limits.** Adapters that put the task in one CLI argument declare `taskTransport: "argv"`. Linux limits each argument to 128 KiB and Windows native limits the complete command line to roughly 32K UTF-16 code units. When the platform-specific safe budget is exceeded, materialize the full task as `.aicr-task.md` after the runtime bundle, pass a short sandbox-visible pointer prompt, and delete any stale task file before each run. Keep stdin adapters on stdin.
-- **kilo global-state isolation.** kilo's project `.kilo/kilo.json` merges over the host global `$XDG_CONFIG_HOME/kilo` config with schema-strict validation (one unrecognized host key hard-fails the run), and its `$XDG_DATA_HOME/kilo` SQLite migrations are not idempotent across versions. The orchestrator redirects both XDG dirs to bundle-local paths (`agentConfigDirEnvVars`); never rely on the host's global kilo state, and write provider `apiKey` as `{env:<apiKeyEnv>}` so secrets never persist in the bundle.
+For MCP schema changes, update server/client tests and prompt guidance together.
+For live usage, exercise split stdout records before exit and final accounting
+after exit; previews must not be added twice. Run applicable final gates from
+[the baseline](../../../docs/ai/AGENTS.repository-baseline.md).

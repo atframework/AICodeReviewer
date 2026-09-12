@@ -50,7 +50,10 @@ export const pullRequestPayloadSchema = z
         title: z.string().min(1).optional(),
         html_url: z.string().url().optional(),
         user: actorSchema.optional(),
-        base: z.object({ sha: z.string().min(1).optional() }).passthrough(),
+        base: z.object({
+          sha: z.string().min(1).optional(),
+          ref: z.string().min(1).optional(),
+        }).passthrough(),
         head: z.object({ sha: z.string().min(1).optional() }).passthrough(),
         labels: z
           .array(
@@ -359,6 +362,7 @@ export function createPullRequestReviewEvent(
   config: VcsWebhookConfig,
 ): ReviewEvent {
   const prLabels = extractLabelNames(parsed.pull_request.labels);
+  const targetBranch = parsed.pull_request.base.ref;
 
   return createReviewEvent({
     triggerName: config.triggerName,
@@ -375,13 +379,14 @@ export function createPullRequestReviewEvent(
     rawEventName: eventName,
     ...(prLabels.length > 0 ? { labels: prLabels } : {}),
     branch: extractPrBranch(parsed.pull_request),
+    ...(targetBranch ? { targetBranch } : {}),
   });
 }
 
 const ZERO_SHA_PATTERN = /^0+$/u;
 
-function isBranchCreateOrDeletePush(parsed: PushPayload): boolean {
-  // GitHub/Gitea send an all-zero SHA (40 or 64 zeros) for `before` on branch
+export function isBranchCreateOrDeletePush(parsed: Pick<PushPayload, "before" | "after">): boolean {
+  // Git providers send an all-zero SHA (40 or 64 zeros) for `before` on branch
   // creation and for `after` on branch deletion. Neither has a reviewable
   // commit range (`git diff` rejects a `..<all-zeros>` range with "Invalid
   // revision range"), so these events must be skipped instead of failing the
@@ -469,6 +474,7 @@ export async function translateIssueCommentReviewCommand(
   let url = prInfo.html_url ?? prInfo.url;
   let author = normalizeActor(parsed.comment?.user ?? parsed.sender);
   let branch: string | undefined;
+  let targetBranch: string | undefined;
   const prLabels = extractLabelNames(parsed.issue?.labels);
 
   if (config.token && fetchPullRequestDetails) {
@@ -482,6 +488,7 @@ export async function translateIssueCommentReviewCommand(
         author = normalizeActor(prDetails.user);
       }
       branch = prDetails.head?.ref;
+      targetBranch = prDetails.base?.ref;
     } catch {
       // Use the already-delivered webhook payload if enrichment fails.
     }
@@ -502,5 +509,6 @@ export async function translateIssueCommentReviewCommand(
     rawEventName: eventName,
     ...(prLabels.length > 0 ? { labels: prLabels } : {}),
     ...(branch ? { branch } : {}),
+    ...(targetBranch ? { targetBranch } : {}),
   });
 }

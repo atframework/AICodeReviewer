@@ -103,6 +103,43 @@ exclusions. Omitted schedules allow all times; omitted timezones use UTC.
 Windows include their start and exclude their end. An overnight window belongs
 to its starting weekday. Already running reviews may finish after a window closes.
 
+`include_branches` restricts automatic commit analysis to the listed branches
+(it never touches PR/MR, comment, or issue flows):
+
+```yaml
+workspaces:
+  instances:
+    atframe-utils:
+      review:
+        auto_commit:
+          include_branches: [main] # pushes to other branches are ignored at
+                                   # receive time; [] clears an inherited list
+```
+
+Branchless P4/SVN hooks are never filtered by this list.
+Use exact, case-sensitive branch names without `refs/heads/`; glob patterns and
+regular expressions are not expanded. GitLab `Push Hook` uses the same filter
+and receipt queue. All-zero before/after SHAs for branch creation/deletion are ignored.
+
+`review.pull_request.include_target_branches` does the same for PR/MR analysis
+based on the target (base) branch — `[main]` analyzes only PRs/MRs that merge
+into `main`:
+
+```yaml
+workspaces:
+  instances:
+    atframe-utils:
+      review:
+        pull_request:
+          include_target_branches: [main] # [] clears an inherited list
+```
+
+PR/MR events whose target branch cannot be determined (a failed PR-detail
+fetch for a comment command) are allowed through.
+Target branches use the same exact matching. A supplied empty or non-string
+webhook target ref is invalid. Both lists apply only at reception; already
+accepted receipts and deferred reviews retain their original admission.
+
 The window gates every execution path. Outside it, automatic-commit batches
 do not start, and asynchronous pull-request, issue, and comment processing
 defers the first attempt and every retry to the next window (logged as

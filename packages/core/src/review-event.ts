@@ -45,6 +45,13 @@ export const reviewEventSchema = z
     labels: z.array(z.string().min(1)).optional(),
     rawEventName: z.string().min(1).optional(),
     branch: z.string().min(1).optional(),
+    /**
+     * Target (base) branch of a PR/MR — `pull_request.base.ref` for
+     * Gitea/GitHub, `object_attributes.target_branch` for GitLab. Unset for
+     * push/commit/issue/manual/scheduled events and for comment commands whose
+     * PR-detail enrichment failed.
+     */
+    targetBranch: z.string().min(1).optional(),
     sourcePath: z.string().min(1).optional(),
     submitterWorkspace: z.string().min(1).optional(),
   })

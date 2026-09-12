@@ -93,7 +93,7 @@ import type { ServerAppOptions, ServerReviewOrchestrationOptions, TriggerRetryCo
 import { persistReviewRunToStore } from "./index.js";
 import { type AutoCommitStore, type StreamKeyInput } from "@aicr/core";
 import { createAutoCommitStoreFromConfig } from "@aicr/core";
-import { resolvePullRequestSchedule } from "@aicr/core";
+import { resolvePullRequestSchedule, resolvePullRequestTargetBranches } from "@aicr/core";
 import { AutoCommitRuntime, createAutoCommitBatchExecutor } from "./auto-commit-runtime.js";
 import {
   AutoCommitScheduler,
@@ -2775,6 +2775,18 @@ export async function bootstrapServerApp(options: BootstrapServerOptions): Promi
       }
       return autoCommitPipeline.runtime.policyFor(workspaceId).schedule;
     },
+    // Receive-side branch allowlist for automatic commit events, from the
+    // same layered policy (`review.auto_commit.include_branches`).
+    getAutoCommitBranches: (workspaceId: string) =>
+      autoCommitPipeline.runtime.policyFor(workspaceId).includeBranches,
+    // Receive-side target-branch allowlist for PR/MR analysis
+    // (`review.pull_request.include_target_branches`).
+    getPullRequestTargetBranches: (workspaceId: string) =>
+      resolvePullRequestTargetBranches(
+        config.review.pull_request,
+        config.workspaces.defaults.review?.pull_request,
+        config.workspaces.instances[workspaceId]?.review?.pull_request,
+      ),
     // Window-deferred async events persist here so a restart resumes them.
     deferralManager: new ReviewDeferralManager({ ...(store ? { store } : {}) }),
     ...(observability ? { observability } : {}),
