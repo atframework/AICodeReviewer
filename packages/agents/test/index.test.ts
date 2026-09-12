@@ -3207,6 +3207,11 @@ describe("runtime bundle pi/oh-my-pi wiring", () => {
       const spawn = vi.fn(() => child);
       const processStub = {
         env: {
+          HOME: "/run/home",
+          USERPROFILE: "/run/home",
+          APPDATA: "/run/appdata",
+          XDG_DATA_HOME: "/run/xdg-data",
+          UNRELATED_PROVIDER_SECRET: "must-not-reach-mcp",
           AICR_PI_MCP_SERVERS: JSON.stringify([{
             name: "aicr-output",
             command: ["node", "server.js"],
@@ -3238,6 +3243,10 @@ describe("runtime bundle pi/oh-my-pi wiring", () => {
       expect(spawn).not.toHaveBeenCalled();
       await handlers.get("session_start")?.();
       expect(spawn).toHaveBeenCalledTimes(1);
+      expect(spawn).toHaveBeenCalledWith("node", ["server.js"], expect.objectContaining({ env: expect.objectContaining({
+        HOME: "/run/home", USERPROFILE: "/run/home", APPDATA: "/run/appdata", XDG_DATA_HOME: "/run/xdg-data",
+      }) }));
+      expect(JSON.stringify(spawn.mock.calls)).not.toContain("must-not-reach-mcp");
       expect(tools.map((tool) => tool.name)).toEqual(["pi_aicr_output_aicr_skip"]);
       await expect(tools[0]?.execute("call-1", {})).resolves.toEqual({
         content: [{ type: "text", text: "ok" }],

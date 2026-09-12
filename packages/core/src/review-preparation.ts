@@ -15,6 +15,7 @@ import { normalizeChangedPath } from "./utils.js";
 export interface PrepareReviewPromptInput {
   readonly reviewEvent: ReviewEvent;
   readonly sourceRoot: string;
+  readonly policyRoot?: string;
   readonly baseSystemPrompt: string;
   readonly changedPaths?: readonly string[];
   readonly operatorOverrides?: readonly string[];
@@ -111,6 +112,16 @@ export async function prepareReviewPrompt(
     changedPaths,
     ...(input.forceSkills?.length ? { forceSkills: input.forceSkills } : {}),
   });
+  if (input.policyRoot && resolve(input.policyRoot) !== sourceRoot) {
+    const fallback = await discoverRepoPromptAssets({ sourceRoot: resolve(input.policyRoot), changedPaths,
+      ...(input.forceSkills?.length ? { forceSkills: input.forceSkills } : {}) });
+    const instructionPaths = new Set(discovery.instructions.map((entry) => entry.path));
+    const skillNames = new Set(discovery.skills.map((entry) => entry.name));
+    discovery.instructions.push(...fallback.instructions.filter((entry) => !instructionPaths.has(entry.path)));
+    discovery.skills.push(...fallback.skills.filter((entry) => !skillNames.has(entry.name)));
+    discovery.droppedRefs.push(...fallback.droppedRefs);
+    discovery.conflicts.push(...fallback.conflicts);
+  }
   const taskContext = input.taskContext?.trim()
     ? input.taskContext.trim()
     : buildReviewTaskContext(input.reviewEvent, changedPaths);

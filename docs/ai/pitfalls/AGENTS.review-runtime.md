@@ -57,7 +57,11 @@ Sources: `packages/sandbox/src/types.ts`, `native.ts`, `docker.ts`,
 - Keep container env files on the host outside source/agent/tmp mounts and remove
   them after each run. Materialized config contains env references, never keys.
 - All mutable per-run state lives under one `runs/<runId>/` root
-  (source/agent/tmp/context-repos); the shared sourceRoot is a pure repo
+  (source/agent/tmp/context-repos, HOME/USERPROFILE/APPDATA/XDG). Create a separate
+  stateful sandbox backend for every orchestration and forward the factory through
+  CLI callers. Reflection reads/writes use instance ID; policy uses definition ID.
+  Operator templates/AGENTS/skills use the explicit layout's read-only policyRoot
+  fallback, with instance/source assets taking precedence. The shared sourceRoot is a pure repo
   cache. Tests that read run artifacts (task handoff, manifest, mcp.json)
   after the orchestration completes break because the root is cleaned in
   the orchestration `finally` (never after one model call): capture them inside the fake sandbox `spawn`, and honor

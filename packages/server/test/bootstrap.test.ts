@@ -3213,7 +3213,12 @@ describe("bootstrapServerApp", () => {
       expect(result.reviewOrchestration?.agentModelChain?.map((entry) => entry.modelId)).toEqual(["gpt-4o"]);
       expect(result.reviewOrchestration?.dryRun).toBe(false);
       expect(typeof result.reviewOrchestration?.outputPublisherResolver).toBe("function");
-      expect(result.reviewOrchestration?.sandbox?.kind).toBe("native");
+      const sandboxA = await result.reviewOrchestration?.sandboxFactory?.();
+      const sandboxB = await result.reviewOrchestration?.sandboxFactory?.();
+      expect(sandboxA?.kind).toBe("native");
+      expect(sandboxA).not.toBe(sandboxB);
+      await sandboxA?.teardown();
+      await sandboxB?.teardown();
       expect(result.reviewOrchestration?.agentAdapter?.kind).toBe("kilo");
       expect(result.reviewOrchestration?.agentTimeoutMs).toBe(600_000);
       // Hand-built AppConfig literals (like makeConfig) omit web_search; bootstrap

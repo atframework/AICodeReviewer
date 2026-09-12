@@ -660,8 +660,9 @@ export function getRecentRuns(
 export function softDeleteMissingProjects(
   store: StoreDb,
   activeIdentities: ReadonlyArray<{ workspaceId: string; triggerName: string; repoRef: string }>,
+  activeMatchWorkspaceIds: readonly string[] = [],
 ): number {
-  if (activeIdentities.length === 0) {
+  if (activeIdentities.length === 0 && activeMatchWorkspaceIds.length === 0) {
     const result = store.db
       .update(projects)
       .set({ deletedAt: new Date() })
@@ -673,6 +674,10 @@ export function softDeleteMissingProjects(
   const conditions = activeIdentities.map((id) =>
     sql`(${projects.workspaceId} = ${id.workspaceId} AND ${projects.triggerName} = ${id.triggerName} AND ${projects.repoRef} = ${id.repoRef})`,
   );
+  // A match definition does not enumerate its projects in source_repo. Keep
+  // discovered projects until the definition is removed; never infer deletion
+  // from the absence of a static binding (branch-specific rules need snapshots).
+  conditions.push(...activeMatchWorkspaceIds.map((id) => sql`${projects.workspaceId} = ${id}`));
 
   const result = store.db
     .update(projects)

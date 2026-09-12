@@ -77,6 +77,11 @@ bootstrap, core auto-commit stores, scheduler and real-backend conformance tests
 - Completed checkpoints replay local accounting only. Started/publication-pending
   checkpoints do not justify replaying remote POSTs. Verify actual LLM/publisher
   call counts after recovery and test memory/SQLite/Redis contracts.
+- When routing receipts cross Redis Lua/cjson, an empty array round-trips as an
+  empty object. Normalize only declared array fields at the read boundary;
+  preserve null (unresolved) versus [] (resolved without scopes). Exercise
+  duplicate intake, retry, completion and immutable replay against real Redis
+  with `auto-commit-store-conformance.ts`, not only an in-memory Redis mock.
 - Scheduler Git adapters need per-workspace clone roots matching the run layout,
   `alwaysFetch: true`, and a fresh `tokenProvider`. Cache keys include workspaceId;
   never clone into runtime cwd `/app`. Bootstrap tests with a real local bare

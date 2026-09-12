@@ -269,13 +269,15 @@ describe("variable registry (V11/V13)", () => {
       gitea: () => registryResolve("gitea", "acme/service", { base_branch: "main", head_branch: "feature" }),
       forgejo: () => registryResolve("forgejo", "acme/service", { base_branch: "main", head_branch: "feature" }),
       gitlab: () => registryResolve("gitlab", "group/sub/project", { base_branch: "main", head_branch: "feature" }),
+      p4: () => registryResolve("p4", "//depot/project"),
+      svn: () => registryResolve("svn", "https://svn.example/project"),
     };
     for (const entry of WORK_PATH_TEMPLATE_VARIABLES) {
       if (entry.availability !== "extracted") {
         continue;
       }
       const namespace = entry.path.split(".")[0]!;
-      const fixtureKey = ["github", "gitea", "forgejo", "gitlab"].includes(namespace) ? namespace : "github";
+      const fixtureKey = namespace in fixtures ? namespace : "github";
       const variables = fixtures[fixtureKey]!();
       expect(
         registryGet(variables, entry.path),
@@ -291,7 +293,7 @@ describe("variable registry (V11/V13)", () => {
     );
     for (const entry of nullable) {
       const namespace = entry.path.split(".")[0]!;
-      if (["gitea", "forgejo", "gitlab"].includes(namespace)) {
+      if (["gitea", "forgejo", "gitlab", "p4", "svn"].includes(namespace)) {
         continue; // namespace absent on a github fixture by design (V04)
       }
       expect(

@@ -104,8 +104,8 @@ workspaces:
 agent 故障切换和压缩摘要；triage 各层都未配置时继承该 workspace 的主链。
 完整示例见[模型分组配置](/zh-cn/configuration/llm/)。
 
-\* schema 接受 workspace 层的 `agent.default` 和 `sandbox`，但当前版本在启动时只按
-全局 `agent` 创建一份适配器和沙箱，workspace 层这两项设置了也不会生效。混用 agent
+\* schema 接受 workspace 层的 `agent.default` 和 `sandbox`，但当前版本仍按全局
+`agent` 选择适配器和沙箱配置，每次运行独立创建沙箱实例。workspace 层这两项设置了也不会生效。混用 agent
 或按 workspace 换沙箱镜像的需求要等后续版本。
 
 `context_repositories` 声明评审时可引用的辅助仓库（共享库、协议契约等）：每次评审

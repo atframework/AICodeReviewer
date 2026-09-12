@@ -128,6 +128,8 @@ export interface VcsAdapter {
    * unaffected).
    */
   listCommitMetadataPage?(query: CommitMetadataQuery): Promise<CommitMetadataPage>;
+  /** Bounded source identity lookup at a pinned revision. Failures must be retried durably. */
+  describeSource?(revision: string): Promise<Readonly<Record<string, string | null>>>;
   /**
    * Best-effort commit time for one revision, normalized to an ISO-8601 UTC
    * string: git committer date (`%cI`), SVN `svn:date`, P4 changelist `time`.

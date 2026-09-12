@@ -85,6 +85,7 @@ description: 全量配置字段参考，按顶层命名空间组织，并以 Zod
 | --- | --- | --- | --- |
 | `triggers[].name` | string | — | trigger profile 名；被 `workspaces.instances.<id>.source_repo.trigger` 引用 |
 | `triggers[].kind` | enum | — | trigger kind（见枚举表） |
+| `triggers[].enabled` | boolean | — | 未设置时启用；`false` 停止该 profile 的新任务准入，历史快照保留 |
 | `triggers[].watch_path` | string[] | — | 只分析这些 depot/仓库相对子路径下的文件 |
 | `triggers[].include_cr_file` | string[] | — | glob 模式；文件必须至少匹配一个才会被分析 |
 | `triggers[].exclude_cr_file` | string[] | — | glob 模式；匹配任一则跳过 |
@@ -143,6 +144,7 @@ provider 专属字段（`webhook_secret_env`、`token_env`、`port`、`user_env`
 | `workspaces.instances.<id>.match[].source.<id>.regex` | string | — | RE2 正则,未用 `^`/`$` 锚定时为子串匹配 |
 | `workspaces.instances.<id>.match[].source.<id>.ignore_case` | boolean | — | 仅匹配时折叠大小写,不改写身份 |
 | `workspaces.instances.<id>.work_path` | string | — | Handlebars 路径模板(AST 白名单,仅 `segment`/`default`/`hash`/`lower`,输出必须是相对 `/` 路径),需配合 `match`,默认 `{{workspace.id}}` |
+| `workspaces.instances.<id>.enabled` | boolean | — | 未设置时启用；`false` 停止新任务准入，保留已有快照 |
 | `workspaces.instances.<id>.model_chain` | string | 继承 | 覆盖主链组名，引用 `llm.model_chain` |
 | `workspaces.instances.<id>.triage_model_chain` | string | 继承 | 覆盖生命周期分析组名；各层均未配置时使用该 workspace 主链 |
 | `workspaces.instances.<id>.agent.default` | enum | — | agent kind 覆盖（当前版本运行时未生效，见下方说明） |
@@ -173,25 +175,34 @@ instance 定义自己的 `context_repositories` 时整体替换 `workspaces.defa
 :::note[多工程匹配与隔离目录]
 GitHub/GitLab/Gitea/Forgejo 先鉴权再匹配；repository/namespace 保留 subgroup。
 未命中返回 `202 repository_not_configured`，多定义命中返回 `202 ambiguous_route`。
-命中后的 binding 固定在事件和自动提交 receipt 上，配置改变后执行仍复用该绑定。
+命中后的 binding、完整变量和逐字段 provenance 固定在事件和自动提交 receipt 上；
+配置改变或重启后复用该快照，reflection 按 instance ID 隔离。
 
 P4/SVN match profile 先持久化 routing receipt 再返回 202；后台将配置 scope 与验证后的
 变更路径求交集。路径缺失或截断时重试，范围外事件不创建审查；冻结事件重放时不再查 VCS。
 
 匹配实例使用 `workspaces.root/work_path/instance_id`，每次运行的 source/agent/tmp/context-repos
 位于 `runs/<runId>/`，模型回退和复核结束后随整次审查清理。legacy 缓存保留原路径，
-match 元数据缓存使用 `.metadata/<hash>`。HOME 隔离尚未完成。
+match 元数据缓存使用 `.metadata/<hash>`。每次审查创建独立 sandbox；HOME、USERPROFILE、
+APPDATA、XDG 和临时目录均位于运行目录内，MCP 子进程继承这些目录。认证使用配置声明的
+环境变量，不复制宿主机 OAuth/auth store。P4 client 名包含主机和运行目录的哈希。
+实例模板优先，缺失时只读回退到 `<workspaces.root>/<definition>/templates`；
+operator `AGENTS.md` 和 `.agents/skills` 从同一策略目录回退，源码中的同路径指令/同名 skill 优先。
 
 模板只允许 `segment/default/hash/lower`；`default` 必须包在 `segment/hash` 中，
 fallback 必须是字面量，禁止 hash arguments。provider 变量必须适用于全部匹配的 trigger kind。
 渲染路径最多 4096 UTF-8 字节、单段最多 255 字节；拒绝 Windows 设备名（含扩展名）、
-非法字符及尾随点/空格。三个 `manual.*` 字段来自受信 CLI 输入；`p4.*`、`svn.*`、
-`scheduled.*` 描述符仍不可用，路径中禁止使用 `event.*`。
+非法字符及尾随点/空格。Git provider ID/编号为十进制字符串，缺失时为 null。
+`p4.*` 来自已提交 changelist 与配置 scope，stream 仅采用 changelist 记录；
+不从当前 client 或 depot 路径推定历史 stream。`svn.*` 使用固定 revision 的 `svn info --xml`
+和提交元数据，URL 去除凭据，project/branch 仅来自显式 `project_roots`。
+三个 `manual.*` 字段来自受信 CLI 输入；没有受信调度引擎的 `scheduled.*` 仍不可用，
+路径中禁止使用 `event.*`。变量目录记录类型、事件范围、获取阶段、可空性和示例。
 :::
 
 :::note[workspace 层 `agent.default` / `sandbox` 当前不生效]
 schema 接受 `workspaces.defaults` 和实例上的 `agent.default` 与 `sandbox`，但当前版本
-启动时只按全局 `agent` 创建一份适配器和沙箱。workspace 层这两项会被解析和校验，
+按全局 `agent` 选择适配器并为每次审查创建独立沙箱。workspace 层这两项会被解析和校验，
 运行时不会使用。
 :::
 

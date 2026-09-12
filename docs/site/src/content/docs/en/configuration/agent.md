@@ -52,6 +52,13 @@ and `workspaces.instances.<id>.agent.default` layers, but the current version
 builds a single adapter from the global value at startup — workspace-layer values
 are parsed but have no effect.
 
+Every review creates an independent sandbox. HOME, USERPROFILE, APPDATA, XDG and
+temporary directories belong to that run; MCP children inherit the same paths.
+Supply authentication through configured environment variables. The runtime does
+not copy developer OAuth/auth stores. Operator templates and `.agents/skills`
+can fall back read-only to the definition's legacy policy directory; see the
+[configuration field reference](/en/reference/config-fields/).
+
 ## `agent.timeout_seconds` — hard per-run cap
 
 ```yaml

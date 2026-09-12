@@ -1,6 +1,10 @@
 import { z } from "zod";
 
 import type { WorkspaceBinding } from "./config-workspace.js";
+import type { PathTemplateVariables } from "./config-path-template.js";
+
+const resolutionVariablesSchema = z.record(z.string(), z.record(z.string(), z.string().nullable()));
+const resolutionProvenanceSchema = z.record(z.string(), z.enum(["verified_payload", "configured", "vcs_verified", "unavailable", "conflicted"]));
 
 export const reviewProviderSchema = z.enum([
   "gitea",
@@ -82,6 +86,8 @@ export const reviewEventResolutionSchema = z.discriminatedUnion("kind", [
       kind: z.literal("match"),
       definitionId: z.string().min(1),
       ruleId: z.string().min(1).optional(),
+      variables: resolutionVariablesSchema.optional(),
+      provenance: resolutionProvenanceSchema.optional(),
       binding: z
         .object({
           definitionId: z.string().min(1),
@@ -107,6 +113,8 @@ export function projectEventResolution(
         readonly definitionId: string;
         readonly ruleId?: string | undefined;
         readonly binding: WorkspaceBinding;
+        readonly variables?: PathTemplateVariables | undefined;
+        readonly provenance?: Readonly<Record<string, string>> | undefined;
       },
 ): ReviewEventResolution {
   if (resolution.kind === "legacy_binding") {
@@ -117,7 +125,14 @@ export function projectEventResolution(
     definitionId: resolution.definitionId,
     ...(resolution.ruleId !== undefined ? { ruleId: resolution.ruleId } : {}),
     binding: resolution.binding,
+    ...(resolution.variables !== undefined ? { variables: resolutionVariablesSchema.parse(resolution.variables) } : {}),
+    ...(resolution.provenance !== undefined ? { provenance: resolutionProvenanceSchema.parse(resolution.provenance) } : {}),
   };
+}
+
+/** Policy uses workspaceId; learned memory must belong to the resolved project. */
+export function reviewMemoryScope(event: Pick<ReviewEvent, "workspaceId" | "resolution">): string {
+  return event.resolution?.kind === "match" ? event.resolution.binding.instanceId : event.workspaceId;
 }
 export type ReviewTargetKind = z.infer<typeof reviewTargetKindSchema>;
 

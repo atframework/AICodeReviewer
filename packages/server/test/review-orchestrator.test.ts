@@ -126,6 +126,33 @@ describe("runReviewOrchestration", () => {
     } finally { await rm(root, { recursive: true, force: true }); }
   });
 
+  it.each(["factory", "teardown"])("releases run ownership when sandbox %s fails", async (failure) => {
+    await mkdir("build/tmp", { recursive: true });
+    const root = await mkdtemp(join(process.cwd(), "build/tmp/sandbox-cleanup-"));
+    const context = { reviewEvent: createReviewEventFixture(), provider: "gitea", eventName: "pull_request", payload: {}, runId: "retry" };
+    const options = {
+      baseSystemPrompt: "Review", sourceRootResolver: () => root, model,
+      vcs: { ...createVcs(root), listChanges: async () => ({ baseRevision: "base", headRevision: "head", files: [] }) },
+      llm: { complete: async () => { throw new Error("unexpected LLM call"); } },
+    };
+    try {
+      await expect(runReviewOrchestration(context, { ...options, sandboxFactory: () => {
+        if (failure === "factory") throw new Error("sandbox factory failed");
+        return {
+          kind: "native",
+          materializeFs: async (layout) => ({ ...layout, mountSpecs: [] }),
+          spawn: async () => { throw new Error("unexpected spawn"); },
+          teardown: async () => { throw new Error("sandbox teardown failed"); },
+        };
+      } })).rejects.toThrow(`sandbox ${failure} failed`);
+      // Reusing this id must succeed: both the owned directory and the in-memory
+      // active-run guard must have been released by the failed attempt.
+      await expect(runReviewOrchestration(context, options)).resolves.toBeDefined();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it.each([".", ".."])("rejects a dot run id before touching the workspace: %s", async (runId) => {
     const listChanges = vi.fn();
     await expect(runReviewOrchestration({ reviewEvent: createReviewEventFixture(), provider: "gitea", eventName: "pull_request", payload: {}, runId }, {
@@ -219,6 +246,9 @@ describe("runReviewOrchestration", () => {
     };
     const layouts: { agentDir: string; tmpDir: string }[] = [];
     const fetchedSources: string[] = [];
+    const homeDirs: string[] = [];
+    let homesReady!: () => void;
+    const bothHomes = new Promise<void>((resolveReady) => { homesReady = resolveReady; });
     try {
       await writeWorkspaceFile(sourceRoot, "src/app.ts", "const ok = true;\n");
       const sandbox: SandboxBackend = {
@@ -230,7 +260,14 @@ describe("runReviewOrchestration", () => {
           await mkdir(l.tmpDir, { recursive: true });
           return { ...l, mountSpecs: [] };
         },
-        async spawn() {
+        async spawn(options) {
+          const runHome = options.env!.HOME!;
+          homeDirs.push(runHome);
+          await writeFile(join(runHome, "owner"), options.cwd);
+          if (homeDirs.length === 2) homesReady();
+          await bothHomes;
+          expect(await readFile(join(runHome, "owner"), "utf8")).toBe(options.cwd);
+          expect(options.env!.USERPROFILE).toBe(runHome);
           return {
             stdout: JSON.stringify({ type: "text", text: '{"skipReason":"lgtm"}' }),
             stderr: "",
@@ -261,7 +298,19 @@ describe("runReviewOrchestration", () => {
         },
         model,
         llm: { complete: async () => { throw new Error("unexpected direct call"); } },
-        sandbox,
+        sandboxFactory: () => {
+          let ownAgentDir = "";
+          return { ...sandbox,
+            async materializeFs(l: Parameters<SandboxBackend["materializeFs"]>[0]) {
+              ownAgentDir = l.agentDir;
+              return sandbox.materializeFs(l);
+            },
+            async spawn(options: SandboxSpawnOptions) {
+              expect(options.cwd).toBe(ownAgentDir);
+              return sandbox.spawn(options);
+            },
+          };
+        },
         agentAdapter,
       });
 
@@ -279,6 +328,7 @@ describe("runReviewOrchestration", () => {
       expect(b.outputState.skipReason).toBe("lgtm");
 
       expect(layouts).toHaveLength(2);
+      expect(new Set(homeDirs).size).toBe(2);
       const dirsA = layouts.find((l) => l.agentDir.includes("run-a"));
       const dirsB = layouts.find((l) => l.agentDir.includes("run-b"));
       // Each run got its own root under the shared instance layout (spec §5.5).
@@ -885,8 +935,11 @@ describe("runReviewOrchestration", () => {
       expect(spawnCalls).toHaveLength(1);
       expect(spawnCalls[0]?.stdin).toContain("Diff:");
       const xdgRoot = String(spawnCalls[0]?.cwd ?? "");
-      expect(spawnCalls[0]?.env).toEqual({
+      expect(spawnCalls[0]?.env).toMatchObject({
         AICR_AGENT_TOKEN: "resolved-token",
+        HOME: join(xdgRoot, ".aicr-home"),
+        USERPROFILE: join(xdgRoot, ".aicr-home"),
+        XDG_CACHE_HOME: join(xdgRoot, ".aicr-xdg-cache"),
         // kilo global config/data isolation rides the same injection as PI_CODING_AGENT_DIR.
         XDG_CONFIG_HOME: join(xdgRoot, ".aicr-xdg-config"),
         XDG_DATA_HOME: join(xdgRoot, ".aicr-xdg-data"),

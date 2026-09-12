@@ -213,6 +213,36 @@ interface SvnLogEntry {
   readonly paths: readonly string[];
 }
 
+/** Descriptor URLs are identities, never credential carriers. */
+export function sanitizeSourceUrl(value: string): string {
+  const url = new URL(value);
+  if (!["http:", "https:", "svn:", "svn+ssh:", "file:"].includes(url.protocol)) throw new Error("Unsupported SVN source URL");
+  url.username = "";
+  url.password = "";
+  url.search = "";
+  url.hash = "";
+  return url.href.replace(/\/$/u, "");
+}
+
+export function parseSvnSourceInfo(xml: string): Readonly<Record<string, string | null>> {
+  if (Buffer.byteLength(xml, "utf8") > 256 * 1024 || /<!DOCTYPE|<!ENTITY/iu.test(xml)) throw new Error("Invalid SVN info XML");
+  const entries = [...xml.matchAll(/<entry\b[^>]*>([\s\S]*?)<\/entry>/gu)];
+  if (!/<info[\s>]/u.test(xml) || entries.length !== 1) throw new Error("Expected one SVN info entry");
+  const body = entries[0]![1]!;
+  const field = (content: string, name: string): string | null => {
+    const matches = [...content.matchAll(new RegExp(`<${name}>([^<]*)<\\/${name}>`, "gu"))];
+    if (matches.length > 1) throw new Error("Conflicting SVN source metadata");
+    return matches[0]?.[1] ? decodeXmlEntities(matches[0][1]) : null;
+  };
+  const repositories = [...body.matchAll(/<repository>([\s\S]*?)<\/repository>/gu)];
+  if (repositories.length > 1) throw new Error("Conflicting SVN repository metadata");
+  const repository = repositories[0]?.[1] ?? "";
+  const url = field(body, "url");
+  const root = field(repository, "root");
+  return { repository_url: url ? sanitizeSourceUrl(url) : null,
+    repository_root: root ? sanitizeSourceUrl(root) : null, repository_uuid: field(repository, "uuid") };
+}
+
 /**
  * Normalizes the `svn log --xml` `<date>` value (`2026-09-01T00:00:00.000000Z`)
  * to canonical ISO-8601 UTC with millisecond precision. A malformed or missing
@@ -334,6 +364,16 @@ export class SvnVcsAdapter implements VcsAdapter {
         throw sanitized;
       }
     });
+  }
+
+  async describeSource(revision: string): Promise<Readonly<Record<string, string | null>>> {
+    if (!/^[1-9][0-9]*$/u.test(revision) || !this.repositoryUrl) throw new RangeError("SVN source requires a configured URL and numeric revision");
+    const result = await this.runSvn(["info", "--xml", "-r", revision, `${this.repositoryUrl}@${revision}`]);
+    const fields = parseSvnSourceInfo(result.stdout);
+    if (fields.repository_url !== null && fields.repository_url !== sanitizeSourceUrl(this.repositoryUrl)) {
+      throw new Error("SVN info URL conflicts with configured source");
+    }
+    return fields;
   }
 
   private targetForPath(path = ""): string {

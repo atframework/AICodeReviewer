@@ -21,6 +21,7 @@
  */
 
 import {
+  projectEventResolution,
   type AppConfig,
   type AutoCommitStore,
   type ReviewEvent,
@@ -29,7 +30,7 @@ import {
   type RoutingReceiptRecord,
   type WorkspaceResolution,
 } from "@aicr/core";
-import type { CommitMetadataRecord, VcsAdapter } from "@aicr/vcs";
+import { sanitizeSourceUrl, type CommitMetadataRecord, type VcsAdapter } from "@aicr/vcs";
 
 import type { AutoCommitRuntime } from "./auto-commit-runtime.js";
 import type { WorkspaceRuntime } from "./workspace-runtime.js";
@@ -209,13 +210,24 @@ export class RoutingReceiptResolver {
       return undefined;
     }
     const metadata: CommitMetadataRecord = { ...records[0]!, changedPaths: [...new Set(records.flatMap((entry) => [...entry.changedPaths]))] };
+    for (const entry of records) {
+      if (entry.p4User !== metadata.p4User || entry.p4Client !== metadata.p4Client || entry.svnAuthor !== metadata.svnAuthor) {
+        throw new Error("Conflicting routing revision metadata");
+      }
+    }
 
     // V14: the per-scope interpretation freezes on first use; retries and
     // post-restart recovery replay the frozen outcome instead of re-resolving
     // against possibly-changed workspace config.
     let frozen = record.resolution;
     if (frozen === null) {
-      const computed = this.interpretScopes(record, envelope, profile, metadata, revision);
+      if (!adapter.describeSource) throw new Error("no source descriptor adapter for routing profile");
+      const fields = await adapter.describeSource(revision);
+      if (provider === "p4" && ((fields.user != null && metadata.p4User !== undefined && fields.user !== metadata.p4User) ||
+          (fields.client != null && metadata.p4Client !== undefined && fields.client !== metadata.p4Client))) {
+        throw new Error("Conflicting P4 changelist user/client metadata");
+      }
+      const computed = this.interpretScopes(record, envelope, profile, metadata, revision, fields);
       frozen = (await store.recordRoutingReceiptResolution(record.routingId, computed, now)).resolution
         ?? computed;
     }
@@ -274,14 +286,29 @@ export class RoutingReceiptResolver {
     profile: RoutingTriggerProfile,
     metadata: CommitMetadataRecord,
     revision: string,
+    fields: Readonly<Record<string, string | null>>,
   ): FrozenScopeResolution[] {
     const provider = record.provider as ReviewProvider;
     return this.scopesFor(record, envelope, profile, metadata).map((scope) => {
+      const root = profile.projectRoots?.find((entry) =>
+        `${sanitizeSourceUrl(profile.repositoryUrl!)}${entry.prefix === "/" ? "" : entry.prefix}` === scope.repoRef);
+      const stream = fields.stream && scopeMatchesPath(fields.stream, scope.repoRef) ? fields.stream : null;
+      const providerFields = provider === "svn"
+        ? { ...fields, repository_url: sanitizeSourceUrl(profile.repositoryUrl!),
+          repository: root?.project ?? null, project_path: root?.prefix ?? null, branch: scope.branch ?? null,
+          revision, author: metadata.svnAuthor ?? null }
+        : { ...fields, depot: /^\/\/([^/]+)/u.exec(scope.repoRef)?.[1] ?? null,
+          depot_path: scope.repoRef, scope: scope.repoRef, stream,
+          stream_name: stream?.slice(stream.lastIndexOf("/") + 1) ?? null,
+          change: revision, user: metadata.p4User ?? fields.user ?? null, client: metadata.p4Client ?? fields.client ?? null };
+      const projectKey = provider === "svn"
+        ? `svn:${JSON.stringify([fields.repository_root ?? sanitizeSourceUrl(profile.repositoryUrl!), fields.repository_uuid ?? null, scope.repoRef])}`
+        : `p4:${JSON.stringify([fields.server ?? null, scope.repoRef])}`;
       const source =
         provider === "svn"
-          ? { vcs: "svn" as const, repo_ref: scope.repoRef, branch: scope.branch ?? null, ref: revision }
-          : { vcs: "p4" as const, repo_ref: scope.repoRef, branch: null, ref: revision };
-      const resolution = this.options.workspaceRuntime.resolveForSource(record.triggerName, source);
+          ? { vcs: "svn" as const, repo_ref: scope.repoRef, repository: root?.project ?? null, branch: scope.branch ?? null, ref: revision, project_key: projectKey }
+          : { vcs: "p4" as const, repo_ref: scope.repoRef, branch: null, ref: revision, project_key: projectKey };
+      const resolution = this.options.workspaceRuntime.resolveForSource(record.triggerName, source, { provider_fields: providerFields });
       const base = { repoRef: scope.repoRef, ...(scope.branch !== undefined ? { branch: scope.branch } : {}) };
       switch (resolution.kind) {
         case "no_match":
@@ -307,7 +334,7 @@ export class RoutingReceiptResolver {
   ): readonly { repoRef: string; branch?: string | undefined }[] {
     const provider = record.provider as ReviewProvider;
     if (provider === "svn") {
-      const repositoryUrl = profile.repositoryUrl ?? record.triggerName;
+      const repositoryUrl = sanitizeSourceUrl(profile.repositoryUrl!);
       const roots = profile.projectRoots ?? [];
       const changedPaths = metadata.changedPaths;
       if (roots.length === 0) return [{ repoRef: repositoryUrl }];
@@ -351,16 +378,17 @@ export class RoutingReceiptResolver {
       triggerName: record.triggerName,
       provider,
       workspaceId: resolution.definitionId,
+      resolution: projectEventResolution(resolution),
       targetKind: "commit",
       repoRef,
       reason: `${provider}:${envelope.eventName ?? "commit"}:${revision}`,
       headSha: revision,
       ...(previousRevision(revision) !== undefined ? { baseSha: previousRevision(revision) } : {}),
       ...(branch !== undefined ? { branch } : {}),
-      author: { username: (isP4 ? metadata.p4User : metadata.svnAuthor) ?? envelope.user },
+      author: { username: isP4 ? metadata.p4User : metadata.svnAuthor },
       ...(envelope.depotPath ? { sourcePath: envelope.depotPath } : {}),
-      ...(isP4 && (metadata.p4Client ?? envelope.client)
-        ? { submitterWorkspace: metadata.p4Client ?? envelope.client }
+      ...(isP4 && metadata.p4Client
+        ? { submitterWorkspace: metadata.p4Client }
         : {}),
       ...(metadata.changedPaths.length > 0 ? { changedFiles: metadata.changedPaths.slice(0, 500) } : {}),
     };

@@ -177,6 +177,7 @@ describe("p4 routing admission (spec §5.2, W14)", () => {
 function fakeAdapter(record: { revision: string; p4User?: string; p4Client?: string; changedPaths: readonly string[] }): VcsAdapter {
   return {
     kind: "p4",
+    describeSource: async () => ({ server: "p4.example:1666", user: record.p4User ?? null, client: record.p4Client ?? null }),
     listChanges: () => Promise.reject(new Error("unused")),
     fetchScoped: () => Promise.reject(new Error("unused")),
     fetchExtraContext: () => Promise.reject(new Error("unused")),

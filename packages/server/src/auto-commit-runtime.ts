@@ -208,7 +208,7 @@ export class AutoCommitRuntime implements AutoCommitAcceptor {
       ...(input.resolution !== undefined
         ? { resolution: input.resolution }
         : reviewEvent.resolution !== undefined
-          ? { resolution: reviewEvent.resolution.kind === "match" ? { ...reviewEvent.resolution, variables: {} } : reviewEvent.resolution }
+          ? { resolution: reviewEvent.resolution.kind === "match" ? { ...reviewEvent.resolution, variables: reviewEvent.resolution.variables ?? {} } : reviewEvent.resolution }
           : {}),
       now: input.now,
     });

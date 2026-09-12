@@ -887,7 +887,7 @@ review:
 #     api_key_env: AICR_WORKSPACE_API_KEY  # env var with a per-workspace key
 #     enabled: true
 # ---------------------------------------------------------------------------
-# LIVE for git webhooks (P1b): match/work_path/workspaces.root parse,
+# LIVE (P1): match/work_path/workspaces.root parse,
 # validate, and drive admission on GitHub/GitLab/Gitea/Forgejo webhook routes.
 # After signature verification, each event is matched against rules using the
 # verified payload only: no hit -> 202 repository_not_configured; hits in more
@@ -895,17 +895,24 @@ review:
 # onto the event and runs under the isolated_v2 layout below. Definitions
 # using source_repo (or no binding) keep the legacy layout and admission.
 # P4/SVN match profiles use durable routing receipts and verified scope paths.
-# p4.*/svn.*/scheduled.* descriptors remain unavailable; manual.* comes from CLI.
+# p4.* uses submitted changelist metadata; svn.* uses revision-pinned svn info.
+# scheduled.* remains unavailable without an engine; manual.* comes from CLI.
+# IDs/numbers are decimal strings; missing metadata is null. Use default.
 # work_path helpers have fixed arity; default must be nested in segment/hash.
 # Path limits: 4096 UTF-8 bytes total, 255 per segment; no Windows device names.
 # Provider-specific variables must exist for all matched trigger kinds.
 # Per-run directories survive model fallback/follow-ups and are cleaned after
-# the whole review. HOME isolation remains pending.
+# the whole review. Sandbox/HOME/XDG/temp/MCP state are per-run; reflection is
+# per instance. Authentication uses configured env vars, not host login stores.
+# Legacy definition templates/AGENTS/.agents/skills are read-only fallbacks.
+# Set triggers[].enabled or workspaces.instances.<id>.enabled to false to stop
+# new admission; already accepted variable/binding snapshots remain readable.
 # Design: docs/superpowers/specs/2026-09-11-workspace-config-management.md
 # Plans: docs/superpowers/plans/2026-09-11-workspace-config-{implementation,tests}.md
 #
 # Definition (under workspaces.instances; source_repo is mutually exclusive):
 #   shared-services:
+#     enabled: true
 #     match:
 #       - id: github-services
 #         triggers: [github-main]        # must reference existing triggers

@@ -4,6 +4,18 @@ Read only the record for the external contract being changed. Dates describe the
 last evidence check, not guaranteed current behavior. Retained records were not
 revalidated by the 2026-09-12 layout change unless explicitly marked below.
 
+## Per-run user directories
+
+- Sources:
+  - <https://nodejs.org/api/os.html#oshomedir>
+  - <https://opencode.ai/docs/config/>
+  - <https://code.claude.com/docs/en/settings>
+- Evidence: Node resolves the home directory from HOME on POSIX and USERPROFILE on Windows. OpenCode documents its global XDG config directory. The AICR orchestrator now supplies isolated HOME/USERPROFILE, APPDATA/LOCALAPPDATA and XDG directories for every adapter, with CLAUDE_CONFIG_DIR for Claude. Credentials remain explicit environment references; host login stores are not copied. This check covers directory selection, not a refresh of every adapter's CLI or output contract below.
+- Local checks: `packages/server/test/review-orchestrator.test.ts` exercises concurrent stateful sandbox instances and distinct home sentinels; `packages/agents/test/index.test.ts` checks the generated MCP child's environment allowlist.
+- `last_checked`: 2026-09-12
+- `next_review`: 2026-12-12
+- `update_trigger`: Changing home/config environment overrides, sandbox lifecycle, or credential forwarding.
+
 ## Kilo Code and Zoo Code
 
 - Sources:

@@ -94,6 +94,7 @@ Narrative: [VCS providers](/en/integrations/vcs-providers/).
 | --- | --- | --- | --- |
 | `triggers[].name` | string | — | Trigger profile name; referenced from `workspaces.instances.<id>.source_repo.trigger` |
 | `triggers[].kind` | enum | — | Trigger kind (see enum table) |
+| `triggers[].enabled` | boolean | — | Enabled when omitted; `false` stops new admission for this profile while retaining historical snapshots |
 | `triggers[].watch_path` | string[] | — | Only analyze files under these depot/repo-relative subpaths |
 | `triggers[].include_cr_file` | string[] | — | Glob patterns; a file must match at least one to be analyzed |
 | `triggers[].exclude_cr_file` | string[] | — | Glob patterns; a file matching any is skipped |
@@ -156,6 +157,7 @@ Narrative: [Configuration overview](/en/configuration/overview/).
 | `workspaces.instances.<id>.match[].source.<id>.regex` | string | — | RE2 regex; substring match unless anchored with `^` / `$` |
 | `workspaces.instances.<id>.match[].source.<id>.ignore_case` | boolean | — | Case folding for matching only; never rewrites identity |
 | `workspaces.instances.<id>.work_path` | string | — | Handlebars path template (whitelisted AST: `segment`/`default`/`hash`/`lower` helpers only; output must be a relative `/` path). Requires `match`. Default: `{{workspace.id}}` |
+| `workspaces.instances.<id>.enabled` | boolean | — | Enabled when omitted; `false` stops new admission while retaining existing snapshots |
 | `workspaces.instances.<id>.model_chain` | string | inherit | Main-group override referencing `llm.model_chain` |
 | `workspaces.instances.<id>.triage_model_chain` | string | inherit | Lifecycle-group override; if absent at all layers, uses this workspace's main group |
 | `workspaces.instances.<id>.agent.default` | enum | — | Agent kind override (no runtime effect yet, see note below) |
@@ -189,7 +191,8 @@ GitHub/GitLab/Gitea/Forgejo verify credentials before matching. Source repositor
 and namespace preserve subgroup paths. No rule hit returns
 `202 repository_not_configured`; multiple definition hits return
 `202 ambiguous_route`. A hit pins its binding on the event and automatic-commit
-receipt. Execution reuses that binding after configuration changes.
+receipt, together with full variables and per-field provenance. Execution reuses
+that snapshot after configuration changes or restart. Reflection memory is keyed by instance ID.
 
 P4/SVN match profiles persist a routing receipt before returning 202. Background
 resolution intersects configured scopes with verified changed paths. Missing or
@@ -199,21 +202,34 @@ review. Frozen events replay without querying VCS again.
 Matched instances use `workspaces.root/work_path/instance_id`, with each run's
 source/agent/tmp/context-repos under `runs/<runId>/`. Cleanup follows the entire
 review, including model fallback and follow-ups. Legacy cache paths stay intact;
-match metadata caches use `.metadata/<hash>`. HOME isolation is not complete.
+match metadata caches use `.metadata/<hash>`. Every review creates its own sandbox.
+HOME, USERPROFILE, APPDATA, XDG and temporary directories stay inside the run;
+MCP children inherit these paths. Authentication uses configured environment
+variables without copying host OAuth/auth stores. P4 client names include a hash
+of the host and run directory. Instance templates take precedence, with read-only
+fallback to `<workspaces.root>/<definition>/templates`. Operator `AGENTS.md` and
+`.agents/skills` use the same policy directory; source instructions at the same
+path and skills with the same name take precedence.
 
 Templates allow only `segment/default/hash/lower`. Wrap `default` inside
 `segment/hash` and provide a literal fallback; hash arguments are rejected.
 Provider variables must exist for every matched trigger kind. Rendered paths
 are limited to 4096 UTF-8 bytes and each segment to 255; Windows device names
 (including extensions), reserved characters and trailing dots/spaces are rejected.
-The three `manual.*` fields come from trusted CLI input. `p4.*`, `svn.*` and
-`scheduled.*` descriptors remain unavailable; `event.*` is forbidden in paths.
+Git provider IDs and numbers are decimal strings, or null when absent. `p4.*`
+comes from submitted changelist metadata and configured scopes; a stream requires
+a changelist record, never the current client or a depot-path guess. `svn.*` uses
+revision-pinned `svn info --xml` and commit metadata. URLs omit credentials;
+project/branch require explicit `project_roots`. The three `manual.*` fields come
+from trusted CLI input. `scheduled.*` remains unavailable without a trusted
+scheduler; `event.*` is forbidden in paths. The variable catalog records type,
+event applicability, acquisition stage, nullability and examples.
 :::
 
 :::note[Workspace-layer `agent.default` / `sandbox` have no effect yet]
 The schema accepts `agent.default` and `sandbox` under `workspaces.defaults`
-and each instance, but the current version builds a single adapter and sandbox
-from the global `agent` section at startup. Workspace-layer values are parsed
+and each instance, but the current version selects the adapter and each run’s
+independent sandbox from the global `agent` section. Workspace-layer values are parsed
 and validated but unused at runtime.
 :::
 

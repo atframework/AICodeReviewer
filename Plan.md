@@ -17,7 +17,7 @@ PR/MR 执行时段、持久化延期与事件面板见 [M16](docs/ai/milestones/
 模型目录 Redis 新连接重载，以及部署配置/双语自动提交示例的 schema 校验。
 记录与复现条件见 [本地验收](docs/ai/milestones/local-priority-queue.md)。
 
-Workspace 多工程配置已进入 P1 实现与审查。P1 尚缺完整 P4/SVN 描述符、HOME 隔离、旧 prompts/skills 回退的完整验收及真实多工程场景；workspace 级 agent/sandbox 接线随 P4 推进，P2–P8 仍未完成。
+Workspace 多工程配置已完成 P1 实现与验收。P1 已补齐来源描述符、完整快照、运行/记忆隔离、只读策略回退及 Windows/Linux 和真实 VCS 验收；workspace 级 agent/sandbox 配置覆盖仍按原计划在 P4 接线，P2–P8 待推进。
 当前测试证据与待办见[执行计划](docs/superpowers/plans/2026-09-11-workspace-config-implementation.md)。
 
 ## 2. 可本地推进的下一步
@@ -26,7 +26,7 @@ Workspace 多工程配置已进入 P1 实现与审查。P1 尚缺完整 P4/SVN �
 
 | 优先级 | 工作 | 本地产物与验收 | 边界 |
 | --- | --- | --- | --- |
-| P0 | Workspace 多工程规则、动态配置管理与自动迁移 | 按设计和阶段计划补齐 P1 验收，再推进配置存储、发布和 UI；文件来源只读、任务版本固定与目标数据库升级均需测试 | P1 尚缺完整 P4/SVN 描述符、HOME 隔离、旧 prompts/skills 回退的完整验收及真实多工程场景；workspace 级 agent/sandbox 接线随 P4 推进，P2–P8 仍未完成。 PostgreSQL store 接线待补 |
+| P0 | Workspace 多工程规则、动态配置管理与自动迁移 | 从 P2 配置存储推进至发布和 UI；文件来源只读、任务版本固定与目标数据库升级均需测试 | PostgreSQL store、动态发布与 workspace 级 agent/sandbox 配置覆盖待接线；范围见下方 P2–P8 计划 |
 | P1 | 自动批次逐目标发布恢复 | 先梳理 publisher 能力矩阵；设计持久目标回执及状态转换；覆盖部分成功、响应丢失、租约过期与重入调用次数 | 当前仅完成检查点可恢复本地记账；未知 POST 结果不得自动重发。远端对账另行验收 |
 | P1 | dead 批次的管理与人工恢复 | 定义鉴权、审计和 CAS 操作；区分本地记账重试与可能重复远端副作用的操作；用三个存储后端验证 | dead 目前会占住 stream；不得以清空成员归属或重新组批作为恢复办法 |
 | P2 | 扩展配置示例校验 | 在现有 config-examples 测试上覆盖更多独立命名空间片段，补错误字段/失效引用的阴性场景 | 当前自动验证完整部署配置和 README/双语队列页的自动提交、PR/MR 策略示例；其他片段仍需人工核对 |
@@ -36,7 +36,7 @@ Workspace 多工程配置已进入 P1 实现与审查。P1 尚缺完整 P4/SVN �
 
 ### 2.1 Workspace 与动态配置管理
 
-本项已进入 P1 实现与审查；剩余验收及 P2–P8 仍待推进。详细资料：
+本项已完成 P0–P1；继续推进 P2–P8。详细资料：
 
 - [设计与调研依据](docs/superpowers/specs/2026-09-11-workspace-config-management.md)：多工程匹配、分来源变量、路径表达式、来源优先级、发布协议、管理 UI 和迁移合同。
 - [分阶段执行计划](docs/superpowers/plans/2026-09-11-workspace-config-implementation.md)：P0–P8 的依赖、文件范围、交付物和退出条件。
@@ -44,7 +44,7 @@ Workspace 多工程配置已进入 P1 实现与审查。P1 尚缺完整 P4/SVN �
 
 | 执行顺序 | 尚待实施的交付 | 完成条件 |
 | --- | --- | --- |
-| P0–P1 | ~~passthrough 类型化能力校验~~(P0 已交付);P1:多工程规则、Handlebars 路径与变量目录 | 同规则的不同工程独立运行；未知变量、路径逃逸和歧义可诊断；旧映射语义保留 |
+| P0–P1 | ~~passthrough 类型化能力校验~~(P0 已交付);~~多工程规则、Handlebars 路径与变量目录~~(P1 已交付) | 同规则的不同工程独立运行；未知变量、路径逃逸和歧义可诊断；旧映射语义保留 |
 | P2–P3 | SQLite/PostgreSQL/Redis 配置存储、迁移、来源合并、路由和原子发布 | 真实旧数据自动升级；文件项只读；原子引用变更及并发冲突可验证 |
 | P4–P5 | 不可变运行配置版本、立即生效边界、管理员 API | 新接收任务用新版本，旧任务固定版本；所有模型/agent/review/输出路径实际接线 |
 | P6–P7 | 按组件能力设计管理表单与完整流程 | UI 描述/映射范式四项覆盖率 100%；文件只读、CRUD、预览、冲突和多后端流程通过 |

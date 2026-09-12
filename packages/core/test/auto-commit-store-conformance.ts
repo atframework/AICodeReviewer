@@ -1577,9 +1577,27 @@ export function runAutoCommitStoreConformance(factory: StoreFactory): void {
       expect((await store.getRoutingReceipt(id))?.resolution).toEqual(first.resolution);
     });
 
+    it("preserves an empty frozen interpretation through retries and duplicate intake (V14)", async () => {
+      const store = await factory.makeStore();
+      const input = { routingKey: "svn:empty-scopes", provider: "svn", triggerName: "svn", envelope: { revision: "42" }, now: T0 };
+      const accepted = await store.acceptRoutingReceipt(input);
+      const id = accepted.receipt.routingId;
+      const frozen = await store.recordRoutingReceiptResolution(id, [], T0 + 1);
+      expect(frozen.resolution).toEqual([]);
+      expect(frozen.convertedReceiptIds).toEqual([]);
+      await store.recordRoutingReceiptFailure(id, "retry conversion", T0 + 2);
+      expect((await store.readDueRoutingReceipts(T0 + 2, 10))[0]?.resolution).toEqual([]);
+      expect((await store.acceptRoutingReceipt(input)).receipt.resolution).toEqual([]);
+      expect((await store.recordRoutingReceiptResolution(id, [{ repoRef: "changed", outcome: "no_match" }], T0 + 3)).resolution).toEqual([]);
+      expect((await store.recordRoutingReceiptConversion(id, { complete: true }, T0 + 4)).resolution).toEqual([]);
+      expect((await store.getRoutingReceipt(id))?.convertedReceiptIds).toEqual([]);
+    });
+
     it("freezes the admission resolution snapshot on receipts (V14)", async () => {
       const store = await factory.makeStore();
-      const resolution = { kind: "legacy_binding", definitionId: "ws1" } as const;
+      const resolution = { kind: "match", definitionId: "ws1", binding: { definitionId: "ws1", instanceId: "instance-original", workPath: "old-path" },
+        variables: { source: { project_key: "p4:server:scope" }, p4: { user: "submitter", stream: null } },
+        provenance: { "p4.user": "vcs_verified", "p4.stream": "unavailable" } } as const;
       const accepted = await store.acceptReceipt(receiptInput({ resolution }));
       expect(accepted.receipt.resolution).toEqual(resolution);
 

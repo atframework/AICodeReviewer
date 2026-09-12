@@ -18,6 +18,7 @@ import { z } from "zod";
 import { branchFromGitRef, describeWebhookSource } from "./source-descriptors.js";
 
 export interface VcsWebhookConfig {
+  readonly isWorkspaceEnabled?: (workspaceId: string) => boolean;
   readonly triggerName: string;
   readonly workspaceId: string;
   readonly webhookSecret?: string;
@@ -292,12 +293,16 @@ export function resolveWorkspaceForRepo(
   repoRef: string,
   context?: WorkspaceIdResolutionContext,
 ): Pick<ReviewEvent, "workspaceId" | "resolution"> {
+  const assertEnabled = (id: string): void => {
+    if (config.isWorkspaceEnabled?.(id) === false) throw new ConfigError("repository_not_configured", `Workspace "${id}" is disabled or removed.`);
+  };
   const normalizedRepo = normalizeRepositoryRef(repoRef);
   const matched = config.repoMappings?.find((mapping) => {
     const normalizedMatch = normalizeRepositoryRef(mapping.match);
     return normalizedRepo === normalizedMatch || normalizedRepo.endsWith(`/${normalizedMatch}`);
   });
   if (matched !== undefined) {
+    assertEnabled(matched.workspace);
     return { workspaceId: matched.workspace, resolution: { kind: "legacy_binding", definitionId: matched.workspace } };
   }
 
@@ -305,6 +310,7 @@ export function resolveWorkspaceForRepo(
   // the legacy contract routes repoRef-equal events to the bound workspace
   // unconditionally.
   if (config.repoRef !== undefined && normalizedRepo === normalizeRepositoryRef(config.repoRef)) {
+    assertEnabled(config.workspaceId);
     return { workspaceId: config.workspaceId, resolution: { kind: "legacy_binding", definitionId: config.workspaceId } };
   }
 
@@ -313,6 +319,7 @@ export function resolveWorkspaceForRepo(
     switch (resolution.kind) {
       case "legacy_binding":
       case "match":
+        assertEnabled(resolution.definitionId);
         return { workspaceId: resolution.definitionId, resolution: projectEventResolution(resolution) };
       case "ambiguous":
         throw workspaceAmbiguityError(resolution.definitionIds);
@@ -333,6 +340,7 @@ export function resolveWorkspaceForRepo(
     }
   }
 
+  assertEnabled(config.workspaceId);
   return { workspaceId: config.workspaceId };
 }
 
@@ -499,6 +507,7 @@ export function createPushReviewEvent(
     provider,
     ...resolveWorkspaceForRepo(config, parsed.repository.full_name, {
       source: { vcs, repo_ref: parsed.repository.full_name, branch: branchFromGitRef(ref ?? undefined), ref },
+      event: describeWebhookSource(provider, parsed)?.event,
     }),
     targetKind: "push",
     repoRef: parsed.repository.full_name,
@@ -528,6 +537,7 @@ export function createIssueReviewEvent(
     provider,
     ...resolveWorkspaceForRepo(config, parsed.repository.full_name, {
       source: { vcs, repo_ref: parsed.repository.full_name, branch: null, ref: null },
+      event: describeWebhookSource(provider, parsed)?.event,
     }),
     targetKind: "issue",
     repoRef: parsed.repository.full_name,
@@ -593,7 +603,7 @@ export async function translateIssueCommentReviewCommand(
     provider,
     ...resolveWorkspaceForRepo(config, parsed.repository.full_name, {
       source: { vcs, repo_ref: parsed.repository.full_name, branch: branch ?? null, ref: null },
-      event: { base_branch: targetBranch ?? null, head_branch: branch ?? null },
+      event: { ...describeWebhookSource(provider, parsed)?.event, base_branch: targetBranch ?? null, head_branch: branch ?? null },
     }),
     targetKind: "pull_request",
     repoRef: parsed.repository.full_name,

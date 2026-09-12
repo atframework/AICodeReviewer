@@ -28,7 +28,7 @@ const PROTOCOL_VERSION = "2025-06-18";
 const HANDSHAKE_TIMEOUT_MS = 15000;
 const CALL_TIMEOUT_MS = 120000;
 const MAX_BUFFER_BYTES = 16 * 1024 * 1024;
-const BASE_ENV_KEYS = ["PATH", "Path", "SYSTEMROOT", "SystemRoot", "HOME", "TMPDIR", "TEMP", "TMP"];
+const BASE_ENV_KEYS = ["PATH", "Path", "SYSTEMROOT", "SystemRoot", "HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_STATE_HOME", "XDG_RUNTIME_DIR", "TMPDIR", "TEMP", "TMP"];
 
 // Only the minimal runtime base env plus the per-server spec environment reaches
 // MCP children; the agent process env (which carries the resolved provider API

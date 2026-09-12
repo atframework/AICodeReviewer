@@ -49,6 +49,7 @@ describe.skipIf(!p4d)("P4 local server metadata and endpoint diff", () => {
       const raw = p4(["diff2", "-u", "//depot/...@1", "//depot/...@3"]);
       await writeFile(join(root, "snapshot-diff.txt"), raw);
       const adapter = new P4VcsAdapter({ repositoryDir: clientRoot, port, user: "alice", workspace: "task-main", depot: "//depot" });
+      expect(await adapter.describeSource("3")).toMatchObject({ change: "3", user: "alice", client: "task-main", stream: null, server: port, service_client: expect.stringMatching(/^task-main-[0-9a-f]{10}$/u) });
       const page = await adapter.listCommitMetadataPage({ scopeRef: "//depot/...", baseRevision: "1", headRevision: "3", maxRecords: 1, maxBytes: 1_048_576 });
       expect(page.status).toBe("partial");
       expect(page.records.map((record) => [record.revision, record.p4User, record.p4Client])).toEqual([["2", "alice", "task-main"]]);

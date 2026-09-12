@@ -377,7 +377,7 @@ export function assertSafeWorkPathOutput(rendered: string, path?: ConfigPath): s
 }
 
 // ---------------------------------------------------------------------------
-// work_path variable registry (spec §5.3, P1b extraction status)
+// work_path variable registry (spec §5.3)
 // ---------------------------------------------------------------------------
 
 export type WorkPathVariableAvailability = "extracted" | "unavailable" | "forbidden";
@@ -388,6 +388,10 @@ export interface WorkPathVariableDescriptor {
   readonly availability: WorkPathVariableAvailability;
   /** True when the value can be null for some event kinds (use `default`). */
   readonly nullable: boolean;
+  readonly type: "string";
+  readonly events: readonly string[];
+  readonly acquisitionStage: "configured" | "verified_payload" | "vcs_verified" | "unavailable";
+  readonly sample: string | null;
   readonly note?: string;
 }
 
@@ -414,6 +418,7 @@ const EXTRACTED_COMMON: readonly (readonly [string, boolean])[] = [
   ["git.head_branch", true],
   ["git.head_repository", true],
   ["git.head_owner", true],
+  ["git.default_branch", true],
 ];
 
 const EXTRACTED_GITHUB_LIKE: readonly (readonly [string, boolean])[] = [
@@ -423,6 +428,9 @@ const EXTRACTED_GITHUB_LIKE: readonly (readonly [string, boolean])[] = [
   ["branch", true],
   ["base_branch", true],
   ["head_branch", true],
+  ["repository_id", true],
+  ["pull_number", true],
+  ["issue_number", true],
 ];
 
 const EXTRACTED_GITLAB: readonly (readonly [string, boolean])[] = [
@@ -432,26 +440,16 @@ const EXTRACTED_GITLAB: readonly (readonly [string, boolean])[] = [
   ["branch", true],
   ["source_branch", true],
   ["target_branch", true],
+  ["project_id", true],
+  ["source_project_id", true],
+  ["target_project_id", true],
+  ["merge_request_iid", true],
+  ["issue_iid", true],
 ];
 
-/** Registered variables that P1b does not extract yet (spec §5.3 remainder). */
-const UNAEXTRACTED: readonly string[] = [
-  "git.default_branch",
-  "github.repository_id",
-  "github.pull_number",
-  "github.issue_number",
+/** Provider descriptors produced after authenticated intake or bounded VCS lookup. */
+const EXTRACTED_PROVIDER: readonly string[] = [
   "github.installation_id",
-  "gitea.repository_id",
-  "gitea.pull_number",
-  "gitea.issue_number",
-  "forgejo.repository_id",
-  "forgejo.pull_number",
-  "forgejo.issue_number",
-  "gitlab.project_id",
-  "gitlab.source_project_id",
-  "gitlab.target_project_id",
-  "gitlab.merge_request_iid",
-  "gitlab.issue_iid",
   "p4.server",
   "p4.depot",
   "p4.depot_path",
@@ -470,6 +468,9 @@ const UNAEXTRACTED: readonly string[] = [
   "svn.branch",
   "svn.revision",
   "svn.author",
+];
+
+const UNEXTRACTED: readonly string[] = [
   "scheduled.job_id",
   "scheduled.schedule_id",
   "scheduled.scheduled_at",
@@ -496,7 +497,7 @@ const EVENT_VARIABLES: readonly string[] = [
 ];
 
 function buildRegistry(): readonly WorkPathVariableDescriptor[] {
-  const entries: WorkPathVariableDescriptor[] = [];
+  const entries: Omit<WorkPathVariableDescriptor, "type" | "events" | "acquisitionStage" | "sample">[] = [];
   for (const [path, nullable] of EXTRACTED_COMMON) {
     entries.push({ path, availability: "extracted", nullable });
   }
@@ -511,12 +512,15 @@ function buildRegistry(): readonly WorkPathVariableDescriptor[] {
   for (const [field, nullable] of EXTRACTED_MANUAL) {
     entries.push({ path: `manual.${field}`, availability: "extracted", nullable });
   }
-  for (const path of UNAEXTRACTED) {
+  for (const path of EXTRACTED_PROVIDER) {
+    entries.push({ path, availability: "extracted", nullable: true });
+  }
+  for (const path of UNEXTRACTED) {
     entries.push({
       path,
       availability: "unavailable",
       nullable: true,
-      note: "registered in spec §5.3; extraction lands with the provider descriptor slice",
+      note: "requires a trusted scheduled engine",
     });
   }
   for (const path of EVENT_VARIABLES) {
@@ -527,7 +531,22 @@ function buildRegistry(): readonly WorkPathVariableDescriptor[] {
       note: "event fields are unstable between receive and execution; work_path must use stable project identity",
     });
   }
-  return entries;
+  return entries.map((entry) => {
+    const [namespace, field] = entry.path.split(".");
+    const events = namespace === "manual" ? ["manual"]
+      : namespace === "scheduled" ? ["scheduled"]
+      : namespace === "p4" || namespace === "svn" ? ["commit"]
+      : /^(base_branch|head_branch|head_owner|head_repository|source_branch|target_branch|pull_number|merge_request_iid|source_project_id|target_project_id)$/u.test(field!) ? ["pull_request", "comment"]
+      : /^(issue_number|issue_iid)$/u.test(field!) ? ["issue", "comment"]
+      : ["push", "pull_request", "issue", "comment", "commit", "manual"];
+    return { ...entry, type: "string" as const, events,
+      acquisitionStage: entry.availability !== "extracted" ? "unavailable" as const
+        : ["p4.server", "p4.service_client", "p4.depot", "p4.depot_path", "p4.scope", "svn.repository_url", "svn.repository", "svn.project_path", "svn.branch"].includes(entry.path) ? "configured" as const
+        : namespace === "p4" || namespace === "svn" ? "vcs_verified" as const
+        : namespace === "trigger" || namespace === "workspace" ? "configured" as const : "verified_payload" as const,
+      sample: entry.availability !== "extracted" ? null : /(?:_id|_iid|_number|revision|change)$/u.test(field!) ? "42" : "example",
+    };
+  });
 }
 
 /** work_path template variable catalog (V13: one registry drives validation + docs). */
@@ -605,7 +624,7 @@ export function validateWorkPathTemplateVariables(source: string, path?: ConfigP
       );
     }
     const namespace = variable.split(".")[0]!;
-    if (triggerKinds?.length && ["git", "github", "gitea", "forgejo", "gitlab"].includes(namespace)) {
+    if (triggerKinds?.length && ["git", "github", "gitea", "forgejo", "gitlab", "p4", "svn"].includes(namespace)) {
       const supported = namespace === "git" ? ["github", "gitea", "forgejo", "gitlab"] : [namespace];
       if (triggerKinds.some((kind) => !supported.includes(kind))) {
         throw templateError(`work_path variable "${variable}" is unavailable for one or more matched trigger kinds.`, path);

@@ -644,6 +644,7 @@ export interface TemplateResolverOptions {
 	readonly channelKind: string;
 	readonly channelName?: string;
 	readonly workspaceTemplatesDir?: string;
+	readonly fallbackWorkspaceTemplatesDirs?: readonly string[];
 	readonly builtinTemplatesBaseDir?: string;
 }
 
@@ -728,15 +729,12 @@ function resolveWorkspaceTemplate(
 	options: TemplateResolverOptions,
 	kind: TemplateKind,
 ): ResolvedTemplateSource | undefined {
-	if (!options.workspaceTemplatesDir) {
-		return undefined;
+	for (const directory of [options.workspaceTemplatesDir, ...(options.fallbackWorkspaceTemplatesDirs ?? [])]) {
+		if (!directory) continue;
+		const result = resolveFileTemplate(directory, workspaceTemplateCandidates(options, kind), "workspace");
+		if (result) return result;
 	}
-
-	return resolveFileTemplate(
-		options.workspaceTemplatesDir,
-		workspaceTemplateCandidates(options, kind),
-		"workspace",
-	);
+	return undefined;
 }
 
 function resolveTemplateSource(options: TemplateResolverOptions, kind: TemplateKind): ResolvedTemplateSource {

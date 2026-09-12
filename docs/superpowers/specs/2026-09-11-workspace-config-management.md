@@ -1,6 +1,6 @@
 # Workspace 规则、动态配置与数据库迁移设计
 
-状态：P0 基础层和 P1 子集已有实现与回归，包括 Git 匹配准入、P4/SVN 路由收据及冻结 binding。P1 尚缺完整 P4/SVN 描述符、HOME 隔离、旧 prompts/skills 回退的完整验收及真实多工程场景；workspace 级 agent/sandbox 接线随 P4 推进，P2–P8 仍未完成。 下文未交付部分仍为目标合同，证据以[测试计划](../plans/2026-09-11-workspace-config-tests.md)为准。
+状态：P0–P1 已完成实现与验收。P1 已补齐来源描述符、完整快照、运行/记忆隔离、只读策略回退及 Windows/Linux 和真实 VCS 验收；workspace 级 agent/sandbox 配置覆盖仍按原计划在 P4 接线，P2–P8 待推进。 下文未交付部分仍为目标合同，证据以[测试计划](../plans/2026-09-11-workspace-config-tests.md)为准。
 源码核对基线为 `e609cd7`;外部资料核对日期为 2026-09-11。
 
 执行入口：[执行计划](../plans/2026-09-11-workspace-config-implementation.md)、

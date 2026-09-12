@@ -1,6 +1,6 @@
 # Workspace 与动态配置测试计划
 
-状态：P0 基础层、P1 的 Git 准入/布局和 P4/SVN 路由收据已有测试；P1 剩余项与 P2–P8 跨层验收仍待实施。下列矩阵是完整验收目标；部分断言通过不代表该 ID 全部完成。
+状态：P0–P1 已完成；P2–P8 跨层验收仍待实施。P1 当前证据见下方验收索引，历史批次统计保留其原始范围。
 合同见 [详细设计](../specs/2026-09-11-workspace-config-management.md)，阶段见
 [执行计划](2026-09-11-workspace-config-implementation.md)。
 
@@ -30,13 +30,13 @@
 | `config-capabilities.test.ts` | passthrough 类型化 DTO、kind×字段能力矩阵、9 种 channel kind、`resolved_action` 逐 kind 取值、changeset 接入、catalog 键 parity | 文件配置侧能力提示(P5/UI)、P6 UI registry/映射函数和四项覆盖率 |
 | `config-examples.test.ts`、`config.test.ts`、静态 YAML fixtures | 当前示例加载、旧格式转换及现有配置兼容；fixture b01–b05 为输入编号 | B02 compatibility graph、B04 CLI 无额外数据库、B06–B10 跨层行为 |
 | `config-matcher.test.ts`、`config-path-template.test.ts`、`config-workspace.test.ts` | RE2/glob/exact matcher、模板 AST 白名单与渲染校验、match 互斥/trigger 引用/歧义、instance identity、legacy/isolated_v2 布局纯层 | matcher 在存储/API 层的复用、L13/L14 平台样例 |
-| `config-resolution.test.ts` | 描述符字段目录、legacy 优先、规则 OR/字段 AND、多定义歧义、provider 变量范围与 W01/W02/W07/W10 纯层 | p4/svn/manual/scheduled 描述符产出 |
-| `source-descriptors.test.ts`（server） | V01 github push/PR/issue、V03 gitlab 多级 namespace/MR/note、V04 gitea、V05 tag push branch=null | V02/V06–V14 事件矩阵 |
-| `workspace-runtime.test.ts`（server） | legacy 布局与 `buildSourceRootResolver` 字节对等、isolated_v2 实例隔离、workspaces.root 覆盖、接受/执行渲染一致（W01/W10/L13 子集） | W04–W06/W08/W09/W11/W12、真实文件系统布局 |
+| `config-resolution.test.ts` | 描述符字段目录、legacy 优先、规则 OR/字段 AND、多定义歧义、provider 变量范围与 W01/W02/W07/W10 纯层 | P4/P5 动态配置发布；scheduled 缺引擎，按合同不可用 |
+| `source-descriptors.test.ts`（server） | V01 github push/PR/issue、V03 gitlab 多级 namespace/MR/note、V04 gitea、V05 tag push branch=null | 完整目录、VCS 与重启矩阵见下方 P1 验收索引 |
+| `workspace-runtime.test.ts`（server） | legacy 布局与 `buildSourceRootResolver` 字节对等、isolated_v2 实例隔离、workspaces.root 覆盖、接受/执行渲染一致（W01/W10/L13 子集） | 全阶段矩阵见下方 P1 验收索引 |
 | `webhook-match-resolution.test.ts`（server） | 四类 Git 真实签名 payload：hit/miss/ambiguous、repository/namespace、legacy、多 profile secret、鉴权先行与持久 binding | H 系列配置热更新 |
 
-| `routing-admission.test.ts`、auto-commit conformance | P4 多范围/depot、SVN 显式根、路径不完整阻断、冻结事件离线重放、持久重试/wake 与幂等转交 | 真实 Redis/P4/SVN、多副本故障矩阵与完整描述符 |
-| `review-orchestrator.test.ts` | 并发目录、模型回退中的源码、直连成功/失败/空变更清理、非法 runId、未知 owner 保留 | HOME/跨主机隔离与 L13 完整回退 |
+| `routing-admission.test.ts`、auto-commit conformance | P4 多范围/depot、SVN 显式根、路径不完整阻断、冻结事件离线重放、持久重试/wake 与幂等转交 | P2–P8 动态配置与多副本故障矩阵 |
+| `review-orchestrator.test.ts` | 并发目录、模型回退中的源码、直连成功/失败/空变更清理、非法 runId、未知 owner 保留 | P4 workspace 级 agent/sandbox 配置覆盖 |
 
 2026-09-12 审查新增的首批 35 项边界测试在修复前 31 项失败，修复后全部通过。
 另补 4 项空映射覆盖边界，修复前均失败。此次累计新增 117 项测试。
@@ -66,6 +66,32 @@
 而跳过；本次未执行 Redis/SVN/P4 实服务用例，也未实现或验收新的配置后端、迁移、UI。
 
 本轮 P1 审查先以新增回归确认失败，再修复实现；迭代记录在 `build/logs/p1-review-red.log`、`p1-review-routing-red.log`，最终全门禁记录在 `build/logs/p1-review-final-*.log`。最终统计以该组日志为准，上表历史数字不代表当前树。
+
+## P1 完成验收索引（2026-09-12）
+
+| 验收项 | 当前证据 |
+| --- | --- |
+| W01–W11 | core config-matcher/config-path-template/config-workspace/config-resolution；server webhook-match-resolution/workspace-runtime；W11 为 source_repo/match 互斥 |
+| W12 | workspace-source-contracts 的静态停用、HTTP 拒绝、删除配置后快照读取；SQLite 关闭重开；动态 CRUD/发布 API 仍属 P5 |
+| W13 | webhook-match-resolution 与 bootstrap 的多 profile secret/token、目标仓库凭据测试 |
+| W14–W15 | routing-admission 与三个 store conformance；workspace-routing-live 使用真实 P4/SVN 双工程提交、独立 instance、幂等重放 |
+| V01–V05/V11–V13 | source-descriptors 与 workspace-source-contracts：全登记目录有效/缺省 fixture、十进制 ID、fork/多级 namespace、已删除 ref、provider 范围、scheduled unavailable |
+| V06–V10 | VCS source-descriptors：P4 recorded stream/classic/缺字段/冲突，SVN XML/UUID/root/去凭据；真实 VCS 和显式 project roots |
+| V14 | full variables/provenance 随事件与收据固定；sqlite-auto-commit-store 关闭重开与三后端 conformance；routing-admission 冻结后不再查询 VCS |
+| L01–L08 | config-path-template/config-workspace 与 review-orchestrator 的参数、预算、设备名、链接包含性及执行前重检 |
+| L09–L12 | 并发 HOME 文件写入、独立 sandbox factory、源码/context/MCP 目录；P4 主机/运行根 client 哈希；run 生命周期与陈旧 owner 保留 |
+| L13 | workspace-policy 的模板/AGENTS/skills 只读回退与优先级；bootstrap/CLI/直接 publisher 显式目录接线；SQLite reflection 按 instance 隔离 |
+| L14 | workspace-host-filesystem 及同源 probe：Windows 主机与 WSL Debian tmpfs；Unicode、超过 260 字符路径、大小写、junction/symlink、两工程相同渲染路径 |
+
+真实服务工具解压在 build/tmp/p1-tools/：SlikSVN 1.14.5、P4D 2025.2、Debian Redis 8.0.2；服务只绑定
+loopback，数据位于 build。Linux probe 使用 Node 24.21.0，tmpfs 类型值 16914836；
+Windows 实测不区分大小写，Linux tmpfs 区分大小写。两者均通过同一组文件读写断言。
+
+完整门禁依序执行 ESLint、TypeScript、覆盖率、Markdown、build、eval fixture、docs:check、
+docs:build，日志为 build/logs/p1-completion-final-*.log。真实 VCS 和 Redis 的 opt-in 在本轮门禁中
+全部启用。Redis 实测发现并修复 routing receipt 空数组经 Lua/cjson 变成空对象的问题；
+三后端共同测试固定空解析结果的重复接收、重试、完成和不可覆盖回放。Linux 文件系统
+probe 不代表 Linux 全量测试或容器部署验收。
 
 ## 2. 配置与来源合并
 

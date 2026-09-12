@@ -58,6 +58,7 @@ describe.skipIf(!svn)("SVN local repository metadata and batch diff", () => {
     run(svn!, ["propdel", "--revprop", "-r", "5", "svn:author", repoUrl]);
 
     const adapter = new SvnVcsAdapter({ repositoryDir: wcDir, repositoryUrl: repoUrl });
+    expect(await adapter.describeSource("5")).toEqual({ repository_url: repoUrl, repository_root: repoUrl, repository_uuid: expect.any(String) });
 
     const page = await adapter.listCommitMetadataPage({
       scopeRef: `${repoUrl}/trunk`, headRevision: "5", maxRecords: 64, maxBytes: 1_048_576,

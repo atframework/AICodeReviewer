@@ -466,6 +466,7 @@ export async function runCli(
           {
             baseSystemPrompt: orchestration.baseSystemPrompt,
             sourceRootResolver: () => sourceRoot,
+            ...(reviewEvent.resolution?.kind === "match" && orchestration.runtimeDirsResolver ? { runtimeDirsResolver: orchestration.runtimeDirsResolver } : {}),
             vcs: orchestration.vcs,
             ...(orchestration.vcsFactory ? { vcsFactory: orchestration.vcsFactory } : {}),
             llm: orchestration.llm,
@@ -474,6 +475,7 @@ export async function runCli(
             ...(orchestration.outputPublisher ? { outputPublisher: orchestration.outputPublisher } : {}),
             ...(orchestration.outputPublisherResolver ? { outputPublisherResolver: orchestration.outputPublisherResolver } : {}),
             ...(orchestration.sandbox ? { sandbox: orchestration.sandbox } : {}),
+            ...(orchestration.sandboxFactory ? { sandboxFactory: orchestration.sandboxFactory } : {}),
             ...(orchestration.agentAdapter ? { agentAdapter: orchestration.agentAdapter } : {}),
             ...(orchestration.agentTimeoutMs !== undefined ? { agentTimeoutMs: orchestration.agentTimeoutMs } : {}),
             ...(orchestration.contextCompaction ? { contextCompaction: orchestration.contextCompaction } : {}),

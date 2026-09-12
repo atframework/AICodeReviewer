@@ -24,7 +24,7 @@ describe("describeWebhookSource — github/gitea/forgejo (V01, V04)", () => {
       branch: "main",
       ref: "refs/heads/main",
     });
-    expect(descriptor?.event).toBeUndefined();
+    expect(descriptor?.event).toEqual({ default_branch: null, provider_fields: { repository_id: null, pull_number: null, issue_number: null, installation_id: null } });
   });
 
   it("tag push: branch is null, ref stays real (V05)", () => {
@@ -42,7 +42,7 @@ describe("describeWebhookSource — github/gitea/forgejo (V01, V04)", () => {
       pull_request: { head: { ref: "feature/x" }, base: { ref: "main" } },
     });
     expect(descriptor?.source.branch).toBe("feature/x");
-    expect(descriptor?.event).toEqual({
+    expect(descriptor?.event).toMatchObject({
       base_branch: "main",
       head_branch: "feature/x",
       head_repository: null,
@@ -61,7 +61,7 @@ describe("describeWebhookSource — github/gitea/forgejo (V01, V04)", () => {
     // Target repo decides identity — never the fork.
     expect(descriptor?.source.repo_ref).toBe("acme/service");
     expect(descriptor?.source.branch).toBe("feature/x");
-    expect(descriptor?.event).toEqual({
+    expect(descriptor?.event).toMatchObject({
       base_branch: "main",
       head_branch: "feature/x",
       head_repository: "contributor/service",
@@ -112,7 +112,7 @@ describe("describeWebhookSource — gitlab (V03)", () => {
       object_attributes: { source_branch: "feature/y", target_branch: "main" },
     });
     expect(descriptor?.source.branch).toBe("feature/y");
-    expect(descriptor?.event).toEqual({ base_branch: "main", head_branch: "feature/y" });
+    expect(descriptor?.event).toMatchObject({ base_branch: "main", head_branch: "feature/y" });
   });
 
   it("note hooks read the embedded merge_request branches", () => {

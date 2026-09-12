@@ -4,6 +4,17 @@ Read only the record for the external contract being changed. Dates describe the
 last evidence check, not guaranteed current behavior. Retained records were not
 revalidated by the 2026-09-12 layout change unless explicitly marked below.
 
+## Per-run home and MCP child environment
+
+- Sources:
+  - <https://raw.githubusercontent.com/earendil-works/pi/main/packages/coding-agent/docs/environment-variables.md>
+  - <https://nodejs.org/api/os.html#oshomedir>
+- Evidence: pi exposes PI_CODING_AGENT_DIR; Node home lookup on Windows also needs USERPROFILE. AICR now redirects HOME/USERPROFILE and XDG directories for both pi-family adapters, retaining their existing agent-directory override. The generated pi MCP bridge forwards these isolated directories through a minimal environment allowlist. Unrelated provider credentials do not enter the MCP child environment.
+- Local checks: `packages/agents/test/index.test.ts` runs the generated bridge lifecycle and inspects the actual child spawn environment. The orchestrator concurrency test verifies distinct home directories. Historical native-home considerations in the records below are superseded by this isolation change; other dated CLI/parser claims were not refreshed.
+- `last_checked`: 2026-09-12
+- `next_review`: 2026-12-12
+- `update_trigger`: Changing pi-family directory overrides or the MCP child's environment allowlist.
+
 ## pi (earendil-works)
 
 - Sources:

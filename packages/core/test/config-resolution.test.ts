@@ -361,7 +361,7 @@ describe("work_path variable registry", () => {
 
   it("rejects registered-but-unextracted provider fields", () => {
     try {
-      parseWith("{{segment github.repository_id}}");
+      parseWith("{{segment scheduled.job_id}}");
       throw new Error("should have thrown");
     } catch (error) {
       expect((error as ConfigError).code).toBe("template_invalid");
@@ -384,6 +384,6 @@ describe("work_path variable registry", () => {
       validateWorkspaceDefinitions(
         configWith({ bad: { match: [{ triggers: ["github-main"] }], work_path: "{{segment svn.revision}}" } }),
       ),
-    ).toThrowError(/not yet extracted/u);
+    ).toThrowError(/unavailable for one or more matched trigger kinds/u);
   });
 });

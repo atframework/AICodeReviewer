@@ -48,6 +48,11 @@ schema 也接受 `workspaces.defaults.agent.default` 和
 `workspaces.instances.<id>.agent.default`，但当前版本启动时只按全局
 `agent.default` 创建一份适配器——workspace 层的设置会被解析，不会生效。
 
+每次审查创建独立沙箱，HOME、USERPROFILE、APPDATA、XDG 和临时目录位于该 run 内；
+MCP 子进程继承相同隔离目录。通过配置声明的环境变量提供认证，运行时不复制开发者的
+全局 OAuth/auth store。operator 的模板和 `.agents/skills` 可从 definition 的旧策略目录
+只读回退；详细目录合同见[配置字段参考](/zh-cn/reference/config-fields/)。
+
 ## `agent.timeout_seconds` —— 单次运行的硬上限
 
 ```yaml

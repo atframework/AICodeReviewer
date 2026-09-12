@@ -116,8 +116,8 @@ Triage inherits that workspace's main group when omitted at every layer.
 See the [model group example](/en/configuration/llm/).
 
 \* The schema accepts `agent.default` and `sandbox` at the workspace layers, but
-the current version builds a single adapter and sandbox from the global `agent`
-section at startup. Values set at the workspace layers are parsed but have no
+the current version selects the adapter and sandbox configuration from the global
+`agent` section. Each run creates its own sandbox instance. Values set at the workspace layers are parsed but have no
 effect. Per-workspace agent mixing and sandbox images are planned for a later
 release.
 

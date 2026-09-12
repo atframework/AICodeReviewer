@@ -13,7 +13,7 @@
 import { createHash } from "node:crypto";
 
 import { CONFIG_MATCHER_LIMITS, ConfigError, computeWorkspaceInstanceId } from "./config-format.js";
-import type { PathTemplateVariables } from "./config-path-template.js";
+import { WORK_PATH_TEMPLATE_VARIABLES, type PathTemplateVariables } from "./config-path-template.js";
 import {
   buildWorkspaceBinding,
   DEFAULT_WORK_PATH_TEMPLATE,
@@ -43,9 +43,12 @@ export interface WorkspaceSourceValues {
 }
 
 export interface WorkspaceTriggerProfile {
+  readonly enabled?: boolean | undefined;
   readonly name: string;
   readonly kind: string;
   readonly base_url?: string | undefined;
+  readonly repository_url?: string | undefined;
+  readonly port?: string | undefined;
 }
 
 /** Maps a trigger kind to the `source.vcs` match value (spec §5.3). */
@@ -76,9 +79,11 @@ const DEFAULT_TRIGGER_HOSTS: Readonly<Record<string, string>> = {
  * one; the project key stays deterministic either way.
  */
 export function triggerProfileHost(profile: WorkspaceTriggerProfile): string | undefined {
-  if (profile.base_url !== undefined && profile.base_url.length > 0) {
+  const endpoint = profile.base_url ?? (profile.kind === "svn" ? profile.repository_url : undefined) ??
+    (profile.kind === "p4" && profile.port ? `p4://${profile.port.replace(/^(?:ssl|tcp)[46]?:/u, "")}` : undefined);
+  if (endpoint !== undefined && endpoint.length > 0) {
     try {
-      const host = new URL(profile.base_url).host;
+      const host = new URL(endpoint).host;
       if (host.length > 0) {
         return host.toLowerCase();
       }
@@ -126,6 +131,7 @@ export type WorkspaceResolution =
       readonly ruleId?: string | undefined;
       readonly binding: WorkspaceBinding;
       readonly variables: PathTemplateVariables;
+      readonly provenance?: Readonly<Record<string, "verified_payload" | "configured" | "vcs_verified" | "unavailable" | "conflicted">> | undefined;
     }
   | { readonly kind: "ambiguous"; readonly definitionIds: readonly string[] }
   | { readonly kind: "no_match" }
@@ -144,6 +150,9 @@ export interface WorkspaceResolutionConfigInput {
 }
 
 export interface WorkspaceResolutionEventContext {
+  /** Whitelisted provider facts from authenticated payloads or verified VCS metadata. */
+  readonly provider_fields?: Readonly<Record<string, string | null>> | undefined;
+  readonly default_branch?: string | null | undefined;
   /** Base (target) branch of a PR/MR; null for push/issue events. */
   readonly base_branch?: string | null | undefined;
   /** Head branch of a PR/MR; equals the push branch for push events. */
@@ -188,7 +197,7 @@ export function buildWorkspaceResolutionVariables(input: {
 }): PathTemplateVariables {
   const { repository, namespace } = input.source.repository !== undefined && input.source.repository !== null
     ? { repository: input.source.repository, namespace: input.source.namespace ?? undefined }
-    : deriveRepositoryParts(input.source.repo_ref);
+    : input.source.vcs === "git" ? deriveRepositoryParts(input.source.repo_ref) : { repository: null, namespace: undefined };
   const host = triggerProfileHost(input.trigger) ?? null;
   const branch = input.source.branch ?? null;
   const ref = input.source.ref ?? null;
@@ -208,6 +217,7 @@ export function buildWorkspaceResolutionVariables(input: {
     head_branch: headBranch,
     head_repository: headRepository,
     head_owner: headOwner,
+    default_branch: input.event?.default_branch ?? null,
   };
 
   const variables: Record<string, unknown> = {
@@ -224,7 +234,7 @@ export function buildWorkspaceResolutionVariables(input: {
       ref,
     },
     workspace: { id: input.definitionId, instance_id: input.instanceId },
-    git: gitNamespace,
+    ...(input.source.vcs === "git" ? { git: gitNamespace } : {}),
     // Trusted manual-entry fields only (spec §5.3); absent on every
     // non-manual admission and null when the request omitted them.
     manual: {
@@ -245,6 +255,10 @@ export function buildWorkspaceResolutionVariables(input: {
         branch,
         base_branch: baseBranch,
         head_branch: headBranch,
+        repository_id: input.event?.provider_fields?.repository_id ?? null,
+        pull_number: input.event?.provider_fields?.pull_number ?? null,
+        issue_number: input.event?.provider_fields?.issue_number ?? null,
+        ...(input.trigger.kind === "github" ? { installation_id: input.event?.provider_fields?.installation_id ?? null } : {}),
       };
       break;
     case "gitlab":
@@ -255,8 +269,18 @@ export function buildWorkspaceResolutionVariables(input: {
         branch,
         source_branch: input.event?.head_branch ?? branch,
         target_branch: baseBranch,
+        ...Object.fromEntries(["project_id", "source_project_id", "target_project_id", "merge_request_iid", "issue_iid"]
+          .map((field) => [field, input.event?.provider_fields?.[field] ?? null])),
       };
       break;
+    case "p4":
+    case "svn": {
+      const fields = input.trigger.kind === "p4"
+        ? ["server", "depot", "depot_path", "stream", "stream_name", "client", "service_client", "user", "change", "scope"]
+        : ["repository_url", "repository_root", "repository_uuid", "repository", "project_path", "branch", "revision", "author"];
+      variables[input.trigger.kind] = Object.fromEntries(fields.map((field) => [field, input.event?.provider_fields?.[field] ?? null]));
+      break;
+    }
     default:
       break;
   }
@@ -289,8 +313,10 @@ export function resolveWorkspaceForSource(
   request?: WorkspaceResolutionRequest,
 ): WorkspaceResolution {
   const requestedId = request?.workspaceId;
+  if (config.triggers.find((entry) => entry.name === triggerName)?.enabled === false) return { kind: "no_match" };
   for (const [definitionId, definition] of Object.entries(config.workspaces.instances)) {
     if (definition.source_repo?.trigger === triggerName) {
+      if (definition.enabled === false) return { kind: "no_match" };
       // An explicit route never widens a legacy binding (W09): only the
       // bound definition itself may be selected.
       if (requestedId !== undefined && requestedId !== definitionId) {
@@ -334,6 +360,7 @@ export function resolveWorkspaceForSource(
         continue;
       }
       triggerMatchReferenced = true;
+      if (config.workspaces.instances[validatedDefinition.definitionId]?.enabled === false) continue;
       const ruleMatches = rule.sourceTest === undefined || rule.sourceTest(sourceValues);
       if (ruleMatches) {
         hits.push({ definition: validatedDefinition, rule });
@@ -378,7 +405,7 @@ function buildMatchResolution(
   event: WorkspaceResolutionEventContext | undefined,
 ): WorkspaceResolution {
   const hit = { definition, rule };
-  const projectKey = canonicalProjectKey({
+  const projectKey = source.project_key ?? canonicalProjectKey({
     vcs: source.vcs,
     host: triggerProfileHost(trigger),
     repoRef: source.repo_ref,
@@ -416,6 +443,14 @@ function buildMatchResolution(
     ruleId: hit.rule.id ?? undefined,
     binding,
     variables,
+    provenance: Object.fromEntries(WORK_PATH_TEMPLATE_VARIABLES.filter((entry) => {
+      const [namespace] = entry.path.split(".");
+      return Object.hasOwn(variables, namespace!);
+    }).map((entry) => {
+      const [namespace, field] = entry.path.split(".");
+      const value = (variables[namespace!] as Record<string, unknown>)[field!];
+      return [entry.path, value == null ? "unavailable" : entry.acquisitionStage];
+    })),
   };
 }
 

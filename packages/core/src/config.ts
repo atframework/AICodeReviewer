@@ -279,6 +279,7 @@ export const triggerSchema = z
   .object({
     name: z.string().min(1),
     kind: z.enum(["gitea", "forgejo", "github", "gitlab", "p4", "svn", "scheduled", "manual"]),
+    enabled: z.boolean().optional(),
     watch_path: z.array(z.string().min(1)).optional(),
     include_cr_file: z.array(z.string().min(1)).optional(),
     exclude_cr_file: z.array(z.string().min(1)).optional(),
@@ -694,6 +695,7 @@ export const workspaceMatchRuleSchema = z
 
 export const workspaceInstanceSchema = z
   .object({
+    enabled: z.boolean().optional(),
     model_chain: modelChainReferenceSchema.optional(),
     triage_model_chain: modelChainReferenceSchema.optional(),
     source_repo: z

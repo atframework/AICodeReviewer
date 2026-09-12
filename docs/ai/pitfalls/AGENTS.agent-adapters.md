@@ -50,8 +50,10 @@ snapshots, not a current CLI specification.
   children receive minimal base env plus server env, not provider secrets from
   `process.env`. Keep the byte-bounded NDJSON buffer and fail/kill on overflow.
 - pi's project skill trust gate needs the headless approval flag in the isolated
-  bundle. Native execution may still discover host `~/.agents/skills`; container
-  isolation is a separate guarantee. omp native MCP can appear as `xd://` writes;
+  bundle. Keep HOME/USERPROFILE and XDG paths inside the run, including the pi
+  MCP bridge's minimal child env; Windows home lookup can bypass HOME when
+  USERPROFILE is omitted. See the bridge lifecycle test in agents `index.test.ts`.
+  omp native MCP can appear as `xd://` writes;
   retain the authoritative MCP state path even when stream tool events are absent.
 - Parse only completed assistant `message_end` usage, not cumulative
   `message_update`. Sum disjoint counters when total is absent; do not synthesize

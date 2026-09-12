@@ -1080,7 +1080,14 @@ function toReceipt(stored: StoredReceipt): AutoCommitReceipt {
   };
 }
 
-/** Normalize routing blobs written before later field additions existed. */
+/** Redis Lua cjson encodes an empty table as {}, including decoded JSON []. */
+function routingArray<T>(value: readonly T[] | null | undefined): readonly T[] {
+  if (Array.isArray(value)) return value;
+  if (value == null || (typeof value === "object" && Object.keys(value).length === 0)) return [];
+  throw new TypeError("Invalid routing receipt array");
+}
+
+/** Normalize older fields and Lua's empty-array representation at the boundary. */
 function toRoutingReceipt(stored: RoutingReceiptRecord): RoutingReceiptRecord {
   return {
     ...stored,
@@ -1088,10 +1095,10 @@ function toRoutingReceipt(stored: RoutingReceiptRecord): RoutingReceiptRecord {
     attempts: stored.attempts ?? 0,
     nextAttemptAt: stored.nextAttemptAt ?? null,
     terminalError: stored.terminalError ?? null,
-    convertedReceiptIds: stored.convertedReceiptIds ?? [],
+    convertedReceiptIds: routingArray(stored.convertedReceiptIds),
     completedAt: stored.completedAt ?? null,
     note: stored.note ?? null,
-    resolution: stored.resolution ?? null,
+    resolution: stored.resolution == null ? null : routingArray(stored.resolution),
   };
 }
 

@@ -42,6 +42,7 @@ export interface WorkspaceMatchRuleInput {
 }
 
 export interface WorkspaceDefinitionInput {
+  readonly enabled?: boolean | undefined;
   readonly source_repo?: { readonly trigger: string; readonly repo: string } | undefined;
   readonly match?: readonly WorkspaceMatchRuleInput[] | undefined;
   readonly work_path?: string | undefined;
@@ -220,6 +221,8 @@ export interface WorkspaceBinding {
 }
 
 export interface WorkspaceLayout {
+  /** Read-only operator assets retained at the definition's legacy location. */
+  readonly policyRoot?: string;
   readonly kind: WorkspaceLayoutKind;
   readonly workspacesRoot?: string;
   readonly instanceRoot: string;
@@ -290,6 +293,7 @@ export function computeWorkspaceLayout(
       tmpDir: joinPath(instanceRoot, "tmp"),
       contextReposDir: joinPath(instanceRoot, "context-repos"),
       templatesDir: joinPath(instanceRoot, "templates"),
+      policyRoot: instanceRoot,
     };
   }
   const instanceRoot = joinPath(workspacesRoot, binding.workPath, binding.instanceId);
@@ -302,5 +306,6 @@ export function computeWorkspaceLayout(
     tmpDir: joinPath(instanceRoot, "tmp"),
     contextReposDir: joinPath(instanceRoot, "context-repos"),
     templatesDir: joinPath(instanceRoot, "templates"),
+    policyRoot: joinPath(workspacesRoot, binding.definitionId),
   };
 }

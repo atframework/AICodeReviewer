@@ -22,6 +22,13 @@ Read for Git/P4 context, attribution, or diff changes. Sources and tests:
 
 ## P4 diagnostics and recovery
 
+- Routing descriptors require a pinned submitted changelist. Only its recorded
+  stream is historical evidence; do not infer one from depot segments or the
+  submitter's current client. User/client disagreement between metadata reads
+  must retry durably. SVN identity comes from revision-pinned `info --xml` at the
+  configured URL; strip credentials and require explicit project/branch roots.
+  See VCS `source-descriptors.test.ts` and server `workspace-routing-live.test.ts`.
+
 - `p4 trust -y` does not replace a mismatched rotated fingerprint; the existing
   automatic-trust path needs its explicit force-replacement fallback. Keep the
   deploy and trigger paths consistent when editing that behavior.

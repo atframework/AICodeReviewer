@@ -1,5 +1,6 @@
 import { execFile, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
+import { hostname } from "node:os";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
@@ -612,7 +613,7 @@ export class P4VcsAdapter implements VcsAdapter {
     // otherwise rewrite each other's client Root while a run is in flight.
     // The suffix is stable, so restarts reuse the same client.
     this.clientWorkspace = options.workspace
-      ? `${options.workspace}-${createHash("sha256").update(this.repositoryDir).digest("hex").slice(0, 10)}`
+      ? `${options.workspace}-${createHash("sha256").update(JSON.stringify([hostname(), this.repositoryDir])).digest("hex").slice(0, 10)}`
       : undefined;
     this.depot = options.depot;
     this.boundScope = options.depot;
@@ -630,6 +631,24 @@ export class P4VcsAdapter implements VcsAdapter {
     if (this.user) args.push("-u", this.user);
     if (this.clientWorkspace) args.push("-c", this.clientWorkspace);
     return args;
+  }
+
+  async describeSource(revision: string): Promise<Readonly<Record<string, string | null>>> {
+    if (!/^[1-9][0-9]*$/u.test(revision)) throw new RangeError("Invalid P4 source revision");
+    const result = await this.runP4(["-ztag", "describe", "-s", "-m", "1", revision]);
+    if (Buffer.byteLength(result.stdout, "utf8") > 256 * 1024) throw new Error("P4 descriptor exceeds metadata budget");
+    const fields = new Map<string, string>();
+    for (const line of result.stdout.split(/\r?\n/u)) {
+      const match = /^\.\.\. (change|user|client|stream|status) (.+)$/u.exec(line);
+      if (!match) continue;
+      if (fields.has(match[1]!) && fields.get(match[1]!) !== match[2]) throw new Error("Conflicting P4 source metadata");
+      fields.set(match[1]!, match[2]!);
+    }
+    if (fields.get("change") !== revision || fields.get("status") !== "submitted") throw new Error("P4 source metadata is not the requested submitted changelist");
+    // Only a stream recorded on this changelist is historical evidence. The
+    // submitter's current client may have switched streams or been deleted.
+    return { change: revision, user: fields.get("user") ?? null, client: fields.get("client") ?? null,
+      stream: fields.get("stream") ?? null, server: this.port ?? null, service_client: this.clientWorkspace ?? null };
   }
 
   private buildEnv(): Readonly<Record<string, string>> | undefined {

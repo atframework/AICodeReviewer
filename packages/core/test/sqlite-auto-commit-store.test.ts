@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -110,6 +110,20 @@ function membersOf(
 }
 
 describe("createSqliteAutoCommitStore persistence", () => {
+  it("reopens full variable/provenance snapshots without reinterpreting admission (V14)", async () => {
+    mkdirSync("build/tmp", { recursive: true });
+    const first = await openStore(mkdtempSync(join(process.cwd(), "build/tmp/source-snapshot-")));
+    const resolution = { kind: "match", definitionId: "services", binding: { definitionId: "services", instanceId: "old-instance", workPath: "old-path" },
+      variables: { source: { project_key: "svn:root:uuid:scope" }, svn: { repository_uuid: "original-uuid", branch: null } },
+      provenance: { "svn.repository_uuid": "vcs_verified", "svn.branch": "unavailable" } } as const;
+    const accepted = await first.store.acceptReceipt(receiptInput({ resolution }));
+    first.store.close?.();
+    const reopened = await openStore(first.dir);
+    expect((await reopened.store.getReceipt(accepted.receipt.receiptId))?.receipt.resolution).toEqual(resolution);
+    const replay = await reopened.store.acceptReceipt(receiptInput({ resolution: { ...resolution, variables: {} } }));
+    expect(replay.duplicate).toBe(true);
+    expect(replay.receipt.resolution).toEqual(resolution);
+  });
   it("keeps receipt/member/batch state across close and reopen (Q09/Q16)", async () => {
     const first = await openStore();
     const accepted = await first.store.acceptReceipt(receiptInput());

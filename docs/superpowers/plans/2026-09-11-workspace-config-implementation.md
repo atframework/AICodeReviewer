@@ -1,12 +1,12 @@
 # Workspace 与动态配置执行计划
 
-状态：P0 基础层和 P1 子集已有实现与回归测试，包括 Git 匹配准入、P4/SVN 持久路由收据、冻结解释及运行目录生命周期。P1 尚缺完整 P4/SVN 描述符、HOME 隔离、旧 prompts/skills 回退的完整验收及真实多工程场景；workspace 级 agent/sandbox 接线随 P4 推进，P2–P8 仍未完成。 设计合同见
+状态：P0–P1 已完成实现与验收。P1 已补齐来源描述符、完整快照、运行/记忆隔离、只读策略回退及 Windows/Linux 和真实 VCS 验收；workspace 级 agent/sandbox 配置覆盖仍按原计划在 P4 接线，P2–P8 待推进。 设计合同见
 [详细设计](../specs/2026-09-11-workspace-config-management.md)，测试 ID 和后端证据要求见
 [测试计划](2026-09-11-workspace-config-tests.md)。任何复选框只有实现、对应测试和适用最终门禁通过后才能勾选。
 
 ## 1. 执行约束与依赖
 
-原设计源码基线为 `e609cd7`。当前已实施并审查 P0 基础层和 P1 子集；继续实施前重新检查 `git status`、schema、bootstrap、调用方和相关测试，保留已有工作区修改。本轮未运行数据库迁移，未部署服务。
+原设计源码基线为 `e609cd7`。当前已实施并审查 P0 与 P1；继续实施前重新检查 `git status`、schema、bootstrap、调用方和相关测试，保留已有工作区修改。本轮未运行数据库迁移，未部署服务。
 
 默认设计：文件显式配置优先并锁定；数据库提供补充来源；发布后新接收任务生效，已接收任务固定版本；新规则使用隔离目录布局，旧绑定保留兼容布局。改变其中任一合同必须同步设计、测试矩阵及示例，不能靠实现中的 fallback 决定。
 
@@ -48,13 +48,13 @@ P0 审查已补充转换失败不修改输入、模型组数组 CRUD/投影、�
 
 - [x] 将现有 RE2/glob 编译抽成最小共享函数，保留 `auto-commit-exclusion` 行为；新增 exact matcher、字段目录和大小限制。（`config-matcher.ts`；`autoCommitGlobToRegexSource` 为共享实现别名，行为由既有测试锁定。）
 - [x] 新增 `workspaces.instances.*.match/work_path`，校验与 `source_repo` 互斥、trigger 引用、非法变量和歧义。（`config-workspace.ts`；`match_rule_invalid`/`template_invalid`/`matcher_invalid`。）
-- [ ] 补全 provider descriptor registry 的事件范围、获取阶段和可空性。Git 描述符与变量目录已有实现；P4/SVN 完整描述符和部分 provider ID 仍不可用，不能以变量名登记代替提取测试。
-- [ ] 将 webhook 翻译拆成已鉴权来源描述与 workspace 解析;所有同类 trigger profile 均从 registry 选择,覆盖目前只有首项配置路径的来源。git 系已完成(github/gitlab 数组选择器既有;gitea/forgejo 改多数组,`options.forgejo` 首次填充并挂 `/webhooks/forgejo`,gitea 路由保留 forgejo 触发器兼容;legacy 单 profile gitea 不做仓库过滤的语义保留);2026-09-12 推进:p4/svn 改多数组(`resolveP4TriggerConfigs`/`resolveSvnTriggerConfigs`,路由归一化数组、多 legacy candidate 全部直接接收、混合路由候选落 routing receipt),描述符产出拆分仍未做,此条保持未勾选。
+- [x] 补全 provider descriptor registry 的类型、事件范围、获取阶段、可空性和示例；Git ID/编号、P4/SVN metadata 均有有效与缺省 fixture，scheduled 明确 unavailable。
+- [x] 将已鉴权来源描述与 workspace 解析分离；同类 profile 全量选择，P4/SVN 在后台取得 descriptor 后再匹配，静态 enabled=false 拒绝新准入。
 - [x] P4/SVN 需要额外 metadata 的匹配采用最小持久待解析 receipt;后台验证后再生成现有自动提交 receipt,转交具备幂等关系,接收失败返回 503。(2026-09-12:`auto_commit_routing_receipts` 三后端 + `RoutingReceiptResolver` 调度 tick 转换,delivery id `routing:{routingKey}:{scopeRef}` 幂等塌缩;`streams`/`project_roots` scope 切分;resolution 固定进 receipt 与 ReviewEvent;`routing-admission.test.ts` + conformance V08/W14 用例。)
 - [x] 使用独立 `Handlebars.create()` 与 AST 白名单；只允许 `segment/default/hash/lower`，校验参数个数、字面量 fallback、provider 命名空间，禁 hash arguments、lookup、原型访问与直接输出未编码变量。语法、渲染和路径错误统一为 `template_invalid`。
 - [x] 新增 `WorkspaceBinding`、`WorkspaceLayout` 和 instance identity；`ReviewEvent.resolution.binding` 固定实例 ID 和渲染路径，执行期复用。match 元数据缓存使用独立 `.metadata/<hash>`，不依赖接收前尚缺的模板变量；legacy 缓存保持原路径。
-- [ ] 完成 VCS 与 Agent 的全部隔离验收。已实现绑定 repo/scope、按 run 隔离 source/agent/tmp/context-repos、整次审查 finally 清理、链接包含性检查及 P4 client 根目录隔离；HOME 仍共享，需逐 provider 确定凭据迁移。目录回收仅处理本机已退出 owner 的陈旧目录；未知归属和远端 host 目录保留。
-- [ ] 补齐旧模板、operator prompts/skills 的只读回退验收。legacy 目录和 stream/member/delivery identity 有兼容测试；L13 完整消费者矩阵仍待验证。
+- [x] VCS/Agent 按运行隔离 source、sandbox、HOME/USERPROFILE/APPDATA/XDG、tmp、MCP 与 context；P4 client 包含主机/运行根哈希，reflection 使用 instance ID，未知/远端 owner 仍保留。
+- [x] 旧 templates、operator AGENTS/skills 从 WorkspaceLayout.policyRoot 只读回退；源码/实例显式资源优先。CLI 转发 sandbox factory 与 match layout，bootstrap 和直接 publisher 均消费显式模板目录。
 
 影响：`packages/core/src/auto-commit-exclusion.ts`、`review-event.ts`；`packages/server/src/webhook-common.ts`、各 `*-webhook.ts`、`bootstrap.ts`、`review-orchestrator.ts`、`run-snapshot.ts`；`packages/vcs/src/{git,p4,svn,context-repos}.ts`；sandbox materialize 合同；拟新增 core matcher/template/layout 和 server source descriptor 模块。
 
@@ -78,10 +78,9 @@ conformance;重启/重试不再按新配置重解释)、L08/L09/L11/L12/L14 隔�
 引用保护;`p4.test.ts` client 派生唯一/同 root 稳定)、W04–W06/V12 纯层边界
 (RE2 拒绝、ignore_case 仅折叠匹配、128 规则与 4KiB/64KiB 字节预算边界、未知/不可用/
 禁用变量发布期拒绝)。
-未覆盖:HOME 隔离、P4/SVN 描述符产出、workspace 级 agent/sandbox 接线、W11/W12(停用依赖 P5 动态配置)、
-V06–V10、L13,以及真实 p4d/svnserve 端到端证据。本阶段不得据此宣称完成。
+补全证据：`workspace-source-contracts.test.ts` 覆盖全目录与停用准入；`workspace-policy.test.ts` 覆盖只读回退、SQLite 记忆隔离和动态工程保留；`workspace-routing-live.test.ts` 验证真实 SVN/P4 双工程转换。`workspace-host-filesystem.test.ts` 与同源 probe 分别在 Windows 和 Linux tmpfs 验证 Unicode、长路径、大小写与链接边界。完整门禁日志为 `build/logs/p1-completion-final-*.log`。W11 是 source_repo/match 互斥，已覆盖；W12 的静态停用/删除准入和既有快照已覆盖，动态管理 API 保留在 P5。
 
-本轮审查补齐 Git 四类 webhook 的 repository/namespace 匹配和 receipt 快照、GitLab Note Hook 顶层 MR、鉴权先于解析、模板参数/路径预算、P4 非首 scope/depot 与 SVN 根范围、路径不完整阻断、冻结事件离线重放、三后端路由 wake、模型回退/直连异常的目录清理。最终门禁以 `build/logs/p1-review-final-*.log` 为证据；没有实服务证据的条目保持待验收。
+前一轮审查补齐 Git 四类 webhook 的 repository/namespace 匹配和 receipt 快照、GitLab Note Hook 顶层 MR、鉴权先于解析、模板参数/路径预算、P4 非首 scope/depot 与 SVN 根范围、路径不完整阻断、冻结事件离线重放、三后端路由 wake、模型回退/直连异常的目录清理，记录在 `build/logs/p1-review-final-*.log`。本轮完成验收另补真实 Redis 空数组恢复、沙箱创建/销毁异常清理与字段清单接线状态；最终证据统一见 `build/logs/p1-completion-final-*.log` 和测试计划验收索引。
 
 ### P2. 存储与迁移
 

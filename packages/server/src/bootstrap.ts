@@ -8,6 +8,7 @@ import {
   createQueueFromConfig,
   loadSystemPromptTemplate,
   resolveWorkspaceConfig,
+  reviewMemoryScope,
   type AppConfig,
   type ReviewEvent,
 } from "@aicr/core";
@@ -633,7 +634,7 @@ export function resolveGiteaLikeWebhookConfigs(
   const kinds: readonly string[] = kind === "gitea" ? ["gitea", "forgejo"] : ["forgejo"];
   const triggers = config.triggers.filter((trigger) =>
     kinds.includes(trigger.kind) && (triggerName === undefined || trigger.name === triggerName));
-  return triggers.map((trigger) => buildWebhookConfigFromTrigger(config, trigger, appTokenServices, workspaceRuntime));
+  return triggers.filter((trigger) => triggerAdmitsNewWork(config, trigger)).map((trigger) => buildWebhookConfigFromTrigger(config, trigger, appTokenServices, workspaceRuntime));
 }
 
 function buildWebhookConfigFromTrigger(
@@ -656,6 +657,8 @@ function buildWebhookConfigFromTrigger(
   return {
     triggerName: trigger.name,
     workspaceId,
+    isWorkspaceEnabled: (id) => (id === "default" && Object.keys(config.workspaces.instances).length === 0) ||
+      (config.workspaces.instances[id] !== undefined && config.workspaces.instances[id]?.enabled !== false),
     ...(repoRef ? { repoRef } : {}),
     ...withRepoMappings(triggerConfig),
     ...(webhookSecret !== undefined ? { webhookSecret } : {}),
@@ -680,7 +683,7 @@ export function resolveGenericWebhookConfigs(
     ? config.triggers.filter((trigger) => trigger.name === triggerName && trigger.kind === kind)
     : config.triggers.filter((trigger) => trigger.kind === kind);
 
-  return triggers.map((trigger) => buildWebhookConfigFromTrigger(config, trigger, appTokenServices, workspaceRuntime));
+  return triggers.filter((trigger) => triggerAdmitsNewWork(config, trigger)).map((trigger) => buildWebhookConfigFromTrigger(config, trigger, appTokenServices, workspaceRuntime));
 }
 
 export function resolveGenericWebhookConfig(
@@ -739,7 +742,7 @@ export function resolveP4TriggerConfigs(
     ? config.triggers.filter((t) => t.name === triggerName && t.kind === "p4")
     : config.triggers.filter((t) => t.kind === "p4");
 
-  return triggers.map((trigger): P4TriggerConfig => {
+  return triggers.filter((trigger) => triggerAdmitsNewWork(config, trigger)).map((trigger): P4TriggerConfig => {
     const triggerConfig = trigger as Record<string, unknown>;
     const port = triggerConfig.port as string | undefined;
     const userEnv = triggerConfig.user_env as string | undefined;
@@ -794,6 +797,7 @@ export function resolveSvnTriggerConfigs(
 
   const configs: SvnTriggerConfig[] = [];
   for (const trigger of triggers) {
+    if (!triggerAdmitsNewWork(config, trigger)) continue;
     const triggerConfig = trigger as Record<string, unknown>;
     const repositoryUrl = typeof triggerConfig.repository_url === "string"
       ? triggerConfig.repository_url.trim()
@@ -864,6 +868,14 @@ export function resolveAuthConfig(config: AppConfig): AuthConfig | undefined {
     workspaceApiKeys,
     enabled: authEnabled,
   };
+}
+
+function triggerAdmitsNewWork(config: AppConfig, trigger: AppConfig["triggers"][number]): boolean {
+  if (trigger.enabled === false) return false;
+  const bound = Object.values(config.workspaces.instances).find((entry) => entry.source_repo?.trigger === trigger.name);
+  if (bound) return bound.enabled !== false;
+  const candidates = Object.values(config.workspaces.instances).filter((entry) => entry.match?.some((rule) => !rule.triggers || rule.triggers.includes(trigger.name)));
+  return candidates.length === 0 || candidates.some((entry) => entry.enabled !== false);
 }
 
 function buildActiveProjectIdentities(config: AppConfig): readonly ActiveProjectIdentity[] {
@@ -1162,14 +1174,16 @@ function createChannelRendering(
   readonly renderProblem: (problem: ReviewProblem) => ReviewProblem;
   readonly renderSummary: (summary: string, problems: readonly ReviewProblem[], title?: string) => string;
 } {
-  const workspaceTemplatesDir = workspaceId
+  const layout = reviewEvent ? createWorkspaceRuntime(config, baseDir).layoutForEvent(reviewEvent) : undefined;
+  const workspaceTemplatesDir = layout?.templatesDir ?? (workspaceId
     ? resolve(baseDir, "workspaces", workspaceId, "templates")
-    : undefined;
+    : undefined);
   const builtinTemplatesBaseDir = resolve(baseDir, "templates", "builtin");
   const resolver = createTemplateResolver({
     channelKind: channel.kind,
     channelName: channel.name,
     ...(workspaceTemplatesDir ? { workspaceTemplatesDir } : {}),
+    ...(layout?.policyRoot ? { fallbackWorkspaceTemplatesDirs: [resolve(layout.policyRoot, "templates")] } : {}),
     builtinTemplatesBaseDir,
   });
   const mentionChannelKind = toMentionChannelKind(channel.kind);
@@ -2575,12 +2589,12 @@ export async function bootstrapServerApp(options: BootstrapServerOptions): Promi
   const sourceRootResolver = (reviewEvent: ReviewEvent): string =>
     workspaceRuntime.layoutForEvent(reviewEvent).sourceRoot;
   const runtimeDirsResolver = (reviewEvent: ReviewEvent) => workspaceRuntime.layoutForEvent(reviewEvent);
-  const sandbox = await createSandboxBackendFromConfig(config);
   const agentAdapter = resolveAgentAdapterFromConfig(config);
 
   if (adminAuthConfig && store) {
     const activeProjectIdentities = buildActiveProjectIdentities(config);
-    softDeleteMissingProjects(store, activeProjectIdentities);
+    softDeleteMissingProjects(store, activeProjectIdentities,
+      Object.entries(config.workspaces.instances).filter(([, instance]) => instance.match !== undefined).map(([id]) => id));
     hardDeleteExpiredProjects(store, config.storage.retention.deleted_project_grace_days);
 
     liveRunRegistry = createLiveRunRegistry();
@@ -2639,7 +2653,7 @@ export async function bootstrapServerApp(options: BootstrapServerOptions): Promi
         sourceRoot,
       }),
     }),
-    sandbox,
+    sandboxFactory: () => createSandboxBackendFromConfig(config),
     agentAdapter,
     agentTimeoutMs: config.agent.timeout_seconds * 1000,
     contextCompaction: {
@@ -2717,7 +2731,7 @@ export async function bootstrapServerApp(options: BootstrapServerOptions): Promi
     ...(reflectionEnabled
       ? {
           postRunCallback: async (result: ReviewOrchestrationResult, ctx: ReviewOrchestrationContext): Promise<void> => {
-            const workspaceId = ctx.reviewEvent.workspaceId;
+            const workspaceId = reviewMemoryScope(ctx.reviewEvent);
             const runId = ctx.runId ?? ctx.reviewEvent.headSha ?? String(Date.now());
             const reflectionInput = {
               workspaceId,

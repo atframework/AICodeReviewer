@@ -30,6 +30,43 @@ function asString(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
+/** JSON numbers outside the safe integer range have already lost their identity. */
+function decimalId(value: unknown): string | null {
+  if (typeof value === "number") return Number.isSafeInteger(value) && value > 0 ? String(value) : null;
+  return typeof value === "string" && /^[1-9][0-9]*$/u.test(value) ? value : null;
+}
+
+function githubFields(payload: PayloadRecord, provider: string): WorkspaceResolutionEventContext {
+  const repo = asRecord(payload.repository);
+  const pr = asRecord(payload.pull_request);
+  const issue = asRecord(payload.issue);
+  return {
+    default_branch: asString(repo?.default_branch) ?? null,
+    provider_fields: {
+      repository_id: decimalId(repo?.id),
+      pull_number: decimalId(pr?.number ?? (issue?.pull_request ? issue.number : undefined)),
+      issue_number: decimalId(issue?.number),
+      ...(provider === "github" ? { installation_id: decimalId(asRecord(payload.installation)?.id) } : {}),
+    },
+  };
+}
+
+function gitlabFields(payload: PayloadRecord): WorkspaceResolutionEventContext {
+  const attrs = asRecord(payload.object_attributes);
+  const mr = asRecord(payload.merge_request) ?? (payload.object_kind === "merge_request" ? attrs : undefined);
+  const issue = asRecord(payload.issue) ?? (payload.object_kind === "issue" ? attrs : undefined);
+  return {
+    default_branch: asString(asRecord(payload.project)?.default_branch) ?? null,
+    provider_fields: {
+      project_id: decimalId(asRecord(payload.project)?.id),
+      source_project_id: decimalId(mr?.source_project_id),
+      target_project_id: decimalId(mr?.target_project_id),
+      merge_request_iid: decimalId(mr?.iid),
+      issue_iid: decimalId(issue?.iid),
+    },
+  };
+}
+
 const BRANCH_REF_PREFIX = "refs/heads/";
 
 /** Push branch from a git ref; null for tags/notes/detached refs (V05). */
@@ -73,7 +110,7 @@ function describeGithubLike(payload: PayloadRecord): WebhookSourceDescriptor | u
   const ref = asString(payload.ref);
   if (ref !== undefined) {
     return {
-      source: { vcs: "git", repo_ref: repoRef, branch: branchFromGitRef(ref), ref },
+      source: { vcs: "git", repo_ref: repoRef, branch: payload.deleted === true || /^0+$/u.test(String(payload.after)) ? null : branchFromGitRef(ref), ref },
     };
   }
 
@@ -103,7 +140,7 @@ function describeGitlab(payload: PayloadRecord): WebhookSourceDescriptor | undef
   const ref = asString(payload.ref);
   if (ref !== undefined) {
     return {
-      source: { vcs: "git", repo_ref: repoRef, branch: branchFromGitRef(ref), ref },
+      source: { vcs: "git", repo_ref: repoRef, branch: /^0+$/u.test(String(payload.after)) ? null : branchFromGitRef(ref), ref },
     };
   }
 
@@ -125,8 +162,8 @@ export function describeWebhookSource(
   if (record === undefined || triggerKindToVcs(provider) !== "git") {
     return undefined;
   }
-  if (provider === "gitlab") {
-    return describeGitlab(record);
-  }
-  return describeGithubLike(record);
+  const descriptor = provider === "gitlab" ? describeGitlab(record) : describeGithubLike(record);
+  if (!descriptor) return undefined;
+  return { ...descriptor, event: { ...descriptor.event,
+    ...(provider === "gitlab" ? gitlabFields(record) : githubFields(record, provider)) } };
 }

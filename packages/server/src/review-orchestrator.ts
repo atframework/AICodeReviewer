@@ -11,6 +11,7 @@ import {
   isPlainObject,
   normalizePath,
   prepareReviewPrompt,
+  reviewMemoryScope,
   scrubPromptMessages,
   scrubText,
   vcsKindForProvider,
@@ -153,6 +154,8 @@ export interface ServerReviewOrchestrationOptions {
   readonly diffContextLines?: number;
   readonly dryRun?: boolean;
   readonly sandbox?: SandboxBackend;
+  /** One stateful backend per orchestration, never shared across concurrent runs. */
+  readonly sandboxFactory?: () => Promise<SandboxBackend> | SandboxBackend;
   readonly agentAdapter?: AgentAdapter;
   readonly agentTimeoutMs?: number;
   readonly contextCompaction?: AgentCompactionOptions;
@@ -812,16 +815,17 @@ function agentConfigDirEnvVars(
 ): Record<string, string> {
   const joinPath = (segment: string): string =>
     sandboxIsNative ? join(sandboxAgentDir, segment) : `${sandboxAgentDir}/${segment}`;
+  const isolated = {
+    HOME: joinPath(".aicr-home"), USERPROFILE: joinPath(".aicr-home"),
+    APPDATA: joinPath(".aicr-appdata"), LOCALAPPDATA: joinPath(".aicr-localappdata"),
+    XDG_CONFIG_HOME: joinPath(".aicr-xdg-config"), XDG_DATA_HOME: joinPath(".aicr-xdg-data"),
+    XDG_CACHE_HOME: joinPath(".aicr-xdg-cache"), XDG_STATE_HOME: joinPath(".aicr-xdg-state"),
+    XDG_RUNTIME_DIR: joinPath(".aicr-xdg-runtime"),
+  };
   if (kind === "pi" || kind === "oh-my-pi") {
-    return { PI_CODING_AGENT_DIR: joinPath(kind === "pi" ? PI_AGENT_DIR_NAME : OMP_AGENT_DIR_NAME) };
+    return { ...isolated, PI_CODING_AGENT_DIR: joinPath(kind === "pi" ? PI_AGENT_DIR_NAME : OMP_AGENT_DIR_NAME) };
   }
-  if (kind === "kilo") {
-    return {
-      XDG_CONFIG_HOME: joinPath(".aicr-xdg-config"),
-      XDG_DATA_HOME: joinPath(".aicr-xdg-data"),
-    };
-  }
-  return {};
+  return { ...isolated, ...(kind === "claude-code" ? { CLAUDE_CONFIG_DIR: joinPath(".aicr-claude") } : {}) };
 }
 
 interface AgentBundleContext {
@@ -1540,6 +1544,11 @@ async function runAgentReviewInDirs(
       sandboxAgentDir,
       sandbox.kind === "native",
     );
+    for (const dir of Object.values(agentConfigDirEnvVars(agentAdapter.kind, materializedFs.agentDir, true))) {
+      await mkdir(dir, { recursive: true, mode: 0o700 });
+    }
+    const sandboxTmpDir = sandbox.kind === "native" ? materializedFs.tmpDir : "/workspace/tmp";
+    Object.assign(configDirEnvVars, { TMPDIR: sandboxTmpDir, TMP: sandboxTmpDir, TEMP: sandboxTmpDir });
     const mcpServers = adaptMcpServersForSandbox(bundleContext?.mcpServers, sandbox, outputStatePath);
     let effectiveTask = task;
     const useTaskFile = shouldUseAgentTaskFile(
@@ -1608,7 +1617,7 @@ async function runAgentReviewInDirs(
       ...(onStdout ? { onStdout } : {}),
     });
   } finally {
-    await sandbox.teardown();
+    if (!options.sandboxFactory) await sandbox.teardown();
   }
 
   // kilo and opencode emit the same NDJSON event stream (`--format json`; kilo is an
@@ -2947,6 +2956,7 @@ async function executeReviewOrchestration(
   }
   activeRunDirs.add(runDirs.root);
   let ownsRunRoot = false;
+  let runSandbox: SandboxBackend | undefined;
   try {
     await reapStaleRunDirs(dirname(runDirs.root));
     if (containmentRoot) {
@@ -2960,16 +2970,21 @@ async function executeReviewOrchestration(
     await mkdir(runDirs.root); // EEXIST prevents cross-process reuse of a live run.
     ownsRunRoot = true;
     await writeFile(join(runDirs.root, RUN_OWNER_FILE), JSON.stringify({ host: hostname(), pid: process.pid }), { flag: "wx" });
-    return await executeReviewInRunDirs(context, options, sourceRoot, runDirs, containmentRoot, runtimeDirs, liveRun);
+    runSandbox = await options.sandboxFactory?.();
+    return await executeReviewInRunDirs(context, runSandbox ? { ...options, sandbox: runSandbox } : options, sourceRoot, runDirs, containmentRoot, runtimeDirs, liveRun);
   } finally {
-    activeRunDirs.delete(runDirs.root);
-    // Verify again before recursive cleanup; an escaping junction must never
-    // redirect cleanup to an unrelated workspace.
-    const realRunsRoot = await realpathContaining(dirname(runDirs.root)).catch(() => undefined);
-    const realRunRoot = await realpathContaining(runDirs.root).catch(() => undefined);
-    if (ownsRunRoot && realRunsRoot && realRunRoot && isWithinRoot(realRunsRoot, realRunRoot) && realRunsRoot !== realRunRoot &&
-        (!containmentRoot || isWithinRoot(containmentRoot, realRunRoot))) {
-      await rm(runDirs.root, { recursive: true, force: true }).catch(() => {});
+    try {
+      await runSandbox?.teardown();
+    } finally {
+      activeRunDirs.delete(runDirs.root);
+      // Verify again before recursive cleanup; an escaping junction must never
+      // redirect cleanup to an unrelated workspace, even if teardown failed.
+      const realRunsRoot = await realpathContaining(dirname(runDirs.root)).catch(() => undefined);
+      const realRunRoot = await realpathContaining(runDirs.root).catch(() => undefined);
+      if (ownsRunRoot && realRunsRoot && realRunRoot && isWithinRoot(realRunsRoot, realRunRoot) && realRunsRoot !== realRunRoot &&
+          (!containmentRoot || isWithinRoot(containmentRoot, realRunRoot))) {
+        await rm(runDirs.root, { recursive: true, force: true }).catch(() => {});
+      }
     }
   }
 }
@@ -2989,7 +3004,7 @@ async function executeReviewInRunDirs(
     id: context.reviewEvent.workspaceId,
     sourceDir: runDirs.sourceDir,
   };
-  const vcs = options.vcsFactory ? await options.vcsFactory(sourceRoot, context) : options.vcs;
+  const vcs = options.vcsFactory ? await options.vcsFactory(context.reviewEvent.provider === "p4" ? runDirs.sourceDir : sourceRoot, context) : options.vcs;
   const range = await vcs.listChanges(context.reviewEvent);
   const scopedTree = await vcs.fetchScoped(range, workspaceRef);
   if (containmentRoot && !isWithinRoot(containmentRoot, await realpathContaining(scopedTree.rootDir))) {
@@ -3157,7 +3172,7 @@ async function executeReviewInRunDirs(
 
   const resolvedForceSkills = options.forceSkillsResolver?.(context.reviewEvent.workspaceId);
   const resolvedMemoryHints = options.memoryHintsResolver
-    ? await options.memoryHintsResolver(context.reviewEvent.workspaceId)
+    ? await options.memoryHintsResolver(reviewMemoryScope(context.reviewEvent))
     : options.memoryHints ?? [];
 
   const effectiveMaxPromptTokens =
@@ -3174,6 +3189,7 @@ async function executeReviewInRunDirs(
     taskContext,
     ...(resolvedForceSkills?.length ? { forceSkills: resolvedForceSkills } : {}),
     ...(options.operatorOverrides ? { operatorOverrides: options.operatorOverrides } : {}),
+    ...(runtimeDirs?.policyRoot ? { policyRoot: runtimeDirs.policyRoot } : {}),
     ...(resolvedMemoryHints.length > 0 ? { memoryHints: resolvedMemoryHints } : {}),
     ...(effectiveMaxPromptTokens !== undefined ? { maxPromptTokens: effectiveMaxPromptTokens } : {}),
   });
@@ -3467,7 +3483,9 @@ async function executeReviewInRunDirs(
       ? undefined
       : options.templateResolver ?? (
           options.channelKind
-            ? createTemplateResolver({ channelKind: options.channelKind })
+            ? createTemplateResolver({ channelKind: options.channelKind,
+              ...(runtimeDirs ? { workspaceTemplatesDir: runtimeDirs.templatesDir } : {}),
+              ...(runtimeDirs?.policyRoot ? { fallbackWorkspaceTemplatesDirs: [join(runtimeDirs.policyRoot, "templates")] } : {}) })
             : undefined
         );
     const mentionChannelKind = options.channelKind as MentionChannelKind | undefined;
