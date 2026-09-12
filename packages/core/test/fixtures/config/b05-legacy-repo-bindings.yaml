@@ -1,0 +1,18 @@
+# B05: legacy exact repo bindings (triggers[].repos array entries and
+# workspaces.instances.*.source_repo) parse verbatim and are never
+# reinterpreted as glob rules (spec §3.2, test W10).
+triggers:
+  - name: svn-main
+    kind: svn
+    repository_url: https://svn.example.com/repo
+    repos:
+      - match: /svn/a
+        workspace: w1
+      - match: /svn/b
+        workspace: w2
+workspaces:
+  instances:
+    w1:
+      source_repo:
+        trigger: svn-main
+        repo: /svn/a

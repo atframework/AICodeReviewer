@@ -4,6 +4,12 @@
 # Copy this file as config.yaml, then fill in your values.
 # All secrets MUST be provided via environment variables (see .env.sample).
 # See example/README.md for detailed setup guides (P4, Feishu, WeCom, etc.).
+# Loader notes: duplicate YAML keys and cyclic aliases are rejected; historical
+# `llm.fallback_chain` / `triage_fallback_chain` / array-form `model_chain`
+# still load (converted in memory to named groups, this file is never
+# rewritten); `config_version: 1` is accepted as envelope metadata. Provider IDs,
+# trigger names and channel names must be unique. Model-chain entry `overrides`
+# is schema-only; set effective request options on the provider for now.
 
 # ---------------------------------------------------------------------------
 # LLM providers

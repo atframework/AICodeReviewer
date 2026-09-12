@@ -106,6 +106,18 @@ tried in list order. Group declaration order has no effect on priority.
 `default`. When groups are configured, that global default must exist.
 A workspace's `model_chain` selects a complete group.
 
+Historical `llm.fallback_chain` / `llm.triage_fallback_chain` keys and the
+array form of `llm.model_chain` still load: the loader converts them in memory
+to named groups (`default` / `triage`) and never rewrites the file. A legacy
+key that conflicts with an explicitly named group is rejected. Malformed old
+values remain errors even when another key can be converted. New files must
+use the named-group form above.
+
+Model-chain entry `overrides` currently has schema validation only; the runtime
+does not apply it. Its keys are limited to request options and cannot contain
+provider identity, endpoint or credential fields. Configure effective request
+options on the provider until entry-level runtime support is available.
+
 | Field | Type | Required | Description |
 | --- | --- | :---: | --- |
 | `provider` | string | ✓ | Must match a `providers[].id`. |

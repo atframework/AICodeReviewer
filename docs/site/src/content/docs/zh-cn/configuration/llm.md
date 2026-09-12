@@ -97,6 +97,14 @@ llm:
 首条目是主模型，后续条目按列表顺序尝试；分组声明顺序不影响优先级。
 `llm.default_model_chain` 选择全局默认组，默认值为 `default`。
 配置了分组时，全局默认组必须存在。workspace 的 `model_chain` 选择整组模型。
+历史写法 `llm.fallback_chain` / `llm.triage_fallback_chain` 与数组形式的
+`llm.model_chain` 仍可加载：加载器在内存中将其转换为命名分组（`default` /
+`triage`），不会改写原文件；与显式命名分组冲突的旧键会被拒绝。旧值形状非法时，
+即使其他键可转换也仍然报错。新配置请使用上面的命名分组形式。
+
+模型链条目的 `overrides` 当前只有 schema 校验，运行时尚不应用。它只接受请求参数，
+不能包含 provider 身份、endpoint 或凭据字段。在条目级运行时支持完成前，请在
+provider 上配置需要生效的请求参数。
 
 | 字段 | 类型 | 必填 | 说明 |
 | --- | --- | :---: | --- |

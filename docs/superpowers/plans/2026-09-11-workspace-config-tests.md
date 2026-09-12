@@ -1,6 +1,6 @@
 # Workspace 与动态配置测试计划
 
-状态：全部为待编写、待执行的测试。本轮没有实施功能或运行这些用例。
+状态：P0 基础层已有测试，P1–P8 跨层验收仍待实施。下列矩阵是完整验收目标；纯函数覆盖其中一部分不代表该 ID 的全部断言完成。
 合同见 [详细设计](../specs/2026-09-11-workspace-config-management.md)，阶段见
 [执行计划](2026-09-11-workspace-config-implementation.md)。
 
@@ -19,6 +19,33 @@
 | 平台 | Windows/Ubuntu；native/Docker/Podman | 路径大小写、长路径、junction/symlink、挂载与工作目录 |
 
 临时 DB、fixture 仓库、截图、日志放 `build/tmp/`、`build/logs/`；永久输入 fixture 放对应包 `test/fixtures/`。PostgreSQL 用专用 schema/database，Redis 用随机前缀，仅清理当前测试资源，禁止 FLUSHDB 和清理未知实例。
+
+### 当前证据边界
+
+| 实现与测试 | 已覆盖 | 尚待验收 |
+| --- | --- | --- |
+| `config-source.test.ts`、`config-review.test.ts` | 来源合并/文件锁、shadowed 视图、实体 CRUD、数组模型组、写前原型键校验、转换无副作用、raw YAML 边界 | F01/F02 的数据库初始化、F09 的重启流程、F11/C02/C03/C09 的原子引用与发布、C10–C13 的服务端实施 |
+| `config-format.test.ts` | revision/namespace/generation、matcher 形状与 UTF-8 大小、路径转义、稳定哈希、实例身份、B05 snapshot 分类 | P1 的 matcher 编译、路径 AST、P2/P4 的存储和任务接线 |
+| `config-components.test.ts` | U24 声明字段、默认值、workspace 实体所有权及 schema-only 标记的一致性 | passthrough 类型化能力校验、P6 UI registry/映射函数和四项覆盖率 |
+| `config-examples.test.ts`、`config.test.ts`、静态 YAML fixtures | 当前示例加载、旧格式转换及现有配置兼容；fixture b01–b05 为输入编号 | B02 compatibility graph、B04 CLI 无额外数据库、B06–B10 跨层行为 |
+
+2026-09-12 审查新增的首批 35 项边界测试在修复前 31 项失败，修复后全部通过。
+另补 4 项空映射覆盖边界，修复前均失败。此次累计新增 117 项测试。
+
+2026-09-12 最终验证环境为 Windows、PowerShell 7、Node 24.21.0、Vitest 5.0.0：
+
+| 门禁 | 结果 |
+| --- | --- |
+| ESLint、TypeScript、正式 build | 全部通过，build 覆盖 11 个 runtime packages |
+| 完整 Vitest coverage | 发现 115 个文件，109 通过、6 跳过；2641 项通过、6 项跳过，无失败 |
+| 新基础层覆盖率 | `config-source.ts` 行 98.30%、分支 90.82%；`config-format.ts` 行 94.63%、分支 90.81%；`config-components.ts` 行 95.48%、分支 94.94%；三者函数均 100% |
+| Markdown | 发现 122 个文件，无问题 |
+| eval validate | 6 个离线 fixtures 通过，未调用真实 LLM |
+| docs:check / docs:build | 通过；Astro 0 errors、0 warnings、11 hints；构建 54 页 |
+
+日志位于 `build/logs/workspace-config-review-final-*.log`。6 个环境选择用例因未配置
+`AICR_REDIS_TEST_URL`、`AICR_SVN_TEST_EXECUTABLE`、`AICR_P4D_TEST_EXECUTABLE`
+而跳过；本次未执行 Redis/SVN/P4 实服务用例，也未实现或验收新的配置后端、迁移、UI。
 
 ## 2. 配置与来源合并
 
@@ -276,6 +303,6 @@ node packages/cli/dist/index.js eval --validate-only
 
 Linux 使用 `pnpm ci`。修改 docs/site 时另跑 `pnpm docs:check`、`pnpm docs:build`。新增正式 browser suite 和真实 PostgreSQL/Redis acceptance 在 CI/文档中有独立可复现命令，命令确定后再写进已支持 CLI 文档。
 
-本轮只有文档与注释，适用验证为 Markdown lint、相对链接、diff whitespace 和 YAML 注释未改变有效配置；不运行上面的功能实现测试或迁移。
+当前改动包含 core 运行代码、schema、单元测试及双语文档，适用上述完整序列和文档站校验。数据库迁移、真实配置后端及浏览器场景尚未实现，不能用这轮纯层测试代替。
 
 完成证据按后端/平台逐行记录：版本、运行命令、测试文件和用例数、失败/跳过数、真实服务或 mock、残留风险。缺环境被 skip 的测试是未执行；PostgreSQL/Redis 全被跳过时不能写“支持所有数据库已验收”。任何范式分支缺测、只测试注册而未调用、源配置可通过 API 修改，均阻止交付完成。

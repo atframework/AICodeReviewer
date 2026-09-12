@@ -1,0 +1,8 @@
+# B04: deprecated/unknown keys under workspaces stay rejected; the reserved
+# roots are cache, defaults, and instances only.
+workspaces:
+  cache:
+    max_total_gb: 50
+    eviction: lru
+    ttl_days: 30
+  legacyWorkspace: {}

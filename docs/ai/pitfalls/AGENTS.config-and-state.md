@@ -13,8 +13,31 @@ consumers in `packages/server/src/bootstrap.ts`.
   Auto-commit schema/tests live in `auto-commit-policy.ts` / its matching test;
   receive-side branch policy is covered in [scheduling](AGENTS.scheduling.md).
 - Renames inside `.passthrough()` objects need explicit legacy-shape errors;
-  otherwise stale keys survive and new defaults silently take over. Preserve
-  rejection of old fallback-chain names and legacy model-chain arrays.
+  otherwise stale keys survive and new defaults silently take over. Historical
+  `llm.fallback_chain` / `triage_fallback_chain` / array `model_chain` are
+  converted in memory by `convertLegacyConfigDocument` (pure, conflicts fail,
+  user files are never rewritten); the latest schema still rejects those keys
+  when the converter does not run.
+- Keep `yaml`'s default duplicate-key rejection (`uniqueKeys: true`), with
+  `stringKeys: true` so numeric/string keys cannot collapse into the same JS
+  property. Reject cyclic aliases and prototype keys before traversing values;
+  see [YAML options](https://eemeli.org/yaml/#options), `parseRawConfigSource`
+  and `config-review.test.ts`. A YAML byte limit alone does not prevent cycles.
+- Validate database keys and changeset path segments before any mutation or
+  Zod parse that could strip a key. File locks must compare both ancestor and
+  descendant paths; arrays are atomic. Converters and merge must preserve raw
+  input and malformed entries for final validation. Database model groups use
+  ordered arrays; record keys match immutable IDs (`config-source.ts`,
+  `config-review.test.ts`).
+- A fixture filename or acceptance ID on an inventory row does not establish
+  end-to-end coverage. Separate pure validation from reference checks, CAS,
+  activation and recovery; retain unfinished plan artifacts. The U24 walker
+  uses Zod 3 metadata for auditing, not as a runtime UI renderer.
+- Workspace-layer `sandbox`, `agent.web_search.*` per-adapter coverage, and
+  several trigger/channel kind-conditional fields are schema-only: acceptance
+  is not runtime effect. `packages/core/src/config-components.ts` (U24 gate)
+  is the wiring inventory; verify the bootstrap consumer before documenting a
+  field as working.
 - `llm.model_chain` contains named, nonempty ordered groups. Main selection is
   instance → workspace defaults → `llm.default_model_chain`; triage is instance
   → defaults → `llm.triage_model_chain` → workspace main group. Apply it to direct

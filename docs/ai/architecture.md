@@ -701,6 +701,21 @@ AICR 采用**两层上下文管理**，两者互补：
 ### 3.10 配置体系
 
 - 配置 schema 的代码真源是 `packages/core/src/config.ts`。
+- `parseConfigDocumentText` / `loadConfigFile` 的管线为原始 YAML → 内存旧格式转换 →
+  一次 schema parse → secret 引用校验。原文限制为 1 MiB，保留从 1 开始的 source
+  locations，拒绝重复键、循环别名和原型键；`config_version: 1` 作为元数据剥离，
+  更高版本拒绝。旧 `fallback_chain`、`triage_fallback_chain` 和数组 `model_chain`
+  转为命名分组，冲突或非法形状仍报错，输入对象与文件均不改写。
+- P0 的 `config-source.ts` 提供来源合并、数据库实体投影及纯 changeset 操作。
+  文件实体整体锁定，全局字段按叶子锁定，父路径写入也必须检查后代锁；数组整体替换。
+  模型组 value 使用有序数组，其他实体使用对象，记录映射键与不可变 ID 一致。
+  无效实体不能在合并中丢失；来源视图保留被文件遮盖的数据库字段值。
+  `unset` 只移除数据库 override，文件有效值保持不变。
+- `config-format.ts` 提供版本、错误码、revision、matcher 形状与实例身份的纯合同；
+  matcher 编译、路径 AST、存储 CAS、引用完整性、API 和热发布仍待后续阶段。
+  `config-components.ts` 的 U24 检查声明字段、默认值和实体所有权；passthrough 清单
+  尚不能替代类型化能力校验。模型条目 `overrides` 只接受请求字段且尚未接线。
+  设计与阶段边界见[workspace 配置设计](../superpowers/specs/2026-09-11-workspace-config-management.md)。
 - `workspaces` 采用三段式：
   - `workspaces.cache`
   - `workspaces.defaults`

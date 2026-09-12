@@ -7,20 +7,30 @@ import { reviewTargetKindSchema } from "./review-event.js";
 import { autoCommitConfigSchema, type AutoCommitConfig } from "./auto-commit-policy.js";
 import { pullRequestConfigSchema, type PullRequestConfig } from "./pull-request-policy.js";
 import { isPlainObject } from "./utils.js";
+import { workspaceRootKeys } from "./config-format.js";
 
-export const workspaceRootKeys = ["cache", "defaults", "instances"] as const;
+import {
+  assertNoSecretEnvIssues,
+  convertLegacyConfigDocument,
+  parseRawConfigSource,
+  type ConfigConversionChange,
+  type ConfigSourceMap,
+  type ParseRawConfigOptions,
+} from "./config-source.js";
 
-const reservedWorkspaceIds = new Set<string>(workspaceRootKeys);
+export { workspaceRootKeys };
 
-const workspaceIdSchema = z
+const reservedWorkspaceIds: Record<string, true> = { cache: true, defaults: true, instances: true };
+
+export const workspaceIdSchema = z
   .string()
   .min(1)
-  .refine((value) => !reservedWorkspaceIds.has(value), {
+  .refine((value) => reservedWorkspaceIds[value] !== true, {
     message:
       "workspace_id must not collide with reserved keys (cache, defaults, instances); see Plan.md §3.10 D14",
   });
 
-const llmProviderSchema = z
+export const llmProviderSchema = z
   .object({
     id: z.string().min(1),
     kind: z.enum([
@@ -41,15 +51,49 @@ const llmProviderSchema = z
   })
   .passthrough();
 
-const llmModelChainEntrySchema = z
+export const reasoningEffortSchema = z.enum(["minimal", "low", "medium", "high", "max"]);
+
+/**
+ * Request-level overrides on a single model-chain entry (spec §4.2). Accepted
+ * by the schema from P0; resolveModelSpecFromChain ignores them until the
+ * runtime generation wiring (P4) — setting them changes no client behavior
+ * yet. Maps merge by key, arrays replace wholesale; disabling a parameter is
+ * expressed through drop_params, never JSON null.
+ */
+export const modelRequestOverridesSchema = z
+  .object({
+    extra_params: z.record(z.string().min(1), z.unknown()).optional(),
+    extra_body: z.record(z.string().min(1), z.unknown()).optional(),
+    extra_headers: z.record(z.string().min(1), z.string()).optional(),
+    reasoning_effort: reasoningEffortSchema.optional(),
+    thinking_level: z.enum(["off", "minimal", "low", "medium", "high", "max"]).optional(),
+    thinking_budget_tokens: z.number().int().positive().optional(),
+    thinking: z.object({ enabled: z.boolean() }).passthrough().optional(),
+    response_format: z
+      .object({ kind: z.enum(["json_schema", "json_object", "text"]) })
+      .passthrough()
+      .optional(),
+    tool_choice: z
+      .union([z.enum(["auto", "none", "required"]), z.record(z.string().min(1), z.unknown())])
+      .optional(),
+    parallel_tool_calls: z.boolean().optional(),
+    seed: z.number().int().optional(),
+    logit_bias: z.record(z.string().min(1), z.number()).optional(),
+    drop_params: z.array(z.string().min(1)).optional(),
+    allowed_openai_params: z.array(z.string().min(1)).optional(),
+  })
+  .strict();
+
+export const llmModelChainEntrySchema = z
   .object({
     provider: z.string().min(1),
     model: z.string().min(1),
     role: z.enum(["light", "heavy", "any"]),
+    overrides: modelRequestOverridesSchema.optional(),
   })
   .passthrough();
 
-const modelChainReferenceSchema = z
+export const modelChainReferenceSchema = z
   .string({
     invalid_type_error: "Model chain references must be group names; move the model list into llm.model_chain.<group> and reference that group",
   })
@@ -58,7 +102,7 @@ const modelChainReferenceSchema = z
     message: "Model chain group names must not have leading or trailing whitespace",
   });
 
-const llmRetrySchema = z
+export const llmRetrySchema = z
   .object({
     max_attempts: z.number().int().positive().optional(),
     respect_retry_after: z.boolean().optional(),
@@ -76,7 +120,7 @@ const llmRetrySchema = z
   .passthrough()
   .optional();
 
-const llmBudgetSchema = z
+export const llmBudgetSchema = z
   .object({
     per_run_usd: z.number().nonnegative().optional(),
     per_repo_daily_usd: z.number().nonnegative().optional(),
@@ -84,7 +128,7 @@ const llmBudgetSchema = z
   .passthrough()
   .optional();
 
-const llmPerProviderOverridesSchema = z
+export const llmPerProviderOverridesSchema = z
   .record(
     z.string().min(1),
     z
@@ -97,8 +141,7 @@ const llmPerProviderOverridesSchema = z
   )
   .optional();
 
-const reasoningEffortSchema = z.enum(["minimal", "low", "medium", "high", "max"]);
-const modelStatusSchema = z.enum([
+export const modelStatusSchema = z.enum([
   "stable",
   "preview",
   "experimental",
@@ -108,7 +151,7 @@ const modelStatusSchema = z.enum([
   "shutdown",
 ]);
 
-const modelCatalogOverrideSchema = z
+export const modelCatalogOverrideSchema = z
   .object({
     catalog_id: z.string().min(1).optional(),
     context_window: z.number().int().positive().optional(),
@@ -168,7 +211,7 @@ const modelCatalogOverrideSchema = z
   })
   .passthrough();
 
-const modelCatalogSchema = z
+export const modelCatalogSchema = z
   .object({
     enabled: z.boolean().default(false),
     source_url: z.string().url().default("https://models.dev/api.json"),
@@ -197,7 +240,7 @@ const modelCatalogSchema = z
   });
 
 
-const compressionSchema = z
+export const compressionSchema = z
   .object({
     trigger_tokens: z.number().int().positive().optional(),
     max_input_ratio: z.number().min(0).max(1).optional(),
@@ -219,9 +262,9 @@ const compressionSchema = z
   .passthrough()
   .optional();
 
-const githubAppIdSchema = z.union([z.string().min(1), z.number().int().positive()]);
+export const githubAppIdSchema = z.union([z.string().min(1), z.number().int().positive()]);
 
-const githubAppAuthSchema = z
+export const githubAppAuthSchema = z
   .object({
     app_id: githubAppIdSchema.optional(),
     client_id: z.string().min(1).optional(),
@@ -231,7 +274,7 @@ const githubAppAuthSchema = z
   })
   .passthrough();
 
-const triggerSchema = z
+export const triggerSchema = z
   .object({
     name: z.string().min(1),
     kind: z.enum(["gitea", "forgejo", "github", "gitlab", "p4", "svn", "scheduled", "manual"]),
@@ -245,20 +288,20 @@ const triggerSchema = z
   })
   .passthrough();
 
-const noProblemsPolicySchema = z
+export const noProblemsPolicySchema = z
   .object({
     action: z.enum(["publish", "suppress", "publish_if_summary"]),
   })
   .strict();
 
-const outputChannelOverrideSchema = z
+export const outputChannelOverrideSchema = z
   .object({
     no_problems: noProblemsPolicySchema.optional(),
     no_findings: z.never().optional(),
   })
   .passthrough();
 
-const outputChannelSchema = z
+export const outputChannelSchema = z
   .object({
     name: z.string().min(1),
     kind: z.string().min(1).refine((value) => value !== "gitea_finding_issue", {
@@ -296,7 +339,7 @@ const outputChannelSchema = z
   })
   .passthrough();
 
-const workspaceOutputsSchema = z
+export const workspaceOutputsSchema = z
   .object({
     line_comments: z.array(z.string()).optional(),
     summary: z.array(z.string()).optional(),
@@ -306,7 +349,7 @@ const workspaceOutputsSchema = z
   })
   .strict();
 
-const outputAuthorResolutionSchema = z
+export const outputAuthorResolutionSchema = z
   .object({
     email_mappings: z.record(z.string().min(1), z.string().min(1)).optional(),
     email_blacklist: z.array(z.string().email()).optional(),
@@ -314,11 +357,11 @@ const outputAuthorResolutionSchema = z
   .passthrough()
   .optional();
 
-const outputRouteTargetKindSchema = z.preprocess((value) => {
+export const outputRouteTargetKindSchema = z.preprocess((value) => {
   return value === "pr" ? "pull_request" : value;
 }, reviewTargetKindSchema);
 
-const outputRouteSchema = z
+export const outputRouteSchema = z
   .object({
     match: z
       .object({
@@ -332,16 +375,16 @@ const outputRouteSchema = z
   })
   .passthrough();
 
-const sandboxSchema = z
+export const sandboxSchema = z
   .object({
     kind: z.enum(["native", "docker", "podman", "docker_socket", "k8s_pod", "firecracker"]).optional(),
     engine: z.enum(["auto", "docker", "podman"]).optional(),
     image: z.string().min(1).optional(),
   })
   .strict();
-const agentKindSchema = z.enum(["kilo", "opencode", "zoo", "copilot-cli", "claude-code", "pi", "oh-my-pi"]);
+export const agentKindSchema = z.enum(["kilo", "opencode", "zoo", "copilot-cli", "claude-code", "pi", "oh-my-pi"]);
 
-const contextCompactionSchema = z
+export const contextCompactionSchema = z
   .object({
     auto: z.boolean().default(true),
     threshold_percent: z.number().int().min(1).max(100).optional(),
@@ -356,7 +399,7 @@ const contextCompactionSchema = z
  * sync). OAuth-stored providers (perplexity/gemini/codex OAuth) are excluded:
  * the per-run `PI_CODING_AGENT_DIR` bundle has no auth store.
  */
-const agentWebSearchCredentialProviderSchema = z.enum([
+export const agentWebSearchCredentialProviderSchema = z.enum([
   "tavily",
   "brave",
   "exa",
@@ -375,7 +418,7 @@ const agentWebSearchCredentialProviderSchema = z.enum([
   "searxng_basic_password",
 ]);
 
-const agentWebSearchSearxngSchema = z
+export const agentWebSearchSearxngSchema = z
   .object({
     endpoint: z.string().min(1).optional(),
     categories: z.string().min(1).optional(),
@@ -385,7 +428,7 @@ const agentWebSearchSearxngSchema = z
   })
   .strict();
 
-const agentWebSearchSchema = z
+export const agentWebSearchSchema = z
   .object({
     enabled: z.boolean().default(false),
     providers: z.array(z.string().min(1)).default([]),
@@ -399,7 +442,7 @@ const agentWebSearchSchema = z
   .strict()
   .default({ enabled: false, providers: [], exclude: [], credentials: {} });
 
-const triageSchema = z
+export const triageSchema = z
   .object({
     enabled: z.boolean().default(false),
     actions: z
@@ -529,14 +572,14 @@ const reviewSchema: z.ZodType<ReviewConfig> = z
   })
   .passthrough();
 
-const contextRepositoryAliasSchema = z
+export const contextRepositoryAliasSchema = z
   .string()
   .min(1)
   .regex(/^[A-Za-z0-9][A-Za-z0-9._-]*$/u, {
     message: "context repository alias must be path-safe (letters, digits, '.', '_', '-'; no slashes)",
   });
 
-const contextRepositorySchema = z
+export const contextRepositorySchema = z
   .object({
     alias: contextRepositoryAliasSchema,
     kind: z.enum(["git", "p4", "svn"]),
@@ -596,7 +639,7 @@ const contextRepositorySchema = z
     }
   });
 
-const contextRepositoriesSchema = z
+export const contextRepositoriesSchema = z
   .array(contextRepositorySchema)
   .superRefine((repos, ctx) => {
     const seen = new Set<string>();
@@ -612,7 +655,7 @@ const contextRepositoriesSchema = z
     });
   });
 
-const workspacePromptSchema = z
+export const workspacePromptSchema = z
   .object({
     base_system_prompt_file: z.string().min(1).optional(),
     force_skills: z.array(z.string().min(1)).optional(),
@@ -620,7 +663,14 @@ const workspacePromptSchema = z
   .strict()
   .optional();
 
-const workspaceInstanceSchema = z
+/** Workspace-layer agent selection (defaults and instances share this shape). */
+export const workspaceAgentSelectionSchema = z
+  .object({
+    default: agentKindSchema.optional(),
+  })
+  .strict();
+
+export const workspaceInstanceSchema = z
   .object({
     model_chain: modelChainReferenceSchema.optional(),
     triage_model_chain: modelChainReferenceSchema.optional(),
@@ -631,12 +681,7 @@ const workspaceInstanceSchema = z
       })
       .strict()
       .optional(),
-    agent: z
-      .object({
-        default: agentKindSchema.optional(),
-      })
-      .strict()
-      .optional(),
+    agent: workspaceAgentSelectionSchema.optional(),
     review: reviewSchema.optional(),
     outputs: workspaceOutputsSchema.optional(),
     sandbox: sandboxSchema.optional(),
@@ -655,7 +700,7 @@ const workspaceInstanceSchema = z
 
 const workspaceConfigFileSchema = workspaceInstanceSchema.omit({ sandbox: true }).strict();
 
-const trustProxyValueSchema: z.ZodType<
+export const trustProxyValueSchema: z.ZodType<
   boolean | "loopback" | "linklocal" | "uniquelocal" | readonly string[],
   z.ZodTypeDef,
   unknown
@@ -665,7 +710,7 @@ const trustProxyValueSchema: z.ZodType<
   z.array(z.string().min(1)),
 ]);
 
-const authSchema = z
+export const authSchema = z
   .object({
     api_key_env: z.string().min(1).optional(),
     enabled: z.boolean().default(true),
@@ -673,7 +718,7 @@ const authSchema = z
   .passthrough()
   .optional();
 
-const serverSchema = z
+export const serverSchema = z
   .object({
     port: z.number().int().positive().default(8080),
     hostname: z.string().min(1).default("0.0.0.0"),
@@ -685,7 +730,7 @@ const serverSchema = z
   .passthrough()
   .default({ port: 8080, hostname: "0.0.0.0", trust_proxy: false });
 
-const storageDatabaseSchema = z
+export const storageDatabaseSchema = z
   .object({
     kind: z.enum(["sqlite", "postgres"]).default("sqlite"),
     sqlite: z
@@ -704,7 +749,7 @@ const storageDatabaseSchema = z
   .passthrough()
   .default({ kind: "sqlite", sqlite: { path: "/app/data/aicr.sqlite" } });
 
-const storageCacheSchema = z
+export const storageCacheSchema = z
   .object({
     kind: z.enum(["memory", "redis", "none"]).default("memory"),
     redis: z
@@ -718,7 +763,7 @@ const storageCacheSchema = z
   .passthrough()
   .default({ kind: "memory" });
 
-const storageObjectSchema = z
+export const storageObjectSchema = z
   .object({
     kind: z.enum(["filesystem", "s3"]).default("filesystem"),
     filesystem: z
@@ -742,7 +787,7 @@ const storageObjectSchema = z
   .passthrough()
   .default({ kind: "filesystem", filesystem: { root: "/app/data/objects" } });
 
-const storageSchema = z
+export const storageSchema = z
   .object({
     database: storageDatabaseSchema,
     cache: storageCacheSchema,
@@ -757,7 +802,7 @@ const storageSchema = z
   .passthrough()
   .default({});
 
-const adminAuthSchema = z
+export const adminAuthSchema = z
   .object({
     username_env: z.string().min(1).default("AICR_ADMIN_USERNAME"),
     password_env: z.string().min(1).default("AICR_ADMIN_PASSWORD"),
@@ -767,113 +812,146 @@ const adminAuthSchema = z
   .passthrough()
   .default({});
 
+export const llmConfigSchema = z
+  .object({
+    providers: z.array(llmProviderSchema).default([]),
+    model_chain: z.record(
+      modelChainReferenceSchema,
+      z.array(llmModelChainEntrySchema).min(1),
+      { invalid_type_error: "llm.model_chain must be a mapping of group names to model lists; move the old array to llm.model_chain.default" },
+    ).default({}),
+    default_model_chain: modelChainReferenceSchema.default("default"),
+    triage_model_chain: modelChainReferenceSchema.optional(),
+    retry: llmRetrySchema,
+    per_provider_overrides: llmPerProviderOverridesSchema,
+    budget: llmBudgetSchema,
+    model_catalog: modelCatalogSchema,
+  })
+  .passthrough();
+
+export const outputsConfigSchema = z
+  .object({
+    template_engine: z.enum(["handlebars", "eta"]).default("handlebars"),
+    no_problems: noProblemsPolicySchema.optional(),
+    no_findings: z.never().optional(),
+    channels: z.array(outputChannelSchema).default([]),
+    author_resolution: outputAuthorResolutionSchema,
+    routes: z
+      .object({
+        default: outputRouteSchema.optional(),
+        rules: z.array(outputRouteSchema).default([]),
+      })
+      .passthrough()
+      .optional(),
+  })
+  .passthrough();
+
+export const queueConfigSchema = z
+  .object({
+    kind: z.enum(["memory", "sqlite", "redis", "rabbitmq"]).default("memory"),
+    sqlite: z
+      .object({
+        path: z.string().min(1).optional(),
+        lock_ttl_seconds: z.number().int().positive().optional(),
+      })
+      .passthrough()
+      .optional(),
+    workers: z
+      .object({
+        concurrency: z.number().int().positive().optional(),
+        per_workspace_concurrency: z.number().int().positive().optional(),
+        lock_ttl_seconds: z.number().int().positive().optional(),
+      })
+      .passthrough()
+      .optional(),
+    rate_limit: z
+      .object({
+        per_provider_rps: z.record(z.string().min(1), z.number().positive()).optional(),
+      })
+      .passthrough()
+      .optional(),
+    retry: z
+      .object({
+        attempts: z.number().int().positive().optional(),
+        backoff: z
+          .object({
+            kind: z.enum(["exponential", "linear", "constant"]),
+            base_ms: z.number().positive().optional(),
+            max_ms: z.number().positive().optional(),
+            jitter: z.boolean().optional(),
+          })
+          .passthrough()
+          .optional(),
+      })
+      .passthrough()
+      .optional(),
+    dead_letter: z
+      .object({
+        enabled: z.boolean().optional(),
+        max_age_hours: z.number().int().positive().optional(),
+      })
+      .passthrough()
+      .optional(),
+  })
+  .passthrough();
+
+export const agentConfigSchema = z
+  .object({
+    default: agentKindSchema.default("kilo"),
+    timeout_seconds: z.number().int().positive().default(1800),
+    auto_approve: z.boolean().default(true),
+    sandbox: sandboxSchema.default({ kind: "docker", engine: "auto" }),
+    context_compaction: contextCompactionSchema.default({ auto: true, prune: true }),
+    web_search: agentWebSearchSchema,
+  })
+  .strict();
+
+export const workspacesCacheSchema = z
+  .object({
+    max_total_gb: z.number().positive().default(50),
+    eviction: z.enum(["lru", "mru", "ttl"]).default("lru"),
+    ttl_days: z.number().int().positive().default(30),
+  })
+  .strict();
+
+export const workspacesDefaultsSchema = z
+  .object({
+    model_chain: modelChainReferenceSchema.optional(),
+    triage_model_chain: modelChainReferenceSchema.optional(),
+    sandbox: sandboxSchema.optional(),
+    review: reviewSchema.optional(),
+    agent: workspaceAgentSelectionSchema.optional(),
+    outputs: workspaceOutputsSchema.optional(),
+    prompt: workspacePromptSchema,
+    context_repositories: contextRepositoriesSchema.optional(),
+  })
+  .strict();
+
+export const workspacesConfigSchema = z
+  .object({
+    cache: workspacesCacheSchema.default({ max_total_gb: 50, eviction: "lru", ttl_days: 30 }),
+    defaults: workspacesDefaultsSchema.default({}),
+    instances: z.record(workspaceIdSchema, workspaceInstanceSchema).default({}),
+  })
+  .strict();
+
 const appConfigSchema = z
   .object({
     storage: storageSchema,
     admin: adminAuthSchema,
     server: serverSchema,
-    llm: z
-      .object({
-        providers: z.array(llmProviderSchema).default([]),
-        model_chain: z.record(
-          modelChainReferenceSchema,
-          z.array(llmModelChainEntrySchema).min(1),
-          { invalid_type_error: "llm.model_chain must be a mapping of group names to model lists; move the old array to llm.model_chain.default" },
-        ).default({}),
-        default_model_chain: modelChainReferenceSchema.default("default"),
-        triage_model_chain: modelChainReferenceSchema.optional(),
-        retry: llmRetrySchema,
-        per_provider_overrides: llmPerProviderOverridesSchema,
-        budget: llmBudgetSchema,
-        model_catalog: modelCatalogSchema,
-      })
-      .passthrough()
-      .default({ providers: [], model_chain: {} }),
+    llm: llmConfigSchema.default({ providers: [], model_chain: {} }),
     triggers: z.array(triggerSchema).default([]),
-    outputs: z
-      .object({
-        template_engine: z.enum(["handlebars", "eta"]).default("handlebars"),
-        no_problems: noProblemsPolicySchema.optional(),
-        no_findings: z.never().optional(),
-        channels: z.array(outputChannelSchema).default([]),
-        author_resolution: outputAuthorResolutionSchema,
-        routes: z
-          .object({
-            default: outputRouteSchema.optional(),
-            rules: z.array(outputRouteSchema).default([]),
-          })
-          .passthrough()
-          .optional(),
-      })
-      .passthrough()
-      .default({ template_engine: "handlebars", channels: [] }),
-    queue: z
-      .object({
-        kind: z.enum(["memory", "sqlite", "redis", "rabbitmq"]).default("memory"),
-        sqlite: z
-          .object({
-            path: z.string().min(1).optional(),
-            lock_ttl_seconds: z.number().int().positive().optional(),
-          })
-          .passthrough()
-          .optional(),
-        workers: z
-          .object({
-            concurrency: z.number().int().positive().optional(),
-            per_workspace_concurrency: z.number().int().positive().optional(),
-            lock_ttl_seconds: z.number().int().positive().optional(),
-          })
-          .passthrough()
-          .optional(),
-        rate_limit: z
-          .object({
-            per_provider_rps: z.record(z.string().min(1), z.number().positive()).optional(),
-          })
-          .passthrough()
-          .optional(),
-        retry: z
-          .object({
-            attempts: z.number().int().positive().optional(),
-            backoff: z
-              .object({
-                kind: z.enum(["exponential", "linear", "constant"]),
-                base_ms: z.number().positive().optional(),
-                max_ms: z.number().positive().optional(),
-                jitter: z.boolean().optional(),
-              })
-              .passthrough()
-              .optional(),
-          })
-          .passthrough()
-          .optional(),
-        dead_letter: z
-          .object({
-            enabled: z.boolean().optional(),
-            max_age_hours: z.number().int().positive().optional(),
-          })
-          .passthrough()
-          .optional(),
-      })
-      .passthrough()
-      .default({ kind: "memory" }),
-    agent: z
-      .object({
-        default: agentKindSchema.default("kilo"),
-        timeout_seconds: z.number().int().positive().default(1800),
-        auto_approve: z.boolean().default(true),
-        sandbox: sandboxSchema.default({ kind: "docker", engine: "auto" }),
-        context_compaction: contextCompactionSchema.default({ auto: true, prune: true }),
-        web_search: agentWebSearchSchema,
-      })
-      .strict()
-      .default({
-        default: "kilo",
-        timeout_seconds: 1800,
-        auto_approve: true,
-        sandbox: { kind: "docker", engine: "auto" },
-        context_compaction: { auto: true, prune: true },
-        web_search: { enabled: false, providers: [], exclude: [], credentials: {} },
-      }),
+    outputs: outputsConfigSchema.default({ template_engine: "handlebars", channels: [] }),
+    queue: queueConfigSchema.default({ kind: "memory" }),
+    agent: agentConfigSchema.default({
+      default: "kilo",
+      timeout_seconds: 1800,
+      auto_approve: true,
+      sandbox: { kind: "docker", engine: "auto" },
+      context_compaction: { auto: true, prune: true },
+      web_search: { enabled: false, providers: [], exclude: [], credentials: {} },
+    }),
     compression: compressionSchema,
     review: reviewSchema.default({
       incremental: true,
@@ -886,42 +964,11 @@ const appConfigSchema = z
       output_language: "zh-CN",
       commit_strategy: "aggregate",
     }),
-    workspaces: z
-      .object({
-        cache: z
-          .object({
-            max_total_gb: z.number().positive().default(50),
-            eviction: z.enum(["lru", "mru", "ttl"]).default("lru"),
-            ttl_days: z.number().int().positive().default(30),
-          })
-          .strict()
-          .default({ max_total_gb: 50, eviction: "lru", ttl_days: 30 }),
-        defaults: z
-          .object({
-            model_chain: modelChainReferenceSchema.optional(),
-            triage_model_chain: modelChainReferenceSchema.optional(),
-            sandbox: sandboxSchema.optional(),
-            review: reviewSchema.optional(),
-            agent: z
-              .object({
-                default: agentKindSchema.optional(),
-              })
-              .strict()
-              .optional(),
-            outputs: workspaceOutputsSchema.optional(),
-            prompt: workspacePromptSchema,
-            context_repositories: contextRepositoriesSchema.optional(),
-          })
-          .strict()
-          .default({}),
-        instances: z.record(workspaceIdSchema, workspaceInstanceSchema).default({}),
-      })
-      .strict()
-      .default({
-        cache: { max_total_gb: 50, eviction: "lru", ttl_days: 30 },
-        defaults: {},
-        instances: {},
-      }),
+    workspaces: workspacesConfigSchema.default({
+      cache: { max_total_gb: 50, eviction: "lru", ttl_days: 30 },
+      defaults: {},
+      instances: {},
+    }),
   })
   .strict()
   .superRefine((config, ctx) => {
@@ -937,6 +984,36 @@ const appConfigSchema = z
         });
       }
     }
+
+    // Duplicate entity ids are rejected with the exact entity path (test C01);
+    // map collections (model_chain, workspaces.instances) cannot duplicate
+    // because YAML parsing already enforces unique mapping keys.
+    const checkDuplicateEntityIds = (
+      entries: readonly Record<string, unknown>[],
+      idField: "id" | "name",
+      collectionPath: [string, ...string[]],
+    ): void => {
+      const seen = new Map<string, number>();
+      entries.forEach((entry, index) => {
+        const id = entry[idField];
+        if (typeof id !== "string" || id.length === 0) {
+          return;
+        }
+        const firstIndex = seen.get(id);
+        if (firstIndex !== undefined) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: `Duplicate ${idField} "${id}": entries ${firstIndex} and ${index} in ${collectionPath.join(".")} must be unique`,
+            path: [...collectionPath, index, idField],
+          });
+          return;
+        }
+        seen.set(id, index);
+      });
+    };
+    checkDuplicateEntityIds(config.llm.providers, "id", ["llm", "providers"]);
+    checkDuplicateEntityIds(config.triggers, "name", ["triggers"]);
+    checkDuplicateEntityIds(config.outputs.channels, "name", ["outputs", "channels"]);
 
     const checkModelChainReference = (name: string | undefined, path: string[]): void => {
       if (name !== undefined && !Object.hasOwn(config.llm.model_chain, name)) {
@@ -1099,11 +1176,40 @@ function normalizeConfigDocument(parsed: unknown): AppConfigInput {
   return parsed;
 }
 
+export interface LoadedConfigDocument {
+  readonly config: AppConfig;
+  /** Historical format conversions applied in memory; the file is never rewritten. */
+  readonly changes: readonly ConfigConversionChange[];
+  readonly sourceMap: ConfigSourceMap;
+  /** SHA-256 hex of the exact input bytes. */
+  readonly digest: string;
+  readonly formatVersion: number;
+}
+
+/**
+ * Full config document pipeline (spec §4.2): raw YAML with source locations →
+ * in-memory legacy format conversion → one schema parse (defaults applied
+ * exactly once) → secret reference validation. Historical `model_chain` array
+ * and `fallback_chain`/`triage_fallback_chain` aliases are converted by the
+ * versioned converter only; the latest schema itself still rejects them.
+ */
+export function parseConfigDocumentText(text: string, options?: ParseRawConfigOptions): LoadedConfigDocument {
+  const raw = parseRawConfigSource(text, options);
+  const { document, changes } = convertLegacyConfigDocument(raw.root);
+  const config = appConfigSchema.parse(document);
+  assertNoSecretEnvIssues(config);
+  return {
+    config,
+    changes,
+    sourceMap: raw.sourceMap,
+    digest: raw.digest,
+    formatVersion: raw.formatVersion,
+  };
+}
+
 export async function loadConfigFile(path: string): Promise<AppConfig> {
   const raw = await readFile(path, "utf8");
-  const parsed = normalizeConfigDocument(parseYaml(raw));
-
-  return appConfigSchema.parse(parsed);
+  return parseConfigDocumentText(raw, { fileName: path }).config;
 }
 
 export async function loadWorkspaceConfigFile(path: string): Promise<WorkspaceConfigFile> {

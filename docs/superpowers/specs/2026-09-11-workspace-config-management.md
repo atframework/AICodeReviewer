@@ -1,7 +1,7 @@
 # Workspace 规则、动态配置与数据库迁移设计
 
-状态：待实现。本文件及关联计划只定义后续交付，不表示当前版本已支持这些字段、API 或界面。
-源码核对基线为 `e609cd7`；外部资料核对日期为 2026-09-11。
+状态：P0 的解析、合并、changeset 和字段清单已有实现及回归测试；passthrough 字段的类型化能力校验仍待补全。其余阶段尚未实施，下文 API、存储、UI 和迁移名称仍为拟定合同。当前证据以[测试计划](../plans/2026-09-11-workspace-config-tests.md)为准。
+源码核对基线为 `e609cd7`;外部资料核对日期为 2026-09-11。
 
 执行入口：[执行计划](../plans/2026-09-11-workspace-config-implementation.md)、
 [测试计划](../plans/2026-09-11-workspace-config-tests.md)、[路线图](../../../Plan.md)。
@@ -115,7 +115,7 @@ workspaces:
 6. 返回每个字段的 `source: file | database | default`、`sourcePath`、`editable`、`effectiveValue`、`overriddenValues`。敏感值仅返回引用名或已设置状态。
 7. 文件不自动导入数据库。提供“复制为数据库配置”，要求新 ID，并展示引用修改；迁移仅转换内存中的文件表示，原文件逐字节不变。
 
-同名冲突和字段锁定由服务端强制执行。字段可见但禁用按钮只是界面表现。
+同名冲突和字段锁定由服务端强制执行。字段可见但禁用按钮只是界面表现。纯层 `set` 校验目标路径与文件锁的祖先、后代交集；数组只能整体替换。`unset` 可移除被文件遮盖的数据库 override，保持文件有效值不变。数据库模型组的 value 保留有序条目数组，其他实体使用对象；记录映射键必须等于不可变 record ID。
 
 模型条目新增可选 `overrides`，字段复用请求参数 schema：`extra_params`、`extra_body`、`extra_headers`、`reasoning_effort`、`thinking_level`、`thinking_budget_tokens`、`thinking`、`response_format`、`tool_choice`、`parallel_tool_calls`、`seed`、`logit_bias`、`drop_params`、`allowed_openai_params`。不得覆盖 provider ID/kind、endpoint 或凭据；这些由 provider 实体管理。token/temperature/top_p 等 provider 专属请求项在 `extra_params` 中按已验证能力校验。空 overrides 继承 provider，map 按 key 合并、数组替换；禁用参数通过 drop_params 表达，不用 null 删除。
 

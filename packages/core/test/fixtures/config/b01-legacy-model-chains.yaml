@@ -1,0 +1,19 @@
+# B01: historical llm.fallback_chain / llm.triage_fallback_chain arrays must
+# convert in memory to named model_chain groups "default" / "triage" with
+# llm.triage_model_chain referencing the converted group (spec §9.4).
+llm:
+  providers:
+    - id: main
+      kind: ollama
+      base_url: http://localhost:11434
+  fallback_chain:
+    - provider: main
+      model: qwen2.5-coder:32b
+      role: heavy
+    - provider: main
+      model: qwen2.5-coder:14b
+      role: any
+  triage_fallback_chain:
+    - provider: main
+      model: qwen2.5-coder:7b
+      role: light

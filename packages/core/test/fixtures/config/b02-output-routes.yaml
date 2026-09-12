@@ -1,0 +1,22 @@
+# B02: legacy outputs.routes keep declaration order; the default route is
+# evaluated first, then rules in file order (compatibility compiler contract).
+triggers:
+  - name: gitea-a
+    kind: gitea
+outputs:
+  channels:
+    - name: gitea-summary
+      kind: gitea_issue
+      trigger: gitea-a
+    - name: gitea-lines
+      kind: gitea_pr_review
+      trigger: gitea-a
+  routes:
+    default:
+      summary: [gitea-summary]
+    rules:
+      - match: { trigger: gitea-a, target_kind: push }
+        line_comments: [gitea-lines]
+        summary: [gitea-summary]
+      - match: { trigger: gitea-a }
+        summary: [gitea-summary]

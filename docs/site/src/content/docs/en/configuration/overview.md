@@ -35,6 +35,18 @@ ships with sensible defaults so the sample `example/config.yaml` runs as-is once
 you fill in your LLM key.
 :::
 
+## File validation
+
+The loader accepts a YAML mapping up to 1 MiB. It rejects duplicate keys,
+cyclic aliases and prototype keys before applying defaults. Provider IDs,
+trigger names and channel names must be unique. Fields ending in `_env`
+must contain an environment variable name matching `[A-Za-z_][A-Za-z0-9_]*`.
+Historical model-chain forms are converted in memory; the file is never
+rewritten. See [model groups](/en/configuration/llm/).
+
+Database configuration sources, configuration editing in the dashboard and
+live configuration publication are not available in this release.
+
 ## The three-layer override model
 
 Settings that affect a review resolve in three layers, each one more specific

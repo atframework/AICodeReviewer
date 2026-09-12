@@ -1,12 +1,12 @@
 # Workspace 与动态配置执行计划
 
-状态：仅规划，未开始实施。设计合同见
+状态：P0 基础层已有实现和回归测试，字段类型化能力校验仍有缺口；P1–P8 仅规划。设计合同见
 [详细设计](../specs/2026-09-11-workspace-config-management.md)，测试 ID 和后端证据要求见
 [测试计划](2026-09-11-workspace-config-tests.md)。任何复选框只有实现、对应测试和适用最终门禁通过后才能勾选。
 
 ## 1. 执行约束与依赖
 
-源码基线为 `e609cd7`。开始实现时重新检查 `git status`、schema、bootstrap、调用方和相关测试，保留已有工作区修改。当前只写文档和 example 注释，不安装依赖、不修改业务代码、不运行迁移或真实服务。
+原设计源码基线为 `e609cd7`。当前已实施并审查 P0 基础层；继续实施前重新检查 `git status`、schema、bootstrap、调用方和相关测试，保留已有工作区修改。本轮未运行数据库迁移，未部署服务。
 
 默认设计：文件显式配置优先并锁定；数据库提供补充来源；发布后新接收任务生效，已接收任务固定版本；新规则使用隔离目录布局，旧绑定保留兼容布局。改变其中任一合同必须同步设计、测试矩阵及示例，不能靠实现中的 fallback 决定。
 
@@ -30,17 +30,19 @@ P1/P2 在合同确定后可独立推进；P4/P5 共享发布和 snapshot 合同�
 
 ### P0. 配置合同与兼容输入
 
-- [ ] 从 `packages/core/src/config.ts` 导出可复用组件 schema，保持 Zod 3、现有默认值和已废弃字段拒绝行为。
-- [ ] 建立永久字段清单：path、kind、default、source ownership、inheritance、capability、resolver、consumer、UI control、test ID。逐项覆盖 provider、model groups/overrides、trigger、channel、route、agent/search/sandbox、review、workspace。
-- [ ] 确认 `triggers`/outputs/providers 的 passthrough 字段实际消费者，将可管理字段结构化；未知旧扩展字段保留而不宣称动态可编辑。
-- [ ] 建立 raw config source 文档和文件位置模型，将读取原文、旧版本转换、填默认值和最终 schema parse 分开。
-- [ ] 为现版 `source_repo`、`repos[].match`、outputs route 顺序、空数组和默认 workspace 行为保存独立兼容 fixtures。
-- [ ] 固定未来配置 `formatVersion`、revision API、错误码、matcher/helper 语言和实例 identity 合同，形成纯类型和验证函数。
-- [ ] 清点 `review` 中 schema-only 与实际接线字段；将本次必须支持的全局 Review 字段分配到 P4，不留下“表单可保存但运行无效”。
+- [x] 从 `packages/core/src/config.ts` 导出可复用组件 schema，保持 Zod 3、现有默认值和已废弃字段拒绝行为。组件 schema 已从原内联定义提取并导出，默认值由兼容测试校验。
+- [x] 建立永久字段清单：path、kind、default、source ownership、inheritance、capability、resolver、consumer、UI control、test ID。逐项覆盖 provider、model groups/overrides、trigger、channel、route、agent/search/sandbox、review、workspace。字段清单位于 `packages/core/src/config-components.ts`，U24 纯层门禁对照 Zod walker 检查声明字段、默认值及实体所有权；字段上的 test ID 是验收目标，不代表已经通过。
+- [ ] 补全 `triggers`/outputs/providers 的 passthrough 字段类型和 kind 能力校验。当前已记录消费者与 schema-only 状态，并保留未知旧扩展；清单元数据尚不能代替发布时的类型化 DTO 和能力验证。
+- [x] 建立 raw config source 文档和文件位置模型，将读取原文、旧版本转换、填默认值和最终 schema parse 分开。(`config-source.ts` 的 `parseRawConfigSource` + `config.ts` 的 `parseConfigDocumentText` 管线；`loadConfigFile` 经同一管线，重复键拒绝、别名内存转换。)
+- [x] 为现版 `source_repo`、`repos[].match`、outputs route 顺序、空数组和默认 workspace 行为保存独立兼容 fixtures。静态输入位于 `test/fixtures/config/`；文件名 b01–b05 只是 fixture 编号，不对应测试矩阵 B01–B05 的完整验收。
+- [x] 固定未来配置 `formatVersion`、revision API、错误码、matcher/helper 语言和实例 identity 合同，形成纯类型和验证函数。(`config-format.ts`：错误码、实体注册表、revision/namespace/generation 校验、stable hash、matcher 白名单、workspace instance identity。)
+- [x] 清点 `review` 中 schema-only 与实际接线字段；将本次必须支持的全局 Review 字段分配到 P4，不留下"表单可保存但运行无效"。(清单逐字段标 wired；schema-only 项带 P4/P1 状态注记，禁入 UI。)
 
-影响：`packages/core/src/config.ts`、`review-event.ts`，拟新增 `config-source.ts`、`config-format.ts`、`config-components.ts`；相应 `packages/core/test/`。不新建 pnpm package。
+当前影响：`packages/core/src/config.ts`、`index.ts`、新增 `config-source.ts`、`config-format.ts`、`config-components.ts` 及相应 `packages/core/test/`。`review-event.ts` 的多工程接线留在 P1，不新建 pnpm package。
 
-退出条件：F01–F12、C01–C08、B01–B05 通过；现有 config/exclusion/model-chain 测试保持通过；新字段仍未接入运行时的部分明确标记。
+退出条件：完成本阶段字段合同及纯层回归，并通过适用最终门禁；依赖存储、API、运行时的 F/C/B 验收随宿主阶段完成，不把纯函数通过写成整项验收通过。
+
+P0 审查已补充转换失败不修改输入、模型组数组 CRUD/投影、记录 ID 一致性、父子路径文件锁、原型键写前拒绝、原子数组、无效实体保留、shadowed 字段视图、YAML 循环/重复键、路径转义、哈希与 snapshot 边界。具体证据与剩余阶段见[测试计划 §1](2026-09-11-workspace-config-tests.md#1-测试组织与证据)。
 
 ### P1. Workspace 匹配、来源变量和目录
 

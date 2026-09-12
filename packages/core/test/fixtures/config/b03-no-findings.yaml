@@ -1,0 +1,4 @@
+# B03: the removed outputs.no_findings alias stays rejected (z.never); only
+# outputs.no_problems.action is accepted.
+outputs:
+  no_findings: true
