@@ -86,6 +86,40 @@ function session(tokenHash: string, expiresAt: number): AdminSessionRecord {
 
 export function runConfigStoreConformance(factory: ConfigStoreFactory): void {
   describe(`ConfigStore conformance [${factory.backendKind}]`, () => {
+    it("CAS runtime references protect snapshots and release exactly once", async () => {
+      const store = await factory.makeStore();
+      await store.writeSnapshot(snapshot());
+      const input = { namespace: NS_A, key: "pin/task", expectedVersion: null, snapshotId: "snap-1", value: { phase: "accepted" }, now: T0 } as const;
+      const results = await Promise.all([store.writeRuntimeState(input), store.writeRuntimeState(input)]);
+      expect(results.filter(Boolean)).toHaveLength(1);
+      const winner = results.find(Boolean)!;
+      expect(await store.readRuntimeState(NS_A, input.key)).toEqual(winner);
+      expect(await store.listRuntimeStates(NS_B)).toEqual([]);
+      expect((await store.readSnapshot("snap-1"))?.refCount).toBe(1);
+      expect((await store.adjustSnapshotRefCount("snap-1", 0))?.refCount).toBe(1);
+      expect((await store.setSnapshotPinned("snap-1", false))?.refCount).toBe(1);
+      expect((await store.writeSnapshot(snapshot())).refCount).toBe(1);
+      await expect(store.deleteSnapshot("snap-1")).rejects.toMatchObject({ code: "snapshot_invalid" });
+      expect(await store.deleteRuntimeState(NS_A, input.key, winner.version + 1)).toBe(false);
+      const next = await store.writeRuntimeState({ ...input, expectedVersion: winner.version, snapshotId: null });
+      expect(next?.version).toBe(winner.version + 1);
+      expect(await store.writeRuntimeState({ ...input, expectedVersion: winner.version })).toBeNull();
+      expect((await store.readSnapshot("snap-1"))?.refCount).toBe(0);
+      await store.deleteSnapshot("snap-1");
+      expect(await store.deleteRuntimeState(NS_A, input.key, next!.version)).toBe(true);
+      expect(await store.deleteRuntimeState(NS_A, input.key, next!.version)).toBe(false);
+    });
+
+    it("runtime references reject missing or foreign snapshots without writing", async () => {
+      const store = await factory.makeStore();
+      await store.writeSnapshot(snapshot({ namespace: NS_B }));
+      for (const snapshotId of ["snap-1", "missing"]) {
+        await expect(store.writeRuntimeState({ namespace: NS_A, key: "pin/invalid", expectedVersion: null,
+          snapshotId, value: {}, now: T0 })).rejects.toMatchObject({ code: "snapshot_invalid" });
+      }
+      expect(await store.listRuntimeStates(NS_A)).toEqual([]);
+    });
+
     it.each([{ fileDigest: "other-file" }, { formatVersion: 2 }])("rejects a reused operation with different execution inputs: %j", async (override) => {
       const store = await factory.makeStore();
       await store.commitChangeset(commit());

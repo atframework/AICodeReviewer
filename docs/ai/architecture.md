@@ -7,7 +7,7 @@
 
 Workspace 多工程匹配、数据库配置管理与自动迁移的新方案见
 [进行中的设计](../superpowers/specs/2026-09-11-workspace-config-management.md)。
-该方案尚未实现，不替代本页现有合同；执行和测试入口见 [Plan.md](../../Plan.md)。
+P0–P5 已交付，管理 UI 和完整故障矩阵仍按计划推进；执行和测试入口见 [Plan.md](../../Plan.md)。
 
 ## 按需阅读
 
@@ -598,6 +598,8 @@ AICR 采用**两层上下文管理**，两者互补：
 ### 3.8 SandboxBackend
 
 - 支持 native、docker、podman，保留 `docker_socket`、`k8s_pod` 与 `firecracker` 扩展位。
+  `agent.sandbox.kind` 无默认值:未设置时自动探测引擎并允许回退 native;显式容器
+  类型 preflight 不可用时任务失败,不静默降级 native(P4/H04)。
 - 容器后端必须通过 allowlist 验证允许执行的命令。
 - 容器 `--env-file` 必须位于挂载工作区之外的临时路径，运行后删除。
 - 源码工作区默认只读挂载，agent 工作目录与临时目录隔离。
@@ -734,14 +736,16 @@ AICR 采用**两层上下文管理**，两者互补：
   无效实体不能在合并中丢失；来源视图保留被文件遮盖的数据库字段值。
   `unset` 只移除数据库 override，文件有效值保持不变。
 - `config-format.ts` 提供版本、错误码、revision、matcher 形状与实例身份的纯合同；
-  matcher 编译、路径 AST、存储 CAS、引用完整性、API 和热发布仍待后续阶段。
+  matcher 编译、路径 AST、存储 CAS 与引用完整性已由 P1–P3 交付,管理 API 与热发布
+  见 §3.16。
   `config-components.ts` 的 U24 检查声明字段、默认值和实体所有权。
   `config-capabilities.ts` 在 `validateDatabaseDocument` 发布路径上执行已知 passthrough
   字段的类型化 DTO 校验与 kind×字段能力检查：9 种可发布 channel kind、provider 连接字段
   按 vertex_ai/bedrock/anthropic 归组、trigger 文件过滤与 `app` 按 kind 限定、
   `resolved_action` 逐 kind 取值；错误码 `invalid_field_type` / `unsupported_capability`,
   未知扩展键保留不拒绝。catalog 提示键与字段清单 parity 由测试锁定。
-  模型条目 `overrides` 只接受请求字段且尚未接线。
+  模型条目 `overrides` 自 P4 起在 `resolveModelSpecFromChain` 接线(map 按 key
+  合并、数组替换,身份/端点/凭据不可覆盖)。
   设计与阶段边界见[workspace 配置设计](../superpowers/specs/2026-09-11-workspace-config-management.md)。
 - P1a 的 `config-matcher.ts` 把 RE2/glob 编译收敛为共享纯函数(`auto-commit-exclusion` 行为
   不变,`autoCommitGlobToRegexSource` 为共享实现别名),新增 exact matcher 与来源字段目录
@@ -1241,9 +1245,8 @@ models.dev 的 key 是 `<providerId>/<modelId>`（AI SDK 标识）。自定义 p
   fixture);postgres 分支经 `pg-migrations.ts` 复用同一 MigrationRunner
   (`pg_advisory` 会话锁包住 CREATE SCHEMA + 迁移)。pg 低权限部署在启动期得到有界
   `store_unavailable`,不创建半套表(M08)。
-- 尚未接线:运行时 generation 固定(P4)、配置管理 API(P5)与管理表单(P6)
-  仍为设计项;运行时消费的仍是 YAML 文件来源(P3 合并/发布服务已在 core
-  落地,见 §3.15)。
+- 运行时 generation 固定(P4)与配置管理 API(P5)已接线，见 §3.16；管理表单(P6)
+  仍按计划推进。配置库 schema 2 增加 runtime state 的 CAS 账本。
 
 ### 3.15 配置来源合并、路由图与发布服务(config-source / config-compiler / config-publish)
 
@@ -1284,6 +1287,100 @@ models.dev 的 key 是 `<providerId>/<modelId>`（AI SDK 标识）。自定义 p
   workspace 绑定、完整最终目录、模型组与输出 channel;`diagnoseConfigReadiness`
   报告 disabled/store_unavailable/empty/file_config_mismatch/snapshot_missing/
   ready 六态。
+
+### 3.16 运行时配置 generation 与管理 API(runtime-config / config-api)
+
+`config_sources.database.enabled` 默认关闭。启用后，`backend: storage` 使用
+SQLite/PostgreSQL 配置库，`backend: redis` 复用 `storage.cache.redis` 连接声明。
+CLI 传入 legacy 转换后的原始文件文档与 SHA-256 digest；defaults 只在合并后应用。
+namespace 与 API 采用同一规则：1–64 个字母、数字、点、下划线或连字符，以字母或数字开头。
+
+`RuntimeConfigManager` 将 effective config 深度冻结，并构建执行图和 workspace
+runtime。每次 webhook 在 profile 查找及鉴权前重读持久 head，通过异步请求作用域
+固定 generation；跨 await 的凭据解析、路径选择和接收 pin 不混用版本。head 消失、
+倒退、文件 digest 不一致或读取失败时暂停新接收，HTTP 返回 503 `config_unavailable`。
+`/readyz` 也验证 admission。后台刷新只加速切换，不能替代屏障；关闭配置 store
+会停止刷新和 session sweep。统计初始化失败时，若配置库可用且 catalog/reflection
+不依赖统计库，管理员配置 API 保持可用，统计端点返回 `stats_unavailable`。
+接收请求唤醒共享调度器时退出请求作用域，避免定时器继承旧 generation；具体任务
+执行时再进入其 snapshot 作用域。
+
+admission 串行采用 head，延迟的 publish install 重新读取 head，不能装回旧版本。
+缺失 snapshot 只在 revision 的 fileDigest 与本机一致后重建；已有行的身份、namespace、
+resolver 或内容校验失败时拒绝激活，不覆盖不可变行。空命名空间先持久化 revision 0
+快照，保证第一次发布之前接收的任务也可在重启后恢复。首次启动以 CAS 建立唯一
+legacy_import，历史 null 引用统一解析到此版本；新任务省略版本时固定当前代。该迁移
+保留旧业务行，跨发布和重启不漂移。已有非空 pin 缺失时失败，不自动改用最新配置。
+
+请求及实际编排通过 lease 持有 generation；最后一个旧 lease 释放后才 dispose，
+已释放对象不留在可租借缓存中。`optionsResolver` 每次运行解析一次模型、agent、
+sandbox、Review 路径策略、语言、VCS 和 publisher。模型链 entry overrides 的 map
+按 key 合并（含 logit_bias），数组替换，不修改 provider 原对象。receipt/batch、
+P4/SVN routing envelope、延期 envelope 和去重重审目标均传递 configSnapshotId；
+metadata adapter 使用覆盖 receipt 的快照；组批在快照边界切分。
+
+`review.include/exclude/max_files` 应用于 changedPaths，复用仓库路径 glob：
+`*` 不跨目录，`**` 匹配零个或多个目录。默认 `**/*` 包含根文件，
+`**/vendor/**` 仅排除 vendor 目录。sandbox 未设置 kind 时自动探测并允许 native
+回退；显式容器 kind 的 preflight 失败则拒绝运行。scheduler concurrency 在 claim
+边界读取当前 generation，降低限制不取消正在执行的批次。
+
+管理员 API 挂载在 `/api/admin/config`，复用 Bearer session：
+
+| 端点 | 当前行为 |
+| --- | --- |
+| GET / | 单次 head 读取对应的 globals、provenance、文件/数据库实体；保留禁用记录与不可变 ID，返回有效值；limit/offset 分页 |
+| GET /schema | 字段清单、capability 与协议版本；ConfigUiSpec 留待 P6 |
+| POST /validate、/preview-route | 零写库预览；路由预览支持 providerFields |
+| POST /changesets | prepare → publish → install；fileDigest 不一致或版本/operation 冲突 409；持久提交但激活失败 202 committed_activating |
+| GET /operations/:id、/revisions、/revisions/:revision | 持久操作状态与脱敏历史、审计 |
+| POST /revisions/:revision/restore | 以当前 head 为父创建新版本，重跑文件锁、引用与凭据检查 |
+| GET /status | manager 状态与实际 admission 诊断；无法激活时 available=false、HTTP 503 |
+
+JSON 按实际流式 UTF-8 字节限制为 1 MiB，提前拒绝原型键、过深结构和缺失 value。
+跨源写入被拒绝；env 只返回引用名和存在性。已知明文凭据与带凭据 URL 不允许新增
+或恢复；读取历史值时覆盖短凭据、URL userinfo/查询参数及 headers，未知驱动错误
+不回传原文。changesets 与 restore 必须携带 fileDigest；状态查询尝试再次激活已提交
+版本，实例列表按持久心跳报告当前版本和可用性。
+
+runtime state 账本采用 memory/SQLite/PostgreSQL/Redis 同一 CAS 合同，记录
+legacy_import、instance、接收 pin、queue version 和 catalog 结果。接收先写 pin，
+再写 receipt/job，成功持久化前不返回接受；pin 结束后保留到对账。GC 先读 pin，
+再完整读取 receipt/routing/batch/deferral/queue 引用；任何后端失败都停止回收。
+未展开、可重试或 claimed 任务仍算引用；活跃 owner 的 pin 保留，失联 owner 和
+无任务引用的遗留 pin 经 5 分钟宽限回收。configVersion 写入结果和 run.json；
+队列使用应用账本，不修改 BullMQ 私有键。关闭等待 GC 和任务 lease。
+
+v2 routing 在已鉴权来源范围内选择 workspace、路径、analysis 和输出；显式空列表
+关闭该类输出，禁用最后一条规则仍是 v2。global → defaults → instance → route
+合并 agent/search/sandbox/review，数组整体替换。repository-owned 配置仍只可选择
+agent.default，不能借代码仓库调整批准、搜索凭据或沙箱权限。
+
+Review 路径筛选在 fetchScoped 前执行。max_patch_bytes 和 fetch_extra 按 UTF-8
+计数；额外上下文请求串行占用每次 run 的文件/字节预算，拒绝越界路径和超额读取。
+incremental=false 追加 head 完整文件，同样受 patch 字节上限约束；skip_lgtm 仅控制
+分析提示。head_only/per_commit 消费有界提交元数据（256 条/1 MiB），后者在一次分析
+中提供带提交标记的补丁，并要求核对最终 head；历史改写保持端点比较。根提交采用
+[Git diff-tree --root](https://git-scm.com/docs/git-diff-tree)，不硬编码 SHA-1 空树。
+reflection 同时执行过期、保留期、条数和 UTF-8 字节限制；窗口删除语义分别依据
+[SQLite](https://www.sqlite.org/windowfunctions.html) 和
+[PostgreSQL](https://www.postgresql.org/docs/current/functions-window.html) 合同。
+
+catalog 配置和 triage 按 generation 构造；激活前固定全部配置模型的目录结果，CAS
+持久保存并校验 hash，旧任务重启后不随共享目录刷新变化。目录缓存与连接按 backend
+共享，到 generation drain 后关闭。并发限制在新 claim 更新；共享 token bucket
+保留发布前额度，实际 LLM 请求逐 provider 限流。原生 agent CLI 按 launch 限流，
+内部 HTTP 请求由对应 CLI 管理。预算累计已报告费用，后续调用前检查新上限；一次
+请求可能在返回费用后超过上限，不能作为远端计费硬封顶；进程重启不保留内存日预算。
+
+secret 授权来自原始文件引用及仅文件可写的 config_sources.secret_refs：env、稳定
+目标路径和 destinations 必须完整匹配。修改 endpoint、代理、关联 trigger 或继承
+凭据的 model/search/channel/context repository 目的地需要相应用途授权。预览、
+发布、restore 和新 head 激活使用同一检查，未授权环境变量不会被查询。规则依据
+[OWASP 出站目标白名单原则](https://cheatsheetseries.owasp.org/cheatsheets/Server_Side_Request_Forgery_Prevention_Cheat_Sheet.html)，
+约束配置可引用的凭据与目的地；它不替代部署网络层的 DNS/重定向访问控制。
+
+P4/P5 本地验收见 M19，P6 管理 UI、P7 跨版本进程矩阵和 P8 整体验收保留在 Plan.md。
 
 ## 4. 默认评审 Prompt 合同
 

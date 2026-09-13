@@ -93,8 +93,8 @@ workspaces:
 | `outputs`（通道列表、`no_problems`、`channel_overrides`） | ✓ | ✓ | ✓ |
 | `model_chain`（主链分组） | 经由 `llm.default_model_chain` | ✓ | ✓ |
 | `triage_model_chain`（生命周期分析分组） | 经由 `llm.triage_model_chain` | ✓ | ✓ |
-| `agent.default` | ✓ | ✓ * | ✓ * |
-| `sandbox` | 经由 `agent.sandbox` | ✓ * | ✓ * |
+| `agent.default` | ✓ | ✓ | ✓ |
+| `sandbox` | 经由 `agent.sandbox` | ✓ | ✓ |
 | `prompt`（基础系统提示、`force_skills`） | — | ✓ | ✓ |
 | `context_repositories`（辅助上下文仓库） | — | ✓ | ✓ |
 | `auth`（按 workspace 的 API key） | 经由 `server.auth` | — | ✓ |
@@ -104,9 +104,8 @@ workspaces:
 agent 故障切换和压缩摘要；triage 各层都未配置时继承该 workspace 的主链。
 完整示例见[模型分组配置](/zh-cn/configuration/llm/)。
 
-\* schema 接受 workspace 层的 `agent.default` 和 `sandbox`，但当前版本仍按全局
-`agent` 选择适配器和沙箱配置，每次运行独立创建沙箱实例。workspace 层这两项设置了也不会生效。混用 agent
-或按 workspace 换沙箱镜像的需求要等后续版本。
+每次运行按 global → defaults → instance 的合并结果选择 `agent.default` 和
+`sandbox`，并独立创建沙箱实例。workspace 层可以混用不同 agent 或独立沙箱镜像。
 
 `context_repositories` 声明评审时可引用的辅助仓库（共享库、协议契约等）：每次评审
 在确认存在变更文件后全新物化到 `<workspace>/context-repos/<alias>`，容器沙箱内以只读
@@ -161,3 +160,28 @@ AICR_LLM_API_KEY=sk-xxxxxxxxxxxxxxxx
   agent 沙箱（[Agent 与沙箱](/zh-cn/configuration/agent/)）。
 - 调整输出行为？看 [输出通道与路由](/zh-cn/configuration/outputs/)，
   涵盖通道、路由、零问题策略，以及托管 issue 的生命周期上限。
+
+## 动态配置 API
+
+启用 `config_sources.database.enabled: true` 后，`/api/admin/config` 可发布数据库
+补充配置，文件显式值保持只读。每次 webhook 在读取凭据前检查持久 head，异步处理
+始终使用同一 generation。receipt 和新持久化延期任务保留接收时快照；空命名空间
+在接收任务前先写入 revision 0 快照。
+
+管理员 API 要求 Bearer session，JSON 请求按 UTF-8 字节限制为 1 MiB，拒绝跨源
+写入和不一致的 `fileDigest`，读取历史凭据时脱敏。新增明文凭据和带凭据 URL
+会被拒绝，应使用环境变量引用。读取视图包含文件/数据库来源、不可变记录 ID、
+有效值和 `limit`/`offset` 实体分页。无法激活配置时，`/readyz` 和管理员
+`/status` 返回 503。
+
+changesets 和 restore 请求必须携带当前 SHA-256 `fileDigest`。operation 端点区分
+持久提交与本机激活，status 列出实例心跳及版本。已排队任务和历史无 pin 任务在发布、
+重启后保持原版本；历史 null 记录统一解析到持久化的 `legacy_import` 基线。
+
+环境变量引用按名称、配置路径及目的地授权。原文件引用授权原有用途；新增数据库引用
+或修改目的地前，需要在文件 `config_sources.secret_refs` 中授权，包括 channel、
+model override、workspace/route search 继承的凭据。授权格式见
+[字段参考](/zh-cn/reference/config-fields/)。
+
+v2 路由、Review 策略、agent/search/sandbox、模型目录和 triage 变更对新任务生效。
+v2 输出显式空列表关闭该类输出。管理 UI 仍在计划中，API 可独立于统计 store 使用。

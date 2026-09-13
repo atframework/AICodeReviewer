@@ -1,8 +1,20 @@
 # Workspace 与动态配置测试计划
 
-状态：P0–P3 已完成；P4–P8 跨层验收仍待实施。P2 证据(2026-09-12):F/C/B/U 系列、S01–S13 四后端 conformance、M01–M20 适用后端合同,映射与边界见 [M17](../../ai/milestones/M17.md);P3 证据(2026-09-12):R01–R07/R11/R12 + legacy parity(config-compiler.test.ts 21 例)、S02/S03/S06/H07/H13–H15/C02/C03/C11/C12(config-publish.test.ts 14 例,SQLite 真实后端)、R13 零副作用 preview 与 readiness 六态(config-preview.test.ts 13 例),见 [M18](../../ai/milestones/M18.md);P1 证据见下方验收索引。
-合同见 [详细设计](../specs/2026-09-11-workspace-config-management.md)，阶段见
-[执行计划](2026-09-11-workspace-config-implementation.md)。
+P0–P5 已交付；最新验证结果和边界见 [M19](../../ai/milestones/M19.md)。测试 ID 是
+合同索引，需组合消费者、存储和 HTTP 证据；单个带 ID 的断言不代表整项完成。
+P6–P8 保留原计划；A14 的浏览器渲染部分随 P6 页面实现，API 部分已验证。
+
+| P4/P5 合同 | 当前组合证据 |
+| --- | --- |
+| H01/H02/H06 | runtime-generation 实际 LLM/triage HTTP、catalog 模型固定；model-chain-overrides、bootstrap、issue-triage、gateway 覆盖 fallback/summary/resolution |
+| H03/H04 | runtime-generation 七 adapter 实际 bundle/command/env/manifest；sandbox factory 和 orchestrator 的显式容器失败、mount 与运行隔离 |
+| H05 | config-components 全 Review 字段清单；review-policy、review-context-budget、review-commit-policy、orchestrator、bootstrap、reflection SQLite/PG、auto-commit/pull-request policy 各消费者断言 |
+| R08/R13/H07 | runtime-http 签名 webhook、runtime-generation 真实 publisher 目标及显式空输出、workspace-runtime 布局与 core preview/compiler parity |
+| H08/H09/H10/H12 | runtime-config memory/SQLite 队列重开与 legacy_import；auto-commit assembly/三后端 conformance；deferral-recovery 和 dedup 保留版本 |
+| H11/H16 | runtime-config 接收前写失败、遗留/结束 pin、后端不可达不 GC、drain 等待；ConfigStore 四后端 CAS/refcount；bootstrap 共享资源关闭 |
+| H13/H14/H15/H18 | config-publish/config-api/runtime-config/runtime-http 的 CAS、激活恢复、多实例 head、digest/损坏/连接/较新 schema 错误；migration 真实后端门禁 |
+| H17 | queue-worker/auto-commit-scheduler 动态 claim；rate-limiter 保留额度；gateway 实际 provider 重试/fallback；runtime-generation 新预算保留历史计费 |
+| A01–A15 | config-api、runtime-http、observability-api、admin/session conformance；secret-policy 的环境名/用途/目标、继承凭据和字面量阴性用例 |
 
 ## 1. 测试组织与证据
 

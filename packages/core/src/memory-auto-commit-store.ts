@@ -293,13 +293,18 @@ export function createMemoryAutoCommitStore(): AutoCommitStore {
         if (receipt.configSnapshotId === null) continue;
         const memberIds = [...(memberIdsByReceipt.get(receipt.receiptId) ?? [])];
         const hasPending = memberIds.some((memberId) => members.get(memberId)?.record.status === "pending");
-        if (hasPending) ids.add(receipt.configSnapshotId);
+        const unexpanded = receipt.receiptSeq > (streams.get(receipt.streamId)?.head.coverageCursor ?? 0);
+        if (hasPending || unexpanded || receipt.metadataTerminalError !== null) ids.add(receipt.configSnapshotId);
       }
       for (const batch of batches.values()) {
         if (batch.record.configSnapshotId === null) continue;
         if (batch.record.status !== "completed" && batch.record.status !== "skipped") {
           ids.add(batch.record.configSnapshotId);
         }
+      }
+      for (const receipt of routingReceipts.values()) {
+        const envelope = receipt.envelope as { configSnapshotId?: unknown } | null;
+        if (receipt.completedAt === null && typeof envelope?.configSnapshotId === "string") ids.add(envelope.configSnapshotId);
       }
       return [...ids];
     },

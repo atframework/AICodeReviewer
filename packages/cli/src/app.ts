@@ -8,6 +8,7 @@ import {
   fixMarkdown,
   createReviewEvent,
   loadConfigFile,
+  loadConfigDocumentFile,
   loadSystemPromptTemplate,
   prepareReviewPrompt,
   projectEventResolution,
@@ -305,7 +306,11 @@ export async function runCli(
       const configPath = values.config
         ? resolve(cwd, values.config)
         : resolve(cwd, "config.yaml");
-      const config = await loadConfigFile(configPath);
+      // Full-document load (P4): the runtime config manager needs the raw
+      // (legacy-converted) file document and its digest for dynamic-config
+      // source merging and file_config_mismatch checks.
+      const loaded = await loadConfigDocumentFile(configPath);
+      const config = loaded.config;
       const basePromptPath = resolve(cwd, values["base-prompt"] ?? "prompts/system/code-reviewer.system.md");
       const baseSystemPrompt = await loadSystemPromptTemplate(basePromptPath);
       const port = parseOptionalInteger(values.port, "--port") ?? config.server.port ?? 8080;
@@ -320,6 +325,7 @@ export async function runCli(
         config,
         baseSystemPrompt,
         baseDir: cwd,
+        configDocument: { document: loaded.document, digest: loaded.digest },
       });
       const app = createServerApp(serverOptions);
 

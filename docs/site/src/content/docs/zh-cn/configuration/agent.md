@@ -18,8 +18,7 @@ agent:
   web_search:
     enabled: false
   sandbox:
-    kind: docker
-    engine: auto
+    # kind 不设置 = 自动探测（docker→podman→native 回退）
 ```
 
 ## `agent.default` —— 使用哪个 agent CLI
@@ -44,9 +43,10 @@ overrides）。由 `deploy/Dockerfile` 构建的运行时镜像内置固定版�
 （这两个二进制默认已在沙箱命令白名单中）。
 :::
 
-schema 也接受 `workspaces.defaults.agent.default` 和
-`workspaces.instances.<id>.agent.default`，但当前版本启动时只按全局
-`agent.default` 创建一份适配器——workspace 层的设置会被解析，不会生效。
+agent 选择、超时、批准、压缩和 web-search 设置按每个任务的
+global → workspace defaults → instance → route analysis 合并。数组整体替换，
+搜索凭据按 key 合并并受部署用途授权约束；不支持的 adapter 能力写入 runtime manifest。
+仓库拥有的配置只能选择 `agent.default`，不能提升批准、搜索凭据或沙箱权限。
 
 每次审查创建独立沙箱，HOME、USERPROFILE、APPDATA、XDG 和临时目录位于该 run 内；
 MCP 子进程继承相同隔离目录。通过配置声明的环境变量提供认证，运行时不复制开发者的
@@ -79,8 +79,8 @@ agent:
   auto_approve: true
 ```
 
-当前版本的编排器固定按 `true` 处理：schema 接受该字段，但设为 `false` 不会生效。
-字段保留给未来的逐步审批调试模式。
+编排器将合并后的值传给 adapter 的命令构造器。CLI 支持时，`false` 会取消自动批准，
+无人值守运行可能因此等待 CLI 批准；该字段不提供交互式批准页面。
 
 ## `agent.context_compaction` —— 运行时侧的历史压缩
 
@@ -207,8 +207,8 @@ kilo、claude-code、copilot-cli 以自动批准方式运行，其内置搜索�
 
 | 字段 | 类型 | 默认 | 说明 |
 | --- | --- | --- | --- |
-| `kind` | enum | `docker` | 沙箱类型（见下）。 |
-| `engine` | enum | `auto` | 容器引擎：`auto`、`docker` 或 `podman`。 |
+| `kind` | enum | *（未设置）* | 沙箱类型（见下）。未设置时自动探测并允许回退 native。 |
+| `engine` | enum | *（未设置）* | 容器引擎：`auto`、`docker` 或 `podman`。 |
 | `image` | string | – | 可选的显式沙箱镜像。 |
 
 ### `kind` 取值
@@ -216,7 +216,7 @@ kilo、claude-code、copilot-cli 以自动批准方式运行，其内置搜索�
 | Kind | 状态 | 何时使用 |
 | --- | --- | --- |
 | `native` | 可用 | 直接在宿主机上运行 agent（无容器）。隔离度最低。 |
-| `docker`（默认） | 可用 | 在 Docker 容器内运行。大多数部署的默认选择。 |
+| `docker` | 可用 | 在 Docker 容器内运行。显式声明容器类型属于信任声明：preflight 探测不到引擎时任务直接失败，不会静默降级 native。 |
 | `podman` | 可用 | 在 Podman 容器内运行。配合 `deploy.sh` + `AICR_ENABLE_CONTAINER_SANDBOX` 与挂载的 Podman socket 时首选。 |
 | `docker_socket` | 可用 | Docker 兼容模式，适用于明确需要经由挂载 socket 使用 Docker CLI 的工作流。 |
 | `k8s_pod` | 保留 | 尚未实现。 |
@@ -235,6 +235,7 @@ agent:
     engine: podman
 ```
 
-`sandbox` 在 schema 里也可放在 `workspaces.defaults` 和 `workspaces.instances.<id>`
-两层，但与 `agent.default` 一样，当前运行时只使用全局 `agent.sandbox`，workspace 层
-设置不会生效（覆盖表见[配置总览](/zh-cn/configuration/overview/)）。
+`sandbox` 与 `agent.default` 均可放在 `workspaces.defaults` 和
+`workspaces.instances.<id>` 两层：每次运行按 global → defaults → instance 合并
+结果选择，workspace 可以使用不同的 agent CLI 或独立的沙箱镜像（覆盖表见
+[配置总览](/zh-cn/configuration/overview/)）。

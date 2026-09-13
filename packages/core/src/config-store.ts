@@ -193,6 +193,10 @@ export interface ListAuditOptions {
 }
 
 export interface ConfigStore {
+  readRuntimeState(namespace: string, key: string): Promise<ConfigRuntimeState | null>;
+  listRuntimeStates(namespace: string): Promise<readonly ConfigRuntimeState[]>;
+  writeRuntimeState(input: WriteConfigRuntimeState): Promise<ConfigRuntimeState | null>;
+  deleteRuntimeState(namespace: string, key: string, expectedVersion: number): Promise<boolean>;
   readonly backendKind: "memory" | "sqlite" | "postgres" | "redis";
 
   /** Current head; `null` when the namespace has no revision yet (S01). */
@@ -324,6 +328,8 @@ export function createMemoryConfigStore(): ConfigStore {
   let closed = false;
   const namespaces = new Map<string, MemoryNamespaceState>();
   const snapshots = new Map<string, ConfigRuntimeSnapshotRecord>();
+  const runtimeStates = new Map<string, ConfigRuntimeState>();
+  const runtimeRefCount = (id: string) => [...runtimeStates.values()].filter(state => state.snapshotId === id).length;
   const bindings = new Map<string, WorkspaceBindingRecord>();
   const sessions = new Map<string, AdminSessionRecord>();
 
@@ -344,6 +350,33 @@ export function createMemoryConfigStore(): ConfigStore {
 
   return {
     backendKind: "memory",
+    async readRuntimeState(namespace, key) {
+      open(); assertNamespace(namespace);
+      return copyConfigValue(runtimeStates.get(JSON.stringify([namespace, key])) ?? null);
+    },
+    async listRuntimeStates(namespace) {
+      open(); assertNamespace(namespace);
+      return [...runtimeStates.values()].filter(state => state.namespace === namespace).map(copyConfigValue);
+    },
+    async writeRuntimeState(input) {
+      open(); assertNamespace(input.namespace);
+      const key = JSON.stringify([input.namespace, input.key]);
+      const previous = runtimeStates.get(key);
+      if ((previous?.version ?? null) !== input.expectedVersion) return null;
+      if (input.snapshotId && snapshots.get(input.snapshotId)?.namespace !== input.namespace) {
+        throw new ConfigError("snapshot_invalid", "Runtime state requires an existing snapshot in its namespace.");
+      }
+      const record: ConfigRuntimeState = { namespace: input.namespace, key: input.key, version: (input.expectedVersion ?? 0) + 1,
+        snapshotId: input.snapshotId, value: copyConfigValue(input.value), updatedAt: input.now };
+      runtimeStates.set(key, record);
+      return copyConfigValue(record);
+    },
+    async deleteRuntimeState(namespace, key, expectedVersion) {
+      open(); assertNamespace(namespace);
+      const id = JSON.stringify([namespace, key]);
+      if (runtimeStates.get(id)?.version !== expectedVersion) return false;
+      return runtimeStates.delete(id);
+    },
 
     async readHead(namespace) {
       open();
@@ -460,7 +493,7 @@ export function createMemoryConfigStore(): ConfigStore {
       const existing = snapshots.get(input.id);
       if (existing !== undefined) {
         if (sameSnapshotContent(existing, input)) {
-          return Promise.resolve(cloneSnapshot(existing));
+          return Promise.resolve({ ...cloneSnapshot(existing), refCount: existing.refCount + runtimeRefCount(input.id) });
         }
         throw new ConfigError("snapshot_invalid", `Snapshot "${input.id}" already exists with different content.`);
       }
@@ -483,7 +516,7 @@ export function createMemoryConfigStore(): ConfigStore {
     async readSnapshot(id) {
       open();
       const found = snapshots.get(id);
-      return Promise.resolve(found === undefined ? null : cloneSnapshot(found));
+      return Promise.resolve(found === undefined ? null : { ...cloneSnapshot(found), refCount: found.refCount + runtimeRefCount(id) });
     },
 
     async adjustSnapshotRefCount(id, delta) {
@@ -492,7 +525,7 @@ export function createMemoryConfigStore(): ConfigStore {
       if (found === undefined) return Promise.resolve(null);
       const updated = { ...found, refCount: Math.max(0, found.refCount + delta) };
       snapshots.set(id, updated);
-      return Promise.resolve(cloneSnapshot(updated));
+      return Promise.resolve({ ...cloneSnapshot(updated), refCount: updated.refCount + runtimeRefCount(id) });
     },
 
     async setSnapshotPinned(id, pinned) {
@@ -501,14 +534,14 @@ export function createMemoryConfigStore(): ConfigStore {
       if (found === undefined) return Promise.resolve(null);
       const updated = { ...found, pinned };
       snapshots.set(id, updated);
-      return Promise.resolve(cloneSnapshot(updated));
+      return Promise.resolve({ ...cloneSnapshot(updated), refCount: updated.refCount + runtimeRefCount(id) });
     },
 
     async listUnreferencedSnapshots(namespace, olderThan, limit = 100) {
       open();
       const result = [...snapshots.values()]
         .filter((entry) => entry.namespace === namespace)
-        .filter((entry) => !entry.pinned && entry.refCount === 0 && entry.createdAt <= olderThan)
+        .filter((entry) => !entry.pinned && entry.refCount === 0 && runtimeRefCount(entry.id) === 0 && entry.createdAt <= olderThan)
         .sort((a, b) => a.createdAt - b.createdAt)
         .slice(0, limit)
         .map(cloneSnapshot);
@@ -519,7 +552,7 @@ export function createMemoryConfigStore(): ConfigStore {
       open();
       const found = snapshots.get(id);
       if (found === undefined) return Promise.resolve();
-      if (found.pinned || found.refCount > 0) {
+      if (found.pinned || found.refCount > 0 || runtimeRefCount(id) > 0) {
         throw new ConfigError("snapshot_invalid", `Snapshot "${id}" is still referenced and cannot be deleted.`);
       }
       snapshots.delete(id);
@@ -631,6 +664,32 @@ export function createMemoryConfigStore(): ConfigStore {
 /** Deterministic content identity of a database document (stable key order). */
 export function contentHashOf(document: unknown): string {
   return createHash("sha256").update(stableStringify(document)).digest("hex");
+}
+
+export interface ExecutionConfigVersion {
+  readonly configSnapshotId: string | null;
+  readonly databaseRevision: number | null;
+  readonly fileDigest: string | null;
+  readonly routeId?: string;
+}
+
+/** CAS ledger for admission pins, legacy import and replica activation. */
+export interface ConfigRuntimeState {
+  readonly namespace: string;
+  readonly key: string;
+  readonly version: number;
+  readonly snapshotId: string | null;
+  readonly value: unknown;
+  readonly updatedAt: number;
+}
+
+export interface WriteConfigRuntimeState {
+  readonly namespace: string;
+  readonly key: string;
+  readonly expectedVersion: number | null;
+  readonly snapshotId: string | null;
+  readonly value: unknown;
+  readonly now: number;
 }
 
 /** Operation identity includes the file and format that determine its meaning. */

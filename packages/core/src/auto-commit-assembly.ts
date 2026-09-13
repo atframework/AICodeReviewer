@@ -33,9 +33,17 @@ export interface AssemblyCandidate {
    * with ordinary members is forbidden (design §5.2).
    */
   readonly rewriteReceiptId?: string;
+  /**
+   * Execution config snapshot the covering receipt pinned at admission
+   * (P4/H09). `null`/undefined marks legacy receipts accepted before
+   * snapshot pinning. Members pinned to different snapshots never share a
+   * batch: the executed plan must be one generation, so a snapshot change is
+   * a batch boundary on both sides.
+   */
+  readonly configSnapshotId?: string | null;
 }
 
-export type AssemblyCutReason = "same_source_run" | "merge_commit" | "rewrite_event";
+export type AssemblyCutReason = "same_source_run" | "merge_commit" | "rewrite_event" | "config_boundary";
 
 export interface AssemblyCut {
   readonly memberIds: readonly string[];
@@ -152,6 +160,19 @@ export function cutAutoCommitBatches(
     }
 
     const previous = run.members[run.members.length - 1];
+    // Execution snapshot boundary (H09): members accepted under different
+    // config snapshots execute on different generations, so they can never
+    // merge into one batch. Legacy (null) receipts group with their own kind.
+    // Rewrite events keep whole-event identity (one receipt = one snapshot).
+    if (
+      previous !== undefined &&
+      run.reason !== "rewrite_event" &&
+      (candidate.configSnapshotId ?? null) !== (previous.configSnapshotId ?? null)
+    ) {
+      finishRun(run);
+      run = { members: [candidate], reason: "config_boundary", closed: false };
+      continue;
+    }
     const startsNewRun =
       previous === undefined ||
       previous.sourceStatus !== "known" ||

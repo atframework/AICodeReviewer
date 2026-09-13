@@ -374,3 +374,15 @@ The resolved metadata is consumed by three subsystems:
    [Agent and Sandbox](/en/configuration/agent/) for the
    `context_compaction` settings and the Kilo requirement that the window be
    known (enable the catalog or set `context_window` in `overrides`).
+
+## Catalog and budget updates
+
+With database configuration enabled, catalog settings and model/triage chains
+apply to the next accepted task. Each configuration snapshot fixes the resolved
+metadata for its configured models, including across restart; refreshing the
+shared cache does not change an older task's fallback or summary model.
+
+Publishing a budget change keeps the process's accumulated daily spend. The
+next model call checks the new limit against reported costs. A response can push
+spend past the limit before the next call is blocked; this is not a remote billing
+hard cap. Daily accounting is in memory and resets on process restart.

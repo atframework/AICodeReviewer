@@ -35,6 +35,7 @@ import { sanitizeSourceUrl, type CommitMetadataRecord, type VcsAdapter } from "@
 import type { AutoCommitRuntime } from "./auto-commit-runtime.js";
 import type { WorkspaceRuntime } from "./workspace-runtime.js";
 import { normalizeP4Scope } from "./p4-webhook.js";
+import type { RuntimeConfigManager } from "./runtime-config.js";
 
 /** Trigger profile slice the resolver needs (p4 scopes / svn project roots). */
 export interface RoutingTriggerProfile {
@@ -51,6 +52,7 @@ export interface RoutingTriggerProfile {
 
 /** Envelope fields the resolver reads back from the persisted record. */
 export interface RoutingEnvelopePayload {
+  readonly configSnapshotId?: string | null;
   readonly revision: string;
   /** Provider event name recorded at intake (change-commit/post-commit). */
   readonly eventName?: string | undefined;
@@ -61,6 +63,7 @@ export interface RoutingEnvelopePayload {
 }
 
 export interface RoutingResolverOptions {
+  readonly runtimeConfig?: RuntimeConfigManager;
   readonly store: AutoCommitStore;
   readonly config: AppConfig;
   readonly runtime: AutoCommitRuntime;
@@ -124,7 +127,13 @@ export class RoutingReceiptResolver {
     for (const record of due) {
       let retryAt: number | undefined;
       try {
-        retryAt = await this.resolveOne(record, now);
+        const manager = this.options.runtimeConfig;
+        if (manager) {
+          const generation = await manager.resolveGeneration(envelopeOf(record).configSnapshotId ?? null);
+          retryAt = await manager.withGeneration(generation, () => this.resolveOne(record, now));
+        } else {
+          retryAt = await this.resolveOne(record, now);
+        }
       } catch (error) {
         // A resolver bug must not strand the record: same retry path as
         // adapter failures (W13), terminal after the attempt budget.
@@ -262,6 +271,7 @@ export class RoutingReceiptResolver {
         reviewEvent,
         deliveryId: `routing:${record.routingKey}:${entry.repoRef}`,
         resolution,
+        configSnapshotId: envelope.configSnapshotId ?? null,
         now,
       });
       receiptIds.push(accepted.receipt.receiptId);
@@ -308,7 +318,8 @@ export class RoutingReceiptResolver {
         provider === "svn"
           ? { vcs: "svn" as const, repo_ref: scope.repoRef, repository: root?.project ?? null, branch: scope.branch ?? null, ref: revision, project_key: projectKey }
           : { vcs: "p4" as const, repo_ref: scope.repoRef, branch: null, ref: revision, project_key: projectKey };
-      const resolution = this.options.workspaceRuntime.resolveForSource(record.triggerName, source, { provider_fields: providerFields });
+      const workspaceRuntime = this.options.runtimeConfig?.current().workspaceRuntime ?? this.options.workspaceRuntime;
+      const resolution = workspaceRuntime.resolveForSource(record.triggerName, source, { provider_fields: providerFields, target_kind: "commit" });
       const base = { repoRef: scope.repoRef, ...(scope.branch !== undefined ? { branch: scope.branch } : {}) };
       switch (resolution.kind) {
         case "no_match":

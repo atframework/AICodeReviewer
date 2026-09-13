@@ -18,6 +18,7 @@ import { z } from "zod";
 import { branchFromGitRef, describeWebhookSource } from "./source-descriptors.js";
 
 export interface VcsWebhookConfig {
+  readonly routingEnabled?: boolean;
   readonly isWorkspaceEnabled?: (workspaceId: string) => boolean;
   readonly triggerName: string;
   readonly workspaceId: string;
@@ -301,7 +302,7 @@ export function resolveWorkspaceForRepo(
     const normalizedMatch = normalizeRepositoryRef(mapping.match);
     return normalizedRepo === normalizedMatch || normalizedRepo.endsWith(`/${normalizedMatch}`);
   });
-  if (matched !== undefined) {
+  if (matched !== undefined && !config.routingEnabled) {
     assertEnabled(matched.workspace);
     return { workspaceId: matched.workspace, resolution: { kind: "legacy_binding", definitionId: matched.workspace } };
   }
@@ -309,7 +310,7 @@ export function resolveWorkspaceForRepo(
   // An explicit trigger-level repo binding always wins over match rules —
   // the legacy contract routes repoRef-equal events to the bound workspace
   // unconditionally.
-  if (config.repoRef !== undefined && normalizedRepo === normalizeRepositoryRef(config.repoRef)) {
+  if (!config.routingEnabled && config.repoRef !== undefined && normalizedRepo === normalizeRepositoryRef(config.repoRef)) {
     assertEnabled(config.workspaceId);
     return { workspaceId: config.workspaceId, resolution: { kind: "legacy_binding", definitionId: config.workspaceId } };
   }

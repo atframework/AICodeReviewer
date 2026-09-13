@@ -50,4 +50,15 @@ describe("checked-in configuration examples", () => {
     // Other fragments may use rules: [] to deliberately lift the window.
     expect([...discovered]).toEqual(expect.arrayContaining(["auto_commit", "auto_commit.schedule", "pull_request"]));
   });
+
+  it("validates the commented dynamic-source and secret-purpose example", async () => {
+    const yaml = await readFile(new URL("example/config.yaml", root), "utf8");
+    const block = yaml.match(/^# config_sources:\r?\n(?:#.*\r?\n)*/m)?.[0];
+    expect(block).toBeDefined();
+    const config = appConfigSchema.parse(parse(block!.replace(/^# ?/gm, "")));
+    expect(config.config_sources.database.enabled).toBe(true);
+    expect(config.config_sources.secret_refs).toEqual([{ env: "DB_LLM_KEY",
+      target: ["llm", "providers", "db-model", "api_key_env"],
+      destinations: { kind: "openai_compatible", base_url: "https://llm.example.com/v1" } }]);
+  });
 });

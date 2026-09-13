@@ -18,7 +18,11 @@ user-invocable: false
 4. Keep protected rules above common/project layers. Materialize canonical skills
    into native surfaces as needed, expose one active instruction surface, reject
    path collisions, and record dropped/unsupported capabilities in the manifest.
-5. Validate generated files, sandbox-visible paths, env, manifest, and actual
+5. For dynamic configuration, test an old pinned run and a new run through each
+   affected adapter's generated config, command, env and manifest. Resolve search
+   credentials after layering against deployment grants; repository-owned input
+   cannot increase approval or sandbox permissions (architecture §3.16).
+6. Validate generated files, sandbox-visible paths, env, manifest, and actual
    context/output collection. Use current registry names and implemented tools;
    stdout JSON/XML is a compatibility fallback to native MCP.
 

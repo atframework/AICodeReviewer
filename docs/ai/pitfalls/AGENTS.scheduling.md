@@ -8,6 +8,14 @@ automatic commit batches, PR windows, or deferrals.
 Sources: `packages/server/src/webhook-common.ts`, `bootstrap.ts`, `index.ts`,
 `review-deduplicator.ts`, `github-app-token.ts`, and matching tests.
 
+- Keep the latest pending target's configSnapshotId when replaying dedup work;
+  never reuse the completed run's scheduling extras. Persist it in the versioned
+  deferral envelope and restore it after restart. Routing receipts must carry the
+  pin through conversion; metadata adapters load the covering receipt's snapshot
+  (runtime-http, routing-admission, auto-commit-scheduler, deferral-recovery tests).
+  Exit the request AsyncLocalStorage scope before kicking shared scheduler timers;
+  otherwise later ticks keep that old generation for policies and concurrency.
+  The bootstrap timer boundary is covered in runtime-generation.test.ts.
 - Dedup identity isolates trigger/workspace and stable target; repeated PR
   commands across commits must share the intended target without collapsing
   unrelated events to `unknown`. Preserve provider-specific PR detail fetchers
@@ -95,6 +103,10 @@ architecture §3.1.1.
 - Every entry point checks planned time and actual attempt start, including
   retries and clock/process pauses. PR/MR schedule takes precedence over resolved
   auto-commit schedule. Keep decision logs and Events records.
+- Database-mode acceptance waits for the durable pin and deferred write before
+  returning 202. Dedup replay reads its execution window in the pending task's
+  generation, not the completing run's async scope (runtime-http and
+  deferral-recovery tests). A store failure retains the task pin for retry.
 - Persist outside-window arrivals without acquiring/releasing an active run's
   dedup key. Test production deduplicator and deferral manager together.
 - Claim before handoff; delete only the claimed row after successful scheduling.

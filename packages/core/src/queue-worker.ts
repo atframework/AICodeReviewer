@@ -5,12 +5,13 @@ export type QueueJobHandler<T = unknown> = (job: QueueJob<T>) => Promise<void>;
 
 export interface QueueWorkerOptions {
   readonly queue: ReviewQueue;
-  readonly concurrency: number;
-  readonly perWorkspaceConcurrency?: number;
+  readonly concurrency: number | (() => number);
+  readonly perWorkspaceConcurrency?: number | (() => number);
   readonly pollIntervalMs?: number;
   readonly lockTtlSeconds?: number;
   readonly rateLimiter?: MultiProviderRateLimiter;
   readonly workerId?: string;
+  readonly beforePoll?: () => Promise<unknown>;
 }
 
 export interface QueueWorker {
@@ -25,9 +26,10 @@ export function createQueueWorker(
   options: QueueWorkerOptions,
 ): QueueWorker {
   const workerId = options.workerId ?? `worker-${Date.now().toString(36)}`;
-  const concurrency = options.concurrency;
+  const concurrency = () => typeof options.concurrency === "function" ? options.concurrency() : options.concurrency;
   const pollIntervalMs = options.pollIntervalMs ?? 1000;
-  const perWorkspaceConcurrency = options.perWorkspaceConcurrency ?? 1;
+  const perWorkspaceConcurrency = () => typeof options.perWorkspaceConcurrency === "function"
+    ? options.perWorkspaceConcurrency() : options.perWorkspaceConcurrency ?? 1;
 
   let running = false;
   let activeJobs = 0;
@@ -47,13 +49,14 @@ export function createQueueWorker(
   }
 
   function getBlockedWorkspaceIds(): string[] {
-    if (perWorkspaceConcurrency <= 0) {
+    const limit = perWorkspaceConcurrency();
+    if (limit <= 0) {
       return [];
     }
 
     const blocked: string[] = [];
     for (const [workspaceId, count] of workspaceActive.entries()) {
-      if (count >= perWorkspaceConcurrency) {
+      if (count >= limit) {
         blocked.push(workspaceId);
       }
     }
@@ -85,8 +88,9 @@ export function createQueueWorker(
     if (!running) return;
 
     try {
-      while (activeJobs < concurrency && running) {
-        const job = await options.queue.dequeue(workerId, concurrency, {
+      await options.beforePoll?.();
+      while (activeJobs < concurrency() && running) {
+        const job = await options.queue.dequeue(workerId, concurrency(), {
           excludedWorkspaceIds: getBlockedWorkspaceIds(),
         });
         if (!job) break;

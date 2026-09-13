@@ -257,7 +257,8 @@ function segmentPatternToRegExp(pattern: string): RegExp {
   return new RegExp(`^${regexBody}$`, "u");
 }
 
-function globMatchesPath(pattern: string, pathValue: string): boolean {
+/** Repository path glob: * stays within a segment, ** spans zero or more directories. */
+export function globMatchesPath(pattern: string, pathValue: string): boolean {
   const normalizedPattern = normalizePath(pattern);
   const normalizedPath = normalizePath(pathValue);
 

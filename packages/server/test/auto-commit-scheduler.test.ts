@@ -199,6 +199,24 @@ function makeScheduler(options: {
 const alice = { authorName: "Alice", authorEmail: "alice@example.com" };
 
 describe("AutoCommitScheduler", () => {
+  it("uses receipt snapshots for metadata and splits batches on the snapshot boundary", async () => {
+    const store = createMemoryAutoCommitStore();
+    const policy = makePolicy({ delay_seconds: 0 });
+    const adapter = new ScriptedAdapter([{ sha: "A1", parents: ["A0"], ...alice }, { sha: "A2", parents: ["A1"], ...alice }]);
+    const getAdapter = vi.fn(async () => adapter as never);
+    const executed: BatchExecutionContext[] = [];
+    for (const [index, snapshot] of ["cfg-first", "cfg-second"].entries()) {
+      await store.acceptReceipt({ deliveryKey: `snapshot-${index}`, workspaceId: "ws1", triggerName: "gitea",
+        provider: "gitea", vcs: "git", sourceNamespace: "git:example.com/org/repo", scopeRef: "refs/heads/main", historyGeneration: 0,
+        coverage: { kind: "range", base: `A${index}`, head: `A${index + 1}` }, envelope: { repoRef: "org/repo" },
+        delaySeconds: 0, policyVersion: policy.policyVersion, configSnapshotId: snapshot, now: T0 });
+    }
+    const scheduler = makeScheduler({ store, policy, adapter, executed, now: () => T0, tuning: { getAdapter } });
+    for (let i = 0; i < 5; ++i) await scheduler.tick();
+    expect(getAdapter.mock.calls.map(call => (call as unknown[])[1])).toEqual(expect.arrayContaining(["cfg-first", "cfg-second"]));
+    expect(executed.map(ctx => ctx.batch.configSnapshotId)).toEqual(["cfg-first", "cfg-second"]);
+    expect(executed.flatMap(ctx => ctx.members.map(member => member.revision))).toEqual(["A1", "A2"]);
+  });
   it("backs off missing adapters and records terminal failure instead of continuously polling", async () => {
     const store = createMemoryAutoCommitStore();
     const policy = makePolicy({ delay_seconds: 0 });

@@ -47,6 +47,10 @@ function publishInput(overrides: Partial<ConfigPublishInput> = {}): ConfigPublis
     operationId: "op-1",
     actor: "tester",
     file: {
+      config_sources: { secret_refs: [
+        { env: "FEISHU_URL", target: ["outputs", "channels", "chat", "webhook_url_env"], destinations: { kind: "feishu_bot", webhook_url_env: "FEISHU_URL" } },
+        { env: "GH_TOKEN", target: ["triggers", "gh", "token_env"], destinations: { kind: "github" } },
+      ] },
       llm: {
         providers: [{ id: "file-main", kind: "ollama" }],
         model_chain: { default: [{ provider: "file-main", model: "m", role: "any" }] },

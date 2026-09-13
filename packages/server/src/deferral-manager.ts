@@ -19,6 +19,7 @@ export interface DeferredTriggerTarget {
   readonly eventName: string;
   readonly decoded: unknown;
   readonly reviewEvent: ReviewEvent;
+  readonly configSnapshotId?: string | null;
 }
 
 export type DeferralResumeHandler = (target: DeferredTriggerTarget) => void;
@@ -93,14 +94,16 @@ export class ReviewDeferralManager {
   }
 
   /** Serializes async store operations to preserve the previous sync ordering. */
-  private enqueue(op: () => Promise<void>): void {
+  private enqueue(op: () => Promise<void>): Promise<void> {
     const result = this.storeQueue.then(op, op);
     this.storeQueue = result.catch(() => {});
+    return result;
   }
 
   /** Persist (or memorize) a deferral and arm its wake-up timer. */
-  defer(target: DeferredTriggerTarget, notBeforeMs: number): void {
-    if (this.stopped) return;
+  defer(target: DeferredTriggerTarget, notBeforeMs: number, requireDurable = false): Promise<void> {
+    if (this.stopped) return requireDurable ? Promise.reject(new Error("Deferral manager is stopped.")) : Promise.resolve();
+    if (requireDurable && !this.store) return Promise.reject(new Error("Durable deferral storage is unavailable."));
     const key = computeDeferralKey(target.reviewEvent);
     notBeforeMs = Math.max(notBeforeMs, this.deadlines.get(key) ?? 0);
     const generation = Symbol(key);
@@ -115,7 +118,8 @@ export class ReviewDeferralManager {
           provider: target.provider,
           eventName: target.eventName,
           reviewEvent: JSON.stringify(target.reviewEvent),
-          payload: safeSerialize(target.decoded),
+          payload: safeSerialize({ aicrDeferralVersion: 1, decoded: target.decoded,
+            ...(target.configSnapshotId !== undefined ? { configSnapshotId: target.configSnapshotId } : {}) }),
           notBefore: new Date(notBeforeMs),
         });
       const settle = async (persisted: Promise<ReviewDeferralRow>): Promise<void> => {
@@ -126,6 +130,7 @@ export class ReviewDeferralManager {
             this.armTimer(key, row.notBefore.getTime());
           }
         } catch (error) {
+          if (requireDurable) throw error;
           // Persistence failure must not lose the event: fall back to memory.
           console.warn(JSON.stringify({
             level: "warn",
@@ -144,19 +149,33 @@ export class ReviewDeferralManager {
         // PG: the upsert joins the serialized queue so consecutive defer()
         // calls for one key observe each other's row — issued concurrently,
         // they race the not-before clamp and can resurrect an earlier wake.
-        this.enqueue(() => settle(issueUpsert()));
+        return this.enqueue(() => settle(issueUpsert()));
       } else {
         // Issue the upsert immediately: on the sqlite backend the body
         // executes synchronously, so a defer() call leaves a visible row just
         // like the pre-async store contract (raw-sql consumers/tests rely on
         // it). Only the continuation joins the queue.
         const persisted = issueUpsert();
-        this.enqueue(() => settle(persisted));
+        return this.enqueue(() => settle(persisted));
       }
     } else {
       this.memoryTargets.set(key, target);
       this.armTimer(key, notBeforeMs);
+      return Promise.resolve();
     }
+  }
+
+  /** Include claimed rows: handoff is not complete until scheduling succeeds. */
+  async listActiveConfigSnapshotIds(): Promise<readonly string[]> {
+    await this.storeQueue;
+    const ids = new Set<string>();
+    for (const target of this.memoryTargets.values()) if (target.configSnapshotId) ids.add(target.configSnapshotId);
+    if (this.store) for (const row of await listPendingReviewDeferrals(this.store, true)) {
+      const payload: unknown = row.payload ? JSON.parse(row.payload) : null;
+      if (payload && typeof payload === "object" && "aicrDeferralVersion" in payload && payload.aicrDeferralVersion === 1
+        && "configSnapshotId" in payload && typeof payload.configSnapshotId === "string") ids.add(payload.configSnapshotId);
+    }
+    return [...ids];
   }
 
   /**
@@ -324,10 +343,18 @@ export class ReviewDeferralManager {
 
     try {
       const reviewEvent = createReviewEvent(JSON.parse(row.reviewEvent) as ReviewEvent);
+      const payload: unknown = row.payload ? JSON.parse(row.payload) : undefined;
+      const envelope = payload !== null && typeof payload === "object" &&
+        "aicrDeferralVersion" in payload && payload.aicrDeferralVersion === 1
+        ? payload as { decoded?: unknown; configSnapshotId?: unknown } : undefined;
+      if (envelope && envelope.configSnapshotId !== undefined && envelope.configSnapshotId !== null && typeof envelope.configSnapshotId !== "string") {
+        throw new Error("Invalid deferred configuration snapshot id.");
+      }
       return {
         provider: row.provider as ReviewProvider,
         eventName: row.eventName,
-        decoded: row.payload ? (JSON.parse(row.payload) as unknown) : undefined,
+        decoded: envelope ? envelope.decoded : payload,
+        ...(envelope?.configSnapshotId !== undefined ? { configSnapshotId: envelope.configSnapshotId as string | null } : {}),
         reviewEvent,
       };
     } catch (error) {

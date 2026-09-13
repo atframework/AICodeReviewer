@@ -115,7 +115,7 @@ describe("aicr migrate", () => {
     const report = JSON.parse(stdout.output) as Array<{ namespace: string; pending: string[] }>;
     expect(report).toHaveLength(2);
     expect(report[0]?.namespace).toBe("config");
-    expect(report[0]?.pending).toEqual(["001_config_initial"]);
+    expect(report[0]?.pending).toEqual(["001_config_initial", "002_config_runtime_state"]);
     expect(report[1]?.namespace).toBe("store");
     expect(report[1]?.pending).toHaveLength(9);
     // Truly read-only (M19): a status probe never creates the database file.
@@ -140,7 +140,7 @@ describe("aicr migrate", () => {
     // The ledger and tables are real (M01 evidence through the CLI surface).
     const db = await openDb(dbPath);
     const rows = db.prepare("SELECT id, to_version FROM schema_migrations WHERE namespace = 'config'").all() as Array<{ id: string; to_version: number }>;
-    expect(rows).toEqual([{ id: "001_config_initial", to_version: 1 }]);
+    expect(rows).toEqual([{ id: "001_config_initial", to_version: 1 }, { id: "002_config_runtime_state", to_version: 2 }]);
     expect(db.prepare("SELECT name FROM sqlite_master WHERE name = 'config_revisions'").all()).toHaveLength(1);
     db.close();
 

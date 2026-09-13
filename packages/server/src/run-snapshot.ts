@@ -1,11 +1,12 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
-import type { ReviewEvent } from "@aicr/core";
+import type { ReviewEvent, ExecutionConfigVersion } from "@aicr/core";
 
 import type { ReviewOrchestrationWebhookSummary } from "./review-orchestrator.js";
 
 export interface RunSnapshot {
+  readonly configVersion?: ExecutionConfigVersion;
   readonly runId: string;
   readonly timestamp: string;
   readonly reviewEvent: ReviewEvent;

@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { assertReflectionLimits } from "./reflection-limit-contract.js";
 import { mkdirSync, rmSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -571,6 +572,7 @@ describe("project lifecycle", () => {
 });
 
 describe("reflection memory", () => {
+  it("enforces UTF-8 bytes, expiry, retention and entry count together", async () => { await assertReflectionLimits(store); });
   it("creates the reflection_memory table via migration", async () => {
     const tables = store.sqlite
       .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")

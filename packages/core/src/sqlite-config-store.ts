@@ -26,6 +26,7 @@ import type {
   ConfigHeadState,
   ConfigRevisionRecord,
   ConfigRuntimeSnapshotRecord,
+  ConfigRuntimeState,
   ConfigStore,
   WorkspaceBindingRecord,
   WorkspaceBindingState,
@@ -83,7 +84,7 @@ async function loadBetterSqlite3(): Promise<SqliteModule> {
 // ---------------------------------------------------------------------------
 
 export const CONFIG_STORE_NAMESPACE = "config";
-export const CONFIG_STORE_SCHEMA_VERSION = 1;
+export const CONFIG_STORE_SCHEMA_VERSION = 2;
 
 const CONFIG_STORE_SQL_001 = `
       CREATE TABLE IF NOT EXISTS config_revisions (
@@ -161,6 +162,11 @@ const CONFIG_STORE_SQL_001 = `
 /** Config-namespace steps; shared with the CLI migrate command (M17-M20). */
 export const CONFIG_STORE_MIGRATIONS: readonly MigrationStep[] = [
   sqliteSqlStep("001_config_initial", 0, 1, CONFIG_STORE_SQL_001),
+  sqliteSqlStep("002_config_runtime_state", 1, 2, `CREATE TABLE config_runtime_state (
+    namespace TEXT NOT NULL, key TEXT NOT NULL, version BIGINT NOT NULL,
+    snapshot_id TEXT REFERENCES config_runtime_snapshots(id), record TEXT NOT NULL,
+    PRIMARY KEY(namespace, key));
+    CREATE INDEX config_runtime_state_snapshot ON config_runtime_state(snapshot_id);`),
 ];
 
 export function createConfigStoreMigrationPlan(): NamespaceMigrationPlan {
@@ -434,6 +440,36 @@ export async function createSqliteConfigStore(options: SqliteConfigStoreOptions)
 
   return {
     backendKind: "sqlite",
+    async readRuntimeState(namespace, key) {
+      open(); assertNamespace(namespace);
+      const row = db.prepare("SELECT record FROM config_runtime_state WHERE namespace = ? AND key = ?").get(namespace, key) as { record: string } | undefined;
+      return row ? JSON.parse(row.record) as ConfigRuntimeState : null;
+    },
+    async listRuntimeStates(namespace) {
+      open(); assertNamespace(namespace);
+      return (db.prepare("SELECT record FROM config_runtime_state WHERE namespace = ? ORDER BY key").all(namespace) as { record: string }[])
+        .map(row => JSON.parse(row.record) as ConfigRuntimeState);
+    },
+    async writeRuntimeState(input) {
+      open(); assertNamespace(input.namespace);
+      return db.transaction(() => {
+        const previous = db.prepare("SELECT version FROM config_runtime_state WHERE namespace = ? AND key = ?").get(input.namespace, input.key) as { version: number } | undefined;
+        if ((previous?.version ?? null) !== input.expectedVersion) return null;
+        if (input.snapshotId && !db.prepare("SELECT id FROM config_runtime_snapshots WHERE id = ? AND namespace = ?").get(input.snapshotId, input.namespace)) {
+          throw new ConfigError("snapshot_invalid", "Runtime state requires an existing snapshot in its namespace.");
+        }
+        const record: ConfigRuntimeState = { namespace: input.namespace, key: input.key, version: (input.expectedVersion ?? 0) + 1,
+          snapshotId: input.snapshotId, value: input.value, updatedAt: input.now };
+        db.prepare(`INSERT INTO config_runtime_state(namespace,key,version,snapshot_id,record) VALUES(?,?,?,?,?)
+          ON CONFLICT(namespace,key) DO UPDATE SET version=excluded.version,snapshot_id=excluded.snapshot_id,record=excluded.record`)
+          .run(input.namespace, input.key, record.version, input.snapshotId, JSON.stringify(record));
+        return JSON.parse(JSON.stringify(record)) as ConfigRuntimeState;
+      }).immediate();
+    },
+    async deleteRuntimeState(namespace, key, expectedVersion) {
+      open(); assertNamespace(namespace);
+      return db.prepare("DELETE FROM config_runtime_state WHERE namespace = ? AND key = ? AND version = ?").run(namespace, key, expectedVersion).changes > 0;
+    },
 
     async readHead(namespace) {
       open();
@@ -522,7 +558,7 @@ export async function createSqliteConfigStore(options: SqliteConfigStoreOptions)
           input.contentHash,
           input.now,
         );
-        const row = db.prepare("SELECT * FROM config_runtime_snapshots WHERE id = ?").get(input.id) as SnapshotRow | undefined;
+        const row = db.prepare("SELECT s.*, s.ref_count + (SELECT count(*) FROM config_runtime_state r WHERE r.snapshot_id=s.id) AS ref_count FROM config_runtime_snapshots s WHERE id = ?").get(input.id) as SnapshotRow | undefined;
         if (inserted.changes > 0) return rowToSnapshot(row as SnapshotRow); // present: this connection just inserted it
         if (row === undefined) continue; // a concurrent delete won the gap; retry the insert
         if (sameSnapshotContent(rowToSnapshot(row), input)) return rowToSnapshot(row);
@@ -532,7 +568,8 @@ export async function createSqliteConfigStore(options: SqliteConfigStoreOptions)
 
     async readSnapshot(id) {
       open();
-      const row = db.prepare("SELECT * FROM config_runtime_snapshots WHERE id = ?").get(id) as SnapshotRow | undefined;
+      const row = db.prepare(`SELECT s.*, s.ref_count + (SELECT count(*) FROM config_runtime_state r WHERE r.snapshot_id=s.id) AS ref_count
+        FROM config_runtime_snapshots s WHERE id = ?`).get(id) as SnapshotRow | undefined;
       return row === undefined ? null : rowToSnapshot(row);
     },
 
@@ -543,14 +580,14 @@ export async function createSqliteConfigStore(options: SqliteConfigStoreOptions)
             SET ref_count = MAX(0, ref_count + ?)
           WHERE id = ?`,
       ).run(delta, id);
-      const row = db.prepare("SELECT * FROM config_runtime_snapshots WHERE id = ?").get(id) as SnapshotRow | undefined;
+      const row = db.prepare("SELECT s.*, s.ref_count + (SELECT count(*) FROM config_runtime_state r WHERE r.snapshot_id=s.id) AS ref_count FROM config_runtime_snapshots s WHERE id = ?").get(id) as SnapshotRow | undefined;
       return row === undefined ? null : rowToSnapshot(row);
     },
 
     async setSnapshotPinned(id, pinned) {
       open();
       db.prepare("UPDATE config_runtime_snapshots SET pinned = ? WHERE id = ?").run(pinned ? 1 : 0, id);
-      const row = db.prepare("SELECT * FROM config_runtime_snapshots WHERE id = ?").get(id) as SnapshotRow | undefined;
+      const row = db.prepare("SELECT s.*, s.ref_count + (SELECT count(*) FROM config_runtime_state r WHERE r.snapshot_id=s.id) AS ref_count FROM config_runtime_snapshots s WHERE id = ?").get(id) as SnapshotRow | undefined;
       return row === undefined ? null : rowToSnapshot(row);
     },
 
@@ -560,6 +597,7 @@ export async function createSqliteConfigStore(options: SqliteConfigStoreOptions)
       const rows = db.prepare(
         `SELECT * FROM config_runtime_snapshots
           WHERE namespace = ? AND pinned = 0 AND ref_count = 0 AND created_at <= ?
+            AND NOT EXISTS (SELECT 1 FROM config_runtime_state r WHERE r.snapshot_id = config_runtime_snapshots.id)
           ORDER BY created_at ASC
           LIMIT ?`,
       ).all(namespace, olderThan, limit) as SnapshotRow[];
@@ -573,7 +611,7 @@ export async function createSqliteConfigStore(options: SqliteConfigStoreOptions)
       // task's snapshot. The follow-up SELECT only classifies the miss:
       // row gone = idempotent no-op, row present = still referenced.
       const deleted = db.prepare(
-        "DELETE FROM config_runtime_snapshots WHERE id = ? AND pinned = 0 AND ref_count = 0",
+        "DELETE FROM config_runtime_snapshots WHERE id = ? AND pinned = 0 AND ref_count = 0 AND NOT EXISTS (SELECT 1 FROM config_runtime_state r WHERE r.snapshot_id = config_runtime_snapshots.id)",
       ).run(id);
       if (deleted.changes > 0) return;
       const row = db.prepare("SELECT pinned, ref_count FROM config_runtime_snapshots WHERE id = ?").get(id) as

@@ -3197,7 +3197,9 @@ describe("bootstrapServerApp", () => {
       } as Partial<AppConfig>);
       const app = await bootstrapServerApp({ config, baseSystemPrompt: "test" });
       const route = app.reviewOrchestration!.modelOptionsResolver!("unlisted-workspace");
-      expect(route).toBe(app.reviewOrchestration!.modelOptionsResolver!());
+      // Workspace budget accounting uses independent clients over the same model.
+      expect(route.model).toEqual(app.reviewOrchestration!.modelOptionsResolver!().model);
+      expect(route).toBe(app.reviewOrchestration!.modelOptionsResolver!("unlisted-workspace"));
       expect(route.model.providerId).toBe("openai-prod");
       expect(route.model.modelId).toBe("gpt-4o-mini");
       expect(route.agentModelChain).toEqual([route.model]);
@@ -3432,8 +3434,11 @@ describe("bootstrapServerApp", () => {
         baseSystemPrompt: "test",
       });
 
-      expect(result.gitea).toBeDefined();
-      expect(result.gitea?.triggerName).toBe("gitea-internal");
+      // Webhook fields are fixed-dispatcher providers (P4/H06): resolve the
+      // current generation's profiles per request.
+      const giteaConfigs = await (result.gitea as unknown as () => Promise<readonly { triggerName: string }[]>)();
+      expect(giteaConfigs).toBeDefined();
+      expect(giteaConfigs.map((entry) => entry.triggerName)).toContain("gitea-internal");
     } finally {
       if (originalKey === undefined) {
         delete process.env.OPENAI_API_KEY;
@@ -3476,8 +3481,11 @@ describe("bootstrapServerApp", () => {
         baseSystemPrompt: "test",
       });
 
-      expect(Array.isArray(result.github)).toBe(true);
-      expect(result.github).toMatchObject([
+      const githubConfigs = await (result.github as unknown as () => Promise<
+        readonly { triggerName: string; workspaceId: string; repoRef?: string }[]
+      >)();
+      expect(Array.isArray(githubConfigs)).toBe(true);
+      expect(githubConfigs).toMatchObject([
         {
           triggerName: "github-atframework",
           workspaceId: "github-atsf4g-co",
@@ -4514,8 +4522,10 @@ describe("resolveP4TriggerConfig", () => {
       expect(result.reviewOrchestration?.model.catalogSource).toBe("bundled");
       expect(redisMock.instances).toHaveLength(1);
       expect(redisMock.instances[0]!.connectCount).toBe(1);
-      expect(redisMock.instances[0]!.quitCount).toBe(1);
+      expect(redisMock.instances[0]!.quitCount).toBe(0);
       expect(redisMock.stores.get("redis://catalog-test")?.has("catalog-test:model-catalog:entry:openai%2Fgpt-4o-mini")).toBe(true);
+      await result.closeAutoCommit?.();
+      expect(redisMock.instances[0]!.quitCount).toBe(1);
     } finally {
       delete process.env.REDIS_URL;
       await rm(tmpDir, { recursive: true, force: true });

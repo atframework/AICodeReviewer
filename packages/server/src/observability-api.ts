@@ -24,7 +24,13 @@ import {
 import type { LiveRunRegistry } from "./live-runs.js";
 
 export interface ObservabilityApiOptions {
-  readonly store: StoreDb;
+  /**
+   * Business stats store. Optional since P5: login/session and the live-run
+   * view work without it, and config management never needed it. The stats,
+   * runs, projects, providers, and events endpoints register only when a
+   * store is present (A04: availability must be explicit, not a crash).
+   */
+  readonly store?: StoreDb;
   readonly adminAuth: AdminAuthConfig;
   /** Durable admin sessions (P2): sha256-hashed, TTL-bound, multi-process. */
   readonly sessionStore: AdminSessionStore;
@@ -84,6 +90,10 @@ function getLoginAttemptKey(username: string, forwardedFor: string | undefined):
   return `${client}:${username.toLowerCase()}`;
 }
 
+function statsUnavailable(c: { json(body: unknown, status: 503): Response }): Response {
+  return c.json({ error: "stats_unavailable", message: "The stats store is not configured on this deployment; login, config management, and live runs remain available." }, 503);
+}
+
 export function createObservabilityApi(options: ObservabilityApiOptions): Hono {
   const api = new Hono();
   const authContext: AdminAuthContext = { config: options.adminAuth, sessions: options.sessionStore };
@@ -137,23 +147,31 @@ export function createObservabilityApi(options: ObservabilityApiOptions): Hono {
   api.post("/logout", authMiddleware, async (c) => {
     const authorization = c.req.header("authorization");
     if (authorization) {
-      const token = authorization.slice("bearer ".length);
+      const token = authorization.slice(7);
       await revokeAdminSession(authContext, token);
     }
     return c.json({ ok: true });
   });
 
-  api.get("/stats", authMiddleware, async (c) => {
+  if (!options.store) {
+    api.get("/stats", authMiddleware, (c) => statsUnavailable(c));
+    api.get("/stats/projects", authMiddleware, (c) => statsUnavailable(c));
+    api.get("/stats/providers", authMiddleware, (c) => statsUnavailable(c));
+    api.get("/runs", authMiddleware, (c) => statsUnavailable(c));
+    api.get("/events", authMiddleware, (c) => statsUnavailable(c));
+  } else {
+    const store = options.store;
+    api.get("/stats", authMiddleware, async (c) => {
     const tz = options.timezone ?? "UTC";
     const windows = getTimeWindows();
 
-    const overview = await getOverviewStats(options.store);
-    const today = await getOverviewStats(options.store, windows.today);
-    const thisWeek = await getOverviewStats(options.store, windows.thisWeek);
-    const thisMonth = await getOverviewStats(options.store, windows.thisMonth);
-    const projects = await getProjectStats(options.store);
-    const providerModels = await getProviderModelStats(options.store);
-    const recentRuns = await getRecentRuns(options.store, 20);
+    const overview = await getOverviewStats(store);
+    const today = await getOverviewStats(store, windows.today);
+    const thisWeek = await getOverviewStats(store, windows.thisWeek);
+    const thisMonth = await getOverviewStats(store, windows.thisMonth);
+    const projects = await getProjectStats(store);
+    const providerModels = await getProviderModelStats(store);
+    const recentRuns = await getRecentRuns(store, 20);
 
     const result: DashboardStats = {
       overview,
@@ -174,7 +192,7 @@ export function createObservabilityApi(options: ObservabilityApiOptions): Hono {
     if (sinceDate === null) {
       return c.json({ error: "bad_request", message: "since must be a valid date" }, 400);
     }
-    const projects = await getProjectStats(options.store, sinceDate);
+    const projects = await getProjectStats(store, sinceDate);
     return c.json(projects);
   });
 
@@ -183,25 +201,14 @@ export function createObservabilityApi(options: ObservabilityApiOptions): Hono {
     if (sinceDate === null) {
       return c.json({ error: "bad_request", message: "since must be a valid date" }, 400);
     }
-    const providers = await getProviderModelStats(options.store, sinceDate);
+    const providers = await getProviderModelStats(store, sinceDate);
     return c.json(providers);
   });
 
   api.get("/runs", authMiddleware, async (c) => {
     const limit = parseLimit(c.req.query("limit"));
-    const runs = await getRecentRuns(options.store, limit);
+    const runs = await getRecentRuns(store, limit);
     return c.json(runs);
-  });
-
-  // Currently executing analyses from the in-process live-run registry.
-  // Streaming agents report completed turns; other invocations report on exit.
-  // Entries vanish on settle or restart; completed runs appear in /runs.
-  api.get("/runs/live", authMiddleware, async (c) => {
-    c.header("Cache-Control", "no-store");
-    return c.json({
-      serverTime: new Date().toISOString(),
-      runs: options.liveRuns?.list() ?? [],
-    });
   });
 
   // Receipt-time webhook/trigger event log backing the dashboard Events
@@ -209,8 +216,21 @@ export function createObservabilityApi(options: ObservabilityApiOptions): Hono {
   // latest 100 entries and the client pages 20 per page.
   api.get("/events", authMiddleware, async (c) => {
     const limit = parseLimit(c.req.query("limit"));
-    const events = await getRecentWebhookEvents(options.store, limit);
+    const events = await getRecentWebhookEvents(store, limit);
     return c.json(events);
+  });
+  }
+
+  // Currently executing analyses from the in-process live-run registry.
+  // Streaming agents report completed turns; other invocations report on exit.
+  // Entries vanish on settle or restart; completed runs appear in /runs.
+  // Store-independent: works without a stats backend (P5 decoupling).
+  api.get("/runs/live", authMiddleware, async (c) => {
+    c.header("Cache-Control", "no-store");
+    return c.json({
+      serverTime: new Date().toISOString(),
+      runs: options.liveRuns?.list() ?? [],
+    });
   });
 
 

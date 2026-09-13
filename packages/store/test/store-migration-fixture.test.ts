@@ -118,6 +118,7 @@ describe("store migration from a real 001–006 ledger (M02)", () => {
         "config_heads",
         "config_revisions",
         "config_runtime_snapshots",
+        "config_runtime_state",
         "schema_migrations",
         "workspace_bindings",
       ]);

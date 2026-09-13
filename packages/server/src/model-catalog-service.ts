@@ -718,6 +718,7 @@ export interface ModelCatalogService {
 	ensureRefreshed(): Promise<void>;
 	resolve(providerId: string, modelId: string): ResolvedModelCatalog;
 	enrichModelSpec(spec: ModelSpec): ModelSpec;
+  freezeModels(specs: readonly ModelSpec[]): void;
 }
 
 export function createModelCatalogService(options: ModelCatalogServiceOptions): ModelCatalogService {
@@ -738,6 +739,7 @@ export function createModelCatalogService(options: ModelCatalogServiceOptions): 
 
 	let bundledCatalog: ReadonlyMap<string, ModelCatalogEntry> | undefined;
 	let refreshInFlight: Promise<void> | undefined;
+  const frozen = new Map<string, ResolvedModelCatalog>();
 
 	function loadBundledSnapshot(): ReadonlyMap<string, ModelCatalogEntry> {
 		if (bundledCatalog) return bundledCatalog;
@@ -863,6 +865,8 @@ export function createModelCatalogService(options: ModelCatalogServiceOptions): 
 	}
 
 	function resolve(providerId: string, modelId: string): ResolvedModelCatalog {
+		const cached = frozen.get(JSON.stringify([providerId, modelId]));
+		if (cached) return structuredClone(cached);
 		if (!enabled) {
 			return { source: "config" };
 		}
@@ -927,5 +931,7 @@ export function createModelCatalogService(options: ModelCatalogServiceOptions): 
 		return merged as unknown as ModelSpec;
 	}
 
-	return { ensureRefreshed, resolve, enrichModelSpec };
+	return { ensureRefreshed, resolve, enrichModelSpec, freezeModels(specs) {
+    for (const spec of specs) frozen.set(JSON.stringify([spec.providerId, spec.modelId]), structuredClone(resolve(spec.providerId, spec.modelId)));
+  } };
 }

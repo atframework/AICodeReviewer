@@ -117,6 +117,21 @@ provider 专属字段（`webhook_secret_env`、`token_env`、`port`、`user_env`
 | `workspaces.defaults.model_chain` | string | 继承 | 覆盖主链组名，引用 `llm.model_chain` |
 | `workspaces.defaults.triage_model_chain` | string | 继承 | 覆盖生命周期分析组名；各层均未配置时使用该 workspace 主链 |
 | `workspaces.defaults.agent.default` | enum | — | 这组 workspace 的默认 agent kind（当前版本运行时未生效，见下方说明） |
+| `workspaces.defaults.agent.timeout_seconds` | int > 0 | — | 单次 run 硬超时；超时时杀整棵进程树 |
+| `workspaces.defaults.agent.auto_approve` | boolean | — | 传给所选 adapter；CLI 支持时 false 取消自动批准 |
+| `workspaces.defaults.agent.context_compaction.auto` | boolean | — | 启用自动压缩 |
+| `workspaces.defaults.agent.context_compaction.threshold_percent` | int 1–100 | — | 压缩触发阈值 |
+| `workspaces.defaults.agent.context_compaction.prune` | boolean | — | 修剪压缩后的历史 |
+| `workspaces.defaults.agent.web_search.enabled` | boolean | — | 为评审启用 agent 内置搜索工具（omp `web_search.enabled`；kilo/opencode permission + 激活 env；claude-code/copilot-cli CLI 开关） |
+| `workspaces.defaults.agent.web_search.providers` | string[] | — | 有序 provider：omp 使用完整链；kilo 仅接受 `exa`；opencode 选择首个 `exa`/`parallel` |
+| `workspaces.defaults.agent.web_search.exclude` | string[] | — | 从搜索链路剔除的 provider id → `providers.webSearchExclude` |
+| `workspaces.defaults.agent.web_search.timeout_seconds` | int 1–300 | — | 单 provider 传输超时 → `providers.webSearchTimeoutSeconds` |
+| `workspaces.defaults.agent.web_search.credentials.<id>` | string | — | 搜索凭据 id → 宿主 env 名；启用搜索的 adapter 通过 `${VAR}` 引用注入所支持的原生 env |
+| `workspaces.defaults.agent.web_search.searxng.endpoint` | string | — | SearXNG 端点 URL |
+| `workspaces.defaults.agent.web_search.searxng.categories` | string | — | SearXNG 分类过滤 |
+| `workspaces.defaults.agent.web_search.searxng.engines` | string | — | SearXNG 引擎过滤 |
+| `workspaces.defaults.agent.web_search.searxng.language` | string | — | SearXNG 语言过滤 |
+| `workspaces.defaults.agent.web_search.searxng.safesearch` | int 0–2 | — | SearXNG 安全搜索级别 |
 | `workspaces.defaults.outputs` | object | — | 默认 outputs（见 `outputs` 的 workspace 字段） |
 | `workspaces.defaults.prompt.base_system_prompt_file` | string | — | 自定义 base system prompt 文件（相对于部署根目录） |
 | `workspaces.defaults.prompt.force_skills` | string[] | — | 始终激活的技能名，忽略 `Applies To` glob |
@@ -148,6 +163,21 @@ provider 专属字段（`webhook_secret_env`、`token_env`、`port`、`user_env`
 | `workspaces.instances.<id>.model_chain` | string | 继承 | 覆盖主链组名，引用 `llm.model_chain` |
 | `workspaces.instances.<id>.triage_model_chain` | string | 继承 | 覆盖生命周期分析组名；各层均未配置时使用该 workspace 主链 |
 | `workspaces.instances.<id>.agent.default` | enum | — | agent kind 覆盖（当前版本运行时未生效，见下方说明） |
+| `workspaces.instances.<id>.agent.timeout_seconds` | int > 0 | — | 单次 run 硬超时；超时时杀整棵进程树 |
+| `workspaces.instances.<id>.agent.auto_approve` | boolean | — | 传给所选 adapter；CLI 支持时 false 取消自动批准 |
+| `workspaces.instances.<id>.agent.context_compaction.auto` | boolean | — | 启用自动压缩 |
+| `workspaces.instances.<id>.agent.context_compaction.threshold_percent` | int 1–100 | — | 压缩触发阈值 |
+| `workspaces.instances.<id>.agent.context_compaction.prune` | boolean | — | 修剪压缩后的历史 |
+| `workspaces.instances.<id>.agent.web_search.enabled` | boolean | — | 为评审启用 agent 内置搜索工具（omp `web_search.enabled`；kilo/opencode permission + 激活 env；claude-code/copilot-cli CLI 开关） |
+| `workspaces.instances.<id>.agent.web_search.providers` | string[] | — | 有序 provider：omp 使用完整链；kilo 仅接受 `exa`；opencode 选择首个 `exa`/`parallel` |
+| `workspaces.instances.<id>.agent.web_search.exclude` | string[] | — | 从搜索链路剔除的 provider id → `providers.webSearchExclude` |
+| `workspaces.instances.<id>.agent.web_search.timeout_seconds` | int 1–300 | — | 单 provider 传输超时 → `providers.webSearchTimeoutSeconds` |
+| `workspaces.instances.<id>.agent.web_search.credentials.<id>` | string | — | 搜索凭据 id → 宿主 env 名；启用搜索的 adapter 通过 `${VAR}` 引用注入所支持的原生 env |
+| `workspaces.instances.<id>.agent.web_search.searxng.endpoint` | string | — | SearXNG 端点 URL |
+| `workspaces.instances.<id>.agent.web_search.searxng.categories` | string | — | SearXNG 分类过滤 |
+| `workspaces.instances.<id>.agent.web_search.searxng.engines` | string | — | SearXNG 引擎过滤 |
+| `workspaces.instances.<id>.agent.web_search.searxng.language` | string | — | SearXNG 语言过滤 |
+| `workspaces.instances.<id>.agent.web_search.searxng.safesearch` | int 0–2 | — | SearXNG 安全搜索级别 |
 | `workspaces.instances.<id>.review` | object | — | review 配置覆盖（见 `review`） |
 | `workspaces.instances.<id>.outputs` | object | — | outputs 覆盖 |
 | `workspaces.instances.<id>.sandbox` | object | — | sandbox 覆盖（当前版本运行时未生效，见下方说明） |
@@ -256,7 +286,7 @@ schema 接受 `workspaces.defaults` 和实例上的 `agent.default` 与 `sandbox
 | --- | --- | --- | --- |
 | `agent.default` | enum | `kilo` | 默认 agent kind |
 | `agent.timeout_seconds` | int > 0 | `1800` | 单次 run 硬超时；超时时杀整棵进程树 |
-| `agent.auto_approve` | boolean | `true` | schema 接受，但当前编排器固定按 `true` 处理，设为 `false` 不生效 |
+| `agent.auto_approve` | boolean | `true` | 传给所选 adapter；CLI 支持时 false 取消自动批准 |
 | `agent.sandbox` | object | `{ kind: "docker", engine: "auto" }` | 沙箱后端 |
 | `agent.sandbox.kind` | enum | — | sandbox kind（见枚举表） |
 | `agent.sandbox.engine` | enum | — | 容器引擎选择 |
@@ -283,22 +313,22 @@ schema 接受 `workspaces.defaults` 和实例上的 `agent.default` 与 `sandbox
 | 字段 | 类型 | 默认值 | 描述 |
 | --- | --- | --- | --- |
 | `review.languages_auto_detect` | boolean | `true` | 自动检测评审语言 |
-| `review.include` | string[] | `["**/*"]` | 包含的 glob 模式 |
-| `review.exclude` | string[] | `["**/vendor/**", "**/*.min.js", "**/*.lock"]` | 排除的 glob 模式 |
+| `review.include` | string[] | `["**/*"]` | 路径 glob：`*` 只匹配当前目录，`**` 匹配零个或多个目录 |
+| `review.exclude` | string[] | `["**/vendor/**", "**/*.min.js", "**/*.lock"]` | 排除的 glob 模式（在 include 之后应用） |
 | `review.max_files` | int > 0 | `50` | 单次评审最大文件数 |
-| `review.max_patch_bytes` | int > 0 | `200000` | 最大 patch 字节数 |
-| `review.incremental` | boolean | `true` | 增量评审 |
+| `review.max_patch_bytes` | int > 0 | `200000` | UTF-8 patch 预算；超额时在调用模型前失败 |
+| `review.incremental` | boolean | `true` | false 追加 head 完整文件，受 max_patch_bytes 限制 |
 | `review.skip_lgtm` | boolean | `true` | 跳过看起来干净的评审 |
 | `review.output_language` | string | `zh-CN` | summary 输出语言 |
-| `review.commit_strategy` | enum | `aggregate` | `per_commit`、`aggregate`、`head_only` |
+| `review.commit_strategy` | enum | `aggregate` | 端点聚合、一次分析中的逐提交标记补丁或仅 head；历史改写保持端点比较 |
 | `review.log_thinking` | boolean | `true` | 记录编排器的 thinking/执行日志（设为 `false` 关闭） |
 | `review.git.allow_deepen` | boolean | `false` | 允许对浅克隆执行 `git fetch --deepen` |
 | `review.labels.ignore` | string[] | `["aicr:ignore", "aicr-ignore"]` | 跳过评审的 label |
 | `review.labels.auto_tag` | string | — | AICR 启动时附加的固定 tag |
 | `review.labels.reviewed_tag` | string | — | 评审完成时附加的 tag |
 | `review.problem_issue.max_recent_issues` | int 1–200 | `30` | 单次 run 对账的最近 open managed issue 上限 |
-| `review.fetch_extra.max_bytes` | int > 0 | — | 单次额外上下文请求的最大字节数 |
-| `review.fetch_extra.max_files` | int > 0 | — | 单次额外上下文请求的最大文件数 |
+| `review.fetch_extra.max_bytes` | int > 0 | — | 每次 run 额外上下文 UTF-8 字节总量，包含并发请求 |
+| `review.fetch_extra.max_files` | int > 0 | — | 每次 run 额外上下文的不同路径数 |
 | `review.fetch_extra.allow_paths` | string[] | — | 额外上下文拉取允许的路径 glob |
 | `review.reflection.enabled` | boolean | `false` | 启用 reflection memory |
 | `review.reflection.mode` | enum | — | `off`、`light`、`thorough` |
@@ -325,12 +355,26 @@ schema 接受 `workspaces.defaults` 和实例上的 `agent.default` 与 `sandbox
 | `queue.sqlite.lock_ttl_seconds` | int > 0 | `300` | stale running job 回收 TTL |
 | `queue.workers.concurrency` | int > 0 | `4` | 全局 worker 并发 |
 | `queue.workers.per_workspace_concurrency` | int > 0 | `1` | 单 workspace 并发上限 |
-| `queue.workers.lock_ttl_seconds` | int > 0 | `1800` | worker 锁 TTL |
+| `queue.workers.lock_ttl_seconds` | int > 0 | `1800` | 预留；锁过期时间由 queue backend 配置 |
 | `queue.rate_limit.per_provider_rps` | map | — | 按 provider 的每秒请求数上限 |
 | `queue.retry.attempts` | int > 0 | `3` | trigger 级重试次数（兼容旧 `max_attempts`） |
 | `queue.retry.backoff` | object | `exponential`，5000→60000ms，带 jitter | `kind`、`base_ms`、`max_ms`、`jitter` |
 | `queue.dead_letter.enabled` | boolean | — | 预留——schema 接受但运行时未消费 |
 | `queue.dead_letter.max_age_hours` | int > 0 | — | 预留——schema 接受但运行时未消费 |
+
+## `config_sources`
+
+动态配置来源开关（默认仅文件）。本节属于启动边界：数据库不可修改。
+
+| 字段 | 类型 | 默认值 | 描述 |
+| --- | --- | --- | --- |
+| `config_sources.database.enabled` | boolean | `false` | 启用数据库配置源。启用后 webhook 准入采用持久配置 head、管理端配置 API 可发布 revision；关闭时保持仅文件行为。 |
+| `config_sources.database.backend` | enum | `storage` | `storage` 复用 `storage.database`（SQLite/PostgreSQL）；`redis` 复用 `storage.cache.redis` 连接声明。 |
+| `config_sources.database.namespace` | string | `default` | 配置命名空间：1–64 个字母、数字、点、下划线或连字符，以字母或数字开头。 |
+| `config_sources.runtime.refresh_interval_seconds` | int 1–3600 | `5` | 后台 generation 刷新周期。不是准入一致性屏障：无论该值如何，每次 webhook 准入都会重读持久 head。 |
+| `config_sources.secret_refs[].env` | string | — | 部署授权的环境变量名 |
+| `config_sources.secret_refs[].target` | string[] | — | 精确路径 token；实体 ID/name、上下文仓库 alias 替代对应数组下标 |
+| `config_sources.secret_refs[].destinations.<id>` | unknown | — | 精确目标信息，含 kind、endpoint 和关联 trigger 的目的地；见 example/config.yaml |
 
 ## `storage`
 

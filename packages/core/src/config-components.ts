@@ -12,7 +12,7 @@ import { isPlainObject } from "./utils.js";
  * and fails closed on schema constructs it does not
  * understand, so new fields cannot slip past the inventory gate unnoticed.
  *
- * `wired`/`consumer` reflect the audited runtime state (2026-09-12):
+ * `wired`/`consumer` reflect the audited runtime state (2026-09-13):
  * schema acceptance alone never marks a field wired. Unwired fields carry a
  * `status` and must not be exposed as editable until their wiring lands.
  */
@@ -355,20 +355,19 @@ const g = (path: string, s: RowSpec): ConfigFieldSpec => row(path, GLOBAL_ONLY, 
 // review tree: identical shape at global / workspaces.defaults / instances.*
 // ---------------------------------------------------------------------------
 
-const SCHEMA_ONLY_REVIEW = "schema-only; no runtime consumer (P4 wires review filters)";
-const LAYER_NOT_CONSUMED = "workspace layer accepted but not consumed";
+const REVIEW_CONSUMER = "packages/server/src/review-orchestrator.ts executeReviewInRunDirs";
 
 /** [suffix, type, meta] — defaults (`d`) apply to the global row only. */
 const REVIEW_TREE: readonly (readonly [string, string, Omit<RowSpec, "t">])[] = [
-  ["languages_auto_detect", "ZodBoolean", { d: true, own: "business", wir: false, st: SCHEMA_ONLY_REVIEW, ui: "toggle", tid: "H05" }],
-  ["include", "ZodString[]", { d: ["**/*"], own: "business", wir: false, st: "schema-only; trigger-level include_cr_file is the wired filter", ui: "multiselect", tid: "H05" }],
-  ["exclude", "ZodString[]", { d: ["**/vendor/**", "**/*.min.js", "**/*.lock"], own: "business", wir: false, st: "schema-only; trigger-level exclude_cr_file is the wired filter", ui: "multiselect", tid: "H05" }],
-  ["max_files", "ZodNumber", { d: 50, own: "business", wir: false, st: SCHEMA_ONLY_REVIEW, ui: "number", tid: "H05" }],
-  ["max_patch_bytes", "ZodNumber", { d: 200000, own: "business", wir: false, st: "schema-only; only referenced by an error hint", ui: "number", tid: "H05" }],
-  ["incremental", "ZodBoolean", { d: true, own: "business", wir: false, st: SCHEMA_ONLY_REVIEW, ui: "toggle", tid: "H05" }],
-  ["skip_lgtm", "ZodBoolean", { d: true, own: "business", wir: false, st: SCHEMA_ONLY_REVIEW, ui: "toggle", tid: "H05" }],
-  ["output_language", "ZodString", { d: "zh-CN", own: "business", wir: true, con: "packages/server/src/bootstrap.ts review prompt options", cap: "workspace layer accepted but not consumed", ui: "select", tid: "H05" }],
-  ["commit_strategy", "ZodEnum", { d: "aggregate", own: "business", wir: false, st: SCHEMA_ONLY_REVIEW, ui: "select", tid: "H05" }],
+  ["languages_auto_detect", "ZodBoolean", { d: true, own: "business", wir: true, con: REVIEW_CONSUMER, ui: "toggle", tid: "H05" }],
+  ["include", "ZodString[]", { d: ["**/*"], own: "business", wir: true, con: "packages/core/src/review-policy.ts:applyReviewPathPolicy", ui: "multiselect", tid: "H05" }],
+  ["exclude", "ZodString[]", { d: ["**/vendor/**", "**/*.min.js", "**/*.lock"], own: "business", wir: true, con: "packages/core/src/review-policy.ts:applyReviewPathPolicy", ui: "multiselect", tid: "H05" }],
+  ["max_files", "ZodNumber", { d: 50, own: "business", wir: true, con: REVIEW_CONSUMER, ui: "number", tid: "H05" }],
+  ["max_patch_bytes", "ZodNumber", { d: 200000, own: "business", wir: true, con: REVIEW_CONSUMER, ui: "number", tid: "H05" }],
+  ["incremental", "ZodBoolean", { d: true, own: "business", wir: true, con: REVIEW_CONSUMER, ui: "toggle", tid: "H05" }],
+  ["skip_lgtm", "ZodBoolean", { d: true, own: "business", wir: true, con: REVIEW_CONSUMER, ui: "toggle", tid: "H05" }],
+  ["output_language", "ZodString", { d: "zh-CN", own: "business", wir: true, con: "packages/server/src/bootstrap.ts review prompt options", ui: "select", tid: "H05" }],
+  ["commit_strategy", "ZodEnum", { d: "aggregate", own: "business", wir: true, con: "packages/server/src/review-commit-policy.ts", ui: "select", tid: "H05" }],
   ["auto_commit.delay_seconds", "ZodNumber", { own: "business", wir: true, res: "resolveAutoCommitPolicy", con: "packages/core/src/auto-commit-policy.ts:resolveAutoCommitPolicy", ui: "number" }],
   ["auto_commit.schedule.timezone", "ZodString", { own: "business", wir: true, res: "resolveAutoCommitPolicy", con: "packages/core/src/weekly-schedule.ts", ui: "text" }],
   ["auto_commit.schedule.rules[].days", "ZodEnum[]", { own: "business", wir: true, res: "resolveAutoCommitPolicy", con: "packages/core/src/weekly-schedule.ts", ui: "multiselect" }],
@@ -382,20 +381,20 @@ const REVIEW_TREE: readonly (readonly [string, string, Omit<RowSpec, "t">])[] = 
   ["pull_request.schedule.rules[].windows[].start", "ZodString", { own: "business", wir: true, res: "resolvePullRequestPolicy", con: "packages/core/src/weekly-schedule.ts", ui: "text" }],
   ["pull_request.schedule.rules[].windows[].end", "ZodString", { own: "business", wir: true, res: "resolvePullRequestPolicy", con: "packages/core/src/weekly-schedule.ts", ui: "text" }],
   ["pull_request.include_target_branches", "ZodString[]", { own: "business", wir: true, res: "resolvePullRequestPolicy", con: "packages/core/src/pull-request-policy.ts", ui: "multiselect" }],
-  ["log_thinking", "ZodBoolean", { own: "business", wir: true, con: "packages/server/src/review-orchestrator.ts thinking log gate", cap: "workspace layer accepted but not consumed", ui: "toggle", tid: "H05" }],
-  ["git.allow_deepen", "ZodBoolean", { own: "business", wir: true, con: "packages/vcs/src/git.ts allowDeepen", cap: "workspace layer accepted but not consumed", ui: "toggle", tid: "H05" }],
+  ["log_thinking", "ZodBoolean", { own: "business", wir: true, con: "packages/server/src/review-orchestrator.ts thinking log gate", ui: "toggle", tid: "H05" }],
+  ["git.allow_deepen", "ZodBoolean", { own: "business", wir: true, con: "packages/vcs/src/git.ts allowDeepen", ui: "toggle", tid: "H05" }],
   ["labels.ignore", "ZodString[]", { own: "business", wir: true, res: "review labels resolver", con: "packages/server/src/bootstrap.ts review labels resolver", ui: "multiselect", tid: "H05" }],
   ["labels.auto_tag", "ZodString", { own: "business", wir: true, res: "review labels resolver", con: "packages/server/src/bootstrap.ts review labels resolver", ui: "text", tid: "H05" }],
   ["labels.reviewed_tag", "ZodString", { own: "business", wir: true, res: "review labels resolver", con: "packages/server/src/bootstrap.ts review labels resolver", ui: "text", tid: "H05" }],
   ["problem_issue.max_recent_issues", "ZodNumber", { own: "business", wir: true, res: "resolveProblemIssueMaxRecentIssues", con: "packages/server/src/bootstrap.ts:resolveProblemIssueMaxRecentIssues", ui: "number", tid: "H05" }],
-  ["fetch_extra.max_bytes", "ZodNumber", { own: "business", wir: false, st: "schema-only; agent-driven fetchExtraContext has no config budget wiring", ui: "number", tid: "H05" }],
-  ["fetch_extra.max_files", "ZodNumber", { own: "business", wir: false, st: SCHEMA_ONLY_REVIEW, ui: "number", tid: "H05" }],
-  ["fetch_extra.allow_paths", "ZodString[]", { own: "business", wir: false, st: SCHEMA_ONLY_REVIEW, ui: "multiselect", tid: "H05" }],
-  ["reflection.enabled", "ZodBoolean", { own: "business", wir: true, con: "packages/server/src/bootstrap.ts reflection wiring", cap: "workspace layer accepted but not consumed", ui: "toggle" }],
-  ["reflection.mode", "ZodEnum", { own: "business", wir: true, con: "packages/server/src/bootstrap.ts reflection wiring", cap: "workspace layer accepted but not consumed", ui: "select" }],
-  ["reflection.memory.max_size_kb", "ZodNumber", { own: "business", wir: false, st: "schema-only; compaction reads entries/days only", ui: "number" }],
-  ["reflection.memory.max_entries", "ZodNumber", { own: "business", wir: true, con: "packages/store/src/reflection.ts:compactReflectionMemory", cap: "workspace layer accepted but not consumed", ui: "number" }],
-  ["reflection.memory.retention_days", "ZodNumber", { own: "business", wir: true, con: "packages/store/src/reflection.ts:compactReflectionMemory", cap: "workspace layer accepted but not consumed", ui: "number" }],
+  ["fetch_extra.max_bytes", "ZodNumber", { own: "business", wir: true, con: "packages/core/src/review-policy.ts:createReviewContextFetcher", ui: "number", tid: "H05" }],
+  ["fetch_extra.max_files", "ZodNumber", { own: "business", wir: true, con: "packages/core/src/review-policy.ts:createReviewContextFetcher", ui: "number", tid: "H05" }],
+  ["fetch_extra.allow_paths", "ZodString[]", { own: "business", wir: true, con: "packages/core/src/review-policy.ts:createReviewContextFetcher", ui: "multiselect", tid: "H05" }],
+  ["reflection.enabled", "ZodBoolean", { own: "business", wir: true, con: "packages/server/src/bootstrap.ts reflection wiring", ui: "toggle" }],
+  ["reflection.mode", "ZodEnum", { own: "business", wir: true, con: "packages/server/src/bootstrap.ts reflection wiring", ui: "select" }],
+  ["reflection.memory.max_size_kb", "ZodNumber", { own: "business", wir: true, con: "packages/store/src/reflection.ts:compactReflectionMemory", ui: "number", tid: "H05" }],
+  ["reflection.memory.max_entries", "ZodNumber", { own: "business", wir: true, con: "packages/store/src/reflection.ts:compactReflectionMemory", ui: "number" }],
+  ["reflection.memory.retention_days", "ZodNumber", { own: "business", wir: true, con: "packages/store/src/reflection.ts:compactReflectionMemory", ui: "number" }],
 ];
 
 /** exclude_sources match triples: author_name/author_email/committer_name/committer_email/user/client/author × glob/regex/ignore_case. */
@@ -412,17 +411,6 @@ const REVIEW_TREE_EXPANDED: readonly (readonly [string, string, Omit<RowSpec, "t
   ),
 ];
 
-/** Suffixes whose defaults/workspace layer instances are not consumed. */
-const REVIEW_LAYER_UNWIRED = new Set([
-  "output_language",
-  "log_thinking",
-  "git.allow_deepen",
-  "reflection.enabled",
-  "reflection.mode",
-  "reflection.memory.max_entries",
-  "reflection.memory.retention_days",
-]);
-
 function reviewTreeRows(): ConfigFieldSpec[] {
   const rows: ConfigFieldSpec[] = [];
   for (const [suffix, type, meta] of REVIEW_TREE_EXPANDED) {
@@ -434,13 +422,7 @@ function reviewTreeRows(): ConfigFieldSpec[] {
     const layered: RowSpec = { ...meta, t: type };
       // Layer instances never carry schema defaults of their own.
       delete (layered as { d?: unknown }).d;
-      if (REVIEW_LAYER_UNWIRED.has(suffix)) {
-        rows.push(row(`${prefix}.${suffix}`, layer, `review.${suffix}`, { ...layered, wir: false, st: LAYER_NOT_CONSUMED }));
-      } else if (meta.wir) {
-        rows.push(row(`${prefix}.${suffix}`, layer, `review.${suffix}`, layered));
-      } else {
-        rows.push(row(`${prefix}.${suffix}`, layer, `review.${suffix}`, layered));
-      }
+      rows.push(row(`${prefix}.${suffix}`, layer, `review.${suffix}`, layered));
     }
   }
   return rows;
@@ -502,6 +484,26 @@ function workspaceSandboxRows(): ConfigFieldSpec[] {
 // ---------------------------------------------------------------------------
 // context_repositories at workspaces.defaults / workspaces.instances.*
 // ---------------------------------------------------------------------------
+
+function workspaceAgentRows(): ConfigFieldSpec[] {
+  const fields: readonly (readonly [string, RowSpec])[] = [
+    ["timeout_seconds", { t: "ZodNumber", own: "business", wir: true, ui: "number" }],
+    ["auto_approve", { t: "ZodBoolean", own: "business", wir: true, ui: "toggle" }],
+    ["context_compaction.auto", { t: "ZodBoolean", d: true, own: "business", wir: true, ui: "toggle" }],
+    ["context_compaction.threshold_percent", { t: "ZodNumber", own: "business", wir: true, ui: "number" }],
+    ["context_compaction.prune", { t: "ZodBoolean", d: true, own: "business", wir: true, ui: "toggle" }],
+    ["web_search.enabled", { t: "ZodBoolean", d: false, own: "business", wir: true, ui: "toggle" }],
+    ["web_search.providers", { t: "ZodString[]", d: [], own: "business", wir: true, ui: "multiselect" }],
+    ["web_search.exclude", { t: "ZodString[]", d: [], own: "business", wir: true, ui: "multiselect" }],
+    ["web_search.timeout_seconds", { t: "ZodNumber", own: "business", wir: true, ui: "number" }],
+    ["web_search.credentials.*", { t: "ZodString", own: "business", wir: true, ui: "secret-ref" }],
+    ...["endpoint", "categories", "engines", "language"].map(suffix => [`web_search.searxng.${suffix}`, { t: "ZodString", own: "business", wir: true, ui: "text" }] as const),
+    ["web_search.searxng.safesearch", { t: "ZodNumber", own: "business", wir: true, ui: "number" }],
+  ];
+  return ["workspaces.defaults", "workspaces.instances.*"].flatMap(prefix => fields.map(([suffix, spec]) =>
+    row(`${prefix}.agent.${suffix}`, prefix.endsWith("defaults") ? DEFAULTS_ONLY : WORKSPACE_ONLY, `agent.${suffix}`,
+      { ...spec, con: "packages/server/src/bootstrap.ts:resolveRunOptions", tid: "H03" })));
+}
 
 function contextRepositoryRows(): ConfigFieldSpec[] {
   const con = "packages/server/src/bootstrap.ts context repositories resolver";
@@ -644,10 +646,10 @@ function providerCatalogFieldRows(): ConfigFieldSpec[] {
 // model chain entry overrides (schema-accepted; resolver wiring lands in P4)
 // ---------------------------------------------------------------------------
 
-const OVERRIDES_P4 = "schema-accepted at P0; resolveModelSpecFromChain wiring lands in P4";
+const OVERRIDES_CONSUMER = "packages/server/src/bootstrap.ts:resolveModelSpecFromChain entry overrides merge";
 
 function modelChainOverrideRows(): ConfigFieldSpec[] {
-  const meta = { own: "entity" as const, ent: "model_group" as const, wir: false, st: OVERRIDES_P4, tid: "H02" };
+  const meta = { own: "entity" as const, ent: "model_group" as const, wir: true, con: OVERRIDES_CONSUMER, tid: "H02" };
   const entries: readonly (readonly [string, string, ConfigUiControlKind])[] = [
     ["extra_params.*", "ZodUnknown", "map"],
     ["extra_body.*", "ZodUnknown", "map"],
@@ -688,6 +690,15 @@ export const CONFIG_FIELD_INVENTORY: readonly ConfigFieldSpec[] = [
   g("admin.password_env", { t: "ZodString", d: "AICR_ADMIN_PASSWORD", own: "bootstrap", con: "packages/server/src/admin-auth.ts", wir: true, ui: "secret-ref" }),
   g("admin.password_hash_env", { t: "ZodString", own: "bootstrap", con: "packages/server/src/admin-auth.ts", wir: true, ui: "secret-ref" }),
   g("admin.session_ttl_seconds", { t: "ZodNumber", d: 86400, own: "bootstrap", con: "packages/server/src/admin-auth.ts", wir: true, ui: "number" }),
+
+  // ------------------------------------------- config_sources (bootstrap, P4/P5)
+  g("config_sources.database.enabled", { t: "ZodBoolean", d: false, own: "bootstrap", con: "packages/server/src/bootstrap.ts runtime config manager", wir: true, ui: "toggle" }),
+  g("config_sources.secret_refs[].env", { t: "ZodString", own: "bootstrap", con: "packages/core/src/config-secret-policy.ts", wir: true, ui: "secret-ref", tid: "A06" }),
+  g("config_sources.secret_refs[].target", { t: "ZodString[]", own: "bootstrap", con: "packages/core/src/config-secret-policy.ts", wir: true, ui: "ordered-list", tid: "A06" }),
+  g("config_sources.secret_refs[].destinations.*", { t: "ZodUnknown", own: "bootstrap", con: "packages/core/src/config-secret-policy.ts", wir: true, ui: "map", tid: "A06" }),
+  g("config_sources.database.backend", { t: "ZodEnum", d: "storage", own: "bootstrap", cap: "storage=sqlite/postgres store, redis shares storage.cache.redis", con: "packages/server/src/bootstrap.ts runtime config manager", wir: true, ui: "select" }),
+  g("config_sources.database.namespace", { t: "ZodString", d: "default", own: "bootstrap", con: "packages/server/src/runtime-config.ts", wir: true, ui: "text" }),
+  g("config_sources.runtime.refresh_interval_seconds", { t: "ZodNumber", d: 5, own: "bootstrap", con: "packages/server/src/runtime-config.ts background refresh", wir: true, ui: "number" }),
 
   // ------------------------------------------------------- storage (bootstrap)
   g("storage.database.kind", { t: "ZodEnum", d: "sqlite", own: "bootstrap", cap: "postgres requires the P2 store service", con: "packages/server/src/bootstrap.ts store wiring", wir: true, st: "sqlite/postgres both wired by the P2 store service", ui: "select" }),
@@ -862,7 +873,7 @@ export const CONFIG_FIELD_INVENTORY: readonly ConfigFieldSpec[] = [
   g("queue.sqlite.lock_ttl_seconds", { t: "ZodNumber", own: "bootstrap", con: "packages/core/src/sqlite-queue.ts", wir: true, ui: "number" }),
   g("queue.workers.concurrency", { t: "ZodNumber", own: "business", res: "claim-time limiter", con: "packages/server/src/bootstrap.ts worker options", wir: true, ui: "number", tid: "H17" }),
   g("queue.workers.per_workspace_concurrency", { t: "ZodNumber", own: "business", con: "packages/server/src/bootstrap.ts worker options", wir: true, ui: "number", tid: "H17" }),
-  g("queue.workers.lock_ttl_seconds", { t: "ZodNumber", own: "business", con: "packages/server/src/bootstrap.ts worker options", wir: true, ui: "number" }),
+  g("queue.workers.lock_ttl_seconds", { t: "ZodNumber", own: "business", wir: false, st: "reserved; lock expiry is configured by the queue backend", ui: "number" }),
   g("queue.rate_limit.per_provider_rps.*", { t: "ZodNumber", own: "business", con: "packages/server/src/bootstrap.ts rate limiter wiring", wir: true, ui: "number", tid: "H17" }),
   g("queue.retry.attempts", { t: "ZodNumber", own: "business", res: "resolveTriggerRetryConfig", con: "packages/server/src/bootstrap.ts:resolveTriggerRetryConfig", wir: true, ui: "number" }),
   g("queue.retry.backoff.kind", { t: "ZodEnum", own: "business", res: "resolveTriggerRetryConfig", con: "packages/server/src/bootstrap.ts:resolveTriggerRetryConfig", wir: true, ui: "select" }),
@@ -875,9 +886,9 @@ export const CONFIG_FIELD_INVENTORY: readonly ConfigFieldSpec[] = [
   // ------------------------------------------------------- agent / sandbox / search
   g("agent.default", { t: "ZodEnum", d: "kilo", own: "business", res: "resolveAgentAdapterFromConfig", con: "packages/server/src/bootstrap.ts:resolveAgentAdapterFromConfig", wir: true, ui: "select", tid: "H03" }),
   g("agent.timeout_seconds", { t: "ZodNumber", d: 1800, own: "business", con: "packages/server/src/bootstrap.ts agent options", wir: true, ui: "number" }),
-  g("agent.auto_approve", { t: "ZodBoolean", d: true, own: "business", wir: false, st: "schema-only; review-orchestrator hardcodes autoApprove: true", ui: "toggle", tid: "H03" }),
-  g("agent.sandbox.kind", { t: "ZodEnum", d: "docker", own: "business", cap: "k8s_pod/firecracker reserved; explicit container kinds must not silently fall back to native", res: "createSandboxBackendFromConfig", con: "packages/server/src/bootstrap.ts:createSandboxBackendFromConfig", wir: true, ui: "select", tid: "H04" }),
-  g("agent.sandbox.engine", { t: "ZodEnum", d: "auto", own: "business", res: "createSandboxBackendFromConfig", con: "packages/server/src/bootstrap.ts:createSandboxBackendFromConfig", wir: true, ui: "select" }),
+  g("agent.auto_approve", { t: "ZodBoolean", d: true, own: "business", wir: true, con: "packages/server/src/review-orchestrator.ts agent spawn options", ui: "toggle", tid: "H03" }),
+  g("agent.sandbox.kind", { t: "ZodEnum", own: "business", cap: "k8s_pod/firecracker reserved; unset kind auto-detects with native fallback, explicit container kinds must not silently fall back to native", res: "createSandboxBackendFromConfig", con: "packages/sandbox/src/factory.ts:resolveSandboxKind", wir: true, ui: "select", tid: "H04" }),
+  g("agent.sandbox.engine", { t: "ZodEnum", own: "business", res: "createSandboxBackendFromConfig", con: "packages/sandbox/src/factory.ts:resolveSandboxKind", wir: true, ui: "select" }),
   g("agent.sandbox.image", { t: "ZodString", own: "business", res: "createSandboxBackendFromConfig", con: "packages/server/src/bootstrap.ts:createSandboxBackendFromConfig", wir: true, ui: "text" }),
   g("agent.context_compaction.auto", { t: "ZodBoolean", d: true, own: "business", con: "packages/server/src/bootstrap.ts agent options", wir: true, ui: "toggle" }),
   g("agent.context_compaction.threshold_percent", { t: "ZodNumber", own: "business", con: "packages/server/src/bootstrap.ts agent options", wir: true, ui: "number" }),
@@ -910,7 +921,7 @@ export const CONFIG_FIELD_INVENTORY: readonly ConfigFieldSpec[] = [
   g("workspaces.cache.ttl_days", { t: "ZodNumber", d: 30, own: "business", wir: false, st: "schema-only; workspace cache GC is not implemented", ui: "number" }),
   row("workspaces.defaults.model_chain", DEFAULTS_ONLY, "llm.default_model_chain", { t: "ZodString", own: "business", res: "resolveModelChainNames", con: "packages/server/src/bootstrap.ts:resolveModelChainNames", wir: true, ui: "select" }),
   row("workspaces.defaults.triage_model_chain", DEFAULTS_ONLY, "llm.triage_model_chain", { t: "ZodString", own: "business", res: "resolveModelChainNames", con: "packages/server/src/bootstrap.ts:resolveModelChainNames", wir: true, ui: "select" }),
-  row("workspaces.defaults.agent.default", DEFAULTS_ONLY, "agent.default", { t: "ZodEnum", own: "business", wir: false, st: "schema-only; workspace-layer agent.default has no consumer", ui: "select", tid: "H03" }),
+  row("workspaces.defaults.agent.default", DEFAULTS_ONLY, "agent.default", { t: "ZodEnum", own: "business", wir: true, con: "packages/server/src/bootstrap.ts:resolveRunOptions", ui: "select", tid: "H03" }),
   row("workspaces.defaults.prompt.base_system_prompt_file", DEFAULTS_ONLY, undefined, { t: "ZodString", own: "business", con: "packages/server/src/bootstrap.ts prompt loader", wir: true, ui: "text" }),
   row("workspaces.defaults.prompt.force_skills", DEFAULTS_ONLY, undefined, { t: "ZodString[]", own: "business", con: "packages/server/src/bootstrap.ts prompt loader", wir: true, ui: "multiselect" }),
   row("workspaces.instances.*.model_chain", WORKSPACE_ONLY, "llm.default_model_chain", { t: "ZodString", own: "entity", ent: "workspace", res: "resolveModelChainNames", con: "packages/server/src/bootstrap.ts:resolveModelChainNames", wir: true, ui: "select" }),
@@ -923,7 +934,7 @@ export const CONFIG_FIELD_INVENTORY: readonly ConfigFieldSpec[] = [
   row("workspaces.instances.*.match[].triggers", WORKSPACE_ONLY, undefined, { t: "ZodString[]", own: "entity", ent: "workspace", con: "packages/core/src/config-resolution.ts:resolveWorkspaceForSource", wir: true, ui: "multiselect", tid: "W01" }),
   row("workspaces.instances.*.match[].source.*", WORKSPACE_ONLY, undefined, { t: "union", own: "entity", ent: "workspace", cap: "source field allowlist + budgets enforced (config-matcher)", con: "packages/core/src/config-resolution.ts:resolveWorkspaceForSource", wir: true, ui: "matcher", tid: "W01" }),
   row("workspaces.instances.*.work_path", WORKSPACE_ONLY, undefined, { t: "ZodString", own: "entity", ent: "workspace", cap: "compiled at parse with AST whitelist", con: "packages/core/src/config-workspace.ts:buildWorkspaceBinding", wir: true, ui: "path-template", tid: "L01" }),
-  row("workspaces.instances.*.agent.default", WORKSPACE_ONLY, "agent.default", { t: "ZodEnum", own: "entity", ent: "workspace", wir: false, st: "schema-only; workspace-layer agent.default has no consumer", ui: "select", tid: "H03" }),
+  row("workspaces.instances.*.agent.default", WORKSPACE_ONLY, "agent.default", { t: "ZodEnum", own: "entity", ent: "workspace", wir: true, con: "packages/server/src/bootstrap.ts:resolveRunOptions", ui: "select", tid: "H03" }),
   row("workspaces.instances.*.triage.enabled", WORKSPACE_ONLY, undefined, { t: "ZodBoolean", d: false, own: "entity", ent: "workspace", res: "resolveIssueTriageOptions", con: "packages/server/src/bootstrap.ts:resolveIssueTriageOptions", wir: true, ui: "toggle" }),
   row("workspaces.instances.*.triage.actions", WORKSPACE_ONLY, undefined, { t: "ZodEnum[]", d: ["close"], own: "entity", ent: "workspace", res: "resolveIssueTriageOptions", con: "packages/server/src/bootstrap.ts:resolveIssueTriageOptions", wir: true, ui: "multiselect" }),
   row("workspaces.instances.*.triage.categories_close", WORKSPACE_ONLY, undefined, { t: "ZodEnum[]", d: ["spam", "invalid"], own: "entity", ent: "workspace", res: "resolveIssueTriageOptions", con: "packages/server/src/bootstrap.ts:resolveIssueTriageOptions", wir: true, ui: "multiselect" }),
@@ -937,6 +948,7 @@ export const CONFIG_FIELD_INVENTORY: readonly ConfigFieldSpec[] = [
   ...workspaceOutputsRows(),
   ...workspaceSandboxRows(),
   ...contextRepositoryRows(),
+  ...workspaceAgentRows(),
 ];
 
 /**

@@ -19,6 +19,8 @@ import { createAgentAdapter, type AgentAdapter } from "@aicr/agents";
 import {
   createChatClientFromModelSpec,
   createResilientChatClient,
+  DailyBudgetTracker,
+  LlmBudgetExceededError,
   extractModelPricing,
   getModelCatalogBundledSnapshotPath,
   type ChatCompletionClient,
@@ -108,6 +110,7 @@ import {
 import { type AuthConfig } from "./auth.js";
 import { createReviewDeduplicator } from "./review-deduplicator.js";
 import { ReviewDeferralManager } from "./deferral-manager.js";
+import { createRuntimeQueue } from "./runtime-queue.js";
 import { cleanupExpiredSessions, resolveAdminAuthConfig } from "./admin-auth.js";
 import {
   createGithubAppTokenService,
@@ -139,6 +142,22 @@ import type {
   ReviewOutputPublisherResolver,
   ReviewSummaryPublishOptions,
 } from "./review-orchestrator.js";
+import {
+  RuntimeConfigManager,
+  type RuntimeConfigGeneration,
+  admissionUnavailableReason,
+} from "./runtime-config.js";
+import {
+  createRedisConfigStore,
+  resolveAnalysisSelection,
+  compileExecutionGraph,
+  resolveRouteForEvent,
+  resolveOutputChannelsForEvent,
+  ConfigError,
+  type EffectiveConfigV2,
+  type CompiledRoutingRule,
+  type AppConfigInput,
+} from "@aicr/core";
 
 export interface BootstrapServerOptions {
   readonly config: AppConfig;
@@ -146,6 +165,13 @@ export interface BootstrapServerOptions {
   readonly baseDir?: string;
   readonly workspaceId?: string;
   readonly jobHandler?: QueueJobHandler;
+  /**
+   * Raw file document + digest for dynamic-config mode (P4). Required when
+   * `config_sources.database.enabled`: source merging and file-digest checks
+   * operate on the legacy-converted pre-defaults document. CLI loaders pass
+   * this from `loadConfigDocumentFile`.
+   */
+  readonly configDocument?: { readonly document: AppConfigInput; readonly digest: string } | undefined;
 }
 
 interface ActiveProjectIdentity {
@@ -235,12 +261,79 @@ function resolveModelSpecFromChain(
 
   const modelId = fallbackEntry?.model ?? "gpt-4o-mini";
 
-  return {
+  const spec: ModelSpec = {
     providerKind: provider.kind as ModelProviderKind,
     providerId: provider.id,
     modelId,
     ...resolveModelProviderFields(provider),
   };
+
+  // Entry-level request overrides (spec §4.2, wired in P4): maps merge by
+  // key over provider fields, arrays and scalars replace. Disabling a
+  // parameter goes through drop_params — JSON null is never a deletion.
+  const overrides = fallbackEntry?.overrides;
+  const draft = { ...spec } as {
+    extraParams?: Record<string, unknown>;
+    extraBody?: Record<string, unknown>;
+    extraHeaders?: Record<string, string>;
+    reasoningEffort?: ModelSpec["reasoningEffort"];
+    thinkingLevel?: ModelSpec["thinkingLevel"];
+    thinkingBudgetTokens?: number;
+    thinking?: ModelSpec["thinking"];
+    responseFormat?: ModelSpec["responseFormat"];
+    toolChoice?: ModelSpec["toolChoice"];
+    parallelToolCalls?: boolean;
+    seed?: number;
+    logitBias?: Record<string, number>;
+    dropParams?: readonly string[];
+    allowedOpenaiParams?: readonly string[];
+  };
+  if (overrides) {
+    mergeRecord(draft, "extraParams", overrides.extra_params);
+    mergeRecord(draft, "extraBody", overrides.extra_body);
+    mergeRecord(draft, "extraHeaders", overrides.extra_headers);
+    if (overrides.reasoning_effort !== undefined) draft.reasoningEffort = overrides.reasoning_effort;
+    if (overrides.thinking_level !== undefined) draft.thinkingLevel = overrides.thinking_level;
+    if (overrides.thinking_budget_tokens !== undefined) draft.thinkingBudgetTokens = overrides.thinking_budget_tokens;
+    if (overrides.thinking !== undefined) draft.thinking = overrides.thinking;
+    if (overrides.response_format !== undefined) draft.responseFormat = overrides.response_format;
+    if (overrides.tool_choice !== undefined) {
+      const choice = overrides.tool_choice;
+      if (typeof choice === "string") {
+        draft.toolChoice = choice;
+      } else {
+        // Accept the OpenAI {"function":{"name"}} shape and the flat
+        // {"name"} shape; anything else cannot name a tool and is dropped.
+        const fn = (choice as { function?: { name?: unknown } }).function;
+        const name = typeof fn?.name === "string" ? fn.name
+          : typeof (choice as { name?: unknown }).name === "string" ? (choice as { name: string }).name
+          : undefined;
+        if (name !== undefined) draft.toolChoice = { name };
+      }
+    }
+    if (overrides.parallel_tool_calls !== undefined) draft.parallelToolCalls = overrides.parallel_tool_calls;
+    if (overrides.seed !== undefined) draft.seed = overrides.seed;
+    if (overrides.logit_bias !== undefined) draft.logitBias = { ...draft.logitBias, ...overrides.logit_bias };
+    if (overrides.drop_params !== undefined) draft.dropParams = overrides.drop_params;
+    if (overrides.allowed_openai_params !== undefined) draft.allowedOpenaiParams = overrides.allowed_openai_params;
+  }
+  // exactOptionalPropertyTypes: never materialize explicit-undefined keys.
+  const merged: Record<string, unknown> = { ...spec, ...draft };
+  for (const key of Object.keys(merged)) {
+    if (merged[key] === undefined) delete merged[key];
+  }
+  return merged as unknown as ModelSpec;
+}
+
+/** Key-wise merge of an overrides map into an optional draft record field. */
+function mergeRecord<K extends "extraParams" | "extraBody" | "extraHeaders">(
+  draft: Record<string, unknown>,
+  key: K,
+  overrides: Record<string, unknown> | undefined,
+): void {
+  if (overrides === undefined) return;
+  const base = draft[key] as Readonly<Record<string, unknown>> | undefined;
+  draft[key] = { ...(base ?? {}), ...overrides };
 }
 
 export function resolveModelSpecFromConfig(config: AppConfig, providerId?: string, workspaceId?: string): ModelSpec {
@@ -600,7 +693,18 @@ export function resolveAgentAdapterFromConfig(config: AppConfig): AgentAdapter {
 }
 
 export async function createSandboxBackendFromConfig(config: AppConfig): Promise<SandboxBackend> {
-  const sandboxConfig = config.agent.sandbox;
+  return createSandboxBackendFromSandboxConfig(config.agent.sandbox);
+}
+
+/**
+ * Sandbox factory over a sandbox-config slice (P4/H04): the global
+ * `agent.sandbox` or its workspace-layer merged equivalent. An explicitly
+ * requested container kind that fails preflight throws — never a silent
+ * native downgrade.
+ */
+export async function createSandboxBackendFromSandboxConfig(
+  sandboxConfig: AppConfig["agent"]["sandbox"],
+): Promise<SandboxBackend> {
   const resolved = await resolveSandboxKind(
     sandboxConfig.kind as SandboxKind | undefined,
     sandboxConfig.engine as SandboxEngine | undefined,
@@ -659,6 +763,7 @@ function buildWebhookConfigFromTrigger(
 
   return {
     triggerName: trigger.name,
+    routingEnabled: (config as EffectiveConfigV2).routing !== undefined,
     workspaceId,
     isWorkspaceEnabled: (id) => (id === "default" && Object.keys(config.workspaces.instances).length === 0) ||
       (config.workspaces.instances[id] !== undefined && config.workspaces.instances[id]?.enabled !== false),
@@ -1961,6 +2066,13 @@ function resolveOutputChannelNames(
   context: ReviewOrchestrationContext,
   key: OutputRouteChannelKey,
 ): readonly string[] {
+  const graph = compileExecutionGraph(config as EffectiveConfigV2);
+  if (graph.mode === "v2") {
+    const event = context.reviewEvent;
+    const routingEvent = { ...event, triggerName: event.triggerName };
+    return resolveOutputChannelsForEvent(config as EffectiveConfigV2, graph, routingEvent,
+      event.workspaceId, key, executionRoute(config, event));
+  }
   // Route rules are more specific (match by trigger + target_kind) and should
   // override workspace defaults for events like push/commit that need different
   // channels than pull_request (e.g. problem_issue instead of pr_review).
@@ -1990,6 +2102,18 @@ function resolveOutputChannelNames(
   }
 
   return [];
+}
+
+/** Re-resolve only inside the task's immutable generation; never the live head. */
+function executionRoute(config: AppConfig, event: ReviewEvent): CompiledRoutingRule | undefined {
+  const graph = compileExecutionGraph(config as EffectiveConfigV2);
+  if (graph.mode === "legacy") return undefined;
+  const selected = resolveRouteForEvent(graph, event);
+  if (selected.status === "none") throw new ConfigError("no_route", "No route matches the accepted event.");
+  if (selected.rule.workspace !== event.workspaceId) {
+    throw new ConfigError("routing_invalid", "Accepted workspace differs from the pinned route.");
+  }
+  return selected.rule;
 }
 
 async function resolveGithubAppInstallationToken(
@@ -2462,6 +2586,7 @@ async function createAppTokenServices(config: AppConfig): Promise<Map<string, Gi
 interface BootstrapOpenedResources {
   store: StoreDb | undefined;
   sessionStore: ConfigStore | undefined;
+  configStore: ConfigStore | undefined;
   catalogBackend: ModelCatalogBackend | undefined;
   closeAutoCommit: (() => Promise<void>) | undefined;
 }
@@ -2484,7 +2609,7 @@ function logBootstrapCloseFailure(resource: string, error: unknown): void {
 export async function bootstrapServerApp(options: BootstrapServerOptions): Promise<ServerAppOptions> {
   // A failure mid-build must not leak what earlier steps opened: release in
   // reverse creation order, then rethrow the original error.
-  const opened: BootstrapOpenedResources = { store: undefined, sessionStore: undefined, catalogBackend: undefined, closeAutoCommit: undefined };
+  const opened: BootstrapOpenedResources = { store: undefined, sessionStore: undefined, configStore: undefined, catalogBackend: undefined, closeAutoCommit: undefined };
   try {
     return await bootstrapServerAppCore(options, opened);
   } catch (error) {
@@ -2493,6 +2618,9 @@ export async function bootstrapServerApp(options: BootstrapServerOptions): Promi
     }
     if (opened.sessionStore !== undefined) {
       await opened.sessionStore.close().catch((closeError: unknown) => logBootstrapCloseFailure("sessionStore", closeError));
+    }
+    if (opened.configStore !== undefined) {
+      await opened.configStore.close().catch((closeError: unknown) => logBootstrapCloseFailure("configStore", closeError));
     }
     if (opened.catalogBackend?.close !== undefined) {
       await opened.catalogBackend.close().catch((closeError: unknown) => logBootstrapCloseFailure("catalogBackend", closeError));
@@ -2507,15 +2635,113 @@ export async function bootstrapServerApp(options: BootstrapServerOptions): Promi
 async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: BootstrapOpenedResources): Promise<ServerAppOptions> {
   const { config, baseSystemPrompt, baseDir = process.cwd(), jobHandler } = options;
 
-  const appTokenServices = await createAppTokenServices(config);
-  const workspaceRuntime = createWorkspaceRuntime(config, baseDir);
+  // --- Runtime config manager (P4): immutable generations replace the
+  // process-frozen config object. File-only mode keeps a single generation
+  // exactly matching the pre-P4 behavior; database mode adopts the durable
+  // head at startup (a broken revision stops bootstrap) and re-reads the
+  // head at every admission boundary. The fallback covers hand-built test
+  // configs that skip the schema parse.
+  const configSources: AppConfig["config_sources"] = config.config_sources ?? {
+    database: { enabled: false, backend: "storage", namespace: "default" },
+    runtime: { refresh_interval_seconds: 5 },
+  };
+  let runtimeConfigStore: ConfigStore | undefined;
+  if (configSources.database.enabled) {
+    if (configSources.database.backend === "redis") {
+      const urlEnv = config.storage.cache.redis?.url_env;
+      const redisUrl = urlEnv ? resolveEnv(urlEnv) : undefined;
+      if (!redisUrl) {
+        throw new TypeError(
+          "config_sources.database.backend 'redis' requires storage.cache.redis.url_env to resolve to a Redis URL.",
+        );
+      }
+      runtimeConfigStore = await createRedisConfigStore({ connection: { url: redisUrl } });
+    } else {
+      runtimeConfigStore = await createConfigStoreFromDatabaseConfig(config.storage.database, resolveEnv);
+    }
+    opened.configStore = runtimeConfigStore;
+  }
+  const runtimeConfig = new RuntimeConfigManager({
+    fileConfig: config,
+    ...(options.configDocument
+      ? { fileDocument: options.configDocument.document, fileDigest: options.configDocument.digest }
+      : {}),
+    ...(runtimeConfigStore ? { store: runtimeConfigStore } : {}),
+    namespace: configSources.database.namespace,
+    baseDir,
+  });
+  if (runtimeConfigStore !== undefined) {
+    await runtimeConfig.admission();
+    await runtimeConfig.legacyImport();
+    await runtimeConfig.heartbeat();
+    // Background refresh only accelerates generation swaps; every admission
+    // re-reads the durable head regardless (H15).
+    const refreshTimer = setInterval(() => {
+      void runtimeConfig.admission().finally(() => runtimeConfig.heartbeat()).catch((error: unknown) => {
+        console.warn(JSON.stringify({
+          level: "warn",
+          msg: "runtime config background refresh failed; admissions will retry",
+          error: admissionUnavailableReason(error),
+        }));
+      });
+    }, configSources.runtime.refresh_interval_seconds * 1000);
+    refreshTimer.unref();
+    const closeConfigStore = runtimeConfigStore.close.bind(runtimeConfigStore);
+    let configStoreClosed = false;
+    runtimeConfigStore.close = async () => {
+      if (configStoreClosed) return;
+      configStoreClosed = true;
+      clearInterval(refreshTimer);
+      await runtimeConfig.drain();
+      await closeConfigStore();
+    };
+  }
+  const currentConfig = (): AppConfig => runtimeConfig.current().config;
 
-  const giteaConfigs = resolveGiteaLikeWebhookConfigs(config, "gitea", undefined, appTokenServices, workspaceRuntime);
-  const forgejoConfigs = resolveGiteaLikeWebhookConfigs(config, "forgejo", undefined, appTokenServices, workspaceRuntime);
-  const githubConfigs = resolveGenericWebhookConfigs(config, "github", undefined, appTokenServices, workspaceRuntime);
-  const gitlabConfigs = resolveGenericWebhookConfigs(config, "gitlab", undefined, undefined, workspaceRuntime);
-  const p4Configs = resolveP4TriggerConfigs(config, undefined, workspaceRuntime);
-  const svnConfigs = resolveSvnTriggerConfigs(config, undefined, workspaceRuntime);
+  // Generation-scoped caches (H01/H02/H06): model routes and GitHub App token
+  // services are rebuilt per generation, so a published revision swaps the
+  // effective clients and trigger credentials on the next request.
+  interface ModelRoute {
+    readonly llm: ChatCompletionClient;
+    readonly model: ModelSpec;
+    readonly agentModelChain: readonly ModelSpec[];
+    readonly compression?: CompressionConfig;
+    readonly summarizeModel?: ModelSpec;
+    readonly summarizeClient?: ChatCompletionClient;
+  }
+  const generationModelRoutes = new WeakMap<RuntimeConfigGeneration, Map<string, ModelRoute>>();
+  const dailyBudgetTracker = new DailyBudgetTracker();
+  const rateLimiter = createMultiProviderRateLimiter(() => runtimeConfig.withoutGeneration(() => runtimeConfig.current().config.queue.rate_limit?.per_provider_rps ?? {}));
+  const generationAppTokenServices = new WeakMap<RuntimeConfigGeneration, Promise<ReadonlyMap<string, GithubAppTokenService>>>();
+  const appTokenServicesFor = (generation: RuntimeConfigGeneration): Promise<ReadonlyMap<string, GithubAppTokenService>> => {
+    let services = generationAppTokenServices.get(generation);
+    if (services === undefined) {
+      services = createAppTokenServices(generation.config);
+      generationAppTokenServices.set(generation, services);
+    }
+    return services;
+  };
+
+  const workspaceRuntime = runtimeConfig.current().workspaceRuntime;
+
+  // Fixed dispatcher sources (P4/H06): each admission re-resolves trigger
+  // profiles from the CURRENT generation, so publishing a revision that
+  // adds/removes/re-credentials triggers applies to the next request without
+  // remounting any Hono route.
+  const gitWebhookConfigs = async (kind: "gitea" | "forgejo" | "github" | "gitlab"): Promise<readonly VcsWebhookConfig[]> => {
+    const generation = runtimeConfig.current();
+    const tokenServices = await appTokenServicesFor(generation);
+    if (kind === "gitea") return resolveGiteaLikeWebhookConfigs(generation.config, "gitea", undefined, tokenServices, generation.workspaceRuntime);
+    if (kind === "forgejo") return resolveGiteaLikeWebhookConfigs(generation.config, "forgejo", undefined, tokenServices, generation.workspaceRuntime);
+    if (kind === "github") return resolveGenericWebhookConfigs(generation.config, "github", undefined, tokenServices, generation.workspaceRuntime);
+    return resolveGenericWebhookConfigs(generation.config, "gitlab", undefined, undefined, generation.workspaceRuntime);
+  };
+  const giteaConfigs = () => gitWebhookConfigs("gitea");
+  const forgejoConfigs = () => gitWebhookConfigs("forgejo");
+  const githubConfigs = () => gitWebhookConfigs("github");
+  const gitlabConfigs = () => gitWebhookConfigs("gitlab");
+  const p4Configs = () => resolveP4TriggerConfigs(runtimeConfig.current().config, undefined, runtimeConfig.current().workspaceRuntime);
+  const svnConfigs = () => resolveSvnTriggerConfigs(runtimeConfig.current().config, undefined, runtimeConfig.current().workspaceRuntime);
 
   const adminAuthConfig = resolveAdminAuthConfig(config as unknown as Record<string, unknown>, resolveEnv);
   const catalogConfig = config.llm?.model_catalog;
@@ -2524,7 +2750,7 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
   const catalogNeedsStore = catalogEnabled && catalogConfig!.cache.backend === "sqlite";
   const reflectionNeedsStore =
     !!reflectionConfig && reflectionConfig.enabled !== false && reflectionConfig.mode !== "off";
-  const needsStore = !!adminAuthConfig || catalogNeedsStore || reflectionNeedsStore;
+  const needsStore = !!adminAuthConfig || catalogNeedsStore || reflectionNeedsStore || runtimeConfig.mode === "database";
 
   let store: StoreDb | undefined;
   let sessionStore: ConfigStore | undefined;
@@ -2532,36 +2758,51 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
   let liveRunRegistry: LiveRunRegistry | undefined;
 
   if (needsStore) {
-    if (config.storage.database.kind === "postgres") {
-      const pgConfig = (config.storage.database.postgres ?? {}) as Record<string, unknown>;
-      const pgUrlEnv = typeof pgConfig.url_env === "string" ? pgConfig.url_env : undefined;
-      const pgUrl = (pgUrlEnv ? resolveEnv(pgUrlEnv) : undefined)
-        ?? (typeof pgConfig.url === "string" ? pgConfig.url : undefined);
-      if (!pgUrl) {
-        throw new TypeError(
-          "storage.database.kind 'postgres' requires storage.database.postgres.url_env to resolve to a PostgreSQL URL.",
-        );
+    try {
+      if (config.storage.database.kind === "postgres") {
+        const pgConfig = (config.storage.database.postgres ?? {}) as Record<string, unknown>;
+        const pgUrlEnv = typeof pgConfig.url_env === "string" ? pgConfig.url_env : undefined;
+        const pgUrl = (pgUrlEnv ? resolveEnv(pgUrlEnv) : undefined)
+          ?? (typeof pgConfig.url === "string" ? pgConfig.url : undefined);
+        if (!pgUrl) {
+          throw new TypeError(
+            "storage.database.kind 'postgres' requires storage.database.postgres.url_env to resolve to a PostgreSQL URL.",
+          );
+        }
+        store = await createStoreDb({ kind: "postgres", url: pgUrl, migrationMode: config.storage.database.migrate });
+      } else {
+        store = await createStoreDb({ kind: "sqlite", path: config.storage.database.sqlite.path, migrationMode: config.storage.database.migrate });
       }
-      store = await createStoreDb({ kind: "postgres", url: pgUrl, migrationMode: config.storage.database.migrate });
-    } else {
-      store = await createStoreDb({ kind: "sqlite", path: config.storage.database.sqlite.path, migrationMode: config.storage.database.migrate });
+    } catch (error) {
+      if (!runtimeConfigStore || catalogNeedsStore || reflectionNeedsStore) throw error;
+      console.warn(JSON.stringify({ level: "warn", msg: "Statistics store unavailable; configuration administration remains available." }));
     }
   }
   opened.store = store;
 
-  let catalogService: ModelCatalogService | undefined;
+  const generationCatalogs = new WeakMap<RuntimeConfigGeneration, ModelCatalogService>();
+  const catalogBackends = new Map<string, Promise<ModelCatalogBackend>>();
   let catalogBackendToClose: ModelCatalogBackend | undefined;
-  if (catalogEnabled && catalogConfig) {
-    let catalogBackend: ModelCatalogBackend | undefined;
-    if (catalogConfig.cache.backend === "sqlite") {
-      catalogBackend = store ? await createStoreModelCatalogBackend(store) : undefined;
-    } else if (catalogConfig.cache.backend === "memory") {
-      catalogBackend = createMemoryModelCatalogBackend();
-    } else if (catalogConfig.cache.backend === "redis") {
-      catalogBackend = await createRedisModelCatalogBackend(toRedisModelCatalogBackendOptions(config));
-      catalogBackendToClose = catalogBackend;
-      opened.catalogBackend = catalogBackend;
+  await runtimeConfig.setGenerationPreparer(async generation => {
+    const config = generation.config;
+    const catalogConfig = config.llm.model_catalog;
+    if (!catalogConfig?.enabled) return;
+    let backendPromise = catalogBackends.get(catalogConfig.cache.backend);
+    if (!backendPromise) {
+      backendPromise = (async () => {
+        if (catalogConfig.cache.backend === "sqlite") {
+          if (!store) throw new ConfigError("store_unavailable", "The configured catalog requires an available statistics store.");
+          return createStoreModelCatalogBackend(store);
+        }
+        if (catalogConfig.cache.backend === "memory") return createMemoryModelCatalogBackend();
+        const backend = await createRedisModelCatalogBackend(toRedisModelCatalogBackendOptions(config));
+        catalogBackendToClose = backend;
+        opened.catalogBackend = backend;
+        return backend;
+      })().catch(error => { catalogBackends.delete(catalogConfig.cache.backend); throw error; });
+      catalogBackends.set(catalogConfig.cache.backend, backendPromise);
     }
+    const catalogBackend = await backendPromise;
     const providerHints: ModelCatalogProviderHint[] = config.llm.providers.map((provider) => {
       const raw = provider as Record<string, unknown>;
       const hint: { id: string; catalogProvider?: string; catalogId?: string } = { id: provider.id };
@@ -2569,7 +2810,7 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
       if (typeof raw.catalog_id === "string") hint.catalogId = raw.catalog_id;
       return hint;
     });
-    catalogService = createModelCatalogService({
+    const catalogService = createModelCatalogService({
       enabled: true,
       sourceUrl: catalogConfig.source_url,
       refreshIntervalHours: catalogConfig.refresh_interval_hours,
@@ -2585,85 +2826,136 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
       fetcher: createHttpModelCatalogFetcher(),
     });
     await catalogService.ensureRefreshed();
-  }
+    // Capture every configured model before activation. Shared cache refreshes
+    // must not change a pinned generation's later fallback or summary lookup.
+    const specs = Object.values(config.llm.model_chain).flat().map(entry => resolveModelSpecFromChain(config.llm.providers, [entry]));
+    if (config.llm.providers.length > 0) specs.push(resolveModelSpecFromChain(config.llm.providers, []));
+    catalogService.freezeModels(specs);
+    let models = Object.fromEntries(specs.map(spec => [JSON.stringify(spec), catalogService.enrichModelSpec(spec)]));
+    if (runtimeConfigStore && generation.snapshotId) {
+      const key = `catalog/${generation.snapshotId}`;
+      let record = await runtimeConfigStore.readRuntimeState(configSources.database.namespace, key);
+      if (!record) record = await runtimeConfigStore.writeRuntimeState({ namespace: configSources.database.namespace, key,
+        expectedVersion: null, snapshotId: null, value: { models, hash: hashStructured([models]) }, now: Date.now() });
+      record ??= await runtimeConfigStore.readRuntimeState(configSources.database.namespace, key);
+      if (!isPlainObject(record?.value) || !isPlainObject(record.value.models) || record.value.hash !== hashStructured([record.value.models])) {
+        throw new ConfigError("snapshot_invalid", "Pinned catalog metadata is corrupt.");
+      }
+      models = record.value.models as Record<string, ModelSpec>;
+    }
+    generationCatalogs.set(generation, { ...catalogService, enrichModelSpec(spec) {
+      const frozen = models[JSON.stringify(spec)];
+      if (!frozen) throw new ConfigError("snapshot_invalid", "Pinned catalog metadata does not contain the configured model.");
+      return structuredClone(frozen);
+    } });
+  });
 
-  const retryConfig = toGatewayRetry(config.llm.retry);
-  const budgetConfig = toGatewayBudget(config.llm.budget);
-  const perProviderOverrides = toGatewayPerProviderOverrides(config.llm.per_provider_overrides);
-  const gatewayModelPricing = catalogService
-    ? buildGatewayModelPricing(catalogService, config)
-    : undefined;
-  const modelRoutes = new Map<string, ReturnType<typeof createModelRoute>>();
-  function createModelRoute(name: string) {
-    const chain = resolveModelChain(config, name);
+  function createModelRouteFor(generation: RuntimeConfigGeneration, name: string, workspaceId?: string): ModelRoute {
+    const generationConfig = generation.config;
+    const catalogService = generationCatalogs.get(generation);
+    // Gateway retry/budget/per-provider overrides and pricing are
+    // database-manageable globals: resolve them per generation so a
+    // published revision actually changes the next task's client config.
+    const retryConfig = toGatewayRetry(generationConfig.llm.retry);
+    const budgetConfig = toGatewayBudget(generationConfig.llm.budget);
+    const perProviderOverrides = toGatewayPerProviderOverrides(generationConfig.llm.per_provider_overrides);
+    const gatewayModelPricing = catalogService
+      ? buildGatewayModelPricing(catalogService, generationConfig)
+      : undefined;
+    const chain = resolveModelChain(generationConfig, name);
     const enrich = (candidate: ModelSpec): ModelSpec =>
       catalogService ? catalogService.enrichModelSpec(candidate) : candidate;
-    const model = enrich(resolveModelSpecFromChain(config.llm.providers, chain));
+    const model = enrich(resolveModelSpecFromChain(generationConfig.llm.providers, chain));
     const agentModelChain = chain.length > 0
-      ? chain.map((entry, index) => index === 0 ? model : enrich(resolveModelSpecFromChain(config.llm.providers, [entry])))
+      ? chain.map((entry, index) => index === 0 ? model : enrich(resolveModelSpecFromChain(generationConfig.llm.providers, [entry])))
       : [model];
     const llm = createResilientChatClient({
+      dailyBudgetTracker,
+      beforeRequest: model => rateLimiter.acquireAsync(model.providerId),
+      ...(workspaceId ? { workspaceId } : {}),
       clientFactory: createLlmClientFromModelSpec,
-      providers: toGatewayProviders(config.llm.providers),
+      providers: toGatewayProviders(generationConfig.llm.providers),
       fallbackChain: toGatewayFallbackChain(chain),
       ...(retryConfig ? { retry: retryConfig } : {}),
       ...(budgetConfig ? { budget: budgetConfig } : {}),
       ...(perProviderOverrides ? { perProviderOverrides } : {}),
       ...(gatewayModelPricing ? { modelPricing: gatewayModelPricing } : {}),
     });
-    const summaryCandidate = resolveSummarizeModelFromChain(config, chain);
+    const summaryCandidate = resolveSummarizeModelFromChain(generationConfig, chain);
     const summarizeModel = summaryCandidate ? enrich(summaryCandidate) : undefined;
     return {
       llm,
       model,
       agentModelChain,
-      compression: toCompressionConfig(config.compression) ?? toDefaultCompressionConfig(model),
-      ...(summarizeModel ? { summarizeModel, summarizeClient: createLlmClientFromModelSpec(summarizeModel) } : {}),
+      compression: toCompressionConfig(generationConfig.compression) ?? toDefaultCompressionConfig(model),
+      ...(summarizeModel ? { summarizeModel, summarizeClient: llm } : {}),
     };
   }
-  function getModelRoute(name: string) {
-    let route = modelRoutes.get(name);
+  function getModelRouteFor(generation: RuntimeConfigGeneration, name: string, workspaceId?: string): ModelRoute {
+    let routes = generationModelRoutes.get(generation);
+    if (!routes) {
+      routes = new Map<string, ModelRoute>();
+      generationModelRoutes.set(generation, routes);
+    }
+    const key = JSON.stringify([name, workspaceId ?? null]);
+    let route = routes.get(key);
     if (!route) {
-      route = createModelRoute(name);
-      modelRoutes.set(name, route);
+      route = createModelRouteFor(generation, name, workspaceId);
+      routes.set(key, route);
     }
     return route;
   }
-  const modelOptionsResolver = (workspaceId?: string) =>
-    getModelRoute(resolveModelChainNames(config, workspaceId).modelChain);
+  const modelOptionsResolver = (workspaceId?: string) => {
+    const generation = runtimeConfig.current();
+    return getModelRouteFor(generation, resolveModelChainNames(generation.config, workspaceId).modelChain, workspaceId);
+  };
   const triageModelOptionsResolver = (workspaceId?: string) => {
-    const { llm, model } = getModelRoute(resolveModelChainNames(config, workspaceId).triageModelChain);
+    const generation = runtimeConfig.current();
+    const { llm, model } = getModelRouteFor(generation, resolveModelChainNames(generation.config, workspaceId).triageModelChain, workspaceId);
     return { llm, model };
   };
   const defaultRoute = modelOptionsResolver();
-  const defaultTriageRoute = triageModelOptionsResolver();
   // Resolve every configured workspace while the catalog backend is open.
   for (const workspaceId of Object.keys(config.workspaces.instances)) {
     modelOptionsResolver(workspaceId);
     triageModelOptionsResolver(workspaceId);
   }
-  if (catalogBackendToClose?.close) {
-    await catalogBackendToClose.close();
-    // Released mid-build; the failure wrapper must not close it twice.
-    opened.catalogBackend = undefined;
-  }
 
   const sourceRootResolver = (reviewEvent: ReviewEvent): string =>
-    workspaceRuntime.layoutForEvent(reviewEvent).sourceRoot;
-  const runtimeDirsResolver = (reviewEvent: ReviewEvent) => workspaceRuntime.layoutForEvent(reviewEvent);
+    runtimeConfig.current().workspaceRuntime.layoutForEvent(reviewEvent).sourceRoot;
+  const runtimeDirsResolver = (reviewEvent: ReviewEvent) => runtimeConfig.current().workspaceRuntime.layoutForEvent(reviewEvent);
   const agentAdapter = resolveAgentAdapterFromConfig(config);
 
   if (adminAuthConfig && store) {
-    const activeProjectIdentities = buildActiveProjectIdentities(config);
-    await softDeleteMissingProjects(store, activeProjectIdentities,
-      Object.entries(config.workspaces.instances).filter(([, instance]) => instance.match !== undefined).map(([id]) => id));
+    // B09: soft-delete must judge liveness by the CURRENT generation's
+    // definitions (dynamic config included) plus durable bindings, never by
+    // a stale static snapshot that would bury wildcard-rule projects.
+    const generationConfig = currentConfig();
+    const activeProjectIdentities = buildActiveProjectIdentities(generationConfig);
+    const matchDefinitionIds = Object.entries(generationConfig.workspaces.instances)
+      .filter(([, instance]) => instance.match !== undefined)
+      .map(([id]) => id);
+    const bindingDefinitionIds = runtimeConfigStore !== undefined
+      ? new Set((await runtimeConfigStore.listWorkspaceBindings(configSources.database.namespace))
+          .filter((binding) => binding.state === "active")
+          .map((binding) => binding.definitionId))
+      : new Set<string>();
+    const protectedIds = [...new Set([...matchDefinitionIds, ...bindingDefinitionIds])];
+    await softDeleteMissingProjects(store, activeProjectIdentities, protectedIds);
     await hardDeleteExpiredProjects(store, config.storage.retention.deleted_project_grace_days);
+  }
 
+  if (adminAuthConfig) {
     liveRunRegistry = createLiveRunRegistry();
     // Durable admin sessions ride the deployment database (P2 item 97):
     // sha256-hashed tokens, TTL at read time, logout visible to every replica.
-    sessionStore = await createConfigStoreFromDatabaseConfig(config.storage.database, resolveEnv);
-    opened.sessionStore = sessionStore;
+    // Dynamic-config mode shares the runtime config store handle instead of
+    // opening a second connection to the same backend (P5 decoupling: admin
+    // sessions and config management no longer require the stats store).
+    sessionStore = runtimeConfigStore ?? await createConfigStoreFromDatabaseConfig(config.storage.database, resolveEnv);
+    if (sessionStore !== runtimeConfigStore) {
+      opened.sessionStore = sessionStore;
+    }
     // Bounded sweep of expired session rows (P2): production never called
     // cleanupExpiredSessions, so admin_sessions grew without bound. The
     // timer is unref'd — it must never hold the process open — and closing
@@ -2685,56 +2977,222 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
       await closeSessions();
     };
     observability = {
-      store,
+      ...(store ? { store } : {}),
       adminAuth: adminAuthConfig,
       sessionStore,
       liveRuns: liveRunRegistry,
     };
   }
 
-  const reflectionEnabled = !!store && reflectionNeedsStore;
+  const reflectionEnabled = !!store;
+
+  const webSearchFromConfig = (source: AppConfig) => ({
+    enabled: source.agent.web_search?.enabled ?? false,
+    ...(source.agent.web_search !== undefined && source.agent.web_search.providers.length > 0
+      ? { providers: source.agent.web_search.providers }
+      : {}),
+    ...(source.agent.web_search !== undefined && source.agent.web_search.exclude.length > 0
+      ? { exclude: source.agent.web_search.exclude }
+      : {}),
+    ...(source.agent.web_search?.timeout_seconds !== undefined
+      ? { timeoutSeconds: source.agent.web_search.timeout_seconds }
+      : {}),
+    ...(source.agent.web_search !== undefined && Object.keys(source.agent.web_search.credentials).length > 0
+      ? { credentials: source.agent.web_search.credentials }
+      : {}),
+    ...(source.agent.web_search?.searxng
+      ? {
+          searxng: {
+            ...(source.agent.web_search.searxng.endpoint !== undefined
+              ? { endpoint: source.agent.web_search.searxng.endpoint }
+              : {}),
+            ...(source.agent.web_search.searxng.categories !== undefined
+              ? { categories: source.agent.web_search.searxng.categories }
+              : {}),
+            ...(source.agent.web_search.searxng.engines !== undefined
+              ? { engines: source.agent.web_search.searxng.engines }
+              : {}),
+            ...(source.agent.web_search.searxng.language !== undefined
+              ? { language: source.agent.web_search.searxng.language }
+              : {}),
+            ...(source.agent.web_search.searxng.safesearch !== undefined
+              ? { safesearch: source.agent.web_search.searxng.safesearch }
+              : {}),
+          },
+        }
+      : {}),
+  });
+
+  const contextCompactionFromConfig = (source: AppConfig) => ({
+    auto: source.agent.context_compaction?.auto ?? true,
+    ...(source.agent.context_compaction?.threshold_percent !== undefined
+      ? { thresholdPercent: source.agent.context_compaction.threshold_percent }
+      : {}),
+    ...(source.agent.context_compaction?.prune !== undefined
+      ? { prune: source.agent.context_compaction.prune }
+      : {}),
+  });
+
+  // P4 execution plan: one resolver, one pinned generation per task (H03–H08).
+  // Everything config-derived that a run consumes resolves here — model route,
+  // workspace-layer agent/sandbox selection, review policy (include/exclude/
+  // max_files), output language, web search — so a mid-flight publish can
+  // never mix generations inside one run.
+  const resolveRunOptions = async (
+    context: ReviewOrchestrationContext,
+  ): Promise<Partial<ServerReviewOrchestrationOptions>> => {
+    const generation = context.configSnapshotId === undefined ? await runtimeConfig.captureForTask() : await runtimeConfig.resolveGeneration(context.configSnapshotId);
+    const generationConfig = generation.config;
+    const workspaceId = context.reviewEvent.workspaceId;
+    const analysis = resolveAnalysisSelection(generationConfig, workspaceId, executionRoute(generationConfig, context.reviewEvent));
+    const reviewPolicy = analysis.review as AppConfig["review"];
+    const executionConfig: AppConfig = { ...generationConfig, review: reviewPolicy,
+      workspaces: { ...generationConfig.workspaces, instances: { ...generationConfig.workspaces.instances,
+        [workspaceId]: { ...generationConfig.workspaces.instances[workspaceId], review: reviewPolicy } } } };
+    const agentConfig = { ...generationConfig, agent: analysis.agent ?? generationConfig.agent };
+    const route = getModelRouteFor(generation, analysis.modelChain, reviewMemoryScope(context.reviewEvent));
+    const tokenServices = await appTokenServicesFor(generation);
+    const billingScope = reviewMemoryScope(context.reviewEvent);
+    const budget = generationConfig.llm.budget;
+    let runSpend = 0;
+    const checkBudget = () => {
+      if (budget?.per_run_usd && runSpend >= budget.per_run_usd) throw new LlmBudgetExceededError("per_run", budget.per_run_usd, runSpend);
+      const dailySpend = dailyBudgetTracker.getDailySpend(billingScope);
+      if (budget?.per_repo_daily_usd && dailySpend >= budget.per_repo_daily_usd) throw new LlmBudgetExceededError("per_repo_daily", budget.per_repo_daily_usd, dailySpend);
+    };
+    const runClient: ChatCompletionClient = {
+      async complete(input) {
+        checkBudget();
+        const result = await route.llm.complete(input);
+        const cost = (result as { estimatedCostUsd?: number }).estimatedCostUsd;
+        if (typeof cost === "number" && Number.isFinite(cost) && cost > 0) runSpend += cost;
+        return result;
+      },
+    };
+    return {
+      ...route,
+      llm: runClient,
+      ...(route.summarizeModel ? { summarizeClient: runClient } : {}),
+      beforeAgentCall: async model => { checkBudget(); await rateLimiter.acquireAsync(model.providerId); },
+      onAgentCost: cost => {
+        if (!Number.isFinite(cost) || cost <= 0) return;
+        runSpend += cost;
+        dailyBudgetTracker.recordSpend(billingScope, cost);
+      },
+      baseSystemPromptResolver: async (id: string) => {
+        try {
+          const workspace = resolveWorkspaceConfig(generationConfig, id);
+          const promptFile = workspace.prompt?.base_system_prompt_file;
+          if (promptFile) {
+            return await loadSystemPromptTemplate(resolve(baseDir, promptFile));
+          }
+        } catch {
+          // workspace not found or file not readable — fall back to global prompt
+        }
+        return undefined;
+      },
+      forceSkillsResolver: (id: string) => {
+        try {
+          return resolveWorkspaceConfig(generationConfig, id).prompt?.force_skills;
+        } catch {
+          return undefined;
+        }
+      },
+      sourceRootResolver: (reviewEvent: ReviewEvent) => generation.workspaceRuntime.layoutForEvent(reviewEvent).sourceRoot,
+      runtimeDirsResolver: (reviewEvent: ReviewEvent) => generation.workspaceRuntime.layoutForEvent(reviewEvent),
+      vcs: createVcsAdapterFromConfig(executionConfig, baseDir),
+      vcsFactory: async (sourceRoot: string, vcsContext: ReviewOrchestrationContext) => {
+        const resolvedToken = await resolveTriggerTokenForContext(generationConfig, vcsContext, tokenServices);
+        return createVcsAdapterFromConfig(
+          executionConfig,
+          sourceRoot,
+          vcsContext.reviewEvent.triggerName,
+          vcsContext.reviewEvent.repoRef,
+          resolvedToken !== undefined ? { resolvedToken } : undefined,
+        );
+      },
+      outputPublisherResolver: createOutputPublisherResolverFromConfig(executionConfig, {
+        baseDir,
+        appTokenServices: tokenServices,
+        resolutionAnalyzerFactory: (sourceRoot, analyzerContext) => createProblemResolutionAnalyzer({
+          ...getModelRouteFor(generation, resolveAnalysisSelection(generationConfig, analyzerContext.reviewEvent.workspaceId,
+            executionRoute(generationConfig, analyzerContext.reviewEvent)).triageModelChain, reviewMemoryScope(analyzerContext.reviewEvent)),
+          sourceRoot,
+        }),
+      }),
+      // H03/H04: workspace-layer agent and sandbox selection via the merged
+      // analysis selection; an explicit container sandbox that fails
+      // preflight rejects this run instead of downgrading to native.
+      sandboxFactory: () => createSandboxBackendFromSandboxConfig(
+        analysis.sandbox ?? generationConfig.agent.sandbox,
+      ),
+      agentAdapter: createAgentAdapter({ kind: analysis.agent?.default ?? generationConfig.agent.default }),
+      agentTimeoutMs: agentConfig.agent.timeout_seconds * 1000,
+      agentAutoApprove: agentConfig.agent.auto_approve,
+      contextCompaction: contextCompactionFromConfig(agentConfig),
+      webSearch: webSearchFromConfig(agentConfig),
+      ignoreLabelsResolver: (id: string) => {
+        if (id === workspaceId) return reviewPolicy.labels?.ignore ?? ["aicr:ignore", "aicr-ignore"];
+        try {
+          const workspace = resolveWorkspaceConfig(generationConfig, id);
+          return workspace.review?.labels?.ignore ?? generationConfig.review.labels?.ignore ?? ["aicr:ignore", "aicr-ignore"];
+        } catch {
+          return generationConfig.review.labels?.ignore ?? ["aicr:ignore", "aicr-ignore"];
+        }
+      },
+      contextRepositoriesResolver: (id: string) => {
+        try {
+          return resolveWorkspaceConfig(generationConfig, id).context_repositories;
+        } catch {
+          return undefined;
+        }
+      },
+      reviewPolicyResolver: (id: string) => {
+        const merged = id === workspaceId
+          ? reviewPolicy
+          : (resolveAnalysisSelection(generationConfig, id, undefined).review as AppConfig["review"]);
+        return { include: merged.include, exclude: merged.exclude, max_files: merged.max_files };
+      },
+      reviewConfig: reviewPolicy,
+      configVersion: { configSnapshotId: generation.snapshotId, databaseRevision: generation.databaseRevision,
+        fileDigest: generation.fileDigest, ...(executionRoute(generationConfig, context.reviewEvent)
+          ? { routeId: executionRoute(generationConfig, context.reviewEvent)!.id } : {}) },
+      memoryHintsResolver: async (scope: string) => {
+        const reflection = reviewPolicy.reflection;
+        if (!store || !reflection || reflection.enabled === false || reflection.mode === "off") return [];
+        const entries = await readReflectionMemory(store, scope, { limit: reflection.memory?.max_entries ?? 100 });
+        let bytes = 0;
+        const bounded = entries.filter(entry => {
+          bytes += Buffer.byteLength(entry.content, "utf8");
+          return bytes <= (reflection.memory?.max_size_kb ?? Infinity) * 1024;
+        });
+        return buildMemoryHintsForPrompt(bounded);
+      },
+      ...(toCompressionConfig(analysis.compression as AppConfig["compression"])
+        ? { compression: toCompressionConfig(analysis.compression as AppConfig["compression"])! } : {}),
+      ...(reviewPolicy.output_language !== undefined ? { outputLanguage: reviewPolicy.output_language } : {}),
+      ...(reviewPolicy.log_thinking !== undefined ? { logThinking: reviewPolicy.log_thinking } : {}),
+    };
+  };
 
   const orchestrationOptions: ServerReviewOrchestrationOptions = {
     baseSystemPrompt,
-    baseSystemPromptResolver: async (workspaceId: string) => {
-      try {
-        const workspace = resolveWorkspaceConfig(config, workspaceId);
-        const promptFile = workspace.prompt?.base_system_prompt_file;
-        if (promptFile) {
-          return await loadSystemPromptTemplate(resolve(baseDir, promptFile));
-        }
-      } catch {
-        // workspace not found or file not readable — fall back to global prompt
-      }
-      return undefined;
-    },
-    forceSkillsResolver: (workspaceId: string) => {
-      try {
-        const workspace = resolveWorkspaceConfig(config, workspaceId);
-        return workspace.prompt?.force_skills;
-      } catch {
-        return undefined;
-      }
-    },
     sourceRootResolver,
     runtimeDirsResolver,
     vcs: createVcsAdapterFromConfig(config, baseDir),
-    vcsFactory: async (sourceRoot: string, context: ReviewOrchestrationContext) => {
-      const resolvedToken = await resolveTriggerTokenForContext(config, context, appTokenServices);
-      return createVcsAdapterFromConfig(
-        config,
-        sourceRoot,
-        context.reviewEvent.triggerName,
-        context.reviewEvent.repoRef,
-        resolvedToken !== undefined ? { resolvedToken } : undefined,
-      );
-    },
     ...defaultRoute,
     modelOptionsResolver,
+    optionsResolver: resolveRunOptions,
+    executionScope: async (context, run) => {
+      const generation = context.configSnapshotId === undefined ? await runtimeConfig.captureForTask() : await runtimeConfig.resolveGeneration(context.configSnapshotId);
+      return runtimeConfig.withGeneration(generation, run);
+    },
     dryRun: false,
+    // Bootstrap-time fallbacks below apply only when a run somehow bypasses
+    // optionsResolver (e.g. a custom caller); every server path resolves the
+    // pinned generation per task instead.
     outputPublisherResolver: createOutputPublisherResolverFromConfig(config, {
       baseDir,
-      appTokenServices,
       resolutionAnalyzerFactory: (sourceRoot, context) => createProblemResolutionAnalyzer({
         ...triageModelOptionsResolver(context.reviewEvent.workspaceId),
         sourceRoot,
@@ -2743,51 +3201,8 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
     sandboxFactory: () => createSandboxBackendFromConfig(config),
     agentAdapter,
     agentTimeoutMs: config.agent.timeout_seconds * 1000,
-    contextCompaction: {
-      auto: config.agent.context_compaction?.auto ?? true,
-      ...(config.agent.context_compaction?.threshold_percent !== undefined
-        ? { thresholdPercent: config.agent.context_compaction.threshold_percent }
-        : {}),
-      ...(config.agent.context_compaction?.prune !== undefined
-        ? { prune: config.agent.context_compaction.prune }
-        : {}),
-    },
-    webSearch: {
-      enabled: config.agent.web_search?.enabled ?? false,
-      ...(config.agent.web_search !== undefined && config.agent.web_search.providers.length > 0
-        ? { providers: config.agent.web_search.providers }
-        : {}),
-      ...(config.agent.web_search !== undefined && config.agent.web_search.exclude.length > 0
-        ? { exclude: config.agent.web_search.exclude }
-        : {}),
-      ...(config.agent.web_search?.timeout_seconds !== undefined
-        ? { timeoutSeconds: config.agent.web_search.timeout_seconds }
-        : {}),
-      ...(config.agent.web_search !== undefined && Object.keys(config.agent.web_search.credentials).length > 0
-        ? { credentials: config.agent.web_search.credentials }
-        : {}),
-      ...(config.agent.web_search?.searxng
-        ? {
-          searxng: {
-            ...(config.agent.web_search.searxng.endpoint !== undefined
-              ? { endpoint: config.agent.web_search.searxng.endpoint }
-              : {}),
-            ...(config.agent.web_search.searxng.categories !== undefined
-              ? { categories: config.agent.web_search.searxng.categories }
-              : {}),
-            ...(config.agent.web_search.searxng.engines !== undefined
-              ? { engines: config.agent.web_search.searxng.engines }
-              : {}),
-            ...(config.agent.web_search.searxng.language !== undefined
-              ? { language: config.agent.web_search.searxng.language }
-              : {}),
-            ...(config.agent.web_search.searxng.safesearch !== undefined
-              ? { safesearch: config.agent.web_search.searxng.safesearch }
-              : {}),
-          },
-        }
-        : {}),
-    },
+    contextCompaction: contextCompactionFromConfig(config),
+    webSearch: webSearchFromConfig(config),
     ignoreLabelsResolver: (workspaceId) => {
       try {
         const workspace = resolveWorkspaceConfig(config, workspaceId);
@@ -2820,6 +3235,17 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
           postRunCallback: async (result: ReviewOrchestrationResult, ctx: ReviewOrchestrationContext): Promise<void> => {
             const workspaceId = reviewMemoryScope(ctx.reviewEvent);
             const runId = ctx.runId ?? ctx.reviewEvent.headSha ?? String(Date.now());
+            // H05 reflection layering: the run's own generation decides mode
+            // and retention, not whatever revision is current at completion.
+            const generationConfig = (await runtimeConfig.resolveGeneration(ctx.configSnapshotId ?? null)).config;
+            const reflectionPolicy = (resolveAnalysisSelection(
+              generationConfig,
+              ctx.reviewEvent.workspaceId,
+              executionRoute(generationConfig, ctx.reviewEvent),
+            ).review as AppConfig["review"]).reflection;
+            if (!reflectionPolicy || reflectionPolicy.enabled === false || reflectionPolicy.mode === "off") {
+              return;
+            }
             const reflectionInput = {
               workspaceId,
               runId,
@@ -2836,7 +3262,7 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
 
             if (reflections.length > 0) {
               const now = new Date();
-              const retentionDays = reflectionConfig?.memory?.retention_days ?? 90;
+              const retentionDays = reflectionPolicy?.memory?.retention_days ?? 90;
               const expiresAt = new Date(now.getTime() + retentionDays * 86_400_000);
               const toEntries = (rs: readonly ExtractedReflection[]) =>
                 rs.map((r: ExtractedReflection) => ({
@@ -2849,7 +3275,7 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
                 }));
               await writeReflectionMemory(store!, toEntries(reflections));
 
-              if (reflectionConfig?.mode === "thorough" && result.outputState.problems.length > 0) {
+              if (reflectionPolicy?.mode === "thorough" && result.outputState.problems.length > 0) {
                 const allEntries = await readReflectionMemory(store!, workspaceId, { limit: 200 });
                 const currentCategories = [
                   ...new Set(
@@ -2866,11 +3292,12 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
                 }
               }
 
-              const maxEntries = reflectionConfig?.memory?.max_entries;
-              if (maxEntries) {
-                void compactReflectionMemory(store!, workspaceId, {
+              const maxEntries = reflectionPolicy?.memory?.max_entries;
+              if (maxEntries || reflectionPolicy.memory?.max_size_kb) {
+                await compactReflectionMemory(store!, workspaceId, {
                   retentionDays,
-                  maxEntries,
+                  ...(maxEntries ? { maxEntries } : {}),
+                  ...(reflectionPolicy.memory?.max_size_kb ? { maxBytes: reflectionPolicy.memory.max_size_kb * 1024 } : {}),
                 });
               }
             }
@@ -2882,21 +3309,23 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
     ...(liveRunRegistry ? { liveRuns: liveRunRegistry } : {}),
   };
 
-  const queue = await createQueueFromConfig(config);
-
-  const rateLimiter = config.queue.rate_limit?.per_provider_rps
-    ? createMultiProviderRateLimiter(config.queue.rate_limit.per_provider_rps)
-    : undefined;
+  const rawQueue = await createQueueFromConfig(config);
+  const runtimeQueue = runtimeConfigStore ? createRuntimeQueue(rawQueue, runtimeConfigStore, configSources.database.namespace, runtimeConfig) : undefined;
+  const queue = runtimeQueue?.queue ?? rawQueue;
+  const deferralManager = new ReviewDeferralManager({ ...(store ? { store } : {}) });
 
   let worker: QueueWorker | undefined;
   if (jobHandler) {
     const workersConfig = config.queue.workers;
-    worker = createQueueWorker(jobHandler, {
+    worker = createQueueWorker(async job => {
+      const generation = await runtimeConfig.resolveGeneration(job.configVersion?.configSnapshotId ?? null);
+      await runtimeConfig.withGeneration(generation, () => jobHandler(job));
+    }, {
       queue,
-      concurrency: workersConfig?.concurrency ?? 4,
-      perWorkspaceConcurrency: workersConfig?.per_workspace_concurrency ?? 1,
+      beforePoll: () => runtimeConfig.admission(),
+      concurrency: () => runtimeConfig.current().config.queue.workers?.concurrency ?? 4,
+      perWorkspaceConcurrency: () => runtimeConfig.current().config.queue.workers?.per_workspace_concurrency ?? 1,
       lockTtlSeconds: workersConfig?.lock_ttl_seconds ?? 1800,
-      ...(rateLimiter ? { rateLimiter } : {}),
     });
   }
 
@@ -2904,30 +3333,49 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
     config,
     baseDir,
     orchestrationOptions,
-    appTokenServices,
     workspaceRuntime,
+    runtimeConfig,
+    appTokenServicesFor,
     ...(store ? { reviewStore: store } : {}),
   });
   opened.closeAutoCommit = autoCommitPipeline.close;
+  let sweepRunning: Promise<void> | undefined;
+  const sweepTimer = runtimeConfigStore ? setInterval(() => {
+    if (sweepRunning) return;
+    sweepRunning = runtimeConfig.withoutGeneration(async () => {
+      await runtimeConfig.admission();
+      await runtimeConfig.heartbeat();
+      await runtimeConfig.sweepSnapshots([autoCommitPipeline.store, deferralManager, ...(runtimeQueue ? [runtimeQueue] : [])]);
+    }).catch((error: unknown) => console.warn(JSON.stringify({ level: "warn", msg: "config snapshot collection deferred", error: admissionUnavailableReason(error) })))
+      .finally(() => { sweepRunning = undefined; });
+  }, 60_000) : undefined;
+  sweepTimer?.unref();
 
-  const triageOptions = resolveIssueTriageOptions(config, defaultTriageRoute.llm, defaultTriageRoute.model);
   const authConfig = resolveAuthConfig(config);
-  const giteaOption = toServerWebhookOption(giteaConfigs);
-  const forgejoOption = toServerWebhookOption(forgejoConfigs);
-  const githubOption = toServerWebhookOption(githubConfigs);
-  const gitlabOption = toServerWebhookOption(gitlabConfigs);
 
   const triggerRetry = resolveTriggerRetryConfig(config);
+  const fileTriage = resolveIssueTriageOptions(config, triageModelOptionsResolver().llm, triageModelOptionsResolver().model);
 
   return {
-    ...(giteaOption ? { gitea: giteaOption } : {}),
-    ...(forgejoOption ? { forgejo: forgejoOption } : {}),
-    ...(githubOption ? { github: githubOption } : {}),
-    ...(gitlabOption ? { gitlab: gitlabOption } : {}),
-    ...(p4Configs.length > 0 ? { p4: p4Configs } : {}),
-    ...(svnConfigs.length > 0 ? { svn: svnConfigs } : {}),
+    // Fixed dispatcher sources (P4/H06): index.ts resolves these per request
+    // against the current generation; trigger changes apply to the next
+    // admission without remounting routes.
+    gitea: giteaConfigs,
+    forgejo: forgejoConfigs,
+    github: githubConfigs,
+    gitlab: gitlabConfigs,
+    p4: p4Configs,
+    svn: svnConfigs,
     reviewOrchestration: orchestrationOptions,
-    ...(triageOptions ? { issueTriage: { ...triageOptions, modelOptionsResolver: triageModelOptionsResolver } } : {}),
+    issueTriage: runtimeConfig.mode === "file-only"
+      ? fileTriage && { ...fileTriage, modelOptionsResolver: triageModelOptionsResolver }
+      : (event: ReviewEvent) => {
+      const generation = runtimeConfig.current();
+      if (generation.config.workspaces.instances[event.workspaceId]?.triage?.enabled !== true) return undefined;
+      const analysis = resolveAnalysisSelection(generation.config, event.workspaceId, executionRoute(generation.config, event));
+      const route = getModelRouteFor(generation, analysis.triageModelChain, reviewMemoryScope(event));
+      return resolveIssueTriageOptions(generation.config, route.llm, route.model, event.triggerName);
+    },
     queue,
     ...(worker ? { worker } : {}),
     ...(config.server.path_prefix ? { pathPrefix: config.server.path_prefix } : {}),
@@ -2939,16 +3387,44 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
     // scheduler; PR/issue/comment/manual flows run on the async path below.
     autoCommit: autoCommitPipeline.runtime,
     autoCommitStore: autoCommitPipeline.store,
-    closeAutoCommit: autoCommitPipeline.close,
+    closeAutoCommit: async () => {
+      if (sweepTimer) clearInterval(sweepTimer);
+      await sweepRunning;
+      await worker?.stop();
+      await autoCommitPipeline.close();
+      await runtimeConfigStore?.close();
+      runtimeConfig.close();
+      await catalogBackendToClose?.close?.();
+    },
+    // Runtime config manager (P4): admission barrier + generation pinning.
+    runtimeConfig,
+    // Config admin API surface (P5) — mounted only with admin auth plus the
+    // config store; independent of the stats store.
+    ...(adminAuthConfig && runtimeConfigStore
+      ? {
+          configApi: {
+            store: runtimeConfigStore,
+            adminAuth: adminAuthConfig,
+            sessionStore: sessionStore ?? runtimeConfigStore,
+            namespace: configSources.database.namespace,
+            fileConfig: (options.configDocument?.document ?? {}) as AppConfigInput,
+            fileDigest: options.configDocument?.digest ?? "",
+            formatVersion: 2,
+            manager: runtimeConfig,
+            envLookup: resolveEnv,
+          },
+        }
+      : {}),
     // PR/MR events prefer their own `review.pull_request.schedule`; when no
     // layer sets it they fall back to the resolved auto-commit schedule, and
     // every other async target kind uses the auto-commit schedule directly.
     getExecutionSchedule: (workspaceId: string, targetKind?: string) => {
+      const generationConfig = currentConfig();
       if (targetKind === "pull_request") {
         const pullRequestSchedule = resolvePullRequestSchedule(
-          config.review.pull_request,
-          config.workspaces.defaults.review?.pull_request,
-          config.workspaces.instances[workspaceId]?.review?.pull_request,
+          generationConfig.review.pull_request,
+          generationConfig.workspaces.defaults.review?.pull_request,
+          generationConfig.workspaces.instances[workspaceId]?.review?.pull_request,
         );
         if (pullRequestSchedule) {
           return pullRequestSchedule;
@@ -2964,12 +3440,12 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
     // (`review.pull_request.include_target_branches`).
     getPullRequestTargetBranches: (workspaceId: string) =>
       resolvePullRequestTargetBranches(
-        config.review.pull_request,
-        config.workspaces.defaults.review?.pull_request,
-        config.workspaces.instances[workspaceId]?.review?.pull_request,
+        currentConfig().review.pull_request,
+        currentConfig().workspaces.defaults.review?.pull_request,
+        currentConfig().workspaces.instances[workspaceId]?.review?.pull_request,
       ),
     // Window-deferred async events persist here so a restart resumes them.
-    deferralManager: new ReviewDeferralManager({ ...(store ? { store } : {}) }),
+    deferralManager,
     ...(observability ? { observability } : {}),
     ...(sessionStore ? { sessionStore } : {}),
     ...(liveRunRegistry ? { liveRuns: liveRunRegistry } : {}),
@@ -2977,25 +3453,11 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
   };
 }
 
-function toServerWebhookOption(
-  configs: readonly VcsWebhookConfig[],
-): VcsWebhookConfig | readonly VcsWebhookConfig[] | undefined {
-  if (configs.length === 0) {
-    return undefined;
-  }
-
-  const firstConfig = configs[0];
-  if (!firstConfig) {
-    return undefined;
-  }
-
-  return configs.length === 1 ? firstConfig : configs;
-}
-
 function resolveIssueTriageOptions(
   config: AppConfig,
   llmClient: ChatCompletionClient,
   model: ModelSpec,
+  triggerName?: string,
 ): IssueTriageRuntimeOptions | undefined {
   const anyTriageEnabled = Object.values(config.workspaces.instances).some(
     (instance) => instance.triage?.enabled === true,
@@ -3005,7 +3467,7 @@ function resolveIssueTriageOptions(
   }
 
   const giteaTrigger = config.triggers.find(
-    (t) => t.kind === "gitea" || t.kind === "forgejo",
+    (t) => (t.kind === "gitea" || t.kind === "forgejo") && (triggerName === undefined || t.name === triggerName),
   );
   if (!giteaTrigger) {
     return undefined;
@@ -3029,6 +3491,7 @@ function resolveIssueTriageOptions(
     }
 
     workspacePolicies[workspaceId] = {
+      ...(triageConfig.events ? { events: triageConfig.events } : {}),
       ...(triageConfig.actions ? { actions: triageConfig.actions } : {}),
       ...(triageConfig.categories_close ? { categoriesClose: triageConfig.categories_close } : {}),
       ...(triageConfig.dry_run !== undefined ? { dryRun: triageConfig.dry_run } : {}),
@@ -3063,13 +3526,16 @@ async function createAutoCommitPipeline(deps: {
   readonly reviewStore?: StoreDb;
   readonly appTokenServices?: ReadonlyMap<string, GithubAppTokenService>;
   readonly workspaceRuntime: WorkspaceRuntime;
+  /** P4 generation source: policies, adapters, and profiles read the CURRENT generation. */
+  readonly runtimeConfig: RuntimeConfigManager;
+  readonly appTokenServicesFor?: (generation: RuntimeConfigGeneration) => Promise<ReadonlyMap<string, GithubAppTokenService>>;
 }): Promise<{
   readonly runtime: AutoCommitRuntime;
   readonly scheduler: AutoCommitScheduler;
   readonly store: AutoCommitStore;
   readonly close: () => Promise<void>;
 }> {
-  const { config, orchestrationOptions, appTokenServices, workspaceRuntime } = deps;
+  const { config, orchestrationOptions, workspaceRuntime, runtimeConfig } = deps;
   const store = await createAutoCommitStoreFromConfig(config);
   if (config.queue.kind === "memory" || config.queue.kind === "rabbitmq") {
     console.warn(JSON.stringify({
@@ -3079,34 +3545,55 @@ async function createAutoCommitPipeline(deps: {
     }));
   }
 
-  const getPolicyLayers = (workspaceId: string) => ({
-    global: config.review.auto_commit,
-    defaults: config.workspaces.defaults.review?.auto_commit,
-    instance: config.workspaces.instances[workspaceId]?.review?.auto_commit,
-  });
+  const getPolicyLayers = (workspaceId: string) => {
+    const generationConfig = runtimeConfig.current().config;
+    return {
+      global: generationConfig.review.auto_commit,
+      defaults: generationConfig.workspaces.defaults.review?.auto_commit,
+      instance: generationConfig.workspaces.instances[workspaceId]?.review?.auto_commit,
+    };
+  };
 
   const schedulerHolder: { scheduler?: AutoCommitScheduler } = {};
   const runtime = new AutoCommitRuntime({
     store,
     getPolicyLayers,
-    onAccepted: () => schedulerHolder.scheduler?.kick(),
+    // H08: every receipt seals the admission generation's snapshot id.
+    getConfigSnapshotId: () => runtimeConfig.current().snapshotId,
+    withAdmissionPin: (id, accept) => runtimeConfig.withAdmissionPin(id, accept),
+    onAccepted: () => runtimeConfig.withoutGeneration(() => schedulerHolder.scheduler?.kick()),
   });
 
-  const triggerByName = new Map(config.triggers.map((trigger) => [trigger.name, trigger]));
-  const adapterCache = new Map<string, GitVcsAdapter | P4VcsAdapter | SvnVcsAdapter>();
-  const getAdapter = (stream: StreamKeyInput) => {
-    const trigger = triggerByName.get(stream.triggerName);
+  // Adapter caches are generation-scoped: a published revision must not
+  // reuse an adapter bound to the previous config's trigger credentials.
+  const adapterCaches = new WeakMap<RuntimeConfigGeneration, Map<string, GitVcsAdapter | P4VcsAdapter | SvnVcsAdapter>>();
+  const getAdapterCacheFor = (generation: RuntimeConfigGeneration): Map<string, GitVcsAdapter | P4VcsAdapter | SvnVcsAdapter> => {
+    let cache = adapterCaches.get(generation);
+    if (cache === undefined) {
+      cache = new Map<string, GitVcsAdapter | P4VcsAdapter | SvnVcsAdapter>();
+      adapterCaches.set(generation, cache);
+    }
+    return cache;
+  };
+
+  const getAdapter = async (stream: StreamKeyInput, configSnapshotId?: string | null) => {
+    const generation = await runtimeConfig.resolveGeneration(configSnapshotId ?? null);
+    const generationConfig = generation.config;
+    const generationWorkspaceRuntime = generation.workspaceRuntime;
+    const trigger = generationConfig.triggers.find((entry) => entry.name === stream.triggerName);
     if (!trigger) {
       return undefined;
     }
+    const adapterCache = getAdapterCacheFor(generation);
     // The namespace prefixes provider identity; the remainder is the
     // original-case repo/depot reference the adapter needs for remote URLs.
     const repoRef = stream.sourceNamespace.slice(stream.sourceNamespace.indexOf(":") + 1);
     // The cache key must include the workspace: two workspaces watching the
     // same trigger+repo each get their own adapter bound to their own clone
     // directory — sharing one adapter would clone workspace B's events into
-    // workspace A's directory.
-    const cacheKey = `${stream.workspaceId} ${stream.triggerName} ${repoRef}`;
+    // workspace A's directory. The snapshot id joins the key so a new
+    // generation never reuses an adapter bound to the previous config.
+    const cacheKey = `${stream.workspaceId} ${stream.triggerName} ${repoRef} ${generation.snapshotId ?? ""}`;
     let adapter = adapterCache.get(cacheKey);
     if (!adapter) {
       // The metadata adapter must clone into the per-workspace source root —
@@ -3119,22 +3606,25 @@ async function createAutoCommitPipeline(deps: {
       // token expires after an hour and would break every later expansion.
       // Metadata queries precede admission and have no branch/template
       // context. Keep caches independent of event-dependent work_path.
-      const metadataDir = config.workspaces.instances[stream.workspaceId]?.match === undefined
-        ? workspaceRuntime.layoutForEvent({ triggerName: stream.triggerName, workspaceId: stream.workspaceId, repoRef }).sourceRoot
-        : resolve(workspaceRuntime.workspacesRoot, ".metadata", hashStructured([stream.triggerName, stream.workspaceId, stream.vcs, repoRef]));
+      const metadataDir = generationConfig.workspaces.instances[stream.workspaceId]?.match === undefined
+        ? generationWorkspaceRuntime.layoutForEvent({ triggerName: stream.triggerName, workspaceId: stream.workspaceId, repoRef }).sourceRoot
+        : resolve(generationWorkspaceRuntime.workspacesRoot, ".metadata", hashStructured([stream.triggerName, stream.workspaceId, stream.vcs, repoRef]));
       adapter = createVcsAdapterFromConfig(
-        config,
+        generationConfig,
         metadataDir,
         stream.triggerName,
         repoRef || undefined,
         {
           alwaysFetch: true,
-          tokenProvider: () => resolveGithubAppInstallationToken(
-            config,
-            appTokenServices,
-            stream.triggerName,
-            repoRef || undefined,
-          ),
+          tokenProvider: async () => {
+            const tokenServices = await (deps.appTokenServicesFor?.(generation) ?? Promise.resolve(deps.appTokenServices));
+            return resolveGithubAppInstallationToken(
+              generationConfig,
+              tokenServices,
+              stream.triggerName,
+              repoRef || undefined,
+            );
+          },
         },
       );
       adapterCache.set(cacheKey, adapter);
@@ -3150,6 +3640,7 @@ async function createAutoCommitPipeline(deps: {
   // directly, no per-scope adapter instances needed.
   const routingAdapterCache = new Map<string, GitVcsAdapter | P4VcsAdapter | SvnVcsAdapter>();
   const routingResolver = new RoutingReceiptResolver({
+    runtimeConfig,
     store,
     config,
     runtime,
@@ -3158,17 +3649,19 @@ async function createAutoCommitPipeline(deps: {
       if (provider !== "p4" && provider !== "svn") {
         return undefined;
       }
-      let adapter = routingAdapterCache.get(triggerName);
+      const generation = runtimeConfig.current();
+      let adapter = routingAdapterCache.get(`${generation.snapshotId ?? ""} ${triggerName}`);
       if (!adapter) {
-        const metadataDir = resolve(workspaceRuntime.workspacesRoot, ".metadata", hashStructured(["routing", triggerName, provider]));
-        adapter = createVcsAdapterFromConfig(config, metadataDir, triggerName, undefined, {});
-        routingAdapterCache.set(triggerName, adapter);
+        const metadataDir = resolve(generation.workspaceRuntime.workspacesRoot, ".metadata", hashStructured(["routing", triggerName, provider]));
+        adapter = createVcsAdapterFromConfig(generation.config, metadataDir, triggerName, undefined, {});
+        routingAdapterCache.set(`${generation.snapshotId ?? ""} ${triggerName}`, adapter);
       }
       return adapter;
     },
     profileFor: (triggerName, provider) => {
+      const generation = runtimeConfig.current();
       if (provider === "p4") {
-        const profile = resolveP4TriggerConfigs(config, triggerName, workspaceRuntime)[0];
+        const profile = resolveP4TriggerConfigs(generation.config, triggerName, generation.workspaceRuntime)[0];
         return profile
           ? {
               workspaceId: profile.workspaceId,
@@ -3178,7 +3671,7 @@ async function createAutoCommitPipeline(deps: {
           : undefined;
       }
       if (provider === "svn") {
-        const profile = resolveSvnTriggerConfigs(config, triggerName, workspaceRuntime)[0];
+        const profile = resolveSvnTriggerConfigs(generation.config, triggerName, generation.workspaceRuntime)[0];
         return profile
           ? {
               workspaceId: profile.workspaceId,
@@ -3209,8 +3702,10 @@ async function createAutoCommitPipeline(deps: {
     getAdapter,
     routingResolver,
     executeBatch,
-    globalConcurrency: config.queue.workers?.concurrency ?? 1,
-    perWorkspaceConcurrency: 1,
+    // H17: concurrency re-reads at the claim boundary from the current
+    // generation; lowering the limit never cancels running batches.
+    globalConcurrency: () => runtimeConfig.current().config.queue.workers?.concurrency ?? 1,
+    perWorkspaceConcurrency: () => runtimeConfig.current().config.queue.workers?.per_workspace_concurrency ?? 1,
   });
   schedulerHolder.scheduler = scheduler;
   scheduler.start();

@@ -37,6 +37,7 @@ import type {
   ConfigHeadState,
   ConfigRevisionRecord,
   ConfigRuntimeSnapshotRecord,
+  ConfigRuntimeState,
   ConfigStore,
   WorkspaceBindingRecord,
   WorkspaceBindingState,
@@ -220,6 +221,10 @@ const LUA_DELETE_SNAPSHOT = `
 ${LUA_VALIDATE_TYPES}
 requireType(KEYS[1], 'hash')
 requireType(KEYS[2], 'zset')
+requireType(KEYS[3], 'hash')
+for _, encoded in ipairs(redis.call('HVALS', KEYS[3])) do
+  if cjson.decode(encoded).snapshotId == ARGV[1] then return -1 end
+end
 local pinned = redis.call('HGET', KEYS[1], 'pinned')
 if not pinned then
   return 0
@@ -396,6 +401,11 @@ export async function createRedisConfigStore(
 
   const snapRecKey = (id: string) => `${P}{snap}:rec:${id}`;
   const snapGcKey = (namespace: string) => `${P}{snap}:gc:${namespace}`;
+  const runtimeKey = (namespace: string) => `${P}{snap}:runtime:${namespace}`;
+  const runtimeRefCount = async (namespace: string, id: string): Promise<number> => {
+    const records = await redis.hvals(runtimeKey(namespace)) as string[];
+    return records.filter(encoded => (JSON.parse(encoded) as ConfigRuntimeState).snapshotId === id).length;
+  };
   const bindRecKey = (id: string) => `${P}{bind}:rec:${id}`;
   const bindRootKey = (root: string) => `${P}{bind}:root:${root}`;
   const BIND_ALL_KEY = `${P}{bind}:all`;
@@ -419,6 +429,47 @@ export async function createRedisConfigStore(
 
   return {
     backendKind: "redis",
+    async readRuntimeState(namespace, key) {
+      open(); assertNamespace(namespace);
+      return guarded("readRuntimeState", async () => {
+        const value = await redis.hget(runtimeKey(namespace), key) as string | null;
+        return value ? JSON.parse(value) as ConfigRuntimeState : null;
+      });
+    },
+    async listRuntimeStates(namespace) {
+      open(); assertNamespace(namespace);
+      return guarded("listRuntimeStates", async () => (await redis.hvals(runtimeKey(namespace)) as string[])
+        .map(value => JSON.parse(value) as ConfigRuntimeState));
+    },
+    async writeRuntimeState(input) {
+      open(); assertNamespace(input.namespace);
+      const record: ConfigRuntimeState = { namespace: input.namespace, key: input.key, version: (input.expectedVersion ?? 0) + 1,
+        snapshotId: input.snapshotId, value: input.value, updatedAt: input.now };
+      return guarded("writeRuntimeState", async () => {
+        const result = await evalScript(`${LUA_VALIDATE_TYPES}
+          requireType(KEYS[1], 'hash')
+          local old = redis.call('HGET', KEYS[1], ARGV[1])
+          if ARGV[2] == '' then if old then return 0 end
+          elseif not old or cjson.decode(old).version ~= tonumber(ARGV[2]) then return 0 end
+          if ARGV[4] ~= '' then
+            requireType(KEYS[2], 'hash')
+            if redis.call('HGET', KEYS[2], 'namespace') ~= ARGV[5] then return -1 end
+          end
+          redis.call('HSET', KEYS[1], ARGV[1], ARGV[3])
+          return 1`, [runtimeKey(input.namespace), snapRecKey(input.snapshotId ?? "")],
+          input.key, input.expectedVersion ?? "", JSON.stringify(record), input.snapshotId ?? "", input.namespace) as number;
+        if (result === -1) throw new ConfigError("snapshot_invalid", "Runtime state requires an existing snapshot in its namespace.");
+        return result === 1 ? copyConfigValue(record) : null;
+      });
+    },
+    async deleteRuntimeState(namespace, key, expectedVersion) {
+      open(); assertNamespace(namespace);
+      return guarded("deleteRuntimeState", async () => (await evalScript(`${LUA_VALIDATE_TYPES}
+        requireType(KEYS[1], 'hash')
+        local old = redis.call('HGET', KEYS[1], ARGV[1])
+        if not old or cjson.decode(old).version ~= tonumber(ARGV[2]) then return 0 end
+        return redis.call('HDEL', KEYS[1], ARGV[1])`, [runtimeKey(namespace)], key, expectedVersion)) === 1);
+    },
 
     async readHead(namespace) {
       open();
@@ -630,7 +681,7 @@ export async function createRedisConfigStore(
         }
         const snapshot = toSnapshot(fields);
         if (!sameSnapshotContent(snapshot, input)) throw new ConfigError("snapshot_invalid", `Snapshot "${input.id}" already exists with different content.`);
-        return snapshot;
+        return { ...snapshot, refCount: snapshot.refCount + await runtimeRefCount(snapshot.namespace, input.id) };
       });
     },
 
@@ -638,7 +689,9 @@ export async function createRedisConfigStore(
       open();
       return guarded("readSnapshot", async () => {
         const fields = await readSnapshotFields(id);
-        return fields === null ? null : toSnapshot(fields);
+        if (fields === null) return null;
+        const snapshot = toSnapshot(fields);
+        return { ...snapshot, refCount: snapshot.refCount + await runtimeRefCount(snapshot.namespace, id) };
       });
     },
 
@@ -652,7 +705,9 @@ export async function createRedisConfigStore(
         )) as number | null;
         if (updated === null) return null;
         const fields = await readSnapshotFields(id);
-        return fields === null ? null : toSnapshot(fields);
+        if (fields === null) return null;
+        const snapshot = toSnapshot(fields);
+        return { ...snapshot, refCount: snapshot.refCount + await runtimeRefCount(snapshot.namespace, id) };
       });
     },
 
@@ -666,7 +721,9 @@ export async function createRedisConfigStore(
         )) as number | null;
         if (updated === null) return null;
         const fields = await readSnapshotFields(id);
-        return fields === null ? null : toSnapshot(fields);
+        if (fields === null) return null;
+        const snapshot = toSnapshot(fields);
+        return { ...snapshot, refCount: snapshot.refCount + await runtimeRefCount(snapshot.namespace, id) };
       });
     },
 
@@ -688,7 +745,7 @@ export async function createRedisConfigStore(
             if (error) throw error;
             if (fields === null || Object.keys(fields).length === 0) continue;
             const record = toSnapshot(fields);
-            if (!record.pinned && record.refCount === 0 && record.createdAt <= olderThan) {
+            if (!record.pinned && record.refCount === 0 && record.createdAt <= olderThan && await runtimeRefCount(namespace, record.id) === 0) {
               result.push(record);
             }
           }
@@ -705,7 +762,7 @@ export async function createRedisConfigStore(
         if (namespace === null) return; // already gone; delete is idempotent
         const result = (await evalScript(
           LUA_DELETE_SNAPSHOT,
-          [snapRecKey(id), snapGcKey(namespace)],
+          [snapRecKey(id), snapGcKey(namespace), runtimeKey(namespace)],
           id,
         )) as number;
         if (result === -1) {

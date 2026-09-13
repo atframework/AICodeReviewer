@@ -130,6 +130,21 @@ Narrative: [Configuration overview](/en/configuration/overview/).
 | `workspaces.defaults.model_chain` | string | inherit | Main-group override referencing `llm.model_chain` |
 | `workspaces.defaults.triage_model_chain` | string | inherit | Lifecycle-group override; if absent at all layers, uses this workspace's main group |
 | `workspaces.defaults.agent.default` | enum | — | Default agent kind for this workspace set (no runtime effect yet, see note below) |
+| `workspaces.defaults.agent.timeout_seconds` | int > 0 | — | Hard per-run timeout; on timeout the whole process tree is killed |
+| `workspaces.defaults.agent.auto_approve` | boolean | — | Passed to the selected adapter; false removes automatic approval where supported |
+| `workspaces.defaults.agent.context_compaction.auto` | boolean | — | Enable auto-compaction |
+| `workspaces.defaults.agent.context_compaction.threshold_percent` | int 1–100 | — | Compaction trigger threshold |
+| `workspaces.defaults.agent.context_compaction.prune` | boolean | — | Prune compacted history |
+| `workspaces.defaults.agent.web_search.enabled` | boolean | — | Enable the agent's built-in web search tool for reviews (omp `web_search.enabled`; kilo/opencode permission + activation env; claude-code/copilot-cli CLI switch) |
+| `workspaces.defaults.agent.web_search.providers` | string[] | — | Ordered providers: full omp chain; kilo accepts `exa`; opencode selects the first `exa`/`parallel` |
+| `workspaces.defaults.agent.web_search.exclude` | string[] | — | Provider ids removed from the search chain → `providers.webSearchExclude` |
+| `workspaces.defaults.agent.web_search.timeout_seconds` | int 1–300 | — | Per-provider transport timeout → `providers.webSearchTimeoutSeconds` |
+| `workspaces.defaults.agent.web_search.credentials.<id>` | string | — | Search credential id → host env var name; enabled adapters inject supported native env vars via `${VAR}` references |
+| `workspaces.defaults.agent.web_search.searxng.endpoint` | string | — | SearXNG endpoint URL |
+| `workspaces.defaults.agent.web_search.searxng.categories` | string | — | SearXNG categories filter |
+| `workspaces.defaults.agent.web_search.searxng.engines` | string | — | SearXNG engines filter |
+| `workspaces.defaults.agent.web_search.searxng.language` | string | — | SearXNG language filter |
+| `workspaces.defaults.agent.web_search.searxng.safesearch` | int 0–2 | — | SearXNG safe-search level |
 | `workspaces.defaults.outputs` | object | — | Default outputs (see `outputs` workspace fields) |
 | `workspaces.defaults.prompt.base_system_prompt_file` | string | — | Custom base system prompt file (deployment-root-relative) |
 | `workspaces.defaults.prompt.force_skills` | string[] | — | Skill names always activated, ignoring `Applies To` globs |
@@ -161,6 +176,21 @@ Narrative: [Configuration overview](/en/configuration/overview/).
 | `workspaces.instances.<id>.model_chain` | string | inherit | Main-group override referencing `llm.model_chain` |
 | `workspaces.instances.<id>.triage_model_chain` | string | inherit | Lifecycle-group override; if absent at all layers, uses this workspace's main group |
 | `workspaces.instances.<id>.agent.default` | enum | — | Agent kind override (no runtime effect yet, see note below) |
+| `workspaces.instances.<id>.agent.timeout_seconds` | int > 0 | — | Hard per-run timeout; on timeout the whole process tree is killed |
+| `workspaces.instances.<id>.agent.auto_approve` | boolean | — | Passed to the selected adapter; false removes automatic approval where supported |
+| `workspaces.instances.<id>.agent.context_compaction.auto` | boolean | — | Enable auto-compaction |
+| `workspaces.instances.<id>.agent.context_compaction.threshold_percent` | int 1–100 | — | Compaction trigger threshold |
+| `workspaces.instances.<id>.agent.context_compaction.prune` | boolean | — | Prune compacted history |
+| `workspaces.instances.<id>.agent.web_search.enabled` | boolean | — | Enable the agent's built-in web search tool for reviews (omp `web_search.enabled`; kilo/opencode permission + activation env; claude-code/copilot-cli CLI switch) |
+| `workspaces.instances.<id>.agent.web_search.providers` | string[] | — | Ordered providers: full omp chain; kilo accepts `exa`; opencode selects the first `exa`/`parallel` |
+| `workspaces.instances.<id>.agent.web_search.exclude` | string[] | — | Provider ids removed from the search chain → `providers.webSearchExclude` |
+| `workspaces.instances.<id>.agent.web_search.timeout_seconds` | int 1–300 | — | Per-provider transport timeout → `providers.webSearchTimeoutSeconds` |
+| `workspaces.instances.<id>.agent.web_search.credentials.<id>` | string | — | Search credential id → host env var name; enabled adapters inject supported native env vars via `${VAR}` references |
+| `workspaces.instances.<id>.agent.web_search.searxng.endpoint` | string | — | SearXNG endpoint URL |
+| `workspaces.instances.<id>.agent.web_search.searxng.categories` | string | — | SearXNG categories filter |
+| `workspaces.instances.<id>.agent.web_search.searxng.engines` | string | — | SearXNG engines filter |
+| `workspaces.instances.<id>.agent.web_search.searxng.language` | string | — | SearXNG language filter |
+| `workspaces.instances.<id>.agent.web_search.searxng.safesearch` | int 0–2 | — | SearXNG safe-search level |
 | `workspaces.instances.<id>.review` | object | — | Review config override (see `review`) |
 | `workspaces.instances.<id>.outputs` | object | — | Outputs override |
 | `workspaces.instances.<id>.sandbox` | object | — | Sandbox override (no runtime effect yet, see note below) |
@@ -283,7 +313,7 @@ Narrative: [Agent and sandbox](/en/configuration/agent/).
 | --- | --- | --- | --- |
 | `agent.default` | enum | `kilo` | Default agent kind |
 | `agent.timeout_seconds` | int > 0 | `1800` | Hard per-run timeout; on timeout the whole process tree is killed |
-| `agent.auto_approve` | boolean | `true` | Accepted by the schema, but the orchestrator always runs as `true`; setting `false` has no effect |
+| `agent.auto_approve` | boolean | `true` | Passed to the selected adapter; false removes automatic approval where supported |
 | `agent.sandbox` | object | `{ kind: "docker", engine: "auto" }` | Sandbox backend |
 | `agent.sandbox.kind` | enum | — | Sandbox kind (see enum table) |
 | `agent.sandbox.engine` | enum | — | Container engine selection |
@@ -310,22 +340,22 @@ Narrative: [Agent and sandbox](/en/configuration/agent/).
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
 | `review.languages_auto_detect` | boolean | `true` | Auto-detect review languages |
-| `review.include` | string[] | `["**/*"]` | Glob patterns to include |
-| `review.exclude` | string[] | `["**/vendor/**", "**/*.min.js", "**/*.lock"]` | Glob patterns to exclude |
+| `review.include` | string[] | `["**/*"]` | Path globs: `*` stays within a directory; `**` spans zero or more directories |
+| `review.exclude` | string[] | `["**/vendor/**", "**/*.min.js", "**/*.lock"]` | Glob patterns to exclude (applied after include) |
 | `review.max_files` | int > 0 | `50` | Max files per review |
-| `review.max_patch_bytes` | int > 0 | `200000` | Max patch size in bytes |
-| `review.incremental` | boolean | `true` | Incremental review |
+| `review.max_patch_bytes` | int > 0 | `200000` | UTF-8 patch budget; oversized patches fail before model calls |
+| `review.incremental` | boolean | `true` | False adds complete head files, bounded by max_patch_bytes |
 | `review.skip_lgtm` | boolean | `true` | Skip reviews that look clean |
 | `review.output_language` | string | `zh-CN` | Output language for summaries |
-| `review.commit_strategy` | enum | `aggregate` | `per_commit`, `aggregate`, `head_only` |
+| `review.commit_strategy` | enum | `aggregate` | Aggregate endpoints, labelled per-commit patches in one analysis, or head-only; rewritten history retains endpoint comparison |
 | `review.log_thinking` | boolean | `true` | Log orchestrator thinking/execution traces (set `false` to silence) |
 | `review.git.allow_deepen` | boolean | `false` | Allow `git fetch --deepen` for shallow clones |
 | `review.labels.ignore` | string[] | `["aicr:ignore", "aicr-ignore"]` | Labels that skip review |
 | `review.labels.auto_tag` | string | — | Fixed tag added when AICR starts |
 | `review.labels.reviewed_tag` | string | — | Tag added when review completes |
 | `review.problem_issue.max_recent_issues` | int 1–200 | `30` | Cap on recent open managed issues reconciled per run |
-| `review.fetch_extra.max_bytes` | int > 0 | — | Max bytes fetched per extra-context request |
-| `review.fetch_extra.max_files` | int > 0 | — | Max files fetched per extra-context request |
+| `review.fetch_extra.max_bytes` | int > 0 | — | Total UTF-8 extra-context bytes per run, including concurrent requests |
+| `review.fetch_extra.max_files` | int > 0 | — | Distinct extra-context paths per run |
 | `review.fetch_extra.allow_paths` | string[] | — | Allowed path globs for extra-context fetch |
 | `review.reflection.enabled` | boolean | `false` | Enable reflection memory |
 | `review.reflection.mode` | enum | — | `off`, `light`, `thorough` |
@@ -352,12 +382,27 @@ Narrative: [Queue and retry](/en/configuration/queue/).
 | `queue.sqlite.lock_ttl_seconds` | int > 0 | `300` | Stale-running job reclaim TTL |
 | `queue.workers.concurrency` | int > 0 | `4` | Global worker concurrency |
 | `queue.workers.per_workspace_concurrency` | int > 0 | `1` | Per-workspace concurrency cap |
-| `queue.workers.lock_ttl_seconds` | int > 0 | `1800` | Worker lock TTL |
+| `queue.workers.lock_ttl_seconds` | int > 0 | `1800` | Reserved; lock expiry is configured by the queue backend |
 | `queue.rate_limit.per_provider_rps` | map | — | Per-provider requests-per-second cap |
 | `queue.retry.attempts` | int > 0 | `3` | Trigger-level retry attempts (legacy `max_attempts` normalized) |
 | `queue.retry.backoff` | object | `exponential`, 5000→60000ms with jitter | `kind`, `base_ms`, `max_ms`, `jitter` |
 | `queue.dead_letter.enabled` | boolean | — | Reserved — accepted by the schema but not consumed at runtime |
 | `queue.dead_letter.max_age_hours` | int > 0 | — | Reserved — accepted by the schema but not consumed at runtime |
+
+## `config_sources`
+
+Dynamic configuration source switch (file-only by default). This section is
+bootstrap-owned: the database can never edit it.
+
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `config_sources.database.enabled` | boolean | `false` | Enable the database configuration source. When enabled, admissions adopt the durable config head and the admin config API can publish revisions; when disabled the process stays file-only. |
+| `config_sources.database.backend` | enum | `storage` | `storage` rides `storage.database` (SQLite/PostgreSQL); `redis` reuses the `storage.cache.redis` connection declaration. |
+| `config_sources.database.namespace` | string | `default` | Config namespace: 1–64 letters, digits, dots, underscores or hyphens; starts with a letter or digit. |
+| `config_sources.runtime.refresh_interval_seconds` | int 1–3600 | `5` | Background generation refresh cadence. Not the admission consistency barrier: every webhook admission re-reads the durable head regardless. |
+| `config_sources.secret_refs[].env` | string | — | Deployment-authorized environment variable name |
+| `config_sources.secret_refs[].target` | string[] | — | Exact path tokens; entity IDs/names and context repository aliases replace array indices |
+| `config_sources.secret_refs[].destinations.<id>` | unknown | — | Exact destination context, including kind, endpoints and linked trigger destination; see example/config.yaml |
 
 ## `storage`
 

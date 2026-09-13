@@ -3,7 +3,7 @@
  * upsert-by-fingerprint, expiry filtering, and retention compaction contract.
  */
 
-import { and, desc, eq, lt } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 
 import type { PgStoreDb } from "./database.js";
 import { reflectionMemory } from "./schema.pg.js";
@@ -87,41 +87,18 @@ export async function readReflectionMemoryPg(
 export async function compactReflectionMemoryPg(
   store: PgStoreDb,
   workspaceId: string,
-  options?: { retentionDays?: number; maxEntries?: number },
+  options?: { retentionDays?: number; maxEntries?: number; maxBytes?: number },
 ): Promise<number> {
   const retentionDays = options?.retentionDays ?? 90;
   const maxEntries = options?.maxEntries ?? 500;
-  let deleted = 0;
-
-  const cutoff = new Date(Date.now() - retentionDays * 86_400_000);
-  const expiredRows = await store.db
-    .delete(reflectionMemory)
-    .where(
-      and(
-        eq(reflectionMemory.workspaceId, workspaceId),
-        lt(reflectionMemory.expiresAt, cutoff),
-      ),
-    )
-    .returning({ id: reflectionMemory.id });
-  deleted += expiredRows.length;
-
-  const excessRows = await store.db
-    .select({ id: reflectionMemory.id })
-    .from(reflectionMemory)
-    .where(eq(reflectionMemory.workspaceId, workspaceId))
-    .orderBy(desc(reflectionMemory.createdAt))
-    .offset(maxEntries)
-    .limit(1000);
-
-  if (excessRows.length > 0) {
-    const idsToDelete = excessRows.map((row) => row.id);
-    for (const id of idsToDelete) {
-      await store.db
-        .delete(reflectionMemory)
-        .where(eq(reflectionMemory.id, id));
-    }
-    deleted += idsToDelete.length;
-  }
-
-  return deleted;
+  const now = Date.now();
+  const result = await store.pool.query(`DELETE FROM reflection_memory WHERE workspace_id = $1 AND
+    (expires_at < $2 OR created_at < $3 OR id IN (
+      SELECT id FROM (SELECT id,
+        ROW_NUMBER() OVER (ORDER BY created_at DESC, id DESC) AS position,
+        SUM(octet_length(content)) OVER (ORDER BY created_at DESC, id DESC) AS bytes
+        FROM reflection_memory WHERE workspace_id = $1 AND (expires_at IS NULL OR expires_at >= $2) AND created_at >= $3) ranked
+      WHERE position > $4 OR bytes > $5))`,
+    [workspaceId, now, now - retentionDays * 86_400_000, maxEntries, options?.maxBytes ?? Number.MAX_SAFE_INTEGER]);
+  return result.rowCount ?? 0;
 }

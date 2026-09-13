@@ -36,6 +36,7 @@ import {
   type MergedConfig,
 } from "./config-source.js";
 import { contentHashOf, type ConfigRevisionRecord, type ConfigStore } from "./config-store.js";
+import { assertConfigSecretPolicy } from "./config-secret-policy.js";
 
 /** Bump when the snapshot content/shape contract changes. */
 export const CONFIG_RESOLVER_VERSION = 1;
@@ -159,6 +160,7 @@ export function prepareConfigPublication(input: ConfigPublishInput): PreparedCon
 
   const graph = compileExecutionGraph(effective);
   assertNoSecretEnvIssues(effective);
+  assertConfigSecretPolicy(input.file ?? {}, document, effective);
 
   const diff = collectionDiff(base, document);
   const globals = globalDiff(input.operations);

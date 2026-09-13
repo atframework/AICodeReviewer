@@ -1619,11 +1619,15 @@ export async function createSqliteAutoCommitStore(
          UNION
          SELECT r.config_snapshot_id AS id FROM auto_commit_receipts r
           WHERE r.config_snapshot_id IS NOT NULL
-            AND EXISTS (
+            AND (r.metadata_terminal_error IS NOT NULL OR r.receipt_seq > COALESCE(
+              (SELECT coverage_cursor FROM auto_commit_stream_heads s WHERE s.stream_id = r.stream_id), 0) OR EXISTS (
               SELECT 1 FROM auto_commit_receipt_members rm
                 JOIN auto_commit_members m ON m.member_id = rm.member_id
                WHERE rm.receipt_id = r.receipt_id AND m.status = 'pending'
-            )`,
+            ))
+         UNION
+         SELECT json_extract(envelope, '$.configSnapshotId') AS id FROM auto_commit_routing_receipts
+          WHERE completed_at IS NULL AND json_type(envelope, '$.configSnapshotId') = 'text'`,
       ).all() as { id: string }[];
       return rows.map((row) => row.id);
     },

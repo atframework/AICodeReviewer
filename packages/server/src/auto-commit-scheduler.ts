@@ -59,7 +59,7 @@ export interface AutoCommitSchedulerOptions {
   readonly store: AutoCommitStore;
   readonly getPolicy: (workspaceId: string) => ResolvedAutoCommitPolicy;
   /** Adapter per stream; must implement listCommitMetadataPage to expand. */
-  readonly getAdapter: (stream: StreamKeyInput) => MetadataAdapter | undefined;
+  readonly getAdapter: (stream: StreamKeyInput, configSnapshotId?: string | null) => MetadataAdapter | undefined | Promise<MetadataAdapter | undefined>;
   readonly executeBatch: (context: BatchExecutionContext) => Promise<void>;
   readonly now?: () => number;
   /** Consumer identity for reservations, claims, and leases. */
@@ -83,8 +83,13 @@ export interface AutoCommitSchedulerOptions {
   readonly routingResolver?: { resolveDue(now: number): Promise<number | undefined> };
   /** Idle safety poll when no wake signal exists (not per-item polling). */
   readonly idlePollMs?: number;
-  readonly globalConcurrency?: number;
-  readonly perWorkspaceConcurrency?: number;
+  /**
+   * Static limit or a claim-boundary provider (H17): when dynamic config is
+   * enabled the provider re-reads `queue.workers.concurrency` from the
+   * current generation at each claim, without cancelling running batches.
+   */
+  readonly globalConcurrency?: number | (() => number);
+  readonly perWorkspaceConcurrency?: number | (() => number);
 }
 
 interface SchedulerTuning {
@@ -101,8 +106,8 @@ interface SchedulerTuning {
   readonly idlePollMs: number;
   readonly reservationTtlMs: number;
   readonly dispatchClaimLimit: number;
-  readonly globalConcurrency: number;
-  readonly perWorkspaceConcurrency: number;
+  readonly globalConcurrency: number | (() => number);
+  readonly perWorkspaceConcurrency: number | (() => number);
 }
 
 const DEFAULTS: SchedulerTuning = {
@@ -443,7 +448,6 @@ export class AutoCommitScheduler {
     );
     if (receipts.length === 0) return true;
 
-    const adapter = this.getAdapter(streamRef);
     for (const receipt of receipts.slice(0, this.options.receiptPageSize)) {
       if (this.stopping || !isAllowedInstant(policy.schedule, this.now()))
         return false;
@@ -456,7 +460,7 @@ export class AutoCommitScheduler {
         stream,
         streamRef,
         receipt,
-        adapter,
+        await this.getAdapter(streamRef, receipt.configSnapshotId),
         policy,
         now,
       );
@@ -854,7 +858,7 @@ export class AutoCommitScheduler {
           stream,
           streamRef,
           view.receipt,
-          this.getAdapter(streamRef),
+          await this.getAdapter(streamRef, view.receipt.configSnapshotId),
           policy,
           this.now(),
         )) !== "expanded"
@@ -897,6 +901,17 @@ export class AutoCommitScheduler {
       }
     }
 
+    // Execution snapshot pin (H09): the covering receipt's configSnapshotId
+    // is the member's generation. Bounded: distinct receipts only, and the
+    // pending read already caps the member page.
+    const snapshotByReceipt = new Map<string, string | null>();
+    for (const member of verified) {
+      if (!snapshotByReceipt.has(member.coverReceiptId)) {
+        const view = await this.store.getReceipt(member.coverReceiptId);
+        snapshotByReceipt.set(member.coverReceiptId, view?.receipt.configSnapshotId ?? null);
+      }
+    }
+
     const candidates: AssemblyCandidate[] = verified.map((member) => ({
       memberId: member.memberId,
       revision: member.revision,
@@ -908,6 +923,7 @@ export class AutoCommitScheduler {
       ...(rewriteReceiptIds.has(member.coverReceiptId)
         ? { rewriteReceiptId: member.coverReceiptId }
         : {}),
+      configSnapshotId: snapshotByReceipt.get(member.coverReceiptId) ?? null,
     }));
 
     const assembly = cutAutoCommitBatches(candidates, now);
@@ -919,6 +935,7 @@ export class AutoCommitScheduler {
         verified,
         this.now(),
         reservationToken,
+        snapshotByReceipt,
       );
       if (!sealed) return; // reservation lost or version conflict; retry next tick
       return; // A stream owns one active batch; later cuts remain pending.
@@ -932,6 +949,7 @@ export class AutoCommitScheduler {
     verified: readonly CommitMemberRecord[],
     now: number,
     reservationToken: string,
+    snapshotByReceipt?: ReadonlyMap<string, string | null>,
   ): Promise<boolean> {
     const byId = new Map(verified.map((member) => [member.memberId, member]));
     const members = memberIds.map((memberId) => {
@@ -972,6 +990,22 @@ export class AutoCommitScheduler {
       sourceKey: first.sourceKey,
       exclusionPolicyVersion: policy.exclusions.canonical,
       configPolicyVersion: policy.policyVersion,
+      // One batch executes on one generation: assembly cut on the snapshot
+      // boundary keeps this uniform; a mixed read (legacy data) seals as
+      // null so the executor falls back to the admission generation.
+      ...(snapshotByReceipt !== undefined
+        ? {
+            configSnapshotId: ((): string | null => {
+              const distinct = new Set(
+                memberIds.map((memberId) => {
+                  const record = byId.get(memberId);
+                  return record ? snapshotByReceipt.get(record.coverReceiptId) ?? null : null;
+                }),
+              );
+              return distinct.size === 1 ? [...distinct][0]! : null;
+            })(),
+          }
+        : {}),
       maxAttempts: this.options.batchMaxAttempts,
       now,
     });
@@ -1036,8 +1070,11 @@ export class AutoCommitScheduler {
       this.options.leaseMs,
       now,
       {
-        global: this.options.globalConcurrency,
-        workspace: this.options.perWorkspaceConcurrency,
+        global: typeof this.options.globalConcurrency === "function"
+          ? this.options.globalConcurrency()
+          : this.options.globalConcurrency,
+        workspace: typeof this.options.perWorkspaceConcurrency === "function"
+          ? this.options.perWorkspaceConcurrency() : this.options.perWorkspaceConcurrency,
       },
     );
     if (!leaseToken) {

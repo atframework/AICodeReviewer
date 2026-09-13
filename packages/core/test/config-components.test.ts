@@ -77,26 +77,14 @@ describe("config field inventory gate (U24)", () => {
     }
   });
 
-  it("unwired review fields are exactly the audited schema-only set", () => {
+  it("all manageable review fields have a declared runtime consumer", () => {
     const unwiredGlobals = CONFIG_FIELD_INVENTORY.filter(
       (row) => row.path.startsWith("review.") && !row.path.startsWith("review.auto_commit") && !row.wired,
     ).map((row) => row.path);
-    expect(unwiredGlobals.sort()).toEqual(
-      [
-        "review.commit_strategy",
-        "review.fetch_extra.allow_paths",
-        "review.fetch_extra.max_bytes",
-        "review.fetch_extra.max_files",
-        "review.include",
-        "review.exclude",
-        "review.incremental",
-        "review.languages_auto_detect",
-        "review.max_files",
-        "review.max_patch_bytes",
-        "review.reflection.memory.max_size_kb",
-        "review.skip_lgtm",
-      ].sort(),
-    );
+    expect(unwiredGlobals).toEqual([]);
+    for (const field of CONFIG_FIELD_INVENTORY.filter(row => row.path.startsWith("review.") && row.wired)) {
+      expect(field.consumer, field.path).toBeTruthy();
+    }
   });
 
   it("CONFIG_FIELD_INVENTORY_BY_PATH mirrors the inventory", () => {
@@ -147,7 +135,7 @@ describe("collectSchemaFieldPaths", () => {
     const leaves = new Map(collectSchemaFieldPaths(appConfigSchema).map((leaf) => [leaf.path, leaf]));
     expect(leaves.get("agent.default")?.enumValues).toContain("kilo");
     expect(leaves.get("review.include")?.defaultValue).toEqual(["**/*"]);
-    expect(leaves.get("agent.sandbox.kind")?.defaultValue).toBe("docker");
+    expect(leaves.get("agent.sandbox.kind")?.defaultValue).toBeUndefined();
   });
 
   it("matches parsing when a parent default supplies a value overriding a child default", () => {

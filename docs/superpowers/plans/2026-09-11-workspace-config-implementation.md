@@ -1,12 +1,14 @@
 # Workspace 与动态配置执行计划
 
-状态:P0–P3 已完成实现与验收(P2 证据见 [M17](../../ai/milestones/M17.md) 与架构 §3.14,P3 见 [M18](../../ai/milestones/M18.md) 与架构 §3.15)。workspace 级 agent/sandbox 配置覆盖仍按原计划在 P4 接线,P4–P8 待推进。 设计合同见
+状态：P0–P5 已交付；P4/P5 原阶段缺项已补齐并完成代码审查。
+本轮修复与验证见 [M19](../../ai/milestones/M19.md)。P4/P5 已补齐原阶段交付，
+P6–P8 尚待推进。设计合同见
 [详细设计](../specs/2026-09-11-workspace-config-management.md)，测试 ID 和后端证据要求见
 [测试计划](2026-09-11-workspace-config-tests.md)。任何复选框只有实现、对应测试和适用最终门禁通过后才能勾选。
 
 ## 1. 执行约束与依赖
 
-原设计源码基线为 `e609cd7`。当前已实施并审查 P0 与 P1；继续实施前重新检查 `git status`、schema、bootstrap、调用方和相关测试，保留已有工作区修改。本轮未运行数据库迁移，未部署服务。
+原设计源码基线为 `e609cd7`。当前已实施并审查 P0 与 P1；继续实施前重新检查 `git status`、schema、bootstrap、调用方和相关测试，保留已有工作区修改。迁移与本地后端验证证据按阶段记录；本轮没有部署生产服务。
 
 默认设计：文件显式配置优先并锁定；数据库提供补充来源；发布后新接收任务生效，已接收任务固定版本；新规则使用隔离目录布局，旧绑定保留兼容布局。改变其中任一合同必须同步设计、测试矩阵及示例，不能靠实现中的 fallback 决定。
 
@@ -126,35 +128,33 @@ compiler、prepare/CAS/install、preview 与 readiness;server `config-service.ts
 
 ### P4. 运行时热更新与持久任务
 
-- [ ] 从 bootstrap 提取 RuntimeConfigManager，用 generation 管理 registry/factories，queue/store/budget/lease 与 generation 分离。
-- [ ] Hono 固定 dispatcher 每次 admission 获取当前 head 和对应 registry；新增/删除 trigger 立即作用于新请求，不动态重复挂载路由。
-- [ ] 为 run/job/receipt/batch/metadata 重试持久化 execution snapshot，引入 snapshot pin/refcount 和 generation 资源释放。
-- [ ] auto-commit 在 snapshot/policy 边界组批，但不改变 delivery/member 去重；连续通知、重启、旧/新版本交错不得丢成员或重复发布。
-- [ ] 每个任务的 VCS、model/main/triage/summary、agent fallback/repair、MCP、publisher、reflection、输出语言读取同一个 execution plan。
-- [ ] workspace 级 agent、sandbox、search、review 实际接线；补足 review include/exclude/max/labels/reflection/fetch_extra 等字段的 consumer，不依赖只读 schema 默认值。
-- [ ] 已明确请求的容器 sandbox preflight 不可用时拒绝该候选，UI 显示原因；不静默切 native。保留文件声明的信任上限。
-- [ ] catalog overrides 更新后建立新模型解析缓存；不得提前关闭新 generation 仍需使用的 Redis catalog 连接；旧 generation 按引用释放。
-- [ ] rate/concurrency 在 claim 边界更新，保留计数与预算；降低限制不杀运行任务。
-- [ ] 多副本每次 admission 读取 durable head，后台 notify/poll 仅加速；fileDigest 不一致或新版本 prepare 失败的副本停止新 admission。
-- [ ] 修改 project soft-delete 判定，动态绑定按 definition/binding 状态管理，不误删通配规则下的活跃工程。
-- [ ] CLI review/dry-run/eval/serve 中使用配置的入口共用加载和解析；保留显式 `--source-root` 行为和 dry-run 无发布合同。
+状态：已完成（2026-09-13）。本地验收及实际调用证据见 [M19](../../ai/milestones/M19.md)，稳定合同见架构 §3.16。
 
-影响：`bootstrap.ts`、`index.ts`、`review-orchestrator.ts`、`auto-commit-runtime.ts`、`auto-commit-scheduler.ts`、`model-catalog-service.ts`、`run-snapshot.ts`、CLI app、queue/worker 及 store recording。
+- [x] 不可变 RuntimeConfigManager、固定 dispatcher、每次 admission 重读持久 head；失配、损坏、不可达时暂停新任务，已有版本继续执行；关闭等待最后一个 lease。
+- [x] v2 routing 消费准入、workspace/path、四层 analysis 和输出选择；显式空输出关闭该类，禁用最后一条规则仍保持 v2，无静默 legacy 回退。
+- [x] receipt/batch/routing/deferral/dedup 固定首次版本；run.json、review result 与 queue job 暴露 configVersion。独立队列账本保留版本，SQLite 队列重开后仍执行原配置，不改 BullMQ 私有结构。
+- [x] 首次启动 CAS 建立唯一 legacy_import，历史 null 引用统一解析到它；新任务显式固定当前版本。保留旧业务行，重启和后续发布不漂移。
+- [x] 四后端持久 runtime state CAS、instance 心跳、接收前 pin、结束标记及保守 GC；读取所有任务后端失败则不回收，未展开 receipt、routing 重试、dead batch、claimed deferral 和在途队列任务均保留。
+- [x] H05 Review 消费：fetchScoped 前过滤、UTF-8 patch/context/reflection 预算、完整文件模式、commit strategy、语言/标签/日志/调度和 reflection。per_commit 在一次分析中提供带提交标记的补丁，最终 head 校验由 prompt 约束；历史改写保持端点比较。
+- [x] agent 的 timeout/approval/compaction/search 与 sandbox 四层配置进入实际 bundle/command/env/manifest；七个已实现 adapter 验证能力差异，repo-owned 配置不能提升部署权限。
+- [x] catalog 全配置与 triage 策略按 generation 解析；配置模型的目录结果经 CAS 固定到 snapshot，历史任务跨重启保持相同元数据；共享后端连接在 drain 后关闭。
+- [x] 自动批次与 queue worker 在 claim 边界读取并发限制；真实 provider 调用与 agent launch 使用共享限流器，预算按调用结果计费，发布不会清空已累计额度。
+- [x] delivery/member 去重与 config_boundary 分批不变，项目 soft-delete 保护活跃 binding，CLI file-only/dry-run/source-root 合同保持。
 
-退出条件：H01–H18、R01–R13、B01–B10 通过；每类配置用下一次真实编排调用证明更新，不能只断言 AppConfig 对象变化。
+退出条件：H01–H18 和 R/B 的 P4 运行时合同已验收；组合证据见测试计划和 M19。P7 的双版本进程故障矩阵保持独立，不替代本阶段消费者测试。
 
 ### P5. 配置 API
 
-- [ ] 将登录/auth/session 与统计 API 的 store 耦合分开，挂载 `/api/admin/config`，配置管理不依赖是否启用统计。
-- [ ] 实现设计列出的 read/schema/validate/preview/changesets/operations/revisions/restore/status 端点，严格 DTO 与分页/大小限制。
-- [ ] 复用管理员鉴权，普通 workspace/webhook token 无写权；文件锁和 capability checks 在服务端执行。
-- [ ] 添加 secret-reference allowlist/用途限制，API、日志、审计、导出及错误统一脱敏，不返回或保存环境变量值。
-- [ ] 返回字段级错误和 revision conflict，处理重复提交、浏览器超时后查询 operation、已提交未激活状态。
-- [ ] 更新 OpenAPI/路由文档和合同 fixtures；保持 path_prefix、禁用管理页、过期/登出行为。
+状态：已完成（2026-09-13）。API 合同通过，ConfigUiSpec/管理 UI 属于 P6。
 
-影响：`admin-auth.ts`、`observability-api.ts`、`index.ts`；拟新增 `config-api.ts`、DTO 和 validation 模块。
+- [x] admin Bearer/session 与统计 store 解耦；read/schema/validate/preview-route/changesets/operations/revisions/restore/status 全部接入服务层。
+- [x] 严格 DTO、1 MiB 流式 UTF-8 限制、原型键拒绝、分页边界、字段级 code/path/entity；changesets 和 restore 必须携带 fileDigest，文件锁与 bootstrap 边界在服务端重验。
+- [x] operationId 幂等、CAS 冲突、不可变 revision、新版本 restore；202 committed_activating 可经 operation/status 再次激活；status 返回持久实例心跳与版本。
+- [x] 文件拥有 secret_refs 名称/用途/目标授权；检查隐式继承的 channel、model override、workspace/route search 与 context repository 凭据，改变目的地也必须重新授权。禁止新增/恢复明文凭据，GET/错误/审计脱敏。
+- [x] path_prefix 下两个真实 SQLite 连接共享 session；跨源拒绝、恶意文本 JSON 响应和日志无敏感原文；不依赖前端校验。
+- [x] 双语文档、示例、AI 条件指引和 Plan 同步。仓库无独立 OpenAPI 文件，架构/API 实现为端点合同真源。
 
-退出条件：A01–A15、C/R 相关 API 合同通过；绕过 UI 直接改文件项仍被拒绝；无明文 secret 泄漏。
+退出条件：A01–A15 的 API 合同及 C/R 服务边界通过。A14 的浏览器文本渲染随 P6 新增管理页面验证，API JSON 内容类型和模板预览隔离已在本阶段验证。
 
 ### P6. 通用表单与管理页面
 

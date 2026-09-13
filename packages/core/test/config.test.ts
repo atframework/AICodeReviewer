@@ -111,8 +111,10 @@ describe("mergeConfigLayers", () => {
     expect(merged.agent.default).toBe("kilo");
     expect(merged.agent.timeout_seconds).toBe(1800);
     expect(merged.agent.auto_approve).toBe(true);
-    expect(merged.agent.sandbox.kind).toBe("docker");
-    expect(merged.agent.sandbox.engine).toBe("auto");
+    // No sandbox.kind default (H04): unset means auto-detect with native
+    // fallback; an explicit container kind is a hard trust statement.
+    expect(merged.agent.sandbox.kind).toBeUndefined();
+    expect(merged.agent.sandbox.engine).toBeUndefined();
     expect(merged.outputs.template_engine).toBe("handlebars");
     expect(merged.queue.kind).toBe("memory");
     expect(merged.workspaces.cache.max_total_gb).toBe(50);
@@ -1331,6 +1333,7 @@ describe("mergeConfigLayers", () => {
     const merged = mergeConfigLayers({});
     expect(merged.review.languages_auto_detect).toBe(true);
     expect(merged.review.include).toEqual(["**/*"]);
+    // Full-field glob defaults (P4): single `*` spans separators.
     expect(merged.review.exclude).toEqual(["**/vendor/**", "**/*.min.js", "**/*.lock"]);
     expect(merged.review.max_files).toBe(50);
     expect(merged.review.max_patch_bytes).toBe(200000);

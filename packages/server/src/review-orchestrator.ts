@@ -6,6 +6,8 @@ import { hostname } from "node:os";
 import { randomUUID } from "node:crypto";
 
 import {
+  applyReviewPathPolicy,
+  createReviewContextFetcher,
   buildReviewTaskContext,
   fixAndValidateMarkdown,
   isPlainObject,
@@ -18,6 +20,9 @@ import {
   type ContextRepositoryConfig,
   type PreparedReviewPrompt,
   type ReviewEvent,
+  type ReviewPathPolicy,
+  type ReviewConfig,
+  type ExecutionConfigVersion,
   type ReviewVcsKind,
   type ReviewProvider,
   type ScrubMatch,
@@ -76,6 +81,7 @@ import {
 } from "@aicr/vcs";
 
 import type { LiveRunMetrics, LiveRunRegistry, LiveRunSource } from "./live-runs.js";
+import { applyReviewCommitPolicy } from "./review-commit-policy.js";
 
 export interface DiffCapableVcsAdapter extends VcsAdapter {
   diff?(range: ChangeRange, options?: { readonly contextLines?: number }): Promise<ParsedDiff>;
@@ -117,11 +123,21 @@ export interface ReviewOrchestrationContext {
   readonly runSource?: LiveRunSource;
   /** 1-based attempt counter when the caller retries with the same runId. */
   readonly attempt?: number;
+  /**
+   * Execution config snapshot the task was admitted under (P4/H08). A
+   * persisted automatic-commit batch pins its receipt-time snapshot id;
+   * `null` marks tasks accepted before snapshot pinning (legacy). The run
+   * resolves every config-derived option from this generation, never from a
+   * concurrently published one.
+   */
+  readonly configSnapshotId?: string | null;
   readonly additionalTaskContext?: string;
   readonly signal?: AbortSignal;
 }
 
 export interface ServerReviewOrchestrationOptions {
+  /** Hold the task's generation lease across options resolution and execution. */
+  readonly executionScope?: (<T>(context: ReviewOrchestrationContext, run: () => Promise<T>) => Promise<T>) | undefined;
   readonly baseSystemPrompt: string;
   readonly baseSystemPromptResolver?: (workspaceId: string) => Promise<string | undefined> | string | undefined;
   readonly forceSkillsResolver?: (workspaceId: string) => readonly string[] | undefined;
@@ -138,11 +154,24 @@ export interface ServerReviewOrchestrationOptions {
   readonly model: ModelSpec;
   /** Ordered models available to agent-backed reviews; the first entry is the normal route. */
   readonly agentModelChain?: readonly ModelSpec[];
+  readonly beforeAgentCall?: (model: ModelSpec) => Promise<void>;
+  readonly onAgentCost?: (costUsd: number) => void;
   /** Resolve once per run; all model-dependent options belong to that workspace. */
   readonly modelOptionsResolver?: (workspaceId: string) => Pick<
     ServerReviewOrchestrationOptions,
     "llm" | "model" | "agentModelChain" | "compression" | "summarizeModel" | "summarizeClient"
   >;
+  /**
+   * Resolve once per run (P4 execution plan): returns per-task overrides for
+   * workspace-layer analysis options (agent adapter, sandbox factory, review
+   * policy, output language, web search, model route…). Bootstrap implements
+   * this against the generation pinned by `context.configSnapshotId` (or the
+   * current admission generation), so one run never mixes two config
+   * generations. Applied after `modelOptionsResolver`.
+   */
+  readonly optionsResolver?: (
+    context: ReviewOrchestrationContext,
+  ) => Promise<Partial<ServerReviewOrchestrationOptions>> | Partial<ServerReviewOrchestrationOptions>;
   readonly outputPublisher?: ReviewOutputPublisher;
   readonly outputPublisherResolver?: ReviewOutputPublisherResolver;
   readonly changedPathsResolver?: (context: ReviewOrchestrationContext) => readonly string[] | undefined;
@@ -158,6 +187,9 @@ export interface ServerReviewOrchestrationOptions {
   readonly sandboxFactory?: () => Promise<SandboxBackend> | SandboxBackend;
   readonly agentAdapter?: AgentAdapter;
   readonly agentTimeoutMs?: number;
+  readonly agentAutoApprove?: boolean;
+  readonly reviewConfig?: ReviewConfig;
+  readonly configVersion?: ExecutionConfigVersion;
   readonly contextCompaction?: AgentCompactionOptions;
   /**
    * Agent web search control. omp/kilo/opencode materialize config-level rules
@@ -192,6 +224,13 @@ export interface ServerReviewOrchestrationOptions {
   readonly mentionAuthor?: boolean;
   readonly authorResolution?: AuthorResolutionOptions;
   readonly ignoreLabelsResolver?: (workspaceId: string) => readonly string[];
+  /**
+   * Merged review policy for one workspace (P4/H05): include/exclude/max_files
+   * filter the changed-path list; output_language/log_thinking ride the same
+   * layered resolution in bootstrap. Returned policy must already be the
+   * global → defaults → instance merge (resolveAnalysisSelection).
+   */
+  readonly reviewPolicyResolver?: (workspaceId: string) => ReviewPathPolicy | undefined;
   readonly outputLanguage?: string;
   readonly logThinking?: boolean;
   /**
@@ -203,6 +242,7 @@ export interface ServerReviewOrchestrationOptions {
 }
 
 export interface ReviewOrchestrationResult {
+  readonly configVersion?: ExecutionConfigVersion;
   readonly status: "dry_run" | "published" | "skipped";
   readonly sourceRoot: string;
   readonly changedFiles: readonly string[];
@@ -265,6 +305,7 @@ export interface ReviewOrchestrationWebhookUsage {
 export type ReviewOrchestrationUsageSource = "llm_gateway" | "agent_stdout" | "mixed";
 
 export interface ReviewOrchestrationWebhookSummary {
+  readonly configVersion?: ExecutionConfigVersion;
   readonly status: "dry_run" | "published" | "skipped";
   readonly changedFileCount: number;
   readonly fetchedFileCount: number;
@@ -1595,7 +1636,7 @@ async function runAgentReviewInDirs(
       workingDir: agentWorkingDirForSandbox(sandbox, bundle.workingDir),
       ...(options.agentTimeoutMs !== undefined ? { timeoutMs: options.agentTimeoutMs } : {}),
       model: options.model,
-      autoApprove: true,
+      autoApprove: options.agentAutoApprove ?? true,
       task: effectiveTask,
       ...(mcpServers ? { mcpServers } : {}),
       ...(bundleContext?.webSearch ? { webSearch: bundleContext.webSearch } : {}),
@@ -1922,6 +1963,7 @@ async function runAgentReviewWithQuotaFallback(
     const currentModel = candidates[index]!;
     attemptedModels.push(currentModel);
     try {
+      await options.beforeAgentCall?.(currentModel);
       const completion = await runAgentReview(
         sourceRoot,
         task,
@@ -1931,6 +1973,7 @@ async function runAgentReviewWithQuotaFallback(
         runDirs,
         containmentRoot,
       );
+      if (completion.estimatedCostUsd !== undefined) options.onAgentCost?.(completion.estimatedCostUsd);
       return index > 0 ? { ...completion, fallbackCount: index } : completion;
     } catch (error) {
       if (!isLlmQuotaExhaustedError(error)) throw error;
@@ -2857,14 +2900,24 @@ export async function runReviewOrchestration(
   context: ReviewOrchestrationContext,
   options: ServerReviewOrchestrationOptions,
 ): Promise<ReviewOrchestrationResult> {
+  if (options.executionScope) {
+    return options.executionScope(context, () => runReviewOrchestration(context, { ...options, executionScope: undefined }));
+  }
   context.signal?.throwIfAborted();
-  if (options.modelOptionsResolver) {
+  if (options.modelOptionsResolver && !options.optionsResolver) {
     options = { ...options, ...options.modelOptionsResolver(context.reviewEvent.workspaceId) };
+  }
+  if (options.optionsResolver) {
+    // One execution plan per task (P4): workspace-layer analysis options and
+    // the pinned generation's model route resolve once, here, and stay fixed
+    // for the whole run even if a new revision publishes mid-flight.
+    options = { ...options, ...(await options.optionsResolver(context)) };
   }
 
   const registry = options.liveRuns;
   if (!registry) {
-    return executeReviewOrchestration(context, options);
+    const result = await executeReviewOrchestration(context, options);
+    return { ...result, ...(options.configVersion ? { configVersion: options.configVersion } : {}) };
   }
 
   const { reviewEvent } = context;
@@ -2892,7 +2945,8 @@ export async function runReviewOrchestration(
   try {
     // Propagate the registry runId so the per-run directory scope (L09)
     // matches the id operators see in the live-run view.
-    return await executeReviewOrchestration({ ...context, runId }, options, { registry, executionId });
+    const result = await executeReviewOrchestration({ ...context, runId }, options, { registry, executionId });
+    return { ...result, ...(options.configVersion ? { configVersion: options.configVersion } : {}) };
   } finally {
     registry.finish(executionId);
   }
@@ -3006,10 +3060,6 @@ async function executeReviewInRunDirs(
   };
   const vcs = options.vcsFactory ? await options.vcsFactory(context.reviewEvent.provider === "p4" ? runDirs.sourceDir : sourceRoot, context) : options.vcs;
   const range = await vcs.listChanges(context.reviewEvent);
-  const scopedTree = await vcs.fetchScoped(range, workspaceRef);
-  if (containmentRoot && !isWithinRoot(containmentRoot, await realpathContaining(scopedTree.rootDir))) {
-    throw new Error(`materialized sourceDir escapes instanceRoot via symlink/junction: ${scopedTree.rootDir}`);
-  }
   let headCommittedAt: string | undefined;
   try {
     const timestamp = range.headRevision && await vcs.fetchRevisionCommittedAt?.(range.headRevision);
@@ -3024,11 +3074,34 @@ async function executeReviewInRunDirs(
     ...(headCommittedAt ? { headCommittedAt } : {}),
   };
   liveRun?.registry.update(liveRun.executionId, revisionStamp);
-  const changedPaths = [
+  let changedPaths = [
     ...(options.changedPathsResolver?.(context) ?? range.files ?? context.reviewEvent.changedFiles ?? []),
   ];
+  // P4/H05: apply the task's merged review include/exclude/max_files policy
+  // (workspace layer included) to the VCS-derived path list. Truncation is
+  // visible in the log so operators can tell filtering from VCS gaps.
+  if (options.reviewPolicyResolver && changedPaths.length > 0) {
+    const reviewPolicy = options.reviewPolicyResolver(context.reviewEvent.workspaceId);
+    if (reviewPolicy) {
+      const applied = applyReviewPathPolicy(changedPaths, reviewPolicy);
+      if (applied.excluded.length > 0 || applied.truncated.length > 0) {
+        console.info(JSON.stringify({
+          level: "info",
+          msg: "review path policy applied",
+          workspaceId: context.reviewEvent.workspaceId,
+          excluded: applied.excluded.length,
+          truncated: applied.truncated.length,
+        }));
+      }
+      changedPaths = [...applied.paths];
+    }
+  }
 
-  if (changedPaths.length === 0 && !options.dryRun) {
+  const scopedTree = await vcs.fetchScoped({ ...range, files: changedPaths }, workspaceRef);
+  if (containmentRoot && !isWithinRoot(containmentRoot, await realpathContaining(scopedTree.rootDir))) {
+    throw new Error(`materialized sourceDir escapes instanceRoot via symlink/junction: ${scopedTree.rootDir}`);
+  }
+  const noChangesResult = (): ReviewOrchestrationResult => {
     console.info(JSON.stringify({
       level: "info",
       msg: "no changed files after filtering, skipping review",
@@ -3075,6 +3148,8 @@ async function executeReviewInRunDirs(
     };
   }
 
+  if (changedPaths.length === 0 && !options.dryRun) return noChangesResult();
+
   const contextRepoResults = await materializeWorkspaceContextRepos(
     options,
     sourceRoot,
@@ -3116,8 +3191,41 @@ async function executeReviewInRunDirs(
       diff = undefined;
     }
   }
-  const rawTaskContext = options.taskContextBuilder?.(context.reviewEvent, changedPaths, diff) ??
-    buildTaskContext(context.reviewEvent, changedPaths, diff, options.outputLanguage, contextReposSection);
+  const policy = options.reviewConfig;
+  const commitPolicy = await applyReviewCommitPolicy(vcs, context.reviewEvent, { ...range, files: changedPaths }, diff,
+    policy?.commit_strategy, options.diffContextLines ?? 3);
+  diff = commitPolicy.diff;
+  changedPaths = [...commitPolicy.files];
+  if (changedPaths.length === 0 && !options.dryRun) return noChangesResult();
+  const patchText = formatParsedDiffForPrompt(diff);
+  if (policy?.max_patch_bytes !== undefined && Buffer.byteLength(patchText, "utf8") > policy.max_patch_bytes) {
+    throw new Error("review.max_patch_bytes exceeded; reduce the review scope or raise its configured byte limit.");
+  }
+  const policyContext: string[] = [];
+  if (policy?.commit_strategy === "per_commit") {
+    policyContext.push("Commit-labelled patches describe historical changes within one review. Verify each suspected problem against the final head and report it only if it still exists there; publish line locations from that final head.");
+  }
+  if (policy?.languages_auto_detect) {
+    policyContext.push(`Source languages inferred from file extensions: ${[...new Set(changedPaths.map(inferCodeFenceLanguage).filter(Boolean))].join(", ")}. Verify against the source before applying language-specific rules.`);
+  }
+  if (policy?.skip_lgtm !== undefined) {
+    policyContext.push(policy.skip_lgtm
+      ? "Skip redundant LGTM-only commentary when there are no confirmed problems. Empty-result publication remains controlled by the output channel policy."
+      : "When there are no confirmed problems, provide a concise review summary with the checked scope and limitations.");
+  }
+  if (policy?.incremental === false) {
+    let bytes = 0;
+    for (const path of changedPaths) {
+      if (diff?.files.some(file => file.status === "deleted" && file.oldPath === path)) continue;
+      const full = await vcs.fetchExtraContext({ path, reason: "Full-file review requested by review.incremental=false", ...(range.headRevision ? { revision: range.headRevision } : {}) }, workspaceRef);
+      bytes += Buffer.byteLength(full.content, "utf8");
+      if (bytes > (policy.max_patch_bytes ?? 200_000)) throw new Error("Full-file review exceeds review.max_patch_bytes.");
+      policyContext.push(`Current file ${JSON.stringify(path)}:\n${full.content}`);
+    }
+  }
+  const rawTaskContext = (options.taskContextBuilder?.(context.reviewEvent, changedPaths, diff) ??
+    buildTaskContext(context.reviewEvent, changedPaths, diff, options.outputLanguage, contextReposSection)
+  ) + (policyContext.length ? `\n\n${policyContext.join("\n\n")}` : "");
 
   let compressed = false;
   let originalTokenEstimate: number | undefined;
@@ -3212,11 +3320,17 @@ async function executeReviewInRunDirs(
   const llmSystemPrompt = (scrubbedPrompt.messages[0] as { role: string; content: string }).content;
 
   const collector = new AicrOutputCollector();
+  const fetchContext = createReviewContextFetcher(policy?.fetch_extra, async (path, startLine, endLine) => {
+    const result = await vcs.fetchExtraContext({ path, reason: "Requested review context",
+      ...(startLine !== undefined ? { startLine } : {}), ...(endLine !== undefined ? { endLine } : {}),
+      ...(range.headRevision ? { revision: range.headRevision } : {}) }, workspaceRef);
+    return result.content;
+  });
   const tools = createAicrOutputToolRegistry(
     collector,
     async (request) => {
-      const result = await vcs.fetchExtraContext(toExtraContextRequest(request, range.headRevision), workspaceRef);
-      return result.content;
+      const parsed = toExtraContextRequest(request, range.headRevision);
+      return fetchContext(parsed.path, parsed.startLine, parsed.endLine);
     },
     async (request) => {
       if (!vcs.fetchAttribution) {
@@ -3878,6 +3992,7 @@ export function summarizeReviewOrchestrationForWebhook(
 ): ReviewOrchestrationWebhookSummary {
   const usage = extractReviewRunUsage(result);
   return {
+    ...(result.configVersion ? { configVersion: result.configVersion } : {}),
     status: result.status,
     changedFileCount: result.changedFiles.length,
     fetchedFileCount: result.fetchedFiles.length,

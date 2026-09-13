@@ -30,6 +30,7 @@ import type {
   ConfigHeadState,
   ConfigRevisionRecord,
   ConfigRuntimeSnapshotRecord,
+  ConfigRuntimeState,
   ConfigStore,
   ListAuditOptions,
   ListRevisionsOptions,
@@ -297,6 +298,11 @@ export const PG_CONFIG_STORE_SQL_001 = `
 /** Config-namespace steps; shared with the CLI migrate command (M17-M20). */
 export const PG_CONFIG_STORE_MIGRATIONS: readonly MigrationStep[] = [
   pgConfigSqlStep("001_pg_config_initial", 0, 1, PG_CONFIG_STORE_SQL_001),
+  pgConfigSqlStep("002_pg_config_runtime_state", 1, 2, `CREATE TABLE config_runtime_state (
+    namespace TEXT NOT NULL, key TEXT NOT NULL, version BIGINT NOT NULL,
+    snapshot_id TEXT REFERENCES config_runtime_snapshots(id), record TEXT NOT NULL,
+    PRIMARY KEY(namespace, key));
+    CREATE INDEX config_runtime_state_snapshot ON config_runtime_state(snapshot_id);`),
 ];
 
 export function createPgConfigStoreMigrationPlan(): NamespaceMigrationPlan {
@@ -583,6 +589,37 @@ export async function createPgConfigStore(options: PgConfigStoreOptions): Promis
 
   return {
     backendKind: "postgres",
+    async readRuntimeState(namespace, key) {
+      open(); assertNamespace(namespace);
+      const result = await queryRows<{ record: string }>("readRuntimeState", "SELECT record FROM config_runtime_state WHERE namespace=$1 AND key=$2", [namespace, key]);
+      return result.rows[0] ? JSON.parse(result.rows[0].record) as ConfigRuntimeState : null;
+    },
+    async listRuntimeStates(namespace) {
+      open(); assertNamespace(namespace);
+      const result = await queryRows<{ record: string }>("listRuntimeStates", "SELECT record FROM config_runtime_state WHERE namespace=$1 ORDER BY key", [namespace]);
+      return result.rows.map(row => JSON.parse(row.record) as ConfigRuntimeState);
+    },
+    async writeRuntimeState(input) {
+      open(); assertNamespace(input.namespace);
+      return guarded("writeRuntimeState", () => withTx(async client => {
+        if (input.snapshotId) {
+          const snapshot = await client.query("SELECT id FROM config_runtime_snapshots WHERE id=$1 AND namespace=$2 FOR KEY SHARE", [input.snapshotId, input.namespace]);
+          if (!snapshot.rows[0]) throw new ConfigError("snapshot_invalid", "Runtime state requires an existing snapshot in its namespace.");
+        }
+        const record: ConfigRuntimeState = { namespace: input.namespace, key: input.key, version: (input.expectedVersion ?? 0) + 1,
+          snapshotId: input.snapshotId, value: input.value, updatedAt: input.now };
+        const params = [input.namespace, input.key, record.version, input.snapshotId, JSON.stringify(record)];
+        const result = input.expectedVersion === null
+          ? await client.query("INSERT INTO config_runtime_state(namespace,key,version,snapshot_id,record) VALUES($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING RETURNING record", params)
+          : await client.query("UPDATE config_runtime_state SET version=$3,snapshot_id=$4,record=$5 WHERE namespace=$1 AND key=$2 AND version=$6 RETURNING record", [...params, input.expectedVersion]);
+        return result.rows[0] ? JSON.parse(result.rows[0].record as string) as ConfigRuntimeState : null;
+      }));
+    },
+    async deleteRuntimeState(namespace, key, expectedVersion) {
+      open(); assertNamespace(namespace);
+      const result = await queryRows("deleteRuntimeState", "DELETE FROM config_runtime_state WHERE namespace=$1 AND key=$2 AND version=$3 RETURNING key", [namespace, key, expectedVersion]);
+      return result.rows.length > 0;
+    },
 
     async readHead(namespace) {
       open();
@@ -785,7 +822,7 @@ export async function createPgConfigStore(options: PgConfigStoreOptions): Promis
           const insertedRow = inserted.rows[0] as SnapshotRow | undefined;
           if (insertedRow !== undefined) return rowToSnapshot(insertedRow);
           const existingResult = await pool.query(
-            "SELECT * FROM config_runtime_snapshots WHERE id = $1",
+            "SELECT s.*, s.ref_count + (SELECT count(*) FROM config_runtime_state r WHERE r.snapshot_id=s.id) AS ref_count FROM config_runtime_snapshots s WHERE id = $1",
             [input.id],
           );
           const existing = existingResult.rows[0] as SnapshotRow | undefined;
@@ -800,7 +837,7 @@ export async function createPgConfigStore(options: PgConfigStoreOptions): Promis
       open();
       const result = await queryRows<SnapshotRow>(
         "readSnapshot",
-        "SELECT * FROM config_runtime_snapshots WHERE id = $1",
+        "SELECT s.*, s.ref_count + (SELECT count(*) FROM config_runtime_state r WHERE r.snapshot_id=s.id) AS ref_count FROM config_runtime_snapshots s WHERE id = $1",
         [id],
       );
       const row = result.rows[0];
@@ -814,7 +851,7 @@ export async function createPgConfigStore(options: PgConfigStoreOptions): Promis
         `UPDATE config_runtime_snapshots
             SET ref_count = GREATEST(0, ref_count + $2)
           WHERE id = $1
-          RETURNING *`,
+          RETURNING *, ref_count + (SELECT count(*) FROM config_runtime_state r WHERE r.snapshot_id=config_runtime_snapshots.id) AS ref_count`,
         [id, delta],
       );
       const row = result.rows[0];
@@ -825,7 +862,7 @@ export async function createPgConfigStore(options: PgConfigStoreOptions): Promis
       open();
       const result = await queryRows<SnapshotRow>(
         "setSnapshotPinned",
-        "UPDATE config_runtime_snapshots SET pinned = $2 WHERE id = $1 RETURNING *",
+        "UPDATE config_runtime_snapshots SET pinned = $2 WHERE id = $1 RETURNING *, ref_count + (SELECT count(*) FROM config_runtime_state r WHERE r.snapshot_id=config_runtime_snapshots.id) AS ref_count",
         [id, pinned],
       );
       const row = result.rows[0];
@@ -839,6 +876,7 @@ export async function createPgConfigStore(options: PgConfigStoreOptions): Promis
         "listUnreferencedSnapshots",
         `SELECT * FROM config_runtime_snapshots
           WHERE namespace = $1 AND pinned = FALSE AND ref_count = 0 AND created_at <= $2
+            AND NOT EXISTS (SELECT 1 FROM config_runtime_state r WHERE r.snapshot_id = config_runtime_snapshots.id)
           ORDER BY created_at ASC
           LIMIT $3`,
         [namespace, olderThan, limit],
@@ -854,7 +892,7 @@ export async function createPgConfigStore(options: PgConfigStoreOptions): Promis
         // task's snapshot. The follow-up SELECT only classifies the miss:
         // row gone = idempotent no-op, row present = still referenced.
         const deleted = await pool.query(
-          "DELETE FROM config_runtime_snapshots WHERE id = $1 AND pinned = FALSE AND ref_count = 0",
+          "DELETE FROM config_runtime_snapshots WHERE id = $1 AND pinned = FALSE AND ref_count = 0 AND NOT EXISTS (SELECT 1 FROM config_runtime_state r WHERE r.snapshot_id = config_runtime_snapshots.id)",
           [id],
         );
         if ((deleted.rowCount ?? 0) > 0) return;

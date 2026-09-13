@@ -46,7 +46,7 @@ export interface DockerSandboxOptions {
   readonly commandRunner?: ContainerCommandRunner;
 }
 
-const execContainerCommand: ContainerCommandRunner = async function execContainerCommand(
+export const execContainerCommand: ContainerCommandRunner = async function execContainerCommand(
   engine,
   args: readonly string[],
   options?: ContainerCommandOptions,

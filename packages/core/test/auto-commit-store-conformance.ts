@@ -210,6 +210,7 @@ export function runAutoCommitStoreConformance(factory: StoreFactory): void {
         receiptInput({ configSnapshotId: "snap-a", delaySeconds: 0 }),
       );
       expect(accepted.receipt.configSnapshotId).toBe("snap-a");
+      expect(await store.listActiveConfigSnapshotIds(T0)).toEqual(["snap-a"]);
       const streamId = computeStreamId(accepted.receipt);
       const metadata = membersOf(["A1"], 1);
       await store.applyMetadataPage({
@@ -220,7 +221,9 @@ export function runAutoCommitStoreConformance(factory: StoreFactory): void {
       });
       expect(await store.listActiveConfigSnapshotIds(T0)).toEqual(["snap-a"]);
 
-      // Seal moves the pin from the receipt to the batch.
+      const expandedHead = (await store.readStreamHead(streamId))!;
+      await store.updateStreamHead(streamId, expandedHead.version, { coverageCursor: accepted.receipt.receiptSeq }, T0);
+      // Seal moves the pin from the fully expanded receipt to the batch.
       const member = (await store.readPendingMembers(streamId, null, 1)).items[0]!;
       await store.applyExclusionVerdicts({
         streamId,

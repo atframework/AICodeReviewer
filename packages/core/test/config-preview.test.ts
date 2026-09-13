@@ -75,12 +75,14 @@ function v2Config(overrides: Record<string, unknown> = {}) {
 }
 
 describe("previewConfigChangeset", () => {
+  const deployment = { config_sources: { secret_refs: [{ env: "FEISHU_URL", target: ["outputs", "channels", "chat", "webhook_url_env"],
+    destinations: { kind: "feishu_bot", webhook_url_env: "FEISHU_URL" } }] } };
   const operations = [
     { op: "create" as const, collection: "channels" as const, record: { id: "rec-chat", name: "chat", enabled: true, value: { name: "chat", kind: "feishu_bot", webhook_url_env: "FEISHU_URL" } } },
   ];
 
   it("returns the impact view without committing anything", async () => {
-    const preview = await previewConfigChangeset({ store, namespace: NAMESPACE, file: {}, fileDigest: DIGEST, operations });
+    const preview = await previewConfigChangeset({ store, namespace: NAMESPACE, file: deployment, fileDigest: DIGEST, operations });
     expect(preview.valid).toBe(true);
     if (!preview.valid) return;
     expect(preview.baseRevision).toBeNull();
@@ -102,7 +104,7 @@ describe("previewConfigChangeset", () => {
         baseRevision: null,
         operationId: "op-1",
         actor: "tester",
-        file: {},
+        file: deployment,
         fileDigest: DIGEST,
         current: {},
         operations,

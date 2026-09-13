@@ -5,6 +5,8 @@ export interface DeduplicationTarget {
   readonly eventName: string;
   readonly decoded: unknown;
   readonly reviewEvent: ReviewEvent;
+  readonly configSnapshotId?: string | null;
+  readonly releaseConfigPin?: () => Promise<void>;
 }
 
 export interface ReviewDeduplicator {
@@ -73,6 +75,7 @@ export function createReviewDeduplicator(): ReviewDeduplicator {
     },
 
     setPending(target: DeduplicationTarget): void {
+      void pending.get(buildDedupKey(target.reviewEvent))?.releaseConfigPin?.().catch(() => {});
       pending.set(buildDedupKey(target.reviewEvent), target);
     },
   };

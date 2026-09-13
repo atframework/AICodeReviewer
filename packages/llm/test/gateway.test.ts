@@ -147,6 +147,7 @@ describe("createResilientChatClient", () => {
 	});
 
 	it("falls back to the next model in the chain on fallback-eligible errors", async () => {
+		const admitted: string[] = [];
 		const primaryError = new LlmProviderError("primary failed", { status: 500 });
 		const fallbackResult: ChatCompletionResult = {
 			providerId: "anthropic-prod",
@@ -158,6 +159,7 @@ describe("createResilientChatClient", () => {
 
 		const gateway = createResilientChatClient(
 			makeOptions({
+				beforeRequest: async model => { admitted.push(model.providerId); },
 				clientFactory: (model) => {
 					if (model.providerId === "openai-prod") {
 						return makeFailingClient(primaryError);
@@ -172,6 +174,9 @@ describe("createResilientChatClient", () => {
 		expect(result.content).toBe("fallback ok");
 		expect(result.providerId).toBe("anthropic-prod");
 		expect(result.fallbackCount).toBe(1);
+		expect(admitted[0]).toBe("openai-prod");
+		expect(admitted.at(-1)).toBe("anthropic-prod");
+		expect(admitted).toHaveLength(result.retryCount + result.fallbackCount + 1);
 	});
 
 	it("throws non-retryable provider errors without falling back", async () => {

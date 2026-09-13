@@ -33,6 +33,32 @@ describe("createQueueWorker", () => {
     expect(worker.isRunning()).toBe(false);
   });
 
+  it("H17: lowering live limits preserves active jobs and gates the next claim", async () => {
+    let limit = 2;
+    const releases: (() => void)[] = [];
+    const started: string[] = [];
+    const worker = createTestWorker(async job => {
+      started.push(job.id);
+      await new Promise<void>(resolve => releases.push(resolve));
+    }, { concurrency: () => limit, perWorkspaceConcurrency: () => limit });
+    for (let i = 0; i < 3; i++) await queue.enqueue({}, { id: String(i), workspaceId: "ws", triggerName: "trigger" });
+    worker.start();
+    await vi.advanceTimersByTimeAsync(100);
+    expect(started).toHaveLength(2);
+    limit = 1;
+    releases[0]!();
+    await vi.advanceTimersByTimeAsync(100);
+    expect(started).toHaveLength(2);
+    expect((await queue.getStats()).running).toBe(1);
+    releases[1]!();
+    await vi.advanceTimersByTimeAsync(100);
+    expect(started).toHaveLength(3);
+    releases[2]!();
+    await vi.advanceTimersByTimeAsync(100);
+    await worker.stop();
+    expect((await queue.getStats()).completed).toBe(3);
+  });
+
   it("starts and stops the worker", () => {
     const worker = createTestWorker(async () => {});
     worker.start();

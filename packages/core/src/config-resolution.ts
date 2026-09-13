@@ -11,6 +11,7 @@
  */
 
 import { createHash } from "node:crypto";
+import type { ReviewTargetKind } from "./review-event.js";
 
 import { CONFIG_MATCHER_LIMITS, ConfigError, computeWorkspaceInstanceId } from "./config-format.js";
 import { WORK_PATH_TEMPLATE_VARIABLES, type PathTemplateVariables } from "./config-path-template.js";
@@ -150,6 +151,8 @@ export interface WorkspaceResolutionConfigInput {
 }
 
 export interface WorkspaceResolutionEventContext {
+  /** Normalized target selected by the authenticated event translator. */
+  readonly target_kind?: ReviewTargetKind | undefined;
   /** Whitelisted provider facts from authenticated payloads or verified VCS metadata. */
   readonly provider_fields?: Readonly<Record<string, string | null>> | undefined;
   readonly default_branch?: string | null | undefined;

@@ -9,7 +9,7 @@
 # still load (converted in memory to named groups, this file is never
 # rewritten); `config_version: 1` is accepted as envelope metadata. Provider IDs,
 # trigger names and channel names must be unique. Model-chain entry `overrides`
-# is schema-only; set effective request options on the provider for now.
+# merge over provider request fields (maps by key, arrays replace).
 
 # ---------------------------------------------------------------------------
 # LLM providers
@@ -183,6 +183,35 @@ llm:
 #     #   force_path_style: true      # MinIO / RustFS / many S3-compatible endpoints
 #   retention:
 #     deleted_project_grace_days: 30  # hard-delete soft-deleted projects after this many days
+
+# ---------------------------------------------------------------------------
+# Dynamic config source (optional, P4/P5)
+# ---------------------------------------------------------------------------
+# Enables database-published configuration: the process adopts the durable
+# config head at startup and at every webhook admission; the admin API at
+# /api/admin/config can publish revisions (read/schema/validate/preview-route/
+# changesets/operations/revisions/restore/status). Published trigger/provider/
+# model changes apply to NEWLY accepted work; already-accepted tasks keep their
+# pinned generation. The management API requires admin auth env vars.
+# `backend: redis` reuses the storage.cache.redis connection declaration.
+# Changesets/restore require the current fileDigest. New DB credential uses
+# need an exact file-owned grant (env + stable target path + destinations).
+# Existing file references authorize their existing purpose implicitly.
+#
+# config_sources:
+#   secret_refs:
+#     - env: DB_LLM_KEY
+#       target: [llm, providers, db-model, api_key_env]
+#       destinations:
+#         kind: openai_compatible
+#         base_url: https://llm.example.com/v1
+#   database:
+#     enabled: true
+#     backend: storage          # storage (sqlite/postgres above) | redis
+#     namespace: default
+#   runtime:
+#     refresh_interval_seconds: 5   # background refresh only; admissions
+#                                    # always re-read the durable head
 
 # ---------------------------------------------------------------------------
 # Server authentication (optional, recommended for production)
@@ -767,6 +796,7 @@ agent:
 # ---------------------------------------------------------------------------
 review:
   languages_auto_detect: true
+  # Path globs: * stays within one directory; ** spans zero or more directories.
   include: ["**/*"]
   exclude:
     - "**/node_modules/**"
@@ -996,11 +1026,13 @@ review:
 # Database configuration sources (revisions, audit, sessions, bindings,
 # snapshots) now have storage backends for SQLite, PostgreSQL and Redis, a
 # checksummed migration ledger and the `aicr migrate` CLI; admin sessions are
-# persisted in the configured config store. Still planned: source merging and
-# publication (P3), runtime pinning of published revisions (P4), the config
-# admin API (P5) and the management form (P6) — until those land, YAML remains
-# the only consumed configuration source. Bootstrap connections, admin auth,
-# secret allowlists and workspace root remain file-only by design.
+# persisted in the configured config store. Source merging/publication and the
+# admin API are implemented when config_sources.database.enabled is true.
+# File-owned values stay locked. Receipts and new deferrals retain their config
+# snapshot; historical unpinned work migration and durable pin reconciliation
+# remain pending. v2 routing runtime selection, secret-purpose allowlists and
+# the management UI are not implemented. Bootstrap connections and workspace
+# root stay file-owned.
 workspaces:
   cache:
     max_total_gb: 10

@@ -2,6 +2,20 @@
 
 Read the section matching a config, model-selection, persistence, or usage change.
 
+## Runtime configuration generations
+
+- Read durable pins before task references during GC, and stop on any unreadable
+  backend. A snapshot refcount alone cannot close the pin-to-receipt race; use
+  CAS runtime state and preserve unexpanded receipts and claimed deferrals
+  (runtime-config tests H11/H12/H16; config-store conformance).
+- Validate credential destinations after inheritance. A channel URL, model
+  override or workspace/route search endpoint can reuse a file token without
+  adding an env field. Require the effective purpose grant and never query an
+  unauthorized env (config-secret-policy tests A06).
+- Freeze catalog observations with the task version, including after restart.
+  Keep budget/token-bucket state outside generation caches; verify actual
+  requests and generated adapter bundles (runtime-generation tests H01–H03/H17).
+
 ## Config and shared utilities
 
 Sources: `packages/core/src/config.ts`, `utils.ts`, their tests, and the actual
@@ -43,7 +57,7 @@ consumers in `packages/server/src/bootstrap.ts`.
   form with `resolve()` at the runtime boundary. Joining segments with the
   host separator breaks byte-parity with the legacy `buildSourceRootResolver`
   derivation on Windows.
-- Workspace-layer `sandbox`, `agent.web_search.*` per-adapter coverage, and
+- `agent.web_search.*` per-adapter coverage and
   several trigger/channel kind-conditional fields are schema-only: acceptance
   is not runtime effect. `packages/core/src/config-components.ts` (U24 gate)
   is the wiring inventory; `config-capabilities.ts` holds the
@@ -69,6 +83,17 @@ consumers in `packages/server/src/bootstrap.ts`.
 - Shared public types use generic names such as `sourcePath` and
   `submitterWorkspace`. Import canonical enums rather than duplicating provider
   lists in generic modules; keep provider-specific fields inside adapters.
+
+- Dynamic config admission must run before profile lookup/authentication. Keep
+  one request generation across awaits; a later publish must not switch credentials,
+  workspace or receipt pin halfway through. Exercise signed HTTP requests without
+  a manual refresh first (`runtime-http.test.ts`). Verify snapshot namespace/file
+  identity before recovery writes, serialize head adoption, and evict disposed
+  generations; null historical pins remain a migration gap, not H12 completion.
+- Config API limits must count streamed UTF-8 bytes, reject prototype keys before
+  Zod parsing and require operation values. Validate client fileDigest against the
+  local file; redact URLs/headers/short credentials and suppress driver error text.
+  Test disabled entities and immutable IDs in GET views (`config-api.test.ts`).
 
 ## Model catalog and failure routing
 

@@ -966,6 +966,12 @@ export class GitVcsAdapter implements VcsAdapter {
 
   async diff(range: ChangeRange, options: GitDiffOptions = {}): Promise<ParsedDiff> {
     await this.syncRepository();
+    if (range.baseRevision === undefined && range.headRevision) {
+      if (range.headRevision.startsWith("-")) throw new RangeError("Git revision must not be option-like.");
+      const result = await this.runGit(["-C", this.repositoryDir, "diff-tree", "--root", "--no-commit-id", "-r",
+        `--unified=${options.contextLines ?? 3}`, range.headRevision, "--", ...uniqueNormalizedPaths(this.repositoryDir, range.files)]);
+      return parseUnifiedDiff(result.stdout);
+    }
     const { baseRevision, headRevision } = requireRevisionPair(range);
     const args = [
       "-C",

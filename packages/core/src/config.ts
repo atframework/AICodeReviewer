@@ -9,7 +9,7 @@ import { validateWorkspaceDefinitions } from "./config-workspace.js";
 import { autoCommitConfigSchema, type AutoCommitConfig } from "./auto-commit-policy.js";
 import { pullRequestConfigSchema, type PullRequestConfig } from "./pull-request-policy.js";
 import { isPlainObject } from "./utils.js";
-import { workspaceRootKeys } from "./config-format.js";
+import { validateConfigNamespace, workspaceRootKeys } from "./config-format.js";
 
 import {
   assertNoSecretEnvIssues,
@@ -55,11 +55,11 @@ export const llmProviderSchema = z
 
 
 /**
- * Request-level overrides on a single model-chain entry (spec §4.2). Accepted
- * by the schema from P0; resolveModelSpecFromChain ignores them until the
- * runtime generation wiring (P4) — setting them changes no client behavior
- * yet. Maps merge by key, arrays replace wholesale; disabling a parameter is
- * expressed through drop_params, never JSON null.
+ * Request-level overrides on a single model-chain entry (spec §4.2). Wired
+ * into resolveModelSpecFromChain since P4: maps merge by key over provider
+ * fields, arrays replace wholesale; disabling a parameter is expressed
+ * through drop_params, never JSON null. Provider id/kind, endpoint, and
+ * credentials are not overridable here — those belong to the provider entity.
  */
 export const modelRequestOverridesSchema = z
   .object({
@@ -669,6 +669,10 @@ export const workspacePromptSchema = z
 export const workspaceAgentSelectionSchema = z
   .object({
     default: agentKindSchema.optional(),
+    timeout_seconds: z.number().int().positive().optional(),
+    auto_approve: z.boolean().optional(),
+    context_compaction: contextCompactionSchema.partial().optional(),
+    web_search: agentWebSearchSchema.removeDefault().partial().optional(),
   })
   .strict();
 
@@ -726,7 +730,11 @@ export const workspaceInstanceSchema = z
   })
   .strict();
 
-const workspaceConfigFileSchema = workspaceInstanceSchema.omit({ sandbox: true }).strict();
+const workspaceConfigFileSchema = workspaceInstanceSchema.omit({ sandbox: true }).extend({
+  // Repository-owned files may select an adapter, but cannot grant approval,
+  // change process limits or forward deployment credentials.
+  agent: workspaceAgentSelectionSchema.pick({ default: true }).optional(),
+}).strict();
 
 export const trustProxyValueSchema: z.ZodType<
   boolean | "loopback" | "linklocal" | "uniquelocal" | readonly string[],
@@ -846,6 +854,42 @@ export const adminAuthSchema = z
   .passthrough()
   .default({});
 
+/**
+ * Dynamic config source switch (spec §4.1). Bootstrap-owned: the database can
+ * never edit the switch that decides where configuration comes from. When
+ * `database.enabled` is false the process keeps the file-only behavior and
+ * never opens a config store for revisions; when enabled, admission reads the
+ * durable head (P4) and the admin API can publish revisions (P5). Redis as a
+ * config backend reuses the `storage.cache.redis` connection declaration.
+ */
+export const configSourcesSchema = z
+  .object({
+    secret_refs: z.array(z.object({
+      env: z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/),
+      target: z.array(z.string().min(1)).min(1),
+      destinations: z.record(z.string().min(1), z.unknown()),
+    }).strict()).optional(),
+    database: z
+      .object({
+        enabled: z.boolean().default(false),
+        backend: z.enum(["storage", "redis"]).default("storage"),
+        namespace: z.string().refine((value) => {
+          try { validateConfigNamespace(value); return true; } catch { return false; }
+        }, "Config namespace must be 1..64 safe identifier characters.").default("default"),
+      })
+      .strict()
+      .default({ enabled: false, backend: "storage", namespace: "default" }),
+    runtime: z
+      .object({
+        /** Background refresh cadence; NOT the admission consistency barrier. */
+        refresh_interval_seconds: z.number().int().min(1).max(3600).default(5),
+      })
+      .strict()
+      .default({ refresh_interval_seconds: 5 }),
+  })
+  .strict()
+  .default({});
+
 export const llmConfigSchema = z
   .object({
     providers: z.array(llmProviderSchema).default([]),
@@ -934,7 +978,10 @@ export const agentConfigSchema = z
     default: agentKindSchema.default("kilo"),
     timeout_seconds: z.number().int().positive().default(1800),
     auto_approve: z.boolean().default(true),
-    sandbox: sandboxSchema.default({ kind: "docker", engine: "auto" }),
+    // No kind default (H04): an unset kind means "auto-detect, native
+    // fallback allowed", while an explicit container kind is a trust
+    // statement that must not silently downgrade when preflight fails.
+    sandbox: sandboxSchema.default({}),
     context_compaction: contextCompactionSchema.default({ auto: true, prune: true }),
     web_search: agentWebSearchSchema,
   })
@@ -1040,6 +1087,7 @@ const appConfigObjectSchema = z
   .object({
     storage: storageSchema,
     admin: adminAuthSchema,
+    config_sources: configSourcesSchema,
     server: serverSchema,
     llm: llmConfigSchema.default({ providers: [], model_chain: {} }),
     triggers: z.array(triggerSchema).default([]),
@@ -1049,7 +1097,7 @@ const appConfigObjectSchema = z
       default: "kilo",
       timeout_seconds: 1800,
       auto_approve: true,
-      sandbox: { kind: "docker", engine: "auto" },
+      sandbox: {},
       context_compaction: { auto: true, prune: true },
       web_search: { enabled: false, providers: [], exclude: [], credentials: {} },
     }),
@@ -1155,6 +1203,25 @@ const appConfigRefinement = (config: AppConfigRefinementTarget, ctx: z.Refinemen
           code: z.ZodIssueCode.custom,
           message:
             "llm.model_catalog.cache.backend 'redis' requires storage.cache.redis.url_env; see Plan.md §3.13 / D31",
+          path: ["storage", "cache", "redis", "url_env"],
+        });
+      }
+    }
+
+    if (config.config_sources.database.enabled && config.config_sources.database.backend === "redis") {
+      if (config.storage.cache.kind !== "redis") {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message:
+            "config_sources.database.backend 'redis' requires storage.cache.kind 'redis'; the config backend shares that connection declaration",
+          path: ["config_sources", "database", "backend"],
+        });
+      }
+      if (!config.storage.cache.redis?.url_env) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message:
+            "config_sources.database.backend 'redis' requires storage.cache.redis.url_env; the config backend shares that connection declaration",
           path: ["storage", "cache", "redis", "url_env"],
         });
       }
@@ -1302,6 +1369,12 @@ function normalizeConfigDocument(parsed: unknown): AppConfigInput {
 
 export interface LoadedConfigDocument {
   readonly config: AppConfig;
+  /**
+   * Legacy-converted raw file document (pre-defaults). Source merging and the
+   * config publish path consume this shape; re-feeding the defaults-filled
+   * `config` would violate the merge contract (defaults apply exactly once).
+   */
+  readonly document: AppConfigInput;
   /** Historical format conversions applied in memory; the file is never rewritten. */
   readonly changes: readonly ConfigConversionChange[];
   readonly sourceMap: ConfigSourceMap;
@@ -1325,6 +1398,7 @@ export function parseConfigDocumentText(text: string, options?: ParseRawConfigOp
   validateWorkspaceDefinitions(config);
   return {
     config,
+    document,
     changes,
     sourceMap: raw.sourceMap,
     digest: raw.digest,
@@ -1335,6 +1409,12 @@ export function parseConfigDocumentText(text: string, options?: ParseRawConfigOp
 export async function loadConfigFile(path: string): Promise<AppConfig> {
   const raw = await readFile(path, "utf8");
   return parseConfigDocumentText(raw, { fileName: path }).config;
+}
+
+/** Full-document load for runtime/publish consumers needing digest + raw doc. */
+export async function loadConfigDocumentFile(path: string): Promise<LoadedConfigDocument> {
+  const raw = await readFile(path, "utf8");
+  return parseConfigDocumentText(raw, { fileName: path });
 }
 
 export async function loadWorkspaceConfigFile(path: string): Promise<WorkspaceConfigFile> {

@@ -24,7 +24,7 @@ describe("describeWebhookSource — github/gitea/forgejo (V01, V04)", () => {
       branch: "main",
       ref: "refs/heads/main",
     });
-    expect(descriptor?.event).toEqual({ default_branch: null, provider_fields: { repository_id: null, pull_number: null, issue_number: null, installation_id: null } });
+    expect(descriptor?.event).toEqual({ target_kind: "push", default_branch: null, provider_fields: { repository_id: null, pull_number: null, issue_number: null, installation_id: null } });
   });
 
   it("tag push: branch is null, ref stays real (V05)", () => {

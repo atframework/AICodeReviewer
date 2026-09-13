@@ -1,4 +1,4 @@
-import { eq, and, lt, desc } from "drizzle-orm";
+import { eq, and, desc } from "drizzle-orm";
 
 import { reflectionMemory } from "./schema.js";
 import type { StoreDb } from "./database.js";
@@ -103,46 +103,20 @@ export async function readReflectionMemory(
 export async function compactReflectionMemory(
   store: StoreDb,
   workspaceId: string,
-  options?: { retentionDays?: number; maxEntries?: number },
+  options?: { retentionDays?: number; maxEntries?: number; maxBytes?: number },
 ): Promise<number> {
   if (store.kind === "postgres") {
     return compactReflectionMemoryPg(store, workspaceId, options);
   }
   const retentionDays = options?.retentionDays ?? 90;
   const maxEntries = options?.maxEntries ?? 500;
-  let deleted = 0;
-
-  const cutoff = new Date(Date.now() - retentionDays * 86_400_000);
-  const expiredResult = store.db
-    .delete(reflectionMemory)
-    .where(
-      and(
-        eq(reflectionMemory.workspaceId, workspaceId),
-        lt(reflectionMemory.expiresAt, cutoff),
-      ),
-    )
-    .run();
-  deleted += expiredResult.changes;
-
-  const excessRows = store.db
-    .select({ id: reflectionMemory.id })
-    .from(reflectionMemory)
-    .where(eq(reflectionMemory.workspaceId, workspaceId))
-    .orderBy(desc(reflectionMemory.createdAt))
-    .offset(maxEntries)
-    .limit(1000)
-    .all();
-
-  if (excessRows.length > 0) {
-    const idsToDelete = excessRows.map((row: { id: number }) => row.id);
-    for (const id of idsToDelete) {
-      store.db
-        .delete(reflectionMemory)
-        .where(eq(reflectionMemory.id, id))
-        .run();
-    }
-    deleted += idsToDelete.length;
-  }
-
-  return deleted;
+  const now = Date.now();
+  return store.sqlite.prepare(`DELETE FROM reflection_memory WHERE workspace_id = ? AND
+    (expires_at < ? OR created_at < ? OR id IN (
+      SELECT id FROM (SELECT id,
+        ROW_NUMBER() OVER (ORDER BY created_at DESC, id DESC) AS position,
+        SUM(length(CAST(content AS BLOB))) OVER (ORDER BY created_at DESC, id DESC) AS bytes
+        FROM reflection_memory WHERE workspace_id = ? AND (expires_at IS NULL OR expires_at >= ?) AND created_at >= ?)
+      WHERE position > ? OR bytes > ?))`).run(workspaceId, now, now - retentionDays * 86_400_000,
+        workspaceId, now, now - retentionDays * 86_400_000, maxEntries, options?.maxBytes ?? Number.MAX_SAFE_INTEGER).changes;
 }

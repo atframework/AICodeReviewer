@@ -100,6 +100,38 @@ function createVcs(sourceRoot: string): DiffCapableVcsAdapter {
 }
 
 describe("runReviewOrchestration", () => {
+  it("enforces the actual patch byte budget before calling the model", async () => {
+    await mkdir("build/tmp", { recursive: true });
+    const root = await mkdtemp(join(process.cwd(), "build/tmp/review-budget-"));
+    const complete = vi.fn();
+    try {
+      await expect(runReviewOrchestration({ reviewEvent: createReviewEventFixture(), provider: "gitea", eventName: "pull_request", payload: {} }, {
+        baseSystemPrompt: "Review", sourceRootResolver: () => root, vcs: createVcs(root), model, llm: { complete },
+        reviewConfig: { max_patch_bytes: 10 },
+      })).rejects.toThrow("max_patch_bytes");
+      expect(complete).not.toHaveBeenCalled();
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+  it("passes full-file policy, language hints and pinned version through the real prompt and result", async () => {
+    await mkdir("build/tmp", { recursive: true });
+    const root = await mkdtemp(join(process.cwd(), "build/tmp/review-policy-"));
+    const vcs = createVcs(root);
+    const read = vi.spyOn(vcs, "fetchExtraContext");
+    const complete = vi.fn(async () => ({ providerId: model.providerId, modelId: model.modelId, content: '{"skipReason":"lgtm"}', raw: null }));
+    const configVersion = { configSnapshotId: "cfg-sentinel", databaseRevision: 12, fileDigest: "f".repeat(64), routeId: "review-route" };
+    try {
+      const result = await runReviewOrchestration({ reviewEvent: createReviewEventFixture(), provider: "gitea", eventName: "pull_request", payload: {} }, {
+        baseSystemPrompt: "Review", sourceRootResolver: () => root, vcs, model, llm: { complete }, configVersion,
+        reviewConfig: { incremental: false, languages_auto_detect: true, skip_lgtm: false, max_patch_bytes: 2000 },
+      });
+      expect(read).toHaveBeenCalledWith(expect.objectContaining({ path: "src/app.ts", revision: "head" }), expect.anything());
+      expect(result.preparedPrompt.taskContext).toContain("extra context");
+      expect(result.preparedPrompt.taskContext).toContain("Source languages inferred from file extensions: ts");
+      expect(result.preparedPrompt.taskContext).toContain("provide a concise review summary");
+      expect(summarizeReviewOrchestrationForWebhook(result).configVersion).toEqual(configVersion);
+      expect(complete).toHaveBeenCalledTimes(1);
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
   it.each(["success", "failure", "empty"])("cleans direct review directories after %s", async (outcome) => {
     await mkdir("build/tmp", { recursive: true });
     const root = await mkdtemp(join(process.cwd(), "build/tmp/direct-cleanup-"));

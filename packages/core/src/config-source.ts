@@ -691,7 +691,9 @@ export function projectDatabaseDocument(
       }
       kept.push([record.name, cloneConfigValue(record.value)]);
     }
-    if (kept.length === 0) {
+    // An explicitly managed route collection remains v2 when emptied or
+    // disabled. Falling back to legacy here would reopen denied traffic.
+    if (kept.length === 0 && collection.kind !== "route") {
       continue;
     }
     if (collection.shape === "array") {

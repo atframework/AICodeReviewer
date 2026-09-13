@@ -84,11 +84,11 @@ export async function deleteReviewDeferralPg(store: PgStoreDb, dedupKey: string)
   await store.db.delete(reviewDeferrals).where(eq(reviewDeferrals.dedupKey, dedupKey));
 }
 
-export async function listPendingReviewDeferralsPg(store: PgStoreDb): Promise<ReviewDeferralRow[]> {
+export async function listPendingReviewDeferralsPg(store: PgStoreDb, includeClaimed = false): Promise<ReviewDeferralRow[]> {
   return store.db
     .select()
     .from(reviewDeferrals)
-    .where(eq(reviewDeferrals.status, "pending"))
+    .where(includeClaimed ? sql`${reviewDeferrals.status} IN ('pending', 'claimed')` : eq(reviewDeferrals.status, "pending"))
     .orderBy(asc(reviewDeferrals.notBefore));
 }
 

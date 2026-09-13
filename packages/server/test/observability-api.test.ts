@@ -512,3 +512,32 @@ describe("observability API", () => {
     expect(res.status).toBe(401);
   });
 });
+
+describe("observability API without a stats store (P5 decoupling)", () => {
+  it("login/logout and live runs work; stats endpoints report explicit unavailability (A04)", async () => {
+    const sessionStoreOnly = createMemoryConfigStore();
+    const app = createObservabilityApi({ adminAuth: ADMIN_CONFIG, sessionStore: sessionStoreOnly });
+    try {
+      const login = await app.request("/login", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ username: "admin", password: "test-password" }),
+      });
+      expect(login.status).toBe(200);
+      const { token } = await login.json() as { token: string };
+
+      const live = await app.request("/runs/live", { headers: { authorization: `Bearer ${token}` } });
+      expect(live.status).toBe(200);
+      expect(((await live.json()) as { runs: unknown[] }).runs).toEqual([]);
+
+      for (const path of ["/stats", "/stats/projects", "/stats/providers", "/runs", "/events"]) {
+        const response = await app.request(path, { headers: { authorization: `Bearer ${token}` } });
+        expect([path, response.status]).toEqual([path, 503]);
+        const body = await response.json() as { error: string };
+        expect(body.error).toBe("stats_unavailable");
+      }
+    } finally {
+      await sessionStoreOnly.close();
+    }
+  });
+});

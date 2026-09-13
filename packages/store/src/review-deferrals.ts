@@ -139,14 +139,14 @@ export async function deleteReviewDeferral(store: StoreDb, dedupKey: string): Pr
   store.db.delete(reviewDeferrals).where(eq(reviewDeferrals.dedupKey, dedupKey)).run();
 }
 
-export async function listPendingReviewDeferrals(store: StoreDb): Promise<ReviewDeferralRow[]> {
+export async function listPendingReviewDeferrals(store: StoreDb, includeClaimed = false): Promise<ReviewDeferralRow[]> {
   if (store.kind === "postgres") {
-    return listPendingReviewDeferralsPg(store);
+    return listPendingReviewDeferralsPg(store, includeClaimed);
   }
   return store.db
     .select()
     .from(reviewDeferrals)
-    .where(eq(reviewDeferrals.status, "pending"))
+    .where(includeClaimed ? sql`${reviewDeferrals.status} IN ('pending', 'claimed')` : eq(reviewDeferrals.status, "pending"))
     .orderBy(asc(reviewDeferrals.notBefore))
     .all();
 }

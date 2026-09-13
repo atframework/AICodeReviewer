@@ -14,10 +14,15 @@
 import { resolve } from "node:path";
 
 import {
+  ConfigError,
+  compileExecutionGraph,
+  resolveRouteForEvent,
   compileWorkspaceMatchDefinitions,
   computeWorkspaceLayout,
   triggerKindToVcs,
   type AppConfig,
+  type ReviewTargetKind,
+  type EffectiveConfigV2,
   type ReviewEventResolution,
   type ValidatedWorkspaceDefinition,
   type WorkspaceBinding,
@@ -81,13 +86,27 @@ function legacyLayout(workspacesRoot: string, workspaceId: string, repoRef: stri
 }
 
 export function createWorkspaceRuntime(config: AppConfig, baseDir: string): WorkspaceRuntime {
+  const graph = compileExecutionGraph(config as EffectiveConfigV2);
   const matchDefinitions = compileWorkspaceMatchDefinitions(config);
   const workspacesRoot = resolve(baseDir, config.workspaces.root ?? "workspaces");
 
-  const resolveForSource: WorkspaceRuntime["resolveForSource"] = (triggerName, source, event, request) =>
-    resolveWorkspaceForSource(config, matchDefinitions, triggerName, source, event, request);
+  const resolveForSource: WorkspaceRuntime["resolveForSource"] = (triggerName, source, event, request) => {
+    if (graph.mode === "v2") {
+      if (event?.target_kind === undefined) {
+        throw new ConfigError("no_route", "Routing requires a normalized target kind.");
+      }
+      const selected = resolveRouteForEvent(graph, { triggerName, targetKind: event.target_kind, repoRef: source.repo_ref });
+      if (selected.status === "none") throw new ConfigError("no_route", "No enabled route matches this event.");
+      if (request !== undefined && request.workspaceId !== selected.rule.workspace) {
+        return { kind: "route_denied", definitionId: request.workspaceId, reason: "source_not_permitted" };
+      }
+      return resolveWorkspaceForSource(config, matchDefinitions, triggerName, source, event, { workspaceId: selected.rule.workspace });
+    }
+    return resolveWorkspaceForSource(config, matchDefinitions, triggerName, source, event, request);
+  };
 
   const isMatchReferenced = (triggerName: string): boolean => {
+    if (graph.mode === "v2") return true;
     for (const definition of matchDefinitions.values()) {
       for (const rule of definition.rules) {
         if (rule.triggers === undefined || rule.triggers.includes(triggerName)) {
@@ -109,7 +128,7 @@ export function createWorkspaceRuntime(config: AppConfig, baseDir: string): Work
       return legacyLayout(workspacesRoot, event.resolution.definitionId, event.repoRef);
     }
     const definition = config.workspaces.instances[event.workspaceId];
-    if (definition?.match === undefined) {
+    if (definition?.match === undefined && graph.mode !== "v2") {
       return legacyLayout(workspacesRoot, event.workspaceId, event.repoRef);
     }
 
@@ -118,6 +137,7 @@ export function createWorkspaceRuntime(config: AppConfig, baseDir: string): Work
     const trigger = config.triggers.find((entry) => entry.name === event.triggerName);
     const vcs = trigger !== undefined ? triggerKindToVcs(trigger.kind) : undefined;
     if (trigger === undefined || vcs === undefined) {
+      if (graph.mode === "v2") throw new ConfigError("no_route", "Execution source has no configured trigger.");
       return legacyLayout(workspacesRoot, event.workspaceId, event.repoRef);
     }
     const resolution = resolveForSource(
@@ -129,11 +149,15 @@ export function createWorkspaceRuntime(config: AppConfig, baseDir: string): Work
         ref: null,
       },
       {
+        ...(event.targetKind ? { target_kind: event.targetKind as ReviewTargetKind } : {}),
         base_branch: event.targetBranch ?? null,
         head_branch: event.targetKind === "pull_request" ? event.branch ?? null : null,
       },
+      { workspaceId: event.workspaceId },
     );
+    if (resolution.kind === "legacy_binding") return legacyLayout(workspacesRoot, resolution.definitionId, event.repoRef);
     if (resolution.kind !== "match") {
+      if (graph.mode === "v2") throw new ConfigError("no_route", "Execution source does not match its selected workspace.");
       // The event reached execution, so it matched at receive time; a
       // different outcome here means the config changed underneath the run.
       // Fail closed onto the legacy shape instead of inventing a new one.

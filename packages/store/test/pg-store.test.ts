@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { assertReflectionLimits } from "./reflection-limit-contract.js";
 
 import pg from "pg";
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
@@ -517,6 +518,7 @@ describePg("pg store project retention", () => {
 });
 
 describePg("pg store reflection memory", () => {
+  it("enforces UTF-8 bytes, expiry, retention and entry count together", async () => { await assertReflectionLimits(store); });
   it("writes, reads, counts occurrences, and compacts", async () => {
     const now = new Date();
     await writeReflectionMemory(store, [

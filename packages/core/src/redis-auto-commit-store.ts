@@ -1224,11 +1224,13 @@ export async function createRedisAutoCommitStore(
       let cursor = "0";
       const batchKeys: string[] = [];
       const receiptKeys: string[] = [];
+      const routingKeys: string[] = [];
       do {
         const [next, keys] = (await redis.scan(cursor, "MATCH", `${P}*`, "COUNT", 200)) as [string, string[]];
         cursor = next;
         for (const key of keys) {
           if (key.startsWith(`${P}batch:`)) batchKeys.push(key);
+          if (key.startsWith(`${P}routing:`)) routingKeys.push(key);
           // receipt:<id> only; receipt:<id>:members carries no snapshot data.
           if (key.startsWith(`${P}receipt:`) && !key.endsWith(":members")) receiptKeys.push(key);
         }
@@ -1245,7 +1247,13 @@ export async function createRedisAutoCommitStore(
         if (receipt?.configSnapshotId == null) continue;
         const memberIds = (await redis.zrange(`${P}receipt:${receipt.receiptId}:members`, 0, -1)) as string[];
         const members = await hgetJsonMany<{ record: { status: string } }>(memberIds.map((id) => `${P}member:${id}`));
-        if (members.some((member) => member?.record.status === "pending")) ids.add(receipt.configSnapshotId);
+        const [stream] = await hgetJsonMany<StreamHead>([`${P}stream:${receipt.streamId}`]);
+        if (receipt.receiptSeq > (stream?.coverageCursor ?? 0) || receipt.metadataTerminalError != null
+          || members.some((member) => member?.record.status === "pending")) ids.add(receipt.configSnapshotId);
+      }
+      for (const receipt of await hgetJsonMany<RoutingReceiptRecord>(routingKeys)) {
+        const envelope = receipt?.envelope as { configSnapshotId?: unknown } | null;
+        if (receipt?.completedAt == null && typeof envelope?.configSnapshotId === "string") ids.add(envelope.configSnapshotId);
       }
       return [...ids];
     },

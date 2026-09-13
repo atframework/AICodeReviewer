@@ -8,6 +8,20 @@ This directory contains a ready-to-edit deployment configuration.
 > `.github/workflows/docs.yml`; local preview still uses `pnpm docs:dev`. This
 > README remains the copy-paste deployment reference.
 
+## Dynamic configuration
+
+The optional `config_sources` block in [config.yaml](config.yaml) enables the
+admin API at `/api/admin/config` (under `server.path_prefix` when configured).
+Use an admin Bearer session; the API works without the statistics store.
+Changesets and restore require the current `fileDigest` and `baseRevision`.
+Query the operation after a lost response or `committed_activating` result.
+
+File values stay read-only. Before adding a database credential reference or
+changing its destination, authorize the exact env, target path and destinations
+in the file's `secret_refs`. Existing file references authorize their original
+use. Accepted tasks retain their configuration version across publication;
+legacy unpinned tasks use a persisted baseline. The management UI is planned.
+
 ## Quick Start (Docker Compose)
 
 ```bash

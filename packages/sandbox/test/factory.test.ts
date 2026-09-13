@@ -63,10 +63,25 @@ describe("resolveSandboxKind", () => {
     expect(result.kind).toBe("native");
   });
 
-  it("returns native when preflight finds no container engine", async () => {
-    // This test assumes the system has at least docker or podman or falls back to native
-    const result = await resolveSandboxKind("docker");
-    // On a system without docker/podman, it falls back to native
-    expect(["docker", "podman", "native"]).toContain(result.kind);
+  it("rejects an explicit container kind when preflight finds no engine (H04)", async () => {
+    const noEngine = async () => ({ stdout: "", stderr: "not found", exitCode: 127 as number | null });
+    await expect(resolveSandboxKind("docker", undefined, noEngine)).rejects.toThrow(
+      /explicitly requested but no container engine is available/,
+    );
+    await expect(resolveSandboxKind("podman", "podman", noEngine)).rejects.toThrow(
+      /refusing to silently fall back to native/,
+    );
+  });
+
+  it("resolves an explicit container kind when an engine is available", async () => {
+    const withDocker = async () => ({ stdout: "Docker version 27.0.0", stderr: "", exitCode: 0 as number | null });
+    const result = await resolveSandboxKind("docker", undefined, withDocker);
+    expect(result).toEqual({ kind: "docker", engine: "docker" });
+  });
+
+  it("keeps the native fallback for an unset kind (file trust ceiling preserved)", async () => {
+    const noEngine = async () => ({ stdout: "", stderr: "not found", exitCode: 127 as number | null });
+    const result = await resolveSandboxKind(undefined, undefined, noEngine);
+    expect(result).toEqual({ kind: "native", engine: "auto" });
   });
 });

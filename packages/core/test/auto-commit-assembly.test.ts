@@ -165,3 +165,68 @@ describe("cutAutoCommitBatches", () => {
     expect(() => cutAutoCommitBatches([], T0, 0)).toThrow(RangeError);
   });
 });
+
+describe("cutAutoCommitBatches config snapshot boundaries (H09)", () => {
+  it("members pinned to different snapshots never share a batch", () => {
+    const a = member({ memberId: "r1", configSnapshotId: "cfg-old" });
+    const b = member({ memberId: "r2", configSnapshotId: "cfg-old" });
+    const c = member({ memberId: "r3", configSnapshotId: "cfg-new" });
+    const d = member({ memberId: "r4", configSnapshotId: "cfg-new" });
+
+    const result = cutAutoCommitBatches([a, b, c, d], T0);
+    expect(result.ready.map((cut) => cut.memberIds)).toEqual([["r1", "r2"], ["r3", "r4"]]);
+    expect(result.ready.map((cut) => cut.reason)).toEqual(["same_source_run", "config_boundary"]);
+  });
+
+  it("legacy (null snapshot) members group with their own kind only", () => {
+    const legacy = member({ memberId: "l1", configSnapshotId: null });
+    const pinned = member({ memberId: "p1", configSnapshotId: "cfg-1" });
+    const legacy2 = member({ memberId: "l2", configSnapshotId: null });
+
+    const result = cutAutoCommitBatches([legacy, pinned, legacy2], T0);
+    expect(result.ready.map((cut) => cut.memberIds)).toEqual([["l1"], ["p1"], ["l2"]]);
+    // The first cut keeps its ordinary-run reason; boundary labeling starts
+    // with the run that the pin change opens.
+    expect(result.ready.map((cut) => cut.reason)).toEqual(["same_source_run", "config_boundary", "config_boundary"]);
+  });
+
+  it("undefined snapshot behaves as legacy null", () => {
+    const a = member({ memberId: "u1" });
+    const b = member({ memberId: "p1", configSnapshotId: "cfg-1" });
+    const c = member({ memberId: "u2" });
+
+    const result = cutAutoCommitBatches([a, b, c], T0);
+    expect(result.ready.map((cut) => cut.memberIds)).toEqual([["u1"], ["p1"], ["u2"]]);
+  });
+
+  it("a snapshot boundary after a merge commit still isolates the merge", () => {
+    const a = member({ memberId: "m1", parents: ["p0", "p2"], configSnapshotId: "cfg-1" });
+    const b = member({ memberId: "r1", configSnapshotId: "cfg-1" });
+    const c = member({ memberId: "r2", configSnapshotId: "cfg-2" });
+
+    const result = cutAutoCommitBatches([a, b, c], T0);
+    expect(result.ready.map((cut) => cut.memberIds)).toEqual([["m1"], ["r1"], ["r2"]]);
+    expect(result.ready.map((cut) => cut.reason)).toEqual(["merge_commit", "same_source_run", "config_boundary"]);
+  });
+
+  it("rewrite events keep their single-batch identity across snapshot checks", () => {
+    const a = member({ memberId: "w1", rewriteReceiptId: "rw-1", configSnapshotId: "cfg-1" });
+    const b = member({ memberId: "w2", rewriteReceiptId: "rw-1", configSnapshotId: "cfg-1" });
+    const c = member({ memberId: "r1", configSnapshotId: "cfg-2" });
+
+    const result = cutAutoCommitBatches([a, b, c], T0);
+    expect(result.ready.map((cut) => cut.memberIds)).toEqual([["w1", "w2"], ["r1"]]);
+    expect(result.ready.map((cut) => cut.reason)).toEqual(["rewrite_event", "same_source_run"]);
+  });
+
+  it("delivery and member identity stay intact: no member is dropped or duplicated", () => {
+    const members = [
+      member({ memberId: "r1", configSnapshotId: "cfg-1" }),
+      member({ memberId: "r2", configSnapshotId: "cfg-2" }),
+      member({ memberId: "r3", configSnapshotId: "cfg-2" }),
+    ];
+    const result = cutAutoCommitBatches(members, T0);
+    const seen = result.ready.flatMap((cut) => cut.memberIds);
+    expect(seen.sort()).toEqual(["r1", "r2", "r3"]);
+  });
+});

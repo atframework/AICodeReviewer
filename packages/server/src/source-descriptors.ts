@@ -165,5 +165,8 @@ export function describeWebhookSource(
   const descriptor = provider === "gitlab" ? describeGitlab(record) : describeGithubLike(record);
   if (!descriptor) return undefined;
   return { ...descriptor, event: { ...descriptor.event,
+    target_kind: provider === "gitlab"
+      ? (record.object_kind === "merge_request" || record.merge_request !== undefined ? "pull_request" : record.ref !== undefined ? "push" : "issue")
+      : (record.pull_request !== undefined || asRecord(record.issue)?.pull_request !== undefined ? "pull_request" : record.ref !== undefined ? "push" : "issue"),
     ...(provider === "gitlab" ? gitlabFields(record) : githubFields(record, provider)) } };
 }

@@ -29,6 +29,21 @@ describe("deferral failure and deadline recovery", () => {
     (await closeStoreDb(store));
   });
 
+  it("recovers the admitted snapshot and original payload after replacing the manager", async () => {
+    const first = new ReviewDeferralManager({ store });
+    const admitted = { ...target(), configSnapshotId: "cfg-before-publish" };
+    first.defer(admitted, 1000);
+    await vi.advanceTimersByTimeAsync(0);
+    first.stop();
+    const restarted = new ReviewDeferralManager({ store });
+    const resumed = vi.fn();
+    restarted.resumeHandler = resumed;
+    await restarted.recover();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(resumed).toHaveBeenCalledExactlyOnceWith(admitted);
+    expect(await listPendingReviewDeferrals(store)).toEqual([]);
+  });
+
   it.each([true, false])("keeps the latest envelope without moving the timer earlier (persistent=%s)", async (persistent) => {
     const manager = new ReviewDeferralManager(persistent ? { store } : {});
     const resume = vi.fn();

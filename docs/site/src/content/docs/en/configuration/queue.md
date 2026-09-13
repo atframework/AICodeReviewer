@@ -182,7 +182,7 @@ Redis queue connection fields are accepted as passthrough keys:
 | --- | --- | --- | --- |
 | `concurrency` | int > 0 | `4` | Global worker concurrency (jobs running at once across the process). |
 | `per_workspace_concurrency` | int > 0 | `1` | Max jobs running concurrently per workspace. Use `1` to serialize per repo. |
-| `lock_ttl_seconds` | int > 0 | `1800` | Worker job-lock TTL. |
+| `lock_ttl_seconds` | int > 0 | `1800` | Reserved; lock expiry is configured by the queue backend. |
 
 ## `queue.sqlite` — durable queue options
 
@@ -207,7 +207,15 @@ file. Its key properties:
   `PRAGMA journal_mode = WAL` and `PRAGMA busy_timeout = 5000`, so concurrent
   writers from different processes cooperate instead of erroring.
 
+With database configuration enabled, concurrency updates apply at the next claim
+without cancelling running jobs. Queued jobs retain their accepted config version;
+the queue version ledger survives restart with a durable backend.
+
 ## `queue.rate_limit`
+
+Limits use actual LLM provider IDs, including retries and fallback requests.
+Publishing new rates keeps accumulated token-bucket state. Native agent CLIs are
+limited per launch; their internal HTTP requests remain under CLI control.
 
 | Field | Type | Description |
 | --- | --- | --- |
@@ -217,7 +225,7 @@ file. Its key properties:
 queue:
   rate_limit:
     per_provider_rps:
-      gitea-internal: 5      # max 5 rps to the gitea-internal provider
+      openai-prod: 5        # max 5 rps to this LLM provider id
 ```
 
 ## `queue.retry` — use `attempts` + `backoff`

@@ -240,6 +240,7 @@ export interface IssueTriageOptions {
 }
 
 export interface WorkspaceIssueTriagePolicy {
+  readonly events?: readonly "issues"[];
   readonly actions?: readonly "close"[];
   readonly categoriesClose?: readonly TriageDecision["category"][];
   readonly dryRun?: boolean;

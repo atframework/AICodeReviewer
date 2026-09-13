@@ -30,6 +30,8 @@ import {
   isConfigError,
   type WorkspaceResolution,
 } from "@aicr/core";
+import { admissionUnavailableReason, type RuntimeConfigManager } from "./runtime-config.js";
+import { createConfigApi, type ConfigApiOptions } from "./config-api.js";
 import type { ReviewDeduplicator } from "./review-deduplicator.js";
 import type { LiveRunRegistry } from "./live-runs.js";
 import type { AutoCommitStore } from "@aicr/core";
@@ -100,7 +102,21 @@ function deliveryIdForProvider(c: Context, provider: ReviewProvider): string | u
       return undefined;
   }
 }
-type GenericWebhookConfigInput = VcsWebhookConfig | readonly VcsWebhookConfig[];
+/**
+ * Fixed-dispatcher webhook source (P4/H06): either a static array (tests,
+ * pre-P4 callers) or a per-request provider resolving against the current
+ * runtime config generation, so published trigger changes apply to the next
+ * admission without remounting routes.
+ */
+export type WebhookConfigSource<T> = T | readonly T[] | (() => T | readonly T[] | undefined | Promise<T | readonly T[] | undefined>);
+
+async function resolveWebhookConfigList<T>(source: WebhookConfigSource<T> | undefined): Promise<readonly T[]> {
+  if (source === undefined) return [];
+  const provider = typeof source === "function" ? (source as () => T | readonly T[] | undefined | Promise<T | readonly T[] | undefined>) : undefined;
+  const value = provider !== undefined ? await provider() : (source as T | readonly T[]);
+  if (value === undefined) return [];
+  return Array.isArray(value) ? (value as readonly T[]) : [value as T];
+}
 
 export interface TriggerRetryConfig {
   readonly attempts?: number;
@@ -113,15 +129,15 @@ export interface TriggerRetryConfig {
 }
 
 export interface ServerAppOptions {
-  readonly gitea?: GenericWebhookConfigInput;
-  readonly forgejo?: GenericWebhookConfigInput;
-  readonly github?: GenericWebhookConfigInput;
-  readonly gitlab?: GenericWebhookConfigInput;
-  readonly p4?: P4TriggerConfig | readonly P4TriggerConfig[];
-  readonly svn?: SvnTriggerConfig | readonly SvnTriggerConfig[];
+  readonly gitea?: WebhookConfigSource<VcsWebhookConfig>;
+  readonly forgejo?: WebhookConfigSource<VcsWebhookConfig>;
+  readonly github?: WebhookConfigSource<VcsWebhookConfig>;
+  readonly gitlab?: WebhookConfigSource<VcsWebhookConfig>;
+  readonly p4?: WebhookConfigSource<P4TriggerConfig>;
+  readonly svn?: WebhookConfigSource<SvnTriggerConfig>;
   readonly reviewPreparation?: ServerReviewPreparationOptions;
   readonly reviewOrchestration?: ServerReviewOrchestrationOptions;
-  readonly issueTriage?: IssueTriageRuntimeOptions;
+  readonly issueTriage?: IssueTriageConfigSource | undefined;
   readonly queue?: ReviewQueue;
   readonly worker?: QueueWorker;
   readonly pathPrefix?: string;
@@ -189,6 +205,19 @@ export interface ServerAppOptions {
    * instance into `reviewOrchestration.liveRuns` so runs report themselves.
    */
   readonly liveRuns?: LiveRunRegistry;
+  /**
+   * Runtime config manager (P4): admission barrier over the durable config
+   * head plus generation pinning for accepted work. When present, webhook
+   * admission paths consult it before accepting; failures surface as 503,
+   * never as a silently stale routing view (H15/H18).
+   */
+  readonly runtimeConfig?: RuntimeConfigManager;
+  /**
+   * Config admin API options (P5). Mounted at `/api/admin/config` when both
+   * admin auth and the config store are configured; independent of the
+   * observability stats store.
+   */
+  readonly configApi?: ConfigApiOptions;
 }
 
 export interface ServerReviewPreparationOptions {
@@ -251,10 +280,10 @@ function registerGiteaLikeWebhook(
   app: Hono,
   provider: "gitea" | "forgejo",
   path: string,
-  config: GenericWebhookConfigInput | undefined,
+  config: WebhookConfigSource<VcsWebhookConfig> | undefined,
   reviewPreparationOptions: ServerReviewPreparationOptions | undefined,
   reviewOrchestrationOptions: ServerReviewOrchestrationOptions | undefined,
-  issueTriageOptions: IssueTriageRuntimeOptions | undefined,
+  issueTriageOptions: IssueTriageConfigSource | undefined,
   asyncTriggers: boolean,
   deduplicator: ReviewDeduplicator | undefined,
   runsDir: string | undefined,
@@ -266,9 +295,10 @@ function registerGiteaLikeWebhook(
   deferralManager?: ReviewDeferralManager,
   getAutoCommitBranches?: (workspaceId: string) => readonly string[] | undefined,
   getPullRequestTargetBranches?: (workspaceId: string) => readonly string[] | undefined,
+  runtimeConfig?: RuntimeConfigManager,
 ): void {
   app.post(path, async (c) => {
-    const configs = normalizeGenericWebhookConfigs(config);
+    const configs = await resolveWebhookConfigList(config);
     if (configs.length === 0) {
       recordWebhookEvent(store, { provider, decision: "rejected", reason: "trigger_not_configured" });
       return c.json({ accepted: false, reason: "trigger_not_configured", provider }, 503);
@@ -366,13 +396,19 @@ function registerGiteaLikeWebhook(
       return c.json({ accepted: false, reason: "ignored_by_label", provider, eventName, matchedLabels: ignoredLabels }, 200);
     }
 
-    return handleReviewOrchestration(c, provider, eventName, decoded, reviewEvent, reviewPreparationOptions, reviewOrchestrationOptions, issueTriageOptions, asyncTriggers, deduplicator, runsDir, metrics, store, triggerRetry, autoCommit, getExecutionSchedule, deferralManager, getAutoCommitBranches, getPullRequestTargetBranches);
+    return handleReviewOrchestration(c, provider, eventName, decoded, reviewEvent, reviewPreparationOptions, reviewOrchestrationOptions, issueTriageOptions, asyncTriggers, deduplicator, runsDir, metrics, store, triggerRetry, autoCommit, getExecutionSchedule, deferralManager, getAutoCommitBranches, getPullRequestTargetBranches, runtimeConfig);
   });
 }
 
 interface RoutingCandidate {
   readonly triggerName: string;
   readonly resolveWorkspace: unknown;
+}
+
+function hasResolveWorkspace<T extends { readonly resolveWorkspace?: unknown }>(
+  entry: T,
+): entry is T & { readonly resolveWorkspace: unknown } {
+  return entry.resolveWorkspace !== undefined;
 }
 
 /**
@@ -424,7 +460,7 @@ async function admitRoutingReceipts(args: {
 
 function registerP4Trigger(
   app: Hono,
-  config: P4TriggerConfig | readonly P4TriggerConfig[] | undefined,
+  config: WebhookConfigSource<P4TriggerConfig> | undefined,
   reviewPreparationOptions: ServerReviewPreparationOptions | undefined,
   reviewOrchestrationOptions: ServerReviewOrchestrationOptions | undefined,
   asyncTriggers: boolean,
@@ -438,9 +474,10 @@ function registerP4Trigger(
   deferralManager?: ReviewDeferralManager,
   getAutoCommitBranches?: (workspaceId: string) => readonly string[] | undefined,
   getPullRequestTargetBranches?: (workspaceId: string) => readonly string[] | undefined,
+  runtimeConfig?: RuntimeConfigManager,
 ): void {
   app.post("/triggers/p4", async (c) => {
-    const configs = Array.isArray(config) ? config : config ? [config] : [];
+    const configs = await resolveWebhookConfigList(config);
     if (configs.length === 0) {
       recordWebhookEvent(store, { provider: "p4", decision: "rejected", reason: "trigger_not_configured" });
       return c.json({ accepted: false, reason: "trigger_not_configured", provider: "p4" }, 503);
@@ -501,7 +538,7 @@ function registerP4Trigger(
     let singleConfig = configs[0]!;
     if (routingEnvelope) {
       const candidates = configs.filter((entry) => p4ProfileConsistentWithPayload(entry, routingEnvelope));
-      const routingCandidates = candidates.filter((entry) => entry.resolveWorkspace !== undefined);
+      const routingCandidates = candidates.filter(hasResolveWorkspace);
       const legacyCandidates = candidates.filter((entry) => entry.resolveWorkspace === undefined);
       if (legacyCandidates.length === 1) singleConfig = legacyCandidates[0]!;
       if (candidates.length === 0) {
@@ -616,13 +653,14 @@ function registerP4Trigger(
       deferralManager,
       getAutoCommitBranches,
       getPullRequestTargetBranches,
+      runtimeConfig,
     );
   });
 }
 
 function registerSvnTrigger(
   app: Hono,
-  config: SvnTriggerConfig | readonly SvnTriggerConfig[] | undefined,
+  config: WebhookConfigSource<SvnTriggerConfig> | undefined,
   reviewPreparationOptions: ServerReviewPreparationOptions | undefined,
   reviewOrchestrationOptions: ServerReviewOrchestrationOptions | undefined,
   asyncTriggers: boolean,
@@ -636,9 +674,10 @@ function registerSvnTrigger(
   deferralManager?: ReviewDeferralManager,
   getAutoCommitBranches?: (workspaceId: string) => readonly string[] | undefined,
   getPullRequestTargetBranches?: (workspaceId: string) => readonly string[] | undefined,
+  runtimeConfig?: RuntimeConfigManager,
 ): void {
   app.post("/triggers/svn", async (c) => {
-    const configs = Array.isArray(config) ? config : config ? [config] : [];
+    const configs = await resolveWebhookConfigList(config);
     if (configs.length === 0) {
       recordWebhookEvent(store, { provider: "svn", decision: "rejected", reason: "trigger_not_configured" });
       return c.json({ accepted: false, reason: "trigger_not_configured", provider: "svn" }, 503);
@@ -707,7 +746,7 @@ function registerSvnTrigger(
 
     if (routingEnvelope) {
       const candidates = configs;
-      const routingCandidates = candidates.filter((entry) => entry.resolveWorkspace !== undefined);
+      const routingCandidates = candidates.filter(hasResolveWorkspace);
       const legacyCandidates = candidates.filter((entry) => entry.resolveWorkspace === undefined);
       if (!(legacyCandidates.length === 1 && routingCandidates.length === 0 && configs.length === 1)) {
         if (!autoCommit) return c.json({ accepted: false, reason: "trigger_not_configured", provider: "svn" }, 503);
@@ -815,28 +854,9 @@ function registerSvnTrigger(
       deferralManager,
       getAutoCommitBranches,
       getPullRequestTargetBranches,
+      runtimeConfig,
     );
   });
-}
-
-function normalizeGenericWebhookConfigs(
-  config: GenericWebhookConfigInput | undefined,
-): readonly VcsWebhookConfig[] {
-  if (!config) {
-    return [];
-  }
-
-  if (isGenericWebhookConfigArray(config)) {
-    return config;
-  }
-
-  return [config];
-}
-
-function isGenericWebhookConfigArray(
-  config: GenericWebhookConfigInput,
-): config is readonly VcsWebhookConfig[] {
-  return Array.isArray(config);
 }
 
 function matchesGenericWebhookCredential(
@@ -854,7 +874,7 @@ function matchesGenericWebhookCredential(
 
 type WebhookConfigSelection = {
   readonly config?: VcsWebhookConfig;
-  readonly reason?: "invalid_signature" | "repository_not_configured" | "ambiguous_route" | "template_invalid" | "matcher_invalid";
+  readonly reason?: "invalid_signature" | "repository_not_configured" | "ambiguous_route" | "no_route" | "template_invalid" | "matcher_invalid";
 };
 
 function selectWebhookConfigWithScope(
@@ -865,7 +885,7 @@ function selectWebhookConfigWithScope(
   } catch (error) {
     // Event-dependent nulls/byte budgets can fail after config compilation.
     // Preserve the observable ignored-admission contract without persistence.
-    if (isConfigError(error) && (error.code === "template_invalid" || error.code === "matcher_invalid")) {
+    if (isConfigError(error) && (error.code === "template_invalid" || error.code === "matcher_invalid" || error.code === "no_route" || error.code === "ambiguous_route")) {
       return { reason: error.code };
     }
     throw error;
@@ -938,6 +958,9 @@ function selectWebhookConfigWithScopeUnchecked(
   if (resolution?.kind === "ambiguous") {
     return { reason: "ambiguous_route" };
   }
+  if (selected.routingEnabled && resolution?.kind !== "match" && resolution?.kind !== "legacy_binding") {
+    return { reason: "repository_not_configured" };
+  }
   return { config: selected };
 }
 
@@ -956,10 +979,10 @@ function registerGenericWebhook(
   app: Hono,
   provider: GenericWebhookProvider,
   path: string,
-  config: GenericWebhookConfigInput | undefined,
+  config: WebhookConfigSource<VcsWebhookConfig> | undefined,
   reviewPreparationOptions: ServerReviewPreparationOptions | undefined,
   reviewOrchestrationOptions: ServerReviewOrchestrationOptions | undefined,
-  issueTriageOptions: IssueTriageRuntimeOptions | undefined,
+  issueTriageOptions: IssueTriageConfigSource | undefined,
   asyncTriggers: boolean,
   deduplicator: ReviewDeduplicator | undefined,
   runsDir: string | undefined,
@@ -971,9 +994,10 @@ function registerGenericWebhook(
   deferralManager?: ReviewDeferralManager,
   getAutoCommitBranches?: (workspaceId: string) => readonly string[] | undefined,
   getPullRequestTargetBranches?: (workspaceId: string) => readonly string[] | undefined,
+  runtimeConfig?: RuntimeConfigManager,
 ): void {
   app.post(path, async (c) => {
-    const configs = normalizeGenericWebhookConfigs(config);
+    const configs = await resolveWebhookConfigList(config);
     if (configs.length === 0) {
       recordWebhookEvent(store, { provider, decision: "rejected", reason: "trigger_not_configured" });
       return c.json({ accepted: false, reason: "trigger_not_configured", provider }, 503);
@@ -1069,7 +1093,7 @@ function registerGenericWebhook(
       });
       return c.json({ accepted: false, reason: "ignored_by_label", provider, eventName, matchedLabels: ignoredLabels }, 200);
     }
-    return handleReviewOrchestration(c, provider, eventName, decoded, reviewEvent, reviewPreparationOptions, reviewOrchestrationOptions, issueTriageOptions, asyncTriggers, deduplicator, runsDir, metrics, store, triggerRetry, autoCommit, getExecutionSchedule, deferralManager, getAutoCommitBranches, getPullRequestTargetBranches);
+    return handleReviewOrchestration(c, provider, eventName, decoded, reviewEvent, reviewPreparationOptions, reviewOrchestrationOptions, issueTriageOptions, asyncTriggers, deduplicator, runsDir, metrics, store, triggerRetry, autoCommit, getExecutionSchedule, deferralManager, getAutoCommitBranches, getPullRequestTargetBranches, runtimeConfig);
   });
 }
 
@@ -1166,6 +1190,15 @@ async function publishTriggerErrorReport(
   }
 }
 
+export type IssueTriageConfigSource = IssueTriageRuntimeOptions | ((event: ReviewEvent) => IssueTriageRuntimeOptions | undefined);
+
+function triageForEvent(source: IssueTriageConfigSource | undefined, event: ReviewEvent): IssueTriageRuntimeOptions | undefined {
+  const options = typeof source === "function" ? source(event) : source;
+  if (!options?.workspacePolicies) return options;
+  const policy = options.workspacePolicies[event.workspaceId];
+  return policy && (policy.events === undefined || policy.events.includes("issues")) ? options : undefined;
+}
+
 export async function runTriggerProcessing(
   provider: ReviewProvider,
   eventName: string,
@@ -1173,10 +1206,15 @@ export async function runTriggerProcessing(
   reviewEvent: ReviewEvent,
   reviewPreparationOptions: ServerReviewPreparationOptions | undefined,
   reviewOrchestrationOptions: ServerReviewOrchestrationOptions | undefined,
-  issueTriageOptions: IssueTriageRuntimeOptions | undefined,
-  /** Identity of the scheduled execution; threaded into orchestration for live-run reporting. */
-  execution?: { readonly runId: string; readonly attempt?: number },
+  issueTriageOptions: IssueTriageConfigSource | undefined,
+  /**
+   * Identity of the scheduled execution; threaded into orchestration for
+   * live-run reporting. `configSnapshotId` pins the admission-time config
+   * generation (P4/H08) so every attempt runs one execution plan.
+   */
+  execution?: { readonly runId: string; readonly attempt?: number; readonly configSnapshotId?: string | null },
 ): Promise<TriggerProcessingResult> {
+  issueTriageOptions = triageForEvent(issueTriageOptions, reviewEvent);
   let triageResult: TriageResult | undefined;
   // The triage client speaks the Gitea/Forgejo API, so only Gitea-family issue
   // events may be triaged through it. Gate on the EVENT provider family rather
@@ -1274,6 +1312,7 @@ export async function runTriggerProcessing(
             ? {
               runId: execution.runId,
               ...(execution.attempt !== undefined ? { attempt: execution.attempt } : {}),
+              ...(execution.configSnapshotId !== undefined ? { configSnapshotId: execution.configSnapshotId } : {}),
             }
             : {}),
         },
@@ -1321,10 +1360,11 @@ export async function runTriggerProcessing(
 function resolveTriggerSkipReason(
   reviewEvent: ReviewEvent,
   provider: ReviewProvider,
-  issueTriageOptions: IssueTriageRuntimeOptions | undefined,
+  issueTriageOptions: IssueTriageConfigSource | undefined,
   reviewPreparationOptions: ServerReviewPreparationOptions | undefined,
   reviewOrchestrationOptions: ServerReviewOrchestrationOptions | undefined,
 ): string {
+  issueTriageOptions = triageForEvent(issueTriageOptions, reviewEvent);
   if (reviewEvent.targetKind === "issue") {
     const triageEligible = provider === "gitea" || provider === "forgejo";
     if (!triageEligible) {
@@ -1389,6 +1429,7 @@ async function saveCompletedRunSnapshot(
       timestamp: new Date().toISOString(),
       reviewEvent,
       reviewRun,
+      ...(reviewRun.configVersion ? { configVersion: reviewRun.configVersion } : {}),
     });
   } catch (err: unknown) {
     console.warn(JSON.stringify({
@@ -1642,29 +1683,44 @@ export interface TriggerSchedulingExtras {
    * re-defers), but the comment-command deferral notice is not re-published.
    */
   readonly deferralResume?: boolean;
+  /**
+   * Admission-time execution config snapshot pin (P4/H08). The async path
+   * captures it when the webhook is accepted; every attempt and the dedup
+   * replay execute against this generation. New deferrals persist this pin through
+   * restart; legacy envelopes remain unpinned until their migration.
+   */
+  readonly configSnapshotId?: string | null;
+  readonly runtimeConfig?: RuntimeConfigManager;
+  readonly releaseConfigPin?: () => Promise<void>;
 }
 
-function scheduleTriggerProcessing(
+async function scheduleTriggerProcessing(
   provider: ReviewProvider,
   eventName: string,
   decoded: unknown,
   reviewEvent: ReviewEvent,
   reviewPreparationOptions: ServerReviewPreparationOptions | undefined,
   reviewOrchestrationOptions: ServerReviewOrchestrationOptions | undefined,
-  issueTriageOptions: IssueTriageRuntimeOptions | undefined,
+  issueTriageOptions: IssueTriageConfigSource | undefined,
   deduplicator: ReviewDeduplicator | undefined,
   metrics: AicrMetrics,
   runsDir: string | undefined,
   store: StoreDb | undefined,
   triggerRetry?: TriggerRetryConfig,
   extras?: TriggerSchedulingExtras,
-): TriggerSchedulingResult {
+): Promise<TriggerSchedulingResult> {
+  const manager = extras?.runtimeConfig;
+  const generation = manager ? await manager.resolveGeneration(extras?.configSnapshotId ?? null) : undefined;
+  const pin = extras?.releaseConfigPin ? null : await manager?.beginSnapshotPin(generation?.snapshotId ?? null);
+  const releaseConfigPin = extras?.releaseConfigPin ?? (() => manager?.endSnapshotPin(pin ?? null) ?? Promise.resolve());
   const runId = randomUUID();
   const context = { reviewEvent, payload: decoded, provider, eventName };
-  // Resolved once per scheduling round: config is static for the process
-  // lifetime, and every timer this function arms passes through the window
+  // Resolved once per scheduling round; every timer this function arms passes through the window
   // clamp below.
-  const executionSchedule = extras?.getExecutionSchedule?.(reviewEvent.workspaceId, reviewEvent.targetKind);
+  const readSchedule = () => extras?.getExecutionSchedule?.(reviewEvent.workspaceId, reviewEvent.targetKind);
+  const executionSchedule = manager && generation
+    ? await manager.withGeneration(generation, async () => readSchedule())
+    : readSchedule();
   const initial = clampDelayToExecutionWindow(executionSchedule, 0, Date.now());
 
   // Persist outside-window arrivals even when another review is still
@@ -1673,7 +1729,7 @@ function scheduleTriggerProcessing(
     const dedupKey = deduplicator.computeKey(reviewEvent);
     const canSchedule = deduplicator.trySchedule(reviewEvent);
     if (!canSchedule) {
-      deduplicator.setPending({ provider, eventName, decoded, reviewEvent });
+      deduplicator.setPending({ provider, eventName, decoded, reviewEvent, configSnapshotId: generation?.snapshotId ?? extras?.configSnapshotId ?? null, releaseConfigPin });
       console.info(JSON.stringify({
         level: "info",
         msg: "trigger processing deduplicated: same target already running, queued for re-review",
@@ -1709,10 +1765,11 @@ function scheduleTriggerProcessing(
   const backoffJitter = triggerRetry?.backoff?.jitter ?? true;
 
   function onCompleted(): void {
+    void releaseConfigPin().catch((error: unknown) => console.warn(admissionUnavailableReason(error)));
     if (!deduplicator) return;
     const pending = deduplicator.markCompleted(reviewEvent);
     if (pending) {
-      scheduleTriggerProcessing(
+      void scheduleTriggerProcessing(
         pending.provider,
         pending.eventName,
         pending.decoded,
@@ -1725,8 +1782,8 @@ function scheduleTriggerProcessing(
         runsDir,
         store,
         triggerRetry,
-        extras,
-      );
+        { ...extras, configSnapshotId: pending.configSnapshotId ?? null, ...(pending.releaseConfigPin ? { releaseConfigPin: pending.releaseConfigPin } : {}) },
+      ).catch((error: unknown) => console.warn(admissionUnavailableReason(error)));
     }
   }
 
@@ -1736,15 +1793,15 @@ function scheduleTriggerProcessing(
     const windowed = clampDelayToExecutionWindow(executionSchedule, 0, Date.now());
     if (windowed.deferred) {
       if (attemptNumber === 1 && extras?.deferralManager) {
-        extras.deferralManager.defer({ provider, eventName, decoded, reviewEvent }, windowed.resumeAt);
-        onCompleted();
+        void extras.deferralManager.defer({ provider, eventName, decoded, reviewEvent, configSnapshotId: generation?.snapshotId ?? extras.configSnapshotId ?? null }, windowed.resumeAt, manager?.mode === "database")
+          .then(onCompleted).catch(() => setTimeout(() => runAttempt(attemptNumber), 5000));
       } else {
         setTimeout(() => runAttempt(attemptNumber), windowed.delayMs);
       }
       return;
     }
     const startMs = Date.now();
-    void runTriggerProcessing(
+    const processAttempt = () => runTriggerProcessing(
       provider,
       eventName,
       decoded,
@@ -1752,8 +1809,16 @@ function scheduleTriggerProcessing(
       reviewPreparationOptions,
       reviewOrchestrationOptions,
       issueTriageOptions,
-      { runId, attempt: attemptNumber },
-    ).then((result) => {
+      {
+        runId,
+        attempt: attemptNumber,
+        ...(extras?.configSnapshotId !== undefined ? { configSnapshotId: extras.configSnapshotId } : {}),
+      },
+    );
+    const attempt = manager
+      ? manager.resolveGeneration(extras?.configSnapshotId ?? null).then((generation) => manager.withGeneration(generation, processAttempt))
+      : processAttempt();
+    void attempt.then((result) => {
       const durationMs = Date.now() - startMs;
       if (result.reviewRun) {
         recordCompletedReviewRun(metrics, result.reviewRun, durationMs);
@@ -1858,7 +1923,9 @@ function scheduleTriggerProcessing(
     // restart can recover the pending run; otherwise the bare timer below is
     // the pre-persistence in-memory behavior.
     if (extras?.deferralManager) {
-      extras.deferralManager.defer({ provider, eventName, decoded, reviewEvent }, initial.resumeAt);
+      try {
+        await extras.deferralManager.defer({ provider, eventName, decoded, reviewEvent, configSnapshotId: generation?.snapshotId ?? extras.configSnapshotId ?? null }, initial.resumeAt, manager?.mode === "database");
+      } finally { await releaseConfigPin(); }
     } else {
       setTimeout(() => runAttempt(1), initial.delayMs);
     }
@@ -1886,7 +1953,7 @@ async function handleReviewOrchestration(
   reviewEvent: ReviewEvent,
   reviewPreparationOptions: ServerReviewPreparationOptions | undefined,
   reviewOrchestrationOptions: ServerReviewOrchestrationOptions | undefined,
-  issueTriageOptions: IssueTriageRuntimeOptions | undefined,
+  issueTriageOptions: IssueTriageConfigSource | undefined,
   asyncTriggers: boolean,
   deduplicator: ReviewDeduplicator | undefined,
   runsDir: string | undefined,
@@ -1898,7 +1965,11 @@ async function handleReviewOrchestration(
   deferralManager?: ReviewDeferralManager,
   getAutoCommitBranches?: (workspaceId: string) => readonly string[] | undefined,
   getPullRequestTargetBranches?: (workspaceId: string) => readonly string[] | undefined,
+  runtimeConfig?: RuntimeConfigManager,
 ): Promise<Response> {
+  // The dispatcher middleware fixed this request's generation before profile
+  // lookup and authentication. Never refresh it after an async translation.
+  const configSnapshotId = runtimeConfig?.current().snapshotId ?? null;
   // Branch allowlist gate for automatic commit events: a workspace that
   // resolves `review.auto_commit.include_branches` only accepts receipts for
   // the listed branches. The check runs before persistence so off-branch
@@ -1950,6 +2021,7 @@ async function handleReviewOrchestration(
         eventName,
         reviewEvent,
         ...(deliveryId ? { deliveryId } : {}),
+        configSnapshotId,
         now: Date.now(),
       });
       recordWebhookEvent(store, {
@@ -2006,7 +2078,7 @@ async function handleReviewOrchestration(
     }
   }
   if (asyncTriggers) {
-    const scheduled = scheduleTriggerProcessing(
+    const scheduled = await scheduleTriggerProcessing(
       provider,
       eventName,
       decoded,
@@ -2019,7 +2091,12 @@ async function handleReviewOrchestration(
       runsDir,
       store,
       triggerRetry,
-      { ...(getExecutionSchedule ? { getExecutionSchedule } : {}), ...(deferralManager ? { deferralManager } : {}) },
+      {
+        ...(getExecutionSchedule ? { getExecutionSchedule } : {}),
+        ...(deferralManager ? { deferralManager } : {}),
+        configSnapshotId,
+        ...(runtimeConfig ? { runtimeConfig } : {}),
+      },
     );
 
     if (scheduled.disposition === "deferred") {
@@ -2078,7 +2155,7 @@ async function handleReviewOrchestration(
       reviewPreparationOptions,
       reviewOrchestrationOptions,
       issueTriageOptions,
-      { runId, attempt: 1 },
+      { runId, attempt: 1, configSnapshotId },
     );
   } catch (error) {
     const durationMs = Date.now() - startMs;
@@ -2175,7 +2252,14 @@ function mountRoutes(app: Hono, options: ServerAppOptions): void {
   const metrics = options.metrics ?? globalMetrics;
 
   app.get("/healthz", (c) => c.text("ok"));
-  app.get("/readyz", (c) => c.text("ready"));
+  app.get("/readyz", async (c) => {
+    try {
+      await options.runtimeConfig?.admission();
+      return c.text("ready");
+    } catch {
+      return c.text("configuration unavailable", 503);
+    }
+  });
   app.get("/metrics", (c) => c.text(formatPrometheusMetrics(metrics)));
   registerDashboardRoutes(app, options);
   if (options.observability) {
@@ -2186,10 +2270,34 @@ function mountRoutes(app: Hono, options: ServerAppOptions): void {
     });
     app.route("/api/admin", observabilityApi);
   }
+  if (options.configApi) {
+    // P5: config management rides the admin Bearer surface but never the
+    // stats store — admin auth + config backend are the only prerequisites.
+    app.route("/api/admin/config", createConfigApi(options.configApi));
+  }
 
   if (options.auth) {
     const authMiddleware = createAuthMiddleware(options.auth);
     app.use("/triggers/*", authMiddleware);
+  }
+
+  if (options.runtimeConfig) {
+    const manager = options.runtimeConfig;
+    for (const path of ["/webhooks/*", "/triggers/*"]) {
+      app.use(path, async (c, next) => {
+        let generation;
+        try {
+          generation = await manager.admission();
+        } catch (error) {
+          return c.json({ accepted: false, reason: "config_unavailable", message: admissionUnavailableReason(error) }, 503);
+        }
+        try {
+          return await manager.withGeneration(generation, next);
+        } catch (error) {
+          return c.json({ accepted: false, reason: "config_unavailable", message: admissionUnavailableReason(error) }, 503);
+        }
+      });
+    }
   }
 
   const runsDir = options.runsDir;
@@ -2213,6 +2321,7 @@ function mountRoutes(app: Hono, options: ServerAppOptions): void {
     options.deferralManager,
     options.getAutoCommitBranches,
     options.getPullRequestTargetBranches,
+    options.runtimeConfig,
   );
   registerGiteaLikeWebhook(
     app,
@@ -2233,6 +2342,7 @@ function mountRoutes(app: Hono, options: ServerAppOptions): void {
     options.deferralManager,
     options.getAutoCommitBranches,
     options.getPullRequestTargetBranches,
+    options.runtimeConfig,
   );
   registerGenericWebhook(
     app,
@@ -2253,6 +2363,7 @@ function mountRoutes(app: Hono, options: ServerAppOptions): void {
     options.deferralManager,
     options.getAutoCommitBranches,
     options.getPullRequestTargetBranches,
+    options.runtimeConfig,
   );
   registerGenericWebhook(
     app,
@@ -2273,6 +2384,7 @@ function mountRoutes(app: Hono, options: ServerAppOptions): void {
     options.deferralManager,
     options.getAutoCommitBranches,
     options.getPullRequestTargetBranches,
+    options.runtimeConfig,
   );
   registerP4Trigger(
     app,
@@ -2290,6 +2402,7 @@ function mountRoutes(app: Hono, options: ServerAppOptions): void {
     options.deferralManager,
     options.getAutoCommitBranches,
     options.getPullRequestTargetBranches,
+    options.runtimeConfig,
   );
   registerSvnTrigger(
     app,
@@ -2307,6 +2420,7 @@ function mountRoutes(app: Hono, options: ServerAppOptions): void {
     options.deferralManager,
     options.getAutoCommitBranches,
     options.getPullRequestTargetBranches,
+    options.runtimeConfig,
   );
 
   // Deferred events resume through the same scheduling path they arrived on,
@@ -2314,8 +2428,8 @@ function mountRoutes(app: Hono, options: ServerAppOptions): void {
   // previous process left pending.
   const deferralManager = options.deferralManager;
   if (deferralManager) {
-    deferralManager.resumeHandler = (target) => {
-      scheduleTriggerProcessing(
+    deferralManager.resumeHandler = async (target) => {
+      await scheduleTriggerProcessing(
         target.provider,
         target.eventName,
         target.decoded,
@@ -2332,6 +2446,8 @@ function mountRoutes(app: Hono, options: ServerAppOptions): void {
           ...(options.getExecutionSchedule ? { getExecutionSchedule: options.getExecutionSchedule } : {}),
           deferralManager,
           deferralResume: true,
+          configSnapshotId: target.configSnapshotId ?? null,
+          ...(options.runtimeConfig ? { runtimeConfig: options.runtimeConfig } : {}),
         },
       );
     };

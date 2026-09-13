@@ -5,6 +5,22 @@ import {
 } from "../src/rate-limiter.js";
 
 describe("createTokenBucketRateLimiter", () => {
+  it("updates limits without refilling spent tokens or replacing the bucket", () => {
+    let config: Record<string, number> = { provider: 2 };
+    const limiter = createMultiProviderRateLimiter(() => config);
+    const original = limiter.getLimiter("provider");
+    expect(limiter.acquire("provider")).toBe(true);
+    expect(limiter.acquire("provider")).toBe(true);
+    config = { provider: 10, added: 1 };
+    expect(limiter.getLimiter("provider")).toBe(original);
+    expect(limiter.acquire("provider")).toBe(false);
+    vi.advanceTimersByTime(100);
+    expect(limiter.acquire("provider")).toBe(true);
+    config = { provider: 1 };
+    expect(limiter.acquire("provider")).toBe(false);
+    vi.advanceTimersByTime(1000);
+    expect(limiter.acquire("provider")).toBe(true);
+  });
   beforeEach(() => {
     vi.useFakeTimers();
   });

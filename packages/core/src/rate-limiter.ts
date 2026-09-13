@@ -13,10 +13,11 @@ export interface RateLimiter {
 
 export function createTokenBucketRateLimiter(
   name: string,
-  config: RateLimiterConfig,
+  config: RateLimiterConfig | (() => RateLimiterConfig),
 ): RateLimiter {
-  const rps = config.rps;
-  const burst = config.burst ?? Math.max(rps, 1);
+  const readConfig = () => typeof config === "function" ? config() : config;
+  let rps = readConfig().rps;
+  let burst = readConfig().burst ?? Math.max(rps, 1);
   let tokens = burst;
   let lastRefill = Date.now();
 
@@ -25,6 +26,10 @@ export function createTokenBucketRateLimiter(
     const elapsed = (now - lastRefill) / 1000;
     tokens = Math.min(burst, tokens + elapsed * rps);
     lastRefill = now;
+    const latest = readConfig();
+    rps = latest.rps;
+    burst = latest.burst ?? Math.max(rps, 1);
+    tokens = Math.min(tokens, burst);
   }
 
   return {
@@ -74,35 +79,43 @@ export interface MultiProviderRateLimiter {
 }
 
 export function createMultiProviderRateLimiter(
-  configs: Readonly<Record<string, number>>,
+  configs: Readonly<Record<string, number>> | (() => Readonly<Record<string, number>>),
 ): MultiProviderRateLimiter {
   const limiters = new Map<string, RateLimiter>();
 
-  for (const [providerId, rps] of Object.entries(configs)) {
-    limiters.set(providerId, createTokenBucketRateLimiter(providerId, { rps }));
-  }
+  const readConfigs = () => typeof configs === "function" ? configs() : configs;
+  const getLimiter = (providerId: string): RateLimiter | undefined => {
+    const rps = readConfigs()[providerId];
+    if (rps === undefined) return undefined;
+    let limiter = limiters.get(providerId);
+    if (!limiter) {
+      limiter = createTokenBucketRateLimiter(providerId, () => ({ rps: readConfigs()[providerId] ?? rps }));
+      limiters.set(providerId, limiter);
+    }
+    return limiter;
+  };
 
   return {
     acquire(providerId: string): boolean {
-      const limiter = limiters.get(providerId);
+      const limiter = getLimiter(providerId);
       if (!limiter) return true;
       return limiter.acquire();
     },
 
     async acquireAsync(providerId: string): Promise<void> {
-      const limiter = limiters.get(providerId);
+      const limiter = getLimiter(providerId);
       if (!limiter) return;
       await limiter.acquireAsync();
     },
 
     getAvailableTokens(providerId: string): number {
-      const limiter = limiters.get(providerId);
+      const limiter = getLimiter(providerId);
       if (!limiter) return Infinity;
       return limiter.getAvailableTokens();
     },
 
     getLimiter(providerId: string): RateLimiter | undefined {
-      return limiters.get(providerId);
+      return getLimiter(providerId);
     },
   };
 }

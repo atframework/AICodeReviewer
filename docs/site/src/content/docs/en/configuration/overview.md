@@ -103,8 +103,8 @@ sections each layer accepts.
 | `outputs` (channel lists, `no_problems`, `channel_overrides`) | ✓ | ✓ | ✓ |
 | `model_chain` (main group) | via `llm.default_model_chain` | ✓ | ✓ |
 | `triage_model_chain` (lifecycle group) | via `llm.triage_model_chain` | ✓ | ✓ |
-| `agent.default` | ✓ | ✓ * | ✓ * |
-| `sandbox` | via `agent.sandbox` | ✓ * | ✓ * |
+| `agent.default` | ✓ | ✓ | ✓ |
+| `sandbox` | via `agent.sandbox` | ✓ | ✓ |
 | `prompt` (base system prompt, `force_skills`) | — | ✓ | ✓ |
 | `context_repositories` (auxiliary context repositories) | — | ✓ | ✓ |
 | `auth` (per-workspace API key) | via `server.auth` | — | ✓ |
@@ -115,11 +115,8 @@ The main group controls reviews, agent failover, and compression summaries.
 Triage inherits that workspace's main group when omitted at every layer.
 See the [model group example](/en/configuration/llm/).
 
-\* The schema accepts `agent.default` and `sandbox` at the workspace layers, but
-the current version selects the adapter and sandbox configuration from the global
-`agent` section. Each run creates its own sandbox instance. Values set at the workspace layers are parsed but have no
-effect. Per-workspace agent mixing and sandbox images are planned for a later
-release.
+Each run resolves `agent.default` and `sandbox` through the merged
+global → defaults → instance selection and creates its own sandbox instance.
 
 `context_repositories` declares auxiliary repositories the reviewer may consult
 (shared libraries, protocol contracts, and so on): each review materializes a
@@ -183,3 +180,34 @@ API key) combine.
 - Tuning output behavior? See
   [Output Channels and Routing](/en/configuration/outputs/) for channels,
   routing, the zero-problem policy, and managed-issue lifecycle limits.
+
+## Dynamic configuration API
+
+With `config_sources.database.enabled: true`, `/api/admin/config` publishes database
+supplements to the file configuration. File-owned values stay read-only. Each webhook
+loads the durable head before credential lookup and keeps one generation throughout
+its asynchronous processing. Receipts and new persisted deferrals retain that snapshot.
+An empty namespace gets a durable revision 0 snapshot before accepting work.
+
+The admin API requires a Bearer session, limits JSON bodies to 1 MiB of UTF-8 bytes,
+rejects cross-origin writes and mismatched `fileDigest`, and redacts historical credentials.
+New literal credentials and credential-bearing URLs are rejected; use environment references.
+The read view includes file/database origin, immutable record IDs, effective values and
+`limit`/`offset` entity pagination. `/readyz` and admin `/status` return 503 when
+the configuration cannot be activated.
+
+Changesets and restore requests must include the current SHA-256 `fileDigest`.
+The operation endpoint distinguishes durable commit from local activation; status lists
+instance heartbeats and versions. Queued tasks and historical unpinned tasks keep their
+original version across publication and restart. Unpinned legacy records resolve to a
+single persisted `legacy_import` baseline.
+
+Environment references are authorized by their name, configuration path and destination.
+Existing file references authorize their current use. Add a file-owned
+`config_sources.secret_refs` grant before introducing a database reference or changing its
+destination, including inherited channel, model override and workspace/route search tokens.
+See the [field reference](/en/reference/config-fields/) for the grant shape.
+
+v2 routes, Review policies, agent/search/sandbox settings, model catalog and triage changes
+apply to new tasks. An explicit empty v2 output list closes that output kind. The management
+UI remains planned; the API is available independently of the statistics store.

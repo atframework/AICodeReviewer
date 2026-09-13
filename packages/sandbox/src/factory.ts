@@ -1,6 +1,6 @@
 import type { SandboxBackend, SandboxKind, SandboxEngine } from "./types.js";
 import { createNativeSandboxBackend } from "./native.js";
-import { createDockerSandboxBackend, preflightSandbox } from "./docker.js";
+import { createDockerSandboxBackend, execContainerCommand, preflightSandbox, type ContainerCommandRunner } from "./docker.js";
 import { createPodmanSandboxBackend } from "./podman.js";
 import { createK8sPodSandboxBackend } from "./k8s-pod.js";
 import { createFirecrackerSandboxBackend } from "./firecracker.js";
@@ -70,19 +70,28 @@ export async function createSandboxBackend(
 export async function resolveSandboxKind(
   configuredKind?: SandboxKind,
   configuredEngine?: SandboxEngine,
+  commandRunner: ContainerCommandRunner = execContainerCommand,
 ): Promise<{ kind: SandboxKind; engine: SandboxEngine }> {
-  if (configuredKind && configuredKind !== "docker" && configuredKind !== "podman") {
+  if (configuredKind && configuredKind !== "docker" && configuredKind !== "podman" && configuredKind !== "docker_socket") {
     return { kind: configuredKind, engine: configuredEngine ?? "auto" };
   }
 
   const preferredEngine = configuredKind === "podman" ? "podman" : configuredEngine;
-  const preflight = await preflightSandbox(preferredEngine);
+  const preflight = await preflightSandbox(preferredEngine, commandRunner);
   if (preflight.available) {
     const resolvedEngine = preflight.engine;
     const kind: SandboxKind = configuredKind ?? "docker";
     return { kind, engine: resolvedEngine };
   }
 
+  // An explicit container request is a trust-boundary statement, not a hint:
+  // silently downgrading it to native would run untrusted agent code on the
+  // host (P4/H04). Only an unset kind may auto-fall back to native.
+  if (configuredKind !== undefined) {
+    throw new Error(
+      `Sandbox kind "${configuredKind}" was explicitly requested but no ${preferredEngine ?? "container"} engine is available; refusing to silently fall back to native.`,
+    );
+  }
   return { kind: "native", engine: "auto" };
 }
 

@@ -18,9 +18,7 @@ agent:
     prune: true
   web_search:
     enabled: false
-  sandbox:
-    kind: docker
-    engine: auto
+  sandbox: {} # unset kind = auto-detect with native fallback
 ```
 
 ## `agent.default` — which agent CLI
@@ -47,10 +45,12 @@ the matching CLI preinstalled (the binaries are on the sandbox command allowlist
 by default).
 :::
 
-The schema also accepts `agent.default` at the `workspaces.defaults.agent.default`
-and `workspaces.instances.<id>.agent.default` layers, but the current version
-builds a single adapter from the global value at startup — workspace-layer values
-are parsed but have no effect.
+The selected agent, timeout, approval, compaction and web-search settings merge
+global → workspace defaults → instance → route analysis for each task. Arrays replace
+inherited lists; nested search credentials merge by key and remain subject to deployment
+purpose grants. Unsupported adapter capabilities appear in the runtime manifest.
+Repository-owned configuration can select `agent.default`; it cannot increase approval,
+search credential or sandbox permissions.
 
 Every review creates an independent sandbox. HOME, USERPROFILE, APPDATA, XDG and
 temporary directories belong to that run; MCP children inherit the same paths.
@@ -88,9 +88,9 @@ agent:
   auto_approve: true
 ```
 
-The current orchestrator always behaves as if this were `true`: the schema
-accepts the field, but setting `false` has no effect. It is reserved for a
-future step-by-step approval debugging mode.
+The orchestrator passes the resolved value to the adapter's command builder.
+Setting `false` removes automatic approval where that CLI supports it; unattended
+runs may then stop for CLI approval. This field does not add an interactive approval UI.
 
 ## `agent.context_compaction` — runtime-side history compaction
 
@@ -227,8 +227,8 @@ context, it should read mounted files with read-only commands or call
 
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
-| `kind` | enum | `docker` | Sandbox kind (see below). |
-| `engine` | enum | `auto` | Container engine: `auto`, `docker`, or `podman`. |
+| `kind` | enum | *(unset)* | Sandbox kind (see below). Unset auto-detects with native fallback. |
+| `engine` | enum | *(unset)* | Container engine: `auto`, `docker`, or `podman`. |
 | `image` | string | – | Optional explicit sandbox image. |
 
 ### `kind` values
@@ -236,7 +236,7 @@ context, it should read mounted files with read-only commands or call
 | Kind | Status | When to use |
 | --- | --- | --- |
 | `native` | Available | Run the agent directly on the host (no container). Lowest isolation. |
-| `docker` (default) | Available | Run inside a Docker container. Default for most deployments. |
+| `docker` | Available | Run inside a Docker container. An explicit container kind is a trust statement: when preflight finds no engine, the run fails instead of silently downgrading to native. |
 | `podman` | Available | Run inside a Podman container. Preferred with `deploy.sh` + `AICR_ENABLE_CONTAINER_SANDBOX` and a mounted Podman socket. |
 | `docker_socket` | Available | Docker-compatible mode for workflows that specifically expect the Docker CLI over a mounted socket. |
 | `k8s_pod` | Reserved | Not yet implemented. |
@@ -256,8 +256,8 @@ agent:
     engine: podman
 ```
 
-The schema also accepts `sandbox` at the `workspaces.defaults` and
-`workspaces.instances.<id>` layers, but like `agent.default` the runtime
-currently uses only the global `agent.sandbox` — workspace-layer values have no
-effect (see the override table on the
+`sandbox` and `agent.default` also work at the `workspaces.defaults` and
+`workspaces.instances.<id>` layers: each run resolves the merged
+global - defaults - instance selection, so a workspace can run a different
+agent CLI or its own sandbox image (see the override table on the
 [Configuration Overview](/en/configuration/overview/) page).

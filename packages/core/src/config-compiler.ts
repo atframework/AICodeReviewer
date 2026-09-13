@@ -237,7 +237,7 @@ export function resolveRouteForEvent(graph: ExecutionGraph, event: RoutingEventC
 // Analysis layering (R04): global → workspace defaults → instance → route
 // ---------------------------------------------------------------------------
 
-function deepMergeAnalysis(base: unknown, override: unknown): unknown {
+export function deepMergeAnalysis(base: unknown, override: unknown): unknown {
   if (override === undefined) return base;
   if (Array.isArray(base) || Array.isArray(override)) return override;
   if (isPlainObject(base) && isPlainObject(override)) {
@@ -250,7 +250,7 @@ function deepMergeAnalysis(base: unknown, override: unknown): unknown {
   return override;
 }
 
-type WorkspaceAgentSelection = NonNullable<AppConfig["workspaces"]["defaults"]["agent"]>;
+type WorkspaceAgentSelection = AppConfig["agent"];
 
 export interface ResolvedAnalysisSelection {
   readonly modelChain: string;
@@ -283,7 +283,7 @@ export function resolveAnalysisSelection(
   return {
     modelChain,
     triageModelChain,
-    agent: { default: analysis?.agent?.default ?? instance?.agent?.default ?? defaults.agent?.default ?? config.agent.default },
+    agent: deepMergeAnalysis(deepMergeAnalysis(deepMergeAnalysis(config.agent, defaults.agent), instance?.agent), analysis?.agent) as WorkspaceAgentSelection,
     sandbox: deepMergeAnalysis(deepMergeAnalysis(deepMergeAnalysis(config.agent.sandbox, defaults.sandbox), instance?.sandbox), analysis?.sandbox) as ResolvedAnalysisSelection["sandbox"],
     review: deepMergeAnalysis(
       deepMergeAnalysis(deepMergeAnalysis(config.review, defaults.review), instance?.review),

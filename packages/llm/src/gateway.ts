@@ -136,6 +136,8 @@ export interface LlmGatewayOptions {
   readonly onFallback?: (reason: string, from: ModelSpec, to: ModelSpec) => void;
   readonly workspaceId?: string;
   readonly dailyBudgetTracker?: DailyBudgetTracker;
+  /** Shared process limiter, invoked for each actual provider attempt. */
+  readonly beforeRequest?: (model: ModelSpec) => Promise<void>;
   readonly modelPricing?: Readonly<Record<string, ModelPricing>>;
 }
 
@@ -518,6 +520,7 @@ export function createResilientChatClient(options: LlmGatewayOptions): LlmGatewa
         while (attempt < maxAttempts) {
           try {
             const client = clientFactory(currentModel);
+            await options.beforeRequest?.(currentModel);
             const result = await client.complete({ ...input, model: currentModel });
             const callCost = estimateCost(result.usage, extractModelPricing(currentModel));
             accumulatedCost += callCost;

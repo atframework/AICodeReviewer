@@ -1,3 +1,5 @@
+import type { ExecutionConfigVersion } from "./config-store.js";
+
 export type QueueJobStatus = "queued" | "running" | "completed" | "failed" | "dead";
 
 export interface QueueJob<T = unknown> {
@@ -11,6 +13,7 @@ export interface QueueJob<T = unknown> {
   readonly enqueuedAt: number;
   readonly startedAt?: number;
   readonly lastError?: string;
+  readonly configVersion?: ExecutionConfigVersion;
 }
 
 export interface QueueBackoffConfig {

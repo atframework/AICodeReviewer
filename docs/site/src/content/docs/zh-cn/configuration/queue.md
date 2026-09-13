@@ -162,7 +162,7 @@ Redis 队列的连接字段以透传方式接受：
 | --- | --- | --- | --- |
 | `concurrency` | int > 0 | `4` | 全局 worker 并发（进程内同时运行的任务数）。 |
 | `per_workspace_concurrency` | int > 0 | `1` | 每个 workspace 同时运行的任务上限。设为 `1` 可按仓库串行。 |
-| `lock_ttl_seconds` | int > 0 | `1800` | worker 任务锁 TTL。 |
+| `lock_ttl_seconds` | int > 0 | `1800` | 预留；锁过期时间由 queue backend 配置。 |
 
 ## `queue.sqlite` —— 持久化队列选项
 
@@ -183,7 +183,13 @@ SQLite 队列基于 [better-sqlite3](https://github.com/WiseLibs/better-sqlite3)
 - **WAL + `busy_timeout` 保证跨进程安全。** 队列以 `PRAGMA journal_mode = WAL`
   和 `PRAGMA busy_timeout = 5000` 打开，来自不同进程的并发写入会协作而非报错。
 
+启用数据库配置后，并发更新在下一次 claim 生效，不取消正在运行的任务。
+排队任务保留接收时的配置版本；持久后端上的队列版本账本支持重启恢复。
+
 ## `queue.rate_limit`
+
+限流按实际 LLM provider ID 生效，包含重试及 fallback 请求。发布新速率保留
+token bucket 累计状态。原生 agent CLI 按 launch 限流，内部 HTTP 请求由 CLI 管理。
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
@@ -193,7 +199,7 @@ SQLite 队列基于 [better-sqlite3](https://github.com/WiseLibs/better-sqlite3)
 queue:
   rate_limit:
     per_provider_rps:
-      gitea-internal: 5      # 对 gitea-internal provider 最多 5 rps
+      openai-prod: 5        # 对此 LLM provider id 最多 5 rps
 ```
 
 ## `queue.retry` —— 请用 `attempts` + `backoff`

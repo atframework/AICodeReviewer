@@ -41,11 +41,11 @@ workspaces:
             repo_ref: { glob: "http://svn.example.com/repo/projectA" }
 `;
 
-function p4Setup(yaml: string = P4_MATCH_YAML) {
+function p4Setup(yaml: string = P4_MATCH_YAML, getConfigSnapshotId?: () => string | null) {
   const config = parseConfigDocumentText(yaml).config;
   const workspaceRuntime = createWorkspaceRuntime(config, "/tmp/aicr-routing-test");
   const store = createMemoryAutoCommitStore();
-  const runtime = new AutoCommitRuntime({ store, getPolicyLayers: () => ({}) });
+  const runtime = new AutoCommitRuntime({ store, getPolicyLayers: () => ({}), ...(getConfigSnapshotId ? { getConfigSnapshotId } : {}) });
   const configs = resolveP4TriggerConfigs(config, undefined, workspaceRuntime);
   return { config, workspaceRuntime, store, runtime, configs };
 }
@@ -252,7 +252,8 @@ describe("routing receipt resolver (spec §5.2 stage C, W13/W14/W15)", () => {
     if (scenario === "later-scope") expect(queried).toContain("//depot/dev");
   });
   it("converts a pending routing receipt into a formal receipt with the pinned resolution", async () => {
-    const { config, workspaceRuntime, store, runtime } = p4Setup();
+    let snapshot = "cfg-admitted";
+    const { config, workspaceRuntime, store, runtime } = p4Setup(P4_MATCH_YAML, () => snapshot);
     const adapter = fakeAdapter({ revision: "7001", p4User: "alice", changedPaths: ["//depot/main/src/app.cc"] });
     const resolver = new RoutingReceiptResolver({
       store,
@@ -270,7 +271,7 @@ describe("routing receipt resolver (spec §5.2 stage C, W13/W14/W15)", () => {
 
     const envelope = buildP4RoutingEnvelope({ change: "7001", user: "alice", client: "alice-ws", depot_path: "//depot/main" });
     const accepted = await runtime.acceptRouting({ provider: "p4", triggerName: "p4-main", eventName: "change-commit", envelope: envelope!, now: 1000 });
-
+    snapshot = "cfg-published-later";
     expect(await resolver.resolveDue(2000)).toBeUndefined();
 
     const completed = await store.getRoutingReceipt(accepted.receipt.routingId);
@@ -280,6 +281,7 @@ describe("routing receipt resolver (spec §5.2 stage C, W13/W14/W15)", () => {
     const receipt = await store.getReceipt(completed!.convertedReceiptIds[0]!);
     expect(receipt?.receipt.workspaceId).toBe("depot-main");
     expect(receipt?.receipt.scopeRef).toBe("//depot/main");
+    expect(receipt?.receipt.configSnapshotId).toBe("cfg-admitted");
     // Resolution is pinned on the durable receipt for the execution layout.
     expect(receipt?.receipt.resolution).toMatchObject({ kind: "match", definitionId: "depot-main" });
 

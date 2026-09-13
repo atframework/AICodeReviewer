@@ -25,6 +25,9 @@ Read only the corresponding section of `docs/output-channels.md` or architecture
 - Test mixed-channel suppression/publication and relevant PR/non-PR templates.
   Sync affected config/examples, output docs, public locales and roadmap entries;
   run applicable final gates from the repository baseline.
+- For routing changes, compare preview with actual publisher calls in old/new
+  generations. In v2 an explicit empty list closes that output kind; disabling
+  the last rule must retain v2 semantics (runtime-generation/runtime-http tests).
 
 ## Conditional references
 
