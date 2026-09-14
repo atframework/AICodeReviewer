@@ -171,6 +171,32 @@ function buildRevisionArgs(range: ChangeRange): string[] {
   throw new RangeError("SVN diff requires headRevision or a base/head revision pair.");
 }
 
+/** SVN's Git format uses repository-root paths and tab-delimited revision labels. */
+function parseSvnDiff(patch: string, scopePath: string, repositoryDir: string): ParsedDiff {
+  let inHeaders = false;
+  const normalized = patch.split(/\r?\n/u).map(line => {
+    if (line.startsWith("diff --git ")) inHeaders = true;
+    if (line.startsWith("@@ ")) inHeaders = false;
+    if (!inHeaders || (!line.startsWith("--- ") && !line.startsWith("+++ "))) return line;
+    const label = /\t\((revision \d+|working copy|nonexistent)\)$/u.exec(line);
+    if (!label) return line;
+    return label[1] === "nonexistent" ? `${line.slice(0, 4)}/dev/null` : line.slice(0, label.index);
+  }).join("\n");
+  const relativePath = (path: string | undefined): string | undefined => {
+    if (path === undefined) return undefined;
+    if (scopePath && !path.startsWith(`${scopePath}/`)) {
+      throw new RangeError("SVN diff path is outside the configured scope.");
+    }
+    return normalizeChangedPath(repositoryDir, scopePath ? path.slice(scopePath.length + 1) : path);
+  };
+  return { files: parseUnifiedDiff(normalized).files.map(({ oldPath, newPath, ...file }) => {
+    const oldLocalPath = relativePath(oldPath);
+    const newLocalPath = relativePath(newPath);
+    return { ...file, ...(oldLocalPath !== undefined ? { oldPath: oldLocalPath } : {}),
+      ...(newLocalPath !== undefined ? { newPath: newLocalPath } : {}) };
+  }) };
+}
+
 function getSvnErrorText(error: unknown): string {
   const candidate = error as { readonly stdout?: unknown; readonly stderr?: unknown };
   return [
@@ -580,17 +606,41 @@ export class SvnVcsAdapter implements VcsAdapter {
   }
 
   async diff(range: ChangeRange): Promise<ParsedDiff> {
-    const revisionArgs = buildRevisionArgs(range);
     const files = this.applyFilters(range.files.map((file) => this.toLocalPath(file)));
-    const targets = files.length > 0 ? files.map((file) => this.targetForPath(file)) : [this.targetForPath()];
+    if (files.length === 0) return { files: [] };
+    const head = range.headRevision;
+    if (!head || !/^[1-9][0-9]*$/u.test(head) ||
+      (range.baseRevision !== undefined && !/^(0|[1-9][0-9]*)$/u.test(range.baseRevision))) {
+      throw new RangeError("SVN diff requires numeric base/head revisions.");
+    }
+    const base = range.baseRevision ?? String(BigInt(head) - 1n);
+    // Summarize includes added directories and their children. Keep the most
+    // specific paths: parent targets duplicate patches and SVN can omit that
+    // parent's name in Git headers for newly added subdirectories. Two trees avoid
+    // following a copied file's URL back to its source path at the old revision.
+    const targets = files.filter(file => !files.some(child => child !== file && child.startsWith(`${file}/`)));
     const result = await this.runSvn([
       "diff",
       "--git",
-      ...revisionArgs,
+      `--old=${this.targetForPath()}@${base}`,
+      `--new=${this.targetForPath()}@${head}`,
+      "--",
       ...targets,
     ]);
 
-    return parseUnifiedDiff(result.stdout);
+    if (!result.stdout.trim()) return { files: [] };
+    // Discover the prefix from the authenticated source, never from a matching
+    // basename in an untrusted diff. Pin info to the same revision as the run.
+    const info = await this.runSvn(["info", "--xml", "-r", head, `${this.targetForPath()}@${head}`]);
+    const source = parseSvnSourceInfo(info.stdout);
+    const scope = source.repository_url;
+    const root = source.repository_root;
+    if (!scope || !root || (this.repositoryUrl && scope !== sanitizeSourceUrl(this.repositoryUrl))) {
+      throw new Error("SVN diff requires matching source scope metadata.");
+    }
+    const prefix = stripRepositoryUrl(root, scope);
+    if (prefix === undefined) throw new Error("SVN source scope is outside its repository root.");
+    return parseSvnDiff(result.stdout, decodeURIComponent(prefix), this.repositoryDir);
   }
 
   /**

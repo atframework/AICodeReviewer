@@ -31,14 +31,13 @@ export interface ConfigStoreFactory {
 
 function doc(marker: string): DatabaseConfigDocument {
   return {
-    formatVersion: 1,
     entities: {
       providers: {
         [marker]: {
           id: marker,
           name: marker,
           enabled: true,
-          value: { kind: "openai_compatible", api_key_env: "AICR_TEST_KEY" },
+          value: { id: marker, kind: "openai_compatible", api_key_env: "AICR_TEST_KEY" },
         },
       },
     },
@@ -450,8 +449,7 @@ export function runConfigStoreConformance(factory: ConfigStoreFactory): void {
       const a = doc("p1");
       const b: DatabaseConfigDocument = {
         globals: {},
-        formatVersion: 1,
-        entities: { providers: { p1: { enabled: true, name: "p1", id: "p1", value: { api_key_env: "AICR_TEST_KEY", kind: "openai_compatible" } } } },
+        entities: { providers: { p1: { enabled: true, name: "p1", id: "p1", value: { api_key_env: "AICR_TEST_KEY", kind: "openai_compatible", id: "p1" } } } },
       };
       expect(contentHashOf(a)).toBe(contentHashOf(b));
       expect(contentHashOf(doc("p1"))).not.toBe(contentHashOf(doc("p2")));

@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -167,8 +167,8 @@ describe("MigrationRunner (sqlite executor)", () => {
     // itself. Two booting aicr instances are the deployment scenario M04
     // covers; each prints its applied step ids as JSON.
     const script = `
-      const { MigrationRunner } = await import("./packages/core/dist/migration-runner.js");
-      const { createSqliteMigrationStore, sqliteSqlStep } = await import("./packages/core/dist/sqlite-migration-store.js");
+      const { MigrationRunner } = await import("./packages/core/src/migration-runner.ts");
+      const { createSqliteMigrationStore, sqliteSqlStep } = await import("./packages/core/src/sqlite-migration-store.ts");
       const { createRequire } = await import("node:module");
       const require = createRequire(process.cwd() + "/packages/core/package.json");
       const Database = require("better-sqlite3");
@@ -183,8 +183,9 @@ describe("MigrationRunner (sqlite executor)", () => {
       console.log(JSON.stringify(result.appliedByNamespace["store"]));
       db.close();
     `;
-    const runChild = () => execFileAsync(process.execPath, ["--input-type=module", "-e", script], {
+    const runChild = () => execFileAsync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
       cwd: process.cwd(),
+      windowsHide: true,
       timeout: 30_000,
     });
     const [a, b] = await Promise.all([runChild(), runChild()]);
@@ -199,6 +200,92 @@ describe("MigrationRunner (sqlite executor)", () => {
     const rows = verify.prepare("SELECT COUNT(*) AS n FROM schema_migrations WHERE namespace = 'store'").get() as { n: number };
     expect(rows.n).toBe(2);
   }, 60_000);
+
+  it("a contender past its busy_timeout fails with a bounded SQLITE_BUSY-style error, never a hang (G6)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "aicr-migrations-busy-"));
+    tempDirs.push(dir);
+    const path = join(dir, "busy.sqlite").replaceAll("\\", "/");
+
+    // Child A holds BEGIN IMMEDIATE far longer than child B's busy_timeout.
+    // better-sqlite3 blocks the event loop while waiting on a lock, so the
+    // contention has to come from a real second process (same rationale as
+    // the M04 race above). The busy_timeout seam is the connection pragma
+    // the production stores set (createSqliteConfigStore:
+    // `busy_timeout = options.busyTimeoutMs ?? 5000`); here the executor is
+    // constructed directly over a connection tuned down to 500ms so the
+    // bound is observable in test time.
+    // Real wall-clock hold: SQLITE_BUSY contention against busy_timeout is
+    // platform-clock behavior in a separate process, so fake timers cannot
+    // stand in here.
+    const holdScript = `
+      const { createRequire } = await import("node:module");
+      const require = createRequire(process.cwd() + "/packages/core/package.json");
+      const Database = require("better-sqlite3");
+      const db = new Database(${JSON.stringify(path)});
+      db.pragma("busy_timeout = 10000");
+      db.exec("BEGIN IMMEDIATE");
+      db.exec("CREATE TABLE IF NOT EXISTS hold (id TEXT)");
+      console.log("locked");
+      process.stdin.resume();
+      process.stdin.once("end", () => { db.exec("COMMIT"); db.close(); });
+    `;
+    const applyScript = `
+      const { MigrationRunner } = await import("./packages/core/src/migration-runner.ts");
+      const { createSqliteMigrationStore, sqliteSqlStep } = await import("./packages/core/src/sqlite-migration-store.ts");
+      const { createRequire } = await import("node:module");
+      const require = createRequire(process.cwd() + "/packages/core/package.json");
+      const Database = require("better-sqlite3");
+      const db = new Database(${JSON.stringify(path)});
+      db.pragma("busy_timeout = 500");
+      const plan = { namespace: "store", targetVersion: 2, steps: [
+        sqliteSqlStep("001_first", 0, 1, "CREATE TABLE store_one (id TEXT);"),
+        sqliteSqlStep("002_second", 1, 2, "CREATE TABLE store_two (id TEXT);"),
+      ]};
+      await new MigrationRunner(createSqliteMigrationStore(db), [plan]).apply();
+      console.log("applied");
+      db.close();
+    `;
+
+    const holder = spawn(process.execPath, ["--input-type=module", "-e", holdScript], { cwd: process.cwd(), windowsHide: true });
+    const closed = new Promise<void>(resolve => { holder.once("close", () => resolve()); });
+    let holderOutput = "";
+    holder.stdout.on("data", (chunk: Buffer) => { holderOutput += String(chunk); });
+    holder.stderr.on("data", (chunk: Buffer) => { holderOutput += String(chunk); });
+    try {
+      let readinessTimer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await new Promise<void>((resolve, reject) => {
+          readinessTimer = setTimeout(() => reject(new Error(`lock holder did not become ready: ${holderOutput}`)), 10_000);
+          holder.stdout.on("data", () => { if (holderOutput.includes("locked\n") || holderOutput.includes("locked\r\n")) resolve(); });
+          holder.once("error", reject);
+          holder.once("exit", code => reject(new Error(`lock holder exited early (${code}): ${holderOutput}`)));
+        });
+      } finally { clearTimeout(readinessTimer); }
+      // The holder releases only after the contender settles, independent of
+      // machine load. The process timeout bounds a regression that ignores busy_timeout.
+      const failure = await execFileAsync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", applyScript], {
+        cwd: process.cwd(), windowsHide: true, timeout: 10_000,
+      }).then(() => null, (error: unknown) => error);
+      expect(failure).not.toBeNull();
+      const text = failure instanceof Error && "stderr" in failure && typeof failure.stderr === "string"
+        ? failure.stderr : String(failure);
+      expect(text).toMatch(/database is locked|SQLITE_BUSY/);
+    } finally {
+      holder.stdin.end();
+      const cleanupTimer = setTimeout(() => { holder.kill(); }, 5_000);
+      try { await closed; } finally { clearTimeout(cleanupTimer); }
+    }
+    expect(holder.exitCode).toBe(0);
+
+    // The loser left nothing behind: no ledger table, no step tables — the
+    // file still belongs to the holder's (committed) `hold` table only.
+    const { default: Database } = (await import("better-sqlite3")) as unknown as { default: SqliteModule };
+    const verify = new Database(path);
+    openDbs.push(verify);
+    expect(verify.prepare("SELECT name FROM sqlite_master WHERE name = 'schema_migrations'").get()).toBeUndefined();
+    expect(verify.prepare("SELECT name FROM sqlite_master WHERE name = 'store_one'").get()).toBeUndefined();
+    expect(verify.prepare("SELECT name FROM sqlite_master WHERE name = 'store_two'").get()).toBeUndefined();
+  }, 30_000);
 
   it("a failing step rolls back the whole batch atomically (M06)", async () => {
     const db = await freshDb();

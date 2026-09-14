@@ -1,8 +1,9 @@
-import { createMemoryAutoCommitStore, parseConfigDocumentText } from "@aicr/core";
+import { createMemoryAutoCommitStore, parseConfigDocumentText, type AppConfig, type AutoCommitStore } from "@aicr/core";
 import type { VcsAdapter } from "@aicr/vcs";
 import { describe, expect, it, vi } from "vitest";
 
 import { AutoCommitRuntime } from "../src/auto-commit-runtime.js";
+import type { WorkspaceRuntime } from "../src/workspace-runtime.js";
 import { AutoCommitScheduler } from "../src/auto-commit-scheduler.js";
 import { resolveP4TriggerConfigs, resolveSvnTriggerConfigs } from "../src/bootstrap.js";
 import { createServerApp } from "../src/index.js";
@@ -174,10 +175,25 @@ describe("p4 routing admission (spec §5.2, W14)", () => {
   });
 });
 
-function fakeAdapter(record: { revision: string; p4User?: string; p4Client?: string; changedPaths: readonly string[] }): VcsAdapter {
+function fakeAdapter(record: {
+  revision: string;
+  p4User?: string;
+  p4Client?: string;
+  changedPaths: readonly string[];
+  /** Stream reported by `p4 describe` (E06); may disagree with the submitted scope. */
+  stream?: string;
+  /** describe-reported user/client when they must diverge from the changelist metadata (E06). */
+  describeUser?: string;
+  describeClient?: string;
+}): VcsAdapter {
   return {
     kind: "p4",
-    describeSource: async () => ({ server: "p4.example:1666", user: record.p4User ?? null, client: record.p4Client ?? null }),
+    describeSource: async () => ({
+      server: "p4.example:1666",
+      user: record.describeUser ?? record.p4User ?? null,
+      client: record.describeClient ?? record.p4Client ?? null,
+      stream: record.stream ?? null,
+    }),
     listChanges: () => Promise.reject(new Error("unused")),
     fetchScoped: () => Promise.reject(new Error("unused")),
     fetchExtraContext: () => Promise.reject(new Error("unused")),
@@ -311,19 +327,13 @@ describe("routing receipt resolver (spec §5.2 stage C, W13/W14/W15)", () => {
     };
     // First conversion attempt freezes the interpretation, then crashes
     // before the formal receipt is written.
-    let acceptCalls = 0;
-    const failingOnceRuntime = {
-      ...runtime,
-      accept: async (...args: Parameters<typeof runtime.accept>) => {
-        acceptCalls += 1;
-        if (acceptCalls === 1) throw new Error("store crashed mid-conversion");
-        return runtime.accept(...args);
-      },
-    };
+    const accept = runtime.accept.bind(runtime);
+    vi.spyOn(runtime, "accept").mockImplementation(accept)
+      .mockRejectedValueOnce(new Error("store crashed mid-conversion"));
     const resolver = new RoutingReceiptResolver({
       store,
       config,
-      runtime: failingOnceRuntime,
+      runtime,
       workspaceRuntime: shiftingRuntime,
       adapterFor: () => adapter,
       profileFor: (triggerName, _provider) => {
@@ -428,6 +438,114 @@ describe("routing receipt resolver (spec §5.2 stage C, W13/W14/W15)", () => {
     record = await store.getRoutingReceipt(accepted.receipt.routingId);
     expect(record?.terminalError).toContain("p4d offline");
     expect(record?.completedAt).toBeNull();
+  });
+});
+
+const P4_STREAM_YAML = `
+triggers:
+  - name: p4-main
+    kind: p4
+    streams: ["//depot/main", "//depot/dev"]
+workspaces:
+  instances:
+    depot-main:
+      match:
+        - triggers: [p4-main]
+          source:
+            repo_ref: { glob: "//depot/main" }
+      work_path: '{{segment (default p4.stream_name "no-stream")}}'
+`;
+
+describe("p4 stream routing variables (E06)", () => {
+  function streamResolver(config: AppConfig, workspaceRuntime: WorkspaceRuntime,
+    store: AutoCommitStore, runtime: AutoCommitRuntime, adapter: VcsAdapter, maxAttempts?: number) {
+    return new RoutingReceiptResolver({
+      store,
+      config,
+      runtime,
+      workspaceRuntime,
+      adapterFor: () => adapter,
+      profileFor: (triggerName) => {
+        const profile = resolveP4TriggerConfigs(config, triggerName, workspaceRuntime)[0];
+        return profile
+          ? { workspaceId: profile.workspaceId, ...(profile.streams ? { scopes: profile.streams } : {}) }
+          : undefined;
+      },
+      ...(maxAttempts !== undefined ? { maxAttempts } : {}),
+    });
+  }
+
+  it("carries a describe stream inside the submitted scope into the converted variables", async () => {
+    const { config, workspaceRuntime, store, runtime } = p4Setup(P4_STREAM_YAML);
+    const adapter = fakeAdapter({ revision: "7101", p4User: "alice", p4Client: "alice-ws",
+      changedPaths: ["//depot/main/src/app.cc"], stream: "//depot/main" });
+    const resolver = streamResolver(config, workspaceRuntime, store, runtime, adapter);
+
+    const envelope = buildP4RoutingEnvelope({ change: "7101", user: "alice", client: "alice-ws", depot_path: "//depot/main" });
+    const accepted = await runtime.acceptRouting({ provider: "p4", triggerName: "p4-main", eventName: "change-commit", envelope: envelope!, now: 1000 });
+    expect(await resolver.resolveDue(2000)).toBeUndefined();
+
+    const completed = await store.getRoutingReceipt(accepted.receipt.routingId);
+    expect(completed?.completedAt).toBe(2000);
+    expect(completed?.convertedReceiptIds).toHaveLength(1);
+
+    const receipt = await store.getReceipt(completed!.convertedReceiptIds[0]!);
+    const resolution = receipt?.receipt.resolution;
+    if (resolution?.kind !== "match") throw new Error("expected a match resolution on the converted receipt");
+    expect(resolution.variables).toMatchObject({
+      p4: {
+        stream: "//depot/main",
+        stream_name: "main",
+        depot: "depot",
+        depot_path: "//depot/main",
+        scope: "//depot/main",
+        change: "7101",
+        user: "alice",
+        client: "alice-ws",
+      },
+    });
+    // work_path renders the verified stream name, not a fallback.
+    expect(resolution.binding.workPath).toBe("main");
+  });
+
+  it("never trusts a describe stream recorded outside the submitted scope", async () => {
+    const { config, workspaceRuntime, store, runtime } = p4Setup(P4_STREAM_YAML);
+    const adapter = fakeAdapter({ revision: "7102", p4User: "alice", p4Client: "alice-ws",
+      changedPaths: ["//depot/main/src/app.cc"], stream: "//elsewhere/dev" });
+    const resolver = streamResolver(config, workspaceRuntime, store, runtime, adapter);
+
+    const envelope = buildP4RoutingEnvelope({ change: "7102", user: "alice", client: "alice-ws", depot_path: "//depot/main" });
+    const accepted = await runtime.acceptRouting({ provider: "p4", triggerName: "p4-main", eventName: "change-commit", envelope: envelope!, now: 1000 });
+    expect(await resolver.resolveDue(2000)).toBeUndefined();
+
+    const completed = await store.getRoutingReceipt(accepted.receipt.routingId);
+    expect(completed?.convertedReceiptIds).toHaveLength(1);
+
+    const receipt = await store.getReceipt(completed!.convertedReceiptIds[0]!);
+    const resolution = receipt?.receipt.resolution;
+    if (resolution?.kind !== "match") throw new Error("expected a match resolution on the converted receipt");
+    expect(resolution.variables).toMatchObject({ p4: { stream: null, stream_name: null, depot_path: "//depot/main" } });
+    expect(resolution.binding.workPath).toBe("no-stream");
+  });
+
+  it.each(["user", "client"] as const)("a describe %s conflicting with the changelist metadata fails durably", async (field) => {
+    const { config, workspaceRuntime, store, runtime } = p4Setup(P4_STREAM_YAML);
+    const adapter = fakeAdapter({ revision: "7103", p4User: "alice", p4Client: "alice-ws",
+      changedPaths: ["//depot/main/src/app.cc"],
+      ...(field === "user" ? { describeUser: "mallory" } : { describeClient: "mallory-ws" }) });
+    // One attempt: the conflict must surface as the terminal error verbatim.
+    const resolver = streamResolver(config, workspaceRuntime, store, runtime, adapter, 1);
+
+    const envelope = buildP4RoutingEnvelope({ change: "7103", user: "alice", client: "alice-ws", depot_path: "//depot/main" });
+    const accepted = await runtime.acceptRouting({ provider: "p4", triggerName: "p4-main", eventName: "change-commit", envelope: envelope!, now: 1000 });
+    expect(await resolver.resolveDue(2000)).toBeUndefined();
+
+    const record = await store.getRoutingReceipt(accepted.receipt.routingId);
+    expect(record?.terminalError).toContain("Conflicting P4 changelist user/client metadata");
+    expect(record?.completedAt).toBeNull();
+    expect(record?.convertedReceiptIds).toEqual([]);
+    // The conflict is detected before any per-scope interpretation freezes.
+    expect(record?.resolution).toBeNull();
   });
 });
 

@@ -1,9 +1,10 @@
 # Workspace 与动态配置测试计划
 
-P0–P6 已交付；P4/P5 验证结果和边界见 [M19](../../ai/milestones/M19.md)，P6 见
-[M20](../../ai/milestones/M20.md)。测试 ID 是
+P0–P6 已交付，P7 组合证据仍有缺口；最新验证结果和边界见 [M19](../../ai/milestones/M19.md)、
+[M20](../../ai/milestones/M20.md)、[M21](../../ai/milestones/M21.md)。测试 ID 是
 合同索引，需组合消费者、存储和 HTTP 证据；单个带 ID 的断言不代表整项完成。
-P7–P8 保留原计划；A14 的浏览器渲染部分已随 P6 页面验证，API 部分此前已验证。
+A14 的浏览器渲染部分已随 P6 页面验证，API 部分此前已验证；E01–E10 的
+组合证据映射见 §7 附表。
 
 | P4/P5 合同 | 当前组合证据 |
 | --- | --- |
@@ -365,6 +366,24 @@ PostgreSQL 必须额外运行已有 stats、project retention、reflection、cat
 
 输出验收同时检查原始请求数量与解析后的目标/body/模型/版本，不能只看“published”状态。配置更新不纳入“未知远端发布结果自动恢复”，不得为本测试擅自重发已可能成功的 POST。
 
+### 7.1 E01–E10 证据映射（2026-09-14，P7 审查后）
+
+| ID | 组合证据（文件 → 覆盖的断言） |
+| --- | --- |
+| E01 | `config-e2e-publish-review.test.ts`：真实登录/API 发布→签名 webhook 自动钉扎→review→fetch spy 精确请求序列与版本。UI 原子发布另见浏览器用例；尚未在浏览器保存后触发同一配置的 review |
+| E02 | 同文件：HTTP review 阻塞期间经 API 更新 provider/model/channel，run1 全旧、run2 全新；尚未组合 agent/route 本体切换。pin/消费者分层证据见 `runtime-config`、`runtime-http`、`runtime-generation` |
+| E03 | 浏览器 "E03: copy-as-new … saves as a database record" + fixture `copied-llm` 授权；core/API 见 `config-source` file_owned 矩阵、`config-review` 复制/投影、`config-api` provenance/effective 视图 |
+| E04 | `webhook-repo-attribution.test.ts`（两 repo 同 glob、同名不同 owner/大小写、同名不同 host：distinct instanceId/workPath/磁盘根/triggerName）；PR/push 输出归属见 `config-e2e-publish-review.test.ts` 双 route `target_kinds` |
+| E05 | `webhook-repo-attribution.test.ts`（fork MR 仅 target 派生 + 双 id 变量；双 profile 凭据 202/401）；source-namespace 变量见 `workspace-source-contracts` |
+| E06 | `routing-admission.test.ts` 4 例（scope 内/外 stream、stream_name、describe↔metadata 冲突）；本次找到已有 p4d 并补跑 `p4-live-batch-*`、`workspace-routing-live` 的真实服务用例 |
+| E07 | `svn-multiproject-live.test.ts`：真实 svnserve+hook→HTTP→SQLite→resolver→scheduler→真实取文件/diff→review→输出 spy；两 project roots 精确路径、源码片段和独立目录。`svn-live-repo` 另覆盖复制、删除和目录重叠 |
+| E08 | 三后端 close→reopen；`config-migration-fixture` SQLite/PG 001→002 保留有效配置及哈希；`store-migration-fixture` 只验证升级后插入业务行；`runtime-config-backends` 只验证 PG/Redis generation 加载。迁移后新事件实际 review 尚待组合 |
+| E09 | `replica-fault-matrix.test.ts` 8 例：同进程双实例/独立 SQL 连接；安装异常、真实 prepare 失败后恢复、同时保存 CAS/幂等、重复投递、断连异常与 digest 漂移；独立进程崩溃及网络故障仍待验收 |
+| E10 | P6 交付（M20）：`tests/browser/config-ui.spec.ts` desktop 全矩阵 + narrow 视口用例；本轮复跑 22/22 |
+
+E04 的 Git 多工程输出与 E05 的出站凭据仍缺组合证据。完整测试数量与环境见
+[M21](../../ai/milestones/M21.md)；本地服务通过不等于目标部署 ACL/TLS 验收。
+
 ## 8. 最终门禁与完成标准
 
 实施后的最终修改完成后，Windows 按仓库规定依次运行：
@@ -380,6 +399,6 @@ node packages/cli/dist/index.js eval --validate-only
 
 Linux 使用 `pnpm ci`。修改 docs/site 时另跑 `pnpm docs:check`、`pnpm docs:build`。新增正式 browser suite 和真实 PostgreSQL/Redis acceptance 在 CI/文档中有独立可复现命令，命令确定后再写进已支持 CLI 文档。
 
-当前改动包含 core 运行代码、schema、单元测试及双语文档，适用上述完整序列和文档站校验。数据库迁移、真实配置后端及浏览器场景尚未实现，不能用这轮纯层测试代替。
+当前改动包含 VCS 运行代码、测试、双语文档和示例说明，适用上述完整序列、浏览器与文档站校验。数据库迁移、真实配置后端和浏览器测试已经存在；仍缺少的组合场景见 §7.1，不以分层测试替代。
 
 完成证据按后端/平台逐行记录：版本、运行命令、测试文件和用例数、失败/跳过数、真实服务或 mock、残留风险。缺环境被 skip 的测试是未执行；PostgreSQL/Redis 全被跳过时不能写“支持所有数据库已验收”。任何范式分支缺测、只测试注册而未调用、源配置可通过 API 修改，均阻止交付完成。

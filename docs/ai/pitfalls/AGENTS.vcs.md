@@ -1,7 +1,7 @@
 # VCS Context and Batch Diffs
 
-Read for Git/P4 context, attribution, or diff changes. Sources and tests:
-`packages/vcs/src/{git,p4}.ts`, `packages/vcs/test/`, and orchestrator context tests.
+Read for Git/SVN/P4 context, attribution, or diff changes. Sources and tests:
+`packages/vcs/src/{git,svn,p4}.ts`, `packages/vcs/test/`, and orchestrator context tests.
 
 ## Git and attribution
 
@@ -19,6 +19,15 @@ Read for Git/P4 context, attribution, or diff changes. Sources and tests:
 - Validate command parsers against real Git/SVN/P4 output. Git blame porcelain
   uses both four-field group-start and three-field coalesced headers; accept the
   optional fourth field. Synthetic three-field-only fixtures missed that defect.
+- SVN diff paths must equal the scope-relative paths used by fetch/context and
+  finding publication. Remove SVN revision labels only from patch headers;
+  `(nonexistent)` denotes an absent side. Derive the scope prefix from pinned
+  `info --xml`, never a basename match. Compare explicit `--old`/`--new` trees
+  and omit directory targets covered by child paths: copied-file ancestry and
+  directory headers otherwise misattribute or duplicate patches. Verify exact
+  paths/statuses with `svn-live-repo.test.ts` and real review/output with
+  `svn-multiproject-live.test.ts`; accepting a matching prefix conceals defects.
+  CLI semantics: [SVN diff reference](https://svnbook.red-bean.com/en/1.7/svn.ref.svn.c.diff.html).
 
 ## P4 diagnostics and recovery
 

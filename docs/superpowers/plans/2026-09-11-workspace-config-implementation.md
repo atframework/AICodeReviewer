@@ -1,8 +1,9 @@
 # Workspace 与动态配置执行计划
 
-状态：P0–P6 已交付；P4/P5 原阶段缺项已补齐并完成代码审查。
-本轮修复与验证见 [M19](../../ai/milestones/M19.md)，P6 交付与门禁证据见
-[M20](../../ai/milestones/M20.md)。P7–P8 尚待推进。设计合同见
+状态：P0–P6 已交付；P7 已补强集成测试，组合验收缺口仍保留。
+修复与验证见 [M19](../../ai/milestones/M19.md)，P6 交付与门禁证据见
+[M20](../../ai/milestones/M20.md)，P7 证据矩阵与门禁见
+[M21](../../ai/milestones/M21.md)。P7 达成退出条件后推进 P8。设计合同见
 [详细设计](../specs/2026-09-11-workspace-config-management.md)，测试 ID 和后端证据要求见
 [测试计划](2026-09-11-workspace-config-tests.md)。任何复选框只有实现、对应测试和适用最终门禁通过后才能勾选。
 
@@ -178,13 +179,13 @@ compiler、prepare/CAS/install、preview 与 readiness;server `config-service.ts
 
 ### P7. 完整流程与故障注入
 
-- [ ] SQLite/Redis/PostgreSQL 配置后端逐一从真实旧数据升级，重开连接并跑一条 review 路径，断言数据保留和新 revision 消费。
-- [ ] 两工程同规则、同 repo 名不同 owner/host、GitLab subgroup、P4 多 stream、SVN 多 project，验证正确路径/凭据/输出归属。
-- [ ] 两副本读同配置源，保存后向另一副本发事件；模拟 notify 丢失、prepare 失败、DB 断连、fileDigest 不一致。
-- [ ] 审查运行中更新 provider/route/agent，验证旧任务继续旧版，下一任务全链用新版；旧 receipt 与新版交错组批。
-- [ ] migration 锁过期/崩溃/双初始化/partial generation/未知高版本/旧 writer 交错，验证无半升级状态和可恢复诊断。
-- [ ] 管理流程 UI → API → DB → Runtime → 输出 spy 有完整数据断言；至少一条 fixture 使用本地真实 VCS，付费 LLM 使用可控测试实现。
-- [ ] 生产 Git 服务凭据、部署 ACL/TLS、真实模型调用和目标版本兼容单独验收；没有环境条件则记录为未验收，不宣称全后端完成。
+- [ ] SQLite/Redis/PostgreSQL 配置后端逐一从真实旧数据升级，重开连接并跑一条 review 路径，断言数据保留和新 revision 消费。已有三后端重开、SQLite/PG 001→002 有效配置保留、PG/Redis generation 加载；尚未组合为迁移后新事件实际 review。
+- [ ] 两工程同规则、同 repo 名不同 owner/host、GitLab subgroup、P4 多 stream、SVN 多 project，验证正确路径/凭据/输出归属。SVN 已到真实 VCS/审查/输出，P4 本地服务已补跑；Git 多工程用例仍主要验证 HTTP 路由与布局，待补同一流程最终模型/输出/出站凭据。
+- [x] 两副本读同配置源，保存后向另一副本发事件；模拟 prepare 失败、DB 断连、fileDigest 不一致。`replica-fault-matrix` 使用同进程两个 manager/app 与独立 SQLite 配置/回执连接，HTTP 自行 adoption；无通知亦重读 head。独立进程崩溃恢复证据仍待补，不能将注入异常称为进程崩溃。
+- [ ] 审查运行中更新 provider/route/agent，验证旧任务继续旧版，下一任务全链用新版；旧 receipt 与新版交错组批。已有登录/API 发布→签名 webhook→direct LLM/输出的 provider/model/channel 隔离；agent 被测试禁用，route 本体未切换；组批有 H08/H10/R08 分层证据。
+- [ ] migration 锁过期/崩溃/双初始化/partial generation/未知高版本/旧 writer 交错，验证无半升级状态和可恢复诊断。SQL 锁竞争使用实际子进程和源码；001 SQL writer 在升级后继续写、Redis 旧 revision CAS 均通过，但不是旧二进制与升级同时交错的证明。
+- [ ] 管理流程 UI → API → DB → Runtime → 输出 spy 有完整数据断言；至少一条 fixture 使用本地真实 VCS，付费 LLM 使用可控测试实现。UI 发布与后续 HTTP review 目前分层测试；SVN hook→SQLite→resolver→scheduler→真实取文件/diff→review→输出 spy 已通过，仍需补齐 UI 变更到实际执行的组合场景。
+- [x] 生产 Git 服务凭据、部署 ACL/TLS、真实模型调用和目标版本兼容单独验收；没有环境条件则记录为未验收，不宣称全后端完成。（已记录为未验收，见 M21 诚实记录表）
 
 退出条件：E01–E10 通过，各后端/平台清晰记录实测、模拟或未运行；没有用 skip/零测试数代替通过。
 

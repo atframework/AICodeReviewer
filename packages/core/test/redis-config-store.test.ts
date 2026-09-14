@@ -81,7 +81,7 @@ if (REDIS_TEST_URL) {
         fileDigest: "file-digest-1",
         operationId: `op-${randomUUID()}`,
         actor: "admin@example.com",
-        document: { formatVersion: 1, entities: { providers: { p1: { enabled: true, value: { kind: "openai_compatible" } } } }, globals: {} },
+        document: { entities: { providers: { p1: { id: "p1", name: "p1", enabled: true, value: { id: "p1", kind: "openai_compatible" } } } }, globals: {} },
         formatVersion: 1,
         audit: { action: "publish", entityRefs: [], redactedDiff: {} },
         now: Date.now(),
@@ -197,6 +197,117 @@ if (REDIS_TEST_URL) {
     });
   });
 
+  // G1 close→reopen persistence: a fresh connection against the same prefix
+  // must read back every committed row and continue from the persisted head.
+  describe("redis config store persistence and fencing", () => {
+    const T0 = 1_800_000_000_000;
+
+    function changeset(overrides: Partial<CommitChangesetInput> = {}): CommitChangesetInput {
+      return {
+        namespace: "ns-persist",
+        baseRevision: null,
+        fileDigest: "file-digest-1",
+        operationId: `op-${randomUUID()}`,
+        actor: "admin@example.com",
+        document: { entities: { providers: { p1: { id: "p1", name: "p1", enabled: true, value: { id: "p1", kind: "openai_compatible" } } } }, globals: {} },
+        formatVersion: 1,
+        audit: { action: "publish", entityRefs: [], redactedDiff: {} },
+        now: T0,
+        ...overrides,
+      };
+    }
+
+    it("close→reconnect on the same prefix preserves revision, snapshot, audit, and session", async () => {
+      const prefix = `aicr:config:test:${randomUUID()}:`;
+      prefixes.push(prefix);
+
+      const first = await createRedisConfigStore({ connection: { url: REDIS_TEST_URL }, prefix });
+      stores.push(first);
+      const committed = await first.commitChangeset(changeset({ operationId: "op-reopen-1" }));
+      expect(committed.status).toBe("committed");
+      await first.writeSnapshot({
+        id: "snap-reopen",
+        namespace: "ns-persist",
+        fileDigest: "file-digest-1",
+        databaseRevision: 1,
+        resolverVersion: 1,
+        sanitizedEffectiveConfig: { llm: { providers: ["p1"] } },
+        contentHash: "snap-hash-reopen",
+        now: T0,
+      });
+      await first.saveAdminSession({ tokenHash: "hash-reopen", createdAt: T0, expiresAt: T0 + 60_000 });
+      await first.close();
+
+      // A brand-new ioredis connection against the same prefix: every row
+      // is durable beyond the closed connection.
+      const second = await createRedisConfigStore({ connection: { url: REDIS_TEST_URL }, prefix });
+      stores.push(second);
+
+      const head = await second.readHead("ns-persist");
+      expect(head).toMatchObject({ activeRevision: 1, generation: "1" });
+      const revision = await second.readRevision("ns-persist", 1);
+      expect(revision).toMatchObject({ revision: 1, operationId: "op-reopen-1", actor: "admin@example.com" });
+      expect(revision?.document).toEqual(changeset({ operationId: "op-reopen-1" }).document);
+      const audit = await second.readAudit("ns-persist");
+      expect(audit).toHaveLength(1);
+      expect(audit[0]).toMatchObject({ operationId: "op-reopen-1", action: "publish", afterRevision: 1 });
+      const snapshot = await second.readSnapshot("snap-reopen");
+      expect(snapshot).toMatchObject({ contentHash: "snap-hash-reopen", pinned: false, refCount: 0 });
+      expect(await second.readAdminSession("hash-reopen", T0 + 1000))
+        .toEqual({ tokenHash: "hash-reopen", createdAt: T0, expiresAt: T0 + 60_000 });
+
+      const next = await second.commitChangeset(changeset({ baseRevision: 1, operationId: "op-reopen-2" }));
+      expect(next.status).toBe("committed");
+      expect(next.head.activeRevision).toBe(2);
+    });
+
+    it("G7: a stale-generation writer is fenced by the Lua CAS; head and audit land at revision 2 exactly once", async () => {
+      const prefix = `aicr:config:test:${randomUUID()}:`;
+      prefixes.push(prefix);
+      const namespace = "ns-fence";
+
+      // Two store instances (two connections) over one namespace.
+      const storeA = await createRedisConfigStore({ connection: { url: REDIS_TEST_URL }, prefix });
+      stores.push(storeA);
+      const storeB = await createRedisConfigStore({ connection: { url: REDIS_TEST_URL }, prefix });
+      stores.push(storeB);
+
+      // A commits revision 1; B snapshots the head at generation 1.
+      const first = await storeA.commitChangeset(changeset({ namespace, operationId: "op-fence-1" }));
+      expect(first.status).toBe("committed");
+      const headSeenByB = await storeB.readHead(namespace);
+      expect(headSeenByB).toMatchObject({ activeRevision: 1, generation: "1" });
+
+      // A advances the head to revision 2 behind B's back.
+      const advanced = await storeA.commitChangeset(changeset({ namespace, baseRevision: 1, operationId: "op-fence-2" }));
+      expect(advanced.status).toBe("committed");
+      expect(advanced.head.activeRevision).toBe(2);
+
+      // B's stale write path: base 1 while the head is already 2. The CAS
+      // inside the commit script pins baseRevision == active, so the stale
+      // write is refused instead of renumbering or overwriting revision 2.
+      const stale = await storeB.commitChangeset(changeset({
+        namespace,
+        baseRevision: headSeenByB?.activeRevision ?? null,
+        operationId: "op-fence-stale",
+      }));
+      expect(stale.status).toBe("revision_conflict");
+      if (stale.status === "revision_conflict") {
+        expect(stale.head).toMatchObject({ activeRevision: 2, generation: "2" });
+      }
+
+      // The head moved exactly once past B's snapshot; no stale revision or
+      // audit row leaked in.
+      const head = await storeA.readHead(namespace);
+      expect(head).toMatchObject({ activeRevision: 2, generation: "2" });
+      const revisions = await storeA.listRevisions(namespace);
+      expect(revisions.map((entry) => entry.revision)).toEqual([2, 1]);
+      const audit = await storeA.readAudit(namespace);
+      expect(audit.map((entry) => entry.afterRevision).sort((a, b) => a - b)).toEqual([1, 2]);
+      expect(await storeA.readOperation(namespace, "op-fence-stale")).toBeNull();
+    });
+  });
+
   // Snapshot mutation races (spec §7.2), symmetric with the SQLite/Postgres
   // cases: every snapshot mutation here is one Lua script, so the dangerous
   // interleavings collapse into the same two legal linearizations.
@@ -220,7 +331,7 @@ if (REDIS_TEST_URL) {
     async function makeStore(): Promise<ConfigStore> {
       const prefix = `aicr:config:test:${randomUUID()}:`;
       const store = await createRedisConfigStore({
-        connection: { url: REDIS_TEST_URL },
+        connection: { url: REDIS_TEST_URL! },
         prefix,
       });
       prefixes.push(prefix);

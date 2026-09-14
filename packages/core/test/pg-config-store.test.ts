@@ -15,7 +15,7 @@ import { randomUUID } from "node:crypto";
 
 import { afterAll, describe, expect, it } from "vitest";
 
-import type { ConfigStore, WriteSnapshotInput } from "../src/config-store.js";
+import type { CommitChangesetInput, ConfigStore, WriteSnapshotInput } from "../src/config-store.js";
 import { isConfigError } from "../src/config-format.js";
 import type { NamespaceMigrationPlan } from "../src/migration-runner.js";
 import { MigrationRunner } from "../src/migration-runner.js";
@@ -148,6 +148,70 @@ if (PG_TEST_URL) {
     });
   });
 
+  // G1 close→reopen persistence: a fresh pool against the same schema must
+  // read back every committed row and continue from the persisted head.
+  describe("postgres config store persistence", () => {
+    const T0 = 1_800_000_000_000;
+
+    function changeset(overrides: Partial<CommitChangesetInput> = {}): CommitChangesetInput {
+      return {
+        namespace: "ns-reopen",
+        baseRevision: null,
+        fileDigest: "file-digest-1",
+        operationId: "op-reopen-1",
+        actor: "admin@example.com",
+        document: { entities: { providers: { p1: { id: "p1", name: "p1", enabled: true, value: { id: "p1", kind: "openai_compatible" } } } }, globals: {} },
+        formatVersion: 1,
+        audit: { action: "publish", entityRefs: [], redactedDiff: {} },
+        now: T0,
+        ...overrides,
+      };
+    }
+
+    it("close→reopen against the same schema preserves revision, snapshot, audit, and session", async () => {
+      const schema = `test_reopen_${randomUUID().replace(/-/g, "_")}`;
+      schemas.push(schema);
+
+      const first = await createPgConfigStore({ connection: { url: PG_TEST_URL }, schema });
+      stores.push(first);
+      const committed = await first.commitChangeset(changeset());
+      expect(committed.status).toBe("committed");
+      await first.writeSnapshot({
+        id: "snap-reopen",
+        namespace: "ns-reopen",
+        fileDigest: "file-digest-1",
+        databaseRevision: 1,
+        resolverVersion: 1,
+        sanitizedEffectiveConfig: { llm: { providers: ["p1"] } },
+        contentHash: "snap-hash-reopen",
+        now: T0,
+      });
+      await first.saveAdminSession({ tokenHash: "hash-reopen", createdAt: T0, expiresAt: T0 + 60_000 });
+      await first.close();
+
+      // A brand-new pool against the same schema: every row is durable.
+      const second = await createPgConfigStore({ connection: { url: PG_TEST_URL }, schema });
+      stores.push(second);
+
+      const head = await second.readHead("ns-reopen");
+      expect(head).toMatchObject({ activeRevision: 1, generation: "1" });
+      const revision = await second.readRevision("ns-reopen", 1);
+      expect(revision).toMatchObject({ revision: 1, operationId: "op-reopen-1", actor: "admin@example.com" });
+      expect(revision?.document).toEqual(changeset().document);
+      const audit = await second.readAudit("ns-reopen");
+      expect(audit).toHaveLength(1);
+      expect(audit[0]).toMatchObject({ operationId: "op-reopen-1", action: "publish", afterRevision: 1 });
+      const snapshot = await second.readSnapshot("snap-reopen");
+      expect(snapshot).toMatchObject({ contentHash: "snap-hash-reopen", pinned: false, refCount: 0 });
+      expect(await second.readAdminSession("hash-reopen", T0 + 1000))
+        .toEqual({ tokenHash: "hash-reopen", createdAt: T0, expiresAt: T0 + 60_000 });
+
+      const next = await second.commitChangeset(changeset({ baseRevision: 1, operationId: "op-reopen-2" }));
+      expect(next.status).toBe("committed");
+      expect(next.head.activeRevision).toBe(2);
+    });
+  });
+
   // Snapshot mutation races (spec §7.2: a signed-out task's snapshot must
   // never vanish under it; writeSnapshot is idempotent per id). A real pool
   // gives genuine statement-level concurrency, so the delete/ref-count race
@@ -172,7 +236,7 @@ if (PG_TEST_URL) {
     async function makeStore(): Promise<ConfigStore> {
       const schema = `test_${randomUUID().replace(/-/g, "_")}`;
       const store = await createPgConfigStore({
-        connection: { url: PG_TEST_URL },
+        connection: { url: PG_TEST_URL! },
         schema,
       });
       schemas.push(schema);

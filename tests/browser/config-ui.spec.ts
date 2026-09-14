@@ -362,6 +362,50 @@ test.describe.serial("config management UI (P6 browser gate)", () => {
     await expect(drawer).toBeHidden();
   });
 
+  test("E03: copy-as-new of a file-owned provider saves as a database record", async ({ page, request }) => {
+    await login(page);
+    await openConfigTab(page);
+    const drawer = page.locator("#config-editor");
+    await page.locator("#config-main tbody tr", { hasText: "file-llm" }).getByRole("button", { name: "View" }).click();
+    await expect(drawer.locator(".cfg-drawer-title")).toHaveText("View file-llm");
+    await drawer.getByRole("button", { name: "Copy as new database config" }).click();
+    await expect(drawer.locator(".cfg-drawer-title")).toHaveText("New database config (copied from file-llm)");
+    // The id must be chosen explicitly; base URL and env reference carry over.
+    const idInput = drawer.locator('[data-field-id="provider:id"] input');
+    await expect(idInput).toBeEnabled();
+    await expect(idInput).toHaveValue("");
+    await expect(drawer.locator('[data-field-id="provider:base_url"] input')).toHaveValue("http://127.0.0.1:9/v1");
+    await expect(drawer.locator('[data-field-id="provider:api_key_env"] input')).toHaveValue("AICR_BROWSER_LLM_KEY");
+    await idInput.fill("copied-llm");
+    await drawer.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(page.locator("#config-status")).toContainText("Saved as revision");
+    await expect(drawer).toBeHidden();
+    // The copy landed as a database-sourced record (fail-closed grant in the fixture).
+    const token = await bearerToken(page);
+    const response = await request.get("/api/admin/config", { headers: { Authorization: `Bearer ${token}` } });
+    expect(response.status()).toBe(200);
+    const view = await response.json();
+    const copied = view.collections.provider.records.find((record: { name: string }) => record.name === "copied-llm");
+    expect(copied).toMatchObject({ source: "database", readonly: false });
+    expect(copied.value).toMatchObject({
+      id: "copied-llm", kind: "openai_compatible",
+      base_url: "http://127.0.0.1:9/v1", api_key_env: "AICR_BROWSER_LLM_KEY",
+    });
+    // The file-owned original is untouched: badges and the read-only View drawer.
+    const row = page.locator("#config-main tbody tr", { hasText: "file-llm" });
+    await expect(row).toContainText("file");
+    await expect(row).toContainText("readonly");
+    await row.getByRole("button", { name: "View" }).click();
+    await expect(drawer.locator(".cfg-drawer-title")).toHaveText("View file-llm");
+    const controls = drawer.locator("[data-field-id] input, [data-field-id] select, [data-field-id] textarea");
+    expect(await controls.count()).toBeGreaterThan(0);
+    for (const control of await controls.all()) {
+      await expect(control).toBeDisabled();
+    }
+    await drawer.getByRole("button", { name: "Close" }).click();
+    await expect(drawer).toBeHidden();
+  });
+
   test("provider CRUD publishes revisions that take effect immediately", async ({ page, request }) => {
     await login(page);
     await openConfigTab(page);

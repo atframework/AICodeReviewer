@@ -289,6 +289,12 @@ forwards only revision metadata; AICR uses the server-side `repository_url`
 plus its own SVN credentials to fetch the diff. Payload repository URL fields
 are ignored so an inbound hook cannot switch the reviewed repository.
 
+Diff and finding paths are relative to the selected repository scope. For
+example, with a scope ending in `/project/trunk`, `src/app.ts` remains
+`src/app.ts` in downloaded files and review output. AICR removes SVN revision
+labels, keeps copied files at their destination paths, and rejects conflicting
+scope metadata before calling the model.
+
 Install a `post-commit` hook in the SVN repository `hooks/` directory:
 
 ```bash

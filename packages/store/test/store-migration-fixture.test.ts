@@ -16,7 +16,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createSqliteConfigStore } from "@aicr/core";
 
 import { closeStoreDb, createStoreDb, STORE_SQLITE_MIGRATIONS, type SqliteStoreDb } from "../src/database.js";
-import { getProjectStats, getRecentRuns } from "../src/stats.js";
+import { getProjectStats, getRecentRuns, insertReviewRun } from "../src/stats.js";
 
 const require = createRequire(import.meta.url);
 interface BetterSqlite3Ctor {
@@ -134,6 +134,54 @@ describe("store migration from a real 001–006 ledger (M02)", () => {
       expect(count.n).toBe(STORE_SQLITE_MIGRATIONS.length);
     } finally {
       await closeStoreDb(store2);
+    }
+  });
+
+  it("accepts a new 009-era row through the current API without disturbing legacy rows (G3)", async () => {
+    const dbPath = join(tmpDir, "legacy.db");
+    buildHistoricalDb(dbPath);
+
+    const store: SqliteStoreDb = createStoreDb(dbPath);
+    try {
+      // After the upgrade, the current API writes the vcs columns the 009
+      // step added; the legacy row predates them and must stay untouched.
+      await insertReviewRun(store, {
+        id: "new-run",
+        eventId: "evt-2",
+        workspaceId: "ws-legacy",
+        triggerName: "gitea",
+        repoRef: "owner/legacy",
+        provider: "openai",
+        providerModel: "gpt-x",
+        status: "succeeded",
+        startedAt: new Date(1700000010000),
+        finishedAt: new Date(1700000015000),
+        tokensIn: 5,
+        tokensOut: 6,
+        branch: "main",
+        headSha: "new-sha",
+        vcsKind: "git",
+        headCommittedAt: new Date(1700000009000),
+      });
+
+      const count = store.sqlite.prepare("SELECT COUNT(*) AS n FROM review_runs").get() as { n: number };
+      expect(count.n).toBe(2);
+
+      const runs = await getRecentRuns(store, 5);
+      expect(runs).toHaveLength(2);
+      const inserted = runs.find((run) => run.id === "new-run");
+      expect(inserted).toMatchObject({ branch: "main", headSha: "new-sha", vcsKind: "git" });
+      expect(inserted?.headCommittedAt?.getTime()).toBe(1700000009000);
+
+      // Legacy row: counters and the 009-era nulls are exactly as seeded.
+      const legacy = runs.find((run) => run.id === "legacy-run");
+      expect(legacy).toMatchObject({ headSha: "legacy-sha", vcsKind: null, headCommittedAt: null });
+      const legacyRow = store.sqlite
+        .prepare("SELECT tokens_in, tokens_out FROM review_runs WHERE id = 'legacy-run'")
+        .get() as { tokens_in: number; tokens_out: number };
+      expect(legacyRow).toEqual({ tokens_in: 111, tokens_out: 22 });
+    } finally {
+      await closeStoreDb(store);
     }
   });
 });

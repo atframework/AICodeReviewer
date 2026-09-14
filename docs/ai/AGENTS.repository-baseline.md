@@ -66,6 +66,20 @@ not masquerade as passes:
 - `AICR_PG_TEST_URL`(如 `postgres://aicr@127.0.0.1:5432/aicr_test`):
   pg store / pg config store 测试;M08 低权限用例需要该角色具备
   `CREATE ROLE`(否则该用例失败而非 skip)。
+- `AICR_SVN_TEST_EXECUTABLE`：本机 SVN CLI，旁边需有 `svnadmin`、
+  `svnserve`；真实 hook 用例创建独立仓库与回环服务。
+- `AICR_P4D_TEST_EXECUTABLE`：本机 p4d，`p4` 客户端需在 PATH 中；
+  用例创建独立测试服务。先检查已有可执行文件，再把缺少工具记录为跳过。
+
+本机快速搭建（Windows 示例，一次性实例，不入库）：
+`scoop install postgresql redis`；PG 用
+`initdb -D <build/tmp 目录> -U aicr --pwfile=<file> -A scram-sha-256 -E UTF8`
+起一次性 cluster 后 `postgres -D <目录> -p <port>` 前台运行，建库
+`createdb aicr_test`；Redis 直接 `redis-server --port <port> --bind 127.0.0.1`。
+Windows 的 Hyper-V/WSL 会动态保留 TCP 端口段，落在段内的端口 bind 报
+EACCES（`netsh interface ipv4 show excludedportrange protocol=tcp` 查看）；
+选段外端口（如 PG 55432、Redis 6380/6381）。msys2 版 redis-server 对通配
+地址 bind 也可能报 Permission denied，显式 `--bind 127.0.0.1` 规避。
 
 ## Discovery and boundaries
 

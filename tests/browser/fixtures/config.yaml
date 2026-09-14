@@ -50,6 +50,13 @@ config_sources:
       destinations:
         kind: openai_compatible
         base_url: http://127.0.0.1:9/v1
+    # Same grant for the E03 copy-as-new save leg: a copy of file-llm saved
+    # with id copied-llm carries over the identical env/destination pair.
+    - env: AICR_BROWSER_LLM_KEY
+      target: [llm, providers, copied-llm, api_key_env]
+      destinations:
+        kind: openai_compatible
+        base_url: http://127.0.0.1:9/v1
   database:
     enabled: true
     backend: storage

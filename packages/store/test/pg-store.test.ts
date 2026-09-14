@@ -4,7 +4,7 @@ import { assertReflectionLimits } from "./reflection-limit-contract.js";
 import pg from "pg";
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 
-import { isConfigError } from "@aicr/core";
+import { isConfigError, MigrationRunner, createPgConfigStore, type ConfigStore } from "@aicr/core";
 
 import { createStoreDb, closeStoreDb, type PgStoreDb } from "../src/database.js";
 import {
@@ -214,7 +214,7 @@ describePg("pg store migrations", () => {
 async function repairLedger(statement: string, params: readonly unknown[] = []): Promise<void> {
   const pool = new pg.Pool({ connectionString: PG_URL, max: 1 });
   try {
-    await pool.query(statement, params);
+    await pool.query(statement, [...params]);
   } finally {
     await pool.end();
   }
@@ -422,7 +422,7 @@ describePg("pg store stats", () => {
   });
 
   it("folds concurrent duplicate runs and accounts for exactly one write", async () => {
-    const run = { id: "same-run", eventId: "evt", workspaceId: "ws", status: "succeeded" as const };
+    const run = { id: "same-run", eventId: "evt", workspaceId: "ws", triggerName: "gitea", provider: null, providerModel: null, status: "succeeded" as const };
     const results = await Promise.allSettled(Array.from({ length: 8 }, () => insertReviewRunOnce(store, run)));
     expect(results.every((result) => result.status === "fulfilled")).toBe(true);
     expect(results.filter((result) => result.status === "fulfilled" && result.value)).toHaveLength(1);
@@ -430,7 +430,7 @@ describePg("pg store stats", () => {
   });
 
   it("keeps rollups complete when existing-project runs commit concurrently", async () => {
-    const base = { eventId: "evt", workspaceId: "ws", status: "succeeded" as const, startedAt: new Date("2026-09-13T00:00:00Z") };
+    const base = { eventId: "evt", workspaceId: "ws", triggerName: "gitea", provider: null, providerModel: null, status: "succeeded" as const, startedAt: new Date("2026-09-13T00:00:00Z") };
     await insertReviewRun(store, { ...base, id: "seed" });
     await Promise.all(Array.from({ length: 8 }, (_, index) => insertReviewRun(store, { ...base, id: `concurrent-${index}` })));
     expect(await getDailyRollups(store)).toMatchObject([{ reviewCount: 9 }]);
@@ -636,5 +636,89 @@ describePg("pg store webhook events", () => {
       .toHaveLength(WEBHOOK_EVENTS_RETENTION_LIMIT);
     expect(await pruneWebhookEvents(store, 3)).toBe(WEBHOOK_EVENTS_RETENTION_LIMIT - 3);
     expect(await getRecentWebhookEvents(store, 10)).toHaveLength(3);
+  });
+});
+
+describePg("pg config store beside the business schema (G5)", () => {
+  it("applies config migrations over a migrated business schema without touching its rows", async () => {
+    const g5Schema = `test_${randomUUID().replaceAll("-", "")}`;
+    const admin = new pg.Pool({ connectionString: PG_URL, max: 1 });
+    const scoped = new pg.Pool({ connectionString: PG_URL, max: 1, options: `-c search_path=${g5Schema}` });
+    let business: PgStoreDb | undefined;
+    let configStore: ConfigStore | undefined;
+    try {
+      await admin.query(`CREATE SCHEMA ${g5Schema}`);
+
+      // Hand-apply the business migrations 001-009 through the exported
+      // plan/executor instead of the store's automatic startup migration.
+      const client = await scoped.connect();
+      try {
+        const runner = new MigrationRunner(createPgMigrationStore(client), [STORE_MIGRATION_PLAN]);
+        await runner.apply();
+      } finally {
+        client.release();
+      }
+      const ledger = await admin.query(
+        `SELECT id FROM ${g5Schema}.schema_migrations WHERE namespace = 'store' ORDER BY to_version`,
+      );
+      expect(ledger.rows.map((row) => row.id)).toEqual(STORE_MIGRATION_PLAN.steps.map((step) => step.id));
+
+      // Seed one business row before the config store arrives.
+      business = await openStore(g5Schema);
+      await insertReviewRun(business, {
+        id: "run-g5", eventId: "evt-g5", workspaceId: "ws-1", triggerName: "gitea",
+        provider: null, providerModel: null, status: "succeeded",
+        startedAt: new Date(), durationMs: 100, problemCount: 1,
+      });
+
+      configStore = await createPgConfigStore({ connection: { url: PG_URL! }, schema: g5Schema });
+
+      // 001_pg_config_initial + 002_pg_config_runtime_state landed in the same schema…
+      const tables = await admin.query(
+        "SELECT table_name FROM information_schema.tables WHERE table_schema = $1",
+        [g5Schema],
+      );
+      const names = tables.rows.map((row) => row.table_name);
+      for (const expected of ["config_revisions", "config_heads", "config_audit", "config_runtime_snapshots", "workspace_bindings", "admin_sessions", "config_runtime_state"]) {
+        expect(names).toContain(expected);
+      }
+      const configLedger = await admin.query(
+        `SELECT id FROM ${g5Schema}.schema_migrations WHERE namespace = 'config' ORDER BY to_version`,
+      );
+      expect(configLedger.rows.map((row) => row.id)).toEqual(["001_pg_config_initial", "002_pg_config_runtime_state"]);
+
+      // …and the seeded business row is untouched.
+      const before = await admin.query(`SELECT COUNT(*)::int AS n FROM ${g5Schema}.review_runs`);
+      expect(before.rows[0]!.n).toBe(1);
+
+      // Both stores are usable on the shared schema.
+      expect(await configStore.readHead("g5")).toBeNull();
+      const committed = await configStore.commitChangeset({
+        namespace: "g5",
+        baseRevision: null,
+        fileDigest: "file-digest-1",
+        operationId: "op-g5",
+        actor: "admin@example.com",
+        document: { entities: { providers: { p1: { id: "p1", name: "p1", enabled: true, value: { id: "p1", kind: "openai_compatible" } } } }, globals: {} },
+        formatVersion: 1,
+        audit: { action: "publish", entityRefs: [], redactedDiff: {} },
+        now: Date.now(),
+      });
+      expect(committed.status).toBe("committed");
+      expect((await configStore.readHead("g5"))?.activeRevision).toBe(1);
+      await insertReviewRun(business, {
+        id: "run-g5-b", eventId: "evt-g5-b", workspaceId: "ws-1", triggerName: "gitea",
+        provider: null, providerModel: null, status: "failed",
+        startedAt: new Date(), durationMs: 200, problemCount: 2,
+      });
+      const after = await admin.query(`SELECT COUNT(*)::int AS n FROM ${g5Schema}.review_runs`);
+      expect(after.rows[0]!.n).toBe(2);
+    } finally {
+      await configStore?.close();
+      if (business) await closeStoreDb(business);
+      await admin.query(`DROP SCHEMA IF EXISTS ${g5Schema} CASCADE`);
+      await admin.end();
+      await scoped.end();
+    }
   });
 });

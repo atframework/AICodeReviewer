@@ -19,7 +19,8 @@ PR/MR 执行时段、持久化延期与事件面板见 [M16](docs/ai/milestones/
 
 Workspace 多工程配置已完成 P0–P6：存储/合并/发布/运行时接线与管理 API 见
 [M19](docs/ai/milestones/M19.md)，通用表单、管理页面与浏览器门禁见
-[M20](docs/ai/milestones/M20.md)。下一步推进 P7–P8。
+[M20](docs/ai/milestones/M20.md)，P7 集成测试与审查修复见
+[M21](docs/ai/milestones/M21.md)。P7 尚有组合验收缺口，之后推进 P8。
 当前测试证据与待办见[执行计划](docs/superpowers/plans/2026-09-11-workspace-config-implementation.md)。
 
 ## 2. 可本地推进的下一步
@@ -28,7 +29,7 @@ Workspace 多工程配置已完成 P0–P6：存储/合并/发布/运行时接�
 
 | 优先级 | 工作 | 本地产物与验收 | 边界 |
 | --- | --- | --- | --- |
-| P0 | Workspace 多工程规则与动态配置管理 | 管理 UI 已交付；推进多副本完整故障矩阵与整体验收 | P0–P6 已交付；跨版本进程验收与文档收官见 P7–P8 |
+| P0 | Workspace 多工程规则与动态配置管理 | 补齐 P7 的迁移后实际执行、跨进程故障和配置切换组合证据，再收敛 P8 文档 | P0–P6 已交付；P7 已有本地服务与故障测试，剩余项见下表 |
 | P1 | 自动批次逐目标发布恢复 | 先梳理 publisher 能力矩阵；设计持久目标回执及状态转换；覆盖部分成功、响应丢失、租约过期与重入调用次数 | 当前仅完成检查点可恢复本地记账；未知 POST 结果不得自动重发。远端对账另行验收 |
 | P1 | dead 批次的管理与人工恢复 | 定义鉴权、审计和 CAS 操作；区分本地记账重试与可能重复远端副作用的操作；用三个存储后端验证 | dead 目前会占住 stream；不得以清空成员归属或重新组批作为恢复办法 |
 | P2 | 扩展配置示例校验 | 在现有 config-examples 测试上覆盖更多独立命名空间片段，补错误字段/失效引用的阴性场景 | 当前自动验证完整部署配置和 README/双语队列页的自动提交、PR/MR 策略示例；其他片段仍需人工核对 |
@@ -38,9 +39,10 @@ Workspace 多工程配置已完成 P0–P6：存储/合并/发布/运行时接�
 
 ### 2.1 Workspace 与动态配置管理
 
-本项 P0–P5 已交付。P2/P3 证据见
+本项 P0–P6 已交付，P7 的完成声明经审查收窄。P2/P3 证据见
 [M17](docs/ai/milestones/M17.md)、[M18](docs/ai/milestones/M18.md)，
-P4/P5 审查结果见 [M19](docs/ai/milestones/M19.md)。详细资料：
+P4/P5 审查结果见 [M19](docs/ai/milestones/M19.md)，P6/P7 见
+[M20](docs/ai/milestones/M20.md)、[M21](docs/ai/milestones/M21.md)。详细资料：
 
 - [设计与调研依据](docs/superpowers/specs/2026-09-11-workspace-config-management.md)：多工程匹配、分来源变量、路径表达式、来源优先级、发布协议、管理 UI 和迁移合同。
 - [分阶段执行计划](docs/superpowers/plans/2026-09-11-workspace-config-implementation.md)：P0–P8 的依赖、文件范围、交付物和退出条件。
@@ -48,7 +50,7 @@ P4/P5 审查结果见 [M19](docs/ai/milestones/M19.md)。详细资料：
 
 | 执行顺序 | 尚待实施的交付 | 完成条件 |
 | --- | --- | --- |
-| P7 | 完整流程与故障注入（基于完成的 P4/P5，多副本矩阵） | E01–E10 通过；各后端/平台清晰记录实测、模拟或未运行 |
+| P7 | 组合验收缺口 | 三配置后端旧数据升级后实际消费新事件；独立进程发布/崩溃恢复；UI 修改 route/agent 后旧 run 与新 run 完整隔离；同规则多 Git 工程验证最终模型和输出归属。现有分层测试不能替代这些组合证据 |
 | P8 | 双语文档、示例、AI 资产与最终门禁 | 文档匹配实现；适用门禁全部通过；证据归档后移除完成项 |
 
 当前设计采用文件显式配置优先并锁定、数据库补充的合并策略；原文件不自动导入或重写。
@@ -56,7 +58,7 @@ P4/P5 审查结果见 [M19](docs/ai/milestones/M19.md)。详细资料：
 PostgreSQL 业务 store 与配置 store 均已接入并验收(M17);Redis 覆盖独立配置源,memory 只作临时/测试后端。
 运行时版本固定与管理员 API 见 M19：`config_sources.database.enabled` 开启后
 adoption/admission/钉扎生效,`/api/admin/config` 可发布 revision;关闭时保持仅文件行为。
-管理表单（P6）及其审查修复见 M20；后续交付为完整故障矩阵（P7）和整体验收（P8）。
+管理表单（P6）见 M20，P7 已执行的范围和缺口见 M21；P7 通过退出条件后进入 P8。
 
 ## 3. 依赖外部环境的验收
 

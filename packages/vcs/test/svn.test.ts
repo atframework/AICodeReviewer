@@ -24,13 +24,15 @@ function makeEvent(overrides: Partial<ReviewEvent> = {}): ReviewEvent {
 
 const repositoryUrl = "https://svn.example.com/repos/project/trunk";
 
-const gitDiffOutput = `diff --git a/src/app.ts b/src/app.ts
---- a/src/app.ts
-+++ b/src/app.ts
+const gitDiffOutput = `diff --git a/project/trunk/src/app.ts b/project/trunk/src/app.ts
+--- a/project/trunk/src/app.ts\t(revision 10)
++++ b/project/trunk/src/app.ts\t(revision 12)
 @@ -1,1 +1,1 @@
 -old
 +new
 `;
+
+const sourceInfo = `<info><entry><url>${repositoryUrl}</url><repository><root>https://svn.example.com/repos</root></repository></entry></info>`;
 
 describe("SvnVcsAdapter", () => {
   it("lists changed files from svn diff --summarize and applies filters", async () => {
@@ -190,7 +192,7 @@ describe("SvnVcsAdapter", () => {
       repositoryUrl,
       svn: async (args) => {
         calls.push([...args]);
-        return { stdout: gitDiffOutput, stderr: "" };
+        return { stdout: args.includes("info") ? sourceInfo : gitDiffOutput, stderr: "" };
       },
     });
 
@@ -198,8 +200,60 @@ describe("SvnVcsAdapter", () => {
 
     expect(result.files).toHaveLength(1);
     expect(result.files[0]?.newPath).toBe("src/app.ts");
+    expect(result.files[0]?.oldPath).toBe("src/app.ts");
+    expect(result.files[0]?.status).toBe("modified");
     expect(result.files[0]?.hunks[0]?.lines.map((line) => line.kind)).toEqual(["delete", "add"]);
-    expect(calls[0]).toEqual(["--non-interactive", "diff", "--git", "-r", "10:12", `${repositoryUrl}/src/app.ts`]);
+    expect(calls[0]).toEqual(["--non-interactive", "diff", "--git", `--old=${repositoryUrl}@10`, `--new=${repositoryUrl}@12`, "--", "src/app.ts"]);
+    expect(calls[1]).toEqual(["--non-interactive", "info", "--xml", "-r", "12", `${repositoryUrl}@12`]);
+  });
+
+  it.each([{ files: [] }, { files: ["docs/ignored.md"] }])("does not widen an empty filtered range to the whole repository ($files)", async ({ files }) => {
+    const adapter = createSvnVcsAdapter({ repositoryDir: "C:/repo", repositoryUrl, watchPath: ["src/"],
+      svn: async () => { throw new Error("empty range must not contact SVN"); } });
+    await expect(adapter.diff({ headRevision: "12", files })).resolves.toEqual({ files: [] });
+  });
+
+  it.each([
+    { status: "added", oldLabel: "nonexistent", newLabel: "revision 12", oldPath: undefined, newPath: "src/app.ts" },
+    { status: "deleted", oldLabel: "revision 10", newLabel: "nonexistent", oldPath: "src/app.ts", newPath: undefined },
+  ])("normalizes SVN $status paths and the nonexistent side", async ({ status, oldLabel, newLabel, oldPath, newPath }) => {
+    const patch = gitDiffOutput.replace("(revision 10)", `(${oldLabel})`).replace("(revision 12)", `(${newLabel})`);
+    const adapter = createSvnVcsAdapter({ repositoryDir: "C:/repo", repositoryUrl,
+      svn: async args => ({ stdout: args.includes("info") ? sourceInfo : patch, stderr: "" }) });
+    const { files } = await adapter.diff({ baseRevision: "10", headRevision: "12", files: ["src/app.ts"] });
+    expect(files[0]?.status).toBe(status);
+    expect(files[0]?.oldPath).toBe(oldPath);
+    expect(files[0]?.newPath).toBe(newPath);
+  });
+
+  it("rejects a different project's same-name file instead of guessing a suffix", async () => {
+    const adapter = createSvnVcsAdapter({ repositoryDir: "C:/repo", repositoryUrl,
+      svn: async args => ({ stdout: args.includes("info") ? sourceInfo : gitDiffOutput.replaceAll("project/trunk/", "other/trunk/"), stderr: "" }) });
+    await expect(adapter.diff({ headRevision: "12", files: ["src/app.ts"] })).rejects.toThrow(/scope/iu);
+  });
+
+  it("deduplicates directory targets and compares the preceding revision for a single commit", async () => {
+    const calls: string[][] = [];
+    const adapter = createSvnVcsAdapter({ repositoryDir: "C:/repo", repositoryUrl,
+      svn: async args => { calls.push([...args]); return { stdout: "", stderr: "" }; } });
+    await adapter.diff({ headRevision: "12", files: ["src/app.ts", "src", "src/app.ts"] });
+    expect(calls).toEqual([["--non-interactive", "diff", "--git", `--old=${repositoryUrl}@11`, `--new=${repositoryUrl}@12`, "--", "src/app.ts"]]);
+  });
+
+  it("rebases URL-encoded scope metadata without changing hunk text that resembles a header", async () => {
+    const url = "https://svn.example.com/repos/project%20one/trunk";
+    const patch = gitDiffOutput.replaceAll("project/trunk/", "project one/trunk/") + "--- literal\t(revision 10)\n+++ literal\t(revision 12)\n";
+    const adapter = createSvnVcsAdapter({ repositoryDir: "C:/repo", repositoryUrl: url,
+      svn: async args => ({ stdout: args.includes("info") ? sourceInfo.replace(repositoryUrl, url) : patch, stderr: "" }) });
+    const { files } = await adapter.diff({ headRevision: "12", files: ["src/app.ts"] });
+    expect(files[0]).toMatchObject({ oldPath: "src/app.ts", newPath: "src/app.ts", status: "modified" });
+    expect(files[0]?.hunks[0]?.lines.slice(-2).map(line => line.content)).toEqual(["-- literal\t(revision 10)", "++ literal\t(revision 12)"]);
+  });
+
+  it.each(["<info/>", sourceInfo.replace(repositoryUrl, "https://svn.example.com/repos/other/trunk")])("fails closed on incomplete or conflicting source metadata", async info => {
+    const adapter = createSvnVcsAdapter({ repositoryDir: "C:/repo", repositoryUrl,
+      svn: async args => ({ stdout: args.includes("info") ? info : gitDiffOutput, stderr: "" }) });
+    await expect(adapter.diff({ headRevision: "12", files: ["src/app.ts"] })).rejects.toThrow();
   });
 
   it("redacts configured password from command errors", async () => {

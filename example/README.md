@@ -1275,7 +1275,9 @@ The adapter keeps the fetch narrow:
 - `svn diff --summarize` lists changed paths.
 - `svn cat -r <revision>` materializes only changed files and later
   `aicr.fetch_more_context` related files.
-- `svn diff --git` feeds the normal diff parser.
+- `svn diff --git` compares explicit base/head trees. The adapter removes SVN
+  revision labels and normalizes paths against `svn info` so diff, fetched
+  files, and findings share one scope-relative path; copies use their destination.
 - `watch_path`, `include_cr_file`, and `exclude_cr_file` use the same filtering
   semantics as P4.
 

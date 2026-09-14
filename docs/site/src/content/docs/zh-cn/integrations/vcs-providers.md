@@ -262,6 +262,10 @@ triggers:
 AICR 用服务端配置的 `repository_url` 加自己的 SVN 凭据拉取 diff。payload 中的仓库 URL 字段
 会被忽略，入站 hook 无法切换被评审的仓库。
 
+diff 和问题路径相对于选定的仓库范围。例如范围为 `/project/trunk` 时，
+`src/app.ts` 在下载文件和审查输出中仍为 `src/app.ts`。AICR 去除 SVN revision
+标记，将复制文件归属到目标路径，并在调用模型前拒绝冲突的范围元数据。
+
 在 SVN 仓库 `hooks/` 目录安装 `post-commit`：
 
 ```bash

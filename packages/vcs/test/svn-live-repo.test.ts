@@ -4,6 +4,7 @@ import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { describe, expect, it } from "vitest";
+import { createReviewEvent } from "@aicr/core";
 
 import { SvnVcsAdapter } from "../src/svn.js";
 
@@ -81,19 +82,31 @@ describe.skipIf(!svn)("SVN local repository metadata and batch diff", () => {
     expect(first.status).toBe("partial");
     expect(first.records.map((r) => r.revision)).toEqual(["1", "2"]);
     const second = await adapter.listCommitMetadataPage({
-      scopeRef: `${repoUrl}/trunk`, headRevision: "5", cursor: first.nextCursor, maxRecords: 2, maxBytes: 1_048_576,
+      scopeRef: `${repoUrl}/trunk`, headRevision: "5", cursor: first.nextCursor!, maxRecords: 2, maxBytes: 1_048_576,
     });
     expect(second.records.map((r) => r.revision)).toEqual(["3", "4"]);
     const tail = await adapter.listCommitMetadataPage({
-      scopeRef: `${repoUrl}/trunk`, headRevision: "5", cursor: second.nextCursor, maxRecords: 2, maxBytes: 1_048_576,
+      scopeRef: `${repoUrl}/trunk`, headRevision: "5", cursor: second.nextCursor!, maxRecords: 2, maxBytes: 1_048_576,
     });
     expect(tail.records.map((r) => r.revision)).toEqual(["5"]);
     expect(tail.status).toBe("complete");
 
     // Batch diff r1..r4 (net: a.txt edited, copy destination, b.txt deleted).
-    const batch = await adapter.diff({ baseRevision: "1", headRevision: "4", files: [] });
-    expect(batch.files.length).toBeGreaterThan(0);
-    const paths = batch.files.map((f) => f.newPath ?? f.oldPath);
-    expect(paths.some((p) => p.includes("a.txt"))).toBe(true);
+    const scoped = new SvnVcsAdapter({ repositoryDir: wc("trunk"), repositoryUrl: `${repoUrl}/trunk` });
+    const range = await scoped.listChanges(createReviewEvent({ triggerName: "svn", provider: "svn", workspaceId: "ws",
+      targetKind: "commit", repoRef: `${repoUrl}/trunk`, baseSha: "1", headSha: "4", author: { username: "alice" }, reason: "test" }));
+    const batch = await scoped.diff(range);
+    expect(batch.files.map(({ oldPath, newPath, status }) => ({ oldPath, newPath, status })))
+      .toEqual(expect.arrayContaining([
+        { oldPath: "src/a.txt", newPath: "src/a.txt", status: "modified" },
+        { oldPath: "src/b.txt", newPath: undefined, status: "deleted" },
+        { oldPath: undefined, newPath: "src/renamed/a.txt", status: "added" },
+      ]));
+    expect(batch.files).toHaveLength(3);
+    // The scope itself did not exist before its first commit (r0).
+    const initial = await scoped.diff({ headRevision: "1", files: ["src/a.txt", "src/b.txt"] });
+    expect(initial.files.map(file => [file.newPath, file.status])).toEqual([
+      ["src/a.txt", "added"], ["src/b.txt", "added"],
+    ]);
   }, 60_000);
 });
