@@ -1,5 +1,5 @@
 /**
- * Config admin API (spec §8.4, P5). Mounted at `/api/admin/config`, guarded
+ * Config admin API (architecture §3.16, P5). Mounted at `/api/admin/config`, guarded
  * by the admin Bearer session surface, and fully decoupled from the stats
  * store: admin auth plus a config store backend are the only prerequisites.
  *
@@ -418,7 +418,7 @@ function entityIdsAtPath(overlay: unknown, path: readonly string[], idField: str
 }
 
 // ---------------------------------------------------------------------------
-// Options sources (GET /options/:source, spec §8.3)
+// Options sources (GET /options/:source, architecture §3.16)
 // ---------------------------------------------------------------------------
 
 /** Lazily built UI spec: derived from the inventory, never per-request. */

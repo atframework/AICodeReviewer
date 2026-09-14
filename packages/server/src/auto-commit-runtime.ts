@@ -51,7 +51,7 @@ export interface AutoCommitAcceptInput {
 
 /**
  * Routing-stage intake for sources whose workspace binding needs metadata
- * unavailable at receive time (spec §5.2). Persisted before the 202; the
+ * unavailable at receive time (architecture §3.10). Persisted before the 202; the
  * background resolver converts it into formal receipts.
  */
 export interface AutoCommitRoutingInput {

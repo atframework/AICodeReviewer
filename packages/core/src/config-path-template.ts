@@ -1,5 +1,5 @@
 /**
- * Workspace work_path templates (spec §5.3/§5.4, P1).
+ * Workspace work_path templates (architecture §3.10/§5.4, P1).
  *
  * An isolated `Handlebars.create()` instance compiles path templates with an
  * AST whitelist: plain variables, the four whitelisted helpers
@@ -24,7 +24,7 @@ import {
   type ConfigPath,
 } from "./config-format.js";
 
-/** Variables allowed as direct (unwrapped) template output (spec §5.4). */
+/** Variables allowed as direct (unwrapped) template output (architecture §3.10). */
 export const PATH_TEMPLATE_SAFE_VARIABLES = ["workspace.id", "workspace.instance_id"] as const;
 
 // ---------------------------------------------------------------------------
@@ -80,7 +80,7 @@ function templateError(message: string, path?: ConfigPath): ConfigError {
 }
 
 // ---------------------------------------------------------------------------
-// Helpers (spec §5.4 contracts)
+// Helpers (architecture §3.10 contracts)
 // ---------------------------------------------------------------------------
 
 const WINDOWS_DEVICE_NAME = /^(?:con|prn|aux|nul|com[0-9¹²³]|lpt[0-9¹²³])(?:\.|$)/iu;
@@ -339,7 +339,7 @@ export function compileWorkspacePathTemplate(source: string, path?: ConfigPath):
   };
 }
 
-/** Output-side portable relative path validation (spec §5.4). */
+/** Output-side portable relative path validation (architecture §3.10). */
 export function assertSafeWorkPathOutput(rendered: string, path?: ConfigPath): string {
   if (Buffer.byteLength(rendered, "utf8") > PATH_TEMPLATE_LIMITS.maxOutputBytes) {
     throw templateError("Work path exceeds the output byte budget.", path);
@@ -377,7 +377,7 @@ export function assertSafeWorkPathOutput(rendered: string, path?: ConfigPath): s
 }
 
 // ---------------------------------------------------------------------------
-// work_path variable registry (spec §5.3)
+// work_path variable registry (architecture §3.10)
 // ---------------------------------------------------------------------------
 
 export type WorkPathVariableAvailability = "extracted" | "unavailable" | "forbidden";
@@ -598,7 +598,7 @@ export function collectPathTemplateVariables(source: string): readonly string[] 
 
 /**
  * Validates that every variable a work_path template references is in the
- * extracted registry (spec §5.3). Unknown paths, registered-but-unextracted
+ * extracted registry (architecture §3.10). Unknown paths, registered-but-unextracted
  * fields, and event.* all fail with template_invalid at publish time.
  */
 export function validateWorkPathTemplateVariables(source: string, path?: ConfigPath, triggerKinds?: readonly string[]): void {
@@ -619,7 +619,7 @@ export function validateWorkPathTemplateVariables(source: string, path?: ConfigP
     }
     if (descriptor.availability === "unavailable") {
       throw templateError(
-        `work_path variable "${variable}" is registered but not yet extracted by the runtime (spec §5.3).`,
+        `work_path variable "${variable}" is registered but not yet extracted by the runtime (architecture §3.10).`,
         path,
       );
     }

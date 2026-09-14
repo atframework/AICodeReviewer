@@ -102,9 +102,13 @@ llm:
 `triage`），不会改写原文件；与显式命名分组冲突的旧键会被拒绝。旧值形状非法时，
 即使其他键可转换也仍然报错。新配置请使用上面的命名分组形式。
 
-模型链条目的 `overrides` 当前只有 schema 校验，运行时尚不应用。它只接受请求参数，
-不能包含 provider 身份、endpoint 或凭据字段。在条目级运行时支持完成前，请在
-provider 上配置需要生效的请求参数。
+模型链条目接受 `overrides` 请求参数块，运行时会把它合并进解析后的模型规格：
+映射类（`extra_params`、`extra_body`、`extra_headers`）按键合并到 provider 字段之上，
+标量和数组整体替换；禁用某个参数走 `drop_params`——JSON null 绝不表示删除。
+键仅限于请求参数（`reasoning_effort`、`thinking_level`、`thinking_budget_tokens`、
+`thinking`、`response_format`、`tool_choice`、`parallel_tool_calls`、`seed`、
+`logit_bias`、`drop_params`、`allowed_openai_params` 及上述三个映射），不能包含
+provider 身份、endpoint 或凭据字段。
 
 | 字段 | 类型 | 必填 | 说明 |
 | --- | --- | :---: | --- |
@@ -146,7 +150,8 @@ workspaces:
       triage_model_chain: fast
 ```
 
-主链选择优先级为 `workspaces.instances.<id>.model_chain` →
+主链选择优先级为 命中路由的 `analysis.model_chain` →
+`workspaces.instances.<id>.model_chain` →
 `workspaces.defaults.model_chain` → `llm.default_model_chain`。
 自动生成、未显式列出的 workspace 同样继承 workspace defaults。
 分层合并配置时，同名组的模型列表整体替换，其他组保留。
@@ -154,7 +159,8 @@ workspaces:
 ## `llm.triage_model_chain` —— 生命周期分析分组
 
 `triage_model_chain` 填分组名，引用同一份 `llm.model_chain` 定义。
-选择优先级为 `workspaces.instances.<id>.triage_model_chain` →
+选择优先级为 命中路由的 `analysis.triage_model_chain` →
+`workspaces.instances.<id>.triage_model_chain` →
 `workspaces.defaults.triage_model_chain` → `llm.triage_model_chain` →
 当前 workspace 的主链。所有层都未配置时，直接复用主链的模型和 client。
 要覆盖全局 triage 选择并共用某 workspace 的主链，请显式填相同分组名。

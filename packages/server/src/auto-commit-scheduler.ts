@@ -76,7 +76,7 @@ export interface AutoCommitSchedulerOptions {
   /** Workspace/stream heads scanned per tick (bounded, never full scans). */
   readonly streamScanLimit?: number;
   /**
-   * Routing-stage resolver (spec §5.2 stage C): converts pending p4/svn
+   * Routing-stage resolver (architecture §3.10 stage C): converts pending p4/svn
    * routing receipts into formal receipts before expansion runs. Returns
    * the earliest pending retryAt for precise re-arming.
    */

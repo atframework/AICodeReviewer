@@ -11,7 +11,7 @@ import {
 } from "../src/index.js";
 
 /**
- * U24 consistency gate (spec §8.2): the permanent field inventory must cover
+ * U24 consistency gate (architecture §3.16): the permanent field inventory must cover
  * exactly the schema-accepted leaves, with matching value kinds and defaults.
  * A schema change without an inventory update fails here, and so does an
  * inventory row pointing at a field the schema no longer accepts.

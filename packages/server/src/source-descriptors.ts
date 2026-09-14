@@ -1,5 +1,5 @@
 /**
- * Authenticated webhook source descriptors (spec §5.2, P1b).
+ * Authenticated webhook source descriptors (architecture §3.10, P1b).
  *
  * Extraction runs AFTER signature/credential verification and reads only the
  * verified payload plus the configured trigger profile. Fields a provider
@@ -152,7 +152,7 @@ function describeGitlab(payload: PayloadRecord): WebhookSourceDescriptor | undef
  * Returns undefined when the payload carries no repository context (e.g.
  * GitHub installation events) — callers keep their legacy handling for
  * those. P4/SVN stay undefined in this slice: their descriptors require
- * command-verified metadata (spec §5.2 background resolution).
+ * command-verified metadata (architecture §3.10 background resolution).
  */
 export function describeWebhookSource(
   provider: string,

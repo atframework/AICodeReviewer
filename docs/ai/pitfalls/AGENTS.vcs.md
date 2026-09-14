@@ -58,6 +58,13 @@ Read for Git/SVN/P4 context, attribution, or diff changes. Sources and tests:
   default instead of failing fast. Use a loopback discard port
   (`127.0.0.1:1`) — instant ECONNREFUSED with the binary present, ENOENT
   without it. See `auto-commit-webhook.test.ts` P4 cases.
+- p4d versions differ on unauthenticated writes: 2025.1 accepts passwordless
+  `client -i`/`admin stop` on a fresh server, 2026.2 demands auth (reads like
+  `p4 info` still pass, so probes mislead). Live tests assume the 2025.1
+  behavior; pin the binary with `AICR_P4D_TEST_EXECUTABLE` to the 25.1 build
+  (`ftp.perforce.com/perforce/r25.1/bin.ntx64/p4d.exe`, 3042095 — same build
+  the reviewer used) under `build/tmp/`, and record the version in gate
+  evidence instead of claiming "p4d works".
 
 ## P4 batch endpoints
 

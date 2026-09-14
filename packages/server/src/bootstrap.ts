@@ -268,7 +268,7 @@ function resolveModelSpecFromChain(
     ...resolveModelProviderFields(provider),
   };
 
-  // Entry-level request overrides (spec §4.2, wired in P4): maps merge by
+  // Entry-level request overrides (architecture §3.15, wired in P4): maps merge by
   // key over provider fields, arrays and scalars replace. Disabling a
   // parameter goes through drop_params — JSON null is never a deletion.
   const overrides = fallbackEntry?.overrides;
@@ -1527,10 +1527,18 @@ export function createOutputPublisherFromConfig(
         ? ["gitlab"]
         : [];
 
+  // Outbound attribution (E04): a channel without an explicit `trigger` pins
+  // publishes through the trigger that accepted this event, so each run posts
+  // to its owning host with that trigger's base_url/token_env. An explicit
+  // channel trigger stays pinned; without any event the first supported
+  // trigger remains the fallback.
+  const eventTrigger = triggerName === undefined && reviewEvent?.triggerName !== undefined
+    ? config.triggers.find((t) => t.name === reviewEvent.triggerName && supportedTriggerKinds.includes(t.kind))
+    : undefined;
   const trigger = isPrReview || supportedTriggerKinds.length > 0
     ? (triggerName
         ? config.triggers.find((t) => t.name === triggerName && supportedTriggerKinds.includes(t.kind))
-        : config.triggers.find((t) => supportedTriggerKinds.includes(t.kind)))
+        : (eventTrigger ?? config.triggers.find((t) => supportedTriggerKinds.includes(t.kind))))
     : undefined;
   const triggerConfig = (trigger ?? {}) as Record<string, unknown>;
   const baseUrl = (channelConfig.base_url as string | undefined) ??
@@ -1575,7 +1583,10 @@ export function createOutputPublisherFromConfig(
   const workspaceRepoRef = trigger
     ? resolveWorkspaceRepoRef(config, trigger.name, workspaceId)
     : undefined;
-  const parsedRepo = parseRepoRef(explicitOwner && explicitRepo ? undefined : explicitRepo ?? workspaceRepoRef);
+  // Match-rule workspaces carry no source_repo, so the accepted event's
+  // repoRef is the only repository identity (E04); legacy bindings keep
+  // their workspace-pinned repo untouched.
+  const parsedRepo = parseRepoRef(explicitOwner && explicitRepo ? undefined : explicitRepo ?? workspaceRepoRef ?? reviewEvent?.repoRef);
   const owner = explicitOwner ?? parsedRepo?.owner;
   const repo = explicitOwner ? explicitRepo : parsedRepo?.repo;
   const repoRef = owner && repo ? `${owner}/${repo}` : workspaceRepoRef;
@@ -3634,7 +3645,7 @@ async function createAutoCommitPipeline(deps: {
       : undefined;
   };
 
-  // Stage C resolver (spec §5.2): converts durable p4/svn routing receipts
+  // Stage C resolver (architecture §3.10): converts durable p4/svn routing receipts
   // into formal receipts during the scheduler tick. Adapter lookups are
   // cached per trigger — the p4/svn metadata queries hit the server
   // directly, no per-scope adapter instances needed.

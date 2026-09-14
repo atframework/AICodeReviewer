@@ -116,7 +116,7 @@ provider 专属字段（`webhook_secret_env`、`token_env`、`port`、`user_env`
 | `workspaces.defaults.review` | object | — | 默认 review 配置（见 `review`） |
 | `workspaces.defaults.model_chain` | string | 继承 | 覆盖主链组名，引用 `llm.model_chain` |
 | `workspaces.defaults.triage_model_chain` | string | 继承 | 覆盖生命周期分析组名；各层均未配置时使用该 workspace 主链 |
-| `workspaces.defaults.agent.default` | enum | — | 这组 workspace 的默认 agent kind（当前版本运行时未生效，见下方说明） |
+| `workspaces.defaults.agent.default` | enum | — | 这组 workspace 的默认 agent kind；每次运行按 全局 → defaults → 实例 → 路由 analysis 解析（见下方说明） |
 | `workspaces.defaults.agent.timeout_seconds` | int > 0 | — | 单次 run 硬超时；超时时杀整棵进程树 |
 | `workspaces.defaults.agent.auto_approve` | boolean | — | 传给所选 adapter；CLI 支持时 false 取消自动批准 |
 | `workspaces.defaults.agent.context_compaction.auto` | boolean | — | 启用自动压缩 |
@@ -151,7 +151,7 @@ provider 专属字段（`webhook_secret_env`、`token_env`、`port`、`user_env`
 | `workspaces.instances` | map | `{}` | 按 workspace id 组织的 instance |
 | `workspaces.instances.<id>.source_repo.trigger` | string | — | trigger profile 名 |
 | `workspaces.instances.<id>.source_repo.repo` | string | — | 仓库引用 |
-| `workspaces.instances.<id>.match[]` | array | — | 多工程匹配规则(规则间 OR,规则内字段 AND),与 `source_repo` 互斥。git 系 webhook(GitHub/GitLab/Gitea/Forgejo)接受期匹配已生效;p4/svn/manual 变量随对应来源适配器落地(见下方说明) |
+| `workspaces.instances.<id>.match[]` | array | — | 多工程匹配规则(规则间 OR,规则内字段 AND),与 `source_repo` 互斥。git 系 webhook(GitHub/GitLab/Gitea/Forgejo)接受期匹配已生效;P4/SVN 使用后台路由回执(见下方说明) |
 | `workspaces.instances.<id>.match[].id` | string | — | 可选规则 id,同一 definition 内唯一 |
 | `workspaces.instances.<id>.match[].triggers` | string[] | — | trigger 名称,每个名称必须存在于 `triggers[]` |
 | `workspaces.instances.<id>.match[].source.<id>.exact` | string | — | 来源字段(`vcs`、`repo_ref`、`repository`、`namespace`、`project_key`、`branch`、`ref`)的大小写敏感精确匹配,`exact`/`glob`/`regex` 三选一 |
@@ -162,7 +162,7 @@ provider 专属字段（`webhook_secret_env`、`token_env`、`port`、`user_env`
 | `workspaces.instances.<id>.enabled` | boolean | — | 未设置时启用；`false` 停止新任务准入，保留已有快照 |
 | `workspaces.instances.<id>.model_chain` | string | 继承 | 覆盖主链组名，引用 `llm.model_chain` |
 | `workspaces.instances.<id>.triage_model_chain` | string | 继承 | 覆盖生命周期分析组名；各层均未配置时使用该 workspace 主链 |
-| `workspaces.instances.<id>.agent.default` | enum | — | agent kind 覆盖（当前版本运行时未生效，见下方说明） |
+| `workspaces.instances.<id>.agent.default` | enum | — | agent kind 覆盖；每次运行按合并后的 workspace 各层选择（见下方说明） |
 | `workspaces.instances.<id>.agent.timeout_seconds` | int > 0 | — | 单次 run 硬超时；超时时杀整棵进程树 |
 | `workspaces.instances.<id>.agent.auto_approve` | boolean | — | 传给所选 adapter；CLI 支持时 false 取消自动批准 |
 | `workspaces.instances.<id>.agent.context_compaction.auto` | boolean | — | 启用自动压缩 |
@@ -180,7 +180,7 @@ provider 专属字段（`webhook_secret_env`、`token_env`、`port`、`user_env`
 | `workspaces.instances.<id>.agent.web_search.searxng.safesearch` | int 0–2 | — | SearXNG 安全搜索级别 |
 | `workspaces.instances.<id>.review` | object | — | review 配置覆盖（见 `review`） |
 | `workspaces.instances.<id>.outputs` | object | — | outputs 覆盖 |
-| `workspaces.instances.<id>.sandbox` | object | — | sandbox 覆盖（当前版本运行时未生效，见下方说明） |
+| `workspaces.instances.<id>.sandbox` | object | — | sandbox 覆盖；每次运行在 全局 → defaults → 实例 之上按 section 深合并（见下方说明） |
 | `workspaces.instances.<id>.triage` | object | — | issue triage 覆盖（仅 Gitea/Forgejo） |
 | `workspaces.instances.<id>.prompt` | object | — | prompt 覆盖（形状同 `workspaces.defaults.prompt`） |
 | `workspaces.instances.<id>.context_repositories[].alias` | string | — | path-safe 别名（`^[A-Za-z0-9][A-Za-z0-9._-]*$`，同 workspace 内唯一）；挂载路径用其命名 |
@@ -230,11 +230,12 @@ fallback 必须是字面量，禁止 hash arguments。provider 变量必须适�
 路径中禁止使用 `event.*`。变量目录记录类型、事件范围、获取阶段、可空性和示例。
 :::
 
-:::note[workspace 层 `agent.default` / `sandbox` 当前不生效]
-schema 接受 `workspaces.defaults` 和实例上的 `agent.default` 与 `sandbox`，但当前版本
-按全局 `agent` 选择适配器并为每次审查创建独立沙箱。workspace 层这两项会被解析和校验，
-运行时不会使用。
-:::
+::::note[workspace 层 `agent.default` / `sandbox` 按运行解析]
+每次运行按 全局 → `workspaces.defaults` → 实例 → 命中路由的 `analysis` 合并结果
+选择适配器，并创建自己的独立沙箱。当 workspace 各层都未设置时，全局 `agent`
+是兜底（不经过 workspace 解析的调用方也使用全局值）；workspace 层的值按 section
+深合并，实例只需填写要改动的字段。
+::::
 
 ## `outputs`
 

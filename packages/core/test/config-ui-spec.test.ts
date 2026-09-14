@@ -1,6 +1,6 @@
 /**
  * U24 spec-completeness + derivation parity tests for config-ui-spec.ts
- * (spec §8.3, test plan §6 U24). The spec is derived, not duplicated: every
+ * (architecture §3.16, test plan §6 U24). The spec is derived, not duplicated: every
  * inventory row and every routing leaf must surface as exactly one spec
  * field, and every spec field must resolve back to its source row/leaf.
  */

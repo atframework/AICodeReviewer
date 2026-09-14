@@ -1,5 +1,5 @@
 /**
- * E01/E02/E04(c): publication → review execution end-to-end evidence (P7).
+ * E01/E02/E04: publication → review execution end-to-end evidence (P7).
  *
  * E01: one changeset publishes provider + model group + output channel +
  *   route; a real review run for a PR event then proves the integrated chain
@@ -7,7 +7,14 @@
  *   and by the run's pinned config version — never by "published" status.
  * E02: a changeset published mid-flight (LLM response blocked on a deferred
  *   gate) never leaks into the in-flight run: run 1 keeps every old
- *   endpoint/model/channel, run 2 uses the new head exclusively.
+ *   endpoint/model/channel/agent option, run 2 uses the new head
+ *   exclusively — including a route-body switch to a second channel and
+ *   republished agent globals (timeout/web_search/auto_approve), proven from
+ *   the per-run resolved options.
+ * E04: one match-rule workspace definition and one route serve two Git
+ *   projects on two gitea triggers; each run resolves the same route/model
+ *   but its own workspace instance, its owning trigger's output URL and that
+ *   trigger's outbound token — no cross-posts.
  * E04(c): route target_kinds attribute each event kind to its own channel —
  *   pull_request → gitea PR review channel, push → feishu bot webhook — with
  *   no cross-posts.
@@ -24,13 +31,13 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { createReviewEvent, parseConfigDocumentText, type ConfigChangesetOperation, type ConfigStore } from "@aicr/core";
+import { createReviewEvent, parseConfigDocumentText, type ConfigChangesetOperation, type ConfigStore, type ReviewEvent } from "@aicr/core";
 import { createSqliteConfigStore } from "@aicr/core";
 import type { AppConfig } from "@aicr/core";
 import { closeStoreDb } from "@aicr/store";
 import { parseUnifiedDiff, type ChangeRange } from "@aicr/vcs";
 import { bootstrapServerApp } from "../src/bootstrap.js";
-import { createServerApp, runTriggerProcessing, type ServerAppOptions } from "../src/index.js";
+import { createServerApp, runTriggerProcessing, type ServerAppOptions, type TriggerProcessingResult } from "../src/index.js";
 import type {
   DiffCapableVcsAdapter,
   ReviewOrchestrationContext,
@@ -62,7 +69,7 @@ function makeConfig(overrides: Partial<AppConfig> = {}): AppConfig {
       },
     },
     triggers: [
-      { name: "gitea-internal", kind: "gitea", base_url: "https://gitea.example.com", token_env: "GITEA_TOKEN", webhook_secret_env: "GITEA_SECRET" },
+      { name: "gitea-main", kind: "gitea", base_url: "http://127.0.0.1:9401", token_env: "GITEA_TOKEN", webhook_secret_env: "GITEA_SECRET" },
     ],
     outputs: { template_engine: "handlebars", channels: [] },
     review: {},
@@ -101,19 +108,31 @@ const FILE_DOCUMENT = {
     // Authorizes the published feishu_bot channel's webhook env reference
     // (exact destination signature required by the publish secret policy).
     { env: "FEISHU_E2E_WEBHOOK_URL", target: ["outputs", "channels", "c-push", "webhook_url_env"], destinations: { kind: "feishu_bot", webhook_url_env: "FEISHU_E2E_WEBHOOK_URL" } },
+    // Published gitea_pr_review channels carry no token of their own: they
+    // inherit the file trigger's outbound token, and each inheritance needs
+    // its exact destination signature authorized (publish secret policy).
+    { env: "GITEA_TOKEN", target: ["outputs", "channels", "c-e01", "token_env"], destinations: { kind: "gitea_pr_review", trigger: "gitea-main", base_url: "http://127.0.0.1:9021", trigger_destination: { kind: "gitea", base_url: "http://127.0.0.1:9401" } } },
+    { env: "GITEA_TOKEN", target: ["outputs", "channels", "c-e02", "token_env"], destinations: { kind: "gitea_pr_review", trigger: "gitea-main", base_url: "http://127.0.0.1:9201", trigger_destination: { kind: "gitea", base_url: "http://127.0.0.1:9401" } } },
+    { env: "GITEA_TOKEN", target: ["outputs", "channels", "c-e02-b", "token_env"], destinations: { kind: "gitea_pr_review", trigger: "gitea-main", base_url: "http://127.0.0.1:9202", trigger_destination: { kind: "gitea", base_url: "http://127.0.0.1:9401" } } },
+    { env: "GITEA_TOKEN", target: ["outputs", "channels", "c-pr", "token_env"], destinations: { kind: "gitea_pr_review", trigger: "gitea-main", base_url: "http://127.0.0.1:9301", trigger_destination: { kind: "gitea", base_url: "http://127.0.0.1:9401" } } },
+    { env: "GITEA_TOKEN", target: ["outputs", "channels", "c-e04w", "token_env"], destinations: { kind: "gitea_pr_review", trigger: "gitea-main", trigger_destination: { kind: "gitea", base_url: "http://127.0.0.1:9401" } } },
   ] },
   llm: {
     providers: [{ id: "openai-prod", kind: "openai_compatible", base_url: "https://api.openai.com/v1", api_key_env: "OPENAI_API_KEY" }],
     model_chain: { default: [{ provider: "openai-prod", model: "gpt-4o", role: "heavy" }] },
   },
-  triggers: [{ name: "gitea-internal", kind: "gitea", base_url: "https://gitea.example.com", webhook_secret_env: "GITEA_SECRET" }],
+  triggers: [
+    { name: "gitea-main", kind: "gitea", base_url: "http://127.0.0.1:9401", token_env: "GITEA_TOKEN", webhook_secret_env: "GITEA_SECRET" },
+    // Second host profile (E04): own base_url, token and webhook secret.
+    { name: "gitea-alt", kind: "gitea", base_url: "http://127.0.0.1:9402", token_env: "GITEA_TOKEN_ALT", webhook_secret_env: "GITEA_SECRET_ALT" },
+  ],
 };
 
 let dir: string;
 let store: ConfigStore;
 let bootstrapped: ServerAppOptions | undefined;
 const originalEnv: Record<string, string | undefined> = {};
-const MANAGED_ENV = ["OPENAI_API_KEY", "GITEA_TOKEN", "GITEA_SECRET", "AICR_ADMIN_USERNAME", "AICR_ADMIN_PASSWORD", FEISHU_WEBHOOK_ENV];
+const MANAGED_ENV = ["OPENAI_API_KEY", "GITEA_TOKEN", "GITEA_TOKEN_ALT", "GITEA_SECRET", "GITEA_SECRET_ALT", "AICR_ADMIN_USERNAME", "AICR_ADMIN_PASSWORD", FEISHU_WEBHOOK_ENV];
 
 beforeEach(async () => {
   mkdirSync("build/tmp", { recursive: true });
@@ -122,8 +141,10 @@ beforeEach(async () => {
     originalEnv[name] = process.env[name];
   }
   process.env.OPENAI_API_KEY = "test-key";
-  process.env.GITEA_TOKEN = "test-token";
+  process.env.GITEA_TOKEN = "token-one";
+  process.env.GITEA_TOKEN_ALT = "token-two";
   process.env.GITEA_SECRET = "test-secret";
+  process.env.GITEA_SECRET_ALT = "test-secret-alt";
   process.env.AICR_ADMIN_USERNAME = "admin";
   process.env.AICR_ADMIN_PASSWORD = "admin-password";
   process.env[FEISHU_WEBHOOK_ENV] = FEISHU_WEBHOOK_URL;
@@ -196,15 +217,32 @@ async function publishOperations(operations: readonly ConfigChangesetOperation[]
   expect(response.status).toBe(200);
 }
 
-async function postPullRequest(options: ServerAppOptions, vcs: DiffCapableVcsAdapter) {
-  const app = createServerApp({ ...options, asyncTriggers: false, reviewOrchestration: reviewOptions(options, vcs) });
-  const body = JSON.stringify({ action: "opened", repository: { full_name: "acme/repo" },
-    pull_request: { number: 7, base: { sha: "base", ref: "main" }, head: { sha: "head", ref: "feature" }, user: { login: "owent" } } });
+interface PullRequestTarget {
+  readonly repo?: string;
+  readonly prNumber?: number;
+  /** Webhook secret of the owning trigger (E04); defaults to gitea-main's. */
+  readonly secret?: string;
+}
+
+/** The synchronous webhook response: run summary plus the translated event. */
+type PullRequestRunResult = TriggerProcessingResult & {
+  readonly reviewEvent?: ReviewEvent;
+};
+
+async function postPullRequest(
+  options: ServerAppOptions,
+  vcs: DiffCapableVcsAdapter,
+  target: PullRequestTarget = {},
+  onResolved?: (snapshot: ResolvedRunSnapshot) => void,
+): Promise<PullRequestRunResult> {
+  const app = createServerApp({ ...options, asyncTriggers: false, reviewOrchestration: reviewOptions(options, vcs, onResolved) });
+  const body = JSON.stringify({ action: "opened", repository: { full_name: target.repo ?? "acme/repo" },
+    pull_request: { number: target.prNumber ?? 7, base: { sha: "base", ref: "main" }, head: { sha: "head", ref: "feature" }, user: { login: "owent" } } });
   const response = await app.request("/webhooks/gitea", { method: "POST", body, headers: {
     "content-type": "application/json", "x-gitea-event": "pull_request",
-    "x-gitea-signature": createHmac("sha256", "test-secret").update(body).digest("hex"),
+    "x-gitea-signature": createHmac("sha256", target.secret ?? "test-secret").update(body).digest("hex"),
   } });
-  const result = await response.json() as Awaited<ReturnType<typeof runTriggerProcessing>>;
+  const result = await response.json() as PullRequestRunResult;
   expect(response.status).toBe(202);
   return result;
 }
@@ -216,6 +254,8 @@ async function postPullRequest(options: ServerAppOptions, vcs: DiffCapableVcsAda
 interface CapturedRequest {
   readonly method: string;
   readonly url: string;
+  /** Request headers, lowercased (E04 outbound-credential attribution). */
+  readonly headers: Readonly<Record<string, string>>;
   readonly body?: unknown;
 }
 
@@ -236,7 +276,12 @@ function stubFetch(captured: CapturedRequest[], gate: FetchGate = {}): void {
     } catch {
       body = init?.body;
     }
-    captured.push({ method, url: target, ...(body !== undefined ? { body } : {}) });
+    const headers: Record<string, string> = {};
+    const rawHeaders = (init as { headers?: Record<string, string> } | undefined)?.headers;
+    if (rawHeaders) {
+      new Headers(rawHeaders).forEach((value, key) => { headers[key] = value; });
+    }
+    captured.push({ method, url: target, headers, ...(body !== undefined ? { body } : {}) });
     if (target.includes("/chat/completions")) {
       chatCalls += 1;
       if (chatCalls === 1 && gate.holdFirstChat) {
@@ -298,13 +343,30 @@ function createFakeVcs(): DiffCapableVcsAdapter {
 }
 
 /**
+ * Per-run resolved execution plan snapshot (E02): the agent fields the pinned
+ * generation actually resolved, captured as data before the test seam strips
+ * the agent CLI path. H03 proves these flow into real bundles; here they
+ * prove per-generation resolution across a mid-flight publish.
+ */
+interface ResolvedRunSnapshot {
+  readonly agentKind: string | undefined;
+  readonly agentTimeoutMs: number | undefined;
+  readonly agentAutoApprove: boolean | undefined;
+  readonly webSearchEnabled: boolean | undefined;
+}
+
+/**
  * Production orchestration options with two test-only substitutions applied
  * AFTER the production optionsResolver ran (so generation pinning, model
  * routing and output-publisher resolution are all production behavior):
  * the VCS adapter is faked and the agent CLI/sandbox path is disabled, which
  * selects the direct-LLM completion path whose HTTP call the spy captures.
  */
-function reviewOptions(options: ServerAppOptions, vcs: DiffCapableVcsAdapter): ServerReviewOrchestrationOptions {
+function reviewOptions(
+  options: ServerAppOptions,
+  vcs: DiffCapableVcsAdapter,
+  onResolved?: (snapshot: ResolvedRunSnapshot) => void,
+): ServerReviewOrchestrationOptions {
   const base = options.reviewOrchestration!;
   const resolve = base.optionsResolver!;
   // Strip the agent CLI path at BOTH layers: the bootstrap fallback carries
@@ -316,6 +378,12 @@ function reviewOptions(options: ServerAppOptions, vcs: DiffCapableVcsAdapter): S
     ...baseRest,
     optionsResolver: async (context: ReviewOrchestrationContext) => {
       const resolved = await resolve(context);
+      onResolved?.({
+        agentKind: resolved.agentAdapter?.kind,
+        agentTimeoutMs: resolved.agentTimeoutMs,
+        agentAutoApprove: resolved.agentAutoApprove,
+        webSearchEnabled: resolved.webSearch?.enabled,
+      });
       const { agentAdapter: _agent, sandboxFactory: _sandbox, ...rest } = resolved;
       return { ...rest, vcs, vcsFactory: () => vcs };
     },
@@ -324,7 +392,7 @@ function reviewOptions(options: ServerAppOptions, vcs: DiffCapableVcsAdapter): S
 
 function pullRequestEvent() {
   return createReviewEvent({
-    triggerName: "gitea-internal",
+    triggerName: "gitea-main",
     provider: "gitea",
     workspaceId: "ws",
     targetKind: "pull_request",
@@ -339,7 +407,7 @@ function pullRequestEvent() {
 
 function pushEvent() {
   return createReviewEvent({
-    triggerName: "gitea-internal",
+    triggerName: "gitea-main",
     provider: "gitea",
     workspaceId: "ws",
     targetKind: "push",
@@ -354,7 +422,7 @@ function pushEvent() {
 }
 
 function workspaceOperation() {
-  return { op: "create" as const, collection: "workspaces" as const, record: { id: "ws", name: "ws", enabled: true, value: { source_repo: { trigger: "gitea-internal", repo: "acme/repo" } } } };
+  return { op: "create" as const, collection: "workspaces" as const, record: { id: "ws", name: "ws", enabled: true, value: { source_repo: { trigger: "gitea-main", repo: "acme/repo" } } } };
 }
 
 function providerOperation(id: string, baseUrl: string) {
@@ -369,7 +437,7 @@ function modelGroupOperation(id: string, providerId: string, model: string) {
 }
 
 function giteaChannelOperation(id: string, baseUrl: string) {
-  return { op: "create" as const, collection: "channels" as const, record: { id, name: id, enabled: true, value: { name: id, kind: "gitea_pr_review", trigger: "gitea-internal", base_url: baseUrl, review_update_strategy: "always_new", no_problems: { action: "publish" } } } };
+  return { op: "create" as const, collection: "channels" as const, record: { id, name: id, enabled: true, value: { name: id, kind: "gitea_pr_review", trigger: "gitea-main", base_url: baseUrl, review_update_strategy: "always_new", no_problems: { action: "publish" } } } };
 }
 
 function routeOperation(id: string, priority: number, targetKinds: readonly string[], summaryChannels: readonly string[]) {
@@ -377,7 +445,7 @@ function routeOperation(id: string, priority: number, targetKinds: readonly stri
     op: "create" as const, collection: "routes" as const,
     record: {
       id, name: id, enabled: true,
-      value: { id, enabled: true, priority, workspace: "ws", match: { triggers: ["gitea-internal"], target_kinds: [...targetKinds] }, outputs: { line_comments: [], summary: [...summaryChannels] } },
+      value: { id, enabled: true, priority, workspace: "ws", match: { triggers: ["gitea-main"], target_kinds: [...targetKinds] }, outputs: { line_comments: [], summary: [...summaryChannels] } },
     },
   };
 }
@@ -445,19 +513,31 @@ describe("config publication → review execution e2e", () => {
       { op: "set", path: ["llm", "default_model_chain"], value: "g-e02" },
       giteaChannelOperation("c-e02", oldChannelBase),
       routeOperation("r-e02", 10, ["pull_request"], ["c-e02"]),
+      // Agent globals managed by the database (architecture §3.15): run 1 must pin
+      // these exact published values, not schema defaults.
+      { op: "set", path: ["agent", "timeout_seconds"], value: 1800 },
+      { op: "set", path: ["agent", "auto_approve"], value: true },
+      { op: "set", path: ["agent", "web_search", "enabled"], value: false },
     ]);
     const generationOld = await options.runtimeConfig!.admission();
     const headOld = await store.readHead(NAMESPACE);
 
-    const run1Promise = postPullRequest(options, createFakeVcs());
+    const resolvedRuns: ResolvedRunSnapshot[] = [];
+    const run1Promise = postPullRequest(options, createFakeVcs(), {}, (snapshot) => resolvedRuns.push(snapshot));
     try {
     // Run 1 is now blocked inside the LLM completion against the OLD provider.
     await firstChatArrived;
-    // Swap provider base_url + model + channel URL underneath the live run.
+    // Swap provider base_url + model, switch the route body to a SECOND
+    // gitea_pr_review channel with a different URL, and republish the agent
+    // globals — all underneath the live run.
     await publishOperations([
       { op: "update", collection: "providers", recordId: "p-e02", value: { id: "p-e02", kind: "openai_compatible", base_url: newProviderBase } },
       { op: "update", collection: "model_groups", recordId: "g-e02", value: [{ provider: "p-e02", model: "model-new", role: "heavy" }] },
-      { op: "update", collection: "channels", recordId: "c-e02", value: { name: "c-e02", kind: "gitea_pr_review", trigger: "gitea-internal", base_url: newChannelBase, review_update_strategy: "always_new", no_problems: { action: "publish" } } },
+      giteaChannelOperation("c-e02-b", newChannelBase),
+      { op: "update", collection: "routes", recordId: "r-e02", value: { id: "r-e02", enabled: true, priority: 10, workspace: "ws", match: { triggers: ["gitea-main"], target_kinds: ["pull_request"] }, outputs: { line_comments: [], summary: ["c-e02-b"] } } },
+      { op: "set", path: ["agent", "timeout_seconds"], value: 91 },
+      { op: "set", path: ["agent", "auto_approve"], value: false },
+      { op: "set", path: ["agent", "web_search", "enabled"], value: true },
     ]);
     const generationNew = await options.runtimeConfig!.admission();
     const headNew = await store.readHead(NAMESPACE);
@@ -467,12 +547,16 @@ describe("config publication → review execution e2e", () => {
     releaseFirstChat();
     const run1 = await run1Promise;
     const run1Requests = captured.splice(0, captured.length);
+    const run1Resolved = resolvedRuns.splice(0, resolvedRuns.length);
 
-    const run2 = await postPullRequest(options, createFakeVcs());
+    const run2 = await postPullRequest(options, createFakeVcs(), {}, (snapshot) => resolvedRuns.push(snapshot));
     const run2Requests = captured.splice(0, captured.length);
+    const run2Resolved = resolvedRuns.splice(0, resolvedRuns.length);
 
     // Run 1 stayed fully on the pre-publish generation: old provider URL,
-    // old model, old channel URL — the new values appear nowhere.
+    // old model, old channel URL, old agent options — the new values appear
+    // nowhere. The resolved execution plan is asserted as data: one resolver
+    // call per run, old channel c-e02 still bound to the route.
     expect(run1.reviewRun?.configVersion).toMatchObject({
       configSnapshotId: generationOld.snapshotId,
       databaseRevision: headOld?.activeRevision,
@@ -484,8 +568,13 @@ describe("config publication → review execution e2e", () => {
     expect(bodyField(run1Requests[0], "model")).toBe("model-old");
     expect(run1Requests.some(request => request.url.includes("9102") || request.url.includes("9202"))).toBe(false);
     expect(JSON.stringify(run1Requests)).not.toContain("model-new");
+    expect(run1Resolved).toEqual([
+      { agentKind: "kilo", agentTimeoutMs: 1_800_000, agentAutoApprove: true, webSearchEnabled: false },
+    ]);
 
-    // Run 2, admitted after the swap, uses the new head exclusively.
+    // Run 2, admitted after the swap, uses the new head exclusively: the
+    // route body now points at channel c-e02-b and the republished agent
+    // globals resolve into the run's execution plan.
     expect(run2.reviewRun?.configVersion).toMatchObject({
       configSnapshotId: generationNew.snapshotId,
       databaseRevision: headNew?.activeRevision,
@@ -497,6 +586,9 @@ describe("config publication → review execution e2e", () => {
     expect(bodyField(run2Requests[0], "model")).toBe("model-new");
     expect(run2Requests.some(request => request.url.includes("9101") || request.url.includes("9201"))).toBe(false);
     expect(JSON.stringify(run2Requests)).not.toContain("model-old");
+    expect(run2Resolved).toEqual([
+      { agentKind: "kilo", agentTimeoutMs: 91_000, agentAutoApprove: false, webSearchEnabled: true },
+    ]);
     } finally {
       releaseFirstChat();
       await run1Promise.catch(() => undefined);
@@ -563,6 +655,104 @@ describe("config publication → review execution e2e", () => {
     ]);
     expect(pushRequests.some(request => request.url.startsWith(prChannelBase))).toBe(false);
     expect(bodyField(pushRequests[1], "msg_type")).toBe("interactive");
+    await options.closeAutoCommit?.();
+  });
+
+  it("E04: one match-rule definition attributes model, output URL and outbound token per owning trigger", async () => {
+    const providerBase = "http://127.0.0.1:9411/v1";
+    const mainBase = "http://127.0.0.1:9401";
+    const altBase = "http://127.0.0.1:9402";
+    const captured: CapturedRequest[] = [];
+    stubFetch(captured);
+    const { options } = await bootstrap(makeConfig());
+    // ONE changeset: provider P, model group G assigned to the match-rule
+    // workspace definition, channel C and route R bound to that definition.
+    // The definition itself is published (file-owned entities are read-only,
+    // so a changeset could never bind G to a file-owned definition).
+    await publishOperations([
+      { op: "create", collection: "workspaces", record: { id: "services", name: "services", enabled: true, value: {
+        model_chain: "g-e04w",
+        match: [{ triggers: ["gitea-main", "gitea-alt"], source: { repo_ref: { glob: "acme/*" } } }],
+        work_path: "{{segment source.namespace}}/{{segment source.repository}}",
+      } } },
+      providerOperation("p-e04w", providerBase),
+      modelGroupOperation("g-e04w", "p-e04w", "model-e04w"),
+      // No trigger/base_url/owner/repo pins on the channel: the run's owning
+      // trigger supplies host and credential, the event supplies the repo.
+      { op: "create", collection: "channels", record: { id: "c-e04w", name: "c-e04w", enabled: true, value: { name: "c-e04w", kind: "gitea_pr_review", review_update_strategy: "always_new", no_problems: { action: "publish" } } } },
+      { op: "create", collection: "routes", record: { id: "r-e04w", name: "r-e04w", enabled: true, value: {
+        id: "r-e04w", enabled: true, priority: 10, workspace: "services",
+        match: { triggers: ["gitea-main", "gitea-alt"], target_kinds: ["pull_request"] },
+        outputs: { line_comments: [], summary: ["c-e04w"] },
+      } } },
+    ]);
+    const generation = await options.runtimeConfig!.admission();
+    const head = await store.readHead(NAMESPACE);
+
+    const runA = await postPullRequest(options, createFakeVcs(), { repo: "acme/service-a", prNumber: 7 });
+    const runARequests = captured.splice(0, captured.length);
+    const runB = await postPullRequest(options, createFakeVcs(), { repo: "acme/service-b", prNumber: 9, secret: "test-secret-alt" });
+    const runBRequests = captured.splice(0, captured.length);
+
+    const bindingOf = (run: PullRequestRunResult) => {
+      const resolution = run.reviewEvent?.resolution;
+      if (resolution?.kind !== "match") throw new Error("expected a match resolution on the run's review event");
+      return resolution.binding;
+    };
+
+    // Both runs reviewed and published through the SAME rule.
+    expect(runA.outcome).toBe("reviewed");
+    expect(runB.outcome).toBe("reviewed");
+    expect(runA.reviewRun?.status).toBe("published");
+    expect(runB.reviewRun?.status).toBe("published");
+
+    // (i) One definition, but a distinct workspace instance and work path
+    // per repository.
+    expect(runA.reviewEvent).toMatchObject({ triggerName: "gitea-main", workspaceId: "services", repoRef: "acme/service-a" });
+    expect(runB.reviewEvent).toMatchObject({ triggerName: "gitea-alt", workspaceId: "services", repoRef: "acme/service-b" });
+    const bindingA = bindingOf(runA);
+    const bindingB = bindingOf(runB);
+    expect(bindingA.definitionId).toBe("services");
+    expect(bindingB.definitionId).toBe("services");
+    expect(bindingA.instanceId).not.toBe(bindingB.instanceId);
+    expect(bindingA.workPath).toBe("acme/service-a");
+    expect(bindingB.workPath).toBe("acme/service-b");
+
+    // (iv) Same routeId and snapshot (one rule, one pinned generation);
+    // the repoRef differs per run.
+    expect(runA.reviewRun?.configVersion).toMatchObject({
+      configSnapshotId: generation.snapshotId,
+      databaseRevision: head?.activeRevision,
+      routeId: "r-e04w",
+    });
+    expect(runB.reviewRun?.configVersion).toMatchObject({
+      configSnapshotId: generation.snapshotId,
+      databaseRevision: head?.activeRevision,
+      routeId: "r-e04w",
+    });
+
+    // (ii) Both chat bodies carry G's model against P's endpoint…
+    expect(runARequests.map(({ method, url }) => ({ method, url }))).toEqual([
+      { method: "POST", url: `${providerBase}/chat/completions` },
+      { method: "POST", url: `${mainBase}/api/v1/repos/acme/service-a/pulls/7/reviews` },
+    ]);
+    expect(runBRequests.map(({ method, url }) => ({ method, url }))).toEqual([
+      { method: "POST", url: `${providerBase}/chat/completions` },
+      { method: "POST", url: `${altBase}/api/v1/repos/acme/service-b/pulls/9/reviews` },
+    ]);
+    expect(bodyField(runARequests[0], "model")).toBe("model-e04w");
+    expect(bodyField(runBRequests[0], "model")).toBe("model-e04w");
+
+    // (iii) …while each output POST lands on the OWNING trigger's host with
+    // THAT trigger's outbound token.
+    expect(bodyField(runARequests[1], "event")).toBe("COMMENT");
+    expect(bodyField(runBRequests[1], "event")).toBe("COMMENT");
+    expect(runARequests[1]?.headers.authorization).toBe("token token-one");
+    expect(runBRequests[1]?.headers.authorization).toBe("token token-two");
+
+    // (v) No cross-posts: neither run touched the other trigger's host.
+    expect(runARequests.some(request => request.url.includes("9402"))).toBe(false);
+    expect(runBRequests.some(request => request.url.includes("9401"))).toBe(false);
     await options.closeAutoCommit?.();
   });
 });

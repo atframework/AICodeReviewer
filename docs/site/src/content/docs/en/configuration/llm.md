@@ -113,10 +113,15 @@ key that conflicts with an explicitly named group is rejected. Malformed old
 values remain errors even when another key can be converted. New files must
 use the named-group form above.
 
-Model-chain entry `overrides` currently has schema validation only; the runtime
-does not apply it. Its keys are limited to request options and cannot contain
-provider identity, endpoint or credential fields. Configure effective request
-options on the provider until entry-level runtime support is available.
+Model-chain entries accept an `overrides` block of request options that the
+runtime merges into the resolved model spec: maps (`extra_params`,
+`extra_body`, `extra_headers`) merge by key over the provider fields, scalars
+and arrays replace, and disabling a parameter goes through `drop_params` —
+JSON null is never a deletion. Keys are limited to request options
+(`reasoning_effort`, `thinking_level`, `thinking_budget_tokens`, `thinking`,
+`response_format`, `tool_choice`, `parallel_tool_calls`, `seed`, `logit_bias`,
+`drop_params`, `allowed_openai_params`, and the three maps above) and cannot
+contain provider identity, endpoint or credential fields.
 
 | Field | Type | Required | Description |
 | --- | --- | :---: | --- |
@@ -160,7 +165,8 @@ workspaces:
       triage_model_chain: fast
 ```
 
-Main-group precedence is `workspaces.instances.<id>.model_chain` →
+Main-group precedence is the matched route's `analysis.model_chain` →
+`workspaces.instances.<id>.model_chain` →
 `workspaces.defaults.model_chain` → `llm.default_model_chain`.
 Automatically generated workspaces without an explicit instance also inherit
 workspace defaults. Config-layer merging replaces a same-named group's model
@@ -169,9 +175,11 @@ list wholesale and preserves the other groups.
 ## `llm.triage_model_chain` — lifecycle analysis group
 
 `triage_model_chain` is a group name referencing the same `llm.model_chain`
-definitions. Precedence is `workspaces.instances.<id>.triage_model_chain` →
+definitions. Precedence is the matched route's `analysis.triage_model_chain` →
+`workspaces.instances.<id>.triage_model_chain` →
 `workspaces.defaults.triage_model_chain` → `llm.triage_model_chain` → the
-workspace's main group. When omitted at every layer, triage reuses the main
+workspace's main group.
+When omitted at every layer, triage reuses the main
 model and client. To override a global triage selection and use a workspace's
 main group, explicitly select that same group name.
 

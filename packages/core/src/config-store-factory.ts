@@ -31,7 +31,7 @@ export async function createConfigStoreFromDatabaseConfig(
     // `postgres.url` is honored as the fallback when `url_env` is absent or
     // unresolved, matching the business-store wiring in the server bootstrap.
     // The `storage.database` connection string is a pre-existing deployment
-    // contract; spec §8.4's env-only secret boundary targets the new
+    // contract; architecture §3.16's env-only secret boundary targets the new
     // config-source entity model, not this operational DSN.
     const url = (urlEnv !== undefined ? envLookup(urlEnv) : undefined)
       ?? (typeof postgres.url === "string" ? postgres.url : undefined);

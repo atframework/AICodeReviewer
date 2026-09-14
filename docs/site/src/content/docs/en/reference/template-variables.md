@@ -121,6 +121,40 @@ outputs:
       revision_url_template: "https://review.example.com/revisions/{{revision}}"
 ```
 
+## `work_path` template variables
+
+Multi-project instances (`match[]`) render their directory from
+`workspaces.instances.<id>.work_path` — a restricted Handlebars path template.
+Only the `segment`, `default`, `hash`, and `lower` helpers are allowed, the
+output must be a relative `/` path, and the default is `{{workspace.id}}`.
+The catalog below comes from the runtime variable registry; unknown roots,
+registered-but-unextracted `scheduled.*` fields, and the forbidden `event.*`
+namespace all fail validation when the configuration is published. Nullable
+variables (marked `*`) can be null for some event kinds — wrap them in
+`default` with a literal fallback inside `segment`/`hash`.
+
+| Root | Variables (`*` = nullable) | Notes |
+| --- | --- | --- |
+| `trigger.*` | `name`, `kind`, `host*` | Trigger profile identity |
+| `source.*` | `vcs`, `repo_ref`, `repository*`, `namespace*`, `project_key`, `branch*`, `ref*` | Normalized source fields |
+| `workspace.*` | `id`, `instance_id` | Definition and matched instance |
+| `git.*` | `owner*`, `repository`, `full_name`, `namespace*`, `branch*`, `ref*`, `base_branch*`, `head_branch*`, `head_repository*`, `head_owner*`, `default_branch*` | Any git trigger kind (GitHub/GitLab/Gitea/Forgejo) |
+| `github.*`, `gitea.*`, `forgejo.*` | `owner*`, `repository`, `full_name`, `branch*`, `base_branch*`, `head_branch*`, `repository_id*`, `pull_number*`, `issue_number*` (plus `github.installation_id*`) | The matching provider only |
+| `gitlab.*` | `namespace*`, `project`, `path_with_namespace`, `branch*`, `source_branch*`, `target_branch*`, `project_id*`, `source_project_id*`, `target_project_id*`, `merge_request_iid*`, `issue_iid*` | GitLab only |
+| `p4.*` | `server`, `depot`, `depot_path`, `stream`, `stream_name`, `client`, `service_client`, `user`, `change`, `scope` | P4 only; from submitted changelist metadata and configured scopes |
+| `svn.*` | `repository_url`, `repository_root`, `repository_uuid`, `repository`, `project_path`, `branch`, `revision`, `author` | SVN only; revision-pinned |
+| `manual.*` | `request_id*`, `requested_workspace*`, `requested_by*` | Trusted CLI input only |
+| `scheduled.*` | `job_id`, `schedule_id`, `scheduled_at`, `timezone` | Registered but not yet extracted — rejected |
+| `event.*` | — | Forbidden in paths — rejected |
+
+Provider variables must exist for every trigger kind the matching rule
+accepts: a template that uses `git.branch` cannot match a `p4` trigger. Git
+provider IDs and numbers are decimal strings, or null when absent.
+
+```text
+{{segment trigger.name}}/{{segment (default source.namespace "shared")}}/{{segment source.project_key}}
+```
+
 ## Handlebars example
 
 A workspace-scoped Feishu summary override. Place it at

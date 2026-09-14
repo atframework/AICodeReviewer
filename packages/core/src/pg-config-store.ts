@@ -1,6 +1,6 @@
 /**
  * PostgreSQL ConfigStore — durable configuration revisions on the app
- * PostgreSQL service (spec §4.3/§9.3, P2).
+ * PostgreSQL service (architecture §3.14/§9.3, P2).
  *
  * Mirrors the SQLite backend's table shape with PG-native types (JSONB for
  * documents/diffs, BIGINT for epoch millis and the head generation) and owns
@@ -485,6 +485,12 @@ export async function createPgConfigStore(options: PgConfigStoreOptions): Promis
     max: options.maxPoolSize ?? 4,
     ...(schema !== null ? { options: `-c search_path="${schema}"` } : {}),
   });
+  // pg-pool purges a dead idle client and then re-emits its socket error on
+  // the pool (pg-pool makeIdleListener); an 'error' event without a listener
+  // is an uncaught exception, so a real backend outage would kill the whole
+  // process instead of surfacing bounded store_unavailable failures. The
+  // client is already removed when this fires — there is nothing to do.
+  pool.on("error", () => { /* idle client already purged by pg-pool */ });
 
   let closed = false;
   const open = (): void => assertStoreOpen(closed, "postgres");
@@ -887,7 +893,7 @@ export async function createPgConfigStore(options: PgConfigStoreOptions): Promis
     async deleteSnapshot(id) {
       open();
       return guarded("deleteSnapshot", async () => {
-        // Single atomic conditional delete (spec §7.2): a ref-count landing
+        // Single atomic conditional delete (architecture §3.15.2): a ref-count landing
         // between a check-then-delete pair can no longer orphan a signed-out
         // task's snapshot. The follow-up SELECT only classifies the miss:
         // row gone = idempotent no-op, row present = still referenced.

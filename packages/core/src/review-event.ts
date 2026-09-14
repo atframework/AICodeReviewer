@@ -61,7 +61,7 @@ export const reviewEventSchema = z
     sourcePath: z.string().min(1).optional(),
     submitterWorkspace: z.string().min(1).optional(),
     /**
-     * Frozen admission resolution (spec §5.2/§5.5). Absent on events routed
+     * Frozen admission resolution (architecture §3.10/§5.5). Absent on events routed
      * before this field existed — consumers fall back to deriving the layout
      * from the event fields.
      */

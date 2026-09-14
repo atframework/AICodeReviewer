@@ -22,7 +22,7 @@ import type { AppConfigInput } from "./config.js";
 /**
  * Raw config source model and the database/file merge machinery for the
  * workspace/dynamic-config roadmap. The pipeline stages are deliberately
- * separate (spec §4.2): raw YAML text with source locations → in-memory
+ * separate (architecture §3.15): raw YAML text with source locations → in-memory
  * legacy format conversion → source merge with per-field provenance → a
  * single schema parse (defaults applied exactly once, performed in
  * config.ts). Everything here is pure: no filesystem, env, or network.
@@ -193,7 +193,7 @@ export function parseRawConfigSource(text: string, options: ParseRawConfigOption
 }
 
 // ---------------------------------------------------------------------------
-// Legacy format conversion (stage 2, spec §9.4)
+// Legacy format conversion (stage 2, architecture §3.14)
 // ---------------------------------------------------------------------------
 
 export interface ConfigConversionChange {
@@ -390,7 +390,7 @@ export function assertNoSecretEnvIssues(config: unknown): void {
 }
 
 // ---------------------------------------------------------------------------
-// Database document model (spec §4.3)
+// Database document model (architecture §3.14)
 // ---------------------------------------------------------------------------
 
 export const DATABASE_ENTITY_COLLECTION_KEYS = [
@@ -470,7 +470,7 @@ export const databaseConfigDocumentSchema: z.ZodType<DatabaseConfigDocument> = z
   })
   .strict();
 
-/** Global leaf prefixes a database document may manage (spec §4.1). */
+/** Global leaf prefixes a database document may manage (architecture §3.15). */
 export const DATABASE_GLOBAL_PREFIXES: readonly ConfigPath[] = [
   ["llm", "default_model_chain"],
   ["llm", "triage_model_chain"],
@@ -526,7 +526,7 @@ export function assertDatabasePathAllowed(path: ConfigPath): void {
     if (isPathPrefix(prefix, path) || isPathPrefix(path, prefix)) {
       throw new ConfigError(
         "bootstrap_readonly",
-        `${formatConfigPath(path)} belongs to the bootstrap trust boundary and is file-only (spec §4.1)`,
+        `${formatConfigPath(path)} belongs to the bootstrap trust boundary and is file-only (architecture §3.15)`,
         { path },
       );
     }
@@ -632,7 +632,7 @@ export function validateDatabaseDocument(
 }
 
 // ---------------------------------------------------------------------------
-// Projection + merge with provenance (spec §4.2 rules 1-6)
+// Projection + merge with provenance (architecture §3.15 rules 1-6)
 // ---------------------------------------------------------------------------
 
 export interface ProjectedDatabaseConfig {
@@ -766,7 +766,7 @@ const EMPTY_ENTITY_IDS: FileEntityIds = {
 
 /**
  * Merges the file overlay (highest priority) over the projected database
- * overlay (middle) without applying any schema defaults (spec §4.2 rules
+ * overlay (middle) without applying any schema defaults (architecture §3.15 rules
  * 1-4). Entity collections merge by entity id with whole-entity file locks;
  * global objects merge per leaf with explicit empty arrays/false/0 kept
  * distinct from missing values. JSON null is a value, never a delete
@@ -872,7 +872,7 @@ export function mergeConfigSources(input: {
 }
 
 // ---------------------------------------------------------------------------
-// Effective config view (spec §4.2 rule 6)
+// Effective config view (architecture §3.15 rule 6)
 // ---------------------------------------------------------------------------
 
 export interface ConfigFieldView {
@@ -1177,7 +1177,7 @@ export function applyConfigChangeset(
     if (fileEntityIds[kind].has(name)) {
       throw new ConfigError(
         "file_owned",
-        `${kind} "${name}" is owned by the config file and is read-only (spec §4.2 rule 5)`,
+        `${kind} "${name}" is owned by the config file and is read-only (architecture §3.15 rule 5)`,
         { entity: { kind, id: name } },
       );
     }
@@ -1270,7 +1270,7 @@ export function applyConfigChangeset(
           if (isPathPrefix(lockPath, operation.path) || isPathPrefix(operation.path, lockPath)) {
             throw new ConfigError(
               "file_owned",
-              `${formatted} is locked by the config file at ${lock || "<root>"} (spec §4.2 rule 5)`,
+              `${formatted} is locked by the config file at ${lock || "<root>"} (architecture §3.15 rule 5)`,
               { path: operation.path },
             );
           }

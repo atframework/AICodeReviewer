@@ -212,7 +212,7 @@ if (PG_TEST_URL) {
     });
   });
 
-  // Snapshot mutation races (spec §7.2: a signed-out task's snapshot must
+  // Snapshot mutation races (architecture §3.15.2: a signed-out task's snapshot must
   // never vanish under it; writeSnapshot is idempotent per id). A real pool
   // gives genuine statement-level concurrency, so the delete/ref-count race
   // is repeated: either linearization is legal, the spec violation is not.

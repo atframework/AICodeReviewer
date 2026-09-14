@@ -24,6 +24,7 @@ workspace，并强调一条不能破坏的规则——**绝不要把密钥明文
 | `compression` | AICR 侧的 diff 摘要，在模型看到大任务前先压缩。 | [LLM 提供方与模型](/zh-cn/configuration/llm/)（上下文依赖） |
 | `server` | HTTP 监听器与 `/triggers/*` 的全局 API key 鉴权。 | [认证与密钥](/zh-cn/configuration/authentication/) |
 | `admin` | 可选的可观测性看板超级管理员登录（与 webhook/trigger 鉴权相互独立）。 | [认证与密钥](/zh-cn/configuration/authentication/) |
+| `config_sources` | 数据库配置源开关、运行时刷新节奏，以及密钥引用授权。 | 本页（动态配置 API） |
 
 :::note[最小配置]
 要真正发起评审，只需要 `llm`、至少一个 `triggers[]` 条目，以及至少一个
@@ -37,8 +38,6 @@ workspace，并强调一条不能破坏的规则——**绝不要把密钥明文
 provider ID、trigger name 和 channel name 必须分别唯一。以 `_env` 结尾的字段必须填写
 符合 `[A-Za-z_][A-Za-z0-9_]*` 的环境变量名称。旧模型链格式只在内存中转换，原文件不会
 改写，详见[模型分组](/zh-cn/configuration/llm/)。
-
-当前版本尚不提供数据库配置源、看板配置编辑和配置热发布。
 
 ## 三层覆盖模型
 
@@ -98,7 +97,7 @@ workspaces:
 | `prompt`（基础系统提示、`force_skills`） | — | ✓ | ✓ |
 | `context_repositories`（辅助上下文仓库） | — | ✓ | ✓ |
 | `auth`（按 workspace 的 API key） | 经由 `server.auth` | — | ✓ |
-| `compression`、`queue`、`storage`、`llm`、`server`、`admin`、`triggers` | ✓ | — | — |
+| `compression`、`queue`、`storage`、`llm`、`server`、`admin`、`triggers`、`config_sources` | ✓ | — | — |
 
 分组定义统一放在 `llm.model_chain`；workspace 只填分组名。主链用于审查、
 agent 故障切换和压缩摘要；triage 各层都未配置时继承该 workspace 的主链。
@@ -161,6 +160,27 @@ AICR_LLM_API_KEY=sk-xxxxxxxxxxxxxxxx
 - 调整输出行为？看 [输出通道与路由](/zh-cn/configuration/outputs/)，
   涵盖通道、路由、零问题策略，以及托管 issue 的生命周期上限。
 
+## 多工程 workspace（v2 匹配）
+
+一个实例可以用 `match[]` 规则服务多个工程，代替单一的 `source_repo` 绑定
+（两者互斥）。规则之间是 OR，单条规则内的字段是 AND。git 系 webhook
+（GitHub、GitLab、Gitea、Forgejo）先验凭据、准入时匹配：无规则命中返回
+`202 repository_not_configured`，命中多个定义返回 `202 ambiguous_route`。
+P4/SVN profile 先持久化路由回执，再由后台对照验证过的变更路径完成解析。
+
+命中的实例按 `work_path` 渲染目录——一个受限 Handlebars 模板（仅允许
+`segment`、`default`、`hash`、`lower` 四个 helper，默认 `{{workspace.id}}`）。
+变量目录见[模板变量](/zh-cn/reference/template-variables/)。命中的实例使用
+`isolated_v2` 布局：所有内容位于 `<workspaces.root>/<work_path>/<instance_id>`，
+每次运行的 source/agent/tmp/context-repos 位于 `runs/<runId>/`，并随整次评审
+清理；legacy 缓存路径保持原样。
+
+匹配还引入了最顶层的覆盖层：每个任务的分析选择按 全局 → workspace 默认 →
+实例 → 命中路由的 `analysis` 块 合并。数据库配置源发布新版本时，文件显式值
+仍然优先且保持只读，一次发布只对发布后新接收的任务生效——已排队和运行中的
+任务保留接收时的配置。字段细节见
+[配置字段参考](/zh-cn/reference/config-fields/#workspaces)。
+
 ## 动态配置 API
 
 启用 `config_sources.database.enabled: true` 后，`/api/admin/config` 可发布数据库
@@ -183,5 +203,15 @@ changesets 和 restore 请求必须携带当前 SHA-256 `fileDigest`。operation
 model override、workspace/route search 继承的凭据。授权格式见
 [字段参考](/zh-cn/reference/config-fields/)。
 
+数据库可管理的全局叶子包括 `llm.default_model_chain`、`llm.triage_model_chain`、
+`llm.retry`、`llm.per_provider_overrides`、`llm.budget`、`llm.model_catalog`、
+`review`、`compression`、`agent`、`outputs.template_engine`、`outputs.no_problems`、
+`outputs.author_resolution`、`outputs.routes`、`queue.workers`、`queue.rate_limit`、
+`queue.retry`、`queue.dead_letter`、`workspaces.cache`、`workspaces.defaults`，
+以及 provider、模型组、trigger、channel、workspace、route 实体集合。bootstrap
+信任边界——`server`、`admin`、`storage`、`config_sources`、`queue.kind`、
+`queue.sqlite`、`workspaces.root`——永远不可由数据库写入。
+
 v2 路由、Review 策略、agent/search/sandbox、模型目录和 triage 变更对新任务生效。
-v2 输出显式空列表关闭该类输出。管理 UI 仍在计划中，API 可独立于统计 store 使用。
+v2 输出显式空列表关闭该类输出。管理 UI 已随看板 **Config** 标签发布（见
+[Dashboard 与日志](/zh-cn/start/dashboard/)），API 可独立于统计 store 使用。

@@ -22,6 +22,28 @@ Sources: root/package manifests, `pnpm-workspace.yaml`, `tsconfig.json`,
   `lfs: true`; working-tree packaging follows `git lfs pull`, not `git archive`.
   Keep the model snapshot path aligned across code, attributes and deploy checks.
   Renormalization is scoped; history rewrite is a separate operation.
+- On Windows with `core.autocrlf=true`, `pnpm format:check` flags every file
+  (prettier `endOfLine` defaults to `lf`, the working tree is CRLF). This is
+  an environment artifact, not formatting drift: the script is a local
+  convenience, runs in no CI job, and is not part of the repository-baseline
+  gate list. Do not "fix" it by mass-reformatting or by weakening the config
+  without a repo-wide decision.
+- Browser-gate specs share one persistent config namespace per fixture
+  launch. A spec that publishes scheduling config (e.g.
+  `review.pull_request.schedule.rules` weekly windows, M16 durable deferral)
+  silently defers later webhook-triggered reviews to the next window — the
+  failure surfaces in a different spec as "agent never invoked". Affected
+  specs must clear the schedule first, BEFORE the config tab loads: an
+  out-of-band revision after the UI has read its baseline 409s the first UI
+  publish. Cross-process conditions (agent stub spawn after webhook →
+  scheduling → VCS → bundle → exe) exceed Playwright's 10 s `expect.poll`
+  default on cold full-suite starts; give those polls an explicit 60 s
+  budget. See `tests/browser/ui-run-isolation.spec.ts`.
+- Live gate services (throwaway PG cluster, Redis instances) can die between
+  turns; a mid-turn crash even wiped one cluster's roles. Before citing a
+  zero-skip coverage run, re-verify reachability with real clients
+  (psql/redis-cli), not port probes or hub status, and re-create roles via
+  single-user mode if the cluster lost them (`postgres --single -D …`).
 
 ## Runtime image
 

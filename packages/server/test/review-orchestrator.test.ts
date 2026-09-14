@@ -363,7 +363,7 @@ describe("runReviewOrchestration", () => {
       expect(new Set(homeDirs).size).toBe(2);
       const dirsA = layouts.find((l) => l.agentDir.includes("run-a"));
       const dirsB = layouts.find((l) => l.agentDir.includes("run-b"));
-      // Each run got its own root under the shared instance layout (spec §5.5).
+      // Each run got its own root under the shared instance layout (architecture §3.10).
       expect(dirsA?.agentDir).toBe(join(baseDir, "runs", "run-a", "agent"));
       expect(dirsA?.tmpDir).toBe(join(baseDir, "runs", "run-a", "tmp"));
       expect(dirsB?.agentDir).toBe(join(baseDir, "runs", "run-b", "agent"));

@@ -308,7 +308,7 @@ if (REDIS_TEST_URL) {
     });
   });
 
-  // Snapshot mutation races (spec §7.2), symmetric with the SQLite/Postgres
+  // Snapshot mutation races (architecture §3.15.2), symmetric with the SQLite/Postgres
   // cases: every snapshot mutation here is one Lua script, so the dangerous
   // interleavings collapse into the same two legal linearizations.
   describe("redis config store snapshot races", () => {

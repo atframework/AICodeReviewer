@@ -104,7 +104,7 @@ describe("sqlite config store persistence", () => {
   });
 });
 
-// Snapshot mutation races (spec §7.2: a signed-out task's snapshot must
+// Snapshot mutation races (architecture §3.15.2: a signed-out task's snapshot must
 // never vanish under it, and writeSnapshot is idempotent per id).
 // better-sqlite3 executes synchronously on one thread, so JS cannot
 // interleave statements inside one method call; these cases pin the

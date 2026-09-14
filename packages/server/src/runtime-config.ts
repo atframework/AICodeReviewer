@@ -1,5 +1,5 @@
 /**
- * Runtime config manager (spec §7.2, P4). Owns immutable configuration
+ * Runtime config manager (architecture §3.15.2, P4). Owns immutable configuration
  * generations built from (raw file document + database revision + defaults),
  * each carrying its parsed effective config, compiled execution graph, and
  * workspace runtime.

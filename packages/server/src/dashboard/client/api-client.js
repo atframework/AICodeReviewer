@@ -1,5 +1,5 @@
 /**
- * Config admin API client (spec §8.3/§8.4, P6 design doc §6).
+ * Config admin API client (architecture §3.16/§8.4, P6 design doc §6).
  *
  * Plain-browser ESM: no framework, no Node APIs. Every method fetches the
  * relative "api/admin/config[/...]" surface (path_prefix safe), attaches the

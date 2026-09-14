@@ -1,5 +1,5 @@
 /**
- * Workspace multi-project definitions (spec §5.1/§5.5, P1).
+ * Workspace multi-project definitions (architecture §3.10/§5.5, P1).
  *
  * A definition may declare EITHER a legacy `source_repo` exact binding OR a
  * `match` rule list plus an optional `work_path` template. Match rules are
@@ -71,7 +71,7 @@ export interface ValidatedWorkspaceDefinition {
 
 /**
  * Validates every definition and returns the runtime-ready match map with
- * pre-compiled source predicates and templates (spec §5.1 compile cache).
+ * pre-compiled source predicates and templates (architecture §3.10 compile cache).
  * Bootstrap builds this once per config generation; resolution reuses it.
  */
 export function compileWorkspaceMatchDefinitions(
@@ -208,7 +208,7 @@ function validateDefinitions(
 }
 
 // ---------------------------------------------------------------------------
-// Binding + layout (spec §5.5)
+// Binding + layout (architecture §3.10)
 // ---------------------------------------------------------------------------
 
 export type WorkspaceLayoutKind = "legacy_v1" | "isolated_v2";
@@ -240,7 +240,7 @@ export interface WorkspaceBindingInput {
   readonly triggerName: string;
   readonly vcs: string;
   readonly canonicalProjectKey: string;
-  /** Template source; defaults to `{{workspace.id}}` (spec §5.5). */
+  /** Template source; defaults to `{{workspace.id}}` (architecture §3.10). */
   readonly workPathTemplate?: string | undefined;
 }
 
@@ -269,7 +269,7 @@ function joinPath(...segments: readonly string[]): string {
 }
 
 /**
- * Computes the explicit directory layout for a binding (spec §5.5). Paths use
+ * Computes the explicit directory layout for a binding (architecture §3.10). Paths use
  * `/` separators; runtime consumers convert for the host and enforce
  * resolve/realpath containment. `legacy_v1` mirrors the historical layout
  * (`<root>/<definitionId>/source/<repoRef with /: → _>` plus agent/tmp/

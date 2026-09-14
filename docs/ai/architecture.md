@@ -5,9 +5,11 @@
 
 本页的章节编号是稳定合同引用点，独立于路线图的章节与任务顺序。
 
-Workspace 多工程匹配、数据库配置管理与自动迁移的新方案见
-[进行中的设计](../superpowers/specs/2026-09-11-workspace-config-management.md)。
-P0–P5 已交付，管理 UI 和完整故障矩阵仍按计划推进；执行和测试入口见 [Plan.md](../../Plan.md)。
+Workspace 多工程匹配、数据库配置管理与自动迁移已交付 P0–P7：配置存储、schema 迁移与
+PostgreSQL 后端见 [M17](milestones/M17.md)，来源合并、路由图与发布服务见 [M18](milestones/M18.md)，
+运行时配置 generation 与管理 API 见 [M19](milestones/M19.md)，管理表单与管理页面见
+[M20](milestones/M20.md)，集成测试与跨版本进程矩阵见 [M21](milestones/M21.md)。稳定设计合同收敛在
+§3.10–§3.16；任务期 spec/plans 文档在 P8 退役，不再作为引用入口。
 
 ## 按需阅读
 
@@ -746,7 +748,7 @@ AICR 采用**两层上下文管理**，两者互补：
   未知扩展键保留不拒绝。catalog 提示键与字段清单 parity 由测试锁定。
   模型条目 `overrides` 自 P4 起在 `resolveModelSpecFromChain` 接线(map 按 key
   合并、数组替换,身份/端点/凭据不可覆盖)。
-  设计与阶段边界见[workspace 配置设计](../superpowers/specs/2026-09-11-workspace-config-management.md)。
+  阶段交付与验收见 M17/M18，稳定合并与发布合同见 §3.14–3.15。
 - P1a 的 `config-matcher.ts` 把 RE2/glob 编译收敛为共享纯函数(`auto-commit-exclusion` 行为
   不变,`autoCommitGlobToRegexSource` 为共享实现别名),新增 exact matcher 与来源字段目录
   (`vcs`/`repo_ref`/`repository`/`namespace`/`project_key`/`branch`/`ref`);`config-path-template.ts`
@@ -759,7 +761,8 @@ AICR 采用**两层上下文管理**，两者互补：
   `matcher_invalid`/`template_invalid`/`match_rule_invalid`。
 - P1b 起 git 系 webhook 的运行时匹配已接线:`packages/core/src/config-resolution.ts` 定义
   来源变量/主机字段与解析矩阵（legacy 绑定优先、规则 OR/字段 AND；多定义命中报歧义）,
-  `source-descriptors.ts` 只从签名校验后的 payload 提取 GitHub/GitLab/Gitea/Forgejo 描述符
+  `packages/server/src/source-descriptors.ts` 只从签名校验后的 payload 提取
+  GitHub/GitLab/Gitea/Forgejo 描述符
   (tag ref 的 branch 为 null、GitLab namespace 保留子组),`workspace-runtime.ts` 统一
   admission/翻译/执行三处的布局解析(`isolated_v2` = `workspaces.root`/`work_path`/`instance_id`,
   段编码后实例根仍带 sha256 后缀;布局合同为 `/` 分隔,runtime 边界转主机分隔符)。
@@ -856,7 +859,7 @@ AICR 采用**两层上下文管理**，两者互补：
   - `storage.object.s3.region_env`、`access_key_id_env`、`secret_access_key_env`: 通过环境变量引用凭据和区域。
   - `storage.object.s3.force_path_style`: 支持 MinIO / RustFS 这类常见 S3-compatible 部署。
   - `storage.retention.deleted_project_grace_days`: 已删除项目统计硬删除宽限期。
-- 输出路由、模板、queue、review 行为都支持全局 → workspace default → workspace instance 覆盖。`agent.default` 和 `sandbox` 的 workspace 层覆盖目前只被 schema 接受；bootstrap 仍按全局 `agent` 选择适配器和沙箱配置，每次运行独立创建沙箱实例，workspace 层这两项暂不生效。
+- 输出路由、模板、queue、review 行为都支持全局 → workspace default → workspace instance 覆盖。`agent.default` 和 `sandbox` 的 workspace 层覆盖也已按 run 生效：bootstrap 经合并后的 analysis selection 解析（`analysis.sandbox ?? generationConfig.agent.sandbox`、`analysis.agent?.default ?? generationConfig.agent.default`，H03/H04），全局 `agent` 配置仅作回退；每次运行独立创建沙箱实例，显式容器沙箱 preflight 失败拒绝该 run，不降级 native。
 - 当配置 shape 变化时，要同步更新 schema 测试、示例配置、专题文档和 `Plan.md` 摘要。
 
 #### 3.10.1 Per-workspace prompt 覆盖
@@ -951,10 +954,20 @@ AICR 采用**两层上下文管理**，两者互补：
     `?limit=` (1..100)，detail 以解析后的 JSON 返回。
   所有端点（`/login` 除外）需 `Authorization: Bearer <token>` 头。
 - Dashboard SPA 嵌入于 `/dashboard` 和 `/` 路径，由 `packages/server/src/dashboard/dashboard.html`
-  提供。深色主题、登录表单、选项卡视图（live / overview / projects / providers / runs / events）。
+  提供。深色主题、登录表单、选项卡视图（live / overview / projects / providers / runs / events / config）。
   即使尚未配置 admin env，`/` 与 `/dashboard` 也必须返回 dashboard shell，并显示
   setup-required 提示而不是 404；若启用了 `path_prefix`，顶层 `/` 与 `/dashboard`
   应重定向到带前缀的 dashboard 入口。
+  Config 标签（M20）是配置管理页面，由 `packages/server/src/dashboard/client/` 下的原生
+  ES module 组成：`config-app.js`（应用编排与保存合同）、`renderer.js`（ConfigUiSpec DOM
+  渲染器）、`api-client.js`（`/api/admin/config` 客户端），首次进入该标签时由
+  `dashboard.html` 懒加载，无框架、无 Node API。构建时
+  `packages/server/scripts/copy-assets.cjs` 把 dashboard HTML 与 client 模块复制到
+  `dist/dashboard`，并把 core 编译产物 `config-ui-runtime.js` / `config-form-state.js` /
+  `weekly-schedule.js` 一并复制到 `dist/dashboard/client`（缺失资产令构建失败）；服务端经
+  `getDashboardClientAsset` 的白名单（`^[a-z0-9-]+\.js$` 平坦文件名，拒绝分隔符与遍历）
+  从 dist 提供这些模块，白名单外或缺失文件一律 404。渲染硬规则（A14）：所有动态字符串只经
+  `textContent` / `createTextNode` 进入 DOM，任何带数据的 `innerHTML` 都不允许。
   Overview 标签有时间窗口选择器（today / this week / this month / all），Recent activity
   表与 Runs 标签同样展示每条 run 的 token 总量、缓存命中/未命中拆分与命中率；
   两处 run 表还带 Revision 列：分支 + 缩写 revision（git 短 sha、SVN `r<N>`、P4 `CL <N>`，
@@ -1389,7 +1402,7 @@ secret 授权来自原始文件引用及仅文件可写的 config_sources.secret
 [OWASP 出站目标白名单原则](https://cheatsheetseries.owasp.org/cheatsheets/Server_Side_Request_Forgery_Prevention_Cheat_Sheet.html)，
 约束配置可引用的凭据与目的地；它不替代部署网络层的 DNS/重定向访问控制。
 
-P4/P5 本地验收见 M19，P6 管理 UI、P7 跨版本进程矩阵和 P8 整体验收保留在 Plan.md。
+P4/P5 本地验收见 M19，P6 管理 UI 验收见 M20，P7 集成测试与跨版本进程矩阵验收见 M21。
 
 ## 4. 默认评审 Prompt 合同
 
@@ -1417,6 +1430,8 @@ P4/P5 本地验收见 M19，P6 管理 UI、P7 跨版本进程矩阵和 P8 整体
   3. Vitest
   4. markdownlint
   5. 构建
+- Dashboard 浏览器门禁：`pnpm test:browser` 运行 Playwright 套件（`tests/browser/`），
+  覆盖管理 UI 的组合交互；CI 中以独立 job「Dashboard browser gate (P6)」执行。
 - 变更配置 contract、输出 contract、runtime bundle、sandbox 行为时，都要补对应测试。
 - AI 资产变更至少要过 markdownlint，并检查 skill frontmatter / 目录名 / `name` 一致性。
 - 文档不是“写完就算”，它们与示例、测试、配置 shape 一起构成实现合同。

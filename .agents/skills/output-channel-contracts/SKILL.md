@@ -9,7 +9,7 @@ user-invocable: false
 Trace changes through `packages/core/src/config.ts`, server bootstrap/orchestrator,
 `packages/outputs/src/index.ts`, `template-engine.ts`, and relevant tests.
 Read only the corresponding section of `docs/output-channels.md` or architecture
-§3.9–3.10 when its design is needed.
+§3.9–3.10 and §3.16 (v2 routing/runtime generation) when its design is needed.
 
 ## Shared invariants
 
@@ -26,7 +26,13 @@ Read only the corresponding section of `docs/output-channels.md` or architecture
   Sync affected config/examples, output docs, public locales and roadmap entries;
   run applicable final gates from the repository baseline.
 - For routing changes, compare preview with actual publisher calls in old/new
-  generations. In v2 an explicit empty list closes that output kind; disabling
+  generations. v2 route rules match on `target_kinds`, `triggers`, and
+  `source.repo_ref` (`routingRuleMatchSchema` in `config.ts`, compiled by
+  `config-compiler.ts`). Each event resolves publishers through the
+  generation-scoped `outputPublisherResolver` (option declared at
+  `review-orchestrator.ts:176`, invoked per event at ~3590 with
+  `{ sourceRoot }`), falling back to an explicit `outputPublisher` when set.
+  In v2 an explicit empty list closes that output kind; disabling
   the last rule must retain v2 semantics (runtime-generation/runtime-http tests).
 
 ## Conditional references

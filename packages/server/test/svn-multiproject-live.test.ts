@@ -123,7 +123,7 @@ describe.skipIf(!svn)(
           getPolicyLayers: () => ({ global: { delay_seconds: 0 } }),
         });
         // One svn trigger profile with two explicit project roots; each
-        // project is a match-resolved workspace instance (spec §5.2/§5.3).
+        // project is a match-resolved workspace instance (architecture §3.10/§5.3).
         const config = parseConfigDocumentText(`
 triggers:
   - name: svn-main

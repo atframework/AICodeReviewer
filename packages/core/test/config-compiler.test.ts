@@ -1,5 +1,5 @@
 /**
- * Execution graph compiler tests (spec §6, tests R01–R07/R11/R12 + legacy
+ * Execution graph compiler tests (architecture §3.15, tests R01–R07/R11/R12 + legacy
  * compatibility parity with the pre-routing runtime).
  */
 import { describe, expect, it } from "vitest";

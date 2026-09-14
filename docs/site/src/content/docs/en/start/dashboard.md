@@ -184,6 +184,9 @@ All endpoints except `/login` require `Authorization: Bearer <token>`.
 | `GET /api/admin/config/schema`, `/options/:source` | Form specification and dynamic options |
 | `POST /api/admin/config/changesets` | Atomic publication with `baseRevision`, `fileDigest`, `operationId`, and `operations` |
 | `POST /api/admin/config/preview-route` | Read-only event preview; optional `draft` contains `baseRevision`, `fileDigest`, and `operations` |
+| `POST /api/admin/config/validate` | Side-effect-free changeset validation; returns the redacted preview report without writing |
+| `GET /api/admin/config/revisions/:revision` | One revision's document plus its audit entries |
+| `POST /api/admin/config/revisions/:revision/restore` | Publish a new revision restoring an old one; requires `fileDigest`, keeps file locks and reference validation |
 | `GET /api/admin/config/operations/:id`, `/revisions`, `/status` | Operation recovery, version history and activation status |
 
 ## `/metrics`

@@ -5,7 +5,7 @@ import { isPlainObject } from "./utils.js";
 
 /**
  * Permanent config field inventory and the schema walk that keeps it
- * complete (spec §8.2, test U24): every schema-accepted leaf has exactly one
+ * complete (architecture §3.16, test U24): every schema-accepted leaf has exactly one
  * inventory row carrying value kind, default, source ownership, inheritance,
  * capability, resolver, consumer, UI control, and test id. The walker uses
  * Zod 3 accessors and version-specific `_def` metadata for this audit gate,

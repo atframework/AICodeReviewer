@@ -1,5 +1,5 @@
 /**
- * Shared matcher compilation (spec §5.1, P1).
+ * Shared matcher compilation (architecture §3.10, P1).
  *
  * ConfigMatcher is `{ exact } | { glob, ignore_case? } | { regex, ignore_case? }`
  * (config-format.ts). Semantics mirror the auto-commit exclusion contract:
@@ -15,7 +15,7 @@ import { RE2 } from "re2-wasm";
 
 import { ConfigError, validateConfigMatcher, type ConfigMatcher, type ConfigPath } from "./config-format.js";
 
-/** Translate a config glob to an anchored RE2 source (spec §5.1 glob semantics). */
+/** Translate a config glob to an anchored RE2 source (architecture §3.10 glob semantics). */
 export function globToConfigRegexSource(glob: string): string {
   let source = "";
   let pendingStar = false;
@@ -60,7 +60,7 @@ export type CompiledConfigMatcher = (value: string) => boolean;
 /** Compile one ConfigMatcher to a predicate (exact/glob/regex, ignore_case). */
 export function compileConfigMatcher(matcher: ConfigMatcher, path?: ConfigPath): CompiledConfigMatcher {
   if ("exact" in matcher) {
-    // The exact variant has no ignore_case (spec §5.1): plain equality.
+    // The exact variant has no ignore_case (architecture §3.10): plain equality.
     const expected = matcher.exact;
     return (value: string) => value === expected;
   }
@@ -68,7 +68,7 @@ export function compileConfigMatcher(matcher: ConfigMatcher, path?: ConfigPath):
   return compileConfigRegex(source, matcher.ignore_case === true, path);
 }
 
-/** Source variable fields allowed in workspace match source conditions (spec §5.3). */
+/** Source variable fields allowed in workspace match source conditions (architecture §3.10). */
 export const WORKSPACE_MATCH_SOURCE_FIELDS = [
   "vcs",
   "repo_ref",
@@ -82,7 +82,7 @@ export type WorkspaceMatchSourceField = (typeof WORKSPACE_MATCH_SOURCE_FIELDS)[n
 
 /**
  * Validates a record of source field matchers: known fields only, per-field
- * 4 KiB and total 64 KiB matcher budgets (spec §5.1 limits), and every
+ * 4 KiB and total 64 KiB matcher budgets (architecture §3.10 limits), and every
  * expression compilable.
  */
 export function validateWorkspaceMatchSource(
@@ -130,7 +130,7 @@ export function compileWorkspaceMatchSource(
   };
 }
 
-/** Sum of UTF-8 expression bytes across one definition's match rules (spec §5.1 total budget). */
+/** Sum of UTF-8 expression bytes across one definition's match rules (architecture §3.10 total budget). */
 export function workspaceMatchExpressionBytes(
   rules: readonly { readonly source?: Readonly<Record<string, ConfigMatcher>> | undefined }[],
 ): number {

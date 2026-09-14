@@ -1,6 +1,6 @@
 /**
  * Redis ConfigStore — immutable configuration generations behind a CAS head
- * pointer per namespace (spec §4.3/§9.3, P2).
+ * pointer per namespace (architecture §3.14/§9.3, P2).
  *
  * Key layout (single-instance Redis 7.0+; every multi-key command stays in
  * one cluster slot through `{...}` hash tags; `P` = configurable prefix,
@@ -25,7 +25,7 @@
  * shared by interleaved logical operations, and on a shared connection one
  * EXEC discards another operation's WATCH, silently voiding the CAS (S02).
  * Lua keeps check-and-set atomic inside a single hash-tag slot. Redis
- * transactions never roll back (spec §9.3), so scripts validate first and
+ * transactions never roll back (architecture §3.14), so scripts validate first and
  * write last.
  */
 

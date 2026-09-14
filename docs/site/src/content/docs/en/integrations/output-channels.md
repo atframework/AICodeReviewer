@@ -62,7 +62,7 @@ registry (Zod validates the shape; the dispatcher resolves the kind).
 | `gitea_pr_review` | One consolidated PR review/comment body | PR review / configured summary publisher | Problems are buffered and flushed as one Markdown body; falls back to one issue comment on 403/422 |
 | `github_pr_review` | One consolidated PR review/comment body | PR review / configured summary publisher | Same buffer-and-flush as `gitea_pr_review`; falls back to issue comment on 403/422 |
 | `gitlab_mr_review` | MR discussion when `baseSha`/`headSha` available | MR note / configured summary publisher | Falls back to a general MR note when line anchoring is unavailable |
-| `gitea_problem_issue` / `github_problem_issue` | Collected for reconciliation | Creates / updates / resolves managed problem issues | Fingerprint stability matters most here; `github_problem_issue` uses string label names and `resolved_action` supports only `close` and `none` (GitHub has no issue delete API) |
+| `gitea_problem_issue` / `github_problem_issue` | Collected for reconciliation | Creates / updates / resolves managed problem issues | Fingerprint stability matters most here; `github_problem_issue` uses string label names and `resolved_action` supports `none`, `close`, and `mark_resolved` (GitHub has no issue delete API) |
 | `gitea_issue` / `github_issue` | Collected, rendered into an issue comment | Aggregated issue comment | Useful for push events or issue-based triage |
 | `feishu_bot` | Collected for aggregation | Interactive card (JSON 2.0 schema) | See [IM bots](/en/integrations/im-bots/) |
 | `wecom_bot` | Collected for aggregation | Markdown message | See [IM bots](/en/integrations/im-bots/) |
@@ -101,8 +101,8 @@ issues across reviews. Key behaviors:
   capped by `review.problem_issue.max_recent_issues` (default 30, range 1–200,
   overridable per workspace). Fingerprints outside the recent window are not
   deduplicated or closed in that run.
-- **GitHub `resolved_action`.** Supports `close` and `none` only (GitHub has
-  no issue-delete API). Gitea additionally supports `delete`.
+- **GitHub `resolved_action`.** Supports `none`, `close`, and `mark_resolved`
+  (GitHub has no issue-delete API). Gitea additionally supports `delete`.
 
 See [Output channels config](/en/configuration/outputs/) for the
 `issue_mode`, `resolved_action`, `assign_committer`, `owners_file`, and
@@ -110,10 +110,21 @@ severity-label fields.
 
 ## Routing
 
-`outputs.routes` decides which channels receive `line_comments` and `summary`
-for a given review. A `default` block plus optional `rules` (matched on
-`trigger` and `target_kind`) route reviews per provider/event type. Workspaces
-can also pin channels via `workspaces.instances.<id>.outputs`.
+Which channels receive `line_comments` and `summary` for a given review is
+resolved per event. Which routing generation applies depends on the config:
+
+- **v2 `routing.rules[]`** (when the config carries routing rules): rules
+  match on `triggers`, `target_kinds`, and `source.repo_ref` with an explicit
+  `priority`. Channel selection resolves per event as the matched rule's
+  `outputs`, then `workspaces.instances.<id>.outputs`, then
+  `workspaces.defaults.outputs`, then `outputs.routes.default`. An explicit
+  `[]` closes that output kind; only an unset field inherits. A trigger must
+  not be steered by both generations at once.
+- **Legacy `outputs.routes`** (no routing rules configured): a `default`
+  block plus optional `rules` matched on `trigger` and `target_kind`. The
+  first matching rule with a non-empty list wins; empty lists fall through to
+  the workspace instance, then the default, then — for `line_comments` only —
+  the first `*_pr_review` channel.
 
 ```yaml
 outputs:

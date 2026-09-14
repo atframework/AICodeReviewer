@@ -1,12 +1,12 @@
 /**
- * Generic ConfigUiSpec DOM renderer (spec §8.3, P6 design doc §6/D8/D9).
+ * Generic ConfigUiSpec DOM renderer (architecture §3.16, P6 design doc §6/D8/D9).
  *
  * Plain-browser ESM, zero dependencies beyond the sibling paradigm module.
  * The document is injected for testability; every dynamic string reaches the
  * DOM exclusively through createElement/textContent (A14/XSS: no innerHTML
  * with data anywhere in this file).
  *
- * Controls implemented per spec §8.3: text, number (raw string kept in the
+ * Controls implemented per architecture §3.16: text, number (raw string kept in the
  * input, parsed via parseNumberInput), toggle, select (with "(inherit)"
  * sentinel for inherit-or-override bindings), multiselect (checkbox list for
  * ≤12 options, one-per-line textarea + validation above), ordered-list
@@ -140,7 +140,7 @@ export function createRenderer(doc) {
 
   /**
    * Render one spec field. Returns a wrapper div; invisible fields render as
-   * a hidden placeholder so the draft is preserved untouched (spec §8.3).
+   * a hidden placeholder so the draft is preserved untouched (architecture §3.16).
    *
    * @param {object} field ConfigUiField.
    * @param {object} state ConfigFieldState from resolveFieldState.
@@ -295,7 +295,7 @@ export function createRenderer(doc) {
   }
 
   /**
-   * Dispatch to the ten spec §8.3 controls.
+   * Dispatch to the ten architecture §3.16 controls.
    * @param {object} field
    * @param {object} state
    * @param {unknown} value
@@ -986,7 +986,7 @@ export function createRenderer(doc) {
 
   /**
    * Secret reference: env NAME only, datalist from the secret_envs options
-   * source, presence hint (spec §8.4 — values never leave/enter the API).
+   * source, presence hint (architecture §3.16 — values never leave/enter the API).
    * @param {object} field
    * @param {object} state
    * @param {unknown} value

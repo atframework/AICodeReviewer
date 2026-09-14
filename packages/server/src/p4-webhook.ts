@@ -26,7 +26,7 @@ export interface P4TriggerConfig {
   /**
    * Present only when a workspace `match` rule references this trigger:
    * admission must route through a pending routing receipt instead of the
-   * legacy direct binding (spec §5.2).
+   * legacy direct binding (architecture §3.10).
    */
   readonly resolveWorkspace?: (
     source: WorkspaceSourceValues,
@@ -45,7 +45,7 @@ export interface P4RoutingEnvelope {
 
 /**
  * Extracts the routing-stage envelope from a p4 trigger payload without any
- * server-side metadata query (spec §5.2: the HTTP layer never runs p4
+ * server-side metadata query (architecture §3.10: the HTTP layer never runs p4
  * describe). Returns null when the payload names no changelist.
  */
 export function buildP4RoutingEnvelope(payload: unknown): P4RoutingEnvelope | null {

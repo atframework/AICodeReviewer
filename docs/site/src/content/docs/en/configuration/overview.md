@@ -27,6 +27,7 @@ the table below as a jumping-off point.
 | `compression` | AICR-side diff summarization that runs before the model sees a large task. | [LLM Providers and Models](/en/configuration/llm/) (context dependency) |
 | `server` | HTTP listener and global API-key auth for `/triggers/*`. | [Authentication & secrets](/en/configuration/authentication/) |
 | `admin` | Optional observability-dashboard super-admin login (separate from webhook/trigger auth). | [Authentication & secrets](/en/configuration/authentication/) |
+| `config_sources` | Database configuration source switch, runtime refresh cadence, and secret-reference grants. | this page (dynamic configuration API) |
 
 :::note[A minimal config]
 Only `llm`, at least one `triggers[]` entry, and at least one
@@ -43,9 +44,6 @@ trigger names and channel names must be unique. Fields ending in `_env`
 must contain an environment variable name matching `[A-Za-z_][A-Za-z0-9_]*`.
 Historical model-chain forms are converted in memory; the file is never
 rewritten. See [model groups](/en/configuration/llm/).
-
-Database configuration sources, configuration editing in the dashboard and
-live configuration publication are not available in this release.
 
 ## The three-layer override model
 
@@ -108,7 +106,7 @@ sections each layer accepts.
 | `prompt` (base system prompt, `force_skills`) | — | ✓ | ✓ |
 | `context_repositories` (auxiliary context repositories) | — | ✓ | ✓ |
 | `auth` (per-workspace API key) | via `server.auth` | — | ✓ |
-| `compression`, `queue`, `storage`, `llm`, `server`, `admin`, `triggers` | ✓ | — | — |
+| `compression`, `queue`, `storage`, `llm`, `server`, `admin`, `triggers`, `config_sources` | ✓ | — | — |
 
 Define groups once in `llm.model_chain`; workspaces reference group names.
 The main group controls reviews, agent failover, and compression summaries.
@@ -181,6 +179,33 @@ API key) combine.
   [Output Channels and Routing](/en/configuration/outputs/) for channels,
   routing, the zero-problem policy, and managed-issue lifecycle limits.
 
+## Multi-project workspaces (v2 matching)
+
+An instance can serve many projects with `match[]` rules instead of a single
+`source_repo` binding (the two are mutually exclusive). Rules are OR-ed; the
+fields inside one rule are AND-ed. Git webhooks (GitHub, GitLab, Gitea,
+Forgejo) verify credentials and match at admission: no rule hit returns
+`202 repository_not_configured`, and a hit on more than one definition returns
+`202 ambiguous_route`. P4/SVN profiles persist a routing receipt first and
+resolve in the background against the verified changed paths.
+
+A matched instance renders its directory from `work_path`, a restricted
+Handlebars template (only the `segment`, `default`, `hash`, and `lower`
+helpers; default `{{workspace.id}}`). The variable catalog lives in
+[Template variables](/en/reference/template-variables/). Matched instances use
+the `isolated_v2` layout: everything lives under
+`<workspaces.root>/<work_path>/<instance_id>`, each run keeps its
+source/agent/tmp/context-repos under `runs/<runId>/`, and cleanup follows the
+whole review. Legacy cache paths stay intact.
+
+Matching also adds the top override layer: each task resolves its analysis
+selection as global → workspace defaults → instance → the matched route's
+`analysis` block. When the database configuration source publishes new
+revisions, file-owned values keep winning and stay read-only, and a
+publication applies only to newly accepted tasks — queued and running tasks
+keep the configuration they were accepted with. Field details live in the
+[config field reference](/en/reference/config-fields/#workspaces).
+
 ## Dynamic configuration API
 
 With `config_sources.database.enabled: true`, `/api/admin/config` publishes database
@@ -208,6 +233,18 @@ Existing file references authorize their current use. Add a file-owned
 destination, including inherited channel, model override and workspace/route search tokens.
 See the [field reference](/en/reference/config-fields/) for the grant shape.
 
+The database may manage the global leaves `llm.default_model_chain`,
+`llm.triage_model_chain`, `llm.retry`, `llm.per_provider_overrides`,
+`llm.budget`, `llm.model_catalog`, `review`, `compression`, `agent`,
+`outputs.template_engine`, `outputs.no_problems`, `outputs.author_resolution`,
+`outputs.routes`, `queue.workers`, `queue.rate_limit`, `queue.retry`,
+`queue.dead_letter`, `workspaces.cache` and `workspaces.defaults`, plus the
+provider, model-group, trigger, channel, workspace and route entity
+collections. The bootstrap trust boundary — `server`, `admin`, `storage`,
+`config_sources`, `queue.kind`, `queue.sqlite` and `workspaces.root` — is
+never writable from the database.
+
 v2 routes, Review policies, agent/search/sandbox settings, model catalog and triage changes
 apply to new tasks. An explicit empty v2 output list closes that output kind. The management
-UI remains planned; the API is available independently of the statistics store.
+UI ships as the dashboard **Config** tab (see [Dashboard and logs](/en/start/dashboard/));
+the API is available independently of the statistics store.

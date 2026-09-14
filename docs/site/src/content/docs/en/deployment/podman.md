@@ -61,9 +61,11 @@ agent:
     engine: auto
 ```
 
-Per-workspace `sandbox` overrides are accepted by the schema but not applied by
-the current runtime — all workspaces share the global `agent.sandbox`. See
-[Agent and sandbox](/en/configuration/agent/).
+Per-workspace `sandbox` overrides (`workspaces.defaults.sandbox`,
+`workspaces.instances.<id>.sandbox`, or a routing rule's `analysis.sandbox`)
+are applied per run: AICR builds the sandbox backend from the layered
+selection for each review run, falling back to the global `agent.sandbox` when
+no layer sets it. See [Agent and sandbox](/en/configuration/agent/).
 
 ## Nested container sandbox (AICR inside a container)
 

@@ -3,7 +3,7 @@
  *
  * Shares the deployment's app SQLite file (WAL allows concurrent readers)
  * and owns the `config` namespace of the `schema_migrations` ledger
- * (spec §4.3/§9.3). Every mutation runs in a BEGIN IMMEDIATE transaction;
+ * (architecture §3.14/§9.3). Every mutation runs in a BEGIN IMMEDIATE transaction;
  * the migration step re-reads the ledger inside that transaction so two
  * processes racing at boot apply the DDL exactly once (M04).
  *
@@ -606,7 +606,7 @@ export async function createSqliteConfigStore(options: SqliteConfigStoreOptions)
 
     async deleteSnapshot(id) {
       open();
-      // Single atomic conditional delete (spec §7.2): a ref-count landing
+      // Single atomic conditional delete (architecture §3.15.2): a ref-count landing
       // between a check-then-delete pair can no longer orphan a signed-out
       // task's snapshot. The follow-up SELECT only classifies the miss:
       // row gone = idempotent no-op, row present = still referenced.

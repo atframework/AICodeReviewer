@@ -1,5 +1,5 @@
 /**
- * Config editor session state machine (spec §8.3, P6 form-state layer).
+ * Config editor session state machine (architecture §3.16, P6 form-state layer).
  *
  * Wraps the pure decode/encode protocol of config-ui-runtime.ts with the
  * stateful editing session the dashboard client drives:

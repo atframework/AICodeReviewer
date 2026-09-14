@@ -55,7 +55,7 @@ export const llmProviderSchema = z
 
 
 /**
- * Request-level overrides on a single model-chain entry (spec §4.2). Wired
+ * Request-level overrides on a single model-chain entry (architecture §3.15). Wired
  * into resolveModelSpecFromChain since P4: maps merge by key over provider
  * fields, arrays replace wholesale; disabling a parameter is expressed
  * through drop_params, never JSON null. Provider id/kind, endpoint, and
@@ -677,7 +677,7 @@ export const workspaceAgentSelectionSchema = z
   .strict();
 
 /**
- * One workspace match rule (spec §5.1): rules are OR-ed; triggers/source
+ * One workspace match rule (architecture §3.10): rules are OR-ed; triggers/source
  * conditions inside a rule are AND-ed; array triggers are OR-ed. At least one
  * condition is required.
  */
@@ -709,7 +709,7 @@ export const workspaceInstanceSchema = z
       })
       .strict()
       .optional(),
-    // v2 multi-project form (spec §5.1); mutually exclusive with source_repo,
+    // v2 multi-project form (architecture §3.10); mutually exclusive with source_repo,
     // enforced together with trigger references by validateWorkspaceDefinitions.
     match: z.array(workspaceMatchRuleSchema).max(CONFIG_MATCHER_LIMITS.maxRulesPerGroup).optional(),
     work_path: z.string().min(1).optional(),
@@ -855,7 +855,7 @@ export const adminAuthSchema = z
   .default({});
 
 /**
- * Dynamic config source switch (spec §4.1). Bootstrap-owned: the database can
+ * Dynamic config source switch (architecture §3.15). Bootstrap-owned: the database can
  * never edit the switch that decides where configuration comes from. When
  * `database.enabled` is false the process keeps the file-only behavior and
  * never opens a config store for revisions; when enabled, admission reads the
@@ -1010,7 +1010,7 @@ export const workspacesDefaultsSchema = z
 
 export const workspacesConfigSchema = z
   .object({
-    // Layout root for workspace instances (spec §5.5). Relative paths resolve
+    // Layout root for workspace instances (architecture §3.10). Relative paths resolve
     // against the server base directory; when unset the historical
     // `<baseDir>/workspaces` root is used. Consumed by the runtime matcher
     // wiring (P1b).
@@ -1022,14 +1022,14 @@ export const workspacesConfigSchema = z
   .strict();
 
 // ---------------------------------------------------------------------------
-// v2 routing rules (spec §6). The v1 file schema does NOT accept `routing`;
+// v2 routing rules (architecture §3.15). The v1 file schema does NOT accept `routing`;
 // the merged effective document (file + database, format version 2) may carry
 // it when database route records exist. Route records narrow trigger-admitted
 // traffic; they can never widen a trigger's repository authorization, because
 // admission runs before route selection.
 // ---------------------------------------------------------------------------
 
-/** Analysis overrides allowed on a routing rule (spec §6; inheritable subset). */
+/** Analysis overrides allowed on a routing rule (architecture §3.15; inheritable subset). */
 export const routingRuleAnalysisSchema = z
   .object({
     model_chain: modelChainReferenceSchema.optional(),
@@ -1295,7 +1295,7 @@ const appConfigSchema = appConfigObjectSchema.superRefine(appConfigRefinement);
  * v2 effective document schema: same object + refinement plus the optional
  * `routing` section. Used to validate a merged file+database effective
  * document at format version 2; plain config files stay on the v1 schema
- * (`routing` is rejected there as an unknown key, spec §6).
+ * (`routing` is rejected there as an unknown key, architecture §3.15).
  */
 export const effectiveConfigV2Schema = appConfigObjectSchema
   .extend({ routing: routingConfigSchema.optional() })
@@ -1384,7 +1384,7 @@ export interface LoadedConfigDocument {
 }
 
 /**
- * Full config document pipeline (spec §4.2): raw YAML with source locations →
+ * Full config document pipeline (architecture §3.15): raw YAML with source locations →
  * in-memory legacy format conversion → one schema parse (defaults applied
  * exactly once) → secret reference validation. Historical `model_chain` array
  * and `fallback_chain`/`triage_fallback_chain` aliases are converted by the

@@ -1,5 +1,5 @@
 /**
- * Config publish service (spec §7.1, P3d). Orchestrates the atomic publish:
+ * Config publish service (architecture §3.15, P3d). Orchestrates the atomic publish:
  * changeset → merge → effective schema parse → reference resolution → graph
  * compile → capability/secret checks → CAS commit with audit → immutable
  * runtime snapshot → local generation install.
@@ -248,7 +248,7 @@ export async function publishConfig(
       databaseRevision: revision.revision,
       resolverVersion: CONFIG_RESOLVER_VERSION,
       // Env var *names* are references, not secrets; the store never sees
-      // resolved secret material (spec §4.3 snapshot contract).
+      // resolved secret material (architecture §3.14 snapshot contract).
       sanitizedEffectiveConfig: prepared.effective,
       contentHash: contentHashOf(prepared.effective),
       now: now(),

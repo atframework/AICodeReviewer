@@ -129,7 +129,7 @@ Narrative: [Configuration overview](/en/configuration/overview/).
 | `workspaces.defaults.review` | object | — | Default review config (see `review`) |
 | `workspaces.defaults.model_chain` | string | inherit | Main-group override referencing `llm.model_chain` |
 | `workspaces.defaults.triage_model_chain` | string | inherit | Lifecycle-group override; if absent at all layers, uses this workspace's main group |
-| `workspaces.defaults.agent.default` | enum | — | Default agent kind for this workspace set (no runtime effect yet, see note below) |
+| `workspaces.defaults.agent.default` | enum | — | Default agent kind for this workspace set; resolved per run through global → defaults → instance → route analysis (see note below) |
 | `workspaces.defaults.agent.timeout_seconds` | int > 0 | — | Hard per-run timeout; on timeout the whole process tree is killed |
 | `workspaces.defaults.agent.auto_approve` | boolean | — | Passed to the selected adapter; false removes automatic approval where supported |
 | `workspaces.defaults.agent.context_compaction.auto` | boolean | — | Enable auto-compaction |
@@ -175,7 +175,7 @@ Narrative: [Configuration overview](/en/configuration/overview/).
 | `workspaces.instances.<id>.enabled` | boolean | — | Enabled when omitted; `false` stops new admission while retaining existing snapshots |
 | `workspaces.instances.<id>.model_chain` | string | inherit | Main-group override referencing `llm.model_chain` |
 | `workspaces.instances.<id>.triage_model_chain` | string | inherit | Lifecycle-group override; if absent at all layers, uses this workspace's main group |
-| `workspaces.instances.<id>.agent.default` | enum | — | Agent kind override (no runtime effect yet, see note below) |
+| `workspaces.instances.<id>.agent.default` | enum | — | Agent kind override; selected per run through the merged workspace layers (see note below) |
 | `workspaces.instances.<id>.agent.timeout_seconds` | int > 0 | — | Hard per-run timeout; on timeout the whole process tree is killed |
 | `workspaces.instances.<id>.agent.auto_approve` | boolean | — | Passed to the selected adapter; false removes automatic approval where supported |
 | `workspaces.instances.<id>.agent.context_compaction.auto` | boolean | — | Enable auto-compaction |
@@ -193,7 +193,7 @@ Narrative: [Configuration overview](/en/configuration/overview/).
 | `workspaces.instances.<id>.agent.web_search.searxng.safesearch` | int 0–2 | — | SearXNG safe-search level |
 | `workspaces.instances.<id>.review` | object | — | Review config override (see `review`) |
 | `workspaces.instances.<id>.outputs` | object | — | Outputs override |
-| `workspaces.instances.<id>.sandbox` | object | — | Sandbox override (no runtime effect yet, see note below) |
+| `workspaces.instances.<id>.sandbox` | object | — | Sandbox override; deep-merged per run over global → defaults → instance (see note below) |
 | `workspaces.instances.<id>.triage` | object | — | Issue triage override (Gitea/Forgejo only) |
 | `workspaces.instances.<id>.prompt` | object | — | Prompt override (same shape as `workspaces.defaults.prompt`) |
 | `workspaces.instances.<id>.context_repositories[].alias` | string | — | Path-safe alias (`^[A-Za-z0-9][A-Za-z0-9._-]*$`, unique per workspace); names the mount path |
@@ -256,12 +256,14 @@ scheduler; `event.*` is forbidden in paths. The variable catalog records type,
 event applicability, acquisition stage, nullability and examples.
 :::
 
-:::note[Workspace-layer `agent.default` / `sandbox` have no effect yet]
-The schema accepts `agent.default` and `sandbox` under `workspaces.defaults`
-and each instance, but the current version selects the adapter and each run’s
-independent sandbox from the global `agent` section. Workspace-layer values are parsed
-and validated but unused at runtime.
-:::
+::::note[Workspace-layer `agent.default` / `sandbox` resolve per run]
+Each run selects its adapter and creates its own sandbox from the merged
+global → `workspaces.defaults` → instance → matched route `analysis`
+selection. The global `agent` section is the fallback when no workspace layer
+sets a value (and for callers that bypass workspace resolution); workspace-layer
+values are deep-merged per section, so an instance only needs to set the fields
+it changes.
+::::
 
 ## `outputs`
 

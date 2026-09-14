@@ -93,7 +93,7 @@ describe("publish commit (S02/S03)", () => {
     expect(audits).toHaveLength(1);
     expect(audits[0]).toMatchObject({ action: "publish" });
 
-    // The runtime snapshot was written and is fetchable (spec §7.1).
+    // The runtime snapshot was written and is fetchable (architecture §3.15).
     const snapshot = await store.readSnapshot(result.snapshotId);
     expect(snapshot).not.toBeNull();
     expect(snapshot).toMatchObject({ databaseRevision: 1, fileDigest: DIGEST });

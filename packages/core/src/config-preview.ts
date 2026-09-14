@@ -1,5 +1,5 @@
 /**
- * Config preview and readiness diagnostics (spec §7.3/§8.4, P3e).
+ * Config preview and readiness diagnostics (architecture §3.15.3/§8.4, P3e).
  *
  * - `previewConfigChangeset` validates a changeset against the current head
  *   and returns the impact view — affected entities, shadowed records,
@@ -174,7 +174,7 @@ export type ConfigRoutePreview =
       readonly workspace: string;
       readonly workspaceInstanceId?: string | undefined;
       readonly layoutKind: WorkspaceLayoutKind;
-      /** Full final directories — never just template fragments (spec §5.5). */
+      /** Full final directories — never just template fragments (architecture §3.10). */
       readonly layout: WorkspaceLayout;
       readonly variables?: PathTemplateVariables | undefined;
       readonly analysis: {
@@ -376,7 +376,7 @@ export interface ConfigReadinessInput {
   readonly snapshotIdFor?: ((revision: { contentHash: string; revision: number }) => string) | undefined;
 }
 
-/** Structured readiness for the config subsystem (spec §8.4 GET /status). */
+/** Structured readiness for the config subsystem (architecture §3.16 GET /status). */
 export async function diagnoseConfigReadiness(input: ConfigReadinessInput): Promise<ConfigReadinessStatus> {
   if (input.store === undefined) {
     return { status: "disabled", detail: "config_sources is off; configuration is file-only." };

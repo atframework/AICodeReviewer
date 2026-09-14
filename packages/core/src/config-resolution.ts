@@ -1,5 +1,5 @@
 /**
- * Runtime workspace resolution (spec §5.1/§5.2/§5.5, P1b).
+ * Runtime workspace resolution (architecture §3.10/§5.2/§5.5, P1b).
  *
  * Turns an authenticated source description (trigger profile + extracted
  * source fields) into a workspace resolution: a legacy `source_repo`
@@ -30,7 +30,7 @@ import {
 /**
  * Source fields available for rule evaluation. Every value comes from the
  * authenticated payload or the configured trigger profile — never from
- * unverified metadata (spec §5.2). `branch`/`ref` are null when the event
+ * unverified metadata (architecture §3.10). `branch`/`ref` are null when the event
  * kind has none (issue events, tag pushes).
  */
 export interface WorkspaceSourceValues {
@@ -52,7 +52,7 @@ export interface WorkspaceTriggerProfile {
   readonly port?: string | undefined;
 }
 
-/** Maps a trigger kind to the `source.vcs` match value (spec §5.3). */
+/** Maps a trigger kind to the `source.vcs` match value (architecture §3.10). */
 export function triggerKindToVcs(kind: string): string | undefined {
   switch (kind) {
     case "github":
@@ -96,9 +96,9 @@ export function triggerProfileHost(profile: WorkspaceTriggerProfile): string | u
 }
 
 /**
- * Stable canonical project key (spec §5.5). Git keys contain the source
+ * Stable canonical project key (architecture §3.10). Git keys contain the source
  * instance (host) and the target repository; host is case-folded, repo_ref
- * keeps its original case (identity never rewrites case, spec §5.1).
+ * keeps its original case (identity never rewrites case, architecture §3.10).
  */
 export function canonicalProjectKey(input: {
   readonly vcs: string;
@@ -169,7 +169,7 @@ export interface WorkspaceResolutionEventContext {
   readonly head_owner?: string | null | undefined;
   /**
    * Trusted manual-entry fields (authenticated request/CLI structured
-   * input, spec §5.3). Never populated from host cwd, arbitrary env, or
+   * input, architecture §3.10). Never populated from host cwd, arbitrary env, or
    * free-form argument text by adapters.
    */
   readonly manual?: {
@@ -186,7 +186,7 @@ export interface WorkspaceResolutionRequest {
 }
 
 /**
- * Builds the template variables for one matched project (spec §5.3 extracted
+ * Builds the template variables for one matched project (architecture §3.10 extracted
  * subset). Re-derivable from the trigger profile plus the ReviewEvent
  * (repoRef, branch, targetBranch), which is what the execution path does —
  * keeping receive-time and execution-time rendering identical.
@@ -238,7 +238,7 @@ export function buildWorkspaceResolutionVariables(input: {
     },
     workspace: { id: input.definitionId, instance_id: input.instanceId },
     ...(input.source.vcs === "git" ? { git: gitNamespace } : {}),
-    // Trusted manual-entry fields only (spec §5.3); absent on every
+    // Trusted manual-entry fields only (architecture §3.10); absent on every
     // non-manual admission and null when the request omitted them.
     manual: {
       request_id: input.event?.manual?.request_id ?? null,
@@ -303,7 +303,7 @@ type CompiledMatchRule = ValidatedWorkspaceDefinition["rules"][number];
  *    rule-internal conditions AND-ed). Exactly one hit produces a binding;
  *    several hits report `ambiguous` with the conflicting definition ids —
  *    never a lexicographic pick (W07). Zero hits on a match-referenced
- *    trigger is `no_match` (never the first workspace, spec §6).
+ *    trigger is `no_match` (never the first workspace, architecture §3.15).
  * 3. A trigger no definition references stays `unbound`; the caller applies
  *    the legacy first-instance/"default" fallback.
  */

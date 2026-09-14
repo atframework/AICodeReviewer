@@ -121,10 +121,11 @@ oh-my-pi 是 pi 的 fork（`omp` 二进制），与 pi 共用同一 JSON 事件�
 
 ## 选择 agent
 
-用全局 `agent.default` 设置。schema 也接受 `workspaces.defaults.agent.default` 和
-`workspaces.instances.<id>.agent.default`，但当前版本启动时只创建一份全局适配器，
-workspace 层的设置会被解析而不生效——混用 agent 需要等后续版本。适用于所有 agent kind
-的超时、沙箱和上下文压缩字段参见 [Agent 与沙箱](/zh-cn/configuration/agent/)。
+把全局 `agent.default` 作为兜底。每次运行时，AICR 按分层 analysis 选择解析适配器——
+路由规则 analysis → `workspaces.instances.<id>.agent.default` → `workspaces.defaults.agent.default`
+→ 全局 `agent.default`——并为每次审查运行构建对应的适配器，因此不同 workspace 可以使用不同的
+agent。workspace 层的 `sandbox` 覆盖按同样的链路解析，并在每次运行时生效。适用于所有 agent
+kind 的超时、沙箱和上下文压缩字段参见 [Agent 与沙箱](/zh-cn/configuration/agent/)。
 
 ### 该用哪个 agent？
 
@@ -145,8 +146,9 @@ workspace 层的设置会被解析而不生效——混用 agent 需要等后续
   `llm.model_catalog` 或显式 `context_window` override）。否则 Kilo 和 Zoo 无法跟踪上下文用量，
   会溢出而非自动压缩。若仍发生溢出，AICR 抛出 `AgentContextOverflowError`，附带模型上限、
   请求 token 数和可操作指引——不会是泛化的 `review_orchestration_failed`。
-- **想混用 agent？** 当前版本所有 workspace 共用全局 `agent.default`；workspace 层的
-  agent 覆盖尚未生效，混用需要等后续版本。
+- **想混用 agent？** 在 workspace 层（`workspaces.defaults` 或 `workspaces.instances.<id>`）或路由规则的
+  `analysis.agent.default` 中设置 `agent.default`；每次运行按分层选择构建适配器，未设置任何层时
+  回退到全局 `agent.default`。
 
 能力缺口（vision、reasoning、结构化输出、工具调用）记录在每个 run 的 `manifest.json` 中，
 标记为 `injected`、`delegated` 或 `not_applicable`——绝不静默丢弃。

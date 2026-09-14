@@ -1,5 +1,5 @@
 /**
- * Stage C of the p4/svn routing admission (spec §5.2, W14): the scheduler
+ * Stage C of the p4/svn routing admission (architecture §3.10, W14): the scheduler
  * background pass that converts durable routing receipts into formal
  * auto-commit receipts. The webhook never fetches VCS metadata; this pass
  * does it at admission-tick time with the same adapter contract the

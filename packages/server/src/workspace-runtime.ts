@@ -64,7 +64,7 @@ export interface WorkspaceRuntime {
 }
 
 /**
- * Layout paths are specified with "/" separators (spec §5.4); runtime
+ * Layout paths are specified with "/" separators (architecture §3.10); runtime
  * consumers convert to host form. resolve() normalizes separators and
  * collapses duplicate slashes on both platforms.
  */
@@ -118,7 +118,7 @@ export function createWorkspaceRuntime(config: AppConfig, baseDir: string): Work
   };
 
   const layoutForEvent = (event: WorkspaceRuntimeEvent): WorkspaceLayout => {
-    // Pinned receive-time resolution (spec §5.2 stage C): the execution
+    // Pinned receive-time resolution (architecture §3.10 stage C): the execution
     // directory must equal what admission resolved, even if config changed
     // between accept and run. Recompute remains for events without a snapshot.
     if (event.resolution?.kind === "match") {

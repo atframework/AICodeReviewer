@@ -7,8 +7,9 @@ The `storage` namespace configures three independent backends — a database, a
 cache, and an object store — plus a retention policy. These back the
 observability dashboard, the model metadata catalog, and reflection memory. The
 database is created automatically when admin auth is configured, when
-`llm.model_catalog` uses the SQLite backend, or when reflection memory is
-enabled.
+`llm.model_catalog` uses the SQLite backend, when reflection memory is
+enabled, or when the database configuration source is enabled
+(`config_sources.database.enabled: true`).
 
 :::note[Backends are wired in to different degrees]
 Both `sqlite` and `postgres` are wired into the runtime database (dashboard
@@ -67,6 +68,11 @@ Redis is shared with the model catalog Redis backend
 `storage.cache.kind` **must** be `redis` and `redis.url_env` **must** resolve,
 otherwise the config is rejected at load time. See
 [LLM Providers and Models](/en/configuration/llm/) for the catalog side.
+
+The configuration source's Redis backend (`config_sources.database.backend:
+redis`) also reuses this connection declaration: it requires
+`storage.cache.kind: redis` and a resolvable `redis.url_env`, otherwise the
+config is rejected at load time.
 
 :::tip[Sharing Redis across environments]
 When sharing one Redis across multiple environments, use a unique `key_prefix`

@@ -1397,7 +1397,7 @@ function extractClaudeJsonResult(stdout: string): ClaudeResultExtraction {
 }
 
 /**
- * L09 run isolation (spec §5.5): every run gets one root `runs/<runId>/` with
+ * L09 run isolation (architecture §3.10): every run gets one root `runs/<runId>/` with
  * its own source checkout, agentDir, tmpDir, and context-repos. Two parallel
  * runs of the same project therefore never overwrite each other's
  * materialized source, task handoff, runtime bundle, MCP output state, or
@@ -1436,7 +1436,7 @@ interface RunDirs {
 }
 
 function computeRunDirs(runtimeDirs: WorkspaceLayout | undefined, sourceRoot: string, runScope: string): RunDirs {
-  // L09 (spec §5.5): every run writes source/agent/tmp/context-repos under
+  // L09 (architecture §3.10): every run writes source/agent/tmp/context-repos under
   // `runs/<runId>/`; the repo cache may be shared, mutable checkouts never.
   const root = runtimeDirs !== undefined
     ? join(runtimeDirs.instanceRoot, "runs", runScope)

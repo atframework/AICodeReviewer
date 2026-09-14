@@ -1,5 +1,5 @@
 /**
- * PostgreSQL migration plan for the store namespace (spec §9.3, matrix
+ * PostgreSQL migration plan for the store namespace (architecture §3.14, matrix
  * M01/M04/M06/M16). The nine steps are field-level translations of the
  * SQLite MIGRATIONS 001-009 in database.ts; differences are limited to the
  * dialect (identity columns, bigint epoch-ms timestamps, native boolean,

@@ -44,13 +44,32 @@ node -e "console.log('sha256:' + require('crypto').createHash('sha256').update(p
 The server exposes a Prometheus-compatible `/metrics` endpoint. Scrape it from
 your existing Prometheus/Grafana stack alongside `/healthz` for liveness.
 
-## SQLite store
+## Store (SQLite / PostgreSQL)
 
-The built-in store is SQLite + Drizzle at `storage.database.sqlite.path`
-(default `/app/data/aicr.sqlite`). The schema also reserves Postgres and
-S3-compatible object storage under top-level `storage.*`, but the dashboard
-runtime currently uses **SQLite only**. The `redis` cache kind is wired in and
-used by the model catalog's Redis backend; see
+The built-in store supports two backends, selected by
+`storage.database.kind`. SQLite + Drizzle at `storage.database.sqlite.path`
+(default `/app/data/aicr.sqlite`) is the default. PostgreSQL is wired end to
+end — stats, webhook events, review deferrals, reflection memory, and the
+model catalog all dispatch on the backend — so a single instance can share one
+database across restarts without local state:
+
+```yaml
+storage:
+  database:
+    kind: postgres
+    postgres:
+      url_env: AICR_DATABASE_URL   # env var holding the PostgreSQL DSN
+    migrate: auto                  # or: verify
+```
+
+`storage.database.postgres.url_env` names the environment variable that holds
+the connection string (a plaintext `storage.database.postgres.url` fallback is
+honored when `url_env` is absent). `storage.database.migrate: auto` applies
+pending schema migrations at open; `verify` refuses to start when the
+migration ledger is behind, drifted, or newer than this program. The `redis`
+cache kind is wired in and used by the model catalog's Redis backend. The
+schema also reserves S3-compatible object storage under
+`storage.object.*`, which is not wired yet. See
 [Storage](/en/configuration/storage/).
 
 Keep secrets in `.env`; `config.yaml` should contain env-var names only.

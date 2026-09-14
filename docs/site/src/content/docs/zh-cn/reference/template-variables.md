@@ -98,6 +98,37 @@ outputs:
       revision_url_template: "https://review.example.com/revisions/{{revision}}"
 ```
 
+## `work_path` 模板变量
+
+多工程实例（`match[]`）的目录由 `workspaces.instances.<id>.work_path` 渲染——
+一个受限的 Handlebars 路径模板：仅允许 `segment`、`default`、`hash`、`lower`
+四个 helper，输出必须是相对 `/` 路径，默认 `{{workspace.id}}`。下面的目录来自
+运行时变量注册表；未知根、已注册但尚未提取的 `scheduled.*` 字段，以及被禁止的
+`event.*` 命名空间都会在配置发布时校验失败。可空变量（标 `*`）在某些事件类型下
+可以为 null——请在 `segment`/`hash` 内用 `default` 包一个字面量兜底值。
+
+| 根 | 变量（`*` = 可空） | 说明 |
+| --- | --- | --- |
+| `trigger.*` | `name`、`kind`、`host*` | trigger profile 标识 |
+| `source.*` | `vcs`、`repo_ref`、`repository*`、`namespace*`、`project_key`、`branch*`、`ref*` | 归一化来源字段 |
+| `workspace.*` | `id`、`instance_id` | 定义与命中的实例 |
+| `git.*` | `owner*`、`repository`、`full_name`、`namespace*`、`branch*`、`ref*`、`base_branch*`、`head_branch*`、`head_repository*`、`head_owner*`、`default_branch*` | 任意 git 系 trigger kind（GitHub/GitLab/Gitea/Forgejo） |
+| `github.*`、`gitea.*`、`forgejo.*` | `owner*`、`repository`、`full_name`、`branch*`、`base_branch*`、`head_branch*`、`repository_id*`、`pull_number*`、`issue_number*`（另有 `github.installation_id*`） | 仅限对应 provider |
+| `gitlab.*` | `namespace*`、`project`、`path_with_namespace`、`branch*`、`source_branch*`、`target_branch*`、`project_id*`、`source_project_id*`、`target_project_id*`、`merge_request_iid*`、`issue_iid*` | 仅限 GitLab |
+| `p4.*` | `server`、`depot`、`depot_path`、`stream`、`stream_name`、`client`、`service_client`、`user`、`change`、`scope` | 仅限 P4；来自已提交 changelist 元数据与配置 scope |
+| `svn.*` | `repository_url`、`repository_root`、`repository_uuid`、`repository`、`project_path`、`branch`、`revision`、`author` | 仅限 SVN；按 revision 固定 |
+| `manual.*` | `request_id*`、`requested_workspace*`、`requested_by*` | 仅来自受信 CLI 输入 |
+| `scheduled.*` | `job_id`、`schedule_id`、`scheduled_at`、`timezone` | 已注册但尚未提取——会被拒绝 |
+| `event.*` | — | 路径中禁止——会被拒绝 |
+
+provider 变量必须对匹配规则接受的每个 trigger kind 都可用：使用 `git.branch`
+的模板不能匹配 `p4` trigger。git provider 的 ID 与编号为十进制字符串，缺失时
+为 null。
+
+```text
+{{segment trigger.name}}/{{segment (default source.namespace "shared")}}/{{segment source.project_key}}
+```
+
 ## Handlebars 示例
 
 一个 workspace 级的 Feishu summary 覆盖模板。放在

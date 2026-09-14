@@ -569,7 +569,7 @@ export async function createSqliteAutoCommitStore(
         }
         if (version === 4) {
           // v4 → v5: receipts gain the frozen admission resolution snapshot;
-          // the routing-receipt stage (spec §5.2) gets its own table. Old rows
+          // the routing-receipt stage (architecture §3.10) gets its own table. Old rows
           // read as NULL resolution (recompute fallback), matching legacy
           // routing exactly.
           db.exec(`

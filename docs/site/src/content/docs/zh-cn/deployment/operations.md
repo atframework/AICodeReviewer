@@ -39,11 +39,27 @@ node -e "console.log('sha256:' + require('crypto').createHash('sha256').update(p
 服务端暴露了一个 Prometheus 兼容的 `/metrics` 端点。在你现有的 Prometheus/Grafana 技术栈中，把它与
 `/healthz`（用于存活检测）一起抓取即可。
 
-## SQLite 存储
+## 存储（SQLite / PostgreSQL）
 
-内置存储是 SQLite + Drizzle，路径由 `storage.database.sqlite.path` 控制（默认
-`/app/data/aicr.sqlite`）。配置 schema 已经在顶层 `storage.*` 下预留了 Postgres、Redis 缓存和
-S3 兼容对象存储，但 dashboard 运行时目前**仅使用 SQLite**。
+内置存储支持两种后端，由 `storage.database.kind` 选择。默认是 SQLite + Drizzle，路径由
+`storage.database.sqlite.path` 控制（默认 `/app/data/aicr.sqlite`）。PostgreSQL 已端到端接入——
+统计、webhook 事件、review 延期、reflection 记忆和 model catalog 都按后端分发——因此实例
+重启后可以共享同一个数据库而不依赖本地状态：
+
+```yaml
+storage:
+  database:
+    kind: postgres
+    postgres:
+      url_env: AICR_DATABASE_URL   # 存放 PostgreSQL DSN 的环境变量
+    migrate: auto                  # 或：verify
+```
+
+`storage.database.postgres.url_env` 指定存放连接串的环境变量名（未设置 `url_env` 时支持明文
+`storage.database.postgres.url` 兜底）。`storage.database.migrate: auto` 在打开时应用待执行的
+schema 迁移；`verify` 在迁移账本落后、漂移或比当前程序更新时拒绝启动。`redis` 缓存类型已接入，
+供 model catalog 的 Redis 后端使用。schema 还在 `storage.object.*` 下预留了 S3 兼容对象存储，
+但尚未接入。见 [存储](/zh-cn/configuration/storage/)。
 
 密钥请保留在 `.env` 中；`config.yaml` 应只包含环境变量名。
 

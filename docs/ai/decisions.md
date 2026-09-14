@@ -63,7 +63,7 @@ null 字段但固定其解析基线，避免升级时跨业务后端重写和接
 稳定路径和目的地。继承凭据也参与目的地检查，不能只检查新增的 *_env 文本。
 实现和边界见架构 §3.16、config-secret-policy.ts、runtime-config.ts 及对应测试。
 
-### D35：恢复与去重边界
+### D41：恢复与去重边界
 
 成员按 stream + revision 唯一归属批次，投递 ID 还需按 provider、事件、trigger、workspace、
 repo 和 scope 隔离。P4/SVN 的单通知只覆盖所报 revision；同来源合并依赖已收到的覆盖范围。
@@ -72,6 +72,48 @@ repo 和 scope 隔离。P4/SVN 的单通知只覆盖所报 revision；同来源�
 执行租约保护存储状态，不能撤销已经发出的 LLM 请求或远端 POST。当前实现采用保守恢复：
 完成检查点仅恢复本地记账；执行或发布结果不确定时，保留固定批次、停止自动重放并要求人工核查。
 逐目标发布恢复留在 `Plan.md` Backlog，尚不提供端到端 exactly-once 保证。
+
+编号修正：本条原以 D35 追加，与决策表中 D35（自动提交调度，M15）重复；全仓引用均指向
+表内 D35，本条无引用，P8 文档同步时改号为 D41。
+
+### D42：文件显式配置优先与字段级锁（P0/M18）
+
+配置文件是显式声明层，数据库只能补充文件未声明的值：文件实体整体锁定，全局字段按叶子
+锁定，父路径写入也必须检查后代锁；数组整体替换。来源合并带逐字段 provenance，来源视图
+保留被文件遮盖的数据库字段值（shadowed）；管理 UI 中同名 shadowed 数据库实体只允许删除，
+`unset` 只移除数据库 override，文件有效值保持不变。无效实体不能在合并中丢失。
+实现见 `packages/core/src/config-source.ts` 与架构 §3.10、§3.15；交付验收见 M18。
+
+### D43：发布协议——revision 文档、CAS head、operationId 幂等与 committed_activating 不回滚（P3/M18、P4–P5/M19）
+
+每次发布生成不可变 revision 文档与审计条目，`ConfigStore.commitChangeset` 的 head CAS 是
+唯一线性化点；baseRevision 过期即 `revision_conflict`，绝不静默分叉。`(namespace,
+operationId)` 唯一：相同内容重试返回原已提交结果（S03），同 ID 不同内容报
+`operation_conflict`；`getConfigOperation` 回答响应丢失后的落库查询（H14）。提交后
+snapshot/install 失败返回 `committed_activating`：revision 已持久化，绝不伪装回滚；restore
+以当前 head 为父重跑文件锁/引用/凭据检查并发布更高 revision，永不是 head 降级（C12/S07）。
+实现见 `packages/core/src/config-publish.ts`、`config-store.ts` 与架构 §3.15–3.16；
+交付验收见 M18/M19。
+
+### D44：即时生效不依赖 pub/sub（P4/M19）
+
+配置变更的即时生效由 admission barrier 保证：每次 webhook 接收在鉴权与选路前重读持久
+head（H15），副本要么看到新版本、要么不接收工作（失败 503 `config_unavailable`）；不引入
+LISTEN/NOTIFY 或任何形式的失效推送。后台 refresh 定时器
+（`config_sources.runtime.refresh_interval_seconds`）只加速 generation 切换，永远不替代
+barrier；关闭配置 store 会同时停止刷新。实现见
+`packages/server/src/runtime-config.ts`、`bootstrap.ts` 与架构 §3.16；交付验收见 M19。
+
+### D45：配置 store 三后端并发等价合同（P2/M17）
+
+SQLite/PostgreSQL/Redis 配置后端（memory 同合同）共享同一 commit-conflict 语义，由
+`packages/core/test/config-store-conformance.ts` 参数化锁定：并发 changeset 恰好一个
+winner，loser 得到 `revision_conflict`，head 与审计恰好推进一次。实现机制因后端而异：
+SQLite 用 `BEGIN IMMEDIATE` 串行化写事务；PostgreSQL 用 per-namespace
+`pg_advisory_xact_lock`（`hashtext(namespace)`）加 head 行 `FOR UPDATE`；Redis 在单
+hash-tag slot 内用 Lua CAS（不用 WATCH/MULTI，脚本先校验后写入），stale-generation
+writer 被 fencing。实现见 `packages/core/src/{sqlite,pg,redis}-config-store.ts` 与架构
+§3.14；交付验收见 M17（PG 18.6 实测）、M21。
 
 ## 维护规则
 

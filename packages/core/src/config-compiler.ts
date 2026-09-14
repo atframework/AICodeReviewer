@@ -1,5 +1,5 @@
 /**
- * Execution graph compiler (spec §6, P3c). Unifies workspace analysis
+ * Execution graph compiler (architecture §3.15, P3c). Unifies workspace analysis
  * parameters and output channel selection for both graphs:
  *
  * - v2 routing graph (`routing.rules`): explicit priority, AND conditions
@@ -289,7 +289,7 @@ export function resolveAnalysisSelection(
       deepMergeAnalysis(deepMergeAnalysis(config.review, defaults.review), instance?.review),
       analysis?.review,
     ),
-    // compression has no workspace layer; only global → route (spec §6).
+    // compression has no workspace layer; only global → route (architecture §3.15).
     compression: deepMergeAnalysis(config.compression, analysis?.compression),
   };
 }

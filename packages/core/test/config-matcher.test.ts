@@ -26,7 +26,7 @@ function expectMatcherError(fn: () => unknown, fragment?: string): void {
 }
 
 describe("globToConfigRegexSource", () => {
-  it("translates full-field glob semantics (spec §5.1)", () => {
+  it("translates full-field glob semantics (architecture §3.10)", () => {
     expect(globToConfigRegexSource("*.ts")).toBe("^(?:[\\s\\S]*\\.ts)$");
     expect(globToConfigRegexSource("a?c")).toBe("^(?:a[\\s\\S]c)$");
     expect(globToConfigRegexSource("a/b")).toBe("^(?:a/b)$");

@@ -3,18 +3,17 @@ import { createHash } from "node:crypto";
 import { z } from "zod";
 
 /**
- * Forward configuration contracts for the workspace/dynamic-config roadmap.
+ * Configuration contracts for workspace/dynamic-config management.
  *
- * This module pins the pure, storage-agnostic contracts defined in
- * docs/superpowers/specs/2026-09-11-workspace-config-management.md:
- * format versions, revision metadata, error codes, the matcher and path
- * template language limits, and the workspace instance identity function.
- * Runtime wiring (storage, publish, routing) is delivered by later phases;
- * nothing here reads the filesystem, environment, or network.
+ * This module pins the pure, storage-agnostic contracts of architecture
+ * §3.10/§3.14–3.16: format versions, revision metadata, error codes, the
+ * matcher and path template language limits, and the workspace instance
+ * identity function. Nothing here reads the filesystem, environment, or
+ * network.
  */
 
 // ---------------------------------------------------------------------------
-// Format versions (spec §9.1)
+// Format versions (architecture §3.14)
 // ---------------------------------------------------------------------------
 
 /** Current on-disk format: no `config_version` key, named model-chain groups. */
@@ -191,7 +190,7 @@ export function parseConfigPath(text: string): ConfigPath {
 }
 
 // ---------------------------------------------------------------------------
-// Entity collections (spec §4.2 rule 2)
+// Entity collections (architecture §3.15 rule 2)
 // ---------------------------------------------------------------------------
 
 export type ConfigEntityKind = "provider" | "model_group" | "trigger" | "channel" | "workspace" | "route";
@@ -213,7 +212,7 @@ export const CONFIG_ENTITY_COLLECTIONS: Readonly<Record<ConfigEntityKind, Config
   trigger: { kind: "trigger", path: ["triggers"], shape: "array", idField: "name", since: 1 },
   channel: { kind: "channel", path: ["outputs", "channels"], shape: "array", idField: "name", since: 1 },
   workspace: { kind: "workspace", path: ["workspaces", "instances"], shape: "map", idField: null, since: 1 },
-  // Reserved for the v2 routing format (spec §6); rejected by the v1 schema.
+  // Reserved for the v2 routing format (architecture §3.15); rejected by the v1 schema.
   route: { kind: "route", path: ["routing", "rules"], shape: "array", idField: "id", since: 2 },
 };
 
@@ -236,7 +235,7 @@ export function entityCollectionsForVersion(formatVersion: number): readonly Con
 }
 
 // ---------------------------------------------------------------------------
-// Revision and head contracts (spec §4.3)
+// Revision and head contracts (architecture §3.14)
 // ---------------------------------------------------------------------------
 
 export interface ConfigRevisionMetadata {
@@ -262,7 +261,7 @@ export interface ConfigHead {
   /**
    * CAS counter as a decimal string: JS-safe-integer backends increment a
    * number, but the API contract is textual so Redis/SQLite BIGINT never
-   * lose precision (spec §4.3).
+   * lose precision (architecture §3.14).
    */
   readonly generation: string;
 }
@@ -370,7 +369,7 @@ export function stableConfigHash(value: unknown): string {
 
 
 // ---------------------------------------------------------------------------
-// Matcher contract (spec §5.1); RE2/glob compilation lands with the P1 matcher
+// Matcher contract (architecture §3.10); RE2/glob compilation lands with the P1 matcher
 // ---------------------------------------------------------------------------
 
 export const CONFIG_MATCHER_LIMITS = {
@@ -412,7 +411,7 @@ export function validateConfigMatcher(value: unknown, path?: ConfigPath): Config
 }
 
 // ---------------------------------------------------------------------------
-// Path template contract (spec §5.4); Handlebars AST validation lands with P1
+// Path template contract (architecture §3.10); Handlebars AST validation lands with P1
 // ---------------------------------------------------------------------------
 
 export const PATH_TEMPLATE_HELPERS = ["segment", "default", "hash", "lower"] as const;
@@ -427,7 +426,7 @@ export const PATH_TEMPLATE_LIMITS = {
 } as const;
 
 // ---------------------------------------------------------------------------
-// Workspace identity (spec §5.1/§5.5)
+// Workspace identity (architecture §3.10/§5.5)
 // ---------------------------------------------------------------------------
 
 /** Reserved root keys of the `workspaces` section; shared with config.ts. */
@@ -465,7 +464,7 @@ export interface WorkspaceInstanceIdentityInput {
 }
 
 /**
- * Stable per-project workspace instance identity (spec §5.5). The full
+ * Stable per-project workspace instance identity (architecture §3.10). The full
  * SHA-256 hex is the identity; templates never shorten it.
  */
 export function computeWorkspaceInstanceId(input: WorkspaceInstanceIdentityInput): string {
@@ -480,11 +479,11 @@ export function computeWorkspaceInstanceId(input: WorkspaceInstanceIdentityInput
 }
 
 // ---------------------------------------------------------------------------
-// Runtime snapshot reference (spec §4.3 config_runtime_snapshots)
+// Runtime snapshot reference (architecture §3.14 config_runtime_snapshots)
 // ---------------------------------------------------------------------------
 
 export const CONFIG_RUNTIME_SNAPSHOT_FORMAT = 1;
-/** Marker for receipts/snapshots that predate config revisions (spec §7.2). */
+/** Marker for receipts/snapshots that predate config revisions (architecture §3.15.2). */
 export const LEGACY_SNAPSHOT_IMPORT = "legacy_import";
 
 export interface ConfigRuntimeSnapshotRef {

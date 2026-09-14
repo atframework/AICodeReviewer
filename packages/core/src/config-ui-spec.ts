@@ -1,5 +1,5 @@
 /**
- * ConfigUiSpec builder (P6, spec §8.3). Derives the serializable dashboard
+ * ConfigUiSpec builder (P6, architecture §3.16). Derives the serializable dashboard
  * spec from CONFIG_FIELD_INVENTORY, the appConfigSchema / routingRuleSchema
  * leaves, and the capability matrices; the only hand-written input is the
  * PAGE_LAYOUT table (pages → sections → path-prefix assignment, labels,

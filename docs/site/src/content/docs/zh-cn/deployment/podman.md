@@ -56,8 +56,10 @@ agent:
     engine: auto
 ```
 
-按 workspace 的 `sandbox` 覆盖会被 schema 接受，但当前运行时不会应用——所有 workspace
-共用全局 `agent.sandbox`。见 [Agent 与沙箱](/zh-cn/configuration/agent/)。
+按 workspace 的 `sandbox` 覆盖（`workspaces.defaults.sandbox`、
+`workspaces.instances.<id>.sandbox` 或路由规则的 `analysis.sandbox`）会在每次运行时生效：
+AICR 按分层选择为每次审查运行构建沙箱后端，未设置任何层时回退到全局 `agent.sandbox`。
+见 [Agent 与沙箱](/zh-cn/configuration/agent/)。
 
 ## 嵌套容器沙箱（AICR 运行在容器内）
 

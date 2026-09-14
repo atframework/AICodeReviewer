@@ -122,7 +122,7 @@ export interface AcceptReceiptResult {
 }
 
 // ---------------------------------------------------------------------------
-// Routing receipts (pending workspace resolution, spec §5.2)
+// Routing receipts (pending workspace resolution, architecture §3.10)
 // ---------------------------------------------------------------------------
 
 /**

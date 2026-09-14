@@ -256,7 +256,7 @@ function summarizePreparedReviewPromptForWebhook(preparation: PreparedReviewProm
 
 /**
  * Maps workspace-resolution failures during translation to the observable
- * 202-ignored contract (spec §6: never a silent first-workspace fallback).
+ * 202-ignored contract (architecture §3.15: never a silent first-workspace fallback).
  * Returns undefined for unrelated errors so the caller keeps its handling.
  */
 function mapWorkspaceResolutionError(
@@ -413,7 +413,7 @@ function hasResolveWorkspace<T extends { readonly resolveWorkspace?: unknown }>(
 
 /**
  * Persists routing-stage receipts for match-referenced p4/svn profiles
- * (spec §5.2): durable write first, 202 after; a failed write is a retryable
+ * (architecture §3.10): durable write first, 202 after; a failed write is a retryable
  * 503, never a false acceptance (W14).
  */
 async function admitRoutingReceipts(args: {

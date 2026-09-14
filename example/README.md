@@ -65,21 +65,64 @@ node packages/cli/dist/index.js serve \
   --port 8080
 ```
 
-## Planned workspace and configuration management
+## Workspace and configuration management
 
-Multi-project workspace rules, path expressions, database-managed settings,
-and automatic migrations are in the
-[design proposal](../docs/superpowers/specs/2026-09-11-workspace-config-management.md).
-The [implementation plan](../docs/superpowers/plans/2026-09-11-workspace-config-implementation.md)
-and [test plan](../docs/superpowers/plans/2026-09-11-workspace-config-tests.md)
-track the remaining work. These features are not implemented in this release.
+Multi-project workspaces, database-published configuration, and the migration
+tooling from the design proposal are implemented in this release; this section
+expands on the dynamic configuration summary above.
 
-The planned variable and helper reference is included as comments above
-`workspaces` in `config.yaml`. Do not enable those fields yet. The proposal
-keeps explicit file settings read-only, adds database settings through the
-management page, and applies published revisions to newly accepted tasks.
-SQLite, PostgreSQL, and Redis migration work is planned; the current built-in
-relational store supports SQLite only.
+### Management UI
+
+Open the dashboard **Config** tab (requires the admin auth env vars and the
+optional `config_sources` block in [config.yaml](config.yaml)). It manages
+providers, model groups, triggers, channels, workspaces, routes, and global
+settings. Use **Stage changes** across pages to group related records, then
+**Publish staged changes** once — publishing is one atomic revision. Drafts
+stay in the browser page and are lost on reload. See the
+[dashboard guide](../docs/site/src/content/docs/en/start/dashboard.md) for
+conflicts, activation status, and version restore.
+
+### Route preview
+
+The routing **Preview** panel explains how an event would resolve — matched
+workspace, layout, template variables, analysis and outputs — without saving
+anything. It evaluates the durable head plus the currently staged draft, so
+new rules can be verified before publishing. The same semantics are available
+as `POST /api/admin/config/preview-route` with `{ "event": ..., "draft": ... }`;
+the draft is optional, and a draft based on an older revision is answered
+`409 revision_conflict` with the current `headRevision`.
+
+### Store upgrades
+
+The deployment database keeps a checksummed migration ledger for both the
+`config` and `store` namespaces, on SQLite and PostgreSQL. Inspect or apply it
+without starting the server:
+
+```bash
+# Read-only ledger report (JSON), exit 0
+node packages/cli/dist/index.js migrate --status --config example/config.yaml
+# Read-only gate: exit 0 clean, 1 when migrations are pending, 2 on drift
+node packages/cli/dist/index.js migrate --check  --config example/config.yaml
+# Apply pending migrations; exit 2 when the ledger is unsafe
+node packages/cli/dist/index.js migrate --apply  --config example/config.yaml
+```
+
+Exactly one flag is required. `storage.database.migrate` controls the startup
+behavior (`auto` / `verify`); `verify` refuses to boot a behind or drifted
+ledger. Checksum drift and newer unknown schemas are never auto-repaired.
+
+### Conflict precedence
+
+File values win over database records: an entity whose id exists in the file
+is locked there, and the database record for the same id is shadowed. Publishing
+is compare-and-swap on the durable head: a changeset based on an older revision
+fails with `409 revision_conflict` and the current `headRevision` — rebase the
+staged changes and resubmit with the same `operationId`. Resubmitting an
+already-committed operation with identical content returns the original
+revision instead of forking; the same id with different content fails with
+`operation_conflict`. A `202 committed_activating` result means the revision
+is durable but not yet active locally — query
+`GET /api/admin/config/operations/:operationId` before retrying anything.
 
 ## Automatic commit scheduling
 

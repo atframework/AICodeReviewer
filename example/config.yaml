@@ -7,7 +7,8 @@
 # Loader notes: duplicate YAML keys and cyclic aliases are rejected; historical
 # `llm.fallback_chain` / `triage_fallback_chain` / array-form `model_chain`
 # still load (converted in memory to named groups, this file is never
-# rewritten); `config_version: 1` is accepted as envelope metadata. Provider IDs,
+# rewritten); `config_version: 1` is accepted and stripped as envelope
+# metadata (values other than 1 are rejected). Provider IDs,
 # trigger names and channel names must be unique. Model-chain entry `overrides`
 # merge over provider request fields (maps by key, arrays replace).
 
@@ -185,33 +186,39 @@ llm:
 #     deleted_project_grace_days: 30  # hard-delete soft-deleted projects after this many days
 
 # ---------------------------------------------------------------------------
-# Dynamic config source (optional, P4/P5)
+# Dynamic config source (optional, shipped)
 # ---------------------------------------------------------------------------
 # Enables database-published configuration: the process adopts the durable
 # config head at startup and at every webhook admission; the admin API at
 # /api/admin/config can publish revisions (read/schema/validate/preview-route/
 # changesets/operations/revisions/restore/status). Published trigger/provider/
 # model changes apply to NEWLY accepted work; already-accepted tasks keep their
-# pinned generation. The management API requires admin auth env vars.
-# `backend: redis` reuses the storage.cache.redis connection declaration.
-# Changesets/restore require the current fileDigest. New DB credential uses
-# need an exact file-owned grant (env + stable target path + destinations).
-# Existing file references authorize their existing purpose implicitly.
-#
-# config_sources:
-#   secret_refs:
-#     - env: DB_LLM_KEY
-#       target: [llm, providers, db-model, api_key_env]
-#       destinations:
-#         kind: openai_compatible
-#         base_url: https://llm.example.com/v1
-#   database:
-#     enabled: true
-#     backend: storage          # storage (sqlite/postgres above) | redis
-#     namespace: default
-#   runtime:
-#     refresh_interval_seconds: 5   # background refresh only; admissions
-#                                    # always re-read the durable head
+# pinned generation. The management API and the dashboard Config tab require
+# admin auth env vars. `backend: redis` reuses the storage.cache.redis
+# connection declaration (and then requires storage.cache.kind: redis plus a
+# resolvable storage.cache.redis.url_env). Changesets/restore require the
+# current fileDigest. New DB credential uses need an exact file-owned grant
+# (env + stable target path + destinations). Existing file references
+# authorize their existing purpose implicitly.
+config_sources:
+  # File-owned grants authorizing database-published credentials. Each grant
+  # pins the exact env var, the stable target path (collection entries use
+  # stable names, never indices) and the exact destination context it may be
+  # used with; destination keys are limited to the endpoint identity set
+  # (kind/base_url/url/endpoint/port/host/trigger/owner/repo/...).
+  secret_refs:
+    - env: DB_LLM_KEY
+      target: [llm, providers, db-model, api_key_env]
+      destinations:
+        kind: openai_compatible
+        base_url: https://llm.example.com/v1
+  database:
+    enabled: true
+    backend: storage          # storage (storage.database above) | redis
+    namespace: default        # 1..64 safe identifier characters
+  runtime:
+    refresh_interval_seconds: 5   # background refresh only (1..3600); admissions
+                                  # always re-read the durable head
 
 # ---------------------------------------------------------------------------
 # Server authentication (optional, recommended for production)
@@ -944,15 +951,16 @@ review:
 # Design: docs/superpowers/specs/2026-09-11-workspace-config-management.md
 # Plans: docs/superpowers/plans/2026-09-11-workspace-config-{implementation,tests}.md
 #
-# Definition (under workspaces.instances; source_repo is mutually exclusive):
-#   shared-services:
-#     enabled: true
+# Definition (under workspaces.instances; source_repo is mutually exclusive) —
+# see the live `shared-services` example below. For a GitHub trigger the same
+# shape uses github.* variables instead:
+#   github-services:
 #     match:
 #       - id: github-services
-#         triggers: [github-main]        # must reference existing triggers
+#         triggers: [github]             # must reference existing triggers
 #         source:
 #           repo_ref: { glob: "acme/service-*" }
-#     work_path: '{{segment trigger.name}}/{{segment github.owner}}/{{segment github.repository}}'
+#     work_path: '{{segment trigger.name}}/{{segment (default github.owner "unknown")}}/{{segment github.repository}}'
 #     model_chain: thorough
 # Layout root override (optional): workspaces.root — absolute, or relative to
 # the server base directory. Default root stays <baseDir>/workspaces.
@@ -984,7 +992,9 @@ review:
 #   source: vcs, repo_ref, repository, namespace, project_key, branch, ref
 #   workspace: id (definition), instance_id (resolved project identity)
 #   event: provider, kind, name, action, target_id, base_revision,
-#          head_revision, actor
+#          head_revision, actor — registered in the catalog but FORBIDDEN in
+#          work_path: event fields are unstable between receive and execution,
+#          so templates referencing event.* fail validation (template_invalid).
 # Branch/ref and event details may be null. Issue events have no implicit branch.
 #
 # Git sources (GitHub, GitLab, Gitea, Forgejo):
@@ -1007,7 +1017,7 @@ review:
 # client/user mean VCS-verified changelist submitter fields. service_client
 # is AICR's own client. stream is optional for classic clients and must come
 # from verified metadata or an exact configured binding, never a path guess.
-# Example planned P4 path:
+# Example P4 path:
 #   '{{segment trigger.name}}/{{segment p4.depot}}/{{segment (default p4.stream "classic")}}'
 # Metadata queries run in the background, after a durable receipt is accepted.
 #
@@ -1019,20 +1029,27 @@ review:
 #
 # Other entrypoints:
 #   manual: request_id, requested_workspace, requested_by
-#   scheduled: job_id, schedule_id, scheduled_at, timezone
-# Scheduled fields require a trusted scheduled-event envelope. This proposal
-# does not add a new periodic trigger engine; unsupported UI options stay disabled.
+#   scheduled: job_id, schedule_id, scheduled_at, timezone — registered but
+#     UNAVAILABLE: scheduled fields require a trusted scheduled-event envelope
+#     and no periodic trigger engine ships in this release, so templates
+#     referencing scheduled.* fail validation (template_invalid).
 #
 # Database configuration sources (revisions, audit, sessions, bindings,
-# snapshots) now have storage backends for SQLite, PostgreSQL and Redis, a
+# snapshots) have storage backends for SQLite, PostgreSQL and Redis, a
 # checksummed migration ledger and the `aicr migrate` CLI; admin sessions are
-# persisted in the configured config store. Source merging/publication and the
-# admin API are implemented when config_sources.database.enabled is true.
-# File-owned values stay locked. Receipts and new deferrals retain their config
-# snapshot; historical unpinned work migration and durable pin reconciliation
-# remain pending. v2 routing runtime selection, secret-purpose allowlists and
-# the management UI are not implemented. Bootstrap connections and workspace
-# root stay file-owned.
+# persisted in the configured config store. Source merging/publication, the
+# /api/admin/config admin API and the dashboard management UI (Config tab)
+# are live when config_sources.database.enabled is true. File-owned values
+# stay locked and shadow database records. v2 routing runtime selection
+# (resolveRouteForEvent) and the secret-purpose allowlists
+# (config_sources.secret_refs) are enforced at admission and publish time.
+# Receipts and new deferrals retain their config snapshot; historical
+# unpinned work resolves to the single durable legacy-import baseline
+# established before workers start. Top-level `routing.rules` stays
+# DB-publish-only: the v1 file schema is strict and rejects `routing`
+# (route entities require format version 2). Scheduled triggers are
+# schema-only/inert — the kind parses but has no runtime resolver.
+# Bootstrap connections and workspaces.root stay file-owned.
 workspaces:
   cache:
     max_total_gb: 10
@@ -1050,6 +1067,24 @@ workspaces:
     #     - "repo-conventions"
 
   instances:
+    # Multi-project definition (v2 match form): one definition covers every
+    # service repo on the gitea trigger. Each matched project resolves its own
+    # instance id and an isolated layout under
+    # workspaces.root / <rendered work_path> / <instance_id>; source_repo-bound
+    # definitions (my-repo below) keep the legacy layout. Disabled by default — set
+    # enabled: true (or drop the flag) once the glob matches your repos.
+    shared-services:
+      enabled: false
+      match:
+        - id: gitea-services
+          triggers: [gitea] # must reference existing triggers
+          source:
+            repo_ref: { glob: "my-org/service-*" }
+      # Helpers: segment/default/hash/lower; lower and default nest inside
+      # segment. event.* is forbidden, scheduled.* unavailable (see above).
+      work_path: '{{segment trigger.name}}/{{segment (lower (default source.namespace "unscoped"))}}/{{segment (default source.repository "unnamed")}}/{{hash source.project_key}}'
+      model_chain: thorough
+
     # Gitea workspace
     my-repo:
       # model_chain: thorough

@@ -51,7 +51,7 @@ function p4Setup(yaml: string = P4_MATCH_YAML, getConfigSnapshotId?: () => strin
   return { config, workspaceRuntime, store, runtime, configs };
 }
 
-describe("p4 routing admission (spec §5.2, W14)", () => {
+describe("p4 routing admission (architecture §3.10, W14)", () => {
   it("keeps direct legacy handling when only a later profile is consistent", async () => {
     const app = createServerApp({ p4: [
       { triggerName: "first", workspaceId: "first", depot: "//first/main" },
@@ -215,7 +215,7 @@ function fakeAdapter(record: {
   } as VcsAdapter;
 }
 
-describe("routing receipt resolver (spec §5.2 stage C, W13/W14/W15)", () => {
+describe("routing receipt resolver (architecture §3.10 stage C, W13/W14/W15)", () => {
   it.each(["outside", "root", "incomplete"])("honors verified SVN roots: %s", async (scenario) => {
     const config = parseConfigDocumentText(SVN_MATCH_YAML).config;
     const workspaceRuntime = createWorkspaceRuntime(config, "/tmp/aicr-routing-test");

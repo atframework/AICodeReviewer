@@ -1,5 +1,5 @@
 /**
- * Config management UI application (spec §8.3/§8.4, P6 design doc §5/§6).
+ * Config management UI application (architecture §3.16/§8.4, P6 design doc §5/§6).
  *
  * Plain-browser ESM: no framework, no Node APIs. Renders into the frozen
  * dashboard skeleton containers (#config-nav / #config-status / #config-main /

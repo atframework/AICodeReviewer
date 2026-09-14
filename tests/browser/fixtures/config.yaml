@@ -1,7 +1,13 @@
-# Browser-gate fixture for tests/browser (P6). Real CLI `serve` wiring: SQLite
-# config store, file-owned entities for readonly/copy flows, dummy env secrets
-# injected by playwright.config.ts webServer env. No external service is
-# contacted: the provider URL is unroutable and no review is ever triggered.
+# Browser-gate fixture for tests/browser (P6; P7 run isolation leg). Real CLI
+# `serve` wiring: SQLite config store, file-owned entities for readonly/copy
+# flows, dummy env secrets injected by playwright.config.ts webServer env.
+# P6 specs never trigger a review: the provider URL stays unroutable (the
+# direct-LLM path is never exercised). The P7 spec drives the agent path:
+# trigger base URLs point at the in-process stub gitea services hosted by
+# start-fixture.mjs (git smart-HTTP + captured /api/v1 writes), stub
+# kilo/opencode CLIs shadow PATH, and the sandbox is pinned native so the
+# agent child inherits the fixture PATH/env (a container engine would
+# auto-detect otherwise and lose the stubs).
 llm:
   providers:
     - id: file-llm
@@ -17,15 +23,18 @@ triggers:
   - name: git-main
     kind: gitea
     enabled: true
-    base_url: http://127.0.0.1:9
+    base_url: http://127.0.0.1:9399
     token_env: AICR_BROWSER_GIT_TOKEN
     webhook_secret_env: AICR_BROWSER_GIT_SECRET
   # Separate v2 source: git-main is intentionally locked to its legacy binding.
   - name: git-preview
     kind: gitea
-    base_url: http://127.0.0.1:9
+    base_url: http://127.0.0.1:9398
     token_env: AICR_BROWSER_GIT_TOKEN
-    webhook_secret_env: AICR_BROWSER_GIT_SECRET
+    # Distinct secret: with one shared secret both gitea triggers authenticate
+    # every webhook, and v2 admission then evaluates git-preview's workspace
+    # resolution too — which fails closed with no_route when no rule covers it.
+    webhook_secret_env: AICR_BROWSER_GIT_SECRET_PREVIEW
 
 outputs:
   channels:
@@ -39,6 +48,10 @@ workspaces:
       source_repo:
         trigger: git-main
         repo: acme/app
+
+agent:
+  sandbox:
+    kind: native
 
 config_sources:
   # Fail-closed secret policy: the UI may only reference envs the deployment
@@ -57,6 +70,25 @@ config_sources:
       destinations:
         kind: openai_compatible
         base_url: http://127.0.0.1:9/v1
+    # P7 run isolation leg: channels bound to the stub-gitea triggers inherit
+    # the trigger's token_env; each binding is a distinct (target, destination)
+    # pair and needs its own grant.
+    - env: AICR_BROWSER_GIT_TOKEN
+      target: [outputs, channels, c-iso-a, token_env]
+      destinations:
+        kind: gitea_pr_review
+        trigger: git-main
+        trigger_destination:
+          kind: gitea
+          base_url: http://127.0.0.1:9399
+    - env: AICR_BROWSER_GIT_TOKEN
+      target: [outputs, channels, c-iso-b, token_env]
+      destinations:
+        kind: gitea_pr_review
+        trigger: git-preview
+        trigger_destination:
+          kind: gitea
+          base_url: http://127.0.0.1:9398
   database:
     enabled: true
     backend: storage

@@ -45,7 +45,7 @@ function expectConfigError(fn: () => unknown, code: string): ConfigError {
 }
 
 // ---------------------------------------------------------------------------
-// Raw source parsing (spec §9.1 stage 1)
+// Raw source parsing (architecture §3.14 stage 1)
 // ---------------------------------------------------------------------------
 
 describe("parseRawConfigSource", () => {
@@ -118,7 +118,7 @@ describe("parseRawConfigSource", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Legacy format conversion (spec §9.4 stage 2, tests C12-C14)
+// Legacy format conversion (architecture §3.14 stage 2, tests C12-C14)
 // ---------------------------------------------------------------------------
 
 describe("convertLegacyConfigDocument", () => {
@@ -332,7 +332,7 @@ describe("validateDatabaseDocument", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Source merging and provenance (spec §4.2, tests F01-F08)
+// Source merging and provenance (architecture §3.15, tests F01-F08)
 // ---------------------------------------------------------------------------
 
 describe("mergeConfigSources", () => {
@@ -441,7 +441,7 @@ describe("mergeConfigSources", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Effective config view (spec §4.2 rule 6, tests F05/F09/F10)
+// Effective config view (architecture §3.15 rule 6, tests F05/F09/F10)
 // ---------------------------------------------------------------------------
 
 describe("buildEffectiveConfigView", () => {
@@ -543,7 +543,7 @@ describe("collectEntityReferences", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Changeset operations (spec §4.3, tests C05/C07/C09, F12)
+// Changeset operations (architecture §3.14, tests C05/C07/C09, F12)
 // ---------------------------------------------------------------------------
 
 describe("applyConfigChangeset", () => {
@@ -661,7 +661,7 @@ describe("applyConfigChangeset", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Copy file entity as database draft (spec §4.2 rule 7, F11)
+// Copy file entity as database draft (architecture §3.15 rule 7, F11)
 // ---------------------------------------------------------------------------
 
 describe("copyFileEntityAsDatabaseDraft", () => {
@@ -705,7 +705,7 @@ describe("parseConfigDocumentText", () => {
 });
 
 // ---------------------------------------------------------------------------
-// B-series compatibility fixtures (spec §9.4, tests B01-B05)
+// B-series compatibility fixtures (architecture §3.14, tests B01-B05)
 // ---------------------------------------------------------------------------
 
 describe("compatibility fixtures", () => {

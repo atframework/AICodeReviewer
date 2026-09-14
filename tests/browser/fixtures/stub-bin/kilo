@@ -1,0 +1,3 @@
+#!/bin/sh
+# Browser-gate stub for the kilo CLI (POSIX PATH resolution).
+exec node "$(dirname "$0")/kilo.mjs" "$@"

@@ -56,7 +56,7 @@ Channel 的 `kind` 是由输出实现注册表约束的自由字符串（Zod 校
 | `gitea_pr_review` | 一条合并的 PR review/评论正文 | PR review / 配置的 summary 发布器 | problem 先缓冲，再作为一条 Markdown 正文 flush；403/422 时退化为一条 issue 评论 |
 | `github_pr_review` | 一条合并的 PR review/评论正文 | PR review / 配置的 summary 发布器 | 与 `gitea_pr_review` 相同的缓冲+flush；403/422 时退化为 issue 评论 |
 | `gitlab_mr_review` | 当 `baseSha`/`headSha` 可用时发 MR discussion | MR note / 配置的 summary 发布器 | 行锚点不可用时退化为通用 MR note |
-| `gitea_problem_issue` / `github_problem_issue` | 收集后对账 | 创建 / 更新 / 解决托管 problem issue | 这里 fingerprint 稳定性最重要；`github_problem_issue` 用字符串标签名，`resolved_action` 仅支持 `close` 和 `none`（GitHub 无 issue 删除 API） |
+| `gitea_problem_issue` / `github_problem_issue` | 收集后对账 | 创建 / 更新 / 解决托管 problem issue | 这里 fingerprint 稳定性最重要；`github_problem_issue` 用字符串标签名，`resolved_action` 支持 `none`、`close` 和 `mark_resolved`（GitHub 无 issue 删除 API） |
 | `gitea_issue` / `github_issue` | 收集后渲染为 issue 评论 | 聚合 issue 评论 | 适用于 push 事件或基于 issue 的分诊 |
 | `feishu_bot` | 收集后聚合 | 交互卡片（JSON 2.0 schema） | 见 [IM 机器人](/zh-cn/integrations/im-bots/) |
 | `wecom_bot` | 收集后聚合 | Markdown 消息 | 见 [IM 机器人](/zh-cn/integrations/im-bots/) |
@@ -88,18 +88,25 @@ HTTP POST 或每个 problem 一条行内评论。如果把 PR review channel 只
 - **最近 issue 上限。** 对账只列出仍处于 open 状态的 issue（`state=open`），上限由
   `review.problem_issue.max_recent_issues` 控制（默认 30，范围 1–200，可按 workspace 覆盖）。
   最近窗口之外的 fingerprint 不会在该 run 去重或关闭。
-- **GitHub `resolved_action`。** 仅支持 `close` 和 `none`（GitHub 无 issue 删除 API）。Gitea
-  额外支持 `delete`。
+- **GitHub `resolved_action`。** 支持 `none`、`close` 和 `mark_resolved`（GitHub 无 issue 删除
+  API）。Gitea 额外支持 `delete`。
 
 `issue_mode`、`resolved_action`、`assign_committer`、`owners_file` 和严重性标签字段见
 [输出通道配置](/zh-cn/configuration/outputs/)。
 
 ## 路由
 
-`outputs.routes` 决定某次评审的 `line_comments` 和 `summary` 发往哪些 channel。
-一个 `default` 块加上可选的 `rules`（按 `trigger` 和 `target_kind` 匹配），可以按
-provider/事件类型路由。Workspace 也可以通过 `workspaces.instances.<id>.outputs`
-固定 channel。
+某次评审的 `line_comments` 和 `summary` 发往哪些 channel 按事件解析，适用哪套路由世代
+取决于配置：
+
+- **v2 `routing.rules[]`**（配置携带路由规则时）：规则按 `triggers`、`target_kinds` 和
+  `source.repo_ref` 匹配，带显式 `priority`。channel 选择按事件依次解析为：命中规则的
+  `outputs`、`workspaces.instances.<id>.outputs`、`workspaces.defaults.outputs`、
+  `outputs.routes.default`。显式 `[]` 关闭该输出类型；只有未设置的字段才继承。同一
+  trigger 不得由两套路由世代同时控制。
+- **遗留 `outputs.routes`**（未配置路由规则时）：一个 `default` 块加上按 `trigger` 和
+  `target_kind` 匹配的可选 `rules`。数组顺序中第一个匹配且列表非空的规则生效；空列表回落到
+  workspace 实例，再到 default；仅 `line_comments` 最后回落到第一个 `*_pr_review` channel。
 
 ```yaml
 outputs:

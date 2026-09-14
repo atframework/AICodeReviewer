@@ -117,6 +117,12 @@ async function createPostgresStoreDb(config: {
     // the configured schema (test isolation and non-public deployments).
     ...(config.schema !== undefined ? { options: `-c search_path="${config.schema}"` } : {}),
   });
+  // pg-pool purges a dead idle client and then re-emits its socket error on
+  // the pool (pg-pool makeIdleListener); an 'error' event without a listener
+  // is an uncaught exception, so a real backend outage would kill the whole
+  // process instead of surfacing bounded store_unavailable failures. The
+  // client is already removed when this fires — there is nothing to do.
+  pool.on("error", () => { /* idle client already purged by pg-pool */ });
   try {
     const client = await pool.connect();
     try {

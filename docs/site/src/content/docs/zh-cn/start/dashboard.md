@@ -116,6 +116,9 @@ Workspace 路径补全以 `{{` 开始，插入 `segment` 表达式，为可空�
 | `GET /api/admin/config/schema`、`/options/:source` | 表单描述和动态选项 |
 | `POST /api/admin/config/changesets` | 携带 baseRevision、fileDigest、operationId、operations 原子发布 |
 | `POST /api/admin/config/preview-route` | 只读事件预览；可选 draft 携带 baseRevision、fileDigest、operations |
+| `POST /api/admin/config/validate` | 无副作用的 changeset 校验；返回脱敏后的预览报告，不写入 |
+| `GET /api/admin/config/revisions/:revision` | 单个 revision 的文档及其审计条目 |
+| `POST /api/admin/config/revisions/:revision/restore` | 以旧版本为准发布新 revision；需要 `fileDigest`，保留文件锁与引用校验 |
 | `GET /api/admin/config/operations/:id`、`/revisions`、`/status` | 操作恢复、版本历史和激活状态 |
 
 ## `/metrics`

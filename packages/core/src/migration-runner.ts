@@ -1,5 +1,5 @@
 /**
- * Namespace-scoped migration runner (spec §4.3/§9.3, matrix M01–M20).
+ * Namespace-scoped migration runner (architecture §3.14/§9.3, matrix M01–M20).
  *
  * One deployment carries several independently-versioned namespaces in the
  * same database — `store` (business tables), `config` (config revisions),

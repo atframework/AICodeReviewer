@@ -7,7 +7,7 @@ import {
 import { z } from "zod";
 
 /**
- * Explicit project root inside a monitored SVN repository (spec §5.3: branch
+ * Explicit project root inside a monitored SVN repository (architecture §3.10: branch
  * and project_path exist only under explicitly configured roots, never
  * inferred from arbitrary URLs).
  */

@@ -9,7 +9,7 @@ import { ConfigError, formatConfigPath, reasoningEffortSchema, type ConfigEntity
 // preserved losslessly, so the Zod layer alone cannot type-check KNOWN
 // extension fields or reject a known field attached to a kind whose runtime
 // consumer never reads it. This module is the publish-time gate for database
-// records (spec §6 capability matrix, §7.1 prepare). Field sets and types are
+// records (architecture §3.10 capability matrix, §7.1 prepare). Field sets and types are
 // verified against the consumers in packages/server/src/bootstrap.ts
 // (resolveModelProviderFields, resolveP4TriggerConfig, resolveSvnTriggerConfig,
 // createChannelPublisherFromConfig) and packages/server/src/*-webhook.ts.
@@ -125,7 +125,7 @@ export const PROVIDER_PASSTHROUGH_FIELDS: FieldMap = {
   ...MODEL_CATALOG_HINT_FIELDS,
 };
 
-/** Kind-conditional provider fields (spec §6 provider row). */
+/** Kind-conditional provider fields (architecture §3.10 provider row). */
 export const PROVIDER_KIND_FIELDS: Readonly<Record<string, FieldMap>> = {
   vertex_ai: {
     vertex_project: nonEmptyString,
@@ -399,7 +399,7 @@ function validateChannelCapabilities(value: Record<string, unknown>, context: Ca
 
 /**
  * Publish-time typed DTO + kind capability validation for one entity record
- * value (spec §6 matrix). Applies to provider/trigger/channel records; other
+ * value (architecture §3.10 matrix). Applies to provider/trigger/channel records; other
  * collections have no passthrough surface and are skipped. Unknown extension
  * keys are preserved and not rejected.
  */

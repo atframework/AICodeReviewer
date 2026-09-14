@@ -1,5 +1,5 @@
 /**
- * Backend-neutral ConfigStore contract (spec §4.3/§9.3, P2).
+ * Backend-neutral ConfigStore contract (architecture §3.14/§9.3, P2).
  *
  * The store persists immutable configuration revisions with a CAS head
  * pointer per namespace, atomic audit entries, durable runtime snapshots,
@@ -43,7 +43,7 @@ export interface ConfigRevisionRecord {
   /** Per-namespace monotonic revision, starting at 1. */
   readonly revision: number;
   readonly parentRevision: number | null;
-  /** Document format contract version (spec §9.1: distinct from schemaVersion). */
+  /** Document format contract version (architecture §3.14: distinct from schemaVersion). */
   readonly formatVersion: number;
   /** Database-owned configuration only; never resolved secrets. */
   readonly document: DatabaseConfigDocument;
@@ -144,7 +144,7 @@ export interface WriteSnapshotInput {
 export type WorkspaceBindingState = "active" | "disabled";
 
 export interface WorkspaceBindingRecord {
-  /** Full instance identity (spec §5.5); idempotent upsert key. */
+  /** Full instance identity (architecture §3.10); idempotent upsert key. */
   readonly instanceId: string;
   readonly definitionId: string;
   readonly canonicalProjectKey: string;

@@ -3,7 +3,7 @@
  * frozen prefix of STORE_SQLITE_MIGRATIONS, byte-identical to the pre-007
  * commit) plus its `_migrations` ledger rows and seeded business data.
  * Opening it with current code must apply only 007–009, preserve every old
- * row, and accept the config namespace tables alongside (spec §9 M02:
+ * row, and accept the config namespace tables alongside (architecture §3.14 M02:
  * "先核验真实旧账本，再添加 config/binding/session/audit 表和业务升级").
  */
 import { mkdtemp, rm } from "node:fs/promises";

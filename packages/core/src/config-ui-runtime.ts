@@ -1,5 +1,5 @@
 /**
- * ConfigUiSpec runtime protocol (spec §8.3, P6). Serializable description of the
+ * ConfigUiSpec runtime protocol (architecture §3.16, P6). Serializable description of the
  * config management UI plus the five pure function families that operate on it:
  * validateUiSpec, decodeDraft, encodeChanges, resolveFieldState, resolveOptions.
  *

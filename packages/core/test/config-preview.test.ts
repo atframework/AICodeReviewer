@@ -154,7 +154,7 @@ describe("previewConfigRoute (R13)", () => {
     expect(preview.routeRuleId).toBe("r-pr");
     expect(preview.workspace).toBe("product-services");
     expect(preview.workspaceInstanceId).toBeTruthy();
-    // Full final path, not a template fragment (spec §5.5).
+    // Full final path, not a template fragment (architecture §3.10).
     expect(preview.layout.instanceRoot).toMatch(/^\/data\/workspaces\/product-services\/.+/u);
     expect(preview.layout.instanceRoot).toContain(preview.workspaceInstanceId!);
     expect(preview.layout.sourceRoot).toContain(preview.layout.instanceRoot);

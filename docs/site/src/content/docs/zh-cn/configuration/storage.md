@@ -5,10 +5,10 @@ description: 配置 storage 命名空间下的 database、cache、object 三类�
 
 `storage` 命名空间配置三个相互独立的后端——数据库、缓存和对象存储——外加一项保留
 策略。它们支撑可观测性看板、模型元数据目录和反思记忆。当配置了 admin 鉴权、
-`llm.model_catalog` 使用 SQLite 后端，或启用反思记忆时，数据库会自动创建。
+`llm.model_catalog` 使用 SQLite 后端、启用反思记忆，或启用数据库配置源
+（`config_sources.database.enabled: true`）时，数据库会自动创建。
 
 :::note[各后端的接入程度不同]
-数据库目前只有 `sqlite` 接入了运行时（dashboard 统计、模型目录、反思记忆），
 `sqlite` 与 `postgres` 都已接入运行时数据库（仪表盘统计、模型目录、反思记忆、评审延期、webhook 事件）。缓存的 `redis` 已接入，供模型目录的 Redis 后端使用。
 对象存储的 `s3` 字段是预留——能通过校验，但运行时还没有消费它们。
 :::
@@ -57,6 +57,10 @@ Redis 与模型目录的 Redis 后端（`llm.model_catalog.cache.backend: redis`
 当目录使用 Redis 时，`storage.cache.kind` **必须**为 `redis` 且
 `redis.url_env` **必须**可解析，否则配置在加载时即被拒绝。目录侧见
 [LLM 提供方与模型](/zh-cn/configuration/llm/)。
+
+配置源的 Redis 后端（`config_sources.database.backend: redis`）同样复用这份
+连接声明：要求 `storage.cache.kind: redis` 且 `redis.url_env` 可解析，否则配置
+在加载时即被拒绝。
 
 :::tip[跨环境共享 Redis]
 在多个环境间共享同一个 Redis 时，请为每个环境使用唯一的 `key_prefix`，避免目录键

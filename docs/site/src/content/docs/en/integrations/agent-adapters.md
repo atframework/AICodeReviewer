@@ -255,11 +255,12 @@ double-write conflicts.
 
 ## Choosing an agent
 
-Set `agent.default` globally. The schema also accepts
-`workspaces.defaults.agent.default` and
-`workspaces.instances.<id>.agent.default`, but the current version builds one
-global adapter at startup — workspace-layer values are parsed but have no
-effect, so mixing agents needs a future release. See
+Set `agent.default` globally as the fallback. Per-run, AICR resolves the
+adapter through the layered analysis selection — route analysis →
+`workspaces.instances.<id>.agent.default` → `workspaces.defaults.agent.default`
+→ global `agent.default` — and builds the adapter for each review run, so
+different workspaces can run different agents. Workspace-layer `sandbox`
+overrides resolve the same way and are applied per run. See
 [Agent and sandbox](/en/configuration/agent/) for the timeout, sandbox, and
 context-compaction fields that apply to every agent kind.
 
@@ -286,9 +287,10 @@ context-compaction fields that apply to every agent kind.
   usage and will overflow instead of auto-compacting. If an overflow still
   occurs, AICR throws `AgentContextOverflowError` with the limit, requested
   tokens, and actionable guidance — not a generic `review_orchestration_failed`.
-- **Mixing agents?** All workspaces share the global `agent.default` in the
-  current version; per-workspace agent overrides are parsed but not applied
-  yet.
+- **Mixing agents?** Set `agent.default` at the workspace layer
+  (`workspaces.defaults` or `workspaces.instances.<id>`) or in a routing rule's
+  `analysis.agent.default`; each run builds the adapter from the layered
+  selection and falls back to the global `agent.default` when no layer sets it.
 
 Capability gaps (vision, reasoning, structured output, tool calls) are
 recorded in each run's `manifest.json` as `injected`, `delegated`, or
