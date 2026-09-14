@@ -1,8 +1,13 @@
 import type { StoreDb } from "@aicr/store";
+import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { createContext, runInContext } from "node:vm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createServerApp } from "../src/index.js";
+import { getDashboardClientAsset } from "../src/dashboard/index.js";
 
 describe("dashboard routes", () => {
   afterEach(() => vi.useRealTimers());
@@ -266,5 +271,86 @@ describe("dashboard routes", () => {
 
     expect(response.status).toBe(200);
     expect(html).toContain("AICodeReviewer Observability");
+  });
+});
+
+describe("getDashboardClientAsset", () => {
+  it("reads an allowlisted asset from the base directory and caches it", () => {
+    const dir = mkdtempSync(join(tmpdir(), "aicr-client-assets-"));
+    try {
+      writeFileSync(join(dir, "config-app.js"), "export default {};\n");
+      const asset = getDashboardClientAsset("config-app.js", dir);
+      expect(asset).toEqual({ content: "export default {};\n", contentType: "application/javascript; charset=utf-8" });
+      // Per-name cache: the asset survives removal of the underlying file.
+      rmSync(join(dir, "config-app.js"));
+      expect(getDashboardClientAsset("config-app.js", dir)).toEqual(asset);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects traversal, separators, uppercase, non-js and missing names", () => {
+    const dir = mkdtempSync(join(tmpdir(), "aicr-client-assets-"));
+    try {
+      writeFileSync(join(dir, "present.js"), "present");
+      for (const name of ["../secret.js", "..%2F..%2Fsecret.js", "/abs.js", "CONFIG-APP.js", "nested/app.js", "app.css", "missing.js"]) {
+        expect(getDashboardClientAsset(name, dir)).toBeNull();
+      }
+      // A cached miss stays a miss even after the file appears.
+      writeFileSync(join(dir, "missing.js"), "late");
+      expect(getDashboardClientAsset("missing.js", dir)).toBeNull();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("dashboard client asset route", () => {
+  it("answers 404 JSON for well-formed but missing assets", async () => {
+    const app = createServerApp({});
+    const response = await app.request("/dashboard/client/definitely-missing.js");
+    expect(response.status).toBe(404);
+    expect((await response.json() as { error: string }).error).toBe("not_found");
+  });
+
+  it("rejects traversal and names outside the allowlist", async () => {
+    const app = createServerApp({});
+    for (const path of [
+      "/dashboard/client/..%2F..%2Fsecret.js",
+      "/dashboard/client/%2Fetc%2Fpasswd",
+      "/dashboard/client/CONFIG-APP.js",
+      "/dashboard/client/nested%2Fapp.js",
+    ]) {
+      const response = await app.request(path);
+      expect([path, response.status]).toEqual([path, 404]);
+    }
+    // Names rejected by the allowlist still hit the handler and answer JSON.
+    const uppercase = await app.request("/dashboard/client/CONFIG-APP.js");
+    expect((await uppercase.json() as { error: string }).error).toBe("not_found");
+  });
+
+  it("serves an allowlisted asset with MIME and no-store when the client build exists", async () => {
+    const clientDir = join(dirname(fileURLToPath(import.meta.url)), "..", "src", "dashboard", "client");
+    const present = existsSync(clientDir) ? readdirSync(clientDir).find((entry) => /^[a-z0-9-]+\.js$/u.test(entry)) : undefined;
+    const app = createServerApp({});
+    if (present === undefined) {
+      // Client modules are produced by the build/copy step; without them the
+      // route must still answer a clean 404 rather than throw.
+      const response = await app.request("/dashboard/client/config-app.js");
+      expect(response.status).toBe(404);
+      return;
+    }
+    const response = await app.request(`/dashboard/client/${present}`);
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toBe("application/javascript; charset=utf-8");
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(await response.text()).toBe(getDashboardClientAsset(present)?.content);
+  });
+
+  it("hits the same handler under a path prefix", async () => {
+    const app = createServerApp({ pathPrefix: "/x" });
+    const response = await app.request("/x/dashboard/client/definitely-missing.js");
+    expect(response.status).toBe(404);
+    expect((await response.json() as { error: string }).error).toBe("not_found");
   });
 });

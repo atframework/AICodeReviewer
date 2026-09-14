@@ -28,11 +28,15 @@ import {
   DATABASE_ENTITY_COLLECTION_KEYS,
   DATABASE_KIND_COLLECTION,
   ConfigError,
+  WORK_PATH_TEMPLATE_VARIABLES,
   assertNoConfigCredentialLiterals,
+  buildConfigUiSpec,
+  buildEffectiveConfigView,
   collectConfigSecretReferences,
   getConfigOperation,
   isConfigError,
   mergeConfigSources,
+  parseConfigPath,
   parseEffectiveConfig,
   prepareConfigPublication,
   prepareConfigRestore,
@@ -44,10 +48,13 @@ import {
   validateConfigNamespace,
   type AppConfigInput,
   type ConfigChangesetOperation,
+  type ConfigEntityKind,
+  type ConfigFieldView,
   type ConfigRoutePreviewEvent,
   type ConfigStore,
+  type ConfigUiOption,
+  type ConfigUiSpec,
   type DatabaseConfigDocument,
-  type EffectiveConfigV2,
 } from "@aicr/core";
 import { createAdminAuthMiddleware, type AdminAuthConfig, type AdminSessionStore } from "./admin-auth.js";
 import type { RuntimeConfigManager } from "./runtime-config.js";
@@ -153,7 +160,10 @@ const routePreviewEventSchema: z.ZodType<ConfigRoutePreviewEvent> = z.object({
   providerFields: z.record(z.string().max(4096).nullable()).optional(),
 }).strict();
 
-const previewRouteRequestSchema = z.object({ event: routePreviewEventSchema }).strict();
+const previewRouteRequestSchema = z.object({
+  event: routePreviewEventSchema,
+  draft: changesetRequestSchema.omit({ operationId: true }).optional(),
+}).strict();
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -224,6 +234,13 @@ function assertJsonShape(value: unknown, depth = 0): void {
 
 /** New writes store credential references; legacy literal values remain readable only through redaction. */
 function assertNoInlineCredentials(value: unknown): void {
+  const visit = (entry: unknown): void => {
+    if (typeof entry === "string" && /<redacted>|%3credacted%3e/iu.test(entry)) {
+      throw new ConfigError("invalid_field_type", "Replace or clear redacted values before saving; placeholders cannot be persisted.");
+    }
+    if (entry !== null && typeof entry === "object") Object.values(entry).forEach(visit);
+  };
+  visit(value);
   assertNoConfigCredentialLiterals(value);
 }
 
@@ -294,6 +311,29 @@ function redactDeep(value: unknown): unknown {
   return output;
 }
 
+/**
+ * Fields-view redaction (A05): redactDeep matches on object keys, but field
+ * values sit under `effectiveValue`/`value`, so sensitivity is derived from
+ * the config path segments instead — any secret-named segment (without the
+ * `_env` reference suffix) masks the whole subtree value, mirroring
+ * redactDeep's key rule. Numbers/booleans survive, as in redactDeep.
+ */
+function redactFieldsView(fields: readonly ConfigFieldView[]): readonly ConfigFieldView[] {
+  return fields.map((field) => {
+    const sensitive = parseConfigPath(field.path).some((segment) =>
+      (SENSITIVE_NAME_SUFFIX_FREE.test(segment) || /^(authorization|proxy-authorization|cookie|set-cookie|headers)$/i.test(segment))
+      && !segment.endsWith("_env"));
+    if (!sensitive) return field;
+    const mask = (value: unknown): unknown =>
+      typeof value === "number" || typeof value === "boolean" ? value : "<redacted>";
+    return {
+      ...field,
+      effectiveValue: mask(field.effectiveValue),
+      overriddenValues: field.overriddenValues.map((entry) => ({ ...entry, value: mask(entry.value) })),
+    };
+  });
+}
+
 function revisionMetadata(revision: {
   readonly namespace: string;
   readonly revision: number;
@@ -331,10 +371,6 @@ async function loadConfigView(options: ConfigApiOptions) {
   const merged = mergeConfigSources({ file: options.fileConfig, database, formatVersion: record?.formatVersion ?? 2 });
   const effective = parseEffectiveConfig(merged.document, options.formatVersion ?? 2);
   return { head, database, merged, effective };
-}
-
-async function loadEffective(options: ConfigApiOptions): Promise<EffectiveConfigV2> {
-  return (await loadConfigView(options)).effective;
 }
 
 function secretEnvStatus(config: unknown, envLookup: ((name: string) => string | undefined) | undefined, file: AppConfigInput): { name: string; present: boolean }[] {
@@ -382,6 +418,68 @@ function entityIdsAtPath(overlay: unknown, path: readonly string[], idField: str
 }
 
 // ---------------------------------------------------------------------------
+// Options sources (GET /options/:source, spec §8.3)
+// ---------------------------------------------------------------------------
+
+/** Lazily built UI spec: derived from the inventory, never per-request. */
+let cachedConfigUiSpec: ConfigUiSpec | undefined;
+
+function configUiSpec(): ConfigUiSpec {
+  cachedConfigUiSpec ??= buildConfigUiSpec();
+  return cachedConfigUiSpec;
+}
+
+/**
+ * Entity id options: file entities plus every database record. Disabled
+ * database records stay selectable-but-flagged so editors can reference an
+ * entity before re-enabling it; records shadowed by a file entity are
+ * effective, hence not disabled.
+ */
+async function entityOptions(options: ConfigApiOptions, kind: ConfigEntityKind): Promise<ConfigUiOption[]> {
+  const collection = CONFIG_ENTITY_COLLECTIONS[kind];
+  const { database } = await loadConfigView(options);
+  const fileIds = entityIdsAtPath(options.fileConfig, collection.path, collection.idField);
+  const byId = new Map<string, ConfigUiOption>();
+  for (const id of fileIds) byId.set(id, { value: id, label: id });
+  for (const record of Object.values(database.entities?.[DATABASE_KIND_COLLECTION[kind]] ?? {})) {
+    byId.set(record.name, {
+      value: record.name,
+      label: record.name,
+      ...(!record.enabled && !fileIds.includes(record.name) ? { disabled: true } : {}),
+    });
+  }
+  return [...byId.values()].sort((left, right) => left.value.localeCompare(right.value));
+}
+
+/** Secret env options carry names only; absent envs are disabled, never valued (A05/A06). */
+async function secretEnvOptions(options: ConfigApiOptions): Promise<ConfigUiOption[]> {
+  const names = new Set(collectConfigSecretReferences(options.fileConfig).map(reference => reference.env));
+  for (const reference of (options.fileConfig.config_sources as { secret_refs?: readonly { env: string }[] } | undefined)?.secret_refs ?? []) names.add(reference.env);
+  return [...names].sort().map(name => ({ value: name, label: name,
+    ...(options.envLookup?.(name) === undefined ? { disabled: true } : {}) }));
+}
+
+function pathTemplateVariableOptions(): ConfigUiOption[] {
+  return WORK_PATH_TEMPLATE_VARIABLES.map((entry) => ({
+    value: entry.path,
+    label: entry.availability === "extracted" ? entry.path : `${entry.path} (${entry.availability})`,
+    ...(entry.availability !== "extracted" ? { disabled: true } : {
+      insertText: entry.nullable ? `{{segment (default ${entry.path} "unknown")}}` : `{{segment ${entry.path}}}`,
+    }),
+  }));
+}
+
+const CONFIG_OPTIONS_SOURCES: Readonly<Record<string, (options: ConfigApiOptions) => Promise<ConfigUiOption[]> | ConfigUiOption[]>> = {
+  providers: (options) => entityOptions(options, "provider"),
+  model_groups: (options) => entityOptions(options, "model_group"),
+  triggers: (options) => entityOptions(options, "trigger"),
+  channels: (options) => entityOptions(options, "channel"),
+  workspaces: (options) => entityOptions(options, "workspace"),
+  secret_envs: secretEnvOptions,
+  path_template_variables: pathTemplateVariableOptions,
+};
+
+// ---------------------------------------------------------------------------
 // API factory
 // ---------------------------------------------------------------------------
 
@@ -396,8 +494,34 @@ export function createConfigApi(options: ConfigApiOptions): Hono {
   app.use("*", authMiddleware);
   app.use("*", async (c, next) => {
     if (!["GET", "HEAD", "OPTIONS"].includes(c.req.method)) {
+      // CSRF guard: reject cross-site fetches outright, and when an Origin
+      // header is present require its host to match the request Host header.
+      // The Host header (not c.req.url) is the reliable reference: the server
+      // fabricates req.url from its bind address, which need not carry the
+      // port the browser actually dialed.
       const origin = c.req.header("origin");
-      if (c.req.header("sec-fetch-site") === "cross-site" || (origin !== undefined && origin !== new URL(c.req.url).origin)) {
+      let originHost: string | undefined;
+      if (origin !== undefined) {
+        try {
+          originHost = new URL(origin).host;
+        } catch {
+          originHost = undefined;
+        }
+      }
+      // Host header first (browsers always send one); fall back to the
+      // request URL host for non-browser/test contexts that omit it.
+      let requestHost = c.req.header("host");
+      if (requestHost === undefined) {
+        try {
+          requestHost = new URL(c.req.url).host;
+        } catch {
+          requestHost = undefined;
+        }
+      }
+      if (
+        c.req.header("sec-fetch-site") === "cross-site"
+        || (origin !== undefined && (originHost === undefined || requestHost === undefined || originHost !== requestHost))
+      ) {
         return c.json({ error: "forbidden_origin", message: "Cross-origin configuration writes are not allowed." }, 403);
       }
     }
@@ -446,7 +570,8 @@ export function createConfigApi(options: ConfigApiOptions): Hono {
       }
       const view = redactDeep({ namespace: options.namespace, head,
         configSnapshotId: options.manager?.status().snapshotId ?? null,
-        fileDigest: options.fileDigest, globals, provenance: Object.fromEntries(merged.provenance), collections });
+        fileDigest: options.fileDigest, globals, provenance: Object.fromEntries(merged.provenance), collections,
+        fields: redactFieldsView(buildEffectiveConfigView(merged, effective)) });
       return c.json({ ...(view as Record<string, unknown>), secretEnvs: secretEnvStatus(effective, options.envLookup, options.fileConfig) });
     } catch (error) {
       return configErrorResponse(c, error);
@@ -457,6 +582,7 @@ export function createConfigApi(options: ConfigApiOptions): Hono {
   app.get("/schema", (c) => {
     return c.json({
       protocolVersion: 1,
+      uiSpec: configUiSpec(),
       formatVersion: options.formatVersion ?? 2,
       entityCollections: Object.values(CONFIG_ENTITY_COLLECTIONS).map((collection) => ({ kind: collection.kind, path: collection.path, idField: collection.idField, since: collection.since })),
       channelKinds: CHANNEL_KINDS,
@@ -473,6 +599,20 @@ export function createConfigApi(options: ConfigApiOptions): Hono {
         testId: spec.testId ?? null,
       })),
     });
+  });
+
+  // ------------------------------------------------------ GET /options/:source
+  app.get("/options/:source", async (c) => {
+    const source = c.req.param("source");
+    const handler = Object.hasOwn(CONFIG_OPTIONS_SOURCES, source) ? CONFIG_OPTIONS_SOURCES[source] : undefined;
+    if (handler === undefined) {
+      return c.json({ error: "invalid_request", message: `Unknown options source "${source}".` }, 400);
+    }
+    try {
+      return c.json(redactDeep({ source, options: await handler(options) }));
+    } catch (error) {
+      return configErrorResponse(c, error);
+    }
   });
 
   // --------------------------------------------------------- POST /validate
@@ -502,7 +642,21 @@ export function createConfigApi(options: ConfigApiOptions): Hono {
     const body = await readJsonBody(c, previewRouteRequestSchema, maxBodyBytes);
     if (!body.ok) return body.response;
     try {
-      const effective = await loadEffective(options);
+      const loaded = await loadConfigView(options);
+      let effective = loaded.effective;
+      const draft = body.value.draft;
+      if (draft !== undefined) {
+        if (draft.fileDigest !== options.fileDigest) throw new ConfigError("file_config_mismatch", "The draft uses a different file configuration.");
+        if (draft.baseRevision !== (loaded.head?.activeRevision ?? null)) {
+          return c.json({ error: "revision_conflict", headRevision: loaded.head?.activeRevision ?? null, message: "The staged draft is based on an older revision." }, 409);
+        }
+        assertNoInlineCredentials(draft.operations);
+        effective = prepareConfigPublication({
+          ...draft, operations: draft.operations as readonly ConfigChangesetOperation[],
+          namespace: options.namespace, file: options.fileConfig, current: loaded.database,
+          formatVersion: options.formatVersion ?? 2, operationId: "route-preview", actor: "preview",
+        }).effective;
+      }
       const preview = previewConfigRoute(effective, body.value.event);
       return c.json(redactDeep(preview));
     } catch (error) {

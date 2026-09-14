@@ -110,6 +110,26 @@ async function seedLegacyCredentials(operations: readonly ConfigChangesetOperati
 }
 
 describe("config api auth (A01/A02)", () => {
+  it("P6 offers approved unused secret names without enumerating the environment", async () => {
+    const envLookup = vi.fn(() => "private-value");
+    const response = await request(makeApp({ ...apiOptions, envLookup }), "/options/secret_envs");
+    expect(await response.json()).toEqual({ source: "secret_envs", options: [{ value: "KNOWN_ENV", label: "KNOWN_ENV" }] });
+    expect(envLookup.mock.calls).toEqual([["KNOWN_ENV"]]);
+  });
+
+  it.each(["constructor", "toString", "__proto__"])("P6 rejects inherited options source %s", async (source) => {
+    const response = await request(makeApp(), `/options/${source}`);
+    expect(response.status).toBe(400);
+  });
+
+  it.each(["<redacted>", "http://localhost/?key=%3Credacted%3E"])("P6 rejects redaction placeholders before persistence: %s", async (base_url) => {
+    const response = await request(makeApp(), "/changesets", { method: "POST", body: { baseRevision: null, operationId: "masked-value",
+      operations: [{ op: "create", collection: "providers", record: { id: "masked", name: "masked", enabled: true, value: { id: "masked", kind: "ollama", base_url } } }] } });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ code: "invalid_field_type" });
+    expect(await store.readHead(NAMESPACE)).toBeNull();
+  });
+
   it("A07: prefixed replicas share persisted sessions and report activation versions", async () => {
     const replicaStore = await createSqliteConfigStore({ path: join(dir, "config.sqlite") });
     const replicaManager = new RuntimeConfigManager({ fileConfig: FILE_CONFIG, fileDocument: FILE_CONFIG,
@@ -253,6 +273,46 @@ describe("config api schema endpoint", () => {
 });
 
 describe("config api validate + preview-route (A09)", () => {
+  const draftOperations: ConfigChangesetOperation[] = [
+    { op: "create", collection: "workspaces", record: { id: "draft-workspace", name: "draft-workspace", enabled: true,
+      value: { match: [{ source: { repo_ref: { exact: "acme/x" } } }], work_path: "{{segment git.repository}}" } } },
+    { op: "create", collection: "routes", record: { id: "draft-route", name: "draft-route", enabled: true,
+      value: { id: "draft-route", enabled: true, priority: 100, workspace: "draft-workspace", match: { triggers: ["t"], target_kinds: ["push"] } } } },
+  ];
+
+  it("previews staged workspace and routing edits without committing or installing them", async () => {
+    const app = makeApp({ ...apiOptions, fileConfig: { ...apiOptions.fileConfig, triggers: [{ name: "t", kind: "github", token_env: "GH_TOKEN" }] } });
+    const response = await request(app, "/preview-route", { method: "POST", body: {
+      event: { triggerName: "t", targetKind: "push", repoRef: "acme/x" },
+      draft: { baseRevision: null, fileDigest: DIGEST, operations: draftOperations },
+    } });
+    expect(await response.json()).toMatchObject({ status: "matched", workspace: "draft-workspace", routeRuleId: "draft-route" });
+    expect(response.status).toBe(200);
+    expect(await store.readHead(NAMESPACE)).toBeNull();
+    expect(await store.listRevisions(NAMESPACE)).toEqual([]);
+    expect(await store.readAudit(NAMESPACE)).toEqual([]);
+  });
+
+  it.each([
+    [{ baseRevision: 1, fileDigest: DIGEST }, 409, "revision_conflict"],
+    [{ baseRevision: null, fileDigest: "0".repeat(64) }, 409, "file_config_mismatch"],
+  ])("rejects stale preview baselines: %j", async (baseline, status, code) => {
+    const response = await request(makeApp(), "/preview-route", { method: "POST", body: {
+      event: { triggerName: "t", targetKind: "push" }, draft: { ...baseline, operations: draftOperations },
+    } });
+    expect(response.status).toBe(status);
+    expect(JSON.stringify(await response.json())).toContain(code);
+    expect(await store.readHead(NAMESPACE)).toBeNull();
+  });
+
+  it("does not offer forbidden variables and supplies valid nullable completion expressions", async () => {
+    const response = await request(makeApp(), "/options/path_template_variables");
+    const { options } = await response.json();
+    expect(options).toContainEqual({ value: "git.repository", label: "git.repository", insertText: "{{segment git.repository}}" });
+    expect(options).toContainEqual({ value: "git.branch", label: "git.branch", insertText: '{{segment (default git.branch "unknown")}}' });
+    expect(options.find((option: { value: string }) => option.value === "event.actor")).toMatchObject({ disabled: true });
+  });
+
   it("validate reports issues without writing", async () => {
     const app = makeApp();
     const before = await store.readHead(NAMESPACE);
@@ -560,5 +620,111 @@ describe("config API regression boundaries", () => {
     const restore = await request(app, "/revisions/1/restore", { method: "POST", body: { baseRevision: 1, operationId: "op-restore-secrets" } });
     expect(restore.status).toBe(400);
     expect((await store.readHead(NAMESPACE))?.activeRevision).toBe(1);
+  });
+});
+
+describe("config api P6 fields view + options sources", () => {
+  it("GET / includes the effective fields view with file locks and overridden values", async () => {
+    const fileConfig = { ...FILE_CONFIG, review: { max_files: 7 } } as never;
+    const app = makeApp({ ...apiOptions, fileConfig });
+    // Bypass the write policy to place a database value beneath a file-owned field.
+    await seedLegacyCredentials([{ op: "set", path: ["review", "max_files"], value: 99 }]);
+
+    const response = await request(app, "/");
+    expect(response.status).toBe(200);
+    const body = await response.json() as {
+      fields: { path: string; source: string; editable: boolean; effectiveValue: unknown;
+        overriddenValues: { source: string; value: unknown }[] }[];
+    };
+    expect(Array.isArray(body.fields)).toBe(true);
+    const locked = body.fields.find((field) => field.path === "review.max_files");
+    expect(locked).toMatchObject({
+      source: "file",
+      editable: false,
+      effectiveValue: 7,
+      overriddenValues: [{ source: "database", value: 99 }],
+    });
+    const fileProvider = body.fields.find((field) => field.path === "llm.providers.file-main.kind");
+    expect(fileProvider).toMatchObject({ source: "file", editable: false, effectiveValue: "ollama", overriddenValues: [] });
+  });
+
+  it("GET /schema exposes the derived UI spec as JSON", async () => {
+    const app = makeApp();
+    const response = await request(app, "/schema");
+    expect(response.status).toBe(200);
+    const body = await response.json() as {
+      uiSpec: { protocolVersion: number; pages: { id: string }[]; optionsSources: { id: string }[] };
+    };
+    expect(body.uiSpec.protocolVersion).toBe(1);
+    const pageIds = body.uiSpec.pages.map((page) => page.id);
+    for (const id of ["providers", "model-groups", "routing", "versions"]) expect(pageIds).toContain(id);
+    expect(body.uiSpec.optionsSources.map((source) => source.id)).toContain("secret_envs");
+    // The spec round-trips through JSON and carries no secret material.
+    expect(JSON.parse(JSON.stringify(body.uiSpec))).toEqual(body.uiSpec);
+    expect(JSON.stringify(body)).not.toContain("only-in-process-secret-value");
+  });
+
+  it("GET /options serves all seven sources with disabled and secret-presence flags", async () => {
+    const fileConfig = {
+      config_sources: { secret_refs: [
+        { env: "KNOWN_ENV", target: ["llm", "providers", "db-openai", "api_key_env"], destinations: { kind: "openai_compatible" } },
+        { env: "ABSENT_ENV", target: ["llm", "providers", "db-absent", "api_key_env"], destinations: { kind: "openai_compatible" } },
+      ] },
+      llm: {
+        providers: [{ id: "file-main", kind: "ollama" }],
+        model_chain: { default: [{ provider: "file-main", model: "m", role: "any" }] },
+      },
+    } as never;
+    const app = makeApp({ ...apiOptions, fileConfig });
+    await seedLegacyCredentials([
+      { op: "create", collection: "providers", record: { id: "db-openai", name: "db-openai", enabled: true,
+        value: { id: "db-openai", kind: "openai_compatible", api_key_env: "KNOWN_ENV" } } },
+      { op: "create", collection: "providers", record: { id: "db-absent", name: "db-absent", enabled: true,
+        value: { id: "db-absent", kind: "openai_compatible", api_key_env: "ABSENT_ENV" } } },
+      { op: "create", collection: "providers", record: { id: "db-off", name: "db-off", enabled: false,
+        value: { id: "db-off", kind: "ollama" } } },
+    ]);
+
+    type Option = { value: string; label?: string; disabled?: boolean };
+    const getOptions = async (source: string) => {
+      const response = await request(app, `/options/${source}`);
+      expect([source, response.status]).toEqual([source, 200]);
+      return (await response.json() as { source: string; options: Option[] }).options;
+    };
+
+    const providers = await getOptions("providers");
+    expect(providers).toContainEqual({ value: "file-main", label: "file-main" });
+    expect(providers).toContainEqual({ value: "db-openai", label: "db-openai" });
+    expect(providers).toContainEqual({ value: "db-off", label: "db-off", disabled: true });
+
+    const modelGroups = await getOptions("model_groups");
+    expect(modelGroups).toContainEqual({ value: "default", label: "default" });
+
+    for (const source of ["triggers", "channels", "workspaces"]) {
+      expect(await getOptions(source)).toEqual([]);
+    }
+
+    const secretEnvs = await getOptions("secret_envs");
+    expect(secretEnvs).toContainEqual({ value: "KNOWN_ENV", label: "KNOWN_ENV" });
+    expect(secretEnvs).toContainEqual({ value: "ABSENT_ENV", label: "ABSENT_ENV", disabled: true });
+    expect(JSON.stringify(secretEnvs)).not.toContain("only-in-process-secret-value");
+
+    const variables = await getOptions("path_template_variables");
+    expect(variables).toContainEqual({ value: "git.branch", label: "git.branch", insertText: '{{segment (default git.branch "unknown")}}' });
+    const unavailable = variables.find((option) => option.value === "scheduled.job_id");
+    expect(unavailable?.label).toBe("scheduled.job_id (unavailable)");
+  });
+
+  it("rejects unknown options sources with 400 invalid_request", async () => {
+    const app = makeApp();
+    const response = await request(app, "/options/catalog_models");
+    expect(response.status).toBe(400);
+    expect((await response.json() as { error: string }).error).toBe("invalid_request");
+  });
+
+  it("rejects unauthenticated options requests with 401", async () => {
+    const app = makeApp();
+    const response = await request(app, "/options/providers", { token: null });
+    expect(response.status).toBe(401);
   });
 });

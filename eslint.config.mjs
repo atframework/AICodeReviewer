@@ -41,6 +41,18 @@ export default tseslint.config(
     },
   },
   {
+    // Dashboard browser client (P6): plain ESM served verbatim to the
+    // browser; no Node APIs, DOM globals only.
+    files: ["packages/server/src/dashboard/client/**/*.js"],
+    languageOptions: {
+      ecmaVersion: 2022,
+      sourceType: "module",
+      globals: {
+        ...globals.browser,
+      },
+    },
+  },
+  {
     files: ["**/*.mjs"],
     languageOptions: {
       ecmaVersion: 2022,
@@ -48,6 +60,20 @@ export default tseslint.config(
       globals: {
         ...globals.node,
       },
+    },
+  },
+  {
+    // CommonJS build scripts (e.g. packages/server/scripts/copy-assets.cjs).
+    files: ["**/*.cjs"],
+    languageOptions: {
+      ecmaVersion: 2022,
+      sourceType: "commonjs",
+      globals: {
+        ...globals.node,
+      },
+    },
+    rules: {
+      "@typescript-eslint/no-require-imports": "off",
     },
   },
 );

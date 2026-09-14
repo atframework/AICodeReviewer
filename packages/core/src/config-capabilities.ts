@@ -14,6 +14,13 @@ import { ConfigError, formatConfigPath, reasoningEffortSchema, type ConfigEntity
 // (resolveModelProviderFields, resolveP4TriggerConfig, resolveSvnTriggerConfig,
 // createChannelPublisherFromConfig) and packages/server/src/*-webhook.ts.
 // Unknown keys are NOT rejected here — they are preserved unmanaged extensions.
+//
+// Exported matrices: MODEL_CATALOG_HINT_FIELDS, PROVIDER_PASSTHROUGH_FIELDS,
+// PROVIDER_KIND_FIELDS, TRIGGER_KIND_FIELDS, TRIGGER_DECLARED_KIND_FIELDS,
+// CHANNEL_KINDS, CHANNEL_KIND_FIELDS, CHANNEL_DECLARED_KIND_FIELDS,
+// CHANNEL_RESOLVED_ACTION_VALUES. The declared-kind and resolved-action maps
+// additionally feed the P6 config UI spec (config-ui-spec.ts) `kinds`
+// applicability metadata.
 // ---------------------------------------------------------------------------
 
 const nonEmptyString = z.string().min(1);
@@ -188,7 +195,7 @@ export const TRIGGER_KIND_FIELDS: Readonly<Record<string, FieldMap>> = {
 };
 
 /** Declared fields whose consumer set is narrower than the schema allows. */
-const TRIGGER_DECLARED_KIND_FIELDS: Readonly<Record<string, readonly string[]>> = {
+export const TRIGGER_DECLARED_KIND_FIELDS: Readonly<Record<string, readonly string[]>> = {
   // app is declared on triggerSchema; only the github kind consumes it.
   app: ["github"],
   // File filters are declared for every kind but only p4/svn read them.
@@ -264,7 +271,7 @@ export const CHANNEL_KIND_FIELDS: Readonly<Record<string, FieldMap>> = {
 };
 
 /** Declared channel fields allowed per kind (consumer-verified matrix). */
-const CHANNEL_DECLARED_KIND_FIELDS: Readonly<Record<string, readonly string[]>> = {
+export const CHANNEL_DECLARED_KIND_FIELDS: Readonly<Record<string, readonly string[]>> = {
   severity_label_prefix: ["gitea_pr_review", "github_pr_review", "github_problem_issue", "gitlab_mr_review", "gitea_problem_issue"],
   severity_label_colors: ["gitea_pr_review", "github_pr_review", "github_problem_issue", "gitlab_mr_review", "gitea_problem_issue"],
   review_mode: ["gitea_pr_review", "github_pr_review"],
@@ -283,7 +290,7 @@ const CHANNEL_DECLARED_KIND_FIELDS: Readonly<Record<string, readonly string[]>> 
 };
 
 /** resolved_action values each problem-issue dispatcher actually honors. */
-const CHANNEL_RESOLVED_ACTION_VALUES: Readonly<Record<string, readonly string[]>> = {
+export const CHANNEL_RESOLVED_ACTION_VALUES: Readonly<Record<string, readonly string[]>> = {
   github_problem_issue: ["none", "close", "mark_resolved"],
   gitea_problem_issue: ["none", "close", "mark_resolved", "delete"],
 };

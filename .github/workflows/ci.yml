@@ -40,6 +40,38 @@ jobs:
       - name: Run CI verification
         run: pnpm run ci
 
+  browser:
+    name: Dashboard browser gate (P6)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          lfs: true
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 10.20.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Chromium
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Build packages
+        run: pnpm build
+
+      - name: Run browser gate
+        run: pnpm test:browser
+
   docs:
     name: Docs site build
     runs-on: ubuntu-latest

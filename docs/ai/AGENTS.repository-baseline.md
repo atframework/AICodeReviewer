@@ -33,6 +33,22 @@ For site commands on Windows use `cmd /c "pnpm docs:build"` / `docs:check`.
 Run eval validation after build. Offline fixture validation does not exercise a
 real LLM; do not describe it as a model-quality benchmark.
 
+## Browser gate (dashboard config UI, P6)
+
+`tests/browser/` holds the Playwright suite for the dashboard management pages.
+It drives the real CLI server against a throwaway SQLite store; no external
+service or LLM is contacted. One-time setup: `pnpm exec playwright install
+chromium` (browser download is intentionally not part of `pnpm install`).
+Run after `pnpm build`:
+
+| Order | Windows command | Linux command |
+| --- | --- | --- |
+| 7 | `cmd /c "pnpm test:browser"` | `pnpm test:browser` |
+
+The suite is applicable when the diff touches `packages/server/src/dashboard/`,
+the config admin API, the core `config-ui-*` paradigm modules, or
+`tests/browser/` itself. CI runs it as the dedicated `browser` job.
+
 ## Real-service test endpoints
 
 Redis/PostgreSQL contract tests skip unless the endpoint env vars are set.

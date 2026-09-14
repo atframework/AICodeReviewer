@@ -12,7 +12,7 @@
     }
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json && node -e \"const fs=require('node:fs'); fs.mkdirSync('dist/dashboard',{recursive:true}); fs.copyFileSync('src/dashboard/dashboard.html','dist/dashboard/dashboard.html');\""
+    "build": "tsc -p tsconfig.json && node scripts/copy-assets.cjs"
   },
   "dependencies": {
     "@aicr/agents": "workspace:*",

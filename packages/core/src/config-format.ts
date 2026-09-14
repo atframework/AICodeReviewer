@@ -62,6 +62,8 @@ export const CONFIG_ERROR_CODES = [
   "matcher_invalid",
   "template_invalid",
   "definition_id_invalid",
+  // config UI spec (P6)
+  "invalid_spec",
   "revision_invalid",
   "snapshot_invalid",
   // routing outcomes (P3+)

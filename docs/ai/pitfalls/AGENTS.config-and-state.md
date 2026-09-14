@@ -47,6 +47,16 @@ consumers in `packages/server/src/bootstrap.ts`.
   end-to-end coverage. Separate pure validation from reference checks, CAS,
   activation and recovery; retain unfinished plan artifacts. The U24 walker
   uses Zod 3 metadata for auditing, not as a runtime UI renderer.
+- UI parity must exercise the generated registry and the real renderer through
+  API persistence. Synthetic field fixtures can reach 100% while `[]`/`*`
+  descendants disappear or UI IDs become config keys. Check row-relative paths,
+  consecutive nested edits, unknown descendants and explicit empty values
+  (`config-ui-integration.test.ts`, `tests/browser/config-ui.spec.ts`).
+- Freeze each editor's revision/digest and the complete submitted payload.
+  Refreshing another page must not advance a dirty draft's CAS base. After a lost
+  response, query the operation and reuse the exact payload for an explicit retry;
+  404 can still mean an in-flight write. Apply this to restore too, and keep 202
+  edits locked until activation is resolved (`config-ui-client.test.ts`, browser gate).
 - Legacy single-profile Gitea/Forgejo routes never enforced repository
   scoping; multi-profile selection must keep that catch-all for profiles
   without `match` resolvers, or existing deployments start returning

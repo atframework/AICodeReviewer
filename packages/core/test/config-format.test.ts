@@ -265,6 +265,7 @@ describe("config-format errors", () => {
         "file_owned",
         "invalid_field_type",
         "invalid_reference",
+        "invalid_spec",
         "invalid_secret_env",
         "malformed_yaml",
         "match_rule_invalid",

@@ -20,7 +20,14 @@ File values stay read-only. Before adding a database credential reference or
 changing its destination, authorize the exact env, target path and destinations
 in the file's `secret_refs`. Existing file references authorize their original
 use. Accepted tasks retain their configuration version across publication;
-legacy unpinned tasks use a persisted baseline. The management UI is planned.
+legacy unpinned tasks use a persisted baseline.
+
+The dashboard **Config** tab manages providers, model groups, triggers, channels,
+workspaces, routes and global settings. Use **Stage changes** across pages to
+create related records together, then **Publish staged changes** once. Routing
+**Preview** includes staged changes without saving them. Drafts stay in this
+browser page and are lost on reload. See the [dashboard guide](../docs/site/src/content/docs/en/start/dashboard.md)
+for conflicts, activation status and version restore.
 
 ## Quick Start (Docker Compose)
 

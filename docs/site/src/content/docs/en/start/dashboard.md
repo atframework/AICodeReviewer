@@ -40,11 +40,11 @@ a fixed-length SHA-256 digest and `timingSafeEqual`; the server never prints
 or persists the raw password.
 :::
 
-When admin auth is configured, AICR initializes the SQLite store (at
-`storage.database.sqlite.path`, default `/app/data/aicr.sqlite`) that backs
-the dashboard. Only `sqlite` is wired into the runtime database today
-(`postgres` is reserved) — startup fails loudly if `storage.database.kind` is
-not `sqlite` when the dashboard is enabled.
+When admin auth is configured, AICR initializes the statistics store selected by
+`storage.database.kind`: SQLite uses `storage.database.sqlite.path` (default
+`/app/data/aicr.sqlite`); PostgreSQL uses the URL named by
+`storage.database.postgres.url_env`. The Config API can remain available when
+statistics initialization fails, provided its own configuration store is available.
 
 ## Navigating the dashboard
 
@@ -53,7 +53,7 @@ configured, the route returns the dashboard shell with a setup-required
 prompt instead of a 404; if `path_prefix` is set, the root paths redirect to
 the prefixed entry.
 
-After logging in, the dashboard has six tabs:
+After logging in, the dashboard has seven tabs:
 
 - **Live** — analyses running right now in this server process. Responsive cards show
   the worker slot, run ID, task title, attempt, workspace/trigger/repo, branch and revision (git short sha,
@@ -102,6 +102,9 @@ After logging in, the dashboard has six tabs:
   missing configuration), with the reason and details such as matched labels
   or the receipt id.
 
+- **Config** — database configuration, field sources, routing preview and version
+  history. Enable `config_sources.database.enabled` to use configuration management.
+
 Usage is aggregated across the complete review run, including the initial model
 call, context or format-repair calls, and any final direct-LLM fallback. For
 Kilo, each `step_finish` model turn counts as one request. The locally estimated
@@ -132,6 +135,34 @@ the submit time only for submitted changelists. Times display in the browser's
 local timezone. Unavailable commit times show `—`; legacy or unknown VCS kinds
 retain the full revision without guessing a hash format.
 
+## Managing configuration
+
+In **Config**, edit providers, model groups, triggers, channels, routes, workspaces
+and global settings. File-owned values are read-only; **Copy as new database
+config** requires a distinct name. Database values supplement explicit file
+configuration. A shadowed database record can be deleted; edit its file owner to
+change the effective value. Secret controls accept authorized environment variable
+names. Replace or clear redacted legacy values before saving them.
+
+Use **Save** for one record or **Save page changes** for global settings. For
+related edits, use **Stage changes** or **Stage page changes** on each page, then
+**Publish staged changes**. For example, stage a provider, select it in a new model
+group, and publish both together. Staged edits share one revision and remain in
+browser memory; reloading the page discards them.
+
+Routing **Preview** includes staged changes without publishing. Stage open edits
+first. Workspace path completion starts with `{{`, inserts `segment` expressions,
+and uses `default` for nullable variables; choose a suitable fallback before
+publication. Weekly schedules support multiple weekdays and time windows.
+
+A successful save shows its revision. A conflict keeps the draft and offers a
+comparison before retrying. If the response is lost, check the operation status;
+**Resubmit** retries the original request. **Stored, activation pending** means
+the write is durable but the runtime has not activated it. Resolve that status
+before submitting another edit. **Versions → Restore** creates a new revision;
+it retains file locks and validates references. Newly accepted tasks use the
+published revision; already accepted tasks retain their original configuration.
+
 ## The admin API
 
 Queued commit events show a **not before** time: receipt delay and execution
@@ -149,6 +180,11 @@ All endpoints except `/login` require `Authorization: Bearer <token>`.
 | `GET /api/admin/runs?limit=` | Recent run list (1..100), each with token usage incl. the cache hit split and the VCS stamp |
 | `GET /api/admin/runs/live` | Currently running analyses from the in-process registry: phase, elapsed start time, cumulative tokens/requests/cost |
 | `GET /api/admin/events?limit=` | Recent webhook/trigger event log (1..100), each with the receipt-time decision and reason |
+| `GET /api/admin/config` | Configuration view with provenance and paginated entities |
+| `GET /api/admin/config/schema`, `/options/:source` | Form specification and dynamic options |
+| `POST /api/admin/config/changesets` | Atomic publication with `baseRevision`, `fileDigest`, `operationId`, and `operations` |
+| `POST /api/admin/config/preview-route` | Read-only event preview; optional `draft` contains `baseRevision`, `fileDigest`, and `operations` |
+| `GET /api/admin/config/operations/:id`, `/revisions`, `/status` | Operation recovery, version history and activation status |
 
 ## `/metrics`
 

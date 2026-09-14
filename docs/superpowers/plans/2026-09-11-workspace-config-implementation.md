@@ -1,8 +1,8 @@
 # Workspace 与动态配置执行计划
 
-状态：P0–P5 已交付；P4/P5 原阶段缺项已补齐并完成代码审查。
-本轮修复与验证见 [M19](../../ai/milestones/M19.md)。P4/P5 已补齐原阶段交付，
-P6–P8 尚待推进。设计合同见
+状态：P0–P6 已交付；P4/P5 原阶段缺项已补齐并完成代码审查。
+本轮修复与验证见 [M19](../../ai/milestones/M19.md)，P6 交付与门禁证据见
+[M20](../../ai/milestones/M20.md)。P7–P8 尚待推进。设计合同见
 [详细设计](../specs/2026-09-11-workspace-config-management.md)，测试 ID 和后端证据要求见
 [测试计划](2026-09-11-workspace-config-tests.md)。任何复选框只有实现、对应测试和适用最终门禁通过后才能勾选。
 
@@ -158,14 +158,19 @@ compiler、prepare/CAS/install、preview 与 readiness;server `config-service.ts
 
 ### P6. 通用表单与管理页面
 
-- [ ] 实现有限 ConfigUiSpec、组件 registry 和五类纯映射函数，枚举/默认值引用 schema 定义，不遍历 Zod 私有结构。
-- [ ] 覆盖 text/number/toggle/select/multiselect/ordered-list/map/secret-ref/matcher/path-template、继承态、只读态、variant 切换、未知扩展无损保留。
-- [ ] 将配置 renderer 与 API client 从内联 HTML 中分离为可测试模块，扩展现有 server build 复制/编译资产，不默认新增 UI workspace/React。
-- [ ] 增加 providers、模型组/覆盖、triggers、channels、routing、agent/search/sandbox、review、workspace、版本历史入口，控件与能力矩阵一致。
-- [ ] route/workspace preview、模型组排序、周计划采用专用控件；保存显示实际 revision，冲突保留草稿并提供差异比较。
-- [ ] 文件来源显示只读详情与“复制为新数据库配置”；field provenance、引用影响、停用/删除和历史恢复可操作。
-- [ ] 响应式表格、键盘焦点、标签/错误关联、禁用状态和窄屏布局；工具用图标与 tooltip，避免依赖纯拖拽。
-- [ ] 新浏览器测试如需 Playwright，作为明确 dev dependency 加入正式 gate；不把生产数据库或外部 LLM 作为页面测试前置。
+状态：已完成（2026-09-14）。U01–U24 参数化用例通过，三范式模块 100% 四项覆盖率
+按文件阈值强制执行，浏览器门禁覆盖 desktop/narrow；交付与审查修复证据见
+[M20](../../ai/milestones/M20.md)。
+
+- [x] 实现有限 ConfigUiSpec、组件 registry 和五类纯映射函数，枚举/默认值引用 schema 定义，不遍历 Zod 私有结构。
+- [x] 覆盖 text/number/toggle/select/multiselect/ordered-list/map/secret-ref/matcher/path-template、继承态、只读态、variant 切换、未知扩展无损保留。
+- [x] 将配置 renderer 与 API client 从内联 HTML 中分离为可测试模块，扩展现有 server build 复制/编译资产，不默认新增 UI workspace/React。
+- [x] 增加 providers、模型组/覆盖、triggers、channels、routing、agent/search/sandbox、review、workspace、版本历史入口，控件与能力矩阵一致。
+- [x] route/workspace preview、模型组排序、周计划采用专用控件；保存显示实际 revision，冲突保留草稿并提供差异比较。
+- [x] 跨页暂存引用与修改，单 changeset 原子发布；路由预览复用发布前校验且零写库；网络恢复重用完整原请求，分页检查 head/digest 一致性。
+- [x] 文件来源显示只读详情与“复制为新数据库配置”；field provenance、引用影响、停用/删除和历史恢复可操作。
+- [x] 响应式表格、键盘焦点、标签/错误关联、禁用状态和窄屏布局；工具用图标与 tooltip，避免依赖纯拖拽。
+- [x] 新浏览器测试如需 Playwright，作为明确 dev dependency 加入正式 gate；不把生产数据库或外部 LLM 作为页面测试前置。
 
 影响：`packages/server/src/dashboard/`、server package build、server tests；必要 root browser-test/dev dependency/CI wiring 必须单独审查，不弱化现有测试收集。
 

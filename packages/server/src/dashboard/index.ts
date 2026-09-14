@@ -30,3 +30,35 @@ export function getDashboardHtml(options: DashboardHtmlOptions = { enabled: true
       JSON.stringify(options.disabledMessage ?? DEFAULT_DISABLED_MESSAGE),
     );
 }
+
+export interface DashboardClientAsset {
+  readonly content: string;
+  readonly contentType: string;
+}
+
+/** Strict allowlist: flat lowercase names only — no separators, no traversal. */
+const CLIENT_ASSET_NAME_PATTERN = /^[a-z0-9-]+\.js$/u;
+const CLIENT_ASSET_CONTENT_TYPE = "application/javascript; charset=utf-8";
+
+const clientAssetCache = new Map<string, DashboardClientAsset | null>();
+
+/**
+ * Serves a compiled dashboard client module from `dist/dashboard/client`
+ * (produced by the build copy step). Names outside the allowlist and files
+ * absent from disk — e.g. unbuilt dev checkouts — both yield null so the
+ * route can answer 404 without exposing filesystem detail.
+ */
+export function getDashboardClientAsset(name: string, baseDir: string = join(__dirname, "client")): DashboardClientAsset | null {
+  if (!CLIENT_ASSET_NAME_PATTERN.test(name)) return null;
+  const cacheKey = `${baseDir}\n${name}`;
+  const cached = clientAssetCache.get(cacheKey);
+  if (cached !== undefined) return cached;
+  let asset: DashboardClientAsset | null;
+  try {
+    asset = { content: readFileSync(join(baseDir, name), "utf8"), contentType: CLIENT_ASSET_CONTENT_TYPE };
+  } catch {
+    asset = null;
+  }
+  clientAssetCache.set(cacheKey, asset);
+  return asset;
+}

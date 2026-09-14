@@ -24,3 +24,7 @@ config.acceptance.yaml
 
 # Docker static binary downloaded on-demand by deploy.sh for container sandbox
 /deploy/docker-static
+
+# Playwright browser gate artifacts
+/test-results/
+/playwright-report/

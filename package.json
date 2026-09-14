@@ -20,12 +20,14 @@
     "markdownlint": "markdownlint-cli2",
     "eval:validate": "node packages/cli/dist/index.js eval --validate-only",
     "test": "vitest run --coverage",
+    "test:browser": "playwright test",
     "typecheck": "tsc -b tsconfig.json --pretty false",
     "ci": "pnpm lint && pnpm typecheck && pnpm test && pnpm markdownlint && pnpm build && pnpm eval:validate"
   },
   "devDependencies": {
     "@aicr/cli": "workspace:*",
     "@eslint/js": "^10.0.1",
+    "@playwright/test": "^1.63.0",
     "@types/node": "^26.4.1",
     "@vitest/coverage-v8": "^5.0.0",
     "eslint": "^10.10.0",

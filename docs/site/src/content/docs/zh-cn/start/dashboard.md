@@ -32,13 +32,16 @@ admin:
 session TTL 字段是 `session_ttl_seconds`（默认 `86400` = 24 小时）。`session_ttl_minutes` 字段会被静默忽略。密码比较使用固定长度 SHA-256 digest 和 `timingSafeEqual`；服务端永不打印或落盘密码原值。
 :::
 
-配置管理员认证后，AICR 初始化支撑 dashboard 的 SQLite store（位于 `storage.database.sqlite.path`，默认 `/app/data/aicr.sqlite`）。数据库后端目前只有 `sqlite` 接入运行时（`postgres` 是预留）——启用 dashboard 而 `storage.database.kind` 不是 `sqlite` 时启动会显式失败。
+配置管理员认证后，AICR 按 `storage.database.kind` 初始化统计库：SQLite 使用
+`storage.database.sqlite.path`（默认 `/app/data/aicr.sqlite`），PostgreSQL 使用
+`storage.database.postgres.url_env` 指定的环境变量中的 URL。统计库初始化失败时，
+只要独立配置库可用，Config API 仍可提供配置管理。
 
 ## 导航 dashboard
 
 访问 `http://<aicr-host>:8080/dashboard`（或 `/`）。即使尚未配置管理员环境变量，该路由也会返回 dashboard 外壳并显示 setup-required 提示而不是 404；如果设置了 `path_prefix`，根路径会重定向到带前缀的入口。
 
-登录后，dashboard 有六个标签：
+登录后，dashboard 有七个标签：
 
 - **Live**——当前服务进程中正在执行的分析。卡片随屏幕宽度排列，展示 worker 槽位、run ID、任务标题、attempt、workspace/trigger/repo、分支和 revision（git 短 sha、SVN `r<N>`、P4 `CL <N>`，悬停显示完整 revision）、提交时间、model 与 agent、phase（preparing → analyzing → publishing）、开始时间及耗时。指标包括输入/输出 token、缓存命中/未命中/写入量、命中率、LLM 请求数、重试/fallback 次数、估算成本及用量更新时间；usage 缺失时单独显示 `~N est. prompt`。worker 编号代表本进程的活动分析槽位，任务结束后可复用。Kilo/OpenCode 和 pi/oh-my-pi 每完成一个模型回合便更新用量，其他 agent 和直连 LLM 在调用结束时更新。执行结束或服务重启后条目消失。Refresh 手动刷新；自动刷新默认 **Off (manual)**，可选前次请求结束后每 5/15/30/60 秒刷新。离开 Live 或隐藏浏览器页面时暂停，退出登录恢复手动模式；刷新失败时保留的快照标为过期。
 - **Overview**——总评审次数、成功/失败/跳过次数、发现问题的 run 次数、problem 总数、创建 issue 数、分析代码量、LLM 请求数、输入/输出/总 token、prompt 缓存命中率（含命中/未命中 token 拆分）、估算成本、平均 duration。时间窗口选择器切换 today / this week / this month / all（均按 UTC）。Recent activity 表格与 Runs 标签一样展示每条 run 的总 token、缓存命中/未命中拆分与命中率，外加分支、缩写 revision 与提交时间。
@@ -46,6 +49,9 @@ session TTL 字段是 `session_ttl_seconds`（默认 `86400` = 24 小时）。`s
 - **Providers**——按 provider+model 聚合：请求数、输入/输出 token、缓存命中 token 与命中率、成本、重试/fallback/失败次数、平均延迟。
 - **Runs**——最近 100 条运行记录，每页 20 条，用 Prev/Next 翻页。每行展示真实 token 用量：总 token、命中/未命中输入拆分与命中率；run 未上报可解析 usage 时显示 `—`。Revision 列展示分支、缩写 revision，以及 VCS adapter 解析成功时的提交时间。
 - **Events**——最近收到的 100 条 webhook/trigger 事件，每页 20 条。每行展示接收时刻的处理决定：`executed`（立即执行）、`queued`/`duplicate`（auto-commit 回执）、`deferred`（执行窗口延期，含计划恢复时刻）、`deduplicated`（合并进待重审）、`ignored`（label 忽略、不支持的事件、仓库未配置）或 `rejected`（签名无效、payload 非法、触发器未配置），以及原因和细节（命中的 label、回执 id 等）。
+
+- **Config**——数据库配置、字段来源、路由预览与版本历史。启用
+  `config_sources.database.enabled` 后可使用配置管理。
 
 用量按完整 review run 聚合，包括首次模型调用、上下文/格式修复调用以及最终直连 LLM 兜底。
 对 Kilo 而言，每个 `step_finish` 模型回合计为一次请求。本地 prompt 大小估算单独保存，只有拿不到
@@ -67,6 +73,28 @@ Git 取 committer date，SVN 取 `svn:date`，P4 仅对 submitted changelist 展
 时间按浏览器本地时区显示。无法解析的提交时间显示 `—`；旧记录或未知 VCS 类型保留完整
 revision，不按字符串形状猜测 hash 格式。
 
+## 管理配置
+
+在 **Config** 中编辑 provider、模型组、trigger、channel、路由、workspace 和全局设置。
+文件值只读，**Copy as new database config** 需要填写不同的名称。数据库配置补充文件的
+显式配置。同名 shadowed 数据库记录可以删除；要改变有效值需修改其文件来源。
+凭据控件只接受已授权的环境变量名。历史值被脱敏时，保存前需要替换或清除占位符。
+
+单条记录使用 **Save**，全局设置使用 **Save page changes**。关联修改可在各页面分别
+点击 **Stage changes** 或 **Stage page changes**，最后点击 **Publish staged changes**。
+例如先暂存 provider，再在新模型组中选择它，一次发布两者。暂存修改共享同一 revision，
+只保存在浏览器内存，刷新页面会丢弃。
+
+Routing 的 **Preview** 包含已暂存修改且不发布；打开的编辑需先暂存。
+Workspace 路径补全以 `{{` 开始，插入 `segment` 表达式，为可空变量添加 `default`；
+发布前请选择适合的兜底值。周计划可设置多个星期和时间窗口。
+
+保存成功后显示 revision。冲突保留草稿，提供差异比较后再决定是否重试。
+响应丢失时先检查操作状态，**Resubmit** 重试原请求。
+**Stored, activation pending** 表示已持久化但尚未激活，确认该状态后再提交其他编辑。
+**Versions → Restore** 创建新 revision，继续执行文件锁与引用校验。
+新接收的任务使用已发布版本，已接收的任务保留原配置。
+
 ## 管理 API
 
 提交事件的 **not before** 表示首次接收延迟和执行窗口共同决定的最早可执行时间，
@@ -84,6 +112,11 @@ revision，不按字符串形状猜测 hash 格式。
 | `GET /api/admin/runs?limit=` | 最近 run 列表（1..100），含 token 用量、缓存命中拆分与 VCS stamp |
 | `GET /api/admin/runs/live` | 进程内注册表中正在执行的分析：phase、开始时间、累计 token/请求数/成本 |
 | `GET /api/admin/events?limit=` | 最近 webhook/trigger 事件日志（1..100），含接收时刻的处理决定与原因 |
+| `GET /api/admin/config` | 带来源信息和实体分页的配置视图 |
+| `GET /api/admin/config/schema`、`/options/:source` | 表单描述和动态选项 |
+| `POST /api/admin/config/changesets` | 携带 baseRevision、fileDigest、operationId、operations 原子发布 |
+| `POST /api/admin/config/preview-route` | 只读事件预览；可选 draft 携带 baseRevision、fileDigest、operations |
+| `GET /api/admin/config/operations/:id`、`/revisions`、`/status` | 操作恢复、版本历史和激活状态 |
 
 ## `/metrics`
 

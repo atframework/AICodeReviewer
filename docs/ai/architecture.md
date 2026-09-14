@@ -1245,8 +1245,8 @@ models.dev 的 key 是 `<providerId>/<modelId>`（AI SDK 标识）。自定义 p
   fixture);postgres 分支经 `pg-migrations.ts` 复用同一 MigrationRunner
   (`pg_advisory` 会话锁包住 CREATE SCHEMA + 迁移)。pg 低权限部署在启动期得到有界
   `store_unavailable`,不创建半套表(M08)。
-- 运行时 generation 固定(P4)与配置管理 API(P5)已接线，见 §3.16；管理表单(P6)
-  仍按计划推进。配置库 schema 2 增加 runtime state 的 CAS 账本。
+- 运行时 generation 固定(P4)、配置管理 API(P5)与管理表单(P6)已接线，见 §3.16。
+  配置库 schema 2 增加 runtime state 的 CAS 账本。
 
 ### 3.15 配置来源合并、路由图与发布服务(config-source / config-compiler / config-publish)
 
@@ -1330,8 +1330,8 @@ metadata adapter 使用覆盖 receipt 的快照；组批在快照边界切分。
 | 端点 | 当前行为 |
 | --- | --- |
 | GET / | 单次 head 读取对应的 globals、provenance、文件/数据库实体；保留禁用记录与不可变 ID，返回有效值；limit/offset 分页 |
-| GET /schema | 字段清单、capability 与协议版本；ConfigUiSpec 留待 P6 |
-| POST /validate、/preview-route | 零写库预览；路由预览支持 providerFields |
+| GET /schema、/options/:source | 字段清单、capability、ConfigUiSpec 与协议版本；动态选项包括实体、已授权 env 名和路径模板补全 |
+| POST /validate、/preview-route | 零写库预览；路由预览支持 providerFields，可选 draft 携带 baseRevision/fileDigest/operations，经发布前校验后解析，过期基线拒绝 |
 | POST /changesets | prepare → publish → install；fileDigest 不一致或版本/operation 冲突 409；持久提交但激活失败 202 committed_activating |
 | GET /operations/:id、/revisions、/revisions/:revision | 持久操作状态与脱敏历史、审计 |
 | POST /revisions/:revision/restore | 以当前 head 为父创建新版本，重跑文件锁、引用与凭据检查 |
@@ -1342,6 +1342,15 @@ JSON 按实际流式 UTF-8 字节限制为 1 MiB，提前拒绝原型键、过�
 或恢复；读取历史值时覆盖短凭据、URL userinfo/查询参数及 headers，未知驱动错误
 不回传原文。changesets 与 restore 必须携带 fileDigest；状态查询尝试再次激活已提交
 版本，实例列表按持久心跳报告当前版本和可用性。
+
+Config 页面通过 `config-ui-spec` 声明控件，`config-ui-runtime` 与
+`config-form-state` 负责草稿、继承、嵌套列表/map 和 changeset 编码。
+字段 ID 与配置路径分离，行内使用相对路径；数组原子替换，未知扩展和显式空值保留。
+跨页暂存共享同一基线，新增引用可从暂存记录选择，统一发布一个 changeset。
+路由预览包含已暂存操作；尚未暂存的编辑不加入预览，草稿只保存在当前页面内存。
+409 展示差异并由管理员决定重试；响应丢失先查询 operation，重试保持原 ID 和完整请求。
+202 锁定该提交的编辑，继续查询激活状态。历史恢复创建新 revision，使用相同恢复协议。
+文件锁定值只读，同名 shadowed 数据库实体只允许删除；脱敏占位符禁止回写。
 
 runtime state 账本采用 memory/SQLite/PostgreSQL/Redis 同一 CAS 合同，记录
 legacy_import、instance、接收 pin、queue version 和 catalog 结果。接收先写 pin，

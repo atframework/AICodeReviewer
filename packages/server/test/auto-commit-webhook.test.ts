@@ -158,7 +158,9 @@ describe("auto-commit webhook wiring", () => {
       p4: {
         triggerName: "p4-main",
         workspaceId: "ws-p4",
-        port: "ssl:p4.example.com:1666",
+        // Loopback discard port: hosts with a real p4 binary refuse instantly;
+        // a fake hostname stalls the describe enrichment on the TCP timeout.
+        port: "127.0.0.1:1",
         user: "swarm",
         ticket: "ticket",
       },
@@ -302,7 +304,8 @@ describe("auto-commit webhook wiring", () => {
       p4: {
         triggerName: "p4-main",
         workspaceId: "ws-p4",
-        port: "ssl:p4.example.com:1666",
+        // See above: loopback refuse keeps describe enrichment off the network.
+        port: "127.0.0.1:1",
         user: "swarm",
         ticket: "ticket",
       },

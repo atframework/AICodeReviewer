@@ -1,8 +1,9 @@
 # Workspace 与动态配置测试计划
 
-P0–P5 已交付；最新验证结果和边界见 [M19](../../ai/milestones/M19.md)。测试 ID 是
+P0–P6 已交付；P4/P5 验证结果和边界见 [M19](../../ai/milestones/M19.md)，P6 见
+[M20](../../ai/milestones/M20.md)。测试 ID 是
 合同索引，需组合消费者、存储和 HTTP 证据；单个带 ID 的断言不代表整项完成。
-P6–P8 保留原计划；A14 的浏览器渲染部分随 P6 页面实现，API 部分已验证。
+P7–P8 保留原计划；A14 的浏览器渲染部分已随 P6 页面验证，API 部分此前已验证。
 
 | P4/P5 合同 | 当前组合证据 |
 | --- | --- |
@@ -15,6 +16,18 @@ P6–P8 保留原计划；A14 的浏览器渲染部分随 P6 页面实现，API 
 | H13/H14/H15/H18 | config-publish/config-api/runtime-config/runtime-http 的 CAS、激活恢复、多实例 head、digest/损坏/连接/较新 schema 错误；migration 真实后端门禁 |
 | H17 | queue-worker/auto-commit-scheduler 动态 claim；rate-limiter 保留额度；gateway 实际 provider 重试/fallback；runtime-generation 新预算保留历史计费 |
 | A01–A15 | config-api、runtime-http、observability-api、admin/session conformance；secret-policy 的环境名/用途/目标、继承凭据和字面量阴性用例 |
+
+| P6 合同 | 当前组合证据 |
+| --- | --- |
+| U01–U03、U24 | config-ui-spec.test.ts 的 registry/validateUiSpec 正反用例；config-components/config-capabilities 的清单 parity gate |
+| U04/U05、U17/U18 | config-ui-runtime.test.ts 的 decodeDraft/encodeChanges 全字段往返、继承/覆盖切换、未知扩展无损保留；config-form-state.test.ts session 基线 |
+| U06–U12 | config-ui-runtime.test.ts 的 parseNumberInput、toggle/select/multiselect、ordered-list stable row、map key 转义、secret-ref、matcher、path-template 用例 |
+| U13–U15 | config-form-state.test.ts 的 visibleWhen、kind variant 切换/回切保留、capability 禁用不丢已存值（含无 kindOptions 不默认 kind） |
+| U16、U20–U22 | config-form-state.test.ts provenance/readonly、mapApiErrors entity/path/动态数组、changeset 原子编码与取消不写；server config-api.test.ts 409/幂等 |
+| U19 | config-ui-runtime.test.ts resolveOptions + resolveItemOptions（ordered-list 行内动态源，含失效引用禁用保留与加载失败传播） |
+| U23、A14 渲染 | tests/browser/config-ui.spec.ts：desktop project 全量、narrow project（420px）只读响应式用例（两 project 共享有状态 fixture namespace，写入用例不跨 project 复跑）；label/错误关联、键盘 Alt+Arrow、XSS 惰性文本渲染；dashboard-routes.test.ts 资产白名单 |
+| 浏览器流程 | provider CRUD 立即生效、文件只读 + copy-as-new、409 冲突草稿保留/rebase、workspace 继承往返、route preview、版本列表/redacted diff/restore |
+| P6 审查回归 | config-ui-integration.test.ts 使用真实 registry 验证 workspace match、模型行相对路径、catalog map、空值与扩展保留、kind/rebase/rename；config-ui-client.test.ts 验证分页基线和响应丢失；浏览器验证跨页原子发布、连续嵌套编辑、数值拒绝、原请求重试、模板补全及暂存预览；API 断言预览零 revision/audit 写入 |
 
 ## 1. 测试组织与证据
 
@@ -44,8 +57,8 @@ Redis WRONGTYPE/OOM/代际精度及 PostgreSQL 并发去重/汇总。代码与�
 | --- | --- | --- |
 | `config-source.test.ts`、`config-review.test.ts` | 来源合并/文件锁、shadowed 视图、实体 CRUD、数组模型组、写前原型键校验、转换无副作用、raw YAML 边界 | F01/F02 的数据库初始化、F09 的重启流程、F11/C02/C03/C09 的原子引用与发布、C10–C13 的服务端实施 |
 | `config-format.test.ts` | revision/namespace/generation、matcher 形状与 UTF-8 大小、路径转义、稳定哈希、实例身份、B05 snapshot 分类 | P1 的 matcher 编译、路径 AST、P2/P4 的存储和任务接线 |
-| `config-components.test.ts` | U24 声明字段、默认值、workspace 实体所有权及 schema-only 标记的一致性 | P6 UI registry/映射函数和四项覆盖率 |
-| `config-capabilities.test.ts` | passthrough 类型化 DTO、kind×字段能力矩阵、9 种 channel kind、`resolved_action` 逐 kind 取值、changeset 接入、catalog 键 parity | 文件配置侧能力提示(P5/UI)、P6 UI registry/映射函数和四项覆盖率 |
+| `config-components.test.ts` | U24 声明字段、默认值、workspace 实体所有权及 schema-only 标记的一致性；P6 registry/映射函数已交付（见上方 P6 证据表） | — |
+| `config-capabilities.test.ts` | passthrough 类型化 DTO、kind×字段能力矩阵、9 种 channel kind、`resolved_action` 逐 kind 取值、changeset 接入、catalog 键 parity；P6 UI 控件与能力矩阵一致 | 文件配置侧能力提示的余下 UI 呈现随 P7 端到端复验 |
 | `config-examples.test.ts`、`config.test.ts`、静态 YAML fixtures | 当前示例加载、旧格式转换及现有配置兼容；fixture b01–b05 为输入编号 | B02 compatibility graph、B04 CLI 无额外数据库、B06–B10 跨层行为 |
 | `config-matcher.test.ts`、`config-path-template.test.ts`、`config-workspace.test.ts` | RE2/glob/exact matcher、模板 AST 白名单与渲染校验、match 互斥/trigger 引用/歧义、instance identity、legacy/isolated_v2 布局纯层 | matcher 在存储/API 层的复用、L13/L14 平台样例 |
 | `config-resolution.test.ts` | 描述符字段目录、legacy 优先、规则 OR/字段 AND、多定义歧义、provider 变量范围与 W01/W02/W07/W10 纯层 | P4/P5 动态配置发布；scheduled 缺引擎，按合同不可用 |

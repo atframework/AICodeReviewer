@@ -42,6 +42,13 @@ Read for Git/P4 context, attribution, or diff changes. Sources and tests:
   through list/diff/fetch/context; they must not become an empty LGTM review.
   Treat only genuine diagnostic `no such file(s)` as absent files, never quoted
   stdout. Keep transport patterns distinct from not-found checks.
+- Tests that reach a real CLI via app-level fixtures must not point the
+  trigger config at a fake hostname: on hosts where the binary is installed,
+  `p4 describe` enrichment (`enrichP4ReviewEvent` via the default runner)
+  stalls on the TCP connect timeout (~20 s) and the test dies at the 5 s
+  default instead of failing fast. Use a loopback discard port
+  (`127.0.0.1:1`) — instant ECONNREFUSED with the binary present, ENOENT
+  without it. See `auto-commit-webhook.test.ts` P4 cases.
 
 ## P4 batch endpoints
 

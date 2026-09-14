@@ -66,6 +66,8 @@ tr:hover td{background:rgba(59,130,246,0.05)}
 .live-metrics dd{font-size:0.875rem}
 .live-card a{color:var(--accent)}
 .tabs{overflow-x:auto;white-space:nowrap}
+#config-status{margin-bottom:0.75rem;font-size:0.8125rem;color:var(--muted);min-height:1.25rem}
+#config-main{min-width:0}
 @media(max-width:640px){.header{flex-wrap:wrap;gap:0.5rem}.content{padding:0.75rem}.header-actions{flex-wrap:wrap}}
 </style>
 </head>
@@ -100,6 +102,7 @@ tr:hover td{background:rgba(59,130,246,0.05)}
 <div class="tab" data-tab="providers" onclick="switchTab('providers')">LLM Providers</div>
 <div class="tab" data-tab="runs" onclick="switchTab('runs')">Recent Runs</div>
 <div class="tab" data-tab="events" onclick="switchTab('events')">Events</div>
+<div class="tab" data-tab="config" onclick="switchTab('config')">Config</div>
 </div>
 
 <div id="tab-live" class="tab-content active">
@@ -204,6 +207,12 @@ tr:hover td{background:rgba(59,130,246,0.05)}
 <tbody id="events-table"></tbody>
 </table></div>
 </div>
+<div id="tab-config" class="tab-content">
+<div id="config-status" role="status" aria-live="polite"></div>
+<nav id="config-nav" aria-label="Configuration sections"></nav><div id="config-main"></div>
+<div id="config-editor" hidden></div>
+</div>
+
 
 </div>
 </div>
@@ -375,6 +384,14 @@ function selectWindow(w){
 function switchTab(t){
   document.querySelectorAll(".tab").forEach(function(el){el.classList.toggle("active",el.dataset.tab===t)});
   document.querySelectorAll(".tab-content").forEach(function(el){el.classList.toggle("active",el.id==="tab-"+t)});
+  if(t==="config"){
+    if(!window.__aicrConfigApp)window.__aicrConfigApp=import("./dashboard/client/config-app.js");
+    window.__aicrConfigApp.then(function(m){if(authToken)m.default.show();}).catch(function(){
+      var main=document.getElementById("config-main");
+      main.textContent="";
+      main.appendChild(document.createTextNode("Failed to load the configuration editor."));
+    });
+  }
   if(t==="projects"&&!projectStatsData)loadProjectStats(currentProjectWindow);
   if(t==="providers"&&!providerStatsData)loadProviderStats(currentProviderWindow);
   if(t==="runs"&&!runsData)loadRuns();

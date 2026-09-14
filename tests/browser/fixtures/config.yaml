@@ -1,0 +1,69 @@
+# Browser-gate fixture for tests/browser (P6). Real CLI `serve` wiring: SQLite
+# config store, file-owned entities for readonly/copy flows, dummy env secrets
+# injected by playwright.config.ts webServer env. No external service is
+# contacted: the provider URL is unroutable and no review is ever triggered.
+llm:
+  providers:
+    - id: file-llm
+      kind: openai_compatible
+      base_url: http://127.0.0.1:9/v1
+      api_key_env: AICR_BROWSER_LLM_KEY
+  model_chain:
+    default:
+      - { provider: file-llm, model: browser-test-model, role: any }
+  default_model_chain: default
+
+triggers:
+  - name: git-main
+    kind: gitea
+    enabled: true
+    base_url: http://127.0.0.1:9
+    token_env: AICR_BROWSER_GIT_TOKEN
+    webhook_secret_env: AICR_BROWSER_GIT_SECRET
+  # Separate v2 source: git-main is intentionally locked to its legacy binding.
+  - name: git-preview
+    kind: gitea
+    base_url: http://127.0.0.1:9
+    token_env: AICR_BROWSER_GIT_TOKEN
+    webhook_secret_env: AICR_BROWSER_GIT_SECRET
+
+outputs:
+  channels:
+    - name: pr-comments
+      kind: gitea_pr_review
+      trigger: git-main
+
+workspaces:
+  instances:
+    default-project:
+      source_repo:
+        trigger: git-main
+        repo: acme/app
+
+config_sources:
+  # Fail-closed secret policy: the UI may only reference envs the deployment
+  # pre-authorized for an exact (target path, destination) pair. The browser
+  # CRUD flow creates exactly this provider id/destination.
+  secret_refs:
+    - env: AICR_BROWSER_LLM_KEY
+      target: [llm, providers, db-provider, api_key_env]
+      destinations:
+        kind: openai_compatible
+        base_url: http://127.0.0.1:9/v1
+  database:
+    enabled: true
+    backend: storage
+    namespace: browser-test
+
+storage:
+  database:
+    kind: sqlite
+    sqlite:
+      path: build/tmp/browser/aicr.sqlite
+
+queue:
+  kind: memory
+
+server:
+  port: 18080
+  hostname: 127.0.0.1
