@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { createMemoryConfigStore, applyConfigChangeset, type ConfigStore, type ConfigChangesetOperation } from "@aicr/core";
+import { createMemoryConfigStore, applyConfigChangeset, appConfigSchema, type ConfigStore, type ConfigChangesetOperation } from "@aicr/core";
 import { createSqliteConfigStore } from "@aicr/core";
 import { createAdminSession, type AdminAuthConfig } from "../src/admin-auth.js";
 import { createConfigApi, type ConfigApiOptions } from "../src/config-api.js";
@@ -31,7 +31,7 @@ const FILE_CONFIG = {
     providers: [{ id: "file-main", kind: "ollama" }],
     model_chain: { default: [{ provider: "file-main", model: "m", role: "any" }] },
   },
-} as never;
+};
 
 let dir: string;
 let store: ConfigStore;
@@ -45,7 +45,7 @@ beforeEach(async () => {
   store = await createSqliteConfigStore({ path: join(dir, "config.sqlite") });
   sessionStore = createMemoryConfigStore();
   manager = new RuntimeConfigManager({
-    fileConfig: FILE_CONFIG,
+    fileConfig: appConfigSchema.parse(FILE_CONFIG),
     fileDocument: FILE_CONFIG,
     fileDigest: DIGEST,
     store,
@@ -78,7 +78,7 @@ function makeApp(options: ConfigApiOptions = apiOptions) {
   return createConfigApi(options);
 }
 
-function request(
+async function request(
   app: ReturnType<typeof makeApp>,
   path: string,
   init: { method?: string; body?: unknown; token?: string | null; headers?: Record<string, string> } = {},
@@ -132,7 +132,7 @@ describe("config api auth (A01/A02)", () => {
 
   it("A07: prefixed replicas share persisted sessions and report activation versions", async () => {
     const replicaStore = await createSqliteConfigStore({ path: join(dir, "config.sqlite") });
-    const replicaManager = new RuntimeConfigManager({ fileConfig: FILE_CONFIG, fileDocument: FILE_CONFIG,
+    const replicaManager = new RuntimeConfigManager({ fileConfig: appConfigSchema.parse(FILE_CONFIG), fileDocument: FILE_CONFIG,
       fileDigest: DIGEST, store: replicaStore, namespace: NAMESPACE, baseDir: dir });
     const session = await createAdminSession({ config: ADMIN, sessions: store }, "admin", "secret-password");
     const headers = { authorization: `Bearer ${session!.token}`, "content-type": "application/json" };
@@ -225,7 +225,7 @@ describe("config api GET / (A05 redaction + shape)", () => {
     expect(response.status).toBe(200);
     const body = await response.json() as {
       head: { activeRevision: number } | null;
-      collections: Record<string, { count: number; records: { id: string }[] }>;
+      collections: { provider: { count: number; records: { id: string }[] } };
       secretEnvs: { name: string; present: boolean }[];
     };
     expect(body.head?.activeRevision).toBe(1);
@@ -286,7 +286,14 @@ describe("config api validate + preview-route (A09)", () => {
       event: { triggerName: "t", targetKind: "push", repoRef: "acme/x" },
       draft: { baseRevision: null, fileDigest: DIGEST, operations: draftOperations },
     } });
-    expect(await response.json()).toMatchObject({ status: "matched", workspace: "draft-workspace", routeRuleId: "draft-route" });
+    const preview = await response.json() as { workspaceInstanceId: string; layout: Record<string, unknown> };
+    expect(preview).toMatchObject({ status: "matched", workspace: "draft-workspace", routeRuleId: "draft-route" });
+    expect(preview.workspaceInstanceId).toMatch(/^[a-f0-9]{64}$/u);
+    expect(preview.layout).toMatchObject({
+      instanceRoot: `workspaces/x/${preview.workspaceInstanceId}`,
+      sourceRoot: `workspaces/x/${preview.workspaceInstanceId}/source`,
+      agentDir: `workspaces/x/${preview.workspaceInstanceId}/agent`,
+    });
     expect(response.status).toBe(200);
     expect(await store.readHead(NAMESPACE)).toBeNull();
     expect(await store.listRevisions(NAMESPACE)).toEqual([]);
@@ -307,7 +314,7 @@ describe("config api validate + preview-route (A09)", () => {
 
   it("does not offer forbidden variables and supplies valid nullable completion expressions", async () => {
     const response = await request(makeApp(), "/options/path_template_variables");
-    const { options } = await response.json();
+    const { options } = await response.json() as { options: { value: string; label: string; insertText?: string; disabled?: boolean }[] };
     expect(options).toContainEqual({ value: "git.repository", label: "git.repository", insertText: "{{segment git.repository}}" });
     expect(options).toContainEqual({ value: "git.branch", label: "git.branch", insertText: '{{segment (default git.branch "unknown")}}' });
     expect(options.find((option: { value: string }) => option.value === "event.actor")).toMatchObject({ disabled: true });
@@ -582,10 +589,10 @@ describe("config API regression boundaries", () => {
       baseRevision: null, operationId: "op-view-1", operations: [{ op: "create", collection: "providers",
         record: { id: "immutable-id", name: "display-name", enabled: false, value: { id: "display-name", kind: "ollama" } } }] } });
     expect(response.status, await response.text()).toBe(200);
-    const first = await (await request(app, "/?limit=1")).json() as { collections: Record<string, { records: unknown[]; nextOffset: number }> };
+    const first = await (await request(app, "/?limit=1")).json() as { collections: { provider: { records: unknown[]; nextOffset: number } } };
     expect(first.collections.provider.records).toEqual([expect.objectContaining({ id: "file-main", source: "file", readonly: true, effectiveValue: { id: "file-main", kind: "ollama" } })]);
     expect(first.collections.provider.nextOffset).toBe(1);
-    const second = await (await request(app, "/?limit=1&offset=1")).json() as { collections: Record<string, { records: unknown[] }> };
+    const second = await (await request(app, "/?limit=1&offset=1")).json() as { collections: { provider: { records: unknown[] } } };
     expect(second.collections.provider.records).toEqual([expect.objectContaining({ id: "immutable-id", name: "display-name", enabled: false, source: "database" })]);
   });
 

@@ -40,6 +40,7 @@ interface ChildConfig {
   readonly configStore: ConfigStoreSpec;
   readonly receipts: { readonly path: string };
   readonly controlFile?: string;
+  readonly pauseBeforeInstallRevision?: number;
 }
 
 const FILE_CONFIG = {
@@ -91,6 +92,18 @@ async function main(): Promise<void> {
   });
   // Bootstrap parity: adopt the durable head before serving traffic.
   await manager.admission();
+
+  // Test-only barrier after the real durable commit, before local activation.
+  // The parent waits for this acknowledgement and kills the process while
+  // the publish response is still pending; polling head alone cannot prove it.
+  const install = manager.install.bind(manager);
+  manager.install = async input => {
+    if (input.revision === config.pauseBeforeInstallRevision) {
+      console.log(JSON.stringify({ event: "before-install", revision: input.revision }));
+      await new Promise<void>(() => {});
+    }
+    return install(input);
+  };
 
   const receiptStore = await core.createSqliteAutoCommitStore({ path: config.receipts.path });
   const runtime = new AutoCommitRuntime({ store: receiptStore, getPolicyLayers: () => ({}) });

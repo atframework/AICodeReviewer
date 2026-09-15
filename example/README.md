@@ -22,6 +22,10 @@ in the file's `secret_refs`. Existing file references authorize their original
 use. Accepted tasks retain their configuration version across publication;
 legacy unpinned tasks use a persisted baseline.
 
+Channels without an explicit `trigger` can inherit credentials from every
+compatible event profile. A database channel needs a `secret_refs` grant for
+each effective credential/destination pair; specify `trigger` to restrict it.
+
 The dashboard **Config** tab manages providers, model groups, triggers, channels,
 workspaces, routes and global settings. Use **Stage changes** across pages to
 create related records together, then **Publish staged changes** once. Routing

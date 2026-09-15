@@ -17,7 +17,7 @@ PR/MR 执行时段、持久化延期与事件面板见 [M16](docs/ai/milestones/
 模型目录 Redis 新连接重载，以及部署配置/双语自动提交示例的 schema 校验。
 记录与复现条件见 [本地验收](docs/ai/milestones/local-priority-queue.md)。
 
-Workspace 多工程规则与动态配置管理 P0–P8 已全部交付：存储/迁移见
+Workspace 多工程规则与动态配置管理已交付主要功能，P8 复审仍保留跨版本验收缺口：存储/迁移见
 [M17](docs/ai/milestones/M17.md)，来源合并/发布见 [M18](docs/ai/milestones/M18.md)，
 运行时接线/管理 API 见 [M19](docs/ai/milestones/M19.md)，管理表单与浏览器门禁见
 [M20](docs/ai/milestones/M20.md)，集成测试与组合验收见
@@ -37,8 +37,10 @@ Workspace 多工程规则与动态配置管理 P0–P8 已全部交付：存储/
 不把单元测试或本地服务通过写成生产集成验收通过。完成一项后将证据移入对应里程碑，
 从本表删除，不累积完成清单。
 
-Workspace 与动态配置管理（原 2.1）已完成并归档：验收矩阵、组合证据与
-任务资料退役记录见 [M22](docs/ai/milestones/M22.md)。
+Workspace 与动态配置管理复审见 [M23](docs/ai/milestones/M23.md)。保留
+[实施计划](docs/superpowers/plans/2026-09-11-workspace-config-implementation.md)及
+[测试矩阵](docs/superpowers/plans/2026-09-11-workspace-config-tests.md)：M17/M18 尚需指定
+兼容旧版本并验证停机排空/reader-writer 边界；同版本进程恢复不构成该证据。
 
 ## 3. 依赖外部环境的验收
 

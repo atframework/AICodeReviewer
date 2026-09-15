@@ -55,6 +55,11 @@ business tables retain their historical name-only `_migrations` ledger.
 `store` namespaces on SQLite and PostgreSQL without starting the server (see
 [CLI Reference](/en/reference/cli/)).
 
+Keep SQLite WAL databases on a local filesystem shared by processes on the
+same host. WAL does not support network filesystems; use the Linux filesystem
+for WSL database tests rather than a Windows-drive mount. See the
+[SQLite WAL requirements](https://www.sqlite.org/wal.html).
+
 ## `storage.cache`
 
 | Field | Type | Default | Description |

@@ -13,14 +13,14 @@
  * pass (no format-repair respawn, no direct-LLM fallback).
  *
  * Every `run` invocation appends one JSON line to AICR_STUB_AGENT_LOG. The
- * FIRST recorded invocation holds the run in flight by polling (100 ms, 45 s
- * cap) for the AICR_STUB_RELEASE_FILE flag before emitting its stream.
+ * FIRST recorded invocation holds the run in flight for the release flag.
+ * A missing acknowledgement fails the child; it never silently releases.
  */
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
 
 const RELEASE_POLL_MS = 100;
-const RELEASE_CAP_MS = 45_000;
+const RELEASE_CAP_MS = 120_000;
 
 export function runStubAgent(options) {
   const { binary, sentinel } = options;
@@ -42,7 +42,10 @@ export function runStubAgent(options) {
   if (logPath) {
     mkdirSync(dirname(logPath), { recursive: true });
     isFirstInvocation = !existsSync(logPath) || readFileSync(logPath, "utf8").trim() === "";
-    appendFileSync(logPath, `${JSON.stringify({ binary, argv, cwd: process.cwd(), ts: Date.now() })}\n`, "utf8");
+    const configPath = join(process.cwd(), binary === "kilo" ? ".kilo/kilo.json" : "opencode.json");
+    const config = JSON.parse(readFileSync(configPath, "utf8"));
+    const providerBaseUrl = config.provider?.["iso-provider"]?.options?.baseURL;
+    appendFileSync(logPath, `${JSON.stringify({ binary, argv, cwd: process.cwd(), providerBaseUrl, ts: Date.now() })}\n`, "utf8");
   }
 
   const emit = () => {
@@ -63,9 +66,14 @@ export function runStubAgent(options) {
   if (isFirstInvocation && releaseFile && !existsSync(releaseFile)) {
     const deadline = Date.now() + RELEASE_CAP_MS;
     const timer = setInterval(() => {
-      if (existsSync(releaseFile) || Date.now() >= deadline) {
+      if (existsSync(releaseFile)) {
         clearInterval(timer);
         emit();
+      } else if (Date.now() >= deadline) {
+        clearInterval(timer);
+        process.stderr.write("Browser test did not release the blocked agent.\n");
+        process.exitCode = 1;
+        process.stdin.destroy();
       }
     }, RELEASE_POLL_MS);
     return;

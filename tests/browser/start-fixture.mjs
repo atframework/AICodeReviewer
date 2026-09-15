@@ -7,7 +7,7 @@
  * Invoked by playwright.config.ts webServer; not part of the shipped package.
  */
 import { execFileSync, spawn } from "node:child_process";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -28,8 +28,7 @@ mkdirSync(tmpDir, { recursive: true });
 // `git diff` / `git show`. Fixed commit metadata keeps the SHAs deterministic;
 // the spec reads them from fixture-shas.json for its webhook payload.
 // ---------------------------------------------------------------------------
-const fixtureRepoDir = join(repoRoot, "workspaces", "default-project", "source", "acme_app");
-rmSync(fixtureRepoDir, { recursive: true, force: true });
+const fixtureRepoDir = join(tmpDir, "workspaces", "default-project", "source", "acme_app");
 mkdirSync(fixtureRepoDir, { recursive: true });
 const gitEnv = {
   ...process.env,
@@ -101,8 +100,14 @@ const env = {
 const child = spawn(
   process.execPath,
   [join(repoRoot, "packages", "cli", "dist", "index.js"), "serve", "--config", join(repoRoot, "tests", "browser", "fixtures", "config.yaml")],
-  { env, stdio: "inherit", cwd: repoRoot },
+  { env, stdio: ["ignore", "pipe", "pipe"], cwd: repoRoot, windowsHide: true },
 );
+for (const [stream, output] of [[child.stdout, process.stdout], [child.stderr, process.stderr]]) {
+  stream.on("data", chunk => {
+    appendFileSync(join(tmpDir, "cli-events.log"), chunk);
+    output.write(chunk);
+  });
+}
 
 const shutdown = (code) => {
   void stubServices.close().finally(() => process.exit(code));

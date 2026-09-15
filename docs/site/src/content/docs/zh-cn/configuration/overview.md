@@ -203,6 +203,11 @@ changesets 和 restore 请求必须携带当前 SHA-256 `fileDigest`。operation
 model override、workspace/route search 继承的凭据。授权格式见
 [字段参考](/zh-cn/reference/config-fields/)。
 
+未指定 `trigger` 的 channel 继承接收事件的兼容 profile。数据库 channel 需要对所有
+兼容 profile 的有效凭据与目的地授权；指定 `trigger` 可缩小这一范围。文件拥有的
+channel 保留这些原有用途的授权。GitLab `project_id` 属于目的地授权字段，修改时
+需要匹配的文件授权。
+
 数据库可管理的全局叶子包括 `llm.default_model_chain`、`llm.triage_model_chain`、
 `llm.retry`、`llm.per_provider_overrides`、`llm.budget`、`llm.model_catalog`、
 `review`、`compression`、`agent`、`outputs.template_engine`、`outputs.no_problems`、

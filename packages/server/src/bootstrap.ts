@@ -204,9 +204,20 @@ function toRedisModelCatalogBackendOptions(config: AppConfig): RedisModelCatalog
   };
 }
 
-function extractPullNumber(payload: unknown): number | undefined {
+function extractPullNumber(payload: unknown, event: ReviewEvent): number | undefined {
   if (!isPlainObject(payload)) {
     return undefined;
+  }
+
+  if (event.provider === "gitlab") {
+    if (event.targetKind !== "pull_request") return undefined;
+    // MR hooks put the project-local IID in object_attributes; Note Hooks
+    // carry the referenced MR at the payload root. Global id/note iid are
+    // never valid substitutes for the merge request's project-local number.
+    const mergeRequest = isPlainObject(payload.merge_request) ? payload.merge_request :
+      payload.object_kind === "merge_request" ? payload.object_attributes : undefined;
+    const iid = isPlainObject(mergeRequest) ? mergeRequest.iid : undefined;
+    return typeof iid === "number" && Number.isSafeInteger(iid) && iid > 0 ? iid : undefined;
   }
 
   const pullRequest = payload.pull_request;
@@ -1589,7 +1600,10 @@ export function createOutputPublisherFromConfig(
   const parsedRepo = parseRepoRef(explicitOwner && explicitRepo ? undefined : explicitRepo ?? workspaceRepoRef ?? reviewEvent?.repoRef);
   const owner = explicitOwner ?? parsedRepo?.owner;
   const repo = explicitOwner ? explicitRepo : parsedRepo?.repo;
-  const repoRef = owner && repo ? `${owner}/${repo}` : workspaceRepoRef;
+  // GitLab project paths may contain multiple namespace segments. Preserve
+  // the complete accepted target path instead of requiring owner/repo shape.
+  const repoRef = owner && repo ? `${owner}/${repo}` :
+    channel.kind === "gitlab_mr_review" ? explicitRepo ?? workspaceRepoRef ?? reviewEvent?.repoRef : workspaceRepoRef;
   const rendering = createChannelRendering(config, channel, workspaceId, reviewEvent, repoRef, baseDir, targetUrlTemplates);
   const publishEmptySummary = noProblemsAction === "publish";
   const channelSeverityLabelPrefix = readString(channelConfig, "severity_label_prefix", "severityLabelPrefix");
@@ -1811,7 +1825,7 @@ export function createOutputPublisherFromConfig(
   }
 
   if (channel.kind === "gitlab_mr_review") {
-    const projectId = channelConfig.project_id ?? channelConfig.projectId ?? (owner && repo ? `${owner}/${repo}` : workspaceRepoRef);
+    const projectId = channelConfig.project_id ?? channelConfig.projectId ?? repoRef;
     const mergeRequestIid = readNumber(channelConfig, "merge_request_iid", "mergeRequestIid") ?? pullNumber;
     if ((typeof projectId !== "string" && typeof projectId !== "number") || mergeRequestIid === undefined) {
       return undefined;
@@ -2178,19 +2192,32 @@ export function createOutputPublisherResolverFromConfig(
   options: OutputPublisherConfigOptions = {},
 ): ReviewOutputPublisherResolver {
   return async (context, runtime) => {
-    const pullNumber = extractPullNumber(context.payload);
+    const pullNumber = extractPullNumber(context.payload, context.reviewEvent);
     const baseDir = options.baseDir ?? process.cwd();
-    const resolvedTriggerToken = await resolveTriggerTokenForContext(
-      config,
-      context,
-      options.appTokenServices,
-    );
+    const tokenPromises = new Map<string, Promise<string | undefined>>();
+    const channelToken = (name: string): Promise<string | undefined> => {
+      const channel = config.outputs.channels.find(entry => entry.name === name);
+      if (!channel?.kind.startsWith("github_") || channel.token_env !== undefined) return Promise.resolve(undefined);
+      const eventTrigger = config.triggers.find(entry => entry.name === context.reviewEvent.triggerName && entry.kind === "github");
+      const triggerName = readString(channel, "trigger") ?? eventTrigger?.name ?? config.triggers.find(entry => entry.kind === "github")?.name;
+      const explicitOwner = readString(channel, "owner");
+      const explicitRepo = readString(channel, "repo");
+      const repoRef = explicitOwner && explicitRepo ? `${explicitOwner}/${explicitRepo}` : explicitRepo ??
+        (triggerName ? resolveWorkspaceRepoRef(config, triggerName, context.reviewEvent.workspaceId) : undefined) ?? context.reviewEvent.repoRef;
+      const key = JSON.stringify([triggerName, repoRef]);
+      let token = tokenPromises.get(key);
+      if (!token) {
+        token = resolveGithubAppInstallationToken(config, options.appTokenServices, triggerName, repoRef);
+        tokenPromises.set(key, token);
+      }
+      return token;
+    };
     const resolutionAnalyzer = options.resolutionAnalyzerFactory?.(
       runtime?.sourceRoot ?? baseDir,
       context,
     );
-    const linePublishers = resolveOutputChannelNames(config, context, "line_comments")
-      .map((name): OutputPublisherEntry | undefined => {
+    const linePublishers = (await Promise.all(resolveOutputChannelNames(config, context, "line_comments")
+      .map(async (name): Promise<OutputPublisherEntry | undefined> => {
         const publisher = createOutputPublisherFromConfig(
           config,
           name,
@@ -2198,14 +2225,14 @@ export function createOutputPublisherResolverFromConfig(
           context.reviewEvent.workspaceId,
           context.reviewEvent,
           baseDir,
-          resolvedTriggerToken,
+          await channelToken(name),
           resolutionAnalyzer,
         );
         return publisher ? { name, publisher } : undefined;
-      })
+      })))
       .filter((entry): entry is OutputPublisherEntry => Boolean(entry));
-    const summaryPublishers = resolveOutputChannelNames(config, context, "summary")
-      .map((name): OutputPublisherEntry | undefined => {
+    const summaryPublishers = (await Promise.all(resolveOutputChannelNames(config, context, "summary")
+      .map(async (name): Promise<OutputPublisherEntry | undefined> => {
         const publisher = createOutputPublisherFromConfig(
           config,
           name,
@@ -2213,11 +2240,11 @@ export function createOutputPublisherResolverFromConfig(
           context.reviewEvent.workspaceId,
           context.reviewEvent,
           baseDir,
-          resolvedTriggerToken,
+          await channelToken(name),
           resolutionAnalyzer,
         );
         return publisher ? { name, publisher } : undefined;
-      })
+      })))
       .filter((entry): entry is OutputPublisherEntry => Boolean(entry));
 
     return createCompositeOutputPublisher(linePublishers, summaryPublishers);

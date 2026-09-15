@@ -1313,6 +1313,236 @@ export function createMemoryAutoCommitStore(): AutoCommitStore {
       return batches.get(batchId)?.record;
     },
 
+    async recordPublicationPlan(
+      batchId: string,
+      token: string,
+      plan: BatchPublicationPlan,
+      now: number,
+    ): Promise<BatchPublicationPlan | null> {
+      const json = JSON.stringify(plan);
+      if (Buffer.byteLength(json) > BATCH_PUBLICATION_PLAN_MAX_BYTES)
+        throw new RangeError("Publication plan exceeds 1 MiB");
+      const batch = batches.get(batchId);
+      if (
+        !batch ||
+        batch.record.status !== "running" ||
+        batch.record.leaseToken !== token ||
+        (batch.record.leaseExpiry ?? 0) <= now
+      )
+        return null;
+      const existing = publicationPlans.get(batchId);
+      if (existing) return existing;
+      const stored = JSON.parse(json) as BatchPublicationPlan;
+      publicationPlans.set(batchId, stored);
+      return stored;
+    },
+
+    async recordPublicationReceipts(
+      batchId: string,
+      token: string,
+      receipts: readonly BatchPublicationReceipt[],
+      now: number,
+    ): Promise<boolean> {
+      const batch = batches.get(batchId);
+      if (
+        !batch ||
+        batch.record.status !== "running" ||
+        batch.record.leaseToken !== token ||
+        (batch.record.leaseExpiry ?? 0) <= now
+      )
+        return false;
+      let byKey = publicationReceipts.get(batchId);
+      if (!byKey) {
+        byKey = new Map<string, BatchPublicationReceipt>();
+        publicationReceipts.set(batchId, byKey);
+      }
+      for (const receipt of receipts) {
+        // Collection-only synthetic results are not remote acts (spec §4).
+        if (receipt.action === "collected") continue;
+        byKey.set(
+          `${receipt.kind}:${receipt.channel}`,
+          JSON.parse(JSON.stringify(receipt)) as BatchPublicationReceipt,
+        );
+      }
+      return true;
+    },
+
+    async readPublicationLedger(
+      batchId: string,
+    ): Promise<BatchPublicationLedger> {
+      const plan = publicationPlans.get(batchId) ?? null;
+      const byKey = publicationReceipts.get(batchId);
+      const receipts = byKey
+        ? [...byKey.values()].sort((a, b) =>
+            a.channel === b.channel
+              ? a.kind < b.kind
+                ? -1
+                : 1
+              : a.channel < b.channel
+                ? -1
+                : 1,
+          )
+        : [];
+      return { plan, receipts };
+    },
+
+    async readBatchRecoveryAudit(
+      batchId: string,
+    ): Promise<readonly BatchRecoveryAuditEntry[]> {
+      return recoveryAudits.get(batchId) ?? [];
+    },
+
+    async readBatches(
+      query: BatchListQuery,
+    ): Promise<Page<CommitBatchRecord>> {
+      const filtered = [...batches.values()]
+        .map((state) => state.record)
+        .filter(
+          (record) =>
+            (query.status === undefined || record.status === query.status) &&
+            (query.streamId === undefined ||
+              record.streamId === query.streamId) &&
+            (query.cursor === undefined ||
+              query.cursor === null ||
+              record.batchId > query.cursor),
+        )
+        .sort((a, b) => (a.batchId < b.batchId ? -1 : 1));
+      const items = filtered.slice(0, query.limit);
+      const last = items[items.length - 1];
+      return {
+        items,
+        nextCursor:
+          items.length === query.limit && last ? last.batchId : null,
+      };
+    },
+
+    async applyBatchRecovery(
+      batchId: string,
+      expectedRecoveryVersion: number,
+      operation: BatchRecoveryOperation,
+      actor: string,
+      now: number,
+    ): Promise<BatchRecoveryResult> {
+      const batch = batches.get(batchId);
+      if (!batch) return { ok: false, reason: "not_found" };
+      const record = batch.record;
+      if (record.status !== "dead") return { ok: false, reason: "not_dead" };
+      if (record.recoveryVersion !== expectedRecoveryVersion)
+        return { ok: false, reason: "version_conflict" };
+      const nextVersion = expectedRecoveryVersion + 1;
+      let resultingStatus: string = record.status;
+      let detail: string | undefined;
+      if (operation.op === "redrive_publication") {
+        const plan = publicationPlans.get(batchId);
+        const byKey = publicationReceipts.get(batchId);
+        const republishable = new Set(
+          (plan?.channels ?? [])
+            .filter((channel) => channel.queryRepublishable)
+            .map((channel) => `${channel.kind}:${channel.channel}`),
+        );
+        const resumable = byKey
+          ? [...byKey.values()].some(
+              (receipt) =>
+                receipt.status === "failed_unconfirmed" &&
+                republishable.has(`${receipt.kind}:${receipt.channel}`),
+            )
+          : false;
+        if (!plan || !resumable)
+          return { ok: false, reason: "not_resumable" };
+        batch.record = {
+          ...record,
+          status: "queued",
+          leaseToken: null,
+          leaseOwner: null,
+          leaseExpiry: null,
+          recoveryVersion: nextVersion,
+        };
+        outbox.set(batchId, {
+          entry: { batchId, status: "pending", nextAttemptAt: now },
+          claimToken: null,
+          claimExpiry: null,
+        });
+        resultingStatus = "queued";
+      } else if (operation.op === "complete") {
+        const byKey = publicationReceipts.get(batchId);
+        const unresolved = byKey
+          ? [...byKey.values()].some(
+              (receipt) => receipt.status === "failed_unconfirmed",
+            )
+          : false;
+        if (unresolved && operation.acknowledgeUnresolved !== true)
+          return { ok: false, reason: "unresolved_receipts" };
+        batch.record = {
+          ...record,
+          status: "completed",
+          leaseToken: null,
+          leaseOwner: null,
+          leaseExpiry: null,
+          recoveryVersion: nextVersion,
+        };
+        for (const member of record.members) {
+          const state = members.get(member.memberId);
+          if (state && state.record.batchId === batchId) {
+            state.record = { ...state.record, status: "completed" };
+          }
+        }
+        outbox.delete(batchId);
+        clearStreamActiveBatch(record.streamId, batchId);
+        resultingStatus = "completed";
+      } else if (operation.op === "abandon") {
+        batch.record = {
+          ...record,
+          status: "skipped",
+          leaseToken: null,
+          leaseOwner: null,
+          leaseExpiry: null,
+          recoveryVersion: nextVersion,
+        };
+        for (const member of record.members) {
+          const state = members.get(member.memberId);
+          if (state && state.record.batchId === batchId) {
+            state.record = {
+              ...state.record,
+              status: "skipped",
+              terminalReason: "operator_abandoned",
+            };
+          }
+        }
+        outbox.delete(batchId);
+        clearStreamActiveBatch(record.streamId, batchId);
+        resultingStatus = "skipped";
+      } else {
+        const byKey = publicationReceipts.get(batchId);
+        const key = `${operation.kind}:${operation.channel}`;
+        const receipt = byKey?.get(key);
+        if (!receipt) return { ok: false, reason: "unknown_target" };
+        byKey!.set(key, {
+          ...receipt,
+          status: "confirmed_external",
+          recordedAt: now,
+        });
+        batch.record = { ...record, recoveryVersion: nextVersion };
+        detail = `${operation.channel}:${operation.kind}`;
+        resultingStatus = "dead";
+      }
+      const audit: BatchRecoveryAuditEntry = {
+        batchId,
+        recoveryVersion: nextVersion,
+        op: operation.op,
+        actor,
+        ...(operation.note !== undefined ? { note: operation.note } : {}),
+        previousStatus: "dead",
+        resultingStatus,
+        ...(detail !== undefined ? { detail } : {}),
+        recordedAt: now,
+      };
+      const entries = recoveryAudits.get(batchId) ?? [];
+      entries.push(audit);
+      recoveryAudits.set(batchId, entries);
+      recomputeStreamNotBefore(record.streamId);
+      return { ok: true, recoveryVersion: nextVersion };
+    },
+
     async getReceipt(
       receiptId: string,
     ): Promise<ReceiptQueryResult | undefined> {

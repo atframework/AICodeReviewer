@@ -7,6 +7,17 @@ only the matching references in the
 Sources: `packages/outputs/src/index.ts`, `template-engine.ts`, `im-markdown.ts`,
 `packages/core/src/markdown-fixer.ts`, server bootstrap/orchestrator, and tests.
 
+- Keep authorization and publisher inheritance aligned: an unpinned channel
+  uses the accepting event's compatible trigger, so secret-policy collection
+  must cover every possible profile. Resolve GitHub App tokens for the output
+  trigger and target repo, including explicit cross-repo channels. Assert raw
+  request host, auth and count (`config-secret-policy.test.ts`,
+  `config-e2e-publish-review.test.ts`).
+- GitLab project paths can contain multiple namespace segments. MR publication
+  needs the full target path and project-local `iid`; Note Hooks carry the MR
+  at the payload root. Never fall back to the note or global MR ID; cover absent
+  and invalid identifiers (`config-e2e-publish-review.test.ts` E05).
+
 - Apply `no_problems` per channel with workspace overrides. Errors bypass normal
   empty-result suppression. `dryRun: false` must not become `dry_run` just because
   no publisher exists; bootstrap must not force dry-run when outputs are configured.

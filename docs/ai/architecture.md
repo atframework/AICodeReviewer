@@ -1253,6 +1253,10 @@ models.dev 的 key 是 `<providerId>/<modelId>`（AI SDK 标识）。自定义 p
   与未知高版本、非连续账本永远拒绝写入(M16),不自动修复。CLI 同时处理
   SQLite/PostgreSQL 的 config/store 命名空间;两个 PostgreSQL namespace 共用
   advisory 锁,创建账本也在锁和事务内。
+- 首次升级必须先关闭所有旧实例入口、停止新 claim、等待在途任务排空并停止旧进程，
+  备份后再迁移并启动新实例。迁移锁只协调遵循协议的迁移者，不能阻止旧二进制继续
+  写入；当前没有可协商的 reader/writer 范围或对任意旧进程的自动 fencing。
+  未知高版本的启动拒绝与同版本跨进程恢复不能充当双版本滚动升级验收。
 - 业务 StoreDb 双后端:`packages/store` 的 sqlite 分支保留 legacy `_migrations`
   (001–006 文本冻结,append-only,新增步只允许追加;M02 用该前缀构建真实旧账本
   fixture);postgres 分支经 `pg-migrations.ts` 复用同一 MigrationRunner
@@ -1402,7 +1406,16 @@ secret 授权来自原始文件引用及仅文件可写的 config_sources.secret
 [OWASP 出站目标白名单原则](https://cheatsheetseries.owasp.org/cheatsheets/Server_Side_Request_Forgery_Prevention_Cheat_Sheet.html)，
 约束配置可引用的凭据与目的地；它不替代部署网络层的 DNS/重定向访问控制。
 
-P4/P5 本地验收见 M19，P6 管理 UI 验收见 M20，P7 集成测试与跨版本进程矩阵验收见 M21。
+未指定 trigger 的 channel 会使用接收事件的兼容 profile；secret policy 因此检查全部
+兼容 profile 的凭据和有效目的地。显式 trigger 缩小候选集合。GitHub App token 按
+输出 channel 的 trigger 与目标仓库获取。GitLab MR 输出保留完整 namespace 路径，
+只接受项目内 MR iid；Note Hook 从顶层 merge_request 读取。
+
+预览 API 保留已验证并计算出的 workspaceInstanceId 与 layout，避免 SHA-256 标识被
+通用高熵脱敏器误删；来源变量仍经过脱敏，预览不写 revision、审计或目录。
+
+P4/P5 本地验收见 M19，P6 管理 UI 验收见 M20，P7/P8 集成与同版本跨进程验收见
+M21/M22；复审修复与证据边界见 [M23](milestones/M23.md)。
 
 ## 4. 默认评审 Prompt 合同
 

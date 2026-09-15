@@ -43,6 +43,7 @@ outputs:
       trigger: git-main
 
 workspaces:
+  root: build/tmp/browser/workspaces
   instances:
     default-project:
       source_repo:

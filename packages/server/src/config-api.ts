@@ -658,6 +658,13 @@ export function createConfigApi(options: ConfigApiOptions): Hono {
         }).effective;
       }
       const preview = previewConfigRoute(effective, body.value.event);
+      if (preview.status === "matched") {
+        // Computed, validated workspace paths include a SHA-256 instance ID.
+        // Entropy heuristics mistake these public identities for credentials;
+        // keep the layout usable without relaxing redaction of source data.
+        return c.json({ ...redactDeep(preview) as Record<string, unknown>,
+          layout: preview.layout, workspaceInstanceId: preview.workspaceInstanceId });
+      }
       return c.json(redactDeep(preview));
     } catch (error) {
       return configErrorResponse(c, error);

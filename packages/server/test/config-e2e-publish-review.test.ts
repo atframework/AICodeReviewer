@@ -36,7 +36,8 @@ import { createSqliteConfigStore } from "@aicr/core";
 import type { AppConfig } from "@aicr/core";
 import { closeStoreDb } from "@aicr/store";
 import { parseUnifiedDiff, type ChangeRange } from "@aicr/vcs";
-import { bootstrapServerApp } from "../src/bootstrap.js";
+import { bootstrapServerApp, createOutputPublisherResolverFromConfig } from "../src/bootstrap.js";
+import { GithubAppTokenService } from "../src/github-app-token.js";
 import { createServerApp, runTriggerProcessing, type ServerAppOptions, type TriggerProcessingResult } from "../src/index.js";
 import type {
   DiffCapableVcsAdapter,
@@ -116,6 +117,9 @@ const FILE_DOCUMENT = {
     { env: "GITEA_TOKEN", target: ["outputs", "channels", "c-e02-b", "token_env"], destinations: { kind: "gitea_pr_review", trigger: "gitea-main", base_url: "http://127.0.0.1:9202", trigger_destination: { kind: "gitea", base_url: "http://127.0.0.1:9401" } } },
     { env: "GITEA_TOKEN", target: ["outputs", "channels", "c-pr", "token_env"], destinations: { kind: "gitea_pr_review", trigger: "gitea-main", base_url: "http://127.0.0.1:9301", trigger_destination: { kind: "gitea", base_url: "http://127.0.0.1:9401" } } },
     { env: "GITEA_TOKEN", target: ["outputs", "channels", "c-e04w", "token_env"], destinations: { kind: "gitea_pr_review", trigger: "gitea-main", trigger_destination: { kind: "gitea", base_url: "http://127.0.0.1:9401" } } },
+    { env: "GITEA_TOKEN_ALT", target: ["outputs", "channels", "c-e04w", "token_env"], destinations: { kind: "gitea_pr_review", trigger: "gitea-alt", trigger_destination: { kind: "gitea", base_url: "http://127.0.0.1:9402" } } },
+    { env: "GITLAB_TOKEN", target: ["outputs", "channels", "c-e05", "token_env"], destinations: { kind: "gitlab_mr_review", trigger: "gitlab-main", trigger_destination: { kind: "gitlab", base_url: "http://127.0.0.1:9501" } } },
+    { env: "GITLAB_TOKEN_ALT", target: ["outputs", "channels", "c-e05", "token_env"], destinations: { kind: "gitlab_mr_review", trigger: "gitlab-alt", trigger_destination: { kind: "gitlab", base_url: "http://127.0.0.1:9502" } } },
   ] },
   llm: {
     providers: [{ id: "openai-prod", kind: "openai_compatible", base_url: "https://api.openai.com/v1", api_key_env: "OPENAI_API_KEY" }],
@@ -125,6 +129,8 @@ const FILE_DOCUMENT = {
     { name: "gitea-main", kind: "gitea", base_url: "http://127.0.0.1:9401", token_env: "GITEA_TOKEN", webhook_secret_env: "GITEA_SECRET" },
     // Second host profile (E04): own base_url, token and webhook secret.
     { name: "gitea-alt", kind: "gitea", base_url: "http://127.0.0.1:9402", token_env: "GITEA_TOKEN_ALT", webhook_secret_env: "GITEA_SECRET_ALT" },
+    { name: "gitlab-main", kind: "gitlab", base_url: "http://127.0.0.1:9501", token_env: "GITLAB_TOKEN", webhook_secret_env: "GITLAB_SECRET" },
+    { name: "gitlab-alt", kind: "gitlab", base_url: "http://127.0.0.1:9502", token_env: "GITLAB_TOKEN_ALT", webhook_secret_env: "GITLAB_SECRET_ALT" },
   ],
 };
 
@@ -132,7 +138,7 @@ let dir: string;
 let store: ConfigStore;
 let bootstrapped: ServerAppOptions | undefined;
 const originalEnv: Record<string, string | undefined> = {};
-const MANAGED_ENV = ["OPENAI_API_KEY", "GITEA_TOKEN", "GITEA_TOKEN_ALT", "GITEA_SECRET", "GITEA_SECRET_ALT", "AICR_ADMIN_USERNAME", "AICR_ADMIN_PASSWORD", FEISHU_WEBHOOK_ENV];
+const MANAGED_ENV = ["OPENAI_API_KEY", "GITEA_TOKEN", "GITEA_TOKEN_ALT", "GITEA_SECRET", "GITEA_SECRET_ALT", "GITLAB_TOKEN", "GITLAB_TOKEN_ALT", "GITLAB_SECRET", "GITLAB_SECRET_ALT", "AICR_ADMIN_USERNAME", "AICR_ADMIN_PASSWORD", FEISHU_WEBHOOK_ENV];
 
 beforeEach(async () => {
   mkdirSync("build/tmp", { recursive: true });
@@ -145,6 +151,10 @@ beforeEach(async () => {
   process.env.GITEA_TOKEN_ALT = "token-two";
   process.env.GITEA_SECRET = "test-secret";
   process.env.GITEA_SECRET_ALT = "test-secret-alt";
+  process.env.GITLAB_TOKEN = "gitlab-token-one";
+  process.env.GITLAB_TOKEN_ALT = "gitlab-token-two";
+  process.env.GITLAB_SECRET = "gitlab-secret-one";
+  process.env.GITLAB_SECRET_ALT = "gitlab-secret-two";
   process.env.AICR_ADMIN_USERNAME = "admin";
   process.env.AICR_ADMIN_PASSWORD = "admin-password";
   process.env[FEISHU_WEBHOOK_ENV] = FEISHU_WEBHOOK_URL;
@@ -293,7 +303,7 @@ function stubFetch(captured: CapturedRequest[], gate: FetchGate = {}): void {
         usage: { prompt_tokens: 5, completion_tokens: 2 },
       }), { headers: { "content-type": "application/json" } });
     }
-    if (target.includes("/reviews")) {
+    if (target.includes("/reviews") || target.includes("/notes")) {
       return new Response(JSON.stringify({ id: 7 }), { headers: { "content-type": "application/json" } });
     }
     if (target === FEISHU_WEBHOOK_URL) {
@@ -451,6 +461,60 @@ function routeOperation(id: string, priority: number, targetKinds: readonly stri
 }
 
 describe("config publication → review execution e2e", () => {
+  it.each([
+    [{ object_kind: "merge_request", object_attributes: { iid: 9, id: 999 } }, 9],
+    [{ object_kind: "note", object_attributes: { iid: 333 }, merge_request: { iid: 10, id: 999 } }, 10],
+    [{ object_kind: "merge_request", object_attributes: { id: 999 } }, null],
+    [{ object_kind: "merge_request", object_attributes: { iid: 0 } }, null],
+    [{ object_kind: "merge_request", object_attributes: { iid: 1.5 } }, null],
+  ])("uses only the GitLab MR IID for payload %j", async (payload, iid) => {
+    const captured: CapturedRequest[] = [];
+    stubFetch(captured);
+    const { config } = parseConfigDocumentText(JSON.stringify({
+      triggers: [{ name: "gl", kind: "gitlab", base_url: "http://127.0.0.1:9501", token_env: "GITLAB_TOKEN" }],
+      outputs: { channels: [{ name: "mr", kind: "gitlab_mr_review", no_problems: { action: "publish" } }], routes: { default: { summary: ["mr"] } } },
+    }));
+    const publisher = await createOutputPublisherResolverFromConfig(config)({
+      provider: "gitlab", eventName: "Merge Request Hook", payload,
+      reviewEvent: createReviewEvent({ triggerName: "gl", provider: "gitlab", workspaceId: "ws", targetKind: "pull_request", repoRef: "group/sub/service", author: {}, reason: "gitlab:review" }),
+    });
+    if (iid === null) {
+      expect(publisher).toBeUndefined();
+      expect(captured).toEqual([]);
+    } else {
+      expect(publisher?.publishSummary).toBeTypeOf("function");
+      await publisher!.publishSummary!(SUMMARY_SENTINEL, []);
+      expect(captured.map(entry => entry.url)).toEqual([`http://127.0.0.1:9501/api/v4/projects/group%2Fsub%2Fservice/merge_requests/${iid}/notes`]);
+    }
+  });
+
+  it("resolves a GitHub App token for each output's explicit trigger and target repository", async () => {
+    const serviceA = new GithubAppTokenService({ appId: "1", privateKey: "unused-test-key" });
+    const serviceB = new GithubAppTokenService({ appId: "2", privateKey: "unused-test-key" });
+    const tokenA = vi.spyOn(serviceA, "getInstallationTokenForRepo").mockResolvedValue("app-a-token");
+    const tokenB = vi.spyOn(serviceB, "getInstallationTokenForRepo").mockResolvedValue("app-b-token");
+    const captured: CapturedRequest[] = [];
+    stubFetch(captured);
+    const { config } = parseConfigDocumentText(JSON.stringify({
+      triggers: [
+        { name: "app-a", kind: "github", base_url: "https://github.com", app: { app_id: "1", private_key_env: "APP_A_KEY" } },
+        { name: "app-b", kind: "github", base_url: "https://github.enterprise.example", app: { app_id: "2", private_key_env: "APP_B_KEY" } },
+      ],
+      outputs: { channels: [{ name: "review", kind: "github_pr_review", trigger: "app-b", owner: "target", repo: "repo", review_update_strategy: "always_new", no_problems: { action: "publish" } }],
+        routes: { default: { line_comments: ["review"], summary: ["review"] } } },
+    }));
+    const publisher = await createOutputPublisherResolverFromConfig(config, { appTokenServices: new Map([["app-a", serviceA], ["app-b", serviceB]]) })({
+      provider: "github", eventName: "pull_request", payload: { pull_request: { number: 7 } },
+      reviewEvent: createReviewEvent({ triggerName: "app-a", provider: "github", workspaceId: "ws", targetKind: "pull_request", repoRef: "source/repo", author: {}, reason: "github:review" }),
+    });
+    await publisher!.publishSummary!(SUMMARY_SENTINEL, []);
+    expect(tokenA).not.toHaveBeenCalled();
+    expect(tokenB.mock.calls).toEqual([["target", "repo"]]);
+    expect(captured).toHaveLength(1);
+    expect(captured[0]?.url).toBe("https://github.enterprise.example/api/v3/repos/target/repo/pulls/7/reviews");
+    expect(captured[0]?.headers.authorization).toBe("Bearer app-b-token");
+  });
+
   it("E01: published provider/model/channel/route chain drives one review run end to end", async () => {
     const providerBase = "http://127.0.0.1:9011/v1";
     const channelBase = "http://127.0.0.1:9021";
@@ -656,6 +720,60 @@ describe("config publication → review execution e2e", () => {
     expect(pushRequests.some(request => request.url.startsWith(prChannelBase))).toBe(false);
     expect(bodyField(pushRequests[1], "msg_type")).toBe("interactive");
     await options.closeAutoCommit?.();
+  });
+
+  it("E05: fork MR reviews preserve target subgroups and the accepting profile's outbound token", async () => {
+    const captured: CapturedRequest[] = [];
+    stubFetch(captured);
+    const { options } = await bootstrap(makeConfig());
+    await publishOperations([
+      providerOperation("p-e05", "http://127.0.0.1:9511/v1"),
+      modelGroupOperation("g-e05", "p-e05", "model-e05"),
+      { op: "create", collection: "workspaces", record: { id: "services", name: "services", enabled: true, value: {
+        model_chain: "g-e05", match: [{ triggers: ["gitlab-main", "gitlab-alt"], source: { repo_ref: { glob: "group/sub/*" } } }],
+        work_path: "{{segment gitlab.project}}/{{segment gitlab.target_project_id}}",
+      } } },
+      { op: "create", collection: "channels", record: { id: "c-e05", name: "c-e05", enabled: true,
+        value: { name: "c-e05", kind: "gitlab_mr_review", no_problems: { action: "publish" } } } },
+      { op: "create", collection: "routes", record: { id: "r-e05", name: "r-e05", enabled: true, value: {
+        id: "r-e05", workspace: "services", match: { triggers: ["gitlab-main", "gitlab-alt"], target_kinds: ["pull_request"] },
+        outputs: { line_comments: [], summary: ["c-e05"] },
+      } } },
+    ]);
+    const app = createServerApp({ ...options, asyncTriggers: false, reviewOrchestration: reviewOptions(options, createFakeVcs()) });
+    const instances: string[] = [];
+    for (const [trigger, port, secret, token, project, iid] of [
+      ["gitlab-main", 9501, "gitlab-secret-one", "gitlab-token-one", 12, 9],
+      ["gitlab-alt", 9502, "gitlab-secret-two", "gitlab-token-two", 13, 10],
+    ] as const) {
+      const response = await app.request("/webhooks/gitlab", { method: "POST",
+        headers: { "content-type": "application/json", "x-gitlab-event": "Merge Request Hook", "x-gitlab-token": secret },
+        body: JSON.stringify({ object_kind: "merge_request", project: { id: project, path_with_namespace: "group/sub/service", default_branch: "main" },
+          object_attributes: { iid, action: "open", source_project_id: 44, target_project_id: project,
+            source_branch: "feature/fork-change", target_branch: "main", diff_refs: { base_sha: "base", head_sha: "head" }, last_commit: { id: "head" },
+            source: { id: 44, path_with_namespace: "fork-owner/service" }, target: { id: project, path_with_namespace: "group/sub/service" } },
+          user: { username: "fork-dev" } }),
+      });
+      const run = await response.json() as PullRequestRunResult;
+      expect(response.status).toBe(202);
+      expect(run.outcome).toBe("reviewed");
+      expect(run.reviewRun?.status).toBe("published");
+      expect(run.reviewRun?.configVersion).toMatchObject({ databaseRevision: 1, routeId: "r-e05" });
+      expect(run.reviewEvent).toMatchObject({ triggerName: trigger, repoRef: "group/sub/service", branch: "feature/fork-change", targetBranch: "main" });
+      const resolution = run.reviewEvent?.resolution;
+      if (resolution?.kind !== "match") throw new Error("expected match binding");
+      instances.push(resolution.binding.instanceId);
+      expect(resolution.binding.workPath).toBe(`service/${project}`);
+      expect(captured.map(({ method, url }) => ({ method, url }))).toEqual([
+        { method: "POST", url: "http://127.0.0.1:9511/v1/chat/completions" },
+        { method: "POST", url: `http://127.0.0.1:${port}/api/v4/projects/group%2Fsub%2Fservice/merge_requests/${iid}/notes` },
+      ]);
+      expect(bodyField(captured[0], "model")).toBe("model-e05");
+      expect(captured[1]?.headers["private-token"]).toBe(token);
+      expect(bodyField(captured[1], "body")).toContain(SUMMARY_SENTINEL);
+      captured.length = 0;
+    }
+    expect(new Set(instances).size).toBe(2);
   });
 
   it("E04: one match-rule definition attributes model, output URL and outbound token per owning trigger", async () => {

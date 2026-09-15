@@ -45,6 +45,10 @@ PostgreSQL 支持相同业务合同。配置表和 PostgreSQL 业务表使用带
 `aicr migrate --status|--check|--apply` 在两个后端均检查或升级 `config` 与
 `store` 命名空间，无需启动服务，见 [CLI 参考](/zh-cn/reference/cli/)。
 
+SQLite WAL 数据库应放在同一主机进程共享的本地文件系统。WAL 不支持网络文件系统；
+WSL 数据库测试应使用 Linux 文件系统，避免 Windows 盘挂载。参见
+[SQLite WAL 要求](https://www.sqlite.org/wal.html)。
+
 ## `storage.cache`
 
 | 字段 | 类型 | 默认 | 说明 |

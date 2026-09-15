@@ -47,7 +47,8 @@
 | M19 运行时配置 generation 与配置管理 API | P4/P5 已交付；本地验收完成 | `milestones/M19.md` / `architecture.md` §3.16 |
 | M20 配置管理表单与管理页面 | P6 已交付；本地验收完成 | `milestones/M20.md` |
 | M21 P7 集成测试与审查修复 | SVN 修复、真实服务及故障证据 | `milestones/M21.md` |
-| M22 P7 组合验收补齐、P8 收敛与资料退役 | P0–P8 全部交付；任务期设计/计划文档已删除 | `milestones/M22.md` / `architecture.md` §3.10、§3.14–3.16 |
+| M22 P7 组合验收补齐、P8 收敛与资料退役 | 原交付记录；复审修正见 M23 | `milestones/M22.md` / `architecture.md` §3.10、§3.14–3.16 |
+| M23 P8 复审 | 凭据/输出/预览修复与组合验证；跨版本边界待验收 | [M23](milestones/M23.md) |
 | 本地优先队列 P0-P15 | 已完成 | `milestones/local-priority-queue.md` |
 
 历史记录仅用于查交付证据；当前状态以代码、测试和前瞻路线图为准。公开用户文档位于

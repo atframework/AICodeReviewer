@@ -104,6 +104,15 @@ consumers in `packages/server/src/bootstrap.ts`.
   Zod parsing and require operation values. Validate client fileDigest against the
   local file; redact URLs/headers/short credentials and suppress driver error text.
   Test disabled entities and immutable IDs in GET views (`config-api.test.ts`).
+- High-entropy redaction also matches SHA-256 workspace identities. Preserve
+  only the validated, computed preview layout and instance ID; keep source
+  values redacted. Assert complete paths through HTTP and UI-to-review tests
+  (`config-api.test.ts`, `tests/browser/ui-run-isolation.spec.ts`).
+- A crash-window test needs an observed barrier after durable commit and before
+  installation. A sleep or a branch accepting an already-completed response
+  cannot prove that window. Keep the barrier in the child fixture, kill the
+  actual process, then assert durable operation/head and idempotent recovery
+  (`replica-process-matrix.test.ts`).
 
 ## Model catalog and failure routing
 
@@ -139,6 +148,11 @@ Sources: `packages/store/src/schema.ts`, `database.ts`, store tests, architectur
   older files. Guard such steps with `PRAGMA table_info` like the v3→v4
   checkpoint and v5→v6 routing-resolution migrations in
   `packages/core/src/sqlite-auto-commit-store.ts`.
+- SQLite initialization PRAGMAs can fail before migration starts. Keep them
+  inside connection cleanup protection; injected failures must close the real
+  handle (`sqlite-auto-commit-store.test.ts`). Reproduce WAL locking failures
+  on a native local filesystem before changing concurrency logic; a WSL v9fs
+  Windows-drive mount is not equivalent to Linux local storage.
 - Old-schema tests must reproduce the actual prior DDL, removing all later
   columns before stamping its version. Migration DDL and the version write must
   be atomic. Verify preserved receipts and reopening, and update derived state

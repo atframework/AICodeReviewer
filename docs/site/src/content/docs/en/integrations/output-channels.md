@@ -110,6 +110,15 @@ severity-label fields.
 
 ## Routing
 
+Channels without an explicit `trigger` use the compatible profile that accepted
+the event. An explicit channel trigger takes precedence. GitHub App installation
+tokens are resolved for the output channel's trigger and target repository.
+
+GitLab MR channels preserve the full project path, including subgroups, and use
+the merge request's project-local `iid`. Note Hooks read that identifier from
+the top-level `merge_request`; a note ID or global MR ID cannot replace it.
+See the [GitLab discussion API](https://docs.gitlab.com/api/discussions/).
+
 Which channels receive `line_comments` and `summary` for a given review is
 resolved per event. Which routing generation applies depends on the config:
 

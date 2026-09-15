@@ -96,6 +96,13 @@ HTTP POST 或每个 problem 一条行内评论。如果把 PR review channel 只
 
 ## 路由
 
+未指定 `trigger` 的 channel 使用接收事件的兼容 profile；channel 显式指定的
+trigger 优先。GitHub App installation token 按输出 channel 的 trigger 和目标仓库获取。
+
+GitLab MR channel 保留包含子群组的完整项目路径，并使用项目内的 MR `iid`。
+Note Hook 从顶层 `merge_request` 读取该标识，不能用 note ID 或全局 MR ID 替代。
+参见 [GitLab discussion API](https://docs.gitlab.com/api/discussions/)。
+
 某次评审的 `line_comments` 和 `summary` 发往哪些 channel 按事件解析，适用哪套路由世代
 取决于配置：
 

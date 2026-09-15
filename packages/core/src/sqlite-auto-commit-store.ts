@@ -32,6 +32,7 @@ import type {
   AutoCommitStore,
   BatchCompletion,
   BatchExecutionCheckpoint,
+  BatchListQuery,
   ClaimedDispatch,
   CommitBatchRecord,
   CommitMemberRecord,
@@ -53,6 +54,16 @@ import {
   computeMemberEligibility,
   mergeSourceEvidence,
 } from "./auto-commit-store.js";
+import type {
+  BatchPublicationLedger,
+  BatchPublicationPlan,
+  BatchPublicationReceipt,
+  BatchRecoveryAuditEntry,
+  BatchRecoveryOperation,
+  BatchRecoveryResult,
+  PublicationReceiptStatus,
+} from "./auto-commit-publication.js";
+import { BATCH_PUBLICATION_PLAN_MAX_BYTES } from "./auto-commit-publication.js";
 
 export interface SqliteAutoCommitStoreOptions {
   readonly path: string;
@@ -201,7 +212,9 @@ const SCHEMA_SQL = `
     lease_token TEXT,
     lease_owner TEXT,
     lease_expiry INTEGER,
-    last_error TEXT,
+    execution_checkpoint TEXT,
+    config_snapshot_id TEXT,
+    recovery_version INTEGER NOT NULL DEFAULT 0
     created_at INTEGER NOT NULL,
     execution_checkpoint TEXT,
     config_snapshot_id TEXT
@@ -510,11 +523,10 @@ export async function createSqliteAutoCommitStore(
   mkdirSync(dir, { recursive: true });
 
   const db: SqliteDb = new Database(options.path);
-  db.pragma("journal_mode = WAL");
-  db.pragma("busy_timeout = 5000");
-  db.pragma("synchronous = NORMAL");
-
   try {
+    db.pragma("journal_mode = WAL");
+    db.pragma("busy_timeout = 5000");
+    db.pragma("synchronous = NORMAL");
     db.transaction(() => {
       db.exec(SCHEMA_SQL);
       const meta = db

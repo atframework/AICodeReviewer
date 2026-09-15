@@ -2,14 +2,14 @@
  * Independent-process publish/crash-recovery matrix (P7): the replica fault
  * scenarios of replica-fault-matrix.test.ts replayed across REAL OS child
  * server processes (tsx-loaded repo source, see test/fixtures/replica-child.mts)
- * driven entirely over real HTTP — no in-process seams.
+ * driven over real HTTP, with a child-side activation barrier for crash timing.
  *
  * Leg 1 (always): two child replicas A/B over one shared SQLite config file
  *   (+ shared receipts file, admin sessions in the same config DB). Covers
  *   cross-process adoption without a refresh call and a SIGKILL in the
  *   commit→install publish window with post-restart convergence and
- *   cross-process operationId dedup. Assertions branch on the observed store
- *   state (read through a dedicated test-side connection), never on timing.
+ *   cross-process operationId dedup. The child acknowledges the exact
+ *   commit-before-install barrier before the parent kills it.
  * Leg 2 (skipIf no postgres binaries): a throwaway initdb cluster on a
  *   scratch port is SIGKILLed under child C — a REAL network outage, not a
  *   mocked rejection — then restarted on the same port; C must 503
@@ -27,9 +27,9 @@
 import { execFile, spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import { createHmac } from "node:crypto";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
-import { homedir, tmpdir } from "node:os";
+import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
@@ -110,6 +110,7 @@ interface ChildConfig {
   configStore: ConfigStoreSpec;
   receipts: { path: string };
   controlFile?: string;
+  pauseBeforeInstallRevision?: number;
 }
 
 interface ChildHandle {
@@ -261,7 +262,10 @@ async function getOperation(base: string, token: string, operationId: string): P
     headers: { authorization: `Bearer ${token}` },
   });
   const body = await response.json().catch(() => ({})) as { status?: string; revision?: { revision?: number } };
-  return { httpStatus: response.status, status: body.status, revision: body.revision };
+  return { httpStatus: response.status,
+    ...(body.status !== undefined ? { status: body.status } : {}),
+    ...(body.revision !== undefined ? { revision: body.revision } : {}),
+  };
 }
 
 async function readyzStatus(base: string): Promise<number> {
@@ -509,12 +513,14 @@ afterEach(async () => {
 });
 
 function freshDir(tag: string): string {
-  const dir = mkdtempSync(join(tmpdir(), `aicr-process-matrix-${tag}-`));
+  const scratch = join(REPO_ROOT, "build", "tmp");
+  mkdirSync(scratch, { recursive: true });
+  const dir = mkdtempSync(join(scratch, `aicr-process-matrix-${tag}-`));
   tempDirs.push(dir);
   return dir;
 }
 
-function sqliteChildConfig(dir: string, name: string, port: number): { configPath: string; configDb: string; receiptsDb: string } {
+function sqliteChildConfig(dir: string, name: string, port: number, pauseBeforeInstallRevision?: number): { configPath: string; configDb: string; receiptsDb: string } {
   const configDb = join(dir, "config.sqlite");
   const receiptsDb = join(dir, "receipts.sqlite");
   const configPath = writeChildConfig(dir, name, {
@@ -526,6 +532,7 @@ function sqliteChildConfig(dir: string, name: string, port: number): { configPat
     admin: ADMIN,
     configStore: { kind: "sqlite", path: configDb },
     receipts: { path: receiptsDb },
+    ...(pauseBeforeInstallRevision !== undefined ? { pauseBeforeInstallRevision } : {}),
   });
   return { configPath, configDb, receiptsDb };
 }
@@ -539,7 +546,7 @@ describe("independent-process publish/crash recovery", () => {
     const dir = freshDir("sqlite");
     const portA = await freePort();
     const portB = await freePort();
-    const childAConfig = sqliteChildConfig(dir, "child-a.json", portA);
+    const childAConfig = sqliteChildConfig(dir, "child-a.json", portA, 2);
     const childBConfig = sqliteChildConfig(dir, "child-b.json", portB);
 
     // Dedicated test-side connection: reads the shared store without any
@@ -569,46 +576,27 @@ describe("independent-process publish/crash recovery", () => {
     expect(adopted).toBe(snapshot1);
     expect(adopted).not.toBe(baselineSnapshot);
 
-    // Crash window: fire a second publish at A, watch the SHARED store for
-    // the rev-2 commit at 10 ms cadence, then SIGKILL A immediately — the
-    // kill lands inside the commit→install→response window whenever the
-    // commit won the race, and before the commit otherwise. Either way the
-    // post-conditions below are asserted on the observed store state.
+    // A acknowledges its blocked install only AFTER the real rev-2 commit.
+    // The response must remain pending, so this cannot pass by killing a
+    // process that has already installed and returned success.
+    let responseSettled = false;
     const inFlight = publishChangeset(a.base, tokenA, "op-revision-2", "db-second", 1).then(
-      response => ({ response }),
-      (error: unknown) => ({ error }),
+      response => { responseSettled = true; return { response }; },
+      (error: unknown) => { responseSettled = true; return { error }; },
     );
-    const rev2Deadline = Date.now() + 10_000;
-    let rev2Committed = false;
-    while (Date.now() < rev2Deadline) {
-      const head = await probeStore.readHead(NAMESPACE);
-      if (head?.activeRevision === 2) { rev2Committed = true; break; }
-      await sleep(10);
-    }
+    await pollUntil("A blocked before revision 2 activation", 10_000, async () =>
+      a.output().includes('"event":"before-install","revision":2') ? true : undefined);
+    expect((await probeStore.readHead(NAMESPACE))?.activeRevision).toBe(2);
+    expect(responseSettled).toBe(false);
     await a.kill();
-    console.info(`crash window: kill landed ${rev2Committed ? "after" : "before"} the rev-2 commit`);
     const settled = await inFlight;
-    if ("response" in settled) {
-      // The response raced the kill; the commit is already durable either way.
-      expect([200, 202]).toContain(settled.response.status);
-    }
+    expect(settled).toHaveProperty("error");
 
-    // Restart A on the same port against the same files.
+    // Restart A without the test barrier, on the same port and persisted files.
+    sqliteChildConfig(dir, "child-a.json", portA);
     const a2 = await startChild(childAConfig.configPath, portA);
 
-    // Branch on the observed store state, never on timing.
-    let revisions = await probeStore.listRevisions(NAMESPACE, { limit: 10 });
-    expect(revisions.filter(revision => revision.revision === 2)).toHaveLength(rev2Committed ? 1 : 0);
-    if (!rev2Committed) {
-      // Kill landed before the commit: no half state (no rev-2 row, no audit),
-      // and the same operationId retries exactly once against B.
-      expect(revisions).toHaveLength(1);
-      expect(await probeStore.readAudit(NAMESPACE, { operationId: "op-revision-2", limit: 10 })).toHaveLength(0);
-      const retried = await publishChangeset(b.base, tokenA, "op-revision-2", "db-second", 1);
-      expect(retried.status).toBe(200);
-      expect(await retried.json()).toMatchObject({ status: "committed", revision: { revision: 2 } });
-      revisions = await probeStore.listRevisions(NAMESPACE, { limit: 10 });
-    }
+    const revisions = await probeStore.listRevisions(NAMESPACE, { limit: 10 });
 
     // Exactly one rev-2 revision across both processes — no duplicate.
     expect(revisions).toHaveLength(2);

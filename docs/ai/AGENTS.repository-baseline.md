@@ -16,7 +16,8 @@ package manifests, and `.github/workflows/`; do not maintain a second version li
 
 ## Runtime sequence
 
-Linux/CI: `pnpm ci`. Windows: use PowerShell 7+ and execute these in order;
+Linux/CI: `pnpm run ci` (the repository script; `pnpm ci` names a reserved pnpm
+command). Windows: use PowerShell 7+ and execute these in order;
 Node entrypoints avoid blocked `.ps1` shims. The build uses the package manager's
 Windows shim through `cmd` as an explicit exception.
 

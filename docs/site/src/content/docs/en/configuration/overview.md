@@ -233,6 +233,12 @@ Existing file references authorize their current use. Add a file-owned
 destination, including inherited channel, model override and workspace/route search tokens.
 See the [field reference](/en/reference/config-fields/) for the grant shape.
 
+A channel without an explicit `trigger` inherits the accepting event's compatible
+profile. Database channels need grants for every compatible profile's effective
+credential and destination; pin `trigger` to restrict this set. File-owned
+channels retain authorization for these existing uses. GitLab `project_id` is
+part of the destination grant, so changing it requires a matching file grant.
+
 The database may manage the global leaves `llm.default_model_chain`,
 `llm.triage_model_chain`, `llm.retry`, `llm.per_provider_overrides`,
 `llm.budget`, `llm.model_catalog`, `review`, `compression`, `agent`,

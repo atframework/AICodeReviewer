@@ -12,14 +12,13 @@ export interface ConfigSecretGrant {
 
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const DESTINATION_KEYS = new Set(["kind", "base_url", "url", "endpoint", "endpoint_url", "http_proxy", "repository_url",
-  "port", "host", "trigger", "owner", "repo", "aws_region", "vertex_project", "vertex_location", "region", "aws_endpoint", "azure_endpoint",
+  "port", "host", "trigger", "owner", "repo", "project_id", "projectId", "aws_region", "vertex_project", "vertex_location", "region", "aws_endpoint", "azure_endpoint",
   "webhook_url_env", "endpoint_url_env", "app_id", "client_id", "installation_id"]);
 
-function channelTrigger(channel: Record<string, unknown>, triggers: readonly unknown[]): Record<string, unknown> | undefined {
+function channelTriggers(channel: Record<string, unknown>, triggers: readonly unknown[]): Record<string, unknown>[] {
   const kind = String(channel.kind ?? "");
   const kinds = kind.startsWith("gitea_") ? ["gitea", "forgejo"] : kind.startsWith("github_") ? ["github"] : kind.startsWith("gitlab_") ? ["gitlab"] : [];
-  const found = triggers.find(t => isPlainObject(t) && kinds.includes(String(t.kind)) && (channel.trigger === undefined || t.name === channel.trigger));
-  return isPlainObject(found) ? found : undefined;
+  return triggers.filter((t): t is Record<string, unknown> => isPlainObject(t) && kinds.includes(String(t.kind)) && (channel.trigger === undefined || t.name === channel.trigger));
 }
 
 function destinationContext(owner: Record<string, unknown>, triggers: readonly unknown[]): Record<string, unknown> {
@@ -65,10 +64,18 @@ export function collectConfigSecretReferences(config: unknown): readonly ConfigS
       }
     }
     if (path[0] === "outputs" && path[1] === "channels" && path.length === 3) {
-      const inherited = channelTrigger(value, triggers);
-      if (inherited) {
-        value = { ...value, ...(value.trigger === undefined ? { trigger: inherited.name } : {}) };
-        owner = value as Record<string, unknown>;
+      if (value.trigger === undefined) {
+        // The runtime selects the accepting event's compatible trigger. An
+        // unpinned channel can therefore inherit any compatible profile, not
+        // just the first one. Authorize every endpoint/credential combination.
+        const candidates = channelTriggers(value, triggers);
+        if (candidates.length > 0) {
+          for (const trigger of candidates) {
+            const variant = { ...value, trigger: trigger.name };
+            visit(variant, path, variant);
+          }
+          return;
+        }
       }
     }
     if (!isPlainObject(value)) return;

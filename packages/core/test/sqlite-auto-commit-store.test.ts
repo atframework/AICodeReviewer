@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import Database from "better-sqlite3";
 
 import {
@@ -52,6 +52,32 @@ async function openStore(
 runAutoCommitStoreConformance({
   backendKind: "sqlite",
   makeStore: async () => (await openStore()).store,
+});
+
+describe("SQLite initialization failure cleanup", () => {
+  it.each(["journal_mode = WAL", "busy_timeout = 5000", "synchronous = NORMAL"])("closes the connection when %s fails", async failingPragma => {
+    mkdirSync("build/tmp", { recursive: true });
+    const dir = mkdtempSync(join("build/tmp", "sqlite-init-failure-"));
+    const fault = new Error("injected initialization failure");
+    const databases: Database.Database[] = [];
+    const pragma = Database.prototype.pragma;
+    const spy = vi.spyOn(Database.prototype, "pragma").mockImplementation(function (this: Database.Database, source, options) {
+      if (source === failingPragma) {
+        databases.push(this);
+        throw fault;
+      }
+      return pragma.call(this, source, options);
+    });
+    try {
+      await expect(createSqliteAutoCommitStore({ path: join(dir, "store.db") })).rejects.toBe(fault);
+      expect(databases).toHaveLength(1);
+      expect(databases[0]!.open).toBe(false);
+    } finally {
+      spy.mockRestore();
+      for (const db of databases) if (db.open) db.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 function gitSnapshot(revision: string): SourceSnapshot {

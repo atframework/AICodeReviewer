@@ -1772,6 +1772,45 @@ describe("createOutputPublisherFromConfig", () => {
   });
 });
 
+describe("resolveChannelQueryRepublishable (R11)", () => {
+  it("matches the static capability truth table for all nine channel kinds", () => {
+    const table: readonly [string, string | undefined, boolean][] = [
+      // Managed-marker PR review upsert is query-republishable unless the
+      // channel downgrades to always_new (spec §2 idempotence matrix).
+      ["gitea_pr_review", undefined, true],
+      ["gitea_pr_review", "update_existing", true],
+      ["gitea_pr_review", "always_new", false],
+      ["github_pr_review", undefined, true],
+      ["github_pr_review", "update_existing", true],
+      ["github_pr_review", "always_new", false],
+      // Fingerprint/scope-fingerprint reconciliation is query-republishable.
+      ["gitea_problem_issue", undefined, true],
+      ["github_problem_issue", undefined, true],
+      // Everything else is a fresh POST on every publish: never republishable.
+      ["gitlab_mr_review", undefined, false],
+      ["gitea_issue", undefined, false],
+      ["github_issue", undefined, false],
+      ["feishu_bot", undefined, false],
+      ["wecom_bot", undefined, false],
+    ];
+    const kinds = new Set(table.map(([kind]) => kind));
+    expect(kinds).toEqual(new Set([
+      "gitea_pr_review",
+      "github_pr_review",
+      "gitea_problem_issue",
+      "github_problem_issue",
+      "gitlab_mr_review",
+      "gitea_issue",
+      "github_issue",
+      "feishu_bot",
+      "wecom_bot",
+    ]));
+    for (const [kind, strategy, expected] of table) {
+      expect(resolveChannelQueryRepublishable(kind, strategy)).toBe(expected);
+    }
+  });
+});
+
 describe("createOutputPublisherResolverFromConfig", () => {
   it("creates a publisher from pull request payload and workspace route", async () => {
     const calls: { url: string; init: { headers?: Record<string, string>; body?: string } }[] = [];

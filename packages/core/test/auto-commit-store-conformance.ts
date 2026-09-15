@@ -86,6 +86,7 @@ function membersOf(
   return revisions.map((revision, index) => ({
     revision,
     orderKey: String(orderStart + index).padStart(12, "0"),
+    parents: [],
     sourceSnapshot: gitSnapshot(revision, name, email),
   }));
 }
