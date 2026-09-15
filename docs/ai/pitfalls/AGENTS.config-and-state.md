@@ -100,6 +100,19 @@ consumers in `packages/server/src/bootstrap.ts`.
   a manual refresh first (`runtime-http.test.ts`). Verify snapshot namespace/file
   identity before recovery writes, serialize head adoption, and evict disposed
   generations; null historical pins remain a migration gap, not H12 completion.
+- Publish prepare must share the exact validation a generation build runs: the
+  file-load path called `validateWorkspaceDefinitions` while the publish path
+  only compiled the routing graph, letting invalid DB workspace records commit
+  and fail post-commit at install (`committed_activating`, replica 503s). Any
+  validation added to one side belongs to both (`config-publish.ts`,
+  `config-publish.test.ts`). Related: a v2 route selecting a workspace with no
+  binding rule must fail admission with `no_route` instead of silently falling
+  back to the first workspace, and disabled legacy bindings are skipped like
+  disabled match rules but still own their trigger (`config-resolution.ts`).
+- Path-shaped comparisons must use one encoding: restore compared
+  `path.join(".")` against `formatConfigPath`-encoded file locks, so quoted
+  map keys (`openai/gpt-4.1`) bypassed the C12 check. Compare parsed token
+  arrays, not formatted strings (`config-publish.ts`).
 - Config API limits must count streamed UTF-8 bytes, reject prototype keys before
   Zod parsing and require operation values. Validate client fileDigest against the
   local file; redact URLs/headers/short credentials and suppress driver error text.

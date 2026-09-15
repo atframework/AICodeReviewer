@@ -102,6 +102,27 @@ describe("sqlite config store persistence", () => {
     expect(next.status).toBe("committed");
     expect(next.head.activeRevision).toBe(2);
   });
+
+  it("an operation retry against a headless namespace reports store_unavailable, never a bare TypeError", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "aicr-config-headless-"));
+    tempDirs.push(dir);
+    const path = join(dir, "config.sqlite");
+    const store = await createSqliteConfigStore({ path });
+    stores.push(store);
+    const committed = await store.commitChangeset(changeset());
+    expect(committed.status).toBe("committed");
+
+    // Corrupt the store: the revision row exists but its head row is gone.
+    await store.close();
+    const mod = (await import("better-sqlite3")) as unknown as { default: new (path: string) => { exec(sql: string): unknown; close(): void } };
+    const db = new mod.default(path);
+    db.exec("DELETE FROM config_heads WHERE namespace = 'ns-reopen'");
+    db.close();
+
+    const reopened = await createSqliteConfigStore({ path });
+    stores.push(reopened);
+    await expect(reopened.commitChangeset(changeset())).rejects.toMatchObject({ code: "store_unavailable" });
+  });
 });
 
 // Snapshot mutation races (architecture §3.15.2: a signed-out task's snapshot must

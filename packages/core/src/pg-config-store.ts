@@ -498,6 +498,9 @@ export async function createPgConfigStore(options: PgConfigStoreOptions): Promis
   const pool = new PgPool({
     connectionString: options.connection.url,
     max: options.maxPoolSize ?? 4,
+    // Bounded connect (S13): the pg default waits for the OS TCP timeout,
+    // which far exceeds the repository's 5s discipline (see CLI migrate).
+    connectionTimeoutMillis: 5000,
     ...(schema !== null ? { options: `-c search_path="${schema}"` } : {}),
   });
   // pg-pool purges a dead idle client and then re-emits its socket error on
@@ -625,6 +628,11 @@ export async function createPgConfigStore(options: PgConfigStoreOptions): Promis
     async writeRuntimeState(input) {
       open(); assertNamespace(input.namespace);
       return guarded("writeRuntimeState", () => withTx(async client => {
+        // Version CAS first (matching the other three backends): a stale
+        // expectedVersion returns null even when the snapshot id is invalid.
+        const previous = await client.query("SELECT version FROM config_runtime_state WHERE namespace=$1 AND key=$2 FOR UPDATE", [input.namespace, input.key]);
+        const previousVersion = previous.rows[0] === undefined ? null : Number(previous.rows[0].version);
+        if (previousVersion !== input.expectedVersion) return null;
         if (input.snapshotId) {
           const snapshot = await client.query("SELECT id FROM config_runtime_snapshots WHERE id=$1 AND namespace=$2 FOR KEY SHARE", [input.snapshotId, input.namespace]);
           if (!snapshot.rows[0]) throw new ConfigError("snapshot_invalid", "Runtime state requires an existing snapshot in its namespace.");

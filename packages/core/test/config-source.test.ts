@@ -21,6 +21,7 @@ import {
   findReferencesTo,
   mergeConfigSources,
   parseConfigDocumentText,
+  parseEffectiveConfig,
   parseRawConfigSource,
   stableSerialize,
   validateDatabaseDocument,
@@ -478,6 +479,34 @@ describe("buildEffectiveConfigView", () => {
     const view = buildEffectiveConfigView(merged, parsed);
     const entry = view.find((candidate) => candidate.path === "llm.providers.main.api_key_env");
     expect(entry).toMatchObject({ source: "database", editable: true, effectiveValue: "OLLAMA_KEY" });
+  });
+
+  it("treats v2 routing rules as entity records, not one opaque leaf", () => {
+    const merged = mergeConfigSources({
+      formatVersion: 2,
+      database: {
+        entities: {
+          routes: {
+            "rec-r1": { id: "rec-r1", name: "r1", enabled: true, value: { id: "r1", priority: 100, workspace: "ws1", match: { triggers: ["gitea-a"] } } },
+          },
+        },
+      },
+    });
+    const parsed = parseEffectiveConfig(merged.document, 2);
+    const view = buildEffectiveConfigView(merged, parsed);
+    // Per-field entries carry the database provenance…
+    const leaf = view.find((candidate) => candidate.path === "routing.rules.r1.priority");
+    expect(leaf).toMatchObject({ source: "database", editable: true, effectiveValue: 100 });
+    // …and the bare collection path never appears as an opaque default leaf.
+    expect(view.some((candidate) => candidate.path === "routing.rules")).toBe(false);
+  });
+
+  it("rejects pathologically deep documents with a bounded ConfigError", () => {
+    let deep: unknown = 1;
+    for (let index = 0; index < 10000; index += 1) deep = { a: deep };
+    expect(() => validateDatabaseDocument(deep, 1)).toThrowError(
+      expect.objectContaining({ code: "config_path_invalid" }) as Error,
+    );
   });
 });
 

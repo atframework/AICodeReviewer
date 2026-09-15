@@ -94,7 +94,13 @@ function buildSourceMap(root: unknown, lineCounter: LineCounter): Map<string, Co
   return map;
 }
 
+/** Recursion ceiling for source/DB documents; guards the JS call stack. */
+const CONFIG_DOCUMENT_MAX_DEPTH = 128;
+
 function assertNoPrototypeKeys(value: unknown, path: string[], ancestors = new Set<object>()): void {
+  if (path.length > CONFIG_DOCUMENT_MAX_DEPTH) {
+    throw new ConfigError("config_path_invalid", `Config value exceeds the ${CONFIG_DOCUMENT_MAX_DEPTH}-level nesting limit at ${formatConfigPath(path)}.`, { path });
+  }
   if (value !== null && typeof value === "object") {
     if (ancestors.has(value)) {
       throw new ConfigError("malformed_yaml", `Cyclic config value at ${formatConfigPath(path)}.`, { path });
@@ -712,6 +718,8 @@ export type ConfigFieldSource = "file" | "database" | "default";
 export interface MergedConfig {
   /** Raw merged config, ready for a single schema parse. */
   readonly document: AppConfigInput;
+  /** Database document format version this merge was computed for. */
+  readonly formatVersion: number;
   /** Decision path (entity or leaf) → winning source; longest-prefix lookup. */
   readonly provenance: ReadonlyMap<string, "file" | "database">;
   /** File-owned decision paths: entity ids and leaf/subtree roots. */
@@ -865,6 +873,7 @@ export function mergeConfigSources(input: {
 
   return {
     document,
+    formatVersion,
     provenance,
     fileLocks,
     fileEntityIds,
@@ -903,7 +912,7 @@ function longestPrefixSource(provenance: ReadonlyMap<string, "file" | "database"
  */
 export function buildEffectiveConfigView(merged: MergedConfig, parsed: unknown): readonly ConfigFieldView[] {
   const view: ConfigFieldView[] = [];
-  const collections = entityCollectionsForVersion(1);
+  const collections = entityCollectionsForVersion(merged.formatVersion);
 
   const isBootstrapLeaf = (path: string[]): boolean =>
     BOOTSTRAP_CONFIG_PREFIXES.some((prefix) => isPathPrefix(prefix, path) || isPathPrefix(path, prefix));

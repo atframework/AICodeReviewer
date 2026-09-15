@@ -263,7 +263,7 @@ function configErrorResponse(c: Context, error: unknown): Response {
       message: error.code === "store_unavailable" ? "Configuration store is unavailable." : scrubMessage(error.message),
       ...(error.path !== undefined ? { path: error.path } : {}),
       ...(error.entity !== undefined ? { entity: error.entity } : {}),
-    }, error.code === "store_unavailable" ? 503 : error.code === "file_config_mismatch" ? 409 : 400);
+    }, error.code === "store_unavailable" ? 503 : error.code === "file_config_mismatch" ? 409 : error.code === "entity_not_found" ? 404 : 400);
   }
   return c.json({ error: "internal_error", message: "Configuration operation failed." }, 500);
 }
@@ -278,6 +278,10 @@ function limitOf(c: Context): number {
 
 const SENSITIVE_NAME_SUFFIX_FREE = /(api[_-]?key|token|secret|password|credential)/i;
 
+/** Query keys whose values are credentials even under an innocuous field name
+ * (superset of the write policy in assertNoConfigCredentialLiterals). */
+const SENSITIVE_URL_QUERY_KEY = /(token|api[_-]?key|secret|password|credential|sig|signature|auth|(^|[-_])key([-_]|$))/i;
+
 /**
  * Deep response redaction (A05): config surfaces carry env var *names* by
  * contract, but passthrough values could hold literal credentials. Keys that
@@ -287,13 +291,17 @@ const SENSITIVE_NAME_SUFFIX_FREE = /(api[_-]?key|token|secret|password|credentia
 function redactDeep(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(redactDeep);
   if (typeof value === "string") {
-    // URL credentials and signed query parameters are secrets even when the
-    // surrounding key is merely base_url/url. Strip all query values.
+    // URL userinfo and credential-named query parameters are secrets even
+    // when the surrounding key is merely base_url/url. Non-credential query
+    // values (tenant, api-version, …) stay visible so the redacted view
+    // round-trips through the editor without a save trap.
     try {
       const url = new URL(value);
       if (url.username) url.username = "<redacted>";
       if (url.password) url.password = "<redacted>";
-      for (const key of new Set(url.searchParams.keys())) url.searchParams.set(key, "<redacted>");
+      for (const key of new Set(url.searchParams.keys())) {
+        if (SENSITIVE_URL_QUERY_KEY.test(key)) url.searchParams.set(key, "<redacted>");
+      }
       if (url.hash) url.hash = "<redacted>";
       return scrubMessage(url.toString());
     } catch { return scrubMessage(value); }

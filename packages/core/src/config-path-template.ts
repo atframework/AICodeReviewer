@@ -215,8 +215,7 @@ function assertInvocation(node: AstSubExpression | AstMustache, helper: string, 
   }
 }
 
-function assertNode(node: AstNode, parentHelper: string | null, budget: { nodes: number }, depth: number, path?: ConfigPath): void {
-  budget.nodes += 1;
+function assertNode(node: AstNode, parentHelper: string | null, budget: { nodes: number }, depth: number, path?: ConfigPath): void {  budget.nodes += 1;
   if (budget.nodes > PATH_TEMPLATE_LIMITS.maxAstNodes) {
     throw templateError(`Path template exceeds the ${PATH_TEMPLATE_LIMITS.maxAstNodes}-node AST budget.`, path);
   }
@@ -285,6 +284,51 @@ function assertNode(node: AstNode, parentHelper: string | null, budget: { nodes:
 // Isolated instance, compile, render
 // ---------------------------------------------------------------------------
 
+/** Compile-time validation of one complete literal path segment (design §5.4). */
+function assertLiteralSegment(segment: string, path?: ConfigPath): void {
+  if (segment.length === 0 || segment === "." || segment === "..") {
+    throw templateError(`Path template has an empty or dot literal segment: "${segment}".`, path);
+  }
+  if (/[\\:*?"<>|]/u.test(segment) || WINDOWS_DEVICE_NAME.test(segment) || /[. ]$/u.test(segment)) {
+    throw templateError(`Path template has a nonportable literal segment: "${segment}".`, path);
+  }
+  if (Buffer.byteLength(segment, "utf8") > PATH_TEMPLATE_LIMITS.maxSegmentBytes) {
+    throw templateError("Path template literal segment exceeds the 255-byte budget.", path);
+  }
+}
+
+/**
+ * Validates literal segments of mixed templates at compile time. A piece is
+ * only checked when it is a COMPLETE segment (bounded by "/" or the template
+ * edges): pieces adjacent to a mustache merge with variable output and stay
+ * covered by the render-time assertSafeWorkPathOutput.
+ */
+function assertTemplateLiteralSegments(body: readonly AstNode[], path?: ConfigPath): void {
+  for (const [index, node] of body.entries()) {
+    if (node.type !== "ContentStatement") continue;
+    const text = (node as AstContent).value;
+    const pieces = text.split("/");
+    for (const [pieceIndex, piece] of pieces.entries()) {
+      const atFirst = pieceIndex === 0;
+      const atLast = pieceIndex === pieces.length - 1;
+      if (pieces.length === 1) {
+        // Lone content between two mustaches merges on both sides; only a
+        // whole-template literal is complete (handled by the caller's
+        // pure-literal check).
+        continue;
+      }
+      if (!atFirst && !atLast) {
+        // Bounded by "/" on both sides: always a complete segment.
+        assertLiteralSegment(piece, path);
+      } else if (atFirst && index === 0 && piece.length > 0) {
+        assertLiteralSegment(piece, path);
+      } else if (atLast && index === body.length - 1 && piece.length > 0) {
+        assertLiteralSegment(piece, path);
+      }
+    }
+  }
+}
+
 const pathTemplateHandlebars = Handlebars.create();
 pathTemplateHandlebars.registerHelper("segment", pathTemplateSegment);
 pathTemplateHandlebars.registerHelper("default", pathTemplateDefault);
@@ -314,6 +358,7 @@ export function compileWorkspacePathTemplate(source: string, path?: ConfigPath):
     assertNode(node, null, budget, 1, path);
   }
   if (program.body.every((node) => node.type === "ContentStatement")) assertSafeWorkPathOutput(source, path);
+  assertTemplateLiteralSegments(program.body, path);
   let compiled: Handlebars.TemplateDelegate;
   try {
     compiled = pathTemplateHandlebars.compile(source, {

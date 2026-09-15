@@ -88,6 +88,13 @@ export function validateRoutingConfig(config: EffectiveConfigV2): void {
         { path: [...path, "workspace"] },
       );
     }
+    if (rule.enabled && config.workspaces.instances[rule.workspace]?.enabled === false) {
+      throw new ConfigError(
+        "invalid_reference",
+        `Routing rule "${rule.id}" targets workspace "${rule.workspace}", which is disabled (R03).`,
+        { path: [...path, "workspace"] },
+      );
+    }
     for (const [field, group] of [
       ["model_chain", rule.analysis?.model_chain],
       ["triage_model_chain", rule.analysis?.triage_model_chain],

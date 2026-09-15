@@ -10,6 +10,7 @@ import {
   triggerProfileHost,
   validateWorkspaceDefinitions,
   workspaceAmbiguityError,
+  workspaceResolutionDigest,
   ConfigError,
   type WorkspaceMatchConfigInput,
   type WorkspaceSourceValues,
@@ -109,6 +110,45 @@ describe("resolveWorkspaceForSource", () => {
       { workspaceId: "ghost" },
     );
     expect(unknown).toEqual({ kind: "route_denied", definitionId: "ghost", reason: "unknown_definition" });
+  });
+
+  it("a disabled legacy binding is skipped but still owns its trigger", () => {
+    const config = configWith({
+      "legacy-off": { enabled: false, source_repo: { trigger: "github-main", repo: "acme/legacy" } },
+      services: { match: [{ triggers: ["github-main"], source: { repo_ref: { glob: "acme/*" } } }] },
+    });
+    const map = resolvedMap(config);
+    // The disabled binding no longer vetoes the trigger: the match rule wins.
+    const matched = resolveWorkspaceForSource(config, map, "github-main", source("acme/svc"));
+    expect(matched.kind).toBe("match");
+    if (matched.kind === "match") expect(matched.definitionId).toBe("services");
+    // With nothing else binding the trigger, the outcome is no_match — never
+    // unbound (which would fall back to the first workspace).
+    const orphan = configWith({
+      "legacy-off": { enabled: false, source_repo: { trigger: "github-main", repo: "acme/legacy" } },
+    });
+    expect(resolveWorkspaceForSource(orphan, resolvedMap(orphan), "github-main", source("acme/legacy")).kind).toBe("no_match");
+    // An enabled binding behind a disabled one still wins (first enabled entry).
+    const pair = configWith({
+      "legacy-off": { enabled: false, source_repo: { trigger: "github-main", repo: "acme/legacy" } },
+      "legacy-on": { source_repo: { trigger: "github-main", repo: "acme/legacy" } },
+    });
+    expect(resolveWorkspaceForSource(pair, resolvedMap(pair), "github-main", source("acme/legacy"))).toEqual({ kind: "legacy_binding", definitionId: "legacy-on" });
+    // A route to a third workspace while the trigger is owned stays denied.
+    const denied = resolveWorkspaceForSource(orphan, resolvedMap(orphan), "github-main", source("acme/legacy"), undefined, { workspaceId: "ghost" });
+    expect(denied.kind).toBe("route_denied");
+  });
+
+  it("the resolution digest changes with the matcher, not just rule ids", () => {
+    const base = configWith({
+      services: { match: [{ triggers: ["github-main"], source: { repo_ref: { glob: "acme/a" } } }] },
+    });
+    const changed = configWith({
+      services: { match: [{ triggers: ["github-main"], source: { repo_ref: { glob: "acme/b" } } }] },
+    });
+    expect(workspaceResolutionDigest(resolvedMap(base))).not.toBe(workspaceResolutionDigest(resolvedMap(changed)));
+    // Same definitions re-validated: deterministic digest.
+    expect(workspaceResolutionDigest(resolvedMap(base))).toBe(workspaceResolutionDigest(resolvedMap(base)));
   });
 
   it("an explicit route never widens a legacy source_repo binding (W09)", () => {

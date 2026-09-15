@@ -22,6 +22,7 @@
 
 import {
   projectEventResolution,
+  scrubText,
   type AppConfig,
   type AutoCommitStore,
   type ReviewEvent,
@@ -160,7 +161,7 @@ export class RoutingReceiptResolver {
     error: unknown,
     now: number,
   ): Promise<number | undefined> {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = scrubText(error instanceof Error ? error.message : String(error)).text;
     const retryAt = this.nextRetryAt(record.attempts, now);
     await this.options.store.recordRoutingReceiptFailure(record.routingId, message, retryAt);
     return retryAt ?? undefined;

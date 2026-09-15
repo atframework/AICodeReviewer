@@ -57,6 +57,7 @@ interface SqliteDatabase {
   exec(source: string): unknown;
   prepare(source: string): SqliteStatement;
   transaction<T extends (...args: never[]) => unknown>(fn: T): T & { immediate: T };
+  readonly inTransaction: boolean;
   close(): void;
 }
 
@@ -360,7 +361,14 @@ export async function createSqliteConfigStore(options: SqliteConfigStoreOptions)
     }
   } catch (error) {
     db.close();
-    throw error;
+    // Align the open-failure surface with the PG/Redis guarded() mapping:
+    // driver errors (SQLITE_BUSY/NOTADB/…) surface as bounded ConfigErrors.
+    if (error instanceof ConfigError) throw error;
+    throw new ConfigError(
+      "migration_failed",
+      `SQLite config store open failed: ${error instanceof Error ? error.message : String(error)}`,
+      { cause: error },
+    );
   }
 
   const stmtHead = db.prepare("SELECT * FROM config_heads WHERE namespace = ?");
@@ -373,7 +381,15 @@ export async function createSqliteConfigStore(options: SqliteConfigStoreOptions)
     const existing = stmtRevisionByOperation.get(input.namespace, input.operationId) as RevisionRow | undefined;
     if (existing !== undefined) {
       if (sameConfigOperation(rowToRevision(existing), input)) {
-        const head = stmtHead.get(input.namespace) as HeadRow;
+        const head = stmtHead.get(input.namespace) as HeadRow | undefined;
+        if (head === undefined) {
+          // Corrupted state: the revision exists but its head row is gone —
+          // report a bounded error instead of a bare TypeError.
+          throw new ConfigError(
+            "store_unavailable",
+            `Namespace "${input.namespace}" has revision ${existing.revision} but no head row; the store is inconsistent.`,
+          );
+        }
         return { status: "committed", revision: rowToRevision(existing), head: rowToHead(head), duplicate: true };
       }
       throw new ConfigError(
@@ -559,7 +575,9 @@ export async function createSqliteConfigStore(options: SqliteConfigStoreOptions)
           input.now,
         );
         const row = db.prepare("SELECT s.*, s.ref_count + (SELECT count(*) FROM config_runtime_state r WHERE r.snapshot_id=s.id) AS ref_count FROM config_runtime_snapshots s WHERE id = ?").get(input.id) as SnapshotRow | undefined;
-        if (inserted.changes > 0) return rowToSnapshot(row as SnapshotRow); // present: this connection just inserted it
+        // A cross-process delete landing between INSERT and SELECT leaves no
+        // row; treat it like the lost-race case below instead of crashing.
+        if (inserted.changes > 0 && row !== undefined) return rowToSnapshot(row);
         if (row === undefined) continue; // a concurrent delete won the gap; retry the insert
         if (sameSnapshotContent(rowToSnapshot(row), input)) return rowToSnapshot(row);
         throw new ConfigError("snapshot_invalid", `Snapshot "${input.id}" already exists with different content.`);

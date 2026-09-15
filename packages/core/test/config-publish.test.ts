@@ -189,6 +189,41 @@ describe("prepare failure commits nothing (H13)", () => {
     });
     expect(() => prepareConfigPublication(owned)).toThrowError(expect.objectContaining({ code: "file_owned" }) as Error);
   });
+
+  it.each([
+    {
+      name: "RE2-unsupported matcher expression",
+      value: { match: [{ triggers: ["gh"], source: { repo_ref: { regex: "acme/(?=svc)" } } }] },
+      code: "matcher_invalid",
+    },
+    {
+      name: "match rule referencing an unknown trigger",
+      value: { match: [{ triggers: ["ghost"], source: { repo_ref: { glob: "acme/*" } } }] },
+      code: "invalid_reference",
+    },
+    {
+      name: "source_repo and match both set",
+      value: { source_repo: { trigger: "gh", repo: "acme/x" }, match: [{ triggers: ["gh"] }] },
+      code: "match_rule_invalid",
+    },
+    {
+      name: "work_path escaping the workspace root",
+      value: { match: [{ triggers: ["gh"] }], work_path: "{{segment source.repository}}/../../outside" },
+      code: "template_invalid",
+    },
+  ])("workspace match errors fail at prepare, never post-commit ($name)", async ({ value, code }) => {
+    const base = publishInput({ formatVersion: 2 });
+    const input: ConfigPublishInput = {
+      ...base,
+      file: {
+        ...base.file,
+        triggers: [{ name: "gh", kind: "github", token_env: "GH_TOKEN" }],
+      },
+      operations: [createOp("workspaces", "ws-bad", value)],
+    };
+    expect(() => prepareConfigPublication(input)).toThrowError(expect.objectContaining({ code }) as Error);
+    await expect(store.readHead(NAMESPACE)).resolves.toBeNull();
+  });
 });
 
 describe("committed_activating (H15)", () => {
@@ -253,6 +288,31 @@ describe("restore (C12/S07)", () => {
         operationId: "op-2",
         actor: "tester",
         file: { review: { output_language: "en" } },
+        fileDigest: "b".repeat(64),
+        baseRevision: 1,
+      }),
+    ).rejects.toMatchObject({ code: "file_owned" });
+  });
+
+  it("restore conflicts through quoted map-key locks (C12, formatConfigPath parity)", async () => {
+    // Revision 1 sets a DB global under a model id containing "/" and ".".
+    await publish(
+      prepareConfigPublication(
+        publishInput({
+          file: {},
+          operations: [{ op: "set", path: ["llm", "model_catalog", "overrides", "openai/gpt-4.1", "open_weights"], value: true }],
+        }),
+      ),
+    );
+    // The file now locks the same leaf; the historical value must conflict
+    // instead of silently restoring a value the file immediately shadows.
+    await expect(
+      prepareConfigRestore(store, {
+        namespace: NAMESPACE,
+        revision: 1,
+        operationId: "op-2",
+        actor: "tester",
+        file: { llm: { model_catalog: { overrides: { "openai/gpt-4.1": { open_weights: false } } } } },
         fileDigest: "b".repeat(64),
         baseRevision: 1,
       }),

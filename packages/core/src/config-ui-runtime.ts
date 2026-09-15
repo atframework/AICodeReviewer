@@ -532,11 +532,14 @@ function controlEmptyValue(field: ConfigUiField): unknown {
   }
 }
 
+/** Internal key sheltering a row's own literal `_rowId` data key (U17). */
+const ROW_ID_DATA_KEY = "\0_rowId";
+
 function toRowShape(itemFields: readonly ConfigUiField[], row: unknown, index: number): Record<string, unknown> {
   let shaped: Record<string, unknown> = {};
   if (isPlainRecord(row)) {
     for (const [key, entry] of Object.entries(row)) {
-      defineValue(shaped, key, deepCloneValue(entry));
+      defineValue(shaped, key === "_rowId" ? ROW_ID_DATA_KEY : key, deepCloneValue(entry));
     }
   }
   shaped["_rowId"] = `r${index + 1}`;
@@ -602,7 +605,7 @@ function encodeRow(itemFields: readonly ConfigUiField[], row: unknown): unknown 
     if (key === "_rowId") {
       continue;
     }
-    defineValue(encoded, key, deepCloneValue(entry));
+    defineValue(encoded, key === ROW_ID_DATA_KEY ? "_rowId" : key, deepCloneValue(entry));
   }
   for (const itemField of itemFields) {
     const keys = fieldPathKeys(itemField);
@@ -897,7 +900,11 @@ function validateSpecPage(
       issues.push({ code: "invalid_spec", message: `section on page "${page.id}" must be an object with a fields array.` });
       continue;
     }
-    sectionIds.add(section.id);
+    if (sectionIds.has(section.id)) {
+      issues.push({ code: "duplicate_field_id", message: `duplicate section id "${section.id}" on page "${page.id}".` });
+    } else {
+      sectionIds.add(section.id);
+    }
     if (section.fields.length === 0) {
       issues.push({ code: "missing_section", message: `section "${section.id}" on page "${page.id}" has no fields.` });
     }
@@ -1035,10 +1042,18 @@ export function validateUiSpec(spec: ConfigUiSpec): readonly ConfigUiIssue[] {
     }
   }
   const seenFieldIds = new Set<string>();
+  const seenPageIds = new Set<string>();
   for (const page of spec.pages) {
     if (!isPlainRecord(page) || !Array.isArray(page.sections)) {
       issues.push({ code: "invalid_spec", message: "ConfigUiPage must be an object with a sections array." });
       continue;
+    }
+    if (typeof page.id === "string") {
+      if (seenPageIds.has(page.id)) {
+        issues.push({ code: "duplicate_field_id", message: `duplicate page id "${page.id}".` });
+      } else {
+        seenPageIds.add(page.id);
+      }
     }
     // isPlainRecord narrows away the static page type; the guard above already
     // established the runtime shape the validator requires.
@@ -1345,6 +1360,17 @@ function encodeGlobalsChanges(page: ConfigUiPage, draft: ConfigDraft, base: Conf
       encoded = encodeFieldValue(field, draftField.value);
       if (encoded === SKIP) {
         wantsOverride = false;
+      } else if (encoded === undefined) {
+        // A cleared optional scalar must never become a `set` without a
+        // value (the DTO requires one). Inherit-or-override: an empty
+        // override is not an implicit inherit (§8.1) — fail locally so the
+        // form shows a field-level message instead of a server 400.
+        if (field.binding === "inherit-or-override") {
+          throw new TypeError(`encodeChanges: field "${field.id}" override requires a value; switch to inherit or enter one.`);
+        }
+        // Value binding: empty means absent — fall through to unset a DB
+        // override (no op for file/default-sourced values).
+        wantsOverride = false;
       }
     }
     if (wantsOverride) {
@@ -1494,6 +1520,16 @@ function apiErrorMatchesField(
   }
   if (apiError.path === undefined) {
     return false;
+  }
+  // Dual-domain pages (entity + globals): an untagged error whose path is
+  // exactly a globals field path belongs to the defaults domain — never
+  // suffix-match it onto an entity field with the same relative shape.
+  if (draft.scope.kind === "entity" && apiError.entity === undefined) {
+    for (const globalField of scopedGlobalFields(page)) {
+      if (tokensEqual(fieldPathKeys(globalField), apiError.path)) {
+        return false;
+      }
+    }
   }
   return tokensSuffix(fieldKeys, apiError.path);
 }

@@ -127,6 +127,24 @@ MigrationRunner 保存最低 reader/writer 协议与 atomic 事务声明，旧�
 1–2。已验证的历史代码基线固定为 `c5d221c`，其他版本对须追加真实进程证据。
 实现与验收见 [架构](architecture.md) §3.14、§3.16 和 [M24](milestones/M24.md)。
 
+### D47：workspace 解析与发布校验的失败封闭边界（2026-09-15 复审/M25）
+
+- 停用语义在 legacy 绑定与 match 规则间一致：停用定义被跳过，但仍占有其
+  trigger——没有任何其他规则可绑定该 trigger 时结果为 `no_match`（拒绝新准入），
+  绝不落入 `unbound` 首 workspace 回退。首个启用 legacy 绑定仍按原顺序胜出。
+- v2 图模式下绝不回退首 workspace：路由选中的 workspace 若无 match 规则或
+  legacy 绑定可接纳该来源，准入即抛 `no_route`，与执行期 `layoutForEvent` 一致。
+- 发布 prepare 与 generation build 共享同一份 workspace 校验
+  （`validateWorkspaceDefinitions`）：matcher/模板/trigger 引用/互斥错误必须在
+  prepare 失败；只校验 graph 会让非法配置 commit 后才在 install 失败
+  （`committed_activating` + 副本 503）。
+- 启用路由指向不存在或停用的 workspace 在发布期即 `invalid_reference`（R03）。
+- 管理 API 读侧脱敏与写侧凭据策略使用同一敏感键集：URL userinfo、hash 与凭据
+  命名的查询参数脱敏；非凭据查询值保持可见，否则脱敏视图无法原样回写编辑
+  （"保存陷阱"）。
+
+实现与回归测试见 [架构](architecture.md) §3.10、§3.15–3.16 与 [M25](milestones/M25.md)。
+
 ## 维护规则
 
 - 如果某条决策只影响已完成阶段的历史说明，优先更新相关 `milestones/*.md`。

@@ -113,6 +113,9 @@ async function createPostgresStoreDb(config: {
   const pool = new pg.Pool({
     connectionString: config.url,
     max: config.poolSize ?? 4,
+    // Bounded connect: the pg default waits for the OS TCP timeout, which
+    // far exceeds the repository's 5s discipline (see CLI migrate).
+    connectionTimeoutMillis: 5000,
     // Startup option so every pooled client resolves unqualified names into
     // the configured schema (test isolation and non-public deployments).
     ...(config.schema !== undefined ? { options: `-c search_path="${config.schema}"` } : {}),

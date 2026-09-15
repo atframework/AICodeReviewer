@@ -56,6 +56,9 @@ describe("compileConfigMatcher", () => {
     expect(matcher("v1.0")).toBe(true);
     expect(matcher("v12.0")).toBe(false);
     expect(matcher("v.0")).toBe(false);
+    // Astral characters count as one code point, not two UTF-16 units.
+    expect(matcher("v\u{1F600}.0")).toBe(true);
+    expect(matcher("v\u{1F600}\u{1F600}.0")).toBe(false);
   });
 
   it("glob has no extglob/brace/character-class semantics", () => {

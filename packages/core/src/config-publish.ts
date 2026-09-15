@@ -22,8 +22,9 @@ import {
   compileExecutionGraph,
   type ExecutionGraph,
 } from "./config-compiler.js";
-import { ConfigError, stableSerialize } from "./config-format.js";
+import { ConfigError, formatConfigPath, parseConfigPath, stableSerialize } from "./config-format.js";
 import { parseEffectiveConfig, type AppConfigInput, type EffectiveConfigV2 } from "./config.js";
+import { validateWorkspaceDefinitions } from "./config-workspace.js";
 import {
   applyConfigChangeset,
   assertNoSecretEnvIssues,
@@ -159,6 +160,10 @@ export function prepareConfigPublication(input: ConfigPublishInput): PreparedCon
   }
 
   const graph = compileExecutionGraph(effective);
+  // The file-load path (config.ts) already runs this; the publish path must
+  // not commit workspace match/template errors that generation builds would
+  // only reject post-commit (committed_activating, replica 503s).
+  validateWorkspaceDefinitions(effective);
   assertNoSecretEnvIssues(effective);
   assertConfigSecretPolicy(input.file ?? {}, document, effective);
 
@@ -332,7 +337,12 @@ export async function prepareConfigRestore(store: ConfigStore, input: RestoreCon
   const document = validateDatabaseDocument(historical.document, formatVersion);
   const { fileLocks } = mergeConfigSources({ file: input.file ?? {}, database: document, formatVersion });
 
-  // C12: historical globals must not intersect a CURRENT file lock.
+  // C12: historical globals must not intersect a CURRENT file lock. Locks are
+  // formatConfigPath-encoded, so compare structurally — quoted segments like
+  // ["openai/gpt-4.1"] never match a naive join(".") comparison.
+  const isPathPrefix = (prefix: readonly string[], path: readonly string[]): boolean =>
+    prefix.length <= path.length && prefix.every((segment, index) => segment === path[index]);
+  const lockPaths = [...fileLocks].map((lock) => parseConfigPath(lock));
   const visit = (value: unknown, path: string[]): void => {
     if (value !== null && typeof value === "object" && !Array.isArray(value) && Object.keys(value as object).length > 0) {
       for (const [key, entry] of Object.entries(value)) {
@@ -340,12 +350,11 @@ export async function prepareConfigRestore(store: ConfigStore, input: RestoreCon
       }
       return;
     }
-    const formatted = path.join(".");
-    for (const lock of fileLocks) {
-      if (formatted === lock || formatted.startsWith(`${lock}.`) || lock.startsWith(`${formatted}.`)) {
+    for (const lockPath of lockPaths) {
+      if (isPathPrefix(lockPath, path) || isPathPrefix(path, lockPath)) {
         throw new ConfigError(
           "file_owned",
-          `Cannot restore revision ${input.revision}: historical global "${formatted}" is locked by the current config file at "${lock}" (C12).`,
+          `Cannot restore revision ${input.revision}: historical global "${formatConfigPath(path)}" is locked by the current config file at "${formatConfigPath(lockPath)}" (C12).`,
           { path },
         );
       }

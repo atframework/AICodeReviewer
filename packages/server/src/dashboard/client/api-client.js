@@ -156,11 +156,15 @@ export function createConfigApiClient({ getToken, onUnauthorized }) {
   }
 
   return {
-    /** GET / — redacted config view: head, fileDigest, collections, globals, fields. */
+    /** GET / — redacted config view: head, fileDigest, collections, globals, fields.
+     * Pages are merged until every collection reports nextOffset null, up to a
+     * bounded page count; hitting the cap leaves nextOffset set so the UI can
+     * show its "first page only" note instead of fetching without bound. */
     async getView() {
       const view = await request("GET", "?limit=200");
       let offset = 0;
-      for (;;) {
+      const maxPages = 50;
+      for (let pages = 1; pages < maxPages; pages += 1) {
         const pending = Object.values(view.collections).map(collection => collection.nextOffset).filter(value => value !== null);
         if (pending.length === 0) return view;
         const nextOffset = Math.min(...pending);
@@ -177,6 +181,7 @@ export function createConfigApiClient({ getToken, onUnauthorized }) {
         }
         offset = nextOffset;
       }
+      return view;
     },
     /** GET /schema — protocol version plus the ConfigUiSpec (uiSpec key). */
     getSchema() {

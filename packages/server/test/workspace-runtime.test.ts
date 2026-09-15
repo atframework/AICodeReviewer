@@ -2,7 +2,7 @@ import { join, resolve, sep } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { parseConfigDocumentText } from "@aicr/core";
+import { parseConfigDocumentText, parseEffectiveConfig } from "@aicr/core";
 
 import { buildSourceRootResolver } from "../src/bootstrap.js";
 import { createWorkspaceRuntime } from "../src/workspace-runtime.js";
@@ -74,6 +74,27 @@ describe("workspace-runtime legacy parity (W10, L13)", () => {
     const runtime = createWorkspaceRuntime(config, BASE_DIR);
     const layout = runtime.layoutForEvent({ triggerName: "t", workspaceId: "plain", repoRef: "a/b" });
     expect(layout.kind).toBe("legacy_v1");
+  });
+
+  it("v2: a route to a workspace with no binding rules fails no_route, never the first workspace", () => {
+    const config = parseEffectiveConfig(
+      {
+        triggers: [{ name: "github-main", kind: "github" }],
+        workspaces: { instances: { fallback: {}, plain: {} } },
+        routing: { rules: [{ id: "r1", priority: 100, workspace: "plain" }] },
+      },
+      2,
+    );
+    const runtime = createWorkspaceRuntime(config, BASE_DIR);
+    // "plain" has neither a source_repo binding nor a match rule: the route's
+    // workspace cannot bind this source — admission must fail, not silently
+    // fall back to the first workspace.
+    expect(() =>
+      runtime.resolveForSource("github-main", { vcs: "git", repo_ref: "acme/x" }),
+    ).toThrowError(expect.objectContaining({ code: "no_route" }) as Error);
+    // Legacy mode keeps the unbound contract for the first-workspace fallback.
+    const legacy = createWorkspaceRuntime(parse("workspaces:\n  instances:\n    fallback: {}\n"), BASE_DIR);
+    expect(legacy.resolveForSource("github-main", { vcs: "git", repo_ref: "acme/x" }).kind).toBe("unbound");
   });
 });
 

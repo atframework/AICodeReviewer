@@ -101,6 +101,19 @@ describe("config field inventory gate (U24)", () => {
       expect(field, field.path).toMatchObject({ ownership: "entity", entityKind: "workspace" });
     }
   });
+
+  it("workspace-layer sandbox fields are wired to their runtime consumer", () => {
+    // H04: workspaces.defaults/instances.* sandbox merges into the analysis
+    // selection consumed by the sandbox factory (regression guard).
+    const fields = CONFIG_FIELD_INVENTORY.filter(
+      (field) => (field.path.startsWith("workspaces.instances.*.sandbox.") || field.path.startsWith("workspaces.defaults.sandbox.")),
+    );
+    expect(fields.length).toBeGreaterThan(0);
+    for (const field of fields) {
+      expect(field.wired, field.path).toBe(true);
+      expect(field.consumer, field.path).toContain("sandboxFactory");
+    }
+  });
 });
 
 describe("collectSchemaFieldPaths", () => {

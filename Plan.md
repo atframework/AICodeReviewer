@@ -17,12 +17,13 @@ PR/MR 执行时段、持久化延期与事件面板见 [M16](docs/ai/milestones/
 模型目录 Redis 新连接重载，以及部署配置/双语自动提交示例的 schema 校验。
 记录与复现条件见 [本地验收](docs/ai/milestones/local-priority-queue.md)。
 
-Workspace 多工程规则与动态配置管理 P0–P8 已完成本地交付与复审：存储/迁移见
+Workspace 多工程规则与动态配置管理 P0–P8 已完成本地交付、复审与资料退役：存储/迁移见
 [M17](docs/ai/milestones/M17.md)，来源合并/发布见 [M18](docs/ai/milestones/M18.md)，
 运行时接线/管理 API 见 [M19](docs/ai/milestones/M19.md)，管理表单与浏览器门禁见
 [M20](docs/ai/milestones/M20.md)，集成测试与组合验收见
-[M21](docs/ai/milestones/M21.md)/[M22](docs/ai/milestones/M22.md)。
-跨版本迁移、服务排空和两平台真实服务最终验收见 [M24](docs/ai/milestones/M24.md)。
+[M21](docs/ai/milestones/M21.md)/[M22](docs/ai/milestones/M22.md)，
+跨版本迁移、服务排空和两平台真实服务最终验收见 [M24](docs/ai/milestones/M24.md)，
+全量复审修复与合同精炼（D47）见 [M25](docs/ai/milestones/M25.md)。
 稳定合同见[架构](docs/ai/architecture.md) §3.10、§3.14–3.16。
 
 ## 2. 可本地推进的下一步

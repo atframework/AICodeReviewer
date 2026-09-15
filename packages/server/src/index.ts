@@ -2315,6 +2315,10 @@ function mountRoutes(app: Hono, options: ServerAppOptions): void {
         try {
           return await manager.withGeneration(generation, next);
         } catch (error) {
+          // Only configuration failures are 503 config_unavailable; a
+          // downstream handler bug must surface as a 500 via the global
+          // error handler, not an invitation for the provider to retry.
+          if (!isConfigError(error)) throw error;
           return c.json({ accepted: false, reason: "config_unavailable", message: admissionUnavailableReason(error) }, 503);
         }
       });

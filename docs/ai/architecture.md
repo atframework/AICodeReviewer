@@ -753,14 +753,19 @@ AICR 采用**两层上下文管理**，两者互补：
   不变,`autoCommitGlobToRegexSource` 为共享实现别名),新增 exact matcher 与来源字段目录
   (`vcs`/`repo_ref`/`repository`/`namespace`/`project_key`/`branch`/`ref`);`config-path-template.ts`
   提供隔离 Handlebars 实例、AST 白名单(仅 `segment`/`default`/`hash`/`lower`,禁 block/partial/
-  lookup/原型/this)与渲染输出校验(相对路径、禁 `..`/绝对/盘符/UNC/反斜杠);`config-workspace.ts`
+  lookup/原型/this)与渲染输出校验(相对路径、禁 `..`/绝对/盘符/UNC/反斜杠);编译期另校验
+  完整字面段（`..`/设备名/非法字符/尾随点空格，mustache 相邻段与变量合并、仍在渲染期
+  校验）;`config-workspace.ts`
   提供 match 校验(`source_repo` 互斥、trigger 引用、相同规则歧义、规则/字节预算)、
   `WorkspaceBinding`(instance_id = sha256(definition/trigger/vcs/canonicalProjectKey))与
   `legacy_v1`/`isolated_v2` 布局(legacy 镜像现行 `workspaces/<id>/source/<repoRef_>` 派生)。
   schema 新增 `workspaces.instances.*.match[]/work_path` 与 `workspaces.root`,错误码新增
   `matcher_invalid`/`template_invalid`/`match_rule_invalid`。
 - P1b 起 git 系 webhook 的运行时匹配已接线:`packages/core/src/config-resolution.ts` 定义
-  来源变量/主机字段与解析矩阵（legacy 绑定优先、规则 OR/字段 AND；多定义命中报歧义）,
+  来源变量/主机字段与解析矩阵（legacy 绑定优先、规则 OR/字段 AND；多定义命中报歧义；
+  停用 legacy 绑定与停用 match 定义一样被跳过但仍占有其 trigger——无其他规则可绑定
+  时结果为 `no_match`，绝不落入 `unbound` 首 workspace 回退；v2 图模式下路由选中的
+  workspace 若无任何规则可绑定该来源，准入即抛 `no_route` 而非回退首 workspace）,
   `packages/server/src/source-descriptors.ts` 只从签名校验后的 payload 提取
   GitHub/GitLab/Gitea/Forgejo 描述符
   (tag ref 的 branch 为 null、GitLab namespace 保留子组),`workspace-runtime.ts` 统一
@@ -1295,10 +1300,14 @@ models.dev 的 key 是 `<providerId>/<modelId>`（AI SDK 标识）。自定义 p
   同一 resolveRouteForEvent/resolveAnalysisSelection/resolveOutputChannels
   入口;同 trigger 受两代路由声明控制是 `routing_conflict`,优先级同分且结果
   冲突是 `ambiguous_route`(由 stableSerialize 比较 workspace/analysis/outputs
-  判定),一个事件至多匹配一条规则,无隐式 fan-out 与隐式回退。分析参数按
+  判定),一个事件至多匹配一条规则,无隐式 fan-out 与隐式回退;启用规则指向不存在
+  或停用（`enabled: false`）的 workspace 在发布期即 `invalid_reference`（R03）。
+  分析参数按
   全局 → workspace defaults → 实例 → 路由规则四层合并,数组整体替换。
-- 发布事务:prepare 纯函数(结构校验 + 引用解析 + 图编译 + capability/secret
-  检查;不评审、不建 webhook、不调模型、不拉镜像);`commitChangeset` CAS 是
+- 发布事务:prepare 纯函数(结构校验 + 引用解析 + 图编译 + workspace match/模板校验
+  （与文件加载路径同一 `validateWorkspaceDefinitions`，非法定义绝不落库后才在
+  generation build 失败）+ capability/secret 检查;不评审、不建 webhook、不调模型、
+  不拉镜像);`commitChangeset` CAS 是
   线性化点(revision + audit + head 原子,三后端等价);commit 后 snapshot 写入
   或本机 generation install 失败返回 `committed_activating`,不谎报 rollback;
   operationId 可查询已提交结果(响应丢失恢复),旧操作重试不得激活已被替换的
@@ -1365,8 +1374,13 @@ metadata adapter 使用覆盖 receipt 的快照；组批在快照边界切分。
 
 JSON 按实际流式 UTF-8 字节限制为 1 MiB，提前拒绝原型键、过深结构和缺失 value。
 跨源写入被拒绝；env 只返回引用名和存在性。已知明文凭据与带凭据 URL 不允许新增
-或恢复；读取历史值时覆盖短凭据、URL userinfo/查询参数及 headers，未知驱动错误
-不回传原文。changesets 与 restore 必须携带 fileDigest；状态查询尝试再次激活已提交
+或恢复；读取历史值时覆盖短凭据、URL userinfo、凭据命名的查询参数
+（token/api_key/secret/password/sig/signature/key 等，与写入策略同一键集）及
+headers——非凭据查询值（如 `?tenant=`/`?api-version=`）保持可见，脱敏视图可原样
+回写编辑；未知驱动错误不回传原文。changesets 与 restore 必须携带 fileDigest；
+缺失的 baseRevision/目标 revision 与 GET 缺失 revision 同为 404；webhook 准入
+中间件仅将 ConfigError 映射为 503 `config_unavailable`，下游 handler 的其他错误
+按 500 处理，不邀请 provider 重试。状态查询尝试再次激活已提交
 版本，实例列表按持久心跳报告当前版本和可用性。
 
 Config 页面通过 `config-ui-spec` 声明控件，`config-ui-runtime` 与

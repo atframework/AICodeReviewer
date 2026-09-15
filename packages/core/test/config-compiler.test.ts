@@ -66,6 +66,22 @@ describe("validateRoutingConfig", () => {
     );
   });
 
+  it("rejects an enabled rule targeting a disabled workspace (R03)", () => {
+    const config = configWith({
+      workspaces: { defaults: {}, instances: { "product-services": { enabled: false } } },
+      routing: { rules: [rule({})] },
+    });
+    expect(() => validateRoutingConfig(config)).toThrowError(
+      expect.objectContaining({ code: "invalid_reference" }) as Error,
+    );
+    // A disabled rule may still point at a disabled workspace (no effect).
+    const inert = configWith({
+      workspaces: { defaults: {}, instances: { "product-services": { enabled: false } } },
+      routing: { rules: [rule({ enabled: false })] },
+    });
+    expect(() => validateRoutingConfig(inert)).not.toThrow();
+  });
+
   it("rejects unknown model groups, channels and triggers", () => {
     expect(() =>
       validateRoutingConfig(configWith({ routing: { rules: [rule({ analysis: { model_chain: "ghost" } })] } })),

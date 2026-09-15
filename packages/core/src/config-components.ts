@@ -455,14 +455,16 @@ function workspaceOutputsRows(): ConfigFieldSpec[] {
 }
 
 // ---------------------------------------------------------------------------
-// sandbox tree at workspaces.defaults / workspaces.instances.* (unwired)
+// sandbox tree at workspaces.defaults / workspaces.instances.* (wired: P4
+// merges the layers into the analysis selection consumed by the sandbox factory)
 // ---------------------------------------------------------------------------
 
 function workspaceSandboxRows(): ConfigFieldSpec[] {
   const meta: Omit<RowSpec, "t" | "ui"> = {
     own: "business",
-    wir: false,
-    st: "schema-only; workspace-layer sandbox has no consumer (P4 wires it)",
+    wir: true,
+    res: "resolveAnalysisSelection",
+    con: "packages/server/src/bootstrap.ts:sandboxFactory",
   };
   const entries: readonly (readonly [string, string, ConfigUiControlKind])[] = [
     ["kind", "ZodEnum", "select"],

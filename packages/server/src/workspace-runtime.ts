@@ -100,7 +100,17 @@ export function createWorkspaceRuntime(config: AppConfig, baseDir: string): Work
       if (request !== undefined && request.workspaceId !== selected.rule.workspace) {
         return { kind: "route_denied", definitionId: request.workspaceId, reason: "source_not_permitted" };
       }
-      return resolveWorkspaceForSource(config, matchDefinitions, triggerName, source, event, { workspaceId: selected.rule.workspace });
+      const resolution = resolveWorkspaceForSource(config, matchDefinitions, triggerName, source, event, { workspaceId: selected.rule.workspace });
+      // v2 never falls back to the first workspace (architecture §3.15 R06):
+      // an unbound result means the selected route's workspace has no rule
+      // binding this source — the execution path would fail with no_route.
+      if (resolution.kind === "unbound") {
+        throw new ConfigError(
+          "no_route",
+          `Route "${selected.rule.id}" selected workspace "${selected.rule.workspace}", but no source_repo binding or match rule binds this source.`,
+        );
+      }
+      return resolution;
     }
     return resolveWorkspaceForSource(config, matchDefinitions, triggerName, source, event, request);
   };

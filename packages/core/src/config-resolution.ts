@@ -298,7 +298,9 @@ type CompiledMatchRule = ValidatedWorkspaceDefinition["rules"][number];
  * the legacy contract exactly:
  *
  * 1. A definition whose `source_repo.trigger` equals the trigger wins
- *    (first entry order, as `resolveWorkspaceIdFromTrigger` did).
+ *    (first enabled entry order, as `resolveWorkspaceIdFromTrigger` did).
+ *    A disabled legacy binding is skipped but still owns the trigger, so the
+ *    strict outcome below is `no_match` rather than `unbound`.
  * 2. Otherwise match rules referencing this trigger are evaluated (OR-ed,
  *    rule-internal conditions AND-ed). Exactly one hit produces a binding;
  *    several hits report `ambiguous` with the conflicting definition ids —
@@ -317,9 +319,16 @@ export function resolveWorkspaceForSource(
 ): WorkspaceResolution {
   const requestedId = request?.workspaceId;
   if (config.triggers.find((entry) => entry.name === triggerName)?.enabled === false) return { kind: "no_match" };
+  // A disabled legacy binding is skipped like a disabled match definition,
+  // but it still owns the trigger: when nothing else resolves, the outcome is
+  // no_match — never unbound (which would fall back to the first workspace).
+  let disabledLegacyBound = false;
   for (const [definitionId, definition] of Object.entries(config.workspaces.instances)) {
     if (definition.source_repo?.trigger === triggerName) {
-      if (definition.enabled === false) return { kind: "no_match" };
+      if (definition.enabled === false) {
+        disabledLegacyBound = true;
+        continue;
+      }
       // An explicit route never widens a legacy binding (W09): only the
       // bound definition itself may be selected.
       if (requestedId !== undefined && requestedId !== definitionId) {
@@ -377,7 +386,7 @@ export function resolveWorkspaceForSource(
     if (requestedHit === undefined) {
       // The explicit route is outside what the rules permit for this source
       // (W09): a trusted request still cannot widen the trigger's scope.
-      return triggerMatchReferenced
+      return triggerMatchReferenced || disabledLegacyBound
         ? { kind: "route_denied", definitionId: requestedId, reason: "source_not_permitted" }
         : { kind: "unbound" };
     }
@@ -387,7 +396,7 @@ export function resolveWorkspaceForSource(
   }
 
   if (hits.length === 0) {
-    return triggerMatchReferenced ? { kind: "no_match" } : { kind: "unbound" };
+    return triggerMatchReferenced || disabledLegacyBound ? { kind: "no_match" } : { kind: "unbound" };
   }
   if (hits.length > 1) {
     const ids = hits.map((hit) => hit.definition.definitionId).sort();
@@ -436,6 +445,7 @@ function buildMatchResolution(
         hit.definition.workPathTemplate === DEFAULT_WORK_PATH_TEMPLATE
           ? undefined
           : hit.definition.workPathTemplate,
+      compiledWorkPath: hit.definition.renderWorkPath,
     },
     variables,
   );
@@ -484,7 +494,12 @@ export function workspaceResolutionDigest(
   for (const definition of [...validated.values()].sort((a, b) => a.definitionId.localeCompare(b.definitionId))) {
     parts.push(
       `${definition.definitionId}=${definition.rules
-        .map((rule) => `${rule.id ?? ""}(${(rule.triggers ?? []).join(",")})`)
+        .map((rule) => `${rule.id ?? ""}(${(rule.triggers ?? []).join(",")})[${Object.entries(rule.source ?? {})
+          .map(([field, matcher]) =>
+            `${field}:${"exact" in matcher ? `exact:${matcher.exact}` : "glob" in matcher ? `glob:${matcher.glob}` : `regex:${matcher.regex}`}${
+              "exact" in matcher ? "" : matcher.ignore_case === true ? ":i" : ""}`)
+          .sort()
+          .join(",")}]`)
         .join("|")}@${definition.workPathTemplate}`,
     );
   }

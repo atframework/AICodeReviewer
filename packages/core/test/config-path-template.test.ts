@@ -172,6 +172,34 @@ describe("compileWorkspacePathTemplate AST whitelist", () => {
     expectTemplateError(() => compileWorkspacePathTemplate(`{{segment ${deep}}}`), "depth");
   });
 
+  it("hits the node budget independently of the byte budget", () => {
+    // 129 content + 129 mustache nodes = 258 > 256, at only 2193 bytes.
+    const source = "x{{workspace.id}}".repeat(129);
+    expect(Buffer.byteLength(source, "utf8")).toBeLessThan(4096);
+    expectTemplateError(() => compileWorkspacePathTemplate(source), "256-node");
+    // 128 + 128 = 256 nodes exactly: within budget.
+    expect(() => compileWorkspacePathTemplate("x{{workspace.id}}".repeat(128))).not.toThrow();
+  });
+
+  it("accepts depth at the budget and rejects one level beyond", () => {
+    const nested = (levels: number) => {
+      let expr = "git.branch";
+      for (let i = 0; i < levels; i += 1) expr = `(default ${expr} "x")`;
+      return `{{segment ${expr}}}`;
+    };
+    expect(() => compileWorkspacePathTemplate(nested(6))).not.toThrow();
+    expectTemplateError(() => compileWorkspacePathTemplate(nested(7)), "depth");
+  });
+
+  it("rejects path-escaping literal segments at compile time, not just at render", () => {
+    expectTemplateError(() => compileWorkspacePathTemplate("{{segment source.repository}}/../../outside"), "dot");
+    expectTemplateError(() => compileWorkspacePathTemplate("a/{{segment source.repository}}/../b"), "dot");
+    expectTemplateError(() => compileWorkspacePathTemplate("{{segment source.repository}}/CON.txt"), "nonportable");
+    // Pieces adjacent to a mustache merge with variable output: render-only.
+    const merged = compileWorkspacePathTemplate("{{workspace.id}}..");
+    expect(() => merged({ workspace: { id: "a" } })).toThrowError(/nonportable/u);
+  });
+
   it("rejects template syntax errors", () => {
     expectTemplateError(() => compileWorkspacePathTemplate("{{segment git.branch"));
   });

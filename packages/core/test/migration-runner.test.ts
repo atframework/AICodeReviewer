@@ -66,6 +66,21 @@ function plan(namespace = "store", sql?: string): NamespaceMigrationPlan {
 }
 
 describe("MigrationRunner (sqlite executor)", () => {
+  it("a pre-rolled-back transaction surfaces the original error, not a rollback error", async () => {
+    // SQLite rolls back on its own for some failures (IOERR/FULL); a second
+    // ROLLBACK must not mask the original migration error (M05/M06).
+    const store = createSqliteMigrationStore({
+      exec(source: string) {
+        if (source === "ROLLBACK") throw new Error("cannot rollback - no transaction is active");
+        return undefined;
+      },
+      prepare() { throw new Error("unreachable"); },
+      transaction<T extends (...args: never[]) => unknown>(fn: T): T & { immediate: T } { return fn as T & { immediate: T }; },
+      inTransaction: false,
+    });
+    await expect(store.withMigrationLock(() => Promise.reject(new Error("original migration failure")))).rejects.toThrow("original migration failure");
+  });
+
   it("persists protocol requirements and rejects an incompatible reader or writer before DDL", async () => {
     const db = await freshDb();
     const future = { namespace: "config", targetVersion: 1,

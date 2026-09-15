@@ -119,6 +119,18 @@ export function runConfigStoreConformance(factory: ConfigStoreFactory): void {
       expect(await store.listRuntimeStates(NS_A)).toEqual([]);
     });
 
+    it("checks the version CAS before the snapshot (stale version + missing snapshot returns null)", async () => {
+      const store = await factory.makeStore();
+      await store.writeSnapshot(snapshot());
+      const written = await store.writeRuntimeState({ namespace: NS_A, key: "pin/order", expectedVersion: null, snapshotId: "snap-1", value: {}, now: T0 });
+      expect(written).not.toBeNull();
+      // Current version + missing snapshot: snapshot_invalid on every backend.
+      await expect(store.writeRuntimeState({ namespace: NS_A, key: "pin/order", expectedVersion: written!.version, snapshotId: "missing", value: {}, now: T0 })).rejects.toMatchObject({ code: "snapshot_invalid" });
+      // Stale version + missing snapshot: the version CAS folds to null first —
+      // identical outcome on every backend.
+      expect(await store.writeRuntimeState({ namespace: NS_A, key: "pin/order", expectedVersion: 99, snapshotId: "missing", value: {}, now: T0 })).toBeNull();
+    });
+
     it.each([{ fileDigest: "other-file" }, { formatVersion: 2 }])("rejects a reused operation with different execution inputs: %j", async (override) => {
       const store = await factory.makeStore();
       await store.commitChangeset(commit());
@@ -276,6 +288,21 @@ export function runConfigStoreConformance(factory: ConfigStoreFactory): void {
       const byOperation = await store.readAudit(NS_A, { operationId: "op-1" });
       expect(byOperation).toHaveLength(1);
       expect(await store.readAudit(NS_A, { operationId: "op-none" })).toEqual([]);
+    });
+
+    it("readAudit pages newest-first with a bounded limit", async () => {
+      const store = await factory.makeStore();
+      for (const [index, operationId] of ["op-a", "op-b", "op-c"].entries()) {
+        await store.commitChangeset(commit({
+          operationId,
+          baseRevision: index === 0 ? null : index,
+          now: T0 + index,
+        }));
+      }
+      const page = await store.readAudit(NS_A, { limit: 2 });
+      expect(page.map((entry) => entry.operationId)).toEqual(["op-c", "op-b"]);
+      const older = await store.readAudit(NS_A, { limit: 2, beforeTimestamp: page[1]!.timestamp });
+      expect(older.map((entry) => entry.operationId)).toEqual(["op-a"]);
     });
 
     it("restores create a new revision with a new parent, never a downgrade (S07)", async () => {

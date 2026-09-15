@@ -27,6 +27,8 @@ export interface SqliteMigrationDatabase {
   exec(source: string): unknown;
   prepare(source: string): SqliteStatement;
   transaction<T extends (...args: never[]) => unknown>(fn: T): T & { immediate: T };
+  /** True while a transaction is open on this connection. */
+  readonly inTransaction: boolean;
 }
 
 export const SCHEMA_MIGRATIONS_TABLE = "schema_migrations";
@@ -131,7 +133,11 @@ export function createSqliteMigrationStore(db: SqliteMigrationDatabase): Migrati
         db.exec("COMMIT");
         return result;
       } catch (error) {
-        db.exec("ROLLBACK");
+        // SQLite may have already rolled back on its own (IOERR/FULL); a
+        // second ROLLBACK would mask the original migration error (M05/M06).
+        if (db.inTransaction) {
+          db.exec("ROLLBACK");
+        }
         throw error;
       }
     },

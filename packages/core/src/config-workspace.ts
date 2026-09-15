@@ -28,6 +28,7 @@ import {
   compileWorkspacePathTemplate,
   assertSafeWorkPathOutput,
   validateWorkPathTemplateVariables,
+  type CompiledPathTemplate,
   type PathTemplateVariables,
 } from "./config-path-template.js";
 
@@ -67,6 +68,8 @@ export interface ValidatedWorkspaceDefinition {
   readonly definitionId: string;
   readonly rules: readonly (WorkspaceMatchRuleInput & { readonly sourceTest?: CompiledWorkspaceMatchSource })[];
   readonly workPathTemplate: string;
+  /** Pre-compiled work_path render (architecture §3.10 compile cache). */
+  readonly renderWorkPath: CompiledPathTemplate;
 }
 
 /**
@@ -192,16 +195,21 @@ function validateDefinitions(
       validateWorkPathTemplateVariables(definition.work_path, [...definitionPath, "work_path"], triggerKinds);
     }
     if (out !== undefined && definition.match !== undefined) {
+      const workPathTemplate = definition.work_path ?? DEFAULT_WORK_PATH_TEMPLATE;
       out.set(definitionId, {
         definitionId,
-        workPathTemplate: definition.work_path ?? DEFAULT_WORK_PATH_TEMPLATE,
-        rules: definition.match.map((rule) => ({
-          ...(rule.id !== undefined ? { id: rule.id } : {}),
-          ...(rule.triggers !== undefined ? { triggers: rule.triggers } : {}),
-          ...(rule.source !== undefined
-            ? { sourceTest: compileWorkspaceMatchSource(validateWorkspaceMatchSource(rule.source)) }
-            : {}),
-        })),
+        workPathTemplate,
+        renderWorkPath: compileWorkspacePathTemplate(workPathTemplate, [...definitionPath, "work_path"]),
+        rules: definition.match.map((rule) => {
+          const source = rule.source !== undefined ? validateWorkspaceMatchSource(rule.source) : undefined;
+          return {
+            ...(rule.id !== undefined ? { id: rule.id } : {}),
+            ...(rule.triggers !== undefined ? { triggers: rule.triggers } : {}),
+            ...(source !== undefined
+              ? { source, sourceTest: compileWorkspaceMatchSource(source) }
+              : {}),
+          };
+        }),
       });
     }
   }
@@ -242,6 +250,8 @@ export interface WorkspaceBindingInput {
   readonly canonicalProjectKey: string;
   /** Template source; defaults to `{{workspace.id}}` (architecture §3.10). */
   readonly workPathTemplate?: string | undefined;
+  /** Pre-compiled template from ValidatedWorkspaceDefinition; avoids recompiling per event. */
+  readonly compiledWorkPath?: CompiledPathTemplate | undefined;
 }
 
 /**
@@ -256,7 +266,7 @@ export function buildWorkspaceBinding(input: WorkspaceBindingInput, variables: P
     vcs: input.vcs,
     canonicalProjectKey: input.canonicalProjectKey,
   });
-  const render = compileWorkspacePathTemplate(input.workPathTemplate ?? DEFAULT_WORK_PATH_TEMPLATE);
+  const render = input.compiledWorkPath ?? compileWorkspacePathTemplate(input.workPathTemplate ?? DEFAULT_WORK_PATH_TEMPLATE);
   return {
     definitionId: input.definitionId,
     instanceId,

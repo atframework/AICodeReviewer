@@ -1062,6 +1062,21 @@ function createApp({ root, api, runtime, formState, schedule }) {
   // Routing extras: preview panel (D8)
   // -------------------------------------------------------------------------
 
+  function stagedOpIdentity(op) {
+    if (op.op === "set" || op.op === "unset") return `${op.op}:${JSON.stringify(op.path)}`;
+    return `${op.op}:${op.collection}:${op.recordId ?? op.record?.id ?? ""}`;
+  }
+
+  /** Second staging of the same page/record merges ops instead of silently
+   * dropping the first round: the editor re-decodes from the original base,
+   * so a same-key replace would lose earlier staged edits. */
+  function mergeStagedOperations(previous, next) {
+    const merged = new Map();
+    for (const op of previous) merged.set(stagedOpIdentity(op), op);
+    for (const op of next) merged.set(stagedOpIdentity(op), op);
+    return [...merged.values()];
+  }
+
   function stageEditor(context) {
     if (state.saving || state.pending !== null) return;
     if (!validateLocalFields(context)) return;
@@ -1076,7 +1091,9 @@ function createApp({ root, api, runtime, formState, schedule }) {
       const scope = entry.session.draft.scope;
       const created = operations.find(op => op.op === "create");
       const key = scope.kind === "entity" ? `${scope.collection}/${scope.recordId ?? created.record.id}` : `page/${context.page.id}`;
-      state.staged.set(key, { operations, baseRevision: entry.baseInput.baseRevision, fileDigest: entry.baseInput.fileDigest });
+      const existing = state.staged.get(key);
+      const merged = existing === undefined ? operations : mergeStagedOperations(existing.operations, operations);
+      state.staged.set(key, { operations: merged, baseRevision: entry.baseInput.baseRevision, fileDigest: entry.baseInput.fileDigest });
       state.stagedOperationId = newOperationId();
       if (context.kind === "drawer") closeDrawer();
       else { state.pageSessions.delete(context.page.id); renderPage(); }

@@ -165,4 +165,15 @@ describe("runtime HTTP admission", () => {
     expect(profiles).not.toHaveBeenCalled();
     expect((await app.request("/readyz")).status).toBe(503);
   });
+
+  it("a downstream handler bug surfaces as 500, not a retry-inviting 503 config_unavailable", async () => {
+    const h = await harness();
+    const app = createServerApp({ runtimeConfig: h.manager, autoCommit: h.autoCommit,
+      github: () => { throw new TypeError("synthetic handler bug"); } });
+    try {
+      const response = await post(app, "old-secret", "handler-bug");
+      expect(response.status).toBe(500);
+      expect(await response.text()).not.toContain("config_unavailable");
+    } finally { h.manager.close(); }
+  });
 });

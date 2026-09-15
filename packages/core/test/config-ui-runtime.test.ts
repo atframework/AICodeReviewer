@@ -368,7 +368,7 @@ const agentPage = makePage({
 });
 
 const llmGlobalsPage = makePage({
-  id: "model-groups",
+  id: "llm-globals",
   globals: true,
   fields: [
     makeField({
@@ -447,6 +447,24 @@ describe("validateUiSpec", () => {
     ]);
   });
 
+  it("U01: flags duplicate page and section ids", () => {
+    const field = makeField({ id: "f:1", path: ["a"], control: "text", valueKind: "string" });
+    const dupPages = makeSpec([
+      makePage({ id: "same", fields: [field] }),
+      makePage({ id: "same", fields: [makeField({ id: "f:2", path: ["b"], control: "text", valueKind: "string" })] }),
+    ]);
+    expectIssues(dupPages, [{ code: "duplicate_field_id" }]);
+    const sectionField = (id: string) => ({ ...makeField({ id, path: ["a"], control: "text", valueKind: "string" }), section: "sec" });
+    const dupSectionPage = makePage({
+      id: "s",
+      sections: [
+        { id: "sec", label: "one", fields: [sectionField("f:1")] },
+        { id: "sec", label: "two", fields: [sectionField("f:2")] },
+      ],
+    });
+    expectIssues(makeSpec([dupSectionPage]), [{ code: "duplicate_field_id" }]);
+  });
+
   it("U01: flags fields referencing unknown sections and empty sections", () => {
     const page = makePage({
       id: "p",
@@ -504,6 +522,9 @@ describe("validateUiSpec", () => {
       "invalid_spec",
     ]);
     expect(issues[0]?.message).toContain("protocolVersion must be 1");
+    // A non-string page id is tolerated (no duplicate tracking) while the
+    // rest of the page still validates.
+    expect(validateUiSpec({ protocolVersion: 1, pages: [{ id: 7, sections: [] }], optionsSources: [] } as unknown as ConfigUiSpec)).toEqual([]);
   });
 
   it("treats a missing optionsSources array as empty", () => {
@@ -879,6 +900,17 @@ describe("decodeDraft entity scope", () => {
     // Arrays have no unknown-key passthrough.
     expect(draft.fields["$extras"]?.mode).toBe("absent");
     expect(draft.fields["$extras"]?.value).toEqual({});
+  });
+
+  it("roundtrips a row's own literal _rowId data key", () => {
+    const record = makeRecord([{ provider: "p", _rowId: "user-data" }], { id: "g", name: "g" });
+    const draft = decodeDraft(modelGroupPage, makeInput({ record }));
+    const rows = draft.fields["model_group:entries"]?.value as Record<string, unknown>[];
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.["_rowId"]).toBe("r1"); // stable row id
+    const ops = encodeChanges(modelGroupPage, draft, makeInput({ record }));
+    const op = singleOp(ops) as { value: Record<string, unknown>[] };
+    expect(op.value).toEqual([{ provider: "p", _rowId: "user-data" }]);
   });
 
   it("decodes matcher controls and flags malformed shapes as absent (U11)", () => {
@@ -1717,6 +1749,31 @@ describe("encodeChanges globals scope", () => {
     expect(encodeChanges(reviewPage, defaultDraft, defaultBase)).toEqual([]);
   });
 
+  it("cleared optional scalars never encode as a DTO-invalid set (U06 empty=absent)", () => {
+    // Value binding + database base: clearing unsets the override.
+    const dbBase = makeInput({ fields: [fieldEntry("review.max_files", "database", 12)] });
+    const dbDraft = withField(decodeDraft(reviewPage, dbBase), draftField({ id: "review:max_files", value: undefined }));
+    expect(encodeChanges(reviewPage, dbDraft, dbBase)).toEqual([{ op: "unset", path: ["review", "max_files"] }]);
+    // Value binding + default base: clearing is a no-op, not a set.
+    const defaultBase = makeInput({ fields: [fieldEntry("review.max_files", "default", 50)] });
+    const defaultDraft = withField(decodeDraft(reviewPage, defaultBase), draftField({ id: "review:max_files", value: undefined }));
+    expect(encodeChanges(reviewPage, defaultDraft, defaultBase)).toEqual([]);
+    // Inherit-or-override: an empty override is not an implicit inherit (§8.1).
+    const inheritPage = makePage({
+      id: "inherit",
+      globals: true,
+      fields: [
+        makeField({ id: "review:max_files", path: ["review", "max_files"], control: "number", valueKind: "number", binding: "inherit-or-override", optional: true }),
+      ],
+    });
+    const inheritBase = makeInput({ fields: [fieldEntry("review.max_files", "database", 12)] });
+    const inheritDraft = withField(
+      decodeDraft(inheritPage, inheritBase),
+      draftField({ id: "review:max_files", value: undefined, inherit: false }),
+    );
+    expect(() => encodeChanges(inheritPage, inheritDraft, inheritBase)).toThrowError(/requires a value/u);
+  });
+
   it("treats NaN as never equal and null as distinct from undefined", () => {
     const nanBase = makeInput({ fields: [fieldEntry("review.max_files", "database", Number.NaN)] });
     const nanDraft = decodeDraft(reviewPage, nanBase);
@@ -1725,7 +1782,9 @@ describe("encodeChanges globals scope", () => {
 
     const nullBase = makeInput({ fields: [fieldEntry("review.max_files", "database", null)] });
     const nullDraft = withField(decodeDraft(reviewPage, nullBase), draftField({ id: "review:max_files", value: undefined }));
-    expect(encodeChanges(reviewPage, nullDraft, nullBase)).toEqual([{ op: "set", path: ["review", "max_files"], value: undefined }]);
+    // A cleared optional scalar on a value binding encodes as absent (unset),
+    // never as a DTO-invalid `set` without a value.
+    expect(encodeChanges(reviewPage, nullDraft, nullBase)).toEqual([{ op: "unset", path: ["review", "max_files"] }]);
   });
 
   it("skips draft fields with no entry and sets everything without a base view", () => {
@@ -1840,6 +1899,33 @@ describe("resolveFieldState", () => {
     const draft = decodeDraft(providerPage, makeInput({ record: makeRecord(providerValue) }));
     const state = resolveFieldState(providerPage, "provider:ghost", draft, {}, [{ message: "ignored", path: ["kind"] }]);
     expect(state).toEqual({ visible: true, disabled: false, options: [] });
+  });
+
+  it("U24: untagged defaults errors never land on same-shaped entity fields", () => {
+    // Dual-domain page (workspaces: defaults globals + instance entity) where
+    // the entity field's relative keys are a suffix of the globals path.
+    const dualPage = makePage({
+      id: "workspaces",
+      entity: { kind: "workspace", collection: "workspaces", idField: null, valueShape: "object" },
+      globals: true,
+      fields: [
+        makeField({ id: "workspace:review.max_files", path: ["review", "max_files"], control: "number", valueKind: "number" }),
+        makeField({ id: "workspaces:defaults.review.max_files", path: ["workspaces", "defaults", "review", "max_files"], control: "number", valueKind: "number" }),
+      ],
+    });
+    const record = makeRecord({ review: { max_files: 7 } }, { id: "ws1", name: "ws1" });
+    const entityDraft = decodeDraft(dualPage, makeInput({ record }));
+    // An untagged error whose path IS a globals field path belongs to defaults.
+    const defaultsError = [{ message: "defaults bad", path: ["workspaces", "defaults", "review", "max_files"] }];
+    expect(resolveFieldState(dualPage, "workspace:review.max_files", entityDraft, {}, defaultsError).error).toBeUndefined();
+    // A full document path through the entity record still suffix-matches.
+    const entityError = [{ message: "entity bad", path: ["workspaces", "instances", "ws1", "review", "max_files"] }];
+    expect(resolveFieldState(dualPage, "workspace:review.max_files", entityDraft, {}, entityError).error).toBe("entity bad");
+    // Entity-tagged errors keep their strict addressing.
+    const tagged = [{ message: "tagged bad", path: ["review", "max_files"], entity: { kind: "workspace", id: "ws1" } }];
+    expect(resolveFieldState(dualPage, "workspace:review.max_files", entityDraft, {}, tagged).error).toBe("tagged bad");
+    const otherTagged = [{ message: "other record", path: ["review", "max_files"], entity: { kind: "workspace", id: "ws2" } }];
+    expect(resolveFieldState(dualPage, "workspace:review.max_files", entityDraft, {}, otherTagged).error).toBeUndefined();
   });
 
   it("disables fields with readonlyReason and surfaces static options", () => {

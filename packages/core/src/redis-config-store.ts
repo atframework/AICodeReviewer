@@ -582,6 +582,16 @@ export async function createRedisConfigStore(
               `Operation "${input.operationId}" indexes missing revision ${String(reply[1])} (namespace "${input.namespace}").`,
             );
           }
+          if (Number(reply[2]) < Number(reply[1])) {
+            // Partial commit (e.g. OOM between the op marker and the head
+            // write): the revision was never activated — report a bounded
+            // failure instead of claiming a committed revision the head
+            // does not cover.
+            throw new ConfigError(
+              "store_unavailable",
+              `Operation "${input.operationId}" references revision ${String(reply[1])} above head ${String(reply[2])} (namespace "${input.namespace}"); the original commit was interrupted.`,
+            );
+          }
           if (sameConfigOperation(stored, input)) {
             return {
               status: "committed" as const,
@@ -626,6 +636,30 @@ export async function createRedisConfigStore(
       open();
       const tag = keyNamespace(namespace);
       return guarded("readAudit", async () => {
+        // Without an operationId filter the result is the newest-first page:
+        // push the bound down to Redis (zrevrangebyscore orders equal scores
+        // lex-descending, matching the timestamp-desc/id-desc contract).
+        if (options.operationId === undefined) {
+          const max = options.beforeTimestamp === undefined ? "+inf" : `(${options.beforeTimestamp}`;
+          const ids = (await redis.zrevrangebyscore(
+            `${tag}audit:z`,
+            max,
+            "-inf",
+            "LIMIT",
+            0,
+            options.limit ?? 1000,
+          )) as string[];
+          if (ids.length === 0) return [];
+          const rows = (await redis
+            .pipeline(ids.map((id) => ["get", `${tag}audit:${id}`]))
+            .exec()) as [Error | null, string | null][];
+          const records: ConfigAuditRecord[] = [];
+          for (const [error, value] of rows) {
+            if (error) throw error;
+            if (value !== null) records.push(JSON.parse(value) as ConfigAuditRecord);
+          }
+          return records;
+        }
         const ids = options.beforeTimestamp === undefined
           ? ((await redis.zrange(`${tag}audit:z`, 0, -1)) as string[])
           : ((await redis.zrevrangebyscore(
@@ -644,7 +678,7 @@ export async function createRedisConfigStore(
           }
         }
         const filtered = records
-          .filter((entry) => options.operationId === undefined || entry.operationId === options.operationId)
+          .filter((entry) => entry.operationId === options.operationId)
           .sort((a, b) => b.timestamp - a.timestamp || b.id.localeCompare(a.id));
         return options.limit === undefined ? filtered : filtered.slice(0, options.limit);
       });
@@ -731,15 +765,22 @@ export async function createRedisConfigStore(
       open();
       keyNamespace(namespace); // validates the namespace used in the GC key
       return guarded("listUnreferencedSnapshots", async () => {
-        const ids = (await redis.zrangebyscore(
+        // Bound the candidate scan (S13): referenced/pinned candidates are
+        // filtered below, so over-fetch by a bounded factor; a backlog of
+        // still-referenced candidates yields a partial batch the periodic
+        // sweep retries — never an unbounded full-index pull.
+        const candidates = (await redis.zrangebyscore(
           snapGcKey(namespace),
           "-inf",
           olderThan,
+          "LIMIT",
+          0,
+          Math.max(limit * 4, limit),
         )) as string[];
         const result: ConfigRuntimeSnapshotRecord[] = [];
-        if (ids.length > 0) {
+        if (candidates.length > 0) {
           const rows = (await redis
-            .pipeline(ids.map((id) => ["hgetall", snapRecKey(id)]))
+            .pipeline(candidates.map((id) => ["hgetall", snapRecKey(id)]))
             .exec()) as [Error | null, Record<string, string>][];
           for (const [error, fields] of rows) {
             if (error) throw error;

@@ -496,6 +496,21 @@ describe("config api revisions (A11)", () => {
     expect((await request(app, "/revisions/99")).status).toBe(404);
     expect((await request(app, "/operations/op-none")).status).toBe(404);
   });
+
+  it("missing base/target revisions report 404, not a generic 400", async () => {
+    const app = makeApp();
+    const changeset = await request(app, "/changesets", {
+      method: "POST",
+      body: { baseRevision: 99, operationId: "op-missing-base", operations: [{ op: "set", path: ["review", "max_files"], value: 1 }] },
+    });
+    expect(changeset.status).toBe(404);
+    expect(await changeset.json()).toMatchObject({ code: "entity_not_found" });
+    const restore = await request(app, "/revisions/99/restore", {
+      method: "POST",
+      body: { baseRevision: null, operationId: "op-restore-missing" },
+    });
+    expect(restore.status).toBe(404);
+  });
 });
 
 describe("config api request limits (A08)", () => {
@@ -627,6 +642,19 @@ describe("config API regression boundaries", () => {
     const restore = await request(app, "/revisions/1/restore", { method: "POST", body: { baseRevision: 1, operationId: "op-restore-secrets" } });
     expect(restore.status).toBe(400);
     expect((await store.readHead(NAMESPACE))?.activeRevision).toBe(1);
+  });
+
+  it("keeps non-credential URL query values visible (no editor save trap)", async () => {
+    const app = makeApp();
+    await seedLegacyCredentials([{ op: "create", collection: "providers", record: {
+        id: "db", name: "db", enabled: true, value: { id: "db", kind: "ollama",
+          base_url: "https://gateway.example.com/v1?tenant=acme&api-version=2024-10-01&sig=querysecret" } } }]);
+    const body = await (await request(app, "/")).text();
+    expect(body).toContain("tenant=acme");
+    expect(body).toContain("api-version=2024-10-01");
+    expect(body).not.toContain("querysecret");
+    // Credential-named query keys stay redacted — and placeholders still
+    // cannot be written back (pinned by the placeholder rejection test).
   });
 });
 
