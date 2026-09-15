@@ -198,6 +198,10 @@ the `isolated_v2` layout: everything lives under
 source/agent/tmp/context-repos under `runs/<runId>/`, and cleanup follows the
 whole review. Legacy cache paths stay intact.
 
+Paths must be relative and portable. Saving rejects invalid literal boundaries
+such as `/{{workspace.id}}` and `{{workspace.id}}/`; event-dependent values are
+also checked when the path is rendered.
+
 Matching also adds the top override layer: each task resolves its analysis
 selection as global → workspace defaults → instance → the matched route's
 `analysis` block. When the database configuration source publishes new

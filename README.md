@@ -157,6 +157,9 @@ Full documentation is available at **[aicr.atframe.work](https://aicr.atframe.wo
 
 [中文文档](https://aicr.atframe.work/zh-cn/) also available.
 
+For local sources, design documents, and acceptance records, start with the
+[documentation directory](docs/README.md).
+
 ## Repository Structure
 
 | Package | Description |

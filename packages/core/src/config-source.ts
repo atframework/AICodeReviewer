@@ -1079,6 +1079,9 @@ export function collectEntityReferences(config: AppConfigInput): readonly Config
       }
       for (const [segments, rule] of routes) {
         if (isPlainObject(rule)) {
+          if (isPlainObject(rule.match) && typeof rule.match.trigger === "string") {
+            add(["outputs", "routes", ...segments, "match", "trigger"], { kind: "trigger", id: rule.match.trigger });
+          }
           addChannelRefs(rule.line_comments, ["outputs", "routes", ...segments, "line_comments"]);
           addChannelRefs(rule.summary, ["outputs", "routes", ...segments, "summary"]);
         }

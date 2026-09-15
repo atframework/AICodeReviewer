@@ -2,6 +2,9 @@
 
 This directory contains a ready-to-edit deployment configuration.
 
+The [documentation directory](../docs/README.md) links the bilingual user guides,
+Workspace design, and configuration management reference.
+
 > **Documentation site:** The user-facing documentation lives in `docs/site/`
 > (Astro Starlight, English + 简体中文). It is built with `pnpm docs:build`
 > and published from `main` doc changes to the `gh-pages` branch by
@@ -81,8 +84,10 @@ Open the dashboard **Config** tab (requires the admin auth env vars and the
 optional `config_sources` block in [config.yaml](config.yaml)). It manages
 providers, model groups, triggers, channels, workspaces, routes, and global
 settings. Use **Stage changes** across pages to group related records, then
-**Publish staged changes** once — publishing is one atomic revision. Drafts
-stay in the browser page and are lost on reload. See the
+**Publish staged changes** once — publishing is one atomic revision. Reopening
+and staging a record again preserves earlier edits; returning a field to its
+published value removes that change. Drafts stay in the browser page and are lost
+on reload. **Discard staged changes** also clears the corresponding editors. See the
 [dashboard guide](../docs/site/src/content/docs/en/start/dashboard.md) for
 conflicts, activation status, and version restore.
 

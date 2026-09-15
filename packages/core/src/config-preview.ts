@@ -102,7 +102,7 @@ export async function previewConfigChangeset(input: ConfigChangesetPreviewInput)
       fileDigest: input.fileDigest,
       current,
       operations: input.operations,
-      ...(input.formatVersion !== undefined ? { formatVersion: input.formatVersion } : {}),
+      formatVersion: input.formatVersion ?? revision?.formatVersion ?? 1,
     });
     const touched = new Set(
       input.operations

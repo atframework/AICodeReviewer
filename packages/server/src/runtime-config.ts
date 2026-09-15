@@ -243,6 +243,8 @@ export class RuntimeConfigManager {
   private currentEntry: GenerationEntry;
   /** Pinned historical generations, keyed by snapshotId (current excluded). */
   private readonly pinnedEntries = new Map<string, GenerationEntry>();
+  /** Ownership is independent of which snapshot currently occupies a cache slot. */
+  private readonly entries = new Set<GenerationEntry>();
   private generationsBuilt = 0;
   private closed = false;
   private draining = false;
@@ -349,10 +351,8 @@ export class RuntimeConfigManager {
 
   status(): RuntimeConfigStatus {
     const current = this.currentEntry.generation;
-    // The current entry may also live in the pinned cache; count it once.
-    const entries = new Set<GenerationEntry>([this.currentEntry, ...this.pinnedEntries.values()]);
     let activeLeases = 0;
-    for (const entry of entries) activeLeases += entry.refCount;
+    for (const entry of this.entries) activeLeases += entry.refCount;
     return {
       mode: this.mode,
       snapshotId: current.snapshotId,
@@ -442,6 +442,8 @@ export class RuntimeConfigManager {
         this.assertOpen();
         // A concurrent admission may have installed this snapshot meanwhile.
         if (this.currentEntry.generation.snapshotId === snapshotId) return this.currentEntry;
+        const existing = this.pinnedEntries.get(snapshotId);
+        if (existing && !existing.disposed) return existing;
         const entry = this.registerEntry(generation, undefined);
         entry.retired = true;
         this.pinnedEntries.set(snapshotId, entry);
@@ -457,12 +459,18 @@ export class RuntimeConfigManager {
   }
 
   async lease(snapshotId: string | null): Promise<RuntimeConfigLease> {
-    const entry = await this.entryFor(snapshotId);
-    const lease = this.acquireEntry(entry);
+    const finish = this.retainBackgroundTask();
     try {
-      await this.prepareGeneration(entry.generation);
-      return lease;
-    } catch (error) { lease.release(); throw error; }
+      let entry = await this.entryFor(snapshotId);
+      // Retirement may run while entryFor's promise resumes; never acquire
+      // resources that have already been disposed.
+      while (entry.disposed) entry = await this.entryFor(snapshotId);
+      const lease = this.acquireEntry(entry);
+      try {
+        await this.prepareGeneration(entry.generation);
+        return lease;
+      } catch (error) { lease.release(); throw error; }
+    } finally { finish(); }
   }
 
   /** Adopt the durable head; a delayed install can never reinstall an older revision. */
@@ -498,7 +506,9 @@ export class RuntimeConfigManager {
 
   private registerEntry(generation: RuntimeConfigGeneration, dispose: (() => void) | undefined): GenerationEntry {
     this.generationsBuilt += 1;
-    return { generation, retired: false, refCount: 0, disposed: false, dispose };
+    const entry = { generation, retired: false, refCount: 0, disposed: false, dispose };
+    this.entries.add(entry);
+    return entry;
   }
 
   private acquireEntry(entry: GenerationEntry): RuntimeConfigLease {
@@ -521,17 +531,18 @@ export class RuntimeConfigManager {
   private disposeEntry(entry: GenerationEntry): void {
     if (entry.disposed) return;
     entry.disposed = true;
+    this.entries.delete(entry);
     const id = entry.generation.snapshotId;
     if (id && this.pinnedEntries.get(id) === entry) this.pinnedEntries.delete(id);
     this.onGenerationDispose?.(entry.generation);
     entry.dispose?.();
   }
 
-  private swapCurrent(generation: RuntimeConfigGeneration): void {
+  private swapCurrent(next: GenerationEntry): void {
     const previous = this.currentEntry;
     this.assertOpen();
-    const next = this.registerEntry(generation, undefined);
-    if (generation.snapshotId) this.pinnedEntries.set(generation.snapshotId, next);
+    if (previous === next) return;
+    next.retired = false;
     previous.retired = true;
     this.currentEntry = next;
     if (previous.refCount === 0) {
@@ -544,8 +555,20 @@ export class RuntimeConfigManager {
       throw new ConfigError("store_unavailable", "RuntimeConfigManager refresh requires a config store and file document.");
     }
     const generation = await this.buildGenerationForRevision(activeRevision);
-    await this.prepareGeneration(generation);
-    this.swapCurrent(generation);
+    this.assertOpen();
+    let entry = generation.snapshotId ? this.pinnedEntries.get(generation.snapshotId) : undefined;
+    if (!entry || entry.disposed) {
+      entry = this.registerEntry(generation, undefined);
+      entry.retired = true;
+      if (generation.snapshotId) this.pinnedEntries.set(generation.snapshotId, entry);
+    }
+    // A worker may have loaded this snapshot before the replica adopted its
+    // head. Share its resources and hold them across asynchronous preparation.
+    const lease = this.acquireEntry(entry);
+    try {
+      await this.prepareGeneration(entry.generation);
+      this.swapCurrent(entry);
+    } finally { lease.release(); }
   }
 
   private async buildGenerationForRevision(activeRevision: number | null): Promise<RuntimeConfigGeneration> {
@@ -656,7 +679,7 @@ export class RuntimeConfigManager {
   close(): void {
     if (this.closed) return;
     this.closed = true;
-    for (const entry of new Set([this.currentEntry, ...this.pinnedEntries.values()])) {
+    for (const entry of this.entries) {
       entry.retired = true;
       if (entry.refCount === 0) this.disposeEntry(entry);
     }

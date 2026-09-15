@@ -19,7 +19,7 @@ import {
   type ConfigStore,
 } from "@aicr/core";
 import { createSqliteConfigStore } from "@aicr/core";
-import { RuntimeConfigManager } from "../src/runtime-config.js";
+import { RuntimeConfigManager, type RuntimeConfigGeneration } from "../src/runtime-config.js";
 import { createRuntimeQueue } from "../src/runtime-queue.js";
 
 const NAMESPACE = "runtime-test";
@@ -160,6 +160,35 @@ describe("RuntimeConfigManager", () => {
     expect(pins[0]?.value).toMatchObject({ state: "ended" });
   });
 
+  it("H16: adopting a snapshot already leased by a worker preserves ownership through drain", async () => {
+    const publisher = makeManager();
+    const published = await publishProviderRevision(publisher, "remote", null, "remote-publication");
+    publisher.close();
+    const disposed = vi.fn();
+    const manager = new RuntimeConfigManager({ fileConfig: FILE_CONFIG, fileDocument: FILE_DOCUMENT,
+      fileDigest: DIGEST, store, namespace: NAMESPACE, baseDir: dir, onGenerationDispose: disposed });
+    const prepare = vi.fn<(generation: RuntimeConfigGeneration) => Promise<void>>(async () => {});
+    await manager.setGenerationPreparer(prepare);
+    const lease = await manager.lease(published.snapshotId);
+    try {
+      const adopted = await manager.admission();
+      expect(adopted).toBe(lease.generation);
+      expect(manager.status().activeLeases).toBe(1);
+      expect(prepare.mock.calls.filter(([generation]) => generation.snapshotId === published.snapshotId)).toHaveLength(1);
+      let drained = false;
+      const draining = manager.drain().then(() => { drained = true; });
+      await new Promise(resolve => setTimeout(resolve, 35));
+      expect(drained).toBe(false);
+      expect(disposed.mock.calls.some(([generation]) => generation.snapshotId === published.snapshotId)).toBe(false);
+      lease.release();
+      await draining;
+      expect(disposed.mock.calls.filter(([generation]) => generation.snapshotId === published.snapshotId)).toHaveLength(1);
+    } finally {
+      lease.release();
+      manager.close();
+    }
+  });
+
   it("M17: drain refuses new admissions but waits for accepted timers and their final writes", async () => {
     const manager = makeManager();
     const generation = await manager.admission();
@@ -177,6 +206,39 @@ describe("RuntimeConfigManager", () => {
     await draining;
     expect(manager.status().pendingTasks).toBe(0);
     await expect(manager.admission()).rejects.toThrow("closed");
+  });
+
+  it("H16: drain waits while an accepted historical lease is still loading", async () => {
+    const manager = makeManager();
+    const first = await publishProviderRevision(manager, "old-loading", null, "old-loading");
+    await publishProviderRevision(manager, "new-loading", 1, "new-loading");
+    const read = store.readSnapshot.bind(store);
+    let resume!: () => void;
+    const barrier = new Promise<void>(resolve => { resume = resolve; });
+    let entered!: () => void;
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    const spy = vi.spyOn(store, "readSnapshot").mockImplementation(async id => {
+      if (id === first.snapshotId) { entered(); await barrier; }
+      return read(id);
+    });
+    const pendingLease = manager.lease(first.snapshotId);
+    await started;
+    let drained = false;
+    const draining = manager.drain().then(() => { drained = true; });
+    try {
+      await new Promise(resolve => setTimeout(resolve, 35));
+      expect(drained).toBe(false);
+      resume();
+      const lease = await pendingLease;
+      expect(manager.status().activeLeases).toBe(1);
+      lease.release();
+      await draining;
+    } finally {
+      resume();
+      (await pendingLease.catch(() => null))?.release();
+      await draining;
+      spy.mockRestore();
+    }
   });
 
   it.each(["memory", "sqlite"])("H08/H10: %s queue versions survive duplicate enqueue, publish and restart", async kind => {

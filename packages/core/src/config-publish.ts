@@ -360,7 +360,7 @@ export async function prepareConfigRestore(store: ConfigStore, input: RestoreCon
       }
     }
   };
-  if (document.globals !== undefined) {
+  if (document.globals !== undefined && Object.keys(document.globals).length > 0) {
     visit(document.globals, []);
   }
 

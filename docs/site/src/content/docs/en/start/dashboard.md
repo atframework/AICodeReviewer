@@ -150,6 +150,10 @@ related edits, use **Stage changes** or **Stage page changes** on each page, the
 group, and publish both together. Staged edits share one revision and remain in
 browser memory; reloading the page discards them.
 
+Reopen a staged record or page to continue editing its draft. Staging again keeps
+earlier changes; returning a field to its published value removes that change.
+**Discard staged changes** also clears the corresponding editor drafts.
+
 Routing **Preview** includes staged changes without publishing. Stage open edits
 first. Workspace path completion starts with `{{`, inserts `segment` expressions,
 and uses `default` for nullable variables; choose a suitable fallback before

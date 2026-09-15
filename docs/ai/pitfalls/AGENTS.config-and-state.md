@@ -99,20 +99,32 @@ consumers in `packages/server/src/bootstrap.ts`.
   workspace or receipt pin halfway through. Exercise signed HTTP requests without
   a manual refresh first (`runtime-http.test.ts`). Verify snapshot namespace/file
   identity before recovery writes, serialize head adoption, and evict disposed
-  generations; null historical pins remain a migration gap, not H12 completion.
+  generations. Adopting a snapshot already leased by a worker must reuse its
+  generation and resources; track live ownership independently of cache keys
+  (`runtime-config.test.ts`). Historical null pins resolve to the durable
+  `legacy_import` baseline, never the latest head.
 - Publish prepare must share the exact validation a generation build runs: the
   file-load path called `validateWorkspaceDefinitions` while the publish path
   only compiled the routing graph, letting invalid DB workspace records commit
   and fail post-commit at install (`committed_activating`, replica 503s). Any
   validation added to one side belongs to both (`config-publish.ts`,
-  `config-publish.test.ts`). Related: a v2 route selecting a workspace with no
+  `config-publish.test.ts`). Validate mixed template literals before publication:
+  `/{{workspace.id}}` is always invalid even though its variable is valid
+  (`config-path-template.test.ts`). Related: a v2 route selecting a workspace with no
   binding rule must fail admission with `no_route` instead of silently falling
   back to the first workspace, and disabled legacy bindings are skipped like
   disabled match rules but still own their trigger (`config-resolution.ts`).
 - Path-shaped comparisons must use one encoding: restore compared
   `path.join(".")` against `formatConfigPath`-encoded file locks, so quoted
   map keys (`openai/gpt-4.1`) bypassed the C12 check. Compare parsed token
-  arrays, not formatted strings (`config-publish.ts`).
+  arrays, not formatted strings (`config-publish.ts`). An empty globals object
+  contributes no paths; do not compare an empty root path against every file lock.
+- Repeated UI staging must retain the original baseline and cumulative session.
+  Entity updates replace the full value, so merging operations by record ID loses
+  earlier fields. Re-encode from the retained session, remove reverted fields and
+  clear sessions when discarding (`tests/browser/config-ui.spec.ts`). Refresh only
+  staged option overlays; clearing server options breaks the next editor on the
+  same page (`tests/browser/ui-run-isolation.spec.ts`, consecutive channels).
 - Config API limits must count streamed UTF-8 bytes, reject prototype keys before
   Zod parsing and require operation values. Validate client fileDigest against the
   local file; redact URLs/headers/short credentials and suppress driver error text.
@@ -132,7 +144,7 @@ consumers in `packages/server/src/bootstrap.ts`.
   format rejection, an active legacy transaction, drain and old-program restart
   (`migration-version-process.test.ts`). Migration locks cannot detect idle old
   binaries; keep the first-upgrade stop/drain prerequisite explicit.
-- Drain must include pending claims, accepted timers/retries, publication and
+- Drain must include pending lease loads, claims, accepted timers/retries, publication and
   final persistence. Counting only active generation leases misses work between
   awaits; never report a worker's 30-second wait expiry as success. Stop new
   admission before waiting, close stores last, and close both BullMQ clients

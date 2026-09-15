@@ -269,6 +269,13 @@ function registryGet(variables: PathTemplateVariables, path: string): unknown {
     );
 }
 
+describe("mixed template static path boundaries", () => {
+  it.each(["/{{workspace.id}}", "~{{workspace.id}}", "{{workspace.id}}/", "a\\{{workspace.id}}",
+    "{{workspace.id}}%", "x:{{workspace.id}}", "{{workspace.id}}\u0000"])("rejects %j before rendering", source => {
+    expectTemplateError(() => compileWorkspacePathTemplate(source));
+  });
+});
+
 describe("variable registry (V11/V13)", () => {
   it("registers each path exactly once, well-formed", () => {
     const paths = WORK_PATH_TEMPLATE_VARIABLES.map((entry) => entry.path);

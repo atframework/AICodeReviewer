@@ -307,6 +307,13 @@ function assertTemplateLiteralSegments(body: readonly AstNode[], path?: ConfigPa
   for (const [index, node] of body.entries()) {
     if (node.type !== "ContentStatement") continue;
     const text = (node as AstContent).value;
+    // These literals cannot become portable by adjoining a variable. Reject
+    // them before committing a template that every runtime render would reject.
+    if (/[\\%:*?"<>|]/u.test(text) || [...text].some(isControlCharacter) ||
+        (index === 0 && (text.startsWith("/") || text.startsWith("~"))) ||
+        (index === body.length - 1 && text.endsWith("/"))) {
+      throw templateError("Path template contains a nonportable literal or absolute/empty path boundary.", path);
+    }
     const pieces = text.split("/");
     for (const [pieceIndex, piece] of pieces.entries()) {
       const atFirst = pieceIndex === 0;

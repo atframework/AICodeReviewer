@@ -96,6 +96,72 @@ test("P6 regression: staged provider and model group publish atomically and row 
     .toEqual([{ provider: "staged-ollama", model: "model-one", role: "any", overrides: { seed: 7 } }]);
 });
 
+test("P6 regression: repeated staging preserves entity edits and one atomic publication", async ({ page, request }) => {
+  const token = await apiLogin(request);
+  const initial = await apiView(request, token);
+  const created = await request.post("/api/admin/config/changesets", { headers: { Authorization: `Bearer ${token}` }, data: {
+    baseRevision: initial.head?.activeRevision ?? null, fileDigest: initial.fileDigest, operationId: "stage-repeat-create",
+    operations: [{ op: "create", collection: "providers", record: { id: "stage-repeat", name: "stage-repeat", enabled: true,
+      value: { id: "stage-repeat", kind: "ollama", timeout_ms: 1000 } } }],
+  } });
+  expect(created.status()).toBe(200);
+  await login(page);
+  await openConfigTab(page);
+  const before = await apiView(request, token);
+  const drawer = page.locator("#config-editor");
+  const edit = () => page.locator("#config-main tbody tr", { hasText: "stage-repeat" })
+    .getByRole("button", { name: "Edit", exact: true }).click();
+  await edit();
+  await setTextField(drawer, "provider:timeout_ms", "24000");
+  await drawer.getByRole("button", { name: "Stage changes", exact: true }).click();
+  await edit();
+  await setTextField(drawer, "provider:max_retries", "3");
+  await drawer.getByRole("button", { name: "Stage changes", exact: true }).click();
+  expect((await apiView(request, token)).head).toEqual(before.head);
+  await page.getByRole("button", { name: "Publish staged changes", exact: true }).click();
+  await expect(page.locator("#config-status")).toContainText("Saved as revision");
+  const response = await request.get("/api/admin/config", { headers: { Authorization: `Bearer ${token}` } });
+  const view = await response.json();
+  expect(view.head.activeRevision).toBe(before.head!.activeRevision + 1);
+  expect(view.collections.provider.records.find((record: { id: string }) => record.id === "stage-repeat").value)
+    .toMatchObject({ timeout_ms: 24000, max_retries: 3 });
+});
+
+test("P6 regression: restaging globals can revert a field and discard the remaining draft", async ({ page, request }) => {
+  const token = await apiLogin(request);
+  const initial = await apiView(request, token);
+  const seeded = await request.post("/api/admin/config/changesets", { headers: { Authorization: `Bearer ${token}` }, data: {
+    baseRevision: initial.head?.activeRevision ?? null, fileDigest: initial.fileDigest, operationId: "stage-globals-seed",
+    operations: [{ op: "set", path: ["review", "max_files"], value: 55 },
+      { op: "set", path: ["review", "output_language"], value: "en-US" }],
+  } });
+  expect(seeded.status()).toBe(200);
+  await login(page);
+  await openConfigTab(page, "Review");
+  const before = await apiView(request, token);
+  const main = page.locator("#config-main");
+  const stage = () => main.getByRole("button", { name: "Stage page changes", exact: true }).click();
+  await ensureFieldVisible(page, "review:max_files");
+  await setTextField(main, "review:max_files", "56");
+  await stage();
+  await main.locator('[data-field-id="review:output_language"] select').selectOption("zh-CN");
+  await stage();
+  await setTextField(main, "review:max_files", "55");
+  await stage();
+  expect((await apiView(request, token)).head).toEqual(before.head);
+  await page.getByRole("button", { name: "Publish staged changes", exact: true }).click();
+  await expect(page.locator("#config-status")).toContainText("Saved as revision");
+  const response = await request.get("/api/admin/config", { headers: { Authorization: `Bearer ${token}` } });
+  const view = await response.json();
+  expect(view.head.activeRevision).toBe(before.head!.activeRevision + 1);
+  expect(view.globals.review).toMatchObject({ max_files: 55, output_language: "zh-CN" });
+  await setTextField(main, "review:max_files", "57");
+  await stage();
+  await page.getByRole("button", { name: "Discard staged changes", exact: true }).click();
+  await expect(main.locator('[data-field-id="review:max_files"] input')).toHaveValue("55");
+  expect((await apiView(request, token)).head?.activeRevision).toBe(view.head.activeRevision);
+});
+
 test("P6 regression: nested weekly windows and multiple weekdays survive consecutive edits", async ({ page, request }) => {
   await login(page);
   await openConfigTab(page, "Review");

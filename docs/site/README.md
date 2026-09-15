@@ -5,6 +5,9 @@ This is the user-facing documentation site for AICodeReviewer, built with
 workspace package (`@aicr/docs-site`) and has **no runtime dependency** on the
 AICR service.
 
+The [documentation directory](../README.md) groups the user guides, design
+documents, and acceptance records. This file covers the documentation site itself.
+
 ## Quick commands
 
 Run from the repository root with Node.js `>=23.6.0`. Astro 7 itself supports

@@ -146,6 +146,34 @@ describe("publish commit (S02/S03)", () => {
 });
 
 describe("prepare failure commits nothing (H13)", () => {
+  it("C03: deleting a trigger referenced only by a legacy output rule fails atomically", async () => {
+    const first = prepareConfigPublication(publishInput({ operations: [
+      createOp("triggers", "gh", { name: "gh", kind: "github" }),
+      { op: "set", path: ["outputs", "routes", "rules"], value: [{ match: { trigger: "gh" }, summary: [] }] },
+    ] }));
+    await publish(first);
+    const input = publishInput({ current: first.document, baseRevision: 1, operationId: "delete-trigger", operations: [
+      { op: "delete", collection: "triggers", recordId: "rec-gh" },
+    ] });
+    expect(() => prepareConfigPublication(input)).toThrowError(expect.objectContaining({ code: "invalid_reference" }));
+    expect((await store.readHead(NAMESPACE))?.activeRevision).toBe(1);
+    expect(prepareConfigPublication({ ...input, operations: [...input.operations,
+      { op: "unset", path: ["outputs", "routes", "rules"] },
+    ] }).document.entities?.triggers).toEqual({});
+  });
+
+  it("C12: restoring an empty globals object does not claim every file lock", async () => {
+    const original = prepareConfigPublication(publishInput({ current: { globals: {} }, operations: [] }));
+    await publish(original);
+    const changed = prepareConfigPublication(publishInput({ current: original.document, baseRevision: 1,
+      operationId: "changed", operations: [{ op: "set", path: ["review", "max_files"], value: 42 }] }));
+    await publish(changed);
+    const restore = await prepareConfigRestore(store, { namespace: NAMESPACE, revision: 1, baseRevision: 2,
+      operationId: "restore-empty", actor: "test", file: original.input.file, fileDigest: DIGEST });
+    expect((await publish(restore)).status).toBe("committed");
+    expect((await currentDoc(NAMESPACE))?.globals).toEqual({});
+  });
+
   it("invalid changeset aborts before any commit", async () => {
     // Unknown channel kind: capability validation rejects during prepare (§6).
     const bad = publishInput({
@@ -209,6 +237,11 @@ describe("prepare failure commits nothing (H13)", () => {
     {
       name: "work_path escaping the workspace root",
       value: { match: [{ triggers: ["gh"] }], work_path: "{{segment source.repository}}/../../outside" },
+      code: "template_invalid",
+    },
+    {
+      name: "mixed work_path with an absolute literal prefix",
+      value: { match: [{ triggers: ["gh"] }], work_path: "/{{workspace.id}}" },
       code: "template_invalid",
     },
   ])("workspace match errors fail at prepare, never post-commit ($name)", async ({ value, code }) => {

@@ -75,6 +75,20 @@ function v2Config(overrides: Record<string, unknown> = {}) {
 }
 
 describe("previewConfigChangeset", () => {
+  it("inherits the active revision format when the caller omits it, without writing", async () => {
+    const prepared = prepareConfigPublication({ namespace: NAMESPACE, baseRevision: null, operationId: "v2",
+      actor: "test", fileDigest: DIGEST, current: { entities: { routes: {} } }, operations: [], formatVersion: 2 });
+    await publishConfig(store, prepared);
+    const preview = await previewConfigChangeset({ store, namespace: NAMESPACE, fileDigest: DIGEST,
+      operations: [{ op: "set", path: ["review", "max_files"], value: 12 }] });
+    expect(preview).toMatchObject({ valid: true, baseRevision: 1 });
+    expect(await store.listRevisions(NAMESPACE)).toHaveLength(1);
+    expect(await store.readAudit(NAMESPACE)).toHaveLength(1);
+    const incompatible = await previewConfigChangeset({ store, namespace: NAMESPACE, fileDigest: DIGEST,
+      operations: [], formatVersion: 1 });
+    expect(incompatible).toMatchObject({ valid: false, issue: { code: "unsupported_config_version" } });
+  });
+
   const deployment = { config_sources: { secret_refs: [{ env: "FEISHU_URL", target: ["outputs", "channels", "chat", "webhook_url_env"],
     destinations: { kind: "feishu_bot", webhook_url_env: "FEISHU_URL" } }] } };
   const operations = [

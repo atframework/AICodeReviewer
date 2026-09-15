@@ -900,13 +900,13 @@ AICR 采用**两层上下文管理**，两者互补：
   `AICR_ADMIN_PASSWORD` 或 `AICR_ADMIN_PASSWORD_HASH` 引用；比较时转为固定长度
   SHA-256 digest 后使用 `timingSafeEqual`。Session token 为 32 字节随机 hex，默认
   TTL 86400 秒。服务端不得打印或落盘密码原值。
-- 持久化数据使用 SQLite + Drizzle ORM（`@aicr/store` 包）。
+- 持久化数据使用 `@aicr/store` 的 SQLite/PostgreSQL 适配器；SQLite 使用 Drizzle ORM。
   代码真源为 `packages/store/src/schema.ts`，连接通过 `createStoreDb()` 初始化。
   SQLite 连接启用 WAL、`foreign_keys=ON`、`busy_timeout=5000` 和 `synchronous=NORMAL`。
   迁移通过内联 SQL + `_migrations` 跟踪表在启动时自动运行。
   `runs/<run_id>/run.json` 仍用于审计与问题排查，但不作为统计聚合查询真源。
-- Postgres 和 Redis 后端为预留扩展位，当前仅实现 SQLite；当 admin dashboard 启用且
-  `storage.database.kind` 不是 `sqlite` 时，启动必须失败并给出清晰错误，不能静默落回 SQLite。
+- PostgreSQL 已接入统计与管理 API（§3.14）；Redis 可提供配置源、缓存及调度存储，
+  不作为 dashboard 业务统计数据库。显式数据库连接失败时不能静默落回 SQLite。
 - 统计 schema 包含八张表：
   - `projects`：由 `workspaceId + triggerName + repoRef` 派生的 project identity，
     含 `deleted_at` 软删除标记。
@@ -1294,7 +1294,8 @@ models.dev 的 key 是 `<providerId>/<modelId>`（AI SDK 标识）。自定义 p
   操作全局叶路径;实体值经 capability 校验(§P0 字段矩阵),文件拥有的实体
   与锁定的叶路径返回 `file_owned`;引用修改与被引用实体必须同一 changeset
   提交,发布后逐项解析 provider/model_group/trigger/channel/workspace 引用,
-  缺失即 `invalid_reference`,整批不提交。
+  缺失即 `invalid_reference`,整批不提交。旧 `outputs.routes.rules[].match.trigger`
+  同样参与引用检查，删除 trigger 必须一并移除或修改这些规则。
 - 执行图:`compileExecutionGraph` 把 v2 `routing.rules`(显式 priority、AND
   条件 + OR 列表、空数组关闭、缺省继承)与旧 `outputs.routes` 兼容图统一为
   同一 resolveRouteForEvent/resolveAnalysisSelection/resolveOutputChannels
@@ -1306,7 +1307,8 @@ models.dev 的 key 是 `<providerId>/<modelId>`（AI SDK 标识）。自定义 p
   全局 → workspace defaults → 实例 → 路由规则四层合并,数组整体替换。
 - 发布事务:prepare 纯函数(结构校验 + 引用解析 + 图编译 + workspace match/模板校验
   （与文件加载路径同一 `validateWorkspaceDefinitions`，非法定义绝不落库后才在
-  generation build 失败）+ capability/secret 检查;不评审、不建 webhook、不调模型、
+  generation build 失败；混合路径模板中确定非法的字面量也在此拒绝，事件变量在渲染时
+  再校验）+ capability/secret 检查;不评审、不建 webhook、不调模型、
   不拉镜像);`commitChangeset` CAS 是
   线性化点(revision + audit + head 原子,三后端等价);commit 后 snapshot 写入
   或本机 generation install 失败返回 `committed_activating`,不谎报 rollback;
@@ -1315,8 +1317,10 @@ models.dev 的 key 是 `<providerId>/<modelId>`（AI SDK 标识）。自定义 p
   revision、fileDigest、formatVersion 与 resolver 版本。audit diff 只含实体名与全局
   路径,不含值。restore 以历史 revision 文档重跑当前文件锁/capability/secret
   校验后发布为更高 revision,保留历史 formatVersion,审计与当前版本比较。
+  空 `globals: {}` 没有全局字段，不作为根路径占用所有文件锁。
 - preview/readiness:`previewConfigChangeset` 返回与真实发布相同的校验结论与
   影响视图(零写库),空库 baseRevision 为 null,affected 使用合并后的有效值;
+  未指定 formatVersion 时沿用当前 revision 的版本，空库才默认版本 1。
   `previewConfigRoute` 复用准入同一路径函数,显式路由仍须通过 workspace 准入,
   layout 由实际 binding 决定,输出规则命中、
   workspace 绑定、完整最终目录、模型组与输出 channel;`diagnoseConfigReadiness`
@@ -1348,7 +1352,9 @@ legacy_import，历史 null 引用统一解析到此版本；新任务省略版�
 保留旧业务行，跨发布和重启不漂移。已有非空 pin 缺失时失败，不自动改用最新配置。
 
 请求及实际编排通过 lease 持有 generation；最后一个旧 lease 释放后才 dispose，
-已释放对象不留在可租借缓存中。`optionsResolver` 每次运行解析一次模型、agent、
+已释放对象不留在可租借缓存中。若 worker 已租借即将激活的快照，head adoption
+复用同一个 generation 及资源；租约统计独立于缓存键，异步加载租约也计入 drain。
+`optionsResolver` 每次运行解析一次模型、agent、
 sandbox、Review 路径策略、语言、VCS 和 publisher。模型链 entry overrides 的 map
 按 key 合并（含 logit_bias），数组替换，不修改 provider 原对象。receipt/batch、
 P4/SVN routing envelope、延期 envelope 和去重重审目标均传递 configSnapshotId；
@@ -1387,6 +1393,8 @@ Config 页面通过 `config-ui-spec` 声明控件，`config-ui-runtime` 与
 `config-form-state` 负责草稿、继承、嵌套列表/map 和 changeset 编码。
 字段 ID 与配置路径分离，行内使用相对路径；数组原子替换，未知扩展和显式空值保留。
 跨页暂存共享同一基线，新增引用可从暂存记录选择，统一发布一个 changeset。
+重复编辑同一记录或全局页面时保留累计草稿和原始基线，重新编码完整操作；恢复到
+原始值会移除对应暂存修改。丢弃暂存后清理对应编辑会话，避免旧草稿重新出现。
 路由预览包含已暂存操作；尚未暂存的编辑不加入预览，草稿只保存在当前页面内存。
 409 展示差异并由管理员决定重试；响应丢失先查询 operation，重试保持原 ID 和完整请求。
 202 锁定该提交的编辑，继续查询激活状态。历史恢复创建新 revision，使用相同恢复协议。

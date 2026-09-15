@@ -17,13 +17,14 @@ PR/MR 执行时段、持久化延期与事件面板见 [M16](docs/ai/milestones/
 模型目录 Redis 新连接重载，以及部署配置/双语自动提交示例的 schema 校验。
 记录与复现条件见 [本地验收](docs/ai/milestones/local-priority-queue.md)。
 
-Workspace 多工程规则与动态配置管理 P0–P8 已完成本地交付、复审与资料退役：存储/迁移见
+Workspace 多工程规则与动态配置管理 P0–P8 已完成本地交付、复审与任务资料退役：存储/迁移见
 [M17](docs/ai/milestones/M17.md)，来源合并/发布见 [M18](docs/ai/milestones/M18.md)，
 运行时接线/管理 API 见 [M19](docs/ai/milestones/M19.md)，管理表单与浏览器门禁见
 [M20](docs/ai/milestones/M20.md)，集成测试与组合验收见
 [M21](docs/ai/milestones/M21.md)/[M22](docs/ai/milestones/M22.md)，
 跨版本迁移、服务排空和两平台真实服务最终验收见 [M24](docs/ai/milestones/M24.md)，
-全量复审修复与合同精炼（D47）见 [M25](docs/ai/milestones/M25.md)。
+全量复审修复与合同精炼（D47）见 [M25](docs/ai/milestones/M25.md)，
+本次资源生命周期、暂存编辑与发布边界复审见 [M26](docs/ai/milestones/M26.md)。
 稳定合同见[架构](docs/ai/architecture.md) §3.10、§3.14–3.16。
 
 ## 2. 可本地推进的下一步
@@ -46,6 +47,7 @@ Workspace 多工程规则与动态配置管理 P0–P8 已完成本地交付、�
 | GitLab 真实仓库端到端流程 | 适配器、webhook、分支筛选与持久入队、输出合同测试 | GitLab 实例、测试仓库、token、webhook 权限；验证真实 push/MR 筛选、入队与发布 |
 | SVN 部署环境 | file:// 仓库及本机 svnserve、认证 HTTP hook、SQLite 调度、真实 diff | 目标服务器上的 hook 账户/PATH、网络 ACL，以及实际使用的 HTTP(S)/认证方式 |
 | Redis 部署环境 | 自动调度和模型目录均已通过本机真实 Redis | 仅部署特定的 Redis 版本、ACL/TLS、网络中断及持久化配置需要现场验证 |
+| PostgreSQL 部署环境 | 本机配置、业务存储、迁移及指定旧版本进程矩阵已验证 | 目标服务器的版本、角色权限、TLS 与网络配置需要现场验证 |
 | GitHub App pull_request 生产路径 | push 已签收，PR token 注入有单测 | 目标仓库自然出现 PR 后核验入站、分析和发布；不为验收代用户创建 PR |
 | PR/MR 避峰恢复生产路径 | 正式环境已部署并验证 PR 配置、管理 API、迁移和产物哈希；隔离容器验证七个时间边界及恢复 | 仍需窗口外自然事件持久化及下一窗口恢复的运行证据；不主动制造分析或通知 |
 | CI 真实 LLM benchmark | 6 个 eval fixtures 的离线校验已入 CI | CI secrets、provider 凭据和明确调用预算 |
@@ -64,6 +66,7 @@ Workspace 多工程规则与动态配置管理 P0–P8 已完成本地交付、�
 
 ## 5. 文档入口
 
+- [文档目录](docs/README.md)：设计文档、双语用户说明和验收记录的统一入口。
 - [AI 文档索引](docs/ai/index.md)：按任务定位实现、架构章节、技能和交付历史。
 - [坑点地图](docs/ai/AGENTS.known-pitfalls.md)、[来源地图](docs/ai/source-index.md)：只读取相关主题。
 - [输出合同](docs/output-channels.md)：发布策略和自动批次恢复边界。

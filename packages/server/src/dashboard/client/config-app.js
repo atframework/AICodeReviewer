@@ -268,7 +268,11 @@ function createApp({ root, api, runtime, formState, schedule }) {
       const save = button("cfg-btn cfg-btn-primary", "Publish staged changes", () => void publishStaged());
       save.disabled = state.saving || state.pending !== null;
       const discard = button("cfg-btn cfg-btn-ghost", "Discard staged changes", () => {
-        state.staged.clear(); state.stagedOperationId = null; state.references = {}; renderStatusBar();
+        for (const key of state.staged.keys()) {
+          if (key.startsWith("page/")) state.pageSessions.delete(key.slice(5));
+        }
+        if (state.drawer?.record && state.staged.has(`${state.drawer.page.entity.collection}/${state.drawer.record.id}`)) closeDrawer();
+        state.staged.clear(); state.stagedOperationId = null; refreshStagedReferences(); renderPage(); renderStatusBar();
       });
       discard.disabled = state.saving || state.pending !== null;
       panel.append(save, discard);
@@ -329,18 +333,26 @@ function createApp({ root, api, runtime, formState, schedule }) {
         try {
           const result = await api.getOptions(source);
           state.references[source] = { source, options: Array.isArray(result.options) ? result.options : [] };
-          for (const entry of state.staged.values()) {
-            for (const operation of entry.operations) {
-              if (operation.op === "create" && operation.collection === source) {
-                state.references[source].options.push({ value: operation.record.name, label: `${operation.record.name} (staged)` });
-              }
-            }
-          }
         } catch (error) {
           state.references[source] = { source, options: [], error: errorMessage(error, "Failed to load options.") };
         }
       }),
     );
+    refreshStagedReferences();
+  }
+
+  function refreshStagedReferences() {
+    for (const [source, reference] of Object.entries(state.references)) {
+      const options = reference.options.filter(option => option.staged !== true);
+      for (const entry of state.staged.values()) {
+        for (const operation of entry.operations) {
+          if (operation.op === "create" && operation.collection === source) {
+            options.push({ value: operation.record.name, label: `${operation.record.name} (staged)`, staged: true });
+          }
+        }
+      }
+      state.references[source] = { ...reference, options };
+    }
   }
 
   function renderPage() {
@@ -679,8 +691,9 @@ function createApp({ root, api, runtime, formState, schedule }) {
 
   function openEntityDrawer(page, record, options) {
     if (state.saving || state.pending !== null) return;
-    const baseInput = entityBaseInput(record);
-    const session = formState.createEditorSession(page, baseInput);
+    const staged = record && state.staged.get(`${page.entity.collection}/${record.id}`);
+    const baseInput = staged?.baseInput ?? entityBaseInput(record);
+    const session = staged?.session ?? formState.createEditorSession(page, baseInput);
     state.drawer = {
       page,
       record,
@@ -945,9 +958,10 @@ function createApp({ root, api, runtime, formState, schedule }) {
   function renderGlobalsSection(page) {
     let entry = state.pageSessions.get(page.id);
     if (entry === undefined) {
-      const baseInput = globalsBaseInput();
+      const staged = state.staged.get(`page/${page.id}`);
+      const baseInput = staged?.baseInput ?? globalsBaseInput();
       entry = {
-        session: formState.createEditorSession(page, baseInput),
+        session: staged?.session ?? formState.createEditorSession(page, baseInput),
         baseInput,
         operationId: newOperationId(),
         fieldNodes: new Map(),
@@ -1062,39 +1076,28 @@ function createApp({ root, api, runtime, formState, schedule }) {
   // Routing extras: preview panel (D8)
   // -------------------------------------------------------------------------
 
-  function stagedOpIdentity(op) {
-    if (op.op === "set" || op.op === "unset") return `${op.op}:${JSON.stringify(op.path)}`;
-    return `${op.op}:${op.collection}:${op.recordId ?? op.record?.id ?? ""}`;
-  }
-
-  /** Second staging of the same page/record merges ops instead of silently
-   * dropping the first round: the editor re-decodes from the original base,
-   * so a same-key replace would lose earlier staged edits. */
-  function mergeStagedOperations(previous, next) {
-    const merged = new Map();
-    for (const op of previous) merged.set(stagedOpIdentity(op), op);
-    for (const op of next) merged.set(stagedOpIdentity(op), op);
-    return [...merged.values()];
-  }
-
   function stageEditor(context) {
     if (state.saving || state.pending !== null) return;
     if (!validateLocalFields(context)) return;
     const entry = context.kind === "drawer" ? context.drawer : context.entry;
     try {
       const { operations } = formState.sessionEncode(entry.session, entry.baseInput);
-      if (!entry.session.dirty || operations.length === 0) return;
       const previous = state.staged.values().next().value;
       if (previous && (previous.baseRevision !== entry.baseInput.baseRevision || previous.fileDigest !== entry.baseInput.fileDigest)) {
         throw new Error("Staged edits must share the same revision. Publish or discard the existing staged changes first.");
       }
       const scope = entry.session.draft.scope;
       const created = operations.find(op => op.op === "create");
+      if (scope.kind === "entity" && scope.recordId === null && !created) return;
       const key = scope.kind === "entity" ? `${scope.collection}/${scope.recordId ?? created.record.id}` : `page/${context.page.id}`;
-      const existing = state.staged.get(key);
-      const merged = existing === undefined ? operations : mergeStagedOperations(existing.operations, operations);
-      state.staged.set(key, { operations: merged, baseRevision: entry.baseInput.baseRevision, fileDigest: entry.baseInput.fileDigest });
-      state.stagedOperationId = newOperationId();
+      // Reopen from the immutable staged session and its original CAS base.
+      // Encode the complete accumulated draft once; merging full-record update
+      // operations loses earlier fields and cannot represent reverting an edit.
+      if (!entry.session.dirty || operations.length === 0) state.staged.delete(key);
+      else state.staged.set(key, { operations, session: entry.session, baseInput: entry.baseInput,
+        baseRevision: entry.baseInput.baseRevision, fileDigest: entry.baseInput.fileDigest });
+      state.stagedOperationId = state.staged.size > 0 ? newOperationId() : null;
+      refreshStagedReferences();
       if (context.kind === "drawer") closeDrawer();
       else { state.pageSessions.delete(context.page.id); renderPage(); }
       renderStatusBar();
