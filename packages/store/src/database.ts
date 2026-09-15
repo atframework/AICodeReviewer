@@ -129,6 +129,7 @@ async function createPostgresStoreDb(config: {
       // Session-level lock covers schema creation plus the whole migration
       // batch: CREATE SCHEMA IF NOT EXISTS races two fresh databases on
       // pg_namespace, and only one process may own the upgrade (M04).
+      await client.query("SET lock_timeout = '5s'");
       await client.query(`SELECT pg_advisory_lock(${STORE_MIGRATION_LOCK_KEY})`);
       try {
         if (config.schema !== undefined && config.migrationMode !== "verify") {
@@ -143,6 +144,7 @@ async function createPostgresStoreDb(config: {
         }
       } finally {
         await client.query(`SELECT pg_advisory_unlock(${STORE_MIGRATION_LOCK_KEY})`).catch(() => {});
+        await client.query("RESET lock_timeout");
       }
     } finally {
       client.release();

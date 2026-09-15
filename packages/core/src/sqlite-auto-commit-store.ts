@@ -32,7 +32,6 @@ import type {
   AutoCommitStore,
   BatchCompletion,
   BatchExecutionCheckpoint,
-  BatchListQuery,
   ClaimedDispatch,
   CommitBatchRecord,
   CommitMemberRecord,
@@ -54,16 +53,6 @@ import {
   computeMemberEligibility,
   mergeSourceEvidence,
 } from "./auto-commit-store.js";
-import type {
-  BatchPublicationLedger,
-  BatchPublicationPlan,
-  BatchPublicationReceipt,
-  BatchRecoveryAuditEntry,
-  BatchRecoveryOperation,
-  BatchRecoveryResult,
-  PublicationReceiptStatus,
-} from "./auto-commit-publication.js";
-import { BATCH_PUBLICATION_PLAN_MAX_BYTES } from "./auto-commit-publication.js";
 
 export interface SqliteAutoCommitStoreOptions {
   readonly path: string;
@@ -212,9 +201,7 @@ const SCHEMA_SQL = `
     lease_token TEXT,
     lease_owner TEXT,
     lease_expiry INTEGER,
-    execution_checkpoint TEXT,
-    config_snapshot_id TEXT,
-    recovery_version INTEGER NOT NULL DEFAULT 0
+    last_error TEXT,
     created_at INTEGER NOT NULL,
     execution_checkpoint TEXT,
     config_snapshot_id TEXT

@@ -5,7 +5,7 @@
 
 | 任务 | 首选实现与参考 |
 | --- | --- |
-| 当前待办、Workspace 动态配置设计 | [Plan.md](../../Plan.md)，保留其链接的未完成 specs/plans；设计不代表现版能力 |
+| 当前待办与验收边界 | [Plan.md](../../Plan.md)；Workspace 动态配置稳定合同见架构 §3.10、§3.14–3.16，交付证据见 M17–M24 |
 | Config / workspace / model groups | `packages/core/src/config.ts`、server bootstrap；[架构 §3.10](architecture.md#310-配置体系)、[配置坑点](pitfalls/AGENTS.config-and-state.md) |
 | Webhook / 调度 / 去重 / PR 延期 | server runtime/scheduler/deferral-manager；[架构 §3.1](architecture.md#31-触发器与-reviewevent-归一化)、[调度坑点](pitfalls/AGENTS.scheduling.md) |
 | VCS / 多源上下文 / GitHub App | `packages/vcs/src/`、server credential wiring；[架构 §3.2](architecture.md#32-vcs-adapter-与-scoped-fetch)、[VCS 坑点](pitfalls/AGENTS.vcs.md) |
@@ -48,7 +48,8 @@
 | M20 配置管理表单与管理页面 | P6 已交付；本地验收完成 | `milestones/M20.md` |
 | M21 P7 集成测试与审查修复 | SVN 修复、真实服务及故障证据 | `milestones/M21.md` |
 | M22 P7 组合验收补齐、P8 收敛与资料退役 | 原交付记录；复审修正见 M23 | `milestones/M22.md` / `architecture.md` §3.10、§3.14–3.16 |
-| M23 P8 复审 | 凭据/输出/预览修复与组合验证；跨版本边界待验收 | [M23](milestones/M23.md) |
+| M23 P8 复审 | 凭据/输出/预览修复；当时遗留的本地缺口已在 M24 补齐 | [M23](milestones/M23.md) |
+| M24 跨版本迁移与停机排空 | 指定历史版本对与两平台真实服务验收完成，任务资料退役 | [M24](milestones/M24.md) |
 | 本地优先队列 P0-P15 | 已完成 | `milestones/local-priority-queue.md` |
 
 历史记录仅用于查交付证据；当前状态以代码、测试和前瞻路线图为准。公开用户文档位于

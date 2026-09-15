@@ -1246,7 +1246,10 @@ models.dev 的 key 是 `<providerId>/<modelId>`（AI SDK 标识）。自定义 p
   分阶段迁移:发布是单 Lua 原子提交,M09/M10 的保护目标由 CAS + 代际计数承担。
 - schema 版本由 `MigrationRunner`(`packages/core/src/migration-runner.ts`)按
   namespace 账本(`schema_migrations`:namespace/id/checksum/from/to/appVersion/
-  appliedAt)协调;启动路径 `storage.database.migrate`:`auto` 应用待执行步骤,
+  appliedAt/minReaderProtocol/minWriterProtocol/transactionMode)协调;
+  SQL runner 当前读/写协议均为 1，仅接受 `atomic` 事务模式；历史账本缺字段按协议 1
+  解释，首次 apply 在同一事务中补列，不改历史 SQL checksum。status/check 报告协议
+  要求且不补列；不兼容协议拒绝启动。启动路径 `storage.database.migrate`:`auto` 应用待执行步骤,
   `verify` 只校验并在缺失/落后/漂移/未知高版本时拒绝启动。CLI
   `aicr migrate --status|--check|--apply` 与启动共用同一 runner;status/check 严格
   只读(不建文件、不建账本表),退出码 0/1/2 = 干净/待执行/不安全。checksum 漂移
@@ -1255,8 +1258,12 @@ models.dev 的 key 是 `<providerId>/<modelId>`（AI SDK 标识）。自定义 p
   advisory 锁,创建账本也在锁和事务内。
 - 首次升级必须先关闭所有旧实例入口、停止新 claim、等待在途任务排空并停止旧进程，
   备份后再迁移并启动新实例。迁移锁只协调遵循协议的迁移者，不能阻止旧二进制继续
-  写入；当前没有可协商的 reader/writer 范围或对任意旧进程的自动 fencing。
-  未知高版本的启动拒绝与同版本跨进程恢复不能充当双版本滚动升级验收。
+  写入，也不能证明闲置旧进程已退出。固定历史基线为 `c5d221c`：SQLite/PostgreSQL
+  先排空停止旧进程后升级，旧程序重启会拒绝 schema 2；Redis 保留原有键/JSON 格式，
+  两版本的 v1/v2 文档读写和 stale CAS 由独立进程矩阵验证。更早版本或未来不兼容
+  格式不在滚动升级窗口内，须另行验证。证据见 `migration-version-process.test.ts`。
+  PG 会话迁移锁等待上限 5 秒，事务内 lock/statement timeout 为 5/30 秒；锁失败
+  保留旧状态并报告失败，不能当作已排空。
 - 业务 StoreDb 双后端:`packages/store` 的 sqlite 分支保留 legacy `_migrations`
   (001–006 文本冻结,append-only,新增步只允许追加;M02 用该前缀构建真实旧账本
   fixture);postgres 分支经 `pg-migrations.ts` 复用同一 MigrationRunner
@@ -1264,6 +1271,8 @@ models.dev 的 key 是 `<providerId>/<modelId>`（AI SDK 标识）。自定义 p
   `store_unavailable`,不创建半套表(M08)。
 - 运行时 generation 固定(P4)、配置管理 API(P5)与管理表单(P6)已接线，见 §3.16。
   配置库 schema 2 增加 runtime state 的 CAS 账本。
+  数据库文档/有效配置读写范围为 v1–v2；`validateDatabaseDocument` 与
+  `parseEffectiveConfig` 在解析前拒绝其他版本。原始文件版本仍单独限定为 v1。
 
 ### 3.15 配置来源合并、路由图与发布服务(config-source / config-compiler / config-publish)
 
@@ -1399,6 +1408,13 @@ catalog 配置和 triage 按 generation 构造；激活前固定全部配置模�
 内部 HTTP 请求由对应 CLI 管理。预算累计已报告费用，后续调用前检查新上限；一次
 请求可能在返回费用后超过上限，不能作为远端计费硬封顶；进程重启不保留内存日预算。
 
+CLI `serve` 收到可捕获的 SIGTERM/SIGINT 后关闭监听并停止 admission/claim，等待
+已接收 HTTP、worker、异步审查 timer/retry、发布及结果落库，再关闭数据库和队列。
+`RuntimeConfigManager.status()` 显示 draining、pendingTasks 与 activeLeases；
+`/readyz` 在排空时返回 503。QueueWorker 在 claim 仍未返回时也必须等待，30 秒未排空
+明确失败，不能关闭其存储。Redis 队列关闭 Worker/Queue 两个连接。进程管理器强杀、
+Windows 的强制进程终止不触发该协议；部署升级必须确认全部旧进程已退出。
+
 secret 授权来自原始文件引用及仅文件可写的 config_sources.secret_refs：env、稳定
 目标路径和 destinations 必须完整匹配。修改 endpoint、代理、关联 trigger 或继承
 凭据的 model/search/channel/context repository 目的地需要相应用途授权。预览、
@@ -1415,7 +1431,8 @@ secret 授权来自原始文件引用及仅文件可写的 config_sources.secret
 通用高熵脱敏器误删；来源变量仍经过脱敏，预览不写 revision、审计或目录。
 
 P4/P5 本地验收见 M19，P6 管理 UI 验收见 M20，P7/P8 集成与同版本跨进程验收见
-M21/M22；复审修复与证据边界见 [M23](milestones/M23.md)。
+M21/M22；复审修复见 [M23](milestones/M23.md)，指定旧版本兼容、CLI 排空和两平台
+真实服务最终证据见 [M24](milestones/M24.md)。
 
 ## 4. 默认评审 Prompt 合同
 

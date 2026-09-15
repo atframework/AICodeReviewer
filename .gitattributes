@@ -1,5 +1,6 @@
 *.sh text eol=lf
 Dockerfile text eol=lf
 *.Dockerfile text eol=lf
+packages/core/test/fixtures/migration-*.mjs.txt text eol=lf
 packages/llm/assets/model-catalog/models-dev.json filter=lfs diff=lfs merge=lfs -text
 *.png filter=lfs diff=lfs merge=lfs -text

@@ -34,7 +34,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createReviewEvent, parseConfigDocumentText, type ConfigChangesetOperation, type ConfigStore, type ReviewEvent } from "@aicr/core";
 import { createSqliteConfigStore } from "@aicr/core";
 import type { AppConfig } from "@aicr/core";
-import { closeStoreDb } from "@aicr/store";
+import { closeStoreDb, getRecentRuns } from "@aicr/store";
 import { parseUnifiedDiff, type ChangeRange } from "@aicr/vcs";
 import { bootstrapServerApp, createOutputPublisherResolverFromConfig } from "../src/bootstrap.js";
 import { GithubAppTokenService } from "../src/github-app-token.js";
@@ -556,6 +556,46 @@ describe("config publication → review execution e2e", () => {
     expect(bodyField(captured[1], "event")).toBe("COMMENT");
     expect(bodyField(captured[1], "body")).toContain(SUMMARY_SENTINEL);
     await options.closeAutoCommit?.();
+  });
+
+  it("M17: shutdown drains an accepted asynchronous review through publication and rejects later admissions", async () => {
+    let release!: () => void, entered!: () => void;
+    const holdFirstChat = new Promise<void>(resolve => { release = resolve; });
+    const firstChat = new Promise<void>(resolve => { entered = resolve; });
+    const captured: CapturedRequest[] = [];
+    stubFetch(captured, { holdFirstChat, onFirstChat: entered });
+    const { options } = await bootstrap(makeConfig());
+    await publishOperations([
+      workspaceOperation(), providerOperation("p-drain", "http://127.0.0.1:9011/v1"),
+      modelGroupOperation("g-drain", "p-drain", "model-drain"),
+      { op: "set", path: ["llm", "default_model_chain"], value: "g-drain" },
+      giteaChannelOperation("c-e01", "http://127.0.0.1:9021"), routeOperation("r-drain", 10, ["pull_request"], ["c-e01"]),
+    ]);
+    const app = createServerApp({ ...options, asyncTriggers: true, reviewOrchestration: reviewOptions(options, createFakeVcs()) });
+    const body = JSON.stringify({ action: "opened", repository: { full_name: "acme/repo" },
+      pull_request: { number: 7, base: { sha: "base", ref: "main" }, head: { sha: "head", ref: "feature" }, user: { login: "owent" } } });
+    const send = () => app.request("/webhooks/gitea", { method: "POST", body, headers: {
+      "content-type": "application/json", "x-gitea-event": "pull_request",
+      "x-gitea-signature": createHmac("sha256", "test-secret").update(body).digest("hex"),
+    } });
+    let closing: Promise<void> | undefined;
+    try {
+      expect((await send()).status).toBe(202);
+      await firstChat;
+      let closed = false;
+      closing = options.closeAutoCommit!().then(() => { closed = true; });
+      expect((await app.request("/readyz")).status).toBe(503);
+      expect((await send()).status).toBe(503);
+      expect(options.runtimeConfig!.status()).toMatchObject({ draining: true, pendingTasks: 1 });
+      expect(closed).toBe(false);
+      release();
+      await closing;
+      expect(options.runtimeConfig!.status()).toMatchObject({ activeLeases: 0, pendingTasks: 0 });
+      expect(await getRecentRuns(options.store!, 10)).toEqual([expect.objectContaining({ status: "succeeded", providerModel: "model-drain" })]);
+      expect(captured.map(entry => entry.url)).toEqual([
+        "http://127.0.0.1:9011/v1/chat/completions", "http://127.0.0.1:9021/api/v1/repos/acme/repo/pulls/7/reviews",
+      ]);
+    } finally { release(); await closing; }
   });
 
   it("E02: a mid-flight changeset never leaks into the in-flight run", async () => {

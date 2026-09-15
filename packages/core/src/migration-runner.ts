@@ -28,6 +28,14 @@
 
 import { ConfigError } from "./config-format.js";
 
+/** Protocol versions are independent of application semver and schema versions. */
+export const MIGRATION_PROTOCOL = Object.freeze({ reader: 1, writer: 1 });
+
+export interface MigrationProtocol {
+  readonly reader: number;
+  readonly writer: number;
+}
+
 export interface MigrationStep {
   /** Stable identifier, e.g. "001_config_initial". Never reused. */
   readonly id: string;
@@ -38,6 +46,10 @@ export interface MigrationStep {
   readonly description?: string | undefined;
   /** Backend-specific body (e.g. `{ sql }`); interpreted by the executor. */
   readonly payload?: unknown;
+  /** Omitted by legacy plans: protocol 1, atomic SQL transaction. */
+  readonly minReaderProtocol?: number;
+  readonly minWriterProtocol?: number;
+  readonly transactionMode?: "atomic";
 }
 
 export interface AppliedMigration {
@@ -48,6 +60,9 @@ export interface AppliedMigration {
   readonly toVersion: number;
   readonly appVersion: string | null;
   readonly appliedAt: number;
+  readonly minReaderProtocol?: number;
+  readonly minWriterProtocol?: number;
+  readonly transactionMode?: "atomic";
 }
 
 export interface NamespaceMigrationPlan {
@@ -96,6 +111,13 @@ export interface NamespaceMigrationStatus {
   readonly driftedIds: readonly string[];
   /** Highest applied version not present in the plan, if it exceeds target. */
   readonly unknownHigherVersion: number | null;
+  readonly protocol: {
+    readonly reader: number;
+    readonly writer: number;
+    readonly requiredReader: number;
+    readonly requiredWriter: number;
+    readonly compatible: boolean;
+  };
 }
 
 export interface MigrationCheckResult {
@@ -116,11 +138,23 @@ export interface MigrationApplyResult {
  * CLI `--status`/`--check` modes compose it without opening a writable
  * ledger or running ensureLedger).
  */
-export function computeNamespaceMigrationStatus(namespace: string, plan: NamespaceMigrationPlan, applied: readonly AppliedMigration[]): NamespaceMigrationStatus {
+export function computeNamespaceMigrationStatus(namespace: string, plan: NamespaceMigrationPlan, applied: readonly AppliedMigration[], protocol: MigrationProtocol = MIGRATION_PROTOCOL): NamespaceMigrationStatus {
   const planIds = new Map(plan.steps.map((step) => [step.id, step]));
   const drifted: string[] = [];
   let unknownHigher: number | null = null;
   let current = 0;
+  let requiredReader = 1;
+  let requiredWriter = 1;
+  let validProtocol = true;
+
+  for (const item of [...plan.steps, ...applied]) {
+    const reader = item.minReaderProtocol === undefined ? 1 : item.minReaderProtocol;
+    const writer = item.minWriterProtocol === undefined ? 1 : item.minWriterProtocol;
+    if (!Number.isSafeInteger(reader) || reader < 1 || !Number.isSafeInteger(writer) || writer < 1 ||
+        (item.transactionMode !== undefined && item.transactionMode !== "atomic")) validProtocol = false;
+    requiredReader = Math.max(requiredReader, reader);
+    requiredWriter = Math.max(requiredWriter, writer);
+  }
 
   const ordered = [...applied].sort((a, b) => a.toVersion - b.toVersion);
   const seen = new Set<string>();
@@ -135,7 +169,9 @@ export function computeNamespaceMigrationStatus(namespace: string, plan: Namespa
       continue;
     }
     if (seen.has(row.id) || row.fromVersion !== step.fromVersion || row.toVersion !== step.toVersion ||
-        row.fromVersion !== current || (row.checksum !== null && row.checksum !== step.checksum)) {
+        row.fromVersion !== current || (row.checksum !== null && row.checksum !== step.checksum) ||
+        (row.minReaderProtocol ?? 1) !== (step.minReaderProtocol ?? 1) ||
+        (row.minWriterProtocol ?? 1) !== (step.minWriterProtocol ?? 1)) {
       drifted.push(row.id);
     }
     seen.add(row.id);
@@ -153,10 +189,16 @@ export function computeNamespaceMigrationStatus(namespace: string, plan: Namespa
     pendingIds,
     driftedIds: drifted,
     unknownHigherVersion: unknownHigher,
+    protocol: { ...protocol, requiredReader, requiredWriter,
+      compatible: validProtocol && protocol.reader >= requiredReader && protocol.writer >= requiredWriter },
   };
 }
 
 function refuseUnsafeStatus(status: NamespaceMigrationStatus): void {
+  if (!status.protocol.compatible) {
+    throw new ConfigError("schema_version_unsupported",
+      `Namespace "${status.namespace}" requires reader/writer protocol ${status.protocol.requiredReader}/${status.protocol.requiredWriter}; this program supports ${status.protocol.reader}/${status.protocol.writer}. Stop and drain incompatible processes before upgrading.`);
+  }
   if (status.driftedIds.length > 0) {
     throw new ConfigError(
       "schema_version_unsupported",
@@ -174,6 +216,7 @@ function refuseUnsafeStatus(status: NamespaceMigrationStatus): void {
 export interface MigrationRunnerOptions {
   readonly appVersion?: string | null | undefined;
   readonly now?: (() => number) | undefined;
+  readonly protocol?: MigrationProtocol;
 }
 
 export class MigrationRunner {
@@ -181,18 +224,29 @@ export class MigrationRunner {
   readonly #plans: readonly NamespaceMigrationPlan[];
   readonly #appVersion: string | null;
   readonly #now: () => number;
+  readonly #protocol: MigrationProtocol;
 
   constructor(store: MigrationStore, plans: readonly NamespaceMigrationPlan[], options: MigrationRunnerOptions = {}) {
     this.#store = store;
     this.#plans = plans;
     this.#appVersion = options.appVersion ?? null;
     this.#now = options.now ?? Date.now;
+    this.#protocol = { ...(options.protocol ?? MIGRATION_PROTOCOL) };
+    if (![this.#protocol.reader, this.#protocol.writer].every(value => Number.isSafeInteger(value) && value > 0)) {
+      throw new ConfigError("migration_failed", "Reader/writer protocol versions must be positive safe integers.");
+    }
     const namespaces = new Set<string>();
     for (const plan of plans) {
       if (namespaces.has(plan.namespace)) {
         throw new ConfigError("migration_failed", `Duplicate migration namespace "${plan.namespace}".`);
       }
       namespaces.add(plan.namespace);
+      for (const step of plan.steps) {
+        if (![step.minReaderProtocol ?? 1, step.minWriterProtocol ?? 1].every(value => Number.isSafeInteger(value) && value > 0) ||
+            (step.transactionMode !== undefined && step.transactionMode !== "atomic")) {
+          throw new ConfigError("migration_failed", `Migration "${step.id}" has an invalid protocol or unsupported transaction mode.`);
+        }
+      }
       if (!Number.isSafeInteger(plan.targetVersion) || plan.targetVersion < 0 ||
           (plan.steps.length === 0 ? plan.targetVersion !== 0 : plan.steps[0]!.fromVersion !== 0 || plan.steps.at(-1)!.toVersion !== plan.targetVersion) ||
           new Set(plan.steps.map((step) => step.id)).size !== plan.steps.length ||
@@ -221,7 +275,7 @@ export class MigrationRunner {
   async status(): Promise<readonly NamespaceMigrationStatus[]> {
     if (this.#store.ledgerExists !== undefined) {
       if (!(await this.#store.ledgerExists())) {
-        return this.#plans.map((plan) => computeNamespaceMigrationStatus(plan.namespace, plan, []));
+        return this.#plans.map((plan) => computeNamespaceMigrationStatus(plan.namespace, plan, [], this.#protocol));
       }
     } else {
       await this.#store.ensureLedger();
@@ -229,7 +283,7 @@ export class MigrationRunner {
     const statuses: NamespaceMigrationStatus[] = [];
     for (const plan of this.#plans) {
       const applied = await this.#store.readApplied(plan.namespace);
-      statuses.push(computeNamespaceMigrationStatus(plan.namespace, plan, applied));
+      statuses.push(computeNamespaceMigrationStatus(plan.namespace, plan, applied, this.#protocol));
     }
     return statuses;
   }
@@ -256,7 +310,7 @@ export class MigrationRunner {
       const statuses: NamespaceMigrationStatus[] = [];
       for (const plan of this.#plans) {
         const applied = await this.#store.readApplied(plan.namespace);
-        const status = computeNamespaceMigrationStatus(plan.namespace, plan, applied);
+        const status = computeNamespaceMigrationStatus(plan.namespace, plan, applied, this.#protocol);
         refuseUnsafeStatus(status);
 
         const appliedIds = new Set(applied.map((row) => row.id));
@@ -287,8 +341,11 @@ export class MigrationRunner {
               toVersion: step.toVersion,
               appVersion: this.#appVersion,
               appliedAt: this.#now(),
+              minReaderProtocol: step.minReaderProtocol ?? 1,
+              minWriterProtocol: step.minWriterProtocol ?? 1,
+              transactionMode: step.transactionMode ?? "atomic",
             })),
-        ]));
+        ], this.#protocol));
       }
       return { appliedByNamespace, statuses };
     });

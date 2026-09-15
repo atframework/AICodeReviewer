@@ -36,7 +36,7 @@ import { createHmac, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
-import net from "node:net";
+import { freeLoopbackPort as findFreePort } from "./fixtures/loopback-port.js";
 import { delimiter, dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -117,14 +117,6 @@ const REDIS_URL_ENV = "AICR_POST_MIGRATION_REDIS_URL";
 
 const PG_TEST_URL = process.env.AICR_PG_TEST_URL;
 const describePg = PG_TEST_URL ? describe : describe.skip;
-
-/** Hyper-V excluded port ranges on this workstation class; avoid for scratch listeners. */
-const EXCLUDED_PORT_RANGES: ReadonlyArray<readonly [number, number]> = [
-  [49455, 49554],
-  [50000, 50059],
-  [54081, 54180],
-  [55682, 56482],
-];
 
 function resolveRedisServerExecutable(): string | undefined {
   const fromEnv = process.env.AICR_REDIS_SERVER_EXECUTABLE;
@@ -918,23 +910,6 @@ describePg("post-migration consumption [postgres]", () => {
 // ---------------------------------------------------------------------------
 // Redis leg: dedicated child redis-server, SIGKILL + restart persistence.
 // ---------------------------------------------------------------------------
-
-async function findFreePort(): Promise<number> {
-  for (let attempt = 0; attempt < 50; attempt += 1) {
-    const server = net.createServer();
-    const { promise, resolve, reject } = Promise.withResolvers<number>();
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      const address = server.address();
-      server.close(() => resolve(typeof address === "object" && address !== null ? address.port : 0));
-    });
-    const port = await promise;
-    if (port > 0 && !EXCLUDED_PORT_RANGES.some(([lo, hi]) => port >= lo && port <= hi)) {
-      return port;
-    }
-  }
-  throw new Error("no free loopback port outside the Hyper-V excluded ranges");
-}
 
 function redisArgs(port: number, redisDir: string): string[] {
   // appendfsync=always: a SIGKILL must never lose the published revision.

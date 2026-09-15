@@ -49,6 +49,19 @@ SQLite WAL 数据库应放在同一主机进程共享的本地文件系统。WAL
 WSL 数据库测试应使用 Linux 文件系统，避免 Windows 盘挂载。参见
 [SQLite WAL 要求](https://www.sqlite.org/wal.html)。
 
+### 升级兼容性
+
+首次升级前，停止所有旧实例的入口与 claim，排空已接收任务，确认旧进程已退出后备份
+数据库。迁移锁无法检测闲置旧进程。已验证的历史基线为提交 `c5d221c`：SQLite/
+PostgreSQL 必须按上述停机顺序升级，旧程序会拒绝重新打开 schema 2。Redis 保持
+既有键和 JSON 格式，两版本均可读写 v1/v2 文档，并由 CAS 保护冲突。其他版本组合
+需要各自的兼容性测试。
+
+SQL 账本记录最低 reader/writer 协议和事务模式，当前读写协议均为 1，缺少字段的
+历史记录按协议 1 解释。仅支持原子 SQL 迁移。PostgreSQL 迁移锁最多等待 5 秒，
+迁移语句最多执行 30 秒。`migrate --status` 报告兼容状态；`--check`/`--apply`
+拒绝不兼容要求。数据库文档/有效配置读写范围为 v1–v2；原始配置文件仍使用 v1。
+
 ## `storage.cache`
 
 | 字段 | 类型 | 默认 | 说明 |

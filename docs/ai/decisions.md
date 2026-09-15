@@ -115,6 +115,18 @@ hash-tag slot 内用 Lua CAS（不用 WATCH/MULTI，脚本先校验后写入）�
 writer 被 fencing。实现见 `packages/core/src/{sqlite,pg,redis}-config-store.ts` 与架构
 §3.14；交付验收见 M17（PG 18.6 实测）、M21。
 
+### D46：首次升级先排空，兼容范围由实际版本对限定（P8/M24）
+
+迁移锁只串行化参与锁协议的操作，不能阻止不认识新协议的旧进程在锁外写入。首次
+升级必须停止全部旧实例的 admission/claim、等已接收任务和最终记账结束、确认退出，
+再备份和迁移。CLI 的 drained 标记和正常退出共同构成排空证据；超时、SIGKILL 或
+Windows 强制结束不能替代。Redis CAS 拒绝过期 generation，不等同于任意旧程序隔离。
+
+MigrationRunner 保存最低 reader/writer 协议与 atomic 事务声明，旧账本缺列按 1/1
+解释；协议不足和未知高 schema 均拒绝启动。原始文件格式仍为 1，数据库文档支持
+1–2。已验证的历史代码基线固定为 `c5d221c`，其他版本对须追加真实进程证据。
+实现与验收见 [架构](architecture.md) §3.14、§3.16 和 [M24](milestones/M24.md)。
+
 ## 维护规则
 
 - 如果某条决策只影响已完成阶段的历史说明，优先更新相关 `milestones/*.md`。

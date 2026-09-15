@@ -11,7 +11,7 @@ import { createObservabilityApi, type ObservabilityApiOptions } from "./observab
 import { getDashboardClientAsset, getDashboardHtml } from "./dashboard/index.js";
 import type { ConfigStore } from "@aicr/core";
 import type { StoreDb } from "@aicr/store";
-import { insertReviewRun, insertReviewRunOnce } from "@aicr/store";
+import { closeStoreDb, insertReviewRun, insertReviewRunOnce } from "@aicr/store";
 
 const globalMetrics: AicrMetrics = createAicrMetrics();
 
@@ -158,6 +158,8 @@ export interface ServerAppOptions {
   readonly autoCommitStore?: AutoCommitStore;
   /** Stop receipt execution, drain the active batch, then close its store. */
   readonly closeAutoCommit?: () => Promise<void>;
+  /** Stop admission/claim immediately; resolve after background workers drain. */
+  readonly beginDrain?: () => Promise<void>;
   /**
    * Weekly execution-window lookup. Receives the workspace and the event's
    * targetKind: pull_request events prefer the resolved
@@ -1712,7 +1714,7 @@ async function scheduleTriggerProcessing(
   const manager = extras?.runtimeConfig;
   const generation = manager ? await manager.resolveGeneration(extras?.configSnapshotId ?? null) : undefined;
   const pin = extras?.releaseConfigPin ? null : await manager?.beginSnapshotPin(generation?.snapshotId ?? null);
-  const releaseConfigPin = extras?.releaseConfigPin ?? (() => manager?.endSnapshotPin(pin ?? null) ?? Promise.resolve());
+  const releasePin = extras?.releaseConfigPin ?? (() => manager?.endSnapshotPin(pin ?? null) ?? Promise.resolve());
   const runId = randomUUID();
   const context = { reviewEvent, payload: decoded, provider, eventName };
   // Resolved once per scheduling round; every timer this function arms passes through the window
@@ -1722,6 +1724,13 @@ async function scheduleTriggerProcessing(
     ? await manager.withGeneration(generation, async () => readSchedule())
     : readSchedule();
   const initial = clampDelayToExecutionWindow(executionSchedule, 0, Date.now());
+  const finishTask = manager?.retainBackgroundTask();
+  let pinReleased = false;
+  const releaseConfigPin = async (): Promise<void> => {
+    if (pinReleased) return;
+    pinReleased = true;
+    try { await releasePin(); } finally { finishTask?.(); }
+  };
 
   // Persist outside-window arrivals even when another review is still
   // running. Waiting must not acquire or release that run's dedup ownership.
@@ -1818,12 +1827,12 @@ async function scheduleTriggerProcessing(
     const attempt = manager
       ? manager.resolveGeneration(extras?.configSnapshotId ?? null).then((generation) => manager.withGeneration(generation, processAttempt))
       : processAttempt();
-    void attempt.then((result) => {
+    void attempt.then(async (result) => {
       const durationMs = Date.now() - startMs;
       if (result.reviewRun) {
         recordCompletedReviewRun(metrics, result.reviewRun, durationMs);
-        void saveCompletedRunSnapshot(runsDir, runId, reviewEvent, result.reviewRun);
-        void persistReviewRunToStore(store, runId, reviewEvent, result.reviewRun, durationMs, startMs);
+        await saveCompletedRunSnapshot(runsDir, runId, reviewEvent, result.reviewRun);
+        await persistReviewRunToStore(store, runId, reviewEvent, result.reviewRun, durationMs, startMs);
       }
       console.info(JSON.stringify({
         level: "info",
@@ -1843,7 +1852,7 @@ async function scheduleTriggerProcessing(
         ...(result.triage ? { triage: result.triage } : {}),
       }));
       onCompleted();
-    }).catch((error) => {
+    }).catch(async (error) => {
       const durationMs = Date.now() - startMs;
       const reason = error instanceof TriggerProcessingError ? error.reason : "trigger_processing_failed";
       const message = toErrorMessage(error);
@@ -1885,7 +1894,7 @@ async function scheduleTriggerProcessing(
       }
 
       recordReviewResult(metrics, { status: "failed", durationMs });
-      void persistFailedRunToStore(store, runId, reviewEvent, durationMs, startMs, error);
+      await persistFailedRunToStore(store, runId, reviewEvent, durationMs, startMs, error);
       console.error(JSON.stringify({
         level: "error",
         msg: "trigger processing failed",
@@ -1900,7 +1909,7 @@ async function scheduleTriggerProcessing(
         error: message,
         ...(attemptNumber > 1 ? { attempts: attemptNumber } : {}),
       }));
-      void publishTriggerErrorReport(context, reviewOrchestrationOptions, runId, reason, message);
+      await publishTriggerErrorReport(context, reviewOrchestrationOptions, runId, reason, message);
       onCompleted();
     });
   }
@@ -1933,7 +1942,7 @@ async function scheduleTriggerProcessing(
     // PR/MR with the scheduled start so the requester is not left guessing.
     // Resumed deferrals already notified on first receipt.
     if (!extras?.deferralResume && reviewEvent.reason.endsWith(":comment_review")) {
-      void publishDeferralNotice(context, reviewOrchestrationOptions, runId, initial.resumeAt, executionSchedule?.timezone);
+      await publishDeferralNotice(context, reviewOrchestrationOptions, runId, initial.resumeAt, executionSchedule?.timezone);
     }
     return { runId, disposition: "deferred", resumeAt: initial.resumeAt };
   }
@@ -2203,6 +2212,13 @@ async function handleReviewOrchestration(
     reviewEvent,
     ...result,
   }, 202);
+}
+
+/** Call after the HTTP listener has drained its accepted requests. */
+export async function closeServerApp(options: ServerAppOptions): Promise<void> {
+  await options.closeAutoCommit?.();
+  await options.sessionStore?.close();
+  if (options.store) await closeStoreDb(options.store);
 }
 
 export function createServerApp(options: ServerAppOptions = {}): Hono {

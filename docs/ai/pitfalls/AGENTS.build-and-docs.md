@@ -44,6 +44,14 @@ Sources: root/package manifests, `pnpm-workspace.yaml`, `tsconfig.json`,
   zero-skip coverage run, re-verify reachability with real clients
   (psql/redis-cli), not port probes or hub status, and re-create roles via
   single-user mode if the cluster lost them (`postgres --single -D …`).
+- A process fixture reporting no free port may be rejecting valid ports with a
+  stale workstation-specific Hyper-V range list. Repeated `listen(0)` calls can
+  also return the same recently closed candidate. Probe explicit random ports,
+  retry only bind conflicts/access denial with a finite budget, and propagate
+  other errors. Never copy one host's excluded ranges into tests. See
+  `packages/server/test/fixtures/loopback-port.ts` and the post-migration/replica
+  process tests; a probe is not a reservation, so child readiness must still fail
+  visibly if another process wins the port.
 
 ## Runtime image
 

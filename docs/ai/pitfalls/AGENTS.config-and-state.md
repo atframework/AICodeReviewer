@@ -113,6 +113,17 @@ consumers in `packages/server/src/bootstrap.ts`.
   cannot prove that window. Keep the barrier in the child fixture, kill the
   actual process, then assert durable operation/head and idempotent recovery
   (`replica-process-matrix.test.ts`).
+- A version matrix must run pinned historical implementation code in a separate
+  process, with source/artifact hashes and stable line endings. Same-version
+  children do not test compatibility. Cover supported reads/writes, unknown
+  format rejection, an active legacy transaction, drain and old-program restart
+  (`migration-version-process.test.ts`). Migration locks cannot detect idle old
+  binaries; keep the first-upgrade stop/drain prerequisite explicit.
+- Drain must include pending claims, accepted timers/retries, publication and
+  final persistence. Counting only active generation leases misses work between
+  awaits; never report a worker's 30-second wait expiry as success. Stop new
+  admission before waiting, close stores last, and close both BullMQ clients
+  (`runtime-config`, `queue-worker`, `server-shutdown` and E2E drain tests).
 
 ## Model catalog and failure routing
 

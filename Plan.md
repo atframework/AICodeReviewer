@@ -17,11 +17,12 @@ PR/MR 执行时段、持久化延期与事件面板见 [M16](docs/ai/milestones/
 模型目录 Redis 新连接重载，以及部署配置/双语自动提交示例的 schema 校验。
 记录与复现条件见 [本地验收](docs/ai/milestones/local-priority-queue.md)。
 
-Workspace 多工程规则与动态配置管理已交付主要功能，P8 复审仍保留跨版本验收缺口：存储/迁移见
+Workspace 多工程规则与动态配置管理 P0–P8 已完成本地交付与复审：存储/迁移见
 [M17](docs/ai/milestones/M17.md)，来源合并/发布见 [M18](docs/ai/milestones/M18.md)，
 运行时接线/管理 API 见 [M19](docs/ai/milestones/M19.md)，管理表单与浏览器门禁见
 [M20](docs/ai/milestones/M20.md)，集成测试与组合验收见
 [M21](docs/ai/milestones/M21.md)/[M22](docs/ai/milestones/M22.md)。
+跨版本迁移、服务排空和两平台真实服务最终验收见 [M24](docs/ai/milestones/M24.md)。
 稳定合同见[架构](docs/ai/architecture.md) §3.10、§3.14–3.16。
 
 ## 2. 可本地推进的下一步
@@ -37,11 +38,6 @@ Workspace 多工程规则与动态配置管理已交付主要功能，P8 复审�
 不把单元测试或本地服务通过写成生产集成验收通过。完成一项后将证据移入对应里程碑，
 从本表删除，不累积完成清单。
 
-Workspace 与动态配置管理复审见 [M23](docs/ai/milestones/M23.md)。保留
-[实施计划](docs/superpowers/plans/2026-09-11-workspace-config-implementation.md)及
-[测试矩阵](docs/superpowers/plans/2026-09-11-workspace-config-tests.md)：M17/M18 尚需指定
-兼容旧版本并验证停机排空/reader-writer 边界；同版本进程恢复不构成该证据。
-
 ## 3. 依赖外部环境的验收
 
 | 场景 | 已有本地证据 | 仍需的条件与验收 |
@@ -53,6 +49,7 @@ Workspace 与动态配置管理复审见 [M23](docs/ai/milestones/M23.md)。保�
 | PR/MR 避峰恢复生产路径 | 正式环境已部署并验证 PR 配置、管理 API、迁移和产物哈希；隔离容器验证七个时间边界及恢复 | 仍需窗口外自然事件持久化及下一窗口恢复的运行证据；不主动制造分析或通知 |
 | CI 真实 LLM benchmark | 6 个 eval fixtures 的离线校验已入 CI | CI secrets、provider 凭据和明确调用预算 |
 | 自动批次远端对账 | 执行检查点与未知结果保护；逐目标协议待实现 | 对应 publisher 的查询/幂等协议及测试目标；在本地协议实现后验收 |
+| 其他部署版本的升级兼容 | `c5d221c` 历史配置模块与当前程序的 SQLite/PG/Redis 真实进程矩阵、首次停机排空 | 若部署旧版本不同，需固定其源码和驱动版本再跑矩阵；首次升级必须确认全部旧实例退出，不能仅依赖迁移锁 |
 
 ## 4. 预留扩展
 

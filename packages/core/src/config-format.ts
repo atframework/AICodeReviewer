@@ -18,10 +18,19 @@ import { z } from "zod";
 
 /** Current on-disk format: no `config_version` key, named model-chain groups. */
 export const CONFIG_FORMAT_VERSION_LEGACY = 1;
-/** Highest format this build can load. */
+/** Highest raw file format this build can load. */
 export const CONFIG_FORMAT_VERSION_CURRENT = 1;
-/** Planned multi-project/dynamic-config format; not accepted yet. */
+/** Legacy public name for the database routing format. */
 export const CONFIG_FORMAT_VERSION_PLANNED = 2;
+
+/** Database documents/effective configs have a separate reader/writer window. */
+export const CONFIG_DATABASE_FORMAT_WINDOW = Object.freeze({ min: 1, max: 2 });
+
+export function assertConfigDatabaseFormat(version: number): void {
+  if (!Number.isSafeInteger(version) || version < CONFIG_DATABASE_FORMAT_WINDOW.min || version > CONFIG_DATABASE_FORMAT_WINDOW.max) {
+    throw new ConfigError("unsupported_config_version", `Database config format ${String(version)} is unsupported; reader/writer range is 1–2.`);
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Error codes

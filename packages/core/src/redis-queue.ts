@@ -120,9 +120,18 @@ export async function createRedisQueue(options: RedisQueueOptions): Promise<Revi
     autorun: false,
   });
   const activeJobs = new Map<string, ActiveBullMqJob>();
+  let closing: Promise<void> | undefined;
 
   return {
     kind: "redis",
+
+    close(): Promise<void> {
+      if (activeJobs.size > 0) return Promise.reject(new Error("Redis queue still has active jobs; drain its worker before closing."));
+      closing ??= (async () => {
+        try { await worker.close(); } finally { await queue.close(); }
+      })();
+      return closing;
+    },
 
     async enqueue<T>(data: T, opts: QueueEnqueueOptions): Promise<QueueJob<T>> {
       const backoffConfig = opts.backoff ?? { kind: "exponential", baseMs: 2000, maxMs: 60000, jitter: true };

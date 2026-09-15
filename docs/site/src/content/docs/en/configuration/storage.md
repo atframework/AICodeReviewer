@@ -60,6 +60,24 @@ same host. WAL does not support network filesystems; use the Linux filesystem
 for WSL database tests rather than a Windows-drive mount. See the
 [SQLite WAL requirements](https://www.sqlite.org/wal.html).
 
+### Upgrade compatibility
+
+Before the first upgrade, stop ingress and claims on every old instance, drain
+accepted work, confirm the old processes have exited, and back up the database.
+A migration lock does not detect an idle old process. The tested historical
+baseline is commit `c5d221c`: SQLite/PostgreSQL require that stop-and-upgrade
+sequence, and the old program refuses to reopen schema 2. Redis keeps its
+existing keys and JSON shape; both versions can read/write v1/v2 documents with
+CAS conflict protection. Other version pairs need their own compatibility test.
+
+The SQL ledger records minimum reader/writer protocols and transaction mode.
+Both protocols are currently 1; historical rows without those fields mean 1.
+Only atomic SQL migrations are supported. PostgreSQL migration lock waits are
+bounded to 5 seconds, and migration statements to 30 seconds. `migrate --status`
+reports compatibility; `--check`/`--apply` reject incompatible requirements.
+Database document/effective-config readers and writers accept formats 1–2;
+raw configuration files continue to use format 1.
+
 ## `storage.cache`
 
 | Field | Type | Default | Description |

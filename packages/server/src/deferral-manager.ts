@@ -102,7 +102,9 @@ export class ReviewDeferralManager {
 
   /** Persist (or memorize) a deferral and arm its wake-up timer. */
   defer(target: DeferredTriggerTarget, notBeforeMs: number, requireDurable = false): Promise<void> {
-    if (this.stopped) return requireDurable ? Promise.reject(new Error("Deferral manager is stopped.")) : Promise.resolve();
+    // Already accepted requests may finish persisting during shutdown. The
+    // stopped timer guard prevents these records from starting new work.
+    if (this.stopped && !this.store) return requireDurable ? Promise.reject(new Error("Deferral manager is stopped.")) : Promise.resolve();
     if (requireDurable && !this.store) return Promise.reject(new Error("Durable deferral storage is unavailable."));
     const key = computeDeferralKey(target.reviewEvent);
     notBeforeMs = Math.max(notBeforeMs, this.deadlines.get(key) ?? 0);
@@ -249,6 +251,11 @@ export class ReviewDeferralManager {
       clearTimeout(timer);
     }
     this.timers.clear();
+  }
+
+  async drain(): Promise<void> {
+    this.stop();
+    await this.storeQueue;
   }
 
   private armTimer(key: string, notBeforeMs: number): void {

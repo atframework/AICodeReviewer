@@ -26,6 +26,7 @@ import {
 import {
   bootstrapServerApp,
   createServerApp,
+  closeServerApp,
   createWorkspaceRuntime,
   runReviewOrchestration,
   serveAsync,
@@ -41,6 +42,7 @@ import {
 
 import { installFileLogTeeFromEnv } from "./log-file.js";
 import { runMigrateCommand } from "./migrate.js";
+import { waitForServerShutdown } from "./server-shutdown.js";
 
 const helpText = `AICodeReviewer CLI
 
@@ -337,7 +339,7 @@ export async function runCli(
           }
         : undefined;
 
-      await serveAsync(app, {
+      const server = await serveAsync(app, {
         port,
         hostname: config.server.hostname,
         ...(proxyConfig ? { proxy: proxyConfig } : {}),
@@ -345,8 +347,12 @@ export async function runCli(
       logger.info({ port }, "AICR server started");
       stdout.write(`AICR server listening on port ${port}\n`);
 
-      return new Promise<number>(() => {
-        // Keep process alive until killed
+      return waitForServerShutdown({
+        server,
+        beginDrain: () => serverOptions.beginDrain?.() ?? Promise.resolve(),
+        close: async () => { await closeServerApp(serverOptions); await otelSdk?.shutdown(); },
+        stdout,
+        stderr,
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

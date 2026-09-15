@@ -28,7 +28,7 @@ import { execFile, spawn, spawnSync, type ChildProcess } from "node:child_proces
 import { once } from "node:events";
 import { createHmac } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { createServer } from "node:net";
+import { freeLoopbackPort as freePort } from "./fixtures/loopback-port.js";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -54,14 +54,6 @@ const DIGEST = "d".repeat(64);
 const WEBHOOK_SECRET = "replica-process-secret";
 const ADMIN = { username: "admin", password: "admin-password" };
 
-// Hyper-V excluded port ranges on this workstation (never rebind these).
-const EXCLUDED_PORT_RANGES: readonly (readonly [number, number])[] = [
-  [49455, 49554],
-  [50000, 50059],
-  [54081, 54180],
-  [55682, 56482],
-];
-
 /**
  * Real wall-clock waits are unavoidable in this file by design: every poll
  * awaits a condition owned by a SEPARATE OS process (child server boot,
@@ -74,21 +66,6 @@ function sleep(ms: number): Promise<void> {
   const { promise, resolve: wake } = Promise.withResolvers<void>();
   setTimeout(wake, ms);
   return promise;
-}
-
-async function freePort(): Promise<number> {
-  for (;;) {
-    const server = createServer();
-    const listening = Promise.withResolvers<void>();
-    server.listen(0, "127.0.0.1", listening.resolve);
-    await listening.promise;
-    const address = server.address();
-    const port = typeof address === "object" && address !== null ? address.port : 0;
-    const closed = Promise.withResolvers<void>();
-    server.close(() => closed.resolve());
-    await closed.promise;
-    if (port > 0 && !EXCLUDED_PORT_RANGES.some(([lo, hi]) => port >= lo && port <= hi)) return port;
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -398,6 +375,9 @@ async function startPostgres(binaries: PgBinaries, dataDir: string, port: number
   const proc = spawn(binaries.postgres, [
     "-D", dataDir, "-p", String(port),
     "-c", "listen_addresses=127.0.0.1",
+    // This fixture uses TCP only; distro defaults may require a privileged
+    // /var/run/postgresql socket directory that rootless tests do not own.
+    "-c", "unix_socket_directories=",
     "-c", "lc_messages=C",
   ], {
     windowsHide: true,

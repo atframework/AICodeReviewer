@@ -66,6 +66,52 @@ function plan(namespace = "store", sql?: string): NamespaceMigrationPlan {
 }
 
 describe("MigrationRunner (sqlite executor)", () => {
+  it("persists protocol requirements and rejects an incompatible reader or writer before DDL", async () => {
+    const db = await freshDb();
+    const future = { namespace: "config", targetVersion: 1,
+      steps: [{ ...sqliteSqlStep("001_future", 0, 1, "CREATE TABLE future_data (id TEXT)"), minReaderProtocol: 2, minWriterProtocol: 3 }] };
+    const oldReader = new MigrationRunner(createSqliteMigrationStore(db), [future], { protocol: { reader: 1, writer: 3 } });
+    const oldWriter = new MigrationRunner(createSqliteMigrationStore(db), [future], { protocol: { reader: 2, writer: 2 } });
+    for (const runner of [oldReader, oldWriter]) {
+      await expect(runner.apply()).rejects.toMatchObject({ code: "schema_version_unsupported" });
+      expect(db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all()).toEqual([]);
+    }
+    const compatible = new MigrationRunner(createSqliteMigrationStore(db), [future], { protocol: { reader: 2, writer: 3 } });
+    await compatible.apply();
+    expect(db.prepare("SELECT min_reader_protocol, min_writer_protocol, transaction_mode FROM schema_migrations").get())
+      .toEqual({ min_reader_protocol: 2, min_writer_protocol: 3, transaction_mode: "atomic" });
+    await expect(oldWriter.check()).rejects.toMatchObject({ code: "schema_version_unsupported" });
+    expect((await compatible.status())[0]?.protocol.compatible).toBe(true);
+  });
+
+  it("adds protocol metadata to a legacy ledger without changing its SQL checksum", async () => {
+    const db = await freshDb();
+    const p = plan();
+    db.exec("CREATE TABLE schema_migrations(namespace TEXT,id TEXT,checksum TEXT,from_version INTEGER,to_version INTEGER,app_version TEXT,applied_at INTEGER, PRIMARY KEY(namespace,id))");
+    db.exec(String((p.steps[0]!.payload as { sql: string }).sql));
+    db.prepare("INSERT INTO schema_migrations VALUES(?,?,?,?,?,?,?)").run("store", p.steps[0]!.id, p.steps[0]!.checksum, 0, 1, "historical", T0);
+    const runner = new MigrationRunner(createSqliteMigrationStore(db), [p]);
+    expect((await runner.check()).needsMigration).toEqual(["store"]);
+    expect(db.prepare("PRAGMA table_info(schema_migrations)").all()).toHaveLength(7);
+    await runner.apply();
+    const rows = db.prepare("SELECT checksum,min_reader_protocol,min_writer_protocol FROM schema_migrations ORDER BY to_version").all();
+    expect(rows).toEqual(p.steps.map(step => ({ checksum: step.checksum, min_reader_protocol: 1, min_writer_protocol: 1 })));
+    db.prepare("UPDATE schema_migrations SET min_writer_protocol=2 WHERE id=?").run(p.steps[0]!.id);
+    await expect(runner.apply()).rejects.toMatchObject({ code: "schema_version_unsupported" });
+  });
+
+  it.each([0, -1, 1.5, Number.NaN])("rejects invalid protocol requirement %s before opening a store", (minReaderProtocol) => {
+    const p = plan();
+    expect(() => new MigrationRunner({} as MigrationStore, [{ ...p, steps: [{ ...p.steps[0]!, minReaderProtocol }, p.steps[1]!] }]))
+      .toThrowError(expect.objectContaining({ code: "migration_failed" }));
+  });
+
+  it("rejects nontransactional migration bodies rather than claiming atomic execution", () => {
+    const p = plan();
+    const unsupported = { ...p.steps[0]!, transactionMode: "nontransactional" } as unknown as typeof p.steps[number];
+    expect(() => new MigrationRunner({} as MigrationStore, [{ ...p, steps: [unsupported, p.steps[1]!] }]))
+      .toThrowError(expect.objectContaining({ code: "migration_failed" }));
+  });
   it("applies pending steps and reports status (M01)", async () => {
     const db = await freshDb();
     const runner = new MigrationRunner(createSqliteMigrationStore(db), [plan()], { now: () => T0 });

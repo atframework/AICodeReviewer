@@ -64,7 +64,7 @@ export interface ReviewQueue {
   getDeadJobs(): Promise<readonly QueueJob[]>;
   requeueDead(jobId: string): Promise<QueueJob | undefined>;
   purgeDead(maxAgeMs?: number): Promise<number>;
-  close?(): void;
+  close?(): void | Promise<void>;
 }
 
 export function computeBackoffDelay(

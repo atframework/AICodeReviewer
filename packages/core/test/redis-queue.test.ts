@@ -8,11 +8,13 @@ const fakeBullMq = vi.hoisted(() => {
     waiting: [] as FakeJob[],
     completedTokens: [] as string[],
     failedTokens: [] as string[],
+    closed: [] as string[],
     reset(): void {
       this.jobs.clear();
       this.waiting.length = 0;
       this.completedTokens.length = 0;
       this.failedTokens.length = 0;
+      this.closed.length = 0;
     },
   };
 
@@ -59,13 +61,13 @@ const fakeBullMq = vi.hoisted(() => {
         throw new Error("invalid wait token");
       }
       this.state = "waiting";
-      this.token = undefined;
+      delete this.token;
       api.waiting.unshift(this);
     }
 
     async retry(): Promise<void> {
       this.state = "waiting";
-      this.failedReason = undefined;
+      delete this.failedReason;
       this.attemptsMade = 0;
       api.waiting.push(this);
     }
@@ -76,6 +78,7 @@ const fakeBullMq = vi.hoisted(() => {
   }
 
   class FakeQueue {
+    async close(): Promise<void> { api.closed.push("queue"); }
     async add(_name: string, data: unknown, opts: { attempts?: number }): Promise<FakeJob> {
       const job = new FakeJob(String(api.jobs.size + 1), data, opts);
       api.jobs.set(job.id, job);
@@ -107,6 +110,7 @@ const fakeBullMq = vi.hoisted(() => {
   }
 
   class FakeWorker {
+    async close(): Promise<void> { api.closed.push("worker"); }
     async getNextJob(token: string): Promise<FakeJob | undefined> {
       const job = api.waiting.shift();
       if (!job) return undefined;
@@ -128,6 +132,16 @@ vi.mock("bullmq", () => ({
 import { createRedisQueue } from "../src/redis-queue.js";
 
 describe("createRedisQueue", () => {
+  it("drains the claimed job before closing both Redis clients once", async () => {
+    const queue = await createRedisQueue({ connection: {} });
+    const job = await queue.enqueue({}, { workspaceId: "ws", triggerName: "t" });
+    await queue.dequeue("worker");
+    await expect(queue.close?.()).rejects.toThrow("active jobs");
+    expect(fakeBullMq.closed).toEqual([]);
+    await queue.complete(job.id);
+    await Promise.all([queue.close?.(), queue.close?.()]);
+    expect(fakeBullMq.closed).toEqual(["worker", "queue"]);
+  });
   beforeEach(() => {
     fakeBullMq.reset();
   });

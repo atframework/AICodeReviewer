@@ -948,8 +948,8 @@ review:
 # Legacy definition templates/AGENTS/.agents/skills are read-only fallbacks.
 # Set triggers[].enabled or workspaces.instances.<id>.enabled to false to stop
 # new admission; already accepted variable/binding snapshots remain readable.
-# Design: docs/superpowers/specs/2026-09-11-workspace-config-management.md
-# Plans: docs/superpowers/plans/2026-09-11-workspace-config-{implementation,tests}.md
+# Contracts: docs/ai/architecture.md sections 3.10 and 3.14-3.16.
+# Acceptance and upgrade boundaries: docs/ai/milestones/M24.md.
 #
 # Definition (under workspaces.instances; source_repo is mutually exclusive) —
 # see the live `shared-services` example below. For a GitHub trigger the same

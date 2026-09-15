@@ -38,6 +38,9 @@ interface LedgerRow {
   to_version: number;
   app_version: string | null;
   applied_at: number;
+  min_reader_protocol?: number;
+  min_writer_protocol?: number;
+  transaction_mode?: "atomic";
 }
 
 /** Builds a SQL step whose checksum pins the body (M16 drift detection). */
@@ -49,6 +52,9 @@ export function sqliteSqlStep(id: string, fromVersion: number, toVersion: number
     checksum: createHash("sha256").update(`${id}\n${sql}`).digest("hex"),
     description,
     payload: { sql },
+    minReaderProtocol: 1,
+    minWriterProtocol: 1,
+    transactionMode: "atomic",
   };
 }
 
@@ -81,12 +87,20 @@ export function createSqliteMigrationStore(db: SqliteMigrationDatabase): Migrati
           PRIMARY KEY (namespace, id)
         );
       `);
+      const columns = new Set((db.prepare(`PRAGMA table_info(${SCHEMA_MIGRATIONS_TABLE})`).all() as { name: string }[]).map(row => row.name));
+      for (const [name, declaration] of [
+        ["min_reader_protocol", "INTEGER NOT NULL DEFAULT 1"],
+        ["min_writer_protocol", "INTEGER NOT NULL DEFAULT 1"],
+        ["transaction_mode", "TEXT NOT NULL DEFAULT 'atomic'"],
+      ] as const) {
+        if (!columns.has(name)) db.exec(`ALTER TABLE ${SCHEMA_MIGRATIONS_TABLE} ADD COLUMN ${name} ${declaration}`);
+      }
       return Promise.resolve();
     },
 
     readApplied(namespace) {
       const rows = db.prepare(
-        `SELECT id, checksum, from_version, to_version, app_version, applied_at
+        `SELECT *
            FROM ${SCHEMA_MIGRATIONS_TABLE}
           WHERE namespace = ?
           ORDER BY to_version ASC`,
@@ -98,6 +112,9 @@ export function createSqliteMigrationStore(db: SqliteMigrationDatabase): Migrati
         toVersion: row.to_version,
         appVersion: row.app_version,
         appliedAt: row.applied_at,
+        ...(row.min_reader_protocol !== undefined ? { minReaderProtocol: row.min_reader_protocol } : {}),
+        ...(row.min_writer_protocol !== undefined ? { minWriterProtocol: row.min_writer_protocol } : {}),
+        ...(row.transaction_mode !== undefined ? { transactionMode: row.transaction_mode } : {}),
       })));
     },
 
@@ -127,9 +144,10 @@ export function createSqliteMigrationStore(db: SqliteMigrationDatabase): Migrati
     recordApplied(namespace, step, appVersion, now) {
       db.prepare(
         `INSERT INTO ${SCHEMA_MIGRATIONS_TABLE}
-           (namespace, id, checksum, from_version, to_version, app_version, applied_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      ).run(namespace, step.id, step.checksum, step.fromVersion, step.toVersion, appVersion, now);
+           (namespace, id, checksum, from_version, to_version, app_version, applied_at, min_reader_protocol, min_writer_protocol, transaction_mode)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(namespace, step.id, step.checksum, step.fromVersion, step.toVersion, appVersion, now,
+        step.minReaderProtocol ?? 1, step.minWriterProtocol ?? 1, step.transactionMode ?? "atomic");
       return Promise.resolve();
     },
   };

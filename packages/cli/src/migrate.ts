@@ -27,6 +27,7 @@ function renderStatus(statuses: readonly NamespaceMigrationStatus[]): string {
     targetVersion: status.targetVersion, applied: status.appliedIds,
     pending: status.pendingIds, drifted: status.driftedIds,
     unknownHigherVersion: status.unknownHigherVersion,
+    protocol: status.protocol,
   })), null, 2) + "\n";
 }
 
@@ -34,8 +35,8 @@ function report(options: MigrateCommandOptions, statuses: readonly NamespaceMigr
   options.stdout.write(renderStatus(statuses));
   if (options.mode === "status") return MIGRATE_EXIT.ok;
   for (const status of statuses) {
-    if (status.driftedIds.length > 0 || status.unknownHigherVersion !== null) {
-      options.stderr.write('aicr migrate: unsafe migration ledger in namespace "' + status.namespace + '" (drift or newer schema).\n');
+    if (status.driftedIds.length > 0 || status.unknownHigherVersion !== null || !status.protocol.compatible) {
+      options.stderr.write('aicr migrate: unsafe migration ledger in namespace "' + status.namespace + '" (drift, newer schema or incompatible reader/writer protocol).\n');
       return MIGRATE_EXIT.unsafe;
     }
   }

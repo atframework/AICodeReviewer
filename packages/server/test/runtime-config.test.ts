@@ -160,6 +160,25 @@ describe("RuntimeConfigManager", () => {
     expect(pins[0]?.value).toMatchObject({ state: "ended" });
   });
 
+  it("M17: drain refuses new admissions but waits for accepted timers and their final writes", async () => {
+    const manager = makeManager();
+    const generation = await manager.admission();
+    const finish = manager.retainBackgroundTask();
+    let drained = false;
+    const draining = manager.drain().then(() => { drained = true; });
+    await expect(manager.admission()).rejects.toThrow("draining");
+    expect(manager.status()).toMatchObject({ draining: true, pendingTasks: 1 });
+    // The accepted timer can still acquire its pinned generation after drain starts.
+    await manager.withGeneration(generation, async () => {});
+    await new Promise(resolve => setTimeout(resolve, 35));
+    expect(drained).toBe(false);
+    finish();
+    finish();
+    await draining;
+    expect(manager.status().pendingTasks).toBe(0);
+    await expect(manager.admission()).rejects.toThrow("closed");
+  });
+
   it.each(["memory", "sqlite"])("H08/H10: %s queue versions survive duplicate enqueue, publish and restart", async kind => {
     const manager = makeManager();
     await manager.legacyImport();

@@ -5,6 +5,7 @@ import { z } from "zod";
 
 import {
   CONFIG_ENTITY_COLLECTIONS,
+  assertConfigDatabaseFormat,
   ConfigError,
   entityCollectionsForVersion,
   formatConfigPath,
@@ -576,6 +577,7 @@ export function validateDatabaseDocument(
   raw: unknown,
   formatVersion = 1,
 ): DatabaseConfigDocument {
+  assertConfigDatabaseFormat(formatVersion);
   assertNoPrototypeKeys(raw, []);
   const document = databaseConfigDocumentSchema.parse(raw);
   if (document.entities?.routes !== undefined && formatVersion < 2) {

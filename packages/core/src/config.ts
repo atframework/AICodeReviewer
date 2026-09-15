@@ -4,7 +4,7 @@ import { parse as parseYaml } from "yaml";
 import { z } from "zod";
 
 import { reviewTargetKindSchema } from "./review-event.js";
-import { CONFIG_MATCHER_LIMITS, configMatcherSchema, reasoningEffortSchema } from "./config-format.js";
+import { CONFIG_MATCHER_LIMITS, assertConfigDatabaseFormat, configMatcherSchema, reasoningEffortSchema } from "./config-format.js";
 import { validateWorkspaceDefinitions } from "./config-workspace.js";
 import { autoCommitConfigSchema, type AutoCommitConfig } from "./auto-commit-policy.js";
 import { pullRequestConfigSchema, type PullRequestConfig } from "./pull-request-policy.js";
@@ -1306,6 +1306,7 @@ export type EffectiveConfigV2 = z.infer<typeof effectiveConfigV2Schema>;
 
 /** Parses an effective (merged) config document at the given format version. */
 export function parseEffectiveConfig(input: unknown, formatVersion = 1): EffectiveConfigV2 {
+  assertConfigDatabaseFormat(formatVersion);
   return (formatVersion >= 2 ? effectiveConfigV2Schema : appConfigSchema).parse(input) as EffectiveConfigV2;
 }
 

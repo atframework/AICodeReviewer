@@ -56,6 +56,13 @@ The server exposes `/healthz`, `/readyz`, `/metrics`, `/dashboard`,
 `/api/admin/*`, `/webhooks/*`, and `/triggers/*`. See [Authentication &
 secrets](/en/configuration/authentication/) for how each route is protected.
 
+On a catchable SIGTERM or SIGINT, `serve` stops ingress and claims, waits for
+accepted requests, reviews, publication and final persistence, then closes its
+stores and queue connections. Wait for `AICR server drained and closed.` and
+process exit before migrating. A failed drain exits the command with code 1 and
+does not authorize migration while the process is still alive. Forced termination
+(including Windows process termination) does not provide graceful-drain evidence.
+
 ## review
 
 Run a single review without the long-running server. With `--dry-run` it

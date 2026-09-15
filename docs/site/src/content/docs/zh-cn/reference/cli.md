@@ -53,6 +53,11 @@ node packages/cli/dist/index.js serve \
 服务暴露 `/healthz`、`/readyz`、`/metrics`、`/dashboard`、`/api/admin/*`、`/webhooks/*`、
 `/triggers/*`。各路由的鉴权方式见[认证与密钥](/zh-cn/configuration/authentication/)。
 
+收到可捕获的 SIGTERM 或 SIGINT 时，`serve` 停止入口和 claim，等待已接收请求、
+审查、输出发布及结果落库，再关闭存储和队列连接。迁移前必须等到
+`AICR server drained and closed.` 及进程退出。排空失败时命令返回 1；只要旧进程
+仍在运行，就不能据此开始迁移。强制终止（包括 Windows 进程终止）不证明已排空。
+
 ## review
 
 不启动常驻服务，运行单次评审。加 `--dry-run` 会准备并运行评审，但跳过所有输出通道。

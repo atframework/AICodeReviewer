@@ -107,6 +107,9 @@ interface LedgerRow {
   to_version: number;
   app_version: string | null;
   applied_at: string | number;
+  min_reader_protocol?: number;
+  min_writer_protocol?: number;
+  transaction_mode?: "atomic";
 }
 
 /** Builds a SQL step whose checksum pins the body (M16 drift detection). */
@@ -118,6 +121,9 @@ export function pgConfigSqlStep(id: string, fromVersion: number, toVersion: numb
     checksum: createHash("sha256").update(`${id}\n${sql}`).digest("hex"),
     description,
     payload: { sql },
+    minReaderProtocol: 1,
+    minWriterProtocol: 1,
+    transactionMode: "atomic",
   };
 }
 
@@ -151,6 +157,9 @@ export function createPgConfigMigrationStore(client: PgConfigMigrationClient): M
           applied_at bigint NOT NULL,
           PRIMARY KEY (namespace, id)
         );
+        ALTER TABLE schema_migrations ADD COLUMN IF NOT EXISTS min_reader_protocol integer NOT NULL DEFAULT 1;
+        ALTER TABLE schema_migrations ADD COLUMN IF NOT EXISTS min_writer_protocol integer NOT NULL DEFAULT 1;
+        ALTER TABLE schema_migrations ADD COLUMN IF NOT EXISTS transaction_mode text NOT NULL DEFAULT 'atomic';
       `);
     },
 
@@ -169,6 +178,8 @@ export function createPgConfigMigrationStore(client: PgConfigMigrationClient): M
     async withMigrationLock(fn) {
       await client.query("BEGIN");
       try {
+        await client.query("SET LOCAL lock_timeout = '5s'");
+        await client.query("SET LOCAL statement_timeout = '30s'");
         await client.query(`SELECT pg_advisory_xact_lock(${PG_CONFIG_MIGRATION_LOCK_KEY})`);
         const result = await fn();
         await client.query("COMMIT");
@@ -181,7 +192,7 @@ export function createPgConfigMigrationStore(client: PgConfigMigrationClient): M
 
     async readApplied(namespace) {
       const result = await client.query(
-        `SELECT id, checksum, from_version, to_version, app_version, applied_at
+        `SELECT *
            FROM schema_migrations
           WHERE namespace = $1
           ORDER BY to_version ASC`,
@@ -194,6 +205,9 @@ export function createPgConfigMigrationStore(client: PgConfigMigrationClient): M
         toVersion: row.to_version,
         appVersion: row.app_version,
         appliedAt: Number(row.applied_at),
+        ...(row.min_reader_protocol !== undefined ? { minReaderProtocol: row.min_reader_protocol } : {}),
+        ...(row.min_writer_protocol !== undefined ? { minWriterProtocol: row.min_writer_protocol } : {}),
+        ...(row.transaction_mode !== undefined ? { transactionMode: row.transaction_mode } : {}),
       }));
     },
 
@@ -204,9 +218,10 @@ export function createPgConfigMigrationStore(client: PgConfigMigrationClient): M
     async recordApplied(namespace, step, appVersion, now) {
       await client.query(
         `INSERT INTO schema_migrations
-           (namespace, id, checksum, from_version, to_version, app_version, applied_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-        [namespace, step.id, step.checksum, step.fromVersion, step.toVersion, appVersion, now],
+           (namespace, id, checksum, from_version, to_version, app_version, applied_at, min_reader_protocol, min_writer_protocol, transaction_mode)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+        [namespace, step.id, step.checksum, step.fromVersion, step.toVersion, appVersion, now,
+          step.minReaderProtocol ?? 1, step.minWriterProtocol ?? 1, step.transactionMode ?? "atomic"],
       );
     },
   };
@@ -517,6 +532,7 @@ export async function createPgConfigStore(options: PgConfigStoreOptions): Promis
         // plus the whole migration batch: CREATE SCHEMA IF NOT EXISTS races
         // two fresh processes on pg_namespace, and only one process may own
         // the upgrade (M04) — same pattern as packages/store/src/database.ts.
+        await client.query("SET lock_timeout = '5s'");
         await client.query(`SELECT pg_advisory_lock(${PG_CONFIG_MIGRATION_LOCK_KEY})`);
         try {
           // One dedicated client for the whole migration batch (M07): BEGIN →
@@ -546,6 +562,7 @@ export async function createPgConfigStore(options: PgConfigStoreOptions): Promis
           }
         } finally {
           await client.query(`SELECT pg_advisory_unlock(${PG_CONFIG_MIGRATION_LOCK_KEY})`).catch(() => {});
+          await client.query("RESET lock_timeout");
         }
       } finally {
         client.release();

@@ -198,4 +198,41 @@ describe("createQueueWorker", () => {
 
     expect(completed).toBe(true);
   });
+
+  it("does not finish drain while an asynchronous claim is still in flight", async () => {
+    let release!: () => void;
+    const blocked = new Promise<void>(resolve => { release = resolve; });
+    const dequeue = queue.dequeue.bind(queue);
+    queue.dequeue = async (...args) => { await blocked; return dequeue(...args); };
+    const processed = vi.fn(async () => {});
+    const worker = createTestWorker(processed);
+    await queue.enqueue({}, { workspaceId: "ws", triggerName: "t" });
+    worker.start();
+    await vi.advanceTimersByTimeAsync(1);
+    let drained = false;
+    const draining = worker.stop().then(() => { drained = true; });
+    await vi.advanceTimersByTimeAsync(100);
+    expect(drained).toBe(false);
+    release();
+    await vi.advanceTimersByTimeAsync(100);
+    await draining;
+    expect(processed).toHaveBeenCalledTimes(1);
+    expect((await queue.getStats()).completed).toBe(1);
+  });
+
+  it("reports an incomplete drain instead of silently closing under a running job", async () => {
+    let release!: () => void;
+    const worker = createTestWorker(() => new Promise<void>(resolve => { release = resolve; }));
+    await queue.enqueue({}, { workspaceId: "ws", triggerName: "t" });
+    worker.start();
+    await vi.advanceTimersByTimeAsync(1);
+    const stopped = expect(worker.stop()).rejects.toThrow("not drained");
+    await vi.advanceTimersByTimeAsync(30_000);
+    await stopped;
+    expect((await queue.getStats()).running).toBe(1);
+    release();
+    await vi.advanceTimersByTimeAsync(100);
+    await worker.stop();
+    expect((await queue.getStats()).completed).toBe(1);
+  });
 });

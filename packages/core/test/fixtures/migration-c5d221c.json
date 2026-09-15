@@ -1,0 +1,17 @@
+{
+  "revision": "c5d221c5fc54bf5322f9eaa4c900937ddc267bd1",
+  "builder": "esbuild 0.28.2",
+  "sha256": "e100e8bd6ec66d3a4cc32cbe087ec73f2a0acf765631a11aca5a2df61caa673a",
+  "sourceHashes": {
+    "packages/core/src/config-format.ts": "3d25b9a5c900200b9c0efeaed1a87cdc8fcc7fbaa1f49459f60b7c5ffca31862",
+    "packages/core/src/config-store.ts": "9f9faa283ffbf7add70d40fc4c9561adb6bb7dd1fbfeff8c25ef00d8d3f18922",
+    "packages/core/src/migration-runner.ts": "3d3e98d639f39b19f1aba6cf2a9c8f0f994b79a51fe3d989c29a8ac7b65912c3",
+    "packages/core/src/sqlite-migration-store.ts": "ad798097ec20086901fad6b99c82ae154b17d19d6c36450620225efdd27b7aac",
+    "packages/core/src/sqlite-config-store.ts": "5d78d21a87c5a4f087b6a13f8dbf6d807b9fd65348724c9a3fb0d2d67462f3bd",
+    "packages/core/src/pg-config-store.ts": "166e92eda165749ee2072388a8f6e8e3feeb70765e36007c4a3e2e166a4b5a93",
+    "packages/core/src/redis-config-store.ts": "535bf6e874815f48664ccf51115ff63304423487d27efe7eacd6f10cf39b6ce1",
+    "packages/core/src/config-capabilities.ts": "1c41823688c1b098f84cb85b843357d200a24b4fa21281c096dfaba959802862",
+    "packages/core/src/utils.ts": "c3375a55c0e601a743edc3dbb3e95e2201d9a36322f65a0b43e3ebd8561e7478",
+    "packages/core/src/config-source.ts": "fcb1bbb853f4dc1229fc725cc89d27c0e18d8acab81afa50209cead3a4dd1f78"
+  }
+}

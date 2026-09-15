@@ -98,8 +98,9 @@ the draft is optional, and a draft based on an older revision is answered
 
 ### Store upgrades
 
-The deployment database keeps a checksummed migration ledger for both the
-`config` and `store` namespaces, on SQLite and PostgreSQL. Inspect or apply it
+The deployment database keeps a checksummed migration ledger for config and
+PostgreSQL business tables; SQLite business tables retain their name-only
+legacy ledger. Inspect or apply both namespaces
 without starting the server:
 
 ```bash
@@ -114,6 +115,13 @@ node packages/cli/dist/index.js migrate --apply  --config example/config.yaml
 Exactly one flag is required. `storage.database.migrate` controls the startup
 behavior (`auto` / `verify`); `verify` refuses to boot a behind or drifted
 ledger. Checksum drift and newer unknown schemas are never auto-repaired.
+
+Before the first upgrade, stop ingress and claims on every old instance, drain
+accepted work, confirm every old process has exited, and back up the database.
+The current `serve` command handles SIGTERM/SIGINT by draining before closing;
+wait for `AICR server drained and closed.` and process exit. A forced process
+termination does not prove drain. Migration JSON reports reader/writer protocol
+requirements (currently 1/1); database configuration documents accept v1/v2 only.
 
 ### Conflict precedence
 

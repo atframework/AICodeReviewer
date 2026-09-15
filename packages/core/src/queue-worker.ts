@@ -34,6 +34,7 @@ export function createQueueWorker(
   let running = false;
   let activeJobs = 0;
   let pollTimer: ReturnType<typeof setTimeout> | undefined;
+  let polling = false;
   const workspaceActive = new Map<string, number>();
 
   function getWorkspaceActive(workspaceId: string): number {
@@ -86,6 +87,7 @@ export function createQueueWorker(
 
   async function poll(): Promise<void> {
     if (!running) return;
+    polling = true;
 
     try {
       await options.beforePoll?.();
@@ -99,6 +101,8 @@ export function createQueueWorker(
       }
     } catch {
       // Poll errors are non-fatal; retry on next tick
+    } finally {
+      polling = false;
     }
 
     if (running) {
@@ -124,11 +128,12 @@ export function createQueueWorker(
 
       const maxWaitMs = 30_000;
       const start = Date.now();
-      while (activeJobs > 0 && (Date.now() - start) < maxWaitMs) {
+      while ((activeJobs > 0 || polling) && (Date.now() - start) < maxWaitMs) {
         await new Promise<void>((resolve) => {
           setTimeout(resolve, 100);
         });
       }
+      if (activeJobs > 0 || polling) throw new Error(`Queue worker ${workerId} is not drained: ${activeJobs} active job(s), polling=${polling}.`);
     },
 
     isRunning(): boolean {

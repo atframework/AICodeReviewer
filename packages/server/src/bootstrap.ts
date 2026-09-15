@@ -3394,6 +3394,16 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
   const triggerRetry = resolveTriggerRetryConfig(config);
   const fileTriage = resolveIssueTriageOptions(config, triageModelOptionsResolver().llm, triageModelOptionsResolver().model);
 
+  let draining: Promise<void> | undefined;
+  const beginDrain = (): Promise<void> => {
+    if (draining) return draining;
+    runtimeConfig.stopAdmission();
+    deferralManager.stop();
+    if (sweepTimer) clearInterval(sweepTimer);
+    draining = Promise.all([sweepRunning, worker?.stop(), autoCommitPipeline.scheduler.stopAndDrain()]).then(() => {});
+    return draining;
+  };
+
   return {
     // Fixed dispatcher sources (P4/H06): index.ts resolves these per request
     // against the current generation; trigger changes apply to the next
@@ -3425,13 +3435,14 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
     // scheduler; PR/issue/comment/manual flows run on the async path below.
     autoCommit: autoCommitPipeline.runtime,
     autoCommitStore: autoCommitPipeline.store,
+    beginDrain,
     closeAutoCommit: async () => {
-      if (sweepTimer) clearInterval(sweepTimer);
-      await sweepRunning;
-      await worker?.stop();
+      await beginDrain();
+      await runtimeConfig.drain();
+      await deferralManager.drain();
       await autoCommitPipeline.close();
       await runtimeConfigStore?.close();
-      runtimeConfig.close();
+      await queue.close?.();
       await catalogBackendToClose?.close?.();
     },
     // Runtime config manager (P4): admission barrier + generation pinning.

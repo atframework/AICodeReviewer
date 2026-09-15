@@ -1,0 +1,2838 @@
+// build/tmp/p8-historical-source/packages/core/src/sqlite-config-store.ts
+import { randomUUID } from "node:crypto";
+import { existsSync, mkdirSync } from "node:fs";
+import { dirname } from "node:path";
+
+// build/tmp/p8-historical-source/packages/core/src/config-format.ts
+import { z } from "zod";
+var reasoningEffortSchema = z.enum(["minimal", "low", "medium", "high", "max"]);
+var ConfigError = class extends Error {
+  code;
+  path;
+  entity;
+  constructor(code, message, details = {}) {
+    super(message, details.cause !== void 0 ? { cause: details.cause } : void 0);
+    this.name = "ConfigError";
+    this.code = code;
+    this.path = details.path;
+    this.entity = details.entity;
+  }
+};
+var PROTOTYPE_KEYS = Object.fromEntries(
+  ["__proto__", "prototype", "constructor"].map((key) => [key, true])
+);
+var PLAIN_SEGMENT_RE = /^[A-Za-z0-9][A-Za-z0-9_-]*$/u;
+function isPrototypeKey(segment) {
+  return PROTOTYPE_KEYS[segment] === true;
+}
+function formatConfigPath(path) {
+  return path.map((segment) => {
+    if (PLAIN_SEGMENT_RE.test(segment)) {
+      return `.${segment}`;
+    }
+    return `[${JSON.stringify(segment)}]`;
+  }).join("").replace(/^\./u, "");
+}
+var CONFIG_ENTITY_COLLECTIONS = {
+  provider: { kind: "provider", path: ["llm", "providers"], shape: "array", idField: "id", since: 1 },
+  model_group: { kind: "model_group", path: ["llm", "model_chain"], shape: "map", idField: null, since: 1 },
+  trigger: { kind: "trigger", path: ["triggers"], shape: "array", idField: "name", since: 1 },
+  channel: { kind: "channel", path: ["outputs", "channels"], shape: "array", idField: "name", since: 1 },
+  workspace: { kind: "workspace", path: ["workspaces", "instances"], shape: "map", idField: null, since: 1 },
+  // Reserved for the v2 routing format (spec §6); rejected by the v1 schema.
+  route: { kind: "route", path: ["routing", "rules"], shape: "array", idField: "id", since: 2 }
+};
+function entityCollectionsForVersion(formatVersion) {
+  return Object.values(CONFIG_ENTITY_COLLECTIONS).filter((collection) => collection.since <= formatVersion);
+}
+function stableSerializeInto(value, out, ancestors) {
+  if (value === null) {
+    out.push("null");
+    return;
+  }
+  switch (typeof value) {
+    case "boolean":
+      out.push(JSON.stringify(value));
+      return;
+    case "number":
+      if (!Number.isFinite(value)) {
+        throw new TypeError("stableConfigHash requires finite numbers.");
+      }
+      out.push(JSON.stringify(value));
+      return;
+    case "string":
+      out.push(JSON.stringify(value));
+      return;
+    case "object": {
+      if (ancestors.has(value)) {
+        throw new TypeError("stableConfigHash cannot serialize cyclic values.");
+      }
+      ancestors.add(value);
+      if (Array.isArray(value)) {
+        out.push("[");
+        for (const entry of value) {
+          stableSerializeInto(entry, out, ancestors);
+          out.push(",");
+        }
+        out.push("]");
+        ancestors.delete(value);
+        return;
+      }
+      if (Object.getPrototypeOf(value) !== Object.prototype && Object.getPrototypeOf(value) !== null) {
+        throw new TypeError("stableConfigHash only accepts plain objects, arrays, and primitives.");
+      }
+      out.push("{");
+      for (const key of Object.keys(value).sort()) {
+        const entry = value[key];
+        if (entry === void 0) {
+          continue;
+        }
+        out.push(JSON.stringify(key), ":");
+        stableSerializeInto(entry, out, ancestors);
+        out.push(",");
+      }
+      out.push("}");
+      ancestors.delete(value);
+      return;
+    }
+    default:
+      throw new TypeError(`stableConfigHash cannot serialize ${typeof value}.`);
+  }
+}
+function stableSerialize(value) {
+  const out = [];
+  stableSerializeInto(value, out, /* @__PURE__ */ new Set());
+  return out.join("");
+}
+var CONFIG_MATCHER_LIMITS = {
+  maxRulesPerGroup: 128,
+  maxExpressionBytes: 1024,
+  maxFieldBytes: 4096,
+  maxTotalBytes: 64 * 1024
+};
+var configMatcherSchema = z.union([
+  z.object({ exact: z.string().min(1) }).strict(),
+  z.object({ glob: z.string().min(1), ignore_case: z.boolean().optional() }).strict(),
+  z.object({ regex: z.string().min(1), ignore_case: z.boolean().optional() }).strict()
+]);
+
+// build/tmp/p8-historical-source/packages/core/src/config-store.ts
+import { createHash } from "node:crypto";
+function assertNamespace(namespace) {
+  if (typeof namespace !== "string" || namespace.length === 0 || namespace.length > 128) {
+    throw new ConfigError("store_unavailable", `Config namespace must be 1..128 chars; got ${JSON.stringify(namespace)}.`);
+  }
+}
+function assertStoreOpen(closed, backend) {
+  if (closed) {
+    throw new ConfigError("store_unavailable", `${backend} config store is closed.`);
+  }
+}
+function copyConfigValue(value) {
+  if (value === null || typeof value !== "object") return value;
+  return JSON.parse(JSON.stringify(value));
+}
+function contentHashOf(document) {
+  return createHash("sha256").update(stableStringify(document)).digest("hex");
+}
+function sameConfigOperation(existing, input) {
+  return existing.contentHash === contentHashOf(input.document) && existing.fileDigest === input.fileDigest && existing.formatVersion === input.formatVersion;
+}
+function sameSnapshotContent(existing, input) {
+  return existing.namespace === input.namespace && existing.fileDigest === input.fileDigest && existing.databaseRevision === input.databaseRevision && existing.resolverVersion === input.resolverVersion && existing.contentHash === input.contentHash && stableSerialize(existing.sanitizedEffectiveConfig) === stableSerialize(input.sanitizedEffectiveConfig);
+}
+function stableStringify(value) {
+  if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
+  const entries = Object.entries(value).filter(([, entry]) => entry !== void 0).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([key, entry]) => `${JSON.stringify(key)}:${stableStringify(entry)}`);
+  return `{${entries.join(",")}}`;
+}
+
+// build/tmp/p8-historical-source/packages/core/src/migration-runner.ts
+function computeNamespaceMigrationStatus(namespace, plan, applied) {
+  const planIds = new Map(plan.steps.map((step) => [step.id, step]));
+  const drifted = [];
+  let unknownHigher = null;
+  let current = 0;
+  const ordered = [...applied].sort((a, b) => a.toVersion - b.toVersion);
+  const seen = /* @__PURE__ */ new Set();
+  for (const row of ordered) {
+    const step = planIds.get(row.id);
+    if (step === void 0) {
+      if (row.toVersion > plan.targetVersion && (unknownHigher === null || row.toVersion > unknownHigher)) {
+        unknownHigher = row.toVersion;
+      } else {
+        drifted.push(row.id);
+      }
+      continue;
+    }
+    if (seen.has(row.id) || row.fromVersion !== step.fromVersion || row.toVersion !== step.toVersion || row.fromVersion !== current || row.checksum !== null && row.checksum !== step.checksum) {
+      drifted.push(row.id);
+    }
+    seen.add(row.id);
+    if (row.toVersion > current) current = row.toVersion;
+  }
+  const appliedIds = new Set(applied.map((row) => row.id));
+  const pendingIds = plan.steps.filter((step) => !appliedIds.has(step.id)).map((step) => step.id);
+  return {
+    namespace,
+    currentVersion: current,
+    targetVersion: plan.targetVersion,
+    appliedIds: ordered.map((row) => row.id),
+    pendingIds,
+    driftedIds: drifted,
+    unknownHigherVersion: unknownHigher
+  };
+}
+function refuseUnsafeStatus(status) {
+  if (status.driftedIds.length > 0) {
+    throw new ConfigError(
+      "schema_version_unsupported",
+      `Migration ledger drift in namespace "${status.namespace}": ${status.driftedIds.join(", ")} checksum(s) no longer match this program (M16).`
+    );
+  }
+  if (status.unknownHigherVersion !== null) {
+    throw new ConfigError(
+      "schema_version_unsupported",
+      `Namespace "${status.namespace}" was migrated to version ${status.unknownHigherVersion} by a newer program; refusing to write (M16).`
+    );
+  }
+}
+var MigrationRunner = class {
+  #store;
+  #plans;
+  #appVersion;
+  #now;
+  constructor(store, plans, options = {}) {
+    this.#store = store;
+    this.#plans = plans;
+    this.#appVersion = options.appVersion ?? null;
+    this.#now = options.now ?? Date.now;
+    const namespaces = /* @__PURE__ */ new Set();
+    for (const plan of plans) {
+      if (namespaces.has(plan.namespace)) {
+        throw new ConfigError("migration_failed", `Duplicate migration namespace "${plan.namespace}".`);
+      }
+      namespaces.add(plan.namespace);
+      if (!Number.isSafeInteger(plan.targetVersion) || plan.targetVersion < 0 || (plan.steps.length === 0 ? plan.targetVersion !== 0 : plan.steps[0].fromVersion !== 0 || plan.steps.at(-1).toVersion !== plan.targetVersion) || new Set(plan.steps.map((step) => step.id)).size !== plan.steps.length || plan.steps.some((step) => !Number.isSafeInteger(step.fromVersion) || !Number.isSafeInteger(step.toVersion) || step.toVersion !== step.fromVersion + 1)) {
+        throw new ConfigError("migration_failed", `Migration chain in namespace "${plan.namespace}" is not contiguous or has invalid versions/ids.`);
+      }
+      for (let i = 1; i < plan.steps.length; i += 1) {
+        const prev = plan.steps[i - 1];
+        const step = plan.steps[i];
+        if (step.fromVersion !== prev.toVersion) {
+          throw new ConfigError(
+            "migration_failed",
+            `Migration chain in namespace "${plan.namespace}" is not contiguous at "${step.id}".`
+          );
+        }
+      }
+    }
+  }
+  /**
+   * Reads the ledger without locking; safe for status reporting. When the
+   * store provides `ledgerExists`, a missing ledger reports every step as
+   * pending without executing any DDL (the migrate=verify startup gate and
+   * the CLI `--status`/`--check` modes must not mutate the database).
+   */
+  async status() {
+    if (this.#store.ledgerExists !== void 0) {
+      if (!await this.#store.ledgerExists()) {
+        return this.#plans.map((plan) => computeNamespaceMigrationStatus(plan.namespace, plan, []));
+      }
+    } else {
+      await this.#store.ensureLedger();
+    }
+    const statuses = [];
+    for (const plan of this.#plans) {
+      const applied = await this.#store.readApplied(plan.namespace);
+      statuses.push(computeNamespaceMigrationStatus(plan.namespace, plan, applied));
+    }
+    return statuses;
+  }
+  /** Dry-run: reports pending work and refuses drifted/unknown state. */
+  async check() {
+    const statuses = await this.status();
+    for (const status of statuses) refuseUnsafeStatus(status);
+    return {
+      ok: true,
+      needsMigration: statuses.filter((status) => status.pendingIds.length > 0).map((status) => status.namespace),
+      statuses
+    };
+  }
+  /**
+   * Applies pending steps. The ledger is re-read inside the migration lock
+   * so a concurrent winner is observed, not overwritten (M04).
+   */
+  async apply() {
+    return this.#store.withMigrationLock(async () => {
+      await this.#store.ensureLedger();
+      const appliedByNamespace = {};
+      const statuses = [];
+      for (const plan of this.#plans) {
+        const applied = await this.#store.readApplied(plan.namespace);
+        const status = computeNamespaceMigrationStatus(plan.namespace, plan, applied);
+        refuseUnsafeStatus(status);
+        const appliedIds = new Set(applied.map((row) => row.id));
+        let runningVersion = status.currentVersion;
+        const justApplied = [];
+        for (const step of plan.steps) {
+          if (appliedIds.has(step.id)) continue;
+          if (step.fromVersion !== runningVersion) {
+            throw new ConfigError(
+              "migration_failed",
+              `Cannot apply "${step.id}" in namespace "${plan.namespace}": running version ${runningVersion}, expected ${step.fromVersion}.`
+            );
+          }
+          await this.#store.applyStep(step);
+          await this.#store.recordApplied(plan.namespace, step, this.#appVersion, this.#now());
+          runningVersion = step.toVersion;
+          justApplied.push(step.id);
+        }
+        appliedByNamespace[plan.namespace] = justApplied;
+        statuses.push(computeNamespaceMigrationStatus(plan.namespace, plan, [
+          ...applied,
+          ...plan.steps.filter((step) => justApplied.includes(step.id)).map((step) => ({
+            id: step.id,
+            checksum: step.checksum,
+            fromVersion: step.fromVersion,
+            toVersion: step.toVersion,
+            appVersion: this.#appVersion,
+            appliedAt: this.#now()
+          }))
+        ]));
+      }
+      return { appliedByNamespace, statuses };
+    });
+  }
+};
+
+// build/tmp/p8-historical-source/packages/core/src/sqlite-migration-store.ts
+import { createHash as createHash2 } from "node:crypto";
+var SCHEMA_MIGRATIONS_TABLE = "schema_migrations";
+function sqliteSqlStep(id, fromVersion, toVersion, sql, description) {
+  return {
+    id,
+    fromVersion,
+    toVersion,
+    checksum: createHash2("sha256").update(`${id}
+${sql}`).digest("hex"),
+    description,
+    payload: { sql }
+  };
+}
+function sqlOf(step) {
+  const payload = step.payload;
+  if (payload === void 0 || typeof payload.sql !== "string") {
+    throw new Error(`sqlite migration store cannot apply non-SQL step "${step.id}"`);
+  }
+  return payload.sql;
+}
+function createSqliteMigrationStore(db) {
+  return {
+    backendKind: "sqlite",
+    ledgerExists() {
+      return Promise.resolve(db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?").get(SCHEMA_MIGRATIONS_TABLE) !== void 0);
+    },
+    ensureLedger() {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS ${SCHEMA_MIGRATIONS_TABLE} (
+          namespace TEXT NOT NULL,
+          id TEXT NOT NULL,
+          checksum TEXT,
+          from_version INTEGER NOT NULL,
+          to_version INTEGER NOT NULL,
+          app_version TEXT,
+          applied_at INTEGER NOT NULL,
+          PRIMARY KEY (namespace, id)
+        );
+      `);
+      return Promise.resolve();
+    },
+    readApplied(namespace) {
+      const rows = db.prepare(
+        `SELECT id, checksum, from_version, to_version, app_version, applied_at
+           FROM ${SCHEMA_MIGRATIONS_TABLE}
+          WHERE namespace = ?
+          ORDER BY to_version ASC`
+      ).all(namespace);
+      return Promise.resolve(rows.map((row) => ({
+        id: row.id,
+        checksum: row.checksum,
+        fromVersion: row.from_version,
+        toVersion: row.to_version,
+        appVersion: row.app_version,
+        appliedAt: row.applied_at
+      })));
+    },
+    async withMigrationLock(fn) {
+      db.exec("BEGIN IMMEDIATE");
+      try {
+        const result = await fn();
+        db.exec("COMMIT");
+        return result;
+      } catch (error) {
+        db.exec("ROLLBACK");
+        throw error;
+      }
+    },
+    applyStep(step) {
+      db.exec(sqlOf(step));
+      return Promise.resolve();
+    },
+    recordApplied(namespace, step, appVersion, now) {
+      db.prepare(
+        `INSERT INTO ${SCHEMA_MIGRATIONS_TABLE}
+           (namespace, id, checksum, from_version, to_version, app_version, applied_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`
+      ).run(namespace, step.id, step.checksum, step.fromVersion, step.toVersion, appVersion, now);
+      return Promise.resolve();
+    }
+  };
+}
+
+// build/tmp/p8-historical-source/packages/core/src/sqlite-config-store.ts
+async function loadBetterSqlite3() {
+  try {
+    const mod = await import("better-sqlite3");
+    return mod.default;
+  } catch {
+    throw new ConfigError(
+      "store_unavailable",
+      "better-sqlite3 is not installed. Install it with: pnpm add better-sqlite3"
+    );
+  }
+}
+var CONFIG_STORE_NAMESPACE = "config";
+var CONFIG_STORE_SCHEMA_VERSION = 1;
+var CONFIG_STORE_SQL_001 = `
+      CREATE TABLE IF NOT EXISTS config_revisions (
+        namespace TEXT NOT NULL,
+        revision INTEGER NOT NULL,
+        parent_revision INTEGER,
+        format_version INTEGER NOT NULL,
+        document TEXT NOT NULL,
+        content_hash TEXT NOT NULL,
+        file_digest TEXT,
+        created_at INTEGER NOT NULL,
+        actor TEXT NOT NULL,
+        operation_id TEXT NOT NULL,
+        PRIMARY KEY (namespace, revision)
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_config_revisions_operation
+        ON config_revisions(namespace, operation_id);
+
+      CREATE TABLE IF NOT EXISTS config_heads (
+        namespace TEXT PRIMARY KEY,
+        active_revision INTEGER NOT NULL,
+        generation INTEGER NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS config_audit (
+        id TEXT PRIMARY KEY,
+        namespace TEXT NOT NULL,
+        operation_id TEXT NOT NULL,
+        before_revision INTEGER,
+        after_revision INTEGER NOT NULL,
+        action TEXT NOT NULL,
+        entity_refs TEXT NOT NULL,
+        redacted_diff TEXT NOT NULL,
+        actor TEXT NOT NULL,
+        timestamp INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_config_audit_ns
+        ON config_audit(namespace, timestamp);
+
+      CREATE TABLE IF NOT EXISTS config_runtime_snapshots (
+        id TEXT PRIMARY KEY,
+        namespace TEXT NOT NULL,
+        file_digest TEXT,
+        database_revision INTEGER NOT NULL,
+        resolver_version INTEGER NOT NULL,
+        sanitized_effective_config TEXT NOT NULL,
+        content_hash TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        pinned INTEGER NOT NULL DEFAULT 0,
+        ref_count INTEGER NOT NULL DEFAULT 0
+      );
+      CREATE INDEX IF NOT EXISTS idx_config_snapshots_ns
+        ON config_runtime_snapshots(namespace, created_at);
+
+      CREATE TABLE IF NOT EXISTS workspace_bindings (
+        instance_id TEXT PRIMARY KEY,
+        definition_id TEXT NOT NULL,
+        canonical_project_key TEXT NOT NULL,
+        layout_version INTEGER NOT NULL,
+        relative_root TEXT NOT NULL UNIQUE,
+        created_at INTEGER NOT NULL,
+        last_seen_at INTEGER NOT NULL,
+        state TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS admin_sessions (
+        token_hash TEXT PRIMARY KEY,
+        created_at INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_admin_sessions_expiry
+        ON admin_sessions(expires_at);
+`;
+var CONFIG_STORE_MIGRATIONS = [
+  sqliteSqlStep("001_config_initial", 0, 1, CONFIG_STORE_SQL_001)
+];
+function createConfigStoreMigrationPlan() {
+  return {
+    namespace: CONFIG_STORE_NAMESPACE,
+    targetVersion: CONFIG_STORE_SCHEMA_VERSION,
+    steps: CONFIG_STORE_MIGRATIONS
+  };
+}
+function rowToRevision(row) {
+  return {
+    namespace: row.namespace,
+    revision: row.revision,
+    parentRevision: row.parent_revision,
+    formatVersion: row.format_version,
+    document: JSON.parse(row.document),
+    contentHash: row.content_hash,
+    fileDigest: row.file_digest,
+    createdAt: row.created_at,
+    actor: row.actor,
+    operationId: row.operation_id
+  };
+}
+function rowToHead(row) {
+  return {
+    namespace: row.namespace,
+    activeRevision: row.active_revision,
+    // Decimal string at the API boundary so u64-capable backends never
+    // coerce differently (S11); SQLite integers stay exact here.
+    generation: String(row.generation)
+  };
+}
+function rowToAudit(row) {
+  return {
+    id: row.id,
+    namespace: row.namespace,
+    operationId: row.operation_id,
+    beforeRevision: row.before_revision,
+    afterRevision: row.after_revision,
+    action: row.action,
+    entityRefs: JSON.parse(row.entity_refs),
+    redactedDiff: JSON.parse(row.redacted_diff),
+    actor: row.actor,
+    timestamp: row.timestamp
+  };
+}
+function rowToSnapshot(row) {
+  return {
+    id: row.id,
+    namespace: row.namespace,
+    fileDigest: row.file_digest,
+    databaseRevision: row.database_revision,
+    resolverVersion: row.resolver_version,
+    sanitizedEffectiveConfig: JSON.parse(row.sanitized_effective_config),
+    contentHash: row.content_hash,
+    createdAt: row.created_at,
+    pinned: row.pinned !== 0,
+    refCount: row.ref_count
+  };
+}
+function rowToBinding(row) {
+  return {
+    instanceId: row.instance_id,
+    definitionId: row.definition_id,
+    canonicalProjectKey: row.canonical_project_key,
+    layoutVersion: row.layout_version,
+    relativeRoot: row.relative_root,
+    createdAt: row.created_at,
+    lastSeenAt: row.last_seen_at,
+    state: row.state
+  };
+}
+async function createSqliteConfigStore(options) {
+  const Database = await loadBetterSqlite3();
+  if (options.migrationMode === "verify") {
+    if (!existsSync(options.path)) throw new ConfigError("migration_failed", "Config database does not exist; apply migrations before verify startup.");
+    const probe = new Database(options.path, { readonly: true });
+    try {
+      const check = await new MigrationRunner(createSqliteMigrationStore(probe), [createConfigStoreMigrationPlan()]).check();
+      if (check.needsMigration.length > 0) throw new ConfigError("migration_failed", "Config schema is behind this program; apply migrations before verify startup.");
+    } finally {
+      probe.close();
+    }
+  }
+  mkdirSync(dirname(options.path), { recursive: true });
+  const db = new Database(options.path);
+  let closed = false;
+  try {
+    db.pragma("journal_mode = WAL");
+    db.pragma("foreign_keys = ON");
+    db.pragma(`busy_timeout = ${options.busyTimeoutMs ?? 5e3}`);
+    db.pragma("synchronous = NORMAL");
+    const runner = new MigrationRunner(createSqliteMigrationStore(db), [createConfigStoreMigrationPlan()], { now: options.now });
+    if (options.migrationMode === "verify") {
+      const check = await runner.check();
+      if (check.needsMigration.length > 0) {
+        throw new ConfigError(
+          "migration_failed",
+          `Config store schema is behind this program (pending namespaces: ${check.needsMigration.join(", ")}); run \`aicr migrate --apply\` or set storage.database.migrate=auto.`
+        );
+      }
+    } else {
+      await runner.apply();
+    }
+  } catch (error) {
+    db.close();
+    throw error;
+  }
+  const stmtHead = db.prepare("SELECT * FROM config_heads WHERE namespace = ?");
+  const stmtRevision = db.prepare("SELECT * FROM config_revisions WHERE namespace = ? AND revision = ?");
+  const stmtRevisionByOperation = db.prepare("SELECT * FROM config_revisions WHERE namespace = ? AND operation_id = ?");
+  const open = () => assertStoreOpen(closed, "sqlite");
+  const txCommit = db.transaction((input) => {
+    const existing = stmtRevisionByOperation.get(input.namespace, input.operationId);
+    if (existing !== void 0) {
+      if (sameConfigOperation(rowToRevision(existing), input)) {
+        const head2 = stmtHead.get(input.namespace);
+        return { status: "committed", revision: rowToRevision(existing), head: rowToHead(head2), duplicate: true };
+      }
+      throw new ConfigError(
+        "operation_conflict",
+        `Operation "${input.operationId}" was already committed with different content (namespace "${input.namespace}").`
+      );
+    }
+    const headRow = stmtHead.get(input.namespace);
+    const expectedBase = headRow === void 0 ? null : headRow.active_revision;
+    if (input.baseRevision !== expectedBase) {
+      return {
+        status: "revision_conflict",
+        head: headRow === void 0 ? { namespace: input.namespace, activeRevision: 0, generation: "0" } : rowToHead(headRow)
+      };
+    }
+    const revision = expectedBase === null ? 1 : expectedBase + 1;
+    db.prepare(
+      `INSERT INTO config_revisions (
+         namespace, revision, parent_revision, format_version, document, content_hash,
+         file_digest, created_at, actor, operation_id
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      input.namespace,
+      revision,
+      expectedBase,
+      input.formatVersion,
+      JSON.stringify(input.document),
+      contentHashOf(input.document),
+      input.fileDigest,
+      input.now,
+      input.actor,
+      input.operationId
+    );
+    db.prepare(
+      `INSERT INTO config_heads (namespace, active_revision, generation) VALUES (?, ?, 1)
+       ON CONFLICT(namespace) DO UPDATE SET active_revision = excluded.active_revision,
+         generation = config_heads.generation + 1`
+    ).run(input.namespace, revision);
+    db.prepare(
+      `INSERT INTO config_audit (
+         id, namespace, operation_id, before_revision, after_revision, action,
+         entity_refs, redacted_diff, actor, timestamp
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      randomUUID(),
+      input.namespace,
+      input.operationId,
+      expectedBase,
+      revision,
+      input.audit.action,
+      JSON.stringify(input.audit.entityRefs),
+      JSON.stringify(input.audit.redactedDiff),
+      input.actor,
+      input.now
+    );
+    const head = stmtHead.get(input.namespace);
+    const stored = stmtRevision.get(input.namespace, revision);
+    return { status: "committed", revision: rowToRevision(stored), head: rowToHead(head), duplicate: false };
+  });
+  return {
+    backendKind: "sqlite",
+    async readHead(namespace) {
+      open();
+      assertNamespace(namespace);
+      const row = stmtHead.get(namespace);
+      return row === void 0 ? null : rowToHead(row);
+    },
+    async readRevision(namespace, revision) {
+      open();
+      assertNamespace(namespace);
+      const row = stmtRevision.get(namespace, revision);
+      return row === void 0 ? null : rowToRevision(row);
+    },
+    async listRevisions(namespace, listOptions = {}) {
+      open();
+      assertNamespace(namespace);
+      const rows = db.prepare(
+        `SELECT * FROM config_revisions
+          WHERE namespace = ? AND (? IS NULL OR revision < ?)
+          ORDER BY revision DESC
+          LIMIT ?`
+      ).all(
+        namespace,
+        listOptions.before ?? null,
+        listOptions.before ?? null,
+        listOptions.limit ?? 1e3
+      );
+      return rows.map(rowToRevision);
+    },
+    async readOperation(namespace, operationId) {
+      open();
+      assertNamespace(namespace);
+      const row = stmtRevisionByOperation.get(namespace, operationId);
+      return row === void 0 ? null : rowToRevision(row);
+    },
+    async commitChangeset(input) {
+      open();
+      assertNamespace(input.namespace);
+      return txCommit.immediate(input);
+    },
+    async readAudit(namespace, readOptions = {}) {
+      open();
+      assertNamespace(namespace);
+      const rows = db.prepare(
+        `SELECT * FROM config_audit
+          WHERE namespace = ?
+            AND (? IS NULL OR operation_id = ?)
+            AND (? IS NULL OR timestamp < ?)
+          ORDER BY timestamp DESC, id DESC
+          LIMIT ?`
+      ).all(
+        namespace,
+        readOptions.operationId ?? null,
+        readOptions.operationId ?? null,
+        readOptions.beforeTimestamp ?? null,
+        readOptions.beforeTimestamp ?? null,
+        readOptions.limit ?? 1e3
+      );
+      return rows.map(rowToAudit);
+    },
+    async writeSnapshot(input) {
+      open();
+      for (; ; ) {
+        const inserted = db.prepare(
+          `INSERT OR IGNORE INTO config_runtime_snapshots (
+             id, namespace, file_digest, database_revision, resolver_version,
+             sanitized_effective_config, content_hash, created_at, pinned, ref_count
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0)`
+        ).run(
+          input.id,
+          input.namespace,
+          input.fileDigest,
+          input.databaseRevision,
+          input.resolverVersion,
+          JSON.stringify(input.sanitizedEffectiveConfig),
+          input.contentHash,
+          input.now
+        );
+        const row = db.prepare("SELECT * FROM config_runtime_snapshots WHERE id = ?").get(input.id);
+        if (inserted.changes > 0) return rowToSnapshot(row);
+        if (row === void 0) continue;
+        if (sameSnapshotContent(rowToSnapshot(row), input)) return rowToSnapshot(row);
+        throw new ConfigError("snapshot_invalid", `Snapshot "${input.id}" already exists with different content.`);
+      }
+    },
+    async readSnapshot(id) {
+      open();
+      const row = db.prepare("SELECT * FROM config_runtime_snapshots WHERE id = ?").get(id);
+      return row === void 0 ? null : rowToSnapshot(row);
+    },
+    async adjustSnapshotRefCount(id, delta) {
+      open();
+      db.prepare(
+        `UPDATE config_runtime_snapshots
+            SET ref_count = MAX(0, ref_count + ?)
+          WHERE id = ?`
+      ).run(delta, id);
+      const row = db.prepare("SELECT * FROM config_runtime_snapshots WHERE id = ?").get(id);
+      return row === void 0 ? null : rowToSnapshot(row);
+    },
+    async setSnapshotPinned(id, pinned) {
+      open();
+      db.prepare("UPDATE config_runtime_snapshots SET pinned = ? WHERE id = ?").run(pinned ? 1 : 0, id);
+      const row = db.prepare("SELECT * FROM config_runtime_snapshots WHERE id = ?").get(id);
+      return row === void 0 ? null : rowToSnapshot(row);
+    },
+    async listUnreferencedSnapshots(namespace, olderThan, limit = 100) {
+      open();
+      assertNamespace(namespace);
+      const rows = db.prepare(
+        `SELECT * FROM config_runtime_snapshots
+          WHERE namespace = ? AND pinned = 0 AND ref_count = 0 AND created_at <= ?
+          ORDER BY created_at ASC
+          LIMIT ?`
+      ).all(namespace, olderThan, limit);
+      return rows.map(rowToSnapshot);
+    },
+    async deleteSnapshot(id) {
+      open();
+      const deleted = db.prepare(
+        "DELETE FROM config_runtime_snapshots WHERE id = ? AND pinned = 0 AND ref_count = 0"
+      ).run(id);
+      if (deleted.changes > 0) return;
+      const row = db.prepare("SELECT pinned, ref_count FROM config_runtime_snapshots WHERE id = ?").get(id);
+      if (row === void 0) return;
+      throw new ConfigError("snapshot_invalid", `Snapshot "${id}" is still referenced and cannot be deleted.`);
+    },
+    async upsertWorkspaceBinding(input) {
+      open();
+      return db.transaction(() => {
+        const existing = db.prepare("SELECT * FROM workspace_bindings WHERE instance_id = ?").get(input.instanceId);
+        if (existing !== void 0) {
+          if (existing.relative_root !== input.relativeRoot) {
+            throw new ConfigError(
+              "binding_conflict",
+              `Binding "${input.instanceId}" already owns root "${existing.relative_root}".`
+            );
+          }
+          db.prepare(
+            `UPDATE workspace_bindings
+                SET definition_id = ?, canonical_project_key = ?, layout_version = ?, last_seen_at = ?
+              WHERE instance_id = ?`
+          ).run(input.definitionId, input.canonicalProjectKey, input.layoutVersion, input.now, input.instanceId);
+          return rowToBinding(db.prepare("SELECT * FROM workspace_bindings WHERE instance_id = ?").get(input.instanceId));
+        }
+        const owner = db.prepare("SELECT * FROM workspace_bindings WHERE relative_root = ?").get(input.relativeRoot);
+        if (owner !== void 0) {
+          throw new ConfigError(
+            "binding_conflict",
+            `Root "${input.relativeRoot}" is already owned by binding "${owner.instance_id}" (S08).`
+          );
+        }
+        db.prepare(
+          `INSERT INTO workspace_bindings (
+             instance_id, definition_id, canonical_project_key, layout_version,
+             relative_root, created_at, last_seen_at, state
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, 'active')`
+        ).run(
+          input.instanceId,
+          input.definitionId,
+          input.canonicalProjectKey,
+          input.layoutVersion,
+          input.relativeRoot,
+          input.now,
+          input.now
+        );
+        return rowToBinding(db.prepare("SELECT * FROM workspace_bindings WHERE instance_id = ?").get(input.instanceId));
+      }).immediate();
+    },
+    async readWorkspaceBinding(instanceId) {
+      open();
+      const row = db.prepare("SELECT * FROM workspace_bindings WHERE instance_id = ?").get(instanceId);
+      return row === void 0 ? null : rowToBinding(row);
+    },
+    async listWorkspaceBindings(_namespace) {
+      open();
+      const rows = db.prepare("SELECT * FROM workspace_bindings ORDER BY created_at ASC").all();
+      return rows.map(rowToBinding);
+    },
+    async setWorkspaceBindingState(instanceId, state, now) {
+      open();
+      db.prepare("UPDATE workspace_bindings SET state = ?, last_seen_at = ? WHERE instance_id = ?").run(state, now, instanceId);
+      const row = db.prepare("SELECT * FROM workspace_bindings WHERE instance_id = ?").get(instanceId);
+      return row === void 0 ? null : rowToBinding(row);
+    },
+    async saveAdminSession(record) {
+      open();
+      db.prepare(
+        `INSERT INTO admin_sessions (token_hash, created_at, expires_at) VALUES (?, ?, ?)
+         ON CONFLICT(token_hash) DO UPDATE SET created_at = excluded.created_at, expires_at = excluded.expires_at`
+      ).run(record.tokenHash, record.createdAt, record.expiresAt);
+    },
+    async readAdminSession(tokenHash, now) {
+      open();
+      const row = db.prepare("SELECT * FROM admin_sessions WHERE token_hash = ?").get(tokenHash);
+      if (row === void 0 || row.expires_at <= now) return null;
+      return { tokenHash: row.token_hash, createdAt: row.created_at, expiresAt: row.expires_at };
+    },
+    async deleteAdminSession(tokenHash) {
+      open();
+      db.prepare("DELETE FROM admin_sessions WHERE token_hash = ?").run(tokenHash);
+    },
+    async deleteExpiredAdminSessions(now, limit = 500) {
+      open();
+      const result = db.prepare(
+        `DELETE FROM admin_sessions WHERE token_hash IN (
+           SELECT token_hash FROM admin_sessions WHERE expires_at <= ? LIMIT ?
+         )`
+      ).run(now, limit);
+      return result.changes;
+    },
+    close() {
+      if (closed) return Promise.resolve();
+      closed = true;
+      db.close();
+      return Promise.resolve();
+    }
+  };
+}
+
+// build/tmp/p8-historical-source/packages/core/src/pg-config-store.ts
+import { createHash as createHash3, randomUUID as randomUUID2 } from "node:crypto";
+async function loadPg() {
+  try {
+    const mod = await import("pg");
+    const ctor = mod.Pool ?? mod.default?.Pool;
+    if (ctor === void 0) throw new Error("pg Pool export not found");
+    return ctor;
+  } catch (error) {
+    throw new ConfigError(
+      "store_unavailable",
+      "pg is not installed; the PostgreSQL config store requires it (pnpm add pg).",
+      { cause: error }
+    );
+  }
+}
+var PG_CONFIG_MIGRATION_LOCK_KEY = 1634296690;
+function pgConfigSqlStep(id, fromVersion, toVersion, sql, description) {
+  return {
+    id,
+    fromVersion,
+    toVersion,
+    checksum: createHash3("sha256").update(`${id}
+${sql}`).digest("hex"),
+    description,
+    payload: { sql }
+  };
+}
+function sqlOf2(step) {
+  const payload = step.payload;
+  if (payload === void 0 || typeof payload.sql !== "string") {
+    throw new Error(`postgres config migration store cannot apply non-SQL step "${step.id}"`);
+  }
+  return payload.sql;
+}
+function createPgConfigMigrationStore(client) {
+  return {
+    backendKind: "postgres",
+    async ensureLedger() {
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS schema_migrations (
+          namespace text NOT NULL,
+          id text NOT NULL,
+          checksum text,
+          from_version integer NOT NULL,
+          to_version integer NOT NULL,
+          app_version text,
+          applied_at bigint NOT NULL,
+          PRIMARY KEY (namespace, id)
+        );
+      `);
+    },
+    /**
+     * Read-only ledger probe for the verify path: no DDL. Resolves through
+     * the session search_path, so a missing schema or table reads as an
+     * empty ledger and the runner reports every step pending.
+     */
+    async ledgerExists() {
+      const result = await client.query(
+        `SELECT to_regclass('schema_migrations') IS NOT NULL AS exists`
+      );
+      return result.rows[0]?.exists === true;
+    },
+    async withMigrationLock(fn) {
+      await client.query("BEGIN");
+      try {
+        await client.query(`SELECT pg_advisory_xact_lock(${PG_CONFIG_MIGRATION_LOCK_KEY})`);
+        const result = await fn();
+        await client.query("COMMIT");
+        return result;
+      } catch (error) {
+        await client.query("ROLLBACK").catch(() => {
+        });
+        throw error;
+      }
+    },
+    async readApplied(namespace) {
+      const result = await client.query(
+        `SELECT id, checksum, from_version, to_version, app_version, applied_at
+           FROM schema_migrations
+          WHERE namespace = $1
+          ORDER BY to_version ASC`,
+        [namespace]
+      );
+      return result.rows.map((row) => ({
+        id: row.id,
+        checksum: row.checksum,
+        fromVersion: row.from_version,
+        toVersion: row.to_version,
+        appVersion: row.app_version,
+        appliedAt: Number(row.applied_at)
+      }));
+    },
+    async applyStep(step) {
+      await client.query(sqlOf2(step));
+    },
+    async recordApplied(namespace, step, appVersion, now) {
+      await client.query(
+        `INSERT INTO schema_migrations
+           (namespace, id, checksum, from_version, to_version, app_version, applied_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [namespace, step.id, step.checksum, step.fromVersion, step.toVersion, appVersion, now]
+      );
+    }
+  };
+}
+var PG_CONFIG_STORE_SQL_001 = `
+      CREATE TABLE IF NOT EXISTS config_revisions (
+        namespace TEXT NOT NULL,
+        revision INTEGER NOT NULL,
+        parent_revision INTEGER,
+        format_version INTEGER NOT NULL,
+        document JSONB NOT NULL,
+        content_hash TEXT NOT NULL,
+        file_digest TEXT,
+        created_at BIGINT NOT NULL,
+        actor TEXT NOT NULL,
+        operation_id TEXT NOT NULL,
+        PRIMARY KEY (namespace, revision)
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_config_revisions_operation
+        ON config_revisions(namespace, operation_id);
+
+      CREATE TABLE IF NOT EXISTS config_heads (
+        namespace TEXT PRIMARY KEY,
+        active_revision INTEGER NOT NULL,
+        generation BIGINT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS config_audit (
+        id TEXT PRIMARY KEY,
+        namespace TEXT NOT NULL,
+        operation_id TEXT NOT NULL,
+        before_revision INTEGER,
+        after_revision INTEGER NOT NULL,
+        action TEXT NOT NULL,
+        entity_refs JSONB NOT NULL,
+        redacted_diff JSONB NOT NULL,
+        actor TEXT NOT NULL,
+        timestamp BIGINT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_config_audit_ns
+        ON config_audit(namespace, timestamp);
+
+      CREATE TABLE IF NOT EXISTS config_runtime_snapshots (
+        id TEXT PRIMARY KEY,
+        namespace TEXT NOT NULL,
+        file_digest TEXT,
+        database_revision INTEGER NOT NULL,
+        resolver_version INTEGER NOT NULL,
+        sanitized_effective_config JSONB NOT NULL,
+        content_hash TEXT NOT NULL,
+        created_at BIGINT NOT NULL,
+        pinned BOOLEAN NOT NULL DEFAULT FALSE,
+        ref_count INTEGER NOT NULL DEFAULT 0
+      );
+      CREATE INDEX IF NOT EXISTS idx_config_snapshots_ns
+        ON config_runtime_snapshots(namespace, created_at);
+
+      CREATE TABLE IF NOT EXISTS workspace_bindings (
+        instance_id TEXT PRIMARY KEY,
+        definition_id TEXT NOT NULL,
+        canonical_project_key TEXT NOT NULL,
+        layout_version INTEGER NOT NULL,
+        relative_root TEXT NOT NULL UNIQUE,
+        created_at BIGINT NOT NULL,
+        last_seen_at BIGINT NOT NULL,
+        state TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS admin_sessions (
+        token_hash TEXT PRIMARY KEY,
+        created_at BIGINT NOT NULL,
+        expires_at BIGINT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_admin_sessions_expiry
+        ON admin_sessions(expires_at);
+`;
+var PG_CONFIG_STORE_MIGRATIONS = [
+  pgConfigSqlStep("001_pg_config_initial", 0, 1, PG_CONFIG_STORE_SQL_001)
+];
+function createPgConfigStoreMigrationPlan() {
+  return {
+    namespace: CONFIG_STORE_NAMESPACE,
+    targetVersion: CONFIG_STORE_SCHEMA_VERSION,
+    steps: PG_CONFIG_STORE_MIGRATIONS
+  };
+}
+function rowToRevision2(row) {
+  return {
+    namespace: row.namespace,
+    revision: Number(row.revision),
+    parentRevision: row.parent_revision,
+    formatVersion: Number(row.format_version),
+    // JSONB comes back already parsed by the driver; a fresh object per read.
+    document: row.document,
+    contentHash: row.content_hash,
+    fileDigest: row.file_digest,
+    createdAt: Number(row.created_at),
+    actor: row.actor,
+    operationId: row.operation_id
+  };
+}
+function rowToHead2(row) {
+  return {
+    namespace: row.namespace,
+    activeRevision: Number(row.active_revision),
+    // int8 arrives as a string from the driver; keep the decimal text so u64
+    // generations never pass through a float at the API boundary (S11).
+    generation: String(row.generation)
+  };
+}
+function rowToAudit2(row) {
+  return {
+    id: row.id,
+    namespace: row.namespace,
+    operationId: row.operation_id,
+    beforeRevision: row.before_revision,
+    afterRevision: Number(row.after_revision),
+    action: row.action,
+    entityRefs: row.entity_refs,
+    redactedDiff: row.redacted_diff,
+    actor: row.actor,
+    timestamp: Number(row.timestamp)
+  };
+}
+function rowToSnapshot2(row) {
+  return {
+    id: row.id,
+    namespace: row.namespace,
+    fileDigest: row.file_digest,
+    databaseRevision: Number(row.database_revision),
+    resolverVersion: Number(row.resolver_version),
+    sanitizedEffectiveConfig: row.sanitized_effective_config,
+    contentHash: row.content_hash,
+    createdAt: Number(row.created_at),
+    pinned: row.pinned,
+    refCount: Number(row.ref_count)
+  };
+}
+function rowToBinding2(row) {
+  return {
+    instanceId: row.instance_id,
+    definitionId: row.definition_id,
+    canonicalProjectKey: row.canonical_project_key,
+    layoutVersion: Number(row.layout_version),
+    relativeRoot: row.relative_root,
+    createdAt: Number(row.created_at),
+    lastSeenAt: Number(row.last_seen_at),
+    state: row.state
+  };
+}
+var SCHEMA_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/u;
+async function createPgConfigStore(options) {
+  const schema = options.schema ?? null;
+  if (schema !== null && !SCHEMA_NAME_PATTERN.test(schema)) {
+    throw new ConfigError(
+      "store_unavailable",
+      `PostgreSQL config schema must be a plain identifier; got ${JSON.stringify(schema)}.`
+    );
+  }
+  const PgPool = await loadPg();
+  const pool = new PgPool({
+    connectionString: options.connection.url,
+    max: options.maxPoolSize ?? 4,
+    ...schema !== null ? { options: `-c search_path="${schema}"` } : {}
+  });
+  let closed = false;
+  const open = () => assertStoreOpen(closed, "postgres");
+  async function guarded(operation, run) {
+    try {
+      return await run();
+    } catch (error) {
+      if (error instanceof ConfigError) throw error;
+      throw new ConfigError(
+        "store_unavailable",
+        `PostgreSQL config store ${operation} failed: ${error instanceof Error ? error.message : String(error)}`,
+        { cause: error }
+      );
+    }
+  }
+  try {
+    await guarded("connect", async () => {
+      const client = await pool.connect();
+      try {
+        await client.query(`SELECT pg_advisory_lock(${PG_CONFIG_MIGRATION_LOCK_KEY})`);
+        try {
+          const runner = new MigrationRunner(
+            createPgConfigMigrationStore(client),
+            [createPgConfigStoreMigrationPlan()],
+            { now: options.now }
+          );
+          if (options.migrationMode === "verify") {
+            const check = await runner.check();
+            if (check.needsMigration.length > 0) {
+              throw new ConfigError(
+                "migration_failed",
+                `Config store schema is behind this program (pending namespaces: ${check.needsMigration.join(", ")}); run \`aicr migrate --apply\` or set storage.database.migrate=auto.`
+              );
+            }
+          } else {
+            if (schema !== null) {
+              await client.query(`CREATE SCHEMA IF NOT EXISTS "${schema}"`);
+            }
+            await runner.apply();
+          }
+        } finally {
+          await client.query(`SELECT pg_advisory_unlock(${PG_CONFIG_MIGRATION_LOCK_KEY})`).catch(() => {
+          });
+        }
+      } finally {
+        client.release();
+      }
+    });
+  } catch (error) {
+    closed = true;
+    await pool.end().catch(() => {
+    });
+    throw error;
+  }
+  async function queryRows(operation, text, params = []) {
+    return guarded(operation, () => pool.query(text, params));
+  }
+  async function withTx(fn) {
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const result = await fn(client);
+      await client.query("COMMIT");
+      return result;
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => {
+      });
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+  async function readHeadRow(client, namespace) {
+    const result = await client.query(
+      "SELECT * FROM config_heads WHERE namespace = $1 FOR UPDATE",
+      [namespace]
+    );
+    const row = result.rows[0];
+    return row === void 0 ? null : row;
+  }
+  return {
+    backendKind: "postgres",
+    async readHead(namespace) {
+      open();
+      assertNamespace(namespace);
+      const result = await queryRows(
+        "readHead",
+        "SELECT * FROM config_heads WHERE namespace = $1",
+        [namespace]
+      );
+      const row = result.rows[0];
+      return row === void 0 ? null : rowToHead2(row);
+    },
+    async readRevision(namespace, revision) {
+      open();
+      assertNamespace(namespace);
+      const result = await queryRows(
+        "readRevision",
+        "SELECT * FROM config_revisions WHERE namespace = $1 AND revision = $2",
+        [namespace, revision]
+      );
+      const row = result.rows[0];
+      return row === void 0 ? null : rowToRevision2(row);
+    },
+    async listRevisions(namespace, listOptions = {}) {
+      open();
+      assertNamespace(namespace);
+      const result = await queryRows(
+        "listRevisions",
+        `SELECT * FROM config_revisions
+          WHERE namespace = $1 AND ($2::integer IS NULL OR revision < $2)
+          ORDER BY revision DESC
+          LIMIT $3`,
+        [namespace, listOptions.before ?? null, listOptions.limit ?? 1e3]
+      );
+      return result.rows.map(rowToRevision2);
+    },
+    async readOperation(namespace, operationId) {
+      open();
+      assertNamespace(namespace);
+      const result = await queryRows(
+        "readOperation",
+        "SELECT * FROM config_revisions WHERE namespace = $1 AND operation_id = $2",
+        [namespace, operationId]
+      );
+      const row = result.rows[0];
+      return row === void 0 ? null : rowToRevision2(row);
+    },
+    async commitChangeset(input) {
+      open();
+      assertNamespace(input.namespace);
+      return guarded(
+        "commitChangeset",
+        () => withTx(async (client) => {
+          await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [input.namespace]);
+          const existingResult = await client.query(
+            "SELECT * FROM config_revisions WHERE namespace = $1 AND operation_id = $2",
+            [input.namespace, input.operationId]
+          );
+          const existing = existingResult.rows[0];
+          if (existing !== void 0) {
+            if (sameConfigOperation(rowToRevision2(existing), input)) {
+              const head = await readHeadRow(client, input.namespace);
+              if (head === null) {
+                throw new ConfigError(
+                  "store_unavailable",
+                  `Revision "${input.operationId}" exists but namespace "${input.namespace}" has no head.`
+                );
+              }
+              return { status: "committed", revision: rowToRevision2(existing), head: rowToHead2(head), duplicate: true };
+            }
+            throw new ConfigError(
+              "operation_conflict",
+              `Operation "${input.operationId}" was already committed with different content (namespace "${input.namespace}").`
+            );
+          }
+          const headRow = await readHeadRow(client, input.namespace);
+          const expectedBase = headRow === null ? null : Number(headRow.active_revision);
+          if (input.baseRevision !== expectedBase) {
+            return {
+              status: "revision_conflict",
+              head: headRow === null ? { namespace: input.namespace, activeRevision: 0, generation: "0" } : rowToHead2(headRow)
+            };
+          }
+          const revision = expectedBase === null ? 1 : expectedBase + 1;
+          const insertedRevision = await client.query(
+            `INSERT INTO config_revisions (
+               namespace, revision, parent_revision, format_version, document, content_hash,
+               file_digest, created_at, actor, operation_id
+             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+             RETURNING *`,
+            [
+              input.namespace,
+              revision,
+              expectedBase,
+              input.formatVersion,
+              JSON.stringify(input.document),
+              contentHashOf(input.document),
+              input.fileDigest,
+              input.now,
+              input.actor,
+              input.operationId
+            ]
+          );
+          const insertedHead = await client.query(
+            `INSERT INTO config_heads (namespace, active_revision, generation) VALUES ($1, $2, 1)
+             ON CONFLICT(namespace) DO UPDATE SET active_revision = excluded.active_revision,
+               generation = config_heads.generation + 1
+             RETURNING *`,
+            [input.namespace, revision]
+          );
+          await client.query(
+            `INSERT INTO config_audit (
+               id, namespace, operation_id, before_revision, after_revision, action,
+               entity_refs, redacted_diff, actor, timestamp
+             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+            [
+              randomUUID2(),
+              input.namespace,
+              input.operationId,
+              expectedBase,
+              revision,
+              input.audit.action,
+              JSON.stringify(input.audit.entityRefs),
+              JSON.stringify(input.audit.redactedDiff),
+              input.actor,
+              input.now
+            ]
+          );
+          return {
+            status: "committed",
+            revision: rowToRevision2(insertedRevision.rows[0]),
+            head: rowToHead2(insertedHead.rows[0]),
+            duplicate: false
+          };
+        })
+      );
+    },
+    async readAudit(namespace, readOptions = {}) {
+      open();
+      assertNamespace(namespace);
+      const result = await queryRows(
+        "readAudit",
+        `SELECT * FROM config_audit
+          WHERE namespace = $1
+            AND ($2::text IS NULL OR operation_id = $2)
+            AND ($3::bigint IS NULL OR timestamp < $3)
+          ORDER BY timestamp DESC, id DESC
+          LIMIT $4`,
+        [
+          namespace,
+          readOptions.operationId ?? null,
+          readOptions.beforeTimestamp ?? null,
+          readOptions.limit ?? 1e3
+        ]
+      );
+      return result.rows.map(rowToAudit2);
+    },
+    async writeSnapshot(input) {
+      open();
+      return guarded("writeSnapshot", async () => {
+        for (; ; ) {
+          const inserted = await pool.query(
+            `INSERT INTO config_runtime_snapshots (
+               id, namespace, file_digest, database_revision, resolver_version,
+               sanitized_effective_config, content_hash, created_at, pinned, ref_count
+             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, FALSE, 0)
+             ON CONFLICT (id) DO NOTHING
+             RETURNING *`,
+            [
+              input.id,
+              input.namespace,
+              input.fileDigest,
+              input.databaseRevision,
+              input.resolverVersion,
+              JSON.stringify(input.sanitizedEffectiveConfig),
+              input.contentHash,
+              input.now
+            ]
+          );
+          const insertedRow = inserted.rows[0];
+          if (insertedRow !== void 0) return rowToSnapshot2(insertedRow);
+          const existingResult = await pool.query(
+            "SELECT * FROM config_runtime_snapshots WHERE id = $1",
+            [input.id]
+          );
+          const existing = existingResult.rows[0];
+          if (existing === void 0) continue;
+          if (sameSnapshotContent(rowToSnapshot2(existing), input)) return rowToSnapshot2(existing);
+          throw new ConfigError("snapshot_invalid", `Snapshot "${input.id}" already exists with different content.`);
+        }
+      });
+    },
+    async readSnapshot(id) {
+      open();
+      const result = await queryRows(
+        "readSnapshot",
+        "SELECT * FROM config_runtime_snapshots WHERE id = $1",
+        [id]
+      );
+      const row = result.rows[0];
+      return row === void 0 ? null : rowToSnapshot2(row);
+    },
+    async adjustSnapshotRefCount(id, delta) {
+      open();
+      const result = await queryRows(
+        "adjustSnapshotRefCount",
+        `UPDATE config_runtime_snapshots
+            SET ref_count = GREATEST(0, ref_count + $2)
+          WHERE id = $1
+          RETURNING *`,
+        [id, delta]
+      );
+      const row = result.rows[0];
+      return row === void 0 ? null : rowToSnapshot2(row);
+    },
+    async setSnapshotPinned(id, pinned) {
+      open();
+      const result = await queryRows(
+        "setSnapshotPinned",
+        "UPDATE config_runtime_snapshots SET pinned = $2 WHERE id = $1 RETURNING *",
+        [id, pinned]
+      );
+      const row = result.rows[0];
+      return row === void 0 ? null : rowToSnapshot2(row);
+    },
+    async listUnreferencedSnapshots(namespace, olderThan, limit = 100) {
+      open();
+      assertNamespace(namespace);
+      const result = await queryRows(
+        "listUnreferencedSnapshots",
+        `SELECT * FROM config_runtime_snapshots
+          WHERE namespace = $1 AND pinned = FALSE AND ref_count = 0 AND created_at <= $2
+          ORDER BY created_at ASC
+          LIMIT $3`,
+        [namespace, olderThan, limit]
+      );
+      return result.rows.map(rowToSnapshot2);
+    },
+    async deleteSnapshot(id) {
+      open();
+      return guarded("deleteSnapshot", async () => {
+        const deleted = await pool.query(
+          "DELETE FROM config_runtime_snapshots WHERE id = $1 AND pinned = FALSE AND ref_count = 0",
+          [id]
+        );
+        if ((deleted.rowCount ?? 0) > 0) return;
+        const existingResult = await pool.query(
+          "SELECT pinned, ref_count FROM config_runtime_snapshots WHERE id = $1",
+          [id]
+        );
+        const existing = existingResult.rows[0];
+        if (existing === void 0) return;
+        throw new ConfigError("snapshot_invalid", `Snapshot "${id}" is still referenced and cannot be deleted.`);
+      });
+    },
+    async upsertWorkspaceBinding(input) {
+      open();
+      return guarded(
+        "upsertWorkspaceBinding",
+        () => withTx(async (client) => {
+          const existingResult = await client.query(
+            "SELECT * FROM workspace_bindings WHERE instance_id = $1 FOR UPDATE",
+            [input.instanceId]
+          );
+          const existing = existingResult.rows[0];
+          if (existing !== void 0) {
+            if (existing.relative_root !== input.relativeRoot) {
+              throw new ConfigError(
+                "binding_conflict",
+                `Binding "${input.instanceId}" already owns root "${existing.relative_root}".`
+              );
+            }
+            const updated = await client.query(
+              `UPDATE workspace_bindings
+                  SET definition_id = $2, canonical_project_key = $3, layout_version = $4, last_seen_at = $5
+                WHERE instance_id = $1
+                RETURNING *`,
+              [input.instanceId, input.definitionId, input.canonicalProjectKey, input.layoutVersion, input.now]
+            );
+            return rowToBinding2(updated.rows[0]);
+          }
+          const ownerResult = await client.query(
+            "SELECT * FROM workspace_bindings WHERE relative_root = $1",
+            [input.relativeRoot]
+          );
+          const owner = ownerResult.rows[0];
+          if (owner !== void 0) {
+            throw new ConfigError(
+              "binding_conflict",
+              `Root "${input.relativeRoot}" is already owned by binding "${owner.instance_id}" (S08).`
+            );
+          }
+          const inserted = await client.query(
+            `INSERT INTO workspace_bindings (
+               instance_id, definition_id, canonical_project_key, layout_version,
+               relative_root, created_at, last_seen_at, state
+             ) VALUES ($1, $2, $3, $4, $5, $6, $7, 'active')
+             RETURNING *`,
+            [
+              input.instanceId,
+              input.definitionId,
+              input.canonicalProjectKey,
+              input.layoutVersion,
+              input.relativeRoot,
+              input.now,
+              input.now
+            ]
+          );
+          return rowToBinding2(inserted.rows[0]);
+        })
+      );
+    },
+    async readWorkspaceBinding(instanceId) {
+      open();
+      const result = await queryRows(
+        "readWorkspaceBinding",
+        "SELECT * FROM workspace_bindings WHERE instance_id = $1",
+        [instanceId]
+      );
+      const row = result.rows[0];
+      return row === void 0 ? null : rowToBinding2(row);
+    },
+    async listWorkspaceBindings(_namespace) {
+      open();
+      const result = await queryRows(
+        "listWorkspaceBindings",
+        "SELECT * FROM workspace_bindings ORDER BY created_at ASC"
+      );
+      return result.rows.map(rowToBinding2);
+    },
+    async setWorkspaceBindingState(instanceId, state, now) {
+      open();
+      const result = await queryRows(
+        "setWorkspaceBindingState",
+        "UPDATE workspace_bindings SET state = $2, last_seen_at = $3 WHERE instance_id = $1 RETURNING *",
+        [instanceId, state, now]
+      );
+      const row = result.rows[0];
+      return row === void 0 ? null : rowToBinding2(row);
+    },
+    async saveAdminSession(record) {
+      open();
+      await queryRows(
+        "saveAdminSession",
+        `INSERT INTO admin_sessions (token_hash, created_at, expires_at) VALUES ($1, $2, $3)
+         ON CONFLICT(token_hash) DO UPDATE SET created_at = excluded.created_at, expires_at = excluded.expires_at`,
+        [record.tokenHash, record.createdAt, record.expiresAt]
+      );
+    },
+    async readAdminSession(tokenHash, now) {
+      open();
+      const result = await queryRows(
+        "readAdminSession",
+        "SELECT * FROM admin_sessions WHERE token_hash = $1",
+        [tokenHash]
+      );
+      const row = result.rows[0];
+      if (row === void 0 || Number(row.expires_at) <= now) return null;
+      return {
+        tokenHash: row.token_hash,
+        createdAt: Number(row.created_at),
+        expiresAt: Number(row.expires_at)
+      };
+    },
+    async deleteAdminSession(tokenHash) {
+      open();
+      await queryRows(
+        "deleteAdminSession",
+        "DELETE FROM admin_sessions WHERE token_hash = $1",
+        [tokenHash]
+      );
+    },
+    async deleteExpiredAdminSessions(now, limit = 500) {
+      open();
+      const result = await queryRows(
+        "deleteExpiredAdminSessions",
+        `DELETE FROM admin_sessions WHERE token_hash IN (
+           SELECT token_hash FROM admin_sessions WHERE expires_at <= $1 LIMIT $2
+         )`,
+        [now, limit]
+      );
+      return result.rowCount ?? 0;
+    },
+    async close() {
+      if (closed) return;
+      closed = true;
+      await pool.end();
+    }
+  };
+}
+
+// build/tmp/p8-historical-source/packages/core/src/redis-config-store.ts
+import { randomUUID as randomUUID3 } from "node:crypto";
+async function loadIoredis() {
+  try {
+    return await import("ioredis");
+  } catch (error) {
+    throw new ConfigError(
+      "store_unavailable",
+      "ioredis is not installed; the Redis config store requires it (pnpm add ioredis).",
+      { cause: error }
+    );
+  }
+}
+function buildRedisConnection(options) {
+  return {
+    host: options.host ?? "localhost",
+    port: options.port ?? 6379,
+    ...options.password ? { password: options.password } : {},
+    ...options.db !== void 0 ? { db: options.db } : {},
+    ...options.tls ? { tls: {} } : {}
+  };
+}
+var LUA_VALIDATE_TYPES = `
+local function requireType(key, expected)
+  local actual = redis.call('TYPE', key).ok
+  if actual ~= 'none' and actual ~= expected then
+    error('WRONGTYPE config store key must be ' .. expected)
+  end
+end
+`;
+var LUA_COMMIT = `
+${LUA_VALIDATE_TYPES}
+requireType(KEYS[1], 'hash')
+requireType(KEYS[2], 'zset')
+requireType(KEYS[3], 'string')
+requireType(KEYS[4], 'string')
+requireType(KEYS[5], 'string')
+requireType(KEYS[6], 'zset')
+local active = redis.call('HGET', KEYS[1], 'active_revision')
+local generation = redis.call('HGET', KEYS[1], 'generation') or '0'
+local opRevision = redis.call('GET', KEYS[3])
+if opRevision then
+  return {'op', opRevision, active or '0', generation}
+end
+if active then
+  if ARGV[1] == '' or ARGV[1] ~= active then
+    return {'conflict', active, generation}
+  end
+elseif ARGV[1] ~= '' then
+  return {'conflict', '0', '0'}
+end
+local n = tonumber(active or '0') + 1
+if not string.match(generation, '^%d+$') or (#generation > 1 and string.sub(generation, 1, 1) == '0')
+  or #generation > 19 or (#generation == 19 and generation >= '9223372036854775807') then
+  error('Invalid or exhausted config generation')
+end
+if not n or n > 9007199254740991 or n % 1 ~= 0 then
+  error('Invalid or exhausted config revision')
+end
+local revision = string.format('%.0f', n)
+redis.call('SET', KEYS[4], ARGV[2])
+redis.call('ZADD', KEYS[2], n, revision)
+redis.call('SET', KEYS[3], revision)
+redis.call('SET', KEYS[5], ARGV[3])
+redis.call('ZADD', KEYS[6], tonumber(ARGV[4]), ARGV[5])
+redis.call('HSET', KEYS[1], 'active_revision', revision)
+redis.call('HINCRBY', KEYS[1], 'generation', 1)
+return {'committed', revision, redis.call('HGET', KEYS[1], 'generation')}
+`;
+var LUA_WRITE_SNAPSHOT = `
+${LUA_VALIDATE_TYPES}
+requireType(KEYS[1], 'hash')
+requireType(KEYS[2], 'zset')
+local existing = redis.call('HGET', KEYS[1], 'content_hash')
+if existing then
+  if existing == ARGV[2] then
+    return 0
+  end
+  return -1
+end
+redis.call('HSET', KEYS[1],
+  'id', ARGV[1],
+  'content_hash', ARGV[2],
+  'namespace', ARGV[3],
+  'file_digest', ARGV[4],
+  'database_revision', ARGV[5],
+  'resolver_version', ARGV[6],
+  'config', ARGV[7],
+  'created_at', ARGV[8],
+  'pinned', '0',
+  'ref_count', '0')
+redis.call('ZADD', KEYS[2], tonumber(ARGV[8]), ARGV[1])
+return 1
+`;
+var LUA_ADJUST_SNAPSHOT_REFCOUNT = `
+if redis.call('EXISTS', KEYS[1]) == 0 then
+  return nil
+end
+local current = tonumber(redis.call('HGET', KEYS[1], 'ref_count') or '0') or 0
+local updated = current + tonumber(ARGV[1])
+if updated < 0 then
+  updated = 0
+end
+redis.call('HSET', KEYS[1], 'ref_count', tostring(updated))
+return updated
+`;
+var LUA_SET_SNAPSHOT_PINNED = `
+if redis.call('EXISTS', KEYS[1]) == 0 then
+  return nil
+end
+redis.call('HSET', KEYS[1], 'pinned', ARGV[1])
+return 1
+`;
+var LUA_DELETE_SNAPSHOT = `
+${LUA_VALIDATE_TYPES}
+requireType(KEYS[1], 'hash')
+requireType(KEYS[2], 'zset')
+local pinned = redis.call('HGET', KEYS[1], 'pinned')
+if not pinned then
+  return 0
+end
+local refs = tonumber(redis.call('HGET', KEYS[1], 'ref_count') or '0') or 0
+if pinned == '1' or refs > 0 then
+  return -1
+end
+redis.call('DEL', KEYS[1])
+redis.call('ZREM', KEYS[2], ARGV[1])
+return 1
+`;
+var LUA_UPSERT_BINDING = `
+${LUA_VALIDATE_TYPES}
+requireType(KEYS[1], 'hash')
+requireType(KEYS[2], 'string')
+requireType(KEYS[3], 'set')
+local existingRoot = redis.call('HGET', KEYS[1], 'relative_root')
+if existingRoot then
+  if existingRoot ~= ARGV[2] then
+    return {'conflict_instance', existingRoot}
+  end
+  redis.call('HSET', KEYS[1],
+    'definition_id', ARGV[3],
+    'canonical_project_key', ARGV[4],
+    'layout_version', ARGV[5],
+    'last_seen_at', ARGV[6])
+  local createdAt = redis.call('HGET', KEYS[1], 'created_at')
+  local state = redis.call('HGET', KEYS[1], 'state')
+  return {'updated', createdAt, state}
+end
+local owner = redis.call('GET', KEYS[2])
+if owner then
+  return {'conflict_root', owner}
+end
+redis.call('HSET', KEYS[1],
+  'instance_id', ARGV[1],
+  'relative_root', ARGV[2],
+  'definition_id', ARGV[3],
+  'canonical_project_key', ARGV[4],
+  'layout_version', ARGV[5],
+  'created_at', ARGV[6],
+  'last_seen_at', ARGV[6],
+  'state', 'active')
+redis.call('SADD', KEYS[3], ARGV[1])
+redis.call('SET', KEYS[2], ARGV[1])
+return {'created'}
+`;
+var LUA_SET_BINDING_STATE = `
+if redis.call('EXISTS', KEYS[1]) == 0 then
+  return nil
+end
+redis.call('HSET', KEYS[1], 'state', ARGV[1], 'last_seen_at', ARGV[2])
+return 1
+`;
+var LUA_PURGE_SESSIONS = `
+local members = redis.call('ZRANGEBYSCORE', KEYS[1], '-inf', ARGV[1], 'LIMIT', 0, tonumber(ARGV[2]))
+for _, member in ipairs(members) do
+  redis.call('DEL', ARGV[3] .. member)
+end
+if #members > 0 then
+  redis.call('ZREM', KEYS[1], unpack(members))
+end
+return #members
+`;
+function toSnapshot(fields) {
+  return {
+    id: fields.id ?? "",
+    namespace: fields.namespace ?? "",
+    fileDigest: JSON.parse(fields.file_digest ?? "null"),
+    databaseRevision: Number(fields.database_revision ?? "0"),
+    resolverVersion: Number(fields.resolver_version ?? "0"),
+    sanitizedEffectiveConfig: JSON.parse(fields.config ?? "null"),
+    contentHash: fields.content_hash ?? "",
+    createdAt: Number(fields.created_at ?? "0"),
+    pinned: fields.pinned === "1",
+    refCount: Number(fields.ref_count ?? "0")
+  };
+}
+function toBinding(fields) {
+  return {
+    instanceId: fields.instance_id ?? "",
+    definitionId: fields.definition_id ?? "",
+    canonicalProjectKey: fields.canonical_project_key ?? "",
+    layoutVersion: Number(fields.layout_version ?? "0"),
+    relativeRoot: fields.relative_root ?? "",
+    createdAt: Number(fields.created_at ?? "0"),
+    lastSeenAt: Number(fields.last_seen_at ?? "0"),
+    state: fields.state === "disabled" ? "disabled" : "active"
+  };
+}
+async function createRedisConfigStore(options) {
+  const mod = await loadIoredis();
+  const RedisCtor = mod.Redis ?? mod;
+  const connectionOptions = { connectTimeout: 5e3, maxRetriesPerRequest: 2 };
+  const redis = options.connection.url ? new RedisCtor(options.connection.url, connectionOptions) : new RedisCtor({ ...buildRedisConnection(options.connection), ...connectionOptions });
+  const P = options.prefix ?? "aicr:config:";
+  let closed = false;
+  const open = () => assertStoreOpen(closed, "redis");
+  function keyNamespace(namespace) {
+    assertNamespace(namespace);
+    if (namespace.includes("{") || namespace.includes("}")) {
+      throw new ConfigError(
+        "store_unavailable",
+        `Config namespace must not contain "{" or "}" (Redis hash tag); got ${JSON.stringify(namespace)}.`
+      );
+    }
+    return `${P}{${namespace}}:`;
+  }
+  async function guarded(operation, run) {
+    try {
+      return await run();
+    } catch (error) {
+      if (error instanceof ConfigError) throw error;
+      throw new ConfigError(
+        "store_unavailable",
+        `Redis config store ${operation} failed: ${error instanceof Error ? error.message : String(error)}`,
+        { cause: error }
+      );
+    }
+  }
+  async function evalScript(script, keys, ...args) {
+    return redis.eval(script, keys.length, ...keys, ...args.map((arg) => String(arg)));
+  }
+  async function getJson(key) {
+    const data = await redis.get(key);
+    return data === null ? null : JSON.parse(data);
+  }
+  async function hgetallTyped(key) {
+    return await redis.hgetall(key);
+  }
+  function checkExec(results) {
+    if (results === null) return;
+    for (const [error] of results) {
+      if (error) throw error;
+    }
+  }
+  const snapRecKey = (id) => `${P}{snap}:rec:${id}`;
+  const snapGcKey = (namespace) => `${P}{snap}:gc:${namespace}`;
+  const bindRecKey = (id) => `${P}{bind}:rec:${id}`;
+  const bindRootKey = (root) => `${P}{bind}:root:${root}`;
+  const BIND_ALL_KEY = `${P}{bind}:all`;
+  const sessRecKey = (hash) => `${P}{sess}:rec:${hash}`;
+  const SESS_Z_KEY = `${P}{sess}:z`;
+  async function readSnapshotFields(id) {
+    const fields = await hgetallTyped(snapRecKey(id));
+    return Object.keys(fields).length === 0 ? null : fields;
+  }
+  async function readHeadInternal(tag, namespace) {
+    const fields = await hgetallTyped(`${tag}head`);
+    if (fields.active_revision === void 0) return null;
+    return {
+      namespace,
+      activeRevision: Number(fields.active_revision),
+      generation: String(fields.generation ?? "0")
+    };
+  }
+  return {
+    backendKind: "redis",
+    async readHead(namespace) {
+      open();
+      const tag = keyNamespace(namespace);
+      return guarded("readHead", () => readHeadInternal(tag, namespace));
+    },
+    async readRevision(namespace, revision) {
+      open();
+      const tag = keyNamespace(namespace);
+      return guarded("readRevision", () => getJson(`${tag}rev:${revision}`));
+    },
+    async listRevisions(namespace, options2 = {}) {
+      open();
+      const tag = keyNamespace(namespace);
+      return guarded("listRevisions", async () => {
+        const max = options2.before === void 0 ? "+inf" : `(${options2.before}`;
+        const args = options2.limit === void 0 ? [max, "-inf"] : [max, "-inf", "LIMIT", 0, options2.limit];
+        const members = await redis.zrevrangebyscore(`${tag}rev:z`, ...args);
+        const records = [];
+        if (members.length > 0) {
+          const rows = await redis.pipeline(members.map((member) => ["get", `${tag}rev:${member}`])).exec();
+          for (const [error, value] of rows) {
+            if (error) throw error;
+            if (value !== null) records.push(JSON.parse(value));
+          }
+        }
+        return records;
+      });
+    },
+    async readOperation(namespace, operationId) {
+      open();
+      const tag = keyNamespace(namespace);
+      return guarded("readOperation", async () => {
+        const revision = await redis.get(`${tag}op:${operationId}`);
+        if (revision === null) return null;
+        return getJson(`${tag}rev:${revision}`);
+      });
+    },
+    async commitChangeset(input) {
+      open();
+      const tag = keyNamespace(input.namespace);
+      return guarded("commitChangeset", async () => {
+        const expectedBase = input.baseRevision;
+        const n = expectedBase === null ? 1 : expectedBase + 1;
+        const revision = {
+          namespace: input.namespace,
+          revision: n,
+          parentRevision: expectedBase,
+          formatVersion: input.formatVersion,
+          document: copyConfigValue(input.document),
+          contentHash: contentHashOf(input.document),
+          fileDigest: input.fileDigest,
+          createdAt: input.now,
+          actor: input.actor,
+          operationId: input.operationId
+        };
+        const auditId = `audit-${randomUUID3()}`;
+        const audit = {
+          ...input.audit,
+          entityRefs: [...input.audit.entityRefs],
+          redactedDiff: copyConfigValue(input.audit.redactedDiff),
+          namespace: input.namespace,
+          id: auditId,
+          operationId: input.operationId,
+          beforeRevision: expectedBase,
+          afterRevision: n,
+          actor: input.actor,
+          timestamp: input.now
+        };
+        const reply = await evalScript(
+          LUA_COMMIT,
+          [
+            `${tag}head`,
+            `${tag}rev:z`,
+            `${tag}op:${input.operationId}`,
+            `${tag}rev:${n}`,
+            `${tag}audit:${auditId}`,
+            `${tag}audit:z`
+          ],
+          input.baseRevision === null ? "" : input.baseRevision,
+          JSON.stringify(revision),
+          JSON.stringify(audit),
+          input.now,
+          auditId
+        );
+        const kind = String(reply[0]);
+        if (kind === "op") {
+          const stored = await getJson(`${tag}rev:${String(reply[1])}`);
+          if (stored === null) {
+            throw new ConfigError(
+              "store_unavailable",
+              `Operation "${input.operationId}" indexes missing revision ${String(reply[1])} (namespace "${input.namespace}").`
+            );
+          }
+          if (sameConfigOperation(stored, input)) {
+            return {
+              status: "committed",
+              revision: stored,
+              head: {
+                namespace: input.namespace,
+                activeRevision: Number(reply[2]),
+                generation: String(reply[3])
+              },
+              duplicate: true
+            };
+          }
+          throw new ConfigError(
+            "operation_conflict",
+            `Operation "${input.operationId}" was already committed with different content (namespace "${input.namespace}").`
+          );
+        }
+        if (kind === "conflict") {
+          return {
+            status: "revision_conflict",
+            head: {
+              namespace: input.namespace,
+              activeRevision: Number(reply[1]),
+              generation: String(reply[2])
+            }
+          };
+        }
+        return {
+          status: "committed",
+          revision,
+          head: {
+            namespace: input.namespace,
+            activeRevision: Number(reply[1]),
+            generation: String(reply[2])
+          },
+          duplicate: false
+        };
+      });
+    },
+    async readAudit(namespace, options2 = {}) {
+      open();
+      const tag = keyNamespace(namespace);
+      return guarded("readAudit", async () => {
+        const ids = options2.beforeTimestamp === void 0 ? await redis.zrange(`${tag}audit:z`, 0, -1) : await redis.zrevrangebyscore(
+          `${tag}audit:z`,
+          `(${options2.beforeTimestamp}`,
+          "-inf"
+        );
+        const records = [];
+        if (ids.length > 0) {
+          const rows = await redis.pipeline(ids.map((id) => ["get", `${tag}audit:${id}`])).exec();
+          for (const [error, value] of rows) {
+            if (error) throw error;
+            if (value !== null) records.push(JSON.parse(value));
+          }
+        }
+        const filtered = records.filter((entry) => options2.operationId === void 0 || entry.operationId === options2.operationId).sort((a, b) => b.timestamp - a.timestamp || b.id.localeCompare(a.id));
+        return options2.limit === void 0 ? filtered : filtered.slice(0, options2.limit);
+      });
+    },
+    async writeSnapshot(input) {
+      open();
+      keyNamespace(input.namespace);
+      return guarded("writeSnapshot", async () => {
+        const result = await evalScript(
+          LUA_WRITE_SNAPSHOT,
+          [snapRecKey(input.id), snapGcKey(input.namespace)],
+          input.id,
+          input.contentHash,
+          input.namespace,
+          JSON.stringify(input.fileDigest),
+          input.databaseRevision,
+          input.resolverVersion,
+          JSON.stringify(input.sanitizedEffectiveConfig ?? null),
+          input.now
+        );
+        if (result === -1) {
+          throw new ConfigError(
+            "snapshot_invalid",
+            `Snapshot "${input.id}" already exists with different content.`
+          );
+        }
+        const fields = await readSnapshotFields(input.id);
+        if (fields === null) {
+          throw new ConfigError(
+            "store_unavailable",
+            `Snapshot "${input.id}" vanished immediately after write.`
+          );
+        }
+        const snapshot = toSnapshot(fields);
+        if (!sameSnapshotContent(snapshot, input)) throw new ConfigError("snapshot_invalid", `Snapshot "${input.id}" already exists with different content.`);
+        return snapshot;
+      });
+    },
+    async readSnapshot(id) {
+      open();
+      return guarded("readSnapshot", async () => {
+        const fields = await readSnapshotFields(id);
+        return fields === null ? null : toSnapshot(fields);
+      });
+    },
+    async adjustSnapshotRefCount(id, delta) {
+      open();
+      return guarded("adjustSnapshotRefCount", async () => {
+        const updated = await evalScript(
+          LUA_ADJUST_SNAPSHOT_REFCOUNT,
+          [snapRecKey(id)],
+          delta
+        );
+        if (updated === null) return null;
+        const fields = await readSnapshotFields(id);
+        return fields === null ? null : toSnapshot(fields);
+      });
+    },
+    async setSnapshotPinned(id, pinned) {
+      open();
+      return guarded("setSnapshotPinned", async () => {
+        const updated = await evalScript(
+          LUA_SET_SNAPSHOT_PINNED,
+          [snapRecKey(id)],
+          pinned ? "1" : "0"
+        );
+        if (updated === null) return null;
+        const fields = await readSnapshotFields(id);
+        return fields === null ? null : toSnapshot(fields);
+      });
+    },
+    async listUnreferencedSnapshots(namespace, olderThan, limit = 100) {
+      open();
+      keyNamespace(namespace);
+      return guarded("listUnreferencedSnapshots", async () => {
+        const ids = await redis.zrangebyscore(
+          snapGcKey(namespace),
+          "-inf",
+          olderThan
+        );
+        const result = [];
+        if (ids.length > 0) {
+          const rows = await redis.pipeline(ids.map((id) => ["hgetall", snapRecKey(id)])).exec();
+          for (const [error, fields] of rows) {
+            if (error) throw error;
+            if (fields === null || Object.keys(fields).length === 0) continue;
+            const record = toSnapshot(fields);
+            if (!record.pinned && record.refCount === 0 && record.createdAt <= olderThan) {
+              result.push(record);
+            }
+          }
+        }
+        result.sort((a, b) => a.createdAt - b.createdAt);
+        return result.slice(0, limit);
+      });
+    },
+    async deleteSnapshot(id) {
+      open();
+      return guarded("deleteSnapshot", async () => {
+        const namespace = await redis.hget(snapRecKey(id), "namespace");
+        if (namespace === null) return;
+        const result = await evalScript(
+          LUA_DELETE_SNAPSHOT,
+          [snapRecKey(id), snapGcKey(namespace)],
+          id
+        );
+        if (result === -1) {
+          throw new ConfigError(
+            "snapshot_invalid",
+            `Snapshot "${id}" is still referenced and cannot be deleted.`
+          );
+        }
+      });
+    },
+    async upsertWorkspaceBinding(input) {
+      open();
+      return guarded("upsertWorkspaceBinding", async () => {
+        const reply = await evalScript(
+          LUA_UPSERT_BINDING,
+          [bindRecKey(input.instanceId), bindRootKey(input.relativeRoot), BIND_ALL_KEY],
+          input.instanceId,
+          input.relativeRoot,
+          input.definitionId,
+          input.canonicalProjectKey,
+          input.layoutVersion,
+          input.now
+        );
+        const kind = String(reply[0]);
+        if (kind === "conflict_instance") {
+          throw new ConfigError(
+            "binding_conflict",
+            `Binding "${input.instanceId}" already owns root "${String(reply[1])}".`
+          );
+        }
+        if (kind === "conflict_root") {
+          throw new ConfigError(
+            "binding_conflict",
+            `Root "${input.relativeRoot}" is already owned by binding "${String(reply[1])}" (S08).`
+          );
+        }
+        const created = kind === "created";
+        return {
+          instanceId: input.instanceId,
+          definitionId: input.definitionId,
+          canonicalProjectKey: input.canonicalProjectKey,
+          layoutVersion: input.layoutVersion,
+          relativeRoot: input.relativeRoot,
+          createdAt: created ? input.now : Number(reply[1]),
+          lastSeenAt: input.now,
+          state: created ? "active" : String(reply[2])
+        };
+      });
+    },
+    async readWorkspaceBinding(instanceId) {
+      open();
+      return guarded("readWorkspaceBinding", async () => {
+        const fields = await hgetallTyped(bindRecKey(instanceId));
+        return Object.keys(fields).length === 0 ? null : toBinding(fields);
+      });
+    },
+    async listWorkspaceBindings(namespace) {
+      void namespace;
+      open();
+      return guarded("listWorkspaceBindings", async () => {
+        const ids = await redis.smembers(BIND_ALL_KEY);
+        const result = [];
+        if (ids.length > 0) {
+          const rows = await redis.pipeline(ids.map((id) => ["hgetall", bindRecKey(id)])).exec();
+          for (const [error, fields] of rows) {
+            if (error) throw error;
+            if (fields !== null && Object.keys(fields).length > 0) {
+              result.push(toBinding(fields));
+            }
+          }
+        }
+        result.sort((a, b) => a.createdAt - b.createdAt);
+        return result;
+      });
+    },
+    async setWorkspaceBindingState(instanceId, state, now) {
+      open();
+      return guarded("setWorkspaceBindingState", async () => {
+        const updated = await evalScript(
+          LUA_SET_BINDING_STATE,
+          [bindRecKey(instanceId)],
+          state,
+          now
+        );
+        if (updated === null) return null;
+        const fields = await hgetallTyped(bindRecKey(instanceId));
+        return Object.keys(fields).length === 0 ? null : toBinding(fields);
+      });
+    },
+    async saveAdminSession(record) {
+      open();
+      return guarded("saveAdminSession", async () => {
+        const results = await redis.multi().set(
+          sessRecKey(record.tokenHash),
+          JSON.stringify({
+            tokenHash: record.tokenHash,
+            createdAt: record.createdAt,
+            expiresAt: record.expiresAt
+          })
+        ).pexpireat(sessRecKey(record.tokenHash), record.expiresAt).zadd(SESS_Z_KEY, record.expiresAt, record.tokenHash).exec();
+        checkExec(results);
+      });
+    },
+    async readAdminSession(tokenHash, now) {
+      open();
+      return guarded("readAdminSession", async () => {
+        const data = await redis.get(sessRecKey(tokenHash));
+        if (data === null) return null;
+        const parsed = JSON.parse(data);
+        if (parsed.expiresAt <= now) return null;
+        return {
+          tokenHash: parsed.tokenHash,
+          createdAt: parsed.createdAt,
+          expiresAt: parsed.expiresAt
+        };
+      });
+    },
+    async deleteAdminSession(tokenHash) {
+      open();
+      return guarded("deleteAdminSession", async () => {
+        const results = await redis.multi().del(sessRecKey(tokenHash)).zrem(SESS_Z_KEY, tokenHash).exec();
+        checkExec(results);
+      });
+    },
+    async deleteExpiredAdminSessions(now, limit = 500) {
+      open();
+      return guarded("deleteExpiredAdminSessions", async () => {
+        const removed = await evalScript(
+          LUA_PURGE_SESSIONS,
+          [SESS_Z_KEY],
+          now,
+          limit,
+          `${P}{sess}:rec:`
+        );
+        return Number(removed);
+      });
+    },
+    async close() {
+      if (closed) return;
+      closed = true;
+      try {
+        await redis.quit().catch(() => void 0);
+      } finally {
+        redis.disconnect();
+      }
+    }
+  };
+}
+
+// build/tmp/p8-historical-source/packages/core/src/config-source.ts
+import { LineCounter, isMap, isSeq, parseDocument } from "yaml";
+import { z as z3 } from "zod";
+
+// build/tmp/p8-historical-source/packages/core/src/config-capabilities.ts
+import { z as z2 } from "zod";
+var nonEmptyString = z2.string().min(1);
+var stringArray = z2.array(nonEmptyString);
+var stringRecord = z2.record(nonEmptyString, z2.string());
+var MODEL_CATALOG_HINT_FIELDS = {
+  context_window: z2.number().positive(),
+  max_input_tokens: z2.number().int().positive(),
+  max_output_tokens: z2.number().int().positive(),
+  cost_input_per_mtok: z2.number().nonnegative(),
+  cost_output_per_mtok: z2.number().nonnegative(),
+  cost_cache_read_per_mtok: z2.number().nonnegative(),
+  cost_cache_write_per_mtok: z2.number().nonnegative(),
+  cost_reasoning_per_mtok: z2.number().nonnegative(),
+  cost_input_audio_per_mtok: z2.number().nonnegative(),
+  cost_output_audio_per_mtok: z2.number().nonnegative(),
+  supports_tool_call: z2.boolean(),
+  supports_attachment: z2.boolean(),
+  supports_vision: z2.boolean(),
+  supports_cache_prompt: z2.boolean(),
+  supports_reasoning: z2.boolean(),
+  supported_reasoning_efforts: z2.array(reasoningEffortSchema),
+  default_reasoning_effort: reasoningEffortSchema,
+  thinking_modes: stringArray,
+  supports_interleaved_reasoning: z2.boolean(),
+  interleaved_reasoning_field: nonEmptyString,
+  supports_structured_output: z2.boolean(),
+  supports_temperature: z2.boolean(),
+  supports_streaming: z2.boolean(),
+  supports_logprobs: z2.boolean(),
+  supports_search: z2.boolean(),
+  supports_computer_use: z2.boolean(),
+  native_tool_capabilities: stringArray,
+  supported_request_parameters: stringArray,
+  unsupported_request_parameters: stringArray,
+  input_modalities: stringArray,
+  output_modalities: stringArray,
+  display_name: nonEmptyString,
+  family: nonEmptyString,
+  knowledge_cutoff: nonEmptyString,
+  training_cutoff: nonEmptyString,
+  release_date: nonEmptyString,
+  last_updated: nonEmptyString,
+  // Enum values live in packages/llm (core cannot import it); membership is
+  // enforced by the consumer's readStringEnum, the DTO pins the scalar type.
+  model_status: nonEmptyString,
+  open_weights: z2.boolean(),
+  license: nonEmptyString,
+  model_links: stringRecord,
+  provider_display_name: nonEmptyString,
+  provider_npm_package: nonEmptyString,
+  provider_env_vars: stringArray,
+  provider_api_base_url: nonEmptyString,
+  provider_docs_url: nonEmptyString,
+  provider_model_aliases: stringArray,
+  provider_model_ids: stringArray,
+  preferred_endpoint: nonEmptyString,
+  latency_class: nonEmptyString,
+  priority_tier_supported: z2.boolean(),
+  rate_limit_tier: nonEmptyString,
+  concurrency_limit: z2.number().int().positive(),
+  throughput_hint_tokens_per_second: z2.number().positive()
+};
+var PROVIDER_PASSTHROUGH_FIELDS = {
+  organization: nonEmptyString,
+  extra_headers: stringRecord,
+  extra_body: z2.record(nonEmptyString, z2.unknown()),
+  extra_params: z2.record(nonEmptyString, z2.unknown()),
+  http_proxy: nonEmptyString,
+  timeout_ms: z2.number().positive(),
+  max_retries: z2.number().int().nonnegative(),
+  reasoning_effort: reasoningEffortSchema,
+  thinking_level: z2.enum(["off", "minimal", "low", "medium", "high", "max"]),
+  thinking_budget_tokens: z2.number().int().positive(),
+  thinking: z2.object({ enabled: z2.boolean() }).passthrough(),
+  response_format: z2.object({ kind: z2.enum(["json_schema", "json_object", "text"]) }).passthrough(),
+  tool_choice: z2.union([z2.enum(["auto", "none", "required"]), z2.record(nonEmptyString, z2.unknown())]),
+  parallel_tool_calls: z2.boolean(),
+  seed: z2.number().int(),
+  logit_bias: z2.record(nonEmptyString, z2.number()),
+  drop_params: stringArray,
+  allowed_openai_params: stringArray,
+  ...MODEL_CATALOG_HINT_FIELDS
+};
+var PROVIDER_KIND_FIELDS = {
+  vertex_ai: {
+    vertex_project: nonEmptyString,
+    vertex_location: nonEmptyString,
+    google_application_credentials_env: nonEmptyString
+  },
+  bedrock: {
+    aws_region: nonEmptyString,
+    aws_access_key_env: nonEmptyString,
+    aws_secret_key_env: nonEmptyString,
+    aws_session_token_env: nonEmptyString,
+    aws_profile: nonEmptyString
+  },
+  anthropic: {
+    anthropic_version: nonEmptyString,
+    anthropic_beta: stringArray,
+    cache_control: z2.enum(["ephemeral", "off"])
+  }
+};
+var TRIGGER_FILE_FILTER_FIELDS = {
+  watch_path: stringArray,
+  include_cr_file: stringArray,
+  exclude_cr_file: stringArray
+};
+var TRIGGER_GIT_FIELDS = {
+  webhook_secret_env: nonEmptyString,
+  token_env: nonEmptyString,
+  base_url: nonEmptyString,
+  repos: z2.array(z2.object({ match: nonEmptyString, workspace: nonEmptyString }).passthrough())
+};
+var TRIGGER_KIND_FIELDS = {
+  gitea: TRIGGER_GIT_FIELDS,
+  forgejo: TRIGGER_GIT_FIELDS,
+  github: TRIGGER_GIT_FIELDS,
+  gitlab: TRIGGER_GIT_FIELDS,
+  p4: {
+    port: nonEmptyString,
+    user_env: nonEmptyString,
+    ticket_env: nonEmptyString,
+    password_env: nonEmptyString,
+    depot_path: nonEmptyString,
+    streams: stringArray,
+    workspace: nonEmptyString,
+    ...TRIGGER_FILE_FILTER_FIELDS
+  },
+  svn: {
+    repository_url: nonEmptyString,
+    username_env: nonEmptyString,
+    password_env: nonEmptyString,
+    trust_server_cert: z2.boolean(),
+    ...TRIGGER_FILE_FILTER_FIELDS
+  },
+  // scheduled/manual have no runtime resolvers yet (schema-only kinds); only
+  // schema-declared fields are managed, so the capability map is empty.
+  scheduled: {},
+  manual: {}
+};
+var TRIGGER_DECLARED_KIND_FIELDS = {
+  // app is declared on triggerSchema; only the github kind consumes it.
+  app: ["github"],
+  // File filters are declared for every kind but only p4/svn read them.
+  watch_path: ["p4", "svn"],
+  include_cr_file: ["p4", "svn"],
+  exclude_cr_file: ["p4", "svn"]
+};
+var CHANNEL_KINDS = [
+  "gitea_pr_review",
+  "github_pr_review",
+  "github_issue",
+  "github_problem_issue",
+  "gitlab_mr_review",
+  "gitea_issue",
+  "gitea_problem_issue",
+  "feishu_bot",
+  "wecom_bot"
+];
+var CHANNEL_COMMON_PASSTHROUGH_FIELDS = {
+  base_url: nonEmptyString,
+  token_env: nonEmptyString,
+  owner: nonEmptyString,
+  repo: nonEmptyString
+};
+var GIT_PR_REVIEW_FIELDS = {
+  ...CHANNEL_COMMON_PASSTHROUGH_FIELDS
+};
+var GITHUB_PROBLEM_ISSUE_FIELDS = {
+  ...CHANNEL_COMMON_PASSTHROUGH_FIELDS,
+  labels: stringArray
+};
+var GITLAB_MR_REVIEW_FIELDS = {
+  ...CHANNEL_COMMON_PASSTHROUGH_FIELDS,
+  project_id: z2.union([nonEmptyString, z2.number().int().positive()]),
+  merge_request_iid: z2.number().int().positive()
+};
+var GITEA_PROBLEM_ISSUE_FIELDS = {
+  ...CHANNEL_COMMON_PASSTHROUGH_FIELDS
+  // label_ids is schema-declared (number[]), so no passthrough DTO needed.
+};
+var FEISHU_BOT_FIELDS = {
+  ...CHANNEL_COMMON_PASSTHROUGH_FIELDS,
+  webhook_url_env: nonEmptyString,
+  secret_env: nonEmptyString
+};
+var WECOM_BOT_FIELDS = {
+  ...CHANNEL_COMMON_PASSTHROUGH_FIELDS,
+  webhook_url_env: nonEmptyString,
+  mentioned_mobile_list: stringArray
+};
+var CHANNEL_KIND_FIELDS = {
+  gitea_pr_review: GIT_PR_REVIEW_FIELDS,
+  github_pr_review: GIT_PR_REVIEW_FIELDS,
+  github_issue: { ...CHANNEL_COMMON_PASSTHROUGH_FIELDS },
+  github_problem_issue: GITHUB_PROBLEM_ISSUE_FIELDS,
+  gitlab_mr_review: GITLAB_MR_REVIEW_FIELDS,
+  gitea_issue: { ...CHANNEL_COMMON_PASSTHROUGH_FIELDS },
+  gitea_problem_issue: GITEA_PROBLEM_ISSUE_FIELDS,
+  feishu_bot: FEISHU_BOT_FIELDS,
+  wecom_bot: WECOM_BOT_FIELDS
+};
+var CHANNEL_DECLARED_KIND_FIELDS = {
+  severity_label_prefix: ["gitea_pr_review", "github_pr_review", "github_problem_issue", "gitlab_mr_review", "gitea_problem_issue"],
+  severity_label_colors: ["gitea_pr_review", "github_pr_review", "github_problem_issue", "gitlab_mr_review", "gitea_problem_issue"],
+  review_mode: ["gitea_pr_review", "github_pr_review"],
+  review_event: ["gitea_pr_review", "github_pr_review"],
+  review_update_strategy: ["gitea_pr_review", "github_pr_review"],
+  marker_prefix: ["github_problem_issue", "gitea_problem_issue"],
+  marker_label: ["github_problem_issue", "gitea_problem_issue"],
+  issue_mode: ["github_problem_issue", "gitea_problem_issue"],
+  resolved_action: ["github_problem_issue", "gitea_problem_issue"],
+  assign_committer: ["github_problem_issue", "gitea_problem_issue"],
+  owners_file: ["github_problem_issue", "gitea_problem_issue"],
+  add_owners_as_assignees: ["github_problem_issue", "gitea_problem_issue"],
+  notify_feishu: ["github_problem_issue", "gitea_problem_issue"],
+  labels: ["github_problem_issue"],
+  label_ids: ["gitea_problem_issue"]
+};
+var CHANNEL_RESOLVED_ACTION_VALUES = {
+  github_problem_issue: ["none", "close", "mark_resolved"],
+  gitea_problem_issue: ["none", "close", "mark_resolved", "delete"]
+};
+function unsupported(context, field, kind) {
+  throw new ConfigError(
+    "unsupported_capability",
+    `${context.entity.kind} "${context.entity.id}" (kind "${kind}") has no runtime consumer for "${field}"; the field would be silently ignored.`,
+    { entity: context.entity, path: [...context.path, field] }
+  );
+}
+function checkDeclaredKindFields(value, kind, declared, context) {
+  for (const [field, kinds] of Object.entries(declared)) {
+    if (value[field] !== void 0 && !kinds.includes(kind)) {
+      unsupported(context, field, kind);
+    }
+  }
+}
+function checkPassthroughFields(value, kind, kindFields, otherKindFields, context) {
+  for (const [field, schema] of Object.entries(kindFields)) {
+    const fieldValue = value[field];
+    if (fieldValue === void 0) {
+      continue;
+    }
+    const parsed = schema.safeParse(fieldValue);
+    if (!parsed.success) {
+      throw new ConfigError(
+        "invalid_field_type",
+        `${context.entity.kind} "${context.entity.id}" field "${formatConfigPath([...context.path, field])}" has an invalid value: ${parsed.error.issues[0]?.message ?? "type mismatch"}.`,
+        { entity: context.entity, path: [...context.path, field], cause: parsed.error }
+      );
+    }
+  }
+  for (const other of otherKindFields) {
+    for (const field of Object.keys(other)) {
+      if (kindFields[field] === void 0 && value[field] !== void 0) {
+        unsupported(context, field, kind);
+      }
+    }
+  }
+}
+function validateProviderCapabilities(value, context) {
+  const kind = typeof value.kind === "string" ? value.kind : "";
+  checkPassthroughFields(
+    value,
+    kind,
+    { ...PROVIDER_PASSTHROUGH_FIELDS, ...PROVIDER_KIND_FIELDS[kind] ?? {} },
+    Object.values(PROVIDER_KIND_FIELDS),
+    context
+  );
+}
+function validateTriggerCapabilities(value, context) {
+  const kind = typeof value.kind === "string" ? value.kind : "";
+  checkDeclaredKindFields(value, kind, TRIGGER_DECLARED_KIND_FIELDS, context);
+  checkPassthroughFields(value, kind, TRIGGER_KIND_FIELDS[kind] ?? {}, Object.values(TRIGGER_KIND_FIELDS), context);
+}
+function validateChannelCapabilities(value, context) {
+  const kind = typeof value.kind === "string" ? value.kind : "";
+  if (!CHANNEL_KINDS.includes(kind)) {
+    throw new ConfigError(
+      "unsupported_capability",
+      `channel "${context.entity.id}" has unknown kind "${kind}"; no publisher exists for it.`,
+      { entity: context.entity, path: [...context.path, "kind"] }
+    );
+  }
+  checkDeclaredKindFields(value, kind, CHANNEL_DECLARED_KIND_FIELDS, context);
+  const resolvedAction = value.resolved_action;
+  if (typeof resolvedAction === "string" && kind in CHANNEL_RESOLVED_ACTION_VALUES) {
+    const allowed = CHANNEL_RESOLVED_ACTION_VALUES[kind];
+    if (!allowed.includes(resolvedAction)) {
+      throw new ConfigError(
+        "unsupported_capability",
+        `channel "${context.entity.id}" (kind "${kind}") does not honor resolved_action "${resolvedAction}".`,
+        { entity: context.entity, path: [...context.path, "resolved_action"] }
+      );
+    }
+  }
+  checkPassthroughFields(value, kind, CHANNEL_KIND_FIELDS[kind] ?? {}, Object.values(CHANNEL_KIND_FIELDS), context);
+}
+function validateEntityCapabilities(kind, value) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return;
+  }
+  const record = value;
+  const id = typeof record.name === "string" ? record.name : typeof record.id === "string" ? record.id : "?";
+  const context = { entity: { kind, id }, path: [] };
+  if (kind === "provider") {
+    validateProviderCapabilities(record, context);
+  } else if (kind === "trigger") {
+    validateTriggerCapabilities(record, context);
+  } else if (kind === "channel") {
+    validateChannelCapabilities(record, context);
+  }
+}
+
+// build/tmp/p8-historical-source/packages/core/src/utils.ts
+function isPlainObject(value) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
+  }
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
+// build/tmp/p8-historical-source/packages/core/src/config-source.ts
+var CONFIG_SOURCE_MAX_BYTES = 1024 * 1024;
+function assertNoPrototypeKeys(value, path, ancestors = /* @__PURE__ */ new Set()) {
+  if (value !== null && typeof value === "object") {
+    if (ancestors.has(value)) {
+      throw new ConfigError("malformed_yaml", `Cyclic config value at ${formatConfigPath(path)}.`, { path });
+    }
+    ancestors.add(value);
+  }
+  if (Array.isArray(value)) {
+    value.forEach((entry, index) => assertNoPrototypeKeys(entry, [...path, String(index)], ancestors));
+    ancestors.delete(value);
+    return;
+  }
+  if (isPlainObject(value)) {
+    for (const [key, entry] of Object.entries(value)) {
+      if (isPrototypeKey(key)) {
+        throw new ConfigError("prototype_key", `Config key "${key}" at ${formatConfigPath(path)} is a prototype key.`, {
+          path: [...path, key]
+        });
+      }
+      assertNoPrototypeKeys(entry, [...path, key], ancestors);
+    }
+  }
+  if (value !== null && typeof value === "object") {
+    ancestors.delete(value);
+  }
+}
+var DATABASE_ENTITY_COLLECTION_KEYS = [
+  "providers",
+  "model_groups",
+  "triggers",
+  "channels",
+  "workspaces",
+  "routes"
+];
+var DATABASE_COLLECTION_KIND = {
+  providers: "provider",
+  model_groups: "model_group",
+  triggers: "trigger",
+  channels: "channel",
+  workspaces: "workspace",
+  routes: "route"
+};
+var databaseEntityRecordSchema = z3.object({
+  id: z3.string().min(1),
+  name: z3.string().min(1),
+  enabled: z3.boolean(),
+  note: z3.string().optional(),
+  value: z3.union([z3.record(z3.string(), z3.unknown()), z3.array(z3.record(z3.string(), z3.unknown()))])
+}).strict();
+var databaseConfigDocumentSchema = z3.object({
+  globals: z3.record(z3.string(), z3.unknown()).optional(),
+  entities: z3.object({
+    providers: z3.record(z3.string().min(1), databaseEntityRecordSchema).optional(),
+    model_groups: z3.record(z3.string().min(1), databaseEntityRecordSchema).optional(),
+    triggers: z3.record(z3.string().min(1), databaseEntityRecordSchema).optional(),
+    channels: z3.record(z3.string().min(1), databaseEntityRecordSchema).optional(),
+    workspaces: z3.record(z3.string().min(1), databaseEntityRecordSchema).optional(),
+    routes: z3.record(z3.string().min(1), databaseEntityRecordSchema).optional()
+  }).strict().optional()
+}).strict();
+var DATABASE_GLOBAL_PREFIXES = [
+  ["llm", "default_model_chain"],
+  ["llm", "triage_model_chain"],
+  ["llm", "retry"],
+  ["llm", "per_provider_overrides"],
+  ["llm", "budget"],
+  ["llm", "model_catalog"],
+  ["review"],
+  ["compression"],
+  ["agent"],
+  ["outputs", "template_engine"],
+  ["outputs", "no_problems"],
+  ["outputs", "author_resolution"],
+  ["outputs", "routes"],
+  ["queue", "workers"],
+  ["queue", "rate_limit"],
+  ["queue", "retry"],
+  ["queue", "dead_letter"],
+  ["workspaces", "cache"],
+  ["workspaces", "defaults"]
+];
+var BOOTSTRAP_CONFIG_PREFIXES = [
+  ["server"],
+  ["admin"],
+  ["storage"],
+  ["config_sources"],
+  ["queue", "kind"],
+  ["queue", "sqlite"],
+  ["workspaces", "root"]
+];
+function isPathPrefix(prefix, path) {
+  return prefix.length <= path.length && prefix.every((segment, index) => path[index] === segment);
+}
+function assertDatabasePathAllowed(path) {
+  if (path.some(isPrototypeKey)) {
+    throw new ConfigError("prototype_key", "Database config paths must not contain prototype keys.", { path });
+  }
+  for (const collection of entityCollectionsForVersion(2)) {
+    if (isPathPrefix(collection.path, path) || isPathPrefix(path, collection.path)) {
+      throw new ConfigError(
+        "entity_collection_misplaced",
+        `${formatConfigPath(path)} is inside the ${collection.kind} entity collection; use entity operations instead of global set`,
+        { path }
+      );
+    }
+  }
+  for (const prefix of BOOTSTRAP_CONFIG_PREFIXES) {
+    if (isPathPrefix(prefix, path) || isPathPrefix(path, prefix)) {
+      throw new ConfigError(
+        "bootstrap_readonly",
+        `${formatConfigPath(path)} belongs to the bootstrap trust boundary and is file-only (spec \xA74.1)`,
+        { path }
+      );
+    }
+  }
+  if (!DATABASE_GLOBAL_PREFIXES.some((prefix) => isPathPrefix(prefix, path))) {
+    throw new ConfigError(
+      "bootstrap_readonly",
+      `${formatConfigPath(path)} is not a database-manageable config prefix`,
+      { path }
+    );
+  }
+}
+function assertDatabaseGlobalsAllowed(globals) {
+  const visit = (value, path) => {
+    if (isPlainObject(value) && Object.keys(value).length > 0) {
+      for (const [key, entry] of Object.entries(value)) {
+        if (isPrototypeKey(key)) {
+          throw new ConfigError("prototype_key", `Database globals key "${key}" is a prototype key.`, {
+            path: [...path, key]
+          });
+        }
+        visit(entry, [...path, key]);
+      }
+      return;
+    }
+    if (path.length === 0) {
+      return;
+    }
+    assertDatabasePathAllowed(path);
+    if (isPlainObject(value)) {
+      return;
+    }
+    if (Array.isArray(value)) {
+      value.forEach((entry, index) => assertNoPrototypeKeys(entry, [...path, String(index)]));
+    } else {
+      assertNoPrototypeKeys(value, path);
+    }
+  };
+  visit(globals, []);
+}
+function validateDatabaseDocument(raw, formatVersion = 1) {
+  assertNoPrototypeKeys(raw, []);
+  const document = databaseConfigDocumentSchema.parse(raw);
+  if (document.entities?.routes !== void 0 && formatVersion < 2) {
+    throw new ConfigError(
+      "unsupported_config_version",
+      "Database routing rule records require config format version 2.",
+      { path: ["entities", "routes"] }
+    );
+  }
+  if (document.globals !== void 0) {
+    assertDatabaseGlobalsAllowed(document.globals);
+  }
+  for (const key of DATABASE_ENTITY_COLLECTION_KEYS) {
+    const records = document.entities?.[key];
+    if (records === void 0) {
+      continue;
+    }
+    const kind = DATABASE_COLLECTION_KIND[key];
+    const collection = CONFIG_ENTITY_COLLECTIONS[kind];
+    const seenNames = /* @__PURE__ */ new Map();
+    for (const [recordId, record] of Object.entries(records)) {
+      if (recordId !== record.id || isPrototypeKey(record.id) || isPrototypeKey(record.name)) {
+        throw new ConfigError("entity_id_mismatch", "Database record keys must match safe immutable record ids and entity names.", {
+          entity: { kind, id: record.name }
+        });
+      }
+      if (kind === "model_group" ? !Array.isArray(record.value) : !isPlainObject(record.value)) {
+        throw new ConfigError("entity_id_mismatch", `Database ${kind} has an invalid value shape.`, {
+          entity: { kind, id: record.name }
+        });
+      }
+      validateEntityCapabilities(kind, record.value);
+      const existing = seenNames.get(record.name);
+      if (existing !== void 0) {
+        throw new ConfigError(
+          "duplicate_entity",
+          `Database records "${existing}" and "${record.id}" share the ${kind} name "${record.name}".`,
+          { entity: { kind, id: record.name } }
+        );
+      }
+      seenNames.set(record.name, record.id);
+      if (collection.shape === "array" && collection.idField !== null && isPlainObject(record.value) && record.value[collection.idField] !== record.name) {
+        throw new ConfigError(
+          "entity_id_mismatch",
+          `Database ${kind} record "${record.id}" is named "${record.name}" but value.${collection.idField} is ${String(record.value[collection.idField])}.`,
+          { entity: { kind, id: record.name } }
+        );
+      }
+    }
+  }
+  return document;
+}
+export {
+  MigrationRunner,
+  createConfigStoreMigrationPlan,
+  createPgConfigMigrationStore,
+  createPgConfigStore,
+  createPgConfigStoreMigrationPlan,
+  createRedisConfigStore,
+  createSqliteConfigStore,
+  createSqliteMigrationStore,
+  validateDatabaseDocument
+};

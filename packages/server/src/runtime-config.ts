@@ -100,6 +100,8 @@ export interface RuntimeConfigStatus {
   readonly activeLeases: number;
   /** Generations built since process start (admission swaps included). */
   readonly generationsBuilt: number;
+  readonly draining: boolean;
+  readonly pendingTasks: number;
 }
 
 function buildGeneration(input: {
@@ -243,6 +245,8 @@ export class RuntimeConfigManager {
   private readonly pinnedEntries = new Map<string, GenerationEntry>();
   private generationsBuilt = 0;
   private closed = false;
+  private draining = false;
+  private pendingTasks = 0;
   private refreshQueue: Promise<unknown> = Promise.resolve();
   private readonly loading = new Map<string, Promise<GenerationEntry>>();
   private readonly scope = new AsyncLocalStorage<RuntimeConfigGeneration>();
@@ -327,6 +331,22 @@ export class RuntimeConfigManager {
     }
   }
 
+  /** Accepted async work includes timers, retries and final persistence. */
+  retainBackgroundTask(): () => void {
+    this.assertOpen();
+    this.pendingTasks++;
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      this.pendingTasks--;
+    };
+  }
+
+  stopAdmission(): void {
+    this.draining = true;
+  }
+
   status(): RuntimeConfigStatus {
     const current = this.currentEntry.generation;
     // The current entry may also live in the pinned cache; count it once.
@@ -339,6 +359,8 @@ export class RuntimeConfigManager {
       databaseRevision: current.databaseRevision,
       fileDigest: current.fileDigest,
       activeLeases,
+      draining: this.draining,
+      pendingTasks: this.pendingTasks,
       generationsBuilt: this.generationsBuilt,
     };
   }
@@ -350,6 +372,8 @@ export class RuntimeConfigManager {
    */
   async admission(): Promise<RuntimeConfigGeneration> {
     const refresh = this.refreshQueue.then(async () => {
+      this.assertOpen();
+      if (this.draining) throw new ConfigError("store_unavailable", "Runtime configuration is draining; admission and claim are stopped.");
       const generation = await this.adoptHead();
       await this.prepareGeneration(generation);
       return generation;
@@ -622,10 +646,11 @@ export class RuntimeConfigManager {
 
   /** Stops serving generations; in-flight leases still release cleanly. */
   async drain(): Promise<void> {
-    this.close();
+    this.stopAdmission();
     await this.refreshQueue;
     await this.heartbeatQueue;
-    while (this.status().activeLeases > 0) await new Promise(resolve => setTimeout(resolve, 25));
+    while (this.status().activeLeases > 0 || this.pendingTasks > 0) await new Promise(resolve => setTimeout(resolve, 25));
+    this.close();
   }
 
   close(): void {
