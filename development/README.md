@@ -208,6 +208,7 @@ curl -sf <部署环境入口URL>/healthz
 - 容器引擎：Podman
 - 启动方式：systemd user 服务（quadlet）。部署用 `AICR_ENABLE_SYSTEMD=true bash deploy.sh`，由 podlet 生成 `~/.config/containers/systemd/aicr.container`（`--restart unless-stopped` 映射为 `Restart=always`，`--wanted-by default.target` + Linger 实现开机自启）。崩溃自动拉起、开机自启均由 `aicr.service` 负责；日常管理用 `systemctl --user status|restart|stop aicr.service`，不要再手工 `podman run -d` 起同名容器。podlet/quadlet 仅支持 podman 引擎；`AICR_ENGINE` 为 docker 等其他引擎时脚本会告警并回退到 `<engine> run -d`，不会生成 systemd 服务。docker 引擎主机也可选 `AICR_ENABLE_COMPOSE=true`（默认关闭）：deploy.sh 按 `<engine> compose` → `docker compose` → `docker-compose` 顺序发现 CLI，生成 `<部署目录>/docker-compose.yaml`（`restart: unless-stopped` + `init: true` + healthcheck，每次部署重写）后 `up -d` 保活；找不到 compose CLI 时告警回退 `<engine> run -d`。`AICR_ENABLE_COMPOSE` 与 `AICR_ENABLE_SYSTEMD` 互斥，同设会直接报错退出。
 - 反向代理：<部署环境入口URL> → `http://10.0.4.9:8090`
+- **动态配置（2026-09-16 部署起）**：`config_sources.database.enabled: true`，`backend: storage`（复用 `storage.database` 的 sqlite `/app/data/store.db`），namespace `default`；启动时把当时的 `config.yaml` 作为 `legacy_import` 基线（revision 0）导入配置库，管理端 `/api/admin/config` 与看板 **Config** 标签可发布数据库补充配置。
 - 如果公网机本机监听了 TCP `3128`，`deploy.sh` 会自动探测这个 HTTP 代理并用于宿主下载与镜像构建；详细规则见下文“关于构建期 HTTP 代理”。
 
 ### 7.2 内网公共环境
@@ -327,6 +328,8 @@ ssh -p "$SSH_PORT" -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no \
 - **SSH 远程终止构建任务**：直接 `pkill -f 'bash deploy.sh'` 会匹配到本地 ssh 命令自身导致会话被杀。用方括号正则规避自匹配，如 `pkill -f 'bash deploy[.]sh'`。
 - **外层容器必须保留 `--init`**：`deploy/deploy.sh` 用 `podman run -d --init` 启动服务。`--init` 让 `tini`/`catatonit` 作为 PID 1 回收被沙箱超时 kill 后 reparent 的 `.kilo` worker 僵尸（Kilo 会把 worker `setsid` 进独立 session，进程组信号杀不到，必须靠 `/proc` PPID 遍历 + PID 1 回收兜底）。删掉 `--init` 会让僵尸在 PID 1 下堆积（公网实测 31 个 `Z` 状态进程），并在退出窗口内拖慢重试形成死亡螺旋。若出现 `Agent kilo timed out after <N>ms` 且 N 远超 `agent.timeout_seconds`，先用 `podman exec aicr ps -eo pid,ppid,etime,comm | grep kilo` 确认是否有大量 PPID=1 的残留进程，再 `podman restart aicr` 清理并重新部署带修复的镜像。
 - **Admin session TTL**：`adminAuthSchema` 使用 `session_ttl_seconds`（默认 28800 = 8 小时），不是 `session_ttl_minutes`。设置 `minutes` 字段会被静默忽略。
+- **动态配置启用后不要直接改 `config.yaml` 重启**：首次数据库发布后，head revision 会钉住文件 SHA-256 摘要；文件摘要不一致时准入与 `/readyz` 返回 503 `config_unavailable`（`file_config_mismatch`）。恢复：还原摘要一致的文件，或从 `GET /api/admin/config/status` 的 `head.activeRevision` 取基线，用新文件摘要加空 `operations` 调 `POST /api/admin/config/changesets` 采纳新摘要（2026-09-16 用当前构建产物本地探针验证可恢复）；不要手工改数据库。
+- **升级备份目录必须唯一命名**：跨版本升级的备份目录带秒级时间戳，删除被替代的临时目录前确认它与本轮备份路径不同；2026-09-16 动态配置升级中同分钟的同名目录曾把新备份误删。
 - **pnpm 10.x 原生模块**：必须通过 `pnpm-workspace.yaml` 的 `onlyBuiltDependencies: [better-sqlite3]` 授权构建，不能用 `pnpm config set` 或 `--allow-build`。
 - **P4 运行时基线**：运行时镜像默认固定在 `debian:trixie-slim` +
   Perforce 官方 APT（Ubuntu `noble` 代号源）安装 `p4-cli` 的链路。

@@ -39,6 +39,12 @@ host snapshot or secrets into a committed helper.
 - Restart through the current owner: systemd unit, compose project, or plain
   engine. For rootless port-release races, stop/start after confirming the port
   is free. Recheck health and logs after the configuration is loaded.
+- Name pre-migration DB/config backups with a unique second-resolution path and
+  confirm the target differs from any cleanup path before removing superseded
+  partials; a same-minute collision has silently deleted a fresh backup. Once a
+  deployment enables database configuration, a changed file digest fails
+  admission closed (`file_config_mismatch`); restore the matching file or adopt
+  the new digest through a published changeset before restarting.
 
 ## Fresh or nested-sandbox deployment
 
