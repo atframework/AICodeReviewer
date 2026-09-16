@@ -265,7 +265,7 @@ Channel fields:
 | `label_ids` | Existing Gitea label IDs to attach to every created issue |
 | `issue_mode` | `consolidated` (default), `per_problem`, or `per_commit` |
 | `resolved_action` | `none`, `close`, `mark_resolved`, or `delete`; defaults to `close` |
-| `assign_committer` | Add the resolved review author as an assignee; defaults to `true` |
+| `assign_committer` | Assign the resolved review author to created issues; defaults to `true` (see Assignee resolution) |
 | `owners_file` | Repository file to read for path owners; defaults to `OWNERS` |
 | `add_owners_as_assignees` | Set to `true` to add matched OWNERS entries as assignees |
 | `severity_label_prefix` | When set, auto-create and attach one severity label such as `aicr:problem:high` |
@@ -284,6 +284,23 @@ paths:
 ```
 
 Path owners use longest-prefix matching. If no path matches, `reviewers` are used as a fallback. Missing or unreadable OWNERS files do not block issue creation.
+
+### Assignee resolution
+
+`assign_committer` (default `true`) adds the resolved review author to newly created GitHub/Gitea issues:
+
+1. Use the event author's platform login. Push payloads with head-commit metadata use that commit's author; a Git display name is never a login. Payloads without that metadata retain the legacy pusher identity. GitHub/Gitea PR events prefer the PR author over the delivery sender; automatic Git batches carry only the Git name/email.
+2. Resolve the author email through `outputs.author_resolution.email_mappings`.
+3. Query the review head commit and use the linked `author.login`: GitHub uses `GET /repos/{owner}/{repo}/commits/{headSha}`; Gitea/Forgejo uses `GET /repos/{owner}/{repo}/git/commits/{headSha}`. The lookup uses the output repository and credentials, runs only for issue creation, and caches both the pending request and its result per dispatcher.
+4. Use the push event's retained pusher login only if the lookup found no linked author or failed.
+
+`email_blacklist` blocks author assignment, including API lookup and pusher fallback. `assign_committer: false` also disables those paths. `add_owners_as_assignees` independently adds and deduplicates matched OWNERS entries. Existing issues keep their assignees.
+
+If no identity resolves, creation proceeds without an author assignee. Only an explicit HTTP 422 assignee validation error causes one retry without `assignees`; authentication, rate limits, other validation failures, and unknown POST outcomes propagate. A failed retry also propagates.
+
+The publishing account must have permission to assign issues, and the assignee must be eligible in the target repository. GitHub can silently ignore assignees without push access; Gitea also ignores assignment without issue write access. Successful creation alone does not prove assignment. Private GitHub commit lookup additionally needs Contents read permission. See the [GitHub issue API](https://docs.github.com/en/rest/issues/issues#create-an-issue), [GitHub commit API](https://docs.github.com/en/rest/commits/commits#get-a-commit), [Gitea commit API](https://docs.gitea.com/api/operations/repo-get-single-commit/), and [Gitea issue handler](https://github.com/go-gitea/gitea/blob/main/routers/api/v1/repo/issue.go).
+
+GitLab currently has no managed problem issue channel: `gitlab_mr_review` publishes MR discussions/notes only. GitLab issue creation and assignment are unimplemented; its [issue API](https://docs.gitlab.com/api/issues/#new-issue) requires numeric `assignee_ids`.
 
 Example (per-problem mode):
 
@@ -343,7 +360,7 @@ Channel fields:
 | `labels` | GitHub label names to attach to every created issue |
 | `issue_mode` | `consolidated` (default), `per_problem`, or `per_commit` |
 | `resolved_action` | `none`, `close`, or `mark_resolved`; defaults to `close` |
-| `assign_committer` | Add the resolved review author as an assignee; defaults to `true` |
+| `assign_committer` | Assign the resolved review author to created issues; defaults to `true` (see Assignee resolution) |
 | `owners_file` | Repository file to read for path owners; defaults to `OWNERS` |
 | `add_owners_as_assignees` | Set to `true` to add matched OWNERS entries as assignees |
 | `severity_label_prefix` | When set, auto-create and attach one severity label such as `aicr:problem:high` |

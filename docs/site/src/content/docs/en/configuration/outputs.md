@@ -104,7 +104,7 @@ fields are listed under each kind.
 | `label_ids` | int[] | Numeric label ids (some VCS APIs). |
 | `issue_mode` | enum | `per_problem`, `consolidated` (default), or `per_commit`. |
 | `resolved_action` | enum | `none`, `close`, `mark_resolved`, or `delete`. Action when a problem is fixed. |
-| `assign_committer` | bool | Add the commit author as assignee (default `true`). |
+| `assign_committer` | bool | Add the resolved review author to newly created managed issues (default `true`); see assignment rules below. |
 | `owners_file` | string | Path to OWNERS file (default `OWNERS`). |
 | `add_owners_as_assignees` | bool | Add matched OWNERS as assignees. |
 | `severity_label_prefix` | string | Auto-created label prefix (e.g. `aicr:problem:`). |
@@ -113,6 +113,14 @@ fields are listed under each kind.
 | `review_event` | enum | `COMMENT` (default) or `REQUEST_CHANGES`. |
 | `review_update_strategy` | enum | `always_new` or `update_existing` (default). |
 | `notify_feishu` | object | Optional Feishu notify-on-issue-creation (`webhook_url_env`, `secret_env`). |
+
+### Issue assignment
+
+GitHub/Gitea managed issues resolve the event login, then `outputs.author_resolution.email_mappings`, then the linked head-commit author, and finally the retained push pusher. Pushes with head-commit metadata use that author's identity; PR events prefer the PR author over the delivery sender. Git display names are not platform logins. GitHub queries `/repos/{owner}/{repo}/commits/{sha}`; Gitea/Forgejo queries `/repos/{owner}/{repo}/git/commits/{sha}`. Queries use the output repository and credentials and are cached per review.
+
+`email_blacklist` and `assign_committer: false` block author lookup and fallback. OWNERS assignments remain independent. Missing identities or failed lookups leave the author unassigned. Only explicit HTTP 422 assignee validation errors trigger one creation retry without assignees; other failures propagate. Existing issue assignees are retained.
+
+The publishing account needs assignment permission, and the target user must be eligible. GitHub/Gitea can silently ignore assignment when the publisher lacks the required repository access; check the created issue's assignees. Private GitHub commit lookup needs Contents read permission. GitLab currently supports MR discussions/notes only; issue creation and assignment are unimplemented.
 
 ### Channel kinds
 

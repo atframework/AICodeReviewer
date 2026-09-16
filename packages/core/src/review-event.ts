@@ -31,6 +31,13 @@ export const reviewActorSchema = z
     username: z.string().min(1).optional(),
     email: z.string().min(1).optional(),
     displayName: z.string().min(1).optional(),
+    /**
+     * Last-resort platform identity used only when the primary author cannot be
+     * resolved to a platform account (e.g. the pusher of a push event whose
+     * head-commit author is not linked to a platform user). Never preferred
+     * over `username` or an `email_mappings` hit.
+     */
+    fallbackUsername: z.string().min(1).optional(),
   })
   .passthrough();
 
@@ -41,6 +48,9 @@ export const reviewEventSchema = z
     workspaceId: z.string().min(1),
     targetKind: reviewTargetKindSchema,
     repoRef: z.string().min(1),
+    /** PR/MR source and target repository identities; absent means unverified. */
+    sourceRepoRef: z.string().min(1).optional(),
+    targetRepoRef: z.string().min(1).optional(),
     baseSha: z.string().min(1).optional(),
     headSha: z.string().min(1).optional(),
     changedFiles: z.array(z.string().min(1)).optional(),

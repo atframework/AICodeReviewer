@@ -55,6 +55,25 @@ describe("resolveAuthorUsername", () => {
 		const ctx: AuthorMentionContext = { author: { email: "unknown@example.com" } };
 		expect(resolveAuthorUsername(ctx)).toBeUndefined();
 	});
+
+	it("uses fallbackUsername only when username and email mappings miss", () => {
+		expect(resolveAuthorUsername({ author: { fallbackUsername: "pusher" } })).toBe("pusher");
+		expect(resolveAuthorUsername({
+			author: { username: "real", fallbackUsername: "pusher" },
+		})).toBe("real");
+		expect(resolveAuthorUsername({
+			author: { email: "owent@example.com", fallbackUsername: "pusher" },
+		}, { emailMappings: { "owent@example.com": "owent" } })).toBe("owent");
+	});
+
+	it("does not use fallbackUsername when the author email is blacklisted", () => {
+		const ctx: AuthorMentionContext = {
+			author: { email: "blocked@example.com", fallbackUsername: "pusher" },
+		};
+		expect(resolveAuthorUsername(ctx, {
+			emailBlacklist: new Set(["blocked@example.com"]),
+		})).toBeUndefined();
+	});
 });
 
 describe("renderMentions", () => {
@@ -108,6 +127,13 @@ describe("buildAtMentions", () => {
 	it("returns empty string when author cannot be resolved", () => {
 		const ctx: AuthorMentionContext = { author: { email: "unknown@example.com" } };
 		expect(buildAtMentions(ctx, "github_pr_review")).toBe("");
+	});
+
+	it("mentions the fallbackUsername when the author is otherwise unresolvable", () => {
+		const ctx: AuthorMentionContext = {
+			author: { email: "unknown@example.com", fallbackUsername: "pusher" },
+		};
+		expect(buildAtMentions(ctx, "github_problem_issue")).toBe("@pusher");
 	});
 
 	it("renders Feishu all fallback when configured and author cannot be resolved", () => {

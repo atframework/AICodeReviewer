@@ -631,6 +631,18 @@ AICR 采用**两层上下文管理**，两者互补：
   - `aicr.skip`
   - `aicr.fetch_more_context`
   - `aicr.try_blame`
+  - `aicr.get_review_commits`
+  - `aicr.get_review_context`
+- 审查元数据查询由 `packages/server/src/review-data.ts` 接入 VCS；原生 MCP 将请求记入
+  `reviewDataRequests`，宿主查询后回填，JSON/stream 回退共用相同 handler。
+  `get_review_commits` 的 ids/files/diffs/summary 四种投影支持分页及作者、仓库信息开关；
+  Git 枚举完整 `base..head` 可达集合，独立于自动调度的 first-parent 元数据协议。
+  无 base 只查 head，自动提交 `head_only` 同样限定 head；merge patch 与第一父提交比较。
+  `summary` 为本页提交文件并集，完整汇总需要遍历全部页；响应超限显式失败，不截断 diff。
+  游标绑定本次 review 和查询投影并签名；Git ref 在编排入口解析为固定 SHA。
+  `get_review_context` 返回有效文件范围和端点，超过 1000 个文件时明确标记截断。
+  PR/MR 事件保留 `sourceRepoRef`/`targetRepoRef`，缺失来源不冒充目标；commit 两端相同。
+  字段和示例见双语 [MCP 工具](../site/src/content/docs/zh-cn/integrations/mcp-tools.md)。
 - 尚未完全落地的工具（如 memory/skill recall）不能提前宣传为已实现能力。
 - problem 合同保持最小稳定字段；`message` 讲问题与影响，`suggestion` 给修复建议。
 - 模板渲染与最终发布由输出层统一控制，而不是让 agent 直写各平台方言。
@@ -704,6 +716,15 @@ AICR 采用**两层上下文管理**，两者互补：
   - `mark_resolved`：在 issue 正文顶部添加 ✅ Resolved 标记并关闭。
   - `none`：不执行任何操作。
 - consolidated 模式下 labels 使用最高严重级别，assignees 汇总所有关联负责人。
+- `assign_committer`（默认 `true`）仅在创建时添加评审作者：事件 login →
+  `outputs.author_resolution.email_mappings` → head commit API 的 `author.login` →
+  push 保留的 `fallbackUsername`。GitHub 路径为 `/repos/{owner}/{repo}/commits/{headSha}`，
+  Gitea/Forgejo 为 `/repos/{owner}/{repo}/git/commits/{headSha}`；查询使用输出仓库及凭据，
+  每个 dispatcher 缓存进行中的请求及成功/失败结果。黑名单和关闭指派都会阻止作者查询与兜底，
+  OWNERS 独立合并去重。仅明确的 422 assignee 校验失败允许去掉 assignees 重试一次；
+  其他错误及重试失败向上传递。平台权限不足可能静默忽略指派，创建成功不等于指派成功。
+  GitLab 目前仅有 `gitlab_mr_review`，未实现 issue 创建/指派。
+  事件作者兼容边界与权限要求见[输出合同](../output-channels.md#assignee-resolution)。
 - managed issue 标题由输出层生成：
   - `per_problem`：前缀 + 严重级别 + 缩短位置 + 简短摘要。
   - `consolidated`：单问题复用 `per_problem` 格式；多问题使用前缀 + 最高严重级别 + 问题数 + 代表摘要。
@@ -982,7 +1003,7 @@ AICR 采用**两层上下文管理**，两者互补：
   `GET /stats/projects?since=` 与 `GET /stats/providers?since=`；Runs 标签首次进入时
   调用 `GET /runs?limit=100` 拉取最近 100 条并前端分页（每页 20 条，Prev/Next）；
   Events 标签同样以 `GET /events?limit=100` + 前端分页（每页 20 条）展示接收时刻的
-  事件与处理决定。Live 标签（首个选项卡）调用 `GET /runs/live`，用响应式 worker 卡片展示
+  事件与处理决定。Overview 标签是首个选项卡与默认落地页；Live 标签调用 `GET /runs/live`，用响应式 worker 卡片展示
   槽位编号、run ID、任务、attempt、workspace/trigger/repo、Revision、model、phase、
   开始时间与 elapsed、累计 token、缓存命中率、LLM 请求数、重试/fallback、成本及用量更新时间。
   尚无 usage 时单独显示 `~N est. prompt`，不伪装成已消耗 token。

@@ -39,7 +39,8 @@ work or move required runtime safety/output rules behind them.
 | Adapter config, native skills, MCP, compaction, web search, argv, usage parser | [Agent adapters](../../../docs/ai/pitfalls/AGENTS.agent-adapters.md); target adapter and sandbox tests |
 | Model catalog, workspace groups, quota fallback, live/final usage | [Config and state](../../../docs/ai/pitfalls/AGENTS.config-and-state.md); model-metadata, catalog-service, orchestration tests |
 
-For MCP schema changes, update server/client tests and prompt guidance together.
+For MCP schema changes, update server/client tests and prompt guidance together;
+verify host VCS execution and follow-up replay as well as tool discovery.
 For live usage, exercise split stdout records before exit and final accounting
 after exit; previews must not be added twice. Run applicable final gates from
 [the baseline](../../../docs/ai/AGENTS.repository-baseline.md).

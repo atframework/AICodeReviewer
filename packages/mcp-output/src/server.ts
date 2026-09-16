@@ -12,6 +12,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
+import { parseReviewDataRequest, reviewCommitsShape, reviewDataDescriptions } from "./review-data.js";
 
 import {
 	AICR_OUTPUT_TOOL_DESCRIPTIONS,
@@ -214,6 +215,19 @@ export function createAicrMcpServer(options: AicrMcpServerOptions = {}): AicrMcp
 	});
 
 	const collector = new AicrOutputCollector();
+
+	for (const name of ["aicr.get_review_commits", "aicr.get_review_context"] as const) {
+		server.registerTool(name, {
+			description: reviewDataDescriptions[name],
+			inputSchema: name === "aicr.get_review_commits" ? z.object(reviewCommitsShape).strict() : z.object({}).strict(),
+			annotations: { readOnlyHint: true, destructiveHint: false },
+		}, async (args: unknown) => {
+			collector.recordReviewDataRequest(parseReviewDataRequest(name, args));
+			writeState(collector.snapshot(), outputStatePath);
+			return { content: [{ type: "text" as const, text: JSON.stringify({ pending: true,
+				message: "Review data request recorded. End this pass; AICR will query the pinned VCS range and supply the result in a follow-up pass." }) }] };
+		});
+	}
 
 	server.registerTool(
 		"aicr.report_problem",

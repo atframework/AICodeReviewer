@@ -98,7 +98,7 @@ workspaces:
 | `label_ids` | int[] | 数字 label id（部分 VCS API）。 |
 | `issue_mode` | enum | `per_problem`、`consolidated`（默认）或 `per_commit`。 |
 | `resolved_action` | enum | `none`、`close`、`mark_resolved` 或 `delete`。问题被修复时执行的动作。 |
-| `assign_committer` | bool | 把提交作者加为 assignee（默认 `true`）。 |
+| `assign_committer` | bool | 创建托管 issue 时添加解析后的评审作者（默认 `true`）；规则见下文。 |
 | `owners_file` | string | OWNERS 文件路径（默认 `OWNERS`）。 |
 | `add_owners_as_assignees` | bool | 把匹配到的 OWNERS 加为 assignee。 |
 | `severity_label_prefix` | string | 自动创建 label 的前缀（例如 `aicr:problem:`）。 |
@@ -107,6 +107,14 @@ workspaces:
 | `review_event` | enum | `COMMENT`（默认）或 `REQUEST_CHANGES`。 |
 | `review_update_strategy` | enum | `always_new` 或 `update_existing`（默认）。 |
 | `notify_feishu` | object | 可选的 issue 创建时飞书通知（`webhook_url_env`、`secret_env`）。 |
+
+### Issue 指派
+
+GitHub/Gitea 托管 issue 按事件 login、`outputs.author_resolution.email_mappings`、head 提交关联账号、push 保留的 pusher 依次解析。有 head-commit 元数据的 push 使用该提交作者；PR 事件优先使用 PR 作者，之后才回退到事件发送者。Git 显示名不作为平台 login。GitHub 查询 `/repos/{owner}/{repo}/commits/{sha}`，Gitea/Forgejo 查询 `/repos/{owner}/{repo}/git/commits/{sha}`，使用输出仓库及凭据，每次评审缓存查询结果。
+
+`email_blacklist` 和 `assign_committer: false` 都会阻止作者查询与兜底；OWNERS 指派独立处理。身份无法解析或查询失败时不添加作者。仅明确的 HTTP 422 assignee 校验错误触发一次无 assignees 的创建重试；其他错误向上传递。已有 issue 的 assignees 保持原值。
+
+发布账号需要指派权限，目标用户也必须满足仓库的指派条件。GitHub/Gitea 可能在发布账号权限不足时静默忽略指派，应核对创建结果中的 assignees。私有 GitHub 仓库查询提交还需要 Contents read 权限。GitLab 当前仅支持 MR 讨论/评论，未实现 issue 创建和指派。
 
 ### 通道类型
 

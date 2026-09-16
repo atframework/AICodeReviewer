@@ -122,12 +122,16 @@ export interface AttributionResult {
 export interface VcsAdapter {
   readonly kind: "git" | "svn" | "p4" | "github" | "gitlab" | "gitea" | "forgejo";
   listChanges(ev: ReviewEvent): Promise<ChangeRange>;
+  /** Resolve movable Git refs once before reading the review's files or history. */
+  resolveReviewRevision?(revision: string): Promise<string>;
   /**
    * Bounded history read for auto-commit scheduling. Optional: adapters
    * without it cannot serve the automatic commit path (manual/PR flows are
    * unaffected).
    */
   listCommitMetadataPage?(query: CommitMetadataQuery): Promise<CommitMetadataPage>;
+  /** Review membership (all Git parents), separate from scheduler first-parent continuity. */
+  listReviewCommitMetadataPage?(query: CommitMetadataQuery): Promise<CommitMetadataPage>;
   /** Bounded source identity lookup at a pinned revision. Failures must be retried durably. */
   describeSource?(revision: string): Promise<Readonly<Record<string, string | null>>>;
   /**

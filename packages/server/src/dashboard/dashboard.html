@@ -96,8 +96,8 @@ tr:hover td{background:rgba(59,130,246,0.05)}
 <div class="content">
 
 <div class="tabs">
-<div class="tab active" data-tab="live" onclick="switchTab('live')">Live</div>
-<div class="tab" data-tab="overview" onclick="switchTab('overview')">Overview</div>
+<div class="tab active" data-tab="overview" onclick="switchTab('overview')">Overview</div>
+<div class="tab" data-tab="live" onclick="switchTab('live')">Live</div>
 <div class="tab" data-tab="projects" onclick="switchTab('projects')">Projects</div>
 <div class="tab" data-tab="providers" onclick="switchTab('providers')">LLM Providers</div>
 <div class="tab" data-tab="runs" onclick="switchTab('runs')">Recent Runs</div>
@@ -105,7 +105,7 @@ tr:hover td{background:rgba(59,130,246,0.05)}
 <div class="tab" data-tab="config" onclick="switchTab('config')">Config</div>
 </div>
 
-<div id="tab-live" class="tab-content active">
+<div id="tab-live" class="tab-content">
 <div class="toolbar">
 <button id="live-refresh" class="btn btn-sm btn-ghost" onclick="loadLiveRuns()">Refresh</button>
 <label class="indicator" for="live-auto">Auto-refresh</label>
@@ -122,7 +122,7 @@ tr:hover td{background:rgba(59,130,246,0.05)}
 <div class="cell-sub" style="margin-top:0.5rem">Workers are active analysis slots in this server process. Usage updates after completed model turns for streaming agents, or when other invocations finish. Unreported usage stays unavailable; prompt estimates are separate. Entries disappear when an execution settles or the server restarts.</div>
 </div>
 
-<div id="tab-overview" class="tab-content">
+<div id="tab-overview" class="tab-content active">
 <div id="time-selector" style="margin-bottom:1rem;display:flex;gap:0.5rem">
 <button class="btn btn-sm btn-ghost active" data-window="today" onclick="selectWindow('today')">Today</button>
 <button class="btn btn-sm btn-ghost" data-window="week" onclick="selectWindow('week')">This Week</button>

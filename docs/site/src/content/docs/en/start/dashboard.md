@@ -53,8 +53,16 @@ configured, the route returns the dashboard shell with a setup-required
 prompt instead of a 404; if `path_prefix` is set, the root paths redirect to
 the prefixed entry.
 
-After logging in, the dashboard has seven tabs:
+After logging in, the dashboard lands on the **Overview** tab and has seven tabs:
 
+- **Overview** — the landing tab: total reviews, success/failure/skip counts, runs that found
+  problems, total problems, issues created, code analyzed, LLM requests,
+  input/output/total tokens, prompt cache hit rate with the hit/miss token
+  split, estimated cost, average duration. A time-window
+  selector switches between today / this week / this month / all (all in
+  UTC). The Recent activity table includes the same per-run token total,
+  cache hit/miss split, and hit rate as the Runs tab, plus the branch and
+  short revision with the commit time.
 - **Live** — analyses running right now in this server process. Responsive cards show
   the worker slot, run ID, task title, attempt, workspace/trigger/repo, branch and revision (git short sha,
   SVN `r<N>`, P4 `CL <N>`; hover for the full revision) with the commit time
@@ -72,14 +80,6 @@ After logging in, the dashboard has seven tabs:
   seconds after the previous request finishes. Polling pauses outside the Live
   tab and while the browser page is hidden; logout resets it to manual.
   A failed refresh labels retained data as stale.
-- **Overview** — total reviews, success/failure/skip counts, runs that found
-  problems, total problems, issues created, code analyzed, LLM requests,
-  input/output/total tokens, prompt cache hit rate with the hit/miss token
-  split, estimated cost, average duration. A time-window
-  selector switches between today / this week / this month / all (all in
-  UTC). The Recent activity table includes the same per-run token total,
-  cache hit/miss split, and hit rate as the Runs tab, plus the branch and
-  short revision with the commit time.
 - **Projects** — per-project aggregates (`workspaceId + triggerName +
   repoRef`): review/success/failure/skip counts, problem totals, issues
   created, files changed, lines added/deleted, LLM requests, tokens, cache-hit

@@ -73,8 +73,9 @@ export const pullRequestPayloadSchema = z
         base: z.object({
           sha: z.string().min(1).optional(),
           ref: z.string().min(1).optional(),
+          repo: repositorySchema.nullish(),
         }).passthrough(),
-        head: z.object({ sha: z.string().min(1).optional() }).passthrough(),
+        head: z.object({ sha: z.string().min(1).optional(), repo: repositorySchema.nullish() }).passthrough(),
         labels: z
           .array(
             z.object({ name: z.string().min(1).optional() }).passthrough(),
@@ -105,6 +106,16 @@ export const pushPayloadSchema = z
       .optional(),
     head_commit: z
       .object({
+        // Gitea/GitHub push payloads describe the head commit author as
+        // `{ name, email, username }`; an unlinked Gitea author has username "".
+        // Keep this commit metadata separate from platform actor validation.
+        author: z.object({
+          name: z.string().nullish(),
+          full_name: z.string().nullish(),
+          email: z.string().nullish(),
+          login: z.string().nullish(),
+          username: z.string().nullish(),
+        }).passthrough().nullish(),
         added: z.array(z.string()).optional(),
         modified: z.array(z.string()).optional(),
         removed: z.array(z.string()).optional(),
@@ -178,8 +189,8 @@ export type PushPayload = z.infer<typeof pushPayloadSchema>;
 export type IssuePayload = z.infer<typeof issuePayloadSchema>;
 
 export interface PullRequestDetails {
-  readonly head?: { readonly sha?: string; readonly ref?: string };
-  readonly base?: { readonly sha?: string; readonly ref?: string };
+  readonly head?: { readonly sha?: string; readonly ref?: string; readonly repo?: { readonly full_name?: string } | null };
+  readonly base?: { readonly sha?: string; readonly ref?: string; readonly repo?: { readonly full_name?: string } | null };
   readonly title?: string;
   readonly html_url?: string;
   readonly user?: ActorPayload;
@@ -464,8 +475,10 @@ export function createPullRequestReviewEvent(
     targetKind: "pull_request",
     repoRef: parsed.repository.full_name,
     baseSha: parsed.pull_request.base.sha,
+    ...(parsed.pull_request.head.repo?.full_name ? { sourceRepoRef: parsed.pull_request.head.repo.full_name } : {}),
+    targetRepoRef: parsed.pull_request.base.repo?.full_name ?? parsed.repository.full_name,
     headSha: parsed.pull_request.head.sha,
-    author: normalizeActor(parsed.sender ?? parsed.pull_request.user),
+    author: normalizeActor(parsed.pull_request.user ?? parsed.sender),
     title: parsed.pull_request.title,
     url: parsed.pull_request.html_url,
     reason: `${provider}:${parsed.action ?? "pull_request"}`,
@@ -486,6 +499,38 @@ export function isBranchCreateOrDeletePush(parsed: Pick<PushPayload, "before" | 
   // trigger with review_orchestration_failed.
   return (typeof parsed.before === "string" && ZERO_SHA_PATTERN.test(parsed.before))
     || (typeof parsed.after === "string" && ZERO_SHA_PATTERN.test(parsed.after));
+}
+
+/**
+ * Resolve the review author of a push event. The head-commit author is the
+ * identity issue assignment and mentions should target; the pusher is only a
+ * delivery actor. Preference order:
+ * 1. head-commit author's platform login (`username`/`login` in the payload);
+ * 2. head-commit author's email (resolvable later via `email_mappings`), with
+ *    the pusher login retained as `fallbackUsername` so flows that used to
+ *    assign/mention the pusher keep a last-resort identity;
+ * 3. the pusher (legacy behavior for payloads without head-commit metadata).
+ * The git display name (`author.name`) is never used as a platform login.
+ */
+function resolvePushAuthor(parsed: PushPayload): ReviewActor {
+  const pusher = normalizeActor(parsed.pusher);
+  const rawAuthor = parsed.head_commit?.author;
+  if (!rawAuthor) {
+    return pusher;
+  }
+
+  const displayName = rawAuthor.full_name?.trim() || rawAuthor.name?.trim() || undefined;
+  const login = rawAuthor.login?.trim() || rawAuthor.username?.trim() || undefined;
+  const email = rawAuthor.email?.trim() || undefined;
+  if (login) {
+    return {
+      username: login,
+      email,
+      displayName,
+    };
+  }
+
+  return { email, displayName, fallbackUsername: pusher.username };
 }
 
 export function createPushReviewEvent(
@@ -514,7 +559,7 @@ export function createPushReviewEvent(
     repoRef: parsed.repository.full_name,
     baseSha: parsed.before,
     headSha: parsed.after,
-    author: normalizeActor(parsed.pusher),
+    author: resolvePushAuthor(parsed),
     url: parsed.compare_url,
     reason: `${provider}:push`,
     rawEventName: eventName,
@@ -578,6 +623,8 @@ export async function translateIssueCommentReviewCommand(
   let author = normalizeActor(parsed.comment?.user ?? parsed.sender);
   let branch: string | undefined;
   let targetBranch: string | undefined;
+  let sourceRepoRef: string | undefined;
+  let targetRepoRef = parsed.repository.full_name;
   const prLabels = extractLabelNames(parsed.issue?.labels);
 
   if (config.token && fetchPullRequestDetails) {
@@ -592,6 +639,8 @@ export async function translateIssueCommentReviewCommand(
       }
       branch = prDetails.head?.ref;
       targetBranch = prDetails.base?.ref;
+      sourceRepoRef = prDetails.head?.repo?.full_name;
+      targetRepoRef = prDetails.base?.repo?.full_name ?? targetRepoRef;
     } catch {
       // Use the already-delivered webhook payload if enrichment fails.
     }
@@ -609,6 +658,8 @@ export async function translateIssueCommentReviewCommand(
     targetKind: "pull_request",
     repoRef: parsed.repository.full_name,
     ...(baseSha ? { baseSha } : {}),
+    ...(sourceRepoRef ? { sourceRepoRef } : {}),
+    targetRepoRef,
     ...(headSha ? { headSha } : {}),
     author,
     ...(title ? { title } : {}),

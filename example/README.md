@@ -11,6 +11,13 @@ Workspace design, and configuration management reference.
 > `.github/workflows/docs.yml`; local preview still uses `pnpm docs:dev`. This
 > README remains the copy-paste deployment reference.
 
+## Review metadata queries
+
+Review agents can query their current scope and commit metadata with
+[mcp-review-queries.json](mcp-review-queries.json). This is a tool-call example,
+not service configuration. Native MCP requests are filled by the host in a
+follow-up pass; see the [MCP reference](../docs/site/src/content/docs/en/integrations/mcp-tools.md).
+
 ## Dynamic configuration
 
 The optional `config_sources` block in [config.yaml](config.yaml) enables the

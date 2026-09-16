@@ -1,6 +1,6 @@
 ---
 title: MCP tools
-description: Full reference for the five AICR MCP tools exposed to review agents, the output-state flow, and transport options.
+description: AICR MCP tools for review output, source context, commit metadata, and review scope, including transport and follow-up behavior.
 ---
 
 AICR exposes a small, stable set of MCP tools to the review agent. The agent
@@ -21,10 +21,85 @@ agent runtimes that call these tools, see
 | `aicr.skip` | Mark the review as intentionally skipped |
 | `aicr.fetch_more_context` | Request source context for a changed or narrowly related file |
 | `aicr.try_blame` | Request VCS-verified, best-effort line attribution without file content |
+| `aicr.get_review_commits` | Query reviewed commits/revisions, files, patches and optional author/repository metadata |
+| `aicr.get_review_context` | Recover the current review endpoints, repository/branch identities and effective file scope |
 
 `aicr.fetch_more_context` and `aicr.try_blame` are read-only context tools.
 The orchestrator replays them through the configured VCS adapter and runs a
 final follow-up pass with the fetched content/attribution.
+
+## `aicr.get_review_commits`
+
+Read the current review's VCS range. The caller cannot select another repository
+or revision. Git uses all commits reachable from head and not base, including
+merged side branches; a query without base reads only head. SVN/P4 use
+`(base, head]`, or the single revision/changelist when base is absent.
+Automatic `head_only` review policy limits membership to head.
+
+| Field | Default | Description |
+| --- | --- | --- |
+| `detail` | `ids` | `ids`: revision IDs only; `files`: files per commit; `diffs`: files and complete structured patches per commit; `summary`: union of files in this page |
+| `include_authors` | `false` | Include recorded author/committer name and email, SVN username or P4 user/workspace when available |
+| `include_repositories` | `false` | Include `repositories.source` and `repositories.target`, each with `repository` and `branch` |
+| `limit` | `20` | Commits per page, from 1 to 100 |
+| `cursor` | absent | Opaque `next_cursor` from a previous response in this review; keep the same detail/metadata options |
+| `max_bytes` | `200000` | Response byte limit, from 1024 to 1048576; oversized responses fail without truncating a patch |
+
+Results contain `status: complete | partial | unavailable`, `vcs`, and
+`commits: [{ revision, ... }]`. `partial` includes `next_cursor`; follow it to
+finish the range. Git orders commits topologically from head toward base;
+SVN/P4 order revisions ascending. Cursors are signed for the active review
+and cannot be reused after it ends. For `summary`, `files_scope: "page"`
+means the caller unions `files` across all pages to obtain the full list.
+Reverted files can appear here even when absent from the net review diff.
+
+`diff` contains `files` with paths, status, raw headers and hunks; hunk lines
+carry their kind, content and old/new line numbers. Patches use three context
+lines and compare Git merges with their first parent. Binary contents are not
+returned as text. SVN/P4 file paths respect the configured adapter scope.
+An empty commit has an empty patch. Reduce `limit` or increase `max_bytes`
+when a response is too large; `files` can be used when a patch exceeds the cap.
+
+Author fields are VCS-recorded values: `username`, `display_name`, `email`,
+`workspace`, `committer_name`, `committer_email`. Missing values are `null`.
+Git display names are not platform usernames, so Git `username` remains
+`null`; the tool does not infer linked accounts. Commit reviews use the same
+repository and branch for source and target. PR/MR reviews preserve the
+requester's source and the receiving target, including forks. Old events,
+deleted forks or incomplete payloads can leave source identity unknown.
+
+```json
+{
+  "toolCalls": [
+    {
+      "name": "aicr.get_review_commits",
+      "input": {
+        "detail": "diffs",
+        "include_authors": true,
+        "include_repositories": true,
+        "limit": 5
+      }
+    }
+  ]
+}
+```
+
+## `aicr.get_review_context`
+
+Pass `{}` to recover `provider`, `target_kind`, `base_revision`,
+`head_revision`, `repositories`, `commit_strategy`, `reviewed_files` and
+`reviewed_file_count`. These are the effective review files after filtering
+and commit policy. At most 1000 paths are returned; `files_truncated` states
+whether more exist. This tool helps restore scope after context compression
+and distinguish historical commit files from the files actually reviewed.
+
+Both review-data tools work through the in-process registry and native MCP.
+Native stdio/HTTP calls record `reviewDataRequests` in the output state and
+return `pending: true`. End that pass: the host queries its VCS adapter and
+supplies the result in the next bounded follow-up pass. Credentials stay with
+the host. Standalone MCP without review orchestration only records requests.
+Unavailable history or missing metadata must not be treated as an empty review.
+Verify historical findings against the final head before reporting them.
 
 ## `aicr.report_problem`
 
@@ -174,7 +249,7 @@ After every tool call, the MCP output server writes `.aicr-output-state.json`
 into the isolated `agent/` directory of the run. When the agent run finishes,
 the orchestrator reads that state file and populates AICR's output collector
 from it — validated problems, summaries, the skip reason, recorded
-`contextRequests`, and recorded `attributionRequests`.
+`contextRequests`, recorded `attributionRequests`, and `reviewDataRequests`.
 
 This state file is the structured contract between the agent and AICR. The
 orchestrator:
@@ -186,7 +261,9 @@ orchestrator:
    adapter's `fetchExtraContext`.
 4. Executes recorded `aicr.try_blame` requests through the VCS adapter's
    `fetchAttribution` when supported.
-5. Runs a final follow-up pass with the fetched content/attribution fed back
+5. Executes review-data requests through the current review's host handler
+   and Git/SVN/P4 adapter.
+6. Runs a final follow-up pass with the fetched content/attribution/metadata fed back
    in, then publishes results.
 
 :::caution[Container workdir must be `/workspace/agent`]

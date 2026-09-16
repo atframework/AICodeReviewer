@@ -41,10 +41,10 @@ session TTL 字段是 `session_ttl_seconds`（默认 `86400` = 24 小时）。`s
 
 访问 `http://<aicr-host>:8080/dashboard`（或 `/`）。即使尚未配置管理员环境变量，该路由也会返回 dashboard 外壳并显示 setup-required 提示而不是 404；如果设置了 `path_prefix`，根路径会重定向到带前缀的入口。
 
-登录后，dashboard 有七个标签：
+登录后，dashboard 默认落在 **Overview** 标签，共七个标签：
 
+- **Overview**——落地标签：总评审次数、成功/失败/跳过次数、发现问题的 run 次数、problem 总数、创建 issue 数、分析代码量、LLM 请求数、输入/输出/总 token、prompt 缓存命中率（含命中/未命中 token 拆分）、估算成本、平均 duration。时间窗口选择器切换 today / this week / this month / all（均按 UTC）。Recent activity 表格与 Runs 标签一样展示每条 run 的总 token、缓存命中/未命中拆分与命中率，外加分支、缩写 revision 与提交时间。
 - **Live**——当前服务进程中正在执行的分析。卡片随屏幕宽度排列，展示 worker 槽位、run ID、任务标题、attempt、workspace/trigger/repo、分支和 revision（git 短 sha、SVN `r<N>`、P4 `CL <N>`，悬停显示完整 revision）、提交时间、model 与 agent、phase（preparing → analyzing → publishing）、开始时间及耗时。指标包括输入/输出 token、缓存命中/未命中/写入量、命中率、LLM 请求数、重试/fallback 次数、估算成本及用量更新时间；usage 缺失时单独显示 `~N est. prompt`。worker 编号代表本进程的活动分析槽位，任务结束后可复用。Kilo/OpenCode 和 pi/oh-my-pi 每完成一个模型回合便更新用量，其他 agent 和直连 LLM 在调用结束时更新。执行结束或服务重启后条目消失。Refresh 手动刷新；自动刷新默认 **Off (manual)**，可选前次请求结束后每 5/15/30/60 秒刷新。离开 Live 或隐藏浏览器页面时暂停，退出登录恢复手动模式；刷新失败时保留的快照标为过期。
-- **Overview**——总评审次数、成功/失败/跳过次数、发现问题的 run 次数、problem 总数、创建 issue 数、分析代码量、LLM 请求数、输入/输出/总 token、prompt 缓存命中率（含命中/未命中 token 拆分）、估算成本、平均 duration。时间窗口选择器切换 today / this week / this month / all（均按 UTC）。Recent activity 表格与 Runs 标签一样展示每条 run 的总 token、缓存命中/未命中拆分与命中率，外加分支、缩写 revision 与提交时间。
 - **Projects**——按 project 聚合（`workspaceId + triggerName + repoRef`）：评审/成功/失败/跳过次数、problem 总数、创建 issue 数、变更文件数、增删行数、LLM 请求数、token、缓存命中 token 与命中率、成本、平均 duration。软删除的 project 在宽限期内仍可见，并用 `isActive` 标记。
 - **Providers**——按 provider+model 聚合：请求数、输入/输出 token、缓存命中 token 与命中率、成本、重试/fallback/失败次数、平均延迟。
 - **Runs**——最近 100 条运行记录，每页 20 条，用 Prev/Next 翻页。每行展示真实 token 用量：总 token、命中/未命中输入拆分与命中率；run 未上报可解析 usage 时显示 `—`。Revision 列展示分支、缩写 revision，以及 VCS adapter 解析成功时的提交时间。

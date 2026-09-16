@@ -20,7 +20,7 @@ describe("dashboard routes", () => {
       let value = elements.get(id);
       if (!value) {
         value = { innerHTML: "", textContent: "", disabled: false, value: "0", style: {},
-          classList: { active: id === "tab-live", contains() { return this.active; } }, addEventListener() {} };
+          classList: { active: id === "tab-overview", contains() { return this.active; } }, addEventListener() {} };
         elements.set(id, value);
       }
       return value;
@@ -120,6 +120,7 @@ describe("dashboard routes", () => {
   it("defaults to manual refresh and serializes polling after slow requests finish", async () => {
     vi.useFakeTimers();
     const { context, element } = await dashboardScript();
+    element("tab-live").classList.active = true;
     let respond!: (value: unknown) => void;
     const fetch = vi.fn(() => new Promise((resolve) => { respond = resolve; }));
     Object.assign(context, { fetch, authToken: "token" });
@@ -148,6 +149,7 @@ describe("dashboard routes", () => {
 
   it("reports HTTP and malformed responses as errors instead of an empty success", async () => {
     const { context, element } = await dashboardScript();
+    element("tab-live").classList.active = true;
     const fetch = vi.fn().mockResolvedValue({ ok: false, status: 503 });
     Object.assign(context, { fetch, authToken: "token" });
     await runInContext("loadLiveRuns()", context);
@@ -162,6 +164,7 @@ describe("dashboard routes", () => {
   it("stops polling on hide/logout and ignores responses from an earlier session", async () => {
     vi.useFakeTimers();
     const { context, element, listeners } = await dashboardScript();
+    element("tab-live").classList.active = true;
     let respond!: (value: unknown) => void;
     const fetch = vi.fn(() => new Promise((resolve) => { respond = resolve; }));
     Object.assign(context, { fetch, authToken: "old-token" });
@@ -190,6 +193,16 @@ describe("dashboard routes", () => {
     expect(html).toContain('id="live-table"');
     expect(html).toContain("api/admin/runs/live");
     expect(html).toContain("Off (manual)");
+  });
+
+  it("lands on the Overview tab instead of the live worker view", async () => {
+    const app = createServerApp({});
+    const response = await app.request("http://localhost/dashboard");
+    const html = await response.text();
+    expect(html).toContain('<div class="tab active" data-tab="overview"');
+    expect(html).toContain('<div id="tab-overview" class="tab-content active">');
+    expect(html).not.toContain('<div class="tab active" data-tab="live"');
+    expect(html).not.toContain('<div id="tab-live" class="tab-content active">');
   });
 
   it("pages 100 events by 20 and escapes event text and reasons", async () => {

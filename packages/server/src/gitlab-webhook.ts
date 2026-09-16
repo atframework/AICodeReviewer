@@ -15,11 +15,31 @@ import { describeWebhookSource } from "./source-descriptors.js";
 
 type GitlabProvider = Extract<ReviewProvider, "gitlab">;
 
+const gitlabProjectRefSchema = z.object({
+  path_with_namespace: z.string().min(1).optional(),
+  default_branch: z.string().min(1).optional(),
+}).passthrough();
+
+const gitlabRepositoriesShape = {
+  source: gitlabProjectRefSchema.nullish(),
+  target: gitlabProjectRefSchema.nullish(),
+  source_project_id: z.number().int().optional(),
+  target_project_id: z.number().int().optional(),
+};
+
+function gitlabRepositoryRefs(mr: z.infer<z.ZodObject<typeof gitlabRepositoriesShape>>, target: string) {
+  const targetRepoRef = mr.target?.path_with_namespace ?? target;
+  const sourceRepoRef = mr.source?.path_with_namespace ??
+    (mr.source_project_id !== undefined && mr.source_project_id === mr.target_project_id ? targetRepoRef : undefined);
+  return { targetRepoRef, ...(sourceRepoRef ? { sourceRepoRef } : {}) };
+}
+
 const gitlabMergeRequestPayloadSchema = z
   .object({
     object_attributes: z
       .object({
         iid: z.number().optional(),
+        ...gitlabRepositoriesShape,
         title: z.string().min(1).optional(),
         action: z.string().min(1).optional(),
         source_branch: z.string().min(1).optional(),
@@ -35,12 +55,6 @@ const gitlabMergeRequestPayloadSchema = z
         last_commit: z
           .object({
             id: z.string().min(1).optional(),
-          })
-          .passthrough()
-          .optional(),
-        source: z
-          .object({
-            default_branch: z.string().min(1).optional(),
           })
           .passthrough()
           .optional(),
@@ -88,6 +102,7 @@ const gitlabNotePayloadSchema = z
     merge_request: z
       .object({
         iid: z.number().int().positive(),
+        ...gitlabRepositoriesShape,
         source_branch: z.string().min(1).optional(),
         target_branch: z.string().min(1).optional(),
         title: z.string().min(1).optional(),
@@ -142,6 +157,7 @@ export async function translateGitlabWebhookToReviewEvent(
       ...resolveWorkspaceForRepo(config, parsed.project.path_with_namespace, describeWebhookSource(provider, parsed)),
       targetKind: "pull_request",
       repoRef: parsed.project.path_with_namespace,
+      ...gitlabRepositoryRefs(mr, parsed.project.path_with_namespace),
       baseSha: mr.diff_refs?.base_sha ?? mr.target_branch,
       headSha: mr.diff_refs?.head_sha ?? mr.source_branch,
       author: normalizeActor(parsed.user),
@@ -165,6 +181,7 @@ export async function translateGitlabWebhookToReviewEvent(
       targetKind: "pull_request",
       repoRef: parsed.project.path_with_namespace,
       baseSha: parsed.object_attributes.diff_refs?.base_sha ?? parsed.object_attributes.target_branch ?? parsed.object_attributes.source?.default_branch,
+      ...gitlabRepositoryRefs(parsed.object_attributes, parsed.project.path_with_namespace),
       headSha: parsed.object_attributes.diff_refs?.head_sha ?? parsed.object_attributes.last_commit?.id ?? parsed.object_attributes.source_branch,
       author: normalizeActor(parsed.user),
       title: parsed.object_attributes.title,

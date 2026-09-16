@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto";
+import { parseReviewDataRequest, reviewCommitsInputSchema, reviewDataDescriptions, type ReviewDataHandler, type ReviewDataRequest } from "./review-data.js";
+export * from "./review-data.js";
 
 export const mcpOutputPackageName = "@aicr/mcp-output";
 
@@ -7,9 +9,12 @@ export type AicrOutputToolName =
 	| "aicr.publish_summary"
 	| "aicr.skip"
 	| "aicr.fetch_more_context"
+	| "aicr.get_review_commits"
+	| "aicr.get_review_context"
 	| "aicr.try_blame";
 
 export const AICR_OUTPUT_TOOL_DESCRIPTIONS: Readonly<Record<AicrOutputToolName, string>> = {
+	...reviewDataDescriptions,
 	"aicr.report_problem": "Report one concrete problem introduced or worsened by the change, anchored to a changed line with a realistic trigger. Call once per discrete issue; omit praise, style-only preferences, and speculation.",
 	"aicr.publish_summary": "Publish one concise final summary after all problem reports. Roll up the reported problems and material uncertainty; do not recap code that was checked and found correct or claim unreported problems.",
 	"aicr.skip": "End the review without other output when there are no actionable problems (lgtm) or no reviewable code (no_reviewable_code).",
@@ -78,6 +83,7 @@ export interface AicrOutputState {
 	readonly summaries: readonly PublishSummaryInput[];
 	readonly contextRequests: readonly FetchMoreContextInput[];
 	readonly attributionRequests?: readonly TryBlameInput[];
+	readonly reviewDataRequests?: readonly ReviewDataRequest[];
 	readonly skipReason?: string;
 }
 
@@ -198,6 +204,7 @@ export class AicrOutputCollector {
 	private readonly summaries: PublishSummaryInput[] = [];
 	private readonly contextRequests: FetchMoreContextInput[] = [];
 	private readonly attributionRequests: TryBlameInput[] = [];
+	private readonly reviewDataRequests: ReviewDataRequest[] = [];
 	private skipReasonValue: string | undefined;
 
 	reportProblem(input: ReportProblemInput): { accepted: true; problemCount: number } {
@@ -231,6 +238,10 @@ export class AicrOutputCollector {
 		this.attributionRequests.push(input);
 	}
 
+	recordReviewDataRequest(input: ReviewDataRequest): void {
+		this.reviewDataRequests.push(input);
+	}
+
 	clearReviewOutputs(): void {
 		this.problems.length = 0;
 		this.fingerprints.clear();
@@ -247,6 +258,7 @@ export class AicrOutputCollector {
 				...(summary.title ? { title: summary.title } : {}),
 			})),
 			contextRequests: [...this.contextRequests],
+			...(this.reviewDataRequests.length > 0 ? { reviewDataRequests: [...this.reviewDataRequests] } : {}),
 			...(this.attributionRequests.length > 0 ? { attributionRequests: [...this.attributionRequests] } : {}),
 			...(this.skipReasonValue ? { skipReason: this.skipReasonValue } : {}),
 		};
@@ -280,8 +292,20 @@ export function createAicrOutputToolRegistry(
 	collector = new AicrOutputCollector(),
 	fetchMoreContext?: FetchMoreContextHandler,
 	tryBlame?: TryBlameHandler,
+	reviewData?: ReviewDataHandler,
 ): readonly AicrOutputToolDefinition[] {
 	return [
+		...(["aicr.get_review_commits", "aicr.get_review_context"] as const).map((name): AicrOutputToolDefinition => ({
+			name,
+			description: reviewDataDescriptions[name],
+			inputSchema: name === "aicr.get_review_commits" ? reviewCommitsInputSchema : { type: "object", additionalProperties: false },
+			async call(input) {
+				const request = parseReviewDataRequest(name, input);
+				collector.recordReviewDataRequest(request);
+				if (!reviewData) throw new Error("Review data is unavailable outside an active review.");
+				return { content: JSON.stringify(await reviewData(request), null, 2) };
+			},
+		})),
 		{
 			name: "aicr.report_problem",
 			description: AICR_OUTPUT_TOOL_DESCRIPTIONS["aicr.report_problem"],

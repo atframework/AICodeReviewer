@@ -549,7 +549,7 @@ outputs:
     #   resolved_action: close                   # none | close (default) | delete | mark_resolved — action when problem is fixed
     #
     #   # -- Assignee configuration --
-    #   assign_committer: true                   # add the commit author as assignee (default: true)
+    #   assign_committer: true                   # resolved author; email blacklist also blocks API/pusher fallback
     #   owners_file: "OWNERS"                    # path to OWNERS file in repo (default: "OWNERS")
     #   add_owners_as_assignees: true            # add matched OWNERS as assignees (default: false)
     #
@@ -593,7 +593,7 @@ outputs:
     #   marker_label: "aicr-managed"
     #   issue_mode: consolidated                 # consolidated (default) | per_problem | per_commit
     #   resolved_action: close                   # none | close | mark_resolved (GitHub does not support delete)
-    #   assign_committer: true
+    #   assign_committer: true                   # resolved author; requires repository assignment permission
     #   owners_file: "OWNERS"
     #   add_owners_as_assignees: true
 

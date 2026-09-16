@@ -1298,6 +1298,15 @@ export class P4VcsAdapter implements VcsAdapter {
    * `-u`/`-c` filtered, never substituted); changed paths are an advisory
    * summary from one batched `p4 describe -s` under the byte budget.
    */
+  async listReviewCommitMetadataPage(query: CommitMetadataQuery): Promise<CommitMetadataPage> {
+    const scope = (this.depot ?? query.scopeRef).replace(/\/\.\.\.$/u, "").replace(/\/+$/u, "");
+    const page = await this.listCommitMetadataPage({ ...query, scopeRef: scope,
+      baseRevision: query.baseRevision ?? String(BigInt(query.headRevision) - 1n) });
+    return { ...page, records: page.records.map(record => ({ ...record,
+      changedPaths: this.applyFilters(record.changedPaths.filter(path => path.startsWith(`${scope}/`))
+        .map(path => path.slice(scope.length + 1))) })) };
+  }
+
   async listCommitMetadataPage(query: CommitMetadataQuery): Promise<CommitMetadataPage> {
     if (!/^\/\//u.test(query.scopeRef)) {
       throw new RangeError(`P4 metadata scope "${query.scopeRef}" must be a depot path (//...).`);

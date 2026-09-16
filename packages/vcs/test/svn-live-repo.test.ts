@@ -65,6 +65,13 @@ describe.skipIf(!svn)("SVN local repository metadata and batch diff", () => {
       scopeRef: `${repoUrl}/trunk`, headRevision: "5", maxRecords: 64, maxBytes: 1_048_576,
     });
     expect(page.status).toBe("complete");
+    const reviewPage = await adapter.listReviewCommitMetadataPage({ scopeRef: "event-label", headRevision: "5", maxRecords: 20, maxBytes: 1_048_576 });
+    expect(reviewPage.records).toHaveLength(1);
+    expect(reviewPage.records[0]).toMatchObject({ revision: "5" });
+    expect(reviewPage.records[0]?.svnAuthor).toBeUndefined();
+    const reviewFirst = await adapter.listReviewCommitMetadataPage({ scopeRef: "event-label", baseRevision: "1", headRevision: "5", maxRecords: 2, maxBytes: 1_048_576 });
+    const reviewNext = await adapter.listReviewCommitMetadataPage({ scopeRef: "event-label", baseRevision: "1", headRevision: "5", cursor: reviewFirst.nextCursor!, maxRecords: 2, maxBytes: 1_048_576 });
+    expect([...reviewFirst.records, ...reviewNext.records].map(record => record.revision)).toEqual(["2", "3", "4", "5"]);
     expect(page.records.map((r) => r.revision)).toEqual(["1", "2", "3", "4", "5"]);
     // Authors are the recorded svn:author values only: alice for the streak,
     // and r5's deleted author stays unavailable — never substituted with a

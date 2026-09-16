@@ -306,6 +306,198 @@ describe("createGithubProblemIssueDispatcher", () => {
 		expect(body.assignees).toContain("bob");
 	});
 
+	it("resolves the committer through the platform commit API when the event had no username", async () => {
+		const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
+		const headSha = "0123456789abcdef0123456789abcdef01234567";
+		const dispatcher = createGithubProblemIssueDispatcher({
+			owner: "my-org",
+			repo: "my-repo",
+			issueMode: "per_problem",
+			headSha,
+			fetch: async (url, init) => {
+				calls.push({ url, init });
+				if (url.includes("/issues?state=open")) {
+					return response([]);
+				}
+				if (url.includes("/commits/")) {
+					return response({ sha: headSha, author: { login: "octocat" } });
+				}
+				return response({ id: 100, number: 10 });
+			},
+		});
+
+		const results = await dispatcher.reconcileProblems([problem]);
+
+		expect(results).toHaveLength(1);
+		expect(calls.some((c) => c.url === `https://api.github.com/repos/my-org/my-repo/commits/${headSha}`)).toBe(true);
+		const create = calls.find((c) => c.url.endsWith("/repos/my-org/my-repo/issues") && c.init?.method === "POST");
+		const body = JSON.parse(create?.init?.body ?? "{}");
+		expect(body.assignees).toEqual(["octocat"]);
+	});
+
+	it("caches the committer lookup across problems", async () => {
+		const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
+		const headSha = "0123456789abcdef0123456789abcdef01234567";
+		const second: ReviewProblem = { ...problem, file: "src/other.ts", fingerprint: "fp-other" };
+		const dispatcher = createGithubProblemIssueDispatcher({
+			owner: "my-org",
+			repo: "my-repo",
+			issueMode: "per_problem",
+			headSha,
+			fetch: async (url, init) => {
+				calls.push({ url, init });
+				if (url.includes("/issues?state=open")) {
+					return response([]);
+				}
+				if (url.includes("/commits/")) {
+					return response({ sha: headSha, author: { login: "octocat" } });
+				}
+				return response({ id: 100, number: 10 });
+			},
+		});
+
+		await dispatcher.reconcileProblems([problem, second]);
+
+		expect(calls.filter((c) => c.url.includes("/commits/"))).toHaveLength(1);
+		const creates = calls.filter((c) => c.url.endsWith("/repos/my-org/my-repo/issues") && c.init?.method === "POST");
+		expect(creates).toHaveLength(2);
+		for (const create of creates) {
+			expect(JSON.parse(create.init?.body ?? "{}").assignees).toEqual(["octocat"]);
+		}
+	});
+
+	it("creates the issue without an assignee when the commit lookup fails or is unlinked", async () => {
+		for (const commitResponse of [response({ message: "Not Found" }, 404), response({ sha: "x", author: null })]) {
+			const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
+			const dispatcher = createGithubProblemIssueDispatcher({
+				owner: "my-org",
+				repo: "my-repo",
+				issueMode: "per_problem",
+				headSha: "0123456789abcdef0123456789abcdef01234567",
+				fetch: async (url, init) => {
+					calls.push({ url, init });
+					if (url.includes("/issues?state=open")) {
+						return response([]);
+					}
+					if (url.includes("/commits/")) {
+						return commitResponse;
+					}
+					return response({ id: 100, number: 10 });
+				},
+			});
+
+			const results = await dispatcher.reconcileProblems([problem]);
+
+			expect(results).toHaveLength(1);
+			expect(results[0]?.status).toBe("published");
+			const create = calls.find((c) => c.url.endsWith("/repos/my-org/my-repo/issues") && c.init?.method === "POST");
+			expect(JSON.parse(create?.init?.body ?? "{}").assignees).toBeUndefined();
+		}
+	});
+
+	it("does not query the commit API when assignment is disabled or the username is known", async () => {
+		for (const extra of [{ assignCommitter: false }, { committerUsername: "committer-user" }] as const) {
+			const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
+			const dispatcher = createGithubProblemIssueDispatcher({
+				owner: "my-org",
+				repo: "my-repo",
+				issueMode: "per_problem",
+				headSha: "0123456789abcdef0123456789abcdef01234567",
+				...extra,
+				fetch: async (url, init) => {
+					calls.push({ url, init });
+					return url.includes("/issues?state=open") ? response([]) : response({ id: 100, number: 10 });
+				},
+			});
+
+			await dispatcher.reconcileProblems([problem]);
+
+			expect(calls.some((c) => c.url.includes("/commits/"))).toBe(false);
+			const create = calls.find((c) => c.url.endsWith("/repos/my-org/my-repo/issues") && c.init?.method === "POST");
+			const assignees = JSON.parse(create?.init?.body ?? "{}").assignees as string[] | undefined;
+			expect(assignees).toEqual("committerUsername" in extra ? ["committer-user"] : undefined);
+		}
+	});
+
+	it("retries issue creation without assignees when the platform rejects them", async () => {
+		const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
+		const dispatcher = createGithubProblemIssueDispatcher({
+			owner: "my-org",
+			repo: "my-repo",
+			issueMode: "per_problem",
+			committerUsername: "not-a-collaborator",
+			fetch: async (url, init) => {
+				calls.push({ url, init });
+				if (url.includes("/issues?state=open")) {
+					return response([]);
+				}
+				if (url.endsWith("/repos/my-org/my-repo/issues") && init?.method === "POST") {
+					const hasAssignees = JSON.parse(init.body ?? "{}").assignees !== undefined;
+					return hasAssignees
+						? response({ message: "Validation Failed", errors: [{ field: "assignees" }] }, 422)
+						: response({ id: 100, number: 10 });
+				}
+				return response({});
+			},
+		});
+
+		const results = await dispatcher.reconcileProblems([problem]);
+
+		expect(results).toHaveLength(1);
+		expect(results[0]?.status).toBe("published");
+		const creates = calls.filter((c) => c.url.endsWith("/repos/my-org/my-repo/issues") && c.init?.method === "POST");
+		expect(creates).toHaveLength(2);
+		expect(JSON.parse(creates[0]?.init?.body ?? "{}").assignees).toEqual(["not-a-collaborator"]);
+		expect(JSON.parse(creates[1]?.init?.body ?? "{}").assignees).toBeUndefined();
+	});
+
+	it("does not retry issue creation without assignees on a server error", async () => {
+		const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
+		const dispatcher = createGithubProblemIssueDispatcher({
+			owner: "my-org",
+			repo: "my-repo",
+			issueMode: "per_problem",
+			committerUsername: "committer-user",
+			fetch: async (url, init) => {
+				calls.push({ url, init });
+				if (url.includes("/issues?state=open")) {
+					return response([]);
+				}
+				return response({ message: "Internal Server Error" }, 500);
+			},
+		});
+
+		await expect(dispatcher.reconcileProblems([problem])).rejects.toThrow("500");
+		expect(calls.filter((c) => c.url.endsWith("/repos/my-org/my-repo/issues") && c.init?.method === "POST")).toHaveLength(1);
+	});
+
+	it("assigns the API-resolved committer on consolidated issues", async () => {
+		const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
+		const headSha = "0123456789abcdef0123456789abcdef01234567";
+		const dispatcher = createGithubProblemIssueDispatcher({
+			owner: "my-org",
+			repo: "my-repo",
+			headSha,
+			targetKind: "push",
+			fetch: async (url, init) => {
+				calls.push({ url, init });
+				if (url.includes("/issues?state=open")) {
+					return response([]);
+				}
+				if (url.includes("/commits/")) {
+					return response({ sha: headSha, author: { login: "octocat" } });
+				}
+				return response({ id: 100, number: 10 });
+			},
+		});
+
+		const results = await dispatcher.reconcileProblems([problem], "Summary text");
+
+		expect(results).toHaveLength(1);
+		const create = calls.find((c) => c.url.endsWith("/repos/my-org/my-repo/issues") && c.init?.method === "POST");
+		expect(JSON.parse(create?.init?.body ?? "{}").assignees).toEqual(["octocat"]);
+	});
+
 	it("auto-creates severity labels using string names (not IDs)", async () => {
 		const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
 		const dispatcher = createGithubProblemIssueDispatcher({

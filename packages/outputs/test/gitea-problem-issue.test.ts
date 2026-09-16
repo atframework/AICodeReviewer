@@ -306,6 +306,99 @@ describe("createGiteaProblemIssueDispatcher", () => {
     expect(body.assignees).toContain("bob");
   });
 
+  it("resolves the committer through the platform commit API when the event had no username", async () => {
+    const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
+    const headSha = "0123456789abcdef0123456789abcdef01234567";
+    const dispatcher = createGiteaProblemIssueDispatcher({
+      baseUrl: "https://gitea.example",
+      owner: "owent",
+      repo: "example",
+      issueMode: "per_problem",
+      headSha,
+      fetch: async (url, init) => {
+        calls.push({ url, init });
+        if (url.includes("/issues?state=open")) {
+          return response([]);
+        }
+        if (url.includes("/commits/")) {
+          return response({ sha: headSha, author: { login: "octocat" } });
+        }
+        return response({ id: 100, number: 10 });
+      },
+    });
+
+    const results = await dispatcher.reconcileProblems([problem]);
+
+    expect(results).toHaveLength(1);
+    expect(calls.some((c) => c.url === `https://gitea.example/api/v1/repos/owent/example/git/commits/${headSha}`)).toBe(true);
+    const create = calls.find((c) => c.url.endsWith("/repos/owent/example/issues") && c.init?.method === "POST");
+    expect(JSON.parse(create?.init?.body ?? "{}").assignees).toEqual(["octocat"]);
+  });
+
+  it("creates the issue without an assignee when the commit lookup fails", async () => {
+    const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
+    const dispatcher = createGiteaProblemIssueDispatcher({
+      baseUrl: "https://gitea.example",
+      owner: "owent",
+      repo: "example",
+      issueMode: "per_problem",
+      headSha: "0123456789abcdef0123456789abcdef01234567",
+      fetch: async (url, init) => {
+        calls.push({ url, init });
+        if (url.includes("/issues?state=open")) {
+          return response([]);
+        }
+        if (url.includes("/commits/")) {
+          return response({ message: "Not Found" }, 404);
+        }
+        return response({ id: 100, number: 10 });
+      },
+    });
+
+    const results = await dispatcher.reconcileProblems([problem]);
+
+    expect(results).toHaveLength(1);
+    expect(results[0]?.status).toBe("published");
+    const create = calls.find((c) => c.url.endsWith("/repos/owent/example/issues") && c.init?.method === "POST");
+    expect(JSON.parse(create?.init?.body ?? "{}").assignees).toBeUndefined();
+  });
+
+  it.each([
+    "assignee does not exist",
+    "user doesn't have access to repo [user_id: 42, repo_name: example]",
+  ])("retries issue creation without assignees for %s", async (message) => {
+    const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
+    const dispatcher = createGiteaProblemIssueDispatcher({
+      baseUrl: "https://gitea.example",
+      owner: "owent",
+      repo: "example",
+      issueMode: "per_problem",
+      committerUsername: "not-a-user",
+      fetch: async (url, init) => {
+        calls.push({ url, init });
+        if (url.includes("/issues?state=open")) {
+          return response([]);
+        }
+        if (url.endsWith("/repos/owent/example/issues") && init?.method === "POST") {
+          const hasAssignees = JSON.parse(init.body ?? "{}").assignees !== undefined;
+          return hasAssignees
+            ? response({ message }, 422)
+            : response({ id: 100, number: 10 });
+        }
+        return response({});
+      },
+    });
+
+    const results = await dispatcher.reconcileProblems([problem]);
+
+    expect(results).toHaveLength(1);
+    expect(results[0]?.status).toBe("published");
+    const creates = calls.filter((c) => c.url.endsWith("/repos/owent/example/issues") && c.init?.method === "POST");
+    expect(creates).toHaveLength(2);
+    expect(JSON.parse(creates[0]?.init?.body ?? "{}").assignees).toEqual(["not-a-user"]);
+    expect(JSON.parse(creates[1]?.init?.body ?? "{}").assignees).toBeUndefined();
+  });
+
   it("falls back to reviewers when no path matches", async () => {
     const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
     const dispatcher = createGiteaProblemIssueDispatcher({

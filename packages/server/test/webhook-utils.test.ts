@@ -269,7 +269,7 @@ describe("translateWebhookToReviewEvent", () => {
     expect(event).toBeNull();
   });
 
-  it("uses sender over pull_request.user when both are present", async () => {
+  it("prefers the PR author without borrowing the delivery sender's email", async () => {
     const event = await translateWebhookToReviewEvent(
       "gitea",
       "pull_request",
@@ -286,8 +286,8 @@ describe("translateWebhookToReviewEvent", () => {
       config,
     );
 
-    expect(event?.author.username).toBe("sender-user");
-    expect(event?.author.email).toBe("sender@example.com");
+    expect(event?.author.username).toBe("pr-user");
+    expect(event?.author.email).toBeUndefined();
   });
 
   it("produces an empty author when both sender and pull_request.user are absent", async () => {
@@ -359,6 +359,79 @@ describe("translateWebhookToReviewEvent", () => {
 
     expect(event?.author.username).toBe("yousongyang");
     expect(event?.author.email).toBe("yousongyang@example.com");
+  });
+
+  it("prefers the head commit author identity over the pusher for push events", async () => {
+    const event = await translateWebhookToReviewEvent(
+      "github",
+      "push",
+      {
+        ref: "refs/heads/main",
+        before: "abc123",
+        after: "def456",
+        repository: { full_name: "atframework/atsf4g-co" },
+        pusher: { name: "pusher-user", email: "pusher@example.com" },
+        commits: [],
+        head_commit: {
+          author: { name: "Mona Lisa", email: "mona@example.com", username: "monalisa" },
+          modified: ["src/app.ts"],
+        },
+      },
+      { triggerName: "github-atframework", workspaceId: "github-atsf4g-co" },
+    );
+
+    expect(event?.author.username).toBe("monalisa");
+    expect(event?.author.email).toBe("mona@example.com");
+    expect(event?.author.displayName).toBe("Mona Lisa");
+    expect(event?.author.fallbackUsername).toBeUndefined();
+  });
+
+  it("keeps the pusher login as fallbackUsername when the head commit author is not a platform user", async () => {
+    const event = await translateWebhookToReviewEvent(
+      "gitea",
+      "push",
+      {
+        before: "abc123",
+        after: "def456",
+        repository: { full_name: "owent/example" },
+        pusher: { login: "pusher-user", email: "pusher@example.com" },
+        head_commit: {
+          author: { name: "Mona Lisa", email: "mona@example.com" },
+          modified: ["src/app.ts"],
+        },
+      },
+      config,
+    );
+
+    // The git display name must never be treated as a platform login; the
+    // commit-author email can still resolve through email_mappings and the
+    // pusher remains the last-resort identity.
+    expect(event?.author.username).toBeUndefined();
+    expect(event?.author.email).toBe("mona@example.com");
+    expect(event?.author.displayName).toBe("Mona Lisa");
+    expect(event?.author.fallbackUsername).toBe("pusher-user");
+  });
+
+  it.each(["github", "gitea", "forgejo"] as const)("accepts unlinked %s commit authors without confusing names with logins", async (provider) => {
+    for (const username of ["", null, undefined]) {
+      const event = await translateWebhookToReviewEvent(provider, "push", {
+        before: "base", after: "head", repository: { full_name: "owent/example" },
+        pusher: { login: "pusher", email: "pusher@example.com" },
+        head_commit: { author: { name: "Git Display Name", email: "author@example.com", username } },
+      }, config);
+      expect(event?.author).toMatchObject({ email: "author@example.com", displayName: "Git Display Name", fallbackUsername: "pusher" });
+      expect(event?.author.username).toBeUndefined();
+    }
+  });
+
+  it("does not attach the pusher email to a linked head author", async () => {
+    const event = await translateWebhookToReviewEvent("github", "push", {
+      before: "base", after: "head", repository: { full_name: "owent/example" },
+      pusher: { login: "pusher", email: "bot@example.com" },
+      head_commit: { author: { username: "author" } },
+    }, config);
+    expect(event?.author.username).toBe("author");
+    expect(event?.author.email).toBeUndefined();
   });
 
   it("uses repository mappings to select the target workspace", async () => {

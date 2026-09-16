@@ -116,16 +116,18 @@ describe("AicrOutputCollector", () => {
     const tools = createAicrOutputToolRegistry();
 
     expect(tools.map((tool) => tool.name)).toEqual([
+      "aicr.get_review_commits",
+      "aicr.get_review_context",
       "aicr.report_problem",
       "aicr.publish_summary",
       "aicr.skip",
       "aicr.fetch_more_context",
       "aicr.try_blame",
     ]);
-    expect(tools[0]?.inputSchema).toMatchObject({
+    expect(tools.find(tool => tool.name === "aicr.report_problem")?.inputSchema).toMatchObject({
       required: ["file", "line", "severity", "category", "message"],
     });
-    expect(tools[1]?.inputSchema).toMatchObject({
+    expect(tools.find(tool => tool.name === "aicr.publish_summary")?.inputSchema).toMatchObject({
       required: ["markdown"],
       properties: {
         markdown: { type: "string" },

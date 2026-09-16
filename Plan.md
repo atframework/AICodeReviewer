@@ -12,6 +12,9 @@ M0–M16 的核心交付已归档；待验收的外部场景与预留扩展列�
 PR/MR 执行时段、持久化延期与事件面板见 [M16](docs/ai/milestones/M16.md)。
 当前 Observability 的 VCS 提交信息、worker 活动视图及用量刷新边界见
 [架构 §3.11](docs/ai/architecture.md#311-run-状态与可观测性)。
+审查提交与范围查询的 MCP 接线、分页和 fork 身份合同见
+[架构 §3.9](docs/ai/architecture.md#39-输出通道模板与-mcp-工具)及
+[MCP 工具](docs/site/src/content/docs/zh-cn/integrations/mcp-tools.md)。
 
 2026-09-10 已推进的本地验收：真实 svnserve + post-commit hook 到持久调度、
 模型目录 Redis 新连接重载，以及部署配置/双语自动提交示例的 schema 校验。
@@ -44,6 +47,7 @@ Workspace 多工程规则与动态配置管理 P0–P8 已完成本地交付、�
 
 | 场景 | 已有本地证据 | 仍需的条件与验收 |
 | --- | --- | --- |
+| GitHub/Gitea issue 自动指派 | 作者解析、真实 API 路径、三种 issue 模式、黑名单与重试边界的本地测试 | 使用有指派权限的账号核对真实创建结果中的 assignees；验证账号未关联邮箱、无权限及不可指派用户；规则见[输出合同](docs/output-channels.md#assignee-resolution) |
 | GitLab 真实仓库端到端流程 | 适配器、webhook、分支筛选与持久入队、输出合同测试 | GitLab 实例、测试仓库、token、webhook 权限；验证真实 push/MR 筛选、入队与发布 |
 | SVN 部署环境 | file:// 仓库及本机 svnserve、认证 HTTP hook、SQLite 调度、真实 diff | 目标服务器上的 hook 账户/PATH、网络 ACL，以及实际使用的 HTTP(S)/认证方式 |
 | Redis 部署环境 | 自动调度和模型目录均已通过本机真实 Redis | 仅部署特定的 Redis 版本、ACL/TLS、网络中断及持久化配置需要现场验证 |

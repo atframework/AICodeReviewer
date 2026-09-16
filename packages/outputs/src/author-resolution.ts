@@ -3,6 +3,7 @@ export interface AuthorMentionContext {
 		readonly username?: string | undefined;
 		readonly email?: string | undefined;
 		readonly displayName?: string | undefined;
+		readonly fallbackUsername?: string | undefined;
 	};
 }
 
@@ -82,7 +83,26 @@ export function resolveAuthorUsername(
 		}
 	}
 
+	if (author.fallbackUsername) {
+		return author.fallbackUsername;
+	}
+
 	return undefined;
+}
+
+/** Keep the delivery actor separate so assignment can try the commit API first. */
+export function resolveAuthorAssignment(context: AuthorMentionContext, opts?: AuthorResolutionOptions): {
+	readonly blocked: boolean;
+	readonly username: string | undefined;
+	readonly fallbackUsername: string | undefined;
+} {
+	const author = context.author;
+	const blocked = !!author?.email && isEmailBlacklisted(author.email, opts?.emailBlacklist);
+	return {
+		blocked,
+		username: author ? resolveAuthorUsername({ author: { ...author, fallbackUsername: undefined } }, opts) : undefined,
+		fallbackUsername: blocked ? undefined : author?.fallbackUsername,
+	};
 }
 
 function renderFallbackMention(channelKind: MentionChannelKind): string {

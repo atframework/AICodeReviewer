@@ -14,6 +14,7 @@ import type * as aicrStore from "@aicr/store";
 import type * as aicrCore from "@aicr/core";
 
 import { GithubAppTokenService } from "../src/github-app-token.js";
+import { translateWebhookToReviewEvent } from "../src/webhook-translator.js";
 import {
   resolveModelSpecFromConfig,
   resolveIssueTriageModelSpecFromConfig,
@@ -1628,6 +1629,65 @@ describe("createOutputPublisherFromConfig", () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+
+  describe.each(["github", "gitea", "forgejo"] as const)("%s managed issue author assignment", (provider) => {
+    it.each([
+      { name: "linked author", username: "author-login", expected: "author-login", lookups: 0 },
+      { name: "email mapping before pusher", mapped: true, expected: "mapped-author", lookups: 0 },
+      { name: "commit API before pusher", expected: "api-author", lookups: 1 },
+      { name: "scheduled git author has only name and email", scheduled: true, expected: "api-author", lookups: 1 },
+      { name: "pusher after unlinked commit", unlinked: true, expected: "pusher", lookups: 1 },
+      { name: "blacklist blocks API and pusher", blocked: true, expected: undefined, lookups: 0 },
+      { name: "explicit disable", disabled: true, expected: undefined, lookups: 0 },
+    ])("$name", async (scenario) => {
+      const github = provider === "github";
+      const repoPath = github ? "https://api.github.com/repos/org/repo" : "https://git.example/api/v1/repos/org/repo";
+      const commitPath = `${repoPath}/${github ? "commits" : "git/commits"}/head`;
+      const calls: { url: string; method?: string; body?: string }[] = [];
+      vi.stubGlobal("fetch", async (url: string, init?: { method?: string; body?: string }) => {
+        calls.push({ url, ...init });
+        if (url.includes("/issues?")) return response([]);
+        if (url === commitPath) return response({ author: scenario.unlinked ? null : { login: "api-author" } });
+        if (url === `${repoPath}/issues` && init?.method === "POST") return response({ id: 1, number: 1 });
+        throw new Error(`Unexpected request: ${init?.method} ${url}`);
+      });
+      try {
+        const config = makeConfig({
+          triggers: [{ name: "git", kind: provider, base_url: github ? "https://github.com" : "https://git.example" }],
+          outputs: {
+            template_engine: "handlebars",
+            author_resolution: {
+              email_mappings: scenario.mapped ? { "author@example.com": "mapped-author" } : {},
+              email_blacklist: scenario.blocked ? ["author@example.com"] : [],
+            },
+            channels: [{ name: "issues", kind: github ? "github_problem_issue" : "gitea_problem_issue", trigger: "git",
+              ...(scenario.disabled ? { assign_committer: false } : {}) }],
+          },
+        } as Partial<AppConfig>);
+        const event = await translateWebhookToReviewEvent(provider, "push", {
+          before: "base", after: "head", repository: { full_name: "org/repo" },
+          pusher: { login: "pusher" },
+          head_commit: { author: { name: "Git Author", email: "Author@Example.com", ...(scenario.username ? { username: scenario.username } : {}) } },
+        }, { triggerName: "git", workspaceId: "test-workspace" });
+        expect(event).not.toBeNull();
+        const reviewEvent = scenario.scheduled
+          ? { ...event!, targetKind: "commit" as const, author: { displayName: "Git Author", email: "author@example.com" } }
+          : event!;
+        const publisher = createOutputPublisherFromConfig(config, "issues", undefined, "test-workspace", reviewEvent);
+        expect(publisher).toBeDefined();
+        await publisher!.publishSummary?.("Review summary", [
+          { file: "src/app.ts", line: 7, severity: "high", category: "correctness", message: "Issue." },
+        ]);
+        const posts = calls.filter((call) => call.method === "POST");
+        expect(posts).toHaveLength(1);
+        expect(JSON.parse(posts[0]!.body!).assignees).toEqual(scenario.expected ? [scenario.expected] : undefined);
+        expect(calls.filter((call) => call.url.includes("/commits/"))).toHaveLength(scenario.lookups);
+        if (scenario.lookups) expect(calls.some((call) => call.url === commitPath)).toBe(true);
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    });
   });
 
   it("passes configured Feishu author mappings as mention text", async () => {

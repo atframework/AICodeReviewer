@@ -30,6 +30,7 @@ import {
 } from "@aicr/core";
 import type { AgentAdapter, AgentCompactionOptions, AgentSpawnOptions, AgentWebSearchOptions } from "@aicr/agents";
 import { materializeRuntimeBundle, OMP_AGENT_DIR_NAME, PI_AGENT_DIR_NAME } from "@aicr/agents";
+import { createReviewDataHandler } from "./review-data.js";
 import type { RuntimeBundleInstruction, RuntimeBundleMcpServer, RuntimeBundleMcpTool, RuntimeBundleSkill } from "@aicr/agents";
 import {
   type ChatCompletionClient,
@@ -621,6 +622,7 @@ function buildJsonToolContract(): string {
     "When the diff is unavailable or insufficient, call aicr.fetch_more_context for the changed file; omit range to fetch the full file.",
     "You may call aicr.fetch_more_context for a narrowly related repository file outside the change when it is required to understand an API contract, caller/callee, type definition, or configuration that directly affects a changed line.",
     "Use aicr.try_blame only when VCS-verified line attribution is needed; it returns best-effort blame/annotate metadata and never returns source content. Do not guess authors from names, summaries, or diff text.",
+    "Use aicr.get_review_context with {} to recover scope, or aicr.get_review_commits with detail ids/files/diffs/summary to query the current review. Authors and repositories are opt-in (include_authors/include_repositories). Follow next_cursor with the same projection; native MCP pending requests require ending this pass for host follow-up. Verify historical patches against the final head.",
     "When running inside an agent sandbox, inspect already materialized files with read-only shell commands (rg, fd, bat --paging=never --style=plain, jq, yq) before concluding that source code is inaccessible.",
     "If a needed file is not materialized or the MCP tool returns a pending/empty context response, stop making a final no-problem claim; request the concrete file through aicr.fetch_more_context so AICR can pull it from VCS and rerun the final pass.",
     "Never ask the user to provide diff or source context; request it through aicr.fetch_more_context with a concrete path and reason.",
@@ -633,6 +635,7 @@ function buildJsonToolContract(): string {
     "Preferred shape:",
     '{"toolCalls":[{"name":"aicr.fetch_more_context","input":{"path":"src/changed-file.ts","reason":"Need the full file to validate control flow around the changed function."}}]}',
     '{"toolCalls":[{"name":"aicr.try_blame","input":{"path":"src/changed-file.ts","range":{"start_line":42,"end_line":42},"reason":"Need VCS-verified attribution for the changed line before deciding ownership-sensitive follow-up."}}]}',
+    '{"toolCalls":[{"name":"aicr.get_review_commits","input":{"detail":"ids"}},{"name":"aicr.get_review_context","input":{}}]}',
     '{"toolCalls":[{"name":"aicr.report_problem","input":{"file":"src/file.ts","line":1,"severity":"medium","category":"correctness","message":"..."}}],"notes":"optional"}',
     '{"toolCalls":[{"name":"aicr.skip","input":{"reason":"lgtm"}}]}',
     "Alternatively use problems/summary/skipReason fields; AICR will translate them into tool calls.",
@@ -1847,6 +1850,7 @@ async function runAgentReviewInDirs(
           summaries: Array.isArray(parsed.summaries) ? parsed.summaries : [],
           contextRequests: Array.isArray(parsed.contextRequests) ? parsed.contextRequests : [],
           ...(Array.isArray(parsed.attributionRequests) ? { attributionRequests: parsed.attributionRequests } : {}),
+          ...(Array.isArray(parsed.reviewDataRequests) ? { reviewDataRequests: parsed.reviewDataRequests } : {}),
           ...(typeof parsed.skipReason === "string" ? { skipReason: parsed.skipReason } : {}),
         };
         if (options.logThinking !== false) {
@@ -2116,6 +2120,8 @@ const KILO_MCP_TOOL_MAP: Readonly<Record<string, AicrOutputToolName>> = {
   skip: "aicr.skip",
   fetch_more_context: "aicr.fetch_more_context",
   try_blame: "aicr.try_blame",
+  get_review_commits: "aicr.get_review_commits",
+  get_review_context: "aicr.get_review_context",
 };
 
 function normalizeToolName(value: unknown): AicrOutputToolName {
@@ -2124,7 +2130,9 @@ function normalizeToolName(value: unknown): AicrOutputToolName {
     value === "aicr.publish_summary" ||
     value === "aicr.skip" ||
     value === "aicr.fetch_more_context" ||
-    value === "aicr.try_blame"
+    value === "aicr.try_blame" ||
+    value === "aicr.get_review_commits" ||
+    value === "aicr.get_review_context"
   ) {
     return value;
   }
@@ -2294,7 +2302,8 @@ function parseToolCalls(content: string, options: ParseToolCallOptions = {}): To
 }
 
 function isContextToolName(name: AicrOutputToolName): boolean {
-  return name === "aicr.fetch_more_context" || name === "aicr.try_blame";
+  return name === "aicr.fetch_more_context" || name === "aicr.try_blame" ||
+    name === "aicr.get_review_commits" || name === "aicr.get_review_context";
 }
 
 function emptyToolExecutionResult(): ToolCallExecutionResult {
@@ -2347,7 +2356,7 @@ async function executeAicrToolCalls(
       if (isContextToolName(toolCall.name)) {
         const input = isPlainObject(toolCall.input) ? toolCall.input : {};
         contextResponses.push({
-          ...(typeof input.path === "string" ? { path: input.path } : {}),
+          path: typeof input.path === "string" ? input.path : toolCall.name,
           ...(isPlainObject(result) && typeof result.content === "string" ? { content: result.content } : {}),
         });
       } else {
@@ -2360,9 +2369,7 @@ async function executeAicrToolCalls(
         contextResponses.push({ error: errorMessage });
         console.warn(JSON.stringify({
           level: "warn",
-          msg: toolCall.name === "aicr.fetch_more_context"
-            ? "ignored invalid fetch_more_context tool call"
-            : "ignored invalid try_blame tool call",
+          msg: `ignored invalid ${toolCall.name.slice("aicr.".length)} tool call`,
           toolName: toolCall.name,
           error: errorMessage,
         }));
@@ -2458,12 +2465,14 @@ async function collectCompletionOutputs(
   if (completion.mcpState) {
     replayMcpReviewOutputs(completion.mcpState, collector);
     const attributionRequests = completion.mcpState.attributionRequests ?? [];
-    if (completion.mcpState.contextRequests.length > 0 || attributionRequests.length > 0) {
+    const reviewDataRequests = completion.mcpState.reviewDataRequests ?? [];
+    if (completion.mcpState.contextRequests.length > 0 || attributionRequests.length > 0 || reviewDataRequests.length > 0) {
       executions.push(
         await executeAicrToolCalls(
           [
             ...contextRequestsToToolCalls(completion.mcpState.contextRequests),
             ...attributionRequestsToToolCalls(attributionRequests),
+            ...reviewDataRequests.filter(request => request && (request.name === "aicr.get_review_commits" || request.name === "aicr.get_review_context")),
           ],
           tools,
         ),
@@ -3059,7 +3068,11 @@ async function executeReviewInRunDirs(
     sourceDir: runDirs.sourceDir,
   };
   const vcs = options.vcsFactory ? await options.vcsFactory(context.reviewEvent.provider === "p4" ? runDirs.sourceDir : sourceRoot, context) : options.vcs;
-  const range = await vcs.listChanges(context.reviewEvent);
+  const event = context.reviewEvent;
+  const range = await vcs.listChanges(vcs.resolveReviewRevision ? { ...event,
+    baseSha: event.baseSha ? await vcs.resolveReviewRevision(event.baseSha) : undefined,
+    headSha: event.headSha ? await vcs.resolveReviewRevision(event.headSha) : undefined,
+  } : event);
   let headCommittedAt: string | undefined;
   try {
     const timestamp = range.headRevision && await vcs.fetchRevisionCommittedAt?.(range.headRevision);
@@ -3339,6 +3352,7 @@ async function executeReviewInRunDirs(
 
       return vcs.fetchAttribution(toAttributionRequest(request, range.headRevision), workspaceRef);
     },
+    createReviewDataHandler(vcs, context.reviewEvent, range, changedPaths, policy?.commit_strategy),
   );
   const runMetricsAccumulator = createReviewRunMetricsAccumulator();
   const bundleContext: AgentBundleContext = {

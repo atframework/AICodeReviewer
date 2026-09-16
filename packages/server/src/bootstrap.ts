@@ -51,7 +51,7 @@ import {
   type ReviewProblem,
   type DispatchResult,
   toTemplateProblem,
-  resolveAuthorUsername,
+  resolveAuthorAssignment,
   type AuthorResolutionOptions,
   type MentionChannelKind,
   type TemplateContext,
@@ -1763,9 +1763,9 @@ export function createOutputPublisherFromConfig(
     const notifyFeishuSecretEnv = notifyFeishuConfig?.secret_env as string | undefined;
     const notifyFeishuSecret = notifyFeishuSecretEnv ? resolveEnv(notifyFeishuSecretEnv) : undefined;
     const authorResolution = buildAuthorResolutionOptions(config, channel);
-    const committerUsername = reviewEvent?.author
-      ? resolveAuthorUsername({ author: reviewEvent.author }, authorResolution)
-      : undefined;
+    const authorAssignment = resolveAuthorAssignment(reviewEvent ?? {}, authorResolution);
+    const committerUsername = authorAssignment.username;
+    const fallbackCommitterUsername = authorAssignment.fallbackUsername;
     const ref = reviewEvent?.headSha ?? "main";
 
     const dispatcher = createGithubProblemIssueDispatcher({
@@ -1780,8 +1780,9 @@ export function createOutputPublisherFromConfig(
       ...(resolvedIssueMode ? { issueMode: resolvedIssueMode } : {}),
       ...(resolvedAction === "none" || resolvedAction === "close" || resolvedAction === "mark_resolved" ? { resolvedAction } : {}),
       ...(problemIssueMaxRecentIssues !== undefined ? { maxRecentIssues: problemIssueMaxRecentIssues } : {}),
-      ...(assignCommitter !== undefined ? { assignCommitter } : {}),
+      ...(authorAssignment.blocked ? { assignCommitter: false } : assignCommitter !== undefined ? { assignCommitter } : {}),
       ...(committerUsername ? { committerUsername } : {}),
+      ...(fallbackCommitterUsername ? { fallbackCommitterUsername } : {}),
       ...(ownersFile ? { ownersFilePath: ownersFile } : {}),
       ...(addOwnersAsAssignees !== undefined ? { addOwnersAsAssignees } : {}),
       ...(channelSeverityLabelPrefix ? { severityLabelPrefix: channelSeverityLabelPrefix } : {}),
@@ -1923,9 +1924,9 @@ export function createOutputPublisherFromConfig(
     const notifyFeishuSecretEnv = notifyFeishuConfig?.secret_env as string | undefined;
     const notifyFeishuSecret = notifyFeishuSecretEnv ? resolveEnv(notifyFeishuSecretEnv) : undefined;
     const authorResolution = buildAuthorResolutionOptions(config, channel);
-    const committerUsername = reviewEvent?.author
-      ? resolveAuthorUsername({ author: reviewEvent.author }, authorResolution)
-      : undefined;
+    const authorAssignment = resolveAuthorAssignment(reviewEvent ?? {}, authorResolution);
+    const committerUsername = authorAssignment.username;
+    const fallbackCommitterUsername = authorAssignment.fallbackUsername;
     const ref = reviewEvent?.headSha ?? "main";
 
     const dispatcher = createGiteaProblemIssueDispatcher({
@@ -1940,8 +1941,9 @@ export function createOutputPublisherFromConfig(
       ...(resolvedIssueMode ? { issueMode: resolvedIssueMode } : {}),
       ...(resolvedAction === "none" || resolvedAction === "close" || resolvedAction === "mark_resolved" || resolvedAction === "delete" ? { resolvedAction } : {}),
       ...(problemIssueMaxRecentIssues !== undefined ? { maxRecentIssues: problemIssueMaxRecentIssues } : {}),
-      ...(assignCommitter !== undefined ? { assignCommitter } : {}),
+      ...(authorAssignment.blocked ? { assignCommitter: false } : assignCommitter !== undefined ? { assignCommitter } : {}),
       ...(committerUsername ? { committerUsername } : {}),
+      ...(fallbackCommitterUsername ? { fallbackCommitterUsername } : {}),
       ...(ownersFile ? { ownersFilePath: ownersFile } : {}),
       ...(addOwnersAsAssignees !== undefined ? { addOwnersAsAssignees } : {}),
       ...(channelSeverityLabelPrefix ? { severityLabelPrefix: channelSeverityLabelPrefix } : {}),

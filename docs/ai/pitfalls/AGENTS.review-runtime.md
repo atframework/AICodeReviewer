@@ -33,11 +33,16 @@ Sources: `packages/server/src/review-orchestrator.ts`,
   `AICR_OUTPUT_STATE_PATH` to the shared writable agent workspace. Container cwd
   is `/workspace/agent`. Native runs rewrite the image-only MCP server path
   `/app/packages/mcp-output/dist/server.js` to its host module-relative location.
-- Replay both `contextRequests` and `attributionRequests` through VCS handlers.
+- Replay `contextRequests`, `attributionRequests`, and `reviewDataRequests` through VCS handlers.
   A pending response is not proof the file is inaccessible. When context is
   fetched, re-run verification and clear provisional findings, even if the same
   round also emitted problems. Preserve bounded follow-up rounds; failed invalid
   requests alone do not invalidate otherwise confirmed findings.
+- Review commit membership must not reuse the scheduler's first-parent walk:
+  merged side commits belong to `base..head`. Pin refs before reading files,
+  preserve fork source/target identity, and reject cursors from another run or
+  projection. Cover registry, stdio/HTTP state and JSON/stream/native replay
+  (`review-commits.test.ts`, `review-data.test.ts`, `review-orchestrator.test.ts`).
 - Free-form agent stdout is not a report. Repair summaries claiming issues
   without `report_problem` records and prose asking humans for source/blame.
   If agent repair fails, use direct LLM repair. Explicit no-issue/no-code prose

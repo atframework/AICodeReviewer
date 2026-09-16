@@ -100,6 +100,75 @@ function createVcs(sourceRoot: string): DiffCapableVcsAdapter {
 }
 
 describe("runReviewOrchestration", () => {
+  it.each(["json", "mcp", "stream"])("feeds review metadata from real Git into a follow-up via %s", async transport => {
+    await mkdir("build/tmp", { recursive: true });
+    const root = await mkdtemp(join(process.cwd(), "build/tmp/review-metadata-"));
+    let calls = 0;
+    let pinnedHead = "";
+    const requests = [{ name: "aicr.get_review_commits", input: { detail: "diffs", include_authors: true, include_repositories: true } },
+      { name: "aicr.get_review_context", input: {} }];
+    const verify = (text: string) => {
+      expect(text).toContain('"email": "alice@example.com"');
+      expect(text).toContain('"repository": "fork/example"');
+      expect(text).toContain('"reviewed_files"');
+      expect(text).toContain('"diff"');
+      expect(text).toContain("newValue");
+      expect(text).toContain(pinnedHead);
+      expect(text).not.toContain("futureValue");
+    };
+    try {
+      await runGit(root, ["init"]);
+      await writeWorkspaceFile(root, "src/app.ts", "const value = oldValue();\n");
+      await commitAll(root, "Base", "base@example.com", "base");
+      await writeWorkspaceFile(root, "src/app.ts", "const value = newValue();\n");
+      await commitAll(root, "Alice", "alice@example.com", "head");
+      pinnedHead = (await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" })).stdout.trim();
+      const advanceRef = async () => {
+        await writeWorkspaceFile(root, "src/app.ts", "const value = futureValue();\n");
+        await commitAll(root, "Future", "future@example.com", "future");
+      };
+      const vcs = createGitVcsAdapter({ repositoryDir: root });
+      const reviewEvent = { ...createReviewEventFixture(), baseSha: "HEAD~1", headSha: "HEAD",
+        sourceRepoRef: "fork/example", targetRepoRef: "owent/example", branch: "feature", targetBranch: "main" };
+      const llm: ChatCompletionClient = { async complete(input) {
+        calls++;
+        if (calls === 1) await advanceRef();
+        if (calls > 1) verify(input.messages.map(message => message.content).join("\n"));
+        return { providerId: model.providerId, modelId: model.modelId, raw: {},
+          content: calls === 1 ? JSON.stringify({ toolCalls: requests, skipReason: "lgtm" }) : '{"skipReason":"lgtm"}' };
+      } };
+      const sandbox: SandboxBackend = {
+        kind: "native", async materializeFs(layout) {
+          await mkdir(layout.agentDir, { recursive: true }); await mkdir(layout.tmpDir, { recursive: true });
+          return { agentDir: layout.agentDir, tmpDir: layout.tmpDir, mountSpecs: [] };
+        }, async spawn(options) {
+          calls++;
+          if (calls === 1) await advanceRef();
+          const manifest = JSON.parse(await readFile(join(options.cwd, "manifest.json"), "utf8"));
+          expect(manifest.mcpTools).toEqual(expect.arrayContaining(requests.map(request => request.name)));
+          if (calls > 1) verify(options.stdin ?? "");
+          if (transport === "mcp" || calls > 1) {
+            await writeFile(join(options.cwd, ".aicr-output-state.json"), JSON.stringify({ problems: [], summaries: [], contextRequests: [],
+              ...(calls === 1 ? { reviewDataRequests: requests } : {}), skipReason: "lgtm" }));
+          }
+          return { exitCode: 0, stderr: "", timedOut: false, durationMs: 1,
+            stdout: transport === "stream" && calls === 1 ? requests.map(request => JSON.stringify({ type: "tool_call",
+              name: request.name.replace("aicr.", "aicr-output_aicr_"), input: request.input })).join("\n") : "" };
+        }, async teardown() {},
+      };
+      const agentAdapter: AgentAdapter = { kind: "kilo", async detect() { return { available: true, binary: "kilo" }; },
+        buildCommand() { return ["kilo", "run", "--auto"]; },
+        async materializeConfig(_model, workingDir) { return { configFiles: new Map(), envVars: {}, workingDir }; } };
+      const result = await runReviewOrchestration({ reviewEvent, provider: "gitea", eventName: "pull_request", payload: {} }, {
+        sourceRootResolver: () => root, vcs, model, llm, baseSystemPrompt: "<task>{{TASK_CONTEXT}}</task>",
+        ...(transport === "json" ? {} : { sandbox, agentAdapter }),
+      });
+      expect(calls).toBe(2);
+      expect(result.skipReason).toBe("lgtm");
+      expect(result.outputState.reviewDataRequests).toHaveLength(2);
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
   it("enforces the actual patch byte budget before calling the model", async () => {
     await mkdir("build/tmp", { recursive: true });
     const root = await mkdtemp(join(process.cwd(), "build/tmp/review-budget-"));

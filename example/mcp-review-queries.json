@@ -1,0 +1,17 @@
+{
+  "toolCalls": [
+    {
+      "name": "aicr.get_review_context",
+      "input": {}
+    },
+    {
+      "name": "aicr.get_review_commits",
+      "input": {
+        "detail": "files",
+        "include_authors": true,
+        "include_repositories": true,
+        "limit": 20
+      }
+    }
+  ]
+}

@@ -661,6 +661,11 @@ export class SvnVcsAdapter implements VcsAdapter {
    * E170001, E175002, E200009, …) surface as `unavailable` with the error
    * text, never as a silently empty range.
    */
+  async listReviewCommitMetadataPage(query: CommitMetadataQuery): Promise<CommitMetadataPage> {
+    return this.listCommitMetadataPage({ ...query, scopeRef: this.targetForPath(),
+      baseRevision: query.baseRevision ?? String(BigInt(query.headRevision) - 1n) });
+  }
+
   async listCommitMetadataPage(query: CommitMetadataQuery): Promise<CommitMetadataPage> {
     if (!/^\d+$/u.test(query.headRevision)) {
       throw new RangeError(`Invalid SVN metadata head revision "${query.headRevision}".`);

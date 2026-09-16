@@ -987,17 +987,59 @@ export class GitVcsAdapter implements VcsAdapter {
     return parseUnifiedDiff(result.stdout);
   }
 
+  /** Freeze a ref before the review reads its files, patches or metadata. */
+  async resolveReviewRevision(revision: string): Promise<string> {
+    if (revision.startsWith("-")) throw new RangeError("Invalid review revision.");
+    await this.syncRepository();
+    const result = await this.runRevisionRangeCommand(["-C", this.repositoryDir, "rev-parse", "--verify", `${revision}^{commit}`]);
+    const sha = result.stdout.trim();
+    if (!/^[0-9a-f]{40,64}$/iu.test(sha)) throw new Error("Invalid resolved Git commit.");
+    return sha;
+  }
+
+  /** All-parent review membership; scheduler enumeration below stays first-parent. */
+  async listReviewCommitMetadataPage(query: CommitMetadataQuery): Promise<CommitMetadataPage> {
+    const offset = query.cursor === undefined ? 0 : Number(query.cursor);
+    if (!Number.isSafeInteger(offset) || offset < 0 ||
+      (query.cursor !== undefined && !/^\d+$/u.test(query.cursor)) ||
+      query.headRevision.startsWith("-") || query.baseRevision?.startsWith("-")) {
+      throw new RangeError("Invalid review revision or cursor.");
+    }
+    // Resolve endpoints before walking; callers cannot inject revision-set expressions.
+    const head = await this.resolveReviewRevision(query.headRevision);
+    const base = query.baseRevision ? await this.resolveReviewRevision(query.baseRevision) : undefined;
+    const listing = base
+      ? await this.runRevisionRangeCommand(["-C", this.repositoryDir, "rev-list", "--topo-order",
+        `--skip=${offset}`, `--max-count=${query.maxRecords + 1}`, `${base}..${head}`, "--"])
+      : { stdout: offset === 0 ? head : "" };
+    const shas = listing.stdout.trim().split(/\r?\n/u).filter(Boolean);
+    const records: CommitMetadataRecord[] = [];
+    for (const sha of shas.slice(0, query.maxRecords)) {
+      const result = await this.runRevisionRangeCommand(["-C", this.repositoryDir, "show", "-s",
+        "--format=%H%x00%P%x00%an%x00%ae%x00%cn%x00%ce", sha, "--"]);
+      const [revision, parentText, authorName, authorEmail, committerName, committerEmail] = result.stdout.trimEnd().split("\0");
+      if (revision !== sha) throw new Error("Git review metadata does not match enumerated commit.");
+      const parents = parentText?.split(" ").filter(Boolean) ?? [];
+      const paths = await this.runRevisionRangeCommand(["-C", this.repositoryDir, "diff-tree", "--root",
+        "--no-commit-id", "--name-only", "-r", "-z", ...(parents[0] ? [parents[0]] : []), sha, "--"]);
+      records.push({ revision, parents, orderKey: String(offset + records.length),
+        ...(authorName ? { authorName } : {}), ...(authorEmail ? { authorEmail } : {}),
+        ...(committerName ? { committerName } : {}), ...(committerEmail ? { committerEmail } : {}),
+        changedPaths: paths.stdout.split("\0").filter(Boolean) });
+    }
+    const more = shas.length > query.maxRecords;
+    return { vcs: "git", records, status: more ? "partial" : "complete",
+      ...(more ? { nextCursor: String(offset + records.length) } : {}) };
+  }
+
   /**
    * Bounded first-parent history read for auto-commit scheduling (design
    * §6.1). Walks `base..head` (or from `head`'s root when base is omitted)
-   * oldest-first with raw `%an/%ae/%cn/%ce` — never the mailmap-rewritten
-   * `%aN/%aE/%cN/%cE` forms. Order keys are ABSOLUTE history positions
-   * (`git rev-list --first-parent --count <sha>`), so out-of-order webhook
-   * deliveries still order by true history rather than arrival (design
-   * §5.2). The cursor carries the last emitted sha and its absolute
-   * position; resuming re-derives the remaining range from that sha.
-   * Side-branch commits of merges are excluded by `--first-parent`; merges
-   * themselves keep their full parent list.
+   * oldest-first with raw `%an/%ae/%cn/%ce` — never mailmap-rewritten values.
+   * Order keys are absolute first-parent positions, so out-of-order webhook
+   * deliveries still order by true VCS history. The cursor carries the last
+   * emitted SHA and its position; side-branch commits are excluded, while
+   * merges keep their full parent list.
    */
   async listCommitMetadataPage(query: CommitMetadataQuery): Promise<CommitMetadataPage> {
     await this.syncRepository();

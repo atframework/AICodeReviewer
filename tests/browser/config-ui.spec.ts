@@ -54,6 +54,28 @@ interface ConfigView {
   fileDigest: string;
 }
 
+test("Overview is the landing page after login and reload, and Live remains available", async ({ page }) => {
+  const liveRequests: string[] = [];
+  page.on("request", (request) => {
+    if (new URL(request.url()).pathname.endsWith("/runs/live")) liveRequests.push(request.url());
+  });
+  await login(page);
+  await expect(page.locator("#tab-overview")).toBeVisible();
+  await expect(page.locator(".tab.active")).toHaveAttribute("data-tab", "overview");
+  await expect(page.locator("#tab-live")).toBeHidden();
+  await expect(page.locator("#refresh-indicator")).toContainText("Updated");
+  expect(liveRequests).toHaveLength(0);
+  await page.click(".tab[data-tab='live']");
+  await expect(page.locator("#tab-live")).toBeVisible();
+  await expect.poll(() => liveRequests.length).toBe(1);
+  liveRequests.length = 0;
+  await page.reload();
+  await expect(page.locator("#tab-overview")).toBeVisible();
+  await expect(page.locator("#tab-live")).toBeHidden();
+  await expect(page.locator("#refresh-indicator")).toContainText("Updated");
+  expect(liveRequests).toHaveLength(0);
+});
+
 test("P6 regression: config tab can be reopened", async ({ page }) => {
   const errors: string[] = [];
   page.on("pageerror", error => errors.push(error.message));

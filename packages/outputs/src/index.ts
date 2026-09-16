@@ -37,6 +37,7 @@ export {
 	buildAtMentions,
 	renderMentions,
 	resolveAuthorUsername,
+	resolveAuthorAssignment,
 	type AuthorMentionContext,
 	type AuthorResolutionOptions,
 	type MentionChannelKind,
@@ -1804,6 +1805,87 @@ function normalizeManagedIssueFetchLimit(limit: number | undefined): number {
 	return Math.min(MAX_MANAGED_ISSUE_FETCH_LIMIT, Math.max(1, Math.trunc(limit)));
 }
 
+type ManagedIssueRequest = (method: string, endpoint: string, body?: unknown) => Promise<unknown>;
+
+/**
+ * Resolve a missing event username through the provider's commit author API.
+ * Query only for creation, sharing pending requests and misses per dispatcher.
+ * A lookup failure retains the optional pusher fallback and does not fail
+ * publication; the Git committer (often a merge bot) is not the author.
+ */
+function createCommitterUsernameResolver(
+	options: {
+		readonly assignCommitter: boolean;
+		readonly committerUsername?: string | undefined;
+		readonly fallbackCommitterUsername?: string | undefined;
+		readonly headSha?: string | undefined;
+	},
+	request: ManagedIssueRequest,
+	commitPath: string,
+): () => Promise<string | undefined> {
+	let lookup: Promise<string | undefined> | undefined;
+	return async () => {
+		if (!options.assignCommitter) {
+			return undefined;
+		}
+		if (options.committerUsername) {
+			return options.committerUsername;
+		}
+		if (!options.headSha) {
+			return options.fallbackCommitterUsername;
+		}
+		lookup ??= request("GET", `${commitPath}/${encodeURIComponent(options.headSha)}`)
+			.then((raw) => {
+				const author = raw && typeof raw === "object" ? (raw as Record<string, unknown>).author : undefined;
+				const login = author && typeof author === "object" ? (author as Record<string, unknown>).login : undefined;
+				return typeof login === "string" ? login.trim() || undefined : undefined;
+			})
+			.catch(() => undefined);
+		return await lookup ?? options.fallbackCommitterUsername;
+	};
+}
+
+function isAssigneeRejection(error: unknown): boolean {
+	if (!(error instanceof OutputDispatchError) || error.status !== 422 || !error.responseBody) return false;
+	try {
+		const raw: unknown = JSON.parse(error.responseBody);
+		if (!raw || typeof raw !== "object") return false;
+		const { errors, message } = raw as Record<string, unknown>;
+		// GitHub validation fields; unrelated validation and spam errors must propagate.
+		if (Array.isArray(errors) && errors.length > 0) {
+			return errors.every((entry: unknown) => !!entry && typeof entry === "object" &&
+				["assignee", "assignees"].includes(String((entry as Record<string, unknown>).field)));
+		}
+		// Gitea/Forgejo report these two assignment validation failures as messages.
+		return typeof message === "string" && (/^assignee does not exist(?:[:.]|$)/iu.test(message) ||
+			/^user doesn't have access to repo \[user_id:/u.test(message));
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * Retry once only after an explicit assignee validation rejection. An unknown
+ * POST outcome, permission failure or rate limit never justifies a second POST.
+ */
+async function postManagedIssue(
+	request: ManagedIssueRequest,
+	endpoint: string,
+	body: Record<string, unknown>,
+): Promise<unknown> {
+	try {
+		return await request("POST", endpoint, body);
+	} catch (error) {
+		const hasAssignees = Array.isArray(body.assignees) && body.assignees.length > 0;
+		if (!hasAssignees || !isAssigneeRejection(error)) {
+			throw error;
+		}
+		const retryBody = { ...body };
+		delete retryBody.assignees;
+		return request("POST", endpoint, retryBody);
+	}
+}
+
 export interface GithubProblemIssueOptions {
 	readonly baseUrl?: string;
 	readonly token?: string;
@@ -1819,6 +1901,7 @@ export interface GithubProblemIssueOptions {
 	readonly fetch?: FetchLike;
 	readonly assignCommitter?: boolean;
 	readonly committerUsername?: string;
+	readonly fallbackCommitterUsername?: string;
 	readonly ownersFilePath?: string;
 	readonly ownersContent?: string;
 	readonly addOwnersAsAssignees?: boolean;
@@ -2095,11 +2178,18 @@ export function createGithubProblemIssueDispatcher(options: GithubProblemIssueOp
 		return issues;
 	}
 
-	function resolveAssignees(problem: ReviewProblem, owners: OwnersConfig | undefined): string[] {
+	const resolveCommitterUsername = createCommitterUsernameResolver(
+		{ assignCommitter, committerUsername: options.committerUsername, fallbackCommitterUsername: options.fallbackCommitterUsername, headSha: options.headSha },
+		request,
+		`${repoPath}/commits`,
+	);
+
+	async function resolveAssignees(problem: ReviewProblem, owners: OwnersConfig | undefined): Promise<string[]> {
 		const assignees: string[] = [];
 
-		if (assignCommitter && options.committerUsername) {
-			assignees.push(options.committerUsername);
+		const committerUsername = await resolveCommitterUsername();
+		if (committerUsername) {
+			assignees.push(committerUsername);
 		}
 
 		if (addOwnersAsAssignees && owners) {
@@ -2154,12 +2244,12 @@ export function createGithubProblemIssueDispatcher(options: GithubProblemIssueOp
 			body.labels = labelNames;
 		}
 
-		const assignees = resolveAssignees(problem, owners);
+		const assignees = await resolveAssignees(problem, owners);
 		if (assignees.length > 0) {
 			body.assignees = assignees;
 		}
 
-		const raw = await request("POST", `${repoPath}/issues`, body);
+		const raw = await postManagedIssue(request, `${repoPath}/issues`, body);
 		const externalId = extractExternalId(raw);
 
 		const issueUrl = raw && typeof raw === "object"
@@ -2225,12 +2315,12 @@ export function createGithubProblemIssueDispatcher(options: GithubProblemIssueOp
 			body.labels = labelNames;
 		}
 
-		const allAssignees = collectAllAssignees(problems, owners);
+		const allAssignees = await collectAllAssignees(problems, owners);
 		if (allAssignees.length > 0) {
 			body.assignees = allAssignees;
 		}
 
-		const raw = await request("POST", `${repoPath}/issues`, body);
+		const raw = await postManagedIssue(request, `${repoPath}/issues`, body);
 		const externalId = extractExternalId(raw);
 
 		const issueUrl = raw && typeof raw === "object"
@@ -2300,10 +2390,10 @@ export function createGithubProblemIssueDispatcher(options: GithubProblemIssueOp
 		};
 	}
 
-	function collectAllAssignees(problems: readonly ReviewProblem[], owners: OwnersConfig | undefined): string[] {
+	async function collectAllAssignees(problems: readonly ReviewProblem[], owners: OwnersConfig | undefined): Promise<string[]> {
 		const assigneeSet = new Set<string>();
 		for (const problem of problems) {
-			for (const assignee of resolveAssignees(problem, owners)) {
+			for (const assignee of await resolveAssignees(problem, owners)) {
 				assigneeSet.add(assignee);
 			}
 		}
@@ -3001,6 +3091,7 @@ export interface GiteaProblemIssueOptions {
 	readonly fetch?: FetchLike;
 	readonly assignCommitter?: boolean;
 	readonly committerUsername?: string;
+	readonly fallbackCommitterUsername?: string;
 	readonly ownersFilePath?: string;
 	readonly ownersContent?: string;
 	readonly addOwnersAsAssignees?: boolean;
@@ -4183,11 +4274,18 @@ export function createGiteaProblemIssueDispatcher(options: GiteaProblemIssueOpti
 		return issues;
 	}
 
-	function resolveAssignees(problem: ReviewProblem, owners: OwnersConfig | undefined): string[] {
+	const resolveCommitterUsername = createCommitterUsernameResolver(
+		{ assignCommitter, committerUsername: options.committerUsername, fallbackCommitterUsername: options.fallbackCommitterUsername, headSha: options.headSha },
+		request,
+		`${repoPath}/git/commits`,
+	);
+
+	async function resolveAssignees(problem: ReviewProblem, owners: OwnersConfig | undefined): Promise<string[]> {
 		const assignees: string[] = [];
 
-		if (assignCommitter && options.committerUsername) {
-			assignees.push(options.committerUsername);
+		const committerUsername = await resolveCommitterUsername();
+		if (committerUsername) {
+			assignees.push(committerUsername);
 		}
 
 		if (addOwnersAsAssignees && owners) {
@@ -4242,12 +4340,12 @@ export function createGiteaProblemIssueDispatcher(options: GiteaProblemIssueOpti
 			body.labels = labelIdList;
 		}
 
-		const assignees = resolveAssignees(problem, owners);
+		const assignees = await resolveAssignees(problem, owners);
 		if (assignees.length > 0) {
 			body.assignees = assignees;
 		}
 
-		const raw = await request("POST", `${repoPath}/issues`, body);
+		const raw = await postManagedIssue(request, `${repoPath}/issues`, body);
 		const externalId = extractExternalId(raw);
 
 		const issueUrl = raw && typeof raw === "object"
@@ -4313,12 +4411,12 @@ export function createGiteaProblemIssueDispatcher(options: GiteaProblemIssueOpti
 			body.labels = labelIdList;
 		}
 
-		const allAssignees = collectAllAssignees(problems, owners);
+		const allAssignees = await collectAllAssignees(problems, owners);
 		if (allAssignees.length > 0) {
 			body.assignees = allAssignees;
 		}
 
-		const raw = await request("POST", `${repoPath}/issues`, body);
+		const raw = await postManagedIssue(request, `${repoPath}/issues`, body);
 		const externalId = extractExternalId(raw);
 
 		const issueUrl = raw && typeof raw === "object"
@@ -4388,10 +4486,10 @@ export function createGiteaProblemIssueDispatcher(options: GiteaProblemIssueOpti
 		};
 	}
 
-	function collectAllAssignees(problems: readonly ReviewProblem[], owners: OwnersConfig | undefined): string[] {
+	async function collectAllAssignees(problems: readonly ReviewProblem[], owners: OwnersConfig | undefined): Promise<string[]> {
 		const assigneeSet = new Set<string>();
 		for (const problem of problems) {
-			for (const assignee of resolveAssignees(problem, owners)) {
+			for (const assignee of await resolveAssignees(problem, owners)) {
 				assigneeSet.add(assignee);
 			}
 		}

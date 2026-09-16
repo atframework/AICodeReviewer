@@ -262,7 +262,7 @@ fallback 必须是字面量，禁止 hash arguments。provider 变量必须适�
 | `outputs.channels[].labels` | string[] | — | 要附加的 GitHub label 名 |
 | `outputs.channels[].issue_mode` | enum | — | `per_problem`、`consolidated`、`per_commit` |
 | `outputs.channels[].resolved_action` | enum | — | `none`、`close`、`mark_resolved`、`delete`（仅 Gitea） |
-| `outputs.channels[].assign_committer` | boolean | — | 把 review 作者加为 assignee |
+| `outputs.channels[].assign_committer` | boolean | — | 创建托管 issue 时指派解析后的评审作者（默认 `true`）；邮箱黑名单阻止 API/pusher 兜底，OWNERS 独立处理 |
 | `outputs.channels[].owners_file` | string | — | owners 文件路径（默认 `OWNERS`） |
 | `outputs.channels[].add_owners_as_assignees` | boolean | — | 把匹配到的 OWNERS 条目加为 assignee |
 | `outputs.channels[].severity_label_prefix` | string | — | 自动创建/附加一个 severity label，如 `aicr:problem:high` |

@@ -79,6 +79,8 @@ describe("AICR MCP Streamable HTTP server", () => {
 
 			const tools = await client.listTools();
 			expect(tools.tools.map((tool) => tool.name)).toEqual([
+				"aicr.get_review_commits",
+				"aicr.get_review_context",
 				"aicr.report_problem",
 				"aicr.publish_summary",
 				"aicr.skip",
@@ -86,6 +88,17 @@ describe("AICR MCP Streamable HTTP server", () => {
 				"aicr.try_blame",
 			]);
 
+			for (const name of ["aicr.get_review_commits", "aicr.get_review_context"]) {
+				const result = await client.callTool({ name, arguments: {} }, CallToolResultSchema);
+				expect(parseTextJson(result)).toMatchObject({ pending: true });
+			}
+			const recorded = JSON.parse(await readFile(outputStatePath, "utf8"));
+			expect(recorded.reviewDataRequests).toEqual([
+				{ name: "aicr.get_review_commits", input: { detail: "ids", include_authors: false, include_repositories: false, limit: 20, max_bytes: 200000 } },
+				{ name: "aicr.get_review_context", input: {} },
+			]);
+			const invalid = await client.callTool({ name: "aicr.get_review_commits", arguments: { limit: 101 } }, CallToolResultSchema);
+			expect(invalid.isError).toBe(true);
 			const reportResult = await client.callTool(
 				{
 					name: "aicr.report_problem",

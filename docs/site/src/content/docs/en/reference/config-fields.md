@@ -290,7 +290,7 @@ Narrative: [Output channels and routing](/en/configuration/outputs/).
 | `outputs.channels[].labels` | string[] | — | GitHub label names to attach |
 | `outputs.channels[].issue_mode` | enum | — | `per_problem`, `consolidated`, `per_commit` |
 | `outputs.channels[].resolved_action` | enum | — | `none`, `close`, `mark_resolved`, `delete` (Gitea only) |
-| `outputs.channels[].assign_committer` | boolean | — | Add the review author as assignee |
+| `outputs.channels[].assign_committer` | boolean | — | Assign the resolved review author to new managed issues (default `true`); email blacklist blocks API/pusher fallback; OWNERS remain independent |
 | `outputs.channels[].owners_file` | string | — | Owners file path (default `OWNERS`) |
 | `outputs.channels[].add_owners_as_assignees` | boolean | — | Add matched OWNERS entries as assignees |
 | `outputs.channels[].severity_label_prefix` | string | — | Auto-create/attach a severity label such as `aicr:problem:high` |
