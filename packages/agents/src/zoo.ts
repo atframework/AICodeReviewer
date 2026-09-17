@@ -138,7 +138,9 @@ export function createZooAdapter(
       await writeFile(configPath, settingsJsonContent, "utf8");
 
       const envVars: Record<string, string> = {};
-      if (model.apiKeyEnv) {
+      if (model.apiKey) {
+        envVars.OPENAI_API_KEY = model.apiKey;
+      } else if (model.apiKeyEnv) {
         envVars.OPENAI_API_KEY = `\${${model.apiKeyEnv}}`;
       }
 

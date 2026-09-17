@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { createMemoryConfigStore, applyConfigChangeset, appConfigSchema, type ConfigStore, type ConfigChangesetOperation } from "@aicr/core";
+import { createMemoryConfigStore, applyConfigChangeset, appConfigSchema, createConfigSecretSealing, parseConfigSecretsKeyMaterial, type ConfigStore, type ConfigChangesetOperation } from "@aicr/core";
 import { createSqliteConfigStore } from "@aicr/core";
 import { createAdminSession, type AdminAuthConfig } from "../src/admin-auth.js";
 import { createConfigApi, type ConfigApiOptions } from "../src/config-api.js";
@@ -19,6 +19,8 @@ import { createServerApp } from "../src/index.js";
 
 const NAMESPACE = "api-test";
 const DIGEST = "c".repeat(64);
+/** Shared sealing service: pass-through for env-reference-only fixtures. */
+const SEALING = createConfigSecretSealing(parseConfigSecretsKeyMaterial(Buffer.alloc(32, 0x5).toString("base64")));
 const ADMIN: AdminAuthConfig = {
   username: "admin",
   password: "secret-password",
@@ -51,6 +53,7 @@ beforeEach(async () => {
     store,
     namespace: NAMESPACE,
     baseDir: dir,
+    secretSealing: SEALING,
   });
   await manager.admission();
   apiOptions = {
@@ -537,6 +540,157 @@ describe("config api status", () => {
     expect(body.head?.activeRevision).toBe(1);
     expect(body.manager?.databaseRevision).toBe(1);
     expect(body.manager?.snapshotId).not.toBeNull();
+  });
+});
+
+describe("config api literal credentials (sealed at rest)", () => {
+  const sealing = SEALING;
+
+  it("retries a literal publication without changing the immutable snapshot", async () => {
+    const app = makeApp(sealedOptions());
+    const body = { baseRevision: null, operationId: "literal-retry", operations: [triggerCreate("retry")] };
+    const first = await request(app, "/changesets", { method: "POST", body });
+    expect(first.status).toBe(200);
+    const original = await first.json();
+    const retry = await request(app, "/changesets", { method: "POST", body });
+    expect(await retry.json()).toEqual(original);
+    expect(retry.status).toBe(200);
+  });
+
+  it.each(["enc:v1.broken", createConfigSecretSealing(Buffer.alloc(32, 9)).seal("foreign", "token")])(
+    "rejects unreadable ciphertext before committing: %s", async (ciphertext) => {
+      const operation = { op: "create", collection: "triggers", record: { id: "invalid", name: "invalid", enabled: true,
+        value: { name: "invalid", kind: "gitea", token: ciphertext } } };
+      const app = makeApp(sealedOptions());
+      const validation = await request(app, "/validate", { method: "POST", body: { operations: [operation] } });
+      expect(await validation.json()).toMatchObject({ valid: false });
+      const response = await request(app, "/changesets", { method: "POST", body: {
+        baseRevision: null, operationId: "invalid-ciphertext", operations: [operation],
+      } });
+      expect(response.status).toBe(400);
+      expect(await store.readHead(NAMESPACE)).toBeNull();
+    },
+  );
+
+  it("round-trips search credential maps through the read view and clears a literal global leaf", async () => {
+    const app = makeApp(sealedOptions());
+    const create = await request(app, "/changesets", { method: "POST", body: {
+      baseRevision: null, operationId: "search-literal", operations: [
+        { op: "set", path: ["agent", "web_search", "credentials"], value: { exa: { value: "search-secret" } } },
+      ],
+    } });
+    expect(create.status, await create.text()).toBe(200);
+    const view = await (await request(app, "/")).json() as { globals: { agent: { web_search: { credentials: unknown } } } };
+    expect(view.globals.agent.web_search.credentials).toEqual({ exa: { value: "<redacted>" } });
+    const clear = await request(app, "/changesets", { method: "POST", body: {
+      baseRevision: 1, operationId: "clear-search-literal", operations: [{ op: "set", path: ["agent", "web_search", "credentials", "exa"], value: null }],
+    } });
+    expect(clear.status).toBe(200);
+    expect((await manager.captureForTask()).config.agent.web_search.credentials).not.toHaveProperty("exa");
+  });
+
+  it("restores a sealed revision and rejects a restore with a missing retired key before commit", async () => {
+    const app = makeApp(sealedOptions());
+    const create = await request(app, "/changesets", { method: "POST", body: {
+      baseRevision: null, operationId: "restore-seed", operations: [triggerCreate("restore")],
+    } });
+    expect(create.status).toBe(200);
+    const restore = await request(app, "/revisions/1/restore", { method: "POST", body: { baseRevision: 1, operationId: "restore-literal" } });
+    expect(restore.status).toBe(200);
+    expect((await manager.captureForTask()).config.triggers.find(trigger => trigger.name === "restore")?.token).toBe("gtok-plain-secret");
+    const wrongKey = makeApp({ ...apiOptions, secretSealing: createConfigSecretSealing(Buffer.alloc(32, 9)) });
+    const rejected = await request(wrongKey, "/revisions/1/restore", { method: "POST", body: { baseRevision: 2, operationId: "restore-wrong-key" } });
+    expect(rejected.status).toBe(400);
+    expect((await store.readHead(NAMESPACE))?.activeRevision).toBe(2);
+  });
+
+  function triggerCreate(name: string): unknown {
+    return {
+      op: "create", collection: "triggers",
+      record: { id: `rec-${name}`, name, enabled: true, value: { name, kind: "gitea", base_url: "https://gitea.example", token: "gtok-plain-secret" } },
+    };
+  }
+
+  function sealedOptions(): ConfigApiOptions {
+    return { ...apiOptions, secretSealing: sealing };
+  }
+
+  it("validate reports the literal and fails closed without a sealing key", async () => {
+    const keyless = await request(makeApp(), "/validate", { method: "POST", body: { operations: [triggerCreate("v-keyless")] } });
+    const keylessBody = await keyless.json() as { valid: boolean; issue?: { code: string } };
+    expect(keylessBody.valid).toBe(false);
+    expect(keylessBody.issue?.code).toBe("secrets_key_missing");
+
+    const keyed = await request(makeApp(sealedOptions()), "/validate", { method: "POST", body: { operations: [triggerCreate("v-keyed")] } });
+    const keyedBody = await keyed.json() as { valid: boolean; sealableSecrets?: boolean };
+    expect(keyedBody.valid).toBe(true);
+    expect(keyedBody.sealableSecrets).toBe(true);
+  });
+
+  it("publish without a sealing key fails closed and commits nothing", async () => {
+    const response = await request(makeApp(), "/changesets", {
+      method: "POST",
+      body: { baseRevision: null, operationId: "op-literal-keyless", operations: [triggerCreate("t-keyless")] },
+    });
+    expect(response.status).toBe(400);
+    const body = await response.json() as { error?: string };
+    expect(body.error).toBe("secrets_key_missing");
+    expect(await store.readHead(NAMESPACE)).toBeNull();
+  });
+
+  it("publish seals literals before persistence, redacts reads, and keeps secrets across redacted round-trips", async () => {
+    const app = makeApp(sealedOptions());
+    const create = await request(app, "/changesets", {
+      method: "POST",
+      body: { baseRevision: null, operationId: "op-literal-sealed", operations: [triggerCreate("t-sealed")] },
+    });
+    expect(create.status).toBe(200);
+
+    // The durable revision holds ciphertext only.
+    const headState = await store.readHead(NAMESPACE);
+    const head = headState?.activeRevision ?? null;
+    const revision = head === null ? null : await store.readRevision(NAMESPACE, head);
+    const storedDoc = JSON.stringify(revision?.document);
+    expect(storedDoc).not.toContain("gtok-plain-secret");
+    const storedTrigger = revision?.document.entities?.triggers?.["rec-t-sealed"]?.value as Record<string, unknown>;
+    expect(String(storedTrigger.token)).toMatch(/^enc:v1\./u);
+
+    // Reads redact the literal; the runtime generation resolves plaintext.
+    const view = await (await request(app, "/")).json() as { collections: { trigger: { records: { name: string; value: Record<string, unknown> }[] } } };
+    const viewTrigger = view.collections.trigger.records.find((record) => record.name === "t-sealed")!;
+    expect(viewTrigger.value.token).toBe("<redacted>");
+    const generation = await manager.captureForTask();
+    const runtimeTrigger = (generation.config as { triggers: Record<string, unknown>[] }).triggers.find((t) => t.name === "t-sealed")!;
+    expect(runtimeTrigger.token).toBe("gtok-plain-secret");
+
+    // Redacted round-trip: an update that omits the masked token keeps it.
+    const update = await request(app, "/changesets", {
+      method: "POST",
+      body: {
+        baseRevision: head, operationId: "op-literal-keep",
+        operations: [{ op: "update", collection: "triggers", recordId: "rec-t-sealed", value: { name: "t-sealed", kind: "gitea", base_url: "https://gitea2.example" } }],
+      },
+    });
+    expect(update.status).toBe(200);
+    const after = await store.readRevision(NAMESPACE, 2);
+    const afterTrigger = after?.document.entities?.triggers?.["rec-t-sealed"]?.value as Record<string, unknown>;
+    expect(String(afterTrigger.token)).toMatch(/^enc:v1\./u);
+    expect(afterTrigger.base_url).toBe("https://gitea2.example");
+    const generation2 = await manager.captureForTask();
+    const runtimeTrigger2 = (generation2.config as { triggers: Record<string, unknown>[] }).triggers.find((t) => t.name === "t-sealed")!;
+    expect(runtimeTrigger2.token).toBe("gtok-plain-secret");
+
+    // Explicit null clears the stored secret.
+    const clear = await request(app, "/changesets", {
+      method: "POST",
+      body: {
+        baseRevision: 2, operationId: "op-literal-clear",
+        operations: [{ op: "update", collection: "triggers", recordId: "rec-t-sealed", value: { name: "t-sealed", kind: "gitea", token: null } }],
+      },
+    });
+    expect(clear.status).toBe(200);
+    const cleared = await store.readRevision(NAMESPACE, 3);
+    expect(cleared?.document.entities?.triggers?.["rec-t-sealed"]?.value).not.toHaveProperty("token");
   });
 });
 

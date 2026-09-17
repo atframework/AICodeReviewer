@@ -64,6 +64,8 @@ export interface LlmGatewayProviderConfig {
   readonly kind: ModelProviderKind;
   readonly baseUrl?: string;
   readonly apiKeyEnv?: string;
+  /** Literal API key; wins over apiKeyEnv when both resolve (config enforces exclusivity). */
+  readonly apiKey?: string;
   readonly organization?: string;
   readonly extraHeaders?: Readonly<Record<string, string>>;
   readonly extraBody?: Readonly<Record<string, unknown>>;
@@ -75,10 +77,14 @@ export interface LlmGatewayProviderConfig {
   readonly vertexProject?: string;
   readonly vertexLocation?: string;
   readonly googleApplicationCredentialsEnv?: string;
+  readonly googleApplicationCredentials?: string;
   readonly awsRegion?: string;
   readonly awsAccessKeyEnv?: string;
   readonly awsSecretKeyEnv?: string;
   readonly awsSessionTokenEnv?: string;
+  readonly awsAccessKey?: string;
+  readonly awsSecretKey?: string;
+  readonly awsSessionToken?: string;
   readonly awsProfile?: string;
   readonly anthropicVersion?: string;
   readonly anthropicBeta?: readonly string[];

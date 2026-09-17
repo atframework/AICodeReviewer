@@ -93,7 +93,7 @@ export interface ConfigUiField {
   /** Ordered-list row object fields. */
   readonly itemFields?: readonly ConfigUiField[];
   /** Map control value type. */
-  readonly mapValueKind?: "string" | "number" | "record";
+  readonly mapValueKind?: "string" | "number" | "record" | "credential";
 }
 
 export interface ConfigUiSection {
@@ -269,6 +269,7 @@ const CONTROL_VALUE_KINDS: Readonly<Record<string, readonly ConfigUiValueKind[]>
   "ordered-list": ["record"],
   map: ["record"],
   "secret-ref": ["string"],
+  "secret-value": ["string"],
   matcher: ["union", "record"],
   "path-template": ["string"],
 };
@@ -517,6 +518,7 @@ function controlEmptyValue(field: ConfigUiField): unknown {
   switch (field.control) {
     case "text":
     case "secret-ref":
+    case "secret-value":
     case "path-template":
       return "";
     case "multiselect":
@@ -619,7 +621,7 @@ function encodeRow(itemFields: readonly ConfigUiField[], row: unknown): unknown 
   return encoded;
 }
 
-function materializeMapValue(field: ConfigUiField, entries: readonly unknown[]): Record<string, unknown> {
+function materializeMapValue(field: ConfigUiField, entries: readonly unknown[], previous?: unknown): Record<string, unknown> {
   const materialized: Record<string, unknown> = {};
   for (const entry of entries) {
     if (!isPlainRecord(entry) || typeof entry["key"] !== "string") {
@@ -632,7 +634,20 @@ function materializeMapValue(field: ConfigUiField, entries: readonly unknown[]):
     if (Object.hasOwn(materialized, key)) {
       throw new TypeError(`encodeChanges: map field "${field.id}" has duplicate key "${key}".`);
     }
-    defineValue(materialized, key, field.itemFields ? encodeRow(field.itemFields, entry["value"]) : deepCloneValue(entry["value"]));
+    let value = field.itemFields ? encodeRow(field.itemFields, entry["value"]) : deepCloneValue(entry["value"]);
+    if (field.mapValueKind === "credential") {
+      if (isPlainRecord(value)) {
+        const literal = encodeFieldValue({ ...field, control: "secret-value" }, value.value);
+        value = literal === SKIP ? {} : literal === null ? null : { value: literal };
+      } else {
+        const ref = encodeFieldValue({ ...field, control: "secret-ref" }, value);
+        value = ref === SKIP ? null : ref;
+      }
+    }
+    defineValue(materialized, key, value);
+  }
+  if (field.mapValueKind === "credential" && isPlainRecord(previous)) {
+    for (const key of Object.keys(previous)) if (!Object.hasOwn(materialized, key)) defineValue(materialized, key, null);
   }
   return materialized;
 }
@@ -643,7 +658,7 @@ function materializeMapValue(field: ConfigUiField, entries: readonly unknown[]):
  * on credential-mask leakage, invalid secret env names, prototype keys, and
  * duplicate map keys — the draft is assumed valid, these are defensive.
  */
-function encodeFieldValue(field: ConfigUiField, value: unknown): unknown {
+function encodeFieldValue(field: ConfigUiField, value: unknown, previous?: unknown): unknown {
   if (field.control === "secret-ref") {
     if (value === undefined || value === null || value === "") {
       return SKIP;
@@ -660,6 +675,25 @@ function encodeFieldValue(field: ConfigUiField, value: unknown): unknown {
       throw new TypeError(
         `encodeChanges: secret-ref field "${field.id}" value "${value}" is not an environment variable name matching ${SECRET_ENV_NAME_RE.source}.`,
       );
+    }
+    return value;
+  }
+  if (field.control === "secret-value") {
+    // Literal credential semantics (server-side carry-over): an untouched
+    // masked value encodes as ABSENT so the stored secret survives the
+    // wholesale entity update; "" encodes as JSON null = explicit clear;
+    // anything else is the new literal.
+    if (value === undefined || value === null) {
+      return SKIP;
+    }
+    if (typeof value !== "string") {
+      throw new TypeError(`encodeChanges: secret-value field "${field.id}" value must be a string.`);
+    }
+    if (value === "") {
+      return null;
+    }
+    if (SECRET_MASK_VALUES.includes(value) || /<redacted>/iu.test(value)) {
+      return SKIP;
     }
     return value;
   }
@@ -683,7 +717,7 @@ function encodeFieldValue(field: ConfigUiField, value: unknown): unknown {
     if (!Array.isArray(value)) {
       return deepCloneValue(value);
     }
-    return materializeMapValue(field, value);
+    return materializeMapValue(field, value, previous);
   }
   return deepCloneValue(value);
 }
@@ -1270,7 +1304,7 @@ export function encodeChanges(
     if (entity === undefined) {
       throw new TypeError("encodeChanges: entity draft requires an entity page.");
     }
-    return encodeEntityChanges(page, entity, scope, draft);
+    return encodeEntityChanges(page, entity, scope, draft, base);
   }
   return encodeGlobalsChanges(page, draft, base);
 }
@@ -1280,6 +1314,7 @@ function encodeEntityChanges(
   entity: ConfigUiPageEntity,
   scope: { readonly kind: "entity"; readonly collection: string; readonly recordId: string | null },
   draft: ConfigDraft,
+  base: ConfigDecodeInput,
 ): readonly ConfigUiOperation[] {
   const specFields = scopedEntityFields(page, entity);
   let value: unknown;
@@ -1311,10 +1346,19 @@ function encodeEntityChanges(
       }
       const draftField = draft.fields[field.id];
       if (draftField === undefined || draftField.mode !== "present" || draftField.inherit) {
+        if (field.control === "secret-value" && getIn(base.record?.value, fieldPathKeys(field)).found) {
+          record = setIn(record, fieldPathKeys(field), null) as Record<string, unknown>;
+        }
         continue;
       }
-      const encoded = encodeFieldValue(field, draftField.value);
+      const encoded = encodeFieldValue(field, draftField.value, draftField.effectiveValue);
       if (encoded === SKIP) {
+        // Keep an empty parent for a masked nested secret; the server carries
+        // its stored leaf over only when that parent remains in the update.
+        const parent = fieldPathKeys(field).slice(0, -1);
+        if (field.control === "secret-value" && parent.length > 0 && !getIn(record, parent).found) {
+          record = setIn(record, parent, {}) as Record<string, unknown>;
+        }
         continue;
       }
       record = setIn(record, fieldPathKeys(field), encoded) as Record<string, unknown>;
@@ -1357,8 +1401,11 @@ function encodeGlobalsChanges(page: ConfigUiPage, draft: ConfigDraft, base: Conf
     let wantsOverride = draftField.mode === "present" && !draftField.inherit;
     let encoded: unknown;
     if (wantsOverride) {
-      encoded = encodeFieldValue(field, draftField.value);
+      encoded = encodeFieldValue(field, draftField.value, baseInfo.effectiveValue);
       if (encoded === SKIP) {
+        if (field.control === "secret-value") continue;
+        wantsOverride = false;
+      } else if (field.control === "secret-value" && encoded === null) {
         wantsOverride = false;
       } else if (encoded === undefined) {
         // A cleared optional scalar must never become a `set` without a

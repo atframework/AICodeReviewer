@@ -177,6 +177,9 @@ function createApp({ root, api, runtime, formState, schedule }) {
     injectStyles();
     if (state.initialized) {
       renderStatusBar();
+      // The editor container was hidden on hide(); restore an open drawer so
+      // its draft survives top-level tab switches.
+      if (state.drawer !== null) renderDrawer();
       return;
     }
     setLoading(true);
@@ -309,6 +312,25 @@ function createApp({ root, api, runtime, formState, schedule }) {
   }
 
   async function selectPage(id) {
+    if (id !== state.pageId && state.drawer !== null) {
+      // The drawer belongs to the page it was opened on; never leak it into
+      // another sub-tab. Unsaved edits follow the same discard confirmation
+      // as an explicit close; cancelling keeps the user on the current page.
+      if (!state.drawer.readonly && state.drawer.session.dirty === true) {
+        openConfirm({
+          title: "Discard unsaved changes?",
+          body: "The draft in this editor has not been saved. Switching pages discards every edit made since the editor was opened.",
+          confirmLabel: "Discard",
+          danger: true,
+          onConfirm: () => {
+            closeDrawer();
+            void selectPage(id);
+          },
+        });
+        return;
+      }
+      closeDrawer();
+    }
     state.pageId = id;
     state.fieldErrors = [];
     buildNav();
@@ -1764,7 +1786,7 @@ function createApp({ root, api, runtime, formState, schedule }) {
  * once as a literal string (no dynamic data — D9).
  */
 const CONFIG_APP_STYLES = `
-#tab-config{display:grid;grid-template-columns:180px 1fr;gap:1rem;align-items:start}
+#tab-config.active{display:grid;grid-template-columns:180px 1fr;gap:1rem;align-items:start}
 #config-nav{display:flex;flex-direction:column;gap:0.25rem;position:sticky;top:1rem}
 #config-status{grid-column:2;display:flex;flex-direction:column;gap:0.25rem;min-height:2rem}
 #config-main{grid-column:2;min-width:0}
@@ -1876,7 +1898,7 @@ const CONFIG_APP_STYLES = `
 .cfg-schedule-preview{margin-top:0.25rem}
 .cfg-revision-detail{margin-top:1rem}
 @media(max-width:720px){
-#tab-config{grid-template-columns:1fr}
+#tab-config.active{grid-template-columns:1fr}
 #config-nav{flex-direction:row;overflow-x:auto;position:static}
 #config-status,#config-main,#config-editor{grid-column:1}
 .cfg-map-row{grid-template-columns:1fr}

@@ -1,10 +1,11 @@
 ---
 title: Dashboard and logs
-description: Enable the observability dashboard, navigate it, read /metrics, and find run logs and snapshots.
+description: Enable the admin dashboard, navigate it, read /metrics, and find run logs and snapshots.
 ---
 
-AICR ships a built-in observability dashboard and a Prometheus metrics
-endpoint. The dashboard covers basic statistics on its own and complements an
+AICR ships a built-in admin dashboard and a Prometheus metrics
+endpoint. The dashboard pairs observability (statistics, live runs, events)
+with configuration management (the **Config** tab) and complements an
 external time-series system when you have one. This page expands on the
 [Quick start](/en/start/quick-start/) health check with how to enable admin
 login, navigate the dashboard, read `/metrics`, and locate run logs and
@@ -47,6 +48,14 @@ When admin auth is configured, AICR initializes the statistics store selected by
 statistics initialization fails, provided its own configuration store is available.
 
 ## Navigating the dashboard
+
+The browser title and page heading are **AICodeReviewer Admin**. Config editors
+are visible only on their current page. Switching Config subpages closes clean
+or read-only drawers; dirty drawers require discarding changes or cancelling the
+switch. Switching a top-level tab hides the editor and preserves its draft.
+Literal credentials use password inputs: leave a stored value untouched to keep
+it, enter a replacement, or choose **Clear stored value** to remove it. Search
+credential rows let you choose an environment variable or a literal value.
 
 Visit `http://<aicr-host>:8080/dashboard` (or `/`). Even before admin env is
 configured, the route returns the dashboard shell with a setup-required

@@ -48,3 +48,4 @@ export * from "./review-preparation.js";
 export * from "./secret-scrubber.js";
 export * from "./utils.js";
 export * from "./config-secret-policy.js";
+export * from "./config-secret-sealing.js";

@@ -154,7 +154,7 @@ export default defineConfig({
 
 **症状：** `/dashboard` 返回需要配置的页面，或 `POST /api/admin/login` 返回 401。
 
-**诊断：** 可观测性 dashboard 有**独立**的超级管理员登录（`admin.*`），与 webhook HMAC
+**诊断：** 管理后台有**独立**的超级管理员登录（`admin.*`），与 webhook HMAC
 和 trigger API key 无关。如果 `config.yaml` 中未设置 `admin.username_env` 加
 `admin.password_env`（或 `admin.password_hash_env`），或引用的环境变量为空，dashboard
 会被禁用。

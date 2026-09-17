@@ -1,10 +1,10 @@
 ---
 title: Dashboard 与日志
-description: 启用可观测性 dashboard、导航它、读取 /metrics，并定位 run 日志与快照。
+description: 启用管理后台 dashboard、导航它、读取 /metrics，并定位 run 日志与快照。
 ---
 
-AICR 内置可观测性 dashboard 和 Prometheus metrics 端点。dashboard 覆盖基础统计；
-有外部时序系统时两者可以互补。本页在[快速上手](/zh-cn/start/quick-start/)的健康检查基础上，介绍如何启用管理员登录、导航 dashboard、读取 `/metrics`，以及定位 run 日志和快照。
+AICR 内置管理后台 dashboard（可观测性统计与配置管理）和 Prometheus metrics 端点。
+dashboard 的可观测性部分覆盖基础统计；有外部时序系统时两者可以互补。本页在[快速上手](/zh-cn/start/quick-start/)的健康检查基础上，介绍如何启用管理员登录、导航 dashboard、读取 `/metrics`，以及定位 run 日志和快照。
 
 ## 启用管理员登录
 
@@ -38,6 +38,11 @@ session TTL 字段是 `session_ttl_seconds`（默认 `86400` = 24 小时）。`s
 只要独立配置库可用，Config API 仍可提供配置管理。
 
 ## 导航 dashboard
+
+浏览器标题和页面标题为 **AICodeReviewer Admin**。配置编辑器只显示在当前页面。
+切换 Config 子页面会关闭未修改或只读面板；有未保存修改时，可放弃修改或取消切换。
+切换顶层标签会隐藏编辑器并保留草稿。明文凭据使用密码输入框：不编辑即保留，输入
+新值即替换，点击 **Clear stored value** 清除。搜索凭据条目可选择环境变量或明文值。
 
 访问 `http://<aicr-host>:8080/dashboard`（或 `/`）。即使尚未配置管理员环境变量，该路由也会返回 dashboard 外壳并显示 setup-required 提示而不是 404；如果设置了 `path_prefix`，根路径会重定向到带前缀的入口。
 

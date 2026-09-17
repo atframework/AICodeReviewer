@@ -1,5 +1,7 @@
+import { createHash } from "node:crypto";
 import { ConfigError, stableSerialize } from "./config-format.js";
 import { deepMergeAnalysis } from "./config-compiler.js";
+import { LITERAL_SECRET_FIELDS, SEALED_LITERAL_SECRET_FIELDS } from "./config-secret-sealing.js";
 import { isPlainObject } from "./utils.js";
 
 export interface ConfigSecretGrant {
@@ -91,7 +93,7 @@ export function collectConfigSecretReferences(config: unknown): readonly ConfigS
     }
     // Channel-level endpoints can override a file trigger endpoint while
     // silently inheriting that trigger's token. Treat that as a distinct use.
-    if (path[0] === "outputs" && path[1] === "channels" && path.length === 3 && value.token_env === undefined && typeof value.trigger === "string") {
+    if (path[0] === "outputs" && path[1] === "channels" && path.length === 3 && value.token_env === undefined && value.token === undefined && typeof value.trigger === "string") {
       const trigger = triggers.find(t => isPlainObject(t) && t.name === value.trigger);
       if (isPlainObject(trigger) && typeof trigger.token_env === "string") {
         references.push({ env: trigger.token_env, target: [...path, "token_env"], destinations: destinationContext(value, triggers) });
@@ -140,7 +142,14 @@ export function collectConfigSecretReferences(config: unknown): readonly ConfigS
   return references;
 }
 
-/** Reject credential literals before they reach revisions, snapshots or audits. */
+/**
+ * Rejects unregistered credential material before it reaches revisions,
+ * snapshots or audits. Registered literal fields (LITERAL_SECRET_FIELDS —
+ * `api_key`, `token`, `webhook_secret`, …) are allowed: they are sealed at
+ * every persistence boundary and masked on read APIs. Credential-bearing
+ * URLs, credential-file paths and arbitrary credential-named keys remain
+ * rejected — secrets outside the registry still require an env reference.
+ */
 export function assertNoConfigCredentialLiterals(value: unknown, path: readonly string[] = []): void {
   if (typeof value === "string") {
     try {
@@ -155,10 +164,18 @@ export function assertNoConfigCredentialLiterals(value: unknown, path: readonly 
   for (const [key, child] of Object.entries(value)) {
     const searchCredential = path.at(-1) === "credentials" && path.includes("web_search");
     if (searchCredential && typeof child === "string" && ENV_NAME.test(child)) continue;
+    // web_search credentials { value } entries are registered literals.
+    if (searchCredential && isPlainObject(child) && typeof child.value === "string") continue;
+    // Registered literal fields are sealed/masked downstream; recurse so a
+    // credential-bearing URL inside them is still rejected.
+    if (LITERAL_SECRET_FIELDS.has(key)) {
+      assertNoConfigCredentialLiterals(child, [...path, key]);
+      continue;
+    }
     if (key === "private_key_path" || /Env$/.test(key) ||
         (!key.endsWith("_env") && /(^|[_-])(api[_-]?key|token|secret|password|authorization|cookie|credential)($|[_-])/i.test(key) &&
          child !== undefined && child !== null && typeof child !== "number" && typeof child !== "boolean")) {
-      throw new ConfigError("invalid_secret_env", "Literal credentials and credential-file paths cannot be stored in database configuration.", { path: [...path, key] });
+      throw new ConfigError("invalid_secret_env", "Unregistered credential fields and credential-file paths cannot be stored in database configuration; use a registered literal field or an environment reference.", { path: [...path, key] });
     }
     assertNoConfigCredentialLiterals(child, [...path, key]);
   }
@@ -176,4 +193,28 @@ export function assertConfigSecretPolicy(file: unknown, database: unknown, effec
       throw new ConfigError("invalid_secret_env", "Environment reference or destination is not authorized by config_sources.secret_refs.", { path: reference.target });
     }
   }
+  // File-owned literals have the same destination boundary as file env refs.
+  // Project them to private fingerprints to reuse the inheritance traversal;
+  // these names never reach env lookup, public grants, snapshots or responses.
+  const literalGrants = collectConfigSecretReferences(projectLiteralReferences(file));
+  const literalNames = new Set(literalGrants.filter(grant => grant.env.startsWith("AICR_LITERAL_")).map(grant => grant.env));
+  const literalSignatures = new Set(literalGrants.map(grant => stableSerialize(grant)));
+  for (const reference of collectConfigSecretReferences(projectLiteralReferences(effective))) {
+    if (literalNames.has(reference.env) && !literalSignatures.has(stableSerialize(reference))) {
+      throw new ConfigError("invalid_secret_env", "A file-owned literal credential cannot be reused at a different path or destination; configure a credential for that destination.", { path: reference.target });
+    }
+  }
+}
+
+function projectLiteralReferences(root: unknown, path: readonly string[] = []): unknown {
+  if (Array.isArray(root)) return root.map(entry => projectLiteralReferences(entry, path));
+  if (!isPlainObject(root)) return root;
+  const fingerprint = (value: string): string => `AICR_LITERAL_${createHash("sha256").update(value).digest("hex")}`;
+  return Object.fromEntries(Object.entries(root).map(([key, value]) => {
+    if (path.at(-1) === "credentials" && path.includes("web_search") && isPlainObject(value) && typeof value.value === "string") {
+      return [key, fingerprint(value.value)];
+    }
+    if (SEALED_LITERAL_SECRET_FIELDS.has(key) && typeof value === "string") return [`${key}_env`, fingerprint(value)];
+    return [key, projectLiteralReferences(value, [...path, key])];
+  }));
 }

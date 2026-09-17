@@ -47,7 +47,8 @@ llm:
 | `id` | string | ✓ | 唯一的 provider id，供 `model_chain` 与目录引用。 |
 | `kind` | enum | ✓ | 提供方协议。取值：`openai_compatible`、`azure_openai`、`anthropic`、`vertex_ai`、`bedrock`、`google_ai_studio`、`ollama`、`copilot`。 |
 | `base_url` | string (URL) | – | API 基础 URL，部分托管类型可省略。 |
-| `api_key_env` | string | – | 存放 API key 的环境变量名。绝不内联 key。 |
+| `api_key_env` | string | – | 存放 API key 的环境变量名。提交库的文件绝不内联 key。 |
+| `api_key` | string | – | 明文 API key；与 `api_key_env` 互斥（明文优先）。发布到数据库配置源后加密落库。 |
 | `api_version` | string | – | API 版本（`azure_openai` 等使用）。 |
 | `catalog_provider` | string | – | 将自定义 provider 映射到 models.dev 的 provider id（例如 `openai`）。 |
 | `catalog_id` | string | – | 显式 models.dev 查找 id（例如 `openai/gpt-4o-mini`），用于自定义别名。 |

@@ -126,7 +126,9 @@ export function createCopilotCliAdapter(options: CopilotCliAdapterOptions = {}):
 				searxng: false,
 			});
 
-			if (model.apiKeyEnv) {
+			if (model.apiKey) {
+				envVars.COPILOT_GITHUB_TOKEN = model.apiKey;
+			} else if (model.apiKeyEnv) {
 				// Highest-precedence Copilot CLI auth env for headless use
 				// (COPILOT_GITHUB_TOKEN > GH_TOKEN > GITHUB_TOKEN per the CLI reference).
 				envVars.COPILOT_GITHUB_TOKEN = `\${${model.apiKeyEnv}}`;

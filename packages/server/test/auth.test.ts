@@ -121,6 +121,12 @@ describe("createAuthMiddleware", () => {
 });
 
 describe("resolveWorkspaceAuth", () => {
+	it("uses a literal key without reading the environment", () => {
+		const result = resolveWorkspaceAuth({ auth: { api_key: "literal-workspace-key", enabled: true } }, () => {
+			throw new Error("literal credentials must not read env");
+		});
+		expect(result).toEqual({ apiKey: "literal-workspace-key", enabled: true });
+	});
 	it("resolves the api key from the configured env var", () => {
 		const result = resolveWorkspaceAuth(
 			{ auth: { api_key_env: "WS_KEY", enabled: true } },

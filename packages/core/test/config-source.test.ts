@@ -678,6 +678,58 @@ describe("applyConfigChangeset", () => {
     expect(stableSerialize(base)).toBe(before);
   });
 
+  it("update carries over omitted literal secret fields and clears them on explicit null", () => {
+    const withSecret: DatabaseConfigDocument = {
+      entities: {
+        triggers: {
+          "rec-1": { id: "rec-1", name: "gitea-main", enabled: true, value: { name: "gitea-main", kind: "gitea", token: "enc:v1.sealed", base_url: "https://gitea.example" } },
+        },
+      },
+    };
+    // Redacted round-trip: the replacement omits the masked token entirely.
+    const kept = applyConfigChangeset(withSecret, [
+      { op: "update", collection: "triggers", recordId: "rec-1", value: { name: "gitea-main", kind: "gitea", base_url: "https://gitea2.example" } },
+    ]);
+    expect(kept.entities?.triggers?.["rec-1"]?.value).toMatchObject({ token: "enc:v1.sealed", base_url: "https://gitea2.example" });
+    // Explicit null clears the stored secret.
+    const cleared = applyConfigChangeset(withSecret, [
+      { op: "update", collection: "triggers", recordId: "rec-1", value: { name: "gitea-main", kind: "gitea", token: null } },
+    ]);
+    expect(cleared.entities?.triggers?.["rec-1"]?.value).toEqual({ name: "gitea-main", kind: "gitea" });
+  });
+
+  it("carries over nested literals (notify_feishu) and web_search credential { value } entries", () => {
+    const withNested: DatabaseConfigDocument = {
+      entities: {
+        channels: {
+          "rec-1": {
+            id: "rec-1", name: "issues", enabled: true,
+            value: { name: "issues", kind: "github_problem_issue", notify_feishu: { webhook_url: "enc:v1.hook", secret: "enc:v1.sig" } },
+          },
+        },
+      },
+      globals: { agent: { web_search: { enabled: true, credentials: { exa: { value: "enc:v1.exa" }, tavily: "SEARCH_ENV" } } } },
+    };
+    const updated = applyConfigChangeset(withNested, [
+      { op: "update", collection: "channels", recordId: "rec-1", value: { name: "issues", kind: "github_problem_issue", notify_feishu: { secret: "enc:v1.newsig" } } },
+      { op: "set", path: ["agent", "web_search"], value: { enabled: true, credentials: { tavily: "SEARCH_ENV" } } },
+    ]);
+    const channel = updated.entities?.channels?.["rec-1"]?.value as Record<string, unknown>;
+    // The replaced literal wins; the omitted nested literal is carried over.
+    expect(channel?.notify_feishu).toEqual({ webhook_url: "enc:v1.hook", secret: "enc:v1.newsig" });
+    // The omitted { value } credential entry survives a global set; env names
+    // are never masked, so the unchanged env entry round-trips normally.
+    const webSearch = (updated.globals?.agent as { web_search: { credentials: Record<string, unknown> } }).web_search;
+    expect(webSearch.credentials).toEqual({ exa: { value: "enc:v1.exa" }, tavily: "SEARCH_ENV" });
+  });
+
+  it("create strips null literal fields instead of persisting them", () => {
+    const next = applyConfigChangeset(base, [
+      { op: "create", collection: "providers", record: { id: "rec-2", name: "second", enabled: true, value: { id: "second", kind: "ollama", api_key: null } } },
+    ]);
+    expect(next.entities?.providers?.["rec-2"]?.value).toEqual({ id: "second", kind: "ollama" });
+  });
+
   it("rejects route record creation at format version 1", () => {
     expectConfigError(
       () =>

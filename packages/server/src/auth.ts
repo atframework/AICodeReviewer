@@ -68,9 +68,10 @@ export function resolveWorkspaceAuth(
 	if (!auth || typeof auth !== "object") return undefined;
 
 	const apiKeyEnv = auth.api_key_env as string | undefined;
+	const apiKeyLiteral = auth.api_key as string | undefined;
 	const enabled = auth.enabled as boolean | undefined;
 
-	const apiKey = apiKeyEnv ? envLookup(apiKeyEnv) : undefined;
+	const apiKey = apiKeyLiteral ?? (apiKeyEnv ? envLookup(apiKeyEnv) : undefined);
 
 	return {
 		...(apiKey ? { apiKey } : {}),

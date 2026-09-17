@@ -678,7 +678,7 @@ describe("mergeConfigLayers", () => {
 
       expect(result.success).toBe(false);
       if (!result.success) {
-        expect(result.error.issues.some((i) => /only one of private_key_env or private_key_path/iu.test(i.message))).toBe(true);
+        expect(result.error.issues.some((i) => /only one of private_key, private_key_env or private_key_path/iu.test(i.message))).toBe(true);
       }
     });
 
@@ -1769,6 +1769,81 @@ it("rejects system-only fields in workspace config files per Plan §3.10", () =>
       },
     });
     expect(result.success).toBe(true);
+  });
+});
+
+describe("literal secret fields (architecture §3.15 literal credentials)", () => {
+  it("accepts literal credentials across providers, triggers, channels, auth and admin", () => {
+    const result = appConfigSchema.safeParse({
+      llm: {
+        providers: [
+          { id: "openai-prod", kind: "openai_compatible", base_url: "https://api.openai.com/v1", api_key: "sk-live" },
+          { id: "bedrock-prod", kind: "bedrock", aws_region: "us-east-1", aws_access_key: "AKIA", aws_secret_key: "awssecret" },
+        ],
+        model_chain: { default: [{ provider: "openai-prod", model: "gpt-4o", role: "any" }] },
+      },
+      triggers: [
+        { name: "gitea-main", kind: "gitea", base_url: "https://gitea.example", token: "gtok", webhook_secret: "whsec" },
+        { name: "p4-main", kind: "p4", port: "ssl:p4.example:1666", user: "p4user", ticket: "p4ticket" },
+        { name: "svn-main", kind: "svn", repository_url: "https://svn.example/repo", username: "svnuser", password: "svnpass" },
+      ],
+      outputs: {
+        channels: [
+          { name: "feishu", kind: "feishu_bot", webhook_url: "https://open.feishu.cn/bot/x", secret: "sig" },
+          { name: "issues", kind: "github_problem_issue", owner: "o", repo: "r", token: "ghtok", notify_feishu: { webhook_url: "https://open.feishu.cn/bot/y", secret: "sig2" } },
+        ],
+      },
+      workspaces: { instances: { ws: { auth: { api_key: "ws-key" } } } },
+      server: { auth: { api_key: "server-key" } },
+      admin: { password: "admin-pass" },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it.each([
+    ["provider api_key + api_key_env", { llm: { providers: [{ id: "p", kind: "ollama", api_key: "k", api_key_env: "KEY" }], model_chain: { default: [{ provider: "p", model: "m", role: "any" }] } } }, ["api_key"]],
+    ["trigger token + token_env", { triggers: [{ name: "t", kind: "gitea", token: "t", token_env: "TOK" }] }, ["token"]],
+    ["trigger user + user_env", { triggers: [{ name: "t", kind: "p4", user: "u", user_env: "U" }] }, ["user"]],
+    ["channel webhook_url + webhook_url_env", { outputs: { channels: [{ name: "c", kind: "feishu_bot", webhook_url: "https://x.example", webhook_url_env: "HOOK" }] } }, ["webhook_url"]],
+    ["notify_feishu secret + secret_env", { outputs: { channels: [{ name: "c", kind: "github_problem_issue", notify_feishu: { webhook_url: "https://x.example", secret: "s", secret_env: "S" } }] } }, ["secret"]],
+    ["workspace auth api_key + api_key_env", { workspaces: { instances: { ws: { auth: { api_key: "k", api_key_env: "KEY" } } } } }, ["api_key"]],
+    ["admin password + password_env", { admin: { password: "p", password_env: "PASS" } }, ["password"]],
+    ["context repo token + token_env", { workspaces: { instances: { ws: { context_repositories: [{ alias: "lib", kind: "git", url: "https://x.example/lib.git", token: "t", token_env: "TOK" }] } } } }, ["token"]],
+  ])("rejects %s as mutually exclusive", (_label, document, path) => {
+    const result = appConfigSchema.safeParse(document);
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues.some((issue) => /mutually exclusive/u.test(issue.message))).toBe(true);
+      expect(result.error.issues.find((issue) => /mutually exclusive/u.test(issue.message))?.path.at(-1)).toBe(path[0]);
+    }
+  });
+
+  it("accepts a github app with a literal private_key and rejects pairing it with token", () => {
+    const ok = appConfigSchema.safeParse({
+      triggers: [{ name: "gh", kind: "github", app: { app_id: "1", private_key: "-----BEGIN KEY-----x" } }],
+    });
+    expect(ok.success).toBe(true);
+    const conflict = appConfigSchema.safeParse({
+      triggers: [{ name: "gh", kind: "github", token: "tok", app: { app_id: "1", private_key: "-----BEGIN KEY-----x" } }],
+    });
+    expect(conflict.success).toBe(false);
+  });
+
+  it("requires notify_feishu to carry webhook_url or webhook_url_env", () => {
+    const result = appConfigSchema.safeParse({
+      outputs: { channels: [{ name: "c", kind: "github_problem_issue", notify_feishu: { secret: "s" } }] },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("accepts web_search credential { value } literals next to env names", () => {
+    const result = appConfigSchema.safeParse({
+      agent: { web_search: { enabled: true, credentials: { exa: { value: "exa-key" }, tavily: "AICR_SEARCH_TAVILY_KEY" } } },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.agent.web_search.credentials.exa).toEqual({ value: "exa-key" });
+    }
   });
 });
 

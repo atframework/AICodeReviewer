@@ -12,6 +12,27 @@ Read the section matching a config, model-selection, persistence, or usage chang
   override or workspace/route search endpoint can reuse a file token without
   adding an env field. Require the effective purpose grant and never query an
   unauthorized env (config-secret-policy tests A06).
+- Literal credentials (the `api_key`/`token`/… siblings of `*_env`) must cross
+  every persistence boundary sealed: the revision document AND the runtime
+  snapshot's `sanitizedEffectiveConfig`, including plaintext literals merged in
+  from the file config. Preview/publish/restore authenticate ciphertext before
+  commit; generation builds open it for execution. Random nonces must not break
+  operation retries or concurrent snapshot recovery: compare opened content and
+  reuse the committed ciphertext (`config-publish` / `config-api` tests). Keep `config-secret-sealing`
+  walkers, the `assertNoConfigCredentialLiterals` allowlist and the admin
+  redaction key sets driven from one registry (SEALED/PLAIN literal fields).
+- Masked secret fields cannot round-trip through a wholesale entity update:
+  `applyConfigChangeset` carries omitted registered literals over from the
+  stored record and treats explicit JSON null as clear. Preserve empty parents
+  for masked nested fields; encode explicit removal and kind changes as null.
+  Search maps must retain masked rows and emit tombstones for removed rows
+  (`config-ui-integration` / browser tests). Plain usernames follow normal edits.
+- A fixed `display` on `#tab-config` overrides the dashboard's inactive-tab rule.
+  Scope its grid layout to `.active`; test both top-level tabs and config pages,
+  including read-only drawers and dirty drafts (`tests/browser/config-ui.spec.ts`).
+- Schema `superRefine` runs after defaults are applied — mutual-exclusion
+  checks between a literal and a defaulted `*_env` (e.g. admin.password_env
+  defaults to AICR_ADMIN_PASSWORD) must treat the default value as unset.
 - Freeze catalog observations with the task version, including after restart.
   Keep budget/token-bucket state outside generation caches; verify actual
   requests and generated adapter bundles (runtime-generation tests H01–H03/H17).
@@ -266,6 +287,11 @@ Sources: `packages/server/src/review-orchestrator.ts`, `live-runs.ts`,
   ledger, so they need the same lock before ledger creation. Check both
   namespaces in CLI/verify; preserve SQLite's name-only historical ledger
   (`migration-review.test.ts`, `migrate.test.ts`).
+  The advisory lock is database-wide: unique test schemas do not isolate the
+  deliberate lock holder in `migration-version-process.test.ts` from other
+  migration tests. With a shared `AICR_PG_TEST_URL`, run the complete suite with
+  `--maxWorkers=1` or provide separate databases; retain timeouts and the
+  concurrency exercised inside each test.
 - PostgreSQL recording errors from Drizzle wrap the driver error in `cause`;
   dedupe only `review_runs_pkey`. Serialize rollup reads inside the transaction
   with `FOR NO KEY UPDATE`, compatible with concurrent FK `KEY SHARE` locks

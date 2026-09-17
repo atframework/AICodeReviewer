@@ -84,6 +84,7 @@ const env = {
   ...process.env,
   AICR_ADMIN_USERNAME: "admin",
   AICR_ADMIN_PASSWORD: "browser-test-password",
+  AICR_CONFIG_SECRETS_KEY: Buffer.alloc(32, 6).toString("base64"),
   AICR_BROWSER_LLM_KEY: "browser-dummy-llm-key",
   AICR_BROWSER_GIT_TOKEN: "browser-dummy-git-token",
   AICR_BROWSER_GIT_SECRET: "browser-dummy-git-secret",

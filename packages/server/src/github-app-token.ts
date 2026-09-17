@@ -290,7 +290,12 @@ export async function resolvePrivateKey(
   privateKeyEnv: string | undefined,
   privateKeyPath: string | undefined,
   resolveEnv: (name: string) => string | undefined,
+  privateKeyLiteral?: string | undefined,
 ): Promise<string> {
+  if (privateKeyLiteral) {
+    return decodePrivateKey(privateKeyLiteral);
+  }
+
   if (privateKeyEnv) {
     const raw = resolveEnv(privateKeyEnv);
     if (!raw) {
@@ -311,7 +316,7 @@ export async function resolvePrivateKey(
     }
   }
 
-  throw new Error("GitHub App auth requires private_key_env or private_key_path.");
+  throw new Error("GitHub App auth requires private_key, private_key_env or private_key_path.");
 }
 
 export interface GithubAppTriggerAuth {
@@ -336,13 +341,14 @@ export async function resolveGithubAppTriggerAuth(
   const clientId = typeof app.client_id === "string" ? app.client_id : undefined;
   const privateKeyEnv = typeof app.private_key_env === "string" ? app.private_key_env : undefined;
   const privateKeyPath = typeof app.private_key_path === "string" ? app.private_key_path : undefined;
+  const privateKeyLiteral = typeof app.private_key === "string" ? app.private_key : undefined;
   const installationIdRaw = app.installation_id !== undefined ? Number(app.installation_id) : undefined;
   const installationId = installationIdRaw !== undefined && Number.isFinite(installationIdRaw)
     ? installationIdRaw
     : undefined;
   const baseUrl = typeof triggerConfig.base_url === "string" ? triggerConfig.base_url : undefined;
 
-  const privateKey = await resolvePrivateKey(privateKeyEnv, privateKeyPath, resolveEnvFn);
+  const privateKey = await resolvePrivateKey(privateKeyEnv, privateKeyPath, resolveEnvFn, privateKeyLiteral);
 
   return {
     ...(appId !== undefined ? { appId } : {}),

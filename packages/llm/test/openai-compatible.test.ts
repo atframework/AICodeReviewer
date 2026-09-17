@@ -74,6 +74,27 @@ describe("createOpenAICompatibleChatClient", () => {
     });
   });
 
+  it("uses a literal apiKey directly without consulting the resolver", async () => {
+    const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
+    const fetch: FetchLike = async (url, init) => {
+      calls.push({ url, init });
+      return jsonResponse({ choices: [{ message: { content: "ok" } }] });
+    };
+    const client = createOpenAICompatibleChatClient({
+      fetch,
+      apiKeyResolver: () => {
+        throw new Error("resolver must not be consulted for a literal key");
+      },
+    });
+
+    await client.complete({
+      model: { ...model, apiKeyEnv: undefined, apiKey: "sk-literal" },
+      messages: [],
+    });
+
+    expect(calls[0]?.init?.headers).toMatchObject({ authorization: "Bearer sk-literal" });
+  });
+
   it("extracts cached prompt tokens from prompt_tokens_details", async () => {
     const fetch: FetchLike = async () =>
       jsonResponse({

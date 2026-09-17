@@ -73,8 +73,12 @@ function buildKiloProviderOptions(model: ModelSpec): Record<string, unknown> {
 
   // `{env:NAME}` is substituted by kilo's config loader (`config/variable.ts`)
   // from the spawned process env, so the secret never persists in the per-run
-  // bundle (same convention as the opencode adapter).
-  if (model.apiKeyEnv) {
+  // bundle (same convention as the opencode adapter). A literal key is written
+  // directly — the per-run bundle is disposable, but env indirection is
+  // preferable when available.
+  if (model.apiKey) {
+    options.apiKey = model.apiKey;
+  } else if (model.apiKeyEnv) {
     options.apiKey = `{env:${model.apiKeyEnv}}`;
   }
 
@@ -249,7 +253,10 @@ export function createKiloAdapter(options: KiloAdapterOptions = {}): AgentAdapte
       await writeFile(configPath, kiloJsonContent, "utf8");
 
       const envVars: Record<string, string> = {};
-      if (model.apiKeyEnv) {
+      if (model.apiKey) {
+        envVars.KILO_API_KEY = model.apiKey;
+        envVars[`KILO_API_KEY_${sanitizeEnvSuffix(model.providerId)}`] = model.apiKey;
+      } else if (model.apiKeyEnv) {
         envVars.KILO_API_KEY = `\${${model.apiKeyEnv}}`;
         envVars[`KILO_API_KEY_${sanitizeEnvSuffix(model.providerId)}`] = `\${${model.apiKeyEnv}}`;
       }

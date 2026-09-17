@@ -52,7 +52,11 @@ export function createOpenAICompatibleTranslator(
 
       const envVars: Record<string, string> = {};
       const apiKeyEnv = model.apiKeyEnv ?? options?.apiKeyEnv;
-      if (apiKeyEnv) {
+      // A literal key is injected under the configured env name (or the CLI
+      // default); an env reference stays a `${VAR}` indirection.
+      if (model.apiKey) {
+        envVars[apiKeyEnv ?? "OPENAI_API_KEY"] = model.apiKey;
+      } else if (apiKeyEnv) {
         envVars[apiKeyEnv] = `\${${apiKeyEnv}}`;
       }
 
@@ -84,7 +88,7 @@ export function createAnthropicTranslator(
       const envVars: Record<string, string> = {};
 
       const apiKeyEnv = model.apiKeyEnv ?? options?.apiKeyEnv ?? "ANTHROPIC_API_KEY";
-      envVars.ANTHROPIC_API_KEY = `\${${apiKeyEnv}}`;
+      envVars.ANTHROPIC_API_KEY = model.apiKey ?? `\${${apiKeyEnv}}`;
 
       const baseUrl = model.baseUrl ?? options?.baseUrl;
       if (baseUrl) {
@@ -152,7 +156,7 @@ export function createVertexAiTranslator(
       const envVars: Record<string, string> = {};
 
       const credentialsEnv = model.googleApplicationCredentialsEnv ?? "GOOGLE_APPLICATION_CREDENTIALS";
-      envVars.GOOGLE_APPLICATION_CREDENTIALS = `\${${credentialsEnv}}`;
+      envVars.GOOGLE_APPLICATION_CREDENTIALS = model.googleApplicationCredentials ?? `\${${credentialsEnv}}`;
 
       if (model.vertexProject) {
         envVars.GOOGLE_CLOUD_PROJECT = model.vertexProject;
@@ -201,15 +205,21 @@ export function createBedrockTranslator(
         envVars.AWS_REGION = model.awsRegion;
       }
 
-      if (model.awsAccessKeyEnv) {
+      if (model.awsAccessKey) {
+        envVars.AWS_ACCESS_KEY_ID = model.awsAccessKey;
+      } else if (model.awsAccessKeyEnv) {
         envVars.AWS_ACCESS_KEY_ID = `\${${model.awsAccessKeyEnv}}`;
       }
 
-      if (model.awsSecretKeyEnv) {
+      if (model.awsSecretKey) {
+        envVars.AWS_SECRET_ACCESS_KEY = model.awsSecretKey;
+      } else if (model.awsSecretKeyEnv) {
         envVars.AWS_SECRET_ACCESS_KEY = `\${${model.awsSecretKeyEnv}}`;
       }
 
-      if (model.awsSessionTokenEnv) {
+      if (model.awsSessionToken) {
+        envVars.AWS_SESSION_TOKEN = model.awsSessionToken;
+      } else if (model.awsSessionTokenEnv) {
         envVars.AWS_SESSION_TOKEN = `\${${model.awsSessionTokenEnv}}`;
       }
 

@@ -45,11 +45,12 @@ export interface AgentWebSearchOptions {
   /** Per-provider search transport timeout in seconds (`providers.webSearchTimeoutSeconds`, omp caps at 300). */
   readonly timeoutSeconds?: number;
   /**
-   * Credential provider id -> env var name that holds the secret on the AICR host.
-   * Each supporting adapter injects its native env var with a `${VAR}` reference;
-   * disabled runs inject none, and secrets never persist in the runtime bundle.
+   * Credential provider id -> either the env var name holding the secret on
+   * the AICR host (injected as a `${VAR}` reference) or a `{ value }` literal
+   * injected directly. Env references keep secrets out of the runtime bundle;
+   * literals resolve before the bundle is built and therefore land in it.
    */
-  readonly credentials?: Readonly<Record<string, string>>;
+  readonly credentials?: Readonly<Record<string, string | { readonly value: string }>>;
   readonly searxng?: AgentWebSearchSearxngOptions;
 }
 

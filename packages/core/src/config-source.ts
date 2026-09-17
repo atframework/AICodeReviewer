@@ -17,6 +17,7 @@ import {
   type ConfigPath,
 } from "./config-format.js";
 import { validateEntityCapabilities } from "./config-capabilities.js";
+import { carryOverSecretLiterals, LITERAL_SECRET_FIELDS } from "./config-secret-sealing.js";
 import { isPlainObject } from "./utils.js";
 import type { AppConfigInput } from "./config.js";
 
@@ -1235,7 +1236,7 @@ export function applyConfigChangeset(
           );
         }
         assertNameAvailable(operation.collection, record.name);
-        writeRecord(operation.collection, record);
+        writeRecord(operation.collection, { ...record, value: carryOverSecretLiterals(undefined, record.value) as DatabaseEntityValue });
         break;
       }
       case "update": {
@@ -1243,7 +1244,9 @@ export function applyConfigChangeset(
         assertNotFileOwned(operation.collection, record.name);
         writeRecord(operation.collection, {
           ...record,
-          value: cloneConfigValue(operation.value),
+          // Omitted registered literal fields keep their stored value so
+          // redacted round-trips are lossless; explicit null clears them.
+          value: carryOverSecretLiterals(record.value, operation.value) as DatabaseEntityValue,
           ...(operation.note !== undefined ? { note: operation.note } : {}),
         });
         break;
@@ -1290,7 +1293,14 @@ export function applyConfigChangeset(
           }
         }
         const next = globals !== undefined ? cloneConfigValue(globals) : {};
-        setPathValue(next, operation.path, cloneConfigValue(operation.value));
+        const literalLeaf = LITERAL_SECRET_FIELDS.has(operation.path.at(-1)!)
+          || (operation.path.at(-2) === "credentials" && operation.path.includes("web_search"));
+        if (operation.value === null && literalLeaf) {
+          const parent = getPathValue(next, operation.path.slice(0, -1));
+          if (isPlainObject(parent)) delete parent[operation.path.at(-1)!];
+        } else {
+          setPathValue(next, operation.path, carryOverSecretLiterals(getPathValue(next, operation.path), operation.value, operation.path));
+        }
         globals = next;
         break;
       }

@@ -282,6 +282,8 @@ describe("config-format errors", () => {
         "routing_conflict",
         "routing_invalid",
         "schema_version_unsupported",
+        "secret_sealing_invalid",
+        "secrets_key_missing",
         "snapshot_invalid",
         "store_unavailable",
         "template_invalid",

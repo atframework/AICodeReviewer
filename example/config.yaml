@@ -2,7 +2,15 @@
 # AICodeReviewer — Deployment Configuration Sample
 # =============================================================================
 # Copy this file as config.yaml, then fill in your values.
-# All secrets MUST be provided via environment variables (see .env.sample).
+# Secrets are referenced as environment variable names via `*_env` fields (see
+# .env.sample). Registered credentials also support literal fields
+# (`api_key`, `token`, `webhook_secret`, `password`, `ticket`, `webhook_url`,
+# `secret`, `private_key`) — setting both forms fails validation.
+# Keep committed files on env references; literals are intended
+# for the database configuration source, where they are sealed with
+# AES-256-GCM before persistence (see config_sources + AICR_CONFIG_SECRETS_KEY).
+# Storage URL fields keep env references. Inherited file credentials cannot
+# be redirected to a new destination; provide a credential for that destination.
 # See example/README.md for detailed setup guides (P4, Feishu, WeCom, etc.).
 # Loader notes: duplicate YAML keys and cyclic aliases are rejected; historical
 # `llm.fallback_chain` / `triage_fallback_chain` / array-form `model_chain`
@@ -21,6 +29,8 @@ llm:
       kind: openai_compatible # openai_compatible | azure_openai | anthropic | ollama | google_ai_studio | vertex_ai | bedrock | copilot
       base_url: https://api.openai.com/v1
       api_key_env: AICR_LLM_API_KEY # reads API key from $AICR_LLM_API_KEY
+      # api_key: sk-xxxxxxxx       # literal alternative — mutually exclusive with
+                                   # api_key_env; sealed when published to the database
       # reasoning_effort: high        # optional per-provider reasoning effort:
       #                                 # minimal | low | medium | high | max
       #                                 # Sent as reasoning_effort on direct LLM calls;
@@ -125,7 +135,7 @@ llm:
   #       # catalog_id: openai/gpt-4o-mini       # or an explicit models.dev lookup id
 
 # ---------------------------------------------------------------------------
-# Observability dashboard admin (optional)
+# Admin dashboard (optional): observability + configuration management
 # ---------------------------------------------------------------------------
 # When AICR_ADMIN_USERNAME and either AICR_ADMIN_PASSWORD or
 # AICR_ADMIN_PASSWORD_HASH are set, the server initializes a SQLite observation
@@ -199,7 +209,12 @@ llm:
 # resolvable storage.cache.redis.url_env). Changesets/restore require the
 # current fileDigest. New DB credential uses need an exact file-owned grant
 # (env + stable target path + destinations). Existing file references
-# authorize their existing purpose implicitly.
+# authorize their existing purpose implicitly. Credentials may also be
+# published literally (e.g. `api_key` instead of `api_key_env`): literals are
+# sealed with AES-256-GCM before they are written, so revisions and runtime
+# snapshots hold only ciphertext. Publishing a literal requires
+# AICR_CONFIG_SECRETS_KEY on the replica (see .env.sample); rotation uses
+# AICR_CONFIG_SECRETS_KEY_PREVIOUS for retired, decrypt-only keys.
 config_sources:
   # File-owned grants authorizing database-published credentials. Each grant
   # pins the exact env var, the stable target path (collection entries use
@@ -299,7 +314,9 @@ triggers:
     kind: gitea # gitea | forgejo | github | gitlab | p4 | svn
     base_url: https://git.example.com # your Gitea / Forgejo base URL
     token_env: AICR_GITEA_TOKEN # outbound: reads token from $AICR_GITEA_TOKEN
+    # token: xxxxxxxxxxxxxxxx   # literal alternative to token_env (mutually exclusive)
     webhook_secret_env: AICR_WEBHOOK_SECRET # inbound: HMAC-SHA256 secret for webhook verification
+    # webhook_secret: xxxxxxxx  # literal alternative to webhook_secret_env
     # Commit URLs for push/commit targets are derived from base_url + repo + revision.
     # Optional: only analyze files in these paths (omit = all paths)
     # watch_path:

@@ -7,6 +7,21 @@ description: 全量配置字段参考，按顶层命名空间组织，并以 Zod
 
 下面每个命名空间都链接到其叙述页，并列出 schema 校验的每个字段（类型、默认值、一句话描述）。没有 schema 默认值的可选字段在“默认值”列标记为 *—*。
 
+:::note[明文凭据同名字段]
+已注册的凭据支持以下明文字段——`api_key` 对应 `api_key_env`、
+`token` 对应 `token_env`，以及 `webhook_secret`、`password`、`ticket`、
+`webhook_url`、`secret`、`private_key`、AWS 三件套
+`aws_access_key`/`aws_secret_key`/`aws_session_token` 与
+`google_application_credentials`（类型均为 `string`，默认值 *—*）。二者
+**互斥**，同时设置会校验失败。存储连接 URL 保持原有环境变量配置。
+`user`/`username` 是普通标识符。agent
+web_search `credentials` 条目接受环境变量名字符串或 `{ value: "..." }` 明文
+对象。发布到数据库配置源的明文在落库前经 AES-256-GCM 封存，管理读取一律显示
+为 `<redacted>`；见
+[配置总览——动态配置 API](/zh-cn/configuration/overview/#动态配置-api)。
+下表列出各命名空间实际支持的字段。
+:::
+
 ## 枚举参考
 
 这些枚举值出现在多个命名空间中，集中放在这里方便查阅。
@@ -43,6 +58,7 @@ description: 全量配置字段参考，按顶层命名空间组织，并以 Zod
 | `llm.providers[].kind` | enum | — | provider kind（见上方 LLM provider 枚举） |
 | `llm.providers[].base_url` | URL | — | provider API base URL |
 | `llm.providers[].api_key_env` | string | — | 持有 API key 的环境变量名 |
+| `llm.providers[].api_key` | string | — | 明文 API key；与 `api_key_env` 互斥（明文优先）；发布到数据库后加密落库 |
 | `llm.providers[].api_version` | string | — | API 版本（Azure 等） |
 | `llm.providers[].catalog_provider` | string | — | 覆盖 catalog 查询时的 models.dev provider id |
 | `llm.providers[].catalog_id` | string | — | 覆盖 catalog 查询时的 models.dev `<provider>/<model>` id |
@@ -92,12 +108,19 @@ description: 全量配置字段参考，按顶层命名空间组织，并以 Zod
 | `triggers[].commit_url_template` | string | — | commit 链接的 URL 模板（变量会做 URL 编码） |
 | `triggers[].revision_url_template` | string | — | revision 链接的 URL 模板 |
 | `triggers[].change_url_template` | string | — | changelist 链接的 URL 模板（P4 Swarm 等） |
-| `triggers[].app` | object | — | GitHub App 认证块；仅 `kind: github`，与 `token_env` 互斥 |
+| `triggers[].app` | object | — | GitHub App 认证块；仅 `kind: github`，与 `token`/`token_env` 互斥 |
 | `triggers[].app.app_id` | string \| int | — | GitHub App ID（与 `client_id` 至少填一个） |
 | `triggers[].app.client_id` | string | — | GitHub App client ID（`app_id` 的替代项） |
-| `triggers[].app.private_key_env` | string | — | 持有 App 私钥 PEM 的环境变量（与 `private_key_path` 恰好填一个） |
-| `triggers[].app.private_key_path` | string | — | App 私钥 PEM 文件路径（与 `private_key_env` 恰好填一个） |
+| `triggers[].app.private_key_env` | string | — | 持有 App 私钥 PEM 的环境变量（与 `private_key`/`private_key_path` 恰好填一个） |
+| `triggers[].app.private_key_path` | string | — | App 私钥 PEM 文件路径（与 `private_key`/`private_key_env` 恰好填一个） |
+| `triggers[].app.private_key` | string | — | 明文 App 私钥 PEM 或 base64 PEM（与 `private_key_env`/`private_key_path` 恰好填一个）；发布到数据库后加密落库 |
 | `triggers[].app.installation_id` | string \| int | — | 固定 installation id；缺省时按 `owner/repo` 动态解析 |
+| `triggers[].token` | string | — | 明文出站 VCS token（git 系）；与 `token_env` 和 `app` 互斥；发布到数据库后加密落库 |
+| `triggers[].webhook_secret` | string | — | 明文入站 webhook 密钥（git 系）；与 `webhook_secret_env` 互斥；发布到数据库后加密落库 |
+| `triggers[].user` | string | — | 明文 P4 用户名（标识符，不封存）；与 `user_env` 互斥 |
+| `triggers[].ticket` | string | — | 明文 P4 ticket；与 `ticket_env` 互斥；发布到数据库后加密落库 |
+| `triggers[].password` | string | — | 明文 P4/SVN 密码；与 `password_env` 互斥；发布到数据库后加密落库 |
+| `triggers[].username` | string | — | 明文 SVN 用户名（标识符，不封存）；与 `username_env` 互斥 |
 
 provider 专属字段（`webhook_secret_env`、`token_env`、`port`、`user_env`、`password_env`、`depot_path`、`workspace`、`repository_url`）通过 `passthrough` 校验接受，文档见[VCS 提供商](/zh-cn/integrations/vcs-providers/)与[认证与密钥](/zh-cn/configuration/authentication/)。
 
@@ -126,7 +149,8 @@ provider 专属字段（`webhook_secret_env`、`token_env`、`port`、`user_env`
 | `workspaces.defaults.agent.web_search.providers` | string[] | — | 有序 provider：omp 使用完整链；kilo 仅接受 `exa`；opencode 选择首个 `exa`/`parallel` |
 | `workspaces.defaults.agent.web_search.exclude` | string[] | — | 从搜索链路剔除的 provider id → `providers.webSearchExclude` |
 | `workspaces.defaults.agent.web_search.timeout_seconds` | int 1–300 | — | 单 provider 传输超时 → `providers.webSearchTimeoutSeconds` |
-| `workspaces.defaults.agent.web_search.credentials.<id>` | string | — | 搜索凭据 id → 宿主 env 名；启用搜索的 adapter 通过 `${VAR}` 引用注入所支持的原生 env |
+| `workspaces.defaults.agent.web_search.credentials.<id>` | string \| object | — | 搜索凭据 id → 宿主 env 名（字符串）或 `{ value }` 明文；启用搜索的 adapter 通过 `${VAR}` 引用注入所支持的原生 env，明文直接注入 |
+| `workspaces.defaults.agent.web_search.credentials.<id>.value` | string | — | 明文搜索凭据（对象形式）；发布到数据库后加密落库 |
 | `workspaces.defaults.agent.web_search.searxng.endpoint` | string | — | SearXNG 端点 URL |
 | `workspaces.defaults.agent.web_search.searxng.categories` | string | — | SearXNG 分类过滤 |
 | `workspaces.defaults.agent.web_search.searxng.engines` | string | — | SearXNG 引擎过滤 |
@@ -140,12 +164,16 @@ provider 专属字段（`webhook_secret_env`、`token_env`、`port`、`user_env`
 | `workspaces.defaults.context_repositories[].url` | string | — | git 仓库 URL（`kind: git` 必填） |
 | `workspaces.defaults.context_repositories[].ref` | string | — | git branch/tag pin |
 | `workspaces.defaults.context_repositories[].token_env` | string | — | git http(s) 认证 token 的环境变量名 |
+| `workspaces.defaults.context_repositories[].token` | string | — | 明文 git http(s) token；与 `token_env` 互斥；发布到数据库后加密落库 |
 | `workspaces.defaults.context_repositories[].repository_url` | string | — | SVN 仓库 URL（`kind: svn` 必填） |
 | `workspaces.defaults.context_repositories[].revision` | string \| int | — | svn/p4 的版本 pin |
 | `workspaces.defaults.context_repositories[].port` | string | — | P4 端口 |
 | `workspaces.defaults.context_repositories[].user_env` | string | — | P4 用户名的环境变量名 |
+| `workspaces.defaults.context_repositories[].user` | string | — | 明文 P4 用户名（标识符，不封存）；与 `user_env` 互斥 |
 | `workspaces.defaults.context_repositories[].ticket_env` | string | — | P4 ticket 的环境变量名 |
+| `workspaces.defaults.context_repositories[].ticket` | string | — | 明文 P4 ticket；与 `ticket_env` 互斥；发布到数据库后加密落库 |
 | `workspaces.defaults.context_repositories[].password_env` | string | — | P4 密码的环境变量名 |
+| `workspaces.defaults.context_repositories[].password` | string | — | 明文 P4 密码；与 `password_env` 互斥；发布到数据库后加密落库 |
 | `workspaces.defaults.context_repositories[].depot_path` | string | — | P4 depot 路径（`kind: p4` 必填） |
 | `workspaces.defaults.context_repositories[].max_mb` | int > 0 | `512` | 单仓库物化后大小上限（MB） |
 | `workspaces.instances` | map | `{}` | 按 workspace id 组织的 instance |
@@ -172,7 +200,8 @@ provider 专属字段（`webhook_secret_env`、`token_env`、`port`、`user_env`
 | `workspaces.instances.<id>.agent.web_search.providers` | string[] | — | 有序 provider：omp 使用完整链；kilo 仅接受 `exa`；opencode 选择首个 `exa`/`parallel` |
 | `workspaces.instances.<id>.agent.web_search.exclude` | string[] | — | 从搜索链路剔除的 provider id → `providers.webSearchExclude` |
 | `workspaces.instances.<id>.agent.web_search.timeout_seconds` | int 1–300 | — | 单 provider 传输超时 → `providers.webSearchTimeoutSeconds` |
-| `workspaces.instances.<id>.agent.web_search.credentials.<id>` | string | — | 搜索凭据 id → 宿主 env 名；启用搜索的 adapter 通过 `${VAR}` 引用注入所支持的原生 env |
+| `workspaces.instances.<id>.agent.web_search.credentials.<id>` | string \| object | — | 搜索凭据 id → 宿主 env 名（字符串）或 `{ value }` 明文；启用搜索的 adapter 通过 `${VAR}` 引用注入所支持的原生 env，明文直接注入 |
+| `workspaces.instances.<id>.agent.web_search.credentials.<id>.value` | string | — | 明文搜索凭据（对象形式）；发布到数据库后加密落库 |
 | `workspaces.instances.<id>.agent.web_search.searxng.endpoint` | string | — | SearXNG 端点 URL |
 | `workspaces.instances.<id>.agent.web_search.searxng.categories` | string | — | SearXNG 分类过滤 |
 | `workspaces.instances.<id>.agent.web_search.searxng.engines` | string | — | SearXNG 引擎过滤 |
@@ -188,15 +217,20 @@ provider 专属字段（`webhook_secret_env`、`token_env`、`port`、`user_env`
 | `workspaces.instances.<id>.context_repositories[].url` | string | — | git 仓库 URL（`kind: git` 必填） |
 | `workspaces.instances.<id>.context_repositories[].ref` | string | — | git branch/tag pin（缺省远端默认分支） |
 | `workspaces.instances.<id>.context_repositories[].token_env` | string | — | git http(s) 认证 token 的环境变量名（经 `http.extraHeader` 注入，不落盘） |
+| `workspaces.instances.<id>.context_repositories[].token` | string | — | 明文 git http(s) token；与 `token_env` 互斥；发布到数据库后加密落库 |
 | `workspaces.instances.<id>.context_repositories[].repository_url` | string | — | SVN 仓库 URL（`kind: svn` 必填） |
 | `workspaces.instances.<id>.context_repositories[].revision` | string \| int | — | svn/p4 的版本 pin（缺省取最新） |
 | `workspaces.instances.<id>.context_repositories[].port` | string | — | P4 端口（如 `ssl:p4.example.com:1666`） |
 | `workspaces.instances.<id>.context_repositories[].user_env` | string | — | P4 用户名的环境变量名 |
+| `workspaces.instances.<id>.context_repositories[].user` | string | — | 明文 P4 用户名（标识符，不封存）；与 `user_env` 互斥 |
 | `workspaces.instances.<id>.context_repositories[].ticket_env` | string | — | P4 ticket 的环境变量名 |
+| `workspaces.instances.<id>.context_repositories[].ticket` | string | — | 明文 P4 ticket；与 `ticket_env` 互斥；发布到数据库后加密落库 |
 | `workspaces.instances.<id>.context_repositories[].password_env` | string | — | P4 密码的环境变量名（与 `ticket_env` 同义入口） |
+| `workspaces.instances.<id>.context_repositories[].password` | string | — | 明文 P4 密码；与 `password_env` 互斥；发布到数据库后加密落库 |
 | `workspaces.instances.<id>.context_repositories[].depot_path` | string | — | P4 depot 路径（`kind: p4` 必填，通常以 `/...` 结尾） |
 | `workspaces.instances.<id>.context_repositories[].max_mb` | int > 0 | `512` | 单仓库物化后大小上限（MB），超限判失败并清理 |
 | `workspaces.instances.<id>.auth.api_key_env` | string | — | workspace 级 API key 环境变量 |
+| `workspaces.instances.<id>.auth.api_key` | string | — | 明文 workspace 级 API key；与 `api_key_env` 互斥；发布到数据库后加密落库 |
 | `workspaces.instances.<id>.auth.enabled` | boolean | `true` | 切换 workspace 级 API key |
 
 workspace id 不能与保留键 `cache`、`defaults`、`instances` 冲突。
@@ -270,7 +304,10 @@ fallback 必须是字面量，禁止 hash arguments。provider 变量必须适�
 | `outputs.channels[].review_mode` | enum | — | `auto`、`review`、`comment` |
 | `outputs.channels[].review_event` | enum | — | `COMMENT` 或 `REQUEST_CHANGES` |
 | `outputs.channels[].review_update_strategy` | enum | — | `always_new` 或 `update_existing` |
-| `outputs.channels[].notify_feishu` | object | — | issue 创建时的 Feishu 通知（`webhook_url_env`、可选 `secret_env`） |
+| `outputs.channels[].notify_feishu` | object | — | issue 创建时的 Feishu 通知（`webhook_url_env` 或明文 `webhook_url`，可选 `secret_env`/明文 `secret`） |
+| `outputs.channels[].token` | string | — | 明文 channel API token；与 `token_env` 互斥；发布到数据库后加密落库 |
+| `outputs.channels[].webhook_url` | string | — | 明文机器人 webhook URL（feishu_bot/wecom_bot）；与 `webhook_url_env` 互斥；发布到数据库后加密落库 |
+| `outputs.channels[].secret` | string | — | 明文 Feishu 签名密钥；与 `secret_env` 互斥；发布到数据库后加密落库 |
 | `outputs.author_resolution` | object | — | `email_mappings` 映射和 `email_blacklist` 数组 |
 | `outputs.routes.default` | object | — | 无规则匹配时应用的默认路由 |
 | `outputs.routes.rules[]` | array | `[]` | 有序路由规则 |
@@ -424,6 +461,7 @@ fallback 必须是字面量，禁止 hash arguments。provider 变量必须适�
 | `server.base_url` | string | — | 外部 base URL |
 | `server.path_prefix` | string | — | URL 路径前缀（反代子路径） |
 | `server.auth.api_key_env` | string | — | 全局 API key 环境变量（保护 `/triggers/*`） |
+| `server.auth.api_key` | string | — | 明文全局 API key；与 `api_key_env` 互斥（明文优先） |
 | `server.auth.enabled` | boolean | `true` | 切换全局 API key |
 
 ## `admin`
@@ -435,4 +473,6 @@ fallback 必须是字面量，禁止 hash arguments。provider 变量必须适�
 | `admin.username_env` | string | `AICR_ADMIN_USERNAME` | 管理员用户名环境变量 |
 | `admin.password_env` | string | `AICR_ADMIN_PASSWORD` | 管理员密码环境变量 |
 | `admin.password_hash_env` | string | — | 管理员密码哈希环境变量（`sha256:<hex>`）；优先于 `password_env` |
+| `admin.password` | string | — | 明文管理员密码；与 `password_env` 互斥（明文优先） |
+| `admin.password_hash` | string | — | 明文管理员密码哈希（`sha256:<hex>`）；与 `password_hash_env` 互斥 |
 | `admin.session_ttl_seconds` | int > 0 | `86400` | session TTL（秒，不是分钟） |

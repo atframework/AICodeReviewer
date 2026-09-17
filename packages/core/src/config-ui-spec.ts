@@ -44,7 +44,7 @@ import {
   type SchemaFieldLeaf,
 } from "./config-components.js";
 import { ConfigError } from "./config-format.js";
-import { appConfigSchema, llmProviderSchema, routingRuleSchema, triggerSchema } from "./config.js";
+import { appConfigSchema, llmProviderObjectSchema, routingRuleSchema, triggerObjectSchema } from "./config.js";
 import type {
   ConfigUiControlKind,
   ConfigUiEntityKind,
@@ -240,10 +240,10 @@ function lookupKinds(lookup: FieldKindLookup, relativePath: string): readonly st
 
 function kindOptionsForPage(pageId: string): readonly string[] {
   if (pageId === "providers") {
-    return [...llmProviderSchema.shape.kind.options];
+    return [...llmProviderObjectSchema.shape.kind.options];
   }
   if (pageId === "triggers") {
-    return [...triggerSchema.shape.kind.options];
+    return [...triggerObjectSchema.shape.kind.options];
   }
   return [...CHANNEL_KINDS];
 }
@@ -395,8 +395,8 @@ export const PAGE_LAYOUT: readonly ConfigUiPageLayout[] = [
     entity: { kind: "provider", collection: "providers", idField: "id", valueShape: "object", kindField: "kind" },
     sections: [
       { id: "identity", label: "Identity", scope: "entity", match: ["id", "kind"] },
-      { id: "connection", label: "Connection", scope: "entity", match: ["base_url", "api_key_env", "api_version", "organization", "http_proxy", "timeout_ms", "max_retries"] },
-      { id: "kind-specific", label: "Kind-specific", scope: "entity", match: ["vertex_", "aws_", "anthropic_", "cache_control"], collapsed: true },
+      { id: "connection", label: "Connection", scope: "entity", match: ["base_url", "api_key_env", "api_key", "api_version", "organization", "http_proxy", "timeout_ms", "max_retries"] },
+      { id: "kind-specific", label: "Kind-specific", scope: "entity", match: ["vertex_", "aws_", "google_", "anthropic_", "cache_control"], collapsed: true },
       { id: "catalog", label: "Catalog metadata", scope: "entity", match: PROVIDER_CATALOG_MATCHES, collapsed: true },
       { id: "overrides", label: "Request overrides", scope: "entity", match: [""], collapsed: true },
     ],
@@ -424,9 +424,9 @@ export const PAGE_LAYOUT: readonly ConfigUiPageLayout[] = [
       { id: "urls", label: "URL templates", scope: "entity", match: ["commit_url_template", "revision_url_template", "change_url_template"] },
       { id: "filters", label: "File filters", scope: "entity", match: ["watch_path", "include_cr_file", "exclude_cr_file"], collapsed: true },
       { id: "github", label: "GitHub App", scope: "entity", match: ["app"], collapsed: true },
-      { id: "git", label: "Git servers", scope: "entity", match: ["token_env", "webhook_secret_env", "base_url", "repos"], collapsed: true },
-      { id: "p4", label: "Perforce", scope: "entity", match: ["port", "user_env", "ticket_env", "password_env", "depot_path", "streams", "workspace"], collapsed: true },
-      { id: "svn", label: "Subversion", scope: "entity", match: ["repository_url", "trust_server_cert"], collapsed: true },
+      { id: "git", label: "Git servers", scope: "entity", match: ["token_env", "token", "webhook_secret_env", "webhook_secret", "base_url", "repos"], collapsed: true },
+      { id: "p4", label: "Perforce", scope: "entity", match: ["port", "user_env", "user", "ticket_env", "ticket", "password_env", "password", "depot_path", "streams", "workspace"], collapsed: true },
+      { id: "svn", label: "Subversion", scope: "entity", match: ["repository_url", "trust_server_cert", "username"], collapsed: true },
     ],
   },
   {
@@ -713,6 +713,7 @@ const SCALAR_VALUE_KIND_BY_CONTROL: Readonly<Record<string, ConfigUiValueKind>> 
   select: "string",
   multiselect: "string[]",
   "secret-ref": "string",
+  "secret-value": "string",
   "path-template": "string",
 };
 
@@ -1042,7 +1043,10 @@ function nestCollectionFields(fields: readonly ConfigUiField[], prefix = ""): Co
     const match = /\[\]\.|\.\*\./u.exec(relative);
     if (!match) {
       // A wildcard leaf edits the entire map, e.g. workspace match.source.*.
-      result.push(field.id.endsWith(".*") && field.control !== "map" ? { ...field, control: "map", valueKind: "record", mapValueKind: "record" } : field);
+      result.push(field.id.endsWith(".*") && field.control !== "map" ? {
+        ...field, control: "map", valueKind: "record",
+        mapValueKind: field.id.endsWith("web_search.credentials.*") ? "credential" : "record",
+      } : field);
       continue;
     }
     const id = prefix + relative.slice(0, match.index);

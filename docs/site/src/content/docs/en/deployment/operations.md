@@ -1,19 +1,21 @@
 ---
 title: Operations and Security
-description: Observability dashboard and metrics, admin auth, the secret scrubber, sandbox security model, socket risk, backup, and upgrade / rollback.
+description: Admin dashboard and metrics, admin auth, the secret scrubber, sandbox security model, socket risk, backup, and upgrade / rollback.
 ---
 
 This page covers day-2 operations for a running AICR deployment: the
-observability dashboard and Prometheus metrics endpoint, admin authentication,
+admin dashboard and Prometheus metrics endpoint, admin authentication,
 the secret scrubber, the sandbox security model, the Podman/Docker socket
 threat model, backups, and upgrade / rollback.
 
-## Observability dashboard
+## Admin dashboard
 
 Set `admin.username_env` plus either `admin.password_env` or
 `admin.password_hash_env` to enable the built-in dashboard. The dashboard is a
 separate super-admin surface — it does **not** reuse webhook HMAC or trigger
 API keys (see [Authentication & secrets](/en/configuration/authentication/)).
+It pairs observability (statistics, live runs, events) with configuration
+management (the **Config** tab).
 
 | Route | Method | Purpose |
 | --- | --- | --- |
@@ -26,6 +28,28 @@ API keys (see [Authentication & secrets](/en/configuration/authentication/)).
 Prefer `password_hash_env` (format `sha256:<hex>`) in production; a raw password
 env is allowed for small internal deployments but is compared with a
 constant-time digest check, rate-limited, and never logged.
+
+### Config secret sealing
+
+Literal credentials published to the database configuration source (the
+`api_key`/`token`/`webhook_url`/… siblings of the `*_env` fields) are sealed
+with AES-256-GCM before they are written — revisions, runtime snapshots and
+their backups hold only ciphertext. Set `AICR_CONFIG_SECRETS_KEY` (32 bytes,
+hex or base64) on every replica that publishes or activates such configuration;
+publishing a literal without it fails closed (`secrets_key_missing`), and a
+replica missing the key refuses to activate sealed configuration
+(`config_unavailable` / 503 until fixed). Env-reference-only deployments need
+no key. To rotate: generate a new key into `AICR_CONFIG_SECRETS_KEY` and move
+the old one to `AICR_CONFIG_SECRETS_KEY_PREVIOUS` (comma-separated,
+decrypt-only); new writes use the new key, historical revisions keep working.
+Store backups are safe to copy off-host but still protect the unsealed
+remainder; the sealing key itself never enters the store.
+
+Generate a key:
+
+```bash
+node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
+```
 
 :::caution[Session TTL is in seconds]
 The admin session TTL field is `session_ttl_seconds` (default `86400` = 24 hours).

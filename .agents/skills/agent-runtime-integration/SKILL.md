@@ -13,14 +13,19 @@ user-invocable: false
    [external source record](../../../docs/ai/source-index.md) and verify current
    upstream schema/help. Local fixtures alone can encode an invented contract.
 3. Treat model config, MCP, instructions, skills, env/mounts and manifest as one
-   per-run materialization. Write into the isolated bundle; secrets remain env
-   references and developer-global config is untouched.
+   per-run materialization. Write into the isolated bundle; env references keep
+   secrets out of the bundle, while registered literal credentials (literal
+   `api_key`, web_search `{ value }`) resolve before the bundle is built and
+   may enter generated config or the per-run spawn environment. Verify the
+   actual adapter output; never let either form reach developer-global config.
 4. Keep protected rules above common/project layers. Materialize canonical skills
    into native surfaces as needed, expose one active instruction surface, reject
    path collisions, and record dropped/unsupported capabilities in the manifest.
 5. For dynamic configuration, test an old pinned run and a new run through each
    affected adapter's generated config, command, env and manifest. Resolve search
-   credentials after layering against deployment grants; repository-owned input
+   credentials after layering against deployment grants (env names stay `${VAR}`
+   references; `{ value }` literals inject directly). Inherited file literals
+   retain their destination restrictions; repository-owned input
    cannot increase approval or sandbox permissions (architecture §3.16).
 6. Validate generated files, sandbox-visible paths, env, manifest, and actual
    context/output collection. Use current registry names and implemented tools;

@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>AICodeReviewer Observability</title>
+<title>AICodeReviewer Admin</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 :root{--bg:#0f172a;--card:#1e293b;--border:#334155;--text:#e2e8f0;--muted:#94a3b8;--accent:#3b82f6;--green:#22c55e;--red:#ef4444;--yellow:#eab308;--orange:#f97316}
@@ -86,7 +86,7 @@ tr:hover td{background:rgba(59,130,246,0.05)}
 
 <div id="dashboard-view" class="dashboard">
 <div class="header">
-<h1>AICodeReviewer Observability</h1>
+<h1>AICodeReviewer Admin</h1>
 <div class="header-actions">
 <span id="refresh-indicator" style="font-size:0.75rem;color:var(--muted)"></span>
 <button class="btn btn-sm btn-ghost" onclick="refreshStats()">Refresh</button>
@@ -386,12 +386,13 @@ function switchTab(t){
   document.querySelectorAll(".tab-content").forEach(function(el){el.classList.toggle("active",el.id==="tab-"+t)});
   if(t==="config"){
     if(!window.__aicrConfigApp)window.__aicrConfigApp=import("./dashboard/client/config-app.js");
-    window.__aicrConfigApp.then(function(m){if(authToken)m.default.show();}).catch(function(){
+    window.__aicrConfigApp.then(function(m){if(authToken&&document.getElementById("tab-config").classList.contains("active"))m.default.show();}).catch(function(){
       var main=document.getElementById("config-main");
       main.textContent="";
       main.appendChild(document.createTextNode("Failed to load the configuration editor."));
     });
   }
+  if(t!=="config"&&window.__aicrConfigApp)window.__aicrConfigApp.then(function(m){if(!document.getElementById("tab-config").classList.contains("active"))m.default.hide();}).catch(function(){});
   if(t==="projects"&&!projectStatsData)loadProjectStats(currentProjectWindow);
   if(t==="providers"&&!providerStatsData)loadProviderStats(currentProviderWindow);
   if(t==="runs"&&!runsData)loadRuns();

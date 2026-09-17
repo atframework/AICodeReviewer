@@ -102,7 +102,8 @@ function buildOpencodeProviderConfig(model: ModelSpec): Record<string, unknown> 
 
 	const providerOptions: Record<string, unknown> = {};
 	if (model.baseUrl) providerOptions.baseURL = model.baseUrl;
-	if (model.apiKeyEnv) providerOptions.apiKey = `{env:${model.apiKeyEnv}}`;
+	if (model.apiKey) providerOptions.apiKey = model.apiKey;
+	else if (model.apiKeyEnv) providerOptions.apiKey = `{env:${model.apiKeyEnv}}`;
 	if (model.extraHeaders) providerOptions.headers = model.extraHeaders;
 	if (model.timeoutMs !== undefined) providerOptions.timeout = model.timeoutMs;
 	if (model.apiVersion) providerOptions.apiVersion = model.apiVersion;
@@ -221,7 +222,7 @@ export function createOpencodeAdapter(options: OpencodeAdapterOptions = {}): Age
 
 			const envVars: Record<string, string> = {};
 			if (model.apiKeyEnv) {
-				envVars[model.apiKeyEnv] = `\${${model.apiKeyEnv}}`;
+				envVars[model.apiKeyEnv] = model.apiKey ?? `\${${model.apiKeyEnv}}`;
 			}
 			// `--dir` and the sandbox cwd both point at workingDir, so the project-level
 			// opencode.json is discovered natively. Do not set OPENCODE_CONFIG to this host

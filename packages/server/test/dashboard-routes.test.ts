@@ -232,8 +232,8 @@ describe("dashboard routes", () => {
     const html = await response.text();
 
     expect(response.status).toBe(200);
-    expect(html).toContain("AICodeReviewer Observability");
-    expect(html).toContain("Observability dashboard is not configured.");
+    expect(html).toContain("AICodeReviewer Admin");
+    expect(html).toContain("The admin dashboard is not configured.");
   });
 
   it("serves the dashboard shell at /dashboard when observability is disabled", async () => {
@@ -243,7 +243,7 @@ describe("dashboard routes", () => {
     const html = await response.text();
 
     expect(response.status).toBe(200);
-    expect(html).toContain("AICodeReviewer Observability");
+    expect(html).toContain("AICodeReviewer Admin");
     expect(html).toContain("var dashboardEnabled=false");
   });
 
@@ -283,7 +283,7 @@ describe("dashboard routes", () => {
     const html = await response.text();
 
     expect(response.status).toBe(200);
-    expect(html).toContain("AICodeReviewer Observability");
+    expect(html).toContain("AICodeReviewer Admin");
   });
 });
 

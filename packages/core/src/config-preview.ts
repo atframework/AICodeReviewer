@@ -26,6 +26,7 @@ import {
 } from "./config-compiler.js";
 import { ConfigError } from "./config-format.js";
 import type { EffectiveConfigV2 } from "./config.js";
+import { containsSealableSecrets, validateConfigSecretLiterals, type ConfigSecretSealing } from "./config-secret-sealing.js";
 import {
   prepareConfigPublication,
   configSnapshotId,
@@ -55,6 +56,7 @@ import type { PathTemplateVariables } from "./config-path-template.js";
 // ---------------------------------------------------------------------------
 
 export interface ConfigChangesetPreviewInput {
+  readonly secretSealing?: ConfigSecretSealing | undefined;
   readonly store: ConfigStore;
   readonly namespace: string;
   readonly file?: ConfigPublishInput["file"] | undefined;
@@ -73,6 +75,8 @@ export type ConfigChangesetPreview =
       readonly shadowedEntities: readonly { readonly kind: string; readonly id: string }[];
       /** Effective values for the entity collections touched by the changeset. */
       readonly affected: readonly { readonly kind: string; readonly id: string; readonly value: unknown }[];
+      /** True when the resulting document/effective config holds literal credentials that require AICR_CONFIG_SECRETS_KEY at publish time. */
+      readonly sealableSecrets: boolean;
     }
   | {
       readonly valid: false;
@@ -104,6 +108,8 @@ export async function previewConfigChangeset(input: ConfigChangesetPreviewInput)
       operations: input.operations,
       formatVersion: input.formatVersion ?? revision?.formatVersion ?? 1,
     });
+    validateConfigSecretLiterals(prepared.document, input.secretSealing);
+    validateConfigSecretLiterals(prepared.effective, input.secretSealing);
     const touched = new Set(
       input.operations
         .map((operation) => ("collection" in operation ? `${operation.collection}` : null))
@@ -133,6 +139,7 @@ export async function previewConfigChangeset(input: ConfigChangesetPreviewInput)
       diff: prepared.audit.redactedDiff,
       shadowedEntities: prepared.merged.shadowedEntities.map((ref) => ({ kind: ref.kind, id: ref.id })),
       affected,
+      sealableSecrets: containsSealableSecrets(prepared.document) || containsSealableSecrets(prepared.effective),
     };
   } catch (error) {
     if (error instanceof ConfigError) {

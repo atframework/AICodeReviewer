@@ -369,6 +369,7 @@ describe("control parity", () => {
     "ordered-list",
     "map",
     "secret-ref",
+    "secret-value",
     "matcher",
     "path-template",
   ] as const;

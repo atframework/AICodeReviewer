@@ -86,6 +86,9 @@ export const CONFIG_ERROR_CODES = [
   "binding_conflict",
   "schema_version_unsupported",
   "migration_failed",
+  // secret sealing (literal credentials at rest)
+  "secrets_key_missing",
+  "secret_sealing_invalid",
 ] as const;
 
 export type ConfigErrorCode = (typeof CONFIG_ERROR_CODES)[number];

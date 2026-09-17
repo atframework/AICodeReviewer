@@ -13,6 +13,9 @@ import {
   createMemoryConfigStore,
   createInMemoryQueue,
   createSqliteQueue,
+  createConfigSecretSealing,
+  isSealedSecretValue,
+  parseConfigSecretsKeyMaterial,
   prepareConfigPublication,
   publishConfig,
   type ConfigChangesetOperation,
@@ -534,6 +537,130 @@ describe("RuntimeConfigManager", () => {
     const generation = await manager.admission();
     expect(generation.config.llm.providers.map((provider) => provider.id).sort()).toEqual(["db-memory", "file-main"]);
     await memoryStore.close();
+  });
+});
+
+describe("secret sealing (literal credentials at rest)", () => {
+  const KEY_A = Buffer.alloc(32, 0xa).toString("base64");
+  const KEY_B = Buffer.alloc(32, 0xb).toString("base64");
+  const sealingA = () => createConfigSecretSealing(parseConfigSecretsKeyMaterial(KEY_A));
+
+  function triggerCreate(name: string, token: string): ConfigChangesetOperation {
+    return {
+      op: "create", collection: "triggers",
+      record: { id: `rec-${name}`, name, enabled: true, value: { name, kind: "gitea", base_url: "https://gitea.example", token } },
+    };
+  }
+
+  async function publishSealedTrigger(
+    manager: RuntimeConfigManager,
+    sealing: ReturnType<typeof sealingA>,
+    baseRevision: number | null,
+    operationId: string,
+  ): Promise<{ revision: number; snapshotId: string }> {
+    const raw = prepareConfigPublication({
+      namespace: NAMESPACE,
+      baseRevision,
+      operationId,
+      actor: "test",
+      file: FILE_DOCUMENT,
+      fileDigest: DIGEST,
+      current: baseRevision === null
+        ? {}
+        : ((await store.readRevision(NAMESPACE, baseRevision))?.document ?? {}),
+      operations: [triggerCreate("gitea-main", "gtok-plain-secret")],
+      formatVersion: 2,
+    });
+    const result = await publishConfig(store, raw, {
+      secretSealing: sealing,
+      install: async (preparedPublication, revision) => {
+        await manager.install({
+          effective: preparedPublication.effective,
+          revision: revision.revision,
+          revisionContentHash: revision.contentHash,
+          fileDigest: revision.fileDigest,
+          formatVersion: preparedPublication.formatVersion,
+        });
+      },
+    });
+    if (result.status !== "committed") throw new Error(`publish failed: ${result.status}`);
+    return { revision: result.revision.revision, snapshotId: result.snapshotId };
+  }
+
+  it("persists only ciphertext in revisions and snapshots while generations see plaintext", async () => {
+    const sealing = sealingA();
+    const manager = new RuntimeConfigManager({
+      fileConfig: FILE_CONFIG, fileDocument: FILE_DOCUMENT, fileDigest: DIGEST,
+      store, namespace: NAMESPACE, baseDir: dir, secretSealing: sealing,
+    });
+    await manager.admission();
+    const { revision, snapshotId } = await publishSealedTrigger(manager, sealing, null, "sealed-trigger-1");
+
+    const revisionRow = await store.readRevision(NAMESPACE, revision);
+    const storedTrigger = (revisionRow?.document.entities?.triggers?.["rec-gitea-main"]?.value ?? {}) as Record<string, unknown>;
+    expect(isSealedSecretValue(storedTrigger.token)).toBe(true);
+    expect(JSON.stringify(revisionRow?.document)).not.toContain("gtok-plain-secret");
+
+    const snapshot = await store.readSnapshot(snapshotId);
+    expect(JSON.stringify(snapshot?.sanitizedEffectiveConfig)).not.toContain("gtok-plain-secret");
+    const snapshotTrigger = (snapshot?.sanitizedEffectiveConfig as { triggers: Record<string, unknown>[] }).triggers[0]!;
+    expect(isSealedSecretValue(snapshotTrigger.token)).toBe(true);
+
+    const generation = await manager.captureForTask();
+    const trigger = (generation.config as { triggers: Record<string, unknown>[] }).triggers[0]!;
+    expect(trigger.token).toBe("gtok-plain-secret");
+    manager.close();
+  });
+
+  it("fails closed when the sealing key is missing at runtime", async () => {
+    const sealing = sealingA();
+    const writer = new RuntimeConfigManager({
+      fileConfig: FILE_CONFIG, fileDocument: FILE_DOCUMENT, fileDigest: DIGEST,
+      store, namespace: NAMESPACE, baseDir: dir, secretSealing: sealing,
+    });
+    await writer.admission();
+    await publishSealedTrigger(writer, sealing, null, "sealed-trigger-2");
+    writer.close();
+
+    const keyless = new RuntimeConfigManager({
+      fileConfig: FILE_CONFIG, fileDocument: FILE_DOCUMENT, fileDigest: DIGEST,
+      store, namespace: NAMESPACE, baseDir: dir,
+    });
+    await expect(keyless.admission()).rejects.toThrow(/AICR_CONFIG_SECRETS_KEY/u);
+    keyless.close();
+  });
+
+  it("opens values sealed with a retired key after rotation", async () => {
+    const sealing = sealingA();
+    const writer = new RuntimeConfigManager({
+      fileConfig: FILE_CONFIG, fileDocument: FILE_DOCUMENT, fileDigest: DIGEST,
+      store, namespace: NAMESPACE, baseDir: dir, secretSealing: sealing,
+    });
+    await writer.admission();
+    await publishSealedTrigger(writer, sealing, null, "sealed-trigger-3");
+    writer.close();
+
+    const rotated = new RuntimeConfigManager({
+      fileConfig: FILE_CONFIG, fileDocument: FILE_DOCUMENT, fileDigest: DIGEST,
+      store, namespace: NAMESPACE, baseDir: dir,
+      secretSealing: createConfigSecretSealing(parseConfigSecretsKeyMaterial(KEY_B), [parseConfigSecretsKeyMaterial(KEY_A)]),
+    });
+    await rotated.admission();
+    const generation = await rotated.captureForTask();
+    const trigger = (generation.config as { triggers: Record<string, unknown>[] }).triggers[0]!;
+    expect(trigger.token).toBe("gtok-plain-secret");
+    rotated.close();
+  });
+
+  it("requires no key when only env references are used", async () => {
+    const manager = new RuntimeConfigManager({
+      fileConfig: FILE_CONFIG, fileDocument: FILE_DOCUMENT, fileDigest: DIGEST,
+      store, namespace: NAMESPACE, baseDir: dir,
+    });
+    await manager.admission();
+    await publishProviderRevision(manager, "plain-provider", null, "plain-publication");
+    expect((await manager.captureForTask()).databaseRevision).toBe(1);
+    manager.close();
   });
 });
 

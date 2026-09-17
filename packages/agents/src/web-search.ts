@@ -63,10 +63,11 @@ export function warnUnsupportedWebSearchFields(
 }
 
 /**
- * Maps AICR-side credential env names onto an adapter's native env names as
- * `${VAR}` references (resolved by the orchestrator at spawn time). Credential
- * providers outside `envByProvider` are skipped — the caller is expected to have
- * warned about them via {@link warnUnsupportedWebSearchFields}.
+ * Maps AICR-side credentials onto an adapter's native env names. Env var
+ * names become `${VAR}` references (resolved by the orchestrator at spawn
+ * time); `{ value }` literals are injected directly. Credential providers
+ * outside `envByProvider` are skipped — the caller is expected to have warned
+ * about them via {@link warnUnsupportedWebSearchFields}.
  */
 export function buildWebSearchCredentialEnvVars(
   webSearch: AgentWebSearchOptions | undefined,
@@ -76,10 +77,10 @@ export function buildWebSearchCredentialEnvVars(
   const credentials = webSearch?.credentials;
   if (!credentials) return {};
   const envVars: Record<string, string> = {};
-  for (const [provider, envName] of Object.entries(credentials)) {
+  for (const [provider, credential] of Object.entries(credentials)) {
     const nativeEnvName = envByProvider[provider];
     if (!nativeEnvName) continue;
-    envVars[nativeEnvName] = `\${${envName}}`;
+    envVars[nativeEnvName] = typeof credential === "string" ? `\${${credential}}` : credential.value;
   }
   return envVars;
 }

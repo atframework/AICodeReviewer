@@ -76,7 +76,7 @@ curl http://localhost:8080/healthz
 ```
 
 `/healthz` 返回纯文本 `ok`，是标准的存活探针（也是 Compose 健康检查使用的端点）。
-如果启用了可观测性 dashboard（config 中的 `admin.*`），访问
+如果启用了管理后台（config 中的 `admin.*`），访问
 `http://localhost:8080/dashboard`。
 
 ## Dry-run 评审

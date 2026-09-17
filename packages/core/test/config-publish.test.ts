@@ -18,6 +18,7 @@ import {
 } from "../src/config-publish.js";
 import type { ConfigChangesetOperation } from "../src/config-source.js";
 import type { ConfigStore } from "../src/config-store.js";
+import { createConfigSecretSealing, openConfigSecretLiterals } from "../src/config-secret-sealing.js";
 import { createSqliteConfigStore } from "../src/sqlite-config-store.js";
 
 function createOp(collection: "providers" | "triggers" | "channels" | "workspaces" | "routes", name: string, value: Record<string, unknown>): ConfigChangesetOperation {
@@ -79,6 +80,27 @@ async function publish(prepared: PreparedConfigPublication) {
 }
 
 describe("publish commit (S02/S03)", () => {
+  it("requires sealing at the core publish boundary and handles concurrent literal retries", async () => {
+    const prepared = prepareConfigPublication(publishInput({ operations: [
+      createOp("triggers", "git", { name: "git", kind: "gitea", token: "literal-token" }),
+    ] }));
+    await expect(publishConfig(store, prepared)).rejects.toMatchObject({ code: "secrets_key_missing" });
+    expect(await store.readHead(NAMESPACE)).toBeNull();
+    const secretSealing = createConfigSecretSealing(Buffer.alloc(32, 7));
+    const results = await Promise.all(Array.from({ length: 3 }, () => publishConfig(store, prepared, { secretSealing })));
+    for (const result of results) expect(result.status).toBe("committed");
+    const first = results[0]!;
+    if (first.status !== "committed") throw new Error("publication failed");
+    expect(JSON.stringify(first.revision.document)).not.toContain("literal-token");
+    const snapshot = await store.readSnapshot(first.snapshotId);
+    expect(JSON.stringify(snapshot)).not.toContain("literal-token");
+    expect(openConfigSecretLiterals(snapshot!.sanitizedEffectiveConfig, secretSealing)).toEqual(prepared.effective);
+    const changed = prepareConfigPublication(publishInput({ operations: [
+      createOp("triggers", "git", { name: "git", kind: "gitea", token: "different-token" }),
+    ] }));
+    await expect(publishConfig(store, changed, { secretSealing })).rejects.toMatchObject({ code: "operation_conflict" });
+  });
+
   it("commits revision + audit atomically and advances the head", async () => {
     const result = await publish(prepareConfigPublication(publishInput()));
     expect(result.status).toBe("committed");

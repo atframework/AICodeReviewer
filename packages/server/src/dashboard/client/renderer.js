@@ -323,6 +323,8 @@ export function createRenderer(doc) {
         return buildMap(field, value, disabled, domId, handlers);
       case "secret-ref":
         return buildSecretRef(field, state, value, disabled, domId, handlers);
+      case "secret-value":
+        return buildSecretValue(field, value, disabled, domId, handlers);
       case "matcher":
         return buildMatcher(field, value, disabled, domId, handlers);
       case "path-template":
@@ -925,6 +927,37 @@ export function createRenderer(doc) {
    * @returns {HTMLElement}
    */
   function buildMapValue(field, entryValue, rowId, index, disabled, domId, handlers) {
+    if (field.mapValueKind === "credential") {
+      const box = el("div", "cfg-map-value");
+      const mode = /** @type {HTMLSelectElement} */ (el("select", "cfg-input"));
+      mode.setAttribute("aria-label", `${field.label} source ${index + 1}`);
+      for (const [value, label] of [["env", "Environment variable"], ["literal", "Literal value"]]) {
+        const choice = el("option", "", label);
+        choice.value = value;
+        mode.append(choice);
+      }
+      mode.value = entryValue !== null && typeof entryValue === "object" ? "literal" : "env";
+      mode.disabled = disabled;
+      const host = el("div");
+      const render = (value) => {
+        host.replaceChildren();
+        const change = (_id, next) => handlers.onMapOp?.(field.id, {
+          type: "setValue", rowId, value: mode.value === "literal" ? { value: next } : next,
+        });
+        const control = mode.value === "literal"
+          ? buildSecretValue(field, value?.value, disabled, `${domId}-value-${index}`, { onValueChange: change })
+          : buildText(field, value, disabled, `${domId}-value-${index}`, { onValueChange: change });
+        host.append(control.element);
+      };
+      mode.addEventListener("change", () => {
+        const value = mode.value === "literal" ? { value: "" } : "";
+        handlers.onMapOp?.(field.id, { type: "setValue", rowId, value });
+        render(value);
+      });
+      render(entryValue);
+      box.append(mode, host);
+      return box;
+    }
     if (field.itemFields) {
       const host = el("div", "cfg-map-fields");
       let current = entryValue ?? {};
@@ -1037,6 +1070,61 @@ export function createRenderer(doc) {
     });
     updateHint();
     box.append(input, datalist, hint);
+    return { element: box, focusable: input, localErrorIds: [] };
+  }
+
+  /**
+   * Literal credential input (password-style). A server-masked value renders
+   * as an empty input with a "set" placeholder: the draft keeps the mask
+   * sentinel, which the encoder strips so the stored secret survives the
+   * save; typing replaces it; clearing after typing removes it (null).
+   * @param {object} field
+   * @param {unknown} value
+   * @param {boolean} disabled
+   * @param {string} domId
+   * @param {ConfigFieldHandlers} handlers
+   * @returns {RenderedControl}
+   */
+  function buildSecretValue(field, value, disabled, domId, handlers) {
+    const box = el("div", "cfg-secret");
+    const input = /** @type {HTMLInputElement} */ (el("input", "cfg-input"));
+    input.type = "password";
+    input.id = domId;
+    input.autocomplete = "new-password";
+    input.spellcheck = false;
+    const masked = typeof value === "string" && (value === "configured" || value === "•••" || /<redacted>/iu.test(value));
+    input.value = masked ? "" : (typeof value === "string" ? value : "");
+    input.disabled = disabled;
+    if (masked) {
+      input.placeholder = "(set — never displayed)";
+    }
+    const hint = el("div", "cfg-field-note");
+    let edited = false;
+    const updateHint = () => {
+      if (masked && !edited) {
+        hint.textContent = "A value is stored but never shown. Leave blank to keep it, or type a new value to replace it.";
+        return;
+      }
+      hint.textContent = input.value.length === 0 ? "Empty after editing removes the stored value." : "";
+    };
+    input.addEventListener("input", () => {
+      edited = true;
+      handlers.onValueChange(field.id, input.value);
+      updateHint();
+    });
+    updateHint();
+    box.append(input, hint);
+    const clear = el("button", "cfg-btn cfg-btn-ghost", "Clear stored value");
+    clear.type = "button";
+    clear.disabled = disabled;
+    clear.addEventListener("click", () => {
+      edited = true;
+      input.value = "";
+      input.placeholder = "";
+      handlers.onValueChange(field.id, "");
+      updateHint();
+    });
+    box.append(clear);
     return { element: box, focusable: input, localErrorIds: [] };
   }
 

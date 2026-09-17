@@ -131,12 +131,16 @@ export const PROVIDER_KIND_FIELDS: Readonly<Record<string, FieldMap>> = {
     vertex_project: nonEmptyString,
     vertex_location: nonEmptyString,
     google_application_credentials_env: nonEmptyString,
+    google_application_credentials: nonEmptyString,
   },
   bedrock: {
     aws_region: nonEmptyString,
     aws_access_key_env: nonEmptyString,
     aws_secret_key_env: nonEmptyString,
     aws_session_token_env: nonEmptyString,
+    aws_access_key: nonEmptyString,
+    aws_secret_key: nonEmptyString,
+    aws_session_token: nonEmptyString,
     aws_profile: nonEmptyString,
   },
   anthropic: {
@@ -162,6 +166,8 @@ const TRIGGER_FILE_FILTER_FIELDS: FieldMap = {
 const TRIGGER_GIT_FIELDS: FieldMap = {
   webhook_secret_env: nonEmptyString,
   token_env: nonEmptyString,
+  webhook_secret: nonEmptyString,
+  token: nonEmptyString,
   base_url: nonEmptyString,
   repos: z.array(z.object({ match: nonEmptyString, workspace: nonEmptyString }).passthrough()),
 };
@@ -176,6 +182,9 @@ export const TRIGGER_KIND_FIELDS: Readonly<Record<string, FieldMap>> = {
     user_env: nonEmptyString,
     ticket_env: nonEmptyString,
     password_env: nonEmptyString,
+    user: nonEmptyString,
+    ticket: nonEmptyString,
+    password: nonEmptyString,
     depot_path: nonEmptyString,
     streams: stringArray,
     workspace: nonEmptyString,
@@ -185,6 +194,8 @@ export const TRIGGER_KIND_FIELDS: Readonly<Record<string, FieldMap>> = {
     repository_url: nonEmptyString,
     username_env: nonEmptyString,
     password_env: nonEmptyString,
+    username: nonEmptyString,
+    password: nonEmptyString,
     trust_server_cert: z.boolean(),
     ...TRIGGER_FILE_FILTER_FIELDS,
   },
@@ -226,6 +237,7 @@ export const CHANNEL_KINDS = [
 const CHANNEL_COMMON_PASSTHROUGH_FIELDS: FieldMap = {
   base_url: nonEmptyString,
   token_env: nonEmptyString,
+  token: nonEmptyString,
   owner: nonEmptyString,
   repo: nonEmptyString,
 };
@@ -251,10 +263,13 @@ const FEISHU_BOT_FIELDS: FieldMap = {
   ...CHANNEL_COMMON_PASSTHROUGH_FIELDS,
   webhook_url_env: nonEmptyString,
   secret_env: nonEmptyString,
+  webhook_url: nonEmptyString,
+  secret: nonEmptyString,
 };
 const WECOM_BOT_FIELDS: FieldMap = {
   ...CHANNEL_COMMON_PASSTHROUGH_FIELDS,
   webhook_url_env: nonEmptyString,
+  webhook_url: nonEmptyString,
   mentioned_mobile_list: stringArray,
 };
 

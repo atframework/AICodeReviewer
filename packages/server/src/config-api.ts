@@ -44,6 +44,7 @@ import {
   previewConfigRoute,
   publishConfig,
   scrubText,
+  SEALED_LITERAL_SECRET_FIELDS,
   validateDatabaseDocument,
   validateConfigNamespace,
   type AppConfigInput,
@@ -51,6 +52,7 @@ import {
   type ConfigEntityKind,
   type ConfigFieldView,
   type ConfigRoutePreviewEvent,
+  type ConfigSecretSealing,
   type ConfigStore,
   type ConfigUiOption,
   type ConfigUiSpec,
@@ -78,6 +80,12 @@ export interface ConfigApiOptions {
   readonly manager?: RuntimeConfigManager | undefined;
   readonly envLookup?: ((name: string) => string | undefined) | undefined;
   readonly maxBodyBytes?: number | undefined;
+  /**
+   * Envelope encryption for literal credentials: publications are sealed
+   * before they reach the store. Publishing literal credentials without it
+   * fails closed with secrets_key_missing.
+   */
+  readonly secretSealing?: ConfigSecretSealing | undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -283,13 +291,28 @@ const SENSITIVE_NAME_SUFFIX_FREE = /(api[_-]?key|token|secret|password|credentia
 const SENSITIVE_URL_QUERY_KEY = /(token|api[_-]?key|secret|password|credential|sig|signature|auth|(^|[-_])key([-_]|$))/i;
 
 /**
+ * Registered literal credential fields the name regex misses (architecture
+ * §3.15 literal secrets). Their values are sealed at rest; read APIs never
+ * expose even the ciphertext.
+ */
+const SENSITIVE_EXACT_KEYS: ReadonlySet<string> = new Set([
+  ...SEALED_LITERAL_SECRET_FIELDS,
+  "password_hash",
+]);
+
+function isSensitiveKey(key: string): boolean {
+  return (SENSITIVE_NAME_SUFFIX_FREE.test(key) || SENSITIVE_EXACT_KEYS.has(key)
+    || /^(authorization|proxy-authorization|cookie|set-cookie|headers)$/i.test(key)) && !key.endsWith("_env");
+}
+
+/**
  * Deep response redaction (A05): config surfaces carry env var *names* by
  * contract, but passthrough values could hold literal credentials. Keys that
  * name secrets (without the `_env` reference suffix) have their values
  * replaced; hashes/ids/urls survive because they do not match the name rule.
  */
-function redactDeep(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(redactDeep);
+function redactDeep(value: unknown, ancestors: readonly string[] = []): unknown {
+  if (Array.isArray(value)) return value.map((entry) => redactDeep(entry, ancestors));
   if (typeof value === "string") {
     // URL userinfo and credential-named query parameters are secrets even
     // when the surrounding key is merely base_url/url. Non-credential query
@@ -307,13 +330,25 @@ function redactDeep(value: unknown): unknown {
     } catch { return scrubMessage(value); }
   }
   if (value === null || typeof value !== "object") return value;
+  const credentialMap = ancestors.at(-1) === "credentials" && ancestors.includes("web_search");
   const output: Record<string, unknown> = {};
   for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
     if (PROTOTYPE_TOKENS.has(key.toLowerCase())) continue;
-    if ((SENSITIVE_NAME_SUFFIX_FREE.test(key) || /^(authorization|proxy-authorization|cookie|set-cookie|headers)$/i.test(key)) && !key.endsWith("_env") && typeof entry !== "number" && typeof entry !== "boolean") {
+    if (key === "credentials" && ancestors.includes("web_search")) {
+      output[key] = redactDeep(entry, [...ancestors, key]);
+      continue;
+    }
+    // web_search credentials { value } literals mask like any other secret;
+    // plain string entries are env var names and stay visible.
+    if (credentialMap && entry !== null && typeof entry === "object" && !Array.isArray(entry)
+        && typeof (entry as Record<string, unknown>).value === "string") {
+      output[key] = { ...(entry as Record<string, unknown>), value: "<redacted>" };
+      continue;
+    }
+    if (isSensitiveKey(key) && typeof entry !== "number" && typeof entry !== "boolean") {
       output[key] = "<redacted>";
     } else {
-      output[key] = redactDeep(entry);
+      output[key] = redactDeep(entry, [...ancestors, key]);
     }
   }
   return output;
@@ -328,9 +363,10 @@ function redactDeep(value: unknown): unknown {
  */
 function redactFieldsView(fields: readonly ConfigFieldView[]): readonly ConfigFieldView[] {
   return fields.map((field) => {
-    const sensitive = parseConfigPath(field.path).some((segment) =>
-      (SENSITIVE_NAME_SUFFIX_FREE.test(segment) || /^(authorization|proxy-authorization|cookie|set-cookie|headers)$/i.test(segment))
-      && !segment.endsWith("_env"));
+    const segments = parseConfigPath(field.path);
+    const sensitive = segments.some((segment) => isSensitiveKey(segment) && !(segment === "credentials" && segments.includes("web_search")))
+      || (segments.at(-1) === "value" && segments.at(-2) !== undefined
+        && segments.includes("credentials") && segments.includes("web_search"));
     if (!sensitive) return field;
     const mask = (value: unknown): unknown =>
       typeof value === "number" || typeof value === "boolean" ? value : "<redacted>";
@@ -636,6 +672,7 @@ export function createConfigApi(options: ConfigApiOptions): Hono {
         fileDigest: fileDigestOf(body.value.fileDigest),
         operations: body.value.operations as readonly ConfigChangesetOperation[],
         formatVersion: options.formatVersion ?? 2,
+        secretSealing: options.secretSealing,
       });
       // A09: preview is side-effect free by contract; the preview service
       // itself never writes. Report shape only — no env values exist here.
@@ -698,6 +735,7 @@ export function createConfigApi(options: ConfigApiOptions): Hono {
         formatVersion: options.formatVersion ?? 2,
       });
       const result = await publishConfig(options.store, prepared, {
+        secretSealing: options.secretSealing,
         ...(options.manager
           ? {
               install: async (preparedPublication, revision) => {
@@ -824,6 +862,7 @@ export function createConfigApi(options: ConfigApiOptions): Hono {
       });
       assertNoInlineCredentials(prepared.document);
       const result = await publishConfig(options.store, prepared, {
+        secretSealing: options.secretSealing,
         ...(options.manager
           ? {
               install: async (preparedPublication, revision) => {

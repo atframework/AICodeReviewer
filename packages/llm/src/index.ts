@@ -36,6 +36,8 @@ export interface ModelSpec {
 	readonly modelId: string;
 	readonly baseUrl?: string;
 	readonly apiKeyEnv?: string;
+	/** Literal API key; wins over apiKeyEnv when both resolve (config enforces exclusivity). */
+	readonly apiKey?: string;
 	readonly organization?: string;
 	readonly extraHeaders?: Readonly<Record<string, string>>;
 	readonly extraBody?: Readonly<Record<string, unknown>>;
@@ -47,10 +49,14 @@ export interface ModelSpec {
 	readonly vertexProject?: string;
 	readonly vertexLocation?: string;
 	readonly googleApplicationCredentialsEnv?: string;
+	readonly googleApplicationCredentials?: string;
 	readonly awsRegion?: string;
 	readonly awsAccessKeyEnv?: string;
 	readonly awsSecretKeyEnv?: string;
 	readonly awsSessionTokenEnv?: string;
+	readonly awsAccessKey?: string;
+	readonly awsSecretKey?: string;
+	readonly awsSessionToken?: string;
 	readonly awsProfile?: string;
 	readonly anthropicVersion?: string;
 	readonly anthropicBeta?: readonly string[];
@@ -250,7 +256,9 @@ function buildHeaders(
 		headers["openai-organization"] = model.organization;
 	}
 
-	if (model.apiKeyEnv) {
+	if (model.apiKey) {
+		headers.authorization = `Bearer ${model.apiKey}`;
+	} else if (model.apiKeyEnv) {
 		const apiKey = apiKeyResolver(model.apiKeyEnv);
 		if (!apiKey) {
 			throw new LlmProviderError(`Missing API key environment variable: ${model.apiKeyEnv}`);
@@ -673,7 +681,7 @@ export function createChatClientFromModelSpec(model: ModelSpec): ChatCompletionC
 					if (!candidate) {
 						throw new TypeError("No global fetch implementation is available.");
 					}
-					const apiKey = model.apiKeyEnv ? process.env[model.apiKeyEnv] : undefined;
+					const apiKey = model.apiKey ?? (model.apiKeyEnv ? process.env[model.apiKeyEnv] : undefined);
 					const headers: Record<string, string> = {
 						...(init?.headers ?? {}),
 						"content-type": "application/json",

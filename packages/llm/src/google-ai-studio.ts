@@ -41,7 +41,9 @@ function buildHeaders(model: ModelSpec, apiKeyResolver: (envName: string) => str
 		...(model.extraHeaders ?? {}),
 	};
 
-	if (model.apiKeyEnv) {
+	if (model.apiKey) {
+		headers["x-goog-api-key"] = model.apiKey;
+	} else if (model.apiKeyEnv) {
 		const apiKey = apiKeyResolver(model.apiKeyEnv);
 		if (!apiKey) {
 			throw new LlmProviderError(`Missing API key environment variable: ${model.apiKeyEnv}`);

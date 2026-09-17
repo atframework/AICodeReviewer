@@ -112,7 +112,9 @@ export function createClaudeCodeAdapter(options: ClaudeCodeAdapterOptions = {}):
 				searxng: false,
 			});
 
-			if (model.apiKeyEnv) {
+			if (model.apiKey) {
+				envVars.ANTHROPIC_API_KEY = model.apiKey;
+			} else if (model.apiKeyEnv) {
 				envVars.ANTHROPIC_API_KEY = `\${${model.apiKeyEnv}}`;
 			}
 

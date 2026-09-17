@@ -28,17 +28,23 @@ import {
   configSnapshotId as computeSnapshotId,
   CONFIG_RESOLVER_VERSION,
   ConfigError,
+  containsSealableSecrets,
+  containsSealedSecrets,
   contentHashOf,
   isConfigError,
   mergeConfigSources,
+  openConfigSecretLiterals,
   parseEffectiveConfig,
   scrubText,
   isPlainObject,
+  sealConfigSecretLiterals,
+  writeSealedConfigSnapshot,
   sweepUnreferencedConfigSnapshots,
   validateDatabaseDocument,
   type AppConfig,
   type AppConfigInput,
   type ConfigRuntimeSnapshotRecord,
+  type ConfigSecretSealing,
   type ConfigStore,
   type ConfigRuntimeState,
   type ConfigSnapshotReferenceSource,
@@ -89,6 +95,12 @@ export interface RuntimeConfigManagerOptions {
   readonly baseDir: string;
   /** Generation-scoped resource disposal (H16); runs once at zero refs. */
   readonly onGenerationDispose?: ((generation: RuntimeConfigGeneration) => void) | undefined;
+  /**
+   * Envelope encryption for literal credentials: snapshots/revisions persist
+   * sealed values and generations open them at build time. When absent, any
+   * sealed or sealable literal crossing the boundary fails closed.
+   */
+  readonly secretSealing?: ConfigSecretSealing | undefined;
 }
 
 export interface RuntimeConfigStatus {
@@ -239,6 +251,7 @@ export class RuntimeConfigManager {
   private readonly fileDocument: AppConfigInput | undefined;
   private readonly fileDigest: string | null;
   private readonly onGenerationDispose: ((generation: RuntimeConfigGeneration) => void) | undefined;
+  private readonly secretSealing: ConfigSecretSealing | undefined;
 
   private currentEntry: GenerationEntry;
   /** Pinned historical generations, keyed by snapshotId (current excluded). */
@@ -283,6 +296,7 @@ export class RuntimeConfigManager {
     this.fileDocument = options.fileDocument === undefined ? undefined : structuredClone(options.fileDocument);
     this.fileDigest = options.fileDigest ?? null;
     this.onGenerationDispose = options.onGenerationDispose;
+    this.secretSealing = options.secretSealing;
     validateConfigNamespace(this.namespace);
     if (this.store !== undefined && this.fileDocument === undefined) {
       throw new ConfigError(
@@ -295,7 +309,7 @@ export class RuntimeConfigManager {
     }
     this.currentEntry = this.registerEntry(
       buildGeneration({
-        config: parseEffectiveConfig(this.fileConfig, 1),
+        config: this.openForRuntime(parseEffectiveConfig(this.fileConfig, 1)),
         snapshotId: null,
         databaseRevision: null,
         fileDigest: this.fileDigest,
@@ -504,6 +518,37 @@ export class RuntimeConfigManager {
     }
   }
 
+  /**
+   * Seals literal credentials before persistence; fails closed when a
+   * sealable literal is present but no sealing key is configured.
+   */
+  private sealForStore<T>(value: T): T {
+    if (this.secretSealing !== undefined) {
+      return sealConfigSecretLiterals(value, this.secretSealing);
+    }
+    if (containsSealableSecrets(value)) {
+      throw new ConfigError(
+        "secrets_key_missing",
+        "Persisting literal credentials requires AICR_CONFIG_SECRETS_KEY; configure it or switch the credentials to environment references.",
+      );
+    }
+    return value;
+  }
+
+  /** Opens sealed literals for runtime use; fails closed without the key. */
+  private openForRuntime<T>(value: T): T {
+    if (this.secretSealing !== undefined) {
+      return openConfigSecretLiterals(value, this.secretSealing);
+    }
+    if (containsSealedSecrets(value)) {
+      throw new ConfigError(
+        "secrets_key_missing",
+        "The stored configuration holds sealed credentials but AICR_CONFIG_SECRETS_KEY is not configured; refusing to activate it.",
+      );
+    }
+    return value;
+  }
+
   private registerEntry(generation: RuntimeConfigGeneration, dispose: (() => void) | undefined): GenerationEntry {
     this.generationsBuilt += 1;
     const entry = { generation, retired: false, refCount: 0, disposed: false, dispose };
@@ -577,12 +622,13 @@ export class RuntimeConfigManager {
     }
     if (activeRevision === null) {
       const effective = this.currentEntry.generation.config;
-      const hash = contentHashOf(effective);
+      const stored = this.sealForStore(effective);
+      const hash = contentHashOf(stored);
       const snapshot = await this.store.writeSnapshot({
         id: computeSnapshotId({ namespace: this.namespace, revision: 0, contentHash: hash,
           fileDigest: this.fileDigest, formatVersion: 2 }),
         namespace: this.namespace, databaseRevision: 0, fileDigest: this.fileDigest,
-        resolverVersion: CONFIG_RESOLVER_VERSION, sanitizedEffectiveConfig: effective,
+        resolverVersion: CONFIG_RESOLVER_VERSION, sanitizedEffectiveConfig: stored,
         contentHash: hash, now: Date.now(),
       });
       return this.generationFromSnapshot(snapshot, effective);
@@ -603,11 +649,12 @@ export class RuntimeConfigManager {
     assertConfigSecretPolicy(this.fileDocument, database, effective);
     let snapshot = await this.store.readSnapshot(expectedSnapshotId);
     if (snapshot === null) {
-      snapshot = await this.store.writeSnapshot({
+      const stored = this.sealForStore(effective);
+      snapshot = await writeSealedConfigSnapshot(this.store, {
         id: expectedSnapshotId, namespace: this.namespace, fileDigest: revision.fileDigest,
         databaseRevision: revision.revision, resolverVersion: CONFIG_RESOLVER_VERSION,
-        sanitizedEffectiveConfig: effective, contentHash: contentHashOf(effective), now: Date.now(),
-      });
+        sanitizedEffectiveConfig: stored, contentHash: contentHashOf(stored), now: Date.now(),
+      }, this.secretSealing);
     }
     return this.validateSnapshot(snapshot, expectedSnapshotId, activeRevision, revision.fileDigest);
   }
@@ -624,7 +671,7 @@ export class RuntimeConfigManager {
       // Immutable rows cannot be repaired in place. Fail closed for operator recovery.
       throw new ConfigError("snapshot_invalid", "Config snapshot content hash mismatch.");
     }
-    return this.generationFromSnapshot(snapshot, effective);
+    return this.generationFromSnapshot(snapshot, this.openForRuntime(effective));
   }
 
   private generationFromSnapshot(

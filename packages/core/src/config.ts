@@ -32,7 +32,29 @@ export const workspaceIdSchema = z
       "workspace_id must not collide with reserved keys (cache, defaults, instances); see Plan.md §3.10 D14",
   });
 
-export const llmProviderSchema = z
+/**
+ * Adds one issue per secret field whose literal and `*_env` reference forms
+ * are both set. The literal form always wins at runtime; rejecting the
+ * ambiguity keeps operator intent explicit.
+ */
+function addSecretMutexIssues(
+  ctx: z.RefinementCtx,
+  record: Record<string, unknown>,
+  pairs: readonly (readonly [string, string])[],
+): void {
+  for (const [literal, envRef] of pairs) {
+    if (record[literal] !== undefined && record[envRef] !== undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `'${literal}' and '${envRef}' are mutually exclusive; configure the literal value or the environment variable reference, not both.`,
+        path: [literal],
+      });
+    }
+  }
+}
+
+/** Unrefined provider object; config-ui-spec reads `.shape` off this base. */
+export const llmProviderObjectSchema = z
   .object({
     id: z.string().min(1),
     kind: z.enum([
@@ -47,11 +69,22 @@ export const llmProviderSchema = z
     ]),
     base_url: z.string().url().optional(),
     api_key_env: z.string().min(1).optional(),
+    /** Literal API key; mutually exclusive with api_key_env (literal wins). */
+    api_key: z.string().min(1).optional(),
     api_version: z.string().min(1).optional(),
     catalog_provider: z.string().min(1).optional(),
     catalog_id: z.string().min(1).optional(),
   })
   .passthrough();
+
+export const llmProviderSchema = llmProviderObjectSchema
+  .superRefine((provider, ctx) => addSecretMutexIssues(ctx, provider, [
+    ["api_key", "api_key_env"],
+    ["aws_access_key", "aws_access_key_env"],
+    ["aws_secret_key", "aws_secret_key_env"],
+    ["aws_session_token", "aws_session_token_env"],
+    ["google_application_credentials", "google_application_credentials_env"],
+  ]));
 
 
 /**
@@ -271,11 +304,24 @@ export const githubAppAuthSchema = z
     client_id: z.string().min(1).optional(),
     private_key_env: z.string().min(1).optional(),
     private_key_path: z.string().min(1).optional(),
+    /** Literal PEM (or base64 PEM) private key; mutually exclusive with the env/path forms. */
+    private_key: z.string().min(1).optional(),
     installation_id: githubAppIdSchema.optional(),
   })
-  .passthrough();
+  .passthrough()
+  .superRefine((app, ctx) => {
+    const forms = ["private_key", "private_key_env", "private_key_path"].filter((field) => app[field as keyof typeof app] !== undefined);
+    if (forms.length > 1) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `GitHub App credentials are mutually exclusive; set exactly one of private_key, private_key_env, private_key_path (got: ${forms.join(", ")}).`,
+        path: ["private_key"],
+      });
+    }
+  });
 
-export const triggerSchema = z
+/** Unrefined trigger object; config-ui-spec reads `.shape` off this base. */
+export const triggerObjectSchema = z
   .object({
     name: z.string().min(1),
     kind: z.enum(["gitea", "forgejo", "github", "gitlab", "p4", "svn", "scheduled", "manual"]),
@@ -287,8 +333,26 @@ export const triggerSchema = z
     revision_url_template: z.string().min(1).optional(),
     change_url_template: z.string().min(1).optional(),
     app: githubAppAuthSchema.optional(),
+    // Literal credential forms of the passthrough *_env references (declared
+    // for documentation/mutex; the env twins stay passthrough).
+    token: z.string().min(1).optional(),
+    webhook_secret: z.string().min(1).optional(),
+    user: z.string().min(1).optional(),
+    ticket: z.string().min(1).optional(),
+    password: z.string().min(1).optional(),
+    username: z.string().min(1).optional(),
   })
   .passthrough();
+
+export const triggerSchema = triggerObjectSchema
+  .superRefine((trigger, ctx) => addSecretMutexIssues(ctx, trigger, [
+    ["token", "token_env"],
+    ["webhook_secret", "webhook_secret_env"],
+    ["user", "user_env"],
+    ["ticket", "ticket_env"],
+    ["password", "password_env"],
+    ["username", "username_env"],
+  ]));
 
 export const noProblemsPolicySchema = z
   .object({
@@ -333,13 +397,39 @@ export const outputChannelSchema = z
     review_update_strategy: z.enum(["always_new", "update_existing"]).optional(),
     notify_feishu: z
       .object({
-        webhook_url_env: z.string().min(1),
+        webhook_url_env: z.string().min(1).optional(),
         secret_env: z.string().min(1).optional(),
+        /** Literal webhook URL; mutually exclusive with webhook_url_env. */
+        webhook_url: z.string().min(1).optional(),
+        /** Literal signing secret; mutually exclusive with secret_env. */
+        secret: z.string().min(1).optional(),
       })
       .passthrough()
+      .superRefine((notify, ctx) => {
+        addSecretMutexIssues(ctx, notify, [
+          ["webhook_url", "webhook_url_env"],
+          ["secret", "secret_env"],
+        ]);
+        if (notify.webhook_url === undefined && notify.webhook_url_env === undefined) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: "notify_feishu requires webhook_url or webhook_url_env.",
+            path: ["webhook_url"],
+          });
+        }
+      })
       .optional(),
+    // Literal credential forms of the passthrough *_env references.
+    token: z.string().min(1).optional(),
+    webhook_url: z.string().min(1).optional(),
+    secret: z.string().min(1).optional(),
   })
-  .passthrough();
+  .passthrough()
+  .superRefine((channel, ctx) => addSecretMutexIssues(ctx, channel, [
+    ["token", "token_env"],
+    ["webhook_url", "webhook_url_env"],
+    ["secret", "secret_env"],
+  ]));
 
 export const workspaceOutputsSchema = z
   .object({
@@ -430,6 +520,16 @@ export const agentWebSearchSearxngSchema = z
   })
   .strict();
 
+/**
+ * A web_search credential: either the name of an env var on the AICR host
+ * (legacy string form) or a literal value object. Literals are sealed at
+ * persistence boundaries and resolved before the agent bundle is built.
+ */
+export const agentWebSearchCredentialSchema = z.union([
+  z.string().min(1),
+  z.object({ value: z.string().min(1) }).strict(),
+]);
+
 export const agentWebSearchSchema = z
   .object({
     enabled: z.boolean().default(false),
@@ -437,7 +537,7 @@ export const agentWebSearchSchema = z
     exclude: z.array(z.string().min(1)).default([]),
     timeout_seconds: z.number().int().min(1).max(300).optional(),
     credentials: z
-      .record(agentWebSearchCredentialProviderSchema, z.string().min(1))
+      .record(agentWebSearchCredentialProviderSchema, agentWebSearchCredentialSchema)
       .default({}),
     searxng: agentWebSearchSearxngSchema.optional(),
   })
@@ -588,17 +688,28 @@ export const contextRepositorySchema = z
     url: z.string().min(1).optional(),
     ref: z.string().min(1).optional(),
     token_env: z.string().min(1).optional(),
+    /** Literal VCS token; mutually exclusive with token_env (literal wins). */
+    token: z.string().min(1).optional(),
     repository_url: z.string().min(1).optional(),
     revision: z.union([z.string().min(1), z.number().int().positive()]).optional(),
     port: z.string().min(1).optional(),
     user_env: z.string().min(1).optional(),
     ticket_env: z.string().min(1).optional(),
     password_env: z.string().min(1).optional(),
+    user: z.string().min(1).optional(),
+    ticket: z.string().min(1).optional(),
+    password: z.string().min(1).optional(),
     depot_path: z.string().min(1).optional(),
     max_mb: z.number().int().positive().optional(),
   })
   .strict()
   .superRefine((repo, ctx) => {
+    addSecretMutexIssues(ctx, repo, [
+      ["token", "token_env"],
+      ["user", "user_env"],
+      ["ticket", "ticket_env"],
+      ["password", "password_env"],
+    ]);
     const forbid = (fields: readonly string[], allowedBy: string) => {
       for (const field of fields) {
         if (repo[field as keyof typeof repo] !== undefined) {
@@ -619,7 +730,7 @@ export const contextRepositorySchema = z
           path: ["url"],
         });
       }
-      forbid(["repository_url", "revision", "port", "user_env", "ticket_env", "password_env", "depot_path"], "svn/p4");
+      forbid(["repository_url", "revision", "port", "user_env", "ticket_env", "password_env", "user", "ticket", "password", "depot_path"], "svn/p4");
     } else if (repo.kind === "svn") {
       if (!repo.repository_url) {
         ctx.addIssue({
@@ -628,7 +739,7 @@ export const contextRepositorySchema = z
           path: ["repository_url"],
         });
       }
-      forbid(["url", "ref", "token_env", "port", "user_env", "ticket_env", "password_env", "depot_path"], "git/p4");
+      forbid(["url", "ref", "token_env", "token", "port", "user_env", "ticket_env", "password_env", "user", "ticket", "password", "depot_path"], "git/p4");
     } else {
       if (!repo.depot_path) {
         ctx.addIssue({
@@ -637,7 +748,7 @@ export const contextRepositorySchema = z
           path: ["depot_path"],
         });
       }
-      forbid(["url", "ref", "token_env", "repository_url"], "git/svn");
+      forbid(["url", "ref", "token_env", "token", "repository_url"], "git/svn");
     }
   });
 
@@ -723,9 +834,12 @@ export const workspaceInstanceSchema = z
     auth: z
       .object({
         api_key_env: z.string().min(1).optional(),
+        /** Literal API key; mutually exclusive with api_key_env (literal wins). */
+        api_key: z.string().min(1).optional(),
         enabled: z.boolean().default(true),
       })
       .passthrough()
+      .superRefine((auth, ctx) => addSecretMutexIssues(ctx, auth, [["api_key", "api_key_env"]]))
       .optional(),
   })
   .strict();
@@ -749,9 +863,12 @@ export const trustProxyValueSchema: z.ZodType<
 export const authSchema = z
   .object({
     api_key_env: z.string().min(1).optional(),
+    /** Literal API key; mutually exclusive with api_key_env (literal wins). */
+    api_key: z.string().min(1).optional(),
     enabled: z.boolean().default(true),
   })
   .passthrough()
+  .superRefine((auth, ctx) => addSecretMutexIssues(ctx, auth, [["api_key", "api_key_env"]]))
   .optional();
 
 export const serverSchema = z
@@ -849,9 +966,23 @@ export const adminAuthSchema = z
     username_env: z.string().min(1).default("AICR_ADMIN_USERNAME"),
     password_env: z.string().min(1).default("AICR_ADMIN_PASSWORD"),
     password_hash_env: z.string().min(1).optional(),
+    /** Literal password; mutually exclusive with password_env (literal wins). */
+    password: z.string().min(1).optional(),
+    /** Literal sha256:<hex> password hash; mutually exclusive with password_hash_env. */
+    password_hash: z.string().min(1).optional(),
     session_ttl_seconds: z.number().int().positive().default(86400),
   })
   .passthrough()
+  .superRefine((admin, ctx) => {
+    // password_env defaults to AICR_ADMIN_PASSWORD; only an explicitly chosen
+    // (non-default) env name conflicts with a literal password.
+    addSecretMutexIssues(ctx,
+      { ...admin, password_env: admin.password_env === "AICR_ADMIN_PASSWORD" ? undefined : admin.password_env },
+      [
+        ["password", "password_env"],
+        ["password_hash", "password_hash_env"],
+      ]);
+  })
   .default({});
 
 /**
@@ -1252,6 +1383,7 @@ const appConfigRefinement = (config: AppConfigRefinementTarget, ctx: z.Refinemen
       const app = appConfig as Record<string, unknown>;
       const hasAppId = app.app_id !== undefined && app.app_id !== "";
       const hasClientId = app.client_id !== undefined && app.client_id !== "";
+      const hasPrivateKey = typeof app.private_key === "string" && app.private_key.length > 0;
       const hasPrivateKeyEnv = typeof app.private_key_env === "string" && app.private_key_env.length > 0;
       const hasPrivateKeyPath = typeof app.private_key_path === "string" && app.private_key_path.length > 0;
 
@@ -1263,27 +1395,28 @@ const appConfigRefinement = (config: AppConfigRefinementTarget, ctx: z.Refinemen
         });
       }
 
-      if (!hasPrivateKeyEnv && !hasPrivateKeyPath) {
+      if (!hasPrivateKey && !hasPrivateKeyEnv && !hasPrivateKeyPath) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
-          message: "github app auth requires exactly one of private_key_env or private_key_path; see docs/ai/architecture.md §3.2.1",
+          message: "github app auth requires exactly one of private_key, private_key_env or private_key_path; see docs/ai/architecture.md §3.2.1",
           path: ["triggers", index, "app", "private_key_env"],
         });
       }
 
-      if (hasPrivateKeyEnv && hasPrivateKeyPath) {
+      if ([hasPrivateKey, hasPrivateKeyEnv, hasPrivateKeyPath].filter(Boolean).length > 1) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
-          message: "github app auth accepts only one of private_key_env or private_key_path, not both; see docs/ai/architecture.md §3.2.1",
+          message: "github app auth accepts only one of private_key, private_key_env or private_key_path; see docs/ai/architecture.md §3.2.1",
           path: ["triggers", index, "app", "private_key_path"],
         });
       }
 
-      if (hasTokenEnv) {
+      const hasToken = typeof triggerConfig.token === "string" && triggerConfig.token.length > 0;
+      if (hasTokenEnv || hasToken) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
-          message: "github trigger cannot specify both token_env and app; they are mutually exclusive outbound auth methods; see docs/ai/architecture.md §3.2.1",
-          path: ["triggers", index, "token_env"],
+          message: "github trigger cannot specify both token/token_env and app; they are mutually exclusive outbound auth methods; see docs/ai/architecture.md §3.2.1",
+          path: ["triggers", index, hasToken ? "token" : "token_env"],
         });
       }
     });

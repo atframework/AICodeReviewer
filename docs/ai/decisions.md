@@ -63,6 +63,14 @@ null 字段但固定其解析基线，避免升级时跨业务后端重写和接
 稳定路径和目的地。继承凭据也参与目的地检查，不能只检查新增的 *_env 文本。
 实现和边界见架构 §3.16、config-secret-policy.ts、runtime-config.ts 及对应测试。
 
+注册明文凭据字段可经数据库直接配置；发布方提供的值可用于指定目的地，继承自
+文件的明文仍受原路径和目的地限制。
+持久化边界统一 AES-256-GCM 封存，密钥仅来自 `AICR_CONFIG_SECRETS_KEY` 部署环境，
+缺密钥即 fail-closed。文件配置同样接受明文但维持"提交库的文件推荐 env 引用"的
+建议。明文字段与 `*_env` 互斥；实体 update 省略脱敏字段即保留、null 即清除。
+公共发布入口在提交前认证密文；重试与快照恢复比较解密后的内容并复用已有密文。
+实现见 config-secret-sealing.ts、config-source.ts 的 carry-over 语义与 §3.16。
+
 ### D41：恢复与去重边界
 
 成员按 stream + revision 唯一归属批次，投递 ID 还需按 provider、事件、trigger、workspace、

@@ -136,14 +136,16 @@ export function resolveAdminAuthConfig(
   const admin = _config.admin as Record<string, unknown> | undefined;
   if (!admin || typeof admin !== "object") return undefined;
 
-  const usernameEnv = admin.username_env as string | undefined;
-  const passwordEnv = admin.password_env as string | undefined;
-  const passwordHashEnv = admin.password_hash_env as string | undefined;
-  const ttlSeconds = admin.session_ttl_seconds as number | undefined;
+	const usernameEnv = admin.username_env as string | undefined;
+	const passwordEnv = admin.password_env as string | undefined;
+	const passwordHashEnv = admin.password_hash_env as string | undefined;
+	const passwordLiteral = admin.password as string | undefined;
+	const passwordHashLiteral = admin.password_hash as string | undefined;
+	const ttlSeconds = admin.session_ttl_seconds as number | undefined;
 
-  const username = usernameEnv ? envLookup(usernameEnv) : undefined;
-  const password = passwordEnv ? envLookup(passwordEnv) : undefined;
-  const passwordHash = passwordHashEnv ? envLookup(passwordHashEnv) : undefined;
+	const username = usernameEnv ? envLookup(usernameEnv) : undefined;
+	const password = passwordLiteral ?? (passwordEnv ? envLookup(passwordEnv) : undefined);
+	const passwordHash = passwordHashLiteral ?? (passwordHashEnv ? envLookup(passwordHashEnv) : undefined);
 
   if (!username || (!password && !passwordHash)) return undefined;
 

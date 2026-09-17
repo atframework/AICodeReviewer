@@ -6,8 +6,9 @@ description: How AICodeReviewer configuration is organized into namespaces and l
 AICodeReviewer is configured through a single `config.yaml` file plus a `.env`
 file for secrets. This page is the map: it lists every top-level namespace,
 explains how settings cascade from global defaults down to a single workspace,
-and states the one rule you must not break — **never put a secret value inside
-`config.yaml`**.
+and states the secrets rule — **keep committed `config.yaml` files on
+environment references; literal secrets belong in the database configuration
+(where they are stored encrypted) or in files you deliberately keep private**.
 
 Each namespace has its own dedicated page with the full field reference. Use
 the table below as a jumping-off point.
@@ -26,7 +27,7 @@ the table below as a jumping-off point.
 | `storage` | Database, cache, and object-store backends for observability, the model catalog, and future features. | [Storage](/en/configuration/storage/) |
 | `compression` | AICR-side diff summarization that runs before the model sees a large task. | [LLM Providers and Models](/en/configuration/llm/) (context dependency) |
 | `server` | HTTP listener and global API-key auth for `/triggers/*`. | [Authentication & secrets](/en/configuration/authentication/) |
-| `admin` | Optional observability-dashboard super-admin login (separate from webhook/trigger auth). | [Authentication & secrets](/en/configuration/authentication/) |
+| `admin` | Optional admin dashboard super-admin login — the dashboard pairs observability with configuration management (separate from webhook/trigger auth). | [Authentication & secrets](/en/configuration/authentication/) |
 | `config_sources` | Database configuration source switch, runtime refresh cadence, and secret-reference grants. | this page (dynamic configuration API) |
 
 :::note[A minimal config]
@@ -127,10 +128,16 @@ instance list replaces the `defaults` list wholesale. Field details live in the
 
 ## `.env` vs `config.yaml` — secrets convention
 
-`config.yaml` is meant to be checked into source control, so it must never
-contain a raw secret. Instead, every secret-bearing field takes the **name of
-an environment variable**, and AICR reads the value from the environment at
-startup.
+`config.yaml` is meant to be checked into source control, so a committed file
+should never contain a raw secret. The default convention: every secret-bearing
+field takes the **name of an environment variable**, and AICR reads the value
+from the environment at startup. Registered credential fields also support a
+**literal sibling** (`api_key` next to `api_key_env`, `token` next
+to `token_env`, `webhook_url` next to `webhook_url_env`, and so on). The two
+forms are mutually exclusive per field. Literals
+are intended for the database configuration source, where they are sealed with
+AES-256-GCM before persistence (see the dynamic configuration API below), and
+for private file configurations you deliberately keep out of source control.
 
 ```yaml
 # config.yaml — stores the NAME of the env var, never the value
@@ -139,6 +146,9 @@ llm:
     - id: my-llm
       kind: openai_compatible
       api_key_env: AICR_LLM_API_KEY   # reads $AICR_LLM_API_KEY
+      # api_key: sk-xxxxxxxx       # literal alternative — mutually exclusive
+                                   # with api_key_env; sealed when published
+                                   # to the database
 ```
 
 ```bash
@@ -220,8 +230,26 @@ An empty namespace gets a durable revision 0 snapshot before accepting work.
 
 The admin API requires a Bearer session, limits JSON bodies to 1 MiB of UTF-8 bytes,
 rejects cross-origin writes and mismatched `fileDigest`, and redacts historical credentials.
-New literal credentials and credential-bearing URLs are rejected; use environment references.
-The read view includes file/database origin, immutable record IDs, effective values and
+Registered credentials may be configured literally or as environment references.
+Supported literal siblings include `api_key` next to
+`api_key_env`, `token` next to `token_env`, and `webhook_url` next to `webhook_url_env`;
+the two forms are mutually exclusive per field. Deployment storage URLs retain
+their existing env-only configuration. Literal values
+published to the database are sealed with AES-256-GCM before they are persisted —
+revisions and runtime snapshots only ever hold ciphertext — using the deployment-owned
+`AICR_CONFIG_SECRETS_KEY` (32 bytes, hex or base64; generate one with
+`node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"`).
+Publishing a literal without that key fails closed with `secrets_key_missing`;
+configurations that only use env references need no key. `AICR_CONFIG_SECRETS_KEY_PREVIOUS`
+lists retired keys (decrypt-only) so rotation never strands historical revisions.
+Credential-bearing URLs, `private_key_path` and unregistered credential-named keys are
+still rejected. Masked fields survive edits untouched (omitting a masked field keeps the
+stored value; an explicit `null` clears it). Validation and restore authenticate
+stored ciphertext before committing. Retrying the same operation preserves its
+original revision and snapshot. Inherited file literals cannot be redirected to a
+different path or destination; supply a credential for that destination.
+The read view includes file/database origin,
+immutable record IDs, effective values and
 `limit`/`offset` entity pagination. `/readyz` and admin `/status` return 503 when
 the configuration cannot be activated.
 

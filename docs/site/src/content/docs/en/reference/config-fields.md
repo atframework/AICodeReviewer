@@ -12,6 +12,23 @@ Each namespace below links to its narrative page and lists every field the
 schema validates, with type, default, and a one-line description. Optional
 fields without a schema default are marked *—* in the Default column.
 
+:::note[Literal credential siblings]
+Registered credentials support the following literal siblings —
+`api_key` next to `api_key_env`, `token` next to `token_env`, `webhook_secret`,
+`password`, `ticket`, `webhook_url`, `secret`, `private_key`, plus the AWS
+trio `aws_access_key`/`aws_secret_key`/`aws_session_token` and
+`google_application_credentials` (all type `string`, default *—*). The two
+forms are **mutually exclusive per field**. Storage URL fields keep their
+existing env-only configuration.
+`user`/`username` are plain identifiers, not secrets. Agent web_search
+`credentials` entries accept either an env var name string or a
+`{ value: "..." }` literal object. Literals published to the database
+configuration source are sealed with AES-256-GCM before persistence and masked
+as `<redacted>` on every admin read; see
+[Configuration overview — dynamic configuration API](/en/configuration/overview/#dynamic-configuration-api).
+The tables below identify the fields supported by each namespace.
+:::
+
 ## Enum reference
 
 These enum values appear across multiple namespaces and are collected here for
@@ -52,6 +69,7 @@ Narrative: [LLM providers and models](/en/configuration/llm/).
 | `llm.providers[].kind` | enum | — | Provider kind (see LLM provider enum above) |
 | `llm.providers[].base_url` | URL | — | Provider API base URL |
 | `llm.providers[].api_key_env` | string | — | Env var name holding the API key |
+| `llm.providers[].api_key` | string | — | Literal API key; mutually exclusive with `api_key_env` (literal wins); sealed when published to the database |
 | `llm.providers[].api_version` | string | — | API version (Azure, etc.) |
 | `llm.providers[].catalog_provider` | string | — | Override the models.dev provider id for catalog lookup |
 | `llm.providers[].catalog_id` | string | — | Override the models.dev `<provider>/<model>` id for catalog lookup |
@@ -101,12 +119,19 @@ Narrative: [VCS providers](/en/integrations/vcs-providers/).
 | `triggers[].commit_url_template` | string | — | URL template for commit links (variables are URL-encoded) |
 | `triggers[].revision_url_template` | string | — | URL template for revision links |
 | `triggers[].change_url_template` | string | — | URL template for changelist links (P4 Swarm, etc.) |
-| `triggers[].app` | object | — | GitHub App auth block; `kind: github` only, mutually exclusive with `token_env` |
+| `triggers[].app` | object | — | GitHub App auth block; `kind: github` only, mutually exclusive with `token`/`token_env` |
 | `triggers[].app.app_id` | string \| int | — | GitHub App ID (at least one of this or `client_id`) |
 | `triggers[].app.client_id` | string | — | GitHub App client ID (alternative to `app_id`) |
-| `triggers[].app.private_key_env` | string | — | Env var holding the App private key PEM (exactly one of this or `private_key_path`) |
-| `triggers[].app.private_key_path` | string | — | Path to the App private key PEM file (exactly one of this or `private_key_env`) |
+| `triggers[].app.private_key_env` | string | — | Env var holding the App private key PEM (exactly one of this, `private_key` or `private_key_path`) |
+| `triggers[].app.private_key_path` | string | — | Path to the App private key PEM file (exactly one of this, `private_key` or `private_key_env`) |
+| `triggers[].app.private_key` | string | — | Literal App private key PEM or base64 PEM (exactly one of this, `private_key_env` or `private_key_path`); sealed when published to the database |
 | `triggers[].app.installation_id` | string \| int | — | Fixed installation id; resolved per `owner/repo` when omitted |
+| `triggers[].token` | string | — | Literal outbound VCS token (git kinds); mutually exclusive with `token_env` and `app`; sealed when published to the database |
+| `triggers[].webhook_secret` | string | — | Literal inbound webhook secret (git kinds); mutually exclusive with `webhook_secret_env`; sealed when published to the database |
+| `triggers[].user` | string | — | Literal P4 user (identifier, not sealed); mutually exclusive with `user_env` |
+| `triggers[].ticket` | string | — | Literal P4 ticket; mutually exclusive with `ticket_env`; sealed when published to the database |
+| `triggers[].password` | string | — | Literal P4/SVN password; mutually exclusive with `password_env`; sealed when published to the database |
+| `triggers[].username` | string | — | Literal SVN username (identifier, not sealed); mutually exclusive with `username_env` |
 
 Provider-specific fields (`webhook_secret_env`, `token_env`, `port`,
 `user_env`, `password_env`, `depot_path`, `workspace`, `repository_url`) are
@@ -139,7 +164,8 @@ Narrative: [Configuration overview](/en/configuration/overview/).
 | `workspaces.defaults.agent.web_search.providers` | string[] | — | Ordered providers: full omp chain; kilo accepts `exa`; opencode selects the first `exa`/`parallel` |
 | `workspaces.defaults.agent.web_search.exclude` | string[] | — | Provider ids removed from the search chain → `providers.webSearchExclude` |
 | `workspaces.defaults.agent.web_search.timeout_seconds` | int 1–300 | — | Per-provider transport timeout → `providers.webSearchTimeoutSeconds` |
-| `workspaces.defaults.agent.web_search.credentials.<id>` | string | — | Search credential id → host env var name; enabled adapters inject supported native env vars via `${VAR}` references |
+| `workspaces.defaults.agent.web_search.credentials.<id>` | string \| object | — | Search credential id → host env var name (string) or `{ value }` literal; enabled adapters inject supported native env vars via `${VAR}` references, literals inject directly |
+| `workspaces.defaults.agent.web_search.credentials.<id>.value` | string | — | Literal search credential (object form); sealed when published to the database |
 | `workspaces.defaults.agent.web_search.searxng.endpoint` | string | — | SearXNG endpoint URL |
 | `workspaces.defaults.agent.web_search.searxng.categories` | string | — | SearXNG categories filter |
 | `workspaces.defaults.agent.web_search.searxng.engines` | string | — | SearXNG engines filter |
@@ -153,12 +179,16 @@ Narrative: [Configuration overview](/en/configuration/overview/).
 | `workspaces.defaults.context_repositories[].url` | string | — | Git repository URL (required for `kind: git`) |
 | `workspaces.defaults.context_repositories[].ref` | string | — | Git branch/tag pin |
 | `workspaces.defaults.context_repositories[].token_env` | string | — | Env var name holding the git http(s) token |
+| `workspaces.defaults.context_repositories[].token` | string | — | Literal git http(s) token; mutually exclusive with `token_env`; sealed when published to the database |
 | `workspaces.defaults.context_repositories[].repository_url` | string | — | SVN repository URL (required for `kind: svn`) |
 | `workspaces.defaults.context_repositories[].revision` | string \| int | — | Revision pin for svn/p4 |
 | `workspaces.defaults.context_repositories[].port` | string | — | P4 port |
 | `workspaces.defaults.context_repositories[].user_env` | string | — | Env var name holding the P4 user |
+| `workspaces.defaults.context_repositories[].user` | string | — | Literal P4 user (identifier, not sealed); mutually exclusive with `user_env` |
 | `workspaces.defaults.context_repositories[].ticket_env` | string | — | Env var name holding the P4 ticket |
+| `workspaces.defaults.context_repositories[].ticket` | string | — | Literal P4 ticket; mutually exclusive with `ticket_env`; sealed when published to the database |
 | `workspaces.defaults.context_repositories[].password_env` | string | — | Env var name holding the P4 password |
+| `workspaces.defaults.context_repositories[].password` | string | — | Literal P4 password; mutually exclusive with `password_env`; sealed when published to the database |
 | `workspaces.defaults.context_repositories[].depot_path` | string | — | P4 depot path (required for `kind: p4`) |
 | `workspaces.defaults.context_repositories[].max_mb` | int > 0 | `512` | Per-repository post-materialization size cap in MB |
 | `workspaces.instances` | map | `{}` | Per-workspace instances keyed by workspace id |
@@ -185,7 +215,8 @@ Narrative: [Configuration overview](/en/configuration/overview/).
 | `workspaces.instances.<id>.agent.web_search.providers` | string[] | — | Ordered providers: full omp chain; kilo accepts `exa`; opencode selects the first `exa`/`parallel` |
 | `workspaces.instances.<id>.agent.web_search.exclude` | string[] | — | Provider ids removed from the search chain → `providers.webSearchExclude` |
 | `workspaces.instances.<id>.agent.web_search.timeout_seconds` | int 1–300 | — | Per-provider transport timeout → `providers.webSearchTimeoutSeconds` |
-| `workspaces.instances.<id>.agent.web_search.credentials.<id>` | string | — | Search credential id → host env var name; enabled adapters inject supported native env vars via `${VAR}` references |
+| `workspaces.instances.<id>.agent.web_search.credentials.<id>` | string \| object | — | Search credential id → host env var name (string) or `{ value }` literal; enabled adapters inject supported native env vars via `${VAR}` references, literals inject directly |
+| `workspaces.instances.<id>.agent.web_search.credentials.<id>.value` | string | — | Literal search credential (object form); sealed when published to the database |
 | `workspaces.instances.<id>.agent.web_search.searxng.endpoint` | string | — | SearXNG endpoint URL |
 | `workspaces.instances.<id>.agent.web_search.searxng.categories` | string | — | SearXNG categories filter |
 | `workspaces.instances.<id>.agent.web_search.searxng.engines` | string | — | SearXNG engines filter |
@@ -201,15 +232,20 @@ Narrative: [Configuration overview](/en/configuration/overview/).
 | `workspaces.instances.<id>.context_repositories[].url` | string | — | Git repository URL (required for `kind: git`) |
 | `workspaces.instances.<id>.context_repositories[].ref` | string | — | Git branch/tag pin (defaults to the remote default branch) |
 | `workspaces.instances.<id>.context_repositories[].token_env` | string | — | Env var name holding the git http(s) token (injected via `http.extraHeader`, never written to disk) |
+| `workspaces.instances.<id>.context_repositories[].token` | string | — | Literal git http(s) token; mutually exclusive with `token_env`; sealed when published to the database |
 | `workspaces.instances.<id>.context_repositories[].repository_url` | string | — | SVN repository URL (required for `kind: svn`) |
 | `workspaces.instances.<id>.context_repositories[].revision` | string \| int | — | Revision pin for svn/p4 (defaults to latest) |
 | `workspaces.instances.<id>.context_repositories[].port` | string | — | P4 port (e.g. `ssl:p4.example.com:1666`) |
 | `workspaces.instances.<id>.context_repositories[].user_env` | string | — | Env var name holding the P4 user |
+| `workspaces.instances.<id>.context_repositories[].user` | string | — | Literal P4 user (identifier, not sealed); mutually exclusive with `user_env` |
 | `workspaces.instances.<id>.context_repositories[].ticket_env` | string | — | Env var name holding the P4 ticket |
+| `workspaces.instances.<id>.context_repositories[].ticket` | string | — | Literal P4 ticket; mutually exclusive with `ticket_env`; sealed when published to the database |
 | `workspaces.instances.<id>.context_repositories[].password_env` | string | — | Env var name holding the P4 password (alternative to `ticket_env`) |
+| `workspaces.instances.<id>.context_repositories[].password` | string | — | Literal P4 password; mutually exclusive with `password_env`; sealed when published to the database |
 | `workspaces.instances.<id>.context_repositories[].depot_path` | string | — | P4 depot path (required for `kind: p4`, usually ending in `/...`) |
 | `workspaces.instances.<id>.context_repositories[].max_mb` | int > 0 | `512` | Per-repository post-materialization size cap in MB; exceeding it fails and cleans up |
 | `workspaces.instances.<id>.auth.api_key_env` | string | — | Per-workspace API key env var |
+| `workspaces.instances.<id>.auth.api_key` | string | — | Literal per-workspace API key; mutually exclusive with `api_key_env`; sealed when published to the database |
 | `workspaces.instances.<id>.auth.enabled` | boolean | `true` | Toggle per-workspace API key |
 
 Workspace ids must not collide with the reserved keys `cache`, `defaults`,
@@ -298,7 +334,10 @@ Narrative: [Output channels and routing](/en/configuration/outputs/).
 | `outputs.channels[].review_mode` | enum | — | `auto`, `review`, `comment` |
 | `outputs.channels[].review_event` | enum | — | `COMMENT` or `REQUEST_CHANGES` |
 | `outputs.channels[].review_update_strategy` | enum | — | `always_new` or `update_existing` |
-| `outputs.channels[].notify_feishu` | object | — | Issue-created Feishu notification (`webhook_url_env`, optional `secret_env`) |
+| `outputs.channels[].notify_feishu` | object | — | Issue-created Feishu notification (`webhook_url_env` or literal `webhook_url`, optional `secret_env`/literal `secret`) |
+| `outputs.channels[].token` | string | — | Literal channel API token; mutually exclusive with `token_env`; sealed when published to the database |
+| `outputs.channels[].webhook_url` | string | — | Literal bot webhook URL (feishu_bot/wecom_bot); mutually exclusive with `webhook_url_env`; sealed when published to the database |
+| `outputs.channels[].secret` | string | — | Literal Feishu signing secret; mutually exclusive with `secret_env`; sealed when published to the database |
 | `outputs.author_resolution` | object | — | `email_mappings` map and `email_blacklist` array |
 | `outputs.routes.default` | object | — | Default route applied when no rule matches |
 | `outputs.routes.rules[]` | array | `[]` | Ordered routing rules |
@@ -454,6 +493,7 @@ review model's context window.
 | `server.base_url` | string | — | External base URL |
 | `server.path_prefix` | string | — | URL path prefix (reverse-proxy subpath) |
 | `server.auth.api_key_env` | string | — | Global API key env var (protects `/triggers/*`) |
+| `server.auth.api_key` | string | — | Literal global API key; mutually exclusive with `api_key_env` (literal wins) |
 | `server.auth.enabled` | boolean | `true` | Toggle global API key |
 
 ## `admin`
@@ -465,4 +505,6 @@ Narrative: [Dashboard and logs](/en/start/dashboard/).
 | `admin.username_env` | string | `AICR_ADMIN_USERNAME` | Admin username env var |
 | `admin.password_env` | string | `AICR_ADMIN_PASSWORD` | Admin password env var |
 | `admin.password_hash_env` | string | — | Admin password hash env var (`sha256:<hex>`); takes precedence over `password_env` |
+| `admin.password` | string | — | Literal admin password; mutually exclusive with `password_env` (literal wins) |
+| `admin.password_hash` | string | — | Literal admin password hash (`sha256:<hex>`); mutually exclusive with `password_hash_env` |
 | `admin.session_ttl_seconds` | int > 0 | `86400` | Session TTL in seconds (not minutes) |

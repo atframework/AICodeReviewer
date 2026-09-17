@@ -38,6 +38,7 @@ import {
 } from "./config-source.js";
 import { contentHashOf, type ConfigRevisionRecord, type ConfigStore } from "./config-store.js";
 import { assertConfigSecretPolicy } from "./config-secret-policy.js";
+import { openConfigSecretLiterals, sealConfigSecretLiterals, validateConfigSecretLiterals, writeSealedConfigSnapshot, type ConfigSecretSealing } from "./config-secret-sealing.js";
 
 /** Bump when the snapshot content/shape contract changes. */
 export const CONFIG_RESOLVER_VERSION = 1;
@@ -208,6 +209,7 @@ export type ConfigPublishResult =
     };
 
 export interface PublishConfigOptions {
+  readonly secretSealing?: ConfigSecretSealing | undefined;
   /** Local generation install hook (P4 RuntimeConfigManager). */
   readonly install?: ((prepared: PreparedConfigPublication, revision: ConfigRevisionRecord) => Promise<void>) | undefined;
   readonly now?: (() => number) | undefined;
@@ -223,17 +225,37 @@ export async function publishConfig(
   options: PublishConfigOptions = {},
 ): Promise<ConfigPublishResult> {
   const now = options.now ?? Date.now;
-  const result = await store.commitChangeset({
+  const sealing = options.secretSealing;
+  validateConfigSecretLiterals(prepared.document, sealing);
+  validateConfigSecretLiterals(prepared.effective, sealing);
+  const opened = (value: unknown): unknown => sealing ? openConfigSecretLiterals(value, sealing) : value;
+  const document = sealing ? sealConfigSecretLiterals(prepared.document, sealing) : prepared.document;
+  const commitInput = {
     namespace: prepared.input.namespace,
     baseRevision: prepared.input.baseRevision,
     fileDigest: prepared.input.fileDigest,
     operationId: prepared.input.operationId,
     actor: prepared.input.actor,
-    document: prepared.document,
+    document,
     formatVersion: prepared.formatVersion,
     audit: prepared.audit,
     now: now(),
-  });
+  };
+  const retryDocument = async (): Promise<DatabaseConfigDocument | undefined> => {
+    const existing = await store.readOperation(prepared.input.namespace, prepared.input.operationId);
+    return existing !== null && stableSerialize(opened(existing.document)) === stableSerialize(opened(prepared.document))
+      ? existing.document : undefined;
+  };
+  let result;
+  try {
+    result = await store.commitChangeset({ ...commitInput, document: await retryDocument() ?? document });
+  } catch (error) {
+    // Another replica may have committed the same plaintext with a different nonce.
+    if (!(error instanceof ConfigError) || error.code !== "operation_conflict") throw error;
+    const retry = await retryDocument();
+    if (retry === undefined) throw error;
+    result = await store.commitChangeset({ ...commitInput, document: retry });
+  }
 
   if (result.status === "revision_conflict") {
     return {
@@ -246,7 +268,7 @@ export async function publishConfig(
   const { revision } = result;
   const snapshotId = configSnapshotId(revision);
   try {
-    await store.writeSnapshot({
+    await writeSealedConfigSnapshot(store, {
       id: snapshotId,
       namespace: prepared.input.namespace,
       fileDigest: prepared.input.fileDigest,
@@ -257,7 +279,7 @@ export async function publishConfig(
       sanitizedEffectiveConfig: prepared.effective,
       contentHash: contentHashOf(prepared.effective),
       now: now(),
-    });
+    }, sealing);
   } catch (error) {
     return {
       status: "committed_activating",

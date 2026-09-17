@@ -101,10 +101,38 @@ describe("deployment-owned secret purposes (A06)", () => {
     expect(() => assertConfigSecretPolicy(deployment, {}, { ...deployment, workspaces: { instances: { ws: { agent: { web_search: { enabled: true } } } } } })).not.toThrow();
   });
   it.each([
-    { api_key: "secret" }, { extra_headers: { Authorization: "Bearer secret" } },
+    { extra_headers: { Authorization: "Bearer secret" } },
     { private_key_path: "/deployment/private.pem" }, { apiKeyEnv: "PRIVATE_ENV" },
     { base_url: "https://name:password@example.test" }, { url: "https://example.test?token=secret" },
+    { x_custom_api_token: "secret" },
   ])("rejects plaintext or unsupported credential aliases: %j", value => {
     expect(() => assertNoConfigCredentialLiterals(value)).toThrow();
+  });
+  it.each([
+    { api_key: "sk-live" }, { token: "gtok" }, { webhook_url: "https://open.feishu.cn/bot/x" },
+    { password: "p4pass" }, { user: "p4user" }, { private_key: "-----BEGIN KEY-----x" },
+    { agent: { web_search: { credentials: { exa: { value: "exa-key" } } } } },
+  ])("allows registered literal credential fields: %j", value => {
+    expect(() => assertNoConfigCredentialLiterals(value)).not.toThrow();
+  });
+  it("does not inherit a trigger env token when the channel has its own literal token", () => {
+    const trigger = { name: "git", kind: "gitea", token_env: "FILE_TOKEN" };
+    const channel = { name: "issues", kind: "gitea_problem_issue", trigger: "git", token: "channel-token" };
+    expect(() => assertConfigSecretPolicy({ triggers: [trigger] }, {}, { triggers: [trigger], outputs: { channels: [channel] } })).not.toThrow();
+  });
+
+  it("protects inherited file literals from a new model or search destination", () => {
+    const provider = { id: "llm", kind: "openai_compatible", api_key: "file-api-key", base_url: "https://llm.example" };
+    const file = { llm: { providers: [provider] }, agent: { web_search: { credentials: { searxng: { value: "file-search-key" } }, searxng: { endpoint: "https://search.example" } } } };
+    expect(() => assertConfigSecretPolicy(file, {}, file)).not.toThrow();
+    const override = { agent: { web_search: { searxng: { endpoint: "https://different.example" } } } };
+    expect(() => assertConfigSecretPolicy(file, {}, { ...file, workspaces: { defaults: override } })).toThrow(/file-owned literal/);
+    expect(() => assertConfigSecretPolicy(file, {}, { ...file, llm: { ...file.llm, model_chain: { changed: [
+      { provider: "llm", model: "m", overrides: { base_url: "https://different.example" } },
+    ] } } })).toThrow(/file-owned literal/);
+  });
+
+  it("still rejects credential-bearing URLs inside a registered literal field", () => {
+    expect(() => assertNoConfigCredentialLiterals({ webhook_url: "https://name:password@example.test/hook" })).toThrow();
   });
 });

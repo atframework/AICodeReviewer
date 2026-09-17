@@ -58,16 +58,16 @@ export const OMP_WEB_SEARCH_CREDENTIAL_ENV_NAMES: Readonly<Record<string, string
 };
 
 /**
- * Maps AICR-side credential env names onto omp-native env names as `${VAR}`
- * references resolved by the orchestrator at spawn time. Mirrors the pi-family
- * apiKey pattern: the bundle only ever records env var names, never secrets.
+ * Maps AICR-side credentials onto omp-native env names. Env var names become
+ * `${VAR}` references resolved by the orchestrator at spawn time (mirrors the
+ * pi-family apiKey pattern); `{ value }` literals are injected directly.
  */
 export function buildOmpWebSearchEnvVars(webSearch?: AgentWebSearchOptions): Record<string, string> {
   if (!webSearch?.enabled) return {};
   const credentials = webSearch?.credentials;
   if (!credentials) return {};
   const envVars: Record<string, string> = {};
-  for (const [provider, envName] of Object.entries(credentials)) {
+  for (const [provider, credential] of Object.entries(credentials)) {
     const nativeEnvName = OMP_WEB_SEARCH_CREDENTIAL_ENV_NAMES[provider];
     if (!nativeEnvName) {
       throw new RangeError(
@@ -75,7 +75,7 @@ export function buildOmpWebSearchEnvVars(webSearch?: AgentWebSearchOptions): Rec
           `(supported: ${Object.keys(OMP_WEB_SEARCH_CREDENTIAL_ENV_NAMES).join(", ")}).`,
       );
     }
-    envVars[nativeEnvName] = `\${${envName}}`;
+    envVars[nativeEnvName] = typeof credential === "string" ? `\${${credential}}` : credential.value;
   }
   return envVars;
 }

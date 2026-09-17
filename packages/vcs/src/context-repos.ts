@@ -149,7 +149,7 @@ async function runGit(
   args: readonly string[],
   options?: { readonly beforeAttempt?: () => Promise<void> },
 ): Promise<ContextRepoCommandResult> {
-  const token = repo.token_env ? deps.resolveEnv(repo.token_env) : undefined;
+  const token = repo.token ?? (repo.token_env ? deps.resolveEnv(repo.token_env) : undefined);
   const useHeader = token !== undefined && token !== "" && /^https?:\/\//iu.test(repo.url ?? "");
   // The token travels via GIT_CONFIG_* env instead of `-c http.extraHeader`
   // argv so it never appears in the process table; the transient env config
@@ -261,22 +261,19 @@ async function materializeP4Repo(
   targetDir: string,
   maxBytes: number,
 ): Promise<string | undefined> {
-  const password = repo.password_env
-    ? deps.resolveEnv(repo.password_env)
-    : repo.ticket_env
-      ? deps.resolveEnv(repo.ticket_env)
-      : undefined;
+  const password = repo.password
+    ?? (repo.password_env ? deps.resolveEnv(repo.password_env) : undefined)
+    ?? repo.ticket
+    ?? (repo.ticket_env ? deps.resolveEnv(repo.ticket_env) : undefined);
   const env = password ? { P4PASSWD: password } : undefined;
 
   const baseArgs: string[] = [];
   if (repo.port) {
     baseArgs.push("-p", repo.port);
   }
-  if (repo.user_env) {
-    const user = deps.resolveEnv(repo.user_env);
-    if (user) {
-      baseArgs.push("-u", user);
-    }
+  const user = repo.user ?? (repo.user_env ? deps.resolveEnv(repo.user_env) : undefined);
+  if (user) {
+    baseArgs.push("-u", user);
   }
 
   const runP4Once = (args: readonly string[], stdin?: string, bufferStdout = false) =>

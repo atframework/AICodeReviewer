@@ -12,7 +12,7 @@ AICodeReviewer 使用**三层相互独立**的认证。它们保护不同的端�
 | 服务端 API key | 全局 | `/triggers/*` 路由（P4、SVN、自定义脚本） | `server.auth.api_key_env` |
 | Workspace API key | 按 workspace | 同服务端 key，但限定 workspace | `workspaces.instances.<id>.auth.api_key_env` |
 
-可观测性 dashboard 有**独立**的超级管理员登录（`admin.*`），不复用 webhook
+管理后台（可观测性与配置管理）有**独立**的超级管理员登录（`admin.*`），不复用 webhook
 HMAC 或 trigger API key。
 
 :::caution[端点对应关系]
@@ -87,10 +87,10 @@ workspaces:
 
 全局 key 和 workspace key 都会被接受——请求匹配**任意一个**配置的 key 即放行。
 
-## 可观测性 dashboard 管理员
+## 管理后台管理员
 
 设置 `admin.username_env` 加 `admin.password_env` 或 `admin.password_hash_env`
-以启用内置 dashboard：
+以启用内置管理后台（可观测性与配置管理）：
 
 - `GET /dashboard` 和 `GET /` 提供内嵌 SPA。
 - `POST /api/admin/login` 返回 Bearer session token。
@@ -107,8 +107,20 @@ raw password env，但会用定长 digest 比较、限速，且绝不写入日�
 
 ## 密钥：`.env` 与 `config.yaml`
 
-所有密钥放在 `.env`（或你的 secret manager）。`config.yaml` **只写环境变量名**，
-不写值。这样 `config.yaml` 可以安全提交和 review。
+所有密钥放在 `.env`（或你的 secret manager）。提交进版本库的 `config.yaml`
+**只写环境变量名**，不写值。这样 `config.yaml` 可以安全提交和 review。
+
+已注册的凭据支持对应明文字段（`api_key`、`token`、`webhook_secret`、
+`password`、`ticket`、`webhook_url`、`secret`、`private_key`、AWS 三件套
+`aws_access_key`/`aws_secret_key`/`aws_session_token` 与
+`google_application_credentials`；`user`/`username` 是普通标识符）。二者互斥，
+同时设置会校验失败；存储连接 URL 等部署字段保持原有环境变量配置。
+明文适用于**数据库配置源**：发布到数据库的值在写入前经
+AES-256-GCM 封存，revision 与运行时快照只存密文。封存密钥来自部署侧
+`AICR_CONFIG_SECRETS_KEY`（32 字节，hex 或 base64）；未配置该密钥时发布明文以
+`secrets_key_missing` fail-closed，`AICR_CONFIG_SECRETS_KEY_PREVIOUS` 以逗号
+分隔退役密钥供轮换期解密。私有文件配置里写明文同样可用，但值以明文留在该
+文件中——与 `.env` 一样属于运维自有风险。
 
 ```text
 ┌────────────────────────────────────────────────────────────────────────────┐

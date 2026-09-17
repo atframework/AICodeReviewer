@@ -86,6 +86,127 @@ test("P6 regression: config tab can be reopened", async ({ page }) => {
   expect(errors).toEqual([]);
 });
 
+test("P6 regression: switching config pages closes the drawer and confirms dirty drafts", async ({ page }) => {
+  await login(page);
+  await openConfigTab(page);
+  const drawer = page.locator("#config-editor");
+
+  await expect(page).toHaveTitle("AICodeReviewer Admin");
+  await expect(page.locator(".header h1")).toHaveText("AICodeReviewer Admin");
+  await page.locator("#config-main tbody tr", { hasText: "file-llm" }).getByRole("button", { name: "View", exact: true }).click();
+  await expect(drawer.locator(".cfg-drawer-title")).toHaveText("View file-llm");
+  await page.locator("#config-nav").getByRole("button", { name: "Triggers", exact: true }).click();
+  await expect(drawer).toBeHidden();
+  for (const heading of ["View file-llm", "Kind-specific", "Catalog metadata", "Request overrides"]) {
+    await expect(page.getByText(heading, { exact: true })).toHaveCount(0);
+  }
+  await page.locator("#config-nav").getByRole("button", { name: "Providers", exact: true }).click();
+
+  // Create a provider so a record row exists.
+  await page.getByRole("button", { name: "New provider", exact: true }).click();
+  await drawer.locator("#cfg-drawer-kind").selectOption("ollama");
+  await setTextField(drawer, "provider:id", "drawer-leak-provider");
+  await drawer.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(drawer).toBeHidden();
+
+  // A clean drawer (and its provider-specific sections) closes on page switch.
+  await page.locator("#config-main tbody tr", { hasText: "drawer-leak-provider" }).getByRole("button", { name: "Edit", exact: true }).click();
+  await expect(drawer.locator(".cfg-drawer-title")).toHaveText("Edit drawer-leak-provider");
+  await expect(drawer.getByText("Kind-specific", { exact: true })).toBeVisible();
+  await page.locator("#config-nav").getByRole("button", { name: "Triggers", exact: true }).click();
+  await expect(drawer).toBeHidden();
+  await expect(page.locator(".cfg-dialog")).toHaveCount(0);
+  await expect(page.locator("#config-nav button.cfg-active")).toHaveText("Triggers");
+
+  // A dirty drawer holds the switch behind a discard confirmation.
+  await page.locator("#config-nav").getByRole("button", { name: "Providers", exact: true }).click();
+  await page.getByRole("button", { name: "New provider", exact: true }).click();
+  await setTextField(drawer, "provider:id", "dirty-provider");
+  await page.click(".tab[data-tab='overview']");
+  await expect(drawer).toBeHidden();
+  await openConfigTab(page);
+  await expect(drawer).toBeVisible();
+  await expect(drawer.locator('[data-field-id="provider:id"] input')).toHaveValue("dirty-provider");
+  await page.locator("#config-nav").getByRole("button", { name: "Triggers", exact: true }).click();
+  const dialog = page.locator(".cfg-dialog");
+  await expect(dialog).toBeVisible();
+  await expect(dialog).toContainText("Discard unsaved changes?");
+  // Cancel keeps the current page and the draft.
+  await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(page.locator(".cfg-dialog")).toHaveCount(0);
+  await expect(drawer.locator(".cfg-drawer-title")).toHaveText("New provider");
+  await expect(page.locator("#config-nav button.cfg-active")).toHaveText("Providers");
+  // Discard closes the drawer and lands on the requested page.
+  await page.locator("#config-nav").getByRole("button", { name: "Triggers", exact: true }).click();
+  await page.locator(".cfg-dialog").getByRole("button", { name: "Discard", exact: true }).click();
+  await expect(drawer).toBeHidden();
+  await expect(page.locator("#config-nav button.cfg-active")).toHaveText("Triggers");
+});
+
+test("search credentials can be edited as masked literals and removed", async ({ page, request }) => {
+  const token = await apiLogin(request);
+  const before = await apiView(request, token);
+  const seeded = await request.post("/api/admin/config/changesets", { headers: { Authorization: `Bearer ${token}` }, data: {
+    baseRevision: before.head?.activeRevision ?? null, fileDigest: before.fileDigest, operationId: "search-literal-seed",
+    operations: [{ op: "set", path: ["agent", "web_search", "credentials"], value: { exa: { value: "browser-search-secret" } } }],
+  } });
+  expect(seeded.status()).toBe(200);
+  await login(page);
+  await openConfigTab(page, "Agent");
+  const field = page.locator('[data-field-id="agent:web_search.credentials.*"]');
+  await field.evaluate(node => { for (let parent = node.parentElement; parent; parent = parent.parentElement) if (parent instanceof HTMLDetailsElement) parent.open = true; });
+  await expect(field.locator('input[type="password"]')).toHaveValue("");
+  await field.locator('input[type="password"]').fill("replacement-search-secret");
+  await page.getByRole("button", { name: "Save page changes", exact: true }).click();
+  await expect(page.locator("#config-status")).toContainText("Saved as revision");
+  await page.reload();
+  await openConfigTab(page, "Agent");
+  await field.evaluate(node => { for (let parent = node.parentElement; parent; parent = parent.parentElement) if (parent instanceof HTMLDetailsElement) parent.open = true; });
+  await expect(field.locator('input[type="password"]')).toHaveValue("");
+  await field.getByRole("button", { name: "Remove entry", exact: true }).click();
+  await page.getByRole("button", { name: "Save page changes", exact: true }).click();
+  await expect(page.locator("#config-status")).toContainText("Saved as revision");
+  const view = await (await request.get("/api/admin/config", { headers: { Authorization: `Bearer ${token}` } })).json();
+  expect(view.globals.agent.web_search.credentials).toEqual({});
+});
+
+test("literal provider keys survive unrelated edits and can be replaced or removed", async ({ page, request }) => {
+  await login(page);
+  await openConfigTab(page);
+  const drawer = page.locator("#config-editor");
+  const secret = drawer.locator('[data-field-id="provider:api_key"]');
+  await page.getByRole("button", { name: "New provider", exact: true }).click();
+  await setTextField(drawer, "provider:id", "literal-provider");
+  await setTextField(drawer, "provider:api_key", "browser-literal-key");
+  await expect(secret.locator("input")).toHaveAttribute("type", "password");
+  await drawer.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(drawer).toBeHidden();
+  const edit = async () => {
+    await page.locator("#config-main tbody tr", { hasText: "literal-provider" }).getByRole("button", { name: "Edit", exact: true }).click();
+    await expect(secret.locator("input")).toHaveValue("");
+    await expect(secret.locator("input")).toHaveAttribute("placeholder", "(set — never displayed)");
+  };
+  await edit();
+  await setTextField(drawer, "provider:base_url", "http://127.0.0.1:9/v1");
+  await drawer.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(drawer).toBeHidden();
+  await edit();
+  await secret.locator("input").fill("replacement-literal-key");
+  await drawer.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(drawer).toBeHidden();
+  await edit();
+  await secret.getByRole("button", { name: "Clear stored value", exact: true }).click();
+  await expect(secret).toContainText("Empty after editing removes the stored value.");
+  await drawer.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(drawer).toBeHidden();
+  const response = await request.get("/api/admin/config", { headers: { authorization: `Bearer ${await bearerToken(page)}` } });
+  const view = await response.json();
+  const record = view.collections.provider.records.find((entry: { name: string }) => entry.name === "literal-provider");
+  expect(record.value).not.toHaveProperty("api_key");
+  expect(JSON.stringify(view)).not.toContain("browser-literal-key");
+  expect(JSON.stringify(view)).not.toContain("replacement-literal-key");
+});
+
 test("P6 regression: staged provider and model group publish atomically and row edits persist", async ({ page, request }) => {
   await login(page);
   await openConfigTab(page);

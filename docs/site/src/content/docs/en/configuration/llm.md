@@ -48,7 +48,8 @@ config.
 | `id` | string | ✓ | Unique provider id used by `model_chain` and the catalog. |
 | `kind` | enum | ✓ | Provider protocol. One of `openai_compatible`, `azure_openai`, `anthropic`, `vertex_ai`, `bedrock`, `google_ai_studio`, `ollama`, `copilot`. |
 | `base_url` | string (URL) | – | API base URL. Optional for some hosted kinds. |
-| `api_key_env` | string | – | Name of the env var holding the API key. Never inline the key. |
+| `api_key_env` | string | – | Name of the env var holding the API key. Never inline the key in a committed file. |
+| `api_key` | string | – | Literal API key; mutually exclusive with `api_key_env` (literal wins). Sealed when published to the database configuration source. |
 | `api_version` | string | – | API version (used by `azure_openai` and others). |
 | `catalog_provider` | string | – | Map a custom provider to a models.dev provider id (e.g. `openai`). |
 | `catalog_id` | string | – | Explicit models.dev lookup id (e.g. `openai/gpt-4o-mini`) for custom aliases. |

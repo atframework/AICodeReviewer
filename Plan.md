@@ -30,6 +30,9 @@ Workspace 多工程规则与动态配置管理 P0–P8 已完成本地交付、�
 本次资源生命周期、暂存编辑与发布边界复审见 [M26](docs/ai/milestones/M26.md)。
 稳定合同见[架构](docs/ai/architecture.md) §3.10、§3.14–3.16。
 
+数据库配置的注册凭据字段、加密发布与编辑语义见[架构](docs/ai/architecture.md)
+§3.15–3.16 和[决策](docs/ai/decisions.md) D40；部署验收仍按下表执行。
+
 ## 2. 可本地推进的下一步
 
 下列工作不以获得远端服务凭据为前提；实现前仍需确定恢复语义和范围。
@@ -48,6 +51,7 @@ Workspace 多工程规则与动态配置管理 P0–P8 已完成本地交付、�
 | 场景 | 已有本地证据 | 仍需的条件与验收 |
 | --- | --- | --- |
 | GitHub/Gitea issue 自动指派 | 作者解析、真实 API 路径、三种 issue 模式、黑名单与重试边界的本地测试 | 使用有指派权限的账号核对真实创建结果中的 assignees；验证账号未关联邮箱、无权限及不可指派用户；规则见[输出合同](docs/output-channels.md#assignee-resolution) |
+| 数据库凭据部署验收 | 本地加密发布、重试、恢复和管理界面回归 | 在目标副本配置同一主密钥及退役密钥，验证真实凭据调用、轮换后重启及旧任务恢复；本地测试不证明外部凭据有效 |
 | GitLab 真实仓库端到端流程 | 适配器、webhook、分支筛选与持久入队、输出合同测试 | GitLab 实例、测试仓库、token、webhook 权限；验证真实 push/MR 筛选、入队与发布 |
 | SVN 部署环境 | file:// 仓库及本机 svnserve、认证 HTTP hook、SQLite 调度、真实 diff | 目标服务器上的 hook 账户/PATH、网络 ACL，以及实际使用的 HTTP(S)/认证方式 |
 | Redis 部署环境 | 自动调度和模型目录均已通过本机真实 Redis | 仅部署特定的 Redis 版本、ACL/TLS、网络中断及持久化配置需要现场验证 |

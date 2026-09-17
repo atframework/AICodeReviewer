@@ -440,7 +440,7 @@ describe("GithubAppTokenService", () => {
 
     it("throws when neither env nor path is provided", async () => {
       await expect(resolvePrivateKey(undefined, undefined, () => undefined))
-        .rejects.toThrow(/requires private_key_env or private_key_path/u);
+        .rejects.toThrow(/requires private_key, private_key_env or private_key_path/u);
     });
   });
 

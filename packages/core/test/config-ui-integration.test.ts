@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { buildConfigUiSpec } from "../src/config-ui-spec.js";
-import { createEditorSession, rebaseSession, sessionEncode, sessionListOp, sessionSetValue, sessionSwitchKind } from "../src/config-form-state.js";
+import { createEditorSession, rebaseSession, sessionEncode, sessionListOp, sessionMapOp, sessionSetPresent, sessionSetValue, sessionSwitchKind } from "../src/config-form-state.js";
+import { applyConfigChangeset } from "../src/config-source.js";
 import { decodeDraft, encodeChanges, readRowField, resolveItemOptions, type ConfigDecodeInput } from "../src/config-ui-runtime.js";
 
 const spec = buildConfigUiSpec();
@@ -10,6 +11,63 @@ function input(value: unknown, name = "sample"): ConfigDecodeInput {
 }
 
 describe("P6 real registry and editor contracts", () => {
+  it.each([
+    [{ value: "replacement" }, { value: "replacement" }],
+    [{ value: "" }, undefined],
+    ["SEARCH_KEY", "SEARCH_KEY"],
+    ["", undefined],
+  ])("edits a search credential row using %j", (value, expected) => {
+    const raw = { agent: { web_search: { credentials: { exa: { value: "<redacted>" } } } } };
+    const base = input(raw);
+    const fieldId = "workspace:agent.web_search.credentials.*";
+    let session = createEditorSession(page("workspaces"), base);
+    session = sessionMapOp(session, fieldId, { type: "setValue", rowId: "r1", value });
+    const next = applyConfigChangeset({ entities: { workspaces: { sample: {
+      id: "sample", name: "sample", enabled: true,
+      value: { agent: { web_search: { credentials: { exa: { value: "old-secret" } } } } },
+    } } } }, sessionEncode(session, base).operations, { formatVersion: 2 });
+    expect(next.entities?.workspaces?.sample?.value).toEqual({ agent: { web_search: { credentials: expected === undefined ? {} : { exa: expected } } } });
+  });
+
+  it("drops obsolete sealed credentials on a provider kind change", () => {
+    const base = input({ id: "sample", kind: "bedrock", aws_secret_key: "<redacted>" });
+    const session = sessionSwitchKind(createEditorSession(page("providers"), base), "ollama");
+    expect(sessionEncode(session, base).operations).toEqual([{ op: "update", collection: "providers", recordId: "sample",
+      value: { id: "sample", kind: "ollama", aws_secret_key: null } }]);
+  });
+
+  it("preserves masked search credentials and removes a deleted credential map row", () => {
+    const masked = { agent: { web_search: { credentials: { exa: { value: "<redacted>" }, tavily: { value: "<redacted>" } } } } };
+    const base = input(masked);
+    const field = page("workspaces").sections.flatMap(s => s.fields).find(f => f.id === "workspace:agent.web_search.credentials.*")!;
+    expect(field.mapValueKind).toBe("credential");
+    let session = createEditorSession(page("workspaces"), base);
+    const rows = session.draft.fields[field.id]!.value as { _rowId: string; key: string }[];
+    session = sessionMapOp(session, field.id, { type: "remove", rowId: rows.find(row => row.key === "tavily")!._rowId });
+    const stored = { agent: { web_search: { credentials: { exa: { value: "exa-secret" }, tavily: { value: "tavily-secret" } } } } };
+    const next = applyConfigChangeset({ entities: { workspaces: { sample: {
+      id: "sample", name: "sample", enabled: true, value: stored,
+    } } } }, sessionEncode(session, base).operations, { formatVersion: 2 });
+    expect(next.entities?.workspaces?.sample?.value).toEqual({ agent: { web_search: { credentials: { exa: { value: "exa-secret" } } } } });
+  });
+
+  it("keeps nested workspace secrets when another field changes", () => {
+    const value = { auth: { api_key: "<redacted>" } };
+    const base = input(value);
+    const session = sessionSetValue(createEditorSession(page("workspaces"), base), "workspace:review.max_files", 12);
+    const operations = sessionEncode(session, base).operations;
+    const next = applyConfigChangeset({ entities: { workspaces: { sample: {
+      id: "sample", name: "sample", enabled: true, value: { auth: { api_key: "stored-secret" } },
+    } } } }, operations, { formatVersion: 2 });
+    expect(next.entities?.workspaces?.sample?.value).toEqual({ auth: { api_key: "stored-secret" }, review: { max_files: 12 } });
+  });
+
+  it("clears a stored literal when its optional field is removed", () => {
+    const base = input({ id: "sample", kind: "openai_compatible", api_key: "<redacted>" });
+    const session = sessionSetPresent(createEditorSession(page("providers"), base), "provider:api_key", false);
+    expect(sessionEncode(session, base).operations).toEqual([{ op: "update", collection: "providers", recordId: "sample",
+      value: { id: "sample", kind: "openai_compatible", api_key: null } }]);
+  });
   it("uses variable options as template completion instead of validating the whole expression as an enum", () => {
     const field = page("workspaces").sections.flatMap(s => s.fields).find(f => f.control === "path-template")!;
     const options = [{ value: "git.repository", insertText: "{{segment git.repository}}" }];

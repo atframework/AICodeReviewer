@@ -10,6 +10,7 @@ import {
   resolveWorkspaceConfig,
   reviewMemoryScope,
   createConfigStoreFromDatabaseConfig,
+  resolveConfigSecretSealing,
   type AppConfig,
   type ConfigStore,
   type ReviewEvent,
@@ -182,6 +183,25 @@ interface ActiveProjectIdentity {
 
 function resolveEnv(name: string | undefined): string | undefined {
   return name ? process.env[name] : undefined;
+}
+
+/**
+ * Envelope encryption service for literal credentials (AICR_CONFIG_SECRETS_KEY).
+ * Created once per process; undefined when no key is configured — every
+ * consumer fails closed only when a literal actually crosses its boundary.
+ */
+const configSecretSealing = resolveConfigSecretSealing((name) => process.env[name]);
+
+/**
+ * Resolves a secret config field: the literal value wins, then the `*_env`
+ * reference. Database-sourced literals arrive already unsealed (the runtime
+ * config manager opens them when the generation is built).
+ */
+function resolveSecretField(record: Record<string, unknown>, literalField: string, envField: string): string | undefined {
+  const literal = record[literalField];
+  if (typeof literal === "string" && literal.length > 0) return literal;
+  const envName = record[envField];
+  return typeof envName === "string" && envName.length > 0 ? resolveEnv(envName) : undefined;
 }
 
 function toRedisModelCatalogBackendOptions(config: AppConfig): RedisModelCatalogBackendOptions {
@@ -603,6 +623,8 @@ function resolveModelProviderFields(provider: AppConfig["llm"]["providers"][numb
   if (baseUrl !== undefined) fields.baseUrl = baseUrl;
   const apiKeyEnv = readString(raw, "api_key_env", "apiKeyEnv");
   if (apiKeyEnv !== undefined) fields.apiKeyEnv = apiKeyEnv;
+  const apiKey = readString(raw, "api_key", "apiKey");
+  if (apiKey !== undefined) fields.apiKey = apiKey;
   const organization = readString(raw, "organization");
   if (organization !== undefined) fields.organization = organization;
   const extraHeaders = readStringRecord(raw, "extra_headers", "extraHeaders");
@@ -625,6 +647,8 @@ function resolveModelProviderFields(provider: AppConfig["llm"]["providers"][numb
   if (vertexLocation !== undefined) fields.vertexLocation = vertexLocation;
   const googleCredentialsEnv = readString(raw, "google_application_credentials_env", "googleApplicationCredentialsEnv");
   if (googleCredentialsEnv !== undefined) fields.googleApplicationCredentialsEnv = googleCredentialsEnv;
+  const googleCredentials = readString(raw, "google_application_credentials", "googleApplicationCredentials");
+  if (googleCredentials !== undefined) fields.googleApplicationCredentials = googleCredentials;
   const awsRegion = readString(raw, "aws_region", "awsRegion");
   if (awsRegion !== undefined) fields.awsRegion = awsRegion;
   const awsAccessKeyEnv = readString(raw, "aws_access_key_env", "awsAccessKeyEnv");
@@ -633,6 +657,12 @@ function resolveModelProviderFields(provider: AppConfig["llm"]["providers"][numb
   if (awsSecretKeyEnv !== undefined) fields.awsSecretKeyEnv = awsSecretKeyEnv;
   const awsSessionTokenEnv = readString(raw, "aws_session_token_env", "awsSessionTokenEnv");
   if (awsSessionTokenEnv !== undefined) fields.awsSessionTokenEnv = awsSessionTokenEnv;
+  const awsAccessKey = readString(raw, "aws_access_key", "awsAccessKey");
+  if (awsAccessKey !== undefined) fields.awsAccessKey = awsAccessKey;
+  const awsSecretKey = readString(raw, "aws_secret_key", "awsSecretKey");
+  if (awsSecretKey !== undefined) fields.awsSecretKey = awsSecretKey;
+  const awsSessionToken = readString(raw, "aws_session_token", "awsSessionToken");
+  if (awsSessionToken !== undefined) fields.awsSessionToken = awsSessionToken;
   const awsProfile = readString(raw, "aws_profile", "awsProfile");
   if (awsProfile !== undefined) fields.awsProfile = awsProfile;
   const anthropicVersion = readString(raw, "anthropic_version", "anthropicVersion");
@@ -762,10 +792,8 @@ function buildWebhookConfigFromTrigger(
   workspaceRuntime?: WorkspaceRuntime,
 ): VcsWebhookConfig {
   const triggerConfig = trigger as Record<string, unknown>;
-  const webhookSecretEnv = triggerConfig.webhook_secret_env as string | undefined;
-  const webhookSecret = webhookSecretEnv ? resolveEnv(webhookSecretEnv) : undefined;
-  const tokenEnv = triggerConfig.token_env as string | undefined;
-  const token = tokenEnv ? resolveEnv(tokenEnv) : undefined;
+  const webhookSecret = resolveSecretField(triggerConfig, "webhook_secret", "webhook_secret_env");
+  const token = resolveSecretField(triggerConfig, "token", "token_env");
   const baseUrl = triggerConfig.base_url as string | undefined;
   const workspaceId = resolveWorkspaceIdFromTrigger(config, trigger.name);
   const repoRef = resolveWorkspaceRepoRef(config, trigger.name, workspaceId) ?? resolveWorkspaceRepoRef(config, trigger.name);
@@ -864,11 +892,9 @@ export function resolveP4TriggerConfigs(
   return triggers.filter((trigger) => triggerAdmitsNewWork(config, trigger)).map((trigger): P4TriggerConfig => {
     const triggerConfig = trigger as Record<string, unknown>;
     const port = triggerConfig.port as string | undefined;
-    const userEnv = triggerConfig.user_env as string | undefined;
-    const ticketEnv = triggerConfig.ticket_env as string | undefined;
-    const passwordEnv = triggerConfig.password_env as string | undefined;
-    const user = userEnv ? resolveEnv(userEnv) : undefined;
-    const rawPassword = passwordEnv ? resolveEnv(passwordEnv) : ticketEnv ? resolveEnv(ticketEnv) : undefined;
+    const user = resolveSecretField(triggerConfig, "user", "user_env");
+    const rawPassword = resolveSecretField(triggerConfig, "password", "password_env")
+      ?? resolveSecretField(triggerConfig, "ticket", "ticket_env");
     const depot = triggerConfig.depot_path as string | undefined;
     const streams = triggerConfig.streams as string[] | undefined;
     const workspace = triggerConfig.workspace as string | undefined;
@@ -958,8 +984,7 @@ export function resolveSvnTriggerConfig(
 
 export function resolveAuthConfig(config: AppConfig): AuthConfig | undefined {
   const serverAuth = config.server.auth as Record<string, unknown> | undefined;
-  const globalApiKeyEnv = serverAuth?.api_key_env as string | undefined;
-  const globalApiKey = globalApiKeyEnv ? resolveEnv(globalApiKeyEnv) : undefined;
+  const globalApiKey = serverAuth ? resolveSecretField(serverAuth, "api_key", "api_key_env") : undefined;
   const authEnabled = serverAuth ? (serverAuth.enabled as boolean | undefined) !== false : true;
 
   const workspaceApiKeys = new Map<string, string>();
@@ -971,8 +996,7 @@ export function resolveAuthConfig(config: AppConfig): AuthConfig | undefined {
     const wsEnabled = workspaceAuth.enabled as boolean | undefined;
     if (wsEnabled === false) continue;
 
-    const wsApiKeyEnv = workspaceAuth.api_key_env as string | undefined;
-    const wsApiKey = wsApiKeyEnv ? resolveEnv(wsApiKeyEnv) : undefined;
+    const wsApiKey = resolveSecretField(workspaceAuth, "api_key", "api_key_env");
     if (wsApiKey) {
       workspaceApiKeys.set(workspaceId, wsApiKey);
     }
@@ -1584,11 +1608,9 @@ export function createOutputPublisherFromConfig(
     : undefined;
   const autoTag = workspaceLabels?.auto_tag ?? config.review.labels?.auto_tag;
   const reviewedTag = workspaceLabels?.reviewed_tag ?? config.review.labels?.reviewed_tag;
-  const tokenEnv = (channelConfig.token_env as string | undefined) ??
-    (triggerConfig.token_env as string | undefined);
-  const resolvedToken = tokenEnv
-    ? (resolveEnv(tokenEnv) ?? "")
-    : (resolvedTriggerToken ?? "");
+  const channelToken = resolveSecretField(channelConfig, "token", "token_env");
+  const triggerToken = resolveSecretField(triggerConfig, "token", "token_env");
+  const resolvedToken = channelToken ?? triggerToken ?? (resolvedTriggerToken ?? "");
   const explicitOwner = channelConfig.owner as string | undefined;
   const explicitRepo = channelConfig.repo as string | undefined;
   const workspaceRepoRef = trigger
@@ -1758,10 +1780,8 @@ export function createOutputPublisherFromConfig(
     const notifyFeishuConfig = isPlainObject(channelConfig.notify_feishu)
       ? channelConfig.notify_feishu as Record<string, unknown>
       : undefined;
-    const notifyFeishuWebhookUrlEnv = notifyFeishuConfig?.webhook_url_env as string | undefined;
-    const notifyFeishuWebhookUrl = notifyFeishuWebhookUrlEnv ? resolveEnv(notifyFeishuWebhookUrlEnv) : undefined;
-    const notifyFeishuSecretEnv = notifyFeishuConfig?.secret_env as string | undefined;
-    const notifyFeishuSecret = notifyFeishuSecretEnv ? resolveEnv(notifyFeishuSecretEnv) : undefined;
+    const notifyFeishuWebhookUrl = notifyFeishuConfig ? resolveSecretField(notifyFeishuConfig, "webhook_url", "webhook_url_env") : undefined;
+    const notifyFeishuSecret = notifyFeishuConfig ? resolveSecretField(notifyFeishuConfig, "secret", "secret_env") : undefined;
     const authorResolution = buildAuthorResolutionOptions(config, channel);
     const authorAssignment = resolveAuthorAssignment(reviewEvent ?? {}, authorResolution);
     const committerUsername = authorAssignment.username;
@@ -1919,10 +1939,8 @@ export function createOutputPublisherFromConfig(
     const notifyFeishuConfig = isPlainObject(channelConfig.notify_feishu)
       ? channelConfig.notify_feishu as Record<string, unknown>
       : undefined;
-    const notifyFeishuWebhookUrlEnv = notifyFeishuConfig?.webhook_url_env as string | undefined;
-    const notifyFeishuWebhookUrl = notifyFeishuWebhookUrlEnv ? resolveEnv(notifyFeishuWebhookUrlEnv) : undefined;
-    const notifyFeishuSecretEnv = notifyFeishuConfig?.secret_env as string | undefined;
-    const notifyFeishuSecret = notifyFeishuSecretEnv ? resolveEnv(notifyFeishuSecretEnv) : undefined;
+    const notifyFeishuWebhookUrl = notifyFeishuConfig ? resolveSecretField(notifyFeishuConfig, "webhook_url", "webhook_url_env") : undefined;
+    const notifyFeishuSecret = notifyFeishuConfig ? resolveSecretField(notifyFeishuConfig, "secret", "secret_env") : undefined;
     const authorResolution = buildAuthorResolutionOptions(config, channel);
     const authorAssignment = resolveAuthorAssignment(reviewEvent ?? {}, authorResolution);
     const committerUsername = authorAssignment.username;
@@ -1987,14 +2005,12 @@ export function createOutputPublisherFromConfig(
   }
 
   if (channel.kind === "feishu_bot") {
-    const webhookUrlEnv = channelConfig.webhook_url_env as string | undefined;
-    const webhookUrl = webhookUrlEnv ? resolveEnv(webhookUrlEnv) : undefined;
+    const webhookUrl = resolveSecretField(channelConfig, "webhook_url", "webhook_url_env");
     if (!webhookUrl) {
       return undefined;
     }
 
-    const feishuSecretEnv = channelConfig.secret_env as string | undefined;
-    const feishuSecret = feishuSecretEnv ? resolveEnv(feishuSecretEnv) : undefined;
+    const feishuSecret = resolveSecretField(channelConfig, "secret", "secret_env");
     const dispatcher = createFeishuBotDispatcher({
       webhookUrl,
       ...(feishuSecret !== undefined ? { secret: feishuSecret } : {}),
@@ -2022,8 +2038,7 @@ export function createOutputPublisherFromConfig(
   }
 
   if (channel.kind === "wecom_bot") {
-    const webhookUrlEnv = channelConfig.webhook_url_env as string | undefined;
-    const webhookUrl = webhookUrlEnv ? resolveEnv(webhookUrlEnv) : undefined;
+    const webhookUrl = resolveSecretField(channelConfig, "webhook_url", "webhook_url_env");
     if (!webhookUrl) {
       return undefined;
     }
@@ -2199,7 +2214,7 @@ export function createOutputPublisherResolverFromConfig(
     const tokenPromises = new Map<string, Promise<string | undefined>>();
     const channelToken = (name: string): Promise<string | undefined> => {
       const channel = config.outputs.channels.find(entry => entry.name === name);
-      if (!channel?.kind.startsWith("github_") || channel.token_env !== undefined) return Promise.resolve(undefined);
+      if (!channel?.kind.startsWith("github_") || channel.token_env !== undefined || channel.token !== undefined) return Promise.resolve(undefined);
       const eventTrigger = config.triggers.find(entry => entry.name === context.reviewEvent.triggerName && entry.kind === "github");
       const triggerName = readString(channel, "trigger") ?? eventTrigger?.name ?? config.triggers.find(entry => entry.kind === "github")?.name;
       const explicitOwner = readString(channel, "owner");
@@ -2320,9 +2335,6 @@ export function createVcsAdapterFromConfig(
   if (p4Trigger) {
     const triggerConfig = p4Trigger as Record<string, unknown>;
     const port = triggerConfig.port as string | undefined;
-    const userEnv = triggerConfig.user_env as string | undefined;
-    const ticketEnv = triggerConfig.ticket_env as string | undefined;
-    const passwordEnv = triggerConfig.password_env as string | undefined;
     const workspace = triggerConfig.workspace as string | undefined;
     const depot = triggerConfig.depot_path as string | undefined;
     const streams = triggerConfig.streams as string[] | undefined;
@@ -2330,12 +2342,9 @@ export function createVcsAdapterFromConfig(
     const includeCrFile = triggerConfig.include_cr_file as string[] | undefined;
     const excludeCrFile = triggerConfig.exclude_cr_file as string[] | undefined;
 
-    const password = passwordEnv
-      ? resolveEnv(passwordEnv)
-      : ticketEnv
-        ? resolveEnv(ticketEnv)
-        : undefined;
-    const user = userEnv ? resolveEnv(userEnv) : undefined;
+    const password = resolveSecretField(triggerConfig, "password", "password_env")
+      ?? resolveSecretField(triggerConfig, "ticket", "ticket_env");
+    const user = resolveSecretField(triggerConfig, "user", "user_env");
 
     // Scope binding: the event repoRef is the authoritative depot scope
     // (routing-derived receipts carry the per-scope depot path; legacy
@@ -2364,11 +2373,9 @@ export function createVcsAdapterFromConfig(
     const repositoryUrl = typeof triggerConfig.repository_url === "string"
       ? triggerConfig.repository_url.trim()
       : undefined;
-    const usernameEnv = (triggerConfig.username_env as string | undefined)
-      ?? (triggerConfig.user_env as string | undefined);
-    const passwordEnv = triggerConfig.password_env as string | undefined;
-    const username = usernameEnv ? resolveEnv(usernameEnv) : undefined;
-    const password = passwordEnv ? resolveEnv(passwordEnv) : undefined;
+    const username = resolveSecretField(triggerConfig, "username", "username_env")
+      ?? resolveSecretField(triggerConfig, "user", "user_env");
+    const password = resolveSecretField(triggerConfig, "password", "password_env");
     const watchPath = triggerConfig.watch_path as string[] | undefined;
     const includeCrFile = triggerConfig.include_cr_file as string[] | undefined;
     const excludeCrFile = triggerConfig.exclude_cr_file as string[] | undefined;
@@ -2407,16 +2414,16 @@ export function createVcsAdapterFromConfig(
   const effectiveBaseUrl = triggerBaseUrl
     ?? (gitTriggerKind === "github" ? "https://github.com" : undefined);
   const remoteUrl = buildGitRemoteUrl(effectiveBaseUrl, repoRef);
-  const tokenEnv = gitTriggerConfig?.token_env as string | undefined;
-  const token = tokenEnv
-    ? resolveEnv(tokenEnv)
-    : options?.resolvedToken;
+  const token = gitTriggerConfig !== undefined
+    ? resolveSecretField(gitTriggerConfig, "token", "token_env")
+    : undefined;
+  const resolvedGitToken = token ?? options?.resolvedToken;
 
   return createGitVcsAdapter({
     repositoryDir: resolve(repositoryDir),
     allowDeepen: config.review.git?.allow_deepen ?? false,
     ...(remoteUrl ? { remoteUrl } : {}),
-    ...(token ? { token } : {}),
+    ...(resolvedGitToken ? { token: resolvedGitToken } : {}),
     ...(options?.tokenProvider ? { tokenProvider: options.tokenProvider } : {}),
     ...(options?.alwaysFetch ? { alwaysFetch: true } : {}),
   });
@@ -2709,6 +2716,7 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
     ...(runtimeConfigStore ? { store: runtimeConfigStore } : {}),
     namespace: configSources.database.namespace,
     baseDir,
+    ...(configSecretSealing ? { secretSealing: configSecretSealing } : {}),
   });
   if (runtimeConfigStore !== undefined) {
     await runtimeConfig.admission();
@@ -3463,6 +3471,7 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
             formatVersion: 2,
             manager: runtimeConfig,
             envLookup: resolveEnv,
+            ...(configSecretSealing ? { secretSealing: configSecretSealing } : {}),
           },
         }
       : {}),
@@ -3527,8 +3536,7 @@ function resolveIssueTriageOptions(
   const triggerConfig = giteaTrigger as Record<string, unknown>;
   const baseUrl = (triggerConfig.base_url as string | undefined) ??
     config.server.base_url;
-  const tokenEnv = triggerConfig.token_env as string | undefined;
-  const token = tokenEnv ? resolveEnv(tokenEnv) : undefined;
+  const token = resolveSecretField(triggerConfig, "token", "token_env");
 
   if (!baseUrl) {
     return undefined;

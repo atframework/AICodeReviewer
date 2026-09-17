@@ -13,8 +13,9 @@ API keys are never combined on the same request.
 | Server API key | Global | `/triggers/*` routes (P4, SVN, custom scripts) | `server.auth.api_key_env` |
 | Workspace API key | Per-workspace | Same as server key, but workspace-scoped | `workspaces.instances.<id>.auth.api_key_env` |
 
-The observability dashboard has a **separate** super-admin login (`admin.*`)
-and does not reuse webhook HMAC or trigger API keys.
+The admin dashboard (observability and configuration management) has a
+**separate** super-admin login (`admin.*`) and does not reuse webhook HMAC or
+trigger API keys.
 
 :::caution[Endpoint mapping]
 `/webhooks/*` (Gitea, Forgejo, GitHub, GitLab) are protected **only by HMAC**.
@@ -92,10 +93,11 @@ workspaces:
 Both global and workspace keys are accepted — a request is allowed if it matches
 **any** configured key.
 
-## Observability dashboard admin
+## Admin dashboard
 
 Set `admin.username_env` plus either `admin.password_env` or
-`admin.password_hash_env` to enable the built-in dashboard:
+`admin.password_hash_env` to enable the built-in dashboard (observability and
+configuration management):
 
 - `GET /dashboard` and `GET /` serve the embedded SPA.
 - `POST /api/admin/login` returns a Bearer session token.
@@ -113,9 +115,24 @@ A field named `session_ttl_minutes` is ignored.
 
 ## Secrets: `.env` vs `config.yaml`
 
-Keep every secret in `.env` (or your secret manager). `config.yaml` should
-contain **only env var names**, never values. This keeps `config.yaml` safe to
-commit and review.
+Keep every secret in `.env` (or your secret manager). A committed `config.yaml`
+should contain **only env var names**, never values. This keeps `config.yaml`
+safe to commit and review.
+
+Registered credential fields also accept a literal sibling (`api_key`,
+`token`, `webhook_secret`, `password`, `ticket`, `webhook_url`, `secret`,
+`private_key`, the AWS `aws_access_key`/`aws_secret_key`/`aws_session_token`
+trio and `google_application_credentials`; `user`/`username` are plain
+identifiers). The forms are mutually exclusive per field. Deployment storage URL
+fields keep their existing env-only configuration.
+Literals are the right tool for the **database configuration source**: values
+published there are sealed with AES-256-GCM before they are written, so
+revisions and runtime snapshots hold only ciphertext. Sealing uses the
+deployment-owned `AICR_CONFIG_SECRETS_KEY` env var (32 bytes, hex or base64);
+publishing a literal without it fails closed with `secrets_key_missing`, and
+`AICR_CONFIG_SECRETS_KEY_PREVIOUS` keeps retired keys decryptable during
+rotation. Literals in a private file configuration work too but stay
+plaintext in that file — your own operational risk, same as a `.env`.
 
 ```text
 ┌────────────────────────────────────────────────────────────────────────────┐

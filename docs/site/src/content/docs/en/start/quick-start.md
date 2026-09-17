@@ -80,7 +80,7 @@ curl http://localhost:8080/healthz
 ```
 
 The `/healthz` endpoint returns a plain-text `ok` and is the canonical liveness
-probe (also used by the Compose health check). If you enabled the observability
+probe (also used by the Compose health check). If you enabled the admin
 dashboard (`admin.*` in config), visit `http://localhost:8080/dashboard`.
 
 ## Dry-run a review

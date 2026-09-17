@@ -1332,13 +1332,17 @@ models.dev 的 key 是 `<providerId>/<modelId>`（AI SDK 标识）。自定义 p
   再校验）+ capability/secret 检查;不评审、不建 webhook、不调模型、
   不拉镜像);`commitChangeset` CAS 是
   线性化点(revision + audit + head 原子,三后端等价);commit 后 snapshot 写入
-  或本机 generation install 失败返回 `committed_activating`,不谎报 rollback;
-  operationId 可查询已提交结果(响应丢失恢复),旧操作重试不得激活已被替换的
-  revision。contentHash 是稳定 JSON 的 SHA-256;快照 ID 同时绑定 namespace、
-  revision、fileDigest、formatVersion 与 resolver 版本。audit diff 只含实体名与全局
-  路径,不含值。restore 以历史 revision 文档重跑当前文件锁/capability/secret
-  校验后发布为更高 revision,保留历史 formatVersion,审计与当前版本比较。
-  空 `globals: {}` 没有全局字段，不作为根路径占用所有文件锁。
+   或本机 generation install 失败返回 `committed_activating`,不谎报 rollback;
+   operationId 可查询已提交结果(响应丢失恢复),旧操作重试不得激活已被替换的
+   revision。contentHash 是稳定 JSON 的 SHA-256;快照 ID 同时绑定 namespace、
+   revision、fileDigest、formatVersion 与 resolver 版本。audit diff 只含实体名与全局
+   路径,不含值。restore 以历史 revision 文档重跑当前文件锁/capability/secret
+   校验后发布为更高 revision,保留历史 formatVersion,审计与当前版本比较。
+   空 `globals: {}` 没有全局字段，不作为根路径占用所有文件锁。
+   注册明文凭据字段（§3.16 明文凭据）在 prepare 之后、落库之前由公共发布服务
+   统一封存：revision 文档与运行时快照只存密文；预览返回
+   `sealableSecrets` 标记，副本未配置 `AICR_CONFIG_SECRETS_KEY` 时发布
+   以 `secrets_key_missing` fail-closed，不提交任何内容。
 - preview/readiness:`previewConfigChangeset` 返回与真实发布相同的校验结论与
   影响视图(零写库),空库 baseRevision 为 null,affected 使用合并后的有效值;
   未指定 formatVersion 时沿用当前 revision 的版本，空库才默认版本 1。
@@ -1369,8 +1373,31 @@ admission 串行采用 head，延迟的 publish install 重新读取 head，不�
 缺失 snapshot 只在 revision 的 fileDigest 与本机一致后重建；已有行的身份、namespace、
 resolver 或内容校验失败时拒绝激活，不覆盖不可变行。空命名空间先持久化 revision 0
 快照，保证第一次发布之前接收的任务也可在重启后恢复。首次启动以 CAS 建立唯一
-legacy_import，历史 null 引用统一解析到此版本；新任务省略版本时固定当前代。该迁移
-保留旧业务行，跨发布和重启不漂移。已有非空 pin 缺失时失败，不自动改用最新配置。
+ legacy_import，历史 null 引用统一解析到此版本；新任务省略版本时固定当前代。该迁移
+ 保留旧业务行，跨发布和重启不漂移。已有非空 pin 缺失时失败，不自动改用最新配置。
+
+明文凭据（literal credentials）：下列注册凭据支持与 `*_env` 对应的明文字段
+（`api_key`/`token`/`webhook_secret`/`private_key`/`password`/`ticket`/`webhook_url`/
+`secret`/AWS 三件套/`google_application_credentials`，`user`/`username` 是标识符不封存，
+web_search `credentials` 值可用 `{ value }` 对象形式），schema 层强制二者互斥，运行时
+明文优先。数据库文档与运行时快照在持久化前经 `config-secret-sealing` 以 AES-256-GCM
+信封加密封存（格式 `enc:v1.<kid>.<nonce>.<ct+tag>`，AAD 绑定字段名，kid 为密钥指纹
+前 8 位 hex）；密钥只来自部署环境变量 `AICR_CONFIG_SECRETS_KEY`（32 字节，hex 或
+base64），`AICR_CONFIG_SECRETS_KEY_PREVIOUS` 以逗号分隔退役密钥（仅解密），轮换即
+换主密钥、旧密钥列入 previous，历史 revision/快照保持可解。generation 构建（含
+revision 0 与快照加载）开封供运行时使用；预览、发布和恢复先认证存量密文，
+缺密钥、未知密钥或认证失败时拒绝提交，加载失败时拒绝激活。
+只有 env 引用的配置无需密钥。文件配置中的明文按运维自有风险处理、不封存，但数据
+库模式下并入有效配置的文件明文同样经快照边界封存。管理读取 API 对所有注册明文
+字段（含 `webhook_url`/`private_key`/`ticket`/`aws_access_key` 与 credentials `{ value }`）
+返回 `<redacted>`；实体 update 省略注册明文字段时自动保留存值（脱敏回显无损往返），
+显式 JSON null 清除；数据库侧校验依旧拒绝带凭据 URL、`private_key_path` 与未注册
+的 credentia 命名键进入数据库配置。
+
+相同 operationId 的重试按解密后配置比较，复用已提交的密文；快照并发恢复也比较
+解密后内容并保留原快照，随机 nonce 不改变幂等语义。文件中继承的明文凭据受原
+路径与目的地约束，数据库覆盖端点时须提供自己的凭据，不能转发文件密钥。
+支持范围以 schema/能力表为准；存储连接等部署字段不自动增加明文对应项。
 
 请求及实际编排通过 lease 持有 generation；最后一个旧 lease 释放后才 dispose，
 已释放对象不留在可租借缓存中。若 worker 已租借即将激活的快照，head adoption
@@ -1400,10 +1427,11 @@ metadata adapter 使用覆盖 receipt 的快照；组批在快照边界切分。
 | GET /status | manager 状态与实际 admission 诊断；无法激活时 available=false、HTTP 503 |
 
 JSON 按实际流式 UTF-8 字节限制为 1 MiB，提前拒绝原型键、过深结构和缺失 value。
-跨源写入被拒绝；env 只返回引用名和存在性。已知明文凭据与带凭据 URL 不允许新增
+跨源写入被拒绝；env 只返回引用名和存在性。注册明文凭据字段允许入库（封存后落库，
+见上段）；带凭据 URL、`private_key_path` 与未注册的 credentia 命名键不允许新增
 或恢复；读取历史值时覆盖短凭据、URL userinfo、凭据命名的查询参数
-（token/api_key/secret/password/sig/signature/key 等，与写入策略同一键集）及
-headers——非凭据查询值（如 `?tenant=`/`?api-version=`）保持可见，脱敏视图可原样
+（token/api_key/secret/password/sig/signature/key 等，与写入策略同一键集）、注册明文
+字段名及 headers——非凭据查询值（如 `?tenant=`/`?api-version=`）保持可见，脱敏视图可原样
 回写编辑；未知驱动错误不回传原文。changesets 与 restore 必须携带 fileDigest；
 缺失的 baseRevision/目标 revision 与 GET 缺失 revision 同为 404；webhook 准入
 中间件仅将 ConfigError 映射为 503 `config_unavailable`，下游 handler 的其他错误
@@ -1491,6 +1519,7 @@ M21/M22；复审修复见 [M23](milestones/M23.md)，指定旧版本兼容、CLI
 
 - webhook / trigger 入口先鉴权，后入队。
 - secret scrubber 作用于 prompt、日志和最终输出。
+- 数据库中的明文凭据只存 AES-256-GCM 信封密文，密钥仅来自部署环境；读取面一律脱敏。
 - sandbox 保证最小权限、最小挂载、最小网络/命令能力。
 - 归因、作者信息、target URL 等外部可见数据必须可验证，不能靠模型猜测。
 - 远端部署和调试流程中不得打印 `.env` 或 secret 文件原文。

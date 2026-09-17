@@ -1,16 +1,17 @@
 ---
 title: 运维与安全
-description: 可观测性 dashboard 与 metrics、管理员认证、secret scrubber、沙箱安全模型、socket 风险、备份与升级/回滚。
+description: 管理后台 dashboard 与 metrics、管理员认证、secret scrubber、沙箱安全模型、socket 风险、备份与升级/回滚。
 ---
 
-本页介绍 AICR 部署上线后的日常运维：可观测性 dashboard 与 Prometheus metrics 端点、管理员认证、
+本页介绍 AICR 部署上线后的日常运维：管理后台 dashboard 与 Prometheus metrics 端点、管理员认证、
 secret scrubber、沙箱安全模型、Podman/Docker socket 威胁模型、备份，以及升级/回滚。
 
-## 可观测性 dashboard
+## 管理后台 dashboard
 
 设置 `admin.username_env` 加上 `admin.password_env` 或 `admin.password_hash_env` 之一，即可启用内置
 dashboard。该 dashboard 是独立的超级管理员界面 — 它**不**复用 webhook HMAC 或 trigger API key
-（参见 [身份认证与密钥](/zh-cn/configuration/authentication/)）。
+（参见 [身份认证与密钥](/zh-cn/configuration/authentication/)）。页面同时提供可观测性
+（统计、实时 run、事件）与配置管理（**Config** 标签）。
 
 | 路由 | 方法 | 用途 |
 | --- | --- | --- |
@@ -22,6 +23,25 @@ dashboard。该 dashboard 是独立的超级管理员界面 — 它**不**复用
 
 生产环境优先使用 `password_hash_env`（格式 `sha256:<hex>`）；小型内部部署允许使用原始密码 env，但会
 以常数时间摘要比较、限流，并且绝不记录日志。
+
+### 配置密钥封存
+
+发布到数据库配置源的明文凭据（各 `*_env` 字段的同名明文字段
+`api_key`/`token`/`webhook_url` 等）在写入前以 AES-256-GCM 封存——revision、
+运行时快照及其备份只存密文。每个需要发布或激活此类配置的副本都必须设置
+`AICR_CONFIG_SECRETS_KEY`（32 字节，hex 或 base64）；未配置密钥时发布明文以
+`secrets_key_missing` fail-closed，缺少密钥的副本拒绝激活含密文的配置
+（`config_unavailable` / 503，修复后恢复）。只使用 env 引用的部署无需密钥。
+轮换：生成新密钥写入 `AICR_CONFIG_SECRETS_KEY`，旧密钥移入
+`AICR_CONFIG_SECRETS_KEY_PREVIOUS`（逗号分隔、仅解密）；新写入使用新密钥，
+历史 revision 保持可解。存储备份可安全拷出，但未加密的其余内容仍需保护；
+封存密钥本身绝不入库。
+
+生成密钥：
+
+```bash
+node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
+```
 
 :::caution[会话 TTL 单位是秒]
 管理员会话 TTL 字段是 `session_ttl_seconds`（默认 `86400` = 24 小时）。名为 `session_ttl_minutes`

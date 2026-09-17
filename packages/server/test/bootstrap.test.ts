@@ -292,6 +292,15 @@ describe("normalizeModelCatalogOverrides", () => {
 });
 
 describe("resolveModelSpecFromConfig", () => {
+  it("carries literal credentials through provider resolution", () => {
+    const config = makeConfig();
+    const provider = config.llm.providers[0]!;
+    delete provider.api_key_env;
+    Object.assign(provider, { api_key: "literal-api", aws_access_key: "literal-access", aws_secret_key: "literal-secret",
+      aws_session_token: "literal-session", google_application_credentials: "/private/adc.json" });
+    expect(resolveModelSpecFromConfig(config)).toMatchObject({ apiKey: "literal-api", awsAccessKey: "literal-access",
+      awsSecretKey: "literal-secret", awsSessionToken: "literal-session", googleApplicationCredentials: "/private/adc.json" });
+  });
   it("returns a ModelSpec from the first provider and matching fallback", () => {
     const config = makeConfig();
     const model = resolveModelSpecFromConfig(config);

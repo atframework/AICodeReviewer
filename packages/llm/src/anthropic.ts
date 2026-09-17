@@ -101,7 +101,9 @@ function buildAnthropicHeaders(model: ModelSpec, apiKeyResolver: (envName: strin
 		headers["anthropic-version"] = "2023-06-01";
 	}
 
-	if (model.apiKeyEnv) {
+	if (model.apiKey) {
+		headers["x-api-key"] = model.apiKey;
+	} else if (model.apiKeyEnv) {
 		const apiKey = apiKeyResolver(model.apiKeyEnv);
 		if (!apiKey) {
 			throw new LlmProviderError(`Missing API key environment variable: ${model.apiKeyEnv}`);

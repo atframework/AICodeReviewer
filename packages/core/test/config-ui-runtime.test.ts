@@ -1327,6 +1327,65 @@ describe("encodeChanges entity scope", () => {
     expect(() => encodeChanges(providerPage, nonString, base)).throw(TypeError, /must be a string/);
   });
 
+  it("U10b: secret-value encodes keep/clear/replace semantics for literal credentials", () => {
+    const triggerPage = makePage({
+      id: "triggers",
+      entity: { kind: "trigger", collection: "triggers", idField: "name", valueShape: "object" },
+      fields: [
+        makeField({ id: "trigger:name", path: ["name"], control: "text", valueKind: "string" }),
+        makeField({ id: "trigger:token", path: ["token"], control: "secret-value", valueKind: "string" }),
+      ],
+    });
+    const record = makeRecord({ name: "gitea", kind: "gitea", token: "<redacted>" });
+    const base = makeInput({ record });
+    const draft = decodeDraft(triggerPage, base);
+
+    // Untouched masked value: omitted from the update (server keeps the stored secret).
+    const untouched = singleOp(encodeChanges(triggerPage, draft, base));
+    if (untouched.op !== "update") throw new Error("unreachable");
+    expect(untouched.value).not.toHaveProperty("token");
+
+    // Explicit clear: empty string encodes as JSON null.
+    const cleared = withField(draft, draftField({ id: "trigger:token", value: "" }));
+    const clearOp = singleOp(encodeChanges(triggerPage, cleared, base));
+    if (clearOp.op !== "update") throw new Error("unreachable");
+    expect(clearOp.value).toHaveProperty("token", null);
+
+    // Replacement literal passes through verbatim.
+    const replaced = withField(draft, draftField({ id: "trigger:token", value: "gtok-new" }));
+    const replaceOp = singleOp(encodeChanges(triggerPage, replaced, base));
+    if (replaceOp.op !== "update") throw new Error("unreachable");
+    expect(replaceOp.value).toMatchObject({ token: "gtok-new" });
+
+    // Mask sentinels and <redacted> are stripped; null/undefined encode as absent;
+    // non-strings are rejected.
+    for (const masked of ["configured", "•••", "<redacted>"]) {
+      const maskedDraft = withField(draft, draftField({ id: "trigger:token", value: masked }));
+      const maskedOp = singleOp(encodeChanges(triggerPage, maskedDraft, base));
+      if (maskedOp.op !== "update") throw new Error("unreachable");
+      expect(maskedOp.value).not.toHaveProperty("token");
+    }
+    for (const absent of [null, undefined]) {
+      const absentDraft = withField(draft, draftField({ id: "trigger:token", value: absent }));
+      const absentOp = singleOp(encodeChanges(triggerPage, absentDraft, base));
+      if (absentOp.op !== "update") throw new Error("unreachable");
+      expect(absentOp.value).not.toHaveProperty("token");
+    }
+    const nonString = withField(draft, draftField({ id: "trigger:token", value: 42 }));
+    expect(() => encodeChanges(triggerPage, nonString, base)).throw(TypeError, /must be a string/);
+  });
+
+  it("keeps a masked global secret and unsets it only after an explicit clear", () => {
+    const page = makePage({ id: "auth", globals: true, fields: [
+      makeField({ id: "auth:api_key", path: ["auth", "api_key"], control: "secret-value", valueKind: "string" }),
+    ] });
+    const base = makeInput({ fields: [fieldEntry("auth.api_key", "database", "<redacted>")] });
+    const draft = decodeDraft(page, base);
+    expect(encodeChanges(page, draft, base)).toEqual([]);
+    expect(encodeChanges(page, withField(draft, draftField({ id: "auth:api_key", value: "" })), base))
+      .toEqual([{ op: "unset", path: ["auth", "api_key"] }]);
+  });
+
   it("encodes matcher controls to the exact/glob/regex union shapes", () => {
     const matcherPage = makePage({
       id: "custom",

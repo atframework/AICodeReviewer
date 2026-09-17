@@ -979,7 +979,7 @@ AICodeReviewer supports **three layers** of authentication:
 The observability dashboard has a separate super-admin login (`admin.*`) and
 does not reuse webhook HMAC or trigger API keys.
 
-### Observability dashboard admin and storage
+### Admin dashboard and storage
 
 Set `admin.username_env` plus either `admin.password_env` or
 `admin.password_hash_env` to enable the built-in dashboard:

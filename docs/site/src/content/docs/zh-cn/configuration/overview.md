@@ -5,7 +5,8 @@ description: AICodeReviewer 的配置命名空间划分，以及从全局默认�
 
 AICodeReviewer 通过一个 `config.yaml` 文件加一个 `.env` 文件完成全部配置。
 本页是一张地图：列出所有顶层命名空间、说明配置如何从全局默认逐层下沉到单个
-workspace，并强调一条不能破坏的规则——**绝不要把密钥明文写进 `config.yaml`**。
+workspace，并强调密钥规则——**提交进版本库的 `config.yaml` 只放环境变量引用；
+明文密钥请配置到数据库配置源（加密落库）或你刻意保持私有的文件中**。
 
 每个命名空间都有独立的详情页给出完整字段表，你可以把下表当作入口。
 
@@ -23,7 +24,7 @@ workspace，并强调一条不能破坏的规则——**绝不要把密钥明文
 | `storage` | 数据库、缓存与对象存储后端，用于可观测性、模型目录及未来特性。 | [存储](/zh-cn/configuration/storage/) |
 | `compression` | AICR 侧的 diff 摘要，在模型看到大任务前先压缩。 | [LLM 提供方与模型](/zh-cn/configuration/llm/)（上下文依赖） |
 | `server` | HTTP 监听器与 `/triggers/*` 的全局 API key 鉴权。 | [认证与密钥](/zh-cn/configuration/authentication/) |
-| `admin` | 可选的可观测性看板超级管理员登录（与 webhook/trigger 鉴权相互独立）。 | [认证与密钥](/zh-cn/configuration/authentication/) |
+| `admin` | 可选的管理后台超级管理员登录——后台同时提供可观测性与配置管理（与 webhook/trigger 鉴权相互独立）。 | [认证与密钥](/zh-cn/configuration/authentication/) |
 | `config_sources` | 数据库配置源开关、运行时刷新节奏，以及密钥引用授权。 | 本页（动态配置 API） |
 
 :::note[最小配置]
@@ -114,16 +115,22 @@ agent 故障切换和压缩摘要；triage 各层都未配置时继承该 worksp
 
 ## `.env` 与 `config.yaml` —— 密钥约定
 
-`config.yaml` 设计为可以提交到版本库，因此绝不能包含明文密钥。所有承载密钥
-的字段都只接受**环境变量的名字**，AICR 在启动时从环境读取实际值。
+`config.yaml` 设计为可以提交到版本库，因此提交库的文件不应包含明文密钥。默认
+约定是：所有承载密钥的字段都只接受**环境变量的名字**，AICR 在启动时从环境读取
+实际值。已注册的凭据还支持对应的**明文字段**（`api_key` 对应 `api_key_env`、
+`token` 对应 `token_env`、`webhook_url` 对应 `webhook_url_env` 等），二者互斥，
+同时设置会校验失败。明文主要用于数据库配置源——发布后经 AES-256-GCM 加密落库
+（见下文动态配置 API）——或你刻意不进版本库的私有文件配置。
 
 ```yaml
-# config.yaml —— 只存放环境变量名，绝不放值
+# config.yaml —— 只存放环境变量名，不放值
 llm:
   providers:
     - id: my-llm
       kind: openai_compatible
       api_key_env: AICR_LLM_API_KEY   # 从 $AICR_LLM_API_KEY 读取
+      # api_key: sk-xxxxxxxx        # 明文替代形式——与 api_key_env 互斥；
+                                    # 发布到数据库后加密落库
 ```
 
 ```bash
@@ -192,8 +199,20 @@ P4/SVN profile 先持久化路由回执，再由后台对照验证过的变更�
 在接收任务前先写入 revision 0 快照。
 
 管理员 API 要求 Bearer session，JSON 请求按 UTF-8 字节限制为 1 MiB，拒绝跨源
-写入和不一致的 `fileDigest`，读取历史凭据时脱敏。新增明文凭据和带凭据 URL
-会被拒绝，应使用环境变量引用。读取视图包含文件/数据库来源、不可变记录 ID、
+写入和不一致的 `fileDigest`，读取历史凭据时脱敏。凭据既可配环境变量引用，也可
+直接配明文：已注册的凭据支持对应字段（如 `api_key` 对应 `api_key_env`、
+`token` 对应 `token_env`、`webhook_url` 对应 `webhook_url_env`），二者互斥。
+存储连接 URL 等部署字段保持原有环境变量配置。发布到数据库的明文在落库前以
+AES-256-GCM 封存——revision 与运行时快照只存
+密文——密钥来自部署侧 `AICR_CONFIG_SECRETS_KEY`（32 字节，hex 或 base64；可用
+`node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"` 生成）。
+未配置该密钥时发布明文以 `secrets_key_missing` fail-closed；只使用 env 引用的配置
+无需密钥。`AICR_CONFIG_SECRETS_KEY_PREVIOUS` 以逗号分隔退役密钥（仅解密），轮换
+不影响历史 revision。带凭据 URL、`private_key_path` 与未注册的 credentia 命名键
+仍被拒绝。脱敏字段编辑时不动即保留原值（省略字段保留，显式 `null` 清除）。
+校验与恢复在提交前认证存量密文；相同操作重试复用原 revision 和快照。继承自文件
+的明文凭据不能转向不同路径或目的地，变更目的地时须提供对应凭据。读取视图
+包含文件/数据库来源、不可变记录 ID、
 有效值和 `limit`/`offset` 实体分页。无法激活配置时，`/readyz` 和管理员
 `/status` 返回 503。
 

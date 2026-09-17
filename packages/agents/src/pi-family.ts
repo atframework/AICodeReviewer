@@ -115,10 +115,18 @@ export interface PiFamilyProviderConfig {
 }
 
 /**
+ * Synthetic env var name used to pass a literal provider key into the sandbox:
+ * the pi/omp config keeps naming an env var, the literal lands only in the
+ * per-run spawn environment.
+ */
+export const PI_FAMILY_LITERAL_API_KEY_ENV = "AICR_MODEL_API_KEY";
+
+/**
  * Resolves the shared provider config. `apiKey` never carries a secret literal: pi
  * resolves `$ENV`/`${ENV}` references, omp resolves env-var names first. Keyless
  * providers (ollama without api_key_env) use omp's documented `auth: none`; pi has
- * no keyless marker and gets a harmless literal placeholder instead.
+ * no keyless marker and gets a harmless literal placeholder instead. A literal
+ * config key is injected under AICR_MODEL_API_KEY and referenced by name.
  */
 export function buildPiFamilyProviderConfig(model: ModelSpec, agentKind: PiFamilyAgentKind): PiFamilyProviderConfig {
   assertPiFamilyModelSupported(model, agentKind);
@@ -131,7 +139,7 @@ export function buildPiFamilyProviderConfig(model: ModelSpec, agentKind: PiFamil
   return {
     baseUrl,
     api: resolvePiFamilyApi(model.providerKind)!,
-    ...(model.apiKeyEnv ? { apiKey: model.apiKeyEnv } : {}),
+    ...(model.apiKey ? { apiKey: PI_FAMILY_LITERAL_API_KEY_ENV } : model.apiKeyEnv ? { apiKey: model.apiKeyEnv } : {}),
     ...(model.extraHeaders ? { headers: model.extraHeaders } : {}),
     modelEntry: buildPiFamilyModelEntry(model, agentKind),
   };
@@ -140,7 +148,9 @@ export function buildPiFamilyProviderConfig(model: ModelSpec, agentKind: PiFamil
 /** Provider key env passthrough so the sandbox inherits the host secret by name. */
 export function buildPiFamilyEnvVars(model: ModelSpec): Record<string, string> {
   const envVars: Record<string, string> = {};
-  if (model.apiKeyEnv) {
+  if (model.apiKey) {
+    envVars[PI_FAMILY_LITERAL_API_KEY_ENV] = model.apiKey;
+  } else if (model.apiKeyEnv) {
     envVars[model.apiKeyEnv] = `\${${model.apiKeyEnv}}`;
   }
   return envVars;
