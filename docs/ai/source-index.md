@@ -13,6 +13,7 @@ records from primary sources and mark unavailable claims unverified.
 | Kilo/Zoo, OpenCode or Copilot CLI flags/config/skills | [CLI adapters](sources/cli-adapters.md) |
 | pi/omp models, MCP, trust, events or search | [pi family](sources/pi-family.md) |
 | Model catalog, quota classification, completed/live usage | [Models and usage](sources/models-and-usage.md) |
+| LLM provider presets (China platforms, Anthropic-compatible endpoints) | [Models and usage](sources/models-and-usage.md) § China platform endpoints |
 | MCP schemas, transport or authorization | [MCP](sources/mcp.md) |
 | PowerShell or runtime image tools/releases | [Shell and tooling](sources/shell-and-tooling.md) |
 

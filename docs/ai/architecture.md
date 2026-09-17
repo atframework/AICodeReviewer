@@ -1224,13 +1224,19 @@ models.dev 的 key 是 `<providerId>/<modelId>`（AI SDK 标识）。自定义 p
 
 | Adapter | 是否原生读 models.dev | 转换策略 |
 | --- | --- | --- |
-| **opencode** | 已知 provider 走 models.dev 自动解析；**自定义 `@ai-sdk/openai-compatible` provider 不自动解析** | 按官方 schema 生成 `provider.<provider-id>.models.<model-id>`；provider transport/auth 放 `.options`，模型请求参数放 model `.options`。自定义 model 仅在字段完整时注入 `limit.{context,output}` / `cost.{input,output}`，并按已知值注入 attachment/reasoning/temperature/tool-call/interleaved/modalities；命中 models.dev 已知 provider 时跳过重复 catalog metadata。 |
-| **Kilo Code** | 否（Cline/Zoo 同源生态） | OpenAI-compatible 自定义 provider 注入模型参数：`contextWindow`、`maxTokens`（输出上限）、`supportsImages`（视觉）、`supportsComputerUse`、`supportsPromptCache`、`inputPrice`、`outputPrice`、`cacheReadsPrice`、`cacheWritesPrice`。 |
+| **opencode** | 原生 provider 可交给 models.dev；OpenAI 兼容与自定义 Anthropic provider 显式注入 | 按协议指定 SDK，生成 `provider.<provider-id>.models.<model-id>`；transport/auth 放 provider `.options`，请求参数放 model `.options`。仅注入完整的 `limit.{context,output}` / `cost.{input,output}` 对及已知能力；未自定义端点的原生 Anthropic 可委托目录。 |
+| **Kilo Code** | 是（OpenCode 派生实现） | OpenAI/Anthropic 兼容 provider 显式指定 SDK；模型注入 `limit.context/output`、`cost.input/output/cache_read/cache_write`、`attachment`、`reasoning`、`tool_call` 等原生字段。完整限额/价格对才写入对应块。 |
 | **Zoo Code** | 否（未验证到原生 models.dev 读取面） | Zoo Code 当前 `.roo/settings.json` 兼容路径的 `apiConfiguration.openAiCustomModelInfo` 注入 `contextWindow`、`maxTokens`、`supportsImages`、`supportsComputerUse`、`supportsPromptCache`、`inputPrice`、`outputPrice`。 |
 | **Claude Code** | 否（依赖内置 Anthropic 目录 + 环境变量） | 无 file 级模型元数据面；有 `maxOutputTokens` 时设置 `CLAUDE_CODE_MAX_OUTPUT_TOKENS`，有 `contextWindow` 时设置 `CLAUDE_CODE_MAX_CONTEXT_TOKENS`（对 gateway/自定义 model ID 修正 Claude Code 假定的上下文窗口），价格依赖 Anthropic 内置目录。能力缺失时在 manifest 显式降级。 |
 | **pi** | 否 | `$PI_CODING_AGENT_DIR/models.json` 写自定义 provider：`api` 映射为 `openai-completions`/`anthropic-messages`/`google-generative-ai`，`apiKey` 用 `$ENV` 引用不落盘（keyless provider 写无害占位字面量）。模型条目必填 `contextWindow`/`maxTokens`——catalog 无法提供时适配器直接报错并指引启用 `llm.model_catalog`，不编造限额；cost 未知填 0（仅 CLI 展示用，AICR 成本自算）。 |
 | **oh-my-pi** | 否 | `$PI_CODING_AGENT_DIR/models.yml`（同一 schema，顶级仅 `providers:`）；`apiKey` 值先按 env 名解析（写 env 名即可不落盘），keyless provider 用原生 `auth: none`。`contextWindow`/`maxTokens` 同 pi 必填。 |
 | **Copilot CLI** | 否（Copilot 订阅固定目录） | 模型目录由 Copilot 订阅固定，无注入面；记为 N/A 并在 manifest 标注。 |
+
+- 平台预设只预填 provider 草稿；目录提供元数据，端点与账户权限按官方文档核查。
+  `kind` 决定协议，不能被目录 `providerNpmPackage` 覆盖。Anthropic 根地址不含 `/v1`；
+  OpenCode/Kilo 的 AI SDK 配置补上 `/v1`，直连、Claude Code 和 pi 系列保留根地址。
+  Kilo 的 `KILO_CONFIG` 由 orchestrator 指向沙箱内生成配置，允许凭据引用解析；
+  不得将仓库自带配置作为这个受信任入口。Zoo 当前拒绝 Anthropic 协议。
 
 - 注入只在**自定义/未被工具原生解析**的 provider 路径发生；工具能自己从 models.dev
   解析时跳过，避免双写冲突。

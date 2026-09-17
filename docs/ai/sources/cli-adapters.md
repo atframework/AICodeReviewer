@@ -72,3 +72,17 @@ revalidated by the 2026-09-12 layout change unless explicitly marked below.
 - `last_checked`: 2026-08-27
 - `next_review`: 2026-11-08
 - `update_trigger`: Re-check before changing the copilot-cli adapter command line, auth env mapping, MCP wiring, or skills materialization for Copilot CLI.
+
+## Compatible provider translation (OpenCode and Kilo)
+
+- Sources:
+  - <https://opencode.ai/docs/providers/>
+  - <https://raw.githubusercontent.com/anomalyco/opencode/dev/packages/opencode/src/provider/provider.ts>
+  - <https://raw.githubusercontent.com/Kilo-Org/kilocode/main/packages/opencode/src/provider/provider.ts>
+  - <https://raw.githubusercontent.com/vercel/ai/main/packages/anthropic/src/anthropic-provider.ts>
+  - <https://raw.githubusercontent.com/Kilo-Org/kilocode/main/packages/opencode/src/config/config.ts>
+- Evidence: Custom provider model selection uses explicit npm before catalog defaults. Both CLIs use provider options, model limit/cost blocks and model entries. Anthropic AI SDK expects a versioned base URL for custom endpoints, sends x-api-key and appends /messages. AICR selects the SDK from the configured protocol, versions only generated AI SDK URLs and forwards the exact key env reference. Native Anthropic without a custom endpoint can still delegate its model catalog in OpenCode.
+- Local checks: agents provider-presets tests inspect materialized files, commands, env and manifests using bundled catalog metadata, including Kimi's opposite-protocol catalog npm. Zoo rejects Anthropic rather than emitting OpenAI config. Kilo 7.4.21 debug config accepted the generated SDK/URL/model limits after explicit KILO_CONFIG injection; auto-discovered project config did not load the provider. The orchestrator points KILO_CONFIG only at the generated sandbox-visible bundle, preserving env substitution without trusting repository config. No model request was made; provider authentication and billing remain external acceptance.
+- `last_checked`: 2026-09-17
+- `next_review`: 2026-12-17
+- `update_trigger`: Compatible transport selection, SDK path/auth changes or native provider/model schema changes.

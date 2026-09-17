@@ -22,12 +22,24 @@ snapshots, not a current CLI specification.
 
 - Kilo: redirect XDG config/data to bundle-local sandbox-visible paths; host
   global config validation and stale session DBs can break otherwise valid runs.
-  Provider keys use `{env:NAME}`. Keep native `kilo.json` MCP/compaction wiring.
+  Provider keys use `{env:NAME}`; forward that exact env name, not only KILO_API_KEY
+  aliases. Native model metadata uses `limit.context/output`, `cost` and
+  `attachment`, not Zoo's `contextWindow`/`maxTokens` fields. Keep native
+  `kilo.json` MCP/compaction wiring (`agents/test/provider-presets.test.ts`).
+  Current Kilo rejects env references in untrusted project configuration. Set
+  `KILO_CONFIG` to the sandbox-visible generated bundle file in the orchestrator;
+  never trust a repository-owned file this way. Check actual CLI discovery as
+  well as JSON shape (`server/test/review-orchestrator.test.ts`).
 - OpenCode: provider map keyed by ID, models nested beneath it, transport/auth
   under provider `options`, request parameters under model `options`, and
   `provider/model` CLI IDs. Discover root `opencode.json` via sandbox cwd/`--dir`;
   do not set a host-only `OPENCODE_CONFIG` in containers. Known providers can
   delegate catalog metadata; custom compatible providers need valid model entries.
+- OpenCode/Kilo custom Anthropic providers need explicit `@ai-sdk/anthropic`
+  and model entries. AI SDK appends `/messages`, while Anthropic SDK clients
+  append `/v1/messages`: add `/v1` only in the generated AI SDK configuration.
+  Choose SDK from `providerKind`; a dual-protocol catalog entry can advertise
+  the opposite npm transport (Kimi Code). Zoo currently rejects this protocol.
 - Zoo: retain verified `.roo` compatibility paths/binary until upstream changes
   them. Do not invent `.zoo` paths from the adapter name.
 - Claude: verify print-mode flags and documented env names. Context/output limits,

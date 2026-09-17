@@ -37,6 +37,33 @@ llm:
       #                                 # for the Kilo agent it becomes `kilo run --variant`
       #                                 # (variants are materialized into .kilo/kilo.json).
 
+    # --- China platform presets ---------------------------------------------
+    # The dashboard Config → Providers page prefills these fields from a
+    # curated preset list (Kimi For Coding, Kimi Open Platform, Zhipu,
+    # Z.AI, Alibaba Cloud, Tencent Cloud, DeepSeek), each in OpenAI-compatible
+    # and — where the platform documents it — Anthropic-compatible form.
+    # Writing them into config.yaml directly works the same way:
+    #
+    # Zhipu GLM Coding Plan, OpenAI-compatible wire:
+    #   - id: zhipuai-coding-plan
+    #     kind: openai_compatible
+    #     base_url: https://open.bigmodel.cn/api/coding/paas/v4
+    #     api_key_env: ZHIPU_API_KEY
+    #     catalog_provider: zhipuai-coding-plan   # models.dev metadata mapping
+    #
+    # Same platform, Anthropic-compatible wire (note: no /v1 suffix —
+    # the Anthropic client appends /v1/messages itself):
+    #   - id: zhipuai-coding-plan-anthropic
+    #     kind: anthropic
+    #     base_url: https://open.bigmodel.cn/api/anthropic
+    #     api_key_env: ZHIPU_API_KEY
+    #     catalog_provider: zhipuai-coding-plan
+    #
+    # OpenCode/Kilo add /v1 to the generated AI SDK URL automatically.
+    # Add this provider/model to a model_chain group before selecting it.
+    # Full endpoint table incl. plan eligibility and key caveats:
+    # docs/site/src/content/docs/zh-cn/configuration/llm.md (国内平台预设)
+
   # Define reusable groups. Priority is the list order within each group.
   model_chain:
     default:

@@ -3,7 +3,7 @@ import { join } from "node:path";
 
 import type { ModelSpec } from "@aicr/llm";
 
-import { buildKiloModelInfo } from "./model-metadata.js";
+import { buildKiloModelInfo, resolveCompatibleProviderNpm, resolveAiSdkBaseUrl } from "./model-metadata.js";
 import type {
   AgentAdapter,
   AgentDetectResult,
@@ -68,7 +68,7 @@ function buildKiloProviderOptions(model: ModelSpec): Record<string, unknown> {
   const options: Record<string, unknown> = {};
 
   if (model.baseUrl) {
-    options.baseURL = model.baseUrl;
+    options.baseURL = resolveAiSdkBaseUrl(model);
   }
 
   // `{env:NAME}` is substituted by kilo's config loader (`config/variable.ts`)
@@ -91,7 +91,7 @@ function buildKiloProviderOptions(model: ModelSpec): Record<string, unknown> {
   }
 
   if (model.extraHeaders) {
-    options.extraHeaders = model.extraHeaders;
+    options.headers = model.extraHeaders;
   }
 
   if (model.extraBody) {
@@ -161,6 +161,7 @@ function buildKiloJsonConfig(
   };
 
   const providerEntry: Record<string, unknown> = {
+    ...(resolveCompatibleProviderNpm(model) ? { npm: resolveCompatibleProviderNpm(model) } : {}),
     options: providerOptions,
     models,
   };
@@ -257,6 +258,9 @@ export function createKiloAdapter(options: KiloAdapterOptions = {}): AgentAdapte
         envVars.KILO_API_KEY = model.apiKey;
         envVars[`KILO_API_KEY_${sanitizeEnvSuffix(model.providerId)}`] = model.apiKey;
       } else if (model.apiKeyEnv) {
+        // The config loader resolves {env:NAME}, so preserve that exact name
+        // in the isolated spawn environment as well as the CLI aliases.
+        envVars[model.apiKeyEnv] = `\${${model.apiKeyEnv}}`;
         envVars.KILO_API_KEY = `\${${model.apiKeyEnv}}`;
         envVars[`KILO_API_KEY_${sanitizeEnvSuffix(model.providerId)}`] = `\${${model.apiKeyEnv}}`;
       }

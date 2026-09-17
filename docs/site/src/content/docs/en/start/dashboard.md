@@ -153,6 +153,13 @@ configuration. A shadowed database record can be deleted; edit its file owner to
 change the effective value. Secret controls accept authorized environment variable
 names. Replace or clear redacted legacy values before saving them.
 
+New providers can start from a **Platform preset** (Kimi For Coding, Kimi Open
+Platform, Zhipu, Z.AI, Alibaba Cloud, Tencent Cloud, DeepSeek), which prefills
+the endpoint, the wire protocol (OpenAI- or Anthropic-compatible), and the
+catalog mapping. Presets only prefill the draft; every field stays editable
+until you save. Endpoint tables and plan caveats live in
+[LLM Providers and Models](/en/configuration/llm/#platform-presets-dashboard).
+
 Use **Save** for one record or **Save page changes** for global settings. For
 related edits, use **Stage changes** or **Stage page changes** on each page, then
 **Publish staged changes**. For example, stage a provider, select it in a new model

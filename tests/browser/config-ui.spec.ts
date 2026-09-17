@@ -712,6 +712,83 @@ test.describe.serial("config management UI (P6 browser gate)", () => {
     void browser;
   });
 
+  test("provider preset prefills a new provider draft and stays editable", async ({ page, request }) => {
+    await login(page);
+    await openConfigTab(page);
+    const drawer = page.locator("#config-editor");
+
+    await page.getByRole("button", { name: "New provider" }).click();
+    await expect(drawer.locator(".cfg-drawer-title")).toHaveText("New provider");
+    const picker = drawer.locator("#cfg-provider-preset");
+    await expect(picker).toBeVisible();
+    await expect(picker.locator("option", { hasText: "Anthropic-compatible" }).first()).toBeAttached();
+    const token = await bearerToken(page);
+    const headBefore = await apiStatusRevision(request, token);
+    await picker.selectOption("deepseek");
+    await expect(drawer.locator('[data-field-id="provider:id"] input')).toHaveValue("");
+    await drawer.getByRole("button", { name: "Apply preset" }).click();
+    await expect(drawer.locator("#cfg-drawer-kind")).toHaveValue("openai_compatible");
+
+    // Anthropic-compatible preset switches the kind and prefills the endpoint.
+    await picker.selectOption("kimi-for-coding-anthropic");
+    await expect(drawer.locator("[data-role='preset-note']")).toContainText("https://api.kimi.com/coding");
+    await drawer.getByRole("button", { name: "Apply preset" }).click();
+    await expect(drawer.locator("#cfg-drawer-kind")).toHaveValue("anthropic");
+    await expect(drawer.locator('[data-field-id="provider:id"] input')).toHaveValue("kimi-for-coding-anthropic");
+    await expect(drawer.locator('[data-field-id="provider:base_url"] input')).toHaveValue("https://api.kimi.com/coding");
+    await expect(drawer.locator('[data-field-id="provider:api_key_env"] input')).toHaveValue("KIMI_API_KEY");
+    await expect(drawer.locator('[data-field-id="provider:catalog_provider"] input')).toHaveValue("kimi-for-coding");
+
+    // Prefilled drafts remain editable: point the env reference at the fixture
+    // secret so publish validation accepts it, then save.
+    await setTextField(drawer, "provider:api_key_env", "AICR_BROWSER_LLM_KEY");
+    expect(await apiStatusRevision(request, token)).toBe(headBefore);
+    await saveDrawerAndWaitRevision(page, request, headBefore);
+    const row = page.locator("#config-main tbody tr", { hasText: "kimi-for-coding-anthropic" });
+    await expect(row).toContainText("database");
+
+    // Edit drawers of existing records do not offer the preset picker.
+    await row.getByRole("button", { name: "Edit" }).click();
+    await expect(drawer.locator(".cfg-drawer-title")).toHaveText("Edit kimi-for-coding-anthropic");
+    await expect(drawer.locator("#cfg-provider-preset")).toHaveCount(0);
+    await expect(drawer.locator("#cfg-drawer-kind")).toHaveValue("anthropic");
+    await expect(drawer.locator('[data-field-id="provider:base_url"] input')).toHaveValue("https://api.kimi.com/coding");
+    await expect(drawer.locator('[data-field-id="provider:catalog_provider"] input')).toHaveValue("kimi-for-coding");
+    await drawer.getByRole("button", { name: "Cancel", exact: true }).click();
+
+    // Cleanup.
+    page.once("dialog", (dialog) => void dialog.accept());
+    await page.locator("#config-main tbody tr", { hasText: "kimi-for-coding-anthropic" }).getByRole("button", { name: "Delete" }).click();
+    const confirmDelete = page.locator(".cfg-dialog, [role='dialog'], .cfg-panel", { hasText: "Delete kimi-for-coding-anthropic" });
+    await confirmDelete.getByRole("button", { name: "Delete" }).click();
+    await expect(page.locator("#config-main tbody tr", { hasText: "kimi-for-coding-anthropic" })).toHaveCount(0);
+  });
+
+  test("provider preset preserves a literal key without adding a conflicting env reference", async ({ page }) => {
+    await login(page);
+    await openConfigTab(page);
+    const drawer = page.locator("#config-editor");
+    await page.getByRole("button", { name: "New provider", exact: true }).click();
+    await drawer.locator("#cfg-provider-preset").selectOption("deepseek");
+    await drawer.getByRole("button", { name: "Apply preset" }).click();
+    await setTextField(drawer, "provider:api_key", "preset-literal-key");
+    await drawer.locator("#cfg-provider-preset").selectOption("kimi-for-coding-anthropic");
+    await drawer.getByRole("button", { name: "Apply preset" }).click();
+    await expect(drawer.locator('[data-field-id="provider:api_key"] input')).toHaveValue("preset-literal-key");
+    await expect(drawer.locator('[data-field-id="provider:api_key_env"] input')).toHaveCount(0);
+    await setTextField(drawer, "provider:id", "preset-literal-provider");
+    await drawer.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(drawer).toBeHidden();
+    const row = page.locator("#config-main tbody tr", { hasText: "preset-literal-provider" });
+    await row.getByRole("button", { name: "Edit", exact: true }).click();
+    await expect(drawer.locator('[data-field-id="provider:api_key_env"] input')).toHaveCount(0);
+    await expect(drawer.locator('[data-field-id="provider:api_key"]')).toContainText("A value is stored");
+    await drawer.getByRole("button", { name: "Cancel", exact: true }).click();
+    await row.getByRole("button", { name: "Delete", exact: true }).click();
+    await page.locator(".cfg-dialog").getByRole("button", { name: "Delete", exact: true }).click();
+    await expect(row).toHaveCount(0);
+  });
+
   test("workspace defaults support explicit inherit/override round-trips", async ({ page }) => {
     await login(page);
     await openConfigTab(page, "Workspaces");
@@ -762,6 +839,11 @@ test.describe.serial("config management UI (P6 browser gate)", () => {
     await expect(drawer.locator(".cfg-drawer-title")).toHaveText("View file-llm");
     await drawer.getByRole("button", { name: "Close" }).click();
     await expect(drawer).toBeHidden();
+    await page.getByRole("button", { name: "New provider", exact: true }).click();
+    const preset = drawer.locator(".cfg-provider-preset");
+    await expect(preset).toBeVisible();
+    expect(await preset.evaluate(el => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
+    await drawer.getByRole("button", { name: "Cancel", exact: true }).click();
   });
 
   test("ordered-list rows move with keyboard (Alt+Arrow)", async ({ page }) => {

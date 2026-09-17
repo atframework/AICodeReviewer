@@ -7,6 +7,8 @@ export function getModelCatalogBundledSnapshotPath(): string {
 	return join(dirname(fileURLToPath(import.meta.url)), "../assets/model-catalog/models-dev.json");
 }
 
+export * from "./provider-presets.js";
+
 export type ModelProviderKind =
 	| "openai_compatible"
 	| "azure_openai"

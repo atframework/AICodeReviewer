@@ -37,6 +37,8 @@ function buildGenericModelInfo(
 }
 
 export function buildKiloModelInfo(model: ModelSpec): Record<string, unknown> | undefined {
+	const entry = buildOpencodeModelEntry(model);
+	if (entry) return Object.keys(entry).length > 1 || model.displayName !== undefined ? entry : undefined;
 	return buildGenericModelInfo(model, true);
 }
 
@@ -45,7 +47,21 @@ export function buildZooCustomModelInfo(model: ModelSpec): Record<string, unknow
 }
 
 export function isOpenCodeCustomProvider(model: ModelSpec): boolean {
-	return model.providerKind === "openai_compatible" || model.providerKind === "ollama";
+	return model.providerKind === "openai_compatible" || model.providerKind === "ollama" ||
+		(model.providerKind === "anthropic" && (model.providerId !== "anthropic" || model.baseUrl !== undefined));
+}
+
+/** Catalog transport metadata may describe the other protocol of a dual-protocol platform. */
+export function resolveCompatibleProviderNpm(model: ModelSpec): string | undefined {
+	if (model.providerKind === "anthropic") return "@ai-sdk/anthropic";
+	if (model.providerKind === "openai_compatible" || model.providerKind === "ollama") return "@ai-sdk/openai-compatible";
+	return undefined;
+}
+
+/** AI SDK appends /messages; AICR and the Anthropic SDK append /v1/messages. */
+export function resolveAiSdkBaseUrl(model: ModelSpec): string | undefined {
+	if (!model.baseUrl) return undefined;
+	return model.providerKind === "anthropic" ? `${model.baseUrl.replace(/\/+$/u, "")}/v1` : model.baseUrl;
 }
 
 const OPENCODE_MODALITIES = new Set(["text", "audio", "image", "video", "pdf"]);

@@ -71,6 +71,14 @@ config_sources:
       destinations:
         kind: openai_compatible
         base_url: http://127.0.0.1:9/v1
+    # Preset-prefill leg: the provider is created from the Kimi For Coding
+    # Anthropic-compatible preset (id/kind/base_url prefilled), then its
+    # api_key_env is rewritten to the fixture key before saving.
+    - env: AICR_BROWSER_LLM_KEY
+      target: [llm, providers, kimi-for-coding-anthropic, api_key_env]
+      destinations:
+        kind: anthropic
+        base_url: https://api.kimi.com/coding
     # P7 run isolation leg: channels bound to the stub-gitea triggers inherit
     # the trigger's token_env; each binding is a distinct (target, destination)
     # pair and needs its own grant.

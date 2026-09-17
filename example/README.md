@@ -98,6 +98,14 @@ on reload. **Discard staged changes** also clears the corresponding editors. See
 [dashboard guide](../docs/site/src/content/docs/en/start/dashboard.md) for
 conflicts, activation status, and version restore.
 
+New providers can start from a **Platform preset** (Kimi For Coding, Kimi Open
+Platform, Zhipu, Z.AI, Alibaba Cloud, Tencent Cloud, DeepSeek) which prefills
+`kind`, `base_url`, `api_key_env` and `catalog_provider` — including the
+Anthropic-compatible endpoints those platforms document. The endpoint table and
+plan-key caveats are in
+[LLM Providers and Models](../docs/site/src/content/docs/en/configuration/llm.md#platform-presets-dashboard);
+the matching env var names are listed at the bottom of [.env.sample](.env.sample).
+
 ### Route preview
 
 The routing **Preview** panel explains how an event would resolve — matched

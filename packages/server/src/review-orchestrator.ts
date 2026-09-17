@@ -842,8 +842,10 @@ function adaptMcpServersForSandbox(
  * host-side paths.
  *
  * - pi/oh-my-pi: PI_CODING_AGENT_DIR redirects the whole config dir.
- * - kilo: the project `.kilo/kilo.json` is discovered via cwd traversal, but the
- *   global `$XDG_CONFIG_HOME/kilo/` config still loads and is schema-strict — an
+ * - kilo: KILO_CONFIG explicitly loads the generated `.kilo/kilo.json` as trusted
+ *   configuration. Current CLIs reject env references in discovered project
+ *   config; never point this variable at repository-owned configuration.
+ *   The global `$XDG_CONFIG_HOME/kilo/` config still loads and is schema-strict — an
  *   unrecognized key in a developer's global config hard-fails the run. The data
  *   dir (`$XDG_DATA_HOME/kilo/`) holds the session SQLite database whose drizzle
  *   migrations are not idempotent, so a stale host DB from another kilo version
@@ -1590,6 +1592,13 @@ async function runAgentReviewInDirs(
     );
     for (const dir of Object.values(agentConfigDirEnvVars(agentAdapter.kind, materializedFs.agentDir, true))) {
       await mkdir(dir, { recursive: true, mode: 0o700 });
+    }
+    // A file reference, not a directory to create above. Only the generated
+    // bundle is trusted; translate to the container path before spawning.
+    if (agentAdapter.kind === "kilo") {
+      configDirEnvVars.KILO_CONFIG = sandbox.kind === "native"
+        ? join(sandboxAgentDir, ".kilo/kilo.json")
+        : `${sandboxAgentDir}/.kilo/kilo.json`;
     }
     const sandboxTmpDir = sandbox.kind === "native" ? materializedFs.tmpDir : "/workspace/tmp";
     Object.assign(configDirEnvVars, { TMPDIR: sandboxTmpDir, TMP: sandboxTmpDir, TEMP: sandboxTmpDir });

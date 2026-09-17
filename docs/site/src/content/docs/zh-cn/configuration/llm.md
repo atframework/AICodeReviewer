@@ -66,6 +66,58 @@ AICR 直连调用（diff 压缩、结构化修复兜底）目前只实现了
 `catalog_id: openai/gpt-4o-mini` 固定到具体条目。
 :::
 
+### 平台预设（管理页面）
+
+在 **Config → Providers** 新建 provider 时，选择 **Platform preset** 并点击
+**Apply preset**，预填 `id`、`kind`、`base_url`、`api_key_env` 和
+`catalog_provider`。草稿在 Save 前仍可修改；预设不会改动已有记录，也不携带凭据。
+建议环境变量名见 `example/.env.sample`。Anthropic 变体的预设 ID 在基础 ID 后加 `-anthropic`。
+
+| 平台 | 预设 id 前缀 | OpenAI 兼容 `base_url` | Anthropic 兼容 `base_url` |
+| --- | --- | --- | --- |
+| Kimi For Coding（Kimi Code 订阅） | `kimi-for-coding` | `https://api.kimi.com/coding/v1` | `https://api.kimi.com/coding` |
+| Kimi 开放平台（国内） | `moonshotai-cn` | `https://api.moonshot.cn/v1` | `https://api.moonshot.cn/anthropic` |
+| Kimi 开放平台（国际） | `moonshotai` | `https://api.moonshot.ai/v1` | `https://api.moonshot.ai/anthropic` |
+| 智谱开放平台 | `zhipuai` | `https://open.bigmodel.cn/api/paas/v4` | – |
+| 智谱 GLM Coding Plan | `zhipuai-coding-plan` | `https://open.bigmodel.cn/api/coding/paas/v4` | `https://open.bigmodel.cn/api/anthropic` |
+| Z.AI 平台 | `zai` | `https://api.z.ai/api/paas/v4` | – |
+| Z.AI Coding Plan | `zai-coding-plan` | `https://api.z.ai/api/coding/paas/v4` | `https://api.z.ai/api/anthropic` |
+| 阿里云百炼（按量，北京） | `alibaba-cn` | `https://dashscope.aliyuncs.com/compatible-mode/v1` | `https://dashscope.aliyuncs.com/apps/anthropic` |
+| 阿里云百炼（按量，新加坡） | `alibaba` | `https://dashscope-intl.aliyuncs.com/compatible-mode/v1` | `https://dashscope-intl.aliyuncs.com/apps/anthropic` |
+| 阿里云 Token Plan（北京） | `alibaba-token-plan-cn` | `https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1` | `https://token-plan.cn-beijing.maas.aliyuncs.com/apps/anthropic` |
+| 阿里云 Token Plan（新加坡） | `alibaba-token-plan` | `https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1` | `https://token-plan.ap-southeast-1.maas.aliyuncs.com/apps/anthropic` |
+| 腾讯云 Coding Plan | `tencent-coding-plan` | `https://api.lkeap.cloud.tencent.com/coding/v3` | `https://api.lkeap.cloud.tencent.com/coding/anthropic` |
+| 腾讯云 Token Plan | `tencent-token-plan` | `https://api.lkeap.cloud.tencent.com/plan/v3` | `https://api.lkeap.cloud.tencent.com/plan/anthropic` |
+| 腾讯 TokenHub（按量） | `tencent-tokenhub` | `https://tokenhub.tencentmaas.com/v1` | `https://tokenhub.tencentmaas.com` |
+| DeepSeek | `deepseek` | `https://api.deepseek.com` | `https://api.deepseek.com/anthropic` |
+
+注意事项：
+
+- Apply 只改新建草稿，Save 才会发布。已填写明文 API Key 时，Apply 保留
+  该值并移除环境变量引用，避免凭据互斥冲突。保存 provider 后还需在模型组中
+  添加 provider 和模型；建议模型 ID 不会自动创建模型组。
+- Anthropic 兼容根地址不带末尾的 `/v1`。直连客户端、Claude Code、pi 和
+  oh-my-pi 使用根地址；OpenCode/Kilo 的生成配置为 AI SDK 补上 `/v1`。
+  两条路径最终请求 `/v1/messages`，使用 `x-api-key`。Claude Code 应选择
+  `kind: anthropic`。Zoo 适配器明确拒绝该协议；Copilot CLI 不消费这些自定义预设。
+- `kind` 决定协议，即使目录指定另一种 SDK（例如 Kimi Code）也不改变协议。
+  OpenCode/Kilo 会注入匹配的 SDK 和原生模型限额。pi/oh-my-pi 需要目录限额或显式覆盖。
+- Key 与端点必须属于同一套餐和地域。阿里云共享 DashScope 地址仍可用，生产环境
+  可换成控制台提供的业务空间专属地址，见[官方端点说明](https://help.aliyun.com/zh/model-studio/base-url)。
+- 阿里云推荐新订阅使用 Token Plan，预设不再推荐旧 Coding Plan。腾讯 Coding Plan
+  仅建议 `tc-code-latest`，GLM-5 将于 2026-10-09 下线。依据见
+  [阿里云说明](https://help.aliyun.com/zh/model-studio/token-plan-overview)和
+  [腾讯云说明](https://cloud.tencent.com/document/product/1823/130092)。
+- 智谱/Z.AI 余额账户使用通用 OpenAI 端点。Anthropic 余额调用要求账户从未购买
+  套餐且获得白名单；已订阅账户的套餐耗尽或过期后不会回退到余额。选择器只为
+  Coding Plan 提供 Anthropic 预设，见[官方账户说明](https://zcode.z.ai/en/docs/configuration)。
+- 协议预设不代表个人套餐允许自动化后端审查。需核对套餐适用场景与账户权限；
+  服务端任务应选择允许该用途的按量 API。
+- `catalog_provider` 独立于协议解析元数据；端点和可用性以平台官方文档为准。
+  模型存在于 models.dev 打包快照中不代表当前账户仍可调用。
+- 部署若用 `config_sources.secret_refs` 限制凭据引用，需先授权环境变量名与
+  目标端点组合。本地测试验证配置和请求构造；平台鉴权、计费仍需真实账户验收。
+
 ### 推理强度（reasoning effort）
 
 provider 条目还接受一组透传字段，用来控制推理模型的思考强度：

@@ -3,7 +3,7 @@ import { join } from "node:path";
 
 import type { ModelSpec } from "@aicr/llm";
 
-import { buildOpencodeModelEntry, isOpenCodeCustomProvider } from "./model-metadata.js";
+import { buildOpencodeModelEntry, isOpenCodeCustomProvider, resolveCompatibleProviderNpm, resolveAiSdkBaseUrl } from "./model-metadata.js";
 import type {
 	AgentAdapter,
 	AgentDetectResult,
@@ -96,12 +96,12 @@ function buildOpencodeModelOptions(model: ModelSpec): Record<string, unknown> {
 function buildOpencodeProviderConfig(model: ModelSpec): Record<string, unknown> {
 	const provider: Record<string, unknown> = {};
 	if (isOpenCodeCustomProvider(model)) {
-		provider.npm = model.providerNpmPackage ?? "@ai-sdk/openai-compatible";
+		provider.npm = resolveCompatibleProviderNpm(model);
 		provider.name = model.providerDisplayName ?? model.providerId;
 	}
 
 	const providerOptions: Record<string, unknown> = {};
-	if (model.baseUrl) providerOptions.baseURL = model.baseUrl;
+	if (model.baseUrl) providerOptions.baseURL = resolveAiSdkBaseUrl(model);
 	if (model.apiKey) providerOptions.apiKey = model.apiKey;
 	else if (model.apiKeyEnv) providerOptions.apiKey = `{env:${model.apiKeyEnv}}`;
 	if (model.extraHeaders) providerOptions.headers = model.extraHeaders;

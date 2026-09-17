@@ -85,6 +85,12 @@ revision，不按字符串形状猜测 hash 格式。
 显式配置。同名 shadowed 数据库记录可以删除；要改变有效值需修改其文件来源。
 凭据控件只接受已授权的环境变量名。历史值被脱敏时，保存前需要替换或清除占位符。
 
+新建 provider 时可从 **Platform preset** 选择国内常见平台（Kimi For Coding、Kimi
+开放平台、智谱、Z.AI、阿里云百炼、腾讯云、DeepSeek），一键预填端点、协议
+（OpenAI 兼容或 Anthropic 兼容）和目录映射；预设只预填草稿，保存前仍可修改。
+各平台端点与套餐注意事项见
+[LLM 提供方与模型](/zh-cn/configuration/llm/#平台预设管理页面)。
+
 单条记录使用 **Save**，全局设置使用 **Save page changes**。关联修改可在各页面分别
 点击 **Stage changes** 或 **Stage page changes**，最后点击 **Publish staged changes**。
 例如先暂存 provider，再在新模型组中选择它，一次发布两者。暂存修改共享同一 revision，

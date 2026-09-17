@@ -69,6 +69,68 @@ catalog: set `catalog_provider: openai` on the provider (resolved as
 openai/gpt-4o-mini`.
 :::
 
+### Platform presets (dashboard)
+
+When creating a provider in **Config → Providers**, choose a **Platform preset**
+and click **Apply preset** to fill `id`, `kind`, `base_url`, `api_key_env`
+and `catalog_provider`. The draft stays editable until Save. Existing records
+are unchanged and presets contain no credentials. Suggested env names are in
+`example/.env.sample`. Anthropic variants add `-anthropic` to the preset ID.
+
+| Platform | Preset id prefix | OpenAI-compatible `base_url` | Anthropic-compatible `base_url` |
+| --- | --- | --- | --- |
+| Kimi For Coding (Kimi Code subscription) | `kimi-for-coding` | `https://api.kimi.com/coding/v1` | `https://api.kimi.com/coding` |
+| Kimi Open Platform (China) | `moonshotai-cn` | `https://api.moonshot.cn/v1` | `https://api.moonshot.cn/anthropic` |
+| Kimi Open Platform (global) | `moonshotai` | `https://api.moonshot.ai/v1` | `https://api.moonshot.ai/anthropic` |
+| Zhipu AI open platform (bigmodel.cn) | `zhipuai` | `https://open.bigmodel.cn/api/paas/v4` | – |
+| Zhipu GLM Coding Plan (bigmodel.cn) | `zhipuai-coding-plan` | `https://open.bigmodel.cn/api/coding/paas/v4` | `https://open.bigmodel.cn/api/anthropic` |
+| Z.AI platform | `zai` | `https://api.z.ai/api/paas/v4` | – |
+| Z.AI Coding Plan | `zai-coding-plan` | `https://api.z.ai/api/coding/paas/v4` | `https://api.z.ai/api/anthropic` |
+| Alibaba Cloud Model Studio (China, pay-as-you-go) | `alibaba-cn` | `https://dashscope.aliyuncs.com/compatible-mode/v1` | `https://dashscope.aliyuncs.com/apps/anthropic` |
+| Alibaba Cloud Model Studio (Singapore, pay-as-you-go) | `alibaba` | `https://dashscope-intl.aliyuncs.com/compatible-mode/v1` | `https://dashscope-intl.aliyuncs.com/apps/anthropic` |
+| Alibaba Cloud Token Plan (China) | `alibaba-token-plan-cn` | `https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1` | `https://token-plan.cn-beijing.maas.aliyuncs.com/apps/anthropic` |
+| Alibaba Cloud Token Plan (Singapore) | `alibaba-token-plan` | `https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1` | `https://token-plan.ap-southeast-1.maas.aliyuncs.com/apps/anthropic` |
+| Tencent Cloud Coding Plan | `tencent-coding-plan` | `https://api.lkeap.cloud.tencent.com/coding/v3` | `https://api.lkeap.cloud.tencent.com/coding/anthropic` |
+| Tencent Cloud Token Plan | `tencent-token-plan` | `https://api.lkeap.cloud.tencent.com/plan/v3` | `https://api.lkeap.cloud.tencent.com/plan/anthropic` |
+| Tencent TokenHub (pay-as-you-go) | `tencent-tokenhub` | `https://tokenhub.tencentmaas.com/v1` | `https://tokenhub.tencentmaas.com` |
+| DeepSeek | `deepseek` | `https://api.deepseek.com` | `https://api.deepseek.com/anthropic` |
+
+Caveats:
+
+- Apply changes only the new draft; Save publishes it. If you entered a literal
+  API key, Apply keeps it and removes the env reference to avoid conflicting
+  credentials. Add the provider and model to a model group to use it; suggested
+  model IDs do not create a group automatically.
+- Store Anthropic-compatible roots without a trailing `/v1`. The direct client,
+  Claude Code, pi and oh-my-pi use that root; OpenCode/Kilo receive a generated
+  AI SDK URL with `/v1`. Both paths reach `/v1/messages` with `x-api-key`.
+  Select `kind: anthropic` for Claude Code. Zoo's adapter rejects this kind;
+  Copilot CLI does not consume these custom provider presets.
+- `kind` selects the wire protocol even when the catalog uses another SDK
+  (for example, Kimi Code). OpenCode/Kilo receive the matching SDK and native
+  model limits. pi/oh-my-pi require catalog limits or explicit overrides.
+- Use keys and endpoints from the same plan and region. Alibaba's shared
+  DashScope URLs remain supported; its console supplies workspace-specific
+  URLs for production. See the [official endpoint guide](https://help.aliyun.com/zh/model-studio/base-url).
+- Alibaba recommends Token Plan for new subscriptions, so retired Coding Plan
+  recommendations are omitted. Tencent Coding Plan suggests only
+  `tc-code-latest`; its GLM-5 is scheduled to retire on 2026-10-09.
+  See [Alibaba](https://help.aliyun.com/zh/model-studio/token-plan-overview) and
+  [Tencent](https://cloud.tencent.com/document/product/1823/130092).
+- Zhipu/Z.AI prepaid balance uses the general OpenAI endpoint. Their Anthropic
+  balance path requires an account that has never subscribed plus allowlisting;
+  exhausted or expired plans do not fall back to balance. The picker offers
+  Anthropic for Coding Plan. See [the official account guidance](https://zcode.z.ai/en/docs/configuration).
+- A protocol preset does not grant permission to use a personal plan for
+  automated backend reviews. Check your plan's supported workloads and account
+  permissions; use a suitable pay-as-you-go API for service workloads.
+- `catalog_provider` resolves metadata independently of protocol. Official
+  platform docs determine endpoints and availability; a bundled models.dev
+  entry does not prove a model remains available to your account.
+- If `config_sources.secret_refs` restricts credentials, grant the env-name and
+  destination pair before publishing. Local tests verify configuration and
+  request construction; platform authentication and billing need live acceptance.
+
 ### Reasoning effort
 
 Provider entries also accept passthrough fields that control reasoning-model

@@ -47,3 +47,24 @@ revalidated by the 2026-09-12 layout change unless explicitly marked below.
 - `last_checked`: 2026-08-09
 - `next_review`: 2026-11-09
 - `update_trigger`: Re-check before changing the model-catalog fetch URL, the api.json field mapping into `ModelSpec`, the per-tool config-injection strategy, or the build-time fallback snapshot source.
+
+## China platform endpoints (config UI provider presets)
+
+- Sources:
+  - <https://www.kimi.com/code/docs/> (Coding dual-protocol endpoints and current model IDs)
+  - <https://platform.kimi.com/docs/api/overview> and <https://platform.kimi.ai/docs/api/overview> (China/global Open Platform)
+  - <https://docs.bigmodel.cn/cn/guide/develop/claude/introduction> (Anthropic root and x-api-key)
+  - <https://zcode.z.ai/en/docs/configuration> (BigModel/Z.AI general versus Coding endpoints; prepaid Anthropic account allowlisting)
+  - <https://docs.z.ai/devpack/tool/claude> and <https://docs.z.ai/devpack/overview> (Coding endpoint and current GLM models)
+  - <https://help.aliyun.com/zh/model-studio/base-url> (regional shared/workspace URLs, protocol roots and workload restrictions)
+  - <https://help.aliyun.com/zh/model-studio/token-plan-overview> and <https://www.alibabacloud.com/help/en/model-studio/token-plan-overview> (Token Plan replaces new Coding Plan recommendations)
+  - <https://help.aliyun.com/zh/model-studio/token-plan-personal-quick-start> and <https://www.alibabacloud.com/help/en/model-studio/token-plan-personal-quick-start> (Beijing/Singapore Token Plan protocols and isolated credentials)
+  - <https://cloud.tencent.com/document/product/1823/130092> (Coding endpoint; only Auto remains a recommendation after excluding GLM-5 scheduled retirement)
+  - <https://cloud.tencent.cn/document/product/1823/130060> (Token Plan dual-protocol endpoints)
+  - <https://cloud.tencent.com/document/product/1823/135874> (TokenHub /v1/messages and x-api-key)
+  - <https://api-docs.deepseek.com/guides/anthropic_api/> (Anthropic root and supported headers)
+- Evidence: Official platform docs determine preset endpoints and account eligibility. models.dev validates catalog IDs and metadata, not current availability or billing. BigModel/Z.AI general prepaid accounts use OpenAI; Anthropic balance use needs a never-subscribed allowlisted account. Alibaba Coding Plan is omitted from new presets. Tencent Coding Plan omits retired models and GLM-5 scheduled to retire on 2026-10-09. Alibaba/Tencent Token Plan and TokenHub have Anthropic variants. Subscription compatibility does not authorize automated backend use; check the account's workload terms.
+- Local contract: AICR Anthropic roots omit /v1. Direct/Claude/pi-family use that root; OpenCode/Kilo add /v1 for AI SDK. Protocol choice wins over catalog npm. Tests in llm/agents provider-presets and the browser suite exercise these paths without contacting providers. No live credential/billing acceptance is implied.
+- `last_checked`: 2026-09-17
+- `next_review`: 2026-10-09
+- `update_trigger`: Endpoint, region, account restrictions, model retirement, catalog changes or SDK URL/auth behavior changes.

@@ -59,6 +59,7 @@ import {
   type DatabaseConfigDocument,
 } from "@aicr/core";
 import { createAdminAuthMiddleware, type AdminAuthConfig, type AdminSessionStore } from "./admin-auth.js";
+import { MODEL_PROVIDER_PRESETS } from "@aicr/llm";
 import type { RuntimeConfigManager } from "./runtime-config.js";
 
 /** Mirrors the config source cap: one MiB JSON bodies are already generous. */
@@ -627,6 +628,9 @@ export function createConfigApi(options: ConfigApiOptions): Hono {
     return c.json({
       protocolVersion: 1,
       uiSpec: configUiSpec(),
+      // Static LLM provider presets (curated in @aicr/llm; no credentials).
+      // Consumed by the dashboard Providers page as draft prefill templates.
+      providerPresets: MODEL_PROVIDER_PRESETS,
       formatVersion: options.formatVersion ?? 2,
       entityCollections: Object.values(CONFIG_ENTITY_COLLECTIONS).map((collection) => ({ kind: collection.kind, path: collection.path, idField: collection.idField, since: collection.since })),
       channelKinds: CHANNEL_KINDS,

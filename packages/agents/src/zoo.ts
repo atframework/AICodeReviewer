@@ -94,6 +94,9 @@ export function createZooAdapter(
       workingDir: string,
       options?: AgentMaterializeOptions,
     ): Promise<AgentMaterializeResult> {
+      if (model.providerKind === "anthropic") {
+        throw new RangeError("The zoo adapter does not support Anthropic-compatible providers; use kilo, opencode, claude-code, pi or oh-my-pi.");
+      }
       await mkdir(workingDir, { recursive: true });
 
       const zooCompatibilityDir = join(workingDir, ".roo");

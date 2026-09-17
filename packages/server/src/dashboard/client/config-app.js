@@ -107,6 +107,8 @@ function createApp({ root, api, runtime, formState, schedule }) {
     initialized: false,
     spec: null,
     view: null,
+    /** Curated LLM provider presets from GET /schema (no credentials). */
+    providerPresets: [],
     references: {},
     pageId: null,
     /** @type {Map<string, {session: object, baseInput: object, operationId: string, fieldNodes: Map<string, HTMLElement>, previewNodes: Map<string, HTMLElement>}>} */
@@ -186,6 +188,17 @@ function createApp({ root, api, runtime, formState, schedule }) {
     try {
       const [schema, view] = await Promise.all([api.getSchema(), api.getView()]);
       state.spec = schema !== null && typeof schema === "object" ? schema.uiSpec : null;
+      state.providerPresets =
+        schema !== null && typeof schema === "object" && Array.isArray(schema.providerPresets)
+          ? schema.providerPresets.filter(
+              (preset) =>
+                preset !== null &&
+                typeof preset === "object" &&
+                typeof preset.id === "string" &&
+                typeof preset.kind === "string" &&
+                typeof preset.baseUrl === "string",
+            )
+          : [];
       state.view = view;
       if (state.spec === null || !Array.isArray(state.spec.pages)) {
         throw new Error("The schema response does not carry a uiSpec.");
@@ -727,6 +740,7 @@ function createApp({ root, api, runtime, formState, schedule }) {
       previewNodes: new Map(),
       copiedFrom: options.copiedFrom,
       copiedRefs: options.copiedRefs ?? [],
+      appliedPresetId: null,
       panelHost: null,
     };
     renderDrawer();
@@ -781,9 +795,95 @@ function createApp({ root, api, runtime, formState, schedule }) {
       previewNodes: new Map(),
       copiedFrom: record.id,
       copiedRefs,
+      appliedPresetId: null,
       panelHost: null,
     };
     renderDrawer();
+  }
+
+  /**
+   * Prefill a NEW provider draft from a curated preset (schema providerPresets).
+   * Only the advertised connection fields are written; the user can still edit every
+   * value before saving, and the preset never touches existing records.
+   */
+  function applyProviderPreset(drawer, presetId) {
+    const preset = state.providerPresets.find((candidate) => candidate.id === presetId);
+    if (preset === undefined) return;
+    let session = drawer.session;
+    if (typeof preset.kind === "string" && preset.kind !== "" && session.kind !== preset.kind) {
+      session = formState.sessionSwitchKind(session, preset.kind);
+    }
+    const assignments = [
+      ["provider:id", preset.id],
+      ["provider:base_url", preset.baseUrl],
+      ["provider:api_key_env", preset.apiKeyEnv],
+      ["provider:catalog_provider", preset.catalogProvider],
+    ];
+    const literalKey = session.draft.fields["provider:api_key"];
+    for (const [fieldId, value] of assignments) {
+      // A literal key and an env reference are mutually exclusive. Keep an
+      // explicitly entered literal instead of creating an invalid draft.
+      if (fieldId === "provider:api_key_env" && literalKey?.mode === "present" && literalKey.value) {
+        session = formState.sessionSetPresent(session, fieldId, false);
+        continue;
+      }
+      if (typeof value !== "string" || value === "") continue;
+      if (session.draft.fields[fieldId] === undefined) continue;
+      session = formState.sessionSetValue(session, fieldId, value);
+    }
+    drawer.session = session;
+    drawer.appliedPresetId = preset.id;
+    renderDrawer();
+  }
+
+  function presetNoteText(preset) {
+    const parts = [
+      `kind: ${preset.kind}`,
+      `base_url: ${preset.baseUrl}`,
+      `api_key_env: ${preset.apiKeyEnv}`,
+      `catalog_provider: ${preset.catalogProvider}`,
+    ];
+    if (Array.isArray(preset.suggestedModels) && preset.suggestedModels.length > 0) {
+      parts.push(`models: ${preset.suggestedModels.join(", ")}`);
+    }
+    if (typeof preset.docsUrl === "string" && preset.docsUrl !== "") {
+      parts.push(`docs: ${preset.docsUrl}`);
+    }
+    if (typeof preset.note === "string" && preset.note !== "") {
+      parts.push(preset.note);
+    }
+    return parts.join(" — ");
+  }
+
+  function renderPresetPicker(drawer) {
+    const wrap = el("div", "cfg-field cfg-provider-preset");
+    const label = el("label", "cfg-field-label", "Platform preset");
+    const select = el("select", "cfg-input");
+    select.id = "cfg-provider-preset";
+    label.htmlFor = select.id;
+    const placeholder = el("option", undefined, "— prefill from a known platform (Kimi, Zhipu, Z.AI, Alibaba, Tencent, DeepSeek) —");
+    placeholder.value = "";
+    select.append(placeholder);
+    for (const preset of state.providerPresets) {
+      const option = el("option", undefined, typeof preset.label === "string" && preset.label !== "" ? preset.label : preset.id);
+      option.value = preset.id;
+      if (drawer.appliedPresetId === preset.id) option.selected = true;
+      select.append(option);
+    }
+    const note = el("div", "cfg-field-note");
+    note.dataset.role = "preset-note";
+    const selected = state.providerPresets.find((candidate) => candidate.id === select.value);
+    note.textContent = selected !== undefined ? presetNoteText(selected) : "Apply preset fills id, kind, base_url, api_key_env and catalog_provider. An entered API key is kept instead of adding an env reference. Save publishes the draft.";
+    select.addEventListener("change", () => {
+      const next = state.providerPresets.find((candidate) => candidate.id === select.value);
+      note.textContent = next !== undefined ? presetNoteText(next) : "";
+    });
+    const apply = button("cfg-btn cfg-btn-ghost", "Apply preset", () => {
+      if (select.value !== "") applyProviderPreset(drawer, select.value);
+    });
+    apply.dataset.role = "apply-preset";
+    wrap.append(label, select, apply, note);
+    return wrap;
   }
 
   function drawerEditor() {
@@ -857,6 +957,18 @@ function createApp({ root, api, runtime, formState, schedule }) {
       const hint = el("div", "cfg-field-note");
       hint.textContent = `References carried over — verify they fit the new record: ${drawer.copiedRefs.join("; ")}`;
       box.append(hint);
+    }
+
+    // Curated platform presets (GET /schema → providerPresets) prefill a NEW
+    // provider draft; existing records are never rewritten by a preset.
+    if (
+      drawer.page.id === "providers" &&
+      drawer.record === null &&
+      drawer.copiedFrom === undefined &&
+      !drawer.readonly &&
+      state.providerPresets.length > 0
+    ) {
+      box.append(renderPresetPicker(drawer));
     }
 
     const kindField = drawer.page.entity.kindField;
@@ -1816,6 +1928,9 @@ const CONFIG_APP_STYLES = `
 .cfg-icon-btn:disabled{opacity:0.4;cursor:not-allowed}
 .cfg-icon-btn:hover:not(:disabled){color:var(--text);border-color:var(--muted)}
 .cfg-field{margin-bottom:0.875rem;min-width:0}
+.cfg-provider-preset{display:grid;grid-template-columns:minmax(8rem,auto) minmax(16rem,1fr) auto;gap:0.5rem;align-items:center;border:1px dashed var(--border);border-radius:8px;padding:0.625rem}
+.cfg-provider-preset .cfg-field-note{grid-column:1/-1;overflow-wrap:anywhere}
+.cfg-provider-preset select{min-width:0;max-width:100%}
 .cfg-field-head{display:flex;align-items:center;gap:0.5rem;margin-bottom:0.25rem;flex-wrap:wrap}
 .cfg-field-label{font-size:0.8125rem;color:var(--muted)}
 .cfg-field-note{font-size:0.75rem;color:var(--muted);margin-top:0.125rem}
@@ -1898,6 +2013,7 @@ const CONFIG_APP_STYLES = `
 .cfg-schedule-preview{margin-top:0.25rem}
 .cfg-revision-detail{margin-top:1rem}
 @media(max-width:720px){
+.cfg-provider-preset{grid-template-columns:minmax(0,1fr)}
 #tab-config.active{grid-template-columns:1fr}
 #config-nav{flex-direction:row;overflow-x:auto;position:static}
 #config-status,#config-main,#config-editor{grid-column:1}

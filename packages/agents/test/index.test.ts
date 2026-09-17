@@ -2360,14 +2360,10 @@ describe("model metadata injection (M10 catalog)", () => {
     const parsed = JSON.parse(result.configFiles.get(".kilo/kilo.json") ?? "{}");
     const modelInfo = parsed.provider["custom-gateway"]?.models?.["gpt-4o"];
     expect(modelInfo).toBeDefined();
-    expect(modelInfo.contextWindow).toBe(128000);
-    expect(modelInfo.maxTokens).toBe(16384);
-    expect(modelInfo.supportsImages).toBe(true);
-    expect(modelInfo.supportsPromptCache).toBe(true);
-    expect(modelInfo.inputPrice).toBe(2.5);
-    expect(modelInfo.outputPrice).toBe(10);
-    expect(modelInfo.cacheReadsPrice).toBe(1.25);
-    expect(modelInfo.cacheWritesPrice).toBe(3.75);
+    expect(modelInfo.limit).toEqual({ context: 128000, output: 16384 });
+    expect(modelInfo.attachment).toBe(true);
+    expect(modelInfo.cost).toEqual({ input: 2.5, output: 10, cache_read: 1.25, cache_write: 3.75 });
+    expect(modelInfo).not.toHaveProperty("contextWindow");
   });
 
   it("kilo emits empty models entry when no catalog metadata present", async () => {

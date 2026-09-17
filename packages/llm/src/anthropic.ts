@@ -124,7 +124,7 @@ export function createAnthropicChatClient(options: AnthropicClientOptions = {}):
 
 	return {
 		async complete(input: ChatCompletionInput): Promise<ChatCompletionResult> {
-			const baseUrl = input.model.baseUrl ?? "https://api.anthropic.com";
+			const baseUrl = (input.model.baseUrl ?? "https://api.anthropic.com").replace(/\/+$/u, "");
 			const systemMessage = input.messages.find((m) => m.role === "system")?.content;
 			const conversationMessages = input.messages.filter((m) => m.role !== "system");
 

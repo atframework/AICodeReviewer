@@ -185,6 +185,12 @@ Sources: `packages/server/src/model-catalog-service.ts`, `bootstrap.ts`,
   Pin `catalog_provider`/`catalog_id` when provider IDs differ or fuzzy matches
   are ambiguous. The former `zhipu` catalog name changed; inspect the current
   snapshot and endpoint rather than copying a historical provider/model list.
+- Dashboard provider presets (`packages/llm/src/provider-presets.ts`) use official
+  platform docs for endpoints, account restrictions and model retirement; the
+  bundled catalog validates metadata resolution only. Anthropic roots omit `/v1`;
+  OpenCode/Kilo translate them for AI SDK. Test both protocols through direct
+  requests and real bundle materialization (`provider-presets.test.ts` in llm
+  and agents). Catalog npm metadata must not override the selected protocol.
 - Quota exhaustion is a conservative machine-code/message classification, not
   every HTTP 429 or `RESOURCE_EXHAUSTED`. Durable spend/plan exhaustion selects
   the next model; ordinary rate/capacity pressure uses bounded retry. Agent CLIs

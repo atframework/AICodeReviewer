@@ -273,6 +273,34 @@ describe("config api schema endpoint", () => {
     expect(body.inventory.length).toBeGreaterThan(100);
     expect(body.inventory.some((row) => row.path === "config_sources.database.enabled" && row.wired)).toBe(true);
   });
+
+  it("exposes curated LLM provider presets without credentials", async () => {
+    const app = makeApp();
+    const response = await request(app, "/schema");
+    expect(response.status).toBe(200);
+    const body = await response.json() as {
+      providerPresets: {
+        id: string; kind: string; baseUrl: string; apiKeyEnv: string;
+        catalogProvider: string; suggestedModels: string[];
+      }[];
+    };
+    expect(Array.isArray(body.providerPresets)).toBe(true);
+    const zhipu = body.providerPresets.find((preset) => preset.id === "zhipuai-coding-plan-anthropic");
+    expect(zhipu).toMatchObject({
+      kind: "anthropic",
+      baseUrl: "https://open.bigmodel.cn/api/anthropic",
+      catalogProvider: "zhipuai-coding-plan",
+    });
+    expect(body.providerPresets.some((preset) => preset.id === "kimi-for-coding")).toBe(true);
+    for (const preset of body.providerPresets) {
+      // Presets carry endpoint metadata only; credential-shaped fields must
+      // never appear (api keys stay env references or user-entered literals).
+      expect(Object.keys(preset).sort()).toEqual(
+        expect.arrayContaining(["id", "label", "kind", "baseUrl", "apiKeyEnv", "catalogProvider", "docsUrl", "suggestedModels"]),
+      );
+      expect(preset).not.toHaveProperty("apiKey");
+    }
+  });
 });
 
 describe("config api validate + preview-route (A09)", () => {

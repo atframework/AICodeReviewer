@@ -6,6 +6,7 @@ import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 
 import type { AgentAdapter } from "@aicr/agents";
+import { createKiloAdapter } from "@aicr/agents";
 import { createReviewEvent } from "@aicr/core";
 import type { ChatCompletionClient, ModelSpec } from "@aicr/llm";
 import type { ReviewProblem } from "@aicr/outputs";
@@ -1044,6 +1045,7 @@ describe("runReviewOrchestration", () => {
         // kilo global config/data isolation rides the same injection as PI_CODING_AGENT_DIR.
         XDG_CONFIG_HOME: join(xdgRoot, ".aicr-xdg-config"),
         XDG_DATA_HOME: join(xdgRoot, ".aicr-xdg-data"),
+        KILO_CONFIG: join(xdgRoot, ".kilo/kilo.json"),
       });
       expect(spawnCalls[0]?.timeoutMs).toBe(30_000);
       expect(teardownCount).toBe(1);
@@ -2674,7 +2676,7 @@ describe("summarizeReviewOrchestrationForWebhook", () => {
     }
   });
 
-  it("redirects XDG config/data dirs to bundle-local paths for kilo runs", async () => {
+  it.each(["native", "docker"] as const)("loads generated Kilo config with isolated directories and a sandbox-visible trusted path (%s)", async kind => {
     const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-kilo-xdg-"));
 
     try {
@@ -2686,29 +2688,30 @@ describe("summarizeReviewOrchestrationForWebhook", () => {
         .join("\n");
       const spawnCalls: SandboxSpawnOptions[] = [];
       let bundleManifest: { envKeys?: string[] } | undefined;
+      let hostAgentDir = "";
+      let generatedProviderNpm: string | undefined;
       const sandbox: SandboxBackend = {
-        kind: "native",
+        kind,
         async materializeFs(layout) {
+          hostAgentDir = layout.agentDir;
           await mkdir(layout.agentDir, { recursive: true });
           await mkdir(layout.tmpDir, { recursive: true });
           return { agentDir: layout.agentDir, tmpDir: layout.tmpDir, mountSpecs: [] };
         },
         async spawn(spawnOptions) {
           spawnCalls.push(spawnOptions);
-          bundleManifest = JSON.parse(await readFile(join(spawnOptions.cwd, "manifest.json"), "utf8")) as {
+          bundleManifest = JSON.parse(await readFile(join(hostAgentDir, "manifest.json"), "utf8")) as {
             envKeys?: string[];
           };
+          const config = JSON.parse(await readFile(join(hostAgentDir, ".kilo/kilo.json"), "utf8"));
+          generatedProviderNpm = config.provider[model.providerId].npm;
           return { exitCode: 0, stdout: kiloStream, stderr: "", timedOut: false, durationMs: 9 };
         },
         async teardown() {},
       };
       const agentAdapter: AgentAdapter = {
-        kind: "kilo",
+        ...createKiloAdapter(),
         async detect() { return { available: true, binary: "kilo" }; },
-        buildCommand() { return ["kilo", "run", "--auto"]; },
-        async materializeConfig(_m, workingDir) {
-          return { configFiles: new Map(), envVars: {}, workingDir };
-        },
       };
 
       await runReviewOrchestration(
@@ -2730,10 +2733,14 @@ describe("summarizeReviewOrchestrationForWebhook", () => {
       );
 
       const agentSpawn = spawnCalls[0];
-      const agentDir = String(agentSpawn?.cwd ?? "");
-      expect(agentSpawn?.env?.XDG_CONFIG_HOME).toBe(join(agentDir, ".aicr-xdg-config"));
-      expect(agentSpawn?.env?.XDG_DATA_HOME).toBe(join(agentDir, ".aicr-xdg-data"));
+      const agentDir = kind === "native" ? String(agentSpawn?.cwd ?? "") : "/workspace/agent";
+      const sandboxPath = (suffix: string) => kind === "native" ? join(agentDir, suffix) : `${agentDir}/${suffix}`;
+      expect(agentSpawn?.env?.XDG_CONFIG_HOME).toBe(sandboxPath(".aicr-xdg-config"));
+      expect(agentSpawn?.env?.XDG_DATA_HOME).toBe(sandboxPath(".aicr-xdg-data"));
       expect(bundleManifest?.envKeys).toContain("XDG_DATA_HOME");
+      expect(agentSpawn?.env?.KILO_CONFIG).toBe(sandboxPath(".kilo/kilo.json"));
+      expect(generatedProviderNpm).toBe("@ai-sdk/openai-compatible");
+      expect(bundleManifest?.envKeys).toContain("KILO_CONFIG");
       expect(agentSpawn?.env?.PI_CODING_AGENT_DIR).toBeUndefined();
       expect(bundleManifest?.envKeys).toContain("XDG_CONFIG_HOME");
     } finally {

@@ -12,6 +12,9 @@ user-invocable: false
 2. Before changing a CLI flag or generated config, refresh that adapter's
    [external source record](../../../docs/ai/source-index.md) and verify current
    upstream schema/help. Local fixtures alone can encode an invented contract.
+   For platform presets, verify both protocol choices through the enriched model
+   and actual bundle: catalog SDK metadata can describe a different protocol,
+   and SDKs differ in whether they append /messages or /v1/messages.
 3. Treat model config, MCP, instructions, skills, env/mounts and manifest as one
    per-run materialization. Write into the isolated bundle; env references keep
    secrets out of the bundle, while registered literal credentials (literal
