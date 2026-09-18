@@ -1,0 +1,14 @@
+<svg role="img" aria-label="AICodeReviewer logo" width="128" height="128" viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="aicrBg" x1="16" y1="12" x2="112" y2="116" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#2f6bff" />
+      <stop offset="1" stop-color="#12b3e8" />
+    </linearGradient>
+  </defs>
+  <rect x="12" y="12" width="104" height="104" rx="24" fill="url(#aicrBg)" />
+  <path d="M52 46 L36 64 L52 82" fill="none" stroke="#ffffff" stroke-width="7" stroke-linecap="round" stroke-linejoin="round" />
+  <path d="M76 46 L92 64 L76 82" fill="none" stroke="#ffffff" stroke-width="7" stroke-linecap="round" stroke-linejoin="round" />
+  <path d="M68 40 L60 88" fill="none" stroke="#ffffff" stroke-width="7" stroke-linecap="round" opacity="0.55" />
+  <circle cx="100" cy="100" r="20" fill="#16a34a" stroke="#ffffff" stroke-width="5" />
+  <path d="M91 100 L98 107 L110 93" fill="none" stroke="#ffffff" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round" />
+</svg>
