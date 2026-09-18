@@ -219,6 +219,7 @@ export function collectSchemaFieldPaths(root: z.ZodTypeAny): readonly SchemaFiel
 
 export type ConfigUiControlKind =
   | "text"
+  | "document"
   | "number"
   | "toggle"
   | "select"
@@ -839,6 +840,9 @@ export const CONFIG_FIELD_INVENTORY: readonly ConfigFieldSpec[] = [
 
   // ------------------------------------------------------- outputs globals
   g("outputs.template_engine", { t: "ZodEnum", d: "handlebars", own: "business", con: "packages/outputs/src template engine", wir: true, ui: "select" }),
+  // Named template documents; the wildcard row IS the whole record value (a
+  // markdown document with optional frontmatter), edited on the Templates page.
+  g("outputs.templates.*", { t: "ZodString", own: "entity", ent: "template", cap: "display text, never sealed as a credential", con: "packages/outputs/src/template-engine.ts named template source", wir: true, ui: "document" }),
   g("outputs.no_problems.action", { t: "ZodEnum", own: "business", res: "resolveNoProblemsAction", con: "packages/server/src/bootstrap.ts:resolveNoProblemsAction", wir: true, ui: "select", tid: "R09" }),
   g("outputs.no_findings", { t: "ZodNever", own: "business", ss: "removed", wir: false, st: "removed alias; rejected by schema", ui: "toggle", tid: "B03" }),
   g("outputs.author_resolution.email_mappings.*", { t: "ZodString", own: "business", res: "buildAuthorResolutionOptions", con: "packages/server/src/bootstrap.ts:buildAuthorResolutionOptions", wir: true, ui: "text" }),
@@ -856,6 +860,8 @@ export const CONFIG_FIELD_INVENTORY: readonly ConfigFieldSpec[] = [
   g("outputs.channels[].name", { t: "ZodString", own: "entity", ent: "channel", res: "resolveOutputChannelNames", con: "packages/server/src/bootstrap.ts:resolveOutputChannelNames", wir: true, ui: "text" }),
   g("outputs.channels[].kind", { t: "ZodString", own: "entity", ent: "channel", cap: "9 built-in kinds; unknown kinds silently publish nothing today", con: "packages/server/src/bootstrap.ts:createChannelPublisherFromConfig", wir: true, ui: "select" }),
   g("outputs.channels[].trigger", { t: "ZodString", own: "entity", ent: "channel", con: "packages/server/src/bootstrap.ts channel trigger lookup", wir: true, ui: "select" }),
+  g("outputs.channels[].templates.problem", { t: "ZodString", own: "entity", ent: "channel", cap: "named reference into outputs.templates; wins over workspace/built-in lookup", con: "packages/server/src/bootstrap.ts:createChannelRendering", wir: true, ui: "select" }),
+  g("outputs.channels[].templates.summary", { t: "ZodString", own: "entity", ent: "channel", cap: "named reference into outputs.templates; wins over workspace/built-in lookup", con: "packages/server/src/bootstrap.ts:createChannelRendering", wir: true, ui: "select" }),
   g("outputs.channels[].mention_author", { t: "ZodBoolean", own: "entity", ent: "channel", res: "shouldMentionAuthor", con: "packages/server/src/bootstrap.ts:shouldMentionAuthor", wir: true, ui: "toggle" }),
   g("outputs.channels[].mention_fallback", { t: "ZodEnum", own: "entity", ent: "channel", res: "buildAuthorResolutionOptions", con: "packages/server/src/bootstrap.ts:buildAuthorResolutionOptions", wir: true, ui: "select" }),
   g("outputs.channels[].no_problems.action", { t: "ZodEnum", own: "entity", ent: "channel", res: "resolveNoProblemsAction", con: "packages/server/src/bootstrap.ts:resolveNoProblemsAction", wir: true, ui: "select", tid: "R09" }),
@@ -894,6 +900,11 @@ export const CONFIG_FIELD_INVENTORY: readonly ConfigFieldSpec[] = [
   g("outputs.channels[].project_id", { t: "ZodUnknown", own: "entity", ent: "channel", ss: "passthrough", cap: "gitlab_mr_review only", con: "packages/server/src/bootstrap.ts:createGitlabMergeRequestReviewDispatcher", wir: true, ui: "text" }),
   g("outputs.channels[].merge_request_iid", { t: "ZodUnknown", own: "entity", ent: "channel", ss: "passthrough", cap: "gitlab_mr_review only", con: "packages/server/src/bootstrap.ts:createGitlabMergeRequestReviewDispatcher", wir: true, ui: "number" }),
 
+  // ------------------------------------------------------- prompts
+  // Named system-prompt documents; the wildcard row IS the whole record value
+  // (a markdown document with optional frontmatter), edited on the Prompts page.
+  g("prompts.system.*", { t: "ZodString", own: "entity", ent: "prompt", cap: "display text, never sealed as a credential", con: "packages/server/src/bootstrap.ts prompt resolvers", wir: true, ui: "document" }),
+
   // ------------------------------------------------------- queue
   g("queue.kind", { t: "ZodEnum", d: "memory", own: "bootstrap", cap: "rabbitmq reserved; rejected at bootstrap", con: "packages/core/src/queue-factory.ts:createQueueFromConfig", wir: true, ui: "select" }),
   g("queue.sqlite.path", { t: "ZodString", own: "bootstrap", con: "packages/core/src/sqlite-queue.ts", wir: true, ui: "text" }),
@@ -907,8 +918,8 @@ export const CONFIG_FIELD_INVENTORY: readonly ConfigFieldSpec[] = [
   g("queue.retry.backoff.base_ms", { t: "ZodNumber", own: "business", res: "resolveTriggerRetryConfig", con: "packages/server/src/bootstrap.ts:resolveTriggerRetryConfig", wir: true, ui: "number" }),
   g("queue.retry.backoff.max_ms", { t: "ZodNumber", own: "business", res: "resolveTriggerRetryConfig", con: "packages/server/src/bootstrap.ts:resolveTriggerRetryConfig", wir: true, ui: "number" }),
   g("queue.retry.backoff.jitter", { t: "ZodBoolean", own: "business", res: "resolveTriggerRetryConfig", con: "packages/server/src/bootstrap.ts:resolveTriggerRetryConfig", wir: true, ui: "toggle" }),
-  g("queue.dead_letter.enabled", { t: "ZodBoolean", own: "business", con: "packages/server/src/bootstrap.ts dead letter wiring", wir: true, ui: "toggle" }),
-  g("queue.dead_letter.max_age_hours", { t: "ZodNumber", own: "business", con: "packages/server/src/bootstrap.ts dead letter wiring", wir: true, ui: "number" }),
+  g("queue.dead_letter.enabled", { t: "ZodBoolean", own: "business", wir: false, st: "reserved; no runtime consumer", ui: "toggle" }),
+  g("queue.dead_letter.max_age_hours", { t: "ZodNumber", own: "business", wir: false, st: "reserved; no runtime consumer", ui: "number" }),
 
   // ------------------------------------------------------- agent / sandbox / search
   g("agent.default", { t: "ZodEnum", d: "kilo", own: "business", res: "resolveAgentAdapterFromConfig", con: "packages/server/src/bootstrap.ts:resolveAgentAdapterFromConfig", wir: true, ui: "select", tid: "H03" }),
@@ -950,6 +961,8 @@ export const CONFIG_FIELD_INVENTORY: readonly ConfigFieldSpec[] = [
   row("workspaces.defaults.triage_model_chain", DEFAULTS_ONLY, "llm.triage_model_chain", { t: "ZodString", own: "business", res: "resolveModelChainNames", con: "packages/server/src/bootstrap.ts:resolveModelChainNames", wir: true, ui: "select" }),
   row("workspaces.defaults.agent.default", DEFAULTS_ONLY, "agent.default", { t: "ZodEnum", own: "business", wir: true, con: "packages/server/src/bootstrap.ts:resolveRunOptions", ui: "select", tid: "H03" }),
   row("workspaces.defaults.prompt.base_system_prompt_file", DEFAULTS_ONLY, undefined, { t: "ZodString", own: "business", con: "packages/server/src/bootstrap.ts prompt loader", wir: true, ui: "text" }),
+  row("workspaces.defaults.prompt.system_prompt", DEFAULTS_ONLY, undefined, { t: "ZodString", own: "business", cap: "named reference into prompts.system; replaces the built-in base prompt", con: "packages/server/src/bootstrap.ts baseSystemPromptResolver", wir: true, ui: "select" }),
+  row("workspaces.defaults.prompt.extra_system_prompt", DEFAULTS_ONLY, undefined, { t: "ZodString", own: "business", cap: "named reference into prompts.system; appended after the resolved base prompt", con: "packages/server/src/bootstrap.ts extraSystemPromptResolver", wir: true, ui: "select" }),
   row("workspaces.defaults.prompt.force_skills", DEFAULTS_ONLY, undefined, { t: "ZodString[]", own: "business", con: "packages/server/src/bootstrap.ts prompt loader", wir: true, ui: "multiselect" }),
   row("workspaces.instances.*.model_chain", WORKSPACE_ONLY, "llm.default_model_chain", { t: "ZodString", own: "entity", ent: "workspace", res: "resolveModelChainNames", con: "packages/server/src/bootstrap.ts:resolveModelChainNames", wir: true, ui: "select" }),
   row("workspaces.instances.*.enabled", WORKSPACE_ONLY, undefined, { t: "ZodBoolean", own: "entity", ent: "workspace", con: "packages/core/src/config-resolution.ts:resolveWorkspaceForSource", wir: true, ui: "toggle", tid: "W12" }),
@@ -969,6 +982,8 @@ export const CONFIG_FIELD_INVENTORY: readonly ConfigFieldSpec[] = [
   row("workspaces.instances.*.triage.custom_prompt", WORKSPACE_ONLY, undefined, { t: "ZodString", own: "entity", ent: "workspace", res: "resolveIssueTriageOptions", con: "packages/server/src/bootstrap.ts:resolveIssueTriageOptions", wir: true, ui: "text" }),
   row("workspaces.instances.*.triage.dry_run", WORKSPACE_ONLY, undefined, { t: "ZodBoolean", d: false, own: "entity", ent: "workspace", res: "resolveIssueTriageOptions", con: "packages/server/src/bootstrap.ts:resolveIssueTriageOptions", wir: true, ui: "toggle" }),
   row("workspaces.instances.*.prompt.base_system_prompt_file", WORKSPACE_ONLY, undefined, { t: "ZodString", own: "entity", ent: "workspace", con: "packages/server/src/bootstrap.ts prompt loader", wir: true, ui: "text" }),
+  row("workspaces.instances.*.prompt.system_prompt", WORKSPACE_ONLY, undefined, { t: "ZodString", own: "entity", ent: "workspace", cap: "named reference into prompts.system; replaces the built-in base prompt", con: "packages/server/src/bootstrap.ts baseSystemPromptResolver", wir: true, ui: "select" }),
+  row("workspaces.instances.*.prompt.extra_system_prompt", WORKSPACE_ONLY, undefined, { t: "ZodString", own: "entity", ent: "workspace", cap: "named reference into prompts.system; appended after the resolved base prompt", con: "packages/server/src/bootstrap.ts extraSystemPromptResolver", wir: true, ui: "select" }),
   row("workspaces.instances.*.prompt.force_skills", WORKSPACE_ONLY, undefined, { t: "ZodString[]", own: "entity", ent: "workspace", con: "packages/server/src/bootstrap.ts prompt loader", wir: true, ui: "multiselect" }),
   row("workspaces.instances.*.auth.api_key_env", WORKSPACE_ONLY, undefined, { t: "ZodString", own: "entity", ent: "workspace", res: "resolveAuthConfig", con: "packages/server/src/bootstrap.ts:resolveAuthConfig", wir: true, ui: "secret-ref" }),
   row("workspaces.instances.*.auth.api_key", WORKSPACE_ONLY, undefined, { t: "ZodString", own: "entity", ent: "workspace", res: "resolveAuthConfig", con: "packages/server/src/bootstrap.ts:resolveAuthConfig", wir: true, ui: "secret-value", cap: "mutually exclusive with api_key_env" }),

@@ -1,7 +1,10 @@
 import { readFileSync, statSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { join } from "node:path";
 
 import Handlebars from "handlebars";
+
+import { markdownDocumentBody } from "@aicr/core";
 
 export type TemplateKind = "problem" | "summary";
 
@@ -583,6 +586,24 @@ export function getBuiltinTemplate(channelKind: string, kind: TemplateKind): str
 	return builtinTemplates["gitea_pr_review"]![kind];
 }
 
+export interface BuiltinTemplateAsset {
+	readonly channelKind: string;
+	readonly kind: TemplateKind;
+	readonly document: string;
+}
+
+/**
+ * Read-only built-in template documents for the management UI. Built-ins are
+ * never stored in the config database; the UI offers them as copy sources.
+ */
+export function listBuiltinTemplates(builtinTemplatesBaseDir?: string): readonly BuiltinTemplateAsset[] {
+	return Object.entries(builtinTemplates).flatMap(([channelKind, kinds]) =>
+		(["problem", "summary"] as const).map((kind) => ({ channelKind, kind,
+			document: resolveBuiltinFileTemplate({ channelKind, ...(builtinTemplatesBaseDir ? { builtinTemplatesBaseDir } : {}) }, kind)?.source ?? kinds[kind],
+		})),
+	);
+}
+
 export function clearTemplateCache(): void {
 	compiledCache.clear();
 }
@@ -646,6 +667,12 @@ export interface TemplateResolverOptions {
 	readonly workspaceTemplatesDir?: string;
 	readonly fallbackWorkspaceTemplatesDirs?: readonly string[];
 	readonly builtinTemplatesBaseDir?: string;
+	/**
+	 * Named template lookup (channel `templates.<kind>` → `outputs.templates`
+	 * document). Explicit channel references win over workspace-directory
+	 * discovery and built-in templates; frontmatter is stripped before render.
+	 */
+	readonly namedTemplateSource?: (kind: TemplateKind) => string | undefined;
 }
 
 export interface TemplateResolver {
@@ -738,6 +765,12 @@ function resolveWorkspaceTemplate(
 }
 
 function resolveTemplateSource(options: TemplateResolverOptions, kind: TemplateKind): ResolvedTemplateSource {
+	const named = options.namedTemplateSource?.(kind);
+	if (named !== undefined) {
+		const digest = createHash("sha256").update(named).digest("hex").slice(0, 16);
+		return { source: named, cacheKey: `named:${options.channelKind}:${options.channelName ?? ""}:${kind}:${digest}` };
+	}
+
 	const workspaceTemplate = resolveWorkspaceTemplate(options, kind);
 	if (workspaceTemplate) {
 		return workspaceTemplate;
@@ -757,12 +790,14 @@ function resolveTemplateSource(options: TemplateResolverOptions, kind: TemplateK
 export function createTemplateResolver(options: TemplateResolverOptions): TemplateResolver {
 	return {
 		resolveTemplate(kind: TemplateKind): string {
-			return resolveTemplateSource(options, kind).source;
+			return markdownDocumentBody(resolveTemplateSource(options, kind).source);
 		},
 
 		render(kind: TemplateKind, context: TemplateContext): string {
 			const resolved = resolveTemplateSource(options, kind);
-			return renderTemplate(resolved.source, context, resolved.cacheKey);
+			// Stored documents may carry frontmatter display metadata; only the
+			// body is handlebars source (workspace/builtin files included).
+			return renderTemplate(markdownDocumentBody(resolved.source), context, resolved.cacheKey);
 		},
 	};
 }

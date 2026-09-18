@@ -173,6 +173,8 @@ Narrative: [Configuration overview](/en/configuration/overview/).
 | `workspaces.defaults.agent.web_search.searxng.safesearch` | int 0–2 | — | SearXNG safe-search level |
 | `workspaces.defaults.outputs` | object | — | Default outputs (see `outputs` workspace fields) |
 | `workspaces.defaults.prompt.base_system_prompt_file` | string | — | Custom base system prompt file (deployment-root-relative) |
+| `workspaces.defaults.prompt.system_prompt` | string | — | Named reference into `prompts.system.<name>`; replaces the base prompt (wins over `base_system_prompt_file` and the built-in default) |
+| `workspaces.defaults.prompt.extra_system_prompt` | string | — | Named reference into `prompts.system.<name>`; appended after the resolved base prompt |
 | `workspaces.defaults.prompt.force_skills` | string[] | — | Skill names always activated, ignoring `Applies To` globs |
 | `workspaces.defaults.context_repositories[].alias` | string | — | Path-safe alias (`^[A-Za-z0-9][A-Za-z0-9._-]*$`, unique per workspace) |
 | `workspaces.defaults.context_repositories[].kind` | enum | — | `git`, `p4`, `svn` |
@@ -308,6 +310,7 @@ Narrative: [Output channels and routing](/en/configuration/outputs/).
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
 | `outputs.template_engine` | enum | `handlebars` | Template engine. `eta` is accepted by the schema but unimplemented; only `handlebars` works |
+| `outputs.templates.<id>` | string | — | Named Handlebars template document (markdown, optional frontmatter metadata; only the body is rendered), referenced by channel `templates.*` |
 | `outputs.no_problems` | object | — | Global zero-problem policy |
 | `outputs.no_problems.action` | enum | — | `publish`, `suppress`, or `publish_if_summary` |
 | `outputs.channels[]` | array | `[]` | Output channel definitions |
@@ -320,6 +323,8 @@ Narrative: [Output channels and routing](/en/configuration/outputs/).
 | `outputs.channels[].commit_url_template` | string | — | Commit link template |
 | `outputs.channels[].revision_url_template` | string | — | Revision link template |
 | `outputs.channels[].change_url_template` | string | — | Changelist link template |
+| `outputs.channels[].templates.problem` | string | — | Problem-template reference into `outputs.templates.<name>`; wins over workspace-directory and built-in lookup |
+| `outputs.channels[].templates.summary` | string | — | Summary-template reference into `outputs.templates.<name>`; wins over workspace-directory and built-in lookup |
 | `outputs.channels[].marker_prefix` | string | — | Managed-issue title prefix (default `[AICR]`) |
 | `outputs.channels[].marker_label` | string | — | Hidden body marker scoping managed issues |
 | `outputs.channels[].label_ids` | int[] | — | Gitea label IDs to attach |
@@ -345,6 +350,19 @@ Narrative: [Output channels and routing](/en/configuration/outputs/).
 | `outputs.routes.rules[].match.target_kind` | enum | — | Target kind (`pull_request`, `push`, `commit`, `issue`, `manual`, `scheduled`); `pr` is normalized to `pull_request`. GitLab MRs are reported as `pull_request`. |
 | `outputs.routes.rules[].line_comments` | string[] | — | Channel names to receive line-comment output |
 | `outputs.routes.rules[].summary` | string[] | — | Channel names to receive summary output |
+
+## `prompts`
+
+Named system-prompt documents (markdown, optional frontmatter metadata; only the
+body reaches the model). A workspace's `prompt.system_prompt` references one name
+to replace the built-in base prompt; `prompt.extra_system_prompt` references one
+to append after the base. The built-in base
+(`prompts/system/code-reviewer.system.md`) is never stored; the management UI
+offers it read-only with a "copy as new config" action.
+
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `prompts.system.<id>` | string | — | Name → system-prompt document |
 
 ## `agent`
 

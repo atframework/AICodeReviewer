@@ -185,6 +185,48 @@ describe("previewConfigRoute (R13)", () => {
     expect(preview).toMatchObject({ status: "no_match", graphMode: "v2" });
   });
 
+  it("v2 rule match without a repo ref still explains the route chain", () => {
+    const preview = previewConfigRoute(v2Config(), {
+      triggerName: "github-main",
+      targetKind: "pull_request",
+    });
+    expect(preview.status).toBe("matched");
+    if (preview.status !== "matched") return;
+    expect(preview.graphMode).toBe("v2");
+    expect(preview.routeRuleId).toBe("r-pr");
+    expect(preview.workspace).toBe("product-services");
+    expect(preview.workspaceInstanceId).toBeUndefined();
+    expect(preview.analysis.modelChain).toBe("default");
+    expect(preview.outputs.line_comments).toEqual(["gh-review"]);
+    expect(preview.note).toContain("repo");
+    // Legacy graph mode has no explicit rule to fall back on.
+    const legacy = parseEffectiveConfig(
+      {
+        llm: {
+          providers: [{ id: "main", kind: "ollama" }],
+          model_chain: { default: [{ provider: "main", model: "m", role: "any" }] },
+        },
+        triggers: [{ name: "github-main", kind: "github", token_env: "GH_TOKEN" }],
+        workspaces: { defaults: {}, instances: { "product-services": {} } },
+      },
+      1,
+    );
+    expect(previewConfigRoute(legacy, { triggerName: "github-main", targetKind: "push" })).toMatchObject({ status: "unbound" });
+  });
+
+  it("v2 rule match without a repo ref rejects an unknown workspace target", () => {
+    // compileExecutionGraph (R03) rejects the config before preview runs.
+    const config = v2Config({
+      routing: {
+        rules: [
+          { id: "r-pr", enabled: true, priority: 100, workspace: "missing", match: { triggers: ["github-main"] } },
+        ],
+      },
+    });
+    expect(() => previewConfigRoute(config, { triggerName: "github-main", targetKind: "pull_request" }))
+      .toThrowError(expect.objectContaining({ code: "invalid_reference" }) as Error);
+  });
+
   it("ambiguous priority tie surfaces the same error execution sees", () => {
     const config = v2Config({
       routing: {

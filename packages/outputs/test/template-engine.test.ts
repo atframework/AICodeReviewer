@@ -9,6 +9,7 @@ import {
 	clearTemplateCache,
 	createTemplateResolver,
 	getBuiltinTemplate,
+	listBuiltinTemplates,
 	renderBuiltinTemplate,
 	renderTemplate,
 	toTemplateProblem,
@@ -26,6 +27,21 @@ const sampleProblem = {
 	codeLanguage: "ts",
 	fingerprint: "fp-1",
 };
+
+it("lists the deployed built-in template document with the same fallback as rendering", async () => {
+	const directory = await mkdtemp(join(tmpdir(), "aicr-builtin-list-"));
+	try {
+		const document = "---\nname: Deployed summary\n---\nDeployed {{summary}}";
+		await writeFile(join(directory, "summary.hbs"), document);
+		const assets = listBuiltinTemplates(directory);
+		expect(assets.find(asset => asset.channelKind === "gitea_pr_review" && asset.kind === "summary")?.document).toBe(document);
+		expect(createTemplateResolver({ channelKind: "gitea_pr_review", builtinTemplatesBaseDir: directory }).resolveTemplate("summary")).toBe("Deployed {{summary}}");
+		expect(assets.find(asset => asset.channelKind === "gitea_pr_review" && asset.kind === "problem")?.document).toBe(getBuiltinTemplate("gitea_pr_review", "problem"));
+		expect(listBuiltinTemplates()).toContainEqual({ channelKind: "gitea_pr_review", kind: "summary", document: getBuiltinTemplate("gitea_pr_review", "summary") });
+	} finally {
+		await rm(directory, { recursive: true, force: true });
+	}
+});
 
 const sampleContext: TemplateContext = {
 	event: {
@@ -575,6 +591,66 @@ describe("createTemplateResolver", () => {
 		});
 
 		expect(resolver.render("summary", { problems: [] })).toContain("");
+	});
+
+	it("prefers the named template source over workspace and builtin lookup", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "aicr-template-named-"));
+		try {
+			await writeFile(join(dir, "gitea-pr.summary.md.hbs"), "Workspace {{summary}}", "utf8");
+			const resolver = createTemplateResolver({
+				channelKind: "gitea_pr_review",
+				channelName: "gitea-pr",
+				workspaceTemplatesDir: dir,
+				namedTemplateSource: (kind) => (kind === "summary" ? "Named {{summary}}" : undefined),
+			});
+
+			expect(resolver.resolveTemplate("summary")).toBe("Named {{summary}}");
+			expect(resolver.render("summary", sampleContext)).toBe(
+				"Named Overall the PR looks good with one problem.",
+			);
+			// Kinds without a named document fall through to workspace/builtin lookup.
+			expect(resolver.resolveTemplate("problem")).not.toBe("Named {{summary}}");
+		} finally {
+			await rm(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("strips frontmatter display metadata from named documents before rendering", () => {
+		const resolver = createTemplateResolver({
+			channelKind: "gitea_pr_review",
+			namedTemplateSource: () => "---\nname: 汇总\ndescription: 显示名\n---\nBody {{run.id}}\n",
+		});
+
+		expect(resolver.resolveTemplate("summary")).toBe("Body {{run.id}}\n");
+		expect(resolver.render("summary", sampleContext)).toBe("Body run-abc\n");
+	});
+
+	it("strips frontmatter from workspace template files before rendering", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "aicr-template-frontmatter-"));
+		try {
+			await writeFile(join(dir, "gitea-pr.summary.md.hbs"), "---\nname: ws\n---\nWS {{run.id}}", "utf8");
+			const resolver = createTemplateResolver({
+				channelKind: "gitea_pr_review",
+				channelName: "gitea-pr",
+				workspaceTemplatesDir: dir,
+			});
+
+			expect(resolver.render("summary", sampleContext)).toBe("WS run-abc");
+		} finally {
+			await rm(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("caches compiled named templates per document content", () => {
+		let current = "First {{run.id}}";
+		const resolver = createTemplateResolver({
+			channelKind: "gitea_pr_review",
+			namedTemplateSource: () => current,
+		});
+
+		expect(resolver.render("summary", sampleContext)).toBe("First run-abc");
+		current = "Second {{run.id}}";
+		expect(resolver.render("summary", sampleContext)).toBe("Second run-abc");
 	});
 });
 

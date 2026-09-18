@@ -34,6 +34,7 @@ export * from "./config-form-state.js";
 export * from "./review-policy.js";
 export * from "./io-retry.js";
 export * from "./markdown-fixer.js";
+export * from "./markdown-document.js";
 export * from "./observability.js";
 export * from "./prompt-manager.js";
 export * from "./queue.js";

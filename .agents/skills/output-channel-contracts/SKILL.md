@@ -16,6 +16,13 @@ Read only the corresponding section of `docs/output-channels.md` or architecture
 - Resolve empty-result policy per channel: built-in → `outputs.no_problems` →
   channel → workspace defaults → instance. `review.skip_lgtm` is review guidance,
   not output routing. Errors and managed lifecycle checks have separate rules.
+- Resolve template sources in order: channel `templates.{problem,summary}` named
+  reference into `outputs.templates` → workspace `templates/` directory lookup →
+  built-in template. Named documents are markdown with optional frontmatter;
+  only the body is rendered, and template text is never secret-sealed or redacted.
+  Verify document create/update/restore and preview/audit paths, including names
+  such as `token`/`example_env` and credential-shaped example text. Keep the
+  exemption scoped to document bodies; real credential fields still seal/mask.
 - Derive target context before rendering. Use PR/MR, commit, P4/SVN revision,
   scheduled/manual labels accurately; when no safe URL exists use a plain label.
   Validate allowed template variables and untrusted values.

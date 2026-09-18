@@ -3,6 +3,7 @@ import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:
 import { ConfigError, stableSerialize } from "./config-format.js";
 import { contentHashOf, type ConfigStore, type WriteSnapshotInput, type ConfigRuntimeSnapshotRecord } from "./config-store.js";
 import { isPlainObject } from "./utils.js";
+import { isMarkdownConfigMap } from "./markdown-document.js";
 
 // ---------------------------------------------------------------------------
 // Literal credential sealing (architecture §3.15)
@@ -185,6 +186,17 @@ function isWebSearchCredentialsMap(ancestors: readonly string[]): boolean {
 }
 
 /**
+ * Template/prompt document maps (`outputs.templates`, `prompts.system`) hold
+ * display text keyed by user-chosen names; the subtree is exempt from
+ * credential sealing/redaction so a document id colliding with a credential
+ * field name (e.g. "token") never seals the body. Match only the actual
+ * document maps, not similarly named passthrough objects on other entities.
+ */
+function isTemplateOrPromptSubtree(ancestors: readonly string[]): boolean {
+  return isMarkdownConfigMap(ancestors);
+}
+
+/**
  * Applies `transform` to every registered literal secret value reachable from
  * `root`. Shape-agnostic: walks config documents, database documents
  * (globals + entities.*.*.value), entity records and changeset operation
@@ -196,6 +208,12 @@ export function mapConfigSecretLiterals<T>(root: T, transform: LiteralTransform)
       return value.map((entry) => visit(entry, ancestors));
     }
     if (!isPlainObject(value)) {
+      return value;
+    }
+    if (isTemplateOrPromptSubtree(ancestors)) {
+      // Template/prompt documents are display text, never credentials — a map
+      // key colliding with a credential field name (e.g. a template named
+      // "token") must not seal or redact the document body.
       return value;
     }
     if (isWebSearchCredentialsMap(ancestors)) {

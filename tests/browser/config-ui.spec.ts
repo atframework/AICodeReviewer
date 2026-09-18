@@ -54,6 +54,35 @@ interface ConfigView {
   fileDigest: string;
 }
 
+test("kind-specific sections hide in file views, database drafts and channel views", async ({ page }) => {
+  await login(page);
+  await openConfigTab(page, "Triggers");
+  const drawer = page.locator("#config-editor");
+  await page.locator("#config-main tbody tr", { hasText: "git-main" }).getByRole("button", { name: "View", exact: true }).click();
+  for (const field of ["trigger:port", "trigger:app.app_id", "trigger:repository_url"]) {
+    const hiddenField = drawer.locator(`[data-field-id="${field}"]`);
+    await expect(hiddenField).toHaveCount(1);
+    await expect(hiddenField).toBeHidden();
+  }
+  await drawer.getByRole("button", { name: "Close", exact: true }).click();
+  await page.getByRole("button", { name: "New trigger", exact: true }).click();
+  await drawer.locator("#cfg-drawer-kind").selectOption("p4");
+  for (const field of ["trigger:app.app_id", "trigger:base_url", "trigger:repository_url"]) {
+    const hiddenField = drawer.locator(`[data-field-id="${field}"]`);
+    await expect(hiddenField).toHaveCount(1);
+    await expect(hiddenField).toBeHidden();
+    const section = drawer.locator("details.cfg-section", { has: page.locator(`[data-field-id="${field}"]`) });
+    await expect(section).toHaveCount(1);
+    await expect(section).toBeHidden();
+  }
+  await cancelDrawerAndDiscard(page);
+  await openConfigTab(page, "Channels");
+  await page.locator("#config-main tbody tr", { hasText: "pr-comments" }).getByRole("button", { name: "View", exact: true }).click();
+  await expect(drawer.locator('[data-field-id="channel:issue_mode"]')).toBeHidden();
+  await expect(drawer.locator('[data-field-id="channel:webhook_url"]')).toBeHidden();
+  await drawer.getByRole("button", { name: "Close", exact: true }).click();
+});
+
 test("Overview is the landing page after login and reload, and Live remains available", async ({ page }) => {
   const liveRequests: string[] = [];
   page.on("request", (request) => {
@@ -110,9 +139,12 @@ test("P6 regression: switching config pages closes the drawer and confirms dirty
   await expect(drawer).toBeHidden();
 
   // A clean drawer (and its provider-specific sections) closes on page switch.
+  // Kind-specific fields only exist for vertex/bedrock/google/anthropic kinds,
+  // so an ollama drawer hides that section entirely; Catalog metadata stays.
   await page.locator("#config-main tbody tr", { hasText: "drawer-leak-provider" }).getByRole("button", { name: "Edit", exact: true }).click();
   await expect(drawer.locator(".cfg-drawer-title")).toHaveText("Edit drawer-leak-provider");
-  await expect(drawer.getByText("Kind-specific", { exact: true })).toBeVisible();
+  await expect(drawer.getByText("Kind-specific", { exact: true })).toBeHidden();
+  await expect(drawer.getByText("Catalog metadata", { exact: true })).toBeVisible();
   await page.locator("#config-nav").getByRole("button", { name: "Triggers", exact: true }).click();
   await expect(drawer).toBeHidden();
   await expect(page.locator(".cfg-dialog")).toHaveCount(0);
@@ -525,6 +557,17 @@ async function saveDrawerAndWaitRevision(page: Page, request: APIRequestContext,
   return (previousHead ?? 0) + 1;
 }
 
+/** Cancel a drawer; a dirty draft raises the discard confirmation first. */
+async function cancelDrawerAndDiscard(page: Page): Promise<void> {
+  const drawer = page.locator("#config-editor");
+  await drawer.getByRole("button", { name: "Cancel", exact: true }).click();
+  const dialog = page.locator(".cfg-dialog");
+  if ((await dialog.count()) > 0) {
+    await dialog.getByRole("button", { name: "Discard", exact: true }).click();
+  }
+  await expect(drawer).toBeHidden();
+}
+
 test.describe.serial("config management UI (P6 browser gate)", () => {
   test("config tab loads with page navigation and the revision status bar", async ({ page }) => {
     await login(page);
@@ -909,5 +952,131 @@ test.describe.serial("config management UI (P6 browser gate)", () => {
     const confirm = page.locator(".cfg-dialog, [role='dialog'], .cfg-panel");
     await confirm.getByRole("button", { name: /Restore/ }).click();
     await expect.poll(async () => apiStatusRevision(request, token)).toBe(rev1 + 2);
+  });
+
+  test("database-priority prefixes stay editable and reset to file/default values", async ({ page, request }) => {
+    const token = await apiLogin(request);
+    const initial = await apiView(request, token);
+    const seeded = await request.post("/api/admin/config/changesets", {
+      headers: { Authorization: `Bearer ${token}` },
+      data: {
+        baseRevision: initial.head?.activeRevision ?? null,
+        fileDigest: initial.fileDigest,
+        operationId: "db-priority-reset-seed",
+        operations: [{ op: "set", path: ["review", "max_files"], value: 61 }],
+      },
+    });
+    expect(seeded.status()).toBe(200);
+
+    await login(page);
+
+    // §3.15 exception: agent is a database-priority prefix, so the fixture's
+    // file-owned agent.sandbox.kind stays editable instead of locking.
+    await openConfigTab(page, "Agent");
+    const sandboxKind = page.locator('#config-main [data-field-id="agent:sandbox.kind"] select');
+    await expect(sandboxKind).toBeVisible();
+    await expect(sandboxKind).toBeEnabled();
+    await expect(sandboxKind).toHaveValue("native");
+
+    // Review shows the seeded database value; the reset button clears every
+    // database override under the page's database-priority prefixes.
+    await openConfigTab(page, "Review");
+    const maxFiles = await ensureFieldVisible(page, "review:max_files");
+    await expect(maxFiles.locator("input")).toHaveValue("61");
+    // A second editor changes the head after this page froze its revision.
+    const concurrent = await apiView(request, token);
+    const changed = await request.post("/api/admin/config/changesets", {
+      headers: { Authorization: `Bearer ${token}` },
+      data: { baseRevision: concurrent.head?.activeRevision ?? null, fileDigest: concurrent.fileDigest,
+        operationId: "db-priority-reset-conflict", operations: [{ op: "set", path: ["review", "max_files"], value: 75 }] },
+    });
+    expect(changed.status()).toBe(200);
+    await page.locator("#config-main").getByRole("button", { name: "Reset database overrides", exact: true }).click();
+    await page.locator(".cfg-dialog").getByRole("button", { name: "Reset", exact: true }).click();
+    const conflict = page.locator("#config-main .cfg-panel-conflict");
+    await expect(conflict).toContainText("75");
+    expect((await apiView(request, token)).globals.review?.max_files).toBe(75);
+    await conflict.getByRole("button", { name: "Keep my changes and retry", exact: true }).click();
+    await expect(page.locator("#config-status")).toContainText("Saved as revision");
+    // The override is gone: the effective value falls back to the schema default.
+    expect((await apiView(request, token)).globals.review?.max_files).toBe(50);
+
+    // Nothing left to reset: the button warns instead of publishing.
+    await page.locator("#config-main").getByRole("button", { name: "Reset database overrides", exact: true }).click();
+    await expect(page.locator("#config-status")).toContainText("No database overrides to reset");
+  });
+
+  test("templates and prompts pages manage documents and copy built-in assets", async ({ page, request }) => {
+    const token = await apiLogin(request);
+    await login(page);
+    const drawer = page.locator("#config-editor");
+
+    // Templates: create a markdown document with frontmatter metadata.
+    await openConfigTab(page, "Templates");
+    await page.getByRole("button", { name: "New template", exact: true }).click();
+    await setTextField(drawer, "template:$name", "browser-summary");
+    await setTextField(drawer, "template:*", "---\nname: 浏览器汇总\n---\nSummary {{run.id}}\n");
+    await drawer.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(drawer).toBeHidden();
+
+    // Roundtrip: the document loads back verbatim.
+    await page.locator("#config-main tbody tr", { hasText: "browser-summary" }).getByRole("button", { name: "Edit", exact: true }).click();
+    await expect(drawer.locator('[data-field-id="template:*"] textarea')).toHaveValue("---\nname: 浏览器汇总\n---\nSummary {{run.id}}\n");
+    await cancelDrawerAndDiscard(page);
+
+    // Built-in templates are read-only copy sources; copying prefills a create draft.
+    const builtinTemplate = page.locator("#config-main .cfg-builtin-asset", { hasText: "gitea_pr_review/summary" });
+    await expect(builtinTemplate).toBeVisible();
+    await builtinTemplate.getByRole("button", { name: "Copy as new database config", exact: true }).click();
+    await expect(drawer.locator(".cfg-drawer-title")).toContainText("copied from gitea_pr_review/summary");
+    await expect(drawer.locator('[data-field-id="template:*"] textarea')).toHaveValue(/AI Code Review Summary/);
+    await setTextField(drawer, "template:$name", "browser-builtin-copy");
+    await drawer.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(drawer).toBeHidden();
+    await expect(page.locator("#config-main tbody tr", { hasText: "browser-builtin-copy" })).toBeVisible();
+
+    // Prompts: create + roundtrip; the built-in base prompt ships as a copy source.
+    await openConfigTab(page, "Prompts");
+    await page.getByRole("button", { name: "New prompt", exact: true }).click();
+    await setTextField(drawer, "prompt:$name", "team-extra");
+    await setTextField(drawer, "prompt:*", "Extra review rules for the team.\n");
+    await drawer.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(drawer).toBeHidden();
+    await page.locator("#config-main tbody tr", { hasText: "team-extra" }).getByRole("button", { name: "Edit", exact: true }).click();
+    await expect(drawer.locator('[data-field-id="prompt:*"] textarea')).toHaveValue("Extra review rules for the team.\n");
+    await cancelDrawerAndDiscard(page);
+    const builtinPrompt = page.locator("#config-main .cfg-builtin-asset", { hasText: "code-reviewer" });
+    await expect(builtinPrompt).toBeVisible();
+    await builtinPrompt.getByRole("button", { name: "Copy as new database config", exact: true }).click();
+    await expect(drawer.locator('[data-field-id="prompt:*"] textarea')).not.toHaveValue("");
+    await cancelDrawerAndDiscard(page);
+
+    // Named references: options endpoints serve the created entities.
+    const templateOptions = await (await request.get("/api/admin/config/options/templates", { headers: { Authorization: `Bearer ${token}` } })).json();
+    expect(templateOptions.options.map((option: { value: string }) => option.value)).toContain("browser-summary");
+    const promptOptions = await (await request.get("/api/admin/config/options/prompts", { headers: { Authorization: `Bearer ${token}` } })).json();
+    expect(promptOptions.options.map((option: { value: string }) => option.value)).toContain("team-extra");
+
+    // Channel drawer: templates.problem select lists the created template.
+    await openConfigTab(page, "Channels");
+    await page.getByRole("button", { name: "New channel", exact: true }).click();
+    await drawer.locator("#cfg-drawer-kind").selectOption("gitea_issue");
+    const templateSection = drawer.locator("details", { has: page.locator('[data-field-id="channel:templates.problem"]') }).first();
+    if ((await templateSection.getAttribute("open")) === null) await templateSection.locator("summary").first().click();
+    const problemField = drawer.locator('[data-field-id="channel:templates.problem"]');
+    await problemField.getByRole("button", { name: "Set value" }).click();
+    await expect(problemField.locator("select option", { hasText: "browser-summary" })).toHaveCount(1);
+    await cancelDrawerAndDiscard(page);
+
+    // Workspace drawer: prompt.system_prompt select lists the created prompt.
+    // Instance fields use the Inherit/Override segment instead of "Set value".
+    await openConfigTab(page, "Workspaces");
+    await page.getByRole("button", { name: "New workspace", exact: true }).click();
+    const systemPromptField = drawer.locator('[data-field-id="workspace:prompt.system_prompt"]');
+    await expect(systemPromptField.locator("select option", { hasText: "team-extra" })).toHaveCount(1);
+    await systemPromptField.getByRole("button", { name: "Override", exact: true }).click();
+    await systemPromptField.locator("select").selectOption("team-extra");
+    await expect(systemPromptField.locator("select")).toHaveValue("team-extra");
+    await cancelDrawerAndDiscard(page);
   });
 });

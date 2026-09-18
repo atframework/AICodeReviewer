@@ -19,6 +19,7 @@ import {
 import { validateEntityCapabilities } from "./config-capabilities.js";
 import { carryOverSecretLiterals, LITERAL_SECRET_FIELDS } from "./config-secret-sealing.js";
 import { isPlainObject } from "./utils.js";
+import { isMarkdownConfigMap } from "./markdown-document.js";
 import type { AppConfigInput } from "./config.js";
 
 /**
@@ -364,6 +365,7 @@ export interface ConfigIssue {
 export function collectSecretEnvIssues(config: unknown): readonly ConfigIssue[] {
   const issues: ConfigIssue[] = [];
   const visit = (value: unknown, path: string[]): void => {
+    if (isMarkdownConfigMap(path)) return;
     if (Array.isArray(value)) {
       value.forEach((entry, index) => visit(entry, [...path, String(index)]));
       return;
@@ -408,6 +410,8 @@ export const DATABASE_ENTITY_COLLECTION_KEYS = [
   "channels",
   "workspaces",
   "routes",
+  "templates",
+  "prompts",
 ] as const;
 
 export type DatabaseEntityCollectionKey = (typeof DATABASE_ENTITY_COLLECTION_KEYS)[number];
@@ -419,6 +423,8 @@ export const DATABASE_COLLECTION_KIND: Record<DatabaseEntityCollectionKey, Confi
   channels: "channel",
   workspaces: "workspace",
   routes: "route",
+  templates: "template",
+  prompts: "prompt",
 };
 
 export const DATABASE_KIND_COLLECTION: Record<ConfigEntityKind, DatabaseEntityCollectionKey> = {
@@ -428,9 +434,11 @@ export const DATABASE_KIND_COLLECTION: Record<ConfigEntityKind, DatabaseEntityCo
   channel: "channels",
   workspace: "workspaces",
   route: "routes",
+  template: "templates",
+  prompt: "prompts",
 };
 
-export type DatabaseEntityValue = Record<string, unknown> | Record<string, unknown>[];
+export type DatabaseEntityValue = Record<string, unknown> | Record<string, unknown>[] | string;
 
 export interface DatabaseEntityRecord {
   /** Stable record id, immutable across renames. */
@@ -448,7 +456,8 @@ export const databaseEntityRecordSchema = z
     name: z.string().min(1),
     enabled: z.boolean(),
     note: z.string().optional(),
-    value: z.union([z.record(z.string(), z.unknown()), z.array(z.record(z.string(), z.unknown()))]),
+    // String values carry template/prompt markdown documents.
+    value: z.union([z.record(z.string(), z.unknown()), z.array(z.record(z.string(), z.unknown())), z.string()]),
   })
   .strict();
 
@@ -472,6 +481,8 @@ export const databaseConfigDocumentSchema: z.ZodType<DatabaseConfigDocument> = z
         channels: z.record(z.string().min(1), databaseEntityRecordSchema).optional(),
         workspaces: z.record(z.string().min(1), databaseEntityRecordSchema).optional(),
         routes: z.record(z.string().min(1), databaseEntityRecordSchema).optional(),
+        templates: z.record(z.string().min(1), databaseEntityRecordSchema).optional(),
+        prompts: z.record(z.string().min(1), databaseEntityRecordSchema).optional(),
       })
       .strict()
       .optional(),
@@ -500,6 +511,27 @@ export const DATABASE_GLOBAL_PREFIXES: readonly ConfigPath[] = [
   ["workspaces", "cache"],
   ["workspaces", "defaults"],
 ];
+
+/**
+ * Global prefixes where a database value WINS over the file (architecture
+ * §3.15 exception): shared operations tuning that operators adjust at
+ * runtime without redeploying the file. Everywhere else the file wins.
+ * File values under these prefixes still apply when the database does not
+ * set the leaf, but they never create file locks and never block writes.
+ */
+export const DATABASE_PRIORITY_PREFIXES: readonly ConfigPath[] = [
+  ["agent"],
+  ["review"],
+  ["queue", "workers"],
+  ["queue", "rate_limit"],
+  ["queue", "retry"],
+  ["queue", "dead_letter"],
+];
+
+/** True when the path falls under a database-priority prefix. */
+export function isDatabasePriorityPath(path: ConfigPath): boolean {
+  return DATABASE_PRIORITY_PREFIXES.some((prefix) => isPathPrefix(prefix, path));
+}
 
 /** Bootstrap trust-boundary prefixes; the database may never write them. */
 export const BOOTSTRAP_CONFIG_PREFIXES: readonly ConfigPath[] = [
@@ -611,7 +643,11 @@ export function validateDatabaseDocument(
           entity: { kind, id: record.name },
         });
       }
-      if (kind === "model_group" ? !Array.isArray(record.value) : !isPlainObject(record.value)) {
+      if (kind === "model_group"
+        ? !Array.isArray(record.value)
+        : kind === "template" || kind === "prompt"
+          ? typeof record.value !== "string"
+          : !isPlainObject(record.value)) {
         throw new ConfigError("entity_id_mismatch", `Database ${kind} has an invalid value shape.`, {
           entity: { kind, id: record.name },
         });
@@ -729,6 +765,8 @@ export interface MergedConfig {
   readonly shadowedEntities: readonly ConfigEntityRef[];
   /** Database overlay including shadowed entities, for diagnostics only. */
   readonly databaseOverlay: AppConfigInput;
+  /** Raw file document the merge ran against; feeds reverse override views. */
+  readonly fileDocument: AppConfigInput | undefined;
 }
 
 function cloneConfigValue<T>(value: T): T {
@@ -773,6 +811,8 @@ const EMPTY_ENTITY_IDS: FileEntityIds = {
   channel: new Set(),
   workspace: new Set(),
   route: new Set(),
+  template: new Set(),
+  prompt: new Set(),
 };
 
 /**
@@ -806,14 +846,21 @@ export function mergeConfigSources(input: {
   const recordSource = (path: string[], source: "file" | "database"): void => {
     const formatted = formatConfigPath(path);
     provenance.set(formatted, source);
-    if (source === "file") {
+    // Database-priority prefixes never create file locks: a file value there
+    // is the fallback the database may override at runtime (§3.15 exception).
+    if (source === "file" && !isDatabasePriorityPath(path)) {
       fileLocks.add(formatted);
     }
   };
 
   const merge = (dbValue: unknown, fileValue: unknown, path: string[]): unknown => {
-    const source = fileValue === undefined ? "database" : "file";
-    const winner = fileValue === undefined ? dbValue : fileValue;
+    const dbPriority = isDatabasePriorityPath(path);
+    const source = dbPriority
+      ? (dbValue === undefined ? "file" : "database")
+      : (fileValue === undefined ? "database" : "file");
+    const winner = dbPriority
+      ? (dbValue === undefined ? fileValue : dbValue)
+      : (fileValue === undefined ? dbValue : fileValue);
     const collection = collections.get(formatConfigPath(path));
     if (collection !== undefined && winner !== undefined) {
       const entriesOf = (node: unknown): [string, unknown][] | undefined => {
@@ -880,6 +927,7 @@ export function mergeConfigSources(input: {
     fileEntityIds,
     shadowedEntities: projected.shadowedEntities,
     databaseOverlay,
+    fileDocument: file,
   };
 }
 
@@ -918,8 +966,8 @@ export function buildEffectiveConfigView(merged: MergedConfig, parsed: unknown):
   const isBootstrapLeaf = (path: string[]): boolean =>
     BOOTSTRAP_CONFIG_PREFIXES.some((prefix) => isPathPrefix(prefix, path) || isPathPrefix(path, prefix));
 
-  const databaseValueAt = (path: ConfigPath): unknown => {
-    let value: unknown = merged.databaseOverlay;
+  const valueAtPath = (root: unknown, path: ConfigPath): unknown => {
+    let value: unknown = root;
     for (let index = 0; index < path.length; index += 1) {
       const collection = collections.find((candidate) => formatConfigPath(candidate.path) === formatConfigPath(path.slice(0, index)));
       value = collection?.shape === "array" && Array.isArray(value)
@@ -928,6 +976,9 @@ export function buildEffectiveConfigView(merged: MergedConfig, parsed: unknown):
     }
     return value;
   };
+
+  const databaseValueAt = (path: ConfigPath): unknown => valueAtPath(merged.databaseOverlay, path);
+  const fileValueAt = (path: ConfigPath): unknown => valueAtPath(merged.fileDocument, path);
 
   const visit = (value: unknown, path: string[]): void => {
     const collection = collections.find((candidate) => formatConfigPath(candidate.path) === formatConfigPath(path));
@@ -963,10 +1014,20 @@ export function buildEffectiveConfigView(merged: MergedConfig, parsed: unknown):
         overridden.push({ source: "database", value: dbValue });
       }
     }
+    if (source === "database" && isDatabasePriorityPath(path)) {
+      // Database-priority prefixes win over the file; surface the file value
+      // the same way file-owned fields surface shadowed database values.
+      const fileValue = fileValueAt(path);
+      if (fileValue !== undefined && !identicalContent(fileValue, value)) {
+        overridden.push({ source: "file", value: fileValue });
+      }
+    }
     view.push({
       path: formatConfigPath(path),
       source,
-      editable: source !== "file" && !isBootstrapLeaf(path),
+      // Database-priority leaves stay writable even when the file supplies
+      // the current fallback value (§3.15 exception).
+      editable: (source !== "file" || isDatabasePriorityPath(path)) && !isBootstrapLeaf(path),
       effectiveValue: value,
       overriddenValues: overridden,
     });
@@ -1023,6 +1084,17 @@ export function collectEntityReferences(config: AppConfigInput): readonly Config
       }
     }
   };
+  const addWorkspacePromptRefs = (prompt: unknown, path: ConfigPath): void => {
+    if (!isPlainObject(prompt)) {
+      return;
+    }
+    for (const field of ["system_prompt", "extra_system_prompt"] as const) {
+      const name = prompt[field];
+      if (typeof name === "string" && name.length > 0) {
+        add([...path, field], { kind: "prompt", id: name });
+      }
+    }
+  };
 
   const llm = config.llm;
   if (isPlainObject(llm)) {
@@ -1065,8 +1137,19 @@ export function collectEntityReferences(config: AppConfigInput): readonly Config
   if (isPlainObject(outputs)) {
     if (Array.isArray(outputs.channels)) {
       outputs.channels.forEach((channel, index) => {
-        if (isPlainObject(channel) && typeof channel.trigger === "string" && channel.trigger.length > 0) {
+        if (!isPlainObject(channel)) {
+          return;
+        }
+        if (typeof channel.trigger === "string" && channel.trigger.length > 0) {
           add(["outputs", "channels", String(index), "trigger"], { kind: "trigger", id: channel.trigger });
+        }
+        if (isPlainObject(channel.templates)) {
+          for (const kind of ["problem", "summary"] as const) {
+            const name = channel.templates[kind];
+            if (typeof name === "string" && name.length > 0) {
+              add(["outputs", "channels", String(index), "templates", kind], { kind: "template", id: name });
+            }
+          }
         }
       });
     }
@@ -1096,6 +1179,7 @@ export function collectEntityReferences(config: AppConfigInput): readonly Config
       addGroupRef(workspaces.defaults.model_chain, ["workspaces", "defaults", "model_chain"]);
       addGroupRef(workspaces.defaults.triage_model_chain, ["workspaces", "defaults", "triage_model_chain"]);
       addWorkspaceOutputsRefs(workspaces.defaults.outputs, ["workspaces", "defaults", "outputs"]);
+      addWorkspacePromptRefs(workspaces.defaults.prompt, ["workspaces", "defaults", "prompt"]);
     }
     if (isPlainObject(workspaces.instances)) {
       for (const [id, instance] of Object.entries(workspaces.instances)) {
@@ -1111,6 +1195,7 @@ export function collectEntityReferences(config: AppConfigInput): readonly Config
           });
         }
         addWorkspaceOutputsRefs(instance.outputs, ["workspaces", "instances", id, "outputs"]);
+        addWorkspacePromptRefs(instance.prompt, ["workspaces", "instances", id, "prompt"]);
       }
     }
   }
@@ -1369,7 +1454,11 @@ export function copyFileEntityAsDatabaseDraft(
   } else if (collection.shape === "map" && isPlainObject(node)) {
     value = node[target.id];
   }
-  if (value === undefined || (target.kind === "model_group" ? !Array.isArray(value) : !isPlainObject(value))) {
+  if (value === undefined || (target.kind === "model_group"
+    ? !Array.isArray(value)
+    : target.kind === "template" || target.kind === "prompt"
+      ? typeof value !== "string"
+      : !isPlainObject(value))) {
     throw new ConfigError("entity_not_found", `File ${target.kind} "${target.id}" does not exist.`, {
       entity: target,
     });

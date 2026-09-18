@@ -30,6 +30,10 @@ user-invocable: false
    references; `{ value }` literals inject directly). Inherited file literals
    retain their destination restrictions; repository-owned input
    cannot increase approval or sandbox permissions (architecture §3.16).
+   Named base/extra prompts must resolve from the pinned generation; strip
+   frontmatter and append the extra body after the resolved base. Exercise
+   actual bootstrap resolvers and an old task after publication
+   (`runtime-generation.test.ts`), alongside prompt assembly tests.
 6. Validate generated files, sandbox-visible paths, env, manifest, and actual
    context/output collection. Use current registry names and implemented tools;
    stdout JSON/XML is a compatibility fallback to native MCP.

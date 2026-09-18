@@ -447,6 +447,8 @@ When an agent repair attempt only returns prose equivalent to “no actionable p
 
 Built-in templates are packaged in `packages/outputs/src/template-engine.ts`. They are intentionally small and cover problem-comment and summary variants for every built-in channel kind.
 
+A channel may pin a named template from the database-managed `outputs.templates` map via `templates.problem` / `templates.summary`. A configured named reference wins over workspace-directory and built-in lookup; the referenced document is markdown with optional frontmatter (display metadata only — only the body is rendered).
+
 Override templates per workspace by placing files under:
 
 ```text

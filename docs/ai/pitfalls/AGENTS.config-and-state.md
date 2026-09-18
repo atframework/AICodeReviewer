@@ -73,6 +73,10 @@ consumers in `packages/server/src/bootstrap.ts`.
   descendants disappear or UI IDs become config keys. Check row-relative paths,
   consecutive nested edits, unknown descendants and explicit empty values
   (`config-ui-integration.test.ts`, `tests/browser/config-ui.spec.ts`).
+  Kind applicability is independent of write permission: file-owned views must
+  hide irrelevant fields too. Reset conflicts must retry the selected `unset`
+  operations, not encode the unchanged editor draft (`config-ui-runtime.test.ts`,
+  `tests/browser/config-ui.spec.ts`).
 - Freeze each editor's revision/digest and the complete submitted payload.
   Refreshing another page must not advance a dirty draft's CAS base. After a lost
   response, query the operation and reuse the exact payload for an explicit retry;

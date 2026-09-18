@@ -540,6 +540,21 @@ triggers:
 # ---------------------------------------------------------------------------
 outputs:
   template_engine: handlebars
+  # Named Handlebars template documents (markdown, optional frontmatter for UI
+  # display metadata; only the body is rendered). Channels reference these via
+  # templates.problem / templates.summary; a named reference wins over the
+  # workspace templates directory and the built-in templates. Built-in assets
+  # are read-only in the management UI and can be copied as starting points.
+  # Remove channel references before deleting or disabling a named template,
+  # or stage both changes in one publication. Document text is preserved verbatim.
+  # templates:
+  #   pr-summary-compact: |
+  #     ---
+  #     name: Compact PR summary
+  #     description: Single-paragraph summary for small teams
+  #     ---
+  #     ## AI Code Review Summary
+  #     {{summary}}
   # Zero-problem output policy. Notification channels are quiet by default;
   # lifecycle/audit channels can override to publish.
   no_problems: { action: suppress } # publish | suppress
@@ -551,6 +566,9 @@ outputs:
       trigger: gitea
       mention_author: false
       no_problems: { action: suppress }
+      # templates:                      # optional named template references into outputs.templates
+      #   summary: pr-summary-compact   #   wins over workspace templates dir and built-in lookup
+      #   problem: pr-problem-detailed
       # review_mode: auto              # auto (default) | review | comment
       #   auto   — try PR review API first, fallback to issue comment on 403/422
       #   review — always use PR review API, no fallback
@@ -708,8 +726,8 @@ queue:
   #     jitter: true
 
   # dead_letter:
-  #   enabled: true       # When true, exhausted retries are parked for inspection
-  #   max_age_hours: 72   # Parked items older than this are pruned
+  #   enabled: true       # Reserved; accepted by the schema, no runtime consumer
+  #   max_age_hours: 72   # Reserved; does not prune queued jobs
 
 # ---------------------------------------------------------------------------
 # Diff compression (AICR-side)
@@ -1094,6 +1112,21 @@ review:
 # (route entities require format version 2). Scheduled triggers are
 # schema-only/inert — the kind parses but has no runtime resolver.
 # Bootstrap connections and workspaces.root stay file-owned.
+# Named system-prompt documents (markdown, optional frontmatter for UI display
+# metadata; only the body reaches the model). A workspace's
+# prompt.system_prompt references one name to replace the built-in base prompt;
+# prompt.extra_system_prompt references one to append after the resolved base.
+# The built-in base prompt (prompts/system/code-reviewer.system.md) is never
+# stored; the management UI offers it read-only as a copy source.
+# prompts:
+#   system:
+#     strict-reviewer: |
+#       ---
+#       name: Strict reviewer
+#       description: Extra rules appended after the built-in base prompt
+#       ---
+#       Always flag public API changes missing documentation.
+
 workspaces:
   cache:
     max_total_gb: 10
@@ -1107,6 +1140,8 @@ workspaces:
       no_problems: { action: suppress }
     # prompt:                           # per-workspace prompt overrides (see instances below)
     #   base_system_prompt_file: "prompts/system/code-reviewer.system.md"
+    #   system_prompt: strict-reviewer        # named reference into prompts.system; replaces the built-in base prompt
+    #   extra_system_prompt: strict-reviewer  # named reference; appended after the resolved base prompt
     #   force_skills:                   # skill names to always activate regardless of Applies To glob
     #     - "repo-conventions"
 
@@ -1154,6 +1189,8 @@ workspaces:
       # Per-workspace prompt override (optional, overrides global --base-prompt)
       # prompt:
       #   base_system_prompt_file: "prompts/system/strict-reviewer.system.md"
+      #   system_prompt: strict-reviewer        # named reference into prompts.system; replaces the base prompt
+      #   extra_system_prompt: team-rules       # named reference; appended after the resolved base prompt
       #   force_skills:                     # always activate these skills regardless of glob matching
       #     - "security-audit"
       # Auxiliary context repositories (optional): materialized fresh each review

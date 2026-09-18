@@ -28,6 +28,7 @@ import {
   type ReviewProvider,
 
   isConfigError,
+  type AppConfig,
   type WorkspaceResolution,
 } from "@aicr/core";
 import { admissionUnavailableReason, type RuntimeConfigManager } from "./runtime-config.js";
@@ -125,6 +126,50 @@ export interface TriggerRetryConfig {
     readonly base_ms?: number;
     readonly max_ms?: number;
     readonly jitter?: boolean;
+  };
+}
+
+/**
+ * Normalizes queue.retry (canonical attempts/backoff plus the legacy
+ * max_attempts/backoff_seconds aliases) into the runtime retry shape.
+ * Accepts any config carrying `queue` — file AppConfig or a merged
+ * generation EffectiveConfigV2 — so retries follow the pinned generation.
+ */
+export function resolveTriggerRetryConfig(config: { readonly queue?: AppConfig["queue"] | undefined }): TriggerRetryConfig | undefined {
+  const retry = config.queue?.retry;
+  if (!retry) {
+    return undefined;
+  }
+
+  const raw = retry as Record<string, unknown>;
+  const legacyAttempts = typeof raw.max_attempts === "number" && raw.max_attempts > 0
+    ? Math.floor(raw.max_attempts)
+    : undefined;
+  const attempts = retry.attempts ?? legacyAttempts;
+  const legacyBackoffSeconds = typeof raw.backoff_seconds === "number" && raw.backoff_seconds > 0
+    ? raw.backoff_seconds
+    : undefined;
+  const legacyBackoff = legacyBackoffSeconds !== undefined
+    ? {
+        kind: "constant" as const,
+        base_ms: legacyBackoffSeconds * 1000,
+        max_ms: legacyBackoffSeconds * 1000,
+        jitter: false,
+      }
+    : undefined;
+  const configuredBackoff = retry.backoff
+    ? {
+        ...(retry.backoff.kind !== undefined ? { kind: retry.backoff.kind } : {}),
+        ...(retry.backoff.base_ms !== undefined ? { base_ms: retry.backoff.base_ms } : {}),
+        ...(retry.backoff.max_ms !== undefined ? { max_ms: retry.backoff.max_ms } : {}),
+        ...(retry.backoff.jitter !== undefined ? { jitter: retry.backoff.jitter } : {}),
+      }
+    : undefined;
+  const backoff = configuredBackoff ?? legacyBackoff;
+
+  return {
+    ...(attempts !== undefined ? { attempts } : {}),
+    ...(backoff !== undefined ? { backoff } : {}),
   };
 }
 
@@ -1767,11 +1812,14 @@ async function scheduleTriggerProcessing(
     ...buildTriggerEventLogFields(reviewEvent),
   }));
 
-  const maxAttempts = triggerRetry?.attempts ?? 3;
-  const backoffBaseMs = triggerRetry?.backoff?.base_ms ?? 5000;
-  const backoffMaxMs = triggerRetry?.backoff?.max_ms ?? 60000;
-  const backoffKind = triggerRetry?.backoff?.kind ?? "exponential";
-  const backoffJitter = triggerRetry?.backoff?.jitter ?? true;
+  // queue.retry follows the pinned generation (merged file+database config);
+  // the static bootstrap value is only the no-manager file-only fallback.
+  const effectiveRetry = generation !== undefined ? resolveTriggerRetryConfig(generation.config) : triggerRetry;
+  const maxAttempts = effectiveRetry?.attempts ?? 3;
+  const backoffBaseMs = effectiveRetry?.backoff?.base_ms ?? 5000;
+  const backoffMaxMs = effectiveRetry?.backoff?.max_ms ?? 60000;
+  const backoffKind = effectiveRetry?.backoff?.kind ?? "exponential";
+  const backoffJitter = effectiveRetry?.backoff?.jitter ?? true;
 
   function onCompleted(): void {
     void releaseConfigPin().catch((error: unknown) => console.warn(admissionUnavailableReason(error)));

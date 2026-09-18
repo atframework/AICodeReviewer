@@ -4,6 +4,7 @@ import { parse as parseYaml } from "yaml";
 import { z } from "zod";
 
 import { reviewTargetKindSchema } from "./review-event.js";
+import { markdownDocumentString } from "./markdown-document.js";
 import { CONFIG_MATCHER_LIMITS, assertConfigDatabaseFormat, configMatcherSchema, reasoningEffortSchema } from "./config-format.js";
 import { validateWorkspaceDefinitions } from "./config-workspace.js";
 import { autoCommitConfigSchema, type AutoCommitConfig } from "./auto-commit-policy.js";
@@ -381,6 +382,14 @@ export const outputChannelSchema = z
     commit_url_template: z.string().min(1).optional(),
     revision_url_template: z.string().min(1).optional(),
     change_url_template: z.string().min(1).optional(),
+    /** Named references into outputs.templates, one per rendered kind. */
+    templates: z
+      .object({
+        problem: z.string().min(1).optional(),
+        summary: z.string().min(1).optional(),
+      })
+      .strict()
+      .optional(),
     marker_prefix: z.string().min(1).optional(),
     marker_label: z.string().min(1).optional(),
     label_ids: z.array(z.number().int().positive()).optional(),
@@ -771,6 +780,10 @@ export const contextRepositoriesSchema = z
 export const workspacePromptSchema = z
   .object({
     base_system_prompt_file: z.string().min(1).optional(),
+    /** Named reference into prompts.system; replaces the built-in base prompt. */
+    system_prompt: z.string().min(1).optional(),
+    /** Named reference into prompts.system; appended after the resolved base prompt. */
+    extra_system_prompt: z.string().min(1).optional(),
     force_skills: z.array(z.string().min(1)).optional(),
   })
   .strict()
@@ -1021,6 +1034,18 @@ export const configSourcesSchema = z
   .strict()
   .default({});
 
+/**
+ * Named system-prompt documents (markdown with optional frontmatter metadata),
+ * referenced from workspace prompt config: `system_prompt` replaces the
+ * built-in base prompt; `extra_system_prompt` is appended after the resolved
+ * base. Values are never treated as credentials.
+ */
+export const promptsConfigSchema = z
+  .object({
+    system: z.record(z.string().min(1), markdownDocumentString).default({}),
+  })
+  .strict();
+
 export const llmConfigSchema = z
   .object({
     providers: z.array(llmProviderSchema).default([]),
@@ -1041,6 +1066,12 @@ export const llmConfigSchema = z
 export const outputsConfigSchema = z
   .object({
     template_engine: z.enum(["handlebars", "eta"]).default("handlebars"),
+    /**
+     * Named template documents (markdown with optional frontmatter metadata),
+     * referenced per kind from output channels via `templates.problem` /
+     * `templates.summary`. Values are never treated as credentials.
+     */
+    templates: z.record(z.string().min(1), markdownDocumentString).default({}),
     no_problems: noProblemsPolicySchema.optional(),
     no_findings: z.never().optional(),
     channels: z.array(outputChannelSchema).default([]),
@@ -1222,7 +1253,8 @@ const appConfigObjectSchema = z
     server: serverSchema,
     llm: llmConfigSchema.default({ providers: [], model_chain: {} }),
     triggers: z.array(triggerSchema).default([]),
-    outputs: outputsConfigSchema.default({ template_engine: "handlebars", channels: [] }),
+    outputs: outputsConfigSchema.default({ template_engine: "handlebars", templates: {}, channels: [] }),
+    prompts: promptsConfigSchema.default({ system: {} }),
     queue: queueConfigSchema.default({ kind: "memory" }),
     agent: agentConfigSchema.default({
       default: "kilo",

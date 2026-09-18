@@ -115,6 +115,8 @@ const OPTIONS_SOURCES = [
   { id: "triggers", label: "Triggers" },
   { id: "channels", label: "Channels" },
   { id: "workspaces", label: "Workspaces" },
+  { id: "templates", label: "Templates" },
+  { id: "prompts", label: "System prompts" },
   { id: "secret_envs", label: "Secret environment variables" },
   { id: "path_template_variables", label: "Path template variables" },
 ] as const;
@@ -144,6 +146,20 @@ const CHANNEL_REF_PATHS: Readonly<Record<string, true>> = {
   "workspaces.defaults.outputs.summary": true,
   "workspaces.instances.*.outputs.line_comments": true,
   "workspaces.instances.*.outputs.summary": true,
+};
+
+/** Template reference fields (outputs.templates keys), by exact inventory path. */
+const TEMPLATE_REF_PATHS: Readonly<Record<string, true>> = {
+  "outputs.channels[].templates.problem": true,
+  "outputs.channels[].templates.summary": true,
+};
+
+/** Named system-prompt reference fields (prompts.system keys), by exact path. */
+const PROMPT_REF_PATHS: Readonly<Record<string, true>> = {
+  "workspaces.defaults.prompt.system_prompt": true,
+  "workspaces.defaults.prompt.extra_system_prompt": true,
+  "workspaces.instances.*.prompt.system_prompt": true,
+  "workspaces.instances.*.prompt.extra_system_prompt": true,
 };
 
 /** Routing leaf → options source (reference fields with no inventory twin). */
@@ -349,6 +365,12 @@ function optionsSourceForRow(row: ConfigFieldSpec, control: ConfigUiControlKind)
   if (CHANNEL_REF_PATHS[row.path] === true) {
     return "channels";
   }
+  if (TEMPLATE_REF_PATHS[row.path] === true) {
+    return "templates";
+  }
+  if (PROMPT_REF_PATHS[row.path] === true) {
+    return "prompts";
+  }
   return controlBasedOptionsSource(control);
 }
 
@@ -369,7 +391,7 @@ export interface ConfigUiEntityLayout {
   readonly kind: ConfigUiEntityKind;
   readonly collection: string;
   readonly idField: string | null;
-  readonly valueShape: "object" | "array";
+  readonly valueShape: "object" | "array" | "string";
   readonly kindField?: string;
 }
 
@@ -439,6 +461,7 @@ export const PAGE_LAYOUT: readonly ConfigUiPageLayout[] = [
       { id: "mentions", label: "Mentions", scope: "entity", match: ["mention_author", "mention_fallback"] },
       { id: "policy", label: "Policies", scope: "entity", match: ["no_problems", "no_findings"] },
       { id: "urls", label: "URL templates", scope: "entity", match: ["commit_url_template", "revision_url_template", "change_url_template"] },
+      { id: "templates", label: "Templates", scope: "entity", match: ["templates"], collapsed: true },
       { id: "problem", label: "Problem issues", scope: "entity", match: ["marker_prefix", "marker_label", "label_ids", "labels", "issue_mode", "resolved_action", "assign_committer", "owners_file", "add_owners_as_assignees", "notify_feishu"], collapsed: true },
       { id: "review", label: "PR review", scope: "entity", match: ["severity_label_prefix", "severity_label_colors", "review_mode", "review_event", "review_update_strategy"], collapsed: true },
       { id: "delivery", label: "Delivery", scope: "entity", match: [""], collapsed: true },
@@ -460,6 +483,24 @@ export const PAGE_LAYOUT: readonly ConfigUiPageLayout[] = [
       { id: "agent", label: "Agent & sandbox", scope: "entity", match: ["analysis.agent", "analysis.sandbox"], collapsed: true },
       { id: "review", label: "Review overrides", scope: "entity", match: ["analysis.review"], collapsed: true },
       { id: "outputs", label: "Outputs", scope: "entity", match: ["outputs"] },
+    ],
+  },
+  {
+    id: "templates",
+    label: "Templates",
+    entity: { kind: "template", collection: "templates", idField: null, valueShape: "string" },
+    sections: [
+      { id: "identity", label: "Template", scope: "entity", match: ["$name"] },
+      { id: "document", label: "Template document", scope: "entity", match: [""] },
+    ],
+  },
+  {
+    id: "prompts",
+    label: "Prompts",
+    entity: { kind: "prompt", collection: "prompts", idField: null, valueShape: "string" },
+    sections: [
+      { id: "identity", label: "Prompt", scope: "entity", match: ["$name"] },
+      { id: "document", label: "Prompt document", scope: "entity", match: [""] },
     ],
   },
   {
@@ -548,7 +589,9 @@ const PAGE_ASSIGNMENT: readonly (readonly [string, string])[] = [
   ["llm.", "model-groups"],
   ["triggers[].", "triggers"],
   ["outputs.channels[].", "channels"],
+  ["outputs.templates.", "templates"],
   ["outputs.", "channels"],
+  ["prompts.", "prompts"],
   ["review.", "review"],
   ["agent.", "agent"],
   ["compression.", "agent"],
@@ -576,6 +619,8 @@ const ENTITY_PATH_PREFIX: Readonly<Record<string, string>> = {
   triggers: "triggers[].",
   channels: "outputs.channels[].",
   workspaces: "workspaces.instances.*.",
+  templates: "outputs.templates.",
+  prompts: "prompts.system.",
 };
 
 /** Entity record keys the schema requires (absent is NOT valid). */
@@ -708,6 +753,7 @@ interface InventoryFieldContext {
  */
 const SCALAR_VALUE_KIND_BY_CONTROL: Readonly<Record<string, ConfigUiValueKind>> = {
   text: "string",
+  document: "string",
   number: "number",
   toggle: "boolean",
   select: "string",
@@ -751,7 +797,9 @@ function buildInventoryField(row: ConfigFieldSpec, ctx: InventoryFieldContext): 
     control,
     valueKind: valueKindForRow(row),
     labelKey: ctx.fieldId,
-    label: labelFor(ctx.displayPath),
+    // The template/prompt wildcard row IS the record value (path []); give it
+    // a stable label instead of humanizing the `*` marker.
+    label: ctx.displayPath === "*" ? "Document" : labelFor(ctx.displayPath),
     section: ctx.sectionId,
     optional: ctx.scope === "globals" || required === undefined || !required.includes(ctx.displayPath),
     binding: row.inheritance.includes("defaults") || row.inheritance.includes("workspace") ? "inherit-or-override" : "value",
@@ -785,7 +833,7 @@ function buildTriggerReposItemFields(sectionId: string): readonly ConfigUiField[
 }
 
 /** Synthetic map-collection name field (record key is the id; value holds no name). */
-function syntheticNameField(kind: "model_group" | "workspace", sectionId: string): ConfigUiField {
+function syntheticNameField(kind: "model_group" | "workspace" | "template" | "prompt", sectionId: string): ConfigUiField {
   return {
     id: `${kind}:$name`,
     path: [],
@@ -1016,6 +1064,14 @@ function buildPage(layout: ConfigUiPageLayout, ctx: BuildContext): ConfigUiPage 
     if (layout.id === "workspaces") {
       const nameSection = place("entity", "$name");
       nameSection.fields.push(syntheticNameField("workspace", nameSection.id));
+    }
+    if (layout.id === "templates") {
+      const nameSection = place("entity", "$name");
+      nameSection.fields.push(syntheticNameField("template", nameSection.id));
+    }
+    if (layout.id === "prompts") {
+      const nameSection = place("entity", "$name");
+      nameSection.fields.push(syntheticNameField("prompt", nameSection.id));
     }
   }
 

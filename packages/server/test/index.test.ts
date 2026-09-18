@@ -19,6 +19,7 @@ import {
   resolveP4TriggerConfig,
   resolveSvnTriggerConfig,
   resolveModelSpecFromConfig,
+  resolveTriggerRetryConfig,
   serve,
   serveAsync,
   createReviewDeduplicator,
@@ -75,5 +76,56 @@ describe("@aicr/server", () => {
   it("exports admin auth utilities", () => {
     expect(resolveAdminAuthConfig).toBeDefined();
     expect(createAdminAuthMiddleware).toBeDefined();
+  });
+});
+
+describe("resolveTriggerRetryConfig", () => {
+  it("returns undefined without queue.retry", () => {
+    expect(resolveTriggerRetryConfig({})).toBeUndefined();
+    expect(resolveTriggerRetryConfig({ queue: { kind: "memory" } } as never)).toBeUndefined();
+  });
+
+  it("normalizes canonical attempts/backoff", () => {
+    expect(
+      resolveTriggerRetryConfig({
+        queue: {
+          kind: "memory",
+          retry: { attempts: 5, backoff: { kind: "linear", base_ms: 1000, max_ms: 9000, jitter: false } },
+        },
+      } as never),
+    ).toEqual({
+      attempts: 5,
+      backoff: { kind: "linear", base_ms: 1000, max_ms: 9000, jitter: false },
+    });
+  });
+
+  it("maps legacy max_attempts/backoff_seconds aliases", () => {
+    expect(
+      resolveTriggerRetryConfig({
+        queue: { kind: "memory", retry: { max_attempts: 4, backoff_seconds: 20 } },
+      } as never),
+    ).toEqual({
+      attempts: 4,
+      backoff: { kind: "constant", base_ms: 20000, max_ms: 20000, jitter: false },
+    });
+  });
+
+  it("prefers canonical fields over legacy aliases", () => {
+    expect(
+      resolveTriggerRetryConfig({
+        queue: {
+          kind: "memory",
+          retry: { attempts: 2, max_attempts: 9, backoff: { base_ms: 500 }, backoff_seconds: 30 },
+        },
+      } as never),
+    ).toEqual({ attempts: 2, backoff: { base_ms: 500 } });
+  });
+
+  it("drops non-positive legacy values and floors fractional attempts", () => {
+    expect(
+      resolveTriggerRetryConfig({
+        queue: { kind: "memory", retry: { max_attempts: 2.7, backoff_seconds: -1 } },
+      } as never),
+    ).toEqual({ attempts: 2 });
   });
 });

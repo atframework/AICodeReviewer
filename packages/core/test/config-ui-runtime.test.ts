@@ -1115,8 +1115,10 @@ describe("decodeDraft globals scope", () => {
       effectiveValue: 80,
       provenance: "database",
       overriddenValues: [{ source: "file", value: 50 }],
+      editable: true,
     });
-    // File-sourced: effective value shown; resolveFieldState locks it by provenance.
+    // File-sourced under a database-priority prefix: editable stays true only
+    // when the server view says so; here the view marks it not editable.
     expect(draft.fields["review:skip_lgtm"]).toEqual({
       id: "review:skip_lgtm",
       mode: "present",
@@ -1125,6 +1127,7 @@ describe("decodeDraft globals scope", () => {
       effectiveValue: true,
       provenance: "file",
       overriddenValues: [],
+      editable: false,
     });
     // Default-sourced: absent; the default is display data, never an override.
     expect(draft.fields["review:output_language"]).toEqual({
@@ -1135,6 +1138,7 @@ describe("decodeDraft globals scope", () => {
       effectiveValue: "zh-CN",
       provenance: "default",
       overriddenValues: [],
+      editable: true,
     });
     // Missing entry: provenance none.
     expect(draft.fields["review:include"]).toEqual({
@@ -1155,6 +1159,7 @@ describe("decodeDraft globals scope", () => {
       effectiveValue: { exact: "a", glob: "b" },
       provenance: "database",
       overriddenValues: [],
+      editable: true,
     });
   });
 
@@ -1203,6 +1208,7 @@ describe("decodeDraft globals scope", () => {
       effectiveValue: { "x.y": { base_url: "https://x", model: "m-1" } },
       provenance: "database",
       overriddenValues: [],
+      editable: true,
     });
     // Escaped leaf token "x~002Ey" matches the quoted raw segment "x.y".
     expect(draft.fields["llm:per_provider_overrides.x~002Ey.base_url"]).toMatchObject({
@@ -1561,6 +1567,70 @@ describe("encodeChanges entity scope", () => {
       ),
     );
     expect(skipList).toEqual({ op: "update", collection: "model_groups", recordId: "default", value: [] });
+  });
+
+  it("roundtrips string-shaped records (template/prompt documents)", () => {
+    const templatePage = makePage({
+      id: "templates",
+      entity: { kind: "template", collection: "templates", idField: null, valueShape: "string" },
+      fields: [
+        makeField({ id: "template:$name", path: [], control: "text", valueKind: "string" }),
+        makeField({ id: "template:*", path: [], control: "document", valueKind: "string" }),
+      ],
+    });
+    // Decode: the record value IS the document string.
+    const draft = decodeDraft(templatePage, makeInput({
+      record: makeRecord("Summary {{run.id}}", { name: "pr-summary" }),
+    }));
+    expect(draft.fields["template:$name"]?.value).toBe("pr-summary");
+    expect(draft.fields["template:*"]).toMatchObject({ mode: "present", value: "Summary {{run.id}}" });
+
+    // Encode: edits flow back as the bare string record value.
+    const edited: ConfigDraft = {
+      ...draft,
+      fields: {
+        ...draft.fields,
+        "template:*": draftField({ id: "template:*", value: "---\nname: x\n---\nNew body\n" }),
+      },
+    };
+    const op = singleOp(encodeChanges(templatePage, edited, makeInput()));
+    expect(op).toEqual({ op: "update", collection: "templates", recordId: "rec-1", value: "---\nname: x\n---\nNew body\n" });
+
+    // A blank/absent document encodes as the empty string, never dropped.
+    const blanked: ConfigDraft = {
+      ...draft,
+      fields: { ...draft.fields, "template:*": draftField({ id: "template:*", mode: "absent", value: "" }) },
+    };
+    expect(singleOp(encodeChanges(templatePage, blanked, makeInput()))).toEqual({
+      op: "update", collection: "templates", recordId: "rec-1", value: "",
+    });
+    const incompletePage = { ...templatePage, sections: templatePage.sections.map(section => ({ ...section,
+      fields: section.fields.filter(field => field.control !== "document"),
+    })) };
+    expect(() => encodeChanges(incompletePage, draft, makeInput())).toThrow(/document field is missing/);
+    expect(draft.fields["template:*"]?.value).toBe("Summary {{run.id}}");
+  });
+
+  it("creates string-shaped records from a create draft", () => {
+    const promptPage = makePage({
+      id: "prompts",
+      entity: { kind: "prompt", collection: "prompts", idField: null, valueShape: "string" },
+      fields: [
+        makeField({ id: "prompt:$name", path: [], control: "text", valueKind: "string" }),
+        makeField({ id: "prompt:*", path: [], control: "document", valueKind: "string" }),
+      ],
+    });
+    const draft = decodeDraft(promptPage, makeInput({ record: null }));
+    const filled: ConfigDraft = {
+      ...draft,
+      fields: {
+        ...draft.fields,
+        "prompt:$name": draftField({ id: "prompt:$name", value: "team-base" }),
+        "prompt:*": draftField({ id: "prompt:*", value: "You review code." }),
+      },
+    };
+    const op = singleOp(encodeChanges(promptPage, filled, makeInput()));
+    expect(op).toEqual({ op: "create", collection: "prompts", record: expect.objectContaining({ name: "team-base", value: "You review code." }) });
   });
 
   it("re-encodes nested matcher rows through array containers", () => {
@@ -2007,40 +2077,82 @@ describe("resolveFieldState", () => {
     expect(kindState.options).toEqual([{ value: "openai" }, { value: "anthropic" }, { value: "azure_openai" }]);
   });
 
-  it("U15: disables kind-variant fields the current kind does not use", () => {
+  it("U15: hides kind-variant fields the current kind does not use", () => {
     const githubDraft = decodeDraft(triggerPage, makeInput({ record: makeRecord(githubTriggerValue, { name: "g" }) }));
     const portState = resolveFieldState(triggerPage, "trigger:port", githubDraft, {});
+    expect(portState.visible).toBe(false);
     expect(portState.disabled).toBe(true);
     expect(portState.disabledReason).toBe('kind "github" does not use this field');
     const appState = resolveFieldState(triggerPage, "trigger:app.app_id", githubDraft, {});
+    expect(appState.visible).toBe(true);
     expect(appState.disabled).toBe(false);
 
     const p4Draft = decodeDraft(triggerPage, makeInput({ record: makeRecord(p4TriggerValue, { name: "p" }) }));
-    expect(resolveFieldState(triggerPage, "trigger:port", p4Draft, {}).disabled).toBe(false);
+    const p4PortState = resolveFieldState(triggerPage, "trigger:port", p4Draft, {});
+    expect(p4PortState.visible).toBe(true);
+    expect(p4PortState.disabled).toBe(false);
 
-    // No kind draft value: not disabled (kind unknown).
+    // No kind draft value: visible and enabled (kind unknown).
     const kindless: ConfigDraft = { ...githubDraft, fields: { "trigger:port": githubDraft.fields["trigger:port"]! } };
-    expect(resolveFieldState(triggerPage, "trigger:port", kindless, {}).disabled).toBe(false);
+    const kindlessState = resolveFieldState(triggerPage, "trigger:port", kindless, {});
+    expect(kindlessState.visible).toBe(true);
+    expect(kindlessState.disabled).toBe(false);
 
-    // Pages without a kindField never disable via kinds.
+    // Pages without a kindField never hide via kinds.
     const providerDraft = decodeDraft(providerPage, makeInput({ record: makeRecord(providerValue) }));
-    expect(resolveFieldState(providerPage, "provider:api_version", providerDraft, {}).disabled).toBe(false);
+    expect(resolveFieldState(providerPage, "provider:api_version", providerDraft, {}).visible).toBe(true);
 
-    // Entity pages whose kind field is not in the spec: not disabled.
+    // Entity pages whose kind field is not in the spec: not hidden.
     const oddPage = makePage({
       id: "x",
       entity: { kind: "trigger", collection: "triggers", idField: "name", valueShape: "object", kindField: "kind" },
       fields: [makeField({ id: "trigger:port", path: ["port"], control: "text", valueKind: "string", kinds: ["p4"] })],
     });
     const oddDraft = decodeDraft(oddPage, makeInput({ record: makeRecord({ port: "x" }) }));
-    expect(resolveFieldState(oddPage, "trigger:port", oddDraft, {}).disabled).toBe(false);
+    expect(resolveFieldState(oddPage, "trigger:port", oddDraft, {}).visible).toBe(true);
 
     // Globals pages ignore kinds entirely.
     const globalsKindsPage = makePage({
       id: "g",
       fields: [makeField({ id: "review:x", path: ["review", "x"], control: "text", valueKind: "string", kinds: ["github"] })],
     });
-    expect(resolveFieldState(globalsKindsPage, "review:x", globalsDraft({}), {}).disabled).toBe(false);
+    expect(resolveFieldState(globalsKindsPage, "review:x", globalsDraft({}), {}).visible).toBe(true);
+  });
+
+  it("U15: hides irrelevant fields even for file-owned and statically read-only records", () => {
+    const draft = decodeDraft(triggerPage, makeInput({
+      record: makeRecord(p4TriggerValue, { name: "p", source: "file", readonly: true }),
+    }));
+    expect(resolveFieldState(triggerPage, "trigger:app.app_id", draft, {})).toMatchObject({ visible: false, disabled: true });
+    expect(resolveFieldState(triggerPage, "trigger:port", draft, {})).toMatchObject({ visible: true, disabled: true });
+    const page = makePage({
+      id: "triggers",
+      entity: triggerPage.entity!,
+      fields: [
+        makeField({ id: "trigger:kind", path: ["kind"], control: "text", valueKind: "string" }),
+        makeField({ id: "trigger:app.app_id", path: ["app", "app_id"], control: "number", valueKind: "number", kinds: ["github"], readonlyReason: "read only" }),
+      ],
+    });
+    expect(resolveFieldState(page, "trigger:app.app_id", draft, {})).toMatchObject({ visible: false, disabled: true });
+  });
+
+  it("U20: create errors only decorate their matching field", () => {
+    const draft = withField(decodeDraft(triggerPage, makeInput({ record: null })), draftField({ id: "trigger:name", value: "github-main" }));
+    const errors = [{ message: "bad app", path: ["app", "app_id"], entity: { kind: "trigger", id: "github-main" } }];
+    expect(resolveFieldState(triggerPage, "trigger:app.app_id", draft, {}, errors).error).toBe("bad app");
+    expect(resolveFieldState(triggerPage, "trigger:name", draft, {}, errors).error).toBeUndefined();
+    // An incomplete spec must not attach another entity's error without an id.
+    const withoutId = { ...triggerPage, sections: triggerPage.sections.map(section => ({ ...section,
+      fields: section.fields.filter(field => field.id !== "trigger:name"),
+    })) };
+    expect(resolveFieldState(withoutId, "trigger:app.app_id", draft, {}, errors).error).toBeUndefined();
+  });
+
+  it("U20: maps errors for new map entities using the synthetic name field", () => {
+    const draft = withField(decodeDraft(workspacePage, makeInput({ record: null })), draftField({ id: "workspace:$name", value: "new-ws" }));
+    const errors = [{ message: "unsafe path", path: ["work_path"], entity: { kind: "workspace", id: "new-ws" } }];
+    expect(resolveFieldState(workspacePage, "workspace:work_path", draft, {}, errors).error).toBe("unsafe path");
+    expect(resolveFieldState(workspacePage, "workspace:$name", draft, {}, errors).error).toBeUndefined();
   });
 
   it("U13: evaluates visibleWhen with boolean equality and multiselect contains", () => {
@@ -2153,8 +2265,20 @@ describe("resolveFieldState", () => {
     expect(
       resolveFieldState(triggerPage, "trigger:name", draft, {}, [{ message: "x", entity: { kind: "trigger", id: "github-main" } }]).error,
     ).toBeUndefined();
-    // Create-mode drafts (recordId null) never match entity errors.
+    // Create-mode drafts (recordId null) match entity errors through the id
+    // field's draft value; a mismatched or absent id never maps.
     const createDraft = decodeDraft(triggerPage, makeInput({ record: null }));
+    const namedCreate = withField(createDraft, draftField({ id: "trigger:name", value: "github-main" }));
+    expect(
+      resolveFieldState(triggerPage, "trigger:name", namedCreate, {}, [
+        { message: "x", path: ["name"], entity: { kind: "trigger", id: "github-main" } },
+      ]).error,
+    ).toBe("x");
+    expect(
+      resolveFieldState(triggerPage, "trigger:name", namedCreate, {}, [
+        { message: "x", path: ["name"], entity: { kind: "trigger", id: "other" } },
+      ]).error,
+    ).toBeUndefined();
     expect(
       resolveFieldState(triggerPage, "trigger:name", createDraft, {}, [
         { message: "x", path: ["name"], entity: { kind: "trigger", id: "github-main" } },
@@ -2176,6 +2300,29 @@ describe("resolveFieldState", () => {
     expect(
       resolveFieldState(reviewPage, "review:max_files", reviewDraft, {}, [
         { message: "x", path: ["review", "max_files"], entity: { kind: "trigger", id: "t" } },
+      ]).error,
+    ).toBeUndefined();
+  });
+
+  it("U20b: maps leaf-level error paths to the parent field that edits them", () => {
+    const record = makeRecord(githubTriggerValue, { id: "github-main", name: "github-main" });
+    const draft = decodeDraft(triggerPage, makeInput({ record }));
+    // Validators report the failing leaf below the field's object path.
+    expect(
+      resolveFieldState(triggerPage, "trigger:app.app_id", draft, {}, [
+        { message: "leaf", path: ["app", "app_id", "exact"], entity: { kind: "trigger", id: "github-main" } },
+      ]).error,
+    ).toBe("leaf");
+    // ...but an error path shorter than the field path still never matches.
+    expect(
+      resolveFieldState(triggerPage, "trigger:app.app_id", draft, {}, [
+        { message: "short", path: ["app"], entity: { kind: "trigger", id: "github-main" } },
+      ]).error,
+    ).toBeUndefined();
+    // Non-empty field paths never match an empty (record-level) error path.
+    expect(
+      resolveFieldState(triggerPage, "trigger:app.app_id", draft, {}, [
+        { message: "root", path: [], entity: { kind: "trigger", id: "github-main" } },
       ]).error,
     ).toBeUndefined();
   });

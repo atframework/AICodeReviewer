@@ -338,11 +338,11 @@ describe("validateDatabaseDocument", () => {
 
 describe("mergeConfigSources", () => {
   it("passes a file-only document through with file provenance and locks", () => {
-    const merged = mergeConfigSources({ file: { review: { max_files: 10, include: ["src/**"] } } });
-    expect(merged.document).toEqual({ review: { max_files: 10, include: ["src/**"] } });
-    expect(merged.provenance.get("review.max_files")).toBe("file");
-    expect(merged.fileLocks.has("review.max_files")).toBe(true);
-    expect(merged.fileLocks.has("review.include")).toBe(true);
+    const merged = mergeConfigSources({ file: { compression: { trigger_tokens: 10, context_lines: 3 } } });
+    expect(merged.document).toEqual({ compression: { trigger_tokens: 10, context_lines: 3 } });
+    expect(merged.provenance.get("compression.trigger_tokens")).toBe("file");
+    expect(merged.fileLocks.has("compression.trigger_tokens")).toBe(true);
+    expect(merged.fileLocks.has("compression.context_lines")).toBe(true);
   });
 
   it("merges database-only entities and globals with database provenance", () => {
@@ -388,16 +388,16 @@ describe("mergeConfigSources", () => {
 
   it("merges globals per leaf: database additions survive, file leaves win (F03/F04)", () => {
     const merged = mergeConfigSources({
-      file: { review: { exclude: ["dist/**"] } },
-      database: { globals: { review: { max_files: 10, exclude: ["vendor/**"] } } },
+      file: { compression: { trigger_tokens: 5 } },
+      database: { globals: { compression: { trigger_tokens: 50, context_lines: 3 } } },
     });
-    const review = (merged.document as { review: Record<string, unknown> }).review;
-    expect(review.max_files).toBe(10);
-    expect(review.exclude).toEqual(["dist/**"]);
-    expect(merged.provenance.get("review.max_files")).toBe("database");
-    expect(merged.provenance.get("review.exclude")).toBe("file");
-    expect(merged.fileLocks.has("review.exclude")).toBe(true);
-    expect(merged.fileLocks.has("review.max_files")).toBe(false);
+    const compression = (merged.document as { compression: Record<string, unknown> }).compression;
+    expect(compression.trigger_tokens).toBe(5);
+    expect(compression.context_lines).toBe(3);
+    expect(merged.provenance.get("compression.trigger_tokens")).toBe("file");
+    expect(merged.provenance.get("compression.context_lines")).toBe("database");
+    expect(merged.fileLocks.has("compression.trigger_tokens")).toBe(true);
+    expect(merged.fileLocks.has("compression.context_lines")).toBe(false);
   });
 
   it("an empty file object declares nothing and locks nothing below it (F07)", () => {
@@ -411,20 +411,23 @@ describe("mergeConfigSources", () => {
 
   it("a file empty array is an explicit locked leaf (F06)", () => {
     const merged = mergeConfigSources({
-      file: { review: { include: [] } },
-      database: { globals: { review: { include: ["src/**"] } } },
+      file: { workspaces: { defaults: { review: { exclude: [] } } } },
+      database: { globals: { workspaces: { defaults: { review: { exclude: ["src/**"] } } } } },
     });
-    expect((merged.document as { review: Record<string, unknown> }).review.include).toEqual([]);
-    expect(merged.fileLocks.has("review.include")).toBe(true);
+    expect(
+      (merged.document as { workspaces: { defaults: { review: Record<string, unknown> } } }).workspaces.defaults
+        .review.exclude,
+    ).toEqual([]);
+    expect(merged.fileLocks.has("workspaces.defaults.review.exclude")).toBe(true);
   });
 
   it("a file scalar wins the whole subtree on type change (F08)", () => {
     const merged = mergeConfigSources({
-      file: { review: "disabled" },
-      database: { globals: { review: { max_files: 10 } } },
+      file: { compression: "disabled" },
+      database: { globals: { compression: { trigger_tokens: 10 } } },
     });
-    expect((merged.document as { review: unknown }).review).toBe("disabled");
-    expect(merged.provenance.get("review")).toBe("file");
+    expect((merged.document as { compression: unknown }).compression).toBe("disabled");
+    expect(merged.provenance.get("compression")).toBe("file");
   });
 
   it("collectFileEntityIds indexes both array and map collections by entity id", () => {
@@ -448,25 +451,29 @@ describe("mergeConfigSources", () => {
 describe("buildEffectiveConfigView", () => {
   it("marks file-owned and bootstrap fields not editable; database fields editable", () => {
     const merged = mergeConfigSources({
-      file: { review: { max_files: 10 } },
-      database: { globals: { review: { exclude: ["dist/**"] } } },
+      file: { compression: { trigger_tokens: 10 } },
+      database: { globals: { compression: { context_lines: 3 } } },
     });
     const parsed = appConfigSchema.parse(merged.document);
     const view = buildEffectiveConfigView(merged, parsed);
     const byPath = new Map(view.map((entry) => [entry.path, entry]));
-    expect(byPath.get("review.max_files")).toMatchObject({ source: "file", editable: false, effectiveValue: 10 });
-    expect(byPath.get("review.exclude")).toMatchObject({ source: "database", editable: true });
+    expect(byPath.get("compression.trigger_tokens")).toMatchObject({
+      source: "file",
+      editable: false,
+      effectiveValue: 10,
+    });
+    expect(byPath.get("compression.context_lines")).toMatchObject({ source: "database", editable: true });
     expect(byPath.get("server.port")).toMatchObject({ source: "default", editable: false, effectiveValue: 8080 });
   });
 
   it("exposes overridden database values under file-owned leaves (F09)", () => {
     const merged = mergeConfigSources({
-      file: { review: { max_files: 10 } },
-      database: { globals: { review: { max_files: 99 } } },
+      file: { compression: { trigger_tokens: 10 } },
+      database: { globals: { compression: { trigger_tokens: 99 } } },
     });
     const parsed = appConfigSchema.parse(merged.document);
     const view = buildEffectiveConfigView(merged, parsed);
-    const entry = view.find((candidate) => candidate.path === "review.max_files");
+    const entry = view.find((candidate) => candidate.path === "compression.trigger_tokens");
     expect(entry?.source).toBe("file");
     expect(entry?.overriddenValues).toEqual([{ source: "database", value: 99 }]);
   });
@@ -893,12 +900,188 @@ describe("unset restores lower-layer value (F08)", () => {
 
   it("keeps file-declared leaves intact while the database override exists (F03)", () => {
     const merged = mergeConfigSources({
-      file: { review: { exclude: ["file-glob"] } },
-      database: { globals: { review: { exclude: ["db-glob"], max_files: 99 } } },
+      file: { compression: { trigger_tokens: 5 } },
+      database: { globals: { compression: { trigger_tokens: 50, context_lines: 3 } } },
     });
     // File explicit leaf wins over the database override; the db-only leaf survives.
-    expect(merged.document.review).toEqual({ exclude: ["file-glob"], max_files: 99 });
-    expect(merged.fileLocks.has("review.exclude")).toBe(true);
+    expect(merged.document.compression).toEqual({ trigger_tokens: 5, context_lines: 3 });
+    expect(merged.fileLocks.has("compression.trigger_tokens")).toBe(true);
+    expect(merged.provenance.get("compression.context_lines")).toBe("database");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Database-priority prefixes (§3.15 exception: database > file > defaults for
+// agent / review / queue.workers|rate_limit|retry|dead_letter)
+// ---------------------------------------------------------------------------
+
+describe("database priority prefixes", () => {
+  it("database values win over file values under priority prefixes", () => {
+    const merged = mergeConfigSources({
+      file: { review: { exclude: ["dist/**"], max_files: 5 } },
+      database: { globals: { review: { max_files: 99 } } },
+    });
+    const review = (merged.document as { review: Record<string, unknown> }).review;
+    expect(review.max_files).toBe(99);
+    expect(review.exclude).toEqual(["dist/**"]);
     expect(merged.provenance.get("review.max_files")).toBe("database");
+    expect(merged.provenance.get("review.exclude")).toBe("file");
+  });
+
+  it("file values under priority prefixes never create file locks", () => {
+    const merged = mergeConfigSources({
+      file: { review: { exclude: ["dist/**"] }, agent: { default: "kilo" }, queue: { retry: { max_attempts: 3 } } },
+    });
+    expect(merged.fileLocks.has("review.exclude")).toBe(false);
+    expect(merged.fileLocks.has("agent.default")).toBe(false);
+    expect(merged.fileLocks.has("queue.retry.max_attempts")).toBe(false);
+  });
+
+  it("queue.kind and queue.sqlite stay file-locked bootstrap configuration", () => {
+    const merged = mergeConfigSources({
+      file: { queue: { kind: "sqlite" } },
+    });
+    expect(merged.fileLocks.has("queue.kind")).toBe(true);
+  });
+
+  it("marks file-owned priority leaves editable and exposes the file value under database-owned leaves", () => {
+    const merged = mergeConfigSources({
+      file: { review: { max_files: 10 } },
+      database: { globals: { review: { max_files: 99 } } },
+    });
+    const parsed = appConfigSchema.parse(merged.document);
+    const view = buildEffectiveConfigView(merged, parsed);
+    const entry = view.find((candidate) => candidate.path === "review.max_files");
+    expect(entry?.source).toBe("database");
+    expect(entry?.effectiveValue).toBe(99);
+    expect(entry?.editable).toBe(true);
+    expect(entry?.overriddenValues).toEqual([{ source: "file", value: 10 }]);
+  });
+
+  it("file-owned priority leaves without a database override stay editable (file provenance, no lock)", () => {
+    const merged = mergeConfigSources({
+      file: { review: { max_files: 10 } },
+    });
+    const parsed = appConfigSchema.parse(merged.document);
+    const view = buildEffectiveConfigView(merged, parsed);
+    const entry = view.find((candidate) => candidate.path === "review.max_files");
+    expect(entry?.source).toBe("file");
+    expect(entry?.editable).toBe(true);
+  });
+
+  it("agent leaves merge per leaf with database winning shared leaves", () => {
+    const merged = mergeConfigSources({
+      file: { agent: { timeout_seconds: 60, auto_approve: false } },
+      database: { globals: { agent: { timeout_seconds: 300 } } },
+    });
+    const agent = (merged.document as { agent: Record<string, unknown> }).agent;
+    expect(agent.timeout_seconds).toBe(300);
+    expect(agent.auto_approve).toBe(false);
+    expect(merged.provenance.get("agent.timeout_seconds")).toBe("database");
+    expect(merged.provenance.get("agent.auto_approve")).toBe("file");
+    expect(merged.fileLocks.has("agent.auto_approve")).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Template/prompt entity collections (string record values)
+// ---------------------------------------------------------------------------
+
+describe("template and prompt entities", () => {
+  const templateRecord = (id: string, name: string, value: unknown): DatabaseEntityRecord => ({
+    id,
+    name,
+    enabled: true,
+    value: value as string,
+  });
+
+  it("validateDatabaseDocument accepts string record values for template/prompt", () => {
+    const doc = validateDatabaseDocument({
+      entities: {
+        templates: { "rec-1": templateRecord("rec-1", "pr-summary", "Summary {{run.id}}") },
+        prompts: { "rec-2": templateRecord("rec-2", "team-base", "---\nname: x\n---\nYou review code.\n") },
+      },
+    });
+    expect(doc.entities?.templates?.["rec-1"]?.value).toBe("Summary {{run.id}}");
+    expect(doc.entities?.prompts?.["rec-2"]?.name).toBe("team-base");
+  });
+
+  it("validateDatabaseDocument rejects non-string record values for template/prompt", () => {
+    expectConfigError(
+      () =>
+        validateDatabaseDocument({
+          entities: { templates: { "rec-1": templateRecord("rec-1", "t", { body: "object" }) } },
+        }),
+      "entity_id_mismatch",
+    );
+    expectConfigError(
+      () =>
+        validateDatabaseDocument({
+          entities: { prompts: { "rec-1": templateRecord("rec-1", "p", [{ entry: "object" }]) } },
+        }),
+      "entity_id_mismatch",
+    );
+  });
+
+  it("merges database template/prompt entities into the document maps with database provenance", () => {
+    const merged = mergeConfigSources({
+      database: {
+        entities: {
+          templates: { "rec-1": templateRecord("rec-1", "pr-summary", "Summary {{run.id}}") },
+          prompts: { "rec-2": templateRecord("rec-2", "team-base", "You review code.") },
+        },
+      },
+    });
+    const document = merged.document as { outputs: { templates: Record<string, string> }; prompts: { system: Record<string, string> } };
+    expect(document.outputs.templates).toEqual({ "pr-summary": "Summary {{run.id}}" });
+    expect(document.prompts.system).toEqual({ "team-base": "You review code." });
+    expect(merged.provenance.get("outputs.templates.pr-summary")).toBe("database");
+    expect(merged.provenance.get("prompts.system.team-base")).toBe("database");
+  });
+
+  it("file templates shadow same-name database templates and are reported", () => {
+    const merged = mergeConfigSources({
+      file: { outputs: { templates: { "pr-summary": "File {{run.id}}" } } },
+      database: {
+        entities: { templates: { "rec-1": templateRecord("rec-1", "pr-summary", "Db {{run.id}}") } },
+      },
+    });
+    const document = merged.document as { outputs: { templates: Record<string, string> } };
+    expect(document.outputs.templates).toEqual({ "pr-summary": "File {{run.id}}" });
+    expect(merged.shadowedEntities).toEqual([{ kind: "template", id: "pr-summary" }]);
+    expect(merged.provenance.get("outputs.templates.pr-summary")).toBe("file");
+    expect(merged.fileLocks.has("outputs.templates.pr-summary")).toBe(true);
+  });
+
+  it("copyFileEntityAsDatabaseDraft copies a file template/prompt document", () => {
+    const file: AppConfigInput = {
+      outputs: { templates: { "pr-summary": "Summary {{run.id}}" } },
+      prompts: { system: { "team-base": "You review code." } },
+    };
+    const templateDraft = copyFileEntityAsDatabaseDraft(file, { kind: "template", id: "pr-summary" }, "rec-t", "pr-summary-copy");
+    expect(templateDraft.record.value).toBe("Summary {{run.id}}");
+    expect(templateDraft.record.name).toBe("pr-summary-copy");
+    const promptDraft = copyFileEntityAsDatabaseDraft(file, { kind: "prompt", id: "team-base" }, "rec-p", "team-base-copy");
+    expect(promptDraft.record.value).toBe("You review code.");
+    expectConfigError(() => copyFileEntityAsDatabaseDraft({}, { kind: "template", id: "nope" }, "r", "n"), "entity_not_found");
+  });
+
+  it("collectEntityReferences collects channel template refs and workspace prompt refs", () => {
+    const references = collectEntityReferences({
+      outputs: {
+        templates: { "pr-summary": "x" },
+        channels: [{ name: "pr", kind: "gitea_issue", templates: { problem: "issue-problem", summary: "pr-summary" } }],
+      },
+      prompts: { system: { "team-base": "x", "team-addon": "y" } },
+      workspaces: {
+        defaults: { prompt: { system_prompt: "team-base" } },
+        instances: { "my-repo": { prompt: { extra_system_prompt: "team-addon" } } },
+      },
+    });
+    const pairs = references.map((reference) => `${reference.to.kind}:${reference.to.id}`);
+    expect(pairs).toContain("template:issue-problem");
+    expect(pairs).toContain("template:pr-summary");
+    expect(pairs).toContain("prompt:team-base");
+    expect(pairs).toContain("prompt:team-addon");
   });
 });

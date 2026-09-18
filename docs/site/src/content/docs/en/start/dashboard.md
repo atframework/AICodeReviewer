@@ -150,8 +150,36 @@ In **Config**, edit providers, model groups, triggers, channels, routes, workspa
 and global settings. File-owned values are read-only; **Copy as new database
 config** requires a distinct name. Database values supplement explicit file
 configuration. A shadowed database record can be deleted; edit its file owner to
-change the effective value. Secret controls accept authorized environment variable
+change the effective value. The `agent`, `review` and
+`queue.workers|rate_limit|retry|dead_letter` prefixes are the exception: database
+values win over file values, the Agent/Review/Queue pages stay editable, and
+**Reset database overrides** clears the database overrides and falls back to the
+file or default values.
+Reserved Queue settings (`workers.lock_ttl_seconds` and `dead_letter.*`) remain
+read-only because they have no runtime consumer. A reset also discards unsaved
+page edits; a revision conflict shows the current database values before retry.
+Reserved Queue settings (`workers.lock_ttl_seconds` and `dead_letter.*`) remain
+read-only because they have no runtime consumer. A reset also discards unsaved
+page edits; a revision conflict shows the current database values before retry.
+Secret controls accept authorized environment variable
 names. Replace or clear redacted legacy values before saving them.
+
+The **Templates** and **Prompts** pages manage named template
+(`outputs.templates`) and system-prompt (`prompts.system`) documents: the markdown
+body is the runtime content, optional frontmatter only feeds the UI metadata.
+Below the record table, read-only built-in assets (the built-in problem/summary
+templates per channel kind and the built-in base prompt) offer **Copy as new
+database config** to start a managed draft from their body. Channels reference
+template names via `templates.{problem,summary}`; workspaces reference prompt
+names via `prompt.system_prompt`/`prompt.extra_system_prompt`.
+Document text round-trips unchanged, including URL fragments, credential-shaped
+examples and names ending in `_env`. Preview and version history include these
+entities. Delete or disable a referenced document only after removing its
+references, or remove both in one staged publication.
+Document text round-trips unchanged, including URL fragments, credential-shaped
+examples and names ending in `_env`. Preview and version history include these
+entities. Delete or disable a referenced document only after removing its
+references, or remove both in one staged publication.
 
 New providers can start from a **Platform preset** (Kimi For Coding, Kimi Open
 Platform, Zhipu, Z.AI, Alibaba Cloud, Tencent Cloud, DeepSeek), which prefills

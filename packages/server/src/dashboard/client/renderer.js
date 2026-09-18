@@ -309,6 +309,8 @@ export function createRenderer(doc) {
     switch (field.control) {
       case "text":
         return buildText(field, value, disabled, domId, handlers);
+      case "document":
+        return buildDocument(field, value, disabled, domId, handlers);
       case "number":
         return buildNumber(field, value, disabled, domId, handlers);
       case "toggle":
@@ -350,6 +352,27 @@ export function createRenderer(doc) {
     input.disabled = disabled;
     input.addEventListener("input", () => handlers.onValueChange(field.id, input.value));
     return { element: input, focusable: input, localErrorIds: [] };
+  }
+
+  /**
+   * Multi-line markdown document editor (template/prompt record values).
+   * @param {object} field
+   * @param {unknown} value
+   * @param {boolean} disabled
+   * @param {string} domId
+   * @param {ConfigFieldHandlers} handlers
+   * @returns {RenderedControl}
+   */
+  function buildDocument(field, value, disabled, domId, handlers) {
+    const textarea = /** @type {HTMLTextAreaElement} */ (el("textarea", "cfg-input cfg-textarea cfg-document"));
+    textarea.id = domId;
+    textarea.rows = 16;
+    textarea.spellcheck = false;
+    textarea.value = typeof value === "string" ? value : "";
+    textarea.disabled = disabled;
+    textarea.setAttribute("aria-label", `${field.label} (markdown document)`);
+    textarea.addEventListener("input", () => handlers.onValueChange(field.id, textarea.value));
+    return { element: textarea, focusable: textarea, localErrorIds: [] };
   }
 
   /**
@@ -467,8 +490,10 @@ export function createRenderer(doc) {
         handlers.onInheritChange?.(field.id, true);
         return;
       }
-      if (field.binding === "inherit-or-override" && inherited) handlers.onInheritChange?.(field.id, false);
+      // Value first, then the inherit flip: the flip may re-render the editor,
+      // and the toggled draft must already carry the picked value (U05).
       handlers.onValueChange(field.id, select.value === "" ? undefined : select.value);
+      if (field.binding === "inherit-or-override" && inherited) handlers.onInheritChange?.(field.id, false);
     });
     return { element: select, focusable: select, localErrorIds: [] };
   }
@@ -887,10 +912,12 @@ export function createRenderer(doc) {
       keyBox.append(keyInput);
       if (key.length === 0) {
         const required = el("div", "cfg-field-error", "Key required.");
+        required.dataset.localValidation = "true";
         required.setAttribute("role", "alert");
         keyBox.append(required);
       } else if ((keyCounts.get(key) ?? 0) > 1) {
         const dup = el("div", "cfg-field-error", "Duplicate key.");
+        dup.dataset.localValidation = "true";
         dup.setAttribute("role", "alert");
         keyBox.append(dup);
       }
@@ -1166,6 +1193,11 @@ export function createRenderer(doc) {
     pattern.value = state_.pattern;
     pattern.disabled = disabled;
 
+    const patternError = el("div", "cfg-field-error", "Pattern is required.");
+    patternError.dataset.localValidation = "true";
+    patternError.setAttribute("role", "alert");
+    patternError.hidden = state_.pattern.length > 0;
+
     const ignoreRow = el("label", "cfg-checklist-label");
     const ignore = /** @type {HTMLInputElement} */ (el("input"));
     ignore.type = "checkbox";
@@ -1182,13 +1214,14 @@ export function createRenderer(doc) {
     });
     pattern.addEventListener("input", () => {
       state_.pattern = pattern.value;
+      patternError.hidden = pattern.value.length > 0;
       commit();
     });
     ignore.addEventListener("change", () => {
       state_.ignore_case = ignore.checked;
       commit();
     });
-    box.append(modeSelect, pattern, ignoreRow);
+    box.append(modeSelect, pattern, patternError, ignoreRow);
     return { element: box, focusable: pattern, localErrorIds: [] };
   }
 
@@ -1658,6 +1691,9 @@ export function createRenderer(doc) {
       }
       box.append(definitionBlock("Analysis", result.analysis));
       box.append(definitionBlock("Outputs", result.outputs));
+      if (typeof result.note === "string" && result.note.length > 0) {
+        box.append(el("p", "cfg-field-note", result.note));
+      }
       return box;
     }
     box.append(el("p", "cfg-field-note", typeof result.detail === "string" ? result.detail : "No matching route."));
@@ -1666,6 +1702,81 @@ export function createRenderer(doc) {
       const list = el("ul", "cfg-candidates");
       for (const candidate of result.candidates) list.append(el("li", "mono", String(candidate)));
       box.append(list);
+    }
+    return box;
+  }
+
+  /**
+   * Read-only legacy `outputs.routes` summary for the Routing page: default
+   * route plus ordered rules, with a provenance note. Editing stays on the
+   * Channels page globals section.
+   * @param {object} options
+   * @param {object|undefined} options.defaultRoute Legacy default route.
+   * @param {readonly object[]} options.rules Ordered legacy rules.
+   * @param {readonly string[]} options.sources Provenance sources (file/database/default).
+   * @returns {HTMLElement}
+   */
+  function renderLegacyRoutesPanel(options) {
+    const box = el("section", "cfg-panel cfg-legacy-routes");
+    box.append(el("h3", "cfg-subtitle", "Legacy routes (outputs.routes)"));
+    const sources = options.sources.length > 0 ? options.sources.join(", ") : "unknown";
+    box.append(el("p", "cfg-field-note", `Effective merged view (source: ${sources}). Edit legacy routes on the Channels page.`));
+    const table = el("table", "cfg-table");
+    const head = el("thead");
+    const headRow = el("tr");
+    for (const label of ["Rule", "Trigger", "Target kind", "Line comments", "Summary"]) headRow.append(el("th", undefined, label));
+    head.append(headRow);
+    table.append(head);
+    const body = el("tbody");
+    const appendRoute = (label, route) => {
+      const row = el("tr");
+      const match = route !== null && typeof route === "object" ? route.match : undefined;
+      const trigger = match !== null && typeof match === "object" && typeof match.trigger === "string" ? match.trigger : "(all triggers)";
+      const targetKind = match !== null && typeof match === "object" && typeof match.target_kind === "string" ? match.target_kind : "(all kinds)";
+      const channels = (key) => {
+        const value = route !== null && typeof route === "object" ? route[key] : undefined;
+        return Array.isArray(value) && value.length > 0 ? value.join(", ") : "—";
+      };
+      row.append(el("td", undefined, label), el("td", undefined, trigger), el("td", undefined, targetKind), el("td", undefined, channels("line_comments")), el("td", undefined, channels("summary")));
+      body.append(row);
+    };
+    if (options.defaultRoute !== undefined) appendRoute("default", options.defaultRoute);
+    options.rules.forEach((rule, index) => appendRoute(`#${index + 1}`, rule));
+    table.append(body);
+    box.append(table);
+    return box;
+  }
+
+  /**
+   * Read-only built-in asset list (Templates/Prompts pages): each asset shows
+   * its document and offers "Copy as new database config".
+   * @param {object} options
+   * @param {string} options.title Section title.
+   * @param {readonly object[]} options.assets Built-in assets ({id, name?, document}).
+   * @param {(asset: object) => void} options.onCopy Copy handler.
+   * @returns {HTMLElement}
+   */
+  function renderBuiltinAssets(options) {
+    const box = el("section", "cfg-panel cfg-builtin-assets");
+    box.append(el("h3", "cfg-subtitle", options.title));
+    box.append(el("p", "cfg-field-note", "Built-in assets ship with the server and cannot be edited. Copy one to create a managed database override."));
+    for (const asset of options.assets) {
+      const details = el("details", "cfg-builtin-asset");
+      const summary = el("summary", "cfg-builtin-asset-summary");
+      const label = typeof asset.name === "string" && asset.name.length > 0 ? `${asset.id} — ${asset.name}` : String(asset.id);
+      summary.append(el("span", "cfg-builtin-asset-id", label));
+      const copy = /** @type {HTMLButtonElement} */ (el("button", "cfg-btn cfg-btn-ghost", "Copy as new database config"));
+      copy.type = "button";
+      copy.addEventListener("click", (event) => {
+        event.preventDefault();
+        options.onCopy(asset);
+      });
+      summary.append(copy);
+      details.append(summary);
+      const pre = el("pre", "cfg-builtin-asset-document");
+      pre.textContent = typeof asset.document === "string" ? asset.document : "";
+      details.append(pre);
+      box.append(details);
     }
     return box;
   }
@@ -1680,6 +1791,8 @@ export function createRenderer(doc) {
     diffView,
     renderRoutePreviewPanel,
     renderRoutePreviewResult,
+    renderLegacyRoutesPanel,
+    renderBuiltinAssets,
     /**
      * @param {(parentField: object, itemField: object, value: unknown) => {options: readonly object[], error?: string}} resolver
      */

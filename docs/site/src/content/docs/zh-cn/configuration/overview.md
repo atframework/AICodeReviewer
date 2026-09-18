@@ -187,14 +187,17 @@ P4/SVN profile 先持久化路由回执，再由后台对照验证过的变更�
 
 匹配还引入了最顶层的覆盖层：每个任务的分析选择按 全局 → workspace 默认 →
 实例 → 命中路由的 `analysis` 块 合并。数据库配置源发布新版本时，文件显式值
-仍然优先且保持只读，一次发布只对发布后新接收的任务生效——已排队和运行中的
+仍然优先且保持只读——`agent`、`review`、`queue.workers|rate_limit|retry|dead_letter`
+前缀除外：这些共享全局按 数据库 > 文件 > 默认值 合并，管理界面保持可编辑并提供
+"重置数据库配置"。一次发布只对发布后新接收的任务生效——已排队和运行中的
 任务保留接收时的配置。字段细节见
 [配置字段参考](/zh-cn/reference/config-fields/#workspaces)。
 
 ## 动态配置 API
 
 启用 `config_sources.database.enabled: true` 后，`/api/admin/config` 可发布数据库
-补充配置，文件显式值保持只读。每次 webhook 在读取凭据前检查持久 head，异步处理
+补充配置，文件显式值保持只读（`agent`/`review`/`queue.workers|rate_limit|retry|dead_letter`
+前缀例外：数据库值优先，可编辑、可重置）。每次 webhook 在读取凭据前检查持久 head，异步处理
 始终使用同一 generation。receipt 和新持久化延期任务保留接收时快照；空命名空间
 在接收任务前先写入 revision 0 快照。
 
@@ -232,10 +235,11 @@ channel 保留这些原有用途的授权。GitLab `project_id` 属于目的地�
 
 数据库可管理的全局叶子包括 `llm.default_model_chain`、`llm.triage_model_chain`、
 `llm.retry`、`llm.per_provider_overrides`、`llm.budget`、`llm.model_catalog`、
-`review`、`compression`、`agent`、`outputs.template_engine`、`outputs.no_problems`、
-`outputs.author_resolution`、`outputs.routes`、`queue.workers`、`queue.rate_limit`、
-`queue.retry`、`queue.dead_letter`、`workspaces.cache`、`workspaces.defaults`，
-以及 provider、模型组、trigger、channel、workspace、route 实体集合。bootstrap
+`review`、`compression`、`agent`、`outputs.template_engine`、`outputs.templates`、
+`outputs.no_problems`、`outputs.author_resolution`、`outputs.routes`、`prompts.system`、
+`queue.workers`、`queue.rate_limit`、`queue.retry`、`queue.dead_letter`、`workspaces.cache`、
+`workspaces.defaults`，以及 provider、模型组、trigger、channel、workspace、route、
+template、prompt 实体集合。bootstrap
 信任边界——`server`、`admin`、`storage`、`config_sources`、`queue.kind`、
 `queue.sqlite`、`workspaces.root`——永远不可由数据库写入。
 

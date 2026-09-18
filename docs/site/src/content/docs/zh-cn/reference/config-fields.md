@@ -158,6 +158,8 @@ provider 专属字段（`webhook_secret_env`、`token_env`、`port`、`user_env`
 | `workspaces.defaults.agent.web_search.searxng.safesearch` | int 0–2 | — | SearXNG 安全搜索级别 |
 | `workspaces.defaults.outputs` | object | — | 默认 outputs（见 `outputs` 的 workspace 字段） |
 | `workspaces.defaults.prompt.base_system_prompt_file` | string | — | 自定义 base system prompt 文件（相对于部署根目录） |
+| `workspaces.defaults.prompt.system_prompt` | string | — | 引用 `prompts.system.<name>` 的命名 system prompt，替换基底 prompt（优先于 `base_system_prompt_file` 与内置默认） |
+| `workspaces.defaults.prompt.extra_system_prompt` | string | — | 引用 `prompts.system.<name>` 的命名 system prompt，拼接在解析后的基底之后 |
 | `workspaces.defaults.prompt.force_skills` | string[] | — | 始终激活的技能名，忽略 `Applies To` glob |
 | `workspaces.defaults.context_repositories[].alias` | string | — | path-safe 别名（`^[A-Za-z0-9][A-Za-z0-9._-]*$`，同 workspace 内唯一） |
 | `workspaces.defaults.context_repositories[].kind` | enum | — | `git`、`p4`、`svn` |
@@ -278,6 +280,7 @@ fallback 必须是字面量，禁止 hash arguments。provider 变量必须适�
 | 字段 | 类型 | 默认值 | 描述 |
 | --- | --- | --- | --- |
 | `outputs.template_engine` | enum | `handlebars` | 模板引擎。`eta` 被 schema 接受但尚未实现，只有 `handlebars` 可用 |
+| `outputs.templates.<id>` | string | — | 命名 Handlebars 模板文档（markdown，可带 frontmatter 元数据；运行时只使用正文），供 channel `templates.*` 引用 |
 | `outputs.no_problems` | object | — | 全局零问题策略 |
 | `outputs.no_problems.action` | enum | — | `publish`、`suppress` 或 `publish_if_summary` |
 | `outputs.channels[]` | array | `[]` | 输出 channel 定义 |
@@ -290,6 +293,8 @@ fallback 必须是字面量，禁止 hash arguments。provider 变量必须适�
 | `outputs.channels[].commit_url_template` | string | — | commit 链接模板 |
 | `outputs.channels[].revision_url_template` | string | — | revision 链接模板 |
 | `outputs.channels[].change_url_template` | string | — | changelist 链接模板 |
+| `outputs.channels[].templates.problem` | string | — | 引用 `outputs.templates.<name>` 的 problem 模板；优先于 workspace 目录与内置模板 |
+| `outputs.channels[].templates.summary` | string | — | 引用 `outputs.templates.<name>` 的 summary 模板；优先于 workspace 目录与内置模板 |
 | `outputs.channels[].marker_prefix` | string | — | managed issue 标题前缀（默认 `[AICR]`） |
 | `outputs.channels[].marker_label` | string | — | 用于界定 managed issue 的隐藏 body 标记 |
 | `outputs.channels[].label_ids` | int[] | — | 要附加的 Gitea label ID |
@@ -315,6 +320,18 @@ fallback 必须是字面量，禁止 hash arguments。provider 变量必须适�
 | `outputs.routes.rules[].match.target_kind` | enum | — | 目标类型（`pull_request`、`push`、`commit`、`issue`、`manual`、`scheduled`）；`pr` 会被归一化为 `pull_request`。GitLab MR 以 `pull_request` 报告。 |
 | `outputs.routes.rules[].line_comments` | string[] | — | 接收行评论输出的 channel 名 |
 | `outputs.routes.rules[].summary` | string[] | — | 接收 summary 输出的 channel 名 |
+
+## `prompts`
+
+命名 system prompt 文档（markdown，可带 frontmatter 元数据；运行时只使用正文）。
+workspace 的 `prompt.system_prompt` 引用其中一个名称替换内置基底 prompt，
+`prompt.extra_system_prompt` 引用一个名称拼接在基底之后。内置基底
+（`prompts/system/code-reviewer.system.md`）永不入库，管理界面以只读形式提供
+"复制为新配置"。
+
+| 字段 | 类型 | 默认值 | 描述 |
+| --- | --- | --- | --- |
+| `prompts.system.<id>` | string | — | 名称 → system prompt 文档 |
 
 ## `agent`
 

@@ -60,7 +60,7 @@ describe("config field inventory gate (U24)", () => {
   });
 
   it("inventory rows are well-formed: ownership, entity kind, and UI control", () => {
-    const controls = new Set(["text", "number", "toggle", "select", "multiselect", "ordered-list", "map", "secret-ref", "secret-value", "matcher", "path-template"]);
+    const controls = new Set(["text", "document", "number", "toggle", "select", "multiselect", "ordered-list", "map", "secret-ref", "secret-value", "matcher", "path-template"]);
     for (const row of CONFIG_FIELD_INVENTORY) {
       expect(controls.has(row.uiControl), `ui control for ${row.path}`).toBe(true);
       expect(["bootstrap", "business", "entity"]).toContain(row.ownership);

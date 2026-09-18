@@ -826,7 +826,10 @@ AICR 采用**两层上下文管理**，两者互补：
   - `agent.context_compaction`（auto / threshold_percent / prune，见 §3.3.2）
   - `agent.web_search`（enabled / providers / exclude / timeout_seconds / credentials / searxng，各 agent 映射见 §3.3.2）
   - `workspaces.defaults.prompt.base_system_prompt_file`
+  - `workspaces.defaults.prompt.system_prompt` / `workspaces.defaults.prompt.extra_system_prompt`（`prompts.system` 命名引用）
   - `workspaces.defaults.prompt.force_skills`
+  - `outputs.templates`（命名模板文档，channel `templates.{problem,summary}` 引用）
+  - `prompts.system`（命名 system prompt 文档）
   - `outputs.channels[].mention_fallback`
   - `outputs.routes`
 - `queue.retry` 的规范字段是 `attempts` 与 `backoff`；旧配置中的
@@ -890,11 +893,13 @@ AICR 采用**两层上下文管理**，两者互补：
 
 #### 3.10.1 Per-workspace prompt 覆盖
 
-- `workspaces.defaults.prompt` 和 `workspaces.instances.<id>.prompt` 支持两个字段：
+- `workspaces.defaults.prompt` 和 `workspaces.instances.<id>.prompt` 支持四个字段：
   - `base_system_prompt_file`：指向自定义 system prompt 模板文件的路径（相对于部署根目录）。设置后，该 workspace 的 review 使用此模板替代全局 `--base-prompt` 加载的模板。
+  - `system_prompt`：引用 `prompts.system.<name>` 的命名 system prompt 文档，替换基底 prompt；解析顺序为 命名引用 → `base_system_prompt_file` → 内置默认（管理配置优先于文件，文档 frontmatter 仅作界面元数据，运行时只消费正文）。
+  - `extra_system_prompt`：引用 `prompts.system.<name>` 的命名文档，拼接在解析后的基底 prompt 之后（空白文档跳过）。
   - `force_skills`：技能名称数组，强制激活指定技能，忽略 `Applies To` glob 过滤。适用于需要始终运行的审计、安全等技能。
-- Bootstrap 阶段为每个 workspace 注册 `baseSystemPromptResolver` 和 `forceSkillsResolver`；orchestrator 在调用 `prepareReviewPrompt()` 前解析 workspace 级配置。
-- 代码真源：`packages/server/src/bootstrap.ts`（resolver 注册）、`packages/server/src/review-orchestrator.ts`（运行时解析）。
+- Bootstrap 阶段为每个 workspace 注册 `baseSystemPromptResolver`（命名引用 → prompt 文件 → 内置默认）、`extraSystemPromptResolver` 和 `forceSkillsResolver`，均按当前 generation 解析；orchestrator 在调用 `prepareReviewPrompt()` 前解析 workspace 级配置并把 extra prompt 拼到基底之后。
+- 代码真源：`packages/server/src/bootstrap.ts`（resolver 注册）、`packages/server/src/review-orchestrator.ts`（运行时解析）、`packages/core/src/markdown-document.ts`（frontmatter 解析）。
 
 ### 3.11 Run 状态与可观测性
 
@@ -1316,12 +1321,21 @@ models.dev 的 key 是 `<providerId>/<modelId>`（AI SDK 标识）。自定义 p
   文件实体遮蔽同名的数据库记录(shadowed 可见、可导出、可删除,不报错);
   显式空数组/false/0 是有效声明,与缺省区分;defaults 只在单次最终解析时
   应用一次。每字段 provenance(file/database/default)可查询。
+  显式例外:`agent`、`review`、`queue.workers|rate_limit|retry|dead_letter`
+  前缀(`DATABASE_PRIORITY_PREFIXES`)按 数据库 > 文件 > 默认值 合并,文件锁
+  对这些前缀豁免,UI 保持可编辑并提供按前缀 unset 的"重置数据库配置";
+  `queue.kind`/`queue.sqlite` 仍属 bootstrap 信任边界不可写。
 - changeset 词汇:`create/update/delete/rename/set-enabled` 操作实体集合
-  (providers/model_groups/triggers/channels/workspaces/routes),`set/unset`
+  (providers/model_groups/triggers/channels/workspaces/routes/templates/prompts;
+  template/prompt 的记录值是 markdown 文档字符串,frontmatter 仅作界面元数据,
+  运行时只消费正文,模板/prompt 路径不当作凭据封存、读取不脱敏),`set/unset`
   操作全局叶路径;实体值经 capability 校验(§P0 字段矩阵),文件拥有的实体
   与锁定的叶路径返回 `file_owned`;引用修改与被引用实体必须同一 changeset
   提交,发布后逐项解析 provider/model_group/trigger/channel/workspace 引用,
-  缺失即 `invalid_reference`,整批不提交。旧 `outputs.routes.rules[].match.trigger`
+  缺失即 `invalid_reference`,整批不提交。channel `templates.{problem,summary}`
+  引用 `outputs.templates` 名称、workspace `prompt.system_prompt`/
+  `extra_system_prompt` 引用 `prompts.system` 名称,同样参与引用检查。旧
+  `outputs.routes.rules[].match.trigger`
   同样参与引用检查，删除 trigger 必须一并移除或修改这些规则。
 - 执行图:`compileExecutionGraph` 把 v2 `routing.rules`(显式 priority、AND
   条件 + OR 列表、空数组关闭、缺省继承)与旧 `outputs.routes` 兼容图统一为
@@ -1354,7 +1368,9 @@ models.dev 的 key 是 `<providerId>/<modelId>`（AI SDK 标识）。自定义 p
   未指定 formatVersion 时沿用当前 revision 的版本，空库才默认版本 1。
   `previewConfigRoute` 复用准入同一路径函数,显式路由仍须通过 workspace 准入,
   layout 由实际 binding 决定,输出规则命中、
-  workspace 绑定、完整最终目录、模型组与输出 channel;`diagnoseConfigReadiness`
+  workspace 绑定、完整最终目录、模型组与输出 channel;v2 规则已命中但请求未给
+  repoRef 时返回命中结果并附 note(实例绑定与布局变量在准入时解析),不再误报
+  unbound;`diagnoseConfigReadiness`
   报告 disabled/store_unavailable/empty/file_config_mismatch/snapshot_missing/
   ready 六态。
 
@@ -1447,6 +1463,10 @@ JSON 按实际流式 UTF-8 字节限制为 1 MiB，提前拒绝原型键、过�
 Config 页面通过 `config-ui-spec` 声明控件，`config-ui-runtime` 与
 `config-form-state` 负责草稿、继承、嵌套列表/map 和 changeset 编码。
 字段 ID 与配置路径分离，行内使用相对路径；数组原子替换，未知扩展和显式空值保留。
+kind 不适用的字段（如 anthropic 专属字段之于 ollama provider）渲染为不可见并
+以占位符保留草稿；整区块无可见字段时隐藏该区块。模板/prompt 实体是字符串形状
+记录：文档控件直接编辑整条记录值，Templates/Prompts 页下方列出只读内置资产
+（各 channel kind 的内置模板与内置基底 prompt），可"复制为新数据库配置"。
 跨页暂存共享同一基线，新增引用可从暂存记录选择，统一发布一个 changeset。
 重复编辑同一记录或全局页面时保留累计草稿和原始基线，重新编码完整操作；恢复到
 原始值会移除对应暂存修改。丢弃暂存后清理对应编辑会话，避免旧草稿重新出现。

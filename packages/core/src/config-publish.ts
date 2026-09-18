@@ -26,6 +26,7 @@ import { ConfigError, formatConfigPath, parseConfigPath, stableSerialize } from 
 import { parseEffectiveConfig, type AppConfigInput, type EffectiveConfigV2 } from "./config.js";
 import { validateWorkspaceDefinitions } from "./config-workspace.js";
 import {
+  DATABASE_ENTITY_COLLECTION_KEYS,
   applyConfigChangeset,
   assertNoSecretEnvIssues,
   collectEntityReferences,
@@ -90,7 +91,7 @@ function collectionDiff(
   const added: string[] = [];
   const removed: string[] = [];
   const changed: string[] = [];
-  for (const collection of ["providers", "model_groups", "triggers", "channels", "workspaces", "routes"] as const) {
+  for (const collection of DATABASE_ENTITY_COLLECTION_KEYS) {
     const a = before.entities?.[collection] ?? {};
     const b = after.entities?.[collection] ?? {};
     for (const [id, record] of Object.entries(b)) {
@@ -149,6 +150,8 @@ export function prepareConfigPublication(input: ConfigPublishInput): PreparedCon
     channel: new Set(effective.outputs.channels.map((channel) => channel.name)),
     workspace: new Set(Object.keys(effective.workspaces.instances)),
     route: new Set((effective.routing?.rules ?? []).map((rule) => rule.id)),
+    template: new Set(Object.keys(effective.outputs.templates)),
+    prompt: new Set(Object.keys(effective.prompts.system)),
   };
   for (const reference of collectEntityReferences(merged.document)) {
     if (!available[reference.to.kind].has(reference.to.id)) {

@@ -91,6 +91,7 @@ repo 和 scope 隔离。P4/SVN 的单通知只覆盖所报 revision；同来源�
 保留被文件遮盖的数据库字段值（shadowed）；管理 UI 中同名 shadowed 数据库实体只允许删除，
 `unset` 只移除数据库 override，文件有效值保持不变。无效实体不能在合并中丢失。
 实现见 `packages/core/src/config-source.ts` 与架构 §3.10、§3.15；交付验收见 M18。
+显式例外见 D48（共享全局前缀数据库优先）。
 
 ### D43：发布协议——revision 文档、CAS head、operationId 幂等与 committed_activating 不回滚（P3/M18、P4–P5/M19）
 
@@ -152,6 +153,31 @@ MigrationRunner 保存最低 reader/writer 协议与 atomic 事务声明，旧�
   （"保存陷阱"）。
 
 实现与回归测试见 [架构](architecture.md) §3.10、§3.15–3.16 与 [M25](milestones/M25.md)。
+
+### D48：共享全局 agent/review/queue 前缀数据库优先（2026-09 管理页面修订）
+
+`agent`、`review`、`queue.workers`、`queue.rate_limit`、`queue.retry`、`queue.dead_letter`
+前缀（`DATABASE_PRIORITY_PREFIXES`）按 数据库 > 文件 > 默认值 合并，是 D42 合同唯一
+显式例外：共享全局由值班管理员经 UI 调整（超时、并发、评审预算），不应要求改文件再部署。
+文件锁对这些前缀豁免，UI 三页保持可编辑并提供"重置数据库配置"（按前缀 unset，回落
+文件/默认）。例外只限上述前缀——`queue.kind`/`queue.sqlite` 仍属 bootstrap 信任边界
+不可写，其余字段维持文件优先。`queue.retry` 从 bootstrap 固定值改为按 generation 热读取
+（与并发/限流一致），这是例外可行的前提。实现见
+`packages/core/src/config-source.ts` 与架构 §3.15。
+
+### D49：命名模板与 system prompt 实体（2026-09 管理页面修订）
+
+模板与 system prompt 是数据库实体集合 `templates`（`outputs.templates`）与
+`prompts`（`prompts.system`）：map 键即实体名，记录值是整份 markdown 文档字符串。
+文档可带 YAML frontmatter，仅作界面元数据（name/description）；实体 id 永远是存储键，
+运行时只消费正文。channel `templates.{problem,summary}` 引用模板名（优先于 workspace
+目录与内置查找）；workspace `prompt.system_prompt` 引用 prompt 名替换内置基底，
+`prompt.extra_system_prompt` 拼接在基底之后。内置模板与内置基底 prompt 永不入库、
+不可改，管理 UI 只读展示并提供"复制为新数据库配置"。模板/prompt 文本是展示内容
+而非凭据：不参与封存，读取 API 不脱敏。实现见
+`packages/core/src/{markdown-document,config-source}.ts`、
+`packages/outputs/src/template-engine.ts`（`namedTemplateSource`）、
+`packages/server/src/bootstrap.ts`（prompt resolvers）。
 
 ## 维护规则
 

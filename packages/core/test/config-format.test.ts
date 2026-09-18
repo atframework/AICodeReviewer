@@ -215,10 +215,10 @@ describe("config-format entity registry", () => {
     expect(entityPath({ kind: "route", id: "r1" })).toEqual(["routing", "rules", "r1"]);
   });
 
-  it("v1 exposes five collections; routing rules join at v2", () => {
+  it("v1 exposes seven collections; routing rules join at v2", () => {
     const v1Kinds = entityCollectionsForVersion(1).map((collection) => collection.kind);
     const v2Kinds = entityCollectionsForVersion(2).map((collection) => collection.kind);
-    expect(v1Kinds).toEqual(["provider", "model_group", "trigger", "channel", "workspace"]);
+    expect(v1Kinds).toEqual(["provider", "model_group", "trigger", "channel", "workspace", "template", "prompt"]);
     expect(v2Kinds).toContain("route");
     expect(v2Kinds).toHaveLength(v1Kinds.length + 1);
   });

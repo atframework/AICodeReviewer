@@ -7,6 +7,7 @@ import {
   createMultiProviderRateLimiter,
   createQueueFromConfig,
   loadSystemPromptTemplate,
+  markdownDocumentBody,
   resolveWorkspaceConfig,
   reviewMemoryScope,
   createConfigStoreFromDatabaseConfig,
@@ -99,8 +100,8 @@ import type { SvnTriggerConfig } from "./svn-webhook.js";
 import { GiteaApiClient } from "./issue-triage.js";
 import type { IssueTriageRuntimeOptions, WorkspaceIssueTriagePolicy } from "./issue-triage.js";
 import { createProblemResolutionAnalyzer } from "./problem-resolution.js";
-import type { ServerAppOptions, ServerReviewOrchestrationOptions, TriggerRetryConfig } from "./index.js";
-import { persistReviewRunToStore } from "./index.js";
+import type { ServerAppOptions, ServerReviewOrchestrationOptions } from "./index.js";
+import { persistReviewRunToStore, resolveTriggerRetryConfig } from "./index.js";
 import { type AutoCommitStore, type StreamKeyInput } from "@aicr/core";
 import { createAutoCommitStoreFromConfig } from "@aicr/core";
 import { resolvePullRequestSchedule, resolvePullRequestTargetBranches } from "@aicr/core";
@@ -842,44 +843,6 @@ export function resolveGenericWebhookConfig(
   return resolveGenericWebhookConfigs(config, kind, triggerName, appTokenServices)[0];
 }
 
-function resolveTriggerRetryConfig(config: AppConfig): TriggerRetryConfig | undefined {
-  const retry = config.queue?.retry;
-  if (!retry) {
-    return undefined;
-  }
-
-  const raw = retry as Record<string, unknown>;
-  const legacyAttempts = typeof raw.max_attempts === "number" && raw.max_attempts > 0
-    ? Math.floor(raw.max_attempts)
-    : undefined;
-  const attempts = retry.attempts ?? legacyAttempts;
-  const legacyBackoffSeconds = typeof raw.backoff_seconds === "number" && raw.backoff_seconds > 0
-    ? raw.backoff_seconds
-    : undefined;
-  const legacyBackoff = legacyBackoffSeconds !== undefined
-    ? {
-        kind: "constant" as const,
-        base_ms: legacyBackoffSeconds * 1000,
-        max_ms: legacyBackoffSeconds * 1000,
-        jitter: false,
-      }
-    : undefined;
-  const configuredBackoff = retry.backoff
-    ? {
-        ...(retry.backoff.kind !== undefined ? { kind: retry.backoff.kind } : {}),
-        ...(retry.backoff.base_ms !== undefined ? { base_ms: retry.backoff.base_ms } : {}),
-        ...(retry.backoff.max_ms !== undefined ? { max_ms: retry.backoff.max_ms } : {}),
-        ...(retry.backoff.jitter !== undefined ? { jitter: retry.backoff.jitter } : {}),
-      }
-    : undefined;
-  const backoff = configuredBackoff ?? legacyBackoff;
-
-  return {
-    ...(attempts !== undefined ? { attempts } : {}),
-    ...(backoff !== undefined ? { backoff } : {}),
-  };
-}
-
 export function resolveP4TriggerConfigs(
   config: AppConfig,
   triggerName?: string,
@@ -1325,6 +1288,12 @@ function createChannelRendering(
   const resolver = createTemplateResolver({
     channelKind: channel.kind,
     channelName: channel.name,
+    // Explicit channel template references (outputs.templates, merged
+    // file+database config) win over workspace-directory and built-in lookup.
+    namedTemplateSource: (kind) => {
+      const name = channel.templates?.[kind];
+      return name !== undefined ? config.outputs.templates[name] : undefined;
+    },
     ...(workspaceTemplatesDir ? { workspaceTemplatesDir } : {}),
     ...(layout?.policyRoot ? { fallbackWorkspaceTemplatesDirs: [resolve(layout.policyRoot, "templates")] } : {}),
     builtinTemplatesBaseDir,
@@ -3130,12 +3099,36 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
       baseSystemPromptResolver: async (id: string) => {
         try {
           const workspace = resolveWorkspaceConfig(generationConfig, id);
+          // A named prompts.system reference replaces the built-in base and
+          // wins over the workspace prompt file (managed config over file).
+          const promptName = workspace.prompt?.system_prompt;
+          if (promptName !== undefined) {
+            const document = generationConfig.prompts.system[promptName];
+            if (document !== undefined) {
+              return markdownDocumentBody(document);
+            }
+          }
           const promptFile = workspace.prompt?.base_system_prompt_file;
           if (promptFile) {
             return await loadSystemPromptTemplate(resolve(baseDir, promptFile));
           }
         } catch {
           // workspace not found or file not readable — fall back to global prompt
+        }
+        return undefined;
+      },
+      extraSystemPromptResolver: (id: string) => {
+        try {
+          const workspace = resolveWorkspaceConfig(generationConfig, id);
+          const extraName = workspace.prompt?.extra_system_prompt;
+          if (extraName !== undefined) {
+            const document = generationConfig.prompts.system[extraName];
+            if (document !== undefined) {
+              return markdownDocumentBody(document);
+            }
+          }
+        } catch {
+          // workspace not found — no extra prompt
         }
         return undefined;
       },
@@ -3471,6 +3464,10 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
             formatVersion: 2,
             manager: runtimeConfig,
             envLookup: resolveEnv,
+            builtinPrompts: [
+              { id: "code-reviewer", name: "Built-in code reviewer (prompts/system/code-reviewer.system.md)", document: baseSystemPrompt },
+            ],
+            builtinTemplatesBaseDir: resolve(baseDir, "templates", "builtin"),
             ...(configSecretSealing ? { secretSealing: configSecretSealing } : {}),
           },
         }

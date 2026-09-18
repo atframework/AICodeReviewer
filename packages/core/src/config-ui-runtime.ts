@@ -103,7 +103,7 @@ export interface ConfigUiSection {
   readonly collapsed?: boolean;
 }
 
-export type ConfigUiEntityKind = "provider" | "model_group" | "trigger" | "channel" | "workspace" | "route";
+export type ConfigUiEntityKind = "provider" | "model_group" | "trigger" | "channel" | "workspace" | "route" | "template" | "prompt";
 
 export interface ConfigUiPage {
   readonly id: string;
@@ -114,7 +114,7 @@ export interface ConfigUiPage {
     readonly collection: string;
     /** Field holding the entity id for array collections; null for maps. */
     readonly idField: string | null;
-    readonly valueShape: "object" | "array";
+    readonly valueShape: "object" | "array" | "string";
     readonly kindField?: string;
     readonly kindOptions?: readonly string[];
   };
@@ -145,6 +145,12 @@ export interface ConfigDraftField {
   readonly effectiveValue: unknown;
   readonly provenance: "file" | "database" | "default" | "none";
   readonly overriddenValues: readonly { readonly source: "file" | "database"; readonly value: unknown }[];
+  /**
+   * Server-side write permission from the fields view; only set on globals
+   * drafts. File-provenance globals under database-priority prefixes stay
+   * editable (§3.15 exception) because the database wins there.
+   */
+  readonly editable?: boolean | undefined;
   /** Unknown passthrough keys preserved losslessly (entity drafts). */
   readonly extras?: Readonly<Record<string, unknown>>;
 }
@@ -262,6 +268,7 @@ const SKIP = Symbol("config-ui-runtime.skip");
 /** U03 control/valueKind compatibility matrix. */
 const CONTROL_VALUE_KINDS: Readonly<Record<string, readonly ConfigUiValueKind[]>> = {
   text: ["string", "union"],
+  document: ["string"],
   number: ["number"],
   toggle: ["boolean"],
   select: ["enum", "string", "union"],
@@ -517,6 +524,7 @@ function encodeMatcherValue(value: MatcherDraftValue): Record<string, unknown> {
 function controlEmptyValue(field: ConfigUiField): unknown {
   switch (field.control) {
     case "text":
+    case "document":
     case "secret-ref":
     case "secret-value":
     case "path-template":
@@ -771,17 +779,6 @@ function tokensPrefix(prefix: readonly string[], path: readonly string[]): boole
   return prefix.length <= path.length && prefix.every((token, index) => token === path[index]);
 }
 
-function tokensSuffix(suffix: readonly string[], path: readonly string[]): boolean {
-  if (suffix.length === 0) {
-    return path.length === 0;
-  }
-  if (path.length < suffix.length) {
-    return false;
-  }
-  const offset = path.length - suffix.length;
-  return suffix.every((token, index) => token === path[offset + index]);
-}
-
 function commonPathPrefix(paths: readonly (readonly string[])[]): readonly string[] {
   const first = paths[0];
   if (first === undefined) {
@@ -809,6 +806,8 @@ interface FieldEntryInfo {
   readonly source: "file" | "database" | "default" | "none";
   readonly effectiveValue: unknown;
   readonly overriddenValues: readonly { readonly source: "file" | "database"; readonly value: unknown }[];
+  /** Server-side write permission; absent when no view entry exists. */
+  readonly editable?: boolean | undefined;
 }
 
 function indexFieldEntries(entries: readonly ConfigFieldViewEntry[] | undefined): ParsedFieldEntry[] {
@@ -839,6 +838,7 @@ function lookupFieldEntry(index: readonly ParsedFieldEntry[], keys: readonly str
         source: item.entry.source,
         effectiveValue: item.entry.effectiveValue,
         overriddenValues: item.entry.overriddenValues,
+        editable: item.entry.editable,
       };
     }
   }
@@ -870,7 +870,7 @@ function lookupFieldEntry(index: readonly ParsedFieldEntry[], keys: readonly str
   for (const descendant of descendants) {
     composite = setIn(composite, descendant.relative, deepCloneValue(descendant.entry.effectiveValue));
   }
-  return { source, effectiveValue: composite, overriddenValues: [] };
+  return { source, effectiveValue: composite, overriddenValues: [], editable: descendants.some((descendant) => descendant.entry.editable) };
 }
 
 // ---------- spec validation internals ----------
@@ -1282,6 +1282,7 @@ function decodeGlobalsDraft(page: ConfigUiPage, input: ConfigDecodeInput): Confi
       effectiveValue: info.effectiveValue,
       provenance: info.source,
       overriddenValues: info.overriddenValues,
+      ...(info.editable !== undefined ? { editable: info.editable } : {}),
     };
   }
   return {
@@ -1318,7 +1319,17 @@ function encodeEntityChanges(
 ): readonly ConfigUiOperation[] {
   const specFields = scopedEntityFields(page, entity);
   let value: unknown;
-  if (entity.valueShape === "array") {
+  if (entity.valueShape === "string") {
+    // template/prompt: the single path-[] textarea field IS the document.
+    const docField = specFields.find((field) => field.path.length === 0 && !isNameField(entity, field));
+    if (docField === undefined) throw new TypeError(`encodeChanges: document field is missing on page "${page.id}".`);
+    let document = "";
+    const draftField = draft.fields[docField.id];
+    if (draftField !== undefined && draftField.mode === "present" && !draftField.inherit) {
+      document = encodeFieldValue(docField, draftField.value) as string;
+    }
+    value = document;
+  } else if (entity.valueShape === "array") {
     // model_group: the single path-[] ordered-list field IS the record value.
     const listField = specFields.find((field) => field.path.length === 0 && !isNameField(entity, field));
     let rows: unknown = [];
@@ -1459,14 +1470,18 @@ export function resolveFieldState(
   if (field?.readonlyReason !== undefined) {
     disabled = true;
     disabledReason = field.readonlyReason;
-  } else if (draftField !== undefined && draftField.provenance === "file") {
+  } else if (draftField !== undefined && draftField.provenance === "file" && draftField.editable !== true) {
     disabled = true;
     disabledReason = "owned by the config file";
-  } else if (field !== undefined && field.kinds !== undefined) {
+  }
+  // Applicability is independent of edit permission: file-owned and other
+  // read-only records must hide the same fields as editable records.
+  if (field !== undefined && field.kinds !== undefined) {
     const kindValue = entityKindDraftValue(page, draft);
     if (typeof kindValue === "string" && !field.kinds.includes(kindValue)) {
+      visible = false;
       disabled = true;
-      disabledReason = `kind "${kindValue}" does not use this field`;
+      disabledReason ??= `kind "${kindValue}" does not use this field`;
     }
   }
   if (!disabled && !visible) {
@@ -1561,24 +1576,54 @@ function apiErrorMatchesField(
       return false;
     }
     const scope = draft.scope;
-    if (scope.kind !== "entity" || scope.recordId === null || scope.recordId !== apiError.entity.id) {
+    if (scope.kind !== "entity") {
+      return false;
+    }
+    if (scope.recordId === null) {
+      // Create drafts have no recordId yet; the new record's id lives in the
+      // id field's draft value, so entity errors from a failed create still
+      // land on the drawer that produced them.
+      const idField = entity.idField;
+      const idDraftField = scopedEntityFields(page, entity).find(
+        (candidate) => idField === null ? isNameField(entity, candidate)
+          : candidate.path.length === 1 && fieldPathKeys(candidate)[0] === idField,
+      );
+      const draftId = idDraftField === undefined ? undefined : draft.fields[idDraftField.id]?.value;
+      if (typeof draftId !== "string" || draftId !== apiError.entity.id) return false;
+    } else if (scope.recordId !== apiError.entity.id) {
       return false;
     }
   }
   if (apiError.path === undefined) {
     return false;
   }
-  // Dual-domain pages (entity + globals): an untagged error whose path is
-  // exactly a globals field path belongs to the defaults domain — never
-  // suffix-match it onto an entity field with the same relative shape.
-  if (draft.scope.kind === "entity" && apiError.entity === undefined) {
-    for (const globalField of scopedGlobalFields(page)) {
-      if (tokensEqual(fieldPathKeys(globalField), apiError.path)) {
-        return false;
+  if (fieldKeys.length === 0) {
+    return apiError.path.length === 0;
+  }
+  // Schema validators report the failing LEAF (e.g. a matcher's inner
+  // `exact` token), while the field owns the parent object. Trim trailing
+  // tokens until the field path suffix-matches so leaf errors land on the
+  // field that edits them.
+  for (let end = apiError.path.length; end >= fieldKeys.length; end -= 1) {
+    const candidate = end === apiError.path.length ? apiError.path : apiError.path.slice(0, end);
+    // Dual-domain pages (entity + globals): an untagged error whose path is
+    // exactly a globals field path belongs to the defaults domain — never
+    // suffix-match it onto an entity field with the same relative shape.
+    if (draft.scope.kind === "entity" && apiError.entity === undefined) {
+      let hitsGlobals = false;
+      for (const globalField of scopedGlobalFields(page)) {
+        if (tokensEqual(fieldPathKeys(globalField), candidate)) {
+          hitsGlobals = true;
+          break;
+        }
       }
+      if (hitsGlobals) return false;
+    }
+    if (tokensEqual(fieldKeys, candidate.slice(candidate.length - fieldKeys.length))) {
+      return true;
     }
   }
-  return tokensSuffix(fieldKeys, apiError.path);
+  return false;
 }
 
 /** U19: options for one field; never silently defaults to the first option. */

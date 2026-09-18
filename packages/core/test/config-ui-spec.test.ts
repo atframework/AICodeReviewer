@@ -88,7 +88,9 @@ const AUDIT_PAGE_ASSIGNMENT: readonly (readonly [string, string])[] = [
   ["llm.", "model-groups"],
   ["triggers[].", "triggers"],
   ["outputs.channels[].", "channels"],
+  ["outputs.templates.", "templates"],
   ["outputs.", "channels"],
+  ["prompts.", "prompts"],
   ["review.", "review"],
   ["agent.", "agent"],
   ["compression.", "agent"],
@@ -105,6 +107,8 @@ const AUDIT_ENTITY_PREFIX: Readonly<Record<string, string>> = {
   trigger: "triggers[].",
   channel: "outputs.channels[].",
   workspace: "workspaces.instances.*.",
+  template: "outputs.templates.",
+  prompt: "prompts.system.",
 };
 
 const AUDIT_ENTITY_PAGE: Readonly<Record<string, string>> = {
@@ -114,6 +118,8 @@ const AUDIT_ENTITY_PAGE: Readonly<Record<string, string>> = {
   channel: "channels",
   workspace: "workspaces",
   route: "routing",
+  template: "templates",
+  prompt: "prompts",
 };
 
 const MODEL_CHAIN_ROW_PREFIX = "llm.model_chain.*[].";
@@ -160,6 +166,8 @@ function normalizeFamilyPath(path: string): string {
 const SYNTHETIC_FIELD_IDS: Readonly<Record<string, true>> = {
   "model_group:$name": true,
   "workspace:$name": true,
+  "template:$name": true,
+  "prompt:$name": true,
   "model_group:entries": true,
 };
 
@@ -362,6 +370,7 @@ describe("enum parity", () => {
 describe("control parity", () => {
   const CONTROL_KINDS = [
     "text",
+    "document",
     "number",
     "toggle",
     "select",
@@ -509,6 +518,8 @@ describe("page and section sanity", () => {
       "triggers",
       "channels",
       "routing",
+      "templates",
+      "prompts",
       "agent",
       "review",
       "workspaces",
@@ -545,6 +556,8 @@ describe("page and section sanity", () => {
     expect(findPage("channels").entity).toMatchObject({ kind: "channel", collection: "channels", idField: "name", kindField: "kind" });
     expect(findPage("routing").entity).toMatchObject({ kind: "route", collection: "routes", idField: "id", valueShape: "object" });
     expect(findPage("routing").entity).not.toHaveProperty("kindField");
+    expect(findPage("templates").entity).toMatchObject({ kind: "template", collection: "templates", idField: null, valueShape: "string" });
+    expect(findPage("prompts").entity).toMatchObject({ kind: "prompt", collection: "prompts", idField: null, valueShape: "string" });
     expect(findPage("workspaces").entity).toMatchObject({ kind: "workspace", collection: "workspaces", idField: null, valueShape: "object" });
     expect(findPage("providers").entity?.kindOptions).toEqual(optionValues(findField("providers", "provider:kind")));
     expect(findPage("triggers").entity?.kindOptions).toEqual(optionValues(findField("triggers", "trigger:kind")));
@@ -590,13 +603,15 @@ describe("visibleWhen", () => {
 });
 
 describe("optionsSource assignments", () => {
-  it("registers the seven dynamic options sources", () => {
+  it("registers the nine dynamic options sources", () => {
     expect(spec.optionsSources.map((source) => source.id)).toEqual([
       "providers",
       "model_groups",
       "triggers",
       "channels",
       "workspaces",
+      "templates",
+      "prompts",
       "secret_envs",
       "path_template_variables",
     ]);
@@ -623,6 +638,12 @@ describe("optionsSource assignments", () => {
       ["routing", "route:outputs.summary", "channels"],
       ["channels", "outputs:routes.default.line_comments", "channels"],
       ["workspaces", "workspaces:defaults.outputs.summary", "channels"],
+      ["channels", "channel:templates.problem", "templates"],
+      ["channels", "channel:templates.summary", "templates"],
+      ["workspaces", "workspaces:defaults.prompt.system_prompt", "prompts"],
+      ["workspaces", "workspaces:defaults.prompt.extra_system_prompt", "prompts"],
+      ["workspaces", "workspace:prompt.system_prompt", "prompts"],
+      ["workspaces", "workspace:prompt.extra_system_prompt", "prompts"],
       ["providers", "provider:api_key_env", "secret_envs"],
       ["triggers", "trigger:commit_url_template", "path_template_variables"],
     ];

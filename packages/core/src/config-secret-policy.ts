@@ -3,6 +3,7 @@ import { ConfigError, stableSerialize } from "./config-format.js";
 import { deepMergeAnalysis } from "./config-compiler.js";
 import { LITERAL_SECRET_FIELDS, SEALED_LITERAL_SECRET_FIELDS } from "./config-secret-sealing.js";
 import { isPlainObject } from "./utils.js";
+import { isMarkdownConfigMap, isMarkdownDatabaseCollection } from "./markdown-document.js";
 
 export interface ConfigSecretGrant {
   readonly env: string;
@@ -42,6 +43,7 @@ export function collectConfigSecretReferences(config: unknown): readonly ConfigS
   const triggers = Array.isArray(config.triggers) ? config.triggers : [];
   const references: ConfigSecretGrant[] = [];
   const visit = (value: unknown, path: string[], owner: Record<string, unknown>): void => {
+    if (isMarkdownConfigMap(path)) return;
     if (Array.isArray(value)) {
       value.forEach((entry, index) => {
         const entity = isPlainObject(entry) ? entry : undefined;
@@ -151,6 +153,16 @@ export function collectConfigSecretReferences(config: unknown): readonly ConfigS
  * rejected — secrets outside the registry still require an env reference.
  */
 export function assertNoConfigCredentialLiterals(value: unknown, path: readonly string[] = []): void {
+  if (isMarkdownConfigMap(path)) return;
+  if (isMarkdownDatabaseCollection(path) && isPlainObject(value)) {
+    // Record ids and bodies in these collections are display data. Continue
+    // checking metadata and malformed non-string values normally.
+    for (const [id, record] of Object.entries(value)) {
+      assertNoConfigCredentialLiterals(isPlainObject(record) && typeof record.value === "string"
+        ? { ...record, value: undefined } : record, [...path, id]);
+    }
+    return;
+  }
   if (typeof value === "string") {
     try {
       const url = new URL(value);
@@ -207,6 +219,7 @@ export function assertConfigSecretPolicy(file: unknown, database: unknown, effec
 }
 
 function projectLiteralReferences(root: unknown, path: readonly string[] = []): unknown {
+  if (isMarkdownConfigMap(path)) return root;
   if (Array.isArray(root)) return root.map(entry => projectLiteralReferences(entry, path));
   if (!isPlainObject(root)) return root;
   const fingerprint = (value: string): string => `AICR_LITERAL_${createHash("sha256").update(value).digest("hex")}`;

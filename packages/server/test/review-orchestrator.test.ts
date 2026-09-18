@@ -202,6 +202,39 @@ describe("runReviewOrchestration", () => {
       expect(complete).toHaveBeenCalledTimes(1);
     } finally { await rm(root, { recursive: true, force: true }); }
   });
+  it("replaces the base prompt via the workspace resolver and appends the extra prompt", async () => {
+    await mkdir("build/tmp", { recursive: true });
+    const root = await mkdtemp(join(process.cwd(), "build/tmp/review-extra-prompt-"));
+    const vcs = createVcs(root);
+    const complete = vi.fn(async () => ({ providerId: model.providerId, modelId: model.modelId, content: '{"skipReason":"lgtm"}', raw: null }));
+    try {
+      const result = await runReviewOrchestration({ reviewEvent: createReviewEventFixture(), provider: "gitea", eventName: "pull_request", payload: {} }, {
+        baseSystemPrompt: "BUILT-IN BASE", sourceRootResolver: () => root, vcs, model, llm: { complete },
+        baseSystemPromptResolver: () => "WORKSPACE BASE",
+        extraSystemPromptResolver: () => "EXTRA RULES",
+      });
+      const systemPrompt = result.preparedPrompt.prompt.systemPrompt;
+      expect(systemPrompt).toContain("WORKSPACE BASE");
+      expect(systemPrompt).toContain("EXTRA RULES");
+      expect(systemPrompt.indexOf("WORKSPACE BASE")).toBeLessThan(systemPrompt.indexOf("EXTRA RULES"));
+      expect(systemPrompt).not.toContain("BUILT-IN BASE");
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+  it("keeps the built-in base prompt and skips blank extra prompts", async () => {
+    await mkdir("build/tmp", { recursive: true });
+    const root = await mkdtemp(join(process.cwd(), "build/tmp/review-blank-extra-"));
+    const vcs = createVcs(root);
+    const complete = vi.fn(async () => ({ providerId: model.providerId, modelId: model.modelId, content: '{"skipReason":"lgtm"}', raw: null }));
+    try {
+      const result = await runReviewOrchestration({ reviewEvent: createReviewEventFixture(), provider: "gitea", eventName: "pull_request", payload: {} }, {
+        baseSystemPrompt: "BUILT-IN BASE", sourceRootResolver: () => root, vcs, model, llm: { complete },
+        extraSystemPromptResolver: () => "   ",
+      });
+      const systemPrompt = result.preparedPrompt.prompt.systemPrompt;
+      expect(systemPrompt).toContain("BUILT-IN BASE");
+      expect(systemPrompt.trimEnd().endsWith("BUILT-IN BASE")).toBe(true);
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
   it.each(["success", "failure", "empty"])("cleans direct review directories after %s", async (outcome) => {
     await mkdir("build/tmp", { recursive: true });
     const root = await mkdtemp(join(process.cwd(), "build/tmp/direct-cleanup-"));

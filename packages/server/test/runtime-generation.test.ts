@@ -17,7 +17,7 @@ import { createSqliteConfigStore } from "@aicr/core";
 import type { AppConfig } from "@aicr/core";
 import { closeStoreDb, createStoreDb } from "@aicr/store";
 import { bootstrapServerApp } from "../src/bootstrap.js";
-import { runTriggerProcessing, type ServerAppOptions } from "../src/index.js";
+import { resolveTriggerRetryConfig, runTriggerProcessing, type ServerAppOptions } from "../src/index.js";
 import { RuntimeConfigManager } from "../src/runtime-config.js";
 import { AutoCommitScheduler } from "../src/auto-commit-scheduler.js";
 import { materializeRuntimeBundle } from "@aicr/agents";
@@ -130,13 +130,13 @@ interface Harness {
   readonly options: ServerAppOptions;
 }
 
-async function bootstrap(config: AppConfig): Promise<Harness> {
+async function bootstrap(config: AppConfig, fileDocument = FILE_DOCUMENT): Promise<Harness> {
   const options = await bootstrapServerApp({
     config,
     baseSystemPrompt: "test",
     baseDir: dir,
     configDocument: {
-      document: FILE_DOCUMENT,
+      document: fileDocument,
       digest: "d".repeat(64),
     },
   });
@@ -144,14 +144,14 @@ async function bootstrap(config: AppConfig): Promise<Harness> {
   return { options };
 }
 
-async function publishOperations(operations: Parameters<typeof prepareConfigPublication>[0]["operations"]): Promise<void> {
+async function publishOperations(operations: Parameters<typeof prepareConfigPublication>[0]["operations"], fileDocument = FILE_DOCUMENT): Promise<void> {
   const head = await store.readHead(NAMESPACE);
   const prepared = prepareConfigPublication({
     namespace: NAMESPACE,
     baseRevision: head?.activeRevision ?? null,
     operationId: `op-${Math.random().toString(36).slice(2, 10)}`,
     actor: "test",
-    file: FILE_DOCUMENT,
+    file: fileDocument,
     fileDigest: "d".repeat(64),
     current: head === null ? {} : ((await store.readRevision(NAMESPACE, head.activeRevision))?.document ?? {}),
     operations,
@@ -162,6 +162,69 @@ async function publishOperations(operations: Parameters<typeof prepareConfigPubl
 }
 
 describe("runtime config generation integration (bootstrap)", () => {
+  it("pins document rendering and shared overrides, then resets globals to file and schema defaults", async () => {
+    const bodies: string[] = [];
+    vi.stubGlobal("fetch", async (_url: string, init?: RequestInit) => {
+      if (typeof init?.body === "string") bodies.push(init.body);
+      return new Response(JSON.stringify({ id: 7 }), { headers: { "content-type": "application/json" } });
+    });
+    const file = { ...FILE_DOCUMENT, agent: { timeout_seconds: 120 }, review: { max_files: 17 },
+      queue: { retry: { attempts: 2, backoff: { kind: "constant", base_ms: 99 } } } };
+    const { options } = await bootstrap(makeConfig(), file);
+    await publishOperations([
+      { op: "create", collection: "prompts", record: { id: "base", name: "base", enabled: true, value: "---\nname: Base\n---\nOld base" } },
+      { op: "create", collection: "prompts", record: { id: "extra", name: "extra", enabled: true, value: "---\nname: Extra\n---\nOld extra" } },
+      { op: "create", collection: "templates", record: { id: "summary", name: "summary", enabled: true, value: "---\nname: Summary\n---\nOld template {{summary}}" } },
+      { op: "create", collection: "workspaces", record: { id: "ws", name: "ws", enabled: true, value: {
+        source_repo: { trigger: "gitea-internal", repo: "acme/repo" }, prompt: { system_prompt: "base", extra_system_prompt: "extra" } } } },
+      { op: "create", collection: "channels", record: { id: "out", name: "out", enabled: true, value: { name: "out", kind: "gitea_pr_review",
+        trigger: "gitea-internal", templates: { summary: "summary" }, review_update_strategy: "always_new", no_problems: { action: "publish" } } } },
+      { op: "set", path: ["outputs", "routes", "default"], value: { summary: ["out"] } },
+    ], file);
+    const old = await options.runtimeConfig!.admission();
+    const event = createReviewEvent({ triggerName: "gitea-internal", provider: "gitea", workspaceId: "ws", targetKind: "pull_request", repoRef: "acme/repo", author: {}, reason: "test" });
+    const context = { reviewEvent: event, payload: { pull_request: { number: 7 } }, provider: "gitea" as const, eventName: "pull_request", configSnapshotId: old.snapshotId };
+    const resolve = options.reviewOrchestration!.optionsResolver!;
+    await publishOperations([
+      { op: "update", collection: "prompts", recordId: "base", value: "New base" },
+      { op: "update", collection: "prompts", recordId: "extra", value: "New extra" },
+      { op: "update", collection: "templates", recordId: "summary", value: "New template {{summary}}" },
+      { op: "set", path: ["agent", "timeout_seconds"], value: 45 },
+      { op: "set", path: ["agent", "auto_approve"], value: false },
+      { op: "set", path: ["review", "max_files"], value: 3 },
+      { op: "set", path: ["queue", "retry", "attempts"], value: 5 },
+    ], file);
+    const next = await options.runtimeConfig!.admission();
+    const oldOptions = await resolve(context);
+    const newContext = { ...context, configSnapshotId: next.snapshotId };
+    const newOptions = await resolve(newContext);
+    for (const [run, prefix, timeout, maxFiles] of [[oldOptions, "Old", 120_000, 17], [newOptions, "New", 45_000, 3]] as const) {
+      expect(await run.baseSystemPromptResolver!("ws")).toBe(`${prefix} base`);
+      expect(await run.extraSystemPromptResolver!("ws")).toBe(`${prefix} extra`);
+      expect(run.agentTimeoutMs).toBe(timeout);
+      expect(run.reviewPolicyResolver!("ws")?.max_files).toBe(maxFiles);
+    }
+    expect(newOptions.agentAutoApprove).toBe(false);
+    expect(resolveTriggerRetryConfig(old.config)).toMatchObject({ attempts: 2, backoff: { base_ms: 99 } });
+    expect(resolveTriggerRetryConfig(next.config)).toMatchObject({ attempts: 5, backoff: { base_ms: 99 } });
+    await (await oldOptions.outputPublisherResolver!(context))!.publishSummary!("sentinel");
+    await (await newOptions.outputPublisherResolver!(newContext))!.publishSummary!("sentinel");
+    expect(bodies).toHaveLength(2);
+    expect(bodies[0]).toContain("Old template sentinel");
+    expect(bodies[1]).toContain("New template sentinel");
+    expect(bodies.join("\n")).not.toContain("name: Summary");
+    await publishOperations(["agent", "review"].map(key => ({ op: "unset" as const, path: [key] })).concat([
+      { op: "unset", path: ["queue", "retry"] },
+    ]), file);
+    const reset = await options.runtimeConfig!.admission();
+    const resetOptions = await resolve({ ...context, configSnapshotId: reset.snapshotId });
+    expect(resetOptions.agentTimeoutMs).toBe(120_000);
+    expect(resetOptions.agentAutoApprove).toBe(true);
+    expect(resetOptions.reviewPolicyResolver!("ws")?.max_files).toBe(17);
+    expect(resolveTriggerRetryConfig(reset.config)).toMatchObject({ attempts: 2 });
+    expect((await resolve(newContext)).agentTimeoutMs).toBe(45_000);
+  });
+
   it("R08/R13/H07: preview and actual publishers follow pinned v2 routes, including explicit empty output", async () => {
     const requests: string[] = [];
     vi.stubGlobal("fetch", async (url: string) => { requests.push(String(url)); return new Response(JSON.stringify({ id: 7 }), { headers: { "content-type": "application/json" } }); });

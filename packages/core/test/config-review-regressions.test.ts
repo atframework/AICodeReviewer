@@ -127,8 +127,12 @@ describe("preview admission and compiler parity", () => {
   it("cannot widen a workspace match using an explicit route", () => {
     expect(previewConfigRoute(routeConfig(), { triggerName: "primary", targetKind: "pull_request", repoRef: "denied/repo" }).status).not.toBe("matched");
   });
-  it("does not bind a route without repository evidence", () => {
-    expect(previewConfigRoute(routeConfig(), { triggerName: "primary", targetKind: "pull_request" }).status).not.toBe("matched");
+  it("explains a sourceless rule hit without binding an instance", () => {
+    const result = previewConfigRoute(routeConfig(), { triggerName: "primary", targetKind: "pull_request" });
+    // The v2 rule pins its workspace, so the preview reports the match; the
+    // note marks instance binding/layout variables as admission-time work.
+    expect(result).toMatchObject({ status: "matched", routeRuleId: "route", workspace: "service" });
+    if (result.status === "matched") expect(result.note).toContain("No repository ref");
   });
   it("keeps disabled triggers out of preview", () => {
     expect(previewConfigRoute(routeConfig({ triggers: [{ name: "primary", kind: "github", enabled: false }] }), { triggerName: "primary", targetKind: "pull_request", repoRef: "allowed/repo" }).status).not.toBe("matched");

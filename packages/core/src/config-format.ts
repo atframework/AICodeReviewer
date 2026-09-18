@@ -205,7 +205,7 @@ export function parseConfigPath(text: string): ConfigPath {
 // Entity collections (architecture §3.15 rule 2)
 // ---------------------------------------------------------------------------
 
-export type ConfigEntityKind = "provider" | "model_group" | "trigger" | "channel" | "workspace" | "route";
+export type ConfigEntityKind = "provider" | "model_group" | "trigger" | "channel" | "workspace" | "route" | "template" | "prompt";
 
 export interface ConfigEntityCollection {
   readonly kind: ConfigEntityKind;
@@ -226,6 +226,11 @@ export const CONFIG_ENTITY_COLLECTIONS: Readonly<Record<ConfigEntityKind, Config
   workspace: { kind: "workspace", path: ["workspaces", "instances"], shape: "map", idField: null, since: 1 },
   // Reserved for the v2 routing format (architecture §3.15); rejected by the v1 schema.
   route: { kind: "route", path: ["routing", "rules"], shape: "array", idField: "id", since: 2 },
+  // Named template documents (markdown + frontmatter), referenced per kind
+  // from output channels; values are display documents, never credentials.
+  template: { kind: "template", path: ["outputs", "templates"], shape: "map", idField: null, since: 1 },
+  // Named system-prompt documents, referenced from workspace prompt config.
+  prompt: { kind: "prompt", path: ["prompts", "system"], shape: "map", idField: null, since: 1 },
 };
 
 export interface ConfigEntityRef {

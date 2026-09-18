@@ -33,6 +33,10 @@ Workspace 多工程规则与动态配置管理 P0–P8 已完成本地交付、�
 数据库配置的注册凭据字段、加密发布与编辑语义见[架构](docs/ai/architecture.md)
 §3.15–3.16 和[决策](docs/ai/decisions.md) D40；部署验收仍按下表执行。
 
+管理页面的类型可见性、共享配置覆盖/重置、模板与系统 prompt 管理及复审边界见
+[M27](docs/ai/milestones/M27.md) 和架构 §3.15–3.16。Queue 的
+`workers.lock_ttl_seconds` 与 `dead_letter.*` 仍是预留字段，不计作运行时能力。
+
 ## 2. 可本地推进的下一步
 
 下列工作不以获得远端服务凭据为前提；实现前仍需确定恢复语义和范围。

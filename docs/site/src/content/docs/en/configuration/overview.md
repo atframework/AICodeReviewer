@@ -215,7 +215,10 @@ also checked when the path is rendered.
 Matching also adds the top override layer: each task resolves its analysis
 selection as global → workspace defaults → instance → the matched route's
 `analysis` block. When the database configuration source publishes new
-revisions, file-owned values keep winning and stay read-only, and a
+revisions, file-owned values keep winning and stay read-only — except the
+`agent`, `review` and `queue.workers|rate_limit|retry|dead_letter` prefixes,
+which merge database > file > default and stay editable with a "reset database
+overrides" action in the management UI. A
 publication applies only to newly accepted tasks — queued and running tasks
 keep the configuration they were accepted with. Field details live in the
 [config field reference](/en/reference/config-fields/#workspaces).
@@ -223,7 +226,9 @@ keep the configuration they were accepted with. Field details live in the
 ## Dynamic configuration API
 
 With `config_sources.database.enabled: true`, `/api/admin/config` publishes database
-supplements to the file configuration. File-owned values stay read-only. Each webhook
+supplements to the file configuration. File-owned values stay read-only (except the
+`agent`/`review`/`queue.workers|rate_limit|retry|dead_letter` prefixes, where database
+values win and remain editable and resettable). Each webhook
 loads the durable head before credential lookup and keeps one generation throughout
 its asynchronous processing. Receipts and new persisted deferrals retain that snapshot.
 An empty namespace gets a durable revision 0 snapshot before accepting work.
@@ -274,10 +279,12 @@ part of the destination grant, so changing it requires a matching file grant.
 The database may manage the global leaves `llm.default_model_chain`,
 `llm.triage_model_chain`, `llm.retry`, `llm.per_provider_overrides`,
 `llm.budget`, `llm.model_catalog`, `review`, `compression`, `agent`,
-`outputs.template_engine`, `outputs.no_problems`, `outputs.author_resolution`,
-`outputs.routes`, `queue.workers`, `queue.rate_limit`, `queue.retry`,
+`outputs.template_engine`, `outputs.templates`, `outputs.no_problems`,
+`outputs.author_resolution`, `outputs.routes`, `prompts.system`,
+`queue.workers`, `queue.rate_limit`, `queue.retry`,
 `queue.dead_letter`, `workspaces.cache` and `workspaces.defaults`, plus the
-provider, model-group, trigger, channel, workspace and route entity
+provider, model-group, trigger, channel, workspace, route, template and
+prompt entity
 collections. The bootstrap trust boundary — `server`, `admin`, `storage`,
 `config_sources`, `queue.kind`, `queue.sqlite` and `workspaces.root` — is
 never writable from the database.

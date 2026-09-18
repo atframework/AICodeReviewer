@@ -9,6 +9,7 @@ import {
   type PromptAssemblyOutput,
   type RepoPromptDiscovery,
 } from "./prompt-manager.js";
+import { markdownDocumentBody } from "./markdown-document.js";
 import type { ReviewEvent } from "./review-event.js";
 import { normalizeChangedPath } from "./utils.js";
 
@@ -96,7 +97,9 @@ export function buildReviewTaskContext(
 }
 
 export async function loadSystemPromptTemplate(path: string): Promise<string> {
-  return readFile(path, "utf8");
+  // Prompt files may open with frontmatter display metadata (name/description);
+  // only the body reaches the model.
+  return markdownDocumentBody(await readFile(path, "utf8"));
 }
 
 export async function prepareReviewPrompt(

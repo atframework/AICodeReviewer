@@ -83,7 +83,27 @@ revision，不按字符串形状猜测 hash 格式。
 在 **Config** 中编辑 provider、模型组、trigger、channel、路由、workspace 和全局设置。
 文件值只读，**Copy as new database config** 需要填写不同的名称。数据库配置补充文件的
 显式配置。同名 shadowed 数据库记录可以删除；要改变有效值需修改其文件来源。
+`agent`、`review`、`queue.workers|rate_limit|retry|dead_letter` 前缀例外：数据库值
+优先于文件值，对应页面（Agent、Review、Queue）保持可编辑，并可用
+**Reset database overrides** 清除数据库覆盖、回落到文件或默认值。
+Queue 的预留字段（`workers.lock_ttl_seconds`、`dead_letter.*`）没有运行时消费者，
+仍保持只读。重置也会丢弃当前页未保存的编辑；revision 冲突时展示最新数据库值再重试。
+Queue 的预留字段（`workers.lock_ttl_seconds`、`dead_letter.*`）没有运行时消费者，
+仍保持只读。重置也会丢弃当前页未保存的编辑；revision 冲突时展示最新数据库值再重试。
 凭据控件只接受已授权的环境变量名。历史值被脱敏时，保存前需要替换或清除占位符。
+
+**Templates** 和 **Prompts** 页管理命名模板（`outputs.templates`）与 system prompt
+（`prompts.system`）文档：markdown 正文即运行时内容，可选 frontmatter 仅作界面元数据。
+页面下方列出只读的内置资产（各 channel kind 的内置 problem/summary 模板与内置基底
+prompt），点击 **Copy as new database config** 以正文为草稿新建数据库配置。
+channel 的 `templates.{problem,summary}` 和 workspace 的
+`prompt.system_prompt`/`prompt.extra_system_prompt` 通过下拉引用这些名称。
+文档文本原样保存和读取，包括 URL 片段、凭据格式示例及以 `_env` 结尾的名称。
+预览和版本历史包含这些实体。删除或禁用被引用的文档前需清除引用，
+也可把引用清理和文档删除放入同一次暂存发布。
+文档文本原样保存和读取，包括 URL 片段、凭据格式示例及以 `_env` 结尾的名称。
+预览和版本历史包含这些实体。删除或禁用被引用的文档前需清除引用，
+也可把引用清理和文档删除放入同一次暂存发布。
 
 新建 provider 时可从 **Platform preset** 选择国内常见平台（Kimi For Coding、Kimi
 开放平台、智谱、Z.AI、阿里云百炼、腾讯云、DeepSeek），一键预填端点、协议

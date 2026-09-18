@@ -117,6 +117,21 @@ describe("prepareReviewPrompt", () => {
     }
   });
 
+  it("strips frontmatter display metadata when loading a system prompt template", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-prep-frontmatter-"));
+
+    try {
+      const promptPath = join(tempDir, "team-base.system.md");
+      await writeFile(promptPath, "---\nname: 团队基底\ndescription: 显示用\n---\n<task>\n{{TASK_CONTEXT}}\n</task>\n", "utf8");
+
+      const prompt = await loadSystemPromptTemplate(promptPath);
+      expect(prompt).toBe("<task>\n{{TASK_CONTEXT}}\n</task>\n");
+      expect(prompt).not.toContain("团队基底");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("falls back to a built task context when an explicit whitespace-only context is provided", async () => {
     const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-prep-blank-"));
     try {

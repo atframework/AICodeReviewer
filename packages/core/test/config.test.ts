@@ -2463,5 +2463,104 @@ describe("triage config", () => {
       });
       expect(result.success).toBe(false);
     });
+
+    it("accepts prompt.system_prompt/extra_system_prompt named references in instances and defaults", () => {
+      const result = appConfigSchema.safeParse({
+        workspaces: {
+          defaults: { prompt: { system_prompt: "base-v2" } },
+          instances: {
+            "my-repo": {
+              prompt: { system_prompt: "team-base", extra_system_prompt: "team-addon" },
+            },
+          },
+        },
+      });
+      expect(result.success).toBe(true);
+      if (!result.success) return;
+      const ws = result.data.workspaces.instances["my-repo"]!;
+      expect(ws.prompt?.system_prompt).toBe("team-base");
+      expect(ws.prompt?.extra_system_prompt).toBe("team-addon");
+      expect(result.data.workspaces.defaults?.prompt?.system_prompt).toBe("base-v2");
+    });
+
+    it("rejects empty named prompt references", () => {
+      const result = appConfigSchema.safeParse({
+        workspaces: { instances: { "my-repo": { prompt: { system_prompt: "" } } } },
+      });
+      expect(result.success).toBe(false);
+    });
+  });
+
+  describe("named template and prompt documents", () => {
+    it("accepts outputs.templates markdown documents and defaults to an empty map", () => {
+      const result = appConfigSchema.safeParse({
+        outputs: {
+          templates: {
+            "pr-summary": "---\nname: 汇总模板\n---\nSummary {{run.id}}\n",
+            plain: "Problem {{problem.location}}",
+          },
+        },
+      });
+      expect(result.success).toBe(true);
+      if (!result.success) return;
+      expect(Object.keys(result.data.outputs.templates)).toEqual(["pr-summary", "plain"]);
+      const bare = appConfigSchema.parse({});
+      expect(bare.outputs.templates).toEqual({});
+    });
+
+    it("rejects template documents with an unusable frontmatter block", () => {
+      const result = appConfigSchema.safeParse({
+        outputs: { templates: { broken: "---\nname: [unclosed\n---\nbody\n" } },
+      });
+      expect(result.success).toBe(false);
+    });
+
+    it("accepts prompts.system markdown documents and defaults to an empty map", () => {
+      const result = appConfigSchema.safeParse({
+        prompts: { system: { "team-base": "---\nname: 团队基底\n---\nYou review code.\n" } },
+      });
+      expect(result.success).toBe(true);
+      if (!result.success) return;
+      expect(result.data.prompts.system["team-base"]).toContain("You review code.");
+      expect(appConfigSchema.parse({}).prompts.system).toEqual({});
+    });
+
+    it("rejects prompt documents with an unclosed frontmatter fence", () => {
+      const result = appConfigSchema.safeParse({
+        prompts: { system: { broken: "---\nname: x\n" } },
+      });
+      expect(result.success).toBe(false);
+    });
+
+    it("rejects unknown keys under prompts", () => {
+      const result = appConfigSchema.safeParse({ prompts: { user: { x: "y" } } });
+      expect(result.success).toBe(false);
+    });
+
+    it("accepts channel templates.problem/templates.summary named references", () => {
+      const result = appConfigSchema.safeParse({
+        outputs: {
+          channels: [
+            { name: "pr", kind: "gitea_issue", templates: { problem: "issue-problem", summary: "issue-summary" } },
+          ],
+        },
+      });
+      expect(result.success).toBe(true);
+      if (!result.success) return;
+      expect(result.data.outputs.channels[0]?.templates).toEqual({ problem: "issue-problem", summary: "issue-summary" });
+    });
+
+    it("rejects empty channel template references and unknown template keys", () => {
+      expect(
+        appConfigSchema.safeParse({
+          outputs: { channels: [{ name: "pr", kind: "gitea_issue", templates: { problem: "" } }] },
+        }).success,
+      ).toBe(false);
+      expect(
+        appConfigSchema.safeParse({
+          outputs: { channels: [{ name: "pr", kind: "gitea_issue", templates: { finding: "x" } }] },
+        }).success,
+      ).toBe(false);
+    });
   });
 });

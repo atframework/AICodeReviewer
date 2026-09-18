@@ -25,6 +25,11 @@ function createOp(collection: "providers" | "triggers" | "channels" | "workspace
   return { op: "create", collection, record: { id: `rec-${name}`, name, enabled: true, value } };
 }
 
+/** String-valued document entity (template/prompt). */
+function createDocOp(collection: "templates" | "prompts", name: string, document: string): ConfigChangesetOperation {
+  return { op: "create", collection, record: { id: `rec-${name}`, name, enabled: true, value: document } };
+}
+
 const NAMESPACE = "workspace:test";
 const DIGEST = "a".repeat(64);
 
@@ -333,7 +338,7 @@ describe("restore (C12/S07)", () => {
     // Revision 1 sets a DB global; the file later locks the same leaf.
     await publish(
       prepareConfigPublication(
-        publishInput({ file: {}, operations: [{ op: "set", path: ["review", "output_language"], value: "zh-CN" }] }),
+        publishInput({ file: {}, operations: [{ op: "set", path: ["compression", "context_lines"], value: 5 }] }),
       ),
     );
     await expect(
@@ -342,7 +347,7 @@ describe("restore (C12/S07)", () => {
         revision: 1,
         operationId: "op-2",
         actor: "tester",
-        file: { review: { output_language: "en" } },
+        file: { compression: { context_lines: 3 } },
         fileDigest: "b".repeat(64),
         baseRevision: 1,
       }),
@@ -403,6 +408,23 @@ describe("namespace isolation (C11)", () => {
 });
 
 describe("reference resolution on publish", () => {
+  it.each(["templates", "prompts"] as const)("rejects removing or disabling referenced %s, and permits atomic reference cleanup", (collection) => {
+    const operations: ConfigChangesetOperation[] = [createDocOp(collection, "shared", "Shared text")];
+    if (collection === "templates") operations.push(createOp("channels", "out", { name: "out", kind: "gitea_issue", templates: { summary: "shared" } }));
+    else operations.push(createOp("workspaces", "ws", { prompt: { extra_system_prompt: "shared" } }));
+    const current = prepareConfigPublication(publishInput({ operations })).document;
+    for (const op of [
+      { op: "delete" as const, collection, recordId: "rec-shared" },
+      { op: "set-enabled" as const, collection, recordId: "rec-shared", enabled: false },
+    ]) expect(() => prepareConfigPublication(publishInput({ current, operations: [op] })))
+      .toThrowError(expect.objectContaining({ code: "invalid_reference" }));
+    const cleared = prepareConfigPublication(publishInput({ current, operations: [
+      { op: "delete", collection, recordId: "rec-shared" },
+      { op: "delete", collection: collection === "templates" ? "channels" : "workspaces", recordId: collection === "templates" ? "rec-out" : "rec-ws" },
+    ] }));
+    expect(cleared.audit.entityRefs).toContain(`-${collection}/shared`);
+  });
+
   const withTrigger: ConfigChangesetOperation[] = [
     createOp("triggers", "gh", { name: "gh", kind: "github", token_env: "GH_TOKEN" }),
   ];
@@ -433,5 +455,53 @@ describe("reference resolution on publish", () => {
         }),
       ),
     ).toThrowError(expect.objectContaining({ code: "invalid_reference" }) as Error);
+  });
+
+  it("channel referencing a template upserted in the same changeset passes", async () => {
+    const prepared = prepareConfigPublication(
+      publishInput({
+        operations: [
+          createDocOp("templates", "pr-summary", "Summary {{run.id}}"),
+          createOp("channels", "pr", { name: "pr", kind: "gitea_issue", templates: { summary: "pr-summary" } }),
+        ],
+      }),
+    );
+    await expect(publish(prepared)).resolves.toMatchObject({ status: "committed" });
+  });
+
+  it("channel referencing a missing template fails with invalid_reference", async () => {
+    expect(() =>
+      prepareConfigPublication(
+        publishInput({
+          operations: [
+            createOp("channels", "pr", { name: "pr", kind: "gitea_issue", templates: { problem: "ghost" } }),
+          ],
+        }),
+      ),
+    ).toThrowError(expect.objectContaining({ code: "invalid_reference" }) as Error);
+  });
+
+  it("workspace referencing a missing system prompt fails with invalid_reference", async () => {
+    expect(() =>
+      prepareConfigPublication(
+        publishInput({
+          operations: [
+            createOp("workspaces", "product-services", { prompt: { system_prompt: "ghost" } }),
+          ],
+        }),
+      ),
+    ).toThrowError(expect.objectContaining({ code: "invalid_reference" }) as Error);
+  });
+
+  it("workspace referencing a prompt upserted in the same changeset passes", async () => {
+    const prepared = prepareConfigPublication(
+      publishInput({
+        operations: [
+          createDocOp("prompts", "team-base", "You review code."),
+          createOp("workspaces", "product-services", { prompt: { system_prompt: "team-base", extra_system_prompt: "team-base" } }),
+        ],
+      }),
+    );
+    await expect(publish(prepared)).resolves.toMatchObject({ status: "committed" });
   });
 });

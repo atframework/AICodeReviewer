@@ -141,6 +141,11 @@ export interface ServerReviewOrchestrationOptions {
   readonly executionScope?: (<T>(context: ReviewOrchestrationContext, run: () => Promise<T>) => Promise<T>) | undefined;
   readonly baseSystemPrompt: string;
   readonly baseSystemPromptResolver?: (workspaceId: string) => Promise<string | undefined> | string | undefined;
+  /**
+   * Workspace extra system prompt (named prompts.system reference), appended
+   * after the resolved base prompt — built-in or workspace override alike.
+   */
+  readonly extraSystemPromptResolver?: (workspaceId: string) => Promise<string | undefined> | string | undefined;
   readonly forceSkillsResolver?: (workspaceId: string) => readonly string[] | undefined;
   readonly sourceRootResolver: (reviewEvent: ReviewEvent) => string | undefined;
   /**
@@ -3291,13 +3296,20 @@ async function executeReviewInRunDirs(
   }
 
   const resolvedBasePrompt = await (async () => {
+    let base: string | undefined;
     if (options.baseSystemPromptResolver) {
-      const resolved = await options.baseSystemPromptResolver(context.reviewEvent.workspaceId);
-      if (resolved !== undefined) {
-        return resolved;
-      }
+      base = await options.baseSystemPromptResolver(context.reviewEvent.workspaceId);
     }
-    return options.baseSystemPrompt;
+    let resolved = base ?? options.baseSystemPrompt;
+    // The workspace extra prompt appends after whichever base resolved
+    // (built-in, workspace file, or named prompts.system override).
+    const extra = options.extraSystemPromptResolver !== undefined
+      ? await options.extraSystemPromptResolver(context.reviewEvent.workspaceId)
+      : undefined;
+    if (extra !== undefined && extra.trim().length > 0) {
+      resolved = `${resolved.trimEnd()}\n\n${extra.trim()}`;
+    }
+    return resolved;
   })();
 
   const resolvedForceSkills = options.forceSkillsResolver?.(context.reviewEvent.workspaceId);

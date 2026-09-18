@@ -37,6 +37,19 @@ describe("parseConfigSecretsKeyMaterial", () => {
 });
 
 describe("envelope round-trip", () => {
+  it("exempts only document maps, retaining credential sealing on similarly named extensions", () => {
+    const source = {
+      outputs: { templates: { token: "Example text" } },
+      prompts: { system: { api_key: "Example instructions" } },
+      llm: { providers: [{ id: "p", outputs: { templates: { token: "real-token" } } }] },
+    };
+    const sealed = sealConfigSecretLiterals(source, sealing());
+    expect(sealed.outputs.templates.token).toBe("Example text");
+    expect(sealed.prompts.system.api_key).toBe("Example instructions");
+    expect(isSealedSecretValue(sealed.llm.providers[0]!.outputs.templates.token)).toBe(true);
+    expect(openConfigSecretLiterals(sealed, sealing())).toEqual(source);
+  });
+
   it("seals and opens a literal, binding ciphertext to the field name", () => {
     const service = sealing();
     const sealed = service.seal("sk-live-123", "api_key");

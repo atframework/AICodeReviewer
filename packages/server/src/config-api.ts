@@ -27,6 +27,7 @@ import {
   CONFIG_FIELD_INVENTORY,
   DATABASE_ENTITY_COLLECTION_KEYS,
   DATABASE_KIND_COLLECTION,
+  DATABASE_PRIORITY_PREFIXES,
   ConfigError,
   WORK_PATH_TEMPLATE_VARIABLES,
   assertNoConfigCredentialLiterals,
@@ -35,6 +36,8 @@ import {
   collectConfigSecretReferences,
   getConfigOperation,
   isConfigError,
+  isMarkdownConfigMap,
+  isMarkdownDatabaseCollection,
   mergeConfigSources,
   parseConfigPath,
   parseEffectiveConfig,
@@ -60,6 +63,7 @@ import {
 } from "@aicr/core";
 import { createAdminAuthMiddleware, type AdminAuthConfig, type AdminSessionStore } from "./admin-auth.js";
 import { MODEL_PROVIDER_PRESETS } from "@aicr/llm";
+import { listBuiltinTemplates } from "@aicr/outputs";
 import type { RuntimeConfigManager } from "./runtime-config.js";
 
 /** Mirrors the config source cap: one MiB JSON bodies are already generous. */
@@ -87,6 +91,14 @@ export interface ConfigApiOptions {
    * fails closed with secrets_key_missing.
    */
   readonly secretSealing?: ConfigSecretSealing | undefined;
+  /**
+   * Built-in system-prompt assets surfaced read-only on the Prompts page
+   * (the built-in base prompt, already frontmatter-stripped). Built-in
+   * template documents are listed from @aicr/outputs directly.
+   */
+  readonly builtinPrompts?: readonly { readonly id: string; readonly name?: string | undefined; readonly document: string }[] | undefined;
+  /** Same deployed built-in template directory used by output rendering. */
+  readonly builtinTemplatesBaseDir?: string | undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -225,7 +237,7 @@ async function readJsonBody<T>(c: Context, schema: z.ZodType<T>, maxBodyBytes: n
       response: c.json({
         error: "invalid_request",
         message: "Request body failed DTO validation.",
-        issues: result.error.issues.map((issue) => ({ path: issue.path.join("."), message: "Invalid field value." })),
+        issues: result.error.issues.map((issue) => ({ path: issue.path.map(String), message: "Invalid field value." })),
       }, 400),
     };
   }
@@ -243,14 +255,32 @@ function assertJsonShape(value: unknown, depth = 0): void {
 
 /** New writes store credential references; legacy literal values remain readable only through redaction. */
 function assertNoInlineCredentials(value: unknown): void {
+  const withoutBody = (record: unknown): unknown => record !== null && typeof record === "object" && !Array.isArray(record)
+    && typeof (record as Record<string, unknown>).value === "string" ? { ...record, value: undefined } : record;
+  // Only known document operation/record bodies are display text. All other
+  // request data retains the credential and placeholder checks.
+  let checked = value;
+  if (Array.isArray(value)) {
+    checked = value.map((operation) => {
+      if (operation?.collection !== "templates" && operation?.collection !== "prompts") return operation;
+      if (operation.op === "create") return { ...operation, record: withoutBody(operation.record) };
+      return operation.op === "update" ? withoutBody(operation) : operation;
+    });
+  } else if (value !== null && typeof value === "object" && "entities" in value) {
+    const entities = value.entities as Record<string, unknown> | undefined;
+    if (entities !== undefined) checked = { ...value, entities: Object.fromEntries(Object.entries(entities).map(([collection, records]) => [collection,
+      (collection === "templates" || collection === "prompts") && records !== null && typeof records === "object"
+        ? Object.fromEntries(Object.entries(records).map(([id, record]) => [id, withoutBody(record)])) : records,
+    ])) };
+  }
   const visit = (entry: unknown): void => {
     if (typeof entry === "string" && /<redacted>|%3credacted%3e/iu.test(entry)) {
       throw new ConfigError("invalid_field_type", "Replace or clear redacted values before saving; placeholders cannot be persisted.");
     }
     if (entry !== null && typeof entry === "object") Object.values(entry).forEach(visit);
   };
-  visit(value);
-  assertNoConfigCredentialLiterals(value);
+  visit(checked);
+  assertNoConfigCredentialLiterals(checked);
 }
 
 function scrubMessage(message: string): string {
@@ -262,7 +292,7 @@ function configErrorResponse(c: Context, error: unknown): Response {
     return c.json({
       error: "invalid_request",
       message: "DTO validation failed.",
-      issues: error.issues.map((issue) => ({ path: issue.path.join("."), message: "Invalid field value." })),
+      issues: error.issues.map((issue) => ({ path: issue.path.map(String), message: "Invalid field value." })),
     }, 400);
   }
   if (isConfigError(error)) {
@@ -331,10 +361,32 @@ function redactDeep(value: unknown, ancestors: readonly string[] = []): unknown 
     } catch { return scrubMessage(value); }
   }
   if (value === null || typeof value !== "object") return value;
+  if (isMarkdownConfigMap(ancestors)) {
+    // Template/prompt documents are display text keyed by user-chosen ids; a
+    // document id colliding with a sensitive key name (e.g. "token") must not
+    // redact the body (mirrors the sealing exemption).
+    return value;
+  }
   const credentialMap = ancestors.at(-1) === "credentials" && ancestors.includes("web_search");
+  const databasePath = ancestors[0] === "document" ? ancestors.slice(1) : ancestors;
+  const documentCollection = isMarkdownDatabaseCollection(databasePath);
+  const documentRecord = databasePath.length === 3 && isMarkdownDatabaseCollection(databasePath.slice(0, 2));
+  const viewDocument = ancestors.length === 3 && ancestors[0] === "collections" && ancestors[2] === "records"
+    && (ancestors[1] === "template" || ancestors[1] === "prompt");
+  const previewDocument = ancestors.length === 1 && ancestors[0] === "affected"
+    && ((value as Record<string, unknown>).kind === "templates" || (value as Record<string, unknown>).kind === "prompts");
   const output: Record<string, unknown> = {};
   for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
     if (PROTOTYPE_TOKENS.has(key.toLowerCase())) continue;
+    if (typeof entry === "string" && ((key === "value" && (documentRecord || viewDocument || previewDocument))
+      || (key === "effectiveValue" && viewDocument))) {
+      output[key] = entry;
+      continue;
+    }
+    if (documentCollection) {
+      output[key] = redactDeep(entry, [...ancestors, key]);
+      continue;
+    }
     if (key === "credentials" && ancestors.includes("web_search")) {
       output[key] = redactDeep(entry, [...ancestors, key]);
       continue;
@@ -365,10 +417,15 @@ function redactDeep(value: unknown, ancestors: readonly string[] = []): unknown 
 function redactFieldsView(fields: readonly ConfigFieldView[]): readonly ConfigFieldView[] {
   return fields.map((field) => {
     const segments = parseConfigPath(field.path);
+    // Template/prompt document leaves are display text even when the document
+    // id matches a sensitive key name (sealing exemption parity).
+    if (segments.length === 3 && isMarkdownConfigMap(segments.slice(0, 2))) {
+      return field;
+    }
     const sensitive = segments.some((segment) => isSensitiveKey(segment) && !(segment === "credentials" && segments.includes("web_search")))
       || (segments.at(-1) === "value" && segments.at(-2) !== undefined
         && segments.includes("credentials") && segments.includes("web_search"));
-    if (!sensitive) return field;
+    if (!sensitive) return redactDeep(field) as ConfigFieldView;
     const mask = (value: unknown): unknown =>
       typeof value === "number" || typeof value === "boolean" ? value : "<redacted>";
     return {
@@ -422,9 +479,10 @@ function secretEnvStatus(config: unknown, envLookup: ((name: string) => string |
   const allowed = new Set([...collectConfigSecretReferences(file).map(reference => reference.env),
     ...((file.config_sources as { secret_refs?: readonly { env: string }[] } | undefined)?.secret_refs ?? []).map(reference => reference.env)]);
   const names = new Set<string>();
-  const visit = (value: unknown): void => {
+  const visit = (value: unknown, path: readonly string[] = []): void => {
+    if (isMarkdownConfigMap(path)) return;
     if (Array.isArray(value)) {
-      value.forEach(visit);
+      value.forEach(entry => visit(entry, path));
       return;
     }
     if (value === null || typeof value !== "object") return;
@@ -432,7 +490,7 @@ function secretEnvStatus(config: unknown, envLookup: ((name: string) => string |
       if (key.endsWith("_env") && typeof entry === "string" && entry.length > 0) {
         if (allowed.has(entry)) names.add(entry);
       }
-      visit(entry);
+      visit(entry, [...path, key]);
     }
   };
   visit(config);
@@ -520,6 +578,8 @@ const CONFIG_OPTIONS_SOURCES: Readonly<Record<string, (options: ConfigApiOptions
   triggers: (options) => entityOptions(options, "trigger"),
   channels: (options) => entityOptions(options, "channel"),
   workspaces: (options) => entityOptions(options, "workspace"),
+  templates: (options) => entityOptions(options, "template"),
+  prompts: (options) => entityOptions(options, "prompt"),
   secret_envs: secretEnvOptions,
   path_template_variables: pathTemplateVariableOptions,
 };
@@ -615,9 +675,9 @@ export function createConfigApi(options: ConfigApiOptions): Hono {
       }
       const view = redactDeep({ namespace: options.namespace, head,
         configSnapshotId: options.manager?.status().snapshotId ?? null,
-        fileDigest: options.fileDigest, globals, provenance: Object.fromEntries(merged.provenance), collections,
-        fields: redactFieldsView(buildEffectiveConfigView(merged, effective)) });
-      return c.json({ ...(view as Record<string, unknown>), secretEnvs: secretEnvStatus(effective, options.envLookup, options.fileConfig) });
+        fileDigest: options.fileDigest, globals, provenance: Object.fromEntries(merged.provenance), collections });
+      return c.json({ ...(view as Record<string, unknown>), fields: redactFieldsView(buildEffectiveConfigView(merged, effective)),
+        secretEnvs: secretEnvStatus(effective, options.envLookup, options.fileConfig) });
     } catch (error) {
       return configErrorResponse(c, error);
     }
@@ -632,6 +692,20 @@ export function createConfigApi(options: ConfigApiOptions): Hono {
       // Consumed by the dashboard Providers page as draft prefill templates.
       providerPresets: MODEL_PROVIDER_PRESETS,
       formatVersion: options.formatVersion ?? 2,
+      // Global prefixes where the database wins over the file (§3.15
+      // exception); the dashboard renders reset controls for these pages.
+      databasePriorityPrefixes: DATABASE_PRIORITY_PREFIXES.map((prefix) => prefix.join(".")),
+      // Read-only built-in assets (never stored); the dashboard offers them
+      // as copy sources on the Templates/Prompts pages.
+      builtinAssets: {
+        templates: listBuiltinTemplates(options.builtinTemplatesBaseDir).map((asset) => ({
+          id: `${asset.channelKind}/${asset.kind}`,
+          channelKind: asset.channelKind,
+          kind: asset.kind,
+          document: asset.document,
+        })),
+        prompts: options.builtinPrompts ?? [],
+      },
       entityCollections: Object.values(CONFIG_ENTITY_COLLECTIONS).map((collection) => ({ kind: collection.kind, path: collection.path, idField: collection.idField, since: collection.since })),
       channelKinds: CHANNEL_KINDS,
       inventory: CONFIG_FIELD_INVENTORY.map((spec) => ({

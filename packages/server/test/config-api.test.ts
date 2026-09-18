@@ -208,6 +208,44 @@ describe("config api auth (A01/A02)", () => {
 });
 
 describe("config api GET / (A05 redaction + shape)", () => {
+  it.each(["templates", "prompts"] as const)("preserves %s document text through validation, persistence, reads and restore", async (collection) => {
+    const app = makeApp();
+    const kind = collection === "templates" ? "template" : "prompt";
+    const document = "https://example.test/guide?token=EXAMPLE#section";
+    const create = { op: "create", collection, record: { id: "secret", name: "example_env", enabled: true, value: document } };
+    const validated = await request(app, "/validate", { method: "POST", body: { operations: [create] } });
+    expect(await validated.json()).toMatchObject({ valid: true, sealableSecrets: false,
+      diff: { entities: { added: [`${collection}/example_env`] } },
+      affected: [{ kind: collection, id: "example_env", value: document }] });
+    const saved = await request(app, "/changesets", { method: "POST", body: { baseRevision: null, operationId: "document-create", operations: [create] } });
+    expect(saved.status).toBe(200);
+    const read = await request(app, "/");
+    expect(await read.json()).toMatchObject({ collections: { [kind]: { records: [{ value: document, effectiveValue: document }] } } });
+    const revision = await request(app, "/revisions/1");
+    expect(await revision.json()).toMatchObject({ document: { entities: { [collection]: { secret: { value: document } } } },
+      audit: [{ entityRefs: [`+${collection}/example_env`] }] });
+    const updated = await request(app, "/changesets", { method: "POST", body: { baseRevision: 1, operationId: "document-update",
+      operations: [{ op: "update", collection, recordId: "secret", value: "Use <redacted> when documenting secrets." }] } });
+    expect(updated.status).toBe(200);
+    const restored = await request(app, "/revisions/1/restore", { method: "POST", body: { baseRevision: 2, operationId: "document-restore" } });
+    expect(restored.status).toBe(200);
+    expect((await store.readRevision(NAMESPACE, 3))?.document).toMatchObject({ entities: { [collection]: { secret: { value: document } } } });
+  });
+
+  it("keeps file-owned template and prompt content intact in records and field views", async () => {
+    const document = "https://example.test/guide#section";
+    const app = makeApp({ ...apiOptions, fileConfig: { ...FILE_CONFIG,
+      outputs: { templates: { token: document } }, prompts: { system: { token: document } } } });
+    const response = await request(app, "/");
+    const body = await response.json();
+    expect(body.collections.template.records[0]).toMatchObject({ value: document, effectiveValue: document, readonly: true });
+    expect(body.collections.prompt.records[0]).toMatchObject({ value: document, effectiveValue: document, readonly: true });
+    expect(body.fields).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: "outputs.templates.token", effectiveValue: document }),
+      expect.objectContaining({ path: "prompts.system.token", effectiveValue: document }),
+    ]));
+  });
+
   it("reports head, collections, and secret env presence without values", async () => {
     const app = makeApp();
     // Publish a provider that references an env var name.
@@ -382,7 +420,7 @@ describe("config api validate + preview-route (A09)", () => {
       body: { operations: [{ op: "set", path: ["__proto__", "x"], value: 1 }] },
     });
     expect(response.status).toBe(400);
-    const body = await response.json() as { error: string; issues: { path: string }[] };
+    const body = await response.json() as { error: string; issues: { path: string[] }[] };
     expect(body.error).toBe("invalid_request");
     expect(body.issues[0]?.path).toContain("path");
   });
@@ -844,7 +882,7 @@ describe("config api P6 fields view + options sources", () => {
   it("GET / includes the effective fields view with file locks and overridden values", async () => {
     const fileConfig = { ...FILE_CONFIG, review: { max_files: 7 } } as never;
     const app = makeApp({ ...apiOptions, fileConfig });
-    // Bypass the write policy to place a database value beneath a file-owned field.
+    // Bypass the write policy to place a database value over a file-owned field.
     await seedLegacyCredentials([{ op: "set", path: ["review", "max_files"], value: 99 }]);
 
     const response = await request(app, "/");
@@ -854,12 +892,14 @@ describe("config api P6 fields view + options sources", () => {
         overriddenValues: { source: string; value: unknown }[] }[];
     };
     expect(Array.isArray(body.fields)).toBe(true);
-    const locked = body.fields.find((field) => field.path === "review.max_files");
-    expect(locked).toMatchObject({
-      source: "file",
-      editable: false,
-      effectiveValue: 7,
-      overriddenValues: [{ source: "database", value: 99 }],
+    // Database-priority prefix (§3.15 exception): the database value wins and
+    // the file value is reported as overridden instead of locking the field.
+    const priority = body.fields.find((field) => field.path === "review.max_files");
+    expect(priority).toMatchObject({
+      source: "database",
+      editable: true,
+      effectiveValue: 99,
+      overriddenValues: [{ source: "file", value: 7 }],
     });
     const fileProvider = body.fields.find((field) => field.path === "llm.providers.file-main.kind");
     expect(fileProvider).toMatchObject({ source: "file", editable: false, effectiveValue: "ollama", overriddenValues: [] });
@@ -871,17 +911,35 @@ describe("config api P6 fields view + options sources", () => {
     expect(response.status).toBe(200);
     const body = await response.json() as {
       uiSpec: { protocolVersion: number; pages: { id: string }[]; optionsSources: { id: string }[] };
+      builtinAssets: { templates: { id: string; document: string }[]; prompts: { id: string; document: string }[] };
     };
     expect(body.uiSpec.protocolVersion).toBe(1);
     const pageIds = body.uiSpec.pages.map((page) => page.id);
-    for (const id of ["providers", "model-groups", "routing", "versions"]) expect(pageIds).toContain(id);
+    for (const id of ["providers", "model-groups", "routing", "templates", "prompts", "versions"]) expect(pageIds).toContain(id);
     expect(body.uiSpec.optionsSources.map((source) => source.id)).toContain("secret_envs");
+    // Built-in assets are read-only copy sources; templates ship from
+    // @aicr/outputs, prompts default to none without bootstrap wiring.
+    expect(body.builtinAssets.templates.length).toBeGreaterThan(0);
+    expect(body.builtinAssets.templates.map((asset) => asset.id)).toContain("gitea_pr_review/summary");
+    expect(body.builtinAssets.templates.find((asset) => asset.id === "gitea_pr_review/summary")?.document).toContain("AI Code Review");
+    expect(body.builtinAssets.prompts).toEqual([]);
     // The spec round-trips through JSON and carries no secret material.
     expect(JSON.parse(JSON.stringify(body.uiSpec))).toEqual(body.uiSpec);
     expect(JSON.stringify(body)).not.toContain("only-in-process-secret-value");
   });
 
-  it("GET /options serves all seven sources with disabled and secret-presence flags", async () => {
+  it("GET /schema serves configured built-in prompts", async () => {
+    const app = makeApp({
+      ...apiOptions,
+      builtinPrompts: [{ id: "code-reviewer", name: "Built-in code reviewer", document: "You review code." }],
+    });
+    const response = await request(app, "/schema");
+    expect(response.status).toBe(200);
+    const body = await response.json() as { builtinAssets: { prompts: { id: string; name?: string; document: string }[] } };
+    expect(body.builtinAssets.prompts).toEqual([{ id: "code-reviewer", name: "Built-in code reviewer", document: "You review code." }]);
+  });
+
+  it("GET /options serves all nine sources with disabled and secret-presence flags", async () => {
     const fileConfig = {
       config_sources: { secret_refs: [
         { env: "KNOWN_ENV", target: ["llm", "providers", "db-openai", "api_key_env"], destinations: { kind: "openai_compatible" } },
@@ -917,7 +975,7 @@ describe("config api P6 fields view + options sources", () => {
     const modelGroups = await getOptions("model_groups");
     expect(modelGroups).toContainEqual({ value: "default", label: "default" });
 
-    for (const source of ["triggers", "channels", "workspaces"]) {
+    for (const source of ["triggers", "channels", "workspaces", "templates", "prompts"]) {
       expect(await getOptions(source)).toEqual([]);
     }
 
@@ -930,6 +988,25 @@ describe("config api P6 fields view + options sources", () => {
     expect(variables).toContainEqual({ value: "git.branch", label: "git.branch", insertText: '{{segment (default git.branch "unknown")}}' });
     const unavailable = variables.find((option) => option.value === "scheduled.job_id");
     expect(unavailable?.label).toBe("scheduled.job_id (unavailable)");
+  });
+
+  it("GET /options lists template and prompt entities", async () => {
+    const app = makeApp({ ...apiOptions, fileConfig: { outputs: { templates: { "file-template": "x" } } } as never });
+    await seedLegacyCredentials([
+      { op: "create", collection: "templates", record: { id: "rec-t", name: "db-template", enabled: true, value: "Summary {{run.id}}" } },
+      { op: "create", collection: "prompts", record: { id: "rec-p", name: "team-base", enabled: false, value: "You review code." } },
+    ] as never);
+    type Option = { value: string; label?: string; disabled?: boolean };
+    const getOptions = async (source: string) => {
+      const response = await request(app, `/options/${source}`);
+      expect(response.status).toBe(200);
+      return (await response.json() as { options: Option[] }).options;
+    };
+    expect(await getOptions("templates")).toEqual([
+      { value: "db-template", label: "db-template" },
+      { value: "file-template", label: "file-template" },
+    ]);
+    expect(await getOptions("prompts")).toEqual([{ value: "team-base", label: "team-base", disabled: true }]);
   });
 
   it("rejects unknown options sources with 400 invalid_request", async () => {

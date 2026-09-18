@@ -115,6 +115,10 @@ function createApp({ root, api, runtime, formState, schedule }) {
     pageSessions: new Map(),
     /** @type {Map<string, Map<string, boolean>>} section open state per editor context, survives full page rebuilds. */
     sectionStates: new Map(),
+    /** @type {readonly string[]} Global dotted prefixes where the database wins over the file. */
+    databasePriorityPrefixes: [],
+    /** @type {{templates: readonly object[], prompts: readonly object[]}} Read-only built-in assets (copy sources). */
+    builtinAssets: { templates: [], prompts: [] },
     drawer: null,
     fieldErrors: [],
     message: null,
@@ -200,6 +204,17 @@ function createApp({ root, api, runtime, formState, schedule }) {
             )
           : [];
       state.view = view;
+      state.databasePriorityPrefixes =
+        schema !== null && typeof schema === "object" && Array.isArray(schema.databasePriorityPrefixes)
+          ? schema.databasePriorityPrefixes.filter((prefix) => typeof prefix === "string" && prefix.length > 0)
+          : [];
+      state.builtinAssets =
+        schema !== null && typeof schema === "object" && schema.builtinAssets !== null && typeof schema.builtinAssets === "object"
+          ? {
+              templates: Array.isArray(schema.builtinAssets.templates) ? schema.builtinAssets.templates : [],
+              prompts: Array.isArray(schema.builtinAssets.prompts) ? schema.builtinAssets.prompts : [],
+            }
+          : { templates: [], prompts: [] };
       if (state.spec === null || !Array.isArray(state.spec.pages)) {
         throw new Error("The schema response does not carry a uiSpec.");
       }
@@ -400,6 +415,7 @@ function createApp({ root, api, runtime, formState, schedule }) {
     }
     if (page.entity !== undefined) renderEntitySection(page);
     if (page.id === "routing") renderRoutePreviewSection();
+    if (page.id === "routing") renderLegacyRoutesSection();
     if (page.globals === true || page.entity === undefined) renderGlobalsSection(page);
   }
 
@@ -535,8 +551,10 @@ function createApp({ root, api, runtime, formState, schedule }) {
       },
       onInheritChange(fieldId, inherit) {
         const current = editor.session.draft.fields[fieldId]?.inherit === true;
-        if (current !== inherit) editor.setSession(formState.sessionToggleInherit(editor.session, fieldId));
-        structural(fieldId);
+        if (current !== inherit) {
+          editor.setSession(formState.sessionToggleInherit(editor.session, fieldId));
+          structural(fieldId);
+        }
       },
       onPresentChange(fieldId, present) {
         editor.setSession(formState.sessionSetPresent(editor.session, fieldId, present));
@@ -567,13 +585,17 @@ function createApp({ root, api, runtime, formState, schedule }) {
 
   /** Re-render fields whose visibleWhen depends on the changed field. */
   function refreshDependents(editor, changedFieldId) {
+    const touchedSections = new Set();
     for (const field of allFields(editor.page)) {
       if (field.visibleWhen === undefined || field.visibleWhen.field !== changedFieldId) continue;
       const old = editor.fieldNodes.get(field.id);
       if (old === undefined) continue;
+      const section = old.closest("details.cfg-section");
       const next = renderEditorField(editor, field);
       old.replaceWith(next);
+      if (section !== null) touchedSections.add(section);
     }
+    for (const section of touchedSections) syncOneSectionVisibility(section);
   }
 
   function refreshSchedulePreview(editor, changedFieldId) {
@@ -652,6 +674,37 @@ function createApp({ root, api, runtime, formState, schedule }) {
       onAction: (actionId, record) => void onEntityAction(page, actionId, record, reorder),
     });
     els.main.append(table);
+    renderBuiltinAssetsSection(page);
+  }
+
+  /**
+   * Read-only built-in assets on the Templates/Prompts pages: built-ins are
+   * never stored or edited; each offers "Copy as new database config".
+   */
+  function renderBuiltinAssetsSection(page) {
+    const assets = page.id === "templates" ? state.builtinAssets.templates : page.id === "prompts" ? state.builtinAssets.prompts : [];
+    if (assets.length === 0) return;
+    els.main.append(renderer.renderBuiltinAssets({
+      title: page.id === "templates" ? "Built-in templates (read-only)" : "Built-in prompts (read-only)",
+      assets,
+      onCopy: (asset) => openBuiltinCopyDrawer(page, asset),
+    }));
+  }
+
+  /** Open the create drawer prefilled with a built-in asset's document. */
+  function openBuiltinCopyDrawer(page, asset) {
+    if (state.saving || state.pending !== null) return;
+    const document = typeof asset.document === "string" ? asset.document : "";
+    openCopyDrawer(page, {
+      id: typeof asset.id === "string" && asset.id.length > 0 ? asset.id : "built-in",
+      name: "",
+      enabled: true,
+      source: "builtin",
+      readonly: true,
+      shadowedByFile: false,
+      value: document,
+      effectiveValue: document,
+    });
   }
 
   function priorityOf(record) {
@@ -929,6 +982,19 @@ function createApp({ root, api, runtime, formState, schedule }) {
     }
   }
 
+  /**
+   * Hide a rendered section when every field inside it is invisible
+   * (kind-mismatch or visibleWhen), so kind-specific pages stay focused.
+   */
+  function syncOneSectionVisibility(details) {
+    details.hidden = details.querySelector(".cfg-section-body .cfg-field:not([hidden])") === null;
+  }
+
+  function syncSectionVisibility(host) {
+    if (host === null || host === undefined) return;
+    for (const details of host.querySelectorAll("details.cfg-section")) syncOneSectionVisibility(details);
+  }
+
   function renderDrawer() {
     const drawer = state.drawer;
     if (drawer === null) return;
@@ -1010,6 +1076,7 @@ function createApp({ root, api, runtime, formState, schedule }) {
       box.append(renderer.renderSection(section, fieldEls));
     }
     restoreSectionState(box, sectionState);
+    syncSectionVisibility(box);
 
     const bar = el("div", "cfg-savebar");
     if (drawer.readonly) {
@@ -1140,6 +1207,10 @@ function createApp({ root, api, runtime, formState, schedule }) {
       save.dataset.role = "save";
       const reset = button("cfg-btn cfg-btn-ghost", "Discard page edits", () => requestResetGlobals(page));
       bar.append(dirtyNote, save, button("cfg-btn cfg-btn-ghost", "Stage page changes", () => stageEditor({ kind: "globals", page, entry })), reset);
+      const dbResettable = resettableDbPrefixes(page);
+      if (dbResettable.length > 0) {
+        bar.append(button("cfg-btn cfg-btn-ghost", "Reset database overrides", () => requestResetDatabaseOverrides(page, dbResettable)));
+      }
       host.append(bar);
     }
     els.main.append(host);
@@ -1147,6 +1218,52 @@ function createApp({ root, api, runtime, formState, schedule }) {
     entry.panelHost = panelHost;
     entry.editor = editor;
     renderGlobalsFields(page, entry);
+  }
+
+  /** Database-priority prefixes that own at least one globals field on this page. */
+  function resettableDbPrefixes(page) {
+    const roots = new Set();
+    // The served section JSON drops the layout scope; globals fields are
+    // identified by id — "<root>:<rest>" from the document root — while entity
+    // fields start with the entity kind prefix (see scopedGlobalFields).
+    const entityPrefix = page.entity !== undefined && typeof page.entity.kind === "string" ? `${page.entity.kind}:` : null;
+    for (const section of page.sections) {
+      for (const field of section.fields ?? []) {
+        if (typeof field.id !== "string") continue;
+        if (entityPrefix !== null && field.id.startsWith(entityPrefix)) continue;
+        const separator = field.id.indexOf(":");
+        if (separator > 0) roots.add(field.id.slice(0, separator));
+      }
+    }
+    return state.databasePriorityPrefixes.filter((prefix) => roots.has(prefix.split(".")[0]));
+  }
+
+  /** Prefixes that currently hold at least one database-sourced leaf value. */
+  function prefixesWithDatabaseValues(prefixes) {
+    const fields = state.view !== null && typeof state.view === "object" && Array.isArray(state.view.fields) ? state.view.fields : [];
+    return prefixes.filter((prefix) => fields.some((field) =>
+      field !== null && typeof field === "object" && typeof field.path === "string" &&
+      (field.path === prefix || field.path.startsWith(`${prefix}.`) || field.path.startsWith(`${prefix}[`)) &&
+      field.source === "database"));
+  }
+
+  function requestResetDatabaseOverrides(page, prefixes) {
+    const active = prefixesWithDatabaseValues(prefixes);
+    if (active.length === 0) {
+      setStatusMessage("No database overrides to reset on this page.", "warn");
+      return;
+    }
+    openConfirm({
+      title: "Reset database overrides?",
+      body: `Database values for ${active.join(", ")} and unsaved page edits will be removed; the config file or schema defaults take over.`,
+      confirmLabel: "Reset",
+      danger: true,
+      onConfirm: () => void submitChangeset({
+        operations: active.map((prefix) => ({ op: "unset", path: prefix.split(".") })),
+        operationId: newOperationId(),
+        context: { kind: "globals", page, entry: state.pageSessions.get(page.id), resetPrefixes: active },
+      }),
+    });
   }
 
   function renderGlobalsFields(page, entry) {
@@ -1159,6 +1276,7 @@ function createApp({ root, api, runtime, formState, schedule }) {
       entry.fieldsHost.append(renderer.renderSection(section, fieldEls));
     }
     restoreSectionState(entry.fieldsHost, sectionState);
+    syncSectionVisibility(entry.fieldsHost);
     updateGlobalsSaveState(page, entry);
   }
 
@@ -1256,6 +1374,24 @@ function createApp({ root, api, runtime, formState, schedule }) {
       onPreview: (event) => void runRoutePreview(panel, event),
     });
     els.main.append(el("p", "cfg-field-note", "Preview includes staged changes. Stage open edits first; preview does not publish them."), panel.element);
+  }
+
+  /** Read-only legacy outputs.routes summary (effective merged view). */
+  function renderLegacyRoutesSection() {
+    const view = state.view !== null && typeof state.view === "object" ? state.view : null;
+    const globals = view !== null && view.globals !== null && typeof view.globals === "object" ? view.globals : null;
+    const outputs = globals !== null && globals.outputs !== null && typeof globals.outputs === "object" ? globals.outputs : null;
+    const routes = outputs !== null && outputs.routes !== null && typeof outputs.routes === "object" ? outputs.routes : null;
+    const defaultRoute = routes !== null && routes.default !== null && typeof routes.default === "object" ? routes.default : undefined;
+    const rules = routes !== null && Array.isArray(routes.rules) ? routes.rules.filter((rule) => rule !== null && typeof rule === "object") : [];
+    if (defaultRoute === undefined && rules.length === 0) return;
+    const sources = new Set();
+    for (const field of Array.isArray(view?.fields) ? view.fields : []) {
+      if (typeof field?.path === "string" && (field.path === "outputs.routes" || field.path.startsWith("outputs.routes.")) && typeof field.source === "string") {
+        sources.add(field.source);
+      }
+    }
+    els.main.append(renderer.renderLegacyRoutesPanel({ defaultRoute, rules, sources: [...sources] }));
   }
 
   async function runRoutePreview(panel, event) {
@@ -1638,6 +1774,16 @@ function createApp({ root, api, runtime, formState, schedule }) {
   }
 
   function computeConflictDiff(fresh, context) {
+    if (context.resetPrefixes !== undefined) {
+      const before = {};
+      for (const field of fresh.fields ?? []) {
+        if (field.source === "database" && context.resetPrefixes.some(prefix =>
+          field.path === prefix || field.path.startsWith(`${prefix}.`) || field.path.startsWith(`${prefix}[`))) {
+          before[field.path] = field.effectiveValue;
+        }
+      }
+      return formState.diffConfigValues(before, {});
+    }
     if (context.kind === "drawer") {
       const drawer = context.drawer;
       const kind = drawer.page.entity.kind;
@@ -1688,9 +1834,11 @@ function createApp({ root, api, runtime, formState, schedule }) {
     } else {
       const entry = context.entry;
       const freshInput = globalsBaseInput();
-      entry.session = formState.rebaseSession(entry.session, freshInput);
+      entry.session = context.resetPrefixes === undefined ? formState.rebaseSession(entry.session, freshInput)
+        : formState.createEditorSession(context.page, freshInput);
       entry.baseInput = freshInput;
-      operations = formState.sessionEncode(entry.session, entry.baseInput).operations;
+      operations = context.resetPrefixes === undefined ? formState.sessionEncode(entry.session, entry.baseInput).operations
+        : prefixesWithDatabaseValues(context.resetPrefixes).map(prefix => ({ op: "unset", path: prefix.split(".") }));
     }
     if (operations.length === 0) {
       setStatusMessage("Your changes are already reflected in the latest revision.", "ok");
@@ -1821,7 +1969,12 @@ function createApp({ root, api, runtime, formState, schedule }) {
   /** Place a panel/banner where the current editing context will see it. */
   function validateLocalFields(context) {
     const host = context.kind === "drawer" ? els.editor : context.entry.fieldsHost;
-    if (host?.querySelector('[data-local-validation]:not([hidden])')) {
+    const flagged = host?.querySelectorAll('[data-local-validation]:not([hidden])') ?? [];
+    for (const node of flagged) {
+      // Errors inside a hidden field (kind-mismatch or visibleWhen) do not
+      // block saving — the encoder drops or ignores those values.
+      const fieldWrap = node.closest(".cfg-field");
+      if (fieldWrap !== null && fieldWrap.hidden) continue;
       showContextBanner(context, renderer.errorBanner("Correct the invalid field values before saving or staging."));
       return false;
     }
@@ -2012,6 +2165,11 @@ const CONFIG_APP_STYLES = `
 .cfg-instances{list-style:none;display:flex;flex-direction:column;gap:0.25rem;font-size:0.8125rem;margin-bottom:0.5rem}
 .cfg-schedule-preview{margin-top:0.25rem}
 .cfg-revision-detail{margin-top:1rem}
+.cfg-document{font-family:"SF Mono","Fira Code",monospace;font-size:0.8125rem;resize:vertical;min-height:16rem;white-space:pre}
+.cfg-builtin-asset{border:1px solid var(--border);border-radius:6px;margin-bottom:0.5rem;padding:0.375rem 0.625rem}
+.cfg-builtin-asset-summary{display:flex;align-items:center;justify-content:space-between;gap:0.75rem;cursor:pointer;flex-wrap:wrap}
+.cfg-builtin-asset-id{font-family:"SF Mono","Fira Code",monospace;font-size:0.8125rem;overflow-wrap:anywhere}
+.cfg-builtin-asset-document{max-height:24rem;overflow:auto;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:0.625rem;font-size:0.75rem;white-space:pre-wrap;overflow-wrap:anywhere}
 @media(max-width:720px){
 .cfg-provider-preset{grid-template-columns:minmax(0,1fr)}
 #tab-config.active{grid-template-columns:1fr}

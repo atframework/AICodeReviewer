@@ -41,7 +41,7 @@ import {
   type WorkspaceResolutionEventContext,
   type WorkspaceSourceValues,
 } from "./config-resolution.js";
-import type { DatabaseConfigDocument } from "./config-source.js";
+import { DATABASE_ENTITY_COLLECTION_KEYS, type DatabaseConfigDocument } from "./config-source.js";
 import type { ConfigStore } from "./config-store.js";
 import {
   compileWorkspaceMatchDefinitions,
@@ -124,8 +124,10 @@ export async function previewConfigChangeset(input: ConfigChangesetPreviewInput)
       channels: effective.outputs.channels.map((value) => ({ id: value.name, value })),
       workspaces: Object.entries(effective.workspaces.instances).map(([id, value]) => ({ id, value })),
       routes: (effective.routing?.rules ?? []).map((value) => ({ id: value.id, value })),
+      templates: Object.entries(effective.outputs.templates).map(([id, value]) => ({ id, value })),
+      prompts: Object.entries(effective.prompts.system).map(([id, value]) => ({ id, value })),
     };
-    for (const collection of ["providers", "model_groups", "triggers", "channels", "workspaces", "routes"] as const) {
+    for (const collection of DATABASE_ENTITY_COLLECTION_KEYS) {
       if (!touched.has(collection)) {
         continue;
       }
@@ -190,6 +192,8 @@ export type ConfigRoutePreview =
         readonly review: unknown;
       };
       readonly outputs: { readonly line_comments: readonly string[]; readonly summary: readonly string[] };
+      /** Caveat shown with the result (e.g. sourceless rule match). */
+      readonly note?: string | undefined;
     }
   | {
       readonly status: "no_match" | "ambiguous" | "unbound";
@@ -288,7 +292,35 @@ export function previewConfigRoute(config: EffectiveConfigV2, event: ConfigRoute
         );
 
   if (resolution === undefined) {
-    return { status: "unbound", graphMode: graph.mode, detail: "Event carries no repository source; no workspace can bind." };
+    if (rule === undefined || workspaceId === undefined) {
+      return { status: "unbound", graphMode: graph.mode, detail: "Event carries no repository source; no workspace can bind." };
+    }
+    // A matched v2 rule pins its workspace explicitly, so the preview can
+    // still explain the route; source-dependent binding details (instance
+    // binding, rendered layout variables) resolve at admission time.
+    if (config.workspaces.instances[workspaceId] === undefined) {
+      return { status: "unbound", graphMode: graph.mode, detail: `Routing rule "${rule.id}" targets workspace "${workspaceId}", which is not defined.` };
+    }
+    const sourcelessAnalysis = resolveAnalysisSelection(config, workspaceId, rule);
+    const sourcelessEvent = { triggerName: event.triggerName, targetKind: event.targetKind };
+    return {
+      status: "matched",
+      graphMode: graph.mode,
+      routeRuleId: rule.id,
+      workspace: workspaceId,
+      layoutKind: "isolated_v2",
+      layout: computeWorkspaceLayout(
+        workspacesRoot,
+        { definitionId: workspaceId, instanceId: "(set repo_ref to resolve)", workPath: workspaceId },
+        "isolated_v2",
+      ),
+      analysis: { modelChain: sourcelessAnalysis.modelChain, triageModelChain: sourcelessAnalysis.triageModelChain, review: sourcelessAnalysis.review },
+      outputs: {
+        line_comments: resolveOutputChannelsForEvent(config, graph, sourcelessEvent, workspaceId, "line_comments", rule),
+        summary: resolveOutputChannelsForEvent(config, graph, sourcelessEvent, workspaceId, "summary", rule),
+      },
+      note: "No repository ref provided — the rule matched on the trigger; instance binding and layout variables resolve at admission.",
+    };
   }
   switch (resolution.kind) {
     case "legacy_binding":
