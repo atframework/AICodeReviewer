@@ -175,6 +175,17 @@ test("P6 regression: switching config pages closes the drawer and confirms dirty
   await expect(page.locator("#config-nav button.cfg-active")).toHaveText("Triggers");
 });
 
+test("Agent page offers the built-in direct LLM mode", async ({ page }) => {
+  await login(page);
+  await openConfigTab(page, "Agent");
+  const row = await ensureFieldVisible(page, "agent:default");
+  await row.getByRole("button", { name: "Set value" }).click();
+  const select = row.locator("select");
+  await expect(select.locator('option[value="native-llm"]')).toHaveCount(1);
+  await select.selectOption("native-llm");
+  await expect(select).toHaveValue("native-llm");
+});
+
 test("search credentials can be edited as masked literals and removed", async ({ page, request }) => {
   const token = await apiLogin(request);
   const before = await apiView(request, token);

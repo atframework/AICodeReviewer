@@ -1,11 +1,11 @@
 ---
 title: Agent 与沙箱
-description: 选择 agent CLI、设置单次运行超时、启用上下文自动压缩，并选择沙箱后端。
+description: 选择 agent CLI 或 AICR 直连 LLM 模式，并配置 CLI 超时、压缩与沙箱。
 ---
 
-AICodeReviewer 会在沙箱内驱动一个外部 agent CLI（默认 Kilo Code）。`agent`
-命名空间用于选择运行哪个 CLI、设定单次运行的硬超时、为长评审启用上下文自动压缩，
-并选择把 agent 与宿主机隔离的沙箱后端。
+AICodeReviewer 可以在沙箱内驱动外部 agent CLI（默认 Kilo Code），也可以通过
+`native-llm` 直接调用已配置的 LLM。`agent` 命名空间选择执行模式；超时、自动批准、
+上下文压缩、网络搜索与沙箱设置用于 CLI 运行。
 
 ```yaml
 agent:
@@ -21,7 +21,7 @@ agent:
     # kind 不设置 = 自动探测（docker→podman→native 回退）
 ```
 
-## `agent.default` —— 使用哪个 agent CLI
+## `agent.default` —— 执行模式
 
 | 取值 | 行为 |
 | --- | --- |
@@ -32,10 +32,11 @@ agent:
 | `claude-code` | Claude Code 适配器。 |
 | `pi` | pi（`@earendil-works/pi-coding-agent`）适配器。要求 catalog 提供 `context_window` / `max_output_tokens`。 |
 | `oh-my-pi` | oh-my-pi（`omp`，pi 的 fork）适配器。模型元数据要求与 `pi` 相同。 |
+| `native-llm` | AICR 通过 LLM gateway 直接调用已配置模型，不启动 agent CLI。 |
 
 :::note[沿用默认值]
-`kilo` 是经过验证的默认值。只有在你明确要验证某个适配器时才切换到其他
-`AgentKind`。`pi` 与 `oh-my-pi` 适配器支持 `openai_compatible`、`ollama`、
+`kilo` 是经过验证的默认值。验证其他 CLI 适配器时可切换到对应 kind。
+`pi` 与 `oh-my-pi` 适配器支持 `openai_compatible`、`ollama`、
 `anthropic`、`google_ai_studio` 四种 provider kind，且两者都要求模型的上下文
 窗口与输出 token 上限已知——使用前请先启用 `llm.model_catalog`（或设置
 overrides）。由 `deploy/Dockerfile` 构建的运行时镜像内置固定版本的 Kilo 与
@@ -43,12 +44,17 @@ overrides）。由 `deploy/Dockerfile` 构建的运行时镜像内置固定版�
 （这两个二进制默认已在沙箱命令白名单中）。
 :::
 
-agent 选择、超时、批准、压缩和 web-search 设置按每个任务的
+`native-llm` 使用与直连 LLM 回退相同的模型路由、评审 prompt、diff 压缩和结构化输出
+解析。它不会启动沙箱或生成 CLI runtime bundle。模型只能使用准备好的 prompt，无法
+读取挂载文件、调用 MCP 工具、运行技能，或通过 agent 工具请求更多上下文；辅助上下文
+仓库也会跳过。适用于已有 prompt 足以完成评审的场景。
+
+执行模式、超时、批准、压缩和 web-search 设置按每个任务的
 global → workspace defaults → instance → route analysis 合并。数组整体替换，
-搜索凭据按 key 合并并受部署用途授权约束；不支持的 adapter 能力写入 runtime manifest。
+搜索凭据按 key 合并并受部署用途授权约束；CLI adapter 不支持的能力写入 CLI runtime manifest。
 仓库拥有的配置只能选择 `agent.default`，不能提升批准、搜索凭据或沙箱权限。
 
-每次审查创建独立沙箱，HOME、USERPROFILE、APPDATA、XDG 和临时目录位于该 run 内；
+每次 CLI 审查创建独立沙箱，HOME、USERPROFILE、APPDATA、XDG 和临时目录位于该 run 内；
 MCP 子进程继承相同隔离目录。通过配置声明的环境变量提供认证，运行时不复制开发者的
 全局 OAuth/auth store。operator 的模板和 `.agents/skills` 可从 definition 的旧策略目录
 只读回退；详细目录合同见[配置字段参考](/zh-cn/reference/config-fields/)。
@@ -60,7 +66,8 @@ agent:
   timeout_seconds: 1800  # 默认值；小 PR 为主的环境可以调低
 ```
 
-这是**单次 agent 跑一轮的硬上限**。超时触发时，沙箱会杀掉**整棵进程树**——
+这是**单次 CLI agent 运行的硬上限**，不限制 `native-llm` 的 gateway 请求。
+超时触发时，沙箱会杀掉**整棵进程树**——
 agent 二进制及其派生的全部 worker 子进程，包括那些用 `setsid` 进入自己会话的
 worker。因此单次运行不会因为留下孤儿 worker 而超时拖延。
 

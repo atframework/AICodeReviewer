@@ -424,8 +424,12 @@ AICR 采用**两层上下文管理**，两者互补：
   `ContextOverflowError` / `context length exceeded` 模式后抛出 `AgentContextOverflowError`，
   携带 model limit、requested tokens 与可操作修复建议（启用 model_catalog / 配置 compression /
   缩小 diff scope），而不是裸 `review_orchestration_failed`。
-- built-in（native-llm）路径由 orchestrator 根据 `contextWindow × 0.6` 计算 `maxPromptTokens`，
-  让 prompt-manager 在预算内裁剪 memory hints / skills / instructions；diff 本身由 §3.3.1 压缩。
+- `agent.default: native-llm` 可在全局、workspace 和 route analysis 层选择内置直连 LLM
+  路径；orchestrator 不创建 CLI adapter、sandbox 或 runtime bundle。该路径只发送已准备的
+  prompt，不能读取挂载文件、调用 agent MCP 工具或物化辅助上下文仓库；CLI 超时、自动批准、
+  对话压缩与 web-search 配置不生效。orchestrator 根据 `contextWindow × 0.6` 计算
+  `maxPromptTokens`，让 prompt-manager 在预算内裁剪 memory hints / skills / instructions；
+  diff 本身由 §3.3.1 压缩。
 
 ### 3.4 Secrets Scrubber
 

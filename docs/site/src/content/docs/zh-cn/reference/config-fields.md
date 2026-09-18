@@ -29,7 +29,7 @@ web_search `credentials` 条目接受环境变量名字符串或 `{ value: "..."
 | 概念 | 枚举值 |
 | --- | --- |
 | Trigger `kind` | `gitea`、`forgejo`、`github`、`gitlab`、`p4`、`svn`、`scheduled`、`manual` |
-| Agent `kind` | `kilo`、`opencode`、`zoo`、`copilot-cli`、`claude-code`、`pi`、`oh-my-pi` |
+| Agent 执行模式 | `kilo`、`opencode`、`zoo`、`copilot-cli`、`claude-code`、`pi`、`oh-my-pi`、`native-llm` |
 | Sandbox `kind` | `native`、`docker`、`podman`、`docker_socket`、`k8s_pod`、`firecracker` |
 | Sandbox `engine` | `auto`、`docker`、`podman` |
 | Queue `kind` | `memory`、`sqlite`、`redis`、`rabbitmq`（预留） |
@@ -139,7 +139,7 @@ provider 专属字段（`webhook_secret_env`、`token_env`、`port`、`user_env`
 | `workspaces.defaults.review` | object | — | 默认 review 配置（见 `review`） |
 | `workspaces.defaults.model_chain` | string | 继承 | 覆盖主链组名，引用 `llm.model_chain` |
 | `workspaces.defaults.triage_model_chain` | string | 继承 | 覆盖生命周期分析组名；各层均未配置时使用该 workspace 主链 |
-| `workspaces.defaults.agent.default` | enum | — | 这组 workspace 的默认 agent kind；每次运行按 全局 → defaults → 实例 → 路由 analysis 解析（见下方说明） |
+| `workspaces.defaults.agent.default` | enum | — | 这组 workspace 的默认执行模式；每次运行按 全局 → defaults → 实例 → 路由 analysis 解析（见下方说明） |
 | `workspaces.defaults.agent.timeout_seconds` | int > 0 | — | 单次 run 硬超时；超时时杀整棵进程树 |
 | `workspaces.defaults.agent.auto_approve` | boolean | — | 传给所选 adapter；CLI 支持时 false 取消自动批准 |
 | `workspaces.defaults.agent.context_compaction.auto` | boolean | — | 启用自动压缩 |
@@ -192,7 +192,7 @@ provider 专属字段（`webhook_secret_env`、`token_env`、`port`、`user_env`
 | `workspaces.instances.<id>.enabled` | boolean | — | 未设置时启用；`false` 停止新任务准入，保留已有快照 |
 | `workspaces.instances.<id>.model_chain` | string | 继承 | 覆盖主链组名，引用 `llm.model_chain` |
 | `workspaces.instances.<id>.triage_model_chain` | string | 继承 | 覆盖生命周期分析组名；各层均未配置时使用该 workspace 主链 |
-| `workspaces.instances.<id>.agent.default` | enum | — | agent kind 覆盖；每次运行按合并后的 workspace 各层选择（见下方说明） |
+| `workspaces.instances.<id>.agent.default` | enum | — | 执行模式覆盖；每次运行按合并后的 workspace 各层选择（见下方说明） |
 | `workspaces.instances.<id>.agent.timeout_seconds` | int > 0 | — | 单次 run 硬超时；超时时杀整棵进程树 |
 | `workspaces.instances.<id>.agent.auto_approve` | boolean | — | 传给所选 adapter；CLI 支持时 false 取消自动批准 |
 | `workspaces.instances.<id>.agent.context_compaction.auto` | boolean | — | 启用自动压缩 |
@@ -339,10 +339,10 @@ workspace 的 `prompt.system_prompt` 引用其中一个名称替换内置基底 
 
 | 字段 | 类型 | 默认值 | 描述 |
 | --- | --- | --- | --- |
-| `agent.default` | enum | `kilo` | 默认 agent kind |
-| `agent.timeout_seconds` | int > 0 | `1800` | 单次 run 硬超时；超时时杀整棵进程树 |
-| `agent.auto_approve` | boolean | `true` | 传给所选 adapter；CLI 支持时 false 取消自动批准 |
-| `agent.sandbox` | object | `{ kind: "docker", engine: "auto" }` | 沙箱后端 |
+| `agent.default` | enum | `kilo` | 执行模式：`kilo`、`opencode`、`zoo`、`copilot-cli`、`claude-code`、`pi`、`oh-my-pi` 或 `native-llm`（直连 gateway） |
+| `agent.timeout_seconds` | int > 0 | `1800` | CLI agent 单次运行硬超时；超时时杀整棵进程树；`native-llm` 不使用 |
+| `agent.auto_approve` | boolean | `true` | 传给所选 CLI adapter；CLI 支持时 false 取消自动批准；`native-llm` 不使用 |
+| `agent.sandbox` | object | `{}` | CLI 沙箱后端；`native-llm` 不使用 |
 | `agent.sandbox.kind` | enum | — | sandbox kind（见枚举表） |
 | `agent.sandbox.engine` | enum | — | 容器引擎选择 |
 | `agent.sandbox.image` | string | — | 使用的容器镜像 |

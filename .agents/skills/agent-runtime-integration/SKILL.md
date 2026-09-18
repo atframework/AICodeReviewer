@@ -9,6 +9,8 @@ user-invocable: false
 1. Trace the affected path through `packages/agents/src/types.ts`, the target
    adapter, `runtime-bundle.ts`, server orchestration, and their tests. Consult
    architecture §3.6–3.8 only for the corresponding contract.
+   For `agent.default: native-llm`, trace core selection → bootstrap → direct
+   gateway completion instead: it creates no adapter, sandbox, or runtime bundle.
 2. Before changing a CLI flag or generated config, refresh that adapter's
    [external source record](../../../docs/ai/source-index.md) and verify current
    upstream schema/help. Local fixtures alone can encode an invented contract.

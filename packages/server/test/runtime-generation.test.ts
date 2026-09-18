@@ -502,6 +502,14 @@ describe("runtime config generation integration (bootstrap)", () => {
     } as never;
     const agentRun = await resolver(baseContext);
     expect(agentRun.agentAdapter?.kind).toBe("opencode");
+    await publishOperations([{ op: "update", collection: "workspaces", recordId: "ws-agent", value: {
+      source_repo: { trigger: "gitea-internal", repo: "acme/x" }, agent: { default: "native-llm" },
+    } }]);
+    await options.runtimeConfig!.admission();
+    const directRun = await resolver(baseContext);
+    expect(agentRun.agentAdapter?.kind).toBe("opencode");
+    expect(directRun.agentAdapter).toBeUndefined();
+    expect(directRun.sandboxFactory).toBeUndefined();
 
     const sandboxContext = {
       reviewEvent: { workspaceId: "ws-sandbox", triggerName: "gitea-internal", repoRef: "acme/y" },
@@ -520,6 +528,15 @@ describe("runtime config generation integration (bootstrap)", () => {
     // The sandbox factory honors the merged workspace layer (native here).
     const sandbox = await sandboxRun.sandboxFactory!();
     expect(sandbox.kind).toBe("native");
+    await options.closeAutoCommit?.();
+  });
+
+  it("selects the direct LLM path from the global agent setting", async () => {
+    const config = makeConfig();
+    config.agent.default = "native-llm";
+    const { options } = await bootstrap(config);
+    expect(options.reviewOrchestration?.agentAdapter).toBeUndefined();
+    expect(options.reviewOrchestration?.sandboxFactory).toBeUndefined();
     await options.closeAutoCommit?.();
   });
 

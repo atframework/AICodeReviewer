@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -216,6 +216,137 @@ describe("AutoCommitScheduler", () => {
     expect(getAdapter.mock.calls.map(call => (call as unknown[])[1])).toEqual(expect.arrayContaining(["cfg-first", "cfg-second"]));
     expect(executed.map(ctx => ctx.batch.configSnapshotId)).toEqual(["cfg-first", "cfg-second"]);
     expect(executed.flatMap(ctx => ctx.members.map(member => member.revision))).toEqual(["A1", "A2"]);
+  });
+  it("isolates a stream whose pinned snapshot fails to resolve and still serves healthy streams", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const store = createMemoryAutoCommitStore();
+      const policy = makePolicy({ delay_seconds: 0 });
+      const adapter = new ScriptedAdapter([
+        { sha: "A0", parents: [] , ...alice },
+        { sha: "A1", parents: ["A0"], ...alice },
+        { sha: "B0", parents: [] , ...alice },
+        { sha: "B1", parents: ["B0"], ...alice },
+      ]);
+      const executed: BatchExecutionContext[] = [];
+      await store.acceptReceipt({ deliveryKey: "healthy", workspaceId: "ws1", triggerName: "gitea",
+        provider: "gitea", vcs: "git", sourceNamespace: "git:example.com/org/one", scopeRef: "refs/heads/main", historyGeneration: 0,
+        coverage: { kind: "range", base: "A0", head: "A1" }, envelope: { repoRef: "org/one" },
+        delaySeconds: 0, policyVersion: policy.policyVersion, configSnapshotId: "cfg-good", now: T0 });
+      await store.acceptReceipt({ deliveryKey: "broken", workspaceId: "ws2", triggerName: "gitea",
+        provider: "gitea", vcs: "git", sourceNamespace: "git:example.com/org/two", scopeRef: "refs/heads/main", historyGeneration: 0,
+        coverage: { kind: "range", base: "B0", head: "B1" }, envelope: { repoRef: "org/two" },
+        delaySeconds: 0, policyVersion: policy.policyVersion, configSnapshotId: "cfg-broken", now: T0 });
+      const getAdapter = vi.fn(async (stream: { workspaceId: string }) => {
+        if (stream.workspaceId === "ws2") {
+          throw new Error("snapshot_invalid: Config snapshot content hash mismatch.");
+        }
+        return adapter as never;
+      });
+      let now = T0;
+      const scheduler = makeScheduler({ store, policy, adapter, executed, now: () => now, tuning: { getAdapter } });
+      await scheduler.tick();
+      // The healthy stream sealed and executed despite the sibling throwing.
+      expect(executed).toHaveLength(1);
+      expect(executed[0]!.batch.workspaceId).toBe("ws1");
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("auto-commit stream processing failed"));
+      // The failing stream is retried after its persisted backoff, not dropped.
+      now += 5_000;
+      await scheduler.tick();
+      expect(getAdapter.mock.calls.filter((call) => (call[0] as { workspaceId: string }).workspaceId === "ws2").length).toBeGreaterThan(1);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+  it("backs off a broken stream so another stream in the same workspace passes a bounded scan", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const store = createMemoryAutoCommitStore();
+      const policy = makePolicy({ delay_seconds: 0 });
+      const adapter = new ScriptedAdapter([
+        { sha: "A1", parents: ["A0"], ...alice },
+        { sha: "B1", parents: ["B0"], ...alice },
+      ]);
+      const executed: BatchExecutionContext[] = [];
+      let now = T0 + 1;
+      for (const [name, base, acceptedAt] of [
+        ["broken", "A0", T0], ["healthy", "B0", T0 + 1],
+      ] as const) {
+        await store.acceptReceipt({ deliveryKey: name, workspaceId: "ws1", triggerName: "gitea",
+          provider: "gitea", vcs: "git", sourceNamespace: `git:example.com/org/${name}`, scopeRef: "refs/heads/main", historyGeneration: 0,
+          coverage: { kind: "range", base, head: base === "A0" ? "A1" : "B1" }, envelope: { repoRef: `org/${name}` },
+          delaySeconds: 0, policyVersion: policy.policyVersion, configSnapshotId: name, now: acceptedAt });
+      }
+      let broken = true;
+      const getAdapter = vi.fn(async (_stream: unknown, snapshot: string | null | undefined) => {
+        if (snapshot === "broken" && broken) throw new Error("snapshot_invalid");
+        return adapter as never;
+      });
+      const scheduler = makeScheduler({ store, policy, adapter, executed, now: () => now,
+        tuning: { streamScanLimit: 1, getAdapter } });
+      await scheduler.tick();
+      expect(executed).toHaveLength(0);
+      const brokenHead = (await store.readStreamHeads("ws1", 2)).find(head => head.sourceNamespace.endsWith("/broken"));
+      expect(brokenHead?.resumeNotBefore).toBeGreaterThan(now);
+      await scheduler.tick();
+      expect(executed.map(ctx => ctx.batch.sourceNamespace)).toEqual(["git:example.com/org/healthy"]);
+      broken = false;
+      now = brokenHead!.resumeNotBefore!;
+      await scheduler.tick();
+      expect(executed.map(ctx => ctx.batch.sourceNamespace)).toEqual([
+        "git:example.com/org/healthy", "git:example.com/org/broken",
+      ]);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+  it("keeps a failed stream's backoff across SQLite scheduler restarts", async () => {
+    const temporaryRoot = join(process.cwd(), "build", "tmp");
+    await mkdir(temporaryRoot, { recursive: true });
+    const dir = await mkdtemp(join(temporaryRoot, "auto-commit-backoff-"));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    let store: AutoCommitStore | undefined;
+    try {
+      const policy = makePolicy({ delay_seconds: 0 });
+      const adapter = new ScriptedAdapter([
+        { sha: "A1", parents: ["A0"], ...alice },
+        { sha: "B1", parents: ["B0"], ...alice },
+      ]);
+      const dbPath = join(dir, "auto-commit.sqlite");
+      let now = T0 + 1;
+      store = await createSqliteAutoCommitStore({ path: dbPath });
+      for (const [name, base, acceptedAt] of [
+        ["broken", "A0", T0], ["healthy", "B0", T0 + 1],
+      ] as const) {
+        await store.acceptReceipt({ deliveryKey: name, workspaceId: "ws1", triggerName: "gitea",
+          provider: "gitea", vcs: "git", sourceNamespace: `git:example.com/org/${name}`, scopeRef: "refs/heads/main", historyGeneration: 0,
+          coverage: { kind: "range", base, head: base === "A0" ? "A1" : "B1" }, envelope: { repoRef: `org/${name}` },
+          delaySeconds: 0, policyVersion: policy.policyVersion, configSnapshotId: name, now: acceptedAt });
+      }
+      const getAdapter = vi.fn(async (_stream: unknown, snapshot: string | null | undefined) => {
+        if (snapshot === "broken") throw new Error("snapshot_invalid");
+        return adapter as never;
+      });
+      const first = makeScheduler({ store, policy, adapter, executed: [], now: () => now,
+        tuning: { streamScanLimit: 1, getAdapter } });
+      await first.tick();
+      const failed = (await store.readStreamHeads("ws1", 2)).find(head => head.sourceNamespace.endsWith("/broken"));
+      expect(failed?.resumeNotBefore).toBe(T0 + 1 + 5_000);
+      store.close?.();
+      store = await createSqliteAutoCommitStore({ path: dbPath });
+      const executed: BatchExecutionContext[] = [];
+      const restarted = makeScheduler({ store, policy, adapter, executed, now: () => now,
+        tuning: { streamScanLimit: 1, getAdapter } });
+      await restarted.tick();
+      expect(executed.map(ctx => ctx.batch.sourceNamespace)).toEqual(["git:example.com/org/healthy"]);
+      now = failed!.resumeNotBefore!;
+      await restarted.tick();
+      expect(getAdapter.mock.calls.filter(call => call[1] === "broken")).toHaveLength(2);
+    } finally {
+      store?.close?.();
+      warn.mockRestore();
+      await rm(dir, { recursive: true, force: true });
+    }
   });
   it("backs off missing adapters and records terminal failure instead of continuously polling", async () => {
     const store = createMemoryAutoCommitStore();
@@ -868,6 +999,7 @@ describe("AutoCommitScheduler", () => {
     const policy = makePolicy({ delay_seconds: 0 });
     const adapter = new ScriptedAdapter([
       { sha: "A1", parents: ["A0"], ...alice },
+      { sha: "A2", parents: ["A1"], ...alice },
     ]);
     const executed: BatchExecutionContext[] = [];
     let now = T0;
@@ -894,6 +1026,14 @@ describe("AutoCommitScheduler", () => {
     await scheduler.tick();
     batch = await store.readBatch(batch?.batchId ?? "");
     expect(batch?.status).toBe("dead");
+    expect(executed).toHaveLength(0);
+
+    // A later webhook is accepted, but this stream cannot assemble behind
+    // the dead batch until an operator resolves the unknown side effects.
+    await accept(store, policy, "d2", "A1", "A2", now + 1);
+    now += 1;
+    await scheduler.tick();
+    expect((await store.readStreamHead(streamId))?.activeBatchId).toBe(batch?.batchId);
     expect(executed).toHaveLength(0);
   });
 

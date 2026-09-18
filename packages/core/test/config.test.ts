@@ -10,11 +10,26 @@ import {
   loadWorkspaceConfigFile,
   mergeConfigLayers,
   resolveWorkspaceConfig,
+  routingRuleSchema,
   workspaceConfigFileSchema,
   workspaceRootKeys,
 } from "../src/config.js";
 
 describe("mergeConfigLayers", () => {
+  it("accepts native-llm at global and workspace selection layers", () => {
+    const config = appConfigSchema.parse({
+      agent: { default: "native-llm" },
+      workspaces: {
+        defaults: { agent: { default: "native-llm" } },
+        instances: { example: { agent: { default: "native-llm" } } },
+      },
+    });
+    expect(config.agent.default).toBe("native-llm");
+    expect(config.workspaces.defaults.agent?.default).toBe("native-llm");
+    expect(config.workspaces.instances.example?.agent?.default).toBe("native-llm");
+    expect(routingRuleSchema.parse({ id: "direct", workspace: "example", analysis: { agent: { default: "native-llm" } } }).analysis?.agent?.default).toBe("native-llm");
+  });
+
   it("deep merges defaults, system config, and workspace overrides", () => {
     const merged = mergeConfigLayers(
       {

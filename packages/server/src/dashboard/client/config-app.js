@@ -2124,10 +2124,10 @@ const CONFIG_APP_STYLES = `
 .cfg-drawer{border:1px solid var(--border);border-radius:8px;background:var(--card);padding:1rem;margin-bottom:1rem}
 .cfg-drawer-title{font-size:1rem;font-weight:600;margin-bottom:0.75rem;outline:none}
 .cfg-savebar{display:flex;align-items:center;gap:0.5rem;margin-top:0.75rem;flex-wrap:wrap}
-.cfg-savebar-sticky{position:sticky;bottom:0;background:var(--card);border-top:1px solid var(--border);padding:0.625rem 0;z-index:5}
+.cfg-savebar-sticky{position:sticky;bottom:0;background:var(--card);border-top:1px solid var(--border);padding:0.625rem 0.625rem;z-index:5}
 .cfg-entity{margin-bottom:1rem}
 .cfg-filter{max-width:20rem;margin-bottom:0.5rem}
-.cfg-empty{color:var(--muted);font-size:0.8125rem;padding:0.5rem 0}
+.cfg-empty{color:var(--muted);font-size:0.8125rem;padding:0.5rem 0.5rem}
 .cfg-state-cell{white-space:nowrap}
 .cfg-actions-cell{white-space:nowrap}
 .cfg-actions-cell .cfg-btn{margin-right:0.25rem}

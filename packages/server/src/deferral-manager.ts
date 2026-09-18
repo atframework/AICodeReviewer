@@ -22,7 +22,8 @@ export interface DeferredTriggerTarget {
   readonly configSnapshotId?: string | null;
 }
 
-export type DeferralResumeHandler = (target: DeferredTriggerTarget) => void;
+/** Async handoffs are tracked through settlement and drained on shutdown. */
+export type DeferralResumeHandler = (target: DeferredTriggerTarget) => void | Promise<void>;
 
 export interface ReviewDeferralManagerOptions {
   /**
@@ -86,6 +87,7 @@ export class ReviewDeferralManager {
   private readonly memoryTargets = new Map<string, DeferredTriggerTarget>();
   private readonly deadlines = new Map<string, number>();
   private readonly generations = new Map<string, symbol>();
+  private readonly handoffs = new Set<Promise<void>>();
   private storeQueue: Promise<void> = Promise.resolve();
   private stopped = false;
 
@@ -246,7 +248,6 @@ export class ReviewDeferralManager {
   /** Clear all armed timers (shutdown). Persisted rows survive for recover(). */
   stop(): void {
     this.stopped = true;
-    this.generations.clear();
     for (const timer of this.timers.values()) {
       clearTimeout(timer);
     }
@@ -256,6 +257,9 @@ export class ReviewDeferralManager {
   async drain(): Promise<void> {
     this.stop();
     await this.storeQueue;
+    while (this.handoffs.size > 0) await Promise.all([...this.handoffs]);
+    await this.storeQueue;
+    this.generations.clear();
   }
 
   private armTimer(key: string, notBeforeMs: number): void {
@@ -290,38 +294,63 @@ export class ReviewDeferralManager {
     if (!this.resumeHandler) return;
     const handler = this.resumeHandler;
     const generation = this.generations.get(key);
-    const current = (): boolean => !this.stopped && this.generations.get(key) === generation;
+    const current = (): boolean => generation !== undefined && this.generations.get(key) === generation;
     this.enqueue(async () => {
-      if (!current()) return;
+      if (this.stopped || !current()) return;
       try {
         const target = await this.takeTarget(key);
         if (!current()) return;
+        if (this.stopped) {
+          if (this.store) await releaseReviewDeferral(this.store, key);
+          return;
+        }
         if (!target) {
           if (!this.timers.has(key)) this.deadlines.delete(key);
           return;
         }
-        handler(target);
-        // A cleanup failure after handoff must not launch a second review.
-        try {
-          if (this.store) await completeReviewDeferral(this.store, key);
-        } catch (error) {
-          console.warn(JSON.stringify({ level: "warn", msg: "failed to acknowledge review deferral", error: toErrorMessage(error) }));
-        }
-        if (!this.timers.has(key)) {
-          this.memoryTargets.delete(key);
-          this.deadlines.delete(key);
-        }
+        const handoff = handler(target);
+        // Never await here: handlers can re-defer through the same storeQueue.
+        // The continuation owns cleanup, including a memory-only retry target.
+        const pending = Promise.resolve(handoff).then(
+          () => this.settleHandoff(key, current),
+          (error: unknown) => this.failHandoff(key, current, error),
+        );
+        this.handoffs.add(pending);
+        void pending.then(() => this.handoffs.delete(pending));
       } catch (error) {
-        if (!current()) return;
-        console.warn(JSON.stringify({ level: "warn", msg: "failed to resume review deferral, retrying", error: toErrorMessage(error) }));
-        try {
-          if (this.store) await releaseReviewDeferral(this.store, key);
-        } catch {
-          // Recovery resets claims after a restart; retry the read meanwhile.
-        }
-        this.armTimer(key, Date.now() + 5000);
+        await this.failHandoff(key, current, error);
       }
     });
+  }
+
+  /** Post-handoff acknowledgement: only a still-claimed row is deleted. */
+  private async settleHandoff(key: string, current: () => boolean): Promise<void> {
+    if (!current()) return;
+    // Acknowledgment is conditional on the row still being claimed. A failed
+    // write remains visible for operator/restart recovery and is logged.
+    if (this.store) {
+      try {
+        await completeReviewDeferral(this.store, key);
+      } catch (error) {
+        console.warn(JSON.stringify({ level: "warn", msg: "failed to acknowledge review deferral", error: toErrorMessage(error) }));
+      }
+    }
+    if (!this.timers.has(key)) {
+      this.memoryTargets.delete(key);
+      this.deadlines.delete(key);
+    }
+  }
+
+  /** Release the claim for the retry timer; never rethrow to the caller. */
+  private async failHandoff(key: string, current: () => boolean, error: unknown): Promise<void> {
+    if (!current()) return;
+    console.warn(JSON.stringify({ level: "warn", msg: "failed to resume review deferral, retrying", error: toErrorMessage(error) }));
+    if (this.store) {
+      await releaseReviewDeferral(this.store, key).catch(() => {
+        // Recovery resets claims after a restart; retry the read meanwhile.
+      });
+    }
+    if (!this.stopped) this.armTimer(key, Date.now() + 5000);
   }
 
   private async takeTarget(key: string): Promise<DeferredTriggerTarget | undefined> {

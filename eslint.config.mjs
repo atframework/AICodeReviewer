@@ -10,6 +10,8 @@ export default tseslint.config(
       "**/dist/**",
       "**/node_modules/**",
       "build/**",
+      ".kilo/**",
+      "workspaces/**",
       "deploy/**",
       // The docs site (docs/site) is an isolated Astro Starlight app with its
       // own tsconfig and `astro check`; it is not runtime code and is excluded

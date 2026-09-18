@@ -128,6 +128,8 @@ const DEFAULTS: SchedulerTuning = {
   perWorkspaceConcurrency: 1,
 };
 
+const STREAM_FAILURE_RETRY_MS = 5_000;
+
 export class AutoCommitScheduler {
   private readonly store: AutoCommitStore;
   private readonly getPolicy: AutoCommitSchedulerOptions["getPolicy"];
@@ -142,6 +144,8 @@ export class AutoCommitScheduler {
   private ticking = false;
   private pendingKick = false;
   private stopping = false;
+  /** Streams that threw during the current tick; floors the next re-arm. */
+  private streamFailures = 0;
   private tickCompletion: Promise<void> | null = null;
 
   constructor(options: AutoCommitSchedulerOptions) {
@@ -239,6 +243,7 @@ export class AutoCommitScheduler {
     this.tickCompletion = new Promise<void>((resolve) => {
       finishTick = resolve;
     });
+    this.streamFailures = 0;
     try {
       const now = this.now();
       // Stage C first: routing receipts become formal receipts the same
@@ -265,8 +270,11 @@ export class AutoCommitScheduler {
             storeWake === undefined ? routingWake
             : routingWake === undefined ? storeWake
             : Math.min(storeWake, routingWake);
+          // A failing stream's own wake signal is usually "now"; floor the
+          // re-arm so its retry loop stays bounded instead of spinning hot.
+          const failureFloorMs = this.streamFailures > 0 ? STREAM_FAILURE_RETRY_MS : 0;
           this.arm(
-            delay !== undefined ? Math.max(0, delay) : this.options.idlePollMs,
+            delay !== undefined ? Math.max(delay, failureFloorMs) : this.options.idlePollMs,
           );
         }
       } finally {
@@ -294,7 +302,35 @@ export class AutoCommitScheduler {
       for (const stream of streams) {
         if (this.stopping) return;
         if (stream.notBefore !== null && stream.notBefore > now) continue;
-        await this.processStream(stream, now);
+        try {
+          await this.processStream(stream, now);
+        } catch (error) {
+          // Persist the retry bound on this stream. A global timer floor alone
+          // still lets a broken stream occupy every bounded scan slot ahead
+          // of healthy streams in the same workspace.
+          this.streamFailures += 1;
+          try {
+            const current = await this.store.readStreamHead(stream.streamId);
+            if (current && current.notBefore !== null) {
+              await this.store.updateStreamHead(stream.streamId, current.version,
+                { resumeNotBefore: this.now() + STREAM_FAILURE_RETRY_MS }, this.now());
+            }
+          } catch (backoffError) {
+            console.warn(JSON.stringify({
+              level: "warn", msg: "auto-commit stream retry backoff failed",
+              streamId: stream.streamId,
+              error: backoffError instanceof Error ? backoffError.message : String(backoffError),
+            }));
+          }
+          console.warn(JSON.stringify({
+            level: "warn",
+            msg: "auto-commit stream processing failed, will retry next tick",
+            workspaceId: stream.workspaceId,
+            streamId: stream.streamId,
+            scopeRef: stream.scopeRef,
+            error: error instanceof Error ? error.message : String(error),
+          }));
+        }
       }
       await this.store.rotateWorkspaceFairness(head.workspaceId, now);
     }
@@ -733,6 +769,15 @@ export class AutoCommitScheduler {
     const attempts =
       (current?.receipt.metadataAttempts ?? receipt.metadataAttempts) + 1;
     if (attempts >= this.options.maxExpansionAttempts) {
+      console.error(JSON.stringify({
+        level: "error",
+        msg: "auto-commit receipt expansion failed terminally, members failed",
+        receiptId: receipt.receiptId,
+        workspaceId: receipt.workspaceId,
+        scopeRef: receipt.scopeRef,
+        attempts,
+        error: reason.slice(0, 200),
+      }));
       await this.store.recordReceiptMetadataFailure(
         receipt.receiptId,
         reason.slice(0, 200),
@@ -1156,6 +1201,23 @@ export class AutoCommitScheduler {
         "retryable" in error &&
         error.retryable === false;
       const dead = permanent || batch.attempt >= batch.maxAttempts;
+      // The store result is the durable record, but without this line a dead
+      // batch (which jams its stream until manual release) is invisible in
+      // logs — the 2026-09-18 incident lost both causes this way.
+      console.warn(JSON.stringify({
+        level: dead ? "error" : "warn",
+        msg: dead
+          ? "auto-commit batch died, stream holds it until manual release"
+          : "auto-commit batch attempt failed, retrying",
+        batchId: batch.batchId,
+        runId: batch.runId,
+        workspaceId: batch.workspaceId,
+        streamId: batch.streamId,
+        attempt: batch.attempt,
+        maxAttempts: batch.maxAttempts,
+        dead,
+        error: message,
+      }));
       await this.store.failBatch(
         batch.batchId,
         leaseToken,

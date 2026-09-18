@@ -58,6 +58,11 @@ session TTL 字段是 `session_ttl_seconds`（默认 `86400` = 24 小时）。`s
 - **Config**——数据库配置、字段来源、路由预览与版本历史。启用
   `config_sources.database.enabled` 后可使用配置管理。
 
+`queued` 是 webhook 到达时记录的决定，批次执行后 Events 行不会变更。评审结果写入后才会
+出现在 Recent Runs。若长期没有新记录，应检查所配置 auto-commit 存储中的 receipt、batch
+和 stream 状态。dead 批次会占住其 stream，需人工核查；无法读取的固定配置快照可能阻止
+receipt 展开。健康检查成功不代表队列正在推进。
+
 用量按完整 review run 聚合，包括首次模型调用、上下文/格式修复调用以及最终直连 LLM 兜底。
 对 Kilo 而言，每个 `step_finish` 模型回合计为一次请求。本地 prompt 大小估算单独保存，只有拿不到
 真实 usage 时才作为参考显示，绝不会混入 provider token 总数。

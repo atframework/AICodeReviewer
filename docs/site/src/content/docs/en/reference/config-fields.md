@@ -37,7 +37,7 @@ quick lookup.
 | Concept | Enum values |
 | --- | --- |
 | Trigger `kind` | `gitea`, `forgejo`, `github`, `gitlab`, `p4`, `svn`, `scheduled`, `manual` |
-| Agent `kind` | `kilo`, `opencode`, `zoo`, `copilot-cli`, `claude-code`, `pi`, `oh-my-pi` |
+| Agent execution mode | `kilo`, `opencode`, `zoo`, `copilot-cli`, `claude-code`, `pi`, `oh-my-pi`, `native-llm` |
 | Sandbox `kind` | `native`, `docker`, `podman`, `docker_socket`, `k8s_pod`, `firecracker` |
 | Sandbox `engine` | `auto`, `docker`, `podman` |
 | Queue `kind` | `memory`, `sqlite`, `redis`, `rabbitmq` (reserved) |
@@ -154,7 +154,7 @@ Narrative: [Configuration overview](/en/configuration/overview/).
 | `workspaces.defaults.review` | object | — | Default review config (see `review`) |
 | `workspaces.defaults.model_chain` | string | inherit | Main-group override referencing `llm.model_chain` |
 | `workspaces.defaults.triage_model_chain` | string | inherit | Lifecycle-group override; if absent at all layers, uses this workspace's main group |
-| `workspaces.defaults.agent.default` | enum | — | Default agent kind for this workspace set; resolved per run through global → defaults → instance → route analysis (see note below) |
+| `workspaces.defaults.agent.default` | enum | — | Default execution mode for this workspace set; resolved per run through global → defaults → instance → route analysis (see note below) |
 | `workspaces.defaults.agent.timeout_seconds` | int > 0 | — | Hard per-run timeout; on timeout the whole process tree is killed |
 | `workspaces.defaults.agent.auto_approve` | boolean | — | Passed to the selected adapter; false removes automatic approval where supported |
 | `workspaces.defaults.agent.context_compaction.auto` | boolean | — | Enable auto-compaction |
@@ -207,7 +207,7 @@ Narrative: [Configuration overview](/en/configuration/overview/).
 | `workspaces.instances.<id>.enabled` | boolean | — | Enabled when omitted; `false` stops new admission while retaining existing snapshots |
 | `workspaces.instances.<id>.model_chain` | string | inherit | Main-group override referencing `llm.model_chain` |
 | `workspaces.instances.<id>.triage_model_chain` | string | inherit | Lifecycle-group override; if absent at all layers, uses this workspace's main group |
-| `workspaces.instances.<id>.agent.default` | enum | — | Agent kind override; selected per run through the merged workspace layers (see note below) |
+| `workspaces.instances.<id>.agent.default` | enum | — | Execution mode override; selected per run through the merged workspace layers (see note below) |
 | `workspaces.instances.<id>.agent.timeout_seconds` | int > 0 | — | Hard per-run timeout; on timeout the whole process tree is killed |
 | `workspaces.instances.<id>.agent.auto_approve` | boolean | — | Passed to the selected adapter; false removes automatic approval where supported |
 | `workspaces.instances.<id>.agent.context_compaction.auto` | boolean | — | Enable auto-compaction |
@@ -370,10 +370,10 @@ Narrative: [Agent and sandbox](/en/configuration/agent/).
 
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
-| `agent.default` | enum | `kilo` | Default agent kind |
-| `agent.timeout_seconds` | int > 0 | `1800` | Hard per-run timeout; on timeout the whole process tree is killed |
-| `agent.auto_approve` | boolean | `true` | Passed to the selected adapter; false removes automatic approval where supported |
-| `agent.sandbox` | object | `{ kind: "docker", engine: "auto" }` | Sandbox backend |
+| `agent.default` | enum | `kilo` | Execution mode: `kilo`, `opencode`, `zoo`, `copilot-cli`, `claude-code`, `pi`, `oh-my-pi`, or `native-llm` (direct gateway call) |
+| `agent.timeout_seconds` | int > 0 | `1800` | Hard timeout for a CLI agent pass; on timeout the whole process tree is killed; unused by `native-llm` |
+| `agent.auto_approve` | boolean | `true` | Passed to the selected CLI adapter; false removes automatic approval where supported; unused by `native-llm` |
+| `agent.sandbox` | object | `{}` | CLI sandbox backend; unused by `native-llm` |
 | `agent.sandbox.kind` | enum | — | Sandbox kind (see enum table) |
 | `agent.sandbox.engine` | enum | — | Container engine selection |
 | `agent.sandbox.image` | string | — | Container image to use |

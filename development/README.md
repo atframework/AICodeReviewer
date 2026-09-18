@@ -331,6 +331,11 @@ ssh -p "$SSH_PORT" -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no \
 - **Admin session TTL**：`adminAuthSchema` 使用 `session_ttl_seconds`（默认 28800 = 8 小时），不是 `session_ttl_minutes`。设置 `minutes` 字段会被静默忽略。
 - **动态配置启用后不要直接改 `config.yaml` 重启**：首次数据库发布后，head revision 会钉住文件 SHA-256 摘要；文件摘要不一致时准入与 `/readyz` 返回 503 `config_unavailable`（`file_config_mismatch`）。恢复：还原摘要一致的文件，或从 `GET /api/admin/config/status` 的 `head.activeRevision` 取基线，用新文件摘要加空 `operations` 调 `POST /api/admin/config/changesets` 采纳新摘要（2026-09-16 用当前构建产物本地探针验证可恢复）；不要手工改数据库。
 - **升级备份目录必须唯一命名**：跨版本升级的备份目录带秒级时间戳，删除被替代的临时目录前确认它与本轮备份路径不同；2026-09-16 动态配置升级中同分钟的同名目录曾把新备份误删。
+- **队列停滞排查**：Events 的 `queued` 是接收时记录的决定，执行后也不会变更。若 Recent Runs 长期没有新记录，而 `/healthz` 仍返回 200，按对应存储后端核对 receipt、batch、stream head 和运行日志：
+  1. 检查 `auto_commit_batches.status='dead'` 是否仍占用 stream 的 `active_batch_id`。executor 在 `started` 检查点之后失败时，远端副作用可能已经发生；dead 批次按设计阻止该 stream 继续组批。人工恢复须先核对发布结果，再以带备份、鉴权、审计和版本条件的操作释放，并维护 stream/workspace 唤醒索引；不要把无条件清空 `active_batch_id` 当成通用修复。dead 成员不可直接重放。
+  2. 检查固定配置快照能否通过 `loadSnapshotGeneration` 校验。若配置规范化发生变化，旧快照可能报 `snapshot_invalid: Config snapshot content hash mismatch`；应先使用当前代码验证内容等价，再决定如何迁移 `legacy_import`、旧 receipt 及 deferral 的引用。调度器退避故障 stream 不会自行修复无效快照。
+  3. 检查延期恢复日志。旧实现未接住异步 resume handler 的拒绝，固定快照解析失败可能导致进程退出；当前实现会释放 claim 并重试，但无效快照仍需修复，停机前已领取的回调须完成排空。
+  管理端 dead 批次恢复工具仍列在 [Plan.md](../Plan.md)；临时 `build/tmp/` 脚本不属于可复用的部署流程。
 - **pnpm 10.x 原生模块**：必须通过 `pnpm-workspace.yaml` 的 `onlyBuiltDependencies: [better-sqlite3]` 授权构建，不能用 `pnpm config set` 或 `--allow-build`。
 - **P4 运行时基线**：运行时镜像默认固定在 `debian:trixie-slim` +
   Perforce 官方 APT（Ubuntu `noble` 代号源）安装 `p4-cli` 的链路。

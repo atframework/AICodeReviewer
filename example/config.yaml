@@ -767,11 +767,13 @@ queue:
 # Agent & sandbox
 # ---------------------------------------------------------------------------
 # Kilo is the default supported agent path. Set agent.default to another
-# AgentKind (opencode, zoo, claude-code, copilot-cli, pi, oh-my-pi) only when
-# explicitly validating that adapter. Set to "native-llm" only for direct-LLM
-# debugging. pi/oh-my-pi additionally require the model's context_window and
-# max_output_tokens (enable llm.model_catalog or set overrides), support the
-# provider kinds openai_compatible, ollama, anthropic, and google_ai_studio.
+# CLI kind (opencode, zoo, claude-code, copilot-cli, pi, oh-my-pi) when
+# validating that adapter. Set "native-llm" to review with the configured LLM
+# gateway and prepared prompt without launching a CLI or sandbox. This mode
+# cannot read mounted files or call agent MCP tools. pi/oh-my-pi require the
+# model's context_window and max_output_tokens (enable llm.model_catalog or
+# set overrides). They support openai_compatible, ollama, anthropic, and
+# google_ai_studio provider kinds.
 # The deploy/Dockerfile runtime image ships pinned Kilo and `omp` CLIs for the
 # native sandbox; other sandbox images need the matching CLI preinstalled.
 # Agent sandboxes expose scoped source read-only and AICR MCP tools. If an
@@ -796,6 +798,8 @@ queue:
 #   - oh-my-pi:    compaction.enabled / thresholdPercent in config.yml
 agent:
   default: kilo
+  # To use AICR's direct LLM path instead, replace the line above with:
+  # default: native-llm
   # Hard cap on a SINGLE agent run. On timeout the sandbox kills the WHOLE
   # process tree (the agent binary plus its worker subprocesses, including
   # workers that `setsid` into their own session), so a run cannot overrun by

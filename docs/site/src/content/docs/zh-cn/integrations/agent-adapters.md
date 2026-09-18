@@ -3,13 +3,13 @@ title: Agent 适配器
 description: 支持的 agent CLI 以及 AICR 如何把模型、instructions 和 MCP 工具翻译到每个 agent 的运行时 bundle。
 ---
 
-AICR 通过外部 agent CLI（以及内置的直连 LLM 路径）完成代码推理。每种 agent kind 都由一个 `AgentAdapter` 包装，把 AICR 的 provider 中立 model spec 翻译成 agent 的原生配置。适配器还会按 run 物化隔离的运行时 bundle，因此 AICR 永远不会修改你全局的 agent CLI 配置目录。
+AICR 通过外部 agent CLI 或内置 `native-llm` 直连路径完成代码推理。每种 CLI kind 都由一个 `AgentAdapter` 包装，把 AICR 的 provider 中立 model spec 翻译成 agent 的原生配置。适配器还会按 run 物化隔离的运行时 bundle，因此 AICR 永远不会修改你全局的 agent CLI 配置目录。
 
 这里引用的配置字段参见[Agent 与沙箱](/zh-cn/configuration/agent/)。agent 回调的 MCP 工具参见 [MCP 工具](/zh-cn/integrations/mcp-tools/)。
 
 ## 运行时 bundle 如何物化
 
-每次 agent run，AICR 会向 run 的 `agent/` 目录写入完整、隔离的 bundle，并以该目录作为配置根运行 agent。bundle 包含：
+每次 CLI agent run，AICR 会向 run 的 `agent/` 目录写入完整、隔离的 bundle，并以该目录作为配置根运行 agent。bundle 包含：
 
 - LLM provider/model 配置（已翻译为 agent 的原生格式）。
 - 指向本地 `aicr-output` server 的 MCP 配置（通过 agent 的原生 MCP 接入面接线：配置文件或 CLI flag）。
@@ -18,7 +18,7 @@ AICR 通过外部 agent CLI（以及内置的直连 LLM 路径）完成代码推
 - 环境变量注入。
 - 一个 `manifest.json`，记录哪些参数被注入、哪些委托给工具原生 catalog、哪些被降级，以及哪些原生接入面（instructions/技能/MCP）被接线——能力缺口可审计，而不是被静默丢弃。
 
-orchestrator 每次 run 调用一次 `materializeRuntimeBundle`，而不是修改任何全局配置。每个适配器再把 bundle 翻译成自己的文件布局（如 Kilo 的 `kilo.json`、opencode 的 `opencode.json`、Zoo Code 的 `.roo/`）。
+orchestrator 每次 CLI run 调用一次 `materializeRuntimeBundle`，而不是修改任何全局配置。每个适配器再把 bundle 翻译成自己的文件布局（如 Kilo 的 `kilo.json`、opencode 的 `opencode.json`、Zoo Code 的 `.roo/`）。
 
 ## 原生接入面接线
 
@@ -100,9 +100,12 @@ pi 的自定义模型条目必填 `contextWindow` 与 `maxTokens`：请启用 `l
 
 oh-my-pi 是 pi 的 fork（`omp` 二进制），与 pi 共用同一 JSON 事件流、`PI_CODING_AGENT_DIR` 隔离和模型 catalog 要求（镜像要求同 pi：需自定义沙箱镜像安装 `omp`）。运行形态为 `omp -p --mode json --auto-approve --no-session --model provider/id -- <task>`。与 pi 不同，它有**原生 MCP 接入面**：AICR 写 `.omp-agent/mcp.json`（manifest 记为 `config_file`），`aicr-output` 工具以 `mcp__aicr_output_aicr_*` 形态出现。自定义 provider 写入 `.omp-agent/models.yml`（`apiKey` 先按 env 名解析，keyless provider 用 `auth: none`），压缩配置写入 `.omp-agent/config.yml`（`compaction.enabled` + `compaction.thresholdPercent`）。
 
-## 直连 LLM 回退（不是 agent kind）
+## `native-llm` 与直连 LLM 回退
 
-当 agent CLI 即便经过结构化修复 pass 也无法产出结构化输出时，orchestrator 可以回退到直接调用 LLM gateway。这是内部回退机制，**不是**可配置的 `agent.default` 值——合法的 `agent.default` 值只有 `kilo`、`opencode`、`zoo`、`copilot-cli`、`claude-code`、`pi` 和 `oh-my-pi`。orchestrator 计算
+设置 `agent.default: native-llm` 后，初始评审直接调用 LLM gateway。CLI 评审在结构化修复
+仍失败时，也使用同一条直连路径兜底。此模式不创建 CLI adapter、沙箱或 runtime bundle；
+模型只能使用准备好的 prompt，不能调用 agent 工具、读取挂载源码或物化辅助上下文仓库。
+CLI 超时、批准、上下文压缩与 web-search 配置对它无效。orchestrator 计算
 `maxPromptTokens = floor(contextWindow × 0.6)`，让 prompt manager 在预算内裁剪 memory hints、技能和 instructions；diff 本身由 AICR 侧的压缩阶段处理。
 
 ## Model catalog 注入差异汇总
@@ -121,11 +124,11 @@ oh-my-pi 是 pi 的 fork（`omp` 二进制），与 pi 共用同一 JSON 事件�
 
 ## 选择 agent
 
-把全局 `agent.default` 作为兜底。每次运行时，AICR 按分层 analysis 选择解析适配器——
+把全局 `agent.default` 作为兜底。每次运行时，AICR 按分层 analysis 选择执行模式——
 路由规则 analysis → `workspaces.instances.<id>.agent.default` → `workspaces.defaults.agent.default`
-→ 全局 `agent.default`——并为每次审查运行构建对应的适配器，因此不同 workspace 可以使用不同的
-agent。workspace 层的 `sandbox` 覆盖按同样的链路解析，并在每次运行时生效。适用于所有 agent
-kind 的超时、沙箱和上下文压缩字段参见 [Agent 与沙箱](/zh-cn/configuration/agent/)。
+→ 全局 `agent.default`——并为 CLI 审查运行构建对应适配器，因此不同 workspace 可以选择不同
+模式。workspace 层的 `sandbox` 覆盖按同样的链路解析，仅在 CLI 运行时生效。CLI 的超时、
+沙箱和上下文压缩字段参见 [Agent 与沙箱](/zh-cn/configuration/agent/)。
 
 ### 该用哪个 agent？
 
@@ -138,6 +141,7 @@ kind 的超时、沙箱和上下文压缩字段参见 [Agent 与沙箱](/zh-cn/c
 | `copilot-cli` | 使用 GitHub Copilot 订阅、希望零单次 LLM 成本的环境。 | 使用订阅固定的 catalog；不注入模型元数据。无对话级自动压缩接入面（`not_applicable`）。 |
 | `pi` | 偏好极简、可扩展的 pi 运行时；接受扩展桥接工具的团队。 | 要求 catalog 提供 `contextWindow`/`maxTokens`；仅支持 `openai_compatible`/`ollama`/`anthropic`/`google_ai_studio`；MCP 经生成的扩展接入，不是配置文件。 |
 | `oh-my-pi` | 需要原生 MCP（`mcp.json`）与更细压缩配置的 pi 系运行时。 | 模型元数据与 provider kind 要求同 `pi`。 |
+| `native-llm` | 准备好的 prompt 已包含足够上下文的评审。 | 无 agent 文件读取、技能、MCP 工具或辅助上下文仓库。 |
 
 ### 决策指引
 
@@ -147,8 +151,8 @@ kind 的超时、沙箱和上下文压缩字段参见 [Agent 与沙箱](/zh-cn/c
   会溢出而非自动压缩。若仍发生溢出，AICR 抛出 `AgentContextOverflowError`，附带模型上限、
   请求 token 数和可操作指引——不会是泛化的 `review_orchestration_failed`。
 - **想混用 agent？** 在 workspace 层（`workspaces.defaults` 或 `workspaces.instances.<id>`）或路由规则的
-  `analysis.agent.default` 中设置 `agent.default`；每次运行按分层选择构建适配器，未设置任何层时
+  `analysis.agent.default` 中设置 `agent.default`；每次运行按分层选择执行模式，未设置任何层时
   回退到全局 `agent.default`。
 
-能力缺口（vision、reasoning、结构化输出、工具调用）记录在每个 run 的 `manifest.json` 中，
+CLI 能力缺口（vision、reasoning、结构化输出、工具调用）记录在每个 CLI run 的 `manifest.json` 中，
 标记为 `injected`、`delegated` 或 `not_applicable`——绝不静默丢弃。

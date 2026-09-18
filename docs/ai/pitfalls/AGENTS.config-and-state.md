@@ -36,6 +36,18 @@ Read the section matching a config, model-selection, persistence, or usage chang
 - Freeze catalog observations with the task version, including after restart.
   Keep budget/token-bucket state outside generation caches; verify actual
   requests and generated adapter bundles (runtime-generation tests H01–H03/H17).
+- Any change to `parseEffectiveConfig`'s canonical output changes
+  `contentHashOf` of every future `loadSnapshotGeneration` read: a snapshot
+  written by an older parser fails `validateSnapshot` with
+  `snapshot_invalid: Config snapshot content hash mismatch` even though the
+  config is unchanged. Bump `CONFIG_RESOLVER_VERSION` in the same change, and
+  migrate pinned references when the normalized old document hashes to an
+  existing snapshot (prove content equivalence via the app's own
+  `parseEffectiveConfig` + `contentHashOf` before repointing
+  `config_runtime_state.legacy_import` and `auto_commit_receipts.config_snapshot_id`).
+  2026-09-18: a silent canonicalization change stranded the legacy baseline,
+  crashed the deferral resume, and made every pre-upgrade receipt unloadable
+  (`runtime-config.ts` validateSnapshot/loadSnapshotGeneration).
 
 ## Config and shared utilities
 
@@ -45,6 +57,10 @@ consumers in `packages/server/src/bootstrap.ts`.
 - Trace schema → workspace resolution → consumer before documenting behavior.
   Schema-only fields are not implemented features. Add config tests and sync
   architecture §3.10, examples, and both public reference locales when affected.
+  `agent.default: native-llm` must remain selectable at global, workspace and
+  route layers; bootstrap leaves both adapter and sandbox factory unset so the
+  orchestrator uses direct gateway completion. The Config UI enum comes from the
+  schema (`config-ui-spec.test.ts`; `runtime-generation.test.ts`).
   Auto-commit schema/tests live in `auto-commit-policy.ts` / its matching test;
   receive-side branch policy is covered in [scheduling](AGENTS.scheduling.md).
 - Renames inside `.passthrough()` objects need explicit legacy-shape errors;

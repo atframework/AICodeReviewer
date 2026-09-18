@@ -189,9 +189,9 @@ export interface ServerReviewOrchestrationOptions {
   readonly diffContextLines?: number;
   readonly dryRun?: boolean;
   readonly sandbox?: SandboxBackend;
-  /** One stateful backend per orchestration, never shared across concurrent runs. */
-  readonly sandboxFactory?: () => Promise<SandboxBackend> | SandboxBackend;
-  readonly agentAdapter?: AgentAdapter;
+  /** One stateful backend per orchestration; a native-llm generation clears this factory. */
+  readonly sandboxFactory?: (() => Promise<SandboxBackend> | SandboxBackend) | undefined;
+  readonly agentAdapter?: AgentAdapter | undefined;
   readonly agentTimeoutMs?: number;
   readonly agentAutoApprove?: boolean;
   readonly reviewConfig?: ReviewConfig;
@@ -2962,7 +2962,7 @@ export async function runReviewOrchestration(
     ...(reviewEvent.url ? { url: reviewEvent.url } : {}),
     modelProviderId: options.model.providerId,
     modelId: options.model.modelId,
-    ...(options.agentAdapter ? { agentKind: options.agentAdapter.kind } : {}),
+    agentKind: options.agentAdapter?.kind ?? "native-llm",
     attempt: context.attempt ?? 1,
   });
   try {
@@ -3380,7 +3380,7 @@ async function executeReviewInRunDirs(
     ...(liveRun ? { progress: {
       modelStarted: (selected: ModelSpec, agentKind?: string) => {
         liveRun.registry.update(liveRun.executionId, {
-          modelProviderId: selected.providerId, modelId: selected.modelId, agentKind: agentKind ?? null,
+          modelProviderId: selected.providerId, modelId: selected.modelId, agentKind: agentKind ?? "native-llm",
         });
       },
       agentUsage: (partial: ReviewCompletionResult) => {

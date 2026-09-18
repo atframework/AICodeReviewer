@@ -319,6 +319,17 @@ function innerEnumValues(schema: z.ZodTypeAny): readonly string[] {
 }
 
 describe("enum parity", () => {
+  it("offers the direct LLM mode at every agent selection layer", () => {
+    for (const [page, id] of [
+      ["agent", "agent:default"],
+      ["workspaces", "workspaces:defaults.agent.default"],
+      ["workspaces", "workspace:agent.default"],
+      ["routing", "route:analysis.agent.default"],
+    ] as const) {
+      expect(optionValues(findField(page, id)), `${page} ${id}`).toContain("native-llm");
+    }
+  });
+
   it("gives every leaf-backed spec field options equal to the schema leaf enumValues", () => {
     const appLeaves = new Map(collectSchemaFieldPaths(appConfigSchema).map((leaf) => [leaf.path, leaf]));
     const problems: string[] = [];

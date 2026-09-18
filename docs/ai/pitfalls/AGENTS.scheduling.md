@@ -82,6 +82,16 @@ bootstrap, core auto-commit stores, scheduler and real-backend conformance tests
   Recheck time before analysis, keep every sealed member via bounded ID lookups,
   and fence completion/checkpoint writes with a live lease. Merge complementary
   observations without erasing conflicts or earlier range evidence.
+- A dead batch keeps `stream.activeBatchId` by design (§9 manual handling), and
+  any executor error after the `started` checkpoint — including transient LLM
+  failures — dies unretryable. A dead batch holds its stream until an operator
+  checks the side effects and repairs the durable state. Events `queued` is an
+  immutable admission decision; inspect batch/stream state and Recent Runs to
+  diagnose progress. Dispatch and stream exceptions must log. Persist a failing
+  stream's retry bound: a global timer delay alone still lets it monopolize a
+  bounded same-workspace scan (`auto-commit-scheduler.test.ts` memory and SQLite
+  restart cases). Pinned snapshot repair is covered by
+  [config pitfalls](AGENTS.config-and-state.md).
 - Completed checkpoints replay local accounting only. Started/publication-pending
   checkpoints do not justify replaying remote POSTs. Verify actual LLM/publisher
   call counts after recovery and test memory/SQLite/Redis contracts.
@@ -113,6 +123,12 @@ architecture §3.1.1.
   Preserve a re-deferred pending replacement, retain rows on transient reads or
   failed handoff, arm stored deadlines, and consult latest memory fallback after
   failed upserts. Reset claims on startup.
+- Track async resume handlers through acknowledgment or release, and drain them
+  before closing the store. A rejection must release the claim and retain a
+  memory-only target for retry. Do not await a handler inside the serialized
+  store queue: it may await `defer()` on that queue. Re-deferred replacements
+  must survive acknowledgment (`deferral-manager.ts` and
+  `deferral-recovery.test.ts`).
 - Receipt-time Events retain the newest 100 decisions and are separate from run
   rollups. Deferrals provide single-process restart recovery, not distributed
   leases or a post-start durable retry queue; without the configured store,

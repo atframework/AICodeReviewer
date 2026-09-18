@@ -244,8 +244,9 @@ async function postPullRequest(
   vcs: DiffCapableVcsAdapter,
   target: PullRequestTarget = {},
   onResolved?: (snapshot: ResolvedRunSnapshot) => void,
+  preserveAgentSelection = false,
 ): Promise<PullRequestRunResult> {
-  const app = createServerApp({ ...options, asyncTriggers: false, reviewOrchestration: reviewOptions(options, vcs, onResolved) });
+  const app = createServerApp({ ...options, asyncTriggers: false, reviewOrchestration: reviewOptions(options, vcs, onResolved, preserveAgentSelection) });
   const body = JSON.stringify({ action: "opened", repository: { full_name: target.repo ?? "acme/repo" },
     pull_request: { number: target.prNumber ?? 7, base: { sha: "base", ref: "main" }, head: { sha: "head", ref: "feature" }, user: { login: "owent" } } });
   const response = await app.request("/webhooks/gitea", { method: "POST", body, headers: {
@@ -376,6 +377,7 @@ function reviewOptions(
   options: ServerAppOptions,
   vcs: DiffCapableVcsAdapter,
   onResolved?: (snapshot: ResolvedRunSnapshot) => void,
+  preserveAgentSelection = false,
 ): ServerReviewOrchestrationOptions {
   const base = options.reviewOrchestration!;
   const resolve = base.optionsResolver!;
@@ -383,7 +385,8 @@ function reviewOptions(
   // sandboxFactory/agentAdapter and so does the per-generation resolved layer;
   // without a sandbox the orchestrator takes the direct-LLM completion path
   // whose HTTP request the fetch spy captures.
-  const { agentAdapter: _baseAgent, sandboxFactory: _baseSandbox, ...baseRest } = base;
+  const { agentAdapter: _baseAgent, sandboxFactory: _baseSandbox, ...withoutBaseAgent } = base;
+  const baseRest = preserveAgentSelection ? base : withoutBaseAgent;
   return {
     ...baseRest,
     optionsResolver: async (context: ReviewOrchestrationContext) => {
@@ -394,7 +397,8 @@ function reviewOptions(
         agentAutoApprove: resolved.agentAutoApprove,
         webSearchEnabled: resolved.webSearch?.enabled,
       });
-      const { agentAdapter: _agent, sandboxFactory: _sandbox, ...rest } = resolved;
+      const { agentAdapter: _agent, sandboxFactory: _sandbox, ...withoutResolvedAgent } = resolved;
+      const rest = preserveAgentSelection ? resolved : withoutResolvedAgent;
       return { ...rest, vcs, vcsFactory: () => vcs };
     },
   };
@@ -526,18 +530,23 @@ describe("config publication → review execution e2e", () => {
       providerOperation("p-e01", providerBase),
       modelGroupOperation("g-e01", "p-e01", "model-e01"),
       { op: "set", path: ["llm", "default_model_chain"], value: "g-e01" },
+      { op: "set", path: ["agent", "default"], value: "native-llm" },
       giteaChannelOperation("c-e01", channelBase),
       routeOperation("r-e01", 10, ["pull_request"], ["c-e01"]),
     ]);
     const head = await store.readHead(NAMESPACE);
     expect(head?.activeRevision).toBe(1);
 
-    const result = await postPullRequest(options, createFakeVcs());
+    let resolvedAgentKind: string | undefined;
+    const result = await postPullRequest(options, createFakeVcs(), {}, snapshot => {
+      resolvedAgentKind = snapshot.agentKind;
+    }, true);
     const generation = options.runtimeConfig!.current();
 
     expect(result.outcome).toBe("reviewed");
     expect(result.reviewRun?.status).toBe("published");
     expect(result.reviewRun?.problemCount).toBe(0);
+    expect(resolvedAgentKind).toBeUndefined();
     // §7: the run is pinned to the published head, not merely "published".
     expect(result.reviewRun?.configVersion).toEqual({
       configSnapshotId: generation.snapshotId,

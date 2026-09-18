@@ -476,8 +476,9 @@ Behavior contract (see `docs/ai/architecture.md` §3.2.2):
 - Container sandboxes get each repository as a read-only mount at
   `/workspace/context-repos/<alias>`; the native sandbox reads the host path
   directly. The task prompt lists the available aliases and revisions.
-- Only the agent path (sandbox + agent CLI) materializes these repositories;
-  the direct-LLM path has no shell to read them and skips materialization.
+- Only the CLI agent path (sandbox + agent CLI) materializes these repositories;
+  `agent.default: native-llm` and direct-LLM fallback have no shell to read
+  them and skip materialization.
 - A failing repository is isolated (warning + `status: failed` in the run
   result); the review continues without it. `max_mb` (default 512) caps the
   materialized size.
@@ -637,6 +638,17 @@ artifacts.
 If the target host already configures Podman/Docker registry mirrors globally,
 leave `NODE_IMAGE` unset and let the default `node:lts-trixie-slim` pull flow
 use that host-level configuration.
+
+## Built-in direct LLM mode
+
+Set `agent.default: native-llm` in `config.yaml`, or select `native-llm` on the
+dashboard's Agent page, to review through AICR's configured LLM gateway. This
+uses the prepared review prompt and structured-output parser without installing
+an external agent CLI. Workspace defaults, instance overrides, and route
+analysis can select the same value. The model cannot inspect mounted files,
+call agent MCP tools, or use auxiliary context repositories; CLI timeout,
+approval, compaction, web-search, and sandbox settings do not apply. Keep
+`kilo` for reviews that need those agent capabilities.
 
 ## Kilo Code Deployment Verification
 

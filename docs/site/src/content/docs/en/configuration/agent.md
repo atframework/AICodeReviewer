@@ -1,12 +1,12 @@
 ---
 title: Agent and Sandbox
-description: Choose the agent CLI, set the per-run timeout, enable context auto-compaction, and pick the sandbox backend.
+description: Choose an agent CLI or AICR's direct LLM mode, then configure CLI timeouts, compaction, and sandboxing.
 ---
 
-AICodeReviewer drives an external agent CLI (Kilo Code by default) inside a
-sandbox. The `agent` namespace picks which CLI to run, sets the hard per-run
-timeout, enables context auto-compaction for long reviews, and selects the
-sandbox backend that isolates the agent from the host.
+AICodeReviewer runs an external agent CLI (Kilo Code by default) inside a
+sandbox, or calls its configured LLM directly with `native-llm`. The `agent`
+namespace selects the execution mode. Timeout, auto-approval, context compaction,
+web search, and sandbox settings apply to CLI runs.
 
 ```yaml
 agent:
@@ -21,7 +21,7 @@ agent:
   sandbox: {} # unset kind = auto-detect with native fallback
 ```
 
-## `agent.default` — which agent CLI
+## `agent.default` — execution mode
 
 | Value | Behavior |
 | --- | --- |
@@ -32,10 +32,11 @@ agent:
 | `claude-code` | Claude Code adapter. |
 | `pi` | pi (`@earendil-works/pi-coding-agent`) adapter. Requires catalog-supplied `context_window` / `max_output_tokens`. |
 | `oh-my-pi` | oh-my-pi (`omp`, pi fork) adapter. Same model-metadata requirements as `pi`. |
+| `native-llm` | AICR calls the configured LLM through its gateway without launching an agent CLI. |
 
 :::note[Stick with the default]
-`kilo` is the validated default. Switch to another `AgentKind` only when you are
-explicitly validating that adapter. The `pi` and `oh-my-pi` adapters support the
+`kilo` is the validated default. Switch to another CLI kind when validating
+that adapter. The `pi` and `oh-my-pi` adapters support the
 provider kinds `openai_compatible`, `ollama`, `anthropic`, and
 `google_ai_studio`, and both require the model's context window and output-token
 limit — enable `llm.model_catalog` (or set overrides) before using them. The
@@ -45,14 +46,21 @@ the matching CLI preinstalled (the binaries are on the sandbox command allowlist
 by default).
 :::
 
-The selected agent, timeout, approval, compaction and web-search settings merge
+`native-llm` uses the same model route, review prompt, diff compression, and
+structured-output parsing as the direct-LLM fallback. It does not launch a
+sandbox or materialize a CLI runtime bundle. The model receives the prepared
+prompt and cannot inspect mounted files, invoke MCP tools, run skills, or request
+more context through agent tools. Auxiliary context repositories are skipped.
+Choose this mode when the review can be completed from the prepared prompt.
+
+The selected mode, timeout, approval, compaction and web-search settings merge
 global → workspace defaults → instance → route analysis for each task. Arrays replace
 inherited lists; nested search credentials merge by key and remain subject to deployment
-purpose grants. Unsupported adapter capabilities appear in the runtime manifest.
+purpose grants. Unsupported CLI adapter capabilities appear in the CLI runtime manifest.
 Repository-owned configuration can select `agent.default`; it cannot increase approval,
 search credential or sandbox permissions.
 
-Every review creates an independent sandbox. HOME, USERPROFILE, APPDATA, XDG and
+Every CLI review creates an independent sandbox. HOME, USERPROFILE, APPDATA, XDG and
 temporary directories belong to that run; MCP children inherit the same paths.
 Supply authentication through configured environment variables. The runtime does
 not copy developer OAuth/auth stores. Operator templates and `.agents/skills`
@@ -66,7 +74,8 @@ agent:
   timeout_seconds: 1800  # the default; lower it for small-PR environments
 ```
 
-This is a **hard cap on a single agent pass**. When the timeout fires, the
+This is a **hard cap on a single CLI agent pass**; it does not limit a
+`native-llm` gateway request. When the timeout fires, the
 sandbox kills the **whole process tree** — the agent binary plus every worker
 subprocess it spawned, including workers that `setsid` into their own session.
 A run therefore cannot overrun by leaving orphaned workers behind.

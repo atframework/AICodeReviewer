@@ -483,7 +483,7 @@ export const sandboxSchema = z
     image: z.string().min(1).optional(),
   })
   .strict();
-export const agentKindSchema = z.enum(["kilo", "opencode", "zoo", "copilot-cli", "claude-code", "pi", "oh-my-pi"]);
+export const agentKindSchema = z.enum(["kilo", "opencode", "zoo", "copilot-cli", "claude-code", "pi", "oh-my-pi", "native-llm"]);
 
 export const contextCompactionSchema = z
   .object({

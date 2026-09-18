@@ -114,6 +114,13 @@ After logging in, the dashboard lands on the **Overview** tab and has seven tabs
 - **Config** — database configuration, field sources, routing preview and version
   history. Enable `config_sources.database.enabled` to use configuration management.
 
+`queued` is the decision recorded when the webhook arrived; the Events row does
+not change when a batch runs. A new Recent Runs entry appears after its review
+result is stored. If none appears, inspect the receipt, batch, and stream state
+in the configured auto-commit store. A dead batch holds its stream for manual
+inspection, and an unreadable pinned configuration snapshot can prevent receipt
+expansion. A successful health check does not establish queue progress.
+
 Usage is aggregated across the complete review run, including the initial model
 call, context or format-repair calls, and any final direct-LLM fallback. For
 Kilo, each `step_finish` model turn counts as one request. The locally estimated

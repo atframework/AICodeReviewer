@@ -3,8 +3,8 @@ title: Agent adapters
 description: The supported agent CLIs and how AICR translates models, instructions, and MCP tools into each one's runtime bundle.
 ---
 
-AICR does code reasoning through external agent CLIs (and a built-in
-direct-LLM path). Each agent kind is wrapped by an `AgentAdapter` that turns
+AICR does code reasoning through external agent CLIs or its built-in
+`native-llm` direct-LLM mode. Each CLI kind is wrapped by an `AgentAdapter` that turns
 AICR's provider-neutral model spec into the agent's native configuration. The
 adapter also materializes an isolated runtime bundle per run, so AICR never
 mutates your global agent CLI config directory.
@@ -15,7 +15,7 @@ calls back into, see [MCP tools](/en/integrations/mcp-tools/).
 
 ## How a runtime bundle is materialized
 
-For every agent run, AICR writes a complete, isolated bundle into the run's
+For every CLI agent run, AICR writes a complete, isolated bundle into the run's
 `agent/` directory and runs the agent with that directory as its config root.
 The bundle contains:
 
@@ -34,7 +34,7 @@ The bundle contains:
   surfaces (instructions/skills/MCP) were wired — so capability gaps are
   auditable rather than silently dropped.
 
-The orchestrator calls `materializeRuntimeBundle` once per run instead of
+The orchestrator calls `materializeRuntimeBundle` once per CLI run instead of
 mutating any global config. Each adapter then translates the bundle into its
 own file layout (for example Kilo's `kilo.json`, opencode's `opencode.json`,
 Zoo Code's `.roo/`).
@@ -225,14 +225,14 @@ tools appear as `mcp__aicr_output_aicr_*`. Custom providers go to
 providers) and compaction to `.omp-agent/config.yml`
 (`compaction.enabled` + `compaction.thresholdPercent`).
 
-## Direct-LLM fallback (not an agent kind)
+## `native-llm` and direct-LLM fallback
 
-When an agent CLI cannot produce structured output even after a structured
-repair pass, the orchestrator can fall back to calling the LLM gateway
-directly. This is an internal fallback, **not** a configurable `agent.default`
-value — the valid `agent.default` values are exactly `kilo`, `opencode`,
-`zoo`, `copilot-cli`, `claude-code`, `pi`, and `oh-my-pi`. The orchestrator
-computes
+Set `agent.default: native-llm` to use the LLM gateway directly for the initial
+review. The same direct path remains the final structured-output fallback for
+CLI reviews. This mode creates no CLI adapter, sandbox, or runtime bundle; it
+uses only the prepared prompt and cannot call agent tools, inspect mounted
+source, or materialize auxiliary context repositories. CLI timeout, approval,
+compaction, and web-search settings do not affect it. The orchestrator computes
 `maxPromptTokens = floor(contextWindow × 0.6)` and lets the prompt manager
 trim memory hints, skills, and instructions to fit; the diff itself is
 compressed by the AICR-side compression stage.
@@ -256,11 +256,11 @@ double-write conflicts.
 ## Choosing an agent
 
 Set `agent.default` globally as the fallback. Per-run, AICR resolves the
-adapter through the layered analysis selection — route analysis →
+execution mode through the layered analysis selection — route analysis →
 `workspaces.instances.<id>.agent.default` → `workspaces.defaults.agent.default`
-→ global `agent.default` — and builds the adapter for each review run, so
-different workspaces can run different agents. Workspace-layer `sandbox`
-overrides resolve the same way and are applied per run. See
+→ global `agent.default` — and builds an adapter for CLI review runs, so
+different workspaces can select different modes. Workspace-layer `sandbox`
+overrides resolve the same way for CLI runs. See
 [Agent and sandbox](/en/configuration/agent/) for the timeout, sandbox, and
 context-compaction fields that apply to every agent kind.
 
@@ -275,6 +275,7 @@ context-compaction fields that apply to every agent kind.
 | `copilot-cli` | GitHub Copilot subscription environments where you want zero per-call LLM cost. | Uses the subscription's fixed catalog; no model metadata is injected. No conversation-level auto-compaction surface (`not_applicable`). |
 | `pi` | Minimal, hackable pi runtime; teams that want extension-bridged tooling. | Requires catalog-supplied `contextWindow`/`maxTokens`; only `openai_compatible`/`ollama`/`anthropic`/`google_ai_studio` provider kinds; MCP arrives via a generated extension, not a config file. |
 | `oh-my-pi` | pi-family runtime with native MCP (`mcp.json`) and finer compaction knobs. | Same model-metadata and provider-kind requirements as `pi`. |
+| `native-llm` | Reviews where the prepared prompt contains enough context. | No agent file reading, skills, MCP tools, or auxiliary context repositories. |
 
 ### Decision guide
 
@@ -289,9 +290,9 @@ context-compaction fields that apply to every agent kind.
   tokens, and actionable guidance — not a generic `review_orchestration_failed`.
 - **Mixing agents?** Set `agent.default` at the workspace layer
   (`workspaces.defaults` or `workspaces.instances.<id>`) or in a routing rule's
-  `analysis.agent.default`; each run builds the adapter from the layered
-  selection and falls back to the global `agent.default` when no layer sets it.
+  `analysis.agent.default`; each run resolves the selected mode from those
+  layers and falls back to the global `agent.default` when no layer sets it.
 
-Capability gaps (vision, reasoning, structured output, tool calls) are
-recorded in each run's `manifest.json` as `injected`, `delegated`, or
+CLI capability gaps (vision, reasoning, structured output, tool calls) are
+recorded in each CLI run's `manifest.json` as `injected`, `delegated`, or
 `not_applicable` — they are never silently dropped.

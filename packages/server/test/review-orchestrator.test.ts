@@ -702,7 +702,7 @@ describe("runReviewOrchestration", () => {
       await writeWorkspaceFile(tempDir, "src/app.ts", "const value = 1;\n");
       const registry = createLiveRunRegistry();
       const committedAt = "2026-09-10T08:00:00.000Z";
-      const observed: { phase: string; estimate?: number; committedAt?: string; vcsKind?: string }[] = [];
+      const observed: { phase: string; estimate?: number; committedAt?: string; vcsKind?: string; agentKind?: string }[] = [];
       const vcs = {
         ...createVcs(tempDir),
         async fetchRevisionCommittedAt(revision: string): Promise<string | undefined> {
@@ -719,6 +719,7 @@ describe("runReviewOrchestration", () => {
             estimate: live[0]!.promptTokenEstimate,
             committedAt: live[0]!.headCommittedAt,
             vcsKind: live[0]!.vcsKind,
+            agentKind: live[0]!.agentKind,
           });
           return { providerId: input.model.providerId, modelId: input.model.modelId, content: '{"skipReason":"lgtm"}', raw: {} };
         },
@@ -749,6 +750,7 @@ describe("runReviewOrchestration", () => {
       expect(observed[0]!.estimate).toBeGreaterThan(0);
       expect(observed[0]!.committedAt).toBe(committedAt);
       expect(observed[0]!.vcsKind).toBe("git");
+      expect(observed[0]!.agentKind).toBe("native-llm");
       expect(registry.list()).toEqual([]);
       expect(result.headCommittedAt).toBe(committedAt);
     } finally {

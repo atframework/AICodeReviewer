@@ -729,9 +729,12 @@ export function createLlmClientFromModelSpec(model: ModelSpec): ChatCompletionCl
   return createChatClientFromModelSpec(model);
 }
 
-export function resolveAgentAdapterFromConfig(config: AppConfig): AgentAdapter {
-  const agentDefault = config.agent.default;
-  return createAgentAdapter({ kind: agentDefault });
+function createConfiguredAgentAdapter(kind: AppConfig["agent"]["default"]): AgentAdapter | undefined {
+  return kind === "native-llm" ? undefined : createAgentAdapter({ kind });
+}
+
+export function resolveAgentAdapterFromConfig(config: AppConfig): AgentAdapter | undefined {
+  return createConfiguredAgentAdapter(config.agent.default);
 }
 
 export async function createSandboxBackendFromConfig(config: AppConfig): Promise<SandboxBackend> {
@@ -3067,6 +3070,7 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
       workspaces: { ...generationConfig.workspaces, instances: { ...generationConfig.workspaces.instances,
         [workspaceId]: { ...generationConfig.workspaces.instances[workspaceId], review: reviewPolicy } } } };
     const agentConfig = { ...generationConfig, agent: analysis.agent ?? generationConfig.agent };
+    const selectedAgentAdapter = createConfiguredAgentAdapter(analysis.agent?.default ?? generationConfig.agent.default);
     const route = getModelRouteFor(generation, analysis.modelChain, reviewMemoryScope(context.reviewEvent));
     const tokenServices = await appTokenServicesFor(generation);
     const billingScope = reviewMemoryScope(context.reviewEvent);
@@ -3164,10 +3168,10 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
       // H03/H04: workspace-layer agent and sandbox selection via the merged
       // analysis selection; an explicit container sandbox that fails
       // preflight rejects this run instead of downgrading to native.
-      sandboxFactory: () => createSandboxBackendFromSandboxConfig(
+      sandboxFactory: selectedAgentAdapter ? () => createSandboxBackendFromSandboxConfig(
         analysis.sandbox ?? generationConfig.agent.sandbox,
-      ),
-      agentAdapter: createAgentAdapter({ kind: analysis.agent?.default ?? generationConfig.agent.default }),
+      ) : undefined,
+      agentAdapter: selectedAgentAdapter,
       agentTimeoutMs: agentConfig.agent.timeout_seconds * 1000,
       agentAutoApprove: agentConfig.agent.auto_approve,
       contextCompaction: contextCompactionFromConfig(agentConfig),
@@ -3239,7 +3243,7 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
         sourceRoot,
       }),
     }),
-    sandboxFactory: () => createSandboxBackendFromConfig(config),
+    sandboxFactory: agentAdapter ? () => createSandboxBackendFromConfig(config) : undefined,
     agentAdapter,
     agentTimeoutMs: config.agent.timeout_seconds * 1000,
     contextCompaction: contextCompactionFromConfig(config),

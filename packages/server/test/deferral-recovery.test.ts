@@ -85,8 +85,8 @@ describe("deferral failure and deadline recovery", () => {
   it("retains a claimed row until the scheduling handoff succeeds", async () => {
     const manager = new ReviewDeferralManager({ store });
     const key = computeDeferralKey(target().reviewEvent);
-    // The manager treats the handler as synchronous: the throw must stay
-    // synchronous, so capture the claimed-row read and assert on it below.
+    // Capture the claimed-row read synchronously from inside the handler so
+    // the assertion below observes the claim before the release.
     let claimedRow: Promise<ReviewDeferralRow | undefined> | undefined;
     const resume = vi.fn().mockImplementationOnce(() => {
       claimedRow = getReviewDeferral(store, key);
@@ -100,6 +100,83 @@ describe("deferral failure and deadline recovery", () => {
     await vi.advanceTimersByTimeAsync(5000);
     expect(resume).toHaveBeenCalledTimes(2);
     expect((await getReviewDeferral(store, key))).toBeUndefined();
+  });
+
+  it("releases and retries when an async resume handler rejects", async () => {
+    const manager = new ReviewDeferralManager({ store });
+    const key = computeDeferralKey(target().reviewEvent);
+    const resume = vi.fn().mockImplementationOnce(async () => {
+      throw new Error("snapshot_invalid: Config snapshot content hash mismatch.");
+    });
+    manager.resumeHandler = resume;
+    manager.defer(target(), 100);
+    await vi.advanceTimersByTimeAsync(100);
+    expect((await getReviewDeferral(store, key))?.status).toBe("pending");
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(resume).toHaveBeenCalledTimes(2);
+    expect((await getReviewDeferral(store, key))).toBeUndefined();
+  });
+
+  it("retains a memory-only target while an asynchronous handoff fails", async () => {
+    const manager = new ReviewDeferralManager({});
+    const resume = vi.fn().mockRejectedValueOnce(new Error("temporary admission failure"));
+    manager.resumeHandler = resume;
+    await manager.defer(target(), 100);
+    await vi.advanceTimersByTimeAsync(100);
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(resume).toHaveBeenCalledTimes(2);
+    expect(resume).toHaveBeenLastCalledWith(target());
+  });
+
+  it("drains an accepted async handoff and its durable acknowledgement before closing", async () => {
+    const manager = new ReviewDeferralManager({ store });
+    const key = computeDeferralKey(target().reviewEvent);
+    let finish!: () => void;
+    const handoff = new Promise<void>((resolve) => { finish = resolve; });
+    manager.resumeHandler = vi.fn(() => handoff);
+    await manager.defer(target(), 100);
+    await vi.advanceTimersByTimeAsync(100);
+    expect((await getReviewDeferral(store, key))?.status).toBe("claimed");
+    let drained = false;
+    const drain = manager.drain().then(() => { drained = true; });
+    await Promise.resolve();
+    expect(drained).toBe(false);
+    finish();
+    await drain;
+    expect(await getReviewDeferral(store, key)).toBeUndefined();
+  });
+
+  it("releases a rejected handoff during drain for restart recovery", async () => {
+    const manager = new ReviewDeferralManager({ store });
+    const key = computeDeferralKey(target().reviewEvent);
+    let reject!: (error: Error) => void;
+    manager.resumeHandler = () => new Promise<void>((_resolve, fail) => { reject = fail; });
+    await manager.defer(target(), 100);
+    await vi.advanceTimersByTimeAsync(100);
+    const drain = manager.drain();
+    reject(new Error("admission failed"));
+    await drain;
+    expect((await getReviewDeferral(store, key))?.status).toBe("pending");
+    const restarted = new ReviewDeferralManager({ store });
+    const resumed = vi.fn();
+    restarted.resumeHandler = resumed;
+    await restarted.recover();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(resumed).toHaveBeenCalledExactlyOnceWith(target());
+  });
+
+  it("lets an async handoff await a replacement deferral without deadlocking", async () => {
+    const manager = new ReviewDeferralManager({ store });
+    const resume = vi.fn().mockImplementationOnce(async () => {
+      await manager.defer(target("new"), 1_000);
+    });
+    manager.resumeHandler = resume;
+    await manager.defer(target(), 100);
+    await vi.advanceTimersByTimeAsync(100);
+    expect((await listPendingReviewDeferrals(store))[0]?.reviewEvent).toContain('"headSha":"new"');
+    await vi.advanceTimersByTimeAsync(900);
+    expect(resume).toHaveBeenLastCalledWith(target("new"));
+    expect(await listPendingReviewDeferrals(store)).toEqual([]);
   });
 
   it("preserves a replacement row when the resume handler re-defers", async () => {
