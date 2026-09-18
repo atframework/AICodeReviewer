@@ -22,6 +22,14 @@ Sources: root/package manifests, `pnpm-workspace.yaml`, `tsconfig.json`,
   `lfs: true`; working-tree packaging follows `git lfs pull`, not `git archive`.
   Keep the model snapshot path aligned across code, attributes and deploy checks.
   Renormalization is scoped; history rewrite is a separate operation.
+- Executable scripts must carry the tracked `100755` mode. Windows checkouts
+  (`core.filemode=false`) commit new shebang scripts as `100644` with no
+  warning, and POSIX later fails `spawn <name> EACCES` wherever a test or doc
+  resolves the script by PATH name instead of `bash <path>`. Set it with
+  `git update-index --chmod=+x <path>` (a mode-only commit; a working-tree
+  chmod alone is invisible on Windows), and audit modes with `git ls-files -s`
+  when adding PATH-spawned shims such as
+  `tests/browser/fixtures/stub-bin/kilo` / `opencode`.
 - On Windows with `core.autocrlf=true`, `pnpm format:check` flags every file
   (prettier `endOfLine` defaults to `lf`, the working tree is CRLF). This is
   an environment artifact, not formatting drift: the script is a local
