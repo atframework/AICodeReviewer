@@ -131,15 +131,18 @@ export function parseWebhookDetail(raw: string | null): unknown {
  * Mirror the auto-commit queue-timeout sweep onto the event log: queued (or
  * duplicate) events whose receipt timed out flip to the terminal `timeout`
  * decision so the Events panel reflects reality instead of showing stale
- * queue entries forever. Chunked to keep the IN list bounded.
+ * queue entries forever. `routingIds` covers routing-stage intake events,
+ * whose detail carries `routingId` instead of a formal `receiptId`. Chunked
+ * to keep the IN list bounded.
  */
 export async function markWebhookEventsTimedOut(
   store: StoreDb,
   receiptIds: readonly string[],
+  routingIds: readonly string[] = [],
 ): Promise<number> {
-  if (receiptIds.length === 0) return 0;
+  if (receiptIds.length === 0 && routingIds.length === 0) return 0;
   if (store.kind === "postgres") {
-    return markWebhookEventsTimedOutPg(store, receiptIds);
+    return markWebhookEventsTimedOutPg(store, receiptIds, routingIds);
   }
   let total = 0;
   for (let offset = 0; offset < receiptIds.length; offset += 100) {
@@ -147,6 +150,16 @@ export async function markWebhookEventsTimedOut(
     const result = store.db.run(sql`UPDATE webhook_events SET decision = 'timeout', reason = 'queued_timeout'
       WHERE decision IN ('queued', 'duplicate')
         AND json_extract(detail, '$.receiptId') IN (${sql.join(
+          chunk.map((id) => sql`${id}`),
+          sql`, `,
+        )})`);
+    total += Number(result.changes);
+  }
+  for (let offset = 0; offset < routingIds.length; offset += 100) {
+    const chunk = routingIds.slice(offset, offset + 100);
+    const result = store.db.run(sql`UPDATE webhook_events SET decision = 'timeout', reason = 'queued_timeout'
+      WHERE decision IN ('queued', 'duplicate')
+        AND json_extract(detail, '$.routingId') IN (${sql.join(
           chunk.map((id) => sql`${id}`),
           sql`, `,
         )})`);

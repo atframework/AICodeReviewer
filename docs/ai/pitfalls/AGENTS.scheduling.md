@@ -82,19 +82,33 @@ bootstrap, core auto-commit stores, scheduler and real-backend conformance tests
   Recheck time before analysis, keep every sealed member via bounded ID lookups,
   and fence completion/checkpoint writes with a live lease. Merge complementary
   observations without erasing conflicts or earlier range evidence.
-- A dead batch keeps `stream.activeBatchId` by design (§9 manual handling), and
-  any executor error after the `started` checkpoint — including transient LLM
-  failures — dies unretryable. A dead batch holds its stream until an operator
-  checks the side effects and repairs the durable state. Events `queued` is an
-  immutable admission decision; inspect batch/stream state and Recent Runs to
-  diagnose progress. Dispatch and stream exceptions must log. Persist a failing
-  stream's retry bound: a global timer delay alone still lets it monopolize a
-  bounded same-workspace scan (`auto-commit-scheduler.test.ts` memory and SQLite
+- Recovery contract (2026-09 operator decision, store schema v8): executor
+  errors after the `started` checkpoint propagate as ordinary retryable
+  failures — replay re-runs the batch and may re-publish output the failed
+  attempt already delivered; that duplicate-publication risk is accepted in
+  exchange for never leaving a stream jammed. A would-be-terminal failure
+  consumes the batch's single automatic recovery (`recoveryAttempt`); a second
+  terminal failure skips the batch terminally and the stream keeps flowing.
+  Boot reclaims leases held by the previous consumer id and re-arms pre-upgrade
+  dead batches; `stop()` aborts in-flight executions (`interrupted_by_shutdown`)
+  so deploys never wait out a long analysis. Replays reuse the run id, and the
+  run-dir `EEXIST` guard must re-enter a leftover directory whose recorded
+  owner is gone (different host after a container restart, or dead pid) — a
+  live same-host owner still fails closed (`review-orchestrator.ts`
+  isRunDirOwnerAlive; the stale-run reaper never clears cross-host leftovers).
+  Manual re-arm is
+  `POST /api/admin/auto-commit/batches/:id/retry` (dashboard Queue tab).
+  Events `queued` is an immutable admission decision; the `queued_timeout_hours`
+  sweep (default 48h) flips stale entries to the terminal `timeout` decision.
+  Dispatch and stream exceptions must log. Persist a failing stream's retry
+  bound: a global timer delay alone still lets it monopolize a bounded
+  same-workspace scan (`auto-commit-scheduler.test.ts` memory and SQLite
   restart cases). Pinned snapshot repair is covered by
   [config pitfalls](AGENTS.config-and-state.md).
 - Completed checkpoints replay local accounting only. Started/publication-pending
-  checkpoints do not justify replaying remote POSTs. Verify actual LLM/publisher
-  call counts after recovery and test memory/SQLite/Redis contracts.
+  checkpoints justify replay only under the operator-accepted duplicate risk
+  above; verify actual LLM/publisher call counts after recovery and test
+  memory/SQLite/Redis contracts.
 - When routing receipts cross Redis Lua/cjson, an empty array round-trips as an
   empty object. Normalize only declared array fields at the read boundary;
   preserve null (unresolved) versus [] (resolved without scopes). Exercise

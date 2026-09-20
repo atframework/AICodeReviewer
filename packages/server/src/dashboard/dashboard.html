@@ -858,6 +858,12 @@ function renderProviderTable(data){
   }).join("");
 }
 
+function runStatusCell(r){
+  var reason=r.status==="failed"?r.error:(r.status==="skipped"||r.status==="timeout")?r.skipReason:null;
+  var line=statusBadge(r.status);
+  if(reason)line+='<div class="cell-sub" title="'+escAttr(reason)+'">'+esc(String(reason).slice(0,120))+"</div>";
+  return "<td>"+line+"</td>";
+}
 function renderRunsTable(runs,target,compact){
   var el=target||document.getElementById("runs-table");
   if(!runs||runs.length===0){
@@ -867,13 +873,12 @@ function renderRunsTable(runs,target,compact){
   el.innerHTML=runs.map(function(r){
     if(compact){
       return "<tr><td>"+formatTime(r.startedAt)+"</td><td>"+esc(r.workspaceId)+"</td>"+
-        revisionCell(r)+"<td>"+esc(r.provider||"-")+"</td><td>"+statusBadge(r.status)+"</td><td>"+
+        revisionCell(r)+"<td>"+esc(r.provider||"-")+"</td>"+runStatusCell(r)+"<td>"+
         formatNumber(r.problemCount)+"</td><td>"+runTokensCell(r)+"</td><td>"+formatDuration(r.durationMs)+"</td></tr>";
     }
     return "<tr><td>"+esc(r.id.slice(0,8))+"</td><td>"+formatTime(r.startedAt)+"</td><td>"+
       esc(r.workspaceId)+"</td><td>"+esc(r.triggerName||"-")+"</td>"+
-      revisionCell(r)+"<td>"+esc(r.provider||"-")+"</td><td>"+esc(r.providerModel||"-")+"</td><td>"+
-      statusBadge(r.status)+"</td><td>"+formatNumber(r.problemCount)+"</td><td>"+
+      revisionCell(r)+"<td>"+esc(r.provider||"-")+"</td><td>"+esc(r.providerModel||"-")+"</td>"+runStatusCell(r)+"<td>"+formatNumber(r.problemCount)+"</td><td>"+
       runTokensCell(r)+"</td><td>"+formatDuration(r.durationMs)+"</td></tr>";
   }).join("");
 }

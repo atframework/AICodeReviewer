@@ -98,6 +98,17 @@ export interface AutoCommitSchedulerOptions {
    */
   readonly globalConcurrency?: number | (() => number);
   readonly perWorkspaceConcurrency?: number | (() => number);
+  /**
+   * Notified once when a batch reaches a terminal non-completed state
+   * (skipped after its automatic recovery, or dead for pre-upgrade rows):
+   * the operator surface for "why was this rejected" — the dashboard's
+   * Recent Runs shows the persisted failure, the Queue tab shows lastError.
+   * Failures in the hook itself are logged, never rethrown.
+   */
+  readonly onBatchTerminal?: (
+    context: BatchExecutionContext,
+    error: string,
+  ) => Promise<void> | void;
 }
 
 interface SchedulerTuning {
@@ -116,6 +127,7 @@ interface SchedulerTuning {
   readonly dispatchClaimLimit: number;
   readonly globalConcurrency: number | (() => number);
   readonly perWorkspaceConcurrency: number | (() => number);
+  readonly onBatchTerminal?: AutoCommitSchedulerOptions["onBatchTerminal"];
 }
 
 const DEFAULTS: SchedulerTuning = {
@@ -191,6 +203,7 @@ export class AutoCommitScheduler {
         options.globalConcurrency ?? DEFAULTS.globalConcurrency,
       perWorkspaceConcurrency:
         options.perWorkspaceConcurrency ?? DEFAULTS.perWorkspaceConcurrency,
+      onBatchTerminal: options.onBatchTerminal,
     };
   }
 
@@ -1284,6 +1297,27 @@ export class AutoCommitScheduler {
         dead,
         this.now(),
       );
+      // A would-be-terminal failure may have consumed the single automatic
+      // recovery instead of skipping. Surface only real terminal skips: the
+      // persisted run row is the dashboard's rejection reason.
+      if (dead && !interrupted) {
+        const settled = await this.store.readBatch(batch.batchId);
+        if (settled?.status === "skipped") {
+          try {
+            await this.options.onBatchTerminal?.(
+              { batch, members, receipt: receipt.receipt, leaseToken },
+              message,
+            );
+          } catch (hookError) {
+            console.warn(JSON.stringify({
+              level: "warn",
+              msg: "failed to record terminal auto-commit batch outcome",
+              batchId: batch.batchId,
+              error: hookError instanceof Error ? hookError.message : String(hookError),
+            }));
+          }
+        }
+      }
     } finally {
       this.execAbort.signal.removeEventListener("abort", onSchedulerAbort);
       clearInterval(renew);

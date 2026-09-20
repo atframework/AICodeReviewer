@@ -10,13 +10,44 @@ pnpm-debug.log*
 /.cmd-*.log
 /.tmp-*.log
 
+# AI agent,RAG and other tools
+# codegraph index directories (mcp integration, per-platform)
+.codegraph*
+.omp
+.codex
+.kilo
+.kilocode
+.zcode
+.vscode
+.claude
+
+# AI agent project-level MCP configs (written by project/integration/mcp/setup.js
+# with machine-specific absolute paths; not meant to be committed)
+.mcp.json
+/mcp.json
+opencode.json
+opencode.jsonc
+/kilo.json
+/kilo.jsonc
+/mimocode.json
+/mimocode.jsonc
+.cursor
+.zed
+.roo
+.gemini
+.kimi-code
+.qwen
+.mimocode
+.workbuddy
+.cline
+.pi
+/.agents/mcp.json
+
 # Temporary repository artifacts must live under build/
 /build/
 /aicr-deploy-*.tar.gz
 /.venv
 
-/.claude/settings.local*
-/.kilo/
 /.vscode/settings.json
 /development/secret
 /workspaces

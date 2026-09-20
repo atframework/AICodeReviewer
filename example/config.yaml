@@ -870,6 +870,9 @@ agent:
 review:
   languages_auto_detect: true
   # Path globs: * stays within one directory; ** spans zero or more directories.
+  # Only files surviving these filters are analyzed — and only analyzed files
+  # count toward max_files/max_patch_bytes: a 50MB resource excluded here never
+  # inflates the patch budget of a 10KB code change.
   include: ["**/*"]
   exclude:
     - "**/node_modules/**"
@@ -879,8 +882,8 @@ review:
     - "**/vendor/**"
     - "**/*.min.js"
     - "**/*.lock"
-  max_files: 50
-  max_patch_bytes: 200000
+  max_files: 2000 # cap on filter-passing analyzed files; excluded files never count
+  max_patch_bytes: 20971520 # 20 MiB budget over the analyzed diff only; oversized analyzed patches are rejected before model calls
   skip_lgtm: true
   output_language: en # en | zh-CN | ja | …
   # log_thinking: false             # set false to suppress verbose orchestrator thinking/execution logs (default: true)
@@ -896,6 +899,9 @@ review:
   # schedule replaces wholesale at the nearest layer that sets it.
   # auto_commit:
   #   delay_seconds: 120        # 0 disables the first-receive wait (max: 31536000)
+  #   queued_timeout_hours: 48  # pending queue entries older than this are terminally skipped
+  #                             # as queued_timeout (Events decision "timeout"); 0 disables the
+  #                             # sweep. Max 8760 (365 days).
   #   schedule:                 # weekly execution window; omitted = always allowed.
   #                             # Gates auto-commit batch starts and async issue
   #                             # triage; async PR/MR events (including comment

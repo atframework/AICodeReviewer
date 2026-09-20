@@ -20,6 +20,7 @@ import {
   insertOutputEventsPg,
   insertReviewRunOncePg,
   insertReviewRunPg,
+  deleteReviewRunPg,
   recomputeDailyRollupPg,
   softDeleteMissingProjectsPg,
   updateRunStatusPg,
@@ -104,6 +105,19 @@ export async function insertReviewRun(store: StoreDb, run: ReviewRunInsert): Pro
     return insertReviewRunPg(store, run);
   }
   insertReviewRunSqlite(store, run);
+}
+
+/**
+ * Removes one run row (usage/metrics/output children cascade) so a re-armed
+ * execution — e.g. a manually retried auto-commit batch — can record its own
+ * outcome under the same run id. Returns true when a row was removed.
+ */
+export async function deleteReviewRun(store: StoreDb, runId: string): Promise<boolean> {
+  if (store.kind === "postgres") {
+    return deleteReviewRunPg(store, runId);
+  }
+  const result = store.db.delete(reviewRuns).where(eq(reviewRuns.id, runId)).run();
+  return Number(result.changes) > 0;
 }
 
 /**
@@ -640,6 +654,10 @@ export interface RecentRunStats {
   durationMs: number | null;
   startedAt: Date | null;
   targetKind: string | null;
+  /** Failure text for failed runs — the panel-visible rejection reason. */
+  error: string | null;
+  /** Skip reason for skipped runs (lgtm, no_changed_files, …). */
+  skipReason: string | null;
   /** Branch/ref of the analyzed code when the event carried one (git-family flows). */
   branch: string | null;
   /** Analyzed head revision: git sha, SVN revision number, or P4 changelist. */
@@ -672,6 +690,8 @@ export async function getRecentRuns(
       durationMs: reviewRuns.durationMs,
       startedAt: reviewRuns.startedAt,
       targetKind: reviewRuns.targetKind,
+      error: reviewRuns.error,
+      skipReason: reviewRuns.skipReason,
       branch: reviewRuns.branch,
       headSha: reviewRuns.headSha,
       vcsKind: reviewRuns.vcsKind,

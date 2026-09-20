@@ -7,6 +7,7 @@ import { createStoreDb, closeStoreDb, type SqliteStoreDb } from "../src/database
 import {
   insertWebhookEvent,
   getRecentWebhookEvents,
+  markWebhookEventsTimedOut,
   pruneWebhookEvents,
   WEBHOOK_EVENTS_RETENTION_LIMIT,
 } from "../src/webhook-events.js";
@@ -76,6 +77,40 @@ describe("webhook events", () => {
     store.sqlite.prepare("UPDATE webhook_events SET detail = ? WHERE id = ?").run("not-json", before.id);
     const after = (await getRecentWebhookEvents(store, 1))[0]!;
     expect(after.detail).toBeNull();
+  });
+
+  it("flips queued events to timeout by receipt id and by routing intake id", async () => {
+    (await insertWebhookEvent(store, {
+      decision: "queued",
+      detail: { receiptId: "receipt-formal", headSha: "abc123" },
+    }));
+    (await insertWebhookEvent(store, {
+      decision: "queued",
+      reason: "routing_pending",
+      detail: { routingId: "routing-intake-1", headSha: "777" },
+    }));
+    (await insertWebhookEvent(store, {
+      decision: "duplicate",
+      detail: { routingId: "routing-intake-1" },
+    }));
+    (await insertWebhookEvent(store, {
+      decision: "queued",
+      detail: { routingId: "routing-still-live" },
+    }));
+    (await insertWebhookEvent(store, { decision: "executed" }));
+
+    const flipped = await markWebhookEventsTimedOut(store, ["receipt-formal"], ["routing-intake-1"]);
+    expect(flipped).toBe(3);
+    const events = await getRecentWebhookEvents(store, 10);
+    const byId = (key: string, value: string) =>
+      events.find((event) => (event.detail as Record<string, unknown> | null)?.[key] === value);
+    for (const flippedRow of [byId("receiptId", "receipt-formal"), byId("routingId", "routing-intake-1")]) {
+      expect(flippedRow?.decision).toBe("timeout");
+      expect(flippedRow?.reason).toBe("queued_timeout");
+    }
+    expect(byId("routingId", "routing-still-live")?.decision).toBe("queued");
+    expect(events.find((event) => event.decision === "executed")?.decision).toBe("executed");
+    expect(await markWebhookEventsTimedOut(store, [], [])).toBe(0);
   });
 
   it("prunes rows beyond the retention limit on insert", async () => {

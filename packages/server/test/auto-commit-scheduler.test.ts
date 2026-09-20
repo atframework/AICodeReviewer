@@ -1107,6 +1107,52 @@ describe("AutoCommitScheduler", () => {
     expect(executed).toHaveLength(2);
   });
 
+  it("notifies onBatchTerminal once when the recovery is spent and the batch skips", async () => {
+    const store = createMemoryAutoCommitStore();
+    const policy = makePolicy({ delay_seconds: 0 });
+    const adapter = new ScriptedAdapter([
+      { sha: "A1", parents: ["A0"], ...alice },
+    ]);
+    const executed: BatchExecutionContext[] = [];
+    const terminal: { runId: string; error: string }[] = [];
+    let now = T0;
+    const scheduler = makeScheduler({
+      store,
+      adapter,
+      policy,
+      executed,
+      now: () => now,
+      // Every execution fails: retries exhaust the attempt budget, the single
+      // automatic recovery re-arms once, and its exhausted budget terminally
+      // skips the batch — only that final skip may notify.
+      failExecutions: 99,
+      tuning: {
+        onBatchTerminal: async (context, error) => {
+          terminal.push({ runId: context.batch.runId, error });
+        },
+      },
+    });
+
+    await accept(store, policy, "d1", "A0", "A1", now);
+    await scheduler.tick();
+    let batch = (await store.readBatchesByStatus(["retry_wait", "skipped", "completed", "dead"], 10))[0]!;
+    for (let round = 0; round < 6 && batch.status !== "skipped"; round += 1) {
+      // Retry/recovery re-arms schedule at or after the current tick; advance
+      // past the recorded bound so the next tick dispatches again.
+      now = Math.max(now + 1, (batch.retryNotBefore ?? now) + 1);
+      await scheduler.tick();
+      batch = (await store.readBatch(batch.batchId))!;
+      // Retries and the automatic recovery are not terminal decisions; only
+      // the round that flips to skipped may have notified.
+      if (batch.status !== "skipped") expect(terminal).toEqual([]);
+    }
+    expect(batch.status).toBe("skipped");
+    expect(batch.recoveryAttempt).toBe(1);
+    expect(terminal).toHaveLength(1);
+    expect(terminal[0]!.runId).toBe(batch.runId);
+    expect(terminal[0]!.error).toContain("scripted execution failure");
+  });
+
   it("fails receipt coverage explicitly after bounded metadata retries", async () => {
     const store = createMemoryAutoCommitStore();
     const policy = makePolicy({ delay_seconds: 0 });

@@ -17,6 +17,7 @@ import {
   scrubPromptMessages,
   scrubText,
   vcsKindForProvider,
+  REVIEW_DEFAULT_MAX_PATCH_BYTES,
   type ContextRepositoryConfig,
   type PreparedReviewPrompt,
   type ReviewEvent,
@@ -1458,6 +1459,36 @@ function computeRunDirs(runtimeDirs: WorkspaceLayout | undefined, sourceRoot: st
     tmpDir: join(root, "tmp"),
     contextReposDir: join(root, "context-repos"),
   };
+}
+
+/**
+ * True when the run dir's recorded owner is a live same-host process. A
+ * different recorded host (e.g. the previous container before a restart) can
+ * never own this process's run: the directory is a leftover. An unreadable
+ * owner file only counts as live while the directory is fresh enough to be
+ * mid-creation by a concurrent orchestrator.
+ */
+async function isRunDirOwnerAlive(runRoot: string): Promise<boolean> {
+  let mtimeMs: number;
+  try {
+    mtimeMs = (await stat(runRoot)).mtimeMs;
+  } catch {
+    return false;
+  }
+  try {
+    const owner = JSON.parse(await readFile(join(runRoot, RUN_OWNER_FILE), "utf8")) as { host?: unknown; pid?: unknown };
+    if (owner.host !== hostname() || typeof owner.pid !== "number" || !Number.isInteger(owner.pid) || owner.pid <= 0) {
+      return false;
+    }
+    try {
+      process.kill(owner.pid, 0);
+      return true;
+    } catch (error) {
+      return (error as NodeJS.ErrnoException).code !== "ESRCH";
+    }
+  } catch {
+    return Date.now() - mtimeMs < 60_000;
+  }
 }
 
 async function reapStaleRunDirs(runsDir: string): Promise<void> {
@@ -3044,7 +3075,21 @@ async function executeReviewOrchestration(
       }
     }
     await mkdir(dirname(runDirs.root), { recursive: true });
-    await mkdir(runDirs.root); // EEXIST prevents cross-process reuse of a live run.
+    try {
+      await mkdir(runDirs.root); // EEXIST prevents cross-process reuse of a live run.
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      // A replayed run (auto-commit recovery reuses the run id) legitimately
+      // re-enters a leftover directory from a killed attempt; the stale-run
+      // reaper cannot clear it across a container restart because the
+      // recorded host differs. Reuse the directory only when its recorded
+      // owner is provably gone; a live owner keeps failing closed.
+      if (await isRunDirOwnerAlive(runDirs.root)) {
+        throw new Error(`run directory is owned by a live process: ${runDirs.root}`, { cause: error });
+      }
+      await rm(runDirs.root, { recursive: true, force: true });
+      await mkdir(runDirs.root);
+    }
     ownsRunRoot = true;
     await writeFile(join(runDirs.root, RUN_OWNER_FILE), JSON.stringify({ host: hostname(), pid: process.pid }), { flag: "wx" });
     runSandbox = await options.sandboxFactory?.();
@@ -3225,7 +3270,12 @@ async function executeReviewInRunDirs(
   changedPaths = [...commitPolicy.files];
   if (changedPaths.length === 0 && !options.dryRun) return noChangesResult();
   const patchText = formatParsedDiffForPrompt(diff);
-  if (policy?.max_patch_bytes !== undefined && Buffer.byteLength(patchText, "utf8") > policy.max_patch_bytes) {
+  // The budget bounds the ANALYZED patch only: changedPaths is the
+  // post-filter set and the diff was requested with exactly that pathspec,
+  // so files dropped by review.include/exclude never count. A dry run with
+  // an empty analyzed set previews the unfiltered diff but analyzes nothing
+  // — it must not be rejected on preview-only content.
+  if (changedPaths.length > 0 && policy?.max_patch_bytes !== undefined && Buffer.byteLength(patchText, "utf8") > policy.max_patch_bytes) {
     throw new Error("review.max_patch_bytes exceeded; reduce the review scope or raise its configured byte limit.");
   }
   const policyContext: string[] = [];
@@ -3246,7 +3296,7 @@ async function executeReviewInRunDirs(
       if (diff?.files.some(file => file.status === "deleted" && file.oldPath === path)) continue;
       const full = await vcs.fetchExtraContext({ path, reason: "Full-file review requested by review.incremental=false", ...(range.headRevision ? { revision: range.headRevision } : {}) }, workspaceRef);
       bytes += Buffer.byteLength(full.content, "utf8");
-      if (bytes > (policy.max_patch_bytes ?? 200_000)) throw new Error("Full-file review exceeds review.max_patch_bytes.");
+      if (bytes > (policy.max_patch_bytes ?? REVIEW_DEFAULT_MAX_PATCH_BYTES)) throw new Error("Full-file review exceeds review.max_patch_bytes.");
       policyContext.push(`Current file ${JSON.stringify(path)}:\n${full.content}`);
     }
   }

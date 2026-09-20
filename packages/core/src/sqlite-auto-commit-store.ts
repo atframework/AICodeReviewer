@@ -1756,7 +1756,7 @@ export async function createSqliteAutoCommitStore(
   );
 
   const txRequeueForRecovery = db.transaction(
-    (batchId: string, now: number): BatchRow | undefined => {
+    (batchId: string, now: number, configSnapshotId: string | null): BatchRow | undefined => {
       const batch = stmtBatchById.get(batchId) as BatchRow | undefined;
       if (!batch) return undefined;
       if (batch.status !== "dead" && batch.status !== "skipped") return undefined;
@@ -1778,11 +1778,13 @@ export async function createSqliteAutoCommitStore(
             SET status = 'retry_wait', last_error = ?, retry_not_before = ?,
                 attempt = 1, recovery_attempt = 1,
                 lease_token = NULL, lease_owner = NULL, lease_expiry = NULL,
-                execution_checkpoint = NULL
+                execution_checkpoint = NULL,
+                config_snapshot_id = ?
           WHERE batch_id = ?`,
       ).run(
         `manual retry re-armed${batch.last_error ? `; previous: ${batch.last_error}` : ""}`,
         now,
+        configSnapshotId,
         batchId,
       );
       requeueOutbox(batchId, now);
@@ -2357,8 +2359,9 @@ export async function createSqliteAutoCommitStore(
     async requeueBatchForRecovery(
       batchId: string,
       now: number,
+      configSnapshotId: string | null = null,
     ): Promise<CommitBatchRecord | undefined> {
-      const row = txRequeueForRecovery.immediate(batchId, now) as
+      const row = txRequeueForRecovery.immediate(batchId, now, configSnapshotId) as
         | BatchRow
         | undefined;
       return row ? rowToBatch(row) : undefined;
@@ -2385,6 +2388,25 @@ export async function createSqliteAutoCommitStore(
       workspaceId?: string,
     ): Promise<readonly string[]> {
       return txTimeoutStaleQueue.immediate(cutoff, now, workspaceId) as readonly string[];
+    },
+
+    async listRoutingIntakeIdsForReceipts(
+      receiptIds: readonly string[],
+    ): Promise<readonly string[]> {
+      if (receiptIds.length === 0) return [];
+      const ids = new Set<string>();
+      for (let offset = 0; offset < receiptIds.length; offset += 100) {
+        const chunk = receiptIds.slice(offset, offset + 100);
+        const placeholders = chunk.map(() => "?").join(",");
+        const rows = db.prepare(
+          `SELECT routing_id, converted_receipt_ids FROM auto_commit_routing_receipts
+            WHERE EXISTS (
+              SELECT 1 FROM json_each(auto_commit_routing_receipts.converted_receipt_ids) je
+               WHERE je.value IN (${placeholders}))`,
+        ).all(...chunk) as { routing_id: string }[];
+        for (const row of rows) ids.add(row.routing_id);
+      }
+      return [...ids];
     },
 
     async readBatch(batchId: string): Promise<CommitBatchRecord | undefined> {

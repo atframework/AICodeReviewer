@@ -170,6 +170,7 @@ The following schedule allows weekday evenings and mornings, plus all weekend:
 review:
   auto_commit:
     delay_seconds: 120
+    queued_timeout_hours: 48 # terminal-skip queue entries older than this; 0 disables
     schedule:
       timezone: Asia/Shanghai
       rules:

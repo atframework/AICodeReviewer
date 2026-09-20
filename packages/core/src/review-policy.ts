@@ -6,6 +6,14 @@
 import { globMatchesPath } from "./prompt-manager.js";
 import type { ReviewConfig } from "./config.js";
 
+/**
+ * Built-in review-scope defaults. The effective-config schema fills the same
+ * values; keep them exported so enforcement fallbacks (full-file budget) and
+ * the schema default cannot drift apart.
+ */
+export const REVIEW_DEFAULT_MAX_FILES = 2_000;
+export const REVIEW_DEFAULT_MAX_PATCH_BYTES = 20 * 1_024 * 1_024;
+
 /** Per-run serialized budget; concurrent MCP requests cannot overspend it. */
 export function createReviewContextFetcher(
   policy: ReviewConfig["fetch_extra"],

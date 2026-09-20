@@ -370,8 +370,8 @@ workspace 的 `prompt.system_prompt` 引用其中一个名称替换内置基底 
 | `review.languages_auto_detect` | boolean | `true` | 自动检测评审语言 |
 | `review.include` | string[] | `["**/*"]` | 路径 glob：`*` 只匹配当前目录，`**` 匹配零个或多个目录 |
 | `review.exclude` | string[] | `["**/vendor/**", "**/*.min.js", "**/*.lock"]` | 排除的 glob 模式（在 include 之后应用） |
-| `review.max_files` | int > 0 | `50` | 单次评审最大文件数 |
-| `review.max_patch_bytes` | int > 0 | `200000` | UTF-8 patch 预算；超额时在调用模型前失败 |
+| `review.max_files` | int > 0 | `2000` | 单次评审最大分析文件数；只统计通过 `review.include`/`exclude` 过滤的文件——超出上限的过滤后路径被截断并记录可见日志，被排除的文件从不计数 |
+| `review.max_patch_bytes` | int > 0 | `20971520` | UTF-8 patch 预算（20 MiB），只计分析用 diff：被评审过滤规则排除的文件从不计入；分析集超额在调用模型前拒绝，拒绝原因以失败 run 显示在 Recent Runs |
 | `review.incremental` | boolean | `true` | false 追加 head 完整文件，受 max_patch_bytes 限制 |
 | `review.skip_lgtm` | boolean | `true` | 跳过看起来干净的评审 |
 | `review.output_language` | string | `zh-CN` | summary 输出语言 |
@@ -391,6 +391,7 @@ workspace 的 `prompt.system_prompt` 引用其中一个名称替换内置基底 
 | `review.reflection.memory.max_entries` | int > 0 | — | memory 最大条目数 |
 | `review.reflection.memory.retention_days` | int > 0 | `90` | memory TTL（天） |
 | `review.auto_commit.delay_seconds` | int 0–31536000 | `120` | 自动提交首次接收后的固定延迟；`0` 表示不等待 |
+| `review.auto_commit.queued_timeout_hours` | int 0–8760 | `48` | 待处理队列条目超过该时限后终结为 `queued_timeout`（Events 决策 `timeout`）；`0` 关闭清扫 |
 | `review.auto_commit.schedule.timezone` | string | `UTC` | 执行时段使用的 IANA 时区 |
 | `review.auto_commit.schedule.rules[]` | object[] | — | 周计划规则组（`days` 星期集合 + `windows` `HH:mm` 时间段，组间取并集）；`rules: []` 解除全部周限制 |
 | `review.auto_commit.exclude_sources[]` | object[] | — | 机器人/CI 来源排除规则（`id`、`vcs`、`match` 字段匹配器，`glob`/`regex` 二选一）；`[]` 清除继承规则 |

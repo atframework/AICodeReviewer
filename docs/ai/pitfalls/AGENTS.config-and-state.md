@@ -54,6 +54,17 @@ Read the section matching a config, model-selection, persistence, or usage chang
 Sources: `packages/core/src/config.ts`, `utils.ts`, their tests, and the actual
 consumers in `packages/server/src/bootstrap.ts`.
 
+- `review.max_files` and `review.max_patch_bytes` count only the post-filter
+  analyzed set: the orchestrator applies include/exclude/max_files to
+  changedPaths first and requests the diff with exactly that pathspec, so an
+  excluded 50MB resource never inflates the budget of a 10KB code change.
+  Preserve this contract everywhere: VCS adapters must honor the requested
+  pathspec (git `-- <paths>`, p4 `filterDiffToRange`/`diffBatch`, svn target
+  filters), `applyReviewCommitPolicy` re-diffs per commit against
+  `range.files`-intersected paths, the `incremental=false` full-file budget
+  iterates the same filtered list, and a dry run whose analyzed set is empty
+  must not be rejected on preview-only diff content
+  (`review-orchestrator.test.ts` post-filter budget and dry-run cases).
 - Trace schema → workspace resolution → consumer before documenting behavior.
   Schema-only fields are not implemented features. Add config tests and sync
   architecture §3.10, examples, and both public reference locales when affected.

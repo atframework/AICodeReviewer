@@ -895,7 +895,7 @@ describe("unset restores lower-layer value (F08)", () => {
     expect(restored.document.review).toBeUndefined();
     const config = appConfigSchema.parse(restored.document);
     expect(config.review.exclude).toEqual(["**/vendor/**", "**/*.min.js", "**/*.lock"]);
-    expect(config.review.max_files).toBe(50);
+    expect(config.review.max_files).toBe(2000);
   });
 
   it("keeps file-declared leaves intact while the database override exists (F03)", () => {

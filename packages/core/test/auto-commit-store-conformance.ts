@@ -96,13 +96,15 @@ export function runAutoCommitStoreConformance(factory: StoreFactory): void {
     store: AutoCommitStore,
     batchId: string,
     workspaceId = "ws1",
-  ): Promise<void> {
+    configSnapshotId?: string,
+  ): Promise<{ batchId: string; streamId: string; configSnapshotId: string | null }> {
     const accepted = await store.acceptReceipt(
       receiptInput({
         deliveryKey: batchId,
         workspaceId,
         scopeRef: `refs/heads/${batchId}`,
         delaySeconds: 0,
+        ...(configSnapshotId !== undefined ? { configSnapshotId } : {}),
       }),
     );
     const streamId = computeStreamId(accepted.receipt);
@@ -148,10 +150,17 @@ export function runAutoCommitStoreConformance(factory: StoreFactory): void {
         sourceKey: metadata[0]!.sourceSnapshot.sourceKey!,
         exclusionPolicyVersion: "rules-v1",
         configPolicyVersion: "pol-1",
+        ...(configSnapshotId !== undefined ? { configSnapshotId } : {}),
         maxAttempts: 2,
         now: T0,
       }),
     ).toEqual({ kind: "sealed" });
+    const sealed = await store.readBatch(batchId);
+    return {
+      batchId,
+      streamId,
+      configSnapshotId: sealed?.configSnapshotId ?? null,
+    };
   }
   describe(`AutoCommitStore conformance [${factory.backendKind}]`, () => {
     it("enforces global and workspace execution limits atomically and releases capacity", async () => {
@@ -1192,7 +1201,8 @@ export function runAutoCommitStoreConformance(factory: StoreFactory): void {
 
     it("manually re-arms terminal dead/skipped batches with a fresh budget", async () => {
       const store = await factory.makeStore();
-      await prepareBatch(store, "manual-a");
+      const pinned = await prepareBatch(store, "manual-a", "ws1", "cfg-admission-old");
+      expect(pinned?.configSnapshotId).toBe("cfg-admission-old");
       await dispatchOnce(store, T0);
       const token = await store.startBatchExecution("manual-a", "w", 60_000, T0 + 1_000);
       await store.failBatch("manual-a", token ?? "", "boom", null, true, T0 + 2_000);
@@ -1207,11 +1217,15 @@ export function runAutoCommitStoreConformance(factory: StoreFactory): void {
       expect(await store.requeueBatchForRecovery("manual-b", T0 + 6_000)).toBeUndefined();
       // Unknown batches refuse too.
       expect(await store.requeueBatchForRecovery("missing", T0 + 6_000)).toBeUndefined();
-      const requeued = await store.requeueBatchForRecovery("manual-a", T0 + 6_000);
+      const requeued = await store.requeueBatchForRecovery("manual-a", T0 + 6_000, "cfg-admission-current");
       expect(requeued?.status).toBe("retry_wait");
       expect(requeued?.attempt).toBe(1);
       expect(requeued?.recoveryAttempt).toBe(1);
       expect(requeued?.executionCheckpoint).toBeNull();
+      // The retry executes against the CURRENT admission generation: the
+      // caller re-pins the batch so operators can unstick it by changing
+      // settings (e.g. raising review.max_patch_bytes).
+      expect(requeued?.configSnapshotId).toBe("cfg-admission-current");
       // The re-armed batch re-claims the stream's active slot, so it cannot
       // execute concurrently with a successor batch, and its members are
       // batched again — dispatch proceeds.
@@ -1278,6 +1292,43 @@ export function runAutoCommitStoreConformance(factory: StoreFactory): void {
       expect(
         await store.timeoutStaleQueue(T0 + 100, T0 + 100, "ws-other"),
       ).toEqual([other.receipt.receiptId]);
+    });
+
+    it("maps timed-out formal receipts back to their routing intake", async () => {
+      const store = await factory.makeStore();
+      // Routing-stage intake converts into a formal receipt; the intake event
+      // carries detail.routingId, so the timeout mirror needs this linkage.
+      const routing = await store.acceptRoutingReceipt({
+        routingKey: "p4:routing-timeout",
+        provider: "p4",
+        triggerName: "p4-main",
+        envelope: { change: "777" },
+        now: T0,
+      });
+      const formal = await store.acceptReceipt(
+        receiptInput({ deliveryKey: "d:routing-formal", delaySeconds: 0 }),
+      );
+      await store.recordRoutingReceiptConversion(
+        routing.receipt.routingId,
+        { addedReceiptIds: [formal.receipt.receiptId], complete: true },
+        T0,
+      );
+      const streamId = computeStreamId(formal.receipt);
+      await store.applyMetadataPage({
+        streamId,
+        receiptId: formal.receipt.receiptId,
+        members: membersOf(["A1"], 1),
+        now: T0,
+      });
+      const timedOut = await store.timeoutStaleQueue(T0 + 100, T0 + 100);
+      expect(timedOut).toContain(formal.receipt.receiptId);
+      expect(
+        await store.listRoutingIntakeIdsForReceipts([formal.receipt.receiptId]),
+      ).toEqual([routing.receipt.routingId]);
+      expect(
+        await store.listRoutingIntakeIdsForReceipts(["receipt-unknown"]),
+      ).toEqual([]);
+      expect(await store.listRoutingIntakeIdsForReceipts([])).toEqual([]);
     });
 
     it("reports the earliest scheduling signal across heads, outbox, and leases", async () => {

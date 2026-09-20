@@ -42,6 +42,7 @@ replaces the inherited value as a whole.
 review:
   auto_commit:
     delay_seconds: 120
+    queued_timeout_hours: 48
     schedule:
       timezone: Asia/Shanghai
       rules:
@@ -78,6 +79,13 @@ Use exact, case-sensitive branch names such as `main` or `release/1.x`, without
 the `refs/heads/` prefix; glob patterns and regular expressions are not expanded.
 GitLab `Push Hook` events use this same filter and persistent queue. Branch
 creation/deletion notifications with an all-zero before/after SHA are ignored.
+
+`queued_timeout_hours` bounds how long a queued automatic commit may wait
+before it is terminally skipped: pending entries older than the bound are
+marked `queued_timeout` and the Events decision flips from `queued` to
+`timeout`, so a stuck queue never accumulates silently. The default is `48`;
+`0` disables the sweep and the maximum is `8760` (365 days). The nearest
+explicitly set layer wins, like the other fields above.
 
 ## Pull request schedules
 

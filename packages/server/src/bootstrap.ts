@@ -102,11 +102,11 @@ import { GiteaApiClient } from "./issue-triage.js";
 import type { IssueTriageRuntimeOptions, WorkspaceIssueTriagePolicy } from "./issue-triage.js";
 import { createProblemResolutionAnalyzer } from "./problem-resolution.js";
 import type { ServerAppOptions, ServerReviewOrchestrationOptions } from "./index.js";
-import { persistReviewRunToStore, resolveTriggerRetryConfig } from "./index.js";
+import { persistRejectedAutoCommitRun, persistReviewRunToStore, resolveTriggerRetryConfig } from "./index.js";
 import { type AutoCommitStore, type StreamKeyInput, resolveAutoCommitPolicy } from "@aicr/core";
 import { createAutoCommitStoreFromConfig } from "@aicr/core";
 import { resolvePullRequestSchedule, resolvePullRequestTargetBranches } from "@aicr/core";
-import { AutoCommitRuntime, createAutoCommitBatchExecutor } from "./auto-commit-runtime.js";
+import { AutoCommitRuntime, createAutoCommitBatchExecutor, reviewEventForBatch } from "./auto-commit-runtime.js";
 import {
   AutoCommitScheduler,
 } from "./auto-commit-scheduler.js";
@@ -3433,11 +3433,18 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
         );
       }
       if (store && timedOut.length > 0) {
-        const events = await markWebhookEventsTimedOut(store, timedOut);
+        // Routing-stage intake events carry detail.routingId; the sweep's
+        // formal receipt ids must be mapped back to their routing intakes
+        // before the mirror flip, or those events stay `queued` forever.
+        const routingIds = await autoCommitPipeline.store
+          .listRoutingIntakeIdsForReceipts(timedOut)
+          .catch(() => [] as readonly string[]);
+        const events = await markWebhookEventsTimedOut(store, timedOut, routingIds);
         console.warn(JSON.stringify({
           level: "warn",
           msg: "auto-commit queue timeout sweep marked stale entries",
           receipts: timedOut.length,
+          routingIntakes: routingIds.length,
           events,
         }));
       }
@@ -3825,6 +3832,18 @@ async function createAutoCommitPipeline(deps: {
     getAdapter,
     routingResolver,
     executeBatch,
+    // Terminal rejections (e.g. review.max_patch_bytes exceeded after the
+    // automatic recovery) persist a failed run row so Recent Runs shows the
+    // reason; the admin retry endpoint deletes the marker on re-arm.
+    onBatchTerminal: async (context, error) => {
+      await persistRejectedAutoCommitRun(
+        deps.reviewStore,
+        context.batch.runId,
+        reviewEventForBatch(context),
+        context.batch.attempt,
+        error,
+      );
+    },
     // H17: concurrency re-reads at the claim boundary from the current
     // generation; lowering the limit never cancels running batches.
     globalConcurrency: () => runtimeConfig.current().config.queue.workers?.concurrency ?? 1,

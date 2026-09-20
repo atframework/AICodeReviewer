@@ -182,6 +182,110 @@ describe("runReviewOrchestration", () => {
       expect(complete).not.toHaveBeenCalled();
     } finally { await rm(root, { recursive: true, force: true }); }
   });
+
+  it("counts only post-filter analyzed files toward max_patch_bytes", async () => {
+    await mkdir("build/tmp", { recursive: true });
+    const root = await mkdtemp(join(process.cwd(), "build/tmp/review-budget-filter-"));
+    // Pathspec-honoring adapter like the real git/p4/svn backends: the diff
+    // covers exactly the requested (already filtered) file set.
+    const bigLine = `+${"X".repeat(400_000)}`;
+    const diffRequests: readonly string[][] = [];
+    const vcs: DiffCapableVcsAdapter = {
+      kind: "git",
+      async listChanges(): Promise<ChangeRange> {
+        return { baseRevision: "base", headRevision: "head", files: ["src/app.ts", "assets/generated.map"] };
+      },
+      async fetchScoped(range, ws) {
+        return { workspaceId: ws.id, rootDir: root, fetchedFiles: [...range.files] };
+      },
+      async fetchExtraContext(req) {
+        return { path: req.path, content: "context" };
+      },
+      async diff(range) {
+        diffRequests.push([...(range.files ?? [])]);
+        const chunks: string[] = [];
+        for (const path of range.files ?? []) {
+          chunks.push(
+            `diff --git a/${path} b/${path}`,
+            `--- a/${path}`,
+            `+++ b/${path}`,
+            "@@ -1 +1,2 @@",
+            " old",
+            path.endsWith(".map") ? bigLine : "+commitBeforeReturn();",
+          );
+        }
+        return parseUnifiedDiff(chunks.join("\n"));
+      },
+    };
+    const complete = vi.fn(async () => ({ providerId: model.providerId, modelId: model.modelId, content: '{"skipReason":"lgtm"}', raw: null }));
+    try {
+      // The 400KB generated.map alone would blow the 20KB budget, but the
+      // exclude rule removes it from the analyzed set: only the .ts diff is
+      // requested and counted, so the review must proceed.
+      const result = await runReviewOrchestration({ reviewEvent: createReviewEventFixture(), provider: "gitea", eventName: "pull_request", payload: {} }, {
+        baseSystemPrompt: "Review", sourceRootResolver: () => root, vcs, model, llm: { complete },
+        reviewConfig: { max_patch_bytes: 20_000, exclude: ["assets/**"] },
+        reviewPolicyResolver: () => ({ include: ["**/*"], exclude: ["assets/**"] }),
+      });
+      expect(result.outputState.skipReason).toBe("lgtm");
+      expect(complete).toHaveBeenCalledOnce();
+      expect(diffRequests[diffRequests.length - 1]).toEqual(["src/app.ts"]);
+
+      // Without the exclude the big file joins the analyzed set and the same
+      // budget rejects the run before any model call.
+      diffRequests.length = 0;
+      complete.mockClear();
+      await expect(runReviewOrchestration({ reviewEvent: createReviewEventFixture(), provider: "gitea", eventName: "pull_request", payload: {} }, {
+        baseSystemPrompt: "Review", sourceRootResolver: () => root, vcs, model, llm: { complete },
+        reviewConfig: { max_patch_bytes: 20_000, exclude: ["assets/**"] },
+        reviewPolicyResolver: () => ({ include: ["**/*"], exclude: [] }),
+      })).rejects.toThrow("max_patch_bytes");
+      expect(complete).not.toHaveBeenCalled();
+      expect(diffRequests[diffRequests.length - 1]).toEqual(["src/app.ts", "assets/generated.map"]);
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  it("never rejects a dry run whose analyzed set is empty on preview-only diff content", async () => {
+    await mkdir("build/tmp", { recursive: true });
+    const root = await mkdtemp(join(process.cwd(), "build/tmp/review-budget-dry-"));
+    const bigLine = `+${"X".repeat(400_000)}`;
+    const vcs: DiffCapableVcsAdapter = {
+      kind: "git",
+      async listChanges(): Promise<ChangeRange> {
+        return { baseRevision: "base", headRevision: "head", files: ["assets/generated.map"] };
+      },
+      async fetchScoped(range, ws) {
+        return { workspaceId: ws.id, rootDir: root, fetchedFiles: [...range.files] };
+      },
+      async fetchExtraContext(req) {
+        return { path: req.path, content: "context" };
+      },
+      async diff(range) {
+        // A dry run previews the unfiltered range when the analyzed set is
+        // empty; nothing is analyzed or billed, so this content must not
+        // trip the budget.
+        void range;
+        return parseUnifiedDiff([
+          "diff --git a/assets/generated.map b/assets/generated.map",
+          "--- a/assets/generated.map",
+          "+++ b/assets/generated.map",
+          "@@ -1 +1,2 @@",
+          " old",
+          bigLine,
+        ].join("\n"));
+      },
+    };
+    const complete = vi.fn(async () => ({ providerId: model.providerId, modelId: model.modelId, content: '{"skipReason":"lgtm"}', raw: null }));
+    try {
+      const result = await runReviewOrchestration({ reviewEvent: createReviewEventFixture(), provider: "gitea", eventName: "pull_request", payload: {} }, {
+        baseSystemPrompt: "Review", sourceRootResolver: () => root, vcs, model, llm: { complete }, dryRun: true,
+        reviewConfig: { max_patch_bytes: 20_000 },
+        reviewPolicyResolver: () => ({ include: ["**/*"], exclude: ["assets/**"] }),
+      });
+      expect(result.status).toBe("skipped");
+      expect(complete).toHaveBeenCalledOnce();
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
   it("passes full-file policy, language hints and pinned version through the real prompt and result", async () => {
     await mkdir("build/tmp", { recursive: true });
     const root = await mkdtemp(join(process.cwd(), "build/tmp/review-policy-"));
@@ -631,6 +735,53 @@ describe("runReviewOrchestration", () => {
       expect(existsSync(staleDir)).toBe(false);
       // The fresh orphan (not yet stale) survives.
       expect(existsSync(freshDir)).toBe(true);
+    } finally {
+      await rm(baseDir, { recursive: true, force: true });
+    }
+  });
+
+  it("re-enters a leftover run dir whose owner is gone and refuses a live owner (replay)", async () => {
+    await mkdir("build/tmp", { recursive: true });
+    const baseDir = await mkdtemp(join(process.cwd(), "build/tmp/replay-"));
+    const sourceRoot = join(baseDir, "source");
+    const layout = {
+      kind: "isolated_v2" as const,
+      instanceRoot: baseDir,
+      sourceRoot,
+      agentDir: join(baseDir, "agent"),
+      tmpDir: join(baseDir, "tmp"),
+      contextReposDir: join(baseDir, "context-repos"),
+      templatesDir: join(baseDir, "templates"),
+    };
+    const { hostname } = await import("node:os");
+    try {
+      await writeWorkspaceFile(sourceRoot, "src/app.ts", "const ok = true;\n");
+      // A killed attempt's leftover: owned by a previous container (different
+      // host) and a dead pid — a replayed run must reuse the directory.
+      const leftoverDir = join(baseDir, "runs", "run-replay");
+      await writeWorkspaceFile(leftoverDir, "agent", "");
+      await writeWorkspaceFile(leftoverDir, ".aicr-run-owner.json", JSON.stringify({ host: `${hostname()}-previous-container`, pid: 123 }));
+      const result = await runReviewOrchestration(
+        { reviewEvent: createReviewEventFixture(), provider: "gitea", eventName: "pull_request", payload: {}, runId: "run-replay" },
+        {
+          baseSystemPrompt: "Review", sourceRootResolver: () => sourceRoot, runtimeDirsResolver: () => layout,
+          vcs: createVcs(sourceRoot), model,
+          llm: { complete: async () => ({ providerId: model.providerId, modelId: model.modelId, content: '{"skipReason":"lgtm"}', raw: {} }) },
+        },
+      );
+      expect(result.outputState.skipReason).toBe("lgtm");
+
+      // A live same-host owner (this process) keeps the EEXIST guard closed.
+      const liveDir = join(baseDir, "runs", "run-live-owner");
+      await writeWorkspaceFile(liveDir, ".aicr-run-owner.json", JSON.stringify({ host: hostname(), pid: process.pid }));
+      await expect(runReviewOrchestration(
+        { reviewEvent: createReviewEventFixture(), provider: "gitea", eventName: "pull_request", payload: {}, runId: "run-live-owner" },
+        {
+          baseSystemPrompt: "Review", sourceRootResolver: () => sourceRoot, runtimeDirsResolver: () => layout,
+          vcs: createVcs(sourceRoot), model,
+          llm: { complete: async () => ({ providerId: model.providerId, modelId: model.modelId, content: "{}", raw: {} }) },
+        },
+      )).rejects.toThrow(/owned by a live process/u);
     } finally {
       await rm(baseDir, { recursive: true, force: true });
     }

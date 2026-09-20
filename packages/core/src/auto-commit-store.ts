@@ -746,12 +746,16 @@ export interface AutoCommitStore {
   /**
    * Manual admin retry for a terminal batch (dead/skipped): re-arm with a
    * fresh full attempt budget (`recoveryAttempt` stays 1 so a repeated
-   * terminal failure skips again instead of looping). Returns the updated
+   * terminal failure skips again instead of looping) and re-pin the batch to
+   * `configSnapshotId` — the caller passes the CURRENT admission generation so
+   * operators re-arm precisely to pick up settings changed since the original
+   * admission (e.g. a raised `review.max_patch_bytes`). Returns the updated
    * record, or undefined when the batch is unknown or not terminal.
    */
   requeueBatchForRecovery(
     batchId: string,
     now: number,
+    configSnapshotId?: string | null,
   ): Promise<CommitBatchRecord | undefined>;
 
   /** Batches currently in one of `statuses`, newest first (admin listing). */
@@ -773,6 +777,18 @@ export interface AutoCommitStore {
     cutoff: number,
     now: number,
     workspaceId?: string,
+  ): Promise<readonly string[]>;
+
+  /**
+   * Routing-intake linkage for the queue-timeout mirror: returns the routing
+   * receipt ids whose conversion created any of `receiptIds`. The webhook
+   * events recorded at routing intake carry `detail.routingId` (no formal
+   * receipt id exists at that point), so flipping them to the terminal
+   * `timeout` decision needs this mapping when a converted formal receipt
+   * times out.
+   */
+  listRoutingIntakeIdsForReceipts(
+    receiptIds: readonly string[],
   ): Promise<readonly string[]>;
 
   readBatch(batchId: string): Promise<CommitBatchRecord | undefined>;

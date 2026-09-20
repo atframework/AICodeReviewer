@@ -401,8 +401,8 @@ Narrative: [Agent and sandbox](/en/configuration/agent/).
 | `review.languages_auto_detect` | boolean | `true` | Auto-detect review languages |
 | `review.include` | string[] | `["**/*"]` | Path globs: `*` stays within a directory; `**` spans zero or more directories |
 | `review.exclude` | string[] | `["**/vendor/**", "**/*.min.js", "**/*.lock"]` | Glob patterns to exclude (applied after include) |
-| `review.max_files` | int > 0 | `50` | Max files per review |
-| `review.max_patch_bytes` | int > 0 | `200000` | UTF-8 patch budget; oversized patches fail before model calls |
+| `review.max_files` | int > 0 | `2000` | Max analyzed files per review; counts only files that pass the `review.include`/`exclude` filters — filter-passing paths beyond the cap are dropped with a visible truncation log, excluded files never count |
+| `review.max_patch_bytes` | int > 0 | `20971520` | UTF-8 patch budget (20 MiB) over the analyzed diff only: files dropped by the review filters never count toward it; oversized analyzed patches are rejected before model calls and the rejection reason shows as a failed run in Recent Runs |
 | `review.incremental` | boolean | `true` | False adds complete head files, bounded by max_patch_bytes |
 | `review.skip_lgtm` | boolean | `true` | Skip reviews that look clean |
 | `review.output_language` | string | `zh-CN` | Output language for summaries |
@@ -422,6 +422,7 @@ Narrative: [Agent and sandbox](/en/configuration/agent/).
 | `review.reflection.memory.max_entries` | int > 0 | — | Max memory entries |
 | `review.reflection.memory.retention_days` | int > 0 | `90` | Memory TTL in days |
 | `review.auto_commit.delay_seconds` | int 0–31536000 | `120` | First-receive delay before an automatic commit becomes due; `0` disables the wait |
+| `review.auto_commit.queued_timeout_hours` | int 0–8760 | `48` | Pending queue entries older than this bound are terminally skipped as `queued_timeout` (Events decision `timeout`); `0` disables the sweep |
 | `review.auto_commit.schedule.timezone` | string | `UTC` | IANA timezone for the execution schedule |
 | `review.auto_commit.schedule.rules[]` | object[] | — | Weekly rule groups (`days` weekday set + `windows` `HH:mm` ranges, union across groups); `rules: []` lifts all weekly limits |
 | `review.auto_commit.exclude_sources[]` | object[] | — | Bot/CI source exclusion rules (`id`, `vcs`, `match` field matchers with exactly one of `glob`/`regex`); `[]` clears inherited rules |

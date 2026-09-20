@@ -1205,6 +1205,9 @@ const LUA_REQUEUE_RECOVERY =
   `
 local bid = ARGV[2]
 local now = tonumber(ARGV[3])
+-- ARGV[4]: the CURRENT admission config snapshot id to pin the retry to, or
+-- empty for a null pin (legacy fallback resolution).
+local snapshot = ARGV[4]
 local bdata = redis.call("HGET", kBatch(bid), "data")
 if not bdata then return "missing" end
 local rec = cjson.decode(bdata)
@@ -1229,6 +1232,13 @@ rec.executionCheckpoint = cjson.null
 rec.leaseToken = cjson.null
 rec.leaseOwner = cjson.null
 rec.leaseExpiry = cjson.null
+-- A manual retry executes against the CURRENT admission generation
+-- (operators re-arm to pick up settings changed since admission).
+if snapshot and snapshot ~= "" then
+  rec.configSnapshotId = snapshot
+else
+  rec.configSnapshotId = cjson.null
+end
 saveBatch(rec)
 saveOutbox({ batchId = bid, status = "pending", nextAttemptAt = now }, "", "0")
 setMembersStatusFrom(bid, rec.members, "dead", "batched", true)
@@ -2143,12 +2153,14 @@ return 1
     async requeueBatchForRecovery(
       batchId: string,
       now: number,
+      configSnapshotId: string | null = null,
     ): Promise<CommitBatchRecord | undefined> {
       const raw = (await evalScript(
         LUA_REQUEUE_RECOVERY,
         P,
         batchId,
         now,
+        configSnapshotId ?? "",
       )) as string;
       if (raw === "missing" || raw === "not_terminal" || raw === "stream_busy") {
         return undefined;
@@ -2265,6 +2277,31 @@ return 1
     async readBatch(batchId: string): Promise<CommitBatchRecord | undefined> {
       const batch = await hgetJson<CommitBatchRecord>(`${P}batch:${batchId}`);
       return batch === undefined ? undefined : toBatch(batch);
+    },
+
+    async listRoutingIntakeIdsForReceipts(
+      receiptIds: readonly string[],
+    ): Promise<readonly string[]> {
+      if (receiptIds.length === 0) return [];
+      const wanted = new Set(receiptIds);
+      // Rare background linkage (only after a timeout sweep reported entries):
+      // an honest SCAN over the routing keys beats maintaining a reverse
+      // receipt→routing index for a write path that never reads it.
+      const routingKeys: string[] = [];
+      let cursor = "0";
+      do {
+        const [next, keys] = (await redis.scan(cursor, "MATCH", `${P}routing:*`, "COUNT", 200)) as [string, string[]];
+        cursor = next;
+        routingKeys.push(...keys);
+      } while (cursor !== "0");
+      const records = await hgetJsonMany<RoutingReceiptRecord>(routingKeys);
+      const ids: string[] = [];
+      for (const record of records) {
+        if (record?.convertedReceiptIds.some((id) => wanted.has(id))) {
+          ids.push(record.routingId);
+        }
+      }
+      return ids;
     },
 
     async getReceipt(

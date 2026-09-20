@@ -499,7 +499,14 @@ async function admitRoutingReceipts(args: {
       eventName: args.eventName,
       decision: "queued",
       reason: "routing_pending",
-      detail: { routingId: result.receipt.routingId, duplicate: result.duplicate },
+      // The revision rides in detail directly: routing intake has no
+      // translated ReviewEvent yet, but the Events panel shows the
+      // triggering revision from detail.headSha like every other path.
+      detail: {
+        routingId: result.receipt.routingId,
+        duplicate: result.duplicate,
+        ...(args.envelope.revision ? { headSha: args.envelope.revision } : {}),
+      },
     });
   }
   return routingIds;
@@ -632,6 +639,13 @@ function registerP4Trigger(
               now: Date.now(),
             });
             receipts.push({ receiptId: accepted.receipt.receiptId, duplicate: accepted.duplicate });
+            recordWebhookEvent(store, {
+              provider: "p4",
+              eventName: "change-commit",
+              decision: accepted.duplicate ? "duplicate" : "queued",
+              detail: { receiptId: accepted.receipt.receiptId },
+              ...webhookEventFields(enriched),
+            }, enriched);
           }
         } catch {
           recordWebhookEvent(store, { provider: "p4", eventName: "change-commit", decision: "rejected", reason: "persistence_failed" });
@@ -834,6 +848,13 @@ function registerSvnTrigger(
               now: Date.now(),
             });
             receipts.push({ receiptId: accepted.receipt.receiptId, duplicate: accepted.duplicate });
+            recordWebhookEvent(store, {
+              provider: "svn",
+              eventName: "post-commit",
+              decision: accepted.duplicate ? "duplicate" : "queued",
+              detail: { receiptId: accepted.receipt.receiptId },
+              ...webhookEventFields(legacyEvent),
+            }, legacyEvent);
           }
         } catch {
           recordWebhookEvent(store, { provider: "svn", eventName: "post-commit", decision: "rejected", reason: "persistence_failed" });
@@ -1604,6 +1625,51 @@ async function persistFailedRunToStore(
   }
 }
 
+/**
+ * Terminal auto-commit rejection marker (e.g. `review.max_patch_bytes`
+ * exceeded after the automatic recovery): persists a failed run row so the
+ * dashboard's Recent Runs shows the rejection reason. Insert-once keeps a
+ * previously recorded outcome authoritative; a manual admin re-arm deletes
+ * the marker so the retried execution can record its own result.
+ */
+export async function persistRejectedAutoCommitRun(
+  store: StoreDb | undefined,
+  runId: string,
+  reviewEvent: ReviewEvent,
+  attempt: number,
+  error: string,
+): Promise<void> {
+  if (!store) return;
+  try {
+    await insertReviewRunOnce(store, {
+      id: runId,
+      eventId: runId,
+      workspaceId: reviewEvent.workspaceId,
+      triggerName: reviewEvent.triggerName ?? null,
+      repoRef: reviewEvent.repoRef ?? null,
+      provider: null,
+      providerModel: null,
+      status: "failed" as const,
+      attempt,
+      startedAt: new Date(),
+      finishedAt: new Date(),
+      error: error.slice(0, 500),
+      targetKind: reviewEvent.targetKind ?? null,
+      targetUrl: reviewEvent.url ?? null,
+      branch: reviewEvent.branch ?? null,
+      headSha: reviewEvent.headSha ?? null,
+      vcsKind: vcsKindForProvider(reviewEvent.provider) ?? null,
+    });
+  } catch (err: unknown) {
+    console.warn(JSON.stringify({
+      level: "warn",
+      msg: "failed to persist rejected auto-commit run",
+      runId,
+      error: toErrorMessage(err),
+    }));
+  }
+}
+
 function computeBackoff(
   baseMs: number,
   maxMs: number,
@@ -2336,6 +2402,7 @@ function mountRoutes(app: Hono, options: ServerAppOptions): void {
       ...options.observability,
       ...(options.autoCommitStore ? { autoCommitStore: options.autoCommitStore } : {}),
       ...(options.liveRuns ? { liveRuns: options.liveRuns } : {}),
+      ...(options.runtimeConfig ? { currentConfigSnapshotId: () => options.runtimeConfig!.current().snapshotId } : {}),
     });
     app.route("/api/admin", observabilityApi);
   }

@@ -71,23 +71,29 @@ export async function getRecentWebhookEventsPg(store: PgStoreDb, limit: number):
 export async function markWebhookEventsTimedOutPg(
   store: PgStoreDb,
   receiptIds: readonly string[],
+  routingIds: readonly string[] = [],
 ): Promise<number> {
-  if (receiptIds.length === 0) return 0;
+  if (receiptIds.length === 0 && routingIds.length === 0) return 0;
   let total = 0;
-  for (let offset = 0; offset < receiptIds.length; offset += 100) {
-    const chunk = receiptIds.slice(offset, offset + 100);
-    const updated = await store.db
-      .update(webhookEvents)
-      .set({ decision: "timeout", reason: "queued_timeout" })
-      .where(
-        sql`${webhookEvents.decision} IN ('queued', 'duplicate')
-            AND ${webhookEvents.detail} ->> 'receiptId' IN (${sql.join(
-          chunk.map((id) => sql`${id}`),
-          sql`, `,
-        )})`,
-      )
-      .returning({ id: webhookEvents.id });
-    total += updated.length;
+  for (const [ids, field] of [
+    [receiptIds, "receiptId"],
+    [routingIds, "routingId"],
+  ] as const) {
+    for (let offset = 0; offset < ids.length; offset += 100) {
+      const chunk = ids.slice(offset, offset + 100);
+      const updated = await store.db
+        .update(webhookEvents)
+        .set({ decision: "timeout", reason: "queued_timeout" })
+        .where(
+          sql`${webhookEvents.decision} IN ('queued', 'duplicate')
+              AND ${webhookEvents.detail} ->> ${field} IN (${sql.join(
+            chunk.map((id) => sql`${id}`),
+            sql`, `,
+          )})`,
+        )
+        .returning({ id: webhookEvents.id });
+      total += updated.length;
+    }
   }
   return total;
 }

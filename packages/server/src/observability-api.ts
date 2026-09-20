@@ -2,6 +2,7 @@ import { Hono } from "hono";
 
 import type { StoreDb } from "@aicr/store";
 import {
+  deleteReviewRun,
   getOverviewStats,
   getProjectStats,
   getProviderModelStats,
@@ -35,6 +36,12 @@ export interface ObservabilityApiOptions {
   /** Durable admin sessions (P2): sha256-hashed, TTL-bound, multi-process. */
   readonly sessionStore: AdminSessionStore;
   readonly timezone?: string;
+  /**
+   * Current admission config snapshot id, supplied when dynamic config is
+   * enabled: manual batch retries pin to it so re-armed executions pick up
+   * settings changed since the batch's original admission.
+   */
+  readonly currentConfigSnapshotId?: () => string | null;
   /** Auto-commit receipt store; enables the receipt query endpoint. */
   readonly autoCommitStore?: AutoCommitStore;
   /** In-memory registry of currently running analyses; enables the live-runs endpoint. */
@@ -309,7 +316,13 @@ export function createObservabilityApi(options: ObservabilityApiOptions): Hono {
           409,
         );
       }
-      const requeued = await autoCommitStore.requeueBatchForRecovery(batchId, Date.now());
+      const requeued = await autoCommitStore.requeueBatchForRecovery(
+        batchId,
+        Date.now(),
+        // Pin the retry to the CURRENT admission generation so the re-armed
+        // execution picks up settings changed since the original admission.
+        options.currentConfigSnapshotId?.() ?? null,
+      );
       if (!requeued) {
         return c.json(
           {
@@ -319,6 +332,13 @@ export function createObservabilityApi(options: ObservabilityApiOptions): Hono {
           409,
         );
       }
+      // Drop the terminal-failure marker run row (if any) so the retried
+      // execution can record its own outcome under the same run id; Recent
+      // Runs never shows a stale rejection next to the fresh retry.
+      let clearedRejectionMarker = false;
+      if (options.store) {
+        clearedRejectionMarker = await deleteReviewRun(options.store, requeued.runId).catch(() => false);
+      }
       console.warn(JSON.stringify({
         level: "warn",
         msg: "admin manual retry re-armed auto-commit batch",
@@ -327,9 +347,11 @@ export function createObservabilityApi(options: ObservabilityApiOptions): Hono {
         streamId: requeued.streamId,
         previousStatus: existing.status,
         previousError: existing.lastError,
+        clearedRejectionMarker,
       }));
       return c.json({
         ok: true,
+        clearedRejectionMarker,
         batch: {
           batchId: requeued.batchId,
           status: requeued.status,

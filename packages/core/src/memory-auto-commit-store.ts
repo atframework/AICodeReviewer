@@ -1365,6 +1365,7 @@ export function createMemoryAutoCommitStore(): AutoCommitStore {
     async requeueBatchForRecovery(
       batchId: string,
       now: number,
+      configSnapshotId: string | null = null,
     ): Promise<CommitBatchRecord | undefined> {
       const batch = batches.get(batchId);
       if (!batch) return undefined;
@@ -1390,6 +1391,10 @@ export function createMemoryAutoCommitStore(): AutoCommitStore {
         leaseToken: null,
         leaseOwner: null,
         leaseExpiry: null,
+        // A manual retry executes against the CURRENT admission generation:
+        // operators re-arm precisely to pick up settings changed since the
+        // original admission (e.g. a raised review.max_patch_bytes).
+        configSnapshotId,
       };
       outbox.set(batchId, {
         entry: { batchId, status: "pending", nextAttemptAt: now },
@@ -1489,6 +1494,19 @@ export function createMemoryAutoCommitStore(): AutoCommitStore {
         }
       }
       return timedOut;
+    },
+
+    async listRoutingIntakeIdsForReceipts(
+      receiptIds: readonly string[],
+    ): Promise<readonly string[]> {
+      const wanted = new Set(receiptIds);
+      const ids: string[] = [];
+      for (const record of routingReceipts.values()) {
+        if (record.convertedReceiptIds.some((id) => wanted.has(id))) {
+          ids.push(record.routingId);
+        }
+      }
+      return ids;
     },
 
     async readBatch(batchId: string): Promise<CommitBatchRecord | undefined> {

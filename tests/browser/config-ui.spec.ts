@@ -1010,7 +1010,7 @@ test.describe.serial("config management UI (P6 browser gate)", () => {
     await conflict.getByRole("button", { name: "Keep my changes and retry", exact: true }).click();
     await expect(page.locator("#config-status")).toContainText("Saved as revision");
     // The override is gone: the effective value falls back to the schema default.
-    expect((await apiView(request, token)).globals.review?.max_files).toBe(50);
+    expect((await apiView(request, token)).globals.review?.max_files).toBe(2000);
 
     // Nothing left to reset: the button warns instead of publishing.
     await page.locator("#config-main").getByRole("button", { name: "Reset database overrides", exact: true }).click();

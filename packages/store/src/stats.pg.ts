@@ -129,6 +129,12 @@ export async function insertReviewRunPg(store: PgStoreDb, run: ReviewRunInsert):
   });
 }
 
+/** Removes one run row (and its cascading children) so a re-armed retry can record a fresh outcome. */
+export async function deleteReviewRunPg(store: PgStoreDb, runId: string): Promise<boolean> {
+  const removed = await store.db.delete(reviewRuns).where(eq(reviewRuns.id, runId)).returning({ id: reviewRuns.id });
+  return removed.length > 0;
+}
+
 async function insertReviewRunOn(db: PgExecutor, run: ReviewRunInsert): Promise<void> {
   const projectId = await upsertProjectPg(db, {
     workspaceId: run.workspaceId,
@@ -523,6 +529,8 @@ export async function getRecentRunsPg(
       durationMs: reviewRuns.durationMs,
       startedAt: reviewRuns.startedAt,
       targetKind: reviewRuns.targetKind,
+      error: reviewRuns.error,
+      skipReason: reviewRuns.skipReason,
       branch: reviewRuns.branch,
       headSha: reviewRuns.headSha,
       vcsKind: reviewRuns.vcsKind,

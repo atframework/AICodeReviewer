@@ -1350,8 +1350,8 @@ describe("mergeConfigLayers", () => {
     expect(merged.review.include).toEqual(["**/*"]);
     // Full-field glob defaults (P4): single `*` spans separators.
     expect(merged.review.exclude).toEqual(["**/vendor/**", "**/*.min.js", "**/*.lock"]);
-    expect(merged.review.max_files).toBe(50);
-    expect(merged.review.max_patch_bytes).toBe(200000);
+    expect(merged.review.max_files).toBe(2000);
+    expect(merged.review.max_patch_bytes).toBe(20_971_520);
     expect(merged.review.output_language).toBe("zh-CN");
     expect(merged.review.commit_strategy).toBe("aggregate");
   });

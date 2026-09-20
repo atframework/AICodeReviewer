@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { createMemoryAutoCommitStore, createReviewEvent, createMemoryConfigStore } from "@aicr/core";
-import { closeStoreDb, createStoreDb } from "@aicr/store";
+import { closeStoreDb, createStoreDb, getRecentWebhookEvents } from "@aicr/store";
 import { describe, expect, it, vi } from "vitest";
 
 import { createAdminSession } from "../src/admin-auth.js";
@@ -362,6 +362,84 @@ describe("auto-commit webhook wiring", () => {
     expect(receipt?.receipt.vcs).toBe("svn");
     expect(receipt?.receipt.coverage).toEqual({ kind: "single", revision: "421" });
     expect(branchLookup).not.toHaveBeenCalled();
+  });
+
+  it("records the triggering revision on routing-queued p4 webhook events", async () => {
+    const autoCommitStore = createMemoryAutoCommitStore();
+    const runtime = new AutoCommitRuntime({ store: autoCommitStore, getPolicyLayers: () => ({}) });
+    const events = createStoreDb(":memory:");
+    try {
+      const app = createServerApp({
+        p4: [{
+          triggerName: "p4-routed",
+          workspaceId: "ws-routed",
+          depot: "//depot/main",
+          resolveWorkspace: () => ({ kind: "legacy_binding", definitionId: "ws-routed" }),
+        }],
+        autoCommit: runtime,
+        store: events,
+      });
+      const response = await app.request("/triggers/p4", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ change: "8089", user: "alice", depot_path: "//depot/main" }),
+      });
+      expect(response.status).toBe(202);
+      const recent = await getRecentWebhookEvents(events, 10);
+      const queued = recent.find((row) => row.decision === "queued");
+      // Routing intake has no translated ReviewEvent yet, but the Events panel
+      // shows the triggering revision from detail.headSha like every path.
+      expect(queued?.provider).toBe("p4");
+      expect(queued?.reason).toBe("routing_pending");
+      expect((queued?.detail as Record<string, unknown> | null)?.headSha).toBe("8089");
+    } finally {
+      await closeStoreDb(events);
+    }
+  });
+
+  it("records queued webhook events for legacy p4 accepts mixed with routing profiles", async () => {
+    const autoCommitStore = createMemoryAutoCommitStore();
+    const runtime = new AutoCommitRuntime({ store: autoCommitStore, getPolicyLayers: () => ({}) });
+    const events = createStoreDb(":memory:");
+    try {
+      const app = createServerApp({
+        p4: [
+          {
+            triggerName: "p4-routed",
+            workspaceId: "ws-routed",
+            depot: "//depot/main",
+            resolveWorkspace: () => ({ kind: "legacy_binding", definitionId: "ws-routed" }),
+          },
+          {
+            triggerName: "p4-legacy",
+            workspaceId: "ws-legacy",
+            depot: "//depot/main",
+            // Loopback refuse keeps describe enrichment off the network.
+            port: "127.0.0.1:1",
+            user: "swarm",
+            ticket: "ticket",
+          },
+        ],
+        autoCommit: runtime,
+        store: events,
+      });
+      const response = await app.request("/triggers/p4", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ change: "8090", user: "alice", depot_path: "//depot/main" }),
+      });
+      expect(response.status).toBe(202);
+      const recent = await getRecentWebhookEvents(events, 10);
+      const legacy = recent.find((row) => row.workspaceId === "ws-legacy");
+      expect(legacy?.decision).toBe("queued");
+      expect((legacy?.detail as Record<string, unknown> | null)?.headSha).toBe("8090");
+      expect(typeof (legacy?.detail as Record<string, unknown> | null)?.receiptId).toBe("string");
+      // The routing profile keeps its own queued row with the revision.
+      const routed = recent.find((row) => row.reason === "routing_pending");
+      expect((routed?.detail as Record<string, unknown> | null)?.headSha).toBe("8090");
+    } finally {
+      await closeStoreDb(events);
+    }
   });
 });
 

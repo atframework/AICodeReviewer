@@ -40,6 +40,7 @@ Git push、P4 `change-commit`、SVN `post-commit` 默认等待 120 秒。
 review:
   auto_commit:
     delay_seconds: 120
+    queued_timeout_hours: 48
     schedule:
       timezone: Asia/Shanghai
       rules:
@@ -72,6 +73,11 @@ review:
 填写 `main` 或 `release/1.x` 这样的完整分支名，不带 `refs/heads/` 前缀；
 匹配区分大小写，不展开 glob 或正则表达式。GitLab `Push Hook` 也走同一筛选和
 持久化队列。before/after SHA 全零的分支创建、删除通知会被忽略。
+
+`queued_timeout_hours` 限制一条自动提交在队列中的最长等待时间：超过该
+时限的待处理条目会被终结为 `queued_timeout`，Events 面板的决策从 `queued`
+翻转为 `timeout`，队列不会无限静默堆积。默认 `48`；`0` 关闭清扫，最大
+`8760`（365 天）。与其他字段一样按最近显式设置层生效。
 
 ## PR/MR 执行时段
 

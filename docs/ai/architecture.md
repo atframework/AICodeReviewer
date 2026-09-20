@@ -123,12 +123,23 @@ PostgreSQL 后端见 [M17](milestones/M17.md)，来源合并、路由图与发�
   按最早到期信号唤醒，扩展（有界 VCS 元数据页 + 来源快照 + 排除判定）→ 组批封存 →
   窗口内派发执行；执行桥 `createAutoCommitBatchExecutor` 以固定 runId、成员列表和端点调用
   `runReviewOrchestration`。扩展前固定 `assemblyCutSeq`，持续新通知不阻止旧批次前进。
-  日历下限和元数据重试预算持久化；元数据读取及每次执行前重新检查时段，停机等待当前执行结束。
+  日历下限和元数据重试预算持久化；元数据读取及每次执行前重新检查时段；`stop()` 立即 abort
+  在执行的批次（`interrupted_by_shutdown` 重入队列），部署重启不等待长分析结束。
   三后端原子限制全局和 workspace 执行并发，默认各为 1；bootstrap 的全局上限读取
   `queue.workers.concurrency`（未设置时为 1）。租约过期禁止旧消费者写完成状态和检查点。
-  已保存 `completed` 检查点只重试本地结果记账；`started`/`publication_pending` 表示执行或
-  发布结果不确定，终结为 dead 并要求人工核查，不自动重跑 LLM/非幂等 POST。dead 批次仍占住
-  stream。外部发布尚无跨进程事务或逐目标恢复回执，不能承诺端到端 exactly-once。
+  恢复语义（2026-09 运维决策）：已保存 `completed` 检查点只重试本地结果记账；`started`/
+  `publication_pending` 表示执行或发布结果不确定，但重试执行允许重放（接受重复发布风险）
+  而不是 dead-letter 卡死流。首次到达终态失败的批次消费其唯一一次自动恢复（attempts 重置、
+  重入 outbox）；再次终态失败则 terminally skip 并释放流，同时以失败 run 行持久化拒绝原因
+  （如 `review.max_patch_bytes exceeded`），Recent Runs 可见；管理端重排会删除该标记行让重试
+  记录自己的结果。调度器启动时按 consumerId 立即回收上一进程的租约，并把升级前遗留的 dead
+  批次重新武装。管理端 `POST /api/admin/auto-commit/batches/:id/retry` 可人工重排 terminal
+  批次（看板 Queue 页）；人工重排会清除批次的准入配置快照固定，重试按**当前**准入代执行——
+  运维调参（如调大 `review.max_patch_bytes`）后重排即可生效。
+  `queued_timeout_hours`（默认 48）把超过时限的待处理条目终结为 `queued_timeout`，Events
+  决策翻转为 `timeout`——正式 receipt 按 `detail.receiptId` 翻转，routing 接收的事件经
+  `listRoutingIntakeIdsForReceipts` 映射按 `detail.routingId` 翻转。外部发布尚无跨进程事务
+  或逐目标恢复回执，不能承诺端到端 exactly-once。
 - 直接路径（PR/MR、issue、评论命令）复用同一周计划：async 触发处理把首次尝试和每次重试的
   定时器经 `clampDelayToExecutionWindow`（`packages/server/src/index.ts`）钳制到
   `nextAllowedInstant`，窗口外到达的事件记录 `trigger processing deferred by execution window`
@@ -1493,8 +1504,11 @@ v2 routing 在已鉴权来源范围内选择 workspace、路径、analysis 和�
 agent.default，不能借代码仓库调整批准、搜索凭据或沙箱权限。
 
 Review 路径筛选在 fetchScoped 前执行。max_patch_bytes 和 fetch_extra 按 UTF-8
-计数；额外上下文请求串行占用每次 run 的文件/字节预算，拒绝越界路径和超额读取。
-incremental=false 追加 head 完整文件，同样受 patch 字节上限约束；skip_lgtm 仅控制
+计数；`max_files` 与 `max_patch_bytes` 只计过滤后参与分析的文件——diff 以过滤后
+pathspec 请求，被 include/exclude 排除的文件从不计入预算（dry run 分析集为空时预览
+性 diff 不触发预算拦截）；VCS 适配器必须遵守请求的 pathspec，返回未裁剪 diff 会破坏
+该合同。额外上下文请求串行占用每次 run 的文件/字节预算，拒绝越界路径和超额读取。
+incremental=false 追加 head 完整文件（同样只计分析集），受 patch 字节上限约束；skip_lgtm 仅控制
 分析提示。head_only/per_commit 消费有界提交元数据（256 条/1 MiB），后者在一次分析
 中提供带提交标记的补丁，并要求核对最终 head；历史改写保持端点比较。根提交采用
 [Git diff-tree --root](https://git-scm.com/docs/git-diff-tree)，不硬编码 SHA-1 空树。

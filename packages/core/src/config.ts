@@ -9,6 +9,7 @@ import { CONFIG_MATCHER_LIMITS, assertConfigDatabaseFormat, configMatcherSchema,
 import { validateWorkspaceDefinitions } from "./config-workspace.js";
 import { autoCommitConfigSchema, type AutoCommitConfig } from "./auto-commit-policy.js";
 import { pullRequestConfigSchema, type PullRequestConfig } from "./pull-request-policy.js";
+import { REVIEW_DEFAULT_MAX_FILES, REVIEW_DEFAULT_MAX_PATCH_BYTES } from "./review-policy.js";
 import { isPlainObject } from "./utils.js";
 import { validateConfigNamespace, workspaceRootKeys } from "./config-format.js";
 
@@ -1271,8 +1272,8 @@ const appConfigObjectSchema = z
       languages_auto_detect: true,
       include: ["**/*"],
       exclude: ["**/vendor/**", "**/*.min.js", "**/*.lock"],
-      max_files: 50,
-      max_patch_bytes: 200_000,
+      max_files: REVIEW_DEFAULT_MAX_FILES,
+      max_patch_bytes: REVIEW_DEFAULT_MAX_PATCH_BYTES,
       output_language: "zh-CN",
       commit_strategy: "aggregate",
     }),
