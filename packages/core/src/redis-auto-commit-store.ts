@@ -45,6 +45,7 @@ import {
   computeMemberId,
   computeStreamId,
 } from "./auto-commit-identity.js";
+import type { CommitBatchStatus } from "./auto-commit-identity.js";
 import type {
   AcceptReceiptInput,
   AcceptReceiptResult,
@@ -262,6 +263,78 @@ local function setMembersTerminal(batchId, members, status, reason)
       end
     end
   end
+end
+local function setMembersStatusFrom(batchId, members, fromStatus, status, clearReason)
+  for _, m in ipairs(members) do
+    local mdata = redis.call("HGET", kMember(m.memberId), "data")
+    if mdata then
+      local ms = cjson.decode(mdata)
+      if ms.record.batchId == batchId and ms.record.status == fromStatus then
+        ms.record.status = status
+        if clearReason then
+          ms.record.terminalReason = cjson.null
+        end
+        redis.call("HSET", kMember(m.memberId), "data", cjson.encode(ms))
+      end
+    end
+  end
+end
+local function clearActiveBatch(streamId, batchId)
+  local sdata = redis.call("HGET", kStream(streamId), "data")
+  if sdata then
+    local head = cjson.decode(sdata)
+    if head.activeBatchId == batchId then
+      head.activeBatchId = cjson.null
+      head.version = head.version + 1
+      redis.call("HSET", kStream(streamId), "data", cjson.encode(head))
+    end
+  end
+end
+local function reclaimLeases(candidates, now, reason, requireExpired)
+  local reclaimed = {}
+  for _, bid in ipairs(candidates) do
+    local bdata = redis.call("HGET", kBatch(bid), "data")
+    if bdata then
+      local rec = cjson.decode(bdata)
+      if (rec.status == "running" or rec.status == "queued")
+          and (not requireExpired or (not isNull(rec.leaseExpiry) and rec.leaseExpiry <= now)) then
+        redis.call("ZREM", K_IDX_LEASE, bid)
+        redis.call("ZREM", K_IDX_RUNNING, bid)
+        redis.call("ZREM", kWsRunning(rec.workspaceId), bid)
+        rec.lastError = reason
+        rec.leaseToken = cjson.null
+        rec.leaseOwner = cjson.null
+        rec.leaseExpiry = cjson.null
+        if rec.status == "running" and rec.attempt >= rec.maxAttempts then
+          if isNull(rec.recoveryAttempt) or rec.recoveryAttempt == 0 then
+            rec.status = "retry_wait"
+            rec.lastError = reason..": recovery re-armed"
+            rec.retryNotBefore = cjson.null
+            rec.attempt = 1
+            rec.recoveryAttempt = 1
+            saveBatch(rec)
+            saveOutbox({ batchId = bid, status = "pending", nextAttemptAt = now }, "", "0")
+          else
+            rec.status = "skipped"
+            rec.lastError = "recovery exhausted: "..reason
+            saveBatch(rec)
+            setMembersTerminal(bid, rec.members, "skipped", "recovery exhausted: "..reason)
+            redis.call("DEL", kOutbox(bid))
+            redis.call("ZREM", K_IDX_OUTBOX, bid)
+            clearActiveBatch(rec.streamId, bid)
+          end
+        else
+          rec.status = "retry_wait"
+          rec.retryNotBefore = cjson.null
+          saveBatch(rec)
+          saveOutbox({ batchId = bid, status = "pending", nextAttemptAt = now }, "", "0")
+        end
+        streamRecompute(rec.streamId)
+        reclaimed[#reclaimed + 1] = bid
+      end
+    end
+  end
+  return reclaimed
 end
 `;
 
@@ -1007,10 +1080,25 @@ rec.leaseExpiry = cjson.null
 redis.call("ZREM", K_IDX_LEASE, ARGV[2])
 redis.call("ZREM", K_IDX_RUNNING, ARGV[2])
 redis.call("ZREM", kWsRunning(rec.workspaceId), ARGV[2])
-if exhausted then
-  rec.status = "dead"
+if exhausted and (isNull(rec.recoveryAttempt) or rec.recoveryAttempt == 0) then
+  -- Would-be-terminal failure consumes the single automatic recovery: fresh
+  -- attempt budget, a due outbox entry, the same batch re-executes.
+  rec.status = "retry_wait"
+  rec.lastError = "recovery: "..ARGV[4]
+  rec.retryNotBefore = tonumber(ARGV[7])
+  rec.attempt = 1
+  rec.recoveryAttempt = 1
   saveBatch(rec)
-  setMembersTerminal(ARGV[2], rec.members, "dead", ARGV[4])
+  saveOutbox({ batchId = ARGV[2], status = "pending", nextAttemptAt = tonumber(ARGV[7]) }, "", "0")
+elseif exhausted then
+  -- Recovery attempt failed too: skip terminally, release the stream.
+  rec.status = "skipped"
+  rec.lastError = "recovery exhausted: "..ARGV[4]
+  saveBatch(rec)
+  setMembersTerminal(ARGV[2], rec.members, "skipped", "recovery exhausted: "..ARGV[4])
+  redis.call("DEL", kOutbox(ARGV[2]))
+  redis.call("ZREM", K_IDX_OUTBOX, ARGV[2])
+  clearActiveBatch(rec.streamId, ARGV[2])
 else
   rec.status = "retry_wait"
   if ARGV[5] == "" then rec.retryNotBefore = cjson.null else rec.retryNotBefore = tonumber(ARGV[5]) end
@@ -1028,35 +1116,142 @@ const LUA_RECLAIM_LEASES =
   `
 local now = tonumber(ARGV[2])
 local due = redis.call("ZRANGEBYSCORE", K_IDX_LEASE, "-inf", now, "LIMIT", 0, tonumber(ARGV[3]))
-local reclaimed = {}
-for _, bid in ipairs(due) do
+local reclaimed = reclaimLeases(due, now, "lease_expired", true)
+return reclaimed
+`;
+
+const LUA_RECLAIM_BY_OWNER =
+  LUA_PRELUDE +
+  `
+local now = tonumber(ARGV[3])
+local running = redis.call("ZRANGE", K_IDX_RUNNING, 0, -1)
+local candidates = {}
+for _, bid in ipairs(running) do
   local bdata = redis.call("HGET", kBatch(bid), "data")
   if bdata then
     local rec = cjson.decode(bdata)
-    if (rec.status == "running" or rec.status == "queued") and not isNull(rec.leaseExpiry) and rec.leaseExpiry <= now then
-      redis.call("ZREM", K_IDX_LEASE, bid)
-      redis.call("ZREM", K_IDX_RUNNING, bid)
-      redis.call("ZREM", kWsRunning(rec.workspaceId), bid)
-      rec.lastError = "lease_expired"
-      rec.leaseToken = cjson.null
-      rec.leaseOwner = cjson.null
-      rec.leaseExpiry = cjson.null
-      if rec.status == "running" and rec.attempt >= rec.maxAttempts then
-        rec.status = "dead"
-        saveBatch(rec)
-        setMembersTerminal(bid, rec.members, "dead", "lease_expired")
-      else
-        rec.status = "retry_wait"
-        rec.retryNotBefore = cjson.null
-        saveBatch(rec)
-        saveOutbox({ batchId = bid, status = "pending", nextAttemptAt = now }, "", "0")
-      end
-      streamRecompute(rec.streamId)
-      reclaimed[#reclaimed + 1] = bid
+    if rec.status == "running" and rec.leaseOwner == ARGV[2] then
+      candidates[#candidates + 1] = bid
     end
   end
 end
-return reclaimed
+return reclaimLeases(candidates, now, "interrupted_by_restart", false)
+`;
+
+const LUA_RECOVER_DEAD_BATCHES =
+  LUA_PRELUDE +
+  `
+local now = tonumber(ARGV[2])
+local recovered = {}
+-- Only the oldest dead batch per stream re-arms: it re-claims the stream's
+-- active slot; a younger same-stream dead batch would otherwise execute
+-- concurrently with it.
+local claimedStreams = {}
+local dead = {}
+local cursor = "0"
+repeat
+  local reply = redis.call("SCAN", cursor, "MATCH", P.."batch:*", "COUNT", 128)
+  cursor = reply[1]
+  for _, key in ipairs(reply[2]) do
+    local status = redis.call("HGET", key, "status")
+    if status == "dead" then
+      local bdata = redis.call("HGET", key, "data")
+      if bdata then
+        local rec = cjson.decode(bdata)
+        dead[#dead + 1] = rec
+      end
+    end
+  end
+until cursor == "0"
+table.sort(dead, function(a, b) return a.createdAt < b.createdAt end)
+for _, rec in ipairs(dead) do
+  local sid = rec.streamId
+  local bid = rec.batchId
+  local sdata = redis.call("HGET", kStream(sid), "data")
+  if sdata then
+    local head = cjson.decode(sdata)
+    local active = head.activeBatchId
+    local occupied = (not isNull(active)) and active ~= bid
+    if (not occupied) and claimedStreams[sid] == nil then
+      local previous = ""
+      if not isNull(rec.lastError) then previous = "; previous: "..rec.lastError end
+      rec.status = "retry_wait"
+      rec.lastError = "legacy dead batch recovered at boot"..previous
+      rec.retryNotBefore = now
+      rec.attempt = 1
+      rec.recoveryAttempt = 1
+      rec.leaseToken = cjson.null
+      rec.leaseOwner = cjson.null
+      rec.leaseExpiry = cjson.null
+      saveBatch(rec)
+      saveOutbox({ batchId = bid, status = "pending", nextAttemptAt = now }, "", "0")
+      setMembersStatusFrom(bid, rec.members, "dead", "batched", true)
+      if isNull(active) then
+        head.activeBatchId = bid
+        head.version = head.version + 1
+        redis.call("HSET", kStream(sid), "data", cjson.encode(head))
+      end
+      streamRecompute(sid)
+      claimedStreams[sid] = true
+      recovered[#recovered + 1] = bid
+    end
+  end
+end
+return recovered
+`;
+
+const LUA_REQUEUE_RECOVERY =
+  LUA_PRELUDE +
+  `
+local bid = ARGV[2]
+local now = tonumber(ARGV[3])
+local bdata = redis.call("HGET", kBatch(bid), "data")
+if not bdata then return "missing" end
+local rec = cjson.decode(bdata)
+if rec.status ~= "dead" and rec.status ~= "skipped" then return "not_terminal" end
+local sdata = redis.call("HGET", kStream(rec.streamId), "data")
+if not sdata then return "missing_stream" end
+local head = cjson.decode(sdata)
+local active = head.activeBatchId
+if (not isNull(active)) and active ~= bid then
+  -- Another batch holds the stream; refuse instead of executing two
+  -- non-terminal batches concurrently.
+  return "stream_busy"
+end
+local previous = ""
+if not isNull(rec.lastError) then previous = "; previous: "..rec.lastError end
+rec.status = "retry_wait"
+rec.lastError = "manual retry re-armed"..previous
+rec.retryNotBefore = now
+rec.attempt = 1
+rec.recoveryAttempt = 1
+rec.executionCheckpoint = cjson.null
+rec.leaseToken = cjson.null
+rec.leaseOwner = cjson.null
+rec.leaseExpiry = cjson.null
+saveBatch(rec)
+saveOutbox({ batchId = bid, status = "pending", nextAttemptAt = now }, "", "0")
+setMembersStatusFrom(bid, rec.members, "dead", "batched", true)
+setMembersStatusFrom(bid, rec.members, "skipped", "batched", true)
+if isNull(active) then
+  head.activeBatchId = bid
+  head.version = head.version + 1
+  redis.call("HSET", kStream(rec.streamId), "data", cjson.encode(head))
+end
+streamRecompute(rec.streamId)
+return cjson.encode(rec)
+`;
+
+const LUA_RECEIPT_TIMEOUT_STAMP =
+  LUA_PRELUDE +
+  `
+local rdata = redis.call("HGET", kReceipt(ARGV[2]), "data")
+if not rdata then return 0 end
+local rec = cjson.decode(rdata)
+if not isNull(rec.timeoutReportedAt) then return 0 end
+rec.timeoutReportedAt = tonumber(ARGV[3])
+redis.call("HSET", kReceipt(ARGV[2]), "data", cjson.encode(rec))
+return 1
 `;
 
 // ---------------------------------------------------------------------------
@@ -1080,12 +1275,17 @@ function toReceipt(stored: StoredReceipt): AutoCommitReceipt {
     metadataTerminalError: receipt.metadataTerminalError ?? null,
     resolution: receipt.resolution ?? null,
     configSnapshotId: receipt.configSnapshotId ?? null,
+    timeoutReportedAt: receipt.timeoutReportedAt ?? null,
   };
 }
 
-/** Blobs written before the snapshot field existed decode as undefined. */
+/** Blobs written before the snapshot/recovery fields existed decode as undefined. */
 function toBatch(stored: CommitBatchRecord): CommitBatchRecord {
-  return { ...stored, configSnapshotId: stored.configSnapshotId ?? null };
+  return {
+    ...stored,
+    configSnapshotId: stored.configSnapshotId ?? null,
+    recoveryAttempt: stored.recoveryAttempt ?? 0,
+  };
 }
 
 /** Redis Lua cjson encodes an empty table as {}, including decoded JSON []. */
@@ -1192,7 +1392,7 @@ export async function createRedisAutoCommitStore(
   const memberKey = (id: string) => `${P}member:${id}`;
   const streamKey = (id: string) => `${P}stream:${id}`;
 
-  return {
+  const store: AutoCommitStore = {
     backendKind: "redis",
 
     async acceptReceipt(
@@ -1918,6 +2118,150 @@ return 1
       return raw;
     },
 
+    async reclaimBatchesByOwner(
+      ownerId: string,
+      now: number,
+    ): Promise<readonly string[]> {
+      const raw = (await evalScript(
+        LUA_RECLAIM_BY_OWNER,
+        P,
+        ownerId,
+        now,
+      )) as string[];
+      return raw;
+    },
+
+    async recoverDeadBatches(now: number): Promise<readonly string[]> {
+      const raw = (await evalScript(
+        LUA_RECOVER_DEAD_BATCHES,
+        P,
+        now,
+      )) as string[];
+      return raw;
+    },
+
+    async requeueBatchForRecovery(
+      batchId: string,
+      now: number,
+    ): Promise<CommitBatchRecord | undefined> {
+      const raw = (await evalScript(
+        LUA_REQUEUE_RECOVERY,
+        P,
+        batchId,
+        now,
+      )) as string;
+      if (raw === "missing" || raw === "not_terminal" || raw === "stream_busy") {
+        return undefined;
+      }
+      if (typeof raw !== "string" || raw.length === 0) return undefined;
+      return toBatch(JSON.parse(raw) as CommitBatchRecord);
+    },
+
+    async readBatchesByStatus(
+      statuses: readonly CommitBatchStatus[],
+      limit: number,
+    ): Promise<readonly CommitBatchRecord[]> {
+      if (statuses.length === 0) return [];
+      const wanted = new Set<string>(statuses);
+      const matched: CommitBatchRecord[] = [];
+      // Bounded SCAN over the batch keyspace; the status is a hash field of
+      // the batch key (see saveBatch). Deployments hold a small batch
+      // population and the admin listing is paged by `limit`.
+      let cursor = "0";
+      do {
+        const reply = (await redis.scan(
+          cursor,
+          "MATCH",
+          `${P}batch:*`,
+          "COUNT",
+          256,
+        )) as [string, string[]];
+        cursor = reply[0];
+        const batchKeys = reply[1];
+        if (batchKeys.length) {
+          const statusFields = (await Promise.all(
+            batchKeys.map((key) => redis.hget(key, "status")),
+          )) as (string | null)[];
+          const selected = batchKeys.filter(
+            (key, index) => statusFields[index] !== null && wanted.has(statusFields[index]!),
+          );
+          if (selected.length) {
+            const dataRows = (await Promise.all(
+              selected.map((key) => redis.hget(key, "data")),
+            )) as (string | null)[];
+            for (const row of dataRows) {
+              if (row) matched.push(toBatch(JSON.parse(row) as CommitBatchRecord));
+            }
+          }
+        }
+      } while (cursor !== "0" && matched.length < limit);
+      matched.sort((a, b) => b.createdAt - a.createdAt);
+      return matched.slice(0, limit);
+    },
+
+    async timeoutStaleQueue(
+      cutoff: number,
+      now: number,
+      workspaceId?: string,
+    ): Promise<readonly string[]> {
+      // TS-level sweep over the existing indexes: oldest-first per stream.
+      const workspaces = workspaceId
+        ? [workspaceId]
+        : ((await redis.zrange(`${P}idx:ws:notBefore`, 0, 255)) as string[]);
+      const timedOut: string[] = [];
+      for (const ws of workspaces) {
+        const streams = (await redis.zrange(`${P}ws:${ws}:streamNb`, 0, 63)) as string[];
+        const nullStreams = (await redis.zrangebylex(`${P}ws:${ws}:streamNull`, "-", "+", "LIMIT", 0, 64)) as string[];
+        for (const streamId of [...streams, ...nullStreams]) {
+          // 1) Terminal-skip stale never-batched pending members through the
+          //    exclusion-verdict path (pending → skipped, wake recompute).
+          const pending = await this.readPendingMembers(streamId, null, 512);
+          const stale = pending.items.filter(
+            (member) =>
+              member.batchId === null && member.eligibleAt < cutoff,
+          );
+          if (stale.length > 0) {
+            await this.applyExclusionVerdicts({
+              streamId,
+              verdicts: stale.map((member) => ({
+                memberId: member.memberId,
+                state: "unavailable" as const,
+                ruleId: "queued_timeout",
+                policyVersion: member.exclusion.policyVersion ?? "queued-timeout",
+              })),
+              now,
+            });
+          }
+          // 2) Stamp one-time timeout reports on fully-terminal receipts that
+          //     were accepted before the cutoff.
+          const receiptIds = (await redis.zrange(
+            `${P}stream:${streamId}:receipts`,
+            0,
+            127,
+          )) as string[];
+          for (const receiptId of receiptIds) {
+            const view = await this.getReceipt(receiptId);
+            if (!view) continue;
+            if (
+              view.receipt.timeoutReportedAt === null &&
+              view.receipt.firstAcceptedAt < cutoff &&
+              view.memberCounts.pending === 0 &&
+              view.memberCounts.batched === 0
+            ) {
+              const stamped = (await evalScript(
+                LUA_RECEIPT_TIMEOUT_STAMP,
+                P,
+                receiptId,
+                now,
+              )) as number;
+              if (stamped === 1) timedOut.push(receiptId);
+            }
+          }
+        }
+      }
+      return timedOut;
+    },
+
     async readBatch(batchId: string): Promise<CommitBatchRecord | undefined> {
       const batch = await hgetJson<CommitBatchRecord>(`${P}batch:${batchId}`);
       return batch === undefined ? undefined : toBatch(batch);
@@ -1979,4 +2323,5 @@ return 1
       void (redis.quit() as Promise<unknown>).catch(() => undefined);
     },
   };
+  return store;
 }

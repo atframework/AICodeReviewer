@@ -99,6 +99,7 @@ export const webhookEventDecisionValues = [
   "executed",
   "deferred",
   "queued",
+  "timeout",
   "duplicate",
   "deduplicated",
   "ignored",

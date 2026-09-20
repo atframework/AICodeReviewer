@@ -18,6 +18,7 @@ import {
   computeMemberId,
   computeStreamId,
   type CommitBatchMember,
+  type CommitBatchStatus,
   type SourceSnapshot,
 } from "./auto-commit-identity.js";
 import type {
@@ -93,7 +94,8 @@ const SCHEMA_SQL = `
     metadata_next_attempt_at INTEGER,
     metadata_terminal_error TEXT,
     resolution TEXT,
-    config_snapshot_id TEXT
+    config_snapshot_id TEXT,
+    timeout_reported_at INTEGER
   );
   CREATE INDEX IF NOT EXISTS idx_auto_commit_receipts_stream
     ON auto_commit_receipts(stream_id, receipt_seq);
@@ -197,6 +199,7 @@ const SCHEMA_SQL = `
     status TEXT NOT NULL,
     attempt INTEGER NOT NULL,
     max_attempts INTEGER NOT NULL,
+    recovery_attempt INTEGER NOT NULL DEFAULT 0,
     retry_not_before INTEGER,
     lease_token TEXT,
     lease_owner TEXT,
@@ -243,6 +246,7 @@ interface ReceiptRow {
   metadata_terminal_error: string | null;
   resolution: string | null;
   config_snapshot_id: string | null;
+  timeout_reported_at: number | null;
 }
 
 interface RoutingReceiptRow {
@@ -328,6 +332,7 @@ interface BatchRow {
   status: string;
   attempt: number;
   max_attempts: number;
+  recovery_attempt: number;
   retry_not_before: number | null;
   lease_token: string | null;
   lease_owner: string | null;
@@ -410,6 +415,7 @@ function rowToReceipt(row: ReceiptRow): AutoCommitReceipt {
     metadataTerminalError: row.metadata_terminal_error,
     resolution: row.resolution === null ? null : (JSON.parse(row.resolution) as AutoCommitReceipt["resolution"]),
     configSnapshotId: row.config_snapshot_id,
+    timeoutReportedAt: row.timeout_reported_at ?? null,
   };
 }
 
@@ -492,6 +498,7 @@ function rowToBatch(row: BatchRow): CommitBatchRecord {
     status: row.status as CommitBatchRecord["status"],
     attempt: row.attempt,
     maxAttempts: row.max_attempts,
+    recoveryAttempt: row.recovery_attempt ?? 0,
     retryNotBefore: row.retry_not_before,
     leaseToken: row.lease_token,
     leaseOwner: row.lease_owner,
@@ -627,6 +634,31 @@ export async function createSqliteAutoCommitStore(
             db.exec("ALTER TABLE auto_commit_batches ADD COLUMN config_snapshot_id TEXT");
           }
           version = 7;
+        }
+        if (version === 7) {
+          // v7 → v8: batches gain the single automatic recovery marker and
+          // receipts gain the queue-timeout report stamp. Old batch rows read
+          // 0 (recovery unused), matching pre-upgrade dead batches so the
+          // boot recovery can consume their first recovery; old receipts read
+          // NULL (never timed out). SCHEMA_SQL already carries the columns;
+          // guard like the v3 → v4 step.
+          const batchCols = db
+            .prepare("PRAGMA table_info(auto_commit_batches)")
+            .all() as { name: string }[];
+          if (!batchCols.some((column) => column.name === "recovery_attempt")) {
+            db.exec(
+              "ALTER TABLE auto_commit_batches ADD COLUMN recovery_attempt INTEGER NOT NULL DEFAULT 0",
+            );
+          }
+          const receiptCols = db
+            .prepare("PRAGMA table_info(auto_commit_receipts)")
+            .all() as { name: string }[];
+          if (!receiptCols.some((column) => column.name === "timeout_reported_at")) {
+            db.exec(
+              "ALTER TABLE auto_commit_receipts ADD COLUMN timeout_reported_at INTEGER",
+            );
+          }
+          version = 8;
         }
         if (version !== AUTO_COMMIT_STORE_SCHEMA_VERSION) {
           throw new Error(
@@ -872,6 +904,7 @@ export async function createSqliteAutoCommitStore(
         metadataTerminalError: null,
         resolution: input.resolution ?? null,
         configSnapshotId: input.configSnapshotId ?? null,
+        timeoutReportedAt: null,
       };
       return { receipt, duplicate: false };
     },
@@ -1508,23 +1541,44 @@ export async function createSqliteAutoCommitStore(
       )
         return;
       const exhausted = dead || batch.attempt >= batch.max_attempts;
-      if (exhausted) {
+      if (exhausted && batch.recovery_attempt === 0) {
+        // Would-be-terminal failure consumes the batch's single automatic
+        // recovery: a fresh attempt budget, a due outbox entry, and the
+        // stream keeps its activeBatchId (the same batch re-executes — it is
+        // never re-grouped with newer commits).
         db.prepare(
           `UPDATE auto_commit_batches
-              SET status = 'dead', last_error = ?, lease_token = NULL, lease_owner = NULL, lease_expiry = NULL
+              SET status = 'retry_wait', last_error = ?, retry_not_before = ?,
+                  attempt = 1, recovery_attempt = 1,
+                  lease_token = NULL, lease_owner = NULL, lease_expiry = NULL
             WHERE batch_id = ?`,
-        ).run(error, batchId);
-        const stmtDeadMember = db.prepare(
-          `UPDATE auto_commit_members SET status = 'dead', terminal_reason = ?
+        ).run(`recovery: ${error}`, now, batchId);
+        db.prepare(
+          `INSERT INTO auto_commit_outbox (batch_id, status, next_attempt_at, claim_token, claim_expiry)
+           VALUES (?, 'pending', ?, NULL, NULL)
+           ON CONFLICT(batch_id) DO UPDATE SET
+             status = 'pending', next_attempt_at = excluded.next_attempt_at,
+             claim_token = NULL, claim_expiry = NULL`,
+        ).run(batchId, now);
+      } else if (exhausted) {
+        // The recovery attempt failed too: skip terminally and release the
+        // stream so later commits keep flowing. Re-executing this batch again
+        // requires the admin retry (manual re-arm).
+        db.prepare(
+          `UPDATE auto_commit_batches
+              SET status = 'skipped', last_error = ?, lease_token = NULL, lease_owner = NULL, lease_expiry = NULL
+            WHERE batch_id = ?`,
+        ).run(`recovery exhausted: ${error}`, batchId);
+        const stmtSkipMember = db.prepare(
+          `UPDATE auto_commit_members SET status = 'skipped', terminal_reason = ?
             WHERE member_id = ? AND batch_id = ?`,
         );
         for (const member of JSON.parse(
           batch.members,
         ) as readonly CommitBatchMember[]) {
-          stmtDeadMember.run(error, member.memberId, batchId);
+          stmtSkipMember.run(`recovery exhausted: ${error}`, member.memberId, batchId);
         }
-        // The dead batch keeps stream.activeBatchId: the stream enters explicit
-        // manual handling instead of silently regrouping (design §9).
+        clearStreamActiveBatch(batch.stream_id, batchId);
       } else {
         db.prepare(
           `UPDATE auto_commit_batches
@@ -1544,6 +1598,70 @@ export async function createSqliteAutoCommitStore(
     },
   );
 
+  /** Re-arm a batch's dispatch outbox entry to `nextAt` (idempotent upsert). */
+  function requeueOutbox(batchId: string, nextAt: number): void {
+    db.prepare(
+      `INSERT INTO auto_commit_outbox (batch_id, status, next_attempt_at, claim_token, claim_expiry)
+       VALUES (?, 'pending', ?, NULL, NULL)
+       ON CONFLICT(batch_id) DO UPDATE SET
+         status = 'pending', next_attempt_at = excluded.next_attempt_at,
+         claim_token = NULL, claim_expiry = NULL`,
+    ).run(batchId, nextAt);
+  }
+
+  /**
+   * Shared lease-reclaim transition for one batch: retry_wait with a fresh
+   * outbox entry, or — when attempts are exhausted — the single automatic
+   * recovery, or a terminal skip that releases the stream. Never regroups
+   * members; the expired token dies with the status change.
+   */
+  function reclaimLeaseBatch(batch: BatchRow, now: number, reason: string): void {
+    const exhausted =
+      batch.status === "running" && batch.attempt >= batch.max_attempts;
+    if (exhausted && batch.recovery_attempt === 0) {
+      // Interrupted at exhaustion (crash/deploy restart): consume the single
+      // automatic recovery instead of persisting a stream-jamming dead row.
+      db.prepare(
+        `UPDATE auto_commit_batches
+            SET status = 'retry_wait', last_error = ?, retry_not_before = NULL,
+                attempt = 1, recovery_attempt = 1,
+                lease_token = NULL, lease_owner = NULL, lease_expiry = NULL
+          WHERE batch_id = ?`,
+      ).run(`${reason}: recovery re-armed`, batch.batch_id);
+      requeueOutbox(batch.batch_id, now);
+    } else if (exhausted) {
+      db.prepare(
+        `UPDATE auto_commit_batches
+            SET status = 'skipped', last_error = ?,
+                lease_token = NULL, lease_owner = NULL, lease_expiry = NULL
+          WHERE batch_id = ?`,
+      ).run(`recovery exhausted: ${reason}`, batch.batch_id);
+      const stmtSkipMember = db.prepare(
+        `UPDATE auto_commit_members SET status = 'skipped', terminal_reason = ?
+          WHERE member_id = ? AND batch_id = ?`,
+      );
+      for (const member of JSON.parse(
+        batch.members,
+      ) as readonly CommitBatchMember[]) {
+        stmtSkipMember.run(
+          `recovery exhausted: ${reason}`,
+          member.memberId,
+          batch.batch_id,
+        );
+      }
+      clearStreamActiveBatch(batch.stream_id, batch.batch_id);
+    } else {
+      db.prepare(
+        `UPDATE auto_commit_batches
+            SET status = 'retry_wait', last_error = ?, retry_not_before = NULL,
+                lease_token = NULL, lease_owner = NULL, lease_expiry = NULL
+          WHERE batch_id = ?`,
+      ).run(reason, batch.batch_id);
+      requeueOutbox(batch.batch_id, now);
+    }
+    recomputeStreamNotBefore(batch.stream_id);
+  }
+
   const txReclaimLeases = db.transaction(
     (now: number, limit: number): readonly string[] => {
       const expired = db
@@ -1557,45 +1675,187 @@ export async function createSqliteAutoCommitStore(
       for (const batch of expired) {
         if (reclaimed.length >= limit) break;
         if (batch.lease_token === null && batch.status !== "queued") continue;
-        // Reclaim through the same failure path with a fresh outbox entry;
-        // the expired token is invalidated implicitly by the status change.
-        const exhausted =
-          batch.status === "running" && batch.attempt >= batch.max_attempts;
-        if (exhausted) {
-          db.prepare(
-            `UPDATE auto_commit_batches
-              SET status = 'dead', last_error = 'lease_expired',
-                  lease_token = NULL, lease_owner = NULL, lease_expiry = NULL
-            WHERE batch_id = ?`,
-          ).run(batch.batch_id);
-          const stmtDeadMember = db.prepare(
-            `UPDATE auto_commit_members SET status = 'dead', terminal_reason = 'lease_expired'
-            WHERE member_id = ? AND batch_id = ?`,
-          );
-          for (const member of JSON.parse(
-            batch.members,
-          ) as readonly CommitBatchMember[]) {
-            stmtDeadMember.run(member.memberId, batch.batch_id);
-          }
-        } else {
-          db.prepare(
-            `UPDATE auto_commit_batches
-              SET status = 'retry_wait', last_error = 'lease_expired', retry_not_before = NULL,
-                  lease_token = NULL, lease_owner = NULL, lease_expiry = NULL
-            WHERE batch_id = ?`,
-          ).run(batch.batch_id);
-          db.prepare(
-            `INSERT INTO auto_commit_outbox (batch_id, status, next_attempt_at, claim_token, claim_expiry)
-           VALUES (?, 'pending', ?, NULL, NULL)
-           ON CONFLICT(batch_id) DO UPDATE SET
-             status = 'pending', next_attempt_at = excluded.next_attempt_at,
-             claim_token = NULL, claim_expiry = NULL`,
-          ).run(batch.batch_id, now);
-        }
-        recomputeStreamNotBefore(batch.stream_id);
+        reclaimLeaseBatch(batch, now, "lease_expired");
         reclaimed.push(batch.batch_id);
       }
       return reclaimed;
+    },
+  );
+
+  const txReclaimByOwner = db.transaction(
+    (ownerId: string, now: number): readonly string[] => {
+      const stale = db
+        .prepare(
+          `SELECT * FROM auto_commit_batches
+          WHERE status = 'running' AND lease_owner = ?`,
+        )
+        .all(ownerId) as BatchRow[];
+      const reclaimed: string[] = [];
+      for (const batch of stale) {
+        reclaimLeaseBatch(batch, now, "interrupted_by_restart");
+        reclaimed.push(batch.batch_id);
+      }
+      return reclaimed;
+    },
+  );
+
+  const txRecoverDeadBatches = db.transaction(
+    (now: number): readonly string[] => {
+      const dead = db
+        .prepare(
+          `SELECT * FROM auto_commit_batches WHERE status = 'dead' ORDER BY created_at ASC`,
+        )
+        .all() as BatchRow[];
+      const recovered: string[] = [];
+      // Only the oldest dead batch per stream re-arms: it re-claims the
+      // stream's active slot, and a younger dead batch on the same stream
+      // would otherwise execute concurrently with it. Younger rows stay
+      // dead (admin-retryable once the stream settles).
+      const claimedStreams = new Set<string>();
+      for (const batch of dead) {
+        const head = db
+          .prepare(`SELECT * FROM auto_commit_stream_heads WHERE stream_id = ?`)
+          .get(batch.stream_id) as
+          | { active_batch_id: string | null }
+          | undefined;
+        if (!head) continue;
+        const occupied =
+          head.active_batch_id !== null && head.active_batch_id !== batch.batch_id;
+        if (occupied || claimedStreams.has(batch.stream_id)) continue;
+        db.prepare(
+          `UPDATE auto_commit_batches
+              SET status = 'retry_wait', last_error = ?, retry_not_before = ?,
+                  attempt = 1, recovery_attempt = 1,
+                  lease_token = NULL, lease_owner = NULL, lease_expiry = NULL
+            WHERE batch_id = ?`,
+        ).run(
+          `legacy dead batch recovered at boot${batch.last_error ? `; previous: ${batch.last_error}` : ""}`,
+          now,
+          batch.batch_id,
+        );
+        requeueOutbox(batch.batch_id, now);
+        const stmtSkipMember = db.prepare(
+          `UPDATE auto_commit_members SET status = 'batched' WHERE member_id = ? AND batch_id = ? AND status = 'dead'`,
+        );
+        for (const member of JSON.parse(
+          batch.members,
+        ) as readonly CommitBatchMember[]) {
+          stmtSkipMember.run(member.memberId, batch.batch_id);
+        }
+        db.prepare(
+          `UPDATE auto_commit_stream_heads
+              SET active_batch_id = ?, version = version + 1
+            WHERE stream_id = ? AND (active_batch_id IS NULL OR active_batch_id = ?)`,
+        ).run(batch.batch_id, batch.stream_id, batch.batch_id);
+        recomputeStreamNotBefore(batch.stream_id);
+        claimedStreams.add(batch.stream_id);
+        recovered.push(batch.batch_id);
+      }
+      return recovered;
+    },
+  );
+
+  const txRequeueForRecovery = db.transaction(
+    (batchId: string, now: number): BatchRow | undefined => {
+      const batch = stmtBatchById.get(batchId) as BatchRow | undefined;
+      if (!batch) return undefined;
+      if (batch.status !== "dead" && batch.status !== "skipped") return undefined;
+      const head = db
+        .prepare(`SELECT * FROM auto_commit_stream_heads WHERE stream_id = ?`)
+        .get(batch.stream_id) as
+        | { active_batch_id: string | null }
+        | undefined;
+      if (
+        !head ||
+        (head.active_batch_id !== null && head.active_batch_id !== batchId)
+      ) {
+        // Another batch holds the stream; re-arming now would execute two
+        // non-terminal batches concurrently on the same stream.
+        return undefined;
+      }
+      db.prepare(
+        `UPDATE auto_commit_batches
+            SET status = 'retry_wait', last_error = ?, retry_not_before = ?,
+                attempt = 1, recovery_attempt = 1,
+                lease_token = NULL, lease_owner = NULL, lease_expiry = NULL,
+                execution_checkpoint = NULL
+          WHERE batch_id = ?`,
+      ).run(
+        `manual retry re-armed${batch.last_error ? `; previous: ${batch.last_error}` : ""}`,
+        now,
+        batchId,
+      );
+      requeueOutbox(batchId, now);
+      const stmtRebatchMember = db.prepare(
+        `UPDATE auto_commit_members SET status = 'batched', terminal_reason = NULL
+          WHERE member_id = ? AND batch_id = ? AND status IN ('dead', 'skipped')`,
+      );
+      for (const member of JSON.parse(
+        batch.members,
+      ) as readonly CommitBatchMember[]) {
+        stmtRebatchMember.run(member.memberId, batchId);
+      }
+      db.prepare(
+        `UPDATE auto_commit_stream_heads
+            SET active_batch_id = ?, version = version + 1
+          WHERE stream_id = ? AND (active_batch_id IS NULL OR active_batch_id = ?)`,
+      ).run(batchId, batch.stream_id, batchId);
+      recomputeStreamNotBefore(batch.stream_id);
+      return stmtBatchById.get(batchId) as BatchRow | undefined;
+    },
+  );
+
+  const txTimeoutStaleQueue = db.transaction(
+    (cutoff: number, now: number, workspaceId?: string): readonly string[] => {
+      // 1) Never-batched pending members past the cutoff become terminally
+      //    skipped; batched members belong to a live/recovering batch and are
+      //    governed by the batch lifecycle, not the queue timeout.
+      const staleMembers = db
+        .prepare(
+          `SELECT m.member_id AS member_id, m.stream_id AS stream_id
+             FROM auto_commit_members m
+            WHERE m.status = 'pending' AND m.batch_id IS NULL AND m.eligible_at < ?
+              AND (? IS NULL OR EXISTS (
+                SELECT 1 FROM auto_commit_stream_heads h
+                 WHERE h.stream_id = m.stream_id AND h.workspace_id = ?))`,
+        )
+        .all(cutoff, workspaceId ?? null, workspaceId ?? null) as {
+        member_id: string;
+        stream_id: string;
+      }[];
+      if (staleMembers.length > 0) {
+        const stmtTimeoutMember = db.prepare(
+          `UPDATE auto_commit_members SET status = 'skipped', terminal_reason = 'queued_timeout'
+            WHERE member_id = ? AND status = 'pending'`,
+        );
+        for (const member of staleMembers) {
+          stmtTimeoutMember.run(member.member_id);
+        }
+        for (const streamId of new Set(staleMembers.map((m) => m.stream_id))) {
+          recomputeStreamNotBefore(streamId);
+        }
+      }
+      // 2) Receipts accepted before the cutoff whose members are all terminal
+      //    (or that never expanded into any member) get their one-time
+      //    timeout report stamp; the caller mirrors it onto the webhook event
+      //    log. `timeout_reported_at` keeps the sweep idempotent.
+      const timedOut = db
+        .prepare(
+          `UPDATE auto_commit_receipts SET timeout_reported_at = ?
+           WHERE timeout_reported_at IS NULL AND first_accepted_at < ?
+             AND (? IS NULL OR workspace_id = ?)
+             AND NOT EXISTS (
+               SELECT 1 FROM auto_commit_receipt_members rm
+                 JOIN auto_commit_members m ON m.member_id = rm.member_id
+                WHERE rm.receipt_id = auto_commit_receipts.receipt_id
+                  AND m.status IN ('pending', 'batched')
+             )
+           RETURNING receipt_id`,
+        )
+        .all(now, cutoff, workspaceId ?? null, workspaceId ?? null) as {
+        receipt_id: string;
+      }[];
+      return timedOut.map((row) => row.receipt_id);
     },
   );
 
@@ -2081,6 +2341,50 @@ export async function createSqliteAutoCommitStore(
       limit: number,
     ): Promise<readonly string[]> {
       return txReclaimLeases.immediate(now, limit) as readonly string[];
+    },
+
+    async reclaimBatchesByOwner(
+      ownerId: string,
+      now: number,
+    ): Promise<readonly string[]> {
+      return txReclaimByOwner.immediate(ownerId, now) as readonly string[];
+    },
+
+    async recoverDeadBatches(now: number): Promise<readonly string[]> {
+      return txRecoverDeadBatches.immediate(now) as readonly string[];
+    },
+
+    async requeueBatchForRecovery(
+      batchId: string,
+      now: number,
+    ): Promise<CommitBatchRecord | undefined> {
+      const row = txRequeueForRecovery.immediate(batchId, now) as
+        | BatchRow
+        | undefined;
+      return row ? rowToBatch(row) : undefined;
+    },
+
+    async readBatchesByStatus(
+      statuses: readonly CommitBatchStatus[],
+      limit: number,
+    ): Promise<readonly CommitBatchRecord[]> {
+      if (statuses.length === 0) return [];
+      const placeholders = statuses.map(() => "?").join(", ");
+      const rows = db
+        .prepare(
+          `SELECT * FROM auto_commit_batches WHERE status IN (${placeholders})
+            ORDER BY created_at DESC LIMIT ?`,
+        )
+        .all(...statuses, limit) as BatchRow[];
+      return rows.map(rowToBatch);
+    },
+
+    async timeoutStaleQueue(
+      cutoff: number,
+      now: number,
+      workspaceId?: string,
+    ): Promise<readonly string[]> {
+      return txTimeoutStaleQueue.immediate(cutoff, now, workspaceId) as readonly string[];
     },
 
     async readBatch(batchId: string): Promise<CommitBatchRecord | undefined> {

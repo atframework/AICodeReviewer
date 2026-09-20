@@ -78,6 +78,7 @@ import {
   closeStoreDb,
   createStoreDb,
   hardDeleteExpiredProjects,
+  markWebhookEventsTimedOut,
   readReflectionMemory,
   writeReflectionMemory,
   compactReflectionMemory,
@@ -102,7 +103,7 @@ import type { IssueTriageRuntimeOptions, WorkspaceIssueTriagePolicy } from "./is
 import { createProblemResolutionAnalyzer } from "./problem-resolution.js";
 import type { ServerAppOptions, ServerReviewOrchestrationOptions } from "./index.js";
 import { persistReviewRunToStore, resolveTriggerRetryConfig } from "./index.js";
-import { type AutoCommitStore, type StreamKeyInput } from "@aicr/core";
+import { type AutoCommitStore, type StreamKeyInput, resolveAutoCommitPolicy } from "@aicr/core";
 import { createAutoCommitStoreFromConfig } from "@aicr/core";
 import { resolvePullRequestSchedule, resolvePullRequestTargetBranches } from "@aicr/core";
 import { AutoCommitRuntime, createAutoCommitBatchExecutor } from "./auto-commit-runtime.js";
@@ -3395,6 +3396,68 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
       .finally(() => { sweepRunning = undefined; });
   }, 60_000) : undefined;
   sweepTimer?.unref();
+
+  // Queue-timeout sweep (review.auto_commit.queued_timeout_hours, default
+  // 48h): pending members past the per-workspace bound become terminally
+  // skipped and their webhook events flip to the `timeout` decision, so a
+  // stuck queue can never accumulate forever or show stale queue entries.
+  const QUEUED_TIMEOUT_SWEEP_INTERVAL_MS = 10 * 60_000;
+  let queuedTimeoutRunning = false;
+  const runQueuedTimeoutSweep = async (): Promise<void> => {
+    if (queuedTimeoutRunning) return;
+    queuedTimeoutRunning = true;
+    try {
+      const now = Date.now();
+      const workspaceIds = new Set<string>(
+        Object.keys(runtimeConfig.current().config.workspaces?.instances ?? {}),
+      );
+      // Declared workspaces resolve their own bound (instance → defaults →
+      // global → built-in 48h). Only a config without any workspace instance
+      // falls back to one unscoped pass — an unscoped pass cannot honor a
+      // per-workspace disabled timeout, so it must not run alongside
+      // declared instances.
+      const scopes: (string | undefined)[] = workspaceIds.size > 0 ? [...workspaceIds] : [undefined];
+      const timedOut: string[] = [];
+      for (const workspaceId of scopes) {
+        const timeoutMs = workspaceId === undefined
+          ? resolveAutoCommitPolicy(
+              (runtimeConfig.current().config as unknown as { review?: { auto_commit?: Parameters<typeof resolveAutoCommitPolicy>[0] } }).review?.auto_commit,
+              (runtimeConfig.current().config as unknown as { workspaces?: { defaults?: { review?: { auto_commit?: Parameters<typeof resolveAutoCommitPolicy>[0] } } } }).workspaces?.defaults?.review?.auto_commit,
+              undefined,
+            ).queuedTimeoutMs
+          : autoCommitPipeline.runtime.policyFor(workspaceId).queuedTimeoutMs;
+        if (timeoutMs === null) continue;
+        const cutoff = now - timeoutMs;
+        timedOut.push(
+          ...(await autoCommitPipeline.store.timeoutStaleQueue(cutoff, now, workspaceId)),
+        );
+      }
+      if (store && timedOut.length > 0) {
+        const events = await markWebhookEventsTimedOut(store, timedOut);
+        console.warn(JSON.stringify({
+          level: "warn",
+          msg: "auto-commit queue timeout sweep marked stale entries",
+          receipts: timedOut.length,
+          events,
+        }));
+      }
+    } catch (error) {
+      console.warn(JSON.stringify({
+        level: "warn",
+        msg: "auto-commit queue timeout sweep failed; retrying next interval",
+        error: error instanceof Error ? error.message : String(error),
+      }));
+    } finally {
+      queuedTimeoutRunning = false;
+    }
+  };
+  const queuedTimeoutTimer = setInterval(() => {
+    void runQueuedTimeoutSweep();
+  }, QUEUED_TIMEOUT_SWEEP_INTERVAL_MS);
+  queuedTimeoutTimer.unref();
+  setTimeout(() => {
+    void runQueuedTimeoutSweep();
+  }, 30_000).unref();
 
   const authConfig = resolveAuthConfig(config);
 

@@ -15,6 +15,7 @@ import type {
   AutoCommitStore,
   MemberMetadataUpsert,
 } from "../src/auto-commit-store.js";
+import { AUTO_COMMIT_STORE_SCHEMA_VERSION } from "../src/auto-commit-store.js";
 import { createSqliteAutoCommitStore } from "../src/sqlite-auto-commit-store.js";
 
 import { runAutoCommitStoreConformance } from "./auto-commit-store-conformance.js";
@@ -301,7 +302,7 @@ describe("createSqliteAutoCommitStore persistence", () => {
       const verify = new Database(first.dbPath);
       expect(
         verify.prepare("SELECT schema_version FROM auto_commit_meta").get(),
-      ).toEqual({ schema_version: 7 });
+      ).toEqual({ schema_version: AUTO_COMMIT_STORE_SCHEMA_VERSION });
       expect(
         verify.prepare("PRAGMA table_info(auto_commit_receipts)").all(),
       ).toEqual(
@@ -322,9 +323,75 @@ describe("createSqliteAutoCommitStore persistence", () => {
       ).toEqual(
         expect.arrayContaining([
           expect.objectContaining({ name: "execution_checkpoint" }),
+          expect.objectContaining({ name: "recovery_attempt" }),
         ]),
       );
       verify.close();
     },
   );
+
+  it("migrates v7 files with dead batches: boot recovery re-arms the oldest per stream", async () => {
+    const first = await openStore();
+    const accepted = await first.store.acceptReceipt(receiptInput());
+    const streamId = computeStreamId(accepted.receipt);
+    await first.store.applyMetadataPage({
+      streamId,
+      receiptId: accepted.receipt.receiptId,
+      members: membersOf(["A1"], 1),
+      now: T0,
+    });
+    const member = (
+      await first.store.readPendingMembers(streamId, null, 1)
+    ).items[0]!;
+    const reservation = await first.store.acquireStreamReservation(
+      streamId,
+      "sched",
+      60_000,
+      T0,
+    );
+    await first.store.sealBatch({
+      streamId,
+      reservationToken: reservation?.token ?? "",
+      expectedStreamVersion: reservation?.version ?? -1,
+      batchId: "legacy-dead",
+      runId: "run-legacy-dead",
+      members: [
+        { memberId: member.memberId, revision: "A1", sourceKey: member.sourceSnapshot?.sourceKey ?? "k" },
+      ],
+      base: "A0",
+      head: "A1",
+      sourceKey: member.sourceSnapshot?.sourceKey ?? "k",
+      exclusionPolicyVersion: "rules-v1",
+      configPolicyVersion: "pol-1",
+      maxAttempts: 2,
+      now: T0,
+    });
+    first.store.close?.();
+    // Forge a pre-upgrade v8 file: a dead batch jamming its stream with dead
+    // members (exactly the 2026-09-18 production state).
+    const raw = new Database(first.dbPath);
+    raw.exec(`
+      UPDATE auto_commit_batches SET status = 'dead', last_error = 'execution_outcome_unknown: legacy';
+      UPDATE auto_commit_members SET status = 'dead', terminal_reason = 'execution_outcome_unknown: legacy';
+      UPDATE auto_commit_stream_heads SET active_batch_id = 'legacy-dead';
+      UPDATE auto_commit_meta SET schema_version = 7 WHERE id = 1;
+    `);
+    raw.close();
+    const migrated = await openStore(first.dir);
+    // Boot recovery (scheduler start) re-arms the legacy dead batch.
+    const recovered = await migrated.store.recoverDeadBatches(T0 + 1);
+    expect(recovered).toEqual(["legacy-dead"]);
+    const batch = await migrated.store.readBatch("legacy-dead");
+    expect(batch?.status).toBe("retry_wait");
+    expect(batch?.recoveryAttempt).toBe(1);
+    expect(batch?.attempt).toBe(1);
+    expect(batch?.lastError).toContain("legacy dead batch recovered");
+    const head = await migrated.store.readStreamHead(streamId);
+    expect(head?.activeBatchId).toBe("legacy-dead");
+    const verify = new Database(first.dbPath);
+    expect(
+      verify.prepare("SELECT schema_version FROM auto_commit_meta").get(),
+    ).toEqual({ schema_version: AUTO_COMMIT_STORE_SCHEMA_VERSION });
+    verify.close();
+  });
 });

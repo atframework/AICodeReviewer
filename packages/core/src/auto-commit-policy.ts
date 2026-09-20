@@ -18,6 +18,10 @@
  *   clears the inherited allowlist (back to all branches). When the resolved
  *   list is non-empty, only automatic commit events whose `reviewEvent.branch`
  *   is listed are accepted; branchless events (P4/SVN hooks) are not filtered.
+ * - `queued_timeout_hours`: nearest explicitly set value wins; built-in
+ *   default 48. Pending queue entries older than the bound are terminally
+ *   skipped as `queued_timeout` (Events decision becomes `timeout`); `0`
+ *   disables the sweep.
  *
  * Defaults are filled only after layered selection, so a layer that sets only
  * `schedule` does not reset an inherited `delay_seconds`. Validation is strict:
@@ -50,6 +54,14 @@ export const AUTO_COMMIT_DEFAULT_DELAY_SECONDS = 120;
  * timestamp overflow (design §3 delay_seconds row).
  */
 export const AUTO_COMMIT_MAX_DELAY_SECONDS = 31_536_000; // 365 days
+/**
+ * Built-in queue timeout (hours). Pending auto-commit members older than this
+ * bound are terminally skipped as `queued_timeout` so a stuck queue can never
+ * accumulate forever. `0` disables the sweep.
+ */
+export const AUTO_COMMIT_DEFAULT_QUEUED_TIMEOUT_HOURS = 48;
+/** Upper bound mirrors the delay bound: one year. */
+export const AUTO_COMMIT_MAX_QUEUED_TIMEOUT_HOURS = 8_760;
 
 const scheduleWindowSchema = z
   .object({
@@ -115,6 +127,14 @@ export const autoCommitConfigSchema = z
     schedule: autoCommitScheduleSchema.optional(),
     exclude_sources: autoCommitExcludeSourcesSchema.optional(),
     include_branches: z.array(z.string().min(1)).optional(),
+    queued_timeout_hours: z
+      .number()
+      .int()
+      .min(0, { message: "queued_timeout_hours must be ≥ 0 (0 disables the queue timeout)" })
+      .max(AUTO_COMMIT_MAX_QUEUED_TIMEOUT_HOURS, {
+        message: `queued_timeout_hours must not exceed ${AUTO_COMMIT_MAX_QUEUED_TIMEOUT_HOURS} (365 days)`,
+      })
+      .optional(),
   })
   .strict();
 
@@ -131,6 +151,12 @@ export interface ResolvedAutoCommitPolicy {
    * so this never joins `policyVersion`.
    */
   readonly includeBranches: readonly string[] | undefined;
+  /**
+   * Queue timeout in UTC ms: pending members whose eligibility predates
+   * `now - queuedTimeoutMs` are terminally skipped as `queued_timeout`.
+   * `null` disables the sweep (`queued_timeout_hours: 0`).
+   */
+  readonly queuedTimeoutMs: number | null;
   /**
    * Hash of the canonical resolved policy. Sealed batches pin the exclusion
    * version; pending members are re-decided when this version changes.
@@ -206,12 +232,17 @@ export function resolveAutoCommitPolicy(
     ? Object.freeze([...branchConfig])
     : undefined;
 
+  const queuedTimeoutHours =
+    pickLayer((layer) => layer?.queued_timeout_hours, nearestFirst) ??
+    AUTO_COMMIT_DEFAULT_QUEUED_TIMEOUT_HOURS;
+  const queuedTimeoutMs = queuedTimeoutHours === 0 ? null : queuedTimeoutHours * 3_600_000;
+
   const policyVersion = createHash("sha256")
     .update(
-      JSON.stringify(["auto-commit-policy", 1, delaySeconds, schedule.canonical, exclusions.canonical]),
+      JSON.stringify(["auto-commit-policy", 2, delaySeconds, queuedTimeoutMs, schedule.canonical, exclusions.canonical]),
     )
     .digest("hex")
     .slice(0, 16);
 
-  return { delaySeconds, schedule, exclusions, includeBranches, policyVersion };
+  return { delaySeconds, schedule, exclusions, includeBranches, queuedTimeoutMs, policyVersion };
 }

@@ -164,6 +164,35 @@ describe("layered resolution (C01–C04)", () => {
     expect(a.policyVersion).toBe(b.policyVersion);
   });
 
+  it("resolves queued_timeout_hours nearest-first with a 48h built-in and 0 disabling the sweep", () => {
+    expect(policy(undefined, undefined, undefined).queuedTimeoutMs).toBe(48 * 3_600_000);
+    expect(policy({ queued_timeout_hours: 24 }).queuedTimeoutMs).toBe(24 * 3_600_000);
+    expect(
+      policy({ queued_timeout_hours: 24 }, { queued_timeout_hours: 12 }).queuedTimeoutMs,
+    ).toBe(12 * 3_600_000);
+    expect(
+      policy(
+        { queued_timeout_hours: 24 },
+        { queued_timeout_hours: 12 },
+        { queued_timeout_hours: 0 },
+      ).queuedTimeoutMs,
+    ).toBeNull();
+  });
+
+  it("changes policyVersion when the queued timeout changes", () => {
+    const a = policy(undefined, undefined, undefined);
+    const b = policy({ queued_timeout_hours: 24 }, undefined, undefined);
+    expect(a.policyVersion).not.toBe(b.policyVersion);
+  });
+
+  it("rejects queued_timeout_hours outside the operational bound", () => {
+    expect(autoCommitConfigSchema.safeParse({ queued_timeout_hours: -1 }).success).toBe(false);
+    expect(autoCommitConfigSchema.safeParse({ queued_timeout_hours: 8_761 }).success).toBe(false);
+    expect(autoCommitConfigSchema.safeParse({ queued_timeout_hours: 1.5 }).success).toBe(false);
+    expect(autoCommitConfigSchema.safeParse({ queued_timeout_hours: 0 }).success).toBe(true);
+    expect(autoCommitConfigSchema.safeParse({ queued_timeout_hours: 8_760 }).success).toBe(true);
+  });
+
   it("preserves inherited branch filtering when an instance only overrides delay or schedule", () => {
     const resolved = policy(
       { include_branches: ["main"] },

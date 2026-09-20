@@ -102,6 +102,7 @@ tr:hover td{background:rgba(59,130,246,0.05)}
 <div class="tab" data-tab="providers" onclick="switchTab('providers')">LLM Providers</div>
 <div class="tab" data-tab="runs" onclick="switchTab('runs')">Recent Runs</div>
 <div class="tab" data-tab="events" onclick="switchTab('events')">Events</div>
+<div class="tab" data-tab="queue" onclick="switchTab('queue')">Queue</div>
 <div class="tab" data-tab="config" onclick="switchTab('config')">Config</div>
 </div>
 
@@ -207,6 +208,23 @@ tr:hover td{background:rgba(59,130,246,0.05)}
 <tbody id="events-table"></tbody>
 </table></div>
 </div>
+<div id="tab-queue" class="tab-content">
+<div style="margin-bottom:1rem;display:flex;gap:0.5rem;align-items:center">
+<button class="btn btn-sm btn-ghost" onclick="loadQueue()">Refresh</button>
+<select id="queue-status" onchange="loadQueue()">
+<option value="dead,skipped" selected>Stuck / terminal (dead, skipped)</option>
+<option value="retry_wait">Waiting retry</option>
+<option value="queued,running,dispatch_pending">Active</option>
+<option value="completed">Completed</option>
+</select>
+<span id="queue-indicator" class="indicator" role="status" aria-live="polite"></span>
+</div>
+<div class="table-scroll"><table>
+<thead><tr><th>Created</th><th>Workspace</th><th>Range</th><th>Status</th><th>Attempt</th><th>Retry at</th><th>Last error</th><th></th></tr></thead>
+<tbody id="queue-table"></tbody>
+</table></div>
+<div class="cell-sub" style="margin-top:0.5rem">Automatic commit batches. A terminal failure consumes one automatic recovery (attempt budget reset); if that retry fails the batch is skipped and the stream continues. Use Retry to re-arm a dead/skipped batch manually — re-execution may re-publish output that the failed attempt already delivered.</div>
+</div>
 <div id="tab-config" class="tab-content">
 <div id="config-status" role="status" aria-live="polite"></div>
 <nav id="config-nav" aria-label="Configuration sections"></nav><div id="config-main"></div>
@@ -294,13 +312,23 @@ function runTokensCell(r){
     formatNumber(u.cachedTokens||0)+" · miss "+formatNumber(miss)+
     " ("+cacheHitRate(u.cachedTokens||0,u.tokensIn||0)+")</div>";
 }
-function statusBadge(s){var m={succeeded:"success",published:"success",failed:"failure",skipped:"skip",queued:"running"};return '<span class="badge badge-'+(m[s]||"skip")+'">'+esc(s)+"</span>"}
-function decisionBadge(d){var m={executed:"success",queued:"running",deferred:"running",duplicate:"skip",deduplicated:"skip",ignored:"skip",rejected:"failure"};return '<span class="badge badge-'+(m[d]||"skip")+'">'+esc(d)+"</span>"}
+function statusBadge(s){var m={succeeded:"success",published:"success",failed:"failure",skipped:"skip",queued:"running",dead:"failure",timeout:"failure",retry_wait:"running",dispatch_pending:"running"};return '<span class="badge badge-'+(m[s]||"skip")+'">'+esc(s)+"</span>"}
+function decisionBadge(d){var m={executed:"success",queued:"running",deferred:"running",timeout:"failure",duplicate:"skip",deduplicated:"skip",ignored:"skip",rejected:"failure"};return '<span class="badge badge-'+(m[d]||"skip")+'">'+esc(d)+"</span>"}
+function eventTargetRef(e){
+  var d=(e&&typeof e.detail==="object"&&e.detail)||{};
+  var kind=e.targetKind||"";
+  if(d.headSha)return '<span class="mono" title="'+esc(d.headSha)+'">'+esc(String(d.headSha).slice(0,10))+"</span>";
+  var m=String(e.targetUrl||"").match(/\/(?:pull|pulls|issues|merge_requests)\/(\d+)/);
+  if(m)return "#"+esc(m[1]);
+  if(e.branch)return esc(e.branch);
+  return "—";
+}
 function eventReasonCell(e){
   var d=e.detail||{};
   if(e.decision==="deferred"&&d.resumeAt)return '<div>'+esc(e.reason||"")+'</div><div style="font-size:0.75rem;color:var(--muted)">until '+formatTime(d.resumeAt)+"</div>";
   if(e.reason==="ignored_by_label"&&d.matchedLabels)return esc(e.reason)+' <span style="font-size:0.75rem;color:var(--muted)">['+esc(d.matchedLabels.join(", "))+"]</span>";
   if((e.decision==="queued"||e.decision==="duplicate")&&d.receiptId)return '<div>'+esc(e.reason||"")+'</div><div style="font-size:0.75rem;color:var(--muted)">receipt '+esc(String(d.receiptId).slice(0,8))+(d.notBefore?' · not before '+formatTime(d.notBefore):'')+"</div>";
+  if(e.decision==="timeout")return '<div>queued_timeout</div><div style="font-size:0.75rem;color:var(--muted)">'+(d.receiptId?'receipt '+esc(String(d.receiptId).slice(0,8))+" · ":"")+"entry exceeded the queue timeout</div>";
   if(d.message)return '<div>'+esc(e.reason||"")+'</div><div style="font-size:0.75rem;color:var(--muted)">'+esc(String(d.message).slice(0,120))+"</div>";
   return esc(e.reason||"—");
 }
@@ -397,6 +425,7 @@ function switchTab(t){
   if(t==="providers"&&!providerStatsData)loadProviderStats(currentProviderWindow);
   if(t==="runs"&&!runsData)loadRuns();
   if(t==="events"&&!eventsData)loadEvents();
+  if(t==="queue")loadQueue();
   if(t==="live"){loadLiveRuns();startLiveTicker();}
   else {stopLiveTicker();stopLiveRefresh();}
 }
@@ -549,13 +578,71 @@ function renderEventsTable(events){
     return;
   }
   el.innerHTML=events.map(function(e){
-    var target=e.targetKind||"-";
-    if(e.branch)target+=" · "+e.branch;
+    var target=esc(e.targetKind||"-")+' <span style="font-size:0.75rem;color:var(--muted)">'+eventTargetRef(e)+"</span>";
+    if(e.branch)target+='<div style="font-size:0.75rem;color:var(--muted)">'+esc(e.branch)+"</div>";
     return "<tr><td>"+formatTime(e.receivedAt)+"</td><td>"+esc(e.provider||"-")+"</td><td>"+
       esc(e.eventName||"-")+"</td><td>"+esc(e.workspaceId||"-")+"</td><td>"+
-      esc(e.repoRef||"-")+"</td><td>"+esc(target)+"</td><td>"+
+      esc(e.repoRef||"-")+"</td><td>"+target+"</td><td>"+
       decisionBadge(e.decision)+"</td><td>"+eventReasonCell(e)+"</td></tr>";
   }).join("");
+}
+
+var queueData=null;
+var queueRequest=null;
+async function loadQueue(){
+  var sel=document.getElementById("queue-status");
+  var status=sel?sel.value:"dead,skipped";
+  var ind=document.getElementById("queue-indicator");
+  if(queueRequest)return;
+  queueRequest=true;
+  if(ind)ind.textContent="Loading...";
+  try{
+    var r=await apiFetch("api/admin/auto-commit/batches?limit=50&status="+encodeURIComponent(status));
+    if(!r.ok)throw new Error("HTTP "+r.status);
+    queueData=await r.json();
+    renderQueueTable();
+    if(ind)ind.textContent=queueData.length+" batch(es)";
+  }catch(ex){
+    queueData=queueData||[];
+    renderQueueTable();
+    if(ind)ind.textContent="Refresh failed: "+ex.message;
+  }finally{
+    queueRequest=null;
+  }
+}
+function renderQueueTable(){
+  var el=document.getElementById("queue-table");
+  if(!el)return;
+  if(!queueData||queueData.length===0){
+    el.innerHTML='<tr><td colspan="8" style="text-align:center;color:var(--muted)">No batches for this filter</td></tr>';
+    return;
+  }
+  el.innerHTML=queueData.map(function(b){
+    var range='<span class="mono" title="'+esc(b.base+".."+b.head)+'">'+esc(String(b.head).slice(0,10))+"</span>";
+    var retry=b.retryNotBefore?formatTime(b.retryNotBefore):"—";
+    var canRetry=b.status==="dead"||b.status==="skipped";
+    var action=canRetry?'<button class="btn btn-sm btn-ghost" onclick="retryBatch(\''+esc(b.batchId)+'\')">Retry</button>':"";
+    return "<tr><td>"+formatTime(b.createdAt)+"</td><td>"+esc(b.workspaceId||"-")+"</td><td>"+
+      range+"</td><td>"+statusBadge(b.status)+"</td><td>"+esc(b.attempt+"/"+b.maxAttempts+(b.recoveryAttempt>0?" (R)":""))+
+      "</td><td>"+retry+"</td><td>"+esc(String(b.lastError||"-").slice(0,120))+"</td><td>"+action+"</td></tr>";
+  }).join("");
+}
+async function retryBatch(batchId){
+  if(!batchId)return;
+  if(!window.confirm("Re-arm this batch for re-execution? A failed attempt may already have published output; the retry may publish it again."))return;
+  var ind=document.getElementById("queue-indicator");
+  try{
+    var r=await apiFetch("api/admin/auto-commit/batches/"+encodeURIComponent(batchId)+"/retry",{method:"POST"});
+    if(!r.ok){
+      var data={};
+      try{data=await r.json()}catch(_parseError){}
+      throw new Error(data.message||("HTTP "+r.status));
+    }
+    if(ind)ind.textContent="Re-armed "+String(batchId).slice(0,8)+"…";
+    await loadQueue();
+  }catch(ex){
+    if(ind)ind.textContent="Retry failed: "+ex.message;
+  }
 }
 
 function phaseBadge(p){

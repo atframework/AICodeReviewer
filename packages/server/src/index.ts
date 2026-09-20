@@ -439,7 +439,7 @@ function registerGiteaLikeWebhook(
         reason: "ignored_by_label",
         detail: { matchedLabels: ignoredLabels },
         ...webhookEventFields(reviewEvent),
-      });
+      }, reviewEvent);
       return c.json({ accepted: false, reason: "ignored_by_label", provider, eventName, matchedLabels: ignoredLabels }, 200);
     }
 
@@ -1137,7 +1137,7 @@ function registerGenericWebhook(
         reason: "ignored_by_label",
         detail: { matchedLabels: ignoredLabels },
         ...webhookEventFields(reviewEvent),
-      });
+      }, reviewEvent);
       return c.json({ accepted: false, reason: "ignored_by_label", provider, eventName, matchedLabels: ignoredLabels }, 200);
     }
     return handleReviewOrchestration(c, provider, eventName, decoded, reviewEvent, reviewPreparationOptions, reviewOrchestrationOptions, issueTriageOptions, asyncTriggers, deduplicator, runsDir, metrics, store, triggerRetry, autoCommit, getExecutionSchedule, deferralManager, getAutoCommitBranches, getPullRequestTargetBranches, runtimeConfig);
@@ -2042,7 +2042,7 @@ async function handleReviewOrchestration(
         reason: "branch_not_watched",
         detail: { branch: reviewEvent.branch },
         ...webhookEventFields(reviewEvent),
-      });
+      }, reviewEvent);
       return c.json({ accepted: false, reason: "branch_not_watched", provider, eventName, branch: reviewEvent.branch }, 200);
     }
   }
@@ -2063,7 +2063,7 @@ async function handleReviewOrchestration(
         reason: "target_branch_not_watched",
         detail: { branch: reviewEvent.targetBranch },
         ...webhookEventFields(reviewEvent),
-      });
+      }, reviewEvent);
       return c.json({ accepted: false, reason: "target_branch_not_watched", provider, eventName, branch: reviewEvent.targetBranch }, 200);
     }
   }
@@ -2096,7 +2096,7 @@ async function handleReviewOrchestration(
           ).resumeAt).toISOString(),
         },
         ...webhookEventFields(reviewEvent),
-      });
+      }, reviewEvent);
       return c.json({
         accepted: true,
         provider,
@@ -2121,7 +2121,7 @@ async function handleReviewOrchestration(
         reason: "auto_commit_receive_failed",
         detail: { message: toErrorMessage(error) },
         ...webhookEventFields(reviewEvent),
-      });
+      }, reviewEvent);
       return c.json(
         {
           accepted: false,
@@ -2167,7 +2167,7 @@ async function handleReviewOrchestration(
           ...(scheduled.resumeAt ? { resumeAt: new Date(scheduled.resumeAt).toISOString() } : {}),
         },
         ...webhookEventFields(reviewEvent),
-      });
+      }, reviewEvent);
     } else if (scheduled.disposition === "deduplicated") {
       recordWebhookEvent(store, {
         provider,
@@ -2175,7 +2175,7 @@ async function handleReviewOrchestration(
         decision: "deduplicated",
         detail: { runId: scheduled.runId },
         ...webhookEventFields(reviewEvent),
-      });
+      }, reviewEvent);
     } else {
       recordWebhookEvent(store, {
         provider,
@@ -2183,7 +2183,7 @@ async function handleReviewOrchestration(
         decision: "executed",
         detail: { mode: "background", runId: scheduled.runId },
         ...webhookEventFields(reviewEvent),
-      });
+      }, reviewEvent);
     }
 
     return c.json({
@@ -2226,7 +2226,7 @@ async function handleReviewOrchestration(
       reason,
       detail: { mode: "inline", runId, message: toErrorMessage(error) },
       ...webhookEventFields(reviewEvent),
-    });
+    }, reviewEvent);
     return c.json(
       {
         accepted: false,
@@ -2252,7 +2252,7 @@ async function handleReviewOrchestration(
     decision: "executed",
     detail: { mode: "inline", runId, outcome: result.outcome },
     ...webhookEventFields(reviewEvent),
-  });
+  }, reviewEvent);
 
   return c.json({
     accepted: true,

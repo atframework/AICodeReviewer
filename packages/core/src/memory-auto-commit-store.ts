@@ -16,6 +16,7 @@
 import { randomUUID } from "node:crypto";
 
 import { computeMemberId, computeStreamId } from "./auto-commit-identity.js";
+import type { CommitBatchStatus } from "./auto-commit-identity.js";
 import type {
   AcceptReceiptInput,
   AcceptReceiptResult,
@@ -235,6 +236,7 @@ export function createMemoryAutoCommitStore(): AutoCommitStore {
         metadataTerminalError: null,
         resolution: input.resolution ?? null,
         configSnapshotId: input.configSnapshotId ?? null,
+        timeoutReportedAt: null,
         envelope: input.envelope,
         firstAcceptedAt: input.now,
         delaySeconds: input.delaySeconds,
@@ -935,6 +937,7 @@ export function createMemoryAutoCommitStore(): AutoCommitStore {
         status: "dispatch_pending",
         attempt: 0,
         maxAttempts: input.maxAttempts,
+        recoveryAttempt: 0,
         retryNotBefore: null,
         leaseToken: null,
         leaseOwner: null,
@@ -1199,11 +1202,31 @@ export function createMemoryAutoCommitStore(): AutoCommitStore {
       )
         return;
       const exhausted = dead || record.attempt >= record.maxAttempts;
-      if (exhausted) {
+      if (exhausted && record.recoveryAttempt === 0) {
+        // Would-be-terminal failure consumes the single automatic recovery:
+        // fresh attempt budget, due outbox entry, same batch re-executes.
         batch.record = {
           ...record,
-          status: "dead",
-          lastError: error,
+          status: "retry_wait",
+          lastError: `recovery: ${error}`,
+          retryNotBefore: now,
+          attempt: 1,
+          recoveryAttempt: 1,
+          leaseToken: null,
+          leaseOwner: null,
+          leaseExpiry: null,
+        };
+        outbox.set(batchId, {
+          entry: { batchId, status: "pending", nextAttemptAt: now },
+          claimToken: null,
+          claimExpiry: null,
+        });
+      } else if (exhausted) {
+        // Recovery attempt failed too: skip terminally, release the stream.
+        batch.record = {
+          ...record,
+          status: "skipped",
+          lastError: `recovery exhausted: ${error}`,
           leaseToken: null,
           leaseOwner: null,
           leaseExpiry: null,
@@ -1213,13 +1236,12 @@ export function createMemoryAutoCommitStore(): AutoCommitStore {
           if (state && state.record.batchId === batchId) {
             state.record = {
               ...state.record,
-              status: "dead",
-              terminalReason: error,
+              status: "skipped",
+              terminalReason: `recovery exhausted: ${error}`,
             };
           }
         }
-        // The dead batch keeps stream.activeBatchId: the stream enters explicit
-        // manual handling instead of silently regrouping (design §9).
+        clearStreamActiveBatch(record.streamId, batchId);
       } else {
         batch.record = {
           ...record,
@@ -1260,53 +1282,213 @@ export function createMemoryAutoCommitStore(): AutoCommitStore {
         }
         const token = record.leaseToken;
         if (token === null && record.status !== "queued") continue;
-        // Reclaim through the same failure path with a fresh outbox entry;
-        // the expired token is invalidated implicitly by the status change.
-        const exhausted =
-          record.status === "running" && record.attempt >= record.maxAttempts;
-        if (exhausted) {
-          batch.record = {
-            ...record,
-            status: "dead",
-            leaseToken: null,
-            leaseOwner: null,
-            leaseExpiry: null,
-            lastError: "lease_expired",
-          };
-          for (const member of record.members) {
-            const state = members.get(member.memberId);
-            if (state && state.record.batchId === record.batchId) {
-              state.record = {
-                ...state.record,
-                status: "dead",
-                terminalReason: "lease_expired",
-              };
-            }
-          }
-        } else {
-          batch.record = {
-            ...record,
-            status: "retry_wait",
-            lastError: "lease_expired",
-            retryNotBefore: null,
-            leaseToken: null,
-            leaseOwner: null,
-            leaseExpiry: null,
-          };
-          outbox.set(record.batchId, {
-            entry: {
-              batchId: record.batchId,
-              status: "pending",
-              nextAttemptAt: now,
-            },
-            claimToken: null,
-            claimExpiry: null,
-          });
-        }
-        recomputeStreamNotBefore(record.streamId);
+        reclaimLeaseRecord(record.batchId, now, "lease_expired");
         reclaimed.push(record.batchId);
       }
       return reclaimed;
+    },
+
+    async reclaimBatchesByOwner(
+      ownerId: string,
+      now: number,
+    ): Promise<readonly string[]> {
+      const reclaimed: string[] = [];
+      for (const batch of batches.values()) {
+        const record = batch.record;
+        if (record.status !== "running" || record.leaseOwner !== ownerId) {
+          continue;
+        }
+        reclaimLeaseRecord(record.batchId, now, "interrupted_by_restart");
+        reclaimed.push(record.batchId);
+      }
+      return reclaimed;
+    },
+
+    async recoverDeadBatches(now: number): Promise<readonly string[]> {
+      const recovered: string[] = [];
+      // Only the oldest dead batch per stream re-arms (it re-claims the
+      // stream's active slot); a younger same-stream dead batch would
+      // otherwise execute concurrently with it.
+      const claimedStreams = new Set<string>();
+      const dead = [...batches.values()]
+        .map((batch) => batch.record)
+        .filter((record) => record.status === "dead")
+        .sort((a, b) => a.createdAt - b.createdAt);
+      for (const record of dead) {
+        const stream = streams.get(record.streamId);
+        if (!stream) continue;
+        const active = stream.head.activeBatchId;
+        if (
+          (active !== null && active !== record.batchId) ||
+          claimedStreams.has(record.streamId)
+        ) {
+          continue;
+        }
+        batches.set(record.batchId, {
+          record: {
+            ...record,
+            status: "retry_wait",
+            lastError: `legacy dead batch recovered at boot${record.lastError ? `; previous: ${record.lastError}` : ""}`,
+            retryNotBefore: now,
+            attempt: 1,
+            recoveryAttempt: 1,
+            leaseToken: null,
+            leaseOwner: null,
+            leaseExpiry: null,
+          },
+        });
+        outbox.set(record.batchId, {
+          entry: { batchId: record.batchId, status: "pending", nextAttemptAt: now },
+          claimToken: null,
+          claimExpiry: null,
+        });
+        for (const member of record.members) {
+          const state = members.get(member.memberId);
+          if (state && state.record.batchId === record.batchId && state.record.status === "dead") {
+            state.record = { ...state.record, status: "batched", terminalReason: null };
+          }
+        }
+        if (active === null) {
+          stream.head = {
+            ...stream.head,
+            activeBatchId: record.batchId,
+            version: stream.head.version + 1,
+          };
+        }
+        recomputeStreamNotBefore(record.streamId);
+        claimedStreams.add(record.streamId);
+        recovered.push(record.batchId);
+      }
+      return recovered;
+    },
+
+    async requeueBatchForRecovery(
+      batchId: string,
+      now: number,
+    ): Promise<CommitBatchRecord | undefined> {
+      const batch = batches.get(batchId);
+      if (!batch) return undefined;
+      const record = batch.record;
+      if (record.status !== "dead" && record.status !== "skipped") {
+        return undefined;
+      }
+      const stream = streams.get(record.streamId);
+      const active = stream?.head.activeBatchId ?? null;
+      if (!stream || (active !== null && active !== batchId)) {
+        // Another batch holds the stream; re-arming now would execute two
+        // non-terminal batches concurrently on the same stream.
+        return undefined;
+      }
+      batch.record = {
+        ...record,
+        status: "retry_wait",
+        lastError: `manual retry re-armed${record.lastError ? `; previous: ${record.lastError}` : ""}`,
+        retryNotBefore: now,
+        attempt: 1,
+        recoveryAttempt: 1,
+        executionCheckpoint: null,
+        leaseToken: null,
+        leaseOwner: null,
+        leaseExpiry: null,
+      };
+      outbox.set(batchId, {
+        entry: { batchId, status: "pending", nextAttemptAt: now },
+        claimToken: null,
+        claimExpiry: null,
+      });
+      for (const member of record.members) {
+        const state = members.get(member.memberId);
+        if (
+          state &&
+          state.record.batchId === batchId &&
+          (state.record.status === "dead" || state.record.status === "skipped")
+        ) {
+          state.record = { ...state.record, status: "batched", terminalReason: null };
+        }
+      }
+      if (active === null) {
+        stream.head = {
+          ...stream.head,
+          activeBatchId: batchId,
+          version: stream.head.version + 1,
+        };
+      }
+      recomputeStreamNotBefore(record.streamId);
+      return batch.record;
+    },
+
+    async readBatchesByStatus(
+      statuses: readonly CommitBatchStatus[],
+      limit: number,
+    ): Promise<readonly CommitBatchRecord[]> {
+      const wanted = new Set<string>(statuses);
+      const matched: CommitBatchRecord[] = [];
+      for (const batch of batches.values()) {
+        if (wanted.has(batch.record.status)) {
+          matched.push(batch.record);
+        }
+      }
+      matched.sort((a, b) => b.createdAt - a.createdAt);
+      return matched.slice(0, limit);
+    },
+
+    async timeoutStaleQueue(
+      cutoff: number,
+      now: number,
+      workspaceId?: string,
+    ): Promise<readonly string[]> {
+      const affectedStreams = new Set<string>();
+      for (const state of members.values()) {
+        const record = state.record;
+        if (
+          record.status !== "pending" ||
+          record.batchId !== null ||
+          record.eligibleAt >= cutoff
+        ) {
+          continue;
+        }
+        if (workspaceId !== undefined) {
+          const stream = streams.get(record.streamId);
+          if (stream?.head.workspaceId !== workspaceId) continue;
+        }
+        state.record = {
+          ...record,
+          status: "skipped",
+          terminalReason: "queued_timeout",
+        };
+        affectedStreams.add(record.streamId);
+      }
+      for (const streamId of affectedStreams) {
+        recomputeStreamNotBefore(streamId);
+      }
+      const timedOut: string[] = [];
+      for (const [receiptId, receipt] of receipts.entries()) {
+        if (
+          receipt.timeoutReportedAt !== null ||
+          receipt.firstAcceptedAt >= cutoff
+        ) {
+          continue;
+        }
+        if (workspaceId !== undefined && receipt.workspaceId !== workspaceId) {
+          continue;
+        }
+        const memberIds = memberIdsByReceipt.get(receiptId);
+        let open = false;
+        if (memberIds) {
+          for (const memberId of memberIds) {
+            const status = members.get(memberId)?.record.status;
+            if (status === "pending" || status === "batched") {
+              open = true;
+              break;
+            }
+          }
+        }
+        if (!open) {
+          receipts.set(receiptId, { ...receipt, timeoutReportedAt: now });
+          timedOut.push(receiptId);
+        }
+      }
+      return timedOut;
     },
 
     async readBatch(batchId: string): Promise<CommitBatchRecord | undefined> {
@@ -1385,6 +1567,78 @@ export function createMemoryAutoCommitStore(): AutoCommitStore {
       };
     }
     recomputeStreamNotBefore(streamId);
+  }
+
+  /**
+   * Shared lease-reclaim transition: retry_wait with a fresh outbox entry,
+   * or — at exhausted attempts — the single automatic recovery, or a terminal
+   * skip releasing the stream. Mirrors the sqlite transaction of the same
+   * name; the expired token dies with the record replacement.
+   */
+  function reclaimLeaseRecord(
+    batchId: string,
+    now: number,
+    reason: string,
+  ): void {
+    const batch = batches.get(batchId);
+    if (!batch) return;
+    const record = batch.record;
+    const exhausted =
+      record.status === "running" && record.attempt >= record.maxAttempts;
+    if (exhausted && record.recoveryAttempt === 0) {
+      batch.record = {
+        ...record,
+        status: "retry_wait",
+        lastError: `${reason}: recovery re-armed`,
+        retryNotBefore: null,
+        attempt: 1,
+        recoveryAttempt: 1,
+        leaseToken: null,
+        leaseOwner: null,
+        leaseExpiry: null,
+      };
+      outbox.set(batchId, {
+        entry: { batchId, status: "pending", nextAttemptAt: now },
+        claimToken: null,
+        claimExpiry: null,
+      });
+    } else if (exhausted) {
+      batch.record = {
+        ...record,
+        status: "skipped",
+        lastError: `recovery exhausted: ${reason}`,
+        leaseToken: null,
+        leaseOwner: null,
+        leaseExpiry: null,
+      };
+      for (const member of record.members) {
+        const state = members.get(member.memberId);
+        if (state && state.record.batchId === batchId) {
+          state.record = {
+            ...state.record,
+            status: "skipped",
+            terminalReason: `recovery exhausted: ${reason}`,
+          };
+        }
+      }
+      clearStreamActiveBatch(record.streamId, batchId);
+    } else {
+      batch.record = {
+        ...record,
+        status: "retry_wait",
+        lastError: reason,
+        retryNotBefore: null,
+        leaseToken: null,
+        leaseOwner: null,
+        leaseExpiry: null,
+      };
+      outbox.set(batchId, {
+        entry: { batchId, status: "pending", nextAttemptAt: now },
+        claimToken: null,
+        claimExpiry: null,
+      });
+    }
+    recomputeStreamNotBefore(record.streamId);
   }
 }
 

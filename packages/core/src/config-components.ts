@@ -378,6 +378,7 @@ const REVIEW_TREE: readonly (readonly [string, string, Omit<RowSpec, "t">])[] = 
   ["auto_commit.exclude_sources[].id", "ZodString", { own: "business", wir: true, res: "resolveAutoCommitPolicy", con: "packages/core/src/auto-commit-exclusion.ts", ui: "text" }],
   ["auto_commit.exclude_sources[].vcs", "ZodEnum", { own: "business", wir: true, res: "resolveAutoCommitPolicy", con: "packages/core/src/auto-commit-exclusion.ts", ui: "select" }],
   ["auto_commit.include_branches", "ZodString[]", { own: "business", wir: true, res: "resolveAutoCommitPolicy", con: "packages/core/src/auto-commit-policy.ts", ui: "multiselect" }],
+  ["auto_commit.queued_timeout_hours", "ZodNumber", { own: "business", wir: true, res: "resolveAutoCommitPolicy", con: "packages/core/src/auto-commit-policy.ts", ui: "number" }],
   ["pull_request.schedule.timezone", "ZodString", { own: "business", wir: true, res: "resolvePullRequestPolicy", con: "packages/core/src/weekly-schedule.ts", ui: "text" }],
   ["pull_request.schedule.rules[].days", "ZodEnum[]", { own: "business", wir: true, res: "resolvePullRequestPolicy", con: "packages/core/src/weekly-schedule.ts", ui: "multiselect" }],
   ["pull_request.schedule.rules[].windows[].start", "ZodString", { own: "business", wir: true, res: "resolvePullRequestPolicy", con: "packages/core/src/weekly-schedule.ts", ui: "text" }],

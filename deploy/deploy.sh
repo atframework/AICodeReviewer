@@ -481,14 +481,19 @@ run_with_build_proxy "$ENGINE_CMD" "${ENGINE_ARGS[@]}" build \
 
 # Stop existing container if any. Under systemd management the service must be
 # stopped first, otherwise Restart=always resurrects the container mid-deploy.
+# The stop is hard-bounded: the server aborts in-flight auto-commit batches on
+# SIGTERM (they re-queue and retry after the next start), so a deploy never
+# waits out a long analysis. If anything still hangs, `timeout` cuts the stop
+# and the `podman rm -f` below force-kills the container; interrupted batches
+# are reclaimed by the new process's boot recovery.
 echo "=== Stopping old container ==="
 if [ "$AICR_ENABLE_SYSTEMD" = "true" ]; then
   export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
   export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=${XDG_RUNTIME_DIR}/bus}"
   if [ "$(id -un)" = "root" ]; then
-    systemctl stop "${CONTAINER_NAME}.service" 2>/dev/null || true
+    timeout 30 systemctl stop "${CONTAINER_NAME}.service" 2>/dev/null || true
   else
-    systemctl --user stop "${CONTAINER_NAME}.service" 2>/dev/null || true
+    timeout 30 systemctl --user stop "${CONTAINER_NAME}.service" 2>/dev/null || true
   fi
 fi
 if [ "$AICR_ENABLE_COMPOSE" = "true" ]; then

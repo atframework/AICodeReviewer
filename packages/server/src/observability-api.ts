@@ -249,6 +249,97 @@ export function createObservabilityApi(options: ObservabilityApiOptions): Hono {
       }
       return c.json(result);
     });
+
+    // Auto-commit batch listing for the dashboard Queue tab: stuck/terminal
+    // batches by status. Bounded to the retention window of interest.
+    api.get("/auto-commit/batches", authMiddleware, async (c) => {
+      const statusParam = c.req.query("status");
+      const allowed = ["dead", "skipped", "retry_wait", "dispatch_pending", "queued", "running", "completed"] as const;
+      const statuses = (statusParam ?? "dead,skipped")
+        .split(",")
+        .map((value) => value.trim())
+        .filter((value): value is (typeof allowed)[number] =>
+          (allowed as readonly string[]).includes(value),
+        );
+      if (statuses.length === 0) {
+        return c.json({ error: "bad_request", message: "status filter must name at least one known batch status" }, 400);
+      }
+      const limit = parseLimit(c.req.query("limit"));
+      const batches = await autoCommitStore.readBatchesByStatus(statuses, limit);
+      return c.json(
+        batches.map((batch) => ({
+          batchId: batch.batchId,
+          runId: batch.runId,
+          streamId: batch.streamId,
+          workspaceId: batch.workspaceId,
+          vcs: batch.vcs,
+          status: batch.status,
+          attempt: batch.attempt,
+          maxAttempts: batch.maxAttempts,
+          recoveryAttempt: batch.recoveryAttempt,
+          base: batch.base,
+          head: batch.head,
+          memberCount: batch.members.length,
+          retryNotBefore: batch.retryNotBefore,
+          lastError: batch.lastError,
+          createdAt: batch.createdAt,
+        })),
+      );
+    });
+
+    // Manual retry (P1 dead-batch recovery): re-arm a terminal batch with a
+    // fresh attempt budget and release its stream. CAS on the terminal
+    // status; audited through the structured log (admin surface is
+    // session-authenticated and single-operator).
+    api.post("/auto-commit/batches/:id/retry", authMiddleware, async (c) => {
+      const batchId = c.req.param("id");
+      if (!batchId) {
+        return c.json({ error: "bad_request", message: "batch id required" }, 400);
+      }
+      const existing = await autoCommitStore.readBatch(batchId);
+      if (!existing) {
+        return c.json({ error: "not_found", message: `unknown batch ${batchId}` }, 404);
+      }
+      if (existing.status !== "dead" && existing.status !== "skipped") {
+        return c.json(
+          {
+            error: "conflict",
+            message: `batch ${batchId} is '${existing.status}'; only terminal dead/skipped batches can be re-armed`,
+          },
+          409,
+        );
+      }
+      const requeued = await autoCommitStore.requeueBatchForRecovery(batchId, Date.now());
+      if (!requeued) {
+        return c.json(
+          {
+            error: "conflict",
+            message: `batch ${batchId} could not re-arm: its stream is currently held by another batch; retry after that batch settles`,
+          },
+          409,
+        );
+      }
+      console.warn(JSON.stringify({
+        level: "warn",
+        msg: "admin manual retry re-armed auto-commit batch",
+        batchId,
+        workspaceId: requeued.workspaceId,
+        streamId: requeued.streamId,
+        previousStatus: existing.status,
+        previousError: existing.lastError,
+      }));
+      return c.json({
+        ok: true,
+        batch: {
+          batchId: requeued.batchId,
+          status: requeued.status,
+          attempt: requeued.attempt,
+          maxAttempts: requeued.maxAttempts,
+          recoveryAttempt: requeued.recoveryAttempt,
+          retryNotBefore: requeued.retryNotBefore,
+        },
+      });
+    });
   }
   return api;
 }

@@ -183,6 +183,7 @@ describe("webhookEvents schema", () => {
       "executed",
       "deferred",
       "queued",
+      "timeout",
       "duplicate",
       "deduplicated",
       "ignored",

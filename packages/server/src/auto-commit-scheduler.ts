@@ -49,6 +49,14 @@ export interface BatchExecutionContext {
   readonly receipt: AutoCommitReceipt;
   readonly leaseToken: string;
   readonly signal?: AbortSignal;
+  /**
+   * True when this execution re-enters a batch that already consumed its
+   * automatic recovery (or is retrying after a checkpoint was written). The
+   * executor may then replay the execution even though the previous outcome
+   * is unprovable — the operator explicitly accepted duplicate publication
+   * risk in exchange for never having a permanently jammed stream.
+   */
+  readonly recovery?: boolean;
 }
 
 type MetadataAdapter = VcsAdapter & {
@@ -144,6 +152,12 @@ export class AutoCommitScheduler {
   private ticking = false;
   private pendingKick = false;
   private stopping = false;
+  /** Aborted on stop(): in-flight executions must interrupt promptly so a
+   * deploy restart never waits out a long analysis; the interrupted batch
+   * re-queues through failBatch and retries on the next process start.
+   * Re-created on start() — an aborted controller must never leak into a
+   * later session. */
+  private execAbort: AbortController = new AbortController();
   /** Streams that threw during the current tick; floors the next re-arm. */
   private streamFailures = 0;
   private tickCompletion: Promise<void> | null = null;
@@ -185,11 +199,46 @@ export class AutoCommitScheduler {
     if (this.running) return;
     this.stopping = false;
     this.running = true;
+    this.execAbort = new AbortController();
+    // Boot recovery (single-instance contract: this consumer id's previous
+    // process is gone by construction):
+    // 1. Reclaim leases still held by our own consumer identity — a deploy
+    //    restart must retry interrupted executions immediately, not after the
+    //    lease TTL.
+    // 2. Re-arm pre-upgrade dead batches so legacy stream jams clear without
+    //    manual database surgery.
+    void (async () => {
+      try {
+        const now = this.now();
+        const reclaimed = await this.store.reclaimBatchesByOwner(
+          this.options.consumerId,
+          now,
+        );
+        const recovered = await this.store.recoverDeadBatches(now);
+        if (reclaimed.length > 0 || recovered.length > 0) {
+          console.warn(JSON.stringify({
+            level: "warn",
+            msg: "auto-commit boot recovery re-armed interrupted/legacy batches",
+            reclaimedLeases: reclaimed.length,
+            recoveredDead: recovered.length,
+          }));
+          this.kick();
+        }
+      } catch (error) {
+        console.warn(JSON.stringify({
+          level: "warn",
+          msg: "auto-commit boot recovery failed; expired-lease reclaim still applies",
+          error: error instanceof Error ? error.message : String(error),
+        }));
+      }
+    })();
     this.arm(0);
   }
 
   stop(): void {
     this.running = false;
+    this.stopping = true;
+    this.execAbort.abort();
     if (this.timer) {
       clearTimeout(this.timer);
       this.timer = null;
@@ -1153,6 +1202,8 @@ export class AutoCommitScheduler {
     }
 
     const abort = new AbortController();
+    const onSchedulerAbort = () => abort.abort();
+    this.execAbort.signal.addEventListener("abort", onSchedulerAbort, { once: true });
     const renew = setInterval(() => {
       void this.store
         .renewBatchLease(
@@ -1176,6 +1227,7 @@ export class AutoCommitScheduler {
         receipt: receipt.receipt,
         leaseToken,
         signal: abort.signal,
+        recovery: active.recoveryAttempt > 0,
       });
       if (abort.signal.aborted) return;
       await this.store.completeBatch(
@@ -1185,8 +1237,10 @@ export class AutoCommitScheduler {
         this.now(),
       );
     } catch (error) {
-      const message =
-        error instanceof Error
+      const interrupted = this.stopping && abort.signal.aborted;
+      const message = interrupted
+        ? "interrupted_by_shutdown"
+        : error instanceof Error
           ? error.message.slice(0, 500)
           : "execution failed";
       const retryAt = nextAllowedInstant(
@@ -1201,13 +1255,16 @@ export class AutoCommitScheduler {
         "retryable" in error &&
         error.retryable === false;
       const dead = permanent || batch.attempt >= batch.maxAttempts;
-      // The store result is the durable record, but without this line a dead
-      // batch (which jams its stream until manual release) is invisible in
-      // logs — the 2026-09-18 incident lost both causes this way.
+      // The store turns a would-be-terminal failure into the single
+      // automatic recovery (attempt reset, outbox re-armed) and, once that
+      // recovery is spent, into a terminal skip that releases the stream —
+      // the durable record is authoritative, these lines are the operator
+      // trace (the 2026-09-18 incident lost both causes when they lived only
+      // in the database).
       console.warn(JSON.stringify({
         level: dead ? "error" : "warn",
         msg: dead
-          ? "auto-commit batch died, stream holds it until manual release"
+          ? "auto-commit batch terminal failure; recovery re-armed or batch skipped"
           : "auto-commit batch attempt failed, retrying",
         batchId: batch.batchId,
         runId: batch.runId,
@@ -1215,7 +1272,8 @@ export class AutoCommitScheduler {
         streamId: batch.streamId,
         attempt: batch.attempt,
         maxAttempts: batch.maxAttempts,
-        dead,
+        recoveryAttempt: active.recoveryAttempt,
+        terminal: dead,
         error: message,
       }));
       await this.store.failBatch(
@@ -1227,6 +1285,7 @@ export class AutoCommitScheduler {
         this.now(),
       );
     } finally {
+      this.execAbort.signal.removeEventListener("abort", onSchedulerAbort);
       clearInterval(renew);
     }
   }

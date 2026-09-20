@@ -728,7 +728,7 @@ describe("AutoCommitScheduler", () => {
     expect((await store.readNextWake())?.at).toBe(Date.UTC(2026, 8, 14, 12));
   });
 
-  it("waits for the running batch when draining and starts no later batch", async () => {
+  it("aborts the running batch on drain, re-queues it, and starts no later batch", async () => {
     const store = createMemoryAutoCommitStore();
     const policy = makePolicy({ delay_seconds: 0 });
     const adapter = new ScriptedAdapter([
@@ -744,6 +744,9 @@ describe("AutoCommitScheduler", () => {
       executed,
       now: () => T0,
       tuning: {
+        // An execution that ignores the abort signal is the worst case: the
+        // drain still cannot complete the batch, so it must be left for the
+        // lease-expiry reclaim of the next process start.
         executeBatch: async (context) => {
           executed.push(context);
           entered.resolve();
@@ -755,19 +758,71 @@ describe("AutoCommitScheduler", () => {
     await accept(store, policy, "w2", "A0", "A1", T0, 0, "ws2");
     const tick = scheduler.tick();
     await entered.promise;
+    expect(executed[0]?.signal).toBeDefined();
+    expect(executed[0]?.signal?.aborted).toBe(false);
     let drained = false;
     const drain = scheduler.stopAndDrain().then(() => {
       drained = true;
     });
+    // The drain aborts in-flight executions immediately; only the stubborn
+    // (signal-ignoring) execution keeps the tick pending.
+    expect(executed[0]?.signal?.aborted).toBe(true);
     await Promise.resolve();
     expect(drained).toBe(false);
     release.resolve();
     await Promise.all([tick, drain]);
     expect(drained).toBe(true);
     expect(executed).toHaveLength(1);
-    expect((await store.readBatch(executed[0]!.batch.batchId))?.status).toBe(
-      "completed",
+    // The aborted execution must not be recorded as completed.
+    const batch = await store.readBatch(executed[0]!.batch.batchId);
+    expect(batch?.status).toBe("running");
+    // The next process start reclaims the expired lease and retries.
+    const reclaimed = await store.reclaimExpiredBatchLeases(
+      (batch?.leaseExpiry ?? T0) + 1,
+      10,
     );
+    expect(reclaimed).toEqual([executed[0]!.batch.batchId]);
+    expect(
+      (await store.readBatch(executed[0]!.batch.batchId))?.status,
+    ).toBe("retry_wait");
+  });
+
+  it("re-queues an abort-aware execution immediately on drain", async () => {
+    const store = createMemoryAutoCommitStore();
+    const policy = makePolicy({ delay_seconds: 0 });
+    const adapter = new ScriptedAdapter([
+      { sha: "A1", parents: ["A0"], ...alice },
+    ]);
+    const entered = Promise.withResolvers<void>();
+    const executed: BatchExecutionContext[] = [];
+    const scheduler = makeScheduler({
+      store,
+      adapter,
+      policy,
+      executed,
+      now: () => T0,
+      tuning: {
+        executeBatch: async (context) => {
+          executed.push(context);
+          entered.resolve();
+          // Real executions observe the abort signal and fail fast; the
+          // scheduler converts that into an immediate retry_wait re-queue.
+          await new Promise<never>((_resolve, reject) => {
+            context.signal?.addEventListener("abort", () =>
+              reject(new Error("interrupted_by_shutdown")),
+            );
+          });
+        },
+      },
+    });
+    await accept(store, policy, "w1", "A0", "A1", T0, 0, "ws1");
+    const tick = scheduler.tick();
+    await entered.promise;
+    await scheduler.stopAndDrain();
+    await tick;
+    const batch = await store.readBatch(executed[0]!.batch.batchId);
+    expect(batch?.status).toBe("retry_wait");
+    expect(batch?.lastError).toBe("interrupted_by_shutdown");
   });
 
   it("does not reinterpret an excluded ordinary prefix as a mixed-source rewrite", async () => {
@@ -994,7 +1049,7 @@ describe("AutoCommitScheduler", () => {
     expect(executed).toHaveLength(1);
   });
 
-  it("retries a failed batch inside the window and dies after max attempts", async () => {
+  it("retries a failed batch inside the window and recovers instead of dying", async () => {
     const store = createMemoryAutoCommitStore();
     const policy = makePolicy({ delay_seconds: 0 });
     const adapter = new ScriptedAdapter([
@@ -1019,22 +1074,37 @@ describe("AutoCommitScheduler", () => {
       (await store.readStreamHead(streamId))?.activeBatchId ?? "",
     );
     expect(batch?.status).toBe("retry_wait");
+    expect(batch?.attempt).toBe(1);
+    expect(batch?.recoveryAttempt).toBe(0);
     expect(batch?.retryNotBefore).not.toBeNull();
+    expect(executed).toHaveLength(0);
 
-    // Second attempt fails -> dead; members die with the batch (no re-group).
+    // Second failure exhausts the budget -> the single automatic recovery
+    // re-arms the batch (attempt reset) instead of persisting a dead row
+    // that jams the stream; the recovery outbox entry is due immediately, so
+    // the same tick re-dispatches it and the recovery attempt succeeds.
     now = (batch?.retryNotBefore ?? now) + 1;
     await scheduler.tick();
     batch = await store.readBatch(batch?.batchId ?? "");
-    expect(batch?.status).toBe("dead");
-    expect(executed).toHaveLength(0);
+    expect(batch?.status).toBe("completed");
+    expect(batch?.recoveryAttempt).toBe(1);
+    expect(executed).toHaveLength(1);
 
-    // A later webhook is accepted, but this stream cannot assemble behind
-    // the dead batch until an operator resolves the unknown side effects.
+    // A later webhook assembles into a fresh batch once the stream freed; it
+    // seals, executes, and completes inside the same tick (the terminal batch
+    // releases the stream, so the head's activeBatchId is null again).
     await accept(store, policy, "d2", "A1", "A2", now + 1);
     now += 1;
     await scheduler.tick();
-    expect((await store.readStreamHead(streamId))?.activeBatchId).toBe(batch?.batchId);
-    expect(executed).toHaveLength(0);
+    const batches = await store.readBatchesByStatus(
+      ["completed", "skipped", "dead", "retry_wait", "running", "queued", "dispatch_pending"],
+      10,
+    );
+    expect(batches).toHaveLength(2);
+    const successor = batches.find((entry) => entry.batchId !== batch?.batchId);
+    expect(successor?.status).toBe("completed");
+    expect(successor?.head).toBe("A2");
+    expect(executed).toHaveLength(2);
   });
 
   it("fails receipt coverage explicitly after bounded metadata retries", async () => {

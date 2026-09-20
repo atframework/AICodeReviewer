@@ -38,7 +38,7 @@ import { deriveSourceKey } from "./auto-commit-identity.js";
 import type { WorkspaceResolution } from "./config-resolution.js";
 import type { ReviewEvent } from "./review-event.js";
 
-export const AUTO_COMMIT_STORE_SCHEMA_VERSION = 7;
+export const AUTO_COMMIT_STORE_SCHEMA_VERSION = 8;
 
 // ---------------------------------------------------------------------------
 // Receipts and members
@@ -113,6 +113,12 @@ export interface AutoCommitReceipt {
   readonly resolution: WorkspaceResolution | null;
   /** Admission-time config snapshot reference; null for legacy/pre-upgrade rows. */
   readonly configSnapshotId: string | null;
+  /**
+   * Set once the queue-timeout sweep reported this receipt as timed out
+   * (mirrored onto the webhook event log); null otherwise. Pure bookkeeping
+   * for sweep idempotency — lifecycle truth lives on the members.
+   */
+  readonly timeoutReportedAt: number | null;
 }
 
 export interface AcceptReceiptResult {
@@ -379,6 +385,16 @@ export interface CommitBatchRecord {
   readonly status: CommitBatchStatus;
   readonly attempt: number;
   readonly maxAttempts: number;
+  /**
+   * 0 until the batch's first would-be-terminal failure. A would-be-dead
+   * batch (exhausted attempts, permanent error, or an execution outcome that
+   * cannot be proven safe) consumes its single automatic recovery instead:
+   * attempts reset to 1 and the batch re-enters the outbox. A later
+   * would-be-terminal failure while `recoveryAttempt` is 1 skips the batch
+   * terminally so the stream keeps flowing. Manual admin retry always
+   * re-arms the batch regardless of this flag.
+   */
+  readonly recoveryAttempt: number;
   readonly retryNotBefore: number | null;
   readonly leaseToken: string | null;
   readonly leaseOwner: string | null;
@@ -682,6 +698,14 @@ export interface AutoCommitStore {
     now: number,
   ): Promise<void>;
 
+  /**
+   * Record a failed execution attempt. `dead=true` marks a would-be-terminal
+   * failure (permanent error or exhausted attempts): the store consumes the
+   * batch's single automatic recovery on the first such failure (attempts
+   * reset, outbox re-armed) and terminally skips the batch on the second,
+   * releasing the stream. Dead as a persisted status is only written for
+   * pre-upgrade rows and never blocks a stream under the current contract.
+   */
   failBatch(
     batchId: string,
     token: string,
@@ -695,6 +719,60 @@ export interface AutoCommitStore {
   reclaimExpiredBatchLeases(
     now: number,
     limit: number,
+  ): Promise<readonly string[]>;
+
+  /**
+   * Reclaim running/queued batches still leased by `ownerId` regardless of
+   * lease expiry. Called once at scheduler start: the previous process with
+   * this consumer identity is gone by construction, so its leases are stale
+   * even before their TTL lapses (deploy restarts must not wait out the
+   * lease window to retry interrupted executions). Single-instance contract —
+   * concurrent schedulers must use distinct consumer ids.
+   */
+  reclaimBatchesByOwner(
+    ownerId: string,
+    now: number,
+  ): Promise<readonly string[]>;
+
+  /**
+   * Re-arm every dead batch for its single automatic recovery: status →
+   * retry_wait, attempts reset to 1, `recoveryAttempt` pinned to 1, a fresh
+   * outbox entry, and the stream's `activeBatchId` released. Called at boot
+   * so pre-upgrade dead batches (which jammed their streams) resume instead
+   * of waiting for manual repair. Returns the re-armed batch ids.
+   */
+  recoverDeadBatches(now: number): Promise<readonly string[]>;
+
+  /**
+   * Manual admin retry for a terminal batch (dead/skipped): re-arm with a
+   * fresh full attempt budget (`recoveryAttempt` stays 1 so a repeated
+   * terminal failure skips again instead of looping). Returns the updated
+   * record, or undefined when the batch is unknown or not terminal.
+   */
+  requeueBatchForRecovery(
+    batchId: string,
+    now: number,
+  ): Promise<CommitBatchRecord | undefined>;
+
+  /** Batches currently in one of `statuses`, newest first (admin listing). */
+  readBatchesByStatus(
+    statuses: readonly CommitBatchStatus[],
+    limit: number,
+  ): Promise<readonly CommitBatchRecord[]>;
+
+  /**
+   * Queue timeout sweep: pending (never-batched) members whose eligibility
+   * fell before `cutoff` become terminally skipped with reason
+   * `queued_timeout`, and receipts that then own no non-terminal members and
+   * were accepted before `cutoff` get `resolution = 'timeout'`. Returns the
+   * receipt ids whose resolution this call set, so the caller can mirror the
+   * state change onto the dashboard webhook event log. Optional
+   * `workspaceId` scopes the sweep (per-workspace timeout policy).
+   */
+  timeoutStaleQueue(
+    cutoff: number,
+    now: number,
+    workspaceId?: string,
   ): Promise<readonly string[]>;
 
   readBatch(batchId: string): Promise<CommitBatchRecord | undefined>;

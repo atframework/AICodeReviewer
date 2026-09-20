@@ -217,7 +217,7 @@ describe("automatic batch execution boundary", () => {
     expect(persistResult).toHaveBeenCalledTimes(2);
   });
 
-  it("keeps partially failed publication pending and never repeats a successful POST", async () => {
+  it("keeps partially failed publication pending and replays only through the recovery policy", async () => {
     const { store, context } = await fixture();
     const runReview = vi
       .fn<typeof runReviewOrchestration>()
@@ -235,24 +235,34 @@ describe("automatic batch execution boundary", () => {
     expect((await store.readBatch("batch"))?.executionCheckpoint?.phase).toBe(
       "publication_pending",
     );
+    // 2026-09 operator policy: a retry re-executes even when the previous
+    // outcome is unprovable — the store's single automatic recovery bounds
+    // the replay instead of dead-lettering the stream.
     await expect(execute(context)).rejects.toMatchObject({ retryable: false });
-    expect(runReview).toHaveBeenCalledTimes(1);
+    expect(runReview).toHaveBeenCalledTimes(2);
   });
 
-  it("does not replay a started checkpoint left behind by an unconfirmed execution", async () => {
+  it("replays a started checkpoint left behind by an unconfirmed execution (operator policy)", async () => {
     const { store, context } = await fixture();
     const runReview = vi
       .fn<typeof runReviewOrchestration>()
-      .mockRejectedValue(new Error("response lost"));
+      .mockRejectedValueOnce(new Error("response lost"))
+      .mockResolvedValueOnce(result(true));
     const execute = createAutoCommitBatchExecutor({
       store,
       orchestrationOptions: {} as ServerReviewOrchestrationOptions,
       runReview,
       now: () => 1001,
     });
+    await expect(execute(context)).rejects.toThrow("response lost");
+    // The `started` checkpoint no longer dead-letters the batch; the retry
+    // re-runs the analysis under the live lease (duplicate publication risk
+    // accepted by the 2026-09 operator decision).
     await expect(execute(context)).rejects.toMatchObject({ retryable: false });
-    await expect(execute(context)).rejects.toThrow("started checkpoint");
-    expect(runReview).toHaveBeenCalledTimes(1);
+    expect(runReview).toHaveBeenCalledTimes(2);
+    expect((await store.readBatch("batch"))?.executionCheckpoint?.phase).toBe(
+      "publication_pending",
+    );
   });
 
   it("never enters analysis when its execution checkpoint cannot acquire the lease", async () => {

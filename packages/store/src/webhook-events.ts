@@ -5,6 +5,7 @@ import { webhookEvents, type WebhookEventDecision } from "./schema.js";
 import {
   getRecentWebhookEventsPg,
   insertWebhookEventPg,
+  markWebhookEventsTimedOutPg,
   pruneWebhookEventsPg,
 } from "./webhook-events.pg.js";
 
@@ -124,4 +125,32 @@ export function parseWebhookDetail(raw: string | null): unknown {
   } catch {
     return null;
   }
+}
+
+/**
+ * Mirror the auto-commit queue-timeout sweep onto the event log: queued (or
+ * duplicate) events whose receipt timed out flip to the terminal `timeout`
+ * decision so the Events panel reflects reality instead of showing stale
+ * queue entries forever. Chunked to keep the IN list bounded.
+ */
+export async function markWebhookEventsTimedOut(
+  store: StoreDb,
+  receiptIds: readonly string[],
+): Promise<number> {
+  if (receiptIds.length === 0) return 0;
+  if (store.kind === "postgres") {
+    return markWebhookEventsTimedOutPg(store, receiptIds);
+  }
+  let total = 0;
+  for (let offset = 0; offset < receiptIds.length; offset += 100) {
+    const chunk = receiptIds.slice(offset, offset + 100);
+    const result = store.db.run(sql`UPDATE webhook_events SET decision = 'timeout', reason = 'queued_timeout'
+      WHERE decision IN ('queued', 'duplicate')
+        AND json_extract(detail, '$.receiptId') IN (${sql.join(
+          chunk.map((id) => sql`${id}`),
+          sql`, `,
+        )})`);
+    total += Number(result.changes);
+  }
+  return total;
 }

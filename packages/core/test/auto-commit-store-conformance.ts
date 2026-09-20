@@ -1115,7 +1115,9 @@ export function runAutoCommitStoreConformance(factory: StoreFactory): void {
         retryAt,
       );
 
-      // Second attempt dies → dead, members dead, stream stays for manual handling.
+      // Second attempt exhausts the budget → the single automatic recovery
+      // re-arms (attempt reset to 1) instead of persisting a stream-jamming
+      // dead row; the outbox entry is immediately due.
       const token2 = await store.startBatchExecution(
         "batch-r",
         "w",
@@ -1130,13 +1132,152 @@ export function runAutoCommitStoreConformance(factory: StoreFactory): void {
         false,
         retryAt + 2000,
       );
-      const deadBatch = await store.readBatch("batch-r");
-      expect(deadBatch?.status).toBe("dead");
-      const view = await store.getReceipt(n1.receipt.receiptId);
-      expect(view?.memberCounts.dead).toBe(1);
+      const recoveryBatch = await store.readBatch("batch-r");
+      expect(recoveryBatch?.status).toBe("retry_wait");
+      expect(recoveryBatch?.recoveryAttempt).toBe(1);
+      expect(recoveryBatch?.attempt).toBe(1);
+      expect(recoveryBatch?.lastError).toContain("recovery: transient-io");
       expect((await store.readStreamHead(streamId))?.activeBatchId).toBe(
         "batch-r",
       );
+      // The recovery re-arm is claimable right away.
+      const recoveryClaim = await store.claimDispatch(retryAt + 3000, "dispatcher", 10);
+      expect(recoveryClaim).toHaveLength(1);
+      await store.confirmDispatch(
+        "batch-r",
+        recoveryClaim[0]?.claimToken ?? "",
+        retryAt + 3000,
+      );
+      // Recovery attempt fails again → terminal skip, members skipped, and
+      // the stream is released so later commits keep flowing.
+      const token3 = await store.startBatchExecution(
+        "batch-r",
+        "w",
+        60_000,
+        retryAt + 4000,
+      );
+      await store.failBatch(
+        "batch-r",
+        token3 ?? "",
+        "still-broken",
+        null,
+        false,
+        retryAt + 5000,
+      );
+      const skippedBatch = await store.readBatch("batch-r");
+      expect(skippedBatch?.status).toBe("skipped");
+      const view = await store.getReceipt(n1.receipt.receiptId);
+      expect(view?.memberCounts.skipped).toBe(1);
+      expect((await store.readStreamHead(streamId))?.activeBatchId).toBeNull();
+    });
+
+    it("reclaims leases held by a previous scheduler owner at boot (interrupted executions)", async () => {
+      const store = await factory.makeStore();
+      await prepareBatch(store, "owner-b");
+      await dispatchOnce(store, T0);
+      const token = await store.startBatchExecution("owner-b", "scheduler-old", 60_000, T0 + 1_000);
+      expect(token).toBeTruthy();
+      // Lease still valid — expiry-based reclaim must not fire…
+      expect(await store.reclaimExpiredBatchLeases(T0 + 2_000, 10)).toHaveLength(0);
+      // …but the boot reclaim by owner re-queues it immediately.
+      const reclaimed = await store.reclaimBatchesByOwner("scheduler-old", T0 + 2_500);
+      expect(reclaimed).toEqual(["owner-b"]);
+      const batch = await store.readBatch("owner-b");
+      expect(batch?.status).toBe("retry_wait");
+      expect(batch?.leaseToken).toBeNull();
+      // The re-queued batch dispatches again without waiting for the old TTL.
+      const claim = await store.claimDispatch(T0 + 3_000, "dispatcher", 10);
+      expect(claim.map((entry) => entry.batch.batchId)).toEqual(["owner-b"]);
+    });
+
+    it("manually re-arms terminal dead/skipped batches with a fresh budget", async () => {
+      const store = await factory.makeStore();
+      await prepareBatch(store, "manual-a");
+      await dispatchOnce(store, T0);
+      const token = await store.startBatchExecution("manual-a", "w", 60_000, T0 + 1_000);
+      await store.failBatch("manual-a", token ?? "", "boom", null, true, T0 + 2_000);
+      const recoveryClaim = await store.claimDispatch(T0 + 3_000, "d", 10);
+      await store.confirmDispatch("manual-a", recoveryClaim[0]?.claimToken ?? "", T0 + 3_000);
+      const token2 = await store.startBatchExecution("manual-a", "w", 60_000, T0 + 4_000);
+      await store.failBatch("manual-a", token2 ?? "", "boom-2", null, true, T0 + 5_000);
+      const terminal = await store.readBatch("manual-a");
+      expect(terminal?.status).toBe("skipped");
+      // Non-terminal batches refuse the manual re-arm.
+      await prepareBatch(store, "manual-b");
+      expect(await store.requeueBatchForRecovery("manual-b", T0 + 6_000)).toBeUndefined();
+      // Unknown batches refuse too.
+      expect(await store.requeueBatchForRecovery("missing", T0 + 6_000)).toBeUndefined();
+      const requeued = await store.requeueBatchForRecovery("manual-a", T0 + 6_000);
+      expect(requeued?.status).toBe("retry_wait");
+      expect(requeued?.attempt).toBe(1);
+      expect(requeued?.recoveryAttempt).toBe(1);
+      expect(requeued?.executionCheckpoint).toBeNull();
+      // The re-armed batch re-claims the stream's active slot, so it cannot
+      // execute concurrently with a successor batch, and its members are
+      // batched again — dispatch proceeds.
+      const streamIdManual = requeued?.streamId ?? "";
+      expect((await store.readStreamHead(streamIdManual))?.activeBatchId).toBe("manual-a");
+      const claim = await store.claimDispatch(T0 + 7_000, "d", 10);
+      expect(claim.map((entry) => entry.batch.batchId)).toContain("manual-a");
+    });
+
+    it("lists batches by status newest-first for the admin queue view", async () => {
+      const store = await factory.makeStore();
+      expect(await store.readBatchesByStatus(["dead", "skipped"], 10)).toEqual([]);
+      await prepareBatch(store, "list-a");
+      await prepareBatch(store, "list-b");
+      const active = await store.readBatchesByStatus(
+        ["dispatch_pending", "queued", "running", "retry_wait", "completed", "skipped", "dead"],
+        10,
+      );
+      expect(active.map((batch) => batch.batchId).sort()).toEqual(["list-a", "list-b"]);
+      const limited = await store.readBatchesByStatus(
+        ["dispatch_pending", "queued"],
+        1,
+      );
+      expect(limited).toHaveLength(1);
+    });
+
+    it("times out stale pending members and reports their receipts once (48h default)", async () => {
+      const store = await factory.makeStore();
+      const accepted = await store.acceptReceipt(
+        receiptInput({ deliveryKey: "d:timeout", delaySeconds: 0 }),
+      );
+      const streamId = computeStreamId(accepted.receipt);
+      await store.applyMetadataPage({
+        streamId,
+        receiptId: accepted.receipt.receiptId,
+        members: membersOf(["A1"], 1),
+        now: T0,
+      });
+      // Before the cutoff (entry not yet stale) nothing happens.
+      expect(await store.timeoutStaleQueue(T0 - 1_000, T0)).toEqual([]);
+      // Past the cutoff: the never-batched pending member is terminally skipped…
+      const timedOut = await store.timeoutStaleQueue(T0 + 100, T0 + 100);
+      expect(timedOut).toEqual([accepted.receipt.receiptId]);
+      const member = (await store.readPendingMembers(streamId, null, 10)).items;
+      expect(member).toHaveLength(0);
+      const view = await store.getReceipt(accepted.receipt.receiptId);
+      expect(view?.memberCounts.skipped).toBe(1);
+      // …and the report is idempotent.
+      expect(
+        await store.timeoutStaleQueue(T0 + 200, T0 + 200),
+      ).toEqual([]);
+      // A fresh receipt in another workspace stays untouched when the sweep
+      // scopes elsewhere.
+      const other = await store.acceptReceipt(
+        receiptInput({ deliveryKey: "d:other", workspaceId: "ws-other", delaySeconds: 0 }),
+      );
+      const otherStream = computeStreamId(other.receipt);
+      await store.applyMetadataPage({
+        streamId: otherStream,
+        receiptId: other.receipt.receiptId,
+        members: membersOf(["B1"], 1),
+        now: T0,
+      });
+      expect(
+        await store.timeoutStaleQueue(T0 + 100, T0 + 100, "ws-other"),
+      ).toEqual([other.receipt.receiptId]);
     });
 
     it("reports the earliest scheduling signal across heads, outbox, and leases", async () => {
