@@ -1308,8 +1308,14 @@ function toReceipt(stored: StoredReceipt): AutoCommitReceipt {
 
 /** Blobs written before the snapshot/recovery fields existed decode as undefined. */
 function toBatch(stored: CommitBatchRecord): CommitBatchRecord {
+  // Keep arbitrary checkpoint JSON opaque to Lua cjson: it changes nested []
+  // into {} whenever a batch is saved (including lease/recovery updates).
+  const checkpoint: unknown = stored.executionCheckpoint;
   return {
     ...stored,
+    executionCheckpoint: typeof checkpoint === "string"
+      ? JSON.parse(checkpoint) as BatchExecutionCheckpoint
+      : stored.executionCheckpoint,
     configSnapshotId: stored.configSnapshotId ?? null,
     recoveryAttempt: stored.recoveryAttempt ?? 0,
   };
@@ -2092,7 +2098,7 @@ local raw = redis.call("HGET", kBatch(ARGV[2]), "data")
 if not raw then return 0 end
 local rec = cjson.decode(raw)
 if rec.status ~= "running" or rec.leaseToken ~= ARGV[3] or isNull(rec.leaseExpiry) or rec.leaseExpiry <= tonumber(ARGV[5]) then return 0 end
-rec.executionCheckpoint = cjson.decode(ARGV[4])
+rec.executionCheckpoint = ARGV[4]
 saveBatch(rec)
 return 1
 `,

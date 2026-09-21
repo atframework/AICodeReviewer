@@ -212,7 +212,7 @@ describe("dashboard routes", () => {
       requests.push(url);
       const page = Number(new URL(url, "http://localhost").searchParams.get("page"));
       return { ok: true, json: async () => ({ items: Array.from({ length: page === 1 ? 20 : 5 }, (_, i) => ({
-        provider: "gitea", eventName: `event-${(page - 1) * 20 + i}`, decision: "queued",
+        provider: "gitea", eventName: `event-${(page - 1) * 20 + i}`, decision: ["queued", "executed", "deferred"][i % 3],
       })), hasMore: page === 1 }) };
     };
     runInContext(`eventsHasMore=true;eventsData=Array.from({length:20},function(_,i){return {
@@ -229,6 +229,14 @@ describe("dashboard routes", () => {
     expect(requests).toEqual(["api/admin/events?limit=20&page=2"]);
     expect(element("events-page-info").textContent).toBe("Page 2 · 5 events");
     expect(element("events-next").disabled).toBe(true);
+    const history = element("events-table").innerHTML;
+    expect(history).toContain("queued at receipt");
+    expect(history).toContain("execution accepted");
+    expect(history).toContain("deferred at receipt");
+    expect(history).not.toContain("badge-running");
+    expect(history).not.toContain("badge-success");
+    // Queue states still describe current work; receipt history must not look active.
+    expect(runInContext("statusBadge('queued')", context)).toContain('badge-running">queued');
     runInContext("eventsPage=1;eventsData=[];renderEventsPage()", context);
     expect(element("events-page-info").textContent).toBe("Page 1 · 0 events");
     expect(element("events-table").innerHTML).toContain("No events");

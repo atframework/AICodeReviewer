@@ -84,11 +84,12 @@ bootstrap, core auto-commit stores, scheduler and real-backend conformance tests
   observations without erasing conflicts or earlier range evidence.
 - Recovery contract (2026-09 operator decision, store schema v8): executor
   errors after the `started` checkpoint propagate as ordinary retryable
-  failures — replay re-runs the batch and may re-publish output the failed
-  attempt already delivered; that duplicate-publication risk is accepted in
-  exchange for never leaving a stream jammed. A would-be-terminal failure
-  consumes the batch's single automatic recovery (`recoveryAttempt`); a second
-  terminal failure skips the batch terminally and the stream keeps flowing.
+  failures. A valid `publication_pending` payload resumes per channel without
+  analysis (D50); legacy or oversized checkpoints replay fully. Partial channel
+  publication and uncertain remote outcomes can duplicate messages.
+  A would-be-terminal failure consumes the batch's single automatic recovery
+  (`recoveryAttempt`); a second terminal failure skips the batch terminally
+  and the stream keeps flowing.
   Boot reclaims leases held by the previous consumer id and re-arms pre-upgrade
   dead batches; `stop()` aborts in-flight executions (`interrupted_by_shutdown`)
   so deploys never wait out a long analysis. Replays reuse the run id, and the
@@ -100,15 +101,33 @@ bootstrap, core auto-commit stores, scheduler and real-backend conformance tests
   `POST /api/admin/auto-commit/batches/:id/retry` (dashboard Queue tab).
   Events `queued` is an immutable admission decision; the `queued_timeout_hours`
   sweep (default 48h) flips stale entries to the terminal `timeout` decision.
+  When investigating apparent cross-workspace blocking, join the receipt's
+  members to current batches and compare run start/end times before changing
+  scheduling. A completed batch keeps its Events admission decision. The UI
+  labels it `queued at receipt` with a neutral badge; only Queue carries current
+  batch state. Refresh Live (manual by default) before treating its snapshot as
+  the current concurrency count (`dashboard-routes.test.ts`, browser tests).
   Dispatch and stream exceptions must log. Persist a failing stream's retry
   bound: a global timer delay alone still lets it monopolize a bounded
   same-workspace scan (`auto-commit-scheduler.test.ts` memory and SQLite
   restart cases). Pinned snapshot repair is covered by
   [config pitfalls](AGENTS.config-and-state.md).
-- Completed checkpoints replay local accounting only. Started/publication-pending
-  checkpoints justify replay only under the operator-accepted duplicate risk
-  above; verify actual LLM/publisher call counts after recovery and test
-  memory/SQLite/Redis contracts.
+- Completed checkpoints replay local accounting only. `started` checkpoints replay
+  fully; old writers may already have touched the remote. A valid
+  `publication_pending` payload preserves analysis output and usage/cost while
+  skipping LLM calls and confirmed channels. Fence before each channel and save
+  its receipt before the next channel; abort publication on persistence failure
+  or lease loss, including through the orchestrator's dispatch-error catches.
+  Confirm a channel only after all its messages settle; never overwrite an
+  earlier failure with a later success. Buffered/collected output is not delivery.
+  Overflow from payload, receipts or final accounting must remove any stale
+  partial checkpoint before degrading to full replay. Malformed state fails
+  closed. Check actual calls, multiple summaries, mixed outcomes and usage
+  accounting in runtime/bootstrap/orchestrator tests.
+- Keep execution checkpoint JSON opaque to Redis Lua/cjson, which otherwise
+  converts nested empty arrays to objects on every batch save. The shared
+  `auto-commit-store-conformance.ts` tests check round trips through lease recovery
+  against memory, SQLite and real Redis, including nested empty objects/arrays.
 - When routing receipts cross Redis Lua/cjson, an empty array round-trips as an
   empty object. Normalize only declared array fields at the read boundary;
   preserve null (unresolved) versus [] (resolved without scopes). Exercise

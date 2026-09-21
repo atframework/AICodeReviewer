@@ -15,6 +15,7 @@ records from primary sources and mark unavailable claims unverified.
 | Model catalog, quota classification, completed/live usage | [Models and usage](sources/models-and-usage.md) |
 | LLM provider presets (China platforms, Anthropic-compatible endpoints) | [Models and usage](sources/models-and-usage.md) § China platform endpoints |
 | MCP schemas, transport or authorization | [MCP](sources/mcp.md) |
+| Feishu application bot, contacts, member pagination or card envelopes | [Feishu](sources/feishu.md) |
 | PowerShell or runtime image tools/releases | [Shell and tooling](sources/shell-and-tooling.md) |
 
 The 2026-09-12 authoring refresh covers concise instructions, conditional

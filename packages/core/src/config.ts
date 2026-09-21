@@ -433,13 +433,39 @@ export const outputChannelSchema = z
     token: z.string().min(1).optional(),
     webhook_url: z.string().min(1).optional(),
     secret: z.string().min(1).optional(),
+    app_id: z.string().min(1).optional(),
+    app_secret: z.string().min(1).optional(),
+    app_secret_env: z.string().min(1).optional(),
+    receive_id: z.string().min(1).optional(),
+    receive_id_type: z.enum(["chat_id", "open_id", "user_id", "union_id", "email"]).optional(),
+    member_directory: z.object({
+      chat_id: z.string().min(1),
+      cache_ttl_seconds: z.number().int().min(0).max(3600).optional(),
+    }).strict().optional(),
+    user_mappings: z.record(z.string().min(1), z.string().regex(/^ou_[A-Za-z0-9_-]+$/u)).optional(),
+    guess_author: z.boolean().optional(),
   })
   .passthrough()
-  .superRefine((channel, ctx) => addSecretMutexIssues(ctx, channel, [
-    ["token", "token_env"],
-    ["webhook_url", "webhook_url_env"],
-    ["secret", "secret_env"],
-  ]));
+  .superRefine((channel, ctx) => {
+    addSecretMutexIssues(ctx, channel, [
+      ["token", "token_env"],
+      ["webhook_url", "webhook_url_env"],
+      ["secret", "secret_env"],
+      ["app_secret", "app_secret_env"],
+    ]);
+    if (channel.kind === "feishu_app") {
+      for (const key of ["app_id", "receive_id"] as const) {
+        if (!channel[key]) ctx.addIssue({ code: z.ZodIssueCode.custom, path: [key], message: `feishu_app requires ${key}.` });
+      }
+      if (!channel.app_secret && !channel.app_secret_env) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["app_secret"], message: "feishu_app requires app_secret or app_secret_env." });
+      }
+      if (channel.base_url !== undefined && (typeof channel.base_url !== "string" ||
+        !["https://open.feishu.cn", "https://open.larksuite.com"].includes(channel.base_url.replace(/\/+$/u, "")))) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["base_url"], message: "feishu_app base_url must be https://open.feishu.cn or https://open.larksuite.com." });
+      }
+    }
+  });
 
 export const workspaceOutputsSchema = z
   .object({
@@ -827,6 +853,7 @@ export const workspaceInstanceSchema = z
     enabled: z.boolean().optional(),
     model_chain: modelChainReferenceSchema.optional(),
     triage_model_chain: modelChainReferenceSchema.optional(),
+    author_resolution_model_chain: modelChainReferenceSchema.optional(),
     source_repo: z
       .object({
         trigger: z.string().min(1),
@@ -1066,6 +1093,7 @@ export const llmConfigSchema = z
     ).default({}),
     default_model_chain: modelChainReferenceSchema.default("default"),
     triage_model_chain: modelChainReferenceSchema.optional(),
+    author_resolution_model_chain: modelChainReferenceSchema.optional(),
     retry: llmRetrySchema,
     per_provider_overrides: llmPerProviderOverridesSchema,
     budget: llmBudgetSchema,
@@ -1171,6 +1199,7 @@ export const workspacesDefaultsSchema = z
   .object({
     model_chain: modelChainReferenceSchema.optional(),
     triage_model_chain: modelChainReferenceSchema.optional(),
+    author_resolution_model_chain: modelChainReferenceSchema.optional(),
     sandbox: sandboxSchema.optional(),
     review: reviewSchema.optional(),
     agent: workspaceAgentSelectionSchema.optional(),
@@ -1354,7 +1383,8 @@ const appConfigRefinement = (config: AppConfigRefinementTarget, ctx: z.Refinemen
       checkModelChainReference(config.llm.default_model_chain, ["llm", "default_model_chain"]);
     }
     checkModelChainReference(config.llm.triage_model_chain, ["llm", "triage_model_chain"]);
-    for (const field of ["model_chain", "triage_model_chain"] as const) {
+    checkModelChainReference(config.llm.author_resolution_model_chain, ["llm", "author_resolution_model_chain"]);
+    for (const field of ["model_chain", "triage_model_chain", "author_resolution_model_chain"] as const) {
       checkModelChainReference(config.workspaces.defaults[field], ["workspaces", "defaults", field]);
       for (const [workspaceId, instance] of Object.entries(config.workspaces.instances)) {
         checkModelChainReference(instance[field], ["workspaces", "instances", workspaceId, field]);

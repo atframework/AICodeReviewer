@@ -355,8 +355,9 @@ export function runAutoCommitStoreConformance(factory: StoreFactory): void {
         T0,
       ))!;
       const checkpoint = {
-        phase: "completed" as const,
-        result: { summary: "saved" },
+        phase: "publication_pending" as const,
+        result: { summary: "saved", nested: [[], {}, { empty: [] }] },
+        publication: { output: { problems: [], summaries: [] }, receipts: [] },
       };
       expect(
         await store.checkpointBatchExecution(

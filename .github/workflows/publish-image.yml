@@ -47,6 +47,15 @@ jobs:
           tags: |
             type=ref,event=tag
 
+      - name: Create docker-static placeholder
+        shell: bash
+        # deploy/Dockerfile has an unconditional COPY for this optional binary;
+        # the file is gitignored and normally provided by deploy.sh. An empty
+        # placeholder keeps the context valid (the Dockerfile removes it).
+        run: |
+          mkdir -p deploy
+          : > deploy/docker-static
+
       - name: Build and push image
         id: push
         uses: docker/build-push-action@v7

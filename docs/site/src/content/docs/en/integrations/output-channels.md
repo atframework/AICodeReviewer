@@ -65,6 +65,7 @@ registry (Zod validates the shape; the dispatcher resolves the kind).
 | `gitea_problem_issue` / `github_problem_issue` | Collected for reconciliation | Creates / updates / resolves managed problem issues | Fingerprint stability matters most here; `github_problem_issue` uses string label names and `resolved_action` supports `none`, `close`, and `mark_resolved` (GitHub has no issue delete API) |
 | `gitea_issue` / `github_issue` | Collected, rendered into an issue comment | Aggregated issue comment | Useful for push events or issue-based triage |
 | `feishu_bot` | Collected for aggregation | Interactive card (JSON 2.0 schema) | See [IM bots](/en/integrations/im-bots/) |
+| `feishu_app` | Collected for aggregation | Shared Feishu card via application message API | Optional source-group directory for author mentions; see [IM bots](/en/integrations/im-bots/#feishu-custom-application) |
 | `wecom_bot` | Collected for aggregation | Markdown message | See [IM bots](/en/integrations/im-bots/) |
 
 :::note[Feishu cards use schema 2.0]

@@ -197,6 +197,7 @@ tr:hover td{background:rgba(59,130,246,0.05)}
 </div>
 
 <div id="tab-events" class="tab-content">
+<p class="cell-sub" id="events-help">Receipt history. Decisions describe how an event was accepted, not its current execution status. Check Queue for batch status and Live for running analyses; refresh Live or enable auto-refresh for a current snapshot.</p>
 <div id="events-loading" style="display:none;color:var(--muted);font-size:0.875rem;margin-bottom:0.5rem">Loading...</div>
 <div style="margin-bottom:1rem;display:flex;gap:0.5rem;align-items:center">
 <button class="btn btn-sm btn-ghost" id="events-prev" onclick="prevEventsPage()">Prev</button>
@@ -204,7 +205,7 @@ tr:hover td{background:rgba(59,130,246,0.05)}
 <button class="btn btn-sm btn-ghost" id="events-next" onclick="nextEventsPage()">Next</button>
 </div>
 <div class="table-scroll"><table>
-<thead><tr><th>Time</th><th>Provider</th><th>Event</th><th>Workspace</th><th>Repo</th><th>Target</th><th>Decision</th><th>Reason</th></tr></thead>
+<thead><tr><th>Time</th><th>Provider</th><th>Event</th><th>Workspace</th><th>Repo</th><th>Target</th><th>Receipt decision</th><th>Reason</th></tr></thead>
 <tbody id="events-table"></tbody>
 </table></div>
 </div>
@@ -320,7 +321,7 @@ function runTokensCell(r){
     " ("+cacheHitRate(u.cachedTokens||0,u.tokensIn||0)+")</div>";
 }
 function statusBadge(s){var m={succeeded:"success",published:"success",failed:"failure",skipped:"skip",queued:"running",dead:"failure",timeout:"failure",retry_wait:"running",dispatch_pending:"running"};return '<span class="badge badge-'+(m[s]||"skip")+'">'+esc(s)+"</span>"}
-function decisionBadge(d){var m={executed:"success",queued:"running",deferred:"running",timeout:"failure",duplicate:"skip",deduplicated:"skip",ignored:"skip",rejected:"failure"};return '<span class="badge badge-'+(m[d]||"skip")+'">'+esc(d)+"</span>"}
+function decisionBadge(d){var labels={executed:"execution accepted",queued:"queued at receipt",deferred:"deferred at receipt"};var m={timeout:"failure",rejected:"failure"};return '<span class="badge badge-'+(m[d]||"skip")+'">'+esc(labels[d]||d)+"</span>"}
 function eventTargetRef(e){
   var d=(e&&typeof e.detail==="object"&&e.detail)||{};
   var kind=e.targetKind||"";

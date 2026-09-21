@@ -103,8 +103,8 @@ After logging in, the dashboard lands on the **Overview** tab and has seven tabs
   parseable usage. The Revision column shows the branch, the short revision,
   and the commit time when the VCS adapter could resolve it.
 - **Events** — retained received webhook/trigger events, fetched 20
-  at a time. Each row shows the receipt-time decision: `executed` (started
-  immediately), `queued`/`duplicate` (auto-commit receipt), `deferred`
+  at a time. Each row shows the receipt-time decision: `executed` (execution
+  accepted), `queued`/`duplicate` (auto-commit receipt), `deferred`
   (execution window, with the scheduled resume instant), `deduplicated`
   (merged into a pending re-review), `ignored` (label, unsupported event, or
   unconfigured repository), or `rejected` (bad signature, invalid payload,
@@ -114,12 +114,23 @@ After logging in, the dashboard lands on the **Overview** tab and has seven tabs
 - **Config** — database configuration, field sources, routing preview and version
   history. Enable `config_sources.database.enabled` to use configuration management.
 
-`queued` is the decision recorded when the webhook arrived; the Events row does
-not change when a batch runs. A new Recent Runs entry appears after its review
-result is stored. If none appears, inspect the receipt, batch, and stream state
-in the configured auto-commit store. A dead batch holds its stream for manual
-inspection, and an unreadable pinned configuration snapshot can prevent receipt
-expansion. A successful health check does not establish queue progress.
+Events labels `queued` as **queued at receipt**, `executed` as **execution
+accepted**, and `deferred` as **deferred at receipt**, with neutral badges.
+The API retains the original decision values. Completed work can still have a
+`queued` receipt; batch execution does not update that admission decision.
+Queue shows current batch states, while Live shows a snapshot of running analyses.
+The admin batches API exposes per-channel `publications` receipts while publication
+is pending. Recovery with a valid saved payload skips analysis and confirmed
+channels, retaining the original model usage and cost. Partial or uncertain writes
+can duplicate messages on retry. Legacy or oversized checkpoints replay fully;
+corrupt recovery data stops execution. Receipt `attempts` counts executor attempts,
+not individual HTTP calls. Completed checkpoints retain local accounting only.
+Refresh Live or enable auto-refresh before comparing its count with current work.
+A new Recent Runs entry appears after its review result is stored. If none
+appears, inspect receipt members, batch and stream state in the configured
+auto-commit store, including execution windows and retry times. An unreadable
+pinned configuration snapshot can prevent receipt expansion. A successful health
+check or an old receipt decision alone does not establish queue progress.
 
 Usage is aggregated across the complete review run, including the initial model
 call, context or format-repair calls, and any final direct-LLM fallback. For

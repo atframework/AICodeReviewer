@@ -131,6 +131,13 @@ describe("observability API", () => {
       await batches.confirmDispatch(batchId, claimed[0]!.claimToken, createdAt);
       const token = await batches.startBatchExecution(batchId, "test", 60_000, createdAt, { global: 10, workspace: 1 });
       if (terminal === "completed") await batches.completeBatch(batchId, token!, { outcome: "completed" }, createdAt);
+      else await batches.checkpointBatchExecution(batchId, token!, {
+        phase: "publication_pending",
+        publication: {
+          output: { problems: [], summaries: [{ markdown: "private analysis payload" }] },
+          receipts: [{ channel: "report", status: "unknown", attempts: 1, updatedAt: createdAt }],
+        },
+      }, createdAt);
     };
     await seal("queue-aged-out", now - 400 * 86_400_000, "completed");
     await seal("queue-overflow", now - 1000, "completed");
@@ -153,6 +160,9 @@ describe("observability API", () => {
     expect(completed.hasMore).toBe(false);
     const running = await (await fetchHistory("/auto-commit/batches?status=running&limit=10&page=1")).json();
     expect(running.items.map((item: { batchId: string }) => item.batchId)).toEqual(["queue-active"]);
+    expect(running.items[0].publications).toEqual([{ channel: "report", status: "unknown", attempts: 1, updatedAt: now }]);
+    expect(JSON.stringify(running)).not.toContain("private analysis payload");
+    expect(completed.items[0].publications).toEqual([]);
     expect(maintenance).toHaveBeenCalledTimes(2);
 
     // The same hook guards Recent Runs and Events; a sweep failure degrades to

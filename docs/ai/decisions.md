@@ -77,9 +77,8 @@ null 字段但固定其解析基线，避免升级时跨业务后端重写和接
 repo 和 scope 隔离。P4/SVN 的单通知只覆盖所报 revision；同来源合并依赖已收到的覆盖范围。
 固定接收截止序号、日历下限和元数据重试预算都必须被调度器实际消费，不能只写入 schema。
 
-执行租约保护存储状态，不能撤销已经发出的 LLM 请求或远端 POST。当前实现采用保守恢复：
-完成检查点仅恢复本地记账；执行或发布结果不确定时，保留固定批次、停止自动重放并要求人工核查。
-逐目标发布恢复留在 `Plan.md` Backlog，尚不提供端到端 exactly-once 保证。
+执行租约保护存储状态，不能撤销已经发出的 LLM 请求或远端 POST。恢复策略的现行表述见
+D50（逐目标发布恢复，2026-09-21）；本条早期"停止自动重放并要求人工核查"的表述已被取代。
 
 编号修正：本条原以 D35 追加，与决策表中 D35（自动提交调度，M15）重复；全仓引用均指向
 表内 D35，本条无引用，P8 文档同步时改号为 D41。
@@ -178,6 +177,21 @@ MigrationRunner 保存最低 reader/writer 协议与 atomic 事务声明，旧�
 `packages/core/src/{markdown-document,config-source}.ts`、
 `packages/outputs/src/template-engine.ts`（`namedTemplateSource`）、
 `packages/server/src/bootstrap.ts`（prompt resolvers）。
+
+### D50：批次逐目标发布恢复——检查点载荷 + 逐渠道回执（2026-09-21，P1）
+
+自动提交批次的 `publication_pending` 不再整体重放：分析完成后把产物（problems/summaries）
+序列化进批次检查点，发布过程中逐渠道持久化回执（`pending`/`published`/`failed`/`unknown`）。
+有效载荷重入时跳过 LLM/分析并保留原模型用量与费用，全部消息确认 `published` 的渠道不再触碰。
+HTTP 4xx（除 408）记 `failed`；无响应、408、5xx 与部分发送的渠道记 `unknown`。
+`buffered`/仅本地收集的结果记 `pending`，不视为已发送。发送前检查租约，回执保存后才处理
+下一渠道；持久化失败立即停止。payload、回执与记账总计超过 1 MiB 时清除旧载荷并整体重放；
+损坏载荷拒绝执行。Redis 对检查点使用不透明 JSON，避免空数组被 Lua 转成对象。
+update_existing PR review 与指纹 reconcile 降低重复，但不构成远端和本地的原子事务。
+自动终态恢复只增加一次执行机会，部分报告和内部 HTTP 重试仍可能重复多条消息；人工核查依据是
+批次列表 API 的 `publications` 字段。实现见 `packages/core/src/auto-commit-store.ts`
+（`BatchExecutionCheckpoint.publication`）、`packages/server/src/auto-commit-runtime.ts`
+与 `packages/server/src/bootstrap.ts`（复合 publisher 恢复钩子）。
 
 ## 维护规则
 

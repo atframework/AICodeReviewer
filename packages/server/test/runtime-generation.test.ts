@@ -162,6 +162,60 @@ async function publishOperations(operations: Parameters<typeof prepareConfigPubl
 }
 
 describe("runtime config generation integration (bootstrap)", () => {
+  it("pins database-managed author models through publication, preserves references and shares the run budget", async () => {
+    const modelRequests: Record<string, unknown>[] = [];
+    const cards: string[] = [];
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.stubGlobal("fetch", async (url: string, init?: RequestInit) => {
+      const body = typeof init?.body === "string" ? JSON.parse(init.body) : {};
+      let response: unknown;
+      if (String(url).includes("/chat/completions")) {
+        modelRequests.push(body);
+        response = { choices: [{ message: { content: '{"candidate":"u0","confidence":"high"}' } }], usage: { prompt_tokens: 10, completion_tokens: 5 } };
+      } else if (String(url).includes("tenant_access_token")) response = { code: 0, tenant_access_token: "tenant-token", expire: 7200 };
+      else if (String(url).includes("/members?")) response = { code: 0, data: { has_more: false, items: [{ member_id: "ou_person", member_id_type: "open_id", name: "张三" }] } };
+      else if (String(url).includes("/contact/")) response = { code: 0, data: { user: { open_id: "ou_person", nickname: "owent", email: "admin@owent.net" } } };
+      else { cards.push(body.content); response = { code: 0, data: { message_id: "om_test" } }; }
+      return new Response(JSON.stringify(response), { headers: { "content-type": "application/json" } });
+    });
+    const file = { ...FILE_DOCUMENT, llm: { ...FILE_DOCUMENT.llm, budget: { per_run_usd: 0.1 } }, outputs: {
+      channels: [{ name: "app", kind: "feishu_app", app_id: "cli_test", app_secret_env: "GITEA_TOKEN", receive_id: "oc_target",
+        member_directory: { chat_id: "oc_source" }, mention_author: true }], routes: { default: { summary: ["app"] } },
+    } };
+    const { options } = await bootstrap(makeConfig(), file);
+    const workspace = { source_repo: { trigger: "gitea-internal", repo: "acme/repo" }, author_resolution_model_chain: "identity-old" };
+    await publishOperations([
+      ...["identity-old", "identity-new"].map(name => ({ op: "create" as const, collection: "model_groups" as const,
+        record: { id: name, name, enabled: true, value: [{ provider: "openai-prod", model: name, role: "light" }] } })),
+      { op: "set", path: ["llm", "author_resolution_model_chain"], value: "identity-old" },
+      { op: "set", path: ["workspaces", "defaults", "author_resolution_model_chain"], value: "identity-old" },
+      { op: "create", collection: "workspaces", record: { id: "ws", name: "ws", enabled: true, value: workspace } },
+    ], file);
+    const old = await options.runtimeConfig!.admission();
+    const event = createReviewEvent({ triggerName: "gitea-internal", provider: "gitea", workspaceId: "ws", targetKind: "push", repoRef: "acme/repo", author: { username: "zhangsan" }, reason: "test" });
+    const context = { reviewEvent: event, payload: {}, provider: "gitea" as const, eventName: "push", configSnapshotId: old.snapshotId };
+    await expect(publishOperations([{ op: "delete", collection: "model_groups", recordId: "identity-old" }], file)).rejects.toThrow();
+    await publishOperations([
+      { op: "set", path: ["llm", "author_resolution_model_chain"], value: "identity-new" },
+      { op: "set", path: ["workspaces", "defaults", "author_resolution_model_chain"], value: "identity-new" },
+      { op: "update", collection: "workspaces", recordId: "ws", value: { ...workspace, author_resolution_model_chain: "identity-new" } },
+    ], file);
+    const current = await options.runtimeConfig!.admission();
+    expect(current.config.llm.author_resolution_model_chain).toBe("identity-new");
+    expect(current.config.workspaces.defaults.author_resolution_model_chain).toBe("identity-new");
+    const oldRun = await options.reviewOrchestration!.optionsResolver!(context);
+    const newContext = { ...context, configSnapshotId: current.snapshotId };
+    const newRun = await options.reviewOrchestration!.optionsResolver!(newContext);
+    await (await oldRun.outputPublisherResolver!(context))!.publishSummary!("Old report");
+    await (await newRun.outputPublisherResolver!(newContext))!.publishSummary!("New report");
+    expect(modelRequests.map(body => body.model)).toEqual(["identity-old", "identity-new"]);
+    expect(cards).toHaveLength(2);
+    expect(cards.every(card => card.includes('id=\\"ou_person\\"'))).toBe(true);
+    oldRun.onAgentCost!(1);
+    await (await oldRun.outputPublisherResolver!(context))!.publishSummary!("Over budget report");
+    expect(modelRequests).toHaveLength(2);
+    expect(cards).toHaveLength(3); expect(cards[2]).not.toContain("<at");
+  });
   it("pins document rendering and shared overrides, then resets globals to file and schema defaults", async () => {
     const bodies: string[] = [];
     vi.stubGlobal("fetch", async (_url: string, init?: RequestInit) => {

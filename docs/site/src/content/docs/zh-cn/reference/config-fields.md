@@ -69,6 +69,7 @@ web_search `credentials` 条目接受环境变量名字符串或 `{ value: "..."
 | `llm.model_chain.<id>[]` | array | — | 非空列表；首项为默认模型，其余项按序切换。每项有 `provider`、`model`、`role`（`light`/`heavy`/`any`） |
 | `llm.default_model_chain` | string | `default` | 全局主链组名；已配置分组时必须存在 |
 | `llm.triage_model_chain` | string | 继承 | 生命周期分析组名；缺省继承当前 workspace 主链 |
+| `llm.author_resolution_model_chain` | string | 继承 | 目录身份分析模型组；缺省使用 `llm.default_model_chain` |
 | `llm.retry` | object | — | 单次调用重试策略 |
 | `llm.retry.max_attempts` | int > 0 | — | 单次 LLM 调用最大尝试次数 |
 | `llm.retry.respect_retry_after` | boolean | — | 遵守 `Retry-After` 响应头 |
@@ -139,6 +140,7 @@ provider 专属字段（`webhook_secret_env`、`token_env`、`port`、`user_env`
 | `workspaces.defaults.review` | object | — | 默认 review 配置（见 `review`） |
 | `workspaces.defaults.model_chain` | string | 继承 | 覆盖主链组名，引用 `llm.model_chain` |
 | `workspaces.defaults.triage_model_chain` | string | 继承 | 覆盖生命周期分析组名；各层均未配置时使用该 workspace 主链 |
+| `workspaces.defaults.author_resolution_model_chain` | string | 继承 | 覆盖 `llm.author_resolution_model_chain` 的身份分析模型组 |
 | `workspaces.defaults.agent.default` | enum | — | 这组 workspace 的默认执行模式；每次运行按 全局 → defaults → 实例 → 路由 analysis 解析（见下方说明） |
 | `workspaces.defaults.agent.timeout_seconds` | int > 0 | — | 单次 run 硬超时；超时时杀整棵进程树 |
 | `workspaces.defaults.agent.auto_approve` | boolean | — | 传给所选 adapter；CLI 支持时 false 取消自动批准 |
@@ -192,6 +194,7 @@ provider 专属字段（`webhook_secret_env`、`token_env`、`port`、`user_env`
 | `workspaces.instances.<id>.enabled` | boolean | — | 未设置时启用；`false` 停止新任务准入，保留已有快照 |
 | `workspaces.instances.<id>.model_chain` | string | 继承 | 覆盖主链组名，引用 `llm.model_chain` |
 | `workspaces.instances.<id>.triage_model_chain` | string | 继承 | 覆盖生命周期分析组名；各层均未配置时使用该 workspace 主链 |
+| `workspaces.instances.<id>.author_resolution_model_chain` | string | 继承 | 身份分析模型组覆盖；向上依次继承 workspace defaults、全局身份组、`llm.default_model_chain` |
 | `workspaces.instances.<id>.agent.default` | enum | — | 执行模式覆盖；每次运行按合并后的 workspace 各层选择（见下方说明） |
 | `workspaces.instances.<id>.agent.timeout_seconds` | int > 0 | — | 单次 run 硬超时；超时时杀整棵进程树 |
 | `workspaces.instances.<id>.agent.auto_approve` | boolean | — | 传给所选 adapter；CLI 支持时 false 取消自动批准 |
@@ -320,6 +323,22 @@ fallback 必须是字面量，禁止 hash arguments。provider 变量必须适�
 | `outputs.routes.rules[].match.target_kind` | enum | — | 目标类型（`pull_request`、`push`、`commit`、`issue`、`manual`、`scheduled`）；`pr` 会被归一化为 `pull_request`。GitLab MR 以 `pull_request` 报告。 |
 | `outputs.routes.rules[].line_comments` | string[] | — | 接收行评论输出的 channel 名 |
 | `outputs.routes.rules[].summary` | string[] | — | 接收 summary 输出的 channel 名 |
+
+### 飞书应用渠道字段
+
+以下字段只适用于 `feishu_app`，配置步骤见 [IM 机器人指南](/zh-cn/integrations/im-bots/#飞书自建应用)。
+
+| 字段 | 类型 | 默认值 | 含义 |
+| --- | --- | --- | --- |
+| `outputs.channels[].app_id` | string | — | 必填，自建应用 ID |
+| `outputs.channels[].app_secret` | string | — | 明文 App Secret；数据库配置加密存储；与 `app_secret_env` 互斥 |
+| `outputs.channels[].app_secret_env` | string | — | 持有 App Secret 的环境变量名 |
+| `outputs.channels[].receive_id` | string | — | 必填，报告接收对象 |
+| `outputs.channels[].receive_id_type` | enum | — | `chat_id`、`open_id`、`user_id`、`union_id` 或 `email`；运行时默认 `chat_id` |
+| `outputs.channels[].member_directory.chat_id` | string | — | 成员身份目录的来源群 |
+| `outputs.channels[].member_directory.cache_ttl_seconds` | int | — | 目录缓存时长，0–3600 秒；运行时默认 300 |
+| `outputs.channels[].user_mappings.<id>` | string | — | 作者或 workspace 标识精确映射到当前应用的 `open_id` |
+| `outputs.channels[].guess_author` | boolean | — | 运行时默认 true；允许精确匹配后的 workspace 推测及专用模型兜底；`mention_author` 单独控制通知 |
 
 ## `prompts`
 

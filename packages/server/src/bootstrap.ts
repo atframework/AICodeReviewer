@@ -50,6 +50,12 @@ import {
   createGithubIssueDispatcher,
   createGithubProblemIssueDispatcher,
   createFeishuBotDispatcher,
+  createFeishuAppDispatcher,
+  FeishuAppClient,
+  feishuDirectoryUsers,
+  renderFeishuAuthorMention,
+  resolveChannelAuthor,
+  type ChannelAuthorGuesser,
   createWeComBotDispatcher,
   type ProblemResolutionAnalyzer,
   type ReviewProblem,
@@ -103,6 +109,7 @@ import type { SvnTriggerConfig } from "./svn-webhook.js";
 import { GiteaApiClient } from "./issue-triage.js";
 import type { IssueTriageRuntimeOptions, WorkspaceIssueTriagePolicy } from "./issue-triage.js";
 import { createProblemResolutionAnalyzer } from "./problem-resolution.js";
+import { createAuthorIdentityGuesser } from "./author-identity.js";
 import type { ServerAppOptions, ServerReviewOrchestrationOptions } from "./index.js";
 import { persistRejectedAutoCommitRun, persistReviewRunToStore, resolveTriggerRetryConfig } from "./index.js";
 import { type AutoCommitStore, type StreamKeyInput, resolveAutoCommitPolicy } from "@aicr/core";
@@ -192,7 +199,7 @@ function resolveEnv(name: string | undefined): string | undefined {
 
 /**
  * Envelope encryption service for literal credentials (AICR_CONFIG_SECRETS_KEY).
- * Created once per process; undefined when no key is configured â€” every
+ * Created once per process; undefined when no key is configured â€?every
  * consumer fails closed only when a literal actually crosses its boundary.
  */
 const configSecretSealing = resolveConfigSecretSealing((name) => process.env[name]);
@@ -264,6 +271,49 @@ function resolveModelChainNames(config: AppConfig, workspaceId?: string) {
   return { modelChain, triageModelChain };
 }
 
+/** Identity analysis inherits the global default, independently of review/triage routes. */
+export function resolveAuthorModelChainName(config: AppConfig, workspaceId?: string): string {
+  return (workspaceId ? config.workspaces.instances[workspaceId]?.author_resolution_model_chain : undefined)
+    ?? config.workspaces.defaults.author_resolution_model_chain
+    ?? config.llm.author_resolution_model_chain ?? config.llm.default_model_chain;
+}
+
+function createConfiguredAuthorGuesser(config: AppConfig, workspaceId?: string, runtime: {
+  readonly enrich?: (model: ModelSpec) => ModelSpec;
+  readonly billingScope?: string;
+  readonly dailyBudgetTracker?: DailyBudgetTracker;
+  readonly beforeRequest?: (model: ModelSpec) => Promise<void>;
+  readonly onCost?: (cost: number) => void;
+} = {}): ChannelAuthorGuesser {
+  const chain = resolveModelChain(config, resolveAuthorModelChainName(config, workspaceId));
+  const enrich = runtime.enrich ?? ((model: ModelSpec) => model);
+  const model = enrich(resolveModelSpecFromChain(config.llm.providers, chain));
+  const specs = chain.map(entry => enrich(resolveModelSpecFromChain(config.llm.providers, [entry])));
+  const retry = toGatewayRetry(config.llm.retry);
+  const budget = toGatewayBudget(config.llm.budget);
+  const perProviderOverrides = toGatewayPerProviderOverrides(config.llm.per_provider_overrides);
+  const gateway = createResilientChatClient({
+    // Preserve entry overrides and frozen catalog fields on every fallback.
+    clientFactory: candidate => {
+      const resolved = specs.find(spec => spec.providerId === candidate.providerId && spec.modelId === candidate.modelId) ?? candidate;
+      const client = createLlmClientFromModelSpec(resolved);
+      return { complete: input => client.complete({ ...input, model: resolved }) };
+    },
+    modelPricing: Object.fromEntries(specs.map(spec => [spec.providerId + "/" + spec.modelId, extractModelPricing(spec)])),
+    providers: toGatewayProviders(config.llm.providers), fallbackChain: toGatewayFallbackChain(chain),
+    ...(retry ? { retry } : {}), ...(budget ? { budget } : {}),
+    ...(perProviderOverrides ? { perProviderOverrides } : {}),
+    ...(runtime.billingScope ? { workspaceId: runtime.billingScope } : {}),
+    ...(runtime.dailyBudgetTracker ? { dailyBudgetTracker: runtime.dailyBudgetTracker } : {}),
+    ...(runtime.beforeRequest ? { beforeRequest: runtime.beforeRequest } : {}),
+  });
+  return createAuthorIdentityGuesser({ model, llm: { async complete(input) {
+    const result = await gateway.complete(input);
+    runtime.onCost?.(result.estimatedCostUsd);
+    return result;
+  } } });
+}
+
 function resolveModelChain(config: AppConfig, name: string): LlmModelChain {
   if (Object.hasOwn(config.llm.model_chain, name)) {
     return config.llm.model_chain[name]!;
@@ -306,7 +356,7 @@ function resolveModelSpecFromChain(
 
   // Entry-level request overrides (architecture Â§3.15, wired in P4): maps merge by
   // key over provider fields, arrays and scalars replace. Disabling a
-  // parameter goes through drop_params â€” JSON null is never a deletion.
+  // parameter goes through drop_params â€?JSON null is never a deletion.
   const overrides = fallbackEntry?.overrides;
   const draft = { ...spec } as {
     extraParams?: Record<string, unknown>;
@@ -748,7 +798,7 @@ export async function createSandboxBackendFromConfig(config: AppConfig): Promise
 /**
  * Sandbox factory over a sandbox-config slice (P4/H04): the global
  * `agent.sandbox` or its workspace-layer merged equivalent. An explicitly
- * requested container kind that fails preflight throws â€” never a silent
+ * requested container kind that fails preflight throws â€?never a silent
  * native downgrade.
  */
 export async function createSandboxBackendFromSandboxConfig(
@@ -1059,6 +1109,7 @@ interface TargetUrlTemplateOptions {
 }
 
 export interface OutputPublisherConfigOptions {
+  readonly authorGuesserFactory?: (context: ReviewOrchestrationContext) => ChannelAuthorGuesser;
   readonly baseDir?: string;
   readonly appTokenServices?: ReadonlyMap<string, GithubAppTokenService>;
   readonly resolutionAnalyzerFactory?: (
@@ -1097,7 +1148,7 @@ function defaultNoProblemsActionForChannel(channelKind: string): NoProblemsActio
   if (channelKind === "gitea_problem_issue" || channelKind === "github_problem_issue") {
     return "publish";
   }
-  if (channelKind === "feishu_bot" || channelKind === "wecom_bot") {
+  if (channelKind === "feishu_bot" || channelKind === "feishu_app" || channelKind === "wecom_bot") {
     return "publish_if_summary";
   }
   return "suppress";
@@ -1282,6 +1333,7 @@ function createChannelRendering(
   repoRef: string | undefined,
   baseDir: string,
   targetUrlTemplates: TargetUrlTemplateOptions = {},
+  resolvedMention?: string,
 ): {
   readonly mentionText: string;
   readonly renderProblem: (problem: ReviewProblem) => ReviewProblem;
@@ -1317,7 +1369,7 @@ function createChannelRendering(
   );
 
   return {
-    mentionText: baseTemplateContext.atMentions ?? "",
+    mentionText: resolvedMention ?? baseTemplateContext.atMentions ?? "",
     renderProblem(problem: ReviewProblem): ReviewProblem {
       if (problem.renderedMarkdown) {
         return problem;
@@ -1325,6 +1377,7 @@ function createChannelRendering(
 
       const renderedMarkdown = fixAndValidateMarkdown(resolver.render("problem", {
         ...baseTemplateContext,
+        ...(resolvedMention !== undefined ? { atMentions: resolvedMention } : {}),
         problem: toTemplateProblem(problem),
       }));
 
@@ -1333,6 +1386,7 @@ function createChannelRendering(
     renderSummary(summary: string, problems: readonly ReviewProblem[], title?: string): string {
       return fixAndValidateMarkdown(resolver.render("summary", {
         ...baseTemplateContext,
+        ...(resolvedMention !== undefined ? { atMentions: resolvedMention } : {}),
         summary,
         ...(title ? { summaryTitle: title } : {}),
         problems: problems.map((problem) => toTemplateProblem(problem)),
@@ -1350,7 +1404,7 @@ function appendPublisherResults(target: DispatchResult[], result: ReviewDispatch
   target.push(result as DispatchResult);
 }
 
-interface OutputPublisherEntry {
+export interface OutputPublisherEntry {
   readonly name: string;
   readonly publisher: ReviewOutputPublisher;
 }
@@ -1430,9 +1484,15 @@ function uniqueOutputPublisherEntries(entries: readonly OutputPublisherEntry[]):
   return result;
 }
 
-function createCompositeOutputPublisher(
+export function createCompositeOutputPublisher(
   linePublishers: readonly OutputPublisherEntry[],
   summaryPublishers: readonly OutputPublisherEntry[],
+  recovery?: {
+    readonly skipChannels?: ReadonlySet<string>;
+    readonly signal?: AbortSignal;
+    readonly onChannelStart?: (channel: string) => void | Promise<void>;
+    readonly onChannelResult?: (result: DispatchResult, phase: "problem" | "summary", finalForChannel?: boolean) => void | Promise<void>;
+  },
 ): ReviewOutputPublisher | undefined {
   const summaryCapable = uniqueOutputPublisherEntries(summaryPublishers.filter((entry) => entry.publisher.publishSummary));
   const lineFlushCapable = uniqueOutputPublisherEntries(linePublishers.filter((entry) => entry.publisher.publishSummary));
@@ -1451,11 +1511,20 @@ function createCompositeOutputPublisher(
     async publishProblem(problem: ReviewProblem): Promise<readonly DispatchResult[]> {
       const results: DispatchResult[] = [];
       for (const entry of linePublishers) {
+        if (recovery?.skipChannels?.has(entry.name)) {
+          continue;
+        }
+        recovery?.signal?.throwIfAborted();
+        await recovery?.onChannelStart?.(entry.name);
+        const firstResult = results.length;
         try {
           appendPublisherResults(results, await callPublishProblem(entry.publisher, problem));
         } catch (error) {
           logDispatchFailure(entry.name, "problem", error);
           results.push(createFailedDispatchResult(entry.name, "problem", error));
+        }
+        for (const result of results.slice(firstResult)) {
+          await recovery?.onChannelResult?.(result, "problem");
         }
       }
       return results;
@@ -1472,6 +1541,9 @@ function createCompositeOutputPublisher(
             const bypassNoProblemsPolicy = options?.bypassNoProblemsPolicy === true;
             const entries = noProblems ? summaryCapable : summaryFlushCapable;
             for (const entry of entries) {
+              if (recovery?.skipChannels?.has(entry.name)) {
+                continue;
+              }
               const publisher = entry.publisher;
               if (!summaryChannelNames.has(entry.name) && noProblems) {
                 continue;
@@ -1485,11 +1557,17 @@ function createCompositeOutputPublisher(
                 }
               }
               if (publisher.publishSummary) {
+                recovery?.signal?.throwIfAborted();
+                await recovery?.onChannelStart?.(entry.name);
+                const firstResult = results.length;
                 try {
                   appendPublisherResults(results, await publisher.publishSummary(summary, problems, options));
                 } catch (error) {
                   logDispatchFailure(entry.name, "summary", error);
                   results.push(createFailedDispatchResult(entry.name, "summary", error));
+                }
+                for (const result of results.slice(firstResult).length > 0 ? results.slice(firstResult) : [{ channel: entry.name, status: "published" as const, raw: { noOutput: true } }]) {
+                  await recovery?.onChannelResult?.(result, "summary", options?.finalForChannel);
                 }
               }
             }
@@ -1500,6 +1578,8 @@ function createCompositeOutputPublisher(
   };
 }
 
+const feishuAppClients = new WeakMap<OutputChannelConfig, { secret: string; client: FeishuAppClient }>();
+
 export function createOutputPublisherFromConfig(
   config: AppConfig,
   channelName?: string,
@@ -1509,6 +1589,7 @@ export function createOutputPublisherFromConfig(
   baseDir = process.cwd(),
   resolvedTriggerToken?: string,
   resolutionAnalyzer?: ProblemResolutionAnalyzer,
+  authorGuesser?: ChannelAuthorGuesser,
 ): ReviewOutputPublisher | undefined {
   const channels = config.outputs.channels;
   if (channels.length === 0) {
@@ -1569,7 +1650,7 @@ export function createOutputPublisherFromConfig(
     ...(commitUrlTemplate ? { commitUrlTemplate } : {}),
     ...(revisionUrlTemplate ? { revisionUrlTemplate } : {}),
     ...(changeUrlTemplate ? { changeUrlTemplate } : {}),
-    ...(baseUrl ? { baseUrl } : {}),
+    ...(baseUrl && channel.kind !== "feishu_app" ? { baseUrl } : {}),
   };
   const noProblemsAction = resolveNoProblemsAction(config, channel, workspaceId);
   const workspaceLabels = workspaceId
@@ -1723,7 +1804,7 @@ export function createOutputPublisherFromConfig(
       publishEmptySummary,
       async publishProblem(problem: ReviewProblem): Promise<DispatchResult> {
         problems.push(rendering.renderProblem(problem));
-        return { channel: channel.name, status: "published", raw: {} };
+        return { channel: channel.name, status: "published", raw: { collected: true } };
       },
       async publishSummary(summary: string, summaryProblems?: readonly ReviewProblem[], options?: ReviewSummaryPublishOptions): Promise<DispatchResult> {
         const renderedProblems = (summaryProblems ?? problems).map((problem) => rendering.renderProblem(problem));
@@ -1882,7 +1963,7 @@ export function createOutputPublisherFromConfig(
       publishEmptySummary,
       async publishProblem(problem: ReviewProblem): Promise<DispatchResult> {
         problems.push(rendering.renderProblem(problem));
-        return { channel: channel.name, status: "published", raw: {} };
+        return { channel: channel.name, status: "published", raw: { collected: true } };
       },
       async publishSummary(summary: string, summaryProblems?: readonly ReviewProblem[], options?: ReviewSummaryPublishOptions): Promise<DispatchResult> {
         const renderedProblems = (summaryProblems ?? problems).map((problem) => rendering.renderProblem(problem));
@@ -1980,6 +2061,56 @@ export function createOutputPublisherFromConfig(
     };
   }
 
+  if (channel.kind === "feishu_app") {
+    const secret = resolveSecretField(channelConfig, "app_secret", "app_secret_env");
+    if (!secret || !channel.app_id || !channel.receive_id) {
+      throw new Error("Feishu application channel requires app_id, app_secret or app_secret_env, and receive_id.");
+    }
+    let cached = feishuAppClients.get(channel);
+    if (!cached || cached.secret !== secret) {
+      cached = { secret, client: new FeishuAppClient({
+        appId: channel.app_id, appSecret: secret, baseUrl,
+        onDirectoryWarning: (code) => console.warn(`[outputs] Feishu directory: ${code}`),
+      }) };
+      feishuAppClients.set(channel, cached);
+    }
+    const client = cached.client;
+    const dispatcher = createFeishuAppDispatcher({ client, receiveId: channel.receive_id,
+      receiveIdType: channel.receive_id_type, channelName: channel.name });
+    const problems: ReviewProblem[] = [];
+    return {
+      handlesRendering: true, noProblemsAction, publishEmptySummary,
+      async publishProblem(problem): Promise<DispatchResult> {
+        problems.push(problem);
+        return { channel: channel.name, status: "buffered" };
+      },
+      async publishSummary(summary, summaryProblems, options): Promise<DispatchResult> {
+        let mention = "";
+        if (channel.mention_author && reviewEvent) {
+          try {
+            const directory = channel.member_directory;
+            const matched = await resolveChannelAuthor({
+              channelKind: channel.kind,
+              input: { author: reviewEvent.author, provider: reviewEvent.provider,
+                submitterWorkspace: reviewEvent.provider === "p4" ? reviewEvent.submitterWorkspace : undefined },
+              directory: directory ? { listUsers: async () => feishuDirectoryUsers(await client.members(directory.chat_id, directory.cache_ttl_seconds)) } : undefined,
+              policy: { mappings: channel.user_mappings, guessAuthor: channel.guess_author,
+                emailBlacklist: config.outputs.author_resolution?.email_blacklist },
+              guesser: authorGuesser ?? ((input, users) => createConfiguredAuthorGuesser(config, workspaceId)(input, users)),
+            });
+            mention = renderFeishuAuthorMention(matched, channel.mention_fallback);
+          } catch {
+            console.warn("[outputs] Feishu directory unavailable; sending report without mentions.");
+          }
+        }
+        const appRendering = createChannelRendering(config, channel, workspaceId, reviewEvent, repoRef, baseDir, targetUrlTemplates, mention);
+        const renderedProblems = (summaryProblems ?? problems).map(problem => appRendering.renderProblem(problem));
+        return dispatcher.publishAggregatedProblems(renderedProblems,
+          appRendering.renderSummary(summary, renderedProblems, options?.title), mention || undefined);
+      },
+    };
+  }
+
   if (channel.kind === "feishu_bot") {
     const webhookUrl = resolveSecretField(channelConfig, "webhook_url", "webhook_url_env");
     if (!webhookUrl) {
@@ -2000,7 +2131,7 @@ export function createOutputPublisherFromConfig(
       publishEmptySummary,
       async publishProblem(problem: ReviewProblem): Promise<DispatchResult> {
         problems.push(rendering.renderProblem(problem));
-        return { channel: channel.name, status: "published", raw: {} };
+        return { channel: channel.name, status: "published", raw: { collected: true } };
       },
       async publishSummary(summary: string, summaryProblems?: readonly ReviewProblem[], options?: ReviewSummaryPublishOptions): Promise<DispatchResult> {
         const renderedProblems = (summaryProblems ?? problems).map((problem) => rendering.renderProblem(problem));
@@ -2034,7 +2165,7 @@ export function createOutputPublisherFromConfig(
       publishEmptySummary,
       async publishProblem(problem: ReviewProblem): Promise<DispatchResult> {
         problems.push(rendering.renderProblem(problem));
-        return { channel: channel.name, status: "published", raw: {} };
+        return { channel: channel.name, status: "published", raw: { collected: true } };
       },
       async publishSummary(summary: string, summaryProblems?: readonly ReviewProblem[], options?: ReviewSummaryPublishOptions): Promise<DispatchResult> {
         const renderedProblems = (summaryProblems ?? problems).map((problem) => rendering.renderProblem(problem));
@@ -2209,6 +2340,12 @@ export function createOutputPublisherResolverFromConfig(
       runtime?.sourceRoot ?? baseDir,
       context,
     );
+    // Construct the model client only after directory rules leave an unmatched author.
+    let identityGuesser: ChannelAuthorGuesser | undefined;
+    const authorGuesser: ChannelAuthorGuesser = (input, users) => {
+      identityGuesser ??= options.authorGuesserFactory?.(context) ?? createConfiguredAuthorGuesser(config, context.reviewEvent.workspaceId);
+      return identityGuesser(input, users);
+    };
     const linePublishers = (await Promise.all(resolveOutputChannelNames(config, context, "line_comments")
       .map(async (name): Promise<OutputPublisherEntry | undefined> => {
         const publisher = createOutputPublisherFromConfig(
@@ -2220,6 +2357,7 @@ export function createOutputPublisherResolverFromConfig(
           baseDir,
           await channelToken(name),
           resolutionAnalyzer,
+          authorGuesser,
         );
         return publisher ? { name, publisher } : undefined;
       })))
@@ -2235,12 +2373,22 @@ export function createOutputPublisherResolverFromConfig(
           baseDir,
           await channelToken(name),
           resolutionAnalyzer,
+          authorGuesser,
         );
         return publisher ? { name, publisher } : undefined;
       })))
       .filter((entry): entry is OutputPublisherEntry => Boolean(entry));
 
-    return createCompositeOutputPublisher(linePublishers, summaryPublishers);
+    const publicationRecovery = context.publicationRecovery;
+    return createCompositeOutputPublisher(linePublishers, summaryPublishers,
+      publicationRecovery
+        ? {
+            ...(publicationRecovery.skipChannels ? { skipChannels: new Set(publicationRecovery.skipChannels) } : {}),
+            ...(context.signal ? { signal: context.signal } : {}),
+            ...(publicationRecovery.onChannelStart ? { onChannelStart: publicationRecovery.onChannelStart } : {}),
+            ...(publicationRecovery.onChannelResult ? { onChannelResult: publicationRecovery.onChannelResult } : {}),
+          }
+        : undefined);
   };
 }
 
@@ -2982,7 +3130,7 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
     }
     // Bounded sweep of expired session rows (P2): production never called
     // cleanupExpiredSessions, so admin_sessions grew without bound. The
-    // timer is unref'd â€” it must never hold the process open â€” and closing
+    // timer is unref'd â€?it must never hold the process open â€?and closing
     // the store stops the sweep (close owns the lifecycle).
     const sessions = sessionStore;
     const sessionSweep = setInterval(() => {
@@ -3058,9 +3206,9 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
   });
 
   // P4 execution plan: one resolver, one pinned generation per task (H03â€“H08).
-  // Everything config-derived that a run consumes resolves here â€” model route,
+  // Everything config-derived that a run consumes resolves here â€?model route,
   // workspace-layer agent/sandbox selection, review policy (include/exclude/
-  // max_files), output language, web search â€” so a mid-flight publish can
+  // max_files), output language, web search â€?so a mid-flight publish can
   // never mix generations inside one run.
   const resolveRunOptions = async (
     context: ReviewOrchestrationContext,
@@ -3121,7 +3269,7 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
             return await loadSystemPromptTemplate(resolve(baseDir, promptFile));
           }
         } catch {
-          // workspace not found or file not readable â€” fall back to global prompt
+          // workspace not found or file not readable â€?fall back to global prompt
         }
         return undefined;
       },
@@ -3136,7 +3284,7 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
             }
           }
         } catch {
-          // workspace not found â€” no extra prompt
+          // workspace not found â€?no extra prompt
         }
         return undefined;
       },
@@ -3163,6 +3311,12 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
       outputPublisherResolver: createOutputPublisherResolverFromConfig(executionConfig, {
         baseDir,
         appTokenServices: tokenServices,
+        authorGuesserFactory: () => createConfiguredAuthorGuesser(generationConfig, workspaceId, {
+          enrich: candidate => generationCatalogs.get(generation)?.enrichModelSpec(candidate) ?? candidate,
+          billingScope, dailyBudgetTracker,
+          beforeRequest: async candidate => { checkBudget(); await rateLimiter.acquireAsync(candidate.providerId); },
+          onCost: cost => { if (Number.isFinite(cost) && cost > 0) runSpend += cost; },
+        }),
         resolutionAnalyzerFactory: (sourceRoot, analyzerContext) => createProblemResolutionAnalyzer({
           ...getModelRouteFor(generation, resolveAnalysisSelection(generationConfig, analyzerContext.reviewEvent.workspaceId,
             executionRoute(generationConfig, analyzerContext.reviewEvent)).triageModelChain, reviewMemoryScope(analyzerContext.reviewEvent)),
@@ -3430,9 +3584,8 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
       const workspaceIds = new Set<string>(
         Object.keys(runtimeConfig.current().config.workspaces?.instances ?? {}),
       );
-      // Declared workspaces resolve their own bound (instance â†’ defaults â†’
-      // global â†’ built-in 48h). Only a config without any workspace instance
-      // falls back to one unscoped pass â€” an unscoped pass cannot honor a
+      // Declared workspaces resolve their own bound (instance â†?defaults â†?      // global â†?built-in 48h). Only a config without any workspace instance
+      // falls back to one unscoped pass â€?an unscoped pass cannot honor a
       // per-workspace disabled timeout, so it must not run alongside
       // declared instances.
       const scopes: (string | undefined)[] = workspaceIds.size > 0 ? [...workspaceIds] : [undefined];
@@ -3548,7 +3701,7 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
     },
     // Runtime config manager (P4): admission barrier + generation pinning.
     runtimeConfig,
-    // Config admin API surface (P5) â€” mounted only with admin auth plus the
+    // Config admin API surface (P5) â€?mounted only with admin auth plus the
     // config store; independent of the stats store.
     ...(adminAuthConfig && runtimeConfigStore
       ? {
@@ -3744,19 +3897,18 @@ async function createAutoCommitPipeline(deps: {
     const repoRef = stream.sourceNamespace.slice(stream.sourceNamespace.indexOf(":") + 1);
     // The cache key must include the workspace: two workspaces watching the
     // same trigger+repo each get their own adapter bound to their own clone
-    // directory â€” sharing one adapter would clone workspace B's events into
+    // directory â€?sharing one adapter would clone workspace B's events into
     // workspace A's directory. The snapshot id joins the key so a new
     // generation never reuses an adapter bound to the previous config.
     const cacheKey = `${stream.workspaceId} ${stream.triggerName} ${repoRef} ${generation.snapshotId ?? ""}`;
     let adapter = adapterCache.get(cacheKey);
     if (!adapter) {
-      // The metadata adapter must clone into the per-workspace source root â€”
-      // the same layout buildSourceRootResolver produces â€” never baseDir
+      // The metadata adapter must clone into the per-workspace source root â€?      // the same layout buildSourceRootResolver produces â€?never baseDir
       // (process cwd): inside the runtime image cwd is the read-only /app,
       // so a clone attempt there fails with EACCES and poisons the receipt
       // with a terminal metadata error. The adapter is long-lived, so it
       // re-fetches on every sync (alwaysFetch) and resolves GitHub App
-      // installation tokens lazily per sync (tokenProvider) â€” a cached static
+      // installation tokens lazily per sync (tokenProvider) â€?a cached static
       // token expires after an hour and would break every later expansion.
       // Metadata queries precede admission and have no branch/template
       // context. Keep caches independent of event-dependent work_path.
@@ -3790,7 +3942,7 @@ async function createAutoCommitPipeline(deps: {
 
   // Stage C resolver (architecture Â§3.10): converts durable p4/svn routing receipts
   // into formal receipts during the scheduler tick. Adapter lookups are
-  // cached per trigger â€” the p4/svn metadata queries hit the server
+  // cached per trigger â€?the p4/svn metadata queries hit the server
   // directly, no per-scope adapter instances needed.
   const routingAdapterCache = new Map<string, GitVcsAdapter | P4VcsAdapter | SvnVcsAdapter>();
   const routingResolver = new RoutingReceiptResolver({

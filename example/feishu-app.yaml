@@ -1,0 +1,23 @@
+# Merge this outputs block into your deployment configuration.
+# Create/publish a Feishu custom app with the bot capability and add it to both groups.
+# Export AICR_FEISHU_APP_SECRET; see the bilingual IM bots guide for permissions.
+outputs:
+  channels:
+    - name: feishu-app-review
+      kind: feishu_app
+      app_id: cli_replace_me
+      app_secret_env: AICR_FEISHU_APP_SECRET
+      receive_id_type: chat_id
+      receive_id: oc_report_group
+      mention_author: true
+      guess_author: true # Runtime default; false disables workspace/model guesses.
+      mention_fallback: skip
+      member_directory:
+        chat_id: oc_member_source_group
+        cache_ttl_seconds: 300
+      user_mappings:
+        "alice@example.com": ou_replace_with_app_open_id
+        "alice-dev-workspace": ou_replace_with_app_open_id
+  routes:
+    default:
+      summary: [feishu-app-review]

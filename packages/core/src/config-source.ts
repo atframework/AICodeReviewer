@@ -493,6 +493,7 @@ export const databaseConfigDocumentSchema: z.ZodType<DatabaseConfigDocument> = z
 export const DATABASE_GLOBAL_PREFIXES: readonly ConfigPath[] = [
   ["llm", "default_model_chain"],
   ["llm", "triage_model_chain"],
+  ["llm", "author_resolution_model_chain"],
   ["llm", "retry"],
   ["llm", "per_provider_overrides"],
   ["llm", "budget"],
@@ -1120,6 +1121,7 @@ export function collectEntityReferences(config: AppConfigInput): readonly Config
     }
     addGroupRef(llm.default_model_chain, ["llm", "default_model_chain"]);
     addGroupRef(llm.triage_model_chain, ["llm", "triage_model_chain"]);
+    addGroupRef(llm.author_resolution_model_chain, ["llm", "author_resolution_model_chain"]);
     if (isPlainObject(llm.per_provider_overrides)) {
       for (const id of Object.keys(llm.per_provider_overrides)) {
         add(["llm", "per_provider_overrides", id], { kind: "provider", id });
@@ -1187,6 +1189,7 @@ export function collectEntityReferences(config: AppConfigInput): readonly Config
     if (isPlainObject(workspaces.defaults)) {
       addGroupRef(workspaces.defaults.model_chain, ["workspaces", "defaults", "model_chain"]);
       addGroupRef(workspaces.defaults.triage_model_chain, ["workspaces", "defaults", "triage_model_chain"]);
+      addGroupRef(workspaces.defaults.author_resolution_model_chain, ["workspaces", "defaults", "author_resolution_model_chain"]);
       addWorkspaceOutputsRefs(workspaces.defaults.outputs, ["workspaces", "defaults", "outputs"]);
       addWorkspacePromptRefs(workspaces.defaults.prompt, ["workspaces", "defaults", "prompt"]);
     }
@@ -1197,6 +1200,7 @@ export function collectEntityReferences(config: AppConfigInput): readonly Config
         }
         addGroupRef(instance.model_chain, ["workspaces", "instances", id, "model_chain"]);
         addGroupRef(instance.triage_model_chain, ["workspaces", "instances", id, "triage_model_chain"]);
+        addGroupRef(instance.author_resolution_model_chain, ["workspaces", "instances", id, "author_resolution_model_chain"]);
         if (isPlainObject(instance.source_repo) && typeof instance.source_repo.trigger === "string") {
           add(["workspaces", "instances", id, "source_repo", "trigger"], {
             kind: "trigger",

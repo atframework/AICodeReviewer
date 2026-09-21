@@ -546,6 +546,10 @@ const builtinTemplates: Readonly<Record<string, Record<TemplateKind, string>>> =
 		summary: BUILTIN_FEISHU_SUMMARY_TEMPLATE,
 		problem: BUILTIN_PROBLEM_TEMPLATE,
 	},
+	feishu_app: {
+		summary: BUILTIN_FEISHU_SUMMARY_TEMPLATE,
+		problem: BUILTIN_PROBLEM_TEMPLATE,
+	},
 	wecom_bot: {
 		summary: BUILTIN_WECOM_SUMMARY_TEMPLATE,
 		problem: BUILTIN_PROBLEM_TEMPLATE,
@@ -561,6 +565,7 @@ const BUILTIN_TEMPLATE_FILE_NAMES: Readonly<Record<string, Record<TemplateKind, 
 	github_pr_review: { summary: "summary.hbs", problem: "problem.hbs" },
 	gitlab_mr_review: { summary: "summary.hbs", problem: "problem.hbs" },
 	feishu_bot: { summary: "feishu-summary.hbs", problem: "problem.hbs" },
+	feishu_app: { summary: "feishu-summary.hbs", problem: "problem.hbs" },
 	wecom_bot: { summary: "wecom-summary.hbs", problem: "problem.hbs" },
 };
 
@@ -702,6 +707,7 @@ function workspaceTemplateCandidates(options: TemplateResolverOptions, kind: Tem
 	candidates.push(
 		`${options.channelKind}.${kind}.md.hbs`,
 		`${options.channelKind}.${kind}.hbs`,
+		...(options.channelKind === "feishu_app" ? [`feishu_bot.${kind}.md.hbs`, `feishu_bot.${kind}.hbs`] : []),
 		`${kind}.md.hbs`,
 		`${kind}.hbs`,
 	);

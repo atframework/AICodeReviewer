@@ -125,6 +125,30 @@ function makeOptions(partial: Partial<LlmGatewayOptions> & Pick<LlmGatewayOption
 }
 
 describe("createResilientChatClient", () => {
+	it("cancels retry backoff without another provider or fallback call", async () => {
+		vi.useFakeTimers();
+		try {
+			const controller = new AbortController();
+			const complete = vi.fn(async () => { throw new LlmProviderError("retry", { status: 503 }); });
+			const factory = vi.fn(() => ({ complete }));
+			const gateway = createResilientChatClient(makeOptions({ clientFactory: factory,
+				retry: { maxAttempts: 4, backoff: { kind: "constant", baseMs: 60_000, jitter: false } } }));
+			const pending = gateway.complete({ model: baseModel, messages: [], signal: controller.signal });
+			const rejected = expect(pending).rejects.toThrow("cancel identity");
+			await vi.advanceTimersByTimeAsync(1);
+			controller.abort(new Error("cancel identity"));
+			await rejected;
+			expect(complete).toHaveBeenCalledTimes(1); expect(factory).toHaveBeenCalledTimes(1);
+			expect(vi.getTimerCount()).toBe(0);
+		} finally { vi.useRealTimers(); }
+	});
+	it("checks cancellation after the shared rate limiter and before creating an HTTP request", async () => {
+		const controller = new AbortController(); const complete = vi.fn();
+		const gateway = createResilientChatClient(makeOptions({ clientFactory: () => ({ complete }),
+			beforeRequest: async () => { controller.abort(new Error("cancel while queued")); } }));
+		await expect(gateway.complete({ model: baseModel, messages: [], signal: controller.signal })).rejects.toThrow("cancel while queued");
+		expect(complete).not.toHaveBeenCalled();
+	});
 	it("returns the result from the primary client on success", async () => {
 		const expected: ChatCompletionResult = {
 			providerId: "openai-prod",

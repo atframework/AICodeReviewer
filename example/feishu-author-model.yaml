@@ -1,0 +1,28 @@
+# Merge these model groups/provider references into your existing configuration.
+# Replace endpoint, model names and workspace ID with your deployment values.
+# Pair with feishu-app.yaml. That channel enables mentions and directory lookup.
+llm:
+  providers:
+    - id: inference-api
+      kind: openai_compatible
+      base_url: https://llm.example.com/v1
+      api_key_env: AICR_LLM_API_KEY
+  model_chain:
+    default:
+      - provider: inference-api
+        model: your-review-model
+        role: heavy
+    directory-identity:
+      - provider: inference-api
+        model: your-identity-model
+        role: light
+  default_model_chain: default
+  author_resolution_model_chain: directory-identity
+workspaces:
+  defaults:
+    author_resolution_model_chain: directory-identity
+  instances:
+    your-workspace:
+      author_resolution_model_chain: directory-identity
+# Priority: instance > workspace defaults > llm.author_resolution_model_chain
+# > llm.default_model_chain. It does not inherit the workspace review model_chain.

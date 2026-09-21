@@ -17,8 +17,7 @@ agent:
     prune: true
   web_search:
     enabled: false
-  sandbox:
-    # kind 不设置 = 自动探测（docker→podman→native 回退）
+  sandbox: {}  # kind 不设置 = 自动探测（docker→podman→native 回退）
 ```
 
 ## `agent.default` —— 执行模式

@@ -1037,6 +1037,139 @@ describe("runReviewOrchestration", () => {
     }
   });
 
+  it.each(["problem", "summary"] as const)("does not swallow a recovery abort during %s publication", async (phase) => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-abort-publication-"));
+    try {
+      await writeWorkspaceFile(tempDir, "src/app.ts", "const value = oldValue();\n");
+      const abort = new AbortController();
+      let calls = 0;
+      const fail = async (): Promise<never> => {
+        calls += 1;
+        const error = new Error("checkpoint could not be saved");
+        abort.abort(error);
+        throw error;
+      };
+      await expect(runReviewOrchestration({ reviewEvent: createReviewEventFixture(), payload: {}, provider: "gitea",
+        eventName: "pull_request", signal: abort.signal, publicationRecovery: {} }, {
+        baseSystemPrompt: "{{TASK_CONTEXT}}", sourceRootResolver: () => tempDir, vcs: createVcs(tempDir), model,
+        llm: { complete: async () => { throw new Error("unexpected analysis"); } },
+        outputPublisher: { publishesProblems: phase === "problem", publishProblem: fail, publishSummary: fail },
+        resumePublication: {
+          problems: [{ file: "src/app.ts", line: 1, severity: "high", category: "correctness", message: "saved problem" }],
+          summaries: [{ markdown: "one" }, { markdown: "two" }],
+        },
+      })).rejects.toThrow("checkpoint could not be saved");
+      expect(calls).toBe(1);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("retains published status when every channel is already confirmed", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-resume-confirmed-"));
+    try {
+      await writeWorkspaceFile(tempDir, "src/app.ts", "const value = oldValue();\n");
+      const result = await runReviewOrchestration({ reviewEvent: createReviewEventFixture(), payload: {}, provider: "gitea",
+        eventName: "pull_request", publicationRecovery: { skipChannels: ["sent"] } }, {
+        baseSystemPrompt: "{{TASK_CONTEXT}}", sourceRootResolver: () => tempDir, vcs: createVcs(tempDir), model,
+        llm: { complete: async () => { throw new Error("unexpected analysis"); } },
+        outputPublisher: { publishSummary: async () => [] },
+        resumePublication: { problems: [], summaries: [{ markdown: "already sent" }] },
+      });
+      expect(result.status).toBe("published");
+      expect(result.skipReason).toBeUndefined();
+      expect(result.dispatchCount).toBe(0);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("resumePublication skips the analysis phase and republishes the persisted output", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-resume-"));
+
+    try {
+      await writeWorkspaceFile(tempDir, "AGENTS.md", "# Root\nKeep problems focused.\n");
+      await writeWorkspaceFile(tempDir, "src/app.ts", "const value = oldValue();\ncommitBeforeReturn();\n");
+      const llm: ChatCompletionClient = {
+        async complete() {
+          throw new Error("the LLM must not run on a publication resume");
+        },
+      };
+      let analysisHookCalls = 0;
+      const publishedProblems: ReviewProblem[] = [];
+      const publishedSummaries: string[] = [];
+      const outputPublisher: ReviewOutputPublisher = {
+        async publishProblem(problem) {
+          publishedProblems.push(problem);
+          return { channel: "gitea-pr", status: "published", externalId: "123" };
+        },
+        async publishSummary(summary) {
+          publishedSummaries.push(summary);
+          return { channel: "gitea-pr", status: "published", externalId: "123" };
+        },
+      };
+
+      const result = await runReviewOrchestration(
+        {
+          reviewEvent: createReviewEventFixture(),
+          payload: {},
+          provider: "gitea",
+          eventName: "pull_request",
+        },
+        {
+          baseSystemPrompt: "<task>\n{{TASK_CONTEXT}}\n</task>",
+          sourceRootResolver: () => tempDir,
+          vcs: createVcs(tempDir),
+          llm,
+          model,
+          outputPublisher,
+          onAnalysisComplete: () => {
+            analysisHookCalls += 1;
+          },
+          resumePublication: {
+            analysis: {
+              model: { providerId: "paid-provider", modelId: "fallback-model" },
+              promptTokenEstimate: 120, contextRequestCount: 2,
+              llmUsage: { promptTokens: 100, completionTokens: 40, totalTokens: 140 },
+              estimatedCostUsd: 0.25, requestCount: 3, retryCount: 1, fallbackCount: 1,
+              usageSource: "llm_gateway",
+            },
+            problems: [
+              {
+                file: "src/app.ts",
+                line: 2,
+                severity: "high",
+                category: "correctness",
+                message: "The return path can run before the commit finishes.",
+              },
+            ],
+            summaries: [{ markdown: "Persisted summary from the first attempt." }],
+          },
+        },
+      );
+
+      expect(result.status).toBe("published");
+      expect(result.problemCount).toBe(1);
+      expect(result.summaryCount).toBe(1);
+      // The analysis-complete hook fires only on the analysis path, never on
+      // a resume (the payload already exists by definition).
+      expect(analysisHookCalls).toBe(0);
+      expect(publishedProblems).toEqual([
+        expect.objectContaining({ file: "src/app.ts", line: 2, message: "The return path can run before the commit finishes." }),
+      ]);
+      expect(publishedSummaries).toEqual(["Persisted summary from the first attempt."]);
+      expect(result.llmResult).toMatchObject({ providerId: "paid-provider", modelId: "fallback-model" });
+      expect(summarizeReviewOrchestrationForWebhook(result)).toMatchObject({
+        model: { providerId: "paid-provider", modelId: "fallback-model" },
+        promptTokenEstimate: 120, contextRequestCount: 2,
+        llmUsage: { promptTokens: 100, completionTokens: 40, totalTokens: 140 },
+        estimatedCostUsd: 0.25, requestCount: 3, retryCount: 1, fallbackCount: 1,
+      });
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("supports fenced JSON skip output without dispatching problems", async () => {
     const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-orchestrator-skip-"));
 

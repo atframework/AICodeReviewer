@@ -80,6 +80,7 @@ import {
   type ExtraContextRequest,
   type MaterializeContextReposOptions,
   type ParsedDiff,
+  type ScopedTree,
   type VcsAdapter,
 } from "@aicr/vcs";
 
@@ -102,6 +103,8 @@ export interface ReviewOutputPublisher {
 }
 
 export interface ReviewSummaryPublishOptions {
+	/** Internal recovery boundary: earlier summaries do not confirm the channel. */
+	readonly finalForChannel?: boolean;
 	readonly bypassNoProblemsPolicy?: boolean;
 	readonly skipReconcile?: boolean;
 	readonly title?: string;
@@ -136,6 +139,17 @@ export interface ReviewOrchestrationContext {
   readonly configSnapshotId?: string | null;
   readonly additionalTaskContext?: string;
   readonly signal?: AbortSignal;
+  /**
+   * Per-target publication recovery wiring (P1). `skipChannels` names output
+   * channels whose delivery is already confirmed by a durable receipt; the
+   * composite publisher skips them. `onChannelResult` observes every channel
+   * outcome as it settles so the caller can persist receipts mid-flight.
+   */
+  readonly publicationRecovery?: {
+    readonly skipChannels?: readonly string[];
+    readonly onChannelStart?: (channel: string) => void | Promise<void>;
+    readonly onChannelResult?: (result: DispatchResult, phase: "problem" | "summary", finalForChannel?: boolean) => void | Promise<void>;
+  };
 }
 
 export interface ServerReviewOrchestrationOptions {
@@ -183,6 +197,24 @@ export interface ServerReviewOrchestrationOptions {
   ) => Promise<Partial<ServerReviewOrchestrationOptions>> | Partial<ServerReviewOrchestrationOptions>;
   readonly outputPublisher?: ReviewOutputPublisher;
   readonly outputPublisherResolver?: ReviewOutputPublisherResolver;
+  /**
+   * Resume a run whose analysis completed but publication did not (P1
+   * per-target recovery). When set, the VCS range is re-fetched for anchoring
+   * but the LLM/agent analysis is skipped; publication replays from the
+   * persisted output instead.
+   */
+  readonly resumePublication?: {
+    readonly problems: AicrOutputState["problems"];
+    readonly summaries: AicrOutputState["summaries"];
+    readonly skipReason?: string;
+    readonly analysis?: ReviewAnalysisSnapshot;
+  };
+  /**
+   * Fires once after the analysis output is final and before publication
+   * starts. Used by the auto-commit executor to durably record the
+   * publishable payload and per-channel intent before any remote call.
+   */
+  readonly onAnalysisComplete?: (outputState: AicrOutputState, analysis?: ReviewAnalysisSnapshot) => void | Promise<void>;
   readonly changedPathsResolver?: (context: ReviewOrchestrationContext) => readonly string[] | undefined;
   readonly operatorOverrides?: readonly string[];
   readonly memoryHints?: readonly string[];
@@ -3270,6 +3302,63 @@ async function executeReviewInRunDirs(
     policy?.commit_strategy, options.diffContextLines ?? 3);
   diff = commitPolicy.diff;
   changedPaths = [...commitPolicy.files];
+  if (options.resumePublication) {
+    // P1 publication recovery: the analysis output is already persisted in the
+    // batch checkpoint, so the LLM/agent phase is skipped entirely. The VCS
+    // range above was still re-fetched so anchoring/template context resolve
+    // against the batch's pinned revisions.
+    const resume = options.resumePublication;
+    return finalizeReviewRun({
+      context,
+      options,
+      liveRun,
+      runMetricsAccumulator: createReviewRunMetricsAccumulator(),
+      completion: {
+        llmResult: {
+          providerId: options.model.providerId,
+          modelId: options.model.modelId,
+          content: "",
+          raw: { resumed: true },
+          ...(resume.analysis ? { providerId: resume.analysis.model.providerId, modelId: resume.analysis.model.modelId } : {}),
+        },
+      },
+      lastAgentResult: undefined,
+      outputState: {
+        problems: resume.problems,
+        summaries: resume.summaries,
+        contextRequests: [],
+        ...(resume.skipReason !== undefined ? { skipReason: resume.skipReason } : {}),
+      },
+      scopedTree,
+      runtimeDirs,
+      diff,
+      changedPaths,
+      enableScrub: options.scrubSecrets !== false,
+      allScrubMatches: [],
+      preparedPrompt: {
+        reviewEvent: context.reviewEvent,
+        sourceRoot: scopedTree.rootDir,
+        changedPaths,
+        taskContext: "",
+        discovery: { instructions: [], skills: [], droppedRefs: [], conflicts: [] },
+        prompt: {
+          systemPrompt: "",
+          tokenEstimate: 0,
+          repoInstructionSummaries: [],
+          activeSkillSummaries: [],
+          loadedInstructionRefs: [],
+          activatedSkillRefs: [],
+          droppedInstructionRefs: [],
+          conflicts: [],
+        },
+      },
+      compressed: false,
+      originalTokenEstimate: undefined,
+      compressedTokenEstimate: undefined,
+      contextRepoResults,
+      revisionStamp,
+    });
+  }
   if (changedPaths.length === 0 && !options.dryRun) return noChangesResult();
   const patchText = formatParsedDiffForPrompt(diff);
   // The budget bounds the ANALYZED patch only: changedPaths is the
@@ -3662,13 +3751,234 @@ async function executeReviewInRunDirs(
     outputState = collector.snapshot();
   }
 
+  return finalizeReviewRun({
+    context,
+    options,
+    liveRun,
+    runMetricsAccumulator,
+    completion,
+    lastAgentResult,
+    outputState,
+    scopedTree,
+    runtimeDirs,
+    diff,
+    changedPaths,
+    enableScrub,
+    allScrubMatches,
+    preparedPrompt,
+    compressed,
+    originalTokenEstimate,
+    compressedTokenEstimate,
+    contextRepoResults,
+    revisionStamp,
+  });
+}
+
+function buildOrchestratorVcsContext(reviewEvent: ReviewEvent): { branch?: string; sourcePath?: string; workspace?: string; repositoryPath?: string } {
+  const result: { branch?: string; sourcePath?: string; workspace?: string; repositoryPath?: string } = {};
+
+  if (reviewEvent.branch !== undefined) {
+    result.branch = reviewEvent.branch;
+  }
+  if (reviewEvent.sourcePath !== undefined) {
+    result.sourcePath = reviewEvent.sourcePath;
+  }
+  if (reviewEvent.submitterWorkspace !== undefined) {
+    result.workspace = reviewEvent.submitterWorkspace;
+  }
+  if (reviewEvent.repoRef !== undefined) {
+    result.repositoryPath = reviewEvent.repoRef;
+  }
+
+  return result;
+}
+
+/**
+ * Extracts real LLM usage from an orchestration result for webhook/store persistence.
+ *
+ * The direct-LLM path produces a {@link ChatCompletionResult} whose `usage` is the real
+ * provider-reported token usage; gateway cost/retry/fallback ride on the runtime object
+ * (fields not on the static `ChatCompletionResult` type — they belong to
+ * {@link LlmGatewayCallResult}), so the gateway-calling plumbing copies them onto the
+ * orchestration result's `estimatedCostUsd`/`retryCount`/`fallbackCount`.
+ *
+ * The orchestration layer aggregates every initial/follow-up/fallback completion into
+ * `llmResult.usage` before this function runs. Agent usage is included only when step-finish
+ * events were parseable from stdout; otherwise callers still have `promptTokenEstimate` as a
+ * separately labelled local estimate.
+ */
+function extractReviewRunUsage(
+  result: Pick<ReviewOrchestrationResult, "llmResult" | "agentResult" | "usageSource" | "estimatedCostUsd" | "requestCount" | "retryCount" | "fallbackCount">,
+): {
+  readonly llmUsage?: ReviewOrchestrationWebhookUsage;
+  readonly usageSource?: ReviewOrchestrationUsageSource;
+  readonly estimatedCostUsd?: number;
+  readonly requestCount?: number;
+  readonly retryCount?: number;
+  readonly fallbackCount?: number;
+} {
+  const usage = result.llmResult.usage;
+  const isFiniteNumber = (v: unknown): v is number =>
+    typeof v === "number" && Number.isFinite(v);
+  const usageSource: ReviewOrchestrationUsageSource | undefined = usage
+    ? result.usageSource ?? (result.agentResult ? "agent_stdout" : "llm_gateway")
+    : undefined;
+  // On the direct path the gateway-only fields are read from the runtime llmResult,
+  // since the static ChatCompletionResult type does not declare them.
+  const gatewayResult = result.llmResult as ChatCompletionResult & {
+    estimatedCostUsd?: unknown;
+    retryCount?: unknown;
+    fallbackCount?: unknown;
+  };
+  return {
+    ...(usage ? {
+      llmUsage: {
+        ...(usage.promptTokens !== undefined ? { promptTokens: usage.promptTokens } : {}),
+        ...(usage.completionTokens !== undefined ? { completionTokens: usage.completionTokens } : {}),
+        ...(usage.totalTokens !== undefined ? { totalTokens: usage.totalTokens } : {}),
+        ...(usage.cachedPromptTokens !== undefined ? { cachedPromptTokens: usage.cachedPromptTokens } : {}),
+        ...(usage.cacheCreationTokens !== undefined ? { cacheCreationTokens: usage.cacheCreationTokens } : {}),
+      },
+    } : {}),
+    ...(usageSource ? { usageSource } : {}),
+    ...(result.estimatedCostUsd !== undefined
+      ? { estimatedCostUsd: result.estimatedCostUsd }
+      : isFiniteNumber(gatewayResult.estimatedCostUsd) ? { estimatedCostUsd: gatewayResult.estimatedCostUsd } : {}),
+    ...(result.retryCount !== undefined
+      ? { retryCount: result.retryCount }
+      : isFiniteNumber(gatewayResult.retryCount) ? { retryCount: gatewayResult.retryCount } : {}),
+    ...(result.fallbackCount !== undefined
+      ? { fallbackCount: result.fallbackCount }
+      : isFiniteNumber(gatewayResult.fallbackCount) ? { fallbackCount: gatewayResult.fallbackCount } : {}),
+    // The direct path is a single completion; the agent path reports one request per
+    // captured step. New results carry a run-wide aggregate; the fallback preserves legacy
+    // manually-constructed direct-path results used by callers/tests.
+    ...(result.requestCount !== undefined
+      ? { requestCount: result.requestCount }
+      : usage && !result.agentResult ? { requestCount: 1 } : {}),
+  };
+}
+
+/** Billable analysis metadata retained during publication-only recovery. */
+export type ReviewAnalysisSnapshot = ReturnType<typeof extractReviewRunUsage> & Pick<
+  ReviewOrchestrationWebhookSummary,
+  "model" | "promptTokenEstimate" | "contextRequestCount" | "compressed" | "originalTokenEstimate" | "compressedTokenEstimate"
+>;
+
+export function summarizeReviewOrchestrationForWebhook(
+  result: ReviewOrchestrationResult,
+): ReviewOrchestrationWebhookSummary {
+  const usage = extractReviewRunUsage(result);
+  return {
+    ...(result.configVersion ? { configVersion: result.configVersion } : {}),
+    status: result.status,
+    changedFileCount: result.changedFiles.length,
+    fetchedFileCount: result.fetchedFiles.length,
+    diffFileCount: result.diffFileCount,
+    promptTokenEstimate: result.promptTokenEstimate,
+    problemCount: result.problemCount,
+    summaryCount: result.summaryCount,
+    contextRequestCount: result.contextRequestCount,
+    dispatchCount: result.dispatchCount,
+    ...(result.skipReason ? { skipReason: result.skipReason } : {}),
+    ...(result.compressed ? { compressed: result.compressed } : {}),
+    ...(result.originalTokenEstimate !== undefined ? { originalTokenEstimate: result.originalTokenEstimate } : {}),
+    ...(result.compressedTokenEstimate !== undefined ? { compressedTokenEstimate: result.compressedTokenEstimate } : {}),
+    model: result.model,
+    ...(usage.llmUsage ? { llmUsage: usage.llmUsage } : {}),
+    ...(usage.usageSource ? { usageSource: usage.usageSource } : {}),
+    ...(usage.estimatedCostUsd !== undefined ? { estimatedCostUsd: usage.estimatedCostUsd } : {}),
+    ...(usage.requestCount !== undefined ? { requestCount: usage.requestCount } : {}),
+    ...(usage.retryCount !== undefined ? { retryCount: usage.retryCount } : {}),
+    ...(usage.fallbackCount !== undefined ? { fallbackCount: usage.fallbackCount } : {}),
+    ...(result.contextRepositories && result.contextRepositories.length > 0
+      ? {
+          contextRepositories: result.contextRepositories.map((entry) => ({
+            alias: entry.alias,
+            kind: entry.kind,
+            status: entry.status,
+            ...(entry.resolvedRevision ? { resolvedRevision: entry.resolvedRevision } : {}),
+            ...(entry.fileCount !== undefined ? { fileCount: entry.fileCount } : {}),
+            ...(entry.totalBytes !== undefined ? { totalBytes: entry.totalBytes } : {}),
+            ...(entry.error ? { error: entry.error } : {}),
+          })),
+        }
+      : {}),
+    ...(result.headCommittedAt ? { headCommittedAt: result.headCommittedAt } : {}),
+    ...(result.headSha ? { headSha: result.headSha } : {}),
+    ...(result.vcsKind ? { vcsKind: result.vcsKind } : {}),
+  };
+}
+
+
+interface FinalizeReviewRunParams {
+  readonly context: ReviewOrchestrationContext;
+  readonly options: ServerReviewOrchestrationOptions;
+  readonly liveRun: LiveRunHandle | undefined;
+  readonly runMetricsAccumulator: ReviewRunMetricsAccumulator;
+  readonly completion: ReviewCompletionResult;
+  readonly lastAgentResult: SandboxSpawnResult | undefined;
+  readonly outputState: AicrOutputState;
+  readonly scopedTree: ScopedTree;
+  readonly runtimeDirs: WorkspaceLayout | undefined;
+  readonly diff: ParsedDiff | undefined;
+  readonly changedPaths: readonly string[];
+  readonly enableScrub: boolean;
+  readonly allScrubMatches: ScrubMatch[];
+  readonly preparedPrompt: PreparedReviewPrompt;
+  readonly compressed: boolean;
+  readonly originalTokenEstimate: number | undefined;
+  readonly compressedTokenEstimate: number | undefined;
+  readonly contextRepoResults: readonly ContextRepoMaterialization[];
+  readonly revisionStamp: {
+    readonly headSha?: string;
+    readonly vcsKind?: ReviewVcsKind;
+    readonly headCommittedAt?: string;
+  };
+}
+
+async function finalizeReviewRun(params: FinalizeReviewRunParams): Promise<ReviewOrchestrationResult> {
+  const {
+    context,
+    options,
+    liveRun,
+    runMetricsAccumulator,
+    completion,
+    lastAgentResult,
+    outputState,
+    scopedTree,
+    runtimeDirs,
+    diff,
+    changedPaths,
+    enableScrub,
+    allScrubMatches,
+    preparedPrompt,
+    compressed,
+    originalTokenEstimate,
+    compressedTokenEstimate,
+    contextRepoResults,
+    revisionStamp,
+  } = params;
   const runMetrics = finalizeReviewRunMetrics(runMetricsAccumulator);
   const llmResult: ChatCompletionResult = runMetrics.usage
     ? { ...completion.llmResult, usage: runMetrics.usage }
     : completion.llmResult;
   const agentResult = completion.agentResult ?? lastAgentResult;
+  const analysis: ReviewAnalysisSnapshot = options.resumePublication?.analysis ?? {
+    model: { providerId: llmResult.providerId, modelId: llmResult.modelId },
+    promptTokenEstimate: preparedPrompt.prompt.tokenEstimate,
+    contextRequestCount: outputState.contextRequests.length,
+    ...(compressed ? { compressed } : {}),
+    ...(originalTokenEstimate !== undefined ? { originalTokenEstimate } : {}),
+    ...(compressedTokenEstimate !== undefined ? { compressedTokenEstimate } : {}),
+    ...extractReviewRunUsage({ ...runMetrics, llmResult, ...(agentResult ? { agentResult } : {}) }),
+  };
   const dispatchResults: DispatchResult[] = [];
   // A worker that lost its lease must never start publication afterwards.
+  context.signal?.throwIfAborted();
+  if (!options.resumePublication) {
+    await options.onAnalysisComplete?.(outputState, analysis);
+  }
   context.signal?.throwIfAborted();
   liveRun?.registry.update(liveRun.executionId, {
     phase: "publishing",
@@ -3737,6 +4047,7 @@ async function executeReviewInRunDirs(
     };
     const reviewProblems: ReviewProblem[] = [];
     for (const reportedProblem of outputState.problems) {
+      context.signal?.throwIfAborted();
       const rawReviewProblem = toReviewProblem(reportedProblem);
       const lineCommentable = isLineCommentableInDiff(rawReviewProblem, diff);
       const anchoredProblem: ReviewProblem = lineCommentable === false
@@ -3788,6 +4099,7 @@ async function executeReviewInRunDirs(
           try {
             appendDispatchResults(dispatchResults, await publishProblem(outputPublisher, preparedProblem));
           } catch (error) {
+            context.signal?.throwIfAborted();
             logDispatchFailure("output", "problem", error);
             dispatchResults.push(createFailedDispatchResult("output", "problem", error));
           }
@@ -3801,6 +4113,7 @@ async function executeReviewInRunDirs(
         try {
           appendDispatchResults(dispatchResults, await publishProblem(outputPublisher, preparedProblem));
         } catch (error) {
+          context.signal?.throwIfAborted();
           logDispatchFailure("output", "problem", error);
           dispatchResults.push(createFailedDispatchResult("output", "problem", error));
         }
@@ -3818,7 +4131,8 @@ async function executeReviewInRunDirs(
           : reviewProblems.length > 0 || outputPublisher.publishEmptySummary
             ? [{ markdown: "" }]
             : [];
-        for (const summaryEntry of summariesToPublish) {
+        for (const [summaryIndex, summaryEntry] of summariesToPublish.entries()) {
+          context.signal?.throwIfAborted();
           let renderedSummary: string;
           let renderedSummaryTitle: string | undefined;
           if (enableScrub) {
@@ -3857,12 +4171,14 @@ async function executeReviewInRunDirs(
                 renderedSummary,
                 reviewProblems,
                 {
+                  ...(context.publicationRecovery ? { finalForChannel: summaryIndex === summariesToPublish.length - 1 } : {}),
                   ...(renderedSummaryTitle ? { title: renderedSummaryTitle } : {}),
                   ...(changedPaths.length > 0 ? { reviewedFiles: changedPaths } : {}),
                 },
               ),
             );
           } catch (error) {
+            context.signal?.throwIfAborted();
             logDispatchFailure("output", "summary", error);
             dispatchResults.push(createFailedDispatchResult("output", "summary", error));
           }
@@ -3915,7 +4231,8 @@ async function executeReviewInRunDirs(
 
   const publishedDispatchCount = countPublishedDispatchResults(dispatchResults);
   const failedDispatchCount = countFailedDispatchResults(dispatchResults);
-  const implicitSkipReason = !options.dryRun && !outputState.skipReason && publishedDispatchCount === 0
+  const previouslyPublished = Boolean(options.resumePublication && context.publicationRecovery?.skipChannels?.length);
+  const implicitSkipReason = !options.dryRun && !outputState.skipReason && publishedDispatchCount === 0 && !previouslyPublished
     ? failedDispatchCount > 0
       ? "output_dispatch_failed"
       : outputState.problems.length > 0 && !outputPublisher
@@ -3930,32 +4247,27 @@ async function executeReviewInRunDirs(
   const skipReason = outputState.skipReason ?? implicitSkipReason;
   const status = skipReason
     ? "skipped"
-    : publishedDispatchCount > 0
+    : publishedDispatchCount > 0 || previouslyPublished
       ? "published"
       : options.dryRun
         ? "dry_run"
         : "published";
 
+  const { llmUsage, ...analysisFields } = analysis;
   const result: ReviewOrchestrationResult = {
     status,
     sourceRoot: scopedTree.rootDir,
     changedFiles: changedPaths,
     fetchedFiles: scopedTree.fetchedFiles,
     diffFileCount: diff?.files.length ?? 0,
-    promptTokenEstimate: preparedPrompt.prompt.tokenEstimate,
     problemCount: outputState.problems.length,
     summaryCount: outputState.summaries.length,
-    contextRequestCount: outputState.contextRequests.length,
     dispatchCount: dispatchResults.length,
     ...(skipReason ? { skipReason } : {}),
-    model: {
-      providerId: llmResult.providerId,
-      modelId: llmResult.modelId,
-    },
     preparedPrompt,
     outputState,
     dispatchResults,
-    llmResult,
+    llmResult: llmUsage ? { ...llmResult, usage: llmUsage } : llmResult,
     ...(agentResult ? { agentResult } : {}),
     scrubMatches: allScrubMatches,
     ...(compressed ? { compressed } : {}),
@@ -3968,6 +4280,7 @@ async function executeReviewInRunDirs(
     ...(runMetrics.retryCount !== undefined ? { retryCount: runMetrics.retryCount } : {}),
     ...(runMetrics.fallbackCount !== undefined ? { fallbackCount: runMetrics.fallbackCount } : {}),
     ...(runMetrics.usageSource ? { usageSource: runMetrics.usageSource } : {}),
+    ...analysisFields,
     ...(contextRepoResults.length > 0 ? { contextRepositories: contextRepoResults } : {}),
     ...revisionStamp,
   };
@@ -3987,134 +4300,4 @@ async function executeReviewInRunDirs(
   }
 
   return result;
-}
-
-function buildOrchestratorVcsContext(reviewEvent: ReviewEvent): { branch?: string; sourcePath?: string; workspace?: string; repositoryPath?: string } {
-  const result: { branch?: string; sourcePath?: string; workspace?: string; repositoryPath?: string } = {};
-
-  if (reviewEvent.branch !== undefined) {
-    result.branch = reviewEvent.branch;
-  }
-  if (reviewEvent.sourcePath !== undefined) {
-    result.sourcePath = reviewEvent.sourcePath;
-  }
-  if (reviewEvent.submitterWorkspace !== undefined) {
-    result.workspace = reviewEvent.submitterWorkspace;
-  }
-  if (reviewEvent.repoRef !== undefined) {
-    result.repositoryPath = reviewEvent.repoRef;
-  }
-
-  return result;
-}
-
-/**
- * Extracts real LLM usage from an orchestration result for webhook/store persistence.
- *
- * The direct-LLM path produces a {@link ChatCompletionResult} whose `usage` is the real
- * provider-reported token usage; gateway cost/retry/fallback ride on the runtime object
- * (fields not on the static `ChatCompletionResult` type — they belong to
- * {@link LlmGatewayCallResult}), so the gateway-calling plumbing copies them onto the
- * orchestration result's `estimatedCostUsd`/`retryCount`/`fallbackCount`.
- *
- * The orchestration layer aggregates every initial/follow-up/fallback completion into
- * `llmResult.usage` before this function runs. Agent usage is included only when step-finish
- * events were parseable from stdout; otherwise callers still have `promptTokenEstimate` as a
- * separately labelled local estimate.
- */
-function extractReviewRunUsage(
-  result: ReviewOrchestrationResult,
-): {
-  readonly llmUsage?: ReviewOrchestrationWebhookUsage;
-  readonly usageSource?: ReviewOrchestrationUsageSource;
-  readonly estimatedCostUsd?: number;
-  readonly requestCount?: number;
-  readonly retryCount?: number;
-  readonly fallbackCount?: number;
-} {
-  const usage = result.llmResult.usage;
-  const isFiniteNumber = (v: unknown): v is number =>
-    typeof v === "number" && Number.isFinite(v);
-  const usageSource: ReviewOrchestrationUsageSource | undefined = usage
-    ? result.usageSource ?? (result.agentResult ? "agent_stdout" : "llm_gateway")
-    : undefined;
-  // On the direct path the gateway-only fields are read from the runtime llmResult,
-  // since the static ChatCompletionResult type does not declare them.
-  const gatewayResult = result.llmResult as ChatCompletionResult & {
-    estimatedCostUsd?: unknown;
-    retryCount?: unknown;
-    fallbackCount?: unknown;
-  };
-  return {
-    ...(usage ? {
-      llmUsage: {
-        ...(usage.promptTokens !== undefined ? { promptTokens: usage.promptTokens } : {}),
-        ...(usage.completionTokens !== undefined ? { completionTokens: usage.completionTokens } : {}),
-        ...(usage.totalTokens !== undefined ? { totalTokens: usage.totalTokens } : {}),
-        ...(usage.cachedPromptTokens !== undefined ? { cachedPromptTokens: usage.cachedPromptTokens } : {}),
-        ...(usage.cacheCreationTokens !== undefined ? { cacheCreationTokens: usage.cacheCreationTokens } : {}),
-      },
-    } : {}),
-    ...(usageSource ? { usageSource } : {}),
-    ...(result.estimatedCostUsd !== undefined
-      ? { estimatedCostUsd: result.estimatedCostUsd }
-      : isFiniteNumber(gatewayResult.estimatedCostUsd) ? { estimatedCostUsd: gatewayResult.estimatedCostUsd } : {}),
-    ...(result.retryCount !== undefined
-      ? { retryCount: result.retryCount }
-      : isFiniteNumber(gatewayResult.retryCount) ? { retryCount: gatewayResult.retryCount } : {}),
-    ...(result.fallbackCount !== undefined
-      ? { fallbackCount: result.fallbackCount }
-      : isFiniteNumber(gatewayResult.fallbackCount) ? { fallbackCount: gatewayResult.fallbackCount } : {}),
-    // The direct path is a single completion; the agent path reports one request per
-    // captured step. New results carry a run-wide aggregate; the fallback preserves legacy
-    // manually-constructed direct-path results used by callers/tests.
-    ...(result.requestCount !== undefined
-      ? { requestCount: result.requestCount }
-      : usage && !result.agentResult ? { requestCount: 1 } : {}),
-  };
-}
-
-export function summarizeReviewOrchestrationForWebhook(
-  result: ReviewOrchestrationResult,
-): ReviewOrchestrationWebhookSummary {
-  const usage = extractReviewRunUsage(result);
-  return {
-    ...(result.configVersion ? { configVersion: result.configVersion } : {}),
-    status: result.status,
-    changedFileCount: result.changedFiles.length,
-    fetchedFileCount: result.fetchedFiles.length,
-    diffFileCount: result.diffFileCount,
-    promptTokenEstimate: result.promptTokenEstimate,
-    problemCount: result.problemCount,
-    summaryCount: result.summaryCount,
-    contextRequestCount: result.contextRequestCount,
-    dispatchCount: result.dispatchCount,
-    ...(result.skipReason ? { skipReason: result.skipReason } : {}),
-    ...(result.compressed ? { compressed: result.compressed } : {}),
-    ...(result.originalTokenEstimate !== undefined ? { originalTokenEstimate: result.originalTokenEstimate } : {}),
-    ...(result.compressedTokenEstimate !== undefined ? { compressedTokenEstimate: result.compressedTokenEstimate } : {}),
-    model: result.model,
-    ...(usage.llmUsage ? { llmUsage: usage.llmUsage } : {}),
-    ...(usage.usageSource ? { usageSource: usage.usageSource } : {}),
-    ...(usage.estimatedCostUsd !== undefined ? { estimatedCostUsd: usage.estimatedCostUsd } : {}),
-    ...(usage.requestCount !== undefined ? { requestCount: usage.requestCount } : {}),
-    ...(usage.retryCount !== undefined ? { retryCount: usage.retryCount } : {}),
-    ...(usage.fallbackCount !== undefined ? { fallbackCount: usage.fallbackCount } : {}),
-    ...(result.contextRepositories && result.contextRepositories.length > 0
-      ? {
-          contextRepositories: result.contextRepositories.map((entry) => ({
-            alias: entry.alias,
-            kind: entry.kind,
-            status: entry.status,
-            ...(entry.resolvedRevision ? { resolvedRevision: entry.resolvedRevision } : {}),
-            ...(entry.fileCount !== undefined ? { fileCount: entry.fileCount } : {}),
-            ...(entry.totalBytes !== undefined ? { totalBytes: entry.totalBytes } : {}),
-            ...(entry.error ? { error: entry.error } : {}),
-          })),
-        }
-      : {}),
-    ...(result.headCommittedAt ? { headCommittedAt: result.headCommittedAt } : {}),
-    ...(result.headSha ? { headSha: result.headSha } : {}),
-    ...(result.vcsKind ? { vcsKind: result.vcsKind } : {}),
-  };
 }

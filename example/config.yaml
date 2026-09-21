@@ -606,6 +606,10 @@ outputs:
     #   no_problems: { action: suppress }        # keep quiet when no actionable problems are found
     #   revision_url_template: "https://swarm.example.com/changes/{{revision}}"  # optional P4/SVN link override
 
+    # Feishu custom application bot: merge example/feishu-app.yaml for app_id,
+    # app_secret_env, receive_id, member_directory and explicit user_mappings.
+    # Shares the Feishu webhook templates; see the bilingual IM bots guide.
+
     # Gitea managed problem issues — create/close/delete issues per problem fingerprint.
     # Supports: assignees (committer + OWNERS), severity labels, Feishu notifications.
     # Use issue_mode: consolidated to merge all problems from one review into a

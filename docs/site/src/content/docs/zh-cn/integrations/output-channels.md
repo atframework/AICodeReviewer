@@ -59,6 +59,7 @@ Channel 的 `kind` 是由输出实现注册表约束的自由字符串（Zod 校
 | `gitea_problem_issue` / `github_problem_issue` | 收集后对账 | 创建 / 更新 / 解决托管 problem issue | 这里 fingerprint 稳定性最重要；`github_problem_issue` 用字符串标签名，`resolved_action` 支持 `none`、`close` 和 `mark_resolved`（GitHub 无 issue 删除 API） |
 | `gitea_issue` / `github_issue` | 收集后渲染为 issue 评论 | 聚合 issue 评论 | 适用于 push 事件或基于 issue 的分诊 |
 | `feishu_bot` | 收集后聚合 | 交互卡片（JSON 2.0 schema） | 见 [IM 机器人](/zh-cn/integrations/im-bots/) |
+| `feishu_app` | 收集后聚合 | 通过应用消息 API 发送共享飞书卡片 | 可选来源群目录匹配作者并 @；见 [IM 机器人](/zh-cn/integrations/im-bots/#飞书自建应用) |
 | `wecom_bot` | 收集后聚合 | Markdown 消息 | 见 [IM 机器人](/zh-cn/integrations/im-bots/) |
 
 :::note[飞书卡片使用 schema 2.0]

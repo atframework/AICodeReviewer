@@ -16,7 +16,7 @@ export interface ConfigSecretGrant {
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const DESTINATION_KEYS = new Set(["kind", "base_url", "url", "endpoint", "endpoint_url", "http_proxy", "repository_url",
   "port", "host", "trigger", "owner", "repo", "project_id", "projectId", "aws_region", "vertex_project", "vertex_location", "region", "aws_endpoint", "azure_endpoint",
-  "webhook_url_env", "endpoint_url_env", "app_id", "client_id", "installation_id"]);
+  "webhook_url_env", "endpoint_url_env", "app_id", "client_id", "installation_id", "receive_id", "receive_id_type", "chat_id"]);
 
 function channelTriggers(channel: Record<string, unknown>, triggers: readonly unknown[]): Record<string, unknown>[] {
   const kind = String(channel.kind ?? "");
@@ -28,7 +28,7 @@ function destinationContext(owner: Record<string, unknown>, triggers: readonly u
   const result: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(owner)) {
     if (DESTINATION_KEYS.has(key)) result[key] = value;
-    if ((key === "app" || key === "searxng") && isPlainObject(value)) result[key] = destinationContext(value, []);
+    if ((key === "app" || key === "searxng" || key === "member_directory") && isPlainObject(value)) result[key] = destinationContext(value, []);
   }
   if (typeof owner.trigger === "string") {
     const trigger = triggers.find(t => isPlainObject(t) && t.name === owner.trigger);

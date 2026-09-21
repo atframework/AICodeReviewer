@@ -128,6 +128,7 @@ GitHub/Gitea 托管 issue 按事件 login、`outputs.author_resolution.email_map
 | `gitea_issue` | 把汇总评审作为评论发到既有 Gitea issue。 |
 | `github_issue` | 把汇总评审作为评论发到既有 GitHub issue。 |
 | `feishu_bot` | 通过自定义机器人把汇总问题推送到飞书群。 |
+| `feishu_app` | 通过自建应用机器人发送共享飞书报告卡片；见[配置和成员匹配](/zh-cn/integrations/im-bots/#飞书自建应用)。 |
 | `wecom_bot` | 通过 webhook 把汇总问题推送到企业微信群。 |
 
 ### `review_mode` —— PR review API 策略

@@ -48,10 +48,16 @@ Read only the corresponding section of `docs/output-channels.md` or architecture
   repair: [output pitfalls](../../../docs/ai/pitfalls/AGENTS.outputs.md).
 - IM card/Markdown payloads, mentions, truncation, or structured repair:
   [IM contracts](references/im-bot-message-contracts.md).
+  Directory identity guessing also changes the dedicated server prompt and
+  model-group selection; check static/database publication and old/new runs.
+  For Feishu application authentication, directory permissions or API payloads,
+  also check the [Feishu source record](../../../docs/ai/sources/feishu.md).
 - Managed issue scopes, `resolved_action`, file coverage, commit ancestry,
   diagnostic retention or resolution analysis:
   [managed issues](references/managed-problem-issues.md). Check `max_recent_issues`
   pagination, including a short Gitea page with a `Link: rel="next"` header.
 - Automatic batch publication recovery:
   [scheduling](../../../docs/ai/pitfalls/AGENTS.scheduling.md). Check actual raw
-  publisher calls; a completed checkpoint replays local accounting only.
+  publisher calls, multiple summaries, lease/persistence interruption and
+  buffered versus delivered output. A completed checkpoint replays local
+  accounting only; publication-only recovery retains the original model usage.

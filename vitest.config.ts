@@ -22,6 +22,9 @@ export default defineConfig({
   },
   test: {
     include: ["packages/*/test/**/*.test.ts"],
+    // Live-service suites (redis/pg gated by AICR_REDIS_TEST_URL/AICR_PG_TEST_URL)
+    // exceed the 5s default under high worker parallelism on many-core hosts.
+    testTimeout: 15000,
     coverage: {
       provider: "v8",
       reporter: ["text", "html"],

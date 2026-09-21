@@ -326,6 +326,9 @@ export function createObservabilityApi(options: ObservabilityApiOptions): Hono {
           memberCount: batch.members.length,
           retryNotBefore: batch.retryNotBefore,
           lastError: batch.lastError,
+          // Per-target publication receipts (P1): which channels have a
+          // confirmed delivery, a definitive failure, or an unknown outcome.
+          publications: batch.executionCheckpoint?.publication?.receipts ?? [],
           createdAt: batch.createdAt,
         })), page, limit),
       );

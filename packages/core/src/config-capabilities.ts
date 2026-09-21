@@ -217,7 +217,7 @@ export const TRIGGER_DECLARED_KIND_FIELDS: Readonly<Record<string, readonly stri
 
 // ---------------------------------------------------------------------------
 // Channels (consumer: bootstrap.ts createChannelPublisherFromConfig kind
-// branches + shared rendering block; 9 publishable kinds)
+// branches + shared rendering block)
 // ---------------------------------------------------------------------------
 
 /** Kinds with a publisher implementation; anything else can never publish. */
@@ -230,6 +230,7 @@ export const CHANNEL_KINDS = [
   "gitea_issue",
   "gitea_problem_issue",
   "feishu_bot",
+  "feishu_app",
   "wecom_bot",
 ] as const;
 
@@ -282,11 +283,20 @@ export const CHANNEL_KIND_FIELDS: Readonly<Record<string, FieldMap>> = {
   gitea_issue: { ...CHANNEL_COMMON_PASSTHROUGH_FIELDS },
   gitea_problem_issue: GITEA_PROBLEM_ISSUE_FIELDS,
   feishu_bot: FEISHU_BOT_FIELDS,
+  feishu_app: { base_url: nonEmptyString },
   wecom_bot: WECOM_BOT_FIELDS,
 };
 
 /** Declared channel fields allowed per kind (consumer-verified matrix). */
 export const CHANNEL_DECLARED_KIND_FIELDS: Readonly<Record<string, readonly string[]>> = {
+  app_id: ["feishu_app"],
+  app_secret: ["feishu_app"],
+  app_secret_env: ["feishu_app"],
+  receive_id: ["feishu_app"],
+  receive_id_type: ["feishu_app"],
+  member_directory: ["feishu_app"],
+  guess_author: ["feishu_app"],
+  user_mappings: ["feishu_app"],
   severity_label_prefix: ["gitea_pr_review", "github_pr_review", "github_problem_issue", "gitlab_mr_review", "gitea_problem_issue"],
   severity_label_colors: ["gitea_pr_review", "github_pr_review", "github_problem_issue", "gitlab_mr_review", "gitea_problem_issue"],
   review_mode: ["gitea_pr_review", "github_pr_review"],

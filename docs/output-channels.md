@@ -9,6 +9,47 @@ This document is the user-facing module for AICodeReviewer report output. Keep i
 - The same reported problem must render cleanly as a VCS line comment, an issue entry, or an IM summary card.
 - The contract stays small and stable so Kilo Code, Zoo Code, OpenCode, Claude Code, and other adapters can all emit the same shape.
 
+## Feishu application reports
+
+`feishu_app` sends JSON 2.0 reports with a tenant access token from a custom
+application. It shares the `feishu_bot` card builder, built-in template files,
+workspace webhook template fallback and default `publish_if_summary` policy.
+Configure `app_id`, `app_secret_env` (or sealed literal `app_secret`),
+`receive_id_type` (default `chat_id`) and `receive_id`. The runnable fragment is
+[example/feishu-app.yaml](../example/feishu-app.yaml); setup, permissions and
+matching rules are in the [English](site/src/content/docs/en/integrations/im-bots.md#feishu-custom-application)
+and [Chinese](site/src/content/docs/zh-cn/integrations/im-bots.md#飞书自建应用) guides.
+
+An optional `member_directory.chat_id` supplies the candidate group. Membership
+is paginated completely before contact enrichment. Only authorized identity
+fields are retained in a generation-scoped memory cache; they never enter main
+review prompts or persistent report state. Exact channel-local mappings take priority,
+then full email, exact author identifiers and P4 submitter workspace segments.
+Ambiguity and the global email blacklist suppress mentions. Directory failure
+sends without mentions; profile failures preserve only available fields.
+The channel identity abstraction separates native Git identities, directory
+channels, and channels without directory capability. Only `feishu_app` can use
+the dedicated model fallback for otherwise unmatched submitters. `guess_author`
+defaults to true; false disables workspace heuristics and LLM association.
+`mention_author` separately enables notifications. The identity model group is
+selected by instance/defaults `author_resolution_model_chain`, then
+`llm.author_resolution_model_chain`, then `llm.default_model_chain`.
+These references work through static files and database publication, remain
+pinned for each run, and use shared run/daily budgets and provider limits.
+The dedicated prompt receives only names, aliases, emails and submitter hints;
+opaque candidate keys replace directory IDs. Strict host validation, abstention,
+a 15-second deadline and directory/input bounds prevent uncertain model output
+from producing individual or all-user mentions. The implementation lives in
+`channel-identity.ts`, `author-identity.ts`, and the bootstrap output resolver;
+[feishu-author-model.yaml](../example/feishu-author-model.yaml) shows configuration.
+The source group can differ from the destination, so live mention delivery
+still requires tenant validation.
+
+Application API business failures are publication failures. Transport errors and
+successful responses lacking a receipt are unknown delivery outcomes; do not
+claim successful publication or blindly retry POST. A token rejection may refresh
+once with the same UUID. This UUID is not persisted across runs or restarts.
+
 ## Automatic commit batch publication
 
 Automatic commits publish one review result per sealed batch. The review uses
@@ -18,11 +59,33 @@ names the batch head; other targets are derived by the normal link resolver.
 
 The executor saves a checkpoint before analysis and a result checkpoint after
 orchestration returns. A `completed` checkpoint permits local result accounting
-to resume without calling the LLM or output publishers again. A `started` or
-`publication_pending` checkpoint requires operator inspection and ends automatic
-replay with `execution_outcome_unknown`. Publication failures must not be treated
-as successful batch completion. There is no automatic per-target publication
-recovery yet; remote side effects and the local checkpoint are not one transaction.
+to resume without calling the LLM or output publishers again. A `started`
+checkpoint replays fully; older checkpoints can include prior remote writes. A `publication_pending`
+checkpoint resumes at per-target granularity: the checkpoint carries the
+analysis payload, model usage/cost, and per-channel receipts (`pending`/`published`/`failed`/
+`unknown`), the resume skips LLM and analysis, and channels with a confirmed
+`published` receipt are not re-called. A channel is confirmed only after all of
+its calls succeed; a later success cannot erase an earlier failure. Buffered or
+locally collected results stay `pending` until flushed. Each channel call is
+fenced before sending and its receipt is saved before the next channel starts;
+lease loss or checkpoint failure stops publication.
+
+HTTP 4xx rejections except 408 are `failed`. Transport errors, 408 and 5xx are
+conservatively `unknown`: a gateway response does not prove that the upstream
+write was rolled back ([HTTP semantics](https://www.rfc-editor.org/rfc/rfc9110.html#section-15.6)).
+A partially sent channel can also remain `unknown`. Automatic terminal-failure
+recovery permits one further executor attempt; partial reports, internal HTTP
+retries and manual retries can duplicate more than one message. PR update and
+problem-issue reconciliation reduce duplicates but do not provide an atomic
+transaction with the local store. Inspect the admin batches API's `publications`
+receipts; `attempts` counts executor attempts touching a channel, not HTTP calls.
+
+The 1 MiB cap includes output, receipts and accounting. If growth exceeds it,
+the writer removes any older partial snapshot and falls back to full replay;
+legacy checkpoints without a payload also replay fully. Malformed recovery
+payloads stop execution instead of silently discarding receipts. Redis stores
+checkpoint JSON opaquely so nested empty arrays survive lease/recovery writes.
+Unfinished publication never counts as successful batch completion.
 
 ## Implemented MCP-style tools
 

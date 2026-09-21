@@ -306,4 +306,344 @@ describe("automatic batch execution boundary", () => {
     expect(event.author.username).toBe("alice");
     expect(event.submitterWorkspace).toBe("task-client");
   });
+
+  it("persists the publication payload and per-channel receipts, then completes without them", async () => {
+    const { store, context } = await fixture();
+    const runReview = vi.fn<typeof runReviewOrchestration>()
+      .mockImplementation(async (runContext, runOptions) => {
+        await runOptions.onAnalysisComplete?.({
+          problems: [],
+          summaries: [{ markdown: "Reviewed" }],
+          contextRequests: [],
+        });
+        await runContext.publicationRecovery?.onChannelResult?.(
+          { channel: "gitea-pr", status: "published", externalId: "comment-1" },
+          "summary",
+        );
+        // Mid-flight the checkpoint must already carry the payload + receipt.
+        const midFlight = (await store.readBatch("batch"))?.executionCheckpoint;
+        expect(midFlight?.phase).toBe("publication_pending");
+        expect(midFlight?.publication?.receipts).toEqual([
+          expect.objectContaining({ channel: "gitea-pr", status: "published", externalId: "comment-1", attempts: 1 }),
+        ]);
+        return result();
+      });
+    const execute = createAutoCommitBatchExecutor({
+      store,
+      orchestrationOptions: {} as ServerReviewOrchestrationOptions,
+      runReview,
+      now: () => 1001,
+    });
+    await execute(context);
+    const checkpoint = (await store.readBatch("batch"))?.executionCheckpoint;
+    expect(checkpoint?.phase).toBe("completed");
+    expect(checkpoint?.publication).toBeUndefined();
+  });
+
+  it("resumes a publication_pending batch without re-running analysis and skips confirmed channels", async () => {
+    const { store, context } = await fixture();
+    const analysisOutput = {
+      problems: [{ file: "file.ts", line: 1, severity: "high", category: "correctness", message: "boom" }],
+      summaries: [{ markdown: "Reviewed" }],
+      contextRequests: [],
+    };
+    const runReview = vi.fn<typeof runReviewOrchestration>()
+      // First attempt: channel A lands, channel B loses its response.
+      .mockImplementationOnce(async (runContext, runOptions) => {
+        await runOptions.onAnalysisComplete?.(analysisOutput);
+        await runContext.publicationRecovery?.onChannelResult?.(
+          { channel: "gitea-pr", status: "published", externalId: "comment-1" },
+          "summary",
+        );
+        await runContext.publicationRecovery?.onChannelResult?.(
+          { channel: "feishu", status: "failed", raw: { action: "dispatch_failed", phase: "summary", error: "fetch failed" } },
+          "summary",
+        );
+        return result(true);
+      })
+      // Recovery attempt: must receive the persisted payload and skip channel A.
+      .mockImplementationOnce(async (runContext, runOptions) => {
+        expect(runOptions.resumePublication).toEqual({
+          problems: analysisOutput.problems,
+          summaries: analysisOutput.summaries,
+        });
+        expect(runContext.publicationRecovery?.skipChannels).toEqual(["gitea-pr"]);
+        await runContext.publicationRecovery?.onChannelResult?.(
+          { channel: "feishu", status: "published" },
+          "summary",
+        );
+        return result();
+      });
+    const execute = createAutoCommitBatchExecutor({
+      store,
+      orchestrationOptions: {} as ServerReviewOrchestrationOptions,
+      runReview,
+      now: () => 1001,
+    });
+    await expect(execute(context)).rejects.toMatchObject({ retryable: false });
+    const pending = (await store.readBatch("batch"))?.executionCheckpoint;
+    expect(pending?.phase).toBe("publication_pending");
+    expect(pending?.publication?.receipts).toEqual([
+      expect.objectContaining({ channel: "gitea-pr", status: "published", attempts: 1 }),
+      // No HTTP status in the failure raw payload: the outcome is unknown.
+      expect.objectContaining({ channel: "feishu", status: "unknown", attempts: 1 }),
+    ]);
+
+    await execute(context);
+    expect(runReview).toHaveBeenCalledTimes(2);
+    const completed = (await store.readBatch("batch"))?.executionCheckpoint;
+    expect(completed?.phase).toBe("completed");
+    expect(completed?.publication).toBeUndefined();
+  });
+
+  it.each([[403, "failed"], [429, "failed"], [408, "unknown"], [500, "unknown"], [502, "unknown"], [504, "unknown"]] as const)("maps HTTP %s to %s", async (status, expected) => {
+    const { store, context } = await fixture();
+    const runReview = vi.fn<typeof runReviewOrchestration>()
+      .mockImplementation(async (runContext, runOptions) => {
+        await runOptions.onAnalysisComplete?.({
+          problems: [],
+          summaries: [{ markdown: "Reviewed" }],
+          contextRequests: [],
+        });
+        await runContext.publicationRecovery?.onChannelResult?.(
+          { channel: "gitlab-mr", status: "failed", raw: { action: "dispatch_failed", phase: "summary", error: `HTTP ${status}`, status } },
+          "summary",
+        );
+        return result(true);
+      });
+    const execute = createAutoCommitBatchExecutor({
+      store,
+      orchestrationOptions: {} as ServerReviewOrchestrationOptions,
+      runReview,
+      now: () => 1001,
+    });
+    await expect(execute(context)).rejects.toMatchObject({ retryable: false });
+    const checkpoint = (await store.readBatch("batch"))?.executionCheckpoint;
+    expect(checkpoint?.publication?.receipts).toEqual([
+      expect.objectContaining({ channel: "gitlab-mr", status: expected, lastError: `HTTP ${status}` }),
+    ]);
+  });
+
+  it("falls back to a full replay for a legacy publication_pending checkpoint without a payload", async () => {
+    const { store, context } = await fixture();
+    // First attempt fails without ever reporting its analysis output, so the
+    // checkpoint carries no recovery payload (legacy behavior).
+    const runReview = vi.fn<typeof runReviewOrchestration>()
+      .mockResolvedValueOnce(result(true))
+      .mockResolvedValueOnce(result());
+    const execute = createAutoCommitBatchExecutor({
+      store,
+      orchestrationOptions: {} as ServerReviewOrchestrationOptions,
+      runReview,
+      now: () => 1001,
+    });
+    await expect(execute(context)).rejects.toMatchObject({ retryable: false });
+    expect((await store.readBatch("batch"))?.executionCheckpoint?.publication).toBeUndefined();
+
+    await execute(context);
+    const [, secondOptions] = runReview.mock.calls[1]!;
+    expect(secondOptions.resumePublication).toBeUndefined();
+    expect((await store.readBatch("batch"))?.executionCheckpoint?.phase).toBe("completed");
+  });
+
+  it("stops before publication when the analysis checkpoint loses its lease", async () => {
+    const { store, context } = await fixture();
+    const checkpoint = store.checkpointBatchExecution.bind(store);
+    vi.spyOn(store, "checkpointBatchExecution").mockImplementation((id, token, value, at) =>
+      value.phase === "publication_pending" ? Promise.resolve(false) : checkpoint(id, token, value, at));
+    const publish = vi.fn();
+    const execute = createAutoCommitBatchExecutor({ store, now: () => 1001,
+      orchestrationOptions: {} as ServerReviewOrchestrationOptions,
+      runReview: async (_context, options) => {
+        await options.onAnalysisComplete?.(result().outputState);
+        publish();
+        return result();
+      },
+    });
+    await expect(execute(context)).rejects.toMatchObject({ retryable: false });
+    expect(publish).not.toHaveBeenCalled();
+  });
+
+  it.each(["failed", "buffered"] as const)("does not complete a channel with an unfinished %s dispatch", async (status) => {
+    const { store, context } = await fixture();
+    const execute = createAutoCommitBatchExecutor({ store, now: () => 1001,
+      orchestrationOptions: {} as ServerReviewOrchestrationOptions,
+      runReview: async (runContext, options) => {
+        await options.onAnalysisComplete?.(result().outputState);
+        await runContext.publicationRecovery?.onChannelResult?.({ channel: "first", status }, "problem");
+        if (status === "failed") {
+          await runContext.publicationRecovery?.onChannelResult?.({ channel: "first", status: "published" }, "summary");
+        }
+        return result();
+      },
+    });
+    await expect(execute(context)).rejects.toMatchObject({ retryable: false });
+    expect((await store.readBatch("batch"))?.executionCheckpoint?.publication?.receipts[0]?.status)
+      .toBe(status === "failed" ? "unknown" : "pending");
+  });
+
+  it.each([
+    { output: { problems: [], summaries: [null] }, receipts: [] },
+    { output: { problems: [], summaries: [{ markdown: "saved" }] }, receipts: {} },
+    { output: { problems: [], summaries: [{ markdown: "saved" }] }, receipts: [{ channel: "first", status: "published" }] },
+    { output: { problems: [{ file: "a.ts", line: 1, category: "correctness", message: "saved", severity: ["high"] }], summaries: [] }, receipts: [] },
+    { output: { problems: [], summaries: [] }, receipts: [{ channel: "first", status: ["published"], attempts: 1, updatedAt: 1000 }] },
+    { output: { problems: [], summaries: [] }, receipts: [
+      { channel: "first", status: "failed", attempts: 1, updatedAt: 1000 },
+      { channel: "first", status: "published", attempts: 1, updatedAt: 1000 },
+    ] },
+  ])("rejects corrupt recovery state without running or skipping analysis", async (publication) => {
+    const { store, context } = await fixture();
+    await store.checkpointBatchExecution("batch", context.leaseToken, {
+      phase: "publication_pending", publication: publication as never,
+    }, 1001);
+    const runReview = vi.fn<typeof runReviewOrchestration>().mockResolvedValue(result());
+    const execute = createAutoCommitBatchExecutor({ store, runReview, now: () => 1001,
+      orchestrationOptions: {} as ServerReviewOrchestrationOptions });
+    await expect(execute(context)).rejects.toMatchObject({ retryable: false });
+    expect(runReview).not.toHaveBeenCalled();
+  });
+
+  it("counts repeated identical failed outcomes on separate attempts", async () => {
+    const { store, context } = await fixture();
+    const execute = createAutoCommitBatchExecutor({ store, now: () => 1001,
+      orchestrationOptions: {} as ServerReviewOrchestrationOptions,
+      runReview: async (runContext, options) => {
+        if (!options.resumePublication) await options.onAnalysisComplete?.(result().outputState);
+        await runContext.publicationRecovery?.onChannelResult?.({ channel: "first", status: "failed" }, "summary");
+        return result(true);
+      },
+    });
+    await expect(execute(context)).rejects.toMatchObject({ retryable: false });
+    await expect(execute(context)).rejects.toMatchObject({ retryable: false });
+    expect((await store.readBatch("batch"))?.executionCheckpoint?.publication?.receipts[0]?.attempts).toBe(2);
+  });
+
+  it("does not skip a channel interrupted between two summaries", async () => {
+    const { store, context } = await fixture();
+    const runReview = vi.fn<typeof runReviewOrchestration>()
+      .mockImplementationOnce(async (runContext, options) => {
+        await options.onAnalysisComplete?.({ problems: [], summaries: [{ markdown: "one" }, { markdown: "two" }], contextRequests: [] });
+        await runContext.publicationRecovery?.onChannelResult?.({ channel: "first", status: "published" }, "summary", false);
+        expect((await store.readBatch("batch"))?.executionCheckpoint?.publication?.receipts[0]?.status).toBe("unknown");
+        throw new Error("interrupted before second summary");
+      })
+      .mockImplementationOnce(async (runContext, options) => {
+        expect(runContext.publicationRecovery?.skipChannels).toEqual([]);
+        expect(options.resumePublication?.summaries).toHaveLength(2);
+        await runContext.publicationRecovery?.onChannelResult?.({ channel: "first", status: "published" }, "summary", false);
+        await runContext.publicationRecovery?.onChannelResult?.({ channel: "first", status: "published" }, "summary", true);
+        return result();
+      });
+    const execute = createAutoCommitBatchExecutor({ store, runReview, now: () => 1001,
+      orchestrationOptions: {} as ServerReviewOrchestrationOptions });
+    await expect(execute(context)).rejects.toThrow("interrupted before second summary");
+    await execute(context);
+    expect((await store.readBatch("batch"))?.executionCheckpoint?.phase).toBe("completed");
+  });
+
+  it.each([true, false])("does not confirm mixed buffered/published summary results (buffer first: %s)", async (bufferFirst) => {
+    const { store, context } = await fixture();
+    const execute = createAutoCommitBatchExecutor({ store, now: () => 1001,
+      orchestrationOptions: {} as ServerReviewOrchestrationOptions,
+      runReview: async (runContext, options) => {
+        await options.onAnalysisComplete?.(result().outputState);
+        for (const status of bufferFirst ? ["buffered", "published"] as const : ["published", "buffered"] as const) {
+          await runContext.publicationRecovery?.onChannelResult?.({ channel: "first", status }, "summary");
+        }
+        return result();
+      },
+    });
+    await expect(execute(context)).rejects.toMatchObject({ retryable: false });
+    expect((await store.readBatch("batch"))?.executionCheckpoint?.publication?.receipts[0]?.status).toBe("pending");
+  });
+
+  it.each(["receipt", "accounting"] as const)("removes stale recovery state when %s pushes the checkpoint over its cap", async (growth) => {
+    const { store, context } = await fixture();
+    const largeOutput = { problems: [], summaries: [{ markdown: "x".repeat(1_048_576 - 220) }], contextRequests: [] };
+    const runReview = vi.fn<typeof runReviewOrchestration>()
+      .mockImplementationOnce(async (runContext, options) => {
+        await options.onAnalysisComplete?.(largeOutput);
+        expect((await store.readBatch("batch"))?.executionCheckpoint?.publication).toBeDefined();
+        if (growth === "receipt") {
+          await runContext.publicationRecovery?.onChannelResult?.({ channel: "first", status: "failed", raw: { error: "e".repeat(1000) } }, "summary");
+          expect((await store.readBatch("batch"))?.executionCheckpoint?.publication).toBeUndefined();
+          throw new Error("crash after overflow");
+        }
+        return result(true);
+      })
+      .mockImplementationOnce(async (runContext, options) => {
+        expect(options.resumePublication).toBeUndefined();
+        expect(runContext.publicationRecovery?.skipChannels).toEqual([]);
+        return result();
+      });
+    const execute = createAutoCommitBatchExecutor({ store, runReview, now: () => 1001,
+      orchestrationOptions: {} as ServerReviewOrchestrationOptions });
+    await expect(execute(context)).rejects.toThrow(growth === "receipt" ? "crash after overflow" : "unconfirmed output");
+    expect((await store.readBatch("batch"))?.executionCheckpoint?.publication).toBeUndefined();
+    await execute(context);
+  });
+
+  it("aborts the orchestration signal when a receipt cannot be persisted", async () => {
+    const { store, context } = await fixture();
+    const execute = createAutoCommitBatchExecutor({ store, now: () => 1001,
+      orchestrationOptions: {} as ServerReviewOrchestrationOptions,
+      runReview: async (runContext, options) => {
+        await options.onAnalysisComplete?.(result().outputState);
+        vi.spyOn(store, "checkpointBatchExecution").mockRejectedValue(new Error("database unavailable"));
+        await expect(runContext.publicationRecovery?.onChannelResult?.({ channel: "first", status: "published" }, "summary"))
+          .rejects.toMatchObject({ retryable: false });
+        expect(runContext.signal?.aborted).toBe(true);
+        return result();
+      },
+    });
+    await expect(execute(context)).rejects.toMatchObject({ retryable: false });
+  });
+
+  it("retains analysis accounting and the existing analysis callback across recovery", async () => {
+    const { store, context } = await fixture();
+    const analysis = { model: { providerId: "fallback", modelId: "paid" }, promptTokenEstimate: 400,
+      contextRequestCount: 1, llmUsage: { totalTokens: 800 }, estimatedCostUsd: 0.5, requestCount: 2 };
+    const hook = vi.fn();
+    const runReview = vi.fn<typeof runReviewOrchestration>()
+      .mockImplementationOnce(async (_runContext, options) => {
+        await options.onAnalysisComplete?.(result().outputState, analysis);
+        throw new Error("interrupted");
+      })
+      .mockImplementationOnce(async (_runContext, options) => {
+        expect(options.resumePublication?.analysis).toEqual(analysis);
+        return result();
+      });
+    const execute = createAutoCommitBatchExecutor({ store, runReview, now: () => 1001,
+      orchestrationOptions: { onAnalysisComplete: hook } as unknown as ServerReviewOrchestrationOptions });
+    await expect(execute(context)).rejects.toThrow("interrupted");
+    expect(hook).toHaveBeenCalledWith(result().outputState, analysis);
+    await execute(context);
+    expect(hook).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops an oversized recovery payload and degrades to full-replay recovery", async () => {
+    const { store, context } = await fixture();
+    const oversized = "x".repeat(1024 * 1024);
+    const runReview = vi.fn<typeof runReviewOrchestration>()
+      .mockImplementation(async (_runContext, runOptions) => {
+        await runOptions.onAnalysisComplete?.({
+          problems: [],
+          summaries: [{ markdown: oversized }],
+          contextRequests: [],
+        });
+        return result(true);
+      });
+    const execute = createAutoCommitBatchExecutor({
+      store,
+      orchestrationOptions: {} as ServerReviewOrchestrationOptions,
+      runReview,
+      now: () => 1001,
+    });
+    // The run itself must not fail on the RangeError from the 1 MiB cap.
+    await expect(execute(context)).rejects.toMatchObject({ retryable: false });
+    const checkpoint = (await store.readBatch("batch"))?.executionCheckpoint;
+    expect(checkpoint?.phase).toBe("publication_pending");
+    expect(checkpoint?.publication).toBeUndefined();
+  });
 });

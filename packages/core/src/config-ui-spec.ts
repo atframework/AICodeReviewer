@@ -125,6 +125,7 @@ const OPTIONS_SOURCES = [
 const MODEL_GROUP_REF_CANONICALS: Readonly<Record<string, true>> = {
   "llm.default_model_chain": true,
   "llm.triage_model_chain": true,
+  "llm.author_resolution_model_chain": true,
 };
 
 /** Trigger reference fields, compared by exact inventory path. */
@@ -431,7 +432,7 @@ export const PAGE_LAYOUT: readonly ConfigUiPageLayout[] = [
     sections: [
       { id: "identity", label: "Group", scope: "entity", match: ["$name"] },
       { id: "entries", label: "Model entries", scope: "entity", match: ["entries"] },
-      { id: "chains", label: "Model chains", scope: "globals", match: ["llm.default_model_chain", "llm.triage_model_chain"] },
+      { id: "chains", label: "Model chains", scope: "globals", match: ["llm.default_model_chain", "llm.triage_model_chain", "llm.author_resolution_model_chain"] },
       { id: "retry", label: "Retry & per-provider overrides", scope: "globals", match: ["llm.retry", "llm.per_provider_overrides"] },
       { id: "budget", label: "Budget", scope: "globals", match: ["llm.budget"] },
       { id: "catalog", label: "Model catalog", scope: "globals", match: ["llm.model_catalog"], collapsed: true },
@@ -459,6 +460,7 @@ export const PAGE_LAYOUT: readonly ConfigUiPageLayout[] = [
     sections: [
       { id: "identity", label: "Identity", scope: "entity", match: ["name", "kind", "trigger"] },
       { id: "mentions", label: "Mentions", scope: "entity", match: ["mention_author", "mention_fallback"] },
+      { id: "feishu-app", label: "Feishu application", scope: "entity", match: ["app_id", "app_secret", "app_secret_env", "receive_id", "receive_id_type", "member_directory", "user_mappings", "guess_author"] },
       { id: "policy", label: "Policies", scope: "entity", match: ["no_problems", "no_findings"] },
       { id: "urls", label: "URL templates", scope: "entity", match: ["commit_url_template", "revision_url_template", "change_url_template"] },
       { id: "templates", label: "Templates", scope: "entity", match: ["templates"], collapsed: true },
@@ -537,13 +539,13 @@ export const PAGE_LAYOUT: readonly ConfigUiPageLayout[] = [
     globals: true,
     sections: [
       { id: "layout", label: "Layout & cache", scope: "globals", match: ["workspaces.root", "workspaces.cache"] },
-      { id: "defaults", label: "Defaults", scope: "globals", match: ["workspaces.defaults.model_chain", "workspaces.defaults.triage_model_chain", "workspaces.defaults.prompt"] },
+      { id: "defaults", label: "Defaults", scope: "globals", match: ["workspaces.defaults.model_chain", "workspaces.defaults.triage_model_chain", "workspaces.defaults.author_resolution_model_chain", "workspaces.defaults.prompt"] },
       { id: "defaults-review", label: "Default review", scope: "globals", match: ["workspaces.defaults.review"], collapsed: true },
       { id: "defaults-agent", label: "Default agent & sandbox", scope: "globals", match: ["workspaces.defaults.agent", "workspaces.defaults.sandbox"], collapsed: true },
       { id: "defaults-outputs", label: "Default outputs", scope: "globals", match: ["workspaces.defaults.outputs"], collapsed: true },
       { id: "defaults-repos", label: "Default context repositories", scope: "globals", match: ["workspaces.defaults.context_repositories[]"], collapsed: true },
       { id: "identity", label: "Identity", scope: "entity", match: ["$name", "enabled", "source_repo", "work_path"] },
-      { id: "models", label: "Models", scope: "entity", match: ["model_chain", "triage_model_chain", "agent.default"] },
+      { id: "models", label: "Models", scope: "entity", match: ["model_chain", "triage_model_chain", "author_resolution_model_chain", "agent.default"] },
       { id: "match", label: "Match rules", scope: "entity", match: ["match[]"] },
       { id: "triage", label: "Issue triage", scope: "entity", match: ["triage"], collapsed: true },
       { id: "prompt", label: "Prompt", scope: "entity", match: ["prompt"] },

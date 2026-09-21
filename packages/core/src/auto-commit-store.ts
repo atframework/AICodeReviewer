@@ -410,9 +410,37 @@ export interface DispatchOutboxEntry {
 }
 
 export interface BatchExecutionCheckpoint {
-
   readonly phase: "started" | "completed" | "publication_pending";
   readonly result?: unknown;
+  /**
+   * Per-target publication recovery state (P1). Present only while
+   * `phase === "publication_pending"`: `output` carries the completed
+   * analysis output and usage accounting so a re-entry republishes without
+   * re-running the LLM, and `receipts` tracks each channel's delivery state.
+   * Dropped on `completed`. Serialized with the checkpoint under the same
+   * 1 MiB cap; oversized payloads are omitted by the writer, which degrades
+   * recovery to a full replay.
+   */
+  readonly publication?: BatchPublicationRecovery;
+}
+
+export type PublicationReceiptStatus = "pending" | "published" | "failed" | "unknown";
+
+export interface PublicationReceipt {
+  /** Output channel name (matches DispatchResult.channel). */
+  readonly channel: string;
+  readonly status: PublicationReceiptStatus;
+  readonly externalId?: string;
+  /** Executor attempts touching this channel; excludes internal HTTP retries. */
+  readonly attempts: number;
+  readonly lastError?: string;
+  readonly updatedAt: number;
+}
+
+export interface BatchPublicationRecovery {
+  /** Serialized analysis output and accounting for LLM-free replay. */
+  readonly output: unknown;
+  readonly receipts: readonly PublicationReceipt[];
 }
 
 /** Claim one due outbox entry for dispatch into the execution queue. */

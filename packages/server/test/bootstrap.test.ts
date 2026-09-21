@@ -15,6 +15,7 @@ import type * as aicrCore from "@aicr/core";
 
 import { GithubAppTokenService } from "../src/github-app-token.js";
 import { translateWebhookToReviewEvent } from "../src/webhook-translator.js";
+import type { ReviewOutputPublisher } from "../src/review-orchestrator.js";
 import {
   resolveModelSpecFromConfig,
   resolveIssueTriageModelSpecFromConfig,
@@ -24,6 +25,7 @@ import {
   resolveSvnTriggerConfig,
   createOutputPublisherFromConfig,
   createOutputPublisherResolverFromConfig,
+  createCompositeOutputPublisher,
   createVcsAdapterFromConfig,
   bootstrapServerApp,
   buildSourceRootResolver,
@@ -213,6 +215,107 @@ function assertProblemPublisher(publisher: OutputPublisher | undefined): asserts
 function assertSummaryPublisher(publisher: OutputPublisher | undefined): asserts publisher is SummaryPublisher {
   expect(typeof publisher?.publishSummary).toBe("function");
 }
+
+describe("createCompositeOutputPublisher publication recovery", () => {
+  it("acknowledges an empty successful reconciliation", async () => {
+    const observed = vi.fn();
+    const composite = createCompositeOutputPublisher([], [{ name: "issues", publisher: { publishSummary: async () => [] } }],
+      { onChannelResult: observed });
+    expect(await composite!.publishSummary!("summary")).toEqual([]);
+    expect(observed).toHaveBeenCalledWith(expect.objectContaining({ channel: "issues", status: "published" }), "summary", undefined);
+  });
+
+  it("checks cancellation before each channel", async () => {
+    const calls: string[] = [];
+    const abort = new AbortController();
+    const composite = createCompositeOutputPublisher([], [fakeChannel("first", calls), fakeChannel("second", calls)], {
+      signal: abort.signal, onChannelResult: () => { abort.abort(new Error("lease lost")); },
+    });
+    await expect(composite!.publishSummary!("summary")).rejects.toThrow("lease lost");
+    expect(calls).toEqual(["first:summary"]);
+  });
+
+  it.each(["problem", "summary"] as const)("persists each %s receipt before touching the next channel", async (phase) => {
+    const calls: string[] = [];
+    const composite = createCompositeOutputPublisher(
+      [fakeChannel("first", calls), fakeChannel("second", calls)],
+      [fakeChannel("first", calls), fakeChannel("second", calls)],
+      { onChannelResult: async (result) => {
+        calls.push(`saved:${result.channel}`);
+        if (result.channel === "first") throw new Error("checkpoint unavailable");
+      } },
+    )!;
+    const publish = phase === "problem"
+      ? composite.publishProblem!({ file: "a.ts", line: 1, severity: "low", category: "style", message: "m" })
+      : composite.publishSummary!("summary");
+    await expect(publish).rejects.toThrow("checkpoint unavailable");
+    expect(calls).toEqual([`first:${phase}`, "saved:first"]);
+  });
+
+  function fakeChannel(name: string, calls: string[]): { name: string; publisher: ReviewOutputPublisher } {
+    return {
+      name,
+      publisher: {
+        async publishProblem() {
+          calls.push(`${name}:problem`);
+          return { channel: name, status: "buffered" };
+        },
+        async publishSummary() {
+          calls.push(`${name}:summary`);
+          return { channel: name, status: "published", externalId: `${name}-1` };
+        },
+      },
+    };
+  }
+
+  it("skips channels with confirmed receipts and reports each settled channel result", async () => {
+    const calls: string[] = [];
+    const observed: { channel: string; status: string; phase: string }[] = [];
+    const composite = createCompositeOutputPublisher(
+      [fakeChannel("gitea-pr", calls), fakeChannel("feishu", calls)],
+      [fakeChannel("gitea-pr", calls), fakeChannel("feishu", calls)],
+      {
+        skipChannels: new Set(["gitea-pr"]),
+        onChannelResult: (result, phase) => {
+          observed.push({ channel: result.channel, status: result.status, phase });
+        },
+      },
+    );
+    expect(composite).toBeDefined();
+    await composite!.publishProblem({ file: "a.ts", line: 1, severity: "low", category: "style", message: "m" });
+    await composite!.publishSummary!("summary", [], {});
+    // The confirmed channel never sees another remote call.
+    expect(calls).toEqual(["feishu:problem", "feishu:summary"]);
+    expect(observed).toEqual([
+      { channel: "feishu", status: "buffered", phase: "problem" },
+      { channel: "feishu", status: "published", phase: "summary" },
+    ]);
+  });
+
+  it("reports a channel failure without affecting the other channel", async () => {
+    const calls: string[] = [];
+    const failing = {
+      name: "gitlab-mr",
+      publisher: {
+        async publishSummary() {
+          throw new Error("connection reset");
+        },
+      },
+    };
+    const observed: { channel: string; status: string }[] = [];
+    const composite = createCompositeOutputPublisher(
+      [],
+      [failing, fakeChannel("gitea-pr", calls)],
+      { onChannelResult: (result) => { observed.push({ channel: result.channel, status: result.status }); } },
+    );
+    const results = await composite!.publishSummary!("summary", [], {});
+    expect(results).toHaveLength(2);
+    expect(observed).toEqual([
+      { channel: "gitlab-mr", status: "failed" },
+      { channel: "gitea-pr", status: "published" },
+    ]);
+  });
+});
 
 describe("normalizeModelCatalogOverrides", () => {
   it("maps snake_case config keys to camelCase service keys including MTok pricing", () => {

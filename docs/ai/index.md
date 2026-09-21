@@ -6,7 +6,7 @@
 
 | 任务 | 首选实现与参考 |
 | --- | --- |
-| 当前待办与验收边界 | [Plan.md](../../Plan.md)；Workspace 动态配置稳定合同见架构 §3.10、§3.14–3.16，交付证据见 M17–M27 |
+| 当前待办与验收边界 | [Plan.md](../../Plan.md)；Workspace 动态配置稳定合同见架构 §3.10、§3.14–3.16，交付证据见 M17–M28 |
 | Config / workspace / model groups | `packages/core/src/config.ts`、server bootstrap；[架构 §3.10](architecture.md#310-配置体系)、[配置坑点](pitfalls/AGENTS.config-and-state.md) |
 | Webhook / 调度 / 去重 / PR 延期 | server runtime/scheduler/deferral-manager；[架构 §3.1](architecture.md#31-触发器与-reviewevent-归一化)、[调度坑点](pitfalls/AGENTS.scheduling.md) |
 | VCS / 多源上下文 / GitHub App | `packages/vcs/src/`、server credential wiring；[架构 §3.2](architecture.md#32-vcs-adapter-与-scoped-fetch)、[VCS 坑点](pitfalls/AGENTS.vcs.md) |
@@ -54,6 +54,7 @@
 | M25 Workspace 与动态配置全量复审 | 高/中/低 31 项修复含双高危（发布期 workspace 校验、v2 准入回退），合同精炼见 D47；任务资料退役记录见 M26 | [M25](milestones/M25.md) / `decisions.md` D47 |
 | M26 Workspace 与动态配置再次复审 | generation 所有权、重复暂存、发布/恢复/预览边界修复与当前验收；任务资料已退役 | [M26](milestones/M26.md) |
 | M27 管理页面修订与模板/Prompt 管理 | kind 区块隐藏、Routing 修复、共享全局数据库优先（D48）、模板/prompt 实体（D49）；合同同步双语公开文档 | [M27](milestones/M27.md) / `decisions.md` D48–D49 |
+| M28 逐目标发布恢复与配置示例校验 | 批次 `publication_pending` 逐渠道回执续发（D50）、复合 publisher 恢复钩子、管理 API `publications`；文档配置片段全量 schema 校验与阴性用例 | [M28](milestones/M28.md) / `decisions.md` D50 |
 | 本地优先队列 P0-P15 | 已完成 | `milestones/local-priority-queue.md` |
 
 历史记录仅用于查交付证据；当前状态以代码、测试和前瞻路线图为准。公开用户文档位于

@@ -53,15 +53,23 @@ session TTL 字段是 `session_ttl_seconds`（默认 `86400` = 24 小时）。`s
 - **Projects**——按 project 聚合（`workspaceId + triggerName + repoRef`）：评审/成功/失败/跳过次数、problem 总数、创建 issue 数、变更文件数、增删行数、LLM 请求数、token、缓存命中 token 与命中率、成本、平均 duration。软删除的 project 在宽限期内仍可见，并用 `isActive` 标记。
 - **Providers**——按 provider+model 聚合：请求数、输入/输出 token、缓存命中 token 与命中率、成本、重试/fallback/失败次数、平均延迟。
 - **Runs**——保留范围内的运行记录，每页从服务端取 20 条，用 Prev/Next 翻页。每行展示真实 token 用量：总 token、命中/未命中输入拆分与命中率；run 未上报可解析 usage 时显示 `—`。Revision 列展示分支、缩写 revision，以及 VCS adapter 解析成功时的提交时间。
-- **Events**——保留范围内的 webhook/trigger 事件，每页从服务端取 20 条。每行展示接收时刻的处理决定：`executed`（立即执行）、`queued`/`duplicate`（auto-commit 回执）、`deferred`（执行窗口延期，含计划恢复时刻）、`deduplicated`（合并进待重审）、`ignored`（label 忽略、不支持的事件、仓库未配置）或 `rejected`（签名无效、payload 非法、触发器未配置），以及原因和细节（命中的 label、回执 id 等）。
+- **Events**——保留范围内的 webhook/trigger 事件，每页从服务端取 20 条。每行展示接收时刻的处理决定：`executed`（已接受执行）、`queued`/`duplicate`（auto-commit 回执）、`deferred`（执行窗口延期，含计划恢复时刻）、`deduplicated`（合并进待重审）、`ignored`（label 忽略、不支持的事件、仓库未配置）或 `rejected`（签名无效、payload 非法、触发器未配置），以及原因和细节（命中的 label、回执 id 等）。
 
 - **Config**——数据库配置、字段来源、路由预览与版本历史。启用
   `config_sources.database.enabled` 后可使用配置管理。
 
-`queued` 是 webhook 到达时记录的决定，批次执行后 Events 行不会变更。评审结果写入后才会
-出现在 Recent Runs。若长期没有新记录，应检查所配置 auto-commit 存储中的 receipt、batch
-和 stream 状态。dead 批次会占住其 stream，需人工核查；无法读取的固定配置快照可能阻止
-receipt 展开。健康检查成功不代表队列正在推进。
+Events 将 `queued` 显示为 **queued at receipt**（接收时已入队），`executed` 显示为
+**execution accepted**（已接受执行），`deferred` 显示为 **deferred at receipt**
+（接收时延期），均使用中性色徽标。API 保留原始决定值；批次完成后，接收记录仍可能是
+`queued`，执行过程不会更新这项接收决定。Queue 展示当前批次状态，Live 展示活动分析快照。
+管理端批次 API 在发布待完成时提供逐渠道 `publications` 回执。有效载荷恢复会跳过分析与已确认
+渠道，保留原模型用量与费用；部分或结果不确定的写入在重试时可能重复。旧版无载荷或超限
+检查点会整体重放，损坏的恢复数据会停止执行。回执 `attempts` 统计执行器尝试次数，不是
+HTTP 请求数；完成后的检查点只保留本地记账结果。
+比较当前任务数量前，先刷新 Live 或开启自动刷新。
+评审结果写入后才会出现在 Recent Runs。若长期没有新记录，应检查所配置 auto-commit
+存储中的 receipt 成员、batch 和 stream 状态，包括执行时段和重试时间。无法读取的固定
+配置快照可能阻止 receipt 展开。健康检查或旧的接收决定本身不能证明队列正在推进。
 
 用量按完整 review run 聚合，包括首次模型调用、上下文/格式修复调用以及最终直连 LLM 兜底。
 对 Kilo 而言，每个 `step_finish` 模型回合计为一次请求。本地 prompt 大小估算单独保存，只有拿不到

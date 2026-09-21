@@ -185,9 +185,12 @@ export class LlmFallbackExhaustedError extends Error {
   }
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    signal?.throwIfAborted();
+    const onAbort = () => { clearTimeout(timer); reject(signal?.reason); };
+    const timer = setTimeout(() => { signal?.removeEventListener("abort", onAbort); resolve(); }, ms);
+    signal?.addEventListener("abort", onAbort, { once: true });
   });
 }
 
@@ -497,6 +500,7 @@ export function createResilientChatClient(options: LlmGatewayOptions): LlmGatewa
 
   return {
     async complete(input: ChatCompletionInput): Promise<LlmGatewayCallResult> {
+      input.signal?.throwIfAborted();
       let currentModel = input.model;
       const attemptedModels: ModelSpec[] = [currentModel];
       const usedFallbackIndices = new Set<number>();
@@ -525,8 +529,10 @@ export function createResilientChatClient(options: LlmGatewayOptions): LlmGatewa
 
         while (attempt < maxAttempts) {
           try {
+            input.signal?.throwIfAborted();
             const client = clientFactory(currentModel);
             await options.beforeRequest?.(currentModel);
+            input.signal?.throwIfAborted();
             const result = await client.complete({ ...input, model: currentModel });
             const callCost = estimateCost(result.usage, extractModelPricing(currentModel));
             accumulatedCost += callCost;
@@ -552,6 +558,7 @@ export function createResilientChatClient(options: LlmGatewayOptions): LlmGatewa
               estimatedCostUsd: accumulatedCost,
             };
           } catch (error) {
+            input.signal?.throwIfAborted();
             lastError = error;
             const elapsedSeconds = (Date.now() - startTime) / 1000;
 
@@ -578,7 +585,7 @@ export function createResilientChatClient(options: LlmGatewayOptions): LlmGatewa
               break;
             }
 
-            await sleep(delay);
+            await sleep(delay, input.signal);
             attempt++;
             totalRetryCount++;
           }

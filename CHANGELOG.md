@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Auto-commit batch per-target publication recovery: the `publication_pending` checkpoint now carries the analysis payload plus per-channel receipts (`pending`/`published`/`failed`/`unknown`), so a resumed batch skips LLM/analysis, never re-calls channels with a confirmed `published` receipt, and only retries unfinished channels. Payload exceeding the checkpoint size cap degrades to full replay. The admin batches API returns each batch's `publications` receipts for operator inspection.
+- Config-example test sweep: every `yaml` code block in docs matching a config namespace is schema-validated, plus negative tests for type errors, unknown keys, forbidden keys, and trigger reference validation.
+
+### Fixed
+
+- Publication recovery now fences each channel, persists receipts before continuing, retains analysis usage/cost, and keeps failures across later messages. Redis preserves checkpoint arrays; overflow removes stale snapshots and corrupt payloads fail closed. Config-example discovery no longer silently skips malformed YAML or mixed known/unknown root keys.
+- Publish image workflow now creates the gitignored `deploy/docker-static` placeholder before the Docker build (mirroring `deploy.sh`), fixing tag builds that failed with `"/deploy/docker-static": not found`.
+- Vitest `testTimeout` raised to 15s: live-service suites exceeded the 5s default under full-suite worker load on many-core hosts, causing rotating flakes that passed standalone.
+
 ## [0.2.0]
 
 ### Added

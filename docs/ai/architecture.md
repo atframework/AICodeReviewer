@@ -133,19 +133,30 @@ PostgreSQL 后端见 [M17](milestones/M17.md)，来源合并、路由图与发�
   唤醒等待者；人工 Retry 重排后立即 kick。停止时排空启动恢复、扫描、路由、准备和执行任务。
   三后端还原子限制共享 store 的批次租约并发；跨入口共享名额是进程内预算，不能描述为
   集群总并发。单个 stream 保持串行。租约过期禁止旧消费者写完成状态和检查点。
-  恢复语义（2026-09 运维决策）：已保存 `completed` 检查点只重试本地结果记账；`started`/
-  `publication_pending` 表示执行或发布结果不确定，但重试执行允许重放（接受重复发布风险）
-  而不是 dead-letter 卡死流。首次到达终态失败的批次消费其唯一一次自动恢复（attempts 重置、
+  恢复语义（2026-09 运维决策）：已保存 `completed` 检查点只重试本地结果记账；`started`
+  重试整体重放，旧版本写入的检查点可能已有远端副作用。`publication_pending` 有有效载荷时进入
+  逐目标恢复：检查点携带分析产物（problems/summaries）、原模型用量/费用与逐渠道回执
+  （`pending`/`published`/`failed`/`unknown`，含 externalId 与尝试次数），重入时跳过
+  LLM/分析阶段，只续发未完成渠道。HTTP 4xx（除 408）记 `failed`；传输失败、408、5xx 与部分
+  消息已发送的渠道记 `unknown`（写入可能已落地）。全部消息确认后才把渠道记为 `published`；缓冲中
+  （`buffered`）与仅本地收集的结果只记 `pending`。payload 与回执随检查点 1 MiB 上限序列化，
+  超限（含后续回执和记账增长）会清除旧的部分检查点并退化为整体重放，损坏载荷则拒绝执行。
+  每个渠道发送前检查租约，完成后先保存回执，再处理下一渠道；持久化失败或失去租约立即停止。
+  Redis 将检查点保存为不经过 Lua 解码的 JSON 字符串，保留嵌套空数组与空对象。
+  首次到达终态失败的批次消费其唯一一次自动恢复（attempts 重置、
   重入 outbox）；再次终态失败则 terminally skip 并释放流，同时以失败 run 行持久化拒绝原因
   （如 `review.max_patch_bytes exceeded`），Recent Runs 可见；管理端重排会删除该标记行让重试
   记录自己的结果。调度器启动时按 consumerId 立即回收上一进程的租约，并把升级前遗留的 dead
   批次重新武装。管理端 `POST /api/admin/auto-commit/batches/:id/retry` 可人工重排 terminal
   批次（看板 Queue 页）；人工重排会清除批次的准入配置快照固定，重试按**当前**准入代执行——
-  运维调参（如调大 `review.max_patch_bytes`）后重排即可生效。
+  运维调参（如调大 `review.max_patch_bytes`）后重排即可生效。批次列表 API
+  （`GET /api/admin/auto-commit/batches`）返回每批的 `publications` 回执供人工核查。
   `queued_timeout_hours`（默认 48）把超过时限的待处理条目终结为 `queued_timeout`，Events
   决策翻转为 `timeout`——正式 receipt 按 `detail.receiptId` 翻转，routing 接收的事件经
-  `listRoutingIntakeIdsForReceipts` 映射按 `detail.routingId` 翻转。外部发布尚无跨进程事务
-  或逐目标恢复回执，不能承诺端到端 exactly-once。
+  `listRoutingIntakeIdsForReceipts` 映射按 `detail.routingId` 翻转。有效载荷与逐目标回执避免
+  分析重跑与已确认渠道的重复发布，但外部发布仍无跨进程事务：对无对账能力的渠道
+  （gitlab_mr_review、gitea/github_issue、IM bot、always_new PR review），`unknown`
+  状态的自动重发可能重复多条消息（部分报告、内部 HTTP 重试）；不能承诺端到端 exactly-once。
 - 直接路径（PR/MR、issue、评论命令）复用同一周计划：async 触发处理把首次尝试和每次重试的
   定时器经 `clampDelayToExecutionWindow`（`packages/server/src/index.ts`）钳制到
   `nextAllowedInstant`，窗口外到达的事件记录 `trigger processing deferred by execution window`

@@ -124,6 +124,13 @@ test("Runs, Events and Queue request server pages and stop at the last page", as
     await page.click(`.tab[data-tab='${tab}']`);
     await expect(page.locator(`#${tab}-table tr`)).toHaveCount(20);
     await expect(page.locator(`#${tab}-prev`)).toBeDisabled();
+    if (tab === "events") {
+      await expect(page.locator("#events-help")).toContainText("Receipt history");
+      await expect(page.locator("#events-help")).toContainText("refresh Live");
+      await expect(page.locator("#events-table .badge").first()).toHaveText("queued at receipt");
+      await expect(page.locator("#events-table .badge-running")).toHaveCount(0);
+      await expect(page.locator("#tab-events th", { hasText: "Receipt decision" })).toBeVisible();
+    }
     await page.click(`#${tab}-next`);
     await expect(page.locator(`#${tab}-table tr`)).toHaveCount(1);
     await expect(page.locator(`#${tab}-table`)).toContainText("workspace-page-2");

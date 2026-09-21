@@ -54,7 +54,12 @@ the config admin API, the core `config-ui-*` paradigm modules, or
 
 Redis/PostgreSQL contract tests skip unless the endpoint env vars are set.
 For backend/migration work run the sequence with both exported so skips do
-not masquerade as passes:
+not masquerade as passes. `vitest.config.ts` sets `testTimeout: 15000`:
+live-service suites exceed the 5s vitest default under full-suite worker
+load on many-core hosts. A standalone pass alone does not establish a load flake:
+retain the failure log, investigate service/resource state, then rerun the unchanged
+applicable gate. Do not dismiss assertion failures or weaken checks. The endpoint
+variables:
 
 - `AICR_REDIS_TEST_URL`(如 `redis://127.0.0.1:6379`):redis config store、
   queue、auto-commit、catalog live 测试共用专用测试实例。重复全量验收用

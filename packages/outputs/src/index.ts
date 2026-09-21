@@ -4,6 +4,11 @@ import { isTransientIoError, isTransientIoHttpStatus, normalizePath, withTransie
 
 import { renderMarkdownCodeFence } from "./template-engine.js";
 import { toFeishuMarkdown, toWeComMarkdown } from "./im-markdown.js";
+import type { FeishuAppClient } from "./feishu-app.js";
+
+export { FeishuAppClient, FeishuApiError, type FeishuAppOptions } from "./feishu-app.js";
+export { resolveFeishuMention, feishuDirectoryUsers, renderFeishuAuthorMention, type FeishuMember, type FeishuMentionInput, type FeishuMentionOptions } from "./feishu-members.js";
+export { channelIdentityCapability, matchChannelAuthor, resolveChannelAuthor, type ChannelUser, type ChannelUserDirectory, type ChannelAuthorInput, type ChannelAuthorOptions, type ChannelAuthorMatch, type ChannelAuthorGuesser } from "./channel-identity.js";
 
 export const outputsPackageName = "@aicr/outputs";
 
@@ -4829,22 +4834,8 @@ export function createFeishuBotDispatcher(options: FeishuBotOptions): FeishuBotD
 			summary?: string,
 			mentionText?: string,
 		): Promise<DispatchResult> {
-			const sections: string[] = [];
-			if (summary) {
-				sections.push(summary.trim());
-			}
-			sections.push(...buildImProblemSections(problems));
-
-			const extraElements: Record<string, unknown>[] = [];
-			if (mentionText) {
-				extraElements.push({ tag: "markdown", content: mentionText });
-			}
-
 			const timestamp = Math.floor(Date.now() / 1000);
-			const body: Record<string, unknown> = buildFeishuCardBody(
-				toFeishuMarkdown(sections.join("\n")),
-				extraElements,
-			);
+			const body = buildFeishuReportBody(problems, summary, mentionText);
 
 			if (options.secret) {
 				body.timestamp = String(timestamp);
@@ -4870,6 +4861,27 @@ export function createFeishuBotDispatcher(options: FeishuBotOptions): FeishuBotD
 	};
 
 	return dispatcher;
+}
+
+function buildFeishuReportBody(problems: readonly ReviewProblem[], summary?: string, mentionText?: string): Record<string, unknown> {
+	const sections = [...(summary ? [summary.trim()] : []), ...buildImProblemSections(problems)];
+	return buildFeishuCardBody(toFeishuMarkdown(sections.join("\n")),
+		mentionText ? [{ tag: "markdown", content: mentionText }] : []);
+}
+
+export function createFeishuAppDispatcher(options: {
+	readonly client: FeishuAppClient;
+	readonly receiveId: string;
+	readonly receiveIdType?: string | undefined;
+	readonly channelName?: string | undefined;
+}): FeishuBotDispatcher {
+	return {
+		async publishAggregatedProblems(problems, summary, mentionText) {
+			const body = buildFeishuReportBody(problems, summary, mentionText);
+			const externalId = await options.client.sendCard(options.receiveId, options.receiveIdType ?? "chat_id", body.card);
+			return { channel: options.channelName ?? "feishu_app", status: "published", externalId };
+		},
+	};
 }
 
 export interface WeComBotOptions {

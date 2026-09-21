@@ -2,6 +2,15 @@
 
 This directory contains a ready-to-edit deployment configuration.
 
+For Feishu custom application reports, merge [feishu-app.yaml](feishu-app.yaml).
+It configures the application credentials, report recipient, source group and
+explicit identity mappings. Both Feishu transports share templates.
+The optional [feishu-author-model.yaml](feishu-author-model.yaml) demonstrates
+global and workspace model groups for otherwise unmatched directory identities.
+Permissions, matching rules and tenant acceptance are documented in the
+[English](../docs/site/src/content/docs/en/integrations/im-bots.md#feishu-custom-application)
+and [Chinese](../docs/site/src/content/docs/zh-cn/integrations/im-bots.md#飞书自建应用) guides.
+
 The [documentation directory](../docs/README.md) links the bilingual user guides,
 Workspace design, and configuration management reference.
 
@@ -270,10 +279,14 @@ RE2 `regex`. Missing required evidence is retried with a bounded budget, then
 marked failed; it never silently passes an exclusion rule.
 
 Completed execution checkpoints recover local result accounting without
-repeating analysis or remote publication. An interrupted execution without a
-completed checkpoint, or an incomplete publication, stops automatic replay
-with `execution_outcome_unknown` and requires operator inspection. A dead batch
-holds its stream until handled; inspect it before manually initiating a new review.
+repeating analysis or remote publication. An execution interrupted before
+analysis finished replays fully; one interrupted during publication resumes
+per-channel from persisted receipts, skipping the LLM and any channel with a
+confirmed delivery and retaining original model usage (see `docs/output-channels.md`).
+Legacy checkpoints without a payload and checkpoints exceeding 1 MiB replay fully;
+partial or uncertain remote writes can duplicate messages. A terminal failure
+consumes one automatic recovery, then a second terminal failure skips the batch
+and releases its stream. Inspect batch receipts before manually retrying.
 
 ## Eval Fixture Validation
 

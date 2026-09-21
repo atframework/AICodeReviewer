@@ -80,6 +80,7 @@ Narrative: [LLM providers and models](/en/configuration/llm/).
 | `llm.model_chain.<id>[]` | array | — | Non-empty list; first entry is primary, later entries are tried in order. Each has `provider`, `model`, `role` (`light`/`heavy`/`any`) |
 | `llm.default_model_chain` | string | `default` | Global main-group name; must exist when groups are configured |
 | `llm.triage_model_chain` | string | inherit | Lifecycle-analysis group name; omitted inherits the current workspace main group |
+| `llm.author_resolution_model_chain` | string | inherit | Directory identity-analysis group; omitted uses `llm.default_model_chain` |
 | `llm.retry` | object | — | Per-call retry policy |
 | `llm.retry.max_attempts` | int > 0 | — | Max attempts per LLM call |
 | `llm.retry.respect_retry_after` | boolean | — | Honor `Retry-After` headers |
@@ -154,6 +155,7 @@ Narrative: [Configuration overview](/en/configuration/overview/).
 | `workspaces.defaults.review` | object | — | Default review config (see `review`) |
 | `workspaces.defaults.model_chain` | string | inherit | Main-group override referencing `llm.model_chain` |
 | `workspaces.defaults.triage_model_chain` | string | inherit | Lifecycle-group override; if absent at all layers, uses this workspace's main group |
+| `workspaces.defaults.author_resolution_model_chain` | string | inherit | Identity group override over `llm.author_resolution_model_chain` |
 | `workspaces.defaults.agent.default` | enum | — | Default execution mode for this workspace set; resolved per run through global → defaults → instance → route analysis (see note below) |
 | `workspaces.defaults.agent.timeout_seconds` | int > 0 | — | Hard per-run timeout; on timeout the whole process tree is killed |
 | `workspaces.defaults.agent.auto_approve` | boolean | — | Passed to the selected adapter; false removes automatic approval where supported |
@@ -207,6 +209,7 @@ Narrative: [Configuration overview](/en/configuration/overview/).
 | `workspaces.instances.<id>.enabled` | boolean | — | Enabled when omitted; `false` stops new admission while retaining existing snapshots |
 | `workspaces.instances.<id>.model_chain` | string | inherit | Main-group override referencing `llm.model_chain` |
 | `workspaces.instances.<id>.triage_model_chain` | string | inherit | Lifecycle-group override; if absent at all layers, uses this workspace's main group |
+| `workspaces.instances.<id>.author_resolution_model_chain` | string | inherit | Identity group override over workspace defaults, then global identity group, then `llm.default_model_chain` |
 | `workspaces.instances.<id>.agent.default` | enum | — | Execution mode override; selected per run through the merged workspace layers (see note below) |
 | `workspaces.instances.<id>.agent.timeout_seconds` | int > 0 | — | Hard per-run timeout; on timeout the whole process tree is killed |
 | `workspaces.instances.<id>.agent.auto_approve` | boolean | — | Passed to the selected adapter; false removes automatic approval where supported |
@@ -350,6 +353,22 @@ Narrative: [Output channels and routing](/en/configuration/outputs/).
 | `outputs.routes.rules[].match.target_kind` | enum | — | Target kind (`pull_request`, `push`, `commit`, `issue`, `manual`, `scheduled`); `pr` is normalized to `pull_request`. GitLab MRs are reported as `pull_request`. |
 | `outputs.routes.rules[].line_comments` | string[] | — | Channel names to receive line-comment output |
 | `outputs.routes.rules[].summary` | string[] | — | Channel names to receive summary output |
+
+### Feishu application channel fields
+
+These fields apply to `feishu_app`; see the [IM bots guide](/en/integrations/im-bots/#feishu-custom-application).
+
+| Field | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `outputs.channels[].app_id` | string | — | Required custom application ID |
+| `outputs.channels[].app_secret` | string | — | Literal App Secret; sealed in database config; mutually exclusive with `app_secret_env` |
+| `outputs.channels[].app_secret_env` | string | — | Environment variable holding the App Secret |
+| `outputs.channels[].receive_id` | string | — | Required report recipient |
+| `outputs.channels[].receive_id_type` | enum | — | `chat_id`, `open_id`, `user_id`, `union_id` or `email`; runtime default `chat_id` |
+| `outputs.channels[].member_directory.chat_id` | string | — | Source group whose members form the identity directory |
+| `outputs.channels[].member_directory.cache_ttl_seconds` | int | — | Directory cache duration, 0–3600 seconds; runtime default 300 |
+| `outputs.channels[].user_mappings.<id>` | string | — | Exact author/workspace identifier to the application's `open_id` |
+| `outputs.channels[].guess_author` | boolean | — | Runtime default true; permits workspace heuristics and dedicated model fallback after exact matching; `mention_author` separately enables notifications |
 
 ## `prompts`
 
