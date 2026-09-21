@@ -282,10 +282,14 @@ The database may manage the global leaves `llm.default_model_chain`,
 `outputs.template_engine`, `outputs.templates`, `outputs.no_problems`,
 `outputs.author_resolution`, `outputs.routes`, `prompts.system`,
 `queue.workers`, `queue.rate_limit`, `queue.retry`,
-`queue.dead_letter`, `workspaces.cache` and `workspaces.defaults`, plus the
+`queue.dead_letter`, `workspaces.cache`, `workspaces.defaults`,
+`storage.retention.recent_runs`, `storage.retention.events` and
+`storage.retention.queue`, plus the
 provider, model-group, trigger, channel, workspace, route, template and
 prompt entity
-collections. The bootstrap trust boundary — `server`, `admin`, `storage`,
+collections. History retention uses database priority and supports reset to
+YAML/default values. The bootstrap trust boundary — `server`, `admin`,
+`storage.database|cache|object`, `storage.retention.deleted_project_grace_days`,
 `config_sources`, `queue.kind`, `queue.sqlite` and `workspaces.root` — is
 never writable from the database.
 

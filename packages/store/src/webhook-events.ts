@@ -1,4 +1,6 @@
-import { desc, sql } from "drizzle-orm";
+import { desc, gte, sql } from "drizzle-orm";
+import { historyCutoff } from "@aicr/core";
+import { pruneEventHistory, storeHistoryRetention } from "./history-retention.js";
 
 import type { StoreDb } from "./database.js";
 import { webhookEvents, type WebhookEventDecision } from "./schema.js";
@@ -6,15 +8,12 @@ import {
   getRecentWebhookEventsPg,
   insertWebhookEventPg,
   markWebhookEventsTimedOutPg,
-  pruneWebhookEventsPg,
 } from "./webhook-events.pg.js";
 
 /**
- * Cap on stored webhook event rows. The dashboard Events panel mirrors the
- * Recent Runs contract (latest 100 entries, paged 20 per page on the client),
- * so older rows are pruned on every insert.
+ * Default count cap; bootstrap supplies the live count and calendar-month age.
  */
-export const WEBHOOK_EVENTS_RETENTION_LIMIT = 100;
+export const WEBHOOK_EVENTS_RETENTION_LIMIT = 2000;
 
 export interface WebhookEventInsert {
   receivedAt?: Date;
@@ -76,29 +75,25 @@ export async function insertWebhookEvent(store: StoreDb, event: WebhookEventInse
 
 export async function pruneWebhookEvents(
   store: StoreDb,
-  keep: number = WEBHOOK_EVENTS_RETENTION_LIMIT,
+  keep?: number,
+  now = Date.now(),
 ): Promise<number> {
-  if (store.kind === "postgres") {
-    return pruneWebhookEventsPg(store, keep);
-  }
-  const result = store.db
-    .delete(webhookEvents)
-    .where(
-      sql`${webhookEvents.id} NOT IN (SELECT id FROM webhook_events ORDER BY id DESC LIMIT ${keep})`,
-    )
-    .run();
-  return Number(result.changes);
+  return pruneEventHistory(store, keep, now);
 }
 
-export async function getRecentWebhookEvents(store: StoreDb, limit: number): Promise<RecentWebhookEvent[]> {
+export async function getRecentWebhookEvents(store: StoreDb, limit: number, offset = 0): Promise<RecentWebhookEvent[]> {
   if (store.kind === "postgres") {
-    return getRecentWebhookEventsPg(store, limit);
+    return getRecentWebhookEventsPg(store, limit, offset);
   }
+  const policy = storeHistoryRetention(store)?.events;
+  if (policy) limit = Math.max(0, Math.min(limit, policy.max_count - offset));
   const rows = store.db
     .select()
     .from(webhookEvents)
-    .orderBy(desc(webhookEvents.id))
+    .where(policy ? gte(webhookEvents.receivedAt, new Date(historyCutoff(policy))) : undefined)
+    .orderBy(desc(webhookEvents.receivedAt), desc(webhookEvents.id))
     .limit(limit)
+    .offset(offset)
     .all();
 
   return rows.map((row) => ({

@@ -163,6 +163,41 @@ export function runAutoCommitStoreConformance(factory: StoreFactory): void {
     };
   }
   describe(`AutoCommitStore conformance [${factory.backendKind}]`, () => {
+    it("skips busy workspaces before a bounded dispatch claim", async () => {
+      const store = await factory.makeStore();
+      for (let i = 0; i < 12; i++) await prepareBatch(store, `busy-${i}`, "p4-main");
+      await prepareBatch(store, "free-github", "github-atsf4g-co");
+      let claimed = await store.claimDispatch(T0, "worker", 1, ["p4-main"]);
+      // Redis advances a bounded index cursor past excluded candidates.
+      for (let i = 0; i < 4 && claimed.length === 0; i++) claimed = await store.claimDispatch(T0, "worker", 1, ["p4-main"]);
+      expect(claimed.map(entry => entry.batch.batchId)).toEqual(["free-github"]);
+      expect((await store.readBatch("busy-0"))?.attempt).toBe(0);
+    });
+
+    it("pages terminal history deterministically and prunes without losing active work or receipt dedup", async () => {
+      const store = await factory.makeStore();
+      for (const id of ["history-a", "history-b", "history-c", "history-running", "history-wait"]) await prepareBatch(store, id, id);
+      const claimed = await store.claimDispatch(T0, "worker", 10);
+      for (const entry of claimed) {
+        await store.confirmDispatch(entry.batch.batchId, entry.claimToken, T0);
+        const token = await store.startBatchExecution(entry.batch.batchId, "worker", 60_000, T0, { global: 10, workspace: 1 });
+        expect(token).toBeDefined();
+        if (entry.batch.batchId === "history-running") continue;
+        if (entry.batch.batchId === "history-wait") await store.failBatch(entry.batch.batchId, token!, "retry", T0 + 1000, false, T0);
+        else await store.completeBatch(entry.batch.batchId, token!, { outcome: "completed" }, T0);
+      }
+      expect((await store.readBatchesByStatus(["completed"], 1, 1)).map(batch => batch.batchId)).toEqual(["history-b"]);
+      expect(await store.pruneBatchHistory(2, T0 - 1)).toBe(1);
+      expect(await store.readBatch("history-a")).toBeUndefined();
+      const duplicate = await store.acceptReceipt(receiptInput({ deliveryKey: "history-a", workspaceId: "history-a", scopeRef: "refs/heads/history-a", delaySeconds: 0 }));
+      expect(duplicate.duplicate).toBe(true);
+      expect((await store.getReceipt(duplicate.receipt.receiptId))?.receipt.receiptId).toBe(duplicate.receipt.receiptId);
+      expect(await store.pruneBatchHistory(20, T0 + 1)).toBe(2);
+      expect((await store.readBatch("history-running"))?.status).toBe("running");
+      expect((await store.readBatch("history-wait"))?.status).toBe("retry_wait");
+      expect(await store.pruneBatchHistory(1, T0 + 1)).toBe(0);
+    });
+
     it("enforces global and workspace execution limits atomically and releases capacity", async () => {
       const store = await factory.makeStore();
       await prepareBatch(store, "limit-a", "ws-a");

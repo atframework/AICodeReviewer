@@ -13,7 +13,7 @@ import {
   type ProviderModelStats,
   type RecentRunStats,
 } from "@aicr/store";
-import type { AutoCommitStore } from "@aicr/core";
+import { historyCutoff, type AutoCommitStore, type HistoryRetention } from "@aicr/core";
 import type { AdminAuthConfig } from "./admin-auth.js";
 import {
   createAdminAuthMiddleware,
@@ -42,6 +42,10 @@ export interface ObservabilityApiOptions {
    * settings changed since the batch's original admission.
    */
   readonly currentConfigSnapshotId?: () => string | null;
+  readonly onBatchRequeued?: () => void;
+  /** Bounded cleanup before history reads; failures are logged, reads still serve. */
+  readonly beforeHistoryRead?: () => Promise<void>;
+  readonly historyRetention?: () => HistoryRetention;
   /** Auto-commit receipt store; enables the receipt query endpoint. */
   readonly autoCommitStore?: AutoCommitStore;
   /** In-memory registry of currently running analyses; enables the live-runs endpoint. */
@@ -92,6 +96,16 @@ function parseLimit(value: string | undefined): number {
   return Math.min(Math.max(Math.trunc(parsed), 1), 100);
 }
 
+function parsePage(value: string | undefined): number | null {
+  if (value === undefined) return 0; // Preserve the existing array response.
+  const page = Number(value);
+  return Number.isSafeInteger(page) && page >= 1 && page <= 1_000_000 ? page : null;
+}
+
+function historyPage<T>(items: readonly T[], page: number, limit: number): readonly T[] | { items: readonly T[]; page: number; hasMore: boolean } {
+  return page === 0 ? items : { items: items.slice(0, limit), page, hasMore: items.length > limit };
+}
+
 function getLoginAttemptKey(username: string, forwardedFor: string | undefined): string {
   const client = forwardedFor?.split(",")[0]?.trim() || "unknown";
   return `${client}:${username.toLowerCase()}`;
@@ -106,6 +120,19 @@ export function createObservabilityApi(options: ObservabilityApiOptions): Hono {
   const authContext: AdminAuthContext = { config: options.adminAuth, sessions: options.sessionStore };
   const authMiddleware = createAdminAuthMiddleware(authContext);
   const loginFailures = new Map<string, LoginFailureState>();
+
+  // Cleanup keeps the panels bounded, but a sweep failure (e.g. a degraded
+  // store backend) must not take the read-only admin history endpoints down
+  // with it: the queries below already enforce the live retention limits.
+  const runHistoryMaintenance = async (): Promise<void> => {
+    await options.beforeHistoryRead?.().catch((error: unknown) => {
+      console.warn(JSON.stringify({
+        level: "warn",
+        msg: "history maintenance before admin read failed; serving bounded history",
+        error: error instanceof Error ? error.message : String(error),
+      }));
+    });
+  };
 
   function isLoginRateLimited(key: string): boolean {
     const now = Date.now();
@@ -214,17 +241,22 @@ export function createObservabilityApi(options: ObservabilityApiOptions): Hono {
 
   api.get("/runs", authMiddleware, async (c) => {
     const limit = parseLimit(c.req.query("limit"));
-    const runs = await getRecentRuns(store, limit);
-    return c.json(runs);
+    const page = parsePage(c.req.query("page"));
+    if (page === null) return c.json({ error: "bad_request", message: "page must be a positive integer" }, 400);
+    await runHistoryMaintenance();
+    const runs = await getRecentRuns(store, limit + (page ? 1 : 0), page ? (page - 1) * limit : 0);
+    return c.json(historyPage(runs, page, limit));
   });
 
   // Receipt-time webhook/trigger event log backing the dashboard Events
-  // panel. Same retention contract as Recent Runs: the store keeps the
-  // latest 100 entries and the client pages 20 per page.
+  // panel. Pagination reads only the requested page and one lookahead row.
   api.get("/events", authMiddleware, async (c) => {
     const limit = parseLimit(c.req.query("limit"));
-    const events = await getRecentWebhookEvents(store, limit);
-    return c.json(events);
+    const page = parsePage(c.req.query("page"));
+    if (page === null) return c.json({ error: "bad_request", message: "page must be a positive integer" }, 400);
+    await runHistoryMaintenance();
+    const events = await getRecentWebhookEvents(store, limit + (page ? 1 : 0), page ? (page - 1) * limit : 0);
+    return c.json(historyPage(events, page, limit));
   });
   }
 
@@ -272,9 +304,14 @@ export function createObservabilityApi(options: ObservabilityApiOptions): Hono {
         return c.json({ error: "bad_request", message: "status filter must name at least one known batch status" }, 400);
       }
       const limit = parseLimit(c.req.query("limit"));
-      const batches = await autoCommitStore.readBatchesByStatus(statuses, limit);
+      const page = parsePage(c.req.query("page"));
+      if (page === null) return c.json({ error: "bad_request", message: "page must be a positive integer" }, 400);
+      await runHistoryMaintenance();
+      const policy = options.historyRetention?.().queue;
+      const batches = await autoCommitStore.readBatchesByStatus(statuses, limit + (page ? 1 : 0), page ? (page - 1) * limit : 0,
+        policy ? { maxCount: policy.max_count, before: historyCutoff(policy) } : undefined);
       return c.json(
-        batches.map((batch) => ({
+        historyPage(batches.map((batch) => ({
           batchId: batch.batchId,
           runId: batch.runId,
           streamId: batch.streamId,
@@ -290,7 +327,7 @@ export function createObservabilityApi(options: ObservabilityApiOptions): Hono {
           retryNotBefore: batch.retryNotBefore,
           lastError: batch.lastError,
           createdAt: batch.createdAt,
-        })),
+        })), page, limit),
       );
     });
 
@@ -339,6 +376,7 @@ export function createObservabilityApi(options: ObservabilityApiOptions): Hono {
       if (options.store) {
         clearedRejectionMarker = await deleteReviewRun(options.store, requeued.runId).catch(() => false);
       }
+      options.onBatchRequeued?.();
       console.warn(JSON.stringify({
         level: "warn",
         msg: "admin manual retry re-armed auto-commit batch",

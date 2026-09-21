@@ -510,6 +510,9 @@ export const DATABASE_GLOBAL_PREFIXES: readonly ConfigPath[] = [
   ["queue", "dead_letter"],
   ["workspaces", "cache"],
   ["workspaces", "defaults"],
+  ["storage", "retention", "recent_runs"],
+  ["storage", "retention", "events"],
+  ["storage", "retention", "queue"],
 ];
 
 /**
@@ -520,6 +523,9 @@ export const DATABASE_GLOBAL_PREFIXES: readonly ConfigPath[] = [
  * set the leaf, but they never create file locks and never block writes.
  */
 export const DATABASE_PRIORITY_PREFIXES: readonly ConfigPath[] = [
+  ["storage", "retention", "recent_runs"],
+  ["storage", "retention", "events"],
+  ["storage", "retention", "queue"],
   ["agent"],
   ["review"],
   ["queue", "workers"],
@@ -537,7 +543,10 @@ export function isDatabasePriorityPath(path: ConfigPath): boolean {
 export const BOOTSTRAP_CONFIG_PREFIXES: readonly ConfigPath[] = [
   ["server"],
   ["admin"],
-  ["storage"],
+  ["storage", "database"],
+  ["storage", "cache"],
+  ["storage", "object"],
+  ["storage", "retention", "deleted_project_grace_days"],
   ["config_sources"],
   ["queue", "kind"],
   ["queue", "sqlite"],

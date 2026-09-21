@@ -27,6 +27,15 @@ storage:
       root: /app/data/objects
   retention:
     deleted_project_grace_days: 30
+    recent_runs:
+      max_count: 2000
+      max_age_months: 6
+    events:
+      max_count: 2000
+      max_age_months: 6
+    queue:
+      max_count: 1000
+      max_age_months: 6
 ```
 
 ## `storage.database`
@@ -104,6 +113,31 @@ S3 字段为**预留**——会通过校验，但尚未被运行时特性使用�
 | 字段 | 类型 | 默认 | 说明 |
 | --- | --- | --- | --- |
 | `deleted_project_grace_days` | int ≥ 0 | `30` | 软删除的项目在该天数后被硬删除。 |
+| `recent_runs.max_count` | int 1–1000000 | `2000` | 保留最近的逐次运行详情数量。 |
+| `recent_runs.max_age_months` | int 1–1200 | `6` | 运行详情最长保留月数，从运行开始时间计算。 |
+| `events.max_count` | int 1–1000000 | `2000` | 保留最近的接收事件数量。 |
+| `events.max_age_months` | int 1–1200 | `6` | 事件最长保留月数，从接收时间计算。 |
+| `queue.max_count` | int 1–1000000 | `1000` | 保留最近的已结束自动提交批次数量。 |
+| `queue.max_age_months` | int 1–1200 | `6` | 已结束批次历史最长保留月数，从批次创建时间计算。 |
+
+数量或时长**任一超限**即淘汰。月数按 UTC 日历月计算，目标月份没有对应日期时取该月
+最后一天。数量上限覆盖同一 store 中的所有 workspace。等待、运行、待重试批次以及仍被
+stream 的活动指针引用的批次不受历史清理影响。
+
+这六项同时支持 YAML 和数据库配置；即使 YAML 显式设置了值，数据库值仍优先。
+在 Admin → Config → Advanced 的 Storage 字段中修改，使用 **Reset database overrides**
+清除数据库覆盖后，回退到 YAML 值；YAML 未设置时使用默认值。发布后，后续历史查询和
+清理使用新策略。提高上限不能找回已淘汰的详情。存储连接设置仍属于只读的文件启动配置。
+
+Recent Runs 清理逐次运行的展示详情，保留统计事实、数值用量和 run ID；Overview、
+Projects、Providers、每日汇总和检查点去重仍计入旧运行。Events 删除事件记录；Queue
+删除已结束批次详情和 outbox，保留防止重复分析所需的 receipt 与成员身份。此策略不删除
+运行目录产物，也不清空数据库中的全部统计记账行。
+
+启动时、每 60 秒和历史查询前执行有界清理，每轮每类最多处理 500 条。即使升级后存在
+清理积压，查询仍立即遵循配置上限。三个面板均从服务端按页取 20 条；默认保留
+2000/2000/1000 条不会把全部历史加载到浏览器。SQL 使用时间/ID 索引，Redis 使用状态
+有序集合；升级后的首次启动会为既有 Redis 批次回填索引。
 
 ## 后端一览
 

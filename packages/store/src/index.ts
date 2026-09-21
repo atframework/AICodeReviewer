@@ -5,6 +5,7 @@ export * from "./pg-migrations.js";
 export * from "./sqlite-migrations.js";
 export * from "./stats.js";
 export * from "./webhook-events.js";
+export * from "./history-retention.js";
 export * from "./review-deferrals.js";
 export * from "./reflection.js";
 export * from "./model-catalog.js";

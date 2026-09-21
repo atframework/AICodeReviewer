@@ -643,6 +643,7 @@ export interface AutoCommitStore {
     now: number,
     ownerId: string,
     limit: number,
+    excludedWorkspaceIds?: readonly string[],
   ): Promise<readonly ClaimedDispatch[]>;
 
   /** Mark an outbox entry dispatched after the execution enqueue succeeded. */
@@ -762,7 +763,12 @@ export interface AutoCommitStore {
   readBatchesByStatus(
     statuses: readonly CommitBatchStatus[],
     limit: number,
+    offset?: number,
+    history?: { readonly maxCount: number; readonly before: number },
   ): Promise<readonly CommitBatchRecord[]>;
+
+  /** Remove terminal history only; keep receipt/member deduplication and active streams. */
+  pruneBatchHistory(maxCount: number, before: number, limit?: number): Promise<number>;
 
   /**
    * Queue timeout sweep: pending (never-batched) members whose eligibility

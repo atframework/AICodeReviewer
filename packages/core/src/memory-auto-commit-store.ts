@@ -981,12 +981,14 @@ export function createMemoryAutoCommitStore(): AutoCommitStore {
       now: number,
       ownerId: string,
       limit: number,
+      excludedWorkspaceIds: readonly string[] = [],
     ): Promise<readonly ClaimedDispatch[]> {
       const due = [...outbox.values()]
         .filter(
           (entry) =>
             entry.entry.status === "pending" &&
             entry.entry.nextAttemptAt <= now &&
+            !excludedWorkspaceIds.includes(batches.get(entry.entry.batchId)?.record.workspaceId ?? "") &&
             (entry.claimToken === null ||
               entry.claimExpiry === null ||
               entry.claimExpiry <= now),
@@ -1425,16 +1427,36 @@ export function createMemoryAutoCommitStore(): AutoCommitStore {
     async readBatchesByStatus(
       statuses: readonly CommitBatchStatus[],
       limit: number,
+      offset = 0,
+      history?: { readonly maxCount: number; readonly before: number },
     ): Promise<readonly CommitBatchRecord[]> {
       const wanted = new Set<string>(statuses);
+      const historyIds = history ? new Set([...batches.values()].map(entry => entry.record)
+        .filter(batch => ["completed", "skipped", "dead"].includes(batch.status) && batch.createdAt >= history.before)
+        .sort((a, b) => b.createdAt - a.createdAt || (a.batchId < b.batchId ? 1 : a.batchId > b.batchId ? -1 : 0))
+        .slice(0, history.maxCount).map(batch => batch.batchId)) : undefined;
       const matched: CommitBatchRecord[] = [];
       for (const batch of batches.values()) {
-        if (wanted.has(batch.record.status)) {
+        if (wanted.has(batch.record.status) && (!historyIds || !["completed", "skipped", "dead"].includes(batch.record.status) ||
+          historyIds.has(batch.record.batchId) || streams.get(batch.record.streamId)?.head.activeBatchId === batch.record.batchId)) {
           matched.push(batch.record);
         }
       }
-      matched.sort((a, b) => b.createdAt - a.createdAt);
-      return matched.slice(0, limit);
+      matched.sort((a, b) => b.createdAt - a.createdAt || (a.batchId < b.batchId ? 1 : a.batchId > b.batchId ? -1 : 0));
+      return matched.slice(offset, offset + limit);
+    },
+
+    async pruneBatchHistory(maxCount: number, before: number, limit = 500): Promise<number> {
+      const terminal = [...batches.values()].map((entry) => entry.record)
+        .filter((batch) => ["completed", "skipped", "dead"].includes(batch.status))
+        .sort((a, b) => b.createdAt - a.createdAt || (a.batchId < b.batchId ? 1 : a.batchId > b.batchId ? -1 : 0));
+      const expired = terminal.filter((batch, index) => (index >= maxCount || batch.createdAt < before)
+        && streams.get(batch.streamId)?.head.activeBatchId !== batch.batchId).slice(0, limit);
+      for (const batch of expired) {
+        batches.delete(batch.batchId);
+        outbox.delete(batch.batchId);
+      }
+      return expired.length;
     },
 
     async timeoutStaleQueue(

@@ -9,8 +9,8 @@
  *   001–006 ledger plus legacy review-run rows (the M02 fixture state) and
  *   (b) the config namespace at the real 001 ledger plus a valid revision-1
  *   document and immutable snapshot in the 001 shape (the E08 fixture state).
- *   Bootstrap must advance both ledgers (007–009 business, 002 config),
- *   preserve every legacy row, and a signed PR webhook must drive a review
+ *   Bootstrap must advance both ledgers (007–010 business, 002 config),
+ *   preserve legacy accounting while expiring old details, and a signed PR webhook must drive a review
  *   whose HTTP requests carry the MIGRATED revision's provider base_url and
  *   model. A changeset-API publish of revision 2 (model swap) then drives a
  *   second webhook on the new head.
@@ -65,6 +65,7 @@ import {
   closeStoreDb,
   createStoreDb,
   getRecentRuns,
+  getOverviewStats,
 } from "@aicr/store";
 import { parseUnifiedDiff, type ChangeRange } from "@aicr/vcs";
 import { bootstrapServerApp } from "../src/bootstrap.js";
@@ -636,10 +637,11 @@ async function expectReviewOnRevision(
 
 async function expectPersistedRun(
   options: ServerAppOptions,
-  expectation: { readonly model: string; readonly totalRuns: number },
+  expectation: { readonly model: string; readonly totalRuns: number; readonly prunedRuns?: number },
 ): Promise<void> {
   const runs = await getRecentRuns(options.store!, 10);
-  expect(runs).toHaveLength(expectation.totalRuns);
+  expect(runs).toHaveLength(expectation.totalRuns - (expectation.prunedRuns ?? 0));
+  expect((await getOverviewStats(options.store!)).reviewCount).toBe(expectation.totalRuns);
   const persisted = runs.find((run) => run.providerModel === expectation.model);
   expect(persisted).toBeDefined();
   expect(persisted).toMatchObject({
@@ -678,7 +680,7 @@ describe("post-migration consumption [sqlite]", () => {
     const options = await bootstrapParsed(file);
     const publishStore = trackStore(await createSqliteConfigStore({ path: dbPath }));
 
-    // Both ledgers advanced exactly once: business 007–009 appended to the
+    // Both ledgers advanced exactly once: business 007–010 appended to the
     // historical 001–006 names; config 002 appended to the historical 001.
     const probe = new Database(dbPath);
     try {
@@ -698,14 +700,12 @@ describe("post-migration consumption [sqlite]", () => {
       probe.close();
     }
     const legacyRuns = await getRecentRuns(options.store!, 10);
-    expect(legacyRuns).toHaveLength(1);
-    expect(legacyRuns[0]).toMatchObject({
-      id: "legacy-run",
-      branch: "main",
-      headSha: "legacy-sha",
-      vcsKind: null,
-      headCommittedAt: null,
-    });
+    expect(legacyRuns).toHaveLength(0); // Six-month default removes the 2023 display details.
+    expect((await getOverviewStats(options.store!)).reviewCount).toBe(1);
+    expect(options.store!.kind).toBe("sqlite");
+    if (options.store!.kind === "sqlite") expect(options.store!.sqlite.prepare(
+      "SELECT branch, head_sha, history_pruned FROM review_runs WHERE id = 'legacy-run'",
+    ).get()).toEqual({ branch: null, head_sha: null, history_pruned: 1 });
 
     // New signed webhook event → review consumes the MIGRATED revision 1.
     const head1 = await publishStore.readHead(NAMESPACE);
@@ -719,7 +719,7 @@ describe("post-migration consumption [sqlite]", () => {
       fileDigest: file.digest,
       routeId: LEGACY_IDS.route,
     });
-    await expectPersistedRun(options, { model: LEGACY_IDS.model, totalRuns: 2 });
+    await expectPersistedRun(options, { model: LEGACY_IDS.model, totalRuns: 2, prunedRuns: 1 });
 
     // Publish revision 2 through the real changeset API (model swap), then a
     // second webhook consumes the new head exclusively.
@@ -738,7 +738,7 @@ describe("post-migration consumption [sqlite]", () => {
       routeId: LEGACY_IDS.route,
     });
     expect(run2.reviewRun?.configVersion?.configSnapshotId).not.toBe(seed.snapshotId);
-    await expectPersistedRun(options, { model: "model-v2", totalRuns: 3 });
+    await expectPersistedRun(options, { model: "model-v2", totalRuns: 3, prunedRuns: 1 });
     await options.closeAutoCommit?.();
   }, 60_000);
 });
@@ -862,14 +862,12 @@ describePg("post-migration consumption [postgres]", () => {
       await probe.end();
     }
     const legacyRuns = await getRecentRuns(options.store!, 10);
-    expect(legacyRuns).toHaveLength(1);
-    expect(legacyRuns[0]).toMatchObject({
-      id: "legacy-run",
-      branch: "main",
-      headSha: "legacy-sha",
-      vcsKind: null,
-      headCommittedAt: null,
-    });
+    expect(legacyRuns).toHaveLength(0);
+    expect((await getOverviewStats(options.store!)).reviewCount).toBe(1);
+    expect(options.store!.kind).toBe("postgres");
+    if (options.store!.kind === "postgres") expect((await options.store!.pool.query(
+      "SELECT branch, head_sha, history_pruned FROM review_runs WHERE id = 'legacy-run'",
+    )).rows).toEqual([{ branch: null, head_sha: null, history_pruned: true }]);
 
     // New signed webhook event → review consumes the MIGRATED revision 1.
     const head1 = await publishStore.readHead(NAMESPACE);
@@ -883,7 +881,7 @@ describePg("post-migration consumption [postgres]", () => {
       fileDigest: file.digest,
       routeId: LEGACY_IDS.route,
     });
-    await expectPersistedRun(options, { model: LEGACY_IDS.model, totalRuns: 2 });
+    await expectPersistedRun(options, { model: LEGACY_IDS.model, totalRuns: 2, prunedRuns: 1 });
 
     // Publish revision 2 through the real changeset API, then a second
     // webhook consumes the new head exclusively.
@@ -902,7 +900,7 @@ describePg("post-migration consumption [postgres]", () => {
       routeId: LEGACY_IDS.route,
     });
     expect(run2.reviewRun?.configVersion?.configSnapshotId).not.toBe(seed.snapshotId);
-    await expectPersistedRun(options, { model: "model-v2", totalRuns: 3 });
+    await expectPersistedRun(options, { model: "model-v2", totalRuns: 3, prunedRuns: 1 });
     await options.closeAutoCommit?.();
   }, 90_000);
 });

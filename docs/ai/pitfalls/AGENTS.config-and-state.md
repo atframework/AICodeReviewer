@@ -30,6 +30,9 @@ Read the section matching a config, model-selection, persistence, or usage chang
 - A fixed `display` on `#tab-config` overrides the dashboard's inactive-tab rule.
   Scope its grid layout to `.active`; test both top-level tabs and config pages,
   including read-only drawers and dirty drafts (`tests/browser/config-ui.spec.ts`).
+  Derive page actions from field metadata, not an `advanced` page-id exception:
+  that page mixes editable history-retention policies with read-only connection
+  settings. Browser tests must save, reload and reset the editable fields.
 - Schema `superRefine` runs after defaults are applied — mutual-exclusion
   checks between a literal and a defaulted `*_env` (e.g. admin.password_env
   defaults to AICR_ADMIN_PASSWORD) must treat the default value as unset.
@@ -48,6 +51,11 @@ Read the section matching a config, model-selection, persistence, or usage chang
   2026-09-18: a silent canonicalization change stranded the legacy baseline,
   crashed the deferral resume, and made every pre-upgrade receipt unloadable
   (`runtime-config.ts` validateSnapshot/loadSnapshotGeneration).
+  Consumer defaults behind optional schema parents can preserve old canonical
+  output instead: history-retention fields use that approach and pin the old
+  `storage.retention` shape in `core/test/history-retention.test.ts`. Verify
+  omitted-parent output before deciding whether a resolver-version migration
+  is necessary; UI field defaults alone must not rewrite persisted snapshots.
 
 ## Config and shared utilities
 

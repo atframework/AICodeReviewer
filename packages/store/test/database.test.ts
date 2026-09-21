@@ -43,6 +43,11 @@ describe("store database", () => {
     (await insertReviewRun(store, { id: "old-run", eventId: "evt", workspaceId: "ws", status: "succeeded",
       branch: "main", headSha: "old-sha" }));
     store.sqlite.exec(`
+      DROP INDEX idx_review_runs_history;
+      DROP INDEX idx_webhook_events_history;
+      DROP INDEX idx_llm_usage_run;
+      ALTER TABLE review_runs DROP COLUMN history_pruned;
+      DELETE FROM _migrations WHERE name = '010_admin_history';
       ALTER TABLE review_runs DROP COLUMN vcs_kind;
       ALTER TABLE review_runs DROP COLUMN head_committed_at;
       DELETE FROM _migrations WHERE name = '009_review_run_vcs_stamp';
@@ -56,6 +61,7 @@ describe("store database", () => {
     expect(store.sqlite.prepare("SELECT COUNT(*) AS n FROM _migrations WHERE name = ?")
       .get("009_review_run_vcs_stamp")).toEqual({ n: 1 });
     expect((await getRecentRuns(store, 1))).toHaveLength(1);
+    expect(store.sqlite.prepare("SELECT history_pruned FROM review_runs WHERE id = 'old-run'").get()).toEqual({ history_pruned: 0 });
   });
   it("creates and initializes database with migrations", async () => {
     const tables = store.sqlite

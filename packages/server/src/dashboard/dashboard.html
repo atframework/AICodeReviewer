@@ -211,12 +211,15 @@ tr:hover td{background:rgba(59,130,246,0.05)}
 <div id="tab-queue" class="tab-content">
 <div style="margin-bottom:1rem;display:flex;gap:0.5rem;align-items:center">
 <button class="btn btn-sm btn-ghost" onclick="loadQueue()">Refresh</button>
-<select id="queue-status" onchange="loadQueue()">
+<select id="queue-status" onchange="queuePage=1;loadQueue()">
 <option value="dead,skipped" selected>Stuck / terminal (dead, skipped)</option>
 <option value="retry_wait">Waiting retry</option>
 <option value="queued,running,dispatch_pending">Active</option>
 <option value="completed">Completed</option>
 </select>
+<button class="btn btn-sm btn-ghost" id="queue-prev" onclick="prevQueuePage()">Prev</button>
+<span id="queue-page-info"></span>
+<button class="btn btn-sm btn-ghost" id="queue-next" onclick="nextQueuePage()">Next</button>
 <span id="queue-indicator" class="indicator" role="status" aria-live="polite"></span>
 </div>
 <div class="table-scroll"><table>
@@ -247,9 +250,13 @@ var projectStatsData=null;
 var providerStatsData=null;
 var runsData=null;
 var runsPage=1;
+var runsHasMore=false;
+var runsRequest=0;
 var RUNS_PAGE_SIZE=20;
 var eventsData=null;
 var eventsPage=1;
+var eventsHasMore=false;
+var eventsRequest=0;
 var EVENTS_PAGE_SIZE=20;
 var liveData=null;
 var liveServerSkewMs=0;
@@ -377,6 +384,10 @@ function showDashboard(){
 
 function logout(){
   authToken=null;
+  runsRequest++;eventsRequest++;queueRequest++;
+  runsData=null;eventsData=null;queueData=null;
+  runsPage=1;eventsPage=1;queuePage=1;
+  runsHasMore=false;eventsHasMore=false;queueHasMore=false;
   localStorage.removeItem("aicr_token");
   stopLiveTicker();
   stopLiveRefresh();
@@ -490,85 +501,85 @@ async function loadProviderStats(w){
 }
 
 async function loadRuns(){
+  var request=++runsRequest;
+  var page=runsPage;
   var el=document.getElementById("runs-loading");
   if(el)el.style.display="block";
   try{
-    var r=await apiFetch("api/admin/runs?limit=100");
-    runsData=await r.json();
+    var r=await apiFetch("api/admin/runs?limit="+RUNS_PAGE_SIZE+"&page="+page);
+    if(!r.ok)throw new Error("HTTP "+r.status);
+    var data=await r.json();
+    if(request!==runsRequest)return;
+    runsData=data.items;
+    runsHasMore=data.hasMore;
+    if(!runsData.length&&runsPage>1){runsPage=1;return loadRuns()}
     renderRunsPage();
   }catch(ex){
+    if(request!==runsRequest)return;
     var tbody=document.getElementById("runs-table");
     if(tbody)tbody.innerHTML='<tr><td colspan="11" style="text-align:center;color:var(--muted)">Error loading data</td></tr>';
   }finally{
-    if(el)el.style.display="none";
+    if(el&&request===runsRequest)el.style.display="none";
   }
-}
-
-function runsPageCount(){
-  return Math.max(1,Math.ceil(((runsData||[]).length)/RUNS_PAGE_SIZE));
 }
 
 function renderRunsPage(){
-  var total=(runsData||[]).length;
-  var totalPages=runsPageCount();
-  if(runsPage>totalPages)runsPage=totalPages;
-  var start=(runsPage-1)*RUNS_PAGE_SIZE;
-  renderRunsTable((runsData||[]).slice(start,start+RUNS_PAGE_SIZE));
+  renderRunsTable(runsData||[]);
   var info=document.getElementById("runs-page-info");
-  if(info)info.textContent=total+" runs · page "+runsPage+" / "+totalPages;
+  if(info)info.textContent="Page "+runsPage+" · "+(runsData||[]).length+" runs";
   var prev=document.getElementById("runs-prev");
   var next=document.getElementById("runs-next");
   if(prev)prev.disabled=runsPage<=1;
-  if(next)next.disabled=runsPage>=totalPages;
+  if(next)next.disabled=!runsHasMore;
 }
 
 function prevRunsPage(){
-  if(runsPage>1){runsPage--;renderRunsPage()}
+  if(runsPage>1){runsPage--;loadRuns()}
 }
 
 function nextRunsPage(){
-  if(runsPage<runsPageCount()){runsPage++;renderRunsPage()}
+  if(runsHasMore){runsPage++;loadRuns()}
 }
 
 async function loadEvents(){
+  var request=++eventsRequest;
+  var page=eventsPage;
   var el=document.getElementById("events-loading");
   if(el)el.style.display="block";
   try{
-    var r=await apiFetch("api/admin/events?limit=100");
-    eventsData=await r.json();
+    var r=await apiFetch("api/admin/events?limit="+EVENTS_PAGE_SIZE+"&page="+page);
+    if(!r.ok)throw new Error("HTTP "+r.status);
+    var data=await r.json();
+    if(request!==eventsRequest)return;
+    eventsData=data.items;
+    eventsHasMore=data.hasMore;
+    if(!eventsData.length&&eventsPage>1){eventsPage=1;return loadEvents()}
     renderEventsPage();
   }catch(ex){
+    if(request!==eventsRequest)return;
     var tbody=document.getElementById("events-table");
     if(tbody)tbody.innerHTML='<tr><td colspan="8" style="text-align:center;color:var(--muted)">Error loading data</td></tr>';
   }finally{
-    if(el)el.style.display="none";
+    if(el&&request===eventsRequest)el.style.display="none";
   }
 }
 
-function eventsPageCount(){
-  return Math.max(1,Math.ceil(((eventsData||[]).length)/EVENTS_PAGE_SIZE));
-}
-
 function renderEventsPage(){
-  var total=(eventsData||[]).length;
-  var totalPages=eventsPageCount();
-  if(eventsPage>totalPages)eventsPage=totalPages;
-  var start=(eventsPage-1)*EVENTS_PAGE_SIZE;
-  renderEventsTable((eventsData||[]).slice(start,start+EVENTS_PAGE_SIZE));
+  renderEventsTable(eventsData||[]);
   var info=document.getElementById("events-page-info");
-  if(info)info.textContent=total+" events · page "+eventsPage+" / "+totalPages;
+  if(info)info.textContent="Page "+eventsPage+" · "+(eventsData||[]).length+" events";
   var prev=document.getElementById("events-prev");
   var next=document.getElementById("events-next");
   if(prev)prev.disabled=eventsPage<=1;
-  if(next)next.disabled=eventsPage>=totalPages;
+  if(next)next.disabled=!eventsHasMore;
 }
 
 function prevEventsPage(){
-  if(eventsPage>1){eventsPage--;renderEventsPage()}
+  if(eventsPage>1){eventsPage--;loadEvents()}
 }
 
 function nextEventsPage(){
-  if(eventsPage<eventsPageCount()){eventsPage++;renderEventsPage()}
+  if(eventsHasMore){eventsPage++;loadEvents()}
 }
 
 function renderEventsTable(events){
@@ -588,28 +599,37 @@ function renderEventsTable(events){
 }
 
 var queueData=null;
-var queueRequest=null;
+var queueRequest=0;
+var queuePage=1;
+var queueHasMore=false;
 async function loadQueue(){
+  var request=++queueRequest;
   var sel=document.getElementById("queue-status");
   var status=sel?sel.value:"dead,skipped";
   var ind=document.getElementById("queue-indicator");
-  if(queueRequest)return;
-  queueRequest=true;
   if(ind)ind.textContent="Loading...";
   try{
-    var r=await apiFetch("api/admin/auto-commit/batches?limit=50&status="+encodeURIComponent(status));
+    var r=await apiFetch("api/admin/auto-commit/batches?limit=20&page="+queuePage+"&status="+encodeURIComponent(status));
     if(!r.ok)throw new Error("HTTP "+r.status);
-    queueData=await r.json();
+    var data=await r.json();
+    if(request!==queueRequest)return;
+    queueData=data.items;
+    queueHasMore=data.hasMore;
+    if(!queueData.length&&queuePage>1){queuePage=1;return loadQueue()}
     renderQueueTable();
+    document.getElementById("queue-page-info").textContent="Page "+queuePage;
+    document.getElementById("queue-prev").disabled=queuePage<=1;
+    document.getElementById("queue-next").disabled=!queueHasMore;
     if(ind)ind.textContent=queueData.length+" batch(es)";
   }catch(ex){
+    if(request!==queueRequest)return;
     queueData=queueData||[];
     renderQueueTable();
     if(ind)ind.textContent="Refresh failed: "+ex.message;
-  }finally{
-    queueRequest=null;
   }
 }
+function prevQueuePage(){if(queuePage>1){queuePage--;loadQueue()}}
+function nextQueuePage(){if(queueHasMore){queuePage++;loadQueue()}}
 function renderQueueTable(){
   var el=document.getElementById("queue-table");
   if(!el)return;

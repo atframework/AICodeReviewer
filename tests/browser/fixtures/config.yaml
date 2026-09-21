@@ -104,6 +104,10 @@ config_sources:
     namespace: browser-test
 
 storage:
+  retention:
+    events:
+      max_count: 1500
+      max_age_months: 3
   database:
     kind: sqlite
     sqlite:

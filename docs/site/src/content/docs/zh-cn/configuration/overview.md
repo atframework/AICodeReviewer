@@ -238,9 +238,11 @@ channel 保留这些原有用途的授权。GitLab `project_id` 属于目的地�
 `review`、`compression`、`agent`、`outputs.template_engine`、`outputs.templates`、
 `outputs.no_problems`、`outputs.author_resolution`、`outputs.routes`、`prompts.system`、
 `queue.workers`、`queue.rate_limit`、`queue.retry`、`queue.dead_letter`、`workspaces.cache`、
-`workspaces.defaults`，以及 provider、模型组、trigger、channel、workspace、route、
-template、prompt 实体集合。bootstrap
-信任边界——`server`、`admin`、`storage`、`config_sources`、`queue.kind`、
+`workspaces.defaults`、`storage.retention.recent_runs`、`storage.retention.events`、
+`storage.retention.queue`，以及 provider、模型组、trigger、channel、workspace、route、
+template、prompt 实体集合。历史保留配置采用数据库优先，重置回退到 YAML/默认值。bootstrap
+信任边界——`server`、`admin`、`storage.database|cache|object`、
+`storage.retention.deleted_project_grace_days`、`config_sources`、`queue.kind`、
 `queue.sqlite`、`workspaces.root`——永远不可由数据库写入。
 
 v2 路由、Review 策略、agent/search/sandbox、模型目录和 triage 变更对新任务生效。

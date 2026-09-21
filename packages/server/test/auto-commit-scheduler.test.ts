@@ -4,8 +4,10 @@ import { join } from "node:path";
 
 import {
   createMemoryAutoCommitStore,
+  createMemoryConfigStore,
   createSqliteAutoCommitStore,
   computeSourceKey,
+  ExecutionConcurrency,
   resolveAutoCommitPolicy,
   type AutoCommitStore,
   type CommitMetadataPage,
@@ -17,6 +19,8 @@ import {
   AutoCommitScheduler,
   type BatchExecutionContext,
 } from "../src/auto-commit-scheduler.js";
+import { createAdminSession } from "../src/admin-auth.js";
+import { createObservabilityApi } from "../src/observability-api.js";
 
 /**
  * Scheduler flow tests with the memory store, a scripted metadata adapter,
@@ -26,6 +30,74 @@ import {
  */
 
 const T0 = 1_700_000_000_000;
+
+describe.each(["memory", "sqlite"] as const)("nonblocking scheduler [%s]", (backend) => {
+  it("starts a manual GitHub retry while P4 remains running, within shared limits", async () => {
+    await mkdir(join(process.cwd(), "build/tmp"), { recursive: true });
+    const directory = await mkdtemp(join(process.cwd(), "build/tmp/scheduler-concurrency-"));
+    const store = backend === "memory" ? createMemoryAutoCommitStore() : await createSqliteAutoCommitStore({ path: join(directory, "queue.sqlite") });
+    const policy = makePolicy({ delay_seconds: 0 });
+    const adapter = new ScriptedAdapter([{ sha: "A1", parents: ["A0"], authorName: "Developer", authorEmail: "dev@example.com" }]);
+    let rejectGithub = true;
+    const p4 = Promise.withResolvers<void>();
+    const github = Promise.withResolvers<void>();
+    const starts: BatchExecutionContext[] = [];
+    const pool = new ExecutionConcurrency(() => ({ global: 2, workspace: 1 }));
+    const scheduler = new AutoCommitScheduler({ store, getPolicy: () => policy, getAdapter: () => adapter,
+      now: () => T0, globalConcurrency: 2, executionConcurrency: pool,
+      executeBatch: async context => {
+        if (context.batch.workspaceId === "github-atsf4g-co" && rejectGithub) throw Object.assign(new Error("agent exited"), { retryable: false });
+        starts.push(context);
+        await (context.batch.workspaceId === "p4-main" ? p4.promise : github.promise);
+      },
+    });
+    try {
+      await accept(store, policy, "github", "A0", "A1", T0, 0, "github-atsf4g-co");
+      await scheduler.tick();
+      await scheduler.tick();
+      const terminal = (await store.readBatchesByStatus(["skipped"], 10))[0]!;
+      expect(terminal.workspaceId).toBe("github-atsf4g-co");
+      rejectGithub = false;
+      await accept(store, policy, "p4", "A0", "A1", T0, 0, "p4-main");
+      await vi.waitFor(async () => {
+        await scheduler.tick(false);
+        expect(starts.map(context => context.batch.workspaceId)).toEqual(["p4-main"]);
+      });
+      const sessions = createMemoryConfigStore();
+      const adminAuth = { username: "admin", password: "test", sessionTtlSeconds: 3600 };
+      const nowSpy = vi.spyOn(Date, "now").mockReturnValue(T0);
+      try {
+        const session = await createAdminSession({ config: adminAuth, sessions }, "admin", "test");
+        const wake = vi.fn(() => scheduler.kick());
+        const api = createObservabilityApi({ adminAuth, sessionStore: sessions, autoCommitStore: store, onBatchRequeued: wake });
+        const response = await api.request(`/auto-commit/batches/${terminal.batchId}/retry`, {
+          method: "POST", headers: { Authorization: `Bearer ${session!.token}` },
+        });
+        expect(response.status).toBe(200);
+        expect(wake).toHaveBeenCalledTimes(1);
+        const listed = await api.request("/auto-commit/batches?status=running,retry_wait&page=1&limit=1", {
+          headers: { Authorization: `Bearer ${session!.token}` },
+        });
+        expect(await listed.json()).toMatchObject({ page: 1, hasMore: true, items: [expect.objectContaining({ workspaceId: expect.any(String) })] });
+      } finally {
+        nowSpy.mockRestore();
+        await sessions.close();
+      }
+      await scheduler.tick(false);
+      await vi.waitFor(() => expect(starts.map(context => context.batch.workspaceId)).toEqual(["p4-main", "github-atsf4g-co"]));
+      expect((await store.readBatch(terminal.batchId))?.status).toBe("running");
+      expect(pool.available).toBe(false);
+      expect(pool.tryAcquire("third-workspace")).toBeUndefined();
+      github.resolve();
+      await vi.waitFor(async () => expect((await store.readBatch(terminal.batchId))?.status).toBe("completed"));
+      expect((await store.readBatch(starts[0]!.batch.batchId))?.status).toBe("running");
+    } finally {
+      p4.resolve(); github.resolve();
+      await scheduler.stopAndDrain(); store.close?.();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+});
 
 interface ScriptedCommit {
   readonly sha: string;
@@ -715,6 +787,7 @@ describe("AutoCommitScheduler", () => {
       executed,
       now: () => now,
       tuning: {
+        globalConcurrency: 1,
         executeBatch: async (context) => {
           executed.push(context);
           now = Date.UTC(2026, 8, 7, 13, 0, 1);
@@ -723,6 +796,7 @@ describe("AutoCommitScheduler", () => {
     });
     await accept(store, policy, "w1", "A0", "A1", now, 0, "ws1");
     await accept(store, policy, "w2", "A0", "A1", now, 0, "ws2");
+    await scheduler.tick();
     await scheduler.tick();
     expect(executed).toHaveLength(1);
     expect((await store.readNextWake())?.at).toBe(Date.UTC(2026, 8, 14, 12));
@@ -1081,9 +1155,11 @@ describe("AutoCommitScheduler", () => {
 
     // Second failure exhausts the budget -> the single automatic recovery
     // re-arms the batch (attempt reset) instead of persisting a dead row
-    // that jams the stream; the recovery outbox entry is due immediately, so
-    // the same tick re-dispatches it and the recovery attempt succeeds.
+    // that jams the stream. The next scan dispatches the due recovery without
+    // holding the scan lock while the preceding attempt is running.
     now = (batch?.retryNotBefore ?? now) + 1;
+    await scheduler.tick();
+    expect((await store.readBatch(batch!.batchId))?.status).toBe("retry_wait");
     await scheduler.tick();
     batch = await store.readBatch(batch?.batchId ?? "");
     expect(batch?.status).toBe("completed");

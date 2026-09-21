@@ -1,6 +1,8 @@
 import { and, desc, eq, gte, inArray, lt, lte, sql, sum, count, avg } from "drizzle-orm";
 
 import type { SqliteStoreDb, StoreDb } from "./database.js";
+import { storeHistoryRetention } from "./history-retention.js";
+import { historyCutoff } from "@aicr/core";
 import {
   projects,
   reviewRuns,
@@ -102,9 +104,10 @@ export interface OutputEventInsert {
 
 export async function insertReviewRun(store: StoreDb, run: ReviewRunInsert): Promise<void> {
   if (store.kind === "postgres") {
-    return insertReviewRunPg(store, run);
+    await insertReviewRunPg(store, run);
+  } else {
+    insertReviewRunSqlite(store, run);
   }
-  insertReviewRunSqlite(store, run);
 }
 
 /**
@@ -129,7 +132,7 @@ export async function insertReviewRunOnce(store: StoreDb, run: ReviewRunInsert):
   if (store.kind === "postgres") {
     return insertReviewRunOncePg(store, run);
   }
-  return store.sqlite.transaction(() => {
+  const inserted = store.sqlite.transaction(() => {
     const existing = store.db
       .select({ id: reviewRuns.id })
       .from(reviewRuns)
@@ -139,6 +142,7 @@ export async function insertReviewRunOnce(store: StoreDb, run: ReviewRunInsert):
     insertReviewRunSqlite(store, run);
     return true;
   })();
+  return inserted;
 }
 
 function insertReviewRunSqlite(store: SqliteStoreDb, run: ReviewRunInsert): void {
@@ -673,10 +677,13 @@ export interface RecentRunStats {
 export async function getRecentRuns(
   store: StoreDb,
   limit: number,
+  offset = 0,
 ): Promise<RecentRunStats[]> {
   if (store.kind === "postgres") {
-    return getRecentRunsPg(store, limit);
+    return getRecentRunsPg(store, limit, offset);
   }
+  const policy = storeHistoryRetention(store)?.recent_runs;
+  if (policy) limit = Math.max(0, Math.min(limit, policy.max_count - offset));
 
   const runs = store.db
     .select({
@@ -699,8 +706,10 @@ export async function getRecentRuns(
     })
     .from(reviewRuns)
     .innerJoin(projects, eq(reviewRuns.projectId, projects.id))
-    .orderBy(desc(reviewRuns.startedAt))
+    .where(and(eq(reviewRuns.historyPruned, false), policy ? gte(reviewRuns.startedAt, new Date(historyCutoff(policy))) : undefined))
+    .orderBy(desc(reviewRuns.startedAt), desc(reviewRuns.id))
     .limit(limit)
+    .offset(offset)
     .all();
 
   if (runs.length === 0) {

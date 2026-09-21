@@ -468,4 +468,13 @@ export const STORE_SQLITE_MIGRATIONS = [
       ALTER TABLE review_runs ADD COLUMN head_committed_at INTEGER;
     `,
   },
+  {
+    name: "010_admin_history",
+    sql: `
+      ALTER TABLE review_runs ADD COLUMN history_pruned INTEGER NOT NULL DEFAULT 0;
+      CREATE INDEX idx_review_runs_history ON review_runs(started_at DESC, id DESC) WHERE history_pruned = 0;
+      CREATE INDEX idx_webhook_events_history ON webhook_events(received_at DESC, id DESC);
+      CREATE INDEX idx_llm_usage_run ON llm_usage(run_id);
+    `,
+  },
 ];

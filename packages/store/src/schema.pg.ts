@@ -37,6 +37,7 @@ export const projects = pgTable("projects", {
 });
 
 export const reviewRuns = pgTable("review_runs", {
+  historyPruned: boolean("history_pruned").notNull().default(false),
   id: text("id").primaryKey(),
   projectId: integer("project_id")
     .notNull()

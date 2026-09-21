@@ -486,6 +486,12 @@ Narrative: [Storage](/en/configuration/storage/).
 | `storage.object.s3.secret_access_key_env` | string | — | Secret access key env var |
 | `storage.object.s3.force_path_style` | boolean | — | Use path-style addressing (MinIO/RustFS) |
 | `storage.retention.deleted_project_grace_days` | int ≥ 0 | `30` | Soft-deleted project grace period before hard delete |
+| `storage.retention.recent_runs.max_count` | int 1–1000000 | `2000` | Most recent run details to retain; aggregate statistics remain available |
+| `storage.retention.recent_runs.max_age_months` | int 1–1200 | `6` | Maximum age of run details in UTC calendar months, from start time |
+| `storage.retention.events.max_count` | int 1–1000000 | `2000` | Most recent received events to retain |
+| `storage.retention.events.max_age_months` | int 1–1200 | `6` | Maximum age of events in UTC calendar months, from receipt time |
+| `storage.retention.queue.max_count` | int 1–1000000 | `1000` | Most recent terminal automatic-commit batches to retain; active and retrying work is protected |
+| `storage.retention.queue.max_age_months` | int 1–1200 | `6` | Maximum age of terminal batch history in UTC calendar months, from creation time |
 
 ## `compression`
 

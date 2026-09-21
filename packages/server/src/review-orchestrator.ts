@@ -24,6 +24,7 @@ import {
   type ReviewPathPolicy,
   type ReviewConfig,
   type ExecutionConfigVersion,
+  type ExecutionConcurrency,
   type ReviewVcsKind,
   type ReviewProvider,
   type ScrubMatch,
@@ -138,6 +139,7 @@ export interface ReviewOrchestrationContext {
 }
 
 export interface ServerReviewOrchestrationOptions {
+  readonly executionConcurrency?: ExecutionConcurrency;
   /** Hold the task's generation lease across options resolution and execution. */
   readonly executionScope?: (<T>(context: ReviewOrchestrationContext, run: () => Promise<T>) => Promise<T>) | undefined;
   readonly baseSystemPrompt: string;

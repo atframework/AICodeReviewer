@@ -634,7 +634,14 @@ describePg("pg store webhook events", () => {
     }
     expect(await getRecentWebhookEvents(store, WEBHOOK_EVENTS_RETENTION_LIMIT + 50))
       .toHaveLength(WEBHOOK_EVENTS_RETENTION_LIMIT);
-    expect(await pruneWebhookEvents(store, 3)).toBe(WEBHOOK_EVENTS_RETENTION_LIMIT - 3);
+    let deleted = 0;
+    for (let i = 0; i < Math.ceil(WEBHOOK_EVENTS_RETENTION_LIMIT / 500); i++) {
+      const chunk = await pruneWebhookEvents(store, 3);
+      expect(chunk).toBeLessThanOrEqual(500);
+      deleted += chunk;
+    }
+    expect(deleted).toBe(WEBHOOK_EVENTS_RETENTION_LIMIT - 3);
+    expect(await pruneWebhookEvents(store, 3)).toBe(0);
     expect(await getRecentWebhookEvents(store, 10)).toHaveLength(3);
   });
 });

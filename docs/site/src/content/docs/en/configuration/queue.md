@@ -157,12 +157,31 @@ uses bounded retries and then fails the member; it cannot silently allow it.
 
 Receipts, batch membership, and execution checkpoints use the `queue.kind`
 backend. Memory state is lost on restart. A completed checkpoint recovers local
-result accounting without rerunning analysis or publication. Interrupted or
-partially published work requires operator inspection (`execution_outcome_unknown`);
-its dead batch holds the stream. Remote publication has no automatic per-target
-recovery. Each scheduler executes one batch at a time; across consumers the global
-cap uses `queue.workers.concurrency` (1 when the workers block is absent), with
-one active batch per workspace.
+result accounting without rerunning analysis or publication. Other interrupted
+work can replay analysis and publication. A terminal failure gets one automatic
+recovery; exhausting that recovery skips the batch and releases the stream.
+Admin Queue offers Retry for terminal batches, using current configuration.
+Replay can duplicate remote publication; per-target recovery is not implemented.
+
+Automatic batches, ordinary queue workers, PR/MR, issue, comment and manual
+analysis share one execution budget per server process:
+`queue.workers.concurrency` defaults to 4, and
+`queue.workers.per_workspace_concurrency` defaults to 1. A running P4 workspace
+does not prevent a different GitHub workspace from using a free slot. Claims
+skip workspaces at their limit before applying the candidate bound. Scheduler
+scans do not wait for analysis to finish; metadata preparation is bounded
+separately per workspace. A single stream still executes its sealed batches in
+order, even when the workspace limit is greater than 1.
+
+Retries acquire a slot for each attempt; backoff and execution-window waits hold
+no analysis slot. Each actual start rechecks its window. Lowering concurrency
+does not cancel admitted work; it delays new starts until usage falls below the
+new limit. Raising it allows waiting work to start. Batch-store leases also
+enforce batch limits across consumers sharing that store; the shared budget for
+all entry points is process-local, not a cluster-wide quota.
+
+Recent Runs, Events and terminal Queue history use the configurable
+[storage retention policy](/en/configuration/storage/#storageretention).
 
 ## `queue.kind`
 
@@ -188,8 +207,8 @@ Redis queue connection fields are accepted as passthrough keys:
 
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
-| `concurrency` | int > 0 | `4` | Global worker concurrency (jobs running at once across the process). |
-| `per_workspace_concurrency` | int > 0 | `1` | Max jobs running concurrently per workspace. Use `1` to serialize per repo. |
+| `concurrency` | int > 0 | `4` | Total simultaneous analyses across scheduler entry points in one process. |
+| `per_workspace_concurrency` | int > 0 | `1` | Simultaneous analyses per workspace across those entry points. |
 | `lock_ttl_seconds` | int > 0 | `1800` | Reserved; lock expiry is configured by the queue backend. |
 
 ## `queue.sqlite` — durable queue options

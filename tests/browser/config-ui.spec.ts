@@ -105,6 +105,34 @@ test("Overview is the landing page after login and reload, and Live remains avai
   expect(liveRequests).toHaveLength(0);
 });
 
+test("Runs, Events and Queue request server pages and stop at the last page", async ({ page }) => {
+  for (const [tab, endpoint] of [["runs", "runs"], ["events", "events"], ["queue", "auto-commit/batches"]]) {
+    await page.route(`**/api/admin/${endpoint}?*`, async route => {
+      const params = new URL(route.request().url()).searchParams;
+      expect(params.get("limit")).toBe("20");
+      const current = Number(params.get("page"));
+      const items = Array.from({ length: current === 1 ? 20 : 1 }, (_, index) => ({
+        id: `${tab}-${current}-${index}`, batchId: `${tab}-${current}-${index}`, workspaceId: `workspace-page-${current}`,
+        triggerName: "test", status: "completed", decision: "queued", eventName: "push", members: [],
+        createdAt: Date.now(), receivedAt: new Date().toISOString(), startedAt: new Date().toISOString(),
+      }));
+      await route.fulfill({ json: { items, page: current, hasMore: current === 1 } });
+    });
+  }
+  await login(page);
+  for (const tab of ["runs", "events", "queue"]) {
+    await page.click(`.tab[data-tab='${tab}']`);
+    await expect(page.locator(`#${tab}-table tr`)).toHaveCount(20);
+    await expect(page.locator(`#${tab}-prev`)).toBeDisabled();
+    await page.click(`#${tab}-next`);
+    await expect(page.locator(`#${tab}-table tr`)).toHaveCount(1);
+    await expect(page.locator(`#${tab}-table`)).toContainText("workspace-page-2");
+    await expect(page.locator(`#${tab}-next`)).toBeDisabled();
+    await page.click(`#${tab}-prev`);
+    await expect(page.locator(`#${tab}-table tr`)).toHaveCount(20);
+  }
+});
+
 test("P6 regression: config tab can be reopened", async ({ page }) => {
   const errors: string[] = [];
   page.on("pageerror", error => errors.push(error.message));
@@ -1015,6 +1043,56 @@ test.describe.serial("config management UI (P6 browser gate)", () => {
     // Nothing left to reset: the button warns instead of publishing.
     await page.locator("#config-main").getByRole("button", { name: "Reset database overrides", exact: true }).click();
     await expect(page.locator("#config-status")).toContainText("No database overrides to reset");
+  });
+
+  test("history retention overrides YAML and resets to YAML or defaults", async ({ page, request }) => {
+    const token = await apiLogin(request);
+    const initial = await apiView(request, token);
+    const sections = ["recent_runs", "events", "queue"];
+    const response = await request.post("/api/admin/config/changesets", {
+      headers: { Authorization: `Bearer ${token}` },
+      data: { baseRevision: initial.head?.activeRevision ?? null, fileDigest: initial.fileDigest,
+        operationId: "history-retention-browser", operations: sections.flatMap(section => [
+          { op: "set", path: ["storage", "retention", section, "max_count"], value: 1200 },
+          { op: "set", path: ["storage", "retention", section, "max_age_months"], value: 9 },
+        ]) },
+    });
+    expect(response.status()).toBe(200);
+    await login(page);
+    await openConfigTab(page, "Advanced");
+    for (const section of sections) {
+      for (const [field, value] of [["max_count", "1200"], ["max_age_months", "9"]]) {
+        const row = await ensureFieldVisible(page, `storage:retention.${section}.${field}`);
+        await expect(row.locator("input")).toBeEnabled();
+        await expect(row.locator("input")).toHaveValue(value!);
+      }
+    }
+    await expect(page.locator('#config-main [data-field-id="storage:database.kind"] select')).toBeDisabled();
+    const editableCount = await ensureFieldVisible(page, "storage:retention.events.max_count");
+    await editableCount.locator("input").fill("1300");
+    await page.locator("#config-main").getByRole("button", { name: "Save page changes", exact: true }).click();
+    await expect(page.locator("#config-status")).toContainText("Saved as revision");
+    await page.reload();
+    await openConfigTab(page, "Advanced");
+    await expect((await ensureFieldVisible(page, "storage:retention.events.max_count")).locator("input")).toHaveValue("1300");
+    await page.locator("#config-main").getByRole("button", { name: "Reset database overrides", exact: true }).click();
+    await page.locator(".cfg-dialog").getByRole("button", { name: "Reset", exact: true }).click();
+    await expect(page.locator("#config-status")).toContainText("Saved as revision");
+    for (const [section, count, months] of [["recent_runs", "2000", "6"], ["events", "1500", "3"], ["queue", "1000", "6"]]) {
+      const countRow = await ensureFieldVisible(page, `storage:retention.${section}.max_count`);
+      if (section !== "events") {
+        // Optional parents remain absent after reset, preserving old snapshot
+        // canonicalization. The editor offers the consumer default on Set value.
+        await expect(countRow).toContainText("Not set");
+        await countRow.getByRole("button", { name: "Set value", exact: true }).click();
+      }
+      await expect(countRow.locator("input")).toHaveValue(count!);
+      const ageRow = await ensureFieldVisible(page, `storage:retention.${section}.max_age_months`);
+      if (section !== "events") await ageRow.getByRole("button", { name: "Set value", exact: true }).click();
+      await expect(ageRow.locator("input")).toHaveValue(months!);
+    }
+    // The default previews above were never saved as database overrides.
+    await page.reload();
   });
 
   test("templates and prompts pages manage documents and copy built-in assets", async ({ page, request }) => {

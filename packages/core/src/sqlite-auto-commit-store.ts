@@ -672,6 +672,8 @@ export async function createSqliteAutoCommitStore(
       db.exec(`
     CREATE INDEX IF NOT EXISTS idx_auto_commit_batches_active ON auto_commit_batches(status, lease_expiry, workspace_id);
     CREATE INDEX IF NOT EXISTS idx_auto_commit_batches_workspace_active ON auto_commit_batches(workspace_id, status, lease_expiry);
+    CREATE INDEX IF NOT EXISTS idx_auto_commit_batches_history ON auto_commit_batches(status, created_at DESC, batch_id DESC);
+    CREATE INDEX IF NOT EXISTS idx_auto_commit_batches_history_time ON auto_commit_batches(created_at DESC, batch_id DESC);
     CREATE INDEX IF NOT EXISTS idx_auto_commit_streams_due ON auto_commit_stream_heads(workspace_id, not_before);
     CREATE INDEX IF NOT EXISTS idx_auto_commit_members_elig ON auto_commit_members(stream_id, status, eligible_at);
   `);
@@ -1365,16 +1367,18 @@ export async function createSqliteAutoCommitStore(
       now: number,
       ownerId: string,
       limit: number,
+      excludedWorkspaceIds: readonly string[],
     ): readonly ClaimedDispatch[] => {
       const due = db
         .prepare(
           `SELECT * FROM auto_commit_outbox
             WHERE status = 'pending' AND next_attempt_at <= ?
               AND (claim_token IS NULL OR claim_expiry IS NULL OR claim_expiry <= ?)
+              ${excludedWorkspaceIds.length ? `AND batch_id IN (SELECT batch_id FROM auto_commit_batches WHERE workspace_id NOT IN (${excludedWorkspaceIds.map(() => "?").join(",")}))` : ""}
             ORDER BY next_attempt_at ASC
             LIMIT ?`,
         )
-        .all(now, now, limit) as OutboxRow[];
+        .all(now, now, ...excludedWorkspaceIds, limit) as OutboxRow[];
       const stmtClaim = db.prepare(
         `UPDATE auto_commit_outbox SET claim_token = ?, claim_expiry = ? WHERE batch_id = ?`,
       );
@@ -2215,11 +2219,13 @@ export async function createSqliteAutoCommitStore(
       now: number,
       ownerId: string,
       limit: number,
+      excludedWorkspaceIds: readonly string[] = [],
     ): Promise<readonly ClaimedDispatch[]> {
       return txClaimDispatch.immediate(
         now,
         ownerId,
         limit,
+        excludedWorkspaceIds,
       ) as readonly ClaimedDispatch[];
     },
 
@@ -2370,16 +2376,39 @@ export async function createSqliteAutoCommitStore(
     async readBatchesByStatus(
       statuses: readonly CommitBatchStatus[],
       limit: number,
+      offset = 0,
+      history?: { readonly maxCount: number; readonly before: number },
     ): Promise<readonly CommitBatchRecord[]> {
       if (statuses.length === 0) return [];
       const placeholders = statuses.map(() => "?").join(", ");
       const rows = db
         .prepare(
           `SELECT * FROM auto_commit_batches WHERE status IN (${placeholders})
-            ORDER BY created_at DESC LIMIT ?`,
+            ${history ? `AND (status NOT IN ('completed', 'skipped', 'dead') OR EXISTS (
+              SELECT 1 FROM auto_commit_stream_heads WHERE stream_id = auto_commit_batches.stream_id AND active_batch_id = auto_commit_batches.batch_id)
+              OR batch_id IN (SELECT batch_id FROM auto_commit_batches WHERE status IN ('completed', 'skipped', 'dead')
+                AND created_at >= ? ORDER BY created_at DESC, batch_id DESC LIMIT ?))` : ""}
+            ORDER BY created_at DESC, batch_id DESC LIMIT ? OFFSET ?`,
         )
-        .all(...statuses, limit) as BatchRow[];
+        .all(...statuses, ...(history ? [history.before, history.maxCount] : []), limit, offset) as BatchRow[];
       return rows.map(rowToBatch);
+    },
+
+    async pruneBatchHistory(maxCount: number, before: number, limit = 500): Promise<number> {
+      return db.transaction(() => {
+        const terminal = `status IN ('completed', 'skipped', 'dead') AND NOT EXISTS (
+          SELECT 1 FROM auto_commit_stream_heads WHERE stream_id = auto_commit_batches.stream_id AND active_batch_id = auto_commit_batches.batch_id)`;
+        const rows = db.prepare(`SELECT batch_id FROM auto_commit_batches WHERE ${terminal}
+          AND (created_at < ? OR batch_id NOT IN (SELECT batch_id FROM auto_commit_batches
+            WHERE status IN ('completed', 'skipped', 'dead') ORDER BY created_at DESC, batch_id DESC LIMIT ?))
+          ORDER BY created_at, batch_id LIMIT ?`)
+          .all(before, maxCount, limit) as { batch_id: string }[];
+        for (const row of rows) {
+          db.prepare("DELETE FROM auto_commit_outbox WHERE batch_id = ?").run(row.batch_id);
+          db.prepare("DELETE FROM auto_commit_batches WHERE batch_id = ?").run(row.batch_id);
+        }
+        return rows.length;
+      }).immediate();
     },
 
     async timeoutStaleQueue(

@@ -2,6 +2,7 @@ import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { createInMemoryQueue, type ReviewQueue } from "../src/queue.js";
 import { createQueueWorker, type QueueJobHandler, type QueueWorker } from "../src/queue-worker.js";
 import { createMultiProviderRateLimiter } from "../src/rate-limiter.js";
+import { ExecutionConcurrency } from "../src/execution-concurrency.js";
 
 describe("createQueueWorker", () => {
   let queue: ReviewQueue;
@@ -197,6 +198,34 @@ describe("createQueueWorker", () => {
     await stopPromise;
 
     expect(completed).toBe(true);
+  });
+
+  it("shares permits with other schedulers and dequeues past their busy workspace", async () => {
+    const pool = new ExecutionConcurrency(() => ({ global: 2, workspace: 1 }));
+    const releaseP4 = pool.tryAcquire("p4-main")!;
+    const releaseGithub = Promise.withResolvers<void>();
+    const started: string[] = [];
+    const worker = createTestWorker(async job => {
+      started.push(job.workspaceId);
+      if (job.workspaceId === "github-atsf4g-co") await releaseGithub.promise;
+    }, { executionConcurrency: pool, concurrency: 4 });
+    for (const workspaceId of ["p4-main", "github-atsf4g-co", "svn"]) await queue.enqueue({}, { workspaceId, triggerName: "t" });
+    try {
+      worker.start();
+      await vi.advanceTimersByTimeAsync(100);
+      expect(started).toEqual(["github-atsf4g-co"]);
+      expect((await queue.getStats()).queued).toBe(2);
+      releaseGithub.resolve();
+      await vi.advanceTimersByTimeAsync(100);
+      expect(started).toEqual(["github-atsf4g-co", "svn"]);
+      releaseP4();
+      await vi.advanceTimersByTimeAsync(100);
+      expect(started).toEqual(["github-atsf4g-co", "svn", "p4-main"]);
+    } finally {
+      releaseP4(); releaseGithub.resolve();
+      await vi.advanceTimersByTimeAsync(100);
+      await worker.stop();
+    }
   });
 
   it("does not finish drain while an asynchronous claim is still in flight", async () => {

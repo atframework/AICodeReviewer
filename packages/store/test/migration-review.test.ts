@@ -5,7 +5,7 @@ import Database from "better-sqlite3";
 import pg from "pg";
 import { afterAll, describe, expect, it } from "vitest";
 import { createPgConfigStore, createSqliteConfigStore } from "@aicr/core";
-import { closeStoreDb, createStoreDb } from "../src/database.js";
+import { closeStoreDb, createStoreDb, STORE_SQLITE_MIGRATIONS } from "../src/database.js";
 
 const root = resolve("build/tmp/p2p3-migration-tests");
 mkdirSync(root, { recursive: true });
@@ -42,7 +42,8 @@ describe("verify startup is read-only before accepting the database", () => {
     const path = join(directory, "ready.sqlite");
     await closeStoreDb(createStoreDb(path));
     const store = createStoreDb({ kind: "sqlite", path, migrationMode: "verify" });
-    expect(store.sqlite.prepare("SELECT COUNT(*) AS n FROM _migrations").get()).toEqual({ n: 9 });
+    expect(store.sqlite.prepare("SELECT name FROM _migrations ORDER BY name").all())
+      .toEqual(STORE_SQLITE_MIGRATIONS.map(step => ({ name: step.name })));
     await closeStoreDb(store);
   });
 });

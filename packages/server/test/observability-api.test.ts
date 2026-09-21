@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdirSync, rmSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -9,7 +9,13 @@ import type { ObservabilityApiOptions } from "../src/observability-api.js";
 import { createObservabilityApi } from "../src/observability-api.js";
 import { createLiveRunRegistry } from "../src/live-runs.js";
 import type { AdminAuthConfig } from "../src/admin-auth.js";
-import { createMemoryConfigStore } from "@aicr/core";
+import {
+  computeSourceKey,
+  computeStreamId,
+  createMemoryAutoCommitStore,
+  createMemoryConfigStore,
+  resolveHistoryRetention,
+} from "@aicr/core";
 
 import { createAdminSession, type AdminAuthContext } from "../src/admin-auth.js";
 
@@ -63,6 +69,102 @@ async function fetchApi(path: string, init?: RequestInit): Promise<Response> {
 }
 
 describe("observability API", () => {
+  it("returns bounded run/event pages with a lookahead and stable timestamp ties", async () => {
+    const now = new Date();
+    for (let i = 0; i < 25; i++) {
+      await insertReviewRun(store, { id: `page-${String(i).padStart(2, "0")}`, eventId: "evt", workspaceId: "ws", triggerName: "github",
+        provider: "test", providerModel: "test", status: "succeeded", startedAt: now });
+      await insertWebhookEvent(store, { decision: "queued", reason: `event-${i}`, receivedAt: now });
+    }
+    for (const endpoint of ["runs", "events"]) {
+      const first = await (await fetchApi(`/${endpoint}?page=1&limit=20`)).json();
+      const second = await (await fetchApi(`/${endpoint}?page=2&limit=20`)).json();
+      expect(first.items).toHaveLength(20);
+      expect(first.hasMore).toBe(true);
+      expect(second.items).toHaveLength(5);
+      expect(second.hasMore).toBe(false);
+      expect(new Set([...first.items, ...second.items].map((item: { id: string | number }) => item.id)).size).toBe(25);
+      expect(await (await fetchApi(`/${endpoint}?page=3&limit=20`)).json()).toMatchObject({ items: [], hasMore: false });
+      expect((await fetchApi(`/${endpoint}?page=-1`)).status).toBe(400);
+      expect((await fetchApi(`/${endpoint}?page=1.5`)).status).toBe(400);
+      expect(Array.isArray(await (await fetchApi(`/${endpoint}?limit=5`)).json())).toBe(true);
+    }
+  });
+
+  it("runs history maintenance before reads without failing them, and bounds Queue pages by the retention policy", async () => {
+    const maintenance = vi.fn(() => Promise.resolve());
+    const batches = createMemoryAutoCommitStore();
+    const now = Date.now();
+    const seal = async (batchId: string, createdAt: number, terminal: "completed" | "running") => {
+      const scopeRef = `refs/heads/${batchId}`;
+      const sourceNamespace = "https://git.example.com/org/repo";
+      const snapshot = {
+        v: 1 as const, vcs: "git" as const, sourceNamespace, revision: "A1",
+        fields: {
+          authorName: { status: "known" as const, value: "dev" },
+          authorEmail: { status: "known" as const, value: "dev@example.com" },
+        },
+        command: "git log", observedAt: createdAt, rulesVersion: "rules-v1",
+        sourceKey: computeSourceKey(sourceNamespace, { vcs: "git", authorName: "dev", authorEmail: "dev@example.com" }),
+        status: "known" as const,
+      };
+      const accepted = await batches.acceptReceipt({
+        deliveryKey: `delivery-${batchId}`, workspaceId: "ws", triggerName: "gitea", provider: "gitea", vcs: "git",
+        sourceNamespace, scopeRef, historyGeneration: 0,
+        coverage: { kind: "range", base: "A0", head: "A1" }, envelope: { ref: scopeRef },
+        delaySeconds: 0, policyVersion: "pol-1", now: createdAt,
+      });
+      const streamId = computeStreamId(accepted.receipt);
+      await batches.applyMetadataPage({ streamId, receiptId: accepted.receipt.receiptId,
+        members: [{ revision: "A1", orderKey: "000000000001", parents: [], sourceSnapshot: snapshot }], now: createdAt });
+      const member = (await batches.readPendingMembers(streamId, null, 1)).items[0]!;
+      await batches.applyExclusionVerdicts({ streamId,
+        verdicts: [{ memberId: member.memberId, state: "allowed", policyVersion: "pol-1" }], now: createdAt });
+      const reservation = await batches.acquireStreamReservation(streamId, "test", 60_000, createdAt);
+      expect(await batches.sealBatch({ streamId, reservationToken: reservation!.token,
+        expectedStreamVersion: reservation!.version, batchId, runId: `run-${batchId}`,
+        members: [{ memberId: member.memberId, revision: "A1", sourceKey: snapshot.sourceKey }],
+        base: "A0", head: "A1", sourceKey: snapshot.sourceKey,
+        exclusionPolicyVersion: "rules-v1", configPolicyVersion: "pol-1", maxAttempts: 2, now: createdAt,
+      })).toEqual({ kind: "sealed" });
+      const claimed = await batches.claimDispatch(createdAt, "test", 1);
+      await batches.confirmDispatch(batchId, claimed[0]!.claimToken, createdAt);
+      const token = await batches.startBatchExecution(batchId, "test", 60_000, createdAt, { global: 10, workspace: 1 });
+      if (terminal === "completed") await batches.completeBatch(batchId, token!, { outcome: "completed" }, createdAt);
+    };
+    await seal("queue-aged-out", now - 400 * 86_400_000, "completed");
+    await seal("queue-overflow", now - 1000, "completed");
+    await seal("queue-kept", now, "completed");
+    await seal("queue-active", now, "running");
+
+    const historyApp = createObservabilityApi({
+      store, adminAuth: ADMIN_CONFIG, sessionStore, autoCommitStore: batches,
+      historyRetention: () => resolveHistoryRetention({ queue: { max_count: 1, max_age_months: 6 } }),
+      beforeHistoryRead: maintenance,
+    });
+    const fetchHistory = (path: string) => historyApp.fetch(new Request(`http://localhost${path}`, {
+      headers: { Authorization: `Bearer ${authToken}` },
+    }));
+
+    const completed = await (await fetchHistory("/auto-commit/batches?status=completed&limit=10&page=1")).json();
+    // Only the newest terminal batch inside the age window survives the policy;
+    // the aged-out and over-count rows are invisible without any deletion.
+    expect(completed.items.map((item: { batchId: string }) => item.batchId)).toEqual(["queue-kept"]);
+    expect(completed.hasMore).toBe(false);
+    const running = await (await fetchHistory("/auto-commit/batches?status=running&limit=10&page=1")).json();
+    expect(running.items.map((item: { batchId: string }) => item.batchId)).toEqual(["queue-active"]);
+    expect(maintenance).toHaveBeenCalledTimes(2);
+
+    // The same hook guards Recent Runs and Events; a sweep failure degrades to
+    // a warn log instead of failing the bounded read.
+    maintenance.mockRejectedValue(new Error("sweep backend unavailable"));
+    for (const path of ["/runs?page=1&limit=5", "/events?page=1&limit=5", "/auto-commit/batches?status=completed&limit=10&page=1"]) {
+      const response = await fetchHistory(path);
+      expect(response.status).toBe(200);
+    }
+    expect(maintenance).toHaveBeenCalledTimes(5);
+  });
+
   it("POST /login returns token on valid credentials", async () => {
     const res = await fetchApi("/login", {
       method: "POST",

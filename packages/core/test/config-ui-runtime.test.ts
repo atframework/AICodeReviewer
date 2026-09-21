@@ -1745,6 +1745,21 @@ describe("encodeChanges entity scope", () => {
 // ---------------------------------------------------------------------------
 
 describe("encodeChanges globals scope", () => {
+  it("encodes writable structured map rows without leaking editor row identities", () => {
+    const page = makePage({ id: "llm", globals: true, fields: [makeField({
+      id: "llm:per_provider_overrides", path: ["llm", "per_provider_overrides"], control: "map", valueKind: "record",
+      mapValueKind: "record", itemFields: [makeField({ id: "provider:timeout_ms", path: ["timeout_ms"], control: "number", valueKind: "number" })],
+    })] });
+    const base = makeInput({ fields: [fieldEntry("llm.per_provider_overrides", "database", { local: { timeout_ms: 100 } })] });
+    const draft = decodeDraft(page, base);
+    expect(encodeChanges(page, draft, base)).toEqual([]);
+    const changed = withField(draft, draftField({ id: "llm:per_provider_overrides",
+      value: [{ _rowId: "editor-only", key: "local", value: { timeout_ms: 200 } }] }));
+    expect(encodeChanges(page, changed, base)).toEqual([
+      { op: "set", path: ["llm", "per_provider_overrides"], value: { local: { timeout_ms: 200 } } },
+    ]);
+  });
+
   const reviewBase = makeInput({
     fields: [
       fieldEntry("review.max_files", "database", 80, [{ source: "file", value: 50 }]),

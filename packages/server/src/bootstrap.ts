@@ -6,6 +6,8 @@ import {
   isPlainObject,
   createMultiProviderRateLimiter,
   createQueueFromConfig,
+  ExecutionConcurrency,
+  resolveHistoryRetention,
   loadSystemPromptTemplate,
   markdownDocumentBody,
   resolveWorkspaceConfig,
@@ -136,6 +138,7 @@ import {
   type RedisModelCatalogBackendOptions,
 } from "./model-catalog-service.js";
 import type { ObservabilityApiOptions } from "./observability-api.js";
+import { createHistoryMaintenance } from "./history-maintenance.js";
 import { createLiveRunRegistry, type LiveRunRegistry } from "./live-runs.js";
 import type {
   ReviewDispatchResult,
@@ -3221,7 +3224,12 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
     };
   };
 
+  const executionConcurrency = new ExecutionConcurrency(() => runtimeConfig.withoutGeneration(() => ({
+    global: runtimeConfig.current().config.queue.workers?.concurrency ?? 4,
+    workspace: runtimeConfig.current().config.queue.workers?.per_workspace_concurrency ?? 1,
+  })));
   const orchestrationOptions: ServerReviewOrchestrationOptions = {
+    executionConcurrency,
     baseSystemPrompt,
     sourceRootResolver,
     runtimeDirsResolver,
@@ -3368,6 +3376,7 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
       await runtimeConfig.withGeneration(generation, () => jobHandler(job));
     }, {
       queue,
+      executionConcurrency,
       beforePoll: () => runtimeConfig.admission(),
       concurrency: () => runtimeConfig.current().config.queue.workers?.concurrency ?? 4,
       perWorkspaceConcurrency: () => runtimeConfig.current().config.queue.workers?.per_workspace_concurrency ?? 1,
@@ -3385,6 +3394,16 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
     ...(store ? { reviewStore: store } : {}),
   });
   opened.closeAutoCommit = autoCommitPipeline.close;
+  const historyMaintenance = createHistoryMaintenance({ store, batches: autoCommitPipeline.store,
+    policy: () => runtimeConfig.withoutGeneration(() => resolveHistoryRetention(runtimeConfig.current().config.storage.retention)),
+  });
+  opened.closeAutoCommit = async () => { await historyMaintenance.stop(); await autoCommitPipeline.close(); };
+  await historyMaintenance.sweep();
+  if (observability) observability = { ...observability,
+    onBatchRequeued: () => runtimeConfig.withoutGeneration(() => autoCommitPipeline.scheduler.kick()),
+    beforeHistoryRead: historyMaintenance.sweep,
+    historyRetention: () => runtimeConfig.withoutGeneration(() => resolveHistoryRetention(runtimeConfig.current().config.storage.retention)),
+  };
   let sweepRunning: Promise<void> | undefined;
   const sweepTimer = runtimeConfigStore ? setInterval(() => {
     if (sweepRunning) return;
@@ -3471,13 +3490,18 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
   const triggerRetry = resolveTriggerRetryConfig(config);
   const fileTriage = resolveIssueTriageOptions(config, triageModelOptionsResolver().llm, triageModelOptionsResolver().model);
 
+  const concurrencyTimer = setInterval(() => executionConcurrency.refresh(), 1000);
+  concurrencyTimer.unref();
+
   let draining: Promise<void> | undefined;
   const beginDrain = (): Promise<void> => {
     if (draining) return draining;
     runtimeConfig.stopAdmission();
     deferralManager.stop();
     if (sweepTimer) clearInterval(sweepTimer);
-    draining = Promise.all([sweepRunning, worker?.stop(), autoCommitPipeline.scheduler.stopAndDrain()]).then(() => {});
+    clearInterval(concurrencyTimer);
+    clearInterval(queuedTimeoutTimer);
+    draining = Promise.all([sweepRunning, historyMaintenance.stop(), worker?.stop(), autoCommitPipeline.scheduler.stopAndDrain()]).then(() => {});
     return draining;
   };
 
@@ -3832,6 +3856,7 @@ async function createAutoCommitPipeline(deps: {
     getAdapter,
     routingResolver,
     executeBatch,
+    executionConcurrency: orchestrationOptions.executionConcurrency,
     // Terminal rejections (e.g. review.max_patch_bytes exceeded after the
     // automatic recovery) persist a failed run row so Recent Runs shows the
     // reason; the admin retry endpoint deletes the marker on re-arm.
@@ -3846,8 +3871,8 @@ async function createAutoCommitPipeline(deps: {
     },
     // H17: concurrency re-reads at the claim boundary from the current
     // generation; lowering the limit never cancels running batches.
-    globalConcurrency: () => runtimeConfig.current().config.queue.workers?.concurrency ?? 1,
-    perWorkspaceConcurrency: () => runtimeConfig.current().config.queue.workers?.per_workspace_concurrency ?? 1,
+    globalConcurrency: () => runtimeConfig.withoutGeneration(() => runtimeConfig.current().config.queue.workers?.concurrency ?? 4),
+    perWorkspaceConcurrency: () => runtimeConfig.withoutGeneration(() => runtimeConfig.current().config.queue.workers?.per_workspace_concurrency ?? 1),
   });
   schedulerHolder.scheduler = scheduler;
   scheduler.start();

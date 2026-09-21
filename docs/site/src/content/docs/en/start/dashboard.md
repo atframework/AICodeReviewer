@@ -97,12 +97,12 @@ After logging in, the dashboard lands on the **Overview** tab and has seven tabs
 - **Providers** — per-provider+model aggregates: request count, input/output
   tokens, cache-hit tokens and hit rate, cost, retry/fallback/failure counts,
   average latency.
-- **Runs** — the most recent 100 runs, paged 20 at a time with Prev/Next. Each row
+- **Runs** — retained run details, fetched 20 at a time with Prev/Next. Each row
   shows real token usage when captured: total tokens with the cache-hit and
   non-cached input split and the hit rate; `—` when the run reported no
   parseable usage. The Revision column shows the branch, the short revision,
   and the commit time when the VCS adapter could resolve it.
-- **Events** — the most recent 100 received webhook/trigger events, paged 20
+- **Events** — retained received webhook/trigger events, fetched 20
   at a time. Each row shows the receipt-time decision: `executed` (started
   immediately), `queued`/`duplicate` (auto-commit receipt), `deferred`
   (execution window, with the scheduled resume instant), `deduplicated`
@@ -134,10 +134,13 @@ reports usage with a non-zero input.
 
 The Projects and Providers tabs each call their own time-windowed API
 (`GET /api/admin/stats/projects?since=` and `.../providers?since=`). The Runs
-tab fetches the latest 100 runs from `GET /api/admin/runs?limit=100` and pages
-them in the browser; the Events tab does the same against
-`GET /api/admin/events?limit=100`, whose store keeps only the newest 100
-entries. The Live tab polls `GET /api/admin/runs/live`, which reads an
+tab uses `GET /api/admin/runs?limit=20&page=1`; Events and Queue use the same
+server-side paging contract. Recent Runs and Events retain up to 2000 entries
+by default, and Queue retains 1000 terminal batches, each for at most six calendar
+months. Configure count and age independently under
+[`storage.retention`](/en/configuration/storage/#storageretention). Cleanup keeps
+aggregate statistics and protects active/retrying Queue work.
+The Live tab polls `GET /api/admin/runs/live`, which reads an
 in-memory registry of the current process. Completed runs are available in
 Recent Runs, subject to its retention limit. The dashboard queries real-time aggregation
 as the source of truth.
@@ -232,9 +235,9 @@ All endpoints except `/login` require `Authorization: Bearer <token>`.
 | `GET /api/admin/stats` | Overview + today/this-week/this-month windows, projects, providers, recent runs |
 | `GET /api/admin/stats/projects?since=` | Per-project aggregates |
 | `GET /api/admin/stats/providers?since=` | Per-provider+model aggregates |
-| `GET /api/admin/runs?limit=` | Recent run list (1..100), each with token usage incl. the cache hit split and the VCS stamp |
+| `GET /api/admin/runs?limit=&page=` | Retained runs (limit 1..100, page from 1), with token usage, cache split and VCS stamp; page requests return `{items,page,hasMore}`, otherwise an array |
 | `GET /api/admin/runs/live` | Currently running analyses from the in-process registry: phase, elapsed start time, cumulative tokens/requests/cost |
-| `GET /api/admin/events?limit=` | Recent webhook/trigger event log (1..100), each with the receipt-time decision and reason |
+| `GET /api/admin/events?limit=&page=` | Received events with the same paging contract, receipt-time decision and reason |
 | `GET /api/admin/config` | Configuration view with provenance and paginated entities |
 | `GET /api/admin/config/schema`, `/options/:source` | Form specification and dynamic options |
 | `POST /api/admin/config/changesets` | Atomic publication with `baseRevision`, `fileDigest`, `operationId`, and `operations` |

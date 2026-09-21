@@ -137,10 +137,24 @@ SVN `svn:author` 区分。同来源连续且到期的提交可跨通知合并，
 排除判定所需的来源证据缺失时，有界重试后将成员标记为失败，不会默认放行。
 
 接收回执、批次成员关系和执行检查点使用 `queue.kind` 对应的后端，memory 重启会丢失。
-完成检查点仅恢复本地结果记账，不重跑分析或发布。执行中断或部分发布的任务需要人工
-核查（`execution_outcome_unknown`），其 dead 批次会占住 stream。尚无自动逐目标发布恢复。
-每个调度器逐批执行；多消费者间的全局上限取 `queue.workers.concurrency`（省略 workers
-块时为 1），每个 workspace 同时最多执行一批。
+完成检查点仅恢复本地结果记账，不重跑分析或发布。其他执行中断允许重放分析和发布。
+终态失败会获得一次自动恢复，耗尽恢复机会后跳过批次并释放 stream。Admin Queue 可对
+终态批次执行 Retry，按当前配置重试。重放可能重复远端发布；尚无逐目标发布恢复。
+
+自动批次、普通队列 worker、PR/MR、issue、comment 和手动分析在同一服务进程中共享
+执行名额：`queue.workers.concurrency` 默认 4，
+`queue.workers.per_workspace_concurrency` 默认 1。P4 workspace 正在运行时，不会阻止
+另一个 GitHub workspace 使用空闲名额。claim 在截取候选数量前跳过已达上限的 workspace。
+调度扫描不等待分析结束；元数据准备按 workspace 单独限制并发。同一 stream 的已封存
+批次仍按序执行，即使 workspace 并发设置大于 1。
+
+每次重试重新获取名额；退避和执行时段等待不占分析名额，实际开始时重新检查时段。
+降低并发不会取消已启动的任务，后续任务等待活动数量降到新上限以下；提高并发后允许
+等待任务启动。批次存储租约还限制共享该 store 的多个消费者的批次并发；覆盖所有入口的
+共享名额属于单进程限制，不是集群总配额。
+
+Recent Runs、Events 和已结束 Queue 历史使用可配置的
+[存储保留策略](/zh-cn/configuration/storage/#storageretention)。
 
 ## `queue.kind`
 
@@ -166,8 +180,8 @@ Redis 队列的连接字段以透传方式接受：
 
 | 字段 | 类型 | 默认 | 说明 |
 | --- | --- | --- | --- |
-| `concurrency` | int > 0 | `4` | 全局 worker 并发（进程内同时运行的任务数）。 |
-| `per_workspace_concurrency` | int > 0 | `1` | 每个 workspace 同时运行的任务上限。设为 `1` 可按仓库串行。 |
+| `concurrency` | int > 0 | `4` | 同一进程所有调度入口同时分析的总上限。 |
+| `per_workspace_concurrency` | int > 0 | `1` | 这些入口在每个 workspace 中同时分析的上限。 |
 | `lock_ttl_seconds` | int > 0 | `1800` | 预留；锁过期时间由 queue backend 配置。 |
 
 ## `queue.sqlite` —— 持久化队列选项

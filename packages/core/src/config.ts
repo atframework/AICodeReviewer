@@ -960,6 +960,11 @@ export const storageObjectSchema = z
   .passthrough()
   .default({ kind: "filesystem", filesystem: { root: "/app/data/objects" } });
 
+export const historyRetentionPolicySchema = z.object({
+  max_count: z.number().int().min(1).max(1_000_000).default(2000),
+  max_age_months: z.number().int().min(1).max(1200).default(6),
+});
+
 export const storageSchema = z
   .object({
     database: storageDatabaseSchema,
@@ -968,6 +973,10 @@ export const storageSchema = z
     retention: z
       .object({
         deleted_project_grace_days: z.number().int().nonnegative().default(30),
+        // Optional parents preserve the canonical shape of pre-upgrade snapshots.
+        recent_runs: historyRetentionPolicySchema.optional(),
+        events: historyRetentionPolicySchema.optional(),
+        queue: historyRetentionPolicySchema.extend({ max_count: z.number().int().min(1).max(1_000_000).default(1000) }).optional(),
       })
       .passthrough()
       .default({ deleted_project_grace_days: 30 }),

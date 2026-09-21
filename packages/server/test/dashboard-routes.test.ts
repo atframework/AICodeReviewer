@@ -205,9 +205,17 @@ describe("dashboard routes", () => {
     expect(html).not.toContain('<div id="tab-live" class="tab-content active">');
   });
 
-  it("pages 100 events by 20 and escapes event text and reasons", async () => {
+  it("loads event pages from the server and escapes event text and reasons", async () => {
     const { context, element } = await dashboardScript();
-    runInContext(`eventsData=Array.from({length:100},function(_,i){return {
+    const requests: string[] = [];
+    context.apiFetch = async (url: string) => {
+      requests.push(url);
+      const page = Number(new URL(url, "http://localhost").searchParams.get("page"));
+      return { ok: true, json: async () => ({ items: Array.from({ length: page === 1 ? 20 : 5 }, (_, i) => ({
+        provider: "gitea", eventName: `event-${(page - 1) * 20 + i}`, decision: "queued",
+      })), hasMore: page === 1 }) };
+    };
+    runInContext(`eventsHasMore=true;eventsData=Array.from({length:20},function(_,i){return {
       provider:'gitea',repoRef:'<img src=x onerror=alert(1)>',eventName:'event-'+i,
       decision:'ignored',reason:'ignored_by_label',detail:{matchedLabels:['<script>']}
     }});renderEventsPage()`, context);
@@ -217,11 +225,12 @@ describe("dashboard routes", () => {
     expect(element("events-table").innerHTML).not.toContain("<img");
     expect(element("events-table").innerHTML).toContain("&lt;script&gt;");
     expect(element("events-prev").disabled).toBe(true);
-    runInContext("eventsPage=5;renderEventsPage();nextEventsPage()", context);
-    expect(element("events-page-info").textContent).toBe("100 events · page 5 / 5");
+    await runInContext("eventsPage=2;loadEvents()", context);
+    expect(requests).toEqual(["api/admin/events?limit=20&page=2"]);
+    expect(element("events-page-info").textContent).toBe("Page 2 · 5 events");
     expect(element("events-next").disabled).toBe(true);
-    runInContext("eventsData=[];renderEventsPage()", context);
-    expect(element("events-page-info").textContent).toBe("0 events · page 1 / 1");
+    runInContext("eventsPage=1;eventsData=[];renderEventsPage()", context);
+    expect(element("events-page-info").textContent).toBe("Page 1 · 0 events");
     expect(element("events-table").innerHTML).toContain("No events");
   });
 

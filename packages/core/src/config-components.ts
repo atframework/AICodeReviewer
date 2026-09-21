@@ -729,6 +729,10 @@ export const CONFIG_FIELD_INVENTORY: readonly ConfigFieldSpec[] = [
   g("storage.object.s3.secret_access_key_env", { t: "ZodString", own: "bootstrap", wir: false, st: "schema-only; object storage is not wired", ui: "secret-ref" }),
   g("storage.object.s3.force_path_style", { t: "ZodBoolean", own: "bootstrap", wir: false, st: "schema-only; object storage is not wired", ui: "toggle" }),
   g("storage.retention.deleted_project_grace_days", { t: "ZodNumber", d: 30, own: "bootstrap", con: "packages/store/src retention sweep", wir: true, ui: "number" }),
+  ...(["recent_runs", "events", "queue"] as const).flatMap(section => [
+    g(`storage.retention.${section}.max_count`, { t: "ZodNumber", d: section === "queue" ? 1000 : 2000, own: "business", con: "packages/server/src/history-maintenance.ts", wir: true, ui: "number" }),
+    g(`storage.retention.${section}.max_age_months`, { t: "ZodNumber", d: 6, own: "business", con: "packages/core/src/history-retention.ts", wir: true, ui: "number" }),
+  ]),
 
   // ------------------------------------------------------- llm providers (entity)
   g("llm.providers[].id", { t: "ZodString", own: "entity", ent: "provider", res: "resolveModelSpecFromChain", con: "packages/server/src/bootstrap.ts provider lookup", wir: true, ui: "text", tid: "C01" }),

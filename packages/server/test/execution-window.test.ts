@@ -3,6 +3,7 @@ import { createHmac } from "node:crypto";
 import {
   compileWeeklySchedule,
   createMemoryAutoCommitStore,
+  ExecutionConcurrency,
   type CompiledWeeklySchedule,
 } from "@aicr/core";
 import type { Hono } from "hono";
@@ -10,6 +11,21 @@ import { describe, expect, it, vi } from "vitest";
 
 import { AutoCommitRuntime, createServerApp } from "../src/index.js";
 import { createReviewDeduplicator } from "../src/review-deduplicator.js";
+import type { ReviewOrchestrationContext, ServerReviewOrchestrationOptions } from "../src/review-orchestrator.js";
+
+function controlledExecution(pool: ExecutionConcurrency, execute: (context: ReviewOrchestrationContext) => Promise<void>): ServerReviewOrchestrationOptions {
+  return {
+    executionConcurrency: pool,
+    baseSystemPrompt: "test", sourceRootResolver: () => undefined,
+    model: { providerKind: "openai_compatible", providerId: "test", modelId: "test" },
+    llm: { complete: vi.fn() },
+    vcs: { kind: "git", listChanges: vi.fn(), fetchScoped: vi.fn(), fetchExtraContext: vi.fn() },
+    executionScope: async context => {
+      await execute(context);
+      throw new Error("controlled permanent execution failure");
+    },
+  };
+}
 
 const webhookSecret = "top-secret";
 
@@ -77,6 +93,77 @@ function postGitea(app: Hono, payload: string, event: string): Promise<Response>
 }
 
 describe("execution window gating for async trigger processing", () => {
+  it.each([false, true])("shares capacity across direct triggers and skips busy workspaces (async=%s)", async asyncTriggers => {
+    vi.useFakeTimers();
+    const pool = new ExecutionConcurrency(() => ({ global: 3, workspace: 1 }));
+    const releaseP4 = pool.tryAcquire("p4-main")!;
+    const github = Promise.withResolvers<void>();
+    const started: string[] = [];
+    const options = controlledExecution(pool, async ({ reviewEvent }) => {
+      started.push(reviewEvent.workspaceId);
+      if (reviewEvent.workspaceId === "github") await github.promise;
+    });
+    const app = (workspaceId: string) => createServerApp({
+      gitea: { triggerName: "git", workspaceId, webhookSecret }, asyncTriggers, reviewOrchestration: options,
+    });
+    const git = app("github");
+    const requests: Promise<Response>[] = [];
+    try {
+      requests.push(postGitea(git, giteaPrPayload(), "pull_request"));
+      await vi.advanceTimersByTimeAsync(1);
+      requests.push(postGitea(git, giteaPrPayload(), "pull_request"));
+      await vi.advanceTimersByTimeAsync(1);
+      requests.push(postGitea(app("other"), giteaPrPayload(), "pull_request"));
+      await vi.advanceTimersByTimeAsync(1);
+      expect(started).toEqual(["github", "other"]);
+      expect(pool.tryAcquire("github")).toBeUndefined();
+      github.resolve();
+      await vi.advanceTimersByTimeAsync(1);
+      await Promise.all(requests);
+      expect(started).toEqual(["github", "other", "github"]);
+    } finally {
+      github.resolve(); releaseP4();
+      await vi.advanceTimersByTimeAsync(1);
+      await Promise.all(requests);
+      vi.clearAllTimers(); vi.useRealTimers();
+    }
+  });
+
+  it("rechecks the window after waiting for capacity and releases capacity during retry backoff", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(Date.parse("2026-09-11T13:00:00Z"));
+    const pool = new ExecutionConcurrency(() => ({ global: 1, workspace: 1 }));
+    const releaseP4 = pool.tryAcquire("p4-main")!;
+    const execute = vi.fn(async () => {}).mockRejectedValueOnce(new Error("ECONNRESET"));
+    try {
+      const app = createServerApp({
+        gitea: { triggerName: "git", workspaceId: "github", webhookSecret }, asyncTriggers: true,
+        reviewOrchestration: controlledExecution(pool, execute), getExecutionSchedule: weekdayLunchSchedule,
+        triggerRetry: { attempts: 2, backoff: { base_ms: 100, max_ms: 100, jitter: false } },
+      });
+      expect((await postGitea(app, giteaPrPayload(), "pull_request")).status).toBe(202);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(execute).not.toHaveBeenCalled();
+      vi.setSystemTime(Date.parse(FRIDAY_AFTER_WINDOW));
+      releaseP4();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(execute).not.toHaveBeenCalled();
+      expect(pool.available).toBe(true);
+      await vi.advanceTimersByTimeAsync(FRIDAY_TO_MONDAY_MS - 1);
+      expect(execute).toHaveBeenCalledTimes(1);
+      expect(pool.available).toBe(true);
+      const holdRetry = pool.tryAcquire("p4-main")!;
+      await vi.advanceTimersByTimeAsync(100);
+      expect(execute).toHaveBeenCalledTimes(1);
+      holdRetry();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(execute).toHaveBeenCalledTimes(2);
+      expect(pool.available).toBe(true);
+    } finally {
+      releaseP4(); vi.clearAllTimers(); vi.useRealTimers();
+    }
+  });
+
   it.each([false, true])("rechecks the actual start after a clock jump (retry=%s)", async (retry) => {
     vi.useFakeTimers();
     vi.setSystemTime(Date.parse("2026-09-11T13:00:00Z"));

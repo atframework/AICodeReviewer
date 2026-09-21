@@ -125,8 +125,14 @@ PostgreSQL 后端见 [M17](milestones/M17.md)，来源合并、路由图与发�
   `runReviewOrchestration`。扩展前固定 `assemblyCutSeq`，持续新通知不阻止旧批次前进。
   日历下限和元数据重试预算持久化；元数据读取及每次执行前重新检查时段；`stop()` 立即 abort
   在执行的批次（`interrupted_by_shutdown` 重入队列），部署重启不等待长分析结束。
-  三后端原子限制全局和 workspace 执行并发，默认各为 1；bootstrap 的全局上限读取
-  `queue.workers.concurrency`（未设置时为 1）。租约过期禁止旧消费者写完成状态和检查点。
+  `ExecutionConcurrency` 在进程内统一限制自动批次、普通 worker、PR/issue/comment/手动
+  分析及每次重试，读取当前未固定代的 `queue.workers.concurrency`（默认 4）和
+  `per_workspace_concurrency`（默认 1）。扫描不等待分析结束，按 workspace 有界准备元数据，
+  跳过已满 workspace 后再截取派发候选；Redis 用有界游标推进，避免忙 workspace 队首阻塞。
+  退避和日历等待释放名额，实际开始前重新检查时段。动态降低上限不取消活动任务，提高上限
+  唤醒等待者；人工 Retry 重排后立即 kick。停止时排空启动恢复、扫描、路由、准备和执行任务。
+  三后端还原子限制共享 store 的批次租约并发；跨入口共享名额是进程内预算，不能描述为
+  集群总并发。单个 stream 保持串行。租约过期禁止旧消费者写完成状态和检查点。
   恢复语义（2026-09 运维决策）：已保存 `completed` 检查点只重试本地结果记账；`started`/
   `publication_pending` 表示执行或发布结果不确定，但重试执行允许重放（接受重复发布风险）
   而不是 dead-letter 卡死流。首次到达终态失败的批次消费其唯一一次自动恢复（attempts 重置、
@@ -903,6 +909,16 @@ AICR 采用**两层上下文管理**，两者互补：
   - `storage.object.s3.region_env`、`access_key_id_env`、`secret_access_key_env`: 通过环境变量引用凭据和区域。
   - `storage.object.s3.force_path_style`: 支持 MinIO / RustFS 这类常见 S3-compatible 部署。
   - `storage.retention.deleted_project_grace_days`: 已删除项目统计硬删除宽限期。
+  - `storage.retention.recent_runs|events|queue`: 各有 `max_count` 和 `max_age_months`，
+    默认数量分别 2000/2000/1000，时长均为 6 个 UTC 日历月（跨月末取目标月末）。
+    任一超限淘汰，数据库覆盖 YAML，重置回退 YAML/默认值；连接字段仍由文件控制。
+    `history-maintenance.ts` 启动、每 60 秒及历史读取前有界清理，每类最多 500 条；查询本身
+    即时限制可见历史。`review_runs.history_pruned` 标记不可恢复的详情清理，删除错误、
+    event/target/VCS 展示信息，保留 run ID 与数值记账事实，汇总及检查点去重不变。
+    Recent Runs 用部分时间/ID 索引，Events 用时间/ID 索引，usage 只聚合当前页的 run ID。
+    Queue 只删除终态 batch/outbox，保留活动 stream 引用和 receipt/member 去重身份；
+    Redis 按状态维护有序集合，首次升级按 SCAN 页回填，常规分页不再 SCAN 全库。
+    保留策略不清理运行目录或所有统计事实；增加上限不能还原已淘汰详情。
 - 输出路由、模板、queue、review 行为都支持全局 → workspace default → workspace instance 覆盖。`agent.default` 和 `sandbox` 的 workspace 层覆盖也已按 run 生效：bootstrap 经合并后的 analysis selection 解析（`analysis.sandbox ?? generationConfig.agent.sandbox`、`analysis.agent?.default ?? generationConfig.agent.default`，H03/H04），全局 `agent` 配置仅作回退；每次运行独立创建沙箱实例，显式容器沙箱 preflight 失败拒绝该 run，不降级 native。
 - 当配置 shape 变化时，要同步更新 schema 测试、示例配置、专题文档和 `Plan.md` 摘要。
 
@@ -975,7 +991,7 @@ AICR 采用**两层上下文管理**，两者互补：
     事件名、workspace/trigger/repo/target 溯源字段、decision（executed/deferred/queued/
     duplicate/deduplicated/ignored/rejected）、reason 与 JSON detail（命中 label、
     resumeAt、receiptId 等）。只记录接收时刻的决定，不写逐次重试结果；每次插入后由
-    `pruneWebhookEvents` 裁剪到最新 100 条；不参与 `recomputeDailyRollup`。
+    `pruneWebhookEvents` 按历史保留策略有界清理；不参与 `recomputeDailyRollup`。
   - `review_deferrals`：执行窗口延期的队列状态（见 §3.1.1 直接路径段），按 dedup key
     单条记录目标事件信封与 `not_before`；pending→claimed 原子迁移，执行开始时删除，
     启动恢复把 claimed 重置为 pending 并重新武装定时器。
@@ -986,7 +1002,8 @@ AICR 采用**两层上下文管理**，两者互补：
     project 列表、provider+model 统计、最近 20 条 run。
   - `GET /stats/projects`：按 project 聚合统计，支持 `?since=` ISO 日期筛选。
   - `GET /stats/providers`：按 provider+model 聚合统计，支持 `?since=` 筛选。
-  - `GET /runs`：最近 run 列表，支持 `?limit=` (1..100)。每条 run 附带跨 `llm_usage`
+  - `GET /runs`：最近 run 列表，支持 `?limit=` (1..100) 和 `?page=`（从 1 开始）。
+    带 page 返回 `{items,page,hasMore}`，不带 page 保留原数组响应。每条 run 附带跨 `llm_usage`
     行聚合的 `llmUsage`（输入/输出/总量与缓存命中/写入拆分）；未记录 usage 时省略该字段。
     同时返回 VCS stamp（`branch`/`headSha`/`vcsKind`/`headCommittedAt`）。
   - `GET /runs/live`：当前正在执行的分析列表，来自进程内 `LiveRunRegistry`，返回
@@ -997,7 +1014,9 @@ AICR 采用**两层上下文管理**，两者互补：
     累计 metrics（tokens、缓存命中/写入、请求数、重试/fallback、成本）、metricsUpdatedAt。
     未注入 registry 时返回空列表。
   - `GET /events`：最近 webhook/trigger 事件日志（`webhook_events` 表），支持
-    `?limit=` (1..100)，detail 以解析后的 JSON 返回。
+    `?limit=` (1..100) 和 `?page=`，分页信封同 `/runs`，detail 以解析后的 JSON 返回。
+  - `GET /auto-commit/batches`：按状态筛选批次，支持相同分页信封；历史策略仅过滤终态，
+    活动、待重试及仍被 stream 引用的批次保留。
   所有端点（`/login` 除外）需 `Authorization: Bearer <token>` 头。
 - Dashboard SPA 嵌入于 `/dashboard` 和 `/` 路径，由 `packages/server/src/dashboard/dashboard.html`
   提供。深色主题、登录表单、选项卡视图（live / overview / projects / providers / runs / events / config）。
@@ -1021,8 +1040,9 @@ AICR 采用**两层上下文管理**，两者互补：
   `vcs_kind` 未知时保留完整 revision，属性值单独转义引号；
   Projects 与 Providers 标签各自独立支持时间维度切换，按需调用
   `GET /stats/projects?since=` 与 `GET /stats/providers?since=`；Runs 标签首次进入时
-  调用 `GET /runs?limit=100` 拉取最近 100 条并前端分页（每页 20 条，Prev/Next）；
-  Events 标签同样以 `GET /events?limit=100` + 前端分页（每页 20 条）展示接收时刻的
+  调用 `GET /runs?limit=20&page=1` 服务端分页（Prev/Next）；
+  Events 与 Queue 同样按页查询，每次用一条 lookahead 判断 hasMore，序号防止旧响应覆盖。
+  Events 展示接收时刻的
   事件与处理决定。Overview 标签是首个选项卡与默认落地页；Live 标签调用 `GET /runs/live`，用响应式 worker 卡片展示
   槽位编号、run ID、任务、attempt、workspace/trigger/repo、Revision、model、phase、
   开始时间与 elapsed、累计 token、缓存命中率、LLM 请求数、重试/fallback、成本及用量更新时间。
@@ -1336,10 +1356,12 @@ models.dev 的 key 是 `<providerId>/<modelId>`（AI SDK 标识）。自定义 p
   文件实体遮蔽同名的数据库记录(shadowed 可见、可导出、可删除,不报错);
   显式空数组/false/0 是有效声明,与缺省区分;defaults 只在单次最终解析时
   应用一次。每字段 provenance(file/database/default)可查询。
-  显式例外:`agent`、`review`、`queue.workers|rate_limit|retry|dead_letter`
+  显式例外:`agent`、`review`、`queue.workers|rate_limit|retry|dead_letter`、
+  `storage.retention.recent_runs|events|queue`
   前缀(`DATABASE_PRIORITY_PREFIXES`)按 数据库 > 文件 > 默认值 合并,文件锁
   对这些前缀豁免,UI 保持可编辑并提供按前缀 unset 的"重置数据库配置";
-  `queue.kind`/`queue.sqlite` 仍属 bootstrap 信任边界不可写。
+  `queue.kind`/`queue.sqlite`、storage 连接字段和 `deleted_project_grace_days`
+  仍属 bootstrap 信任边界不可写。
 - changeset 词汇:`create/update/delete/rename/set-enabled` 操作实体集合
   (providers/model_groups/triggers/channels/workspaces/routes/templates/prompts;
   template/prompt 的记录值是 markdown 文档字符串,frontmatter 仅作界面元数据,

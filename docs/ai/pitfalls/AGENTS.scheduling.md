@@ -118,6 +118,15 @@ bootstrap, core auto-commit stores, scheduler and real-backend conformance tests
   `alwaysFetch: true`, and a fresh `tokenProvider`. Cache keys include workspaceId;
   never clone into runtime cwd `/app`. Bootstrap tests with a real local bare
   remote must cover later heads and distinct clones for two workspaces.
+- A scan that awaits analysis serializes unrelated workspaces even with higher
+  configured limits. Share `ExecutionConcurrency` across batches, queue workers
+  and direct trigger attempts; claim past busy workspaces before bounding the
+  candidate page. Read live limits outside pinned generations. Track detached
+  preparation/execution promises and drain them before closing stores; backoff
+  holds no permit. Recheck windows after admission. Cover a blocked P4 run plus
+  GitHub manual Retry, shared worker limits and runtime limit changes
+  (`auto-commit-scheduler.test.ts`, `queue-worker.test.ts`,
+  `execution-concurrency.test.ts`, `execution-window.test.ts`).
 
 ## PR windows and deferrals
 
@@ -143,7 +152,14 @@ architecture §3.1.1.
   store queue: it may await `defer()` on that queue. Re-deferred replacements
   must survive acknowledgment (`deferral-manager.ts` and
   `deferral-recovery.test.ts`).
-- Receipt-time Events retain the newest 100 decisions and are separate from run
-  rollups. Deferrals provide single-process restart recovery, not distributed
+- History cleanup follows `storage.retention.recent_runs|events|queue` and must
+  preserve accounting and deduplication facts, live work and retry state.
+  Never delete old run IDs solely to cap Recent Runs: checkpoint replay would
+  count them again. Use `history_pruned` plus indexed history queries; verify
+  Overview/Projects/Providers and daily rollups before and after cleanup on real
+  SQLite/PostgreSQL (`store/test/history-retention.test.ts`). Test terminal-only
+  Queue cleanup and duplicate receipts in the three-backend conformance suite.
+- Receipt-time Events are separate from run rollups. Deferrals provide
+  single-process restart recovery, not distributed
   leases or a post-start durable retry queue; without the configured store,
   restart persistence is unavailable.

@@ -33,6 +33,15 @@ storage:
       root: /app/data/objects
   retention:
     deleted_project_grace_days: 30
+    recent_runs:
+      max_count: 2000
+      max_age_months: 6
+    events:
+      max_count: 2000
+      max_age_months: 6
+    queue:
+      max_count: 1000
+      max_age_months: 6
 ```
 
 ## `storage.database`
@@ -123,6 +132,39 @@ features.
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
 | `deleted_project_grace_days` | int ≥ 0 | `30` | Hard-delete soft-deleted projects after this many days. |
+| `recent_runs.max_count` | int 1–1000000 | `2000` | Most recent run details to retain. |
+| `recent_runs.max_age_months` | int 1–1200 | `6` | Maximum age of run details, measured from start time. |
+| `events.max_count` | int 1–1000000 | `2000` | Most recent received events to retain. |
+| `events.max_age_months` | int 1–1200 | `6` | Maximum age of events, measured from receipt time. |
+| `queue.max_count` | int 1–1000000 | `1000` | Most recent terminal automatic-commit batches to retain. |
+| `queue.max_age_months` | int 1–1200 | `6` | Maximum age of terminal batch history, measured from creation time. |
+
+History expires when **either** limit is exceeded. Months are calendar months in
+UTC, with the day clamped to the last day of the target month. Counts apply to
+the whole store across workspaces. Pending, running and retrying batches, and
+batches still referenced by an active stream, are protected from history cleanup.
+
+These six fields support YAML and database configuration. Database values take
+precedence, including when YAML explicitly sets a value. In Admin → Config →
+Advanced, edit the Storage fields or use **Reset database overrides** to fall
+back to the YAML value, then the default when YAML omits it. Published changes
+apply to subsequent history reads and cleanup; increasing a limit cannot restore
+details that have already been removed. Storage connection settings remain
+file-only bootstrap settings.
+
+Recent Runs cleanup erases per-run display details while retaining accounting
+facts, numeric usage and run IDs. Overview, Projects, Providers, daily rollups
+and checkpoint deduplication continue to include older runs. Events are deleted;
+Queue cleanup removes terminal batch details and outbox records but preserves
+receipt and member identities needed to prevent duplicate analysis. This policy
+does not remove run-directory artifacts or all accounting rows from the database.
+
+Startup, a 60-second maintenance timer and history reads perform bounded cleanup
+(up to 500 records per category per sweep). Reads enforce the configured limits
+even while an older cleanup backlog remains. The three panels fetch 20 rows per
+page from server-side indexed queries, so retaining the default 2000/2000/1000
+records does not load the full history into the browser. SQL uses time/ID indexes;
+Redis uses status sorted sets, backfilled on first startup after upgrade.
 
 ## Backends at a glance
 

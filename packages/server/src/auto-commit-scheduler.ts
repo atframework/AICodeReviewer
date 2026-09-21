@@ -4,6 +4,7 @@ import {
   decideExclusion,
   deriveSourceKey,
   exclusionInputFromSnapshotFields,
+  ExecutionConcurrency,
   isAllowedInstant,
   nextAllowedInstant,
   type AssemblyCandidate,
@@ -98,6 +99,7 @@ export interface AutoCommitSchedulerOptions {
    */
   readonly globalConcurrency?: number | (() => number);
   readonly perWorkspaceConcurrency?: number | (() => number);
+  readonly executionConcurrency?: ExecutionConcurrency | undefined;
   /**
    * Notified once when a batch reaches a terminal non-completed state
    * (skipped after its automatic recovery, or dead for pre-upgrade rows):
@@ -144,7 +146,7 @@ const DEFAULTS: SchedulerTuning = {
   idlePollMs: 30_000,
   reservationTtlMs: 30_000,
   dispatchClaimLimit: 8,
-  globalConcurrency: 1,
+  globalConcurrency: 4,
   perWorkspaceConcurrency: 1,
 };
 
@@ -173,6 +175,12 @@ export class AutoCommitScheduler {
   /** Streams that threw during the current tick; floors the next re-arm. */
   private streamFailures = 0;
   private tickCompletion: Promise<void> | null = null;
+  private readonly executions = new Set<Promise<void>>();
+  private readonly preparations = new Map<string, Promise<void>>();
+  private routingTask: Promise<void> | undefined;
+  private bootTask: Promise<void> | undefined;
+  private readonly concurrency: ExecutionConcurrency;
+  private unsubscribe: (() => void) | undefined;
 
   constructor(options: AutoCommitSchedulerOptions) {
     this.store = options.store;
@@ -205,6 +213,10 @@ export class AutoCommitScheduler {
         options.perWorkspaceConcurrency ?? DEFAULTS.perWorkspaceConcurrency,
       onBatchTerminal: options.onBatchTerminal,
     };
+    this.concurrency = options.executionConcurrency ?? new ExecutionConcurrency(() => ({
+      global: typeof this.options.globalConcurrency === "function" ? this.options.globalConcurrency() : this.options.globalConcurrency,
+      workspace: typeof this.options.perWorkspaceConcurrency === "function" ? this.options.perWorkspaceConcurrency() : this.options.perWorkspaceConcurrency,
+    }));
   }
 
   /** Arm the loop. Crash leftovers are reclaimed by normal claim/lease expiry. */
@@ -212,6 +224,7 @@ export class AutoCommitScheduler {
     if (this.running) return;
     this.stopping = false;
     this.running = true;
+    this.unsubscribe = this.concurrency.onAvailable(() => this.kick());
     this.execAbort = new AbortController();
     // Boot recovery (single-instance contract: this consumer id's previous
     // process is gone by construction):
@@ -220,7 +233,7 @@ export class AutoCommitScheduler {
     //    lease TTL.
     // 2. Re-arm pre-upgrade dead batches so legacy stream jams clear without
     //    manual database surgery.
-    void (async () => {
+    this.bootTask = (async () => {
       try {
         const now = this.now();
         const reclaimed = await this.store.reclaimBatchesByOwner(
@@ -244,13 +257,14 @@ export class AutoCommitScheduler {
           error: error instanceof Error ? error.message : String(error),
         }));
       }
-    })();
-    this.arm(0);
+    })().finally(() => { this.bootTask = undefined; this.kick(); });
   }
 
   stop(): void {
     this.running = false;
     this.stopping = true;
+    this.unsubscribe?.();
+    this.unsubscribe = undefined;
     this.execAbort.abort();
     if (this.timer) {
       clearTimeout(this.timer);
@@ -261,12 +275,16 @@ export class AutoCommitScheduler {
   async stopAndDrain(): Promise<void> {
     this.stopping = true;
     this.stop();
+    await this.bootTask;
     await this.tickCompletion;
+    await this.routingTask;
+    await Promise.all(this.preparations.values());
+    await Promise.all(this.executions);
   }
 
   /** Called after webhook acceptance; debounced into the single timer. */
   kick(): void {
-    if (!this.running) return;
+    if (!this.running || this.bootTask) return;
     if (this.ticking) {
       this.pendingKick = true;
       return;
@@ -282,7 +300,7 @@ export class AutoCommitScheduler {
     this.timer = setTimeout(
       () => {
         this.timer = null;
-        void this.tick().catch(() => {
+        void this.tick(false).catch(() => {
           // A failed tick must never kill the loop (F10); the safety poll
           // re-arms and the next wake signal re-schedules work.
           if (this.running) this.arm(this.options.idlePollMs);
@@ -293,8 +311,8 @@ export class AutoCommitScheduler {
     this.timer.unref?.();
   }
 
-  /** One full expand → assemble → dispatch pass. Public for tests. */
-  async tick(): Promise<void> {
+  /** A manual pass can await its work; the timer never waits for VCS/analysis. */
+  async tick(waitForWork = true): Promise<void> {
     if (this.stopping) return;
     if (this.ticking) {
       this.pendingKick = true;
@@ -312,13 +330,19 @@ export class AutoCommitScheduler {
       // tick, so p4/svn admissions reach expansion without extra latency.
       // A routing failure must never kill the tick loop (F10); per-record
       // retries are already persisted by the resolver.
-      this.routingWake = await this.routingResolver?.resolveDue(now).catch(() => undefined);
+      if (this.routingResolver && !this.routingTask) {
+        this.routingTask = this.routingResolver.resolveDue(now).then((wake) => { this.routingWake = wake; })
+          .catch(() => { this.routingWake = this.now() + this.options.idlePollMs; })
+          .finally(() => { this.routingTask = undefined; });
+      }
+      if (waitForWork) await this.routingTask;
       await this.store.reclaimExpiredBatchLeases(
         now,
         this.options.streamScanLimit,
       );
-      await this.expandAndAssemble(now);
-      await this.dispatchDue(this.now());
+      await this.expandAndAssemble(now, waitForWork);
+      if (waitForWork) await Promise.all(this.preparations.values());
+      await this.dispatchDue();
     } finally {
       try {
         if (this.pendingKick) {
@@ -336,7 +360,7 @@ export class AutoCommitScheduler {
           // re-arm so its retry loop stays bounded instead of spinning hot.
           const failureFloorMs = this.streamFailures > 0 ? STREAM_FAILURE_RETRY_MS : 0;
           this.arm(
-            delay !== undefined ? Math.max(delay, failureFloorMs) : this.options.idlePollMs,
+            delay !== undefined ? Math.max(delay, failureFloorMs, 1000) : this.options.idlePollMs,
           );
         }
       } finally {
@@ -345,20 +369,40 @@ export class AutoCommitScheduler {
         finishTick();
       }
     }
+    // This wait is outside the scan lock. New admissions and Retry can dispatch
+    // while previously admitted executions are still running.
+    if (waitForWork) await Promise.all(this.executions);
   }
 
   // ------------------------------------------------------------------
   // Expansion + assembly
   // ------------------------------------------------------------------
 
-  private async expandAndAssemble(now: number): Promise<void> {
+  private async expandAndAssemble(now: number, waitForWork: boolean): Promise<void> {
     const heads = await this.store.readRunnableWorkspaceHeads(
       now,
       this.options.streamScanLimit,
     );
     for (const head of heads) {
+      if (this.stopping) return;
+      const limit = typeof this.options.globalConcurrency === "function" ? this.options.globalConcurrency() : this.options.globalConcurrency;
+      if (this.preparations.size >= limit) break;
+      if (this.preparations.has(head.workspaceId)) continue;
+      await this.store.rotateWorkspaceFairness(head.workspaceId, now);
+      const task = this.prepareWorkspace(head.workspaceId, now).finally(() => {
+        this.preparations.delete(head.workspaceId);
+        // An unexpanded head already keeps the next poll due. Avoid kicking
+        // a zero-delay loop when a reservation is busy or metadata fails.
+      });
+      this.preparations.set(head.workspaceId, task);
+      if (waitForWork) await task;
+    }
+  }
+
+  private async prepareWorkspace(workspaceId: string, now: number): Promise<void> {
+    try {
       const streams = await this.store.readStreamHeads(
-        head.workspaceId,
+        workspaceId,
         this.options.streamScanLimit,
       );
       for (const stream of streams) {
@@ -394,7 +438,9 @@ export class AutoCommitScheduler {
           }));
         }
       }
-      await this.store.rotateWorkspaceFairness(head.workspaceId, now);
+    } catch (error) {
+      console.warn(JSON.stringify({ level: "warn", msg: "auto-commit workspace preparation failed", workspaceId,
+        error: error instanceof Error ? error.message : String(error) }));
     }
   }
 
@@ -1123,20 +1169,35 @@ export class AutoCommitScheduler {
   // Dispatch
   // ------------------------------------------------------------------
 
-  private async dispatchDue(_now: number): Promise<void> {
+  private async dispatchDue(): Promise<void> {
     for (
       let i = 0;
       i < this.options.dispatchClaimLimit && !this.stopping;
       i += 1
     ) {
+      if (!this.concurrency.available) return;
       const claimed = await this.store.claimDispatch(
         this.now(),
         this.options.consumerId,
         1,
+        this.concurrency.blockedWorkspaceIds(),
       );
       const entry = claimed[0];
       if (!entry) return;
-      await this.dispatchOne(entry.batch, entry.claimToken, this.now());
+      const release = this.stopping ? undefined : this.concurrency.tryAcquire(entry.batch.workspaceId);
+      if (!release) {
+        await this.store.abortDispatch(entry.batch.batchId, entry.claimToken, this.now(), this.now());
+        return;
+      }
+      const task = this.dispatchOne(entry.batch, entry.claimToken, this.now()).catch((error: unknown) => {
+        console.warn(JSON.stringify({ level: "warn", msg: "auto-commit dispatch failed; lease recovery will retry",
+          batchId: entry.batch.batchId, error: error instanceof Error ? error.message : String(error) }));
+      }).finally(() => {
+        this.executions.delete(task);
+        release();
+        this.kick();
+      });
+      this.executions.add(task);
     }
   }
 
@@ -1217,6 +1278,7 @@ export class AutoCommitScheduler {
     const abort = new AbortController();
     const onSchedulerAbort = () => abort.abort();
     this.execAbort.signal.addEventListener("abort", onSchedulerAbort, { once: true });
+    if (this.execAbort.signal.aborted) abort.abort();
     const renew = setInterval(() => {
       void this.store
         .renewBatchLease(
@@ -1234,6 +1296,7 @@ export class AutoCommitScheduler {
     }, this.options.leaseRenewMs);
     renew.unref?.();
     try {
+      abort.signal.throwIfAborted();
       await this.executeBatch({
         batch,
         members,

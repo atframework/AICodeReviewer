@@ -1170,13 +1170,14 @@ function createApp({ root, api, runtime, formState, schedule }) {
       };
       state.pageSessions.set(page.id, entry);
     }
-    const readonly = page.id === "advanced";
+    const readonly = page.sections.every(section =>
+      (section.fields ?? []).every(field => field.readonlyReason !== undefined));
     if (page.entity === undefined) {
       const header = el("div", "cfg-page-head");
       header.append(el("h2", "cfg-page-title", page.label));
       els.main.append(header);
-      if (readonly) {
-        els.main.append(el("div", "cfg-field-note", "Bootstrap-owned and schema-only settings — edit the config file to change these."));
+      if (page.id === "advanced") {
+        els.main.append(el("div", "cfg-field-note", "Edit history retention here. Database connections and server settings are read-only; change them in the config file."));
       }
     }
     const editor = {
@@ -1192,7 +1193,7 @@ function createApp({ root, api, runtime, formState, schedule }) {
       fieldNodes: entry.fieldNodes,
       previewNodes: entry.previewNodes,
       rerender: () => renderGlobalsFields(page, entry),
-      updateSaveState: () => updateGlobalsSaveState(page, entry),
+      updateSaveState: () => updateGlobalsSaveState(entry),
     };
     const host = el("div", "cfg-globals");
     const fieldsHost = el("div", "cfg-globals-fields");
@@ -1277,11 +1278,11 @@ function createApp({ root, api, runtime, formState, schedule }) {
     }
     restoreSectionState(entry.fieldsHost, sectionState);
     syncSectionVisibility(entry.fieldsHost);
-    updateGlobalsSaveState(page, entry);
+    updateGlobalsSaveState(entry);
   }
 
-  function updateGlobalsSaveState(page, entry) {
-    if (els.main === null || page.id === "advanced") return;
+  function updateGlobalsSaveState(entry) {
+    if (els.main === null) return;
     const host = entry.panelHost?.parentElement ?? els.main;
     const save = host.querySelector("[data-role=save]");
     if (save !== null) save.disabled = state.saving || state.pending !== null || entry.session.dirty !== true;
@@ -1646,7 +1647,7 @@ function createApp({ root, api, runtime, formState, schedule }) {
     }
     state.saving = true;
     updateDrawerSaveState();
-    if (context.kind === "globals") updateGlobalsSaveState(context.page, context.entry);
+    if (context.kind === "globals") updateGlobalsSaveState(context.entry);
     renderStatusBar();
     const base = context.kind === "drawer" ? context.drawer.baseInput : context.kind === "globals" ? context.entry.baseInput : null;
     const payload = retryPayload ?? {
@@ -1664,7 +1665,7 @@ function createApp({ root, api, runtime, formState, schedule }) {
       state.saving = false;
       renderStatusBar();
       updateDrawerSaveState();
-      for (const [id, entry] of state.pageSessions) updateGlobalsSaveState(state.spec.pages.find(page => page.id === id), entry);
+      for (const entry of state.pageSessions.values()) updateGlobalsSaveState(entry);
       renderStatusBar();
     }
   }

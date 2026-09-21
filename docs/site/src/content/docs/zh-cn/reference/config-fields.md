@@ -454,6 +454,12 @@ workspace 的 `prompt.system_prompt` 引用其中一个名称替换内置基底 
 | `storage.object.s3.secret_access_key_env` | string | — | secret access key 环境变量 |
 | `storage.object.s3.force_path_style` | boolean | — | 使用 path-style 寻址（MinIO/RustFS） |
 | `storage.retention.deleted_project_grace_days` | int ≥ 0 | `30` | 软删除项目的硬删除宽限期（天） |
+| `storage.retention.recent_runs.max_count` | int 1–1000000 | `2000` | 保留最近的逐次运行详情数量；汇总统计继续保留 |
+| `storage.retention.recent_runs.max_age_months` | int 1–1200 | `6` | 运行详情最长保留 UTC 日历月数，从运行开始时间计算 |
+| `storage.retention.events.max_count` | int 1–1000000 | `2000` | 保留最近的接收事件数量 |
+| `storage.retention.events.max_age_months` | int 1–1200 | `6` | 事件最长保留 UTC 日历月数，从接收时间计算 |
+| `storage.retention.queue.max_count` | int 1–1000000 | `1000` | 保留最近的已结束自动提交批次数量；活动和待重试任务不受影响 |
+| `storage.retention.queue.max_age_months` | int 1–1200 | `6` | 已结束批次历史最长保留 UTC 日历月数，从批次创建时间计算 |
 
 ## `compression`
 

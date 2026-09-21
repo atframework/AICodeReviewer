@@ -1,4 +1,5 @@
 import type { MultiProviderRateLimiter } from "./rate-limiter.js";
+import type { ExecutionConcurrency } from "./execution-concurrency.js";
 import type { QueueJob, ReviewQueue } from "./queue.js";
 
 export type QueueJobHandler<T = unknown> = (job: QueueJob<T>) => Promise<void>;
@@ -12,6 +13,7 @@ export interface QueueWorkerOptions {
   readonly rateLimiter?: MultiProviderRateLimiter;
   readonly workerId?: string;
   readonly beforePoll?: () => Promise<unknown>;
+  readonly executionConcurrency?: ExecutionConcurrency;
 }
 
 export interface QueueWorker {
@@ -61,7 +63,7 @@ export function createQueueWorker(
         blocked.push(workspaceId);
       }
     }
-    return blocked;
+    return [...new Set([...blocked, ...(options.executionConcurrency?.blockedWorkspaceIds() ?? [])])];
   }
 
   async function processJob(job: QueueJob): Promise<void> {
@@ -74,7 +76,8 @@ export function createQueueWorker(
         await options.rateLimiter.acquireAsync(job.triggerName);
       }
 
-      await handler(job);
+      if (options.executionConcurrency) await options.executionConcurrency.run(workspaceId, () => handler(job));
+      else await handler(job);
       await options.queue.complete(job.id);
     } catch (error) {
       const err = error instanceof Error ? error : new Error(String(error));
@@ -91,7 +94,7 @@ export function createQueueWorker(
 
     try {
       await options.beforePoll?.();
-      while (activeJobs < concurrency() && running) {
+      while (activeJobs < concurrency() && running && (options.executionConcurrency?.available ?? true)) {
         const job = await options.queue.dequeue(workerId, concurrency(), {
           excludedWorkspaceIds: getBlockedWorkspaceIds(),
         });

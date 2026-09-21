@@ -221,6 +221,17 @@ llm:
 #     #   force_path_style: true      # MinIO / RustFS / many S3-compatible endpoints
 #   retention:
 #     deleted_project_grace_days: 30  # hard-delete soft-deleted projects after this many days
+#     # Admin history: database overrides YAML; Reset falls back to YAML/default.
+#     # Either count or UTC calendar-month age expires details; aggregates remain.
+#     recent_runs:
+#       max_count: 2000
+#       max_age_months: 6
+#     events:
+#       max_count: 2000
+#       max_age_months: 6
+#     queue:                         # terminal batches only; active/retry work is protected
+#       max_count: 1000
+#       max_age_months: 6
 
 # ---------------------------------------------------------------------------
 # Dynamic config source (optional, shipped)

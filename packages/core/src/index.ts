@@ -40,6 +40,8 @@ export * from "./prompt-manager.js";
 export * from "./queue.js";
 export * from "./queue-factory.js";
 export * from "./queue-worker.js";
+export * from "./execution-concurrency.js";
+export * from "./history-retention.js";
 export * from "./rate-limiter.js";
 export * from "./sqlite-queue.js";
 export * from "./redis-queue.js";

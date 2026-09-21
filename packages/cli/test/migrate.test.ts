@@ -5,7 +5,7 @@ import { randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
 
 import { createPgConfigStore, createSqliteConfigStore } from "@aicr/core";
-import { closeStoreDb, createStoreDb } from "@aicr/store";
+import { closeStoreDb, createStoreDb, STORE_SQLITE_MIGRATIONS } from "@aicr/store";
 
 import { afterAll, describe, expect, it } from "vitest";
 
@@ -117,7 +117,7 @@ describe("aicr migrate", () => {
     expect(report[0]?.namespace).toBe("config");
     expect(report[0]?.pending).toEqual(["001_config_initial", "002_config_runtime_state"]);
     expect(report[1]?.namespace).toBe("store");
-    expect(report[1]?.pending).toHaveLength(9);
+    expect(report[1]?.pending).toEqual(STORE_SQLITE_MIGRATIONS.map(step => step.name));
     // Truly read-only (M19): a status probe never creates the database file.
     const { existsSync } = await import("node:fs");
     expect(existsSync(dbPath)).toBe(false);

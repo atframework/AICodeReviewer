@@ -393,10 +393,16 @@ export const STORE_MIGRATION_STEPS: readonly MigrationStep[] = [
   pgSqlStep("007_webhook_events", 6, 7, MIGRATION_007_WEBHOOK_EVENTS),
   pgSqlStep("008_review_deferrals", 7, 8, MIGRATION_008_REVIEW_DEFERRALS),
   pgSqlStep("009_review_run_vcs_stamp", 8, 9, MIGRATION_009_REVIEW_RUN_VCS_STAMP),
+  pgSqlStep("010_admin_history", 9, 10, `
+    ALTER TABLE review_runs ADD COLUMN history_pruned boolean NOT NULL DEFAULT false;
+    CREATE INDEX idx_review_runs_history ON review_runs(started_at DESC, id DESC) WHERE history_pruned = false;
+    CREATE INDEX idx_webhook_events_history ON webhook_events(received_at DESC, id DESC);
+    CREATE INDEX idx_llm_usage_run ON llm_usage(run_id);
+  `),
 ];
 
 export const STORE_MIGRATION_PLAN: NamespaceMigrationPlan = {
   namespace: STORE_MIGRATION_NAMESPACE,
-  targetVersion: 9,
+  targetVersion: 10,
   steps: STORE_MIGRATION_STEPS,
 };

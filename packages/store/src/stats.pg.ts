@@ -12,6 +12,8 @@ import type { NodePgQueryResultHKT } from "drizzle-orm/node-postgres";
 import type { PgTransaction } from "drizzle-orm/pg-core";
 
 import type { PgStoreDb } from "./database.js";
+import { storeHistoryRetention } from "./history-retention.js";
+import { historyCutoff } from "@aicr/core";
 import {
   codeMetrics,
   dailyRollups,
@@ -516,7 +518,10 @@ export async function getProviderModelStatsPg(
 export async function getRecentRunsPg(
   store: PgStoreDb,
   limit: number,
+  offset = 0,
 ): Promise<RecentRunStats[]> {
+  const policy = storeHistoryRetention(store)?.recent_runs;
+  if (policy) limit = Math.max(0, Math.min(limit, policy.max_count - offset));
   const runs = await store.db
     .select({
       id: reviewRuns.id,
@@ -538,8 +543,10 @@ export async function getRecentRunsPg(
     })
     .from(reviewRuns)
     .innerJoin(projects, eq(reviewRuns.projectId, projects.id))
-    .orderBy(desc(reviewRuns.startedAt))
-    .limit(limit);
+    .where(and(eq(reviewRuns.historyPruned, false), policy ? gte(reviewRuns.startedAt, new Date(historyCutoff(policy))) : undefined))
+    .orderBy(desc(reviewRuns.startedAt), desc(reviewRuns.id))
+    .limit(limit)
+    .offset(offset);
 
   if (runs.length === 0) {
     return runs;

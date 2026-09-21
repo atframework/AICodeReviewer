@@ -25,6 +25,7 @@ export const projects = sqliteTable("projects", {
 });
 
 export const reviewRuns = sqliteTable("review_runs", {
+  historyPruned: integer("history_pruned", { mode: "boolean" }).notNull().default(false),
   id: text("id").primaryKey(),
   projectId: integer("project_id")
     .notNull()

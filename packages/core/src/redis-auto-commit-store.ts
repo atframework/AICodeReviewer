@@ -238,6 +238,14 @@ end
 local function saveBatch(rec)
   local rnb = ""
   if not isNull(rec.retryNotBefore) then rnb = tostring(rec.retryNotBefore) end
+  local previous = redis.call("HGET", kBatch(rec.batchId), "status")
+  if previous then redis.call("ZREM", P.."idx:batch:"..previous, rec.batchId) end
+  redis.call("ZADD", P.."idx:batch:"..rec.status, rec.createdAt, rec.batchId)
+  if rec.status == "completed" or rec.status == "skipped" or rec.status == "dead" then
+    redis.call("ZADD", P.."idx:batch:terminal", rec.createdAt, rec.batchId)
+  else
+    redis.call("ZREM", P.."idx:batch:terminal", rec.batchId)
+  end
   redis.call("HSET", kBatch(rec.batchId), "data", cjson.encode(rec), "status", rec.status, "rnb", rnb)
 end
 local function saveOutbox(entry, claimToken, claimExpiry)
@@ -933,13 +941,22 @@ local now = tonumber(ARGV[2])
 local limit = tonumber(ARGV[3])
 local fetchN = tonumber(ARGV[4])
 local tokens = cjson.decode(ARGV[5])
-local due = redis.call("ZRANGEBYSCORE", K_IDX_OUTBOX, "-inf", now, "LIMIT", 0, fetchN)
-local out = {}
+local excluded = cjson.decode(ARGV[6])
+local offset = tonumber(ARGV[7])
+local due = redis.call("ZRANGEBYSCORE", K_IDX_OUTBOX, "-inf", now, "LIMIT", offset, fetchN)
+local out = {"0"}
 local ti = 1
-for _, bid in ipairs(due) do
-  if ti > limit then break end
+for position, bid in ipairs(due) do
+  if ti > limit then out[1] = tostring(offset + position - 1); break end
+  if position == #due and #due == fetchN then out[1] = tostring(offset + #due) end
   local odata = redis.call("HGET", kOutbox(bid), "data")
-  if odata then
+  local bdata = redis.call("HGET", kBatch(bid), "data")
+  local blocked = false
+  if bdata then
+    local batch = cjson.decode(bdata)
+    for _, workspace in ipairs(excluded) do if workspace == batch.workspaceId then blocked = true; break end end
+  end
+  if odata and bdata and not blocked then
     local entry = cjson.decode(odata)
     local ct = redis.call("HGET", kOutbox(bid), "claimToken")
     local ce = tonumber(redis.call("HGET", kOutbox(bid), "claimExpiry") or "0")
@@ -972,7 +989,7 @@ local rec = cjson.decode(bdata)
 rec.status = "queued"
 rec.leaseExpiry = tonumber(ARGV[4]) + DISPATCH_CLAIM_TTL_MS
 redis.call("ZADD", K_IDX_LEASE, rec.leaseExpiry, ARGV[2])
-redis.call("HSET", kBatch(ARGV[2]), "data", cjson.encode(rec), "status", "queued")
+saveBatch(rec)
 return 1
 `;
 
@@ -1007,7 +1024,7 @@ rec.attempt = rec.attempt + 1
 rec.leaseToken = ARGV[4]
 rec.leaseOwner = ARGV[3]
 rec.leaseExpiry = tonumber(ARGV[5])
-redis.call("HSET", kBatch(ARGV[2]), "data", cjson.encode(rec), "status", "running")
+saveBatch(rec)
 redis.call("ZADD", K_IDX_LEASE, rec.leaseExpiry, ARGV[2])
 redis.call("ZADD", K_IDX_RUNNING, rec.leaseExpiry, ARGV[2])
 redis.call("ZADD", kWsRunning(rec.workspaceId), rec.leaseExpiry, ARGV[2])
@@ -1043,7 +1060,7 @@ rec.status = ARGV[4]
 rec.leaseToken = cjson.null
 rec.leaseOwner = cjson.null
 rec.leaseExpiry = cjson.null
-redis.call("HSET", kBatch(ARGV[2]), "data", cjson.encode(rec), "status", ARGV[4])
+saveBatch(rec)
 redis.call("ZREM", K_IDX_LEASE, ARGV[2])
 redis.call("ZREM", K_IDX_RUNNING, ARGV[2])
 redis.call("ZREM", kWsRunning(rec.workspaceId), ARGV[2])
@@ -1366,6 +1383,7 @@ export async function createRedisAutoCommitStore(
     buildRedisConnection(options.connection),
   );
   const P = `${options.keyPrefix ?? "aicr:"}ac:`;
+  let dispatchScanOffset = 0;
 
   async function evalScript(
     script: string,
@@ -1401,6 +1419,28 @@ export async function createRedisAutoCommitStore(
   const receiptKey = (id: string) => `${P}receipt:${id}`;
   const memberKey = (id: string) => `${P}member:${id}`;
   const streamKey = (id: string) => `${P}stream:${id}`;
+
+  // Upgrade existing deployments once. Each bounded Lua page reads the current
+  // record so concurrent state transitions cannot install a stale status index.
+  try {
+    if (!await redis.get(`${P}idx:batch:ready`)) {
+      let cursor = "0";
+      do {
+        const reply = await redis.scan(cursor, "MATCH", `${P}batch:*`, "COUNT", 256) as [string, string[]];
+        cursor = reply[0];
+        if (reply[1].length) await evalScript(LUA_PRELUDE + `
+          for i = 2, #ARGV do
+            local data = redis.call("HGET", ARGV[i], "data")
+            if data then saveBatch(cjson.decode(data)) end
+          end
+          return 1`, P, ...reply[1]);
+      } while (cursor !== "0");
+      await redis.set(`${P}idx:batch:ready`, "1");
+    }
+  } catch (error) {
+    redis.disconnect();
+    throw error;
+  }
 
   const store: AutoCommitStore = {
     backendKind: "redis",
@@ -1948,6 +1988,7 @@ export async function createRedisAutoCommitStore(
       now: number,
       ownerId: string,
       limit: number,
+      excludedWorkspaceIds: readonly string[] = [],
     ): Promise<readonly ClaimedDispatch[]> {
       if (limit <= 0) return [];
       const fetchN = Math.min(limit * CLAIM_SCAN_MULTIPLIER, CLAIM_SCAN_CAP);
@@ -1962,7 +2003,10 @@ export async function createRedisAutoCommitStore(
         limit,
         fetchN,
         JSON.stringify(tokens),
+        JSON.stringify(excludedWorkspaceIds),
+        dispatchScanOffset,
       )) as string[];
+      dispatchScanOffset = Number(raw.shift() ?? 0);
       const claimed: ClaimedDispatch[] = [];
       const batchIds: string[] = [];
       for (let i = 0; i + 1 < raw.length; i += 2) {
@@ -2172,43 +2216,84 @@ return 1
     async readBatchesByStatus(
       statuses: readonly CommitBatchStatus[],
       limit: number,
+      offset = 0,
+      history?: { readonly maxCount: number; readonly before: number },
     ): Promise<readonly CommitBatchRecord[]> {
-      if (statuses.length === 0) return [];
-      const wanted = new Set<string>(statuses);
-      const matched: CommitBatchRecord[] = [];
-      // Bounded SCAN over the batch keyspace; the status is a hash field of
-      // the batch key (see saveBatch). Deployments hold a small batch
-      // population and the admin listing is paged by `limit`.
-      let cursor = "0";
-      do {
-        const reply = (await redis.scan(
-          cursor,
-          "MATCH",
-          `${P}batch:*`,
-          "COUNT",
-          256,
-        )) as [string, string[]];
-        cursor = reply[0];
-        const batchKeys = reply[1];
-        if (batchKeys.length) {
-          const statusFields = (await Promise.all(
-            batchKeys.map((key) => redis.hget(key, "status")),
-          )) as (string | null)[];
-          const selected = batchKeys.filter(
-            (key, index) => statusFields[index] !== null && wanted.has(statusFields[index]!),
-          );
-          if (selected.length) {
-            const dataRows = (await Promise.all(
-              selected.map((key) => redis.hget(key, "data")),
-            )) as (string | null)[];
-            for (const row of dataRows) {
-              if (row) matched.push(toBatch(JSON.parse(row) as CommitBatchRecord));
-            }
-          }
+      if (statuses.length === 0 || limit <= 0) return [];
+      const records = (await Promise.all([...new Set(statuses)].map(async status => {
+        const found: CommitBatchRecord[] = [];
+        let scanned = 0;
+        const pageSize = Math.min(256, offset + limit);
+        while (found.length < offset + limit) {
+          // Filter before applying the requested page offset. In particular an
+          // old active-stream terminal must remain visible past expired rows.
+          const page = await evalScript(LUA_PRELUDE + `
+            local ids = redis.call("ZREVRANGE", P.."idx:batch:"..ARGV[2], tonumber(ARGV[3]), tonumber(ARGV[3])+tonumber(ARGV[4])-1)
+            local result = { tostring(#ids) }
+            for _, id in ipairs(ids) do
+              local data = redis.call("HGET", kBatch(id), "data")
+              if data then
+                local batch = cjson.decode(data)
+                local eligible = batch.status == ARGV[2]
+                if eligible and ARGV[5] ~= "" and (batch.status == "completed" or batch.status == "skipped" or batch.status == "dead") then
+                  local head = redis.call("HGET", kStream(batch.streamId), "data")
+                  local active = head and cjson.decode(head).activeBatchId == id
+                  local rank = redis.call("ZREVRANK", P.."idx:batch:terminal", id)
+                  eligible = active or (batch.createdAt >= tonumber(ARGV[6]) and rank and rank < tonumber(ARGV[5]))
+                end
+                if eligible then table.insert(result, data) end
+              end
+            end
+            return result`, P, status, scanned, pageSize, history?.maxCount ?? "", history?.before ?? "") as string[];
+          const count = Number(page.shift());
+          found.push(...page.map(data => JSON.parse(data) as CommitBatchRecord));
+          scanned += count;
+          if (count < pageSize) break;
         }
-      } while (cursor !== "0" && matched.length < limit);
-      matched.sort((a, b) => b.createdAt - a.createdAt);
-      return matched.slice(0, limit);
+        return found;
+      }))).flat();
+      // A concurrent transition can appear in two status reads. Return each
+      // batch once even though Redis pages do not share a transaction snapshot.
+      return [...new Map(records.map(record => [record.batchId, record])).values()]
+        .sort((a, b) => b.createdAt - a.createdAt || (a.batchId < b.batchId ? 1 : a.batchId > b.batchId ? -1 : 0))
+        .slice(offset, offset + limit).map(toBatch);
+    },
+
+    async pruneBatchHistory(maxCount: number, before: number, limit = 500): Promise<number> {
+      return Number(await evalScript(LUA_PRELUDE + `
+        local index = P.."idx:batch:terminal"
+        local cursorKey = P.."idx:batch:pruneCursor"
+        local offset = tonumber(redis.call("GET", cursorKey) or "0")
+        if offset >= redis.call("ZCARD", index) then offset = 0 end
+        local candidates = redis.call("ZRANGE", index, offset, offset + tonumber(ARGV[4]) - 1)
+        local removed = 0
+        local retained = 0
+        for _, id in ipairs(candidates) do
+          local data = redis.call("HGET", kBatch(id), "data")
+          if data then
+            local batch = cjson.decode(data)
+            local rank = redis.call("ZREVRANK", index, id)
+            local headData = redis.call("HGET", kStream(batch.streamId), "data")
+            local active = headData and cjson.decode(headData).activeBatchId == id
+            if not active and (batch.status == "completed" or batch.status == "skipped" or batch.status == "dead")
+              and (batch.createdAt < tonumber(ARGV[3]) or (rank and rank >= tonumber(ARGV[2]))) then
+              redis.call("DEL", kBatch(id), kOutbox(id))
+              redis.call("ZREM", index, id)
+              redis.call("ZREM", P.."idx:batch:"..batch.status, id)
+              redis.call("ZREM", K_IDX_OUTBOX, id)
+              redis.call("ZREM", K_IDX_LEASE, id)
+              removed = removed + 1
+            else
+              retained = retained + 1
+            end
+          else
+            redis.call("ZREM", index, id)
+          end
+        end
+        local nextOffset = offset + retained
+        if nextOffset >= redis.call("ZCARD", index) then nextOffset = 0 end
+        redis.call("SET", cursorKey, nextOffset)
+        return removed`, P, maxCount, before, limit));
     },
 
     async timeoutStaleQueue(
@@ -2225,24 +2310,31 @@ return 1
         const streams = (await redis.zrange(`${P}ws:${ws}:streamNb`, 0, 63)) as string[];
         const nullStreams = (await redis.zrangebylex(`${P}ws:${ws}:streamNull`, "-", "+", "LIMIT", 0, 64)) as string[];
         for (const streamId of [...streams, ...nullStreams]) {
-          // 1) Terminal-skip stale never-batched pending members through the
-          //    exclusion-verdict path (pending → skipped, wake recompute).
+          // 1) Recheck and skip stale never-batched members atomically. Source
+          //    "unavailable" is a failure, so it cannot represent queue expiry.
           const pending = await this.readPendingMembers(streamId, null, 512);
           const stale = pending.items.filter(
             (member) =>
               member.batchId === null && member.eligibleAt < cutoff,
           );
           if (stale.length > 0) {
-            await this.applyExclusionVerdicts({
-              streamId,
-              verdicts: stale.map((member) => ({
-                memberId: member.memberId,
-                state: "unavailable" as const,
-                ruleId: "queued_timeout",
-                policyVersion: member.exclusion.policyVersion ?? "queued-timeout",
-              })),
-              now,
-            });
+            await evalScript(LUA_PRELUDE + `
+              for i = 4, #ARGV do
+                local data = redis.call("HGET", kMember(ARGV[i]), "data")
+                if data then
+                  local state = cjson.decode(data)
+                  local rec = state.record
+                  if rec.streamId == ARGV[2] and rec.status == "pending" and isNull(rec.batchId) and rec.eligibleAt < tonumber(ARGV[3]) then
+                    redis.call("ZREM", kStreamPending(rec.streamId), pendingSortKey(rec))
+                    redis.call("ZREM", kStreamMemberElig(rec.streamId), rec.memberId)
+                    rec.status = "skipped"
+                    rec.terminalReason = "queued_timeout"
+                    redis.call("HSET", kMember(rec.memberId), "data", cjson.encode(state))
+                  end
+                end
+              end
+              streamRecompute(ARGV[2])
+              return 1`, P, streamId, cutoff, ...stale.map(member => member.memberId));
           }
           // 2) Stamp one-time timeout reports on fully-terminal receipts that
           //     were accepted before the cutoff.

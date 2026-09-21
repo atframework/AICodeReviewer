@@ -3,11 +3,13 @@
  * append + retention-cap contract as the sqlite implementation.
  */
 
-import { desc, sql } from "drizzle-orm";
+import { desc, gte, sql } from "drizzle-orm";
+import { historyCutoff } from "@aicr/core";
+import { pruneEventHistory, storeHistoryRetention } from "./history-retention.js";
 
 import type { PgStoreDb } from "./database.js";
 import { webhookEvents } from "./schema.pg.js";
-import { parseWebhookDetail, WEBHOOK_EVENTS_RETENTION_LIMIT } from "./webhook-events.js";
+import { parseWebhookDetail } from "./webhook-events.js";
 import type { RecentWebhookEvent, WebhookEventInsert } from "./webhook-events.js";
 
 export async function insertWebhookEventPg(store: PgStoreDb, event: WebhookEventInsert): Promise<void> {
@@ -33,23 +35,21 @@ export async function insertWebhookEventPg(store: PgStoreDb, event: WebhookEvent
 
 export async function pruneWebhookEventsPg(
   store: PgStoreDb,
-  keep: number = WEBHOOK_EVENTS_RETENTION_LIMIT,
+  keep?: number,
 ): Promise<number> {
-  const deleted = await store.db
-    .delete(webhookEvents)
-    .where(
-      sql`${webhookEvents.id} NOT IN (SELECT id FROM webhook_events ORDER BY id DESC LIMIT ${keep})`,
-    )
-    .returning({ id: webhookEvents.id });
-  return deleted.length;
+  return pruneEventHistory(store, keep);
 }
 
-export async function getRecentWebhookEventsPg(store: PgStoreDb, limit: number): Promise<RecentWebhookEvent[]> {
+export async function getRecentWebhookEventsPg(store: PgStoreDb, limit: number, offset = 0): Promise<RecentWebhookEvent[]> {
+  const policy = storeHistoryRetention(store)?.events;
+  if (policy) limit = Math.max(0, Math.min(limit, policy.max_count - offset));
   const rows = await store.db
     .select()
     .from(webhookEvents)
-    .orderBy(desc(webhookEvents.id))
-    .limit(limit);
+    .where(policy ? gte(webhookEvents.receivedAt, new Date(historyCutoff(policy))) : undefined)
+    .orderBy(desc(webhookEvents.receivedAt), desc(webhookEvents.id))
+    .limit(limit)
+    .offset(offset);
 
   return rows.map((row) => ({
     id: row.id,

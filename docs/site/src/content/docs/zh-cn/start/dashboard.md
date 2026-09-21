@@ -52,8 +52,8 @@ session TTL 字段是 `session_ttl_seconds`（默认 `86400` = 24 小时）。`s
 - **Live**——当前服务进程中正在执行的分析。卡片随屏幕宽度排列，展示 worker 槽位、run ID、任务标题、attempt、workspace/trigger/repo、分支和 revision（git 短 sha、SVN `r<N>`、P4 `CL <N>`，悬停显示完整 revision）、提交时间、model 与 agent、phase（preparing → analyzing → publishing）、开始时间及耗时。指标包括输入/输出 token、缓存命中/未命中/写入量、命中率、LLM 请求数、重试/fallback 次数、估算成本及用量更新时间；usage 缺失时单独显示 `~N est. prompt`。worker 编号代表本进程的活动分析槽位，任务结束后可复用。Kilo/OpenCode 和 pi/oh-my-pi 每完成一个模型回合便更新用量，其他 agent 和直连 LLM 在调用结束时更新。执行结束或服务重启后条目消失。Refresh 手动刷新；自动刷新默认 **Off (manual)**，可选前次请求结束后每 5/15/30/60 秒刷新。离开 Live 或隐藏浏览器页面时暂停，退出登录恢复手动模式；刷新失败时保留的快照标为过期。
 - **Projects**——按 project 聚合（`workspaceId + triggerName + repoRef`）：评审/成功/失败/跳过次数、problem 总数、创建 issue 数、变更文件数、增删行数、LLM 请求数、token、缓存命中 token 与命中率、成本、平均 duration。软删除的 project 在宽限期内仍可见，并用 `isActive` 标记。
 - **Providers**——按 provider+model 聚合：请求数、输入/输出 token、缓存命中 token 与命中率、成本、重试/fallback/失败次数、平均延迟。
-- **Runs**——最近 100 条运行记录，每页 20 条，用 Prev/Next 翻页。每行展示真实 token 用量：总 token、命中/未命中输入拆分与命中率；run 未上报可解析 usage 时显示 `—`。Revision 列展示分支、缩写 revision，以及 VCS adapter 解析成功时的提交时间。
-- **Events**——最近收到的 100 条 webhook/trigger 事件，每页 20 条。每行展示接收时刻的处理决定：`executed`（立即执行）、`queued`/`duplicate`（auto-commit 回执）、`deferred`（执行窗口延期，含计划恢复时刻）、`deduplicated`（合并进待重审）、`ignored`（label 忽略、不支持的事件、仓库未配置）或 `rejected`（签名无效、payload 非法、触发器未配置），以及原因和细节（命中的 label、回执 id 等）。
+- **Runs**——保留范围内的运行记录，每页从服务端取 20 条，用 Prev/Next 翻页。每行展示真实 token 用量：总 token、命中/未命中输入拆分与命中率；run 未上报可解析 usage 时显示 `—`。Revision 列展示分支、缩写 revision，以及 VCS adapter 解析成功时的提交时间。
+- **Events**——保留范围内的 webhook/trigger 事件，每页从服务端取 20 条。每行展示接收时刻的处理决定：`executed`（立即执行）、`queued`/`duplicate`（auto-commit 回执）、`deferred`（执行窗口延期，含计划恢复时刻）、`deduplicated`（合并进待重审）、`ignored`（label 忽略、不支持的事件、仓库未配置）或 `rejected`（签名无效、payload 非法、触发器未配置），以及原因和细节（命中的 label、回执 id 等）。
 
 - **Config**——数据库配置、字段来源、路由预览与版本历史。启用
   `config_sources.database.enabled` 后可使用配置管理。
@@ -72,8 +72,11 @@ receipt 展开。健康检查成功不代表队列正在推进。
 
 Projects 和 Providers 标签各自调用带时间窗口的 API
 （`GET /api/admin/stats/projects?since=` 和 `.../providers?since=`）。Runs 标签通过
-`GET /api/admin/runs?limit=100` 拉取最近 100 条并在浏览器内分页；Events 标签同样通过
-`GET /api/admin/events?limit=100` 拉取，其存储只保留最新 100 条。Live 标签轮询
+`GET /api/admin/runs?limit=20&page=1` 服务端分页，Events 和 Queue 使用相同分页合同。
+Recent Runs / Events 默认各保留最近 2000 条，Queue 保留最近 1000 条终态批次，
+最长均为 6 个日历月。数量和时长分别通过
+[`storage.retention`](/zh-cn/configuration/storage/#storageretention) 配置；
+清理保留汇总统计，并保护 Queue 中的活动和待重试任务。Live 标签轮询
 `GET /api/admin/runs/live`，读取当前进程的内存注册表。已结束的 run 可在 Recent Runs
 的保留范围内查询。dashboard 以实时聚合为真源。
 
@@ -148,9 +151,9 @@ Workspace 路径补全以 `{{` 开始，插入 `segment` 表达式，为可空�
 | `GET /api/admin/stats` | overview + today/this-week/this-month 窗口、projects、providers、最近 run |
 | `GET /api/admin/stats/projects?since=` | 按 project 聚合 |
 | `GET /api/admin/stats/providers?since=` | 按 provider+model 聚合 |
-| `GET /api/admin/runs?limit=` | 最近 run 列表（1..100），含 token 用量、缓存命中拆分与 VCS stamp |
+| `GET /api/admin/runs?limit=&page=` | 保留的 run 列表（limit 1..100、page 从 1 开始），含 token 用量、缓存拆分与 VCS stamp；带 page 返回 `{items,page,hasMore}`，否则返回数组 |
 | `GET /api/admin/runs/live` | 进程内注册表中正在执行的分析：phase、开始时间、累计 token/请求数/成本 |
-| `GET /api/admin/events?limit=` | 最近 webhook/trigger 事件日志（1..100），含接收时刻的处理决定与原因 |
+| `GET /api/admin/events?limit=&page=` | 相同分页合同的事件日志，含接收时刻的处理决定与原因 |
 | `GET /api/admin/config` | 带来源信息和实体分页的配置视图 |
 | `GET /api/admin/config/schema`、`/options/:source` | 表单描述和动态选项 |
 | `POST /api/admin/config/changesets` | 携带 baseRevision、fileDigest、operationId、operations 原子发布 |

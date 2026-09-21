@@ -1403,12 +1403,14 @@ function encodeGlobalsChanges(page: ConfigUiPage, draft: ConfigDraft, base: Conf
   const baseIndex = indexFieldEntries(base.fields);
   const operations: ConfigUiOperation[] = [];
   for (const field of scopedGlobalFields(page)) {
+    if (field.readonlyReason !== undefined) continue;
     const draftField = draft.fields[field.id];
     if (draftField === undefined) {
       continue;
     }
     const keys = fieldPathKeys(field);
     const baseInfo = lookupFieldEntry(baseIndex, keys);
+    if (baseInfo.editable === false) continue;
     let wantsOverride = draftField.mode === "present" && !draftField.inherit;
     let encoded: unknown;
     if (wantsOverride) {

@@ -1911,6 +1911,15 @@ async function scheduleTriggerProcessing(
   }
 
   function runAttempt(attemptNumber: number): void {
+    const pool = reviewOrchestrationOptions?.executionConcurrency;
+    const attempt = pool ? pool.run(reviewEvent.workspaceId, () => runAdmittedAttempt(attemptNumber)) : runAdmittedAttempt(attemptNumber);
+    void attempt.catch((error: unknown) => {
+      console.warn(admissionUnavailableReason(error));
+      onCompleted();
+    });
+  }
+
+  async function runAdmittedAttempt(attemptNumber: number): Promise<void> {
     // Timers may fire after a pause or clock adjustment. Check the actual
     // start instant too, including retries and the no-manager fallback.
     const windowed = clampDelayToExecutionWindow(executionSchedule, 0, Date.now());
@@ -1941,7 +1950,7 @@ async function scheduleTriggerProcessing(
     const attempt = manager
       ? manager.resolveGeneration(extras?.configSnapshotId ?? null).then((generation) => manager.withGeneration(generation, processAttempt))
       : processAttempt();
-    void attempt.then(async (result) => {
+    return attempt.then(async (result) => {
       const durationMs = Date.now() - startMs;
       if (result.reviewRun) {
         recordCompletedReviewRun(metrics, result.reviewRun, durationMs);
@@ -2270,7 +2279,7 @@ async function handleReviewOrchestration(
   const startMs = Date.now();
   let result: TriggerProcessingResult;
   try {
-    result = await runTriggerProcessing(
+    const process = () => runTriggerProcessing(
       provider,
       eventName,
       decoded,
@@ -2280,6 +2289,9 @@ async function handleReviewOrchestration(
       issueTriageOptions,
       { runId, attempt: 1, configSnapshotId },
     );
+    result = reviewOrchestrationOptions?.executionConcurrency
+      ? await reviewOrchestrationOptions.executionConcurrency.run(reviewEvent.workspaceId, process)
+      : await process();
   } catch (error) {
     const durationMs = Date.now() - startMs;
     recordReviewResult(metrics, { status: "failed", durationMs });
