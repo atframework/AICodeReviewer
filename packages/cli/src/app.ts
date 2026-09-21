@@ -277,7 +277,7 @@ export async function runCli(
   const { positionals, values } = parsedArgs;
 
   if (values.version) {
-    stdout.write("0.1.0\n");
+    stdout.write("0.2.0\n");
     return 0;
   }
 

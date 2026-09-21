@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0]
+
 ### Added
 
 - `aicr.get_review_commits` and `aicr.get_review_context`: host-backed Git/SVN/P4 review queries, per-commit files/diffs, paginated file unions, optional authors and fork source/target metadata; native MCP state and JSON/stream follow-up paths share the implementation.
@@ -71,7 +73,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **M8**: Eval `runEval` missing/unexpected problem matching now symmetrically checks `file + line + severity + category + messagePattern`.
 - **M8**: Eval `messagePattern` interface field now actually used in matching logic (RegExp and string support).
 
-## [0.1.0] - 2024-12-08
+## [0.1.0]
 
 ### Added
 
@@ -86,5 +88,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Review deduplication and async queue support (in-memory, Redis).
 - Structured logging with pino and secret scrubber.
 
-[Unreleased]: https://github.com/atframework/AICodeReviewer/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/atframework/AICodeReviewer/compare/v0.2.0...HEAD
 [0.1.0]: https://github.com/atframework/AICodeReviewer/releases/tag/v0.1.0
+[0.2.0]: https://github.com/atframework/AICodeReviewer/releases/tag/v0.2.0
