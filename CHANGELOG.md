@@ -11,12 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Auto-commit batch per-target publication recovery: the `publication_pending` checkpoint now carries the analysis payload plus per-channel receipts (`pending`/`published`/`failed`/`unknown`), so a resumed batch skips LLM/analysis, never re-calls channels with a confirmed `published` receipt, and only retries unfinished channels. Payload exceeding the checkpoint size cap degrades to full replay. The admin batches API returns each batch's `publications` receipts for operator inspection.
 - Config-example test sweep: every `yaml` code block in docs matching a config namespace is schema-validated, plus negative tests for type errors, unknown keys, forbidden keys, and trigger reference validation.
+- De-AI writing guidance for repository prose consolidated in `.agents/skills/ai-agent-maintenance/references/writing-guidance.md` (current-version-only statements, bilingual banned-word lists, sentence and structure rules); `docs-writing-style` and the bilingual site validator now point there.
 
 ### Fixed
 
 - Publication recovery now fences each channel, persists receipts before continuing, retains analysis usage/cost, and keeps failures across later messages. Redis preserves checkpoint arrays; overflow removes stale snapshots and corrupt payloads fail closed. Config-example discovery no longer silently skips malformed YAML or mixed known/unknown root keys.
 - Publish image workflow now creates the gitignored `deploy/docker-static` placeholder before the Docker build (mirroring `deploy.sh`), fixing tag builds that failed with `"/deploy/docker-static": not found`.
 - Vitest `testTimeout` raised to 15s: live-service suites exceeded the 5s default under full-suite worker load on many-core hosts, causing rotating flakes that passed standalone.
+- Timing-sensitive tests use fake timers or event gates instead of wall-clock sleeps: LLM gateway backoff/give-up cases assert exact timer ticks; runtime-config drain cases advance the fake 25ms poll loop; the stale-run-dir overlap case holds the first spawn until the second spawn call; the SQLite lock-TTL reclaim case advances the fake clock past the TTL; native sandbox kill cases wait for the grandchild's first heartbeat before the timeout cascade; the replica process matrix reaps orphaned postgres `--forkchild` workers after a forced kill and retries same-datadir restarts on the transient "pre-existing shared memory block is still in use" error (500ms interval, 60s deadline).
 
 ## [0.2.0]
 

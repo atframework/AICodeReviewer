@@ -78,6 +78,21 @@ async function heartbeatLineCount(file: string): Promise<number> {
   }
 }
 
+/**
+ * Poll for the grandchild's first heartbeat. This gates the assertions on the
+ * EVENT that the worker started (two sequential node boots) instead of
+ * assuming that startup fits inside the sandbox timeout window — under full
+ * CI worker load those boots can outlast a few hundred milliseconds.
+ */
+async function waitForFirstHeartbeat(file: string, deadlineMs: number): Promise<boolean> {
+  const deadline = Date.now() + deadlineMs;
+  while (Date.now() < deadline) {
+    if (await heartbeatLineCount(file) > 0) return true;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  return (await heartbeatLineCount(file)) > 0;
+}
+
 describe("createNativeSandboxBackend", () => {
   it("delivers decoded stdout before exit and isolates observer failures", async () => {
     const backend = createNativeSandboxBackend();
@@ -105,10 +120,10 @@ describe("createNativeSandboxBackend", () => {
     await writeFile(workerScript, WORKER_SCRIPT, "utf8");
 
     const backend = createNativeSandboxBackend();
-    const timeoutMs = 700;
+    const timeoutMs = 2_000;
 
     try {
-      const result = await backend.spawn({
+      const spawnPromise = backend.spawn({
         command: ["node", agentScript],
         cwd: base,
         env: {
@@ -119,11 +134,18 @@ describe("createNativeSandboxBackend", () => {
         timeoutMs,
       });
 
+      // Event gate: the grandchild must heartbeat BEFORE the timeout cascade
+      // begins, otherwise the kill assertions below would pass vacuously.
+      const workerRan = await waitForFirstHeartbeat(heartbeatFile, timeoutMs - 100);
+      const result = await spawnPromise;
+      expect(workerRan, "grandchild worker never heartbeated before the timeout fired").toBe(true);
+
       // It must have timed out (not exited cleanly).
       expect(result.timedOut).toBe(true);
       // The promise must resolve boundedly shortly after the timeout + grace
       // cascade, rather than hanging until grandchildren die on their own.
-      expect(result.durationMs).toBeGreaterThanOrEqual(timeoutMs);
+      // The lower bound tolerates ~1ms of timer rounding jitter.
+      expect(result.durationMs).toBeGreaterThanOrEqual(timeoutMs - 1);
       expect(result.durationMs).toBeLessThan(timeoutMs + 3 * GRACE_PERIOD_MS + 5_000);
       // The grandchild worker ran long enough to write at least one heartbeat.
       expect(await heartbeatLineCount(heartbeatFile)).toBeGreaterThan(0);
@@ -154,10 +176,10 @@ describe("createNativeSandboxBackend", () => {
     await writeFile(workerScript, WORKER_SCRIPT, "utf8");
 
     const backend = createNativeSandboxBackend();
-    const timeoutMs = 700;
+    const timeoutMs = 2_000;
 
     try {
-      const result = await backend.spawn({
+      const spawnPromise = backend.spawn({
         command: ["node", agentScript],
         cwd: base,
         env: {
@@ -167,6 +189,12 @@ describe("createNativeSandboxBackend", () => {
         },
         timeoutMs,
       });
+
+      // Event gate: the escaped worker must heartbeat BEFORE the timeout
+      // cascade begins (two sequential node boots under CI load).
+      const workerRan = await waitForFirstHeartbeat(heartbeatFile, timeoutMs - 100);
+      const result = await spawnPromise;
+      expect(workerRan, "setsid worker never heartbeated before the timeout fired").toBe(true);
 
       expect(result.timedOut).toBe(true);
       // The worker must have run and heartbeated before the timeout fired.

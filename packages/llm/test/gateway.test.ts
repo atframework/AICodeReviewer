@@ -259,31 +259,39 @@ describe("createResilientChatClient", () => {
 	});
 
 	it("retries on 429 errors before falling back", async () => {
-		const rateLimitError = new LlmProviderError("rate limited", { status: 429, retryAfter: "1" });
-		const successResult: ChatCompletionResult = {
-			providerId: "openai-prod",
-			modelId: "gpt-test",
-			content: "ok after retry",
-			usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
-			raw: {},
-		};
+		vi.useFakeTimers();
+		try {
+			const rateLimitError = new LlmProviderError("rate limited", { status: 429, retryAfter: "1" });
+			const successResult: ChatCompletionResult = {
+				providerId: "openai-prod",
+				modelId: "gpt-test",
+				content: "ok after retry",
+				usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
+				raw: {},
+			};
 
-		const sharedClient = makeToggleClient([rateLimitError, successResult]);
-		const gateway = createResilientChatClient(
-			makeOptions({
-				clientFactory: () => sharedClient,
-				retry: { maxAttempts: 3, backoff: { kind: "constant", baseMs: 10, jitter: false } },
-			}),
-		);
+			const sharedClient = makeToggleClient([rateLimitError, successResult]);
+			const gateway = createResilientChatClient(
+				makeOptions({
+					clientFactory: () => sharedClient,
+					retry: { maxAttempts: 3, backoff: { kind: "constant", baseMs: 10, jitter: false } },
+				}),
+			);
 
-		const start = Date.now();
-		const result = await gateway.complete({ model: baseModel, messages: [] });
-		const elapsed = Date.now() - start;
+			let settled = false;
+			const pending = gateway.complete({ model: baseModel, messages: [] }).then((result) => { settled = true; return result; });
+			// The single retry waits exactly one 10ms constant backoff tick —
+			// advancing less keeps it pending, hitting the tick resolves it.
+			await vi.advanceTimersByTimeAsync(9);
+			expect(settled).toBe(false);
+			await vi.advanceTimersByTimeAsync(1);
+			const result = await pending;
 
-		expect(result.content).toBe("ok after retry");
-		expect(result.retryCount).toBe(1);
-		expect(result.fallbackCount).toBe(0);
-		expect(elapsed).toBeLessThan(100);
+			expect(result.content).toBe("ok after retry");
+			expect(result.retryCount).toBe(1);
+			expect(result.fallbackCount).toBe(0);
+			expect(vi.getTimerCount()).toBe(0);
+		} finally { vi.useRealTimers(); }
 	});
 
 	it("moves directly to the next model when account quota is exhausted", async () => {
@@ -399,34 +407,41 @@ describe("createResilientChatClient", () => {
 	});
 
 	it("treats maxAttempts as total provider calls and does not sleep after the final attempt", async () => {
-		const rateLimitError = new LlmProviderError("rate limited", { status: 429 });
-		let primaryCalls = 0;
+		vi.useFakeTimers();
+		try {
+			const rateLimitError = new LlmProviderError("rate limited", { status: 429 });
+			let primaryCalls = 0;
 
-		const gateway = createResilientChatClient(
-			makeOptions({
-				clientFactory: (model) => {
-					if (model.providerId === "openai-prod") {
-						return {
-							async complete(): Promise<never> {
-								primaryCalls++;
-								throw rateLimitError;
-							},
-						};
-					}
+			const gateway = createResilientChatClient(
+				makeOptions({
+					clientFactory: (model) => {
+						if (model.providerId === "openai-prod") {
+							return {
+								async complete(): Promise<never> {
+									primaryCalls++;
+									throw rateLimitError;
+								},
+							};
+						}
 
-					return makeClient({ providerId: "anthropic-prod", modelId: "claude-test", content: "fallback ok", raw: {} });
-				},
-				retry: { maxAttempts: 1, backoff: { kind: "constant", baseMs: 1000, jitter: false } },
-			}),
-		);
+						return makeClient({ providerId: "anthropic-prod", modelId: "claude-test", content: "fallback ok", raw: {} });
+					},
+					retry: { maxAttempts: 1, backoff: { kind: "constant", baseMs: 1000, jitter: false } },
+				}),
+			);
 
-		const start = Date.now();
-		const result = await gateway.complete({ model: baseModel, messages: [] });
+			const pending = gateway.complete({ model: baseModel, messages: [] });
+			// Let the single allowed attempt run and fail; with maxAttempts
+			// exhausted the failure must go straight to the fallback chain
+			// instead of scheduling a 1000ms backoff timer.
+			await vi.advanceTimersByTimeAsync(0);
+			expect(vi.getTimerCount()).toBe(0);
+			const result = await pending;
 
-		expect(result.content).toBe("fallback ok");
-		expect(primaryCalls).toBe(1);
-		expect(result.retryCount).toBe(0);
-		expect(Date.now() - start).toBeLessThan(100);
+			expect(result.content).toBe("fallback ok");
+			expect(primaryCalls).toBe(1);
+			expect(result.retryCount).toBe(0);
+		} finally { vi.useRealTimers(); }
 	});
 
 	it("throws LlmFallbackExhaustedError when all options fail", async () => {
@@ -795,70 +810,88 @@ describe("createResilientChatClient", () => {
 	});
 
 	it("uses exponential backoff by default", async () => {
-		const rateLimitError = new LlmProviderError("rate limited", { status: 429 });
-		const successResult: ChatCompletionResult = {
-			providerId: "openai-prod",
-			modelId: "gpt-test",
-			content: "ok",
-			usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
-			raw: {},
-		};
+		vi.useFakeTimers();
+		try {
+			const rateLimitError = new LlmProviderError("rate limited", { status: 429 });
+			const successResult: ChatCompletionResult = {
+				providerId: "openai-prod",
+				modelId: "gpt-test",
+				content: "ok",
+				usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
+				raw: {},
+			};
 
-		const sharedClient = makeToggleClient([rateLimitError, rateLimitError, successResult]);
-		const gateway = createResilientChatClient(
-			makeOptions({
-				clientFactory: () => sharedClient,
-				retry: {
-					maxAttempts: 5,
-					backoff: { kind: "exponential", baseMs: 10, maxMs: 100, jitter: false },
-				},
-			}),
-		);
+			const sharedClient = makeToggleClient([rateLimitError, rateLimitError, successResult]);
+			const gateway = createResilientChatClient(
+				makeOptions({
+					clientFactory: () => sharedClient,
+					retry: {
+						maxAttempts: 5,
+						backoff: { kind: "exponential", baseMs: 10, maxMs: 100, jitter: false },
+					},
+				}),
+			);
 
-		const start = Date.now();
-		const output = await gateway.complete({ model: baseModel, messages: [] });
-		const elapsed = Date.now() - start;
+			let settled = false;
+			const pending = gateway.complete({ model: baseModel, messages: [] }).then((result) => { settled = true; return result; });
+			// First retry: baseMs * 2^0 = 10ms. Second retry: baseMs * 2^1 = 20ms.
+			// The result must resolve only once both backoff ticks (30ms) elapsed.
+			await vi.advanceTimersByTimeAsync(29);
+			expect(settled).toBe(false);
+			await vi.advanceTimersByTimeAsync(1);
+			const output = await pending;
 
-		expect(output.content).toBe("ok");
-		expect(output.retryCount).toBe(2);
-		// First retry: baseMs * 2^0 = 10ms
-		// Second retry: baseMs * 2^1 = 20ms
-		// Total delay should be around 30ms
-		expect(elapsed).toBeGreaterThanOrEqual(25);
+			expect(output.content).toBe("ok");
+			expect(output.retryCount).toBe(2);
+			expect(vi.getTimerCount()).toBe(0);
+		} finally { vi.useRealTimers(); }
 	});
 
 	it("respects giveUpAfterSeconds and falls back early", async () => {
-		const rateLimitError = new LlmProviderError("rate limited", { status: 429 });
-		const fallbackResult: ChatCompletionResult = {
-			providerId: "anthropic-prod",
-			modelId: "claude-test",
-			content: "fallback ok",
-			usage: { promptTokens: 5, completionTokens: 2, totalTokens: 7 },
-			raw: {},
-		};
+		vi.useFakeTimers();
+		try {
+			const rateLimitError = new LlmProviderError("rate limited", { status: 429 });
+			const fallbackResult: ChatCompletionResult = {
+				providerId: "anthropic-prod",
+				modelId: "claude-test",
+				content: "fallback ok",
+				usage: { promptTokens: 5, completionTokens: 2, totalTokens: 7 },
+				raw: {},
+			};
 
-		const gateway = createResilientChatClient(
-			makeOptions({
-				clientFactory: (model) => {
-					if (model.providerId === "openai-prod") {
-						// This will take longer than giveUpAfterSeconds
-						return {
-							async complete(): Promise<never> {
-								await new Promise((resolve) => setTimeout(resolve, 200));
-								throw rateLimitError;
-							},
-						};
-					}
+			const gateway = createResilientChatClient(
+				makeOptions({
+					clientFactory: (model) => {
+						if (model.providerId === "openai-prod") {
+							// This will take longer than giveUpAfterSeconds
+							return {
+								async complete(): Promise<never> {
+									await new Promise((resolve) => setTimeout(resolve, 200));
+									throw rateLimitError;
+								},
+							};
+						}
 
-					return makeClient(fallbackResult);
-				},
-				retry: { maxAttempts: 10, giveUpAfterSeconds: 0.1, backoff: { kind: "constant", baseMs: 1, jitter: false } },
-			}),
-		);
+						return makeClient(fallbackResult);
+					},
+					retry: { maxAttempts: 10, giveUpAfterSeconds: 0.1, backoff: { kind: "constant", baseMs: 1, jitter: false } },
+				}),
+			);
 
-		const result = await gateway.complete({ model: baseModel, messages: [] });
-		expect(result.content).toBe("fallback ok");
-		expect(result.fallbackCount).toBe(1);
+			let settled = false;
+			const pending = gateway.complete({ model: baseModel, messages: [] }).then((result) => { settled = true; return result; });
+			// The failing attempt rejects after its 200ms virtual call; at that
+			// point the 0.1s give-up window is already exceeded, so no retry
+			// backoff tick stands between the failure and the fallback.
+			await vi.advanceTimersByTimeAsync(200);
+			expect(settled).toBe(true);
+			const result = await pending;
+
+			expect(result.content).toBe("fallback ok");
+			expect(result.fallbackCount).toBe(1);
+			expect(result.retryCount).toBe(0);
+			expect(vi.getTimerCount()).toBe(0);
+		} finally { vi.useRealTimers(); }
 	});
 
 	it("passes through the input model to the client factory", async () => {

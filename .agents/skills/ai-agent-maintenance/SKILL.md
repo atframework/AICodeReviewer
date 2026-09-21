@@ -41,6 +41,9 @@ user-invocable: false
 - Add retry-derived lessons only when they change future decisions; merge with
   the closest existing rule. Launcher access-denied is already covered by the
   [Windows reference](../modern-cli-toolkit/references/powershell-for-agents.md).
+- Prose in prompts, skills, bridges, and docs follows
+  [writing guidance](references/writing-guidance.md): current-version-only
+  statements and the de-AI wording rules live there.
 
 ## Validate the resulting reading path
 

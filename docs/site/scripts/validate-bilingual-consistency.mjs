@@ -1,4 +1,6 @@
-// Enforce bilingual contribution rules from .agents/skills/docs-writing-style/SKILL.md.
+// Enforce bilingual contribution rules from .agents/skills/docs-writing-style/SKILL.md
+// (checks 1-4) and the banned-word lists from
+// .agents/skills/ai-agent-maintenance/references/writing-guidance.md (check 5).
 // Contract and acceptance history: docs/ai/milestones/M11.md.
 // Zero dependencies.
 //
@@ -12,9 +14,10 @@
 //   4. every fence in .mdx files carries a language tag (markdownlint MD040
 //      only reaches *.md via the root glob);
 //   5. prose avoids the machine-checkable subset of the banned filler-word
-//      lists from the docs-writing-style skill (zh §3, en §4). The subset is
-//      the unambiguous words only — context-dependent bans (核心、进行,
-//      "simply", sentence-initial "moreover", ...) stay human-reviewed.
+//      lists from .agents/skills/ai-agent-maintenance/references/writing-guidance.md.
+//      The subset is the unambiguous words only — context-dependent bans
+//      (核心、进行, "simply", sentence-initial "moreover", ...) stay
+//      human-reviewed.
 
 import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -158,7 +161,7 @@ for (const locale of locales) {
         for (const word of bannedZh) {
           if (line.includes(word)) {
             violations.push(
-              `${display(file)}:${index + 1}: banned filler word "${word}" (docs-writing-style §3); replace with concrete wording`,
+              `${display(file)}:${index + 1}: banned filler word "${word}" (writing-guidance.md 中文用词); replace with concrete wording`,
             );
           }
         }
@@ -168,7 +171,7 @@ for (const locale of locales) {
           const match = pattern.exec(line);
           if (match) {
             violations.push(
-              `${display(file)}:${index + 1}: banned filler word "${match[0]}" (docs-writing-style §4); replace with concrete wording`,
+              `${display(file)}:${index + 1}: banned filler word "${match[0]}" (writing-guidance.md English wording); replace with concrete wording`,
             );
           }
         }

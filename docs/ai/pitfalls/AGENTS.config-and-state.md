@@ -341,6 +341,15 @@ Sources: `packages/server/src/review-orchestrator.ts`, `live-runs.ts`,
   dedupe only `review_runs_pkey`. Serialize rollup reads inside the transaction
   with `FOR NO KEY UPDATE`, compatible with concurrent FK `KEY SHARE` locks
   (`pg-store.test.ts` concurrent duplicate and rollup cases).
+- On Windows, `taskkill /PID /T /F` on a postgres postmaster leaks
+  `--forkchild` workers (PG18 io_worker/bgwriter) whose recorded parent PID
+  escapes the tree walk; while any orphan lives, its shared-memory segment
+  stays mapped and an immediate same-datadir restart fails with "pre-existing
+  shared memory block is still in use". Reap orphans by matching the
+  `--forkchild <role> <postmasterPid>` command line, and retry that specific
+  startup error (500 ms interval, 60 s deadline)
+  (`packages/server/test/replica-process-matrix.test.ts` `killProcessTree` /
+  `startPostgres`).
 - `tsc -b` trusts dist timestamps: after changing an exported signature,
   a consumer package can compile against the stale `.d.ts` and report phantom
   arity errors. Rebuild the producer with `tsc -b packages/<producer> --force`

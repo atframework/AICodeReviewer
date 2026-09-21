@@ -26,6 +26,10 @@ user-invocable: false
 5. Verify local and reverse-proxy health, service/container state, deployed
    version/config and bounded recent logs. Distinguish build/health from actual
    review acceptance; do not create reviews or notifications merely to test a deploy.
+6. After successful verification, clean deployment artifacts using the retention
+   procedure in [source and config](references/source-and-config.md). Keep the
+   active release and at most two historical releases of code bundles, config
+   backups and AICR images; do not accumulate a new backup on every deployment.
 
 ## Deployment invariants
 

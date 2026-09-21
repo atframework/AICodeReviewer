@@ -712,24 +712,39 @@ describe("runReviewOrchestration", () => {
         agentAdapter,
       });
 
-      // run-a starts first and stays in flight while run-b is admitted.
+      // The first run's spawn stays in flight until the second run's spawn is
+      // called — a happens-before edge instead of a wall-clock window, so CI
+      // scheduler jitter cannot miss the overlap.
+      let releaseFirstSpawn!: () => void;
+      const firstSpawnHold = new Promise<void>(resolve => { releaseFirstSpawn = resolve; });
+      let firstSpawn = true;
       const slowSpawn = sandbox.spawn.bind(sandbox);
       sandbox.spawn = async () => {
-        if (spawnCount === 0) await new Promise((resolve) => setTimeout(resolve, 150));
+        if (firstSpawn) {
+          firstSpawn = false;
+          await firstSpawnHold;
+        } else {
+          releaseFirstSpawn();
+        }
         return slowSpawn();
       };
-      const [a, b] = await Promise.all([
-        runReviewOrchestration(
-          { reviewEvent: createReviewEventFixture(), provider: "gitea", eventName: "pull_request", payload: {}, runId: "run-a" },
-          makeOptions(),
-        ),
-        runReviewOrchestration(
-          { reviewEvent: createReviewEventFixture(), provider: "gitea", eventName: "pull_request", payload: {}, runId: "run-b" },
-          makeOptions(),
-        ),
-      ]);
-      expect(a.outputState.skipReason).toBe("lgtm");
-      expect(b.outputState.skipReason).toBe("lgtm");
+      try {
+        const [a, b] = await Promise.all([
+          runReviewOrchestration(
+            { reviewEvent: createReviewEventFixture(), provider: "gitea", eventName: "pull_request", payload: {}, runId: "run-a" },
+            makeOptions(),
+          ),
+          runReviewOrchestration(
+            { reviewEvent: createReviewEventFixture(), provider: "gitea", eventName: "pull_request", payload: {}, runId: "run-b" },
+            makeOptions(),
+          ),
+        ]);
+        expect(a.outputState.skipReason).toBe("lgtm");
+        expect(b.outputState.skipReason).toBe("lgtm");
+      } finally {
+        // Never leave the first spawn dangling when an assertion above fails.
+        releaseFirstSpawn();
+      }
 
       expect(secondSpawnObservedStale).toBe(true);
       expect(existsSync(staleDir)).toBe(false);

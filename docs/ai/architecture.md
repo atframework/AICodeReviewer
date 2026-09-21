@@ -138,7 +138,7 @@ PostgreSQL 后端见 [M17](milestones/M17.md)，来源合并、路由图与发�
   逐目标恢复：检查点携带分析产物（problems/summaries）、原模型用量/费用与逐渠道回执
   （`pending`/`published`/`failed`/`unknown`，含 externalId 与尝试次数），重入时跳过
   LLM/分析阶段，只续发未完成渠道。HTTP 4xx（除 408）记 `failed`；传输失败、408、5xx 与部分
-  消息已发送的渠道记 `unknown`（写入可能已落地）。全部消息确认后才把渠道记为 `published`；缓冲中
+  消息已发送的渠道记 `unknown`（写入可能已生效）。全部消息确认后才把渠道记为 `published`；缓冲中
   （`buffered`）与仅本地收集的结果只记 `pending`。payload 与回执随检查点 1 MiB 上限序列化，
   超限（含后续回执和记账增长）会清除旧的部分检查点并退化为整体重放，损坏载荷则拒绝执行。
   每个渠道发送前检查租约，完成后先保存回执，再处理下一渠道；持久化失败或失去租约立即停止。

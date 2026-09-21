@@ -46,6 +46,25 @@ host snapshot or secrets into a committed helper.
   admission closed (`file_config_mismatch`); restore the matching file or adopt
   the new digest through a published changeset before restarting.
 
+## Retention after a successful deployment
+
+- Inventory AICR release directories, archives, config/DB backup copies and image
+  IDs before deleting anything. Keep the active release and at most two newest
+  recoverable historical releases, with matching config, env, deployment assets
+  and image identities. Protect those images before `deploy.sh` replaces the
+  `:previous` tag. Do not remove recovery material during a failed rollout.
+- Remove superseded bundles, extracted staging trees, duplicate config/DB
+  backups and unused AICR images only after service and configuration checks
+  pass. Verify every resolved cleanup path lies inside the selected deployment
+  root and every image belongs to AICR and is unused by retained containers.
+  Use explicit paths/image IDs; never run a global image/system/volume prune on
+  a shared host. Build layers needed by retained images are not old releases.
+- Preserve live databases, workspaces, logs, secrets and configuration revisions
+  or snapshots referenced by queued work. Their runtime retention contracts are
+  separate from deployment backup retention; do not delete database rows to
+  satisfy the two-release limit. Remove task-owned temporary secret copies when
+  no longer needed, and record the retained versions and reclaimed space.
+
 ## Fresh or nested-sandbox deployment
 
 Use a new isolated test root, container/image name and port; do not delete or copy

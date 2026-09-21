@@ -135,18 +135,26 @@ describe("createSqliteQueue", () => {
     });
 
     it("reclaims a stale running job after lock TTL expires", async () => {
-      const ttlQueue = await createSqliteQueue({ path: dbPath, lockTtlSeconds: 1 });
-      queue = ttlQueue;
-      const job = await queue.enqueue({}, { workspaceId: "ws1", triggerName: "t1", maxAttempts: 3 });
-      const d1 = await queue.dequeue("w1");
-      expect(d1).toBeDefined();
+      vi.useFakeTimers();
+      try {
+        const ttlQueue = await createSqliteQueue({ path: dbPath, lockTtlSeconds: 1 });
+        queue = ttlQueue;
+        const job = await queue.enqueue({}, { workspaceId: "ws1", triggerName: "t1", maxAttempts: 3 });
+        const d1 = await queue.dequeue("w1");
+        expect(d1).toBeDefined();
 
-      await new Promise((r) => setTimeout(r, 1100));
+        // The stale-claim reclaim is driven by Date.now(): advancing the fake
+        // clock past the 1s lock TTL expires the claim deterministically,
+        // without a real-time sleep that CI scheduler jitter can distort.
+        await vi.advanceTimersByTimeAsync(1100);
 
-      const d2 = await queue.dequeue("w2");
-      expect(d2).toBeDefined();
-      expect(d2!.id).toBe(job.id);
-      expect(d2!.attempt).toBe(2);
+        const d2 = await queue.dequeue("w2");
+        expect(d2).toBeDefined();
+        expect(d2!.id).toBe(job.id);
+        expect(d2!.attempt).toBe(2);
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 

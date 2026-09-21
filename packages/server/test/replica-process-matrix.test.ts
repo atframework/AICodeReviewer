@@ -357,6 +357,25 @@ interface DaemonHandle {
 
 const daemons: DaemonHandle[] = [];
 
+/**
+ * On Windows, postgres fork-children (io_worker/bgwriter/...) record the
+ * postmaster PID as the token after `--forkchild=<role>` but can escape the
+ * taskkill /T tree walk. While any of them lives, the old shared-memory
+ * segment stays mapped and an immediate same-datadir restart fails with
+ * "pre-existing shared memory block is still in use". Reap the orphans that
+ * name the killed postmaster as their parent.
+ */
+async function reapPostgresForkChildren(postmasterPid: number): Promise<void> {
+  if (process.platform !== "win32") return;
+  const script = [
+    "$ErrorActionPreference='SilentlyContinue';",
+    `Get-CimInstance Win32_Process -Filter "Name='postgres.exe'" |`,
+    `  Where-Object { $_.CommandLine -match '--forkchild(=|\\s)"?\\S+"?\\s+${postmasterPid}(\\s|$)' } |`,
+    "  ForEach-Object { Stop-Process -Id $_.ProcessId -Force }",
+  ].join(" ");
+  await execFileAsync("powershell", ["-NoProfile", "-NonInteractive", "-Command", script]).catch(() => undefined);
+}
+
 async function killProcessTree(proc: ChildProcess): Promise<void> {
   if (proc.exitCode !== null || proc.signalCode !== null) return;
   const exited = once(proc, "exit").catch(() => undefined);
@@ -367,29 +386,33 @@ async function killProcessTree(proc: ChildProcess): Promise<void> {
     proc.kill("SIGKILL");
   }
   await Promise.race([exited, sleep(10_000)]);
+  if (proc.pid !== undefined) await reapPostgresForkChildren(proc.pid);
 }
 
 async function startPostgres(binaries: PgBinaries, dataDir: string, port: number): Promise<DaemonHandle> {
-  // lc_messages=C: the readiness marker below is the English log line; the
-  // default locale on this workstation renders it in zh-CN (GBK bytes).
-  const proc = spawn(binaries.postgres, [
-    "-D", dataDir, "-p", String(port),
-    "-c", "listen_addresses=127.0.0.1",
-    // This fixture uses TCP only; distro defaults may require a privileged
-    // /var/run/postgresql socket directory that rootless tests do not own.
-    "-c", "unix_socket_directories=",
-    "-c", "lc_messages=C",
-  ], {
-    windowsHide: true,
-    stdio: ["ignore", "pipe", "pipe"],
-    env: { ...process.env, LC_MESSAGES: "C" },
-  });
-  let output = "";
-  proc.stdout?.on("data", (chunk: Buffer) => { output += String(chunk); });
-  proc.stderr?.on("data", (chunk: Buffer) => { output += String(chunk); });
-  const handle: DaemonHandle = {
+  const spawnPostmaster = (): { proc: ChildProcess; output: () => string } => {
+    // lc_messages=C: the readiness marker below is the English log line; the
+    // default locale on this workstation renders it in zh-CN (GBK bytes).
+    const proc = spawn(binaries.postgres, [
+      "-D", dataDir, "-p", String(port),
+      "-c", "listen_addresses=127.0.0.1",
+      // This fixture uses TCP only; distro defaults may require a privileged
+      // /var/run/postgresql socket directory that rootless tests do not own.
+      "-c", "unix_socket_directories=",
+      "-c", "lc_messages=C",
+    ], {
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "pipe"],
+      env: { ...process.env, LC_MESSAGES: "C" },
+    });
+    let output = "";
+    proc.stdout?.on("data", (chunk: Buffer) => { output += String(chunk); });
+    proc.stderr?.on("data", (chunk: Buffer) => { output += String(chunk); });
+    return { proc, output: () => output };
+  };
+  const makeHandle = (proc: ChildProcess, output: () => string): DaemonHandle => ({
     proc,
-    output: () => output,
+    output,
     async kill() { await killProcessTree(proc); },
     async stop() {
       if (proc.exitCode !== null || proc.signalCode !== null) return;
@@ -397,18 +420,33 @@ async function startPostgres(binaries: PgBinaries, dataDir: string, port: number
         await killProcessTree(proc);
       });
     },
-  };
+  });
   const deadline = Date.now() + 60_000;
-  while (!output.includes("ready to accept connections")) {
-    if (proc.exitCode !== null) throw new Error(`postgres exited before ready (code ${proc.exitCode}):\n${output}`);
+  let attempt = spawnPostmaster();
+  for (;;) {
+    if (attempt.output().includes("ready to accept connections")) {
+      const handle = makeHandle(attempt.proc, attempt.output);
+      daemons.push(handle);
+      return handle;
+    }
+    if (attempt.proc.exitCode !== null) {
+      // After a forced kill, orphaned fork-children may hold the shared-memory
+      // segment for a short window; that failure is transient, so respawn
+      // instead of failing the leg.
+      const retryable = attempt.output().includes("pre-existing shared memory block is still in use");
+      if (!retryable || Date.now() > deadline) {
+        throw new Error(`postgres exited before ready (code ${attempt.proc.exitCode}):\n${attempt.output()}`);
+      }
+      await sleep(500);
+      attempt = spawnPostmaster();
+      continue;
+    }
     if (Date.now() > deadline) {
-      await handle.kill();
-      throw new Error(`postgres did not become ready within 60s:\n${output}`);
+      await makeHandle(attempt.proc, attempt.output).kill();
+      throw new Error(`postgres did not become ready within 60s:\n${attempt.output()}`);
     }
     await sleep(100);
   }
-  daemons.push(handle);
-  return handle;
 }
 
 /** `D:\\x\\y` → `/cygdrive/d/x/y` for MSYS2/cygwin redis builds. */

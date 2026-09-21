@@ -16,7 +16,7 @@ The HTML pages expose a `rel="alternate"` link to their `.md` counterpart.
 On 2026-09-21, those official Markdown endpoints provided the full API and field
 permission tables even though the web reader returned empty HTML bodies.
 Use a direct HTTP read of that declared alternate when verifying these contracts.
-Request paths and field shapes were additionally checked against the official
+Request paths and field shapes were also checked against the official
 [Python SDK](https://github.com/larksuite/oapi-sdk-python/tree/v2_main/lark_oapi):
 `core/token/manager.py`, `api/im/v1/model/create_message_request_body.py`,
 `get_chat_members_request.py`, `get_chat_members_response_body.py`,

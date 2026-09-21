@@ -143,24 +143,32 @@ describe("RuntimeConfigManager", () => {
   });
 
   it("H16: drain waits for the running generation and its durable pin release", async () => {
-    const manager = makeManager();
-    const generation = await manager.admission();
-    let release!: () => void;
-    const body = new Promise<void>(resolve => { release = resolve; });
-    let entered!: () => void;
-    const ready = new Promise<void>(resolve => { entered = resolve; });
-    const task = manager.withGeneration(generation, async () => { entered(); await body; });
-    await ready;
-    let drained = false;
-    const draining = manager.drain().then(() => { drained = true; });
-    await new Promise(resolve => setTimeout(resolve, 35));
-    expect(drained).toBe(false);
-    release();
-    await task;
-    await draining;
-    const pins = (await store.listRuntimeStates(NAMESPACE)).filter(record => record.key.startsWith("pin/"));
-    expect(pins).toHaveLength(1);
-    expect(pins[0]?.value).toMatchObject({ state: "ended" });
+    vi.useFakeTimers();
+    try {
+      const manager = makeManager();
+      const generation = await manager.admission();
+      let release!: () => void;
+      const body = new Promise<void>(resolve => { release = resolve; });
+      let entered!: () => void;
+      const ready = new Promise<void>(resolve => { entered = resolve; });
+      const task = manager.withGeneration(generation, async () => { entered(); await body; });
+      await ready;
+      let drained = false;
+      const draining = manager.drain().then(() => { drained = true; });
+      // Two full drain poll ticks (25ms each) must pass without completing.
+      await vi.advanceTimersByTimeAsync(60);
+      expect(drained).toBe(false);
+      release();
+      await task;
+      // The next poll tick observes the release and finishes the drain.
+      await vi.advanceTimersByTimeAsync(30);
+      await draining;
+      const pins = (await store.listRuntimeStates(NAMESPACE)).filter(record => record.key.startsWith("pin/"));
+      expect(pins).toHaveLength(1);
+      expect(pins[0]?.value).toMatchObject({ state: "ended" });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("H16: adopting a snapshot already leased by a worker preserves ownership through drain", async () => {
@@ -173,6 +181,7 @@ describe("RuntimeConfigManager", () => {
     const prepare = vi.fn<(generation: RuntimeConfigGeneration) => Promise<void>>(async () => {});
     await manager.setGenerationPreparer(prepare);
     const lease = await manager.lease(published.snapshotId);
+    vi.useFakeTimers();
     try {
       const adopted = await manager.admission();
       expect(adopted).toBe(lease.generation);
@@ -180,35 +189,47 @@ describe("RuntimeConfigManager", () => {
       expect(prepare.mock.calls.filter(([generation]) => generation.snapshotId === published.snapshotId)).toHaveLength(1);
       let drained = false;
       const draining = manager.drain().then(() => { drained = true; });
-      await new Promise(resolve => setTimeout(resolve, 35));
+      // Two full drain poll ticks (25ms each) must pass without completing.
+      await vi.advanceTimersByTimeAsync(60);
       expect(drained).toBe(false);
       expect(disposed.mock.calls.some(([generation]) => generation.snapshotId === published.snapshotId)).toBe(false);
       lease.release();
+      // The next poll tick observes the release and finishes the drain.
+      await vi.advanceTimersByTimeAsync(30);
       await draining;
       expect(disposed.mock.calls.filter(([generation]) => generation.snapshotId === published.snapshotId)).toHaveLength(1);
     } finally {
+      vi.useRealTimers();
       lease.release();
       manager.close();
     }
   });
 
   it("M17: drain refuses new admissions but waits for accepted timers and their final writes", async () => {
-    const manager = makeManager();
-    const generation = await manager.admission();
-    const finish = manager.retainBackgroundTask();
-    let drained = false;
-    const draining = manager.drain().then(() => { drained = true; });
-    await expect(manager.admission()).rejects.toThrow("draining");
-    expect(manager.status()).toMatchObject({ draining: true, pendingTasks: 1 });
-    // The accepted timer can still acquire its pinned generation after drain starts.
-    await manager.withGeneration(generation, async () => {});
-    await new Promise(resolve => setTimeout(resolve, 35));
-    expect(drained).toBe(false);
-    finish();
-    finish();
-    await draining;
-    expect(manager.status().pendingTasks).toBe(0);
-    await expect(manager.admission()).rejects.toThrow("closed");
+    vi.useFakeTimers();
+    try {
+      const manager = makeManager();
+      const generation = await manager.admission();
+      const finish = manager.retainBackgroundTask();
+      let drained = false;
+      const draining = manager.drain().then(() => { drained = true; });
+      await expect(manager.admission()).rejects.toThrow("draining");
+      expect(manager.status()).toMatchObject({ draining: true, pendingTasks: 1 });
+      // The accepted timer can still acquire its pinned generation after drain starts.
+      await manager.withGeneration(generation, async () => {});
+      // Two full drain poll ticks (25ms each) must pass without completing.
+      await vi.advanceTimersByTimeAsync(60);
+      expect(drained).toBe(false);
+      finish();
+      finish();
+      // The next poll tick observes the released task and finishes the drain.
+      await vi.advanceTimersByTimeAsync(30);
+      await draining;
+      expect(manager.status().pendingTasks).toBe(0);
+      await expect(manager.admission()).rejects.toThrow("closed");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("H16: drain waits while an accepted historical lease is still loading", async () => {
@@ -226,17 +247,22 @@ describe("RuntimeConfigManager", () => {
     });
     const pendingLease = manager.lease(first.snapshotId);
     await started;
+    vi.useFakeTimers();
     let drained = false;
     const draining = manager.drain().then(() => { drained = true; });
     try {
-      await new Promise(resolve => setTimeout(resolve, 35));
+      // Two full drain poll ticks (25ms each) must pass without completing.
+      await vi.advanceTimersByTimeAsync(60);
       expect(drained).toBe(false);
       resume();
       const lease = await pendingLease;
       expect(manager.status().activeLeases).toBe(1);
       lease.release();
+      // The next poll tick observes the release and finishes the drain.
+      await vi.advanceTimersByTimeAsync(30);
       await draining;
     } finally {
+      vi.useRealTimers();
       resume();
       (await pendingLease.catch(() => null))?.release();
       await draining;
