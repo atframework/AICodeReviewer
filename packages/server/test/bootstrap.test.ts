@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createConfigStoreFromDatabaseConfig, createReviewEvent, isAllowedInstant, type AppConfig } from "@aicr/core";
-import { computeScopeFingerprint } from "@aicr/outputs";
+import { computeScopeFingerprint, PublicationJournal } from "@aicr/outputs";
 import { closeStoreDb, createStoreDb, getProjectStats, hardDeleteExpiredProjects, insertReviewRun } from "@aicr/store";
 import type * as aicrStore from "@aicr/store";
 import type * as aicrCore from "@aicr/core";
@@ -217,6 +217,25 @@ function assertSummaryPublisher(publisher: OutputPublisher | undefined): asserts
 }
 
 describe("createCompositeOutputPublisher publication recovery", () => {
+  it("retains the full report link when its confirmed issue channel is skipped", async () => {
+    const issue = vi.fn();
+    const im = vi.fn(async () => ({ channel: "im", status: "published" as const }));
+    const remote = new PublicationJournal({ batchId: "batch", save: async () => {}, operations: [{
+      id: "a".repeat(64), channel: "issue", call: "summary:0", strategy: "marker", status: "confirmed",
+      target: "https://git.test/repos/o/r/issues", scope: "https://git.test/repos/o/r", collection: true,
+      attempts: 1, reconciliations: 0, firstAttemptAt: 1, updatedAt: 1,
+      response: { status: 201, data: { id: 1, html_url: "https://git.test/o/r/issues/1" } },
+    }] });
+    const composite = createCompositeOutputPublisher([], [
+      { name: "issue", kind: "gitea_problem_issue", publisher: { publishSummary: issue } },
+      { name: "im", kind: "feishu_app", publisher: { publishSummary: im } },
+    ], { remote, skipChannels: new Set(["issue"]) })!;
+    await composite.publishSummary!("summary", []);
+    expect(issue).not.toHaveBeenCalled();
+    expect(im).toHaveBeenCalledWith("summary", [], expect.objectContaining({ summaryIssueUrl: "https://git.test/o/r/issues/1" }));
+    await composite.publishSummary!("second summary", []);
+    expect(im).toHaveBeenLastCalledWith("second summary", [], undefined);
+  });
   it("acknowledges an empty successful reconciliation", async () => {
     const observed = vi.fn();
     const composite = createCompositeOutputPublisher([], [{ name: "issues", publisher: { publishSummary: async () => [] } }],

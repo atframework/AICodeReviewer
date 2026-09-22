@@ -1,6 +1,6 @@
 # Feishu application API
 
-- last_checked: 2026-09-21 (authentication, send, directory); 2026-09-22 (recall)
+- last_checked: 2026-09-21 (authentication, send, directory); 2026-09-22 (recall, UUID deduplication)
 - next_review: before changing authentication, message or directory contracts
 - update_trigger: API errors, permission changes, card rendering changes, SDK model changes
 
@@ -32,6 +32,10 @@ The application message API accepts a serialized card in `content`, with
 includes `name`, `en_name`, `nickname`, `email`, `enterprise_email`, `mobile`,
 `open_id`, `user_id` and `union_id`. Fields are optional in the SDK; schema
 presence does not establish tenant permission or visibility.
+
+The send page's Markdown alternate specifies a UUID limit of 50 characters and
+a one-hour deduplication period. Automatic batch recovery uses a stable UUID
+within 59 minutes; see [publication contracts](publication-reconciliation.md).
 
 For AICR's application identity, use `im:message:send_as_bot` for sends and
 `im:chat.members:read` for membership. The user-profile API accepts

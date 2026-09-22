@@ -140,7 +140,8 @@ PostgreSQL 后端见 [M17](milestones/M17.md)，来源合并、路由图与发�
   LLM/分析阶段，只续发未完成渠道。HTTP 4xx（除 408）记 `failed`；传输失败、408、5xx 与部分
   消息已发送的渠道记 `unknown`（写入可能已生效）。全部消息确认后才把渠道记为 `published`；缓冲中
   （`buffered`）与仅本地收集的结果只记 `pending`。payload 与回执随检查点 1 MiB 上限序列化，
-  超限（含后续回执和记账增长）会清除旧的部分检查点并退化为整体重放，损坏载荷则拒绝执行。
+  携带 `publication.remote` 的检查点超限会停止发布并保留最后持久状态；超大分析载荷不能启动
+  远端写入。旧的无载荷检查点仍重放分析，损坏或未知版本载荷拒绝执行。
   每个渠道发送前检查租约，完成后先保存回执，再处理下一渠道；持久化失败或失去租约立即停止。
   Redis 将检查点保存为不经过 Lua 解码的 JSON 字符串，保留嵌套空数组与空对象。
   首次到达终态失败的批次消费其唯一一次自动恢复（attempts 重置、
@@ -150,13 +151,18 @@ PostgreSQL 后端见 [M17](milestones/M17.md)，来源合并、路由图与发�
   批次重新武装。管理端 `POST /api/admin/auto-commit/batches/:id/retry` 可人工重排 terminal
   批次（看板 Queue 页）；人工重排会清除批次的准入配置快照固定，重试按**当前**准入代执行——
   运维调参（如调大 `review.max_patch_bytes`）后重排即可生效。批次列表 API
-  （`GET /api/admin/auto-commit/batches`）返回每批的 `publications` 回执供人工核查。
+  （`GET /api/admin/auto-commit/batches`）返回每批的 `publications` 与待发布操作
+  `publicationOperations`，含写入/对账次数，不暴露端点和原始响应。人工重排保留已有远端日志与
+  分析载荷；当前配置改变不确定请求时停止发送，不清空操作身份。
   `queued_timeout_hours`（默认 48）把超过时限的待处理条目终结为 `queued_timeout`，Events
   决策翻转为 `timeout`——正式 receipt 按 `detail.receiptId` 翻转，routing 接收的事件经
   `listRoutingIntakeIdsForReceipts` 映射按 `detail.routingId` 翻转。有效载荷与逐目标回执避免
-  分析重跑与已确认渠道的重复发布，但外部发布仍无跨进程事务：对无对账能力的渠道
-  （gitlab_mr_review、gitea/github_issue、IM bot、always_new PR review），`unknown`
-  状态的自动重发可能重复多条消息（部分报告、内部 HTTP 重试）；不能承诺端到端 exactly-once。
+  分析重跑与已确认渠道的重复发布。单次报告写入先保存稳定操作标识，再调用 HTTP；Git 平台
+  查询正文标记、状态或删除结果，飞书应用在去重有效期内复用 UUID，webhook 不盲目重发
+  不确定消息。查询在 managed issue 列表读取前执行，避免远端已创建的 issue 改变恢复分支。
+  分页有界且不跟随外域链接；消息序号区分同内容的多条摘要。协议、超时与未知结果边界见
+  [输出合同](../output-channels.md#automatic-commit-batch-publication)和 D51。内存后端重启、
+  旧写入器及未保存身份的历史任务仍有重复风险；不能承诺端到端 exactly-once。
 - 直接路径（PR/MR、issue、评论命令）复用同一周计划：async 触发处理把首次尝试和每次重试的
   定时器经 `clampDelayToExecutionWindow`（`packages/server/src/index.ts`）钳制到
   `nextAllowedInstant`，窗口外到达的事件记录 `trigger processing deferred by execution window`

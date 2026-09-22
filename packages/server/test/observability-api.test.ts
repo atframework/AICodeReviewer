@@ -136,6 +136,10 @@ describe("observability API", () => {
         publication: {
           output: { problems: [], summaries: [{ markdown: "private analysis payload" }] },
           receipts: [{ channel: "report", status: "unknown", attempts: 1, updatedAt: createdAt }],
+          remote: { version: 1, operations: [{ id: "a".repeat(64), channel: "report", call: "summary:0",
+            strategy: "marker", status: "unknown", target: "https://private.test/report", scope: "https://private.test",
+            attempts: 1, reconciliations: 2, firstAttemptAt: createdAt, updatedAt: createdAt,
+          }] },
         },
       }, createdAt);
     };
@@ -162,6 +166,8 @@ describe("observability API", () => {
     expect(running.items.map((item: { batchId: string }) => item.batchId)).toEqual(["queue-active"]);
     expect(running.items[0].publications).toEqual([{ channel: "report", status: "unknown", attempts: 1, updatedAt: now }]);
     expect(JSON.stringify(running)).not.toContain("private analysis payload");
+    expect(JSON.stringify(running)).not.toContain("private.test");
+    expect(running.items[0].publicationOperations).toEqual([expect.objectContaining({ channel: "report", strategy: "marker", status: "unknown", attempts: 1, reconciliations: 2 })]);
     expect(completed.items[0].publications).toEqual([]);
     expect(maintenance).toHaveBeenCalledTimes(2);
 

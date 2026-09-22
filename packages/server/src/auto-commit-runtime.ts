@@ -20,7 +20,7 @@ import {
   type WorkspaceResolution,
 } from "@aicr/core";
 import type { AicrOutputState } from "@aicr/mcp-output";
-import type { DispatchResult } from "@aicr/outputs";
+import { PublicationJournal, validateRemotePublicationOperations, type DispatchResult } from "@aicr/outputs";
 import type { BatchExecutionContext } from "./auto-commit-scheduler.js";
 import {
   runReviewOrchestration,
@@ -416,6 +416,7 @@ function readResumePublication(
       && typeof receipt.updatedAt === "number" && Number.isFinite(receipt.updatedAt)
       && optionalString(receipt.externalId) && optionalString(receipt.lastError))) return invalid();
   if (new Set(publication.receipts.map((receipt) => receipt.channel)).size !== publication.receipts.length) return invalid();
+  if (publication.remote !== undefined && (!object(publication.remote) || publication.remote.version !== 1 || !validateRemotePublicationOperations(publication.remote.operations))) return invalid();
   return {
     problems: problems as AicrOutputState["problems"],
     summaries: summaries as AicrOutputState["summaries"],
@@ -499,6 +500,7 @@ export function createAutoCommitBatchExecutor(options: {
     // The payload snapshot of this attempt: the persisted one on resume, or
     // the fresh analysis output captured by onAnalysisComplete below.
     let payload: ResumePublicationOutput | undefined = resumePublication;
+    let remote = checkpoint?.publication?.remote;
     const abort = new AbortController();
     const signal = context.signal ? AbortSignal.any([context.signal, abort.signal]) : abort.signal;
     const saveCheckpoint = async (value: BatchExecutionCheckpoint): Promise<void> => {
@@ -506,6 +508,12 @@ export function createAutoCommitBatchExecutor(options: {
       // Also handle growth from receipts/final accounting. Remove an older
       // partial snapshot immediately, or a retry could trust stale receipts.
       if (value.publication && Buffer.byteLength(JSON.stringify(value)) > 1_048_576) {
+        // Never discard remote write identities once reconciliation has begun.
+        if (value.publication.remote) {
+          const failure = new AutoCommitUnsafeReplayError("remote publication checkpoint exceeds the size cap");
+          abort.abort(failure);
+          throw failure;
+        }
         console.warn(JSON.stringify({ level: "warn", msg: "publication recovery payload exceeds the checkpoint size cap; recovery falls back to full replay", batchId: batch.batchId }));
         payload = undefined;
         const { publication: _publication, ...compact } = value;
@@ -524,13 +532,28 @@ export function createAutoCommitBatchExecutor(options: {
     };
     const persistRecovery = (): Promise<void> => saveCheckpoint({
       phase: "publication_pending",
-      ...(payload ? { publication: { output: payload, receipts: [...receipts.values()] } } : {}),
+      ...(payload ? { publication: { output: payload, receipts: [...receipts.values()], ...(remote ? { remote } : {}) } } : {}),
     });
     const attempted = new Set<string>();
     const failed = new Set<string>();
     const confirmed = new Set<string>();
     const unflushed = new Set<string>();
     const publicationRecovery = {
+      remote: new PublicationJournal({
+        batchId: batch.batchId,
+        ...(remote ? { operations: remote.operations } : {}),
+        signal,
+        now,
+        save: async (operations) => {
+          if (!payload) {
+            const failure = new AutoCommitUnsafeReplayError("remote publication requires a durable analysis payload");
+            abort.abort(failure);
+            throw failure;
+          }
+          remote = { version: 1, operations };
+          await persistRecovery();
+        },
+      }),
       skipChannels: [...receipts.values()]
         .filter((receipt) => receipt.status === "published")
         .map((receipt) => receipt.channel),
@@ -638,6 +661,14 @@ export function createAutoCommitBatchExecutor(options: {
         receipts.set(channel, { ...receipts.get(channel)!, status: "published" });
       }
     }
+    // Changed manual-retry routing/policies can omit an old call entirely.
+    // A successful current call must not hide its unresolved durable write.
+    for (const operation of remote?.operations ?? []) {
+      if (operation.status !== "unknown") continue;
+      const previous = receipts.get(operation.channel);
+      receipts.set(operation.channel, { ...previous, channel: operation.channel,
+        status: "unknown", attempts: previous?.attempts ?? 0, updatedAt: now() });
+    }
     // A channel is unconfirmed when its receipt is missing/unfinished or a
     // dispatch result failed without the recovery wiring observing it.
     const failedReceipts = [...receipts.values()].filter(
@@ -648,7 +679,7 @@ export function createAutoCommitBatchExecutor(options: {
     await saveCheckpoint({
       phase: failedDispatch ? "publication_pending" : "completed",
       result: persisted,
-      ...(failedDispatch && payload ? { publication: { output: payload, receipts: [...receipts.values()] } } : {}),
+      ...(failedDispatch && payload ? { publication: { output: payload, receipts: [...receipts.values()], ...(remote ? { remote } : {}) } } : {}),
     });
     await options.persistResult?.(batch.runId, persisted);
     if (failedDispatch)

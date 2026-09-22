@@ -78,6 +78,11 @@ Sources: `deploy/Dockerfile`, `deploy/deploy.sh`, and
   an invalid UNC cwd; use the WSL-native pinned package manager from the repo.
   Isolated dirty-tree validation must copy tracked changes and untracked task
   files without deleting existing dependencies or logs.
+- Disposable Debian slim fixtures may lack CA certificates. Use
+  `tests/services/debian-mirror.sh`: bootstrap the CA bundle from the domestic
+  mirror with Debian signature verification intact, then switch to HTTPS.
+  Preserve the pinned image's suites and signing-key path; validate both service
+  wrappers and cleanup as described in [the service guide](../../testing-services.md).
 
 ## Markdown and public site
 

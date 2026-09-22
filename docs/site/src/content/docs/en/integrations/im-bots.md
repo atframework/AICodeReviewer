@@ -313,9 +313,11 @@ membership and notification rules. Validate that boundary in your tenant.
 
 The client caches tenant access tokens and refreshes an explicitly rejected
 token once. HTTP errors, nonzero API codes and missing message receipts fail
-publication. Message transport failures are not retried automatically because
-delivery may already have occurred. A send UUID is reused for the token retry;
-it does not provide durable deduplication across runs or restarts.
+publication. Delivery may already have occurred after a transport failure.
+Automatic commit batches persist the send identity and reuse its UUID for up to
+59 minutes after the first attempt; SQLite or Redis retains it across restarts.
+An expired UUID or changed uncertain request blocks resending. Other review
+paths reuse an in-memory UUID only for the token retry, without restart recovery.
 
 ## WeCom (企业微信)
 

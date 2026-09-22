@@ -9,6 +9,29 @@ through AICR's tools, never through free-form agent stdout. The same reported
 problem renders cleanly as a VCS line comment, an issue entry, or an IM summary
 card.
 
+## Automatic batch recovery
+
+Automatic commit batches persist analysis results and per-channel receipts.
+Recovery skips the analysis and confirmed sends. Each remote report write has a
+stable operation ID, persisted before sending. GitHub/Gitea issue and review
+publishers and GitLab MR publishers query a hidden body marker to recover lost
+responses. Managed issue state changes and deletes query the original resource.
+
+Feishu applications reuse a stable UUID for at most 59 minutes after the first
+attempt. Feishu/WeCom webhooks cannot query an uncertain send and do not resend
+it automatically. Missing or ambiguous markers, denied queries and expired UUIDs
+retain an unknown outcome. Queries are limited to 20 pages of 100 items and a
+30-second deadline. Report publication and local persistence are separate
+transactions; exactly-once delivery is not guaranteed.
+
+The existing retry budget and one terminal-failure recovery still apply.
+The admin batches API exposes `publications` and `publicationOperations`, with
+write and reconciliation counts. Manual Retry retains the remote journal;
+changing configuration cannot erase an uncertain send. A journal exceeding the
+1 MiB checkpoint cap stops publication while retaining its last saved state.
+Use SQLite or Redis for restart persistence. Legacy checkpoints cannot recover
+operation IDs they never saved; stop older writers before upgrading.
+
 ## The report tools
 
 The in-process tool registry exposes these AICR tools to the review executor:

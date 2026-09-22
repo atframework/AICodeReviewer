@@ -60,6 +60,7 @@ import {
   type ChannelAuthorGuesser,
   createWeComBotDispatcher,
   type ProblemResolutionAnalyzer,
+  type PublicationJournal,
   type ReviewProblem,
   type DispatchResult,
   toTemplateProblem,
@@ -1513,6 +1514,7 @@ export function createCompositeOutputPublisher(
   linePublishers: readonly OutputPublisherEntry[],
   summaryPublishers: readonly OutputPublisherEntry[],
   recovery?: {
+    readonly remote?: PublicationJournal;
     readonly skipChannels?: ReadonlySet<string>;
     readonly signal?: AbortSignal;
     readonly onChannelStart?: (channel: string) => void | Promise<void>;
@@ -1531,6 +1533,14 @@ export function createCompositeOutputPublisher(
     gitlab_mr_review: true,
   };
   const FEISHU_CHANNEL_KINDS: Record<string, true> = { feishu_bot: true, feishu_app: true };
+  const calls = new Map<string, number>();
+  let summarySequence = 0;
+  const invoke = <T>(channel: string, phase: string, work: () => Promise<T>, ordinal?: number): Promise<T> => {
+    const key = `${channel}:${phase}`;
+    const index = ordinal ?? calls.get(key) ?? 0;
+    calls.set(key, index + 1);
+    return recovery?.remote ? recovery.remote.run(channel, `${phase}:${index}`, work) : work();
+  };
 
   if (linePublishers.length === 0 && summaryFlushCapable.length === 0) {
     return undefined;
@@ -1551,7 +1561,7 @@ export function createCompositeOutputPublisher(
         await recovery?.onChannelStart?.(entry.name);
         const firstResult = results.length;
         try {
-          appendPublisherResults(results, await callPublishProblem(entry.publisher, problem));
+          appendPublisherResults(results, await invoke(entry.name, "problem", () => callPublishProblem(entry.publisher, problem)));
         } catch (error) {
           logDispatchFailure(entry.name, "problem", error);
           results.push(createFailedDispatchResult(entry.name, "problem", error));
@@ -1570,10 +1580,19 @@ export function createCompositeOutputPublisher(
             options?: ReviewSummaryPublishOptions,
           ): Promise<readonly DispatchResult[]> {
             const results: DispatchResult[] = [];
+            const summaryOrdinal = summarySequence++;
             const noProblems = (problems?.length ?? 0) === 0;
             const bypassNoProblemsPolicy = options?.bypassNoProblemsPolicy === true;
             const entries = noProblems ? summaryCapable : summaryFlushCapable;
             let issueLinkUrl = options?.summaryIssueUrl;
+            if (!issueLinkUrl && recovery?.remote) {
+              for (const entry of entries) {
+                if (entry.kind && ISSUE_CHANNEL_KINDS[entry.kind] && recovery.skipChannels?.has(entry.name)) {
+                  issueLinkUrl = recovery.remote.publishedUrl(entry.name, `summary:${summaryOrdinal}`);
+                  if (issueLinkUrl) break;
+                }
+              }
+            }
             for (const entry of entries) {
               if (recovery?.skipChannels?.has(entry.name)) {
                 continue;
@@ -1601,7 +1620,7 @@ export function createCompositeOutputPublisher(
                   ? { ...options, summaryIssueUrl: issueLinkUrl }
                   : options;
                 try {
-                  appendPublisherResults(results, await publisher.publishSummary(summary, problems, effectiveOptions));
+                  appendPublisherResults(results, await invoke(entry.name, "summary", () => publisher.publishSummary!(summary, problems, effectiveOptions), summaryOrdinal));
                 } catch (error) {
                   logDispatchFailure(entry.name, "summary", error);
                   results.push(createFailedDispatchResult(entry.name, "summary", error));
@@ -2436,6 +2455,7 @@ export function createOutputPublisherResolverFromConfig(
     return createCompositeOutputPublisher(linePublishers, summaryPublishers,
       publicationRecovery
         ? {
+            ...(publicationRecovery.remote ? { remote: publicationRecovery.remote } : {}),
             ...(publicationRecovery.skipChannels ? { skipChannels: new Set(publicationRecovery.skipChannels) } : {}),
             ...(context.signal ? { signal: context.signal } : {}),
             ...(publicationRecovery.onChannelStart ? { onChannelStart: publicationRecovery.onChannelStart } : {}),

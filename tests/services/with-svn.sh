@@ -44,10 +44,11 @@ if [[ "$had_image" == false ]]; then
 fi
 podman image inspect "$image" --format '{{.Digest}}' >build/logs/svn-image-digest.log
 cp tests/services/svn-fixture.sh "$work/build/tmp/start.sh"
+cp tests/services/debian-mirror.sh "$work/build/tmp/debian-mirror.sh"
 podman run -d --name "$service" --rm --timeout 900 --stop-timeout 5 \
   --label aicr.acceptance=svn --cpus 1 --memory 256m --memory-swap 256m --pids-limit 64 \
-  --publish 127.0.0.1::3690 --volume "$work/build/tmp/start.sh:/start.sh:ro" \
-  "$image" sh /start.sh >"$work/build/tmp/container.id"
+  --publish 127.0.0.1::3690 --volume "$work/build/tmp:/fixture:ro" \
+  "$image" sh /fixture/start.sh >"$work/build/tmp/container.id"
 podman logs --follow "$service" >build/logs/svn-service.log 2>&1 &
 logs_pid=$!
 port=$(podman port "$service" 3690/tcp)

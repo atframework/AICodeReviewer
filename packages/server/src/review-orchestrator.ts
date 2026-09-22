@@ -70,7 +70,7 @@ import {
   type TemplateResolver,
   type MentionChannelKind,
 } from "@aicr/outputs";
-import type { DispatchResult, ReviewProblem } from "@aicr/outputs";
+import type { DispatchResult, PublicationJournal, ReviewProblem } from "@aicr/outputs";
 import type { SandboxBackend, SandboxMountSpec, SandboxSpawnResult } from "@aicr/sandbox";
 import {
   materializeContextRepositories,
@@ -152,6 +152,7 @@ export interface ReviewOrchestrationContext {
    * outcome as it settles so the caller can persist receipts mid-flight.
    */
   readonly publicationRecovery?: {
+    readonly remote?: PublicationJournal;
     readonly skipChannels?: readonly string[];
     readonly onChannelStart?: (channel: string) => void | Promise<void>;
     readonly onChannelResult?: (result: DispatchResult, phase: "problem" | "summary", finalForChannel?: boolean) => void | Promise<void>;

@@ -68,7 +68,9 @@ follows the [MCP tool security requirements](https://modelcontextprotocol.io/spe
 Application API business failures are publication failures. Transport errors and
 successful responses lacking a receipt are unknown delivery outcomes; do not
 claim successful publication or blindly retry POST. A token rejection may refresh
-once with the same UUID. This UUID is not persisted across runs or restarts.
+once with the same UUID. Automatic commit batches persist a stable operation
+identity for the bounded UUID recovery described below. Other review paths use
+an in-memory UUID without restart recovery.
 
 ## Automatic commit batch publication
 
@@ -93,18 +95,50 @@ lease loss or checkpoint failure stops publication.
 HTTP 4xx rejections except 408 are `failed`. Transport errors, 408 and 5xx are
 conservatively `unknown`: a gateway response does not prove that the upstream
 write was rolled back ([HTTP semantics](https://www.rfc-editor.org/rfc/rfc9110.html#section-15.6)).
-A partially sent channel can also remain `unknown`. Automatic terminal-failure
-recovery permits one further executor attempt; partial reports, internal HTTP
-retries and manual retries can duplicate more than one message. PR update and
-problem-issue reconciliation reduce duplicates but do not provide an atomic
-transaction with the local store. Inspect the admin batches API's `publications`
-receipts; `attempts` counts executor attempts touching a channel, not HTTP calls.
+A partially sent channel can also remain `unknown`. Each report write has a
+write-ahead operation in `publication.remote` (version 1). Its hash covers the
+batch, channel, problem/summary ordinal, method, destination, rendered body and
+Feishu application identity.
+The journal stores IDs and bounded response metadata, excluding credentials,
+webhook URLs, report bodies and member directories. Confirmed operations replay
+their local receipt; unconfirmed operations use the channel protocol below.
 
-The 1 MiB cap includes output, receipts and accounting. If growth exceeds it,
-the writer removes any older partial snapshot and falls back to full replay;
-legacy checkpoints without a payload also replay fully. Malformed recovery
-payloads stop execution instead of silently discarding receipts. Redis stores
-checkpoint JSON opaquely so nested empty arrays survive lease/recovery writes.
+| Publisher | Recovery protocol |
+| --- | --- |
+| GitHub/Gitea issue comments, managed issues and PR reviews; GitLab MR notes/discussions | Write an `aicr:publication` HTML marker. Query the original resource or collection before repeating the publisher's create/update decision. Exactly one matching result confirms the write. Discussions inspect `notes[].body`. |
+| Managed issue state changes and deletes | Read the original issue and confirm the requested state or its absence. This verifies a previously authorized action; it does not approve semantic problem resolution. |
+| Feishu application | Use a stable UUID, up to 48 characters. Retry the same request within 59 minutes of the first attempt, leaving a margin inside the API's one-hour deduplication window. Confirmation still requires a successful response with a message ID. |
+| Feishu/WeCom webhook and managed-issue webhook notification | Replay a confirmed local receipt. An unknown outcome blocks automatic resending because these publishers have no implemented query/idempotency protocol. |
+
+Queries stay within the configured repository/project, use at most 20 pages of
+100 items and a 30-second request deadline, and honor next-page headers even on
+a short page. Pagination URLs and redirects cannot redirect credentials.
+Missing/ambiguous markers, malformed responses, denied queries and exhausted
+query limits leave the operation unknown. Absence from a list is not proof that
+a POST failed: a crash between intent persistence and sending can therefore
+require operator investigation. Changed uncertain requests and expired Feishu
+UUIDs also block a new send. Optional label metadata retains its existing
+set-like update behavior and is outside the report journal.
+
+The executor's retry budget and single terminal-failure recovery still apply;
+exhaustion skips the batch and releases the stream. Manual Retry uses current
+configuration but retains the remote journal and analysis payload. It cannot
+erase an unknown send or renew an expired UUID. Inspect `publications` and
+`publicationOperations` in the admin batches API: channel `attempts` counts
+executor attempts; operation `attempts` counts write submissions and
+`reconciliations` counts recovery queries/idempotent retries. Remote operation
+metadata is exposed only while publication is pending, without endpoint URLs.
+
+The 1 MiB checkpoint cap includes output, receipts, operations and accounting.
+Once a journal exists, overflow stops publication and retains the last durable
+checkpoint. An oversized analysis cannot start a journaled remote write. Legacy
+checkpoints without a payload still replay analysis, and cannot recover remote
+identities that were never saved. Memory storage loses this protection on restart;
+use SQLite or Redis for durable recovery. Malformed/version-unknown journals fail
+closed. Redis keeps checkpoint JSON opaque, including through manual Retry.
+Stop older writers before upgrading; they do not understand this journal.
+There is no atomic transaction with the remote service and no exactly-once
+guarantee. API evidence is recorded in the [source record](ai/sources/publication-reconciliation.md).
 Unfinished publication never counts as successful batch completion.
 
 ## Implemented MCP-style tools

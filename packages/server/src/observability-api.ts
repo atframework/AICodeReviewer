@@ -329,6 +329,7 @@ export function createObservabilityApi(options: ObservabilityApiOptions): Hono {
           // Per-target publication receipts (P1): which channels have a
           // confirmed delivery, a definitive failure, or an unknown outcome.
           publications: batch.executionCheckpoint?.publication?.receipts ?? [],
+          publicationOperations: batch.executionCheckpoint?.publication?.remote?.operations.map(({ response: _response, target: _target, scope: _scope, ...operation }) => operation) ?? [],
           createdAt: batch.createdAt,
         })), page, limit),
       );

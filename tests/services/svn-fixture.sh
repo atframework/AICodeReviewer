@@ -2,7 +2,7 @@
 # Runs only inside the disposable Debian container; no host package changes.
 set -eu
 export DEBIAN_FRONTEND=noninteractive
-apt-get update -qq
+sh /fixture/debian-mirror.sh
 apt-get install -y --no-install-recommends subversion=1.14.5-3
 rm -rf /var/lib/apt/lists/*
 mkdir -p /srv/seed/trunk /srv/repos

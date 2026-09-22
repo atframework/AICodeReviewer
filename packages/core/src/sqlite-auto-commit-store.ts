@@ -1782,12 +1782,13 @@ export async function createSqliteAutoCommitStore(
             SET status = 'retry_wait', last_error = ?, retry_not_before = ?,
                 attempt = 1, recovery_attempt = 1,
                 lease_token = NULL, lease_owner = NULL, lease_expiry = NULL,
-                execution_checkpoint = NULL,
+                execution_checkpoint = ?,
                 config_snapshot_id = ?
           WHERE batch_id = ?`,
       ).run(
         `manual retry re-armed${batch.last_error ? `; previous: ${batch.last_error}` : ""}`,
         now,
+        batch.execution_checkpoint && (JSON.parse(batch.execution_checkpoint) as BatchExecutionCheckpoint).publication?.remote ? batch.execution_checkpoint : null,
         configSnapshotId,
         batchId,
       );

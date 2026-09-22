@@ -163,11 +163,13 @@ uses bounded retries and then fails the member; it cannot silently allow it.
 
 Receipts, batch membership, and execution checkpoints use the `queue.kind`
 backend. Memory state is lost on restart. A completed checkpoint recovers local
-result accounting without rerunning analysis or publication. Other interrupted
-work can replay analysis and publication. A terminal failure gets one automatic
-recovery; exhausting that recovery skips the batch and releases the stream.
-Admin Queue offers Retry for terminal batches, using current configuration.
-Replay can duplicate remote publication; per-target recovery is not implemented.
+result accounting without rerunning analysis or publication. Pending publication
+retains analysis, per-channel receipts and remote operation IDs; see
+[remote reconciliation](/en/integrations/output-channels/#automatic-batch-recovery).
+A terminal failure gets one automatic recovery; exhaustion skips the batch and
+releases the stream. Admin Queue Retry uses current configuration and preserves
+an existing remote journal. Old checkpoints without saved identities and memory
+storage after restart cannot prevent duplicate publication.
 
 Automatic batches, ordinary queue workers, PR/MR, issue, comment and manual
 analysis share one execution budget per server process:
@@ -285,8 +287,9 @@ provider calls, output-channel fetches, VCS CLI network operations, GitHub App
 token exchange, and the issue-triage API client each retry transient IO errors up
 to 3 times with a short exponential backoff before an error can fail the whole
 trigger run. At the output and triage layers only idempotent methods retry;
-non-idempotent POSTs never do, so a lost response can never duplicate an issue or
-comment. HTTP 429 is left to the LLM gateway, which honors `Retry-After`.
+non-idempotent POSTs do not blindly retry. Journaled automatic-batch mutations
+use the remote reconciliation protocol for retries, including Feishu UUID
+deduplication. HTTP 429 is left to the LLM gateway, which honors `Retry-After`.
 
 ```yaml
 queue:

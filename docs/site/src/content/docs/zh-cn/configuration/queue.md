@@ -142,9 +142,10 @@ SVN `svn:author` 区分。同来源连续且到期的提交可跨通知合并，
 排除判定所需的来源证据缺失时，有界重试后将成员标记为失败，不会默认放行。
 
 接收回执、批次成员关系和执行检查点使用 `queue.kind` 对应的后端，memory 重启会丢失。
-完成检查点仅恢复本地结果记账，不重跑分析或发布。其他执行中断允许重放分析和发布。
-终态失败会获得一次自动恢复，耗尽恢复机会后跳过批次并释放 stream。Admin Queue 可对
-终态批次执行 Retry，按当前配置重试。重放可能重复远端发布；尚无逐目标发布恢复。
+完成检查点仅恢复本地结果记账，不重跑分析或发布。待发布检查点保留分析、逐渠道回执及
+远端操作 ID，见[远端对账](/zh-cn/integrations/output-channels/#自动批次恢复)。终态失败
+获得一次自动恢复，耗尽后跳过批次并释放 stream。Admin Queue 的 Retry 使用当前配置并
+保留已有远端日志。未保存操作身份的旧检查点和重启后的内存后端无法防止重复发布。
 
 自动批次、普通队列 worker、PR/MR、issue、comment 和手动分析在同一服务进程中共享
 执行名额：`queue.workers.concurrency` 默认 4，
@@ -248,9 +249,9 @@ trigger 级重试用于吸收瞬时 IO 失败（超时、连接重置、DNS 抖�
 无论 `attempts` 是多少都不会重试。更细粒度的重试发生在下一层：LLM provider
 调用、输出渠道 fetch、VCS CLI 网络操作、GitHub App token 交换与 issue triage
 API 客户端，各自对瞬时 IO 错误按短指数退避最多重试 3 次，之后才把整个
-trigger run 判为失败。输出与 triage 层只对幂等方法重试；非幂等 POST 永不重试，
-响应丢失不会导致 issue 或评论重复。HTTP 429 交由 LLM gateway 按 `Retry-After`
-处理。
+trigger run 判为失败。输出与 triage 层只对幂等方法重试；非幂等 POST 不盲目重试。
+带远端日志的自动批次写入按对账协议恢复，包括飞书 UUID 去重。HTTP 429 交由 LLM gateway
+按 `Retry-After` 处理。
 
 ```yaml
 queue:

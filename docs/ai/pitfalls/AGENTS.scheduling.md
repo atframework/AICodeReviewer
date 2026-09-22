@@ -85,8 +85,9 @@ bootstrap, core auto-commit stores, scheduler and real-backend conformance tests
 - Recovery contract (2026-09 operator decision, store schema v8): executor
   errors after the `started` checkpoint propagate as ordinary retryable
   failures. A valid `publication_pending` payload resumes per channel without
-  analysis (D50); legacy or oversized checkpoints replay fully. Partial channel
-  publication and uncertain remote outcomes can duplicate messages.
+  analysis (D50/D51); legacy checkpoints without payload replay analysis.
+  Remote journals must survive retries, including manual re-arm. Unknown webhook
+  writes and failed/missing/ambiguous remote queries cannot authorize a new POST.
   A would-be-terminal failure consumes the batch's single automatic recovery
   (`recoveryAttempt`); a second terminal failure skips the batch terminally
   and the stream keeps flowing.
@@ -120,10 +121,15 @@ bootstrap, core auto-commit stores, scheduler and real-backend conformance tests
   or lease loss, including through the orchestrator's dispatch-error catches.
   Confirm a channel only after all its messages settle; never overwrite an
   earlier failure with a later success. Buffered/collected output is not delivery.
-  Overflow from payload, receipts or final accounting must remove any stale
-  partial checkpoint before degrading to full replay. Malformed state fails
-  closed. Check actual calls, multiple summaries, mixed outcomes and usage
-  accounting in runtime/bootstrap/orchestrator tests.
+  Journaled checkpoint overflow must abort and retain the last durable state;
+  oversized analysis cannot start remote writes. Malformed state fails closed.
+  Check actual calls, multiple summaries, mixed outcomes and usage accounting in
+  runtime/bootstrap/orchestrator tests. `publication-journal.ts` scopes HTTP
+  operations with AsyncLocalStorage: preflight pending Git writes before list
+  discovery changes create/update branches, keep message ordinals and query
+  counts, preserve issue links for skipped channels, and do not serialize auth,
+  recipients or directory data. Regressions: `publication-journal.test.ts`, SQLite
+  restart cases in `auto-commit-runtime.test.ts`, and three-store conformance.
 - Keep execution checkpoint JSON opaque to Redis Lua/cjson, which otherwise
   converts nested empty arrays to objects on every batch save. The shared
   `auto-commit-store-conformance.ts` tests check round trips through lease recovery

@@ -6,6 +6,12 @@ WSL2 Debian 可运行 rootless Podman 服务，并让 Windows 测试进程访问
 Podman fixture 只使用合成账户和仓库。真实飞书/LLM 验收单独通过环境变量启用，
 普通测试不读取本地凭据文件。
 
+Debian 容器统一通过 `tests/services/debian-mirror.sh` 使用中科大国内镜像，覆盖主仓库
+与 `debian-security`，保留镜像原有 suite 和 Debian 签名校验。固定 slim 镜像没有 CA
+证书，先通过 HTTP 镜像安装 `ca-certificates`，再切换 HTTPS 下载服务包；不关闭签名
+或证书验证，不修改 WSL 宿主 APT 配置。配置依据[中科大 Debian 镜像帮助](https://mirrors.ustc.edu.cn/help/debian.html)
+及[清华镜像的 HTTPS 引导说明](https://mirrors.tuna.tsinghua.edu.cn/help/debian/)。
+
 ## 按依赖选择服务
 
 | 依赖 | 本地可验证 | 资源与剩余限制 |

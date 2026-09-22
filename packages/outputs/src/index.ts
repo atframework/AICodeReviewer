@@ -5,6 +5,9 @@ import { isTransientIoError, isTransientIoHttpStatus, normalizePath, withTransie
 import { renderMarkdownCodeFence } from "./template-engine.js";
 import { toFeishuMarkdown, toWeComMarkdown } from "./im-markdown.js";
 import type { FeishuAppClient } from "./feishu-app.js";
+import { hasPublicationJournal, publicationFetch } from "./publication-journal.js";
+
+export { PublicationJournal, PublicationReconciliationError, validateRemotePublicationOperations } from "./publication-journal.js";
 
 export { FeishuAppClient, FeishuApiError, type FeishuAppOptions } from "./feishu-app.js";
 export { resolveFeishuMention, feishuDirectoryUsers, renderFeishuAuthorMention, type FeishuMember, type FeishuMentionInput, type FeishuMentionOptions } from "./feishu-members.js";
@@ -121,6 +124,8 @@ export type FetchLike = (
 		readonly method?: string;
 		readonly headers?: Readonly<Record<string, string>>;
 		readonly body?: string;
+		readonly signal?: AbortSignal;
+		readonly redirect?: "error" | "follow" | "manual";
 	},
 ) => Promise<ResponseLike>;
 
@@ -766,7 +771,8 @@ function defaultFetch(): FetchLike {
 	const baseFetch = candidate as unknown as FetchLike;
 	return (url, init) => {
 		const attempts = 3;
-		const idempotentMethod = (init?.method ?? "GET").toUpperCase() !== "POST";
+		const method = (init?.method ?? "GET").toUpperCase();
+		const idempotentMethod = method === "GET" || method === "HEAD" || (!hasPublicationJournal() && method !== "POST");
 		return withTransientIoRetry(
 			async (attempt) => {
 				const response = await baseFetch(url, init);
@@ -957,7 +963,7 @@ async function flushBufferedReviewProblems(
 export function createGiteaPullRequestReviewDispatcher(
 	options: GiteaPullRequestReviewOptions,
 ): GiteaPullRequestReviewDispatcher {
-	const fetchImpl = options.fetch ?? defaultFetch();
+	const fetchImpl = publicationFetch(options.fetch ?? defaultFetch(), "gitea");
 	const baseUrl = options.baseUrl.replace(/\/+$/u, "");
 	const channel = options.channelName ?? "gitea_pr_review";
 	const reviewMode = options.reviewMode ?? "auto";
@@ -1288,7 +1294,7 @@ export interface GithubPullRequestReviewDispatcher {
 export function createGithubPullRequestReviewDispatcher(
 	options: GithubPullRequestReviewOptions,
 ): GithubPullRequestReviewDispatcher {
-	const fetchImpl = options.fetch ?? defaultFetch();
+	const fetchImpl = publicationFetch(options.fetch ?? defaultFetch(), "github");
 	const baseUrl = (options.baseUrl ?? "https://api.github.com").replace(/\/+$/u, "");
 	const channel = options.channelName ?? "github_pr_review";
 	const reviewMode = options.reviewMode ?? "auto";
@@ -1657,7 +1663,7 @@ async function fetchGithubRepositoryLabelNames(
 }
 
 export function createGithubIssueDispatcher(options: GithubIssueOptions): GithubIssueDispatcher {
-	const fetchImpl = options.fetch ?? defaultFetch();
+	const fetchImpl = publicationFetch(options.fetch ?? defaultFetch(), "github");
 	const baseUrl = (options.baseUrl ?? "https://api.github.com").replace(/\/+$/u, "");
 	const channel = options.channelName ?? "github_issue";
 	const repoPath = buildGithubRepoPath(baseUrl, options.owner, options.repo);
@@ -1994,7 +2000,7 @@ function parseManagedGithubIssues(raw: unknown, markerPrefix: string, markerLabe
 }
 
 export function createGithubProblemIssueDispatcher(options: GithubProblemIssueOptions): GithubProblemIssueDispatcher {
-	const fetchImpl = options.fetch ?? defaultFetch();
+	const fetchImpl = publicationFetch(options.fetch ?? defaultFetch(), "github");
 	const baseUrl = (options.baseUrl ?? "https://api.github.com").replace(/\/+$/u, "");
 	const channel = options.channelName ?? "github_problem_issue";
 	const markerPrefix = options.markerPrefix ?? "[AICR]";
@@ -2689,7 +2695,7 @@ export interface GitlabMergeRequestReviewDispatcher {
 export function createGitlabMergeRequestReviewDispatcher(
 	options: GitlabMergeRequestReviewOptions,
 ): GitlabMergeRequestReviewDispatcher {
-	const fetchImpl = options.fetch ?? defaultFetch();
+	const fetchImpl = publicationFetch(options.fetch ?? defaultFetch(), "gitlab");
 	const baseUrl = (options.baseUrl ?? "https://gitlab.com").replace(/\/+$/u, "");
 	const channel = options.channelName ?? "gitlab_mr_review";
 	const projectPath = encodePathSegment(String(options.projectId));
@@ -2922,7 +2928,7 @@ export interface GiteaIssueDispatcher {
 }
 
 export function createGiteaIssueDispatcher(options: GiteaIssueOptions): GiteaIssueDispatcher {
-	const fetchImpl = options.fetch ?? defaultFetch();
+	const fetchImpl = publicationFetch(options.fetch ?? defaultFetch(), "gitea");
 	const baseUrl = options.baseUrl.replace(/\/+$/u, "");
 	const channel = options.channelName ?? "gitea_issue";
 	const repoPath = [
@@ -3985,7 +3991,7 @@ function parseManagedIssues(raw: unknown, markerPrefix: string, markerLabel: str
 }
 
 export function createGiteaProblemIssueDispatcher(options: GiteaProblemIssueOptions): GiteaProblemIssueDispatcher {
-	const fetchImpl = options.fetch ?? defaultFetch();
+	const fetchImpl = publicationFetch(options.fetch ?? defaultFetch(), "gitea");
 	const baseUrl = options.baseUrl.replace(/\/+$/u, "");
 	const channel = options.channelName ?? "gitea_problem_issue";
 	const markerPrefix = options.markerPrefix ?? "[AICR]";
@@ -4835,7 +4841,7 @@ async function computeFeishuSign(timestamp: number, secret: string): Promise<str
 }
 
 export function createFeishuBotDispatcher(options: FeishuBotOptions): FeishuBotDispatcher {
-	const fetchImpl = options.fetch ?? defaultFetch();
+	const fetchImpl = publicationFetch(options.fetch ?? defaultFetch(), "webhook");
 	const channel = options.channelName ?? "feishu_bot";
 
 	const dispatcher = {
@@ -4939,7 +4945,7 @@ export interface WeComBotDispatcher {
 }
 
 export function createWeComBotDispatcher(options: WeComBotOptions): WeComBotDispatcher {
-	const fetchImpl = options.fetch ?? defaultFetch();
+	const fetchImpl = publicationFetch(options.fetch ?? defaultFetch(), "webhook");
 	const channel = options.channelName ?? "wecom_bot";
 
 	const dispatcher = {

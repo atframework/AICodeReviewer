@@ -57,7 +57,10 @@ Read only the corresponding section of `docs/output-channels.md` or architecture
   [managed issues](references/managed-problem-issues.md). Check `max_recent_issues`
   pagination, including a short Gitea page with a `Link: rel="next"` header.
 - Automatic batch publication recovery:
-  [scheduling](../../../docs/ai/pitfalls/AGENTS.scheduling.md). Check actual raw
+  [scheduling](../../../docs/ai/pitfalls/AGENTS.scheduling.md) and
+  [remote API contracts](../../../docs/ai/sources/publication-reconciliation.md). Check actual raw
   publisher calls, multiple summaries, lease/persistence interruption and
   buffered versus delivered output. A completed checkpoint replays local
   accounting only; publication-only recovery retains the original model usage.
+  Exercise lost remote responses and local receipts with fresh journal/store
+  instances; an unknown result cannot authorize a new non-idempotent write.

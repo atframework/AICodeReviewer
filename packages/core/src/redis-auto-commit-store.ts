@@ -1225,7 +1225,12 @@ rec.lastError = "manual retry re-armed"..previous
 rec.retryNotBefore = now
 rec.attempt = 1
 rec.recoveryAttempt = 1
-rec.executionCheckpoint = cjson.null
+-- Inspect only; keep the original opaque JSON so empty arrays survive.
+local checkpoint = rec.executionCheckpoint
+if type(checkpoint) == "string" then checkpoint = cjson.decode(checkpoint) end
+local keepRemote = type(checkpoint) == "table" and type(checkpoint.publication) == "table"
+  and type(checkpoint.publication.remote) == "table"
+if not keepRemote then rec.executionCheckpoint = cjson.null end
 rec.leaseToken = cjson.null
 rec.leaseOwner = cjson.null
 rec.leaseExpiry = cjson.null

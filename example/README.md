@@ -286,10 +286,14 @@ repeating analysis or remote publication. An execution interrupted before
 analysis finished replays fully; one interrupted during publication resumes
 per-channel from persisted receipts, skipping the LLM and any channel with a
 confirmed delivery and retaining original model usage (see `docs/output-channels.md`).
-Legacy checkpoints without a payload and checkpoints exceeding 1 MiB replay fully;
-partial or uncertain remote writes can duplicate messages. A terminal failure
-consumes one automatic recovery, then a second terminal failure skips the batch
-and releases its stream. Inspect batch receipts before manually retrying.
+Remote operation journals query Git report markers and reuse Feishu application
+UUIDs within their validity window. Unknown webhook sends are held for inspection.
+An oversized journal stops publication; manual Retry retains its operation IDs.
+Legacy checkpoints without a payload replay analysis and cannot reconstruct lost
+remote identities. A terminal failure consumes one automatic recovery, then a
+second terminal failure skips the batch and releases its stream. Inspect the
+batch API's `publications` and `publicationOperations` before manually retrying.
+Use SQLite/Redis for restart recovery; this does not guarantee exactly-once delivery.
 
 ## Eval Fixture Validation
 

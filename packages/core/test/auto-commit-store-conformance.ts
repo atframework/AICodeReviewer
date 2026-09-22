@@ -357,7 +357,11 @@ export function runAutoCommitStoreConformance(factory: StoreFactory): void {
       const checkpoint = {
         phase: "publication_pending" as const,
         result: { summary: "saved", nested: [[], {}, { empty: [] }] },
-        publication: { output: { problems: [], summaries: [] }, receipts: [] },
+        publication: { output: { problems: [], summaries: [] }, receipts: [], remote: { version: 1 as const, operations: [{
+          id: "a".repeat(64), channel: "report", call: "summary:0", strategy: "unqueryable" as const,
+          status: "confirmed" as const, attempts: 1, reconciliations: 0, firstAttemptAt: T0, updatedAt: T0,
+          response: { status: 200, data: {} },
+        }] } },
       };
       expect(
         await store.checkpointBatchExecution(
@@ -1235,12 +1239,19 @@ export function runAutoCommitStoreConformance(factory: StoreFactory): void {
       expect(claim.map((entry) => entry.batch.batchId)).toEqual(["owner-b"]);
     });
 
-    it("manually re-arms terminal dead/skipped batches with a fresh budget", async () => {
+    it.each([false, true])("manually re-arms with a fresh budget and retains remote journal=%s", async (remote) => {
       const store = await factory.makeStore();
       const pinned = await prepareBatch(store, "manual-a", "ws1", "cfg-admission-old");
       expect(pinned?.configSnapshotId).toBe("cfg-admission-old");
       await dispatchOnce(store, T0);
       const token = await store.startBatchExecution("manual-a", "w", 60_000, T0 + 1_000);
+      const checkpoint = { phase: "publication_pending" as const, publication: {
+        output: { problems: [], summaries: [] }, receipts: [], remote: { version: 1 as const, operations: [{
+          id: "a".repeat(64), channel: "report", call: "summary:0", strategy: "unqueryable" as const,
+          status: "unknown" as const, attempts: 1, reconciliations: 2, firstAttemptAt: T0, updatedAt: T0,
+        }] },
+      } };
+      if (remote) await store.checkpointBatchExecution("manual-a", token!, checkpoint, T0 + 1_001);
       await store.failBatch("manual-a", token ?? "", "boom", null, true, T0 + 2_000);
       const recoveryClaim = await store.claimDispatch(T0 + 3_000, "d", 10);
       await store.confirmDispatch("manual-a", recoveryClaim[0]?.claimToken ?? "", T0 + 3_000);
@@ -1257,7 +1268,7 @@ export function runAutoCommitStoreConformance(factory: StoreFactory): void {
       expect(requeued?.status).toBe("retry_wait");
       expect(requeued?.attempt).toBe(1);
       expect(requeued?.recoveryAttempt).toBe(1);
-      expect(requeued?.executionCheckpoint).toBeNull();
+      expect(requeued?.executionCheckpoint).toEqual(remote ? checkpoint : null);
       // The retry executes against the CURRENT admission generation: the
       // caller re-pins the batch so operators can unstick it by changing
       // settings (e.g. raising review.max_patch_bytes).

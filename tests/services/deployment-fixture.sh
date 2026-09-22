@@ -4,7 +4,7 @@ set -euo pipefail
 umask 077
 if [[ ! -f /srv/initialized ]]; then
   export DEBIAN_FRONTEND=noninteractive
-  apt-get update -qq
+  sh /fixture/debian-mirror.sh
   packages=(postgresql-17 redis-server subversion libapache2-mod-svn apache2 openssl curl)
   pinned=()
   for package in "${packages[@]}"; do

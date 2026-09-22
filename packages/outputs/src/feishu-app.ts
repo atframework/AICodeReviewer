@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { DEFAULT_CHANNEL_DIRECTORY_CACHE_TTL_SECONDS } from "./channel-identity.js";
 import type { FetchLike } from "./index.js";
 import type { FeishuMember } from "./feishu-members.js";
+import { PublicationReconciliationError, publicationFetch } from "./publication-journal.js";
 
 export interface FeishuAppOptions {
 	readonly appId: string;
@@ -45,19 +46,21 @@ export class FeishuAppClient {
 			throw new Error("Feishu base_url must be https://open.feishu.cn or https://open.larksuite.com.");
 		}
 		this.fetch = options.fetch ?? ((url, init) => globalThis.fetch(url, {
-			...init, redirect: "error", signal: AbortSignal.timeout(15_000),
+			...init, redirect: "error", signal: init?.signal ? AbortSignal.any([init.signal, AbortSignal.timeout(15_000)]) : AbortSignal.timeout(15_000),
 		}));
 	}
 
 	private async request(path: string, operation: string, body?: unknown, token?: string): Promise<Record<string, unknown>> {
 		let response;
 		try {
-			response = await this.fetch(`${this.baseUrl}/open-apis${path}`, {
+			const fetch = operation === "send message" ? publicationFetch(this.fetch, "feishu", this.options.appId) : this.fetch;
+			response = await fetch(`${this.baseUrl}/open-apis${path}`, {
 				method: body === undefined ? "GET" : "POST",
 				headers: { "content-type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
 				...(body === undefined ? {} : { body: JSON.stringify(body) }),
 			});
-		} catch {
+		} catch (error) {
+			if (error instanceof PublicationReconciliationError) throw error;
 			throw new FeishuApiError(operation, 0);
 		}
 		let result: Record<string, unknown>;

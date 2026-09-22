@@ -193,6 +193,17 @@ update_existing PR review 与指纹 reconcile 降低重复，但不构成远端�
 （`BatchExecutionCheckpoint.publication`）、`packages/server/src/auto-commit-runtime.ts`
 与 `packages/server/src/bootstrap.ts`（复合 publisher 恢复钩子）。
 
+### D51：自动批次远端对账——写入前日志与 publisher 协议（2026-09-22）
+
+`publication.remote.version=1` 逐 HTTP 报告写入持久化意图和精简回执，按批次、渠道、消息序号、
+目标与请求内容生成身份。Git 平台按正文标记查询，状态更新/删除读取原对象；飞书应用复用有
+时限的 UUID。未知 webhook、查询失败/缺失/歧义、超期 UUID 不自动重发。D50 的逐渠道恢复
+继续负责整体完成判断，远端协议补足回执丢失窗口，仍不承诺 exactly-once。
+人工重排保留远端日志，沿用既有恢复次数预算；有日志的检查点超限停止，禁止退化为盲目全量
+发布。实现：`packages/outputs/src/publication-journal.ts`、server executor/composite 与三后端
+manual Retry。合同见[输出渠道](../output-channels.md#automatic-commit-batch-publication)，
+证据见 [M33](milestones/M33.md)。
+
 ## 维护规则
 
 - 如果某条决策只影响已完成阶段的历史说明，优先更新相关 `milestones/*.md`。

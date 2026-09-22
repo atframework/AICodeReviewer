@@ -1,9 +1,11 @@
 import { randomBytes, randomUUID } from "node:crypto";
+import type { RemotePublicationOperation } from "@aicr/core";
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import {
   createGiteaProblemIssueDispatcher,
+  PublicationJournal,
   type FetchLike,
   type GiteaProblemIssueOptions,
   type ReviewProblem,
@@ -121,6 +123,34 @@ describe.skipIf(!enabled)("Gitea assignment with a disposable real service", () 
     const result = await publish(f, { issueMode });
     expect(result.assignees).toEqual([author.login]);
     expect(result.calls.filter((call) => call.url.includes("/git/commits/"))).toHaveLength(1);
+  });
+
+  it("reconciles a real committed issue after losing its POST response", async () => {
+    const f = await fixture();
+    let writes = 0;
+    let operations: readonly RemotePublicationOperation[] = [];
+    const request: FetchLike = async (url, init) => {
+      const result = await fetch(url, { ...init, signal: AbortSignal.timeout(10000) });
+      if (init?.method === "POST" && url.endsWith("/issues")) {
+        writes++;
+        expect(result.status).toBe(201);
+        await result.text();
+        throw new Error("Injected response loss after remote commit");
+      }
+      return result;
+    };
+    const run = () => new PublicationJournal({ batchId: f.repo, operations,
+      save: async value => { operations = structuredClone(value); },
+    }).run("gitea", "summary:0", () => createGiteaProblemIssueDispatcher({
+      baseUrl: baseUrl!, token: owner.token, owner: owner.login, repo: f.repo,
+      headSha: f.headSha, targetKind: "push", resolvedAction: "none", fetch: request,
+    }).reconcileProblems([problem], "Remote reconciliation acceptance"));
+    await expect(run()).rejects.toThrow("Injected response loss");
+    await run();
+    const issues = await (await api(`${f.path}/issues?state=all&type=issues`, "GET", undefined, owner.token)).json() as Issue[];
+    expect(issues).toHaveLength(1);
+    expect(writes).toBe(1);
+    expect(operations.every(op => op.status === "confirmed")).toBe(true);
   });
 
   it("leaves an unlinked email unassigned", async () => {

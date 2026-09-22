@@ -441,6 +441,27 @@ export interface BatchPublicationRecovery {
   /** Serialized analysis output and accounting for LLM-free replay. */
   readonly output: unknown;
   readonly receipts: readonly PublicationReceipt[];
+  /** Versioned remote-write journal; absent on pre-reconciliation checkpoints. */
+  readonly remote?: { readonly version: 1; readonly operations: readonly RemotePublicationOperation[] };
+}
+
+/** No credentials, request bodies, directory data, or upstream error bodies. */
+export interface RemotePublicationOperation {
+  readonly id: string;
+  readonly channel: string;
+  readonly call: string;
+  readonly strategy: "marker" | "state" | "delete" | "feishu_uuid" | "unqueryable";
+  readonly status: "unknown" | "confirmed" | "rejected";
+  /** Git API resource only. Webhook URLs and recipient IDs are never persisted. */
+  readonly target?: string;
+  readonly scope?: string;
+  readonly collection?: boolean;
+  readonly expectedState?: string;
+  readonly attempts: number;
+  readonly reconciliations: number;
+  readonly firstAttemptAt: number;
+  readonly updatedAt: number;
+  readonly response?: { readonly status: number; readonly data: Readonly<Record<string, string | number>> };
 }
 
 /** Claim one due outbox entry for dispatch into the execution queue. */
@@ -778,7 +799,8 @@ export interface AutoCommitStore {
    * terminal failure skips again instead of looping) and re-pin the batch to
    * `configSnapshotId` — the caller passes the CURRENT admission generation so
    * operators re-arm precisely to pick up settings changed since the original
-   * admission (e.g. a raised `review.max_patch_bytes`). Returns the updated
+   * admission (e.g. a raised `review.max_patch_bytes`). A remote publication
+   * journal and its analysis payload survive this reset. Returns the updated
    * record, or undefined when the batch is unknown or not terminal.
    */
   requeueBatchForRecovery(

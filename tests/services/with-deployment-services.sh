@@ -33,6 +33,7 @@ trap 'exit 130' INT
 trap 'exit 143' TERM HUP
 if [[ "$had_image" == false ]]; then timeout 180 podman pull "$image" >build/logs/deployment-pull.log 2>&1; fi
 cp tests/services/deployment-fixture.sh "$work/build/tmp/start.sh"
+cp tests/services/debian-mirror.sh "$work/build/tmp/debian-mirror.sh"
 cp tests/services/deployment-probe.sh "$work/build/tmp/probe.sh"
 podman volume create "$volume" >/dev/null
 podman run -d --name "$service" --init --timeout 900 --stop-timeout 20 \

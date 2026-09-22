@@ -1,9 +1,15 @@
 import {
   createMemoryAutoCommitStore,
+  createSqliteAutoCommitStore,
+  computeStreamId,
   type AutoCommitStore,
   type CommitMemberRecord,
 } from "@aicr/core";
 import { describe, expect, it, vi } from "vitest";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { join, resolve } from "node:path";
+import { createGithubIssueDispatcher, type DispatchResult, type FetchLike } from "@aicr/outputs";
+import { createCompositeOutputPublisher } from "../src/bootstrap.js";
 
 import {
   createAutoCommitBatchExecutor,
@@ -16,11 +22,10 @@ import type {
   runReviewOrchestration,
 } from "../src/review-orchestrator.js";
 
-async function fixture(): Promise<{
+async function fixture(store: AutoCommitStore = createMemoryAutoCommitStore()): Promise<{
   store: AutoCommitStore;
   context: BatchExecutionContext;
 }> {
-  const store = createMemoryAutoCommitStore();
   const { receipt } = await store.acceptReceipt({
     deliveryKey: "delivery",
     workspaceId: "workspace",
@@ -40,8 +45,9 @@ async function fixture(): Promise<{
     policyVersion: "policy",
     now: 1000,
   });
+  const streamId = computeStreamId(receipt);
   await store.applyMetadataPage({
-    streamId: receipt.streamId,
+    streamId,
     receiptId: receipt.receiptId,
     now: 1000,
     members: ["A1", "A2"].map((revision, index) => ({
@@ -65,10 +71,10 @@ async function fixture(): Promise<{
       },
     })),
   });
-  const members = (await store.readPendingMembers(receipt.streamId, null, 10))
+  const members = (await store.readPendingMembers(streamId, null, 10))
     .items;
   await store.applyExclusionVerdicts({
-    streamId: receipt.streamId,
+    streamId,
     now: 1000,
     verdicts: members.map((member) => ({
       memberId: member.memberId,
@@ -77,15 +83,15 @@ async function fixture(): Promise<{
     })),
   });
   const reservation = await store.acquireStreamReservation(
-    receipt.streamId,
+    streamId,
     "consumer",
     10000,
     1000,
   );
-  const head = await store.readStreamHead(receipt.streamId);
+  const head = await store.readStreamHead(streamId);
   expect(
     await store.sealBatch({
-      streamId: receipt.streamId,
+      streamId,
       reservationToken: reservation!.token,
       expectedStreamVersion: head!.version,
       batchId: "batch",
@@ -156,6 +162,90 @@ function result(failed = false): ReviewOrchestrationResult {
 }
 
 describe("automatic batch execution boundary", () => {
+  it("retains remote identities when a later receipt exceeds the checkpoint cap", async () => {
+    const { store, context } = await fixture();
+    const fetch = vi.fn<FetchLike>(async () => ({ ok: true, status: 200, statusText: "OK", json: async () => ({ id: 1 }), text: async () => '{}' }));
+    const execute = createAutoCommitBatchExecutor({ store, now: () => 1001,
+      orchestrationOptions: {} as ServerReviewOrchestrationOptions,
+      runReview: async (runContext, options) => {
+        await options.onAnalysisComplete?.(result().outputState);
+        await runContext.publicationRecovery!.remote!.run("first", "summary:0", () =>
+          createGithubIssueDispatcher({ owner: "o", repo: "r", issueNumber: 1, fetch }).publishAggregatedProblems([], "report"));
+        await runContext.publicationRecovery!.onChannelResult!({ channel: "first", status: "failed", raw: { error: "x".repeat(1_048_576) } }, "summary");
+        return result();
+      },
+    });
+    await expect(execute(context)).rejects.toThrow("exceeds the size cap");
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect((await store.readBatch("batch"))?.executionCheckpoint?.publication?.remote?.operations[0]?.status).toBe("confirmed");
+  });
+
+  it("keeps an omitted old call unknown when manual-retry policy suppresses its channel", async () => {
+    const { store, context } = await fixture();
+    await store.checkpointBatchExecution("batch", context.leaseToken, { phase: "publication_pending", publication: {
+      output: { problems: [], summaries: [{ markdown: "Reviewed" }] }, receipts: [],
+      remote: { version: 1, operations: [{ id: "a".repeat(64), channel: "removed", call: "summary:0", strategy: "unqueryable",
+        status: "unknown", attempts: 1, reconciliations: 0, firstAttemptAt: 1000, updatedAt: 1000 }] },
+    } }, 1001);
+    const execute = createAutoCommitBatchExecutor({ store, now: () => 1001, runReview: async () => result(),
+      orchestrationOptions: {} as ServerReviewOrchestrationOptions });
+    await expect(execute(context)).rejects.toThrow("unconfirmed output");
+    expect((await store.readBatch("batch"))?.executionCheckpoint?.publication?.receipts).toContainEqual(expect.objectContaining({ channel: "removed", status: "unknown" }));
+  });
+  it.each(["response", "checkpoint"])("reconciles lost %s through SQLite restart, lease recovery and the real composite", async loss => {
+    mkdirSync("build/tmp", { recursive: true });
+    const dir = mkdtempSync(resolve("build/tmp/remote-reconcile-"));
+    const path = join(dir, "state.db");
+    let store = await createSqliteAutoCommitStore({ path });
+    try {
+      const { context } = await fixture(store);
+      const records: { id: number; body: string; html_url: string }[] = [];
+      const fetch: FetchLike = async (_url, init) => {
+        if (init?.method === "POST") {
+          records.push({ id: records.length + 1, body: JSON.parse(init.body!).body, html_url: "https://git.test/report" });
+          if (loss === "response") throw new Error("lost committed response");
+        }
+        const raw = init?.method === "GET" ? records : records.at(-1);
+        return { ok: true, status: 200, statusText: "OK", json: async () => raw, text: async () => JSON.stringify(raw) };
+      };
+      const original = store.checkpointBatchExecution.bind(store);
+      if (loss === "checkpoint") vi.spyOn(store, "checkpointBatchExecution").mockImplementation(async (id, token, checkpoint, at) => {
+        if (checkpoint.publication?.remote?.operations.some(op => op.status === "confirmed")) throw new Error("disk failure after send");
+        return original(id, token, checkpoint, at);
+      });
+      const analyze = vi.fn();
+      const runReview = vi.fn<typeof runReviewOrchestration>(async (runContext, opts) => {
+        if (!opts.resumePublication) {
+          analyze();
+          await opts.onAnalysisComplete?.(result().outputState, {
+            model: { providerId: "test", modelId: "test" }, promptTokenEstimate: 100, contextRequestCount: 0,
+            llmUsage: { totalTokens: 123 }, estimatedCostUsd: 0.25,
+          });
+        } else expect(opts.resumePublication.analysis).toMatchObject({ llmUsage: { totalTokens: 123 }, estimatedCostUsd: 0.25 });
+        const dispatcher = createGithubIssueDispatcher({ owner: "o", repo: "r", issueNumber: 1, channelName: "first", fetch });
+        const publisher = createCompositeOutputPublisher([], [{ name: "first", kind: "github_issue", publisher: {
+          publishSummary: () => dispatcher.publishAggregatedProblems([], "Reviewed"),
+        } }], { ...runContext.publicationRecovery, skipChannels: new Set(runContext.publicationRecovery?.skipChannels), signal: runContext.signal })!;
+        const dispatch = await publisher.publishSummary!("Reviewed");
+        return { ...result(), dispatchResults: dispatch as readonly DispatchResult[] };
+      });
+      await expect(createAutoCommitBatchExecutor({ store, runReview, now: () => 1001,
+        orchestrationOptions: {} as ServerReviewOrchestrationOptions })(context)).rejects.toThrow();
+      expect((await store.readBatch("batch"))?.executionCheckpoint?.publication?.remote?.operations[0]?.status).toBe("unknown");
+      store.close?.();
+      store = await createSqliteAutoCommitStore({ path });
+      await store.reclaimExpiredBatchLeases(11001, 10);
+      const claim = (await store.claimDispatch(11002, "replacement", 1))[0]!;
+      await store.confirmDispatch("batch", claim.claimToken, 11002);
+      const leaseToken = await store.startBatchExecution("batch", "replacement", 10000, 11002);
+      await createAutoCommitBatchExecutor({ store, runReview, now: () => 11003,
+        orchestrationOptions: {} as ServerReviewOrchestrationOptions })({ ...context, batch: (await store.readBatch("batch"))!, leaseToken: leaseToken! });
+      expect(records).toHaveLength(1);
+      expect(analyze).toHaveBeenCalledTimes(1);
+      expect((await store.readBatch("batch"))?.executionCheckpoint?.phase).toBe("completed");
+    } finally { store.close?.(); rmSync(dir, { recursive: true, force: true }); }
+  });
+
   it("passes stable run identity, all members, range, and recorded author into one review", async () => {
     const { store, context } = await fixture();
     const runReview = vi
@@ -492,6 +582,9 @@ describe("automatic batch execution boundary", () => {
       { channel: "first", status: "failed", attempts: 1, updatedAt: 1000 },
       { channel: "first", status: "published", attempts: 1, updatedAt: 1000 },
     ] },
+    { output: { problems: [], summaries: [] }, receipts: [], remote: null },
+    { output: { problems: [], summaries: [] }, receipts: [], remote: { version: 2, operations: [] } },
+    { output: { problems: [], summaries: [] }, receipts: [], remote: { version: 1, operations: [{}] } },
   ])("rejects corrupt recovery state without running or skipping analysis", async (publication) => {
     const { store, context } = await fixture();
     await store.checkpointBatchExecution("batch", context.leaseToken, {

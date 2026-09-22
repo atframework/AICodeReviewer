@@ -1389,7 +1389,7 @@ export function createMemoryAutoCommitStore(): AutoCommitStore {
         retryNotBefore: now,
         attempt: 1,
         recoveryAttempt: 1,
-        executionCheckpoint: null,
+        executionCheckpoint: record.executionCheckpoint?.publication?.remote ? record.executionCheckpoint : null,
         leaseToken: null,
         leaseOwner: null,
         leaseExpiry: null,
