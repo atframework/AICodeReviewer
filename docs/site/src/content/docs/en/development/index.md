@@ -125,11 +125,32 @@ both locales. Malformed configuration blocks fail instead of being skipped.
 The SVN wrapper uses a pinned Debian image and Subversion 1.14.5-3, with
 1 CPU / 256 MiB, a random loopback port and the same 900-second cleanup policy.
 It provides `AICR_SVN_TEST_URL`; the test process needs `svn` on PATH.
-The test checks auxiliary repository revision/content, diff and failure cleanup.
+The tests check auxiliary repository content, diff and failure cleanup, then
+run analysis and publication through the orchestrator with a deterministic model fixture.
 
 ```bash
 bash tests/services/with-svn.sh \
-  pnpm exec vitest run packages/vcs/test/svn-context-live.test.ts --maxWorkers=1
+  pnpm exec vitest run packages/vcs/test/svn-context-live.test.ts \
+    packages/server/test/svn-analysis-live.test.ts --maxWorkers=1
+```
+
+For PostgreSQL SCRAM/TLS/roles, Redis TLS/ACL/AOF and SVN HTTPS/authz/hooks,
+run the deployment fixture. It checks persisted data after a container restart,
+uses random loopback ports and shares 1 CPU / 512 MiB across the services.
+It removes its container, volume and temporary directory on exit. Debian package
+versions are recorded in `build/logs/deployment-versions.log`.
+
+```bash
+bash tests/services/with-deployment-services.sh
+```
+
+An optional child command receives `AICR_PG_TEST_URL`, `AICR_REDIS_TEST_URL`,
+`AICR_REDIS_OOM_TEST_URL` and `NODE_EXTRA_CA_CERTS`. Certificate verification stays
+enabled; OOM injection uses a separate Redis process. Serialize suites sharing PG:
+
+```bash
+bash tests/services/with-deployment-services.sh \
+  pnpm exec vitest run --coverage --maxWorkers=1
 ```
 
 ### Opt-in real accounts

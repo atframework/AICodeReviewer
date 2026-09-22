@@ -53,19 +53,10 @@ async function loadBullMq(): Promise<BullMqModule> {
   }
 }
 
-function parseRedisUrl(url: string): { host: string; port: number; password?: string; db?: number } {
-  const parsed = new URL(url);
-  return {
-    host: parsed.hostname || "localhost",
-    port: Number(parsed.port) || 6379,
-    ...(parsed.password ? { password: parsed.password } : {}),
-    ...(parsed.pathname && parsed.pathname !== "/" ? { db: Number(parsed.pathname.slice(1)) } : {}),
-  };
-}
-
 function buildRedisConnection(options: RedisQueueOptions["connection"]): Record<string, unknown> {
   if (options.url) {
-    return parseRedisUrl(options.url);
+    // BullMQ forwards url to ioredis, preserving TLS, ACL identity and URI decoding.
+    return { url: options.url };
   }
   return {
     host: options.host ?? "localhost",

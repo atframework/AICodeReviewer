@@ -107,29 +107,9 @@ async function loadIoredis(): Promise<unknown> {
   }
 }
 
-function parseRedisUrl(url: string): {
-  host: string;
-  port: number;
-  password?: string;
-  db?: number;
-} {
-  const parsed = new URL(url);
-  return {
-    host: parsed.hostname || "localhost",
-    port: Number(parsed.port) || 6379,
-    ...(parsed.password ? { password: parsed.password } : {}),
-    ...(parsed.pathname && parsed.pathname !== "/"
-      ? { db: Number(parsed.pathname.slice(1)) }
-      : {}),
-  };
-}
-
 function buildRedisConnection(
   options: RedisAutoCommitStoreOptions["connection"],
 ): Record<string, unknown> {
-  if (options.url) {
-    return parseRedisUrl(options.url);
-  }
   return {
     host: options.host ?? "localhost",
     port: options.port ?? 6379,
@@ -1382,11 +1362,11 @@ export async function createRedisAutoCommitStore(
   options: RedisAutoCommitStoreOptions,
 ): Promise<AutoCommitStore> {
   const mod = (await loadIoredis()) as {
-    Redis?: new (opts: Record<string, unknown>) => RedisClient;
-  } & (new (opts: Record<string, unknown>) => RedisClient);
+    Redis?: new (opts: string | Record<string, unknown>) => RedisClient;
+  } & (new (opts: string | Record<string, unknown>) => RedisClient);
   const RedisCtor = mod.Redis ?? mod;
   const redis: RedisClient = new RedisCtor(
-    buildRedisConnection(options.connection),
+    options.connection.url ?? buildRedisConnection(options.connection),
   );
   const P = `${options.keyPrefix ?? "aicr:"}ac:`;
   let dispatchScanOffset = 0;

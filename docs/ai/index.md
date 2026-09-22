@@ -31,18 +31,18 @@
 | M3 | 已完成 | `milestones/M3.md` |
 | M4 | 已完成 | `milestones/M4.md` |
 | M5 | 已完成 | `milestones/M5.md` |
-| M6 | 部分完成 | `milestones/M6.md` |
+| M6 | SVN 按 M31 验收；GitLab 端到端待验收 | `milestones/M6.md` |
 | M7 | 已完成 | `milestones/M7.md` |
-| M8 | 基本完成 | `milestones/M8.md` |
+| M8 | 实现与离线 eval 已交付；真实 LLM benchmark 按 M31 跳过 | `milestones/M8.md` |
 | M9 | 核心交付完成，预留扩展见路线图 | `milestones/M9.md` |
 | M10 | 已交付，真实本机 Redis 已验收 | `milestones/M10.md` |
 | M11 文档站子工程 | 已完成（2026-08-28 线上记录；本轮仅本地验证） | `milestones/M11.md` |
 | M12 GitHub App 认证 | 已完成 | `milestones/M12.md` / `architecture.md` §3.2.1 |
 | M13 pi + oh-my-pi 集成 | 已完成 | `milestones/M13.md` |
 | M13.1 agent web search 治理 | 已完成 | `milestones/M13.1.md` |
-| M14 多源上下文聚合 | 已完成 | `milestones/M14.md` / `architecture.md` §3.2.2 |
+| M14 多源上下文聚合 | 已交付；SVN 按 M31 调整后的标准验收 | `milestones/M14.md` / `architecture.md` §3.2.2 |
 | M15 自动提交调度 | 已完成 | `milestones/M15.md` / `architecture.md` §3.1.1 / `decisions.md` D35 |
-| M16 PR/MR 执行时段与持久化延期 | 已完成 | `milestones/M16.md` / `architecture.md` §3.1.1 / `decisions.md` D36 |
+| M16 PR/MR 执行时段与持久化延期 | 实现与本地恢复已验收；GitLab MR 生产路径待验收 | `milestones/M16.md` / `architecture.md` §3.1.1 / `decisions.md` D36 |
 | M17 配置存储、schema 迁移与 PG 后端 | 已完成 | `milestones/M17.md` / `architecture.md` §3.14 |
 | M18 来源合并、路由图与发布服务 | 已完成 | `milestones/M18.md` / `architecture.md` §3.15 |
 | M19 运行时配置 generation 与配置管理 API | P4/P5 已交付；本地验收完成 | `milestones/M19.md` / `architecture.md` §3.16 |
@@ -57,6 +57,7 @@
 | M28 逐目标发布恢复与配置示例校验 | 批次 `publication_pending` 逐渠道回执续发（D50）、复合 publisher 恢复钩子、管理 API `publications`；文档配置片段全量 schema 校验与阴性用例 | [M28](milestones/M28.md) / `decisions.md` D50 |
 | M29 计划精简与 WSL 临时服务验收 | 精简历史、核对残留条件，真实 Gitea 指派及资源清理 | [M29](milestones/M29.md) / [服务验收](../testing-services.md) |
 | M30 环境变量验收与 SVN 修复 | 用户确认 P4/GitHub；飞书、两组 LLM、Podman SVN 及导出修复 | [M30](milestones/M30.md) |
+| M31 验收范围收敛与 WSL 部署验证 | 用户调整验收标准、凭据组合回归、SVN 分析与服务认证/持久化、公网只读证据 | [M31](milestones/M31.md) |
 | 本地优先队列 P0-P15 | 已完成 | `milestones/local-priority-queue.md` |
 
 历史记录仅用于查交付证据；当前状态以代码、测试和前瞻路线图为准。公开用户文档位于

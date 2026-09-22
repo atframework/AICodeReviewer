@@ -727,6 +727,12 @@ queue:
   #   path: data/queue.sqlite     # default
   #   lock_ttl_seconds: 300       # stale-running reclaim TTL (default 300)
 
+  # Redis queue and automatic batch store preserve TLS and ACL credentials.
+  # Set AICR_REDIS_URL to rediss://username:password@host:port/db;
+  # percent-encode credentials. A private CA uses NODE_EXTRA_CA_CERTS (PEM).
+  # redis:
+  #   url_env: AICR_REDIS_URL
+
   # rate_limit:
   #   per_provider_rps:   # Per-provider requests-per-second cap (provider id → rps)
   #     gitea-internal: 5

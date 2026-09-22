@@ -7,6 +7,11 @@ description: 配置内存或持久化 SQLite 队列、worker 并发、限流，�
 以及任务失败时怎么重试。默认是内存队列；生产环境建议切换到持久化 SQLite 队列，
 让任务在重启后仍然存在。
 
+Redis 的 `queue.redis.url_env` 指定保存连接 URL 的环境变量名。
+TLS 与 ACL 认证使用 `rediss://username:password@host:port/db`，凭据按 URI 百分号编码。
+队列与自动批次存储将完整 URL 交给驱动解析。私有 CA 可在启动 Node 前通过
+`NODE_EXTRA_CA_CERTS` 指向 PEM 文件，证书验证保持开启。
+
 ```yaml
 queue:
   kind: sqlite              # memory（默认）| sqlite | redis

@@ -9,12 +9,14 @@ const fakeBullMq = vi.hoisted(() => {
     completedTokens: [] as string[],
     failedTokens: [] as string[],
     closed: [] as string[],
+    connections: [] as Record<string, unknown>[],
     reset(): void {
       this.jobs.clear();
       this.waiting.length = 0;
       this.completedTokens.length = 0;
       this.failedTokens.length = 0;
       this.closed.length = 0;
+      this.connections.length = 0;
     },
   };
 
@@ -78,6 +80,7 @@ const fakeBullMq = vi.hoisted(() => {
   }
 
   class FakeQueue {
+    constructor(_name: string, options: { connection: Record<string, unknown> }) { api.connections.push(options.connection); }
     async close(): Promise<void> { api.closed.push("queue"); }
     async add(_name: string, data: unknown, opts: { attempts?: number }): Promise<FakeJob> {
       const job = new FakeJob(String(api.jobs.size + 1), data, opts);
@@ -110,6 +113,7 @@ const fakeBullMq = vi.hoisted(() => {
   }
 
   class FakeWorker {
+    constructor(_name: string, _processor: unknown, options: { connection: Record<string, unknown> }) { api.connections.push(options.connection); }
     async close(): Promise<void> { api.closed.push("worker"); }
     async getNextJob(token: string): Promise<FakeJob | undefined> {
       const job = api.waiting.shift();
@@ -132,6 +136,13 @@ vi.mock("bullmq", () => ({
 import { createRedisQueue } from "../src/redis-queue.js";
 
 describe("createRedisQueue", () => {
+  it("passes the URL to both BullMQ clients without dropping TLS or ACL credentials", async () => {
+    const url = "rediss://queue-user:p%40ss%2Fword@redis.example:6380/4";
+    const queue = await createRedisQueue({ connection: { url } });
+    try {
+      expect(fakeBullMq.connections).toEqual([{ url }, { url }]);
+    } finally { await queue.close?.(); }
+  });
   it("drains the claimed job before closing both Redis clients once", async () => {
     const queue = await createRedisQueue({ connection: {} });
     const job = await queue.enqueue({}, { workspaceId: "ws", triggerName: "t" });

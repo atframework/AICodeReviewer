@@ -98,11 +98,31 @@ bash tests/services/with-gitea.sh \
 
 SVN 脚本使用固定 Debian 镜像和 Subversion 1.14.5-3，限额 1 CPU / 256 MiB，
 回环随机端口，采用同样的 900 秒生命周期和清理规则。脚本提供 `AICR_SVN_TEST_URL`；
-测试进程的 PATH 需有 `svn`。用例核验辅助仓库版本/内容、diff 与失败清理。
+测试进程的 PATH 需有 `svn`。用例核验辅助仓库内容、diff 与失败清理，
+并通过 orchestrator 和确定性模型夹具执行分析与发布。
 
 ```bash
 bash tests/services/with-svn.sh \
-  pnpm exec vitest run packages/vcs/test/svn-context-live.test.ts --maxWorkers=1
+  pnpm exec vitest run packages/vcs/test/svn-context-live.test.ts \
+    packages/server/test/svn-analysis-live.test.ts --maxWorkers=1
+```
+
+PostgreSQL SCRAM/TLS/角色、Redis TLS/ACL/AOF 与 SVN HTTPS/authz/hook 使用部署夹具。
+它在容器重启后核验持久化数据，使用随机回环端口，服务共享 1 CPU / 512 MiB。
+退出时删除自有容器、数据卷和临时目录，Debian 包版本记录在
+`build/logs/deployment-versions.log`。
+
+```bash
+bash tests/services/with-deployment-services.sh
+```
+
+可选子命令接收 `AICR_PG_TEST_URL`、`AICR_REDIS_TEST_URL`、
+`AICR_REDIS_OOM_TEST_URL` 和 `NODE_EXTRA_CA_CERTS`。证书验证保持开启，
+OOM 注入使用独立 Redis 进程；共享 PG 的测试串行执行：
+
+```bash
+bash tests/services/with-deployment-services.sh \
+  pnpm exec vitest run --coverage --maxWorkers=1
 ```
 
 ### 按需启用真实账户

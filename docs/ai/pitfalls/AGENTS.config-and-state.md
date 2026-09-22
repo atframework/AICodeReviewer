@@ -330,6 +330,12 @@ Sources: `packages/server/src/review-orchestrator.ts`, `live-runs.ts`,
   same file passes standalone. Use a fresh disposable test instance or clean
   only test-owned prefixes; never use `FLUSHDB` or raise the timeout
   (`model-catalog-redis-live.test.ts`).
+- A TLS-only Redis with the default ACL user disabled exposes URL parsers that
+  discard `rediss:` or the username; encoded passwords also need URI decoding.
+  Forward the URL to ioredis, or BullMQ's `connection.url`, rather than rebuilding
+  partial options. Check queue, automatic batches and config storage together
+  (`redis-queue.test.ts`, `redis-config-connection.test.ts`, and the WSL deployment
+  fixture with the real CLI shutdown test). Keep certificate verification enabled.
 - Redis Lua errors do not roll back earlier writes. Validate all index key
   types and generation bounds before mutation; read large HINCRBY results
   back as decimal strings (`redis-config-store.test.ts`). OOM injection must
@@ -343,6 +349,9 @@ Sources: `packages/server/src/review-orchestrator.ts`, `live-runs.ts`,
   migration tests. With a shared `AICR_PG_TEST_URL`, run the complete suite with
   `--maxWorkers=1` or provide separate databases; retain timeouts and the
   concurrency exercised inside each test.
+  Extend test URLs with `URL.searchParams`: appending a second `?options=` after
+  `sslmode` loses the schema option, so migration probes and the consumer can
+  silently use different schemas (`post-migration-consumption.test.ts`).
 - PostgreSQL recording errors from Drizzle wrap the driver error in `cause`;
   dedupe only `review_runs_pkey`. Serialize rollup reads inside the transaction
   with `FOR NO KEY UPDATE`, compatible with concurrent FK `KEY SHARE` locks

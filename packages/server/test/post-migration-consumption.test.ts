@@ -86,6 +86,7 @@ interface SqliteStatement {
   all(...params: unknown[]): unknown[];
 }
 interface SqliteDatabase {
+  readonly inTransaction: boolean;
   exec(source: string): unknown;
   prepare(source: string): SqliteStatement;
   transaction<T extends (...args: never[]) => unknown>(fn: T): T & { immediate: T };
@@ -766,7 +767,9 @@ describePg("post-migration consumption [postgres]", () => {
     const schema = `test_${randomUUID().replace(/-/g, "_")}`;
     schemas.push(schema);
     const searchPath = `-c search_path="${schema}"`;
-    const schemaUrl = `${PG_TEST_URL!}?options=${encodeURIComponent(searchPath)}`;
+    const connectionUrl = new URL(PG_TEST_URL!);
+    connectionUrl.searchParams.set("options", searchPath);
+    const schemaUrl = connectionUrl.toString();
 
     // Seed: business STORE_MIGRATION_PLAN fully applied (real runner via the
     // production store factory), one legacy review_runs row, config 001 only.

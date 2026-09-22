@@ -688,6 +688,62 @@ describe("secret sealing (literal credentials at rest)", () => {
     expect((await manager.captureForTask()).databaseRevision).toBe(1);
     manager.close();
   });
+
+  it("recovers queued credentials across replica connections, key rotation and reopened stores", async () => {
+    const managers: RuntimeConfigManager[] = [];
+    const connections: ConfigStore[] = [];
+    let rawQueue = await createSqliteQueue({ path: join(dir, "sealed-queue.sqlite") });
+    const rotated = createConfigSecretSealing(parseConfigSecretsKeyMaterial(KEY_B), [parseConfigSecretsKeyMaterial(KEY_A)]);
+    const create = (connection: ConfigStore, secretSealing = sealingA()) => {
+      const manager = new RuntimeConfigManager({ fileConfig: FILE_CONFIG, fileDocument: FILE_DOCUMENT,
+        fileDigest: DIGEST, store: connection, namespace: NAMESPACE, baseDir: dir, secretSealing });
+      managers.push(manager);
+      return manager;
+    };
+    const token = (generation: RuntimeConfigGeneration) => generation.config.triggers.find(trigger => trigger.name === "gitea-main")?.token;
+    try {
+      const writer = create(store);
+      await writer.admission();
+      const old = await publishSealedTrigger(writer, sealingA(), null, "rotation-old");
+      const peerStore = await createSqliteConfigStore({ path: join(dir, "config.sqlite") });
+      connections.push(peerStore);
+      const peer = create(peerStore);
+      expect(token(await peer.admission())).toBe("gtok-plain-secret");
+      const queued = createRuntimeQueue(rawQueue, peerStore, NAMESPACE, peer);
+      await queued.queue.enqueue({ synthetic: true }, { id: "old-secret-task", workspaceId: "ws", triggerName: "gitea-main" });
+      const next = prepareConfigPublication({ namespace: NAMESPACE, baseRevision: old.revision,
+        operationId: "rotation-new", actor: "test", file: FILE_DOCUMENT, fileDigest: DIGEST,
+        current: (await store.readRevision(NAMESPACE, old.revision))!.document, formatVersion: 2,
+        operations: [{ op: "update", collection: "triggers", recordId: "rec-gitea-main",
+          value: { name: "gitea-main", kind: "gitea", base_url: "https://gitea.example", token: "new-synthetic-token" } }] });
+      expect((await publishConfig(store, next, { secretSealing: rotated })).status).toBe("committed");
+      // All manager and SQLite handles are replaced, so recovery cannot use an in-memory generation.
+      for (const manager of managers.splice(0)) manager.close();
+      for (const connection of connections.splice(0)) await connection.close();
+      await rawQueue.close?.();
+      await store.close();
+      store = await createSqliteConfigStore({ path: join(dir, "config.sqlite") });
+      rawQueue = await createSqliteQueue({ path: join(dir, "sealed-queue.sqlite") });
+      const restarted = create(store, rotated);
+      expect(token(await restarted.admission())).toBe("new-synthetic-token");
+      const recovered = createRuntimeQueue(rawQueue, store, NAMESPACE, restarted);
+      const job = await recovered.queue.dequeue("new-replica");
+      expect(job?.configVersion?.configSnapshotId).toBe(old.snapshotId);
+      expect(token(await restarted.resolveGeneration(job!.configVersion!.configSnapshotId))).toBe("gtok-plain-secret");
+      const missingRetiredKey = create(store, createConfigSecretSealing(parseConfigSecretsKeyMaterial(KEY_B)));
+      expect(token(await missingRetiredKey.admission())).toBe("new-synthetic-token");
+      await expect(missingRetiredKey.resolveGeneration(old.snapshotId)).rejects.toThrow(/key|decrypt/i);
+      // A mismatched replica must not silently substitute file configuration.
+      await expect(create(store).admission()).rejects.toThrow(/key|decrypt/i);
+      expect(JSON.stringify(await store.readSnapshot(old.snapshotId))).not.toContain("gtok-plain-secret");
+      await recovered.queue.complete(job!.id);
+      expect(await recovered.listActiveConfigSnapshotIds(Date.now())).toEqual([]);
+    } finally {
+      for (const manager of managers) manager.close();
+      for (const connection of connections) await connection.close();
+      await rawQueue.close?.();
+    }
+  });
 });
 
 describe("generation regression boundaries", () => {

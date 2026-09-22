@@ -8,6 +8,12 @@ how fast they can call each provider, and how failures are retried. The default
 is an in-memory queue; for production you should switch to the durable SQLite
 queue so jobs survive restarts.
 
+For Redis, `queue.redis.url_env` names the environment variable containing the
+connection URL. Use `rediss://username:password@host:port/db` for TLS and ACL
+authentication; percent-encode credentials. The queue and automatic batch store
+preserve the URL for the driver. For a private CA, set `NODE_EXTRA_CA_CERTS` to
+its PEM file before starting Node; certificate verification stays enabled.
+
 ```yaml
 queue:
   kind: sqlite              # memory (default) | sqlite | redis
