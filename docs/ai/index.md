@@ -58,6 +58,7 @@
 | M29 计划精简与 WSL 临时服务验收 | 精简历史、核对残留条件，真实 Gitea 指派及资源清理 | [M29](milestones/M29.md) / [服务验收](../testing-services.md) |
 | M30 环境变量验收与 SVN 修复 | 用户确认 P4/GitHub；飞书、两组 LLM、Podman SVN 及导出修复 | [M30](milestones/M30.md) |
 | M31 验收范围收敛与 WSL 部署验证 | 用户调整验收标准、凭据组合回归、SVN 分析与服务认证/持久化、公网只读证据 | [M31](milestones/M31.md) |
+| M32 P4 提交者飞书归属 | 共享账号邮箱前缀误匹配修复，P4 workspace 优先及发布链路回归 | [M32](milestones/M32.md) |
 | 本地优先队列 P0-P15 | 已完成 | `milestones/local-priority-queue.md` |
 
 历史记录仅用于查交付证据；当前状态以代码、测试和前瞻路线图为准。公开用户文档位于

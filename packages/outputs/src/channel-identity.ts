@@ -82,20 +82,25 @@ export function matchChannelAuthor(
 		return choose(ids);
 	}
 	if (!users) return { status: "unmatched" };
-	const tiers = [
+	const accountTiers = [
 		users.filter(user => author?.email && user.emails.some(email => normalized(email) === normalized(author.email!))),
 		users.filter(user => [author?.username, author?.displayName].some(value => value && identifiers(user)
 			.some(id => normalized(id) === normalized(value)))),
-		users.filter(user => {
-			if (options.guessAuthor === false || !input.submitterWorkspace) return false;
-			const workspace = ` ${words(input.submitterWorkspace)} `;
-			return identifiers(user).some(id => {
-				const token = words(id);
-				const enough = token.replace(/ /gu, "").length >= 3 || /^[\p{Script=Han}]{2,}$/u.test(token);
-				return enough && workspace.includes(` ${token} `);
-			});
-		}),
 	];
+	const workspaceTier = users.filter(user => {
+		if (options.guessAuthor === false || !input.submitterWorkspace) return false;
+		const workspace = ` ${words(input.submitterWorkspace)} `;
+		return identifiers(user).some(id => {
+			const token = words(id);
+			const enough = token.replace(/ /gu, "").length >= 3 || /^[\p{Script=Han}]{2,}$/u.test(token);
+			return enough && workspace.includes(` ${token} `);
+		});
+	});
+	// P4 accounts can be shared; an account/email-prefix match must not hide
+	// the submitting client's owner or resolve an ambiguous workspace tier.
+	const tiers = input.provider === "p4"
+		? [workspaceTier, ...accountTiers]
+		: [...accountTiers, workspaceTier];
 	for (const tier of tiers) if (tier.length) return choose(tier.map(user => user.id));
 	return { status: "unmatched" };
 }

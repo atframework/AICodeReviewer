@@ -9,8 +9,38 @@ const users = feishuDirectoryUsers([
 ]);
 const directory = { listUsers: async () => users };
 const input = { provider: "p4", author: { username: "shared" }, submitterWorkspace: "owent_myrion-pc_6689" };
+const p4Users: readonly ChannelUser[] = [...users, {
+	id: "ou_ultramanhu", names: ["Ultramanhu"], aliases: ["ultramanhu"], emails: [], identifiers: [],
+}];
+const p4Input = { provider: "p4", author: { username: "admin" }, submitterWorkspace: "ultramanhu_PrxMain_WorkPC" };
+const p4Directory = { listUsers: async () => p4Users };
 
 describe("channel identity capability and conservative association", () => {
+	it.each([
+		{ username: "admin" },
+		{ username: "admin", email: "admin@owent.net" },
+		{ username: "owent" },
+	])("prefers the P4 submitter workspace over account evidence %j without a model call", async author => {
+		const guesser = vi.fn();
+		expect(await resolveChannelAuthor({ channelKind: "feishu_app", input: { ...p4Input, author }, directory: p4Directory, guesser }))
+			.toEqual({ status: "matched", userId: "ou_ultramanhu" });
+		expect(guesser).not.toHaveBeenCalled();
+	});
+	it("blocks ambiguous P4 workspaces instead of falling back to the shared account or model", async () => {
+		const guesser = vi.fn(async () => "ou_owent");
+		expect(await resolveChannelAuthor({ channelKind: "feishu_app", input: { ...p4Input, submitterWorkspace: "ultramanhu_owent_PC" }, directory: p4Directory, guesser }))
+			.toEqual({ status: "blocked" });
+		expect(guesser).not.toHaveBeenCalled();
+	});
+	it("keeps explicit mappings, blacklists, disabled guesses and non-P4 account precedence", async () => {
+		const resolve = (input: typeof p4Input, policy = {}) => resolveChannelAuthor({ channelKind: "feishu_app", input, directory: p4Directory, policy });
+		expect(await resolve(p4Input, { mappings: { admin: "ou_owent" } })).toEqual({ status: "matched", userId: "ou_owent" });
+		expect(await resolveChannelAuthor({ channelKind: "feishu_app", input: { ...p4Input, author: { username: "admin", email: "blocked@example.net" } }, directory: p4Directory, policy: { emailBlacklist: ["blocked@example.net"] } }))
+			.toEqual({ status: "blocked" });
+		expect(await resolve(p4Input, { guessAuthor: false })).toEqual({ status: "matched", userId: "ou_owent" });
+		expect(await resolve({ ...p4Input, provider: "github" })).toEqual({ status: "matched", userId: "ou_owent" });
+		expect(await resolve({ ...p4Input, submitterWorkspace: "unrecognized_PC" })).toEqual({ status: "matched", userId: "ou_owent" });
+	});
 	it.each(["github_pr_review", "github_issue", "github_problem_issue", "gitea_pr_review", "gitea_issue", "gitea_problem_issue", "gitlab_mr_review"])("keeps %s native and never reads a directory or calls a model", async kind => {
 		const listUsers = vi.fn(directory.listUsers);
 		const guesser = vi.fn();

@@ -2,6 +2,7 @@
 
 只保留未完成工作及完成条件；已完成证据见[里程碑](docs/ai/index.md#里程碑归档)，
 最新验收与用户指定范围见 [M31](docs/ai/milestones/M31.md)。
+P4 共享账号的飞书误 @ 修复见 [M32](docs/ai/milestones/M32.md)。
 
 ## 待完成
 

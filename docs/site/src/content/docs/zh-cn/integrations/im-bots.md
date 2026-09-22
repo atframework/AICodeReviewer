@@ -199,15 +199,18 @@ outputs:
 
 1. 渠道内 `user_mappings`：作者邮箱、用户名、显示名或完整 P4 提交者 workspace
    精确映射到当前应用的 `open_id`。配置目录时，映射目标必须在来源群中。
-2. 作者完整邮箱与个人邮箱或企业邮箱匹配。
-3. 用户名或显示名与中英文名、别名、邮箱本地部分、手机号或 ID 精确匹配。
-4. P4 的 `submitterWorkspace` 按标点或空格分隔后匹配完整标识片段。
+2. P4 的 `submitterWorkspace` 按标点或空格分隔后匹配完整标识片段。
    例如 `build_alice_PC` 匹配别名 `alice`，`malice_PC` 不匹配。
    此步骤排除不足三个字符的短别名，至少两个汉字的中文姓名除外。
+   唯一的 workspace 匹配优先于 `admin` 等共享账号，即使账号命中其他成员的邮箱前缀；
+   其他 provider 跳过此步骤。
+3. 作者完整邮箱与个人邮箱或企业邮箱匹配。
+4. 用户名或显示名与中英文名、别名、邮箱本地部分、手机号或 ID 精确匹配。
 5. 所有规则均未匹配且 `guess_author` 开启时，使用独立 LLM 调用选择一个目录候选人，
    或返回无法确定。
 
-同一优先级出现多个候选时跳过 @，即使配置了 `mention_fallback: all` 也不会转为 @ 所有人；
+同一优先级出现多个候选时跳过 @，停止较弱规则和模型兜底；P4 workspace 有歧义时也如此。
+即使配置了 `mention_fallback: all` 也不会转为 @ 所有人；
 全局邮箱黑名单同样禁止 @。AICR 不使用 push 投递者或分析服务自己的 P4 workspace 猜测作者。
 `mention_author` 默认为 false；未配置目录时，只有显式 `user_mappings` 能解析个人，
 全局 Git 登录名映射不能当作飞书 ID。推荐使用 `mention_fallback: skip`，避免未匹配作者触发群提醒。

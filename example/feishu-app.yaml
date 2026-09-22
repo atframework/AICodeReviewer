@@ -13,6 +13,8 @@ outputs:
       receive_id: oc_report_group
       mention_author: true
       guess_author: true # Runtime default; false disables workspace/model guesses.
+      # P4: a unique submitter-workspace match precedes author email/username.
+      # Shared accounts such as admin must not override the workspace owner.
       mention_fallback: skip
       member_directory:
         chat_id: oc_member_source_group

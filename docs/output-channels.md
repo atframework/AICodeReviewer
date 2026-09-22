@@ -26,8 +26,11 @@ fields are retained in a generation-scoped memory cache; they never enter main
 review prompts or persistent report state. Snapshots live 12 hours by default;
 `outputs.author_resolution.directory_cache_ttl_seconds` sets the global TTL and
 the channel's `member_directory.cache_ttl_seconds` overrides it (0–604800
-seconds, 0 disables reuse). Exact channel-local mappings take priority,
-then full email, exact author identifiers and P4 submitter workspace segments.
+seconds, 0 disables reuse). Exact channel-local mappings take priority.
+For P4, submitter workspace segments are matched before full email and exact
+author identifiers, since a shared account or email prefix may identify someone
+else. A tied workspace match blocks account and model fallback. Other providers
+keep full-email then exact-author matching.
 Ambiguity and the global email blacklist suppress mentions. A temporary transport,
 HTTP 429 or HTTP 5xx failure may reuse an expired snapshot with a warning; each
 subsequent call retries the refresh. Permission rejections and incomplete member

@@ -230,17 +230,20 @@ Matching uses case-insensitive, Unicode-normalized values in this order:
 1. Channel-local `user_mappings`: exact author email, username, display name or
    complete P4 submitter workspace to the same app's `open_id`. If a directory
    is configured, the mapped user must be in that directory.
-2. Full author email against personal or enterprise email.
-3. Exact username/display name against names, aliases, email local parts,
-   phone numbers or IDs.
-4. P4 `submitterWorkspace` against complete identifier segments separated by
+2. P4 `submitterWorkspace` against complete identifier segments separated by
    punctuation or spaces. For example, `build_alice_PC` matches alias `alice`;
    `malice_PC` does not. Short aliases below three characters are excluded here,
-   except Chinese names with at least two characters.
+   except Chinese names with at least two characters. A unique workspace match
+   takes precedence over a shared account such as `admin`, even if that login
+   matches another member's email local part. Other providers skip this step.
+3. Full author email against personal or enterprise email.
+4. Exact username/display name against names, aliases, email local parts,
+   phone numbers or IDs.
 5. If all rules have no match and `guess_author` is enabled, a dedicated LLM
    call may associate the submitter with one directory candidate or abstain.
 
-A tier with multiple candidates suppresses the mention, even with
+A tier with multiple candidates suppresses the mention without trying weaker
+tiers or the model; this includes ambiguous P4 workspaces, even with
 `mention_fallback: all`. The global email blacklist also suppresses it. AICR
 does not use the push delivery actor or the analysis service's P4 workspace.
 `mention_author` defaults to false. Without a directory, only explicit

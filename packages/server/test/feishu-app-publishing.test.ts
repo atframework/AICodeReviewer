@@ -31,6 +31,32 @@ function card(calls: ReturnType<typeof stubApi>) {
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 describe("Feishu app configured publisher", () => {
+  it("mentions the P4 workspace owner when admin matches another member's email prefix", async () => {
+    const calls = stubApi();
+    const baseFetch = globalThis.fetch;
+    const members = [
+      { open_id: "ou_owent", nickname: "owent", email: "admin@example.net" },
+      { open_id: "ou_ultramanhu", nickname: "ultramanhu" },
+    ];
+    vi.stubGlobal("fetch", async (url: string, init?: RequestInit) => {
+      if (url.includes("/members?") || url.includes("/contact/")) {
+        const data = url.includes("/members?")
+          ? { has_more: false, items: members.map(member => ({ member_id_type: "open_id", member_id: member.open_id, name: member.nickname })) }
+          : { user: members.find(member => url.includes(member.open_id)) };
+        return new Response(JSON.stringify({ code: 0, data }), { status: 200 });
+      }
+      return baseFetch(url, init);
+    });
+    const guesser = vi.fn(async () => "ou_owent");
+    const submitter = { ...event, headSha: "8215", author: { username: "admin" }, submitterWorkspace: "ultramanhu_PrxMain_WorkPC" };
+    await createOutputPublisherFromConfig(config(), "app", undefined, "team", submitter, process.cwd(), undefined, undefined, guesser)!.publishSummary!("Summary", []);
+    const rendered = JSON.stringify(card(calls));
+    expect(rendered).toContain('id=\\"ou_ultramanhu\\"');
+    expect(rendered).not.toContain('id=\\"ou_owent\\"');
+    expect(rendered).toContain("@admin");
+    expect(rendered).toContain("ultramanhu_PrxMain_WorkPC");
+    expect(guesser).not.toHaveBeenCalled();
+  });
   it("uses an injected guesser only after rules fail and renders validated native mentions", async () => {
     const calls = stubApi();
     const guesser = vi.fn(async () => "ou_alice");
@@ -128,7 +154,7 @@ describe("Feishu app configured publisher", () => {
     expect(warn).toHaveBeenCalled();
     stubApi(false, true);
     const failed = createOutputPublisherFromConfig(config(), "app", undefined, "team", event)!;
-    const composite = createCompositeOutputPublisher([], [{ name: "app", publisher: failed }]);
+    const composite = createCompositeOutputPublisher([], [{ name: "app", publisher: failed }])!;
     await expect(composite.publishSummary!("Summary", [])).resolves.toMatchObject([{ channel: "app", status: "failed" }]);
   });
   it("applies default empty-summary suppression before any API calls and accepts environment credentials", async () => {
@@ -136,7 +162,7 @@ describe("Feishu app configured publisher", () => {
     vi.stubEnv("FEISHU_TEST_APP_SECRET", "from-env");
     try {
       const publisher = createOutputPublisherFromConfig(config({ app_secret: undefined, app_secret_env: "FEISHU_TEST_APP_SECRET" }), "app", undefined, "team", event)!;
-      const composite = createCompositeOutputPublisher([], [{ name: "app", publisher }]);
+      const composite = createCompositeOutputPublisher([], [{ name: "app", publisher }])!;
       await expect(composite.publishSummary!("", [])).resolves.toEqual([]);
       expect(calls).toHaveLength(0);
       await composite.publishSummary!("Nonempty", []);
