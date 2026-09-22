@@ -1,102 +1,46 @@
 # AICodeReviewer 路线图
 
-本文件只记录尚未完成的工作及其验收条件。稳定合同见
-[架构](docs/ai/architecture.md)，交付历史见 [里程碑索引](docs/ai/index.md)。
-代码、配置和完整验证要求以 [AGENTS.md](AGENTS.md) 及对应实现为准。
+这里只记录未完成工作及其验收条件。实现合同见[架构](docs/ai/architecture.md)，
+交付与历史验证见[里程碑索引](docs/ai/index.md#里程碑归档)；
+本轮临时服务验收见 [M29](docs/ai/milestones/M29.md)。
+历史阶段的局部失败、跳过和固定版本限制不因归档精简而取消。
 
-## 1. 当前状态
+## 1. 可本地推进的下一步
 
-M0–M16 的核心交付已归档；待验收的外部场景与预留扩展列在下文，不能据此宣称已全覆盖。
-自动提交调度的跨通知合并、三后端存储和恢复边界见
-[M15](docs/ai/milestones/M15.md)，多源上下文聚合见 [M14](docs/ai/milestones/M14.md)；
-PR/MR 执行时段、持久化延期与事件面板见 [M16](docs/ai/milestones/M16.md)。
-当前 Observability 的 VCS 提交信息、worker 活动视图及用量刷新边界见
-[架构 §3.11](docs/ai/architecture.md#311-run-状态与可观测性)。
-审查提交与范围查询的 MCP 接线、分页和 fork 身份合同见
-[架构 §3.9](docs/ai/architecture.md#39-输出通道模板与-mcp-工具)及
-[MCP 工具](docs/site/src/content/docs/zh-cn/integrations/mcp-tools.md)。
-
-2026-09-10 已推进的本地验收：真实 svnserve + post-commit hook 到持久调度、
-模型目录 Redis 新连接重载，以及部署配置/双语自动提交示例的 schema 校验。
-记录与复现条件见 [本地验收](docs/ai/milestones/local-priority-queue.md)。
-
-Workspace 多工程规则与动态配置管理 P0–P8 已完成本地交付、复审与任务资料退役：存储/迁移见
-[M17](docs/ai/milestones/M17.md)，来源合并/发布见 [M18](docs/ai/milestones/M18.md)，
-运行时接线/管理 API 见 [M19](docs/ai/milestones/M19.md)，管理表单与浏览器门禁见
-[M20](docs/ai/milestones/M20.md)，集成测试与组合验收见
-[M21](docs/ai/milestones/M21.md)/[M22](docs/ai/milestones/M22.md)，
-跨版本迁移、服务排空和两平台真实服务最终验收见 [M24](docs/ai/milestones/M24.md)，
-全量复审修复与合同精炼（D47）见 [M25](docs/ai/milestones/M25.md)，
-本次资源生命周期、暂存编辑与发布边界复审见 [M26](docs/ai/milestones/M26.md)。
-稳定合同见[架构](docs/ai/architecture.md) §3.10、§3.14–3.16。
-
-数据库配置的注册凭据字段、加密发布与编辑语义见[架构](docs/ai/architecture.md)
-§3.15–3.16 和[决策](docs/ai/decisions.md) D40；部署验收仍按下表执行。
-
-管理页面的类型可见性、共享配置覆盖/重置、模板与系统 prompt 管理及复审边界见
-[M27](docs/ai/milestones/M27.md) 和架构 §3.15–3.16。管理读取面已拆为外壳 +
-按页懒加载（GET /collections/:kind、/fields、/globals、/builtin-assets，同一
-activeRevision 并发共享单次加载；整页校验修订，失败可重试，内置资产与周计划模块按需读取），合同见架构 §3.16。Queue 的
-`workers.lock_ttl_seconds` 与 `dead_letter.*` 仍是预留字段，不计作运行时能力。
-
-`agent.default: native-llm` 已作为全局、workspace 和 route analysis 的可选执行模式接入；
-内置路径的上下文与 CLI 工具边界见[架构 §3.3](docs/ai/architecture.md#33-compression-与上下文管理)。
-
-## 2. 可本地推进的下一步
-
-下列工作不以获得远端服务凭据为前提；实现前仍需确定恢复语义和范围。
-
-| 优先级 | 工作 | 本地产物与验收 | 边界 |
-| --- | --- | --- | --- |
-| （暂无） | — | — | — |
-
-P1（自动批次逐目标发布恢复）与 P2（扩展配置示例校验）已于 2026-09-21 完成，
-证据、发布恢复边界与后续复审记录见 [M28](docs/ai/milestones/M28.md)。
-
-不把单元测试或本地服务通过写成生产集成验收通过。完成一项后将证据移入对应里程碑，
-从本表删除，不累积完成清单。
-
-## 3. 依赖外部环境的验收
-
-| 场景 | 已有本地证据 | 仍需的条件与验收 |
+| 工作 | 验收条件 | 边界 |
 | --- | --- | --- |
-| 飞书自建应用报告与成员匹配 | `feishu_app` 配置、共享卡片/模板、分页资料、规则与独立 LLM 关联、全局/workspace 模型链的静态及数据库版本回归 | 用目标应用核对发送/群成员/通讯录及字段权限；验收来源群与接收群不同、重名、外部成员、字段不可见、令牌刷新及真实 @ 效果。用获准的真实候选资料和调用预算评估身份模型的误匹配/拒答；本地 mock 不代表租户或模型质量验收。接入见[双语指南](docs/site/src/content/docs/zh-cn/integrations/im-bots.md#飞书自建应用) |
-| 跨 workspace 并发与历史保留部署验收 | 共享执行名额、P4 阻塞期间 GitHub Retry、三后端终态清理及统计保留回归；公网只读数据确认 P4/GitHub 自然任务运行时间重叠 | 仍需重启恢复与部署后的 Events 标签验收；核对 YAML/数据库保留策略与重置，确认既有汇总不变。接收历史的 queued 不能用来计算当前排队数量；自然并发证据不代表公网事件重放验收 |
-| 国内 LLM 平台预设与 Anthropic 兼容接入 | 官方端点核查；Web 草稿保存、直连请求构造及 OpenCode/Kilo/Claude Code/pi/oh-my-pi 配置产物回归 | 使用符合套餐用途限制的测试账户、明确调用预算及目标 CLI 版本验证鉴权、模型权限、计费池与限流；本地测试不代表平台调用验收 |
-| GitHub/Gitea issue 自动指派 | 作者解析、真实 API 路径、三种 issue 模式、黑名单与重试边界的本地测试 | 使用有指派权限的账号核对真实创建结果中的 assignees；验证账号未关联邮箱、无权限及不可指派用户；规则见[输出合同](docs/output-channels.md#assignee-resolution) |
-| 数据库凭据部署验收 | 本地加密发布、重试、恢复和管理界面回归 | 在目标副本配置同一主密钥及退役密钥，验证真实凭据调用、轮换后重启及旧任务恢复；本地测试不证明外部凭据有效 |
-| GitLab 真实仓库端到端流程 | 适配器、webhook、分支筛选与持久入队、输出合同测试 | GitLab 实例、测试仓库、token、webhook 权限；验证真实 push/MR 筛选、入队与发布 |
-| SVN 部署环境 | file:// 仓库及本机 svnserve、认证 HTTP hook、SQLite 调度、真实 diff | 目标服务器上的 hook 账户/PATH、网络 ACL，以及实际使用的 HTTP(S)/认证方式 |
-| Redis 部署环境 | 自动调度和模型目录均已通过本机真实 Redis | 仅部署特定的 Redis 版本、ACL/TLS、网络中断及持久化配置需要现场验证 |
-| PostgreSQL 部署环境 | 本机配置、业务存储、迁移及指定旧版本进程矩阵已验证 | 目标服务器的版本、角色权限、TLS 与网络配置需要现场验证 |
-| GitHub App pull_request 生产路径 | push 已签收，PR token 注入有单测 | 目标仓库自然出现 PR 后核验入站、分析和发布；不为验收代用户创建 PR |
-| PR/MR 避峰恢复生产路径 | 正式环境已部署并验证 PR 配置、管理 API、迁移和产物哈希；隔离容器验证七个时间边界及恢复 | 仍需窗口外自然事件持久化及下一窗口恢复的运行证据；不主动制造分析或通知 |
-| CI 真实 LLM benchmark | 6 个 eval fixtures 的离线校验已入 CI | CI secrets、provider 凭据和明确调用预算 |
-| 自动批次远端对账 | 执行检查点与未知结果保护；逐渠道回执与续发已实现（D50/M28） | 对应 publisher 的查询/幂等协议及测试目标；在本地协议实现后验收 |
-| 其他部署版本的升级兼容 | `c5d221c` 历史配置模块与当前程序的 SQLite/PG/Redis 真实进程矩阵、首次停机排空 | 若部署旧版本不同，需固定其源码和驱动版本再跑矩阵；首次升级必须确认全部旧实例退出，不能仅依赖迁移锁 |
+| P4/SVN 辅助仓库物化 | 用真实服务驱动 context_repositories 物化、revision/内容核验、失败清理与 agent 只读挂载 | M14 只有物化合同测试；已有主仓库 diff/hook 测试不能替代辅助仓库链路。临时服务可在 WSL 隔离运行 |
+| GitLab 真仓库端到端 | 固定镜像版本，临时用户/仓库/token/webhook；真实 push/MR 筛选→持久入队→发布，核验出站目标与身份 | WSL/Podman 技术可行；按官方内存要求单独串行安排，见[服务验收](docs/testing-services.md)。LLM 可用确定性替身，但不能据此声称模型质量通过 |
+| 自动批次远端对账 | 按 publisher 定义查询/幂等协议，覆盖远端已写入但本地回执丢失、部分发布与恢复次数 | D50/M28 已有逐渠道续发；协议设计仍未完成。Gitea 可本地验收其分支，其他渠道需各自测试目标；不承诺 exactly-once |
 
-## 4. 预留扩展
+完成后将证据移入里程碑并删除对应待办。WSL 临时服务使用独立目录、回环端口、
+资源上限与退出清理，结束后核对容器、数据和本轮镜像，无全局清库或 prune。
 
-作者目录使用宿主侧 `ChannelUserDirectory` 抽象，默认缓存 12 小时，支持全局与渠道级
-静态/数据库 TTL。整份成员列表不加入评审 MCP 工具；若后续需要 Agent 查询身份，先定义
-按渠道授权、候选数限制及脱敏返回合同，评估见[输出合同](docs/output-channels.md)。
+## 2. 依赖目标环境的验收
 
-| 项目 | 当前状态 | 启动条件 |
+| 场景 | 尚缺证据 | WSL/Podman 能覆盖的部分 |
 | --- | --- | --- |
-| k8s_pod sandbox | 只有明确报错的预留实现 | 部署需求、客户端依赖方案与可用 Kubernetes 集群 |
-| firecracker sandbox | 只有明确报错的预留实现 | 隔离需求、Firecracker 二进制和 API socket 环境 |
+| 飞书自建应用与成员匹配 | 应用发送/群成员/通讯录权限；来源群≠接收群、重名/外部成员/字段不可见、刷新和真实 @；获准候选资料及预算下的误匹配/拒答 | 可测协议替身；不能替代租户权限和身份模型质量，见[接入指南](docs/site/src/content/docs/zh-cn/integrations/im-bots.md#飞书自建应用) |
+| 跨 workspace 并发与保留策略 | 部署重启恢复、Events 标签、YAML/DB 保留策略及重置，既有汇总不变 | 本地并发/恢复/清理可测；自然 P4/GitHub 重叠记录不等于公网事件重放，历史 queued 不是当前队列数量 |
+| 国内 LLM 预设与 Anthropic 接入 | 合用途的账户、预算和目标 CLI 版本；鉴权、模型权限、计费池、限流 | 请求/配置产物可测；不能代替付费账户调用 |
+| GitHub/Gitea issue 指派 | GitHub 真账号权限/邮箱关联/不可指派用户；目标 Gitea 版本与权限策略 | Gitea 1.25.4 的真实本地发布/assignees 与失败边界见 M29；不推广为 GitHub、Forgejo 或其他 Gitea 版本验收 |
+| 数据库凭据部署 | 副本同主密钥/退役密钥；真实调用、轮换后重启及旧任务恢复 | 本地加密/恢复可测；临时服务凭据不能证明生产凭据有效 |
+| SVN 部署环境 | hook 账户/PATH、ACL、实际 HTTP(S)/认证 | 本地 svnserve/hook 已通过；可容器化复验，不能代替目标网络 |
+| Redis 部署环境 | 目标版本、ACL/TLS、中断与持久化策略 | 可隔离模拟 ACL/断网/重启，普通/OOM 必须独立实例；已有本机真实服务证据 |
+| PostgreSQL 部署环境 | 目标版本、角色权限、TLS/网络 | 可隔离验证迁移与权限，低权限测试需 CREATE ROLE；已有本机真实服务及固定旧版本矩阵 |
+| GitHub App pull_request 生产路径 | 等自然 PR 后核验入站、分析、发布 | 本地 token 注入测试不能替代生产；不代用户创建 PR |
+| PR/MR 避峰恢复生产路径 | 窗口外自然事件持久化与下一窗口恢复运行证据 | 已有七个窗口边界/恢复隔离证据；不主动制造分析或通知 |
+| CI 真实 LLM benchmark | CI secrets/provider 凭据、调用预算 | 六个 fixture 离线校验已入 CI；容器不提供模型质量证据 |
+| 其他部署版本升级 | 固定实际旧源码/驱动重跑矩阵；首次升级确认全部旧实例退出 | M24 只覆盖 c5d221c 模块与当前驱动；迁移锁不能代替旧实例排空 |
 
-这两项是产品范围选择，不能仅因能够编写 mock 就视为可完成的本地任务。
-跨 workspace 知识迁移、版本 bump 和 git tag 不在当前范围。
+## 3. 预留扩展
 
-## 5. 文档入口
+| 项目 | 启动条件 |
+| --- | --- |
+| k8s_pod / firecracker sandbox | 明确隔离需求、客户端方案及对应集群/二进制/socket；当前只有明确报错的预留实现 |
+| Agent 查询成员目录 | 先定义按渠道授权、候选数限制与脱敏返回；宿主 ChannelUserDirectory 的整份名单不进入评审 MCP |
 
-- [文档目录](docs/README.md)：设计文档、双语用户说明和验收记录的统一入口。
-- [AI 文档索引](docs/ai/index.md)：按任务定位实现、架构章节、技能和交付历史。
-- [坑点地图](docs/ai/AGENTS.known-pitfalls.md)、[来源地图](docs/ai/source-index.md)：只读取相关主题。
-- [输出合同](docs/output-channels.md)：发布策略和自动批次恢复边界。
-- [示例与部署](example/README.md)、[Podman](docs/podman.md)：公共使用说明。
-- [文档站交付记录](docs/ai/milestones/M11.md)：文档工程边界、六道校验和发布历史。
-
-执行中的任务资料放在 docs/superpowers/specs/ 与 docs/superpowers/plans/；完成且稳定结论
-已迁移后删除。不要把稳定架构、整份里程碑表或验证命令表复制回路线图。
+queue.workers.lock_ttl_seconds、dead_letter.* 等 schema 预留字段不算运行时能力。
+跨 workspace 知识迁移、版本 bump/tag 不在当前范围。
+维护入口：[文档目录](docs/README.md)、[验证基线](docs/ai/AGENTS.repository-baseline.md)、
+[示例](example/README.md)。已完成执行资料按根 AGENTS.md 退役，不在路线图复制合同或日志。

@@ -13,6 +13,9 @@ and [Chinese](../docs/site/src/content/docs/zh-cn/integrations/im-bots.md#飞书
 
 The [documentation directory](../docs/README.md) links the bilingual user guides,
 Workspace design, and configuration management reference.
+For synthetic Gitea acceptance without deployment credentials, see the
+[temporary service guide](../docs/testing-services.md); its runner removes owned
+containers and data after the checks.
 
 > **Documentation site:** The user-facing documentation lives in `docs/site/`
 > (Astro Starlight, English + 简体中文). It is built with `pnpm docs:build`

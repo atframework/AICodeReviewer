@@ -76,6 +76,9 @@ variables:
   `svnserve`；真实 hook 用例创建独立仓库与回环服务。
 - `AICR_P4D_TEST_EXECUTABLE`：本机 p4d，`p4` 客户端需在 PATH 中；
   用例创建独立测试服务。先检查已有可执行文件，再把缺少工具记录为跳过。
+- `AICR_GITEA_TEST_URL` / `AICR_GITEA_TEST_TOKEN`：仅用于独立回环 Gitea；
+  真实发布后检查 assignees，测试会创建/删除合成用户与私有仓库。
+  两者都不设才跳过；[临时服务脚本](../testing-services.md)负责限额、启动与清理。
 
 本机快速搭建（Windows 示例，一次性实例，不入库）：
 `scoop install postgresql redis`；PG 用

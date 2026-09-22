@@ -52,7 +52,7 @@ PowerShell 5.1 的 `>` 重定向和 `Out-File` 默认 UTF-16 LE 编码；需要�
 
 ## 测试与验证矩阵
 
-最后一次修改后、提交变更前运行全部适用门禁，并确认工具实际发现了预期文件或测试。Linux/CI 的最终 runtime 门禁是 `pnpm ci`；Windows PowerShell 直接调用 Node 二进制。
+最后一次修改后、提交变更前运行全部适用门禁，并确认工具实际发现了预期文件或测试。Linux/CI 的最终 runtime 门禁是 `pnpm run ci`；Windows PowerShell 直接调用 Node 二进制。
 
 | 步骤 | Linux/CI | Windows PowerShell |
 | --- | --- | --- |
@@ -76,10 +76,25 @@ PowerShell 5.1 的 `>` 重定向和 `Out-File` 默认 UTF-16 LE 编码；需要�
 | --- | --- |
 | `AICR_SVN_TEST_EXECUTABLE` | `svn` 的绝对路径，同目录提供 `svnadmin` 和 `svnserve`。启用真实仓库元数据测试，以及 post-commit hook → 带认证 HTTP → SQLite 调度测试。 |
 | `AICR_REDIS_TEST_URL` | 本机测试 Redis 的 URL。启用自动提交存储和模型目录持久化测试；目录测试使用独立随机键前缀。 |
+| `AICR_GITEA_TEST_URL` / `AICR_GITEA_TEST_TOKEN` | 一次性回环 HTTP Gitea 及临时管理员 token。测试创建私有仓库和用户、发布 issue，再读取持久化的 assignees。两者都未设置才跳过，配置不完整则失败。 |
 
 运行上面的测试命令前设置变量；未设置时，对应集成测试会跳过。SVN fixture 位于 `build/tmp/`，hook 测试会停止自己启动的服务。这些测试不调用 LLM，也不向远端系统发布 review；部署专属的认证和网络仍需单独验收。
 
-`packages/core/test/config-examples.test.ts` 始终校验部署配置，以及 example README 和中英文 queue 指南中的完整自动提交 YAML 示例。该测试尚未覆盖其他文档片段。
+Gitea 验收在 Linux 或 WSL Debian 的仓库根目录运行，需有 rootless Podman、curl、node 和 timeout：
+
+```bash
+bash tests/services/with-gitea.sh \
+  pnpm exec vitest run packages/outputs/test/gitea-assignment-live.test.ts --maxWorkers=1
+```
+
+脚本固定 Gitea 1.25.4 与 SQLite，限制 1 CPU / 512 MiB，绑定随机回环端口。
+它在 `~/workspace/github/atframework` 下创建独立目录（可用 `AICR_ACCEPTANCE_ROOT`
+覆盖），提供两个 fixture 变量，退出时移除自己的容器、数据及本轮下载的镜像。
+服务另设 900 秒运行上限。日志保留在 `build/logs/gitea-*`。
+中断后仍须检查自有资源已清理；SIGKILL 无法执行目录清理。这些结果只覆盖固定 Gitea 版本。
+
+`packages/core/test/config-examples.test.ts` 始终校验部署配置及仓库文档的配置 YAML
+片段，包含两种语言；畸形配置片段明确失败，不会被跳过。
 
 ## 新增 package
 

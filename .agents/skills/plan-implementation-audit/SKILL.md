@@ -15,6 +15,9 @@ user-invocable: false
 3. Separate local implementation, real local-backend acceptance, and deployment
    evidence. An external service label does not block local work that can be
    verified independently. State gaps and a plan before fixing them.
+   For disposable WSL/Podman acceptance, use the
+   [service guide](../../../docs/testing-services.md): bound resources and lifetime,
+   remove only owned resources, and verify cleanup even when the test fails.
 4. Trace persistence through recovery: fresh process, expired lease, partial
    pages, retry budgets, config changes, and actual downstream call counts.
    Use public records in conformance fixtures (`computeStreamId(receipt)` instead

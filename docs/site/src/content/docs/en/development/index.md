@@ -64,7 +64,7 @@ inline `node -e` snippets with template literals.
 ## Test and validation matrix
 
 After the final edit, run every applicable gate before proposing a change and
-confirm it discovers the expected files or tests. On Linux/CI, `pnpm ci` is the
+confirm it discovers the expected files or tests. On Linux/CI, `pnpm run ci` is the
 final runtime gate; on Windows PowerShell invoke the Node binaries directly.
 
 | Step | Linux/CI | Windows PowerShell |
@@ -94,6 +94,7 @@ These tests can use disposable local services without production credentials:
 | --- | --- |
 | `AICR_SVN_TEST_EXECUTABLE` | Absolute path to `svn`, with `svnadmin` and `svnserve` in the same directory. Enables real repository metadata tests and a post-commit hook → authenticated HTTP → SQLite scheduling test. |
 | `AICR_REDIS_TEST_URL` | URL of a local test Redis. Enables automatic-commit storage and model-catalog persistence tests; the catalog test uses its own random key prefix. |
+| `AICR_GITEA_TEST_URL` / `AICR_GITEA_TEST_TOKEN` | Disposable loopback HTTP Gitea and its temporary admin token. Tests create private repositories and users, publish issues, then read persisted assignees. Both unset means skipped; incomplete configuration fails. |
 
 Set the variables before running the test command above. Without them, the
 corresponding integration tests are skipped. SVN fixtures live under `build/tmp/`
@@ -101,9 +102,25 @@ and the hook test stops its own daemon. These tests do not call an LLM or publis
 reviews to remote systems. Deployment-specific authentication and networking
 still need separate acceptance.
 
+For Gitea, run this from the checkout root in Linux or WSL Debian with rootless
+Podman, curl, node and timeout available:
+
+```bash
+bash tests/services/with-gitea.sh \
+  pnpm exec vitest run packages/outputs/test/gitea-assignment-live.test.ts --maxWorkers=1
+```
+
+The wrapper pins Gitea 1.25.4 with SQLite, limits it to 1 CPU / 512 MiB and
+binds a random loopback port. It uses a fresh directory beneath
+`~/workspace/github/atframework` (override with `AICR_ACCEPTANCE_ROOT`), supplies
+the two fixture variables, and removes its container, data and newly downloaded
+image on exit. The service also has a 900-second lifetime limit. Logs stay under
+`build/logs/gitea-*`. After interruption, verify owned resources were removed;
+SIGKILL cannot run directory cleanup. These results cover the pinned Gitea version.
+
 `packages/core/test/config-examples.test.ts` always validates the deployment
-config and complete automatic-commit YAML examples in the example README and
-both queue guides. Other documentation snippets are not yet covered by this test.
+config and configuration YAML blocks across repository documentation, including
+both locales. Malformed configuration blocks fail instead of being skipped.
 
 ## Adding a package
 

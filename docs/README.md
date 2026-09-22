@@ -41,3 +41,4 @@
 - [M24 跨版本迁移与排空](ai/milestones/M24.md)：指定历史版本对和真实服务验收范围。
 - [M26 Workspace 与动态配置复审](ai/milestones/M26.md)：本轮修复、回归及最终门禁。
 - [路线图](../Plan.md)：生产环境、其他部署版本等尚待验收的事项。
+- [本地临时服务](testing-services.md)：WSL/Podman 的资源、复现与清理要求。
