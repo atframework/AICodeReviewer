@@ -316,7 +316,8 @@ fallback 必须是字面量，禁止 hash arguments。provider 变量必须适�
 | `outputs.channels[].token` | string | — | 明文 channel API token；与 `token_env` 互斥；发布到数据库后加密落库 |
 | `outputs.channels[].webhook_url` | string | — | 明文机器人 webhook URL（feishu_bot/wecom_bot）；与 `webhook_url_env` 互斥；发布到数据库后加密落库 |
 | `outputs.channels[].secret` | string | — | 明文 Feishu 签名密钥；与 `secret_env` 互斥；发布到数据库后加密落库 |
-| `outputs.author_resolution` | object | — | `email_mappings` 映射和 `email_blacklist` 数组 |
+| `outputs.author_resolution` | object | — | `email_mappings` 映射、`email_blacklist` 数组和 `directory_cache_ttl_seconds` |
+| `outputs.author_resolution.directory_cache_ttl_seconds` | int | 43200 | 全局成员目录缓存时长，0–604800 秒；0 表示不复用缓存 |
 | `outputs.routes.default` | object | — | 无规则匹配时应用的默认路由 |
 | `outputs.routes.rules[]` | array | `[]` | 有序路由规则 |
 | `outputs.routes.rules[].match.trigger` | string | — | 要匹配的 trigger 名 |
@@ -336,7 +337,7 @@ fallback 必须是字面量，禁止 hash arguments。provider 变量必须适�
 | `outputs.channels[].receive_id` | string | — | 必填，报告接收对象 |
 | `outputs.channels[].receive_id_type` | enum | — | `chat_id`、`open_id`、`user_id`、`union_id` 或 `email`；运行时默认 `chat_id` |
 | `outputs.channels[].member_directory.chat_id` | string | — | 成员身份目录的来源群 |
-| `outputs.channels[].member_directory.cache_ttl_seconds` | int | — | 目录缓存时长，0–3600 秒；运行时默认 300 |
+| `outputs.channels[].member_directory.cache_ttl_seconds` | int | — | 目录缓存时长，0–604800 秒；覆盖 `outputs.author_resolution.directory_cache_ttl_seconds`；运行时默认 43200（12 小时） |
 | `outputs.channels[].user_mappings.<id>` | string | — | 作者或 workspace 标识精确映射到当前应用的 `open_id` |
 | `outputs.channels[].guess_author` | boolean | — | 运行时默认 true；允许精确匹配后的 workspace 推测及专用模型兜底；`mention_author` 单独控制通知 |
 

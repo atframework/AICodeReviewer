@@ -50,11 +50,13 @@ import {
   createGithubIssueDispatcher,
   createGithubProblemIssueDispatcher,
   createFeishuBotDispatcher,
+  type FeishuBotAggregatedOptions,
   createFeishuAppDispatcher,
   FeishuAppClient,
   feishuDirectoryUsers,
   renderFeishuAuthorMention,
   resolveChannelAuthor,
+  resolveChannelDirectoryCacheTtlSeconds,
   type ChannelAuthorGuesser,
   createWeComBotDispatcher,
   type ProblemResolutionAnalyzer,
@@ -199,7 +201,7 @@ function resolveEnv(name: string | undefined): string | undefined {
 
 /**
  * Envelope encryption service for literal credentials (AICR_CONFIG_SECRETS_KEY).
- * Created once per process; undefined when no key is configured â€?every
+ * Created once per process; undefined when no key is configured ï¿½?every
  * consumer fails closed only when a literal actually crosses its boundary.
  */
 const configSecretSealing = resolveConfigSecretSealing((name) => process.env[name]);
@@ -356,7 +358,7 @@ function resolveModelSpecFromChain(
 
   // Entry-level request overrides (architecture Â§3.15, wired in P4): maps merge by
   // key over provider fields, arrays and scalars replace. Disabling a
-  // parameter goes through drop_params â€?JSON null is never a deletion.
+  // parameter goes through drop_params ï¿½?JSON null is never a deletion.
   const overrides = fallbackEntry?.overrides;
   const draft = { ...spec } as {
     extraParams?: Record<string, unknown>;
@@ -798,7 +800,7 @@ export async function createSandboxBackendFromConfig(config: AppConfig): Promise
 /**
  * Sandbox factory over a sandbox-config slice (P4/H04): the global
  * `agent.sandbox` or its workspace-layer merged equivalent. An explicitly
- * requested container kind that fails preflight throws â€?never a silent
+ * requested container kind that fails preflight throws ï¿½?never a silent
  * native downgrade.
  */
 export async function createSandboxBackendFromSandboxConfig(
@@ -1406,6 +1408,8 @@ function appendPublisherResults(target: DispatchResult[], result: ReviewDispatch
 
 export interface OutputPublisherEntry {
   readonly name: string;
+  /** Channel config kind (feishu_app, github_pr_review, ...); pairs IM briefs with issue links. */
+  readonly kind?: string | undefined;
   readonly publisher: ReviewOutputPublisher;
 }
 
@@ -1484,6 +1488,27 @@ function uniqueOutputPublisherEntries(entries: readonly OutputPublisherEntry[]):
   return result;
 }
 
+/**
+ * Pull the canonical issue/PR URL out of an issue-channel dispatch result. GitHub
+ * issue/PR creations expose `raw.html_url`; managed problem-issue reconciliations
+ * nest it under `raw.issue.html_url`. Returns undefined when no URL was produced.
+ */
+function extractIssueUrlFromResults(results: readonly DispatchResult[]): string | undefined {
+  for (const result of results) {
+    if (result.status !== "published" || !isPlainObject(result.raw)) {
+      continue;
+    }
+    const raw = result.raw as Record<string, unknown>;
+    if (typeof raw.html_url === "string" && raw.html_url) {
+      return raw.html_url;
+    }
+    const issue = raw.issue;
+    if (isPlainObject(issue) && typeof (issue as Record<string, unknown>).html_url === "string") {
+      return (issue as Record<string, unknown>).html_url as string;
+    }
+  }
+  return undefined;
+}
 export function createCompositeOutputPublisher(
   linePublishers: readonly OutputPublisherEntry[],
   summaryPublishers: readonly OutputPublisherEntry[],
@@ -1498,6 +1523,14 @@ export function createCompositeOutputPublisher(
   const lineFlushCapable = uniqueOutputPublisherEntries(linePublishers.filter((entry) => entry.publisher.publishSummary));
   const summaryFlushCapable = uniqueOutputPublisherEntries([...lineFlushCapable, ...summaryCapable]);
   const summaryChannelNames = new Set(summaryCapable.map((entry) => entry.name));
+  // Issue-recording platforms host the full report; a feishu channel paired with one in the
+  // same run links that report instead of duplicating the analysis.
+  const ISSUE_CHANNEL_KINDS: Record<string, true> = {
+    github_issue: true, github_problem_issue: true, github_pr_review: true,
+    gitea_issue: true, gitea_problem_issue: true, gitea_pr_review: true,
+    gitlab_mr_review: true,
+  };
+  const FEISHU_CHANNEL_KINDS: Record<string, true> = { feishu_bot: true, feishu_app: true };
 
   if (linePublishers.length === 0 && summaryFlushCapable.length === 0) {
     return undefined;
@@ -1540,6 +1573,7 @@ export function createCompositeOutputPublisher(
             const noProblems = (problems?.length ?? 0) === 0;
             const bypassNoProblemsPolicy = options?.bypassNoProblemsPolicy === true;
             const entries = noProblems ? summaryCapable : summaryFlushCapable;
+            let issueLinkUrl = options?.summaryIssueUrl;
             for (const entry of entries) {
               if (recovery?.skipChannels?.has(entry.name)) {
                 continue;
@@ -1560,13 +1594,23 @@ export function createCompositeOutputPublisher(
                 recovery?.signal?.throwIfAborted();
                 await recovery?.onChannelStart?.(entry.name);
                 const firstResult = results.length;
+                const kind = entry.kind;
+                const isIssueChannel = kind !== undefined && ISSUE_CHANNEL_KINDS[kind] === true;
+                const isFeishuChannel = kind !== undefined && FEISHU_CHANNEL_KINDS[kind] === true;
+                const effectiveOptions = isFeishuChannel && issueLinkUrl
+                  ? { ...options, summaryIssueUrl: issueLinkUrl }
+                  : options;
                 try {
-                  appendPublisherResults(results, await publisher.publishSummary(summary, problems, options));
+                  appendPublisherResults(results, await publisher.publishSummary(summary, problems, effectiveOptions));
                 } catch (error) {
                   logDispatchFailure(entry.name, "summary", error);
                   results.push(createFailedDispatchResult(entry.name, "summary", error));
                 }
-                for (const result of results.slice(firstResult).length > 0 ? results.slice(firstResult) : [{ channel: entry.name, status: "published" as const, raw: { noOutput: true } }]) {
+                const produced = results.slice(firstResult);
+                if (isIssueChannel && !issueLinkUrl) {
+                  issueLinkUrl = extractIssueUrlFromResults(produced);
+                }
+                for (const result of produced.length > 0 ? produced : [{ channel: entry.name, status: "published" as const, raw: { noOutput: true } }]) {
                   await recovery?.onChannelResult?.(result, "summary", options?.finalForChannel);
                 }
               }
@@ -2093,7 +2137,9 @@ export function createOutputPublisherFromConfig(
               channelKind: channel.kind,
               input: { author: reviewEvent.author, provider: reviewEvent.provider,
                 submitterWorkspace: reviewEvent.provider === "p4" ? reviewEvent.submitterWorkspace : undefined },
-              directory: directory ? { listUsers: async () => feishuDirectoryUsers(await client.members(directory.chat_id, directory.cache_ttl_seconds)) } : undefined,
+              directory: directory ? { listUsers: async () => feishuDirectoryUsers(await client.members(directory.chat_id,
+                resolveChannelDirectoryCacheTtlSeconds({ channel: directory.cache_ttl_seconds,
+                  global: config.outputs.author_resolution?.directory_cache_ttl_seconds }))) } : undefined,
               policy: { mappings: channel.user_mappings, guessAuthor: channel.guess_author,
                 emailBlacklist: config.outputs.author_resolution?.email_blacklist },
               guesser: authorGuesser ?? ((input, users) => createConfiguredAuthorGuesser(config, workspaceId)(input, users)),
@@ -2105,8 +2151,11 @@ export function createOutputPublisherFromConfig(
         }
         const appRendering = createChannelRendering(config, channel, workspaceId, reviewEvent, repoRef, baseDir, targetUrlTemplates, mention);
         const renderedProblems = (summaryProblems ?? problems).map(problem => appRendering.renderProblem(problem));
+        const aggregated: FeishuBotAggregatedOptions | undefined = options?.summaryIssueUrl
+          ? { detailLink: { url: options.summaryIssueUrl, label: "View full report" } }
+          : undefined;
         return dispatcher.publishAggregatedProblems(renderedProblems,
-          appRendering.renderSummary(summary, renderedProblems, options?.title), mention || undefined);
+          appRendering.renderSummary(summary, renderedProblems, options?.title), mention || undefined, aggregated);
       },
     };
   }
@@ -2135,10 +2184,14 @@ export function createOutputPublisherFromConfig(
       },
       async publishSummary(summary: string, summaryProblems?: readonly ReviewProblem[], options?: ReviewSummaryPublishOptions): Promise<DispatchResult> {
         const renderedProblems = (summaryProblems ?? problems).map((problem) => rendering.renderProblem(problem));
+        const aggregated: FeishuBotAggregatedOptions | undefined = options?.summaryIssueUrl
+          ? { detailLink: { url: options.summaryIssueUrl, label: "View full report" } }
+          : undefined;
         return dispatcher.publishAggregatedProblems(
           renderedProblems,
           rendering.renderSummary(summary, renderedProblems, options?.title),
           rendering.mentionText || undefined,
+          aggregated,
         );
       },
     };
@@ -2359,7 +2412,7 @@ export function createOutputPublisherResolverFromConfig(
           resolutionAnalyzer,
           authorGuesser,
         );
-        return publisher ? { name, publisher } : undefined;
+        return publisher ? { name, kind: config.outputs.channels.find((c) => c.name === name)?.kind, publisher } : undefined;
       })))
       .filter((entry): entry is OutputPublisherEntry => Boolean(entry));
     const summaryPublishers = (await Promise.all(resolveOutputChannelNames(config, context, "summary")
@@ -2375,7 +2428,7 @@ export function createOutputPublisherResolverFromConfig(
           resolutionAnalyzer,
           authorGuesser,
         );
-        return publisher ? { name, publisher } : undefined;
+        return publisher ? { name, kind: config.outputs.channels.find((c) => c.name === name)?.kind, publisher } : undefined;
       })))
       .filter((entry): entry is OutputPublisherEntry => Boolean(entry));
 
@@ -3130,7 +3183,7 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
     }
     // Bounded sweep of expired session rows (P2): production never called
     // cleanupExpiredSessions, so admin_sessions grew without bound. The
-    // timer is unref'd â€?it must never hold the process open â€?and closing
+    // timer is unref'd ï¿½?it must never hold the process open ï¿½?and closing
     // the store stops the sweep (close owns the lifecycle).
     const sessions = sessionStore;
     const sessionSweep = setInterval(() => {
@@ -3206,9 +3259,9 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
   });
 
   // P4 execution plan: one resolver, one pinned generation per task (H03â€“H08).
-  // Everything config-derived that a run consumes resolves here â€?model route,
+  // Everything config-derived that a run consumes resolves here ï¿½?model route,
   // workspace-layer agent/sandbox selection, review policy (include/exclude/
-  // max_files), output language, web search â€?so a mid-flight publish can
+  // max_files), output language, web search ï¿½?so a mid-flight publish can
   // never mix generations inside one run.
   const resolveRunOptions = async (
     context: ReviewOrchestrationContext,
@@ -3269,7 +3322,7 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
             return await loadSystemPromptTemplate(resolve(baseDir, promptFile));
           }
         } catch {
-          // workspace not found or file not readable â€?fall back to global prompt
+          // workspace not found or file not readable ï¿½?fall back to global prompt
         }
         return undefined;
       },
@@ -3284,7 +3337,7 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
             }
           }
         } catch {
-          // workspace not found â€?no extra prompt
+          // workspace not found ï¿½?no extra prompt
         }
         return undefined;
       },
@@ -3584,8 +3637,8 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
       const workspaceIds = new Set<string>(
         Object.keys(runtimeConfig.current().config.workspaces?.instances ?? {}),
       );
-      // Declared workspaces resolve their own bound (instance â†?defaults â†?      // global â†?built-in 48h). Only a config without any workspace instance
-      // falls back to one unscoped pass â€?an unscoped pass cannot honor a
+      // Declared workspaces resolve their own bound (instance ï¿½?defaults ï¿½?      // global ï¿½?built-in 48h). Only a config without any workspace instance
+      // falls back to one unscoped pass ï¿½?an unscoped pass cannot honor a
       // per-workspace disabled timeout, so it must not run alongside
       // declared instances.
       const scopes: (string | undefined)[] = workspaceIds.size > 0 ? [...workspaceIds] : [undefined];
@@ -3701,7 +3754,7 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
     },
     // Runtime config manager (P4): admission barrier + generation pinning.
     runtimeConfig,
-    // Config admin API surface (P5) â€?mounted only with admin auth plus the
+    // Config admin API surface (P5) ï¿½?mounted only with admin auth plus the
     // config store; independent of the stats store.
     ...(adminAuthConfig && runtimeConfigStore
       ? {
@@ -3897,18 +3950,18 @@ async function createAutoCommitPipeline(deps: {
     const repoRef = stream.sourceNamespace.slice(stream.sourceNamespace.indexOf(":") + 1);
     // The cache key must include the workspace: two workspaces watching the
     // same trigger+repo each get their own adapter bound to their own clone
-    // directory â€?sharing one adapter would clone workspace B's events into
+    // directory ï¿½?sharing one adapter would clone workspace B's events into
     // workspace A's directory. The snapshot id joins the key so a new
     // generation never reuses an adapter bound to the previous config.
     const cacheKey = `${stream.workspaceId} ${stream.triggerName} ${repoRef} ${generation.snapshotId ?? ""}`;
     let adapter = adapterCache.get(cacheKey);
     if (!adapter) {
-      // The metadata adapter must clone into the per-workspace source root â€?      // the same layout buildSourceRootResolver produces â€?never baseDir
+      // The metadata adapter must clone into the per-workspace source root ï¿½?      // the same layout buildSourceRootResolver produces ï¿½?never baseDir
       // (process cwd): inside the runtime image cwd is the read-only /app,
       // so a clone attempt there fails with EACCES and poisons the receipt
       // with a terminal metadata error. The adapter is long-lived, so it
       // re-fetches on every sync (alwaysFetch) and resolves GitHub App
-      // installation tokens lazily per sync (tokenProvider) â€?a cached static
+      // installation tokens lazily per sync (tokenProvider) ï¿½?a cached static
       // token expires after an hour and would break every later expansion.
       // Metadata queries precede admission and have no branch/template
       // context. Keep caches independent of event-dependent work_path.
@@ -3942,7 +3995,7 @@ async function createAutoCommitPipeline(deps: {
 
   // Stage C resolver (architecture Â§3.10): converts durable p4/svn routing receipts
   // into formal receipts during the scheduler tick. Adapter lookups are
-  // cached per trigger â€?the p4/svn metadata queries hit the server
+  // cached per trigger ï¿½?the p4/svn metadata queries hit the server
   // directly, no per-scope adapter instances needed.
   const routingAdapterCache = new Map<string, GitVcsAdapter | P4VcsAdapter | SvnVcsAdapter>();
   const routingResolver = new RoutingReceiptResolver({

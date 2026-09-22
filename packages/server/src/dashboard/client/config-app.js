@@ -32,11 +32,12 @@ const LOST_RESPONSE_BACKOFF_MS = 1000;
  * @property {ReturnType<typeof createConfigApiClient>} api Config admin API client.
  * @property {object} runtime config-ui-runtime module (resolveFieldState …).
  * @property {object} formState config-form-state module (sessions, encode, diff, rebase).
- * @property {object} schedule weekly-schedule module (compile/nextAllowedInstant).
+ * @property {object} [schedule] weekly-schedule module (loaded when its controls are needed).
  */
 
 /** @type {{show: () => Promise<void>, hide: () => void}|null} */
 let activeApp = null;
+let defaultAppPending = null;
 
 /**
  * Initialize the config app with explicit dependencies (tests use this; the
@@ -72,24 +73,25 @@ export default defaultExport;
  */
 async function ensureDefaultApp() {
   if (activeApp === null) {
-    const [runtime, formState, schedule] = await Promise.all([
+    defaultAppPending ??= Promise.all([
       import("./config-ui-runtime.js"),
       import("./config-form-state.js"),
-      import("./weekly-schedule.js"),
-    ]);
-    const api = createConfigApiClient({
-      getToken: () => {
-        try {
-          return globalThis.localStorage?.getItem("aicr_token") ?? null;
-        } catch {
-          return null;
-        }
-      },
-      onUnauthorized: () => {
-        if (typeof globalThis.logout === "function") globalThis.logout();
-      },
-    });
-    activeApp = createApp({ root: document, api, runtime, formState, schedule });
+    ]).then(([runtime, formState]) => {
+      const api = createConfigApiClient({
+        getToken: () => {
+          try {
+            return globalThis.localStorage?.getItem("aicr_token") ?? null;
+          } catch {
+            return null;
+          }
+        },
+        onUnauthorized: () => {
+          if (typeof globalThis.logout === "function") globalThis.logout();
+        },
+      });
+      activeApp = createApp({ root: document, api, runtime, formState });
+    }).finally(() => { defaultAppPending = null; });
+    await defaultAppPending;
   }
   return activeApp;
 }
@@ -105,10 +107,20 @@ function createApp({ root, api, runtime, formState, schedule }) {
   );
   const state = {
     initialized: false,
+    initializing: null,
+    selection: 0,
     spec: null,
+    /** Shell view: head, fileDigest, namespace, collection counts, secretEnvs. */
     view: null,
-    /** Curated LLM provider presets from GET /schema (no credentials). */
-    providerPresets: [],
+    /** @type {Map<string, {records: object[], truncated: boolean}>} Lazily loaded entity collections by kind. */
+    collectionData: new Map(),
+    /** @type {Map<string, object[]>} Lazily loaded field-view entries per globals page id. */
+    pageFields: new Map(),
+    /** Legacy outputs.routes panel data for the routing page (null = absent/failed). */
+    legacyRoutes: null,
+    legacyRoutesLoaded: false,
+    /** Curated presets load on the Providers page (no credentials). */
+    providerPresets: null,
     references: {},
     pageId: null,
     /** @type {Map<string, {session: object, baseInput: object, operationId: string, fieldNodes: Map<string, HTMLElement>, previewNodes: Map<string, HTMLElement>}>} */
@@ -117,8 +129,8 @@ function createApp({ root, api, runtime, formState, schedule }) {
     sectionStates: new Map(),
     /** @type {readonly string[]} Global dotted prefixes where the database wins over the file. */
     databasePriorityPrefixes: [],
-    /** @type {{templates: readonly object[], prompts: readonly object[]}} Read-only built-in assets (copy sources). */
-    builtinAssets: { templates: [], prompts: [] },
+    /** Read-only copy sources, loaded separately for each document page. */
+    builtinAssets: {},
     drawer: null,
     fieldErrors: [],
     message: null,
@@ -178,7 +190,13 @@ function createApp({ root, api, runtime, formState, schedule }) {
     root.head.append(style);
   }
 
-  async function show() {
+  function show() {
+    if (state.initializing !== null) return state.initializing;
+    state.initializing = showApp().finally(() => { state.initializing = null; });
+    return state.initializing;
+  }
+
+  async function showApp() {
     ensureContainers();
     injectStyles();
     if (state.initialized) {
@@ -190,31 +208,13 @@ function createApp({ root, api, runtime, formState, schedule }) {
     }
     setLoading(true);
     try {
-      const [schema, view] = await Promise.all([api.getSchema(), api.getView()]);
+      const [schema, view] = await Promise.all([api.getSchema(), api.getShell()]);
       state.spec = schema !== null && typeof schema === "object" ? schema.uiSpec : null;
-      state.providerPresets =
-        schema !== null && typeof schema === "object" && Array.isArray(schema.providerPresets)
-          ? schema.providerPresets.filter(
-              (preset) =>
-                preset !== null &&
-                typeof preset === "object" &&
-                typeof preset.id === "string" &&
-                typeof preset.kind === "string" &&
-                typeof preset.baseUrl === "string",
-            )
-          : [];
       state.view = view;
       state.databasePriorityPrefixes =
         schema !== null && typeof schema === "object" && Array.isArray(schema.databasePriorityPrefixes)
           ? schema.databasePriorityPrefixes.filter((prefix) => typeof prefix === "string" && prefix.length > 0)
           : [];
-      state.builtinAssets =
-        schema !== null && typeof schema === "object" && schema.builtinAssets !== null && typeof schema.builtinAssets === "object"
-          ? {
-              templates: Array.isArray(schema.builtinAssets.templates) ? schema.builtinAssets.templates : [],
-              prompts: Array.isArray(schema.builtinAssets.prompts) ? schema.builtinAssets.prompts : [],
-            }
-          : { templates: [], prompts: [] };
       if (state.spec === null || !Array.isArray(state.spec.pages)) {
         throw new Error("The schema response does not carry a uiSpec.");
       }
@@ -360,35 +360,153 @@ function createApp({ root, api, runtime, formState, schedule }) {
       closeDrawer();
     }
     state.pageId = id;
+    const selection = ++state.selection;
+    const isCurrent = () => selection === state.selection;
     state.fieldErrors = [];
     buildNav();
-    await ensureReferences(currentPage());
+    const page = currentPage();
+    setLoading(true);
+    try {
+      if (!await ensurePageData(page, isCurrent)) return;
+    } catch (error) {
+      if (!isCurrent()) return;
+      clearChildren(els.main);
+      els.main.append(renderer.errorBanner(errorMessage(error, "Failed to load page data.")));
+      els.main.append(button("cfg-btn cfg-btn-ghost", "Retry", () => void selectPage(id)));
+      renderStatusBar();
+      return;
+    } finally {
+      if (isCurrent()) setLoading(false);
+    }
+    if (!isCurrent()) return;
+    renderStatusBar();
     renderPage();
     if (id === "versions" && state.status === null && state.statusFailed === null) void loadStatus();
   }
 
-  /** Fetch every optionsSource used by the page's fields (errors captured per source, U19). */
-  async function ensureReferences(page) {
-    if (page === null) return;
+  // -------------------------------------------------------------------------
+  // Lazy page data (architecture §3.16): the shell GET / carries head +
+  // fileDigest; subresource responses carry the head they were computed from.
+  // A mismatch means the head moved mid-load — refresh the shell once (which
+  // drops every derived cache) and retry; a second mismatch is a conflict.
+  // -------------------------------------------------------------------------
+
+  function basisOf(data) {
+    const head = data !== null && typeof data === "object" ? data.head : null;
+    return {
+      revision: head !== null && typeof head === "object" && typeof head.activeRevision === "number" ? head.activeRevision : null,
+      fileDigest: data !== null && typeof data === "object" && typeof data.fileDigest === "string" ? data.fileDigest : "",
+    };
+  }
+
+  function sameBasis(left, right) {
+    return left.revision === right.revision && left.fileDigest === right.fileDigest;
+  }
+
+  /** Load a fresh shell + subresource pair for conflict panels (state untouched). */
+  async function fetchFreshConsistent(load) {
+    let shell = await api.getShell();
+    let data = await load();
+    if (sameBasis(basisOf(shell), basisOf(data))) return { shell, data };
+    shell = await api.getShell();
+    data = await load();
+    if (!sameBasis(basisOf(shell), basisOf(data))) {
+      throw { kind: "conflict", message: "Configuration changed while reloading. Try again." };
+    }
+    return { shell, data };
+  }
+
+  /** Install a shell and drop every derived cache (collections, fields, routes, references). */
+  function applyFreshShell(shell) {
+    state.view = shell;
+    state.collectionData.clear();
+    state.pageFields.clear();
+    state.legacyRoutes = null;
+    state.legacyRoutesLoaded = false;
+    state.references = {};
+    for (const [id, entry] of state.pageSessions) {
+      if (!entry.session.dirty && !state.staged.has(`page/${id}`)) state.pageSessions.delete(id);
+    }
+  }
+
+  /** Fetch a fresh shell and drop every derived cache. */
+  async function refreshShell() {
+    applyFreshShell(await api.getShell());
+  }
+
+  /** Fetch a page as one revision-consistent batch; failed or superseded batches never enter caches. */
+  async function ensurePageData(page, isCurrent = () => true) {
+    if (page === null) return true;
     const needed = new Set();
     const collect = (field) => {
       if (typeof field.optionsSource === "string") needed.add(field.optionsSource);
       if (Array.isArray(field.itemFields)) field.itemFields.forEach(collect);
     };
     for (const section of page.sections) section.fields.forEach(collect);
-    const missing = [...needed];
-    if (missing.length === 0) return;
-    await Promise.all(
-      missing.map(async (source) => {
-        try {
-          const result = await api.getOptions(source);
-          state.references[source] = { source, options: Array.isArray(result.options) ? result.options : [] };
-        } catch (error) {
-          state.references[source] = { source, options: [], error: errorMessage(error, "Failed to load options.") };
-        }
-      }),
-    );
-    refreshStagedReferences();
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const shell = state.view;
+      const commits = [];
+      const jobs = [];
+      if (!schedule && page.sections.some(section => section.fields.some(isScheduleRulesField))) {
+        jobs.push(import("./weekly-schedule.js").then(module => { schedule = module; }));
+      }
+      const read = (load, commit, versioned = true) => {
+        jobs.push(load().then(data => {
+          if (versioned && !sameBasis(basisOf(shell), basisOf(data))) {
+            throw { kind: "conflict", message: "Configuration changed while loading. Retry the page." };
+          }
+          commits.push(() => commit(data));
+        }));
+      };
+      const kind = page.entity?.kind;
+      if (kind !== undefined && !state.collectionData.has(kind)) {
+        read(() => api.getCollection(kind), data => {
+          const collection = data.collections[kind];
+          state.collectionData.set(kind, { records: collection.records, truncated: collection.nextOffset != null });
+        });
+      }
+      if (!state.pageFields.has(page.id) && page.id !== "versions" && (page.globals === true || page.entity === undefined)) {
+        read(() => api.getFields({ page: page.id }), data => state.pageFields.set(page.id, data.fields));
+      }
+      if (page.id === "routing" && !state.legacyRoutesLoaded) {
+        const routes = {};
+        read(() => api.getGlobals("outputs.routes"), data => { routes.value = data.value; });
+        read(() => api.getFields({ prefix: "outputs.routes" }), data => { routes.fields = data.fields; });
+        commits.push(() => { state.legacyRoutes = routes; state.legacyRoutesLoaded = true; });
+      }
+      if ((page.id === "templates" || page.id === "prompts") && state.builtinAssets[page.id] === undefined) {
+        read(() => api.getBuiltinAssets(page.id), data => { state.builtinAssets[page.id] = data[page.id]; }, false);
+      }
+      if (page.id === "providers" && state.providerPresets === null) {
+        read(() => api.getProviderPresets(), data => { state.providerPresets = data.providerPresets; }, false);
+      }
+      for (const source of needed) {
+        if (state.references[source] && !state.references[source].error) continue;
+        read(async () => {
+          try { return await api.getOptions(source); }
+          catch (error) {
+            if (error.kind === "conflict") throw error;
+            return { ...shell, source, options: [], error: errorMessage(error, "Failed to load options.") };
+          }
+        }, data => { state.references[source] = { source, options: data.options, ...(data.error ? { error: data.error } : {}) }; });
+      }
+      try {
+        await Promise.all(jobs);
+        if (!isCurrent()) return false;
+        if (shell !== state.view) continue;
+        commits.forEach(commit => commit());
+        refreshStagedReferences();
+        return true;
+      } catch (error) {
+        if (!isCurrent()) return false;
+        if (error.kind !== "conflict" || attempt > 0) throw error;
+        const fresh = await api.getShell();
+        if (!isCurrent()) return false;
+        // Another page/save may already have refreshed the shell while we awaited it.
+        if (shell === state.view) applyFreshShell(fresh);
+      }
+    }
+    throw { kind: "conflict", message: "Configuration changed while loading. Retry the page." };
   }
 
   function refreshStagedReferences() {
@@ -613,12 +731,10 @@ function createApp({ root, api, runtime, formState, schedule }) {
   // -------------------------------------------------------------------------
 
   function collectionRecords(page) {
-    const kind = page.entity.kind;
-    const collections = state.view !== null && typeof state.view === "object" ? state.view.collections : null;
-    const collection = collections !== null && typeof collections === "object" ? collections[kind] : null;
+    const data = state.collectionData.get(page.entity.kind);
     return {
-      records: collection !== null && typeof collection === "object" && Array.isArray(collection.records) ? collection.records : [],
-      truncated: collection !== null && typeof collection === "object" && collection.nextOffset !== null && collection.nextOffset !== undefined,
+      records: data?.records ?? [],
+      truncated: data?.truncated === true,
     };
   }
 
@@ -682,7 +798,7 @@ function createApp({ root, api, runtime, formState, schedule }) {
    * never stored or edited; each offers "Copy as new database config".
    */
   function renderBuiltinAssetsSection(page) {
-    const assets = page.id === "templates" ? state.builtinAssets.templates : page.id === "prompts" ? state.builtinAssets.prompts : [];
+    const assets = state.builtinAssets[page.id] ?? [];
     if (assets.length === 0) return;
     els.main.append(renderer.renderBuiltinAssets({
       title: page.id === "templates" ? "Built-in templates (read-only)" : "Built-in prompts (read-only)",
@@ -855,7 +971,7 @@ function createApp({ root, api, runtime, formState, schedule }) {
   }
 
   /**
-   * Prefill a NEW provider draft from a curated preset (schema providerPresets).
+   * Prefill a NEW provider draft from a curated provider preset.
    * Only the advertised connection fields are written; the user can still edit every
    * value before saving, and the preset never touches existing records.
    */
@@ -1025,14 +1141,14 @@ function createApp({ root, api, runtime, formState, schedule }) {
       box.append(hint);
     }
 
-    // Curated platform presets (GET /schema → providerPresets) prefill a NEW
+    // Curated platform presets (GET /provider-presets) prefill a NEW
     // provider draft; existing records are never rewritten by a preset.
     if (
       drawer.page.id === "providers" &&
       drawer.record === null &&
       drawer.copiedFrom === undefined &&
       !drawer.readonly &&
-      state.providerPresets.length > 0
+      state.providerPresets?.length > 0
     ) {
       box.append(renderPresetPicker(drawer));
     }
@@ -1148,9 +1264,9 @@ function createApp({ root, api, runtime, formState, schedule }) {
   // Globals pages (agent / review / queue / workspaces defaults / advanced …)
   // -------------------------------------------------------------------------
 
-  function globalsBaseInput() {
+  function globalsBaseInput(page) {
     return {
-      fields: state.view !== null && Array.isArray(state.view.fields) ? state.view.fields : [],
+      fields: state.pageFields.get(page.id) ?? [],
       baseRevision: headRevision(),
       fileDigest: typeof state.view.fileDigest === "string" ? state.view.fileDigest : "",
     };
@@ -1160,7 +1276,7 @@ function createApp({ root, api, runtime, formState, schedule }) {
     let entry = state.pageSessions.get(page.id);
     if (entry === undefined) {
       const staged = state.staged.get(`page/${page.id}`);
-      const baseInput = staged?.baseInput ?? globalsBaseInput();
+      const baseInput = staged?.baseInput ?? globalsBaseInput(page);
       entry = {
         session: staged?.session ?? formState.createEditorSession(page, baseInput),
         baseInput,
@@ -1240,8 +1356,8 @@ function createApp({ root, api, runtime, formState, schedule }) {
   }
 
   /** Prefixes that currently hold at least one database-sourced leaf value. */
-  function prefixesWithDatabaseValues(prefixes) {
-    const fields = state.view !== null && typeof state.view === "object" && Array.isArray(state.view.fields) ? state.view.fields : [];
+  function prefixesWithDatabaseValues(prefixes, page) {
+    const fields = state.pageFields.get(page.id) ?? [];
     return prefixes.filter((prefix) => fields.some((field) =>
       field !== null && typeof field === "object" && typeof field.path === "string" &&
       (field.path === prefix || field.path.startsWith(`${prefix}.`) || field.path.startsWith(`${prefix}[`)) &&
@@ -1249,7 +1365,7 @@ function createApp({ root, api, runtime, formState, schedule }) {
   }
 
   function requestResetDatabaseOverrides(page, prefixes) {
-    const active = prefixesWithDatabaseValues(prefixes);
+    const active = prefixesWithDatabaseValues(prefixes, page);
     if (active.length === 0) {
       setStatusMessage("No database overrides to reset on this page.", "warn");
       return;
@@ -1367,8 +1483,10 @@ function createApp({ root, api, runtime, formState, schedule }) {
   }
 
   function renderRoutePreviewSection() {
-    const triggerRecords = state.view?.collections?.trigger?.records;
-    const triggers = Array.isArray(triggerRecords) ? triggerRecords.map((record) => String(record.name ?? record.id)) : [];
+    // Trigger names come from the "triggers" options source (loaded for the
+    // route match.triggers field); no trigger collection fetch needed here.
+    const reference = state.references.triggers;
+    const triggers = Array.isArray(reference?.options) ? reference.options.map((option) => String(option.value)) : [];
     const panel = renderer.renderRoutePreviewPanel({
       triggers,
       targetKinds: PREVIEW_TARGET_KINDS,
@@ -1379,15 +1497,13 @@ function createApp({ root, api, runtime, formState, schedule }) {
 
   /** Read-only legacy outputs.routes summary (effective merged view). */
   function renderLegacyRoutesSection() {
-    const view = state.view !== null && typeof state.view === "object" ? state.view : null;
-    const globals = view !== null && view.globals !== null && typeof view.globals === "object" ? view.globals : null;
-    const outputs = globals !== null && globals.outputs !== null && typeof globals.outputs === "object" ? globals.outputs : null;
-    const routes = outputs !== null && outputs.routes !== null && typeof outputs.routes === "object" ? outputs.routes : null;
+    const data = state.legacyRoutes;
+    const routes = data !== null && data.value !== null && typeof data.value === "object" ? data.value : null;
     const defaultRoute = routes !== null && routes.default !== null && typeof routes.default === "object" ? routes.default : undefined;
     const rules = routes !== null && Array.isArray(routes.rules) ? routes.rules.filter((rule) => rule !== null && typeof rule === "object") : [];
     if (defaultRoute === undefined && rules.length === 0) return;
     const sources = new Set();
-    for (const field of Array.isArray(view?.fields) ? view.fields : []) {
+    for (const field of data?.fields ?? []) {
       if (typeof field?.path === "string" && (field.path === "outputs.routes" || field.path.startsWith("outputs.routes.")) && typeof field.source === "string") {
         sources.add(field.source);
       }
@@ -1634,9 +1750,9 @@ function createApp({ root, api, runtime, formState, schedule }) {
   // -------------------------------------------------------------------------
 
   async function refreshView() {
-    state.view = await api.getView();
-    state.references = {};
-    await ensureReferences(currentPage());
+    await refreshShell();
+    const page = currentPage();
+    await ensurePageData(page);
     renderStatusBar();
   }
 
@@ -1734,7 +1850,17 @@ function createApp({ root, api, runtime, formState, schedule }) {
   async function showConflictPanel(error, payload, context) {
     let fresh;
     try {
-      fresh = await api.getView();
+      if (context.kind === "drawer") {
+        const kind = context.drawer.page.entity.kind;
+        const { shell, data } = await fetchFreshConsistent(() => api.getCollection(kind));
+        const collection = data.collections?.[kind];
+        fresh = { shell, kind, records: Array.isArray(collection?.records) ? collection.records : [] };
+      } else if (context.kind === "globals") {
+        const { shell, data } = await fetchFreshConsistent(() => api.getFields({ page: context.page.id }));
+        fresh = { shell, pageId: context.page.id, fields: Array.isArray(data.fields) ? data.fields : [] };
+      } else {
+        fresh = { shell: await api.getShell() };
+      }
     } catch (reloadError) {
       showContextBanner(
         context,
@@ -1763,7 +1889,7 @@ function createApp({ root, api, runtime, formState, schedule }) {
       panel.append(bar);
     } else if (context.kind === "staged") {
       panel.append(button("cfg-btn cfg-btn-primary", "Keep staged changes and retry", () => {
-        const retry = { ...payload, baseRevision: fresh.head?.activeRevision ?? null, fileDigest: fresh.fileDigest };
+        const retry = { ...payload, baseRevision: fresh.shell.head?.activeRevision ?? null, fileDigest: fresh.shell.fileDigest };
         void submitChangeset({ ...retry, context, retryPayload: retry });
       }));
       panel.append(renderer.diffView(payload.operations.map(op => ({ path: op.recordId ?? op.record?.name ?? op.path?.join("."), change: op.op }))));
@@ -1772,6 +1898,16 @@ function createApp({ root, api, runtime, formState, schedule }) {
       panel.append(reload);
     }
     showContextBanner(context, panel);
+  }
+
+  /** Prime the derived caches with the conflict panel's fresh data. */
+  function primeFreshCaches(fresh) {
+    if (Array.isArray(fresh.records) && typeof fresh.kind === "string") {
+      state.collectionData.set(fresh.kind, { records: fresh.records, truncated: false });
+    }
+    if (Array.isArray(fresh.fields) && typeof fresh.pageId === "string") {
+      state.pageFields.set(fresh.pageId, fresh.fields);
+    }
   }
 
   function computeConflictDiff(fresh, context) {
@@ -1787,10 +1923,9 @@ function createApp({ root, api, runtime, formState, schedule }) {
     }
     if (context.kind === "drawer") {
       const drawer = context.drawer;
-      const kind = drawer.page.entity.kind;
-      const records = fresh?.collections?.[kind]?.records;
+      const records = Array.isArray(fresh.records) ? fresh.records : [];
       const recordId = drawer.record !== null ? drawer.record.id : null;
-      const serverRecord = recordId !== null && Array.isArray(records) ? records.find((record) => record.id === recordId) : undefined;
+      const serverRecord = recordId !== null ? records.find((record) => record.id === recordId) : undefined;
       const { operations } = formState.sessionEncode(drawer.session, drawer.baseInput);
       const update = operations.find((operation) => operation.op === "update" || operation.op === "create");
       const draftValue = update !== undefined ? (update.op === "create" ? update.record?.value : update.value) : undefined;
@@ -1814,19 +1949,19 @@ function createApp({ root, api, runtime, formState, schedule }) {
 
   /** Rebase onto the fresh view and resubmit with the SAME operationId (D7). */
   async function rebaseAndRetry(fresh, payload, context) {
-    state.view = fresh;
+    applyFreshShell(fresh.shell);
+    primeFreshCaches(fresh);
     renderStatusBar();
     let operations;
     if (context.kind === "drawer") {
       const drawer = context.drawer;
-      const kind = drawer.page.entity.kind;
-      const records = fresh?.collections?.[kind]?.records;
+      const records = Array.isArray(fresh.records) ? fresh.records : [];
       const recordId = drawer.record !== null ? drawer.record.id : null;
-      const freshRecord = recordId !== null && Array.isArray(records) ? records.find((record) => record.id === recordId) ?? null : null;
+      const freshRecord = recordId !== null ? records.find((record) => record.id === recordId) ?? null : null;
       const freshInput = {
         record: freshRecord,
         baseRevision: headRevision(),
-        fileDigest: typeof fresh.fileDigest === "string" ? fresh.fileDigest : "",
+        fileDigest: typeof fresh.shell.fileDigest === "string" ? fresh.shell.fileDigest : "",
       };
       try { drawer.session = formState.rebaseSession(drawer.session, freshInput); }
       catch (error) { showContextBanner(context, renderer.errorBanner(errorMessage(error, "Cannot rebase this record."))); return; }
@@ -1834,12 +1969,12 @@ function createApp({ root, api, runtime, formState, schedule }) {
       operations = formState.sessionEncode(drawer.session, drawer.baseInput).operations;
     } else {
       const entry = context.entry;
-      const freshInput = globalsBaseInput();
+      const freshInput = globalsBaseInput(context.page);
       entry.session = context.resetPrefixes === undefined ? formState.rebaseSession(entry.session, freshInput)
         : formState.createEditorSession(context.page, freshInput);
       entry.baseInput = freshInput;
       operations = context.resetPrefixes === undefined ? formState.sessionEncode(entry.session, entry.baseInput).operations
-        : prefixesWithDatabaseValues(context.resetPrefixes).map(prefix => ({ op: "unset", path: prefix.split(".") }));
+        : prefixesWithDatabaseValues(context.resetPrefixes, context.page).map(prefix => ({ op: "unset", path: prefix.split(".") }));
     }
     if (operations.length === 0) {
       setStatusMessage("Your changes are already reflected in the latest revision.", "ok");
@@ -1851,30 +1986,32 @@ function createApp({ root, api, runtime, formState, schedule }) {
 
   /** Discard the draft and reload the latest server state. */
   async function reloadLatest(fresh, context) {
-    state.view = fresh;
+    applyFreshShell(fresh.shell);
+    primeFreshCaches(fresh);
     renderStatusBar();
     if (context.kind === "drawer") {
       const drawer = context.drawer;
-      const kind = drawer.page.entity.kind;
-      const records = fresh?.collections?.[kind]?.records;
+      const records = Array.isArray(fresh.records) ? fresh.records : [];
       const recordId = drawer.record !== null ? drawer.record.id : null;
-      const freshRecord = recordId !== null && Array.isArray(records) ? records.find((record) => record.id === recordId) ?? null : null;
+      const freshRecord = recordId !== null ? records.find((record) => record.id === recordId) ?? null : null;
       if (freshRecord === null && recordId !== null) {
         // Record vanished upstream: drop the drawer entirely.
         setStatusMessage("The record no longer exists in the latest revision.", "warn");
         closeDrawer();
+        await ensurePageData(currentPage());
         renderPage();
         return;
       }
       const freshInput = {
         record: freshRecord,
         baseRevision: headRevision(),
-        fileDigest: typeof fresh.fileDigest === "string" ? fresh.fileDigest : "",
+        fileDigest: typeof fresh.shell.fileDigest === "string" ? fresh.shell.fileDigest : "",
       };
       drawer.session = formState.createEditorSession(drawer.page, freshInput);
       drawer.baseInput = freshInput;
       drawer.operationId = newOperationId();
       state.fieldErrors = [];
+      await ensurePageData(currentPage());
       renderDrawer();
       renderPage();
       return;
@@ -1883,6 +2020,7 @@ function createApp({ root, api, runtime, formState, schedule }) {
       state.pageSessions.delete(context.page.id);
     }
     state.fieldErrors = [];
+    await ensurePageData(currentPage());
     renderPage();
   }
 

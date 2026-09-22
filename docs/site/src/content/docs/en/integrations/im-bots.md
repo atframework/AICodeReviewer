@@ -211,11 +211,19 @@ a JSON string in the message API's `content` field.
 With `mention_author: true`, AICR pages through `member_directory.chat_id` and
 enriches each member with the fields the app may read: `name`, `en_name`,
 `nickname`, `email`, `enterprise_email`, `mobile`, `open_id`, `user_id` and
-`union_id`. Only these fields are kept in memory. The cache lasts 300 seconds
-by default; `cache_ttl_seconds` accepts 0–3600, with 0 disabling reuse. A new
-configuration generation has a separate cache. Expired directory data is not
-used when refresh fails. Profiles use at most four concurrent requests; each
-request has a 15-second timeout and the refresh has a 60-second work budget.
+`union_id`. Only these fields are kept in memory. The cache lasts 12 hours by
+default; `cache_ttl_seconds` accepts 0–604800 (7 days), with 0 disabling reuse.
+The channel value overrides the global
+`outputs.author_resolution.directory_cache_ttl_seconds`. A new configuration
+generation has a separate cache. Both TTL fields support static files and database
+configuration, under the usual file ownership rules. Temporary transport, HTTP 429
+or HTTP 5xx failures may use an expired snapshot with a diagnostic; the next call
+retries. Permission rejections and incomplete member lists invalidate the snapshot.
+Zero TTL keeps no snapshot for fallback. Without a usable snapshot the report sends
+without mentions. Directory data stays in the host's publication path and the
+dedicated identity call; review MCP tools do not expose the member list. Profiles use at most
+four concurrent requests; each request has a 15-second timeout and the refresh
+has a 60-second work budget.
 
 Matching uses case-insensitive, Unicode-normalized values in this order:
 

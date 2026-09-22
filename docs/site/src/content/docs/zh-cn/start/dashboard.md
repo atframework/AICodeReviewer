@@ -96,6 +96,12 @@ revision，不按字符串形状猜测 hash 格式。
 
 ## 管理配置
 
+Config 编辑器的 JavaScript 在首次打开时加载，各配置页分别请求自己的记录、字段值与
+引用选项。供应商预设、内置模板、内置 Prompt 和周计划模块在对应页面需要时加载；通用
+表单模块与导航 schema 共享。整页读取的 revision 与文件摘要一致后才更新缓存，遇到
+修订变化自动整页重试一次。加载失败可点击 **Retry**，切页后忽略上一页的迟到响应。
+新修订清理未修改的表单会话，未保存草稿保留原始冲突基线。
+
 在 **Config** 中编辑 provider、模型组、trigger、channel、路由、workspace 和全局设置。
 文件值只读，**Copy as new database config** 需要填写不同的名称。数据库配置补充文件的
 显式配置。同名 shadowed 数据库记录可以删除；要改变有效值需修改其文件来源。
@@ -162,7 +168,10 @@ Workspace 路径补全以 `{{` 开始，插入 `segment` 表达式，为可空�
 | `GET /api/admin/runs?limit=&page=` | 保留的 run 列表（limit 1..100、page 从 1 开始），含 token 用量、缓存拆分与 VCS stamp；带 page 返回 `{items,page,hasMore}`，否则返回数组 |
 | `GET /api/admin/runs/live` | 进程内注册表中正在执行的分析：phase、开始时间、累计 token/请求数/成本 |
 | `GET /api/admin/events?limit=&page=` | 相同分页合同的事件日志，含接收时刻的处理决定与原因 |
-| `GET /api/admin/config` | 带来源信息和实体分页的配置视图 |
+| `GET /api/admin/config` | 配置外壳：head、fileDigest、来源信息与各集合记录数 |
+| `GET /api/admin/config/collections/:kind` | 单集合记录，按 `limit`/`offset` 分页 |
+| `GET /api/admin/config/fields`、`/globals` | 按页面/前缀的字段值与 globals 子树；脱敏保留完整路径的规则 |
+| `GET /api/admin/config/builtin-assets?kind=templates\|prompts`、`/provider-presets` | 单页内置文档或供应商预设 |
 | `GET /api/admin/config/schema`、`/options/:source` | 表单描述和动态选项 |
 | `POST /api/admin/config/changesets` | 携带 baseRevision、fileDigest、operationId、operations 原子发布 |
 | `POST /api/admin/config/preview-route` | 只读事件预览；可选 draft 携带 baseRevision、fileDigest、operations |

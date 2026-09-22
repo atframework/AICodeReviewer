@@ -32,6 +32,23 @@ export interface ChannelUserDirectory {
 	listUsers(): Promise<readonly ChannelUser[]>;
 }
 
+/** Default member-directory snapshot TTL: 12 hours. `0` disables reuse. */
+export const DEFAULT_CHANNEL_DIRECTORY_CACHE_TTL_SECONDS = 43_200;
+
+/**
+ * Shared TTL resolution for directory-capable channels: the channel-level
+ * `member_directory.cache_ttl_seconds` wins over the global
+ * `outputs.author_resolution.directory_cache_ttl_seconds`, which wins over
+ * the 12h runtime default. Validated ranges (0..604800) come from the config
+ * schema; values arrive here only after schema parsing.
+ */
+export function resolveChannelDirectoryCacheTtlSeconds(options: {
+	readonly channel?: number | undefined;
+	readonly global?: number | undefined;
+}): number {
+	return options.channel ?? options.global ?? DEFAULT_CHANNEL_DIRECTORY_CACHE_TTL_SECONDS;
+}
+
 export function channelIdentityCapability(kind: string): "native" | "directory" | "unavailable" {
 	if (kind === "feishu_app") return "directory";
 	if (["github_issue", "github_problem_issue", "github_pr_review", "gitlab_mr_review", "gitea_issue", "gitea_problem_issue", "gitea_pr_review"].includes(kind)) return "native";

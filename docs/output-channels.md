@@ -23,10 +23,17 @@ and [Chinese](site/src/content/docs/zh-cn/integrations/im-bots.md#飞书自建�
 An optional `member_directory.chat_id` supplies the candidate group. Membership
 is paginated completely before contact enrichment. Only authorized identity
 fields are retained in a generation-scoped memory cache; they never enter main
-review prompts or persistent report state. Exact channel-local mappings take priority,
+review prompts or persistent report state. Snapshots live 12 hours by default;
+`outputs.author_resolution.directory_cache_ttl_seconds` sets the global TTL and
+the channel's `member_directory.cache_ttl_seconds` overrides it (0–604800
+seconds, 0 disables reuse). Exact channel-local mappings take priority,
 then full email, exact author identifiers and P4 submitter workspace segments.
-Ambiguity and the global email blacklist suppress mentions. Directory failure
-sends without mentions; profile failures preserve only available fields.
+Ambiguity and the global email blacklist suppress mentions. A temporary transport,
+HTTP 429 or HTTP 5xx failure may reuse an expired snapshot with a warning; each
+subsequent call retries the refresh. Permission rejections and incomplete member
+lists invalidate the snapshot. Zero TTL keeps no snapshot for fallback. Without
+a usable snapshot the report sends without mentions; profile failures preserve
+only available fields.
 The channel identity abstraction separates native Git identities, directory
 channels, and channels without directory capability. Only `feishu_app` can use
 the dedicated model fallback for otherwise unmatched submitters. `guess_author`
@@ -44,6 +51,16 @@ from producing individual or all-user mentions. The implementation lives in
 [feishu-author-model.yaml](../example/feishu-author-model.yaml) shows configuration.
 The source group can differ from the destination, so live mention delivery
 still requires tenant validation.
+
+`ChannelUserDirectory.listUsers()` is the shared host-side directory contract.
+TTL resolution is shared; the provider client owns authentication, pagination,
+and its generation-scoped cache. A directory MCP tool is not exposed: author
+association runs at publication time, while review tools feed model context and
+durable tool state. Returning all members there would expand both personal-data
+exposure and context size without improving the current matching path. A future
+agent use case should first define channel authorization, bounded candidate
+lookup and redacted results; tool naming follows that contract. This boundary
+follows the [MCP tool security requirements](https://modelcontextprotocol.io/specification/2025-11-25/server/tools#security-considerations).
 
 Application API business failures are publication failures. Transport errors and
 successful responses lacking a receipt are unknown delivery outcomes; do not

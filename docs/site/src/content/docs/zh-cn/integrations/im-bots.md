@@ -186,9 +186,14 @@ outputs:
 
 设置 `mention_author: true` 后，AICR 分页读取 `member_directory.chat_id`，
 再补充应用有权限读取的 `name`、`en_name`、`nickname`、`email`、`enterprise_email`、
-`mobile`、`open_id`、`user_id` 和 `union_id`。只在内存保存这些字段；默认缓存 300 秒，
-`cache_ttl_seconds` 范围为 0–3600，0 表示不复用缓存。新配置代次使用独立缓存，
-刷新失败时不使用已过期目录。资料请求最多并发 4 个，单次请求超时 15 秒，刷新工作预算为 60 秒。
+`mobile`、`open_id`、`user_id` 和 `union_id`。只在内存保存这些字段；默认缓存 12 小时，
+`cache_ttl_seconds` 范围为 0–604800（7 天），0 表示不复用缓存。渠道值覆盖全局
+`outputs.author_resolution.directory_cache_ttl_seconds`。新配置代次使用独立缓存。
+两个 TTL 字段均支持静态文件与数据库配置，沿用文件来源的优先级与锁定规则。
+临时网络、HTTP 429 或 HTTP 5xx 失败可沿用过期快照并记录诊断，每次后续调用重新刷新。
+权限拒绝或成员列表不完整会清除快照；TTL 为 0 时不保留快照用于回退。没有可用快照时
+报告不带 @ 照常发送。成员数据只供宿主发布链路与独立身份模型调用使用，评审 MCP 工具
+不暴露成员列表。资料请求最多并发 4 个，单次请求超时 15 秒，刷新工作预算为 60 秒。
 
 匹配时统一 Unicode 表示并忽略大小写，按以下优先级查找：
 

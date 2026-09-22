@@ -5,7 +5,9 @@ import {
   decodeMapKey,
   encodeChanges,
   encodeMapKey,
+  fieldViewEntryInScope,
   isPlainRecord,
+  pageGlobalsFieldPaths,
   parseNumberInput,
   resolveFieldState,
   resolveItemOptions,
@@ -2558,5 +2560,61 @@ describe("isPlainRecord", () => {
     expect(isPlainRecord(new Date())).toBe(false);
     class Custom {}
     expect(isPlainRecord(new Custom())).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// pageGlobalsFieldPaths / fieldViewEntryInScope
+// ---------------------------------------------------------------------------
+
+describe("pageGlobalsFieldPaths", () => {
+  it("returns non-empty path keys of all fields when the page has no entity", () => {
+    const page = makePage({
+      id: "review",
+      fields: [
+        makeField({ id: "review:enabled", path: ["review", "enabled"], control: "toggle", valueKind: "boolean" }),
+        makeField({ id: "review:schedule", path: ["review", "pull_request", "schedule"], control: "text", valueKind: "string" }),
+      ],
+    });
+    expect(pageGlobalsFieldPaths(page)).toEqual([
+      ["review", "enabled"],
+      ["review", "pull_request", "schedule"],
+    ]);
+  });
+
+  it("excludes entity-prefixed fields and drops empty paths", () => {
+    const page = makePage({
+      id: "providers",
+      entity: { kind: "provider", collection: "providers", idField: "id", valueShape: "object" },
+      fields: [
+        makeField({ id: "provider:model", path: ["model"], control: "text", valueKind: "string" }),
+        makeField({ id: "shared:timeout", path: ["llm", "timeout_seconds"], control: "text", valueKind: "string" }),
+        makeField({ id: "provider:$document", path: [], control: "text", valueKind: "string" }),
+      ],
+    });
+    expect(pageGlobalsFieldPaths(page)).toEqual([["llm", "timeout_seconds"]]);
+  });
+});
+
+describe("fieldViewEntryInScope", () => {
+  const keys = [["review", "pull_request"], ["outputs", "channels", "feishu:oc_1"]];
+
+  it("matches exact and descendant formatted paths", () => {
+    expect(fieldViewEntryInScope("review.pull_request", keys)).toBe(true);
+    expect(fieldViewEntryInScope("review.pull_request.schedule.rules", keys)).toBe(true);
+    expect(fieldViewEntryInScope('outputs.channels["feishu:oc_1"].member_directory', keys)).toBe(true);
+  });
+
+  it("rejects shorter, mismatching, empty-key and empty-keys paths", () => {
+    expect(fieldViewEntryInScope("review", keys)).toBe(false);
+    expect(fieldViewEntryInScope("review.other", keys)).toBe(false);
+    expect(fieldViewEntryInScope("outputs.channels", keys)).toBe(false);
+    expect(fieldViewEntryInScope("review.pull_request", [[]])).toBe(false);
+    expect(fieldViewEntryInScope("review.pull_request", [])).toBe(false);
+  });
+
+  it("rejects malformed formatted paths", () => {
+    expect(fieldViewEntryInScope("[unclosed", keys)).toBe(false);
+    expect(fieldViewEntryInScope('["bad\\escape]', keys)).toBe(false);
   });
 });

@@ -54,6 +54,98 @@ interface ConfigView {
   fileDigest: string;
 }
 
+test("config lazy loading requests only active page values and document assets", async ({ page }) => {
+  const requests: string[] = [];
+  page.on("request", request => requests.push(new URL(request.url()).pathname + new URL(request.url()).search));
+  await login(page);
+  expect(requests.some(url => url.includes("/dashboard/client/") || url.includes("/api/admin/config"))).toBe(false);
+  await openConfigTab(page);
+  await expect(page.getByRole("button", { name: "New provider", exact: true })).toBeVisible();
+  expect(requests.filter(url => url.includes("/collections/")).every(url => url.includes("/collections/provider?"))).toBe(true);
+  expect(requests.some(url => url.includes("/builtin-assets"))).toBe(false);
+  expect(requests.some(url => url.endsWith("/weekly-schedule.js"))).toBe(false);
+  await page.locator("#config-nav").getByRole("button", { name: "Templates", exact: true }).click();
+  await expect(page.locator("#config-main")).toContainText("Built-in");
+  expect(requests.filter(url => url.includes("/builtin-assets"))).toEqual(["/api/admin/config/builtin-assets?kind=templates"]);
+  await page.locator("#config-nav").getByRole("button", { name: "Prompts", exact: true }).click();
+  await expect(page.locator("#config-main")).toContainText("Built-in");
+  expect(requests.filter(url => url.includes("/builtin-assets"))).toHaveLength(2);
+  await page.locator("#config-nav").getByRole("button", { name: "Review", exact: true }).click();
+  await expect(page.locator('[data-field-id="review:max_files"]')).toBeVisible();
+  expect(requests.some(url => url.endsWith("/weekly-schedule.js"))).toBe(true);
+  await page.locator("#config-nav").getByRole("button", { name: "Templates", exact: true }).click();
+  await expect(page.getByRole("button", { name: "New template", exact: true })).toBeVisible();
+  expect(requests.filter(url => url.includes("/builtin-assets"))).toHaveLength(2);
+});
+
+test("config lazy loading retries failed assets without caching an empty result", async ({ page }) => {
+  let attempts = 0;
+  await page.route("**/api/admin/config/builtin-assets?kind=templates", route => {
+    attempts += 1;
+    return attempts === 1 ? route.fulfill({ status: 503, json: { message: "Asset service unavailable" } }) : route.continue();
+  });
+  await login(page);
+  await openConfigTab(page, "Templates");
+  await expect(page.locator("#config-main")).toContainText("Asset service unavailable");
+  await page.locator("#config-main").getByRole("button", { name: "Retry", exact: true }).click();
+  await expect(page.locator("#config-main")).toContainText("Built-in");
+  expect(attempts).toBe(2);
+});
+
+test("config lazy loading ignores a failed request from a previous tab", async ({ page }) => {
+  let release!: () => void;
+  let started!: () => void;
+  let finished!: () => void;
+  const pending = new Promise<void>(resolve => { release = resolve; });
+  const requested = new Promise<void>(resolve => { started = resolve; });
+  const completed = new Promise<void>(resolve => { finished = resolve; });
+  await page.route("**/api/admin/config/collections/trigger?*", async route => {
+    started();
+    await pending;
+    await route.fulfill({ status: 503, json: { message: "Old tab failure" } });
+    finished();
+  });
+  await login(page);
+  await openConfigTab(page);
+  await expect(page.getByRole("button", { name: "New provider", exact: true })).toBeVisible();
+  await page.locator("#config-nav").getByRole("button", { name: "Triggers", exact: true }).click();
+  await requested;
+  await page.locator("#config-nav").getByRole("button", { name: "Review", exact: true }).click();
+  const field = page.locator('[data-field-id="review:max_files"]');
+  await expect(field).toBeVisible();
+  release();
+  await completed;
+  await expect(page.locator("#config-main")).not.toContainText("Old tab failure");
+  await expect(field).toBeVisible();
+});
+
+test("config lazy loading retries the entire page when a revision moves between parallel reads", async ({ page }) => {
+  let revision = 100;
+  let collections = 0;
+  let released!: () => void;
+  const collectionLoaded = new Promise<void>(resolve => { released = resolve; });
+  await page.route(/\/api\/admin\/config(?:\/|\?|$)/u, async route => {
+    const url = new URL(route.request().url());
+    const response = await route.fetch();
+    const data = await response.json();
+    if (url.pathname.endsWith("/fields") && url.searchParams.get("page") === "workspaces" && revision === 100) {
+      await collectionLoaded;
+      revision = 101;
+    }
+    if ("head" in data) data.head = { ...data.head, activeRevision: revision };
+    if (url.pathname.endsWith("/collections/workspace")) collections += 1;
+    await route.fulfill({ response, json: data });
+    if (url.pathname.endsWith("/collections/workspace")) released();
+  });
+  await login(page);
+  await openConfigTab(page);
+  await expect(page.getByRole("button", { name: "New provider", exact: true })).toBeVisible();
+  await page.locator("#config-nav").getByRole("button", { name: "Workspaces", exact: true }).click();
+  await expect(page.locator("#config-main tbody tr", { hasText: "default-project" })).toBeVisible();
+  await expect(page.locator("#config-status")).toContainText("Revision 101");
+  expect(collections).toBe(2);
+});
+
 test("kind-specific sections hide in file views, database drafts and channel views", async ({ page }) => {
   await login(page);
   await openConfigTab(page, "Triggers");
@@ -244,8 +336,8 @@ test("search credentials can be edited as masked literals and removed", async ({
   await field.getByRole("button", { name: "Remove entry", exact: true }).click();
   await page.getByRole("button", { name: "Save page changes", exact: true }).click();
   await expect(page.locator("#config-status")).toContainText("Saved as revision");
-  const view = await (await request.get("/api/admin/config", { headers: { Authorization: `Bearer ${token}` } })).json();
-  expect(view.globals.agent.web_search.credentials).toEqual({});
+  const search = await apiGlobals(request, token, "agent.web_search") as { credentials?: unknown };
+  expect(search.credentials).toEqual({});
 });
 
 test("literal provider keys survive unrelated edits and can be replaced or removed", async ({ page, request }) => {
@@ -277,12 +369,11 @@ test("literal provider keys survive unrelated edits and can be replaced or remov
   await expect(secret).toContainText("Empty after editing removes the stored value.");
   await drawer.getByRole("button", { name: "Save", exact: true }).click();
   await expect(drawer).toBeHidden();
-  const response = await request.get("/api/admin/config", { headers: { authorization: `Bearer ${await bearerToken(page)}` } });
-  const view = await response.json();
-  const record = view.collections.provider.records.find((entry: { name: string }) => entry.name === "literal-provider");
-  expect(record.value).not.toHaveProperty("api_key");
-  expect(JSON.stringify(view)).not.toContain("browser-literal-key");
-  expect(JSON.stringify(view)).not.toContain("replacement-literal-key");
+  const providers = await apiCollection(request, await bearerToken(page), "provider");
+  const record = providers.find((entry) => entry.name === "literal-provider");
+  expect(record?.value).not.toHaveProperty("api_key");
+  expect(JSON.stringify(providers)).not.toContain("browser-literal-key");
+  expect(JSON.stringify(providers)).not.toContain("replacement-literal-key");
 });
 
 test("P6 regression: staged provider and model group publish atomically and row edits persist", async ({ page, request }) => {
@@ -311,9 +402,8 @@ test("P6 regression: staged provider and model group publish atomically and row 
   await page.locator("#config-main tbody tr", { hasText: "staged-group" }).getByRole("button", { name: "Edit", exact: true }).click();
   await expect(drawer.locator('[data-field-id="model_group:entries[].model"] input')).toHaveValue("model-one");
   await expect(drawer.locator('[data-field-id="model_group:entries[].overrides.seed"] input')).toHaveValue("7");
-  const response = await request.get("/api/admin/config", { headers: { Authorization: `Bearer ${token}` } });
-  const view = await response.json();
-  expect(view.collections.model_group.records.find((record: { name: string }) => record.name === "staged-group").value)
+  const modelGroups = await apiCollection(request, token, "model_group");
+  expect(modelGroups.find((record) => record.name === "staged-group")?.value)
     .toEqual([{ provider: "staged-ollama", model: "model-one", role: "any", overrides: { seed: 7 } }]);
 });
 
@@ -341,10 +431,9 @@ test("P6 regression: repeated staging preserves entity edits and one atomic publ
   expect((await apiView(request, token)).head).toEqual(before.head);
   await page.getByRole("button", { name: "Publish staged changes", exact: true }).click();
   await expect(page.locator("#config-status")).toContainText("Saved as revision");
-  const response = await request.get("/api/admin/config", { headers: { Authorization: `Bearer ${token}` } });
-  const view = await response.json();
-  expect(view.head.activeRevision).toBe(before.head!.activeRevision + 1);
-  expect(view.collections.provider.records.find((record: { id: string }) => record.id === "stage-repeat").value)
+  const after = await apiView(request, token);
+  expect(after.head?.activeRevision).toBe(before.head!.activeRevision + 1);
+  expect((await apiCollection(request, token, "provider")).find((record) => record.id === "stage-repeat")?.value)
     .toMatchObject({ timeout_ms: 24000, max_retries: 3 });
 });
 
@@ -372,15 +461,14 @@ test("P6 regression: restaging globals can revert a field and discard the remain
   expect((await apiView(request, token)).head).toEqual(before.head);
   await page.getByRole("button", { name: "Publish staged changes", exact: true }).click();
   await expect(page.locator("#config-status")).toContainText("Saved as revision");
-  const response = await request.get("/api/admin/config", { headers: { Authorization: `Bearer ${token}` } });
-  const view = await response.json();
-  expect(view.head.activeRevision).toBe(before.head!.activeRevision + 1);
-  expect(view.globals.review).toMatchObject({ max_files: 55, output_language: "zh-CN" });
+  const published = await apiView(request, token);
+  expect(published.head?.activeRevision).toBe(before.head!.activeRevision + 1);
+  expect(await apiGlobals(request, token, "review")).toMatchObject({ max_files: 55, output_language: "zh-CN" });
   await setTextField(main, "review:max_files", "57");
   await stage();
   await page.getByRole("button", { name: "Discard staged changes", exact: true }).click();
   await expect(main.locator('[data-field-id="review:max_files"] input')).toHaveValue("55");
-  expect((await apiView(request, token)).head?.activeRevision).toBe(view.head.activeRevision);
+  expect((await apiView(request, token)).head?.activeRevision).toBe(published.head?.activeRevision);
 });
 
 test("P6 regression: nested weekly windows and multiple weekdays survive consecutive edits", async ({ page, request }) => {
@@ -407,8 +495,7 @@ test("P6 regression: nested weekly windows and multiple weekdays survive consecu
   await page.locator("#config-main").getByRole("button", { name: "Save page changes", exact: true }).click();
   await expect(page.locator("#config-status")).toContainText("Saved as revision");
   const token = await bearerToken(page);
-  const response = await request.get("/api/admin/config", { headers: { Authorization: `Bearer ${token}` } });
-  expect((await response.json()).globals.review.pull_request.schedule.rules).toEqual([
+  expect(await apiGlobals(request, token, "review.pull_request.schedule.rules")).toEqual([
     { days: ["mon", "tue"], windows: [{ start: "09:00", end: "10:00" }, { start: "14:00", end: "15:00" }] },
   ]);
 });
@@ -564,6 +651,23 @@ async function apiView(request: APIRequestContext, token: string): Promise<Confi
   return (await response.json()) as ConfigView;
 }
 
+/** Effective-globals subtree at a dotted prefix (lazy config view split). */
+async function apiGlobals(request: APIRequestContext, token: string, prefix: string): Promise<unknown> {
+  const response = await request.get(`/api/admin/config/globals?prefix=${prefix}`, { headers: { Authorization: `Bearer ${token}` } });
+  expect(response.status()).toBe(200);
+  return ((await response.json()) as { value: unknown }).value;
+}
+
+/** One entity collection's records (lazy config view split). */
+async function apiCollection(request: APIRequestContext, token: string, kind: string): Promise<
+  { id: string; name?: string; value?: unknown; source?: string; readonly?: boolean }[]
+> {
+  const response = await request.get(`/api/admin/config/collections/${kind}`, { headers: { Authorization: `Bearer ${token}` } });
+  expect(response.status()).toBe(200);
+  const body = (await response.json()) as { collections: Record<string, { records: never[] }> };
+  return body.collections[kind]?.records ?? [];
+}
+
 async function apiStatusRevision(request: APIRequestContext, token: string): Promise<number | null> {
   const response = await request.get("/api/admin/config/status", { headers: { Authorization: `Bearer ${token}` } });
   expect(response.status()).toBe(200);
@@ -680,12 +784,9 @@ test.describe.serial("config management UI (P6 browser gate)", () => {
     await expect(drawer).toBeHidden();
     // The copy landed as a database-sourced record (fail-closed grant in the fixture).
     const token = await bearerToken(page);
-    const response = await request.get("/api/admin/config", { headers: { Authorization: `Bearer ${token}` } });
-    expect(response.status()).toBe(200);
-    const view = await response.json();
-    const copied = view.collections.provider.records.find((record: { name: string }) => record.name === "copied-llm");
+    const copied = (await apiCollection(request, token, "provider")).find((record) => record.name === "copied-llm");
     expect(copied).toMatchObject({ source: "database", readonly: false });
-    expect(copied.value).toMatchObject({
+    expect(copied?.value).toMatchObject({
       id: "copied-llm", kind: "openai_compatible",
       base_url: "http://127.0.0.1:9/v1", api_key_env: "AICR_BROWSER_LLM_KEY",
     });
@@ -1041,11 +1142,11 @@ test.describe.serial("config management UI (P6 browser gate)", () => {
     await page.locator(".cfg-dialog").getByRole("button", { name: "Reset", exact: true }).click();
     const conflict = page.locator("#config-main .cfg-panel-conflict");
     await expect(conflict).toContainText("75");
-    expect((await apiView(request, token)).globals.review?.max_files).toBe(75);
+    expect(await apiGlobals(request, token, "review.max_files")).toBe(75);
     await conflict.getByRole("button", { name: "Keep my changes and retry", exact: true }).click();
     await expect(page.locator("#config-status")).toContainText("Saved as revision");
     // The override is gone: the effective value falls back to the schema default.
-    expect((await apiView(request, token)).globals.review?.max_files).toBe(2000);
+    expect(await apiGlobals(request, token, "review.max_files")).toBe(2000);
 
     // Nothing left to reset: the button warns instead of publishing.
     await page.locator("#config-main").getByRole("button", { name: "Reset database overrides", exact: true }).click();

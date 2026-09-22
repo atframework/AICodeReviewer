@@ -17,11 +17,20 @@ describe("Feishu app configuration contract", () => {
     expect(() => validateEntityCapabilities("channel", channel)).not.toThrow();
     for (const change of [{ app_id: undefined }, { receive_id: undefined }, { app_secret_env: undefined },
       { app_secret: "both" }, { receive_id_type: "mobile" }, { base_url: "https://collector.example" },
-      { member_directory: { chat_id: "x", cache_ttl_seconds: -1 } }, { user_mappings: { alice: "all" } }]) {
+      { member_directory: { chat_id: "x", cache_ttl_seconds: -1 } }, { member_directory: { chat_id: "x", cache_ttl_seconds: 604_801 } },
+      { user_mappings: { alice: "all" } }]) {
       expect(() => outputChannelSchema.parse({ ...channel, ...change })).toThrow();
     }
     expect(() => validateEntityCapabilities("channel", { ...channel, webhook_url: "unused" })).toThrow();
     expect(() => validateEntityCapabilities("channel", { ...channel, kind: "feishu_bot" })).toThrow();
+  });
+  it("accepts directory cache TTL bounds per channel and in global author resolution", () => {
+    expect(() => outputChannelSchema.parse({ ...channel, member_directory: { chat_id: "x", cache_ttl_seconds: 604_800 } })).not.toThrow();
+    expect(appConfigSchema.parse({ outputs: { author_resolution: { directory_cache_ttl_seconds: 86_400 } } })
+      .outputs.author_resolution?.directory_cache_ttl_seconds).toBe(86_400);
+    for (const bad of [-1, 604_801, 1.5]) {
+      expect(() => appConfigSchema.parse({ outputs: { author_resolution: { directory_cache_ttl_seconds: bad } } })).toThrow();
+    }
   });
   it("seals the literal app secret and binds environment grants to app, recipient and source group", () => {
     const service = createConfigSecretSealing(Buffer.alloc(32, 5));

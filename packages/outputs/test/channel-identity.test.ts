@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { channelIdentityCapability, resolveChannelAuthor, type ChannelUser } from "../src/channel-identity.js";
+import { channelIdentityCapability, resolveChannelAuthor, resolveChannelDirectoryCacheTtlSeconds,
+	DEFAULT_CHANNEL_DIRECTORY_CACHE_TTL_SECONDS, type ChannelUser } from "../src/channel-identity.js";
 import { feishuDirectoryUsers, resolveFeishuMention } from "../src/feishu-members.js";
 
 const users = feishuDirectoryUsers([
@@ -62,5 +63,16 @@ describe("channel identity capability and conservative association", () => {
 		await resolveChannelAuthor({ channelKind: "feishu_app", input, guesser });
 		await resolveChannelAuthor({ channelKind: "feishu_app", input, directory: { listUsers: async () => [] }, guesser });
 		expect(guesser).not.toHaveBeenCalled();
+	});
+});
+
+describe("channel directory cache TTL resolution", () => {
+	it("prefers the channel value over the global value over the 12h default, keeping 0 as a real value", () => {
+		expect(DEFAULT_CHANNEL_DIRECTORY_CACHE_TTL_SECONDS).toBe(43_200);
+		expect(resolveChannelDirectoryCacheTtlSeconds({})).toBe(43_200);
+		expect(resolveChannelDirectoryCacheTtlSeconds({ global: 86_400 })).toBe(86_400);
+		expect(resolveChannelDirectoryCacheTtlSeconds({ global: 0 })).toBe(0);
+		expect(resolveChannelDirectoryCacheTtlSeconds({ channel: 300, global: 86_400 })).toBe(300);
+		expect(resolveChannelDirectoryCacheTtlSeconds({ channel: 0, global: 604_800 })).toBe(0);
 	});
 });

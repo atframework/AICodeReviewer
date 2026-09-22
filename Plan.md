@@ -34,7 +34,9 @@ Workspace 多工程规则与动态配置管理 P0–P8 已完成本地交付、�
 §3.15–3.16 和[决策](docs/ai/decisions.md) D40；部署验收仍按下表执行。
 
 管理页面的类型可见性、共享配置覆盖/重置、模板与系统 prompt 管理及复审边界见
-[M27](docs/ai/milestones/M27.md) 和架构 §3.15–3.16。Queue 的
+[M27](docs/ai/milestones/M27.md) 和架构 §3.15–3.16。管理读取面已拆为外壳 +
+按页懒加载（GET /collections/:kind、/fields、/globals、/builtin-assets，同一
+activeRevision 并发共享单次加载；整页校验修订，失败可重试，内置资产与周计划模块按需读取），合同见架构 §3.16。Queue 的
 `workers.lock_ttl_seconds` 与 `dead_letter.*` 仍是预留字段，不计作运行时能力。
 
 `agent.default: native-llm` 已作为全局、workspace 和 route analysis 的可选执行模式接入；
@@ -74,6 +76,10 @@ P1（自动批次逐目标发布恢复）与 P2（扩展配置示例校验）已
 | 其他部署版本的升级兼容 | `c5d221c` 历史配置模块与当前程序的 SQLite/PG/Redis 真实进程矩阵、首次停机排空 | 若部署旧版本不同，需固定其源码和驱动版本再跑矩阵；首次升级必须确认全部旧实例退出，不能仅依赖迁移锁 |
 
 ## 4. 预留扩展
+
+作者目录使用宿主侧 `ChannelUserDirectory` 抽象，默认缓存 12 小时，支持全局与渠道级
+静态/数据库 TTL。整份成员列表不加入评审 MCP 工具；若后续需要 Agent 查询身份，先定义
+按渠道授权、候选数限制及脱敏返回合同，评估见[输出合同](docs/output-channels.md)。
 
 | 项目 | 当前状态 | 启动条件 |
 | --- | --- | --- |

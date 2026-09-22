@@ -76,10 +76,10 @@ async function apiStatusRevision(request: APIRequestContext, token: string): Pro
  * Clear the schedule when present; standalone runs skip the extra revision.
  */
 async function clearPrExecutionWindow(request: APIRequestContext, token: string): Promise<void> {
-  const view = await request.get("/api/admin/config", { headers: { Authorization: `Bearer ${token}` } });
-  expect(view.status()).toBe(200);
-  const body = (await view.json()) as { fileDigest: string; globals?: { review?: { pull_request?: { schedule?: { rules?: unknown[] } } } } };
-  const rules = body.globals?.review?.pull_request?.schedule?.rules;
+  const schedule = await request.get("/api/admin/config/globals?prefix=review.pull_request.schedule", { headers: { Authorization: `Bearer ${token}` } });
+  expect(schedule.status()).toBe(200);
+  const body = (await schedule.json()) as { fileDigest: string; value?: { rules?: unknown[] } | null };
+  const rules = body.value?.rules;
   if (!Array.isArray(rules) || rules.length === 0) return;
   const baseRevision = await apiStatusRevision(request, token);
   const response = await request.post("/api/admin/config/changesets", {

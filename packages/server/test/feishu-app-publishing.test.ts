@@ -143,4 +143,35 @@ describe("Feishu app configured publisher", () => {
       expect(calls[0]?.body.app_secret).toBe("from-env");
     } finally { vi.unstubAllEnvs(); }
   });
+  it("resolves the directory cache TTL as channel over global over the 12h default", async () => {
+    let now = 1_000_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    const calls = stubApi();
+    const memberCalls = () => calls.filter(call => call.url.includes("/members?")).length;
+    const publish = (parsed: ReturnType<typeof config>) =>
+      createOutputPublisherFromConfig(parsed, "app", undefined, "team", event)!.publishSummary!("Summary", []);
+    // Default 12h: fresh at +1h, expired past +12h.
+    const defaults = config();
+    await publish(defaults);
+    now += 3_600_000;
+    await publish(defaults);
+    expect(memberCalls()).toBe(1);
+    now += 43_200_000;
+    await publish(defaults);
+    expect(memberCalls()).toBe(2);
+    // Global TTL (60s) applies when the channel leaves cache_ttl_seconds unset.
+    const global = appConfigSchema.parse({ outputs: { channels: [channel], author_resolution: { directory_cache_ttl_seconds: 60 } },
+      triggers: [{ name: "p4", kind: "p4", workspace: "alice-service-client" }], workspaces: { instances: { team: {} } } });
+    await publish(global);
+    now += 61_000;
+    await publish(global);
+    expect(memberCalls()).toBe(4);
+    // Channel TTL (0 disables the cache) wins over the global TTL.
+    const channelWins = appConfigSchema.parse({ outputs: { author_resolution: { directory_cache_ttl_seconds: 604_800 },
+        channels: [{ ...channel, member_directory: { chat_id: "oc_source", cache_ttl_seconds: 0 } }] },
+      triggers: [{ name: "p4", kind: "p4", workspace: "alice-service-client" }], workspaces: { instances: { team: {} } } });
+    await publish(channelWins);
+    await publish(channelWins);
+    expect(memberCalls()).toBe(6);
+  });
 });

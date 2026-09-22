@@ -51,7 +51,12 @@ const API_BASE = "api/admin/config";
  *
  * @param {ConfigApiClientDeps} deps
  * @returns {{
- *   getView: () => Promise<object>,
+ *   getShell: () => Promise<object>,
+ *   getCollection: (kind: string) => Promise<object>,
+ *   getFields: (params: {page?: string, prefix?: string}) => Promise<object>,
+ *   getGlobals: (prefix: string) => Promise<object>,
+ *   getBuiltinAssets: (kind: string) => Promise<object>,
+ *   getProviderPresets: () => Promise<object>,
  *   getSchema: () => Promise<object>,
  *   getOptions: (source: string) => Promise<{source: string, options: object[]}>,
  *   validate: (payload: {baseRevision?: number|null, fileDigest?: string, operations: readonly object[]}) => Promise<object>,
@@ -156,32 +161,67 @@ export function createConfigApiClient({ getToken, onUnauthorized }) {
   }
 
   return {
-    /** GET / — redacted config view: head, fileDigest, collections, globals, fields.
-     * Pages are merged until every collection reports nextOffset null, up to a
-     * bounded page count; hitting the cap leaves nextOffset set so the UI can
-     * show its "first page only" note instead of fetching without bound. */
-    async getView() {
-      const view = await request("GET", "?limit=200");
+    /** GET / — shell: head, fileDigest, namespace, per-collection counts. */
+    getShell() {
+      return request("GET", "");
+    },
+    /**
+     * GET /collections/:kind — one entity collection, pages merged until
+     * nextOffset is null (bounded page count; a page cap leaves nextOffset
+     * set so the UI can show its "first page only" note). A head/fileDigest
+     * change mid-merge aborts with a conflict error.
+     * @param {string} kind Entity kind (provider, model_group, trigger, …).
+     */
+    async getCollection(kind) {
+      const path = `collections/${encodeURIComponent(kind)}`;
+      const view = await request("GET", `${path}?limit=200`);
+      const collection = view.collections?.[kind];
+      if (collection === null || typeof collection !== "object" || !Array.isArray(collection.records)) {
+        throw normalizedError({ kind: "network", message: `The response for collection "${kind}" was incomplete.` });
+      }
       let offset = 0;
       const maxPages = 50;
-      for (let pages = 1; pages < maxPages; pages += 1) {
-        const pending = Object.values(view.collections).map(collection => collection.nextOffset).filter(value => value !== null);
-        if (pending.length === 0) return view;
-        const nextOffset = Math.min(...pending);
+      for (let pages = 1; pages < maxPages && collection.nextOffset !== null && collection.nextOffset !== undefined; pages += 1) {
+        const nextOffset = collection.nextOffset;
         if (!Number.isSafeInteger(nextOffset) || nextOffset <= offset) throw normalizedError({ kind: "http", message: "Invalid configuration page cursor." });
-        const next = await request("GET", `?limit=200&offset=${nextOffset}`);
+        const next = await request("GET", `${path}?limit=200&offset=${nextOffset}`);
         if (next.head?.activeRevision !== view.head?.activeRevision || next.fileDigest !== view.fileDigest) {
           throw normalizedError({ kind: "conflict", message: "Configuration changed while loading pages. Reload the view." });
         }
-        for (const [kind, collection] of Object.entries(view.collections)) {
-          if (collection.nextOffset === null) continue;
-          const page = next.collections[kind];
-          collection.records.push(...page.records);
-          collection.nextOffset = page.nextOffset;
+        const page = next.collections?.[kind];
+        if (!Array.isArray(page?.records) || !("nextOffset" in page)) {
+          throw normalizedError({ kind: "network", message: `The response for collection "${kind}" was incomplete.` });
         }
+        collection.records.push(...page.records);
+        collection.nextOffset = page.nextOffset;
         offset = nextOffset;
       }
       return view;
+    },
+    /**
+     * GET /fields?page=|prefix= — flattened field-view entries scoped to a
+     * page's globals fields and/or a dotted prefix.
+     * @param {{page?: string, prefix?: string}} params
+     */
+    getFields(params) {
+      const query = [];
+      if (typeof params.page === "string") query.push(`page=${encodeURIComponent(params.page)}`);
+      if (typeof params.prefix === "string") query.push(`prefix=${encodeURIComponent(params.prefix)}`);
+      return request("GET", `fields?${query.join("&")}`);
+    },
+    /**
+     * GET /globals?prefix= — effective-globals subtree at a dotted prefix.
+     * @param {string} prefix
+     */
+    getGlobals(prefix) {
+      return request("GET", `globals?prefix=${encodeURIComponent(prefix)}`);
+    },
+    /** GET /builtin-assets?kind= — documents for the active page only. */
+    getBuiltinAssets(kind) {
+      return request("GET", `builtin-assets?kind=${encodeURIComponent(kind)}`);
+    },
+    getProviderPresets() {
+      return request("GET", "provider-presets");
     },
     /** GET /schema — protocol version plus the ConfigUiSpec (uiSpec key). */
     getSchema() {

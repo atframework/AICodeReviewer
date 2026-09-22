@@ -321,6 +321,18 @@ function scopedGlobalFields(page: ConfigUiPage): ConfigUiField[] {
   return fields.filter((field) => !field.id.startsWith(prefix));
 }
 
+/**
+ * Raw config-path keys of a page's globals-scope fields (fieldPathKeys over
+ * scopedGlobalFields). The config API uses them as the GET /fields?page=
+ * filter set; empty paths (document-value fields) never scope globals and are
+ * dropped.
+ */
+export function pageGlobalsFieldPaths(page: ConfigUiPage): readonly (readonly string[])[] {
+  return scopedGlobalFields(page)
+    .map((field) => fieldPathKeys(field))
+    .filter((keys) => keys.length > 0);
+}
+
 function findField(page: ConfigUiPage, fieldId: string): ConfigUiField | undefined {
   for (const section of page.sections) {
     for (const field of section.fields) {
@@ -777,6 +789,17 @@ function tokensEqual(left: readonly string[], right: readonly string[]): boolean
 
 function tokensPrefix(prefix: readonly string[], path: readonly string[]): boolean {
   return prefix.length <= path.length && prefix.every((token, index) => token === path[index]);
+}
+
+/**
+ * True when a formatted field-view path (formatConfigPath form) equals one of
+ * the key token arrays or sits below it — the same exact-or-descendant rule
+ * lookupFieldEntry applies. Malformed paths never match.
+ */
+export function fieldViewEntryInScope(path: string, keys: readonly (readonly string[])[]): boolean {
+  const segments = parseFormattedConfigPath(path);
+  if (segments === null) return false;
+  return keys.some((key) => key.length > 0 && segments.length >= key.length && tokensPrefix(key, segments));
 }
 
 function commonPathPrefix(paths: readonly (readonly string[])[]): readonly string[] {

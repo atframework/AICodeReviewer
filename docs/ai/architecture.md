@@ -1488,7 +1488,11 @@ metadata adapter 使用覆盖 receipt 的快照；组批在快照边界切分。
 
 | 端点 | 当前行为 |
 | --- | --- |
-| GET / | 单次 head 读取对应的 globals、provenance、文件/数据库实体；保留禁用记录与不可变 ID，返回有效值；limit/offset 分页 |
+| GET / | 配置外壳：单次 head 读取返回 head/fileDigest/namespace、provenance、各集合记录数与 secretEnvs，不含记录与字段数据 |
+| GET /collections/:kind | 单集合记录分页（limit/offset），保留禁用记录与不可变 ID，返回有效值 |
+| GET /fields?page=\|prefix= | 页面字段值（页面字段与数据库优先前缀并集）或任意路径前缀下的字段值；page 未知 400 |
+| GET /globals?prefix= | 全局视图先按完整路径脱敏再截取子树，集合区段不外泄 |
+| GET /builtin-assets?kind=templates\|prompts、/provider-presets | 按页面加载内置模板、基底 prompt 或供应商预设 |
 | GET /schema、/options/:source | 字段清单、capability、ConfigUiSpec 与协议版本；动态选项包括实体、已授权 env 名和路径模板补全 |
 | POST /validate、/preview-route | 零写库预览；路由预览支持 providerFields，可选 draft 携带 baseRevision/fileDigest/operations，经发布前校验后解析，过期基线拒绝 |
 | POST /changesets | prepare → publish → install；fileDigest 不一致或版本/operation 冲突 409；持久提交但激活失败 202 committed_activating |
@@ -1515,6 +1519,15 @@ kind 不适用的字段（如 anthropic 专属字段之于 ollama provider）渲
 以占位符保留草稿；整区块无可见字段时隐藏该区块。模板/prompt 实体是字符串形状
 记录：文档控件直接编辑整条记录值，Templates/Prompts 页下方列出只读内置资产
 （各 channel kind 的内置模板与内置基底 prompt），可"复制为新数据库配置"。
+页面按需加载：进入页面时先取外壳 GET /（head 与集合计数），再按页面并行取
+/collections/:kind、/fields?page= 与 /globals?prefix=；同一 activeRevision 的并发
+读取共享单次加载（单槽 memo），仅在读取对应资源时构建记录列表与字段视图；客户端
+合并分页并校验游标。选项响应也携带 head/fileDigest，整页请求相对固定基线校验后才
+一起写入缓存，跨修订时整页重试一次。失败可重试，切页后的旧响应不能覆盖新页。
+刷新外壳清理未修改会话，脏草稿及暂存项保持原始基线。供应商预设和两种内置文档
+各自按页读取，周计划模块在控件出现时动态导入；通用表单模块与 schema 共享。
+这采用 [MDN 按需加载](https://developer.mozilla.org/en-US/docs/Web/Performance/Guides/Lazy_loading)
+的入口与功能拆分方式，保留现有原生 ESM 和表单协议。
 跨页暂存共享同一基线，新增引用可从暂存记录选择，统一发布一个 changeset。
 重复编辑同一记录或全局页面时保留累计草稿和原始基线，重新编码完整操作；恢复到
 原始值会移除对应暂存修改。丢弃暂存后清理对应编辑会话，避免旧草稿重新出现。

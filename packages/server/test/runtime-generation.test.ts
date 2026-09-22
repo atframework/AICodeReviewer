@@ -162,6 +162,57 @@ async function publishOperations(operations: Parameters<typeof prepareConfigPubl
 }
 
 describe("runtime config generation integration (bootstrap)", () => {
+  it("pins database directory TTLs and isolates cached members across configuration generations", async () => {
+    let memberCalls = 0;
+    vi.stubGlobal("fetch", async (url: string) => {
+      const response = String(url).includes("tenant_access_token")
+        ? { code: 0, tenant_access_token: "tenant-token", expire: 7200 }
+        : String(url).includes("/members?")
+          ? (++memberCalls, { code: 0, data: { has_more: false, items: [] } })
+          : { code: 0, data: { message_id: "om_test" } };
+      return Response.json(response);
+    });
+    const file = { ...FILE_DOCUMENT, config_sources: { secret_refs: [{ env: "GITEA_TOKEN",
+      target: ["outputs", "channels", "app", "app_secret_env"], destinations: { kind: "feishu_app",
+        app_id: "cli_test", receive_id: "oc_target", member_directory: { chat_id: "oc_source" } } }] } };
+    const { options } = await bootstrap(makeConfig(), file);
+    const appChannel = { name: "app", kind: "feishu_app", app_id: "cli_test", app_secret_env: "GITEA_TOKEN",
+      receive_id: "oc_target", member_directory: { chat_id: "oc_source" }, mention_author: true };
+    await publishOperations([
+      { op: "create", collection: "channels", record: { id: "app", name: "app", enabled: true, value: appChannel } },
+      { op: "create", collection: "workspaces", record: { id: "ws", name: "ws", enabled: true,
+        value: { source_repo: { trigger: "gitea-internal", repo: "acme/repo" } } } },
+      { op: "set", path: ["outputs", "routes", "default", "summary"], value: ["app"] },
+      { op: "set", path: ["outputs", "author_resolution", "directory_cache_ttl_seconds"], value: 43200 },
+    ], file);
+    const old = await options.runtimeConfig!.admission();
+    const event = createReviewEvent({ triggerName: "gitea-internal", provider: "gitea", workspaceId: "ws", targetKind: "push",
+      repoRef: "acme/repo", author: { username: "alice" }, reason: "test" });
+    const publisherFor = async (snapshotId: string) => {
+      const context = { reviewEvent: event, payload: {}, provider: "gitea" as const, eventName: "push", configSnapshotId: snapshotId };
+      const run = await options.reviewOrchestration!.optionsResolver!(context);
+      return async () => { await (await run.outputPublisherResolver!(context))!.publishSummary!("Report"); };
+    };
+    const publishOld = await publisherFor(old.snapshotId);
+    await publishOld();
+    await publishOld();
+    expect(memberCalls).toBe(1);
+    await publishOperations([{ op: "set", path: ["outputs", "author_resolution", "directory_cache_ttl_seconds"], value: 0 }], file);
+    const uncached = await options.runtimeConfig!.admission();
+    const publishUncached = await publisherFor(uncached.snapshotId);
+    await publishUncached();
+    await publishUncached();
+    expect(memberCalls).toBe(3);
+    await publishOld();
+    expect(memberCalls).toBe(3);
+    await publishOperations([{ op: "update", collection: "channels", recordId: "app",
+      value: { ...appChannel, member_directory: { chat_id: "oc_source", cache_ttl_seconds: 60 } } }], file);
+    const overridden = await options.runtimeConfig!.admission();
+    const publishOverridden = await publisherFor(overridden.snapshotId);
+    await publishOverridden();
+    await publishOverridden();
+    expect(memberCalls).toBe(4);
+  });
   it("pins database-managed author models through publication, preserves references and shares the run budget", async () => {
     const modelRequests: Record<string, unknown>[] = [];
     const cards: string[] = [];

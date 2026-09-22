@@ -2,6 +2,8 @@
 # Create/publish a Feishu custom app with the bot capability and add it to both groups.
 # Export AICR_FEISHU_APP_SECRET; see the bilingual IM bots guide for permissions.
 outputs:
+  author_resolution:
+    directory_cache_ttl_seconds: 43200 # Global default; database configuration is also supported.
   channels:
     - name: feishu-app-review
       kind: feishu_app
@@ -14,6 +16,8 @@ outputs:
       mention_fallback: skip
       member_directory:
         chat_id: oc_member_source_group
+        # Overrides outputs.author_resolution.directory_cache_ttl_seconds;
+        # runtime default 43200 (12h); 0 disables reuse; max 604800 (7d).
         cache_ttl_seconds: 300
       user_mappings:
         "alice@example.com": ou_replace_with_app_open_id

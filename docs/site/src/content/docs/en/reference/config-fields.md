@@ -346,7 +346,8 @@ Narrative: [Output channels and routing](/en/configuration/outputs/).
 | `outputs.channels[].token` | string | — | Literal channel API token; mutually exclusive with `token_env`; sealed when published to the database |
 | `outputs.channels[].webhook_url` | string | — | Literal bot webhook URL (feishu_bot/wecom_bot); mutually exclusive with `webhook_url_env`; sealed when published to the database |
 | `outputs.channels[].secret` | string | — | Literal Feishu signing secret; mutually exclusive with `secret_env`; sealed when published to the database |
-| `outputs.author_resolution` | object | — | `email_mappings` map and `email_blacklist` array |
+| `outputs.author_resolution` | object | — | `email_mappings` map, `email_blacklist` array and `directory_cache_ttl_seconds` |
+| `outputs.author_resolution.directory_cache_ttl_seconds` | int | 43200 | Global member-directory cache duration, 0–604800 seconds; 0 disables reuse |
 | `outputs.routes.default` | object | — | Default route applied when no rule matches |
 | `outputs.routes.rules[]` | array | `[]` | Ordered routing rules |
 | `outputs.routes.rules[].match.trigger` | string | — | Trigger name to match |
@@ -366,7 +367,7 @@ These fields apply to `feishu_app`; see the [IM bots guide](/en/integrations/im-
 | `outputs.channels[].receive_id` | string | — | Required report recipient |
 | `outputs.channels[].receive_id_type` | enum | — | `chat_id`, `open_id`, `user_id`, `union_id` or `email`; runtime default `chat_id` |
 | `outputs.channels[].member_directory.chat_id` | string | — | Source group whose members form the identity directory |
-| `outputs.channels[].member_directory.cache_ttl_seconds` | int | — | Directory cache duration, 0–3600 seconds; runtime default 300 |
+| `outputs.channels[].member_directory.cache_ttl_seconds` | int | — | Directory cache duration, 0–604800 seconds; overrides `outputs.author_resolution.directory_cache_ttl_seconds`; runtime default 43200 (12h) |
 | `outputs.channels[].user_mappings.<id>` | string | — | Exact author/workspace identifier to the application's `open_id` |
 | `outputs.channels[].guess_author` | boolean | — | Runtime default true; permits workspace heuristics and dedicated model fallback after exact matching; `mention_author` separately enables notifications |
 

@@ -4,6 +4,12 @@
  * store: admin auth plus a config store backend are the only prerequisites.
  *
  * Contract highlights:
+ * - Reads are split for lazy loading: GET / returns the shell (head,
+ *   fileDigest, collection counts, secret env presence); records, fields, and
+ *   globals load per page via GET /collections/:kind, /fields?page=|prefix=,
+ *   and /globals?prefix=. Every read response carries head+fileDigest so the
+ *   client detects a head move mid-load. View construction is memoized per
+ *   active revision (single-flight).
  * - Every write path goes through prepareConfigPublication/publishConfig:
  *   server-side Zod validation, file locks, capability checks, reference
  *   integrity, CAS commit, audit, and the runtime generation install hook.
@@ -34,11 +40,13 @@ import {
   buildConfigUiSpec,
   buildEffectiveConfigView,
   collectConfigSecretReferences,
+  fieldViewEntryInScope,
   getConfigOperation,
   isConfigError,
   isMarkdownConfigMap,
   isMarkdownDatabaseCollection,
   mergeConfigSources,
+  pageGlobalsFieldPaths,
   parseConfigPath,
   parseEffectiveConfig,
   prepareConfigPublication,
@@ -52,14 +60,17 @@ import {
   validateConfigNamespace,
   type AppConfigInput,
   type ConfigChangesetOperation,
+  type ConfigEntityCollection,
   type ConfigEntityKind,
   type ConfigFieldView,
+  type ConfigHead,
   type ConfigRoutePreviewEvent,
   type ConfigSecretSealing,
   type ConfigStore,
   type ConfigUiOption,
   type ConfigUiSpec,
   type DatabaseConfigDocument,
+  type MergedConfig,
 } from "@aicr/core";
 import { createAdminAuthMiddleware, type AdminAuthConfig, type AdminSessionStore } from "./admin-auth.js";
 import { MODEL_PROVIDER_PRESETS } from "@aicr/llm";
@@ -461,18 +472,108 @@ function revisionMetadata(revision: {
 }
 
 // ---------------------------------------------------------------------------
-// Effective config loading (GET / and preview-route)
+// Effective config loading (memoized per head revision; all read endpoints
+// share one load so a burst of subresource requests never re-merges)
 // ---------------------------------------------------------------------------
 
-async function loadConfigView(options: ConfigApiOptions) {
-  const head = await options.store.readHead(options.namespace);
+interface LoadedConfigView {
+  readonly head: ConfigHead | null;
+  readonly database: DatabaseConfigDocument;
+  readonly merged: MergedConfig;
+  readonly effective: ReturnType<typeof parseEffectiveConfig>;
+  fields?: readonly ConfigFieldView[];
+  /** Per-kind record lists built on first use; records are redacted per response. */
+  readonly recordsByKind: Map<ConfigEntityKind, Record<string, unknown>[]>;
+  /** Effective config minus entity collections; built on first use. */
+  globals?: Record<string, unknown>;
+}
+
+type ViewLoader = () => Promise<LoadedConfigView>;
+
+async function loadConfigView(options: ConfigApiOptions, head: ConfigHead | null): Promise<LoadedConfigView> {
   const record = head === null ? null : await options.store.readRevision(options.namespace, head.activeRevision);
   if (head !== null && record === null) throw new ConfigError("entity_not_found", "The active configuration revision is unreadable.");
   if (record && record.fileDigest !== options.fileDigest) throw new ConfigError("file_config_mismatch", "The active revision uses a different file configuration.");
   const database = record ? validateDatabaseDocument(record.document, record.formatVersion) : {};
   const merged = mergeConfigSources({ file: options.fileConfig, database, formatVersion: record?.formatVersion ?? 2 });
   const effective = parseEffectiveConfig(merged.document, options.formatVersion ?? 2);
-  return { head, database, merged, effective };
+  return { head, database, merged, effective, recordsByKind: new Map() };
+}
+
+/**
+ * Single-slot loader memo keyed by the active revision: the head read is
+ * cheap, the merge/parse/fields build runs once per revision and concurrent
+ * requests share the in-flight promise. Rejections are never cached.
+ */
+function createViewLoader(options: ConfigApiOptions): ViewLoader {
+  let memo: { readonly revision: number | null; readonly promise: Promise<LoadedConfigView> } | null = null;
+  return async () => {
+    const head = await options.store.readHead(options.namespace);
+    const revision = head?.activeRevision ?? null;
+    if (memo !== null && memo.revision === revision) return memo.promise;
+    const promise = loadConfigView(options, head);
+    memo = { revision, promise };
+    promise.catch(() => {
+      if (memo?.promise === promise) memo = null;
+    });
+    return promise;
+  };
+}
+
+function collectionRecordsOf(view: LoadedConfigView, options: ConfigApiOptions, collection: ConfigEntityCollection): Record<string, unknown>[] {
+  const cached = view.recordsByKind.get(collection.kind);
+  if (cached !== undefined) return cached;
+  const valueAt = (source: unknown, name: string): unknown => {
+    let value: unknown = source;
+    for (const segment of collection.path) value = value !== null && typeof value === "object" ? (value as Record<string, unknown>)[segment] : undefined;
+    return Array.isArray(value)
+      ? value.find((entry: Record<string, unknown>) => entry[collection.idField ?? "id"] === name)
+      : value !== null && typeof value === "object" ? (value as Record<string, unknown>)[name] : undefined;
+  };
+  const fileNames = entityIdsAtPath(options.fileConfig, collection.path, collection.idField);
+  const records = [
+    ...fileNames.map((name) => ({ id: name, name, source: "file", readonly: true, enabled: true,
+      value: valueAt(options.fileConfig, name), effectiveValue: valueAt(view.effective, name), shadowedByFile: false })),
+    ...Object.values(view.database.entities?.[DATABASE_KIND_COLLECTION[collection.kind]] ?? {}).map((record) => ({
+      ...record, source: "database", readonly: false, shadowedByFile: fileNames.includes(record.name),
+      effectiveValue: valueAt(view.effective, record.name),
+    })),
+  ];
+  view.recordsByKind.set(collection.kind, records);
+  return records;
+}
+
+/** Effective config minus entity collections (the globals half of the old full view). */
+function globalsOf(view: LoadedConfigView, options: ConfigApiOptions): Record<string, unknown> {
+  if (view.globals !== undefined) return view.globals;
+  const globals = structuredClone(view.effective) as Record<string, unknown>;
+  for (const collection of Object.values(CONFIG_ENTITY_COLLECTIONS)) {
+    if (collection.since > (options.formatVersion ?? 2)) continue;
+    let parent: Record<string, unknown> | undefined = globals;
+    for (const segment of collection.path.slice(0, -1)) parent = parent?.[segment] as Record<string, unknown> | undefined;
+    if (parent) delete parent[collection.path.at(-1)!];
+  }
+  // Redact before selecting a subtree: a credential leaf or a child of a
+  // secret-named object must retain the protection of its complete ancestry.
+  view.globals = redactDeep(globals) as Record<string, unknown>;
+  return view.globals;
+}
+
+/** Dotted prefix query → validated token array (null on malformed/empty input). */
+function parsePrefixQuery(raw: string): string[] | null {
+  let tokens: readonly string[];
+  try {
+    tokens = parseConfigPath(raw);
+  } catch {
+    return null;
+  }
+  return tokens.length === 0 ? null : [...tokens];
+}
+
+function offsetOf(c: Context): number {
+  const offset = Number(c.req.query("offset") ?? "0");
+  if (!Number.isSafeInteger(offset) || offset < 0) throw new ConfigError("invalid_field_type", "offset must be a nonnegative integer.");
+  return offset;
 }
 
 function secretEnvStatus(config: unknown, envLookup: ((name: string) => string | undefined) | undefined, file: AppConfigInput): { name: string; present: boolean }[] {
@@ -538,9 +639,9 @@ function configUiSpec(): ConfigUiSpec {
  * entity before re-enabling it; records shadowed by a file entity are
  * effective, hence not disabled.
  */
-async function entityOptions(options: ConfigApiOptions, kind: ConfigEntityKind): Promise<ConfigUiOption[]> {
+async function entityOptions(options: ConfigApiOptions, kind: ConfigEntityKind, loadView: ViewLoader): Promise<ConfigUiOption[]> {
   const collection = CONFIG_ENTITY_COLLECTIONS[kind];
-  const { database } = await loadConfigView(options);
+  const { database } = await loadView();
   const fileIds = entityIdsAtPath(options.fileConfig, collection.path, collection.idField);
   const byId = new Map<string, ConfigUiOption>();
   for (const id of fileIds) byId.set(id, { value: id, label: id });
@@ -572,16 +673,16 @@ function pathTemplateVariableOptions(): ConfigUiOption[] {
   }));
 }
 
-const CONFIG_OPTIONS_SOURCES: Readonly<Record<string, (options: ConfigApiOptions) => Promise<ConfigUiOption[]> | ConfigUiOption[]>> = {
-  providers: (options) => entityOptions(options, "provider"),
-  model_groups: (options) => entityOptions(options, "model_group"),
-  triggers: (options) => entityOptions(options, "trigger"),
-  channels: (options) => entityOptions(options, "channel"),
-  workspaces: (options) => entityOptions(options, "workspace"),
-  templates: (options) => entityOptions(options, "template"),
-  prompts: (options) => entityOptions(options, "prompt"),
-  secret_envs: secretEnvOptions,
-  path_template_variables: pathTemplateVariableOptions,
+const CONFIG_OPTIONS_SOURCES: Readonly<Record<string, (options: ConfigApiOptions, loadView: ViewLoader) => Promise<ConfigUiOption[]> | ConfigUiOption[]>> = {
+  providers: (options, loadView) => entityOptions(options, "provider", loadView),
+  model_groups: (options, loadView) => entityOptions(options, "model_group", loadView),
+  triggers: (options, loadView) => entityOptions(options, "trigger", loadView),
+  channels: (options, loadView) => entityOptions(options, "channel", loadView),
+  workspaces: (options, loadView) => entityOptions(options, "workspace", loadView),
+  templates: (options, loadView) => entityOptions(options, "template", loadView),
+  prompts: (options, loadView) => entityOptions(options, "prompt", loadView),
+  secret_envs: (options) => secretEnvOptions(options),
+  path_template_variables: () => pathTemplateVariableOptions(),
 };
 
 // ---------------------------------------------------------------------------
@@ -640,72 +741,160 @@ export function createConfigApi(options: ConfigApiOptions): Hono {
     return options.fileDigest;
   };
 
+  const loadView = createViewLoader(options);
+
   // ------------------------------------------------------------------ GET /
+  // Shell: head/fileDigest/namespace, per-collection counts, secret env
+  // presence. Records, fields, and globals load lazily per page via the
+  // subresource endpoints below; every response carries head+fileDigest so
+  // the client can detect a head move mid-load.
   app.get("/", async (c) => {
     try {
-      const { head, database, merged, effective } = await loadConfigView(options);
-      const limit = limitOf(c);
-      const offset = Number(c.req.query("offset") ?? "0");
-      if (!Number.isSafeInteger(offset) || offset < 0) throw new ConfigError("invalid_field_type", "offset must be a nonnegative integer.");
+      const view = await loadView();
       const collections: Record<string, unknown> = {};
-      const globals = structuredClone(effective) as Record<string, unknown>;
-      for (const kind of Object.values(CONFIG_ENTITY_COLLECTIONS)) {
-        if (kind.since > (options.formatVersion ?? 2)) continue;
-        const valueAt = (source: unknown, name: string): unknown => {
-          let value: unknown = source;
-          for (const segment of kind.path) value = value !== null && typeof value === "object" ? (value as Record<string, unknown>)[segment] : undefined;
-          return Array.isArray(value)
-            ? value.find((entry: Record<string, unknown>) => entry[kind.idField ?? "id"] === name)
-            : value !== null && typeof value === "object" ? (value as Record<string, unknown>)[name] : undefined;
-        };
-        const fileNames = entityIdsAtPath(options.fileConfig, kind.path, kind.idField);
-        const records = [
-          ...fileNames.map((name) => ({ id: name, name, source: "file", readonly: true, enabled: true,
-            value: valueAt(options.fileConfig, name), effectiveValue: valueAt(effective, name), shadowedByFile: false })),
-          ...Object.values(database.entities?.[DATABASE_KIND_COLLECTION[kind.kind]] ?? {}).map((record) => ({
-            ...record, source: "database", readonly: false, shadowedByFile: fileNames.includes(record.name),
-            effectiveValue: valueAt(effective, record.name),
-          })),
-        ];
-        collections[kind.kind] = { count: records.length, records: records.slice(offset, offset + limit),
-          nextOffset: offset + limit < records.length ? offset + limit : null };
-        let parent: Record<string, unknown> | undefined = globals;
-        for (const segment of kind.path.slice(0, -1)) parent = parent?.[segment] as Record<string, unknown> | undefined;
-        if (parent) delete parent[kind.path.at(-1)!];
+      for (const collection of Object.values(CONFIG_ENTITY_COLLECTIONS)) {
+        if (collection.since > (options.formatVersion ?? 2)) continue;
+        collections[collection.kind] = { count: entityIdsAtPath(options.fileConfig, collection.path, collection.idField).length
+          + Object.keys(view.database.entities?.[DATABASE_KIND_COLLECTION[collection.kind]] ?? {}).length };
       }
-      const view = redactDeep({ namespace: options.namespace, head,
-        configSnapshotId: options.manager?.status().snapshotId ?? null,
-        fileDigest: options.fileDigest, globals, provenance: Object.fromEntries(merged.provenance), collections });
-      return c.json({ ...(view as Record<string, unknown>), fields: redactFieldsView(buildEffectiveConfigView(merged, effective)),
-        secretEnvs: secretEnvStatus(effective, options.envLookup, options.fileConfig) });
+      return c.json({
+        ...redactDeep({ namespace: options.namespace, head: view.head,
+          configSnapshotId: options.manager?.status().snapshotId ?? null,
+          fileDigest: options.fileDigest, provenance: Object.fromEntries(view.merged.provenance),
+          collections }) as Record<string, unknown>,
+        secretEnvs: secretEnvStatus(view.effective, options.envLookup, options.fileConfig),
+      });
     } catch (error) {
       return configErrorResponse(c, error);
     }
   });
 
+  // ----------------------------------------------- GET /collections/:kind
+  // One entity collection, paginated. The collections/kind/records nesting is
+  // contractual: redactDeep exempts template/prompt document bodies only at
+  // that exact ancestry.
+  app.get("/collections/:kind", async (c) => {
+    try {
+      const kindParam = c.req.param("kind");
+      if (!Object.hasOwn(CONFIG_ENTITY_COLLECTIONS, kindParam)) {
+        return c.json({ error: "invalid_request", message: `Unknown collection kind "${kindParam}".` }, 400);
+      }
+      const collection = CONFIG_ENTITY_COLLECTIONS[kindParam as ConfigEntityKind];
+      if (collection.since > (options.formatVersion ?? 2)) {
+        return c.json({ error: "invalid_request", message: `Collection "${kindParam}" requires config format version ${collection.since}.` }, 400);
+      }
+      const view = await loadView();
+      const limit = limitOf(c);
+      const offset = offsetOf(c);
+      const records = collectionRecordsOf(view, options, collection);
+      return c.json(redactDeep({
+        namespace: options.namespace, head: view.head, fileDigest: options.fileDigest,
+        collections: { [collection.kind]: { count: records.length, records: records.slice(offset, offset + limit),
+          nextOffset: offset + limit < records.length ? offset + limit : null } },
+      }));
+    } catch (error) {
+      return configErrorResponse(c, error);
+    }
+  });
+
+  // ------------------------------------------------------------- GET /fields
+  // Flattened field-view entries scoped to a page's globals fields (?page=)
+  // and/or a dotted prefix (?prefix=). Page scope mirrors the client's
+  // lookupFieldEntry rule (exact path or descendant); database-priority
+  // prefixes rooted on the page are included so reset controls keep working.
+  app.get("/fields", async (c) => {
+    try {
+      const pageParam = c.req.query("page");
+      const prefixParam = c.req.query("prefix");
+      if (pageParam === undefined && prefixParam === undefined) {
+        return c.json({ error: "invalid_request", message: "GET /fields requires a page or prefix query parameter." }, 400);
+      }
+      const keys: (readonly string[])[] = [];
+      if (pageParam !== undefined) {
+        const page = configUiSpec().pages.find((candidate) => candidate.id === pageParam);
+        if (page === undefined) {
+          return c.json({ error: "invalid_request", message: `Unknown page "${pageParam}".` }, 400);
+        }
+        keys.push(...pageGlobalsFieldPaths(page));
+        const roots = new Set(keys.map((key) => key[0]!));
+        for (const prefix of DATABASE_PRIORITY_PREFIXES) {
+          if (roots.has(prefix[0]!)) keys.push(prefix);
+        }
+      }
+      if (prefixParam !== undefined) {
+        const tokens = parsePrefixQuery(prefixParam);
+        if (tokens === null) {
+          return c.json({ error: "invalid_request", message: "Query 'prefix' must be a non-empty dotted config path." }, 400);
+        }
+        keys.push(tokens);
+      }
+      const view = await loadView();
+      view.fields ??= buildEffectiveConfigView(view.merged, view.effective);
+      const fields = keys.length === 0 ? [] : view.fields.filter((field) => fieldViewEntryInScope(field.path, keys));
+      return c.json({ namespace: options.namespace, head: view.head, fileDigest: options.fileDigest,
+        fields: redactFieldsView(fields) });
+    } catch (error) {
+      return configErrorResponse(c, error);
+    }
+  });
+
+  // ------------------------------------------------------------ GET /globals
+  // Effective-globals subtree at a dotted prefix (entity collections are
+  // stripped; they serve through /collections/:kind). Absent paths read null.
+  app.get("/globals", async (c) => {
+    try {
+      const prefixParam = c.req.query("prefix");
+      if (prefixParam === undefined) {
+        return c.json({ error: "invalid_request", message: "GET /globals requires a prefix query parameter." }, 400);
+      }
+      const tokens = parsePrefixQuery(prefixParam);
+      if (tokens === null) {
+        return c.json({ error: "invalid_request", message: "Query 'prefix' must be a non-empty dotted config path." }, 400);
+      }
+      const view = await loadView();
+      let current: unknown = globalsOf(view, options);
+      for (const token of tokens) {
+        current = current !== null && typeof current === "object" && !Array.isArray(current)
+          ? (current as Record<string, unknown>)[token]
+          : undefined;
+      }
+      return c.json({ namespace: options.namespace, head: view.head, fileDigest: options.fileDigest,
+        prefix: tokens.join("."), value: current === undefined ? null : current });
+    } catch (error) {
+      return configErrorResponse(c, error);
+    }
+  });
+
+  // ------------------------------------------------------ GET /builtin-assets
+  // Read-only built-in template/prompt documents (never stored); the
+  // dashboard offers them as copy sources on the Templates/Prompts pages.
+  app.get("/builtin-assets", (c) => {
+    const kind = c.req.query("kind");
+    if (kind !== "templates" && kind !== "prompts") {
+      return c.json({ error: "invalid_request", message: "Query 'kind' must be templates or prompts." }, 400);
+    }
+    if (kind === "prompts") return c.json({ prompts: options.builtinPrompts ?? [] });
+    return c.json({
+      templates: listBuiltinTemplates(options.builtinTemplatesBaseDir).map((asset) => ({
+        id: `${asset.channelKind}/${asset.kind}`,
+        channelKind: asset.channelKind,
+        kind: asset.kind,
+        document: asset.document,
+      })),
+    });
+  });
+
+  app.get("/provider-presets", (c) => c.json({ providerPresets: MODEL_PROVIDER_PRESETS }));
+
   // ----------------------------------------------------------- GET /schema
   app.get("/schema", (c) => {
     return c.json({
-      protocolVersion: 1,
+      protocolVersion: 2,
       uiSpec: configUiSpec(),
-      // Static LLM provider presets (curated in @aicr/llm; no credentials).
-      // Consumed by the dashboard Providers page as draft prefill templates.
-      providerPresets: MODEL_PROVIDER_PRESETS,
       formatVersion: options.formatVersion ?? 2,
       // Global prefixes where the database wins over the file (§3.15
       // exception); the dashboard renders reset controls for these pages.
       databasePriorityPrefixes: DATABASE_PRIORITY_PREFIXES.map((prefix) => prefix.join(".")),
-      // Read-only built-in assets (never stored); the dashboard offers them
-      // as copy sources on the Templates/Prompts pages.
-      builtinAssets: {
-        templates: listBuiltinTemplates(options.builtinTemplatesBaseDir).map((asset) => ({
-          id: `${asset.channelKind}/${asset.kind}`,
-          channelKind: asset.channelKind,
-          kind: asset.kind,
-          document: asset.document,
-        })),
-        prompts: options.builtinPrompts ?? [],
-      },
       entityCollections: Object.values(CONFIG_ENTITY_COLLECTIONS).map((collection) => ({ kind: collection.kind, path: collection.path, idField: collection.idField, since: collection.since })),
       channelKinds: CHANNEL_KINDS,
       inventory: CONFIG_FIELD_INVENTORY.map((spec) => ({
@@ -731,7 +920,9 @@ export function createConfigApi(options: ConfigApiOptions): Hono {
       return c.json({ error: "invalid_request", message: `Unknown options source "${source}".` }, 400);
     }
     try {
-      return c.json(redactDeep({ source, options: await handler(options) }));
+      const view = await loadView();
+      return c.json(redactDeep({ source, head: view.head, fileDigest: options.fileDigest,
+        options: await handler(options, async () => view) }));
     } catch (error) {
       return configErrorResponse(c, error);
     }
@@ -765,7 +956,7 @@ export function createConfigApi(options: ConfigApiOptions): Hono {
     const body = await readJsonBody(c, previewRouteRequestSchema, maxBodyBytes);
     if (!body.ok) return body.response;
     try {
-      const loaded = await loadConfigView(options);
+      const loaded = await loadView();
       let effective = loaded.effective;
       const draft = body.value.draft;
       if (draft !== undefined) {

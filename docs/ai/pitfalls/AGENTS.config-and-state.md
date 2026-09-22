@@ -33,6 +33,12 @@ Read the section matching a config, model-selection, persistence, or usage chang
   Derive page actions from field metadata, not an `advanced` page-id exception:
   that page mixes editable history-retention policies with read-only connection
   settings. Browser tests must save, reload and reset the editable fields.
+- Lazy Config reads must validate the whole page, including reference options,
+  against one head/fileDigest before updating caches. Per-resource shell refreshes
+  can drop siblings or mix revisions; ignore responses from superseded page loads,
+  retry failed loads, and retain dirty drafts' original bases. Build `/globals`
+  subtrees from the already redacted full view: redacting only a selected leaf
+  loses sensitive ancestor rules (`config-api.test.ts`, browser `config lazy loading`).
 - Schema `superRefine` runs after defaults are applied — mutual-exclusion
   checks between a literal and a defaulted `*_env` (e.g. admin.password_env
   defaults to AICR_ADMIN_PASSWORD) must treat the default value as unset.

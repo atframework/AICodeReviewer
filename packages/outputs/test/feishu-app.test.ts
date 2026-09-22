@@ -78,6 +78,67 @@ describe("Feishu application API", () => {
     await new FeishuAppClient({ appId: "b", appSecret: "s", fetch }).members("oc_a");
     expect(fetch).toHaveBeenCalledTimes(8);
   });
+  it("applies the 12h default TTL and serves an expired snapshot when refresh fails", async () => {
+    let now = 1_000_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    let fail = false;
+    const warn = vi.fn();
+    const fetch = vi.fn<FetchLike>(async url => {
+      if (url.includes("tenant_access_token")) return response(token);
+      if (url.includes("/members?")) return fail ? response({}, 503) : response(page([member("ou_alice", "王小明")]));
+      return response({ code: 0, data: { user: alice } });
+    });
+    const memberCalls = () => fetch.mock.calls.filter(([url]) => url.includes("/members?")).length;
+    const client = new FeishuAppClient({ appId: "a", appSecret: "s", onDirectoryWarning: warn, fetch });
+    const first = await client.members("oc_a");
+    now += 3_600_000; // 1h < 12h default: still fresh
+    expect(await client.members("oc_a")).toBe(first);
+    expect(memberCalls()).toBe(1);
+    now += 43_200_000; // past the 12h default: refresh
+    expect(await client.members("oc_a")).toEqual(first);
+    expect(memberCalls()).toBe(2);
+    now += 43_200_000; // expired again; refresh fails -> stale snapshot with warning
+    fail = true;
+    expect(await client.members("oc_a")).toEqual(first);
+    expect(warn).toHaveBeenCalledExactlyOnceWith("stale_directory_used");
+    fail = false; // the stale serve did not extend the TTL: the next call retries the refresh
+    expect(await client.members("oc_a")).toEqual(first);
+    expect(memberCalls()).toBe(4);
+  });
+  it("keeps rejecting a failed refresh when no snapshot exists yet", async () => {
+    const warn = vi.fn();
+    const client = new FeishuAppClient({ appId: "a", appSecret: "s", onDirectoryWarning: warn,
+      fetch: async url => response(url.includes("tenant_access_token") ? token : { code: 99991672, msg: "denied" }, 403) });
+    await expect(client.members("oc_a")).rejects.toThrow(/Feishu/);
+    expect(warn).not.toHaveBeenCalledWith("stale_directory_used");
+  });
+  it("zero TTL bypasses a fresh snapshot and never falls back to it", async () => {
+    let failed = false;
+    const fetch = vi.fn<FetchLike>(async url => response(url.includes("tenant_access_token") ? token
+      : failed ? { code: 99991672 } : page([])));
+    const client = new FeishuAppClient({ appId: "a", appSecret: "s", fetch });
+    await client.members("oc_a");
+    await client.members("oc_a", 0);
+    expect(fetch.mock.calls.filter(([url]) => url.includes("/members?"))).toHaveLength(2);
+    failed = true;
+    await expect(client.members("oc_a", 0)).rejects.toThrow(/Feishu/);
+  });
+  it.each([
+    { code: 99991672 },
+    { code: 0, data: { items: [], has_more: false, trigger_security_conf_limit: true } },
+  ])("invalidates a snapshot after denied or incomplete membership", async failure => {
+    let now = 100_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    let failed = false;
+    const client = new FeishuAppClient({ appId: "a", appSecret: "s", fetch: async url =>
+      response(url.includes("tenant_access_token") ? token : failed ? failure : page([])) });
+    await client.members("oc_a", 1);
+    now += 1_000;
+    failed = true;
+    await expect(client.members("oc_a", 1)).rejects.toThrow(/Feishu/);
+    // A later, longer TTL must not resurrect the invalidated snapshot.
+    await expect(client.members("oc_a")).rejects.toThrow(/Feishu/);
+  });
   it.each([
     { items: [], has_more: true },
     { items: [], has_more: true, page_token: "loop" },
@@ -117,6 +178,28 @@ describe("Feishu application API", () => {
     expect(request).toMatchObject({ receive_id: "oc_target", msg_type: "interactive", uuid: expect.any(String) });
     expect(request).not.toHaveProperty("card");
     expect(fetch.mock.calls[1]?.[0]).toBe("https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id");
+  });
+  it("sends a brief card with the issue link and keeps the mention when a detail link is provided", async () => {
+    let webhookBody: Record<string, unknown> = {};
+    const problems: ReviewProblem[] = [
+      { file: "a.ts", line: 1, severity: "high", category: "bug", message: "full-message-one", suggestion: "fix-one" },
+      { file: "b.ts", line: 2, severity: "low", category: "style", message: "full-message-two" },
+    ];
+    await createFeishuBotDispatcher({ webhookUrl: "https://unused", fetch: async (_url, init) => {
+      webhookBody = JSON.parse(init?.body ?? "{}"); return response({ code: 0 });
+    } }).publishAggregatedProblems(problems, "# Review Complete\n\nAll good.", '<at id="ou_alice"></at>',
+      { detailLink: { url: "https://github.com/o/r/issues/42", label: "View full report" } });
+    const card = webhookBody.card as { body: { elements: { content?: string }[] } };
+    const markdown = card.body.elements[0]?.content ?? "";
+    // brief: headline + count + link, no full problem bodies
+    expect(markdown).toContain("Review Complete");
+    expect(markdown).toContain("Problems (2)");
+    expect(markdown).toContain("https://github.com/o/r/issues/42");
+    expect(markdown).not.toContain("full-message-one");
+    expect(markdown).not.toContain("full-message-two");
+    // mention preserved as a trailing element
+    const mention = card.body.elements.at(-1)?.content ?? "";
+    expect(mention).toBe('<at id="ou_alice"></at>');
   });
   it.each([99991663, 99991671])("refreshes rejected token %s once using the same send UUID", async code => {
     let sends = 0;

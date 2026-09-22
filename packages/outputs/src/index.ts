@@ -8,7 +8,7 @@ import type { FeishuAppClient } from "./feishu-app.js";
 
 export { FeishuAppClient, FeishuApiError, type FeishuAppOptions } from "./feishu-app.js";
 export { resolveFeishuMention, feishuDirectoryUsers, renderFeishuAuthorMention, type FeishuMember, type FeishuMentionInput, type FeishuMentionOptions } from "./feishu-members.js";
-export { channelIdentityCapability, matchChannelAuthor, resolveChannelAuthor, type ChannelUser, type ChannelUserDirectory, type ChannelAuthorInput, type ChannelAuthorOptions, type ChannelAuthorMatch, type ChannelAuthorGuesser } from "./channel-identity.js";
+export { channelIdentityCapability, matchChannelAuthor, resolveChannelAuthor, resolveChannelDirectoryCacheTtlSeconds, DEFAULT_CHANNEL_DIRECTORY_CACHE_TTL_SECONDS, type ChannelUser, type ChannelUserDirectory, type ChannelAuthorInput, type ChannelAuthorOptions, type ChannelAuthorMatch, type ChannelAuthorGuesser } from "./channel-identity.js";
 
 export const outputsPackageName = "@aicr/outputs";
 
@@ -4778,8 +4778,18 @@ export interface FeishuBotOptions {
 	readonly fetch?: FetchLike | undefined;
 }
 
+export interface FeishuBotAggregatedOptions {
+	/** Link to the full report on the issue-recording platform. */
+	readonly detailLink?: { readonly url: string; readonly label: string } | undefined;
+}
+
 export interface FeishuBotDispatcher {
-	publishAggregatedProblems(problems: readonly ReviewProblem[], summary?: string, mentionText?: string): Promise<DispatchResult>;
+	publishAggregatedProblems(
+		problems: readonly ReviewProblem[],
+		summary?: string,
+		mentionText?: string,
+		aggregatedOptions?: FeishuBotAggregatedOptions,
+	): Promise<DispatchResult>;
 }
 
 /**
@@ -4833,9 +4843,10 @@ export function createFeishuBotDispatcher(options: FeishuBotOptions): FeishuBotD
 			problems: readonly ReviewProblem[],
 			summary?: string,
 			mentionText?: string,
+			aggregatedOptions?: FeishuBotAggregatedOptions,
 		): Promise<DispatchResult> {
 			const timestamp = Math.floor(Date.now() / 1000);
-			const body = buildFeishuReportBody(problems, summary, mentionText);
+			const body = buildFeishuReportBody(problems, summary, mentionText, aggregatedOptions);
 
 			if (options.secret) {
 				body.timestamp = String(timestamp);
@@ -4863,10 +4874,42 @@ export function createFeishuBotDispatcher(options: FeishuBotOptions): FeishuBotD
 	return dispatcher;
 }
 
-function buildFeishuReportBody(problems: readonly ReviewProblem[], summary?: string, mentionText?: string): Record<string, unknown> {
-	const sections = [...(summary ? [summary.trim()] : []), ...buildImProblemSections(problems)];
+function buildFeishuReportBody(
+	problems: readonly ReviewProblem[],
+	summary?: string,
+	mentionText?: string,
+	aggregatedOptions?: FeishuBotAggregatedOptions,
+): Record<string, unknown> {
+	const detailLink = aggregatedOptions?.detailLink;
+	const sections = detailLink
+		? buildFeishuBriefSections(problems, summary, detailLink)
+		: [...(summary ? [summary.trim()] : []), ...buildImProblemSections(problems)];
 	return buildFeishuCardBody(toFeishuMarkdown(sections.join("\n")),
 		mentionText ? [{ tag: "markdown", content: mentionText }] : []);
+}
+
+/**
+ * Brief card for deployments whose summary route also publishes the full report
+ * to an issue-recording platform: keep the headline + problem count and link the
+ * detailed issue instead of duplicating every problem. The @mention rides the
+ * separate element appended by the caller, so it is preserved.
+ */
+function buildFeishuBriefSections(
+	problems: readonly ReviewProblem[],
+	summary: string | undefined,
+	detailLink: { readonly url: string; readonly label: string },
+): string[] {
+	const headline = summary?.trim().split("\n").find((line) => line.trim().length > 0)?.trim();
+	const sections: string[] = [];
+	if (headline) {
+		sections.push(headline, "");
+	}
+	if (problems.length > 0) {
+		sections.push(`**Problems (${problems.length})** — full details: [${detailLink.label}](${detailLink.url})`);
+	} else {
+		sections.push(`Full details: [${detailLink.label}](${detailLink.url})`);
+	}
+	return sections;
 }
 
 export function createFeishuAppDispatcher(options: {
@@ -4876,8 +4919,8 @@ export function createFeishuAppDispatcher(options: {
 	readonly channelName?: string | undefined;
 }): FeishuBotDispatcher {
 	return {
-		async publishAggregatedProblems(problems, summary, mentionText) {
-			const body = buildFeishuReportBody(problems, summary, mentionText);
+		async publishAggregatedProblems(problems, summary, mentionText, aggregatedOptions) {
+			const body = buildFeishuReportBody(problems, summary, mentionText, aggregatedOptions);
 			const externalId = await options.client.sendCard(options.receiveId, options.receiveIdType ?? "chat_id", body.card);
 			return { channel: options.channelName ?? "feishu_app", status: "published", externalId };
 		},

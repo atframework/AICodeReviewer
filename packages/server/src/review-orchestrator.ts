@@ -109,6 +109,12 @@ export interface ReviewSummaryPublishOptions {
 	readonly skipReconcile?: boolean;
 	readonly title?: string;
 	readonly reviewedFiles?: readonly string[];
+	/**
+	 * URL of the full report already published to an issue-recording platform in
+	 * the same run. IM channels (feishu) use it to send a brief card + link
+	 * instead of duplicating the full analysis.
+	 */
+	readonly summaryIssueUrl?: string;
 }
 
 export type ReviewOutputPublisherResolver = (

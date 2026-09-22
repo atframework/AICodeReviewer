@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 
+import { DEFAULT_CHANNEL_DIRECTORY_CACHE_TTL_SECONDS } from "./channel-identity.js";
 import type { FetchLike } from "./index.js";
 import type { FeishuMember } from "./feishu-members.js";
 
@@ -35,8 +36,8 @@ export class FeishuAppClient {
 	private readonly fetch: FetchLike;
 	private token: { value: string; expiresAt: number } | undefined;
 	private tokenPending: Promise<string> | undefined;
-	private directory: { chatId: string; members: readonly FeishuMember[]; expiresAt: number } | undefined;
-	private directoryPending: { chatId: string; promise: Promise<readonly FeishuMember[]> } | undefined;
+	private directory: { chatId: string; members: readonly FeishuMember[]; loadedAt: number } | undefined;
+	private directoryPending: { chatId: string; ttl: number; promise: Promise<readonly FeishuMember[]> } | undefined;
 
 	constructor(private readonly options: FeishuAppOptions) {
 		this.baseUrl = (options.baseUrl ?? "https://open.feishu.cn").replace(/\/+$/u, "");
@@ -107,14 +108,30 @@ export class FeishuAppClient {
 		return id;
 	}
 
-	async members(chatId: string, cacheTtlSeconds = 300): Promise<readonly FeishuMember[]> {
-		if (this.directory?.chatId === chatId && this.directory.expiresAt > Date.now()) return this.directory.members;
-		if (this.directoryPending?.chatId === chatId) return this.directoryPending.promise;
+	async members(chatId: string, cacheTtlSeconds = DEFAULT_CHANNEL_DIRECTORY_CACHE_TTL_SECONDS): Promise<readonly FeishuMember[]> {
+		if (cacheTtlSeconds === 0) this.directory = undefined;
+		if (this.directory?.chatId === chatId && this.directory.loadedAt + cacheTtlSeconds * 1000 > Date.now()) return this.directory.members;
+		if (this.directoryPending?.chatId === chatId && this.directoryPending.ttl === cacheTtlSeconds) return this.directoryPending.promise;
 		const promise = this.loadMembers(chatId).then(members => {
-			this.directory = { chatId, members, expiresAt: Date.now() + cacheTtlSeconds * 1000 };
+			if (cacheTtlSeconds > 0 && this.directoryPending?.promise === promise) {
+				this.directory = { chatId, members, loadedAt: Date.now() };
+			}
 			return members;
+		}, error => {
+			// Only temporary upstream failures may reuse an expired snapshot.
+			// Denied or incomplete membership invalidates it; zero TTL never reuses it.
+			const stale = this.directory;
+			const transient = error instanceof FeishuApiError && error.code === undefined
+				&& ((error.status === undefined && error.operation === "group members")
+					|| error.status === 429 || (error.status !== undefined && error.status >= 500));
+			if (cacheTtlSeconds > 0 && stale?.chatId === chatId && transient) {
+				this.options.onDirectoryWarning?.("stale_directory_used");
+				return stale.members;
+			}
+			if (stale?.chatId === chatId) this.directory = undefined;
+			throw error;
 		});
-		this.directoryPending = { chatId, promise };
+		this.directoryPending = { chatId, ttl: cacheTtlSeconds, promise };
 		try { return await promise; } finally {
 			if (this.directoryPending?.promise === promise) this.directoryPending = undefined;
 		}

@@ -116,7 +116,8 @@ describe("config api auth (A01/A02)", () => {
   it("P6 offers approved unused secret names without enumerating the environment", async () => {
     const envLookup = vi.fn(() => "private-value");
     const response = await request(makeApp({ ...apiOptions, envLookup }), "/options/secret_envs");
-    expect(await response.json()).toEqual({ source: "secret_envs", options: [{ value: "KNOWN_ENV", label: "KNOWN_ENV" }] });
+    expect(await response.json()).toMatchObject({ source: "secret_envs", head: null, fileDigest: DIGEST,
+      options: [{ value: "KNOWN_ENV", label: "KNOWN_ENV" }] });
     expect(envLookup.mock.calls).toEqual([["KNOWN_ENV"]]);
   });
 
@@ -192,6 +193,11 @@ describe("config api auth (A01/A02)", () => {
       ["/", "GET"],
       ["/status", "GET"],
       ["/schema", "GET"],
+      ["/collections/provider", "GET"],
+      ["/fields?page=review", "GET"],
+      ["/globals?prefix=review", "GET"],
+      ["/builtin-assets", "GET"],
+      ["/provider-presets", "GET"],
       ["/changesets", "POST"],
       ["/validate", "POST"],
     ] as const) {
@@ -219,7 +225,7 @@ describe("config api GET / (A05 redaction + shape)", () => {
       affected: [{ kind: collection, id: "example_env", value: document }] });
     const saved = await request(app, "/changesets", { method: "POST", body: { baseRevision: null, operationId: "document-create", operations: [create] } });
     expect(saved.status).toBe(200);
-    const read = await request(app, "/");
+    const read = await request(app, `/collections/${kind}`);
     expect(await read.json()).toMatchObject({ collections: { [kind]: { records: [{ value: document, effectiveValue: document }] } } });
     const revision = await request(app, "/revisions/1");
     expect(await revision.json()).toMatchObject({ document: { entities: { [collection]: { secret: { value: document } } } },
@@ -236,11 +242,13 @@ describe("config api GET / (A05 redaction + shape)", () => {
     const document = "https://example.test/guide#section";
     const app = makeApp({ ...apiOptions, fileConfig: { ...FILE_CONFIG,
       outputs: { templates: { token: document } }, prompts: { system: { token: document } } } });
-    const response = await request(app, "/");
-    const body = await response.json();
-    expect(body.collections.template.records[0]).toMatchObject({ value: document, effectiveValue: document, readonly: true });
-    expect(body.collections.prompt.records[0]).toMatchObject({ value: document, effectiveValue: document, readonly: true });
-    expect(body.fields).toEqual(expect.arrayContaining([
+    const templates = await (await request(app, "/collections/template")).json();
+    expect(templates.collections.template.records[0]).toMatchObject({ value: document, effectiveValue: document, readonly: true });
+    const prompts = await (await request(app, "/collections/prompt")).json();
+    expect(prompts.collections.prompt.records[0]).toMatchObject({ value: document, effectiveValue: document, readonly: true });
+    const templateFields = await (await request(app, "/fields?prefix=outputs.templates")).json();
+    const promptFields = await (await request(app, "/fields?prefix=prompts.system")).json();
+    expect([...templateFields.fields, ...promptFields.fields]).toEqual(expect.arrayContaining([
       expect.objectContaining({ path: "outputs.templates.token", effectiveValue: document }),
       expect.objectContaining({ path: "prompts.system.token", effectiveValue: document }),
     ]));
@@ -266,14 +274,20 @@ describe("config api GET / (A05 redaction + shape)", () => {
     expect(response.status).toBe(200);
     const body = await response.json() as {
       head: { activeRevision: number } | null;
-      collections: { provider: { count: number; records: { id: string }[] } };
+      collections: { provider: { count: number } };
       secretEnvs: { name: string; present: boolean }[];
     };
     expect(body.head?.activeRevision).toBe(1);
-    expect(body.collections.provider.records.map((record) => record.id)).toContain("db-openai");
+    expect(body.collections.provider.count).toBe(2);
+    expect(body.collections.provider).not.toHaveProperty("records");
+    expect(body).not.toHaveProperty("fields");
+    expect(body).not.toHaveProperty("globals");
     expect(body.secretEnvs).toContainEqual({ name: "KNOWN_ENV", present: true });
-    const text = JSON.stringify(body);
-    expect(text).not.toContain("only-in-process-secret-value");
+    expect(JSON.stringify(body)).not.toContain("only-in-process-secret-value");
+    const providers = await (await request(app, "/collections/provider")).json() as {
+      collections: { provider: { records: { id: string }[] } };
+    };
+    expect(providers.collections.provider.records.map((record) => record.id)).toContain("db-openai");
   });
 
   it("rejects new literal credentials instead of persisting them", async () => {
@@ -314,7 +328,7 @@ describe("config api schema endpoint", () => {
 
   it("exposes curated LLM provider presets without credentials", async () => {
     const app = makeApp();
-    const response = await request(app, "/schema");
+    const response = await request(app, "/provider-presets");
     expect(response.status).toBe(200);
     const body = await response.json() as {
       providerPresets: {
@@ -646,8 +660,8 @@ describe("config api literal credentials (sealed at rest)", () => {
       ],
     } });
     expect(create.status, await create.text()).toBe(200);
-    const view = await (await request(app, "/")).json() as { globals: { agent: { web_search: { credentials: unknown } } } };
-    expect(view.globals.agent.web_search.credentials).toEqual({ exa: { value: "<redacted>" } });
+    const view = await (await request(app, "/globals?prefix=agent.web_search")).json() as { value: { credentials: unknown } };
+    expect(view.value.credentials).toEqual({ exa: { value: "<redacted>" } });
     const clear = await request(app, "/changesets", { method: "POST", body: {
       baseRevision: 1, operationId: "clear-search-literal", operations: [{ op: "set", path: ["agent", "web_search", "credentials", "exa"], value: null }],
     } });
@@ -722,7 +736,7 @@ describe("config api literal credentials (sealed at rest)", () => {
     expect(String(storedTrigger.token)).toMatch(/^enc:v1\./u);
 
     // Reads redact the literal; the runtime generation resolves plaintext.
-    const view = await (await request(app, "/")).json() as { collections: { trigger: { records: { name: string; value: Record<string, unknown> }[] } } };
+    const view = await (await request(app, "/collections/trigger")).json() as { collections: { trigger: { records: { name: string; value: Record<string, unknown> }[] } } };
     const viewTrigger = view.collections.trigger.records.find((record) => record.name === "t-sealed")!;
     expect(viewTrigger.value.token).toBe("<redacted>");
     const generation = await manager.captureForTask();
@@ -824,10 +838,10 @@ describe("config API regression boundaries", () => {
       baseRevision: null, operationId: "op-view-1", operations: [{ op: "create", collection: "providers",
         record: { id: "immutable-id", name: "display-name", enabled: false, value: { id: "display-name", kind: "ollama" } } }] } });
     expect(response.status, await response.text()).toBe(200);
-    const first = await (await request(app, "/?limit=1")).json() as { collections: { provider: { records: unknown[]; nextOffset: number } } };
+    const first = await (await request(app, "/collections/provider?limit=1")).json() as { collections: { provider: { records: unknown[]; nextOffset: number } } };
     expect(first.collections.provider.records).toEqual([expect.objectContaining({ id: "file-main", source: "file", readonly: true, effectiveValue: { id: "file-main", kind: "ollama" } })]);
     expect(first.collections.provider.nextOffset).toBe(1);
-    const second = await (await request(app, "/?limit=1&offset=1")).json() as { collections: { provider: { records: unknown[] } } };
+    const second = await (await request(app, "/collections/provider?limit=1&offset=1")).json() as { collections: { provider: { records: unknown[] } } };
     expect(second.collections.provider.records).toEqual([expect.objectContaining({ id: "immutable-id", name: "display-name", enabled: false, source: "database" })]);
   });
 
@@ -835,6 +849,35 @@ describe("config API regression boundaries", () => {
     const readHead = vi.spyOn(store, "readHead");
     expect((await request(makeApp(), "/")).status).toBe(200);
     expect(readHead).toHaveBeenCalledTimes(1);
+  });
+
+  it("memoizes the merged view per revision across subresource reads", async () => {
+    const app = makeApp();
+    const readRevision = vi.spyOn(store, "readRevision");
+    await request(app, "/changesets", { method: "POST", body: {
+      baseRevision: null, operationId: "op-memo-1", operations: [providerCreate("db")] } });
+    readRevision.mockClear();
+    const responses = await Promise.all(["/", "/collections/provider", "/fields?page=review", "/globals?prefix=review"]
+      .map(path => request(app, path)));
+    expect(responses.map(response => response.status)).toEqual([200, 200, 200, 200]);
+    expect(readRevision).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not cache a failed view load and invalidates the memo on publication", async () => {
+    const app = makeApp();
+    await request(app, "/changesets", { method: "POST", body: {
+      baseRevision: null, operationId: "memo-retry-seed", operations: [providerCreate("one")] } });
+    const readRevision = vi.spyOn(store, "readRevision").mockRejectedValueOnce(new Error("temporary failure"));
+    expect((await request(app, "/collections/provider")).status).toBe(500);
+    const recovered = await (await request(app, "/collections/provider")).json();
+    expect(recovered.collections.provider.records.map((record: { id: string }) => record.id)).toContain("one");
+    expect(readRevision).toHaveBeenCalledTimes(2);
+    const saved = await request(app, "/changesets", { method: "POST", body: {
+      baseRevision: 1, operationId: "memo-retry-next", operations: [providerCreate("two")] } });
+    expect(saved.status).toBe(200);
+    const updated = await (await request(app, "/collections/provider")).json();
+    expect(updated.head.activeRevision).toBe(2);
+    expect(updated.collections.provider.records.map((record: { id: string }) => record.id)).toContain("two");
   });
 
   it("reports blocked activation instead of healthy status", async () => {
@@ -855,7 +898,7 @@ describe("config API regression boundaries", () => {
     await seedLegacyCredentials([{ op: "create", collection: "providers", record: {
         id: "db", name: "db", enabled: true, value: { id: "db", kind: "ollama", password: "abc",
           base_url: "https://user:pw@example.com/api?sig=querysecret", headers: { "X-Custom": "headersecret" } } } }]);
-    for (const path of ["/", "/revisions/1"]) {
+    for (const path of ["/collections/provider", "/revisions/1"]) {
       const body = await (await request(app, path)).text();
       for (const secret of ['"abc"', "user:pw", "querysecret", "headersecret"]) expect(body).not.toContain(secret);
     }
@@ -869,7 +912,7 @@ describe("config API regression boundaries", () => {
     await seedLegacyCredentials([{ op: "create", collection: "providers", record: {
         id: "db", name: "db", enabled: true, value: { id: "db", kind: "ollama",
           base_url: "https://gateway.example.com/v1?tenant=acme&api-version=2024-10-01&sig=querysecret" } } }]);
-    const body = await (await request(app, "/")).text();
+    const body = await (await request(app, "/collections/provider")).text();
     expect(body).toContain("tenant=acme");
     expect(body).toContain("api-version=2024-10-01");
     expect(body).not.toContain("querysecret");
@@ -879,13 +922,13 @@ describe("config API regression boundaries", () => {
 });
 
 describe("config api P6 fields view + options sources", () => {
-  it("GET / includes the effective fields view with file locks and overridden values", async () => {
+  it("GET /fields scopes the effective fields view to a page's globals fields", async () => {
     const fileConfig = { ...FILE_CONFIG, review: { max_files: 7 } } as never;
     const app = makeApp({ ...apiOptions, fileConfig });
     // Bypass the write policy to place a database value over a file-owned field.
     await seedLegacyCredentials([{ op: "set", path: ["review", "max_files"], value: 99 }]);
 
-    const response = await request(app, "/");
+    const response = await request(app, "/fields?page=review");
     expect(response.status).toBe(200);
     const body = await response.json() as {
       fields: { path: string; source: string; editable: boolean; effectiveValue: unknown;
@@ -901,8 +944,52 @@ describe("config api P6 fields view + options sources", () => {
       effectiveValue: 99,
       overriddenValues: [{ source: "file", value: 7 }],
     });
-    const fileProvider = body.fields.find((field) => field.path === "llm.providers.file-main.kind");
-    expect(fileProvider).toMatchObject({ source: "file", editable: false, effectiveValue: "ollama", overriddenValues: [] });
+    // Entity collection paths are out of scope for a globals page.
+    expect(body.fields.some((field) => field.path.startsWith("llm."))).toBe(false);
+    const provider = await request(app, "/fields?prefix=llm.providers");
+    const providerFields = await provider.json() as { fields: { path: string }[] };
+    expect(providerFields.fields.find((field) => field.path === "llm.providers.file-main.kind")).toMatchObject({
+      source: "file", editable: false, effectiveValue: "ollama",
+    });
+  });
+
+  it("GET /fields, /globals and /collections validate their query parameters", async () => {
+    const app = makeApp();
+    expect((await request(app, "/fields")).status).toBe(400);
+    expect((await request(app, "/fields?page=not-a-page")).status).toBe(400);
+    expect((await request(app, "/fields?prefix=not a path")).status).toBe(400);
+    expect((await request(app, "/globals")).status).toBe(400);
+    expect((await request(app, "/globals?prefix=not a path")).status).toBe(400);
+    expect((await request(app, "/collections/not-a-kind")).status).toBe(400);
+    const globals = await request(app, "/globals?prefix=review");
+    expect(globals.status).toBe(200);
+    expect(await globals.json()).toMatchObject({ prefix: "review", head: null });
+    await expect((await request(app, "/globals?prefix=does.not.exist")).json()).resolves.toMatchObject({ value: null });
+  });
+
+  it("GET /globals strips entity collections from the subtree", async () => {
+    const app = makeApp();
+    await seedLegacyCredentials([{ op: "set", path: ["review", "max_files"], value: 12 }]);
+    const review = await (await request(app, "/globals?prefix=review")).json() as { value: { max_files: number } };
+    expect(review.value.max_files).toBe(12);
+    const root = await (await request(app, "/globals?prefix=llm")).json() as { value: Record<string, unknown> };
+    expect(root.value).not.toHaveProperty("providers");
+    expect(root.value).not.toHaveProperty("model_chain");
+  });
+
+  it("redacts global leaves and descendants using their complete config ancestry", async () => {
+    const app = makeApp({ ...apiOptions, fileConfig: { ...FILE_CONFIG, agent: {
+      web_search: { credentials: { exa: { value: "opaque-private-value" } } },
+    }, server: { extra_secret: { ordinary: "nested-private-value" } } } });
+    for (const [prefix, expected] of [
+      ["agent.web_search.credentials.exa.value", "<redacted>"],
+      ["server.extra_secret", "<redacted>"],
+      ["server.extra_secret.ordinary", null],
+    ]) {
+      const response = await request(app, `/globals?prefix=${prefix}`);
+      expect(response.status, await response.clone().text()).toBe(200);
+      expect(await response.json()).toMatchObject({ value: expected });
+    }
   });
 
   it("GET /schema exposes the derived UI spec as JSON", async () => {
@@ -910,33 +997,50 @@ describe("config api P6 fields view + options sources", () => {
     const response = await request(app, "/schema");
     expect(response.status).toBe(200);
     const body = await response.json() as {
+      protocolVersion: number;
       uiSpec: { protocolVersion: number; pages: { id: string }[]; optionsSources: { id: string }[] };
-      builtinAssets: { templates: { id: string; document: string }[]; prompts: { id: string; document: string }[] };
     };
+    expect(body.protocolVersion).toBe(2);
     expect(body.uiSpec.protocolVersion).toBe(1);
     const pageIds = body.uiSpec.pages.map((page) => page.id);
     for (const id of ["providers", "model-groups", "routing", "templates", "prompts", "versions"]) expect(pageIds).toContain(id);
     expect(body.uiSpec.optionsSources.map((source) => source.id)).toContain("secret_envs");
-    // Built-in assets are read-only copy sources; templates ship from
-    // @aicr/outputs, prompts default to none without bootstrap wiring.
-    expect(body.builtinAssets.templates.length).toBeGreaterThan(0);
-    expect(body.builtinAssets.templates.map((asset) => asset.id)).toContain("gitea_pr_review/summary");
-    expect(body.builtinAssets.templates.find((asset) => asset.id === "gitea_pr_review/summary")?.document).toContain("AI Code Review");
-    expect(body.builtinAssets.prompts).toEqual([]);
     // The spec round-trips through JSON and carries no secret material.
     expect(JSON.parse(JSON.stringify(body.uiSpec))).toEqual(body.uiSpec);
     expect(JSON.stringify(body)).not.toContain("only-in-process-secret-value");
   });
 
-  it("GET /schema serves configured built-in prompts", async () => {
+  it("GET /builtin-assets serves read-only copy sources", async () => {
+    const app = makeApp();
+    const response = await request(app, "/builtin-assets?kind=templates");
+    expect(response.status).toBe(200);
+    const body = await response.json() as {
+      templates: { id: string; document: string }[];
+      prompts: { id: string; document: string }[];
+    };
+    // Built-in assets are read-only copy sources; templates ship from
+    // @aicr/outputs, prompts default to none without bootstrap wiring.
+    expect(body.templates.length).toBeGreaterThan(0);
+    expect(body.templates.map((asset) => asset.id)).toContain("gitea_pr_review/summary");
+    expect(body.templates.find((asset) => asset.id === "gitea_pr_review/summary")?.document).toContain("AI Code Review");
+    expect(body).not.toHaveProperty("prompts");
+    expect((await request(app, "/builtin-assets?kind=unknown")).status).toBe(400);
+    expect((await request(app, "/builtin-assets")).status).toBe(400);
+    const schema = await (await request(app, "/schema")).json();
+    expect(schema).not.toHaveProperty("providerPresets");
+    expect(schema).not.toHaveProperty("builtinAssets");
+  });
+
+  it("GET /builtin-assets serves configured built-in prompts", async () => {
     const app = makeApp({
       ...apiOptions,
       builtinPrompts: [{ id: "code-reviewer", name: "Built-in code reviewer", document: "You review code." }],
     });
-    const response = await request(app, "/schema");
+    const response = await request(app, "/builtin-assets?kind=prompts");
     expect(response.status).toBe(200);
-    const body = await response.json() as { builtinAssets: { prompts: { id: string; name?: string; document: string }[] } };
-    expect(body.builtinAssets.prompts).toEqual([{ id: "code-reviewer", name: "Built-in code reviewer", document: "You review code." }]);
+    const body = await response.json() as { prompts: { id: string; name?: string; document: string }[] };
+    expect(body.prompts).toEqual([{ id: "code-reviewer", name: "Built-in code reviewer", document: "You review code." }]);
+    expect(body).not.toHaveProperty("templates");
   });
 
   it("GET /options serves all nine sources with disabled and secret-presence flags", async () => {

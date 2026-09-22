@@ -167,6 +167,15 @@ retain the full revision without guessing a hash format.
 
 ## Managing configuration
 
+The Config editor's JavaScript loads on first activation. Each configuration page
+then requests its own records, field values and reference options. Provider presets,
+built-in templates, built-in prompts and the weekly-schedule module load when their
+pages need them. Common form modules and the navigation schema are shared.
+Page reads must share one revision and file digest before entering the cache;
+a revision change retries the whole page once. **Retry** reloads failed pages.
+Switching pages ignores late responses from the previous page. New revisions clear
+clean form sessions while unsaved drafts retain their original conflict baseline.
+
 In **Config**, edit providers, model groups, triggers, channels, routes, workspaces
 and global settings. File-owned values are read-only; **Copy as new database
 config** requires a distinct name. Database values supplement explicit file
@@ -249,7 +258,10 @@ All endpoints except `/login` require `Authorization: Bearer <token>`.
 | `GET /api/admin/runs?limit=&page=` | Retained runs (limit 1..100, page from 1), with token usage, cache split and VCS stamp; page requests return `{items,page,hasMore}`, otherwise an array |
 | `GET /api/admin/runs/live` | Currently running analyses from the in-process registry: phase, elapsed start time, cumulative tokens/requests/cost |
 | `GET /api/admin/events?limit=&page=` | Received events with the same paging contract, receipt-time decision and reason |
-| `GET /api/admin/config` | Configuration view with provenance and paginated entities |
+| `GET /api/admin/config` | Configuration shell: head, `fileDigest`, provenance, per-collection counts |
+| `GET /api/admin/config/collections/:kind` | One collection's records, paginated with `limit`/`offset` |
+| `GET /api/admin/config/fields`, `/globals` | Page/prefix-scoped field values and globals subtrees; redaction preserves full path ancestry |
+| `GET /api/admin/config/builtin-assets?kind=templates\|prompts`, `/provider-presets` | Built-in documents for one page, or provider presets |
 | `GET /api/admin/config/schema`, `/options/:source` | Form specification and dynamic options |
 | `POST /api/admin/config/changesets` | Atomic publication with `baseRevision`, `fileDigest`, `operationId`, and `operations` |
 | `POST /api/admin/config/preview-route` | Read-only event preview; optional `draft` contains `baseRevision`, `fileDigest`, and `operations` |

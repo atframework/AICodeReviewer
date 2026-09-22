@@ -440,7 +440,7 @@ export const outputChannelSchema = z
     receive_id_type: z.enum(["chat_id", "open_id", "user_id", "union_id", "email"]).optional(),
     member_directory: z.object({
       chat_id: z.string().min(1),
-      cache_ttl_seconds: z.number().int().min(0).max(3600).optional(),
+      cache_ttl_seconds: z.number().int().min(0).max(604800).optional(),
     }).strict().optional(),
     user_mappings: z.record(z.string().min(1), z.string().regex(/^ou_[A-Za-z0-9_-]+$/u)).optional(),
     guess_author: z.boolean().optional(),
@@ -481,6 +481,13 @@ export const outputAuthorResolutionSchema = z
   .object({
     email_mappings: z.record(z.string().min(1), z.string().min(1)).optional(),
     email_blacklist: z.array(z.string().email()).optional(),
+    /**
+     * Global default TTL for directory-backed channel member snapshots
+     * (currently feishu_app member_directory). Channel-level
+     * member_directory.cache_ttl_seconds wins when both are set; the runtime
+     * default is 12h; 0 disables reuse. Capped at 7 days.
+     */
+    directory_cache_ttl_seconds: z.number().int().min(0).max(604800).optional(),
   })
   .passthrough()
   .optional();

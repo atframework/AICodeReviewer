@@ -426,7 +426,8 @@ function switchTab(t){
   document.querySelectorAll(".tab-content").forEach(function(el){el.classList.toggle("active",el.id==="tab-"+t)});
   if(t==="config"){
     if(!window.__aicrConfigApp)window.__aicrConfigApp=import("./dashboard/client/config-app.js");
-    window.__aicrConfigApp.then(function(m){if(authToken&&document.getElementById("tab-config").classList.contains("active"))m.default.show();}).catch(function(){
+    window.__aicrConfigApp.then(function(m){if(authToken&&document.getElementById("tab-config").classList.contains("active"))return m.default.show();}).catch(function(){
+      window.__aicrConfigApp=null;
       var main=document.getElementById("config-main");
       main.textContent="";
       main.appendChild(document.createTextNode("Failed to load the configuration editor."));
