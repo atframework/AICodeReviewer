@@ -79,6 +79,11 @@ variables:
 - `AICR_GITEA_TEST_URL` / `AICR_GITEA_TEST_TOKEN`：仅用于独立回环 Gitea；
   真实发布后检查 assignees，测试会创建/删除合成用户与私有仓库。
   两者都不设才跳过；[临时服务脚本](../testing-services.md)负责限额、启动与清理。
+- `AICR_SVN_TEST_URL`：`with-svn.sh` 的只读网络仓库；本机需有 `svn` 客户端。
+  核验辅助仓库的固定 revision、HEAD、diff 和失败清理。
+- `AICR_FEISHU_TEST_*`、`AICR_ZHIPU_TEST_*`、`AICR_KIMI_TEST_*`：真实账户验收，
+  完整变量及调用上限见[服务指南](../testing-services.md)。默认跳过，部分配置失败。
+  普通门禁不读取本地 secret YAML；手动验收与全量覆盖率分开运行，避免重复通知/付费。
 
 本机快速搭建（Windows 示例，一次性实例，不入库）：
 `scoop install postgresql redis`；PG 用

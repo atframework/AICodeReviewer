@@ -56,6 +56,7 @@
 | M27 管理页面修订与模板/Prompt 管理 | kind 区块隐藏、Routing 修复、共享全局数据库优先（D48）、模板/prompt 实体（D49）；合同同步双语公开文档 | [M27](milestones/M27.md) / `decisions.md` D48–D49 |
 | M28 逐目标发布恢复与配置示例校验 | 批次 `publication_pending` 逐渠道回执续发（D50）、复合 publisher 恢复钩子、管理 API `publications`；文档配置片段全量 schema 校验与阴性用例 | [M28](milestones/M28.md) / `decisions.md` D50 |
 | M29 计划精简与 WSL 临时服务验收 | 精简历史、核对残留条件，真实 Gitea 指派及资源清理 | [M29](milestones/M29.md) / [服务验收](../testing-services.md) |
+| M30 环境变量验收与 SVN 修复 | 用户确认 P4/GitHub；飞书、两组 LLM、Podman SVN 及导出修复 | [M30](milestones/M30.md) |
 | 本地优先队列 P0-P15 | 已完成 | `milestones/local-priority-queue.md` |
 
 历史记录仅用于查交付证据；当前状态以代码、测试和前瞻路线图为准。公开用户文档位于

@@ -202,6 +202,11 @@ async function materializeSvnRepo(
 ): Promise<string | undefined> {
   const runSvn = (args: readonly string[]) =>
     withTransientIoRetry(async () => {
+      if (args[0] === "export") {
+        // A retry must not retain files from an interrupted export.
+        await rm(targetDir, { recursive: true, force: true });
+        await mkdir(targetDir, { recursive: true });
+      }
       try {
         return await deps.run("svn", args);
       } catch (error) {
@@ -209,23 +214,18 @@ async function materializeSvnRepo(
       }
     });
 
-  const exportArgs = ["export", "--quiet", "--non-interactive", "--no-auth-cache"];
-  if (repo.revision !== undefined) {
-    exportArgs.push("--revision", String(repo.revision));
+  // Resolve HEAD before exporting so content and reported revision share a snapshot.
+  const revision = repo.revision !== undefined ? String(repo.revision) : String((await runSvn([
+    "info", "--non-interactive", "--no-auth-cache", "--show-item", "revision", repo.repository_url as string,
+  ])).stdout).trim();
+  if (repo.revision === undefined && !/^[0-9]+$/u.test(revision)) {
+    throw new Error("SVN context repository HEAD did not resolve to a numeric revision.");
   }
+  // The per-run directory was cleared above; SVN requires --force even when empty.
+  const exportArgs = ["export", "--force", "--quiet", "--non-interactive", "--no-auth-cache", "--revision", revision];
   exportArgs.push(repo.repository_url as string, targetDir);
   await runSvn(exportArgs);
-
-  if (repo.revision !== undefined) {
-    return String(repo.revision);
-  }
-
-  try {
-    const info = await runSvn(["info", "--show-item", "revision", repo.repository_url as string]);
-    return String(info.stdout).trim() || undefined;
-  } catch {
-    return undefined;
-  }
+  return revision;
 }
 
 function parseP4FilesList(stdout: string): string[] {

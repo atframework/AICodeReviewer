@@ -195,13 +195,14 @@ describe("materializeContextRepositories", () => {
     expect(results[0]?.resolvedRevision).toBe("1234");
 
     const exportCall = calls.find((call) => call.args[0] === "export");
+    expect(exportCall?.args).toContain("--force");
     expect(exportCall?.args).toContain("--no-auth-cache");
     expect(exportCall?.args).toContain("--revision");
     expect(exportCall?.args).toContain("1234");
     expect(exportCall?.args).toContain("https://svn.example.com/repos/lib/trunk");
   });
 
-  it("queries remote HEAD revision for unpinned svn exports", async () => {
+  it("resolves HEAD before export and pins the content to that revision", async () => {
     const { run, calls } = createRecordingRunner((call) => {
       if (call.args[0] === "info") {
         return { stdout: "5678\n" };
@@ -220,7 +221,42 @@ describe("materializeContextRepositories", () => {
     });
 
     expect(results[0]?.resolvedRevision).toBe("5678");
-    expect(calls.some((call) => call.args[0] === "info")).toBe(true);
+    expect(calls.map(call => call.args[0])).toEqual(["info", "export"]);
+    expect(calls[1]?.args).toEqual(expect.arrayContaining(["--revision", "5678"]));
+  });
+
+  it.each(["", "not-a-revision"])("rejects unresolved SVN HEAD %j and removes the alias", async stdout => {
+    const { run, calls } = createRecordingRunner(() => ({ stdout }));
+    const result = await materializeContextRepositories({ contextReposRoot: tempDir, run, warn: () => {},
+      repos: [{ alias: "svn-lib", kind: "svn", repository_url: "https://svn.example.com/trunk" }],
+    });
+    expect(result[0]?.status).toBe("failed");
+    expect(calls.map(call => call.args[0])).toEqual(["info"]);
+    expect(await readdir(tempDir)).toEqual([]);
+  });
+
+  it("clears a partial SVN export before retry while preserving the resolved revision", async () => {
+    let exports = 0;
+    let infos = 0;
+    const run: ContextRepoCommandRunner = async (_command, args) => {
+      if (args[0] === "info") { infos++; return { stdout: "12\n", stderr: "" }; }
+      expect(args).toEqual(expect.arrayContaining(["--revision", "12"]));
+      const target = args.at(-1)!;
+      expect(await readdir(target)).toEqual([]);
+      if (++exports === 1) {
+        await writeFile(join(target, "partial.txt"), "incomplete");
+        throw new Error("Could not resolve host: svn.example.com");
+      }
+      await writeFile(join(target, "complete.txt"), "snapshot");
+      return { stdout: "", stderr: "" };
+    };
+    const result = await materializeContextRepositories({ contextReposRoot: tempDir, run,
+      repos: [{ alias: "svn-lib", kind: "svn", repository_url: "https://svn.example.com/trunk" }],
+    });
+    expect(result[0]).toMatchObject({ status: "ok", resolvedRevision: "12", fileCount: 1 });
+    expect(infos).toBe(1);
+    expect(exports).toBe(2);
+    expect(await readdir(join(tempDir, "svn-lib"))).toEqual(["complete.txt"]);
   });
 
   it("exports p4 depots via files+print without running p4 sync", async () => {

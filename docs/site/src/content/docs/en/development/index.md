@@ -122,6 +122,50 @@ SIGKILL cannot run directory cleanup. These results cover the pinned Gitea versi
 config and configuration YAML blocks across repository documentation, including
 both locales. Malformed configuration blocks fail instead of being skipped.
 
+The SVN wrapper uses a pinned Debian image and Subversion 1.14.5-3, with
+1 CPU / 256 MiB, a random loopback port and the same 900-second cleanup policy.
+It provides `AICR_SVN_TEST_URL`; the test process needs `svn` on PATH.
+The test checks auxiliary repository revision/content, diff and failure cleanup.
+
+```bash
+bash tests/services/with-svn.sh \
+  pnpm exec vitest run packages/vcs/test/svn-context-live.test.ts --maxWorkers=1
+```
+
+### Opt-in real accounts
+
+Real-account tests skip when their variable group is absent; incomplete groups
+fail. They never read a credential file automatically. Use a test group/account.
+
+| Required variables | Test and optional settings |
+| --- | --- |
+| `AICR_FEISHU_TEST_APP_ID`, `AICR_FEISHU_TEST_APP_SECRET`, `AICR_FEISHU_TEST_RECEIVE_ID` | `packages/outputs/test/feishu-app-live.test.ts`: read members/profiles, send one card and recall it. `AICR_FEISHU_TEST_DIRECTORY_CHAT_ID` selects another source group; `AICR_FEISHU_TEST_MENTION_OPEN_ID` opts into notifying one approved member. |
+| `AICR_ZHIPU_TEST_BASE_URL`, `AICR_ZHIPU_TEST_API_KEY` | `packages/llm/test/providers-live.test.ts`: glm-5.3-flash; `AICR_ZHIPU_TEST_KIND` selects `openai_compatible` (default) or `anthropic`. |
+| `AICR_KIMI_TEST_BASE_URL`, `AICR_KIMI_TEST_API_KEY` | Same test, kimi-for-coding; `AICR_KIMI_TEST_KIND` selects the protocol. |
+
+For `anthropic`, the base URL is the protocol root without `/v1`.
+LLM cases make one request per enabled provider, with a 60-second deadline,
+256 output tokens, thinking disabled and no automatic retries. They check an
+answer and usage, not review quality or billing. Logs contain counts and usage,
+never credentials, profiles or raw provider errors. Feishu recall failures fail
+the run; after a forced interruption, check the test group for a remaining card.
+
+If you maintain `development/secret/secret.yaml`, the explicit local helper
+requires yq v4 and reads only the selected fields into the test child's environment:
+
+```bash
+node tests/services/with-local-secrets.mjs feishu
+node tests/services/with-local-secrets.mjs zhipu
+node tests/services/with-local-secrets.mjs kimi
+node tests/services/with-local-secrets.mjs zhipu anthropic
+node tests/services/with-local-secrets.mjs kimi anthropic
+```
+
+The field groups are `.channel.feishu_app.{app_id,app_secret,receive_id}`,
+`.llm.provider.zhipu.{baseURL,token}` and
+`.llm.provider.kimi_coding_backup.{baseURL,token}`. CI supplies environment
+variables directly. Keep these calls separate from routine coverage runs.
+
 ## Adding a package
 
 1. Create the package directory under `packages/<name>/` with its own

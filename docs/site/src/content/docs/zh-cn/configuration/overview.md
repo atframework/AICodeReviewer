@@ -108,10 +108,13 @@ agent 故障切换和压缩摘要；triage 各层都未配置时继承该 worksp
 `sandbox`，并独立创建沙箱实例。workspace 层可以混用不同 agent 或独立沙箱镜像。
 
 `context_repositories` 声明评审时可引用的辅助仓库（共享库、协议契约等）：每次评审
-在确认存在变更文件后全新物化到 `<workspace>/context-repos/<alias>`，容器沙箱内以只读
+在确认存在变更文件后全新物化到 `<run>/context-repos/<alias>`，容器沙箱内以只读
 挂载 `/workspace/context-repos/<alias>` 暴露给 agent，单仓库失败不阻塞评审，
 `max_mb`（默认 512）限制物化体积。instance 的列表整体替换 `defaults` 的列表。
 字段细节见[配置字段参考](/zh-cn/reference/config-fields/#workspaces)。
+
+SVN 未指定 `revision` 时，先解析版本，再固定该版本导出内容。每次导出尝试都从空目录
+开始；无法解析 HEAD 时，该 alias 失败，评审继续但不使用这个辅助仓库。
 
 ## `.env` 与 `config.yaml` —— 密钥约定
 

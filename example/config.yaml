@@ -1219,7 +1219,7 @@ workspaces:
       #   force_skills:                     # always activate these skills regardless of glob matching
       #     - "security-audit"
       # Auxiliary context repositories (optional): materialized fresh each review
-      # into <workspace>/context-repos/<alias> and mounted read-only for the
+      # into <run>/context-repos/<alias> and mounted read-only for the
       # agent sandbox at /workspace/context-repos/<alias> so the reviewer can
       # inspect shared libraries/contracts with rg/bat. Problems must still
       # reference files changed in the primary repository.
@@ -1233,7 +1233,7 @@ workspaces:
       #   - alias: protocol-spec
       #     kind: svn
       #     repository_url: "https://svn.example.com/repos/protocol/trunk"
-      #     revision: 1234                  # optional pin (default: latest)
+      #     revision: 1234                  # optional; otherwise resolve HEAD before export and pin that snapshot
       #   - alias: perforce-lib
       #     kind: p4
       #     port: "ssl:p4.example.com:1666"

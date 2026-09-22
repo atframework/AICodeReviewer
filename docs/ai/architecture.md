@@ -361,13 +361,14 @@ workspace 级声明式配置 + 只读挂载。
 **物化合同**（`packages/vcs/src/context-repos.ts` `materializeContextRepositories`）：
 
 - 每次 run 在确认存在变更文件后全新物化（先 wipe 再拉取），不做跨 run 缓存；
-  目标目录 `<workspaces root>/<workspace_id>/context-repos/<alias>`；物化前清扫
+  目标目录 `<run>/context-repos/<alias>`；物化前清扫
   不在当前配置 alias 集合内的残留目录，失败 alias 的目录在 catch 中清理。
 - git：`git clone --depth 1 [--branch <ref>]`；token 经 `GIT_CONFIG_COUNT/KEY/VALUE`
   环境变量注入 `http.extraHeader`（scheme 与 adapter 一致用 `token`），既不进 argv
   进程表也不写入 `.git/config`；clone 每次重试前重建空目录，避免部分检出导致重试必败。
-- svn：`svn export --quiet --non-interactive --no-auth-cache [--revision N]`；
-  未 pin 时 best-effort 用 `svn info --show-item revision` 记录远端 HEAD。
+- svn：未 pin 时先用 `svn info --show-item revision` 解析数字 HEAD，再按该 revision
+  执行 `svn export --force --quiet --non-interactive --no-auth-cache --revision N`。
+  每次导出重试前重建空目录；解析失败则该 alias 失败，避免记录的版本与内容不一致。
 - p4：与 adapter 共享 `isP4TrustError`/`isP4FingerprintChangedError`/`isP4DeleteAction`/
   `isP4AuthenticationError` 判定（`packages/vcs/src/p4.ts` 导出）；任意命令遇 trust 错误
   先 `p4 trust -y`、指纹变更回退 `p4 trust -y -f` 后重试一次，认证失败（含 session/ticket

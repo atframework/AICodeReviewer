@@ -96,6 +96,48 @@ bash tests/services/with-gitea.sh \
 `packages/core/test/config-examples.test.ts` 始终校验部署配置及仓库文档的配置 YAML
 片段，包含两种语言；畸形配置片段明确失败，不会被跳过。
 
+SVN 脚本使用固定 Debian 镜像和 Subversion 1.14.5-3，限额 1 CPU / 256 MiB，
+回环随机端口，采用同样的 900 秒生命周期和清理规则。脚本提供 `AICR_SVN_TEST_URL`；
+测试进程的 PATH 需有 `svn`。用例核验辅助仓库版本/内容、diff 与失败清理。
+
+```bash
+bash tests/services/with-svn.sh \
+  pnpm exec vitest run packages/vcs/test/svn-context-live.test.ts --maxWorkers=1
+```
+
+### 按需启用真实账户
+
+真实账户测试在整组环境变量缺省时跳过，配置不完整时失败，不会自动读取凭据文件。
+请使用测试群和测试账户。
+
+| 必需变量 | 用例与可选设置 |
+| --- | --- |
+| `AICR_FEISHU_TEST_APP_ID`、`AICR_FEISHU_TEST_APP_SECRET`、`AICR_FEISHU_TEST_RECEIVE_ID` | `packages/outputs/test/feishu-app-live.test.ts`：读取成员/资料，发送一张卡片并撤回。`AICR_FEISHU_TEST_DIRECTORY_CHAT_ID` 选择另一来源群；`AICR_FEISHU_TEST_MENTION_OPEN_ID` 启用对一个获准成员的通知。 |
+| `AICR_ZHIPU_TEST_BASE_URL`、`AICR_ZHIPU_TEST_API_KEY` | `packages/llm/test/providers-live.test.ts`：glm-5.3-flash；`AICR_ZHIPU_TEST_KIND` 选择 `openai_compatible`（默认）或 `anthropic`。 |
+| `AICR_KIMI_TEST_BASE_URL`、`AICR_KIMI_TEST_API_KEY` | 同一用例，kimi-for-coding；`AICR_KIMI_TEST_KIND` 选择协议。 |
+
+`anthropic` 的 base URL 填写协议根地址，不带 `/v1`。
+LLM 每个已启用供应商调用一次，60 秒截止、256 输出 token、关闭 thinking、无自动重试。
+测试核验回答与 usage，不衡量评审质量或计费。日志只记录数量和 usage，
+不记录凭据、成员资料或供应商原始错误。飞书撤回失败则测试失败；强制中断后需核对测试群
+是否仍有测试卡片。
+
+维护了 `development/secret/secret.yaml` 时，可显式调用本地 helper，需 yq v4；
+它只将选定字段读入测试子进程环境：
+
+```bash
+node tests/services/with-local-secrets.mjs feishu
+node tests/services/with-local-secrets.mjs zhipu
+node tests/services/with-local-secrets.mjs kimi
+node tests/services/with-local-secrets.mjs zhipu anthropic
+node tests/services/with-local-secrets.mjs kimi anthropic
+```
+
+字段组为 `.channel.feishu_app.{app_id,app_secret,receive_id}`、
+`.llm.provider.zhipu.{baseURL,token}` 与
+`.llm.provider.kimi_coding_backup.{baseURL,token}`。CI 直接提供环境变量。
+这些真实调用与普通覆盖率测试分开执行。
+
 ## 新增 package
 
 1. 在 `packages/<name>/` 下创建包目录，包含自己的 `package.json`、`tsconfig.json`、`src/` 和 `test/`。

@@ -18,6 +18,10 @@ user-invocable: false
    For disposable WSL/Podman acceptance, use the
    [service guide](../../../docs/testing-services.md): bound resources and lifetime,
    remove only owned resources, and verify cleanup even when the test fails.
+   Keep real-account tests environment-gated: absent settings skip, partial
+   settings fail. Load local secrets only through an explicitly invoked helper;
+   bound calls and redact upstream errors. Preserve user-confirmed acceptance
+   as attributed evidence and do not schedule repeat validation without a reason.
 4. Trace persistence through recovery: fresh process, expired lease, partial
    pages, retry budgets, config changes, and actual downstream call counts.
    Use public records in conformance fixtures (`computeStreamId(receipt)` instead

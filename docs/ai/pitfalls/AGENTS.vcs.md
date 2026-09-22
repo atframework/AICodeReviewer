@@ -3,6 +3,15 @@
 Read for Git/SVN/P4 context, attribution, or diff changes. Sources and tests:
 `packages/vcs/src/{git,svn,p4}.ts`, `packages/vcs/test/`, and orchestrator context tests.
 
+## Auxiliary SVN exports
+
+`materializeContextRepositories` creates the alias directory before invoking
+SVN. A real `svn export` rejects even an empty existing directory with E155000;
+clear the per-run directory before every attempt and use `--force`. Resolve
+unpinned HEAD before export, then export that revision so a concurrent commit
+cannot change only the reported revision. Keep the network regression in
+`svn-context-live.test.ts` and partial-export retry checks in `context-repos.test.ts`.
+
 ## Git and attribution
 
 - Scoped fetch materializes changed files only. Missing related files need

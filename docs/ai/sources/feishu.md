@@ -1,6 +1,6 @@
 # Feishu application API
 
-- last_checked: 2026-09-21
+- last_checked: 2026-09-21 (authentication, send, directory); 2026-09-22 (recall)
 - next_review: before changing authentication, message or directory contracts
 - update_trigger: API errors, permission changes, card rendering changes, SDK model changes
 
@@ -8,6 +8,7 @@ Official documentation entrypoints:
 
 - [Tenant token](https://open.feishu.cn/document/server-docs/authentication-management/access-token/tenant_access_token_internal)
 - [Send message](https://open.feishu.cn/document/server-docs/im-v1/message/create)
+- [Recall message](https://open.feishu.cn/document/server-docs/im-v1/message/delete)
 - [Group members](https://open.feishu.cn/document/server-docs/group/chat-member/get)
 - [User profile](https://open.feishu.cn/document/server-docs/contact-v3/user/get)
 - [Card Markdown](https://open.feishu.cn/document/common-capabilities/message-card/message-cards-content/using-markdown-tags)
@@ -48,5 +49,8 @@ to speak in the destination; production app changes require publication/approval
 Implementation and local regression evidence: `packages/outputs/src/feishu-app.ts`,
 `feishu-members.ts`, `packages/outputs/test/feishu-app.test.ts` and
 `packages/server/test/feishu-app-publishing.test.ts`. Actual tenant grants,
-field visibility, JSON 2.0 mention delivery, and recipient availability remain
-tenant acceptance items. No real application message was sent for these checks.
+field visibility, JSON 2.0 mention delivery, and recipient availability depend on
+the tenant. The opt-in `feishu-app-live.test.ts` checks directory/profile reads,
+sends one real card and recalls it. The official recall endpoint accepts DELETE
+with the tenant token and `im:message:send_as_bot` for the bot's own message.
+This tenant's acceptance and remaining mention boundaries are recorded in M30.

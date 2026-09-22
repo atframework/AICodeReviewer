@@ -68,3 +68,21 @@ revalidated by the 2026-09-12 layout change unless explicitly marked below.
 - `last_checked`: 2026-09-17
 - `next_review`: 2026-10-09
 - `update_trigger`: Endpoint, region, account restrictions, model retirement, catalog changes or SDK URL/auth behavior changes.
+
+## Opt-in coding endpoint acceptance
+
+- `last_checked`: 2026-09-22
+- Sources: [Kimi endpoints](https://www.kimi.com/code/docs/),
+  [Kimi thinking mode](https://www.kimi.com/code/docs/kimi-code/models.html),
+  [BigModel Anthropic](https://docs.bigmodel.cn/cn/guide/develop/claude/introduction),
+  [BigModel thinking mode](https://docs.bigmodel.cn/cn/guide/capabilities/thinking-mode).
+  The BigModel HTML was read directly when the web reader timed out; it specifies
+  `/api/anthropic/v1/messages` and `x-api-key`. Kimi documents both protocols and
+  `thinking.type: disabled`, and requires the client's real identity.
+- `providers-live.test.ts` verifies actual direct-client authentication, a bounded
+  synthetic code response and usage for the two supplied accounts; details in
+  [M30](../milestones/M30.md). It does not establish billing-pool accounting,
+  retry behavior, CLI compatibility or review quality. Helpers never print raw
+  upstream errors and only load local YAML when explicitly invoked.
+- `update_trigger`: Protocol, model, auth or request-parameter changes; rerun only
+  the affected account/protocol with an explicit bounded test invocation.

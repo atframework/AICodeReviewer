@@ -119,12 +119,16 @@ global → defaults → instance selection and creates its own sandbox instance.
 
 `context_repositories` declares auxiliary repositories the reviewer may consult
 (shared libraries, protocol contracts, and so on): each review materializes a
-fresh copy under `<workspace>/context-repos/<alias>` once changed files are
+fresh copy under `<run>/context-repos/<alias>` once changed files are
 known, exposes it to the agent as the read-only mount
 `/workspace/context-repos/<alias>` in container sandboxes, isolates per-repo
 failures from the review, and enforces the `max_mb` size cap (default 512). An
 instance list replaces the `defaults` list wholesale. Field details live in the
 [config field reference](/en/reference/config-fields/#workspaces).
+
+For SVN, an omitted `revision` is resolved before export and the content is pinned
+to that revision. Each export attempt starts with an empty directory. If HEAD
+cannot be resolved, that alias fails and the review continues without it.
 
 ## `.env` vs `config.yaml` — secrets convention
 

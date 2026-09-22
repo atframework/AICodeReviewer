@@ -505,6 +505,10 @@ Behavior contract (see `docs/ai/architecture.md` §3.2.2):
   are supporting evidence only.
 - `workspaces.defaults.context_repositories` sets a default list; an instance
   list replaces it wholesale.
+- SVN resolves an omitted revision before export and pins the exported content
+  to that revision. Each retry starts with an empty directory; unresolved HEAD
+  fails that alias. Local Podman and opt-in Feishu/LLM acceptance commands are in
+  [the service guide](../docs/testing-services.md).
 
 ## Agent web search (per-agent mapping)
 
