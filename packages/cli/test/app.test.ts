@@ -92,7 +92,7 @@ describe("runCli", () => {
     const stderr = new MemoryWriter();
     const exitCode = await runCli(["--version"], { stdout, stderr });
     expect(exitCode).toBe(0);
-    expect(stdout.output.trim()).toBe("0.2.0");
+    expect(stdout.output.trim()).toBe("0.3.0");
     expect(stderr.output).toBe("");
   });
 

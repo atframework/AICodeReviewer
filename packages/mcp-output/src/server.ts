@@ -211,7 +211,7 @@ export function createAicrMcpServer(options: AicrMcpServerOptions = {}): AicrMcp
 	const outputStatePath = resolveOutputStatePath(options.outputStatePath);
 	const server = new McpServer({
 		name: "aicr-output",
-		version: "0.2.0",
+		version: "0.3.0",
 	});
 
 	const collector = new AicrOutputCollector();

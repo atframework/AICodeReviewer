@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0]
+
 ### Added
 
 - Auto-commit batch per-target publication recovery: the `publication_pending` checkpoint now carries the analysis payload plus per-channel receipts (`pending`/`published`/`failed`/`unknown`), so a resumed batch skips LLM/analysis, never re-calls channels with a confirmed `published` receipt, and only retries unfinished channels. Payload exceeding the checkpoint size cap degrades to full replay. The admin batches API returns each batch's `publications` receipts for operator inspection.
@@ -101,6 +103,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Review deduplication and async queue support (in-memory, Redis).
 - Structured logging with pino and secret scrubber.
 
-[Unreleased]: https://github.com/atframework/AICodeReviewer/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/atframework/AICodeReviewer/compare/v0.3.0...HEAD
 [0.1.0]: https://github.com/atframework/AICodeReviewer/releases/tag/v0.1.0
 [0.2.0]: https://github.com/atframework/AICodeReviewer/releases/tag/v0.2.0
+[0.3.0]: https://github.com/atframework/AICodeReviewer/releases/tag/v0.3.0
