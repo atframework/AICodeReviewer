@@ -1,11 +1,12 @@
 # 稳定决策索引
 
 这份文档收纳长期有效、会影响实现和审查方式的决策记录。
-原先散落在 `Plan.md` 的 D1-D31 已搬到这里，`Plan.md` 只保留与当前执行顺序有关的摘要。
+原先散落在 `Plan.md` 的 D1-D31 已搬到这里；`Plan.md` 全部待办完成后路线图已并入
+`docs/ai/index.md` 的前瞻扩展与里程碑归档。
 
 ## 使用方式
 
-- 按下表议题定位所需决策；仅在任务涉及执行优先级时读取 `Plan.md`。
+- 按下表议题定位所需决策；仅在任务涉及执行优先级时读取 `docs/ai/index.md` 的前瞻扩展。
 - 当任务涉及稳定取舍、历史约束或“为什么这样设计”时，再按需读取这里。
 - 若实现变更会推翻这里的某条决策，应同步更新相关文档、示例和测试。
 
@@ -23,7 +24,7 @@
 | D8 | LLM 限流策略 | 单次调用层使用 bounded rate-limit retry，与队列层 retry 解耦。 | `docs/ai/architecture.md` §3.5 |
 | D9 | 模板与 @-mention | 输出走 Handlebars 模板；@-mention 通过作者解析管线与黑名单保护。 | `docs/output-channels.md`、`docs/ai/architecture.md` §3.9 |
 | D10 | 沙箱引擎 | docker 与 podman 平等支持，`sandbox.engine: auto` 自动检测。 | `docs/podman.md`、`docs/ai/architecture.md` §3.8 |
-| D11 | 文档自校验 | `Plan.md` 与 `docs/*.md` 统一走 markdownlint。 | `AGENTS.md` 验证要求、`.markdownlint.json` |
+| D11 | 文档自校验 | 仓库 Markdown 统一走 markdownlint。 | `AGENTS.md` 验证要求、`.markdownlint.json` |
 | D12 | 思考强度 | `ModelSpec.thinkingLevel` 作为统一抽象，adapter 再翻译到各 provider。 | `docs/ai/architecture.md` §3.7.3 |
 | D13 | 压缩阈值参考模型 | 阈值以当代长上下文模型为参考，不按单一供应商硬编码。 | `docs/ai/architecture.md` §3.3 |
 | D14 | workspaces 命名空间 | 强制 `cache / defaults / instances.<id>` 三段式。 | `docs/ai/architecture.md` §3.10、`packages/core/src/config.ts` |
@@ -207,5 +208,5 @@ manual Retry。合同见[输出渠道](../output-channels.md#automatic-commit-ba
 ## 维护规则
 
 - 如果某条决策只影响已完成阶段的历史说明，优先更新相关 `milestones/*.md`。
-- 如果某条决策仍约束当前实现，应同步更新 `Plan.md` 摘要、`docs/ai/architecture.md` 或专题文档。
+- 如果某条决策仍约束当前实现，应同步更新 `docs/ai/index.md` 前瞻扩展摘要、`docs/ai/architecture.md` 或专题文档。
 - 当代码已经成为更精确的真源时，文档应指向实现，而不是重新复制实现细节。

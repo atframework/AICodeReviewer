@@ -14,7 +14,7 @@ first; this file only covers wording.
 - Version identifiers that are contracts stay: API paths (`bot/v2/hook`),
   schema values (`legacy_v1`/`isolated_v2`, config document versions),
   dependency versions, console UI names (版本管理与发布).
-- Unfinished capability goes to `Plan.md`; reference docs do not announce it.
+- Unfinished capability goes to the roadmap section in `docs/ai/index.md`; reference docs do not announce it.
 
 ## English wording
 

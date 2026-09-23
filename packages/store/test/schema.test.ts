@@ -17,7 +17,7 @@ import {
 } from "../src/schema.js";
 
 describe("reviewRuns schema", () => {
-  it("defines all Plan.md §3.11 run status values", () => {
+  it("defines all docs/ai/architecture.md §3.11 run status values", () => {
     expect(runStatusValues).toEqual([
       "queued",
       "preparing",

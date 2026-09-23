@@ -6,7 +6,8 @@ user-invocable: false
 
 # Plan Implementation Audit
 
-1. Read the relevant unfinished item in `Plan.md`. Use
+1. Read the relevant unfinished item in the roadmap section of
+   `docs/ai/index.md`. Use
    [the documentation map](../../../docs/ai/index.md) for corresponding contracts
    and decisions; consult milestones only when acceptance history matters.
 2. Map each acceptance claim to code, configuration wiring, consumer behavior,
@@ -30,10 +31,11 @@ user-invocable: false
 5. Map the actual diff to docs/examples and update affected contracts in the same
    change. For runtime or output work select the corresponding specialized skill;
    do not copy its checklist here. Run the applicable final baseline gates.
-6. Retire a `docs/superpowers/{specs,plans}/` file only when implementation,
-   validation, and durable decisions are accounted for. Search inbound links and
-   update them first. Unchecked template boxes alone do not prove incompleteness;
-   retain tasks with missing evidence. Keep `Plan.md` forward-looking.
+6. Retire a completed task-artifact file (temporary design, execution plan, or
+   test plan) only when implementation, validation, and durable decisions are
+   accounted for. Search inbound links and update them first. Unchecked template
+   boxes alone do not prove incompleteness; retain tasks with missing evidence.
+   Keep the roadmap section in `docs/ai/index.md` forward-looking.
 
 Report each material gap with its source, fix or remaining work, and validation.
 Do not require one test file per source file; test observable contracts and risks.

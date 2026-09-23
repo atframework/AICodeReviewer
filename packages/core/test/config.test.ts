@@ -235,7 +235,7 @@ describe("mergeConfigLayers", () => {
     expect(merged.workspaces.instances["ws-b"]?.sandbox?.kind).toBe("docker");
   });
 
-  it("accepts all LLM provider kinds from Plan.md §3.7.3", () => {
+  it("accepts all LLM provider kinds from docs/ai/architecture.md §3.7.3", () => {
     const providerKinds = [
       "openai_compatible",
       "azure_openai",
@@ -267,7 +267,7 @@ describe("mergeConfigLayers", () => {
     expect(result.success).toBe(false);
   });
 
-  it("accepts all queue kinds from Plan.md §3.10", () => {
+  it("accepts all queue kinds from docs/ai/architecture.md §3.10", () => {
     const queueKinds = ["memory", "sqlite", "redis", "rabbitmq"];
 
     for (const kind of queueKinds) {
@@ -281,7 +281,7 @@ describe("mergeConfigLayers", () => {
     expect(result.success).toBe(false);
   });
 
-  it("accepts queue.sqlite config from Plan.md §3.10", () => {
+  it("accepts queue.sqlite config from docs/ai/architecture.md §3.10", () => {
     const result = appConfigSchema.safeParse({
       queue: {
         kind: "sqlite",
@@ -465,7 +465,7 @@ describe("mergeConfigLayers", () => {
     }
   });
 
-  it("accepts all sandbox kinds from Plan.md §3.8", () => {
+  it("accepts all sandbox kinds from docs/ai/architecture.md §3.8", () => {
     const sandboxKinds = ["native", "docker", "podman", "docker_socket", "k8s_pod", "firecracker"] as const;
 
     for (const kind of sandboxKinds) {
@@ -476,7 +476,7 @@ describe("mergeConfigLayers", () => {
     }
   });
 
-  it("accepts all sandbox engine options from Plan.md §3.8", () => {
+  it("accepts all sandbox engine options from docs/ai/architecture.md §3.8", () => {
     const engines = ["auto", "docker", "podman"] as const;
 
     for (const engine of engines) {
@@ -530,7 +530,7 @@ describe("mergeConfigLayers", () => {
     expect(result.success).toBe(true);
   });
 
-  it("accepts all trigger kinds from Plan.md §3.1", () => {
+  it("accepts all trigger kinds from docs/ai/architecture.md §3.1", () => {
     const triggerKinds = [
       "gitea",
       "forgejo",

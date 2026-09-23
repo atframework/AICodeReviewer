@@ -19,4 +19,4 @@ P0–P15 已交付；重复实现说明由下列合同/里程碑承接。
 真实 Redis/P4/SVN 启用；完整 runtime 门禁、6 eval fixtures、54 页双语站通过。
 日志 build/logs/roadmap-local/。SVN 真实提交 Alice/Alice/Bob 合为两批，重投不重跑；
 Redis 新连接验证数据并仅清理随机前缀。未调用 LLM、远端发布或验证生产 ACL/TLS。
-后续工作只在[路线图](../../../Plan.md)维护。
+后续工作只在[AI 维护导航](../index.md)的前瞻扩展节维护。

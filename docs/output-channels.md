@@ -153,7 +153,7 @@ The current in-process tool registry exposes these AICR tools to the review exec
 | `aicr.fetch_more_context` | Request source context for a changed file or narrowly related repository file | `path`, `reason` |
 | `aicr.try_blame` | Request VCS-verified, best-effort line attribution without file content | `path`, `reason` |
 
-Memory and skill recall tools are tracked by the `Plan.md` roadmap and detailed in `docs/ai/architecture.md`; do not describe future tools as implemented until they exist in `packages/mcp-output` and tests.
+Memory and skill recall tools are tracked by the roadmap section in `docs/ai/index.md` and detailed in `docs/ai/architecture.md`; do not describe future tools as implemented until they exist in `packages/mcp-output` and tests.
 
 `@aicr/mcp-output` provides the in-process registry used by direct LLM/stdout-compatible runs, the stdio MCP server materialized into agent runtime bundles, and an optional local Streamable HTTP endpoint started with `aicr-mcp-server --transport http`. Runtime bundles still use stdio by default. Both server transports write `.aicr-output-state.json` in the isolated `agent/` directory after tool calls; the orchestrator reads that state, validates review outputs, executes recorded `aicr.fetch_more_context` requests through VCS context fetch, executes recorded `aicr.try_blame` requests through VCS attribution when the adapter supports it, and reruns a final pass with fetched content and attribution when needed.
 
@@ -682,4 +682,4 @@ The base system prompt in `prompts/system/code-reviewer.system.md` must keep the
 - Use `aicr.try_blame` only for bounded, justified VCS attribution context.
 - Do not treat stdout as the final review channel.
 
-When changing the tool contract, update the prompt, this document, `docs/ai/architecture.md`, the relevant `Plan.md` roadmap summary, examples, and unit tests together.
+When changing the tool contract, update the prompt, this document, `docs/ai/architecture.md`, the relevant roadmap summary in `docs/ai/index.md`, examples, and unit tests together.

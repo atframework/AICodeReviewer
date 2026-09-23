@@ -31,7 +31,7 @@ export const workspaceIdSchema = z
   .min(1)
   .refine((value) => reservedWorkspaceIds[value] !== true, {
     message:
-      "workspace_id must not collide with reserved keys (cache, defaults, instances); see Plan.md §3.10 D14",
+      "workspace_id must not collide with reserved keys (cache, defaults, instances); see docs/ai/architecture.md §3.10 D14",
   });
 
 /**
@@ -1404,7 +1404,7 @@ const appConfigRefinement = (config: AppConfigRefinementTarget, ctx: z.Refinemen
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           message:
-            "llm.model_catalog.cache.backend 'redis' requires storage.cache.kind 'redis'; see Plan.md §3.13 / D31",
+            "llm.model_catalog.cache.backend 'redis' requires storage.cache.kind 'redis'; see docs/ai/architecture.md §3.13 / D31",
           path: ["llm", "model_catalog", "cache", "backend"],
         });
       }
@@ -1412,7 +1412,7 @@ const appConfigRefinement = (config: AppConfigRefinementTarget, ctx: z.Refinemen
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           message:
-            "llm.model_catalog.cache.backend 'redis' requires storage.cache.redis.url_env; see Plan.md §3.13 / D31",
+            "llm.model_catalog.cache.backend 'redis' requires storage.cache.redis.url_env; see docs/ai/architecture.md §3.13 / D31",
           path: ["storage", "cache", "redis", "url_env"],
         });
       }

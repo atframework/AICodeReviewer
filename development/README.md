@@ -4,15 +4,15 @@
 
 AI agent 开始工作时仍应优先遵守 `AGENTS.md`，并按任务类型读取相关 `.agents/skills/*/SKILL.md`。
 
-**要求所有的任务都要深度调研后制定方案，不要瞎猜，按需更新文档、AI agent提示词、skill、example和Plan.md，保持最佳实践。**
+**要求所有的任务都要深度调研后制定方案，不要瞎猜，按需更新文档、AI agent提示词、skill、example和 docs/ai/index.md 的路线图节，保持最佳实践。**
 
 ## 1. 使用原则
 
 - 所有任务先深度调研再制定方案：读取 `AGENTS.md`、相关 skill、相关源码/测试/文档，必要时查官方资料；不要凭记忆猜实现、配置或环境状态。
-- 方案中显式写清目标、约束、假设、验收方式，以及是否需要同步文档、AI agent 提示词、skill、example 和 `Plan.md`；如果无需同步，也要说明原因。
+- 方案中显式写清目标、约束、假设、验收方式，以及是否需要同步文档、AI agent 提示词、skill、example 和 `docs/ai/index.md` 的前瞻扩展；如果无需同步，也要说明原因。
 - 输出给人或写入文档时按主题分段；不要把历史背景、secret、部署步骤混进同一段自由文本。
-- `Plan.md` 只作为当前路线图入口；需要稳定设计或历史阶段信息时，先读 `docs/ai/index.md`，再按需打开对应文档。
-- 修改代码时优先补测试；修改配置、输出通道、部署行为或公开工作流时，同步更新 `Plan.md` 摘要、相关 `docs/`、`example/config.yaml` 与 `example/README.md`，或明确说明无需更新。
+- 路线图入口是 `docs/ai/index.md`（前瞻扩展与里程碑归档）；需要稳定设计或历史阶段信息时，先读它，再按需打开对应文档。
+- 修改代码时优先补测试；修改配置、输出通道、部署行为或公开工作流时，同步更新 `docs/ai/index.md` 前瞻扩展摘要、相关 `docs/`、`example/config.yaml` 与 `example/README.md`，或明确说明无需更新。
 - 临时脚本、调试日志和一次性报告放在 `build/` 子目录下（如 `build/tmp/`、`build/logs/`），不放仓库根目录。运行前确保子目录存在。
 - 只验证本轮新增或修复的能力；测试验收环境按第 8 节选择，生产签收仍以 Kilo Code 端到端验收为准。
 
@@ -25,7 +25,7 @@ AI agent 开始工作时仍应优先遵守 `AGENTS.md`，并按任务类型读�
 执行顺序：
 
 1. 读取 `AGENTS.md`、相关 skill，以及 `docs/ai/index.md`。
-2. 读取 `Plan.md` 的当前里程碑状态和下一执行包。
+2. 读取 `docs/ai/index.md` 的前瞻扩展与里程碑归档，确认当前状态和下一步。
 3. 按需读取 `docs/ai/architecture.md`、专题文档和相关源码/测试。
 4. 制定小步可验证方案。
 5. 修改代码、测试、文档和示例。
@@ -33,11 +33,11 @@ AI agent 开始工作时仍应优先遵守 `AGENTS.md`，并按任务类型读�
 
 ### 文档或 AI 资产维护
 
-当任务涉及 prompt、skill、bridge 文件、`AGENTS.md`、`Plan.md`、`docs/ai/*` 或类似 AI-facing 资产时：
+当任务涉及 prompt、skill、bridge 文件、`AGENTS.md`、`docs/ai/*` 或类似 AI-facing 资产时：
 
 1. 先读取 `AGENTS.md` 与 `.agents/skills/ai-agent-maintenance/SKILL.md`。
 2. 保持常驻指令短小，长篇稳定细节放入 `docs/ai/index.md` 可导航的文档。
-3. 已完成阶段写入 `docs/ai/milestones/*.md`，不要回填到 `Plan.md` 或 skill 正文。
+3. 已完成阶段写入 `docs/ai/milestones/*.md`，不要回填到 `docs/ai/index.md` 前瞻扩展或 skill 正文。
 4. 最后一次修改后至少运行真实的仓库 Markdown 门禁；若同时改到代码或配置，按完整验证链执行。静默或未扫描到预期文件的 `exit 0` 不算通过。
 
 ## 3. Secret 与凭据安全

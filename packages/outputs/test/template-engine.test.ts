@@ -288,7 +288,7 @@ describe("getBuiltinTemplate", () => {
 		expect(fallback).toBe(expected);
 	});
 
-	it("has templates for all channel kinds in Plan.md §3.9.1", () => {
+	it("has templates for all channel kinds in docs/ai/architecture.md §3.9.1", () => {
 		const channelKinds = [
 			"gitea_pr_review",
 			"gitea_issue",

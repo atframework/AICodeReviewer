@@ -14,8 +14,9 @@
   are iteration evidence. Confirm file/test discovery; report unrun, blocked,
   or failing checks without claiming completion. Never weaken gates to pass.
 - When behavior changes, sync the affected docs, both public locales, examples,
-  AI guidance, and `Plan.md` roadmap entry in the same change; explain any surface
-  that needs no update. Schema acceptance alone does not prove runtime support.
+  AI guidance, and the roadmap section in `docs/ai/index.md` in the same change;
+  explain any surface that needs no update. Schema acceptance alone does not
+  prove runtime support.
 - All temporary task artifacts belong under `build/`: use `build/tmp/` for
   helpers/data, `build/logs/` for logs, and `build/deploy/` for staging. Create
   the directory first. `eval/` contains permanent fixtures only.
@@ -45,10 +46,12 @@ to locate code and relevant architecture sections. History is optional context.
 - Skills use matching directory/frontmatter `name`, a concrete `description`
   with a useful scope boundary, and a body usable without proprietary metadata.
   Load detailed references only under an explicit task condition.
-- Keep `Plan.md` forward-looking, stable contracts in topic docs, and completed
+- Keep the roadmap section in `docs/ai/index.md` forward-looking, stable
+  contracts in topic docs, and completed
   history in `docs/ai/milestones/`. Do not copy history into prompts or skills.
-  Retire completed `docs/superpowers/{specs,plans}/` files only after validation
-  and preservation of durable decisions; retain unfinished work.
+  Retire completed task artifacts (temporary designs, execution and test
+  plans) only after validation and preservation of durable decisions; retain
+  unfinished work.
 - Record reusable retry lessons in the closest existing skill or pitfall topic:
   trigger, non-obvious cause, preferred fix, and code/test pointer. Merge with
   existing rules; do not accumulate incident logs or generic advice.

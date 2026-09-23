@@ -425,7 +425,7 @@ triggers:
   # deps), exchanges it for an installation access token, and auto-refreshes it.
   # This replaces the need to manually paste an installation token (expires ~1h)
   # or a long-lived PAT. `app` and `token_env` are mutually exclusive.
-  # See docs/ai/architecture.md §3.2.1 for the contract; Plan.md tracks remaining acceptance.
+  # See docs/ai/architecture.md §3.2.1 for the contract; docs/ai/index.md tracks remaining acceptance.
   # - name: github-app
   #   kind: github
   #   base_url: https://github.com            # GHE: set to your host; API derived as {base_url}/api/v3

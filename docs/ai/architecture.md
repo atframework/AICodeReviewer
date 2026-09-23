@@ -1,7 +1,7 @@
 # AICodeReviewer 架构与实现合同
 
 这份文档承接原先 `Plan.md` 里稳定、细节化、不会每轮都变的设计说明。
-`Plan.md` 只保留当前状态、本地下一步、外部验收与预留扩展；需要设计细节时按需读取这里。
+路线图已并入 [AI 维护导航](index.md)的前瞻扩展与里程碑归档；需要设计细节时按需读取这里。
 
 本页的章节编号是稳定合同引用点，独立于路线图的章节与任务顺序。
 
@@ -59,7 +59,7 @@ PostgreSQL 后端见 [M17](milestones/M17.md)，来源合并、路由图与发�
 
 ### 2.3 文档分层
 
-- `Plan.md`：前瞻路线图与当前执行顺序
+- `docs/ai/index.md`：前瞻扩展与里程碑归档（原 `Plan.md` 路线图已并入）
 - `docs/ai/architecture.md`：稳定设计合同
 - `docs/ai/decisions.md`：长期有效决策
 - `docs/ai/milestones/*.md`：已完成阶段归档
@@ -938,7 +938,7 @@ AICR 采用**两层上下文管理**，两者互补：
     Redis 按状态维护有序集合，首次升级按 SCAN 页回填，常规分页不再 SCAN 全库。
     保留策略不清理运行目录或所有统计事实；增加上限不能还原已淘汰详情。
 - 输出路由、模板、queue、review 行为都支持全局 → workspace default → workspace instance 覆盖。`agent.default` 和 `sandbox` 的 workspace 层覆盖也已按 run 生效：bootstrap 经合并后的 analysis selection 解析（`analysis.sandbox ?? generationConfig.agent.sandbox`、`analysis.agent?.default ?? generationConfig.agent.default`，H03/H04），全局 `agent` 配置仅作回退；每次运行独立创建沙箱实例，显式容器沙箱 preflight 失败拒绝该 run，不降级 native。
-- 当配置 shape 变化时，要同步更新 schema 测试、示例配置、专题文档和 `Plan.md` 摘要。
+- 当配置 shape 变化时，要同步更新 schema 测试、示例配置、专题文档和 `docs/ai/index.md` 的前瞻扩展摘要。
 
 #### 3.10.1 Per-workspace prompt 覆盖
 
@@ -1634,6 +1634,22 @@ M21/M22；复审修复见 [M23](milestones/M23.md)，指定旧版本兼容、CLI
 - 变更配置 contract、输出 contract、runtime bundle、sandbox 行为时，都要补对应测试。
 - AI 资产变更至少要过 markdownlint，并检查 skill frontmatter / 目录名 / `name` 一致性。
 - 文档不是“写完就算”，它们与示例、测试、配置 shape 一起构成实现合同。
+
+### 7.1 测试 ID 家族图例
+
+代码注释与断言中引用的历史测试矩阵 ID 对照：
+
+| 家族 | 含义 | 执行位置 |
+| --- | --- | --- |
+| S01–S13 | ConfigStore | core/test/config-store-conformance.ts 与各后端测试 |
+| M01–M20 | 迁移/版本 | migration-runner、store-migration-fixture、post-migration-consumption |
+| H01–H18 | 运行时消费者 | runtime-generation、runtime-config、config-components |
+| R/B | 路由/组批 | runtime-http、routing-admission、auto-commit 系列 |
+| A01–A08 | 管理 API | server/test/config-api.test.ts |
+| U01–U24 | 表单与字段清单 | core config-ui/form-state/config-components、browser config-ui |
+| E01–E10 | 组合端到端 | config-e2e-publish-review、进程/live/browser 测试 |
+
+ID 只作历史索引，新证据直接引用测试文件与断言。
 
 ## 10. 扩展点
 

@@ -6,7 +6,7 @@
 
 | 任务 | 首选实现与参考 |
 | --- | --- |
-| 当前待办与验收边界 | [Plan.md](../../Plan.md)；Workspace 动态配置稳定合同见架构 §3.10、§3.14–3.16，交付证据见 M17–M28 |
+| 当前待办与验收边界 | 当前无待完成项；扩展候选见[前瞻扩展](#前瞻扩展未纳入当前交付)；Workspace 动态配置稳定合同见架构 §3.10、§3.14–3.16，交付证据见里程碑归档 |
 | Config / workspace / model groups | `packages/core/src/config.ts`、server bootstrap；[架构 §3.10](architecture.md#310-配置体系)、[配置坑点](pitfalls/AGENTS.config-and-state.md) |
 | Webhook / 调度 / 去重 / PR 延期 | server runtime/scheduler/deferral-manager；[架构 §3.1](architecture.md#31-触发器与-reviewevent-归一化)、[调度坑点](pitfalls/AGENTS.scheduling.md) |
 | VCS / 多源上下文 / GitHub App | `packages/vcs/src/`、server credential wiring；[架构 §3.2](architecture.md#32-vcs-adapter-与-scoped-fetch)、[VCS 坑点](pitfalls/AGENTS.vcs.md) |
@@ -20,6 +20,19 @@
 | 默认评审 prompt 依据 | [设计依据](../prompt-research.md)、[实际模板](../../prompts/system/code-reviewer.system.md) |
 | 部署 / 用户示例 | [部署 skill](../../.agents/skills/remote-deployment/SKILL.md)、[Podman](../podman.md)、[示例](../../example/README.md) |
 
+## 前瞻扩展（未纳入当前交付）
+
+原 `Plan.md` 的全部待办已完成并归档（最后一项 GitLab 端到端验收见 M34）；
+路线图并入本节，只保留前瞻项。临时服务、环境变量门控和退出清理按
+[验收指南](../testing-services.md)执行；本地替身不能作为模型质量或生产验收证据。
+
+- `k8s_pod` / `firecracker` sandbox：明确隔离需求和运行环境后实现，当前为报错占位。
+- Agent 查询成员目录：先定义按渠道授权、候选数量与脱敏返回；不将整份目录交给评审 MCP。
+- `queue.workers.lock_ttl_seconds`、`dead_letter.*`：仅 schema 预留，没有运行时能力。
+
+跨 workspace 知识迁移、版本 bump/tag 不在范围。新任务完成后归档证据到里程碑并更新本节；
+文档精简不取消历史失败、跳过或固定版本限制。
+
 ## 里程碑归档
 
 | 里程碑 | 状态 | 文档 |
@@ -31,10 +44,10 @@
 | M3 | 已完成 | `milestones/M3.md` |
 | M4 | 已完成 | `milestones/M4.md` |
 | M5 | 已完成 | `milestones/M5.md` |
-| M6 | SVN 按 M31 验收；GitLab 端到端待验收 | `milestones/M6.md` |
+| M6 | SVN 按 M31 验收；GitLab 端到端按 M34 验收 | `milestones/M6.md` |
 | M7 | 已完成 | `milestones/M7.md` |
 | M8 | 实现与离线 eval 已交付；真实 LLM benchmark 按 M31 跳过 | `milestones/M8.md` |
-| M9 | 核心交付完成，预留扩展见路线图 | `milestones/M9.md` |
+| M9 | 核心交付完成，预留扩展见前瞻扩展 | `milestones/M9.md` |
 | M10 | 已交付，真实本机 Redis 已验收 | `milestones/M10.md` |
 | M11 文档站子工程 | 已完成（2026-08-28 线上记录；本轮仅本地验证） | `milestones/M11.md` |
 | M12 GitHub App 认证 | 已完成 | `milestones/M12.md` / `architecture.md` §3.2.1 |
@@ -42,7 +55,7 @@
 | M13.1 agent web search 治理 | 已完成 | `milestones/M13.1.md` |
 | M14 多源上下文聚合 | 已交付；SVN 按 M31 调整后的标准验收 | `milestones/M14.md` / `architecture.md` §3.2.2 |
 | M15 自动提交调度 | 已完成 | `milestones/M15.md` / `architecture.md` §3.1.1 / `decisions.md` D35 |
-| M16 PR/MR 执行时段与持久化延期 | 实现与本地恢复已验收；GitLab MR 生产路径待验收 | `milestones/M16.md` / `architecture.md` §3.1.1 / `decisions.md` D36 |
+| M16 PR/MR 执行时段与持久化延期 | 实现与本地恢复已验收；GitLab MR 生产路径按 M34 验收 | `milestones/M16.md` / `architecture.md` §3.1.1 / `decisions.md` D36 |
 | M17 配置存储、schema 迁移与 PG 后端 | 已完成 | `milestones/M17.md` / `architecture.md` §3.14 |
 | M18 来源合并、路由图与发布服务 | 已完成 | `milestones/M18.md` / `architecture.md` §3.15 |
 | M19 运行时配置 generation 与配置管理 API | P4/P5 已交付；本地验收完成 | `milestones/M19.md` / `architecture.md` §3.16 |
@@ -63,6 +76,6 @@
 | M34 GitLab 固定版本端到端验收 | CE 19.4 真容器 push/MR/窗口延期全链路，CE 指派语义与投递竞态修复 | [M34](milestones/M34.md) |
 | 本地优先队列 P0-P15 | 已完成 | `milestones/local-priority-queue.md` |
 
-历史记录仅用于查交付证据；当前状态以代码、测试和前瞻路线图为准。公开用户文档位于
+历史记录仅用于查交付证据；当前状态以代码、测试和上面的前瞻扩展为准。公开用户文档位于
 `docs/site/`，不发布本目录的内部指导。完成任务资料的保留规则见根 `AGENTS.md`。
 归档只保留交付结论、证据入口和限制；完整过程可由 Git 历史追溯。

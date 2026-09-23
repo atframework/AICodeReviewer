@@ -136,7 +136,7 @@ describe("vcs contracts", () => {
     expect(result.entries).toHaveLength(2);
   });
 
-  it("supports all VcsAdapter kind values defined in Plan.md §3.2", () => {
+  it("supports all VcsAdapter kind values defined in docs/ai/architecture.md §3.2", () => {
     const kinds: VcsAdapter["kind"][] = [
       "git",
       "svn",
