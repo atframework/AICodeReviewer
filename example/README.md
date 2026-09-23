@@ -425,7 +425,8 @@ inherit. Both old array fields now fail with migration guidance.
 
 The lifecycle chain covers issue/PR triage, Resolved markers in incremental
 Gitea/GitHub PR summaries, and close/mark-resolved actions for
-`gitea_problem_issue` and `github_problem_issue`. Fingerprint disappearance,
+`gitea_problem_issue`, `github_problem_issue`, and `gitlab_problem_issue`.
+Fingerprint disappearance,
 reviewed-file coverage, and commit ancestry only select candidates. Missing
 source, invalid model output, an LLM failure, or any decision other than an
 explicit confirmation keeps the problem open.
@@ -845,6 +846,15 @@ or **Issue comments** in the GitHub webhook event list only controls which
 inbound events are delivered to AICR; it does not grant REST API permissions.
 If you use a GitHub App, update the repository permission and reinstall/refresh
 the installation before retrying.
+
+For GitLab output channels, the trigger/channel `token_env` must hold a PAT with
+the `api` scope (`read_api` is insufficient for `gitlab_problem_issue`, which
+creates/updates issues). Assignee handling is GitLab-specific: assignees who are
+not project members are silently dropped, and GitLab CE effectively supports a
+single assignee (the plural `assignee_ids` field is a Premium feature; AICR
+sends one assignee via `assignee_id`). A user becomes assignable only after
+GitLab finishes its asynchronous member-authorization propagation, so a review
+published seconds after adding a project member may lose the assignee.
 
 ### GitHub App authentication (M12)
 
@@ -1284,14 +1294,16 @@ review:
 - **Ignore labels**: Checked at the webhook layer. If a PR/MR/issue carries any
   configured ignore label, AICR returns immediately without scheduling a review.
 - **Auto tags**: Applied by output dispatchers (`gitea_pr_review`, `github_pr_review`,
-  `gitlab_mr_review`, `gitea_issue`, `gitea_problem_issue`) when publishing results.
+  `gitlab_mr_review`, `gitea_issue`, `gitea_problem_issue`, `github_problem_issue`,
+  `gitlab_problem_issue`) when publishing results.
   Tags are created automatically if they do not exist.
 - **Workspace override**: Set per-workspace `review.labels` to customize behavior
   for individual repositories.
 
 ## Managed Problem Issue Lifecycle Limit
 
-`gitea_problem_issue` and `github_problem_issue` reconcile stale managed issues
+`gitea_problem_issue`, `github_problem_issue`, and `gitlab_problem_issue`
+reconcile stale managed issues
 by listing only the most recent open issues. Configure the cap globally under
 `review.problem_issue.max_recent_issues` and override it per workspace when a
 repository needs a tighter or looser lifecycle scan.

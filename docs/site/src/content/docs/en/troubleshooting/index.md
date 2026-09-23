@@ -297,3 +297,25 @@ REST API permissions.
   existing installations.
 - Confirm the outbound credential is the resolved GitHub App token or the PAT
   referenced by `triggers[].token_env`, not `AICR_GITHUB_APP_WEBHOOK_SECRET`.
+
+## GitLab managed issues publish but the assignee is missing
+
+**Symptom:** `gitlab_problem_issue` creates issues successfully, but the issue
+has no assignee even though `assign_committer` resolved a username.
+
+**Diagnosis:** GitLab silently drops assignees that fail its checks, and the
+create request still returns 201:
+
+- The resolved user is not a **project member**. Add the user to the project
+  (any role) — GitLab only assigns members.
+- The channel token's PAT lacks the `api` scope for issue creation (less
+  common — that usually fails the whole request with 401/403).
+- The membership was created seconds before the publish: GitLab populates the
+  assignee permission check (`project_authorizations`) **asynchronously**, so
+  a freshly added member may not be assignable yet.
+- On **GitLab CE**, the plural `assignee_ids` field is ignored (Premium
+  feature). AICR sends a single assignee via `assignee_id`; CE therefore
+  effectively supports one assignee per issue.
+
+**Fix:** grant the committer project membership ahead of the review (not in
+the same automation run), and verify `token_env` holds a PAT with `api` scope.

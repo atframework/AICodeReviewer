@@ -250,8 +250,8 @@ The selected group supplies the model list and failover order for issue
 triage and resolved-problem verification. `llm.retry`, `llm.budget`,
 `llm.per_provider_overrides`, and model-catalog settings remain global.
 This covers Gitea/Forgejo issue/PR triage, Resolved markers in incremental
-Gitea/GitHub PR summaries, and `gitea_problem_issue` / `github_problem_issue`
-close or mark-resolved actions. Fingerprint disappearance, reviewed-file
+Gitea/GitHub PR summaries, and `gitea_problem_issue` / `github_problem_issue` /
+`gitlab_problem_issue` close or mark-resolved actions. Fingerprint disappearance, reviewed-file
 coverage, and commit ancestry only produce candidates; the model must
 explicitly confirm a resolution. Missing source, incomplete output, or LLM
 failure keeps the problem open.

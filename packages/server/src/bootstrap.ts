@@ -45,6 +45,7 @@ import {
   createGiteaPullRequestReviewDispatcher,
   createGithubPullRequestReviewDispatcher,
   createGitlabMergeRequestReviewDispatcher,
+  createGitlabProblemIssueDispatcher,
   createGiteaIssueDispatcher,
   createGiteaProblemIssueDispatcher,
   createGithubIssueDispatcher,
@@ -1148,7 +1149,7 @@ function readChannelOverrideNoProblemsAction(raw: unknown, channelName: string):
 }
 
 function defaultNoProblemsActionForChannel(channelKind: string): NoProblemsAction {
-  if (channelKind === "gitea_problem_issue" || channelKind === "github_problem_issue") {
+  if (channelKind === "gitea_problem_issue" || channelKind === "github_problem_issue" || channelKind === "gitlab_problem_issue") {
     return "publish";
   }
   if (channelKind === "feishu_bot" || channelKind === "feishu_app" || channelKind === "wecom_bot") {
@@ -1201,6 +1202,7 @@ function toMentionChannelKind(channelKind: string): MentionChannelKind | undefin
     case "github_issue":
     case "github_problem_issue":
     case "gitlab_mr_review":
+    case "gitlab_problem_issue":
     case "gitea_issue":
     case "gitea_problem_issue":
     case "feishu_bot":
@@ -1222,6 +1224,7 @@ function shouldMentionAuthor(channel: OutputChannelConfig): boolean {
     channel.kind === "github_issue" ||
     channel.kind === "github_problem_issue" ||
     channel.kind === "gitlab_mr_review" ||
+    channel.kind === "gitlab_problem_issue" ||
     channel.kind === "gitea_issue";
 }
 
@@ -1530,7 +1533,7 @@ export function createCompositeOutputPublisher(
   const ISSUE_CHANNEL_KINDS: Record<string, true> = {
     github_issue: true, github_problem_issue: true, github_pr_review: true,
     gitea_issue: true, gitea_problem_issue: true, gitea_pr_review: true,
-    gitlab_mr_review: true,
+    gitlab_mr_review: true, gitlab_problem_issue: true,
   };
   const FEISHU_CHANNEL_KINDS: Record<string, true> = { feishu_bot: true, feishu_app: true };
   const calls = new Map<string, number>();
@@ -1678,7 +1681,8 @@ export function createOutputPublisherFromConfig(
       channel.kind === "github_issue" ||
       channel.kind === "github_problem_issue"
       ? ["github"]
-      : channel.kind === "gitlab_mr_review"
+      : channel.kind === "gitlab_mr_review" ||
+        channel.kind === "gitlab_problem_issue"
         ? ["gitlab"]
         : [];
 
@@ -1745,7 +1749,9 @@ export function createOutputPublisherFromConfig(
   // GitLab project paths may contain multiple namespace segments. Preserve
   // the complete accepted target path instead of requiring owner/repo shape.
   const repoRef = owner && repo ? `${owner}/${repo}` :
-    channel.kind === "gitlab_mr_review" ? explicitRepo ?? workspaceRepoRef ?? reviewEvent?.repoRef : workspaceRepoRef;
+    channel.kind === "gitlab_mr_review" || channel.kind === "gitlab_problem_issue"
+      ? explicitRepo ?? workspaceRepoRef ?? reviewEvent?.repoRef
+      : workspaceRepoRef;
   const rendering = createChannelRendering(config, channel, workspaceId, reviewEvent, repoRef, baseDir, targetUrlTemplates);
   const publishEmptySummary = noProblemsAction === "publish";
   const channelSeverityLabelPrefix = readString(channelConfig, "severity_label_prefix", "severityLabelPrefix");
@@ -2000,6 +2006,92 @@ export function createOutputPublisherFromConfig(
           return dispatcher.publishSummary!(rendering.renderSummary(summary, renderedProblems, options?.title), renderedProblems);
         },
       } : {}),
+    };
+  }
+
+  if (channel.kind === "gitlab_problem_issue") {
+    const projectId = channelConfig.project_id ?? channelConfig.projectId ?? repoRef;
+    if (!baseUrl || (typeof projectId !== "string" && typeof projectId !== "number")) {
+      return undefined;
+    }
+
+    const resolvedAction = readString(channelConfig, "resolved_action", "resolvedAction");
+    const markerPrefix = readString(channelConfig, "marker_prefix", "markerPrefix");
+    const markerLabel = readString(channelConfig, "marker_label", "markerLabel");
+    const issueMode = readString(channelConfig, "issue_mode", "issueMode");
+    const resolvedIssueMode = issueMode === "consolidated" || issueMode === "per_problem" || issueMode === "per_commit"
+      ? issueMode
+      : undefined;
+    const channelLabels = Array.isArray(channelConfig.labels) && channelConfig.labels.every((value) => typeof value === "string")
+      ? channelConfig.labels as readonly string[]
+      : undefined;
+    const assignCommitter = readBoolean(channelConfig, "assign_committer", "assignCommitter");
+    const ownersFile = readString(channelConfig, "owners_file", "ownersFile");
+    const addOwnersAsAssignees = readBoolean(channelConfig, "add_owners_as_assignees", "addOwnersAsAssignees");
+    const notifyFeishuConfig = isPlainObject(channelConfig.notify_feishu)
+      ? channelConfig.notify_feishu as Record<string, unknown>
+      : undefined;
+    const notifyFeishuWebhookUrl = notifyFeishuConfig ? resolveSecretField(notifyFeishuConfig, "webhook_url", "webhook_url_env") : undefined;
+    const notifyFeishuSecret = notifyFeishuConfig ? resolveSecretField(notifyFeishuConfig, "secret", "secret_env") : undefined;
+    const authorResolution = buildAuthorResolutionOptions(config, channel);
+    const authorAssignment = resolveAuthorAssignment(reviewEvent ?? {}, authorResolution);
+    const committerUsername = authorAssignment.username;
+    const fallbackCommitterUsername = authorAssignment.fallbackUsername;
+    const ref = reviewEvent?.headSha ?? "main";
+
+    const dispatcher = createGitlabProblemIssueDispatcher({
+      baseUrl,
+      ...(resolvedToken ? { token: resolvedToken } : {}),
+      projectId,
+      channelName: channel.name,
+      ...(markerPrefix ? { markerPrefix } : {}),
+      ...(markerLabel ? { markerLabel } : {}),
+      ...(channelLabels ? { labels: channelLabels } : {}),
+      ...(resolvedIssueMode ? { issueMode: resolvedIssueMode } : {}),
+      ...(resolvedAction === "none" || resolvedAction === "close" || resolvedAction === "mark_resolved" || resolvedAction === "delete" ? { resolvedAction } : {}),
+      ...(problemIssueMaxRecentIssues !== undefined ? { maxRecentIssues: problemIssueMaxRecentIssues } : {}),
+      ...(authorAssignment.blocked ? { assignCommitter: false } : assignCommitter !== undefined ? { assignCommitter } : {}),
+      ...(committerUsername ? { committerUsername } : {}),
+      ...(fallbackCommitterUsername ? { fallbackCommitterUsername } : {}),
+      ...(ownersFile ? { ownersFilePath: ownersFile } : {}),
+      ...(addOwnersAsAssignees !== undefined ? { addOwnersAsAssignees } : {}),
+      ...(channelSeverityLabelPrefix ? { severityLabelPrefix: channelSeverityLabelPrefix } : {}),
+      ...(channelSeverityLabelColors ? { severityLabelColors: channelSeverityLabelColors } : {}),
+      ...(notifyFeishuWebhookUrl ? { notifyFeishu: { webhookUrl: notifyFeishuWebhookUrl, ...(notifyFeishuSecret ? { secret: notifyFeishuSecret } : {}) } } : {}),
+      ...(autoTag ? { autoTag } : {}),
+      ...(reviewedTag ? { reviewedTag } : {}),
+      ...(resolutionAnalyzer ? { resolutionAnalyzer } : {}),
+      ref,
+      ...(reviewEvent?.headSha ? { headSha: reviewEvent.headSha } : {}),
+      ...(reviewEvent?.targetKind ? { targetKind: reviewEvent.targetKind } : {}),
+      ...(pullNumber !== undefined ? { pullNumber } : {}),
+      ...(reviewEvent?.branch ? { branch: reviewEvent.branch } : {}),
+    });
+
+    let reconciled = false;
+    return {
+      handlesRendering: true,
+      publishesProblems: false,
+      noProblemsAction,
+      publishEmptySummary,
+      async publishProblem(): Promise<DispatchResult> {
+        return { channel: channel.name, status: "published", raw: { collected: true } };
+      },
+      async publishSummary(summary: string, summaryProblems?: readonly ReviewProblem[], options?: ReviewSummaryPublishOptions): Promise<readonly DispatchResult[]> {
+        if (options?.skipReconcile) {
+          return [];
+        }
+        if (reconciled) {
+          return [];
+        }
+        reconciled = true;
+        const renderedProblems = (summaryProblems ?? []).map((problem) => rendering.renderProblem(problem));
+        return dispatcher.reconcileProblems(
+          renderedProblems,
+          rendering.renderSummary(summary, renderedProblems, options?.title),
+          options?.reviewedFiles ? { reviewedFiles: options.reviewedFiles } : undefined,
+        );
+      },
     };
   }
 

@@ -105,6 +105,10 @@ Sources: `.markdownlint-cli2.yaml`, `docs/site/package.json`, its scripts,
   pipes. An ancestor summary cannot silently cover newly undocumented fields.
   Arrays document element `[]` paths under every exposed workspace prefix;
   enumConceptPaths and both locale tables keep matching order.
+- Live serve-based tests (`*-live.test.ts` spawning the CLI) run the workspace
+  **dist** exports of `@aicr/outputs|server|cli`, not the edited `src`; a green
+  vitest on stale dist proves nothing. Always `pnpm build` before rerunning live
+  suites after touching source (`wsl-run-live.sh` builds first for this reason).
 - CLI extraction respects nested braces and distinguishes command from subcommand.
   Sidebar extraction handles inline entries; link resolution distinguishes index
   pages from ordinary pages. Update extractors when source shapes change, never

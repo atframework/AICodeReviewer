@@ -17,6 +17,14 @@ Sources: `packages/outputs/src/index.ts`, `template-engine.ts`, `im-markdown.ts`
   needs the full target path and project-local `iid`; Note Hooks carry the MR
   at the payload root. Never fall back to the note or global MR ID; cover absent
   and invalid identifiers (`config-e2e-publish-review.test.ts` E05).
+- GitLab CE silently drops assignees at issue create (HTTP 201, empty
+  assignees) in three cases: the plural `assignee_ids` field (Premium feature —
+  send a single assignee via `assignee_id` instead), non-project-member users,
+  and members added moments ago (`ProjectTeam#member?` reads the asynchronously
+  populated `project_authorizations` table). Push-review authors are rebuilt
+  from git evidence, so map commit emails to GitLab usernames via
+  `outputs.author_resolution.email_mappings`; MR reviews can use the webhook
+  actor. See `gitlab-assignment-live.test.ts` and `gitlab-flow-live.test.ts`.
 
 - Apply `no_problems` per channel with workspace overrides. Errors bypass normal
   empty-result suppression. `dryRun: false` must not become `dry_run` just because

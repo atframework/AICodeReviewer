@@ -71,7 +71,7 @@ Channel 的 `kind` 是由输出实现注册表约束的自由字符串（Zod 校
 | `gitea_pr_review` | 一条合并的 PR review/评论正文 | PR review / 配置的 summary 发布器 | problem 先缓冲，再作为一条 Markdown 正文 flush；403/422 时退化为一条 issue 评论 |
 | `github_pr_review` | 一条合并的 PR review/评论正文 | PR review / 配置的 summary 发布器 | 与 `gitea_pr_review` 相同的缓冲+flush；403/422 时退化为 issue 评论 |
 | `gitlab_mr_review` | 当 `baseSha`/`headSha` 可用时发 MR discussion | MR note / 配置的 summary 发布器 | 行锚点不可用时退化为通用 MR note |
-| `gitea_problem_issue` / `github_problem_issue` | 收集后对账 | 创建 / 更新 / 解决托管 problem issue | 这里 fingerprint 稳定性最重要；`github_problem_issue` 用字符串标签名，`resolved_action` 支持 `none`、`close` 和 `mark_resolved`（GitHub 无 issue 删除 API） |
+| `gitea_problem_issue` / `github_problem_issue` / `gitlab_problem_issue` | 收集后对账 | 创建 / 更新 / 解决托管 problem issue | 这里 fingerprint 稳定性最重要；`github_problem_issue` 用字符串标签名，`resolved_action` 支持 `none`、`close` 和 `mark_resolved`（GitHub 无 issue 删除 API）；GitLab 上 assignee 必须是项目成员，CE 实际只支持单个 assignee |
 | `gitea_issue` / `github_issue` | 收集后渲染为 issue 评论 | 聚合 issue 评论 | 适用于 push 事件或基于 issue 的分诊 |
 | `feishu_bot` | 收集后聚合 | 交互卡片（JSON 2.0 schema） | 见 [IM 机器人](/zh-cn/integrations/im-bots/) |
 | `feishu_app` | 收集后聚合 | 通过应用消息 API 发送共享飞书卡片 | 可选来源群目录匹配作者并 @；见 [IM 机器人](/zh-cn/integrations/im-bots/#飞书自建应用) |
@@ -92,7 +92,7 @@ HTTP POST 或每个 problem 一条行内评论。如果把 PR review channel 只
 
 ## 托管 problem issue 生命周期
 
-`gitea_problem_issue` 和 `github_problem_issue` 跨评审对账过期的托管 issue。关键行为：
+`gitea_problem_issue`、`github_problem_issue` 和 `gitlab_problem_issue` 跨评审对账过期的托管 issue。关键行为：
 
 - **Fingerprint 稳定性。** 每个 problem 带一个 `fingerprint`。AICR 在每个托管 issue 内的
   隐藏 `aicr:problems` 标记里跟踪打开的 fingerprint。当之前打开的 fingerprint 消失，该 issue
@@ -105,7 +105,10 @@ HTTP POST 或每个 problem 一条行内评论。如果把 PR review channel 只
   `review.problem_issue.max_recent_issues` 控制（默认 30，范围 1–200，可按 workspace 覆盖）。
   最近窗口之外的 fingerprint 不会在该 run 去重或关闭。
 - **GitHub `resolved_action`。** 支持 `none`、`close` 和 `mark_resolved`（GitHub 无 issue 删除
-  API）。Gitea 额外支持 `delete`。
+  API）。Gitea 和 GitLab 额外支持 `delete`（GitLab 上 token 用户必须是项目 owner 或 admin）。
+- **GitLab assignee。** 非项目成员的 assignee 会被静默丢弃，且 CE 忽略复数 `assignee_ids`
+  字段，因此 AICR 通过 `assignee_id` 发送单个 assignee。新增成员要等 GitLab 异步成员授权
+  传播完成后才可被指派。
 
 `issue_mode`、`resolved_action`、`assign_committer`、`owners_file` 和严重性标签字段见
 [输出通道配置](/zh-cn/configuration/outputs/)。

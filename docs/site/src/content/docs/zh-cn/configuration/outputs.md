@@ -125,6 +125,7 @@ GitHub/Gitea 托管 issue 按事件 login、`outputs.author_resolution.email_map
 | `gitlab_mr_review` | GitLab MR 上的行内评论。 |
 | `gitea_problem_issue` | 按 problem 指纹创建/关闭的 Gitea 托管 issue。 |
 | `github_problem_issue` | 按 problem 指纹的 GitHub 托管 issue（不支持删除——GitHub 不允许）。 |
+| `gitlab_problem_issue` | 按 problem 指纹的 GitLab 托管 issue（assignee 必须是项目成员；CE 实际只支持单个 assignee；delete 需要 owner/admin）。 |
 | `gitea_issue` | 把汇总评审作为评论发到既有 Gitea issue。 |
 | `github_issue` | 把汇总评审作为评论发到既有 GitHub issue。 |
 | `feishu_bot` | 通过自定义机器人把汇总问题推送到飞书群。 |
@@ -206,14 +207,14 @@ review:
 | 字段 | 行为 |
 | --- | --- |
 | `ignore` | 在 webhook 层检查。如果 PR/MR/issue 带有任一所列 label，AICR 立即返回，不调度评审。 |
-| `auto_tag` | 由输出分发器（`gitea_pr_review`、`github_pr_review`、`gitlab_mr_review`、`gitea_issue`、`gitea_problem_issue`）在发布时打上的固定 tag。不存在则自动创建。 |
+| `auto_tag` | 由输出分发器（`gitea_pr_review`、`github_pr_review`、`gitlab_mr_review`、`gitea_issue`、`gitea_problem_issue`、`github_problem_issue`、`gitlab_problem_issue`）在发布时打上的固定 tag。不存在则自动创建。 |
 | `reviewed_tag` | 评审完成时打上的 tag。 |
 
 所有字段都支持全局 → workspace 级的覆盖层次。
 
 ## 托管 problem issue 的生命周期上限
 
-`gitea_problem_issue` 与 `github_problem_issue` 通过仅列出最近的开放 issue 来
+`gitea_problem_issue`、`github_problem_issue` 与 `gitlab_problem_issue` 通过仅列出最近的开放 issue 来
 回收陈旧的托管 issue。上限位于 `review.problem_issue`，可按 workspace 收紧。
 
 ```yaml

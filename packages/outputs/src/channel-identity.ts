@@ -51,7 +51,7 @@ export function resolveChannelDirectoryCacheTtlSeconds(options: {
 
 export function channelIdentityCapability(kind: string): "native" | "directory" | "unavailable" {
 	if (kind === "feishu_app") return "directory";
-	if (["github_issue", "github_problem_issue", "github_pr_review", "gitlab_mr_review", "gitea_issue", "gitea_problem_issue", "gitea_pr_review"].includes(kind)) return "native";
+	if (["github_issue", "github_problem_issue", "github_pr_review", "gitlab_mr_review", "gitlab_problem_issue", "gitea_issue", "gitea_problem_issue", "gitea_pr_review"].includes(kind)) return "native";
 	return "unavailable";
 }
 

@@ -323,6 +323,20 @@ Sources: `packages/server/src/review-orchestrator.ts`, `live-runs.ts`,
   Note Hook places `merge_request` at the payload root. Route retries must enter
   `readNextWake` in every backend and reuse frozen events without a new VCS query
   (`routing-admission.test.ts`, `auto-commit-store-conformance.ts`).
+- GitLab webhook delivery is at-most-once and drops silently on a busy cold
+  instance: `allow_local_requests_from_web_hooks_and_services` is held in a
+  per-process settings cache in sidekiq workers, so toggling it off and on (or
+  setting it late) leaves workers with the stale "false" that blocks delivery
+  to host loopback targets ("URL is blocked: Requests to the link local network
+  are not allowed" in `WebHookLog`). Set it once at service startup, never
+  reset it in test teardown, and re-fire the trigger rather than waiting on a
+  single delivery (`tests/services/with-gitlab.sh`, `gitlab-flow-live.test.ts`).
+- Live deferral persistence silently no-ops when the store is skipped: the
+  `needsStore` gate only honors admin auth in the `username_env`/`password_env`
+  form — literal `admin.username` in config leaves `adminAuthConfig` empty, no
+  `store.sqlite` is created, and out-of-window deferrals stay in memory
+  (`bootstrap.ts` `resolveAdminAuthConfig`/`needsStore`,
+  `gitlab-flow-live.test.ts` window leg).
 
 - Redis live tests measure the whole shared keyspace: `SCAN MATCH <prefix>`
   still walks every key, so a dev instance with thousands of leftover test

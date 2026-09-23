@@ -221,7 +221,7 @@ workspaces:
 所选组决定 issue triage 和已解决问题复核的模型列表与故障切换顺序；
 `llm.retry`、`llm.budget`、`llm.per_provider_overrides` 和模型目录仍全局共享。
 这包括 Gitea/Forgejo issue/PR triage、Gitea/GitHub PR 增量 summary 的 Resolved
-标记，以及 `gitea_problem_issue` / `github_problem_issue` 的关闭或标记已解决。
+标记，以及 `gitea_problem_issue` / `github_problem_issue` / `gitlab_problem_issue` 的关闭或标记已解决。
 指纹消失、审查文件范围和提交祖先关系只生成候选；模型明确确认后才执行动作。
 源码缺失、输出不完整或 LLM 失败时保持 open。
 

@@ -443,25 +443,26 @@ describe("kinds applicability", () => {
   });
 
   it("scopes channel kind-conditional fields", () => {
-    expect(findField("channels", "channel:labels").kinds).toEqual(["github_problem_issue"]);
+    expect(findField("channels", "channel:labels").kinds).toEqual(["github_problem_issue", "gitlab_problem_issue"]);
     expect(findField("channels", "channel:label_ids").kinds).toEqual(["gitea_problem_issue"]);
     expect(findField("channels", "channel:review_mode").kinds).toEqual(["gitea_pr_review", "github_pr_review"]);
     expect(findField("channels", "channel:notify_feishu.webhook_url_env").kinds).toEqual([
       "github_problem_issue",
+      "gitlab_problem_issue",
       "gitea_problem_issue",
     ]);
     expect(findField("channels", "channel:name").kinds).toBeUndefined();
   });
 
-  it("documents per-kind resolved_action values, including gitea-only delete", () => {
+  it("documents per-kind resolved_action values, including gitlab/gitea delete", () => {
     const field = findField("channels", "channel:resolved_action");
     expect(optionValues(field)).toEqual(["none", "close", "mark_resolved", "delete"]);
     for (const [kind, values] of Object.entries(CHANNEL_RESOLVED_ACTION_VALUES)) {
       expect(field.capability).toContain(kind);
       expect(field.capability).toContain(values.join("/"));
     }
-    expect(field.capability).toContain("delete is gitea_problem_issue only");
-    expect(field.kinds).toEqual(["github_problem_issue", "gitea_problem_issue"]);
+    expect(field.capability).toContain("delete is gitea_problem_issue/gitlab_problem_issue only");
+    expect(field.kinds).toEqual(["github_problem_issue", "gitlab_problem_issue", "gitea_problem_issue"]);
   });
 });
 

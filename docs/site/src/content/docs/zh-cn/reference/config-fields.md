@@ -43,7 +43,7 @@ web_search `credentials` 条目接受环境变量名字符串或 `{ value: "..."
 :::note[Channel `kind` 是自由字符串]
 输出 channel 的 `kind` 字段是受输出注册表约束的自由字符串，不是封闭枚举。内置 channel kind 包括
 `gitea_pr_review`、`github_pr_review`、`gitlab_mr_review`、`gitea_issue`、`gitea_problem_issue`、
-`github_issue`、`github_problem_issue`、`feishu_bot`、`wecom_bot`。已移除的 `gitea_finding_issue` kind 会被
+`github_issue`、`github_problem_issue`、`gitlab_problem_issue`、`feishu_bot`、`wecom_bot`。已移除的 `gitea_finding_issue` kind 会被
 校验拒绝；请使用 `gitea_problem_issue`。参见[输出通道](/zh-cn/configuration/outputs/)。
 :::
 

@@ -253,6 +253,7 @@ If a run has problems but records `skipReason="no_output_publisher"`, no summary
 | `gitea_problem_issue` | Collected for reconciliation | Creates, updates, or resolves managed problem issues | Fingerprint stability matters most here |
 | `github_issue` | Collected, then rendered into an issue comment | Aggregated issue comment | Same as `gitea_issue` but for GitHub repositories |
 | `github_problem_issue` | Collected for reconciliation | Creates or resolves managed GitHub issues | Like `gitea_problem_issue` but uses string label names; `resolved_action` supports `close`, `mark_resolved`, and `none` (GitHub has no issue delete API) |
+| `gitlab_problem_issue` | Collected for reconciliation | Creates, updates, or resolves managed GitLab issues | Like `gitea_problem_issue` but uses comma-separated label names and numeric assignee IDs resolved through the users API |
 | `feishu_bot` | Collected for aggregation | Interactive card Markdown (JSON 2.0 schema) | Renders sectioned `Review target` / `Summary` / `Problems` blocks. Cards are sent with `card.schema = "2.0"` so headings, tables, inline code (`code`), and fenced code blocks with language-based syntax highlighting render natively; each problem includes severity, category, `Location: file:line`, and truncated message/suggestion; built-in summaries render `@username (Display Name)` when both are available |
 | `wecom_bot` | Collected for aggregation | Markdown message | Same sectioned content as Feishu; messages are truncated to 500 chars and suggestions to 300 chars to stay within size limits; built-in summaries render `@username (Display Name)` when both are available |
 
@@ -317,6 +318,7 @@ Managed issue lifecycle reconciliation is intentionally bounded. Before closing 
 - Only open issues are listed (`state=open`).
 - GitHub uses the repository issues API with `sort=updated`, `direction=desc`, and pages of up to `per_page=100` until the configured window is covered.
 - Gitea/Forgejo uses the repository issues API with `type=issues` and pages of up to `limit=50` (the server default `MAX_RESPONSE_ITEMS`) until the configured window is covered.
+- GitLab uses the project issues API with pages of up to `per_page=100` until the configured window is covered.
 
 When a repository has more open managed problem issues than the limit, fingerprints outside the recent window are not deduplicated or closed in that run. Temporarily raise the limit, or run repeated scheduled reviews, when doing a one-time cleanup of a large backlog.
 
@@ -325,7 +327,7 @@ When a repository has more open managed problem issues than the limit, fingerpri
 Problems are deduplicated by fingerprint at every layer of the pipeline to prevent duplication in published output:
 
 1. **Collection**: `AicrOutputCollector.reportProblem` computes a fingerprint (explicit `fingerprint` field, or `sha256(file:line:category:message)[:16]` when absent) and skips duplicates. When the agent uses MCP output tools (writing `.aicr-output-state.json`), the orchestrator replays MCP state as the authoritative source and skips text re-parsing, preventing the same problems from being collected twice.
-2. **Dispatch**: `github_problem_issue` and `gitea_problem_issue` dispatchers call `dedupProblemsByFingerprint` on the input array before building issue bodies, ensuring that even if upstream dedup misses a case, the published issue body stays clean.
+2. **Dispatch**: `github_problem_issue`, `gitea_problem_issue`, and `gitlab_problem_issue` dispatchers call `dedupProblemsByFingerprint` on the input array before building issue bodies, ensuring that even if upstream dedup misses a case, the published issue body stays clean.
 3. **Reconciliation**: problem-issue `reconcileProblems` runs at most once per review (guarded by a per-publisher `reconciled` flag), so multiple summary entries in one review cannot trigger duplicate issue creation via a read-after-write gap.
 
 ```yaml
@@ -343,7 +345,7 @@ workspaces:
 
 ## Managed Gitea problem issues
 
-The `gitea_problem_issue` and `github_problem_issue` channels reconcile managed issues from problem fingerprints. A fingerprint becomes a resolution candidate only after the current review covers its file and no longer reports it; it is resolved only when the lifecycle model explicitly confirms the fix against current source.
+The `gitea_problem_issue`, `github_problem_issue`, and `gitlab_problem_issue` channels reconcile managed issues from problem fingerprints. A fingerprint becomes a resolution candidate only after the current review covers its file and no longer reports it; it is resolved only when the lifecycle model explicitly confirms the fix against current source.
 
 By default, one review is combined into a single issue (`issue_mode: consolidated`). `per_problem` creates one issue per finding. Consolidated scopes are target-aware: pushes key by `headSha`, PR/MR reviews key by pull number (falling back to `headSha`), and other targets use the repository scope.
 
@@ -364,7 +366,7 @@ A managed problem is only marked Resolved when the current review re-analyzed it
 - Per-problem bodies embed `<!-- aicr:file=<path> -->`; legacy bodies parse `Location: path:line`. Consolidated bodies store per-fingerprint single-line or range locations.
 - Partial updates retain out-of-scope or model-unconfirmed fingerprints in `open_problems` and the body. If retained metadata is incomplete, the rewrite is skipped. Empty reviews use the same per-fingerprint path.
 - Absent or empty `reviewedFiles` preserves current-scope legacy behavior; it never authorizes cross-scope resolution.
-- Trigger-error reports (`publishTriggerErrorReport`, fired when a trigger exhausts retries) never drive lifecycle reconciliation: they pass `ReviewSummaryPublishOptions.skipReconcile`, so the `github_problem_issue` / `gitea_problem_issue` wrappers skip `reconcileProblems` entirely. A failed/timed-out analysis has an empty problem list but is not a "no problems found" result, so it must not resolve or close managed issues. `bypassNoProblemsPolicy` is still set so the failure notice reaches IM/review-comment channels.
+- Trigger-error reports (`publishTriggerErrorReport`, fired when a trigger exhausts retries) never drive lifecycle reconciliation: they pass `ReviewSummaryPublishOptions.skipReconcile`, so the `github_problem_issue` / `gitea_problem_issue` / `gitlab_problem_issue` wrappers skip `reconcileProblems` entirely. A failed/timed-out analysis has an empty problem list but is not a "no problems found" result, so it must not resolve or close managed issues. `bypassNoProblemsPolicy` is still set so the failure notice reaches IM/review-comment channels.
 Managed issue titles are generated by the output layer to stay concise in GitHub/Gitea list views. `aicr.publish_summary.title` only affects the rendered summary content in the issue body; it does not replace the managed issue title. Current title policy:
 
 - `per_problem`: `marker_prefix + severity + shortened location + short first-sentence summary`
@@ -404,20 +406,18 @@ Path owners use longest-prefix matching. If no path matches, `reviewers` are use
 
 ### Assignee resolution
 
-`assign_committer` (default `true`) adds the resolved review author to newly created GitHub/Gitea issues:
+`assign_committer` (default `true`) adds the resolved review author to newly created GitHub/Gitea/GitLab issues:
 
 1. Use the event author's platform login. Push payloads with head-commit metadata use that commit's author; a Git display name is never a login. Payloads without that metadata retain the legacy pusher identity. GitHub/Gitea PR events prefer the PR author over the delivery sender; automatic Git batches carry only the Git name/email.
 2. Resolve the author email through `outputs.author_resolution.email_mappings`.
-3. Query the review head commit and use the linked `author.login`: GitHub uses `GET /repos/{owner}/{repo}/commits/{headSha}`; Gitea/Forgejo uses `GET /repos/{owner}/{repo}/git/commits/{headSha}`. The lookup uses the output repository and credentials, runs only for issue creation, and caches both the pending request and its result per dispatcher.
+3. Query the review head commit and use the linked `author.login`: GitHub uses `GET /repos/{owner}/{repo}/commits/{headSha}`; Gitea/Forgejo uses `GET /repos/{owner}/{repo}/git/commits/{headSha}`. The lookup uses the output repository and credentials, runs only for issue creation, and caches both the pending request and its result per dispatcher. GitLab's commit API exposes no platform username for a commit author, so this step does not apply there.
 4. Use the push event's retained pusher login only if the lookup found no linked author or failed.
 
 `email_blacklist` blocks author assignment, including API lookup and pusher fallback. `assign_committer: false` also disables those paths. `add_owners_as_assignees` independently adds and deduplicates matched OWNERS entries. Existing issues keep their assignees.
 
-If no identity resolves, creation proceeds without an author assignee. Only an explicit HTTP 422 assignee validation error causes one retry without `assignees`; authentication, rate limits, other validation failures, and unknown POST outcomes propagate. A failed retry also propagates.
+If no identity resolves, creation proceeds without an author assignee. On GitHub/Gitea, only an explicit HTTP 422 assignee validation error causes one retry without `assignees`; authentication, rate limits, other validation failures, and unknown POST outcomes propagate. A failed retry also propagates. GitLab resolves each username to its numeric ID through `GET /api/v4/users?username=`, drops unknown usernames instead of failing, and does not retry creation.
 
-The publishing account must have permission to assign issues, and the assignee must be eligible in the target repository. GitHub can silently ignore assignees without push access; Gitea also ignores assignment without issue write access. Successful creation alone does not prove assignment. Private GitHub commit lookup additionally needs Contents read permission. See the [GitHub issue API](https://docs.github.com/en/rest/issues/issues#create-an-issue), [GitHub commit API](https://docs.github.com/en/rest/commits/commits#get-a-commit), [Gitea commit API](https://docs.gitea.com/api/operations/repo-get-single-commit/), and [Gitea issue handler](https://github.com/go-gitea/gitea/blob/main/routers/api/v1/repo/issue.go).
-
-GitLab currently has no managed problem issue channel: `gitlab_mr_review` publishes MR discussions/notes only. GitLab issue creation and assignment are unimplemented; its [issue API](https://docs.gitlab.com/api/issues/#new-issue) requires numeric `assignee_ids`.
+The publishing account must have permission to assign issues, and the assignee must be eligible in the target repository. GitHub can silently ignore assignees without push access; Gitea also ignores assignment without issue write access. GitLab silently drops assignees who are not project members, and GitLab CE silently ignores the plural `assignee_ids` field entirely (multiple assignees are a Premium feature), so a single assignee is sent as `assignee_id`. GitLab membership itself becomes effective for assignment only after asynchronous `project_authorizations` propagation, so an issue created seconds after a member add can still lose the assignee. Successful creation alone does not prove assignment. Private GitHub commit lookup additionally needs Contents read permission. See the [GitHub issue API](https://docs.github.com/en/rest/issues/issues#create-an-issue), [GitHub commit API](https://docs.github.com/en/rest/commits/commits#get-a-commit), [Gitea commit API](https://docs.gitea.com/api/operations/repo-get-single-commit/), [Gitea issue handler](https://github.com/go-gitea/gitea/blob/main/routers/api/v1/repo/issue.go), and the [GitLab issue API](https://docs.gitlab.com/api/issues/#new-issue).
 
 Example (per-problem mode):
 
@@ -496,6 +496,50 @@ outputs:
       assign_committer: true
       owners_file: OWNERS
       add_owners_as_assignees: true
+      severity_label_prefix: "aicr:problem:"
+```
+
+## Managed GitLab problem issues
+
+The `gitlab_problem_issue` channel reconciles managed GitLab issues from problem fingerprints, sharing the gitea/github lifecycle model: issue modes, scope fingerprints, cross-scope coordination, file-scope guards, and title policy all behave the same. On every summary publish it creates issues for new fingerprints and applies `resolved_action` only to disappeared fingerprints confirmed by lifecycle analysis.
+
+Key differences from `gitea_problem_issue`:
+
+- **Project addressing**: the target project is the trigger/workspace `repoRef` (a numeric ID or a URL-encoded `group/subgroup/project` path); set the channel `project_id` to override it.
+- **Labels**: comma-separated label names in the create body (`labels: "bug,aicr:problem:high"`); GitLab creates missing project labels automatically. Severity labels are still resolved explicitly through the project labels API (`?search=` then create) so colors apply.
+- **Assignees**: numeric IDs via `GET /api/v4/users?username=`. A single assignee is sent as `assignee_id` because GitLab CE silently drops the plural `assignee_ids` field (multiple assignees are Premium-only). Assignees must be project members; GitLab silently drops non-members, and a freshly added member may remain unassignable until asynchronous member-authorization propagation completes.
+- **Resolved action**: supports `none`, `close`, `mark_resolved`, and `delete`. Closing and marking resolved use `state_event`; deletion uses `DELETE /projects/:id/issues/:iid`.
+- **Ancestry checks**: cross-scope commit order uses the merge-base API (`GET /projects/:id/repository/merge_base`) instead of a compare endpoint; a missing or failed merge-base result skips the old scope like a compare failure.
+- **API headers**: `PRIVATE-TOKEN: <token>` (or a project/group access token) against `{base_url}/api/v4`.
+
+Channel fields:
+
+| Field | Meaning |
+| --- | --- |
+| `marker_prefix` | Title prefix used to identify managed issues; defaults to `[AICR]` |
+| `marker_label` | Hidden body marker used to scope managed issues; defaults to `aicr-managed` |
+| `labels` | GitLab label names to attach to every created issue |
+| `project_id` | Override target project (numeric ID or `group/project` path) |
+| `issue_mode` | `consolidated` (default), `per_problem`, or `per_commit` |
+| `resolved_action` | `none`, `close`, `mark_resolved`, or `delete`; defaults to `close` |
+| `assign_committer` | Assign the resolved review author to created issues; defaults to `true` (see Assignee resolution) |
+| `owners_file` | Repository file to read for path owners; defaults to `OWNERS` |
+| `add_owners_as_assignees` | Set to `true` to add matched OWNERS entries as assignees |
+| `severity_label_prefix` | When set, auto-create and attach one severity label such as `aicr:problem:high` |
+| `severity_label_colors` | Optional severity-to-color map for auto-created labels |
+| `notify_feishu` | Optional issue-created notification webhook config |
+
+Example:
+
+```yaml
+outputs:
+  channels:
+    - name: gitlab-problem-issues
+      kind: gitlab_problem_issue
+      trigger: gitlab
+      issue_mode: consolidated
+      resolved_action: close
+      assign_committer: true
       severity_label_prefix: "aicr:problem:"
 ```
 

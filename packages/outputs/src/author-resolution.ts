@@ -19,6 +19,7 @@ export type MentionChannelKind =
 	| "github_issue"
 	| "github_problem_issue"
 	| "gitlab_mr_review"
+	| "gitlab_problem_issue"
 	| "gitea_issue"
 	| "gitea_problem_issue"
 	| "feishu_bot"
@@ -30,6 +31,7 @@ function isGitMentionChannel(channelKind: MentionChannelKind): boolean {
 		channelKind === "github_issue" ||
 		channelKind === "github_problem_issue" ||
 		channelKind === "gitlab_mr_review" ||
+		channelKind === "gitlab_problem_issue" ||
 		channelKind === "gitea_issue" ||
 		channelKind === "gitea_problem_issue";
 }
@@ -116,6 +118,7 @@ function renderFallbackMention(channelKind: MentionChannelKind): string {
 		case "github_issue":
 		case "github_problem_issue":
 		case "gitlab_mr_review":
+		case "gitlab_problem_issue":
 		case "gitea_issue":
 		case "gitea_problem_issue":
 		default:
@@ -141,6 +144,7 @@ export function renderMentions(
 		case "github_issue":
 		case "github_problem_issue":
 		case "gitlab_mr_review":
+		case "gitlab_problem_issue":
 		case "gitea_issue":
 		case "gitea_problem_issue":
 		default:

@@ -20,7 +20,7 @@ Debian 容器统一通过 `tests/services/debian-mirror.sh` 使用中科大国�
 | Redis | 配置/队列/catalog、故障恢复与持久化 | 可复用本机镜像；普通和 OOM 独立容器，按测试实际峰值限额，只删自有前缀，禁止 FLUSHDB |
 | PostgreSQL | 配置/业务存储、迁移与角色权限 | 独立 cluster；角色需 CREATE ROLE。共享迁移套件串行或独立数据库，不混用生产连接 |
 | SVN | hook、diff、辅助仓库物化、分析与发布 | svnserve 单容器，1 CPU / 256 MiB；HTTPS/权限测试使用下述部署夹具 |
-| GitLab | 本地真仓库/token/webhook、push/MR 入队与发布 | 可自建，但官方受限单节点至少 8 GB 内存；本轮不启动。单独串行安排，关闭非必要组件，固定镜像后再制定版本对应配置 |
+| GitLab | 真实仓库/token/webhook、push/MR 入队、managed issue 发布与成员指派、窗口外 MR 延期持久化与重启恢复 | 2 CPU / 6 GiB 单独串行；固定 `gitlab/gitlab-ce:19.4.0-ce.0`，omnibus 精简组件，首次引导 3-10 分钟。CE 语义不等同 EE/SaaS，不能替代其他版本 |
 | 飞书、付费 LLM | 真实 API 短请求，见下文环境变量 | 飞书发送后撤回；LLM 每例一次、最多 256 输出 token，无自动重试。不能替代身份匹配质量或套餐边界验收 |
 
 GitLab 的资源判断依据[官方安装要求](https://docs.gitlab.com/install/requirements/)；
@@ -57,6 +57,44 @@ WSLENV 仅追加这两个 fixture 变量以便启动 Windows 子进程。
 权限与 422 重试场景核对固定版本的
 [issue handler](https://github.com/go-gitea/gitea/blob/v1.25.4/routers/api/v1/repo/issue.go)。
 两变量都不设时明确跳过；只设一个或使用非回环 HTTP 地址时失败。
+
+## GitLab 复现
+
+在仓库根目录使用 Linux Node/pnpm（先 `pnpm install` 和 `pnpm build`：端到端用例通过
+workspace 的 dist 出口启动真实 serve 子进程）：
+
+```bash
+bash tests/services/with-gitlab.sh bash -c \
+  'pnpm --filter @aicr/outputs exec vitest run test/gitlab-assignment-live.test.ts &&
+   pnpm --filter @aicr/server exec vitest run test/gitlab-flow-live.test.ts'
+```
+
+脚本要求 Podman、curl、node、timeout；数据目录、随机回环端口、本轮命名卷与
+`AICR_ACCEPTANCE_ROOT` 语义与 Gitea 一致。external_url 携带发布端口，omnibus nginx
+监听同端口；精简配置关闭 Prometheus 族/KAS/registry 并限制 puma/sidekiq 规模，
+readiness 以 `/users/sign_in` 探测全栈。PAT 经 `gitlab-rails runner` 从 stdin 注入，
+不出现在参数或日志。脚本传递 `AICR_GITLAB_TEST_URL` / `AICR_GITLAB_TEST_TOKEN`；
+两变量都不设时明确跳过，只设一个或使用非回环 HTTP 地址时失败。容器运行上限 7200 秒。
+
+webhook 目标是宿主回环（`host.containers.internal`），脚本启动时一次性开启
+`allow_local_requests_from_web_hooks_and_services`；用例不要在收尾时复位该设置——
+sidekiq 进程内设置缓存与快速开关存在竞态，会把后续投递拦成 `URL is blocked`
+（投递记录见实例的 `web_hook_logs`，脚本失败退出时自动导出到
+`build/logs/gitlab-webhooks.log`）。指派用例核验真实成员身份：GitLab 只允许给项目
+成员指派，且 CE 静默丢弃 `assignee_ids` 复数形式（多人指派是 Premium 功能），发布器
+对单个 assignee 使用 `assignee_id`。成员的指派资格由 `project_authorizations`
+异步传播（busy 实例上延迟可达秒级），用例先以作者模拟令牌轮询 `read_project`
+生效再发布。flow 用例经 `agent.default: native-llm` 直连回环假
+OpenAI 端点返回固定评审，不调用付费 LLM；push 身份按设计来自 git 作者证据，用例经
+`outputs.author_resolution.email_mappings` 解析为平台用户。MR 与窗口腿的 webhook
+关闭 push 事件：夹具分支提交触发的 push 评审会按批次 scope 另建 issue 并与 MR 评审
+竞争 assignee 归属。push 腿则按至多一次投递语义在等待期内重发提交触发器。管理员
+账户必须用
+`admin.username_env` / `admin.password_env` 环境变量形式：字面量 username 不生效，
+没有管理员认证时 bootstrap 不建观测库（`needsStore=false`），窗口延期会静默降级为
+进程内存，重启恢复证据丢失。
+
+版本、digest、日志与资源采样保留在 `build/logs/gitlab-*`。
 
 ## SVN 复现
 
@@ -178,7 +216,7 @@ Anthropic 映射只接受代码中列出的两个官方 OpenAI 根地址；其�
 容器绑定 `127.0.0.1` 随机端口，无 restart policy。
 脚本在成功、失败、INT/TERM/HUP 时移除自己的容器、命名卷及临时目录；仅当镜像原先不存在时
 删除本轮拉取的镜像，不执行全局 prune，也不修改已有容器。
-Podman `--timeout 900` 给每次容器启动设置独立于测试进程的运行上限；
+Podman `--timeout 900`（GitLab 为 7200）给每次容器启动设置独立于测试进程的运行上限；
 Gitea/SVN 同时使用 `--rm`，需要重启的部署夹具由 trap 移除。
 语义见[Podman 5.4.2 run](https://docs.podman.io/en/v5.4.2/markdown/podman-run.1.html)。
 SIGKILL/主机断电无法执行 shell 清理，恢复后仍须核对该次目录；不要把超时停服务说成数据已清理。
@@ -190,6 +228,7 @@ SIGKILL/主机断电无法执行 shell 清理，恢复后仍须核对该次目�
 ```bash
 podman ps -a --filter label=aicr.acceptance=gitea
 podman ps -a --filter label=aicr.acceptance=svn
+podman ps -a --filter label=aicr.acceptance=gitlab
 podman ps -a --filter label=aicr.acceptance=deployment
 podman volume ls --filter name=aicr-deployment
 find ~/workspace/github/atframework -maxdepth 1 -type d -name 'aicr-acceptance.*'

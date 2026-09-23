@@ -79,6 +79,12 @@ variables:
 - `AICR_GITEA_TEST_URL` / `AICR_GITEA_TEST_TOKEN`：仅用于独立回环 Gitea；
   真实发布后检查 assignees，测试会创建/删除合成用户与私有仓库。
   两者都不设才跳过；[临时服务脚本](../testing-services.md)负责限额、启动与清理。
+- `AICR_GITLAB_TEST_URL` / `AICR_GITLAB_TEST_TOKEN`：仅用于独立回环 GitLab CE
+  （仅 `http://127.0.0.1`，镜像固定 `gitlab/gitlab-ce:19.4.0-ce.0`）；
+  `tests/services/with-gitlab.sh` 负责建容器、注入 PAT、开启
+  `allow_local_requests_from_web_hooks_and_services` 并清理，失败时保留
+  webhook 投递日志。验收命令：
+  `bash tests/services/with-gitlab.sh bash -c 'pnpm build && pnpm --filter @aicr/outputs exec vitest run test/gitlab-assignment-live.test.ts && pnpm --filter @aicr/server exec vitest run test/gitlab-flow-live.test.ts'`。
 - `AICR_SVN_TEST_URL`：`with-svn.sh` 的只读网络仓库；本机需有 `svn` 客户端。
   核验辅助仓库的固定 revision、HEAD、diff、失败清理及确定性模型分析/发布链路。
 - `AICR_FEISHU_TEST_*`、`AICR_ZHIPU_TEST_*`、`AICR_KIMI_TEST_*`：真实账户验收，

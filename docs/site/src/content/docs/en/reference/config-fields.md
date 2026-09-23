@@ -52,7 +52,8 @@ quick lookup.
 The output channel `kind` field is a free-form string constrained by the
 output registry, not a closed enum. Built-in channel kinds include
 `gitea_pr_review`, `github_pr_review`, `gitlab_mr_review`, `gitea_issue`,
-`gitea_problem_issue`, `github_issue`, `github_problem_issue`, `feishu_bot`,
+`gitea_problem_issue`, `github_issue`, `github_problem_issue`,
+`gitlab_problem_issue`, `feishu_bot`,
 and `wecom_bot`. The removed `gitea_finding_issue` kind is rejected by
 validation; use `gitea_problem_issue`. See
 [Output channels](/en/configuration/outputs/).

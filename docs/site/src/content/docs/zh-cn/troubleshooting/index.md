@@ -187,3 +187,20 @@ admin:
   **重新安装或刷新安装**后再重试——权限变更不会追溯应用到已有安装。
 - 确认出站凭据是解析出的 GitHub App token 或 `triggers[].token_env` 引用的 PAT，而不是
   `AICR_GITHUB_APP_WEBHOOK_SECRET`。
+
+## GitLab 托管 issue 发布成功但缺少 assignee
+
+**症状：** `gitlab_problem_issue` 能正常创建 issue，但即使 `assign_committer` 解析出了用户名，
+issue 上也没有 assignee。
+
+**诊断：** GitLab 会静默丢弃未通过校验的 assignee，创建请求仍返回 201：
+
+- 解析出的用户不是**项目成员**。把该用户加入项目（任意角色）——GitLab 只指派成员。
+- 通道 token 的 PAT 缺少 issue 创建所需的 `api` scope（较少见——通常整个请求会以 401/403 失败）。
+- 成员关系在发布前几秒才创建：GitLab 的 assignee 权限校验（`project_authorizations`）是
+  **异步**填充的，刚加入的成员可能暂时不可指派。
+- 在 **GitLab CE** 上，复数 `assignee_ids` 字段被忽略（Premium 功能）。AICR 通过
+  `assignee_id` 发送单个 assignee，因此 CE 实际只支持每个 issue 一个 assignee。
+
+**修复：** 在评审之前提前授予提交者项目成员资格（不要在同一次自动化运行中临时添加），
+并确认 `token_env` 持有带 `api` scope 的 PAT。

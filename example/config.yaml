@@ -573,7 +573,7 @@ outputs:
   channels:
     # Gitea PR review — inline line comments on pull requests
     - name: gitea-pr-review
-      kind: gitea_pr_review # gitea_pr_review | github_pr_review | gitlab_mr_review | gitea_issue | gitea_problem_issue | github_issue | github_problem_issue | feishu_bot | wecom_bot
+      kind: gitea_pr_review # gitea_pr_review | github_pr_review | gitlab_mr_review | gitea_issue | gitea_problem_issue | github_issue | github_problem_issue | gitlab_problem_issue | feishu_bot | wecom_bot
       trigger: gitea
       mention_author: false
       no_problems: { action: suppress }
@@ -673,6 +673,38 @@ outputs:
     #   assign_committer: true                   # resolved author; requires repository assignment permission
     #   owners_file: "OWNERS"
     #   add_owners_as_assignees: true
+
+    # GitLab managed problem issues — create/close/delete issues per problem fingerprint.
+    # resolved_action: delete requires a token whose user can delete issues
+    # (project owner or admin).
+    # Use issue_mode: consolidated to merge all problems from one review into a
+    # single scope-aware issue: push reviews key by batch (headSha), MR reviews
+    # key by merge-request iid (stable across commits).
+    # Requires a GitLab trigger/channel token_env with api scope.
+    # Assignee notes (GitLab specifics):
+    # - GitLab silently drops assignees who are not project members; the resolved
+    #   author must hold membership on the project (any role).
+    # - GitLab CE ignores the plural assignee_ids field, so a single assignee is
+    #   sent via assignee_id. CE therefore effectively supports one assignee.
+    # - Newly added members become assignable asynchronously
+    #   (project_authorizations propagation); a review published seconds after a
+    #   membership change may lose the assignee.
+    #
+    # - name: gitlab-problem-issues
+    #   kind: gitlab_problem_issue
+    #   trigger: gitlab
+    #   marker_prefix: "[AICR]"                  # title prefix only; managed issue titles stay concise automatically with a representative problem summary
+    #   marker_label: "aicr-managed"
+    #   issue_mode: consolidated                 # consolidated (default) | per_problem | per_commit
+    #   resolved_action: close                   # none | close | mark_resolved | delete (owner/admin only)
+    #   assign_committer: true                   # resolved author; must be a project member (see notes above)
+    #   owners_file: "OWNERS"
+    #   add_owners_as_assignees: true
+    #
+    #   # Push reviews rebuild the author from git commit evidence, so the commit
+    #   # email must map to a GitLab username (MR reviews use the webhook actor).
+    #   # outputs.author_resolution.email_mappings:
+    #   #   "dev@example.com": gitlab-username
 
     # GitHub issue comment — post aggregated review as a comment on an existing issue.
     #

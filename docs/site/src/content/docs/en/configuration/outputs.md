@@ -131,6 +131,7 @@ The publishing account needs assignment permission, and the target user must be 
 | `gitlab_mr_review` | Inline line comments on GitLab merge requests. |
 | `gitea_problem_issue` | Managed Gitea issues created/closed per problem fingerprint. |
 | `github_problem_issue` | Managed GitHub issues per problem fingerprint (no delete — GitHub does not support it). |
+| `gitlab_problem_issue` | Managed GitLab issues per problem fingerprint (assignees must be project members; CE effectively supports one assignee; delete requires owner/admin). |
 | `gitea_issue` | Post the aggregated review as a comment on an existing Gitea issue. |
 | `github_issue` | Post the aggregated review as a comment on an existing GitHub issue. |
 | `feishu_bot` | Push aggregated problems to a Feishu (飞书) group via custom bot. |
@@ -215,14 +216,15 @@ review:
 | Field | Behavior |
 | --- | --- |
 | `ignore` | Checked at the webhook layer. If a PR/MR/issue carries any listed label, AICR returns immediately without scheduling a review. |
-| `auto_tag` | Fixed tag applied by output dispatchers (`gitea_pr_review`, `github_pr_review`, `gitlab_mr_review`, `gitea_issue`, `gitea_problem_issue`) when publishing. Created automatically if missing. |
+| `auto_tag` | Fixed tag applied by output dispatchers (`gitea_pr_review`, `github_pr_review`, `gitlab_mr_review`, `gitea_issue`, `gitea_problem_issue`, `github_problem_issue`, `gitlab_problem_issue`) when publishing. Created automatically if missing. |
 | `reviewed_tag` | Tag applied when a review completes. |
 
 All fields support the global → workspace-level override layering.
 
 ## Managed problem-issue lifecycle limit
 
-`gitea_problem_issue` and `github_problem_issue` reconcile stale managed
+`gitea_problem_issue`, `github_problem_issue`, and `gitlab_problem_issue`
+reconcile stale managed
 issues by listing only the most recent open issues. The cap lives under
 `review.problem_issue` and can be tightened per workspace.
 

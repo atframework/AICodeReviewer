@@ -2911,6 +2911,863 @@ export function createGitlabMergeRequestReviewDispatcher(
 	return dispatcher;
 }
 
+export type GitlabProblemIssueResolvedAction = "none" | "close" | "mark_resolved" | "delete";
+
+export interface GitlabProblemIssueOptions {
+	readonly baseUrl?: string;
+	readonly token?: string;
+	readonly projectId: string | number;
+	readonly channelName?: string;
+	readonly markerPrefix?: string;
+	readonly markerLabel?: string;
+	readonly labels?: readonly string[];
+	readonly issueMode?: ProblemIssueMode;
+	readonly resolvedAction?: GitlabProblemIssueResolvedAction;
+	readonly maxRecentIssues?: number;
+	readonly fetch?: FetchLike;
+	readonly assignCommitter?: boolean;
+	readonly committerUsername?: string;
+	readonly fallbackCommitterUsername?: string;
+	readonly ownersFilePath?: string;
+	readonly ownersContent?: string;
+	readonly addOwnersAsAssignees?: boolean;
+	readonly ref?: string;
+	readonly headSha?: string;
+	readonly targetKind?: string;
+	readonly pullNumber?: number;
+	readonly branch?: string;
+	readonly severityLabelPrefix?: string;
+	readonly severityLabelColors?: Readonly<Record<string, string>>;
+	readonly notifyFeishu?: {
+		readonly webhookUrl: string;
+		readonly secret?: string;
+	};
+	readonly autoTag?: string;
+	readonly reviewedTag?: string;
+	readonly resolutionAnalyzer?: ProblemResolutionAnalyzer;
+}
+
+export interface GitlabProblemIssueDispatcher {
+	reconcileProblems(problems: readonly ReviewProblem[], summary?: string, options?: ReconcileProblemsOptions): Promise<readonly DispatchResult[]>;
+}
+
+interface ManagedGitlabIssue {
+	readonly iid: number;
+	readonly title: string;
+	readonly body: string;
+	readonly state: string;
+	readonly url?: string;
+	readonly fingerprint?: string;
+	readonly scopeFingerprint?: string;
+	readonly file?: string;
+}
+
+function parseManagedGitlabIssues(raw: unknown, markerPrefix: string, markerLabel: string): readonly ManagedGitlabIssue[] {
+	if (!Array.isArray(raw)) {
+		return [];
+	}
+
+	const issues: ManagedGitlabIssue[] = [];
+	for (const entry of raw) {
+		if (!entry || typeof entry !== "object") {
+			continue;
+		}
+
+		const rawIssue = entry as Record<string, unknown>;
+		const iid = rawIssue.iid;
+		const title = String(rawIssue.title ?? "");
+		const body = String(rawIssue.description ?? "");
+		const state = String(rawIssue.state ?? "");
+		if (typeof iid !== "number" || !Number.isInteger(iid) || !title.startsWith(markerPrefix) || !hasManagedProblemIssueMarker(body)) {
+			continue;
+		}
+
+		if (!body.includes(`<!-- aicr:label=${markerLabel} -->`)) {
+			continue;
+		}
+
+		const fingerprint = extractManagedIssueFingerprint(body);
+		const scopeFingerprint = extractConsolidatedScopeFingerprint(body);
+		const file = extractManagedIssueFile(body);
+		issues.push({
+			iid,
+			title,
+			body,
+			state,
+			...(typeof rawIssue.web_url === "string" ? { url: rawIssue.web_url } : {}),
+			...(fingerprint ? { fingerprint } : {}),
+			...(scopeFingerprint ? { scopeFingerprint } : {}),
+			...(file ? { file } : {}),
+		});
+	}
+
+	return issues;
+}
+
+const GITLAB_ISSUE_PAGE_SIZE = 100;
+
+/**
+ * GitLab compare has no ahead/behind status; merge_base tells ancestry:
+ * base == stored → current contains stored (at or after); base == current →
+ * current is behind; anything else is diverged and not safe to reconcile.
+ */
+async function verifyGitlabCommitAtOrAfter(
+	requestFn: (method: string, url: string, body?: unknown) => Promise<unknown>,
+	projectPath: string,
+	storedCommit: string,
+	currentCommit: string,
+): Promise<boolean | undefined> {
+	if (storedCommit === currentCommit) return true;
+	try {
+		const params = new URLSearchParams();
+		params.append("refs[]", storedCommit);
+		params.append("refs[]", currentCommit);
+		const result = await requestFn("GET", `${projectPath}/repository/merge_base?${params.toString()}`);
+		if (!result || typeof result !== "object") return undefined;
+		const id = (result as Record<string, unknown>).id;
+		if (typeof id !== "string") return undefined;
+		if (id === storedCommit) return true;
+		return false;
+	} catch {
+		return undefined;
+	}
+}
+
+export function createGitlabProblemIssueDispatcher(options: GitlabProblemIssueOptions): GitlabProblemIssueDispatcher {
+	const fetchImpl = publicationFetch(options.fetch ?? defaultFetch(), "gitlab");
+	const baseUrl = (options.baseUrl ?? "https://gitlab.com").replace(/\/+$/u, "");
+	const channel = options.channelName ?? "gitlab_problem_issue";
+	const markerPrefix = options.markerPrefix ?? "[AICR]";
+	const markerLabel = options.markerLabel ?? "aicr-managed";
+	const resolvedAction = options.resolvedAction ?? "close";
+	const maxRecentIssues = normalizeManagedIssueFetchLimit(options.maxRecentIssues);
+	const issueMode = options.issueMode ?? "consolidated";
+	const assignCommitter = options.assignCommitter ?? true;
+	const addOwnersAsAssignees = options.addOwnersAsAssignees ?? false;
+	const ownersFilePath = options.ownersFilePath ?? "OWNERS";
+	const severityLabelPrefix = options.severityLabelPrefix;
+	const severityLabelColors = options.severityLabelColors;
+	const projectPath = [
+		baseUrl,
+		"api/v4/projects",
+		encodePathSegment(String(options.projectId)),
+	].join("/");
+	const headers: Record<string, string> = {
+		"content-type": "application/json",
+	};
+	if (options.token) {
+		headers["private-token"] = options.token;
+	}
+	const scopeInput: ScopeFingerprintScope = issueMode === "per_commit" && options.headSha
+		? { headSha: options.headSha }
+		: options.targetKind === "pull_request"
+			? {
+				targetKind: "pull_request",
+				...(options.pullNumber !== undefined ? { pullNumber: options.pullNumber } : {}),
+				...(options.headSha ? { headSha: options.headSha } : {}),
+			}
+			: options.targetKind === "push"
+				? {
+					targetKind: "push",
+					...(options.headSha ? { headSha: options.headSha } : {}),
+					...(options.branch ? { branch: options.branch } : {}),
+				}
+				: {};
+	const currentScopeFingerprint = computeScopeFingerprint(channel, String(options.projectId), "", scopeInput);
+
+	async function request(method: string, endpoint: string, body?: unknown): Promise<unknown> {
+		const response = await fetchImpl(endpoint, {
+			method,
+			headers,
+			...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+		});
+
+		if (!response.ok) {
+			throw new OutputDispatchError(`GitLab problem issue API returned ${response.status}.`, {
+				status: response.status,
+				responseBody: await response.text(),
+			});
+		}
+
+		if (response.status === 204) {
+			return {};
+		}
+
+		return response.json();
+	}
+
+	async function fetchOwnersContent(): Promise<string | undefined> {
+		if (options.ownersContent !== undefined) {
+			return options.ownersContent;
+		}
+
+		try {
+			const refParam = options.ref ? `?ref=${encodeURIComponent(options.ref)}` : "";
+			const response = await fetchImpl(
+				`${projectPath}/repository/files/${encodePathSegment(ownersFilePath)}/raw${refParam}`,
+				{ headers },
+			);
+			if (!response.ok) {
+				await response.text();
+				return undefined;
+			}
+			return await response.text();
+		} catch {
+			return undefined;
+		}
+	}
+
+	const labelNameCache = new Map<string, string>();
+
+	async function resolveLabelName(labelName: string, color?: string): Promise<string | undefined> {
+		const cached = labelNameCache.get(labelName);
+		if (cached !== undefined) {
+			return cached;
+		}
+
+		try {
+			const listRaw = await request("GET", `${projectPath}/labels?search=${encodeURIComponent(labelName)}&per_page=100`);
+			if (Array.isArray(listRaw)) {
+				for (const label of listRaw) {
+					if (label && typeof label === "object" && (label as Record<string, unknown>).name === labelName) {
+						labelNameCache.set(labelName, labelName);
+						return labelName;
+					}
+				}
+			}
+		} catch {
+			// Label lookup failed, try creating
+		}
+
+		const normalizedColor = (color ?? "#ededed").startsWith("#") ? (color ?? "#ededed") : `#${color}`;
+		try {
+			const created = await request("POST", `${projectPath}/labels`, {
+				name: labelName,
+				color: normalizedColor,
+			});
+			if (created && typeof created === "object" && (created as Record<string, unknown>).name === labelName) {
+				labelNameCache.set(labelName, labelName);
+				return labelName;
+			}
+		} catch {
+			// label creation failed
+		}
+
+		return undefined;
+	}
+
+	async function resolveSeverityLabelName(severity: string): Promise<string | undefined> {
+		if (!severityLabelPrefix) {
+			return undefined;
+		}
+		return resolveLabelName(`${severityLabelPrefix}${severity}`, severityLabelColors?.[severity] ?? DEFAULT_SEVERITY_COLORS[severity]);
+	}
+
+	async function sendFeishuNotification(
+		issueTitle: string,
+		issueUrl: string | undefined,
+		severity: string,
+		problemFile: string,
+	): Promise<void> {
+		if (!options.notifyFeishu) {
+			return;
+		}
+
+		try {
+			const sections = [
+				`**New AICR Issue Created**`,
+				`**Severity:** [${severity.toUpperCase()}]`,
+				`**File:** ${problemFile}`,
+			];
+			if (issueUrl) {
+				sections.push(`**Link:** [${issueTitle}](${issueUrl})`);
+			} else {
+				sections.push(`**Title:** ${issueTitle}`);
+			}
+
+			const timestamp = Math.floor(Date.now() / 1000);
+			const body: Record<string, unknown> = buildFeishuCardBody(toFeishuMarkdown(sections.join("\n")));
+
+			if (options.notifyFeishu.secret) {
+				body.timestamp = String(timestamp);
+				body.sign = await computeFeishuSign(timestamp, options.notifyFeishu.secret);
+			}
+
+			await fetchImpl(options.notifyFeishu.webhookUrl, {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify(body),
+			});
+		} catch {
+			// Feishu notification failure should not block issue creation
+		}
+	}
+
+	async function listManagedOpenIssues(): Promise<readonly ManagedGitlabIssue[]> {
+		const pageSize = Math.min(GITLAB_ISSUE_PAGE_SIZE, maxRecentIssues);
+		const maxPages = Math.ceil(maxRecentIssues / pageSize);
+		const issues: ManagedGitlabIssue[] = [];
+		for (let page = 1; page <= maxPages; page += 1) {
+			const params = new URLSearchParams({
+				state: "opened",
+				order_by: "updated_at",
+				sort: "desc",
+				per_page: String(pageSize),
+				page: String(page),
+			});
+			const raw = await request("GET", `${projectPath}/issues?${params.toString()}`);
+			const remainingWindow = maxRecentIssues - (page - 1) * pageSize;
+			const windowedRaw = Array.isArray(raw) ? raw.slice(0, remainingWindow) : raw;
+			issues.push(...parseManagedGitlabIssues(windowedRaw, markerPrefix, markerLabel));
+			if (!Array.isArray(raw) || raw.length < pageSize) {
+				break;
+			}
+		}
+		return issues;
+	}
+
+	// GitLab assigns issues by numeric user id; usernames resolve through the
+	// users API. Unknown users drop out instead of failing the publication.
+	const assigneeIdCache = new Map<string, number | undefined>();
+	const assigneeIdPromises = new Map<string, Promise<number | undefined>>();
+
+	function resolveAssigneeId(username: string): Promise<number | undefined> {
+		const cached = assigneeIdCache.get(username);
+		if (cached !== undefined) {
+			return Promise.resolve(cached);
+		}
+		let pending = assigneeIdPromises.get(username);
+		if (!pending) {
+			pending = request("GET", `${baseUrl}/api/v4/users?username=${encodeURIComponent(username)}`)
+				.then((raw) => {
+					if (!Array.isArray(raw)) return undefined;
+					for (const user of raw) {
+						if (user && typeof user === "object" && (user as Record<string, unknown>).username === username) {
+							const id = (user as Record<string, unknown>).id;
+							return typeof id === "number" ? id : undefined;
+						}
+					}
+					return undefined;
+				})
+				.catch(() => undefined)
+				.then((id) => {
+					assigneeIdCache.set(username, id);
+					assigneeIdPromises.delete(username);
+					return id;
+				});
+			assigneeIdPromises.set(username, pending);
+		}
+		return pending;
+	}
+
+	// The GitLab commit API exposes no platform username for a commit author, so
+	// assignment relies on the webhook actor captured at receive time.
+	function resolveCommitterUsername(): string | undefined {
+		if (!assignCommitter) {
+			return undefined;
+		}
+		return options.committerUsername ?? options.fallbackCommitterUsername;
+	}
+
+	async function resolveAssigneeIds(problem: ReviewProblem, owners: OwnersConfig | undefined): Promise<number[]> {
+		const usernames: string[] = [];
+		const committerUsername = resolveCommitterUsername();
+		if (committerUsername) {
+			usernames.push(committerUsername);
+		}
+
+		if (addOwnersAsAssignees && owners) {
+			const matched = matchOwnersForFile(problem.file, owners);
+			for (const owner of matched) {
+				if (!usernames.includes(owner)) {
+					usernames.push(owner);
+				}
+			}
+		}
+
+		const ids: number[] = [];
+		for (const username of usernames) {
+			const id = await resolveAssigneeId(username);
+			if (id !== undefined && !ids.includes(id)) {
+				ids.push(id);
+			}
+		}
+		return ids;
+	}
+
+	async function createIssue(
+		problem: ReviewProblem,
+		summary: string | undefined,
+		owners: OwnersConfig | undefined,
+	): Promise<DispatchResult> {
+		const body: Record<string, unknown> = {
+			title: buildProblemIssueTitle(problem, markerPrefix),
+			description: buildManagedIssueBody(problem, { channel, markerLabel, ...(summary ? { summary } : {}) }),
+		};
+
+		const labelNames: string[] = [];
+		if (options.labels && options.labels.length > 0) {
+			labelNames.push(...options.labels);
+		}
+
+		if (options.autoTag) {
+			const name = await resolveLabelName(options.autoTag);
+			if (name !== undefined && !labelNames.includes(name)) {
+				labelNames.push(name);
+			}
+		}
+
+		if (options.reviewedTag) {
+			const name = await resolveLabelName(options.reviewedTag);
+			if (name !== undefined && !labelNames.includes(name)) {
+				labelNames.push(name);
+			}
+		}
+
+		if (severityLabelPrefix) {
+			const severityName = await resolveSeverityLabelName(problem.severity);
+			if (severityName !== undefined && !labelNames.includes(severityName)) {
+				labelNames.push(severityName);
+			}
+		}
+
+		if (labelNames.length > 0) {
+			body.labels = labelNames.join(",");
+		}
+
+		const assigneeIds = await resolveAssigneeIds(problem, owners);
+		if (assigneeIds.length === 1) {
+			// GitLab CE silently drops assignee_ids (multiple assignees are a
+			// Premium feature); the singular field works on both tiers.
+			body.assignee_id = assigneeIds[0];
+		} else if (assigneeIds.length > 1) {
+			body.assignee_ids = assigneeIds;
+		}
+
+		const raw = await request("POST", `${projectPath}/issues`, body);
+		const issueIid = raw && typeof raw === "object" ? (raw as Record<string, unknown>).iid : undefined;
+		const externalId = typeof issueIid === "number" ? String(issueIid) : extractExternalId(raw);
+
+		const issueUrl = raw && typeof raw === "object"
+			? (raw as Record<string, unknown>).web_url as string | undefined
+			: undefined;
+
+		await sendFeishuNotification(
+			buildProblemIssueTitle(problem, markerPrefix),
+			issueUrl,
+			problem.severity,
+			problem.file,
+		);
+
+		return {
+			channel,
+			status: "published",
+			...(externalId ? { externalId } : {}),
+			raw: { action: "created", issue: raw },
+		};
+	}
+
+	async function collectAllAssigneeIds(problems: readonly ReviewProblem[], owners: OwnersConfig | undefined): Promise<number[]> {
+		const idSet = new Set<number>();
+		for (const problem of problems) {
+			for (const id of await resolveAssigneeIds(problem, owners)) {
+				idSet.add(id);
+			}
+		}
+		return [...idSet];
+	}
+
+	async function createConsolidatedIssue(
+		problems: readonly ReviewProblem[],
+		summary: string | undefined,
+		owners: OwnersConfig | undefined,
+	): Promise<DispatchResult> {
+		const scopeFingerprint = currentScopeFingerprint;
+		const body: Record<string, unknown> = {
+			title: buildConsolidatedIssueTitle(problems, markerPrefix),
+			description: buildConsolidatedIssueBody(problems, { channel, markerLabel, scopeFingerprint, ...(summary ? { summary } : {}), ...(options.headSha ? { headSha: options.headSha } : {}) }),
+		};
+
+		const labelNames: string[] = [];
+		if (options.labels && options.labels.length > 0) {
+			labelNames.push(...options.labels);
+		}
+
+		if (options.autoTag) {
+			const name = await resolveLabelName(options.autoTag);
+			if (name !== undefined && !labelNames.includes(name)) {
+				labelNames.push(name);
+			}
+		}
+
+		if (options.reviewedTag) {
+			const name = await resolveLabelName(options.reviewedTag);
+			if (name !== undefined && !labelNames.includes(name)) {
+				labelNames.push(name);
+			}
+		}
+
+		if (severityLabelPrefix) {
+			const highest = getHighestSeverity(problems);
+			if (highest) {
+				const severityName = await resolveSeverityLabelName(highest);
+				if (severityName !== undefined && !labelNames.includes(severityName)) {
+					labelNames.push(severityName);
+				}
+			}
+		}
+
+		if (labelNames.length > 0) {
+			body.labels = labelNames.join(",");
+		}
+
+		const allAssigneeIds = await collectAllAssigneeIds(problems, owners);
+		if (allAssigneeIds.length === 1) {
+			// See createIssue: CE ignores the plural field.
+			body.assignee_id = allAssigneeIds[0];
+		} else if (allAssigneeIds.length > 1) {
+			body.assignee_ids = allAssigneeIds;
+		}
+
+		const raw = await request("POST", `${projectPath}/issues`, body);
+		const issueIid = raw && typeof raw === "object" ? (raw as Record<string, unknown>).iid : undefined;
+		const externalId = typeof issueIid === "number" ? String(issueIid) : extractExternalId(raw);
+
+		const issueUrl = raw && typeof raw === "object"
+			? (raw as Record<string, unknown>).web_url as string | undefined
+			: undefined;
+
+		const highest = getHighestSeverity(problems);
+		await sendFeishuNotification(
+			buildConsolidatedIssueTitle(problems, markerPrefix),
+			issueUrl,
+			highest ?? "info",
+			`${problems.length} problems`,
+		);
+
+		return {
+			channel,
+			status: "published",
+			...(externalId ? { externalId } : {}),
+			raw: { action: "created_consolidated", issue: raw },
+		};
+	}
+
+	async function updateConsolidatedIssue(
+		existing: ManagedGitlabIssue,
+		problems: readonly ReviewProblem[],
+		summary: string | undefined,
+		categorization?: ConsolidatedIssueCategorization,
+		context?: ConsolidatedIssueUpdateContext,
+	): Promise<DispatchResult> {
+		const scopeFingerprint = context?.scopeFingerprint ?? currentScopeFingerprint;
+		const headSha = context?.headSha ?? options.headSha;
+		const body: Record<string, unknown> = {
+			title: buildUpdatedConsolidatedIssueTitle(
+				existing.title,
+				problems,
+				markerPrefix,
+				categorization,
+			),
+			description: buildConsolidatedIssueBody(problems, {
+				channel, markerLabel, scopeFingerprint,
+				...(summary ? { summary } : {}),
+				...(headSha ? { headSha } : {}),
+				...(categorization ? { categorization } : {}),
+			}),
+		};
+
+		if (severityLabelPrefix) {
+			const labelNames: string[] = [];
+			const highest = getHighestSeverity(problems);
+			if (highest) {
+				const severityName = await resolveSeverityLabelName(highest);
+				if (severityName !== undefined) {
+					labelNames.push(severityName);
+				}
+			}
+			if (labelNames.length > 0) {
+				body.labels = labelNames.join(",");
+			}
+		}
+
+		const raw = await request("PUT", `${projectPath}/issues/${existing.iid}`, body);
+		return {
+			channel,
+			status: "published",
+			externalId: String(existing.iid),
+			raw: { action: "updated_consolidated", issueIid: existing.iid, issue: raw },
+		};
+	}
+
+	async function resolveIssue(issue: ManagedGitlabIssue): Promise<DispatchResult | undefined> {
+		if (resolvedAction === "none") {
+			return undefined;
+		}
+
+		if (resolvedAction === "delete") {
+			const raw = await request("DELETE", `${projectPath}/issues/${issue.iid}`);
+			return {
+				channel,
+				status: "published",
+				externalId: String(issue.iid),
+				raw: { action: "deleted", issueIid: issue.iid, response: raw },
+			};
+		}
+
+		const lifecycleMsg = [
+			"🤖 **AICR lifecycle:** this managed problem is no longer present in the latest analysis.",
+			"",
+			resolvedAction === "mark_resolved"
+				? "Marking as resolved and closing. Reopen it if the problem is still valid."
+				: "Closing the issue automatically. Reopen it if the problem is still valid.",
+		].join("\n");
+
+		await request("POST", `${projectPath}/issues/${issue.iid}/notes`, {
+			body: lifecycleMsg,
+		});
+
+		if (resolvedAction === "mark_resolved") {
+			const markerEnd = issue.body.indexOf("\n", issue.body.indexOf(AICR_MANAGED_PROBLEM_ISSUE_MARKER));
+			const markers = markerEnd > 0 ? issue.body.slice(0, markerEnd + 1) : "";
+			const resolvedPrefix = "✅ **Resolved** — This issue is no longer present in the latest analysis.\n\n---\n\n";
+			const originalBody = markerEnd > 0 ? issue.body.slice(markerEnd + 1) : issue.body;
+			await request("PUT", `${projectPath}/issues/${issue.iid}`, {
+				description: markers + resolvedPrefix + originalBody,
+				state_event: "close",
+			});
+		} else {
+			await request("PUT", `${projectPath}/issues/${issue.iid}`, { state_event: "close" });
+		}
+
+		const raw = await request("GET", `${projectPath}/issues/${issue.iid}`);
+		return {
+			channel,
+			status: "published",
+			externalId: String(issue.iid),
+			raw: { action: resolvedAction === "mark_resolved" ? "mark_resolved" : "closed", issueIid: issue.iid, issue: raw },
+		};
+	}
+
+	const dispatcher = {
+		async reconcileProblems(rawProblems: readonly ReviewProblem[], summary?: string, reconcileOptions?: { readonly reviewedFiles?: readonly string[] }): Promise<readonly DispatchResult[]> {
+			const reviewedFiles = reconcileOptions?.reviewedFiles;
+			const problems = dedupProblemsByFingerprint([...rawProblems]);
+			let owners: OwnersConfig | undefined;
+
+			if (addOwnersAsAssignees) {
+				const ownersContent = await fetchOwnersContent();
+				if (ownersContent) {
+					owners = parseOwnersContent(ownersContent);
+				}
+			}
+
+			if (issueMode === "consolidated" || issueMode === "per_commit") {
+				const existingIssues = await listManagedOpenIssues();
+				const scopeFingerprint = currentScopeFingerprint;
+				const existingConsolidated = existingIssues.find(
+					(issue) => issue.scopeFingerprint === scopeFingerprint,
+				);
+
+				const results: DispatchResult[] = [];
+				const preparedProblems = problems.map(ensureProblemFingerprint);
+
+				if (preparedProblems.length === 0) {
+					if (resolvedAction === "none") return results;
+
+					for (const issue of existingIssues) {
+						if (!issue.scopeFingerprint) continue;
+						const isCurrentScope = issue.scopeFingerprint === scopeFingerprint;
+						if (!isCurrentScope) {
+							if (issueMode !== "consolidated") continue;
+							if (!reviewedFiles || reviewedFiles.length === 0) continue;
+							const storedCommit = extractCommitFromIssueBody(issue.body);
+							if (!storedCommit || !options.headSha) continue;
+							const isAtOrAfter = await verifyGitlabCommitAtOrAfter(request, projectPath, storedCommit, options.headSha);
+							if (isAtOrAfter !== true) continue;
+						}
+
+						const prepared = await prepareStoredConsolidatedReconciliation(
+							issue.body,
+							preparedProblems,
+							reviewedFiles,
+							options.resolutionAnalyzer,
+						);
+						if (!prepared) {
+							if (isCurrentScope && !options.resolutionAnalyzer && (!reviewedFiles || reviewedFiles.length === 0)) {
+								const result = await resolveIssue(issue);
+								if (result) results.push(result);
+							}
+							continue;
+						}
+						if (prepared.categorization.resolvedFingerprints.size === 0) continue;
+						if (prepared.openProblems.length === 0) {
+							const result = await resolveIssue(issue);
+							if (result) results.push(result);
+							continue;
+						}
+
+						results.push(await updateConsolidatedIssue(
+							issue,
+							prepared.relevantCurrentProblems,
+							extractConsolidatedIssueSummary(issue.body),
+							prepared.categorization,
+							{
+								scopeFingerprint: issue.scopeFingerprint,
+								...(options.headSha ? { headSha: options.headSha } : {}),
+							},
+						));
+					}
+					return results;
+				}
+
+				if (existingConsolidated) {
+					const storedCommit = extractCommitFromIssueBody(existingConsolidated.body);
+					const storedFingerprints = extractOpenProblemFingerprintsFromBody(existingConsolidated.body);
+					const resolvedDetails = parseConsolidatedBodyProblemInfo(existingConsolidated.body);
+
+					if (storedCommit && options.headSha && storedCommit !== options.headSha) {
+						const isCurrentAtOrAfter = await verifyGitlabCommitAtOrAfter(request, projectPath, storedCommit, options.headSha);
+						if (isCurrentAtOrAfter === false) {
+							return results;
+						}
+						if (isCurrentAtOrAfter === undefined) {
+							results.push(await updateConsolidatedIssue(existingConsolidated, preparedProblems, summary));
+							return results;
+						}
+					}
+
+					const isSameCommit = storedCommit && options.headSha && storedCommit === options.headSha;
+
+					if (storedFingerprints.size > 0 && !isSameCommit) {
+						const previousFilesByFingerprint = new Map<string, string>();
+						for (const [fp, info] of resolvedDetails) {
+							previousFilesByFingerprint.set(fp, info.file);
+						}
+						const categorized = categorizeProblems(preparedProblems, storedFingerprints, {
+							previousFilesByFingerprint,
+							...(reviewedFiles ? { reviewedFiles } : {}),
+						});
+						const confirmed = await confirmResolvedFingerprints(
+							categorized.resolvedFingerprints,
+							resolvedDetails,
+							options.resolutionAnalyzer,
+						);
+						const retainedFingerprints = new Set([
+							...categorized.retainedFingerprints,
+							...confirmed.retainedFingerprints,
+						]);
+						const retainedProblems = buildRetainedProblems(retainedFingerprints, resolvedDetails);
+						if (retainedFingerprints.size > retainedProblems.length) {
+							return results;
+						}
+						if (confirmed.resolvedFingerprints.size > 0 || retainedProblems.length > 0) {
+							results.push(await updateConsolidatedIssue(existingConsolidated, preparedProblems, summary, {
+								newProblems: categorized.newProblems,
+								stillOpenProblems: categorized.stillOpenProblems,
+								retainedProblems,
+								resolvedFingerprints: confirmed.resolvedFingerprints,
+								resolvedDetails,
+							}));
+						} else {
+							results.push(await updateConsolidatedIssue(existingConsolidated, preparedProblems, summary));
+						}
+					} else {
+						results.push(await updateConsolidatedIssue(existingConsolidated, preparedProblems, summary));
+					}
+				} else {
+					results.push(await createConsolidatedIssue(preparedProblems, summary, owners));
+				}
+
+				if (resolvedAction !== "none") {
+					for (const issue of existingIssues) {
+						if (!issue.scopeFingerprint) continue;
+						if (issue.scopeFingerprint === scopeFingerprint) {
+							if (existingConsolidated && issue.iid !== existingConsolidated.iid) {
+								const result = await resolveIssue(issue);
+								if (result) results.push(result);
+							}
+							continue;
+						}
+						if (issueMode !== "consolidated") continue;
+
+						const storedCommit = extractCommitFromIssueBody(issue.body);
+						if (!storedCommit || !options.headSha) continue;
+						const isAtOrAfter = await verifyGitlabCommitAtOrAfter(request, projectPath, storedCommit, options.headSha);
+						if (isAtOrAfter !== true) continue;
+
+						const prepared = await prepareStoredConsolidatedReconciliation(
+							issue.body,
+							preparedProblems,
+							reviewedFiles,
+							options.resolutionAnalyzer,
+						);
+						if (!prepared || prepared.categorization.resolvedFingerprints.size === 0) continue;
+						if (prepared.openProblems.length === 0) {
+							const result = await resolveIssue(issue);
+							if (result) results.push(result);
+							continue;
+						}
+
+						results.push(await updateConsolidatedIssue(
+							issue,
+							prepared.relevantCurrentProblems,
+							extractConsolidatedIssueSummary(issue.body),
+							prepared.categorization,
+							{
+								scopeFingerprint: issue.scopeFingerprint,
+								...(options.headSha ? { headSha: options.headSha } : {}),
+							},
+						));
+					}
+				}
+
+				return results;
+			}
+			const preparedProblems = problems.map(ensureProblemFingerprint);
+
+			const currentFingerprints = new Set(preparedProblems.map((problem) => problem.fingerprint!));
+			const existingIssues = await listManagedOpenIssues();
+			const existingByFingerprint = new Map<string, ManagedGitlabIssue>();
+			for (const issue of existingIssues) {
+				if (issue.fingerprint) {
+					existingByFingerprint.set(issue.fingerprint, issue);
+				}
+			}
+
+			const results: DispatchResult[] = [];
+			for (const problem of preparedProblems) {
+				if (!existingByFingerprint.has(problem.fingerprint!)) {
+					results.push(await createIssue(problem, summary, owners));
+				}
+			}
+
+			for (const issue of existingIssues) {
+				if (!issue.fingerprint || currentFingerprints.has(issue.fingerprint)) {
+					continue;
+				}
+
+				if (!isFileCoveredByReview(issue.file, reviewedFiles)) {
+					continue;
+				}
+
+				if (!await isManagedIssueResolutionConfirmed(issue, options.resolutionAnalyzer)) {
+					continue;
+				}
+
+				const result = await resolveIssue(issue);
+				if (result) {
+					results.push(result);
+				}
+			}
+
+			return results;
+		},
+	};
+
+	return dispatcher;
+}
+
 export interface GiteaIssueOptions {
 	readonly baseUrl: string;
 	readonly token?: string;

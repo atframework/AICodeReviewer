@@ -85,7 +85,7 @@ registry (Zod validates the shape; the dispatcher resolves the kind).
 | `gitea_pr_review` | One consolidated PR review/comment body | PR review / configured summary publisher | Problems are buffered and flushed as one Markdown body; falls back to one issue comment on 403/422 |
 | `github_pr_review` | One consolidated PR review/comment body | PR review / configured summary publisher | Same buffer-and-flush as `gitea_pr_review`; falls back to issue comment on 403/422 |
 | `gitlab_mr_review` | MR discussion when `baseSha`/`headSha` available | MR note / configured summary publisher | Falls back to a general MR note when line anchoring is unavailable |
-| `gitea_problem_issue` / `github_problem_issue` | Collected for reconciliation | Creates / updates / resolves managed problem issues | Fingerprint stability matters most here; `github_problem_issue` uses string label names and `resolved_action` supports `none`, `close`, and `mark_resolved` (GitHub has no issue delete API) |
+| `gitea_problem_issue` / `github_problem_issue` / `gitlab_problem_issue` | Collected for reconciliation | Creates / updates / resolves managed problem issues | Fingerprint stability matters most here; `github_problem_issue` uses string label names and `resolved_action` supports `none`, `close`, and `mark_resolved` (GitHub has no issue delete API); on GitLab assignees must be project members and CE effectively supports one assignee |
 | `gitea_issue` / `github_issue` | Collected, rendered into an issue comment | Aggregated issue comment | Useful for push events or issue-based triage |
 | `feishu_bot` | Collected for aggregation | Interactive card (JSON 2.0 schema) | See [IM bots](/en/integrations/im-bots/) |
 | `feishu_app` | Collected for aggregation | Shared Feishu card via application message API | Optional source-group directory for author mentions; see [IM bots](/en/integrations/im-bots/#feishu-custom-application) |
@@ -109,7 +109,8 @@ problems will be dropped.
 
 ## Managed problem-issue lifecycle
 
-`gitea_problem_issue` and `github_problem_issue` reconcile stale managed
+`gitea_problem_issue`, `github_problem_issue`, and `gitlab_problem_issue`
+reconcile stale managed
 issues across reviews. Key behaviors:
 
 - **Fingerprint stability.** Each problem carries a `fingerprint`. AICR tracks
@@ -126,7 +127,12 @@ issues across reviews. Key behaviors:
   overridable per workspace). Fingerprints outside the recent window are not
   deduplicated or closed in that run.
 - **GitHub `resolved_action`.** Supports `none`, `close`, and `mark_resolved`
-  (GitHub has no issue-delete API). Gitea additionally supports `delete`.
+  (GitHub has no issue-delete API). Gitea and GitLab additionally support
+  `delete` (on GitLab the token user must be a project owner or admin).
+- **GitLab assignees.** Assignees who are not project members are silently
+  dropped, and CE ignores the plural `assignee_ids` field, so AICR sends a
+  single assignee via `assignee_id`. Newly added members become assignable
+  only after GitLab's asynchronous member-authorization propagation.
 
 See [Output channels config](/en/configuration/outputs/) for the
 `issue_mode`, `resolved_action`, `assign_committer`, `owners_file`, and
