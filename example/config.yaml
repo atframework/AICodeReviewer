@@ -604,6 +604,9 @@ outputs:
     #   mention_author: true                     # @-mention the commit author in the card
     #   mention_fallback: skip                  # "all" = mention everyone, "skip" = no mention if author not found
     #   no_problems: { action: suppress }        # keep quiet when no actionable problems are found
+    #   # issue_link_card: titles                # card content when the summary route also records a
+    #                                            # managed issue: brief (count + link) | titles (default,
+    #                                            # + per-problem titles) | full (+ complete sections)
     #   revision_url_template: "https://swarm.example.com/changes/{{revision}}"  # optional P4/SVN link override
 
     # Feishu custom application bot: merge example/feishu-app.yaml for app_id,

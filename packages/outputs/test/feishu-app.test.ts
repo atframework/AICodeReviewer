@@ -179,7 +179,7 @@ describe("Feishu application API", () => {
     expect(request).not.toHaveProperty("card");
     expect(fetch.mock.calls[1]?.[0]).toBe("https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id");
   });
-  it("sends a brief card with the issue link and keeps the mention when a detail link is provided", async () => {
+  it("sends a brief card with the issue link and keeps the mention when issueLinkCard is brief", async () => {
     let webhookBody: Record<string, unknown> = {};
     const problems: ReviewProblem[] = [
       { file: "a.ts", line: 1, severity: "high", category: "bug", message: "full-message-one", suggestion: "fix-one" },
@@ -188,18 +188,83 @@ describe("Feishu application API", () => {
     await createFeishuBotDispatcher({ webhookUrl: "https://unused", fetch: async (_url, init) => {
       webhookBody = JSON.parse(init?.body ?? "{}"); return response({ code: 0 });
     } }).publishAggregatedProblems(problems, "# Review Complete\n\nAll good.", '<at id="ou_alice"></at>',
-      { detailLink: { url: "https://github.com/o/r/issues/42", label: "View full report" } });
+      { detailLink: { url: "https://github.com/o/r/issues/42", label: "View full report" }, issueLinkCard: "brief" });
     const card = webhookBody.card as { body: { elements: { content?: string }[] } };
     const markdown = card.body.elements[0]?.content ?? "";
-    // brief: headline + count + link, no full problem bodies
+    // brief: headline + count + link, no problem titles or bodies
     expect(markdown).toContain("Review Complete");
     expect(markdown).toContain("Problems (2)");
     expect(markdown).toContain("https://github.com/o/r/issues/42");
+    expect(markdown).not.toContain("[HIGH] bug");
     expect(markdown).not.toContain("full-message-one");
     expect(markdown).not.toContain("full-message-two");
     // mention preserved as a trailing element
     const mention = card.body.elements.at(-1)?.content ?? "";
     expect(mention).toBe('<at id="ou_alice"></at>');
+  });
+  it("lists per-problem titles with the issue link by default", async () => {
+    let webhookBody: Record<string, unknown> = {};
+    const problems: ReviewProblem[] = [
+      { file: "a.ts", line: 1, endLine: 3, severity: "high", category: "bug", message: "full-message-one", suggestion: "fix-one" },
+      { file: "b.ts", line: 2, severity: "low", category: "style", message: "full-message-two" },
+    ];
+    await createFeishuBotDispatcher({ webhookUrl: "https://unused", fetch: async (_url, init) => {
+      webhookBody = JSON.parse(init?.body ?? "{}"); return response({ code: 0 });
+    } }).publishAggregatedProblems(problems, "# Review Complete\n\nAll good.", '<at id="ou_alice"></at>',
+      { detailLink: { url: "https://github.com/o/r/issues/42", label: "View full report" } });
+    const card = webhookBody.card as { body: { elements: { content?: string }[] } };
+    const markdown = card.body.elements[0]?.content ?? "";
+    // titles (default): headline + count + one title line per problem + link, no full bodies
+    expect(markdown).toContain("Review Complete");
+    expect(markdown).toContain("Problems (2)");
+    expect(markdown).toContain("1. [HIGH] bug — a.ts:1-3");
+    expect(markdown).toContain("2. [LOW] style — b.ts:2");
+    expect(markdown).toContain("Full details: [View full report](https://github.com/o/r/issues/42)");
+    expect(markdown).not.toContain("full-message-one");
+    expect(markdown).not.toContain("full-message-two");
+    expect(card.body.elements.at(-1)?.content ?? "").toBe('<at id="ou_alice"></at>');
+  });
+  it("renders full problem sections with the issue link when issueLinkCard is full", async () => {
+    let webhookBody: Record<string, unknown> = {};
+    const problems: ReviewProblem[] = [
+      { file: "a.ts", line: 1, severity: "high", category: "bug", message: "full-message-one", suggestion: "fix-one" },
+    ];
+    await createFeishuBotDispatcher({ webhookUrl: "https://unused", fetch: async (_url, init) => {
+      webhookBody = JSON.parse(init?.body ?? "{}"); return response({ code: 0 });
+    } }).publishAggregatedProblems(problems, "# Review Complete", undefined,
+      { detailLink: { url: "https://github.com/o/r/issues/42", label: "View full report" }, issueLinkCard: "full" });
+    const card = webhookBody.card as { body: { elements: { content?: string }[] } };
+    const markdown = card.body.elements[0]?.content ?? "";
+    expect(markdown).toContain("Review Complete");
+    expect(markdown).toContain("## Problems (1)");
+    expect(markdown).toContain("### 1. [HIGH] bug");
+    expect(markdown).toContain("- Location: `a.ts:1`");
+    expect(markdown).toContain("- Message: full-message-one");
+    expect(markdown).toContain("- Suggestion: fix-one");
+    expect(markdown).toContain("Full details: [View full report](https://github.com/o/r/issues/42)");
+  });
+  it("caps the title list at ten problems and keeps the link for empty results", async () => {
+    let webhookBody: Record<string, unknown> = {};
+    const problems: ReviewProblem[] = Array.from({ length: 12 }, (_, i) =>
+      ({ file: `f${i}.ts`, line: i + 1, severity: "medium" as const, category: "bug", message: `m${i}` }));
+    const fetchImpl: FetchLike = async (_url, init) => {
+      webhookBody = JSON.parse(init?.body ?? "{}"); return response({ code: 0 });
+    };
+    const dispatcher = createFeishuBotDispatcher({ webhookUrl: "https://unused", fetch: fetchImpl });
+    await dispatcher.publishAggregatedProblems(problems, "# Review Complete", undefined,
+      { detailLink: { url: "https://github.com/o/r/issues/42", label: "View full report" } });
+    const card = webhookBody.card as { body: { elements: { content?: string }[] } };
+    const markdown = card.body.elements[0]?.content ?? "";
+    expect(markdown).toContain("**Problems (12)**");
+    expect(markdown).toContain("10. [MEDIUM] bug — f9.ts:10");
+    expect(markdown).not.toContain("f10.ts");
+    expect(markdown).toContain("... and 2 more");
+    await dispatcher.publishAggregatedProblems([], "# Review Complete", undefined,
+      { detailLink: { url: "https://github.com/o/r/issues/42", label: "View full report" } });
+    const emptyMarkdown = (webhookBody.card as { body: { elements: { content?: string }[] } }).body.elements[0]?.content ?? "";
+    expect(emptyMarkdown).toContain("Review Complete");
+    expect(emptyMarkdown).toContain("Full details: [View full report](https://github.com/o/r/issues/42)");
+    expect(emptyMarkdown).not.toContain("Problems (");
   });
   it.each([99991663, 99991671])("refreshes rejected token %s once using the same send UUID", async code => {
     let sends = 0;

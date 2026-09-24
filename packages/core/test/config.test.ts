@@ -2155,6 +2155,24 @@ describe("problem issue output config", () => {
       issue_mode: "consolidated",
     });
   });
+
+  it.each(["brief", "titles", "full"])("accepts issue_link_card %s on Feishu channels", (mode) => {
+    const result = appConfigSchema.parse({
+      outputs: {
+        channels: [{ name: "feishu", kind: "feishu_bot", webhook_url_env: "FEISHU_URL", issue_link_card: mode }],
+      },
+    });
+
+    expect(result.outputs.channels[0]).toMatchObject({ issue_link_card: mode });
+  });
+
+  it("rejects an unknown issue_link_card value", () => {
+    expect(() => appConfigSchema.parse({
+      outputs: {
+        channels: [{ name: "feishu", kind: "feishu_bot", webhook_url_env: "FEISHU_URL", issue_link_card: "verbose" }],
+      },
+    })).toThrow();
+  });
 });
 
 describe("triage config", () => {

@@ -307,6 +307,7 @@ export const CHANNEL_DECLARED_KIND_FIELDS: Readonly<Record<string, readonly stri
   marker_prefix: ["github_problem_issue", "gitlab_problem_issue", "gitea_problem_issue"],
   marker_label: ["github_problem_issue", "gitlab_problem_issue", "gitea_problem_issue"],
   issue_mode: ["github_problem_issue", "gitlab_problem_issue", "gitea_problem_issue"],
+  issue_link_card: ["feishu_bot", "feishu_app"],
   resolved_action: ["github_problem_issue", "gitlab_problem_issue", "gitea_problem_issue"],
   assign_committer: ["github_problem_issue", "gitlab_problem_issue", "gitea_problem_issue"],
   owners_file: ["github_problem_issue", "gitlab_problem_issue", "gitea_problem_issue"],

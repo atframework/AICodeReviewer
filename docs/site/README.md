@@ -19,6 +19,7 @@ pnpm docs:dev       # local dev server with hot reload
 pnpm docs:build     # validation gates + static build -> docs/site/dist/
 pnpm docs:preview   # preview the built site locally
 pnpm docs:check     # validation gates + Astro diagnostics
+pnpm --filter @aicr/docs-site generate:brand-assets  # refresh brand exports
 ```
 
 All four scripts filter to `@aicr/docs-site`, so they never build runtime
@@ -34,7 +35,7 @@ packages. `docs:build` and `docs:check` run the validation scripts in
 | `validate-config-reference.mjs` | `en/zh-cn reference/config-fields.md` must cover every settable field of the Zod schema in `packages/core/src/config.ts` (and list no invented fields); the shared enum table must match schema enum options; both locales must list the same field set. Imports the schema from TypeScript source via Node type stripping, so it never validates against a stale build. |
 | `validate-cli-reference.mjs` | `en/zh-cn reference/cli.md` must match the commands and flags the CLI actually dispatches (`packages/cli/src/app.ts` parseArgs options), and `helpText` must list exactly the accepted flags. |
 | `validate-internal-links.mjs` | Every site-absolute link, MDX `href`, and anchor must resolve to a content page route, a `public/` asset, or a heading id; every sidebar slug must exist in both locales and every page must appear in the sidebar. |
-| `validate-seo.mjs` | Every page needs non-empty frontmatter `title`/`description` within length bounds (CJK-aware width: description 40-320, title <= 60); `public/robots.txt` must advertise `<site>/sitemap-index.xml`; the starlight `head` must wire `og:image`/`twitter:image` to a committed 1200x630 `public/og-image.png`. |
+| `validate-seo.mjs` | Every page needs non-empty frontmatter `title`/`description` within length bounds (CJK-aware width: description 40-320, title <= 60); `public/robots.txt` must advertise `<site>/sitemap-index.xml`; the starlight `head` must wire `og:image`/`twitter:image` to a committed 1200x630 `public/og-image.png`. Brand SVG copies must match; 32px, 180px, and 512px PNG exports must have the expected dimensions. |
 | `validate-bilingual-consistency.mjs` | `en/` and `zh-cn/` must hold the same page set with equal code-fence counts; machine tokens inside fences (config keys, env vars, flags, paths) must match across locales; `.mdx` fences need language tags; prose must avoid the machine-checkable subset of the banned filler-word lists in `.agents/skills/ai-agent-maintenance/references/writing-guidance.md`. |
 
 `validate-config-reference.mjs` requires Node `>=23.6` (native TypeScript type
@@ -86,13 +87,17 @@ The `site` field in `astro.config.mjs` encodes that origin, and no `base` is
 set because the site is published at the domain root. The `public/CNAME` file
 is copied into `gh-pages` so GitHub Pages keeps the custom domain binding.
 
-SEO assets shipped from `public/`: `robots.txt` (advertises the Starlight
-sitemap at `/sitemap-index.xml`) and `og-image.png` (1200x630 social preview,
-wired through the starlight `head` config). Regenerate the preview image after
-branding changes with `pnpm --filter @aicr/docs-site generate:og-image` (uses
-the committed `sharp` dependency and system fonts; commit the result) —
-`validate-seo.mjs` fails the build if the image goes missing or drifts from
-1200x630.
+SEO and brand assets shipped from `public/`: `robots.txt` advertises the
+Starlight sitemap; `favicon.svg` is the editable app mark; `favicon-32.png`
+provides a small PNG fallback; `apple-touch-icon.png` is 180x180;
+`app-icon-512.png` is the large app icon; and `og-image.png` is the 1200x630
+social preview. The SVG uses a code-review bracket mark and a confirmation
+badge in navy, ice blue, and mint. Regenerate the PNGs, dashboard SVG copy,
+and Starlight navigation copy in `src/assets/` after changing the master with
+`pnpm --filter @aicr/docs-site generate:brand-assets`. Commit the exports.
+SVG and PNG files are Git LFS assets; hydrate them before building or
+packaging. The generator uses the committed `sharp` dependency and system
+fonts for the social card, so export it deliberately rather than at build time.
 
 The GitHub Actions workflow at `.github/workflows/docs.yml` builds the site
 and publishes `docs/site/dist/` to the `gh-pages` branch. Real publishing

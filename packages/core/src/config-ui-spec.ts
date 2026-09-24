@@ -461,7 +461,7 @@ export const PAGE_LAYOUT: readonly ConfigUiPageLayout[] = [
       { id: "identity", label: "Identity", scope: "entity", match: ["name", "kind", "trigger"] },
       { id: "mentions", label: "Mentions", scope: "entity", match: ["mention_author", "mention_fallback"] },
       { id: "feishu-app", label: "Feishu application", scope: "entity", match: ["app_id", "app_secret", "app_secret_env", "receive_id", "receive_id_type", "member_directory", "user_mappings", "guess_author"] },
-      { id: "policy", label: "Policies", scope: "entity", match: ["no_problems", "no_findings"] },
+      { id: "policy", label: "Policies", scope: "entity", match: ["no_problems", "no_findings", "issue_link_card"] },
       { id: "urls", label: "URL templates", scope: "entity", match: ["commit_url_template", "revision_url_template", "change_url_template"] },
       { id: "templates", label: "Templates", scope: "entity", match: ["templates"], collapsed: true },
       { id: "problem", label: "Problem issues", scope: "entity", match: ["marker_prefix", "marker_label", "label_ids", "labels", "issue_mode", "resolved_action", "assign_committer", "owners_file", "add_owners_as_assignees", "notify_feishu"], collapsed: true },

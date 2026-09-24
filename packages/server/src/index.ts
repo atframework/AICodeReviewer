@@ -8,7 +8,7 @@ import { createAicrMetrics, formatPrometheusMetrics, recordReviewResult } from "
 import { saveRunSnapshot } from "./run-snapshot.js";
 import type { AicrMetrics } from "./metrics.js";
 import { createObservabilityApi, type ObservabilityApiOptions } from "./observability-api.js";
-import { getDashboardClientAsset, getDashboardHtml } from "./dashboard/index.js";
+import { getDashboardClientAsset, getDashboardHtml, getDashboardIconSvg } from "./dashboard/index.js";
 import type { ConfigStore } from "@aicr/core";
 import type { StoreDb } from "@aicr/store";
 import { closeStoreDb, insertReviewRun, insertReviewRunOnce } from "@aicr/store";
@@ -2381,6 +2381,10 @@ function registerDashboardRoutes(app: Hono, options: ServerAppOptions): void {
   const dashboardHtml = getDashboardHtml({ enabled: Boolean(options.observability) });
   app.get("/dashboard", (c) => c.html(dashboardHtml));
   app.get("/", (c) => c.html(dashboardHtml));
+  app.get("/dashboard/favicon.svg", (c) => c.body(getDashboardIconSvg(), 200, {
+    "Content-Type": "image/svg+xml; charset=utf-8",
+    "Cache-Control": "public, max-age=3600",
+  }));
   app.get("/dashboard/client/:name", (c) => {
     const asset = getDashboardClientAsset(c.req.param("name"));
     if (asset === null) return c.json({ error: "not_found" }, 404);

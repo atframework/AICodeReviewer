@@ -31,6 +31,11 @@ export function getDashboardHtml(options: DashboardHtmlOptions = { enabled: true
     );
 }
 
+/** Fixed public icon used by the dashboard shell and its browser tab. */
+export function getDashboardIconSvg(): string {
+  return readFileSync(join(__dirname, "favicon.svg"), "utf8");
+}
+
 export interface DashboardClientAsset {
   readonly content: string;
   readonly contentType: string;

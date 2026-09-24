@@ -105,6 +105,28 @@ headings to bold or tables to plain text (those 1.0-era transforms break 2.0
 rendering). If inline code or code highlighting ever appears as literal
 backticks, confirm the channel dispatcher is on the 2.0 schema path.
 
+### 7. Linked-issue card content
+
+When the summary route also records the run on an issue-recording channel
+(`gitea_problem_issue`, `github_problem_issue`, or `gitlab_problem_issue`),
+the Feishu card links the created issue instead of duplicating every problem.
+`issue_link_card` on the `feishu_bot`/`feishu_app` channel selects the card
+content:
+
+- `titles` (default): headline, problem count, one title line per problem,
+  and the full-report link
+- `brief`: headline, problem count, and the link only
+- `full`: headline, complete problem sections, and the link
+
+```yaml
+outputs:
+  channels:
+    - name: feishu-code-review
+      kind: feishu_bot
+      webhook_url_env: AICR_FEISHU_WEBHOOK
+      issue_link_card: full   # brief | titles (default) | full
+```
+
 ## Feishu custom application
 
 Use `feishu_app` to send reports as a custom application's bot. Enable the bot

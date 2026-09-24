@@ -303,6 +303,7 @@ fallback 必须是字面量，禁止 hash arguments。provider 变量必须适�
 | `outputs.channels[].label_ids` | int[] | — | 要附加的 Gitea label ID |
 | `outputs.channels[].labels` | string[] | — | 要附加的 GitHub label 名 |
 | `outputs.channels[].issue_mode` | enum | — | `per_problem`、`consolidated`、`per_commit` |
+| `outputs.channels[].issue_link_card` | enum | — | summary 路由同时记录托管 issue、卡片附带其链接时的飞书卡片内容：`brief`（标题 + 计数 + 链接）、`titles`（追加逐条问题标题；运行时默认）、`full`（完整问题区块）；仅 `feishu_bot`/`feishu_app` |
 | `outputs.channels[].resolved_action` | enum | — | `none`、`close`、`mark_resolved`、`delete`（仅 Gitea） |
 | `outputs.channels[].assign_committer` | boolean | — | 创建托管 issue 时指派解析后的评审作者（默认 `true`）；邮箱黑名单阻止 API/pusher 兜底，OWNERS 独立处理 |
 | `outputs.channels[].owners_file` | string | — | owners 文件路径（默认 `OWNERS`） |

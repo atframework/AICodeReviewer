@@ -1961,6 +1961,71 @@ describe("createOutputPublisherFromConfig", () => {
       }
     }
   });
+
+  it("controls the linked-issue card content via issue_link_card", async () => {
+    const calls: { init: { body?: string } }[] = [];
+    vi.stubGlobal("fetch", async (_url: string, init?: { body?: string }) => {
+      calls.push({ init: init ?? {} });
+      return response({ code: 0 });
+    });
+
+    const originalWebhook = process.env.FEISHU_WEBHOOK;
+    process.env.FEISHU_WEBHOOK = "https://open.feishu.cn/hook/test";
+    try {
+      const makePublisher = (channel: Record<string, unknown>) => createOutputPublisherFromConfig(
+        makeConfig({
+          outputs: {
+            template_engine: "handlebars",
+            channels: [
+              { name: "feishu-team", kind: "feishu_bot", webhook_url_env: "FEISHU_WEBHOOK", ...channel },
+            ],
+          },
+        } as Partial<AppConfig>),
+        "feishu-team",
+        undefined,
+        "test-workspace",
+        {
+          triggerName: "gitea-internal",
+          provider: "gitea",
+          workspaceId: "test-workspace",
+          targetKind: "pull_request",
+          repoRef: "owent/example",
+          author: {},
+          reason: "gitea:opened",
+        },
+      );
+      const problems = [{ file: "a.ts", line: 1, severity: "high" as const, category: "bug", message: "full-message-one" }];
+      const publishOptions = { summaryIssueUrl: "https://github.com/o/r/issues/42" };
+      const markdownAt = (index: number): string => {
+        const body = JSON.parse(calls[index]?.init.body ?? "{}");
+        const card = body.card as { body?: { elements: Array<{ content?: string }> } };
+        return card.body?.elements[0]?.content ?? "";
+      };
+
+      // default: per-problem titles without full bodies
+      await makePublisher({})?.publishSummary?.("Review summary", problems, publishOptions);
+      expect(markdownAt(0)).toContain("[HIGH] bug — a.ts:1");
+      expect(markdownAt(0)).toContain("Full details: [View full report](https://github.com/o/r/issues/42)");
+      expect(markdownAt(0)).not.toContain("full-message-one");
+
+      // brief: legacy headline + count + link only
+      await makePublisher({ issue_link_card: "brief" })?.publishSummary?.("Review summary", problems, publishOptions);
+      expect(markdownAt(1)).toContain("Problems (1)");
+      expect(markdownAt(1)).not.toContain("[HIGH] bug");
+
+      // full: complete problem sections plus the link
+      await makePublisher({ issue_link_card: "full" })?.publishSummary?.("Review summary", problems, publishOptions);
+      expect(markdownAt(2)).toContain("[HIGH] bug");
+      expect(markdownAt(2)).toContain("full-message-one");
+    } finally {
+      vi.unstubAllGlobals();
+      if (originalWebhook === undefined) {
+        delete process.env.FEISHU_WEBHOOK;
+      } else {
+        process.env.FEISHU_WEBHOOK = originalWebhook;
+      }
+    }
+  });
 });
 
 describe("createOutputPublisherResolverFromConfig", () => {

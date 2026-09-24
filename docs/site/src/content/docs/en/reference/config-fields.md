@@ -334,6 +334,7 @@ Narrative: [Output channels and routing](/en/configuration/outputs/).
 | `outputs.channels[].label_ids` | int[] | — | Gitea label IDs to attach |
 | `outputs.channels[].labels` | string[] | — | GitHub label names to attach |
 | `outputs.channels[].issue_mode` | enum | — | `per_problem`, `consolidated`, `per_commit` |
+| `outputs.channels[].issue_link_card` | enum | — | Feishu card content when the summary route also records a managed issue and the card links to it: `brief` (headline + count + link), `titles` (adds one title line per problem; runtime default), `full` (complete problem sections); `feishu_bot`/`feishu_app` only |
 | `outputs.channels[].resolved_action` | enum | — | `none`, `close`, `mark_resolved`, `delete` (Gitea only) |
 | `outputs.channels[].assign_committer` | boolean | — | Assign the resolved review author to new managed issues (default `true`); email blacklist blocks API/pusher fallback; OWNERS remain independent |
 | `outputs.channels[].owners_file` | string | — | Owners file path (default `OWNERS`) |

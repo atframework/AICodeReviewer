@@ -17,7 +17,7 @@
     "validate:internal-links": "node scripts/validate-internal-links.mjs",
     "validate:seo": "node scripts/validate-seo.mjs",
     "validate:bilingual-consistency": "node scripts/validate-bilingual-consistency.mjs",
-    "generate:og-image": "node scripts/generate-og-image.mjs"
+    "generate:brand-assets": "node scripts/generate-brand-assets.mjs"
   },
   "dependencies": {
     "@astrojs/starlight": "^0.42.0",

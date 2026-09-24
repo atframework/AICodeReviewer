@@ -15,7 +15,9 @@
 //   4. astro.config.mjs wires og:image / twitter:image (plus alt text) to
 //      `<site>/og-image.png`, the file exists, and it is a 1200x630 PNG —
 //      Starlight hardcodes twitter:card=summary_large_image, which without an
-//      og:image renders an empty large card on social platforms.
+//      og:image renders an empty large card on social platforms;
+//   5. the browser, touch, and large app PNGs have their promised dimensions,
+//      and the copied SVG marks match the editable public master.
 //
 // `site` is parsed from astro.config.mjs (same text-scanning approach as
 // validate-internal-links.mjs; importing the config would pull in Astro).
@@ -40,6 +42,11 @@ const DESCRIPTION_MAX_WIDTH = 320;
 const TITLE_MAX_WIDTH = 60;
 const OG_IMAGE_WIDTH = 1200;
 const OG_IMAGE_HEIGHT = 630;
+const BRAND_ICON_SIZES = [
+  ["favicon-32.png", 32],
+  ["apple-touch-icon.png", 180],
+  ["app-icon-512.png", 512],
+];
 
 const violations = [];
 
@@ -153,7 +160,7 @@ for (const { find, what, hint } of requiredHeadAttrs) {
 
 const ogImagePath = join(publicDir, "og-image.png");
 if (!existsSync(ogImagePath)) {
-  violations.push("public/og-image.png: missing; regenerate via `pnpm --filter @aicr/docs-site generate:og-image`");
+  violations.push("public/og-image.png: missing; regenerate via `pnpm --filter @aicr/docs-site generate:brand-assets`");
 } else {
   const dims = pngDimensions(readFileSync(ogImagePath));
   if (dims === null) {
@@ -163,6 +170,29 @@ if (!existsSync(ogImagePath)) {
       `public/og-image.png: ${dims.width}x${dims.height}, expected ${OG_IMAGE_WIDTH}x${OG_IMAGE_HEIGHT} (Open Graph standard)`,
     );
   }
+}
+
+for (const [name, size] of BRAND_ICON_SIZES) {
+  const assetPath = join(publicDir, name);
+  if (!existsSync(assetPath)) {
+    violations.push(`public/${name}: missing; regenerate via \`pnpm --filter @aicr/docs-site generate:brand-assets\``);
+    continue;
+  }
+  const dims = pngDimensions(readFileSync(assetPath));
+  if (dims?.width !== size || dims.height !== size) {
+    violations.push(`public/${name}: expected a ${size}x${size} PNG`);
+  }
+}
+
+const siteIconPath = join(publicDir, "favicon.svg");
+const navIconPath = join(siteRoot, "src", "assets", "brand-mark.svg");
+const dashboardIconPath = join(siteRoot, "..", "..", "packages", "server", "src", "dashboard", "favicon.svg");
+if (!existsSync(siteIconPath) || !readFileSync(siteIconPath, "utf8").startsWith("<svg ")) {
+  violations.push("public/favicon.svg: missing, invalid, or not hydrated from LFS");
+} else if (!existsSync(navIconPath) || readFileSync(navIconPath, "utf8") !== readFileSync(siteIconPath, "utf8")) {
+  violations.push("src/assets/brand-mark.svg: must match public/favicon.svg; regenerate brand assets");
+} else if (!existsSync(dashboardIconPath) || readFileSync(dashboardIconPath, "utf8") !== readFileSync(siteIconPath, "utf8")) {
+  violations.push("dashboard/favicon.svg: must match public/favicon.svg; regenerate brand assets");
 }
 
 if (violations.length > 0) {

@@ -5641,9 +5641,20 @@ export interface FeishuBotOptions {
 	readonly fetch?: FetchLike | undefined;
 }
 
+/**
+ * Card verbosity when the summary route also records the full report on an
+ * issue platform and the card links to it (`detailLink`):
+ * - `brief`: headline + problem count + link (legacy behavior).
+ * - `titles` (default): adds one title line per problem.
+ * - `full`: full problem sections (location + truncated message/suggestion) + link.
+ */
+export type FeishuIssueLinkCardMode = "brief" | "titles" | "full";
+
 export interface FeishuBotAggregatedOptions {
 	/** Link to the full report on the issue-recording platform. */
 	readonly detailLink?: { readonly url: string; readonly label: string } | undefined;
+	/** Content level of the card when `detailLink` is present; defaults to `titles`. */
+	readonly issueLinkCard?: FeishuIssueLinkCardMode | undefined;
 }
 
 export interface FeishuBotDispatcher {
@@ -5745,33 +5756,50 @@ function buildFeishuReportBody(
 ): Record<string, unknown> {
 	const detailLink = aggregatedOptions?.detailLink;
 	const sections = detailLink
-		? buildFeishuBriefSections(problems, summary, detailLink)
+		? buildFeishuIssueLinkSections(problems, summary, detailLink, aggregatedOptions?.issueLinkCard ?? "titles")
 		: [...(summary ? [summary.trim()] : []), ...buildImProblemSections(problems)];
 	return buildFeishuCardBody(toFeishuMarkdown(sections.join("\n")),
 		mentionText ? [{ tag: "markdown", content: mentionText }] : []);
 }
 
 /**
- * Brief card for deployments whose summary route also publishes the full report
- * to an issue-recording platform: keep the headline + problem count and link the
- * detailed issue instead of duplicating every problem. The @mention rides the
- * separate element appended by the caller, so it is preserved.
+ * Card for deployments whose summary route also publishes the full report to an
+ * issue-recording platform: keep the headline and link the detailed issue, with
+ * the per-problem content controlled by `mode` (`titles` by default). The
+ * @mention rides the separate element appended by the caller, so it is preserved.
  */
-function buildFeishuBriefSections(
+function buildFeishuIssueLinkSections(
 	problems: readonly ReviewProblem[],
 	summary: string | undefined,
 	detailLink: { readonly url: string; readonly label: string },
+	mode: FeishuIssueLinkCardMode,
 ): string[] {
 	const headline = summary?.trim().split("\n").find((line) => line.trim().length > 0)?.trim();
 	const sections: string[] = [];
 	if (headline) {
 		sections.push(headline, "");
 	}
-	if (problems.length > 0) {
-		sections.push(`**Problems (${problems.length})** — full details: [${detailLink.label}](${detailLink.url})`);
-	} else {
-		sections.push(`Full details: [${detailLink.label}](${detailLink.url})`);
+	const linkLine = `Full details: [${detailLink.label}](${detailLink.url})`;
+	if (problems.length === 0) {
+		sections.push(linkLine);
+		return sections;
 	}
+	if (mode === "brief") {
+		sections.push(`**Problems (${problems.length})** — full details: [${detailLink.label}](${detailLink.url})`);
+		return sections;
+	}
+	if (mode === "full") {
+		sections.push(...buildImProblemSections(problems), "", linkLine);
+		return sections;
+	}
+	sections.push(`**Problems (${problems.length})**`);
+	for (let i = 0; i < Math.min(problems.length, IM_PROBLEM_DISPLAY_LIMIT); i += 1) {
+		sections.push(`${i + 1}. ${buildProblemTitle(problems[i]!)}`);
+	}
+	if (problems.length > IM_PROBLEM_DISPLAY_LIMIT) {
+		sections.push(`... and ${problems.length - IM_PROBLEM_DISPLAY_LIMIT} more`);
+	}
+	sections.push("", linkLine);
 	return sections;
 }
 

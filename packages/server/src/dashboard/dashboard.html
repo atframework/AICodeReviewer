@@ -4,13 +4,16 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>AICodeReviewer Admin</title>
+<link rel="icon" type="image/svg+xml" href="dashboard/favicon.svg">
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 :root{--bg:#0f172a;--card:#1e293b;--border:#334155;--text:#e2e8f0;--muted:#94a3b8;--accent:#3b82f6;--green:#22c55e;--red:#ef4444;--yellow:#eab308;--orange:#f97316}
 body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--text);line-height:1.6}
 .login-container{display:flex;justify-content:center;align-items:center;min-height:100vh;padding:1rem}
 .login-form{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:2rem;width:100%;max-width:400px}
-.login-form h1{text-align:center;margin-bottom:1.5rem;font-size:1.5rem}
+.login-form h1{justify-content:center;margin-bottom:1.5rem;font-size:1.5rem}
+.brand-heading{display:flex;align-items:center;gap:0.65rem;line-height:1.2}
+.brand-icon{width:2rem;height:2rem;flex:none}
 .form-group{margin-bottom:1rem}
 .form-group label{display:block;margin-bottom:0.25rem;color:var(--muted);font-size:0.875rem}
 .form-group input{width:100%;padding:0.625rem 0.75rem;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:1rem}
@@ -24,6 +27,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
 .dashboard{display:none}
 .header{background:var(--card);border-bottom:1px solid var(--border);padding:0.75rem 1.5rem;display:flex;align-items:center;justify-content:space-between}
 .header h1{font-size:1.125rem;font-weight:600}
+.header .brand-icon{width:1.75rem;height:1.75rem}
 .header-actions{display:flex;gap:0.75rem;align-items:center}
 .btn-sm{padding:0.375rem 0.75rem;font-size:0.8125rem}
 .btn-ghost{background:transparent;border:1px solid var(--border);color:var(--muted)}
@@ -75,7 +79,7 @@ tr:hover td{background:rgba(59,130,246,0.05)}
 
 <div id="login-view" class="login-container">
 <form class="login-form" id="login-form">
-<h1>AICodeReviewer</h1>
+<h1 class="brand-heading"><img class="brand-icon" src="dashboard/favicon.svg" alt="" width="32" height="32">AICodeReviewer</h1>
 <div class="form-group"><label for="username">Username</label><input type="text" id="username" autocomplete="username" required></div>
 <div class="form-group"><label for="password">Password</label><input type="password" id="password" autocomplete="current-password" required></div>
 <button type="submit" class="btn btn-primary">Sign In</button>
@@ -86,7 +90,7 @@ tr:hover td{background:rgba(59,130,246,0.05)}
 
 <div id="dashboard-view" class="dashboard">
 <div class="header">
-<h1>AICodeReviewer Admin</h1>
+<h1 class="brand-heading"><img class="brand-icon" src="dashboard/favicon.svg" alt="" width="28" height="28">AICodeReviewer Admin</h1>
 <div class="header-actions">
 <span id="refresh-indicator" style="font-size:0.75rem;color:var(--muted)"></span>
 <button class="btn btn-sm btn-ghost" onclick="refreshStats()">Refresh</button>

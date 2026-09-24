@@ -7,6 +7,7 @@ Read this when changing Feishu, WeCom, DingTalk, Slack, or other IM bot renderin
 The implemented IM bot channels (`feishu_bot`, `feishu_app` and `wecom_bot`) share this contract. Platform-specific differences (card vs markdown payload, mention dialect, signature algorithm) are absorbed by the dispatcher and `im-markdown.ts` transformer layers; the contracts below apply uniformly.
 
 - `publishAggregatedProblems` includes `problem.message` and optional `problem.suggestion` under each problem, subject to the bounded IM rendering limits below.
+- When the summary route also records the full report as a managed issue, Feishu dispatchers receive a `detailLink` and render the linked-issue card; the channel's `issue_link_card` (`brief` legacy count-only, `titles` default per-problem titles, `full` complete sections) selects the card content, and the trailing mention element is preserved in every mode. The zero-problem card stays headline + link.
 - IM reports stay sectioned as **Review target → Summary → Problems**; problem locations must come from structured `aicr.report_problem` data, not prose-only summaries.
 - Agent CLI free-form stdout is not a publishable final report; repair to structured JSON/XML tool calls before summary-channel dispatch.
 - If the repair result is still prose but explicitly says there are no actionable problems or no reviewable code, normalize it to `aicr.skip` (`lgtm` / `no_reviewable_code`) instead of publishing the generic format-repair fallback to IM.

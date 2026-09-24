@@ -20,6 +20,7 @@ export default defineConfig({
   integrations: [
     starlight({
       title: "AICodeReviewer",
+      logo: { src: "./src/assets/brand-mark.svg", alt: "" },
       defaultLocale: "en",
       locales: {
         en: {
@@ -185,6 +186,23 @@ export default defineConfig({
       // point both standards at the committed public/og-image.png.
       // validate-seo.mjs guards the URL, the file, and its 1200x630 size.
       head: [
+        {
+          tag: "link",
+          attrs: {
+            rel: "apple-touch-icon",
+            sizes: "180x180",
+            href: "/apple-touch-icon.png",
+          },
+        },
+        {
+          tag: "link",
+          attrs: {
+            rel: "icon",
+            type: "image/png",
+            sizes: "32x32",
+            href: "/favicon-32.png",
+          },
+        },
         {
           tag: "meta",
           attrs: {

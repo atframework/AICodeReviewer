@@ -302,6 +302,22 @@ describe("dashboard routes", () => {
     expect(response.status).toBe(200);
     expect(html).toContain("AICodeReviewer Admin");
   });
+
+  it("serves the same brand icon referenced by root and prefixed dashboards", async () => {
+    for (const pathPrefix of [undefined, "/console"]) {
+      const app = createServerApp({ pathPrefix });
+      const pageUrl = `http://localhost${pathPrefix ?? ""}/dashboard`;
+      const page = await (await app.request(pageUrl)).text();
+      expect(page).toContain('href="dashboard/favicon.svg"');
+      expect(page).toContain('src="dashboard/favicon.svg"');
+
+      const iconUrl = new URL("dashboard/favicon.svg", pageUrl);
+      const icon = await app.request(iconUrl.href);
+      expect(icon.status).toBe(200);
+      expect(icon.headers.get("content-type")).toBe("image/svg+xml; charset=utf-8");
+      expect(await icon.text()).toContain("<title id=\"title\">AICodeReviewer</title>");
+    }
+  });
 });
 
 describe("getDashboardClientAsset", () => {

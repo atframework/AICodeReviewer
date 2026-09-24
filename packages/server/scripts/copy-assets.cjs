@@ -19,6 +19,10 @@ fs.copyFileSync(
   path.join(packageRoot, "src", "dashboard", "dashboard.html"),
   path.join(distDashboard, "dashboard.html"),
 );
+fs.copyFileSync(
+  path.join(packageRoot, "src", "dashboard", "favicon.svg"),
+  path.join(distDashboard, "favicon.svg"),
+);
 
 const srcClient = path.join(packageRoot, "src", "dashboard", "client");
 if (fs.existsSync(srcClient)) {

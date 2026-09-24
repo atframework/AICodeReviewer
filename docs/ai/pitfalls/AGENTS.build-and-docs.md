@@ -18,7 +18,7 @@ Sources: root/package manifests, `pnpm-workspace.yaml`, `tsconfig.json`,
 - Check TypeScript/ESLint/Astro peers together. A major Zod bump is a schema
   migration: default/refinement ordering, errors, MCP compatibility and docs
   introspection all need regression evidence. Live manifests own version limits.
-- Hydrate LFS snapshot/PNG assets before packaging. CI/docs/image checkouts use
+- Hydrate LFS snapshot/SVG/PNG assets before packaging. CI/docs/image checkouts use
   `lfs: true`; working-tree packaging follows `git lfs pull`, not `git archive`.
   Keep the model snapshot path aligned across code, attributes and deploy checks.
   Renormalization is scoped; history rewrite is a separate operation.

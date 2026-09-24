@@ -16,6 +16,9 @@ outputs:
       # P4: a unique submitter-workspace match precedes author email/username.
       # Shared accounts such as admin must not override the workspace owner.
       mention_fallback: skip
+      # issue_link_card: titles # Card content when the summary route also records a managed issue:
+      #                         # brief (headline + count + link) | titles (default, + per-problem titles)
+      #                         # | full (+ complete problem sections)
       member_directory:
         chat_id: oc_member_source_group
         # Overrides outputs.author_resolution.directory_cache_ttl_seconds;

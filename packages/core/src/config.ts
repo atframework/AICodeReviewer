@@ -396,6 +396,14 @@ export const outputChannelSchema = z
     label_ids: z.array(z.number().int().positive()).optional(),
     labels: z.array(z.string().min(1)).optional(),
     issue_mode: z.enum(["per_problem", "consolidated", "per_commit"]).optional(),
+    /**
+     * Feishu card verbosity when the summary route also records the full
+     * report as a managed issue and the card links to it: `brief` keeps
+     * headline + count + link, `titles` (runtime default) adds per-problem
+     * title lines, `full` renders complete problem sections. Consumed only by
+     * feishu_bot/feishu_app.
+     */
+    issue_link_card: z.enum(["brief", "titles", "full"]).optional(),
     resolved_action: z.enum(["none", "close", "mark_resolved", "delete"]).optional(),
     assign_committer: z.boolean().optional(),
     owners_file: z.string().min(1).optional(),

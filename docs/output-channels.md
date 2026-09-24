@@ -257,6 +257,24 @@ If a run has problems but records `skipReason="no_output_publisher"`, no summary
 | `feishu_bot` | Collected for aggregation | Interactive card Markdown (JSON 2.0 schema) | Renders sectioned `Review target` / `Summary` / `Problems` blocks. Cards are sent with `card.schema = "2.0"` so headings, tables, inline code (`code`), and fenced code blocks with language-based syntax highlighting render natively; each problem includes severity, category, `Location: file:line`, and truncated message/suggestion; built-in summaries render `@username (Display Name)` when both are available |
 | `wecom_bot` | Collected for aggregation | Markdown message | Same sectioned content as Feishu; messages are truncated to 500 chars and suggestions to 300 chars to stay within size limits; built-in summaries render `@username (Display Name)` when both are available |
 
+## Feishu card content when a managed issue carries the full report
+
+When the summary route also records the run on an issue-recording channel
+(`gitea_problem_issue`, `github_problem_issue`, or `gitlab_problem_issue`), the
+Feishu card keeps the summary headline and links the detailed issue instead of
+duplicating every problem. `outputs.channels[].issue_link_card` (only
+`feishu_bot`/`feishu_app`) selects what the card includes:
+
+- `titles` (default): headline, problem count, one title line per problem
+  (`[SEVERITY] category — file:line`, capped at ten entries with an overflow
+  note), and the `Full details` link.
+- `brief`: headline, problem count, and the link (the pre-option behavior).
+- `full`: headline, complete problem sections (location plus truncated
+  message/suggestion), and the link.
+
+With zero problems the card always renders the headline plus the link. The
+@mention element is unaffected by this option.
+
 ## PR/MR review summary update mode
 
 PR/MR review channels (`gitea_pr_review` and `github_pr_review`) support

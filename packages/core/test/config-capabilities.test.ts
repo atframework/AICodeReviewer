@@ -160,6 +160,8 @@ describe("channel kind capability", () => {
     validateEntityCapabilities("channel", { name: "c", kind: "gitea_problem_issue", label_ids: [1, 2], resolved_action: "delete" });
     validateEntityCapabilities("channel", { name: "c", kind: "gitlab_mr_review", project_id: 42, merge_request_iid: 7, severity_label_prefix: "sev" });
     validateEntityCapabilities("channel", { name: "c", kind: "wecom_bot", webhook_url_env: "WECOM_URL", mentioned_mobile_list: ["13800000000"] });
+    validateEntityCapabilities("channel", { name: "c", kind: "feishu_bot", webhook_url_env: "FEISHU_URL", issue_link_card: "titles" });
+    validateEntityCapabilities("channel", { name: "c", kind: "feishu_app", app_id: "cli_a", app_secret_env: "FEISHU_SECRET", receive_id: "oc_x", issue_link_card: "full" });
   });
 
   it.each([
@@ -170,6 +172,7 @@ describe("channel kind capability", () => {
     ["gitea_problem_issue", "labels", ["bug"]],
     ["wecom_bot", "secret_env", "WESECRET"],
     ["feishu_bot", "issue_mode", "per_problem"],
+    ["github_problem_issue", "issue_link_card", "titles"],
   ])("rejects %s with %s (no consumer)", (kind, field, value) => {
     const error = expectConfigError(
       () => validateEntityCapabilities("channel", { name: "c", kind, [field]: value }),

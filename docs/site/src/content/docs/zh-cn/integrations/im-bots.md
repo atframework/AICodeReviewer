@@ -98,6 +98,26 @@ AICR 使用 **JSON 2.0 schema**（`card.schema = "2.0"`，markdown 放在
 破坏 2.0 渲染）。如果行内代码或代码高亮显示为字面反引号，请确认 channel dispatcher 走的是
 2.0 schema 路径。
 
+### 7. 链接 issue 的卡片内容
+
+当 summary 路由同时在 issue 记录渠道（`gitea_problem_issue`、`github_problem_issue`
+或 `gitlab_problem_issue`）落盘本次评审的完整报告时，飞书卡片改为链接该 issue，
+而不是逐条重复问题。频道上的 `issue_link_card`（仅 `feishu_bot`/`feishu_app`）
+选择卡片内容：
+
+- `titles`（默认）：标题行、问题计数、逐条问题标题和完整报告链接
+- `brief`：只有标题行、问题计数和链接
+- `full`：标题行、完整问题区块和链接
+
+```yaml
+outputs:
+  channels:
+    - name: feishu-code-review
+      kind: feishu_bot
+      webhook_url_env: AICR_FEISHU_WEBHOOK
+      issue_link_card: full   # brief | titles（默认）| full
+```
+
 ## 飞书自建应用
 
 使用 `feishu_app` 以自建应用机器人身份发送报告。启用机器人能力、发布应用，

@@ -154,13 +154,13 @@ html:not([data-has-sidebar]) {
  * Landing-page (splash) polish
  * ------------------------------------------------------------------ */
 
-/* Let the inline SVG hero logo scale with the viewport and stay proportional
+/* Let the shared hero icon scale with the viewport and stay proportional
  * on large displays instead of staying pinned at its intrinsic 208px size. */
 html:not([data-has-sidebar]) .hero .hero-html {
   justify-content: center;
 }
 
-html:not([data-has-sidebar]) .hero .hero-html svg {
+html:not([data-has-sidebar]) .hero .hero-html img {
   width: 100%;
   max-width: clamp(11rem, 16vw, 20rem);
   height: auto;

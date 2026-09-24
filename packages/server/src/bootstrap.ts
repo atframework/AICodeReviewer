@@ -2263,7 +2263,10 @@ export function createOutputPublisherFromConfig(
         const appRendering = createChannelRendering(config, channel, workspaceId, reviewEvent, repoRef, baseDir, targetUrlTemplates, mention);
         const renderedProblems = (summaryProblems ?? problems).map(problem => appRendering.renderProblem(problem));
         const aggregated: FeishuBotAggregatedOptions | undefined = options?.summaryIssueUrl
-          ? { detailLink: { url: options.summaryIssueUrl, label: "View full report" } }
+          ? {
+              detailLink: { url: options.summaryIssueUrl, label: "View full report" },
+              ...(channel.issue_link_card ? { issueLinkCard: channel.issue_link_card } : {}),
+            }
           : undefined;
         return dispatcher.publishAggregatedProblems(renderedProblems,
           appRendering.renderSummary(summary, renderedProblems, options?.title), mention || undefined, aggregated);
@@ -2296,7 +2299,10 @@ export function createOutputPublisherFromConfig(
       async publishSummary(summary: string, summaryProblems?: readonly ReviewProblem[], options?: ReviewSummaryPublishOptions): Promise<DispatchResult> {
         const renderedProblems = (summaryProblems ?? problems).map((problem) => rendering.renderProblem(problem));
         const aggregated: FeishuBotAggregatedOptions | undefined = options?.summaryIssueUrl
-          ? { detailLink: { url: options.summaryIssueUrl, label: "View full report" } }
+          ? {
+              detailLink: { url: options.summaryIssueUrl, label: "View full report" },
+              ...(channel.issue_link_card ? { issueLinkCard: channel.issue_link_card } : {}),
+            }
           : undefined;
         return dispatcher.publishAggregatedProblems(
           renderedProblems,
