@@ -97,8 +97,10 @@ HTTP POST 或每个 problem 一条行内评论。如果把 PR review channel 只
 - **Fingerprint 稳定性。** 每个 problem 带一个 `fingerprint`。AICR 在每个托管 issue 内的
   隐藏 `aicr:problems` 标记里跟踪打开的 fingerprint。当之前打开的 fingerprint 消失，该 issue
   被移到 Resolved 段（可选关闭）。
-- **文件范围解决守卫。** 只有当当前评审确实重新分析了包含该 problem 的文件时，该 problem
-  才会被标记为"已解决"。由触及无关文件的提交触发的评审——或什么都没发现的评审——**不会**
+- **文件范围解决守卫。** 只有当生命周期模型对照当前源码确认修复后，problem 才会被标记为"已解决"。
+  这通常要求当前评审确实重新分析了包含该 problem 的文件；但一次真正的空评审（例如
+  `lgtm` 运行）在生命周期分析启用时，会改为验证该 issue 所有仍打开的 fingerprint。未经模型确认时，
+  由触及无关文件的提交触发的评审——或什么都没发现的评审——**不会**
   把之前报告的每个 problem 都标记为已解决。每个托管 issue 正文嵌入
   `aicr:file=<path>`，以便恢复文件归属。
 - **最近 issue 上限。** 对账只列出仍处于 open 状态的 issue（`state=open`），上限由
@@ -150,7 +152,9 @@ outputs:
 `no_problems.action` 决定一次成功但无可操作问题的评审是否通知各 channel
 （`publish`、`suppress` 或 `publish_if_summary`）。channel 可以按 channel 或按
 workspace 覆盖全局策略。如果所有选中的 summary channel 都抑制零问题结果，run 会被
-记为跳过，`skipReason="no_problems_suppressed"`。
+记为跳过，`skipReason="no_problems_suppressed"`。该策略只控制可见的通知：
+托管 problem issue channel 仍会在每次真正的零问题评审后对账已有指纹，
+让经模型确认已修复的 issue 得以关闭（`resolved_action: none` 可关闭该行为）。
 
 ## 下一步
 

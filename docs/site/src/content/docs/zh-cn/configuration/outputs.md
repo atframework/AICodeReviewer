@@ -72,7 +72,9 @@ workspaces:
 ```
 
 如果所有选中的 summary 通道都对零问题结果抑制，运行会被记为 skipped，
-`skipReason="no_problems_suppressed"`。
+`skipReason="no_problems_suppressed"`。该策略只控制可见的通知：托管
+problem issue 通道仍会在每次真正的零问题评审后对账已有指纹，让经模型确认
+已修复的 issue 得以关闭（`resolved_action: none` 可关闭该行为）。
 
 ## `outputs.channels[]` —— 输出目标
 

@@ -5049,6 +5049,62 @@ describe("runReviewOrchestration error paths", () => {
     }
   });
 
+  it("still reconciles managed issues on a zero-problem skip despite the suppress policy", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-reconcile-managed-skip-"));
+
+    try {
+      await writeWorkspaceFile(tempDir, "src/app.ts", "const ok = true;\n");
+      const llm: ChatCompletionClient = {
+        async complete(input) {
+          return {
+            providerId: input.model.providerId,
+            modelId: input.model.modelId,
+            content: JSON.stringify({ skipReason: "lgtm" }),
+            raw: {},
+          };
+        },
+      };
+      const summaryCalls: { summary: string; problems: readonly ReviewProblem[] | undefined; options: ReviewSummaryPublishOptions | undefined }[] = [];
+
+      const result = await runReviewOrchestration(
+        {
+          reviewEvent: createReviewEventFixture(),
+          payload: {},
+          provider: "gitea",
+          eventName: "pull_request",
+        },
+        {
+          baseSystemPrompt: "<task>\n{{TASK_CONTEXT}}\n</task>",
+          sourceRootResolver: () => tempDir,
+          vcs: createVcs(tempDir),
+          llm,
+          model,
+          outputPublisher: {
+            handlesRendering: true,
+            noProblemsAction: "suppress",
+            reconcilesManagedIssues: true,
+            async publishSummary(summary, problems, options) {
+              summaryCalls.push({ summary, problems, options });
+              return [];
+            },
+          },
+        },
+      );
+
+      expect(result.status).toBe("skipped");
+      expect(result.skipReason).toBe("lgtm");
+      expect(result.problemCount).toBe(0);
+      expect(result.summaryCount).toBe(0);
+      expect(result.dispatchCount).toBe(0);
+      expect(summaryCalls).toHaveLength(1);
+      expect(summaryCalls[0]?.summary).toBe("");
+      expect(summaryCalls[0]?.problems).toEqual([]);
+      expect(summaryCalls[0]?.options?.reviewedFiles).toEqual(["src/app.ts"]);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("repairs summary-only issue claims before publishing summary channels", async () => {
     const tempDir = await mkdtemp(join(tmpdir(), "aicr-review-summary-claim-repair-"));
 

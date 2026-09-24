@@ -117,11 +117,14 @@ issues across reviews. Key behaviors:
   open fingerprints in a hidden `aicr:problems` marker inside each managed
   issue. When a previously-open fingerprint disappears, the issue is moved to
   a Resolved section (and optionally closed).
-- **File-scope resolution guard.** A problem is only marked "resolved" when
-  the current review actually re-analyzed the file containing it. A review
-  triggered by a commit that touches unrelated files — or that finds nothing
-  — will **not** mark every previously-reported problem as resolved. Each
-  managed-issue body embeds `aicr:file=<path>` so the file is recoverable.
+- **File-scope resolution guard.** A problem is only marked "resolved" after
+  the lifecycle model verifies the fix against current source. That normally
+  requires the current review to re-analyze the file containing it, but a
+  genuine empty review (for example an `lgtm` run) with lifecycle analysis
+  active verifies every still-open stored fingerprint instead. Without model
+  verification, a review that touches unrelated files or finds nothing will
+  **not** mark previously-reported problems as resolved. Each managed-issue
+  body embeds `aicr:file=<path>` so the file is recoverable.
 - **Recent-issue cap.** Reconciliation lists only open issues (`state=open`),
   capped by `review.problem_issue.max_recent_issues` (default 30, range 1–200,
   overridable per workspace). Fingerprints outside the recent window are not
@@ -183,7 +186,10 @@ problems should notify each channel (`publish`, `suppress`, or
 `publish_if_summary`). Channels can override the global policy per-channel or
 per-workspace. If every selected summary channel suppresses a zero-problem
 result, the run is recorded as skipped with
-`skipReason="no_problems_suppressed"`.
+`skipReason="no_problems_suppressed"`. The policy only controls visible
+summaries: managed problem-issue channels still reconcile stored findings on
+every genuine zero-problem review so confirmed fixes can close
+(`resolved_action: none` opts out).
 
 ## Where to next
 

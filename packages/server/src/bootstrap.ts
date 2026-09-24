@@ -1553,6 +1553,7 @@ export function createCompositeOutputPublisher(
     handlesRendering: true,
     publishesProblems: linePublishers.length > 0,
     noProblemsAction: summaryCapable.some((entry) => entry.publisher.noProblemsAction === "publish" || entry.publisher.noProblemsAction === "publish_if_summary") ? summaryCapable.every((entry) => entry.publisher.noProblemsAction === "publish_if_summary") ? "publish_if_summary" : "publish" : "suppress",
+    reconcilesManagedIssues: summaryCapable.some((entry) => entry.publisher.reconcilesManagedIssues === true),
     publishEmptySummary: summaryCapable.some((entry) => entry.publisher.publishEmptySummary && entry.publisher.noProblemsAction !== "suppress"),
     async publishProblem(problem: ReviewProblem): Promise<readonly DispatchResult[]> {
       const results: DispatchResult[] = [];
@@ -1604,7 +1605,7 @@ export function createCompositeOutputPublisher(
               if (!summaryChannelNames.has(entry.name) && noProblems) {
                 continue;
               }
-              if (!bypassNoProblemsPolicy && noProblems) {
+              if (!bypassNoProblemsPolicy && noProblems && publisher.reconcilesManagedIssues !== true) {
                 if (publisher.noProblemsAction === "suppress") {
                   continue;
                 }
@@ -1948,6 +1949,7 @@ export function createOutputPublisherFromConfig(
     return {
       handlesRendering: true,
       publishesProblems: false,
+      reconcilesManagedIssues: true,
       noProblemsAction,
       publishEmptySummary,
       async publishProblem(): Promise<DispatchResult> {
@@ -2072,6 +2074,7 @@ export function createOutputPublisherFromConfig(
     return {
       handlesRendering: true,
       publishesProblems: false,
+      reconcilesManagedIssues: true,
       noProblemsAction,
       publishEmptySummary,
       async publishProblem(): Promise<DispatchResult> {
@@ -2193,6 +2196,7 @@ export function createOutputPublisherFromConfig(
     return {
       handlesRendering: true,
       publishesProblems: false,
+      reconcilesManagedIssues: true,
       noProblemsAction,
       publishEmptySummary,
       async publishProblem(): Promise<DispatchResult> {

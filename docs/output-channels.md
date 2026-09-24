@@ -363,11 +363,11 @@ workspaces:
 
 ## Managed Gitea problem issues
 
-The `gitea_problem_issue`, `github_problem_issue`, and `gitlab_problem_issue` channels reconcile managed issues from problem fingerprints. A fingerprint becomes a resolution candidate only after the current review covers its file and no longer reports it; it is resolved only when the lifecycle model explicitly confirms the fix against current source.
+The `gitea_problem_issue`, `github_problem_issue`, and `gitlab_problem_issue` channels reconcile managed issues from problem fingerprints. A fingerprint becomes a resolution candidate when the current review covers its file and no longer reports it; on a genuine empty review (including `lgtm`-classified runs) with lifecycle analysis active, every still-open stored fingerprint becomes a candidate instead. A candidate is resolved only when the lifecycle model explicitly confirms the fix against current source.
 
 By default, one review is combined into a single issue (`issue_mode: consolidated`). `per_problem` creates one issue per finding. Consolidated scopes are target-aware: pushes key by `headSha`, PR/MR reviews key by pull number (falling back to `headSha`), and other targets use the repository scope.
 
-After handling the current scope, consolidated mode coordinates older scopes per fingerprint. Commit ancestry must be explicitly confirmed; behind, diverged, failed, or unknown comparisons cannot change an old scope. Current findings are filtered to fingerprints already owned by that issue. Reviewed-and-missing fingerprints go through model verification, while unreviewed or unconfirmed fingerprints remain open. The old issue is patched while open fingerprints remain and receives `resolved_action` only when none remain. Its scope marker and historical summary are preserved, and current-scope-only fingerprints are never copied into it. Same-scope race duplicates are still cleaned up deterministically because that is identity reconciliation, not a claim that a code finding was fixed. `per_commit` scopes are independent and never enter this cross-scope pass.
+After handling the current scope, consolidated mode coordinates older scopes per fingerprint. Commit ancestry must be explicitly confirmed; behind, diverged, failed, or unknown comparisons cannot change an old scope. Current findings are filtered to fingerprints already owned by that issue. Reviewed-and-missing fingerprints go through model verification — on a genuine empty review with lifecycle analysis active, every stored fingerprint does — while unreviewed or unconfirmed fingerprints remain open. The old issue is patched while open fingerprints remain and receives `resolved_action` only when none remain. Its scope marker and historical summary are preserved, and current-scope-only fingerprints are never copied into it. Same-scope race duplicates are still cleaned up deterministically because that is identity reconciliation, not a claim that a code finding was fixed. `per_commit` scopes are independent and never enter this cross-scope pass.
 
 When updating a consolidated issue:
 
@@ -378,11 +378,11 @@ When updating a consolidated issue:
 
 ### File-scope and model resolution guards
 
-A managed problem is only marked Resolved when the current review re-analyzed its file and the lifecycle model confirms the fix. An unrelated, failed, or uncertain review cannot close valid findings.
+A managed problem is only marked Resolved after the lifecycle model verifies the fix against current source: normally the current review must first re-analyze its file, but a genuine empty review with lifecycle analysis active offers every still-open fingerprint for verification. An unrelated, failed, or uncertain review cannot close valid findings.
 
 - `changedPaths` flows as `reviewedFiles` through `ReviewSummaryPublishOptions` → `publishSummary` → `reconcileProblems`.
 - Per-problem bodies embed `<!-- aicr:file=<path> -->`; legacy bodies parse `Location: path:line`. Consolidated bodies store per-fingerprint single-line or range locations.
-- Partial updates retain out-of-scope or model-unconfirmed fingerprints in `open_problems` and the body. If retained metadata is incomplete, the rewrite is skipped. Empty reviews use the same per-fingerprint path.
+- Partial updates retain out-of-scope or model-unconfirmed fingerprints in `open_problems` and the body. If retained metadata is incomplete, the rewrite is skipped. Empty reviews use the same per-fingerprint path; with lifecycle analysis active they verify every stored fingerprint rather than only the ones inside the current diff.
 - Absent or empty `reviewedFiles` preserves current-scope legacy behavior; it never authorizes cross-scope resolution.
 - Trigger-error reports (`publishTriggerErrorReport`, fired when a trigger exhausts retries) never drive lifecycle reconciliation: they pass `ReviewSummaryPublishOptions.skipReconcile`, so the `github_problem_issue` / `gitea_problem_issue` / `gitlab_problem_issue` wrappers skip `reconcileProblems` entirely. A failed/timed-out analysis has an empty problem list but is not a "no problems found" result, so it must not resolve or close managed issues. `bypassNoProblemsPolicy` is still set so the failure notice reaches IM/review-comment channels.
 Managed issue titles are generated by the output layer to stay concise in GitHub/Gitea list views. `aicr.publish_summary.title` only affects the rendered summary content in the issue body; it does not replace the managed issue title. Current title policy:
@@ -588,7 +588,7 @@ Effective policy is resolved in this order, from low to high precedence:
 
 Use positive wording: `no_problems.action: publish|suppress|publish_if_summary`. When nothing is configured, managed problem-issue channels default to `publish` (publishing drives stale issues to close), IM bots default to `publish_if_summary`, and everything else defaults to `suppress`. Lifecycle or audit channels can opt in to `publish` explicitly. The removed `no_findings` spelling is rejected by config validation.
 
-This is an output-layer policy. It does not replace `review.skip_lgtm`, and it must not suppress error reports or problem lifecycle reconciliation.
+This is an output-layer policy. It does not replace `review.skip_lgtm`, and it must not suppress error reports or problem lifecycle reconciliation: managed problem-issue channels reconcile stored findings on every genuine review outcome even when their zero-problem summary is suppressed (`resolved_action: none` is the lifecycle opt-out).
 
 Example:
 
@@ -620,7 +620,7 @@ workspaces:
 
 If every configured summary channel suppresses a zero-problem result, the run is marked skipped with `skipReason="no_problems_suppressed"` in the run summary.
 
-When an agent repair attempt only returns prose equivalent to “no actionable problems” or “no reviewable code”, AICR normalizes it to `skipReason="lgtm"` or `skipReason="no_reviewable_code"`. This keeps IM channels quiet even when their `no_problems` policy would publish a non-empty zero-problem summary.
+When an agent repair attempt only returns prose equivalent to “no actionable problems” or “no reviewable code”, AICR normalizes it to `skipReason="lgtm"` or `skipReason="no_reviewable_code"`. This keeps IM channels quiet even when their `no_problems` policy would publish a non-empty zero-problem summary. Managed problem issues still reconcile on these runs, so a clean review closes findings the lifecycle model confirms as fixed.
 
 ## Template rendering
 

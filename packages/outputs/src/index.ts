@@ -2495,6 +2495,7 @@ export function createGithubProblemIssueDispatcher(options: GithubProblemIssueOp
 							preparedProblems,
 							reviewedFiles,
 							options.resolutionAnalyzer,
+							true,
 						);
 						if (!prepared) {
 							if (isCurrentScope && !options.resolutionAnalyzer && (!reviewedFiles || reviewedFiles.length === 0)) {
@@ -2645,12 +2646,16 @@ export function createGithubProblemIssueDispatcher(options: GithubProblemIssueOp
 				}
 			}
 
+			// An empty review with a resolution analyzer may verify findings
+			// beyond the current diff's file coverage; without one, coverage
+			// still gates closing.
+			const verifyBeyondCoverage = preparedProblems.length === 0 && options.resolutionAnalyzer !== undefined;
 			for (const issue of existingIssues) {
 				if (!issue.fingerprint || currentFingerprints.has(issue.fingerprint)) {
 					continue;
 				}
 
-				if (!isFileCoveredByReview(issue.file, reviewedFiles)) {
+				if (!verifyBeyondCoverage && !isFileCoveredByReview(issue.file, reviewedFiles)) {
 					continue;
 				}
 
@@ -3592,6 +3597,7 @@ export function createGitlabProblemIssueDispatcher(options: GitlabProblemIssueOp
 							preparedProblems,
 							reviewedFiles,
 							options.resolutionAnalyzer,
+							true,
 						);
 						if (!prepared) {
 							if (isCurrentScope && !options.resolutionAnalyzer && (!reviewedFiles || reviewedFiles.length === 0)) {
@@ -3742,12 +3748,16 @@ export function createGitlabProblemIssueDispatcher(options: GitlabProblemIssueOp
 				}
 			}
 
+			// An empty review with a resolution analyzer may verify findings
+			// beyond the current diff's file coverage; without one, coverage
+			// still gates closing.
+			const verifyBeyondCoverage = preparedProblems.length === 0 && options.resolutionAnalyzer !== undefined;
 			for (const issue of existingIssues) {
 				if (!issue.fingerprint || currentFingerprints.has(issue.fingerprint)) {
 					continue;
 				}
 
-				if (!isFileCoveredByReview(issue.file, reviewedFiles)) {
+				if (!verifyBeyondCoverage && !isFileCoveredByReview(issue.file, reviewedFiles)) {
 					continue;
 				}
 
@@ -4485,6 +4495,7 @@ async function prepareStoredConsolidatedReconciliation(
 	currentProblems: readonly ReviewProblem[],
 	reviewedFiles: readonly string[] | undefined,
 	resolutionAnalyzer?: ProblemResolutionAnalyzer,
+	verifyAllStoredFingerprints?: boolean,
 ): Promise<PreparedStoredConsolidatedReconciliation | undefined> {
 	const storedFingerprints = extractOpenProblemFingerprintsFromBody(body);
 	if (storedFingerprints.size === 0) return undefined;
@@ -4499,9 +4510,16 @@ async function prepareStoredConsolidatedReconciliation(
 		const fingerprint = problem.fingerprint ?? computeProblemFingerprint(problem);
 		return storedFingerprints.has(fingerprint);
 	});
+	// A genuine empty review may resolve findings whose files lie outside the
+	// current diff, but only when the analyzer can verify them semantically
+	// against current source; without one the coverage guard keeps unverified
+	// fingerprints retained.
+	const coverageGuard = verifyAllStoredFingerprints === true && resolutionAnalyzer !== undefined
+		? undefined
+		: reviewedFiles;
 	const categorized = categorizeProblems(relevantCurrentProblems, storedFingerprints, {
 		previousFilesByFingerprint,
-		...(reviewedFiles ? { reviewedFiles } : {}),
+		...(coverageGuard ? { reviewedFiles: coverageGuard } : {}),
 	});
 	const confirmed = await confirmResolvedFingerprints(
 		categorized.resolvedFingerprints,
@@ -5458,6 +5476,7 @@ export function createGiteaProblemIssueDispatcher(options: GiteaProblemIssueOpti
 							preparedProblems,
 							reviewedFiles,
 							options.resolutionAnalyzer,
+							true,
 						);
 						if (!prepared) {
 							if (isCurrentScope && !options.resolutionAnalyzer && (!reviewedFiles || reviewedFiles.length === 0)) {
@@ -5608,12 +5627,16 @@ export function createGiteaProblemIssueDispatcher(options: GiteaProblemIssueOpti
 				}
 			}
 
+			// An empty review with a resolution analyzer may verify findings
+			// beyond the current diff's file coverage; without one, coverage
+			// still gates closing.
+			const verifyBeyondCoverage = preparedProblems.length === 0 && options.resolutionAnalyzer !== undefined;
 			for (const issue of existingIssues) {
 				if (!issue.fingerprint || currentFingerprints.has(issue.fingerprint)) {
 					continue;
 				}
 
-				if (!isFileCoveredByReview(issue.file, reviewedFiles)) {
+				if (!verifyBeyondCoverage && !isFileCoveredByReview(issue.file, reviewedFiles)) {
 					continue;
 				}
 

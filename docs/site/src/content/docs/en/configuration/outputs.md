@@ -77,7 +77,10 @@ workspaces:
 ```
 
 If all selected summary channels suppress a zero-problem result, the run is
-recorded as skipped with `skipReason="no_problems_suppressed"`.
+recorded as skipped with `skipReason="no_problems_suppressed"`. The policy
+only gates visible summaries: managed problem-issue channels still reconcile
+stored findings on every genuine zero-problem review so confirmed fixes can
+close (`resolved_action: none` opts out).
 
 ## `outputs.channels[]` — output targets
 

@@ -97,6 +97,14 @@ export interface ReviewOutputPublisher {
   readonly publishesProblems?: boolean;
   readonly handlesRendering?: boolean;
   readonly publishEmptySummary?: boolean;
+  /**
+   * Managed problem-issue channels reconcile stored findings on every genuine
+   * review outcome. When set, empty reviews still reach publishSummary (with an
+   * empty summary) even where no-problems policy would suppress visible output,
+   * so resolved findings can close. `resolved_action: none` remains the
+   * lifecycle opt-out.
+   */
+  readonly reconcilesManagedIssues?: boolean;
   readonly noProblemsAction?: "publish" | "suppress" | "publish_if_summary";
   publishProblem?(problem: ReviewProblem): Promise<ReviewDispatchResult>;
   publishSummary?(summary: string, problems?: readonly ReviewProblem[], options?: ReviewSummaryPublishOptions): Promise<ReviewDispatchResult>;
@@ -4129,13 +4137,14 @@ async function finalizeReviewRun(params: FinalizeReviewRunParams): Promise<Revie
 
     if (outputPublisher.publishSummary) {
       const suppressNoProblemsSummary = reviewProblems.length === 0
+      && !outputPublisher.reconcilesManagedIssues
         && (outputPublisher.noProblemsAction === "suppress"
           || (outputPublisher.noProblemsAction === "publish_if_summary"
             && outputState.summaries.every((s) => !s.markdown.trim())));
       if (!suppressNoProblemsSummary) {
         const summariesToPublish: readonly PublishSummaryInput[] = outputState.summaries.length > 0
           ? outputState.summaries
-          : reviewProblems.length > 0 || outputPublisher.publishEmptySummary
+          : reviewProblems.length > 0 || outputPublisher.publishEmptySummary || outputPublisher.reconcilesManagedIssues
             ? [{ markdown: "" }]
             : [];
         for (const [summaryIndex, summaryEntry] of summariesToPublish.entries()) {

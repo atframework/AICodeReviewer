@@ -2733,6 +2733,90 @@ describe("createOutputPublisherResolverFromConfig", () => {
     }
   });
 
+  it("reconciles managed problem issues on zero-problem summaries despite no_problems suppress", async () => {
+    const calls: { url: string; init: { body?: string; method?: string } }[] = [];
+    vi.stubGlobal("fetch", async (url: string, init?: { body?: string; method?: string }) => {
+      calls.push({ url, init: init ?? {} });
+      return response(url.includes("/issues?") ? [] : { id: 1, number: 1 });
+    });
+
+    const originalGithubToken = process.env.GITHUB_TOKEN;
+    const originalFeishuWebhook = process.env.FEISHU_SUPPRESS_WEBHOOK;
+    process.env.GITHUB_TOKEN = "resolver-token";
+    process.env.FEISHU_SUPPRESS_WEBHOOK = "https://open.feishu.cn/hook/suppress";
+    try {
+      const config = makeConfig({
+        triggers: [{ name: "github-saas", kind: "github", token_env: "GITHUB_TOKEN" }],
+        outputs: {
+          template_engine: "handlebars",
+          no_problems: { action: "suppress" },
+          channels: [
+            {
+              name: "github-problem-issues",
+              kind: "github_problem_issue",
+              trigger: "github-saas",
+              no_problems: { action: "suppress" },
+            },
+            {
+              name: "feishu-suppress",
+              kind: "feishu_bot",
+              webhook_url_env: "FEISHU_SUPPRESS_WEBHOOK",
+            },
+          ],
+          routes: {
+            default: {},
+            rules: [
+              { match: { trigger: "github-saas", target_kind: "push" }, summary: ["github-problem-issues", "feishu-suppress"] },
+            ],
+          },
+        },
+        workspaces: {
+          cache: { max_total_gb: 50, eviction: "lru", ttl_days: 30 },
+          defaults: {},
+          instances: {
+            "test-workspace": {
+              source_repo: { trigger: "github-saas", repo: "my-org/my-repo" },
+            },
+          },
+        },
+      } as Partial<AppConfig>);
+      const publisher = await createOutputPublisherResolverFromConfig(config)({
+        reviewEvent: {
+          triggerName: "github-saas",
+          provider: "github",
+          workspaceId: "test-workspace",
+          targetKind: "push",
+          repoRef: "my-org/my-repo",
+          headSha: "abcdef1234567890",
+          author: {},
+          reason: "github:push",
+        },
+        payload: {},
+        provider: "github",
+        eventName: "push",
+      });
+
+      expect(publisher).toBeDefined();
+      expect(publisher?.reconcilesManagedIssues).toBe(true);
+      await publisher?.publishSummary?.("", []);
+
+      expect(calls.some((call) => call.url.startsWith("https://api.github.com/repos/my-org/my-repo/issues?"))).toBe(true);
+      expect(calls.some((call) => call.url.includes("open.feishu.cn"))).toBe(false);
+    } finally {
+      vi.unstubAllGlobals();
+      if (originalGithubToken === undefined) {
+        delete process.env.GITHUB_TOKEN;
+      } else {
+        process.env.GITHUB_TOKEN = originalGithubToken;
+      }
+      if (originalFeishuWebhook === undefined) {
+        delete process.env.FEISHU_SUPPRESS_WEBHOOK;
+      } else {
+        process.env.FEISHU_SUPPRESS_WEBHOOK = originalFeishuWebhook;
+      }
+    }
+  });
+
   it("publishes trigger error reports even when no_problems is suppressed", async () => {
     const calls: { url: string; init: { body?: string } }[] = [];
     vi.stubGlobal("fetch", async (url: string, init?: { body?: string }) => {

@@ -727,3 +727,120 @@ describe("createGitlabProblemIssueDispatcher consolidated mode", () => {
     expect(body.description).not.toContain("Resolved");
   });
 });
+
+describe("createGitlabProblemIssueDispatcher empty-review analyzer reconciliation", () => {
+  const oldHeadSha = "a".repeat(40);
+  const newHeadSha = "b".repeat(40);
+  const oldScopeFp = computeScopeFingerprint("aicr-issues", "group/example", "", { targetKind: "push", headSha: oldHeadSha });
+
+  function buildStoredConsolidatedBody(
+    entries: readonly { readonly fp: string; readonly file: string; readonly line: number; readonly category: string; readonly severity: string }[],
+  ): string {
+    const sections = [
+      "<!-- aicr:managed=problem-issue -->",
+      "<!-- aicr:consolidated=true -->",
+      "<!-- aicr:channel=aicr-issues -->",
+      "<!-- aicr:label=aicr-managed -->",
+      `<!-- aicr:scope_fingerprint=${oldScopeFp} -->`,
+      `<!-- aicr:commit=${oldHeadSha} -->`,
+      `<!-- aicr:open_problems=${entries.map((entry) => entry.fp).join(",")} -->`,
+      "",
+    ];
+    for (const entry of entries) {
+      sections.push(
+        `#### ${entry.severity.toUpperCase()} (1)`,
+        "",
+        `**${entry.category}** — \`${entry.file}:${entry.line}\` <!-- aicr:fp=${entry.fp} -->`,
+        "",
+        "Old problem description.",
+        "",
+      );
+    }
+    return sections.join("\n");
+  }
+
+  it("closes an older scope during an empty review when the analyzer approves uncovered findings", async () => {
+    const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
+    const analyzedFingerprints: string[][] = [];
+    const oldBody = buildStoredConsolidatedBody([
+      { fp: "fp-uncovered", file: "src/uncovered.ts", line: 20, category: "security", severity: "high" },
+      { fp: "fp-reviewed", file: "src/reviewed.ts", line: 30, category: "bug", severity: "medium" },
+    ]);
+    const dispatcher = createGitlabProblemIssueDispatcher({
+      baseUrl: "https://gitlab.example",
+      projectId: "group/example",
+      channelName: "aicr-issues",
+      issueMode: "consolidated",
+      headSha: newHeadSha,
+      targetKind: "push",
+      resolvedAction: "close",
+      resolutionAnalyzer: async (candidates) => {
+        analyzedFingerprints.push(candidates.map((candidate) => candidate.fingerprint!));
+        return new Set(candidates.map((candidate) => candidate.fingerprint!));
+      },
+      fetch: async (url, init) => {
+        calls.push({ url, init });
+        if (url.includes("/issues?")) {
+          return response([{ iid: 42, title: "[AICR] Old", description: oldBody, state: "opened" }]);
+        }
+        if (url.includes("/repository/merge_base")) {
+          return response({ id: oldHeadSha });
+        }
+        return response({ id: 42, iid: 42 });
+      },
+    });
+
+    const results = await dispatcher.reconcileProblems([], undefined, { reviewedFiles: ["src/reviewed.ts"] });
+
+    expect(analyzedFingerprints).toHaveLength(1);
+    expect([...analyzedFingerprints[0]!].sort()).toEqual(["fp-reviewed", "fp-uncovered"]);
+    const closeCall = calls.find(
+      (c) => c.url === `${PROJECT}/issues/42` && c.init?.method === "PUT" && JSON.parse(c.init.body ?? "{}").state_event === "close",
+    );
+    expect(closeCall).toBeDefined();
+    expect(results.some((r) => r.raw && typeof r.raw === "object" && (r.raw as Record<string, unknown>).action === "closed")).toBe(true);
+  });
+
+  it("closes a per-problem issue outside the reviewed scope when the analyzer approves it", async () => {
+    const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
+    const analyzed: ReviewProblem[][] = [];
+    const body = [
+      "<!-- aicr:managed=problem-issue -->",
+      "<!-- aicr:channel=aicr-issues -->",
+      "<!-- aicr:label=aicr-managed -->",
+      "<!-- aicr:fingerprint=fp-old -->",
+      "<!-- aicr:file=src/uncovered.ts -->",
+      "",
+      "**HIGH · correctness**",
+      "",
+      "Some old problem.",
+      "",
+      "Location: `src/uncovered.ts:42`",
+    ].join("\n");
+    const dispatcher = createGitlabProblemIssueDispatcher({
+      baseUrl: "https://gitlab.example",
+      projectId: "group/example",
+      channelName: "aicr-issues",
+      issueMode: "per_problem",
+      resolvedAction: "close",
+      resolutionAnalyzer: async (candidates) => {
+        analyzed.push([...candidates]);
+        return new Set(candidates.map((candidate) => candidate.fingerprint!));
+      },
+      fetch: async (url, init) => {
+        calls.push({ url, init });
+        if (url.includes("/issues?")) {
+          return response([{ iid: 42, title: "[AICR] [HIGH] correctness: src/uncovered.ts:42", description: body, state: "opened" }]);
+        }
+        return response({ id: 42, iid: 42 });
+      },
+    });
+
+    const results = await dispatcher.reconcileProblems([], undefined, { reviewedFiles: ["src/reviewed.ts"] });
+
+    expect(analyzed).toHaveLength(1);
+    expect(analyzed[0]?.[0]?.fingerprint).toBe("fp-old");
+    expect(results).toHaveLength(1);
+    expect(results[0]?.raw).toMatchObject({ action: "closed", issueIid: 42 });
+  });
+});

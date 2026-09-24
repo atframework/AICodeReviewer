@@ -1643,6 +1643,177 @@ describe("consolidated cross-scope cleanup", () => {
 		expect(oldPatch.body).toContain("✅ Resolved (1)");
 	});
 
+	it("closes an older scope during an empty review when the analyzer approves uncovered findings", async () => {
+		const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
+		const analyzedFingerprints: string[][] = [];
+		const oldBody = buildStoredConsolidatedBody([
+			{
+				fp: "fp-uncovered",
+				file: "src/uncovered.ts",
+				line: 20,
+				category: "security",
+				severity: "high",
+			},
+			{
+				fp: "fp-reviewed",
+				file: "src/reviewed.ts",
+				line: 30,
+				category: "bug",
+				severity: "medium",
+			},
+		]);
+		const dispatcher = createGithubProblemIssueDispatcher({
+			owner: "my-org",
+			repo: "my-repo",
+			channelName: "github-issues",
+			issueMode: "consolidated",
+			headSha: newHeadSha,
+			targetKind: "push",
+			resolvedAction: "close",
+			resolutionAnalyzer: async (candidates) => {
+				analyzedFingerprints.push(candidates.map((candidate) => candidate.fingerprint!));
+				return new Set(candidates.map((candidate) => candidate.fingerprint!));
+			},
+			fetch: async (url, init) => {
+				calls.push({ url, init });
+				if (url.includes("/issues?state=open"))
+					return response([
+						{ number: 42, title: "[AICR] Old", body: oldBody, state: "open" },
+					]);
+				if (url.includes("/compare/")) return response({ status: "ahead" });
+				return response({ id: 42, number: 42 });
+			},
+		});
+
+		const results = await dispatcher.reconcileProblems([], undefined, {
+			reviewedFiles: ["src/reviewed.ts"],
+		});
+
+		expect(analyzedFingerprints).toHaveLength(1);
+		expect([...analyzedFingerprints[0]!].sort()).toEqual(["fp-reviewed", "fp-uncovered"]);
+		const closeCall = calls.find(
+			(call) =>
+				call.url.includes("/issues/42") &&
+				call.init?.method === "PATCH" &&
+				JSON.parse(call.init.body ?? "{}").state === "closed",
+		);
+		expect(closeCall).toBeDefined();
+		expect(results.some((r) => r.raw && typeof r.raw === "object" && (r.raw as Record<string, unknown>).action === "closed")).toBe(true);
+	});
+
+	it("retains every stored fingerprint during an empty review when the analyzer rejects them all", async () => {
+		const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
+		const analyzedFingerprints: string[][] = [];
+		const oldBody = buildStoredConsolidatedBody([
+			{
+				fp: "fp-uncovered",
+				file: "src/uncovered.ts",
+				line: 20,
+				category: "security",
+				severity: "high",
+			},
+			{
+				fp: "fp-reviewed",
+				file: "src/reviewed.ts",
+				line: 30,
+				category: "bug",
+				severity: "medium",
+			},
+		]);
+		const dispatcher = createGithubProblemIssueDispatcher({
+			owner: "my-org",
+			repo: "my-repo",
+			channelName: "github-issues",
+			issueMode: "consolidated",
+			headSha: newHeadSha,
+			targetKind: "push",
+			resolvedAction: "close",
+			resolutionAnalyzer: async (candidates) => {
+				analyzedFingerprints.push(candidates.map((candidate) => candidate.fingerprint!));
+				return new Set();
+			},
+			fetch: async (url, init) => {
+				calls.push({ url, init });
+				if (url.includes("/issues?state=open"))
+					return response([
+						{ number: 42, title: "[AICR] Old", body: oldBody, state: "open" },
+					]);
+				if (url.includes("/compare/")) return response({ status: "ahead" });
+				return response({ id: 42, number: 42 });
+			},
+		});
+
+		const results = await dispatcher.reconcileProblems([], undefined, {
+			reviewedFiles: ["src/reviewed.ts"],
+		});
+
+		expect(analyzedFingerprints).toHaveLength(1);
+		expect([...analyzedFingerprints[0]!].sort()).toEqual(["fp-reviewed", "fp-uncovered"]);
+		expect(results).toEqual([]);
+		expect(calls.filter((call) => call.init?.method === "PATCH")).toEqual([]);
+	});
+
+	it("updates an older scope during an empty review when the analyzer approves only some findings", async () => {
+		const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
+		const oldBody = buildStoredConsolidatedBody([
+			{
+				fp: "fp-uncovered",
+				file: "src/uncovered.ts",
+				line: 20,
+				category: "security",
+				severity: "high",
+			},
+			{
+				fp: "fp-reviewed",
+				file: "src/reviewed.ts",
+				line: 30,
+				category: "bug",
+				severity: "medium",
+			},
+		]);
+		const dispatcher = createGithubProblemIssueDispatcher({
+			owner: "my-org",
+			repo: "my-repo",
+			channelName: "github-issues",
+			issueMode: "consolidated",
+			headSha: newHeadSha,
+			targetKind: "push",
+			resolvedAction: "close",
+			resolutionAnalyzer: async (candidates) =>
+				new Set(
+					candidates
+						.filter((candidate) => candidate.file === "src/reviewed.ts")
+						.map((candidate) => candidate.fingerprint!),
+				),
+			fetch: async (url, init) => {
+				calls.push({ url, init });
+				if (url.includes("/issues?state=open"))
+					return response([
+						{ number: 42, title: "[AICR] Old", body: oldBody, state: "open" },
+					]);
+				if (url.includes("/compare/")) return response({ status: "ahead" });
+				return response({ id: 42, number: 42 });
+			},
+		});
+
+		const results = await dispatcher.reconcileProblems([], undefined, {
+			reviewedFiles: ["src/reviewed.ts"],
+		});
+
+		expect(results).toHaveLength(1);
+		const oldPatch = JSON.parse(
+			calls.find(
+				(call) =>
+					call.url.includes("/issues/42") && call.init?.method === "PATCH",
+			)?.init?.body ?? "{}",
+		);
+		expect(oldPatch.state).toBeUndefined();
+		expect(oldPatch.body).toContain(
+			"<!-- aicr:open_problems=fp-uncovered -->",
+		);
+		expect(oldPatch.body).toContain("✅ Resolved (1)");
+	});
+
 	it("keeps different per-commit scopes independent", async () => {
 		const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
 		const oldBody = buildStoredConsolidatedBody([
@@ -2051,6 +2222,43 @@ describe("per_problem lifecycle file-scope guard", () => {
 		const results = await dispatcher.reconcileProblems([], undefined, { reviewedFiles: ["src/app.ts"] });
 
 		expect(results).toEqual([]);
+	});
+
+	it("closes a managed issue outside the reviewed scope when the analyzer approves it", async () => {
+		const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
+		const analyzed: ReviewProblem[][] = [];
+		const dispatcher = createGithubProblemIssueDispatcher({
+			owner: "my-org",
+			repo: "my-repo",
+			issueMode: "per_problem",
+			channelName: "github-issues",
+			resolvedAction: "close",
+			resolutionAnalyzer: async (candidates) => {
+				analyzed.push([...candidates]);
+				return new Set(candidates.map((candidate) => candidate.fingerprint!));
+			},
+			fetch: async (url, init) => {
+				calls.push({ url, init });
+				if (calls.length === 1) {
+					return response([
+						{
+							number: 42,
+							title: "[AICR] [HIGH] correctness: src/uncovered.ts:42",
+							body: managedBodyWithFile("src/uncovered.ts"),
+							state: "open",
+						},
+					]);
+				}
+				return response({ id: calls.length });
+			},
+		});
+
+		const results = await dispatcher.reconcileProblems([], undefined, { reviewedFiles: ["src/reviewed.ts"] });
+
+		expect(analyzed).toHaveLength(1);
+		expect(analyzed[0]?.[0]?.fingerprint).toBe("fp-old");
+		expect(results).toHaveLength(1);
+		expect(results[0]?.raw).toMatchObject({ action: "closed", issueNumber: 42 });
 	});
 });
 

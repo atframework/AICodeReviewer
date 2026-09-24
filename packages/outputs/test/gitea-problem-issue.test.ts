@@ -1244,6 +1244,45 @@ describe("per_problem lifecycle file-scope guard", () => {
     expect(results[0]?.raw).toMatchObject({ action: "closed", issueNumber: 42 });
   });
 
+  it("closes a managed issue outside the reviewed scope when the analyzer approves it", async () => {
+    const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
+    const analyzed: ReviewProblem[][] = [];
+    const dispatcher = createGiteaProblemIssueDispatcher({
+      baseUrl: "https://gitea.example",
+      token: "token-value",
+      owner: "owent",
+      repo: "example",
+      issueMode: "per_problem",
+      channelName: "aicr-issues",
+      resolvedAction: "close",
+      resolutionAnalyzer: async (candidates) => {
+        analyzed.push([...candidates]);
+        return new Set(candidates.map((candidate) => candidate.fingerprint!));
+      },
+      fetch: async (url, init) => {
+        calls.push({ url, init });
+        if (calls.length === 1) {
+          return response([
+            {
+              number: 42,
+              title: "[AICR] [HIGH] correctness: src/uncovered.ts:42",
+              body: managedBodyWithFile("src/uncovered.ts"),
+              state: "open",
+            },
+          ]);
+        }
+        return response({ id: calls.length });
+      },
+    });
+
+    const results = await dispatcher.reconcileProblems([], undefined, { reviewedFiles: ["src/reviewed.ts"] });
+
+    expect(analyzed).toHaveLength(1);
+    expect(analyzed[0]?.[0]?.fingerprint).toBe("fp-old");
+    expect(results).toHaveLength(1);
+    expect(results[0]?.raw).toMatchObject({ action: "closed", issueNumber: 42 });
+  });
+
   it("closes issues when reviewedFiles is not provided (backward compat)", async () => {
     const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
     const dispatcher = createGiteaProblemIssueDispatcher({
@@ -1829,6 +1868,65 @@ describe("consolidated cross-scope cleanup for Gitea", () => {
       "<!-- aicr:open_problems=fp-unreviewed -->",
     );
     expect(oldPatch.body).toContain("✅ Resolved (1)");
+  });
+
+  it("closes an older scope during an empty review when the analyzer approves uncovered findings", async () => {
+    const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
+    const analyzedFingerprints: string[][] = [];
+    const oldBody = buildStoredConsolidatedBody([
+      {
+        fp: "fp-uncovered",
+        file: "src/uncovered.ts",
+        line: 20,
+        category: "security",
+        severity: "high",
+      },
+      {
+        fp: "fp-reviewed",
+        file: "src/reviewed.ts",
+        line: 30,
+        category: "bug",
+        severity: "medium",
+      },
+    ]);
+    const dispatcher = createGiteaProblemIssueDispatcher({
+      baseUrl: "https://gitea.example",
+      owner: "owent",
+      repo: "example",
+      channelName: "aicr-issues",
+      issueMode: "consolidated",
+      headSha: newHeadSha,
+      targetKind: "push",
+      resolvedAction: "close",
+      resolutionAnalyzer: async (candidates) => {
+        analyzedFingerprints.push(candidates.map((candidate) => candidate.fingerprint!));
+        return new Set(candidates.map((candidate) => candidate.fingerprint!));
+      },
+      fetch: async (url, init) => {
+        calls.push({ url, init });
+        if (url.includes("/issues?"))
+          return response([
+            { number: 42, title: "[AICR] Old", body: oldBody, state: "open" },
+          ]);
+        if (url.includes("/compare/")) return response({ status: "ahead" });
+        return response({ id: 42, number: 42 });
+      },
+    });
+
+    const results = await dispatcher.reconcileProblems([], undefined, {
+      reviewedFiles: ["src/reviewed.ts"],
+    });
+
+    expect(analyzedFingerprints).toHaveLength(1);
+    expect([...analyzedFingerprints[0]!].sort()).toEqual(["fp-reviewed", "fp-uncovered"]);
+    const closeCall = calls.find(
+      (call) =>
+        call.url.includes("/issues/42") &&
+        call.init?.method === "PATCH" &&
+        JSON.parse(call.init.body ?? "{}").state === "closed",
+    );
+    expect(closeCall).toBeDefined();
+    expect(results.some((r) => r.raw && typeof r.raw === "object" && (r.raw as Record<string, unknown>).action === "closed")).toBe(true);
   });
 
   it("keeps different per-commit scopes independent", async () => {
