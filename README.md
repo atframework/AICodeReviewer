@@ -9,12 +9,32 @@
 <p><em>Multi-VCS · bring-your-own-agent · structured findings · single container</em></p>
 
 [![CI](https://github.com/atframework/AICodeReviewer/actions/workflows/ci.yml/badge.svg)](https://github.com/atframework/AICodeReviewer/actions/workflows/ci.yml)
+[![Deploy Docs](https://github.com/atframework/AICodeReviewer/actions/workflows/docs.yml/badge.svg)](https://github.com/atframework/AICodeReviewer/actions/workflows/docs.yml)
+[![Release](https://img.shields.io/github/v/tag/atframework/AICodeReviewer?label=release)](https://github.com/atframework/AICodeReviewer/tags)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Last Commit](https://img.shields.io/github/last-commit/atframework/AICodeReviewer)](https://github.com/atframework/AICodeReviewer/commits/main/)
+[![Docs](https://img.shields.io/badge/Docs-aicr.atframe.work-2f6bff)](https://aicr.atframe.work/en/)
+
+[![Stars](https://img.shields.io/github/stars/atframework/AICodeReviewer)](https://github.com/atframework/AICodeReviewer/stargazers)
+[![Forks](https://img.shields.io/github/forks/atframework/AICodeReviewer)](https://github.com/atframework/AICodeReviewer/forks)
+[![Contributors](https://img.shields.io/github/contributors/atframework/AICodeReviewer)](https://github.com/atframework/AICodeReviewer/graphs/contributors)
+[![Issues](https://img.shields.io/github/issues/atframework/AICodeReviewer)](https://github.com/atframework/AICodeReviewer/issues)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://aicr.atframe.work/en/development/)
+
 [![Node.js](https://img.shields.io/badge/Node.js-%E2%89%A522-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
+[![pnpm](https://img.shields.io/badge/pnpm-10-F69220?logo=pnpm&logoColor=white)](https://pnpm.io/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![Deploy](https://img.shields.io/badge/Deploy-Docker%20%7C%20Podman-2496ED?logo=docker&logoColor=white)](https://aicr.atframe.work/en/deployment/docker/)
-[![Docs](https://img.shields.io/badge/Docs-aicr.atframe.work-2f6bff)](https://aicr.atframe.work/en/)
-[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://aicr.atframe.work/en/development/)
+
+[![Vitest](https://img.shields.io/badge/Tests-Vitest-6E9F18?logo=vitest&logoColor=white)](https://vitest.dev/)
+[![ESLint](https://img.shields.io/badge/Lint-ESLint-4B32C3?logo=eslint&logoColor=white)](https://eslint.org/)
+[![Prettier](https://img.shields.io/badge/Style-Prettier-F7B93E?logo=prettier&logoColor=white)](https://prettier.io/)
+
+[![Agents](https://img.shields.io/badge/Agents-7%20CLIs%20%2B%20native%20LLM-8A2BE2)](https://aicr.atframe.work/en/integrations/agent-adapters/)
+[![MCP](https://img.shields.io/badge/MCP-Model%20Context%20Protocol-0EA5E9)](https://aicr.atframe.work/en/integrations/mcp-tools/)
+[![Storage](https://img.shields.io/badge/Storage-SQLite%20%7C%20PostgreSQL-003B57?logo=sqlite&logoColor=white)](https://aicr.atframe.work/en/configuration/storage/)
+[![Metrics](https://img.shields.io/badge/Metrics-Prometheus-E6522C?logo=prometheus&logoColor=white)](https://aicr.atframe.work/en/deployment/operations/)
+[![Security](https://img.shields.io/badge/Security-OWASP%20Top%2010%20aware-005F9E)](#security)
 
 [Documentation](https://aicr.atframe.work/en/) ·
 [Quick Start](https://aicr.atframe.work/en/start/quick-start/) ·
