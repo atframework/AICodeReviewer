@@ -123,13 +123,34 @@ describe("collectSchemaFieldPaths", () => {
     expect(stableSerialize(first)).toBe(stableSerialize(second));
   });
 
-  it("fails closed on schema constructs it does not understand", () => {
-    const weird = z.object({ u: z.discriminatedUnion("kind", [z.object({ kind: z.literal("a") })]) });
-    expect(() => collectSchemaFieldPaths(weird)).toThrow(TypeError);
+  it("fails closed on structural union options that disagree on a leaf's type", () => {
+    const conflicting = z.object({
+      u: z.union([
+        z.object({ a: z.object({ b: z.string() }).strict() }).strict(),
+        z.object({ a: z.object({ b: z.number() }).strict() }).strict(),
+      ]),
+    });
+    expect(() => collectSchemaFieldPaths(conflicting)).toThrow(TypeError);
+  });
+
+  it("merges structural union and discriminated-union options under the union path", () => {
+    // Primitive-only strict options stay value leaves (matcher precedent),
+    // including discriminated unions and single-option degenerates.
+    const primitiveOnly = z.object({ u: z.discriminatedUnion("kind", [z.object({ kind: z.literal("a") })]) });
+    expect(collectSchemaFieldPaths(primitiveOnly).map((leaf) => leaf.path)).toEqual(["u"]);
     const nestedUnion = z.object({
       u: z.union([z.object({ a: z.object({ b: z.string() }).strict() }).strict(), z.object({ c: z.string() }).strict()]),
     });
-    expect(() => collectSchemaFieldPaths(nestedUnion)).toThrow(TypeError);
+    expect(collectSchemaFieldPaths(nestedUnion).map((leaf) => leaf.path)).toEqual(["u.a.b", "u.c"]);
+    const shared = z.object({
+      u: z.discriminatedUnion("kind", [
+        z.object({ kind: z.literal("a"), nested: z.object({ value: z.string() }).strict() }).strict(),
+        z.object({ kind: z.literal("b"), nested: z.object({ value: z.string() }).strict() }).strict(),
+      ]),
+    });
+    const leaves = collectSchemaFieldPaths(shared);
+    expect(leaves.map((leaf) => leaf.path)).toEqual(["u.kind", "u.nested.value"]);
+    expect(leaves[0]?.enumValues).toEqual(["a", "b"]);
   });
 
   it("classifies unions of primitive-only strict objects as value leaves", () => {

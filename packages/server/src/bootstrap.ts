@@ -2248,12 +2248,15 @@ export function createOutputPublisherFromConfig(
         if (channel.mention_author && reviewEvent) {
           try {
             const directory = channel.member_directory;
+            // The file source lands with IM-07/IM-08; until then only the
+            // feishu API forms (legacy and explicit) can serve this channel.
+            const apiDirectory = directory !== undefined && "chat_id" in directory ? directory : undefined;
             const matched = await resolveChannelAuthor({
               channelKind: channel.kind,
               input: { author: reviewEvent.author, provider: reviewEvent.provider,
                 submitterWorkspace: reviewEvent.provider === "p4" ? reviewEvent.submitterWorkspace : undefined },
-              directory: directory ? { listUsers: async () => feishuDirectoryUsers(await client.members(directory.chat_id,
-                resolveChannelDirectoryCacheTtlSeconds({ channel: directory.cache_ttl_seconds,
+              directory: apiDirectory ? { listUsers: async () => feishuDirectoryUsers(await client.members(apiDirectory.chat_id,
+                resolveChannelDirectoryCacheTtlSeconds({ channel: apiDirectory.cache_ttl_seconds,
                   global: config.outputs.author_resolution?.directory_cache_ttl_seconds }))) } : undefined,
               policy: { mappings: channel.user_mappings, guessAuthor: channel.guess_author,
                 emailBlacklist: config.outputs.author_resolution?.email_blacklist },

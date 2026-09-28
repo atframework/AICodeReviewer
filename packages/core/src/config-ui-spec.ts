@@ -577,6 +577,9 @@ export const PAGE_LAYOUT: readonly ConfigUiPageLayout[] = [
       { id: "admin", label: "Admin", scope: "globals", match: ["admin"] },
       { id: "sources", label: "Config sources", scope: "globals", match: ["config_sources"] },
       { id: "storage", label: "Storage", scope: "globals", match: ["storage"] },
+      // Readonly until the IM-03 management page introduces connection and
+      // binding entity forms; every row here is unwired inventory.
+      { id: "im", label: "IM integrations (read-only)", scope: "globals", match: ["im"], collapsed: true },
     ],
   },
   { id: "versions", label: "Versions", globals: false, sections: [] },
@@ -603,6 +606,9 @@ const PAGE_ASSIGNMENT: readonly (readonly [string, string])[] = [
   ["admin.", "advanced"],
   ["config_sources.", "advanced"],
   ["storage.", "advanced"],
+  // IM connections/bindings stay on Advanced as readonly unwired fields until
+  // the IM-03 management page introduces their entity forms.
+  ["im.", "advanced"],
 ];
 
 function pageIdForRow(row: ConfigFieldSpec): string | undefined {

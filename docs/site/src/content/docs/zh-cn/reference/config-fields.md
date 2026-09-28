@@ -342,6 +342,51 @@ fallback 必须是字面量，禁止 hash arguments。provider 变量必须适�
 | `outputs.channels[].user_mappings.<id>` | string | — | 作者或 workspace 标识精确映射到当前应用的 `open_id` |
 | `outputs.channels[].guess_author` | boolean | — | 运行时默认 true；允许精确匹配后的 workspace 推测及专用模型兜底；`mention_author` 单独控制通知 |
 
+### 成员目录来源与 IM 频道关联
+
+`member_directory` 接受历史飞书 API 形态（`chat_id`，可选 `cache_ttl_seconds`）、
+显式 `source: feishu_api` 的同字段形态，以及由严格 YAML/JSON 成员文件支撑的
+`source: file` 形态。`file` 来源、`author_mappings`、`connection` 与 `target`
+当前仅通过 schema 校验，发送与目录接线随 IM 计划逐步落地（见
+[IM 机器人指南](/zh-cn/integrations/im-bots/)）；数据库发布侧仍拒绝没有运行时
+消费者的频道记录，这些字段本身不构成可用集成。
+
+| 字段 | 类型 | 默认值 | 描述 |
+| --- | --- | --- | --- |
+| `outputs.channels[].member_directory.source` | enum | — | `feishu_api`（历史目录的显式形态）或 `file`（外部成员目录）；缺省表示旧版 `{chat_id, cache_ttl_seconds}` 形态 |
+| `outputs.channels[].member_directory.path` | string | — | 仅 `file`：成员文件路径；按主配置文件所在目录解析，绝不按进程工作目录解析 |
+| `outputs.channels[].member_directory.directory_id` | string | — | 仅 `file`：本频道使用的成员文件内目录名 |
+| `outputs.channels[].member_directory.identity_scope.kind` | enum | — | 仅 `file`：身份命名空间类型 — `wecom_corp`、`feishu_app` 或 `feishu_tenant` |
+| `outputs.channels[].member_directory.identity_scope.id` | string | — | 仅 `file`：企业/应用/租户命名空间 id；不同 scope 下的相同 id 不会合并 |
+| `outputs.channels[].member_directory.watch` | boolean | — | 仅 `file`：运行时默认 `true`；`false` 只保留周期性校验 |
+| `outputs.channels[].member_directory.debounce_ms` | int 50–2000 | — | 仅 `file`：watch 防抖窗口；运行时默认 300 |
+| `outputs.channels[].member_directory.poll_interval_seconds` | int 5–300 | — | 仅 `file`：周期内容摘要校验间隔；运行时默认 30 |
+| `outputs.channels[].member_directory.allowed_root` | string | — | 仅 `file`：真实路径边界检查的受信根；缺省为主配置文件目录 |
+| `outputs.channels[].author_mappings.<id>` | string | — | 作者或 workspace 标识精确映射到文件成员 key；与 `user_mappings` 互斥 |
+| `outputs.channels[].connection` | string | — | 对 `im.connections` 的引用；`wecom_app` 频道必填，`feishu_app` 频道用它替代内联凭据 |
+| `outputs.channels[].target` | object | — | 仅 `wecom_app`：`{kind: recipients, users/parties/tags}` 或 `{kind: appchat, chat_id}` — 收件人列表与群目标严格二选一 |
+
+## `im`
+
+IM 连接与命令绑定（[IM 机器人指南](/zh-cn/integrations/im-bots/)）。
+schema 已接受该命名空间，发送、回调与 worker 随计划逐步接线；绑定默认停用，
+数据库发布侧持续拒绝没有消费者的记录，仅配置 `im` 不会启用聊天命令。
+`review` 命令另需持久化配置存储。
+
+| 字段 | 类型 | 默认值 | 描述 |
+| --- | --- | --- | --- |
+| `im.connections.<id>` | object | — | 命名连接映射；连接 id 需匹配 `[A-Za-z0-9][A-Za-z0-9_-]*`；`kind` 选择 `wecom_app`（`corp_id`、`agent_id`、`app_secret`/`app_secret_env`）、`wecom_aibot`（`corp_id`、`aibot_id`）或 `feishu_app`（`app_id`、`app_secret`/`app_secret_env`、可选 `base_url`、`tenant_key`），均带可选 `callback`（运行时默认停用；企业微信 `token`/`encoding_aes_key` 与飞书 `verification_token`/`encrypt_key` 各为明文与 `*_env` 成对，启用回调时必填其一） |
+| `im.command_bindings.<id>.enabled` | boolean | — | 运行时默认 false；接线完成前禁用草稿始终可保存 |
+| `im.command_bindings.<id>.connection` | string | — | 对 `im.connections` 的命名引用；启用绑定时要求连接存在且启用 |
+| `im.command_bindings.<id>.actors[].type` | enum | — | `wecom_userid`、`wecom_encrypted_userid` 或 `feishu_open_id`；身份命名空间继承自连接 |
+| `im.command_bindings.<id>.actors[].id` | string | — | 精确的带类型平台 id；不做模糊匹配或目录推导授权 |
+| `im.command_bindings.<id>.conversations[]` | object | — | `app_direct`（企业微信/飞书应用）、`bot_direct`（企业微信 API 机器人）或带非空 `id` 的 `group`；类型必须匹配连接协议 |
+| `im.command_bindings.<id>.commands` | enum[] | — | `help`、`chat-id`、`review`、`status` 的去重子集 |
+| `im.command_bindings.<id>.repositories.<id>.workspace` | string | — | 仓库别名目标：workspace id；发布时按路由/VCS 范围校验 |
+| `im.command_bindings.<id>.repositories.<id>.source_trigger` | string | — | 仓库别名目标：来源触发器名；发布时按路由/VCS 范围校验 |
+| `im.command_bindings.<id>.repositories.<id>.repo_ref` | string | — | 仓库别名目标：仓库引用；发布时按路由/VCS 范围校验 |
+| `im.command_bindings.<id>.report_policy` | enum | — | 仅 `workspace_routes`；运行时默认 |
+
 ## `prompts`
 
 命名 system prompt 文档（markdown，可带 frontmatter 元数据；运行时只使用正文）。

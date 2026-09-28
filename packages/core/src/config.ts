@@ -5,13 +5,14 @@ import { z } from "zod";
 
 import { reviewTargetKindSchema } from "./review-event.js";
 import { markdownDocumentString } from "./markdown-document.js";
-import { CONFIG_MATCHER_LIMITS, assertConfigDatabaseFormat, configMatcherSchema, reasoningEffortSchema } from "./config-format.js";
+import { CONFIG_MATCHER_LIMITS, addSecretMutexIssues, assertConfigDatabaseFormat, configMatcherSchema, reasoningEffortSchema } from "./config-format.js";
 import { validateWorkspaceDefinitions } from "./config-workspace.js";
 import { autoCommitConfigSchema, type AutoCommitConfig } from "./auto-commit-policy.js";
 import { pullRequestConfigSchema, type PullRequestConfig } from "./pull-request-policy.js";
 import { REVIEW_DEFAULT_MAX_FILES, REVIEW_DEFAULT_MAX_PATCH_BYTES } from "./review-policy.js";
 import { isPlainObject } from "./utils.js";
 import { validateConfigNamespace, workspaceRootKeys } from "./config-format.js";
+import { channelMemberDirectorySchema, imConfigSchema, wecomAppTargetSchema } from "./im-config.js";
 
 import {
   assertNoSecretEnvIssues,
@@ -33,27 +34,6 @@ export const workspaceIdSchema = z
     message:
       "workspace_id must not collide with reserved keys (cache, defaults, instances); see docs/ai/architecture.md §3.10 D14",
   });
-
-/**
- * Adds one issue per secret field whose literal and `*_env` reference forms
- * are both set. The literal form always wins at runtime; rejecting the
- * ambiguity keeps operator intent explicit.
- */
-function addSecretMutexIssues(
-  ctx: z.RefinementCtx,
-  record: Record<string, unknown>,
-  pairs: readonly (readonly [string, string])[],
-): void {
-  for (const [literal, envRef] of pairs) {
-    if (record[literal] !== undefined && record[envRef] !== undefined) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: `'${literal}' and '${envRef}' are mutually exclusive; configure the literal value or the environment variable reference, not both.`,
-        path: [literal],
-      });
-    }
-  }
-}
 
 /** Unrefined provider object; config-ui-spec reads `.shape` off this base. */
 export const llmProviderObjectSchema = z
@@ -446,11 +426,18 @@ export const outputChannelSchema = z
     app_secret_env: z.string().min(1).optional(),
     receive_id: z.string().min(1).optional(),
     receive_id_type: z.enum(["chat_id", "open_id", "user_id", "union_id", "email"]).optional(),
-    member_directory: z.object({
-      chat_id: z.string().min(1),
-      cache_ttl_seconds: z.number().int().min(0).max(604800).optional(),
-    }).strict().optional(),
+    /**
+     * Reference into `im.connections`. New app channels require it; historical
+     * feishu_app channels keep their inline credentials, but inline and
+     * reference forms are mutually exclusive (IM design §2).
+     */
+    connection: z.string().min(1).optional(),
+    /** WeCom application send target: recipients or appchat, exclusively. */
+    target: wecomAppTargetSchema.optional(),
+    member_directory: channelMemberDirectorySchema.optional(),
     user_mappings: z.record(z.string().min(1), z.string().regex(/^ou_[A-Za-z0-9_-]+$/u)).optional(),
+    /** Explicit author → file member key mapping; exclusive with user_mappings (member-directory design §2). */
+    author_mappings: z.record(z.string().min(1), z.string().min(1)).optional(),
     guess_author: z.boolean().optional(),
   })
   .passthrough()
@@ -461,12 +448,62 @@ export const outputChannelSchema = z
       ["secret", "secret_env"],
       ["app_secret", "app_secret_env"],
     ]);
-    if (channel.kind === "feishu_app") {
-      for (const key of ["app_id", "receive_id"] as const) {
-        if (!channel[key]) ctx.addIssue({ code: z.ZodIssueCode.custom, path: [key], message: `feishu_app requires ${key}.` });
+    if (channel.connection !== undefined) {
+      if (channel.kind === "feishu_app") {
+        for (const inlineKey of ["app_id", "app_secret", "app_secret_env"] as const) {
+          if (channel[inlineKey] !== undefined) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              message: `feishu_app channels cannot mix inline ${inlineKey} with a connection reference; move credentials into im.connections.`,
+              path: [inlineKey],
+            });
+          }
+        }
+      } else if (channel.kind !== "wecom_app") {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `connection references are only supported by wecom_app/feishu_app channels, not kind "${channel.kind}".`,
+          path: ["connection"],
+        });
       }
-      if (!channel.app_secret && !channel.app_secret_env) {
-        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["app_secret"], message: "feishu_app requires app_secret or app_secret_env." });
+    }
+    if (channel.kind === "wecom_app" && channel.connection === undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "wecom_app channels require a connection reference into im.connections.",
+        path: ["connection"],
+      });
+    }
+    if (channel.kind === "wecom_app" && channel.target === undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "wecom_app channels require a send target (recipients or appchat).",
+        path: ["target"],
+      });
+    }
+    if (channel.target !== undefined && channel.kind !== "wecom_app") {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `send targets are only supported by wecom_app channels, not kind "${channel.kind}".`,
+        path: ["target"],
+      });
+    }
+    if (channel.author_mappings !== undefined && channel.user_mappings !== undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "user_mappings and author_mappings are mutually exclusive on one channel.",
+        path: ["author_mappings"],
+      });
+    }
+    if (channel.kind === "feishu_app") {
+      // Credentials come from im.connections when the channel references one;
+      // the destination and base_url rules apply to both credential forms.
+      if (!channel.receive_id) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["receive_id"], message: "feishu_app requires receive_id." });
+      if (channel.connection === undefined) {
+        if (!channel.app_id) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["app_id"], message: "feishu_app requires app_id." });
+        if (!channel.app_secret && !channel.app_secret_env) {
+          ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["app_secret"], message: "feishu_app requires app_secret or app_secret_env." });
+        }
       }
       if (channel.base_url !== undefined && (typeof channel.base_url !== "string" ||
         !["https://open.feishu.cn", "https://open.larksuite.com"].includes(channel.base_url.replace(/\/+$/u, "")))) {
@@ -1335,6 +1372,12 @@ const appConfigObjectSchema = z
       defaults: {},
       instances: {},
     }),
+    /**
+     * IM connections and command bindings (IM design §2). Optional and
+     * default-free: absent nodes must keep the historical canonical document
+     * and snapshot hash bit-identical (execution contracts §1).
+     */
+    im: imConfigSchema.optional(),
   })
   .strict();
 
@@ -1383,6 +1426,29 @@ const appConfigRefinement = (config: AppConfigRefinementTarget, ctx: z.Refinemen
     checkDuplicateEntityIds(config.llm.providers, "id", ["llm", "providers"]);
     checkDuplicateEntityIds(config.triggers, "name", ["triggers"]);
     checkDuplicateEntityIds(config.outputs.channels, "name", ["outputs", "channels"]);
+
+    // IM connection references from output channels (execution contracts §2):
+    // cross-entity integrity runs on every full-document parse, so file and
+    // database publish paths share it instead of only the admin UI.
+    config.outputs.channels.forEach((channel, index) => {
+      if (channel.connection === undefined) return;
+      const connection = config.im?.connections?.[channel.connection];
+      if (connection === undefined) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `outputs.channels[${index}] references unknown im.connections entry "${channel.connection}".`,
+          path: ["outputs", "channels", index, "connection"],
+        });
+        return;
+      }
+      if (connection.kind !== channel.kind) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `outputs.channels[${index}] kind "${channel.kind}" cannot use connection "${channel.connection}" of kind "${connection.kind}".`,
+          path: ["outputs", "channels", index, "connection"],
+        });
+      }
+    });
 
     const checkModelChainReference = (name: string | undefined, path: string[]): void => {
       if (name !== undefined && !Object.hasOwn(config.llm.model_chain, name)) {

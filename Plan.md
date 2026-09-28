@@ -1,6 +1,7 @@
 # IM 集成开发计划
 
-状态：设计待实施。2026-09-28。本轮仅研究和编写文档，没有实现功能或开展真实账户验收。
+状态：实施中。2026-09-28 完成计划并取得实施授权；按执行手册逐项推进。
+真实平台验收（IM-21）仍需单独授权的测试账户，未验收前相关任务保持 pending_external。
 
 设计与接口依据：
 
@@ -28,9 +29,17 @@
 默认按 IM-00–22 顺序。每项详细输入、改动、验收及停止条件见[对应任务卡](docs/design/im-implementation.md#4-任务卡)。
 checkbox 仅在实现接线、断言和适用门禁均通过后勾选；implemented、blocked、pending_external 仍不勾选。
 
-- [ ] IM-00：基线、协议常量、XML 依赖精确版本和 fixture 来源核查。
-- [ ] IM-01：共享类型、严格 schema 和 ReviewEvent 来源。
-- [ ] IM-02：配置来源/实体/引用、凭据、snapshot 兼容。
+- [x] IM-00：基线、协议常量、XML 依赖精确版本和 fixture 来源核查。
+  基线与常量矩阵见 `build/tmp/im/protocol-matrix.md`；长期结论并入
+  [来源记录](docs/ai/sources/im-integrations.md)（W11–W14、XML pin 5.11.1/≥5.10.1）。
+- [x] IM-01：共享类型、严格 schema 和 ReviewEvent 来源。
+  新增 core `im-config.ts`/`im-contracts.ts`（C01–C03 覆盖于
+  `packages/core/test/im-config.test.ts`、`im-contracts.test.ts`）；`ReviewEvent.requestOrigin`
+  已贯通 strict schema；新字段在字段 inventory 中登记为未接线只读行。
+- [x] IM-02：配置来源/实体/引用、凭据、snapshot 兼容。
+  `im_connection`/`im_command_binding` 实体注册进全部配置链（collection 映射、DB 文档 schema、
+  引用收集/删除改名保护、发布 available 集、preview 枚举）；IM 凭据进入密封注册与 corp/app
+  目的地授权（C04–C07 core 侧覆盖；管理 UI 表单留 IM-03）。
 - [ ] IM-03：配置管理 API、字段 inventory 和表单闭环。
 - [ ] IM-04：企业微信应用 client、token 和业务错误。
 - [ ] IM-05：应用发布、模板、分片和真实 bootstrap 接线。

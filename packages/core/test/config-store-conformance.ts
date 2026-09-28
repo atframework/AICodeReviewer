@@ -172,6 +172,35 @@ export function runConfigStoreConformance(factory: ConfigStoreFactory): void {
       }
     });
 
+    it("round-trips IM connection and binding collections verbatim (IM-02)", async () => {
+      const store = await factory.makeStore();
+      const imDocument: DatabaseConfigDocument = {
+        globals: {},
+        entities: {
+          im_connections: {
+            "corp-review": {
+              id: "rec-corp",
+              name: "corp-review",
+              enabled: true,
+              value: { kind: "wecom_app", corp_id: "ww_example", agent_id: 1000002, app_secret_env: "AICR_WECOM_APP_SECRET" },
+            },
+          },
+          im_command_bindings: {
+            reviewers: {
+              id: "rec-reviewers",
+              name: "reviewers",
+              enabled: false,
+              value: { connection: "corp-review", actors: [{ type: "wecom_userid", id: "alice" }], conversations: [{ kind: "app_direct" }], commands: ["status"] },
+            },
+          },
+        },
+      };
+      const committed = await store.commitChangeset(commit({ document: imDocument }));
+      expect(committed.status).toBe("committed");
+      const stored = await store.readRevision(NS_A, 1);
+      expect(stored?.document).toEqual(imDocument);
+    });
+
     it("serializes concurrent changesets: one commits, one conflicts (S02)", async () => {
       const store = await factory.makeStore();
       const first = await store.commitChangeset(commit());

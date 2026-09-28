@@ -373,6 +373,54 @@ These fields apply to `feishu_app`; see the [IM bots guide](/en/integrations/im-
 | `outputs.channels[].user_mappings.<id>` | string | — | Exact author/workspace identifier to the application's `open_id` |
 | `outputs.channels[].guess_author` | boolean | — | Runtime default true; permits workspace heuristics and dedicated model fallback after exact matching; `mention_author` separately enables notifications |
 
+### Member directory sources and IM channel links
+
+`member_directory` accepts the historical Feishu API form (`chat_id`, optionally
+`cache_ttl_seconds`), an explicit `source: feishu_api` form with the same fields,
+and a `source: file` form backed by a strict YAML/JSON member file. The `file`
+source, `author_mappings`, `connection` and `target` are schema-validated while
+their sender/directory wiring lands progressively (see the [IM bots
+guide](/en/integrations/im-bots/)); database publishing still rejects channel
+records that have no runtime consumer, so these fields do not form a working
+integration on their own.
+
+| Field | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `outputs.channels[].member_directory.source` | enum | — | `feishu_api` (explicit form of the historical directory) or `file` (external member directory); omitted means the legacy `{chat_id, cache_ttl_seconds}` form |
+| `outputs.channels[].member_directory.path` | string | — | `file` only: member file path resolved against the config file's base directory, never the process working directory |
+| `outputs.channels[].member_directory.directory_id` | string | — | `file` only: name of the directory inside the member file that this channel uses |
+| `outputs.channels[].member_directory.identity_scope.kind` | enum | — | `file` only: identity namespace kind — `wecom_corp`, `feishu_app` or `feishu_tenant` |
+| `outputs.channels[].member_directory.identity_scope.id` | string | — | `file` only: corp/app/tenant namespace id; equal ids in different scopes never merge |
+| `outputs.channels[].member_directory.watch` | boolean | — | `file` only: runtime default `true`; `false` keeps only the periodic reload check |
+| `outputs.channels[].member_directory.debounce_ms` | int 50–2000 | — | `file` only: watch debounce window; runtime default 300 |
+| `outputs.channels[].member_directory.poll_interval_seconds` | int 5–300 | — | `file` only: periodic content-digest check interval; runtime default 30 |
+| `outputs.channels[].member_directory.allowed_root` | string | — | `file` only: trusted root for real-path boundary checks; defaults to the config base directory |
+| `outputs.channels[].author_mappings.<id>` | string | — | Exact author/workspace identifier to a file member key; mutually exclusive with `user_mappings` |
+| `outputs.channels[].connection` | string | — | Reference into `im.connections`; required for `wecom_app` channels and replaces inline credentials on `feishu_app` channels |
+| `outputs.channels[].target` | object | — | `wecom_app` only: `{kind: recipients, users/parties/tags}` or `{kind: appchat, chat_id}` — recipients lists and appchat targets are mutually exclusive |
+
+## `im`
+
+IM connections and command bindings ([IM bots guide](/en/integrations/im-bots/)).
+The schema accepts this namespace while the senders, callbacks and workers land
+progressively; every binding is disabled by default and database publishing keeps
+rejecting consumer-less records, so configuring `im` alone does not enable chat
+commands. `review` commands additionally require a persistent config store.
+
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `im.connections.<id>` | object | — | Named connection map; connection ids match `[A-Za-z0-9][A-Za-z0-9_-]*`; `kind` selects `wecom_app` (`corp_id`, `agent_id`, `app_secret`/`app_secret_env`), `wecom_aibot` (`corp_id`, `aibot_id`) or `feishu_app` (`app_id`, `app_secret`/`app_secret_env`, optional `base_url`, `tenant_key`), each with an optional `callback` (`enabled` defaults to false at runtime; WeCom `token`/`encoding_aes_key` and Feishu `verification_token`/`encrypt_key`, each as a literal or `*_env` pair that enabled callbacks must provide) |
+| `im.command_bindings.<id>.enabled` | boolean | — | Runtime default false; disabled drafts stay savable while wiring lands |
+| `im.command_bindings.<id>.connection` | string | — | Named reference into `im.connections`; enabling a binding requires an existing, enabled connection |
+| `im.command_bindings.<id>.actors[].type` | enum | — | `wecom_userid`, `wecom_encrypted_userid` or `feishu_open_id`; the identity namespace comes from the connection |
+| `im.command_bindings.<id>.actors[].id` | string | — | Exact typed platform id; no fuzzy or directory-derived authorization |
+| `im.command_bindings.<id>.conversations[]` | object | — | `app_direct` (WeCom/Feishu applications), `bot_direct` (WeCom API bot) or `group` with a non-empty `id`; kinds must match the connection protocol |
+| `im.command_bindings.<id>.commands` | enum[] | — | Unique subset of `help`, `chat-id`, `review`, `status` |
+| `im.command_bindings.<id>.repositories.<id>.workspace` | string | — | Repo alias target: workspace id, validated against routing/VCS scope at publish |
+| `im.command_bindings.<id>.repositories.<id>.source_trigger` | string | — | Repo alias target: source trigger name, validated against routing/VCS scope at publish |
+| `im.command_bindings.<id>.repositories.<id>.repo_ref` | string | — | Repo alias target: repository reference, validated against routing/VCS scope at publish |
+| `im.command_bindings.<id>.report_policy` | enum | — | `workspace_routes` only; runtime default |
+
 ## `prompts`
 
 Named system-prompt documents (markdown, optional frontmatter metadata; only the

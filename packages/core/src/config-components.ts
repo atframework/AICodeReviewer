@@ -120,18 +120,78 @@ function leafFrom(path: readonly string[], unwrapped: UnwrapResult, typeName: st
   if (unwrapped.schema instanceof z.ZodEnum) {
     return { ...withDefault, enumValues: unwrapped.schema.options as readonly string[] };
   }
+  if (unwrapped.schema instanceof z.ZodLiteral) {
+    return { ...withDefault, enumValues: [unwrapped.schema.value as string] };
+  }
   return withDefault;
 }
 
 /**
  * Collects the settable leaf paths of a config schema. Unions of primitives,
  * arrays of primitives, passthrough objects, and open records are leaves
- * (managed as a whole, e.g. trust_proxy or tool_choice); strict object
- * options inside unions fail closed because their sub-fields would need
- * individual inventory rows.
+ * (managed as a whole, e.g. trust_proxy or tool_choice). Unions and
+ * discriminated unions with structural options are merged per option: every
+ * option's sub-leaves surface under the union's path, same-path options must
+ * agree on the leaf type, and literal discriminators aggregate their values
+ * into the merged enum values.
  */
 export function collectSchemaFieldPaths(root: z.ZodTypeAny): readonly SchemaFieldLeaf[] {
   const leaves: SchemaFieldLeaf[] = [];
+
+  const optionIsLeafLike = (option: z.ZodTypeAny): boolean => {
+    const inner = unwrapSchema(option).schema;
+    const innerType: string = inner._def.typeName;
+    if (PRIMITIVE_LEAF_TYPES.has(innerType)) {
+      return true;
+    }
+    if (inner instanceof z.ZodArray) {
+      const element = unwrapSchema(inner.element).schema;
+      return PRIMITIVE_LEAF_TYPES.has(element._def.typeName as string);
+    }
+    if (inner instanceof z.ZodObject) {
+      // Strip/strict objects carry a ZodNever catchall; anything else is
+      // an opaque managed surface (passthrough or explicit catchall).
+      if ((inner._def.catchall as z.ZodTypeAny)._def.typeName !== z.ZodFirstPartyTypeKind.ZodNever) {
+        return true;
+      }
+      // Strict objects are value leaves only when every field is a
+      // primitive scalar (e.g. the exact/glob/regex matcher alternatives);
+      // otherwise the union mixes structural containers and stays guarded.
+      return Object.values(inner.shape as Record<string, z.ZodTypeAny>).every((field) =>
+        PRIMITIVE_LEAF_TYPES.has(unwrapSchema(field).schema._def.typeName as string),
+      );
+    }
+    // Open maps (e.g. tool_choice function payloads) are opaque too.
+    return inner instanceof z.ZodRecord;
+  };
+
+  const mergeUnionOptions = (options: readonly z.ZodTypeAny[], path: readonly string[]): void => {
+    const merged = new Map<string, SchemaFieldLeaf>();
+    for (const option of options) {
+      const start = leaves.length;
+      visit(option, [...path], undefined);
+      const optionLeaves = leaves.splice(start);
+      for (const leaf of optionLeaves) {
+        const existing = merged.get(leaf.path);
+        if (existing === undefined) {
+          merged.set(leaf.path, leaf);
+          continue;
+        }
+        if (existing.typeName !== leaf.typeName) {
+          throw new TypeError(
+            `collectSchemaFieldPaths: union options disagree on leaf type at ${leaf.path} (${existing.typeName} vs ${leaf.typeName}).`,
+          );
+        }
+        if (existing.enumValues !== undefined || leaf.enumValues !== undefined) {
+          const values = [...(existing.enumValues ?? []), ...(leaf.enumValues ?? [])];
+          merged.set(leaf.path, { ...existing, enumValues: [...new Set(values)] });
+        }
+      }
+    }
+    for (const leaf of merged.values()) {
+      leaves.push(leaf);
+    }
+  };
 
   const visit = (schema: z.ZodTypeAny, path: string[], inheritedDefault: unknown): void => {
     const unwrapped = unwrapSchema(schema);
@@ -172,39 +232,14 @@ export function collectSchemaFieldPaths(root: z.ZodTypeAny): readonly SchemaFiel
       visit(node.valueSchema, [...path, "*"], undefined);
       return;
     }
-    if (node instanceof z.ZodUnion) {
-      const options = node.options as z.ZodTypeAny[];
-      const allLeaves = options.every((option) => {
-        const inner = unwrapSchema(option).schema;
-        const innerType: string = inner._def.typeName;
-        if (PRIMITIVE_LEAF_TYPES.has(innerType)) {
-          return true;
-        }
-        if (inner instanceof z.ZodArray) {
-          const element = unwrapSchema(inner.element).schema;
-          return PRIMITIVE_LEAF_TYPES.has(element._def.typeName as string);
-        }
-        if (inner instanceof z.ZodObject) {
-          // Strip/strict objects carry a ZodNever catchall; anything else is
-          // an opaque managed surface (passthrough or explicit catchall).
-          if ((inner._def.catchall as z.ZodTypeAny)._def.typeName !== z.ZodFirstPartyTypeKind.ZodNever) {
-            return true;
-          }
-          // Strict objects are value leaves only when every field is a
-          // primitive scalar (e.g. the exact/glob/regex matcher alternatives);
-          // otherwise the union mixes structural containers and stays guarded.
-          return Object.values(inner.shape as Record<string, z.ZodTypeAny>).every((field) =>
-            PRIMITIVE_LEAF_TYPES.has(unwrapSchema(field).schema._def.typeName as string),
-          );
-        }
-        // Open maps (e.g. tool_choice function payloads) are opaque too.
-        return inner instanceof z.ZodRecord;
-      });
-      if (allLeaves) {
+    if (node instanceof z.ZodUnion || node instanceof z.ZodDiscriminatedUnion) {
+      const options = node.options as readonly z.ZodTypeAny[];
+      if (options.every(optionIsLeafLike)) {
         leaves.push(leafFrom(path, effective, "union"));
         return;
       }
-      throw new TypeError(`collectSchemaFieldPaths: union with strict object options at ${joinSchemaPath(path)} needs explicit walker support.`);
+      mergeUnionOptions(options, path);
+      return;
     }
     throw new TypeError(`collectSchemaFieldPaths: unsupported schema type ${String(typeName)} at ${joinSchemaPath(path)}.`);
   };
@@ -258,6 +293,7 @@ export function valueKindFromSchemaType(typeName: string): ConfigFieldValueKind 
       return "boolean";
     case "ZodEnum":
     case "ZodNativeEnum":
+    case "ZodLiteral":
       return "enum";
     case "ZodString[]":
       return "string[]";
@@ -873,6 +909,22 @@ export const CONFIG_FIELD_INVENTORY: readonly ConfigFieldSpec[] = [
   g("outputs.channels[].receive_id_type", { t: "ZodEnum", own: "entity", ent: "channel", cap: "feishu_app only; runtime default chat_id", con: "packages/outputs/src/feishu-app.ts", wir: true, ui: "select" }),
   g("outputs.channels[].member_directory.chat_id", { t: "ZodString", own: "entity", ent: "channel", cap: "feishu_app only", con: "packages/outputs/src/feishu-app.ts", wir: true, ui: "text" }),
   g("outputs.channels[].member_directory.cache_ttl_seconds", { t: "ZodNumber", own: "entity", ent: "channel", cap: "feishu_app only; overrides outputs.author_resolution.directory_cache_ttl_seconds; runtime default 43200 (12h); 0 disables cache; max 604800 (7d)", con: "packages/outputs/src/feishu-app.ts", wir: true, ui: "number" }),
+  g("outputs.channels[].member_directory.source", { t: "ZodLiteral", own: "entity", ent: "channel", cap: "feishu_api keeps the historical {chat_id, cache_ttl_seconds} form; file selects a strict YAML/JSON directory", wir: false, st: "IM-06/IM-08 file-directory wiring pending", ui: "select" }),
+  g("outputs.channels[].member_directory.path", { t: "ZodString", own: "entity", ent: "channel", cap: "file source only; resolved against the config baseDir, never cwd", wir: false, st: "IM-07 watch service wiring pending", ui: "text" }),
+  g("outputs.channels[].member_directory.directory_id", { t: "ZodString", own: "entity", ent: "channel", cap: "file source only; names one directory inside the file", wir: false, st: "IM-06 parser wiring pending", ui: "text" }),
+  g("outputs.channels[].member_directory.identity_scope.kind", { t: "ZodEnum", own: "entity", ent: "channel", cap: "file source only; wecom_corp | feishu_app | feishu_tenant", wir: false, st: "IM-08 identity scoping wiring pending", ui: "select" }),
+  g("outputs.channels[].member_directory.identity_scope.id", { t: "ZodString", own: "entity", ent: "channel", cap: "file source only; corp/app/tenant namespace id", wir: false, st: "IM-08 identity scoping wiring pending", ui: "text" }),
+  g("outputs.channels[].member_directory.watch", { t: "ZodBoolean", own: "entity", ent: "channel", cap: "file source only; runtime default true; false keeps periodic reload", wir: false, st: "IM-07 watch service wiring pending", ui: "toggle" }),
+  g("outputs.channels[].member_directory.debounce_ms", { t: "ZodNumber", own: "entity", ent: "channel", cap: "file source only; runtime default 300; bounded 50–2000", wir: false, st: "IM-07 watch service wiring pending", ui: "number" }),
+  g("outputs.channels[].member_directory.poll_interval_seconds", { t: "ZodNumber", own: "entity", ent: "channel", cap: "file source only; runtime default 30; bounded 5–300", wir: false, st: "IM-07 watch service wiring pending", ui: "number" }),
+  g("outputs.channels[].member_directory.allowed_root", { t: "ZodString", own: "entity", ent: "channel", cap: "file source only; trusted root for real-path boundary checks; defaults to the config baseDir", wir: false, st: "IM-07 watch service wiring pending", ui: "text" }),
+  g("outputs.channels[].author_mappings.*", { t: "ZodString", own: "entity", ent: "channel", cap: "author → file member key; mutually exclusive with user_mappings", wir: false, st: "IM-08 directory mapping wiring pending", ui: "text" }),
+  g("outputs.channels[].connection", { t: "ZodString", own: "entity", ent: "channel", cap: "wecom_app channels require it; feishu_app channels replace inline credentials with it", wir: false, st: "IM-05 publisher wiring pending", ui: "select" }),
+  g("outputs.channels[].target.kind", { t: "ZodLiteral", own: "entity", ent: "channel", cap: "wecom_app only; recipients | appchat", wir: false, st: "IM-04/IM-05 sender wiring pending", ui: "select" }),
+  g("outputs.channels[].target.users", { t: "ZodString[]", own: "entity", ent: "channel", cap: "recipients target; ≤1000 userids", wir: false, st: "IM-04/IM-05 sender wiring pending", ui: "multiselect" }),
+  g("outputs.channels[].target.parties", { t: "ZodString[]", own: "entity", ent: "channel", cap: "recipients target; ≤100 party ids", wir: false, st: "IM-04/IM-05 sender wiring pending", ui: "multiselect" }),
+  g("outputs.channels[].target.tags", { t: "ZodString[]", own: "entity", ent: "channel", cap: "recipients target; ≤100 tag ids", wir: false, st: "IM-04/IM-05 sender wiring pending", ui: "multiselect" }),
+  g("outputs.channels[].target.chat_id", { t: "ZodString", own: "entity", ent: "channel", cap: "appchat target; group must be created by the same application", wir: false, st: "IM-04/IM-05 sender wiring pending", ui: "text" }),
   g("outputs.channels[].user_mappings.*", { t: "ZodString", own: "entity", ent: "channel", cap: "feishu_app only; exact author or submitter workspace to open_id", con: "packages/outputs/src/feishu-members.ts", wir: true, ui: "map" }),
   g("outputs.channels[].trigger", { t: "ZodString", own: "entity", ent: "channel", con: "packages/server/src/bootstrap.ts channel trigger lookup", wir: true, ui: "select" }),
   g("outputs.channels[].templates.problem", { t: "ZodString", own: "entity", ent: "channel", cap: "named reference into outputs.templates; wins over workspace/built-in lookup", con: "packages/server/src/bootstrap.ts:createChannelRendering", wir: true, ui: "select" }),
@@ -1011,6 +1063,40 @@ export const CONFIG_FIELD_INVENTORY: readonly ConfigFieldSpec[] = [
   ...workspaceSandboxRows(),
   ...contextRepositoryRows(),
   ...workspaceAgentRows(),
+
+  // -------------------------------------------------- im (IM plan, unwired)
+  // Schema-accepted since IM-01; no runtime consumer exists yet. These maps
+  // become the im_connection / im_command_binding database entities in IM-02,
+  // and rows flip wired as IM-04+ lands the senders, callbacks, and workers.
+  g("im.connections.*.kind", { t: "ZodLiteral", own: "business", cap: "wecom_app | wecom_aibot | feishu_app; never a VCS trigger kind", wir: false, st: "IM-04/IM-10 runtime wiring pending", ui: "select" }),
+  g("im.connections.*.enabled", { t: "ZodBoolean", own: "business", cap: "runtime default true", wir: false, st: "IM-17 lifecycle wiring pending", ui: "toggle" }),
+  g("im.connections.*.corp_id", { t: "ZodString", own: "business", cap: "wecom_app/wecom_aibot; local identity domain, not carried inside aibot payloads", wir: false, st: "IM-04/IM-10 wiring pending", ui: "text" }),
+  g("im.connections.*.agent_id", { t: "ZodNumber", own: "business", cap: "wecom_app only; positive integer", wir: false, st: "IM-04 wiring pending", ui: "number" }),
+  g("im.connections.*.app_secret", { t: "ZodString", own: "business", cap: "wecom_app/feishu_app; mutually exclusive with app_secret_env", wir: false, st: "IM-04 wiring pending", ui: "secret-value" }),
+  g("im.connections.*.app_secret_env", { t: "ZodString", own: "business", cap: "wecom_app/feishu_app; mutually exclusive with app_secret", wir: false, st: "IM-04 wiring pending", ui: "secret-ref" }),
+  g("im.connections.*.aibot_id", { t: "ZodString", own: "business", cap: "wecom_aibot only", wir: false, st: "IM-10 wiring pending", ui: "text" }),
+  g("im.connections.*.app_id", { t: "ZodString", own: "business", cap: "feishu_app only", wir: false, st: "IM-10 wiring pending", ui: "text" }),
+  g("im.connections.*.base_url", { t: "ZodString", own: "business", cap: "feishu_app only; https://open.feishu.cn or https://open.larksuite.com", wir: false, st: "IM-10 wiring pending", ui: "text" }),
+  g("im.connections.*.tenant_key", { t: "ZodString", own: "business", cap: "feishu_app only; required once callback is enabled", wir: false, st: "IM-10 wiring pending", ui: "text" }),
+  g("im.connections.*.callback.enabled", { t: "ZodBoolean", own: "business", cap: "runtime default false", wir: false, st: "IM-12 callback routing pending", ui: "toggle" }),
+  g("im.connections.*.callback.token", { t: "ZodString", own: "business", cap: "wecom kinds; mutually exclusive with token_env", wir: false, st: "IM-10 protocol adapter pending", ui: "secret-value" }),
+  g("im.connections.*.callback.token_env", { t: "ZodString", own: "business", cap: "wecom kinds; mutually exclusive with token", wir: false, st: "IM-10 protocol adapter pending", ui: "secret-ref" }),
+  g("im.connections.*.callback.encoding_aes_key", { t: "ZodString", own: "business", cap: "wecom kinds; mutually exclusive with encoding_aes_key_env", wir: false, st: "IM-10 protocol adapter pending", ui: "secret-value" }),
+  g("im.connections.*.callback.encoding_aes_key_env", { t: "ZodString", own: "business", cap: "wecom kinds; mutually exclusive with encoding_aes_key", wir: false, st: "IM-10 protocol adapter pending", ui: "secret-ref" }),
+  g("im.connections.*.callback.verification_token", { t: "ZodString", own: "business", cap: "feishu_app only; mutually exclusive with verification_token_env", wir: false, st: "IM-10 protocol adapter pending", ui: "secret-value" }),
+  g("im.connections.*.callback.verification_token_env", { t: "ZodString", own: "business", cap: "feishu_app only; mutually exclusive with verification_token", wir: false, st: "IM-10 protocol adapter pending", ui: "secret-ref" }),
+  g("im.connections.*.callback.encrypt_key", { t: "ZodString", own: "business", cap: "feishu_app only; mutually exclusive with encrypt_key_env", wir: false, st: "IM-10 protocol adapter pending", ui: "secret-value" }),
+  g("im.connections.*.callback.encrypt_key_env", { t: "ZodString", own: "business", cap: "feishu_app only; mutually exclusive with encrypt_key", wir: false, st: "IM-10 protocol adapter pending", ui: "secret-ref" }),
+  g("im.command_bindings.*.enabled", { t: "ZodBoolean", own: "business", cap: "runtime default false; disabled drafts stay savable pre-wiring", wir: false, st: "IM-11 admission wiring pending", ui: "toggle" }),
+  g("im.command_bindings.*.connection", { t: "ZodString", own: "business", cap: "named reference into im.connections", wir: false, st: "IM-11 admission wiring pending", ui: "select" }),
+  g("im.command_bindings.*.actors[].type", { t: "ZodEnum", own: "business", cap: "wecom_userid | wecom_encrypted_userid | feishu_open_id; namespace inherited from the connection", wir: false, st: "IM-11 admission wiring pending", ui: "select" }),
+  g("im.command_bindings.*.actors[].id", { t: "ZodString", own: "business", cap: "exact typed platform id; no fuzzy matching", wir: false, st: "IM-11 admission wiring pending", ui: "text" }),
+  g("im.command_bindings.*.conversations[]", { t: "union", own: "business", cap: "app_direct | bot_direct | group(+id); kinds must match the connection protocol", wir: false, st: "IM-11 admission wiring pending", ui: "select" }),
+  g("im.command_bindings.*.commands", { t: "ZodEnum[]", own: "business", cap: "help | chat-id | review | status; unique", wir: false, st: "IM-11 admission wiring pending", ui: "multiselect" }),
+  g("im.command_bindings.*.repositories.*.workspace", { t: "ZodString", own: "business", cap: "repo-alias target; validated against routing/VCS scope at publish", wir: false, st: "IM-13 revision resolution pending", ui: "text" }),
+  g("im.command_bindings.*.repositories.*.source_trigger", { t: "ZodString", own: "business", cap: "repo-alias target; validated against routing/VCS scope at publish", wir: false, st: "IM-13 revision resolution pending", ui: "text" }),
+  g("im.command_bindings.*.repositories.*.repo_ref", { t: "ZodString", own: "business", cap: "repo-alias target; validated against routing/VCS scope at publish", wir: false, st: "IM-13 revision resolution pending", ui: "text" }),
+  g("im.command_bindings.*.report_policy", { t: "ZodEnum", own: "business", cap: "workspace_routes only; runtime default", wir: false, st: "IM-16 reply wiring pending", ui: "select" }),
 ];
 
 /**

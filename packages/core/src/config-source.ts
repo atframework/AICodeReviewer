@@ -412,6 +412,8 @@ export const DATABASE_ENTITY_COLLECTION_KEYS = [
   "routes",
   "templates",
   "prompts",
+  "im_connections",
+  "im_command_bindings",
 ] as const;
 
 export type DatabaseEntityCollectionKey = (typeof DATABASE_ENTITY_COLLECTION_KEYS)[number];
@@ -425,6 +427,8 @@ export const DATABASE_COLLECTION_KIND: Record<DatabaseEntityCollectionKey, Confi
   routes: "route",
   templates: "template",
   prompts: "prompt",
+  im_connections: "im_connection",
+  im_command_bindings: "im_command_binding",
 };
 
 export const DATABASE_KIND_COLLECTION: Record<ConfigEntityKind, DatabaseEntityCollectionKey> = {
@@ -436,6 +440,8 @@ export const DATABASE_KIND_COLLECTION: Record<ConfigEntityKind, DatabaseEntityCo
   route: "routes",
   template: "templates",
   prompt: "prompts",
+  im_connection: "im_connections",
+  im_command_binding: "im_command_bindings",
 };
 
 export type DatabaseEntityValue = Record<string, unknown> | Record<string, unknown>[] | string;
@@ -483,6 +489,8 @@ export const databaseConfigDocumentSchema: z.ZodType<DatabaseConfigDocument> = z
         routes: z.record(z.string().min(1), databaseEntityRecordSchema).optional(),
         templates: z.record(z.string().min(1), databaseEntityRecordSchema).optional(),
         prompts: z.record(z.string().min(1), databaseEntityRecordSchema).optional(),
+        im_connections: z.record(z.string().min(1), databaseEntityRecordSchema).optional(),
+        im_command_bindings: z.record(z.string().min(1), databaseEntityRecordSchema).optional(),
       })
       .strict()
       .optional(),
@@ -823,6 +831,8 @@ const EMPTY_ENTITY_IDS: FileEntityIds = {
   route: new Set(),
   template: new Set(),
   prompt: new Set(),
+  im_connection: new Set(),
+  im_command_binding: new Set(),
 };
 
 /**
@@ -1162,6 +1172,9 @@ export function collectEntityReferences(config: AppConfigInput): readonly Config
             }
           }
         }
+        if (typeof channel.connection === "string" && channel.connection.length > 0) {
+          add(["outputs", "channels", String(index), "connection"], { kind: "im_connection", id: channel.connection });
+        }
       });
     }
     if (isPlainObject(outputs.routes)) {
@@ -1217,6 +1230,40 @@ export function collectEntityReferences(config: AppConfigInput): readonly Config
   if (isPlainObject(queue) && isPlainObject(queue.rate_limit) && isPlainObject(queue.rate_limit.per_provider_rps)) {
     for (const id of Object.keys(queue.rate_limit.per_provider_rps)) {
       add(["queue", "rate_limit", "per_provider_rps", id], { kind: "provider", id });
+    }
+  }
+
+  // IM references (IM design §2): command bindings point at connections, and
+  // output channels may reference the same connections. Binding repository
+  // targets name triggers/workspaces like every other repo mapping.
+  const im = config.im;
+  if (isPlainObject(im) && isPlainObject(im.command_bindings)) {
+    for (const [id, binding] of Object.entries(im.command_bindings)) {
+      if (!isPlainObject(binding)) {
+        continue;
+      }
+      if (typeof binding.connection === "string" && binding.connection.length > 0) {
+        add(["im", "command_bindings", id, "connection"], { kind: "im_connection", id: binding.connection });
+      }
+      if (isPlainObject(binding.repositories)) {
+        for (const [alias, target] of Object.entries(binding.repositories)) {
+          if (!isPlainObject(target)) {
+            continue;
+          }
+          if (typeof target.source_trigger === "string" && target.source_trigger.length > 0) {
+            add(["im", "command_bindings", id, "repositories", alias, "source_trigger"], {
+              kind: "trigger",
+              id: target.source_trigger,
+            });
+          }
+          if (typeof target.workspace === "string" && target.workspace.length > 0) {
+            add(["im", "command_bindings", id, "repositories", alias, "workspace"], {
+              kind: "workspace",
+              id: target.workspace,
+            });
+          }
+        }
+      }
     }
   }
 

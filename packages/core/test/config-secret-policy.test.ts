@@ -136,3 +136,58 @@ describe("deployment-owned secret purposes (A06)", () => {
     expect(() => assertNoConfigCredentialLiterals({ webhook_url: "https://name:password@example.test/hook" })).toThrow();
   });
 });
+
+describe("IM connection credentials (IM-02: C05)", () => {
+  const connection = (overrides: Record<string, unknown> = {}) => ({
+    kind: "wecom_app",
+    corp_id: "ww_example",
+    agent_id: 1000002,
+    app_secret_env: "AICR_WECOM_APP_SECRET",
+    ...overrides,
+  });
+  const imFile = { im: { connections: { "corp-review": connection() } } };
+
+  it("collects im env references with the corp/app destination context", () => {
+    expect(collectConfigSecretReferences(imFile)).toContainEqual({
+      env: "AICR_WECOM_APP_SECRET",
+      target: ["im", "connections", "corp-review", "app_secret_env"],
+      destinations: { kind: "wecom_app", corp_id: "ww_example", agent_id: 1000002 },
+    });
+    expect(() => assertConfigSecretPolicy(imFile, {}, imFile)).not.toThrow();
+  });
+
+  it("rejects the same env reference moved to a different corp or application", () => {
+    for (const change of [{ corp_id: "ww_other" }, { agent_id: 1000003 }]) {
+      const effective = { im: { connections: { "corp-review": connection(change) } } };
+      expect(() => assertConfigSecretPolicy(imFile, {}, effective)).toThrow(/not authorized/u);
+    }
+  });
+
+  it("registers the protocol literal fields and still rejects unknown credential keys", () => {
+    const literals = {
+      im: { connections: { a: connection({
+        app_secret_env: undefined,
+        app_secret: "app-secret",
+        callback: { enabled: true, token: "t", encoding_aes_key: "k" },
+      }), b: { kind: "feishu_app", app_id: "cli_x", app_secret: "s", tenant_key: "t1",
+        callback: { enabled: true, verification_token: "v", encrypt_key: "e" } } } },
+    };
+    expect(() => assertNoConfigCredentialLiterals(literals)).not.toThrow();
+    expect(() => assertNoConfigCredentialLiterals({
+      im: { connections: { a: connection({ client_secret: "nope" }) } },
+    })).toThrow(/Unregistered credential/u);
+  });
+
+  it("binds file-owned IM literals to their issuing connection", () => {
+    const literalFile = { im: { connections: { "corp-review": connection({
+      app_secret_env: undefined,
+      app_secret: "literal-app-secret",
+    }) } } };
+    expect(() => assertConfigSecretPolicy(literalFile, {}, literalFile)).not.toThrow();
+    const reused = { im: { connections: {
+      "corp-review": connection({ app_secret_env: undefined, app_secret: "literal-app-secret" }),
+      "corp-copy": connection({ corp_id: "ww_other", app_secret_env: undefined, app_secret: "literal-app-secret" }),
+    } } };
+    expect(() => assertConfigSecretPolicy(literalFile, {}, reused)).toThrow(/different path or destination/u);
+  });
+});

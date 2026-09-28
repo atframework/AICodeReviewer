@@ -16,7 +16,10 @@ export interface ConfigSecretGrant {
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const DESTINATION_KEYS = new Set(["kind", "base_url", "url", "endpoint", "endpoint_url", "http_proxy", "repository_url",
   "port", "host", "trigger", "owner", "repo", "project_id", "projectId", "aws_region", "vertex_project", "vertex_location", "region", "aws_endpoint", "azure_endpoint",
-  "webhook_url_env", "endpoint_url_env", "app_id", "client_id", "installation_id", "receive_id", "receive_id_type", "chat_id"]);
+  "webhook_url_env", "endpoint_url_env", "app_id", "client_id", "installation_id", "receive_id", "receive_id_type", "chat_id",
+  // IM connection identity domains: grants bind literals/env refs to the
+  // exact corp/app/bot/tenant they were issued for (execution contracts §2).
+  "corp_id", "agent_id", "aibot_id", "tenant_key"]);
 
 function channelTriggers(channel: Record<string, unknown>, triggers: readonly unknown[]): Record<string, unknown>[] {
   const kind = String(channel.kind ?? "");
@@ -91,7 +94,10 @@ export function collectConfigSecretReferences(config: unknown): readonly ConfigS
         references.push({ env: child, target: [...path, key], destinations: destinationContext(owner, triggers) });
       }
       const newOwner = key === "web_search" || key === "source_repo" || key === "notify_feishu";
-      visit(child, [...path, key], newOwner && isPlainObject(child) ? child : owner);
+      // Each im connection is its own credential destination: its env refs and
+      // callback credentials bind to that connection's corp/app identity.
+      const imConnectionEntry = path.length === 2 && path[0] === "im" && path[1] === "connections" && isPlainObject(child);
+      visit(child, [...path, key], (newOwner && isPlainObject(child)) || imConnectionEntry ? child : owner);
     }
     // Channel-level endpoints can override a file trigger endpoint while
     // silently inheriting that trigger's token. Treat that as a distinct use.

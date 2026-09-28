@@ -115,4 +115,34 @@ describe("createReviewEvent", () => {
     });
     expect(result.success).toBe(true);
   });
+
+  it("accepts an im_command requestOrigin without changing the VCS provider or author", () => {
+    const event = createReviewEvent({
+      ...baseEvent,
+      targetKind: "commit",
+      requestOrigin: {
+        kind: "im_command",
+        requestId: "req-1",
+        connectionIdentity: "{\"corpId\":\"ww_example\",\"kind\":\"wecom_app\",\"namespace\":\"default\",\"platformId\":\"1000002\",\"tenantKey\":null}",
+        requestedBy: { type: "wecom_userid", id: "alice_zhang" },
+      },
+    });
+
+    expect(event.provider).toBe("gitea");
+    expect(event.author.username).toBe("owent");
+    expect(event.requestOrigin?.requestedBy.id).toBe("alice_zhang");
+  });
+
+  it("rejects malformed requestOrigin provenance", () => {
+    const origin = {
+      kind: "im_command",
+      requestId: "req-1",
+      connectionIdentity: "identity-key",
+      requestedBy: { type: "wecom_userid", id: "alice_zhang" },
+    };
+    expect(reviewEventSchema.safeParse({ ...baseEvent, requestOrigin: { ...origin, kind: "im_card" } }).success).toBe(false);
+    expect(reviewEventSchema.safeParse({ ...baseEvent, requestOrigin: { ...origin, requestId: "" } }).success).toBe(false);
+    expect(reviewEventSchema.safeParse({ ...baseEvent, requestOrigin: { ...origin, requestedBy: { type: "vcs_login", id: "x" } } }).success).toBe(false);
+    expect(reviewEventSchema.safeParse({ ...baseEvent, requestOrigin: { ...origin, extra: true } }).success).toBe(false);
+  });
 });

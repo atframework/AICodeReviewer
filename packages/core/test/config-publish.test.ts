@@ -505,3 +505,140 @@ describe("reference resolution on publish", () => {
     await expect(publish(prepared)).resolves.toMatchObject({ status: "committed" });
   });
 });
+
+describe("IM entity publication (IM-02: C04/C06/C07)", () => {
+  const connectionValue = {
+    kind: "wecom_app",
+    corp_id: "ww_example",
+    agent_id: 1000002,
+    app_secret: "literal-app-secret",
+    callback: { enabled: true, token: "callback-token", encoding_aes_key: "aes-key-material" },
+  };
+  const bindingValue = {
+    enabled: true,
+    connection: "corp-review",
+    conversations: [{ kind: "app_direct" }],
+    actors: [{ type: "wecom_userid", id: "alice_zhang" }],
+    commands: ["status"],
+  };
+
+  function imOp(collection: "im_connections" | "im_command_bindings", name: string, value: Record<string, unknown>): ConfigChangesetOperation {
+    return { op: "create", collection, record: { id: `rec-${name}`, name, enabled: true, value } };
+  }
+
+  async function publish(prepared: PreparedConfigPublication) {
+    return publishConfig(store, prepared, { secretSealing: createConfigSecretSealing(Buffer.alloc(32, 7)) });
+  }
+
+  it("creates connections and bindings together; literals are sealed in the stored document", async () => {
+    const prepared = prepareConfigPublication(publishInput({
+      operations: [imOp("im_connections", "corp-review", connectionValue), imOp("im_command_bindings", "reviewers", bindingValue)],
+    }));
+    expect(prepared.effective.im?.connections?.["corp-review"]?.kind).toBe("wecom_app");
+    expect(prepared.effective.im?.command_bindings?.reviewers?.connection).toBe("corp-review");
+    const result = await publish(prepared);
+    expect(result.status).toBe("committed");
+    const document = await currentDoc(NAMESPACE);
+    const stored = document?.entities?.im_connections?.["rec-corp-review"]?.value as Record<string, unknown>;
+    expect(String(stored.app_secret)).toMatch(/^enc:v1\./u);
+    expect(String((stored.callback as Record<string, unknown>).token)).toMatch(/^enc:v1\./u);
+    expect(String((stored.callback as Record<string, unknown>).encoding_aes_key)).toMatch(/^enc:v1\./u);
+  });
+
+  it("rejects disabled bindings that reference a missing connection", () => {
+    // Enabled bindings and file channels are already rejected by the im schema
+    // (IM-01); the publish boundary additionally protects disabled drafts.
+    expect(() => prepareConfigPublication(publishInput({
+      operations: [imOp("im_command_bindings", "reviewers", { ...bindingValue, enabled: false })],
+    }))).toThrowError(expect.objectContaining({ code: "invalid_reference" }) as Error);
+  });
+
+  it("rejects deleting or renaming a connection still referenced by a binding or file channel", async () => {
+    const base = await publish(prepareConfigPublication(publishInput({
+      operations: [
+        imOp("im_connections", "corp-review", connectionValue),
+        imOp("im_command_bindings", "reviewers", { ...bindingValue, enabled: false }),
+      ],
+    })));
+    expect(base.status).toBe("committed");
+    const current = (await currentDoc(NAMESPACE))!;
+    expect(() => prepareConfigPublication(publishInput({
+      baseRevision: 1,
+      operationId: "op-del",
+      current,
+      operations: [{ op: "delete", collection: "im_connections", recordId: "rec-corp-review" }],
+    }))).toThrowError(expect.objectContaining({ code: "invalid_reference" }) as Error);
+    expect(() => prepareConfigPublication(publishInput({
+      baseRevision: 1,
+      operationId: "op-ren",
+      current,
+      operations: [{ op: "rename", collection: "im_connections", recordId: "rec-corp-review", newName: "corp-review-2" }],
+    }))).toThrowError(expect.objectContaining({ code: "invalid_reference" }) as Error);
+  });
+
+  it("file-owned connections shadow previously published database records", async () => {
+    const base = await publish(prepareConfigPublication(publishInput({
+      operations: [imOp("im_connections", "corp-review", connectionValue)],
+    })));
+    expect(base.status).toBe("committed");
+    const file = {
+      config_sources: { secret_refs: [] },
+      llm: { providers: [{ id: "file-main", kind: "ollama" }], model_chain: { default: [{ provider: "file-main", model: "m", role: "any" }] } },
+      im: { connections: { "corp-review": { kind: "wecom_app", corp_id: "ww_file", agent_id: 42, app_secret_env: "AICR_WECOM_APP_SECRET" } } },
+    };
+    const current = (await currentDoc(NAMESPACE))!;
+    const prepared = prepareConfigPublication({
+      namespace: NAMESPACE,
+      baseRevision: 1,
+      operationId: "op-2",
+      actor: "tester",
+      file,
+      fileDigest: DIGEST,
+      current,
+      operations: [],
+    });
+    expect(prepared.merged.shadowedEntities).toContainEqual({ kind: "im_connection", id: "corp-review" });
+    expect(prepared.effective.im?.connections?.["corp-review"]?.corp_id).toBe("ww_file");
+    // Creating a database record under a file-owned name is rejected outright.
+    expect(() => prepareConfigPublication({
+      namespace: NAMESPACE,
+      baseRevision: 1,
+      operationId: "op-3",
+      actor: "tester",
+      file,
+      fileDigest: DIGEST,
+      current,
+      operations: [{ op: "create", collection: "im_connections", record: { id: "rec-file-owned", name: "corp-review", enabled: true, value: connectionValue } }],
+    })).toThrowError(expect.objectContaining({ code: "file_owned" }) as Error);
+  });
+
+  it("keeps historical documents without im loadable while new im entities publish (C06)", async () => {
+    const first = await publish(prepareConfigPublication(publishInput({
+      operations: [createOp("providers", "db-main", { id: "db-main", kind: "ollama" })],
+    })));
+    expect(first.status).toBe("committed");
+    const second = prepareConfigPublication(publishInput({
+      baseRevision: 1,
+      operationId: "op-2",
+      current: (await currentDoc(NAMESPACE))!,
+      operations: [imOp("im_connections", "corp-review", connectionValue)],
+    }));
+    expect(second.effective.llm.providers.map((provider) => provider.id)).toContain("db-main");
+    expect(second.effective.im?.connections?.["corp-review"]?.agent_id).toBe(1000002);
+    await expect(publish(second)).resolves.toMatchObject({ status: "committed" });
+  });
+
+  it("publishing file-directory channels never touches the local filesystem (C07)", () => {
+    const prepared = prepareConfigPublication(publishInput({
+      file: {
+        config_sources: { secret_refs: [{ env: "WECOM_WEBHOOK", target: ["outputs", "channels", "group", "webhook_url_env"], destinations: { kind: "wecom_bot" } }] },
+        outputs: { channels: [{
+          name: "group", kind: "wecom_bot", webhook_url_env: "WECOM_WEBHOOK",
+          member_directory: { source: "file", path: "./definitely/not/present/im-members.yaml", directory_id: "d", identity_scope: { kind: "wecom_corp", id: "ww_example" } },
+        }] },
+      },
+      operations: [],
+    }));
+    expect(prepared.effective.outputs.channels[0]?.member_directory).toMatchObject({ source: "file" });
+  });
+});

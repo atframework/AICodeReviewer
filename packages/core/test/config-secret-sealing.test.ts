@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   CONFIG_SECRETS_KEY_ENV,
+  carryOverSecretLiterals,
   CONFIG_SECRETS_KEY_PREVIOUS_ENV,
   containsSealableSecrets,
   containsSealedSecrets,
@@ -167,5 +168,26 @@ describe("resolveConfigSecretSealing", () => {
 
   it("rejects invalid key material from the environment", () => {
     expect(() => resolveConfigSecretSealing((name) => (name === CONFIG_SECRETS_KEY_ENV ? "not-a-key" : undefined))).toThrow(/32-byte key/);
+  });
+});
+
+describe("IM connection literals (IM-02)", () => {
+  it("seals and reopens every IM callback credential field", () => {
+    const service = createConfigSecretSealing(Buffer.alloc(32, 9));
+    const input = {
+      im: { connections: {
+        corp: { kind: "wecom_app", corp_id: "ww", agent_id: 1, app_secret: "app-secret-1",
+          callback: { enabled: true, token: "cb-token-9f01", encoding_aes_key: "aes-key-9f02" } },
+        feishu: { kind: "feishu_app", app_id: "cli", app_secret: "app-secret-2", tenant_key: "t1",
+          callback: { enabled: true, verification_token: "verify-9f03", encrypt_key: "encrypt-9f04" } },
+      } },
+    };
+    const sealed = sealConfigSecretLiterals(input, service);
+    for (const secret of ["app-secret-1", "cb-token-9f01", "aes-key-9f02", "app-secret-2", "verify-9f03", "encrypt-9f04"]) {
+      expect(JSON.stringify(sealed)).not.toContain(secret);
+    }
+    expect(JSON.stringify(sealed)).toMatch(/"encoding_aes_key":"enc:v1\./u);
+    expect(openConfigSecretLiterals(sealed, service)).toEqual(input);
+    expect(carryOverSecretLiterals(sealed.im.connections.corp as Record<string, unknown>, { name: "corp" })).toMatchObject({ app_secret: (sealed.im.connections.corp as Record<string, unknown>).app_secret });
   });
 });

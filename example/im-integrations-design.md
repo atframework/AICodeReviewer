@@ -1,8 +1,10 @@
 # IM 集成草案示例
 
-这些片段属于[开发计划](../Plan.md)，当前 schema/运行时尚不支持，不能复制到当前 `config.yaml` 运行。
+这些片段属于[开发计划](../Plan.md)。自 IM-01 起配置 schema 接受这些字段（含 `im` 节点、
+应用频道 `connection`/`target` 与文件目录），但发送、回调与目录运行时尚未接线（IM-04 起）；
+数据库发布侧仍由能力门禁拒绝无消费者的记录，不要把片段复制到生产 `config.yaml` 期待完整功能。
 字段合同见[集成设计](../docs/design/im-integrations.md)和[文件目录](../docs/design/member-directory.md)。
-后续开发按[执行手册](../docs/design/im-implementation.md)逐项推进，不能把 YAML 语法检查当运行验收。
+开发按[执行手册](../docs/design/im-implementation.md)逐项推进，不能把 YAML 语法检查当运行验收。
 凭据及人员资料均为占位值，不包含真实成员信息。
 
 ## 连接、输出与命令授权

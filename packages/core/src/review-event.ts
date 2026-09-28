@@ -2,6 +2,7 @@ import { z } from "zod";
 
 import type { WorkspaceBinding } from "./config-workspace.js";
 import type { PathTemplateVariables } from "./config-path-template.js";
+import { imPrincipalSchema } from "./im-contracts.js";
 
 const resolutionVariablesSchema = z.record(z.string(), z.record(z.string(), z.string().nullable()));
 const resolutionProvenanceSchema = z.record(z.string(), z.enum(["verified_payload", "configured", "vcs_verified", "unavailable", "conflicted"]));
@@ -76,6 +77,22 @@ export const reviewEventSchema = z
      * from the event fields.
      */
     resolution: z.lazy(() => reviewEventResolutionSchema).optional(),
+    /**
+     * Manual re-review provenance (IM design §7.2): present only on requests
+     * admitted from IM commands or card actions. The VCS provider family and
+     * `author` (the commit author) stay untouched; `requestedBy` is the chat
+     * operator kept for audit only. `connectionIdentity` is the stable
+     * connection identity key (imConnectionIdentityKey).
+     */
+    requestOrigin: z
+      .object({
+        kind: z.literal("im_command"),
+        requestId: z.string().min(1),
+        connectionIdentity: z.string().min(1),
+        requestedBy: imPrincipalSchema,
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 

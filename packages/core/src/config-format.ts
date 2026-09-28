@@ -137,6 +137,27 @@ export function isPrototypeKey(segment: string): boolean {
   return PROTOTYPE_KEYS[segment] === true;
 }
 
+/**
+ * Adds one issue per secret field whose literal and `*_env` reference forms
+ * are both set. The literal form always wins at runtime; rejecting the
+ * ambiguity keeps operator intent explicit.
+ */
+export function addSecretMutexIssues(
+  ctx: z.RefinementCtx,
+  record: Record<string, unknown>,
+  pairs: readonly (readonly [string, string])[],
+): void {
+  for (const [literal, envRef] of pairs) {
+    if (record[literal] !== undefined && record[envRef] !== undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `'${literal}' and '${envRef}' are mutually exclusive; configure the literal value or the environment variable reference, not both.`,
+        path: [literal],
+      });
+    }
+  }
+}
+
 /** `["llm","providers","openai-main","base_url"]` → `llm.providers.openai-main.base_url`. */
 export function formatConfigPath(path: ConfigPath): string {
   return path
@@ -205,7 +226,17 @@ export function parseConfigPath(text: string): ConfigPath {
 // Entity collections (architecture §3.15 rule 2)
 // ---------------------------------------------------------------------------
 
-export type ConfigEntityKind = "provider" | "model_group" | "trigger" | "channel" | "workspace" | "route" | "template" | "prompt";
+export type ConfigEntityKind =
+  | "provider"
+  | "model_group"
+  | "trigger"
+  | "channel"
+  | "workspace"
+  | "route"
+  | "template"
+  | "prompt"
+  | "im_connection"
+  | "im_command_binding";
 
 export interface ConfigEntityCollection {
   readonly kind: ConfigEntityKind;
@@ -231,6 +262,10 @@ export const CONFIG_ENTITY_COLLECTIONS: Readonly<Record<ConfigEntityKind, Config
   template: { kind: "template", path: ["outputs", "templates"], shape: "map", idField: null, since: 1 },
   // Named system-prompt documents, referenced from workspace prompt config.
   prompt: { kind: "prompt", path: ["prompts", "system"], shape: "map", idField: null, since: 1 },
+  // IM protocol connections and command bindings (IM design §2). Map keys are
+  // the entity ids; both v1 and v2 formats accept the optional `im` node.
+  im_connection: { kind: "im_connection", path: ["im", "connections"], shape: "map", idField: null, since: 1 },
+  im_command_binding: { kind: "im_command_binding", path: ["im", "command_bindings"], shape: "map", idField: null, since: 1 },
 };
 
 export interface ConfigEntityRef {

@@ -23,6 +23,10 @@ directory evidence retains its own dates in [feishu.md](feishu.md).
 | W8 | [API bot events](https://developer.work.weixin.qq.com/document/path/101027) | event envelope, template-card actions and optional group ID; event-specific fields must be parsed explicitly |
 | W9 | [API bot active replies](https://developer.work.weixin.qq.com/document/path/101138) | verified callback may carry response_url; one call within one hour, not a permanent outbound channel |
 | W10 | [Official Python sample archive](https://dldir1.qq.com/wework/wwopen/file/aibot_demo_python.tar.gz), linked by W7 | Python 3 GET and POST use empty receiveid; encrypted JSON input and reply envelope, signature and cipher framing inspected without running the sample |
+| W11 | [WeCom global error codes](https://developer.work.weixin.qq.com/document/path/90313), checked 2026-09-28 | access-token whitelist for one refresh-and-retry is exactly `40014` (invalid) and `42001` (expired); `41001` (missing) is a caller bug; rate-limit codes `45009/45033/45036`; trusted-IP requirement surfaces as `60020` with `301042` (whitelist), effective one minute after admin configuration |
+| W12 | [WeCom gettoken](https://developer.work.weixin.qq.com/document/path/91039), checked 2026-09-28 | `GET /cgi-bin/gettoken` returns `expires_in` 7200 s normally, token at most 512 bytes, must be cached per application; the platform may expire tokens early, so expiry-driven refresh is mandatory |
+| W13 | [WeCom message/send limits](https://developer.work.weixin.qq.com/document/path/90236), checked 2026-09-28 | text and Markdown content cap at 2048 UTF-8 bytes with platform-side truncation (senders must split themselves); `touser` ≤1000, `toparty`/`totag` ≤100; partial invalid recipients return `invaliduser/invalidparty/invalidtag/unlicenseduser` with all-invalid `81013`; per member 30 msgs/min and 1000/hour, per app 账号上限数×200 人次/day; duplicate check window defaults 1800 s, max 4 h; interactive template-card `response_code` is single-use within 72 h; `task_id` ≤128 bytes over `[0-9A-Za-z_\-@]` |
+| W14 | [WeCom appchat/send limits](https://developer.work.weixin.qq.com/document/path/90248), checked 2026-09-28 | supported types are text/image/voice/video/file/textcard/news/mpnews/Markdown and template_card is absent; text/Markdown cap at 2048 bytes; chatid groups must be created by the same self-built app whose visible scope is the root department; enterprise cap 20,000 recipients/min with per-member 200/min and 10,000/day silently dropped; the endpoint has no deduplication parameter or message ID |
 | F1 | [Receive Feishu messages](https://open.feishu.cn/document/server-docs/im-v1/message/events/receive) | im.message.receive_v1, sender_type, chat_id, p2p/@ permissions; deduplicate by message_id, not event_id |
 | F2 | [Event overview](https://open.feishu.cn/document/ukTMukTMukTM/uUTNz4SN1MjL1UzM) | HTTP and SDK long connection; 3-second event acknowledgment; retry intervals of 15 seconds, 5 minutes, 1 hour and 6 hours, at most four retries |
 | F3 | [Callback overview](https://open.feishu.cn/document/uAjLw4CM/ukTMukTMukTM/event-subscription-guide/callback-subscription/callback-overview) | synchronous interaction with no event-style redelivery guarantee |
@@ -32,14 +36,17 @@ directory evidence retains its own dates in [feishu.md](feishu.md).
 | F7 | [Custom webhook bot](https://open.feishu.cn/document/client-docs/bot-v3/add-custom-bot) | webhook cards support URL navigation but not request callbacks; mentions require valid group-member open_id/user_id; external groups only support open_id |
 | F8 | [Long-connection callbacks](https://open.feishu.cn/document/uAjLw4CM/ukTMukTMukTM/event-subscription-guide/callback-subscription/configure-callback-request-address) | official SDK callback transport exists; HTTP-first is a local scope decision |
 | N1 | [Node 22 fs.watch caveats](https://nodejs.org/docs/latest-v22.x/api/fs.html#caveats) | platform/network/container differences, inode replacement, missing filenames and Windows directory removal behavior |
-| P1 | [fast-xml-parser upstream](https://github.com/NaturalIntelligence/fast-xml-parser) | upstream describes v4/v5 as functionally aligned and v6 as experimental; entity/DOCTYPE support means defaults are not an XXE policy |
+| P1 | [fast-xml-parser upstream](https://github.com/NaturalIntelligence/fast-xml-parser) and its [published advisories](https://github.com/NaturalIntelligence/fast-xml-parser/security/advisories), checked 2026-09-28 | upstream describes v4/v5 as functionally aligned and v6 as experimental; v5 exposes `processEntities: false` plus explicit expansion limits. 2026 advisory chain (DOCTYPE/entity expansion resets and bypasses, latest GHSA-8r6m-32jq-jx6q / CVE-2026-73569 affecting ≥5.9.3, patched in 5.10.1) makes DTD/entity rejection in the strict wrapper mandatory regardless of version |
 | P2 | [YAML parser options](https://eemeli.org/yaml/#options) | AST/options provide a basis for duplicate-key and alias handling; strict JSON grammar still needs separate assertions |
 | P3 | [saxes upstream](https://github.com/lddubeau/saxes) | repository shown archived on 2025-12-31; not selected as the default parser for new code |
 
 Parser review on 2026-09-28 selected stable fast-xml-parser 5.x as a candidate only.
-No dependency was installed or parser security test run. IM-00 must pin a specific
-patch, verify current advisories/Node compatibility and options, and document strict
-validation, entity/DTD rejection, duplicate fields and depth/size limits before use.
+The IM-00 recheck on 2026-09-28 pinned `fast-xml-parser@5.11.1` (latest stable 5.x,
+registry modified 2026-08-27) with a hard floor of 5.10.1 for CVE-2026-73569; the
+implementation plan is `processEntities: false`, `preserveOrder: true`, explicit
+DOCTYPE/ENTITY rejection before parsing, and the 256 KiB / 32-depth caps from the
+execution contracts. No dependency was installed yet; installation happens in the
+server package only, and the S01/S06 fixed vectors remain the proof obligation.
 The upstream README is not proof that default parsing meets these requirements.
 The [execution contracts](../../design/im-execution-contracts.md) fix required
 behavior; failure to meet it blocks the XML task instead of silently changing parsers.
@@ -67,8 +74,9 @@ implementation; the sample is protocol evidence, not a production security templ
 Archive SHA-256: `c69092b70916c8eba3f8cfeb08e8116540888b5403915e36236c32cc78082171`.
 No sample code or cryptographic test was executed. P0/P3 must create positive and
 negative vectors, and P6 must verify the actual tenant callback.
-Application token error-code allowlists and tenant-specific API network restrictions
-also require a focused official check at implementation time.
+The 2026-09-28 IM-00 pass closed the token error-code allowlist (W11) and the
+tenant trusted-IP requirement (W11/W12); per-tenant network reachability and actual
+visibility/licensing still need the controlled live acceptance.
 
 W1's outbound protocol does not specify a traditional webhook inbound callback.
 The design therefore selects the separate API bot for interactive WeCom requests;

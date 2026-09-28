@@ -100,6 +100,7 @@ const AUDIT_PAGE_ASSIGNMENT: readonly (readonly [string, string])[] = [
   ["admin.", "advanced"],
   ["config_sources.", "advanced"],
   ["storage.", "advanced"],
+  ["im.", "advanced"],
 ];
 
 const AUDIT_ENTITY_PREFIX: Readonly<Record<string, string>> = {

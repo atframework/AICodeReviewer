@@ -6,7 +6,7 @@
 
 | 任务 | 首选实现与参考 |
 | --- | --- |
-| 当前待办与验收边界 | [Plan.md](../../Plan.md)：IM 应用、外部成员目录和回调重新评审，设计待实施；[路线图](#路线图)；Workspace 动态配置稳定合同见架构 §3.10、§3.14–3.16 |
+| 当前待办与验收边界 | [Plan.md](../../Plan.md)：IM 应用、外部成员目录和回调重新评审，实施中（协议基线 IM-00 已核）；[路线图](#路线图)；Workspace 动态配置稳定合同见架构 §3.10、§3.14–3.16 |
 | Config / workspace / model groups | `packages/core/src/config.ts`、server bootstrap；[架构 §3.10](architecture.md#310-配置体系)、[配置坑点](pitfalls/AGENTS.config-and-state.md) |
 | Webhook / 调度 / 去重 / PR 延期 | server runtime/scheduler/deferral-manager；[架构 §3.1](architecture.md#31-触发器与-reviewevent-归一化)、[调度坑点](pitfalls/AGENTS.scheduling.md) |
 | VCS / 多源上下文 / GitHub App | `packages/vcs/src/`、server credential wiring；[架构 §3.2](architecture.md#32-vcs-adapter-与-scoped-fetch)、[VCS 坑点](pitfalls/AGENTS.vcs.md) |
@@ -22,12 +22,14 @@
 
 ## 路线图
 
-当前任务只完成设计文档，尚未实现。执行顺序与验收条件见 [Plan.md](../../Plan.md)，
+实施已授权并开始（2026-09-28）：IM-00 协议基线、IM-01 共享类型/配置 schema、
+IM-02 实体注册与凭据密封已完成，协议结论并入[来源记录](sources/im-integrations.md)。
+执行顺序与验收条件见 [Plan.md](../../Plan.md)，
 接口和模块取舍见 [IM 集成设计](../design/im-integrations.md)，
 通讯录格式与 watch/reload 见[成员目录设计](../design/member-directory.md)。
 开发模型按[执行手册](../design/im-implementation.md)的 IM-00–22 任务卡推进，
 使用[实施合同](../design/im-execution-contracts.md)和[103 组验收断言](../design/im-acceptance.md)逐项核验。
-所有任务未执行；review 命令的持久 ConfigStore 前提、配置接线及故障恢复不能省略。
+review 命令的持久 ConfigStore 前提、配置接线及故障恢复不能省略。
 
 - 企业微信应用消息发送：成员通知和 appchat 目标分别接线，补齐业务错误与发布恢复。
 - 外部文件成员目录：平台身份隔离、原生 @、父目录 watch 与定时校验、新旧 generation 生命周期。

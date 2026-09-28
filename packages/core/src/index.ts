@@ -9,6 +9,8 @@ export * from "./weekly-schedule.js";
 export * from "./auto-commit-store.js";
 export * from "./memory-auto-commit-store.js";
 export * from "./config.js";
+export * from "./im-config.js";
+export * from "./im-contracts.js";
 export * from "./config-capabilities.js";
 export * from "./config-format.js";
 export * from "./config-matcher.js";

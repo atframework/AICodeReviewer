@@ -51,6 +51,12 @@ export const SEALED_LITERAL_SECRET_FIELDS: ReadonlySet<string> = new Set([
   "aws_secret_key",
   "aws_session_token",
   "google_application_credentials",
+  // IM callback credentials (execution contracts §2): `token` and `app_secret`
+  // above already cover the WeCom app pair; these name the protocol-specific
+  // AES/verification materials on im.connections.
+  "encoding_aes_key",
+  "verification_token",
+  "encrypt_key",
 ]);
 
 /**

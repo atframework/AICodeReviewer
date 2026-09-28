@@ -152,6 +152,8 @@ export function prepareConfigPublication(input: ConfigPublishInput): PreparedCon
     route: new Set((effective.routing?.rules ?? []).map((rule) => rule.id)),
     template: new Set(Object.keys(effective.outputs.templates)),
     prompt: new Set(Object.keys(effective.prompts.system)),
+    im_connection: new Set(Object.keys(effective.im?.connections ?? {})),
+    im_command_binding: new Set(Object.keys(effective.im?.command_bindings ?? {})),
   };
   for (const reference of collectEntityReferences(merged.document)) {
     if (!available[reference.to.kind].has(reference.to.id)) {

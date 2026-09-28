@@ -126,6 +126,8 @@ export async function previewConfigChangeset(input: ConfigChangesetPreviewInput)
       routes: (effective.routing?.rules ?? []).map((value) => ({ id: value.id, value })),
       templates: Object.entries(effective.outputs.templates).map(([id, value]) => ({ id, value })),
       prompts: Object.entries(effective.prompts.system).map(([id, value]) => ({ id, value })),
+      im_connections: Object.entries(effective.im?.connections ?? {}).map(([id, value]) => ({ id, value })),
+      im_command_bindings: Object.entries(effective.im?.command_bindings ?? {}).map(([id, value]) => ({ id, value })),
     };
     for (const collection of DATABASE_ENTITY_COLLECTION_KEYS) {
       if (!touched.has(collection)) {
