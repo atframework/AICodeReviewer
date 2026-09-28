@@ -60,6 +60,9 @@ import {
   resolveChannelDirectoryCacheTtlSeconds,
   type ChannelAuthorGuesser,
   createWeComBotDispatcher,
+  createWeComAppDispatcher,
+  memberDirectoryChannelUsers,
+  renderMemberDirectoryMention,
   type ProblemResolutionAnalyzer,
   type PublicationJournal,
   type ReviewProblem,
@@ -164,6 +167,8 @@ import {
   type RuntimeConfigGeneration,
   admissionUnavailableReason,
 } from "./runtime-config.js";
+import { ImConnectionRegistry } from "./im/connections.js";
+import { MemberDirectoryService, type MemberDirectoryView } from "./im/member-directory-service.js";
 import {
   createRedisConfigStore,
   resolveAnalysisSelection,
@@ -1207,6 +1212,7 @@ function toMentionChannelKind(channelKind: string): MentionChannelKind | undefin
     case "gitea_problem_issue":
     case "feishu_bot":
     case "wecom_bot":
+    case "wecom_app":
       return channelKind;
     default:
       return undefined;
@@ -1646,6 +1652,123 @@ export function createCompositeOutputPublisher(
 }
 
 const feishuAppClients = new WeakMap<OutputChannelConfig, { secret: string; client: FeishuAppClient }>();
+
+/** One IM connection registry per config generation; credential-keyed clients. */
+const imConnectionRegistries = new WeakMap<AppConfig, ImConnectionRegistry>();
+
+/**
+ * File member-directory wiring (IM-08). One host per config generation; each
+ * channel acquires its scope-isolated view exactly once (refcount 1) — views
+ * are released by generation dispose (IM-17 wiring). Directory data never
+ * reaches prompts or durable records beyond the opaque member key.
+ */
+const memberDirectoryHosts = new WeakMap<AppConfig, MemberDirectoryService>();
+const memberDirectoryViews = new WeakMap<AppConfig, Map<string, Promise<MemberDirectoryView>>>();
+
+function readFileDirectoryConfig(channelConfig: Record<string, unknown>): FileDirectoryConfig | undefined {
+  const directory = channelConfig.member_directory;
+  if (directory === null || typeof directory !== "object" || Array.isArray(directory)) return undefined;
+  const record = directory as Record<string, unknown>;
+  if (record.source !== "file") return undefined;
+  return directory as FileDirectoryConfig;
+}
+
+type FileDirectoryConfig = {
+  readonly source: "file";
+  readonly path: string;
+  readonly directory_id: string;
+  readonly identity_scope: { readonly kind: string; readonly id: string };
+  readonly watch?: boolean | undefined;
+  readonly debounce_ms?: number | undefined;
+  readonly poll_interval_seconds?: number | undefined;
+  readonly allowed_root?: string | undefined;
+};
+
+async function acquireFileDirectoryView(
+  config: AppConfig,
+  channelName: string,
+  directory: FileDirectoryConfig,
+  baseDir: string,
+): Promise<MemberDirectoryView> {
+  let views = memberDirectoryViews.get(config);
+  if (views === undefined) {
+    views = new Map();
+    memberDirectoryViews.set(config, views);
+  }
+  const key = `${channelName}\0${directory.path}\0${directory.directory_id}`;
+  let view = views.get(key);
+  if (view !== undefined) return view;
+  view = (async () => {
+    let host = memberDirectoryHosts.get(config);
+    if (host === undefined) {
+      host = new MemberDirectoryService();
+      memberDirectoryHosts.set(config, host);
+    }
+    return host.acquire({
+      path: directory.path,
+      baseDir,
+      directoryId: directory.directory_id,
+      identityScope: directory.identity_scope,
+      ...(directory.allowed_root !== undefined ? { allowedRoot: directory.allowed_root } : {}),
+      ...(directory.watch !== undefined ? { watch: directory.watch } : {}),
+      ...(directory.debounce_ms !== undefined ? { debounceMs: directory.debounce_ms } : {}),
+      ...(directory.poll_interval_seconds !== undefined ? { pollIntervalSeconds: directory.poll_interval_seconds } : {}),
+    });
+  })();
+  views.set(key, view);
+  return view;
+}
+
+interface FileDirectoryMention {
+  readonly mentionText: string;
+  readonly mobileReminder: string | undefined;
+}
+
+const NO_DIRECTORY_MENTION: FileDirectoryMention = { mentionText: "", mobileReminder: undefined };
+
+/**
+ * Resolves the commit author against a file member directory (member-directory
+ * design §3): exact scoped vcs account first, explicit author_mappings, then
+ * the deterministic tiers — guess stays OFF unless the channel opts in
+ * (channel.guess_author; file sources default false). The snapshot read here
+ * pins every later split of this report (D15). Unavailable, dirty or ambiguous
+ * directories never degrade to @all and never block the report itself.
+ */
+async function resolveFileDirectoryMention(options: {
+  readonly config: AppConfig;
+  readonly channelKind: string;
+  readonly channelName: string;
+  readonly directory: FileDirectoryConfig;
+  readonly authorMappings?: Record<string, string> | undefined;
+  readonly guessAuthor: boolean;
+  readonly guesser?: ChannelAuthorGuesser | undefined;
+  readonly reviewEvent: ReviewEvent;
+  readonly baseDir: string;
+}): Promise<FileDirectoryMention> {
+  const view = await acquireFileDirectoryView(options.config, options.channelName, options.directory, options.baseDir)
+    .catch(() => undefined);
+  if (view === undefined) return NO_DIRECTORY_MENTION;
+  const snapshot = view.getSnapshot();
+  if (snapshot.status !== "ready" || snapshot.members === undefined) return NO_DIRECTORY_MENTION;
+  const users = memberDirectoryChannelUsers(snapshot.members);
+  const match = await resolveChannelAuthor({
+    channelKind: options.channelKind,
+    input: { author: options.reviewEvent.author, provider: options.reviewEvent.provider,
+      submitterWorkspace: options.reviewEvent.provider === "p4" ? options.reviewEvent.submitterWorkspace : undefined,
+      sourceTrigger: options.reviewEvent.triggerName },
+    directory: { listUsers: async () => users },
+    policy: { mappings: options.authorMappings, guessAuthor: options.guessAuthor,
+      emailBlacklist: options.config.outputs.author_resolution?.email_blacklist },
+    guesser: options.guesser,
+  });
+  if (match.status !== "matched") return NO_DIRECTORY_MENTION;
+  const member = users.find(user => user.id === match.userId);
+  if (member === undefined) return NO_DIRECTORY_MENTION;
+  const rendered = renderMemberDirectoryMention(options.channelKind, member);
+  if (rendered.kind === "inline") return { mentionText: rendered.markup, mobileReminder: undefined };
+  if (rendered.kind === "text_reminder") return { mentionText: "", mobileReminder: rendered.mobile };
+  return NO_DIRECTORY_MENTION;
+}
 
 export function createOutputPublisherFromConfig(
   config: AppConfig,
@@ -2311,10 +2434,19 @@ export function createOutputPublisherFromConfig(
               ...(channel.issue_link_card ? { issueLinkCard: channel.issue_link_card } : {}),
             }
           : undefined;
+        // File member directory (IM-08): typed feishu mention, one snapshot per report.
+        let mention = rendering.mentionText;
+        const fileDirectory = readFileDirectoryConfig(channelConfig);
+        if (fileDirectory !== undefined && reviewEvent !== undefined) {
+          const resolved = await resolveFileDirectoryMention({ config, channelKind: channel.kind, channelName: channel.name,
+            directory: fileDirectory, authorMappings: channel.author_mappings, guessAuthor: channel.guess_author === true,
+            guesser: authorGuesser, reviewEvent, baseDir });
+          if (resolved.mentionText !== "") mention = `${mention}${mention ? " " : ""}${resolved.mentionText}`;
+        }
         return dispatcher.publishAggregatedProblems(
           renderedProblems,
           rendering.renderSummary(summary, renderedProblems, options?.title),
-          rendering.mentionText || undefined,
+          mention || undefined,
           aggregated,
         );
       },
@@ -2346,11 +2478,87 @@ export function createOutputPublisherFromConfig(
       },
       async publishSummary(summary: string, summaryProblems?: readonly ReviewProblem[], options?: ReviewSummaryPublishOptions): Promise<DispatchResult> {
         const renderedProblems = (summaryProblems ?? problems).map((problem) => rendering.renderProblem(problem));
-        return dispatcher.publishAggregatedProblems(
+        // File member directory (IM-08): wecom userid mention inline; mobile
+        // members ride one bounded text reminder after the report.
+        let mention = rendering.mentionText;
+        let mobileReminder: string | undefined;
+        const fileDirectory = readFileDirectoryConfig(channelConfig);
+        if (fileDirectory !== undefined && reviewEvent !== undefined) {
+          const resolved = await resolveFileDirectoryMention({ config, channelKind: channel.kind, channelName: channel.name,
+            directory: fileDirectory, authorMappings: channel.author_mappings, guessAuthor: channel.guess_author === true,
+            guesser: authorGuesser, reviewEvent, baseDir });
+          if (resolved.mentionText !== "") mention = `${mention}${mention ? " " : ""}${resolved.mentionText}`;
+          mobileReminder = resolved.mobileReminder;
+        }
+        const result = await dispatcher.publishAggregatedProblems(
           renderedProblems,
           rendering.renderSummary(summary, renderedProblems, options?.title),
-          rendering.mentionText || undefined,
+          mention || undefined,
         );
+        if (mobileReminder !== undefined && result.status === "published") {
+          await dispatcher.publishTextReminder("Code review report published; mentioned member please check.", { mentionedMobileList: [mobileReminder] });
+        }
+        return result;
+      },
+    };
+  }
+
+  if (channel.kind === "wecom_app") {
+    const connectionName = channel.connection;
+    const connection = connectionName !== undefined ? config.im?.connections?.[connectionName] : undefined;
+    if (connection === undefined || connection.kind !== "wecom_app" || channel.target === undefined) {
+      throw new Error(`WeCom application channel ${channel.name} requires a wecom_app connection and target.`);
+    }
+    let registry = imConnectionRegistries.get(config);
+    if (registry === undefined) {
+      registry = new ImConnectionRegistry({ env: resolveEnv });
+      imConnectionRegistries.set(config, registry);
+    }
+    const client = registry.wecomApp(connection);
+    const dispatcher = createWeComAppDispatcher({
+      client,
+      target: channel.target.kind === "appchat"
+        ? { kind: "appchat", chatId: channel.target.chat_id }
+        : {
+          kind: "recipients",
+          ...(channel.target.users !== undefined ? { users: channel.target.users } : {}),
+          ...(channel.target.parties !== undefined ? { parties: channel.target.parties } : {}),
+          ...(channel.target.tags !== undefined ? { tags: channel.target.tags } : {}),
+        },
+      channelName: channel.name,
+      identityPrefix: `wecom-app:${connection.corp_id}:${connection.agent_id}`,
+    });
+
+    const problems: ReviewProblem[] = [];
+    return {
+      handlesRendering: true,
+      noProblemsAction,
+      publishEmptySummary,
+      async publishProblem(problem: ReviewProblem): Promise<DispatchResult> {
+        problems.push(rendering.renderProblem(problem));
+        return { channel: channel.name, status: "published", raw: { collected: true } };
+      },
+      async publishSummary(summary: string, summaryProblems?: readonly ReviewProblem[], options?: ReviewSummaryPublishOptions): Promise<DispatchResult> {
+        const renderedProblems = (summaryProblems ?? problems).map((problem) => rendering.renderProblem(problem));
+        let mention = rendering.mentionText;
+        let mobileReminder: string | undefined;
+        const fileDirectory = readFileDirectoryConfig(channelConfig);
+        if (fileDirectory !== undefined && reviewEvent !== undefined) {
+          const resolved = await resolveFileDirectoryMention({ config, channelKind: channel.kind, channelName: channel.name,
+            directory: fileDirectory, authorMappings: channel.author_mappings, guessAuthor: channel.guess_author === true,
+            guesser: authorGuesser, reviewEvent, baseDir });
+          if (resolved.mentionText !== "") mention = `${mention}${mention ? " " : ""}${resolved.mentionText}`;
+          mobileReminder = resolved.mobileReminder;
+        }
+        const result = await dispatcher.publishAggregatedProblems(
+          renderedProblems,
+          rendering.renderSummary(summary, renderedProblems, options?.title),
+          mention || undefined,
+        );
+        if (mobileReminder !== undefined && result.status === "published") {
+          await dispatcher.publishTextReminder("Code review report published; mentioned member please check.", { mentionedMobileList: [mobileReminder] });
+        }
+        return result;
       },
     };
   }

@@ -223,7 +223,7 @@ describe("createWeComBotDispatcher", () => {
 		expect(md.content).toContain("Suggestion: Fix it.");
 	});
 
-	it("includes mentioned_mobile_list when provided", async () => {
+	it("moves mobile mentions to a bounded text message, keeping markdown clean (O07)", async () => {
 		const calls: { url: string; init: Parameters<FetchLike>[1] }[] = [];
 		const dispatcher = createWeComBotDispatcher({
 			webhookUrl: "https://qyapi.weixin.qq.com/hook/test",
@@ -236,9 +236,23 @@ describe("createWeComBotDispatcher", () => {
 
 		await dispatcher.publishAggregatedProblems(problems);
 
-		const body = JSON.parse(calls[0]?.init?.body ?? "{}");
-		const md = body.markdown as Record<string, unknown>;
-		expect(md.mentioned_mobile_list).toEqual(["13800138000", "13900139000"]);
+		// mentioned_mobile_list only exists on the text message type (W1);
+		// the report markdown carries no invalid mention fields.
+		expect(calls).toHaveLength(2);
+		const report = JSON.parse(calls[0]!.init?.body ?? "{}");
+		expect(JSON.stringify(report)).not.toContain("mentioned_mobile_list");
+		expect(report.msgtype).toBe("markdown");
+		const reminder = JSON.parse(calls[1]!.init?.body ?? "{}");
+		expect(reminder.msgtype).toBe("text");
+		expect((reminder.text as Record<string, unknown>).mentioned_mobile_list).toEqual(["13800138000", "13900139000"]);
+	});
+
+	it("fails the dispatch on a business errcode despite HTTP 200 (O07)", async () => {
+		const dispatcher = createWeComBotDispatcher({
+			webhookUrl: "https://qyapi.weixin.qq.com/hook/test",
+			fetch: async () => response({ errcode: 45009, errmsg: "api freq out of limit" }),
+		});
+		await expect(dispatcher.publishAggregatedProblems(problems)).rejects.toThrow(/errcode 45009/u);
 	});
 
 	it("appends WeCom mention text to the markdown content", async () => {

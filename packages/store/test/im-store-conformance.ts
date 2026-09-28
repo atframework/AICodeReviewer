@@ -1,0 +1,309 @@
+import { randomUUID } from "node:crypto";
+
+import { expect } from "vitest";
+
+import type { StoreDb } from "../src/database.js";
+import {
+  acceptImDelivery,
+  claimDueImReviewRequests,
+  consumeImAction,
+  consumeImRateLimit,
+  deleteExpiredImActions,
+  deleteExpiredImInbox,
+  deleteExpiredImRateLimits,
+  findImReviewRequest,
+  finishImReviewRequest,
+  getImAction,
+  imReviewJobId,
+  insertImAction,
+  listImActiveConfigSnapshotIds,
+  newImRowId,
+  normalizeRevision,
+  prepareImDispatch,
+  updateImReviewRequest,
+  type AcceptImDeliveryInput,
+  type NewImReviewRequest,
+} from "../src/im-store.js";
+
+/**
+ * IM-09 acceptance R02–R06 shared by the SQLite and real-PostgreSQL wrappers.
+ * Migration conformance (R01) runs in im-store.test.ts (fresh/verify) and the
+ * existing migration process suites cover cross-version readers.
+ */
+
+const T0 = new Date("2026-09-28T08:00:00Z");
+
+function deliveryInput(overrides: Partial<AcceptImDeliveryInput["delivery"]> = {}): AcceptImDeliveryInput {
+  return {
+    delivery: {
+      namespace: "ns-test",
+      connectionIdentity: "wecom-app:ww:1",
+      deliveryKind: "message",
+      deliveryKey: `msg-${randomUUID()}`,
+      payloadDigest: `sha256:${randomUUID()}`,
+      ...overrides,
+    },
+    now: T0,
+  };
+}
+
+function uniqueHex(): string {
+  return randomUUID().replaceAll("-", "") + "a1b2c3d4";
+}
+
+function request(overrides: Partial<NewImReviewRequest> = {}): NewImReviewRequest {
+  return {
+    requestId: `req-${randomUUID()}`,
+    runId: `run-${randomUUID()}`,
+    bindingId: "reviewers",
+    requestedBy: { type: "wecom_userid", id: "alice" },
+    conversation: JSON.stringify({ kind: "app_direct" }),
+    workspaceId: "ws-main",
+    sourceTrigger: "github-main",
+    repoRef: "org/service",
+    requestedRevision: uniqueHex(),
+    configSnapshotId: `cfg-${randomUUID()}`,
+    configFileDigest: "d".repeat(64),
+    configVersionJson: JSON.stringify({ configSnapshotId: "cfg", databaseRevision: 1, fileDigest: "d".repeat(64) }),
+    ...overrides,
+  };
+}
+
+function commandInput(delivery: AcceptImDeliveryInput, req: NewImReviewRequest, extra: Partial<NonNullable<AcceptImDeliveryInput["command"]>> = {}): AcceptImDeliveryInput {
+  return {
+    ...delivery,
+    command: {
+      request: req,
+      activeTarget: { workspaceInstance: "ws-main", sourceIdentity: "trigger:github-main:org/service" },
+      ...extra,
+    },
+  };
+}
+
+export async function runImStoreConformance(store: StoreDb): Promise<void> {
+  await acceptsAndDeduplicatesDeliveries(store);
+  await mergesActiveTargetsAndReleasesOnFinish(store);
+  await atomicActionConsumptionAndQuota(store);
+  await claimsWithFencing(store);
+  await dispatchSequencesAndSnapshotReferences(store);
+  await retentionLifecycle(store);
+}
+
+async function acceptsAndDeduplicatesDeliveries(store: StoreDb): Promise<void> {
+  const base = deliveryInput();
+  const first = await acceptImDelivery(store, base);
+  expect(first).toMatchObject({ kind: "created" });
+  const firstCreated = first as { kind: "created"; inboxId: string };
+
+  // Same key + same digest replays the original outcome (R02).
+  const replay = await acceptImDelivery(store, base);
+  expect(replay).toMatchObject({ kind: "duplicate", inboxId: firstCreated.inboxId });
+
+  // Same key + different digest never executes twice (R02).
+  const conflict = await acceptImDelivery(store, { ...base, delivery: { ...base.delivery, payloadDigest: "sha256:other" } });
+  expect(conflict).toMatchObject({ kind: "conflict" });
+
+  // A different key lands a new row; namespace/identity scoping holds.
+  const other = await acceptImDelivery(store, deliveryInput({ connectionIdentity: "wecom-app:ww:2" }));
+  expect(other).toMatchObject({ kind: "created" });
+}
+
+async function mergesActiveTargetsAndReleasesOnFinish(store: StoreDb): Promise<void> {
+  const delivery = deliveryInput();
+  const req = request({ requestedRevision: "0123456789abcdef0123456789abcdef01234567" });
+  const created = await acceptImDelivery(store, commandInput(delivery, req));
+  expect(created).toMatchObject({ kind: "created", requestId: req.requestId });
+
+  // Same trusted target through a different alias/revision casing merges (R03).
+  const upper = deliveryInput();
+  const merged = await acceptImDelivery(store, commandInput(upper, request({ requestedRevision: req.requestedRevision.toUpperCase() })));
+  expect(merged).toMatchObject({ kind: "active_merged", requestId: req.requestId });
+
+  // A different revision is a separate active request.
+  const separate = await acceptImDelivery(store, commandInput(deliveryInput(), request({ requestedRevision: "fedcba9876543210fedcba9876543210fedcba98" })));
+  expect(separate).toMatchObject({ kind: "created" });
+  const separateCreated = separate as { kind: "created"; requestId: string };
+  expect(await listImActiveConfigSnapshotIds(store, "ns-test")).toContain((await findImReviewRequest(store, "ns-test", separateCreated.requestId))!.configSnapshotId);
+
+  // Finishing releases the target so a new command creates a new request.
+  const claimed = (await claimDueImReviewRequests(store, { namespace: "ns-test", now: T0, leaseMs: 60_000, owner: "w1", limit: 10 }))
+    .find(entry => entry.request.requestId === req.requestId);
+  expect(claimed).toBeDefined();
+  const finished = await finishImReviewRequest(store, { requestId: req.requestId, fence: claimed!.fence, state: "succeeded", now: T0 });
+  expect(finished).toBe(true);
+  const afterFinish = await acceptImDelivery(store, commandInput(deliveryInput(), request({ requestedRevision: req.requestedRevision })));
+  expect(afterFinish).toMatchObject({ kind: "created" });
+}
+
+async function atomicActionConsumptionAndQuota(store: StoreDb): Promise<void> {
+  const actionId = `act-${randomUUID()}`;
+  await insertImAction(store, {
+    actionId,
+    namespace: "ns-test",
+    connectionIdentity: "wecom-app:ww:1",
+    issuedConfigVersion: "v1",
+    sourceMessageId: "msg-1",
+    sourceTaskId: null,
+    conversationJson: null,
+    recipientId: "alice",
+    bindingId: "reviewers",
+    workspaceId: "ws-main",
+    sourceTrigger: "github-main",
+    repoRef: "org/service",
+    revision: uniqueHex(),
+    expiresAt: new Date(T0.getTime() + 24 * 3600_000),
+    status: "issued",
+    createdAt: T0,
+    updatedAt: T0,
+  });
+
+  // First click consumes + creates the request in one transaction (R04/A10).
+  const req = request();
+  const consumed = await acceptImDelivery(store, commandInput(deliveryInput(), req, { consumeActionId: actionId }));
+  expect(consumed).toMatchObject({ kind: "created", requestId: req.requestId });
+  expect((await getImAction(store, actionId))?.status).toBe("consumed");
+
+  // Replaying the same action returns the original request (A10).
+  const replay = await acceptImDelivery(store, commandInput(deliveryInput({ deliveryKey: `replay-${randomUUID()}` }), request(), { consumeActionId: actionId }));
+  expect(replay).toMatchObject({ kind: "duplicate", requestId: req.requestId });
+
+  // A rate-limited command leaves no half-consumed rows (R04).
+  const windowStart = new Date(Math.floor(T0.getTime() / 60_000) * 60_000);
+  const actionId2 = `act-${randomUUID()}`;
+  await insertImAction(store, {
+    actionId: actionId2,
+    namespace: "ns-test",
+    connectionIdentity: "wecom-app:ww:1",
+    issuedConfigVersion: "v1",
+    sourceMessageId: "msg-2",
+    sourceTaskId: null,
+    conversationJson: null,
+    recipientId: "alice",
+    bindingId: "reviewers",
+    workspaceId: "ws-main",
+    sourceTrigger: "github-main",
+    repoRef: "org/service",
+    revision: uniqueHex(),
+    expiresAt: new Date(T0.getTime() + 3600_000),
+    status: "issued",
+    createdAt: T0,
+    updatedAt: T0,
+  });
+  const limited = await acceptImDelivery(store, commandInput(deliveryInput(), request({ requestedRevision: uniqueHex() }), {
+    consumeActionId: actionId2,
+    rateLimit: { bucketKey: "actor:alice", windowStart, limit: 0 },
+  }));
+  expect(limited).toMatchObject({ kind: "rate_limited" });
+  expect((await getImAction(store, actionId2))?.status).toBe("issued");
+  expect(await findImReviewRequest(store, "ns-test", (limited as { kind: string }).kind === "rate_limited" ? "missing" : "")).toBeUndefined();
+
+  // Standalone consumption on an expired action is rejected (A12).
+  const expiredId = `act-${randomUUID()}`;
+  await insertImAction(store, {
+    actionId: expiredId,
+    namespace: "ns-test",
+    connectionIdentity: "wecom-app:ww:1",
+    issuedConfigVersion: "v1",
+    sourceMessageId: null,
+    sourceTaskId: null,
+    conversationJson: null,
+    recipientId: null,
+    bindingId: "reviewers",
+    workspaceId: "ws-main",
+    sourceTrigger: "github-main",
+    repoRef: "org/service",
+    revision: "1111111111111111111111111111111111111111",
+    expiresAt: new Date(T0.getTime() - 1000),
+    status: "issued",
+    createdAt: T0,
+    updatedAt: T0,
+  });
+  expect(await consumeImAction(store, { actionId: expiredId, now: T0 })).toMatchObject({ kind: "expired" });
+}
+
+async function claimsWithFencing(store: StoreDb): Promise<void> {
+  const req = request();
+  await acceptImDelivery(store, commandInput(deliveryInput(), req));
+
+  const first = (await claimDueImReviewRequests(store, { namespace: "ns-test", now: T0, leaseMs: 60_000, owner: "w1", limit: 10 }))
+    .find(entry => entry.request.requestId === req.requestId);
+  expect(first).toBeDefined();
+
+  // A second claim while the lease holds does not double-assign (R05).
+  const second = (await claimDueImReviewRequests(store, { namespace: "ns-test", now: new Date(T0.getTime() + 1000), leaseMs: 60_000, owner: "w2", limit: 10 }))
+    .filter(entry => entry.request.requestId === req.requestId);
+  expect(second).toHaveLength(0);
+
+  // A stale fence loses ownership: zero-row update (R05).
+  expect(await updateImReviewRequest(store, { requestId: req.requestId, fence: first!.fence - 1, state: "validating", now: T0 })).toBe(false);
+  expect(await updateImReviewRequest(store, { requestId: req.requestId, fence: first!.fence, state: "validating", now: T0 })).toBe(true);
+
+  // After the lease expires another owner claims with a higher fence.
+  const renewed = (await claimDueImReviewRequests(store, { namespace: "ns-test", now: new Date(T0.getTime() + 61_000), leaseMs: 60_000, owner: "w2", limit: 10 }))
+    .find(entry => entry.request.requestId === req.requestId);
+  expect(renewed).toBeDefined();
+  expect(renewed!.fence).toBeGreaterThan(first!.fence);
+
+  // The old owner's fenced write no longer applies.
+  expect(await updateImReviewRequest(store, { requestId: req.requestId, fence: first!.fence, state: "queued", now: T0 })).toBe(false);
+}
+
+async function dispatchSequencesAndSnapshotReferences(store: StoreDb): Promise<void> {
+  const req = request();
+  await acceptImDelivery(store, commandInput(deliveryInput(), req));
+  const claimed = (await claimDueImReviewRequests(store, { namespace: "ns-test", now: T0, leaseMs: 60_000, owner: "w1", limit: 10 }))
+    .find(entry => entry.request.requestId === req.requestId)!;
+
+  // prepareDispatch increments atomically; the same seq keeps a stable job id.
+  const first = await prepareImDispatch(store, req.requestId, claimed.fence, T0);
+  const again = await prepareImDispatch(store, req.requestId, claimed.fence, T0);
+  expect(first).toBe(1);
+  expect(again).toBe(2);
+  expect(imReviewJobId(req.requestId, first!)).toBe(`im-review-${req.requestId}-1`);
+
+  // finishRequest creates terminal notifications in the same transaction.
+  const notificationId = `op-${randomUUID()}`;
+  const finished = await finishImReviewRequest(store, {
+    requestId: req.requestId,
+    fence: claimed.fence,
+    state: "partial",
+    notifications: [{ operationId: notificationId, destinationIdentity: "wecom-app:ww:1", operationKind: "final_status", payloadDigest: "sha256:x", nextAttemptAt: T0 }],
+    now: T0,
+  });
+  expect(finished).toBe(true);
+  const terminal = await findImReviewRequest(store, "ns-test", req.requestId);
+  expect(terminal?.state).toBe("partial");
+  expect(await listImActiveConfigSnapshotIds(store, "ns-test")).not.toContain(terminal?.configSnapshotId ?? "");
+
+  // A terminal request never re-enters the claim scan (§5 terminal rule).
+  expect((await claimDueImReviewRequests(store, { namespace: "ns-test", now: new Date(T0.getTime() + 120_000), leaseMs: 60_000, owner: "w3", limit: 100 }))
+    .filter(entry => entry.request.requestId === req.requestId)).toHaveLength(0);
+}
+
+async function retentionLifecycle(store: StoreDb): Promise<void> {
+  const active = request();
+  await acceptImDelivery(store, commandInput(deliveryInput(), active));
+
+  // Terminal inbox rows older than the horizon are removed; active rows stay.
+  const finished = request();
+  await acceptImDelivery(store, commandInput(deliveryInput(), finished));
+  const claimed = (await claimDueImReviewRequests(store, { namespace: "ns-test", now: T0, leaseMs: 60_000, owner: "w1", limit: 10 }))
+    .find(entry => entry.request.requestId === finished.requestId)!;
+  await finishImReviewRequest(store, { requestId: finished.requestId, fence: claimed.fence, state: "failed", now: T0 });
+
+  const before = new Date(T0.getTime() + 8 * 24 * 3600_000);
+  const removed = await deleteExpiredImInbox(store, "ns-test", before, [active.requestId]);
+  expect(removed).toBeGreaterThanOrEqual(1);
+  expect(await findImReviewRequest(store, "ns-test", active.requestId)).toBeDefined();
+
+  // Rate-limit windows and consumed actions expire with bounded deletes.
+  await consumeImRateLimit(store, { namespace: "ns-test", bucketKey: "cleanup", windowStart: new Date(T0.getTime() - 60_000) });
+  expect(await deleteExpiredImRateLimits(store, "ns-test", new Date(T0.getTime() + 120_000))).toBeGreaterThanOrEqual(1);
+  expect(await deleteExpiredImActions(store, "ns-test", new Date(T0.getTime() + 25 * 3600_000))).toBeGreaterThanOrEqual(0);
+
+  // Revision normalization feeds the active-target key (R03).
+  expect(normalizeRevision("r123")).toBe("123");
+  expect(normalizeRevision("0123ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF")).toBe("0123abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
+}
+
+export const conformanceHelpers = { deliveryInput, request, commandInput, T0, newImRowId };

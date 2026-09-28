@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { channelIdentityCapability, resolveChannelAuthor, resolveChannelDirectoryCacheTtlSeconds,
+import { channelIdentityCapability, memberDirectoryChannelUsers, resolveChannelAuthor, resolveChannelDirectoryCacheTtlSeconds,
 	DEFAULT_CHANNEL_DIRECTORY_CACHE_TTL_SECONDS, type ChannelUser } from "../src/channel-identity.js";
 import { feishuDirectoryUsers, resolveFeishuMention } from "../src/feishu-members.js";
 
@@ -48,10 +48,18 @@ describe("channel identity capability and conservative association", () => {
 		expect(await resolveChannelAuthor({ channelKind: kind, input, directory: { listUsers }, guesser })).toEqual({ status: "unavailable" });
 		expect(listUsers).not.toHaveBeenCalled(); expect(guesser).not.toHaveBeenCalled();
 	});
-	it.each(["feishu_bot", "wecom_bot"])("does not guess for %s without directory capability", async kind => {
+	it.each(["feishu_bot", "wecom_bot", "wecom_app"])("does not guess for %s without a configured directory source", async kind => {
 		const listUsers = vi.fn(directory.listUsers); const guesser = vi.fn();
-		await resolveChannelAuthor({ channelKind: kind, input, directory: { listUsers }, guesser });
+		await resolveChannelAuthor({ channelKind: kind, input, guesser });
 		expect(listUsers).not.toHaveBeenCalled(); expect(guesser).not.toHaveBeenCalled();
+	});
+	it.each(["feishu_bot", "wecom_bot", "wecom_app"])("gains directory capability for %s once a directory source is configured", async kind => {
+		const guesser = vi.fn(async () => "alice"); // candidate ids are opaque member keys
+		const users = memberDirectoryChannelUsers([{ key: "alice", displayName: "Alice", aliases: [], emails: [],
+			vcsAccounts: [], mention: { type: "feishu_open_id", id: "ou_alice" } }]);
+		const match = await resolveChannelAuthor({ channelKind: kind, input, directory: { listUsers: async () => users }, guesser,
+			policy: { guessAuthor: true } });
+		expect(match).toMatchObject({ status: "matched", userId: "alice" });
 	});
 	it.each([
 		input,

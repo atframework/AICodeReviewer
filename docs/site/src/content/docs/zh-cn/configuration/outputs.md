@@ -133,6 +133,7 @@ GitHub/Gitea 托管 issue 按事件 login、`outputs.author_resolution.email_map
 | `feishu_bot` | 通过自定义机器人把汇总问题推送到飞书群。 |
 | `feishu_app` | 通过自建应用机器人发送共享飞书报告卡片；见[配置和成员匹配](/zh-cn/integrations/im-bots/#飞书自建应用)。 |
 | `wecom_bot` | 通过 webhook 把汇总问题推送到企业微信群。 |
+| `wecom_app` | 通过企业微信自建应用把汇总报告发送给指定成员或一个应用群聊；见[IM 机器人](/zh-cn/integrations/im-bots/#企业微信自建应用)。 |
 
 ### `review_mode` —— PR review API 策略
 

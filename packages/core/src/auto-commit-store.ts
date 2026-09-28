@@ -452,6 +452,11 @@ export interface RemotePublicationOperation {
   readonly call: string;
   readonly strategy: "marker" | "state" | "delete" | "feishu_uuid" | "unqueryable";
   readonly status: "unknown" | "confirmed" | "rejected";
+  /**
+   * Logical send identity (e.g. app/agent plus part ordinal for chunked IM
+   * reports). Names only — never credentials, URLs, or recipient ids.
+   */
+  readonly identity?: string;
   /** Git API resource only. Webhook URLs and recipient IDs are never persisted. */
   readonly target?: string;
   readonly scope?: string;

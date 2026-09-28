@@ -318,7 +318,8 @@ outputs:
       mention_author: false                    # @ 提交作者
       mention_fallback: skip                   # 作者无法解析时的策略："all" | "skip"
       no_problems: { action: suppress }
-      # mentioned_mobile_list: ["+86-13800138000"]  # 可选：按手机号 @ 指定用户
+      # mentioned_mobile_list: ["+86-13800138000"]  # 可选：额外发送一条有界 text 提醒；
+      #   手机号提醒只存在于 text 消息类型
 ```
 
 ### 4. 把评审事件路由到企业微信
@@ -345,6 +346,82 @@ outputs:
 
 为遵守企业微信消息大小限制，消息会被**截断到 500 字符**，建议（suggestion）会被截断到
 **300 字符**，并以 `...` 后缀标注。
+
+## 外部成员目录（文件）
+
+没有通讯录 API 的 IM 频道（`wecom_bot`、`feishu_bot`、`wecom_app`）可以通过
+严格 YAML/JSON 成员文件解析提交作者，并输出**原生带类型的 @**，而不是纯文本
+`@username`：
+
+```yaml
+outputs:
+  channels:
+    - name: wecom-group
+      kind: wecom_bot
+      webhook_url_env: AICR_WECOM_WEBHOOK
+      mention_author: true
+      member_directory:
+        source: file
+        path: ./private/im-members.yaml
+        directory_id: engineering-wecom
+        identity_scope: { kind: wecom_corp, id: ww_example }
+        watch: true          # 父目录 watch，默认开启
+```
+
+成员文件格式见[配置参考](/zh-cn/reference/config-fields/)；要点：
+
+- 匹配顺序：按触发器隔离的精确 `vcs_accounts`、显式 `author_mappings`、
+  再是确定性的姓名/邮箱——猜测默认关闭，频道显式 `guess_author: true` 才开启。
+- `wecom_userid` 成员内联渲染 `<@userid>`；`wecom_mobile` 成员额外发送一条
+  有界 text 提醒（手机号提醒只在 text 消息生效）；飞书成员渲染带类型的
+  `<at>` 标签。
+- 整个文件校验通过才使用；否则报告照常发送但不去 @——损坏目录绝不回退
+  @all。每份报告固定一个目录快照，覆盖全部分片。
+- 文件中的姓名、别名、邮箱除类型化 mention id 外不进入 payload、prompt 或日志。
+
+## 企业微信自建应用
+
+`wecom_app` 渠道通过**自建应用**（`message/send`）把汇总报告发送给显式
+成员、部门或标签，或发送到一个 **appchat** 应用群（`appchat/send`）。
+凭据保存在 `im.connections` 条目中（明文秘密在数据库配置中密封；
+推荐使用 `app_secret_env`）：
+
+```yaml
+im:
+  connections:
+    corp-review:
+      kind: wecom_app
+      corp_id: ww_example
+      agent_id: 1000002
+      app_secret_env: AICR_WECOM_APP_SECRET
+
+outputs:
+  channels:
+    - name: wecom-app
+      kind: wecom_app
+      connection: corp-review
+      target:
+        kind: recipients          # 成员/部门/标签
+        users: [alice_zhang]
+    - name: wecom-group
+      kind: wecom_app
+      connection: corp-review
+      target:
+        kind: appchat             # 本应用创建的一个群
+        chat_id: exampleChat123
+```
+
+行为说明：
+
+- 报告为企业微信 Markdown，按 UTF-8 安全分片，每片至多 2048 字节；
+  每片有独立送达回执，已送达的分片不会重发。业务拒绝
+  （`errcode != 0`）会让渠道失败，而不是报告成功。
+- 只有明确的 token 错误码 `40014`/`42001` 会刷新一次 token 并重试一次；
+  超时保持结果 `unknown`，绝不盲发。
+- `appchat` 目标要求群由同一应用创建且应用可见范围包含根部门——
+  环境不允许该范围时 appchat 保持未验证，请使用 `recipients`。
+- IM 连接的消息命令与评审按钮另行配置
+  （见[管理 IM 连接与命令绑定](#管理-im-连接与命令绑定)）。
 
 ## 公共字段
 

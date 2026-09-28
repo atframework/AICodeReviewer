@@ -44,11 +44,24 @@ Read only the corresponding section of `docs/output-channels.md` or architecture
 
 ## Conditional references
 
-- WeCom applications, external member files, IM callbacks or command-triggered
-  reviews: read the [pending IM design](../../../docs/design/im-integrations.md)
-  and its [source record](../../../docs/ai/sources/im-integrations.md); load the
+- `wecom_app` channels (implemented): connection references `im.connections`;
+  recipients or one appchat target; reports split into UTF-8-safe 2048-byte
+  parts with per-part publication receipts; only `40014`/`42001` refresh the
+  token once; `wecom_bot` mobile mentions ride a bounded text reminder
+  (text is the only surface with `mentioned_mobile_list`) and business
+  `errcode != 0` fails the dispatch. See the channel table in
+  [output contracts](../../../docs/output-channels.md).
+- External member files (implemented): `member_directory.source: file` gives
+  wecom_bot/wecom_app/feishu_bot typed native mentions — scoped vcs_accounts,
+  author_mappings, guess-off defaults, one pinned snapshot per report, mobile
+  members via one bounded text reminder. See
+  [member-directory design](../../../docs/design/member-directory.md) and
+  `resolveFileDirectoryMention` in server bootstrap.
+- IM callbacks or command-triggered reviews: read the
+  [IM design](../../../docs/design/im-integrations.md) and its
+  [source record](../../../docs/ai/sources/im-integrations.md); load the
   [directory design](../../../docs/design/member-directory.md) only for file
-  identity/reload work. These are proposals, not implemented channel behavior.
+  identity/reload work. These remain proposals until their task cards land.
   During authorized implementation, use the matching task card in the
   [execution guide](../../../docs/design/im-implementation.md), its cited
   [implementation specification](../../../docs/design/im-implementation-spec.md) and

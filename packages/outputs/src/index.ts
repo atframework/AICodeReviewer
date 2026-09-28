@@ -4,14 +4,18 @@ import { isTransientIoError, isTransientIoHttpStatus, normalizePath, withTransie
 
 import { renderMarkdownCodeFence } from "./template-engine.js";
 import { toFeishuMarkdown, toWeComMarkdown } from "./im-markdown.js";
+import { chunkMarkdownSections } from "./wecom-app-dispatcher.js";
 import type { FeishuAppClient } from "./feishu-app.js";
 import { hasPublicationJournal, publicationFetch } from "./publication-journal.js";
 
 export { PublicationJournal, PublicationReconciliationError, validateRemotePublicationOperations } from "./publication-journal.js";
 
 export { FeishuAppClient, FeishuApiError, type FeishuAppOptions } from "./feishu-app.js";
+export { WeComAppClient, WeComAppError, type WeComAppOptions, type WeComAppMessage, type WeComRecipients, type WeComSendResult } from "./wecom-app.js";
+import type { WeComAppClient as WeComAppClientType, WeComAppMessage as WeComAppMessageType, WeComRecipients as WeComRecipientsType, WeComSendResult as WeComSendResultType } from "./wecom-app.js";
+export { chunkMarkdownSections, WECOM_APP_CONTENT_MAX_BYTES } from "./wecom-app-dispatcher.js";
 export { resolveFeishuMention, feishuDirectoryUsers, renderFeishuAuthorMention, type FeishuMember, type FeishuMentionInput, type FeishuMentionOptions } from "./feishu-members.js";
-export { channelIdentityCapability, matchChannelAuthor, resolveChannelAuthor, resolveChannelDirectoryCacheTtlSeconds, DEFAULT_CHANNEL_DIRECTORY_CACHE_TTL_SECONDS, type ChannelUser, type ChannelUserDirectory, type ChannelAuthorInput, type ChannelAuthorOptions, type ChannelAuthorMatch, type ChannelAuthorGuesser } from "./channel-identity.js";
+export { channelIdentityCapability, matchChannelAuthor, memberDirectoryChannelUsers, renderMemberDirectoryMention, resolveChannelAuthor, resolveChannelDirectoryCacheTtlSeconds, DEFAULT_CHANNEL_DIRECTORY_CACHE_TTL_SECONDS, type ChannelUser, type ChannelUserDirectory, type ChannelAuthorInput, type ChannelAuthorOptions, type ChannelAuthorMatch, type ChannelAuthorGuesser, type MemberDirectoryChannelUser } from "./channel-identity.js";
 
 export const outputsPackageName = "@aicr/outputs";
 
@@ -5848,13 +5852,67 @@ export interface WeComBotOptions {
 	readonly fetch?: FetchLike;
 }
 
+export interface WeComAppDispatcherOptions {
+	readonly client: WeComAppClientType;
+	readonly target:
+		| ({ readonly kind: "recipients" } & WeComRecipientsType)
+		| { readonly kind: "appchat"; readonly chatId: string };
+	readonly channelName?: string;
+	/** Corp/app identity prefix; part ordinals are appended per message. */
+	readonly identityPrefix: string;
+}
+
+export interface WeComAppDispatcher {
+	publishAggregatedProblems(problems: readonly ReviewProblem[], summary?: string, mentionText?: string): Promise<DispatchResult>;
+	/** One bounded text message; text is the only surface accepting mobile mentions (member-directory design §3). */
+	publishTextReminder(content: string, options?: {
+		readonly mentionedMobileList?: readonly string[] | undefined;
+		readonly mentionedList?: readonly string[] | undefined;
+	}): Promise<DispatchResult>;
+}
+
 export interface WeComBotDispatcher {
 	publishAggregatedProblems(problems: readonly ReviewProblem[], summary?: string, mentionText?: string): Promise<DispatchResult>;
+	/** One bounded text message with dynamic mobile mentions (directory-driven, D14). */
+	publishTextReminder(content: string, options?: {
+		readonly mentionedMobileList?: readonly string[] | undefined;
+		readonly mentionedList?: readonly string[] | undefined;
+	}): Promise<DispatchResult>;
 }
 
 export function createWeComBotDispatcher(options: WeComBotOptions): WeComBotDispatcher {
 	const fetchImpl = publicationFetch(options.fetch ?? defaultFetch(), "webhook");
 	const channel = options.channelName ?? "wecom_bot";
+	const mobiles = options.mentionedMobileList ?? [];
+
+	const postWebhook = async (body: Record<string, unknown>): Promise<Record<string, unknown>> => {
+		const response = await fetchImpl(options.webhookUrl, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify(body),
+		});
+		if (!response.ok) {
+			throw new OutputDispatchError(`WeCom webhook returned ${response.status}.`, {
+				status: response.status,
+				responseBody: await response.text(),
+			});
+		}
+		let raw: Record<string, unknown>;
+		try {
+			raw = (await response.json()) as Record<string, unknown>;
+		} catch {
+			throw new OutputDispatchError("WeCom webhook returned an unreadable body.", { status: response.status });
+		}
+		// HTTP 200 still carries business rejections (O07): errcode 0 is the
+		// only success; a non-zero code never reports as published.
+		const errcode = raw.errcode;
+		if (errcode !== undefined && errcode !== 0) {
+			throw new OutputDispatchError(`WeCom webhook rejected the message (errcode ${String(errcode)}).`, {
+				status: response.status,
+			});
+		}
+		return raw;
+	};
 
 	const dispatcher = {
 		async publishAggregatedProblems(
@@ -5871,40 +5929,96 @@ export function createWeComBotDispatcher(options: WeComBotOptions): WeComBotDisp
 			}
 			sections.push(...buildImProblemSections(problems));
 
-			const body: Record<string, unknown> = {
+			const raw = await postWebhook({
 				msgtype: "markdown",
 				markdown: {
 					content: toWeComMarkdown(sections.join("\n")),
 				},
-			};
-
-			if (options.mentionedMobileList && options.mentionedMobileList.length > 0) {
-				const md = body.markdown as Record<string, unknown>;
-				body.markdown = {
-					...md,
-					mentioned_mobile_list: options.mentionedMobileList,
-				};
-			}
-
-			const response = await fetchImpl(options.webhookUrl, {
-				method: "POST",
-				headers: { "content-type": "application/json" },
-				body: JSON.stringify(body),
 			});
 
-			if (!response.ok) {
-				throw new OutputDispatchError(`WeCom webhook returned ${response.status}.`, {
-					status: response.status,
-					responseBody: await response.text(),
+			// Mobile mentions only exist on the text message type (W1); the
+			// historical placement inside the markdown object was an invalid
+			// field the platform ignored. Send one bounded text reminder so the
+			// configured mobiles actually get mentioned.
+			if (mobiles.length > 0) {
+				const reminder = await postWebhook({
+					msgtype: "text",
+					text: {
+						content: "Code review report published; mentioned members please check.",
+						mentioned_mobile_list: [...mobiles],
+					},
 				});
+				return { channel, status: "published", raw: { report: raw, reminder } };
 			}
-
-			const raw = await response.json();
 			return { channel, status: "published", raw };
+		},
+
+		async publishTextReminder(content: string, reminderOptions?: {
+			readonly mentionedMobileList?: readonly string[] | undefined;
+			readonly mentionedList?: readonly string[] | undefined;
+		}) {
+			const text: Record<string, unknown> = { content };
+			if (reminderOptions?.mentionedMobileList?.length) text.mentioned_mobile_list = [...reminderOptions.mentionedMobileList];
+			if (reminderOptions?.mentionedList?.length) text.mentioned_list = [...reminderOptions.mentionedList];
+			const raw = await postWebhook({ msgtype: "text", text: text as { content: string } });
+			return { channel, status: "published" as const, raw };
 		},
 	};
 
 	return dispatcher;
+}
+
+export function createWeComAppDispatcher(options: WeComAppDispatcherOptions): WeComAppDispatcher {
+	const channel = options.channelName ?? "wecom_app";
+
+	const sendPart = async (
+		message: WeComAppMessageType,
+		part: number,
+	): Promise<{ result: WeComSendResultType; part: number }> => {
+		const identity = `${options.identityPrefix}:part-${part}`;
+		const result = options.target.kind === "recipients"
+			? await options.client.sendToRecipients(message, options.target, { publicationIdentity: identity })
+			: await options.client.sendToAppChat(message, options.target.chatId, { publicationIdentity: identity });
+		return { result, part };
+	};
+
+	return {
+		async publishAggregatedProblems(problems, summary, mentionText) {
+			const sections: string[] = [];
+			if (summary?.trim()) sections.push(summary.trim());
+			if (mentionText?.trim()) sections.push(mentionText.trim());
+			sections.push(...buildImProblemSections(problems));
+			const parts = chunkMarkdownSections(sections.map(section => toWeComMarkdown(section)));
+			if (parts.length === 0) {
+				return { channel, status: "published", raw: { parts: 0 } };
+			}
+			const details: unknown[] = [];
+			for (let index = 0; index < parts.length; index += 1) {
+				const { result, part } = await sendPart({ msgtype: "markdown", markdown: { content: parts[index]! } }, index + 1);
+				details.push({ part, ...result });
+				if (result.kind === "rejected" || result.kind === "unknown") {
+					// Delivered parts keep their receipts; the failure surfaces
+					// without resending anything already confirmed (O08).
+					return { channel, status: "failed", raw: { parts: parts.length, deliveredParts: index, details, failure: result } };
+				}
+			}
+			return { channel, status: "published", raw: { parts: parts.length, details } };
+		},
+
+		async publishTextReminder(content: string, reminderOptions?: {
+			readonly mentionedMobileList?: readonly string[] | undefined;
+			readonly mentionedList?: readonly string[] | undefined;
+		}) {
+			const text: Record<string, unknown> = { content };
+			if (reminderOptions?.mentionedMobileList?.length) text.mentioned_mobile_list = [...reminderOptions.mentionedMobileList];
+			if (reminderOptions?.mentionedList?.length) text.mentioned_list = [...reminderOptions.mentionedList];
+			const { result } = await sendPart({ msgtype: "text", text: text as { content: string } }, 1);
+			if (result.kind === "rejected" || result.kind === "unknown") {
+				return { channel, status: "failed", raw: result };
+			}
+			return { channel, status: "published", raw: result };
+		},
+	};
 }
 
 export function computeProblemFingerprint(problem: {

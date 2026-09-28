@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import type { RemotePublicationOperation } from "@aicr/core";
 import type { FetchLike, ResponseLike } from "./index.js";
 
-type Provider = "github" | "gitea" | "gitlab" | "feishu" | "webhook";
+type Provider = "github" | "gitea" | "gitlab" | "feishu" | "wecom_app" | "webhook";
 type Operation = RemotePublicationOperation;
 type Request = NonNullable<Parameters<FetchLike>[1]>;
 
@@ -73,6 +73,7 @@ export function validateRemotePublicationOperations(value: unknown): value is re
     if (typeof op.id !== "string" || !/^[a-f0-9]{64}$/u.test(op.id) || ids.has(op.id)) return false;
     ids.add(op.id);
     if (![op.channel, op.call].every(v => typeof v === "string" && v.length > 0)
+      || (op.identity !== undefined && typeof op.identity !== "string")
       || !["marker", "state", "delete", "feishu_uuid", "unqueryable"].includes(String(op.strategy))
       || !["unknown", "confirmed", "rejected"].includes(String(op.status))
       || ![op.attempts, op.reconciliations].every(v => Number.isSafeInteger(v) && Number(v) >= 0)
@@ -193,6 +194,12 @@ export class PublicationJournal {
     this.guard();
     const url = new URL(input);
     const scope = gitScope(url, provider);
+    // WeCom carries its credential in the query; operation identity must stay
+    // stable across token refreshes or a rotation would duplicate confirmed
+    // sends. Everything else in the URL is part of the request identity.
+    const hashInput = provider === "wecom_app" && url.searchParams.has("access_token")
+      ? (() => { const normalized = new URL(input); normalized.searchParams.delete("access_token"); return normalized.href; })()
+      : input;
     // Query pending writes before a live list changes the dispatcher's create/update branch.
     for (const op of this.operations.values()) {
       if (op.channel === channel && op.call === call && op.status === "unknown" && op.scope === scope && scope && !this.checked.has(op.id)) {
@@ -217,10 +224,19 @@ export class PublicationJournal {
     } else if (scope && method === "PUT" && url.searchParams.has("add_labels")) return fetch(input, init);
     if (provider === "feishu") strategy = "feishu_uuid";
     const { uuid: _uuid, timestamp: _timestamp, sign: _sign, ...stableBody } = body;
-    const id = hash([this.options.batchId, channel, call, method, input, stableBody, identity ?? null]);
+    const id = hash([this.options.batchId, channel, call, method, hashInput, stableBody, identity ?? null]);
     const existing = this.operations.get(id);
     if (existing?.status === "confirmed") return response(existing.response!, provider === "feishu");
-    if ((provider === "feishu" || provider === "webhook") && [...this.operations.values()].some(op => op.channel === channel && op.call === call && op.status === "confirmed")) {
+    // One message per logical send: a confirmed write blocks changed bodies.
+    // Chunked WeCom application reports deliberately issue several parts, so
+    // for wecom_app only a changed body under the SAME part identity blocks;
+    // Feishu/webhook keep the strict one-message-per-call rule.
+    const blocksConfirmed = (op: Operation): boolean => provider === "wecom_app"
+      ? (op.identity ?? undefined) === (identity ?? undefined)
+      : true;
+    if ((provider === "feishu" || provider === "webhook" || provider === "wecom_app")
+      && [...this.operations.values()].some(op => op.channel === channel && op.call === call && op.status === "confirmed"
+        && blocksConfirmed(op))) {
       throw new PublicationReconciliationError("request_changed_after_confirmed_write");
     }
     // A changed renderer/recipient must never turn an uncertain IM send into a new message.
@@ -236,6 +252,7 @@ export class PublicationJournal {
     }
     const op: Operation = {
       id, channel, call, strategy, status: "unknown",
+      ...(identity !== undefined ? { identity } : {}),
       ...(scope && strategy !== "unqueryable" ? { scope, target: `${url.origin}${url.pathname}`, collection } : {}),
       ...(strategy === "state" ? { expectedState: String(body.state) } : {}),
       attempts: (existing?.attempts ?? 0) + 1,
@@ -264,6 +281,10 @@ export class PublicationJournal {
     if (strategy === "unqueryable") {
       const data = object(raw);
       if ((data.code !== undefined && data.code !== 0) || (data.errcode !== undefined && data.errcode !== 0)) {
+        // WeCom answers business rejections with HTTP 200; recording them as
+        // rejected (like Feishu token codes) keeps later retries legal while
+        // webhook providers stay fail-closed unknown.
+        if (provider === "wecom_app") await this.save({ ...op, status: "rejected", updatedAt: this.now() });
         return withBody(sent, raw);
       }
     }

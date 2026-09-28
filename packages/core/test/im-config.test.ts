@@ -247,12 +247,17 @@ describe("C03: credential, identity and wiring mistakes fail at exact paths", ()
   });
 
   it("pins the staged capability boundary: schema acceptance alone never publishes", () => {
-    // wecom_app publishers land with IM-05 and file directories with IM-08;
-    // until then the capability gate must reject these records so no
-    // "published but cannot run" review binding can exist (C03, contracts §1).
-    expect(() => validateEntityCapabilities("channel", wecomAppChannel)).toThrow(/no publisher exists|no runtime consumer/u);
+    // The wecom_app publisher landed with IM-05; its records now publish.
+    expect(() => validateEntityCapabilities("channel", wecomAppChannel)).not.toThrow();
+    expect(() => validateEntityCapabilities("channel", { ...wecomAppChannel, connection: 42 })).toThrow();
+    // File directories landed with IM-06/IM-08; the capability gate accepts
+    // them on every IM channel kind now that consumers exist (C03/D14).
     expect(() => validateEntityCapabilities("channel", {
       name: "g", kind: "wecom_bot", webhook_url: "https://x/y",
+      member_directory: { source: "file", path: "./d", directory_id: "d", identity_scope: { kind: "wecom_corp", id: "ww" } },
+    })).not.toThrow();
+    expect(() => validateEntityCapabilities("channel", {
+      name: "g", kind: "gitea_issue",
       member_directory: { source: "file", path: "./d", directory_id: "d", identity_scope: { kind: "wecom_corp", id: "ww" } },
     })).toThrow(/no runtime consumer/u);
   });

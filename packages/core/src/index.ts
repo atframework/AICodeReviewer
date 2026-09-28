@@ -11,6 +11,7 @@ export * from "./memory-auto-commit-store.js";
 export * from "./config.js";
 export * from "./im-config.js";
 export * from "./im-contracts.js";
+export * from "./member-directory.js";
 export * from "./config-capabilities.js";
 export * from "./config-format.js";
 export * from "./config-matcher.js";

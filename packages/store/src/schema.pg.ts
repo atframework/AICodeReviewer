@@ -14,6 +14,7 @@ import {
   doublePrecision,
   integer,
   pgTable,
+  primaryKey,
   text,
 } from "drizzle-orm/pg-core";
 
@@ -199,3 +200,129 @@ export const modelCatalogSource = pgTable("model_catalog_source", {
   lastRefreshedAt: epochMs("last_refreshed_at").notNull(),
   etag: text("etag"),
 });
+
+
+// ---------------------------------------------------------------------------
+// IM tables — field-level mirror of the SQLite views (schema.ts). Same table
+// and column names; epoch-ms timestamps via epochMs (bigint), booleans native.
+// ---------------------------------------------------------------------------
+
+export const imInbox = pgTable("im_inbox", {
+  id: text("id").primaryKey(),
+  namespace: text("namespace").notNull(),
+  connectionIdentity: text("connection_identity").notNull(),
+  deliveryKind: text("delivery_kind").notNull(),
+  deliveryKey: text("delivery_key").notNull(),
+  payloadDigest: text("payload_digest").notNull(),
+  digestVersion: integer("digest_version").notNull().default(1),
+  receivedAt: epochMs("received_at").notNull(),
+  status: text("status").notNull(),
+  requestId: text("request_id"),
+});
+
+export const imReviewRequests = pgTable("im_review_requests", {
+  requestId: text("request_id").primaryKey(),
+  runId: text("run_id").notNull(),
+  namespace: text("namespace").notNull(),
+  bindingId: text("binding_id").notNull(),
+  connectionIdentity: text("connection_identity").notNull(),
+  requestedByType: text("requested_by_type").notNull(),
+  requestedById: text("requested_by_id").notNull(),
+  conversationJson: text("conversation_json").notNull(),
+  workspaceId: text("workspace_id").notNull(),
+  sourceTrigger: text("source_trigger").notNull(),
+  repoRef: text("repo_ref").notNull(),
+  requestedRevision: text("requested_revision").notNull(),
+  resolvedRevision: text("resolved_revision"),
+  baseRevision: text("base_revision"),
+  configSnapshotId: text("config_snapshot_id").notNull(),
+  configFileDigest: text("config_file_digest").notNull(),
+  configVersionJson: text("config_version_json").notNull(),
+  state: text("state").notNull(),
+  attemptsByPhaseJson: text("attempts_by_phase_json").notNull().default('{}'),
+  resumePhase: text("resume_phase"),
+  nextAttemptAt: epochMs("next_attempt_at"),
+  leaseOwner: text("lease_owner"),
+  leaseUntil: epochMs("lease_until"),
+  fence: integer("fence").notNull().default(0),
+  dispatchSeq: integer("dispatch_seq").notNull().default(0),
+  checkpointJson: text("checkpoint_json"),
+  errorCode: text("error_code"),
+  createdAt: epochMs("created_at").notNull(),
+  updatedAt: epochMs("updated_at").notNull(),
+});
+
+export const imActiveTargets = pgTable("im_active_targets", {
+  namespace: text("namespace").notNull(),
+  workspaceInstance: text("workspace_instance").notNull(),
+  sourceIdentity: text("source_identity").notNull(),
+  revision: text("revision").notNull(),
+  requestId: text("request_id").notNull(),
+  createdAt: epochMs("created_at").notNull(),
+}, (table) => [
+  primaryKey(table.namespace, table.workspaceInstance, table.sourceIdentity, table.revision),
+]);
+
+export const imActions = pgTable("im_actions", {
+  actionId: text("action_id").primaryKey(),
+  namespace: text("namespace").notNull(),
+  connectionIdentity: text("connection_identity").notNull(),
+  issuedConfigVersion: text("issued_config_version").notNull(),
+  sourceMessageId: text("source_message_id"),
+  sourceTaskId: text("source_task_id"),
+  conversationJson: text("conversation_json"),
+  recipientId: text("recipient_id"),
+  bindingId: text("binding_id").notNull(),
+  workspaceId: text("workspace_id").notNull(),
+  sourceTrigger: text("source_trigger").notNull(),
+  repoRef: text("repo_ref").notNull(),
+  revision: text("revision").notNull(),
+  expiresAt: epochMs("expires_at").notNull(),
+  consumedRequestId: text("consumed_request_id"),
+  status: text("status").notNull(),
+  createdAt: epochMs("created_at").notNull(),
+  updatedAt: epochMs("updated_at").notNull(),
+});
+
+export const imConversations = pgTable("im_conversations", {
+  namespace: text("namespace").notNull(),
+  connectionIdentity: text("connection_identity").notNull(),
+  conversationKind: text("conversation_kind").notNull(),
+  conversationId: text("conversation_id").notNull().default(''),
+  capabilitiesJson: text("capabilities_json"),
+  discoveredAt: epochMs("discovered_at").notNull(),
+  lastSeenAt: epochMs("last_seen_at").notNull(),
+  revokedAt: epochMs("revoked_at"),
+}, (table) => [
+  primaryKey(table.namespace, table.connectionIdentity, table.conversationKind, table.conversationId),
+]);
+
+export const imReplyOutbox = pgTable("im_reply_outbox", {
+  operationId: text("operation_id").primaryKey(),
+  namespace: text("namespace").notNull(),
+  requestId: text("request_id"),
+  actionId: text("action_id"),
+  destinationIdentity: text("destination_identity").notNull(),
+  operationKind: text("operation_kind").notNull(),
+  payloadDigest: text("payload_digest").notNull(),
+  state: text("state").notNull(),
+  expiry: epochMs("expiry"),
+  sealedReplyCredential: text("sealed_reply_credential"),
+  compactReceipt: text("compact_receipt"),
+  nextAttemptAt: epochMs("next_attempt_at"),
+  attempts: integer("attempts").notNull().default(0),
+  leaseOwner: text("lease_owner"),
+  leaseUntil: epochMs("lease_until"),
+  fence: integer("fence").notNull().default(0),
+  createdAt: epochMs("created_at").notNull(),
+  updatedAt: epochMs("updated_at").notNull(),
+});
+
+export const imRateLimits = pgTable("im_rate_limits", {
+  namespace: text("namespace").notNull(),
+  bucketKey: text("bucket_key").notNull(),
+  windowStart: epochMs("window_start").notNull(),
+  count: integer("count").notNull(),
+}, (table) => [
+  primaryKey(table.namespace, table.bucketKey, table.windowStart),
+]);

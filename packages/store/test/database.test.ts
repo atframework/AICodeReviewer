@@ -51,6 +51,16 @@ describe("store database", () => {
       ALTER TABLE review_runs DROP COLUMN vcs_kind;
       ALTER TABLE review_runs DROP COLUMN head_committed_at;
       DELETE FROM _migrations WHERE name = '009_review_run_vcs_stamp';
+      DROP TABLE IF EXISTS im_rate_limits;
+      DROP TABLE IF EXISTS im_reply_outbox;
+      DROP TABLE IF EXISTS im_conversations;
+      DROP TABLE IF EXISTS im_actions;
+      DROP TABLE IF EXISTS im_active_targets;
+      DROP TABLE IF EXISTS im_review_requests;
+      DROP INDEX IF EXISTS idx_im_inbox_received;
+      DROP INDEX IF EXISTS idx_im_inbox_delivery;
+      DROP TABLE IF EXISTS im_inbox;
+      DELETE FROM _migrations WHERE name = '011_im_tables';
     `);
     (await closeStoreDb(store));
     store = createStoreDb(join(tmpDir, "test.db"));

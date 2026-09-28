@@ -233,6 +233,7 @@ export const CHANNEL_KINDS = [
   "feishu_bot",
   "feishu_app",
   "wecom_bot",
+  "wecom_app",
 ] as const;
 
 /** Passthrough keys shared by every channel kind (rendering/token/repoRef). */
@@ -287,6 +288,9 @@ export const CHANNEL_KIND_FIELDS: Readonly<Record<string, FieldMap>> = {
   feishu_bot: FEISHU_BOT_FIELDS,
   feishu_app: { base_url: nonEmptyString },
   wecom_bot: WECOM_BOT_FIELDS,
+  // Connection reference and the send target are schema-declared (discriminated
+  // union); the passthrough surface carries only the reference name here.
+  wecom_app: { connection: nonEmptyString },
 };
 
 /** Declared channel fields allowed per kind (consumer-verified matrix). */
@@ -296,8 +300,11 @@ export const CHANNEL_DECLARED_KIND_FIELDS: Readonly<Record<string, readonly stri
   app_secret_env: ["feishu_app"],
   receive_id: ["feishu_app"],
   receive_id_type: ["feishu_app"],
-  member_directory: ["feishu_app"],
-  guess_author: ["feishu_app"],
+  // The directory node accepts API or file forms on every IM channel; the
+  // chat_id leaf is the feishu API form only (the file form has its own fields).
+  member_directory: ["feishu_app", "feishu_bot", "wecom_bot", "wecom_app"],
+  "member_directory.chat_id": ["feishu_app"],
+  guess_author: ["feishu_app", "feishu_bot", "wecom_bot", "wecom_app"],
   user_mappings: ["feishu_app"],
   severity_label_prefix: ["gitea_pr_review", "github_pr_review", "github_problem_issue", "gitlab_mr_review", "gitlab_problem_issue", "gitea_problem_issue"],
   severity_label_colors: ["gitea_pr_review", "github_pr_review", "github_problem_issue", "gitlab_mr_review", "gitlab_problem_issue", "gitea_problem_issue"],

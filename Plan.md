@@ -21,9 +21,9 @@
 范围确认（2026-09-28）：企业微信机器人包含 API 模式（`wecom_aibot` 连接）已确认纳入；
 `watch` 一词指 IM 回调事件监听（@机器人的命令与按钮事件），不含仓库订阅——
 长期 `watch/unwatch` 通知订阅另列扩展，不隐含在单次重新评审中，且已确认不纳入本次交付。
-实施环境结论：企业微信测试环境不接受自建应用可见范围为根部门，应用发送以成员通知
-（recipients）为准，appchat 目标保留实现但该环境不可用、真实平台验收记为环境受限；
-飞书为境内版（Lark 仅入口域名与账号体系不同、API 形态一致，`base_url` 已可配置，测试只测境内）；
+实施环境结论：应用发送以成员通知（recipients）为主路径；测试应用与机器人已获通讯录
+根权限，appchat 前提成立，IM-21 不验证权限受限负路径；飞书为境内版（Lark 仅入口域名
+与账号体系不同、API 形态一致，`base_url` 已可配置，测试只测境内）；
 公网回调 HTTPS 入口为 `https://aicr.x-ha.com/`，回调路由挂在其 `server.path_prefix` 前缀之后。
 禁止用 webhook URL 推导会话 ID，禁止把通讯录当作操作权限表。
 可执行 review 命令要求关系型 StoreDb 和已启用的持久 ConfigStore；file-only 模式仍可使用推送/文件目录。
@@ -50,12 +50,42 @@ checkbox 仅在实现接线、断言和适用门禁均通过后勾选；implemen
   有真实消费者的字段（引用完整性/密封/目的地授权链）翻 wired 并标注消费者，其余保持
   只读到对应任务接线（C08 闭环于 config-api 与浏览器用例：创建→编辑→暂存→发布→恢复、
   引用删除与协议切换原子拒绝）。
-- [ ] IM-04：企业微信应用 client、token 和业务错误。
-- [ ] IM-05：应用发布、模板、分片和真实 bootstrap 接线。
-- [ ] IM-06：严格 YAML/JSON 成员目录解析。
-- [ ] IM-07：父目录 watch、poll、原子 reload 和资源生命周期。
-- [ ] IM-08：身份映射、原生 @和同报告目录快照。
-- [ ] IM-09：SQLite/PG IM store、原子操作和迁移。
+- [x] IM-04：企业微信应用 client、token 和业务错误。
+  新增 outputs `wecom-app.ts`（token single-flight/过期/凭据隔离、message/send 与
+  appchat/send、判别 delivered/partial/rejected/unknown、固定 40014/42001 单次刷新）
+  与 server `im/connections.ts`（凭据解析/按凭据身份缓存）；O01–O04 覆盖于
+  `packages/outputs/test/wecom-app.test.ts`、`packages/server/test/im-connections.test.ts`。
+- [x] IM-05：应用发布、模板、分片和真实 bootstrap 接线。
+  新增 `wecom-app-dispatcher`（UTF-8 安全 2048 字节分片、固定 part 序号、逐片回执）
+  与 bootstrap wecom_app 分支（连接注册表、recipients/appchat 目标、混合路由）；
+  修复 webhook 手机号字段（有界 text 提醒）与业务 errcode 检查；发布日志扩展
+  wecom_app provider（凭据无关操作身份、分片 identity、errcode 记 rejected）；
+  O05–O08 覆盖于 `packages/server/test/wecom-app-publishing.test.ts`。
+- [x] IM-06：严格 YAML/JSON 成员目录解析。
+  新增 core `member-directory.ts`（严格 JSON 解析器含重复键/非有限数拒绝、YAML
+  uniqueKeys/禁别名/禁自定义 tag、上限与注入防护、按 scope 的 mention 类型校验、
+  不可变输出 + digest）；D01–D04 覆盖于 `packages/core/test/member-directory.test.ts`。
+- [x] IM-07：父目录 watch、poll、原子 reload 和资源生命周期。
+  新增 server `im/member-directory-service.ts`（父目录 watch + 300ms/2s debounce 上限、
+  周期内容摘要 poll、single-flight+排队跟随读、watcher 失败有界退避重挂、按路径共享
+  读取器/按 scope 隔离视图/引用计数释放、dirty 不用旧身份、错误态不供 last-good、
+  allowed_root 真实路径边界）；D05–D10 覆盖于
+  `packages/server/test/member-directory-service.test.ts`（14 例，含真实临时文件
+  原子替换/删除重建/同 mtime 用例）。
+- [x] IM-08：身份映射、原生 @和同报告目录快照。
+  channel-identity 能力改为按配置来源判定；新增 memberDirectoryChannelUsers/
+  renderMemberDirectoryMention（opaque member key、scoped vcs_accounts 精确匹配层、
+  按平台类型渲染）；bootstrap 三种 IM 频道接入文件目录（guess 默认关闭、author_mappings、
+  手机号走有界 text 补充提醒、每份报告固定一个快照）；能力门禁与字段 inventory 翻绿。
+  D11–D16 覆盖于 `packages/server/test/member-directory-publishing.test.ts` 与
+  `packages/outputs/test/channel-identity.test.ts`。
+- [x] IM-09：SQLite/PG IM store、原子操作和迁移。
+  双后端 011_im_tables 迁移（7 张表：inbox/requests/active-targets/actions/
+  conversations/reply-outbox/rate-limits，唯一键与索引齐备）+ im-store/im-store.pg
+  五组原子操作（acceptDelivery 含 action 消费/限额/active-target 同事务、claimRequest
+  CAS fence、prepareDispatch 序号、finishRequest 终态+释放+通知 outbox 同事务）+
+  retention 与 listImActiveConfigSnapshotIds；R01–R06 覆盖于 im-store-conformance
+  （SQLite + 真实 PG 一次性实例均通过；迁移锁竞争下 PG 套件按指南串行跑）。
 - [ ] IM-10：三种回调协议、验签、解密和固定向量。
 - [ ] IM-11：固定命令、会话发现、精确授权和持久接收。
 - [ ] IM-12：HTTP callback 路由、时限与持久确认。

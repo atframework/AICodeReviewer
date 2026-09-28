@@ -22,8 +22,9 @@
 
 ## 路线图
 
-实施已授权并开始（2026-09-28）：IM-00 协议基线、IM-01 共享类型/配置 schema、
-IM-02 实体注册与凭据密封、IM-03 管理表单闭环已完成，协议结论并入[来源记录](sources/im-integrations.md)。
+实施已授权并开始（2026-09-28）：IM-00–09 已完成（协议基线、schema/实体/表单、
+企业微信应用发送与发布接线、严格目录解析、watch/poll 热加载、目录身份与原生 @、
+SQLite/PG IM 持久化与原子操作），协议结论并入[来源记录](sources/im-integrations.md)。
 执行顺序与验收条件见 [Plan.md](../../Plan.md)，
 接口和模块取舍见 [IM 集成设计](../design/im-integrations.md)，
 通讯录格式与 watch/reload 见[成员目录设计](../design/member-directory.md)。

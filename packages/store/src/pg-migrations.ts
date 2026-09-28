@@ -383,6 +383,131 @@ ALTER TABLE review_runs ADD COLUMN vcs_kind text;
 ALTER TABLE review_runs ADD COLUMN head_committed_at bigint;
 `;
 
+const MIGRATION_011_IM_TABLES = `
+  CREATE TABLE IF NOT EXISTS im_inbox (
+    id text PRIMARY KEY,
+    namespace text NOT NULL,
+    connection_identity text NOT NULL,
+    delivery_kind text NOT NULL,
+    delivery_key text NOT NULL,
+    payload_digest text NOT NULL,
+    digest_version integer NOT NULL DEFAULT 1,
+    received_at bigint NOT NULL,
+    status text NOT NULL,
+    request_id text
+  );
+  CREATE UNIQUE INDEX idx_im_inbox_delivery ON im_inbox(namespace, connection_identity, delivery_kind, delivery_key);
+  CREATE INDEX idx_im_inbox_received ON im_inbox(received_at);
+
+  CREATE TABLE IF NOT EXISTS im_review_requests (
+    request_id text PRIMARY KEY,
+    run_id text NOT NULL,
+    namespace text NOT NULL,
+    binding_id text NOT NULL,
+    connection_identity text NOT NULL,
+    requested_by_type text NOT NULL,
+    requested_by_id text NOT NULL,
+    conversation_json text NOT NULL,
+    workspace_id text NOT NULL,
+    source_trigger text NOT NULL,
+    repo_ref text NOT NULL,
+    requested_revision text NOT NULL,
+    resolved_revision text,
+    base_revision text,
+    config_snapshot_id text NOT NULL,
+    config_file_digest text NOT NULL,
+    config_version_json text NOT NULL,
+    state text NOT NULL,
+    attempts_by_phase_json text NOT NULL DEFAULT '{}',
+    resume_phase text,
+    next_attempt_at bigint,
+    lease_owner text,
+    lease_until bigint,
+    fence integer NOT NULL DEFAULT 0,
+    dispatch_seq integer NOT NULL DEFAULT 0,
+    checkpoint_json text,
+    error_code text,
+    created_at bigint NOT NULL,
+    updated_at bigint NOT NULL
+  );
+  CREATE INDEX idx_im_requests_due ON im_review_requests(state, next_attempt_at);
+  CREATE INDEX idx_im_requests_snapshots ON im_review_requests(namespace, config_snapshot_id);
+
+  CREATE TABLE IF NOT EXISTS im_active_targets (
+    namespace text NOT NULL,
+    workspace_instance text NOT NULL,
+    source_identity text NOT NULL,
+    revision text NOT NULL,
+    request_id text NOT NULL,
+    created_at bigint NOT NULL,
+    PRIMARY KEY (namespace, workspace_instance, source_identity, revision)
+  );
+
+  CREATE TABLE IF NOT EXISTS im_actions (
+    action_id text PRIMARY KEY,
+    namespace text NOT NULL,
+    connection_identity text NOT NULL,
+    issued_config_version text NOT NULL,
+    source_message_id text,
+    source_task_id text,
+    conversation_json text,
+    recipient_id text,
+    binding_id text NOT NULL,
+    workspace_id text NOT NULL,
+    source_trigger text NOT NULL,
+    repo_ref text NOT NULL,
+    revision text NOT NULL,
+    expires_at bigint NOT NULL,
+    consumed_request_id text,
+    status text NOT NULL,
+    created_at bigint NOT NULL,
+    updated_at bigint NOT NULL
+  );
+  CREATE INDEX idx_im_actions_expiry ON im_actions(expires_at);
+
+  CREATE TABLE IF NOT EXISTS im_conversations (
+    namespace text NOT NULL,
+    connection_identity text NOT NULL,
+    conversation_kind text NOT NULL,
+    conversation_id text NOT NULL DEFAULT '',
+    capabilities_json text,
+    discovered_at bigint NOT NULL,
+    last_seen_at bigint NOT NULL,
+    revoked_at bigint,
+    PRIMARY KEY (namespace, connection_identity, conversation_kind, conversation_id)
+  );
+
+  CREATE TABLE IF NOT EXISTS im_reply_outbox (
+    operation_id text PRIMARY KEY,
+    namespace text NOT NULL,
+    request_id text,
+    action_id text,
+    destination_identity text NOT NULL,
+    operation_kind text NOT NULL,
+    payload_digest text NOT NULL,
+    state text NOT NULL,
+    expiry bigint,
+    sealed_reply_credential text,
+    compact_receipt text,
+    next_attempt_at bigint,
+    attempts integer NOT NULL DEFAULT 0,
+    lease_owner text,
+    lease_until bigint,
+    fence integer NOT NULL DEFAULT 0,
+    created_at bigint NOT NULL,
+    updated_at bigint NOT NULL
+  );
+  CREATE INDEX idx_im_outbox_due ON im_reply_outbox(state, next_attempt_at);
+
+  CREATE TABLE IF NOT EXISTS im_rate_limits (
+    namespace text NOT NULL,
+    bucket_key text NOT NULL,
+    window_start bigint NOT NULL,
+    count integer NOT NULL,
+    PRIMARY KEY (namespace, bucket_key, window_start)
+  );
+`;
+
 export const STORE_MIGRATION_STEPS: readonly MigrationStep[] = [
   pgSqlStep("001_initial", 0, 1, MIGRATION_001_INITIAL),
   pgSqlStep("002_reflection_memory", 1, 2, MIGRATION_002_REFLECTION_MEMORY),
@@ -399,10 +524,11 @@ export const STORE_MIGRATION_STEPS: readonly MigrationStep[] = [
     CREATE INDEX idx_webhook_events_history ON webhook_events(received_at DESC, id DESC);
     CREATE INDEX idx_llm_usage_run ON llm_usage(run_id);
   `),
+  pgSqlStep("011_im_tables", 10, 11, MIGRATION_011_IM_TABLES),
 ];
 
 export const STORE_MIGRATION_PLAN: NamespaceMigrationPlan = {
   namespace: STORE_MIGRATION_NAMESPACE,
-  targetVersion: 10,
+  targetVersion: 11,
   steps: STORE_MIGRATION_STEPS,
 };

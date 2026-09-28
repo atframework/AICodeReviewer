@@ -23,7 +23,8 @@ export type MentionChannelKind =
 	| "gitea_issue"
 	| "gitea_problem_issue"
 	| "feishu_bot"
-	| "wecom_bot";
+	| "wecom_bot"
+	| "wecom_app";
 
 function isGitMentionChannel(channelKind: MentionChannelKind): boolean {
 	return channelKind === "gitea_pr_review" ||
@@ -112,6 +113,7 @@ function renderFallbackMention(channelKind: MentionChannelKind): string {
 		case "feishu_bot":
 			return '<at user_id="all"></at>';
 		case "wecom_bot":
+		case "wecom_app":
 			return "<@all>";
 		case "gitea_pr_review":
 		case "github_pr_review":
@@ -138,6 +140,7 @@ export function renderMentions(
 		case "feishu_bot":
 			return usernames.map((u) => `<at user_id="${u}"></at>`).join(" ");
 		case "wecom_bot":
+		case "wecom_app":
 			return usernames.map((u) => `<@${u}>`).join(" ");
 		case "gitea_pr_review":
 		case "github_pr_review":

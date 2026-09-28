@@ -140,6 +140,7 @@ The publishing account needs assignment permission, and the target user must be 
 | `feishu_bot` | Push aggregated problems to a Feishu (飞书) group via custom bot. |
 | `feishu_app` | Send the shared Feishu report card through a custom application's bot; see [setup and member matching](/en/integrations/im-bots/#feishu-custom-application). |
 | `wecom_bot` | Push aggregated problems to a WeCom (企业微信) group via webhook. |
+| `wecom_app` | Send the aggregated report through a WeCom self-built application to explicit members or one appchat group; see [IM bots](/en/integrations/im-bots/#wecom-custom-application). |
 
 ### `review_mode` — PR review API strategy
 

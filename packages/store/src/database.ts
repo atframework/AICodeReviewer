@@ -477,4 +477,132 @@ export const STORE_SQLITE_MIGRATIONS = [
       CREATE INDEX idx_llm_usage_run ON llm_usage(run_id);
     `,
   },
+  {
+    name: "011_im_tables",
+    sql: `
+      CREATE TABLE IF NOT EXISTS im_inbox (
+        id TEXT PRIMARY KEY,
+        namespace TEXT NOT NULL,
+        connection_identity TEXT NOT NULL,
+        delivery_kind TEXT NOT NULL,
+        delivery_key TEXT NOT NULL,
+        payload_digest TEXT NOT NULL,
+        digest_version INTEGER NOT NULL DEFAULT 1,
+        received_at INTEGER NOT NULL,
+        status TEXT NOT NULL,
+        request_id TEXT
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_im_inbox_delivery
+        ON im_inbox(namespace, connection_identity, delivery_kind, delivery_key);
+      CREATE INDEX IF NOT EXISTS idx_im_inbox_received ON im_inbox(received_at);
+
+      CREATE TABLE IF NOT EXISTS im_review_requests (
+        request_id TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL,
+        namespace TEXT NOT NULL,
+        binding_id TEXT NOT NULL,
+        connection_identity TEXT NOT NULL,
+        requested_by_type TEXT NOT NULL,
+        requested_by_id TEXT NOT NULL,
+        conversation_json TEXT NOT NULL,
+        workspace_id TEXT NOT NULL,
+        source_trigger TEXT NOT NULL,
+        repo_ref TEXT NOT NULL,
+        requested_revision TEXT NOT NULL,
+        resolved_revision TEXT,
+        base_revision TEXT,
+        config_snapshot_id TEXT NOT NULL,
+        config_file_digest TEXT NOT NULL,
+        config_version_json TEXT NOT NULL,
+        state TEXT NOT NULL,
+        attempts_by_phase_json TEXT NOT NULL DEFAULT '{}',
+        resume_phase TEXT,
+        next_attempt_at INTEGER,
+        lease_owner TEXT,
+        lease_until INTEGER,
+        fence INTEGER NOT NULL DEFAULT 0,
+        dispatch_seq INTEGER NOT NULL DEFAULT 0,
+        checkpoint_json TEXT,
+        error_code TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_im_requests_due ON im_review_requests(state, next_attempt_at);
+      CREATE INDEX IF NOT EXISTS idx_im_requests_snapshots ON im_review_requests(namespace, config_snapshot_id);
+
+      CREATE TABLE IF NOT EXISTS im_active_targets (
+        namespace TEXT NOT NULL,
+        workspace_instance TEXT NOT NULL,
+        source_identity TEXT NOT NULL,
+        revision TEXT NOT NULL,
+        request_id TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (namespace, workspace_instance, source_identity, revision)
+      );
+
+      CREATE TABLE IF NOT EXISTS im_actions (
+        action_id TEXT PRIMARY KEY,
+        namespace TEXT NOT NULL,
+        connection_identity TEXT NOT NULL,
+        issued_config_version TEXT NOT NULL,
+        source_message_id TEXT,
+        source_task_id TEXT,
+        conversation_json TEXT,
+        recipient_id TEXT,
+        binding_id TEXT NOT NULL,
+        workspace_id TEXT NOT NULL,
+        source_trigger TEXT NOT NULL,
+        repo_ref TEXT NOT NULL,
+        revision TEXT NOT NULL,
+        expires_at INTEGER NOT NULL,
+        consumed_request_id TEXT,
+        status TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_im_actions_expiry ON im_actions(expires_at);
+
+      CREATE TABLE IF NOT EXISTS im_conversations (
+        namespace TEXT NOT NULL,
+        connection_identity TEXT NOT NULL,
+        conversation_kind TEXT NOT NULL,
+        conversation_id TEXT NOT NULL DEFAULT '',
+        capabilities_json TEXT,
+        discovered_at INTEGER NOT NULL,
+        last_seen_at INTEGER NOT NULL,
+        revoked_at INTEGER,
+        PRIMARY KEY (namespace, connection_identity, conversation_kind, conversation_id)
+      );
+
+      CREATE TABLE IF NOT EXISTS im_reply_outbox (
+        operation_id TEXT PRIMARY KEY,
+        namespace TEXT NOT NULL,
+        request_id TEXT,
+        action_id TEXT,
+        destination_identity TEXT NOT NULL,
+        operation_kind TEXT NOT NULL,
+        payload_digest TEXT NOT NULL,
+        state TEXT NOT NULL,
+        expiry INTEGER,
+        sealed_reply_credential TEXT,
+        compact_receipt TEXT,
+        next_attempt_at INTEGER,
+        attempts INTEGER NOT NULL DEFAULT 0,
+        lease_owner TEXT,
+        lease_until INTEGER,
+        fence INTEGER NOT NULL DEFAULT 0,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_im_outbox_due ON im_reply_outbox(state, next_attempt_at);
+
+      CREATE TABLE IF NOT EXISTS im_rate_limits (
+        namespace TEXT NOT NULL,
+        bucket_key TEXT NOT NULL,
+        window_start INTEGER NOT NULL,
+        count INTEGER NOT NULL,
+        PRIMARY KEY (namespace, bucket_key, window_start)
+      );
+    `,
+  },
 ];

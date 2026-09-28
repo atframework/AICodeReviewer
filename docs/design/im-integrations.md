@@ -336,10 +336,18 @@ mock、签名 fixture 和本地回环不能当作真实群 @或平台回调成�
   完整报告仍受路由与可见性限制。本条仅保留为将来扩展的设计草案。
 - API 模式机器人 receiveid/URL 校验/被动回复使用已核查官方样例建立 P0 测试向量，
   P6 验证实际回包；样例阅读不等于协议测试通过。
-- 实施环境已确认（2026-09-28）：企业微信测试环境不接受自建应用可见范围为根部门，
-  appchat/create+send 的前提不成立——应用发送以 message/send 成员通知（recipients）为准；
-  appchat 目标的 schema、client 与 dispatcher 实现保留（O02 仍以注入 transport 验证），
-  真实平台验收将其记为环境受限未验收。飞书为境内版；Lark 仅入口域名与账号体系不同，
+- 测试凭据与环境补充（2026-09-28）：本地 `development/secret/secret.yaml` 提供
+  webhook（`wxwork_robot.webhook`）与应用（`wxwork_app.{corp_id,agent_id,secret}`，
+  corp_id 当日补齐）凭据；智能机器人为**长连接模式**（仅
+  `wxwork_airobot_conn.{bot_id,secret}`，无回调 token/AES），首期 HTTP 回调的
+  wecom_aibot 路径在该租户保持 pending_external，除非改配回调模式。
+  测试应用与机器人已授予通讯录根权限，appchat 前提成立；IM-21 不验证权限受限
+  负路径。变量登记见[服务指南](../testing-services.md)。
+- 实施环境已确认（2026-09-28，同日更新）：应用发送以 message/send 成员通知
+  （recipients）为主路径；测试应用已获通讯录根权限，appchat 前提成立
+  （其 schema、client 与 dispatcher 已随 IM-04/05 实现，O02 以注入 transport 验证），
+  真实 appchat 验收在有本应用创建的群时进行。IM-21 不验证权限受限负路径
+  （无许可收件人、受限可见范围）。飞书为境内版；Lark 仅入口域名与账号体系不同，
   仓库现行合同将两域名视为同一 API 形态（`feishu-app.ts` 双域名校验，来源记录以
   larksuite 官方 SDK 核对过境内契约），`base_url` 已可配置，测试只覆盖境内，
   启用 Lark 前按来源记录复核。公网 HTTPS 回调入口为 `https://aicr.x-ha.com/`，

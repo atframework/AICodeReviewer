@@ -170,6 +170,9 @@ AICR 的 Redis 队列和自动批次存储保留完整连接 URL，由原生驱�
 | 变量组 | 必需 | 可选 |
 | --- | --- | --- |
 | 飞书 | `AICR_FEISHU_TEST_APP_ID`、`AICR_FEISHU_TEST_APP_SECRET`、`AICR_FEISHU_TEST_RECEIVE_ID` | `AICR_FEISHU_TEST_DIRECTORY_CHAT_ID` 指定另一来源群；`AICR_FEISHU_TEST_MENTION_OPEN_ID` 指定获准通知的测试成员，未设则不 @ |
+| 企业微信应用（IM-21） | `AICR_WECOM_TEST_CORP_ID`、`AICR_WECOM_TEST_AGENT_ID`、`AICR_WECOM_TEST_APP_SECRET` | `AICR_WECOM_TEST_APPCHAT_CHAT_ID` 指定本应用创建的 appchat 群（测试租户不接受根部门可见范围时缺省只验成员通知）；发送合成 Markdown 到测试成员并记录 msgid/invaliduser |
+| 企业微信 webhook（IM-21） | `AICR_WECOM_WEBHOOK_TEST_URL`（测试群机器人，勿复用生产的 `AICR_WECOM_WEBHOOK`） | 发送合成 markdown + text 各一条；检查业务 errcode |
+| 企业微信智能机器人 | —（当前不可验收） | 测试租户的智能机器人为**长连接模式**（仅 `bot_id`+`secret`，无回调 token/AES 凭据）；首期 HTTP 回调路径保持 pending_external，除非改配回调模式并补 `AICR_WECOM_AIBOT_TEST_*` 全组凭据 |
 | 智谱 | `AICR_ZHIPU_TEST_BASE_URL`、`AICR_ZHIPU_TEST_API_KEY` | `AICR_ZHIPU_TEST_KIND` 为 `openai_compatible`（默认）或 `anthropic`；固定模型 glm-5.3-flash |
 | Kimi | `AICR_KIMI_TEST_BASE_URL`、`AICR_KIMI_TEST_API_KEY` | `AICR_KIMI_TEST_KIND` 同上；固定模型 kimi-for-coding |
 
@@ -204,6 +207,12 @@ node tests/services/with-local-secrets.mjs kimi anthropic
 helper 从 `development/secret/secret.yaml` 逐字段读取：飞书
 `.channel.feishu_app.{app_id,app_secret,receive_id}`，智谱 `.llm.provider.zhipu.{baseURL,token}`，
 Kimi `.llm.provider.kimi_coding_backup.{baseURL,token}`。值只传给子进程，不保存为 `.env`。
+企业微信的本地来源（IM-21 用，同样只进子进程环境）：
+webhook `yq '.channel.wxwork_robot.webhook'`、应用
+`yq '.channel.wxwork_app.agent_id'` 与 `yq '.channel.wxwork_app.secret'`；
+**corp_id 不在该 YAML 中**（2026-09-28 核对，全树无 corp 键），应用路径验收前需另行提供并
+导出为 `AICR_WECOM_TEST_CORP_ID`。智能机器人凭据 `yq '.channel.wxwork_airobot_conn.{bot_id,secret}'`
+属长连接模式，不映射到 HTTP 回调验收变量。
 Anthropic 映射只接受代码中列出的两个官方 OpenAI 根地址；其他端点手动配置环境变量，
 避免猜测协议路径。CI 也直接提供环境变量并运行对应 Vitest 文件，不读取本地 YAML。
 

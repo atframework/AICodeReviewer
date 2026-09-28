@@ -372,7 +372,8 @@ outputs:
       mention_author: false                    # @-mention the commit author
       mention_fallback: skip                   # "all" | "skip" when author can't be resolved
       no_problems: { action: suppress }
-      # mentioned_mobile_list: ["+86-13800138000"]  # optional: @ specific users by phone
+      # mentioned_mobile_list: ["+86-13800138000"]  # optional: sends one bounded text
+      #   reminder; mobile mentions only exist on the text message type
 ```
 
 ### 4. Route review events to WeCom
@@ -400,6 +401,89 @@ plain-text rows.** Code fences are preserved. AICR applies
 
 To stay within WeCom message-size limits, messages are **truncated to 500
 characters** and suggestions to **300 characters**, with a `...` suffix.
+
+## External member directory (file)
+
+IM channels without a directory API (`wecom_bot`, `feishu_bot`, `wecom_app`)
+can resolve commit authors against a strict YAML/JSON member file and emit
+**native typed mentions** instead of plain `@username` text:
+
+```yaml
+outputs:
+  channels:
+    - name: wecom-group
+      kind: wecom_bot
+      webhook_url_env: AICR_WECOM_WEBHOOK
+      mention_author: true
+      member_directory:
+        source: file
+        path: ./private/im-members.yaml
+        directory_id: engineering-wecom
+        identity_scope: { kind: wecom_corp, id: ww_example }
+        watch: true          # parent-directory watch, default on
+```
+
+The member file format is documented in the
+[configuration reference](/en/reference/config-fields/); highlights:
+
+- Matching order: exact scoped `vcs_accounts` (trigger-isolated), explicit
+  `author_mappings`, then deterministic names/emails — guessing stays OFF
+  unless the channel opts in via `guess_author: true`.
+- `wecom_userid` members render `<@userid>` inline; `wecom_mobile` members
+  get one bounded text reminder (mobiles only work in text messages);
+  Feishu members render typed `<at>` tags.
+- The whole file validates or the report ships without mentions — broken
+  directories never fall back to @all. One directory snapshot is pinned per
+  report, including every split part.
+- Names, aliases and emails from the file never enter payloads, prompts or
+  logs beyond the typed mention id.
+
+## WeCom custom application
+
+The `wecom_app` channel sends the aggregated report through a **self-built
+application** (`message/send`) to explicit members, departments or tags, or to
+one **appchat** group (`appchat/send`). Credentials live in an
+`im.connections` entry (literal secrets are sealed in database config;
+`app_secret_env` is preferred):
+
+```yaml
+im:
+  connections:
+    corp-review:
+      kind: wecom_app
+      corp_id: ww_example
+      agent_id: 1000002
+      app_secret_env: AICR_WECOM_APP_SECRET
+
+outputs:
+  channels:
+    - name: wecom-app
+      kind: wecom_app
+      connection: corp-review
+      target:
+        kind: recipients          # members/departments/tags
+        users: [alice_zhang]
+    - name: wecom-group
+      kind: wecom_app
+      connection: corp-review
+      target:
+        kind: appchat             # one group created by this application
+        chat_id: exampleChat123
+```
+
+Behavior notes:
+
+- The report is WeCom Markdown, split into UTF-8-safe parts of at most
+  2048 bytes; every part carries its own delivery receipt, and a delivered
+  part is never resent. Business rejections (`errcode != 0`) fail the channel
+  instead of reporting success.
+- Only the explicit token error codes `40014`/`42001` trigger one token
+  refresh and one retry; timeouts keep the outcome `unknown` and never resend.
+- `appchat` targets require the group to be created by the same application
+  and its visible scope to include the root department — appchat stays
+  unverified when your environment forbids that scope; use `recipients`.
+- Message commands and review buttons for IM connections are configured
+  separately (see [Managing IM connections](#managing-im-connections-and-command-bindings)).
 
 ## Common fields
 

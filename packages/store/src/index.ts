@@ -7,5 +7,6 @@ export * from "./stats.js";
 export * from "./webhook-events.js";
 export * from "./history-retention.js";
 export * from "./review-deferrals.js";
+export * from "./im-store.js";
 export * from "./reflection.js";
 export * from "./model-catalog.js";
