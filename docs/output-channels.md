@@ -1,4 +1,4 @@
-# Output channels and MCP report contract
+# Output channels and MCP report specification
 
 This document is the user-facing module for AICodeReviewer report output. Keep it aligned with `packages/mcp-output/src/index.ts`, `packages/outputs/src/index.ts`, `packages/outputs/src/template-engine.ts`, `docs/ai/architecture.md` §3.9-§3.10, and `example/config.yaml`.
 

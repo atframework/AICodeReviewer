@@ -1,8 +1,8 @@
-# IM 实施合同
+# IM 实施规范
 
-状态：待实施。本文为[执行手册](im-implementation.md)固定跨模块接口和失败语义，
-不是当前代码 API 清单。现有代码事实与平台能力见[总体设计](im-integrations.md)及[来源记录](../ai/sources/im-integrations.md)。
-标为“新增”的文件、类型、字段和数据表需要在对应任务中创建。
+状态：分阶段实施中，完成范围以 [Plan.md](../../Plan.md) 和当前代码为准。本文为[执行手册](im-implementation.md)
+规定跨模块接口和失败处理方式，未完成部分不是现成 API。平台能力见[总体设计](im-integrations.md)及[来源记录](../ai/sources/im-integrations.md)。
+标为“新增”的位置须先核对实际代码，未创建的类型、字段和数据表在对应任务中实现。
 
 ## 1. 范围和默认决策
 
@@ -24,7 +24,7 @@
 | 身份模型 | 文件目录默认关闭猜测；沿用专用身份模型及预算，不改主评审 prompt，不用模型授权 |
 | 分发升级 | 不为本任务升级所有依赖、迁移全部历史配置或重构全部 publisher |
 
-要求持久 ConfigStore 是首期恢复合同的明确部署前提：`RuntimeConfigManager` 在 file-only 模式
+持久 ConfigStore 是首期恢复的部署前提：`RuntimeConfigManager` 在 file-only 模式
 返回 null snapshot，不能保证改动 YAML 后重启仍使用接收时的配置。当前运行时不受此提案影响。
 推广到 file-only 的持久配置副本属于后续独立设计，不由实施模型临时新增第二套快照格式。
 执行命令启用另需 runtime capability readiness：协议适配器、持久接收服务、worker 与密封密钥均已接线。
@@ -113,7 +113,7 @@ ReviewEvent 新增 optional `requestOrigin`：`{kind:'im_command', requestId, co
 ## 4. 持久数据和原子操作
 
 全部 IM 表使用现有 StoreDb；SQLite/PG 同语义。以部署 namespace 隔离数据。
-下列字段是逻辑合同，SQL 列可合并为经版本化 schema 校验的 JSON，但唯一键、索引与 CAS 字段必须可查询。
+下列字段是逻辑数据约定，SQL 列可合并为经版本化 schema 校验的 JSON，但唯一键、索引与 CAS 字段必须可查询。
 不可用任意 `runtime_state` JSON 代替需要数据库原子性的约束。
 
 | 表 | 必须保存的字段与约束 |

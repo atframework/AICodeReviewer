@@ -64,9 +64,9 @@ PowerShell 5.1 的 `>` 重定向和 `Out-File` 默认 UTF-16 LE 编码；需要�
 | Eval fixture 校验 | `pnpm eval:validate`（构建后） | `node packages/cli/dist/index.js eval --validate-only` |
 | 文档构建 | `pnpm docs:build` | `pnpm docs:build` |
 
-`pnpm eval:validate` 运行 `aicr eval --validate-only`，只校验 `eval/*.json` 的结构和预期 problem 合同——不需要 LLM，不需要 config 密钥。完整 `aicr eval` 会加载 config 并调用 LLM，应作为单独的、按环境配置的 benchmark 任务。
+`pnpm eval:validate` 运行 `aicr eval --validate-only`，只校验 `eval/*.json` 的结构和预期 problem 约定——不需要 LLM，不需要 config 密钥。完整 `aicr eval` 会加载 config 并调用 LLM，应作为单独的、按环境配置的 benchmark 任务。
 
-影响配置 shape、agent 适配器、MCP 工具合同、输出渲染、部署行为或公开工作流的变更，必须在同一次变更中更新对应文档、`example/config.yaml` 和 `example/README.md`。
+影响配置 shape、agent 适配器、MCP 工具接口约定、输出渲染、部署行为或公开工作流的变更，必须在同一次变更中更新对应文档、`example/config.yaml` 和 `example/README.md`。
 
 ### 本地服务集成测试
 
@@ -197,12 +197,12 @@ workspace 配置文件不能写系统级字段；遵守 `cache` / `defaults` / `
 - 内容页用 `.md`。两个首页（`en/index.mdx`、`zh-cn/index.mdx`）用 `.mdx`，以便渲染 Starlight 组件（hero frontmatter 加 `Card`、`CardGrid`、`LinkCard`、`Steps`、`Aside`）。MDX 由 Starlight 内置提供，无需额外集成；组件在纯 `.md` 中不会渲染。公开内容校验器同时扫描 `.md` 和 `.mdx`。
 - 交叉链接使用带 locale 前缀的路径（`/en/...`、`/zh-cn/...`）。
 
-当你改变配置 shape、输出合同或运行时行为时，请在同一次变更中更新两个 locale 的相关页面。
+当你改变配置 shape、输出渠道规范或运行时行为时，请在同一次变更中更新两个 locale 的相关页面。
 
 ## 工作流规则
 
 - 保持编辑最小且外科手术式；不要为了通过而削弱 lint、类型检查、测试或 markdown 门控。
 - 所有临时任务产物（草稿脚本、调试日志、一次性报告、benchmark 输出）都放在 `build/` 下，绝不放在仓库根目录、`eval/` 或任何包目录。
-- 公共/共享模块（`packages/cli/src`、`ReviewEvent`、模板上下文）必须保持平台中立——从 `@aicr/core` 导入规范 schema/常量，把 provider/channel 专属名称限制在配置合同、文档、测试和平台专属适配器内。
+- 公共/共享模块（`packages/cli/src`、`ReviewEvent`、模板上下文）必须保持平台中立——从 `@aicr/core` 导入规范 schema/常量，把 provider/channel 专属名称限制在配置约定、文档、测试和平台专属适配器内。
 
 完整、常驻的贡献者规则——包括需要避免重新引入的已知代码陷阱编号列表——请阅读仓库根目录的 `AGENTS.md`。

@@ -8,7 +8,7 @@ user-invocable: false
 
 1. Read the relevant unfinished item in the roadmap section of
    `docs/ai/index.md`. Use
-   [the documentation map](../../../docs/ai/index.md) for corresponding contracts
+   [the documentation map](../../../docs/ai/index.md) for corresponding specifications
    and decisions; consult milestones only when acceptance history matters.
 2. Map each acceptance claim to code, configuration wiring, consumer behavior,
    and meaningful tests. A schema field or mock alone does not establish runtime
@@ -28,7 +28,7 @@ user-invocable: false
    Use public records in conformance fixtures (`computeStreamId(receipt)` instead
    of adding a memory-only property). Local checkpoints cannot prove remote
    exactly-once publication. See [scheduling](../../../docs/ai/pitfalls/AGENTS.scheduling.md).
-5. Map the actual diff to docs/examples and update affected contracts in the same
+5. Map the actual diff to docs/examples and update affected specifications in the same
    change. For runtime or output work select the corresponding specialized skill;
    do not copy its checklist here. Run the applicable final baseline gates.
 6. Retire a completed task-artifact file (temporary design, execution plan, or
@@ -38,4 +38,4 @@ user-invocable: false
    Keep the roadmap section in `docs/ai/index.md` forward-looking.
 
 Report each material gap with its source, fix or remaining work, and validation.
-Do not require one test file per source file; test observable contracts and risks.
+Do not require one test file per source file; test observable behavior and risks.

@@ -44,13 +44,13 @@ agent CLI，再把结构化结果路由回 PR 评论、托管 issue 或 IM 机�
 ## AICR 做什么
 
 <CardGrid>
-  <Card title="结构化报告契约" icon="approve-check-circle">
+  <Card title="结构化报告规范" icon="approve-check-circle">
     Agent 通过一组固定的 MCP 工具上报发现，AICR 负责校验、去重和渲染。
     agent 的自由文本 stdout 不会成为报告。
   </Card>
   <Card title="多 agent 支持" icon="puzzle">
     Kilo Code、Claude Code、opencode、Zoo Code 和 Copilot CLI
-    共用同一套运行时契约，切换 agent 不用改流水线。
+    遵循同一套运行时约定，切换 agent 不用改流水线。
   </Card>
   <Card title="多 VCS 接入" icon="code-branch">
     GitHub、Gitea、Forgejo、GitLab 走 webhook；Perforce 和 Subversion 走
@@ -99,9 +99,9 @@ agent CLI，再把结构化结果路由回 PR 评论、托管 issue 或 IM 机�
   接入；Perforce (P4) 和 Subversion (SVN) 通过 trigger 端点接入。全部归一为同一个
   `ReviewEvent`。
 - **多 agent 支持。** Kilo Code、Claude Code、opencode、Zoo Code 和 Copilot CLI
-  共用同一套运行时契约。AICR 把你的 `ModelSpec` 翻译成每个工具的原生字段，并在
+  遵循同一套运行时约定。AICR 把你的 `ModelSpec` 翻译成每个工具的原生字段，并在
   run manifest 里记录不支持的能力降级，不会静默丢弃。
-- **结构化报告契约。** Agent 通过一组固定的 MCP 工具产出结果
+- **结构化报告规范。** Agent 通过一组固定的 MCP 工具产出结果
   （`aicr.report_problem`、`aicr.publish_summary`、`aicr.skip`、
   `aicr.fetch_more_context`、`aicr.try_blame`）。同一个 problem 可以渲染为
   PR 行内评论、托管 issue 或 IM 摘要卡片。
@@ -129,7 +129,7 @@ agent CLI，再把结构化结果路由回 PR 评论、托管 issue 或 IM 机�
 
 ## 评审输出规范
 
-每个发现都遵循同一套契约：无论由哪个 agent 产出、由哪个 channel 渲染，报告格式都
+每个发现都遵循同一套格式规则：无论由哪个 agent 产出、由哪个 channel 渲染，报告格式都
 一致。一个 problem 始终携带**严重级别**、**分类**、**文件路径**、**行范围**和人类可读的
 **message**（外加可选的修复 `suggestion`）。
 
@@ -139,7 +139,7 @@ agent CLI，再把结构化结果路由回 PR 评论、托管 issue 或 IM 机�
 | ---------- | -------------------------------------------------- |
 | `critical` | 合入前必须修复——数据丢失、安全漏洞、崩溃或数据损坏 |
 | `high`     | 在现实条件下有真实影响的疑似 bug 或漏洞            |
-| `medium`   | 值得处理的正确性、契约或性能风险                   |
+| `medium`   | 值得处理的正确性、接口或性能风险                   |
 | `low`      | 轻微问题或代码异味；可延后处理                     |
 | `info`     | 提示性说明或观察，无需操作                         |
 

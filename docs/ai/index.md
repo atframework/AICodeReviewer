@@ -1,17 +1,17 @@
 # AI 文档导航
 
 从任务涉及的代码开始。下面只用于定位资料，不要求先读路线图、整份架构或历史。
-长文先搜索标题/符号，再读对应章节；仅当当前合同解释不足时补充相关决策或里程碑。
+长文先搜索标题/符号，再读对应章节；仅当当前约定解释不足时补充相关决策或里程碑。
 设计文档和双语用户说明的统一入口见[文档目录](../README.md)。
 
 | 任务 | 首选实现与参考 |
 | --- | --- |
-| 当前待办与验收边界 | [Plan.md](../../Plan.md)：IM 应用、外部成员目录和回调重新评审，实施中（协议基线 IM-00 已核）；[路线图](#路线图)；Workspace 动态配置稳定合同见架构 §3.10、§3.14–3.16 |
+| 当前待办与验收边界 | [Plan.md](../../Plan.md)：IM 应用、外部成员目录和回调重新评审，IM-00–02 已完成；[路线图](#路线图)；Workspace 动态配置规则见架构 §3.10、§3.14–3.16 |
 | Config / workspace / model groups | `packages/core/src/config.ts`、server bootstrap；[架构 §3.10](architecture.md#310-配置体系)、[配置坑点](pitfalls/AGENTS.config-and-state.md) |
 | Webhook / 调度 / 去重 / PR 延期 | server runtime/scheduler/deferral-manager；[架构 §3.1](architecture.md#31-触发器与-reviewevent-归一化)、[调度坑点](pitfalls/AGENTS.scheduling.md) |
 | VCS / 多源上下文 / GitHub App | `packages/vcs/src/`、server credential wiring；[架构 §3.2](architecture.md#32-vcs-adapter-与-scoped-fetch)、[VCS 坑点](pitfalls/AGENTS.vcs.md) |
 | Prompt / agent / MCP / sandbox | core prompt-manager、agents runtime-bundle、mcp-output；[运行时 skill](../../.agents/skills/agent-runtime-integration/SKILL.md)、架构 §3.6–3.8 |
-| 输出 / 模板 / IM / 问题生命周期 | outputs、server bootstrap；[输出合同](../output-channels.md)、[输出 skill](../../.agents/skills/output-channel-contracts/SKILL.md) |
+| 输出 / 模板 / IM / 问题生命周期 | outputs、server bootstrap；[输出渠道规范](../output-channels.md)、[输出 skill](../../.agents/skills/output-channel-contracts/SKILL.md) |
 | Store / 用量 / 实时面板 | store、server live-runs/observability；[架构 §3.11](architecture.md#311-run-状态与可观测性) |
 | 模型目录 / 压缩 / reflection | llm、server catalog-service、core reflection；架构 §3.3、§3.5、§3.12–3.13 |
 | 验证 / 工具 / 公开文档站 | [基线门禁](AGENTS.repository-baseline.md)、[文档 skill](../../.agents/skills/docs-writing-style/SKILL.md)、[构建坑点](pitfalls/AGENTS.build-and-docs.md) |
@@ -23,19 +23,19 @@
 ## 路线图
 
 实施已授权并开始（2026-09-28）：IM-00 协议基线、IM-01 共享类型/配置 schema、
-IM-02 实体注册与凭据密封已完成，协议结论并入[来源记录](sources/im-integrations.md)。
+IM-02 实体注册与凭据密封、IM-03 管理表单闭环已完成，协议结论并入[来源记录](sources/im-integrations.md)。
 执行顺序与验收条件见 [Plan.md](../../Plan.md)，
 接口和模块取舍见 [IM 集成设计](../design/im-integrations.md)，
 通讯录格式与 watch/reload 见[成员目录设计](../design/member-directory.md)。
 开发模型按[执行手册](../design/im-implementation.md)的 IM-00–22 任务卡推进，
-使用[实施合同](../design/im-execution-contracts.md)和[103 组验收断言](../design/im-acceptance.md)逐项核验。
+使用[实施规范](../design/im-implementation-spec.md)和[103 组验收断言](../design/im-acceptance.md)逐项核验。
 review 命令的持久 ConfigStore 前提、配置接线及故障恢复不能省略。
 
 - 企业微信应用消息发送：成员通知和 appchat 目标分别接线，补齐业务错误与发布恢复。
 - 外部文件成员目录：平台身份隔离、原生 @、父目录 watch 与定时校验、新旧 generation 生命周期。
 - 企业微信应用/API 模式机器人与飞书应用回调：验签解密、持久接收、会话发现及独立命令授权。
 - 指定仓库/commit 重新评审：消息命令和按钮动作、持久任务、去重恢复、共享并发与受控结果通知。
-- 完成组合测试、双语当前功能文档/示例同步与真实平台验收；长期 watch/unwatch 订阅是否纳入待确认。
+- 完成组合测试、双语当前功能文档/示例同步与真实平台验收；watch/unwatch 仓库订阅已确认不纳入本次交付。
 
 ## 前瞻扩展（未纳入当前交付）
 
@@ -81,9 +81,9 @@ review 命令的持久 ConfigStore 前提、配置接线及故障恢复不能省
 | M22 P7 组合验收补齐、P8 收敛与资料退役 | 原交付记录；复审修正见 M23 | `milestones/M22.md` / `architecture.md` §3.10、§3.14–3.16 |
 | M23 P8 复审 | 凭据/输出/预览修复；当时遗留的本地缺口已在 M24 补齐 | [M23](milestones/M23.md) |
 | M24 跨版本迁移与停机排空 | 指定历史版本对与两平台真实服务验收完成，任务资料退役 | [M24](milestones/M24.md) |
-| M25 Workspace 与动态配置全量复审 | 高/中/低 31 项修复含双高危（发布期 workspace 校验、v2 准入回退），合同精炼见 D47；任务资料退役记录见 M26 | [M25](milestones/M25.md) / `decisions.md` D47 |
+| M25 Workspace 与动态配置全量复审 | 高/中/低 31 项修复含双高危（发布期 workspace 校验、v2 准入回退），规则完善见 D47；任务资料退役记录见 M26 | [M25](milestones/M25.md) / `decisions.md` D47 |
 | M26 Workspace 与动态配置再次复审 | generation 所有权、重复暂存、发布/恢复/预览边界修复与当前验收；任务资料已退役 | [M26](milestones/M26.md) |
-| M27 管理页面修订与模板/Prompt 管理 | kind 区块隐藏、Routing 修复、共享全局数据库优先（D48）、模板/prompt 实体（D49）；合同同步双语公开文档 | [M27](milestones/M27.md) / `decisions.md` D48–D49 |
+| M27 管理页面修订与模板/Prompt 管理 | kind 区块隐藏、Routing 修复、共享全局数据库优先（D48）、模板/prompt 实体（D49）；相关规则同步双语公开文档 | [M27](milestones/M27.md) / `decisions.md` D48–D49 |
 | M28 逐目标发布恢复与配置示例校验 | 批次 `publication_pending` 逐渠道回执续发（D50）、复合 publisher 恢复钩子、管理 API `publications`；文档配置片段全量 schema 校验与阴性用例 | [M28](milestones/M28.md) / `decisions.md` D50 |
 | M29 计划精简与 WSL 临时服务验收 | 精简历史、核对残留条件，真实 Gitea 指派及资源清理 | [M29](milestones/M29.md) / [服务验收](../testing-services.md) |
 | M30 环境变量验收与 SVN 修复 | 用户确认 P4/GitHub；飞书、两组 LLM、Podman SVN 及导出修复 | [M30](milestones/M30.md) |

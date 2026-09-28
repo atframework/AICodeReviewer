@@ -69,7 +69,7 @@ directories:
           id: alice_zhang
 ```
 
-| 字段 | 合同 |
+| 字段 | 约定 |
 | --- | --- |
 | `version` | 必填整数 1；未知版本拒绝整次 reload，不能猜测兼容 |
 | `directories` | 必填非空映射；稳定目录名供配置引用 |

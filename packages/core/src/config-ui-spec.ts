@@ -45,6 +45,7 @@ import {
 } from "./config-components.js";
 import { ConfigError } from "./config-format.js";
 import { appConfigSchema, llmProviderObjectSchema, routingRuleSchema, triggerObjectSchema } from "./config.js";
+import { IM_CONNECTION_KINDS } from "./im-config.js";
 import type {
   ConfigUiControlKind,
   ConfigUiEntityKind,
@@ -117,6 +118,7 @@ const OPTIONS_SOURCES = [
   { id: "workspaces", label: "Workspaces" },
   { id: "templates", label: "Templates" },
   { id: "prompts", label: "System prompts" },
+  { id: "im_connections", label: "IM connections" },
   { id: "secret_envs", label: "Secret environment variables" },
   { id: "path_template_variables", label: "Path template variables" },
 ] as const;
@@ -161,6 +163,12 @@ const PROMPT_REF_PATHS: Readonly<Record<string, true>> = {
   "workspaces.defaults.prompt.extra_system_prompt": true,
   "workspaces.instances.*.prompt.system_prompt": true,
   "workspaces.instances.*.prompt.extra_system_prompt": true,
+};
+
+/** IM connection reference fields (im.connections keys), by exact path. */
+const IM_CONNECTION_REF_PATHS: Readonly<Record<string, true>> = {
+  "im.command_bindings.*.connection": true,
+  "outputs.channels[].connection": true,
 };
 
 /** Routing leaf → options source (reference fields with no inventory twin). */
@@ -248,6 +256,26 @@ const PROVIDER_FIELD_KINDS = buildFieldKindLookup(PROVIDER_KIND_FIELDS, { api_ve
 const TRIGGER_FIELD_KINDS = buildFieldKindLookup(TRIGGER_KIND_FIELDS, TRIGGER_DECLARED_KIND_FIELDS);
 const CHANNEL_FIELD_KINDS = buildFieldKindLookup(CHANNEL_KIND_FIELDS, CHANNEL_DECLARED_KIND_FIELDS);
 
+// IM connection fields per protocol kind: schema-verified applicability
+// (im-config.ts discriminated union); shared names come via the declared map.
+const IM_CONNECTION_FIELD_KINDS = buildFieldKindLookup(
+  {
+    wecom_app: { corp_id: true, agent_id: true, app_secret: true, app_secret_env: true },
+    wecom_aibot: { corp_id: true, aibot_id: true },
+    feishu_app: { app_id: true, app_secret: true, app_secret_env: true, base_url: true, tenant_key: true },
+  },
+  {
+    token: ["wecom_app", "wecom_aibot"],
+    token_env: ["wecom_app", "wecom_aibot"],
+    encoding_aes_key: ["wecom_app", "wecom_aibot"],
+    encoding_aes_key_env: ["wecom_app", "wecom_aibot"],
+    verification_token: ["feishu_app"],
+    verification_token_env: ["feishu_app"],
+    encrypt_key: ["feishu_app"],
+    encrypt_key_env: ["feishu_app"],
+  },
+);
+
 function lookupKinds(lookup: FieldKindLookup, relativePath: string): readonly string[] | undefined {
   const withoutWildcard = relativePath.endsWith(".*") ? relativePath.slice(0, -2) : relativePath;
   const dot = withoutWildcard.indexOf(".");
@@ -262,6 +290,9 @@ function kindOptionsForPage(pageId: string): readonly string[] {
   if (pageId === "triggers") {
     return [...triggerObjectSchema.shape.kind.options];
   }
+  if (pageId === "im-connections") {
+    return [...IM_CONNECTION_KINDS];
+  }
   return [...CHANNEL_KINDS];
 }
 
@@ -274,6 +305,7 @@ const KIND_DATA_BY_PAGE: Readonly<Record<string, FieldKindData>> = {
   providers: { lookup: PROVIDER_FIELD_KINDS, allKinds: kindOptionsForPage("providers") },
   triggers: { lookup: TRIGGER_FIELD_KINDS, allKinds: kindOptionsForPage("triggers") },
   channels: { lookup: CHANNEL_FIELD_KINDS, allKinds: kindOptionsForPage("channels") },
+  "im-connections": { lookup: IM_CONNECTION_FIELD_KINDS, allKinds: kindOptionsForPage("im-connections") },
 };
 
 function kindsForField(pageId: string, scope: "entity" | "globals", relativePath: string): readonly string[] | undefined {
@@ -371,6 +403,9 @@ function optionsSourceForRow(row: ConfigFieldSpec, control: ConfigUiControlKind)
   }
   if (PROMPT_REF_PATHS[row.path] === true) {
     return "prompts";
+  }
+  if (IM_CONNECTION_REF_PATHS[row.path] === true) {
+    return "im_connections";
   }
   return controlBasedOptionsSource(control);
 }
@@ -569,6 +604,29 @@ export const PAGE_LAYOUT: readonly ConfigUiPageLayout[] = [
     ],
   },
   {
+    id: "im-connections",
+    label: "IM connections",
+    entity: { kind: "im_connection", collection: "im_connections", idField: null, valueShape: "object", kindField: "kind" },
+    globals: true,
+    sections: [
+      { id: "identity", label: "Identity", scope: "entity", match: ["$name", "kind", "enabled"] },
+      { id: "protocol", label: "Protocol identity", scope: "entity", match: ["corp_id", "agent_id", "aibot_id", "app_id", "base_url", "tenant_key", "app_secret", "app_secret_env"] },
+      { id: "callback", label: "Callback credentials", scope: "entity", match: ["callback"], collapsed: true },
+    ],
+  },
+  {
+    id: "im-bindings",
+    label: "IM command bindings",
+    entity: { kind: "im_command_binding", collection: "im_command_bindings", idField: null, valueShape: "object" },
+    globals: true,
+    sections: [
+      { id: "identity", label: "Identity", scope: "entity", match: ["$name", "enabled"] },
+      { id: "access", label: "Actors & conversations", scope: "entity", match: ["connection", "actors", "conversations", "commands"] },
+      { id: "repositories", label: "Repository aliases", scope: "entity", match: ["repositories"], collapsed: true },
+      { id: "policy", label: "Report policy", scope: "entity", match: ["report_policy"] },
+    ],
+  },
+  {
     id: "advanced",
     label: "Advanced",
     globals: true,
@@ -577,9 +635,6 @@ export const PAGE_LAYOUT: readonly ConfigUiPageLayout[] = [
       { id: "admin", label: "Admin", scope: "globals", match: ["admin"] },
       { id: "sources", label: "Config sources", scope: "globals", match: ["config_sources"] },
       { id: "storage", label: "Storage", scope: "globals", match: ["storage"] },
-      // Readonly until the IM-03 management page introduces connection and
-      // binding entity forms; every row here is unwired inventory.
-      { id: "im", label: "IM integrations (read-only)", scope: "globals", match: ["im"], collapsed: true },
     ],
   },
   { id: "versions", label: "Versions", globals: false, sections: [] },
@@ -602,13 +657,12 @@ const PAGE_ASSIGNMENT: readonly (readonly [string, string])[] = [
   ["compression.", "agent"],
   ["workspaces.", "workspaces"],
   ["queue.", "queue"],
+  ["im.connections.", "im-connections"],
+  ["im.command_bindings.", "im-bindings"],
   ["server.", "advanced"],
   ["admin.", "advanced"],
   ["config_sources.", "advanced"],
   ["storage.", "advanced"],
-  // IM connections/bindings stay on Advanced as readonly unwired fields until
-  // the IM-03 management page introduces their entity forms.
-  ["im.", "advanced"],
 ];
 
 function pageIdForRow(row: ConfigFieldSpec): string | undefined {
@@ -629,6 +683,8 @@ const ENTITY_PATH_PREFIX: Readonly<Record<string, string>> = {
   workspaces: "workspaces.instances.*.",
   templates: "outputs.templates.",
   prompts: "prompts.system.",
+  "im-connections": "im.connections.*.",
+  "im-bindings": "im.command_bindings.*.",
 };
 
 /** Entity record keys the schema requires (absent is NOT valid). */
@@ -636,6 +692,7 @@ const REQUIRED_ENTITY_KEYS: Readonly<Record<string, readonly string[]>> = {
   providers: ["id", "kind"],
   triggers: ["name", "kind"],
   channels: ["name", "kind"],
+  "im-connections": ["kind"],
 };
 
 // ---------------------------------------------------------------------------
@@ -841,7 +898,7 @@ function buildTriggerReposItemFields(sectionId: string): readonly ConfigUiField[
 }
 
 /** Synthetic map-collection name field (record key is the id; value holds no name). */
-function syntheticNameField(kind: "model_group" | "workspace" | "template" | "prompt", sectionId: string): ConfigUiField {
+function syntheticNameField(kind: "model_group" | "workspace" | "template" | "prompt" | "im_connection" | "im_command_binding", sectionId: string): ConfigUiField {
   return {
     id: `${kind}:$name`,
     path: [],
@@ -1080,6 +1137,14 @@ function buildPage(layout: ConfigUiPageLayout, ctx: BuildContext): ConfigUiPage 
     if (layout.id === "prompts") {
       const nameSection = place("entity", "$name");
       nameSection.fields.push(syntheticNameField("prompt", nameSection.id));
+    }
+    if (layout.id === "im-connections") {
+      const nameSection = place("entity", "$name");
+      nameSection.fields.push(syntheticNameField("im_connection", nameSection.id));
+    }
+    if (layout.id === "im-bindings") {
+      const nameSection = place("entity", "$name");
+      nameSection.fields.push(syntheticNameField("im_command_binding", nameSection.id));
     }
   }
 

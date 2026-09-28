@@ -361,3 +361,15 @@ IM channel 类型共享[输出通道配置](/zh-cn/configuration/outputs/)中记
 
 关于路由、target-kind 匹配和零问题策略，见[输出通道](/zh-cn/integrations/output-channels/)和
 [输出通道配置](/zh-cn/configuration/outputs/)。
+
+## 管理 IM 连接与命令绑定
+
+仪表盘的**配置**页签为 IM 集成提供两个实体页面：**IM 连接**与**IM 命令绑定**。
+连接保存协议身份与凭据（`wecom_app`、`wecom_aibot` 或 `feishu_app`）；
+命令绑定引用某个连接，并定义哪些带类型的操作人、会话与命令可以发起评审。
+在抽屉中输入的明文凭据会在持久化边界密封，之后不再回显；
+删除或改名仍被绑定或频道引用的连接时，发布边界会原子地拒绝。
+
+这两个页面当前只管理**草稿配置**：发送、回调与评审命令随相应运行时
+集成逐步生效，命令绑定默认停用。`im.*` 字段合同见
+[配置字段参考](/zh-cn/reference/config-fields/)。

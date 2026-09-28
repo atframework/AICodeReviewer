@@ -93,7 +93,7 @@ LLM_TOKEN="$(yq -r '.llm.provider.xiaomimimo_token_plan.token' development/secre
 
 - 部署时将该优先级写入 `llm.model_chain.lifecycle`：首条目 `zhipu` / `glm-5.3-flash` 为默认模型，其后按上表顺序追加代码分析的整条链作为 fallback，再设置 `llm.triage_model_chain: lifecycle`。workspace defaults / instances 可用同名字段覆盖分组选择；各层均未配置时继承该 workspace 的主链组。旧数组配置需要先迁移，不能直接用于新版本。
 - 适用面：Git 服务 issue/PR 的 triage 关闭决策，以及支持增量生命周期的 PR/MR 已解决问题复核和 `gitea_problem_issue` / `github_problem_issue` 的关闭或标记已解决。指纹、文件覆盖范围和提交祖先检查先生成候选，只有该模型链明确确认后才执行 destructive lifecycle action；调用失败、输出缺失或上下文不足时保持 open。
-- `glm-5.3-flash` 已确认存在于 2026-09-02 刷新的 models.dev 打包快照 `zhipuai-coding-plan`（1M context / 131072 max output，订阅制价格为 0）；`zhipu` provider 需保持 `catalog_provider: zhipuai-coding-plan`（上游已把 `zhipu` id 改名，见 [模型目录合同](../docs/ai/pitfalls/AGENTS.config-and-state.md#model-catalog-and-failure-routing)）。模型端点是否可用仍以部署环境实测为准。
+- `glm-5.3-flash` 已确认存在于 2026-09-02 刷新的 models.dev 打包快照 `zhipuai-coding-plan`（1M context / 131072 max output，订阅制价格为 0）；`zhipu` provider 需保持 `catalog_provider: zhipuai-coding-plan`（上游已把 `zhipu` id 改名，见[模型目录与失败处理](../docs/ai/pitfalls/AGENTS.config-and-state.md#model-catalog-and-failure-routing)）。模型端点是否可用仍以部署环境实测为准。
 - 管理页面 **Config → Providers** 新建 provider 时可用 **Platform preset** 预填上述平台的端点与 `catalog_provider`（含 Anthropic 兼容变体）；预设的目录映射和请求路径由 `packages/llm/test/provider-presets.test.ts` 守住，端点证据见 [来源地图](../docs/ai/sources/models-and-usage.md) “China platform endpoints”。selector 表中的 baseURL 若与预设不一致，以官方文档复核为准。
 
 ### VCS 与输出 selector
@@ -332,7 +332,7 @@ ssh -p "$SSH_PORT" -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no \
 - **动态配置启用后不要直接改 `config.yaml` 重启**：首次数据库发布后，head revision 会钉住文件 SHA-256 摘要；文件摘要不一致时准入与 `/readyz` 返回 503 `config_unavailable`（`file_config_mismatch`）。恢复：还原摘要一致的文件，或从 `GET /api/admin/config/status` 的 `head.activeRevision` 取基线，用新文件摘要加空 `operations` 调 `POST /api/admin/config/changesets` 采纳新摘要（2026-09-16 用当前构建产物本地探针验证可恢复）；不要手工改数据库。
 - **升级备份目录必须唯一命名**：跨版本升级的备份目录带秒级时间戳，删除被替代的临时目录前确认它与本轮备份路径不同；2026-09-16 动态配置升级中同分钟的同名目录曾把新备份误删。
 - **队列停滞排查**：Events 的 `queued` 是接收时记录的决定，执行后也不会变更（超时清扫会翻转为 `timeout`）。若 Recent Runs 长期没有新记录，而 `/healthz` 仍返回 200，按对应存储后端核对 receipt、batch、stream head 和运行日志：
-  1. 检查 `auto_commit_batches.status='dead'` 是否仍占用 stream 的 `active_batch_id`（仅升级前遗留的行；当前合同下终态失败走单次自动恢复，二次失败 terminally skip 并释放流）。人工恢复用看板 Queue 页或 `POST /api/admin/auto-commit/batches/:id/retry`（带鉴权与审计日志）；重排前先核对失败尝试是否已发布输出——重放可能重复发布。dead 成员不可直接重放。
+  1. 检查 `auto_commit_batches.status='dead'` 是否仍占用 stream 的 `active_batch_id`（仅升级前遗留的行；当前处理规则下终态失败走单次自动恢复，二次失败 terminally skip 并释放流）。人工恢复用看板 Queue 页或 `POST /api/admin/auto-commit/batches/:id/retry`（带鉴权与审计日志）；重排前先核对失败尝试是否已发布输出——重放可能重复发布。dead 成员不可直接重放。
   2. 检查固定配置快照能否通过 `loadSnapshotGeneration` 校验。若配置规范化发生变化，旧快照可能报 `snapshot_invalid: Config snapshot content hash mismatch`；应先使用当前代码验证内容等价，再决定如何迁移 `legacy_import`、旧 receipt 及 deferral 的引用。调度器退避故障 stream 不会自行修复无效快照。
   3. 检查延期恢复日志。旧实现未接住异步 resume handler 的拒绝，固定快照解析失败可能导致进程退出；当前实现会释放 claim 并重试，但无效快照仍需修复，停机前已领取的回调须完成排空。
   临时 `build/tmp/` 脚本不属于可复用的部署流程。

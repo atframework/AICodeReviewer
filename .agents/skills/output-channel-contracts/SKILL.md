@@ -4,7 +4,7 @@ description: "Maintain channel policy, templates, target links, mentions, and ma
 user-invocable: false
 ---
 
-# Output Channel Contracts
+# Output Channel Guidance
 
 Trace changes through `packages/core/src/config.ts`, server bootstrap/orchestrator,
 `packages/outputs/src/index.ts`, `template-engine.ts`, and relevant tests.
@@ -48,10 +48,10 @@ Read only the corresponding section of `docs/output-channels.md` or architecture
   reviews: read the [pending IM design](../../../docs/design/im-integrations.md)
   and its [source record](../../../docs/ai/sources/im-integrations.md); load the
   [directory design](../../../docs/design/member-directory.md) only for file
-  identity/reload work. These are proposals, not implemented channel contracts.
+  identity/reload work. These are proposals, not implemented channel behavior.
   During authorized implementation, use the matching task card in the
   [execution guide](../../../docs/design/im-implementation.md), its cited
-  [contracts](../../../docs/design/im-execution-contracts.md) and
+  [implementation specification](../../../docs/design/im-implementation-spec.md) and
   [acceptance IDs](../../../docs/design/im-acceptance.md). Load the current task's
   sections; do not treat proposed APIs or unchecked tasks as existing runtime.
   Keep mention identity separate from callback authorization; distinguish
@@ -59,7 +59,7 @@ Read only the corresponding section of `docs/output-channels.md` or architecture
 - PR buffering, update markers, duplicate collection, error summaries, or Markdown
   repair: [output pitfalls](../../../docs/ai/pitfalls/AGENTS.outputs.md).
 - IM card/Markdown payloads, mentions, truncation, or structured repair:
-  [IM contracts](references/im-bot-message-contracts.md).
+  [IM message rules](references/im-bot-message-contracts.md).
   Directory identity guessing also changes the dedicated server prompt and
   model-group selection; check static/database publication and old/new runs.
   For Feishu application authentication, directory permissions or API payloads,
@@ -70,7 +70,7 @@ Read only the corresponding section of `docs/output-channels.md` or architecture
   pagination, including a short Gitea page with a `Link: rel="next"` header.
 - Automatic batch publication recovery:
   [scheduling](../../../docs/ai/pitfalls/AGENTS.scheduling.md) and
-  [remote API contracts](../../../docs/ai/sources/publication-reconciliation.md). Check actual raw
+  [remote API specifications](../../../docs/ai/sources/publication-reconciliation.md). Check actual raw
   publisher calls, multiple summaries, lease/persistence interruption and
   buffered versus delivered output. A completed checkpoint replays local
   accounting only; publication-only recovery retains the original model usage.

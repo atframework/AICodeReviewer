@@ -3,7 +3,7 @@ title: Podman / Rootless
 description: 使用 Podman 运行 AICodeReviewer，包括 rootless 本地配置与嵌套容器（Docker-out-of-Docker）沙箱模式。
 ---
 
-Podman 沙箱路径使用与 Docker 相同的容器契约，但当选择 `sandbox.kind: podman` 或
+Podman 沙箱路径遵循与 Docker 相同的容器运行规则，但当选择 `sandbox.kind: podman` 或
 `sandbox.engine: podman` 时，会把 CLI 解析为 `podman`。本页介绍何时选择 Podman、rootless 本地配置、
 嵌套容器模式、运行时保证、SELinux 注意事项，以及 `--storage-driver=overlay` 故障恢复要点。
 

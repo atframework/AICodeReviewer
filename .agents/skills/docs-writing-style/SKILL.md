@@ -11,9 +11,14 @@ description: "Verify facts and edit clear bilingual repository Markdown; skip co
 2. Check schema (`packages/core/src/config.ts`), wiring (server bootstrap), then
    the consuming module/tests. Examples are supporting evidence, not substitutes
    for code. Mark schema-only or unwired features explicitly.
-3. Edit only affected prose/contracts. Keep frontmatter, code blocks, and useful
+3. Edit only affected prose/specifications. Keep frontmatter, code blocks, and useful
    table structure. Sync both public locales in the same change; identifiers,
    defaults, paths and commands must match.
+   For Chinese technical prose, follow the terminology choices in the writing
+   guidance: specification, interface convention, rule, protocol, or acceptance
+   criterion according to the behavior being described.
+   For terminology-only localization, inspect the parallel locale and leave its
+   wording intact when it already conveys the same behavior.
 4. Run the repository Markdown gate. For site edits run its applicable checks
    from [the baseline](../../../docs/ai/AGENTS.repository-baseline.md).
 
@@ -22,7 +27,7 @@ description: "Verify facts and edit clear bilingual repository Markdown; skip co
 Apply [writing guidance](../ai-agent-maintenance/references/writing-guidance.md):
 current-version-only statements, the banned word lists for both locales,
 sentence patterns, structure rules, and the exceptions for technical
-contracts and change records.
+specifications and change records.
 
 The unambiguous subset is enforced by
 `docs/site/scripts/validate-bilingual-consistency.mjs`; context-dependent wording

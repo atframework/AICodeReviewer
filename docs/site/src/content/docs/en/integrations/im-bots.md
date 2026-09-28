@@ -418,3 +418,20 @@ to IM bots:
 For routing, target-kind matching, and the zero-problem policy, see
 [Output channels](/en/integrations/output-channels/) and
 [Output channels config](/en/configuration/outputs/).
+
+## Managing IM connections and command bindings
+
+The dashboard **Configuration** tab includes two entity pages for the IM
+integrations: **IM connections** and **IM command bindings**. Connections hold
+the protocol identity and credentials (`wecom_app`, `wecom_aibot` or
+`feishu_app`); command bindings reference a connection and define which typed
+actors, conversations and commands may request reviews. Literal credentials
+entered in the drawer are sealed at persistence boundaries and never displayed
+again; deleting or renaming a connection that a binding or channel references
+is rejected atomically by the publish boundary.
+
+These pages currently manage **draft configuration only**: sending,
+callbacks and review commands activate progressively as the corresponding
+runtime integrations land, and command bindings stay disabled by default.
+See [Configuration field reference](/en/reference/config-fields/) for the
+`im.*` field contracts.

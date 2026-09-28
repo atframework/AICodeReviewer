@@ -1,14 +1,14 @@
-# AICodeReviewer 架构与实现合同
+# AICodeReviewer 架构与实现规范
 
 这份文档承接原先 `Plan.md` 里稳定、细节化、不会每轮都变的设计说明。
 路线图已并入 [AI 维护导航](index.md)的前瞻扩展与里程碑归档；需要设计细节时按需读取这里。
 
-本页的章节编号是稳定合同引用点，独立于路线图的章节与任务顺序。
+本页的章节编号供长期引用，独立于路线图的章节与任务顺序。
 
 Workspace 多工程匹配、数据库配置管理与自动迁移已交付 P0–P7：配置存储、schema 迁移与
 PostgreSQL 后端见 [M17](milestones/M17.md)，来源合并、路由图与发布服务见 [M18](milestones/M18.md)，
 运行时配置 generation 与管理 API 见 [M19](milestones/M19.md)，管理表单与管理页面见
-[M20](milestones/M20.md)，集成测试与跨版本进程矩阵见 [M21](milestones/M21.md)。稳定设计合同收敛在
+[M20](milestones/M20.md)，集成测试与跨版本进程矩阵见 [M21](milestones/M21.md)。稳定设计约定收敛在
 §3.10–§3.16；任务期 spec/plans 文档在 P8 退役，不再作为引用入口。
 
 ## 按需阅读
@@ -38,11 +38,11 @@ PostgreSQL 后端见 [M17](milestones/M17.md)，来源合并、路由图与发�
 
 - 工作目录以 `workspaces/<workspace_id>/` 扁平布局组织。
 - 每个 workspace 自包含 `source/`、`agent/`、`tmp/` 等运行目录。
-- 运行隔离是硬合同（L09）：每次 run 的所有可变状态写入单一 `runs/<runId>/` 根
+- 运行隔离是硬性要求（L09）：每次 run 的所有可变状态写入单一 `runs/<runId>/` 根
   （source/agent/tmp/context-repos），共享 sourceRoot 只作仓库缓存；同工程并行 run
   互不覆盖。布局目录经 symlink/junction 越界校验（执行前与物化后各一次，L08）；
   崩溃遗留的 run 目录由引用保护 + 24h 陈旧阈值回收（L12），活动 run 永不误删。
-- 克隆隔离是硬合同：仓库克隆固定在 `workspaces/<workspace_id>/source/<repo 清洗名>/`
+- 克隆隔离是硬性要求：仓库克隆固定在 `workspaces/<workspace_id>/source/<repo 清洗名>/`
   （`buildSourceRootResolver`，`/`、`:` 清洗为 `_`），git 子模块缓存在其旁的
   `source/.aicr-submodules/<url hash>/`，run 物化、context-repos、agent/tmp 全部派生自同一
   workspace 根。任何按 trigger+repo 缓存 adapter 或目录的结构都必须把 workspaceId 计入键；
@@ -60,12 +60,12 @@ PostgreSQL 后端见 [M17](milestones/M17.md)，来源合并、路由图与发�
 ### 2.3 文档分层
 
 - `docs/ai/index.md`：前瞻扩展与里程碑归档（原 `Plan.md` 路线图已并入）
-- `docs/ai/architecture.md`：稳定设计合同
+- `docs/ai/architecture.md`：稳定设计约定
 - `docs/ai/decisions.md`：长期有效决策
 - `docs/ai/milestones/*.md`：已完成阶段归档
 - `docs/output-channels.md`、`docs/podman.md`、`docs/prompt-research.md`：专题文档
 
-## 3. 核心组件合同
+## 3. 核心组件约定
 
 ### 3.1 触发器与 ReviewEvent 归一化
 
@@ -117,7 +117,7 @@ PostgreSQL 后端见 [M17](milestones/M17.md)，来源合并、路由图与发�
   receipt 与 ReviewEvent（`resolution` 字段），执行目录由 `layoutForEvent` 直接使用固定结果，
   不再依赖接收与执行之间的配置不变性。legacy 单 profile 路由保持逐字节旧行为。
 - 存储：`createAutoCommitStoreFromConfig` 跟随 `queue.kind` 选择 memory/SQLite/Redis 后端；
-  memory 的非持久性在启动日志显式可见。receipt/成员/批次/租约/outbox 合同在
+  memory 的非持久性在启动日志显式可见。receipt/成员/批次/租约/outbox 约定在
   `packages/core/src/auto-commit-store.ts`，三后端共享 conformance 场景。
 - 调度：`AutoCommitScheduler`（`packages/server/src/auto-commit-scheduler.ts`）单去抖 timer
   按最早到期信号唤醒，扩展（有界 VCS 元数据页 + 来源快照 + 排除判定）→ 组批封存 →
@@ -161,7 +161,7 @@ PostgreSQL 后端见 [M17](milestones/M17.md)，来源合并、路由图与发�
   查询正文标记、状态或删除结果，飞书应用在去重有效期内复用 UUID，webhook 不盲目重发
   不确定消息。查询在 managed issue 列表读取前执行，避免远端已创建的 issue 改变恢复分支。
   分页有界且不跟随外域链接；消息序号区分同内容的多条摘要。协议、超时与未知结果边界见
-  [输出合同](../output-channels.md#automatic-commit-batch-publication)和 D51。内存后端重启、
+  [输出渠道规范](../output-channels.md#automatic-commit-batch-publication)和 D51。内存后端重启、
   旧写入器及未保存身份的历史任务仍有重复风险；不能承诺端到端 exactly-once。
 - 直接路径（PR/MR、issue、评论命令）复用同一周计划：async 触发处理把首次尝试和每次重试的
   定时器经 `clampDelayToExecutionWindow`（`packages/server/src/index.ts`）钳制到
@@ -220,19 +220,19 @@ PostgreSQL 后端见 [M17](milestones/M17.md)，来源合并、路由图与发�
 
 ### 3.2 VCS Adapter 与 scoped fetch
 
-- VCS adapter 维持统一三段式合同：
+- VCS adapter 维持统一三段式约定：
   - 列举变更
   - 按 review 目标做 scoped fetch
   - 在需要时获取额外上下文或归因
 - 公共路径与对象工具函数放在 `packages/core/src/utils.ts`，不要在其他模块复制实现。
 - Git 默认浅拉取并允许在闸门下 deepen；P4 / SVN 保持 provider 原生方式。
-- 多源上下文默认关闭：只有 workspace 配置显式声明 `context_repositories` alias 才物化辅助仓库，合同见 §3.2.2。
+- 多源上下文默认关闭：只有 workspace 配置显式声明 `context_repositories` alias 才物化辅助仓库，规则见 §3.2.2。
 - `normalizePath` 必须统一反斜杠、压缩重复斜杠并去除前导 `./`。
 - `isPlainObject` 必须拒绝 `Date`、`RegExp` 等内建类实例。
 - Git blame / P4 annotate / SVN blame 等 attribution 能力属于 best-effort 上下文工具，不应污染默认 fingerprint。
 - 提交时间解析是可选的 advisory 方法 `fetchRevisionCommittedAt(revision)`：orchestrator 在
   scoped fetch 后对 `headRevision` 调用一次，结果写入 `review_runs.head_committed_at` 供
-  Dashboard 展示；契约约定**永不抛错**，解析失败返回 `undefined`。实现：git 用
+  Dashboard 展示；接口约定**永不抛错**，解析失败返回 `undefined`。实现：git 用
   `git log -1 --format=%cI --end-of-options <rev> --`（浅克隆会按需 deepen），SVN 用
   `svn log --xml --limit 1 -r N:N <url>@N` 取 `<date>`，P4 用 `p4 -ztag describe -s N`
   取 submitted changelist 的 `... time <epoch>`，pending 不作为提交时间。
@@ -280,7 +280,7 @@ PostgreSQL 后端见 [M17](milestones/M17.md)，来源合并、路由图与发�
 用户可把外部生成的 GitHub App installation token 粘进 `token_env`，但 installation token
 约 1 小时过期，长期运行不可用。M12 引入 App 原生 JWT → installation token 的自动签发与刷新。
 
-**配置合同**（`packages/core/src/config.ts` `triggerSchema`，仅 `kind: github`）：
+**配置约定**（`packages/core/src/config.ts` `triggerSchema`，仅 `kind: github`）：
 
 - 在 trigger 上新增可选 `app` 子对象，与 `token_env` 互为出站认证方式（二选一）：
   - `app_id`（数字 App ID）或 `client_id`（GitHub 现推荐的 issuer）至少提供其一。
@@ -292,7 +292,7 @@ PostgreSQL 后端见 [M17](milestones/M17.md)，来源合并、路由图与发�
 - 出站 token 解析优先级不变：channel 级 `token_env` > trigger 级 `token_env`/`app`。
 - 新增配置字段必须同步 `packages/core/test/config.test.ts`、`example/config.yaml` 与本节。
 
-**Token 服务合同**（新增 `packages/server/src/github-app-token.ts`，零新增依赖）：
+**Token 服务约定**（新增 `packages/server/src/github-app-token.ts`，零新增依赖）：
 
 - 用 `node:crypto`（`crypto.createSign('RSA-SHA256')`）签发 RS256 App JWT：
   `iat = now - 60s`（容忍时钟偏移）、`exp = now + 540s`（< GitHub 10 分钟上限）、
@@ -307,7 +307,7 @@ PostgreSQL 后端见 [M17](milestones/M17.md)，来源合并、路由图与发�
 - 私钥与签发出的 token 绝不写日志/模板/输出；`secret-scrubber` 的 `gh[pousr]_` 已覆盖
   installation token 前缀 `ghs_`，`private_key`/`jwt` 规则覆盖 PEM 与 App JWT。
 
-**注入点合同**（全部位于 `packages/server`，`vcs`/`outputs` 仍只接收字符串 token）：
+**注入点约定**（全部位于 `packages/server`，`vcs`/`outputs` 仍只接收字符串 token）：
 
 - **VCS**：`vcsFactory`（`packages/server/src/bootstrap.ts`）改为异步，在构造 git adapter 前按事件
   `owner/repo` 解析当前 installation token；`packages/vcs/src/git.ts` 的 `x-access-token:<token>@`
@@ -346,11 +346,11 @@ PostgreSQL 后端见 [M17](milestones/M17.md)，来源合并、路由图与发�
 
 #### 3.2.2 多源上下文聚合（M14，context_repositories）
 
-**动机**：评审经常需要引用主仓库之外的共享库/契约仓库（内部 SDK、协议定义、公共配置）。
-M6 起合同层就预留了“显式 selector/alias 才访问辅助仓库”的边界，M14 把它落成
+**动机**：评审经常需要引用主仓库之外的共享库/协议定义仓库（内部 SDK、协议定义、公共配置）。
+M6 起接口层就预留了“显式 selector/alias 才访问辅助仓库”的边界，M14 把它落成
 workspace 级声明式配置 + 只读挂载。
 
-**配置合同**（`packages/core/src/config.ts`，`workspaces.defaults` 与
+**配置约定**（`packages/core/src/config.ts`，`workspaces.defaults` 与
 `workspaces.instances.<id>` 均可声明 `context_repositories` 数组；merge 语义为整体替换）：
 
 - 每项必填 `alias`（path-safe：`^[A-Za-z0-9][A-Za-z0-9._-]*$`，同一 workspace 内唯一）与
@@ -364,7 +364,7 @@ workspace 级声明式配置 + 只读挂载。
 - 连接信息只能来自 `config.yaml`；trigger payload 任何字段都不能注入或改写辅助仓库
   （与 SVN trigger “configured repository_url wins” 同一原则）。
 
-**物化合同**（`packages/vcs/src/context-repos.ts` `materializeContextRepositories`）：
+**物化约定**（`packages/vcs/src/context-repos.ts` `materializeContextRepositories`）：
 
 - 每次 run 在确认存在变更文件后全新物化（先 wipe 再拉取），不做跨 run 缓存；
   目标目录 `<run>/context-repos/<alias>`；物化前清扫
@@ -396,7 +396,7 @@ workspace 级声明式配置 + 只读挂载。
   直接读 host 路径。每个 agent pass（含修复/上下文 follow-up）都带同一组挂载。
 - task prompt 在 diff 之后列出可用 alias、kind、已解析 revision 与沙箱路径，并约束
   “problem 仍必须锚定本次变更文件，辅助仓库只作 supporting evidence”。
-- `aicr.fetch_more_context` 合同不变，仍只服务主仓库；辅助仓库内容经只读文件系统访问。
+- `aicr.fetch_more_context` 约定不变，仍只服务主仓库；辅助仓库内容经只读文件系统访问。
 - `ReviewOrchestrationResult.contextRepositories` 记录每个 alias 的
   status/resolvedRevision/fileCount/totalBytes，并经 `summarizeReviewOrchestrationForWebhook`
   进入 webhook 响应与 run 快照，供可观测性与排障。
@@ -527,7 +527,7 @@ AICR 采用**两层上下文管理**，两者互补：
 ### 3.6 Prompt Manager 与 AI 资产装配
 
 - 常驻仓库规则只放在 `AGENTS.md`；`AGENTS.md` 与 `.agents/skills/` 是跨工具共享真源。
-- 任务流程放在 `.agents/skills/*/SKILL.md`；较长合同按具体触发条件读取引用。
+- 任务流程放在 `.agents/skills/*/SKILL.md`；较长约定按具体触发条件读取引用。
 - 坑点和来源入口只做主题导航，不要求通读全部条目；验证命令统一放在
   `AGENTS.repository-baseline.md`。
 - Claude / Zoo / Kilo / Copilot 等私有格式只做桥接，不维护重复正文；共享规则写在
@@ -580,12 +580,12 @@ AICR 采用**两层上下文管理**，两者互补：
   - 把完整 skill 文件作为只读资源挂载
   - 用 stdout tool-call 作为兼容回退
 - MCP 工具名必须来自注册表，而不是从 prompt 文本反推。
-- Runtime bundle 当前默认物化本地 stdio `aicr-output` MCP server；`@aicr/mcp-output` 也支持显式启动的本地 Streamable HTTP endpoint（`--transport http`），复用同一工具注册表和 `.aicr-output-state.json` 合同。
+- Runtime bundle 当前默认物化本地 stdio `aicr-output` MCP server；`@aicr/mcp-output` 也支持显式启动的本地 Streamable HTTP endpoint（`--transport http`），复用同一工具注册表和 `.aicr-output-state.json` 约定。
 - 原生接入面接线（2026-08 起，对照各 CLI 当期官方文档核验）：
   - **instructions**：合并写成工作目录根部 `AGENTS.md`（Kilo/OpenCode/Copilot CLI/Zoo 均原生自动加载；pi 在 trust 判定之前也加载 cwd/祖先 `AGENTS.md`，oh-my-pi 经规则发现原生加载）；Claude Code 另写 `CLAUDE.md`（内容为 `@AGENTS.md` 导入）。`instructions/` 保留逐来源副本供 manifest/审计使用，不再通过 Kilo/OpenCode `instructions` glob 重复加载同一内容；归一化后的文件或 skill 路径冲突直接报错，禁止静默覆盖。
   - **skills**：统一物化为标准布局 `.agents/skills/<name>/SKILL.md`（OpenCode、Copilot CLI、oh-my-pi 原生发现；Kilo 经 kilo.json `skills.paths` 指向同一目录；pi 原生发现但项目级 skills 受 trust 门控，headless 必须 `--approve` 才会加载——bundle 目录完全由 AICR 物化，trust 是安全的）；Claude Code 另写 `.claude/skills/<name>/SKILL.md` 副本。opencode.json 加 `permission.skill: {"*": "allow"}` 避免 headless 技能加载被交互确认卡住。
   - **MCP**：kilo 经 `kilo.json` `mcp` 段、opencode 经 `opencode.json` `mcp` 段接线；Claude Code 经 `--mcp-config <inline-json> --strict-mcp-config`（与用户/项目 MCP 配置隔离）；Copilot CLI 经 `--additional-mcp-config=<inline-json>`；oh-my-pi 原生支持 MCP，经 `$PI_CODING_AGENT_DIR/mcp.json` 接线（工具以 `mcp__<server>_<tool>` 暴露，命中现有 `<prefix>_aicr_<tool>` 归一化规则）；**pi 无内置 MCP（上游明确的设计决策）**，runtime bundle 生成用户级扩展 `.pi-agent/extensions/aicr-output.ts`。扩展 factory 只注册生命周期 handler；`session_start` 中启动 stdio JSON-RPC 子进程、完成发现并以 `pi_aicr_<tool>` 注册，`session_shutdown` 回收子进程。server 规格经 `AICR_PI_MCP_SERVERS` env 传入扩展。canonical `{type:"local",command:[...]}` 形态由 `packages/agents/src/mcp-config.ts` 转换为各家原生形态（claude stdio 的 `command`/`args` 拆分、copilot local 的 `command`/`args`/`tools`、omp 的 `command`+`args`+`env` / http `url`+`headers`）。
-  - orchestrator 给 `aicr-output` server 注入 `AICR_OUTPUT_STATE_PATH` 绝对路径（native 沙箱用宿主 agent 目录，docker 沙箱固定 `/workspace/agent/...`），状态文件落点不再依赖宿主 CLI 拉起 MCP server 时的 cwd。server 脚本路径同样按沙箱类型改写：容器沙箱用 runtime 镜像内的 `/app/packages/mcp-output/dist/server.js`，native 沙箱改写为相对本模块解析的宿主 `packages/mcp-output/dist/server.js`（`adaptMcpServersForSandbox`），否则 MCP server 在 native 沙箱内启动失败、agent 静默退化为 stdout JSON 合同。同一注入模式用于 pi/oh-my-pi 的 `PI_CODING_AGENT_DIR`：其值必须是沙箱可见路径（容器固定 `/workspace/agent/.pi-agent` 或 `.omp-agent`），由 orchestrator 在已知沙箱 workdir 后注入，而不是由适配器在 host 侧物化。
+  - orchestrator 给 `aicr-output` server 注入 `AICR_OUTPUT_STATE_PATH` 绝对路径（native 沙箱用宿主 agent 目录，docker 沙箱固定 `/workspace/agent/...`），状态文件落点不再依赖宿主 CLI 拉起 MCP server 时的 cwd。server 脚本路径同样按沙箱类型改写：容器沙箱用 runtime 镜像内的 `/app/packages/mcp-output/dist/server.js`，native 沙箱改写为相对本模块解析的宿主 `packages/mcp-output/dist/server.js`（`adaptMcpServersForSandbox`），否则 MCP server 在 native 沙箱内启动失败、agent 静默退化为 stdout JSON 约定。同一注入模式用于 pi/oh-my-pi 的 `PI_CODING_AGENT_DIR`：其值必须是沙箱可见路径（容器固定 `/workspace/agent/.pi-agent` 或 `.omp-agent`），由 orchestrator 在已知沙箱 workdir 后注入，而不是由适配器在 host 侧物化。
   - manifest 增加 `nativeSurfaces.{instructions,skills,mcp}` 记录实际接线面；无原生面的 adapter（如 zoo 的 MCP）显式记为 `none` 而不是静默走 prompt-only。
 
 ### 3.7 AgentAdapter 与模型翻译
@@ -606,7 +606,7 @@ AICR 采用**两层上下文管理**，两者互补：
 - Claude Code、OpenCode、Zoo、Copilot CLI、pi、oh-my-pi 作为并行适配面。
 - 新 adapter 应尽量复用 runtime bundle 物化与 sandbox contract，而不是重新发明一套配置树。
 
-#### 3.7.2 调用合同
+#### 3.7.2 调用约定
 
 - adapter 的输入至少包括：工作目录、模型、工具、超时、skill/instruction 层和输出收集器。
 - adapter 的输出要么是 MCP 工具调用结果，要么是兼容回退解析后的同构结果。
@@ -645,7 +645,7 @@ AICR 采用**两层上下文管理**，两者互补：
 - 容器 `--env-file` 必须位于挂载工作区之外的临时路径，运行后删除。
 - 源码工作区默认只读挂载，agent 工作目录与临时目录隔离。
 - 白名单、cwd、超时、网络/命令限制由 sandbox 统一守卫。
-- Podman 与 Docker 要共享一套容器合同，而不是两套分叉实现。
+- Podman 与 Docker 要共享一套容器约定，而不是两套分叉实现。
 - **超时必须杀整个进程树（含 `setsid` 逃逸的 worker）**：native/docker 后端超时时调用共享 `killProcessTree`（`packages/sandbox/src/process-tree.ts`）终止整棵后代进程，而非只杀直接子进程。Agent 二进制（如 Kilo）会 `setsid` 把 worker 子进程放进独立 session/进程组，因此仅 `detached: true` + `process.kill(-pid)` 杀进程组**不足以**覆盖它们——worker 会逃逸、被 reparent 到 PID 1 继续运行并持有继承的 stdio，导致 spawn promise 挂起、`durationMs` 远超 `agent.timeout_seconds`（实测 600s 配置跑到 700s–1640s），重试越拖越慢形成 CPU 耗尽死亡螺旋。Linux 下 `killProcessTree` 必须额外按 `/proc` 的 PPID 链遍历后代（`setsid` 不改 PPID）并逐个 kill（先深后浅），再叠加 `kill(-pid)` 进程组信号与 `proc.kill(signal)`；Windows 用 `taskkill /T /F`。配 SIGTERM→SIGKILL 级联与强制 resolve 兜底。`packages/sandbox/test/native.test.ts` 同时覆盖继承 stdio 的孙进程与 `setsid` worker 回归（后者 Linux-only）。
 - **外层容器必须 `--init` 回收僵尸**：`deploy/deploy.sh` 用 `podman run -d --init` 启动服务（不要删 `--init`）。否则 Node 作为 PID 1 不会回收逃出沙箱 kill 的后代（如 #49 的 `setsid` worker），它们以 `Z` 状态堆积在 PID 1 下（生产实测 31 个），在退出前持续拖慢重试。`--init` 让 `tini`/`catatonit` 作为 PID 1 回收 reparent 的僵尸，是容器内 Node-as-PID-1 的标准修复。
 
@@ -655,7 +655,7 @@ AICR 采用**两层上下文管理**，两者互补：
 | --- | --- | --- |
 | `native` | 已交付 | 直接 spawn 子进程，不依赖容器引擎；适用开发环境或无容器权限的场景。 |
 | `docker` | 已交付 | 通过 CLI 调用 Docker，支持镜像、allowlist、只读挂载、env-file 隔离。 |
-| `podman` | 已交付 | 与 Docker 共享同一容器合同，CLI 解析为 `podman`；支持 rootless。 |
+| `podman` | 已交付 | 与 Docker 共享同一容器约定，CLI 解析为 `podman`；支持 rootless。 |
 | `docker_socket` | 已交付（映射实现） | 复用 `docker` 后端的容器实现，仅 `kind` 标识不同；适用于通过 Unix socket 访问 Docker daemon 的场景，不额外引入 Docker Engine API 客户端。 |
 | `docker` (nested) | 已验证 | 当 AICR 本身运行在 Podman/Docker 容器内时，通过挂载宿主机容器引擎 socket + Docker 静态二进制实现嵌套容器隔离。见 `docs/podman.md` "Nested container sandbox"。 |
 | `k8s_pod` | 预留扩展位 | 尚未实现。计划通过 Kubernetes API 创建 Job Pod，挂载 source/agent/tmp 卷，流式回传日志。需要集群环境、`@kubernetes/client-node` 和有效的 kubeconfig。 |
@@ -683,15 +683,15 @@ AICR 采用**两层上下文管理**，两者互补：
   PR/MR 事件保留 `sourceRepoRef`/`targetRepoRef`，缺失来源不冒充目标；commit 两端相同。
   字段和示例见双语 [MCP 工具](../site/src/content/docs/zh-cn/integrations/mcp-tools.md)。
 - 尚未完全落地的工具（如 memory/skill recall）不能提前宣传为已实现能力。
-- problem 合同保持最小稳定字段；`message` 讲问题与影响，`suggestion` 给修复建议。
+- problem 约定保持最小稳定字段；`message` 讲问题与影响，`suggestion` 给修复建议。
 - 模板渲染与最终发布由输出层统一控制，而不是让 agent 直写各平台方言。
 - Agent CLI 的自由文本 stdout 不是正式审查结果；无法解析出 AICR tool payload 时先触发结构化修复重试，避免中间思考泄露到 IM 通知。
-- `@aicr/mcp-output` 的 stdio 与 Streamable HTTP server 使用同一组稳定工具和 state file 合同；Kilo runtime bundle 默认仍走 stdio，HTTP endpoint 供支持远程/HTTP MCP 的客户端或本地集成测试显式启用。
+- `@aicr/mcp-output` 的 stdio 与 Streamable HTTP server 使用同一组稳定工具和 state file 约定；Kilo runtime bundle 默认仍走 stdio，HTTP endpoint 供支持远程/HTTP MCP 的客户端或本地集成测试显式启用。
 - Kilo 等原生 MCP agent 写入 `.aicr-output-state.json` 后，orchestrator 必须读取其中的 problems / summaries / skip、`contextRequests` 和 `attributionRequests`；`contextRequests` 通过 VCS `fetchExtraContext` 执行，`attributionRequests` 通过 VCS `fetchAttribution` 执行，并回灌到 follow-up prompt，而不是只计数或发布“无法访问完整仓库代码”的摘要。
 - Kilo JSON stream 中的 `tool_call` / `tool_use` 事件在 MCP state 缺失时作为兼容回退执行，确保 `aicr.fetch_more_context` 与 `aicr.try_blame` 不会因为 stdout 中没有最终 JSON payload 而丢失。
 - 每次 agent run 启动前要清理旧 `.aicr-output-state.json`，避免上一次 repair pass 的工具状态污染下一次输出。
 - 如果 Agent 结构化修复后的自由文本明确表示“无问题 / 无可审查代码”，orchestrator 会归一为 `aicr.skip`，避免把格式修复失败的 fallback 文案发布到 IM；若仍无法解析且不属于无问题语义，则改走直连 LLM 修复兜底。
-- Summary 中声称“发现问题”但没有 `aicr.report_problem` 记录时，也视为未满足输出合同并触发结构化修复，避免 `problemCount=0` 的问题被 `no_problems` 策略静默压掉。
+- Summary 中声称“发现问题”但没有 `aicr.report_problem` 记录时，也视为未满足输出渠道规范并触发结构化修复，避免 `problemCount=0` 的问题被 `no_problems` 策略静默压掉。
 - Skip reason 或 summary 要求人类补 diff/source context，或声称无法访问完整仓库/源码而无法验证时，orchestrator 也会修复为“只读命令检查已物化源码、`aicr.fetch_more_context` 补拉具体路径，或 `aicr.try_blame` 请求 VCS 归因”的流程，并在拿到上下文后要求最终结构化输出。
 - 同一轮既产出 problem 又有待满足的上下文请求时（例如问题报告同时列出“待 VCS 拉取后复核”事项），orchestrator 在该轮结束后执行补拉并强制再跑一轮 follow-up pass：清除临时的 problems/summary，把拉到的内容回灌 prompt，要求逐条复核并重新输出最终 problems，不得把“待确认”原文直接发布结案。仅存在失败（非法或仓库中不存在）的上下文请求时不触发复核轮；follow-up pass 自身再次申请并成功拉到上下文时，同样再补一轮（单次编排最多三轮）。
 - `aicr.fetch_more_context` 可用于缺失/过窄 diff 下的完整变更文件，以及为验证变更行所必需的窄范围相关文件；problem 仍必须锚定到本次变更的文件与行。
@@ -726,8 +726,8 @@ AICR 采用**两层上下文管理**，两者互补：
 #### 3.9.3 模板引擎
 
 - 内置模板使用 Handlebars。
-- workspace 可以覆盖模板，但变量合同要与内置模板对齐。
-- 模板变量属于稳定合同的一部分，变更时需同步文档、测试与示例。
+- workspace 可以覆盖模板，但变量约定要与内置模板对齐。
+- 模板变量属于稳定约定的一部分，变更时需同步文档、测试与示例。
 
 #### 3.9.4 作者解析与 @-mention
 
@@ -763,7 +763,7 @@ AICR 采用**两层上下文管理**，两者互补：
   OWNERS 独立合并去重。仅明确的 422 assignee 校验失败允许去掉 assignees 重试一次；
   其他错误及重试失败向上传递。平台权限不足可能静默忽略指派，创建成功不等于指派成功。
   GitLab 目前仅有 `gitlab_mr_review`，未实现 issue 创建/指派。
-  事件作者兼容边界与权限要求见[输出合同](../output-channels.md#assignee-resolution)。
+  事件作者兼容边界与权限要求见[输出渠道规范](../output-channels.md#assignee-resolution)。
 - managed issue 标题由输出层生成：
   - `per_problem`：前缀 + 严重级别 + 缩短位置 + 简短摘要。
   - `consolidated`：单问题复用 `per_problem` 格式；多问题使用前缀 + 最高严重级别 + 问题数 + 代表摘要。
@@ -797,7 +797,7 @@ AICR 采用**两层上下文管理**，两者互补：
   模型组 value 使用有序数组，其他实体使用对象，记录映射键与不可变 ID 一致。
   无效实体不能在合并中丢失；来源视图保留被文件遮盖的数据库字段值。
   `unset` 只移除数据库 override，文件有效值保持不变。
-- `config-format.ts` 提供版本、错误码、revision、matcher 形状与实例身份的纯合同；
+- `config-format.ts` 提供版本、错误码、revision、matcher 形状与实例身份的纯类型和校验规则；
   matcher 编译、路径 AST、存储 CAS 与引用完整性已由 P1–P3 交付,管理 API 与热发布
   见 §3.16。
   `config-components.ts` 的 U24 检查声明字段、默认值和实体所有权。
@@ -808,7 +808,7 @@ AICR 采用**两层上下文管理**，两者互补：
   未知扩展键保留不拒绝。catalog 提示键与字段清单 parity 由测试锁定。
   模型条目 `overrides` 自 P4 起在 `resolveModelSpecFromChain` 接线(map 按 key
   合并、数组替换,身份/端点/凭据不可覆盖)。
-  阶段交付与验收见 M17/M18，稳定合并与发布合同见 §3.14–3.15。
+  阶段交付与验收见 M17/M18，稳定合并与发布规则见 §3.14–3.15。
 - P1a 的 `config-matcher.ts` 把 RE2/glob 编译收敛为共享纯函数(`auto-commit-exclusion` 行为
   不变,`autoCommitGlobToRegexSource` 为共享实现别名),新增 exact matcher 与来源字段目录
   (`vcs`/`repo_ref`/`repository`/`namespace`/`project_key`/`branch`/`ref`);`config-path-template.ts`
@@ -830,7 +830,7 @@ AICR 采用**两层上下文管理**，两者互补：
   GitHub/GitLab/Gitea/Forgejo 描述符
   (tag ref 的 branch 为 null、GitLab namespace 保留子组),`workspace-runtime.ts` 统一
   admission/翻译/执行三处的布局解析(`isolated_v2` = `workspaces.root`/`work_path`/`instance_id`,
-  段编码后实例根仍带 sha256 后缀;布局合同为 `/` 分隔,runtime 边界转主机分隔符)。
+  段编码后实例根仍带 sha256 后缀;布局约定为 `/` 分隔,runtime 边界转主机分隔符)。
   布局经 `ReviewEvent.resolution.binding` 传到 orchestrator；match 元数据缓存独立位于
   `.metadata/<hash>`，legacy 缓存保持原位置。Git ID/编号、P4 changelist、SVN info 描述符
   均已接线；完整 variables/provenance 随 binding 固定。`scheduled.*` 缺受信引擎而不可用，
@@ -903,7 +903,7 @@ AICR 采用**两层上下文管理**，两者互补：
   `url` / `host` / `port` / `password_env` / `password` / `db` / `tls` / `key_prefix`
   （默认 `aicr:`）。`queue.kind: "rabbitmq"` 尚未实现：启动时告警并回退 memory 队列
   （`packages/core/src/queue-factory.ts`）。
-- **dead-job 生命周期与 `queue.dead_letter` 的距离**：三种后端的队列合同都实现了
+- **dead-job 生命周期与 `queue.dead_letter` 的距离**：三种后端的队列约定都实现了
   dead-job 操作（retry 耗尽置 `dead`、`getDeadJobs` / `requeueDead` / `purgeDead`），
   但 server 侧当前不调用 requeue/purge，也不读 `queue.dead_letter`
   （`enabled` / `max_age_hours`）——该配置只被 schema 接受，无消费方。
@@ -964,7 +964,7 @@ AICR 采用**两层上下文管理**，两者互补：
 - 当 `dryRun` 为 `false` 时，run status 不能因为没有 publisher 而错误回落到 `dry_run`。
 - Prometheus histogram bucket、sum、count 必须按进程生命周期累计；只能把原始 duration 样本缓冲做滑动窗口裁剪。
 - `/metrics` 计数与 `runs/<run_id>/run.json` 快照应覆盖同步和异步触发的 review run，不能只记录后台模式。
-- `aicr eval --validate-only` 只校验 `eval/*.json` fixture 合同，不加载 config、bootstrap review orchestration 或调用 LLM；root `pnpm ci` 在 build 后运行该无密钥校验。完整 `aicr eval` benchmark 仍会加载配置并调用 LLM，属于需要 secrets / pipeline 权限的外部验收。
+- `aicr eval --validate-only` 只校验 `eval/*.json` fixture 约定，不加载 config、bootstrap review orchestration 或调用 LLM；root `pnpm ci` 在 build 后运行该无密钥校验。完整 `aicr eval` benchmark 仍会加载配置并调用 LLM，属于需要 secrets / pipeline 权限的外部验收。
 
 #### 3.11.1 内置观测首页（M8 follow-up — 已交付）
 
@@ -1042,7 +1042,7 @@ AICR 采用**两层上下文管理**，两者互补：
   setup-required 提示而不是 404；若启用了 `path_prefix`，顶层 `/` 与 `/dashboard`
   应重定向到带前缀的 dashboard 入口。
   Config 标签（M20）是配置管理页面，由 `packages/server/src/dashboard/client/` 下的原生
-  ES module 组成：`config-app.js`（应用编排与保存合同）、`renderer.js`（ConfigUiSpec DOM
+  ES module 组成：`config-app.js`（应用编排与保存约定）、`renderer.js`（ConfigUiSpec DOM
   渲染器）、`api-client.js`（`/api/admin/config` 客户端），首次进入该标签时由
   `dashboard.html` 懒加载，无框架、无 Node API。构建时
   `packages/server/scripts/copy-assets.cjs` 把 dashboard HTML 与 client 模块复制到
@@ -1143,7 +1143,7 @@ AICR 采用**两层上下文管理**，两者互补：
 > `packages/llm/src/model-catalog.ts`（纯解析/归一化）、`packages/store/src/model-catalog.ts`
 > 与 `model_catalog`/`model_catalog_source` 表、`packages/server/src/model-catalog-service.ts`
 > 编排、`packages/agents/src/model-metadata.ts` 注入与各 adapter 实现为准。Redis 结构化
-> 缓存后端已接入本地合同层，复用 `storage.cache.redis`。
+> 缓存后端已接入本地接口层，复用 `storage.cache.redis`。
 
 #### 3.13.1 目标与职责
 
@@ -1318,12 +1318,12 @@ models.dev 的 key 是 `<providerId>/<modelId>`（AI SDK 标识）。自定义 p
 
 ### 3.14 配置存储与 schema 迁移(ConfigStore / MigrationRunner)
 
-- 代码真源:`packages/core/src/config-store.ts`(backend 中立异步合同)、
+- 代码真源:`packages/core/src/config-store.ts`(backend 中立异步约定)、
   `config-store.ts` 内的 memory 实现、`sqlite-config-store.ts`、`redis-config-store.ts`、
   `pg-config-store.ts`;选择器 `config-store-factory.ts` 由 `storage.database` 决定,
-  不在每个消费方各自分叉。管理端 session 经同一合同持久化
+  不在每个消费方各自分叉。管理端 session 经同一约定持久化
   (`packages/server/src/admin-auth.ts` 只存 token 哈希 + TTL,支持跨副本登出)。
-- 合同要点:每 namespace 的 CAS head(`commitChangeset` 携带 `baseRevision` +
+- 关键约定:每 namespace 的 CAS head(`commitChangeset` 携带 `baseRevision` +
   `operationId`,同 operationId 重试返回同 revision,同 ID 不同内容拒绝);不可变
   revision 文档与原子 audit;runtime snapshot 记录(pin/refcount,GC 不清除被引用
   快照);generation 以十进制字符串出 Redis/PG API,守住 2^53 精度。
@@ -1370,7 +1370,7 @@ models.dev 的 key 是 `<providerId>/<modelId>`（AI SDK 标识）。自定义 p
   管线)、`config-compiler.ts`(执行图)、`config-publish.ts`(prepare/CAS/install)、
   `config-preview.ts`(无副作用预览与 readiness)。全部为纯函数 + 显式 store
   参数,无文件/网络/env 副作用。
-- 合并合同:文件显式配置优先并锁定(实体锁 + 全局叶字段锁),数据库补充;
+- 合并约定:文件显式配置优先并锁定(实体锁 + 全局叶字段锁),数据库补充;
   文件实体遮蔽同名的数据库记录(shadowed 可见、可导出、可删除,不报错);
   显式空数组/false/0 是有效声明,与缺省区分;defaults 只在单次最终解析时
   应用一次。每字段 provenance(file/database/default)可查询。
@@ -1543,7 +1543,7 @@ kind 不适用的字段（如 anthropic 专属字段之于 ollama provider）渲
 202 锁定该提交的编辑，继续查询激活状态。历史恢复创建新 revision，使用相同恢复协议。
 文件锁定值只读，同名 shadowed 数据库实体只允许删除；脱敏占位符禁止回写。
 
-runtime state 账本采用 memory/SQLite/PostgreSQL/Redis 同一 CAS 合同，记录
+runtime state 账本采用 memory/SQLite/PostgreSQL/Redis 同一 CAS 约定，记录
 legacy_import、instance、接收 pin、queue version 和 catalog 结果。接收先写 pin，
 再写 receipt/job，成功持久化前不返回接受；pin 结束后保留到对账。GC 先读 pin，
 再完整读取 receipt/routing/batch/deferral/queue 引用；任何后端失败都停止回收。
@@ -1560,14 +1560,14 @@ Review 路径筛选在 fetchScoped 前执行。max_patch_bytes 和 fetch_extra �
 计数；`max_files` 与 `max_patch_bytes` 只计过滤后参与分析的文件——diff 以过滤后
 pathspec 请求，被 include/exclude 排除的文件从不计入预算（dry run 分析集为空时预览
 性 diff 不触发预算拦截）；VCS 适配器必须遵守请求的 pathspec，返回未裁剪 diff 会破坏
-该合同。额外上下文请求串行占用每次 run 的文件/字节预算，拒绝越界路径和超额读取。
+该约定。额外上下文请求串行占用每次 run 的文件/字节预算，拒绝越界路径和超额读取。
 incremental=false 追加 head 完整文件（同样只计分析集），受 patch 字节上限约束；skip_lgtm 仅控制
 分析提示。head_only/per_commit 消费有界提交元数据（256 条/1 MiB），后者在一次分析
 中提供带提交标记的补丁，并要求核对最终 head；历史改写保持端点比较。根提交采用
 [Git diff-tree --root](https://git-scm.com/docs/git-diff-tree)，不硬编码 SHA-1 空树。
 reflection 同时执行过期、保留期、条数和 UTF-8 字节限制；窗口删除语义分别依据
 [SQLite](https://www.sqlite.org/windowfunctions.html) 和
-[PostgreSQL](https://www.postgresql.org/docs/current/functions-window.html) 合同。
+[PostgreSQL](https://www.postgresql.org/docs/current/functions-window.html) 的窗口函数规则。
 
 catalog 配置和 triage 按 generation 构造；激活前固定全部配置模型的目录结果，CAS
 持久保存并校验 hash，旧任务重启后不随共享目录刷新变化。目录缓存与连接按 backend
@@ -1602,13 +1602,13 @@ P4/P5 本地验收见 M19，P6 管理 UI 验收见 M20，P7/P8 集成与同版�
 M21/M22；复审修复见 [M23](milestones/M23.md)，指定旧版本兼容、CLI 排空和两平台
 真实服务最终证据见 [M24](milestones/M24.md)。
 
-## 4. 默认评审 Prompt 合同
+## 4. 默认评审 Prompt 规范
 
 - 默认 system prompt 只保留稳定硬规则、输出协议与安全边界。
 - 详细调研、采纳/拒绝理由和样例留在 `docs/prompt-research.md`。
 - repo-local AI 资产按路径和优先级按需装配，不直接把全量仓库文档塞进系统 prompt。
 - 删除行、旧代码、上下文缺失等高风险区域需要在 prompt 中显式约束，降低 hallucination。
-- 工具合同是真源；prompt 不应单方面扩展未实现的工具名或字段。
+- 工具接口约定是真源；prompt 不应单方面扩展未实现的工具名或字段。
 - 输出以发现的问题为中心：无 actionable problem 时 `aicr.skip` 即完整输出；summary 只
   框定已报问题，不枚举检查过但没问题的文件或方面。
 
@@ -1633,7 +1633,7 @@ M21/M22；复审修复见 [M23](milestones/M23.md)，指定旧版本兼容、CLI
   覆盖管理 UI 的组合交互；CI 中以独立 job「Dashboard browser gate (P6)」执行。
 - 变更配置 contract、输出 contract、runtime bundle、sandbox 行为时，都要补对应测试。
 - AI 资产变更至少要过 markdownlint，并检查 skill frontmatter / 目录名 / `name` 一致性。
-- 文档不是“写完就算”，它们与示例、测试、配置 shape 一起构成实现合同。
+- 文档不是“写完就算”，它们与示例、测试、配置 shape 一起构成实现约定。
 
 ### 7.1 测试 ID 家族图例
 
@@ -1674,6 +1674,6 @@ ID 只作历史索引，新证据直接引用测试文件与断言。
   - 数据目录
   - 日志目录
   - workspace 持久卷
-- Podman / Docker 使用同一构建与运行合同，差异通过 engine 选择吸收。
+- Podman / Docker 使用同一构建与运行约定，差异通过 engine 选择吸收。
 - 健康检查统一使用 `/healthz`。
 - 远程部署的操作性说明以 `example/README.md`、`docs/podman.md` 与仓库技能为准；`development/README.md` 是当前仓库操作约束，不是对外产品文档。

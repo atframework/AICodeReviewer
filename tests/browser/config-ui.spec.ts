@@ -1277,3 +1277,73 @@ test.describe.serial("config management UI (P6 browser gate)", () => {
     await cancelDrawerAndDiscard(page);
   });
 });
+
+test("IM connections page edits kind-scoped fields, stages and publishes a WeCom connection (IM-03: C08)", async ({ page, request }) => {
+  await login(page);
+  await openConfigTab(page, "IM connections");
+  const token = await bearerToken(page);
+  const before = await apiView(request, token);
+  const drawer = page.locator("#config-editor");
+
+  await page.getByRole("button", { name: "New im connection", exact: true }).click();
+  // Kind scoping: protocol fields follow the selected connection kind.
+  await drawer.locator("#cfg-drawer-kind").selectOption("feishu_app");
+  await expect(drawer.locator('[data-field-id="im_connection:app_id"]')).toBeVisible();
+  await expect(drawer.locator('[data-field-id="im_connection:corp_id"]')).toBeHidden();
+  await drawer.locator("#cfg-drawer-kind").selectOption("wecom_app");
+  await expect(drawer.locator('[data-field-id="im_connection:app_id"]')).toBeHidden();
+  await expect(drawer.locator('[data-field-id="im_connection:corp_id"]')).toBeVisible();
+
+  await setTextField(drawer, "im_connection:$name", "corp-review");
+  await setTextField(drawer, "im_connection:corp_id", "ww_example");
+  await setTextField(drawer, "im_connection:agent_id", "1000002");
+  await setTextField(drawer, "im_connection:app_secret", "browser-im-secret");
+  await drawer.getByRole("button", { name: "Stage changes", exact: true }).click();
+  expect((await apiView(request, token)).head).toEqual(before.head);
+  await page.getByRole("button", { name: "Publish staged changes", exact: true }).click();
+  await expect.poll(async () => (await apiView(request, token)).head?.activeRevision).toBe((before.head?.activeRevision ?? 0) + 1);
+
+  await page.locator("#config-main tbody tr", { hasText: "corp-review" }).getByRole("button", { name: "Edit", exact: true }).click();
+  await expect(drawer.locator('[data-field-id="im_connection:app_secret"] input')).toHaveAttribute("placeholder", "(set — never displayed)");
+  await drawer.getByRole("button", { name: "Cancel", exact: true }).click();
+
+  const connections = await apiCollection(request, token, "im_connection");
+  const record = connections.find((entry) => entry.name === "corp-review");
+  expect(record?.value).toMatchObject({ kind: "wecom_app", corp_id: "ww_example", agent_id: 1000002 });
+  expect(JSON.stringify(connections)).not.toContain("browser-im-secret");
+
+  // Deleting the referenced connection through the UI/API surface stays atomic:
+  // seed a binding draft first, then the delete must fail with invalid_reference.
+  const viewNow = await apiView(request, token);
+  const seeded = await request.post("/api/admin/config/changesets", {
+    headers: { Authorization: `Bearer ${token}` },
+    data: {
+      baseRevision: viewNow.head?.activeRevision ?? null,
+      fileDigest: viewNow.fileDigest,
+      operationId: "im-browser-binding-seed",
+      operations: [{
+        op: "create",
+        collection: "im_command_bindings",
+        record: {
+          id: "rec-reviewers",
+          name: "reviewers",
+          enabled: true,
+          value: { connection: "corp-review", actors: [{ type: "wecom_userid", id: "alice" }], conversations: [{ kind: "app_direct" }], commands: ["status"] },
+        },
+      }],
+    },
+  });
+  expect(seeded.status()).toBe(200);
+  const afterSeed = await apiView(request, token);
+  const rejected = await request.post("/api/admin/config/changesets", {
+    headers: { Authorization: `Bearer ${token}` },
+    data: {
+      baseRevision: afterSeed.head?.activeRevision ?? null,
+      fileDigest: afterSeed.fileDigest,
+      operationId: "im-browser-delete-ref",
+      operations: [{ op: "delete", collection: "im_connections", recordId: (connections.find((entry) => entry.name === "corp-review")?.id ?? "rec-corp") }],
+    },
+  });
+  expect(rejected.status()).toBeGreaterThanOrEqual(400);
+  expect(((await rejected.json()) as { error: string }).error).toBe("invalid_reference");
+});

@@ -11,7 +11,7 @@ first; this file only covers wording.
   `CHANGELOG.md`, `docs/ai/milestones/`, or a migration guide.
 - Delete superseded paragraphs instead of keeping them for context; git holds
   the history.
-- Version identifiers that are contracts stay: API paths (`bot/v2/hook`),
+- Stable API and version identifiers stay: API paths (`bot/v2/hook`),
   schema values (`legacy_v1`/`isolated_v2`, config document versions),
   dependency versions, console UI names (版本管理与发布).
 - Unfinished capability goes to the roadmap section in `docs/ai/index.md`; reference docs do not announce it.
@@ -78,9 +78,17 @@ Structure:
 结构：
 
 - 先说结论，一段一事。
-- 列表和表格承载合同信息（字段、默认值、命令）；装饰性的
+- 列表和表格承载规范信息（字段、默认值、命令）；装饰性的
   “加粗标签：描述” 列表不作正文。
 - 不为自然感引入口语梗、表情或营销比喻。
+
+## 中文技术术语
+
+整份强制性设计用“规范”，接口行为和兼容边界用“约定”，字段限制与处理顺序用“规则”，
+外部服务格式用“协议”，完成条件用“验收标准”。不要把软件设计文档、开发计划或测试要求统称
+“合同”；只有确实描述法律协议时才使用该词。
+已被代码、工具或现有引用使用的英文文件名、技能标识和 API 名称保持原样，修改面向读者的标题与正文。
+历史里程碑保留当时用词，不为统一术语重写交付记录。
 
 ## Exceptions
 

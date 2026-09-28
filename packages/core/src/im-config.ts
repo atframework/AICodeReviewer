@@ -19,6 +19,9 @@ import {
  * comment records the runtime default the consumer applies.
  */
 
+/** Connection protocol kinds, in schema order; feeds the UI kind selector. */
+export const IM_CONNECTION_KINDS = ["wecom_app", "wecom_aibot", "feishu_app"] as const;
+
 /** Named-map keys for connections and command bindings (execution contracts §2). */
 export const imEntityNameSchema = z
   .string()

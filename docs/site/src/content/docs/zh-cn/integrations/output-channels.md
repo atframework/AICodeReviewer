@@ -3,7 +3,7 @@ title: 输出通道
 description: AICR 的 MCP 报告工具如何把 agent 发现转化为 PR 评论、issue 和 IM 卡片。
 ---
 
-AICR 把 agent 的职责（代码推理）与自身的职责（报告契约、校验、路由和渲染）分离。
+AICR 把 agent 的职责（代码推理）与自身的职责（报告格式、校验、路由和渲染）分离。
 所有正式评审结果都通过 AICR 工具产出，绝不通过 agent 的自由文本 stdout。同一个
 problem 可以干净地渲染为 VCS 行内评论、issue 条目或 IM 摘要卡片。
 

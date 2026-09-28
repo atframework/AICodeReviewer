@@ -15,7 +15,7 @@ user-invocable: false
    [the source map](../../../docs/ai/source-index.md) and current primary sources.
    Preserve older verification dates for records not refreshed.
 3. State the evidence-backed plan before editing. For each rule choose one owner:
-   global invariant → `AGENTS.md`; workflow → matching skill; conditional contract
+   global invariant → `AGENTS.md`; workflow → matching skill; conditional specification
    → topic reference; external evidence → source record; history → milestone.
 4. Merge duplicates and remove generic advice, stale snapshots, and incident
    narratives. Retain non-obvious invariants, failure boundaries, and source/test
@@ -53,8 +53,8 @@ user-invocable: false
 - Walk representative tasks through the revised routing and compare required
   reads and bytes. Check both positive and negative skill-selection cases.
   Structural checks do not prove model quality or runtime token savings.
-- For runtime prompt edits, preserve placeholders and tool contracts and run
+- For runtime prompt edits, preserve placeholders and tool interfaces and run
   assembly/runtime tests plus the applicable baseline gates. Preserve independent
-  triage, repair, and resolution prompts unless their own contract needs editing.
+  triage, repair, and resolution prompts unless their own specification needs editing.
 - Sync affected docs, examples and roadmap navigation; keep research reports and
   measurements under `build/`. Report which surfaces were retained and why.

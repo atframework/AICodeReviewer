@@ -919,7 +919,7 @@ export const CONFIG_FIELD_INVENTORY: readonly ConfigFieldSpec[] = [
   g("outputs.channels[].member_directory.poll_interval_seconds", { t: "ZodNumber", own: "entity", ent: "channel", cap: "file source only; runtime default 30; bounded 5–300", wir: false, st: "IM-07 watch service wiring pending", ui: "number" }),
   g("outputs.channels[].member_directory.allowed_root", { t: "ZodString", own: "entity", ent: "channel", cap: "file source only; trusted root for real-path boundary checks; defaults to the config baseDir", wir: false, st: "IM-07 watch service wiring pending", ui: "text" }),
   g("outputs.channels[].author_mappings.*", { t: "ZodString", own: "entity", ent: "channel", cap: "author → file member key; mutually exclusive with user_mappings", wir: false, st: "IM-08 directory mapping wiring pending", ui: "text" }),
-  g("outputs.channels[].connection", { t: "ZodString", own: "entity", ent: "channel", cap: "wecom_app channels require it; feishu_app channels replace inline credentials with it", wir: false, st: "IM-05 publisher wiring pending", ui: "select" }),
+  g("outputs.channels[].connection", { t: "ZodString", own: "entity", ent: "channel", cap: "wecom_app channels require it; feishu_app channels replace inline credentials with it; rename/delete protected at publish", con: "packages/core/src/config-source.ts:collectEntityReferences + packages/core/src/config-publish.ts available-set reference integrity", wir: true, ui: "select" }),
   g("outputs.channels[].target.kind", { t: "ZodLiteral", own: "entity", ent: "channel", cap: "wecom_app only; recipients | appchat", wir: false, st: "IM-04/IM-05 sender wiring pending", ui: "select" }),
   g("outputs.channels[].target.users", { t: "ZodString[]", own: "entity", ent: "channel", cap: "recipients target; ≤1000 userids", wir: false, st: "IM-04/IM-05 sender wiring pending", ui: "multiselect" }),
   g("outputs.channels[].target.parties", { t: "ZodString[]", own: "entity", ent: "channel", cap: "recipients target; ≤100 party ids", wir: false, st: "IM-04/IM-05 sender wiring pending", ui: "multiselect" }),
@@ -1064,39 +1064,44 @@ export const CONFIG_FIELD_INVENTORY: readonly ConfigFieldSpec[] = [
   ...contextRepositoryRows(),
   ...workspaceAgentRows(),
 
-  // -------------------------------------------------- im (IM plan, unwired)
-  // Schema-accepted since IM-01; no runtime consumer exists yet. These maps
-  // become the im_connection / im_command_binding database entities in IM-02,
-  // and rows flip wired as IM-04+ lands the senders, callbacks, and workers.
-  g("im.connections.*.kind", { t: "ZodLiteral", own: "business", cap: "wecom_app | wecom_aibot | feishu_app; never a VCS trigger kind", wir: false, st: "IM-04/IM-10 runtime wiring pending", ui: "select" }),
-  g("im.connections.*.enabled", { t: "ZodBoolean", own: "business", cap: "runtime default true", wir: false, st: "IM-17 lifecycle wiring pending", ui: "toggle" }),
-  g("im.connections.*.corp_id", { t: "ZodString", own: "business", cap: "wecom_app/wecom_aibot; local identity domain, not carried inside aibot payloads", wir: false, st: "IM-04/IM-10 wiring pending", ui: "text" }),
-  g("im.connections.*.agent_id", { t: "ZodNumber", own: "business", cap: "wecom_app only; positive integer", wir: false, st: "IM-04 wiring pending", ui: "number" }),
-  g("im.connections.*.app_secret", { t: "ZodString", own: "business", cap: "wecom_app/feishu_app; mutually exclusive with app_secret_env", wir: false, st: "IM-04 wiring pending", ui: "secret-value" }),
-  g("im.connections.*.app_secret_env", { t: "ZodString", own: "business", cap: "wecom_app/feishu_app; mutually exclusive with app_secret", wir: false, st: "IM-04 wiring pending", ui: "secret-ref" }),
-  g("im.connections.*.aibot_id", { t: "ZodString", own: "business", cap: "wecom_aibot only", wir: false, st: "IM-10 wiring pending", ui: "text" }),
-  g("im.connections.*.app_id", { t: "ZodString", own: "business", cap: "feishu_app only", wir: false, st: "IM-10 wiring pending", ui: "text" }),
-  g("im.connections.*.base_url", { t: "ZodString", own: "business", cap: "feishu_app only; https://open.feishu.cn or https://open.larksuite.com", wir: false, st: "IM-10 wiring pending", ui: "text" }),
-  g("im.connections.*.tenant_key", { t: "ZodString", own: "business", cap: "feishu_app only; required once callback is enabled", wir: false, st: "IM-10 wiring pending", ui: "text" }),
-  g("im.connections.*.callback.enabled", { t: "ZodBoolean", own: "business", cap: "runtime default false", wir: false, st: "IM-12 callback routing pending", ui: "toggle" }),
-  g("im.connections.*.callback.token", { t: "ZodString", own: "business", cap: "wecom kinds; mutually exclusive with token_env", wir: false, st: "IM-10 protocol adapter pending", ui: "secret-value" }),
-  g("im.connections.*.callback.token_env", { t: "ZodString", own: "business", cap: "wecom kinds; mutually exclusive with token", wir: false, st: "IM-10 protocol adapter pending", ui: "secret-ref" }),
-  g("im.connections.*.callback.encoding_aes_key", { t: "ZodString", own: "business", cap: "wecom kinds; mutually exclusive with encoding_aes_key_env", wir: false, st: "IM-10 protocol adapter pending", ui: "secret-value" }),
-  g("im.connections.*.callback.encoding_aes_key_env", { t: "ZodString", own: "business", cap: "wecom kinds; mutually exclusive with encoding_aes_key", wir: false, st: "IM-10 protocol adapter pending", ui: "secret-ref" }),
-  g("im.connections.*.callback.verification_token", { t: "ZodString", own: "business", cap: "feishu_app only; mutually exclusive with verification_token_env", wir: false, st: "IM-10 protocol adapter pending", ui: "secret-value" }),
-  g("im.connections.*.callback.verification_token_env", { t: "ZodString", own: "business", cap: "feishu_app only; mutually exclusive with verification_token", wir: false, st: "IM-10 protocol adapter pending", ui: "secret-ref" }),
-  g("im.connections.*.callback.encrypt_key", { t: "ZodString", own: "business", cap: "feishu_app only; mutually exclusive with encrypt_key_env", wir: false, st: "IM-10 protocol adapter pending", ui: "secret-value" }),
-  g("im.connections.*.callback.encrypt_key_env", { t: "ZodString", own: "business", cap: "feishu_app only; mutually exclusive with encrypt_key", wir: false, st: "IM-10 protocol adapter pending", ui: "secret-ref" }),
-  g("im.command_bindings.*.enabled", { t: "ZodBoolean", own: "business", cap: "runtime default false; disabled drafts stay savable pre-wiring", wir: false, st: "IM-11 admission wiring pending", ui: "toggle" }),
-  g("im.command_bindings.*.connection", { t: "ZodString", own: "business", cap: "named reference into im.connections", wir: false, st: "IM-11 admission wiring pending", ui: "select" }),
-  g("im.command_bindings.*.actors[].type", { t: "ZodEnum", own: "business", cap: "wecom_userid | wecom_encrypted_userid | feishu_open_id; namespace inherited from the connection", wir: false, st: "IM-11 admission wiring pending", ui: "select" }),
-  g("im.command_bindings.*.actors[].id", { t: "ZodString", own: "business", cap: "exact typed platform id; no fuzzy matching", wir: false, st: "IM-11 admission wiring pending", ui: "text" }),
-  g("im.command_bindings.*.conversations[]", { t: "union", own: "business", cap: "app_direct | bot_direct | group(+id); kinds must match the connection protocol", wir: false, st: "IM-11 admission wiring pending", ui: "select" }),
-  g("im.command_bindings.*.commands", { t: "ZodEnum[]", own: "business", cap: "help | chat-id | review | status; unique", wir: false, st: "IM-11 admission wiring pending", ui: "multiselect" }),
-  g("im.command_bindings.*.repositories.*.workspace", { t: "ZodString", own: "business", cap: "repo-alias target; validated against routing/VCS scope at publish", wir: false, st: "IM-13 revision resolution pending", ui: "text" }),
-  g("im.command_bindings.*.repositories.*.source_trigger", { t: "ZodString", own: "business", cap: "repo-alias target; validated against routing/VCS scope at publish", wir: false, st: "IM-13 revision resolution pending", ui: "text" }),
-  g("im.command_bindings.*.repositories.*.repo_ref", { t: "ZodString", own: "business", cap: "repo-alias target; validated against routing/VCS scope at publish", wir: false, st: "IM-13 revision resolution pending", ui: "text" }),
-  g("im.command_bindings.*.report_policy", { t: "ZodEnum", own: "business", cap: "workspace_routes only; runtime default", wir: false, st: "IM-16 reply wiring pending", ui: "select" }),
+  // -------------------------------------------------- im (IM plan)
+  // Map entities registered since IM-02. `wired` reflects audited runtime
+  // consumers today: the config pipeline itself (reference integrity in
+  // config-source/config-publish, credential sealing and destination grants
+  // in config-secret-sealing/config-secret-policy, channel-connection kind
+  // checks in config.ts) provably reads these fields, with tests in the
+  // config-publish / config-secret-policy / config-secret-sealing /
+  // im-config suites. Senders, callbacks and workers flip the remaining rows
+  // as IM-04+ lands their consumers.
+  g("im.connections.*.kind", { t: "ZodLiteral", own: "entity", ent: "im_connection", cap: "wecom_app | wecom_aibot | feishu_app; never a VCS trigger kind", con: "packages/core/src/config-source.ts:collectEntityReferences + packages/core/src/config.ts appConfigRefinement connection kind check", wir: true, ui: "select" }),
+  g("im.connections.*.enabled", { t: "ZodBoolean", own: "entity", ent: "im_connection", cap: "runtime default true", wir: false, st: "IM-17 lifecycle wiring pending", ui: "toggle" }),
+  g("im.connections.*.corp_id", { t: "ZodString", own: "entity", ent: "im_connection", cap: "wecom_app/wecom_aibot; local identity domain, not carried inside aibot payloads", con: "packages/core/src/config-secret-policy.ts:destinationContext credential destination binding", wir: true, ui: "text" }),
+  g("im.connections.*.agent_id", { t: "ZodNumber", own: "entity", ent: "im_connection", cap: "wecom_app only; positive integer", con: "packages/core/src/config-secret-policy.ts:destinationContext credential destination binding", wir: true, ui: "number" }),
+  g("im.connections.*.app_secret", { t: "ZodString", own: "entity", ent: "im_connection", cap: "wecom_app/feishu_app; mutually exclusive with app_secret_env; sealed at persistence boundaries", con: "packages/core/src/config-secret-sealing.ts:sealConfigSecretLiterals + config-secret-policy.ts literal grants", wir: true, ui: "secret-value" }),
+  g("im.connections.*.app_secret_env", { t: "ZodString", own: "entity", ent: "im_connection", cap: "wecom_app/feishu_app; mutually exclusive with app_secret", con: "packages/core/src/config-secret-policy.ts:collectConfigSecretReferences", wir: true, ui: "secret-ref" }),
+  g("im.connections.*.aibot_id", { t: "ZodString", own: "entity", ent: "im_connection", cap: "wecom_aibot only", con: "packages/core/src/config-secret-policy.ts:destinationContext credential destination binding", wir: true, ui: "text" }),
+  g("im.connections.*.app_id", { t: "ZodString", own: "entity", ent: "im_connection", cap: "feishu_app only", con: "packages/core/src/config-secret-policy.ts:destinationContext credential destination binding", wir: true, ui: "text" }),
+  g("im.connections.*.base_url", { t: "ZodString", own: "entity", ent: "im_connection", cap: "feishu_app only; https://open.feishu.cn or https://open.larksuite.com", wir: false, st: "IM-10 protocol adapter wiring pending", ui: "text" }),
+  g("im.connections.*.tenant_key", { t: "ZodString", own: "entity", ent: "im_connection", cap: "feishu_app only; required once callback is enabled", con: "packages/core/src/config-secret-policy.ts:destinationContext credential destination binding", wir: true, ui: "text" }),
+  g("im.connections.*.callback.enabled", { t: "ZodBoolean", own: "entity", ent: "im_connection", cap: "runtime default false", wir: false, st: "IM-10/IM-12 callback wiring pending", ui: "toggle" }),
+  g("im.connections.*.callback.token", { t: "ZodString", own: "entity", ent: "im_connection", cap: "wecom kinds; mutually exclusive with token_env; sealed", con: "packages/core/src/config-secret-sealing.ts:sealConfigSecretLiterals + config-secret-policy.ts literal grants", wir: true, ui: "secret-value" }),
+  g("im.connections.*.callback.token_env", { t: "ZodString", own: "entity", ent: "im_connection", cap: "wecom kinds; mutually exclusive with token", con: "packages/core/src/config-secret-policy.ts:collectConfigSecretReferences", wir: true, ui: "secret-ref" }),
+  g("im.connections.*.callback.encoding_aes_key", { t: "ZodString", own: "entity", ent: "im_connection", cap: "wecom kinds; mutually exclusive with encoding_aes_key_env; sealed", con: "packages/core/src/config-secret-sealing.ts:sealConfigSecretLiterals + config-secret-policy.ts literal grants", wir: true, ui: "secret-value" }),
+  g("im.connections.*.callback.encoding_aes_key_env", { t: "ZodString", own: "entity", ent: "im_connection", cap: "wecom kinds; mutually exclusive with encoding_aes_key", con: "packages/core/src/config-secret-policy.ts:collectConfigSecretReferences", wir: true, ui: "secret-ref" }),
+  g("im.connections.*.callback.verification_token", { t: "ZodString", own: "entity", ent: "im_connection", cap: "feishu_app only; mutually exclusive with verification_token_env; sealed", con: "packages/core/src/config-secret-sealing.ts:sealConfigSecretLiterals + config-secret-policy.ts literal grants", wir: true, ui: "secret-value" }),
+  g("im.connections.*.callback.verification_token_env", { t: "ZodString", own: "entity", ent: "im_connection", cap: "feishu_app only; mutually exclusive with verification_token", con: "packages/core/src/config-secret-policy.ts:collectConfigSecretReferences", wir: true, ui: "secret-ref" }),
+  g("im.connections.*.callback.encrypt_key", { t: "ZodString", own: "entity", ent: "im_connection", cap: "feishu_app only; mutually exclusive with encrypt_key_env; sealed", con: "packages/core/src/config-secret-sealing.ts:sealConfigSecretLiterals + config-secret-policy.ts literal grants", wir: true, ui: "secret-value" }),
+  g("im.connections.*.callback.encrypt_key_env", { t: "ZodString", own: "entity", ent: "im_connection", cap: "feishu_app only; mutually exclusive with encrypt_key", con: "packages/core/src/config-secret-policy.ts:collectConfigSecretReferences", wir: true, ui: "secret-ref" }),
+  g("im.command_bindings.*.enabled", { t: "ZodBoolean", own: "entity", ent: "im_command_binding", cap: "runtime default false; disabled drafts stay savable pre-wiring", wir: false, st: "IM-11 admission wiring pending", ui: "toggle" }),
+  g("im.command_bindings.*.connection", { t: "ZodString", own: "entity", ent: "im_command_binding", cap: "named reference into im.connections; rename/delete protected at publish", con: "packages/core/src/config-source.ts:collectEntityReferences + packages/core/src/config-publish.ts available-set reference integrity", wir: true, ui: "select" }),
+  g("im.command_bindings.*.actors[].type", { t: "ZodEnum", own: "entity", ent: "im_command_binding", cap: "wecom_userid | wecom_encrypted_userid | feishu_open_id; namespace inherited from the connection", wir: false, st: "IM-11 admission wiring pending", ui: "select" }),
+  g("im.command_bindings.*.actors[].id", { t: "ZodString", own: "entity", ent: "im_command_binding", cap: "exact typed platform id; no fuzzy matching", wir: false, st: "IM-11 admission wiring pending", ui: "text" }),
+  g("im.command_bindings.*.conversations[]", { t: "union", own: "entity", ent: "im_command_binding", cap: "app_direct | bot_direct | group(+id); kinds must match the connection protocol", wir: false, st: "IM-11 admission wiring pending", ui: "select" }),
+  g("im.command_bindings.*.commands", { t: "ZodEnum[]", own: "entity", ent: "im_command_binding", cap: "help | chat-id | review | status; unique", wir: false, st: "IM-11 admission wiring pending", ui: "multiselect" }),
+  g("im.command_bindings.*.repositories.*.workspace", { t: "ZodString", own: "entity", ent: "im_command_binding", cap: "repo-alias target; validated against routing/VCS scope at publish", con: "packages/core/src/config-source.ts:collectEntityReferences workspace references", wir: true, ui: "select" }),
+  g("im.command_bindings.*.repositories.*.source_trigger", { t: "ZodString", own: "entity", ent: "im_command_binding", cap: "repo-alias target; validated against routing/VCS scope at publish", con: "packages/core/src/config-source.ts:collectEntityReferences trigger references", wir: true, ui: "select" }),
+  g("im.command_bindings.*.repositories.*.repo_ref", { t: "ZodString", own: "entity", ent: "im_command_binding", cap: "repo-alias target; validated against routing/VCS scope at publish", wir: false, st: "IM-13 revision resolution pending", ui: "text" }),
+  g("im.command_bindings.*.report_policy", { t: "ZodEnum", own: "entity", ent: "im_command_binding", cap: "workspace_routes only; runtime default", wir: false, st: "IM-16 reply wiring pending", ui: "select" }),
 ];
 
 /**

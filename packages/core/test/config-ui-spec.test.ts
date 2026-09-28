@@ -100,7 +100,6 @@ const AUDIT_PAGE_ASSIGNMENT: readonly (readonly [string, string])[] = [
   ["admin.", "advanced"],
   ["config_sources.", "advanced"],
   ["storage.", "advanced"],
-  ["im.", "advanced"],
 ];
 
 const AUDIT_ENTITY_PREFIX: Readonly<Record<string, string>> = {
@@ -110,6 +109,8 @@ const AUDIT_ENTITY_PREFIX: Readonly<Record<string, string>> = {
   workspace: "workspaces.instances.*.",
   template: "outputs.templates.",
   prompt: "prompts.system.",
+  im_connection: "im.connections.*.",
+  im_command_binding: "im.command_bindings.*.",
 };
 
 const AUDIT_ENTITY_PAGE: Readonly<Record<string, string>> = {
@@ -121,6 +122,8 @@ const AUDIT_ENTITY_PAGE: Readonly<Record<string, string>> = {
   route: "routing",
   template: "templates",
   prompt: "prompts",
+  im_connection: "im-connections",
+  im_command_binding: "im-bindings",
 };
 
 const MODEL_CHAIN_ROW_PREFIX = "llm.model_chain.*[].";
@@ -170,6 +173,8 @@ const SYNTHETIC_FIELD_IDS: Readonly<Record<string, true>> = {
   "template:$name": true,
   "prompt:$name": true,
   "model_group:entries": true,
+  "im_connection:$name": true,
+  "im_command_binding:$name": true,
 };
 
 // ---------------------------------------------------------------------------
@@ -537,6 +542,8 @@ describe("page and section sanity", () => {
       "review",
       "workspaces",
       "queue",
+      "im-connections",
+      "im-bindings",
       "advanced",
       "versions",
     ]);
@@ -579,7 +586,7 @@ describe("page and section sanity", () => {
 
   it("flags exactly the globals-editing pages", () => {
     const globalsPages = spec.pages.filter((page) => page.globals === true).map((page) => page.id);
-    expect(globalsPages).toEqual(["model-groups", "channels", "agent", "review", "workspaces", "queue", "advanced"]);
+    expect(globalsPages).toEqual(["model-groups", "channels", "agent", "review", "workspaces", "queue", "im-connections", "im-bindings", "advanced"]);
   });
 
   it("mirrors the PAGE_LAYOUT page/section structure in the built spec", () => {
@@ -616,7 +623,7 @@ describe("visibleWhen", () => {
 });
 
 describe("optionsSource assignments", () => {
-  it("registers the nine dynamic options sources", () => {
+  it("registers the ten dynamic options sources", () => {
     expect(spec.optionsSources.map((source) => source.id)).toEqual([
       "providers",
       "model_groups",
@@ -625,6 +632,7 @@ describe("optionsSource assignments", () => {
       "workspaces",
       "templates",
       "prompts",
+      "im_connections",
       "secret_envs",
       "path_template_variables",
     ]);

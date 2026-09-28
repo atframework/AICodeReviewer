@@ -45,10 +45,10 @@ The IM-00 recheck on 2026-09-28 pinned `fast-xml-parser@5.11.1` (latest stable 5
 registry modified 2026-08-27) with a hard floor of 5.10.1 for CVE-2026-73569; the
 implementation plan is `processEntities: false`, `preserveOrder: true`, explicit
 DOCTYPE/ENTITY rejection before parsing, and the 256 KiB / 32-depth caps from the
-execution contracts. No dependency was installed yet; installation happens in the
+implementation specification. No dependency was installed yet; installation happens in the
 server package only, and the S01/S06 fixed vectors remain the proof obligation.
 The upstream README is not proof that default parsing meets these requirements.
-The [execution contracts](../../design/im-execution-contracts.md) fix required
+The [implementation specification](../../design/im-implementation-spec.md) fixes required
 behavior; failure to meet it blocks the XML task instead of silently changing parsers.
 
 ## Retrieval and evidence limits

@@ -51,4 +51,4 @@ Sources: `packages/outputs/src/index.ts`, `template-engine.ts`, `im-markdown.ts`
 - Reused table regexes with `.test()` must not have the stateful `g` flag. IM
   dispatchers apply their platform transformer. Feishu JSON 2.0 preserves headings,
   tables, blockquotes and code: use `card.body.elements`, including appended mentions.
-  Details: [IM contracts](../../../.agents/skills/output-channel-contracts/references/im-bot-message-contracts.md).
+  Details: [IM message rules](../../../.agents/skills/output-channel-contracts/references/im-bot-message-contracts.md).

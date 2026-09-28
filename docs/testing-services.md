@@ -159,7 +159,7 @@ Windows Node 同样可作为子命令；`WSLENV` 转换 CA 路径。运行账户
 
 AICR 的 Redis 队列和自动批次存储保留完整连接 URL，由原生驱动解析 TLS、ACL 用户名
 及编码凭据。依据锁文件中的 BullMQ 6.3.4 `RedisConnection.init` 和
-[BullMQ 连接合同](https://docs.bullmq.io/guide/connections)、
+[BullMQ 连接说明](https://docs.bullmq.io/guide/connections)、
 [ioredis TLS/URI 说明](https://github.com/redis/ioredis#tls-options)。
 
 ## 真实账户验收

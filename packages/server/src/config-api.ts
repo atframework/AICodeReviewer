@@ -681,6 +681,7 @@ const CONFIG_OPTIONS_SOURCES: Readonly<Record<string, (options: ConfigApiOptions
   workspaces: (options, loadView) => entityOptions(options, "workspace", loadView),
   templates: (options, loadView) => entityOptions(options, "template", loadView),
   prompts: (options, loadView) => entityOptions(options, "prompt", loadView),
+  im_connections: (options, loadView) => entityOptions(options, "im_connection", loadView),
   secret_envs: (options) => secretEnvOptions(options),
   path_template_variables: () => pathTemplateVariableOptions(),
 };

@@ -8,12 +8,12 @@ user-invocable: false
 
 1. Trace the affected path through `packages/agents/src/types.ts`, the target
    adapter, `runtime-bundle.ts`, server orchestration, and their tests. Consult
-   architecture §3.6–3.8 only for the corresponding contract.
+   architecture §3.6–3.8 only for the corresponding interface.
    For `agent.default: native-llm`, trace core selection → bootstrap → direct
    gateway completion instead: it creates no adapter, sandbox, or runtime bundle.
 2. Before changing a CLI flag or generated config, refresh that adapter's
    [external source record](../../../docs/ai/source-index.md) and verify current
-   upstream schema/help. Local fixtures alone can encode an invented contract.
+   upstream schema/help. Local fixtures alone can encode an invented behavior.
    For platform presets, verify both protocol choices through the enriched model
    and actual bundle: catalog SDK metadata can describe a different protocol,
    and SDKs differ in whether they append /messages or /v1/messages.
@@ -45,7 +45,7 @@ Repository references must be read from the source checkout (or fetched by a
 concrete repository-relative context request); do not assume bundle-local links
 work or move required runtime safety/output rules behind them.
 
-## Load by changed contract
+## Load by changed interface
 
 | Change | Reference / source |
 | --- | --- |

@@ -166,7 +166,7 @@ AICR 可以把每个 agent 运行隔离在独立的容器中。当服务本身�
 
 ### `docker_socket` 后端
 
-`docker_socket` 使用与 `docker` 相同的容器契约，但用于标识通过 Unix socket 访问 Docker 守护进程的
+`docker_socket` 遵循与 `docker` 相同的容器运行规则，但用于标识通过 Unix socket 访问 Docker 守护进程的
 运行。当服务本身运行在一个挂载了 `/var/run/docker.sock` 的容器内时，配置它：
 
 ```yaml

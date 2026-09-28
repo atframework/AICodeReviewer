@@ -60,7 +60,7 @@ host snapshot or secrets into a committed helper.
   Use explicit paths/image IDs; never run a global image/system/volume prune on
   a shared host. Build layers needed by retained images are not old releases.
 - Preserve live databases, workspaces, logs, secrets and configuration revisions
-  or snapshots referenced by queued work. Their runtime retention contracts are
+  or snapshots referenced by queued work. Their runtime retention rules are
   separate from deployment backup retention; do not delete database rows to
   satisfy the two-release limit. Remove task-owned temporary secret copies when
   no longer needed, and record the retained versions and reclaimed space.

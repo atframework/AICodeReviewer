@@ -103,7 +103,17 @@ export interface ConfigUiSection {
   readonly collapsed?: boolean;
 }
 
-export type ConfigUiEntityKind = "provider" | "model_group" | "trigger" | "channel" | "workspace" | "route" | "template" | "prompt";
+export type ConfigUiEntityKind =
+  | "provider"
+  | "model_group"
+  | "trigger"
+  | "channel"
+  | "workspace"
+  | "route"
+  | "template"
+  | "prompt"
+  | "im_connection"
+  | "im_command_binding";
 
 export interface ConfigUiPage {
   readonly id: string;

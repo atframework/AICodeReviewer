@@ -1,10 +1,11 @@
 # IM 功能执行手册
 
 状态：实施中（2026-09-28 起获授权）。IM-00 协议基线、IM-01 共享类型/配置 schema、
-IM-02 实体注册与凭据密封已完成，状态以 [Plan.md](../../Plan.md) 勾选为准；未完成项继续按本手册推进。
+IM-02 实体注册与凭据密封、IM-03 管理表单闭环已完成，状态以 [Plan.md](../../Plan.md) 勾选为准；
+未完成项继续按本手册推进。
 仅制定计划时不安装依赖、修改运行时代码、启动服务或发送真实消息的约束已被实施授权取代；
 真实平台账户相关操作（IM-21）仍需单独授权。
-任务状态入口是 [Plan.md](../../Plan.md)，合同入口是[实施合同](im-execution-contracts.md)，
+任务状态入口是 [Plan.md](../../Plan.md)，规范入口是[实施规范](im-implementation-spec.md)，
 测试编号和最终门禁见[验收矩阵](im-acceptance.md)。
 
 ## 1. 开发模型每次开始时执行的流程
@@ -12,10 +13,10 @@ IM-02 实体注册与凭据密封已完成，状态以 [Plan.md](../../Plan.md) 
 1. 读根 `AGENTS.md`、Plan 的未完成任务和本次任务卡，只加载该卡列出的源码、skill 和参考章节。
    先核对 Git diff，保留用户和其他任务的修改；不要复制旧会话里的文件快照覆盖当前文件。
 2. 查依赖任务的实现和证据，不能只看 checkbox。确认 public export、bootstrap 接线和测试文件真实存在。
-   文档中标注“新增”的文件目前不存在属于正常现象，不将示意类型当成可调用 API。
+   文档中标注“新增”的文件须按当前任务核对是否已创建，不将尚未实现的示意类型当成可调用 API。
 3. 搜索当前符号和调用者：有 `.codegraph` 时先用 CodeGraph；结果缺失/过期再用 rg。
    本文列出的是 2026-09-28 的定位路径，若已移动，找真实继承者并同步导航，不建立同职能重复模块。
-4. 用一段话说明本次改动、使用的合同、受影响文件和验收测试，再编辑。
+4. 用一段话说明本次改动、适用的规范条款、受影响文件和验收测试，再编辑。
    只能调整任务卡的产品表面；关联 export、manifest、锁文件和必要测试属于同一任务。
 5. 先写有可观察断言的测试，再补实现；复用现有 fixture、clock、transport 和 store 工厂。
    对已有行为写回归，不能只证明新增 helper 返回自己刚构造的对象。
@@ -35,14 +36,14 @@ implemented 只表示代码已接线；validated 需要对应断言、文档和�
 外部账户尚未验收时，IM-21 保持 pending_external，其余独立本地任务可继续。
 Plan 的 checkbox 只在该项 validated 后勾选；整个功能不能因本地 mock 通过宣称交付完成。
 
-以下情况仅暂停受影响步骤并报告：官方协议与合同冲突；无法建立数据库原子性/安全恢复；
+以下情况仅暂停受影响步骤并报告：官方协议与实施规范冲突；无法建立数据库原子性/安全恢复；
 需要改变公开字段或既定首期范围；必须升级不相关依赖；缺少真实验收账户。
-报告须带“冲突的合同、当前代码/来源、影响、建议选项”，不能仅说“不确定”。
+报告须带“冲突的规范条款、当前代码/来源、影响、建议选项”，不能仅说“不确定”。
 平台单据格式不清时拒绝该输入，不猜字段；但不能把拒绝所有正常输入当作功能完成。
 
 普通路径移动、已有 helper 可复用、函数拆分、局部类型收敛、失败后修复并重跑同一测试无需新增审批。
 若运行环境阻止进程启动，按 shell skill 排查与申请精确工具权限，不修改产品或测试断言。
-本次用户只要求细化文档，因此现在不执行下面任一开发任务。
+后续实施以 Plan 的未完成项、现有代码和本次授权范围为准。
 
 ## 3. 任务顺序与阅读范围
 
@@ -70,7 +71,7 @@ Plan 的 checkbox 只在该项 validated 后勾选；整个功能不能因本地
 | IM-19 | 08、15、17、18 | 组合回归和故障注入 | P5 |
 | IM-20 | 19 | 全部文档/示例/AI 同步和最终门禁 | P5 |
 | IM-21 | 20 | 真实平台受控验收 | P6 |
-| IM-22 | 21 | 合同归并、里程碑与计划退役 | P6 |
+| IM-22 | 21 | 约定归并、里程碑与计划退役 | P6 |
 
 默认按 00–22 顺序执行。依赖表允许跳过暂时外部阻塞而处理独立本地任务，不要求多 agent 并发。
 配置任务使用 config/state pitfalls；发布任务使用 output skill；队列恢复使用 scheduling pitfalls；
@@ -94,7 +95,7 @@ VCS 使用 VCS pitfalls；AI 资产修改使用 maintenance skill；每次不必
 ### IM-01 共享类型与配置 schema
 
 - 改：新增 core `im-config.ts`、`im-contracts.ts`，编辑 `config.ts`、`review-event.ts`、core `index.ts`。
-- 顺序：实现[实施合同 §2–3](im-execution-contracts.md#2-配置字段和所有权)的判别类型；
+- 顺序：实现[实施规范 §2–3](im-implementation-spec.md#2-配置字段和所有权)的判别类型；
   加 optional im 父节点；扩展应用 channel、目录来源、author_mappings；保留旧飞书内联和 API 目录形式。
   ReviewEvent 增加 requestOrigin，不增加 wecom/feishu VCS provider。
 - 验证：新建 `packages/core/test/im-config.test.ts`、`im-contracts.test.ts`；扩展 review-event/config 回归。
@@ -146,7 +147,7 @@ VCS 使用 VCS pitfalls；AI 资产修改使用 maintenance skill；每次不必
 - 验证：O05–O08，新 `wecom-app-publishing.test.ts`，并扩展 bootstrap 和 publication-journal 测试。
   从真实 createOutputPublisherResolverFromConfig 调用到捕获 raw HTTP，不只测试 dispatcher。
 - 禁止：给 appchat 塞 message/send 专属模板类型；将 buffered 当 delivered；以无限重试隐藏分片部分失败。
-- 出口：静态和 DB 配置的真实发布路径都可用，旧 IM 和 Git 混合路由仍符合原合同。
+- 出口：静态和 DB 配置的真实发布路径都可用，旧 IM 和 Git 混合路由仍符合现有行为约定。
 
 ### IM-06 目录 schema 与纯解析
 
@@ -184,11 +185,11 @@ VCS 使用 VCS pitfalls；AI 资产修改使用 maintenance skill；每次不必
 
 - 改：新增 store `im-store.ts`、`im-store.pg.ts` 及必要共享 types/export；
   `schema.ts`、`schema.pg.ts`、`database.ts` 的 SQLite migration registry、`pg-migrations.ts`。
-- 顺序：按实施合同建立表、索引和唯一约束；实现 accept/claim/dispatch/consume/finish 原子操作；
+- 顺序：按实施规范建立表、索引和唯一约束；实现 accept/claim/dispatch/consume/finish 原子操作；
   加临时凭证用途绑定的密封封装；snapshot 引用查询；终态/活动数据分开的 retention。
   从当前 migration registry 取下一个版本，不复制本文日期推算版本号，不编辑既有 checksum。
 - 验证：R01–R06，新 `packages/store/test/im-store-conformance.ts` 及
-  `im-store.test.ts`、`im-store-pg.test.ts`；复用同一合同跑 SQLite 和真实 PG；扩展迁移 fixture/进程测试。
+  `im-store.test.ts`、`im-store-pg.test.ts`；复用同一验证标准跑 SQLite 和真实 PG；扩展迁移 fixture/进程测试。
 - 禁止：get→判断→insert 代替唯一约束；SQLite 同步 API 写法原样套 PG；事务中远端发消息；
   将密码/临时 URL 明文塞进 generic JSON；无凭据时将 PG mock 称真实 PG 通过。
 - 出口：双后端原子语义、升级 verify 模式、旧 reader 拒绝新结构和 fresh-store 重启可证明。
@@ -310,13 +311,13 @@ VCS 使用 VCS pitfalls；AI 资产修改使用 maintenance skill；每次不必
   Git 真实本地仓库必跑，P4/SVN 本地工具按已有受控服务规则验收。
 - 证据：每个关键断言有文件/用例标题和日志，不把测试文件数量当需求覆盖数。
   平台 mock 与真实平台分开；未设置真实账户不影响本地矩阵，但 IM-21 不能勾选。
-- 出口：逐条核对[故障注入表](im-execution-contracts.md#8-故障注入点)，任一未知发送没有新增重复 POST。
+- 出口：逐条核对[故障注入表](im-implementation-spec.md#8-故障注入点)，任一未知发送没有新增重复 POST。
 
 ### IM-20 文档、示例与最终门禁
 
 - 改：总体设计 §9 指定的当前行为文档，双语 `integrations/im-bots.md`、outputs、config-fields、
   overview、dashboard、operations、相关首次 webhook 说明；`example/config.yaml`/README/目录示例；
-  AI skill 和来源记录；身份 prompt 只有候选合同变化才改，不让主模型掌握权限逻辑。
+  AI skill 和来源记录；身份 prompt 只有候选数据约定变化才改，不让主模型掌握权限逻辑。
 - 做：草案示例转成经过 `loadConfigFile`/schema/实际 bootstrap 测试的最小配置；
   单独说明持久 ConfigStore 前提、传统 webhook 限制和群 ID 类型；删除“schema 已接受=已支持”的措辞。
 - 验证：所有适用完整 gates，确切命令见验收矩阵；文档站 build/check 与 browser 顺序运行。
@@ -336,7 +337,7 @@ VCS 使用 VCS pitfalls；AI 资产修改使用 maintenance skill；每次不必
 ### IM-22 归档
 
 - 前置：所有必需本地与平台验收完成，或用户明确调整了交付范围并记录具体缺口。
-- 做：稳定合同归入 architecture/output 文档，证据写新里程碑；更新路线图只留未完成事项；
+- 做：稳定约定归入 architecture/output 文档，证据写新里程碑；更新路线图只留未完成事项；
   检索全部 inbound links 后，才退役本组临时设计/执行资料。保持来源记录和必要回归入口。
 - 禁止：因为 checkbox 多或文档长而删除未完成计划；把暂停/缺凭据写为已验收。
 - 出口：Plan 精简，任何未完成项仍可定位，历史证据不混进 prompt/skill 常规读取路径。
@@ -352,7 +353,7 @@ build 文件不保证跨机器保留；跨机器交接要提供当前 diff、Pla
 实际变更：文件、公开接口、为何需要
 保留的旧行为：有针对性的回归用例
 测试：命令、退出码、发现文件/用例数、失败/跳过数量、日志
-合同编号：本项已覆盖与未覆盖编号
+验收编号：本项已覆盖与未覆盖编号
 外部证据：无 / 本地真实后端 / 真实平台；不得合并
 剩余限制：具体原因与解除条件
 下一任务：编号与依赖是否满足
@@ -364,10 +365,10 @@ build 文件不保证跨机器保留；跨机器交接要提供当前 diff、Pla
 
 ```text
 在用户已授权的实施范围内，执行 Plan.md 中依赖已满足的 IM-xx。
-先读 AGENTS.md、该任务卡、该卡引用的实施合同和验收编号，再检查当前源码与 diff。
+先读 AGENTS.md、该任务卡、该卡引用的实施规范和验收编号，再检查当前源码与 diff。
 按任务卡的顺序改动；新增文件仅限任务边界及必要导出、测试和文档。
 不把计划中的新增类型当成现成 API；先确认接线位置。
-不得替换协议、字段、存储后端、授权或失败语义。若有源码/官方合同冲突，给出证据后暂停受影响项。
+不得替换协议、字段、存储后端、授权或失败语义。若有源码/官方协议冲突，给出证据后暂停受影响项。
 不得用 mock、内存状态、schema 接受或 helper 测试替代真实消费/恢复断言。
 先实现正常路径及每个失败边界，再运行定向测试和适用最终门禁；核对测试发现数量。
 保留无关修改、平台限制和未完成证据。更新本项状态并写交接记录。

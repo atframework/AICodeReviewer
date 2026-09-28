@@ -94,7 +94,7 @@ node packages/cli/dist/index.js review \
 
 ## eval
 
-运行评测 fixture。无密钥时，`--validate-only` 只校验 fixture 形状和预期 problem 契约——
+运行评测 fixture。无密钥时，`--validate-only` 只校验 fixture 结构和预期 problem 格式——
 这是 CI 运行的模式。
 
 ```bash

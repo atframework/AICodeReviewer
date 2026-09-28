@@ -107,7 +107,7 @@ agent 故障切换和压缩摘要；triage 各层都未配置时继承该 worksp
 每次运行按 global → defaults → instance 的合并结果选择 `agent.default` 和
 `sandbox`，并独立创建沙箱实例。workspace 层可以混用不同 agent 或独立沙箱镜像。
 
-`context_repositories` 声明评审时可引用的辅助仓库（共享库、协议契约等）：每次评审
+`context_repositories` 声明评审时可引用的辅助仓库（共享库、协议定义等）：每次评审
 在确认存在变更文件后全新物化到 `<run>/context-repos/<alias>`，容器沙箱内以只读
 挂载 `/workspace/context-repos/<alias>` 暴露给 agent，单仓库失败不阻塞评审，
 `max_mb`（默认 512）限制物化体积。instance 的列表整体替换 `defaults` 的列表。

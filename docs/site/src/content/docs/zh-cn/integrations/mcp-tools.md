@@ -176,7 +176,7 @@ commit 评审的来源与目标为同一仓库和分支；PR/MR 则保留请求�
 用于在评审中补齐源码上下文缺口：
 
 - 当 diff 缺失或过窄时，不带 `range` 请求整个变更文件。
-- 仅当理解某个 API 契约、调用路径、schema、生成接口或配置（且直接影响某变更行）所必需时，才请求变更之外的相关文件。
+- 仅当理解某个 API 行为、调用路径、schema、生成接口或配置（且直接影响某变更行）所必需时，才请求变更之外的相关文件。
 
 适配器保持初始 scoped fetch 最小化（只把变更文件写入 workspace）。当相关文件尚未物化时，AICR 按评审 revision 从 VCS 拉取并持久化以供后续读取：
 
@@ -202,7 +202,7 @@ commit 评审的来源与目标为同一仓库和分支；PR/MR 则保留请求�
 
 每次工具调用后，MCP 输出 server 都会向 run 的隔离 `agent/` 目录写入 `.aicr-output-state.json`。agent run 结束时，orchestrator 读取该状态文件并据此填充 AICR 的输出收集器——校验过的 problem、summary、跳过原因，以及 `contextRequests`、`attributionRequests` 和 `reviewDataRequests`。
 
-这个状态文件是 agent 与 AICR 之间的结构化合同。orchestrator 会：
+这个状态文件是 agent 与 AICR 之间的结构化约定。orchestrator 会：
 
 1. 在每次 agent run 前清理旧的 `.aicr-output-state.json`，避免上一次 repair pass 的工具状态污染下一次输出。
 2. run 结束后读取状态。
@@ -217,7 +217,7 @@ Docker/Podman 沙箱 run 必须把容器 workdir 设为可写的 agent 挂载。
 
 ## 传输方式
 
-`@aicr/mcp-output` 包提供一个 review executor 使用的进程内工具注册表，外加两个共享同一工具集和 `.aicr-output-state.json` 合同的 server 传输：
+`@aicr/mcp-output` 包提供一个 review executor 使用的进程内工具注册表，外加两个共享同一工具集和 `.aicr-output-state.json` 约定的 server 传输：
 
 - **stdio**（运行时 bundle 默认）：每个 agent 运行时 bundle 物化本地 stdio `aicr-output` MCP server 配置，agent 通过其原生 MCP client 与之通信。
 - **Streamable HTTP**（测试 / 远程 MCP client）：通过本地 HTTP endpoint 启动同一组工具：

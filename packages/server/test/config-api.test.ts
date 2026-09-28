@@ -1126,3 +1126,216 @@ describe("config api P6 fields view + options sources", () => {
     expect(response.status).toBe(401);
   });
 });
+
+describe("config api IM entities (IM-03: C08)", () => {
+  const imFileConfig = {
+    config_sources: { secret_refs: [
+      { env: "AICR_WECOM_APP_SECRET", target: ["im", "connections", "corp-review", "app_secret_env"], destinations: { kind: "wecom_app", corp_id: "ww_example", agent_id: 1000002 } },
+      { env: "AICR_WECOM_APP_SECRET_2", target: ["im", "connections", "corp-review", "app_secret_env"], destinations: { kind: "wecom_app", corp_id: "ww_example", agent_id: 1000002 } },
+    ] },
+    llm: {
+      providers: [{ id: "file-main", kind: "ollama" }],
+      model_chain: { default: [{ provider: "file-main", model: "m", role: "any" }] },
+    },
+  };
+
+  let imDir: string;
+  let imStore: ConfigStore;
+  let imManager: RuntimeConfigManager;
+  let imToken: string;
+  let imApp: ReturnType<typeof createConfigApi>;
+
+  beforeEach(async () => {
+    imDir = mkdtempSync(join(tmpdir(), "aicr-config-api-im-"));
+    imStore = await createSqliteConfigStore({ path: join(imDir, "config.sqlite") });
+    imManager = new RuntimeConfigManager({
+      fileConfig: appConfigSchema.parse(imFileConfig),
+      fileDocument: imFileConfig,
+      fileDigest: DIGEST,
+      store: imStore,
+      namespace: NAMESPACE,
+      baseDir: imDir,
+      secretSealing: SEALING,
+    });
+    await imManager.admission();
+    const sessionStore = createMemoryConfigStore();
+    const session = await createAdminSession({ config: ADMIN, sessions: sessionStore }, "admin", "secret-password");
+    imToken = session!.token;
+    imApp = createConfigApi({
+      store: imStore,
+      adminAuth: ADMIN,
+      sessionStore,
+      namespace: NAMESPACE,
+      fileConfig: imFileConfig,
+      fileDigest: DIGEST,
+      formatVersion: 2,
+      manager: imManager,
+      secretSealing: SEALING,
+      envLookup: (name) => (name.startsWith("AICR_WECOM_APP_SECRET") ? "in-process-secret-value" : undefined),
+    });
+  });
+
+  afterEach(async () => {
+    await imStore.close();
+    rmSync(imDir, { recursive: true, force: true });
+  });
+
+  function imRequest(path: string, init: { method?: string; body?: unknown } = {}): Promise<Response> {
+    return imApp.request(path, {
+      method: init.method ?? "GET",
+      ...(init.body !== undefined ? { body: JSON.stringify(path === "/changesets" || path.endsWith("/restore") ? { fileDigest: DIGEST, ...init.body } : init.body), headers: { "content-type": "application/json" } } : {}),
+      headers: { authorization: `Bearer ${imToken}`, ...(init.body !== undefined ? { "content-type": "application/json" } : {}) },
+    });
+  }
+
+  const wecomConnection = {
+    kind: "wecom_app",
+    corp_id: "ww_example",
+    agent_id: 1000002,
+    app_secret_env: "AICR_WECOM_APP_SECRET",
+  };
+
+  it("runs the create-edit-restore loop with masked secrets and sealed literals", async () => {
+    const created = await imRequest("/changesets", {
+      method: "POST",
+      body: {
+        baseRevision: null,
+        operationId: "im-c08-create",
+        operations: [{ op: "create", collection: "im_connections", record: { id: "rec-corp", name: "corp-review", enabled: true, value: wecomConnection } }],
+      },
+    });
+    expect(created.status).toBe(200);
+    expect(((await created.json()) as { status: string }).status).toBe("committed");
+    expect(imManager.current().config.im?.connections?.["corp-review"]?.kind).toBe("wecom_app");
+
+    const edited = await imRequest("/changesets", {
+      method: "POST",
+      body: {
+        baseRevision: 1,
+        operationId: "im-c08-edit",
+        operations: [{ op: "update", collection: "im_connections", recordId: "rec-corp", value: { ...wecomConnection, app_secret_env: "AICR_WECOM_APP_SECRET_2" } }],
+      },
+    });
+    expect(edited.status).toBe(200);
+    expect(imManager.current().config.im?.connections?.["corp-review"]?.app_secret_env).toBe("AICR_WECOM_APP_SECRET_2");
+
+    const literal = await imRequest("/changesets", {
+      method: "POST",
+      body: {
+        baseRevision: 2,
+        operationId: "im-c08-literal",
+        operations: [{ op: "update", collection: "im_connections", recordId: "rec-corp", value: { ...wecomConnection, app_secret_env: undefined, app_secret: "literal-im-app-secret" } }],
+      },
+    });
+    expect(literal.status).toBe(200);
+    const head = await imStore.readHead(NAMESPACE);
+    const revision = await imStore.readRevision(NAMESPACE, head!.activeRevision);
+    expect(JSON.stringify(revision?.document)).not.toContain("literal-im-app-secret");
+
+    const records = await imRequest("/collections/im_connection");
+    const body = (await records.json()) as { collections: { im_connection: { records: { name: string; value: Record<string, unknown> }[] } } };
+    const record = body.collections.im_connection.records.find((entry) => entry.name === "corp-review");
+    expect(record?.value.kind).toBe("wecom_app");
+    expect(String(record?.value.app_secret)).not.toBe("literal-im-app-secret");
+
+    const restored = await imRequest("/revisions/1/restore", { method: "POST", body: { baseRevision: 3, operationId: "im-c08-restore" } });
+    expect(restored.status).toBe(200);
+    expect(imManager.current().config.im?.connections?.["corp-review"]?.app_secret_env).toBe("AICR_WECOM_APP_SECRET");
+  });
+
+  it("rejects reference deletion and protocol switches atomically", async () => {
+    const seeded = await imRequest("/changesets", {
+      method: "POST",
+      body: {
+        baseRevision: null,
+        operationId: "im-c08-seed",
+        operations: [
+          { op: "create", collection: "im_connections", record: { id: "rec-corp", name: "corp-review", enabled: true, value: wecomConnection } },
+          {
+            op: "create",
+            collection: "im_command_bindings",
+            record: {
+              id: "rec-reviewers",
+              name: "reviewers",
+              // Record-level enabled keeps the reference visible to publish
+              // integrity; the value-level disabled flag is the draft state.
+              enabled: true,
+              value: {
+                connection: "corp-review",
+                actors: [{ type: "wecom_userid", id: "alice_zhang" }],
+                conversations: [{ kind: "app_direct" }],
+                commands: ["status"],
+              },
+            },
+          },
+        ],
+      },
+    });
+    expect(seeded.status).toBe(200);
+
+    const deleted = await imRequest("/changesets", {
+      method: "POST",
+      body: {
+        baseRevision: 1,
+        operationId: "im-c08-del-ref",
+        operations: [{ op: "delete", collection: "im_connections", recordId: "rec-corp" }],
+      },
+    });
+    expect(deleted.status).toBeGreaterThanOrEqual(400);
+    expect(((await deleted.json()) as { error: string }).error).toBe("invalid_reference");
+
+    const switched = await imRequest("/changesets", {
+      method: "POST",
+      body: {
+        baseRevision: 1,
+        operationId: "im-c08-switch",
+        operations: [{
+          op: "update",
+          collection: "im_connections",
+          recordId: "rec-corp",
+          value: { kind: "feishu_app", app_id: "cli_x", app_secret_env: "AICR_WECOM_APP_SECRET_2", tenant_key: "t1" },
+        }],
+      },
+    });
+    expect(switched.status).toBeGreaterThanOrEqual(400);
+
+    const cleanup = await imRequest("/changesets", {
+      method: "POST",
+      body: {
+        baseRevision: 1,
+        operationId: "im-c08-cleanup",
+        operations: [
+          { op: "delete", collection: "im_command_bindings", recordId: "rec-reviewers" },
+          { op: "delete", collection: "im_connections", recordId: "rec-corp" },
+        ],
+      },
+    });
+    expect(cleanup.status).toBe(200);
+    expect(imManager.current().config.im).toBeUndefined();
+  });
+
+  it("serves im_connections as a reference options source and rejects destination drift", async () => {
+    await imRequest("/changesets", {
+      method: "POST",
+      body: {
+        baseRevision: null,
+        operationId: "im-c08-options",
+        operations: [{ op: "create", collection: "im_connections", record: { id: "rec-corp", name: "corp-review", enabled: true, value: wecomConnection } }],
+      },
+    });
+    const options = await imRequest("/options/im_connections");
+    expect(options.status).toBe(200);
+    const body = (await options.json()) as { options: { value: string }[] };
+    expect(body.options.map((option) => option.value)).toContain("corp-review");
+
+    const drifted = await imRequest("/changesets", {
+      method: "POST",
+      body: {
+        baseRevision: 1,
+        operationId: "im-c08-drift",
+        operations: [{ op: "update", collection: "im_connections", recordId: "rec-corp", value: { ...wecomConnection, corp_id: "ww_other" } }],
+      },
+    });
+    expect(drifted.status).toBeGreaterThanOrEqual(400);
+  });
+});

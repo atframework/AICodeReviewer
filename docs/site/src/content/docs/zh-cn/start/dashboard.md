@@ -80,7 +80,7 @@ HTTP 请求数；完成后的检查点只保留本地记账结果。
 
 Projects 和 Providers 标签各自调用带时间窗口的 API
 （`GET /api/admin/stats/projects?since=` 和 `.../providers?since=`）。Runs 标签通过
-`GET /api/admin/runs?limit=20&page=1` 服务端分页，Events 和 Queue 使用相同分页合同。
+`GET /api/admin/runs?limit=20&page=1` 服务端分页，Events 和 Queue 使用相同分页规则。
 Recent Runs / Events 默认各保留最近 2000 条，Queue 保留最近 1000 条终态批次，
 最长均为 6 个日历月。数量和时长分别通过
 [`storage.retention`](/zh-cn/configuration/storage/#storageretention) 配置；
@@ -167,7 +167,7 @@ Workspace 路径补全以 `{{` 开始，插入 `segment` 表达式，为可空�
 | `GET /api/admin/stats/providers?since=` | 按 provider+model 聚合 |
 | `GET /api/admin/runs?limit=&page=` | 保留的 run 列表（limit 1..100、page 从 1 开始），含 token 用量、缓存拆分与 VCS stamp；带 page 返回 `{items,page,hasMore}`，否则返回数组 |
 | `GET /api/admin/runs/live` | 进程内注册表中正在执行的分析：phase、开始时间、累计 token/请求数/成本 |
-| `GET /api/admin/events?limit=&page=` | 相同分页合同的事件日志，含接收时刻的处理决定与原因 |
+| `GET /api/admin/events?limit=&page=` | 相同分页规则的事件日志，含接收时刻的处理决定与原因 |
 | `GET /api/admin/config` | 配置外壳：head、fileDigest、来源信息与各集合记录数 |
 | `GET /api/admin/config/collections/:kind` | 单集合记录，按 `limit`/`offset` 分页 |
 | `GET /api/admin/config/fields`、`/globals` | 按页面/前缀的字段值与 globals 子树；脱敏保留完整路径的规则 |

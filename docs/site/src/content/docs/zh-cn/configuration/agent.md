@@ -56,7 +56,7 @@ global → workspace defaults → instance → route analysis 合并。数组整
 每次 CLI 审查创建独立沙箱，HOME、USERPROFILE、APPDATA、XDG 和临时目录位于该 run 内；
 MCP 子进程继承相同隔离目录。通过配置声明的环境变量提供认证，运行时不复制开发者的
 全局 OAuth/auth store。operator 的模板和 `.agents/skills` 可从 definition 的旧策略目录
-只读回退；详细目录合同见[配置字段参考](/zh-cn/reference/config-fields/)。
+只读回退；详细目录规则见[配置字段参考](/zh-cn/reference/config-fields/)。
 
 ## `agent.timeout_seconds` —— 单次运行的硬上限
 

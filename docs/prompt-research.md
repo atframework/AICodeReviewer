@@ -1,18 +1,18 @@
 # 评审提示词设计依据
 
 本文保留当前默认 prompt 的设计取舍和验证入口。初始交付历史见
-[M0.5](ai/milestones/M0.5.md)；运行时合同以代码及
+[M0.5](ai/milestones/M0.5.md)；运行时约定以代码及
 [架构 §3.6](ai/architecture.md#36-prompt-manager-与-ai-资产装配) 为准。
 阅读时选择对应章节，无需先通读里程碑或工具手册。
 
 ## 上下文分层
 
-仓库维护入口是 `AGENTS.md`，任务流程由 `.agents/skills/` 提供，较长的合同按任务
+仓库维护入口是 `AGENTS.md`，任务流程由 `.agents/skills/` 提供，较长的约定按任务
 进入专题引用。Agent Skills 标准将元数据、skill 正文和参考文件分层加载；官方
 创作指南建议只保留 agent 缺少的项目知识，并写明每份引用的读取条件。[^1]
 
 据此，根规则、技能索引、坑点导航和来源导航分别保留一个职责。删除近义约束、
-通用教程和事故经过；保留会影响决策的条件、合同、代码与测试入口。单纯拆分文件
+通用教程和事故经过；保留会影响决策的条件、约定、代码与测试入口。单纯拆分文件
 不能降低负担，入口还必须避免“读取所有引用”的指令。
 
 维护 agent 与应用内评审 agent 的装配不同。`prompt-manager.ts` 发现并摘要规则，
@@ -38,7 +38,7 @@
 ## 不采用的做法
 
 - 不把“发现了哪些正常代码”写入问题报告或总结；无问题的 skip 是完整输出。
-- 不用行数代替实际大小：单行合同也可能占用大量上下文。
+- 不用行数代替实际大小：单行约定也可能占用大量上下文。
 - 不把 provider、CLI flags、依赖版本、完整 config schema 复制进常驻提示词。
 - 不把 schema 接受字段写成已经接线的功能；不将计划中的 MCP 工具当作可用工具。
 - 不把未重新验证的来源日期整体刷新为今天；旧记录只保留其原始证据范围。
@@ -47,7 +47,7 @@
 ## 修改与验证
 
 修改前检查默认 prompt、Prompt Manager、runtime bundle、MCP registry，以及
-server 的 JSON/修复/triage/resolution 提示词。调整影响到哪个合同，就验证其调用
+server 的 JSON/修复/triage/resolution 提示词。调整影响到哪个约定，就验证其调用
 路径；避免为了统一行文改动独立判断策略。
 
 保留 `REPO_INSTRUCTION_SUMMARIES`、`ACTIVE_SKILL_SUMMARIES`、`MEMORY_HINTS`、

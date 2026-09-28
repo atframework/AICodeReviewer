@@ -76,7 +76,7 @@ Zoo Code 不读 models.dev，因此 AICR 会向 `apiConfiguration.openAiCustomMo
 
 agent 以 headless 方式运行：`claude -p --output-format json`（print 模式，评审 prompt 经 stdin 管道传入），沙箱内加 `--dangerously-skip-permissions`，并通过 `--mcp-config`/`--strict-mcp-config` 把 `aicr-output` MCP server 与用户/项目级 MCP 配置隔离接线。JSON 结果信封让 orchestrator 拿到最终答复、逐轮 token 用量、USD 成本和轮数。reasoning effort 映射到 `--effort`（AICR 的 `minimal` 档映射为 `low`）。
 
-Claude Code 依赖内置的 Anthropic catalog 和环境变量；没有文件级 model-metadata 接入面。环境变量翻译遵循当前的 Claude Code env-var 合同：`maxOutputTokens`（或显式 `extraParams.max_tokens`）派生 `CLAUDE_CODE_MAX_OUTPUT_TOKENS`，`contextWindow` 派生 `CLAUDE_CODE_MAX_CONTEXT_TOKENS`，显式 thinking 预算设置 `MAX_THINKING_TOKENS` 并加 `CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING`（否则固定预算在自适应推理模型上会被忽略），beta header 走 `ANTHROPIC_BETAS`。一次性沙箱 run 会禁用自更新、遥测和 print 模式的标题生成。context window 和定价委托给 Claude Code 的原生 catalog；能力缺口在 manifest 中记录为 `delegated`。
+Claude Code 依赖内置的 Anthropic catalog 和环境变量；没有文件级 model-metadata 接入面。环境变量翻译遵循当前的 Claude Code 环境变量映射规则：`maxOutputTokens`（或显式 `extraParams.max_tokens`）派生 `CLAUDE_CODE_MAX_OUTPUT_TOKENS`，`contextWindow` 派生 `CLAUDE_CODE_MAX_CONTEXT_TOKENS`，显式 thinking 预算设置 `MAX_THINKING_TOKENS` 并加 `CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING`（否则固定预算在自适应推理模型上会被忽略），beta header 走 `ANTHROPIC_BETAS`。一次性沙箱 run 会禁用自更新、遥测和 print 模式的标题生成。context window 和定价委托给 Claude Code 的原生 catalog；能力缺口在 manifest 中记录为 `delegated`。
 
 instructions 经生成的 `CLAUDE.md`（`@AGENTS.md` 导入共享 instructions 文件）送达 Claude Code，技能物化到 `.claude/skills/<name>/SKILL.md`。
 

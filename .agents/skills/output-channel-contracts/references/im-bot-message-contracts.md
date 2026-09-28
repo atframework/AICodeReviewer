@@ -1,10 +1,10 @@
-# IM Bot Message Contracts
+# IM Bot Message Rules
 
 Read this when changing Feishu, WeCom, DingTalk, Slack, or other IM bot rendering, markdown transformation, author mentions, or agent-output repair behavior.
 
-## IM bot message contracts
+## IM bot message rules
 
-The implemented IM bot channels (`feishu_bot`, `feishu_app` and `wecom_bot`) share this contract. Platform-specific differences (card vs markdown payload, mention dialect, signature algorithm) are absorbed by the dispatcher and `im-markdown.ts` transformer layers; the contracts below apply uniformly.
+The implemented IM bot channels (`feishu_bot`, `feishu_app` and `wecom_bot`) follow these rules. Platform-specific differences (card vs markdown payload, mention dialect, signature algorithm) are absorbed by the dispatcher and `im-markdown.ts` transformer layers; the rules below apply uniformly.
 
 - `publishAggregatedProblems` includes `problem.message` and optional `problem.suggestion` under each problem, subject to the bounded IM rendering limits below.
 - When the summary route also records the full report as a managed issue, Feishu dispatchers receive a `detailLink` and render the linked-issue card; the channel's `issue_link_card` (`brief` legacy count-only, `titles` default per-problem titles, `full` complete sections) selects the card content, and the trailing mention element is preserved in every mode. The zero-problem card stays headline + link.
