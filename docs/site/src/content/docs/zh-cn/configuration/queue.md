@@ -36,7 +36,7 @@ queue:
 
 ## 自动提交调度
 
-Git push、P4 `change-commit`、SVN `post-commit` 默认等待 120 秒。
+Git push、P4 `change-commit`、SVN `post-commit` 默认等待 300 秒。
 `review.auto_commit` 配置延迟、每周可执行时段和来源排除规则，可放在全局、
 `workspaces.defaults.review` 或 `workspaces.instances.<id>.review` 下。
 最近一层的 `schedule` 或 `exclude_sources` 整体替换继承值。
@@ -44,7 +44,7 @@ Git push、P4 `change-commit`、SVN `post-commit` 默认等待 120 秒。
 ```yaml
 review:
   auto_commit:
-    delay_seconds: 120
+    delay_seconds: 300
     queued_timeout_hours: 48
     schedule:
       timezone: Asia/Shanghai

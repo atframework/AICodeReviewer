@@ -443,7 +443,7 @@ Narrative: [Agent and sandbox](/en/configuration/agent/).
 | `review.reflection.memory.max_size_kb` | int > 0 | — | Max memory size in KB |
 | `review.reflection.memory.max_entries` | int > 0 | — | Max memory entries |
 | `review.reflection.memory.retention_days` | int > 0 | `90` | Memory TTL in days |
-| `review.auto_commit.delay_seconds` | int 0–31536000 | `120` | First-receive delay before an automatic commit becomes due; `0` disables the wait |
+| `review.auto_commit.delay_seconds` | int 0–31536000 | `300` | First-receive delay before an automatic commit becomes due; `0` disables the wait |
 | `review.auto_commit.queued_timeout_hours` | int 0–8760 | `48` | Pending queue entries older than this bound are terminally skipped as `queued_timeout` (Events decision `timeout`); `0` disables the sweep |
 | `review.auto_commit.schedule.timezone` | string | `UTC` | IANA timezone for the execution schedule |
 | `review.auto_commit.schedule.rules[]` | object[] | — | Weekly rule groups (`days` weekday set + `windows` `HH:mm` ranges, union across groups); `rules: []` lifts all weekly limits |

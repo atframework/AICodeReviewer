@@ -411,7 +411,7 @@ workspace 的 `prompt.system_prompt` 引用其中一个名称替换内置基底 
 | `review.reflection.memory.max_size_kb` | int > 0 | — | memory 最大大小（KB） |
 | `review.reflection.memory.max_entries` | int > 0 | — | memory 最大条目数 |
 | `review.reflection.memory.retention_days` | int > 0 | `90` | memory TTL（天） |
-| `review.auto_commit.delay_seconds` | int 0–31536000 | `120` | 自动提交首次接收后的固定延迟；`0` 表示不等待 |
+| `review.auto_commit.delay_seconds` | int 0–31536000 | `300` | 自动提交首次接收后的固定延迟；`0` 表示不等待 |
 | `review.auto_commit.queued_timeout_hours` | int 0–8760 | `48` | 待处理队列条目超过该时限后终结为 `queued_timeout`（Events 决策 `timeout`）；`0` 关闭清扫 |
 | `review.auto_commit.schedule.timezone` | string | `UTC` | 执行时段使用的 IANA 时区 |
 | `review.auto_commit.schedule.rules[]` | object[] | — | 周计划规则组（`days` 星期集合 + `windows` `HH:mm` 时间段，组间取并集）；`rules: []` 解除全部周限制 |

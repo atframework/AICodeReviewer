@@ -38,7 +38,7 @@ queue:
 
 ## Automatic commit schedules
 
-Git push, P4 `change-commit`, and SVN `post-commit` events wait 120 seconds by
+Git push, P4 `change-commit`, and SVN `post-commit` events wait 300 seconds by
 default. `review.auto_commit` controls this delay, allowed weekly windows, and
 source exclusions. Set it globally, in `workspaces.defaults.review`, or in
 `workspaces.instances.<id>.review`. The nearest `schedule` or `exclude_sources`
@@ -47,7 +47,7 @@ replaces the inherited value as a whole.
 ```yaml
 review:
   auto_commit:
-    delay_seconds: 120
+    delay_seconds: 300
     queued_timeout_hours: 48
     schedule:
       timezone: Asia/Shanghai

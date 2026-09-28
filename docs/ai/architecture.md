@@ -183,7 +183,7 @@ PostgreSQL 后端见 [M17](milestones/M17.md)，来源合并、路由图与发�
   无 store 时退化为进程内存定时器，重启即丢失。窗口内到达的新事件通过 `cancel` 取代同目标
   的待执行延期。评论命令（reason 以 `:comment_review` 结尾）被延期时复用 output publisher
   在 PR/MR 回复一条说明计划开始时间的评论（`bypassNoProblemsPolicy`，只发一次）。
-- 配置：`review.auto_commit`（global/defaults/instance 三层）支持 `delay_seconds`（默认 120）、
+- 配置：`review.auto_commit`（global/defaults/instance 三层）支持 `delay_seconds`（默认 300）、
   多组 `days+windows` 周计划（整体替换、`rules: []` 清除限制、默认 UTC）、`exclude_sources`
   glob/RE2 来源排除；workspace schedule 不跨层深合并。`review.pull_request.schedule` 形状相同
   （仅 `timezone` + `rules`），同样三层整体替换。

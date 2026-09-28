@@ -172,7 +172,7 @@ is durable but not yet active locally — query
 
 Git push, P4 `change-commit`, and SVN `post-commit` notifications receive a
 `202` response with `processing.receiptId` after storage accepts them. The
-default delay is 120 seconds from first receipt; duplicate notifications do
+default delay is 300 seconds from first receipt; duplicate notifications do
 not restart it. Use `queue.kind: sqlite` or `redis` to retain pending work
 across restarts. The memory backend loses its queue on process exit.
 

@@ -58,3 +58,8 @@ the tenant. The opt-in `feishu-app-live.test.ts` checks directory/profile reads,
 sends one real card and recalls it. The official recall endpoint accepts DELETE
 with the tenant token and `im:message:send_as_bot` for the bot's own message.
 This tenant's acceptance and remaining mention boundaries are recorded in M30.
+
+Event subscriptions, card callbacks, webhook mention limits and long-connection
+options were separately checked on 2026-09-28 for the pending IM design. See the
+[IM source record](im-integrations.md); that research does not establish callback
+runtime support or refresh the older send/directory acceptance above.

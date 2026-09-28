@@ -6,7 +6,7 @@
 
 | 任务 | 首选实现与参考 |
 | --- | --- |
-| 当前待办与验收边界 | 当前无待完成项；扩展候选见[前瞻扩展](#前瞻扩展未纳入当前交付)；Workspace 动态配置稳定合同见架构 §3.10、§3.14–3.16，交付证据见里程碑归档 |
+| 当前待办与验收边界 | [Plan.md](../../Plan.md)：IM 应用、外部成员目录和回调重新评审，设计待实施；[路线图](#路线图)；Workspace 动态配置稳定合同见架构 §3.10、§3.14–3.16 |
 | Config / workspace / model groups | `packages/core/src/config.ts`、server bootstrap；[架构 §3.10](architecture.md#310-配置体系)、[配置坑点](pitfalls/AGENTS.config-and-state.md) |
 | Webhook / 调度 / 去重 / PR 延期 | server runtime/scheduler/deferral-manager；[架构 §3.1](architecture.md#31-触发器与-reviewevent-归一化)、[调度坑点](pitfalls/AGENTS.scheduling.md) |
 | VCS / 多源上下文 / GitHub App | `packages/vcs/src/`、server credential wiring；[架构 §3.2](architecture.md#32-vcs-adapter-与-scoped-fetch)、[VCS 坑点](pitfalls/AGENTS.vcs.md) |
@@ -20,10 +20,25 @@
 | 默认评审 prompt 依据 | [设计依据](../prompt-research.md)、[实际模板](../../prompts/system/code-reviewer.system.md) |
 | 部署 / 用户示例 | [部署 skill](../../.agents/skills/remote-deployment/SKILL.md)、[Podman](../podman.md)、[示例](../../example/README.md) |
 
+## 路线图
+
+当前任务只完成设计文档，尚未实现。执行顺序与验收条件见 [Plan.md](../../Plan.md)，
+接口和模块取舍见 [IM 集成设计](../design/im-integrations.md)，
+通讯录格式与 watch/reload 见[成员目录设计](../design/member-directory.md)。
+开发模型按[执行手册](../design/im-implementation.md)的 IM-00–22 任务卡推进，
+使用[实施合同](../design/im-execution-contracts.md)和[103 组验收断言](../design/im-acceptance.md)逐项核验。
+所有任务未执行；review 命令的持久 ConfigStore 前提、配置接线及故障恢复不能省略。
+
+- 企业微信应用消息发送：成员通知和 appchat 目标分别接线，补齐业务错误与发布恢复。
+- 外部文件成员目录：平台身份隔离、原生 @、父目录 watch 与定时校验、新旧 generation 生命周期。
+- 企业微信应用/API 模式机器人与飞书应用回调：验签解密、持久接收、会话发现及独立命令授权。
+- 指定仓库/commit 重新评审：消息命令和按钮动作、持久任务、去重恢复、共享并发与受控结果通知。
+- 完成组合测试、双语当前功能文档/示例同步与真实平台验收；长期 watch/unwatch 订阅是否纳入待确认。
+
 ## 前瞻扩展（未纳入当前交付）
 
-原 `Plan.md` 的全部待办已完成并归档（最后一项 GitLab 端到端验收见 M34）；
-路线图并入本节，只保留前瞻项。临时服务、环境变量门控和退出清理按
+上一轮 `Plan.md` 的待办已完成并归档（最后一项 GitLab 端到端验收见 M34）；
+本节保留未纳入当前 IM 计划的候选项。临时服务、环境变量门控和退出清理按
 [验收指南](../testing-services.md)执行；本地替身不能作为模型质量或生产验收证据。
 
 - `k8s_pod` / `firecracker` sandbox：明确隔离需求和运行环境后实现，当前为报错占位。
@@ -77,6 +92,6 @@
 | M35 品牌图标与静态资源 | 文档站、管理面板统一图标及分享图；静态图像和二进制使用 Git LFS | [M35](milestones/M35.md) |
 | 本地优先队列 P0-P15 | 已完成 | `milestones/local-priority-queue.md` |
 
-历史记录仅用于查交付证据；当前状态以代码、测试和上面的前瞻扩展为准。公开用户文档位于
+历史记录仅用于查交付证据；当前状态以代码、测试和上面的路线图为准。公开用户文档位于
 `docs/site/`，不发布本目录的内部指导。完成任务资料的保留规则见根 `AGENTS.md`。
 归档只保留交付结论、证据入口和限制；完整过程可由 Git 历史追溯。

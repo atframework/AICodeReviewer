@@ -5,7 +5,7 @@
  * `workspaces.defaults.review`, and `workspaces.instances.<id>.review` — and
  * resolved per key with instance → defaults → global → built-in precedence:
  *
- * - `delay_seconds`: nearest explicitly set value wins; built-in default 120.
+ * - `delay_seconds`: nearest explicitly set value wins; built-in default 300.
  *   `0` disables the first-receive wait (schedule still applies).
  * - `schedule`: whole-object replacement at the nearest layer that sets it —
  *   never deep-merged across layers, so a new timezone cannot combine with an
@@ -47,7 +47,7 @@ import {
   type ScheduleRuleGroupInput,
 } from "./weekly-schedule.js";
 
-export const AUTO_COMMIT_DEFAULT_DELAY_SECONDS = 120;
+export const AUTO_COMMIT_DEFAULT_DELAY_SECONDS = 300;
 /**
  * Operational bound for the first-receive delay. Rejects values that are not
  * useful operationally and keeps `firstAcceptedAt + delay * 1000` far from

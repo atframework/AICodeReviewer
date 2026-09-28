@@ -954,7 +954,7 @@ review:
   # All fields support global → workspace defaults → workspace instance layers;
   # schedule replaces wholesale at the nearest layer that sets it.
   # auto_commit:
-  #   delay_seconds: 120        # 0 disables the first-receive wait (max: 31536000)
+  #   delay_seconds: 300        # 0 disables the first-receive wait (max: 31536000)
   #   queued_timeout_hours: 48  # pending queue entries older than this are terminally skipped
   #                             # as queued_timeout (Events decision "timeout"); 0 disables the
   #                             # sweep. Max 8760 (365 days).

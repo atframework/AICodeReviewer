@@ -16,6 +16,7 @@ records from primary sources and mark unavailable claims unverified.
 | LLM provider presets (China platforms, Anthropic-compatible endpoints) | [Models and usage](sources/models-and-usage.md) § China platform endpoints |
 | MCP schemas, transport or authorization | [MCP](sources/mcp.md) |
 | Feishu application bot, contacts, member pagination or card envelopes | [Feishu](sources/feishu.md) |
+| WeCom applications/API bots, IM callbacks, file members or review commands | [IM integration research](sources/im-integrations.md), including protocol samples and evidence limits |
 | Automatic batch publisher queries, remote receipts or idempotency | [Publication reconciliation](sources/publication-reconciliation.md) |
 | PowerShell or runtime image tools/releases | [Shell and tooling](sources/shell-and-tooling.md) |
 

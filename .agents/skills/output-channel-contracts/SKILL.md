@@ -44,6 +44,18 @@ Read only the corresponding section of `docs/output-channels.md` or architecture
 
 ## Conditional references
 
+- WeCom applications, external member files, IM callbacks or command-triggered
+  reviews: read the [pending IM design](../../../docs/design/im-integrations.md)
+  and its [source record](../../../docs/ai/sources/im-integrations.md); load the
+  [directory design](../../../docs/design/member-directory.md) only for file
+  identity/reload work. These are proposals, not implemented channel contracts.
+  During authorized implementation, use the matching task card in the
+  [execution guide](../../../docs/design/im-implementation.md), its cited
+  [contracts](../../../docs/design/im-execution-contracts.md) and
+  [acceptance IDs](../../../docs/design/im-acceptance.md). Load the current task's
+  sections; do not treat proposed APIs or unchecked tasks as existing runtime.
+  Keep mention identity separate from callback authorization; distinguish
+  webhook bots, applications and API bots before selecting protocol behavior.
 - PR buffering, update markers, duplicate collection, error summaries, or Markdown
   repair: [output pitfalls](../../../docs/ai/pitfalls/AGENTS.outputs.md).
 - IM card/Markdown payloads, mentions, truncation, or structured repair:

@@ -29,6 +29,7 @@
 | [架构](ai/architecture.md) | 当前模块边界与稳定合同；Workspace 见 §3.10，存储迁移见 §3.14，来源合并与发布见 §3.15，运行时版本与管理 API 见 §3.16 |
 | [设计决策](ai/decisions.md) | 方案取舍；Workspace 与动态配置相关合同见 D37–D47 |
 | [输出合同](output-channels.md) | 输出渠道、模板、目标选择及发布语义 |
+| [IM 开发计划](../Plan.md) / [执行手册](design/im-implementation.md) / [集成设计](design/im-integrations.md) / [文件成员目录](design/member-directory.md) | 企业微信应用、通讯录热加载、回调重新评审；23 项任务及逐项契约/验收，均待实施 |
 | [评审提示词设计依据](prompt-research.md) | 默认评审提示词的目标、约束和参考依据 |
 | [AI 维护导航](ai/index.md) | 从代码主题定位设计章节、易错点和维护技能 |
 
