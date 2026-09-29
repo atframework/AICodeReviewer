@@ -104,7 +104,8 @@ const wecomAibotConnectionSchema = z
     enabled: z.boolean().optional(),
     /** Local binding identity domain; not claimed to ride inside the encrypted payload. */
     corp_id: z.string().min(1),
-    aibot_id: z.string().min(1),
+    /** Optional: the event-callback protocol does not require it; the long-connection robot does. */
+    aibot_id: z.string().min(1).optional(),
     callback: wecomCallbackSchema.optional(),
   })
   .strict();

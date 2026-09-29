@@ -168,6 +168,7 @@ import {
   admissionUnavailableReason,
 } from "./runtime-config.js";
 import { ImConnectionRegistry } from "./im/connections.js";
+import type { ImCallbackRoutesOptions } from "./im/callback-routes.js";
 import { MemberDirectoryService, type MemberDirectoryView } from "./im/member-directory-service.js";
 import {
   createRedisConfigStore,
@@ -4144,6 +4145,18 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
     ...(sessionStore ? { sessionStore } : {}),
     ...(liveRunRegistry ? { liveRuns: liveRunRegistry } : {}),
     ...(store ? { store } : {}),
+    // IM callbacks need the inbox store plus the live generation's
+    // connection table; file-only generations still serve the file config.
+    ...(store
+      ? {
+        imCallbacks: {
+          store,
+          namespace: configSources.database.namespace,
+          getConfig: currentConfig,
+          env: (name: string) => resolveEnv(name),
+        } satisfies ImCallbackRoutesOptions,
+      }
+      : {}),
   };
 }
 

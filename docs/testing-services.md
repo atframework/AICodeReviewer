@@ -172,7 +172,8 @@ AICR 的 Redis 队列和自动批次存储保留完整连接 URL，由原生驱�
 | 飞书 | `AICR_FEISHU_TEST_APP_ID`、`AICR_FEISHU_TEST_APP_SECRET`、`AICR_FEISHU_TEST_RECEIVE_ID` | `AICR_FEISHU_TEST_DIRECTORY_CHAT_ID` 指定另一来源群；`AICR_FEISHU_TEST_MENTION_OPEN_ID` 指定获准通知的测试成员，未设则不 @ |
 | 企业微信应用（IM-21） | `AICR_WECOM_TEST_CORP_ID`、`AICR_WECOM_TEST_AGENT_ID`、`AICR_WECOM_TEST_APP_SECRET` | `AICR_WECOM_TEST_APPCHAT_CHAT_ID` 指定本应用创建的 appchat 群（测试租户不接受根部门可见范围时缺省只验成员通知）；发送合成 Markdown 到测试成员并记录 msgid/invaliduser |
 | 企业微信 webhook（IM-21） | `AICR_WECOM_WEBHOOK_TEST_URL`（测试群机器人，勿复用生产的 `AICR_WECOM_WEBHOOK`） | 发送合成 markdown + text 各一条；检查业务 errcode |
-| 企业微信智能机器人 | —（当前不可验收） | 测试租户的智能机器人为**长连接模式**（仅 `bot_id`+`secret`，无回调 token/AES 凭据）；首期 HTTP 回调路径保持 pending_external，除非改配回调模式并补 `AICR_WECOM_AIBOT_TEST_*` 全组凭据 |
+| 企业微信智能机器人 | `AICR_WECOM_AIBOT_TEST_CORP_ID`、`AICR_WECOM_AIBOT_TEST_BOT_ID`、`AICR_WECOM_AIBOT_TEST_TOKEN`、`AICR_WECOM_AIBOT_TEST_ENCODING_AES_KEY` | 事件回调模式凭据已备（2026-09-28：`wxwork_airobot_event_callback.{token,secret}`，secret 为 43 位 EncodingAESKey；corp_id 复用 `wxwork_app.corp_id`）。长连接凭据（`wxwork_airobot_conn.{bot_id,secret}`）仅作参考，不映射验收变量 |
+| 测试人员与 appchat | —（本地私有，不入库） | 测试成员清单存于本地 `development/secret/`（含邮箱/中英文姓名，不含平台 ID——userid 凭应用通讯录根权限在验收时按邮箱换取）；appchat 群由测试应用经 appchat/create 创建后把 chat_id 写回 secret.yaml，人工建的群（如"Robot测试"）不满足 appchat/send 的应用创建前提 |
 | 智谱 | `AICR_ZHIPU_TEST_BASE_URL`、`AICR_ZHIPU_TEST_API_KEY` | `AICR_ZHIPU_TEST_KIND` 为 `openai_compatible`（默认）或 `anthropic`；固定模型 glm-5.3-flash |
 | Kimi | `AICR_KIMI_TEST_BASE_URL`、`AICR_KIMI_TEST_API_KEY` | `AICR_KIMI_TEST_KIND` 同上；固定模型 kimi-for-coding |
 

@@ -7,6 +7,7 @@ import { ZodError } from "zod";
 import { createAicrMetrics, formatPrometheusMetrics, recordReviewResult } from "./metrics.js";
 import { saveRunSnapshot } from "./run-snapshot.js";
 import type { AicrMetrics } from "./metrics.js";
+import { registerImCallbackRoutes, type ImCallbackRoutesOptions } from "./im/callback-routes.js";
 import { createObservabilityApi, type ObservabilityApiOptions } from "./observability-api.js";
 import { getDashboardClientAsset, getDashboardHtml, getDashboardIconSvg } from "./dashboard/index.js";
 import type { ConfigStore } from "@aicr/core";
@@ -241,6 +242,12 @@ export interface ServerAppOptions {
    */
   readonly deferralManager?: ReviewDeferralManager;
   readonly store?: StoreDb;
+  /**
+   * IM callback receive path (IM-12): platform-authenticated GET/POST
+   * /callbacks/im/:connection routes backed by the store inbox. When absent
+   * the routes are not mounted.
+   */
+  readonly imCallbacks?: ImCallbackRoutesOptions;
   /**
    * Durable admin-session ConfigStore (P2). Exposed so shutdown/tests can
    * close its handle; the Bearer surface never sees it.
@@ -2433,6 +2440,12 @@ function mountRoutes(app: Hono, options: ServerAppOptions): void {
     app.use("/triggers/*", authMiddleware);
   }
 
+  if (options.imCallbacks) {
+    // Platform-authenticated routes: no admin session, no API key. The
+    // connection table and secrets come from the resolved config inside the
+    // handler; admission failures surface as 503 for the platform to retry.
+    registerImCallbackRoutes(app, options.imCallbacks);
+  }
   if (options.runtimeConfig) {
     const manager = options.runtimeConfig;
     for (const path of ["/webhooks/*", "/triggers/*"]) {

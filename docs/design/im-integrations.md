@@ -342,7 +342,8 @@ mock、签名 fixture 和本地回环不能当作真实群 @或平台回调成�
   `wxwork_airobot_conn.{bot_id,secret}`，无回调 token/AES），首期 HTTP 回调的
   wecom_aibot 路径在该租户保持 pending_external，除非改配回调模式。
   测试应用与机器人已授予通讯录根权限，appchat 前提成立；IM-21 不验证权限受限
-  负路径。变量登记见[服务指南](../testing-services.md)。
+  负路径。智能机器人已补事件回调模式凭据（`wxwork_airobot_event_callback.{token,secret}`），
+  HTTP 回调路径可实测；长连接凭据仅作参考。变量登记见[服务指南](../testing-services.md)。
 - 实施环境已确认（2026-09-28，同日更新）：应用发送以 message/send 成员通知
   （recipients）为主路径；测试应用已获通讯录根权限，appchat 前提成立
   （其 schema、client 与 dispatcher 已随 IM-04/05 实现，O02 以注入 transport 验证），

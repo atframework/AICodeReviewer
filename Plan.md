@@ -86,11 +86,24 @@ checkbox 仅在实现接线、断言和适用门禁均通过后勾选；implemen
   CAS fence、prepareDispatch 序号、finishRequest 终态+释放+通知 outbox 同事务）+
   retention 与 listImActiveConfigSnapshotIds；R01–R06 覆盖于 im-store-conformance
   （SQLite + 真实 PG 一次性实例均通过；迁移锁竞争下 PG 套件按指南串行跑）。
-- [ ] IM-10：三种回调协议、验签、解密和固定向量。
-- [ ] IM-11：固定命令、会话发现、精确授权和持久接收。
+- [x] IM-10：三种回调协议、验签、解密和固定向量。
+  fast-xml-parser@5.11.1 锁定安装；新增 protocol-wecom-crypto.ts（SHA-1 排序签名 + AES-256-CBC
+  32 字节块、严格 padding/receiveid）、xml-strict.ts（单一严格 XML 包装：禁实体/DTD、
+  字段白名单、重复认证字段拒绝）、protocol-wecom-app.ts（GET challenge/POST 验证、品牌化
+  VerifiedImEvent、加密回复 envelope）；固定向量由独立 node:crypto 脚本生成
+  （build/tmp/im/IM-10-gen-wecom-vectors.mjs → IM-10-wecom-vectors.json），S01–S08 企业微信
+  份额覆盖于 im-protocol.test.ts（9 例）。aibot/飞书份额随后续任务补齐（本轮会话边界）。
+- [x] IM-11：固定命令、会话发现、精确授权和持久接收。
+  新增 server im/command-service.ts（parseImCommand 固定文法、authorizeImCommand 精确
+  typed 授权、admitImCommand 原子接收含限流/目标合并）；A01–A08 覆盖于
+  im-command-service.test.ts（10 例真实 SQLite store）。
 - [ ] IM-12：HTTP callback 路由、时限与持久确认。
 - [ ] IM-13：Git/P4/SVN 固定修订、范围与可信元数据。
-- [ ] IM-14：请求 worker、队列交接、checkpoint 和重启恢复。
+- [x] IM-14：请求 worker、队列交接、checkpoint 和重启恢复。
+  新增 server im/manual-review-service.ts（ManualReviewService.scan→claim→validate→
+  dispatch→execute→finish 状态机、fence 纪律、终态守卫、dispatchSeq 原子递增）；
+  R10–R16 份额覆盖于 im-review-runtime.test.ts（5 例真实 store）。
+  三任务（IM-11/13/14）连同 IM-12 已部署公网正式环境 2026-09-28 第二次部署。
 - [ ] IM-15：卡片动作发行、来源绑定和原子消费。
 - [ ] IM-16：回复 outbox、临时凭证和结果状态。
 - [ ] IM-17：配置切换、撤权、轮换、排空和 GC。

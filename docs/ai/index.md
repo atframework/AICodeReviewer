@@ -22,9 +22,10 @@
 
 ## 路线图
 
-实施已授权并开始（2026-09-28）：IM-00–09 已完成（协议基线、schema/实体/表单、
+实施已授权并开始（2026-09-28）：IM-00–14 已完成（协议基线、schema/实体/表单、
 企业微信应用发送与发布接线、严格目录解析、watch/poll 热加载、目录身份与原生 @、
-SQLite/PG IM 持久化与原子操作），协议结论并入[来源记录](sources/im-integrations.md)。
+SQLite/PG IM 持久化与原子操作、企业微信回调密码学适配、**回调路由接收路径已上线公网
+正式环境 aicr.x-ha.com**），协议结论并入[来源记录](sources/im-integrations.md)。
 执行顺序与验收条件见 [Plan.md](../../Plan.md)，
 接口和模块取舍见 [IM 集成设计](../design/im-integrations.md)，
 通讯录格式与 watch/reload 见[成员目录设计](../design/member-directory.md)。

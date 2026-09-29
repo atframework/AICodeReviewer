@@ -17,11 +17,11 @@
   },
   "dependencies": {
     "@opentelemetry/api": "^1.9.1",
-    "@opentelemetry/exporter-trace-otlp-http": "0.222.0",
+    "@opentelemetry/exporter-trace-otlp-http": "^0.222.0",
     "@opentelemetry/sdk-node": "^0.222.0",
-    "handlebars": "4.7.9",
+    "handlebars": "^4.7.9",
     "pino": "^10.3.1",
-    "re2-wasm": "1.0.2",
+    "re2-wasm": "^1.0.2",
     "yaml": "^2.9.0",
     "zod": "^3.25.76"
   },
