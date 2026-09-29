@@ -118,7 +118,12 @@ function buildEvent(payload: Record<string, unknown>, connection: { identity: Im
   const senderId = string(sender.userid) ?? string(sender.userid_encrypted) ?? string(sender.user_id);
   const senderType = string(sender.userid_encrypted) !== undefined ? "wecom_encrypted_userid" : "wecom_userid";
   const stream = payload.stream;
-  const isStreamRefresh = typeof stream === "object" && stream !== null && (stream as Record<string, unknown>).type === "refresh";
+  // Stream refresh callback: msgtype "stream" carrying our stream.id
+  // (接收消息 path/100719 流式消息刷新). There is no `type` field.
+  const streamId = typeof stream === "object" && stream !== null
+    ? string((stream as Record<string, unknown>).id)
+    : undefined;
+  const isStreamRefresh = string(payload.msgtype) === "stream";
   const text = typeof payload.text === "object" && payload.text !== null ? string((payload.text as Record<string, unknown>).content) : undefined;
 
   const data: VerifiedImEventData = {
@@ -135,7 +140,7 @@ function buildEvent(payload: Record<string, unknown>, connection: { identity: Im
     eventId: undefined,
     actionId: undefined,
     content: isStreamRefresh
-      ? { kind: "stream_refresh" }
+      ? { kind: "stream_refresh", streamId: streamId ?? "" }
       : text !== undefined
         ? { kind: "message", text }
         : { kind: "unknown_type", type: string(payload.msgtype) ?? "unknown" },

@@ -423,6 +423,71 @@ outputs:
 - IM 连接的消息命令与评审按钮另行配置
   （见[管理 IM 连接与命令绑定](#管理-im-连接与命令绑定)）。
 
+## 接收消息命令（回调与长连接）
+
+除主动发送报告外，IM 连接还可以**接收**群内 @机器人 的消息命令。当前支持三种
+接收模式，配置在 `im.connections` 中按连接选择：
+
+```yaml
+im:
+  connections:
+    # 企业微信智能机器人 —— 事件回调模式
+    wecom-airobot:
+      kind: wecom_aibot
+      corp_id: ww_example
+      callback:
+        enabled: true
+        token_env: AICR_WECOM_AIBOT_TOKEN            # 回调 Token
+        encoding_aes_key_env: AICR_WECOM_AIBOT_AES    # 回调 EncodingAESKey
+
+    # 企业微信智能机器人 —— 长连接模式（无需公网回调 URL）
+    wecom-airobot-lc:
+      kind: wecom_aibot
+      corp_id: ww_example
+      aibot_id: "https://open.work.weixin.qq.com/..."  # 机器人的 bot_id
+      secret_env: AICR_WECOM_AIBOT_LC_SECRET           # 机器人的 Secret
+
+    # 飞书自建应用 —— 事件回调模式（平台侧「将事件发送至开发者服务器」）
+    feishu-app:
+      kind: feishu_app
+      app_id: cli_example
+      app_secret_env: AICR_FEISHU_APP_SECRET
+      tenant_key: "xxxx"
+      callback:
+        enabled: true
+        verification_token_env: AICR_FEISHU_VERIFY_TOKEN
+        encrypt_key_env: AICR_FEISHU_ENCRYPT_KEY
+
+    # 飞书自建应用 —— 长连接模式（平台侧「使用长连接接收事件」）：
+    # 不配置回调（或 enabled: false），服务端用 app_id+app_secret 主动建连
+    feishu-app-lc:
+      kind: feishu_app
+      app_id: cli_example
+      app_secret_env: AICR_FEISHU_APP_SECRET
+```
+
+回调模式的平台侧回调 URL 均为 `https://<服务地址>/callbacks/im/<连接id>`，
+例如 `https://aicr.example.com/callbacks/im/wecom-airobot`。配置保存时平台会
+发起 URL 验证 challenge，服务端按协议回包；之后每条 @机器人 消息先验签
+解密、持久化入箱，再处理命令。
+
+当前支持的命令语法（`aicr` 前缀，群内 @机器人 后发送）：
+
+- `aicr help` — 所有接收模式都会即时回复命令帮助。企业微信回调模式按官方
+  被动回复协议在回调响应体里回**加密的流式消息**（`msgtype: "stream"`、
+  `finish: true`；直接回 markdown 会被平台忽略）；企业微信长连接通过
+  `aibot_respond_msg` 回复；飞书通过消息 API 回复。
+- `aicr chat-id` / `aicr review <repo> <revision>` / `aicr status <id>` —
+  需要配置启用的 `im.command_bindings`（按操作人、会话与命令精确授权）；
+  绑定未启用时不会执行评审。
+
+长连接模式由服务端在 `aicr serve` 启动时按连接表主动建立连接（断线自动
+重连），不依赖回调 URL，也不需要 `callback` 配置：企业微信智能机器人用
+官方 WebSocket 协议（`aibot_id`+`secret`），飞书用官方 SDK 长连接
+（`app_id`+`app_secret`）。两种企业微信模式各自对应一个独立的机器人实体
+（各自有自己的 bot_id/凭据），可以并存；飞书的回调与长连接在平台侧互斥，
+按开发者后台选择的事件接收方式配置对应连接。
+
 ## 公共字段
 
 IM channel 类型共享[输出通道配置](/zh-cn/configuration/outputs/)中记录的通用输出 channel 字段。
@@ -447,6 +512,7 @@ IM channel 类型共享[输出通道配置](/zh-cn/configuration/outputs/)中记
 在抽屉中输入的明文凭据会在持久化边界密封，之后不再回显；
 删除或改名仍被绑定或频道引用的连接时，发布边界会原子地拒绝。
 
-这两个页面当前只管理**草稿配置**：发送、回调与评审命令随相应运行时
-集成逐步生效，命令绑定默认停用。`im.*` 字段合同见
-[配置字段参考](/zh-cn/reference/config-fields/)。
+这两个页面管理**草稿配置**：报告发送与三种接收模式（企业微信智能机器人
+事件回调/长连接、飞书应用事件回调）已生效，`aicr help` 即时应答；评审
+命令（review/status）需启用命令绑定后才会执行，绑定默认停用。`im.*`
+字段合同见[配置字段参考](/zh-cn/reference/config-fields/)。

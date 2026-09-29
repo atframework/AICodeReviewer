@@ -1,0 +1,69 @@
+# Merge this im block into your deployment configuration to RECEIVE message
+# commands (e.g. `@机器人 aicr help`). All credentials below are placeholders.
+# Platform callback URLs follow https://<server>/callbacks/im/<connection-id>.
+# The two WeCom robots are separate bot entities (own bot_id/credentials) and
+# can coexist: one uses the event callback, the other the WebSocket long
+# connection. Feishu's callback and long-connection modes are mutually
+# exclusive on the platform side — configure the connection to match the
+# event-receive method chosen in the developer console.
+# See the bilingual IM bots guide for command authorization.
+im:
+  connections:
+    # WeCom smart robot — event-callback mode.
+    # Callback URL: https://<server>/callbacks/im/wecom-airobot
+    wecom-airobot:
+      kind: wecom_aibot
+      corp_id: ww_replace_me
+      # Optional in callback mode; the platform does not require it.
+      aibot_id: "https://open.work.weixin.qq.com/replace_me"
+      callback:
+        enabled: true
+        token_env: AICR_WECOM_AIBOT_TOKEN
+        encoding_aes_key_env: AICR_WECOM_AIBOT_AES
+
+    # WeCom smart robot — long-connection mode: no public callback URL; the
+    # server opens wss://openws.work.weixin.qq.com at startup (aibot_id and
+    # secret come from the robot's "长连接" API-mode credentials).
+    wecom-airobot-lc:
+      kind: wecom_aibot
+      corp_id: ww_replace_me
+      aibot_id: "https://open.work.weixin.qq.com/replace_me"
+      secret_env: AICR_WECOM_AIBOT_LC_SECRET
+
+    # Feishu custom application — event-callback mode.
+    # Callback URL: https://<server>/callbacks/im/feishu-app
+    feishu-app:
+      kind: feishu_app
+      app_id: cli_replace_me
+      app_secret_env: AICR_FEISHU_APP_SECRET
+      tenant_key: replace_me
+      callback:
+        enabled: true
+        verification_token_env: AICR_FEISHU_VERIFY_TOKEN
+        encrypt_key_env: AICR_FEISHU_ENCRYPT_KEY
+
+    # Feishu custom application — long-connection mode: the developer console
+    # selects "使用长连接接收事件"; no callback here, the server dials out
+    # with app_id+app_secret through the official SDK.
+    feishu-app-lc:
+      kind: feishu_app
+      app_id: cli_replace_me
+      app_secret_env: AICR_FEISHU_APP_SECRET
+
+    # Command authorization is separate: without an enabled command binding,
+    # `aicr help` still answers but review/status commands never run.
+    # command_bindings:
+    #   default:
+    #     enabled: false
+    #     connection: wecom-airobot
+    #     actors:
+    #       - type: wecom_userid
+    #         id: owent
+    #     conversations:
+    #       - kind: group
+    #     commands: [help, chat-id, review, status]
+    #     repositories:
+    #       service:
+    #         workspace: default
+    #         source_trigger: github-main
+    #         repo_ref: github.com/org/service

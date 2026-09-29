@@ -256,6 +256,18 @@ export async function admitImCommand(store: StoreDb, input: ImCommandAdmitInput)
   }
 }
 
+/**
+ * Group messages carry an @mention prefix before the command ("@机器人
+ * aicr help" on WeCom, "@_user_1 aicr help" on Feishu); the command grammar
+ * starts at the `aicr` prefix, so strip one leading mention token first.
+ */
+export function stripImMentionPrefix(text: string): string {
+  const trimmed = text.trim();
+  if (!trimmed.startsWith("@")) return trimmed;
+  const firstSpace = trimmed.search(/\s/u);
+  return firstSpace === -1 ? "" : trimmed.slice(firstSpace).trim();
+}
+
 /** The help text shown to authorized users (design §7.1). */
 export const IM_HELP_TEXT = [
   "AICR 评审命令：",

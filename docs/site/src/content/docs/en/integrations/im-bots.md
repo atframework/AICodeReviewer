@@ -485,6 +485,82 @@ Behavior notes:
 - Message commands and review buttons for IM connections are configured
   separately (see [Managing IM connections](#managing-im-connections-and-command-bindings)).
 
+## Receiving message commands (callback and long connection)
+
+Besides sending reports, IM connections can **receive** @-mention message
+commands in groups. Three receive modes are supported today, selected per
+connection in `im.connections`:
+
+```yaml
+im:
+  connections:
+    # WeCom smart robot — event-callback mode
+    wecom-airobot:
+      kind: wecom_aibot
+      corp_id: ww_example
+      callback:
+        enabled: true
+        token_env: AICR_WECOM_AIBOT_TOKEN            # callback Token
+        encoding_aes_key_env: AICR_WECOM_AIBOT_AES    # callback EncodingAESKey
+
+    # WeCom smart robot — long-connection mode (no public callback URL needed)
+    wecom-airobot-lc:
+      kind: wecom_aibot
+      corp_id: ww_example
+      aibot_id: "https://open.work.weixin.qq.com/..."  # the robot's bot_id
+      secret_env: AICR_WECOM_AIBOT_LC_SECRET           # the robot's Secret
+
+    # Feishu custom application — event-callback mode
+    # (platform side: "send events to the developer server")
+    feishu-app:
+      kind: feishu_app
+      app_id: cli_example
+      app_secret_env: AICR_FEISHU_APP_SECRET
+      tenant_key: "xxxx"
+      callback:
+        enabled: true
+        verification_token_env: AICR_FEISHU_VERIFY_TOKEN
+        encrypt_key_env: AICR_FEISHU_ENCRYPT_KEY
+
+    # Feishu custom application — long-connection mode
+    # (platform side: "receive events over a long connection"): no callback
+    # configured (or enabled: false); the server dials with app_id+app_secret
+    feishu-app-lc:
+      kind: feishu_app
+      app_id: cli_example
+      app_secret_env: AICR_FEISHU_APP_SECRET
+```
+
+Platform-side callback URLs follow
+`https://<server-address>/callbacks/im/<connection-id>`, for example
+`https://aicr.example.com/callbacks/im/wecom-airobot`. When you save the URL the
+platform sends a verification challenge and the server answers per protocol;
+afterwards every @-mention message is signature-verified, decrypted, persisted
+to the inbox, and only then processed.
+
+Supported command grammar (the `aicr` prefix, sent after @-mentioning the bot):
+
+- `aicr help` — every receive mode answers immediately with the command help.
+  The WeCom callback mode answers with an **encrypted finished stream
+  message** in the callback response body (`msgtype: "stream"` with
+  `finish: true`; a plain markdown body is ignored by the platform), the WeCom
+  long connection replies via `aibot_respond_msg`, and Feishu replies through
+  its message API.
+- `aicr chat-id` / `aicr review <repo> <revision>` / `aicr status <id>` —
+  require an enabled `im.command_bindings` entry (exact typed authorization of
+  actors, conversations and commands); without an enabled binding no review
+  runs.
+
+Long-connection modes are initiated by the server: `aicr serve` dials per the
+connection table (auto-reconnecting on drops), needing neither a callback URL
+nor any `callback` configuration — WeCom smart robots use the official
+WebSocket protocol (`aibot_id`+`secret`), Feishu uses the official SDK long
+connection (`app_id`+`app_secret`). The two WeCom modes are separate robot
+entities (each with its own bot_id/credentials) and can coexist; Feishu's
+callback and long-connection modes are mutually exclusive on the platform side
+— configure the connection to match the event-receive method chosen in the
+developer console.
+
 ## Common fields
 
 The IM channel kinds share the common output-channel fields documented in
@@ -514,8 +590,10 @@ entered in the drawer are sealed at persistence boundaries and never displayed
 again; deleting or renaming a connection that a binding or channel references
 is rejected atomically by the publish boundary.
 
-These pages currently manage **draft configuration only**: sending,
-callbacks and review commands activate progressively as the corresponding
-runtime integrations land, and command bindings stay disabled by default.
+These pages manage **draft configuration**: report sending and all three
+receive modes (WeCom smart-robot event callback / long connection, Feishu
+application event callback) are live — `aicr help` answers immediately; the
+review commands (review/status) only run once a command binding is enabled,
+and bindings stay disabled by default.
 See [Configuration field reference](/en/reference/config-fields/) for the
 `im.*` field contracts.

@@ -78,7 +78,7 @@ function routeOptions(overrides: Partial<ImCallbackRoutesOptions> = {}): ImCallb
 }
 
 // Independently computed crypto (same framing as the vector generator).
-import { createCipheriv, createHash, randomBytes } from "node:crypto";
+import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
 
 function pad(buf: Buffer, block = 32): Buffer {
   const amount = block - (buf.length % block);
@@ -99,6 +99,17 @@ function sha1(...parts: string[]): string {
   return createHash("sha1").update([...parts].sort().join("")).digest("hex");
 }
 
+function decrypt(ciphertext: string): string {
+  const key = Buffer.from(`${ENCODING_AES_KEY}=`, "base64");
+  const decipher = createDecipheriv("aes-256-cbc", key, Buffer.alloc(16));
+  decipher.setAutoPadding(false);
+  const raw = Buffer.concat([decipher.update(Buffer.from(ciphertext, "base64")), decipher.final()]);
+  const padLen = raw[raw.length - 1]!;
+  const content = raw.subarray(0, raw.length - padLen);
+  const messageLength = content.readUInt32BE(16);
+  return content.subarray(20, 20 + messageLength).toString("utf8");
+}
+
 const PREFIX = Buffer.from("00112233445566778899aabbccddeeff", "hex");
 
 function challengeParams(): URLSearchParams {
@@ -107,11 +118,11 @@ function challengeParams(): URLSearchParams {
   return new URLSearchParams({ msg_signature: sha1(TOKEN, TIMESTAMP, NONCE, ciphertext), timestamp: TIMESTAMP, nonce: NONCE, echostr: ciphertext });
 }
 
-function messageRequest(): { query: URLSearchParams; body: string } {
+function messageRequest(msgid = "m-1", text = "aicr help"): { query: URLSearchParams; body: string } {
   const payload = JSON.stringify({
-    msgid: "m-1", aibotid: AIBOT_ID, chatid: "chat-9", chattype: "group",
+    msgid, aibotid: AIBOT_ID, chatid: "chat-9", chattype: "group",
     from: { userid: "owent" }, timestamp: Number(TIMESTAMP),
-    text: { content: "aicr help" },
+    text: { content: text },
   });
   const ciphertext = encrypt(payload, "", randomBytes(16));
   return {
@@ -132,7 +143,7 @@ describe("im callback routes (real Hono app)", () => {
     expect(await response.text()).toBe("777000111222");
   });
 
-  it("verifies a POST message, persists the inbox row and ACKs success", async () => {
+  it("verifies a POST command message, persists the inbox row and answers with the encrypted reply envelope", async () => {
     const app = createServerApp({ imCallbacks: routeOptions() });
     const request = messageRequest();
     const response = await app.request(`/callbacks/im/corp-airobot?${request.query.toString()}`, {
@@ -141,7 +152,18 @@ describe("im callback routes (real Hono app)", () => {
       body: request.body,
     });
     expect(response.status).toBe(200);
-    expect(await response.text()).toBe("success");
+    // A command message ACKs with the encrypted inline reply, never before
+    // the inbox row is durable (S11: persist, then answer). The passive
+    // reply is a finished stream message; markdown bodies are ignored by
+    // the platform (被动回复消息 path/101031).
+    const envelope = JSON.parse(await response.text()) as { encrypt: string; msgsignature: string; timestamp: string; nonce: string };
+    expect(envelope).toMatchObject({ timestamp: TIMESTAMP, nonce: NONCE });
+    expect(envelope.encrypt).not.toBe("");
+    expect(envelope.msgsignature).toBe(sha1(TOKEN, TIMESTAMP, NONCE, envelope.encrypt));
+    const reply = JSON.parse(decrypt(envelope.encrypt)) as { msgtype: string; stream: { id: string; finish: boolean; content: string } };
+    expect(reply.msgtype).toBe("stream");
+    expect(reply.stream.finish).toBe(true);
+    expect(reply.stream.content).toContain("aicr help");
     const inboxRows = inboxRowsFor("m-1");
     expect(inboxRows).toHaveLength(1);
     expect(inboxRows[0]).toMatchObject({ namespace: "ns-routes", delivery_kind: "message", status: "noted" }); // command creation lands with IM-11
@@ -152,6 +174,33 @@ describe("im callback routes (real Hono app)", () => {
     });
     expect(retry.status).toBe(200);
     expect(inboxRowsFor("m-1")).toHaveLength(1);
+  });
+
+  it("verifies a POST non-command message and ACKs plain success", async () => {
+    const app = createServerApp({ imCallbacks: routeOptions() });
+    const request = messageRequest("m-plain", "看看这个提交就行");
+    const response = await app.request(`/callbacks/im/corp-airobot?${request.query.toString()}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: request.body,
+    });
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe("success");
+    expect(inboxRowsFor("m-plain")).toHaveLength(1);
+  });
+
+  it("replies to a command message carrying the group @mention prefix", async () => {
+    const app = createServerApp({ imCallbacks: routeOptions() });
+    const request = messageRequest("m-mention", "@AICR机器人(事件回调) aicr help");
+    const response = await app.request(`/callbacks/im/corp-airobot?${request.query.toString()}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: request.body,
+    });
+    expect(response.status).toBe(200);
+    const envelope = JSON.parse(await response.text()) as { encrypt: string };
+    expect(envelope.encrypt).not.toBe("");
+    expect(inboxRowsFor("m-mention")).toHaveLength(1);
   });
 
   it("rejects unsigned requests, unknown connections and disabled callbacks without admin auth", async () => {
@@ -219,8 +268,8 @@ describe("im callback routes (real Hono app)", () => {
     expect(response.status).toBe(200);
   });
 
-  it("types stream refresh events without persisting a review-shaped delivery", async () => {
-    const payload = JSON.stringify({ msgid: "m-3", aibotid: AIBOT_ID, from: { userid: "owent" }, stream: { type: "refresh" } });
+  it("types stream refresh events with the stream id (msgtype stream, path/100719)", async () => {
+    const payload = JSON.stringify({ msgid: "m-3", aibotid: AIBOT_ID, from: { userid: "owent" }, msgtype: "stream", stream: { id: "stream-abc" } });
     const ciphertext = encrypt(payload, "", randomBytes(16));
     const query = new URLSearchParams({ msg_signature: sha1(TOKEN, TIMESTAMP, NONCE, ciphertext), timestamp: TIMESTAMP, nonce: NONCE });
     const result = verifyWecomAibotCallback({
@@ -231,6 +280,23 @@ describe("im callback routes (real Hono app)", () => {
     });
     expect(result.kind).toBe("verified");
     if (result.kind !== "verified") return;
-    expect(result.event.content).toEqual({ kind: "stream_refresh" });
+    expect(result.event.content).toEqual({ kind: "stream_refresh", streamId: "stream-abc" });
+  });
+
+  it("answers a stream refresh callback with an encrypted finished stream", async () => {
+    const app = createServerApp({ imCallbacks: routeOptions() });
+    const payload = JSON.stringify({ msgid: "m-refresh", aibotid: AIBOT_ID, chatid: "chat-9", chattype: "group", from: { userid: "owent" }, msgtype: "stream", stream: { id: "stream-xyz" } });
+    const ciphertext = encrypt(payload, "", randomBytes(16));
+    const query = new URLSearchParams({ msg_signature: sha1(TOKEN, TIMESTAMP, NONCE, ciphertext), timestamp: TIMESTAMP, nonce: NONCE });
+    const response = await app.request(`/callbacks/im/corp-airobot?${query.toString()}`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ encrypt: ciphertext }),
+    });
+    expect(response.status).toBe(200);
+    // The passive reply terminates the polled stream with its own id.
+    const envelope = JSON.parse(await response.text()) as { encrypt: string; msgsignature: string };
+    const raw = decrypt(envelope.encrypt);
+    const reply = JSON.parse(raw) as { msgtype: string; stream: { id: string; finish: boolean; content: string } };
+    expect(reply.msgtype).toBe("stream");
+    expect(reply.stream).toMatchObject({ id: "stream-xyz", finish: true });
   });
 });

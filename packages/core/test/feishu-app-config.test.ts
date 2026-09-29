@@ -72,9 +72,12 @@ describe("Feishu app configuration contract", () => {
     expect(identity.llm.author_resolution_model_chain).toBe("directory-identity");
     for (const locale of ["en", "zh-cn"]) {
       const markdown = readFileSync(resolve(root, `docs/site/src/content/docs/${locale}/integrations/im-bots.md`), "utf8");
-      const examples = [...markdown.matchAll(/```yaml\r?\n([\s\S]*?)```/gu)].map(match => match[1]!).filter(text => text.includes("kind: feishu_app"));
-      expect(examples).toHaveLength(1);
-      for (const text of examples) expect(appConfigSchema.parse(parse(text)).outputs.channels[0]?.kind).toBe("feishu_app");
+      const examples = [...markdown.matchAll(/```yaml\r?\n([\s\S]*?)```/gu)].map(match => match[1]!);
+      // Every yaml block in the guide must parse as valid config; exactly
+      // one demonstrates the feishu_app output channel (the receive-mode
+      // block demonstrates im.connections instead).
+      const channelKinds = examples.map(text => appConfigSchema.parse(parse(text)).outputs?.channels?.[0]?.kind);
+      expect(channelKinds.filter(kind => kind === "feishu_app")).toHaveLength(1);
     }
   });
 });

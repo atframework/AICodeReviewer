@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { appConfigSchema, type AppConfig, type ImPrincipal, type ImConversation } from "@aicr/core";
 import { closeStoreDb, createStoreDb, type SqliteStoreDb } from "@aicr/store";
 
-import { admitImCommand, authorizeImCommand, parseImCommand, IM_HELP_TEXT } from "../src/im/command-service.js";
+import { admitImCommand, authorizeImCommand, parseImCommand, stripImMentionPrefix, IM_HELP_TEXT } from "../src/im/command-service.js";
 
 /**
  * IM-11 acceptance A01–A08: fixed grammar, exact typed authorization, atomic
@@ -104,6 +104,18 @@ describe("A01: fixed grammar", () => {
     // resolver (IM-13) rejects floating refs during validation.
     expect(parseImCommand("aicr review service HEAD")).toMatchObject({ kind: "command" });
     expect(parseImCommand("aicr review service " + "a".repeat(3000))).toMatchObject({ kind: "invalid" });
+  });
+
+  it("strips one leading group @mention before parsing", () => {
+    // WeCom group mentions name the bot; Feishu uses @_user_N placeholders.
+    expect(stripImMentionPrefix("@AICR机器人(事件回调) aicr help")).toBe("aicr help");
+    expect(stripImMentionPrefix("@_user_1 aicr help")).toBe("aicr help");
+    expect(stripImMentionPrefix("  aicr help  ")).toBe("aicr help");
+    // A bare mention with nothing after it is empty, not a command.
+    expect(stripImMentionPrefix("@AICR机器人")).toBe("");
+    expect(parseImCommand(stripImMentionPrefix("@AICR机器人(事件回调) aicr help"))).toEqual({
+      kind: "command", command: { kind: "help" },
+    });
   });
 });
 

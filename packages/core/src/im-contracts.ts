@@ -104,7 +104,7 @@ export type ImEventContent =
   | { readonly kind: "card_action"; readonly actionId: string }
   | { readonly kind: "lifecycle"; readonly event: string }
   /** WeCom API-bot stream refresh: acknowledged and typed, never a review trigger (S03). */
-  | { readonly kind: "stream_refresh" }
+  | { readonly kind: "stream_refresh"; readonly streamId: string }
   /** Authenticated but unsupported legal type: confirmed, counted, ignored. */
   | { readonly kind: "unknown_type"; readonly type: string };
 

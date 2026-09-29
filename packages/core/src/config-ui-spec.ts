@@ -265,10 +265,13 @@ const IM_CONNECTION_FIELD_KINDS = buildFieldKindLookup(
     feishu_app: { app_id: true, app_secret: true, app_secret_env: true, base_url: true, tenant_key: true },
   },
   {
+    enabled: ["wecom_app", "wecom_aibot", "feishu_app"],
     token: ["wecom_app", "wecom_aibot"],
     token_env: ["wecom_app", "wecom_aibot"],
     encoding_aes_key: ["wecom_app", "wecom_aibot"],
     encoding_aes_key_env: ["wecom_app", "wecom_aibot"],
+    secret: ["wecom_aibot"],
+    secret_env: ["wecom_aibot"],
     verification_token: ["feishu_app"],
     verification_token_env: ["feishu_app"],
     encrypt_key: ["feishu_app"],
@@ -610,7 +613,7 @@ export const PAGE_LAYOUT: readonly ConfigUiPageLayout[] = [
     globals: true,
     sections: [
       { id: "identity", label: "Identity", scope: "entity", match: ["$name", "kind", "enabled"] },
-      { id: "protocol", label: "Protocol identity", scope: "entity", match: ["corp_id", "agent_id", "aibot_id", "app_id", "base_url", "tenant_key", "app_secret", "app_secret_env"] },
+      { id: "protocol", label: "Protocol identity", scope: "entity", match: ["corp_id", "agent_id", "aibot_id", "app_id", "base_url", "tenant_key", "app_secret", "app_secret_env", "secret", "secret_env"] },
       { id: "callback", label: "Callback credentials", scope: "entity", match: ["callback"], collapsed: true },
     ],
   },

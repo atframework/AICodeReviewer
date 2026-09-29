@@ -8,6 +8,7 @@ import { createAicrMetrics, formatPrometheusMetrics, recordReviewResult } from "
 import { saveRunSnapshot } from "./run-snapshot.js";
 import type { AicrMetrics } from "./metrics.js";
 import { registerImCallbackRoutes, type ImCallbackRoutesOptions } from "./im/callback-routes.js";
+import type { ImLongConnectionService } from "./im/long-connection-service.js";
 import { createObservabilityApi, type ObservabilityApiOptions } from "./observability-api.js";
 import { getDashboardClientAsset, getDashboardHtml, getDashboardIconSvg } from "./dashboard/index.js";
 import type { ConfigStore } from "@aicr/core";
@@ -248,6 +249,13 @@ export interface ServerAppOptions {
    * the routes are not mounted.
    */
   readonly imCallbacks?: ImCallbackRoutesOptions;
+  /**
+   * IM long-connection WebSocket clients (IM-12): connects WeCom aibot
+   * connections without an enabled callback and reconciles on config
+   * changes. Returns the started service; call `dispose()` on shutdown.
+   * When absent no long-connection client runs.
+   */
+  readonly startImLongConnections?: () => Promise<ImLongConnectionService>;
   /**
    * Durable admin-session ConfigStore (P2). Exposed so shutdown/tests can
    * close its handle; the Bearer surface never sees it.

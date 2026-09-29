@@ -6,6 +6,10 @@ import { acceptImDelivery, type AcceptImDeliveryOutcome } from "@aicr/store";
 
 import { verifyWecomAibotCallback, type WecomAibotCallbackCredentials } from "./protocol-wecom-aibot.js";
 import { verifyWecomAppCallback, type WecomAppCallbackCredentials } from "./protocol-wecom-app.js";
+import { verifyFeishuCallback, buildFeishuChallengeResponse } from "./protocol-feishu.js";
+import { processInlineCommand, sendFeishuReply } from "./inline-reply.js";
+import { buildWecomAibotEncryptedReply } from "./protocol-wecom-aibot.js";
+import type { FeishuCallbackCredentials } from "./protocol-feishu.js";
 
 /**
  * IM callback routes (design §5, IM-12): `GET/POST /callbacks/im/:connection`
@@ -29,12 +33,13 @@ export interface ImCallbackRoutesOptions {
 const MAX_CALLBACK_BODY_BYTES = 256 * 1024;
 
 interface ResolvedConnection {
-  readonly kind: "wecom_app" | "wecom_aibot";
+  readonly kind: "wecom_app" | "wecom_aibot" | "feishu_app";
   readonly name: string;
-  readonly identity: { kind: "wecom_app" | "wecom_aibot"; corpId: string | undefined; platformId: string | undefined; tenantKey: undefined; namespace: string };
+  readonly identity: { kind: "wecom_app" | "wecom_aibot" | "feishu_app"; corpId: string | undefined; platformId: string | undefined; tenantKey: string | undefined; namespace: string };
   readonly credentials:
     | (WecomAppCallbackCredentials & { type: "wecom_app" })
-    | ({ aibotId: string; token: string; encodingAesKey: string; type: "wecom_aibot" });
+    | ({ aibotId: string; token: string; encodingAesKey: string; type: "wecom_aibot" })
+    | (FeishuCallbackCredentials & { type: "feishu_app"; appSecret: string });
 }
 
 function resolveConnection(config: AppConfig, options: ImCallbackRoutesOptions, name: string): ResolvedConnection | "unknown" | "disabled" | "no-callback" {
@@ -71,6 +76,29 @@ function resolveConnection(config: AppConfig, options: ImCallbackRoutesOptions, 
       },
     };
   }
+  // Feishu application callback
+  const feishuConnection = connection as unknown as { app_id?: string; app_secret?: string; app_secret_env?: string; tenant_key?: string; callback?: Record<string, unknown> };
+  if (connection.kind === ("feishu_app" as string)) {
+    const cb = feishuConnection.callback;
+    if (cb === undefined || cb.enabled !== true) return "no-callback";
+    const verificationToken = typeof cb.verification_token === "string" ? cb.verification_token
+      : typeof cb.verification_token_env === "string" ? (options.env(cb.verification_token_env) ?? "") : "";
+    const encryptKey = typeof cb.encrypt_key === "string" ? cb.encrypt_key
+      : typeof cb.encrypt_key_env === "string" ? (options.env(cb.encrypt_key_env) ?? "") : "";
+    return {
+      kind: "feishu_app",
+      name,
+      identity: { kind: "feishu_app", corpId: undefined, platformId: feishuConnection.app_id, tenantKey: feishuConnection.tenant_key, namespace: options.namespace },
+      credentials: {
+        type: "feishu_app",
+        appId: feishuConnection.app_id ?? "",
+        verificationToken,
+        encryptKey,
+        appSecret: typeof feishuConnection.app_secret === "string" ? feishuConnection.app_secret
+          : typeof feishuConnection.app_secret_env === "string" ? (options.env(feishuConnection.app_secret_env) ?? "") : "",
+      },
+    };
+  }
   return "unknown";
 }
 
@@ -99,14 +127,21 @@ export function registerImCallbackRoutes(app: Hono, options: ImCallbackRoutesOpt
   const now = options.now ?? (() => Date.now());
 
   const handler = async (context: { req: { method: "GET" | "POST"; param: (name: string) => string; query: () => URLSearchParams; raw: () => Request } }, response: (body: string, status: number, headers?: Record<string, string>) => Response) => {
+
     const name = context.req.param("connection");
     const config = await options.getConfig();
     const resolved = resolveConnection(config, options, name);
     if (typeof resolved === "string") {
       return response(JSON.stringify({ error: "callback_unavailable" }), statusFor(resolved), { "content-type": "application/json" });
     }
-    if (resolved.credentials.token === "" || resolved.credentials.encodingAesKey === "") {
+    if (resolved.kind !== "feishu_app" && ((resolved.credentials as { token: string }).token === "" || (resolved.credentials as { encodingAesKey: string }).encodingAesKey === "")) {
       return response(JSON.stringify({ error: "callback_unavailable" }), 503, { "content-type": "application/json" });
+    }
+    if (resolved.kind === "feishu_app") {
+      const fc = resolved.credentials as FeishuCallbackCredentials;
+      if (fc.verificationToken === "" || fc.encryptKey === "") {
+        return response(JSON.stringify({ error: "callback_unavailable" }), 503, { "content-type": "application/json" });
+      }
     }
 
     const body = context.req.method === "POST" ? await readBoundedBody(context.req.raw()) : undefined;
@@ -117,6 +152,61 @@ export function registerImCallbackRoutes(app: Hono, options: ImCallbackRoutesOpt
     const identity = { identity: resolved.identity, name: resolved.name };
     const method = context.req.method;
     const query = context.req.query();
+    if (resolved.kind === "feishu_app") {
+      if (method === "GET") {
+        return response(JSON.stringify({ error: "method_not_allowed" }), 405, { "content-type": "application/json" });
+      }
+      const feishuBody = body ?? "";
+      const headers: Record<string, string> = {};
+      context.req.raw().headers.forEach((value, key) => { headers[key.toLowerCase()] = value; });
+      const feishuResult = verifyFeishuCallback({
+        query, body: feishuBody, headers,
+        credentials: resolved.credentials as FeishuCallbackCredentials,
+        connection: identity, now: now(),
+      });
+      if (feishuResult.kind === "challenge") {
+        return response(buildFeishuChallengeResponse(feishuResult.challenge), 200, { "content-type": "application/json; charset=utf-8" });
+      }
+      if (feishuResult.kind === "rejected") {
+        console.warn(JSON.stringify({ msg: "im_callback_rejected", connection: name, code: feishuResult.code, method }));
+        return response(JSON.stringify({ error: feishuResult.code }), 401, { "content-type": "application/json" });
+      }
+      // Feishu events: persist and ACK with 200 (empty body = success)
+      const feishuDelivery = {
+        delivery: {
+          namespace: options.namespace,
+          connectionIdentity: JSON.stringify([resolved.identity.namespace, resolved.identity.kind, null, resolved.identity.platformId ?? null, resolved.identity.tenantKey ?? null]),
+          deliveryKind: feishuResult.event.deliveryKind,
+          deliveryKey: feishuResult.event.deliveryKey,
+          payloadDigest: feishuResult.event.payloadDigest,
+        },
+        now: new Date(now()),
+      };
+      try {
+        const feishuOutcome = await acceptImDelivery(options.store, feishuDelivery);
+        if (feishuOutcome.kind === "conflict") {
+          return response(JSON.stringify({ error: "delivery_conflict" }), 409, { "content-type": "application/json" });
+        }
+      } catch {
+        return response(JSON.stringify({ error: "storage_unavailable" }), 503, { "content-type": "application/json" });
+      }
+      // Inline command reply: Feishu has no synchronous response body, so the
+      // reply goes out through the message API after the inbox ACK is durable.
+      const feishuText = feishuResult.event.content.kind === "message" ? feishuResult.event.content.text : undefined;
+      const feishuReply = processInlineCommand(feishuText, "feishu_app", {}, String(Math.floor(now() / 1000)), "0");
+      if (feishuReply !== undefined) {
+        const feishuCreds = resolved.credentials as FeishuCallbackCredentials & { appSecret: string };
+        const chatId = feishuResult.event.conversation?.kind === "group" ? feishuResult.event.conversation.id : undefined;
+        const actorId = feishuResult.event.actor?.id;
+        const receiveId = chatId ?? actorId ?? "";
+        const receiveIdType = chatId !== undefined ? "chat_id" : "open_id";
+        if (receiveId !== "" && feishuCreds.appSecret !== "") {
+          console.log(JSON.stringify({ msg: "im_command_reply", connection: name, format: feishuReply.format }));
+          void sendFeishuReply(feishuCreds.appId, feishuCreds.appSecret, receiveId, receiveIdType, feishuReply.text);
+        }
+      }
+      return response("", 200, { "content-type": "text/plain; charset=utf-8" });
+    }
     const result = resolved.kind === "wecom_app"
       ? verifyWecomAppCallback({ method, query, body, credentials: resolved.credentials as WecomAppCallbackCredentials, connection: identity, now: now() })
       : verifyWecomAibotCallback({ method, query, body, credentials: resolved.credentials as WecomAibotCallbackCredentials, connection: identity, now: now() });
@@ -126,14 +216,11 @@ export function registerImCallbackRoutes(app: Hono, options: ImCallbackRoutesOpt
       return response(result.echo, 200, { "content-type": "text/plain; charset=utf-8" });
     }
     if (result.kind === "rejected") {
-      // Debug: log the exact rejection reason (temporarily verbose)
       console.warn(JSON.stringify({ msg: "im_callback_rejected", connection: name, code: result.code, method: context.req.method }));
       return response(JSON.stringify({ error: result.code }), 401, { "content-type": "application/json" });
     }
 
-    // Verified delivery: persist to the inbox before acknowledging. This is
-    // the only side effect inside the request path; command handling runs in
-    // background workers (IM-11/14).
+    // Verified delivery: persist to the inbox before acknowledging.
     const delivery = {
       delivery: {
         namespace: options.namespace,
@@ -154,6 +241,40 @@ export function registerImCallbackRoutes(app: Hono, options: ImCallbackRoutesOpt
     }
     if (outcome.kind === "conflict") {
       return response(JSON.stringify({ error: "delivery_conflict" }), 409, { "content-type": "application/json" });
+    }
+    // Inline command reply (aibot callback only): the platform renders the
+    // encrypted response body as the bot's answer; persistence stays first.
+    if (resolved.kind === "wecom_aibot" && result.event.content.kind === "stream_refresh") {
+      // Stream refresh poll: we never leave a stream open (command replies
+      // finish immediately), so terminate any stray stream id.
+      const queryTs = query.get("timestamp") ?? String(Math.floor(now() / 1000));
+      const queryNonce = query.get("nonce") ?? "0";
+      const aibotCreds = resolved.credentials as WecomAibotCallbackCredentials;
+      const termination = buildWecomAibotEncryptedReply({
+        credentials: aibotCreds,
+        plaintext: JSON.stringify({
+          msgtype: "stream",
+          stream: { id: result.event.content.streamId, finish: true, content: "" },
+        }),
+        timestamp: queryTs,
+        nonce: queryNonce,
+      });
+      return response(JSON.stringify(termination), 200, { "content-type": "application/json; charset=utf-8" });
+    }
+    if (resolved.kind === "wecom_aibot") {
+      const messageText = result.event.content.kind === "message" ? result.event.content.text : undefined;
+      const queryTs = query.get("timestamp") ?? String(Math.floor(now() / 1000));
+      const queryNonce = query.get("nonce") ?? "0";
+      const aibotCreds = resolved.credentials as WecomAibotCallbackCredentials;
+      const inlineReply = processInlineCommand(messageText, "wecom_aibot", {
+        token: aibotCreds.token, encodingAesKey: aibotCreds.encodingAesKey,
+      }, queryTs, queryNonce);
+      if (inlineReply !== undefined) {
+        console.log(JSON.stringify({ msg: "im_command_reply", connection: name, format: inlineReply.format }));
+        if (inlineReply.format === "wecom_encrypted" && inlineReply.encrypted !== undefined) {
+          return response(JSON.stringify(inlineReply.encrypted), 200, { "content-type": "application/json; charset=utf-8" });
+        }
+      }
     }
     return response("success", 200, { "content-type": "text/plain; charset=utf-8" });
   };

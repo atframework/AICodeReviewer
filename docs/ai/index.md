@@ -26,6 +26,13 @@
 企业微信应用发送与发布接线、严格目录解析、watch/poll 热加载、目录身份与原生 @、
 SQLite/PG IM 持久化与原子操作、企业微信回调密码学适配、**回调路由接收路径已上线公网
 正式环境 aicr.x-ha.com**），协议结论并入[来源记录](sources/im-integrations.md)。
+2026-09-29 起：飞书事件回调（URL 验证 challenge + 头部签名验签 + AES 解密）、
+企业微信智能机器人事件回调的内联命令回复（`aicr help` 等命令按官方被动回复
+协议回**加密流式消息**（`msgtype:"stream"`+`finish:true`；markdown 被平台忽略），
+先持久化后应答，流式刷新回调回 finish 终止）、企业微信智能机器人长连接
+（官方 WebSocket 协议，`ws` 包实现——undici WebSocket 被平台拒绝）、飞书
+长连接（官方 SDK WSClient，适配其拍平的 v2 事件结构）均已实现，四种接收
+模式接入 `aicr serve` 启动接线（按连接表自动连接/重连）并部署公网验证。
 执行顺序与验收条件见 [Plan.md](../../Plan.md)，
 接口和模块取舍见 [IM 集成设计](../design/im-integrations.md)，
 通讯录格式与 watch/reload 见[成员目录设计](../design/member-directory.md)。

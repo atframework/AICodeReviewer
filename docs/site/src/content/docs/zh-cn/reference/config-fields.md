@@ -375,7 +375,7 @@ schema 已接受该命名空间，发送、回调与 worker 随计划逐步接�
 
 | 字段 | 类型 | 默认值 | 描述 |
 | --- | --- | --- | --- |
-| `im.connections.<id>` | object | — | 命名连接映射；连接 id 需匹配 `[A-Za-z0-9][A-Za-z0-9_-]*`；`kind` 选择 `wecom_app`（`corp_id`、`agent_id`、`app_secret`/`app_secret_env`）、`wecom_aibot`（`corp_id`、`aibot_id`）或 `feishu_app`（`app_id`、`app_secret`/`app_secret_env`、可选 `base_url`、`tenant_key`），均带可选 `callback`（运行时默认停用；企业微信 `token`/`encoding_aes_key` 与飞书 `verification_token`/`encrypt_key` 各为明文与 `*_env` 成对，启用回调时必填其一） |
+| `im.connections.<id>` | object | — | 命名连接映射；连接 id 需匹配 `[A-Za-z0-9][A-Za-z0-9_-]*`；`kind` 选择 `wecom_app`（`corp_id`、`agent_id`、`app_secret`/`app_secret_env`）、`wecom_aibot`（`corp_id`；回调模式带 `callback` 与可选 `aibot_id`，长连接模式带 `aibot_id` 与 `secret`/`secret_env`）或 `feishu_app`（`app_id`、`app_secret`/`app_secret_env`、可选 `base_url`、`tenant_key`），均带可选 `callback`（运行时默认停用；企业微信 `token`/`encoding_aes_key` 与飞书 `verification_token`/`encrypt_key` 各为明文与 `*_env` 成对，启用回调时必填其一）。`wecom_aibot` 与 `feishu_app` 的接收模式均按 `callback.enabled` 区分：`true` 走事件回调（`GET/POST /callbacks/im/<id>`），未启用回调时由服务端主动建立长连接接收（企微需 `aibot_id`+`secret`，飞书需 `app_id`+`app_secret`，即官方 SDK 长连接） |
 | `im.command_bindings.<id>.enabled` | boolean | — | 运行时默认 false；接线完成前禁用草稿始终可保存 |
 | `im.command_bindings.<id>.connection` | string | — | 对 `im.connections` 的命名引用；启用绑定时要求连接存在且启用 |
 | `im.command_bindings.<id>.actors[].type` | enum | — | `wecom_userid`、`wecom_encrypted_userid` 或 `feishu_open_id`；身份命名空间继承自连接 |

@@ -169,6 +169,8 @@ import {
 } from "./runtime-config.js";
 import { ImConnectionRegistry } from "./im/connections.js";
 import type { ImCallbackRoutesOptions } from "./im/callback-routes.js";
+import { ImLongConnectionService } from "./im/long-connection-service.js";
+import { IM_HELP_TEXT, parseImCommand, stripImMentionPrefix } from "./im/command-service.js";
 import { MemberDirectoryService, type MemberDirectoryView } from "./im/member-directory-service.js";
 import {
   createRedisConfigStore,
@@ -4155,6 +4157,53 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
           getConfig: currentConfig,
           env: (name: string) => resolveEnv(name),
         } satisfies ImCallbackRoutesOptions,
+      }
+      : {}),
+    // IM long-connection WebSocket clients (start in background; the
+    // service reconnects on disconnect and reconciles on config change).
+    ...(store
+      ? {
+        startImLongConnections: async () => {
+          const service = new ImLongConnectionService({
+            getConfig: currentConfig,
+            env: (name: string) => resolveEnv(name),
+            namespace: configSources.database.namespace,
+            onAdmitMessage: async (message) => {
+              const config = currentConfig();
+              const parse = parseImCommand(stripImMentionPrefix(message.text));
+              if (parse.kind !== "command") return;
+              // help is self-contained: no binding required, reply directly.
+              if (parse.command.kind === "help") {
+                await message.reply(IM_HELP_TEXT);
+                return;
+              }
+              const { admitImCommand } = await import("./im/command-service.js");
+              const outcome = await admitImCommand(store, {
+                config,
+                namespace: configSources.database.namespace,
+                connectionName: message.connectionName,
+                connectionIdentity: `${message.platform === "feishu_app" ? "feishu" : "wecom"}-lc:${message.connectionName}`,
+                deliveryKey: `lc-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+                payloadDigest: `lc:${message.text}`,
+                actor: message.actor,
+                conversation: message.conversation,
+                command: parse.command,
+                now: new Date(),
+                configSnapshotId: "file-only",
+                configFileDigest: "unknown",
+              });
+              if (outcome.kind === "accepted" || outcome.kind === "duplicate") {
+                await message.reply("已收到评审请求。");
+              } else if (outcome.kind === "rejected") {
+                await message.reply(`请求被拒绝: ${outcome.reason}`);
+              } else if (outcome.kind === "rate_limited") {
+                await message.reply("请求过于频繁，请稍后再试。");
+              }
+            },
+          });
+          await service.reconcile();
+          return service;
+        },
       }
       : {}),
   };

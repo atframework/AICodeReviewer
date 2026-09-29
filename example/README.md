@@ -11,6 +11,12 @@ Permissions, matching rules and tenant acceptance are documented in the
 [English](../docs/site/src/content/docs/en/integrations/im-bots.md#feishu-custom-application)
 and [Chinese](../docs/site/src/content/docs/zh-cn/integrations/im-bots.md#飞书自建应用) guides.
 
+To receive @-mention message commands (`aicr help` etc.), merge
+[im-receive-connections.yaml](im-receive-connections.yaml). It demonstrates all
+three receive modes — the WeCom smart robot event callback, the WeCom smart
+robot WebSocket long connection, and the Feishu application event callback —
+plus the disabled command-binding draft that gates review commands.
+
 The [documentation directory](../docs/README.md) links the bilingual user guides,
 Workspace design, and configuration management reference.
 For synthetic Gitea/SVN analysis and PostgreSQL/Redis deployment acceptance, see the

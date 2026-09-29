@@ -106,6 +106,9 @@ const wecomAibotConnectionSchema = z
     corp_id: z.string().min(1),
     /** Optional: the event-callback protocol does not require it; the long-connection robot does. */
     aibot_id: z.string().min(1).optional(),
+    /** Long-connection credential; mutually exclusive with secret_env. */
+    secret: z.string().min(1).optional(),
+    secret_env: z.string().min(1).optional(),
     callback: wecomCallbackSchema.optional(),
   })
   .strict();

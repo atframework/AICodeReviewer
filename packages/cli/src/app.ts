@@ -347,10 +347,23 @@ export async function runCli(
       logger.info({ port }, "AICR server started");
       stdout.write(`AICR server listening on port ${port}\n`);
 
+      // IM long-connection clients run alongside the HTTP surface; a
+      // startup failure disables the mode without taking the server down.
+      let imLongConnections: Awaited<ReturnType<NonNullable<typeof serverOptions.startImLongConnections>>> | undefined;
+      try {
+        imLongConnections = await serverOptions.startImLongConnections?.();
+      } catch (error) {
+        logger.warn({ error: String(error) }, "IM long-connection startup failed");
+      }
+
       return waitForServerShutdown({
         server,
         beginDrain: () => serverOptions.beginDrain?.() ?? Promise.resolve(),
-        close: async () => { await closeServerApp(serverOptions); await otelSdk?.shutdown(); },
+        close: async () => {
+          imLongConnections?.dispose();
+          await closeServerApp(serverOptions);
+          await otelSdk?.shutdown();
+        },
         stdout,
         stderr,
       });
