@@ -256,6 +256,8 @@ export interface ServerAppOptions {
    * membership authorization. Disposed on shutdown.
    */
   readonly imDirectory?: ImAuthorizationDirectory;
+  /** Stops the reply outbox worker and releases its platform senders. */
+  readonly closeImReplies?: () => void;
   /**
    * IM long-connection WebSocket clients (IM-12): connects WeCom aibot
    * connections without an enabled callback and reconciles on config
@@ -2368,6 +2370,7 @@ async function handleReviewOrchestration(
 /** Call after the HTTP listener has drained its accepted requests. */
 export async function closeServerApp(options: ServerAppOptions): Promise<void> {
   await options.closeAutoCommit?.();
+  options.closeImReplies?.();
   options.imDirectory?.dispose();
   await options.sessionStore?.close();
   if (options.store) await closeStoreDb(options.store);

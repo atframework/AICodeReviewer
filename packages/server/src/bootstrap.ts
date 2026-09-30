@@ -173,6 +173,7 @@ import { ImLongConnectionService } from "./im/long-connection-service.js";
 import { IM_HELP_TEXT, invalidImCommandReply, parseImCommand, processImCommand, stripImMentionPrefix } from "./im/command-service.js";
 import { ImAuthorizationDirectory } from "./im/authorization-directory.js";
 import { ImQueryService } from "./im/query-service.js";
+import { ImReplyService } from "./im/reply-service.js";
 import { MemberDirectoryService, type MemberDirectoryView } from "./im/member-directory-service.js";
 import {
   createRedisConfigStore,
@@ -4091,7 +4092,10 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
     store: store!,
     getConfig: currentConfig,
   });
+  let imReplyService: ImReplyService | undefined;
   if (store !== undefined) {
+    imReplyService = new ImReplyService({ store, getConfig: currentConfig, env: (name: string) => resolveEnv(name) });
+    imReplyService.start();
     // Single-process executions cannot survive a restart: sweep in-flight rows.
     void import("@aicr/store").then(({ failActiveReviewRuns }) =>
       failActiveReviewRuns(store!, "interrupted by restart").then((swept) => {
@@ -4207,6 +4211,7 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
     ...(store
       ? {
         ...(imAuthorizationDirectory !== undefined ? { imDirectory: imAuthorizationDirectory } : {}),
+        ...(imReplyService !== undefined ? { closeImReplies: () => imReplyService!.dispose() } : {}),
         imCallbacks: {
           store,
           namespace: configSources.database.namespace,
@@ -4260,6 +4265,7 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
             },
           });
           await service.reconcile();
+          service.startPeriodicReconcile();
           return service;
         },
       }

@@ -10,6 +10,7 @@ import { verifyFeishuCallback, buildFeishuChallengeResponse } from "./protocol-f
 import { buildWecomStreamTextReply, processInlineCommand, sendFeishuReply } from "./inline-reply.js";
 import { buildWecomAibotEncryptedReply } from "./protocol-wecom-aibot.js";
 import { invalidImCommandReply, parseImCommand, processImCommand, stripImMentionPrefix, type ImCommandDirectoryLike, type ImQueryServiceLike } from "./command-service.js";
+import { consumeCardAction } from "./action-service.js";
 import type { FeishuCallbackCredentials } from "./protocol-feishu.js";
 
 /**
@@ -199,6 +200,28 @@ export function registerImCallbackRoutes(app: Hono, options: ImCallbackRoutesOpt
       // reply goes out through the message API after the inbox ACK is durable.
       // help answers without authorization; other commands run the full
       // admission pipeline (scope matchers included).
+      // Card action callbacks (IM-15): consume the opaque action id and
+      // answer with the bound request outcome.
+      if (feishuResult.event.content.kind === "card_action" && feishuResult.event.actor !== undefined && feishuResult.event.conversation !== undefined) {
+        const feishuCreds = resolved.credentials as FeishuCallbackCredentials & { appSecret: string };
+        const chatId = feishuResult.event.conversation?.kind === "group" ? feishuResult.event.conversation.id : undefined;
+        const receiveId = chatId ?? feishuResult.event.actor.id;
+        const receiveIdType = chatId !== undefined ? "chat_id" : "open_id";
+        const config = await options.getConfig();
+        const outcome = await consumeCardAction(options.store, {
+          actionId: feishuResult.event.content.actionId,
+          config, actor: feishuResult.event.actor, conversation: feishuResult.event.conversation,
+        });
+        const text = outcome.kind === "accepted" || outcome.kind === "duplicate"
+          ? `已受理重评请求（${outcome.requestId}）。`
+          : outcome.kind === "expired" ? "该操作已过期（24 小时有效）。"
+            : outcome.kind === "not_found" ? "未知操作。"
+            : outcome.kind === "rejected" ? `操作被拒绝：${outcome.reason}` : "操作不可用。";
+        if (receiveId !== "" && feishuCreds.appSecret !== "") {
+          void sendFeishuReply(feishuCreds.appId, feishuCreds.appSecret, receiveId, receiveIdType, text);
+        }
+        return response("", 200, { "content-type": "text/plain; charset=utf-8" });
+      }
       const feishuText = feishuResult.event.content.kind === "message" ? feishuResult.event.content.text : undefined;
       const parsed = parseImCommand(stripImMentionPrefix(feishuText ?? ""));
       if (parsed.kind === "command" || parsed.kind === "invalid") {

@@ -102,10 +102,11 @@ export async function sendFeishuReply(
   receiveId: string,
   receiveIdType: string,
   text: string,
+  fetchImpl: typeof globalThis.fetch = globalThis.fetch,
 ): Promise<boolean> {
   try {
     // Get tenant_access_token
-    const tokenRes = await fetch("https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal", {
+    const tokenRes = await fetchImpl("https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ app_id: appId, app_secret: appSecret }),
@@ -114,7 +115,7 @@ export async function sendFeishuReply(
     if (tokenData.code !== 0 || tokenData.tenant_access_token === undefined) return false;
 
     // Send message
-    const msgRes = await fetch(
+    const msgRes = await fetchImpl(
       `https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=${receiveIdType}`,
       {
         method: "POST",

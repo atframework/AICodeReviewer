@@ -178,13 +178,47 @@ export class ManualReviewService {
     });
 
     const result = await this.options.executeReview(event, config);
+    const terminalNotification = buildTerminalNotification(request, result.state, result.errorCode);
 
     await finishImReviewRequest(this.options.store, {
       requestId: request.requestId,
       fence,
       state: result.state,
       errorCode: result.errorCode,
+      ...(terminalNotification !== undefined ? { notifications: [terminalNotification] } : {}),
       now,
     });
   }
+}
+
+/**
+ * Terminal notification for the requesting conversation (IM-16, O09): the
+ * destination is the request's connection; the compact receipt carries the
+ * platform conversation plus the result summary. Notification delivery never
+ * re-runs the review — the request row is already terminal here.
+ */
+function buildTerminalNotification(
+  request: { readonly requestId: string; readonly connectionIdentity: string; readonly conversationJson: string; readonly requestedByType: string; readonly requestedById: string; readonly repoRef: string; readonly requestedRevision: string; readonly resolvedRevision: string | null },
+  state: string,
+  errorCode: string | undefined,
+): { readonly operationId: string; readonly destinationIdentity: string; readonly operationKind: string; readonly payloadDigest: string; readonly compactReceipt: string } | undefined {
+  const connectionName = request.connectionIdentity.split(":").pop() ?? "";
+  if (connectionName === "") return undefined;
+  const receipt = JSON.stringify({
+    connectionName,
+    conversation: request.conversationJson,
+    actor: { type: request.requestedByType, id: request.requestedById },
+    requestId: request.requestId,
+    state,
+    ...(errorCode !== undefined ? { errorCode } : {}),
+    repoRef: request.repoRef,
+    revision: request.resolvedRevision ?? request.requestedRevision,
+  });
+  return {
+    operationId: `imn-${request.requestId}`,
+    destinationIdentity: connectionName,
+    operationKind: "review_terminal",
+    payloadDigest: `${state}:${request.requestId}`,
+    compactReceipt: receipt,
+  };
 }

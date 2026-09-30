@@ -4,7 +4,7 @@
  * and GREATEST-free set expressions kept in drizzle's portable form.
  */
 
-import { and, eq, inArray, isNull, lt, or, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, lt, lte, or, sql } from "drizzle-orm";
 
 import { randomUUID } from "node:crypto";
 
@@ -308,4 +308,76 @@ export async function consumeImRateLimitPg(store: PgStoreDb, input: { readonly n
     set: { count: sql`${imRateLimits.count} + 1` },
   }).returning({ count: imRateLimits.count });
   return rows[0]?.count ?? 1;
+}
+
+export interface ImReplyNotificationRowPg {
+  readonly operationId: string;
+  readonly namespace: string;
+  readonly requestId: string | null;
+  readonly destinationIdentity: string;
+  readonly operationKind: string;
+  readonly payloadDigest: string;
+  readonly state: string;
+  readonly expiry: Date | null;
+  readonly compactReceipt: string | null;
+  readonly attempts: number;
+  readonly fence: number;
+}
+
+export async function claimDueImReplyNotificationsPg(store: PgStoreDb, input: { readonly owner: string; readonly limit: number; readonly now: Date }): Promise<ImReplyNotificationRowPg[]> {
+  return store.db.transaction(async (tx) => {
+    const due = await tx.select().from(imReplyOutbox).where(and(
+      eq(imReplyOutbox.state, "pending"),
+      lte(imReplyOutbox.nextAttemptAt, input.now),
+    )).orderBy(imReplyOutbox.nextAttemptAt).limit(input.limit);
+    const claimed: ImReplyNotificationRowPg[] = [];
+    for (const row of due) {
+      if (row.expiry !== null && row.expiry.getTime() <= input.now.getTime()) {
+        await tx.update(imReplyOutbox).set({ state: "expired", updatedAt: input.now }).where(eq(imReplyOutbox.operationId, row.operationId));
+        continue;
+      }
+      const next = await tx.update(imReplyOutbox).set({
+        state: "delivering",
+        leaseOwner: input.owner,
+        leaseUntil: new Date(input.now.getTime() + 60_000),
+        attempts: row.attempts + 1,
+        fence: sql`${imReplyOutbox.fence} + 1`,
+        updatedAt: input.now,
+      }).where(and(eq(imReplyOutbox.operationId, row.operationId), eq(imReplyOutbox.fence, row.fence))).returning();
+      if (next.length > 0) claimed.push(next[0]!);
+    }
+    return claimed;
+  });
+}
+
+export async function finishImReplyNotificationPg(store: PgStoreDb, input: { readonly operationId: string; readonly fence: number; readonly state: "delivered" | "failed" | "pending"; readonly retryAt?: Date; readonly now: Date }): Promise<boolean> {
+  const rows = await store.db.update(imReplyOutbox).set({
+    state: input.state,
+    ...(input.state === "pending" ? { leaseOwner: null, leaseUntil: null, nextAttemptAt: input.retryAt ?? input.now } : {}),
+    ...(input.state === "failed" ? { leaseOwner: null, leaseUntil: null } : {}),
+    ...(input.state === "delivered" ? { leaseOwner: null, leaseUntil: null, nextAttemptAt: null } : {}),
+    updatedAt: input.now,
+  }).where(and(eq(imReplyOutbox.operationId, input.operationId), eq(imReplyOutbox.fence, input.fence))).returning();
+  return rows.length > 0;
+}
+
+export async function consumeImActionForRequestPg(store: PgStoreDb, input: { readonly actionId: string; readonly requestId: string; readonly now: Date }): Promise<{ kind: "consumed" } | { kind: "duplicate"; requestId: string } | { kind: "expired" } | { kind: "not_found" }> {
+  return store.db.transaction(async (tx) => {
+    const rows = await tx.select().from(imActions).where(eq(imActions.actionId, input.actionId));
+    const action = rows[0];
+    if (action === undefined) return { kind: "not_found" } as const;
+    if (action.status === "consumed") return { kind: "duplicate", requestId: action.consumedRequestId ?? "" } as const;
+    if (action.expiresAt.getTime() <= input.now.getTime()) {
+      await tx.update(imActions).set({ status: "expired", updatedAt: input.now }).where(eq(imActions.actionId, input.actionId));
+      return { kind: "expired" } as const;
+    }
+    if (action.status !== "issued") return { kind: "expired" } as const;
+    const updated = await tx.update(imActions).set({
+      status: "consumed",
+      consumedRequestId: input.requestId,
+      updatedAt: input.now,
+    }).where(and(eq(imActions.actionId, input.actionId), eq(imActions.status, "issued"))).returning();
+    if (updated.length === 0) return { kind: "duplicate", requestId: "" } as const;
+    return { kind: "consumed" } as const;
+  });
 }

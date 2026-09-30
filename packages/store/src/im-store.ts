@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import { and, eq, inArray, isNull, lt, or, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, lt, lte, or, sql } from "drizzle-orm";
 
 import type { StoreDb } from "./database.js";
 import {
@@ -21,6 +21,9 @@ import {
   deleteExpiredImRateLimitsPg,
   findImReviewRequestPg,
   finishImReviewRequestPg,
+  claimDueImReplyNotificationsPg,
+  consumeImActionForRequestPg,
+  finishImReplyNotificationPg,
   getImActionPg,
   insertImActionPg,
   listImActiveConfigSnapshotIdsPg,
@@ -151,8 +154,9 @@ export interface FinishImReviewRequestInput {
     readonly destinationIdentity: string;
     readonly operationKind: string;
     readonly payloadDigest: string;
-    readonly nextAttemptAt: Date;
+    readonly nextAttemptAt?: Date | undefined;
     readonly expiry?: Date | undefined;
+    readonly compactReceipt?: string | undefined;
   }[];
   readonly now: Date;
 }
@@ -426,13 +430,69 @@ export async function finishImReviewRequest(store: StoreDb, input: FinishImRevie
         payloadDigest: notification.payloadDigest,
         state: "pending",
         expiry: notification.expiry ?? null,
-        nextAttemptAt: notification.nextAttemptAt,
+        nextAttemptAt: notification.nextAttemptAt ?? input.now,
+        compactReceipt: notification.compactReceipt ?? null,
         createdAt: input.now,
         updatedAt: input.now,
       }).run();
     }
     return true;
   });
+}
+
+export interface ImReplyNotificationRow {
+  readonly operationId: string;
+  readonly namespace: string;
+  readonly requestId: string | null;
+  readonly destinationIdentity: string;
+  readonly operationKind: string;
+  readonly payloadDigest: string;
+  readonly state: string;
+  readonly expiry: Date | null;
+  readonly compactReceipt: string | null;
+  readonly attempts: number;
+  readonly fence: number;
+}
+
+/** Claims due reply notifications for one worker (lease + fence; O09/O11). */
+export async function claimDueImReplyNotifications(store: StoreDb, input: { readonly owner: string; readonly limit: number; readonly now: Date }): Promise<ImReplyNotificationRow[]> {
+  if (store.kind === "postgres") return claimDueImReplyNotificationsPg(store, input);
+  return store.db.transaction((tx) => {
+    const due = tx.select().from(imReplyOutbox).where(and(
+      eq(imReplyOutbox.state, "pending"),
+      lte(imReplyOutbox.nextAttemptAt, input.now),
+    )).orderBy(imReplyOutbox.nextAttemptAt).limit(input.limit).all();
+    const claimed: ImReplyNotificationRow[] = [];
+    for (const row of due) {
+      if (row.expiry !== null && row.expiry.getTime() <= input.now.getTime()) {
+        tx.update(imReplyOutbox).set({ state: "expired", updatedAt: input.now }).where(eq(imReplyOutbox.operationId, row.operationId)).run();
+        continue;
+      }
+      const next = tx.update(imReplyOutbox).set({
+        state: "delivering",
+        leaseOwner: input.owner,
+        leaseUntil: new Date(input.now.getTime() + 60_000),
+        attempts: row.attempts + 1,
+        fence: sql`${imReplyOutbox.fence} + 1`,
+        updatedAt: input.now,
+      }).where(and(eq(imReplyOutbox.operationId, row.operationId), eq(imReplyOutbox.fence, row.fence))).returning().all();
+      if (next.length > 0) claimed.push(next[0]!);
+    }
+    return claimed;
+  });
+}
+
+/** Terminal update for one notification (delivered / failed / back to pending). */
+export async function finishImReplyNotification(store: StoreDb, input: { readonly operationId: string; readonly fence: number; readonly state: "delivered" | "failed" | "pending"; readonly retryAt?: Date; readonly now: Date }): Promise<boolean> {
+  if (store.kind === "postgres") return finishImReplyNotificationPg(store, input);
+  const rows = store.db.update(imReplyOutbox).set({
+    state: input.state,
+    ...(input.state === "pending" ? { leaseOwner: null, leaseUntil: null, nextAttemptAt: input.retryAt ?? input.now } : {}),
+    ...(input.state === "failed" ? { leaseOwner: null, leaseUntil: null } : {}),
+    ...(input.state === "delivered" ? { leaseOwner: null, leaseUntil: null, nextAttemptAt: null } : {}),
+    updatedAt: input.now,
+  }).where(and(eq(imReplyOutbox.operationId, input.operationId), eq(imReplyOutbox.fence, input.fence))).returning().all();
+  return rows.length > 0;
 }
 
 /** Active config snapshot references registered with the runtime GC (R06). */
@@ -474,6 +534,34 @@ export async function consumeImAction(store: StoreDb, input: { readonly actionId
       return { kind: "expired" } as const;
     }
     return { kind: "not_issued" } as const;
+  });
+}
+
+/**
+ * Atomic consume-for-request (IM-15 A10): one CAS transition
+ * issued -> consumed(requestId); replays return the original request id.
+ */
+export async function consumeImActionForRequest(store: StoreDb, input: { readonly actionId: string; readonly requestId: string; readonly now: Date }): Promise<{ kind: "consumed" } | { kind: "duplicate"; requestId: string } | { kind: "expired" } | { kind: "not_found" }> {
+  if (store.kind === "postgres") return consumeImActionForRequestPg(store, input);
+  return store.db.transaction((tx) => {
+    const action = tx.select().from(imActions).where(eq(imActions.actionId, input.actionId)).get();
+    if (action === undefined) return { kind: "not_found" } as const;
+    if (action.status === "consumed") return { kind: "duplicate", requestId: action.consumedRequestId ?? "" } as const;
+    if (action.expiresAt.getTime() <= input.now.getTime()) {
+      tx.update(imActions).set({ status: "expired", updatedAt: input.now }).where(eq(imActions.actionId, input.actionId)).run();
+      return { kind: "expired" } as const;
+    }
+    if (action.status !== "issued") return { kind: "expired" } as const;
+    const updated = tx.update(imActions).set({
+      status: "consumed",
+      consumedRequestId: input.requestId,
+      updatedAt: input.now,
+    }).where(and(
+      eq(imActions.actionId, input.actionId),
+      eq(imActions.status, "issued"),
+    )).returning().all();
+    if (updated.length === 0) return { kind: "duplicate", requestId: "" } as const;
+    return { kind: "consumed" } as const;
   });
 }
 

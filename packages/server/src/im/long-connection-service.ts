@@ -34,12 +34,35 @@ export interface LongConnectionServiceOptions {
   readonly onAdmitMessage: (message: LongConnectionMessage) => Promise<void>;
 }
 
+const RECONCILE_INTERVAL_MS = 30_000;
+
 export class ImLongConnectionService {
   private connections = new Map<string, ManagedConnection>();
   private readonly options: LongConnectionServiceOptions;
+  private timer: ReturnType<typeof setInterval> | undefined;
+  private reconciling = false;
 
   constructor(options: LongConnectionServiceOptions) {
     this.options = options;
+  }
+
+  /**
+   * Periodic reconciliation (IM-17): config changes — added, removed or
+   * disabled long-connection entries — apply within one interval without a
+   * restart; in-flight scans are skipped rather than queued.
+   */
+  startPeriodicReconcile(): void {
+    if (this.timer !== undefined) return;
+    this.timer = setInterval(() => {
+      if (this.reconciling) return;
+      this.reconciling = true;
+      void this.reconcile().catch((error: unknown) => {
+        console.warn(JSON.stringify({ msg: "im_long_connection_reconcile_failed", error: String(error) }));
+      }).finally(() => {
+        this.reconciling = false;
+      });
+    }, RECONCILE_INTERVAL_MS);
+    if (typeof this.timer.unref === "function") this.timer.unref();
   }
 
   /** Scans config and connects/reconnects as needed. Call on startup and config change. */
@@ -123,6 +146,8 @@ export class ImLongConnectionService {
   }
 
   dispose(): void {
+    if (this.timer !== undefined) clearInterval(this.timer);
+    this.timer = undefined;
     for (const conn of this.connections.values()) {
       conn.dispose();
     }

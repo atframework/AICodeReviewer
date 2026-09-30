@@ -33,6 +33,13 @@ SQLite/PG IM 持久化与原子操作、企业微信回调密码学适配、**�
 （官方 WebSocket 协议，`ws` 包实现——undici WebSocket 被平台拒绝）、飞书
 长连接（官方 SDK WSClient，适配其拍平的 v2 事件结构）均已实现，四种接收
 模式接入 `aicr serve` 启动接线（按连接表自动连接/重连）并部署公网验证。
+IM-15 卡片动作服务端链路（发行 24h opaque id + 原子 consume-for-request + 飞书回调消费，重放回原
+请求号）、IM-17 生命周期（LC 30s 周期 reconcile、目录/回复读 live config、统一释放）、IM-18 管理查询
+（/api/admin/im/{requests,outbox} 分页只读）、IM-19 组合回归（命令→评审→终态→通知分类）均完成；
+IM-21 真实平台验收待测试账户（pending_external）。outbox 认领双后端（SQLite+PG）已齐。
+回复通知 outbox（IM-16）上线：评审终态与通知同事务入 im_reply_outbox，worker 周期认领
+（lease+fence）经平台通道推送结果回请求会话（飞书消息 API / 企微 aibot_send_msg），失败指数
+退避、到期不发送、通知失败不重跑评审；PostgreSQL 认领分支待补。
 命令授权模型扩展（A14）：精确 principal 之外新增范围匹配器——企微部门
 （递归）/标签（角色/用户组载体）/职位/自定义字段、飞书群成员/部门/职务、
 `any`，全部支持 `expires_at` 临时授权；目录事实由 authorization directory

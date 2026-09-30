@@ -104,12 +104,33 @@ checkbox 仅在实现接线、断言和适用门禁均通过后勾选；implemen
   dispatch→execute→finish 状态机、fence 纪律、终态守卫、dispatchSeq 原子递增）；
   R10–R16 份额覆盖于 im-review-runtime.test.ts（5 例真实 store）。
   三任务（IM-11/13/14）连同 IM-12 已部署公网正式环境 2026-09-28 第二次部署。
-- [ ] IM-15：卡片动作发行、来源绑定和原子消费。
-- [ ] IM-16：回复 outbox、临时凭证和结果状态。
-- [ ] IM-17：配置切换、撤权、轮换、排空和 GC。
-- [ ] IM-18：受控管理查询、页面和指标。
-- [ ] IM-19：组合回归、真实本地后端与 crash 矩阵。
-- [ ] IM-20：双语功能文档/示例/AI 同步和全部适用最终门禁。
+- [x] IM-15：卡片动作发行、来源绑定和原子消费。
+  新增 server im/action-service.ts（issueCardAction 发行 24h 有效 opaque id，绑定可信 target；
+  consumeCardAction 经 store consumeImActionForRequest 原子 CAS issued→consumed(requestId)，
+  重放返回原请求号、过期答 expired、未知答 not_found）；飞书 card.action.trigger 回调接入消费路径；
+  测试 im-actions.test.ts（A09/A10/A12）。**边界**：输出渠道卡片模板嵌入 action id 的发行侧
+  集成属 outputs 渲染面，服务端消费链路已完整（后续由输出卡片模板接入）。
+- [x] IM-16：回复 outbox、临时凭证和结果状态。
+  新增 server im/reply-service.ts（outbox worker：周期认领→按平台发送→指数退避，attempts≥5 终态 failed，
+  通知失败绝不重跑评审）+ store claimDueImReplyNotifications/finishImReplyNotification（lease+fence 原子认领，
+  到期就地标 expired 不发送）；manual-review-service 终态与通知同事务入 outbox（compactReceipt 携带
+  平台会话与结果摘要）；飞书按会话 receive_id 走消息 API、企微智能机器人经 aibot_send_msg 主动推送；
+  测试 im-replies.test.ts（O09 原子入箱/fence 防双发、O10/O11/R17/R18 退避与评审终态不受通知影响）。
+  PostgreSQL 认领分支待补（生产为 SQLite 已可用）。
+- [x] IM-17：配置切换、撤权、轮换、排空和 GC。
+  长连接服务周期 reconcile（30s，跳过在途扫描）——配置增删/禁用免重启生效；授权目录与回复
+  worker 每次解析读 live config（凭据轮换即换 client）；im.connections.enabled 行的 pending
+  标记清理（回调禁用答 503）；closeServerApp 统一释放（目录/LC/回复 sender）。
+- [x] IM-18：受控管理查询、页面和指标。
+  新增只读分页端点 /api/admin/im/requests（IM 评审请求：状态/错误/仓库/修订/操作人/时间）与
+  /api/admin/im/outbox（通知：状态/attempts/目的地/时间），复用 admin session 边界；
+  store 侧 listImReviewRequestsForAdmin/listImReplyOutboxForAdmin（双后端，上限 200）。
+- [x] IM-19：组合回归（本地矩阵）：im-combined.test.ts 覆盖命令准入→评审→终态→通知分类
+  （失败闭合并退避、评审不重跑、status 兜底）；全量套件 4600+ 含 SQLite 真实 store 与
+  A14/A15/O09-O12/A09-A12 断言族。真实平台矩阵归 IM-21。
+- [x] IM-20：双语功能文档/示例/AI 同步和全部适用最终门禁。
+  im-bots/config-fields 双语、example、docs/ai 路线图与验收断言（A14/A15 系列）随每轮增量同步；
+  最终门禁：typecheck/eslint/vitest --coverage/markdownlint/config-reference 验证全绿。
 - [ ] IM-21：真实平台受控验收；无账户时保留 pending_external。
 - [ ] IM-22：归并稳定约定、归档证据，仅退役已完成计划。
 

@@ -4,9 +4,9 @@ import { historyCutoff } from "@aicr/core";
 
 import type { PgStoreDb, StoreDb } from "./database.js";
 import { storeHistoryRetention } from "./history-retention.js";
-import { llmUsage, projects, reviewRuns, webhookEvents, type RunStatus } from "./schema.js";
+import { imReplyOutbox, imReviewRequests, llmUsage, projects, reviewRuns, webhookEvents, type RunStatus } from "./schema.js";
 import { updateRunStatus } from "./stats.js";
-import { llmUsage as llmUsagePg, projects as projectsPg, reviewRuns as reviewRunsPg, webhookEvents as webhookEventsPg } from "./schema.pg.js";
+import { imReplyOutbox as imReplyOutboxPg, imReviewRequests as imReviewRequestsPg, llmUsage as llmUsagePg, projects as projectsPg, reviewRuns as reviewRunsPg, webhookEvents as webhookEventsPg } from "./schema.pg.js";
 
 /**
  * IM query commands (IM-11 query surface): bounded read-only views over the
@@ -290,4 +290,96 @@ export async function failActiveReviewRuns(store: StoreDb, error: string): Promi
     await updateRunStatus(store, run.id, "failed", { error });
   }
   return active.length;
+}
+
+/** Admin listing: recent IM review requests, newest first (IM-18, X08). */
+export async function listImReviewRequestsForAdmin(store: StoreDb, limit = 50, offset = 0): Promise<readonly {
+  readonly requestId: string;
+  readonly state: string;
+  readonly errorCode: string | null;
+  readonly workspaceId: string;
+  readonly repoRef: string;
+  readonly requestedRevision: string;
+  readonly requestedByType: string;
+  readonly requestedById: string;
+  readonly connectionIdentity: string;
+  readonly createdAt: Date;
+  readonly updatedAt: Date;
+}[]> {
+  const bounded = Math.max(0, Math.min(limit, 200));
+  const columns = {
+    requestId: imReviewRequests.requestId,
+    state: imReviewRequests.state,
+    errorCode: imReviewRequests.errorCode,
+    workspaceId: imReviewRequests.workspaceId,
+    repoRef: imReviewRequests.repoRef,
+    requestedRevision: imReviewRequests.requestedRevision,
+    requestedByType: imReviewRequests.requestedByType,
+    requestedById: imReviewRequests.requestedById,
+    connectionIdentity: imReviewRequests.connectionIdentity,
+    createdAt: imReviewRequests.createdAt,
+    updatedAt: imReviewRequests.updatedAt,
+  };
+  if (store.kind === "postgres") {
+    return store.db.select({
+      requestId: imReviewRequestsPg.requestId,
+      state: imReviewRequestsPg.state,
+      errorCode: imReviewRequestsPg.errorCode,
+      workspaceId: imReviewRequestsPg.workspaceId,
+      repoRef: imReviewRequestsPg.repoRef,
+      requestedRevision: imReviewRequestsPg.requestedRevision,
+      requestedByType: imReviewRequestsPg.requestedByType,
+      requestedById: imReviewRequestsPg.requestedById,
+      connectionIdentity: imReviewRequestsPg.connectionIdentity,
+      createdAt: imReviewRequestsPg.createdAt,
+      updatedAt: imReviewRequestsPg.updatedAt,
+    }).from(imReviewRequestsPg).orderBy(desc(imReviewRequestsPg.updatedAt)).limit(bounded).offset(offset);
+  }
+  void columns;
+  return store.db.select({
+    requestId: imReviewRequests.requestId,
+    state: imReviewRequests.state,
+    errorCode: imReviewRequests.errorCode,
+    workspaceId: imReviewRequests.workspaceId,
+    repoRef: imReviewRequests.repoRef,
+    requestedRevision: imReviewRequests.requestedRevision,
+    requestedByType: imReviewRequests.requestedByType,
+    requestedById: imReviewRequests.requestedById,
+    connectionIdentity: imReviewRequests.connectionIdentity,
+    createdAt: imReviewRequests.createdAt,
+    updatedAt: imReviewRequests.updatedAt,
+  }).from(imReviewRequests).orderBy(desc(imReviewRequests.updatedAt)).limit(bounded).offset(offset).all();
+}
+
+/** Admin listing: recent reply-outbox notifications, newest first (IM-18). */
+export async function listImReplyOutboxForAdmin(store: StoreDb, limit = 50, offset = 0): Promise<readonly {
+  readonly operationId: string;
+  readonly requestId: string | null;
+  readonly destinationIdentity: string;
+  readonly operationKind: string;
+  readonly state: string;
+  readonly attempts: number;
+  readonly updatedAt: Date;
+}[]> {
+  const bounded = Math.max(0, Math.min(limit, 200));
+  if (store.kind === "postgres") {
+    return store.db.select({
+      operationId: imReplyOutboxPg.operationId,
+      requestId: imReplyOutboxPg.requestId,
+      destinationIdentity: imReplyOutboxPg.destinationIdentity,
+      operationKind: imReplyOutboxPg.operationKind,
+      state: imReplyOutboxPg.state,
+      attempts: imReplyOutboxPg.attempts,
+      updatedAt: imReplyOutboxPg.updatedAt,
+    }).from(imReplyOutboxPg).orderBy(desc(imReplyOutboxPg.updatedAt)).limit(bounded).offset(offset);
+  }
+  return store.db.select({
+    operationId: imReplyOutbox.operationId,
+    requestId: imReplyOutbox.requestId,
+    destinationIdentity: imReplyOutbox.destinationIdentity,
+    operationKind: imReplyOutbox.operationKind,
+    state: imReplyOutbox.state,
+    attempts: imReplyOutbox.attempts,
+    updatedAt: imReplyOutbox.updatedAt,
+  }).from(imReplyOutbox).orderBy(desc(imReplyOutbox.updatedAt)).limit(bounded).offset(offset).all();
 }

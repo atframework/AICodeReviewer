@@ -2,6 +2,8 @@ import { Hono } from "hono";
 
 import type { StoreDb } from "@aicr/store";
 import {
+  listImReplyOutboxForAdmin,
+  listImReviewRequestsForAdmin,
   deleteReviewRun,
   getOverviewStats,
   getProjectStats,
@@ -250,6 +252,16 @@ export function createObservabilityApi(options: ObservabilityApiOptions): Hono {
 
   // Receipt-time webhook/trigger event log backing the dashboard Events
   // panel. Pagination reads only the requested page and one lookahead row.
+  api.get("/im/requests", authMiddleware, async (c) => {
+    const limit = Math.max(0, Math.min(Number(c.req.query("limit") ?? 50), 200));
+    const offset = Math.max(0, Number(c.req.query("offset") ?? 0));
+    return c.json({ requests: await listImReviewRequestsForAdmin(store, limit, offset) });
+  });
+  api.get("/im/outbox", authMiddleware, async (c) => {
+    const limit = Math.max(0, Math.min(Number(c.req.query("limit") ?? 50), 200));
+    const offset = Math.max(0, Number(c.req.query("offset") ?? 0));
+    return c.json({ notifications: await listImReplyOutboxForAdmin(store, limit, offset) });
+  });
   api.get("/events", authMiddleware, async (c) => {
     const limit = parseLimit(c.req.query("limit"));
     const page = parsePage(c.req.query("page"));
