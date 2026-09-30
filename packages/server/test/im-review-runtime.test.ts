@@ -4,11 +4,11 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { appConfigSchema, type AppConfig } from "@aicr/core";
-import { closeStoreDb, createStoreDb, findImReviewRequest, type SqliteStoreDb } from "@aicr/store";
+import { closeStoreDb, createStoreDb, findImReviewRequest, claimDueImReviewRequests, updateImReviewRequest, type SqliteStoreDb } from "@aicr/store";
 import type { VcsAdapter } from "@aicr/vcs";
 
 import { admitImCommand, parseImCommand } from "../src/im/command-service.js";
-import { ManualReviewService } from "../src/im/manual-review-service.js";
+import { classifyImReviewResult, ManualReviewService } from "../src/im/manual-review-service.js";
 
 /**
  * IM-14 worker acceptance R10–R16 share: claim→validate→dispatch→execute→
@@ -18,6 +18,26 @@ import { ManualReviewService } from "../src/im/manual-review-service.js";
 
 const REPO_SHA = "0123456789abcdef0123456789abcdef01234567";
 const ACTOR = { type: "wecom_userid" as const, id: "owent" };
+
+describe("IM review publication outcome", () => {
+  it("reports an all-failed publish as failed and a mixed publish as partial", () => {
+    expect(classifyImReviewResult({ status: "skipped", skipReason: "output_dispatch_failed",
+      dispatchResults: [{ channel: "chat", status: "failed" }] })).toEqual({ state: "failed", errorCode: "im.publication_failed" });
+    expect(classifyImReviewResult({ status: "published", dispatchResults: [
+      { channel: "chat", status: "published" }, { channel: "issue", status: "failed" },
+    ] })).toEqual({ state: "partial", errorCode: "im.publication_partial" });
+  });
+
+  it("keeps buffered publication uncertain and distinguishes suppression from no publisher", () => {
+    expect(classifyImReviewResult({ status: "published", dispatchResults: [
+      { channel: "chat", status: "published" }, { channel: "issue", status: "buffered" },
+    ] })).toEqual({ state: "publication_unknown", errorCode: "im.publication_buffered" });
+    expect(classifyImReviewResult({ status: "skipped", skipReason: "no_output_publisher", dispatchResults: [] }))
+      .toEqual({ state: "failed", errorCode: "im.review_not_published" });
+    expect(classifyImReviewResult({ status: "skipped", skipReason: "no_problems_suppressed", dispatchResults: [] }))
+      .toEqual({ state: "succeeded" });
+  });
+});
 
 let dir: string;
 let store: SqliteStoreDb;
@@ -91,6 +111,23 @@ describe("R10–R16: worker scan→validate→dispatch→execute→finish", () =
 
     const final = await findImReviewRequest(store, "ns-w", requestId);
     expect(final?.state).toBe("succeeded");
+    const notification = store.sqlite.prepare("SELECT destination_identity, compact_receipt FROM im_reply_outbox WHERE request_id = ?")
+      .get(requestId) as { destination_identity: string; compact_receipt: string };
+    expect(notification.destination_identity).toBe("bot");
+    expect(JSON.parse(notification.compact_receipt)).toMatchObject({ connectionName: "bot", requestId });
+  });
+
+  it("releases the active target when its configured adapter is unavailable", async () => {
+    const requestId = await seedRequest();
+    const service = new ManualReviewService({
+      store, namespace: "ns-w", getConfig: config,
+      createAdapter: () => undefined,
+      enqueueReview: async () => { throw new Error("must not enqueue"); },
+      executeReview: async () => { throw new Error("must not execute"); },
+    });
+    await service.scan();
+    expect((await findImReviewRequest(store, "ns-w", requestId))?.state).toBe("rejected");
+    expect(store.sqlite.prepare("SELECT COUNT(*) AS total FROM im_active_targets").get()).toMatchObject({ total: 0 });
   });
 
   it("rejects a request whose revision does not exist in the repository", async () => {
@@ -105,6 +142,8 @@ describe("R10–R16: worker scan→validate→dispatch→execute→finish", () =
     const final = await findImReviewRequest(store, "ns-w", requestId);
     expect(final?.state).toBe("rejected");
     expect(final?.errorCode).toContain("not_found");
+    expect(store.sqlite.prepare("SELECT state FROM im_reply_outbox WHERE request_id = ?").get(requestId))
+      .toMatchObject({ state: "pending" });
   });
 
   it("rejects an invalid revision format before any adapter call", async () => {
@@ -152,5 +191,48 @@ describe("R10–R16: worker scan→validate→dispatch→execute→finish", () =
     expect(executeCount).toHaveBeenCalledTimes(1);
     await service.scan(); // second scan should find nothing due
     expect(executeCount).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses the request's saved snapshot and renews its lease during execution", async () => {
+    const requestId = await seedRequest();
+    const snapshots: string[] = [];
+    let startExecution: (() => void) | undefined;
+    const started = new Promise<void>(resolve => { startExecution = resolve; });
+    const service = new ManualReviewService({
+      store, namespace: "ns-w", leaseMs: 90,
+      getConfig: snapshotId => { snapshots.push(snapshotId); return config(); },
+      createAdapter: () => mockAdapter(),
+      enqueueReview: async (_id, run) => run(),
+      executeReview: async () => {
+        startExecution?.();
+        await new Promise(resolve => setTimeout(resolve, 140));
+        return { state: "succeeded" };
+      },
+    });
+    const running = service.scan();
+    await started;
+    await new Promise(resolve => setTimeout(resolve, 110));
+    expect(await service.scan()).toBe(0);
+    expect(snapshots).toEqual(["snap"]);
+    await running;
+    expect((await findImReviewRequest(store, "ns-w", requestId))?.state).toBe("succeeded");
+  });
+
+  it("marks an interrupted running request unknown without publishing again", async () => {
+    const requestId = await seedRequest();
+    const claim = (await claimDueImReviewRequests(store, {
+      namespace: "ns-w", now: new Date(), leaseMs: 1, owner: "lost", limit: 1,
+    }))[0]!;
+    await updateImReviewRequest(store, { requestId, fence: claim.fence, state: "running", releaseLease: true, now: new Date() });
+    const executeReview = vi.fn();
+    const service = new ManualReviewService({
+      store, namespace: "ns-w", getConfig: config,
+      createAdapter: () => mockAdapter(),
+      enqueueReview: async () => { throw new Error("must not enqueue"); },
+      executeReview,
+    });
+    await service.scan();
+    expect(executeReview).not.toHaveBeenCalled();
+    expect((await findImReviewRequest(store, "ns-w", requestId))?.state).toBe("publication_unknown");
   });
 });

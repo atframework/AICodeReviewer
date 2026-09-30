@@ -35,6 +35,7 @@ export interface ImReplyServiceOptions {
   readonly env: (name: string) => string | undefined;
   readonly intervalMs?: number;
   readonly fetch?: typeof globalThis.fetch;
+  readonly now?: () => Date;
 }
 
 const STATE_TEXT: Readonly<Record<string, string>> = {
@@ -49,11 +50,18 @@ export class ImReplyService {
   private readonly options: ImReplyServiceOptions;
   private timer: ReturnType<typeof setInterval> | undefined;
   private readonly owner = `im-reply-${randomUUID().slice(0, 8)}`;
-  private readonly senders = new Map<string, WecomAibotLongConnection>();
+  private readonly senders = new Map<string, { readonly key: string; readonly sender: WecomAibotLongConnection }>();
   private scanning = false;
+  private longConnectionSender: ((connectionName: string, chatId: string, text: string, isGroup: boolean) => Promise<boolean>) | undefined;
 
   constructor(options: ImReplyServiceOptions) {
     this.options = options;
+  }
+
+  private now(): Date { return this.options.now?.() ?? new Date(); }
+
+  setLongConnectionSender(sender: typeof this.longConnectionSender): void {
+    this.longConnectionSender = sender;
   }
 
   start(): void {
@@ -68,18 +76,18 @@ export class ImReplyService {
   dispose(): void {
     if (this.timer !== undefined) clearInterval(this.timer);
     this.timer = undefined;
-    for (const sender of this.senders.values()) sender.dispose();
+    for (const entry of this.senders.values()) entry.sender.dispose();
     this.senders.clear();
   }
 
-  private async scan(): Promise<void> {
+  async scan(): Promise<void> {
     if (this.scanning) return;
     this.scanning = true;
     try {
       const claimed = await claimDueImReplyNotifications(this.options.store, {
         owner: this.owner,
         limit: 10,
-        now: new Date(),
+        now: this.now(),
       });
       for (const row of claimed) {
         await this.deliver(row);
@@ -92,7 +100,7 @@ export class ImReplyService {
   }
 
   private async deliver(row: { readonly operationId: string; readonly fence: number; readonly attempts: number; readonly destinationIdentity: string; readonly compactReceipt: string | null }): Promise<void> {
-    const now = new Date();
+    const now = this.now();
     let receipt: CompactReceipt;
     try {
       receipt = JSON.parse(row.compactReceipt ?? "{}") as CompactReceipt;
@@ -121,7 +129,7 @@ export class ImReplyService {
     } catch (error) {
       console.warn(JSON.stringify({ msg: "im_reply_send_failed", operationId: row.operationId, error: String(error) }));
       try {
-        finishImReplyNotification(this.options.store, {
+        await finishImReplyNotification(this.options.store, {
           operationId: row.operationId,
           fence: row.fence,
           state: row.attempts >= MAX_ATTEMPTS ? "failed" : "pending",
@@ -156,30 +164,40 @@ export class ImReplyService {
       }
     }
     if (connection.kind === "wecom_aibot") {
+      const chatId = conversation.kind === "group" ? conversation.id ?? "" : receipt.actor.id;
+      if (chatId === "") return false;
+      if (this.longConnectionSender !== undefined && connection.callback?.enabled !== true) {
+        return this.longConnectionSender(receipt.connectionName, chatId, text, conversation.kind === "group");
+      }
       const secret = connection.secret
         ?? (connection.secret_env !== undefined ? this.options.env(connection.secret_env) : undefined)
         ?? "";
       const botId = connection.aibot_id ?? "";
       if (!secret || !botId) return false;
-      let sender = this.senders.get(receipt.connectionName);
-      if (sender === undefined) {
-        sender = new WecomAibotLongConnection({
+      const senderKey = JSON.stringify([botId, secret]);
+      let entry = this.senders.get(receipt.connectionName);
+      if (entry !== undefined && entry.key !== senderKey) {
+        entry.sender.dispose();
+        this.senders.delete(receipt.connectionName);
+        entry = undefined;
+      }
+      if (entry === undefined) {
+        const sender = new WecomAibotLongConnection({
           botId, secret, connectionName: receipt.connectionName, namespace: "im-reply",
           onMessage: async () => undefined,
           onStatusChange: (status) => {
             console.log(JSON.stringify({ msg: "im_reply_sender_status", connection: receipt.connectionName, status }));
           },
         });
-        this.senders.set(receipt.connectionName, sender);
+        entry = { key: senderKey, sender };
+        this.senders.set(receipt.connectionName, entry);
         // The reply channel needs its own subscribed connection; aibot_send_msg
         // rides the same long connection, so connect (and resubscribe) once.
         await sender.connect().catch((error: unknown) => {
           console.warn(JSON.stringify({ msg: "im_reply_sender_connect_failed", connection: receipt.connectionName, error: String(error) }));
         });
       }
-      const chatId = conversation.kind === "group" ? conversation.id ?? "" : receipt.actor.id;
-      if (chatId === "") return false;
-      await sender.sendProactive(chatId, text, conversation.kind === "group");
+      await entry.sender.sendProactive(chatId, text, conversation.kind === "group");
       return true;
     }
     return false;

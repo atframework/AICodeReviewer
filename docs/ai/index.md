@@ -22,47 +22,16 @@
 
 ## 路线图
 
-实施已授权并开始（2026-09-28）：IM-00–14 已完成（协议基线、schema/实体/表单、
-企业微信应用发送与发布接线、严格目录解析、watch/poll 热加载、目录身份与原生 @、
-SQLite/PG IM 持久化与原子操作、企业微信回调密码学适配、**回调路由接收路径已上线公网
-正式环境 aicr.x-ha.com**），协议结论并入[来源记录](sources/im-integrations.md)。
-2026-09-29 起：飞书事件回调（URL 验证 challenge + 头部签名验签 + AES 解密）、
-企业微信智能机器人事件回调的内联命令回复（`aicr help` 等命令按官方被动回复
-协议回**加密流式消息**（`msgtype:"stream"`+`finish:true`；markdown 被平台忽略），
-先持久化后应答，流式刷新回调回 finish 终止）、企业微信智能机器人长连接
-（官方 WebSocket 协议，`ws` 包实现——undici WebSocket 被平台拒绝）、飞书
-长连接（官方 SDK WSClient，适配其拍平的 v2 事件结构）均已实现，四种接收
-模式接入 `aicr serve` 启动接线（按连接表自动连接/重连）并部署公网验证。
-IM-15 卡片动作服务端链路（发行 24h opaque id + 原子 consume-for-request + 飞书回调消费，重放回原
-请求号）、IM-17 生命周期（LC 30s 周期 reconcile、目录/回复读 live config、统一释放）、IM-18 管理查询
-（/api/admin/im/{requests,outbox} 分页只读）、IM-19 组合回归（命令→评审→终态→通知分类）均完成；
-IM-21 真实平台验收待测试账户（pending_external）。outbox 认领双后端（SQLite+PG）已齐。
-回复通知 outbox（IM-16）上线：评审终态与通知同事务入 im_reply_outbox，worker 周期认领
-（lease+fence）经平台通道推送结果回请求会话（飞书消息 API / 企微 aibot_send_msg），失败指数
-退避、到期不发送、通知失败不重跑评审；PostgreSQL 认领分支待补。
-命令授权模型扩展（A14）：精确 principal 之外新增范围匹配器——企微部门
-（递归）/标签（角色/用户组载体）/职位/自定义字段、飞书群成员/部门/职务、
-`any`，全部支持 `expires_at` 临时授权；目录事实由 authorization directory
-的后台快照解析（企微走 wecom_app 通讯录 + batch/openuserid_to_userid 加密
-userid 转换，飞书走本应用档案与群成员），目录不可用 fail-closed；
-`chat-id`/`status` 命令在授权后内联应答真实身份与请求状态。查询命令集（A15）上线：
-projects/reviews/commits/prs/detail/prdetail/queue/running——项目列表、近期评审、
-会触发评审的提交与 PR/MR（webhook 事件视图）、按修订/PR 的评审详情（llm_usage
-聚合的输入/输出/缓存命中/请求次数/成本）、排队 deferral 与进行中视图（A15e：全部命令纯数据库查询——运行行在执行开始时写入
-review_runs、完成替换为终态全量记录、重启清扫为 interrupted，`running` 不再读进程内存），
-全部走绑定授权且遵循 history retention。
-执行顺序与验收条件见 [Plan.md](../../Plan.md)，
-接口和模块取舍见 [IM 集成设计](../design/im-integrations.md)，
-通讯录格式与 watch/reload 见[成员目录设计](../design/member-directory.md)。
-开发模型按[执行手册](../design/im-implementation.md)的 IM-00–22 任务卡推进，
-使用[实施规范](../design/im-implementation-spec.md)和[103 组验收断言](../design/im-acceptance.md)逐项核验。
-review 命令的持久 ConfigStore 前提、配置接线及故障恢复不能省略。
+IM 接收、命令授权、请求工作器和通知 outbox 已接入服务端；
+状态查询限制原操作人、会话、连接及绑定仓库。剩余工作与验收条件见
+[Plan.md](../../Plan.md)，稳定接口见[IM 集成设计](../design/im-integrations.md)，
+外部协议核查见[来源记录](sources/im-integrations.md)。
 
-- 企业微信应用消息发送：成员通知和 appchat 目标分别接线，补齐业务错误与发布恢复。
-- 外部文件成员目录：平台身份隔离、原生 @、父目录 watch 与定时校验、新旧 generation 生命周期。
-- 企业微信应用/API 模式机器人与飞书应用回调：验签解密、持久接收、会话发现及独立命令授权。
-- 指定仓库/commit 重新评审：消息命令和按钮动作、持久任务、去重恢复、共享并发与受控结果通知。
-- 完成组合测试、双语当前功能文档/示例同步与真实平台验收；watch/unwatch 仓库订阅已确认不纳入本次交付。
+- IM-14：实现跨重启的持久队列唤醒与发布 checkpoint 恢复；执行中断后的
+  `publication_unknown` 须按远端操作身份核对，不能盲目重发。
+- IM-15：在输出卡片发行按钮动作，并保存平台消息身份用于回调来源校验。
+- IM-21：使用受控平台账户完成真实回调、长连接、通知与卡片动作验收；
+  本地替身和固定向量不代表真实平台验收。
 
 ## 前瞻扩展（未纳入当前交付）
 

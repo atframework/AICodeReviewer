@@ -112,12 +112,9 @@ export function parseImCommand(text: string): ImCommandParseResult {
   }
 }
 
-export interface ImCommandAuthorizeResult {
-  readonly kind: "authorized" | "rejected";
-  readonly binding?: ImCommandBindingConfig;
-  readonly repository?: { readonly workspaceId: string; readonly sourceTrigger: string; readonly repoRef: string };
-  readonly reason?: string;
-}
+export type ImCommandAuthorizeResult =
+  | { readonly kind: "authorized"; readonly binding: ImCommandBindingConfig; readonly repository?: { readonly workspaceId: string; readonly sourceTrigger: string; readonly repoRef: string } }
+  | { readonly kind: "rejected"; readonly reason: string };
 
 function conversationsMatch(
   binding: ImCommandBindingConfig,
@@ -197,6 +194,7 @@ export function authorizeImCommand(options: {
   }
   const now = options.now ?? new Date();
   const bindings = Object.entries(options.config.im?.command_bindings ?? {});
+  let repositoryMissing = false;
   for (const [bindingName, binding] of bindings) {
     if (binding.connection !== options.connectionName) continue;
     if (binding.enabled !== true) continue;
@@ -211,7 +209,8 @@ export function authorizeImCommand(options: {
     if (options.command.kind === "review") {
       const target = binding.repositories?.[options.command.repoAlias];
       if (target === undefined) {
-        return { kind: "rejected", reason: "repository_not_authorized" };
+        repositoryMissing = true;
+        continue;
       }
       // The trigger and workspace must actually exist in the config.
       const trigger = options.config.triggers.find(t => t.name === target.source_trigger);
@@ -227,7 +226,7 @@ export function authorizeImCommand(options: {
     }
     return { kind: "authorized", binding };
   }
-  return { kind: "rejected", reason: "no_matching_binding" };
+  return { kind: "rejected", reason: repositoryMissing ? "repository_not_authorized" : "no_matching_binding" };
 }
 
 export interface ImCommandAdmitInput {
@@ -321,6 +320,7 @@ export async function admitImCommand(store: StoreDb, input: ImCommandAdmitInput)
         configVersionJson: JSON.stringify({
           configSnapshotId: input.configSnapshotId,
           fileDigest: input.configFileDigest,
+          connectionName: input.connectionName,
         }),
       },
       activeTarget: {
@@ -403,7 +403,7 @@ export interface ProcessImCommandInput extends ImCommandAdmitInput {
 
 /** Query surface injected by bootstrap (avoids a concrete-class dependency). */
 export interface ImQueryServiceLike {
-  answer(input: { readonly command: ImCommand; readonly connectionName: string }): Promise<string>;
+  answer(input: { readonly command: ImCommand; readonly connectionName: string; readonly binding: ImCommandBindingConfig }): Promise<string>;
   /** Wildcard alias resolution against observed projects (A15d). */
   resolveProjectAlias(repoAlias: string): Promise<{ readonly workspaceId: string; readonly sourceTrigger: string; readonly repoRef: string } | undefined>;
 }
@@ -462,6 +462,7 @@ function rejectionReplyText(reason: string, input: ProcessImCommandInput): strin
 }
 
 const STATUS_TEXT: Readonly<Record<string, string>> = {
+  accepted: "已收到请求，等待评审工作线程认领。",
   queued: "排队中，等待评审工作线程认领。",
   validating: "正在校验修订版本。",
   queued_for_dispatch: "已入派发队列。",
@@ -474,9 +475,16 @@ const STATUS_TEXT: Readonly<Record<string, string>> = {
   rejected: "请求被拒绝（修订或配置无效）。",
 };
 
-async function statusReplyText(store: StoreDb, namespace: string, requestId: string): Promise<string> {
+async function statusReplyText(store: StoreDb, input: ProcessImCommandInput, binding: ImCommandBindingConfig, requestId: string): Promise<string> {
+  const { namespace, connectionIdentity, actor, conversation } = input;
   const request = await findImReviewRequest(store, namespace, requestId);
-  if (request === undefined) return `未找到请求 ${requestId}（请确认请求 ID，或该请求不属于当前部署命名空间）。`;
+  if (request === undefined || request.connectionIdentity !== connectionIdentity ||
+    request.requestedByType !== actor.type || request.requestedById !== actor.id ||
+    request.conversationJson !== JSON.stringify(conversation) ||
+    (binding.allow_all_repositories !== true && !Object.values(binding.repositories ?? {}).some(target =>
+      target.workspace === request.workspaceId && target.source_trigger === request.sourceTrigger && target.repo_ref === request.repoRef))) {
+    return `未找到请求 ${requestId}（请确认请求 ID，或该请求不属于当前部署命名空间）。`;
+  }
   const state = STATUS_TEXT[request.state] ?? `状态: ${request.state}`;
   return `请求 ${requestId}：${state}`;
 }
@@ -546,7 +554,7 @@ export async function processImCommand(input: ProcessImCommandInput): Promise<Pr
       return { kind: "rejected", replyText: "查询服务不可用（本部署未启用查询命令）。", requestId: null };
     }
     try {
-      const replyText = await input.query.answer({ command: input.command, connectionName: input.connectionName });
+      const replyText = await input.query.answer({ command: input.command, connectionName: input.connectionName, binding: authorized.binding });
       const outcome = await admitImCommand(input.store, { ...input, config, actorScopes });
       if (outcome.kind === "rate_limited") {
         return { kind: "rate_limited", replyText: "请求过于频繁，请稍后再试。", requestId: null };
@@ -573,7 +581,7 @@ export async function processImCommand(input: ProcessImCommandInput): Promise<Pr
       const replyText = outcome.kind === "rate_limited" ? "请求过于频繁，请稍后再试。" : rejectionReplyText(outcome.reason ?? "unauthorized", input);
       return { kind: outcome.kind === "rejected" ? "rejected" : "rate_limited", replyText, requestId: null };
     }
-    return { kind: "replied", replyText: await statusReplyText(input.store, input.namespace, input.command.requestId), requestId: null };
+    return { kind: "replied", replyText: await statusReplyText(input.store, input, authorized.binding, input.command.requestId), requestId: null };
   }
 
   const outcome = await admitImCommand(input.store, { ...input, config, actorScopes });

@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+
 import type { AppConfig } from "@aicr/core";
 import { createReviewEvent, type ReviewEvent } from "@aicr/core";
 import type { StoreDb } from "@aicr/store";
@@ -6,14 +8,35 @@ import {
   finishImReviewRequest,
   findImReviewRequest,
   prepareImDispatch,
+  renewImReviewLease,
   updateImReviewRequest,
   imReviewJobId,
   type ClaimedImReviewRequest,
   type ImTerminalState,
+  type ImReviewRequestRow,
 } from "@aicr/store";
 import type { VcsAdapter } from "@aicr/vcs";
 
 import { resolveImRevision } from "./revision-resolver.js";
+import type { ReviewOrchestrationResult } from "../review-orchestrator.js";
+
+export function classifyImReviewResult(result: Pick<ReviewOrchestrationResult, "status" | "skipReason" | "dispatchResults">): {
+  readonly state: ImTerminalState;
+  readonly errorCode?: string;
+} {
+  if (result.dispatchResults.some(entry => entry.status === "buffered")) {
+    return { state: "publication_unknown", errorCode: "im.publication_buffered" };
+  }
+  if (result.dispatchResults.some(entry => entry.status === "failed")) {
+    return result.dispatchResults.some(entry => entry.status === "published")
+      ? { state: "partial", errorCode: "im.publication_partial" }
+      : { state: "failed", errorCode: "im.publication_failed" };
+  }
+  if (result.status === "dry_run" || result.skipReason === "no_output_publisher" || result.skipReason === "output_dispatch_failed") {
+    return { state: "failed", errorCode: "im.review_not_published" };
+  }
+  return { state: "succeeded" };
+}
 
 /**
  * IM-14 request worker (design §7.3, contracts §5): claims due requests,
@@ -29,10 +52,10 @@ import { resolveImRevision } from "./revision-resolver.js";
 export interface ManualReviewWorkerOptions {
   readonly store: StoreDb;
   readonly namespace: string;
-  readonly getConfig: () => Promise<AppConfig> | AppConfig;
-  readonly createAdapter: (config: AppConfig, triggerName: string) => VcsAdapter | undefined;
-  readonly enqueueReview: (jobId: string, run: () => Promise<void>) => Promise<void>;
-  readonly executeReview: (event: ReviewEvent, config: AppConfig) => Promise<{ readonly state: ImTerminalState; readonly errorCode?: string }>;
+  readonly getConfig: (snapshotId: string) => Promise<AppConfig> | AppConfig;
+  readonly createAdapter: (config: AppConfig, request: ImReviewRequestRow) => Promise<VcsAdapter | undefined> | VcsAdapter | undefined;
+  readonly enqueueReview: (jobId: string, run: () => Promise<void>, workspaceId: string) => Promise<void>;
+  readonly executeReview: (event: ReviewEvent, config: AppConfig, request: ImReviewRequestRow, signal: AbortSignal) => Promise<{ readonly state: ImTerminalState; readonly errorCode?: string }>;
   readonly now?: () => Date;
   readonly leaseMs?: number;
   readonly batchLimit?: number;
@@ -47,7 +70,7 @@ export class ManualReviewService {
       ...options,
       now: options.now ?? (() => new Date()),
       leaseMs: options.leaseMs ?? 60_000,
-      batchLimit: options.batchLimit ?? 100,
+      batchLimit: options.batchLimit ?? 1,
     };
   }
 
@@ -65,11 +88,36 @@ export class ManualReviewService {
         namespace: this.options.namespace,
         now,
         leaseMs: this.options.leaseMs,
-        owner: `im-worker-${Date.now()}`,
+        owner: `im-worker-${randomUUID()}`,
         limit: this.options.batchLimit,
       });
       for (const claim of claimed) {
-        await this.processClaim(claim);
+        const controller = new AbortController();
+        const renew = async () => {
+          try {
+            const valid = await renewImReviewLease(this.options.store, {
+              requestId: claim.request.requestId, fence: claim.fence, owner: claim.request.leaseOwner!,
+              now: this.options.now(), leaseMs: this.options.leaseMs,
+            });
+            if (!valid) controller.abort();
+          } catch { controller.abort(); }
+        };
+        const timer = setInterval(() => { void renew(); }, Math.max(1, Math.floor(this.options.leaseMs / 3)));
+        timer.unref();
+        try {
+          await this.processClaim(claim, controller.signal);
+        } catch (error) {
+          console.warn(JSON.stringify({ msg: "im_review_failed", requestId: claim.request.requestId, error: String(error) }));
+          if (!controller.signal.aborted) {
+            await finishImReviewRequest(this.options.store, {
+              requestId: claim.request.requestId, fence: claim.fence, state: "failed", errorCode: "im.execution_failed",
+              notifications: [buildTerminalNotification(claim.request, "failed", "im.execution_failed")].filter((value): value is NonNullable<typeof value> => value !== undefined),
+              now: this.options.now(),
+            });
+          }
+        } finally {
+          clearInterval(timer);
+        }
       }
       return claimed.length;
     } finally {
@@ -77,7 +125,7 @@ export class ManualReviewService {
     }
   }
 
-  private async processClaim(claim: ClaimedImReviewRequest): Promise<void> {
+  private async processClaim(claim: ClaimedImReviewRequest, signal: AbortSignal): Promise<void> {
     const request = claim.request;
     const now = this.options.now();
     const { fence } = claim;
@@ -88,18 +136,26 @@ export class ManualReviewService {
       return;
     }
 
-    const config = await this.options.getConfig();
+    const config = await this.options.getConfig(request.configSnapshotId);
+
+    // An interrupted published run cannot be replayed without its remote
+    // publication journal. Keep the uncertainty visible and release the target.
+    if (request.state === "running" || request.state === "publishing") {
+      await finishImReviewRequest(this.options.store, {
+        requestId: request.requestId, fence, state: "publication_unknown", errorCode: "im.interrupted",
+        notifications: [buildTerminalNotification(request, "publication_unknown", "im.interrupted")].filter((value): value is NonNullable<typeof value> => value !== undefined),
+        now,
+      });
+      return;
+    }
 
     // validating: resolve the revision through the trusted adapter.
-    if (request.state === "accepted") {
-      const adapter = this.options.createAdapter(config, request.sourceTrigger);
+    if (request.state === "accepted" || request.state === "validating" || request.resolvedRevision === null) {
+      const adapter = await this.options.createAdapter(config, request);
       if (adapter === undefined) {
-        await updateImReviewRequest(this.options.store, {
-          requestId: request.requestId, fence, state: "rejected", errorCode: "im.invalid_revision",
-          now,
-        });
         await finishImReviewRequest(this.options.store, {
-          requestId: request.requestId, fence, state: "rejected", errorCode: "im.invalid_revision", now,
+          requestId: request.requestId, fence, state: "rejected", errorCode: "im.invalid_revision",
+          notifications: [buildTerminalNotification(request, "rejected", "im.invalid_revision")].filter((value): value is NonNullable<typeof value> => value !== undefined), now,
         });
         return;
       }
@@ -108,9 +164,11 @@ export class ManualReviewService {
         requestId: request.requestId, fence, state: "validating", now,
       });
       const resolution = await resolveImRevision(adapter, request.requestedRevision);
+      signal.throwIfAborted();
       if (resolution.kind === "rejected") {
         await finishImReviewRequest(this.options.store, {
-          requestId: request.requestId, fence, state: "rejected", errorCode: `im.${resolution.reason}`, now,
+          requestId: request.requestId, fence, state: "rejected", errorCode: `im.${resolution.reason}`,
+          notifications: [buildTerminalNotification(request, "rejected", `im.${resolution.reason}`)].filter((value): value is NonNullable<typeof value> => value !== undefined), now,
         });
         return;
       }
@@ -132,28 +190,15 @@ export class ManualReviewService {
 
     const jobId = imReviewJobId(request.requestId, dispatchSeq);
     await this.options.enqueueReview(jobId, async () => {
-      await this.execute(request.requestId, config, dispatchSeq);
-    });
+      signal.throwIfAborted();
+      await this.execute(request.requestId, config, dispatchSeq, fence, signal);
+    }, request.workspaceId);
   }
 
-  private async execute(requestId: string, config: AppConfig, dispatchSeq: number): Promise<void> {
+  private async execute(requestId: string, config: AppConfig, dispatchSeq: number, fence: number, signal: AbortSignal): Promise<void> {
     const request = await findImReviewRequest(this.options.store, this.options.namespace, requestId);
-    if (request === undefined) return;
+    if (request === undefined || request.fence !== fence || request.dispatchSeq !== dispatchSeq) return;
     const now = this.options.now();
-
-    // Renew the lease under the dispatch-sequence fence; a zero-row update
-    // means the lease was lost to a replica and this execution stops.
-    const claimed = await claimDueImReviewRequests(this.options.store, {
-      namespace: this.options.namespace,
-      now,
-      leaseMs: this.options.leaseMs,
-      owner: `im-exec-${requestId}-${dispatchSeq}`,
-      limit: 1,
-    });
-    // The scan owner's lease may still be active; use the current request
-    // row's fence (which processClaim already incremented) directly.
-    const fence = request.fence;
-    void claimed;
 
     const event = createReviewEvent({
       triggerName: request.sourceTrigger,
@@ -173,11 +218,12 @@ export class ManualReviewService {
       },
     });
 
-    await updateImReviewRequest(this.options.store, {
+    if (!await updateImReviewRequest(this.options.store, {
       requestId: request.requestId, fence, state: "running", now,
-    });
+    })) return;
 
-    const result = await this.options.executeReview(event, config);
+    const result = await this.options.executeReview(event, config, request, signal);
+    signal.throwIfAborted();
     const terminalNotification = buildTerminalNotification(request, result.state, result.errorCode);
 
     await finishImReviewRequest(this.options.store, {
@@ -186,7 +232,7 @@ export class ManualReviewService {
       state: result.state,
       errorCode: result.errorCode,
       ...(terminalNotification !== undefined ? { notifications: [terminalNotification] } : {}),
-      now,
+      now: this.options.now(),
     });
   }
 }
@@ -198,11 +244,18 @@ export class ManualReviewService {
  * re-runs the review — the request row is already terminal here.
  */
 function buildTerminalNotification(
-  request: { readonly requestId: string; readonly connectionIdentity: string; readonly conversationJson: string; readonly requestedByType: string; readonly requestedById: string; readonly repoRef: string; readonly requestedRevision: string; readonly resolvedRevision: string | null },
+  request: { readonly requestId: string; readonly connectionIdentity: string; readonly configVersionJson: string; readonly conversationJson: string; readonly requestedByType: string; readonly requestedById: string; readonly repoRef: string; readonly requestedRevision: string; readonly resolvedRevision: string | null },
   state: string,
   errorCode: string | undefined,
 ): { readonly operationId: string; readonly destinationIdentity: string; readonly operationKind: string; readonly payloadDigest: string; readonly compactReceipt: string } | undefined {
-  const connectionName = request.connectionIdentity.split(":").pop() ?? "";
+  let connectionName = "";
+  try {
+    const version = JSON.parse(request.configVersionJson) as { connectionName?: unknown };
+    if (typeof version.connectionName === "string") connectionName = version.connectionName;
+  } catch { /* legacy rows may not contain structured version metadata */ }
+  if (connectionName === "" && !request.connectionIdentity.startsWith("{") && !request.connectionIdentity.startsWith("[")) {
+    connectionName = request.connectionIdentity.split(":").pop() ?? "";
+  }
   if (connectionName === "") return undefined;
   const receipt = JSON.stringify({
     connectionName,

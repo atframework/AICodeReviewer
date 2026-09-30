@@ -61,7 +61,19 @@ function baseConfig(): ReturnType<typeof appConfigSchema.parse> {
           callback: { enabled: true, token_env: "AICR_ROUTE_TOKEN", encoding_aes_key: ENCODING_AES_KEY },
         },
       },
+      command_bindings: {
+        reviewers: {
+          enabled: true,
+          connection: "corp-airobot",
+          conversations: [{ kind: "group", id: "chat-9" }],
+          actors: [{ type: "wecom_userid", id: "owent" }],
+          commands: ["review"],
+          repositories: { service: { workspace: "ws-main", source_trigger: "github-main", repo_ref: "org/service" } },
+        },
+      },
     },
+    triggers: [{ name: "github-main", kind: "github" }],
+    workspaces: { instances: { "ws-main": {} } },
     outputs: { channels: [] },
   });
 }
@@ -189,6 +201,22 @@ describe("im callback routes (real Hono app)", () => {
     expect(inboxRowsFor("m-plain")).toHaveLength(1);
   });
 
+  it("promotes a verified callback inbox row into exactly one review request", async () => {
+    const app = createServerApp({ imCallbacks: routeOptions() });
+    const request = messageRequest("m-review", "aicr review service 0123456789abcdef0123456789abcdef01234567");
+    const url = `/callbacks/im/corp-airobot?${request.query.toString()}`;
+    const send = () => app.request(url, { method: "POST", headers: { "content-type": "application/json" }, body: request.body });
+    const first = await send();
+    expect(first.status).toBe(200);
+    const firstReply = JSON.parse(decrypt((JSON.parse(await first.text()) as { encrypt: string }).encrypt)) as { stream: { content: string } };
+    expect(firstReply.stream.content).toContain("已收到评审请求");
+    expect(inboxRowsFor("m-review")).toMatchObject([{ status: "request_created" }]);
+    const requests = store.sqlite.prepare("SELECT request_id FROM im_review_requests").all() as { request_id: string }[];
+    expect(requests).toHaveLength(1);
+    expect((await send()).status).toBe(200);
+    expect(store.sqlite.prepare("SELECT request_id FROM im_review_requests").all()).toHaveLength(1);
+  });
+
   it("replies to a command message carrying the group @mention prefix", async () => {
     const app = createServerApp({ imCallbacks: routeOptions() });
     const request = messageRequest("m-mention", "@AICR机器人(事件回调) aicr help");
@@ -228,6 +256,26 @@ describe("im callback routes (real Hono app)", () => {
     expect(response.status).toBe(413);
   });
 
+  it("stops a chunked callback body at the byte limit without reading the tail", async () => {
+    const app = createServerApp({ imCallbacks: routeOptions() });
+    let pulls = 0;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulls += 1;
+        if (pulls === 1) controller.enqueue(new Uint8Array(200 * 1024));
+        else if (pulls === 2) controller.enqueue(new Uint8Array(100 * 1024));
+        else throw new Error("callback tail must not be read");
+      },
+    }, { highWaterMark: 0 });
+    const request = new Request("http://localhost/callbacks/im/corp-airobot", {
+      method: "POST", headers: { "content-type": "application/json" }, body,
+      duplex: "half",
+    } as RequestInit);
+    const response = await app.request(request);
+    expect(response.status).toBe(413);
+    expect(pulls).toBe(2);
+  });
+
   it("returns 503 when the store fails (no success ACK without persistence)", async () => {
     const broken: ImCallbackRoutesOptions = { ...routeOptions(), store: { ...store, kind: "sqlite", db: undefined as never, sqlite: undefined as never } };
     const app = new Hono();
@@ -263,9 +311,8 @@ describe("im callback routes (real Hono app)", () => {
     const response = await app.request(`/callbacks/im/corp-airobot?${query.toString()}`, {
       method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ encrypt: ciphertext }),
     });
-    // aibot_id check deferred (two different robots share the endpoint);
-    // the message is accepted and persisted.
-    expect(response.status).toBe(200);
+    expect(response.status).toBe(401);
+    expect(inboxRowsFor("m-2")).toHaveLength(0);
   });
 
   it("types stream refresh events with the stream id (msgtype stream, path/100719)", async () => {

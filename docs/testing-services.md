@@ -19,7 +19,7 @@ Debian 容器统一通过 `tests/services/debian-mirror.sh` 使用中科大国�
 | Gitea | 真实 commit 作者关联、issue 发布及最终 assignees、权限失败 | 单容器 + SQLite，1 CPU / 512 MiB；关闭 SSH/Actions/邮件/注册。固定 1.25.4，不能替代其他版本/Forgejo/GitHub |
 | Redis | 配置/队列/catalog、故障恢复与持久化 | 可复用本机镜像；普通和 OOM 独立容器，按测试实际峰值限额，只删自有前缀，禁止 FLUSHDB |
 | PostgreSQL | 配置/业务存储、迁移与角色权限 | 独立 cluster；角色需 CREATE ROLE。共享迁移套件串行或独立数据库，不混用生产连接 |
-| SVN | hook、diff、辅助仓库物化、分析与发布 | svnserve 单容器，1 CPU / 256 MiB；HTTPS/权限测试使用下述部署夹具 |
+| SVN | hook、diff、辅助仓库物化、分析与发布 | svnserve 单容器，1 CPU / 256 MiB；HTTPS/权限测试使用下述部署 fixture |
 | GitLab | 真实仓库/token/webhook、push/MR 入队、managed issue 发布与成员指派、窗口外 MR 延期持久化与重启恢复 | 2 CPU / 6 GiB 单独串行；固定 `gitlab/gitlab-ce:19.4.0-ce.0`，omnibus 精简组件，首次引导 3-10 分钟。CE 语义不等同 EE/SaaS，不能替代其他版本 |
 | 飞书、付费 LLM | 真实 API 短请求，见下文环境变量 | 飞书发送后撤回；LLM 每例一次、最多 256 输出 token，无自动重试。不能替代身份匹配质量或套餐边界验收 |
 
@@ -87,7 +87,7 @@ sidekiq 进程内设置缓存与快速开关存在竞态，会把后续投递拦
 生效再发布。flow 用例经 `agent.default: native-llm` 直连回环假
 OpenAI 端点返回固定评审，不调用付费 LLM；push 身份按设计来自 git 作者证据，用例经
 `outputs.author_resolution.email_mappings` 解析为平台用户。MR 与窗口腿的 webhook
-关闭 push 事件：夹具分支提交触发的 push 评审会按批次 scope 另建 issue 并与 MR 评审
+关闭 push 事件：fixture 分支提交触发的 push 评审会按批次 scope 另建 issue 并与 MR 评审
 竞争 assignee 归属。push 腿则按至多一次投递语义在等待期内重发提交触发器。管理员
 账户必须用
 `admin.username_env` / `admin.password_env` 环境变量形式：字面量 username 不生效，
@@ -135,7 +135,7 @@ bash tests/services/with-deployment-services.sh
 - SVN：HTTPS Basic 认证、匿名拒绝、读者拒绝提交、写者提交触发真实 hook，
   核对 `www-data` 身份、显式 PATH 和重启后版本。
 
-随机密码和一天有效期的自签证书仅供夹具；管理员用于建库与迁移权限测试，
+随机密码和一天有效期的自签证书仅供 fixture；管理员用于建库与迁移权限测试，
 不是生产角色模板。PostgreSQL 初始化密码文件按服务用户权限创建，初始化后删除；
 不能让降权后的 `initdb` 重新打开 root 所有的 `/dev/stdin`。
 依据：[PG TLS](https://www.postgresql.org/docs/17/ssl-tcp.html)、
@@ -227,7 +227,7 @@ Anthropic 映射只接受代码中列出的两个官方 OpenAI 根地址；其�
 脚本在成功、失败、INT/TERM/HUP 时移除自己的容器、命名卷及临时目录；仅当镜像原先不存在时
 删除本轮拉取的镜像，不执行全局 prune，也不修改已有容器。
 Podman `--timeout 900`（GitLab 为 7200）给每次容器启动设置独立于测试进程的运行上限；
-Gitea/SVN 同时使用 `--rm`，需要重启的部署夹具由 trap 移除。
+Gitea/SVN 同时使用 `--rm`，需要重启的部署 fixture 由 trap 移除。
 语义见[Podman 5.4.2 run](https://docs.podman.io/en/v5.4.2/markdown/podman-run.1.html)。
 SIGKILL/主机断电无法执行 shell 清理，恢复后仍须核对该次目录；不要把超时停服务说成数据已清理。
 

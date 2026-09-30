@@ -328,15 +328,68 @@ describe("A15e: running reads the database", () => {
       status: "analyzing", startedAt: new Date(), headSha: REPO_SHA, branch: "main",
     });
     const { ImQueryService } = await import("../src/im/query-service.js");
-    const service = new ImQueryService({ store, getConfig: () => makeConfig() });
-    const reply = await service.answer({ command: { kind: "running" }, connectionName: "wecom-airobot" });
+    const config = makeConfig();
+    const service = new ImQueryService({ store, getConfig: () => config });
+    const binding = config.im.command_bindings.reviewers!;
+    const reply = await service.answer({ command: { kind: "running" }, connectionName: "wecom-airobot", binding });
     expect(reply).toContain("进行中的评审");
     expect(reply).toContain(REPO_SHA.slice(0, 12));
     // Restart sweep marks in-flight rows failed; running becomes empty.
     expect(await failActiveReviewRuns(store, "interrupted by restart")).toBe(1);
     expect(updateRunStatus).toBeDefined();
-    const after = await service.answer({ command: { kind: "running" }, connectionName: "wecom-airobot" });
+    const after = await service.answer({ command: { kind: "running" }, connectionName: "wecom-airobot", binding });
     expect(after).toContain("当前没有进行中的评审");
+  });
+});
+
+describe("IM query authorization scope", () => {
+  it("keeps broad reviews and running lists inside the authorized binding", async () => {
+    const { insertReviewRun } = await import("@aicr/store");
+    const { ImQueryService } = await import("../src/im/query-service.js");
+    const config = makeConfig({ bindings: {
+      viewer: {
+        enabled: true, connection: "wecom-airobot", conversations: [CONV_DIRECT], actors: [{ kind: "any" }],
+        commands: ["reviews", "running"],
+        repositories: { service: { workspace: "ws-main", source_trigger: "github-main", repo_ref: "org/service" } },
+      },
+    } });
+    await insertReviewRun(store, {
+      id: "own-run", eventId: "own-run", workspaceId: "ws-main", triggerName: "github-main",
+      repoRef: "org/service", provider: "openai", providerModel: "m", status: "analyzing", startedAt: new Date("2026-09-29T10:00:00Z"), headSha: "a".repeat(40),
+    });
+    await insertReviewRun(store, {
+      id: "other-run", eventId: "other-run", workspaceId: "ws-other", triggerName: "github-other",
+      repoRef: "secret/private", provider: "openai", providerModel: "m", status: "analyzing", startedAt: new Date("2026-09-29T11:00:00Z"), headSha: "b".repeat(40),
+    });
+    const query = new ImQueryService({ store, getConfig: () => config });
+    for (const command of [{ kind: "reviews", repoAlias: undefined }, { kind: "running" }] as const) {
+      const result = await processImCommand({ store, query, ...admitInput(command, config) });
+      expect(result.replyText).toContain("org/service");
+      expect(result.replyText).not.toContain("secret/private");
+    }
+    const unknown = await processImCommand({ store, query, ...admitInput({ kind: "reviews", repoAlias: "unknown" }, config) });
+    expect(unknown.replyText).toContain("未知的仓库别名");
+  });
+
+  it("shows request status only to its original actor and conversation", async () => {
+    const config = makeConfig({ bindings: {
+      viewer: {
+        enabled: true, connection: "wecom-airobot",
+        conversations: [CONV_DIRECT, { kind: "group", id: "group-1" }], actors: [{ kind: "any" }],
+        commands: ["review", "status"],
+        repositories: { service: { workspace: "ws-main", source_trigger: "github-main", repo_ref: "org/service" } },
+      },
+    } });
+    const created = await admitImCommand(store, admitInput({ kind: "review", repoAlias: "service", revision: REPO_SHA }, config));
+    expect(created.kind).toBe("accepted");
+    if (created.kind !== "accepted") return;
+    const command = { kind: "status", requestId: created.requestId };
+    const owner = await processImCommand({ store, ...admitInput(command, config) });
+    expect(owner.replyText).toContain("已收到请求");
+    const otherActor = await processImCommand({ store, ...admitInput(command, config, { actor: { type: "wecom_userid", id: "other" } }) });
+    expect(otherActor.replyText).toContain("未找到请求");
+    const otherConversation = await processImCommand({ store, ...admitInput(command, config, { conversation: { kind: "group", id: "group-1" } }) });
+    expect(otherConversation.replyText).toContain("未找到请求");
   });
 });
 

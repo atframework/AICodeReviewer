@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { appConfigSchema, type AppConfig } from "@aicr/core";
-import { claimDueImReplyNotifications, closeStoreDb, createStoreDb, finishImReplyNotification, finishImReviewRequest, insertImAction, type SqliteStoreDb } from "@aicr/store";
+import { claimDueImReplyNotifications, closeStoreDb, createStoreDb, finishImReviewRequest, findImReviewRequest, type SqliteStoreDb } from "@aicr/store";
 
 import { ImReplyService } from "../src/im/reply-service.js";
 
@@ -76,37 +76,38 @@ describe("IM-16: reply outbox", () => {
   });
 
   it("expired notifications are never delivered (O10) and retries back off (R17)", async () => {
-    await claimDueImReplyNotifications(store, { owner: "w1", limit: 5, now: new Date() }); // no rows: harmless
-    // Direct row insert through finish path with expiry already passed.
-    void 0;
+    await admitRequest();
+    const now = new Date();
+    await finishImReviewRequest(store, {
+      requestId: "imr-1", fence: 0, state: "succeeded", now,
+      notifications: [{
+        operationId: "imn-expired", destinationIdentity: "feishu-app", operationKind: "review_terminal",
+        payloadDigest: "d", expiry: new Date(now.getTime() - 1000),
+      }],
+    });
+    expect(await claimDueImReplyNotifications(store, { owner: "w1", limit: 5, now })).toHaveLength(0);
+    expect(store.sqlite.prepare("SELECT state FROM im_reply_outbox WHERE operation_id = 'imn-expired'").get())
+      .toMatchObject({ state: "expired" });
   });
 
-  it("delivery marks delivered; a failing platform path retries then fails without touching the review (O11/R18)", async () => {
+  it("backs off failed sends and exhausts after five attempts without rerunning the review (O11/R18)", async () => {
     await admitRequest();
     await finishImReviewRequest(store, {
       requestId: "imr-1", fence: 0, state: "failed", errorCode: "im.x", now: new Date(),
-      notifications: [{ operationId: "imn-2", destinationIdentity: "ghost", operationKind: "review_terminal", payloadDigest: "d" }],
+      notifications: [{ operationId: "imn-2", destinationIdentity: "ghost", operationKind: "review_terminal", payloadDigest: "d",
+        compactReceipt: JSON.stringify({ connectionName: "ghost", conversation: "{\"kind\":\"app_direct\"}",
+          actor: { type: "feishu_open_id", id: "ou_1" }, requestId: "imr-1", state: "failed",
+          repoRef: "org/service", revision: "0123456789abcdef0123456789abcdef01234567" }) }],
     });
-    const service = new ImReplyService({ store, getConfig: () => config, env: () => undefined, intervalMs: 3_600_000 });
-    // scan() is private; drive one cycle through the public start+dispose and
-    // the immediate first scan, then inspect the row state.
-    service.start();
+    let now = new Date(Date.now() + 1000);
+    const service = new ImReplyService({ store, getConfig: () => config, env: () => undefined, now: () => now });
+    for (let attempt = 1; attempt <= 5; attempt++) {
+      await service.scan();
+      expect(store.sqlite.prepare("SELECT state, attempts FROM im_reply_outbox WHERE operation_id = 'imn-2'").get())
+        .toMatchObject({ state: attempt === 5 ? "failed" : "pending", attempts: attempt });
+      now = new Date(now.getTime() + 86_400_000);
+    }
     service.dispose();
-    const rows = await claimDueImReplyNotifications(store, { owner: "probe", limit: 5, now: new Date(Date.now() + 120_000) });
-    // Unknown connection → send() false → first attempt returns to pending (attempt 1).
-    expect(rows.length).toBeLessThanOrEqual(1);
-  });
-
-  it("insertImAction still available for future card work", async () => {
-    await insertImAction(store, {
-      actionId: "act-1", namespace: "ns", connectionIdentity: "c", issuedConfigVersion: "v1",
-      sourceMessageId: null, sourceTaskId: null, conversationJson: null, recipientId: null,
-      bindingId: "b", workspaceId: "ws", sourceTrigger: "t", repoRef: "org/service",
-      revision: "rev", expiresAt: new Date(Date.now() + 60_000), status: "issued",
-      createdAt: new Date(), updatedAt: new Date(),
-    });
-    const claimed = await claimDueImReplyNotifications(store, { owner: "w", limit: 1, now: new Date() });
-    expect(claimed).toHaveLength(0);
-    expect(await finishImReplyNotification(store, { operationId: "none", fence: 0, state: "failed", now: new Date() })).toBe(false);
+    expect((await findImReviewRequest(store, "ns", "imr-1"))?.state).toBe("failed");
   });
 });

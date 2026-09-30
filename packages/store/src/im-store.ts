@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import { and, eq, inArray, isNull, lt, lte, or, sql } from "drizzle-orm";
+import { and, eq, gte, inArray, isNull, lt, lte, or, sql } from "drizzle-orm";
 
 import type { StoreDb } from "./database.js";
 import {
@@ -28,6 +28,7 @@ import {
   insertImActionPg,
   listImActiveConfigSnapshotIdsPg,
   prepareImDispatchPg,
+  renewImReviewLeasePg,
   updateImReviewRequestPg,
 } from "./im-store.pg.js";
 
@@ -119,7 +120,7 @@ export type AcceptImDeliveryOutcome =
   | { readonly kind: "duplicate"; readonly inboxId: string; readonly requestId: string | null }
   | { readonly kind: "active_merged"; readonly inboxId: string; readonly requestId: string }
   | { readonly kind: "conflict" }
-  | { readonly kind: "action_rejected"; readonly reason: "expired" | "consumed_mismatch" | "not_found" }
+  | { readonly kind: "action_rejected"; readonly reason: "expired" | "consumed_mismatch" | "not_found" | "source_mismatch" }
   | { readonly kind: "rate_limited"; readonly count: number };
 
 export interface ClaimedImReviewRequest {
@@ -186,14 +187,28 @@ export function newImRowId(): string {
   return randomUUID();
 }
 
+/** Control-flow error used to roll back the inbox and quota bump together. */
+export class ImRateLimitRollback extends Error {
+  constructor(readonly count: number) {
+    super("IM rate limit exceeded");
+  }
+}
+
+export class ImActionRollback extends Error {
+  constructor(readonly reason: "not_found" | "source_mismatch") {
+    super(`IM action rejected: ${reason}`);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // acceptDelivery (spec §4.1)
 // ---------------------------------------------------------------------------
 
 export async function acceptImDelivery(store: StoreDb, input: AcceptImDeliveryInput): Promise<AcceptImDeliveryOutcome> {
   if (store.kind === "postgres") return acceptImDeliveryPg(store, input);
-  return store.db.transaction((tx) => {
-    const inboxId = newImRowId();
+  try {
+    return store.db.transaction((tx) => {
+    let inboxId = newImRowId();
     const inserted = tx.insert(imInbox).values({
       id: inboxId,
       namespace: input.delivery.namespace,
@@ -216,7 +231,12 @@ export async function acceptImDelivery(store: StoreDb, input: AcceptImDeliveryIn
       if (existing === undefined || existing.payloadDigest !== input.delivery.payloadDigest) {
         return { kind: "conflict" } as AcceptImDeliveryOutcome;
       }
-      return { kind: "duplicate", inboxId: existing.id, requestId: existing.requestId } as AcceptImDeliveryOutcome;
+      // Callback routes persist the verified delivery before command handling.
+      // Its noted row may still be promoted to a request in this transaction.
+      if (input.command === undefined || existing.status !== "noted" || existing.requestId !== null) {
+        return { kind: "duplicate", inboxId: existing.id, requestId: existing.requestId } as AcceptImDeliveryOutcome;
+      }
+      inboxId = existing.id;
     }
 
     if (input.command === undefined) {
@@ -226,7 +246,13 @@ export async function acceptImDelivery(store: StoreDb, input: AcceptImDeliveryIn
     const action = input.command.consumeActionId;
     if (action !== undefined) {
       const existingAction = tx.select().from(imActions).where(eq(imActions.actionId, action)).get();
-      if (existingAction === undefined) return { kind: "action_rejected", reason: "not_found" } as AcceptImDeliveryOutcome;
+      if (existingAction === undefined) throw new ImActionRollback("not_found");
+      if (existingAction.namespace !== input.delivery.namespace || existingAction.connectionIdentity !== input.delivery.connectionIdentity ||
+          existingAction.bindingId !== input.command.request.bindingId || existingAction.workspaceId !== input.command.request.workspaceId ||
+          existingAction.sourceTrigger !== input.command.request.sourceTrigger || existingAction.repoRef !== input.command.request.repoRef ||
+          normalizeRevision(existingAction.revision) !== normalizeRevision(input.command.request.requestedRevision)) {
+        throw new ImActionRollback("source_mismatch");
+      }
       if (existingAction.status === "consumed") {
         // The command reruns; consumeAction returns the original request (R04/A10).
         tx.update(imInbox).set({ requestId: existingAction.consumedRequestId })
@@ -248,8 +274,7 @@ export async function acceptImDelivery(store: StoreDb, input: AcceptImDeliveryIn
         set: { count: sql`${imRateLimits.count} + 1` },
       }).returning({ count: imRateLimits.count }).all();
       if ((bumped[0]?.count ?? 0) > limit) {
-        // A rejected command rolls the quota bump back with the transaction.
-        return { kind: "rate_limited", count: bumped[0]?.count ?? limit } as AcceptImDeliveryOutcome;
+        throw new ImRateLimitRollback(bumped[0]?.count ?? limit);
       }
     }
 
@@ -270,7 +295,11 @@ export async function acceptImDelivery(store: StoreDb, input: AcceptImDeliveryIn
         eq(imActiveTargets.sourceIdentity, targetKey.sourceIdentity),
         eq(imActiveTargets.revision, targetKey.revision),
       )).get();
-      tx.update(imInbox).set({ requestId: existingTarget?.requestId ?? null }).where(eq(imInbox.id, inboxId)).run();
+      tx.update(imInbox).set({ status: "request_created", requestId: existingTarget?.requestId ?? null }).where(eq(imInbox.id, inboxId)).run();
+      if (action !== undefined && existingTarget?.requestId !== undefined) {
+        tx.update(imActions).set({ status: "consumed", consumedRequestId: existingTarget.requestId, updatedAt: input.now })
+          .where(eq(imActions.actionId, action)).run();
+      }
       return { kind: "active_merged", inboxId, requestId: existingTarget?.requestId ?? "" } as AcceptImDeliveryOutcome;
     }
 
@@ -299,9 +328,14 @@ export async function acceptImDelivery(store: StoreDb, input: AcceptImDeliveryIn
       tx.update(imActions).set({ status: "consumed", consumedRequestId: request.requestId, updatedAt: input.now })
         .where(eq(imActions.actionId, action)).run();
     }
-    tx.update(imInbox).set({ requestId: request.requestId }).where(eq(imInbox.id, inboxId)).run();
+    tx.update(imInbox).set({ status: "request_created", requestId: request.requestId }).where(eq(imInbox.id, inboxId)).run();
     return { kind: "created", inboxId, requestId: request.requestId } as AcceptImDeliveryOutcome;
-  });
+    });
+  } catch (error) {
+    if (error instanceof ImRateLimitRollback) return { kind: "rate_limited", count: error.count };
+    if (error instanceof ImActionRollback) return { kind: "action_rejected", reason: error.reason };
+    throw error;
+  }
 }
 
 /**
@@ -340,6 +374,7 @@ export async function claimDueImReviewRequests(
     .where(and(
       eq(imReviewRequests.namespace, options.namespace),
       or(isNull(imReviewRequests.nextAttemptAt), lt(imReviewRequests.nextAttemptAt, options.now)),
+      or(isNull(imReviewRequests.leaseUntil), lte(imReviewRequests.leaseUntil, options.now)),
       inArray(imReviewRequests.state, ["accepted", "validating", "queued", "running", "publishing", "retry_wait"]),
     )).limit(options.limit);
   const claimed: ClaimedImReviewRequest[] = [];
@@ -353,7 +388,7 @@ export async function claimDueImReviewRequests(
     }).where(and(
       eq(imReviewRequests.requestId, candidate.requestId),
       eq(imReviewRequests.fence, candidate.fence),
-      or(isNull(imReviewRequests.leaseUntil), lt(imReviewRequests.leaseUntil, options.now)),
+      or(isNull(imReviewRequests.leaseUntil), lte(imReviewRequests.leaseUntil, options.now)),
     )).returning();
     if (updated[0] !== undefined) claimed.push({ request: toRequestRow(updated[0]), fence: updated[0].fence });
   }
@@ -379,6 +414,25 @@ export async function updateImReviewRequest(store: StoreDb, update: ImFencedUpda
   const rows = await store.db.update(imReviewRequests).set(set)
     .where(and(eq(imReviewRequests.requestId, update.requestId), eq(imReviewRequests.fence, update.fence)))
     .returning({ requestId: imReviewRequests.requestId });
+  return rows.length > 0;
+}
+
+/** Extends an owned request lease without changing its fence or state. */
+export async function renewImReviewLease(store: StoreDb, input: {
+  readonly requestId: string;
+  readonly fence: number;
+  readonly owner: string;
+  readonly now: Date;
+  readonly leaseMs: number;
+}): Promise<boolean> {
+  if (store.kind === "postgres") return renewImReviewLeasePg(store, input);
+  const rows = await store.db.update(imReviewRequests).set({
+    leaseUntil: new Date(input.now.getTime() + input.leaseMs), updatedAt: input.now,
+  }).where(and(
+    eq(imReviewRequests.requestId, input.requestId), eq(imReviewRequests.fence, input.fence),
+    eq(imReviewRequests.leaseOwner, input.owner),
+    gte(imReviewRequests.leaseUntil, input.now),
+  )).returning({ requestId: imReviewRequests.requestId });
   return rows.length > 0;
 }
 
@@ -458,9 +512,9 @@ export interface ImReplyNotificationRow {
 export async function claimDueImReplyNotifications(store: StoreDb, input: { readonly owner: string; readonly limit: number; readonly now: Date }): Promise<ImReplyNotificationRow[]> {
   if (store.kind === "postgres") return claimDueImReplyNotificationsPg(store, input);
   return store.db.transaction((tx) => {
-    const due = tx.select().from(imReplyOutbox).where(and(
-      eq(imReplyOutbox.state, "pending"),
-      lte(imReplyOutbox.nextAttemptAt, input.now),
+    const due = tx.select().from(imReplyOutbox).where(or(
+      and(eq(imReplyOutbox.state, "pending"), lte(imReplyOutbox.nextAttemptAt, input.now)),
+      and(eq(imReplyOutbox.state, "delivering"), lte(imReplyOutbox.leaseUntil, input.now)),
     )).orderBy(imReplyOutbox.nextAttemptAt).limit(input.limit).all();
     const claimed: ImReplyNotificationRow[] = [];
     for (const row of due) {

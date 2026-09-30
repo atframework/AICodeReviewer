@@ -4,7 +4,7 @@
  * and GREATEST-free set expressions kept in drizzle's portable form.
  */
 
-import { and, eq, inArray, isNull, lt, lte, or, sql } from "drizzle-orm";
+import { and, eq, gte, inArray, isNull, lt, lte, or, sql } from "drizzle-orm";
 
 import { randomUUID } from "node:crypto";
 
@@ -26,7 +26,7 @@ import type {
   ImFencedUpdate,
   ImReviewRequestRow,
 } from "./im-store.js";
-import { normalizeRevision } from "./im-store.js";
+import { ImActionRollback, ImRateLimitRollback, normalizeRevision } from "./im-store.js";
 
 export async function findImReviewRequestPg(store: PgStoreDb, namespace: string, requestId: string): Promise<ImReviewRequestRow | undefined> {
   const rows = await store.db.select().from(imReviewRequests)
@@ -80,8 +80,9 @@ function toRequestRow(row: typeof imReviewRequests.$inferSelect): ImReviewReques
 }
 
 export async function acceptImDeliveryPg(store: PgStoreDb, input: AcceptImDeliveryInput): Promise<AcceptImDeliveryOutcome> {
-  return store.db.transaction(async (tx) => {
-    const inboxId = randomUUID();
+  try {
+    return await store.db.transaction(async (tx) => {
+    let inboxId: string = randomUUID();
     const inserted = await tx.insert(imInbox).values({
       id: inboxId,
       namespace: input.delivery.namespace,
@@ -98,11 +99,14 @@ export async function acceptImDeliveryPg(store: PgStoreDb, input: AcceptImDelive
         eq(imInbox.connectionIdentity, input.delivery.connectionIdentity),
         eq(imInbox.deliveryKind, input.delivery.deliveryKind),
         eq(imInbox.deliveryKey, input.delivery.deliveryKey),
-      )))[0];
+      )).for("update"))[0];
       if (existing === undefined || existing.payloadDigest !== input.delivery.payloadDigest) {
         return { kind: "conflict" } as AcceptImDeliveryOutcome;
       }
-      return { kind: "duplicate", inboxId: existing.id, requestId: existing.requestId } as AcceptImDeliveryOutcome;
+      if (input.command === undefined || existing.status !== "noted" || existing.requestId !== null) {
+        return { kind: "duplicate", inboxId: existing.id, requestId: existing.requestId } as AcceptImDeliveryOutcome;
+      }
+      inboxId = existing.id;
     }
 
     if (input.command === undefined) {
@@ -113,7 +117,13 @@ export async function acceptImDeliveryPg(store: PgStoreDb, input: AcceptImDelive
     if (action !== undefined) {
       const rows = await tx.select().from(imActions).where(eq(imActions.actionId, action)).for("update");
       const existingAction = rows[0];
-      if (existingAction === undefined) return { kind: "action_rejected", reason: "not_found" } as AcceptImDeliveryOutcome;
+      if (existingAction === undefined) throw new ImActionRollback("not_found");
+      if (existingAction.namespace !== input.delivery.namespace || existingAction.connectionIdentity !== input.delivery.connectionIdentity ||
+          existingAction.bindingId !== input.command.request.bindingId || existingAction.workspaceId !== input.command.request.workspaceId ||
+          existingAction.sourceTrigger !== input.command.request.sourceTrigger || existingAction.repoRef !== input.command.request.repoRef ||
+          normalizeRevision(existingAction.revision) !== normalizeRevision(input.command.request.requestedRevision)) {
+        throw new ImActionRollback("source_mismatch");
+      }
       if (existingAction.status === "consumed") {
         await tx.update(imInbox).set({ requestId: existingAction.consumedRequestId }).where(eq(imInbox.id, inboxId));
         return { kind: "duplicate", inboxId, requestId: existingAction.consumedRequestId } as AcceptImDeliveryOutcome;
@@ -133,7 +143,7 @@ export async function acceptImDeliveryPg(store: PgStoreDb, input: AcceptImDelive
         set: { count: sql`${imRateLimits.count} + 1` },
       }).returning({ count: imRateLimits.count });
       if ((bumped[0]?.count ?? 0) > limit) {
-        return { kind: "rate_limited", count: bumped[0]?.count ?? limit } as AcceptImDeliveryOutcome;
+        throw new ImRateLimitRollback(bumped[0]?.count ?? limit);
       }
     }
 
@@ -152,7 +162,11 @@ export async function acceptImDeliveryPg(store: PgStoreDb, input: AcceptImDelive
         eq(imActiveTargets.sourceIdentity, targetKey.sourceIdentity),
         eq(imActiveTargets.revision, targetKey.revision),
       )))[0];
-      await tx.update(imInbox).set({ requestId: existingTarget?.requestId ?? null }).where(eq(imInbox.id, inboxId));
+      await tx.update(imInbox).set({ status: "request_created", requestId: existingTarget?.requestId ?? null }).where(eq(imInbox.id, inboxId));
+      if (action !== undefined && existingTarget?.requestId !== undefined) {
+        await tx.update(imActions).set({ status: "consumed", consumedRequestId: existingTarget.requestId, updatedAt: input.now })
+          .where(eq(imActions.actionId, action));
+      }
       return { kind: "active_merged", inboxId, requestId: existingTarget?.requestId ?? "" } as AcceptImDeliveryOutcome;
     }
 
@@ -181,9 +195,14 @@ export async function acceptImDeliveryPg(store: PgStoreDb, input: AcceptImDelive
       await tx.update(imActions).set({ status: "consumed", consumedRequestId: request.requestId, updatedAt: input.now })
         .where(eq(imActions.actionId, action));
     }
-    await tx.update(imInbox).set({ requestId: request.requestId }).where(eq(imInbox.id, inboxId));
+    await tx.update(imInbox).set({ status: "request_created", requestId: request.requestId }).where(eq(imInbox.id, inboxId));
     return { kind: "created", inboxId, requestId: request.requestId } as AcceptImDeliveryOutcome;
-  });
+    });
+  } catch (error) {
+    if (error instanceof ImRateLimitRollback) return { kind: "rate_limited", count: error.count };
+    if (error instanceof ImActionRollback) return { kind: "action_rejected", reason: error.reason };
+    throw error;
+  }
 }
 
 export async function claimDueImReviewRequestsPg(
@@ -194,6 +213,7 @@ export async function claimDueImReviewRequestsPg(
     .where(and(
       eq(imReviewRequests.namespace, options.namespace),
       or(isNull(imReviewRequests.nextAttemptAt), lt(imReviewRequests.nextAttemptAt, options.now)),
+      or(isNull(imReviewRequests.leaseUntil), lte(imReviewRequests.leaseUntil, options.now)),
       inArray(imReviewRequests.state, ["accepted", "validating", "queued", "running", "publishing", "retry_wait"]),
     )).limit(options.limit);
   const claimed: ClaimedImReviewRequest[] = [];
@@ -207,7 +227,7 @@ export async function claimDueImReviewRequestsPg(
     }).where(and(
       eq(imReviewRequests.requestId, candidate.requestId),
       eq(imReviewRequests.fence, candidate.fence),
-      or(isNull(imReviewRequests.leaseUntil), lt(imReviewRequests.leaseUntil, options.now)),
+      or(isNull(imReviewRequests.leaseUntil), lte(imReviewRequests.leaseUntil, options.now)),
     )).returning();
     if (updated[0] !== undefined) claimed.push({ request: toRequestRow(updated[0]), fence: updated[0].fence });
   }
@@ -231,6 +251,23 @@ export async function updateImReviewRequestPg(store: PgStoreDb, update: ImFenced
   const rows = await store.db.update(imReviewRequests).set(set)
     .where(and(eq(imReviewRequests.requestId, update.requestId), eq(imReviewRequests.fence, update.fence)))
     .returning({ requestId: imReviewRequests.requestId });
+  return rows.length > 0;
+}
+
+export async function renewImReviewLeasePg(store: PgStoreDb, input: {
+  readonly requestId: string;
+  readonly fence: number;
+  readonly owner: string;
+  readonly now: Date;
+  readonly leaseMs: number;
+}): Promise<boolean> {
+  const rows = await store.db.update(imReviewRequests).set({
+    leaseUntil: new Date(input.now.getTime() + input.leaseMs), updatedAt: input.now,
+  }).where(and(
+    eq(imReviewRequests.requestId, input.requestId), eq(imReviewRequests.fence, input.fence),
+    eq(imReviewRequests.leaseOwner, input.owner),
+    gte(imReviewRequests.leaseUntil, input.now),
+  )).returning({ requestId: imReviewRequests.requestId });
   return rows.length > 0;
 }
 
@@ -273,7 +310,8 @@ export async function finishImReviewRequestPg(store: PgStoreDb, input: FinishImR
         payloadDigest: notification.payloadDigest,
         state: "pending",
         expiry: notification.expiry ?? null,
-        nextAttemptAt: notification.nextAttemptAt,
+        nextAttemptAt: notification.nextAttemptAt ?? input.now,
+        compactReceipt: notification.compactReceipt ?? null,
         createdAt: input.now,
         updatedAt: input.now,
       });
@@ -326,10 +364,10 @@ export interface ImReplyNotificationRowPg {
 
 export async function claimDueImReplyNotificationsPg(store: PgStoreDb, input: { readonly owner: string; readonly limit: number; readonly now: Date }): Promise<ImReplyNotificationRowPg[]> {
   return store.db.transaction(async (tx) => {
-    const due = await tx.select().from(imReplyOutbox).where(and(
-      eq(imReplyOutbox.state, "pending"),
-      lte(imReplyOutbox.nextAttemptAt, input.now),
-    )).orderBy(imReplyOutbox.nextAttemptAt).limit(input.limit);
+    const due = await tx.select().from(imReplyOutbox).where(or(
+      and(eq(imReplyOutbox.state, "pending"), lte(imReplyOutbox.nextAttemptAt, input.now)),
+      and(eq(imReplyOutbox.state, "delivering"), lte(imReplyOutbox.leaseUntil, input.now)),
+    )).orderBy(imReplyOutbox.nextAttemptAt).limit(input.limit).for("update", { skipLocked: true });
     const claimed: ImReplyNotificationRowPg[] = [];
     for (const row of due) {
       if (row.expiry !== null && row.expiry.getTime() <= input.now.getTime()) {

@@ -8,6 +8,30 @@ import { describe, expect, it } from "vitest";
 import { createGitVcsAdapter, resolveRelativeGitUrl, type GitCommandRunner } from "../src/git.js";
 
 describe("GitVcsAdapter", () => {
+  it("describes only full reachable commits for fixed-revision IM reviews", async () => {
+    const sha = "a".repeat(40);
+    const parent = "b".repeat(40);
+    const calls: string[] = [];
+    let kind = "commit";
+    let refs = "refs/heads/main\n";
+    const git: GitCommandRunner = async args => {
+      calls.push(String(args[2]));
+      if (args[2] === "cat-file") return { stdout: kind, stderr: "" };
+      if (args[2] === "for-each-ref") return { stdout: refs, stderr: "" };
+      if (args[2] === "show") return { stdout: `${sha}\0${parent}\0Dev\0dev@example.com\0Commit title\n`, stderr: "" };
+      throw new Error("unexpected git command");
+    };
+    const adapter = createGitVcsAdapter({ repositoryDir: "C:/repo", git });
+    expect(await adapter.describeSource("HEAD")).toEqual({});
+    expect(calls).toEqual([]);
+    expect(await adapter.describeSource(sha)).toEqual({
+      title: "Commit title", author_name: "Dev", author_email: "dev@example.com", base_revision: parent,
+    });
+    refs = "";
+    expect(await adapter.describeSource(sha)).toEqual({});
+    kind = "tag";
+    expect(await adapter.describeSource(sha)).toEqual({});
+  });
   it("rejects a non-positive deepenBy value", () => {
     expect(() =>
       createGitVcsAdapter({

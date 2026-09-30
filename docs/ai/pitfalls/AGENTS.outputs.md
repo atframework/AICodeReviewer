@@ -52,3 +52,9 @@ Sources: `packages/outputs/src/index.ts`, `template-engine.ts`, `im-markdown.ts`
   dispatchers apply their platform transformer. Feishu JSON 2.0 preserves headings,
   tables, blockquotes and code: use `card.body.elements`, including appended mentions.
   Details: [IM message rules](../../../.agents/skills/output-channel-contracts/references/im-bot-message-contracts.md).
+- IM status and broad query lists must use the authorized binding plus the
+  original actor, connection and conversation; a connection-wide project
+  lookup can expose other bindings' repositories (`im-command-service.test.ts`).
+  WeCom proactive notifications share the subscribed socket and wait for its
+  send acknowledgement before the outbox marks delivery
+  (`im-long-connection-service.test.ts`).

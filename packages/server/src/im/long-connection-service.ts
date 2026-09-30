@@ -1,7 +1,7 @@
-import type { AppConfig, ImConversation, ImEventContent, ImPrincipal } from "@aicr/core";
+import type { AppConfig, ImConnectionIdentity, ImConversation, ImEventContent, ImPrincipal } from "@aicr/core";
 
-import { FeishuAppLongConnection } from "./feishu-long-connection.js";
-import { WecomAibotLongConnection } from "./wecom-long-connection.js";
+import { FeishuAppLongConnection, type FeishuLongConnectionOptions } from "./feishu-long-connection.js";
+import { WecomAibotLongConnection, type WecomLongConnectionOptions } from "./wecom-long-connection.js";
 
 /**
  * IM long-connection service manager: reads the effective config for
@@ -17,6 +17,9 @@ export interface LongConnectionMessage {
   readonly connectionName: string;
   readonly platform: "wecom_aibot" | "feishu_app";
   readonly text: string;
+  readonly connectionIdentity: ImConnectionIdentity;
+  readonly deliveryKey: string;
+  readonly payloadDigest: string;
   readonly actor: ImPrincipal;
   readonly conversation: ImConversation;
   readonly reply: (text: string) => Promise<void>;
@@ -25,6 +28,7 @@ export interface LongConnectionMessage {
 interface ManagedConnection {
   connect(): Promise<void>;
   dispose(): void;
+  sendProactive?(chatId: string, text: string, isGroup: boolean): Promise<void>;
 }
 
 export interface LongConnectionServiceOptions {
@@ -32,12 +36,14 @@ export interface LongConnectionServiceOptions {
   readonly env: (name: string) => string | undefined;
   readonly namespace: string;
   readonly onAdmitMessage: (message: LongConnectionMessage) => Promise<void>;
+  readonly createWecom?: (options: WecomLongConnectionOptions) => ManagedConnection;
+  readonly createFeishu?: (options: FeishuLongConnectionOptions) => ManagedConnection;
 }
 
 const RECONCILE_INTERVAL_MS = 30_000;
 
 export class ImLongConnectionService {
-  private connections = new Map<string, ManagedConnection>();
+  private connections = new Map<string, { readonly key: string; readonly kind: "wecom_aibot" | "feishu_app"; readonly client: ManagedConnection }>();
   private readonly options: LongConnectionServiceOptions;
   private timer: ReturnType<typeof setInterval> | undefined;
   private reconciling = false;
@@ -68,7 +74,7 @@ export class ImLongConnectionService {
   /** Scans config and connects/reconnects as needed. Call on startup and config change. */
   async reconcile(): Promise<void> {
     const config = await this.options.getConfig();
-    const desired = new Map<string, ManagedConnection>();
+    const desired = new Map<string, { readonly key: string; readonly kind: "wecom_aibot" | "feishu_app"; readonly create: () => ManagedConnection }>();
 
     for (const [name, connection] of Object.entries(config.im?.connections ?? {})) {
       if (connection.enabled === false) continue;
@@ -79,7 +85,7 @@ export class ImLongConnectionService {
         const secret = connection.secret ?? (connection.secret_env !== undefined ? this.options.env(connection.secret_env) : undefined) ?? "";
         const botId = connection.aibot_id ?? "";
         if (!secret || !botId) continue;
-        desired.set(name, new WecomAibotLongConnection({
+        desired.set(name, { kind: "wecom_aibot", key: JSON.stringify(["wecom_aibot", botId, secret, this.options.namespace]), create: () => (this.options.createWecom ?? (options => new WecomAibotLongConnection(options)))({
           botId,
           secret,
           connectionName: name,
@@ -88,7 +94,7 @@ export class ImLongConnectionService {
           onStatusChange: (status) => {
             console.log(JSON.stringify({ msg: "im_long_connection_status", connection: name, platform: "wecom_aibot", status }));
           },
-        }));
+        }) });
         continue;
       }
       if (connection.kind === "feishu_app") {
@@ -96,7 +102,7 @@ export class ImLongConnectionService {
           ?? (connection.app_secret_env !== undefined ? this.options.env(connection.app_secret_env) : undefined)
           ?? "";
         if (!connection.app_id || !appSecret) continue;
-        desired.set(name, new FeishuAppLongConnection({
+        desired.set(name, { kind: "feishu_app", key: JSON.stringify(["feishu_app", connection.app_id, appSecret, this.options.namespace]), create: () => (this.options.createFeishu ?? (options => new FeishuAppLongConnection(options)))({
           appId: connection.app_id,
           appSecret,
           connectionName: name,
@@ -105,23 +111,24 @@ export class ImLongConnectionService {
           onStatusChange: (status) => {
             console.log(JSON.stringify({ msg: "im_long_connection_status", connection: name, platform: "feishu_app", status }));
           },
-        }));
+        }) });
       }
     }
 
     // Stop removed or reconfigured connections.
-    for (const [name, conn] of this.connections) {
-      if (desired.get(name) !== conn) {
-        conn.dispose();
+    for (const [name, current] of this.connections) {
+      if (desired.get(name)?.key !== current.key) {
+        current.client.dispose();
         this.connections.delete(name);
       }
     }
 
     // Start new connections.
-    for (const [name, conn] of desired) {
+    for (const [name, definition] of desired) {
       if (this.connections.has(name)) continue;
-      this.connections.set(name, conn);
-      void conn.connect().catch((error) => {
+      const client = definition.create();
+      this.connections.set(name, { key: definition.key, kind: definition.kind, client });
+      void client.connect().catch((error) => {
         console.warn(JSON.stringify({ msg: "im_long_connection_failed", connection: name, error: String(error) }));
       });
     }
@@ -130,26 +137,37 @@ export class ImLongConnectionService {
   private async admit(
     connectionName: string,
     platform: "wecom_aibot" | "feishu_app",
-    event: { content: ImEventContent; actor: ImPrincipal | undefined; conversation: ImConversation | undefined },
+    event: { content: ImEventContent; actor: ImPrincipal | undefined; conversation: ImConversation | undefined; connectionIdentity: ImConnectionIdentity; deliveryKey: string; payloadDigest: string },
     reply: (text: string) => Promise<void>,
   ): Promise<void> {
-    if (event.content.kind !== "message") return;
+    if (event.content.kind !== "message" || event.actor === undefined || event.actor.id === "" || event.conversation === undefined) return;
     const text = event.content.text;
     await this.options.onAdmitMessage({
       connectionName,
       platform,
       text,
-      actor: event.actor ?? { type: platform === "feishu_app" ? "feishu_open_id" : "wecom_userid", id: "" },
-      conversation: event.conversation ?? (platform === "feishu_app" ? { kind: "app_direct" } : { kind: "bot_direct" }),
+      connectionIdentity: event.connectionIdentity,
+      deliveryKey: event.deliveryKey,
+      payloadDigest: event.payloadDigest,
+      actor: event.actor,
+      conversation: event.conversation,
       reply,
     });
+  }
+
+  /** Uses the existing subscribed bot socket for terminal notifications. */
+  async sendWecomProactive(connectionName: string, chatId: string, text: string, isGroup: boolean): Promise<boolean> {
+    const entry = this.connections.get(connectionName);
+    if (entry?.kind !== "wecom_aibot" || entry.client.sendProactive === undefined) return false;
+    await entry.client.sendProactive(chatId, text, isGroup);
+    return true;
   }
 
   dispose(): void {
     if (this.timer !== undefined) clearInterval(this.timer);
     this.timer = undefined;
-    for (const conn of this.connections.values()) {
-      conn.dispose();
+    for (const current of this.connections.values()) {
+      current.client.dispose();
     }
     this.connections.clear();
   }

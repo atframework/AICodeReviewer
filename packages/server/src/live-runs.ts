@@ -12,7 +12,7 @@ import { randomUUID } from "node:crypto";
 
 export type LiveRunPhase = "preparing" | "analyzing" | "publishing";
 
-export type LiveRunSource = "webhook" | "auto_commit";
+export type LiveRunSource = "webhook" | "auto_commit" | "im_command";
 
 export interface LiveRunMetrics {
   readonly promptTokens?: number;

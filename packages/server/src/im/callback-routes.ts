@@ -28,6 +28,8 @@ export interface ImCallbackRoutesOptions {
   readonly namespace: string;
   /** Resolves the live effective config for the connection table. */
   readonly getConfig: () => Promise<AppConfig> | AppConfig;
+  /** Effective generation captured with its config at callback admission. */
+  readonly getConfigGeneration?: () => Promise<{ readonly config: AppConfig; readonly snapshotId: string | null; readonly fileDigest: string }> | { readonly config: AppConfig; readonly snapshotId: string | null; readonly fileDigest: string };
   readonly env: (name: string) => string | undefined;
   /** Directory-fact resolution for scope matchers; absent = fail closed. */
   readonly directory?: ImCommandDirectoryLike | undefined;
@@ -123,9 +125,21 @@ function statusFor(reason: "unknown" | "disabled" | "no-callback"): number {
 async function readBoundedBody(request: Request): Promise<string | undefined> {
   const declared = Number(request.headers.get("content-length") ?? "0");
   if (Number.isSafeInteger(declared) && declared > MAX_CALLBACK_BODY_BYTES) return undefined;
-  const text = await request.text();
-  if (Buffer.byteLength(text, "utf8") > MAX_CALLBACK_BODY_BYTES) return undefined;
-  return text;
+  const reader = request.body?.getReader();
+  if (reader === undefined) return "";
+  const chunks: Buffer[] = [];
+  let bytes = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    bytes += value.byteLength;
+    if (bytes > MAX_CALLBACK_BODY_BYTES) {
+      await reader.cancel().catch(() => undefined);
+      return undefined;
+    }
+    chunks.push(Buffer.from(value));
+  }
+  return Buffer.concat(chunks, bytes).toString("utf8");
 }
 
 /** Registers the platform routes directly on the host app (root mounting). */
@@ -135,7 +149,8 @@ export function registerImCallbackRoutes(app: Hono, options: ImCallbackRoutesOpt
   const handler = async (context: { req: { method: "GET" | "POST"; param: (name: string) => string; query: () => URLSearchParams; raw: () => Request } }, response: (body: string, status: number, headers?: Record<string, string>) => Response) => {
 
     const name = context.req.param("connection");
-    const config = await options.getConfig();
+    const generation = options.getConfigGeneration !== undefined ? await options.getConfigGeneration() : undefined;
+    const config = generation?.config ?? await options.getConfig();
     const resolved = resolveConnection(config, options, name);
     if (typeof resolved === "string") {
       return response(JSON.stringify({ error: "callback_unavailable" }), statusFor(resolved), { "content-type": "application/json" });
@@ -207,10 +222,14 @@ export function registerImCallbackRoutes(app: Hono, options: ImCallbackRoutesOpt
         const chatId = feishuResult.event.conversation?.kind === "group" ? feishuResult.event.conversation.id : undefined;
         const receiveId = chatId ?? feishuResult.event.actor.id;
         const receiveIdType = chatId !== undefined ? "chat_id" : "open_id";
-        const config = await options.getConfig();
         const outcome = await consumeCardAction(options.store, {
           actionId: feishuResult.event.content.actionId,
+          namespace: options.namespace,
+          connectionName: name,
+          connectionIdentity: feishuDelivery.delivery.connectionIdentity,
+          sourceMessageId: feishuResult.event.messageId,
           config, actor: feishuResult.event.actor, conversation: feishuResult.event.conversation,
+          ...(options.directory !== undefined ? { directory: options.directory } : {}),
         });
         const text = outcome.kind === "accepted" || outcome.kind === "duplicate"
           ? `已受理重评请求（${outcome.requestId}）。`
@@ -236,7 +255,6 @@ export function registerImCallbackRoutes(app: Hono, options: ImCallbackRoutesOpt
         } else if (parsed.command.kind === "help") {
           replyText = processInlineCommand(feishuText, "feishu_app", {}, String(Math.floor(now() / 1000)), "0")?.text;
         } else if (feishuResult.event.actor !== undefined && feishuResult.event.conversation !== undefined) {
-          const config = await options.getConfig();
           const result = await processImCommand({
             store: options.store,
             config,
@@ -249,8 +267,8 @@ export function registerImCallbackRoutes(app: Hono, options: ImCallbackRoutesOpt
             conversation: feishuResult.event.conversation,
             command: parsed.command,
             now: new Date(now()),
-            configSnapshotId: "file-only",
-            configFileDigest: "unknown",
+            configSnapshotId: generation?.snapshotId ?? "file-only",
+            configFileDigest: generation?.fileDigest ?? "unknown",
             ...(options.directory !== undefined ? { directory: options.directory } : {}),
             ...(options.query !== undefined ? { query: options.query } : {}),
           });
@@ -334,7 +352,6 @@ export function registerImCallbackRoutes(app: Hono, options: ImCallbackRoutesOpt
             token: aibotCreds.token, encodingAesKey: aibotCreds.encodingAesKey,
           }, queryTs, queryNonce)?.text;
         } else if (result.event.actor !== undefined && result.event.conversation !== undefined) {
-          const config = await options.getConfig();
           const outcome = await processImCommand({
             store: options.store,
             config,
@@ -347,8 +364,8 @@ export function registerImCallbackRoutes(app: Hono, options: ImCallbackRoutesOpt
             conversation: result.event.conversation,
             command: parsed.command,
             now: new Date(now()),
-            configSnapshotId: "file-only",
-            configFileDigest: "unknown",
+            configSnapshotId: generation?.snapshotId ?? "file-only",
+            configFileDigest: generation?.fileDigest ?? "unknown",
             ...(options.directory !== undefined ? { directory: options.directory } : {}),
             ...(options.query !== undefined ? { query: options.query } : {}),
           });

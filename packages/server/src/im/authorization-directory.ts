@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import type { AppConfig, ImActorScopes, ImBindingActor, ImPrincipal } from "@aicr/core";
 import { FeishuAppClient, WeComAppClient } from "@aicr/outputs";
 
@@ -7,8 +9,8 @@ import { FeishuAppClient, WeComAppClient } from "@aicr/outputs";
  * snapshots — never from per-message API walks.
  *
  * - WeCom: departments/positions/extattr from `user/list`, tags from
- *   `tag/list`+`tag/get`, snapshotted against the first enabled `wecom_app`
- *   connection (sorted by name; deterministic). The smart robot's encrypted
+ *   `tag/list`+`tag/get`, snapshotted against the receiving connection's
+ *   corporate application and credential generation. The smart robot's encrypted
  *   open_userid converts via batch/openuserid_to_userid (path/101521) with a
  *   long-lived cache. Snapshots refresh in the background (`start()`); the
  *   request path only reads memory or awaits an in-flight refresh.
@@ -48,7 +50,7 @@ export class ImAuthorizationDirectory {
   private readonly options: ImAuthorizationDirectoryOptions;
   private readonly now: () => number;
   private wecomSnapshot: { readonly key: string; readonly data: WecomSnapshot; readonly expiresAt: number } | undefined;
-  private wecomPending: Promise<WecomSnapshot | undefined> | undefined;
+  private readonly wecomPending = new Map<string, Promise<WecomSnapshot | undefined>>();
   private readonly openUseridCache = new Map<string, { readonly userid: string | undefined; readonly expiresAt: number }>();
   private readonly feishuProfileCache = new Map<string, { readonly data: { readonly departments: readonly string[]; readonly jobTitle: string | undefined } | undefined; readonly expiresAt: number }>();
   private readonly feishuClients = new Map<string, FeishuAppClient>();
@@ -75,7 +77,7 @@ export class ImAuthorizationDirectory {
     if (this.timer !== undefined) clearInterval(this.timer);
     this.timer = undefined;
     this.wecomSnapshot = undefined;
-    this.wecomPending = undefined;
+    this.wecomPending.clear();
     this.openUseridCache.clear();
     this.feishuProfileCache.clear();
     this.feishuClients.clear();
@@ -96,12 +98,12 @@ export class ImAuthorizationDirectory {
     if (!needsWecom && !needsFeishu) return undefined;
 
     const scopes: { wecom?: ImActorScopes["wecom"]; feishu?: ImActorScopes["feishu"] } = {};
-    if (needsWecom) scopes.wecom = await this.resolveWecom(input.actor);
+    if (needsWecom) scopes.wecom = await this.resolveWecom(input.actor, input.connectionName);
     if (needsFeishu) {
       const chats = input.matchers
         .filter((matcher): matcher is Extract<ImBindingActor, { readonly kind: "feishu_chat" }> => "kind" in matcher && matcher.kind === "feishu_chat")
         .map(matcher => matcher.chat_id);
-      scopes.feishu = await this.resolveFeishu(input.actor, chats);
+      scopes.feishu = await this.resolveFeishu(input.actor, chats, input.connectionName);
     }
     return { ...scopes };
   }
@@ -110,9 +112,12 @@ export class ImAuthorizationDirectory {
   // WeCom
   // ---------------------------------------------------------------------------
 
-  private directoryConnection(config: AppConfig): { corpId: string; agentId: number; appSecret: string } | undefined {
+  private directoryConnection(config: AppConfig, connectionName?: string): { corpId: string; agentId: number; appSecret: string } | undefined {
+    const incoming = connectionName === undefined ? undefined : config.im?.connections?.[connectionName];
+    if (connectionName !== undefined && (incoming === undefined || incoming.enabled === false || (incoming.kind !== "wecom_app" && incoming.kind !== "wecom_aibot"))) return undefined;
+    const corpId = incoming?.kind === "wecom_app" || incoming?.kind === "wecom_aibot" ? incoming.corp_id : undefined;
     const entries = Object.entries(config.im?.connections ?? {})
-      .filter(([, connection]) => connection.kind === "wecom_app" && connection.enabled !== false)
+      .filter(([name, connection]) => connection.kind === "wecom_app" && connection.enabled !== false && (corpId === undefined || connection.corp_id === corpId) && (incoming?.kind !== "wecom_app" || name === connectionName))
       .sort(([a], [b]) => a.localeCompare(b));
     for (const [, connection] of entries) {
       if (connection.kind !== "wecom_app") continue;
@@ -133,19 +138,21 @@ export class ImAuthorizationDirectory {
     }
   }
 
-  private async wecomSnapshotData(): Promise<WecomSnapshot | undefined> {
+  private async wecomSnapshotData(connectionName?: string): Promise<WecomSnapshot | undefined> {
     const config = await this.options.getConfig();
-    const directory = this.directoryConnection(config);
+    const directory = this.directoryConnection(config, connectionName);
     if (directory === undefined) return undefined;
-    const key = `${directory.corpId}:${directory.agentId}`;
+    const key = JSON.stringify([directory.corpId, directory.agentId, createHash("sha256").update(directory.appSecret).digest("hex")]);
     const ttl = this.options.snapshotTtlMs ?? SNAPSHOT_TTL_MS;
     if (this.wecomSnapshot?.key === key && this.wecomSnapshot.expiresAt > this.now()) return this.wecomSnapshot.data;
-    if (this.wecomPending !== undefined) return this.wecomPending;
-    this.wecomPending = this.buildWecomSnapshot(directory, key, ttl);
+    const pending = this.wecomPending.get(key);
+    if (pending !== undefined) return pending;
+    const load = this.buildWecomSnapshot(directory, key, ttl);
+    this.wecomPending.set(key, load);
     try {
-      return await this.wecomPending;
+      return await load;
     } finally {
-      this.wecomPending = undefined;
+      this.wecomPending.delete(key);
     }
   }
 
@@ -187,7 +194,7 @@ export class ImAuthorizationDirectory {
     }
 
     const snapshot: WecomSnapshot = { users: userFacts, tags: tagMembers };
-    this.wecomSnapshot = { key, data: snapshot, expiresAt: this.now() + ttl };
+    if (!this.disposed) this.wecomSnapshot = { key, data: snapshot, expiresAt: this.now() + ttl };
     console.log(JSON.stringify({ msg: "im_directory_wecom_snapshot", users: userFacts.size, tags: tagMembers.size, departments: departments.length }));
     return snapshot;
   }
@@ -201,9 +208,10 @@ export class ImAuthorizationDirectory {
     });
   }
 
-  private async plaintextUserid(client: WeComAppClient, actor: ImPrincipal): Promise<string | undefined> {
+  private async plaintextUserid(client: WeComAppClient, actor: ImPrincipal, directoryKey: string): Promise<string | undefined> {
     const ttl = this.options.identityTtlMs ?? IDENTITY_TTL_MS;
-    const cached = this.openUseridCache.get(actor.id);
+    const cacheKey = `${directoryKey}:${actor.id}`;
+    const cached = this.openUseridCache.get(cacheKey);
     if (cached !== undefined && cached.expiresAt > this.now()) return cached.userid;
     // The aibot's encrypted ids only resolve through the batch conversion;
     // the API reports already-plaintext values as invalid (then the actor is
@@ -215,7 +223,7 @@ export class ImAuthorizationDirectory {
         const oldest = this.openUseridCache.keys().next().value;
         if (oldest !== undefined) this.openUseridCache.delete(oldest);
       }
-      this.openUseridCache.set(actor.id, { userid, expiresAt: this.now() + ttl });
+      this.openUseridCache.set(cacheKey, { userid, expiresAt: this.now() + ttl });
       return userid;
     } catch (error) {
       console.warn(JSON.stringify({ msg: "im_directory_wecom_convert_failed", error: String(error) }));
@@ -223,17 +231,18 @@ export class ImAuthorizationDirectory {
     }
   }
 
-  private async resolveWecom(actor: ImPrincipal): Promise<ImActorScopes["wecom"]> {
+  private async resolveWecom(actor: ImPrincipal, connectionName: string): Promise<ImActorScopes["wecom"]> {
     if (actor.type !== "wecom_userid" && actor.type !== "wecom_encrypted_userid") return undefined;
-    const snapshot = await this.wecomSnapshotData();
+    const snapshot = await this.wecomSnapshotData(connectionName);
     if (snapshot === undefined) return undefined;
     // Plaintext ids present in the snapshot skip the conversion API entirely.
     let userid: string | undefined = snapshot.users.has(actor.id) ? actor.id : undefined;
     if (userid === undefined) {
       const config = await this.options.getConfig();
-      const directory = this.directoryConnection(config);
+      const directory = this.directoryConnection(config, connectionName);
       if (directory === undefined) return undefined;
-      userid = await this.plaintextUserid(this.wecomClient(directory), actor);
+      const directoryKey = JSON.stringify([directory.corpId, directory.agentId, createHash("sha256").update(directory.appSecret).digest("hex")]);
+      userid = await this.plaintextUserid(this.wecomClient(directory), actor, directoryKey);
       if (userid === undefined || !snapshot.users.has(userid)) return undefined;
     }
     const facts = snapshot.users.get(userid)!;
@@ -262,7 +271,7 @@ export class ImAuthorizationDirectory {
       ?? (connection.app_secret_env !== undefined ? this.options.env(connection.app_secret_env) : undefined)
       ?? "";
     if (!appSecret) return undefined;
-    const key = `${connectionName}:${connection.app_id}`;
+    const key = JSON.stringify([connectionName, connection.app_id, createHash("sha256").update(appSecret).digest("hex")]);
     const cached = this.feishuClients.get(key);
     if (cached !== undefined) return cached;
     const client = new FeishuAppClient({
@@ -275,21 +284,25 @@ export class ImAuthorizationDirectory {
     return client;
   }
 
-  private async resolveFeishu(actor: ImPrincipal, chatIds: readonly string[]): Promise<ImActorScopes["feishu"]> {
+  private async resolveFeishu(actor: ImPrincipal, chatIds: readonly string[], connectionName: string): Promise<ImActorScopes["feishu"]> {
     if (actor.type !== "feishu_open_id" || actor.id === "") return undefined;
     const config = await this.options.getConfig();
-    const client = this.feishuClient(config, this.connectionForFeishu(config));
+    const client = this.feishuClient(config, connectionName);
     if (client === undefined) return undefined;
+    const connection = config.im?.connections?.[connectionName];
+    if (connection?.kind !== "feishu_app") return undefined;
+    const secret = connection.app_secret ?? (connection.app_secret_env !== undefined ? this.options.env(connection.app_secret_env) : undefined) ?? "";
+    const cacheKey = JSON.stringify([connectionName, connection.app_id, createHash("sha256").update(secret).digest("hex"), actor.id]);
 
     const ttl = this.options.identityTtlMs ?? IDENTITY_TTL_MS;
-    let profile = this.feishuProfileCache.get(actor.id);
+    let profile = this.feishuProfileCache.get(cacheKey);
     if (profile === undefined || profile.expiresAt <= this.now()) {
       const data = await client.userProfile(actor.id).catch((error: unknown) => {
         console.warn(JSON.stringify({ msg: "im_directory_feishu_profile_failed", error: String(error) }));
         return undefined;
       });
       profile = { data, expiresAt: this.now() + ttl };
-      this.feishuProfileCache.set(actor.id, profile);
+      this.feishuProfileCache.set(cacheKey, profile);
     }
 
     const chats = new Set<string>();
@@ -305,13 +318,4 @@ export class ImAuthorizationDirectory {
     return { openId: actor.id, departments: profile.data?.departments ?? [], jobTitle: profile.data?.jobTitle, chats };
   }
 
-  private connectionForFeishu(config: AppConfig): string {
-    // The binding's connection owns the directory; resolve() receives the
-    // connection name but scope sections are per-tenant — use the first
-    // enabled feishu_app connection deterministically, mirroring wecom.
-    const entries = Object.entries(config.im?.connections ?? {})
-      .filter(([, connection]) => connection.kind === "feishu_app" && connection.enabled !== false)
-      .sort(([a], [b]) => a.localeCompare(b));
-    return entries[0]?.[0] ?? "";
-  }
 }

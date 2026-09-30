@@ -1,4 +1,4 @@
-import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID } from "node:crypto";
+import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
 
 import { brandVerifiedImEvent, type ImConnectionIdentity, type VerifiedImEventData } from "@aicr/core";
 
@@ -131,13 +131,27 @@ export function verifyFeishuCallback(input: {
 export function buildFeishuEvent(payload: Record<string, unknown>, connection: { identity: ImConnectionIdentity; name: string }): ReturnType<typeof brandVerifiedImEvent> {
   const header = payload.header as Record<string, unknown> | undefined;
   const event = payload.event as Record<string, unknown> | undefined;
+  const message = event?.message as Record<string, unknown> | undefined;
   const eventType = typeof header?.event_type === "string" ? header.event_type : "unknown";
-  const messageId = typeof header?.message_id === "string" ? header.message_id : undefined;
+  const messageId = typeof message?.message_id === "string" ? message.message_id
+    : typeof header?.message_id === "string" ? header.message_id : undefined;
   const eventId = typeof header?.event_id === "string" ? header.event_id : undefined;
+  const payloadHash = createHash("sha256").update(JSON.stringify(payload)).digest("hex");
   const createTime = Number(header?.create_time ?? 0);
+  const isCardAction = eventType === "card.action.trigger";
+  const operator = event?.operator as Record<string, unknown> | undefined;
+  const operatorId = operator?.operator_id as Record<string, unknown> | undefined;
+  const context = event?.context as Record<string, unknown> | undefined;
+  const cardAction = event?.action as Record<string, unknown> | undefined;
+  const cardValue = cardAction?.value;
+  const actionId = typeof cardValue === "string" ? cardValue
+    : typeof cardValue === "object" && cardValue !== null && typeof (cardValue as Record<string, unknown>).aicr_action_id === "string"
+      ? String((cardValue as Record<string, unknown>).aicr_action_id) : "";
+  const cardChatId = typeof context?.open_chat_id === "string" ? context.open_chat_id : undefined;
+  const cardMessageId = typeof context?.open_message_id === "string" ? context.open_message_id : undefined;
+  const cardOperatorId = typeof operatorId?.open_id === "string" ? operatorId.open_id : undefined;
 
   // im.message.receive_v1
-  const message = event?.message as Record<string, unknown> | undefined;
   const sender = event?.sender as Record<string, unknown> | undefined;
   const senderId = sender?.sender_id as Record<string, unknown> | undefined;
   const openId = typeof senderId?.open_id === "string" ? senderId.open_id : undefined;
@@ -158,21 +172,23 @@ export function buildFeishuEvent(payload: Record<string, unknown>, connection: {
     connectionIdentity: connection.identity,
     connectionName: connection.name,
     protocol: "feishu_app",
-    deliveryKind: eventType.startsWith("im.message") ? "message" : "event",
-    deliveryKey: messageId ?? eventId ?? randomUUID().slice(0, 16),
-    payloadDigest: `feishu:${eventType}:${messageId ?? eventId ?? ""}`,
-    actor: openId !== undefined ? { type: "feishu_open_id", id: openId } : undefined,
-    conversation: chatId !== undefined
+    deliveryKind: isCardAction ? "card_action" : eventType.startsWith("im.message") ? "message" : "event",
+    deliveryKey: messageId ?? eventId ?? `payload:${payloadHash}`,
+    payloadDigest: `feishu:${payloadHash}`,
+    actor: (isCardAction ? cardOperatorId : openId) !== undefined ? { type: "feishu_open_id", id: (isCardAction ? cardOperatorId : openId)! } : undefined,
+    conversation: isCardAction
+      ? (cardChatId !== undefined ? { kind: "group", id: cardChatId } : undefined)
+      : chatId !== undefined
       ? (chatType === "p2p" ? { kind: "app_direct" } : { kind: "group", id: chatId })
       : { kind: "app_direct" },
-    occurredAt: createTime > 0 ? createTime * 1000 : Date.now(),
-    messageId,
+    occurredAt: createTime > 0 ? createTime : Date.now(),
+    messageId: isCardAction ? cardMessageId : messageId,
     eventId,
-    actionId: eventType === "card.action.trigger" ? eventId : undefined,
+    actionId: isCardAction ? actionId : undefined,
     content: text !== undefined
       ? { kind: "message", text }
-      : eventType === "card.action.trigger"
-        ? { kind: "card_action", actionId: eventId ?? "" }
+      : isCardAction
+        ? { kind: "card_action", actionId }
         : eventType.startsWith("im.message")
           ? { kind: "message", text: "" }
           : { kind: "unknown_type", type: eventType },

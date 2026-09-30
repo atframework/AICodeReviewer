@@ -546,8 +546,9 @@ Supported command grammar (the `aicr` prefix, sent after @-mentioning the bot):
   `finish: true`; a plain markdown body is ignored by the platform), the WeCom
   long connection replies via `aibot_respond_msg`, and Feishu replies through
   its message API.
-- Query commands (read-only, same binding authorization; repo aliases only
-  resolve through the binding's registered targets): `aicr projects`,
+- Query commands (read-only, same binding authorization; lists include only
+  repositories in the authorized binding unless it enables
+  `allow_all_repositories`): `aicr projects`,
   `aicr reviews [alias]`, `aicr commits <alias> [branch]` /
   `aicr prs <alias> [branch]` (recently trigger-eligible commits / PRs-MRs),
   `aicr detail <alias> <revision>` / `aicr prdetail <alias> <pr-id>` (run
@@ -574,6 +575,20 @@ Supported command grammar (the `aicr` prefix, sent after @-mentioning the bot):
   whitelist bootstrap loop: @-mention the bot in a group once, take the
   group id from the rejection reply, and add it to the binding's
   `conversations` (WeCom smart-robot groups have no query API).
+
+`aicr review` stores the request and its configuration snapshot. The server
+worker validates the fixed revision and runs the review under the shared
+workspace concurrency limit. Git requires a full commit hash reachable from
+the configured repository; SVN and P4 require a positive revision number.
+`aicr status` reveals a request only to its original actor on the original
+connection and conversation, while its repository remains allowed by the
+status binding. A review interrupted after execution started is reported as
+`publication_unknown`; the service does not automatically publish it again.
+Terminal notifications use the requesting conversation. In WeCom long
+connection mode, they use the existing subscribed socket and wait for the
+platform send acknowledgement.
+A request fails when all publication operations fail or no publisher is configured;
+it is partial when some operations publish and others fail.
 
 Long-connection modes are initiated by the server: `aicr serve` dials per the
 connection table (auto-reconnecting on drops), needing neither a callback URL

@@ -61,8 +61,9 @@ Read only the corresponding section of `docs/output-channels.md` or architecture
   [IM design](../../../docs/design/im-integrations.md) and its
   [source record](../../../docs/ai/sources/im-integrations.md); load the
   [directory design](../../../docs/design/member-directory.md) only for file
-  identity/reload work. These remain proposals until their task cards land.
-  During authorized implementation, use the matching task card in the
+  identity/reload work. Callback admission, the IM review worker and reply
+  outbox are wired; output cards do not yet issue review action IDs. For
+  further implementation, use the matching task card in the
   [execution guide](../../../docs/design/im-implementation.md), its cited
   [implementation specification](../../../docs/design/im-implementation-spec.md) and
   [acceptance IDs](../../../docs/design/im-acceptance.md). Load the current task's

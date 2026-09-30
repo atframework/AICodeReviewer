@@ -84,3 +84,9 @@ Sources: `packages/sandbox/src/types.ts`, `native.ts`, `docker.ts`,
   unknown/remote owners. Reserve a fresh root before VCS writes and verify source,
   context and agent paths before use and cleanup. Test real source sentinels during
   fallback and direct-path failures (`review-orchestrator.test.ts`).
+- IM command admission only creates a durable request. Wire its scanner into
+  server startup and drain, pin the accepted configuration, renew the claim
+  lease while waiting for shared concurrency, and keep an interrupted running
+  publication in `publication_unknown` until remote identity can be reconciled.
+  The local worker path is covered by `im-review-runtime.test.ts` and
+  `im-combined.test.ts`; mocked worker tests alone do not prove startup wiring.

@@ -1248,6 +1248,28 @@ export class GitVcsAdapter implements VcsAdapter {
     }
   }
 
+  /** Describes only a complete commit reachable from this adapter's refs. */
+  async describeSource(revision: string): Promise<Readonly<Record<string, string | null>>> {
+    if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/iu.test(revision)) return {};
+    await this.syncRepository();
+    const kind = await this.runGit(["-C", this.repositoryDir, "cat-file", "-t", revision]);
+    if (kind.stdout.trim() !== "commit") return {};
+    const refs = await this.runGit([
+      "-C", this.repositoryDir, "for-each-ref", `--contains=${revision}`, "--format=%(refname)",
+      ...(this.remoteUrl ? [`refs/remotes/${this.remote}`] : ["refs/heads", "refs/remotes"]),
+    ]);
+    if (refs.stdout.trim() === "") return {};
+    const shown = await this.runGit(["-C", this.repositoryDir, "show", "-s", "--format=%H%x00%P%x00%an%x00%ae%x00%s", revision]);
+    const [sha, parents, authorName, authorEmail, title] = shown.stdout.trimEnd().split("\0");
+    if (sha?.toLowerCase() !== revision.toLowerCase() || title === undefined) return {};
+    return {
+      title,
+      author_name: authorName ?? null,
+      author_email: authorEmail ?? null,
+      base_revision: parents?.split(" ")[0] || null,
+    };
+  }
+
 }
 
 export function createGitVcsAdapter(options: GitVcsAdapterOptions): GitVcsAdapter {

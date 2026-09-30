@@ -19,6 +19,7 @@ function configWith(overrides: { connections?: Record<string, Record<string, unk
           agent_id: 1000002,
           app_secret: "dir-secret",
         },
+        "wecom-airobot": { kind: "wecom_aibot", corp_id: "ww_example", aibot_id: "bot-1" },
       },
     },
     outputs: { channels: [] },
@@ -142,6 +143,23 @@ describe("A14: WeCom authorization directory", () => {
       directory2.dispose();
     }
   });
+
+  it("does not authorize an actor with another corporation's directory", async () => {
+    const directory2 = new ImAuthorizationDirectory({
+      getConfig: () => configWith({ connections: {
+        "corp-directory": { kind: "wecom_app", corp_id: "ww_example", agent_id: 1000002, app_secret: "dir-secret" },
+        "other-bot": { kind: "wecom_aibot", corp_id: "ww_other", aibot_id: "bot-2" },
+      } }),
+      env: () => undefined,
+      fetch: wecomDirectoryFetch() as unknown as typeof globalThis.fetch,
+    });
+    try {
+      const scopes = await directory2.resolve({ connectionName: "other-bot", actor: { type: "wecom_userid", id: "owent" }, matchers: [{ kind: "wecom_department", id: "2" }] });
+      expect(scopes?.wecom).toBeUndefined();
+    } finally {
+      directory2.dispose();
+    }
+  });
 });
 
 describe("A14: Feishu authorization directory", () => {
@@ -164,6 +182,40 @@ describe("A14: Feishu authorization directory", () => {
       expect(scopes?.feishu?.departments).toEqual(["od-9"]);
       expect(scopes?.feishu?.jobTitle).toBe("后端工程师");
       expect(scopes?.feishu?.chats.has("oc_reviewers")).toBe(true);
+    } finally {
+      directory.dispose();
+    }
+  });
+
+  it("uses the receiving application and isolates profile caches across applications", async () => {
+    const requestedAppIds: string[] = [];
+    const fetch = async (url: string | URL, init?: RequestInit): Promise<Response> => {
+      const target = String(url);
+      const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
+      if (target.includes("tenant_access_token/internal")) {
+        const body = JSON.parse(String(init?.body)) as { app_id: string };
+        requestedAppIds.push(body.app_id);
+        return json({ code: 0, tenant_access_token: body.app_id, expire: 7200 });
+      }
+      if (target.includes("/contact/v3/users/")) {
+        const appId = init?.headers && new Headers(init.headers).get("authorization")?.replace("Bearer ", "");
+        return json({ code: 0, data: { user: { open_id: "ou_same", department_ids: [appId === "cli_b" ? "dept-b" : "dept-a"] } } });
+      }
+      return json({ code: -1 });
+    };
+    const directory = new ImAuthorizationDirectory({
+      getConfig: () => configWith({ connections: {
+        "app-a": { kind: "feishu_app", app_id: "cli_a", app_secret: "secret-a" },
+        "app-b": { kind: "feishu_app", app_id: "cli_b", app_secret: "secret-b" },
+      } }),
+      env: () => undefined,
+      fetch: fetch as typeof globalThis.fetch,
+    });
+    try {
+      const input = { actor: { type: "feishu_open_id" as const, id: "ou_same" }, matchers: [{ kind: "feishu_department" as const, id: "dept-b" }] };
+      expect((await directory.resolve({ ...input, connectionName: "app-a" }))?.feishu?.departments).toEqual(["dept-a"]);
+      expect((await directory.resolve({ ...input, connectionName: "app-b" }))?.feishu?.departments).toEqual(["dept-b"]);
+      expect(requestedAppIds).toEqual(["cli_a", "cli_b"]);
     } finally {
       directory.dispose();
     }

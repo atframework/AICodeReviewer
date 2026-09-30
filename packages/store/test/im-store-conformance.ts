@@ -5,6 +5,7 @@ import { expect } from "vitest";
 import type { StoreDb } from "../src/database.js";
 import {
   acceptImDelivery,
+  claimDueImReplyNotifications,
   claimDueImReviewRequests,
   consumeImAction,
   consumeImRateLimit,
@@ -13,6 +14,7 @@ import {
   deleteExpiredImRateLimits,
   findImReviewRequest,
   finishImReviewRequest,
+  finishImReplyNotification,
   getImAction,
   imReviewJobId,
   insertImAction,
@@ -82,11 +84,23 @@ function commandInput(delivery: AcceptImDeliveryInput, req: NewImReviewRequest, 
 
 export async function runImStoreConformance(store: StoreDb): Promise<void> {
   await acceptsAndDeduplicatesDeliveries(store);
+  await promotesRecordedDelivery(store);
   await mergesActiveTargetsAndReleasesOnFinish(store);
   await atomicActionConsumptionAndQuota(store);
   await claimsWithFencing(store);
   await dispatchSequencesAndSnapshotReferences(store);
   await retentionLifecycle(store);
+}
+
+async function promotesRecordedDelivery(store: StoreDb): Promise<void> {
+  const delivery = deliveryInput();
+  const recorded = await acceptImDelivery(store, delivery);
+  const req = request();
+  const promoted = await acceptImDelivery(store, commandInput(delivery, req));
+  expect(promoted).toMatchObject({ kind: "created", requestId: req.requestId });
+  expect((promoted as { inboxId: string }).inboxId).toBe((recorded as { inboxId: string }).inboxId);
+  expect(await findImReviewRequest(store, delivery.delivery.namespace, req.requestId)).toBeDefined();
+  expect(await acceptImDelivery(store, commandInput(delivery, request()))).toMatchObject({ kind: "duplicate", requestId: req.requestId });
 }
 
 async function acceptsAndDeduplicatesDeliveries(store: StoreDb): Promise<void> {
@@ -137,6 +151,7 @@ async function mergesActiveTargetsAndReleasesOnFinish(store: StoreDb): Promise<v
 
 async function atomicActionConsumptionAndQuota(store: StoreDb): Promise<void> {
   const actionId = `act-${randomUUID()}`;
+  const req = request();
   await insertImAction(store, {
     actionId,
     namespace: "ns-test",
@@ -150,7 +165,7 @@ async function atomicActionConsumptionAndQuota(store: StoreDb): Promise<void> {
     workspaceId: "ws-main",
     sourceTrigger: "github-main",
     repoRef: "org/service",
-    revision: uniqueHex(),
+    revision: req.requestedRevision,
     expiresAt: new Date(T0.getTime() + 24 * 3600_000),
     status: "issued",
     createdAt: T0,
@@ -158,18 +173,18 @@ async function atomicActionConsumptionAndQuota(store: StoreDb): Promise<void> {
   });
 
   // First click consumes + creates the request in one transaction (R04/A10).
-  const req = request();
   const consumed = await acceptImDelivery(store, commandInput(deliveryInput(), req, { consumeActionId: actionId }));
   expect(consumed).toMatchObject({ kind: "created", requestId: req.requestId });
   expect((await getImAction(store, actionId))?.status).toBe("consumed");
 
   // Replaying the same action returns the original request (A10).
-  const replay = await acceptImDelivery(store, commandInput(deliveryInput({ deliveryKey: `replay-${randomUUID()}` }), request(), { consumeActionId: actionId }));
+  const replay = await acceptImDelivery(store, commandInput(deliveryInput({ deliveryKey: `replay-${randomUUID()}` }), request({ requestedRevision: req.requestedRevision }), { consumeActionId: actionId }));
   expect(replay).toMatchObject({ kind: "duplicate", requestId: req.requestId });
 
   // A rate-limited command leaves no half-consumed rows (R04).
   const windowStart = new Date(Math.floor(T0.getTime() / 60_000) * 60_000);
   const actionId2 = `act-${randomUUID()}`;
+  const limitedRequest = request({ requestedRevision: uniqueHex() });
   await insertImAction(store, {
     actionId: actionId2,
     namespace: "ns-test",
@@ -183,19 +198,22 @@ async function atomicActionConsumptionAndQuota(store: StoreDb): Promise<void> {
     workspaceId: "ws-main",
     sourceTrigger: "github-main",
     repoRef: "org/service",
-    revision: uniqueHex(),
+    revision: limitedRequest.requestedRevision,
     expiresAt: new Date(T0.getTime() + 3600_000),
     status: "issued",
     createdAt: T0,
     updatedAt: T0,
   });
-  const limited = await acceptImDelivery(store, commandInput(deliveryInput(), request({ requestedRevision: uniqueHex() }), {
+  const limitedDelivery = deliveryInput();
+  const limited = await acceptImDelivery(store, commandInput(limitedDelivery, limitedRequest, {
     consumeActionId: actionId2,
     rateLimit: { bucketKey: "actor:alice", windowStart, limit: 0 },
   }));
   expect(limited).toMatchObject({ kind: "rate_limited" });
   expect((await getImAction(store, actionId2))?.status).toBe("issued");
   expect(await findImReviewRequest(store, "ns-test", (limited as { kind: string }).kind === "rate_limited" ? "missing" : "")).toBeUndefined();
+  expect(await acceptImDelivery(store, limitedDelivery)).toMatchObject({ kind: "created" });
+  expect(await consumeImRateLimit(store, { namespace: "ns-test", bucketKey: "actor:alice", windowStart })).toBe(1);
 
   // Standalone consumption on an expired action is rejected (A12).
   const expiredId = `act-${randomUUID()}`;
@@ -267,13 +285,23 @@ async function dispatchSequencesAndSnapshotReferences(store: StoreDb): Promise<v
     requestId: req.requestId,
     fence: claimed.fence,
     state: "partial",
-    notifications: [{ operationId: notificationId, destinationIdentity: "wecom-app:ww:1", operationKind: "final_status", payloadDigest: "sha256:x", nextAttemptAt: T0 }],
+    notifications: [{ operationId: notificationId, destinationIdentity: "wecom-app:ww:1", operationKind: "final_status", payloadDigest: "sha256:x", compactReceipt: "receipt-1", nextAttemptAt: T0 }],
     now: T0,
   });
   expect(finished).toBe(true);
   const terminal = await findImReviewRequest(store, "ns-test", req.requestId);
   expect(terminal?.state).toBe("partial");
   expect(await listImActiveConfigSnapshotIds(store, "ns-test")).not.toContain(terminal?.configSnapshotId ?? "");
+  const firstNotification = (await claimDueImReplyNotifications(store, { owner: "reply-1", limit: 10, now: T0 }))
+    .find(row => row.operationId === notificationId);
+  expect(firstNotification?.compactReceipt).toBe("receipt-1");
+  expect((await claimDueImReplyNotifications(store, { owner: "reply-2", limit: 10, now: new Date(T0.getTime() + 30_000) }))
+    .some(row => row.operationId === notificationId)).toBe(false);
+  const reclaimed = (await claimDueImReplyNotifications(store, { owner: "reply-2", limit: 10, now: new Date(T0.getTime() + 61_000) }))
+    .find(row => row.operationId === notificationId);
+  expect(reclaimed?.fence).toBeGreaterThan(firstNotification!.fence);
+  expect(await finishImReplyNotification(store, { operationId: notificationId, fence: firstNotification!.fence, state: "delivered", now: T0 })).toBe(false);
+  expect(await finishImReplyNotification(store, { operationId: notificationId, fence: reclaimed!.fence, state: "delivered", now: T0 })).toBe(true);
 
   // A terminal request never re-enters the claim scan (§5 terminal rule).
   expect((await claimDueImReviewRequests(store, { namespace: "ns-test", now: new Date(T0.getTime() + 120_000), leaseMs: 60_000, owner: "w3", limit: 100 }))

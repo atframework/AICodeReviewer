@@ -94,12 +94,10 @@ export function verifyWecomAibotCallback(input: {
     if (payload === null || typeof payload !== "object" || Array.isArray(payload)) {
       return { kind: "rejected", code: "bad_payload" };
     }
-    // The aibot_id check is deferred: the event-callback protocol does not
-    // require it and the two robots (long-connection vs event-callback) have
-    // different ids. Re-enable with per-connection scoping after IM-15.
     const payloadAibotId = typeof payload.aibotid === "string" ? payload.aibotid : undefined;
-    void payloadAibotId;
-    void input.credentials.aibotId;
+    if (payloadAibotId !== undefined && input.credentials.aibotId !== "" && payloadAibotId !== input.credentials.aibotId) {
+      return { kind: "rejected", code: "bad_bot" };
+    }
     return { kind: "verified", event: buildEvent(payload, input.connection, plaintext) };
   } catch (error) {
     if ((error as WecomCryptoError).name === "WecomCryptoError") return { kind: "rejected", code: (error as WecomCryptoError).code };

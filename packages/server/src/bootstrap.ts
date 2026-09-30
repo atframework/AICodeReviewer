@@ -3,10 +3,12 @@ import { resolve } from "node:path";
 import {
   fixAndValidateMarkdown,
   hashStructured,
+  imConnectionIdentityKey,
   isPlainObject,
   createMultiProviderRateLimiter,
   createQueueFromConfig,
   ExecutionConcurrency,
+  createReviewEvent,
   resolveHistoryRetention,
   loadSystemPromptTemplate,
   markdownDocumentBody,
@@ -98,6 +100,7 @@ import {
   writeReflectionMemory,
   compactReflectionMemory,
   softDeleteMissingProjects,
+  listImActiveConfigSnapshotIds,
   type StoreDb,
 } from "@aicr/store";
 import {
@@ -162,6 +165,7 @@ import type {
   ReviewOutputPublisherResolver,
   ReviewSummaryPublishOptions,
 } from "./review-orchestrator.js";
+import { runReviewOrchestration } from "./review-orchestrator.js";
 import {
   RuntimeConfigManager,
   type RuntimeConfigGeneration,
@@ -174,6 +178,7 @@ import { IM_HELP_TEXT, invalidImCommandReply, parseImCommand, processImCommand, 
 import { ImAuthorizationDirectory } from "./im/authorization-directory.js";
 import { ImQueryService } from "./im/query-service.js";
 import { ImReplyService } from "./im/reply-service.js";
+import { classifyImReviewResult, ManualReviewService } from "./im/manual-review-service.js";
 import { MemberDirectoryService, type MemberDirectoryView } from "./im/member-directory-service.js";
 import {
   createRedisConfigStore,
@@ -3987,7 +3992,8 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
     sweepRunning = runtimeConfig.withoutGeneration(async () => {
       await runtimeConfig.admission();
       await runtimeConfig.heartbeat();
-      await runtimeConfig.sweepSnapshots([autoCommitPipeline.store, deferralManager, ...(runtimeQueue ? [runtimeQueue] : [])]);
+      await runtimeConfig.sweepSnapshots([autoCommitPipeline.store, deferralManager, ...(runtimeQueue ? [runtimeQueue] : []),
+        ...(store ? [{ listActiveConfigSnapshotIds: () => listImActiveConfigSnapshotIds(store, configSources.database.namespace) }] : [])]);
     }).catch((error: unknown) => console.warn(JSON.stringify({ level: "warn", msg: "config snapshot collection deferred", error: admissionUnavailableReason(error) })))
       .finally(() => { sweepRunning = undefined; });
   }, 60_000) : undefined;
@@ -4069,6 +4075,8 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
   const concurrencyTimer = setInterval(() => executionConcurrency.refresh(), 1000);
   concurrencyTimer.unref();
 
+  let imReviewTimer: ReturnType<typeof setInterval> | undefined;
+  let imReviewRunning: Promise<void> | undefined;
   let draining: Promise<void> | undefined;
   const beginDrain = (): Promise<void> => {
     if (draining) return draining;
@@ -4077,7 +4085,8 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
     if (sweepTimer) clearInterval(sweepTimer);
     clearInterval(concurrencyTimer);
     clearInterval(queuedTimeoutTimer);
-    draining = Promise.all([sweepRunning, historyMaintenance.stop(), worker?.stop(), autoCommitPipeline.scheduler.stopAndDrain()]).then(() => {});
+    if (imReviewTimer) clearInterval(imReviewTimer);
+    draining = Promise.all([sweepRunning, imReviewRunning, historyMaintenance.stop(), worker?.stop(), autoCommitPipeline.scheduler.stopAndDrain()]).then(() => {});
     return draining;
   };
 
@@ -4096,6 +4105,47 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
   if (store !== undefined) {
     imReplyService = new ImReplyService({ store, getConfig: currentConfig, env: (name: string) => resolveEnv(name) });
     imReplyService.start();
+    const imReviewService = new ManualReviewService({
+      store,
+      namespace: configSources.database.namespace,
+      getConfig: async (snapshotId) => (await runtimeConfig.resolveGeneration(snapshotId === "file-only" ? null : snapshotId)).config,
+      createAdapter: async (pinnedConfig, request) => {
+        if (!pinnedConfig.triggers.some(trigger => trigger.name === request.sourceTrigger) ||
+          pinnedConfig.workspaces.instances[request.workspaceId] === undefined) return undefined;
+        const generation = await runtimeConfig.resolveGeneration(request.configSnapshotId === "file-only" ? null : request.configSnapshotId);
+        const event = createReviewEvent({ provider: "manual", workspaceId: request.workspaceId,
+          triggerName: request.sourceTrigger, targetKind: "commit", repoRef: request.repoRef,
+          headSha: request.requestedRevision, author: {}, reason: "im:command" });
+        const sourceRoot = generation.workspaceRuntime.layoutForEvent(event).sourceRoot;
+        const appTokens = await appTokenServicesFor(generation);
+        const token = await resolveGithubAppInstallationToken(pinnedConfig, appTokens, request.sourceTrigger, request.repoRef);
+        return createVcsAdapterFromConfig(pinnedConfig, sourceRoot, request.sourceTrigger, request.repoRef,
+          token !== undefined ? { resolvedToken: token } : undefined);
+      },
+      enqueueReview: (_jobId, run, workspaceId) => executionConcurrency.run(workspaceId, run),
+      executeReview: async (event, _pinnedConfig, request, signal) => {
+        try {
+          const result = await runReviewOrchestration({
+            reviewEvent: event, payload: {}, provider: "manual", eventName: "im.command.review",
+            runId: request.runId, runSource: "im_command", signal,
+            configSnapshotId: request.configSnapshotId === "file-only" ? null : request.configSnapshotId,
+          }, orchestrationOptions);
+          return classifyImReviewResult(result);
+        } catch (error) {
+          console.warn(JSON.stringify({ msg: "im_review_orchestration_failed", requestId: request.requestId, error: String(error) }));
+          return { state: "publication_unknown" as const, errorCode: "im.review_failed_unknown" };
+        }
+      },
+    });
+    const scanImReviews = () => {
+      if (imReviewRunning) return;
+      imReviewRunning = imReviewService.scan().then(() => {}).catch(error => {
+        console.warn(JSON.stringify({ msg: "im_review_scan_failed", error: String(error) }));
+      }).finally(() => { imReviewRunning = undefined; });
+    };
+    imReviewTimer = setInterval(scanImReviews, 10_000);
+    imReviewTimer.unref();
+    scanImReviews();
     // Single-process executions cannot survive a restart: sweep in-flight rows.
     void import("@aicr/store").then(({ failActiveReviewRuns }) =>
       failActiveReviewRuns(store!, "interrupted by restart").then((swept) => {
@@ -4216,6 +4266,10 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
           store,
           namespace: configSources.database.namespace,
           getConfig: currentConfig,
+          getConfigGeneration: () => {
+            const generation = runtimeConfig.current();
+            return { config: generation.config, snapshotId: generation.snapshotId, fileDigest: generation.fileDigest ?? "unknown" };
+          },
           env: (name: string) => resolveEnv(name),
           directory: imAuthorizationDirectory,
           query: imQueryService,
@@ -4243,21 +4297,22 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
                 await message.reply(IM_HELP_TEXT);
                 return;
               }
-              const config = currentConfig();
+              const generation = runtimeConfig.current();
+              const config = generation.config;
               const result = await processImCommand({
                 store,
                 config,
                 namespace: configSources.database.namespace,
                 connectionName: message.connectionName,
-                connectionIdentity: `${message.platform === "feishu_app" ? "feishu" : "wecom"}-lc:${message.connectionName}`,
-                deliveryKey: `lc-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-                payloadDigest: `lc:${message.text}`,
+                connectionIdentity: imConnectionIdentityKey(message.connectionIdentity),
+                deliveryKey: message.deliveryKey,
+                payloadDigest: message.payloadDigest,
                 actor: message.actor,
                 conversation: message.conversation,
                 command: parse.command,
                 now: new Date(),
-                configSnapshotId: "file-only",
-                configFileDigest: "unknown",
+                configSnapshotId: generation.snapshotId ?? "file-only",
+                configFileDigest: generation.fileDigest ?? "unknown",
                 ...(imAuthorizationDirectory !== undefined ? { directory: imAuthorizationDirectory } : {}),
                 query: imQueryService,
               });
@@ -4265,6 +4320,8 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
             },
           });
           await service.reconcile();
+          imReplyService?.setLongConnectionSender((name, chatId, text, isGroup) =>
+            service.sendWecomProactive(name, chatId, text, isGroup));
           service.startPeriodicReconcile();
           return service;
         },

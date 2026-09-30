@@ -431,7 +431,7 @@ outputs:
 ```yaml
 im:
   connections:
-    # 企业微信智能机器人 —— 事件回调模式
+    # 企业微信 AI 机器人 —— 事件回调模式
     wecom-airobot:
       kind: wecom_aibot
       corp_id: ww_example
@@ -440,7 +440,7 @@ im:
         token_env: AICR_WECOM_AIBOT_TOKEN            # 回调 Token
         encoding_aes_key_env: AICR_WECOM_AIBOT_AES    # 回调 EncodingAESKey
 
-    # 企业微信智能机器人 —— 长连接模式（无需公网回调 URL）
+    # 企业微信 AI 机器人 —— 长连接模式（无需公网回调 URL）
     wecom-airobot-lc:
       kind: wecom_aibot
       corp_id: ww_example
@@ -477,7 +477,8 @@ im:
   被动回复协议在回调响应体里回**加密的流式消息**（`msgtype: "stream"`、
   `finish: true`；直接回 markdown 会被平台忽略）；企业微信长连接通过
   `aibot_respond_msg` 回复；飞书通过消息 API 回复。
-- 查询命令（只读，同样走绑定授权，仓库别名仅接受绑定注册的映射）：
+- 查询命令（只读，同样走绑定授权；列表只显示当前授权绑定中的仓库，
+  除非该绑定启用 `allow_all_repositories`）：
   `aicr projects`（项目列表）、`aicr reviews [别名]`（近期评审）、
   `aicr commits <别名> [分支]` / `aicr prs <别名> [分支]`（近期会触发评审的
   提交/PR-MR）、`aicr detail <别名> <修订>` / `aicr prdetail <别名> <PR号>`
@@ -491,17 +492,25 @@ im:
   角色/用户组语义）、职位、自定义字段、飞书群成员/部门/职务，以及
   `any`（任意已认证操作人）。每个匹配器可加 `expires_at` 实现临时授权，
   到期自动失效。范围匹配依赖服务端目录快照（企业微信需要一个启用的
-  `wecom_app` 连接提供通讯录，智能机器人的加密 userid 自动转换），
+  `wecom_app` 连接提供通讯录，AI 机器人的加密 userid 自动转换），
   目录不可用时该维度不授权（fail-closed），精确 principal 不受影响。
   绑定可开启 `allow_all_repositories`：仓库别名除绑定注册表外，还能按
   workspace id 或仓库全名匹配已接入的项目（`aicr projects` 列出的条目），
   免去逐仓库注册。
   被拒绝的命令会把操作人与会话标识回显给发送者（仅该会话内可见）——
   群白名单引导由此闭环：在群里 @机器人发一次命令，从拒绝回复中取群 id
-  加入绑定的 `conversations` 即可（企业微信智能机器人的群没有查询 API）。
+  加入绑定的 `conversations` 即可（企业微信 AI 机器人的群没有查询 API）。
+
+`aicr review` 持久化请求及配置快照后，服务端工作器校验固定修订，并在共享的
+workspace 并发限制下执行评审。Git 需要配置仓库中可达的完整提交哈希；SVN 和
+P4 需要正整数修订号。`aicr status` 仅向原操作人、原连接和原会话返回请求状态，
+且状态命令绑定仍须允许该仓库。执行开始后中断的评审标记为
+`publication_unknown`，服务端不会自动再次发布。终态通知发回请求会话；
+企业微信长连接模式复用已订阅的连接，并等待平台发送回执。
+所有发布操作均失败或缺少发布通道时，请求记为失败；部分发布成功时记为部分成功。
 
 长连接模式由服务端在 `aicr serve` 启动时按连接表主动建立连接（断线自动
-重连），不依赖回调 URL，也不需要 `callback` 配置：企业微信智能机器人用
+重连），不依赖回调 URL，也不需要 `callback` 配置：企业微信 AI 机器人用
 官方 WebSocket 协议（`aibot_id`+`secret`），飞书用官方 SDK 长连接
 （`app_id`+`app_secret`）。两种企业微信模式各自对应一个独立的机器人实体
 （各自有自己的 bot_id/凭据），可以并存；飞书的回调与长连接在平台侧互斥，
@@ -531,7 +540,7 @@ IM channel 类型共享[输出通道配置](/zh-cn/configuration/outputs/)中记
 在抽屉中输入的明文凭据会在持久化边界密封，之后不再回显；
 删除或改名仍被绑定或频道引用的连接时，发布边界会原子地拒绝。
 
-这两个页面管理**草稿配置**：报告发送与三种接收模式（企业微信智能机器人
+这两个页面管理**草稿配置**：报告发送与三种接收模式（企业微信 AI 机器人
 事件回调/长连接、飞书应用事件回调）已生效，`aicr help` 即时应答；评审
 命令（review/status）需启用命令绑定后才会执行，绑定默认停用。`im.*`
 字段合同见[配置字段参考](/zh-cn/reference/config-fields/)。

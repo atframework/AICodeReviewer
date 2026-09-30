@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 import WebSocket from "ws";
 
@@ -21,6 +21,7 @@ const RECONNECT_BASE_DELAY_MS = 1_000;
 const RECONNECT_MAX_DELAY_MS = 60_000;
 const MARKDOWN_MAX_BYTES = 20_480;
 const MAX_MISSED_PING = 3;
+const SEND_ACK_TIMEOUT_MS = 15_000;
 
 /** Subscribe/ping acks carry no `cmd`; correlate them by req_id prefix. */
 const SUBSCRIBE_PREFIX = "aibot_subscribe";
@@ -44,6 +45,7 @@ export class WecomAibotLongConnection {
   private missedPing = 0;
   private disposed = false;
   private readonly options: WecomLongConnectionOptions;
+  private readonly pendingSends = new Map<string, { readonly resolve: () => void; readonly reject: (error: Error) => void; readonly timer: ReturnType<typeof setTimeout> }>();
 
   constructor(options: WecomLongConnectionOptions) {
     this.options = options;
@@ -76,6 +78,7 @@ export class WecomAibotLongConnection {
 
       ws.on("close", () => {
         this.stopHeartbeat();
+        this.rejectPendingSends(new Error("WeCom long connection closed before send acknowledgement"));
         if (!this.disposed) {
           this.options.onStatusChange?.("disconnected");
           this.scheduleReconnect();
@@ -108,7 +111,7 @@ export class WecomAibotLongConnection {
     const reqId = typeof (message.headers as Record<string, unknown> | undefined)?.req_id === "string"
       ? String((message.headers as Record<string, unknown>).req_id)
       : "";
-    const errcode = Number(message.errcode ?? 0);
+    const errcode = Number(message.errcode);
 
     // Frames without cmd: acks correlated by req_id prefix (SDK contract).
     if (cmd === "" && reqId.startsWith(SUBSCRIBE_PREFIX)) {
@@ -128,6 +131,14 @@ export class WecomAibotLongConnection {
       if (errcode === 0) this.missedPing = 0;
       return;
     }
+    if (cmd === "" && this.pendingSends.has(reqId)) {
+      const pending = this.pendingSends.get(reqId)!;
+      this.pendingSends.delete(reqId);
+      clearTimeout(pending.timer);
+      if (errcode === 0) pending.resolve();
+      else pending.reject(new Error(`WeCom send rejected: ${errcode}`));
+      return;
+    }
     if (cmd === "" ) return;
 
     const body = message.body as Record<string, unknown> | undefined;
@@ -135,6 +146,7 @@ export class WecomAibotLongConnection {
     const callbackReqId = reqId !== "" ? reqId : this.newReqId("callback");
 
     if (cmd === "aibot_msg_callback") {
+      if (body.aibotid !== this.options.botId) return;
       const event = this.buildVerifiedEvent(body);
       void this.options.onMessage(event, async (text: string) => {
         await this.respondMessage(callbackReqId, text);
@@ -154,7 +166,8 @@ export class WecomAibotLongConnection {
   }
 
   private buildVerifiedEvent(body: Record<string, unknown>): ReturnType<typeof brandVerifiedImEvent> {
-    const msgid = typeof body.msgid === "string" ? body.msgid : randomUUID();
+    const bodyDigest = createHash("sha256").update(JSON.stringify(body)).digest("hex");
+    const msgid = typeof body.msgid === "string" ? body.msgid : `body:${bodyDigest}`;
     const chatid = typeof body.chatid === "string" ? body.chatid : undefined;
     const chatType = typeof body.chattype === "string" ? body.chattype : "single";
     const from = body.from as Record<string, unknown> | undefined;
@@ -181,7 +194,7 @@ export class WecomAibotLongConnection {
       protocol: "wecom_aibot",
       deliveryKind: "message",
       deliveryKey: msgid,
-      payloadDigest: `ws:${msgid}`,
+      payloadDigest: `ws:${bodyDigest}`,
       actor: senderId !== undefined ? { type: senderType, id: senderId } : undefined,
       conversation: chatid !== undefined && chatType === "group"
         ? { kind: "group", id: chatid }
@@ -209,16 +222,36 @@ export class WecomAibotLongConnection {
 
   /** Proactive push to a specific conversation (no prior callback required). */
   async sendProactive(chatId: string, text: string, isGroup: boolean): Promise<void> {
-    this.send({
-      cmd: "aibot_send_msg",
-      headers: { req_id: this.newReqId("send") },
-      body: {
-        chatid: chatId,
-        chat_type: isGroup ? 2 : 1,
-        msgtype: "markdown",
-        markdown: { content: text.slice(0, MARKDOWN_MAX_BYTES) },
-      },
+    void isGroup;
+    if (this.ws?.readyState !== WebSocket.OPEN) throw new Error("WeCom long connection is not connected");
+    const reqId = this.newReqId("send");
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pendingSends.delete(reqId);
+        reject(new Error("WeCom send acknowledgement timed out"));
+      }, SEND_ACK_TIMEOUT_MS);
+      timer.unref();
+      this.pendingSends.set(reqId, { resolve, reject, timer });
+      try {
+        if (!this.send({
+          cmd: "aibot_send_msg",
+          headers: { req_id: reqId },
+          body: { chatid: chatId, msgtype: "markdown", markdown: { content: text.slice(0, MARKDOWN_MAX_BYTES) } },
+        })) throw new Error("WeCom long connection is not connected");
+      } catch (error) {
+        this.pendingSends.delete(reqId);
+        clearTimeout(timer);
+        reject(error instanceof Error ? error : new Error(String(error)));
+      }
     });
+  }
+
+  private rejectPendingSends(error: Error): void {
+    for (const pending of this.pendingSends.values()) {
+      clearTimeout(pending.timer);
+      pending.reject(error);
+    }
+    this.pendingSends.clear();
   }
 
   private startHeartbeat(): void {
@@ -256,14 +289,17 @@ export class WecomAibotLongConnection {
     this.reconnectDelay = Math.min(this.reconnectDelay * 2, RECONNECT_MAX_DELAY_MS);
   }
 
-  private send(payload: Record<string, unknown>): void {
+  private send(payload: Record<string, unknown>): boolean {
     if (this.ws?.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify(payload));
+      return true;
     }
+    return false;
   }
 
   dispose(): void {
     this.disposed = true;
+    this.rejectPendingSends(new Error("WeCom long connection disposed"));
     this.stopHeartbeat();
     if (this.reconnectTimer !== undefined) clearTimeout(this.reconnectTimer);
     this.ws?.close();

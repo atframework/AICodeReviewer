@@ -99,24 +99,20 @@ checkbox 仅在实现接线、断言和适用门禁均通过后勾选；implemen
   im-command-service.test.ts（10 例真实 SQLite store）。
 - [ ] IM-12：HTTP callback 路由、时限与持久确认。
 - [ ] IM-13：Git/P4/SVN 固定修订、范围与可信元数据。
-- [x] IM-14：请求 worker、队列交接、checkpoint 和重启恢复。
-  新增 server im/manual-review-service.ts（ManualReviewService.scan→claim→validate→
-  dispatch→execute→finish 状态机、fence 纪律、终态守卫、dispatchSeq 原子递增）；
-  R10–R16 份额覆盖于 im-review-runtime.test.ts（5 例真实 store）。
-  三任务（IM-11/13/14）连同 IM-12 已部署公网正式环境 2026-09-28 第二次部署。
-- [x] IM-15：卡片动作发行、来源绑定和原子消费。
-  新增 server im/action-service.ts（issueCardAction 发行 24h 有效 opaque id，绑定可信 target；
-  consumeCardAction 经 store consumeImActionForRequest 原子 CAS issued→consumed(requestId)，
-  重放返回原请求号、过期答 expired、未知答 not_found）；飞书 card.action.trigger 回调接入消费路径；
-  测试 im-actions.test.ts（A09/A10/A12）。**边界**：输出渠道卡片模板嵌入 action id 的发行侧
-  集成属 outputs 渲染面，服务端消费链路已完整（后续由输出卡片模板接入）。
+- [ ] IM-14：补齐持久队列交接、执行 checkpoint 与发布恢复。
+  当前 `aicr serve` 已启动请求工作器，使用持久请求表、共享并发和租约续期；
+  执行中断后保守标记 `publication_unknown`，不会自动重发。验收：队列唤醒可跨重启，
+  发布阶段按持久操作身份恢复，重复执行不产生第二次远端写入。
+- [ ] IM-15：把卡片动作发行接入输出卡片并绑定平台消息身份。
+  服务端已有 opaque id 存储、飞书回调解析和同事务消费；输出渠道尚未发行按钮动作。
+  验收：发送卡片时保存动作与平台消息关联，转发、撤权、过期和重放均按来源校验。
 - [x] IM-16：回复 outbox、临时凭证和结果状态。
   新增 server im/reply-service.ts（outbox worker：周期认领→按平台发送→指数退避，attempts≥5 终态 failed，
   通知失败绝不重跑评审）+ store claimDueImReplyNotifications/finishImReplyNotification（lease+fence 原子认领，
   到期就地标 expired 不发送）；manual-review-service 终态与通知同事务入 outbox（compactReceipt 携带
   平台会话与结果摘要）；飞书按会话 receive_id 走消息 API、企微智能机器人经 aibot_send_msg 主动推送；
   测试 im-replies.test.ts（O09 原子入箱/fence 防双发、O10/O11/R17/R18 退避与评审终态不受通知影响）。
-  PostgreSQL 认领分支待补（生产为 SQLite 已可用）。
+  PostgreSQL 认领分支已实现；真实平台送达仍按 IM-21 验收。
 - [x] IM-17：配置切换、撤权、轮换、排空和 GC。
   长连接服务周期 reconcile（30s，跳过在途扫描）——配置增删/禁用免重启生效；授权目录与回复
   worker 每次解析读 live config（凭据轮换即换 client）；im.connections.enabled 行的 pending

@@ -7,6 +7,8 @@
 # exclusive on the platform side — configure the connection to match the
 # event-receive method chosen in the developer console.
 # See the bilingual IM bots guide for command authorization.
+# Review commands require a full reachable Git commit hash (or a positive
+# SVN/P4 revision). Status is visible only to the original actor and chat.
 im:
   connections:
     # WeCom smart robot — event-callback mode.

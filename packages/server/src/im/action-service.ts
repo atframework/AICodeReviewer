@@ -1,8 +1,10 @@
 import { randomUUID } from "node:crypto";
 
-import type { AppConfig, ImConversation, ImPrincipal } from "@aicr/core";
+import type { AppConfig, ImBindingActor, ImConversation, ImPrincipal } from "@aicr/core";
 import type { StoreDb } from "@aicr/store";
-import { acceptImDelivery, consumeImActionForRequest, getImAction, insertImAction } from "@aicr/store";
+import { acceptImDelivery, getImAction, insertImAction } from "@aicr/store";
+
+import { authorizeImCommand, type ImCommandDirectoryLike } from "./command-service.js";
 
 /**
  * Card actions (IM-15, A09–A13): outbound cards carry an opaque action id
@@ -69,55 +71,85 @@ export type CardActionResult =
  */
 export async function consumeCardAction(store: StoreDb, input: {
   readonly actionId: string;
+  readonly namespace: string;
+  readonly connectionName: string;
+  readonly connectionIdentity: string;
+  readonly sourceMessageId?: string | undefined;
   readonly config: AppConfig;
   readonly actor: ImPrincipal;
   readonly conversation: ImConversation;
+  readonly directory?: ImCommandDirectoryLike | undefined;
   readonly now?: Date;
 }): Promise<CardActionResult> {
   const now = input.now ?? new Date();
   const action = await getImAction(store, input.actionId);
   if (action === undefined) return { kind: "not_found" };
+  if (action.namespace !== input.namespace || action.connectionIdentity !== input.connectionIdentity) return { kind: "rejected", reason: "source_mismatch" };
+  if (action.sourceMessageId !== null && action.sourceMessageId !== input.sourceMessageId) return { kind: "rejected", reason: "source_mismatch" };
+  if (action.sourceTaskId !== null) return { kind: "rejected", reason: "source_mismatch" };
+  if (action.recipientId !== null && action.recipientId !== input.actor.id) return { kind: "rejected", reason: "recipient_mismatch" };
+  try {
+    const savedConversation = JSON.parse(action.conversationJson ?? "null") as ImConversation | null;
+    if (savedConversation === null || JSON.stringify(savedConversation) !== JSON.stringify(input.conversation)) {
+      return { kind: "rejected", reason: "conversation_mismatch" };
+    }
+  } catch {
+    return { kind: "rejected", reason: "conversation_mismatch" };
+  }
+  const binding = input.config.im?.command_bindings?.[action.bindingId];
+  if (binding === undefined || binding.enabled !== true || binding.connection !== input.connectionName || !binding.commands.includes("review")) {
+    return { kind: "rejected", reason: "binding_revoked" };
+  }
+  const alias = Object.entries(binding.repositories ?? {}).find(([, target]) =>
+    target.workspace === action.workspaceId && target.source_trigger === action.sourceTrigger && target.repo_ref === action.repoRef)?.[0];
+  if (alias === undefined) return { kind: "rejected", reason: "repository_revoked" };
+  const matchers = binding.actors.filter((actor): actor is ImBindingActor => "kind" in actor && actor.kind !== "any");
+  const scopes = matchers.length > 0 ? await input.directory?.resolve({ connectionName: input.connectionName, actor: input.actor, matchers }) : undefined;
+  const authorization = authorizeImCommand({
+    config: { ...input.config, im: { ...input.config.im, command_bindings: { [action.bindingId]: binding } } },
+    connectionName: input.connectionName,
+    actor: input.actor,
+    conversation: input.conversation,
+    command: { kind: "review", repoAlias: alias, revision: action.revision },
+    actorScopes: scopes,
+    now,
+  });
+  if (authorization.kind !== "authorized") return { kind: "rejected", reason: "unauthorized" };
   if (action.status === "consumed" && action.consumedRequestId !== null) {
     return { kind: "duplicate", requestId: action.consumedRequestId };
   }
+  if (action.expiresAt.getTime() <= now.getTime()) return { kind: "expired" };
   const requestId = `imr-${randomUUID()}`;
   const runId = `imrun-${randomUUID()}`;
-  // Atomic consume-for-request: exactly one transition issues the request.
-  const consumed = await consumeImActionForRequest(store, { actionId: input.actionId, requestId, now });
-  if (consumed.kind === "expired") return { kind: "expired" };
-  if (consumed.kind === "not_found") return { kind: "not_found" };
-  if (consumed.kind === "duplicate") return { kind: "duplicate", requestId: consumed.requestId || requestId };
-  const action2 = (await getImAction(store, input.actionId))!;
-  if (action2.consumedRequestId !== requestId) {
-    return { kind: "duplicate", requestId: action2.consumedRequestId ?? requestId };
-  }
+  // The request and action transition share acceptImDelivery's transaction.
   const outcome = await acceptImDelivery(store, {
     delivery: {
-      namespace: action2.namespace,
-      connectionIdentity: action2.connectionIdentity,
+      namespace: action.namespace,
+      connectionIdentity: action.connectionIdentity,
       deliveryKind: "card_action",
       deliveryKey: `action:${input.actionId}`,
-      payloadDigest: `action:${action2.repoRef}:${action2.revision}`,
+      payloadDigest: `action:${action.repoRef}:${action.revision}`,
     },
     command: {
       request: {
         requestId,
         runId,
-        bindingId: action2.bindingId,
+        bindingId: action.bindingId,
         requestedBy: input.actor,
         conversation: JSON.stringify(input.conversation),
-        workspaceId: action2.workspaceId,
-        sourceTrigger: action2.sourceTrigger,
-        repoRef: action2.repoRef,
-        requestedRevision: action2.revision,
+        workspaceId: action.workspaceId,
+        sourceTrigger: action.sourceTrigger,
+        repoRef: action.repoRef,
+        requestedRevision: action.revision,
         configSnapshotId: "card-action",
-        configFileDigest: action2.issuedConfigVersion,
-        configVersionJson: action2.issuedConfigVersion,
+        configFileDigest: action.issuedConfigVersion,
+        configVersionJson: JSON.stringify({ issuedConfigVersion: action.issuedConfigVersion, connectionName: input.connectionName }),
       },
       activeTarget: {
-        workspaceInstance: action2.workspaceId,
-        sourceIdentity: `trigger:${action2.sourceTrigger}:${action2.repoRef}`,
+        workspaceInstance: action.workspaceId,
+        sourceIdentity: `trigger:${action.sourceTrigger}:${action.repoRef}`,
       },
+      consumeActionId: action.actionId,
       rateLimit: {
         bucketKey: `actor:${input.actor.type}:${input.actor.id}`,
         windowStart: new Date(Math.floor(now.getTime() / 60_000) * 60_000),
@@ -126,9 +158,9 @@ export async function consumeCardAction(store: StoreDb, input: {
     },
     now,
   });
-  void input.config;
   if (outcome.kind === "created") return { kind: "accepted", requestId };
   if (outcome.kind === "active_merged") return { kind: "duplicate", requestId: outcome.requestId };
   if (outcome.kind === "duplicate") return { kind: "duplicate", requestId: outcome.requestId ?? requestId };
+  if (outcome.kind === "action_rejected") return outcome.reason === "expired" ? { kind: "expired" } : { kind: "rejected", reason: outcome.reason };
   return { kind: "rejected", reason: outcome.kind };
 }
