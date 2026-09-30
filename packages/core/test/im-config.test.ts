@@ -210,6 +210,56 @@ describe("C03: credential, identity and wiring mistakes fail at exact paths", ()
     } }).success).toBe(true);
   });
 
+  it("accepts scope matchers on matching platforms and rejects cross-platform kinds", () => {
+    const scopeBinding = {
+      enabled: true,
+      connection: "corp-bot",
+      conversations: [{ kind: "bot_direct" }],
+      actors: [
+        { kind: "wecom_department", id: "2" },
+        { kind: "wecom_tag", id: "3", expires_at: "2026-10-06T00:00:00+08:00" },
+        { kind: "wecom_extattr", name: "级别", value: "G5" },
+        { kind: "any", expires_at: "2026-10-06T00:00:00Z" },
+      ],
+      commands: ["chat-id"],
+    };
+    expect(imConfigSchema.safeParse({ connections, command_bindings: { scoped: scopeBinding } }).success).toBe(true);
+    // Feishu matcher kinds cannot resolve against WeCom connections.
+    expect(imConfigSchema.safeParse({ connections, command_bindings: {
+      scoped: { ...scopeBinding, actors: [{ kind: "feishu_chat", chat_id: "oc_x" }] },
+    } }).success).toBe(false);
+    // Malformed expiry timestamps are rejected.
+    expect(imConfigSchema.safeParse({ connections, command_bindings: {
+      scoped: { ...scopeBinding, actors: [{ kind: "any", expires_at: "tomorrow" }] },
+    } }).success).toBe(false);
+  });
+
+  it("treats `any` as overlapping every matcher on the same connection", () => {
+    expect(imConfigSchema.safeParse({ connections, command_bindings: {
+      open: {
+        enabled: true, connection: "corp-bot", conversations: [{ kind: "bot_direct" }],
+        actors: [{ kind: "any" }], commands: ["chat-id"],
+      },
+      dept: {
+        enabled: true, connection: "corp-bot", conversations: [{ kind: "group", id: "wr_ch" }],
+        actors: [{ kind: "wecom_department", id: "2" }], commands: ["review"],
+        repositories: { service: binding.repositories.service },
+      },
+    } }).success).toBe(true);
+    expect(imConfigSchema.safeParse({ connections, command_bindings: {
+      open: {
+        enabled: true, connection: "corp-bot", conversations: [{ kind: "group", id: "wr_ch" }],
+        actors: [{ kind: "any" }], commands: ["review"],
+        repositories: { service: binding.repositories.service },
+      },
+      dept: {
+        enabled: true, connection: "corp-bot", conversations: [{ kind: "group", id: "wr_ch" }],
+        actors: [{ kind: "wecom_department", id: "2" }], commands: ["review"],
+        repositories: { service: binding.repositories.service },
+      },
+    } }).success).toBe(false);
+  });
+
   it("guards channel-level reference and target rules", () => {
     expect(outputChannelSchema.safeParse(wecomAppChannel).success).toBe(true);
     expect(outputChannelSchema.safeParse({ ...wecomAppChannel, target: undefined }).success).toBe(false);

@@ -52,16 +52,48 @@ im:
 
     # Command authorization is separate: without an enabled command binding,
     # `aicr help` still answers but review/status commands never run.
+    # Actors match either exact principals ({type,id}) or scope matchers —
+    # departments/tags/positions/custom fields on WeCom (needs an enabled
+    # wecom_app connection for the directory), chat membership/departments/
+    # job titles on Feishu — plus `any`. Every matcher accepts expires_at
+    # for time-boxed temporary authorization.
     # command_bindings:
-    #   default:
+    #   wecom-reviewers:
     #     enabled: false
-    #     connection: wecom-airobot
+    #     connection: wecom-airobot-lc
     #     actors:
-    #       - type: wecom_userid
+    #       - type: wecom_userid            # exact principal
     #         id: owent
+    #       - kind: wecom_department        # org scope (recursive by default)
+    #         id: "2"
+    #       - kind: wecom_tag               # role / user-group carrier
+    #         id: "3"
+    #       - kind: wecom_extattr           # custom field
+    #         name: "级别"
+    #         value: "G5"
+    #       - kind: any                     # temporary open access
+    #         expires_at: "2026-10-06T00:00:00+08:00"
     #     conversations:
     #       - kind: group
-    #     commands: [help, chat-id, review, status]
+    #     commands: [chat-id, review, status, projects, reviews, commits, prs, detail, prdetail, queue, running]
+    #     allow_all_repositories: true   # aliases may match any integrated project
+    #     repositories:
+    #       service:
+    #         workspace: default
+    #         source_trigger: github-main
+    #         repo_ref: github.com/org/service
+    #   feishu-reviewers:
+    #     enabled: false
+    #     connection: feishu-app-lc
+    #     actors:
+    #       - kind: feishu_chat             # anyone in this group
+    #         chat_id: oc_replace_me
+    #       - kind: feishu_job_title
+    #         value: "后端工程师"
+    #     conversations:
+    #       - kind: group
+    #     commands: [chat-id, review, status, projects, reviews, commits, prs, detail, prdetail, queue, running]
+    #     allow_all_repositories: true   # aliases may match any integrated project
     #     repositories:
     #       service:
     #         workspace: default

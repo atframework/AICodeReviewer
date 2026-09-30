@@ -18,6 +18,22 @@ export interface InlineReplyResult {
 }
 
 /**
+ * Builds the encrypted passive stream reply carrying one final text — the
+ * shared body for help answers and command-outcome answers alike.
+ */
+export function buildWecomStreamTextReply(text: string, credentials: { readonly token: string; readonly encodingAesKey: string }, timestamp: string, nonce: string): { readonly encrypt: string; readonly msgsignature: string; readonly timestamp: string; readonly nonce: string } {
+  return buildWecomAibotEncryptedReply({
+    credentials: { aibotId: "", token: credentials.token, encodingAesKey: credentials.encodingAesKey },
+    plaintext: JSON.stringify({
+      msgtype: "stream",
+      stream: { id: `aicr-${randomUUID()}`, finish: true, content: text },
+    }),
+    timestamp,
+    nonce,
+  });
+}
+
+/**
  * Parses the message text, and if it contains an `aicr` command, generates
  * an inline reply. Returns undefined for non-command messages.
  */

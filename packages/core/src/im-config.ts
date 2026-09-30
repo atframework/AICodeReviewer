@@ -5,6 +5,7 @@ import {
   imConversationSchema,
   imPlatformIdSchema,
   imPrincipalTypeSchema,
+  IM_COMMAND_NAMES,
   type ImConnectionKind,
   type ImConversation,
 } from "./im-contracts.js";
@@ -161,14 +162,79 @@ export const imConnectionSchema = z
   });
 export type ImConnectionConfig = z.infer<typeof imConnectionSchema>;
 
-export const imCommandNameSchema = z.enum(["help", "chat-id", "review", "status"]);
+export const imCommandNameSchema = z.enum(IM_COMMAND_NAMES);
 
-const imBindingActorSchema = z
+/**
+ * Optional per-matcher expiry (RFC 3339 with offset). Expired matchers stop
+ * matching without config edits — the "temporary authorization" mechanism
+ * for principals and scope matchers alike.
+ */
+const imBindingExpiresAtSchema = z.string().datetime({ offset: true, precision: 3 }).or(z.string().datetime({ offset: true }));
+
+/** Exact typed principal (the original shape; `kind` stays implicit). */
+const imBindingPrincipalActorSchema = z
   .object({
     type: imPrincipalTypeSchema,
     id: imPlatformIdSchema,
+    expires_at: imBindingExpiresAtSchema.optional(),
   })
   .strict();
+
+/**
+ * Scope matchers (A02 relaxation, explicit opt-in): authorize by corporate
+ * directory facts instead of exact ids. The aibot's `from.userid` may be an
+ * encrypted open_userid; the server converts it via
+ * batch/openuserid_to_userid (path/101521) against the directory app before
+ * matching. WeCom "roles" are carried by tags; Feishu chat groups carry
+ * membership-based authorization.
+ */
+const imBindingScopeActorSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("any"),
+    expires_at: imBindingExpiresAtSchema.optional(),
+  }).strict(),
+  z.object({
+    kind: z.literal("wecom_department"),
+    id: z.string().min(1),
+    /** Runtime default: true — include child departments. */
+    recursive: z.boolean().optional(),
+    expires_at: imBindingExpiresAtSchema.optional(),
+  }).strict(),
+  z.object({
+    kind: z.literal("wecom_tag"),
+    id: z.string().min(1),
+    expires_at: imBindingExpiresAtSchema.optional(),
+  }).strict(),
+  z.object({
+    kind: z.literal("wecom_position"),
+    value: z.string().min(1),
+    expires_at: imBindingExpiresAtSchema.optional(),
+  }).strict(),
+  z.object({
+    kind: z.literal("wecom_extattr"),
+    name: z.string().min(1),
+    value: z.string().min(1),
+    expires_at: imBindingExpiresAtSchema.optional(),
+  }).strict(),
+  z.object({
+    kind: z.literal("feishu_chat"),
+    chat_id: z.string().min(1),
+    expires_at: imBindingExpiresAtSchema.optional(),
+  }).strict(),
+  z.object({
+    kind: z.literal("feishu_department"),
+    id: z.string().min(1),
+    expires_at: imBindingExpiresAtSchema.optional(),
+  }).strict(),
+  z.object({
+    kind: z.literal("feishu_job_title"),
+    value: z.string().min(1),
+    expires_at: imBindingExpiresAtSchema.optional(),
+  }).strict(),
+]);
+
+const imBindingActorSchema = z.union([imBindingPrincipalActorSchema, imBindingScopeActorSchema]);
+export type ImBindingActor = z.infer<typeof imBindingActorSchema>;
 
 const imBindingRepositorySchema = z
   .object({
@@ -192,12 +258,20 @@ export const imCommandBindingSchema = z
         message: "binding commands must be unique",
       }),
     repositories: z.record(imEntityNameSchema, imBindingRepositorySchema).optional(),
+    /**
+     * Runtime default false. When true, repo aliases resolve beyond the
+     * pre-registered `repositories` map against the observed projects table
+     * (exact workspace id or repo ref match) — the operator's explicit
+     * "open all repositories" opt-in for query and review commands (A15d).
+     */
+    allow_all_repositories: z.boolean().optional(),
     /** Runtime default: workspace_routes; the only first-phase policy. */
     report_policy: z.enum(["workspace_routes"]).optional(),
   })
   .strict()
   .superRefine((binding, ctx) => {
-    if (binding.commands.includes("review") && (binding.repositories === undefined || Object.keys(binding.repositories).length === 0)) {
+    if (binding.commands.includes("review") && binding.allow_all_repositories !== true
+      && (binding.repositories === undefined || Object.keys(binding.repositories).length === 0)) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message: "bindings that allow the review command must map at least one repository alias.",
@@ -221,7 +295,30 @@ const ACTOR_TYPES_BY_CONNECTION_KIND: Readonly<Record<ImConnectionKind, readonly
   feishu_app: ["feishu_open_id"],
 };
 
-const actorKey = (actor: { type: string; id: string }): string => `${actor.type}:${actor.id}`;
+const actorKey = (actor: ImBindingActor): string => {
+  if (!("kind" in actor)) return `${actor.type}:${actor.id}`;
+  switch (actor.kind) {
+    case "any": return "any:*";
+    case "wecom_department": return `wecom_department:${actor.id}${actor.recursive === false ? "!" : ""}`;
+    case "wecom_tag": return `wecom_tag:${actor.id}`;
+    case "wecom_position": return `wecom_position:${actor.value}`;
+    case "wecom_extattr": return `wecom_extattr:${actor.name}=${actor.value}`;
+    case "feishu_chat": return `feishu_chat:${actor.chat_id}`;
+    case "feishu_department": return `feishu_department:${actor.id}`;
+    case "feishu_job_title": return `feishu_job_title:${actor.value}`;
+  }
+};
+
+/** `any` overlaps every other matcher on the same connection. */
+const actorsOverlap = (a: ImBindingActor, b: ImBindingActor): boolean =>
+  ("kind" in a && a.kind === "any") || ("kind" in b && b.kind === "any") || actorKey(a) === actorKey(b);
+
+/** Scope matchers only resolve against their own platform's directory. */
+const SCOPE_ACTOR_KINDS_BY_CONNECTION_KIND: Readonly<Record<ImConnectionKind, readonly string[]>> = {
+  wecom_app: ["wecom_department", "wecom_tag", "wecom_position", "wecom_extattr"],
+  wecom_aibot: ["wecom_department", "wecom_tag", "wecom_position", "wecom_extattr"],
+  feishu_app: ["feishu_chat", "feishu_department", "feishu_job_title"],
+};
 
 const conversationsOverlap = (a: ImConversation, b: ImConversation): boolean => {
   if (a.kind !== b.kind) return false;
@@ -271,7 +368,18 @@ export const imConfigSchema = z
         }
       });
       const allowedActorTypes = ACTOR_TYPES_BY_CONNECTION_KIND[connection.kind];
+      const allowedScopeKinds = SCOPE_ACTOR_KINDS_BY_CONNECTION_KIND[connection.kind];
       binding.actors.forEach((actor, index) => {
+        if ("kind" in actor) {
+          if (actor.kind !== "any" && !allowedScopeKinds.includes(actor.kind)) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              message: `actor scope kind "${actor.kind}" is not resolved by connection kind "${connection.kind}".`,
+              path: [...basePath, "actors", index, "kind"],
+            });
+          }
+          return;
+        }
         if (!allowedActorTypes.includes(actor.type)) {
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
@@ -292,9 +400,9 @@ export const imConfigSchema = z
         const [nameB, bindingB] = enabled[j]!;
         if (bindingA.connection !== bindingB.connection) continue;
         const commandsOverlap = bindingA.commands.some((command) => bindingB.commands.includes(command));
-        const actorsOverlap = bindingA.actors.some((actorA) => bindingB.actors.some((actorB) => actorKey(actorA) === actorKey(actorB)));
+        const actorListsOverlap = bindingA.actors.some((actorA) => bindingB.actors.some((actorB) => actorsOverlap(actorA, actorB)));
         const conversationOverlap = bindingA.conversations.some((convA) => bindingB.conversations.some((convB) => conversationsOverlap(convA, convB)));
-        if (commandsOverlap && actorsOverlap && conversationOverlap) {
+        if (commandsOverlap && actorListsOverlap && conversationOverlap) {
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
             message: `enabled bindings "${nameA}" and "${nameB}" overlap on connection "${bindingA.connection}" (same actor, conversation, and command); merge them or narrow the allowlists.`,

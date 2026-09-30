@@ -140,6 +140,21 @@ export class FeishuAppClient {
 		}
 	}
 
+	/**
+	 * Authorization-scope profile for one user (contact/v3/users/{id}):
+	 * open_department_id list and job title. Read-only, never journaled.
+	 */
+	async userProfile(openId: string): Promise<{ readonly departments: readonly string[]; readonly jobTitle: string | undefined }> {
+		const query = new URLSearchParams({ user_id_type: "open_id", department_id_type: "open_department_id" });
+		const result = await this.authorized(`/contact/v3/users/${encodeURIComponent(openId)}?${query}`, "user profile");
+		const user = object(object(result.data).user);
+		if (user.open_id !== undefined && user.open_id !== openId) throw new FeishuApiError("user profile identity", 200);
+		const departments = Array.isArray(user.department_ids)
+			? user.department_ids.filter((id: unknown): id is string => typeof id === "string" && id.length > 0)
+			: [];
+		return { departments, jobTitle: text(user.job_title) };
+	}
+
 	private async loadMembers(chatId: string): Promise<readonly FeishuMember[]> {
 		const members = new Map<string, FeishuMember>();
 		const tokens = new Set<string>();

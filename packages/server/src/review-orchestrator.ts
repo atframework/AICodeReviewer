@@ -295,6 +295,17 @@ export interface ServerReviewOrchestrationOptions {
    * its phase/metrics at completion boundaries, and deregisters on settle.
    */
   readonly liveRuns?: LiveRunRegistry;
+  /**
+   * Durable lifecycle hook (A15d): fires with the runId when an execution
+   * starts, so the review_runs row exists while in flight (IM `running`
+   * reads the database, never process memory). The completion path replaces
+   * the marker row with the full terminal record.
+   */
+  readonly onExecutionStart?: ((info: {
+    readonly runId: string;
+    readonly reviewEvent: ReviewEvent;
+    readonly model: { readonly providerId: string; readonly modelId: string };
+  }) => Promise<void>) | undefined;
 }
 
 export interface ReviewOrchestrationResult {
@@ -3044,6 +3055,11 @@ export async function runReviewOrchestration(
     modelId: options.model.modelId,
     agentKind: options.agentAdapter?.kind ?? "native-llm",
     attempt: context.attempt ?? 1,
+  });
+  await options.onExecutionStart?.({
+    runId,
+    reviewEvent,
+    model: { providerId: options.model.providerId, modelId: options.model.modelId },
   });
   try {
     // Propagate the registry runId so the per-run directory scope (L09)

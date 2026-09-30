@@ -477,9 +477,28 @@ im:
   被动回复协议在回调响应体里回**加密的流式消息**（`msgtype: "stream"`、
   `finish: true`；直接回 markdown 会被平台忽略）；企业微信长连接通过
   `aibot_respond_msg` 回复；飞书通过消息 API 回复。
+- 查询命令（只读，同样走绑定授权，仓库别名仅接受绑定注册的映射）：
+  `aicr projects`（项目列表）、`aicr reviews [别名]`（近期评审）、
+  `aicr commits <别名> [分支]` / `aicr prs <别名> [分支]`（近期会触发评审的
+  提交/PR-MR）、`aicr detail <别名> <修订>` / `aicr prdetail <别名> <PR号>`
+  （评审详情：状态、模型、输入/输出/缓存命中的 token、请求数、成本、耗时，
+  仅保留近期记录）、`aicr queue`（排队任务含计划开始时间）、
+  `aicr running`（进行中评审）。
 - `aicr chat-id` / `aicr review <repo> <revision>` / `aicr status <id>` —
-  需要配置启用的 `im.command_bindings`（按操作人、会话与命令精确授权）；
-  绑定未启用时不会执行评审。
+  需要配置启用的 `im.command_bindings`。授权按"操作人、会话、连接、命令"
+  四个维度判定，操作人支持两种形态任一命中：**精确 principal**
+  （`{type, id}`）或**范围匹配器**——部门（含子部门）、标签（承载
+  角色/用户组语义）、职位、自定义字段、飞书群成员/部门/职务，以及
+  `any`（任意已认证操作人）。每个匹配器可加 `expires_at` 实现临时授权，
+  到期自动失效。范围匹配依赖服务端目录快照（企业微信需要一个启用的
+  `wecom_app` 连接提供通讯录，智能机器人的加密 userid 自动转换），
+  目录不可用时该维度不授权（fail-closed），精确 principal 不受影响。
+  绑定可开启 `allow_all_repositories`：仓库别名除绑定注册表外，还能按
+  workspace id 或仓库全名匹配已接入的项目（`aicr projects` 列出的条目），
+  免去逐仓库注册。
+  被拒绝的命令会把操作人与会话标识回显给发送者（仅该会话内可见）——
+  群白名单引导由此闭环：在群里 @机器人发一次命令，从拒绝回复中取群 id
+  加入绑定的 `conversations` 即可（企业微信智能机器人的群没有查询 API）。
 
 长连接模式由服务端在 `aicr serve` 启动时按连接表主动建立连接（断线自动
 重连），不依赖回调 URL，也不需要 `callback` 配置：企业微信智能机器人用

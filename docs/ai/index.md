@@ -33,6 +33,17 @@ SQLite/PG IM 持久化与原子操作、企业微信回调密码学适配、**�
 （官方 WebSocket 协议，`ws` 包实现——undici WebSocket 被平台拒绝）、飞书
 长连接（官方 SDK WSClient，适配其拍平的 v2 事件结构）均已实现，四种接收
 模式接入 `aicr serve` 启动接线（按连接表自动连接/重连）并部署公网验证。
+命令授权模型扩展（A14）：精确 principal 之外新增范围匹配器——企微部门
+（递归）/标签（角色/用户组载体）/职位/自定义字段、飞书群成员/部门/职务、
+`any`，全部支持 `expires_at` 临时授权；目录事实由 authorization directory
+的后台快照解析（企微走 wecom_app 通讯录 + batch/openuserid_to_userid 加密
+userid 转换，飞书走本应用档案与群成员），目录不可用 fail-closed；
+`chat-id`/`status` 命令在授权后内联应答真实身份与请求状态。查询命令集（A15）上线：
+projects/reviews/commits/prs/detail/prdetail/queue/running——项目列表、近期评审、
+会触发评审的提交与 PR/MR（webhook 事件视图）、按修订/PR 的评审详情（llm_usage
+聚合的输入/输出/缓存命中/请求次数/成本）、排队 deferral 与进行中视图（A15e：全部命令纯数据库查询——运行行在执行开始时写入
+review_runs、完成替换为终态全量记录、重启清扫为 interrupted，`running` 不再读进程内存），
+全部走绑定授权且遵循 history retention。
 执行顺序与验收条件见 [Plan.md](../../Plan.md)，
 接口和模块取舍见 [IM 集成设计](../design/im-integrations.md)，
 通讯录格式与 watch/reload 见[成员目录设计](../design/member-directory.md)。

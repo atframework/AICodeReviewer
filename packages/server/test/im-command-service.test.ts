@@ -3,10 +3,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { appConfigSchema, type AppConfig, type ImPrincipal, type ImConversation } from "@aicr/core";
+import { appConfigSchema, type AppConfig, type ImPrincipal, type ImConversation, type ImActorScopes } from "@aicr/core";
 import { closeStoreDb, createStoreDb, type SqliteStoreDb } from "@aicr/store";
 
-import { admitImCommand, authorizeImCommand, parseImCommand, stripImMentionPrefix, IM_HELP_TEXT } from "../src/im/command-service.js";
+import { admitImCommand, authorizeImCommand, parseImCommand, processImCommand, stripImMentionPrefix, IM_HELP_TEXT } from "../src/im/command-service.js";
 
 /**
  * IM-11 acceptance A01–A08: fixed grammar, exact typed authorization, atomic
@@ -228,5 +228,234 @@ describe("help text", () => {
     expect(IM_HELP_TEXT).toContain("aicr chat-id");
     expect(IM_HELP_TEXT).toContain("aicr review");
     expect(IM_HELP_TEXT).toContain("aicr status");
+  });
+});
+
+describe("A15: query command grammar and dispatch", () => {
+  it("parses the eight query commands with optional arguments", () => {
+    expect(parseImCommand("aicr projects")).toEqual({ kind: "command", command: { kind: "projects" } });
+    expect(parseImCommand("aicr reviews")).toEqual({ kind: "command", command: { kind: "reviews", repoAlias: undefined } });
+    expect(parseImCommand("aicr reviews service")).toEqual({ kind: "command", command: { kind: "reviews", repoAlias: "service" } });
+    expect(parseImCommand("aicr commits service main")).toEqual({ kind: "command", command: { kind: "commits", repoAlias: "service", branch: "main" } });
+    expect(parseImCommand("aicr commits service")).toEqual({ kind: "command", command: { kind: "commits", repoAlias: "service", branch: undefined } });
+    expect(parseImCommand("aicr prs service release/1.2")).toEqual({ kind: "command", command: { kind: "prs", repoAlias: "service", branch: "release/1.2" } });
+    expect(parseImCommand("aicr detail service " + REPO_SHA)).toEqual({ kind: "command", command: { kind: "detail", repoAlias: "service", revision: REPO_SHA } });
+    expect(parseImCommand("aicr prdetail service 42")).toEqual({ kind: "command", command: { kind: "prdetail", repoAlias: "service", prId: "42" } });
+    expect(parseImCommand("aicr queue")).toEqual({ kind: "command", command: { kind: "queue" } });
+    expect(parseImCommand("aicr running")).toEqual({ kind: "command", command: { kind: "running" } });
+    expect(parseImCommand("aicr commits service main extra")).toMatchObject({ kind: "invalid" });
+    expect(parseImCommand("aicr commits service bad;branch")).toMatchObject({ kind: "invalid", reason: "shell_metacharacters" });
+  });
+
+  it("query commands require the binding to list them and answer through the query service", async () => {
+    const config = makeConfig({ bindings: {
+      viewer: {
+        enabled: true,
+        connection: "wecom-airobot",
+        conversations: [{ kind: "bot_direct" }],
+        actors: [{ kind: "any" }],
+        commands: ["reviews", "queue", "running"],
+      },
+    } });
+    const answered: string[] = [];
+    const query = { answer: async (input: { command: { kind: string } }) => { answered.push(input.command.kind); return `查询结果:${input.command.kind}`; } };
+    const reviews = await processImCommand({ store, query, ...admitInput({ kind: "reviews", repoAlias: undefined }, config) });
+    expect(reviews.kind).toBe("replied");
+    expect(reviews.replyText).toBe("查询结果:reviews");
+    expect(answered).toEqual(["reviews"]);
+
+    // Not listed in the binding's commands → rejected before the query runs.
+    const projects = await processImCommand({ store, query, ...admitInput({ kind: "projects" }, config) });
+    expect(projects.kind).toBe("rejected");
+    expect(answered).toEqual(["reviews"]);
+
+    // No query service wired → fail closed with a clear message.
+    const queue = await processImCommand({ store, ...admitInput({ kind: "queue" }, config) });
+    expect(queue.replyText).toContain("查询服务不可用");
+  });
+});
+
+describe("A15d: wildcard repository aliases", () => {
+  const query = {
+    answer: async (input: { command: { kind: string } }) => `查询结果:${input.command.kind}`,
+    resolveProjectAlias: async (alias: string) => alias === "service"
+      ? { workspaceId: "ws-main", sourceTrigger: "github-main", repoRef: "org/service" }
+      : undefined,
+  };
+
+  it("review resolves unregistered aliases through the projects table when the binding opts in", async () => {
+    const config = makeConfig({ bindings: {
+      open: {
+        enabled: true,
+        connection: "wecom-airobot",
+        conversations: [{ kind: "bot_direct" }],
+        actors: [{ kind: "any" }],
+        commands: ["review", "detail"],
+        allow_all_repositories: true,
+      },
+    } });
+    const review = await processImCommand({ store, query, ...admitInput({ kind: "review", repoAlias: "service", revision: REPO_SHA }, config) });
+    expect(review.kind).toBe("accepted");
+    // Unknown alias stays unresolvable — no augmentation, strict rejection.
+    const unknown = await processImCommand({ store, query, ...admitInput({ kind: "review", repoAlias: "ghost", revision: REPO_SHA }, config) });
+    expect(unknown.kind).toBe("rejected");
+  });
+
+  it("bindings without the wildcard keep strict alias registration", async () => {
+    const config = makeConfig({ bindings: {
+      strict: {
+        enabled: true,
+        connection: "wecom-airobot",
+        conversations: [{ kind: "bot_direct" }],
+        actors: [{ kind: "any" }],
+        commands: ["review"],
+        repositories: { registered: { workspace: "ws-main", source_trigger: "github-main", repo_ref: "org/service" } },
+      },
+    } });
+    const result = await processImCommand({ store, query, ...admitInput({ kind: "review", repoAlias: "service", revision: REPO_SHA }, config) });
+    expect(result.kind).toBe("rejected");
+    const registered = await processImCommand({ store, query, ...admitInput({ kind: "review", repoAlias: "registered", revision: REPO_SHA }, config) });
+    expect(registered.kind).toBe("accepted");
+  });
+});
+
+describe("A15e: running reads the database", () => {
+  it("lists in-flight runs from review_runs and sweeps them as failed", async () => {
+    const { insertReviewRun, updateRunStatus, failActiveReviewRuns } = await import("@aicr/store");
+    await insertReviewRun(store, {
+      id: "run-live-1", eventId: "run-live-1", workspaceId: "ws-main", triggerName: "github-main",
+      repoRef: "org/service", provider: "openai", providerModel: "gpt-test",
+      status: "analyzing", startedAt: new Date(), headSha: REPO_SHA, branch: "main",
+    });
+    const { ImQueryService } = await import("../src/im/query-service.js");
+    const service = new ImQueryService({ store, getConfig: () => makeConfig() });
+    const reply = await service.answer({ command: { kind: "running" }, connectionName: "wecom-airobot" });
+    expect(reply).toContain("进行中的评审");
+    expect(reply).toContain(REPO_SHA.slice(0, 12));
+    // Restart sweep marks in-flight rows failed; running becomes empty.
+    expect(await failActiveReviewRuns(store, "interrupted by restart")).toBe(1);
+    expect(updateRunStatus).toBeDefined();
+    const after = await service.answer({ command: { kind: "running" }, connectionName: "wecom-airobot" });
+    expect(after).toContain("当前没有进行中的评审");
+  });
+});
+
+describe("A14: scope matchers and temporary authorization", () => {
+  const WECOM_SCOPES: ImActorScopes = {
+    wecom: {
+      userid: "owent",
+      departments: ["10"],
+      departmentsClosure: ["10", "2"],
+      position: "高级工程师",
+      extattr: new Map([["级别", "G5"]]),
+      tagIds: ["3"],
+    },
+  };
+
+  function authorizeWith(actors: Record<string, unknown>[], actorScopes?: ImActorScopes, now = new Date("2026-09-29T12:00:00Z")) {
+    const config = makeConfig({ bindings: {
+      scoped: {
+        enabled: true,
+        connection: "wecom-airobot",
+        conversations: [{ kind: "bot_direct" }],
+        actors,
+        commands: ["chat-id", "status"],
+      },
+    } });
+    return authorizeImCommand({
+      config, connectionName: "wecom-airobot",
+      actor: ACTOR_OWENT, conversation: CONV_DIRECT,
+      command: { kind: "chat-id" },
+      ...(actorScopes !== undefined ? { actorScopes } : {}),
+      now,
+    });
+  }
+
+  it("authorizes by recursive department closure and fails closed without scopes", () => {
+    // Direct department is 10; the closure covers ancestor 2.
+    expect(authorizeWith([{ kind: "wecom_department", id: "2" }], WECOM_SCOPES).kind).toBe("authorized");
+    expect(authorizeWith([{ kind: "wecom_department", id: "2" }], undefined).kind).toBe("rejected");
+  });
+
+  it("non-recursive departments only match direct membership", () => {
+    expect(authorizeWith([{ kind: "wecom_department", id: "10", recursive: false }], WECOM_SCOPES).kind).toBe("authorized");
+    expect(authorizeWith([{ kind: "wecom_department", id: "2", recursive: false }], WECOM_SCOPES).kind).toBe("rejected");
+  });
+
+  it("authorizes by tag, position and custom extattr field", () => {
+    expect(authorizeWith([{ kind: "wecom_tag", id: "3" }], WECOM_SCOPES).kind).toBe("authorized");
+    expect(authorizeWith([{ kind: "wecom_tag", id: "4" }], WECOM_SCOPES).kind).toBe("rejected");
+    expect(authorizeWith([{ kind: "wecom_position", value: "高级工程师" }], WECOM_SCOPES).kind).toBe("authorized");
+    expect(authorizeWith([{ kind: "wecom_extattr", name: "级别", value: "G5" }], WECOM_SCOPES).kind).toBe("authorized");
+    expect(authorizeWith([{ kind: "wecom_extattr", name: "级别", value: "G6" }], WECOM_SCOPES).kind).toBe("rejected");
+  });
+
+  it("any authorizes anyone on the connection; expires_at retires it", () => {
+    expect(authorizeWith([{ kind: "any" }]).kind).toBe("authorized");
+    expect(authorizeWith([{ kind: "any", expires_at: "2026-09-28T00:00:00Z" }], undefined, new Date("2026-09-29T12:00:00Z")).kind).toBe("rejected");
+    expect(authorizeWith([{ kind: "any", expires_at: "2026-10-06T00:00:00Z" }], undefined, new Date("2026-09-29T12:00:00Z")).kind).toBe("authorized");
+  });
+
+  it("expired principal matchers stop matching", () => {
+    expect(authorizeWith([{ type: "wecom_userid", id: "owent", expires_at: "2026-09-28T00:00:00Z" }]).kind).toBe("rejected");
+  });
+
+  it("feishu chat, department and job-title matchers resolve against the feishu scope", () => {
+    const config = makeConfig({
+      connections: { "feishu-app": { kind: "feishu_app", app_id: "cli_1", app_secret: "s" } },
+      bindings: {
+        scoped: {
+          enabled: true,
+          connection: "feishu-app",
+          conversations: [{ kind: "app_direct" }],
+          actors: [
+            { kind: "feishu_chat", chat_id: "oc_reviewers" },
+            { kind: "feishu_department", id: "od-9" },
+            { kind: "feishu_job_title", value: "后端工程师" },
+          ],
+          commands: ["chat-id"],
+        },
+      },
+    });
+    const scopes: ImActorScopes = { feishu: { openId: "ou_1", departments: ["od-9"], jobTitle: "后端工程师", chats: new Set(["oc_reviewers"]) } };
+    const base = { config, connectionName: "feishu-app", actor: { type: "feishu_open_id", id: "ou_1" } as ImPrincipal, conversation: { kind: "app_direct" } as ImConversation, command: { kind: "chat-id" as const }, now: new Date("2026-09-29T12:00:00Z") };
+    expect(authorizeImCommand({ ...base, actorScopes: scopes }).kind).toBe("authorized");
+    // No directory facts → all three matchers fail closed.
+    expect(authorizeImCommand({ ...base }).kind).toBe("rejected");
+  });
+
+  it("processImCommand answers chat-id with the identity and status from the store", async () => {
+    const config = makeConfig({ bindings: {
+      open: {
+        enabled: true,
+        connection: "wecom-airobot",
+        conversations: [{ kind: "bot_direct" }],
+        actors: [{ kind: "any" }],
+        commands: ["chat-id", "status"],
+      },
+    } });
+    const chatId = await processImCommand({ store, ...admitInput({ kind: "chat-id" }, config) });
+    expect(chatId.kind).toBe("replied");
+    expect(chatId.replyText).toContain("wecom_userid owent");
+    expect(chatId.replyText).toContain("bot_direct");
+
+    const status = await processImCommand({ store, ...admitInput({ kind: "status", requestId: "imr-missing" }, config) });
+    expect(status.kind).toBe("replied");
+    expect(status.replyText).toContain("未找到请求 imr-missing");
+  });
+
+  it("processImCommand rejects scope-only bindings when the directory is absent", async () => {
+    const config = makeConfig({ bindings: {
+      dept: {
+        enabled: true,
+        connection: "wecom-airobot",
+        conversations: [{ kind: "bot_direct" }],
+        actors: [{ kind: "wecom_department", id: "2" }],
+        commands: ["chat-id"],
+      },
+    } });
+    const result = await processImCommand({ store, ...admitInput({ kind: "chat-id" }, config) });
+    expect(result.kind).toBe("rejected");
+    expect(result.replyText).toContain("no_matching_binding");
   });
 });

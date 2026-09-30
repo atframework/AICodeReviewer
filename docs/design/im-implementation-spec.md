@@ -50,9 +50,10 @@
 | 飞书 callback 凭据 | verification_token/verification_token_env、encrypt_key/encrypt_key_env，同上 |
 | binding `enabled` | boolean，缺省 false；示例显式开启，发布时检查实际回调及持久配置能力 |
 | binding `connection` | 必填命名引用；禁用/不存在/协议不支持时拒绝启用 |
-| binding `actors` | 非空 typed ID 数组；type 为 wecom_userid、wecom_encrypted_userid 或 feishu_open_id；命名空间继承 connection |
+| binding `actors` | 非空匹配器数组，任一命中即授权。两种形态：精确 principal `{type,id}`（type 为 wecom_userid/wecom_encrypted_userid/feishu_open_id）；scope 匹配器（判别键 `kind`）`any`、`wecom_department`（`recursive` 缺省 true 含子部门）、`wecom_tag`（企微标签，承载"角色/用户组"语义）、`wecom_position`、`wecom_extattr`（name+value 自定义字段）、`feishu_chat`（chat_id 群成员）、`feishu_department`、`feishu_job_title`。每个条目可选 `expires_at`（RFC 3339；过期等同不存在，即临时授权）。命名空间继承 connection；scope 匹配器按连接平台适配（企微匹配器只用于企微连接，飞书同理）。目录事实由服务端 authorization directory 解析：企微取 enabled `wecom_app` 连接快照（部门/职位/extattr 来自 user/list、标签来自 tag/list+tag/get；aibot 的加密 open_userid 经 batch/openuserid_to_userid path/101521 转换后匹配）；飞书取本应用的群成员与用户档案。快照后台刷新（TTL 300s）、身份转换/档案 TTL 缓存；目录不可用或身份不可解析时该维度 fail-closed——精确 principal 与未过期 `any` 不受影响（验收 A14a–c） |
 | binding `conversations` | 非空数组：app_direct、bot_direct，或 group + 非空 id；各类型必须匹配 connection 协议 |
-| binding `commands` | help/chat-id/review/status 的非空去重数组；未知命令拒绝配置 |
+| binding `commands` | help/chat-id/review/status + 查询命令 projects/reviews/commits/prs/detail/prdetail/queue/running 的非空去重数组；未知命令拒绝配置；查询命令只读且仓库别名仅经 binding 注册目标解析（A15） |
+| binding `allow_all_repositories` | 缺省 false；开启后别名解析顺序为 repositories 注册表 → projects 表（workspace id 或 repo 全名精确匹配，A15d），对查询与 review 命令一致生效 |
 | binding `repositories` | repo-alias → workspace/source_trigger/repo_ref；review 启用时非空；三者经现有 routing/VCS 范围校验 |
 | binding `report_policy` | 首期仅 workspace_routes，运行时缺省此值；拒绝其他值 |
 | output `connection` | 新应用频道必填；旧 feishu_app 可用原内联凭据，不能与引用同时使用 |

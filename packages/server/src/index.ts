@@ -8,12 +8,13 @@ import { createAicrMetrics, formatPrometheusMetrics, recordReviewResult } from "
 import { saveRunSnapshot } from "./run-snapshot.js";
 import type { AicrMetrics } from "./metrics.js";
 import { registerImCallbackRoutes, type ImCallbackRoutesOptions } from "./im/callback-routes.js";
+import type { ImAuthorizationDirectory } from "./im/authorization-directory.js";
 import type { ImLongConnectionService } from "./im/long-connection-service.js";
 import { createObservabilityApi, type ObservabilityApiOptions } from "./observability-api.js";
 import { getDashboardClientAsset, getDashboardHtml, getDashboardIconSvg } from "./dashboard/index.js";
 import type { ConfigStore } from "@aicr/core";
 import type { StoreDb } from "@aicr/store";
-import { closeStoreDb, insertReviewRun, insertReviewRunOnce } from "@aicr/store";
+import { closeStoreDb, deleteReviewRun, insertReviewRun, insertReviewRunOnce } from "@aicr/store";
 
 const globalMetrics: AicrMetrics = createAicrMetrics();
 
@@ -249,6 +250,12 @@ export interface ServerAppOptions {
    * the routes are not mounted.
    */
   readonly imCallbacks?: ImCallbackRoutesOptions;
+  /**
+   * IM authorization directory (scope matchers): background-refreshed
+   * corporate-directory snapshots for departments/tags/extattr/chat
+   * membership authorization. Disposed on shutdown.
+   */
+  readonly imDirectory?: ImAuthorizationDirectory;
   /**
    * IM long-connection WebSocket clients (IM-12): connects WeCom aibot
    * connections without an enabled callback and reconciles on config
@@ -1541,6 +1548,8 @@ export async function persistReviewRunToStore(
         ? "skipped"
         : "skipped";
     const insert = options.idempotent ? insertReviewRunOnce : insertReviewRun;
+    // The lifecycle marker row (in-flight view) is replaced by the full record.
+    if (!options.idempotent) await deleteReviewRun(store, runId).catch(() => false);
     await insert(store, {
       id: runId,
       eventId: runId,
@@ -1611,6 +1620,7 @@ async function persistFailedRunToStore(
 ): Promise<void> {
   if (!store) return;
   try {
+    await deleteReviewRun(store, runId).catch(() => false);
     await insertReviewRun(store, {
       id: runId,
       eventId: runId,
@@ -2358,6 +2368,7 @@ async function handleReviewOrchestration(
 /** Call after the HTTP listener has drained its accepted requests. */
 export async function closeServerApp(options: ServerAppOptions): Promise<void> {
   await options.closeAutoCommit?.();
+  options.imDirectory?.dispose();
   await options.sessionStore?.close();
   if (options.store) await closeStoreDb(options.store);
 }

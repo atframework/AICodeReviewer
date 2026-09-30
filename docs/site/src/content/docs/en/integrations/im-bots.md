@@ -546,10 +546,34 @@ Supported command grammar (the `aicr` prefix, sent after @-mentioning the bot):
   `finish: true`; a plain markdown body is ignored by the platform), the WeCom
   long connection replies via `aibot_respond_msg`, and Feishu replies through
   its message API.
+- Query commands (read-only, same binding authorization; repo aliases only
+  resolve through the binding's registered targets): `aicr projects`,
+  `aicr reviews [alias]`, `aicr commits <alias> [branch]` /
+  `aicr prs <alias> [branch]` (recently trigger-eligible commits / PRs-MRs),
+  `aicr detail <alias> <revision>` / `aicr prdetail <alias> <pr-id>` (run
+  detail: status, model, input/output/cache-hit tokens, request count, cost,
+  duration — recent records only), `aicr queue` (pending tasks with scheduled
+  starts), `aicr running` (in-flight reviews).
 - `aicr chat-id` / `aicr review <repo> <revision>` / `aicr status <id>` —
-  require an enabled `im.command_bindings` entry (exact typed authorization of
-  actors, conversations and commands); without an enabled binding no review
-  runs.
+  require an enabled `im.command_bindings` entry. Authorization checks four
+  dimensions — actor, conversation, connection and command — and the actor
+  matches either an **exact principal** (`{type, id}`) or a **scope
+  matcher**: departments (recursive), tags (the role/user-group carrier),
+  positions, custom fields, Feishu chat membership / departments / job
+  titles, and `any` (any authenticated actor). Every matcher accepts an
+  optional `expires_at` for time-boxed temporary authorization. Scope
+  matching resolves against server-side directory snapshots (WeCom needs an
+  enabled `wecom_app` connection for the corporate directory; the smart
+  robot's encrypted userids convert automatically). A missing directory
+  fails that dimension closed; exact principals keep working.
+  Bindings may enable `allow_all_repositories`: repo aliases then also resolve
+  by workspace id or full repo name against the integrated projects (the
+  ones `aicr projects` lists), without per-repo registration.
+  Rejected commands echo the actor and conversation identity back to the
+  sender (visible only inside that conversation) — that closes the group
+  whitelist bootstrap loop: @-mention the bot in a group once, take the
+  group id from the rejection reply, and add it to the binding's
+  `conversations` (WeCom smart-robot groups have no query API).
 
 Long-connection modes are initiated by the server: `aicr serve` dials per the
 connection table (auto-reconnecting on drops), needing neither a callback URL

@@ -378,10 +378,13 @@ schema 已接受该命名空间，发送、回调与 worker 随计划逐步接�
 | `im.connections.<id>` | object | — | 命名连接映射；连接 id 需匹配 `[A-Za-z0-9][A-Za-z0-9_-]*`；`kind` 选择 `wecom_app`（`corp_id`、`agent_id`、`app_secret`/`app_secret_env`）、`wecom_aibot`（`corp_id`；回调模式带 `callback` 与可选 `aibot_id`，长连接模式带 `aibot_id` 与 `secret`/`secret_env`）或 `feishu_app`（`app_id`、`app_secret`/`app_secret_env`、可选 `base_url`、`tenant_key`），均带可选 `callback`（运行时默认停用；企业微信 `token`/`encoding_aes_key` 与飞书 `verification_token`/`encrypt_key` 各为明文与 `*_env` 成对，启用回调时必填其一）。`wecom_aibot` 与 `feishu_app` 的接收模式均按 `callback.enabled` 区分：`true` 走事件回调（`GET/POST /callbacks/im/<id>`），未启用回调时由服务端主动建立长连接接收（企微需 `aibot_id`+`secret`，飞书需 `app_id`+`app_secret`，即官方 SDK 长连接） |
 | `im.command_bindings.<id>.enabled` | boolean | — | 运行时默认 false；接线完成前禁用草稿始终可保存 |
 | `im.command_bindings.<id>.connection` | string | — | 对 `im.connections` 的命名引用；启用绑定时要求连接存在且启用 |
-| `im.command_bindings.<id>.actors[].type` | enum | — | `wecom_userid`、`wecom_encrypted_userid` 或 `feishu_open_id`；身份命名空间继承自连接 |
+| `im.command_bindings.<id>.actors[]` | object | — | 匹配器数组，任一命中即授权。范围匹配器形态以 `kind` 判别：`any`（任意已认证操作人）、`wecom_department`（部门，`recursive` 缺省 true 含子部门）、`wecom_tag`（标签，承载角色/用户组语义）、`wecom_position`（职位）、`wecom_extattr`（自定义字段 name+value）、`feishu_chat`（群成员 chat_id）、`feishu_department`（部门）、`feishu_job_title`（职务）；匹配器按连接平台适配，目录事实来自服务端目录快照，目录不可用时该维度不授权（fail-closed） |
+| `im.command_bindings.<id>.actors[].type` | enum | — | 精确 principal 形态：`wecom_userid`、`wecom_encrypted_userid` 或 `feishu_open_id`；身份命名空间继承自连接 |
 | `im.command_bindings.<id>.actors[].id` | string | — | 精确的带类型平台 id；不做模糊匹配或目录推导授权 |
+| `im.command_bindings.<id>.actors[].expires_at` | string | — | RFC 3339 时间戳；到期的匹配器（含精确 principal 与 `any`）自动停止匹配，是临时授权的通用机制 |
 | `im.command_bindings.<id>.conversations[]` | object | — | `app_direct`（企业微信/飞书应用）、`bot_direct`（企业微信 API 机器人）或带非空 `id` 的 `group`；类型必须匹配连接协议 |
-| `im.command_bindings.<id>.commands` | enum[] | — | `help`、`chat-id`、`review`、`status` 的去重子集 |
+| `im.command_bindings.<id>.allow_all_repositories` | boolean | — | 运行时默认 false；开启后仓库别名在 `repositories` 注册表之外还可按 workspace id 或仓库全名精确匹配已观测的项目（projects 表），对查询与 review 命令生效 |
+| `im.command_bindings.<id>.commands` | enum[] | — | `help`、`chat-id`、`review`、`status` 与查询命令 `projects`、`reviews`、`commits`、`prs`、`detail`、`prdetail`、`queue`、`running` 的去重子集 |
 | `im.command_bindings.<id>.repositories.<id>.workspace` | string | — | 仓库别名目标：workspace id；发布时按路由/VCS 范围校验 |
 | `im.command_bindings.<id>.repositories.<id>.source_trigger` | string | — | 仓库别名目标：来源触发器名；发布时按路由/VCS 范围校验 |
 | `im.command_bindings.<id>.repositories.<id>.repo_ref` | string | — | 仓库别名目标：仓库引用；发布时按路由/VCS 范围校验 |

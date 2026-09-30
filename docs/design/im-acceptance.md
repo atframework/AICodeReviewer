@@ -119,6 +119,12 @@ fixture 放 `packages/server/test/fixtures/im/`。协议 fixture 不依赖真实
 | A11 | 转发卡片、改 action value、错 source message/TaskId/会话 | 即使 action ID 存在也拒绝；不能用回调自报来源补齐待绑定动作 |
 | A12 | 24 小时边界、撤权后旧卡片、旧 action 记录 | 过期/撤权拒绝；tombstone 保证重复可识别；不能被新消息语法绕过 |
 | A13 | 远端发送与本地 action 绑定间隙/失败、unsupported channel | pending action 不执行，失败可诊断；传统 webhook/appchat 不展示不支持的回调按钮 |
+| A14a | 部门（递归/非递归）、标签、职位、自定义字段、飞书群/部门/职务匹配器，配对不命中与目录不可用 | 命中即授权；目录快照缺失/身份不可解析时 fail-closed（精确 principal 与 any 照常求值）；目录成员、别名、名称猜测永不授权 |
+| A14b | `any` 与 `expires_at`（已过期/未过期）、principal 过期 | 过期匹配器等同不存在；any 与其他匹配器同连接重叠在配置期拒绝；临时授权无需改配置自动失效 |
+| A14c | 加密 open_userid（aibot 创建者非超管）、目录快照预热/刷新失败 | 转换走 batch/openuserid_to_userid（path/101521）且带缓存；快照后台刷新、请求路径只读内存；刷新失败保持上一快照并告警，不放大权限 |
+| A15a | 查询命令语法（可选参数/非法参数/shell 元字符）、未列入 binding.commands 的查询 | 固定 grammar 解析；未列入绑定命令集的查询在授权阶段拒绝；查询服务缺失时明确"不可用"不假成功 |
+| A15b | 别名未注册、修订/PR 无记录、超出保留窗口 | 只经绑定注册的 repositories 别名解析（A04）；无记录回答"未找到（已归档或移除）"；列表遵循 history retention |
+| A15c | detail 用量拼装（输入/输出/缓存命中/请求次数/成本）、queue/running 快照 | 用量数字来自 llm_usage 聚合且不越权跨命名空间；排队视图只含 pending deferral；运行视图来自 review_runs 活跃状态行（数据库，非进程内存） |
 
 ## 7. VCS 和评审语义 V01–V08
 

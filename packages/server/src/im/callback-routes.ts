@@ -7,8 +7,9 @@ import { acceptImDelivery, type AcceptImDeliveryOutcome } from "@aicr/store";
 import { verifyWecomAibotCallback, type WecomAibotCallbackCredentials } from "./protocol-wecom-aibot.js";
 import { verifyWecomAppCallback, type WecomAppCallbackCredentials } from "./protocol-wecom-app.js";
 import { verifyFeishuCallback, buildFeishuChallengeResponse } from "./protocol-feishu.js";
-import { processInlineCommand, sendFeishuReply } from "./inline-reply.js";
+import { buildWecomStreamTextReply, processInlineCommand, sendFeishuReply } from "./inline-reply.js";
 import { buildWecomAibotEncryptedReply } from "./protocol-wecom-aibot.js";
+import { invalidImCommandReply, parseImCommand, processImCommand, stripImMentionPrefix, type ImCommandDirectoryLike, type ImQueryServiceLike } from "./command-service.js";
 import type { FeishuCallbackCredentials } from "./protocol-feishu.js";
 
 /**
@@ -27,6 +28,10 @@ export interface ImCallbackRoutesOptions {
   /** Resolves the live effective config for the connection table. */
   readonly getConfig: () => Promise<AppConfig> | AppConfig;
   readonly env: (name: string) => string | undefined;
+  /** Directory-fact resolution for scope matchers; absent = fail closed. */
+  readonly directory?: ImCommandDirectoryLike | undefined;
+  /** Read-only query surface for the status commands; absent = fail closed. */
+  readonly query?: ImQueryServiceLike | undefined;
   readonly now?: () => number;
 }
 
@@ -192,17 +197,45 @@ export function registerImCallbackRoutes(app: Hono, options: ImCallbackRoutesOpt
       }
       // Inline command reply: Feishu has no synchronous response body, so the
       // reply goes out through the message API after the inbox ACK is durable.
+      // help answers without authorization; other commands run the full
+      // admission pipeline (scope matchers included).
       const feishuText = feishuResult.event.content.kind === "message" ? feishuResult.event.content.text : undefined;
-      const feishuReply = processInlineCommand(feishuText, "feishu_app", {}, String(Math.floor(now() / 1000)), "0");
-      if (feishuReply !== undefined) {
+      const parsed = parseImCommand(stripImMentionPrefix(feishuText ?? ""));
+      if (parsed.kind === "command" || parsed.kind === "invalid") {
         const feishuCreds = resolved.credentials as FeishuCallbackCredentials & { appSecret: string };
         const chatId = feishuResult.event.conversation?.kind === "group" ? feishuResult.event.conversation.id : undefined;
         const actorId = feishuResult.event.actor?.id;
         const receiveId = chatId ?? actorId ?? "";
         const receiveIdType = chatId !== undefined ? "chat_id" : "open_id";
-        if (receiveId !== "" && feishuCreds.appSecret !== "") {
-          console.log(JSON.stringify({ msg: "im_command_reply", connection: name, format: feishuReply.format }));
-          void sendFeishuReply(feishuCreds.appId, feishuCreds.appSecret, receiveId, receiveIdType, feishuReply.text);
+        let replyText: string | undefined;
+        if (parsed.kind === "invalid") {
+          replyText = invalidImCommandReply(parsed.reason);
+        } else if (parsed.command.kind === "help") {
+          replyText = processInlineCommand(feishuText, "feishu_app", {}, String(Math.floor(now() / 1000)), "0")?.text;
+        } else if (feishuResult.event.actor !== undefined && feishuResult.event.conversation !== undefined) {
+          const config = await options.getConfig();
+          const result = await processImCommand({
+            store: options.store,
+            config,
+            namespace: options.namespace,
+            connectionName: name,
+            connectionIdentity: JSON.stringify([resolved.identity.namespace, resolved.identity.kind, null, resolved.identity.platformId ?? null, resolved.identity.tenantKey ?? null]),
+            deliveryKey: feishuResult.event.deliveryKey,
+            payloadDigest: feishuResult.event.payloadDigest,
+            actor: feishuResult.event.actor,
+            conversation: feishuResult.event.conversation,
+            command: parsed.command,
+            now: new Date(now()),
+            configSnapshotId: "file-only",
+            configFileDigest: "unknown",
+            ...(options.directory !== undefined ? { directory: options.directory } : {}),
+            ...(options.query !== undefined ? { query: options.query } : {}),
+          });
+          replyText = result.replyText ?? undefined;
+        }
+        if (replyText !== undefined && receiveId !== "" && feishuCreds.appSecret !== "") {
+          console.log(JSON.stringify({ msg: "im_command_reply", connection: name, command: parsed.kind === "invalid" ? "invalid" : parsed.command.kind }));
+          void sendFeishuReply(feishuCreds.appId, feishuCreds.appSecret, receiveId, receiveIdType, replyText);
         }
       }
       return response("", 200, { "content-type": "text/plain; charset=utf-8" });
@@ -261,19 +294,49 @@ export function registerImCallbackRoutes(app: Hono, options: ImCallbackRoutesOpt
       });
       return response(JSON.stringify(termination), 200, { "content-type": "application/json; charset=utf-8" });
     }
-    if (resolved.kind === "wecom_aibot") {
-      const messageText = result.event.content.kind === "message" ? result.event.content.text : undefined;
+    // Inline command reply (aibot callback only): the platform renders the
+    // encrypted response body as the bot's answer; persistence stays first.
+    // help answers without authorization; other commands run the full
+    // admission pipeline (scope matchers included) and answer the outcome.
+    if (resolved.kind === "wecom_aibot" && result.event.content.kind === "message") {
+      const messageText = result.event.content.text;
+      const parsed = parseImCommand(stripImMentionPrefix(messageText));
       const queryTs = query.get("timestamp") ?? String(Math.floor(now() / 1000));
       const queryNonce = query.get("nonce") ?? "0";
       const aibotCreds = resolved.credentials as WecomAibotCallbackCredentials;
-      const inlineReply = processInlineCommand(messageText, "wecom_aibot", {
-        token: aibotCreds.token, encodingAesKey: aibotCreds.encodingAesKey,
-      }, queryTs, queryNonce);
-      if (inlineReply !== undefined) {
-        console.log(JSON.stringify({ msg: "im_command_reply", connection: name, format: inlineReply.format }));
-        if (inlineReply.format === "wecom_encrypted" && inlineReply.encrypted !== undefined) {
-          return response(JSON.stringify(inlineReply.encrypted), 200, { "content-type": "application/json; charset=utf-8" });
+      if (parsed.kind === "command") {
+        let replyText: string | undefined;
+        if (parsed.command.kind === "help") {
+          replyText = processInlineCommand(messageText, "wecom_aibot", {
+            token: aibotCreds.token, encodingAesKey: aibotCreds.encodingAesKey,
+          }, queryTs, queryNonce)?.text;
+        } else if (result.event.actor !== undefined && result.event.conversation !== undefined) {
+          const config = await options.getConfig();
+          const outcome = await processImCommand({
+            store: options.store,
+            config,
+            namespace: options.namespace,
+            connectionName: name,
+            connectionIdentity: JSON.stringify([resolved.identity.namespace, resolved.identity.kind, resolved.identity.corpId ?? null, resolved.identity.platformId ?? null, null]),
+            deliveryKey: result.event.deliveryKey,
+            payloadDigest: result.event.payloadDigest,
+            actor: result.event.actor,
+            conversation: result.event.conversation,
+            command: parsed.command,
+            now: new Date(now()),
+            configSnapshotId: "file-only",
+            configFileDigest: "unknown",
+            ...(options.directory !== undefined ? { directory: options.directory } : {}),
+            ...(options.query !== undefined ? { query: options.query } : {}),
+          });
+          replyText = outcome.replyText ?? undefined;
         }
+        if (replyText !== undefined) {
+          console.log(JSON.stringify({ msg: "im_command_reply", connection: name, command: parsed.command.kind }));
+          return response(JSON.stringify(buildWecomStreamTextReply(replyText, aibotCreds, queryTs, queryNonce)), 200, { "content-type": "application/json; charset=utf-8" });
+        }
+      } else if (parsed.kind === "invalid") {
+        return response(JSON.stringify(buildWecomStreamTextReply(invalidImCommandReply(parsed.reason), aibotCreds, queryTs, queryNonce)), 200, { "content-type": "application/json; charset=utf-8" });
       }
     }
     return response("success", 200, { "content-type": "text/plain; charset=utf-8" });

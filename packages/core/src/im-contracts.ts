@@ -148,17 +148,72 @@ export function isVerifiedImEvent(value: unknown): value is VerifiedImEvent {
 }
 
 // ---------------------------------------------------------------------------
+// Authorization directory scopes (scope-matcher evaluation input)
+// ---------------------------------------------------------------------------
+
+/**
+ * Directory facts for one authenticated actor, resolved by the server-side
+ * authorization directory from cached platform snapshots. Scope matchers
+ * only match against a present section; a missing section (directory
+ * unavailable, identity unresolvable) fails closed (design §6 A05).
+ */
+export interface ImActorScopes {
+  /** WeCom corporate directory facts; `userid` is the plaintext userid. */
+  readonly wecom?: {
+    readonly userid: string;
+    /** Direct department ids. */
+    readonly departments: readonly string[];
+    /** Direct departments plus all their ancestors (for recursive matchers). */
+    readonly departmentsClosure: readonly string[];
+    readonly position: string | undefined;
+    /** Custom-field name → first text value. */
+    readonly extattr: ReadonlyMap<string, string>;
+    readonly tagIds: readonly string[];
+  } | undefined;
+  /** Feishu directory facts for the application tenant. */
+  readonly feishu?: {
+    readonly openId: string;
+    /** open_department_id values. */
+    readonly departments: readonly string[];
+    readonly jobTitle: string | undefined;
+    /** Referenced chat ids the actor belongs to. */
+    readonly chats: ReadonlySet<string>;
+  } | undefined;
+}
+
+// ---------------------------------------------------------------------------
 // Commands and manual review requests
 // ---------------------------------------------------------------------------
 
-export const IM_COMMAND_NAMES = ["help", "chat-id", "review", "status"] as const;
+export const IM_COMMAND_NAMES = [
+  "help",
+  "chat-id",
+  "review",
+  "status",
+  "projects",
+  "reviews",
+  "commits",
+  "prs",
+  "detail",
+  "prdetail",
+  "queue",
+  "running",
+] as const;
 export type ImCommandName = (typeof IM_COMMAND_NAMES)[number];
 
 export type ImCommand =
   | { readonly kind: "help" }
   | { readonly kind: "chat-id" }
   | { readonly kind: "review"; readonly repoAlias: string; readonly revision: string }
-  | { readonly kind: "status"; readonly requestId: string };
+  | { readonly kind: "status"; readonly requestId: string }
+  | { readonly kind: "projects" }
+  | { readonly kind: "reviews"; readonly repoAlias: string | undefined }
+  | { readonly kind: "commits"; readonly repoAlias: string; readonly branch: string | undefined }
+  | { readonly kind: "prs"; readonly repoAlias: string; readonly branch: string | undefined }
+  | { readonly kind: "detail"; readonly repoAlias: string; readonly revision: string }
+  | { readonly kind: "prdetail"; readonly repoAlias: string; readonly prId: string }
+  | { readonly kind: "queue" }
+  | { readonly kind: "running" };
 
 export type ImReviewRequestState =
   | "accepted"

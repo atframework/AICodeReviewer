@@ -26,6 +26,27 @@ export interface WeComAppOptions {
 	readonly now?: (() => number) | undefined;
 }
 
+/** Directory snapshot facts (authorization scope sources; read-only). */
+export interface WeComDirectoryDepartment {
+	readonly id: number;
+	readonly name: string;
+	readonly parentId: number | undefined;
+}
+
+export interface WeComDirectoryUser {
+	readonly userid: string;
+	/** Direct department ids. */
+	readonly departments: readonly number[];
+	readonly position: string | undefined;
+	/** Custom-field name → first text value. */
+	readonly extattr: ReadonlyMap<string, string>;
+}
+
+export interface WeComDirectoryTag {
+	readonly id: number;
+	readonly name: string;
+}
+
 export type WeComAppMessage =
 	| { readonly msgtype: "text"; readonly text: { readonly content: string } }
 	| { readonly msgtype: "markdown"; readonly markdown: { readonly content: string } };
@@ -133,6 +154,115 @@ export class WeComAppClient {
 			options?.publicationIdentity ?? `wecom-appchat:${this.options.corpId}:${this.options.agentId}`);
 	}
 
+	// ---------------------------------------------------------------------------
+	// Directory queries (authorization scopes; read-only, never journaled)
+	// ---------------------------------------------------------------------------
+
+	/** department/list: the corporate department tree. */
+	async directoryDepartments(): Promise<readonly WeComDirectoryDepartment[]> {
+		const result = await this.authorizedGet("/cgi-bin/department/list", new URLSearchParams({ id: "1" }), "department list");
+		const departments: WeComDirectoryDepartment[] = [];
+		for (const item of Array.isArray(result.department) ? result.department : []) {
+			const record = object(item);
+			const id = typeof record.id === "number" ? record.id : undefined;
+			const name = text(record.name);
+			if (id === undefined || !name) throw new WeComAppError("department identity", 200);
+			departments.push({ id, name, parentId: typeof record.parentid === "number" ? record.parentid : undefined });
+		}
+		return departments;
+	}
+
+	/**
+	 * user/list (department member details): plaintext userid with direct
+	 * departments, position and text-type extattr values, aggregated over
+	 * offset pages.
+	 */
+	async directoryUserDetails(departmentId: number, fetchChild: boolean): Promise<readonly WeComDirectoryUser[]> {
+		const users = new Map<string, WeComDirectoryUser>();
+		for (let page = 0; page < 200; page += 1) {
+			const query = new URLSearchParams({
+				department_id: String(departmentId),
+				fetch_child: fetchChild ? "1" : "0",
+				offset: String(page * 100),
+				size: "100",
+			});
+			const result = await this.authorizedGet("/cgi-bin/user/list", query, "department users");
+			const items = Array.isArray(result.userlist) ? result.userlist : [];
+			for (const item of items) {
+				const record = object(item);
+				const userid = text(record.userid);
+				if (!userid) throw new WeComAppError("department user identity", 200);
+				const departments = Array.isArray(record.department)
+					? record.department.filter((id: unknown): id is number => typeof id === "number")
+					: [];
+				const extattr = new Map<string, string>();
+				const attrs = record.extattr;
+				if (Array.isArray(attrs)) {
+					for (const attr of attrs) {
+						const entry = object(attr);
+						const name = text(entry.name);
+						const value = text(object(entry.text).value);
+						if (name && value && !extattr.has(name)) extattr.set(name, value);
+					}
+				}
+				users.set(userid, {
+					userid,
+					departments,
+					position: text(record.position),
+					extattr,
+				});
+			}
+			if (items.length < 100) break;
+		}
+		return [...users.values()];
+	}
+
+	/** tag/list: the app-visible tags (the "role/user group" carrier). */
+	async directoryTags(): Promise<readonly WeComDirectoryTag[]> {
+		const result = await this.authorizedGet("/cgi-bin/tag/list", new URLSearchParams(), "tag list");
+		const tags: WeComDirectoryTag[] = [];
+		for (const item of Array.isArray(result.taglist) ? result.taglist : []) {
+			const record = object(item);
+			const id = typeof record.tagid === "number" ? record.tagid : undefined;
+			const name = text(record.tagname);
+			if (id === undefined || !name) throw new WeComAppError("tag identity", 200);
+			tags.push({ id, name });
+		}
+		return tags;
+	}
+
+	/** tag/get: member userids of one tag. */
+	async directoryTagMembers(tagId: number): Promise<readonly string[]> {
+		const result = await this.authorizedGet("/cgi-bin/tag/get", new URLSearchParams({ tagid: String(tagId) }), "tag members");
+		const members: string[] = [];
+		for (const item of Array.isArray(result.userlist) ? result.userlist : []) {
+			const userid = text(object(item).userid);
+			if (userid) members.push(userid);
+		}
+		return members;
+	}
+
+	/**
+	 * batch/openuserid_to_userid (自建应用与智能机器人的对接, path/101521):
+	 * convert the smart robot's encrypted open_userid values into plaintext
+	 * userids. Already-plaintext ids come back in `invalid`.
+	 */
+	async convertOpenUserIds(openUserIds: readonly string[]): Promise<{ readonly converted: ReadonlyMap<string, string>; readonly invalid: readonly string[] }> {
+		const result = await this.authorizedPost("/cgi-bin/batch/openuserid_to_userid", { open_userid_list: openUserIds.slice(0, 1000) }, "open userid conversion");
+		const converted = new Map<string, string>();
+		for (const item of Array.isArray(result.userid_list) ? result.userid_list : []) {
+			const record = object(item);
+			const open = text(record.open_userid);
+			const userid = text(record.userid);
+			if (open && userid) converted.set(open, userid);
+		}
+		const invalid: string[] = [];
+		for (const item of Array.isArray(result.invalid_open_userid_list) ? result.invalid_open_userid_list : []) {
+			if (typeof item === "string") invalid.push(item);
+		}
+		return { converted, invalid };
+	}
+
 	private async accessToken(): Promise<string> {
 		if (this.token && this.token.expiresAt > this.now()) return this.token.value;
 		if (this.tokenPending) return this.tokenPending;
@@ -140,7 +270,7 @@ export class WeComAppClient {
 			const url = `${WECOM_API_ORIGIN}/cgi-bin/gettoken?corpid=${encodeURIComponent(this.options.corpId)}&corpsecret=${encodeURIComponent(this.options.appSecret)}`;
 			let response;
 			try {
-				response = await this.fetch(url, { method: "GET" });
+				response = await this.fetch(url.toString(), { method: "GET" });
 			} catch {
 				throw new WeComAppError("authentication", 0);
 			}
@@ -180,6 +310,63 @@ export class WeComAppClient {
 		const refreshed = await this.accessToken().catch((error: unknown) => error as WeComAppError);
 		if (refreshed instanceof WeComAppError) return tokenFailure(refreshed);
 		return this.post(path, body, refreshed, identity);
+	}
+
+	/** Token-authenticated read-only GET with one invalid-token retry; directory queries never journal. */
+	private async authorizedGet(path: string, query: URLSearchParams, operation: string): Promise<Record<string, unknown>> {
+		const token = await this.accessToken();
+		try {
+			return await this.request("GET", path, query, token, operation);
+		} catch (error) {
+			if (!(error instanceof WeComAppError) || !TOKEN_INVALID_CODES.has(error.errcode ?? 0)) throw error;
+			if (this.token?.value === token) this.token = undefined;
+			return this.request("GET", path, query, await this.accessToken(), operation);
+		}
+	}
+
+	/** Token-authenticated POST with one invalid-token retry; directory queries never journal. */
+	private async authorizedPost(path: string, body: Record<string, unknown>, operation: string): Promise<Record<string, unknown>> {
+		const token = await this.accessToken();
+		try {
+			return await this.request("POST", path, new URLSearchParams(), token, operation, body);
+		} catch (error) {
+			if (!(error instanceof WeComAppError) || !TOKEN_INVALID_CODES.has(error.errcode ?? 0)) throw error;
+			if (this.token?.value === token) this.token = undefined;
+			return this.request("POST", path, new URLSearchParams(), await this.accessToken(), operation, body);
+		}
+	}
+
+	private async request(
+		method: "GET" | "POST",
+		path: string,
+		query: URLSearchParams,
+		token: string,
+		operation: string,
+		body?: Record<string, unknown>,
+	): Promise<Record<string, unknown>> {
+		const url = new URL(`${WECOM_API_ORIGIN}${path}`);
+		url.searchParams.set("access_token", token);
+		for (const [key, value] of query) if (key !== "access_token") url.searchParams.set(key, value);
+		let response;
+		try {
+			response = await this.fetch(url.toString(), {
+				method,
+				...(body === undefined ? {} : { headers: { "content-type": "application/json" }, body: JSON.stringify(body) }),
+			});
+		} catch {
+			throw new WeComAppError(operation, 0);
+		}
+		let result: Record<string, unknown>;
+		try {
+			result = object(await response.json());
+		} catch {
+			throw new WeComAppError(`${operation} response`, response.status);
+		}
+		const errcode = typeof result.errcode === "number" ? result.errcode : undefined;
+		if (!response.ok || (errcode !== undefined && errcode !== 0)) {
+			throw new WeComAppError(operation, response.ok ? 200 : response.status, errcode);
+		}
+		return result;
 	}
 
 	private async post(path: string, body: Record<string, unknown>, token: string, identity: string): Promise<WeComSendResult> {

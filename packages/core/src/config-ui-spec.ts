@@ -625,7 +625,7 @@ export const PAGE_LAYOUT: readonly ConfigUiPageLayout[] = [
     sections: [
       { id: "identity", label: "Identity", scope: "entity", match: ["$name", "enabled"] },
       { id: "access", label: "Actors & conversations", scope: "entity", match: ["connection", "actors", "conversations", "commands"] },
-      { id: "repositories", label: "Repository aliases", scope: "entity", match: ["repositories"], collapsed: true },
+      { id: "repositories", label: "Repository aliases", scope: "entity", match: ["repositories", "allow_all_repositories"], collapsed: true },
       { id: "policy", label: "Report policy", scope: "entity", match: ["report_policy"] },
     ],
   },

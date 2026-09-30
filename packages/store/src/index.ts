@@ -10,3 +10,4 @@ export * from "./review-deferrals.js";
 export * from "./im-store.js";
 export * from "./reflection.js";
 export * from "./model-catalog.js";
+export * from "./review-queries.js";

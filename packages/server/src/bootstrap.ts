@@ -170,7 +170,9 @@ import {
 import { ImConnectionRegistry } from "./im/connections.js";
 import type { ImCallbackRoutesOptions } from "./im/callback-routes.js";
 import { ImLongConnectionService } from "./im/long-connection-service.js";
-import { IM_HELP_TEXT, parseImCommand, stripImMentionPrefix } from "./im/command-service.js";
+import { IM_HELP_TEXT, invalidImCommandReply, parseImCommand, processImCommand, stripImMentionPrefix } from "./im/command-service.js";
+import { ImAuthorizationDirectory } from "./im/authorization-directory.js";
+import { ImQueryService } from "./im/query-service.js";
 import { MemberDirectoryService, type MemberDirectoryView } from "./im/member-directory-service.js";
 import {
   createRedisConfigStore,
@@ -3195,6 +3197,12 @@ export async function bootstrapServerApp(options: BootstrapServerOptions): Promi
 async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: BootstrapOpenedResources): Promise<ServerAppOptions> {
   const { config, baseSystemPrompt, baseDir = process.cwd(), jobHandler } = options;
 
+  // IM authorization directory: background-refreshed corporate-directory
+  // snapshots backing scope matchers (departments/tags/extattr/chats).
+  // Constructed unconditionally; started only when a store exists (the
+  // receive path is the only consumer).
+  let imAuthorizationDirectory: ImAuthorizationDirectory | undefined;
+
   // --- Runtime config manager (P4): immutable generations replace the
   // process-frozen config object. File-only mode keeps a single generation
   // exactly matching the pre-P4 behavior; database mode adopts the durable
@@ -3904,6 +3912,31 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
     ...(config.review.output_language ? { outputLanguage: config.review.output_language } : {}),
     ...(config.review.log_thinking === false ? { logThinking: false } : {}),
     ...(liveRunRegistry ? { liveRuns: liveRunRegistry } : {}),
+    // Durable in-flight marker rows: IM `running` reads the database (A15d).
+    ...(store
+      ? {
+        onExecutionStart: (async (info: Parameters<NonNullable<ServerReviewOrchestrationOptions["onExecutionStart"]>>[0]) => {
+          const { insertReviewRunOnce } = await import("@aicr/store");
+          await insertReviewRunOnce(store, {
+            id: info.runId,
+            eventId: info.runId,
+            workspaceId: info.reviewEvent.workspaceId,
+            triggerName: info.reviewEvent.triggerName ?? null,
+            repoRef: info.reviewEvent.repoRef ?? null,
+            provider: info.model.providerId,
+            providerModel: info.model.modelId,
+            status: "analyzing",
+            startedAt: new Date(),
+            targetKind: info.reviewEvent.targetKind ?? null,
+            targetUrl: info.reviewEvent.url ?? null,
+            branch: info.reviewEvent.branch ?? null,
+            headSha: info.reviewEvent.headSha ?? null,
+          }).catch((error: unknown) => {
+            console.warn(JSON.stringify({ msg: "im_lifecycle_row_failed", runId: info.runId, error: String(error) }));
+          });
+        }),
+      }
+      : {}),
   };
 
   const rawQueue = await createQueueFromConfig(config);
@@ -4047,6 +4080,26 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
     return draining;
   };
 
+  if (store !== undefined) {
+    imAuthorizationDirectory = new ImAuthorizationDirectory({
+      getConfig: currentConfig,
+      env: (name: string) => resolveEnv(name),
+    });
+    imAuthorizationDirectory.start();
+  }
+  const imQueryService = new ImQueryService({
+    store: store!,
+    getConfig: currentConfig,
+  });
+  if (store !== undefined) {
+    // Single-process executions cannot survive a restart: sweep in-flight rows.
+    void import("@aicr/store").then(({ failActiveReviewRuns }) =>
+      failActiveReviewRuns(store!, "interrupted by restart").then((swept) => {
+        if (swept > 0) console.log(JSON.stringify({ msg: "review_runs_startup_sweep", swept }));
+      }),
+    ).catch(() => undefined);
+  }
+
   return {
     // Fixed dispatcher sources (P4/H06): index.ts resolves these per request
     // against the current generation; trigger changes apply to the next
@@ -4149,13 +4202,18 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
     ...(store ? { store } : {}),
     // IM callbacks need the inbox store plus the live generation's
     // connection table; file-only generations still serve the file config.
+    // The authorization directory resolves scope matchers (departments/tags/
+    // extattr/chat membership) from cached platform snapshots.
     ...(store
       ? {
+        ...(imAuthorizationDirectory !== undefined ? { imDirectory: imAuthorizationDirectory } : {}),
         imCallbacks: {
           store,
           namespace: configSources.database.namespace,
           getConfig: currentConfig,
           env: (name: string) => resolveEnv(name),
+          directory: imAuthorizationDirectory,
+          query: imQueryService,
         } satisfies ImCallbackRoutesOptions,
       }
       : {}),
@@ -4169,16 +4227,20 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
             env: (name: string) => resolveEnv(name),
             namespace: configSources.database.namespace,
             onAdmitMessage: async (message) => {
-              const config = currentConfig();
               const parse = parseImCommand(stripImMentionPrefix(message.text));
+              if (parse.kind === "invalid") {
+                await message.reply(invalidImCommandReply(parse.reason));
+                return;
+              }
               if (parse.kind !== "command") return;
               // help is self-contained: no binding required, reply directly.
               if (parse.command.kind === "help") {
                 await message.reply(IM_HELP_TEXT);
                 return;
               }
-              const { admitImCommand } = await import("./im/command-service.js");
-              const outcome = await admitImCommand(store, {
+              const config = currentConfig();
+              const result = await processImCommand({
+                store,
                 config,
                 namespace: configSources.database.namespace,
                 connectionName: message.connectionName,
@@ -4191,14 +4253,10 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
                 now: new Date(),
                 configSnapshotId: "file-only",
                 configFileDigest: "unknown",
+                ...(imAuthorizationDirectory !== undefined ? { directory: imAuthorizationDirectory } : {}),
+                query: imQueryService,
               });
-              if (outcome.kind === "accepted" || outcome.kind === "duplicate") {
-                await message.reply("已收到评审请求。");
-              } else if (outcome.kind === "rejected") {
-                await message.reply(`请求被拒绝: ${outcome.reason}`);
-              } else if (outcome.kind === "rate_limited") {
-                await message.reply("请求过于频繁，请稍后再试。");
-              }
+              if (result.replyText !== undefined) await message.reply(result.replyText);
             },
           });
           await service.reconcile();
