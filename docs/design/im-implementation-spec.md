@@ -134,7 +134,8 @@ inbox、action、outbox 间的引用及受影响 snapshot 必须纳入同一个�
 active-target 在远端校验前使用可信 binding 的仓库身份及规范化 revision：Git hex 小写，P4/SVN 规范十进制；
 SVN 允许前缀 r，移除后使用相同 key。拒绝正负号、空白和范围；对象存在/范围校验仍在 worker 内。
 别名不同但映射相同可信 source/workspace/revision 应合并活动请求，不能按消息 alias 文字分锁。
-payloadDigest 来自通过验证后的规范化业务内容；不含每次重试变化的签名、投递 nonce 或临时 URL。
+payloadDigest 来自通过验证后的规范化业务内容；企业微信 XML/JSON 使用 UTF-8 SHA-256，
+不含每次重试变化的签名、投递 nonce 或临时 URL。
 规范化函数需版本号；保存当前版本，跨版本不能把旧 key 下的新摘要误认为同一内容。
 临时 URL 不参与业务去重；同一 delivery 的更新凭证只允许按平台身份匹配后有界替换未消费凭证。
 
@@ -211,7 +212,8 @@ memory queue 可作唤醒，只要两个持久 store 前提满足；rabbitmq 的
 | Inbox | 终态 7 天；未处理、活动请求、未决发布依赖不按普通 TTL 删除 |
 | 文件目录 | 大小、条数、300ms debounce/30s poll 等沿用目录文档，不重复设置第二份默认值 |
 
-跨副本限流使用持久 bucket；现有 LLM provider rate limiter 不能直接作为用户命令配额。
+跨副本限流使用持久 bucket；同目标活动请求先合并，只有新请求才原子计入 bucket。
+现有 LLM provider rate limiter 不能直接作为用户命令配额。
 限流 key 使用固定摘要，日志不显示 user ID/手机号；管理员受控审计可以保留 typed actor。
 普通 payload/token/response_url 不进入异常原文。所有失败响应不区分私有仓库“不存在”与“无权限”。
 

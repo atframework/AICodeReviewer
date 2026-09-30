@@ -13,6 +13,9 @@ Sources: root/package manifests, `pnpm-workspace.yaml`, `tsconfig.json`,
 - Recheck native-module engines and pnpm build approvals after dependency bumps.
   `better-sqlite3` 13 uses bundled N-API prebuilds: retain the workspace override
   and ignored build setting while applicable; do not trigger node-gyp needlessly.
+  A dynamic optional import can fail because a transitive dependency is missing
+  even when the package itself exists. Preserve the underlying import cause and
+  verify package-local resolution before changing manifests (`redis-queue.ts`).
   Unsupported Node can kill test workers before assertions. Compare expected
   test files with collected results rather than trusting partial green output.
 - Check TypeScript/ESLint/Astro peers together. A major Zod bump is a schema

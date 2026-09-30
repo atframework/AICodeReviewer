@@ -130,7 +130,7 @@ function challengeParams(): URLSearchParams {
   return new URLSearchParams({ msg_signature: sha1(TOKEN, TIMESTAMP, NONCE, ciphertext), timestamp: TIMESTAMP, nonce: NONCE, echostr: ciphertext });
 }
 
-function messageRequest(msgid = "m-1", text = "aicr help"): { query: URLSearchParams; body: string } {
+function messageRequest(msgid = "m-1", text = "aicr help"): { query: URLSearchParams; body: string; plaintext: string } {
   const payload = JSON.stringify({
     msgid, aibotid: AIBOT_ID, chatid: "chat-9", chattype: "group",
     from: { userid: "owent" }, timestamp: Number(TIMESTAMP),
@@ -140,6 +140,7 @@ function messageRequest(msgid = "m-1", text = "aicr help"): { query: URLSearchPa
   return {
     query: new URLSearchParams({ msg_signature: sha1(TOKEN, TIMESTAMP, NONCE, ciphertext), timestamp: TIMESTAMP, nonce: NONCE }),
     body: JSON.stringify({ encrypt: ciphertext }),
+    plaintext: payload,
   };
 }
 
@@ -179,6 +180,8 @@ describe("im callback routes (real Hono app)", () => {
     const inboxRows = inboxRowsFor("m-1");
     expect(inboxRows).toHaveLength(1);
     expect(inboxRows[0]).toMatchObject({ namespace: "ns-routes", delivery_kind: "message", status: "noted" }); // command creation lands with IM-11
+    const digest = store.sqlite.prepare("SELECT payload_digest FROM im_inbox WHERE delivery_key = ?").get("m-1") as { payload_digest: string };
+    expect(digest.payload_digest).toBe(`json:sha256:${createHash("sha256").update(request.plaintext, "utf8").digest("hex")}`);
 
     // Platform retry of the same delivery replays without a second row.
     const retry = await app.request(`/callbacks/im/corp-airobot?${request.query.toString()}`, {

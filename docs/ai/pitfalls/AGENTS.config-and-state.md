@@ -68,6 +68,11 @@ Read the section matching a config, model-selection, persistence, or usage chang
 Sources: `packages/core/src/config.ts`, `utils.ts`, their tests, and the actual
 consumers in `packages/server/src/bootstrap.ts`.
 
+- A file member directory must compare the real path of both `allowed_root`
+  and the target on every read. Checking only changed symlink targets lets a
+  direct absolute or `..` path escape. Share readers only when their root and
+  reload policy match (`member-directory-service.test.ts` D05).
+
 - `review.max_files` and `review.max_patch_bytes` count only the post-filter
   analyzed set: the orchestrator applies include/exclude/max_files to
   changedPaths first and requests the diff with exactly that pathspec, so an
@@ -248,6 +253,10 @@ Sources: `packages/server/src/model-catalog-service.ts`, `bootstrap.ts`,
 Sources: `packages/store/src/schema.ts`, `database.ts`, store tests, architecture
 §3.11, and the auto-commit backends under `packages/core/src/`.
 
+- In IM delivery transactions, resolve an active target before incrementing
+  command rate-limit buckets. A merged request consumes no new-request quota;
+  a rejected new request rolls back its target reservation, inbox row and
+  bucket change (`im-store-conformance.ts`).
 - Add migrations with schema changes and select new columns in read APIs such as
   `getRecentRuns`; a stored column omitted by the query renders blank downstream.
 - The auto-commit store runs `SCHEMA_SQL` (`CREATE TABLE IF NOT EXISTS`) for

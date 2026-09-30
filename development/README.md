@@ -71,11 +71,6 @@ LLM_TOKEN="$(yq -r '.llm.provider.xiaomimimo_token_plan.token' development/secre
 | 1    | `.llm.provider.zhipu.baseURL`                    | `.llm.provider.zhipu.token`                    | `glm-5.3`         |
 | 2    | `.llm.provider.kimi_coding.baseURL`              | `.llm.provider.kimi_coding.token`              | `k3-256k`         |
 | 3    | `.llm.provider.kimi_coding.baseURL`              | `.llm.provider.kimi_coding.token`              | `kimi-for-coding` |
-| 4    | `.llm.provider.aliyun_coding_plan.baseURL`       | `.llm.provider.aliyun_coding_plan.token`       | `glm-5`           |
-| 5    | `.llm.provider.tencentcloud_coding_plan.baseURL` | `.llm.provider.tencentcloud_coding_plan.token` | `glm-5`           |
-| 6    | `.llm.provider.aliyun_coding_plan.baseURL`       | `.llm.provider.aliyun_coding_plan.token`       | `kimi-k2.5`       |
-| 7    | `.llm.provider.tencentcloud_coding_plan.baseURL` | `.llm.provider.tencentcloud_coding_plan.token` | `kimi-k2.5`       |
-| 8    | `.llm.provider.aliyun_coding_plan.baseURL`       | `.llm.provider.aliyun_coding_plan.token`       | `qwen3.6-plus`    |
 
 ### 关闭/标记已解决分析模型优先级
 
@@ -85,11 +80,6 @@ LLM_TOKEN="$(yq -r '.llm.provider.xiaomimimo_token_plan.token' development/secre
 | 2    | `.llm.provider.zhipu.baseURL`                    | `.llm.provider.zhipu.token`                    | `glm-5.3`         |
 | 3    | `.llm.provider.kimi_coding.baseURL`              | `.llm.provider.kimi_coding.token`              | `k3-256k`         |
 | 4    | `.llm.provider.kimi_coding.baseURL`              | `.llm.provider.kimi_coding.token`              | `kimi-for-coding` |
-| 5    | `.llm.provider.aliyun_coding_plan.baseURL`       | `.llm.provider.aliyun_coding_plan.token`       | `glm-5`           |
-| 6    | `.llm.provider.tencentcloud_coding_plan.baseURL` | `.llm.provider.tencentcloud_coding_plan.token` | `glm-5`           |
-| 7    | `.llm.provider.aliyun_coding_plan.baseURL`       | `.llm.provider.aliyun_coding_plan.token`       | `kimi-k2.5`       |
-| 8    | `.llm.provider.tencentcloud_coding_plan.baseURL` | `.llm.provider.tencentcloud_coding_plan.token` | `kimi-k2.5`       |
-| 9    | `.llm.provider.aliyun_coding_plan.baseURL`       | `.llm.provider.aliyun_coding_plan.token`       | `qwen3.6-plus`    |
 
 - 部署时将该优先级写入 `llm.model_chain.lifecycle`：首条目 `zhipu` / `glm-5.3-flash` 为默认模型，其后按上表顺序追加代码分析的整条链作为 fallback，再设置 `llm.triage_model_chain: lifecycle`。workspace defaults / instances 可用同名字段覆盖分组选择；各层均未配置时继承该 workspace 的主链组。旧数组配置需要先迁移，不能直接用于新版本。
 - 适用面：Git 服务 issue/PR 的 triage 关闭决策，以及支持增量生命周期的 PR/MR 已解决问题复核和 `gitea_problem_issue` / `github_problem_issue` 的关闭或标记已解决。指纹、文件覆盖范围和提交祖先检查先生成候选，只有该模型链明确确认后才执行 destructive lifecycle action；调用失败、输出缺失或上下文不足时保持 open。

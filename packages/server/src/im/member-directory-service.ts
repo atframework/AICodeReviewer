@@ -118,7 +118,6 @@ class FileReader {
 	private readonly absolutePath: string;
 	private readonly parentDirectory: string;
 	private readonly fileBasename: string;
-	private readonly normalizedTarget: string;
 
 	constructor(
 		absolutePath: string,
@@ -131,7 +130,6 @@ class FileReader {
 		this.absolutePath = absolutePath;
 		this.parentDirectory = io.dirnameOf(absolutePath);
 		this.fileBasename = io.basenameOf(absolutePath);
-		this.normalizedTarget = io.normalizePath(absolutePath);
 	}
 
 	async acquire(): Promise<void> {
@@ -255,8 +253,9 @@ class FileReader {
 		for (let attempt = 1; attempt <= MAX_READ_ATTEMPTS; attempt += 1) {
 			if (this.disposed) return;
 			try {
-				const normalized = this.io.normalizePath(await this.io.realpath(this.absolutePath));
-				if (normalized !== this.normalizedTarget && !this.io.pathWithin(this.allowedRoot, normalized)) {
+				const realRoot = await this.io.realpath(this.allowedRoot);
+				const realTarget = await this.io.realpath(this.absolutePath);
+				if (!this.io.pathWithin(realRoot, realTarget)) {
 					this.install(undefined, "path_outside_allowed_root");
 					return;
 				}
@@ -369,7 +368,12 @@ export class MemberDirectoryService {
 		const watch = options.watch ?? true;
 		const debounceMs = options.debounceMs ?? DEFAULT_DEBOUNCE_MS;
 		const pollIntervalMs = (options.pollIntervalSeconds ?? DEFAULT_POLL_SECONDS) * 1000;
-		const key = this.io.normalizePath(absolutePath);
+		// A reader's root and reload policy are security/availability inputs.
+		// Sharing only by file path lets a less restrictive view serve another.
+		const key = JSON.stringify([
+			this.io.normalizePath(absolutePath), this.io.normalizePath(allowedRoot),
+			watch, debounceMs, pollIntervalMs,
+		]);
 		let entry = this.readers.get(key);
 		if (entry === undefined) {
 			entry = { reader: new FileReader(absolutePath, allowedRoot, watch, debounceMs, pollIntervalMs, this.io), views: 0 };

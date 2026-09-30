@@ -37,7 +37,8 @@ webhook 频道没有可查询的身份，需要管理员显式配置 scope 并�
 `path` 相对主配置文件的 baseDir 解析，数据库实体也使用这一 baseDir；
 不相对 run 目录、评审 checkout 或当前 cwd 解析。支持管理员配置的绝对本地路径。
 新增可选 `allowed_root` 也按 baseDir 解析；缺省为主配置文件父目录（即 baseDir）。
-绝对 path 在该根外时必须显式配置相应受信根。比较解析后的真实路径边界，不能用字符串前缀判断。
+绝对 path 在该根外时必须显式配置相应受信根。每次读取比较根目录和目标文件的真实路径边界，
+包括直接路径、`..` 和符号链接；同一文件但 `allowed_root` 或 reload 策略不同的视图独立读取。
 容器采用只读挂载。数据库配置写权限继续受管理员权限控制；管理 UI 不提供任意文件下载。
 
 旧 API 目录 `{chat_id, cache_ttl_seconds}` 保持兼容；新 API 写法可显式 `source: feishu_api`。

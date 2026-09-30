@@ -86,6 +86,7 @@ export async function runImStoreConformance(store: StoreDb): Promise<void> {
   await acceptsAndDeduplicatesDeliveries(store);
   await promotesRecordedDelivery(store);
   await mergesActiveTargetsAndReleasesOnFinish(store);
+  await mergesActiveTargetsWithoutConsumingQuota(store);
   await atomicActionConsumptionAndQuota(store);
   await claimsWithFencing(store);
   await dispatchSequencesAndSnapshotReferences(store);
@@ -147,6 +148,26 @@ async function mergesActiveTargetsAndReleasesOnFinish(store: StoreDb): Promise<v
   expect(finished).toBe(true);
   const afterFinish = await acceptImDelivery(store, commandInput(deliveryInput(), request({ requestedRevision: req.requestedRevision })));
   expect(afterFinish).toMatchObject({ kind: "created" });
+}
+
+async function mergesActiveTargetsWithoutConsumingQuota(store: StoreDb): Promise<void> {
+  const revision = uniqueHex();
+  const firstRequest = request({ requestedRevision: revision });
+  const rateLimit = { bucketKey: `actor:${randomUUID()}`, windowStart: T0, limit: 1 };
+  expect(await acceptImDelivery(store, commandInput(deliveryInput(), firstRequest, { rateLimit })))
+    .toMatchObject({ kind: "created", requestId: firstRequest.requestId });
+
+  // A second delivery for the same active target reuses the first request even
+  // after its quota is exhausted, and does not increment the persistent bucket.
+  expect(await acceptImDelivery(store, commandInput(deliveryInput(), request({ requestedRevision: revision }), { rateLimit })))
+    .toMatchObject({ kind: "active_merged", requestId: firstRequest.requestId });
+  expect(await consumeImRateLimit(store, { namespace: "ns-test", bucketKey: rateLimit.bucketKey, windowStart: rateLimit.windowStart }))
+    .toBe(2);
+
+  const rejected = request({ requestedRevision: uniqueHex() });
+  expect(await acceptImDelivery(store, commandInput(deliveryInput(), rejected, { rateLimit })))
+    .toMatchObject({ kind: "rate_limited" });
+  expect(await findImReviewRequest(store, "ns-test", rejected.requestId)).toBeUndefined();
 }
 
 async function atomicActionConsumptionAndQuota(store: StoreDb): Promise<void> {

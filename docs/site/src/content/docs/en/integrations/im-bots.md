@@ -435,6 +435,9 @@ The member file format is documented in the
 - The whole file validates or the report ships without mentions — broken
   directories never fall back to @all. One directory snapshot is pinned per
   report, including every split part.
+- The file path is relative to the main config directory. It must remain under
+  `allowed_root` (the config directory by default) after resolving `..` and
+  symlinks; an absolute path outside that root requires an explicit trusted root.
 - Names, aliases and emails from the file never enter payloads, prompts or
   logs beyond the typed mention id.
 
@@ -555,6 +558,9 @@ Supported command grammar (the `aicr` prefix, sent after @-mentioning the bot):
   detail: status, model, input/output/cache-hit tokens, request count, cost,
   duration — recent records only), `aicr queue` (pending tasks with scheduled
   starts), `aicr running` (in-flight reviews).
+  For registered repositories, queries match the binding's workspace,
+  source trigger, and repo reference. Another trigger for the same workspace
+  and repo is outside that binding.
 - `aicr chat-id` / `aicr review <repo> <revision>` / `aicr status <id>` —
   require an enabled `im.command_bindings` entry. Authorization checks four
   dimensions — actor, conversation, connection and command — and the actor
@@ -580,6 +586,8 @@ Supported command grammar (the `aicr` prefix, sent after @-mentioning the bot):
 worker validates the fixed revision and runs the review under the shared
 workspace concurrency limit. Git requires a full commit hash reachable from
 the configured repository; SVN and P4 require a positive revision number.
+A repeated request for the same active workspace, repository and revision
+reuses the existing review without consuming the quota for a new request.
 `aicr status` reveals a request only to its original actor on the original
 connection and conversation, while its repository remains allowed by the
 status binding. A review interrupted after execution started is reported as

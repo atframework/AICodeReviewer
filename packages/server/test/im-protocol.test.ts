@@ -1,5 +1,4 @@
 import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
@@ -17,18 +16,18 @@ import { parseStrictWcomXml, StrictXmlError, XML_MAX_BYTES } from "../src/im/xml
 
 /**
  * IM-10 acceptance S01–S08 (WeCom application share): fixed vectors computed
- * INDEPENDENTLY with bare node:crypto (build/tmp/im/IM-10-gen-wecom-vectors.mjs),
+ * INDEPENDENTLY with bare node:crypto (fixtures/generate-im-wecom-vectors.mjs),
  * never by encrypt→decrypt of the implementation under test. Negative cases
  * cover tampering, wrong receivers, bad padding, duplicate fields, DTD/XXE and
  * size limits — all rejected with no side effects.
  */
 
-const vectors = JSON.parse(readFileSync(resolve("build/tmp/im/IM-10-wecom-vectors.json"), "utf8")) as {
+const vectors = JSON.parse(readFileSync(new URL("./fixtures/im-wecom-vectors.json", import.meta.url), "utf8")) as {
   encodingAesKey: string;
   token: string;
   corpId: string;
   challenge: { plaintext: string; prefix: string; ciphertext: string; signature: string };
-  message: { innerXml: string; envelope: string; ciphertext: string; signature: string };
+  message: { innerXml: string; envelope: string; ciphertext: string; signature: string; payloadDigest: string };
 };
 
 const credentials: WecomAppCallbackCredentials = {
@@ -93,6 +92,7 @@ describe("S02: application GET challenge and POST verification", () => {
     expect(result.event.content).toEqual({ kind: "message", text: "aicr review service 0123456789abcdef0123456789abcdef01234567" });
     expect(result.event.messageId).toBe("1234567890123456");
     expect(result.event.protocol).toBe("wecom_app");
+    expect(result.event.payloadDigest).toBe(`xml:sha256:${vectors.message.payloadDigest}`);
   });
 
   it("rejects wrong receivers, agents and tampered signatures", () => {

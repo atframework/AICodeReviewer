@@ -45,10 +45,10 @@ type BullMqModule = any;
 async function loadBullMq(): Promise<BullMqModule> {
   try {
     return await import("bullmq");
-  } catch {
+  } catch (error) {
     throw new Error(
-      "bullmq is not installed. Install it with: pnpm add bullmq ioredis\n" +
-      "Redis queue requires both bullmq and ioredis packages.",
+      `Could not load bullmq for the Redis queue. Check the optional dependency installation. Cause: ${error instanceof Error ? error.message : String(error)}`,
+      { cause: error },
     );
   }
 }

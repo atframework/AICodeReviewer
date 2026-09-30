@@ -161,6 +161,29 @@ afterEach(() => {
 });
 
 describe("D05: baseDir resolution and allowed_root boundary", () => {
+	it("rejects direct absolute and parent-relative paths outside allowed_root", async () => {
+		const h = harness();
+		const outside = resolve(h.baseDir, "../outside/members.yaml");
+		h.fs.write(outside, directoryYaml("engineering-wecom", ["alice"]));
+		for (const path of [outside, "../outside/members.yaml"]) {
+			const view = await h.service.acquire({ ...acquireDefaults, baseDir: h.baseDir, path });
+			expect(view.getSnapshot()).toMatchObject({ status: "unavailable", errorCode: "path_outside_allowed_root" });
+			await view.release();
+		}
+	});
+
+	it("keeps readers with different allowed roots separate", async () => {
+		const h = harness(directoryYaml("engineering-wecom", ["alice"]));
+		const broad = await h.service.acquire({ ...acquireDefaults, baseDir: h.baseDir });
+		const restricted = await h.service.acquire({
+			...acquireDefaults, baseDir: h.baseDir, allowedRoot: "private/allowed",
+		});
+		expect(broad.getSnapshot()).toMatchObject({ status: "ready", members: [{ key: "alice" }] });
+		expect(restricted.getSnapshot()).toMatchObject({ status: "unavailable", errorCode: "path_outside_allowed_root" });
+		await restricted.release();
+		await broad.release();
+	});
+
 	it("resolves relative paths against baseDir and honors symlink boundaries per read", async () => {
 		const h = harness(directoryYaml("engineering-wecom", ["alice"]));
 		const view = await h.service.acquire({ ...acquireDefaults, baseDir: h.baseDir });

@@ -47,9 +47,9 @@ function registeredTargets(binding: ImCommandBindingConfig): QueryTarget[] {
   }));
 }
 
-function targetAllowed(binding: ImCommandBindingConfig, workspaceId: string, repoRef: string): boolean {
+function targetAllowed(binding: ImCommandBindingConfig, workspaceId: string, sourceTrigger: string | null | undefined, repoRef: string): boolean {
   return binding.allow_all_repositories === true || registeredTargets(binding).some(target =>
-    target.workspaceId === workspaceId && target.repoRef === repoRef);
+    target.workspaceId === workspaceId && target.sourceTrigger === sourceTrigger && target.repoRef === repoRef);
 }
 
 function statusEmoji(status: string): string {
@@ -116,7 +116,7 @@ export class ImQueryService {
   }
 
   private async projects(binding: ImCommandBindingConfig): Promise<string> {
-    const stats = (await getProjectStats(this.options.store)).filter(project => targetAllowed(binding, project.workspaceId, project.repoRef));
+    const stats = (await getProjectStats(this.options.store)).filter(project => targetAllowed(binding, project.workspaceId, project.triggerName, project.repoRef));
     if (stats.length === 0) return "尚无接入的项目（收到首个评审事件后会出现）。";
     const lines = stats.slice(0, 15).map(project =>
       `- ${project.displayName ?? project.workspaceId}（${shortRepo(project.repoRef)}）触发: ${project.triggerName}，评审 ${project.reviewCount} 次${project.isActive ? "" : " [已停用]"}`,
@@ -130,7 +130,7 @@ export class ImQueryService {
     const runs = [...(targets.length === 0 && binding.allow_all_repositories === true
       ? await listImQueryRuns(this.options.store, { limit: LIST_LIMIT })
       : (await Promise.all(targets.map(entry => listImQueryRuns(this.options.store, {
-        workspaceId: entry.workspaceId, repoRef: entry.repoRef, limit: LIST_LIMIT,
+        workspaceId: entry.workspaceId, sourceTrigger: entry.sourceTrigger, repoRef: entry.repoRef, limit: LIST_LIMIT,
       })))).flat())].sort((a, b) => (b.startedAt?.getTime() ?? 0) - (a.startedAt?.getTime() ?? 0)).slice(0, LIST_LIMIT);
     if (runs.length === 0) return target === undefined ? "近期没有评审记录。" : "该项目近期没有评审记录。";
     const now = this.now;
@@ -142,13 +142,14 @@ export class ImQueryService {
 
   private async triggerEvents(
     targetKind: "commit" | "pull_request",
-    target: { readonly workspaceId: string; readonly repoRef: string } | undefined,
+    target: QueryTarget | undefined,
     branch: string | undefined,
   ): Promise<string> {
     if (target === undefined) return "未知的仓库别名（请先在命令绑定中注册 repositories 映射）。";
     const events = await listImQueryTriggerEvents(this.options.store, {
       targetKind,
       workspaceId: target.workspaceId,
+      sourceTrigger: target.sourceTrigger,
       repoRef: target.repoRef,
       ...(branch !== undefined ? { branch } : {}),
       limit: LIST_LIMIT,
@@ -169,12 +170,13 @@ export class ImQueryService {
   }
 
   private async detail(
-    target: { readonly workspaceId: string; readonly repoRef: string } | undefined,
+    target: QueryTarget | undefined,
     revision: string,
   ): Promise<string> {
     if (target === undefined) return "未知的仓库别名（请先在命令绑定中注册 repositories 映射）。";
     const runs = await listImQueryRuns(this.options.store, {
       workspaceId: target.workspaceId,
+      sourceTrigger: target.sourceTrigger,
       repoRef: target.repoRef,
       limit: 200,
     });
@@ -185,12 +187,13 @@ export class ImQueryService {
   }
 
   private async prDetail(
-    target: { readonly workspaceId: string; readonly repoRef: string } | undefined,
+    target: QueryTarget | undefined,
     prId: string,
   ): Promise<string> {
     if (target === undefined) return "未知的仓库别名（请先在命令绑定中注册 repositories 映射）。";
     const runs = await listImQueryRuns(this.options.store, {
       workspaceId: target.workspaceId,
+      sourceTrigger: target.sourceTrigger,
       repoRef: target.repoRef,
       limit: 200,
     });
@@ -252,14 +255,16 @@ export class ImQueryService {
     for (const row of deferrals) {
       let repo = "-";
       let workspaceId = "";
+      let sourceTrigger: string | undefined;
       let headSha = "-";
       try {
-        const event = JSON.parse(row.reviewEvent) as { workspaceId?: string; repoRef?: string; headSha?: string };
+        const event = JSON.parse(row.reviewEvent) as { workspaceId?: string; triggerName?: string; repoRef?: string; headSha?: string };
         repo = event.repoRef ?? "-";
         workspaceId = event.workspaceId ?? "";
+        sourceTrigger = event.triggerName;
         headSha = formatShortRevision(event.headSha ?? null);
       } catch { /* pruned/legacy rows answer with placeholders */ }
-      if (!targetAllowed(binding, workspaceId, repo)) continue;
+      if (!targetAllowed(binding, workspaceId, sourceTrigger, repo)) continue;
       lines.push(`- ${formatShortRevision(headSha)} ${shortRepo(repo)} 计划 ${formatDateTime(row.notBefore, now)}`);
       if (lines.length >= LIST_LIMIT) break;
     }
@@ -272,7 +277,7 @@ export class ImQueryService {
     const runs = [...(targets.length === 0 && binding.allow_all_repositories === true
       ? await listImQueryRuns(this.options.store, { statusIn: ACTIVE_RUN_STATUSES, limit: LIST_LIMIT })
       : (await Promise.all(targets.map(entry => listImQueryRuns(this.options.store, {
-        workspaceId: entry.workspaceId, repoRef: entry.repoRef, statusIn: ACTIVE_RUN_STATUSES, limit: LIST_LIMIT,
+        workspaceId: entry.workspaceId, sourceTrigger: entry.sourceTrigger, repoRef: entry.repoRef, statusIn: ACTIVE_RUN_STATUSES, limit: LIST_LIMIT,
       })))).flat())].sort((a, b) => (b.startedAt?.getTime() ?? 0) - (a.startedAt?.getTime() ?? 0)).slice(0, LIST_LIMIT);
     if (runs.length === 0) return "当前没有进行中的评审。";
     const now = this.now;

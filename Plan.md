@@ -70,7 +70,7 @@ checkbox 仅在实现接线、断言和适用门禁均通过后勾选；implemen
   周期内容摘要 poll、single-flight+排队跟随读、watcher 失败有界退避重挂、按路径共享
   读取器/按 scope 隔离视图/引用计数释放、dirty 不用旧身份、错误态不供 last-good、
   allowed_root 真实路径边界）；D05–D10 覆盖于
-  `packages/server/test/member-directory-service.test.ts`（14 例，含真实临时文件
+  `packages/server/test/member-directory-service.test.ts`（16 例，含真实临时文件
   原子替换/删除重建/同 mtime 用例）。
 - [x] IM-08：身份映射、原生 @和同报告目录快照。
   channel-identity 能力改为按配置来源判定；新增 memberDirectoryChannelUsers/
@@ -91,7 +91,7 @@ checkbox 仅在实现接线、断言和适用门禁均通过后勾选；implemen
   32 字节块、严格 padding/receiveid）、xml-strict.ts（单一严格 XML 包装：禁实体/DTD、
   字段白名单、重复认证字段拒绝）、protocol-wecom-app.ts（GET challenge/POST 验证、品牌化
   VerifiedImEvent、加密回复 envelope）；固定向量由独立 node:crypto 脚本生成
-  （build/tmp/im/IM-10-gen-wecom-vectors.mjs → IM-10-wecom-vectors.json），S01–S08 企业微信
+  （`packages/server/test/fixtures/generate-im-wecom-vectors.mjs` → `im-wecom-vectors.json`），S01–S08 企业微信
   份额覆盖于 im-protocol.test.ts（9 例）。aibot/飞书份额随后续任务补齐（本轮会话边界）。
 - [x] IM-11：固定命令、会话发现、精确授权和持久接收。
   新增 server im/command-service.ts（parseImCommand 固定文法、authorizeImCommand 精确
@@ -164,8 +164,9 @@ P0 对应 IM-00–03，P1 对应 04–05，P2 对应 06–08，P3/P4 对应 09�
   验收记录分清平台/租户、权限、账户版本、调用量和清理结果；无凭据时明确未验收。
   完成后将稳定约定并入主题文档，证据归档里程碑，再精简本计划。
 
-## 本轮文档验收
+## 本轮代码复审
 
-只运行仓库 Markdown 门禁、AI 入口/元数据/本地引用检查和 `git diff --check`。
-功能测试、平台接入、安装依赖、启动服务、创建应用或发送消息均不属于本轮。
-现有无关工作区修改保持原样。
+以 `73df985a2f4ae4a205883a4080d76126800a5e67` 为差异基准复审已提交代码。
+修复需包含对应回归断言，并按[仓库基线](docs/ai/AGENTS.repository-baseline.md)
+运行代码、文档站与适用的浏览器门禁。IM-14/15/21 等未完成项继续按上面的任务卡验收；
+真实平台验收仍等待单独授权的测试账户。保留无关工作区修改。

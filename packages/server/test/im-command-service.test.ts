@@ -343,6 +343,56 @@ describe("A15e: running reads the database", () => {
 });
 
 describe("IM query authorization scope", () => {
+  it("isolates records with the same workspace and repo by source trigger", async () => {
+    const { insertReviewRun, insertWebhookEvent } = await import("@aicr/store");
+    const { ImQueryService } = await import("../src/im/query-service.js");
+    const config = makeConfig({ bindings: {
+      viewer: {
+        enabled: true, connection: "wecom-airobot", conversations: [CONV_DIRECT], actors: [{ kind: "any" }],
+        commands: ["projects", "reviews", "running", "detail", "prdetail", "commits", "prs"],
+        repositories: { service: { workspace: "ws-main", source_trigger: "github-main", repo_ref: "org/service" } },
+      },
+    } });
+    const ownSha = "a".repeat(40);
+    const otherSha = "b".repeat(40);
+    for (const [id, triggerName, headSha, prId] of [
+      ["own-run", "github-main", ownSha, "41"],
+      ["other-run", "github-shadow", otherSha, "42"],
+    ] as const) {
+      await insertReviewRun(store, {
+        id, eventId: id, workspaceId: "ws-main", triggerName, repoRef: "org/service",
+        provider: "openai", providerModel: "m", status: "analyzing", startedAt: new Date(),
+        headSha, targetKind: "pull_request", targetUrl: `https://example.test/org/service/pull/${prId}`,
+      });
+    }
+    for (const targetKind of ["commit", "pull_request"] as const) {
+      for (const [triggerName, branch] of [["github-main", "own-branch"], ["github-shadow", "other-branch"]] as const) {
+        await insertWebhookEvent(store, {
+          decision: "executed", workspaceId: "ws-main", triggerName, repoRef: "org/service",
+          targetKind, branch,
+        });
+      }
+    }
+    const binding = config.im.command_bindings.viewer!;
+    const query = new ImQueryService({ store, getConfig: () => config });
+    const answer = (command: Parameters<ImQueryService["answer"]>[0]["command"]) =>
+      query.answer({ command, connectionName: "wecom-airobot", binding });
+    expect(await answer({ kind: "projects" })).toContain("github-main");
+    expect(await answer({ kind: "projects" })).not.toContain("github-shadow");
+    for (const command of [{ kind: "reviews", repoAlias: undefined }, { kind: "running" }] as const) {
+      const reply = await answer(command);
+      expect(reply).toContain(ownSha.slice(0, 12));
+      expect(reply).not.toContain(otherSha.slice(0, 12));
+    }
+    expect(await answer({ kind: "detail", repoAlias: "service", revision: otherSha })).toContain("未找到");
+    expect(await answer({ kind: "prdetail", repoAlias: "service", prId: "42" })).toContain("未找到");
+    for (const command of [{ kind: "commits", repoAlias: "service", branch: undefined }, { kind: "prs", repoAlias: "service", branch: undefined }] as const) {
+      const reply = await answer(command);
+      expect(reply).toContain("own-branch");
+      expect(reply).not.toContain("other-branch");
+    }
+  });
+
   it("keeps broad reviews and running lists inside the authorized binding", async () => {
     const { insertReviewRun } = await import("@aicr/store");
     const { ImQueryService } = await import("../src/im/query-service.js");

@@ -55,6 +55,9 @@ Sources: `packages/outputs/src/index.ts`, `template-engine.ts`, `im-markdown.ts`
 - IM status and broad query lists must use the authorized binding plus the
   original actor, connection and conversation; a connection-wide project
   lookup can expose other bindings' repositories (`im-command-service.test.ts`).
+  Registered repository queries must filter the complete workspace, trigger,
+  and repo identity, including project lists, run details, trigger events and
+  queued deferrals; a shared workspace/repo can have a different trigger.
   WeCom proactive notifications share the subscribed socket and wait for its
   send acknowledgement before the outbox marks delivery
   (`im-long-connection-service.test.ts`).

@@ -40,6 +40,7 @@ export const ACTIVE_RUN_STATUSES = ["queued", "preparing", "analyzing", "publish
 
 export interface ImQueryRunFilter {
   readonly workspaceId?: string | undefined;
+  readonly sourceTrigger?: string | undefined;
   readonly statusIn?: readonly string[] | undefined;
   readonly repoRef?: string | undefined;
   readonly headSha?: string | undefined;
@@ -91,6 +92,7 @@ export async function listImQueryRuns(store: StoreDb, filter: ImQueryRunFilter =
       .where(and(
         eq(reviewRunsPg.historyPruned, false),
         ...(filter.workspaceId !== undefined ? [eq(reviewRunsPg.workspaceId, filter.workspaceId)] : []),
+        ...(filter.sourceTrigger !== undefined ? [eq(projectsPg.triggerName, filter.sourceTrigger)] : []),
         ...(filter.statusIn !== undefined ? [inArray(reviewRunsPg.status, filter.statusIn as RunStatus[])] : []),
         ...(filter.repoRef !== undefined ? [eq(projectsPg.repoRef, filter.repoRef)] : []),
         ...(filter.headSha !== undefined ? [eq(reviewRunsPg.headSha, filter.headSha)] : []),
@@ -107,6 +109,7 @@ export async function listImQueryRuns(store: StoreDb, filter: ImQueryRunFilter =
     .where(and(
       eq(reviewRuns.historyPruned, false),
       ...(filter.workspaceId !== undefined ? [eq(reviewRuns.workspaceId, filter.workspaceId)] : []),
+      ...(filter.sourceTrigger !== undefined ? [eq(projects.triggerName, filter.sourceTrigger)] : []),
       ...(filter.statusIn !== undefined ? [inArray(reviewRuns.status, filter.statusIn as RunStatus[])] : []),
       ...(filter.repoRef !== undefined ? [eq(projects.repoRef, filter.repoRef)] : []),
       ...(filter.headSha !== undefined ? [eq(reviewRuns.headSha, filter.headSha)] : []),
@@ -121,7 +124,7 @@ export async function listImQueryRuns(store: StoreDb, filter: ImQueryRunFilter =
 /** Recent trigger events (the commits/PRs that arrived and were accepted). */
 export async function listImQueryTriggerEvents(
   store: StoreDb,
-  filter: { readonly targetKind: "commit" | "pull_request"; readonly workspaceId?: string | undefined; readonly repoRef?: string | undefined; readonly branch?: string | undefined; readonly limit?: number | undefined },
+  filter: { readonly targetKind: "commit" | "pull_request"; readonly workspaceId?: string | undefined; readonly sourceTrigger?: string | undefined; readonly repoRef?: string | undefined; readonly branch?: string | undefined; readonly limit?: number | undefined },
 ): Promise<readonly ImQueryTriggerEvent[]> {
   const limit = clampLimit(filter.limit);
   const decisions = ["executed", "deferred"] as const;
@@ -147,6 +150,7 @@ export async function listImQueryTriggerEvents(
         eq(webhookEventsPg.targetKind, filter.targetKind),
         ...(policy ? [gte(webhookEventsPg.receivedAt, new Date(historyCutoff(policy)))] : []),
         ...(filter.workspaceId !== undefined ? [eq(webhookEventsPg.workspaceId, filter.workspaceId)] : []),
+        ...(filter.sourceTrigger !== undefined ? [eq(webhookEventsPg.triggerName, filter.sourceTrigger)] : []),
         ...(filter.repoRef !== undefined ? [eq(webhookEventsPg.repoRef, filter.repoRef)] : []),
         ...(filter.branch !== undefined ? [eq(webhookEventsPg.branch, filter.branch)] : []),
       ))
@@ -173,6 +177,7 @@ export async function listImQueryTriggerEvents(
       eq(webhookEvents.targetKind, filter.targetKind),
       ...(policy ? [gte(webhookEvents.receivedAt, new Date(historyCutoff(policy)))] : []),
       ...(filter.workspaceId !== undefined ? [eq(webhookEvents.workspaceId, filter.workspaceId)] : []),
+      ...(filter.sourceTrigger !== undefined ? [eq(webhookEvents.triggerName, filter.sourceTrigger)] : []),
       ...(filter.repoRef !== undefined ? [eq(webhookEvents.repoRef, filter.repoRef)] : []),
       ...(filter.branch !== undefined ? [eq(webhookEvents.branch, filter.branch)] : []),
     ))

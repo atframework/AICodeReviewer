@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 
 import { brandVerifiedImEvent, type ImConnectionIdentity, type VerifiedImEventData } from "@aicr/core";
 
@@ -128,8 +128,8 @@ function buildEvent(envelope: { fields: ReadonlyMap<string, string> }, connectio
     connectionName: connection.name,
     protocol: "wecom_app",
     deliveryKind: msgType === "event" || msgType === "template_card_event" ? "event" : "message",
-    deliveryKey: fields.get("MsgId") ?? digestKey(fields),
-    payloadDigest: `xml:${simpleDigest(plaintext)}`,
+    deliveryKey: fields.get("MsgId") ?? `sha256:${digestKey(fields)}`,
+    payloadDigest: `xml:sha256:${simpleDigest(plaintext)}`,
     actor: from ? { type: "wecom_userid", id: from } : undefined,
     conversation: { kind: "app_direct" },
     occurredAt: createTime * 1000,
@@ -157,12 +157,7 @@ function digestKey(fields: ReadonlyMap<string, string>): string {
 }
 
 function simpleDigest(value: string): string {
-  let hash = 0x811c9dc5;
-  for (let index = 0; index < value.length; index += 1) {
-    hash ^= value.charCodeAt(index);
-    hash = Math.imul(hash, 0x01000193) >>> 0;
-  }
-  return hash.toString(16).padStart(8, "0");
+  return createHash("sha256").update(value, "utf8").digest("hex");
 }
 
 /** Encrypted ACK envelope for application replies (used by IM-16's outbox). */

@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import { brandVerifiedImEvent, type ImConnectionIdentity, type VerifiedImEventData } from "@aicr/core";
 
 import {
@@ -129,8 +131,8 @@ function buildEvent(payload: Record<string, unknown>, connection: { identity: Im
     connectionName: connection.name,
     protocol: "wecom_aibot",
     deliveryKind: "message",
-    deliveryKey: msgid ?? digest(plaintext),
-    payloadDigest: `json:${digest(plaintext)}`,
+    deliveryKey: msgid ?? `sha256:${digest(plaintext)}`,
+    payloadDigest: `json:sha256:${digest(plaintext)}`,
     actor: senderId !== undefined ? { type: senderType, id: senderId } : undefined,
     conversation: chatid !== undefined ? { kind: "group", id: chatid } : { kind: "bot_direct" },
     occurredAt: Number(payload.timestamp ?? 0) * 1000 || 0,
@@ -147,12 +149,7 @@ function buildEvent(payload: Record<string, unknown>, connection: { identity: Im
 }
 
 function digest(value: string): string {
-  let hash = 0x811c9dc5;
-  for (let index = 0; index < value.length; index += 1) {
-    hash ^= value.charCodeAt(index);
-    hash = Math.imul(hash, 0x01000193) >>> 0;
-  }
-  return hash.toString(16).padStart(8, "0");
+  return createHash("sha256").update(value, "utf8").digest("hex");
 }
 
 /** Encrypted ACK envelope for passive replies ({encrypt, msgsignature, timestamp, nonce}). */

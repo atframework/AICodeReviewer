@@ -1,0 +1,18 @@
+{
+  "encodingAesKey": "ERERERERERERERERERERERERERERERERERERERERERE",
+  "token": "imTestToken123",
+  "corpId": "wwtestcorp",
+  "challenge": {
+    "plaintext": "777000111222",
+    "prefix": "22222222222222222222222222222222",
+    "ciphertext": "v6FGldfgfwItD7ea+KNFSSvW+BMTBL5111pjGsOC7T/Tm7P4W1K2r6SksAcDcrLcunrgz1xOJUa+EbwgzEGX+g==",
+    "signature": "c2a15ad15be0046314db216575fe9e364994627b"
+  },
+  "message": {
+    "innerXml": "<xml><ToUserName>wwtestcorp</ToUserName><FromUserName>alice_zhang</FromUserName><CreateTime>1759000000</CreateTime><MsgType>text</MsgType><Content>aicr review service 0123456789abcdef0123456789abcdef01234567</Content><MsgId>1234567890123456</MsgId><AgentID>1000002</AgentID></xml>",
+    "envelope": "<xml><ToUserName>wwtestcorp</ToUserName><Encrypt><![CDATA[v6FGldfgfwItD7ea+KNFSdBZ6YMctNt99JFDP8xMkX8/jB3dLjrnR8nWx1f3YZeWjNhYJqTRk2UojQgw744hTACa01RL+44mjkRccyuMH5ebd7PVko1GXYwTIePbVZ75tmS+ExJeWtiVaOHB3ycfmBDFYa6bGbGDCAp+8q/VLEFkElh2FBYs/5KTdsk/vhQmgQPvS+aRiCC70P3b/lHDDnIDrb6zAcrXpn4zdrB4Z7XQtXdcwqaW6S3Fhn1Qn9VfKMtVhlQNWUSxCE1kxtkb8BwMxY1ITn2ryKW66nNOALIrkFRRJrvoG9WE0n7XgGiEJenq7vtJSiGrWAUbQT/qiEyqgiaPNAzolUtWIzXNt7YtZ+bLeW/PVOwco4po/5fq4KBAJwa6fLuwm4tJOYBFfqBO5wv0PQMBaGQOZL3XlzE=]]></Encrypt></xml>",
+    "ciphertext": "v6FGldfgfwItD7ea+KNFSdBZ6YMctNt99JFDP8xMkX8/jB3dLjrnR8nWx1f3YZeWjNhYJqTRk2UojQgw744hTACa01RL+44mjkRccyuMH5ebd7PVko1GXYwTIePbVZ75tmS+ExJeWtiVaOHB3ycfmBDFYa6bGbGDCAp+8q/VLEFkElh2FBYs/5KTdsk/vhQmgQPvS+aRiCC70P3b/lHDDnIDrb6zAcrXpn4zdrB4Z7XQtXdcwqaW6S3Fhn1Qn9VfKMtVhlQNWUSxCE1kxtkb8BwMxY1ITn2ryKW66nNOALIrkFRRJrvoG9WE0n7XgGiEJenq7vtJSiGrWAUbQT/qiEyqgiaPNAzolUtWIzXNt7YtZ+bLeW/PVOwco4po/5fq4KBAJwa6fLuwm4tJOYBFfqBO5wv0PQMBaGQOZL3XlzE=",
+    "signature": "614e2344022b460e7b4276b2183b8d356d70eabd",
+    "payloadDigest": "de42e858ffe5be3437dfe3ddd4c650dd40cf4c520d9f3af3405509586253d70d"
+  }
+}

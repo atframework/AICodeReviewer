@@ -265,19 +265,6 @@ export async function acceptImDelivery(store: StoreDb, input: AcceptImDeliveryIn
       }
     }
 
-    if (input.command.rateLimit !== undefined) {
-      const { bucketKey, windowStart, limit } = input.command.rateLimit;
-      const bumped = tx.insert(imRateLimits).values({
-        namespace: input.delivery.namespace, bucketKey, windowStart, count: 1,
-      }).onConflictDoUpdate({
-        target: [imRateLimits.namespace, imRateLimits.bucketKey, imRateLimits.windowStart],
-        set: { count: sql`${imRateLimits.count} + 1` },
-      }).returning({ count: imRateLimits.count }).all();
-      if ((bumped[0]?.count ?? 0) > limit) {
-        throw new ImRateLimitRollback(bumped[0]?.count ?? limit);
-      }
-    }
-
     // Active target dedup: a running request for the same trusted
     // workspace/source/revision is reused instead of duplicated (R03).
     const targetKey = {
@@ -301,6 +288,19 @@ export async function acceptImDelivery(store: StoreDb, input: AcceptImDeliveryIn
           .where(eq(imActions.actionId, action)).run();
       }
       return { kind: "active_merged", inboxId, requestId: existingTarget?.requestId ?? "" } as AcceptImDeliveryOutcome;
+    }
+
+    if (input.command.rateLimit !== undefined) {
+      const { bucketKey, windowStart, limit } = input.command.rateLimit;
+      const bumped = tx.insert(imRateLimits).values({
+        namespace: input.delivery.namespace, bucketKey, windowStart, count: 1,
+      }).onConflictDoUpdate({
+        target: [imRateLimits.namespace, imRateLimits.bucketKey, imRateLimits.windowStart],
+        set: { count: sql`${imRateLimits.count} + 1` },
+      }).returning({ count: imRateLimits.count }).all();
+      if ((bumped[0]?.count ?? 0) > limit) {
+        throw new ImRateLimitRollback(bumped[0]?.count ?? limit);
+      }
     }
 
     const request = input.command.request;
