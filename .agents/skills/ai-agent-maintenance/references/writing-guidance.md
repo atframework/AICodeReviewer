@@ -90,13 +90,21 @@ Structure:
 “夹具”指测试数据时改用“测试数据”“测试样本”或“样本数据”；只有真正的 setup/teardown
 脚手架才保留“测试夹具”，沿用英文时写 fixture。
 已被代码、工具或现有引用使用的英文文件名、技能标识和 API 名称保持原样，修改面向读者的标题与正文。
-历史里程碑保留当时用词，不为统一术语重写交付记录。
+任务恢复用“重新排队”，定时器按动作使用“设置定时器”“启动定时器”或“恢复定时器”，
+避免将英文 arm/re-arm 直译为军事用语。代码标识、原始日志及协议原文保持原样。
+
+## 里程碑归档
+
+简述问题和解决方式，必要时链接稳定规范；保留影响结论的失败、跳过和验收范围。
+删除被评审项目的目录结构、业务内容、仓库与人员标识、具体运行编号，以及操作过程、
+测试清单和重复实现说明。详细日志放在 `build/logs/`，过程可由 Git 历史追溯。
 
 ## Exceptions
 
 - Quotes, error messages, and proper names keep their original wording.
-- `CHANGELOG.md` and milestones describe change by nature; milestones keep
-  their original prose, so verify facts there instead of restyling archives.
+- `CHANGELOG.md` and milestones describe past changes. Milestones follow the
+  concise archive rules above; editing prose must preserve factual conclusions
+  and material validation limits.
 - A watched phrase inside a discussion of that phrase is exempt.
 
 ## Sources

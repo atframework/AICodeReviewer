@@ -48,7 +48,10 @@ to locate code and relevant architecture sections. History is optional context.
   Load detailed references only under an explicit task condition.
 - Keep the roadmap section in `docs/ai/index.md` forward-looking, stable
   contracts in topic docs, and completed
-  history in `docs/ai/milestones/`. Do not copy history into prompts or skills.
+  history in `docs/ai/milestones/`. Milestones briefly state the problem and
+  solution, retaining material validation limits. Omit reviewed-project
+  structure, content, identities, and operation logs; link stable references
+  when needed. Do not copy history into prompts or skills.
   Retire completed task artifacts (temporary designs, execution and test
   plans) only after validation and preservation of durable decisions; retain
   unfinished work.

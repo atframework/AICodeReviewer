@@ -12,7 +12,12 @@ import { randomUUID } from "node:crypto";
 
 export type LiveRunPhase = "preparing" | "analyzing" | "publishing";
 
-export type LiveRunSource = "webhook" | "auto_commit" | "im_command";
+export class ReviewCancelledError extends Error {
+  readonly retryable = false;
+  constructor() { super("cancelled_by_user"); }
+}
+
+export type LiveRunSource = "webhook" | "auto_commit" | "im_command" | "admin_rereview";
 
 export interface LiveRunMetrics {
   readonly promptTokens?: number;
@@ -84,7 +89,8 @@ export interface LiveRunRegistry {
    * Registers an execution as preparing and returns its unique handle.
    * A persisted runId may recur; updates and cleanup are fenced by this handle.
    */
-  start(entry: LiveRunStart): string;
+  start(entry: LiveRunStart, cancel?: () => void): string;
+  cancel(runId: string): boolean;
   update(executionId: string, patch: LiveRunUpdate): void;
   finish(executionId: string): void;
   /** Detached snapshot ordered by worker slot; safe to serialize directly. */
@@ -94,9 +100,10 @@ export interface LiveRunRegistry {
 
 export function createLiveRunRegistry(now: () => Date = () => new Date()): LiveRunRegistry {
   const entries = new Map<string, LiveRunEntry>();
+  const cancellations = new Map<string, () => void>();
 
   return {
-    start(entry) {
+    start(entry, cancel) {
       const timestamp = now().toISOString();
       const executionId = randomUUID();
       const occupied = new Set([...entries.values()].map((run) => run.workerId));
@@ -111,7 +118,16 @@ export function createLiveRunRegistry(now: () => Date = () => new Date()): LiveR
         metrics: {},
         lastUpdatedAt: timestamp,
       });
+      if (cancel) cancellations.set(executionId, cancel);
       return executionId;
+    },
+    cancel(runId) {
+      let aborted = false;
+      for (const entry of entries.values()) {
+        const cancel = cancellations.get(entry.executionId);
+        if (entry.runId === runId && cancel) { cancel(); aborted = true; }
+      }
+      return aborted;
     },
     update(executionId, patch) {
       const existing = entries.get(executionId);
@@ -135,6 +151,7 @@ export function createLiveRunRegistry(now: () => Date = () => new Date()): LiveR
     },
     finish(executionId) {
       entries.delete(executionId);
+      cancellations.delete(executionId);
     },
     list() {
       return [...entries.values()]

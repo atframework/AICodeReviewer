@@ -85,6 +85,7 @@ import {
 } from "@aicr/vcs";
 
 import type { LiveRunMetrics, LiveRunRegistry, LiveRunSource } from "./live-runs.js";
+import { ReviewCancelledError } from "./live-runs.js";
 import { applyReviewCommitPolicy } from "./review-commit-policy.js";
 
 export interface DiffCapableVcsAdapter extends VcsAdapter {
@@ -168,6 +169,7 @@ export interface ReviewOrchestrationContext {
 }
 
 export interface ServerReviewOrchestrationOptions {
+  readonly signal?: AbortSignal | undefined;
   readonly executionConcurrency?: ExecutionConcurrency;
   /** Hold the task's generation lease across options resolution and execution. */
   readonly executionScope?: (<T>(context: ReviewOrchestrationContext, run: () => Promise<T>) => Promise<T>) | undefined;
@@ -1758,6 +1760,7 @@ async function runAgentReviewInDirs(
     await rm(join(materializedFs.agentDir, ".aicr-output-state.json"), { force: true });
 
     agentResult = await sandbox.spawn({
+      ...(options.signal ? { signal: options.signal } : {}),
       command,
       cwd: materializedFs.agentDir,
       ...(Object.keys(env).length > 0 ? { env } : {}),
@@ -2128,6 +2131,7 @@ async function requestDirectLlmCompletion(
     llmResult: await options.llm.complete({
       model: options.model,
       messages,
+      ...(options.signal ? { signal: options.signal } : {}),
     }),
   };
 }
@@ -3030,11 +3034,13 @@ export async function runReviewOrchestration(
 
   const registry = options.liveRuns;
   if (!registry) {
-    const result = await executeReviewOrchestration(context, options);
+    const result = await executeReviewOrchestration(context, { ...options, signal: context.signal });
     return { ...result, ...(options.configVersion ? { configVersion: options.configVersion } : {}) };
   }
 
   const { reviewEvent } = context;
+  const operatorAbort = new AbortController();
+  context = { ...context, signal: context.signal ? AbortSignal.any([context.signal, operatorAbort.signal]) : operatorAbort.signal };
   const runId = context.runId ?? randomUUID();
   const vcsKind = vcsKindForProvider(reviewEvent.provider);
   const executionId = registry.start({
@@ -3055,16 +3061,17 @@ export async function runReviewOrchestration(
     modelId: options.model.modelId,
     agentKind: options.agentAdapter?.kind ?? "native-llm",
     attempt: context.attempt ?? 1,
-  });
-  await options.onExecutionStart?.({
-    runId,
-    reviewEvent,
-    model: { providerId: options.model.providerId, modelId: options.model.modelId },
-  });
+  }, () => operatorAbort.abort(new ReviewCancelledError()));
   try {
+    await options.onExecutionStart?.({
+      runId,
+      reviewEvent,
+      model: { providerId: options.model.providerId, modelId: options.model.modelId },
+    });
     // Propagate the registry runId so the per-run directory scope (L09)
     // matches the id operators see in the live-run view.
-    const result = await executeReviewOrchestration({ ...context, runId }, options, { registry, executionId });
+    const result = await executeReviewOrchestration({ ...context, runId }, { ...options, signal: context.signal }, { registry, executionId });
+    context.signal?.throwIfAborted();
     return { ...result, ...(options.configVersion ? { configVersion: options.configVersion } : {}) };
   } finally {
     registry.finish(executionId);

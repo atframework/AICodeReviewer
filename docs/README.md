@@ -29,7 +29,7 @@
 | [架构](ai/architecture.md) | 当前模块边界与稳定约定；Workspace 见 §3.10，存储迁移见 §3.14，来源合并与发布见 §3.15，运行时版本与管理 API 见 §3.16 |
 | [设计决策](ai/decisions.md) | 方案取舍；Workspace 与动态配置相关规则见 D37–D47 |
 | [输出渠道规范](output-channels.md) | 输出渠道、模板、目标选择及发布语义 |
-| [IM 开发计划](../Plan.md) / [执行手册](design/im-implementation.md) / [集成设计](design/im-integrations.md) / [文件成员目录](design/member-directory.md) | 企业微信应用、通讯录热加载、回调重新评审；23 项任务及逐项规范和验收，进度见 Plan |
+| [IM 开发计划](../Plan.md) / [执行手册](design/im-implementation.md) / [集成设计](design/im-integrations.md) / [文件成员目录](design/member-directory.md) | 企业微信应用、通讯录热加载与回调重新评审；进度见计划，接口见[实施规范](design/im-implementation-spec.md)，断言见[验收矩阵](design/im-acceptance.md) |
 | [评审提示词设计依据](prompt-research.md) | 默认评审提示词的目标、约束和参考依据 |
 | [AI 维护导航](ai/index.md) | 从代码主题定位设计章节、易错点和维护技能 |
 
@@ -38,8 +38,6 @@
 
 ## 交付记录与验收边界
 
-- [里程碑索引](ai/index.md#里程碑归档)：各阶段的实现、测试和验收证据。
-- [M24 跨版本迁移与排空](ai/milestones/M24.md)：指定历史版本对和真实服务验收范围。
-- [M26 Workspace 与动态配置复审](ai/milestones/M26.md)：本轮修复、回归及最终门禁。
+- [里程碑索引](ai/index.md#里程碑归档)：各阶段的问题、解决方式和必要验收限制。
 - [前瞻扩展](ai/index.md#前瞻扩展未纳入当前交付)：尚未纳入当前交付的预留项与验收边界。
 - [本地临时服务](testing-services.md)：WSL/Podman 的资源、复现与清理要求。

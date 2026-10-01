@@ -1,4 +1,4 @@
-import type { SourceFieldStatus } from "./auto-commit-identity.js";
+import { AUTO_COMMIT_BATCH_LIMITS, type SourceFieldStatus } from "./auto-commit-identity.js";
 
 /**
  * Notification-aware assembly (contract: docs/ai/architecture.md §3.1.1 + docs/ai/decisions.md D35).
@@ -10,7 +10,7 @@ import type { SourceFieldStatus } from "./auto-commit-identity.js";
  * supplies candidates and `now`; the store seals the returned cuts.
  */
 
-/** Hard cap per batch (design §6.4: first version fixed at 50, no public knob). */
+/** Coalescing bound across notifications; a complete Git push is never sliced. */
 export const AUTO_COMMIT_MAX_BATCH_MEMBERS = 50;
 
 export interface AssemblyCandidate {
@@ -27,6 +27,8 @@ export interface AssemblyCandidate {
   readonly sourceKey: string;
   readonly sourceStatus: SourceFieldStatus;
   readonly eligibleAt: number;
+  /** Earliest covering Git push delivery; members of this unit are indivisible. */
+  readonly pushReceiptId?: string;
   /**
    * Receipt id of a force-push/rewrite event. Members of one rewrite event
    * form an isolated batch (endpoint net diff); merging across events or
@@ -43,7 +45,7 @@ export interface AssemblyCandidate {
   readonly configSnapshotId?: string | null;
 }
 
-export type AssemblyCutReason = "same_source_run" | "merge_commit" | "rewrite_event" | "config_boundary";
+export type AssemblyCutReason = "same_source_run" | "merge_commit" | "rewrite_event" | "config_boundary" | "push_event";
 
 export interface AssemblyCut {
   readonly memberIds: readonly string[];
@@ -59,12 +61,12 @@ export interface AssemblyResult {
   readonly ready: readonly AssemblyCut[];
   /**
    * Pending tails whose first member is not yet eligible. Ordinary runs
-   * wake when that member becomes eligible; indivisible rewrite events
+   * wake when that member becomes eligible; indivisible Git push/rewrite units
    * wait for every member.
    */
   readonly waiting: readonly { readonly memberIds: readonly string[]; readonly eligibleAt: number }[];
   /**
-   * Members whose source evidence is unavailable/conflicted: they block
+   * Members with unavailable/conflicted evidence or an invalid push unit block
    * merging on both sides and must be handled by the retry/fail path, never
    * silently re-keyed or merged (design §5.1.1).
    */
@@ -90,6 +92,9 @@ export function cutAutoCommitBatches(
 ): AssemblyResult {
   if (!Number.isInteger(maxBatchMembers) || maxBatchMembers < 1) {
     throw new RangeError("maxBatchMembers must be a positive integer.");
+  }
+  if (candidates.some(member => member.pushReceiptId !== undefined)) {
+    return cutPushUnits(candidates, now, maxBatchMembers);
   }
 
   const ready: AssemblyCut[] = [];
@@ -201,5 +206,68 @@ export function cutAutoCommitBatches(
   }
   finishRun(run);
 
+  return { ready, waiting, blocked };
+}
+
+/** Preserve delivery units before applying the older cross-delivery policy. */
+function cutPushUnits(candidates: readonly AssemblyCandidate[], now: number, mergeLimit: number): AssemblyResult {
+  const units: AssemblyCandidate[][] = [];
+  for (const member of candidates) {
+    const previous = units[units.length - 1];
+    if (member.pushReceiptId !== undefined && previous?.[0]?.pushReceiptId === member.pushReceiptId) {
+      previous.push(member);
+    } else units.push([member]);
+  }
+  const occurrences = new Map<string, number>();
+  for (const unit of units) {
+    const id = unit[0]!.pushReceiptId;
+    if (id !== undefined) occurrences.set(id, (occurrences.get(id) ?? 0) + 1);
+  }
+  const ready: AssemblyCut[] = [];
+  const waiting: { memberIds: string[]; eligibleAt: number }[] = [];
+  const blocked: string[] = [];
+  let run: AssemblyCandidate[] = [];
+  let mergeable = false;
+  const finish = (): void => {
+    if (run.length === 0) return;
+    ready.push({ memberIds: run.map(m => m.memberId), revisions: run.map(m => m.revision),
+      reason: run[0]!.rewriteReceiptId !== undefined ? "rewrite_event" : "push_event",
+      baseRevision: run[0]!.revision, headRevision: run[run.length - 1]!.revision });
+    run = [];
+    mergeable = false;
+  };
+  for (const unit of units) {
+    const first = unit[0]!;
+    const rewrite = first.rewriteReceiptId !== undefined;
+    const contiguous = unit.every((member, index) => index === 0 ||
+      orderNumber(member.orderKey) === orderNumber(unit[index - 1]!.orderKey) + 1 &&
+      (member.parents.length === 0 || member.parents[0] === unit[index - 1]!.revision));
+    if (unit.length > AUTO_COMMIT_BATCH_LIMITS.maxMembersPerBatch ||
+      first.pushReceiptId !== undefined && occurrences.get(first.pushReceiptId) !== 1 ||
+      unit.some(m => m.sourceStatus !== "known" || (m.configSnapshotId ?? null) !== (first.configSnapshotId ?? null)) ||
+      !rewrite && !contiguous) {
+      finish();
+      blocked.push(...unit.map(m => m.memberId));
+      continue;
+    }
+    const eligibleAt = Math.max(...unit.map(m => m.eligibleAt));
+    if (eligibleAt > now) {
+      finish();
+      waiting.push({ memberIds: unit.map(m => m.memberId), eligibleAt });
+      continue;
+    }
+    // Mixed-author pushes and pushes containing a merge/rewrite are whole,
+    // isolated units. Only uniform, continuous pushes coalesce across deliveries.
+    const uniform = !rewrite && unit.every(m => m.sourceKey === first.sourceKey && m.parents.length < 2);
+    const previous = run[run.length - 1];
+    if (previous && (!mergeable || !uniform || run.length + unit.length > mergeLimit ||
+      first.sourceKey !== previous.sourceKey || (first.configSnapshotId ?? null) !== (previous.configSnapshotId ?? null) ||
+      orderNumber(first.orderKey) !== orderNumber(previous.orderKey) + 1 ||
+      first.parents.length > 0 && first.parents[0] !== previous.revision)) finish();
+    run.push(...unit);
+    mergeable = uniform;
+    if (!uniform || run.length >= mergeLimit) finish();
+  }
+  finish();
   return { ready, waiting, blocked };
 }

@@ -20,6 +20,7 @@ import {
 import type {
   AcceptImDeliveryInput,
   AcceptImDeliveryOutcome,
+  CancelImReviewRequestInput,
   ClaimedImReviewRequest,
   FinishImReviewRequestInput,
   ImActionRecord,
@@ -292,6 +293,47 @@ export async function finishImReviewRequestPg(store: PgStoreDb, input: FinishImR
       eq(imReviewRequests.requestId, input.requestId),
       eq(imReviewRequests.fence, input.fence),
       inArray(imReviewRequests.state, ["accepted", "validating", "queued", "running", "publishing", "retry_wait"]),
+    )).returning();
+    if (rows.length === 0) return false;
+    const request = rows[0]!;
+    await tx.delete(imActiveTargets).where(and(
+      eq(imActiveTargets.namespace, request.namespace),
+      eq(imActiveTargets.requestId, request.requestId),
+    ));
+    await tx.update(imInbox).set({ status: "request_finished" }).where(eq(imInbox.requestId, request.requestId));
+    for (const notification of input.notifications ?? []) {
+      await tx.insert(imReplyOutbox).values({
+        operationId: notification.operationId,
+        namespace: request.namespace,
+        requestId: request.requestId,
+        destinationIdentity: notification.destinationIdentity,
+        operationKind: notification.operationKind,
+        payloadDigest: notification.payloadDigest,
+        state: "pending",
+        expiry: notification.expiry ?? null,
+        nextAttemptAt: notification.nextAttemptAt ?? input.now,
+        compactReceipt: notification.compactReceipt ?? null,
+        createdAt: input.now,
+        updatedAt: input.now,
+      });
+    }
+    return true;
+  });
+}
+
+export async function cancelImReviewRequestPg(store: PgStoreDb, input: CancelImReviewRequestInput): Promise<boolean> {
+  return store.db.transaction(async (tx) => {
+    const rows = await tx.update(imReviewRequests).set({
+      state: "rejected",
+      errorCode: input.errorCode ?? "im.cancelled_by_user",
+      leaseOwner: null,
+      leaseUntil: null,
+      fence: sql`${imReviewRequests.fence} + 1`,
+      nextAttemptAt: null,
+      updatedAt: input.now,
+    }).where(and(
+      eq(imReviewRequests.requestId, input.requestId),
+      inArray(imReviewRequests.state, [...(input.states ?? ["accepted", "validating", "queued", "running", "publishing", "retry_wait"])]),
     )).returning();
     if (rows.length === 0) return false;
     const request = rows[0]!;

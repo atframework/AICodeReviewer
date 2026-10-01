@@ -42,9 +42,9 @@ function shortRepo(repoRef: string): string {
 type QueryTarget = { readonly workspaceId: string; readonly sourceTrigger: string; readonly repoRef: string };
 
 function registeredTargets(binding: ImCommandBindingConfig): QueryTarget[] {
-  return Object.values(binding.repositories ?? {}).map(target => ({
+  return [...new Map(Object.values(binding.repositories ?? {}).map(target => [JSON.stringify([target.workspace, target.source_trigger, target.repo_ref]), {
     workspaceId: target.workspace, sourceTrigger: target.source_trigger, repoRef: target.repo_ref,
-  }));
+  }])).values()];
 }
 
 function targetAllowed(binding: ImCommandBindingConfig, workspaceId: string, sourceTrigger: string | null | undefined, repoRef: string): boolean {
@@ -273,11 +273,12 @@ export class ImQueryService {
   }
 
   private async running(binding: ImCommandBindingConfig): Promise<string> {
+    const executingStatuses = ACTIVE_RUN_STATUSES.filter(status => status !== "queued");
     const targets = binding.allow_all_repositories === true ? [] : registeredTargets(binding);
     const runs = [...(targets.length === 0 && binding.allow_all_repositories === true
-      ? await listImQueryRuns(this.options.store, { statusIn: ACTIVE_RUN_STATUSES, limit: LIST_LIMIT })
+      ? await listImQueryRuns(this.options.store, { statusIn: executingStatuses, limit: LIST_LIMIT })
       : (await Promise.all(targets.map(entry => listImQueryRuns(this.options.store, {
-        workspaceId: entry.workspaceId, sourceTrigger: entry.sourceTrigger, repoRef: entry.repoRef, statusIn: ACTIVE_RUN_STATUSES, limit: LIST_LIMIT,
+        workspaceId: entry.workspaceId, sourceTrigger: entry.sourceTrigger, repoRef: entry.repoRef, statusIn: executingStatuses, limit: LIST_LIMIT,
       })))).flat())].sort((a, b) => (b.startedAt?.getTime() ?? 0) - (a.startedAt?.getTime() ?? 0)).slice(0, LIST_LIMIT);
     if (runs.length === 0) return "当前没有进行中的评审。";
     const now = this.now;

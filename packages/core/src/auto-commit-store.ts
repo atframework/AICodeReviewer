@@ -217,8 +217,8 @@ export interface CommitMemberRecord {
   readonly orderKey: string | null;
   /**
    * Direct parent revisions (git); empty for linear p4/svn lineage. Assembly
-   * needs this to isolate merge commits (own batch) without re-reading VCS
-   * metadata after verification.
+   * uses this for continuity and cross-push merge boundaries without
+   * re-reading VCS metadata; one Git push retains its merge commits.
    */
   readonly parents: readonly string[];
   readonly status: CommitMemberStatus;
@@ -502,6 +502,44 @@ export interface NextWake {
 // ---------------------------------------------------------------------------
 // Store interface
 // ---------------------------------------------------------------------------
+
+/** Filter for operator-driven batch cancellation (IM `aicr cancel`, admin). */
+export interface CancelQueuedBatchesInput {
+  /** Restrict to explicit batch ids (admin by-id force close). */
+  readonly batchIds?: readonly string[];
+  /**
+   * Restrict cancellation to these statuses. Defaults to the queued set
+   * (`dispatch_pending`/`queued`/`retry_wait`); callers may include
+   * `running` for force-termination of lease-zombie rows.
+   */
+  readonly statuses?: readonly CommitBatchStatus[];
+  readonly workspaceId?: string;
+  readonly triggerName?: string;
+  /** Exact scope (repo) match. */
+  readonly scopeRef?: string;
+  /** Revision prefix matched against the batch head. */
+  readonly head?: string;
+  /** Match batches created strictly before this epoch ms. */
+  readonly createdBefore?: number;
+  /** Running rows must still own this token when terminally closed. */
+  readonly leaseToken?: string;
+  readonly leaseExpiredBefore?: number;
+  /** Terminal reason recorded on the batch and its members. */
+  readonly reason?: string;
+}
+
+/** Snapshot every page before mutating statuses; a UI page is not a work scan. */
+export async function readAllAutoCommitBatches(
+  store: AutoCommitStore,
+  statuses: readonly CommitBatchStatus[],
+): Promise<readonly CommitBatchRecord[]> {
+  const records = new Map<string, CommitBatchRecord>();
+  for (let offset = 0; ; offset += 256) {
+    const page = await store.readBatchesByStatus(statuses, 256, offset);
+    for (const record of page) records.set(record.batchId, record);
+    if (page.length < 256) return [...records.values()];
+  }
+}
 
 export interface AutoCommitStore {
   readonly backendKind: string;
@@ -839,6 +877,39 @@ export interface AutoCommitStore {
     now: number,
     workspaceId?: string,
   ): Promise<readonly string[]>;
+
+  /**
+   * Queue timeout sweep for batches: `dispatch_pending`/`queued`/`retry_wait`
+   * batches whose creation fell before `cutoff` become terminally skipped
+   * (reason `queued_timeout`), their members skipped, outbox entries removed
+   * and streams released. Returns the affected batch/run ids so the caller can
+   * mirror the outcome onto review run marker rows. Running batches stay under
+   * the lease/retry lifecycle and are not timed out here.
+   */
+  timeoutStaleBatches(
+    cutoff: number,
+    workspaceId?: string,
+  ): Promise<readonly { readonly batchId: string; readonly runId: string }[]>;
+
+  /**
+   * Operator-driven cancellation: terminal-skips non-terminal batches
+   * matching the filter (see `CancelQueuedBatchesInput`). Callers terminate
+   * genuinely running batches through the scheduler's in-process abort first
+   * and use this only for the store side or force cleanup.
+   */
+  cancelQueuedBatches(
+    input: CancelQueuedBatchesInput,
+  ): Promise<readonly { readonly batchId: string; readonly runId: string }[]>;
+
+  /**
+   * Clear the retry backoff (and any dispatch claim) of a
+   * retry_wait/queued/dispatch_pending batch so the next dispatch round picks
+   * it up immediately. Terminal and running batches are rejected (undefined).
+   */
+  requeueStalledBatch(
+    batchId: string,
+    now: number,
+  ): Promise<CommitBatchRecord | undefined>;
 
   /**
    * Routing-intake linkage for the queue-timeout mirror: returns the routing

@@ -190,6 +190,7 @@ export const IM_COMMAND_NAMES = [
   "chat-id",
   "review",
   "status",
+  "cancel",
   "projects",
   "reviews",
   "commits",
@@ -206,6 +207,8 @@ export type ImCommand =
   | { readonly kind: "chat-id" }
   | { readonly kind: "review"; readonly repoAlias: string; readonly revision: string }
   | { readonly kind: "status"; readonly requestId: string }
+  /** Operator cancellation: one repo's task at a revision, or tasks older than a bound. */
+  | { readonly kind: "cancel"; readonly repoAlias: string | undefined; readonly revision: string | undefined; readonly beforeMs: number | undefined; readonly beforeAt?: number }
   | { readonly kind: "projects" }
   | { readonly kind: "reviews"; readonly repoAlias: string | undefined }
   | { readonly kind: "commits"; readonly repoAlias: string; readonly branch: string | undefined }

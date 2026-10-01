@@ -6,7 +6,7 @@
  * and transactions via drizzle's async tx API.
  */
 
-import { and, avg, count, desc, DrizzleQueryError, eq, gte, inArray, lt, lte, sql, sum } from "drizzle-orm";
+import { and, avg, count, desc, DrizzleQueryError, eq, gte, inArray, lt, lte, or, sql, sum } from "drizzle-orm";
 import type { ExtractTablesWithRelations } from "drizzle-orm";
 import type { NodePgQueryResultHKT } from "drizzle-orm/node-postgres";
 import type { PgTransaction } from "drizzle-orm/pg-core";
@@ -35,6 +35,8 @@ import type {
 } from "./stats.js";
 import { dayRange, toUtcDateString } from "./stats.js";
 import type { RunStatus } from "./schema.js";
+import { ACTIVE_RUN_STATUSES } from "./schema.js";
+import { RESTART_SWEEP_ERROR } from "./stats.js";
 
 /** Query executor shared by standalone calls and transaction bodies. */
 type PgExecutor =
@@ -104,9 +106,13 @@ async function upsertProjectPg(
  * so a mid-write failure rolls back completely and a checkpoint retry can
  * safely replay it.
  */
-export async function insertReviewRunOncePg(store: PgStoreDb, run: ReviewRunInsert): Promise<boolean> {
+export async function insertReviewRunOncePg(store: PgStoreDb, run: ReviewRunInsert, replaceMarkers = false): Promise<boolean> {
   try {
     return await store.db.transaction(async (tx) => {
+      if (replaceMarkers) await tx.delete(reviewRuns).where(and(eq(reviewRuns.id, run.id), or(
+        inArray(reviewRuns.status, [...ACTIVE_RUN_STATUSES] as RunStatus[]),
+        and(eq(reviewRuns.status, "failed"), eq(reviewRuns.error, RESTART_SWEEP_ERROR)),
+      )));
       const existing = await tx
         .select({ id: reviewRuns.id })
         .from(reviewRuns)
@@ -137,6 +143,28 @@ export async function deleteReviewRunPg(store: PgStoreDb, runId: string): Promis
   return removed.length > 0;
 }
 
+/** PG mirror of `deleteActiveReviewRunMarker`: drops replaceable marker rows. */
+export async function deleteActiveReviewRunMarkerPg(store: PgStoreDb, runId: string): Promise<boolean> {
+  const removed = await store.db
+    .delete(reviewRuns)
+    .where(and(eq(reviewRuns.id, runId), or(
+      inArray(reviewRuns.status, [...ACTIVE_RUN_STATUSES] as RunStatus[]),
+      and(eq(reviewRuns.status, "failed"), eq(reviewRuns.error, RESTART_SWEEP_ERROR)),
+    )))
+    .returning({ id: reviewRuns.id });
+  return removed.length > 0;
+}
+
+/** PG mirror of `cancelActiveReviewRun`: cancels only in-flight marker rows. */
+export async function cancelActiveReviewRunPg(store: PgStoreDb, runId: string, reason: string): Promise<boolean> {
+  const rows = await store.db
+    .update(reviewRuns)
+    .set({ status: "cancelled", error: reason, finishedAt: new Date() })
+    .where(and(eq(reviewRuns.id, runId), inArray(reviewRuns.status, [...ACTIVE_RUN_STATUSES] as RunStatus[])))
+    .returning({ id: reviewRuns.id });
+  return rows.length > 0;
+}
+
 async function insertReviewRunOn(db: PgExecutor, run: ReviewRunInsert): Promise<void> {
   const projectId = await upsertProjectPg(db, {
     workspaceId: run.workspaceId,
@@ -151,6 +179,7 @@ async function insertReviewRunOn(db: PgExecutor, run: ReviewRunInsert): Promise<
     id: run.id,
     projectId,
     eventId: run.eventId,
+    reviewEventJson: run.reviewEventJson ?? null,
     workspaceId: run.workspaceId,
     triggerName: run.triggerName,
     provider: run.provider,
@@ -250,6 +279,7 @@ export async function updateRunStatusPg(
   runId: string,
   status: RunStatus,
   extra?: {
+    onlyIfActive?: boolean;
     error?: string;
     skipReason?: string;
     problemCount?: number;
@@ -277,7 +307,10 @@ export async function updateRunStatusPg(
       ...(extra?.tokensOut != null ? { tokensOut: extra.tokensOut } : {}),
       finishedAt: extra?.finishedAt ?? new Date(),
     })
-    .where(eq(reviewRuns.id, runId));
+    .where(and(eq(reviewRuns.id, runId), extra?.onlyIfActive ? or(
+      inArray(reviewRuns.status, [...ACTIVE_RUN_STATUSES]),
+      and(eq(reviewRuns.status, "failed"), eq(reviewRuns.error, RESTART_SWEEP_ERROR)),
+    ) : undefined));
 }
 
 export async function getOverviewStatsPg(

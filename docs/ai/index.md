@@ -6,7 +6,7 @@
 
 | 任务 | 首选实现与参考 |
 | --- | --- |
-| 当前待办与验收边界 | [Plan.md](../../Plan.md)：IM 应用、外部成员目录和回调重新评审，IM-00–02 已完成；[路线图](#路线图)；Workspace 动态配置规则见架构 §3.10、§3.14–3.16 |
+| 当前待办与验收边界 | [Plan.md](../../Plan.md)：IM 应用、外部成员目录和回调重新评审；[路线图](#路线图)；Workspace 动态配置规则见架构 §3.10、§3.14–3.16 |
 | Config / workspace / model groups | `packages/core/src/config.ts`、server bootstrap；[架构 §3.10](architecture.md#310-配置体系)、[配置坑点](pitfalls/AGENTS.config-and-state.md) |
 | Webhook / 调度 / 去重 / PR 延期 | server runtime/scheduler/deferral-manager；[架构 §3.1](architecture.md#31-触发器与-reviewevent-归一化)、[调度坑点](pitfalls/AGENTS.scheduling.md) |
 | VCS / 多源上下文 / GitHub App | `packages/vcs/src/`、server credential wiring；[架构 §3.2](architecture.md#32-vcs-adapter-与-scoped-fetch)、[VCS 坑点](pitfalls/AGENTS.vcs.md) |
@@ -22,13 +22,9 @@
 
 ## 路线图
 
-IM 接收、命令授权、请求工作器和通知 outbox 已接入服务端；
-状态查询限制原操作人、会话、连接及绑定仓库；仓库列表与详情按绑定的
-工作区、来源触发器和仓库引用筛选；同目标活动请求复用时不计入新请求限流。
-[文件成员目录](../design/member-directory.md)
-每次读取均校验真实路径边界。剩余工作与验收条件见
-[Plan.md](../../Plan.md)，稳定接口见[IM 集成设计](../design/im-integrations.md)，
-外部协议核查见[来源记录](sources/im-integrations.md)。
+IM 任务进度和验收条件见 [Plan.md](../../Plan.md)，接口边界见
+[IM 实施规范](../design/im-implementation-spec.md)，外部协议见[来源记录](sources/im-integrations.md)。
+主要未完成项：
 
 - IM-14：实现跨重启的持久队列唤醒与发布 checkpoint 恢复；执行中断后的
   `publication_unknown` 须按远端操作身份核对，不能盲目重发。
@@ -36,63 +32,78 @@ IM 接收、命令授权、请求工作器和通知 outbox 已接入服务端；
 - IM-21：使用受控平台账户完成真实回调、长连接、通知与卡片动作验收；
   本地替身和固定向量不代表真实平台验收。
 
+## 路线图：运行控制与队列治理（RUN，2026-10）
+
+稳定约定见[架构 §3.1.1、§3.11](architecture.md)，已完成事项与验证边界见
+[M36](milestones/M36.md)、[M37](milestones/M37.md)。后续工作：
+
+- RUN-1：为自动提交排队超时增加按输出渠道推送的通知。当前通过日志、
+  run 行 `timeout` 与 Events `timeout` 呈现；IM 请求已复用通知 outbox。
+- RUN-2：为缺少完整事件的历史记录设计受控的事件补录；新记录支持保留
+  PR/MR、fork 和提交区间重评，不能从旧 run 的 head 猜测原目标。
+- RUN-3：将管理端重评接受记录转为持久化待执行载体。当前 202 返回新
+  runId，可在 Runs/Live 查询并取消，但进程内等待任务重启后不会自动续跑，
+  会由启动清扫标记中断；不得宣称该入口具备跨重启执行保证。
+- RUN-4：将取消控制面扩展到尚未封存的 push 收据和成员。当前批次 Cancel 仅覆盖
+  已封存批次；取消长 push 积压须同时检查未封存成员，不能据批次数宣称清空队列。
+  需要持久禁止取消收据再次展开，并覆盖分页、并发封存和重复投递。
+
 ## 前瞻扩展（未纳入当前交付）
 
-上一轮 `Plan.md` 的待办已完成并归档（最后一项 GitLab 端到端验收见 M34）；
-本节保留未纳入当前 IM 计划的候选项。临时服务、环境变量门控和退出清理按
-[验收指南](../testing-services.md)执行；本地替身不能作为模型质量或生产验收证据。
+以下候选项未纳入当前交付。
 
 - `k8s_pod` / `firecracker` sandbox：明确隔离需求和运行环境后实现，当前为报错占位。
 - Agent 查询成员目录：先定义按渠道授权、候选数量与脱敏返回；不将整份目录交给评审 MCP。
 - `queue.workers.lock_ttl_seconds`、`dead_letter.*`：仅 schema 预留，没有运行时能力。
 
-跨 workspace 知识迁移、版本 bump/tag 不在范围。新任务完成后归档证据到里程碑并更新本节；
-文档精简不取消历史失败、跳过或固定版本限制。
+跨 workspace 知识迁移、版本 bump/tag 不在范围。
 
 ## 里程碑归档
 
-| 里程碑 | 状态 | 文档 |
-| --- | --- | --- |
-| M0 | 已完成 | `milestones/M0.md` |
-| M0.5 | 已完成 | `milestones/M0.5.md` |
-| M1 | 已完成 | `milestones/M1.md` |
-| M2 | 已完成 | `milestones/M2.md` |
-| M3 | 已完成 | `milestones/M3.md` |
-| M4 | 已完成 | `milestones/M4.md` |
-| M5 | 已完成 | `milestones/M5.md` |
-| M6 | SVN 按 M31 验收；GitLab 端到端按 M34 验收 | `milestones/M6.md` |
-| M7 | 已完成 | `milestones/M7.md` |
-| M8 | 实现与离线 eval 已交付；真实 LLM benchmark 按 M31 跳过 | `milestones/M8.md` |
-| M9 | 核心交付完成，预留扩展见前瞻扩展 | `milestones/M9.md` |
-| M10 | 已交付，真实本机 Redis 已验收 | `milestones/M10.md` |
-| M11 文档站子工程 | 已完成（2026-08-28 线上记录；本轮仅本地验证） | `milestones/M11.md` |
-| M12 GitHub App 认证 | 已完成 | `milestones/M12.md` / `architecture.md` §3.2.1 |
-| M13 pi + oh-my-pi 集成 | 已完成 | `milestones/M13.md` |
-| M13.1 agent web search 治理 | 已完成 | `milestones/M13.1.md` |
-| M14 多源上下文聚合 | 已交付；SVN 按 M31 调整后的标准验收 | `milestones/M14.md` / `architecture.md` §3.2.2 |
-| M15 自动提交调度 | 已完成 | `milestones/M15.md` / `architecture.md` §3.1.1 / `decisions.md` D35 |
-| M16 PR/MR 执行时段与持久化延期 | 实现与本地恢复已验收；GitLab MR 生产路径按 M34 验收 | `milestones/M16.md` / `architecture.md` §3.1.1 / `decisions.md` D36 |
-| M17 配置存储、schema 迁移与 PG 后端 | 已完成 | `milestones/M17.md` / `architecture.md` §3.14 |
-| M18 来源合并、路由图与发布服务 | 已完成 | `milestones/M18.md` / `architecture.md` §3.15 |
-| M19 运行时配置 generation 与配置管理 API | P4/P5 已交付；本地验收完成 | `milestones/M19.md` / `architecture.md` §3.16 |
-| M20 配置管理表单与管理页面 | P6 已交付；本地验收完成 | `milestones/M20.md` |
-| M21 P7 集成测试与审查修复 | SVN 修复、真实服务及故障证据 | `milestones/M21.md` |
-| M22 P7 组合验收补齐、P8 收敛与资料退役 | 原交付记录；复审修正见 M23 | `milestones/M22.md` / `architecture.md` §3.10、§3.14–3.16 |
-| M23 P8 复审 | 凭据/输出/预览修复；当时遗留的本地缺口已在 M24 补齐 | [M23](milestones/M23.md) |
-| M24 跨版本迁移与停机排空 | 指定历史版本对与两平台真实服务验收完成，任务资料退役 | [M24](milestones/M24.md) |
-| M25 Workspace 与动态配置全量复审 | 高/中/低 31 项修复含双高危（发布期 workspace 校验、v2 准入回退），规则完善见 D47；任务资料退役记录见 M26 | [M25](milestones/M25.md) / `decisions.md` D47 |
-| M26 Workspace 与动态配置再次复审 | generation 所有权、重复暂存、发布/恢复/预览边界修复与当前验收；任务资料已退役 | [M26](milestones/M26.md) |
-| M27 管理页面修订与模板/Prompt 管理 | kind 区块隐藏、Routing 修复、共享全局数据库优先（D48）、模板/prompt 实体（D49）；相关规则同步双语公开文档 | [M27](milestones/M27.md) / `decisions.md` D48–D49 |
-| M28 逐目标发布恢复与配置示例校验 | 批次 `publication_pending` 逐渠道回执续发（D50）、复合 publisher 恢复钩子、管理 API `publications`；文档配置片段全量 schema 校验与阴性用例 | [M28](milestones/M28.md) / `decisions.md` D50 |
-| M29 计划精简与 WSL 临时服务验收 | 精简历史、核对残留条件，真实 Gitea 指派及资源清理 | [M29](milestones/M29.md) / [服务验收](../testing-services.md) |
-| M30 环境变量验收与 SVN 修复 | 用户确认 P4/GitHub；飞书、两组 LLM、Podman SVN 及导出修复 | [M30](milestones/M30.md) |
-| M31 验收范围收敛与 WSL 部署验证 | 用户调整验收标准、凭据组合回归、SVN 分析与服务认证/持久化、公网只读证据 | [M31](milestones/M31.md) |
-| M32 P4 提交者飞书归属 | 共享账号邮箱前缀误匹配修复，P4 workspace 优先及发布链路回归 | [M32](milestones/M32.md) |
-| M33 自动批次远端对账 | 单次写入日志、平台查询/幂等协议、回执丢失与部分发布恢复 | [M33](milestones/M33.md) / `decisions.md` D51 |
-| M34 GitLab 固定版本端到端验收 | CE 19.4 真容器 push/MR/窗口延期全链路，CE 指派语义与投递竞态修复 | [M34](milestones/M34.md) |
-| M35 品牌图标与静态资源 | 文档站、管理面板统一图标及分享图；静态图像和二进制使用 Git LFS | [M35](milestones/M35.md) |
-| 本地优先队列 P0-P15 | 已完成 | `milestones/local-priority-queue.md` |
+归档简述问题、解决方式和必要验收限制；当前行为以源码和主题规范为准。
 
-历史记录仅用于查交付证据；当前状态以代码、测试和上面的路线图为准。公开用户文档位于
-`docs/site/`，不发布本目录的内部指导。完成任务资料的保留规则见根 `AGENTS.md`。
-归档只保留交付结论、证据入口和限制；完整过程可由 Git 历史追溯。
+| 里程碑 | 主题 |
+| --- | --- |
+| [M0](milestones/M0.md) | 项目骨架 |
+| [M0.5](milestones/M0.5.md) | 默认评审提示词 |
+| [M1](milestones/M1.md) | Git 与单模型评审闭环 |
+| [M2](milestones/M2.md) | Agent CLI 与沙箱 |
+| [M3](milestones/M3.md) | 大差异与失败恢复 |
+| [M4](milestones/M4.md) | 多渠道输出与作者提醒 |
+| [M5](milestones/M5.md) | 多 Agent 与 MCP |
+| [M6](milestones/M6.md) | 跨 VCS 评审 |
+| [M7](milestones/M7.md) | Workspace 定制与记忆 |
+| [M8](milestones/M8.md) | 可观测性与离线评估 |
+| [M9](milestones/M9.md) | 部署交付 |
+| [M10](milestones/M10.md) | 模型元数据 |
+| [M11](milestones/M11.md) | 双语用户文档站 |
+| [M12](milestones/M12.md) | GitHub App 认证 |
+| [M13](milestones/M13.md) | pi 与 oh-my-pi 接入 |
+| [M13.1](milestones/M13.1.md) | Agent 搜索与凭据隔离 |
+| [M14](milestones/M14.md) | 多源上下文 |
+| [M15](milestones/M15.md) | 自动提交调度 |
+| [M16](milestones/M16.md) | PR/MR 执行时段与延期 |
+| [M17](milestones/M17.md) | 配置存储与迁移 |
+| [M18](milestones/M18.md) | 配置合并与发布 |
+| [M19](milestones/M19.md) | 运行时配置与管理 API |
+| [M20](milestones/M20.md) | 配置管理页面 |
+| [M21](milestones/M21.md) | 集成测试与 SVN 修复 |
+| [M22](milestones/M22.md) | 配置组合验收 |
+| [M23](milestones/M23.md) | 动态配置复审 |
+| [M24](milestones/M24.md) | 跨版本迁移与停机排空 |
+| [M25](milestones/M25.md) | Workspace 与动态配置复审 |
+| [M26](milestones/M26.md) | 配置版本生命周期复审 |
+| [M27](milestones/M27.md) | 管理页面与文档实体 |
+| [M28](milestones/M28.md) | 逐渠道发布恢复与配置示例校验 |
+| [M29](milestones/M29.md) | 文档精简与 Gitea 验收 |
+| [M30](milestones/M30.md) | 真实服务验收与 SVN 物化修复 |
+| [M31](milestones/M31.md) | 验收范围与部署验证 |
+| [M32](milestones/M32.md) | P4 提交者归属 |
+| [M33](milestones/M33.md) | 自动批次远端对账 |
+| [M34](milestones/M34.md) | GitLab 端到端验收 |
+| [M35](milestones/M35.md) | 品牌图标与静态资源 |
+| [M36](milestones/M36.md) | 运行控制与队列治理 |
+| [M37](milestones/M37.md) | Git push 完整评审单元 |
+| [P0–P15](milestones/local-priority-queue.md) | 本地优先执行队列 |
+
+归档规则见根 [AGENTS.md](../../AGENTS.md)；详细过程由 Git 历史追溯。

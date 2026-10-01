@@ -7,6 +7,9 @@ import { tmpdir } from "node:os";
 import { createStoreDb, closeStoreDb, type SqliteStoreDb } from "../src/database.js";
 import {
   insertReviewRun,
+  insertReviewRunOnce,
+  deleteActiveReviewRunMarker,
+  cancelActiveReviewRun,
   getOverviewStats,
   getProjectStats,
   getProviderModelStats,
@@ -60,7 +63,8 @@ describe("store database", () => {
       DROP INDEX IF EXISTS idx_im_inbox_received;
       DROP INDEX IF EXISTS idx_im_inbox_delivery;
       DROP TABLE IF EXISTS im_inbox;
-      DELETE FROM _migrations WHERE name = '011_im_tables';
+      ALTER TABLE review_runs DROP COLUMN review_event_json;
+      DELETE FROM _migrations WHERE name >= '011_im_tables';
     `);
     (await closeStoreDb(store));
     store = createStoreDb(join(tmpDir, "test.db"));
@@ -101,6 +105,26 @@ describe("store database", () => {
 });
 
 describe("stats insert and query", () => {
+  it("atomically replaces an active marker and retains it if accounting rolls back", async () => {
+    const marker = { id: "atomic-marker", eventId: "e", workspaceId: "ws", triggerName: "git", repoRef: "org/service",
+      provider: null, providerModel: null, status: "analyzing" as const };
+    await insertReviewRun(store, marker);
+    store.sqlite.exec("CREATE TRIGGER fail_atomic_usage BEFORE INSERT ON llm_usage BEGIN SELECT RAISE(ABORT, 'accounting unavailable'); END;");
+    await expect(insertReviewRunOnce(store, { ...marker, status: "succeeded", llmUsages: [{ providerId: "p", modelId: "m" }] }, true))
+      .rejects.toThrow("accounting unavailable");
+    const { getReviewRunById, cancelActiveReviewRun } = await import("../src/index.js");
+    expect((await getReviewRunById(store, marker.id))?.status).toBe("analyzing");
+    store.sqlite.exec("DROP TRIGGER fail_atomic_usage;");
+    expect(await insertReviewRunOnce(store, { ...marker, status: "succeeded" }, true)).toBe(true);
+    await insertReviewRun(store, { ...marker, id: "cancelled-marker", status: "analyzing" });
+    await cancelActiveReviewRun(store, "cancelled-marker");
+    expect(await insertReviewRunOnce(store, { ...marker, id: "cancelled-marker", status: "succeeded" }, true)).toBe(false);
+    expect((await getReviewRunById(store, "cancelled-marker"))?.status).toBe("cancelled");
+    await updateRunStatus(store, "cancelled-marker", "timeout", { onlyIfActive: true });
+    await updateRunStatus(store, marker.id, "timeout", { onlyIfActive: true });
+    expect((await getReviewRunById(store, "cancelled-marker"))?.status).toBe("cancelled");
+    expect((await getReviewRunById(store, marker.id))?.status).toBe("succeeded");
+  });
   it("inserts a review run and queries overview stats", async () => {
     (await insertReviewRun(store, {
       id: "run-1",
@@ -487,6 +511,109 @@ describe("stats insert and query", () => {
     const updated = runs.find((r) => r.id === "run-update");
     expect(updated).toBeDefined();
     expect(updated!.status).toBe("succeeded");
+  });
+
+  it("replaces the in-flight marker so the completion record can land", async () => {
+    // Execution start writes an `analyzing` marker; the idempotent
+    // completion path (auto-commit) must drop the marker before
+    // insertReviewRunOnce or the outcome row is silently skipped and
+    // `aicr running` shows a finished review forever.
+    expect(await insertReviewRunOnce(store, {
+      id: "run-marker",
+      eventId: "run-marker",
+      workspaceId: "ws-1",
+      triggerName: "gitea",
+      provider: "openai",
+      providerModel: "gpt-4o",
+      status: "analyzing",
+      startedAt: new Date(),
+    })).toBe(true);
+    // Without the marker drop the dedup insert no-ops.
+    expect(await insertReviewRunOnce(store, {
+      id: "run-marker",
+      eventId: "run-marker",
+      workspaceId: "ws-1",
+      triggerName: "gitea",
+      provider: "openai",
+      providerModel: "gpt-4o",
+      status: "succeeded",
+      startedAt: new Date(),
+      finishedAt: new Date(),
+      problemCount: 1,
+    })).toBe(false);
+    // The marker drop clears only in-flight rows; a replayed completion can
+    // then record the full outcome, and a second replay stays deduped.
+    expect(await deleteActiveReviewRunMarker(store, "run-marker")).toBe(true);
+    expect(await insertReviewRunOnce(store, {
+      id: "run-marker",
+      eventId: "run-marker",
+      workspaceId: "ws-1",
+      triggerName: "gitea",
+      provider: "openai",
+      providerModel: "gpt-4o",
+      status: "succeeded",
+      startedAt: new Date(),
+      finishedAt: new Date(),
+      problemCount: 1,
+    })).toBe(true);
+    // A terminal record is authoritative: the marker drop no longer fires.
+    expect(await deleteActiveReviewRunMarker(store, "run-marker")).toBe(false);
+    expect(await deleteActiveReviewRunMarker(store, "run-unknown")).toBe(false);
+    const runs = await getRecentRuns(store, 5);
+    expect(runs.find((run) => run.id === "run-marker")?.status).toBe("succeeded");
+  });
+
+  it("replaces the restart-sweep placeholder so a recovered outcome lands", async () => {
+    const { RESTART_SWEEP_ERROR } = await import("../src/stats.js");
+    await insertReviewRun(store, {
+      id: "run-restart-placeholder", eventId: "evt", workspaceId: "ws-1", triggerName: "gitea",
+      provider: null, providerModel: null, status: "failed", error: RESTART_SWEEP_ERROR,
+      startedAt: new Date(),
+    });
+    await insertReviewRun(store, {
+      id: "run-real-failure", eventId: "evt", workspaceId: "ws-1", triggerName: "gitea",
+      provider: null, providerModel: null, status: "failed", error: "agent exited",
+      startedAt: new Date(),
+    });
+    // The boot recovery re-executes the swept run id: its terminal record may
+    // replace the placeholder…
+    expect(await deleteActiveReviewRunMarker(store, "run-restart-placeholder")).toBe(true);
+    expect(await insertReviewRunOnce(store, {
+      id: "run-restart-placeholder", eventId: "evt", workspaceId: "ws-1", triggerName: "gitea",
+      provider: null, providerModel: null, status: "succeeded", startedAt: new Date(),
+    })).toBe(true);
+    // …while a genuine failure stays authoritative.
+    expect(await deleteActiveReviewRunMarker(store, "run-real-failure")).toBe(false);
+    const { getReviewRunById } = await import("../src/review-queries.js");
+    expect((await getReviewRunById(store, "run-real-failure"))?.status).toBe("failed");
+  });
+
+  it("cancels only in-flight run rows", async () => {
+    await insertReviewRun(store, {
+      id: "run-cancel-active",
+      eventId: "evt",
+      workspaceId: "ws-1",
+      triggerName: "gitea",
+      provider: null,
+      providerModel: null,
+      status: "analyzing",
+      startedAt: new Date(),
+    });
+    await insertReviewRun(store, {
+      id: "run-cancel-terminal",
+      eventId: "evt",
+      workspaceId: "ws-1",
+      triggerName: "gitea",
+      provider: null,
+      providerModel: null,
+      status: "succeeded",
+      startedAt: new Date(),
+    });
+    expect(await cancelActiveReviewRun(store, "run-cancel-active", "cancelled_by_user")).toBe(true);
+    expect(await cancelActiveReviewRun(store, "run-cancel-terminal", "cancelled_by_user")).toBe(false);
+    const runs = await getRecentRuns(store, 10);
+    expect(runs.find((run) => run.id === "run-cancel-active")?.status).toBe("cancelled");
+    expect(runs.find((run) => run.id === "run-cancel-terminal")?.status).toBe("succeeded");
   });
 
   it("inserts and queries output events", async () => {

@@ -93,7 +93,7 @@ describe("im-contracts: verified events are brand-gated", () => {
 describe("im-contracts: command and state vocabularies", () => {
   it("fixes the first-phase command names", () => {
     expect([...IM_COMMAND_NAMES]).toEqual([
-      "help", "chat-id", "review", "status",
+      "help", "chat-id", "review", "status", "cancel",
       "projects", "reviews", "commits", "prs", "detail", "prdetail", "queue", "running",
     ]);
   });

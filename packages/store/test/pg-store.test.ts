@@ -421,6 +421,21 @@ describePg("pg store stats", () => {
     expect((await getOverviewStats(store)).reviewCount).toBe(1);
   });
 
+  it("atomically replaces active markers and preserves terminal cancellation", async () => {
+    const { cancelActiveReviewRun, getReviewRunById } = await import("../src/index.js");
+    const marker = { id: "pg-marker", eventId: "evt", workspaceId: "ws", triggerName: "gitea",
+      provider: null, providerModel: null, status: "analyzing" as const };
+    await insertReviewRun(store, marker);
+    expect(await insertReviewRunOnce(store, { ...marker, status: "succeeded",
+      llmUsages: [{ providerId: "p", modelId: "m", tokensIn: 12 }] }, true)).toBe(true);
+    expect((await getReviewRunById(store, marker.id))?.status).toBe("succeeded");
+    await insertReviewRun(store, { ...marker, id: "pg-cancelled" });
+    await cancelActiveReviewRun(store, "pg-cancelled");
+    expect(await insertReviewRunOnce(store, { ...marker, id: "pg-cancelled", status: "succeeded" }, true)).toBe(false);
+    await updateRunStatus(store, "pg-cancelled", "timeout", { onlyIfActive: true });
+    expect((await getReviewRunById(store, "pg-cancelled"))?.status).toBe("cancelled");
+  });
+
   it("folds concurrent duplicate runs and accounts for exactly one write", async () => {
     const run = { id: "same-run", eventId: "evt", workspaceId: "ws", triggerName: "gitea", provider: null, providerModel: null, status: "succeeded" as const };
     const results = await Promise.allSettled(Array.from({ length: 8 }, () => insertReviewRunOnce(store, run)));
@@ -569,6 +584,19 @@ describePg("pg store model catalog", () => {
 });
 
 describePg("pg store review deferrals", () => {
+  it("cancels only the observed pending deferral envelope", async () => {
+    const { cancelPendingReviewDeferral } = await import("../src/review-deferrals.js");
+    const input = { dedupKey: "cancel-key", workspaceId: "ws", provider: "gitea", eventName: "pull_request",
+      reviewEvent: "old", notBefore: new Date(Date.now() + 1000) };
+    const old = await upsertReviewDeferral(store, input);
+    const latest = await upsertReviewDeferral(store, { ...input, reviewEvent: "new" });
+    expect(await cancelPendingReviewDeferral(store, old)).toBe(false);
+    await claimReviewDeferral(store, input.dedupKey);
+    expect(await cancelPendingReviewDeferral(store, latest)).toBe(false);
+    const pending = await upsertReviewDeferral(store, { ...input, reviewEvent: "last" });
+    expect(await cancelPendingReviewDeferral(store, pending)).toBe(true);
+    expect(await listPendingReviewDeferrals(store)).toHaveLength(0);
+  });
   const deferral = (overrides: Record<string, unknown> = {}) => ({
     dedupKey: "key-1",
     workspaceId: "ws-1",

@@ -525,10 +525,11 @@ export const STORE_MIGRATION_STEPS: readonly MigrationStep[] = [
     CREATE INDEX idx_llm_usage_run ON llm_usage(run_id);
   `),
   pgSqlStep("011_im_tables", 10, 11, MIGRATION_011_IM_TABLES),
+  pgSqlStep("012_review_event", 11, 12, "ALTER TABLE review_runs ADD COLUMN review_event_json TEXT;"),
 ];
 
 export const STORE_MIGRATION_PLAN: NamespaceMigrationPlan = {
   namespace: STORE_MIGRATION_NAMESPACE,
-  targetVersion: 11,
+  targetVersion: 12,
   steps: STORE_MIGRATION_STEPS,
 };

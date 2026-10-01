@@ -14,6 +14,9 @@ export const runStatusValues = [
 
 export type RunStatus = (typeof runStatusValues)[number];
 
+/** In-flight (non-terminal) run statuses: the lifecycle marker view. */
+export const ACTIVE_RUN_STATUSES = ["queued", "preparing", "analyzing", "publishing"] as const;
+
 export const projects = sqliteTable("projects", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   workspaceId: text("workspace_id").notNull(),
@@ -58,6 +61,7 @@ export const reviewRuns = sqliteTable("review_runs", {
   targetUrl: text("target_url"),
   branch: text("branch"),
   headSha: text("head_sha"),
+  reviewEventJson: text("review_event_json"),
   /** VCS family of the analyzed revision ("git" | "svn" | "p4"); drives revision formatting. */
   vcsKind: text("vcs_kind"),
   /** Commit time of the analyzed head revision, when the VCS adapter could resolve it. */

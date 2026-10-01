@@ -55,11 +55,12 @@ export const AUTO_COMMIT_DEFAULT_DELAY_SECONDS = 300;
  */
 export const AUTO_COMMIT_MAX_DELAY_SECONDS = 31_536_000; // 365 days
 /**
- * Built-in queue timeout (hours). Pending auto-commit members older than this
- * bound are terminally skipped as `queued_timeout` so a stuck queue can never
- * accumulate forever. `0` disables the sweep.
+ * Built-in queue timeout (hours). Pending auto-commit members and queued
+ * batches (dispatch_pending/queued/retry_wait) older than this bound are
+ * terminally skipped as `queued_timeout` so a stuck queue can never accumulate
+ * forever — or get replayed after a long downtime. `0` disables the sweep.
  */
-export const AUTO_COMMIT_DEFAULT_QUEUED_TIMEOUT_HOURS = 48;
+export const AUTO_COMMIT_DEFAULT_QUEUED_TIMEOUT_HOURS = 72;
 /** Upper bound mirrors the delay bound: one year. */
 export const AUTO_COMMIT_MAX_QUEUED_TIMEOUT_HOURS = 8_760;
 

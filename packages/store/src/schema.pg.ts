@@ -71,6 +71,7 @@ export const reviewRuns = pgTable("review_runs", {
   targetUrl: text("target_url"),
   branch: text("branch"),
   headSha: text("head_sha"),
+  reviewEventJson: text("review_event_json"),
   vcsKind: text("vcs_kind"),
   headCommittedAt: epochMs("head_committed_at"),
 });

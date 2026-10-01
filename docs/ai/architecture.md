@@ -119,6 +119,13 @@ PostgreSQL 后端见 [M17](milestones/M17.md)，来源合并、路由图与发�
 - 存储：`createAutoCommitStoreFromConfig` 跟随 `queue.kind` 选择 memory/SQLite/Redis 后端；
   memory 的非持久性在启动日志显式可见。receipt/成员/批次/租约/outbox 约定在
   `packages/core/src/auto-commit-store.ts`，三后端共享 conformance 场景。
+- Git 组批先按 `coverReceiptId` 保留完整 push 单元，同事件的多作者和 merge commit
+  不拆分。跨 push 仅合并连续、到期、同原始作者且不含 merge/rewrite 的单元，合并
+  上限 50，切点只能在事件之间；单 push 可超过 50，原子封存最多 4,096 个成员。
+  超限整体标记 `push_batch_too_large`，内部排除缺口标记 `exclusion_scope_conflict`，
+  不执行部分范围。准备按 512 成员分页，执行按 512 ID 分块读取，封存后不重新分组。
+  分支 stream 独立记覆盖；同 SHA 从已评审分支合入另一受监控分支仍是新事件。
+  排队年龄取接收时间，与 commit 时间无关。P4/SVN 同来源连续合并规则保持 50 上限。
 - 调度：`AutoCommitScheduler`（`packages/server/src/auto-commit-scheduler.ts`）单去抖 timer
   按最早到期信号唤醒，扩展（有界 VCS 元数据页 + 来源快照 + 排除判定）→ 组批封存 →
   窗口内派发执行；执行桥 `createAutoCommitBatchExecutor` 以固定 runId、成员列表和端点调用
@@ -148,15 +155,37 @@ PostgreSQL 后端见 [M17](milestones/M17.md)，来源合并、路由图与发�
   重入 outbox）；再次终态失败则 terminally skip 并释放流，同时以失败 run 行持久化拒绝原因
   （如 `review.max_patch_bytes exceeded`），Recent Runs 可见；管理端重排会删除该标记行让重试
   记录自己的结果。调度器启动时按 consumerId 立即回收上一进程的租约，并把升级前遗留的 dead
-  批次重新武装。管理端 `POST /api/admin/auto-commit/batches/:id/retry` 可人工重排 terminal
+  批次重新排队。管理端 `POST /api/admin/auto-commit/batches/:id/retry` 可人工重排 terminal
   批次（看板 Queue 页）；人工重排会清除批次的准入配置快照固定，重试按**当前**准入代执行——
   运维调参（如调大 `review.max_patch_bytes`）后重排即可生效。批次列表 API
   （`GET /api/admin/auto-commit/batches`）返回每批的 `publications` 与待发布操作
   `publicationOperations`，含写入/对账次数，不暴露端点和原始响应。人工重排保留已有远端日志与
   分析载荷；当前配置改变不确定请求时停止发送，不清空操作身份。
-  `queued_timeout_hours`（默认 48）把超过时限的待处理条目终结为 `queued_timeout`，Events
-  决策翻转为 `timeout`——正式 receipt 按 `detail.receiptId` 翻转，routing 接收的事件经
-  `listRoutingIntakeIdsForReceipts` 映射按 `detail.routingId` 翻转。有效载荷与逐目标回执避免
+  `queued_timeout_hours`（默认 72）把超过时限的待处理条目与排队批次
+  （`dispatch_pending`/`queued`/`retry_wait` 及恢复前的过期/中断执行）终结为 `queued_timeout`
+  并释放流，对应进行中 run 行标记 `timeout`；Events 决策翻转为 `timeout`——正式
+  receipt 按 `detail.receiptId` 翻转，routing 接收的事件经
+  `listRoutingIntakeIdsForReceipts` 映射按 `detail.routingId` 翻转。清扫在
+  bootstrap 周期执行（10 分钟），且在 `scheduler.start()` 之前先按各 workspace
+  边界执行一次；IM 工作器也按保存的请求配置清扫等待请求，并写入
+  `im.queued_timeout` 和通知 outbox。批次 `created_at` 继承最早成员的
+  `firstAcceptedAt`，包含元数据准备与首次延迟；此外**所有自动恢复路径都按首次接收时间
+  预检超龄**：启动时的租约回收、中断恢复和 dead 批次重新排队，每 tick 的过期租约回收、
+  以及 `dispatchOne` 的领取边界，超龄批次一律终态 `queued_timeout`
+  （run 行经 `onBatchTimedOut` 钩子标 `timeout`），绝不恢复执行；仅管理端
+  人工重排（Retry）重置等待期限且保留发布日志。清扫保留当前活动控制器和
+  有效租约，过期租约取消使用 lease token/到期时间 CAS。已完成 receipt 不改超时。
+  操作员可提前终止：IM
+  `aicr cancel`（见 im-bots 文档）与看板 Queue 页 `Cancel/Requeue` 走
+  `review-cancellation.ts` 协调器——排队批次经 `cancelQueuedBatches` 终态跳过
+  （成员 `skipped`、outbox 删除、流释放），运行中批次先持久化终态，再经调度器
+  `cancelRunningBatch` 以 `BATCH_CANCEL_REASON` 中止（不再重试、不消耗
+  自动恢复），IM 请求经 `cancelImReviewRequest` CAS 终态 `rejected` 并自增
+  fence 使在途 worker 的后续写失效；运行记录标记 `cancelled`（仅活跃行）。
+  完整扫描分页面后再修改状态，取消按 workspace/trigger/repoRef 精确匹配。
+  重评（看板 Runs 页 `Re-review`）用保存的完整 ReviewEvent 走当前
+  准入代执行，保留提交区间、PR/MR 和 fork；数据不足的历史记录返回 422。
+  有效载荷与逐目标回执避免
   分析重跑与已确认渠道的重复发布。单次报告写入先保存稳定操作标识，再调用 HTTP；Git 平台
   查询正文标记、状态或删除结果，飞书应用在去重有效期内复用 UUID，webhook 不盲目重发
   不确定消息。查询在 managed issue 列表读取前执行，避免远端已创建的 issue 改变恢复分支。
@@ -175,10 +204,10 @@ PostgreSQL 后端见 [M17](milestones/M17.md)，来源合并、路由图与发�
   始终使用后者；PR/MR 无首次接收延迟、不组装提交批次。
 - 窗口外延期由 `ReviewDeferralManager`（`packages/server/src/deferral-manager.ts`）接管：
   有可观测 store 时事件信封（provider/eventName/payload/ReviewEvent）按 dedup key 持久化到
-  `review_deferrals` 表并武装单定时器，同目标新事件替换信封且 `not_before` 不提前；定时器
-  使用存储返回的时间武装定时器。触发后原子 claim，经 `resumeHandler` 重新进入常规调度，
+  `review_deferrals` 表，按存储返回的 `not_before` 启动定时器；同目标新事件替换信封，
+  恢复时刻不提前。触发后原子 claim，经 `resumeHandler` 重新进入常规调度，
   交接成功后只删除仍为 claimed 的行，不删除交接时再次延期的 pending 行；读取或交接异常
-  保留任务重试，写入失败时读取最新内存回退。启动恢复把 claimed 重置为 pending 并重新武装全部
+  保留任务重试，写入失败时读取最新内存回退。启动恢复把 claimed 重置为 pending 并恢复全部
   定时器。执行开始后的结果（含内存重试链）归 run 生命周期管理，与既有异步路径同级。
   无 store 时退化为进程内存定时器，重启即丢失。窗口内到达的新事件通过 `cancel` 取代同目标
   的待执行延期。评论命令（reason 以 `:comment_review` 结尾）被延期时复用 output publisher
@@ -953,6 +982,27 @@ AICR 采用**两层上下文管理**，两者互补：
 ### 3.11 Run 状态与可观测性
 
 - 状态与持久化 schema 真源是 `packages/store/src/schema.ts`。
+- **In-flight marker 生命周期**：执行开始时 `onExecutionStart` 以
+  `insertReviewRunOnce` 写入 `analyzing` marker 行（`aicr running`、
+  `listImQueryRuns` 的活跃视图来源）。所有终态持久化路径必须让完整结果行
+  **替换** marker：webhook、auto-commit 与 IM 终态均通过
+  `insertReviewRunOnce(store, result, true)` 在同一事务内替换活跃或重启占位行，
+  并写入结果与用量；已取消或其他终态保持权威。否则 dedup 插入对已存在的 marker no-op，
+  marker 永远停留 `analyzing`（僵尸行：`aicr running` 永久显示已完成任务、
+  重启清扫 `failActiveReviewRuns` 又把它们误翻成 `failed`）。取消/超时路径
+  用 `cancelActiveReviewRun` 及带活跃状态前置条件的超时更新保护终态记录。
+  启动清扫须在调度器与 IM 工作器启动之前完成，避免清扫新任务。
+  migration 012 增加 `review_event_json` 保存完整事件供重评使用。
+  延期注册表同样在恢复、周期清扫和执行领取前按保存的配置检查超时，
+  操作员取消用状态、更新时间和事件内容 CAS 删除等待事件，保护新事件与已领取任务。
+- 操作员干预面：看板 Runs 页 `Re-review`（使用保存的完整事件，
+  `POST /api/admin/runs/:id/rereview`，当前准入代执行）、Queue 页
+  `Cancel/Requeue`（`POST /api/admin/auto-commit/batches/:id/cancel|requeue`）、
+  Runs/Live 的 `Terminate`（`POST /api/admin/runs/:id/cancel`），
+  实时运行注册表始终启用，IM 取消不依赖 Web Admin 开关；
+  IM 请求取消（`POST /api/admin/im/requests/:id/cancel`）；中止信号传给 LLM
+  和 sandbox，等待任务可退出共享并发队列，活动任务结束后才释放并发名额。边界与协调器见
+  §3.1.1 的 `review-cancellation.ts` 说明。
 - 运行记录至少要覆盖：
   - run 元数据
   - target / workspace
@@ -1012,7 +1062,7 @@ AICR 采用**两层上下文管理**，两者互补：
     `pruneWebhookEvents` 按历史保留策略有界清理；不参与 `recomputeDailyRollup`。
   - `review_deferrals`：执行窗口延期的队列状态（见 §3.1.1 直接路径段），按 dedup key
     单条记录目标事件信封与 `not_before`；pending→claimed 原子迁移，执行开始时删除，
-    启动恢复把 claimed 重置为 pending 并重新武装定时器。
+    启动恢复把 claimed 重置为 pending 并恢复定时器。
 - Admin API 端点（Hono 子路由 `/api/admin`）：
   - `POST /login`：验证用户名/密码，返回 session token + 过期时间。
   - `POST /logout`：撤销 session token。

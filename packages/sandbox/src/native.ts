@@ -25,6 +25,7 @@ export function createNativeSandboxBackend(
     kind: "native" as SandboxKind,
 
     async spawn(spawnOptions: SandboxSpawnOptions): Promise<SandboxSpawnResult> {
+      spawnOptions.signal?.throwIfAborted();
       const { command, args } = parseAllowedCommand(spawnOptions.command, allowedCommands);
       const timeoutMs = spawnOptions.timeoutMs ?? DEFAULT_TIMEOUT_MS;
       const start = Date.now();
@@ -57,6 +58,7 @@ export function createNativeSandboxBackend(
           if (timers.main !== undefined) clearTimeout(timers.main);
           if (timers.kill !== undefined) clearTimeout(timers.kill);
           if (timers.force !== undefined) clearTimeout(timers.force);
+          spawnOptions.signal?.removeEventListener("abort", abort);
           resolvePromise({
             exitCode,
             stdout,
@@ -94,8 +96,11 @@ export function createNativeSandboxBackend(
         }
         proc.stdin.end();
 
-        timers.main = setTimeout(() => {
-          timedOut = true;
+        let terminating = false;
+        const terminate = () => {
+          if (settled || terminating) return;
+          terminating = true;
+          clearTimeout(timers.main);
           killProcessTree(proc, "SIGTERM");
 
           timers.kill = setTimeout(() => {
@@ -123,7 +128,11 @@ export function createNativeSandboxBackend(
               }
             }, GRACE_PERIOD_MS);
           }, GRACE_PERIOD_MS);
-        }, timeoutMs);
+        };
+        const abort = () => terminate();
+        timers.main = setTimeout(() => { timedOut = true; terminate(); }, timeoutMs);
+        spawnOptions.signal?.addEventListener("abort", abort, { once: true });
+        if (spawnOptions.signal?.aborted) abort();
       });
     },
 

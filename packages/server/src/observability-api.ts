@@ -25,6 +25,7 @@ import {
   type AdminSessionStore,
 } from "./admin-auth.js";
 import type { LiveRunRegistry } from "./live-runs.js";
+import type { ReviewCancellationService } from "./review-cancellation.js";
 
 export interface ObservabilityApiOptions {
   /**
@@ -45,6 +46,15 @@ export interface ObservabilityApiOptions {
    */
   readonly currentConfigSnapshotId?: () => string | null;
   readonly onBatchRequeued?: () => void;
+  /** Operator cancellation surface (IM `aicr cancel`, admin force-close). */
+  readonly cancellation?: ReviewCancellationService;
+  /** Admin requeue of a queued batch (clears the retry backoff); kicks the scheduler. */
+  readonly requeueBatch?: (batchId: string) => Promise<{ readonly status: "requeued" | "not_found" | "not_queued"; readonly detail: string }>;
+  /** Admin re-review of a recorded run; returns the fresh run id when accepted. */
+  readonly reReviewRun?: (runId: string) => Promise<
+    | { readonly status: "accepted"; readonly detail: string; readonly runId: string }
+    | { readonly status: "not_found" | "conflict" | "unsupported" | "unavailable"; readonly detail: string }
+  >;
   /** Bounded cleanup before history reads; failures are logged, reads still serve. */
   readonly beforeHistoryRead?: () => Promise<void>;
   readonly historyRetention?: () => HistoryRetention;
@@ -415,6 +425,98 @@ export function createObservabilityApi(options: ObservabilityApiOptions): Hono {
           retryNotBefore: requeued.retryNotBefore,
         },
       });
+    });
+
+  }
+
+  if (options.cancellation) {
+    const cancellation = options.cancellation;
+    api.post("/runs/:id/cancel", authMiddleware, async (c) => {
+      const runId = c.req.param("id");
+      if (!runId) return c.json({ error: "bad_request" }, 400);
+      const outcome = await cancellation.cancelRun(runId);
+      return c.json(outcome, outcome.status === "cancelled" ? 200 : outcome.status === "not_found" ? 404 : 409);
+    });
+    // Operator cancellation: terminally skip a queued batch (close) or abort
+    // a running one (force-terminate). Audited through the structured log.
+    api.post("/auto-commit/batches/:id/cancel", authMiddleware, async (c) => {
+      const batchId = c.req.param("id");
+      if (!batchId) {
+        return c.json({ error: "bad_request", message: "batch id required" }, 400);
+      }
+      const outcome = await cancellation.cancelBatch(batchId);
+      if (outcome.status === "not_found") {
+        return c.json({ error: "not_found", message: outcome.detail }, 404);
+      }
+      if (outcome.status === "already_settled") {
+        return c.json({ error: "conflict", message: outcome.detail }, 409);
+      }
+      console.warn(JSON.stringify({
+        level: "warn",
+        msg: "admin cancelled auto-commit batch",
+        batchId,
+        workspaceId: outcome.batch?.workspaceId,
+        streamId: outcome.batch?.streamId,
+      }));
+      return c.json({ ok: true, detail: outcome.detail });
+    });
+
+    api.post("/auto-commit/batches/:id/requeue", authMiddleware, async (c) => {
+      const batchId = c.req.param("id");
+      if (!batchId) {
+        return c.json({ error: "bad_request", message: "batch id required" }, 400);
+      }
+      if (!options.requeueBatch) {
+        return c.json({ error: "unavailable", message: "requeue not wired" }, 503);
+      }
+      const outcome = await options.requeueBatch(batchId);
+      if (outcome.status === "not_found") {
+        return c.json({ error: "not_found", message: outcome.detail }, 404);
+      }
+      if (outcome.status === "not_queued") {
+        return c.json({ error: "conflict", message: outcome.detail }, 409);
+      }
+      console.warn(JSON.stringify({ level: "warn", msg: "admin requeued auto-commit batch", batchId }));
+      return c.json({ ok: true, detail: outcome.detail });
+    });
+
+    // Terminal cancellation of an in-flight IM review request.
+    api.post("/im/requests/:id/cancel", authMiddleware, async (c) => {
+      const requestId = c.req.param("id");
+      if (!requestId) {
+        return c.json({ error: "bad_request", message: "request id required" }, 400);
+      }
+      const outcome = await cancellation.cancelImRequest(requestId);
+      if (outcome.status === "not_found") {
+        return c.json({ error: "not_found", message: outcome.detail }, 404);
+      }
+      if (outcome.status === "already_settled") {
+        return c.json({ error: "conflict", message: outcome.detail }, 409);
+      }
+      console.warn(JSON.stringify({ level: "warn", msg: "admin cancelled IM review request", requestId }));
+      return c.json({ ok: true, detail: outcome.detail });
+    });
+  }
+
+  // Re-review a recorded run against the current config (admin): executes
+  // out-of-band; the fresh run appears in Recent Runs and the live view.
+  if (options.reReviewRun) {
+    const reReviewRun = options.reReviewRun;
+    api.post("/runs/:id/rereview", authMiddleware, async (c) => {
+      const runId = c.req.param("id");
+      if (!runId) {
+        return c.json({ error: "bad_request", message: "run id required" }, 400);
+      }
+      const outcome = await reReviewRun(runId);
+      const status = outcome.status === "not_found" ? 404
+        : outcome.status === "conflict" ? 409
+        : outcome.status === "unsupported" ? 422
+        : outcome.status === "unavailable" ? 503
+        : 202;
+      if (outcome.status === "accepted") {
+        console.warn(JSON.stringify({ level: "warn", msg: "admin re-review started", sourceRunId: runId, runId: outcome.runId }));
+      }
+      return c.json({ ...outcome }, status);
     });
   }
   return api;

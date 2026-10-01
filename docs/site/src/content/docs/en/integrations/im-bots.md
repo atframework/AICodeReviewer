@@ -561,7 +561,8 @@ Supported command grammar (the `aicr` prefix, sent after @-mentioning the bot):
   For registered repositories, queries match the binding's workspace,
   source trigger, and repo reference. Another trigger for the same workspace
   and repo is outside that binding.
-- `aicr chat-id` / `aicr review <repo> <revision>` / `aicr status <id>` —
+- `aicr chat-id` / `aicr review <repo> <revision>` / `aicr status <id>` / the
+  cancel commands —
   require an enabled `im.command_bindings` entry. Authorization checks four
   dimensions — actor, conversation, connection and command — and the actor
   matches either an **exact principal** (`{type, id}`) or a **scope
@@ -581,6 +582,32 @@ Supported command grammar (the `aicr` prefix, sent after @-mentioning the bot):
   whitelist bootstrap loop: @-mention the bot in a group once, take the
   group id from the rejection reply, and add it to the binding's
   `conversations` (WeCom smart-robot groups have no query API).
+
+Cancel commands (a write operation; the binding's `commands` must explicitly
+list `cancel`):
+
+- `aicr cancel <repo> <revision>` — cancels the in-flight/queued tasks of
+  that repository matching a commit-hash prefix or an exact numeric revision.
+- `aicr cancel <repo> before <duration>` — cancels that repository's tasks
+  enqueued before now minus the duration; durations are `<n><m|h|d>`
+  (minutes/hours/days), e.g. `2h`, `30m`, `3d`. An ISO timestamp with an explicit
+  timezone also works, e.g. `2026-09-01T00:00:00+08:00`.
+- `aicr cancel before <duration>` — repo-unrestricted, cancels the tasks
+  enqueued before the bound within the binding's authorized repositories
+  (all repositories when the binding enables `allow_all_repositories`).
+
+Cancellation covers queued auto-commit batches
+(terminally closed, stream released), running batches (persisted as cancelled
+before aborting — output already published stays published), IM review
+requests (terminal `rejected`, with a notification to the requesting
+conversation), and leftover in-flight run rows (marked `cancelled`).
+Alias forms require the alias to be registered on the binding (or resolved
+via `allow_all_repositories`); the cancellation scope never exceeds the
+binding's authorized repositories. An explicit alias always limits cancellation
+to that repository, even when `allow_all_repositories` is enabled. Active
+webhook and admin reviews can also be aborted through their live run registry.
+Cancellation prevents subsequent publication; it cannot undo delivered output.
+Reviews deferred outside their execution window are also removed durably.
 
 `aicr review` stores the request and its configuration snapshot. The server
 worker validates the fixed revision and runs the review under the shared

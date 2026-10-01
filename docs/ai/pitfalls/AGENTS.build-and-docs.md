@@ -63,6 +63,15 @@ Sources: root/package manifests, `pnpm-workspace.yaml`, `tsconfig.json`,
   `packages/server/test/fixtures/loopback-port.ts` and the post-migration/replica
   process tests; a probe is not a reservation, so child readiness must still fail
   visibly if another process wins the port.
+- Full live-service coverage can exceed a small fixture's PostgreSQL connection
+  budget (`53300`, too many clients), while overlapping cold TypeScript child
+  imports miss readiness deadlines. Retain the failure log and inspect capacity
+  before rerunning; provision an owned test instance with enough connections and
+  bound worker parallelism with `VITEST_MAX_WORKERS`, preserving every test,
+  race assertion and timeout. With shared live endpoints, also apply the
+  database-wide lock and Redis prefix-isolation rules in
+  [config/state pitfalls](AGENTS.config-and-state.md). The deployment fixture's
+  30-connection limit is a service acceptance constraint, not full-suite sizing.
 
 ## Runtime image
 

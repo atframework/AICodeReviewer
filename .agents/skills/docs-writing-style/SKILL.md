@@ -1,6 +1,6 @@
 ---
 name: docs-writing-style
-description: "Verify facts and edit clear bilingual repository Markdown; skip code comments, commit messages, and historical milestone prose."
+description: "Verify facts and edit clear bilingual repository Markdown, including concise milestone records; skip code comments and commit messages."
 ---
 
 # Docs Writing Style
@@ -31,5 +31,6 @@ specifications and change records.
 
 The unambiguous subset is enforced by
 `docs/site/scripts/validate-bilingual-consistency.mjs`; context-dependent wording
-still needs review. Historical milestones retain their original prose; verify
-current claims instead of restyling archives.
+still needs review. Milestones briefly state the problem and solution; preserve
+material validation failures, skips, and scope limits. Remove reviewed-project
+details and operation logs, and link stable specifications instead of copying them.

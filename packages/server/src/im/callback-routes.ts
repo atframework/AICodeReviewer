@@ -9,7 +9,7 @@ import { verifyWecomAppCallback, type WecomAppCallbackCredentials } from "./prot
 import { verifyFeishuCallback, buildFeishuChallengeResponse } from "./protocol-feishu.js";
 import { buildWecomStreamTextReply, processInlineCommand, sendFeishuReply } from "./inline-reply.js";
 import { buildWecomAibotEncryptedReply } from "./protocol-wecom-aibot.js";
-import { invalidImCommandReply, parseImCommand, processImCommand, stripImMentionPrefix, type ImCommandDirectoryLike, type ImQueryServiceLike } from "./command-service.js";
+import { invalidImCommandReply, parseImCommand, processImCommand, stripImMentionPrefix, type ImCancellationServiceLike, type ImCommandDirectoryLike, type ImQueryServiceLike } from "./command-service.js";
 import { consumeCardAction } from "./action-service.js";
 import type { FeishuCallbackCredentials } from "./protocol-feishu.js";
 
@@ -35,6 +35,8 @@ export interface ImCallbackRoutesOptions {
   readonly directory?: ImCommandDirectoryLike | undefined;
   /** Read-only query surface for the status commands; absent = fail closed. */
   readonly query?: ImQueryServiceLike | undefined;
+  /** Cancellation surface for `aicr cancel`; absent = fail closed. */
+  readonly cancellation?: ImCancellationServiceLike | undefined;
   readonly now?: () => number;
 }
 
@@ -203,11 +205,13 @@ export function registerImCallbackRoutes(app: Hono, options: ImCallbackRoutesOpt
         },
         now: new Date(now()),
       };
+      let feishuDeliveryDuplicate: boolean;
       try {
         const feishuOutcome = await acceptImDelivery(options.store, feishuDelivery);
         if (feishuOutcome.kind === "conflict") {
           return response(JSON.stringify({ error: "delivery_conflict" }), 409, { "content-type": "application/json" });
         }
+        feishuDeliveryDuplicate = feishuOutcome.kind === "duplicate";
       } catch {
         return response(JSON.stringify({ error: "storage_unavailable" }), 503, { "content-type": "application/json" });
       }
@@ -269,8 +273,10 @@ export function registerImCallbackRoutes(app: Hono, options: ImCallbackRoutesOpt
             now: new Date(now()),
             configSnapshotId: generation?.snapshotId ?? "file-only",
             configFileDigest: generation?.fileDigest ?? "unknown",
+            deliveryDuplicate: feishuDeliveryDuplicate,
             ...(options.directory !== undefined ? { directory: options.directory } : {}),
             ...(options.query !== undefined ? { query: options.query } : {}),
+            ...(options.cancellation !== undefined ? { cancellation: options.cancellation } : {}),
           });
           replyText = result.replyText ?? undefined;
         }
@@ -316,6 +322,8 @@ export function registerImCallbackRoutes(app: Hono, options: ImCallbackRoutesOpt
     if (outcome.kind === "conflict") {
       return response(JSON.stringify({ error: "delivery_conflict" }), 409, { "content-type": "application/json" });
     }
+    // A redelivered callback must not re-execute write commands (cancel).
+    const deliveryDuplicate = outcome.kind === "duplicate";
     // Inline command reply (aibot callback only): the platform renders the
     // encrypted response body as the bot's answer; persistence stays first.
     if (resolved.kind === "wecom_aibot" && result.event.content.kind === "stream_refresh") {
@@ -366,8 +374,10 @@ export function registerImCallbackRoutes(app: Hono, options: ImCallbackRoutesOpt
             now: new Date(now()),
             configSnapshotId: generation?.snapshotId ?? "file-only",
             configFileDigest: generation?.fileDigest ?? "unknown",
+            deliveryDuplicate,
             ...(options.directory !== undefined ? { directory: options.directory } : {}),
             ...(options.query !== undefined ? { query: options.query } : {}),
+            ...(options.cancellation !== undefined ? { cancellation: options.cancellation } : {}),
           });
           replyText = outcome.replyText ?? undefined;
         }

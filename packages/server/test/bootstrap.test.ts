@@ -3562,7 +3562,9 @@ describe("bootstrapServerApp", () => {
       });
 
       expect(result.reviewOrchestration).toBeDefined();
-      expect(result.reviewOrchestration?.liveRuns).toBeUndefined();
+      expect(result.reviewOrchestration?.liveRuns).toBeDefined();
+      expect(result.liveRuns).toBe(result.reviewOrchestration?.liveRuns);
+      expect(result.observability).toBeUndefined();
       expect(result.reviewOrchestration?.baseSystemPrompt).toBe("test prompt");
       expect(result.reviewOrchestration?.model.providerId).toBe("openai-prod");
       expect(result.reviewOrchestration?.agentModelChain?.map((entry) => entry.modelId)).toEqual(["gpt-4o"]);

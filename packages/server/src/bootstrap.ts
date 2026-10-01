@@ -92,8 +92,10 @@ import {
   type VcsAdapter,
 } from "@aicr/vcs";
 import {
+  ACTIVE_RUN_STATUSES,
   closeStoreDb,
   createStoreDb,
+  getReviewRunById,
   hardDeleteExpiredProjects,
   markWebhookEventsTimedOut,
   readReflectionMemory,
@@ -101,6 +103,8 @@ import {
   compactReflectionMemory,
   softDeleteMissingProjects,
   listImActiveConfigSnapshotIds,
+  updateRunStatus,
+  RESTART_SWEEP_ERROR,
   type StoreDb,
 } from "@aicr/store";
 import {
@@ -121,7 +125,7 @@ import type { IssueTriageRuntimeOptions, WorkspaceIssueTriagePolicy } from "./is
 import { createProblemResolutionAnalyzer } from "./problem-resolution.js";
 import { createAuthorIdentityGuesser } from "./author-identity.js";
 import type { ServerAppOptions, ServerReviewOrchestrationOptions } from "./index.js";
-import { persistRejectedAutoCommitRun, persistReviewRunToStore, resolveTriggerRetryConfig } from "./index.js";
+import { persistFailedRunToStore, persistRejectedAutoCommitRun, persistReviewRunToStore, resolveTriggerRetryConfig } from "./index.js";
 import { type AutoCommitStore, type StreamKeyInput, resolveAutoCommitPolicy } from "@aicr/core";
 import { createAutoCommitStoreFromConfig } from "@aicr/core";
 import { resolvePullRequestSchedule, resolvePullRequestTargetBranches } from "@aicr/core";
@@ -165,7 +169,11 @@ import type {
   ReviewOutputPublisherResolver,
   ReviewSummaryPublishOptions,
 } from "./review-orchestrator.js";
-import { runReviewOrchestration } from "./review-orchestrator.js";
+import { runReviewOrchestration, summarizeReviewOrchestrationForWebhook } from "./review-orchestrator.js";
+import { createImCancelCommandHandler, createReviewCancellationService } from "./review-cancellation.js";
+import { randomUUID } from "node:crypto";
+import { adminReReviewEvent } from "./admin-review.js";
+import { ReviewCancelledError } from "./live-runs.js";
 import {
   RuntimeConfigManager,
   type RuntimeConfigGeneration,
@@ -178,7 +186,7 @@ import { IM_HELP_TEXT, invalidImCommandReply, parseImCommand, processImCommand, 
 import { ImAuthorizationDirectory } from "./im/authorization-directory.js";
 import { ImQueryService } from "./im/query-service.js";
 import { ImReplyService } from "./im/reply-service.js";
-import { classifyImReviewResult, ManualReviewService } from "./im/manual-review-service.js";
+import { classifyImReviewResult, IM_CANCEL_REASON, ManualReviewService } from "./im/manual-review-service.js";
 import { MemberDirectoryService, type MemberDirectoryView } from "./im/member-directory-service.js";
 import {
   createRedisConfigStore,
@@ -3330,7 +3338,8 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
   let store: StoreDb | undefined;
   let sessionStore: ConfigStore | undefined;
   let observability: ObservabilityApiOptions | undefined;
-  let liveRunRegistry: LiveRunRegistry | undefined;
+  // Operator cancellation must also work for IM deployments without Web Admin.
+  const liveRunRegistry: LiveRunRegistry = createLiveRunRegistry();
 
   if (needsStore) {
     try {
@@ -3521,7 +3530,6 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
   }
 
   if (adminAuthConfig) {
-    liveRunRegistry = createLiveRunRegistry();
     // Durable admin sessions ride the deployment database (P2 item 97):
     // sha256-hashed tokens, TTL at read time, logout visible to every replica.
     // Dynamic-config mode shares the runtime config store handle instead of
@@ -3917,7 +3925,7 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
       : {}),
     ...(config.review.output_language ? { outputLanguage: config.review.output_language } : {}),
     ...(config.review.log_thinking === false ? { logThinking: false } : {}),
-    ...(liveRunRegistry ? { liveRuns: liveRunRegistry } : {}),
+    liveRuns: liveRunRegistry,
     // Durable in-flight marker rows: IM `running` reads the database (A15d).
     ...(store
       ? {
@@ -3925,6 +3933,7 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
           const { insertReviewRunOnce } = await import("@aicr/store");
           await insertReviewRunOnce(store, {
             id: info.runId,
+            reviewEventJson: JSON.stringify(info.reviewEvent),
             eventId: info.runId,
             workspaceId: info.reviewEvent.workspaceId,
             triggerName: info.reviewEvent.triggerName ?? null,
@@ -3937,7 +3946,7 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
             targetUrl: info.reviewEvent.url ?? null,
             branch: info.reviewEvent.branch ?? null,
             headSha: info.reviewEvent.headSha ?? null,
-          }).catch((error: unknown) => {
+          }, true).catch((error: unknown) => {
             console.warn(JSON.stringify({ msg: "im_lifecycle_row_failed", runId: info.runId, error: String(error) }));
           });
         }),
@@ -3948,7 +3957,13 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
   const rawQueue = await createQueueFromConfig(config);
   const runtimeQueue = runtimeConfigStore ? createRuntimeQueue(rawQueue, runtimeConfigStore, configSources.database.namespace, runtimeConfig) : undefined;
   const queue = runtimeQueue?.queue ?? rawQueue;
-  const deferralManager = new ReviewDeferralManager({ ...(store ? { store } : {}) });
+  const deferralManager = new ReviewDeferralManager({ ...(store ? { store } : {}),
+    queuedTimeoutFor: async target => {
+      const saved = (await runtimeConfig.resolveGeneration(target.configSnapshotId ?? null)).config;
+      return resolveAutoCommitPolicy(saved.review.auto_commit, saved.workspaces?.defaults?.review?.auto_commit,
+        saved.workspaces?.instances?.[target.reviewEvent.workspaceId]?.review?.auto_commit).queuedTimeoutMs;
+    },
+  });
 
   let worker: QueueWorker | undefined;
   if (jobHandler) {
@@ -3966,6 +3981,11 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
     });
   }
 
+  // Sweep only the previous process's markers, before any worker can start.
+  if (store) {
+    const { failActiveReviewRuns } = await import("@aicr/store");
+    await failActiveReviewRuns(store, RESTART_SWEEP_ERROR);
+  }
   const autoCommitPipeline = await createAutoCommitPipeline({
     config,
     baseDir,
@@ -4000,25 +4020,31 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
   sweepTimer?.unref();
 
   // Queue-timeout sweep (review.auto_commit.queued_timeout_hours, default
-  // 48h): pending members past the per-workspace bound become terminally
-  // skipped and their webhook events flip to the `timeout` decision, so a
-  // stuck queue can never accumulate forever or show stale queue entries.
+  // 72h): queued batches and pending members past the per-workspace bound
+  // become terminally skipped and their webhook events flip to the `timeout`
+  // decision, so a stuck queue can never accumulate forever, show stale queue
+  // entries, or replay ancient work after a long downtime.
   const QUEUED_TIMEOUT_SWEEP_INTERVAL_MS = 10 * 60_000;
   let queuedTimeoutRunning = false;
+  let imReviewService: ManualReviewService | undefined;
   const runQueuedTimeoutSweep = async (): Promise<void> => {
     if (queuedTimeoutRunning) return;
     queuedTimeoutRunning = true;
     try {
+      await imReviewService?.expireQueued();
+      await deferralManager.expireQueued();
       const now = Date.now();
       const workspaceIds = new Set<string>(
         Object.keys(runtimeConfig.current().config.workspaces?.instances ?? {}),
       );
-      // Declared workspaces resolve their own bound (instance �?defaults �?      // global �?built-in 48h). Only a config without any workspace instance
-      // falls back to one unscoped pass �?an unscoped pass cannot honor a
-      // per-workspace disabled timeout, so it must not run alongside
+      // Declared workspaces resolve their own bound (instance, then defaults,
+      // then global, then the built-in 72h). Only a config without any workspace
+      // instance falls back to one unscoped pass; an unscoped pass cannot honor
+      // a per-workspace disabled timeout, so it must not run alongside
       // declared instances.
       const scopes: (string | undefined)[] = workspaceIds.size > 0 ? [...workspaceIds] : [undefined];
       const timedOut: string[] = [];
+      const timedOutBatches: { batchId: string; runId: string }[] = [];
       for (const workspaceId of scopes) {
         const timeoutMs = workspaceId === undefined
           ? resolveAutoCommitPolicy(
@@ -4029,9 +4055,28 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
           : autoCommitPipeline.runtime.policyFor(workspaceId).queuedTimeoutMs;
         if (timeoutMs === null) continue;
         const cutoff = now - timeoutMs;
+        // Batches first: their members become terminal, so the receipt-stamp
+        // pass below can flip the owning receipts' webhook events in the
+        // same sweep run.
+        timedOutBatches.push(
+          ...(await autoCommitPipeline.store.timeoutStaleBatches(cutoff, workspaceId)),
+        );
         timedOut.push(
           ...(await autoCommitPipeline.store.timeoutStaleQueue(cutoff, now, workspaceId)),
         );
+      }
+      // Mirror the batch outcome onto in-flight run markers so Recent Runs
+      // surfaces the timeout instead of a stale analyzing row.
+      if (store && timedOutBatches.length > 0) {
+        for (const batch of timedOutBatches) {
+          await updateRunStatus(store, batch.runId, "timeout", { error: "queued_timeout", onlyIfActive: true })
+            .catch(() => undefined);
+        }
+        console.warn(JSON.stringify({
+          level: "warn",
+          msg: "auto-commit queue timeout sweep skipped stale batches",
+          batches: timedOutBatches.length,
+        }));
       }
       if (store && timedOut.length > 0) {
         // Routing-stage intake events carry detail.routingId; the sweep's
@@ -4077,6 +4122,7 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
 
   let imReviewTimer: ReturnType<typeof setInterval> | undefined;
   let imReviewRunning: Promise<void> | undefined;
+  const adminReviews = new Map<string, { controller: AbortController; task: Promise<void> }>();
   let draining: Promise<void> | undefined;
   const beginDrain = (): Promise<void> => {
     if (draining) return draining;
@@ -4086,7 +4132,8 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
     clearInterval(concurrencyTimer);
     clearInterval(queuedTimeoutTimer);
     if (imReviewTimer) clearInterval(imReviewTimer);
-    draining = Promise.all([sweepRunning, imReviewRunning, historyMaintenance.stop(), worker?.stop(), autoCommitPipeline.scheduler.stopAndDrain()]).then(() => {});
+    for (const run of adminReviews.values()) run.controller.abort(new ReviewCancelledError());
+    draining = Promise.all([sweepRunning, imReviewRunning, ...[...adminReviews.values()].map(run => run.task), historyMaintenance.stop(), worker?.stop(), autoCommitPipeline.scheduler.stopAndDrain()]).then(() => {});
     return draining;
   };
 
@@ -4105,7 +4152,7 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
   if (store !== undefined) {
     imReplyService = new ImReplyService({ store, getConfig: currentConfig, env: (name: string) => resolveEnv(name) });
     imReplyService.start();
-    const imReviewService = new ManualReviewService({
+    imReviewService = new ManualReviewService({
       store,
       namespace: configSources.database.namespace,
       getConfig: async (snapshotId) => (await runtimeConfig.resolveGeneration(snapshotId === "file-only" ? null : snapshotId)).config,
@@ -4124,35 +4171,133 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
       },
       enqueueReview: (_jobId, run, workspaceId) => executionConcurrency.run(workspaceId, run),
       executeReview: async (event, _pinnedConfig, request, signal) => {
+        const startMs = Date.now();
         try {
           const result = await runReviewOrchestration({
             reviewEvent: event, payload: {}, provider: "manual", eventName: "im.command.review",
             runId: request.runId, runSource: "im_command", signal,
             configSnapshotId: request.configSnapshotId === "file-only" ? null : request.configSnapshotId,
           }, orchestrationOptions);
+          signal.throwIfAborted();
+          // Terminal persistence mirrors the webhook path so the in-flight
+          // `analyzing` marker written at execution start is replaced by the
+          // full outcome row (otherwise `aicr running` shows stale entries).
+          await persistReviewRunToStore(
+            store,
+            request.runId,
+            event,
+            summarizeReviewOrchestrationForWebhook(result),
+            Date.now() - startMs,
+            startMs,
+          );
           return classifyImReviewResult(result);
         } catch (error) {
-          console.warn(JSON.stringify({ msg: "im_review_orchestration_failed", requestId: request.requestId, error: String(error) }));
-          return { state: "publication_unknown" as const, errorCode: "im.review_failed_unknown" };
+          // Operator cancellation: the cancel coordinator already wrote the
+          // terminal request state and the cancelled run row; a failed row
+          // here would overwrite it.
+          const cancelled = signal?.aborted === true
+            && (signal as { reason?: unknown }).reason === IM_CANCEL_REASON;
+          if (!cancelled) {
+            console.warn(JSON.stringify({ msg: "im_review_orchestration_failed", requestId: request.requestId, error: String(error) }));
+            await persistFailedRunToStore(store, request.runId, event, Date.now() - startMs, startMs, error);
+          }
+          return {
+            state: "publication_unknown" as const,
+            errorCode: cancelled ? "im.cancelled_by_user" : "im.review_failed_unknown",
+          };
         }
       },
     });
+    const scanService = imReviewService;
     const scanImReviews = () => {
       if (imReviewRunning) return;
-      imReviewRunning = imReviewService.scan().then(() => {}).catch(error => {
+      imReviewRunning = scanService.scan().then(() => {}).catch(error => {
         console.warn(JSON.stringify({ msg: "im_review_scan_failed", error: String(error) }));
       }).finally(() => { imReviewRunning = undefined; });
     };
     imReviewTimer = setInterval(scanImReviews, 10_000);
     imReviewTimer.unref();
     scanImReviews();
-    // Single-process executions cannot survive a restart: sweep in-flight rows.
-    void import("@aicr/store").then(({ failActiveReviewRuns }) =>
-      failActiveReviewRuns(store!, "interrupted by restart").then((swept) => {
-        if (swept > 0) console.log(JSON.stringify({ msg: "review_runs_startup_sweep", swept }));
-      }),
-    ).catch(() => undefined);
   }
+
+  // Operator cancellation coordinator (IM `aicr cancel`, admin operations):
+  // composes the auto-commit scheduler abort, the IM worker abort, and the
+  // store-side terminal transitions.
+  const reviewCancellation = createReviewCancellationService({
+    cancelDeferred: matches => deferralManager.cancelPending((target, at) => matches(target.reviewEvent, at)),
+    ...(store !== undefined ? { store } : {}),
+    ...(autoCommitPipeline ? { autoCommitStore: autoCommitPipeline.store } : {}),
+    cancelRunningBatch: (batchId) => autoCommitPipeline.scheduler.cancelRunningBatch(batchId),
+    cancelRunningRun: (runId: string) => {
+      const pending = adminReviews.get(runId);
+      if (pending) pending.controller.abort(new ReviewCancelledError());
+      return liveRunRegistry.cancel(runId) || pending !== undefined;
+    },
+    ...(imReviewService !== undefined
+      ? { cancelRunningImRequest: ((requestId: string) => (imReviewService as ManualReviewService).cancelRunning(requestId)) }
+      : {}),
+    imNamespace: configSources.database.namespace,
+  });
+  const imCancellationHandler = createImCancelCommandHandler(reviewCancellation);
+  if (observability) observability = {
+    ...observability,
+    cancellation: reviewCancellation,
+    requeueBatch: async (batchId) => {
+      const outcome = await reviewCancellation.requeueBatch(batchId);
+      if (outcome.status === "requeued") autoCommitPipeline.scheduler.kick();
+      return outcome;
+    },
+    reReviewRun: async (sourceRunId) => {
+      if (store === undefined) return { status: "unavailable" as const, detail: "store unavailable" };
+      const row = await getReviewRunById(store, sourceRunId);
+      if (row === undefined || row.repoRef === null || row.triggerName === null) {
+        return { status: "not_found" as const, detail: `run ${sourceRunId} not found or lacks repo identity` };
+      }
+      if ((ACTIVE_RUN_STATUSES as readonly string[]).includes(row.status)) {
+        return { status: "conflict" as const, detail: `run ${sourceRunId} is still in flight (${row.status})` };
+      }
+      const generation = runtimeConfig.current();
+      const trigger = generation.config.triggers.find(entry => entry.name === row.triggerName);
+      if (trigger === undefined) {
+        return { status: "unsupported" as const, detail: `trigger ${row.triggerName} no longer exists` };
+      }
+      let event: ReviewEvent | undefined;
+      try { event = adminReReviewEvent(row, trigger.kind); } catch {
+        return { status: "unsupported" as const, detail: "stored event is invalid" };
+      }
+      if (!event) return { status: "unsupported" as const, detail: "this historical run has no replayable event; submit a new review command" };
+      const replayEvent = event;
+      const freshRunId = randomUUID();
+      const controller = new AbortController();
+      const { insertReviewRunOnce } = await import("@aicr/store");
+      await insertReviewRunOnce(store, {
+        id: freshRunId, eventId: freshRunId, workspaceId: row.workspaceId, triggerName: row.triggerName,
+        repoRef: row.repoRef, provider: null, providerModel: null, status: "queued",
+        reviewEventJson: JSON.stringify(replayEvent), headSha: replayEvent.headSha ?? null,
+        targetKind: replayEvent.targetKind, targetUrl: replayEvent.url ?? null,
+      });
+      // Out-of-band execution through the shared admission so the re-review
+      // respects global/per-workspace concurrency like any other run.
+      const task = executionConcurrency.run(row.workspaceId, async () => {
+        const startMs = Date.now();
+        try {
+          const result = await runReviewOrchestration({
+            reviewEvent: replayEvent, payload: {}, provider: trigger.kind, eventName: "admin.rereview",
+            runId: freshRunId, runSource: "admin_rereview", signal: controller.signal, configSnapshotId: generation.snapshotId,
+          }, orchestrationOptions);
+          controller.signal.throwIfAborted();
+          await persistReviewRunToStore(store, freshRunId, replayEvent, summarizeReviewOrchestrationForWebhook(result), Date.now() - startMs, startMs);
+        } catch (error) {
+          await persistFailedRunToStore(store, freshRunId, replayEvent, Date.now() - startMs, startMs, error);
+        }
+      }, controller.signal).catch(async (error: unknown) => {
+        await persistFailedRunToStore(store, freshRunId, replayEvent, 0, Date.now(), error);
+        console.warn(JSON.stringify({ msg: "admin_rereview_failed", sourceRunId, runId: freshRunId, error: String(error) }));
+      }).finally(() => { adminReviews.delete(freshRunId); });
+      adminReviews.set(freshRunId, { controller, task });
+      return { status: "accepted" as const, detail: `re-review started for ${row.repoRef}`, runId: freshRunId };
+    },
+  };
 
   return {
     // Fixed dispatcher sources (P4/H06): index.ts resolves these per request
@@ -4252,7 +4397,7 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
     deferralManager,
     ...(observability ? { observability } : {}),
     ...(sessionStore ? { sessionStore } : {}),
-    ...(liveRunRegistry ? { liveRuns: liveRunRegistry } : {}),
+    liveRuns: liveRunRegistry,
     ...(store ? { store } : {}),
     // IM callbacks need the inbox store plus the live generation's
     // connection table; file-only generations still serve the file config.
@@ -4273,6 +4418,7 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
           env: (name: string) => resolveEnv(name),
           directory: imAuthorizationDirectory,
           query: imQueryService,
+          cancellation: imCancellationHandler,
         } satisfies ImCallbackRoutesOptions,
       }
       : {}),
@@ -4315,6 +4461,7 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
                 configFileDigest: generation.fileDigest ?? "unknown",
                 ...(imAuthorizationDirectory !== undefined ? { directory: imAuthorizationDirectory } : {}),
                 query: imQueryService,
+                cancellation: imCancellationHandler,
               });
               if (result.replyText !== undefined) await message.reply(result.replyText);
             },
@@ -4590,12 +4737,68 @@ async function createAutoCommitPipeline(deps: {
         error,
       );
     },
+    // Queue-timeout guard outcome mirror: the scheduler's recovery/dispatch
+    // guards terminally skip over-aged batches; their run rows flip to
+    // `timeout` so Recent Runs and `aicr running` reflect reality.
+    onBatchTimedOut: async (_batchId, runId) => {
+      if (deps.reviewStore) {
+        await updateRunStatus(deps.reviewStore, runId, "timeout", { error: "queued_timeout", onlyIfActive: true })
+          .catch(() => undefined);
+      }
+    },
+    onBatchCancelled: async (_batchId, runId) => {
+      if (deps.reviewStore) {
+        const { cancelActiveReviewRun } = await import("@aicr/store");
+        await cancelActiveReviewRun(deps.reviewStore, runId);
+      }
+    },
     // H17: concurrency re-reads at the claim boundary from the current
     // generation; lowering the limit never cancels running batches.
     globalConcurrency: () => runtimeConfig.withoutGeneration(() => runtimeConfig.current().config.queue.workers?.concurrency ?? 4),
     perWorkspaceConcurrency: () => runtimeConfig.withoutGeneration(() => runtimeConfig.current().config.queue.workers?.per_workspace_concurrency ?? 1),
   });
   schedulerHolder.scheduler = scheduler;
+  // Boot-time queue-timeout pass BEFORE the scheduler starts: reclaiming the
+  // previous process's batches and re-arming dead batches is by design, but a
+  // long downtime must not replay ancient reviews. Terminal-skip queued
+  // batches past each workspace's queued_timeout bound first, so the first
+  // dispatch tick can only pick up work inside the bound.
+  try {
+    const workspaceIds = Object.keys(config.workspaces?.instances ?? {}) as readonly string[];
+    const scopes: (string | undefined)[] = workspaceIds.length > 0 ? [...workspaceIds] : [undefined];
+    let skipped = 0;
+    for (const workspaceId of scopes) {
+      const timeoutMs = workspaceId === undefined
+        ? resolveAutoCommitPolicy(
+            (config as unknown as { review?: { auto_commit?: Parameters<typeof resolveAutoCommitPolicy>[0] } }).review?.auto_commit,
+            (config as unknown as { workspaces?: { defaults?: { review?: { auto_commit?: Parameters<typeof resolveAutoCommitPolicy>[0] } } } }).workspaces?.defaults?.review?.auto_commit,
+            undefined,
+          ).queuedTimeoutMs
+        : runtime.policyFor(workspaceId).queuedTimeoutMs;
+      if (timeoutMs === null) continue;
+      const stale = await store.timeoutStaleBatches(Date.now() - timeoutMs, workspaceId);
+      skipped += stale.length;
+      if (deps.reviewStore) {
+        for (const batch of stale) {
+          await updateRunStatus(deps.reviewStore, batch.runId, "timeout", { error: "queued_timeout", onlyIfActive: true })
+            .catch(() => undefined);
+        }
+      }
+    }
+    if (skipped > 0) {
+      console.warn(JSON.stringify({
+        level: "warn",
+        msg: "auto-commit boot sweep skipped stale queued batches (queued_timeout)",
+        batches: skipped,
+      }));
+    }
+  } catch (error) {
+    console.warn(JSON.stringify({
+      level: "warn",
+      msg: "auto-commit boot sweep failed; periodic sweep will retry",
+      error: error instanceof Error ? error.message : String(error),
+    }));
+  }
   scheduler.start();
   return {
     runtime,

@@ -1,10 +1,9 @@
 # IM 应用、回调与重新评审设计
 
-状态：分阶段实施中，2026-09-28。IM-01/02 的配置类型和来源注册已完成；输出、回调与命令运行时仍待接线。
-具体进度以 [Plan.md](../../Plan.md) 和当前代码为准；未实施的字段、接口、表和命令仍为设计目标。
-开发顺序和完成条件见 [Plan.md](../../Plan.md)；外部协议依据见[来源记录](../ai/sources/im-integrations.md)。
-逐步实施使用[任务卡](im-implementation.md)、[实施规范](im-implementation-spec.md)和[编号验收矩阵](im-acceptance.md)。
-现有运行行为仍以[输出渠道规范](../output-channels.md)和源码为准。
+本设计规定 IM 接入、授权和重新评审的边界。进度及未完成项见 [Plan.md](../../Plan.md)，
+接口见[实施规范](im-implementation-spec.md)，执行步骤见[任务卡](im-implementation.md)，
+验收断言见[验收矩阵](im-acceptance.md)，外部协议见[来源记录](../ai/sources/im-integrations.md)。
+当前可用功能见[用户说明](../site/src/content/docs/zh-cn/integrations/im-bots.md)及[输出渠道规范](../output-channels.md)。
 
 ## 1. 目标和范围
 
@@ -12,9 +11,8 @@
 企业微信 API 模式机器人和飞书应用的消息及事件。用户可查询当前会话标识，
 并以消息命令或评审卡片按钮，要求对已配置仓库的指定 commit 重新评审。
 
-`watch` 已确认为 IM 回调事件监听（@机器人的命令与按钮事件），不含仓库订阅；
-长期仓库订阅的独立设计见 §10，用户已确认不纳入本次交付（2026-09-28）。
-企业微信机器人按同时覆盖传统 webhook 与 API 模式确认纳入。全部能力按协议区分，不改变现有 `wecom_bot` 的含义。
+`watch` 指 IM 回调事件监听；长期仓库订阅不在交付范围，见 §10。
+企业微信传统 webhook 与 API 模式分别建模，保留现有 `wecom_bot` 的含义。
 
 ### 1.1 平台能力矩阵
 
@@ -31,22 +29,11 @@
 appchat/send 的已核查类型没有交互模板卡片，群报告先用 Markdown 与命令入口；
 模板卡片按钮使用支持该类型的应用通知/API 模式机器人或飞书应用路径。
 
-### 1.2 当前源码与可复用边界
+### 1.2 可复用边界
 
-| 当前事实 | 实现与回归入口 | 对计划的影响 |
-| --- | --- | --- |
-| `outputChannelSchema.kind` 接受字符串，只有部分 kind 有校验和运行分支 | `packages/core/src/config.ts`；`packages/server/src/bootstrap.ts` | 新增 kind 必须贯通消费者，schema 接受不代表可用 |
-| `member_directory` 只含飞书 chat_id/TTL，`user_mappings` 限制为 `ou_...` | 同上；`packages/server/test/feishu-app-publishing.test.ts` | 使用判别式目录来源及按平台校验，保留旧配置 |
-| `ChannelUserDirectory` 已隔离目录与评审；目录能力目前按 kind 判断 | `packages/outputs/src/channel-identity.ts`；对应测试 | 改为按已配置来源与平台能力判定；文件目录也可供 webhook 使用 |
-| 飞书目录含权限、分页、TTL 和专用身份模型处理 | `feishu-app.ts`、`feishu-members.ts`、`packages/server/src/author-identity.ts` | 复用匹配顺序和隐私边界，文件不套用远端 API 的 TTL |
-| 企业微信 webhook 发布 Markdown，手机号字段当前放在 markdown 对象内，未检查业务 errcode | `packages/outputs/src/index.ts` 的 `createWeComBotDispatcher` | P1/P2 内核对并修正相关 payload，不把当前实现当作官方协议 |
-| 自动提交接收与死批次重启已有持久协议 | `auto-commit-runtime.ts`、`observability-api.ts`、`review-deduplicator.ts` | 新评审请求需要独立身份，不回放旧 webhook 或重置自动流游标 |
-| 队列支持确定性 job ID；普通 worker 依赖注入 jobHandler | `packages/core/src/queue.ts`、`queue-worker.ts`；server `runtime-queue.ts`、bootstrap | 需要补齐实际消费与持久交接，不能仅 enqueue 后宣称实现 |
-| 配置 generation 有租约、持久 pin 和排空 | `runtime-config.ts`、`runtime-generation.test.ts` | 新连接、目录资源、任务和回调密钥都要明确生命周期 |
-| 发布日志保留远端身份；未知 webhook 写入不能盲重发 | `publication-journal.ts` 及测试；`auto-commit-runtime.test.ts` | 新应用发送和命令反馈均需描述发送中断边界 |
-
-本次在 `packages` 内搜索没有找到现成通用文件 watch 实现。目录监视器作为独立宿主资源设计，
-不要求重新加载整个应用配置。当前八个无关工作区修改不在此次计划文档修改范围。
+复用现有评审编排器、配置版本租约、发布日志和身份匹配服务；IM 接收与文件监视由宿主服务管理。
+重新评审使用独立请求身份，不回放旧 webhook 或重置自动流游标。具体模块及接线要求见
+[实施规范 §3](im-implementation-spec.md#3-包与接口边界)。
 
 ## 2. 组件与配置所有权
 
@@ -141,12 +128,12 @@ flowchart LR
 飞书 URL challenge 可不带普通事件签名；要求配置密钥解密（若加密）并验证 Verification Token，
 不对业务事件复用这一例外。首期生产 HTTP 接入要求 Encrypt Key 和签名验证，
 没有签名的 token-only 接入不进入业务命令路径。
-企业微信机器人加解密页未取得正文，但已从官方概述的下载链接读取 Python 3 样例：
+企业微信 API 模式机器人使用独立加解密协议，依据见[来源记录](../ai/sources/im-integrations.md)：
 GET 验证和 POST 解密均使用空 receiveid，不能替换为应用 CorpID。
 入站 JSON 从 `encrypt` 取密文；回复 envelope 为 `encrypt/msgsignature/timestamp/nonce`。
 协议使用排序后的 token、timestamp、nonce、密文计算 SHA-1，AES-CBC 解密后检查长度、填充和接收方。
 实现采用平台协议测试向量、严格格式校验与系统密码学随机数，不照搬样例的调试日志或依赖。
-P0/P3 仍需编写正反向测试并以真实 URL 验证验收；本轮没有执行样例或加解密测试。
+协议测试向量和真实 URL 验证分别按[验收矩阵 S、L 组](im-acceptance.md)验收。
 
 ### 5.2 事件归一化与持久接收
 
@@ -173,10 +160,9 @@ TaskId 和相关动作字段的规范化摘要；不能只拼发送人和秒级�
 
 ### 5.3 HTTP 与长连接的取舍
 
-首期采用 HTTP，与当前 Hono 服务及企业微信回调部署一致；通过 TLS 反向代理接入。
-飞书官方 SDK 长连接适合无公网入口的自建应用，事件与新卡片回调均有官方入口；
-后续可作为可选 transport，复用相同认证后事件、收件箱和命令服务。
-首期不同时接入多种 transport；不能以“飞书没有长连接卡片回调”解释这一取舍。
+HTTP 回调通过 TLS 反向代理接入；长连接用于无需公网回调入口的接收模式。
+两种入口复用认证后的事件、收件箱和命令服务，具体平台及配置方式见
+[消息接收说明](../site/src/content/docs/zh-cn/integrations/im-bots.md#接收消息命令回调与长连接)。
 
 ## 6. 会话发现与命令授权
 
@@ -307,10 +293,8 @@ aicr status <request-id>
 | 组合边界 | 旧任务+新配置、旧动作+撤权、文件目录变更+发布恢复、过期 response_url、队列满/预算耗尽、停机排空 |
 | 真实账户 | 三种回调、各实际目标发送、原生 @和会话 ID、命令/按钮触发合成 commit，记录账户权限与版本限制 |
 
-本地实现阶段按[仓库基线](../ai/AGENTS.repository-baseline.md)运行完整 runtime sequence；
-变更管理 UI 时加浏览器门禁；涉及存储时加真实 SQLite/PG 及实际采用队列后端的恢复/迁移测试。
-真实平台/LLM 验收独立授权、环境变量门控、限量和清理；全不设才跳过，部分配置失败。
-mock、签名 fixture 和本地回环不能当作真实群 @或平台回调成功的证据。
+执行要求见[验收矩阵](im-acceptance.md#11-执行命令与门禁顺序)和[仓库基线](../ai/AGENTS.repository-baseline.md)。
+真实平台验收与本地替身分开记录，账户和调用预算见[服务指南](../testing-services.md)。
 
 ## 9. 实施时的文档与 AI 同步
 
@@ -319,39 +303,15 @@ mock、签名 fixture 和本地回环不能当作真实群 @或平台回调成�
 | `docs/output-channels.md`、架构输出/触发/配置/存储章节 | 对应实现通过后写当前稳定约定，包含应用目标与回调恢复边界 |
 | `docs/site/src/content/docs/{en,zh-cn}/configuration/outputs.md` | 应用配置、目录与 @、平台能力差异；两种语言同时修改 |
 | 双语配置 overview、字段参考、触发说明、dashboard、operations | 新实体/字段/端点/权限/命令/观测指标出现时同步；执行 docs build/check |
-| `example/config.yaml`、`example/README.md` 和目录示例 | 功能可运行后加入最小配置与加载测试；现在只有独立草案示例 |
+| `example/config.yaml`、`example/README.md` 和目录示例 | 功能可运行后加入最小配置与加载测试 |
 | `output-channel-contracts` skill 及 IM reference | 按实现增加文件目录、回调和来源入口；不把提案写成已实现约束 |
 | `packages/server/src/author-identity.ts` | 仅在扩大候选结构时调整专用提示词与装配测试；主评审 prompt 不接收目录或聊天命令 |
 | `docs/ai/index.md` 与 Plan | 保留未完事项和验收边界；完成后迁移稳定约定与证据，退役任务设计 |
 
-本轮不改双语当前功能页面、运行时 prompt 或可运行配置，因为能力尚未实现；
-不新增需要主评审 agent 理解聊天权限的 skill。此次只为未来实施建立条件导航和官方证据入口。
-
 ## 10. 已确认边界与扩展草案
 
-- watch 长期订阅（已确认不纳入本次交付，2026-09-28）：若将来纳入，新增独立的
-  `watch/unwatch/list` 命令、持久订阅表及终态通知 outbox，
-  以仓库/授权会话/订阅者为键；只订阅原有评审事件，不启动第二套仓库抓取或自动评审。
-  创建和投递时均校验权限，退出群/撤权后停发，事件 ID 去重、静默窗口与退订数据清理另设验收。
-  完整报告仍受路由与可见性限制。本条仅保留为将来扩展的设计草案。
-- API 模式机器人 receiveid/URL 校验/被动回复使用已核查官方样例建立 P0 测试向量，
-  P6 验证实际回包；样例阅读不等于协议测试通过。
-- 测试凭据与环境补充（2026-09-28）：本地 `development/secret/secret.yaml` 提供
-  webhook（`wxwork_robot.webhook`）与应用（`wxwork_app.{corp_id,agent_id,secret}`，
-  corp_id 当日补齐）凭据；智能机器人为**长连接模式**（仅
-  `wxwork_airobot_conn.{bot_id,secret}`，无回调 token/AES），首期 HTTP 回调的
-  wecom_aibot 路径在该租户保持 pending_external，除非改配回调模式。
-  测试应用与机器人已授予通讯录根权限，appchat 前提成立；IM-21 不验证权限受限
-  负路径。智能机器人已补事件回调模式凭据（`wxwork_airobot_event_callback.{token,secret}`），
-  HTTP 回调路径可实测；长连接凭据仅作参考。变量登记见[服务指南](../testing-services.md)。
-- 实施环境已确认（2026-09-28，同日更新）：应用发送以 message/send 成员通知
-  （recipients）为主路径；测试应用已获通讯录根权限，appchat 前提成立
-  （其 schema、client 与 dispatcher 已随 IM-04/05 实现，O02 以注入 transport 验证），
-  真实 appchat 验收在有本应用创建的群时进行。IM-21 不验证权限受限负路径
-  （无许可收件人、受限可见范围）。飞书为境内版；Lark 仅入口域名与账号体系不同，
-  仓库现行合同将两域名视为同一 API 形态（`feishu-app.ts` 双域名校验，来源记录以
-  larksuite 官方 SDK 核对过境内契约），`base_url` 已可配置，测试只覆盖境内，
-  启用 Lark 前按来源记录复核。公网 HTTPS 回调入口为 `https://aicr.x-ha.com/`，
-  回调路由挂在其 `server.path_prefix` 前缀之后（IM-12）。
+- 长期仓库订阅不纳入交付；若启动该工作，另行定义订阅授权、通知去重、退订与清理。
+- 测试账户能力、回调入口和凭据变量统一见[真实平台验收](im-acceptance.md#10-真实平台-l01l06)
+  与[服务指南](../testing-services.md)，不在设计中保存具体部署或凭据补充过程。
 - 单个请求支持一个 revision；跨仓库批量命令、PR/MR 重新评审、任意自然语言代理、
   会话存档/全群监听、自动建群和第三方多租户应用不在本次首期范围。

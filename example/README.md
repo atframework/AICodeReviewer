@@ -188,7 +188,7 @@ The following schedule allows weekday evenings and mornings, plus all weekend:
 review:
   auto_commit:
     delay_seconds: 120
-    queued_timeout_hours: 48 # terminal-skip queue entries older than this; 0 disables
+    queued_timeout_hours: 72 # terminal-skip queue entries/batches older than this; 0 disables
     schedule:
       timezone: Asia/Shanghai
       rules:
@@ -217,6 +217,16 @@ Set the same `review.auto_commit` fields under `workspaces.defaults` or
 exclusions. Omitted schedules allow all times; omitted timezones use UTC.
 Windows include their start and exclude their end. An overnight window belongs
 to its starting weekday. Already running reviews may finish after a window closes.
+
+Queue expiration defaults to 72 hours from first acceptance, including metadata
+preparation and initial delay. Waiting IM review requests share this bound and
+notify their original conversation on expiration. Live executions are preserved.
+Admin Queue supports Cancel/Requeue; Runs and Live support Terminate, and terminal
+Runs support Re-review with the saved event and current configuration.
+
+Enable `cancel` in an IM binding's command list to use `aicr cancel service abcdef12`,
+`aicr cancel service before 3d`, or `aicr cancel before 2026-09-01T00:00:00+08:00`.
+An explicit repository alias stays scoped even with `allow_all_repositories`.
 
 `include_branches` restricts automatic commit analysis to the listed branches
 (it never touches PR/MR, comment, or issue flows):
@@ -275,11 +285,17 @@ queued commits show an earliest eligible time, not a guaranteed start time.
 
 A **submission source** means raw Git author name + email, P4 changelist
 User + Client, or SVN `svn:author`, within one configured repository and stream.
-Consecutive, due commits from that source can merge across notifications,
-up to 50 per batch. Notifications covering `A1–A3`, `A4–A5`, and `B1` produce
-`[A1–A5]` and `[B1]` when both A ranges are due before sealing. Each commit
-belongs to one batch; later notifications cannot regroup it. P4/SVN hooks cover
-only the named revision, and do not discover intervening unnotified revisions.
+One Git push stays one review unit, including multiple authors and merge commits.
+Continuous, due single-author pushes may coalesce across deliveries up to 50
+members; this bound never splits a push. A 550-commit push forms one batch, while
+40-commit and 20-commit pushes stay separate. Mixed-author, merge and rewrite
+pushes stay isolated. The atomic store limit is 4,096 members; oversized pushes
+fail with `push_batch_too_large`. Internal exclusion gaps fail with
+`exclusion_scope_conflict`; a continuous allowed suffix/prefix can still run.
+Each commit belongs to one batch within its branch stream; another watched branch
+has independent coverage. Queue lifetime counts from push admission rather than
+commit dates. P4/SVN retain continuous same-source grouping up to 50 members;
+hooks cover only the named revision, without discovering unnotified revisions.
 
 Exclusion rules use OR between rules and AND between fields. Git accepts
 `author_name`, `author_email`, `committer_name`, and `committer_email`; P4 accepts

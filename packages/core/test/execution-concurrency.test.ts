@@ -2,6 +2,21 @@ import { describe, expect, it } from "vitest";
 import { ExecutionConcurrency } from "../src/execution-concurrency.js";
 
 describe("shared execution concurrency", () => {
+  it("cancels a waiting task without taking or leaking a workspace slot", async () => {
+    const pool = new ExecutionConcurrency(() => ({ global: 1, workspace: 1 }));
+    const release = pool.tryAcquire("ws")!;
+    const controller = new AbortController();
+    let executed = false;
+    const waiting = pool.run("ws", async () => { executed = true; }, controller.signal);
+    const cancelled = expect(waiting).rejects.toThrow("cancelled");
+    controller.abort(new Error("cancelled"));
+    await cancelled;
+    expect(pool.available).toBe(false);
+    release();
+    await pool.run("ws", async () => {});
+    expect(executed).toBe(false);
+    expect(pool.blockedWorkspaceIds()).toEqual([]);
+  });
   it("admits an idle workspace past a busy workspace and shares the global limit", async () => {
     const pool = new ExecutionConcurrency(() => ({ global: 2, workspace: 1 }));
     const p4 = pool.tryAcquire("p4-main")!;

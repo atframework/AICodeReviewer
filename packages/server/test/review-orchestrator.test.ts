@@ -101,6 +101,40 @@ function createVcs(sourceRoot: string): DiffCapableVcsAdapter {
 }
 
 describe("runReviewOrchestration", () => {
+  it("operator termination aborts an active LLM request and prevents publication", async () => {
+    await mkdir("build/tmp", { recursive: true });
+    const root = await mkdtemp(join(process.cwd(), "build/tmp/review-cancel-"));
+    const started = Promise.withResolvers<void>();
+    const registry = createLiveRunRegistry();
+    try {
+      await writeWorkspaceFile(root, "src/app.ts", "const ok = true;\n");
+      const run = runReviewOrchestration({ reviewEvent: createReviewEventFixture(), provider: "gitea",
+        eventName: "pull_request", payload: {}, runId: "operator-run" }, {
+        baseSystemPrompt: "Review", sourceRootResolver: () => root, vcs: createVcs(root), model, liveRuns: registry,
+        llm: { complete: async input => {
+          expect(input.signal).toBeDefined();
+          started.resolve();
+          return new Promise((_resolve, reject) => input.signal!.addEventListener("abort", () => reject(input.signal!.reason), { once: true }));
+        } },
+      });
+      const rejected = expect(run).rejects.toThrow("cancelled_by_user");
+      await started.promise;
+      expect(registry.cancel("operator-run")).toBe(true);
+      await rejected;
+      expect(registry.size).toBe(0);
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  it("removes the live registry entry when the execution-start hook fails", async () => {
+    const registry = createLiveRunRegistry();
+    await expect(runReviewOrchestration({ reviewEvent: createReviewEventFixture(), provider: "gitea",
+      eventName: "pull_request", payload: {} }, {
+      baseSystemPrompt: "Review", sourceRootResolver: () => process.cwd(), model, liveRuns: registry,
+      llm: { complete: vi.fn() }, vcs: createVcs(process.cwd()),
+      onExecutionStart: () => { throw new Error("marker write failed"); },
+    })).rejects.toThrow("marker write failed");
+    expect(registry.size).toBe(0);
+  });
   it.each(["json", "mcp", "stream"])("feeds review metadata from real Git into a follow-up via %s", async transport => {
     await mkdir("build/tmp", { recursive: true });
     const root = await mkdtemp(join(process.cwd(), "build/tmp/review-metadata-"));

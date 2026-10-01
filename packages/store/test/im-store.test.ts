@@ -33,9 +33,10 @@ describe("im store conformance [sqlite]", () => {
 describe("R01: migration registry", () => {
   it("ships the 011_im_tables step as the next append-only version", () => {
     const names = STORE_SQLITE_MIGRATIONS.map(step => step.name);
-    expect(names.at(-1)).toBe("011_im_tables");
+    expect(names).toContain("011_im_tables");
+    expect(names.at(-1)).toBe("012_review_event");
     expect(new Set(names).size).toBe(names.length);
-    expect(names).toHaveLength(11);
+    expect(names).toHaveLength(12);
   });
 
   it("verifies an existing store without rewriting it", async () => {

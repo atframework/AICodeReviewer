@@ -164,8 +164,8 @@ describe("layered resolution (C01–C04)", () => {
     expect(a.policyVersion).toBe(b.policyVersion);
   });
 
-  it("resolves queued_timeout_hours nearest-first with a 48h built-in and 0 disabling the sweep", () => {
-    expect(policy(undefined, undefined, undefined).queuedTimeoutMs).toBe(48 * 3_600_000);
+  it("resolves queued_timeout_hours nearest-first with a 72h built-in and 0 disabling the sweep", () => {
+    expect(policy(undefined, undefined, undefined).queuedTimeoutMs).toBe(72 * 3_600_000);
     expect(policy({ queued_timeout_hours: 24 }).queuedTimeoutMs).toBe(24 * 3_600_000);
     expect(
       policy({ queued_timeout_hours: 24 }, { queued_timeout_hours: 12 }).queuedTimeoutMs,

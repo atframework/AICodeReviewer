@@ -97,7 +97,7 @@ LLM_TOKEN="$(yq -r '.llm.provider.xiaomimimo_token_plan.token' development/secre
 | Gitea                          | exclude files      | `.integration.gitea.exclude_cr_file`              |
 | GitHub App (atframework/owent) | app_id             | `.integration.github-app-aicr.app_id`             |
 | GitHub App (atframework/owent) | client_id          | `.integration.github-app-aicr.client_id`          |
-| GitHub App (atframework/owent) | private key file   | `.integration.github-app-aicr.private_key_file`   |
+| GitHub App (atframework/owent) | private key (b64)  | `.integration.github-app-aicr.private_key_b64`    |
 | GitHub App (atframework/owent) | webhook secret     | `.integration.github-app-aicr.webhook.secret`     |
 | GitHub atframework             | watch path         | `.integration.github-atframework.watch_path`      |
 | GitHub atframework             | include files      | `.integration.github-atframework.include_cr_file` |
@@ -115,8 +115,17 @@ LLM_TOKEN="$(yq -r '.llm.provider.xiaomimimo_token_plan.token' development/secre
 | P4                             | exclude files      | `.integration.p4.exclude_cr_file`                 |
 | Feishu robot                   | webhook            | `.channel.feishu_robot.webhook`                   |
 | Feishu robot                   | token              | `.channel.feishu_robot.token`                     |
+| Feishu app                     | app secret         | `.channel.feishu_app.app_secret`                  |
+| Feishu app                     | verify token       | `.channel.feishu_app.verification_token`          |
+| Feishu app                     | encrypt key        | `.channel.feishu_app.encrypt_key`                 |
 | 企业微信 robot                 | webhook            | `.channel.wxwork_robot.webhook`                   |
+| 企业微信 app                   | secret             | `.channel.wecom_app.secret`                       |
+| 企业微信 aibot                 | callback token     | `.channel.wecom_aibot.callback_token`             |
+| 企业微信 aibot                 | callback AES key   | `.channel.wecom_aibot.callback_aes_key`           |
+| 企业微信 aibot                 | 长连接 secret      | `.channel.wecom_aibot.lc_secret`                  |
 | AICR server                    | global API key     | `.aicr.server.api_key`                            |
+| AICR admin                     | username/password  | `.aicr.admin.username` / `.aicr.admin.password`   |
+| Web search                     | Tavily API key     | `.aicr.web_search.tavily_api_key`                 |
 
 ### GitHub repo → trigger / workspace 映射
 

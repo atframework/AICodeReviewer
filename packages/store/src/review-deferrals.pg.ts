@@ -84,6 +84,13 @@ export async function deleteReviewDeferralPg(store: PgStoreDb, dedupKey: string)
   await store.db.delete(reviewDeferrals).where(eq(reviewDeferrals.dedupKey, dedupKey));
 }
 
+export async function cancelPendingReviewDeferralPg(store: PgStoreDb, row: ReviewDeferralRow): Promise<boolean> {
+  const deleted = await store.db.delete(reviewDeferrals).where(sql`${reviewDeferrals.dedupKey} = ${row.dedupKey}
+    AND ${reviewDeferrals.status} = 'pending' AND ${reviewDeferrals.updatedAt} = ${row.updatedAt.getTime()}
+    AND ${reviewDeferrals.reviewEvent} = ${row.reviewEvent}`).returning({ key: reviewDeferrals.dedupKey });
+  return deleted.length > 0;
+}
+
 export async function listPendingReviewDeferralsPg(store: PgStoreDb, includeClaimed = false): Promise<ReviewDeferralRow[]> {
   return store.db
     .select()

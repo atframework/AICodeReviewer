@@ -1,4 +1,4 @@
-import type { AppConfig, ImActorScopes, ImBindingActor, ImCommandBindingConfig } from "@aicr/core";
+import type { AppConfig, ImActorScopes, ImBindingActor, ImCommandBindingConfig, ImCommandName } from "@aicr/core";
 import type { ImCommand, ImConversation, ImPrincipal } from "@aicr/core";
 import type { AcceptImDeliveryOutcome, StoreDb } from "@aicr/store";
 import { acceptImDelivery, findImReviewRequest } from "@aicr/store";
@@ -72,6 +72,46 @@ export function parseImCommand(text: string): ImCommandParseResult {
       if (tokens.length !== 3) return { kind: "invalid", reason: "wrong_argument_count" };
       if (!/^[A-Za-z0-9_-]+$/u.test(tokens[2]!)) return { kind: "invalid", reason: "invalid_request_id" };
       return { kind: "command", command: { kind: "status", requestId: tokens[2]! } };
+    case "cancel": {
+      // `aicr cancel <alias> <revision>` — one repo's task at a revision
+      // prefix; `aicr cancel <alias> before <duration>` / `aicr cancel before
+      // <duration>` — tasks created before now-duration. Durations are
+      // `<n><m|h|d>` (minutes/hours/days), bounded to keep the value sane.
+      const durationPattern = /^([1-9][0-9]{0,3})(m|h|d)$/u;
+      const durationMs = (token: string): number | undefined => {
+        const match = durationPattern.exec(token);
+        if (!match) return undefined;
+        const scale = match[2] === "m" ? 60_000 : match[2] === "h" ? 3_600_000 : 86_400_000;
+        return Number(match[1]) * scale;
+      };
+      const before = (token: string): { beforeMs: number | undefined; beforeAt?: number } | undefined => {
+        const relative = durationMs(token);
+        if (relative !== undefined) return { beforeMs: relative };
+        if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:\d{2})$/u.test(token)) return undefined;
+        const day = token.slice(0, 10);
+        const calendar = Date.parse(`${day}T00:00:00Z`);
+        if (!Number.isFinite(calendar) || new Date(calendar).toISOString().slice(0, 10) !== day) return undefined;
+        const instant = Date.parse(token);
+        return Number.isFinite(instant) ? { beforeMs: undefined, beforeAt: instant } : undefined;
+      };
+      if (tokens.length === 4 && tokens[2] === "before") {
+        const bound = before(tokens[3]!);
+        if (bound === undefined) return { kind: "invalid", reason: "invalid_duration" };
+        return { kind: "command", command: { kind: "cancel", repoAlias: undefined, revision: undefined, ...bound } };
+      }
+      if (tokens.length === 5 && tokens[3] === "before") {
+        if (!aliasPattern.test(tokens[2]!)) return { kind: "invalid", reason: "invalid_repo_alias" };
+        const bound = before(tokens[4]!);
+        if (bound === undefined) return { kind: "invalid", reason: "invalid_duration" };
+        return { kind: "command", command: { kind: "cancel", repoAlias: tokens[2]!, revision: undefined, ...bound } };
+      }
+      if (tokens.length === 4) {
+        if (!aliasPattern.test(tokens[2]!)) return { kind: "invalid", reason: "invalid_repo_alias" };
+        if (!revisionPattern.test(tokens[3]!)) return { kind: "invalid", reason: "invalid_revision" };
+        return { kind: "command", command: { kind: "cancel", repoAlias: tokens[2]!, revision: tokens[3]!, beforeMs: undefined } };
+      }
+      return { kind: "invalid", reason: "wrong_argument_count" };
+    }
     case "projects":
       if (tokens.length !== 2) return { kind: "invalid", reason: "unexpected_arguments" };
       return { kind: "command", command: { kind: "projects" } };
@@ -203,11 +243,12 @@ export function authorizeImCommand(options: {
     if (!actorsMatch(binding, options.actor, options.actorScopes, now)) continue;
     if (!conversationsMatch(binding, options.conversation)) continue;
     const commandName = options.command.kind === "chat-id" ? "chat-id" : options.command.kind;
-    if (!binding.commands.includes(commandName as "help" | "chat-id" | "review" | "status")) continue;
+    if (!binding.commands.includes(commandName as ImCommandName)) continue;
     void bindingName;
 
-    if (options.command.kind === "review") {
-      const target = binding.repositories?.[options.command.repoAlias];
+    if (options.command.kind === "review" || (options.command.kind === "cancel" && options.command.repoAlias !== undefined)) {
+      const repoAlias = options.command.repoAlias as string;
+      const target = binding.repositories?.[repoAlias];
       if (target === undefined) {
         repositoryMissing = true;
         continue;
@@ -370,6 +411,10 @@ export const IM_HELP_TEXT = [
   "  aicr chat-id — 显示当前会话标识",
   "  aicr review <repo-alias> <revision> — 对指定提交重新评审",
   "  aicr status <request-id> — 查询请求状态",
+  "  aicr cancel <repo-alias> <revision> — 取消指定仓库指定修订的进行中任务",
+  "  aicr cancel <repo-alias> before <时长> — 取消指定仓库指定时间前入队的任务（如 2h、30m、3d）",
+  "  aicr cancel before <时长> — 取消授权范围内指定时间前入队的任务",
+  "  before 支持 2h、3d 或带时区的时间，如 2026-10-01T12:00:00+08:00",
   "查询命令：",
   "  aicr projects — 接入的项目列表",
   "  aicr reviews [repo-alias] — 近期评审记录",
@@ -399,6 +444,16 @@ export interface ProcessImCommandInput extends ImCommandAdmitInput {
   readonly directory?: ImCommandDirectoryLike | undefined;
   /** Read-only query surface for the status commands; absent = fail closed. */
   readonly query?: ImQueryServiceLike | undefined;
+  /** Cancellation surface for `aicr cancel`; absent = fail closed. */
+  readonly cancellation?: ImCancellationServiceLike | undefined;
+  /**
+   * Pre-persist outcome reported by the caller's own delivery acceptance:
+   * `true` when this delivery was already persisted (a platform redelivery —
+   * a write command must not re-execute), `false` when this request created
+   * the inbox row. Undefined when the caller did not pre-persist (long
+   * connection): the inbox row state inside processing is the dedup signal.
+   */
+  readonly deliveryDuplicate?: boolean | undefined;
 }
 
 /** Query surface injected by bootstrap (avoids a concrete-class dependency). */
@@ -406,6 +461,18 @@ export interface ImQueryServiceLike {
   answer(input: { readonly command: ImCommand; readonly connectionName: string; readonly binding: ImCommandBindingConfig }): Promise<string>;
   /** Wildcard alias resolution against observed projects (A15d). */
   resolveProjectAlias(repoAlias: string): Promise<{ readonly workspaceId: string; readonly sourceTrigger: string; readonly repoRef: string } | undefined>;
+}
+
+/**
+ * Cancellation surface injected by bootstrap for the `aicr cancel` command;
+ * absent = fail closed. Implementations must scope every cancellation to the
+ * binding's authorized repositories.
+ */
+export interface ImCancellationServiceLike {
+  cancel(input: {
+    readonly command: ImCommand & { readonly kind: "cancel" };
+    readonly binding: ImCommandBindingConfig;
+  }): Promise<string>;
 }
 
 export interface ProcessImCommandResult {
@@ -582,6 +649,42 @@ export async function processImCommand(input: ProcessImCommandInput): Promise<Pr
       return { kind: outcome.kind === "rejected" ? "rejected" : "rate_limited", replyText, requestId: null };
     }
     return { kind: "replied", replyText: await statusReplyText(input.store, input, authorized.binding, input.command.requestId), requestId: null };
+  }
+
+  if (input.command.kind === "cancel") {
+    if (input.cancellation === undefined) {
+      return { kind: "rejected", replyText: "取消服务不可用（本部署未启用取消命令）。", requestId: null };
+    }
+    // Dedup admission first: cancellation is a write command and its `before`
+    // cutoff re-evaluates against new arrivals, so a platform redelivery must
+    // not run it twice. Authorization already happened above; the inbox row
+    // is the dedup record. A caller that pre-persisted the delivery (callback
+    // routes) reports the outcome through `deliveryDuplicate` — its first
+    // delivery reads as an inbox duplicate here and must still execute.
+    if (input.deliveryDuplicate === true) {
+      return { kind: "duplicate", replyText: "该命令已受理，请勿重复发送。", requestId: null };
+    }
+    const admission = await acceptImDelivery(input.store, {
+      delivery: {
+        namespace: input.namespace,
+        connectionIdentity: input.connectionIdentity,
+        deliveryKind: "message",
+        deliveryKey: input.deliveryKey,
+        payloadDigest: input.payloadDigest,
+      },
+      now: input.now,
+    });
+    if (admission.kind === "conflict"
+      || (admission.kind === "duplicate" && input.deliveryDuplicate !== false)) {
+      return { kind: "duplicate", replyText: "该命令已受理，请勿重复发送。", requestId: null };
+    }
+    try {
+      const replyText = await input.cancellation.cancel({ command: input.command, binding: authorized.binding });
+      return { kind: "replied", replyText, requestId: null };
+    } catch (error) {
+      console.warn(JSON.stringify({ msg: "im_cancel_failed", error: String(error) }));
+      return { kind: "rejected", replyText: "取消操作执行失败，请稍后再试。", requestId: null };
+    }
   }
 
   const outcome = await admitImCommand(input.store, { ...input, config, actorScopes });

@@ -220,6 +220,34 @@ describe("im callback routes (real Hono app)", () => {
     expect(store.sqlite.prepare("SELECT request_id FROM im_review_requests").all()).toHaveLength(1);
   });
 
+  it("runs a cancel command exactly once across a platform redelivery", async () => {
+    const config = baseConfig();
+    const bindings = config.im!.command_bindings as Record<string, { commands: string[] }>;
+    bindings.reviewers!.commands = ["cancel"];
+    let executed = 0;
+    const app = createServerApp({ imCallbacks: routeOptions({
+      getConfig: () => config,
+      cancellation: { cancel: async () => { executed += 1; return "已取消 1 个任务"; } },
+    }) });
+    const request = messageRequest("m-cancel", "aicr cancel service 0123456789ab");
+    const url = `/callbacks/im/corp-airobot?${request.query.toString()}`;
+    const send = () => app.request(url, { method: "POST", headers: { "content-type": "application/json" }, body: request.body });
+    const replyOf = async (response: Response): Promise<string> =>
+      (JSON.parse(decrypt((JSON.parse(await response.text()) as { encrypt: string }).encrypt)) as { stream: { content: string } }).stream.content;
+
+    const first = await send();
+    expect(first.status).toBe(200);
+    expect(await replyOf(first)).toBe("已取消 1 个任务");
+    expect(executed).toBe(1);
+
+    // Same delivery retried by the platform: acknowledged with the dedup
+    // answer, never a second cancellation.
+    const retry = await send();
+    expect(retry.status).toBe(200);
+    expect(await replyOf(retry)).toContain("请勿重复发送");
+    expect(executed).toBe(1);
+  });
+
   it("replies to a command message carrying the group @mention prefix", async () => {
     const app = createServerApp({ imCallbacks: routeOptions() });
     const request = messageRequest("m-mention", "@AICR机器人(事件回调) aicr help");

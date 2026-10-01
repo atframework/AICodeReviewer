@@ -14,7 +14,7 @@ import { createObservabilityApi, type ObservabilityApiOptions } from "./observab
 import { getDashboardClientAsset, getDashboardHtml, getDashboardIconSvg } from "./dashboard/index.js";
 import type { ConfigStore } from "@aicr/core";
 import type { StoreDb } from "@aicr/store";
-import { closeStoreDb, deleteReviewRun, insertReviewRun, insertReviewRunOnce } from "@aicr/store";
+import { closeStoreDb, insertReviewRunOnce } from "@aicr/store";
 
 const globalMetrics: AicrMetrics = createAicrMetrics();
 
@@ -38,6 +38,7 @@ import { admissionUnavailableReason, type RuntimeConfigManager } from "./runtime
 import { createConfigApi, type ConfigApiOptions } from "./config-api.js";
 import type { ReviewDeduplicator } from "./review-deduplicator.js";
 import type { LiveRunRegistry } from "./live-runs.js";
+import { ReviewCancelledError } from "./live-runs.js";
 import type { AutoCommitStore } from "@aicr/core";
 import { isContextOverflowError, LlmFallbackExhaustedError } from "@aicr/llm";
 import {
@@ -1549,11 +1550,12 @@ export async function persistReviewRunToStore(
       : reviewRun.status === "skipped"
         ? "skipped"
         : "skipped";
-    const insert = options.idempotent ? insertReviewRunOnce : insertReviewRun;
-    // The lifecycle marker row (in-flight view) is replaced by the full record.
-    if (!options.idempotent) await deleteReviewRun(store, runId).catch(() => false);
+    const insert = (db: StoreDb, run: Parameters<typeof insertReviewRunOnce>[1]) => insertReviewRunOnce(db, run, true);
+    // Replace active/restart placeholders in the same accounting transaction.
+    // Terminal cancellation remains authoritative over a late result.
     await insert(store, {
       id: runId,
+      reviewEventJson: JSON.stringify(reviewEvent),
       eventId: runId,
       workspaceId: reviewEvent.workspaceId,
       triggerName: reviewEvent.triggerName ?? null,
@@ -1612,7 +1614,7 @@ export async function persistReviewRunToStore(
   }
 }
 
-async function persistFailedRunToStore(
+export async function persistFailedRunToStore(
   store: StoreDb | undefined,
   runId: string,
   reviewEvent: ReviewEvent,
@@ -1622,16 +1624,18 @@ async function persistFailedRunToStore(
 ): Promise<void> {
   if (!store) return;
   try {
-    await deleteReviewRun(store, runId).catch(() => false);
-    await insertReviewRun(store, {
+    const cancelled = error instanceof ReviewCancelledError
+      || error instanceof TriggerProcessingError && error.cause instanceof ReviewCancelledError;
+    await insertReviewRunOnce(store, {
       id: runId,
+      reviewEventJson: JSON.stringify(reviewEvent),
       eventId: runId,
       workspaceId: reviewEvent.workspaceId,
       triggerName: reviewEvent.triggerName ?? null,
       repoRef: reviewEvent.repoRef ?? null,
       provider: null,
       providerModel: null,
-      status: "failed" as const,
+      status: cancelled ? "cancelled" : "failed",
       startedAt: new Date(startMs),
       finishedAt: new Date(startMs + durationMs),
       durationMs,
@@ -1641,7 +1645,7 @@ async function persistFailedRunToStore(
       branch: reviewEvent.branch ?? null,
       headSha: reviewEvent.headSha ?? null,
       vcsKind: vcsKindForProvider(reviewEvent.provider) ?? null,
-    });
+    }, true);
   } catch (err: unknown) {
     console.warn(JSON.stringify({
       level: "warn",
@@ -1668,8 +1672,10 @@ export async function persistRejectedAutoCommitRun(
 ): Promise<void> {
   if (!store) return;
   try {
+    // Atomically replace the in-flight marker with its rejection outcome.
     await insertReviewRunOnce(store, {
       id: runId,
+      reviewEventJson: JSON.stringify(reviewEvent),
       eventId: runId,
       workspaceId: reviewEvent.workspaceId,
       triggerName: reviewEvent.triggerName ?? null,
@@ -1686,7 +1692,7 @@ export async function persistRejectedAutoCommitRun(
       branch: reviewEvent.branch ?? null,
       headSha: reviewEvent.headSha ?? null,
       vcsKind: vcsKindForProvider(reviewEvent.provider) ?? null,
-    });
+    }, true);
   } catch (err: unknown) {
     console.warn(JSON.stringify({
       level: "warn",

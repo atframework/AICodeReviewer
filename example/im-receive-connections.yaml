@@ -77,7 +77,9 @@ im:
     #         expires_at: "2026-10-06T00:00:00+08:00"
     #     conversations:
     #       - kind: group
-    #     commands: [chat-id, review, status, projects, reviews, commits, prs, detail, prdetail, queue, running]
+    #     commands: [chat-id, review, status, cancel, projects, reviews, commits, prs, detail, prdetail, queue, running]
+    #     # aicr cancel service before 3d / aicr cancel before 2026-09-01T00:00:00+08:00
+    #     # Explicit aliases stay scoped even when allow_all_repositories is true.
     #     allow_all_repositories: true   # aliases may match any integrated project
     #     repositories:
     #       service:
@@ -94,7 +96,7 @@ im:
     #         value: "后端工程师"
     #     conversations:
     #       - kind: group
-    #     commands: [chat-id, review, status, projects, reviews, commits, prs, detail, prdetail, queue, running]
+    #     commands: [chat-id, review, status, cancel, projects, reviews, commits, prs, detail, prdetail, queue, running]
     #     allow_all_repositories: true   # aliases may match any integrated project
     #     repositories:
     #       service:

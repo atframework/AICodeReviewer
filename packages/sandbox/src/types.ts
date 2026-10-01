@@ -9,6 +9,7 @@ export type SandboxKind =
 export type SandboxEngine = "auto" | "docker" | "podman";
 
 export interface SandboxSpawnOptions {
+  readonly signal?: AbortSignal;
   readonly command: readonly string[];
   readonly cwd: string;
   readonly env?: Readonly<Record<string, string>>;

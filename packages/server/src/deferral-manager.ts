@@ -1,6 +1,7 @@
 import type { ReviewDeferralRow, StoreDb } from "@aicr/store";
 import {
   claimReviewDeferral,
+  cancelPendingReviewDeferral,
   completeReviewDeferral,
   deleteReviewDeferral,
   getReviewDeferral,
@@ -32,6 +33,7 @@ export interface ReviewDeferralManagerOptions {
    * behavior: a restart drops pending deferrals).
    */
   readonly store?: StoreDb;
+  readonly queuedTimeoutFor?: (target: DeferredTriggerTarget) => number | null | Promise<number | null>;
 }
 
 function toErrorMessage(error: unknown): string {
@@ -85,14 +87,17 @@ export class ReviewDeferralManager {
   private readonly store: StoreDb | undefined;
   private readonly timers = new Map<string, NodeJS.Timeout>();
   private readonly memoryTargets = new Map<string, DeferredTriggerTarget>();
+  private readonly admittedAt = new Map<string, number>();
   private readonly deadlines = new Map<string, number>();
   private readonly generations = new Map<string, symbol>();
   private readonly handoffs = new Set<Promise<void>>();
   private storeQueue: Promise<void> = Promise.resolve();
   private stopped = false;
+  private readonly queuedTimeoutFor: ReviewDeferralManagerOptions["queuedTimeoutFor"];
 
   constructor(options: ReviewDeferralManagerOptions) {
     this.store = options.store;
+    this.queuedTimeoutFor = options.queuedTimeoutFor;
   }
 
   /** Serializes async store operations to preserve the previous sync ordering. */
@@ -109,6 +114,7 @@ export class ReviewDeferralManager {
     if (this.stopped && !this.store) return requireDurable ? Promise.reject(new Error("Deferral manager is stopped.")) : Promise.resolve();
     if (requireDurable && !this.store) return Promise.reject(new Error("Durable deferral storage is unavailable."));
     const key = computeDeferralKey(target.reviewEvent);
+    if (!this.admittedAt.has(key)) this.admittedAt.set(key, Date.now());
     notBeforeMs = Math.max(notBeforeMs, this.deadlines.get(key) ?? 0);
     const generation = Symbol(key);
     this.generations.set(key, generation);
@@ -192,6 +198,7 @@ export class ReviewDeferralManager {
     this.generations.delete(key);
     this.memoryTargets.delete(key);
     this.deadlines.delete(key);
+    this.admittedAt.delete(key);
     if (this.store) {
       const store = this.store;
       const settle = async (deleted: Promise<void>): Promise<void> => {
@@ -218,11 +225,52 @@ export class ReviewDeferralManager {
     }
   }
 
+  /** Durable operator cancellation; serialize with timer claims and defer writes. */
+  async cancelPending(matches: (target: DeferredTriggerTarget, admittedAt: Date) => boolean | Promise<boolean>): Promise<number> {
+    let count = 0;
+    await this.enqueue(async () => {
+      const rows = this.store ? await listPendingReviewDeferrals(this.store) : [];
+      const candidates = new Map<string, { target: DeferredTriggerTarget; at: Date; row?: ReviewDeferralRow | undefined }>();
+      for (const row of rows) {
+        try { candidates.set(row.dedupKey, { target: targetFromRow(row), at: row.createdAt, row }); }
+        catch { /* Corrupt envelopes are handled by normal resume recovery. */ }
+      }
+      for (const [key, target] of this.memoryTargets) candidates.set(key, {
+        target, at: new Date(this.admittedAt.get(key) ?? Date.now()), row: candidates.get(key)?.row,
+      });
+      for (const [key, candidate] of candidates) {
+        const generation = this.generations.get(key);
+        if (!await matches(candidate.target, candidate.at) || this.generations.get(key) !== generation) continue;
+        if (candidate.row && this.store && !await cancelPendingReviewDeferral(this.store, candidate.row)) continue;
+        if (this.generations.get(key) !== generation) continue;
+        this.clearTimer(key);
+        this.generations.delete(key);
+        this.memoryTargets.delete(key);
+        this.deadlines.delete(key);
+        this.admittedAt.delete(key);
+        count++;
+      }
+    });
+    return count;
+  }
+
+  async expireQueued(now = Date.now()): Promise<number> {
+    if (!this.queuedTimeoutFor) return 0;
+    return this.cancelPending(async (target, acceptedAt) => {
+      const timeout = await this.queuedTimeoutFor!(target);
+      const expired = timeout !== null && acceptedAt.getTime() < now - timeout;
+      if (expired) console.info(JSON.stringify({ msg: "review deferral expired", reason: "queued_timeout",
+        workspaceId: target.reviewEvent.workspaceId, repoRef: target.reviewEvent.repoRef }));
+      return expired;
+    });
+  }
+
   /** Startup recovery: un-stick claimed rows and re-arm every pending timer. */
   async recover(): Promise<void> {
     if (!this.store || this.stopped) return;
     try {
       const reset = await resetClaimedReviewDeferrals(this.store);
+      await this.expireQueued();
       const pending = await listPendingReviewDeferrals(this.store);
       if (reset > 0 || pending.length > 0) {
         console.info(JSON.stringify({
@@ -305,7 +353,7 @@ export class ReviewDeferralManager {
           return;
         }
         if (!target) {
-          if (!this.timers.has(key)) this.deadlines.delete(key);
+          if (!this.timers.has(key)) { this.deadlines.delete(key); this.admittedAt.delete(key); }
           return;
         }
         const handoff = handler(target);
@@ -338,6 +386,7 @@ export class ReviewDeferralManager {
     if (!this.timers.has(key)) {
       this.memoryTargets.delete(key);
       this.deadlines.delete(key);
+      this.admittedAt.delete(key);
     }
   }
 
@@ -358,6 +407,12 @@ export class ReviewDeferralManager {
     // the latest envelope and must take precedence over that row.
     const memoryTarget = this.memoryTargets.get(key);
     if (memoryTarget) {
+      if (await this.isExpired(memoryTarget, this.admittedAt.get(key) ?? Date.now())) {
+        if (this.store) await deleteReviewDeferral(this.store, key);
+        this.memoryTargets.delete(key);
+        this.admittedAt.delete(key);
+        return undefined;
+      }
       if (this.store) {
         try {
           await deleteReviewDeferral(this.store, key);
@@ -370,6 +425,14 @@ export class ReviewDeferralManager {
     if (!this.store) return undefined;
 
     const stored = await getReviewDeferral(this.store, key);
+    if (stored && stored.status === "pending") {
+      let target: DeferredTriggerTarget | undefined;
+      try { target = targetFromRow(stored); } catch { /* existing claim/decode/drop path below */ }
+      if (target && await this.isExpired(target, stored.createdAt.getTime())) {
+        await cancelPendingReviewDeferral(this.store, stored);
+        return undefined;
+      }
+    }
     if (stored && stored.notBefore.getTime() > Date.now()) {
       this.armTimer(key, stored.notBefore.getTime());
       return undefined;
@@ -408,6 +471,21 @@ export class ReviewDeferralManager {
       return undefined;
     }
   }
+
+  private async isExpired(target: DeferredTriggerTarget, at: number): Promise<boolean> {
+    const timeout = await this.queuedTimeoutFor?.(target);
+    return timeout !== undefined && timeout !== null && at < Date.now() - timeout;
+  }
+}
+
+function targetFromRow(row: ReviewDeferralRow): DeferredTriggerTarget {
+  const payload: unknown = row.payload ? JSON.parse(row.payload) : undefined;
+  const envelope = payload && typeof payload === "object" && "aicrDeferralVersion" in payload && payload.aicrDeferralVersion === 1
+    ? payload as { decoded?: unknown; configSnapshotId?: string | null } : undefined;
+  return { provider: row.provider as ReviewProvider, eventName: row.eventName,
+    decoded: envelope ? envelope.decoded : payload,
+    ...(envelope?.configSnapshotId !== undefined ? { configSnapshotId: envelope.configSnapshotId } : {}),
+    reviewEvent: createReviewEvent(JSON.parse(row.reviewEvent)) };
 }
 
 function safeSerialize(value: unknown): string | null {

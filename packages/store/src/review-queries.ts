@@ -4,7 +4,7 @@ import { historyCutoff } from "@aicr/core";
 
 import type { PgStoreDb, StoreDb } from "./database.js";
 import { storeHistoryRetention } from "./history-retention.js";
-import { imReplyOutbox, imReviewRequests, llmUsage, projects, reviewRuns, webhookEvents, type RunStatus } from "./schema.js";
+import { ACTIVE_RUN_STATUSES, imReplyOutbox, imReviewRequests, llmUsage, projects, reviewRuns, webhookEvents, type RunStatus } from "./schema.js";
 import { updateRunStatus } from "./stats.js";
 import { imReplyOutbox as imReplyOutboxPg, imReviewRequests as imReviewRequestsPg, llmUsage as llmUsagePg, projects as projectsPg, reviewRuns as reviewRunsPg, webhookEvents as webhookEventsPg } from "./schema.pg.js";
 
@@ -16,6 +16,7 @@ import { imReplyOutbox as imReplyOutboxPg, imReviewRequests as imReviewRequestsP
  */
 
 export interface ImQueryRun {
+  readonly reviewEventJson: string | null;
   readonly id: string;
   readonly workspaceId: string;
   readonly repoRef: string;
@@ -36,7 +37,7 @@ export interface ImQueryRun {
   readonly skipReason: string | null;
 }
 
-export const ACTIVE_RUN_STATUSES = ["queued", "preparing", "analyzing", "publishing"] as const;
+export { ACTIVE_RUN_STATUSES } from "./schema.js";
 
 export interface ImQueryRunFilter {
   readonly workspaceId?: string | undefined;
@@ -47,6 +48,7 @@ export interface ImQueryRunFilter {
   /** SQL LIKE pattern against target_url (PR/MR lookup). */
   readonly targetUrlPattern?: string | undefined;
   readonly limit?: number | undefined;
+  readonly offset?: number | undefined;
 }
 
 export interface ImQueryTriggerEvent {
@@ -81,6 +83,27 @@ function clampLimit(limit: number | undefined, offset = 0): number {
   return Math.max(0, Math.min(value, 200) - offset);
 }
 
+/** Single run row by id (joined with repo identity); undefined when absent. */
+export async function getReviewRunById(store: StoreDb, runId: string): Promise<ImQueryRun | undefined> {
+  if (store.kind === "postgres") {
+    const rows = await store.db
+      .select(runColumnsPg)
+      .from(reviewRunsPg)
+      .innerJoin(projectsPg, eq(reviewRunsPg.projectId, projectsPg.id))
+      .where(eq(reviewRunsPg.id, runId))
+      .limit(1);
+    return rows[0];
+  }
+  const rows = store.db
+    .select(runColumns)
+    .from(reviewRuns)
+    .innerJoin(projects, eq(reviewRuns.projectId, projects.id))
+    .where(eq(reviewRuns.id, runId))
+    .limit(1)
+    .all();
+  return rows[0];
+}
+
 /** Review runs newest-first, joined with repo identity, within retention. */
 export async function listImQueryRuns(store: StoreDb, filter: ImQueryRunFilter = {}): Promise<readonly ImQueryRun[]> {
   const limit = clampLimit(filter.limit);
@@ -99,7 +122,7 @@ export async function listImQueryRuns(store: StoreDb, filter: ImQueryRunFilter =
         ...(filter.targetUrlPattern !== undefined ? [sql`${reviewRunsPg.targetUrl} LIKE ${filter.targetUrlPattern}`] : []),
       ))
       .orderBy(desc(reviewRunsPg.startedAt), desc(reviewRunsPg.id))
-      .limit(limit);
+      .limit(limit).offset(filter.offset ?? 0);
     return rows;
   }
   const rows = store.db
@@ -116,7 +139,7 @@ export async function listImQueryRuns(store: StoreDb, filter: ImQueryRunFilter =
       ...(filter.targetUrlPattern !== undefined ? [sql`${reviewRuns.targetUrl} LIKE ${filter.targetUrlPattern}`] : []),
     ))
     .orderBy(desc(reviewRuns.startedAt), desc(reviewRuns.id))
-    .limit(limit)
+    .limit(limit).offset(filter.offset ?? 0)
     .all();
   return rows;
 }
@@ -220,6 +243,7 @@ export async function listImQueryLlmUsage(store: StoreDb, runId: string): Promis
 }
 
 const runColumns = {
+  reviewEventJson: reviewRuns.reviewEventJson,
   id: reviewRuns.id,
   workspaceId: reviewRuns.workspaceId,
   repoRef: projects.repoRef,
@@ -241,6 +265,7 @@ const runColumns = {
 };
 
 const runColumnsPg = {
+  reviewEventJson: reviewRunsPg.reviewEventJson,
   id: reviewRunsPg.id,
   workspaceId: reviewRunsPg.workspaceId,
   repoRef: projectsPg.repoRef,
@@ -300,6 +325,10 @@ export async function failActiveReviewRuns(store: StoreDb, error: string): Promi
 /** Admin listing: recent IM review requests, newest first (IM-18, X08). */
 export async function listImReviewRequestsForAdmin(store: StoreDb, limit = 50, offset = 0): Promise<readonly {
   readonly requestId: string;
+  readonly namespace: string;
+  readonly sourceTrigger: string;
+  readonly resolvedRevision: string | null;
+  readonly runId: string;
   readonly state: string;
   readonly errorCode: string | null;
   readonly workspaceId: string;
@@ -314,6 +343,10 @@ export async function listImReviewRequestsForAdmin(store: StoreDb, limit = 50, o
   const bounded = Math.max(0, Math.min(limit, 200));
   const columns = {
     requestId: imReviewRequests.requestId,
+    namespace: imReviewRequests.namespace,
+    sourceTrigger: imReviewRequests.sourceTrigger,
+    resolvedRevision: imReviewRequests.resolvedRevision,
+    runId: imReviewRequests.runId,
     state: imReviewRequests.state,
     errorCode: imReviewRequests.errorCode,
     workspaceId: imReviewRequests.workspaceId,
@@ -328,6 +361,10 @@ export async function listImReviewRequestsForAdmin(store: StoreDb, limit = 50, o
   if (store.kind === "postgres") {
     return store.db.select({
       requestId: imReviewRequestsPg.requestId,
+      namespace: imReviewRequestsPg.namespace,
+      sourceTrigger: imReviewRequestsPg.sourceTrigger,
+      resolvedRevision: imReviewRequestsPg.resolvedRevision,
+      runId: imReviewRequestsPg.runId,
       state: imReviewRequestsPg.state,
       errorCode: imReviewRequestsPg.errorCode,
       workspaceId: imReviewRequestsPg.workspaceId,
@@ -343,6 +380,10 @@ export async function listImReviewRequestsForAdmin(store: StoreDb, limit = 50, o
   void columns;
   return store.db.select({
     requestId: imReviewRequests.requestId,
+    namespace: imReviewRequests.namespace,
+    sourceTrigger: imReviewRequests.sourceTrigger,
+    resolvedRevision: imReviewRequests.resolvedRevision,
+    runId: imReviewRequests.runId,
     state: imReviewRequests.state,
     errorCode: imReviewRequests.errorCode,
     workspaceId: imReviewRequests.workspaceId,

@@ -62,6 +62,17 @@ bootstrap, core auto-commit stores, scheduler and real-backend conformance tests
 - Namespace provider delivery IDs by provider/event/trigger/workspace/repo/scope;
   coverage is only the fallback discriminator. P4/SVN single hooks cover only
   their named revision. Keep all callers aligned if handler signatures change.
+- **Git push grouping**: carry `coverReceiptId` into assembly as
+  `pushReceiptId`; multiple authors and merge commits within one delivery stay
+  one unit. Coalesce only complete, continuous, uniform-author pushes across
+  deliveries, cutting at delivery boundaries for the 50-member merge bound.
+  The atomic store bound is 4096; larger pushes fail as a whole. Read preparation
+  and execution members in bounded pages, and omit an incomplete trailing unit.
+  Internal exclusion gaps fail closed; allowed continuous prefixes/tails may run.
+  Branch streams have independent coverage, and queue age uses admission time,
+  not commit date. Diagnose a newly accepted branch merge through receipt ranges
+  before calling it expired recovery. Regression: assembly, scheduler pagination
+  restart, and three-backend large-push conformance tests.
 - `include_branches` lives in `packages/core/src/auto-commit-policy.ts`. Resolve
   the nearest explicit array (`[]` clears inherited filtering), and gate branched
   automatic events before `autoCommit.accept`; ignored branches create no receipt.
@@ -86,22 +97,40 @@ bootstrap, core auto-commit stores, scheduler and real-backend conformance tests
   errors after the `started` checkpoint propagate as ordinary retryable
   failures. A valid `publication_pending` payload resumes per channel without
   analysis (D50/D51); legacy checkpoints without payload replay analysis.
-  Remote journals must survive retries, including manual re-arm. Unknown webhook
+  Remote journals must survive retries, including manual requeue. Unknown webhook
   writes and failed/missing/ambiguous remote queries cannot authorize a new POST.
   A would-be-terminal failure consumes the batch's single automatic recovery
   (`recoveryAttempt`); a second terminal failure skips the batch terminally
   and the stream keeps flowing.
-  Boot reclaims leases held by the previous consumer id and re-arms pre-upgrade
+  Boot reclaims leases held by the previous consumer id and requeues pre-upgrade
   dead batches; `stop()` aborts in-flight executions (`interrupted_by_shutdown`)
   so deploys never wait out a long analysis. Replays reuse the run id, and the
   run-dir `EEXIST` guard must re-enter a leftover directory whose recorded
   owner is gone (different host after a container restart, or dead pid) — a
   live same-host owner still fails closed (`review-orchestrator.ts`
   isRunDirOwnerAlive; the stale-run reaper never clears cross-host leftovers).
-  Manual re-arm is
+  Manual requeue is
   `POST /api/admin/auto-commit/batches/:id/retry` (dashboard Queue tab).
   Events `queued` is an immutable admission decision; the `queued_timeout_hours`
-  sweep (default 48h) flips stale entries to the terminal `timeout` decision.
+  sweep (default 72h) flips stale entries to the terminal `timeout` decision and
+  terminally skips queued batches (`dispatch_pending`/`queued`/`retry_wait`,
+  or expired/interrupted executions) past the bound, releasing their streams.
+  Age counts from the member's first admission, inherited by batch `createdAt`,
+  and every automatic recovery path
+  guards it (`terminateStaleQueuedBatches` + the `dispatchOne` claim guard):
+  boot reclaim/dead requeue, per-tick expired-lease reclaim, and the dispatch
+  claim terminate over-aged batches instead of resurrecting them. Preserve
+  live controllers and valid leases; expired-lease cancellation must CAS the
+  observed lease token and expiration. Manual admin retry resets queue age.
+  Completed receipts must retain their original decision; expired unexpanded
+  receipts must never rematerialize members. Run rows flip to `timeout` through
+  `onBatchTimedOut`.
+  Operator cancellation goes through `review-cancellation.ts`: a running batch
+  persists its terminal state before aborting with `BATCH_CANCEL_REASON`
+  (`skipped`/`cancelled_by_user` — never `failBatch`, which would consume the
+  automatic recovery or retry); an IM request cancels via
+  `cancelImReviewRequest`, whose fence bump invalidates the in-flight worker's
+  later fenced writes.
   When investigating apparent cross-workspace blocking, join the receipt's
   members to current batches and compare run start/end times before changing
   scheduling. A completed batch keeps its Events admission decision. The UI
@@ -113,6 +142,23 @@ bootstrap, core auto-commit stores, scheduler and real-backend conformance tests
   same-workspace scan (`auto-commit-scheduler.test.ts` memory and SQLite
   restart cases). Pinned snapshot repair is covered by
   [config pitfalls](AGENTS.config-and-state.md).
+- **Terminal persistence against an in-flight marker**: a marker shares the
+  result's run id, so ordinary insert-once silently drops the terminal result.
+  Use `insertReviewRunOnce(store, result, true)` to replace only active/restart
+  placeholders inside the accounting transaction; never delete then insert
+  separately, and preserve operator cancellation against late executor success.
+  IM execution must also persist terminal outcomes. Await the restart sweep
+  before starting workers. Regression: `packages/store/test/database.test.ts`,
+  `packages/server/test/im-review-runtime.test.ts` and A15e query tests.
+- **Bulk cancellation and expiration**: read every page before mutating the
+  status-filtered set; newest-N scans miss old backlog, and offset pagination
+  during deletes skips records. Match exact workspace/trigger/repo identities,
+  scope explicit aliases even on wildcard bindings, and match numeric revisions
+  exactly. Regression: `review-cancellation.test.ts` and auto-commit store
+  conformance (more than 512 batches).
+  Include execution-window deferrals; delete only the observed pending envelope
+  and invalidate its timer generation. Recovery and handoff must check age under
+  the saved configuration (`deferral-manager.test.ts`).
 - Completed checkpoints replay local accounting only. `started` checkpoints replay
   fully; old writers may already have touched the remote. A valid
   `publication_pending` payload preserves analysis output and usage/cost while

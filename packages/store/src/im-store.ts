@@ -21,6 +21,7 @@ import {
   deleteExpiredImRateLimitsPg,
   findImReviewRequestPg,
   finishImReviewRequestPg,
+  cancelImReviewRequestPg,
   claimDueImReplyNotificationsPg,
   consumeImActionForRequestPg,
   finishImReplyNotificationPg,
@@ -447,6 +448,65 @@ export async function prepareImDispatch(store: StoreDb, requestId: string, fence
 
 export function imReviewJobId(requestId: string, dispatchSeq: number): string {
   return `im-review-${requestId}-${dispatchSeq}`;
+}
+
+export interface CancelImReviewRequestInput {
+  readonly requestId: string;
+  readonly states?: readonly ImReviewRequestRow["state"][];
+  readonly errorCode?: string | undefined;
+  /** Cancel notification rows created in the same transaction. */
+  readonly notifications?: FinishImReviewRequestInput["notifications"];
+  readonly now: Date;
+}
+
+/**
+ * Operator-driven cancellation (IM `aicr cancel`, admin): CAS transition of a
+ * non-terminal request to `rejected` WITHOUT a worker fence — the fence bump
+ * invalidates any in-flight worker's later fenced writes, so a concurrently
+ * executing request cannot overwrite the cancellation. Releases the active
+ * target and marks the inbox row finished in the same transaction.
+ */
+export async function cancelImReviewRequest(store: StoreDb, input: CancelImReviewRequestInput): Promise<boolean> {
+  if (store.kind === "postgres") return cancelImReviewRequestPg(store, input);
+  return store.db.transaction((tx) => {
+    const rows = tx.update(imReviewRequests).set({
+      state: "rejected",
+      errorCode: input.errorCode ?? "im.cancelled_by_user",
+      leaseOwner: null,
+      leaseUntil: null,
+      fence: sql`${imReviewRequests.fence} + 1`,
+      nextAttemptAt: null,
+      updatedAt: input.now,
+    }).where(and(
+      eq(imReviewRequests.requestId, input.requestId),
+      inArray(imReviewRequests.state, [...(input.states ?? ["accepted", "validating", "queued", "running", "publishing", "retry_wait"])]),
+    )).returning().all();
+    if (rows.length === 0) return false;
+    const request = rows[0]!;
+    tx.delete(imActiveTargets).where(and(
+      eq(imActiveTargets.namespace, request.namespace),
+      eq(imActiveTargets.requestId, request.requestId),
+    )).run();
+    tx.update(imInbox).set({ status: "request_finished" })
+      .where(eq(imInbox.requestId, request.requestId)).run();
+    for (const notification of input.notifications ?? []) {
+      tx.insert(imReplyOutbox).values({
+        operationId: notification.operationId,
+        namespace: request.namespace,
+        requestId: request.requestId,
+        destinationIdentity: notification.destinationIdentity,
+        operationKind: notification.operationKind,
+        payloadDigest: notification.payloadDigest,
+        state: "pending",
+        expiry: notification.expiry ?? null,
+        nextAttemptAt: notification.nextAttemptAt ?? input.now,
+        compactReceipt: notification.compactReceipt ?? null,
+        createdAt: input.now,
+        updatedAt: input.now,
+      }).run();
+    }
+    return true;
+  });
 }
 
 /** Terminal write + active-target release + notification outbox in one transaction. */

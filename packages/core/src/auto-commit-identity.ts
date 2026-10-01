@@ -187,7 +187,9 @@ export interface CommitBatchMember {
 }
 
 export const AUTO_COMMIT_BATCH_LIMITS = {
-  maxMembersPerBatch: 50,
+  // Atomic store mutations stay bounded. Oversized pushes fail as a whole;
+  // the separate 50-member bound only limits coalescing across deliveries.
+  maxMembersPerBatch: 4096,
   maxMetadataPageRecords: 256,
   maxMetadataPageBytes: 1024 * 1024,
   maxWorkspaceHeadsPerScan: 64,

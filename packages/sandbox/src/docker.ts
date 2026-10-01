@@ -26,6 +26,7 @@ interface ContainerCommandResult {
 }
 
 interface ContainerCommandOptions {
+  readonly signal?: AbortSignal;
   readonly timeoutMs?: number;
   readonly stdin?: string;
   readonly onStdout?: (chunk: string) => void;
@@ -52,6 +53,7 @@ export const execContainerCommand: ContainerCommandRunner = async function execC
   options?: ContainerCommandOptions,
 ): Promise<{ readonly stdout: string; readonly stderr: string; readonly exitCode: number | null }> {
   const { spawn } = await import("node:child_process");
+  options?.signal?.throwIfAborted();
 
   return new Promise((resolvePromise) => {
     // Spawn in its own process group (POSIX) so a timeout can kill the whole
@@ -73,6 +75,7 @@ export const execContainerCommand: ContainerCommandRunner = async function execC
       if (settled) return;
       settled = true;
       if (timer !== undefined) clearTimeout(timer);
+      options?.signal?.removeEventListener("abort", abort);
       resolvePromise({ stdout, stderr, exitCode });
     };
 
@@ -110,6 +113,9 @@ export const execContainerCommand: ContainerCommandRunner = async function execC
         killProcessTree(proc, "SIGKILL");
       }, options.timeoutMs);
     }
+    const abort = () => killProcessTree(proc, "SIGKILL");
+    options?.signal?.addEventListener("abort", abort, { once: true });
+    if (options?.signal?.aborted) abort();
   });
 };
 
@@ -162,6 +168,7 @@ export function createDockerSandboxBackend(options: DockerSandboxOptions = {}): 
     engine,
 
     async spawn(spawnOptions: SandboxSpawnOptions): Promise<SandboxSpawnResult> {
+      spawnOptions.signal?.throwIfAborted();
       parseAllowedCommand(spawnOptions.command, allowedCommands);
       const containerName = `aicr-${randomUUID().slice(0, 12)}`;
       const timeoutMs = spawnOptions.timeoutMs ?? DEFAULT_TIMEOUT_MS;
@@ -207,8 +214,10 @@ export function createDockerSandboxBackend(options: DockerSandboxOptions = {}): 
           timeoutMs: effectiveTimeout,
           ...(spawnOptions.stdin ? { stdin: spawnOptions.stdin } : {}),
           ...(spawnOptions.onStdout ? { onStdout: spawnOptions.onStdout } : {}),
+          ...(spawnOptions.signal ? { signal: spawnOptions.signal } : {}),
         });
       } finally {
+        if (spawnOptions.signal?.aborted) await commandRunner(containerCli, ["rm", "-f", containerName], { timeoutMs: 10_000 });
         await cleanupEnvFiles();
       }
 

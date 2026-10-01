@@ -15,6 +15,7 @@ import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 
 import {
+  AUTO_COMMIT_BATCH_LIMITS,
   computeMemberId,
   computeStreamId,
   type CommitBatchMember,
@@ -33,6 +34,7 @@ import type {
   AutoCommitStore,
   BatchCompletion,
   BatchExecutionCheckpoint,
+  CancelQueuedBatchesInput,
   ClaimedDispatch,
   CommitBatchRecord,
   CommitMemberRecord,
@@ -1007,6 +1009,7 @@ export async function createSqliteAutoCommitStore(
       }
       if (receipt.stream_id !== input.streamId)
         throw new RangeError("Receipt stream mismatch");
+      if (receipt.timeout_reported_at !== null) return { created: 0, updated: 0, conflicted: [] };
       let created = 0;
       let updated = 0;
       const conflicted: string[] = [];
@@ -1274,7 +1277,7 @@ export async function createSqliteAutoCommitStore(
       }
       if (
         input.members.length === 0 ||
-        input.members.length > 50 ||
+        input.members.length > AUTO_COMMIT_BATCH_LIMITS.maxMembersPerBatch ||
         stmtBatchById.get(input.batchId) ||
         new Set(input.members.map((m) => m.memberId)).size !==
           input.members.length
@@ -1284,6 +1287,7 @@ export async function createSqliteAutoCommitStore(
         `SELECT * FROM auto_commit_members
         WHERE member_id = ? AND status = 'pending' AND batch_id IS NULL`,
       );
+      let queuedAt = input.now;
       for (const member of input.members) {
         const state = stmtSealCheck.get(member.memberId) as
           MemberRow | undefined;
@@ -1307,6 +1311,7 @@ export async function createSqliteAutoCommitStore(
             memberId: member.memberId,
           };
         }
+        queuedAt = Math.min(queuedAt, state.first_accepted_at);
       }
 
       db.prepare(
@@ -1338,7 +1343,7 @@ export async function createSqliteAutoCommitStore(
         exclusion_policy_version: input.exclusionPolicyVersion,
         config_policy_version: input.configPolicyVersion,
         max_attempts: input.maxAttempts,
-        created_at: input.now,
+        created_at: queuedAt,
         config_snapshot_id: input.configSnapshotId ?? null,
       });
       db.prepare(
@@ -1783,13 +1788,14 @@ export async function createSqliteAutoCommitStore(
                 attempt = 1, recovery_attempt = 1,
                 lease_token = NULL, lease_owner = NULL, lease_expiry = NULL,
                 execution_checkpoint = ?,
-                config_snapshot_id = ?
+                config_snapshot_id = ?, created_at = ?
           WHERE batch_id = ?`,
       ).run(
         `manual retry re-armed${batch.last_error ? `; previous: ${batch.last_error}` : ""}`,
         now,
         batch.execution_checkpoint && (JSON.parse(batch.execution_checkpoint) as BatchExecutionCheckpoint).publication?.remote ? batch.execution_checkpoint : null,
         configSnapshotId,
+        now,
         batchId,
       );
       requeueOutbox(batchId, now);
@@ -1821,7 +1827,7 @@ export async function createSqliteAutoCommitStore(
         .prepare(
           `SELECT m.member_id AS member_id, m.stream_id AS stream_id
              FROM auto_commit_members m
-            WHERE m.status = 'pending' AND m.batch_id IS NULL AND m.eligible_at < ?
+            WHERE m.status = 'pending' AND m.batch_id IS NULL AND m.first_accepted_at < ?
               AND (? IS NULL OR EXISTS (
                 SELECT 1 FROM auto_commit_stream_heads h
                  WHERE h.stream_id = m.stream_id AND h.workspace_id = ?))`,
@@ -1851,6 +1857,12 @@ export async function createSqliteAutoCommitStore(
           `UPDATE auto_commit_receipts SET timeout_reported_at = ?
            WHERE timeout_reported_at IS NULL AND first_accepted_at < ?
              AND (? IS NULL OR workspace_id = ?)
+             AND (EXISTS (
+               SELECT 1 FROM auto_commit_receipt_members rm JOIN auto_commit_members m ON m.member_id = rm.member_id
+               WHERE rm.receipt_id = auto_commit_receipts.receipt_id AND m.terminal_reason = 'queued_timeout'
+             ) OR (NOT EXISTS (SELECT 1 FROM auto_commit_receipt_members rm WHERE rm.receipt_id = auto_commit_receipts.receipt_id)
+               AND EXISTS (SELECT 1 FROM auto_commit_stream_heads h WHERE h.stream_id = auto_commit_receipts.stream_id
+                 AND h.coverage_cursor < auto_commit_receipts.receipt_seq)))
              AND NOT EXISTS (
                SELECT 1 FROM auto_commit_receipt_members rm
                  JOIN auto_commit_members m ON m.member_id = rm.member_id
@@ -1863,6 +1875,126 @@ export async function createSqliteAutoCommitStore(
         receipt_id: string;
       }[];
       return timedOut.map((row) => row.receipt_id);
+    },
+  );
+
+  /**
+   * Shared terminal skip for operator-driven and timeout-driven exits
+   * (queued/retry_wait/dispatch_pending or force-cancelled running): members
+   * become terminally skipped, the outbox entry is deleted (a leftover
+   * `pending` row would let the next dispatch claim resurrect the batch via
+   * confirmDispatch's unconditional `status = 'queued'`), and the stream is
+   * released so later commits keep flowing.
+   */
+  function terminalSkipBatch(batch: BatchRow, reason: string): void {
+    db.prepare(
+      `UPDATE auto_commit_batches
+          SET status = 'skipped', last_error = ?,
+              lease_token = NULL, lease_owner = NULL, lease_expiry = NULL
+        WHERE batch_id = ?`,
+    ).run(reason, batch.batch_id);
+    const stmtSkipMember = db.prepare(
+      `UPDATE auto_commit_members SET status = 'skipped', terminal_reason = ?
+        WHERE member_id = ? AND batch_id = ? AND status = 'batched'`,
+    );
+    for (const member of JSON.parse(
+      batch.members,
+    ) as readonly CommitBatchMember[]) {
+      stmtSkipMember.run(reason, member.memberId, batch.batch_id);
+    }
+    db.prepare(`DELETE FROM auto_commit_outbox WHERE batch_id = ?`).run(
+      batch.batch_id,
+    );
+    clearStreamActiveBatch(batch.stream_id, batch.batch_id);
+    recomputeStreamNotBefore(batch.stream_id);
+  }
+
+  const txTimeoutStaleBatches = db.transaction(
+    (cutoff: number, workspaceId?: string): readonly { batch_id: string; run_id: string }[] => {
+      const stale = db
+        .prepare(
+          `SELECT * FROM auto_commit_batches
+            WHERE status IN ('dispatch_pending', 'queued', 'retry_wait')
+              AND created_at < ?
+              AND (? IS NULL OR workspace_id = ?)`,
+        )
+        .all(cutoff, workspaceId ?? null, workspaceId ?? null) as BatchRow[];
+      for (const batch of stale) {
+        terminalSkipBatch(batch, "queued_timeout");
+      }
+      return stale.map((batch) => ({ batch_id: batch.batch_id, run_id: batch.run_id }));
+    },
+  );
+
+  const txCancelQueuedBatches = db.transaction(
+    (
+      filter: {
+        statuses: readonly string[];
+        batchIds?: readonly string[];
+        workspaceId?: string;
+        triggerName?: string;
+        scopeRef?: string;
+        headPrefix?: string;
+        createdBefore?: number;
+        leaseToken?: string;
+        leaseExpiredBefore?: number;
+        reason: string;
+      },
+    ): readonly { batch_id: string; run_id: string }[] => {
+      if (filter.statuses.length === 0) return [];
+      if (filter.batchIds !== undefined && filter.batchIds.length === 0) return [];
+      const placeholders = filter.statuses.map(() => "?").join(", ");
+      const idList = filter.batchIds;
+      const idPlaceholders = idList ? `(${idList.map(() => "?").join(",")})` : "";
+      const rows = db
+        .prepare(
+          `SELECT * FROM auto_commit_batches
+            WHERE status IN (${placeholders})
+              ${idList ? `AND batch_id IN ${idPlaceholders}` : ""}
+              ${filter.workspaceId !== undefined ? "AND workspace_id = ?" : ""}
+              ${filter.triggerName !== undefined ? "AND trigger_name = ?" : ""}
+              ${filter.scopeRef !== undefined ? "AND scope_ref = ?" : ""}
+              ${filter.headPrefix !== undefined ? "AND head LIKE ?" : ""}
+              ${filter.createdBefore !== undefined ? "AND created_at < ?" : ""}
+              ${filter.leaseToken !== undefined ? "AND lease_token = ?" : ""}
+              ${filter.leaseExpiredBefore !== undefined ? "AND lease_expiry <= ?" : ""}`,
+        )
+        .all(
+          ...filter.statuses,
+          ...(idList ? idList : []),
+          ...(filter.workspaceId !== undefined ? [filter.workspaceId] : []),
+          ...(filter.triggerName !== undefined ? [filter.triggerName] : []),
+          ...(filter.scopeRef !== undefined ? [filter.scopeRef] : []),
+          ...(filter.headPrefix !== undefined ? [`${filter.headPrefix}%`] : []),
+          ...(filter.createdBefore !== undefined ? [filter.createdBefore] : []),
+          ...(filter.leaseToken !== undefined ? [filter.leaseToken] : []),
+          ...(filter.leaseExpiredBefore !== undefined ? [filter.leaseExpiredBefore] : []),
+        ) as BatchRow[];
+      for (const batch of rows) {
+        terminalSkipBatch(batch, filter.reason);
+      }
+      return rows.map((batch) => ({ batch_id: batch.batch_id, run_id: batch.run_id }));
+    },
+  );
+
+  const txRequeueStalledBatch = db.transaction(
+    (batchId: string, now: number): BatchRow | undefined => {
+      const batch = stmtBatchById.get(batchId) as BatchRow | undefined;
+      if (!batch) return undefined;
+      if (batch.status !== "retry_wait" && batch.status !== "queued" && batch.status !== "dispatch_pending") {
+        return undefined;
+      }
+      // Clear the retry backoff and any dispatch claim so the next claim
+      // round picks the batch up immediately.
+      db.prepare(
+        `UPDATE auto_commit_batches
+            SET status = 'retry_wait', retry_not_before = NULL,
+                lease_token = NULL, lease_owner = NULL, lease_expiry = NULL
+          WHERE batch_id = ?`,
+      ).run(batchId);
+      requeueOutbox(batchId, now);
+      recomputeStreamNotBefore(batch.stream_id);
+      return stmtBatchById.get(batchId) as BatchRow | undefined;
     },
   );
 
@@ -2418,6 +2550,40 @@ export async function createSqliteAutoCommitStore(
       workspaceId?: string,
     ): Promise<readonly string[]> {
       return txTimeoutStaleQueue.immediate(cutoff, now, workspaceId) as readonly string[];
+    },
+
+    async timeoutStaleBatches(
+      cutoff: number,
+      workspaceId?: string,
+    ): Promise<readonly { batchId: string; runId: string }[]> {
+      return (txTimeoutStaleBatches.immediate(cutoff, workspaceId) as { batch_id: string; run_id: string }[])
+        .map((row) => ({ batchId: row.batch_id, runId: row.run_id }));
+    },
+
+    async cancelQueuedBatches(
+      input: CancelQueuedBatchesInput,
+    ): Promise<readonly { batchId: string; runId: string }[]> {
+      return (txCancelQueuedBatches.immediate({
+        statuses: input.statuses ?? ["dispatch_pending", "queued", "retry_wait"],
+        ...(input.batchIds !== undefined ? { batchIds: input.batchIds } : {}),
+        ...(input.workspaceId !== undefined ? { workspaceId: input.workspaceId } : {}),
+        ...(input.triggerName !== undefined ? { triggerName: input.triggerName } : {}),
+        ...(input.scopeRef !== undefined ? { scopeRef: input.scopeRef } : {}),
+        ...(input.head !== undefined ? { headPrefix: input.head } : {}),
+        ...(input.createdBefore !== undefined ? { createdBefore: input.createdBefore } : {}),
+        ...(input.leaseToken !== undefined ? { leaseToken: input.leaseToken } : {}),
+        ...(input.leaseExpiredBefore !== undefined ? { leaseExpiredBefore: input.leaseExpiredBefore } : {}),
+        reason: input.reason ?? "cancelled_by_user",
+      }) as { batch_id: string; run_id: string }[])
+        .map((row) => ({ batchId: row.batch_id, runId: row.run_id }));
+    },
+
+    async requeueStalledBatch(
+      batchId: string,
+      now: number,
+    ): Promise<CommitBatchRecord | undefined> {
+      const row = txRequeueStalledBatch.immediate(batchId, now) as BatchRow | undefined;
+      return row ? rowToBatch(row) : undefined;
     },
 
     async listRoutingIntakeIdsForReceipts(

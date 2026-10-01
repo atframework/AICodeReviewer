@@ -4,14 +4,17 @@ import { join } from "node:path";
 
 import {
   createMemoryAutoCommitStore,
+  AUTO_COMMIT_BATCH_LIMITS,
   createMemoryConfigStore,
   createSqliteAutoCommitStore,
   computeSourceKey,
+  computeStreamId,
   ExecutionConcurrency,
   resolveAutoCommitPolicy,
   type AutoCommitStore,
   type CommitMetadataPage,
   type ResolvedAutoCommitPolicy,
+  type SourceSnapshot,
 } from "@aicr/core";
 import { describe, expect, it, vi } from "vitest";
 
@@ -32,6 +35,42 @@ import { createObservabilityApi } from "../src/observability-api.js";
 const T0 = 1_700_000_000_000;
 
 describe.each(["memory", "sqlite"] as const)("nonblocking scheduler [%s]", (backend) => {
+  it("resumes metadata pagination and reviews a mixed-author push as one range", async () => {
+    await mkdir(join(process.cwd(), "build/tmp"), { recursive: true });
+    const directory = await mkdtemp(join(process.cwd(), "build/tmp/push-unit-"));
+    const path = join(directory, "queue.sqlite");
+    let store = backend === "memory" ? createMemoryAutoCommitStore() : await createSqliteAutoCommitStore({ path });
+    const policy = makePolicy({ delay_seconds: 0 });
+    const adapter = new ScriptedAdapter(Array.from({ length: 550 }, (_, index) => ({
+      sha: `A${index + 1}`, parents: index === 200 ? [`A${index}`, "side"] : [`A${index}`],
+      authorName: index % 2 ? "Bob" : "Alice", authorEmail: index % 2 ? "bob@example.com" : "alice@example.com",
+    })));
+    const executed: BatchExecutionContext[] = [];
+    let scheduler = makeScheduler({ store, policy, adapter, executed, now: () => T0,
+      tuning: { metadataPageSize: 100, maxMetadataPagesPerReceipt: 1 } });
+    try {
+      await accept(store, policy, "large-mixed-push", "A0", "A550", T0);
+      await scheduler.tick();
+      expect(executed).toEqual([]);
+      if (backend === "sqlite") {
+        await scheduler.stopAndDrain(); store.close?.();
+        store = await createSqliteAutoCommitStore({ path });
+        scheduler = makeScheduler({ store, policy, adapter, executed, now: () => T0,
+          tuning: { metadataPageSize: 100, maxMetadataPagesPerReceipt: 1 } });
+      }
+      const readMembers = vi.spyOn(store, "readMembers");
+      for (let i = 0; i < 7; i++) await scheduler.tick();
+      expect(executed).toHaveLength(1);
+      expect(executed[0]?.batch).toMatchObject({ base: "A0", head: "A550", status: "running" });
+      expect(executed[0]?.members.map(m => m.revision)).toEqual(Array.from({ length: 550 }, (_, index) => `A${index + 1}`));
+      expect(readMembers.mock.calls.every(([ids]) => ids.length <= 512)).toBe(true);
+      expect((await store.readBatch(executed[0]!.batch.batchId))?.status).toBe("completed");
+    } finally {
+      await scheduler.stopAndDrain(); store.close?.();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it("starts a manual GitHub retry while P4 remains running, within shared limits", async () => {
     await mkdir(join(process.cwd(), "build/tmp"), { recursive: true });
     const directory = await mkdtemp(join(process.cwd(), "build/tmp/scheduler-concurrency-"));
@@ -270,7 +309,69 @@ function makeScheduler(options: {
 
 const alice = { authorName: "Alice", authorEmail: "alice@example.com" };
 
+function gitSourceSnapshot(sourceNamespace: string, revision: string): SourceSnapshot {
+  return {
+    v: 1, vcs: "git", sourceNamespace, revision,
+    fields: {
+      authorName: { status: "known", value: alice.authorName },
+      authorEmail: { status: "known", value: alice.authorEmail },
+    },
+    command: "git log", observedAt: T0, rulesVersion: "rules-v1",
+    sourceKey: computeSourceKey(sourceNamespace, { vcs: "git", ...alice }),
+    status: "known",
+  };
+}
+
 describe("AutoCommitScheduler", () => {
+  it("terminally blocks an oversized push without sealing a prefix", async () => {
+    const store = createMemoryAutoCommitStore();
+    const policy = makePolicy({ delay_seconds: 0 });
+    const count = AUTO_COMMIT_BATCH_LIMITS.maxMembersPerBatch + 1;
+    const adapter = new ScriptedAdapter(Array.from({ length: count }, (_, index) => ({ sha: `A${index + 1}`, parents: [`A${index}`], ...alice })));
+    const executed: BatchExecutionContext[] = [];
+    const scheduler = makeScheduler({ store, policy, adapter, executed, now: () => T0 });
+    await accept(store, policy, "oversized", "A0", `A${count}`, T0);
+    for (let i = 0; i < 8; i++) await scheduler.tick();
+    expect(executed).toEqual([]);
+    const stream = (await store.readStreamHeads("ws1", 1))[0]!;
+    const [receipt] = await store.readStreamReceipts(stream.streamId, 0, Number.MAX_SAFE_INTEGER, 1);
+    expect((await store.getReceipt(receipt!.receiptId))?.memberCounts).toMatchObject({ failed: count, pending: 0, batched: 0 });
+    const page = await store.readReceiptMembers(receipt!.receiptId, null, 10);
+    expect(page.items.every(m => m.terminalReason === "push_batch_too_large")).toBe(true);
+  });
+  it("never applies queue timeout to a live execution with a valid lease", async () => {
+    const store = createMemoryAutoCommitStore();
+    const policy = makePolicy({ delay_seconds: 0, queued_timeout_hours: 1 });
+    const adapter = new ScriptedAdapter([{ sha: "A1", parents: ["A0"], ...alice }]);
+    let now = T0;
+    const started = Promise.withResolvers<BatchExecutionContext>();
+    const finish = Promise.withResolvers<void>();
+    const scheduler = new AutoCommitScheduler({ store, getPolicy: () => policy, getAdapter: () => adapter,
+      now: () => now, leaseMs: 24 * 3600000, leaseRenewMs: 1000000,
+      executeBatch: async context => { started.resolve(context); await finish.promise; } });
+    try {
+      await accept(store, policy, "live-timeout", "A0", "A1", now);
+      await vi.waitFor(async () => { await scheduler.tick(false); expect(await store.readBatchesByStatus(["running"], 1)).toHaveLength(1); });
+      const running = await started.promise;
+      now += 2 * 3600000;
+      await scheduler.tick(false);
+      expect((await store.readBatch(running.batch.batchId))?.status).toBe("running");
+      expect(running.signal?.aborted).toBe(false);
+    } finally { finish.resolve(); await scheduler.stopAndDrain(); }
+  });
+
+  it("does not expand an ancient receipt after a long downtime", async () => {
+    const store = createMemoryAutoCommitStore();
+    const policy = makePolicy({ delay_seconds: 0, queued_timeout_hours: 1 });
+    const adapter = new ScriptedAdapter([{ sha: "A1", parents: ["A0"], ...alice }]);
+    const executed: BatchExecutionContext[] = [];
+    await accept(store, policy, "ancient-receipt", "A0", "A1", T0);
+    const scheduler = makeScheduler({ store, policy, adapter, executed, now: () => T0 + 2 * 3600000 });
+    await scheduler.tick();
+    expect(adapter.calls).toEqual([]);
+    expect(executed).toEqual([]);
+    expect(await store.readBatchesByStatus(["dispatch_pending", "running", "completed"], 10)).toEqual([]);
+  });
   it("uses receipt snapshots for metadata and splits batches on the snapshot boundary", async () => {
     const store = createMemoryAutoCommitStore();
     const policy = makePolicy({ delay_seconds: 0 });
@@ -759,7 +860,8 @@ describe("AutoCommitScheduler", () => {
     });
     await accept(store, policy, "large", "A0", "A550", T0);
     for (let i = 0; i < 12; i++) await scheduler.tick();
-    expect(executed).toHaveLength(11);
+    expect(executed).toHaveLength(1);
+    expect(executed[0]?.batch).toMatchObject({ base: "A0", head: "A550" });
     expect(executed.flatMap((x) => x.members.map((m) => m.revision))).toEqual(
       Array.from({ length: 550 }, (_, i) => `A${i + 1}`),
     );
@@ -934,9 +1036,9 @@ describe("AutoCommitScheduler", () => {
     await scheduler.tick();
     await scheduler.tick();
     expect(executed.map((x) => x.members.map((m) => m.revision))).toEqual([
-      ["A1"],
-      ["B1"],
+      ["A1", "B1"],
     ]);
+    expect(executed[0]?.batch.base).toBe("bot");
   });
 
   it("merges contiguous same-source commits across notifications into one batch", async () => {
@@ -999,7 +1101,7 @@ describe("AutoCommitScheduler", () => {
     expect(executed).toHaveLength(1);
   });
 
-  it("excludes bot commits and cuts the run at the exclusion gap", async () => {
+  it("blocks a push with an internal exclusion gap without analyzing excluded changes", async () => {
     const store = createMemoryAutoCommitStore();
     const policy = makePolicy({
       delay_seconds: 0,
@@ -1028,23 +1130,28 @@ describe("AutoCommitScheduler", () => {
 
     await accept(store, policy, "d1", "A0", "A2", T0);
     await scheduler.tick();
-    // One active batch per stream: the second cut seals on the next tick,
-    // after the first batch completes and clears activeBatchId.
     await scheduler.tick();
 
     expect(
       executed.map((context) =>
         context.members.map((member) => member.revision),
       ),
-    ).toEqual([["A1"], ["A2"]]);
+    ).toEqual([]);
+    const stream = (await store.readStreamHeads("ws1", 1))[0]!;
     const receipts = await store.readStreamReceipts(
-      executed[0]?.batch.streamId ?? "",
+      stream.streamId,
       0,
       Number.MAX_SAFE_INTEGER,
       8,
     );
     const view = await store.getReceipt(receipts[0]?.receiptId ?? "");
     expect(view?.memberCounts.skipped).toBe(1);
+    expect(view?.memberCounts.failed).toBe(2);
+    expect(view?.memberCounts.pending).toBe(0);
+    const members = await store.readReceiptMembers(receipts[0]!.receiptId, null, 10);
+    expect(members.items.filter(m => m.status === "failed").map(m => m.terminalReason)).toEqual([
+      "exclusion_scope_conflict", "exclusion_scope_conflict",
+    ]);
   });
 
   it("isolates a force-push rewrite event into its own batch", async () => {
@@ -1096,6 +1203,7 @@ describe("AutoCommitScheduler", () => {
     const tuesday = Date.UTC(2023, 10, 14, 12, 0, 0); // 2023-11-14 was a Tuesday
     const policy = makePolicy({
       delay_seconds: 0,
+      queued_timeout_hours: 0, // This case exercises a weekly window past the default queue lifetime.
       schedule: {
         timezone: "UTC",
         rules: [{ days: ["mon"], windows: [{ start: "00:00", end: "24:00" }] }],
@@ -1326,6 +1434,140 @@ describe("AutoCommitScheduler", () => {
       store1?.close?.();
       store2?.close?.();
       await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("terminally cancels a running batch through cancelRunningBatch (no retry)", async () => {
+    const store = createMemoryAutoCommitStore();
+    const policy = makePolicy({ delay_seconds: 0 });
+    const adapter = new ScriptedAdapter([{ sha: "A1", parents: ["A0"], ...alice }]);
+    const leaseMs = 60_000;
+    let now = T0;
+    const gate = Promise.withResolvers<BatchExecutionContext>();
+    const cancelledHooks: { batchId: string; runId: string }[] = [];
+    const scheduler = new AutoCommitScheduler({
+      store,
+      getPolicy: () => policy,
+      getAdapter: () => adapter as never,
+      executeBatch: async (context) => {
+        gate.resolve(context);
+        // Abort-aware hang: the executor rejects once the cancel signal
+        // fires, mirroring the orchestrator's checkpoint behavior.
+        await new Promise<void>((_resolve, reject) => {
+          context.signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+        });
+      },
+      onBatchCancelled: async (batchId, runId) => { cancelledHooks.push({ batchId, runId }); },
+      now: () => now,
+      batchMaxAttempts: 2,
+      leaseMs,
+      leaseRenewMs: leaseMs * 100,
+      dispatchRetryBaseMs: 1_000,
+    });
+    await accept(store, policy, "cancel-1", "A0", "A1", now);
+    const inFlight = scheduler.tick();
+    void inFlight.catch(() => {});
+    const running = await gate.promise;
+    // Unknown ids report false; the live batch aborts terminally.
+    expect(scheduler.cancelRunningBatch("batch-unknown")).toBe(false);
+    expect(scheduler.cancelRunningBatch(running.batch.batchId)).toBe(true);
+    await inFlight;
+    const stored = await store.readBatch(running.batch.batchId);
+    expect(stored?.status).toBe("skipped");
+    expect(cancelledHooks).toEqual([{ batchId: running.batch.batchId, runId: running.batch.runId }]);
+    const stream = await store.readStreamHead(running.batch.streamId);
+    expect(stream?.activeBatchId).toBeNull();
+    // The cancelled batch never re-enters the outbox: a later tick does not
+    // resurrect it (confirmDispatch would otherwise flip it back to queued).
+    now += 120_000;
+    const executed: BatchExecutionContext[] = [];
+    const followUp = new AutoCommitScheduler({
+      store,
+      getPolicy: () => policy,
+      getAdapter: () => adapter as never,
+      executeBatch: async (context) => { executed.push(context); },
+      now: () => now,
+      batchMaxAttempts: 2,
+      leaseMs,
+      leaseRenewMs: leaseMs * 100,
+      dispatchRetryBaseMs: 1_000,
+    });
+    await followUp.tick();
+    expect(executed).toHaveLength(0);
+    expect((await store.readBatch(running.batch.batchId))?.status).toBe("skipped");
+  });
+
+  it("terminates over-aged batches at recovery and dispatch instead of resurrecting them", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      // A short, explicit bound makes the age checks deterministic.
+      const policy = makePolicy({ delay_seconds: 0, queued_timeout_hours: 1 });
+      const adapter = new ScriptedAdapter([{ sha: "A1", parents: ["A0"], ...alice }]);
+      const timedOut: { batchId: string; runId: string }[] = [];
+      const HOUR = 3_600_000;
+      const now = T0;
+
+      // An over-aged RUNNING batch (crashed mid-flight during a long
+      // downtime): boot recovery must terminally skip it, not re-queue it.
+      // Drive the store contract directly so the batch id is known.
+      const runningStore = createMemoryAutoCommitStore();
+      const staleAccepted = await runningStore.acceptReceipt({
+        deliveryKey: "d-stale-running", workspaceId: "ws1", triggerName: "gitea",
+        provider: "gitea", vcs: "git", sourceNamespace: "git:example.com/org/stale",
+        scopeRef: "refs/heads/main", historyGeneration: 0,
+        coverage: { kind: "range", base: "A0", head: "A1" }, envelope: { repoRef: "org/stale" },
+        delaySeconds: 0, policyVersion: policy.policyVersion, now,
+      });
+      const staleStream = computeStreamId(staleAccepted.receipt);
+      const staleSnapshot = gitSourceSnapshot("git:example.com/org/stale", "A1");
+      await runningStore.applyMetadataPage({ streamId: staleStream, receiptId: staleAccepted.receipt.receiptId,
+        members: [{ revision: "A1", orderKey: "000000000001", parents: [], sourceSnapshot: staleSnapshot }], now });
+      const staleMember = (await runningStore.readPendingMembers(staleStream, null, 1)).items[0]!;
+      await runningStore.applyExclusionVerdicts({ streamId: staleStream,
+        verdicts: [{ memberId: staleMember.memberId, state: "allowed", policyVersion: policy.policyVersion }], now });
+      const staleReservation = await runningStore.acquireStreamReservation(staleStream, "test", 60_000, now);
+      await runningStore.sealBatch({ streamId: staleStream, reservationToken: staleReservation!.token,
+        expectedStreamVersion: staleReservation!.version, batchId: "stale-running", runId: "run-stale-running",
+        members: [{ memberId: staleMember.memberId, revision: "A1", sourceKey: staleSnapshot.sourceKey }],
+        base: "A0", head: "A1", sourceKey: staleSnapshot.sourceKey,
+        exclusionPolicyVersion: "rules-v1", configPolicyVersion: policy.policyVersion, maxAttempts: 2, now });
+      const staleClaim = await runningStore.claimDispatch(now, "worker", 5);
+      const staleEntry = staleClaim.find((claim) => claim.batch.batchId === "stale-running")!;
+      await runningStore.confirmDispatch("stale-running", staleEntry.claimToken, now);
+      await runningStore.startBatchExecution("stale-running", "worker", 60_000, now, { global: 4, workspace: 1 });
+      expect((await runningStore.readBatch("stale-running"))?.status).toBe("running");
+
+      const runningScheduler = new AutoCommitScheduler({
+        store: runningStore, getPolicy: () => policy, getAdapter: () => adapter as never,
+        executeBatch: async () => { throw new Error("must not execute") },
+        onBatchTimedOut: async (batchId, runId) => { timedOut.push({ batchId, runId }); },
+        now: () => now + 10 * HOUR, batchMaxAttempts: 2, leaseMs: 60_000,
+        leaseRenewMs: 6_000_000, dispatchRetryBaseMs: 1_000,
+      });
+      runningScheduler.start();
+      await runningScheduler.stopAndDrain();
+      const settled = await runningStore.readBatch("stale-running");
+      expect(settled?.status).toBe("skipped");
+      expect(settled?.lastError).toBe("queued_timeout");
+      expect(timedOut.map((entry) => entry.batchId)).toEqual(["stale-running"]);
+
+      // A fresh batch inside the bound still executes normally (the guard
+      // never fires): drive one through claim→confirm→start→complete.
+      const freshStore = createMemoryAutoCommitStore();
+      await accept(freshStore, policy, "d-fresh", "A0", "A1", now);
+      const executed: BatchExecutionContext[] = [];
+      const freshScheduler = new AutoCommitScheduler({
+        store: freshStore, getPolicy: () => policy, getAdapter: () => adapter as never,
+        executeBatch: async (context) => { executed.push(context); },
+        now: () => now + HOUR / 2, batchMaxAttempts: 2, leaseMs: 60_000,
+        leaseRenewMs: 6_000, dispatchRetryBaseMs: 1_000,
+      });
+      await freshScheduler.tick();
+      freshScheduler.stop();
+      expect(executed).toHaveLength(1);
+      expect((await freshStore.readBatch(executed[0]!.batch.batchId))?.status).toBe("completed");
+    } finally {
+      warn.mockRestore();
     }
   });
 

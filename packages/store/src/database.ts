@@ -605,4 +605,8 @@ export const STORE_SQLITE_MIGRATIONS = [
       );
     `,
   },
+  {
+    name: "012_review_event",
+    sql: "ALTER TABLE review_runs ADD COLUMN review_event_json TEXT;",
+  },
 ];

@@ -28,7 +28,7 @@
  * page upsert, exclusion verdicts, reservations, head updates, sealing,
  * dispatch claim/confirm/abort, execution lease lifecycle, reclaim) is a
  * single EVAL script, so the whole check-and-write is atomic on the Redis
- * command timeline. Scripts are bounded: batch members ≤ 50, metadata page
+ * command timeline. Scripts are bounded: batch members ≤ 4096, metadata page
  * members ≤ 256, claim/reclaim fan-out ≤ caller limit, and every loop iterates
  * a caller-supplied page — never a full keyspace scan.
  *
@@ -46,6 +46,7 @@ import {
   computeStreamId,
 } from "./auto-commit-identity.js";
 import type { CommitBatchStatus } from "./auto-commit-identity.js";
+import { readAllAutoCommitBatches } from "./auto-commit-store.js";
 import type {
   AcceptReceiptInput,
   AcceptReceiptResult,
@@ -58,6 +59,7 @@ import type {
   AutoCommitStore,
   BatchCompletion,
   BatchExecutionCheckpoint,
+  CancelQueuedBatchesInput,
   ClaimedDispatch,
   CommitBatchRecord,
   CommitMemberRecord,
@@ -530,6 +532,7 @@ if not rdata then
 end
 local receipt = cjson.decode(rdata)
 if receipt.streamId ~= streamId then return "ERRRANGE Receipt stream mismatch" end
+if not isNull(receipt.timeoutReportedAt) then return { 0, 0, "[]" } end
 local rseq = receipt.receiptSeq
 -- Validate the entire bounded page before writing any association. Source
 -- merging and SHA-256 happen in JS; CAS keeps concurrent evidence lossless.
@@ -849,8 +852,9 @@ end
 if not isNull(head.activeBatchId) then
   return cjson.encode({ kind = "conflict", reason = "active_batch" })
 end
-if #input.members == 0 or #input.members > 50 or redis.call("EXISTS", kBatch(input.batchId)) == 1 then return cjson.encode({ kind = "conflict", reason = "member_unavailable" }) end
+if #input.members == 0 or #input.members > ${AUTO_COMMIT_BATCH_LIMITS.maxMembersPerBatch} or redis.call("EXISTS", kBatch(input.batchId)) == 1 then return cjson.encode({ kind = "conflict", reason = "member_unavailable" }) end
 local seen = {}
+local queuedAt = input.now
 for _, m in ipairs(input.members) do
   if seen[m.memberId] then return cjson.encode({ kind = "conflict", reason = "member_unavailable" }) end
   seen[m.memberId] = true
@@ -865,6 +869,7 @@ for _, m in ipairs(input.members) do
   if ms.record.eligibleAt > input.now then
     return cjson.encode({ kind = "conflict", reason = "member_ineligible", memberId = m.memberId })
   end
+  queuedAt = math.min(queuedAt, ms.record.firstAcceptedAt)
 end
 local batch = {
   executionCheckpoint = cjson.null,
@@ -892,7 +897,7 @@ local batch = {
   leaseOwner = cjson.null,
   leaseExpiry = cjson.null,
   lastError = cjson.null,
-  createdAt = input.now,
+  createdAt = queuedAt,
 }
 saveBatch(batch)
 saveOutbox({ batchId = input.batchId, status = "pending", nextAttemptAt = input.now }, "", "0")
@@ -1108,6 +1113,63 @@ streamRecompute(rec.streamId)
 return 1
 `;
 
+const LUA_TERMINAL_SKIP_BATCH =
+  LUA_PRELUDE +
+  `
+local bid = ARGV[2]
+local filter = cjson.decode(ARGV[3])
+local bdata = redis.call("HGET", kBatch(bid), "data")
+if not bdata then return "missing" end
+local rec = cjson.decode(bdata)
+local allowed = false
+for i = 4, #ARGV do
+  if rec.status == ARGV[i] then allowed = true end
+end
+if not allowed then return "not_match" end
+if filter.leaseToken and rec.leaseToken ~= filter.leaseToken then return "not_match" end
+if filter.leaseExpiredBefore and (isNull(rec.leaseExpiry) or rec.leaseExpiry > filter.leaseExpiredBefore) then return "not_match" end
+if filter.createdBefore and rec.createdAt >= filter.createdBefore then return "not_match" end
+rec.status = "skipped"
+rec.lastError = filter.reason
+rec.retryNotBefore = cjson.null
+rec.leaseToken = cjson.null
+rec.leaseOwner = cjson.null
+rec.leaseExpiry = cjson.null
+saveBatch(rec)
+redis.call("ZREM", K_IDX_LEASE, bid)
+redis.call("ZREM", K_IDX_RUNNING, bid)
+redis.call("ZREM", kWsRunning(rec.workspaceId), bid)
+setMembersTerminal(bid, rec.members, "skipped", filter.reason)
+redis.call("DEL", kOutbox(bid))
+redis.call("ZREM", K_IDX_OUTBOX, bid)
+clearActiveBatch(rec.streamId, bid)
+streamRecompute(rec.streamId)
+return rec.runId
+`;
+
+const LUA_REQUEUE_STALLED =
+  LUA_PRELUDE +
+  `
+local bid = ARGV[2]
+local now = tonumber(ARGV[3])
+local bdata = redis.call("HGET", kBatch(bid), "data")
+if not bdata then return "missing" end
+local rec = cjson.decode(bdata)
+if rec.status ~= "retry_wait" and rec.status ~= "queued" and rec.status ~= "dispatch_pending" then return "not_queued" end
+rec.status = "retry_wait"
+rec.retryNotBefore = cjson.null
+rec.leaseToken = cjson.null
+rec.leaseOwner = cjson.null
+rec.leaseExpiry = cjson.null
+saveBatch(rec)
+redis.call("ZREM", K_IDX_LEASE, bid)
+redis.call("ZREM", K_IDX_RUNNING, bid)
+redis.call("ZREM", kWsRunning(rec.workspaceId), bid)
+saveOutbox({ batchId = bid, status = "pending", nextAttemptAt = now }, "", "0")
+streamRecompute(rec.streamId)
+return cjson.encode(rec)
+`;
+
 const LUA_RECLAIM_LEASES =
   LUA_PRELUDE +
   `
@@ -1222,6 +1284,7 @@ local previous = ""
 if not isNull(rec.lastError) then previous = "; previous: "..rec.lastError end
 rec.status = "retry_wait"
 rec.lastError = "manual retry re-armed"..previous
+rec.createdAt = now
 rec.retryNotBefore = now
 rec.attempt = 1
 rec.recoveryAttempt = 1
@@ -1261,6 +1324,22 @@ local rdata = redis.call("HGET", kReceipt(ARGV[2]), "data")
 if not rdata then return 0 end
 local rec = cjson.decode(rdata)
 if not isNull(rec.timeoutReportedAt) then return 0 end
+if rec.firstAcceptedAt >= tonumber(ARGV[4]) then return 0 end
+local memberIds = redis.call("ZRANGE", kReceiptMembers(rec.receiptId), 0, -1)
+local expired = false
+for _, memberId in ipairs(memberIds) do
+  local data = redis.call("HGET", kMember(memberId), "data")
+  if data then
+    local member = cjson.decode(data).record
+    if member.status == "pending" or member.status == "batched" then return 0 end
+    if member.terminalReason == "queued_timeout" then expired = true end
+  end
+end
+if #memberIds == 0 then
+  local headData = redis.call("HGET", kStream(rec.streamId), "data")
+  expired = headData and cjson.decode(headData).coverageCursor < rec.receiptSeq
+end
+if not expired then return 0 end
 rec.timeoutReportedAt = tonumber(ARGV[3])
 redis.call("HSET", kReceipt(ARGV[2]), "data", cjson.encode(rec))
 return 1
@@ -2295,18 +2374,24 @@ return 1
       // TS-level sweep over the existing indexes: oldest-first per stream.
       const workspaces = workspaceId
         ? [workspaceId]
-        : ((await redis.zrange(`${P}idx:ws:notBefore`, 0, 255)) as string[]);
+        : ((await redis.zrange(`${P}idx:ws:notBefore`, 0, -1)) as string[]);
       const timedOut: string[] = [];
       for (const ws of workspaces) {
-        const streams = (await redis.zrange(`${P}ws:${ws}:streamNb`, 0, 63)) as string[];
-        const nullStreams = (await redis.zrangebylex(`${P}ws:${ws}:streamNull`, "-", "+", "LIMIT", 0, 64)) as string[];
+        const streams = (await redis.zrange(`${P}ws:${ws}:streamNb`, 0, -1)) as string[];
+        const nullStreams = (await redis.zrangebylex(`${P}ws:${ws}:streamNull`, "-", "+")) as string[];
         for (const streamId of [...streams, ...nullStreams]) {
           // 1) Recheck and skip stale never-batched members atomically. Source
           //    "unavailable" is a failure, so it cannot represent queue expiry.
-          const pending = await this.readPendingMembers(streamId, null, 512);
-          const stale = pending.items.filter(
+          const pending: CommitMemberRecord[] = [];
+          let cursor: string | null = null;
+          do {
+            const page = await this.readPendingMembers(streamId, cursor, 256);
+            pending.push(...page.items);
+            cursor = page.nextCursor;
+          } while (cursor !== null);
+          const stale = pending.filter(
             (member) =>
-              member.batchId === null && member.eligibleAt < cutoff,
+              member.batchId === null && member.firstAcceptedAt < cutoff,
           );
           if (stale.length > 0) {
             await evalScript(LUA_PRELUDE + `
@@ -2315,7 +2400,7 @@ return 1
                 if data then
                   local state = cjson.decode(data)
                   local rec = state.record
-                  if rec.streamId == ARGV[2] and rec.status == "pending" and isNull(rec.batchId) and rec.eligibleAt < tonumber(ARGV[3]) then
+                  if rec.streamId == ARGV[2] and rec.status == "pending" and isNull(rec.batchId) and rec.firstAcceptedAt < tonumber(ARGV[3]) then
                     redis.call("ZREM", kStreamPending(rec.streamId), pendingSortKey(rec))
                     redis.call("ZREM", kStreamMemberElig(rec.streamId), rec.memberId)
                     rec.status = "skipped"
@@ -2332,7 +2417,7 @@ return 1
           const receiptIds = (await redis.zrange(
             `${P}stream:${streamId}:receipts`,
             0,
-            127,
+            -1,
           )) as string[];
           for (const receiptId of receiptIds) {
             const view = await this.getReceipt(receiptId);
@@ -2348,6 +2433,7 @@ return 1
                 P,
                 receiptId,
                 now,
+                cutoff,
               )) as number;
               if (stamped === 1) timedOut.push(receiptId);
             }
@@ -2355,6 +2441,62 @@ return 1
         }
       }
       return timedOut;
+    },
+
+    async timeoutStaleBatches(
+      cutoff: number,
+      workspaceId?: string,
+    ): Promise<readonly { batchId: string; runId: string }[]> {
+      const statuses = ["dispatch_pending", "queued", "retry_wait"] as const;
+      const candidates = await readAllAutoCommitBatches(this, statuses);
+      const timedOut: { batchId: string; runId: string }[] = [];
+      const eligible = candidates.filter(batch => batch.createdAt < cutoff
+        && (workspaceId === undefined || batch.workspaceId === workspaceId));
+      // Independent Lua CAS operations can share a bounded flight; avoid one
+      // network round trip per old batch after a long outage.
+      for (let offset = 0; offset < eligible.length; offset += 32) {
+        const results = await Promise.all(eligible.slice(offset, offset + 32).map(async batch => {
+          const raw = (await evalScript(LUA_TERMINAL_SKIP_BATCH, P, batch.batchId,
+            JSON.stringify({ reason: "queued_timeout", createdBefore: cutoff }), ...statuses)) as string;
+          return raw === "missing" || raw === "not_match" ? undefined : { batchId: batch.batchId, runId: raw };
+        }));
+        for (const result of results) if (result) timedOut.push(result);
+      }
+      return timedOut;
+    },
+
+    async cancelQueuedBatches(
+      input: CancelQueuedBatchesInput,
+    ): Promise<readonly { batchId: string; runId: string }[]> {
+      const statuses = input.statuses ?? ["dispatch_pending", "queued", "retry_wait"];
+      if (statuses.length === 0) return [];
+      const candidates = input.batchIds !== undefined
+        ? (await Promise.all(input.batchIds.map(id => this.readBatch(id)))).filter((batch): batch is CommitBatchRecord => batch !== undefined)
+        : await readAllAutoCommitBatches(this, statuses);
+      const batchIds = input.batchIds !== undefined ? new Set<string>(input.batchIds) : undefined;
+      const reason = input.reason ?? "cancelled_by_user";
+      const cancelled: { batchId: string; runId: string }[] = [];
+      for (const batch of candidates) {
+        if (batchIds !== undefined && !batchIds.has(batch.batchId)) continue;
+        if (input.workspaceId !== undefined && batch.workspaceId !== input.workspaceId) continue;
+        if (input.triggerName !== undefined && batch.triggerName !== input.triggerName) continue;
+        if (input.scopeRef !== undefined && batch.scopeRef !== input.scopeRef) continue;
+        if (input.head !== undefined && !batch.head.startsWith(input.head)) continue;
+        if (input.createdBefore !== undefined && batch.createdAt >= input.createdBefore) continue;
+        const raw = (await evalScript(LUA_TERMINAL_SKIP_BATCH, P, batch.batchId, JSON.stringify({ reason, leaseToken: input.leaseToken, leaseExpiredBefore: input.leaseExpiredBefore, createdBefore: input.createdBefore }), ...statuses)) as string;
+        if (raw !== "missing" && raw !== "not_match") cancelled.push({ batchId: batch.batchId, runId: raw });
+      }
+      return cancelled;
+    },
+
+    async requeueStalledBatch(
+      batchId: string,
+      now: number,
+    ): Promise<CommitBatchRecord | undefined> {
+      const raw = (await evalScript(LUA_REQUEUE_STALLED, P, batchId, now)) as string;
+      if (raw === "missing" || raw === "not_queued") return undefined;
+      if (typeof raw !== "string" || raw.length === 0) return undefined;
+      return toBatch(JSON.parse(raw) as CommitBatchRecord);
     },
 
     async readBatch(batchId: string): Promise<CommitBatchRecord | undefined> {

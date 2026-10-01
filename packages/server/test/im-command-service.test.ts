@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { appConfigSchema, type AppConfig, type ImPrincipal, type ImConversation, type ImActorScopes } from "@aicr/core";
-import { closeStoreDb, createStoreDb, type SqliteStoreDb } from "@aicr/store";
+import { acceptImDelivery, closeStoreDb, createStoreDb, type SqliteStoreDb } from "@aicr/store";
 
 import { admitImCommand, authorizeImCommand, parseImCommand, processImCommand, stripImMentionPrefix, IM_HELP_TEXT } from "../src/im/command-service.js";
 
@@ -65,7 +65,7 @@ function makeConfig(overrides: {
   });
 }
 
-function admitInput(command: { kind: string } & Record<string, unknown>, config: AppConfig, overrides: Partial<Parameters<typeof admitImCommand>[1]> = {}) {
+function admitInput(command: { kind: string } & Record<string, unknown>, config: AppConfig, overrides: Partial<Parameters<typeof admitImCommand>[1]> & { deliveryDuplicate?: boolean } = {}) {
   return {
     config,
     namespace: "ns-cmd",
@@ -84,6 +84,13 @@ function admitInput(command: { kind: string } & Record<string, unknown>, config:
 }
 
 describe("A01: fixed grammar", () => {
+  it("accepts absolute cancellation cutoffs only with an explicit timezone", () => {
+    expect(parseImCommand("aicr cancel before 2026-10-01T12:00:00+08:00")).toEqual({ kind: "command",
+      command: { kind: "cancel", repoAlias: undefined, revision: undefined, beforeMs: undefined, beforeAt: Date.parse("2026-10-01T04:00:00Z") } });
+    expect(parseImCommand("aicr cancel before 2026-10-01T12:00:00").kind).toBe("invalid");
+    expect(parseImCommand("aicr cancel before 2026-02-30T12:00:00Z").kind).toBe("invalid");
+    expect(parseImCommand("aicr cancel before 9999999999999999999999d").kind).toBe("invalid");
+  });
   it("parses valid commands and rejects malformed input", () => {
     expect(parseImCommand("aicr help")).toEqual({ kind: "command", command: { kind: "help" } });
     expect(parseImCommand("aicr chat-id")).toEqual({ kind: "command", command: { kind: "chat-id" } });
@@ -275,6 +282,149 @@ describe("A15: query command grammar and dispatch", () => {
   });
 });
 
+describe("cancel command grammar and dispatch", () => {
+  it("parses the three cancellation forms and rejects malformed durations", () => {
+    expect(parseImCommand(`aicr cancel service ${REPO_SHA.slice(0, 12)}`)).toEqual({
+      kind: "command",
+      command: { kind: "cancel", repoAlias: "service", revision: REPO_SHA.slice(0, 12), beforeMs: undefined },
+    });
+    expect(parseImCommand("aicr cancel service before 2h")).toEqual({
+      kind: "command",
+      command: { kind: "cancel", repoAlias: "service", revision: undefined, beforeMs: 7_200_000 },
+    });
+    expect(parseImCommand("aicr cancel before 30m")).toEqual({
+      kind: "command",
+      command: { kind: "cancel", repoAlias: undefined, revision: undefined, beforeMs: 1_800_000 },
+    });
+    expect(parseImCommand("aicr cancel before 3d")).toMatchObject({ kind: "command" });
+    expect(parseImCommand("aicr cancel service before soon")).toMatchObject({ kind: "invalid", reason: "invalid_duration" });
+    expect(parseImCommand("aicr cancel before 0h")).toMatchObject({ kind: "invalid", reason: "invalid_duration" });
+    expect(parseImCommand("aicr cancel service")).toMatchObject({ kind: "invalid", reason: "wrong_argument_count" });
+    expect(parseImCommand("aicr cancel bad$alias abcdef")).toMatchObject({ kind: "invalid" });
+  });
+
+  it("requires the binding to list cancel, fails closed without the service, and answers through it", async () => {
+    const config = makeConfig({ bindings: {
+      operator: {
+        enabled: true,
+        connection: "wecom-airobot",
+        conversations: [{ kind: "bot_direct" }],
+        actors: [{ kind: "any" }],
+        commands: ["cancel"],
+        repositories: { service: { workspace: "ws-main", source_trigger: "github-main", repo_ref: "org/service" } },
+      },
+    } });
+    const seen: string[] = [];
+    const cancellation = {
+      cancel: async (input: { command: { kind: string; repoAlias?: string } }) => {
+        seen.push(input.command.repoAlias ?? "*");
+        return "已取消 1 个任务";
+      },
+    };
+    const replied = await processImCommand({
+      store, cancellation,
+      ...admitInput({ kind: "cancel", repoAlias: "service", revision: REPO_SHA.slice(0, 12), beforeMs: undefined }, config),
+    });
+    expect(replied.kind).toBe("replied");
+    expect(replied.replyText).toBe("已取消 1 个任务");
+    expect(seen).toEqual(["service"]);
+
+    // No cancellation service wired → fail closed with a clear message.
+    const closed = await processImCommand({
+      store,
+      ...admitInput({ kind: "cancel", repoAlias: undefined, revision: undefined, beforeMs: 3_600_000 }, config),
+    });
+    expect(closed.replyText).toContain("取消服务不可用");
+
+    // A binding without the cancel command never reaches the service.
+    const notListed = makeConfig({ bindings: {
+      viewer: {
+        enabled: true, connection: "wecom-airobot", conversations: [{ kind: "bot_direct" }],
+        actors: [{ kind: "any" }], commands: ["status"],
+        repositories: { service: { workspace: "ws-main", source_trigger: "github-main", repo_ref: "org/service" } },
+      },
+    } });
+    const rejected = await processImCommand({
+      store, cancellation,
+      ...admitInput({ kind: "cancel", repoAlias: "service", revision: REPO_SHA.slice(0, 12), beforeMs: undefined }, notListed),
+    });
+    expect(rejected.kind).toBe("rejected");
+    expect(seen).toEqual(["service"]);
+  });
+
+  it("cancel with an alias requires the alias to be registered on the binding", async () => {
+    const config = makeConfig({ bindings: {
+      operator: {
+        enabled: true, connection: "wecom-airobot", conversations: [{ kind: "bot_direct" }],
+        actors: [{ kind: "any" }], commands: ["cancel"],
+        repositories: { service: { workspace: "ws-main", source_trigger: "github-main", repo_ref: "org/service" } },
+      },
+    } });
+    const cancellation = { cancel: async () => "已取消 1 个任务" };
+    const unknown = await processImCommand({
+      store, cancellation,
+      ...admitInput({ kind: "cancel", repoAlias: "ghost", revision: REPO_SHA.slice(0, 12), beforeMs: undefined }, config),
+    });
+    expect(unknown.kind).toBe("rejected");
+  });
+
+  it("executes cancellation once per delivery across callback pre-persist and redeliveries", async () => {
+    const config = makeConfig({ bindings: {
+      operator: {
+        enabled: true, connection: "wecom-airobot", conversations: [{ kind: "bot_direct" }],
+        actors: [{ kind: "any" }], commands: ["cancel"],
+        repositories: { service: { workspace: "ws-main", source_trigger: "github-main", repo_ref: "org/service" } },
+      },
+    } });
+    let executed = 0;
+    const cancellation = { cancel: async () => { executed++; return "已取消 1 个任务"; } };
+    const command = { kind: "cancel", repoAlias: "service", revision: REPO_SHA.slice(0, 12), beforeMs: undefined } as const;
+
+    // Callback shape: the route persists the verified delivery BEFORE command
+    // handling and reports it created the row (`deliveryDuplicate: false`).
+    const callbackKey = { deliveryKey: "msg-callback", payloadDigest: "sha:callback" };
+    await acceptImDelivery(store, {
+      delivery: { namespace: "ns-cmd", connectionIdentity: "wecom-bot", deliveryKind: "message", ...callbackKey },
+      now: new Date(),
+    });
+    const first = await processImCommand({
+      store, cancellation, ...admitInput(command, config, { ...callbackKey, deliveryDuplicate: false }),
+    });
+    expect(first.kind).toBe("replied");
+    expect(executed).toBe(1);
+
+    // A platform redelivery of the same callback reports the duplicate: the
+    // cancellation must not run again, but the user still gets an answer.
+    const redelivered = await processImCommand({
+      store, cancellation, ...admitInput(command, config, { ...callbackKey, deliveryDuplicate: true }),
+    });
+    expect(redelivered.kind).toBe("duplicate");
+    expect(redelivered.replyText).toContain("请勿重复发送");
+    expect(executed).toBe(1);
+
+    // Long-connection shape: no pre-persist outcome — the inbox row created by
+    // the first attempt is the dedup signal for a redelivered message.
+    const streamKey = { deliveryKey: "msg-stream", payloadDigest: "sha:stream" };
+    const streamed = await processImCommand({
+      store, cancellation, ...admitInput(command, config, streamKey),
+    });
+    expect(streamed.kind).toBe("replied");
+    expect(executed).toBe(2);
+    const repeated = await processImCommand({
+      store, cancellation, ...admitInput(command, config, streamKey),
+    });
+    expect(repeated.kind).toBe("duplicate");
+    expect(executed).toBe(2);
+
+    // Same delivery key with a different payload is an integrity conflict.
+    const conflicted = await processImCommand({
+      store, cancellation, ...admitInput(command, config, { deliveryKey: "msg-stream", payloadDigest: "sha:other" }),
+    });
+    expect(conflicted.kind).toBe("duplicate");
+    expect(executed).toBe(2);
+  });
+});
+
 describe("A15d: wildcard repository aliases", () => {
   const query = {
     answer: async (input: { command: { kind: string } }) => `查询结果:${input.command.kind}`,
@@ -320,6 +470,22 @@ describe("A15d: wildcard repository aliases", () => {
 });
 
 describe("A15e: running reads the database", () => {
+  it("deduplicates aliases and excludes queued markers from running", async () => {
+    const { insertReviewRun } = await import("@aicr/store");
+    const { ImQueryService } = await import("../src/im/query-service.js");
+    const config = makeConfig();
+    const original = config.im.command_bindings.reviewers!;
+    const target = Object.values(original.repositories)[0]!;
+    const binding = { ...original, repositories: { a: target, b: target } };
+    for (const [id, status] of [["once-active", "analyzing"], ["waiting", "queued"]] as const) {
+      await insertReviewRun(store, { id, eventId: id, workspaceId: target.workspace, triggerName: target.source_trigger,
+        repoRef: target.repo_ref, provider: "p", providerModel: "m", status, headSha: id });
+    }
+    const service = new ImQueryService({ store, getConfig: () => config });
+    const reply = await service.answer({ command: { kind: "running" }, connectionName: "wecom-airobot", binding });
+    expect(reply.split("once-active")).toHaveLength(2);
+    expect(reply).not.toContain("waiting");
+  });
   it("lists in-flight runs from review_runs and sweeps them as failed", async () => {
     const { insertReviewRun, updateRunStatus, failActiveReviewRuns } = await import("@aicr/store");
     await insertReviewRun(store, {

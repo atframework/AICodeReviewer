@@ -384,7 +384,7 @@ schema 已接受该命名空间，发送、回调与 worker 随计划逐步接�
 | `im.command_bindings.<id>.actors[].expires_at` | string | — | RFC 3339 时间戳；到期的匹配器（含精确 principal 与 `any`）自动停止匹配，是临时授权的通用机制 |
 | `im.command_bindings.<id>.conversations[]` | object | — | `app_direct`（企业微信/飞书应用）、`bot_direct`（企业微信 API 机器人）或带非空 `id` 的 `group`；类型必须匹配连接协议 |
 | `im.command_bindings.<id>.allow_all_repositories` | boolean | — | 运行时默认 false；开启后仓库别名在 `repositories` 注册表之外还可按 workspace id 或仓库全名精确匹配已观测的项目（projects 表），对查询与 review 命令生效 |
-| `im.command_bindings.<id>.commands` | enum[] | — | `help`、`chat-id`、`review`、`status` 与查询命令 `projects`、`reviews`、`commits`、`prs`、`detail`、`prdetail`、`queue`、`running` 的去重子集 |
+| `im.command_bindings.<id>.commands` | enum[] | — | `help`、`chat-id`、`review`、`status`、`cancel` 与查询命令 `projects`、`reviews`、`commits`、`prs`、`detail`、`prdetail`、`queue`、`running` 的去重子集 |
 | `im.command_bindings.<id>.repositories.<id>.workspace` | string | — | 仓库别名目标：workspace id；发布时按路由/VCS 范围校验 |
 | `im.command_bindings.<id>.repositories.<id>.source_trigger` | string | — | 仓库别名目标：来源触发器名；发布时按路由/VCS 范围校验 |
 | `im.command_bindings.<id>.repositories.<id>.repo_ref` | string | — | 仓库别名目标：仓库引用；发布时按路由/VCS 范围校验 |
@@ -460,7 +460,7 @@ workspace 的 `prompt.system_prompt` 引用其中一个名称替换内置基底 
 | `review.reflection.memory.max_entries` | int > 0 | — | memory 最大条目数 |
 | `review.reflection.memory.retention_days` | int > 0 | `90` | memory TTL（天） |
 | `review.auto_commit.delay_seconds` | int 0–31536000 | `300` | 自动提交首次接收后的固定延迟；`0` 表示不等待 |
-| `review.auto_commit.queued_timeout_hours` | int 0–8760 | `48` | 待处理队列条目超过该时限后终结为 `queued_timeout`（Events 决策 `timeout`）；`0` 关闭清扫 |
+| `review.auto_commit.queued_timeout_hours` | int 0–8760 | `72` | 自动提交条目/批次及 IM 请求从接受起的最长等待时间；超龄以 `queued_timeout` 关闭，IM 发送通知；保留有效租约的活动执行；`0` 关闭超时 |
 | `review.auto_commit.schedule.timezone` | string | `UTC` | 执行时段使用的 IANA 时区 |
 | `review.auto_commit.schedule.rules[]` | object[] | — | 周计划规则组（`days` 星期集合 + `windows` `HH:mm` 时间段，组间取并集）；`rules: []` 解除全部周限制 |
 | `review.auto_commit.exclude_sources[]` | object[] | — | 机器人/CI 来源排除规则（`id`、`vcs`、`match` 字段匹配器，`glob`/`regex` 二选一）；`[]` 清除继承规则 |

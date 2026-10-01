@@ -32,12 +32,24 @@ export class ExecutionConcurrency {
     };
   }
 
-  async run<T>(workspaceId: string, task: () => Promise<T>): Promise<T> {
-    const release = await new Promise<() => void>((resolve) => {
-      this.waiting.push({ workspaceId, start: resolve });
+  async run<T>(workspaceId: string, task: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+    signal?.throwIfAborted();
+    const release = await new Promise<() => void>((resolve, reject) => {
+      const entry = { workspaceId, start: (permit: () => void) => {
+        signal?.removeEventListener("abort", abort);
+        resolve(permit);
+      } };
+      const abort = () => {
+        const index = this.waiting.indexOf(entry);
+        if (index >= 0) this.waiting.splice(index, 1);
+        signal?.removeEventListener("abort", abort);
+        reject(signal?.reason);
+      };
+      this.waiting.push(entry);
+      signal?.addEventListener("abort", abort, { once: true });
       this.refresh();
     });
-    try { return await task(); } finally { release(); }
+    try { signal?.throwIfAborted(); return await task(); } finally { release(); }
   }
 
   /** Re-read live limits without interrupting admitted work; skip busy workspaces. */

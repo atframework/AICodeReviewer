@@ -1,9 +1,10 @@
-import { and, desc, eq, gte, inArray, lt, lte, sql, sum, count, avg } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, lt, lte, or, sql, sum, count, avg } from "drizzle-orm";
 
 import type { SqliteStoreDb, StoreDb } from "./database.js";
 import { storeHistoryRetention } from "./history-retention.js";
 import { historyCutoff } from "@aicr/core";
 import {
+  ACTIVE_RUN_STATUSES,
   projects,
   reviewRuns,
   codeMetrics,
@@ -22,6 +23,8 @@ import {
   insertOutputEventsPg,
   insertReviewRunOncePg,
   insertReviewRunPg,
+  deleteActiveReviewRunMarkerPg,
+  cancelActiveReviewRunPg,
   deleteReviewRunPg,
   recomputeDailyRollupPg,
   softDeleteMissingProjectsPg,
@@ -60,6 +63,7 @@ export interface ReviewRunInsert {
   targetUrl?: string | null;
   branch?: string | null;
   headSha?: string | null;
+  reviewEventJson?: string | null;
   /** VCS family of the analyzed revision ("git" | "svn" | "p4"); null when unknown. */
   vcsKind?: string | null;
   /** Commit time of the analyzed head revision; null when unresolved. */
@@ -124,15 +128,67 @@ export async function deleteReviewRun(store: StoreDb, runId: string): Promise<bo
 }
 
 /**
+ * Error text the startup sweep stamps on in-flight rows left by a previous
+ * process (`failActiveReviewRuns`). These rows are placeholders for runs the
+ * boot recovery may re-execute under the same run id; the re-execution's
+ * terminal record must be allowed to replace them.
+ */
+export const RESTART_SWEEP_ERROR = "interrupted by restart";
+
+/** Placeholder/active rows a terminal record may replace for its run id. */
+function replaceableMarkerConditions() {
+  return or(
+    inArray(reviewRuns.status, [...ACTIVE_RUN_STATUSES] as RunStatus[]),
+    and(eq(reviewRuns.status, "failed"), eq(reviewRuns.error, RESTART_SWEEP_ERROR)),
+  );
+}
+
+/**
+ * Removes the in-flight lifecycle marker row (queued/preparing/analyzing/
+ * publishing) for one run id while leaving any already-terminal record
+ * untouched. Terminal persistence uses the atomic `insertReviewRunOnce`
+ * replacement option; this helper is for explicit marker removal only.
+ * A `failed` row stamped by the restart sweep is also
+ * replaceable — the boot recovery re-executes that run id and its real
+ * outcome must land. Returns true when a marker was removed.
+ */
+export async function deleteActiveReviewRunMarker(store: StoreDb, runId: string): Promise<boolean> {
+  if (store.kind === "postgres") {
+    return deleteActiveReviewRunMarkerPg(store, runId);
+  }
+  const result = store.db.delete(reviewRuns)
+    .where(and(eq(reviewRuns.id, runId), replaceableMarkerConditions()))
+    .run();
+  return Number(result.changes) > 0;
+}
+
+/**
+ * Marks one run's in-flight marker row as cancelled (operator action); a
+ * row already in a terminal status stays untouched. Returns true when a
+ * marker was cancelled.
+ */
+export async function cancelActiveReviewRun(store: StoreDb, runId: string, reason = "cancelled_by_user"): Promise<boolean> {
+  if (store.kind === "postgres") {
+    return cancelActiveReviewRunPg(store, runId, reason);
+  }
+  const result = store.db.update(reviewRuns)
+    .set({ status: "cancelled", error: reason, finishedAt: new Date() })
+    .where(and(eq(reviewRuns.id, runId), inArray(reviewRuns.status, [...ACTIVE_RUN_STATUSES] as RunStatus[])))
+    .run();
+  return Number(result.changes) > 0;
+}
+
+/**
  * Atomic dedup variant for checkpoint recovery: records the run only when its
  * id is absent. Returns false when the run was already recorded, so a
  * recovered completed checkpoint can safely retry the accounting.
  */
-export async function insertReviewRunOnce(store: StoreDb, run: ReviewRunInsert): Promise<boolean> {
+export async function insertReviewRunOnce(store: StoreDb, run: ReviewRunInsert, replaceMarkers = false): Promise<boolean> {
   if (store.kind === "postgres") {
-    return insertReviewRunOncePg(store, run);
+    return insertReviewRunOncePg(store, run, replaceMarkers);
   }
   const inserted = store.sqlite.transaction(() => {
+    if (replaceMarkers) store.db.delete(reviewRuns).where(and(eq(reviewRuns.id, run.id), replaceableMarkerConditions())).run();
     const existing = store.db
       .select({ id: reviewRuns.id })
       .from(reviewRuns)
@@ -159,6 +215,7 @@ function insertReviewRunSqlite(store: SqliteStoreDb, run: ReviewRunInsert): void
     id: run.id,
     projectId,
     eventId: run.eventId,
+    reviewEventJson: run.reviewEventJson ?? null,
     workspaceId: run.workspaceId,
     triggerName: run.triggerName,
     provider: run.provider,
@@ -260,6 +317,7 @@ export async function updateRunStatus(
   runId: string,
   status: RunStatus,
   extra?: {
+    onlyIfActive?: boolean;
     error?: string;
     skipReason?: string;
     problemCount?: number;
@@ -290,7 +348,7 @@ export async function updateRunStatus(
       ...(extra?.tokensOut != null ? { tokensOut: extra.tokensOut } : {}),
       finishedAt: extra?.finishedAt ?? new Date(),
     })
-    .where(eq(reviewRuns.id, runId))
+    .where(and(eq(reviewRuns.id, runId), extra?.onlyIfActive ? replaceableMarkerConditions() : undefined))
     .run();
 }
 

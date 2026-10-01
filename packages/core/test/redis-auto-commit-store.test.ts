@@ -18,7 +18,7 @@
 
 import { randomUUID } from "node:crypto";
 
-import { afterAll, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import type { AutoCommitStore, CommitBatchRecord } from "../src/auto-commit-store.js";
 import { createRedisAutoCommitStore } from "../src/redis-auto-commit-store.js";
@@ -29,6 +29,7 @@ const REDIS_TEST_URL = process.env.AICR_REDIS_TEST_URL;
 
 if (REDIS_TEST_URL) {
   const stores: AutoCommitStore[] = [];
+  const ownedPrefixes = new Set<string>();
   it("backfills legacy history indexes and pages protected rows past expired history after restart", async () => {
     // Match the optional runtime import: ioredis is not a required backend.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -36,6 +37,7 @@ if (REDIS_TEST_URL) {
     const RedisCtor = mod.Redis ?? mod.default ?? mod;
     const client = new RedisCtor(REDIS_TEST_URL);
     const keyPrefix = `aicr-test:${randomUUID()}:`;
+    ownedPrefixes.add(keyPrefix);
     const prefix = `${keyPrefix}ac:`;
     const keys: string[] = [];
     const now = Date.now();
@@ -72,17 +74,31 @@ if (REDIS_TEST_URL) {
       await client.quit();
     }
   });
-  afterAll(() => {
-    for (const store of stores) {
-      store.close?.();
-    }
+  afterEach(async () => {
+    for (const store of stores.splice(0)) store.close?.();
+    const { Redis } = await import("ioredis");
+    const cleanup = new Redis(REDIS_TEST_URL);
+    try {
+      for (const prefix of ownedPrefixes) {
+        const owned: string[] = [];
+        let cursor = "0";
+        do {
+          const [next, keys] = await cleanup.scan(cursor, "MATCH", `${prefix}*`, "COUNT", 1000);
+          owned.push(...keys);
+          cursor = next;
+        } while (cursor !== "0");
+        for (let offset = 0; offset < owned.length; offset += 500) await cleanup.del(...owned.slice(offset, offset + 500));
+      }
+    } finally { ownedPrefixes.clear(); await cleanup.quit(); }
   });
   runAutoCommitStoreConformance({
     backendKind: "redis",
     makeStore: async () => {
+      const keyPrefix = `aicr-test:${randomUUID()}:`;
+      ownedPrefixes.add(keyPrefix);
       const store = await createRedisAutoCommitStore({
         connection: { url: REDIS_TEST_URL },
-        keyPrefix: `aicr-test:${randomUUID()}:`,
+        keyPrefix,
       });
       stores.push(store);
       return store;

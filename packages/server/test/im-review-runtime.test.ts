@@ -91,6 +91,41 @@ async function seedRequest(revision: string = REPO_SHA): Promise<string> {
 }
 
 describe("R10–R16: worker scan→validate→dispatch→execute→finish", () => {
+  it("expires queued requests with a notification while preserving live requests", async () => {
+    const requestId = await seedRequest();
+    const request = (await findImReviewRequest(store, "ns-w", requestId))!;
+    const now = new Date(request.createdAt.getTime() + 73 * 3600000);
+    const executeReview = vi.fn(async () => ({ state: "succeeded" as const }));
+    const service = new ManualReviewService({ store, namespace: "ns-w", getConfig: config, now: () => now,
+      createAdapter: () => mockAdapter(), enqueueReview: async (_id, run) => run(), executeReview });
+    expect(await service.scan()).toBe(0);
+    expect(executeReview).not.toHaveBeenCalled();
+    expect(await findImReviewRequest(store, "ns-w", requestId)).toMatchObject({ state: "rejected", errorCode: "im.queued_timeout" });
+    const claimRequestId = await seedRequest("a".repeat(40));
+    const claim = (await claimDueImReviewRequests(store, { namespace: "ns-w", now: new Date(), leaseMs: 1000000, owner: "w", limit: 1 }))[0]!;
+    await updateImReviewRequest(store, { requestId: claimRequestId, fence: claim.fence, state: "running", now: new Date() });
+    expect(await service.expireQueued()).toBe(0);
+    expect((await findImReviewRequest(store, "ns-w", claimRequestId))?.state).toBe("running");
+    expect(store.sqlite.prepare("SELECT COUNT(*) AS count FROM im_reply_outbox WHERE request_id = ?").get(requestId)).toMatchObject({ count: 1 });
+  });
+
+  it("operator cancellation wins over an executor that finishes after abort", async () => {
+    const requestId = await seedRequest();
+    const started = Promise.withResolvers<void>();
+    const finish = Promise.withResolvers<void>();
+    const service = new ManualReviewService({ store, namespace: "ns-w", getConfig: config,
+      createAdapter: () => mockAdapter(), enqueueReview: async (_id, run) => run(),
+      executeReview: async () => { started.resolve(); await finish.promise; return { state: "succeeded" }; } });
+    const scan = service.scan();
+    await started.promise;
+    const { createReviewCancellationService } = await import("../src/review-cancellation.js");
+    const coordinator = createReviewCancellationService({ store, imNamespace: "ns-w", cancelRunningImRequest: id => service.cancelRunning(id) });
+    expect((await coordinator.cancelImRequest(requestId)).status).toBe("cancelled");
+    finish.resolve();
+    await scan;
+    expect(await findImReviewRequest(store, "ns-w", requestId)).toMatchObject({ state: "rejected", errorCode: "im.cancelled_by_user" });
+    expect(await service.scan()).toBe(0);
+  });
   it("processes a request through the full state machine to succeeded", async () => {
     const requestId = await seedRequest();
     const executed: unknown[] = [];

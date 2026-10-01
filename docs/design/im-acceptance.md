@@ -139,7 +139,7 @@ fixture 放 `packages/server/test/fixtures/im/`。协议 fixture 不依赖真实
 | V04 | SVN rN/纯 N、HEAD/范围/范围外路径 | 接受固定正整数 revision，按配置路径求差异；拒绝浮动目标或非法访问 |
 | V05 | commit 作者与聊天操作者不同 | author 来自可信 VCS；requestedBy 单独记录；路由/归属不被消息伪造字段覆盖 |
 | V06 | 已评审 commit 再收到新明确命令 | 旧 run 留存，新 request/run 可执行；同活动目标合并；不被旧 commit 去重永久吞掉 |
-| V07 | 手动 review 与自动流同时运行 | 自动游标/批次/窗口语义不变；IM requestOrigin 不进入自动 admission/re-arm 分支 |
+| V07 | 手动 review 与自动流同时运行 | 自动游标/批次/窗口语义不变；IM requestOrigin 不进入自动准入或重新排队分支 |
 | V08 | metadata IO 暂时失败、缺必要 metadata/快照 | 有界重试或明确拒绝；不换成 latest HEAD/current config；未验证目标不启动 LLM |
 
 ## 8. 持久化和恢复 R01–R18
@@ -210,8 +210,7 @@ observability-api/integration、config-ui-client 和 `tests/browser/config-ui.sp
 
 ## 11. 执行命令与门禁顺序
 
-以下命令只供后续获授权的实施使用，本轮不执行。Windows 先确认 PowerShell 7、node、rg、pnpm 等工具。
-临时文件/日志先创建目录。以实际任务维护 test path 数组，不一次跑尚未创建的未来测试。
+定向检查按实际任务选择已存在的测试文件，例如：
 
 ```powershell
 New-Item -ItemType Directory -Force build/logs/im, build/tmp/im | Out-Null
@@ -231,28 +230,11 @@ if ($LASTEXITCODE -ne 0) { throw 'Targeted gate failed' }
 conformance helper 不独立执行，使用两种 `.test.ts` wrapper；数据库迁移组串行跑或每组使用独立数据库，
 不能多个 Vitest 进程同时迁移同一 schema。重试前查清失败原因，不延长 timeout/降低 coverage 遮盖问题。
 
-最终开发门禁按下面次序串行执行，每条单独保留日志和退出码，失败先修复再继续宣称完成：
-
-| 顺序 | Windows 仓库根命令 | 适用范围与额外证据 |
-| --- | --- | --- |
-| 1 | `node node_modules/eslint/bin/eslint.js . --max-warnings=0` | 全部运行时修改 |
-| 2 | `node node_modules/typescript/bin/tsc -b tsconfig.json --pretty false` | public exports、包边界和严格类型 |
-| 3 | `node node_modules/vitest/vitest.mjs run --coverage` | 全量发现数、覆盖率；IM store/队列修改需已导出专用 PG/Redis 测试端点 |
-| 4 | `node node_modules/markdownlint-cli2/markdownlint-cli2-bin.mjs` | 仓库 Markdown，含隐藏 AI 资产 |
-| 5 | `cmd /c "pnpm build"` | 在 Windows 允许的包管理 shim 例外 |
-| 6 | `node packages/cli/dist/index.js eval --validate-only` | build 后离线 fixture 验证，不是 LLM 质量证据 |
-| 7 | `cmd /c "pnpm test:browser"` | build 后真实管理 UI；浏览器未安装先记录并按授权完成前置 |
-| 8 | `cmd /c "pnpm docs:check"` | 新 schema 的文档字段/类型引用 |
-| 9 | `cmd /c "pnpm docs:build"` | 两种语言页面和站点；与 docs:check/browser 顺序运行 |
-| 10 | `git diff --check` | 检查 whitespace；同时审查无关 diff 没有被覆盖 |
-
-Linux 使用仓库基线的 `pnpm run ci` 和对应 browser/docs 命令。真实后端准备与清理按
-[服务指南](../testing-services.md)，不要随意下载/启动未授权生产服务或清空共享数据库。
-PG/Redis 环境变量、SVN/P4 executable 变量以仓库基线为准；缺少某项要写该断言“未运行”，不能算通过。
+最终门禁及顺序以[仓库基线](../ai/AGENTS.repository-baseline.md)为准，每条保存日志和退出码。
+IM store、队列或迁移修改须启用专用 PG/Redis 后端；管理页面修改须运行浏览器门禁；
+字段文档须通过 docs:check，公开页面须通过 docs:build。定向检查不能替代最终门禁。
+真实后端准备与清理按[服务指南](../testing-services.md)，环境变量以仓库基线为准。
 手动真实 IM 账户用例独立于全量 coverage，防止重复消息和付费调用。
-
-本轮只改内部 Markdown：运行第 4、10 项和新增文档的本地引用、YAML 示例语法、skill 元数据、
-任务依赖及编号完整性检查。YAML 可解析不代表当前 runtime 支持草案字段。
 
 ## 12. 完成判定
 

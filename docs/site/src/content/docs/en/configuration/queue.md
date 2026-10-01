@@ -48,7 +48,7 @@ replaces the inherited value as a whole.
 review:
   auto_commit:
     delay_seconds: 300
-    queued_timeout_hours: 48
+    queued_timeout_hours: 72
     schedule:
       timezone: Asia/Shanghai
       rules:
@@ -87,11 +87,39 @@ GitLab `Push Hook` events use this same filter and persistent queue. Branch
 creation/deletion notifications with an all-zero before/after SHA are ignored.
 
 `queued_timeout_hours` bounds how long a queued automatic commit may wait
-before it is terminally skipped: pending entries older than the bound are
-marked `queued_timeout` and the Events decision flips from `queued` to
-`timeout`, so a stuck queue never accumulates silently. The default is `48`;
-`0` disables the sweep and the maximum is `8760` (365 days). The nearest
-explicitly set layer wins, like the other fields above.
+before it is terminally skipped: pending entries and queued batches
+(`dispatch_pending`/`queued`/`retry_wait`) older than the bound are marked
+`queued_timeout`, their in-flight run rows flip to `timeout`, and the Events
+decision flips from `queued` to `timeout`, so a stuck queue never accumulates
+silently and a long downtime never replays ancient work. Age counts from the
+member's first receipt admission, including time spent waiting for metadata
+and the initial delay. A batch inherits its oldest member's admission time.
+Every automatic recovery path
+checks it before acting — the startup sweep (before dispatching begins),
+expired-lease reclaim, interrupted-batch recovery, legacy dead-batch requeue,
+and the dispatch claim itself: an over-aged task is always terminated, never
+resurrected. The dashboard's manual Retry starts a fresh waiting period while
+preserving publication checkpoints. The default is
+`72`; `0` disables the sweep and the maximum is `8760` (365 days). The nearest
+explicitly set layer wins, like the other fields above. Running batches stay
+under the lease/retry lifecycle and are not timed out by the periodic sweep;
+to stop one early use the IM `aicr cancel` command, Queue's Cancel action,
+or Runs' Terminate action. Expired or interrupted executions are checked
+before automatic recovery; a live execution with a valid lease is preserved.
+Completed receipts are never relabeled as queue timeouts.
+
+The same resolved timeout applies to waiting IM review requests, measured from
+request acceptance. Expired requests close with `im.queued_timeout` and notify
+their original conversation through the notification outbox; running requests
+are preserved. Queue Requeue clears a pending batch's retry delay, and Runs
+Re-review creates a new run using the stored event and current configuration.
+Stored events preserve PR/MR targets, forks and commit ranges. Historical rows
+without enough event data return an explicit error instead of reviewing a
+different target.
+
+PR/MR events waiting for an execution window also expire under this timeout,
+including during startup recovery. Bot cancellation removes matching waiting
+deferrals durably before they can resume.
 
 ## Pull request schedules
 
@@ -153,13 +181,22 @@ Waiting targets do not hold a running-review deduplication slot. Both timer
 scheduling and the actual attempt check the window, including after a process
 pause or clock change. Already running analyses can finish outside the window.
 
-A submission source is raw Git author name + email, P4 User + Client, or SVN
-`svn:author`, scoped to the repository and stream. Consecutive due commits may
-merge across notifications, up to 50 members per batch. Notifications covering
-`A1–A3`, `A4–A5`, and `B1` yield `[A1–A5]` and `[B1]` when all are due before
-sealing. Duplicate notifications never restart the delay or regroup sealed
-members. P4/SVN hooks cover only their named revision. Missing exclusion evidence
-uses bounded retries and then fails the member; it cannot silently allow it.
+A Git push is one complete review unit, including mixed authors and merge
+commits. Metadata pages and the 50-member coalescing bound cannot split it.
+Across pushes, continuous due units from one raw author name + email may merge
+up to 50 members; a mixed-author push or a push containing a merge/rewrite stays
+isolated. Two pushes containing 40 and 20 commits produce two complete batches.
+A single 550-commit push produces one batch. The atomic store bound is 4,096
+members: a larger push fails with `push_batch_too_large`, without executing a
+prefix. An internal exclusion gap fails with `exclusion_scope_conflict`; excluded
+prefixes or tails can be omitted when the remaining range is continuous.
+
+Receipts distinguish repository and branch. Moving already reviewed commits to
+another watched branch creates new work for that branch. Queue age starts at
+event admission, independent of commit dates. Duplicate deliveries preserve that
+age and sealed membership. P4/SVN retain continuous same-source grouping, up to
+50 members, keyed by User + Client or `svn:author`; hooks cover only their named
+revision. Missing exclusion evidence uses bounded retries, then fails the member.
 
 Receipts, batch membership, and execution checkpoints use the `queue.kind`
 backend. Memory state is lost on restart. A completed checkpoint recovers local

@@ -15,7 +15,7 @@
 
 import { randomUUID } from "node:crypto";
 
-import { computeMemberId, computeStreamId } from "./auto-commit-identity.js";
+import { AUTO_COMMIT_BATCH_LIMITS, computeMemberId, computeStreamId } from "./auto-commit-identity.js";
 import type { CommitBatchStatus } from "./auto-commit-identity.js";
 import type {
   AcceptReceiptInput,
@@ -29,6 +29,7 @@ import type {
   AutoCommitStore,
   BatchCompletion,
   BatchExecutionCheckpoint,
+  CancelQueuedBatchesInput,
   ClaimedDispatch,
   CommitBatchRecord,
   CommitMemberRecord,
@@ -436,6 +437,7 @@ export function createMemoryAutoCommitStore(): AutoCommitStore {
       }
       if (receipt.streamId !== input.streamId)
         throw new RangeError("Receipt stream mismatch");
+      if (receipt.timeoutReportedAt !== null) return { created: 0, updated: 0, conflicted: [] };
       let created = 0;
       let updated = 0;
       const conflicted: string[] = [];
@@ -886,7 +888,7 @@ export function createMemoryAutoCommitStore(): AutoCommitStore {
       }
       if (
         input.members.length === 0 ||
-        input.members.length > 50 ||
+        input.members.length > AUTO_COMMIT_BATCH_LIMITS.maxMembersPerBatch ||
         batches.has(input.batchId) ||
         new Set(input.members.map((m) => m.memberId)).size !==
           input.members.length
@@ -943,7 +945,7 @@ export function createMemoryAutoCommitStore(): AutoCommitStore {
         leaseOwner: null,
         leaseExpiry: null,
         lastError: null,
-        createdAt: input.now,
+        createdAt: Math.min(...input.members.map(member => members.get(member.memberId)!.record.firstAcceptedAt)),
       };
       batches.set(input.batchId, { record: batch });
       outbox.set(input.batchId, {
@@ -1386,6 +1388,7 @@ export function createMemoryAutoCommitStore(): AutoCommitStore {
         ...record,
         status: "retry_wait",
         lastError: `manual retry re-armed${record.lastError ? `; previous: ${record.lastError}` : ""}`,
+        createdAt: now,
         retryNotBefore: now,
         attempt: 1,
         recoveryAttempt: 1,
@@ -1470,7 +1473,7 @@ export function createMemoryAutoCommitStore(): AutoCommitStore {
         if (
           record.status !== "pending" ||
           record.batchId !== null ||
-          record.eligibleAt >= cutoff
+          record.firstAcceptedAt >= cutoff
         ) {
           continue;
         }
@@ -1510,12 +1513,98 @@ export function createMemoryAutoCommitStore(): AutoCommitStore {
             }
           }
         }
-        if (!open) {
+        const expired = memberIds && [...memberIds].some(id => members.get(id)?.record.terminalReason === "queued_timeout");
+        const unexpanded = (!memberIds || memberIds.size === 0) && (streams.get(receipt.streamId)?.head.coverageCursor ?? 0) < receipt.receiptSeq;
+        if (!open && (expired || unexpanded)) {
           receipts.set(receiptId, { ...receipt, timeoutReportedAt: now });
           timedOut.push(receiptId);
         }
       }
       return timedOut;
+    },
+
+    async timeoutStaleBatches(
+      cutoff: number,
+      workspaceId?: string,
+    ): Promise<readonly { batchId: string; runId: string }[]> {
+      const timedOut: { batchId: string; runId: string }[] = [];
+      for (const state of batches.values()) {
+        const record = state.record;
+        if (
+          (record.status !== "dispatch_pending" &&
+            record.status !== "queued" &&
+            record.status !== "retry_wait") ||
+          record.createdAt >= cutoff
+        ) {
+          continue;
+        }
+        if (workspaceId !== undefined) {
+          const stream = streams.get(record.streamId);
+          if (stream?.head.workspaceId !== workspaceId) continue;
+        }
+        terminalSkipMemoryBatch(record.batchId, "queued_timeout");
+        timedOut.push({ batchId: record.batchId, runId: record.runId });
+      }
+      return timedOut;
+    },
+
+    async cancelQueuedBatches(
+      input: CancelQueuedBatchesInput,
+    ): Promise<readonly { batchId: string; runId: string }[]> {
+      const statuses = new Set<string>(
+        input.statuses ?? ["dispatch_pending", "queued", "retry_wait"],
+      );
+      const batchIds = input.batchIds !== undefined ? new Set<string>(input.batchIds) : undefined;
+      const cancelled: { batchId: string; runId: string }[] = [];
+      for (const state of batches.values()) {
+        const record = state.record;
+        if (!statuses.has(record.status)) continue;
+        if (batchIds !== undefined && !batchIds.has(record.batchId)) continue;
+        if (input.leaseToken !== undefined && record.leaseToken !== input.leaseToken) continue;
+        if (input.leaseExpiredBefore !== undefined && (record.leaseExpiry ?? Infinity) > input.leaseExpiredBefore) continue;
+        if (input.workspaceId !== undefined) {
+          const stream = streams.get(record.streamId);
+          if (stream?.head.workspaceId !== input.workspaceId) continue;
+        }
+        if (input.triggerName !== undefined && record.triggerName !== input.triggerName) continue;
+        if (input.scopeRef !== undefined && record.scopeRef !== input.scopeRef) continue;
+        if (input.head !== undefined && !record.head.startsWith(input.head)) continue;
+        if (input.createdBefore !== undefined && record.createdAt >= input.createdBefore) continue;
+        terminalSkipMemoryBatch(record.batchId, input.reason ?? "cancelled_by_user");
+        cancelled.push({ batchId: record.batchId, runId: record.runId });
+      }
+      return cancelled;
+    },
+
+    async requeueStalledBatch(
+      batchId: string,
+      now: number,
+    ): Promise<CommitBatchRecord | undefined> {
+      const batch = batches.get(batchId);
+      if (!batch) return undefined;
+      const record = batch.record;
+      if (
+        record.status !== "retry_wait" &&
+        record.status !== "queued" &&
+        record.status !== "dispatch_pending"
+      ) {
+        return undefined;
+      }
+      batch.record = {
+        ...record,
+        status: "retry_wait",
+        retryNotBefore: null,
+        leaseToken: null,
+        leaseOwner: null,
+        leaseExpiry: null,
+      };
+      outbox.set(batchId, {
+        entry: { batchId, status: "pending", nextAttemptAt: now },
+        claimToken: null,
+        claimExpiry: null,
+      });
+      recomputeStreamNotBefore(record.streamId);
+      return batch.record;
     },
 
     async listRoutingIntakeIdsForReceipts(
@@ -1607,6 +1696,37 @@ export function createMemoryAutoCommitStore(): AutoCommitStore {
       };
     }
     recomputeStreamNotBefore(streamId);
+  }
+
+  /**
+   * Shared terminal skip for timeout/operator cancellation: members skipped,
+   * outbox entry removed, stream released. Mirrors the sqlite
+   * `terminalSkipBatch` transaction.
+   */
+  function terminalSkipMemoryBatch(batchId: string, reason: string): void {
+    const batch = batches.get(batchId);
+    if (!batch) return;
+    const record = batch.record;
+    batch.record = {
+      ...record,
+      status: "skipped",
+      lastError: reason,
+      leaseToken: null,
+      leaseOwner: null,
+      leaseExpiry: null,
+    };
+    for (const member of record.members) {
+      const state = members.get(member.memberId);
+      if (state && state.record.batchId === batchId && state.record.status === "batched") {
+        state.record = {
+          ...state.record,
+          status: "skipped",
+          terminalReason: reason,
+        };
+      }
+    }
+    outbox.delete(batchId);
+    clearStreamActiveBatch(record.streamId, batchId);
   }
 
   /**

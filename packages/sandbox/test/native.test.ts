@@ -7,6 +7,17 @@ import { describe, expect, it } from "vitest";
 import { createNativeSandboxBackend } from "../src/native.js";
 import { GRACE_PERIOD_MS } from "../src/types.js";
 
+it("aborts an active native agent before its long timeout", async () => {
+  const controller = new AbortController();
+  const backend = createNativeSandboxBackend();
+  const result = await backend.spawn({ command: ["node", "-e", "process.stdout.write('ready');setInterval(()=>{},1000)"],
+    cwd: process.cwd(), timeoutMs: 60000, signal: controller.signal,
+    onStdout: () => controller.abort(new Error("operator cancellation")) });
+  expect(result.timedOut).toBe(false);
+  expect(result.exitCode).not.toBe(0);
+  expect(result.durationMs).toBeLessThan(15000);
+});
+
 // Agent helper: spawns a grandchild worker (inheriting stdio) that keeps
 // writing a heartbeat, swallows SIGTERM, and outlives the sandbox timeout.
 // With the OLD timeout code only the direct child was signalled, so the

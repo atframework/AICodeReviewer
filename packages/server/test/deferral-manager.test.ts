@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 
 import {
   compileWeeklySchedule,
+  createReviewEvent,
   createMemoryAutoCommitStore,
   type CompiledWeeklySchedule,
 } from "@aicr/core";
@@ -15,6 +16,8 @@ import {
   listPendingReviewDeferrals,
   upsertReviewDeferral,
   claimReviewDeferral,
+  cancelPendingReviewDeferral,
+  getReviewDeferral,
   type StoreDb,
 } from "@aicr/store";
 import type { Hono } from "hono";
@@ -124,6 +127,68 @@ afterEach(async () => {
 });
 
 describe("persistent review deferrals", () => {
+  it("expires ancient deferred reviews before startup can resume them", async () => {
+    vi.useFakeTimers();
+    const now = Date.now();
+    vi.setSystemTime(now - 4 * 86400000);
+    const event = createReviewEvent({ provider: "gitea", workspaceId: "ws", triggerName: "git",
+      repoRef: "org/repo", targetKind: "pull_request", headSha: "old", author: {}, reason: "webhook" });
+    await upsertReviewDeferral(store, { dedupKey: computeDeferralKey(event), workspaceId: "ws", provider: "gitea",
+      eventName: "pull_request", reviewEvent: JSON.stringify(event), notBefore: new Date(now) });
+    vi.setSystemTime(now);
+    const manager = new ReviewDeferralManager({ store, queuedTimeoutFor: () => 72 * 3600000 });
+    const resume = vi.fn();
+    manager.resumeHandler = resume;
+    try {
+      await manager.recover();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(await listPendingReviewDeferrals(store)).toHaveLength(0);
+      expect(resume).not.toHaveBeenCalled();
+    } finally { await manager.drain(); vi.useRealTimers(); }
+  });
+
+  it("durably cancels only matched deferrals and invalidates their timers", async () => {
+    vi.useFakeTimers();
+    const manager = new ReviewDeferralManager({ store });
+    const resume = vi.fn();
+    manager.resumeHandler = resume;
+    const event = createReviewEvent({ provider: "gitea", workspaceId: "ws", triggerName: "git",
+      repoRef: "org/repo", targetKind: "pull_request", headSha: "old", author: {}, reason: "webhook" });
+    try {
+      await manager.defer({ provider: "gitea", eventName: "pull_request", decoded: {}, reviewEvent: event }, Date.now() + 1000);
+      expect(await manager.cancelPending(target => target.reviewEvent.repoRef === "org/other")).toBe(0);
+      expect(await manager.cancelPending(target => target.reviewEvent.repoRef === "org/repo")).toBe(1);
+      await vi.advanceTimersByTimeAsync(1001);
+      expect(resume).not.toHaveBeenCalled();
+      expect(await listPendingReviewDeferrals(store)).toHaveLength(0);
+    } finally { await manager.drain(); vi.useRealTimers(); }
+  });
+
+  it("does not cancel a replacement event or a claimed deferral", async () => {
+    const first = { dedupKey: "key", workspaceId: "ws", provider: "gitea", eventName: "pull_request",
+      reviewEvent: "old", notBefore: new Date(Date.now() + 1000) };
+    const observed = await upsertReviewDeferral(store, first);
+    await upsertReviewDeferral(store, { ...first, reviewEvent: "new" });
+    expect(await cancelPendingReviewDeferral(store, observed)).toBe(false);
+    const updated = (await getReviewDeferral(store, "key"))!;
+    await claimReviewDeferral(store, "key");
+    expect(await cancelPendingReviewDeferral(store, updated)).toBe(false);
+  });
+
+  it("expires memory-only deferrals at the execution boundary", async () => {
+    vi.useFakeTimers();
+    const manager = new ReviewDeferralManager({ queuedTimeoutFor: () => 100 });
+    const resume = vi.fn();
+    manager.resumeHandler = resume;
+    const event = createReviewEvent({ provider: "gitea", workspaceId: "ws", triggerName: "git",
+      repoRef: "org/repo", targetKind: "pull_request", headSha: "old", author: {}, reason: "webhook" });
+    try {
+      await manager.defer({ provider: "gitea", eventName: "pull_request", decoded: {}, reviewEvent: event }, Date.now() + 200);
+      await vi.advanceTimersByTimeAsync(201);
+      expect(resume).not.toHaveBeenCalled();
+    } finally { await manager.drain(); vi.useRealTimers(); }
+  });
+
   it("persists a window-deferred event, records it, and resumes at the window", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(Date.parse(FRIDAY_AFTER_WINDOW));

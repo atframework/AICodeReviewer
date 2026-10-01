@@ -1,11 +1,8 @@
 # IM 集成草案示例
 
-这些片段属于[开发计划](../Plan.md)。自 IM-05 起 `wecom_app` 应用发送已接线
-（连接引用、recipients/appchat 目标、2048 字节 UTF-8 安全分片、逐片回执）；
-回调、文件目录与命令评审运行时仍未接线，数据库发布侧对无消费者记录仍由能力门禁拒绝，
-不要把片段复制到生产 `config.yaml` 期待完整功能。
-字段规则见[集成设计](../docs/design/im-integrations.md)和[文件目录](../docs/design/member-directory.md)。
-开发按[执行手册](../docs/design/im-implementation.md)逐项推进，不能把 YAML 语法检查当运行验收。
+这些片段说明[开发计划](../Plan.md)中的配置关系，不构成可直接运行的完整配置。
+当前可用示例见[示例说明](README.md)；字段规则见[集成设计](../docs/design/im-integrations.md)
+和[文件目录](../docs/design/member-directory.md)，未完成能力以计划和实际运行验收为准。
 凭据及人员资料均为占位值，不包含真实成员信息。
 
 ## 连接、输出与命令授权

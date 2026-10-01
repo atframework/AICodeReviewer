@@ -8,6 +8,27 @@ import { describe, expect, it } from "vitest";
 import { preflightSandbox, createDockerSandboxBackend } from "../src/docker.js";
 
 describe("createDockerSandboxBackend", () => {
+  it("forwards cancellation and forcibly removes the running container", async () => {
+    const controller = new AbortController();
+    const calls: string[][] = [];
+    let started!: () => void;
+    const ready = new Promise<void>(resolve => { started = resolve; });
+    const backend = createDockerSandboxBackend({ commandRunner: async (_engine, args, options) => {
+      calls.push([...args]);
+      if (args[0] === "run") {
+        expect(options?.signal).toBe(controller.signal);
+        started();
+        await new Promise<void>(resolve => options?.signal?.addEventListener("abort", () => resolve(), { once: true }));
+      }
+      return { stdout: "", stderr: "", exitCode: null };
+    } });
+    const running = backend.spawn({ command: ["node", "-v"], cwd: process.cwd(), signal: controller.signal });
+    await ready;
+    controller.abort();
+    await running;
+    const nameIndex = calls[0]!.indexOf("--name");
+    expect(calls[1]).toEqual(["rm", "-f", calls[0]![nameIndex + 1]]);
+  });
   it.each(["docker", "podman", "docker_socket"] as const)("forwards stdout observers for %s", async (kind) => {
     const chunks: string[] = [];
     const backend = createDockerSandboxBackend({ kind, commandRunner: async (_engine, _args, options) => {

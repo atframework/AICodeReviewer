@@ -4,6 +4,7 @@ import type { StoreDb } from "./database.js";
 import { reviewDeferrals, type ReviewDeferralStatus } from "./schema.js";
 import {
   claimReviewDeferralPg,
+  cancelPendingReviewDeferralPg,
   completeReviewDeferralPg,
   deleteReviewDeferralPg,
   getReviewDeferralPg,
@@ -137,6 +138,14 @@ export async function deleteReviewDeferral(store: StoreDb, dedupKey: string): Pr
     return deleteReviewDeferralPg(store, dedupKey);
   }
   store.db.delete(reviewDeferrals).where(eq(reviewDeferrals.dedupKey, dedupKey)).run();
+}
+
+/** Cancel only the observed waiting envelope; a newer event or claim wins. */
+export async function cancelPendingReviewDeferral(store: StoreDb, row: ReviewDeferralRow): Promise<boolean> {
+  if (store.kind === "postgres") return cancelPendingReviewDeferralPg(store, row);
+  return store.db.delete(reviewDeferrals).where(sql`${reviewDeferrals.dedupKey} = ${row.dedupKey}
+    AND ${reviewDeferrals.status} = 'pending' AND ${reviewDeferrals.updatedAt} = ${row.updatedAt.getTime()}
+    AND ${reviewDeferrals.reviewEvent} = ${row.reviewEvent}`).run().changes > 0;
 }
 
 export async function listPendingReviewDeferrals(store: StoreDb, includeClaimed = false): Promise<ReviewDeferralRow[]> {

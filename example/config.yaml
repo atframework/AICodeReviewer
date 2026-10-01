@@ -955,9 +955,11 @@ review:
   # schedule replaces wholesale at the nearest layer that sets it.
   # auto_commit:
   #   delay_seconds: 300        # 0 disables the first-receive wait (max: 31536000)
-  #   queued_timeout_hours: 48  # pending queue entries older than this are terminally skipped
-  #                             # as queued_timeout (Events decision "timeout"); 0 disables the
-  #                             # sweep. Max 8760 (365 days).
+  #   queued_timeout_hours: 72  # pending entries and queued batches older than this are
+  #                             # terminally skipped as queued_timeout (Events decision
+  #                             # "timeout", run row "timeout"); the sweep also runs once at
+  #                             # boot before dispatch so a long downtime never replays ancient
+  #                             # work. 0 disables the sweep. Max 8760 (365 days).
   #   schedule:                 # weekly execution window; omitted = always allowed.
   #                             # Gates auto-commit batch starts and async issue
   #                             # triage; async PR/MR events (including comment

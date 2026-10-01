@@ -69,6 +69,16 @@ async function fetchApi(path: string, init?: RequestInit): Promise<Response> {
 }
 
 describe("observability API", () => {
+  it("authenticates termination and records cancellation only once", async () => {
+    const { createReviewCancellationService } = await import("../src/review-cancellation.js");
+    await insertReviewRun(store, { id: "operator-run", eventId: "e", workspaceId: "ws", triggerName: "git",
+      repoRef: "org/service", provider: null, providerModel: null, status: "analyzing" });
+    app = createObservabilityApi({ store, adminAuth: ADMIN_CONFIG, sessionStore,
+      cancellation: createReviewCancellationService({ store, imNamespace: "ns" }) });
+    expect((await app.request("/runs/operator-run/cancel", { method: "POST" })).status).toBe(401);
+    expect((await fetchApi("/runs/operator-run/cancel", { method: "POST" })).status).toBe(200);
+    expect((await fetchApi("/runs/operator-run/cancel", { method: "POST" })).status).toBe(409);
+  });
   it("returns bounded run/event pages with a lookahead and stable timestamp ties", async () => {
     const now = new Date();
     for (let i = 0; i < 25; i++) {
@@ -179,6 +189,87 @@ describe("observability API", () => {
       expect(response.status).toBe(200);
     }
     expect(maintenance).toHaveBeenCalledTimes(5);
+  });
+
+  it("exposes admin cancel/requeue/re-review operations with conflict handling", async () => {
+    const batches = createMemoryAutoCommitStore();
+    const now = Date.now();
+    // Seal one running batch through the store contract.
+    const sourceNamespace = "https://git.example.com/org/repo";
+    const snapshot = {
+      v: 1 as const, vcs: "git" as const, sourceNamespace, revision: "A1",
+      fields: {
+        authorName: { status: "known" as const, value: "dev" },
+        authorEmail: { status: "known" as const, value: "dev@example.com" },
+      },
+      command: "git log", observedAt: now, rulesVersion: "rules-v1",
+      sourceKey: computeSourceKey(sourceNamespace, { vcs: "git", authorName: "dev", authorEmail: "dev@example.com" }),
+      status: "known" as const,
+    };
+    const accepted = await batches.acceptReceipt({
+      deliveryKey: "delivery-ops", workspaceId: "ws", triggerName: "gitea", provider: "gitea", vcs: "git",
+      sourceNamespace, scopeRef: "refs/heads/main", historyGeneration: 0,
+      coverage: { kind: "range", base: "A0", head: "A1" }, envelope: { ref: "refs/heads/main" },
+      delaySeconds: 0, policyVersion: "pol-1", now,
+    });
+    const streamId = computeStreamId(accepted.receipt);
+    await batches.applyMetadataPage({ streamId, receiptId: accepted.receipt.receiptId,
+      members: [{ revision: "A1", orderKey: "000000000001", parents: [], sourceSnapshot: snapshot }], now });
+    const member = (await batches.readPendingMembers(streamId, null, 1)).items[0]!;
+    await batches.applyExclusionVerdicts({ streamId,
+      verdicts: [{ memberId: member.memberId, state: "allowed", policyVersion: "pol-1" }], now });
+    const reservation = await batches.acquireStreamReservation(streamId, "test", 60_000, now);
+    await batches.sealBatch({ streamId, reservationToken: reservation!.token,
+      expectedStreamVersion: reservation!.version, batchId: "batch-ops", runId: "run-ops-1",
+      members: [{ memberId: member.memberId, revision: "A1", sourceKey: snapshot.sourceKey }],
+      base: "A0", head: "A1", sourceKey: snapshot.sourceKey,
+      exclusionPolicyVersion: "rules-v1", configPolicyVersion: "pol-1", maxAttempts: 2, now,
+    });
+
+    await insertReviewRun(store, { id: "run-terminal", eventId: "run-terminal", workspaceId: "ws",
+      triggerName: "gitea", repoRef: "org/repo", provider: "test", providerModel: "test",
+      status: "failed", startedAt: new Date(), headSha: "A1", targetKind: "commit" });
+
+    const { createReviewCancellationService } = await import("../src/review-cancellation.js");
+    const cancellation = createReviewCancellationService({ store, autoCommitStore: batches, imNamespace: "ns" });
+    const reReviewCalls: string[] = [];
+    const opsApp = createObservabilityApi({
+      store, adminAuth: ADMIN_CONFIG, sessionStore,
+      cancellation,
+      requeueBatch: async (batchId) => {
+        const existing = await batches.readBatch(batchId);
+        if (existing === undefined) return { status: "not_found" as const, detail: `batch ${batchId} not found` };
+        const record = await batches.requeueStalledBatch(batchId, Date.now());
+        return record
+          ? { status: "requeued" as const, detail: `batch ${batchId} requeued (${record.status})` }
+          : { status: "not_queued" as const, detail: `batch ${batchId} is ${existing.status}` };
+      },
+      reReviewRun: async (runId) => runId === "run-terminal"
+        ? { status: "accepted" as const, detail: "started", runId: "run-fresh" }
+        : { status: "not_found" as const, detail: `run ${runId} not found` },
+    });
+    const fetchOps = (path: string) => opsApp.fetch(new Request(`http://localhost${path}`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${authToken}` },
+    }));
+
+    // Force-cancel a dispatch_pending batch by id.
+    const cancel = await fetchOps("/auto-commit/batches/batch-ops/cancel");
+    expect(cancel.status).toBe(200);
+    expect((await batches.readBatch("batch-ops"))?.status).toBe("skipped");
+    // Cancelling again hits the settled guard.
+    expect((await fetchOps("/auto-commit/batches/batch-ops/cancel")).status).toBe(409);
+    expect((await fetchOps("/auto-commit/batches/batch-missing/cancel")).status).toBe(404);
+    // Requeue refuses the now-terminal batch.
+    expect((await fetchOps("/auto-commit/batches/batch-ops/requeue")).status).toBe(409);
+    expect((await fetchOps("/auto-commit/batches/batch-missing/requeue")).status).toBe(404);
+
+    // Re-review delegates to the wired callback; unknown runs 404.
+    const rereview = await fetchOps("/runs/run-terminal/rereview");
+    expect(rereview.status).toBe(202);
+    expect(await rereview.json()).toMatchObject({ status: "accepted", runId: "run-fresh" });
+    expect((await fetchOps("/runs/run-missing/rereview")).status).toBe(404);
+    void reReviewCalls;
   });
 
   it("POST /login returns token on valid credentials", async () => {

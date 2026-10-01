@@ -195,7 +195,7 @@ tr:hover td{background:rgba(59,130,246,0.05)}
 <button class="btn btn-sm btn-ghost" id="runs-next" onclick="nextRunsPage()">Next</button>
 </div>
 <div class="table-scroll"><table>
-<thead><tr><th>ID</th><th>Time</th><th>Workspace</th><th>Trigger</th><th>Revision</th><th>Provider</th><th>Model</th><th>Status</th><th>Problems</th><th>Tokens</th><th>Duration</th></tr></thead>
+<thead><tr><th>ID</th><th>Time</th><th>Workspace</th><th>Trigger</th><th>Revision</th><th>Provider</th><th>Model</th><th>Status</th><th>Problems</th><th>Tokens</th><th>Duration</th><th>Actions</th></tr></thead>
 <tbody id="runs-table"></tbody>
 </table></div>
 </div>
@@ -647,7 +647,12 @@ function renderQueueTable(){
     var range='<span class="mono" title="'+esc(b.base+".."+b.head)+'">'+esc(String(b.head).slice(0,10))+"</span>";
     var retry=b.retryNotBefore?formatTime(b.retryNotBefore):"—";
     var canRetry=b.status==="dead"||b.status==="skipped";
-    var action=canRetry?'<button class="btn btn-sm btn-ghost" onclick="retryBatch(\''+esc(b.batchId)+'\')">Retry</button>':"";
+    var canCancel=["dispatch_pending","queued","retry_wait","running"].indexOf(b.status)>=0;
+    var canRequeue=["dispatch_pending","queued","retry_wait"].indexOf(b.status)>=0;
+    var action="";
+    if(canCancel)action+='<button class="btn btn-sm btn-ghost" onclick="cancelBatch(\''+esc(b.batchId)+'\')">Cancel</button> ';
+    if(canRequeue)action+='<button class="btn btn-sm btn-ghost" onclick="requeueStalledBatch(\''+esc(b.batchId)+'\')">Requeue</button> ';
+    if(canRetry)action+='<button class="btn btn-sm btn-ghost" onclick="retryBatch(\''+esc(b.batchId)+'\')">Retry</button>';
     return "<tr><td>"+formatTime(b.createdAt)+"</td><td>"+esc(b.workspaceId||"-")+"</td><td>"+
       range+"</td><td>"+statusBadge(b.status)+"</td><td>"+esc(b.attempt+"/"+b.maxAttempts+(b.recoveryAttempt>0?" (R)":""))+
       "</td><td>"+retry+"</td><td>"+esc(String(b.lastError||"-").slice(0,120))+"</td><td>"+action+"</td></tr>";
@@ -668,6 +673,40 @@ async function retryBatch(batchId){
     await loadQueue();
   }catch(ex){
     if(ind)ind.textContent="Retry failed: "+ex.message;
+  }
+}
+async function cancelBatch(batchId){
+  if(!batchId)return;
+  if(!window.confirm("Cancel this batch? A running execution is aborted (any already-published output stays); a queued batch is closed terminally and never executes."))return;
+  var ind=document.getElementById("queue-indicator");
+  try{
+    var r=await apiFetch("api/admin/auto-commit/batches/"+encodeURIComponent(batchId)+"/cancel",{method:"POST"});
+    if(!r.ok){
+      var data={};
+      try{data=await r.json()}catch(_parseError){}
+      throw new Error(data.message||("HTTP "+r.status));
+    }
+    if(ind)ind.textContent="Cancelled "+String(batchId).slice(0,8)+"…";
+    await loadQueue();
+  }catch(ex){
+    if(ind)ind.textContent="Cancel failed: "+ex.message;
+  }
+}
+async function requeueStalledBatch(batchId){
+  if(!batchId)return;
+  if(!window.confirm("Clear this batch's retry backoff and dispatch it immediately?"))return;
+  var ind=document.getElementById("queue-indicator");
+  try{
+    var r=await apiFetch("api/admin/auto-commit/batches/"+encodeURIComponent(batchId)+"/requeue",{method:"POST"});
+    if(!r.ok){
+      var data={};
+      try{data=await r.json()}catch(_parseError){}
+      throw new Error(data.message||("HTTP "+r.status));
+    }
+    if(ind)ind.textContent="Requeued "+String(batchId).slice(0,8)+"…";
+    await loadQueue();
+  }catch(ex){
+    if(ind)ind.textContent="Requeue failed: "+ex.message;
   }
 }
 
@@ -755,7 +794,8 @@ function renderLiveTable(){
       liveMetric("Tokens",liveTokensCell(r))+liveMetric("Cache Hit",cacheHit)+
       liveMetric("LLM Requests",requests)+liveMetric("Estimated Cost",cost)+
       '</dl><div class="cell-sub">Usage updated '+(r.metricsUpdatedAt?formatTime(r.metricsUpdatedAt):"—")+
-      (m.usageSource?' · '+esc(m.usageSource):'')+(r.compressed?' · Prompt compressed':'')+'</div></article>';
+      (m.usageSource?' · '+esc(m.usageSource):'')+(r.compressed?' · Prompt compressed':'')+'</div>'+
+      '<button class="btn btn-sm btn-ghost" onclick="cancelRun(\''+esc(r.runId)+'\')">Terminate</button></article>';
   }).join("");
   tickLiveElapsed();
 }
@@ -893,7 +933,7 @@ function runStatusCell(r){
 function renderRunsTable(runs,target,compact){
   var el=target||document.getElementById("runs-table");
   if(!runs||runs.length===0){
-    el.innerHTML='<tr><td colspan="'+(compact?8:11)+'" style="text-align:center;color:var(--muted)">No runs</td></tr>';
+    el.innerHTML='<tr><td colspan="'+(compact?8:12)+'" style="text-align:center;color:var(--muted)">No runs</td></tr>';
     return;
   }
   el.innerHTML=runs.map(function(r){
@@ -902,11 +942,42 @@ function renderRunsTable(runs,target,compact){
         revisionCell(r)+"<td>"+esc(r.provider||"-")+"</td>"+runStatusCell(r)+"<td>"+
         formatNumber(r.problemCount)+"</td><td>"+runTokensCell(r)+"</td><td>"+formatDuration(r.durationMs)+"</td></tr>";
     }
+    var terminal=["succeeded","failed","cancelled","timeout","skipped"].indexOf(r.status)>=0;
+    var reReviewable=terminal;
+    var actions=reReviewable?'<button class="btn btn-sm btn-ghost" onclick="rereviewRun(\''+esc(r.id)+'\')">Re-review</button>':"";
+    if(!terminal)actions+='<button class="btn btn-sm btn-ghost" onclick="cancelRun(\''+esc(r.id)+'\')">Terminate</button>';
     return "<tr><td>"+esc(r.id.slice(0,8))+"</td><td>"+formatTime(r.startedAt)+"</td><td>"+
       esc(r.workspaceId)+"</td><td>"+esc(r.triggerName||"-")+"</td>"+
       revisionCell(r)+"<td>"+esc(r.provider||"-")+"</td><td>"+esc(r.providerModel||"-")+"</td>"+runStatusCell(r)+"<td>"+formatNumber(r.problemCount)+"</td><td>"+
-      runTokensCell(r)+"</td><td>"+formatDuration(r.durationMs)+"</td></tr>";
+      runTokensCell(r)+"</td><td>"+formatDuration(r.durationMs)+"</td><td>"+actions+"</td></tr>";
   }).join("");
+}
+async function cancelRun(runId){
+  if(!window.confirm("Terminate this review? Output already published will remain."))return;
+  var ind=document.getElementById(liveIsVisible()?"live-indicator":"runs-loading");
+  try{
+    var response=await apiFetch("api/admin/runs/"+encodeURIComponent(runId)+"/cancel",{method:"POST"});
+    var data=await response.json();
+    if(!response.ok)throw new Error(data.detail||data.message||("HTTP "+response.status));
+    if(ind)ind.textContent="Termination requested";
+    await loadRuns();
+    if(liveIsVisible())await loadLiveRuns();
+  }catch(ex){if(ind)ind.textContent="Terminate failed: "+ex.message}
+}
+async function rereviewRun(runId){
+  if(!runId)return;
+  if(!window.confirm("Start a re-review of this run against the current configuration?"))return;
+  var ind=document.getElementById("runs-loading");
+  try{
+    var r=await apiFetch("api/admin/runs/"+encodeURIComponent(runId)+"/rereview",{method:"POST"});
+    var data={};
+    try{data=await r.json()}catch(_parseError){}
+    if(!r.ok&&r.status!==202)throw new Error(data.message||data.detail||("HTTP "+r.status));
+    if(ind)ind.textContent="Re-review started (run "+String(data.runId||"").slice(0,8)+"…)";
+    loadRuns();
+  }catch(ex){
+    if(ind)ind.textContent="Re-review failed: "+ex.message;
+  }
 }
 
 function renderProjectTable(data){

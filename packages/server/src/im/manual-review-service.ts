@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 import type { AppConfig } from "@aicr/core";
-import { createReviewEvent, type ReviewEvent } from "@aicr/core";
+import { createReviewEvent, resolveAutoCommitPolicy, type ReviewEvent } from "@aicr/core";
 import type { StoreDb } from "@aicr/store";
 import {
   claimDueImReviewRequests,
@@ -11,6 +11,9 @@ import {
   renewImReviewLease,
   updateImReviewRequest,
   imReviewJobId,
+  listImReviewRequestsForAdmin,
+  cancelImReviewRequest,
+  updateRunStatus,
   type ClaimedImReviewRequest,
   type ImTerminalState,
   type ImReviewRequestRow,
@@ -39,6 +42,13 @@ export function classifyImReviewResult(result: Pick<ReviewOrchestrationResult, "
 }
 
 /**
+ * Abort reason marker for operator-driven cancellation of a running IM
+ * review request; distinguishes cancel from lease-renewal interrupts so the
+ * bootstrap execution hook can leave the run row to the cancel coordinator.
+ */
+export const IM_CANCEL_REASON = "aicr.im_cancelled";
+
+/**
  * IM-14 request worker (design §7.3, contracts §5): claims due requests,
  * validates the fixed revision through the trusted VCS adapter, builds a
  * ReviewEvent with the im_command requestOrigin, dispatches through the
@@ -64,6 +74,8 @@ export interface ManualReviewWorkerOptions {
 export class ManualReviewService {
   private readonly options: Required<ManualReviewWorkerOptions>;
   private running = false;
+  /** Live per-request execution controllers (operator cancel path). */
+  private readonly cancelAborts = new Map<string, AbortController>();
 
   constructor(options: ManualReviewWorkerOptions) {
     this.options = {
@@ -83,6 +95,8 @@ export class ManualReviewService {
     if (this.running) return 0;
     this.running = true;
     try {
+      const configs = new Map<string, AppConfig>();
+      await this.expireQueued(configs);
       const now = this.options.now();
       const claimed = await claimDueImReviewRequests(this.options.store, {
         namespace: this.options.namespace,
@@ -93,6 +107,7 @@ export class ManualReviewService {
       });
       for (const claim of claimed) {
         const controller = new AbortController();
+        this.cancelAborts.set(claim.request.requestId, controller);
         const renew = async () => {
           try {
             const valid = await renewImReviewLease(this.options.store, {
@@ -105,7 +120,7 @@ export class ManualReviewService {
         const timer = setInterval(() => { void renew(); }, Math.max(1, Math.floor(this.options.leaseMs / 3)));
         timer.unref();
         try {
-          await this.processClaim(claim, controller.signal);
+          await this.processClaim(claim, controller.signal, configs);
         } catch (error) {
           console.warn(JSON.stringify({ msg: "im_review_failed", requestId: claim.request.requestId, error: String(error) }));
           if (!controller.signal.aborted) {
@@ -117,6 +132,7 @@ export class ManualReviewService {
           }
         } finally {
           clearInterval(timer);
+          this.cancelAborts.delete(claim.request.requestId);
         }
       }
       return claimed.length;
@@ -125,7 +141,50 @@ export class ManualReviewService {
     }
   }
 
-  private async processClaim(claim: ClaimedImReviewRequest, signal: AbortSignal): Promise<void> {
+  /**
+   * Aborts the live execution of one request (operator cancellation). The
+   * caller owns the terminal store transition (`cancelImReviewRequest`
+   * bumps the fence, so this worker's later fenced writes no-op). Returns
+   * false when no execution is live for the request id.
+   */
+  cancelRunning(requestId: string): boolean {
+    const controller = this.cancelAborts.get(requestId);
+    if (!controller) return false;
+    controller.abort(IM_CANCEL_REASON);
+    return true;
+  }
+
+  /** May run while another request awaits admission; executing reviews survive. */
+  async expireQueued(configs = new Map<string, AppConfig>()): Promise<number> {
+    const rows = [];
+    for (let offset = 0; ; offset += 200) {
+      const page = await listImReviewRequestsForAdmin(this.options.store, 200, offset);
+      rows.push(...page);
+      if (page.length < 200) break;
+    }
+    let expired = 0;
+    for (const row of rows) {
+      if (row.namespace !== this.options.namespace || !["accepted", "validating", "queued", "retry_wait"].includes(row.state)) continue;
+      const request = await findImReviewRequest(this.options.store, this.options.namespace, row.requestId);
+      if (!request) continue;
+      const config = configs.get(request.configSnapshotId) ?? await this.options.getConfig(request.configSnapshotId);
+      configs.set(request.configSnapshotId, config);
+      const timeoutMs = resolveAutoCommitPolicy(config.review.auto_commit, config.workspaces.defaults.review?.auto_commit,
+        config.workspaces.instances[row.workspaceId]?.review?.auto_commit).queuedTimeoutMs;
+      const now = this.options.now();
+      if (timeoutMs === null || row.createdAt.getTime() >= now.getTime() - timeoutMs) continue;
+      const notification = buildTerminalNotification(request, "rejected", "im.queued_timeout");
+      if (!await cancelImReviewRequest(this.options.store, { requestId: request.requestId,
+        states: ["accepted", "validating", "queued", "retry_wait"], errorCode: "im.queued_timeout",
+        ...(notification ? { notifications: [notification] } : {}), now })) continue;
+      this.cancelRunning(request.requestId);
+      await updateRunStatus(this.options.store, request.runId, "timeout", { error: "queued_timeout", onlyIfActive: true });
+      expired++;
+    }
+    return expired;
+  }
+
+  private async processClaim(claim: ClaimedImReviewRequest, signal: AbortSignal, configs: Map<string, AppConfig>): Promise<void> {
     const request = claim.request;
     const now = this.options.now();
     const { fence } = claim;
@@ -136,7 +195,7 @@ export class ManualReviewService {
       return;
     }
 
-    const config = await this.options.getConfig(request.configSnapshotId);
+    const config = configs.get(request.configSnapshotId) ?? await this.options.getConfig(request.configSnapshotId);
 
     // An interrupted published run cannot be replayed without its remote
     // publication journal. Keep the uncertainty visible and release the target.
@@ -247,6 +306,7 @@ function buildTerminalNotification(
   request: { readonly requestId: string; readonly connectionIdentity: string; readonly configVersionJson: string; readonly conversationJson: string; readonly requestedByType: string; readonly requestedById: string; readonly repoRef: string; readonly requestedRevision: string; readonly resolvedRevision: string | null },
   state: string,
   errorCode: string | undefined,
+  operationKind: "review_terminal" | "review_cancelled" = "review_terminal",
 ): { readonly operationId: string; readonly destinationIdentity: string; readonly operationKind: string; readonly payloadDigest: string; readonly compactReceipt: string } | undefined {
   let connectionName = "";
   try {
@@ -270,8 +330,15 @@ function buildTerminalNotification(
   return {
     operationId: `imn-${request.requestId}`,
     destinationIdentity: connectionName,
-    operationKind: "review_terminal",
+    operationKind,
     payloadDigest: `${state}:${request.requestId}`,
     compactReceipt: receipt,
   };
+}
+
+/** Notification for an operator-cancelled request (same pipeline, cancelled kind). */
+export function buildCancelledNotification(
+  request: Parameters<typeof buildTerminalNotification>[0],
+): ReturnType<typeof buildTerminalNotification> {
+  return buildTerminalNotification(request, "rejected", "im.cancelled_by_user", "review_cancelled");
 }

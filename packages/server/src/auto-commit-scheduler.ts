@@ -1,4 +1,5 @@
 import {
+  AUTO_COMMIT_BATCH_LIMITS,
   computeMemberId,
   cutAutoCommitBatches,
   decideExclusion,
@@ -12,6 +13,8 @@ import {
   type AutoCommitStore,
   type StreamKeyInput,
   type CommitBatchRecord,
+  type CommitBatchStatus,
+  readAllAutoCommitBatches,
   type CommitMemberRecord,
   type MemberExclusionState,
   type ResolvedAutoCommitPolicy,
@@ -111,6 +114,20 @@ export interface AutoCommitSchedulerOptions {
     context: BatchExecutionContext,
     error: string,
   ) => Promise<void> | void;
+  /**
+   * Notified when a running batch is terminally cancelled through
+   * `cancelRunningBatch` (IM `aicr cancel`, admin force-terminate): the
+   * execution aborted, the batch terminally skipped, and the stream released.
+   * The owner records the outcome (e.g. run row → cancelled); hook failures
+   * are logged, never rethrown.
+   */
+  readonly onBatchCancelled?: (batchId: string, runId: string) => Promise<void> | void;
+  /**
+   * Notified when a batch is terminally skipped as `queued_timeout` by the
+   * recovery/dispatch guards (owner mirrors the outcome onto the run row,
+   * e.g. status `timeout`); hook failures are logged, never rethrown.
+   */
+  readonly onBatchTimedOut?: (batchId: string, runId: string) => Promise<void> | void;
 }
 
 interface SchedulerTuning {
@@ -130,6 +147,8 @@ interface SchedulerTuning {
   readonly globalConcurrency: number | (() => number);
   readonly perWorkspaceConcurrency: number | (() => number);
   readonly onBatchTerminal?: AutoCommitSchedulerOptions["onBatchTerminal"];
+  readonly onBatchCancelled?: AutoCommitSchedulerOptions["onBatchCancelled"];
+  readonly onBatchTimedOut?: AutoCommitSchedulerOptions["onBatchTimedOut"];
 }
 
 const DEFAULTS: SchedulerTuning = {
@@ -152,6 +171,13 @@ const DEFAULTS: SchedulerTuning = {
 
 const STREAM_FAILURE_RETRY_MS = 5_000;
 
+/**
+ * Abort reason marker for operator-driven cancellation of a running batch
+ * (IM `aicr cancel`, admin force-terminate). Distinguishes the intentional
+ * cancel (terminal skip, no retry) from shutdown/lease interrupts (retry).
+ */
+export const BATCH_CANCEL_REASON = "aicr.batch_cancelled";
+
 export class AutoCommitScheduler {
   private readonly store: AutoCommitStore;
   private readonly getPolicy: AutoCommitSchedulerOptions["getPolicy"];
@@ -172,6 +198,8 @@ export class AutoCommitScheduler {
    * Re-created on start() — an aborted controller must never leak into a
    * later session. */
   private execAbort: AbortController = new AbortController();
+  /** Live per-batch execution controllers, keyed by batch id (cancel path). */
+  private readonly cancelAborts = new Map<string, AbortController>();
   /** Streams that threw during the current tick; floors the next re-arm. */
   private streamFailures = 0;
   private tickCompletion: Promise<void> | null = null;
@@ -212,6 +240,8 @@ export class AutoCommitScheduler {
       perWorkspaceConcurrency:
         options.perWorkspaceConcurrency ?? DEFAULTS.perWorkspaceConcurrency,
       onBatchTerminal: options.onBatchTerminal,
+      onBatchCancelled: options.onBatchCancelled,
+      onBatchTimedOut: options.onBatchTimedOut,
     };
     this.concurrency = options.executionConcurrency ?? new ExecutionConcurrency(() => ({
       global: typeof this.options.globalConcurrency === "function" ? this.options.globalConcurrency() : this.options.globalConcurrency,
@@ -236,6 +266,10 @@ export class AutoCommitScheduler {
     this.bootTask = (async () => {
       try {
         const now = this.now();
+        // Timeout guard BEFORE any recovery: a long downtime must never
+        // resurrect over-aged batches through lease reclaim or the legacy
+        // dead-batch re-arm; they are terminally skipped instead.
+        await this.terminateStaleQueuedBatches(now, ["running", "queued", "dead"], true);
         const reclaimed = await this.store.reclaimBatchesByOwner(
           this.options.consumerId,
           now,
@@ -280,6 +314,64 @@ export class AutoCommitScheduler {
     await this.routingTask;
     await Promise.all(this.preparations.values());
     await Promise.all(this.executions);
+  }
+
+  /**
+   * Queue-timeout guard for every automatic recovery/retry path: batches
+   * whose FIRST queue entry (`createdAt`) is older than their workspace's
+   * `queued_timeout_hours` bound are terminally skipped before any reclaim,
+   * dead-batch re-arm, or dispatch execution can resurrect them. Returns the
+   * number of batches terminally skipped. Manual admin re-arm is exempt (an
+   * operator's explicit decision may raise the bound first).
+   */
+  private async terminateStaleQueuedBatches(
+    now: number,
+    statuses: readonly CommitBatchStatus[],
+    boot = false,
+  ): Promise<number> {
+    if (statuses.length === 0) return 0;
+    const candidates = await readAllAutoCommitBatches(this.store, statuses);
+    let skipped = 0;
+    for (const batch of candidates) {
+      // Queue age never interrupts an admitted, live review. Only an expired
+      // lease (or our previous process's lease during boot) can be recovered.
+      if (batch.status === "running" && (this.cancelAborts.has(batch.batchId)
+        || (!boot || batch.leaseOwner !== this.options.consumerId) && (batch.leaseExpiry ?? Infinity) > now)) continue;
+      const timeoutMs = this.getPolicySafe(batch.workspaceId)?.queuedTimeoutMs;
+      if (timeoutMs === null || timeoutMs === undefined) continue;
+      if (batch.createdAt >= now - timeoutMs) continue;
+      const cancelled = await this.store.cancelQueuedBatches({
+        batchIds: [batch.batchId],
+        statuses: [batch.status],
+        reason: "queued_timeout",
+        ...(batch.leaseToken !== null ? { leaseToken: batch.leaseToken } : {}),
+        ...(batch.status === "running" && (!boot || batch.leaseOwner !== this.options.consumerId) ? { leaseExpiredBefore: now } : {}),
+        createdBefore: now - timeoutMs,
+      });
+      if (cancelled.length === 0) continue;
+      skipped += 1;
+      console.warn(JSON.stringify({
+        level: "warn",
+        msg: "auto-commit recovery guard terminated a stale queued batch",
+        batchId: batch.batchId,
+        runId: batch.runId,
+        workspaceId: batch.workspaceId,
+        streamId: batch.streamId,
+        status: batch.status,
+        ageMs: now - batch.createdAt,
+      }));
+      try {
+        await this.options.onBatchTimedOut?.(batch.batchId, batch.runId);
+      } catch (hookError) {
+        console.warn(JSON.stringify({
+          level: "warn",
+          msg: "failed to record timed-out auto-commit batch outcome",
+          batchId: batch.batchId,
+          error: hookError instanceof Error ? hookError.message : String(hookError),
+        }));
+      }
+    }
+    return skipped;
   }
 
   /** Called after webhook acceptance; debounced into the single timer. */
@@ -336,6 +428,9 @@ export class AutoCommitScheduler {
           .finally(() => { this.routingTask = undefined; });
       }
       if (waitForWork) await this.routingTask;
+      // Timeout guard before expired-lease reclaim: an over-aged batch whose
+      // lease lapsed is terminally skipped, not retried.
+      await this.terminateStaleQueuedBatches(now, ["running", "queued"]);
       await this.store.reclaimExpiredBatchLeases(
         now,
         this.options.streamScanLimit,
@@ -447,6 +542,9 @@ export class AutoCommitScheduler {
   private async processStream(stream: StreamHead, now: number): Promise<void> {
     if (stream.activeBatchId) return;
     const policy = this.getPolicySafe(stream.workspaceId);
+    if (policy?.queuedTimeoutMs != null) {
+      await this.store.timeoutStaleQueue(this.now() - policy.queuedTimeoutMs, this.now(), stream.workspaceId);
+    }
     if (!policy || !isAllowedInstant(policy.schedule, this.now())) {
       const head = await this.store.readStreamHead(stream.streamId);
       if (head)
@@ -646,6 +744,8 @@ export class AutoCommitScheduler {
     policy: ResolvedAutoCommitPolicy,
     now: number,
   ): Promise<"expanded" | "retry" | "incomplete"> {
+    if (receipt.timeoutReportedAt !== null || policy.queuedTimeoutMs !== null
+      && receipt.firstAcceptedAt < this.now() - policy.queuedTimeoutMs) return "expanded";
     const coverage = receipt.coverage;
     const headRevision =
       coverage.kind === "range" ? coverage.head : coverage.revision;
@@ -971,17 +1071,15 @@ export class AutoCommitScheduler {
       return;
     }
 
-    let pending = await this.store.readPendingMembers(
-      stream.streamId,
-      null,
-      512,
-    );
+    let pending = await this.readAssemblyPending(stream);
     const stale = pending.items.filter(
       (member) => member.exclusion.policyVersion !== policy.policyVersion,
     );
     if (stale.length > 0) {
-      await this.decideMembers(stream, stale, policy, this.now());
-      pending = await this.store.readPendingMembers(stream.streamId, null, 512);
+      for (let offset = 0; offset < stale.length; offset += 256) {
+        await this.decideMembers(stream, stale.slice(offset, offset + 256), policy, this.now());
+      }
+      pending = await this.readAssemblyPending(stream);
     }
     // A new exclusion policy can require evidence absent from an already
     // expanded receipt. Re-read its bounded metadata pages through the same
@@ -1017,14 +1115,23 @@ export class AutoCommitScheduler {
         )) !== "expanded"
       )
         return;
-      pending = await this.store.readPendingMembers(stream.streamId, null, 512);
+      pending = await this.readAssemblyPending(stream);
     }
-    const verified = pending.items.filter(
+    let verified = pending.items.filter(
       (member) =>
         member.orderKey !== null &&
         member.status === "pending" &&
         member.exclusion.state === "allowed",
     );
+    if (verified.length === 0) return;
+    // A bounded read may end inside a later push. Leave that entire tail for
+    // the next pass, rather than accidentally sealing its visible prefix.
+    if (stream.vcs === "git" && pending.nextCursor !== null) {
+      const tailReceipt = verified[verified.length - 1]!.coverReceiptId;
+      if (tailReceipt !== verified[0]!.coverReceiptId) {
+        verified = verified.filter(member => member.coverReceiptId !== tailReceipt);
+      }
+    }
     if (verified.length === 0) return;
 
     // Range shape must come from VCS verification. A consumed/excluded
@@ -1041,7 +1148,7 @@ export class AutoCommitScheduler {
         view.memberCounts.skipped > 0 ||
         view.memberCounts.failed > 0 ||
         view.memberCounts.completed > 0 ||
-        view.memberCounts.pending > 50
+        view.memberCounts.pending > AUTO_COMMIT_BATCH_LIMITS.maxMembersPerBatch
       ) {
         if (view)
           await this.failReceiptMembers(
@@ -1073,6 +1180,7 @@ export class AutoCommitScheduler {
       sourceKey: member.sourceSnapshot?.sourceKey ?? "",
       sourceStatus: member.sourceSnapshot?.status ?? "unavailable",
       eligibleAt: member.eligibleAt,
+      ...(stream.vcs === "git" ? { pushReceiptId: member.coverReceiptId } : {}),
       ...(rewriteReceiptIds.has(member.coverReceiptId)
         ? { rewriteReceiptId: member.coverReceiptId }
         : {}),
@@ -1080,6 +1188,19 @@ export class AutoCommitScheduler {
     }));
 
     const assembly = cutAutoCommitBatches(candidates, now);
+    // An incomplete/excluded interior cannot safely become an endpoint net
+    // diff. Fail the affected push as a whole, retaining an explicit reason.
+    if (stream.vcs === "git" && assembly.blocked.length > 0) {
+      const blocked = new Set(assembly.blocked);
+      const receiptIds = new Set(verified.filter(member => blocked.has(member.memberId)).map(member => member.coverReceiptId));
+      for (const receiptId of receiptIds) {
+        const view = await this.store.getReceipt(receiptId);
+        if (view) await this.failReceiptMembers(stream, view.receipt, this.now(),
+          verified.filter(member => member.coverReceiptId === receiptId).length > AUTO_COMMIT_BATCH_LIMITS.maxMembersPerBatch
+            ? "push_batch_too_large" : "exclusion_scope_conflict");
+      }
+      return;
+    }
     for (const cut of assembly.ready) {
       const sealed = await this.sealCut(
         stream,
@@ -1093,6 +1214,19 @@ export class AutoCommitScheduler {
       if (!sealed) return; // reservation lost or version conflict; retry next tick
       return; // A stream owns one active batch; later cuts remain pending.
     }
+  }
+
+  /** Page enough to hold a whole push plus one overflow probe, never all backlog. */
+  private async readAssemblyPending(stream: StreamHead): Promise<{ items: readonly CommitMemberRecord[]; nextCursor: string | null }> {
+    const limit = stream.vcs === "git" ? AUTO_COMMIT_BATCH_LIMITS.maxMembersPerBatch + 1 : 512;
+    const items: CommitMemberRecord[] = [];
+    let cursor: string | null = null;
+    do {
+      const page = await this.store.readPendingMembers(stream.streamId, cursor, Math.min(512, limit - items.length));
+      items.push(...page.items);
+      cursor = page.nextCursor;
+    } while (cursor !== null && items.length < limit);
+    return { items, nextCursor: cursor };
   }
 
   private async sealCut(
@@ -1206,6 +1340,29 @@ export class AutoCommitScheduler {
     claimToken: string,
     now: number,
   ): Promise<void> {
+    // Timeout guard at the claim boundary: even between periodic sweeps, an
+    // over-aged batch must never start executing.
+    const dispatchTimeoutMs = this.getPolicySafe(batch.workspaceId)?.queuedTimeoutMs;
+    if (dispatchTimeoutMs != null && batch.createdAt < now - dispatchTimeoutMs) {
+      const cancelled = await this.store.cancelQueuedBatches({
+        batchIds: [batch.batchId],
+        statuses: [batch.status],
+        reason: "queued_timeout",
+      });
+      if (cancelled.length === 0) return;
+      console.warn(JSON.stringify({
+        level: "warn",
+        msg: "auto-commit dispatch guard terminated a stale queued batch",
+        batchId: batch.batchId,
+        runId: batch.runId,
+        workspaceId: batch.workspaceId,
+        ageMs: now - batch.createdAt,
+      }));
+      try {
+        await this.options.onBatchTimedOut?.(batch.batchId, batch.runId);
+      } catch { /* hook failures never block the guard */ }
+      return;
+    }
     const policy = this.getPolicySafe(batch.workspaceId);
     if (!policy) {
       await this.store.abortDispatch(
@@ -1256,9 +1413,10 @@ export class AutoCommitScheduler {
     const active = await this.store.readBatch(batch.batchId);
     if (!active || active.leaseToken !== leaseToken) return;
     batch = active;
-    const members = await this.store.readMembers(
-      batch.members.map((entry) => entry.memberId),
-    );
+    const members: CommitMemberRecord[] = [];
+    for (let offset = 0; offset < batch.members.length; offset += 512) {
+      members.push(...await this.store.readMembers(batch.members.slice(offset, offset + 512).map(entry => entry.memberId)));
+    }
     const firstReceiptId = members[0]?.coverReceiptId;
     const receipt = firstReceiptId
       ? await this.store.getReceipt(firstReceiptId)
@@ -1279,6 +1437,7 @@ export class AutoCommitScheduler {
     const onSchedulerAbort = () => abort.abort();
     this.execAbort.signal.addEventListener("abort", onSchedulerAbort, { once: true });
     if (this.execAbort.signal.aborted) abort.abort();
+    this.cancelAborts.set(batch.batchId, abort);
     const renew = setInterval(() => {
       void this.store
         .renewBatchLease(
@@ -1305,6 +1464,20 @@ export class AutoCommitScheduler {
         signal: abort.signal,
         recovery: active.recoveryAttempt > 0,
       });
+      if (abort.signal.reason === BATCH_CANCEL_REASON) {
+        // Operator cancellation raced the executor's return (the executor may
+        // swallow the abort and finish early). Cancellation wins: terminal
+        // skip guarantees the batch never re-executes; any output the racing
+        // execution already published stays published (force-cancel caveat).
+        await this.store.completeBatch(
+          batch.batchId,
+          leaseToken,
+          { outcome: "skipped", reason: "cancelled_by_user" },
+          this.now(),
+        );
+        await this.notifyCancelled(batch);
+        return;
+      }
       if (abort.signal.aborted) return;
       await this.store.completeBatch(
         batch.batchId,
@@ -1313,6 +1486,19 @@ export class AutoCommitScheduler {
         this.now(),
       );
     } catch (error) {
+      if (abort.signal.reason === BATCH_CANCEL_REASON) {
+        // Operator cancellation: terminal skip, never a retry and never the
+        // automatic-recovery path. completeBatch is lease-fenced, so a batch
+        // that already settled between abort and here is left untouched.
+        await this.store.completeBatch(
+          batch.batchId,
+          leaseToken,
+          { outcome: "skipped", reason: "cancelled_by_user" },
+          this.now(),
+        );
+        await this.notifyCancelled(batch);
+        return;
+      }
       const interrupted = this.stopping && abort.signal.aborted;
       const message = interrupted
         ? "interrupted_by_shutdown"
@@ -1382,9 +1568,45 @@ export class AutoCommitScheduler {
         }
       }
     } finally {
+      this.cancelAborts.delete(batch.batchId);
       this.execAbort.signal.removeEventListener("abort", onSchedulerAbort);
       clearInterval(renew);
     }
+  }
+
+  private async notifyCancelled(batch: CommitBatchRecord): Promise<void> {
+    console.warn(JSON.stringify({
+      level: "warn",
+      msg: "auto-commit batch cancelled by operator",
+      batchId: batch.batchId,
+      runId: batch.runId,
+      workspaceId: batch.workspaceId,
+      streamId: batch.streamId,
+    }));
+    try {
+      await this.options.onBatchCancelled?.(batch.batchId, batch.runId);
+    } catch (hookError) {
+      console.warn(JSON.stringify({
+        level: "warn",
+        msg: "failed to record cancelled auto-commit batch outcome",
+        batchId: batch.batchId,
+        error: hookError instanceof Error ? hookError.message : String(hookError),
+      }));
+    }
+  }
+
+  /**
+   * Terminally cancel a running batch: aborts the in-process execution with
+   * the cancel reason (terminal skip on settle, never a retry) and returns
+   * true. Returns false when this scheduler has no live execution for the
+   * batch id (not running here — queued, settled, or another process owns
+   * the lease).
+   */
+  cancelRunningBatch(batchId: string): boolean {
+    const controller = this.cancelAborts.get(batchId);
+    if (!controller) return false;
+    controller.abort(BATCH_CANCEL_REASON);
+    return true;
   }
 }
 

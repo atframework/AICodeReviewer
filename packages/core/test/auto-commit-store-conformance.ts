@@ -10,6 +10,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  computeMemberId,
   computeSourceKey,
   computeStreamId,
   type SourceSnapshot,
@@ -163,6 +164,36 @@ export function runAutoCommitStoreConformance(factory: StoreFactory): void {
     };
   }
   describe(`AutoCommitStore conformance [${factory.backendKind}]`, () => {
+    it("seals, recovers and cancels one mixed-author push larger than a member lookup page", async () => {
+      const store = await factory.makeStore();
+      const accepted = await store.acceptReceipt(receiptInput({ coverage: { kind: "range", base: "A0", head: "A550" }, delaySeconds: 0 }));
+      const streamId = computeStreamId(accepted.receipt);
+      const metadata = Array.from({ length: 550 }, (_, index) => membersOf([`A${index + 1}`], index + 1,
+        index % 2 ? "bob" : "alice", index % 2 ? "bob@example.com" : "alice@example.com")[0]!);
+      for (let offset = 0; offset < metadata.length; offset += 256) {
+        const page = metadata.slice(offset, offset + 256);
+        await store.applyMetadataPage({ streamId, receiptId: accepted.receipt.receiptId, members: page, now: T0 });
+        await store.applyExclusionVerdicts({ streamId, now: T0,
+          verdicts: page.map(m => ({ memberId: computeMemberId(streamId, m.revision), state: "allowed", policyVersion: "pol-1" })) });
+      }
+      const reservation = await store.acquireStreamReservation(streamId, "scheduler", 60_000, T0);
+      const members = metadata.map(m => ({ memberId: computeMemberId(streamId, m.revision), revision: m.revision, sourceKey: m.sourceSnapshot.sourceKey! }));
+      expect(await store.sealBatch({ streamId, reservationToken: reservation!.token, expectedStreamVersion: reservation!.version,
+        batchId: "whole-push", runId: "run-whole-push", members, base: "A0", head: "A550", sourceKey: members[0]!.sourceKey,
+        exclusionPolicyVersion: "rules-v1", configPolicyVersion: "pol-1", maxAttempts: 2, now: T0 })).toEqual({ kind: "sealed" });
+      const [claim] = await store.claimDispatch(T0, "dispatcher", 10);
+      expect(claim!.batch.members).toEqual(members);
+      await store.confirmDispatch("whole-push", claim!.claimToken, T0);
+      const token = await store.startBatchExecution("whole-push", "before-restart", 1000, T0);
+      expect(token).toBeDefined();
+      await store.reclaimBatchesByOwner("before-restart", T0 + 1);
+      expect((await store.readBatch("whole-push"))?.members).toEqual(members);
+      expect(await store.cancelQueuedBatches({ batchIds: ["whole-push"], reason: "cancelled_by_user" })).toHaveLength(1);
+      await store.completeBatch("whole-push", token!, { outcome: "completed" }, T0 + 2);
+      expect((await store.readBatch("whole-push"))?.status).toBe("skipped");
+      expect((await store.getReceipt(accepted.receipt.receiptId))?.memberCounts).toMatchObject({ skipped: 550, pending: 0, batched: 0 });
+    });
+
     it("skips busy workspaces before a bounded dispatch claim", async () => {
       const store = await factory.makeStore();
       for (let i = 0; i < 12; i++) await prepareBatch(store, `busy-${i}`, "p4-main");
@@ -1376,6 +1407,121 @@ export function runAutoCommitStoreConformance(factory: StoreFactory): void {
         await store.listRoutingIntakeIdsForReceipts(["receipt-unknown"]),
       ).toEqual([]);
       expect(await store.listRoutingIntakeIdsForReceipts([])).toEqual([]);
+    });
+
+    it("times out stale queued batches terminally and releases their streams", async () => {
+      const store = await factory.makeStore();
+      const stale = await prepareBatch(store, "timeout-batch");
+      const fresh = await prepareBatch(store, "fresh-batch", "ws2");
+      const staleBatch = (await store.readBatch(stale.batchId))!;
+      const head = await store.readStreamHead(staleBatch.streamId);
+      expect(head?.activeBatchId).toBe(stale.batchId);
+      // Before the cutoff nothing is skipped.
+      expect(await store.timeoutStaleBatches(T0 - 1_000)).toEqual([]);
+      // Past the cutoff: terminal skip with the queue-timeout reason, scoped
+      // per workspace; the fresh workspace stays untouched.
+      const timedOut = await store.timeoutStaleBatches(T0 + 100, "ws1");
+      expect(timedOut).toEqual([{ batchId: stale.batchId, runId: "run-timeout-batch" }]);
+      const after = await store.readBatch(stale.batchId);
+      expect(after?.status).toBe("skipped");
+      expect(after?.lastError).toBe("queued_timeout");
+      const headAfter = await store.readStreamHead(staleBatch.streamId);
+      expect(headAfter?.activeBatchId).toBeNull();
+      expect((await store.readBatch(fresh.batchId))?.status).toBe("dispatch_pending");
+      // Idempotent; the members became terminal, so the receipt-timeout pass
+      // (the webhook event mirror) reports the owning receipt.
+      expect(await store.timeoutStaleBatches(T0 + 200, "ws1")).toEqual([]);
+      const stamped = await store.timeoutStaleQueue(T0 + 200, T0 + 200, "ws1");
+      expect(stamped).toHaveLength(1);
+    });
+
+    it("expires first receipt time despite a long delay and fences late metadata", async () => {
+      const store = await factory.makeStore();
+      const { receipt } = await store.acceptReceipt(receiptInput({ delaySeconds: 10_000 }));
+      const streamId = computeStreamId(receipt);
+      await store.applyMetadataPage({ streamId, receiptId: receipt.receiptId, members: membersOf(["A1"], 1), now: T0 });
+      expect(await store.timeoutStaleQueue(T0 + 100, T0 + 100)).toEqual([receipt.receiptId]);
+      await store.applyMetadataPage({ streamId, receiptId: receipt.receiptId, members: membersOf(["A2"], 2), now: T0 + 200 });
+      expect((await store.readPendingMembers(streamId, null, 10)).items).toEqual([]);
+    });
+
+    it("does not relabel an old completed receipt as a queue timeout", async () => {
+      const store = await factory.makeStore();
+      await prepareBatch(store, "already-complete");
+      await dispatchOnce(store, T0);
+      const token = await store.startBatchExecution("already-complete", "w", 60000, T0);
+      await store.completeBatch("already-complete", token!, { outcome: "completed" }, T0 + 1);
+      expect(await store.timeoutStaleQueue(T0 + 200, T0 + 200)).toEqual([]);
+    });
+
+    it("fences operator cancellation against a changed running lease", async () => {
+      const store = await factory.makeStore();
+      await prepareBatch(store, "cancel-fenced");
+      await dispatchOnce(store, T0);
+      const token = await store.startBatchExecution("cancel-fenced", "w", 60000, T0);
+      expect(await store.cancelQueuedBatches({ batchIds: ["cancel-fenced"], statuses: ["running"], leaseToken: "obsolete" })).toEqual([]);
+      expect((await store.readBatch("cancel-fenced"))?.status).toBe("running");
+      expect(await store.cancelQueuedBatches({ batchIds: ["cancel-fenced"], statuses: ["running"], leaseToken: token! })).toHaveLength(1);
+      await store.completeBatch("cancel-fenced", token!, { outcome: "completed" }, T0 + 1);
+      expect((await store.readBatch("cancel-fenced"))?.status).toBe("skipped");
+    });
+
+    it("times out old batches beyond a full admin page", async () => {
+      const store = await factory.makeStore();
+      // Each fixture owns a stream; bounded parallel setup avoids thousands
+      // of sequential live-Redis round trips before the pagination assertion.
+      for (let offset = 0; offset < 513; offset += 32) {
+        await Promise.all(Array.from({ length: Math.min(32, 513 - offset) }, (_, index) =>
+          prepareBatch(store, `timeout-page-${offset + index}`)));
+      }
+      expect(await store.timeoutStaleBatches(T0 + 100)).toHaveLength(513);
+      expect(await store.readBatchesByStatus(["dispatch_pending"], 10)).toEqual([]);
+    });
+
+    it("cancels queued batches by filter and by explicit id", async () => {
+      const store = await factory.makeStore();
+      const a = await prepareBatch(store, "cancel-a");
+      const b = await prepareBatch(store, "cancel-b", "ws2");
+      await prepareBatch(store, "cancel-c");
+      // A head-revision prefix scoped to ws1 matches the two ws1 batches,
+      // not the ws2 batch (prepareBatch seals every batch at head "A1").
+      const byHead = await store.cancelQueuedBatches({ head: "A1", workspaceId: "ws1" });
+      expect(byHead.map((entry) => entry.batchId).sort()).toEqual(["cancel-a", "cancel-c"]);
+      expect((await store.readBatch(a.batchId))?.lastError).toBe("cancelled_by_user");
+      expect((await store.readBatch(b.batchId))?.status).toBe("dispatch_pending");
+      // A workspace filter reaches ws2.
+      const byWorkspace = await store.cancelQueuedBatches({ workspaceId: "ws2" });
+      expect(byWorkspace.map((entry) => entry.batchId)).toEqual([b.batchId]);
+      // The explicit-id filter only touches the listed batch; an empty id
+      // list cancels nothing.
+      const d = await prepareBatch(store, "cancel-d");
+      const e = await prepareBatch(store, "cancel-e");
+      const byIds = await store.cancelQueuedBatches({ batchIds: [d.batchId] });
+      expect(byIds.map((entry) => entry.batchId)).toEqual([d.batchId]);
+      expect((await store.readBatch(e.batchId))?.status).toBe("dispatch_pending");
+      expect(await store.cancelQueuedBatches({ batchIds: [] })).toEqual([]);
+    });
+
+    it("requeues stalled batches by clearing their retry backoff", async () => {
+      const store = await factory.makeStore();
+      const { batchId } = await prepareBatch(store, "requeue-batch");
+      const claimed = await store.claimDispatch(T0, "worker", 5);
+      const entry = claimed.find((claim) => claim.batch.batchId === batchId);
+      expect(entry).toBeDefined();
+      await store.confirmDispatch(batchId, entry!.claimToken, T0);
+      const token = await store.startBatchExecution(batchId, "worker", 60_000, T0, { global: 4, workspace: 1 });
+      expect(token).toBeDefined();
+      await store.failBatch(batchId, token!, "boom", T0 + 60_000, false, T0 + 1_000);
+      const waiting = await store.readBatch(batchId);
+      expect(waiting?.status).toBe("retry_wait");
+      expect(waiting?.retryNotBefore).toBe(T0 + 60_000);
+      const requeued = await store.requeueStalledBatch(batchId, T0 + 2_000);
+      expect(requeued?.status).toBe("retry_wait");
+      expect(requeued?.retryNotBefore).toBeNull();
+      // Terminal batches cannot be requeued through this path.
+      await store.cancelQueuedBatches({ batchIds: [batchId] });
+      expect(await store.requeueStalledBatch(batchId, T0 + 3_000)).toBeUndefined();
+      expect(await store.requeueStalledBatch("batch-unknown", T0 + 3_000)).toBeUndefined();
     });
 
     it("reports the earliest scheduling signal across heads, outbox, and leases", async () => {

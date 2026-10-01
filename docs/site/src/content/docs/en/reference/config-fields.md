@@ -418,7 +418,7 @@ commands. `review` commands additionally require a persistent config store.
 | `im.command_bindings.<id>.actors[].expires_at` | string | — | RFC 3339 timestamp; an expired matcher (exact principals and `any` alike) stops matching on its own — the general temporary-authorization mechanism |
 | `im.command_bindings.<id>.conversations[]` | object | — | `app_direct` (WeCom/Feishu applications), `bot_direct` (WeCom API bot) or `group` with a non-empty `id`; kinds must match the connection protocol |
 | `im.command_bindings.<id>.allow_all_repositories` | boolean | — | Runtime default false; when enabled, repo aliases additionally resolve by exact workspace id or full repo name against observed projects (the projects table), applying to query and review commands |
-| `im.command_bindings.<id>.commands` | enum[] | — | Unique subset of `help`, `chat-id`, `review`, `status` plus the query commands `projects`, `reviews`, `commits`, `prs`, `detail`, `prdetail`, `queue`, `running` |
+| `im.command_bindings.<id>.commands` | enum[] | — | Unique subset of `help`, `chat-id`, `review`, `status`, `cancel` plus the query commands `projects`, `reviews`, `commits`, `prs`, `detail`, `prdetail`, `queue`, `running` |
 | `im.command_bindings.<id>.repositories.<id>.workspace` | string | — | Repo alias target: workspace id, validated against routing/VCS scope at publish |
 | `im.command_bindings.<id>.repositories.<id>.source_trigger` | string | — | Repo alias target: source trigger name, validated against routing/VCS scope at publish |
 | `im.command_bindings.<id>.repositories.<id>.repo_ref` | string | — | Repo alias target: repository reference, validated against routing/VCS scope at publish |
@@ -495,7 +495,7 @@ Narrative: [Agent and sandbox](/en/configuration/agent/).
 | `review.reflection.memory.max_entries` | int > 0 | — | Max memory entries |
 | `review.reflection.memory.retention_days` | int > 0 | `90` | Memory TTL in days |
 | `review.auto_commit.delay_seconds` | int 0–31536000 | `300` | First-receive delay before an automatic commit becomes due; `0` disables the wait |
-| `review.auto_commit.queued_timeout_hours` | int 0–8760 | `48` | Pending queue entries older than this bound are terminally skipped as `queued_timeout` (Events decision `timeout`); `0` disables the sweep |
+| `review.auto_commit.queued_timeout_hours` | int 0–8760 | `72` | Maximum wait since admission for automatic entries/batches and IM requests; expired work closes with `queued_timeout` and IM notification; running work with a valid lease is preserved; `0` disables expiration |
 | `review.auto_commit.schedule.timezone` | string | `UTC` | IANA timezone for the execution schedule |
 | `review.auto_commit.schedule.rules[]` | object[] | — | Weekly rule groups (`days` weekday set + `windows` `HH:mm` ranges, union across groups); `rules: []` lifts all weekly limits |
 | `review.auto_commit.exclude_sources[]` | object[] | — | Bot/CI source exclusion rules (`id`, `vcs`, `match` field matchers with exactly one of `glob`/`regex`); `[]` clears inherited rules |

@@ -8,7 +8,7 @@ unclear. Read the matching skill; its links are conditional references.
 | Ambiguous scope, assumptions, or acceptance criteria | [agent-behavior-guardrails](agent-behavior-guardrails/SKILL.md) |
 | Agent CLI, model/MCP translation, instructions or skills materialization | [agent-runtime-integration](agent-runtime-integration/SKILL.md) |
 | Prompt, skill, bridge, or AI documentation maintenance | [ai-agent-maintenance](ai-agent-maintenance/SKILL.md) |
-| Repository Markdown facts and bilingual prose | [docs-writing-style](docs-writing-style/SKILL.md) |
+| Repository Markdown, bilingual prose, and concise milestones | [docs-writing-style](docs-writing-style/SKILL.md) |
 | Shell commands, Windows quoting, tool selection | [modern-cli-toolkit](modern-cli-toolkit/SKILL.md) |
 | Output policy, templates, mentions, managed issues | [output-channel-contracts](output-channel-contracts/SKILL.md) |
 | Roadmap/implementation comparison or completed task retirement | [plan-implementation-audit](plan-implementation-audit/SKILL.md) |
