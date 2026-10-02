@@ -1,7 +1,7 @@
 # IM 应用、回调与重新评审设计
 
 本设计规定 IM 接入、授权和重新评审的边界。进度及未完成项见 [Plan.md](../../Plan.md)，
-接口见[实施规范](im-implementation-spec.md)，执行步骤见[任务卡](im-implementation.md)，
+接口见[实施规范](im-implementation-spec.md)，
 验收断言见[验收矩阵](im-acceptance.md)，外部协议见[来源记录](../ai/sources/im-integrations.md)。
 当前可用功能见[用户说明](../site/src/content/docs/zh-cn/integrations/im-bots.md)及[输出渠道规范](../output-channels.md)。
 
@@ -211,7 +211,8 @@ aicr status <request-id>
 收到回调时重新鉴权并核对这些字段，CAS 将动作变为 consumed，重复点击返回同一 request ID。
 一个群共享动作首次成功消费后即固定请求；再次评审使用新命令或新动作。
 不接受按钮自带的任意仓库 URL、commit 替换值、命令、reply URL 或权限列表。
-引用旧评审结果的按钮固定原 revision，但新请求使用接收时的当前执行配置。
+引用旧评审结果的按钮固定原 revision，但新请求使用点击时的当前执行配置与授权。
+发行快照用于原卡片追溯及 GC。当前 worker 的后续撤权复查缺口见 Plan 的 IM-17。
 
 ### 7.2 修订解析和 ReviewEvent
 
@@ -224,7 +225,8 @@ aicr status <request-id>
 
 可信 VCS 元数据提供提交作者、基线、链接、标题及 diff。IM 操作人只进入独立 `requestedBy` 审计字段，
 不覆盖 `ReviewEvent.author`，也不授予被 @作者更多权限。
-事件 provider 保留 VCS 家族，不将所有请求设为 `provider: manual` 导致 adapter 丢失 VCS 类型。
+事件 provider 应保留 VCS 家族；当前 worker 使用 `provider: manual`，adapter 由固定的 source trigger
+选择，家族元数据的完整核验仍属 Plan 的 IM-13/IM-19。
 增加明确的触发来源元数据 `im_command`，目标为 `commit`；配置的 VCS trigger 继续提供凭据和路由。
 在自动提交分类前排除这类命令，防止进入 push 扩展、reviewed 去重或 stream 游标推进。
 

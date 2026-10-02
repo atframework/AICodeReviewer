@@ -103,6 +103,40 @@ describe("O02: message/send and appchat/send shapes", () => {
     await expect(client(fetch).sendToAppChat(big, "chat-1")).rejects.toThrow(/2048/u);
     expect(fetch).not.toHaveBeenCalled();
   });
+
+  it("sends a button_interaction card whose task_id and button key carry the opaque action id (IM-15)", async () => {
+    const fetch = recordingFetch(request => (request.url.includes("gettoken") ? TOKEN : { errcode: 0, msgid: "msg-1", response_code: "rc-1" }));
+    const result = await client(fetch).sendToRecipients({
+      msgtype: "template_card",
+      template_card: {
+        card_type: "button_interaction",
+        main_title: { title: "代码评审报告", desc: "org/service" },
+        sub_title_text: "修订 0123456789ab",
+        task_id: "ima-opaque-1",
+        button_list: [{ text: "重新评审", type: 0, key: "ima-opaque-1", style: 1 }],
+      },
+    }, { users: ["alice"] });
+    expect(result).toMatchObject({ kind: "delivered", msgid: "msg-1" });
+    const send = fetch.mock.calls.map(([url, init]) => ({ url: String(url), body: init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : undefined }))
+      .find(call => call.url.includes("message/send"))!;
+    expect(send.body).toEqual({
+      agentid: 1000002, touser: "alice", msgtype: "template_card",
+      template_card: {
+        card_type: "button_interaction",
+        main_title: { title: "代码评审报告", desc: "org/service" },
+        sub_title_text: "修订 0123456789ab",
+        task_id: "ima-opaque-1",
+        button_list: [{ text: "重新评审", type: 0, key: "ima-opaque-1", style: 1 }],
+      },
+    });
+    // The strict task_id charset is enforced before any network call.
+    const badTask = recordingFetch(() => TOKEN);
+    await expect(client(badTask).sendToRecipients({
+      msgtype: "template_card",
+      template_card: { card_type: "button_interaction", main_title: { title: "t" }, task_id: "bad task id!", button_list: [{ text: "b", type: 0, key: "k" }] },
+    }, { users: ["alice"] })).rejects.toThrow(/task_id/u);
+    expect(badTask).not.toHaveBeenCalled();
+  });
 });
 
 describe("O03: business errors and the fixed refresh whitelist", () => {

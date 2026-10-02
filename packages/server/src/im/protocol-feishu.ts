@@ -185,6 +185,7 @@ export function buildFeishuEvent(payload: Record<string, unknown>, connection: {
     messageId: isCardAction ? cardMessageId : messageId,
     eventId,
     actionId: isCardAction ? actionId : undefined,
+    taskId: undefined,
     content: text !== undefined
       ? { kind: "message", text }
       : isCardAction

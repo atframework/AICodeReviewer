@@ -61,15 +61,20 @@ Read only the corresponding section of `docs/output-channels.md` or architecture
   [IM design](../../../docs/design/im-integrations.md) and its
   [source record](../../../docs/ai/sources/im-integrations.md); load the
   [directory design](../../../docs/design/member-directory.md) only for file
-  identity/reload work. Callback admission, the IM review worker and reply
-  outbox are wired; output cards do not yet issue review action IDs. For
-  further implementation, use the matching task card in the
-  [execution guide](../../../docs/design/im-implementation.md), its cited
-  [implementation specification](../../../docs/design/im-implementation-spec.md) and
-  [acceptance IDs](../../../docs/design/im-acceptance.md). Load the current task's
-  sections; do not treat proposed APIs or unchecked tasks as existing runtime.
+  identity/reload work. Callback admission, the IM review worker, the reply
+  outbox and report-card action buttons (feishu_app groups, wecom_app
+  recipients) are wired; verify behavior changes against the
+  [implementation specification](../../../docs/design/im-implementation-spec.md)
+  and [acceptance IDs](../../../docs/design/im-acceptance.md). Do not treat
+  proposed APIs as existing runtime; real-platform delivery is still
+  unverified (see the roadmap in [AI docs](../../../docs/ai/index.md)).
   Keep mention identity separate from callback authorization; distinguish
   webhook bots, applications and API bots before selecting protocol behavior.
+  On publication recovery, reuse the journaled card action id and await the
+  send-side binding; a new opaque id changes the request and can duplicate a
+  confirmed card. Reject malformed/oversized checkpoints before remote writes
+  and retain the last durable journal. Check fresh-journal send counts in
+  `im-card-issuance.test.ts` and failure fencing in `im-review-execution.test.ts`.
 - PR buffering, update markers, duplicate collection, error summaries, or Markdown
   repair: [output pitfalls](../../../docs/ai/pitfalls/AGENTS.outputs.md).
 - IM card/Markdown payloads, mentions, truncation, or structured repair:

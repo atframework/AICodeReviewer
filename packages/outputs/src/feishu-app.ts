@@ -50,10 +50,10 @@ export class FeishuAppClient {
 		}));
 	}
 
-	private async request(path: string, operation: string, body?: unknown, token?: string): Promise<Record<string, unknown>> {
+	private async request(path: string, operation: string, body?: unknown, token?: string, actionId?: string): Promise<Record<string, unknown>> {
 		let response;
 		try {
-			const fetch = operation === "send message" ? publicationFetch(this.fetch, "feishu", this.options.appId) : this.fetch;
+			const fetch = operation === "send message" ? publicationFetch(this.fetch, "feishu", `${this.options.appId}${actionId ? `:card:${actionId}` : ""}`) : this.fetch;
 			response = await fetch(`${this.baseUrl}/open-apis${path}`, {
 				method: body === undefined ? "GET" : "POST",
 				headers: { "content-type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
@@ -91,21 +91,21 @@ export class FeishuAppClient {
 		try { return await this.tokenPending; } finally { this.tokenPending = undefined; }
 	}
 
-	private async authorized(path: string, operation: string, body?: unknown): Promise<Record<string, unknown>> {
+	private async authorized(path: string, operation: string, body?: unknown, actionId?: string): Promise<Record<string, unknown>> {
 		const token = await this.accessToken();
-		try { return await this.request(path, operation, body, token); } catch (error) {
+		try { return await this.request(path, operation, body, token, actionId); } catch (error) {
 			// An explicit expired/invalid tenant token rejection is safe to retry once.
 			// Transport failures on POST remain unknown outcomes; never blindly resend.
 			if (!(error instanceof FeishuApiError) || ![99991663, 99991671].includes(error.code ?? 0)) throw error;
 			if (this.token?.value === token) this.token = undefined;
-			return this.request(path, operation, body, await this.accessToken());
+			return this.request(path, operation, body, await this.accessToken(), actionId);
 		}
 	}
 
-	async sendCard(receiveId: string, receiveIdType: string, card: unknown): Promise<string> {
+	async sendCard(receiveId: string, receiveIdType: string, card: unknown, actionId?: string): Promise<string> {
 		const result = await this.authorized(`/im/v1/messages?receive_id_type=${encodeURIComponent(receiveIdType)}`, "send message", {
 			receive_id: receiveId, msg_type: "interactive", content: JSON.stringify(card), uuid: randomUUID(),
-		});
+		}, actionId);
 		const id = text(object(result.data).message_id);
 		if (!id) throw new FeishuApiError("message response", 0);
 		return id;

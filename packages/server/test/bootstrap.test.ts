@@ -4283,6 +4283,31 @@ describe("resolveP4TriggerConfig", () => {
     }
   });
 
+  it.each([false, true])("preserves injected worker lifecycle (injected=%s) when the IM store is opened", async injected => {
+    const tmpDir = await mkdtemp(join(tmpdir(), "aicr-bootstrap-im-worker-"));
+    vi.stubEnv("AICR_IM_WORKER_TEST_USER", "admin");
+    vi.stubEnv("AICR_IM_WORKER_TEST_PASSWORD", "synthetic");
+    let result: Awaited<ReturnType<typeof bootstrapServerApp>> | undefined;
+    try {
+      const config = makeConfig({
+        admin: { username_env: "AICR_IM_WORKER_TEST_USER", password_env: "AICR_IM_WORKER_TEST_PASSWORD" },
+        storage: { database: { kind: "sqlite", sqlite: { path: join(tmpDir, "obs.db") } },
+          cache: { kind: "memory" }, object: { kind: "filesystem" }, retention: { deleted_project_grace_days: 7 } },
+      } as Partial<AppConfig>);
+      result = await bootstrapServerApp({ config, baseSystemPrompt: "test", baseDir: tmpDir,
+        ...(injected ? { jobHandler: vi.fn(async () => {}) } : {}) });
+      expect(result.worker?.isRunning()).toBe(!injected);
+      await result.beginDrain?.();
+      expect(result.worker?.isRunning()).toBe(false);
+    } finally {
+      await result?.closeAutoCommit?.();
+      await result?.sessionStore?.close();
+      if (result?.store) await closeStoreDb(result.store);
+      vi.unstubAllEnvs();
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it("sweeps expired admin sessions periodically and stops when the session store closes", async () => {
     const tmpDir = await mkdtemp(join(tmpdir(), "aicr-bootstrap-sweep-"));
     process.env.AICR_ADMIN_USERNAME = "admin";

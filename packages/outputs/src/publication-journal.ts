@@ -57,6 +57,12 @@ const current = new AsyncLocalStorage<{ journal: PublicationJournal; channel: st
 
 export function hasPublicationJournal(): boolean { return current.getStore() !== undefined; }
 
+/** Reuse an opaque action already recorded by this logical card publication. */
+export function currentPublicationActionId(): string | undefined {
+  const context = current.getStore();
+  return context?.journal.actionId(context.channel, context.call);
+}
+
 /** Explicitly scoped by the composite publisher; unrelated HTTP/LLM traffic is untouched. */
 export function publicationFetch(fetch: FetchLike, provider: Provider, identity?: string): FetchLike {
   return (url, init) => {
@@ -114,6 +120,15 @@ export class PublicationJournal {
   }
 
   private now(): number { return (this.options.now ?? Date.now)(); }
+
+  actionId(channel: string, call: string): string | undefined {
+    for (const operation of this.operations.values()) {
+      if (operation.channel !== channel || operation.call !== call) continue;
+      const match = /:card:(ima-[0-9a-f-]{36})$/u.exec(operation.identity ?? "");
+      if (match) return match[1];
+    }
+    return undefined;
+  }
 
   publishedUrl(channel: string, call: string): string | undefined {
     const value = [...this.operations.values()].find(op => op.channel === channel && op.call === call && op.status === "confirmed" && typeof op.response?.data.html_url === "string")?.response?.data.html_url;

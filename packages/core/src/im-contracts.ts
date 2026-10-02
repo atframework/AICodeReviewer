@@ -125,6 +125,8 @@ export interface VerifiedImEventData {
   readonly messageId: string | undefined;
   readonly eventId: string | undefined;
   readonly actionId: string | undefined;
+  /** WeCom template-card TaskId (W5): the card's send-side task identity. */
+  readonly taskId: string | undefined;
   readonly content: ImEventContent;
 }
 

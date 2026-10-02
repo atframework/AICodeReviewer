@@ -69,7 +69,7 @@ describe("IM-19: command → review → terminal → notification", () => {
     const worker = new ManualReviewService({
       store, namespace: "ns", getConfig: () => config,
       createAdapter: () => ({ kind: "github", describeSource: async () => ({ title: "Commit" }) }),
-      enqueueReview: async (_id, run) => run(),
+      dispatch: async handoff => handoff.execute(),
       executeReview: async () => ({ state: "succeeded" }),
     });
     expect(await worker.scan()).toBe(1);

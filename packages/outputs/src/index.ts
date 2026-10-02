@@ -8,7 +8,7 @@ import { chunkMarkdownSections } from "./wecom-app-dispatcher.js";
 import type { FeishuAppClient } from "./feishu-app.js";
 import { hasPublicationJournal, publicationFetch } from "./publication-journal.js";
 
-export { PublicationJournal, PublicationReconciliationError, validateRemotePublicationOperations } from "./publication-journal.js";
+export { PublicationJournal, PublicationReconciliationError, validateRemotePublicationOperations, currentPublicationActionId } from "./publication-journal.js";
 
 export { FeishuAppClient, FeishuApiError, type FeishuAppOptions } from "./feishu-app.js";
 export { WeComAppClient, WeComAppError, type WeComAppOptions, type WeComAppMessage, type WeComRecipients, type WeComSendResult } from "./wecom-app.js";
@@ -5690,6 +5690,8 @@ export interface FeishuBotDispatcher {
 		summary?: string,
 		mentionText?: string,
 		aggregatedOptions?: FeishuBotAggregatedOptions,
+		/** Opaque IM card-action id; renders a re-review button (IM-15, app channels only). */
+		cardActionId?: string,
 	): Promise<DispatchResult>;
 }
 
@@ -5780,13 +5782,28 @@ function buildFeishuReportBody(
 	summary?: string,
 	mentionText?: string,
 	aggregatedOptions?: FeishuBotAggregatedOptions,
+	cardActionId?: string,
 ): Record<string, unknown> {
 	const detailLink = aggregatedOptions?.detailLink;
 	const sections = detailLink
 		? buildFeishuIssueLinkSections(problems, summary, detailLink, aggregatedOptions?.issueLinkCard ?? "titles")
 		: [...(summary ? [summary.trim()] : []), ...buildImProblemSections(problems)];
-	return buildFeishuCardBody(toFeishuMarkdown(sections.join("\n")),
-		mentionText ? [{ tag: "markdown", content: mentionText }] : []);
+	const extraElements: Record<string, unknown>[] = mentionText ? [{ tag: "markdown", content: mentionText }] : [];
+	// IM-15 card action button: the value carries only the opaque action id —
+	// never a command, URL or credential. Callers must only pass an id on
+	// surfaces whose callback can consume `card.action.trigger` events.
+	if (cardActionId !== undefined) {
+		extraElements.push({
+			tag: "action",
+			actions: [{
+				tag: "button",
+				text: { tag: "plain_text", content: "重新评审" },
+				type: "primary",
+				value: { aicr_action_id: cardActionId },
+			}],
+		});
+	}
+	return buildFeishuCardBody(toFeishuMarkdown(sections.join("\n")), extraElements);
 }
 
 /**
@@ -5837,9 +5854,9 @@ export function createFeishuAppDispatcher(options: {
 	readonly channelName?: string | undefined;
 }): FeishuBotDispatcher {
 	return {
-		async publishAggregatedProblems(problems, summary, mentionText, aggregatedOptions) {
-			const body = buildFeishuReportBody(problems, summary, mentionText, aggregatedOptions);
-			const externalId = await options.client.sendCard(options.receiveId, options.receiveIdType ?? "chat_id", body.card);
+		async publishAggregatedProblems(problems, summary, mentionText, aggregatedOptions, cardActionId) {
+			const body = buildFeishuReportBody(problems, summary, mentionText, aggregatedOptions, cardActionId);
+			const externalId = await options.client.sendCard(options.receiveId, options.receiveIdType ?? "chat_id", body.card, cardActionId);
 			return { channel: options.channelName ?? "feishu_app", status: "published", externalId };
 		},
 	};
@@ -5868,6 +5885,18 @@ export interface WeComAppDispatcher {
 	publishTextReminder(content: string, options?: {
 		readonly mentionedMobileList?: readonly string[] | undefined;
 		readonly mentionedList?: readonly string[] | undefined;
+	}): Promise<DispatchResult>;
+	/**
+	 * One button_interaction card (IM-15): the button key and task_id both
+	 * carry the opaque action id. Recipients targets only — appchat/send has
+	 * no template_card type (W14), so callers must not issue appchat cards.
+	 */
+	publishCardButton(card: {
+		readonly title: string;
+		readonly desc?: string | undefined;
+		readonly subTitle?: string | undefined;
+		readonly actionId: string;
+		readonly buttonText?: string | undefined;
 	}): Promise<DispatchResult>;
 }
 
@@ -6016,6 +6045,30 @@ export function createWeComAppDispatcher(options: WeComAppDispatcherOptions): We
 			if (result.kind === "rejected" || result.kind === "unknown") {
 				return { channel, status: "failed", raw: result };
 			}
+			return { channel, status: "published", raw: result };
+		},
+
+		async publishCardButton(card) {
+			if (options.target.kind !== "recipients") {
+				throw new TypeError("WeCom template cards ride message/send only; appchat has no card type (W14).");
+			}
+			// The action id doubles as task_id (charset/length fit, unique per
+			// task) so the click callback's TaskId identifies this exact card.
+			const result = await options.client.sendToRecipients({
+				msgtype: "template_card",
+				template_card: {
+					card_type: "button_interaction",
+					main_title: { title: card.title, ...(card.desc !== undefined ? { desc: card.desc } : {}) },
+					...(card.subTitle !== undefined ? { sub_title_text: card.subTitle } : {}),
+					task_id: card.actionId,
+					button_list: [{ text: card.buttonText ?? "重新评审", type: 0, key: card.actionId, style: 1 }],
+				},
+			}, options.target, { publicationIdentity: `${options.identityPrefix}:card:${card.actionId}` });
+			if (result.kind === "rejected" || result.kind === "unknown") {
+				return { channel, status: "failed", raw: result };
+			}
+			// Recipient-partial keeps its delivered remainder in `raw` without
+			// resending the set, matching the markdown part behavior.
 			return { channel, status: "published", raw: result };
 		},
 	};

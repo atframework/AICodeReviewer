@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import type { AppConfig, ImBindingActor, ImConversation, ImPrincipal } from "@aicr/core";
 import type { StoreDb } from "@aicr/store";
 import { acceptImDelivery, getImAction, insertImAction } from "@aicr/store";
+import { currentPublicationActionId } from "@aicr/outputs";
 
 import { authorizeImCommand, type ImCommandDirectoryLike } from "./command-service.js";
 
@@ -33,6 +34,17 @@ export interface CardActionTarget {
 
 /** Issues one opaque action id bound to a trusted target (pre-send). */
 export async function issueCardAction(store: StoreDb, target: CardActionTarget, now = new Date()): Promise<string> {
+  const savedId = currentPublicationActionId();
+  if (savedId !== undefined) {
+    const saved = await getImAction(store, savedId);
+    if (saved === undefined || saved.namespace !== target.namespace || saved.connectionIdentity !== target.connectionIdentity
+      || saved.bindingId !== target.bindingId || saved.workspaceId !== target.workspaceId || saved.sourceTrigger !== target.sourceTrigger
+      || saved.repoRef !== target.repoRef || saved.revision !== target.revision || saved.issuedConfigVersion !== target.configVersion
+      || saved.conversationJson !== target.conversationJson || saved.recipientId !== target.recipientId) {
+      throw new Error("IM card action recovery target is unavailable or changed");
+    }
+    return savedId;
+  }
   const actionId = `ima-${randomUUID()}`;
   await insertImAction(store, {
     actionId,
@@ -56,6 +68,102 @@ export async function issueCardAction(store: StoreDb, target: CardActionTarget, 
   return actionId;
 }
 
+/**
+ * Resolves the issuance target for a wecom_app report card button (IM-15):
+ * the channel's connection must have callbacks enabled (only callback-
+ * configured apps may send callback cards, W15), the target must be explicit
+ * recipients (appchat has no template_card, W14), and a `review`-command
+ * binding on the connection must register the reviewed repository. WeCom app
+ * messages are direct conversations; click authorization rides the binding's
+ * actor matchers.
+ */
+export function resolveWecomCardActionTarget(input: {
+  readonly config: AppConfig;
+  readonly connectionName: string;
+  readonly connection: { readonly corp_id: string; readonly agent_id: number; readonly enabled?: boolean | undefined; readonly callback?: { readonly enabled?: boolean | undefined } | undefined };
+  readonly reviewEvent: { readonly headSha?: string | undefined; readonly workspaceId: string; readonly triggerName?: string | undefined; readonly repoRef?: string | undefined };
+  readonly namespace: string;
+  readonly configSnapshotId: string;
+}): CardActionTarget | undefined {
+  const { config, connection, reviewEvent } = input;
+  if (reviewEvent.headSha === undefined || connection.enabled === false || connection.callback?.enabled !== true) return undefined;
+  for (const [bindingId, binding] of Object.entries(config.im?.command_bindings ?? {})) {
+    if (binding.connection !== input.connectionName || binding.enabled !== true || !binding.commands.includes("review")) continue;
+    if (!binding.conversations.some(allowed => allowed.kind === "app_direct")) continue;
+    const registered = Object.entries(binding.repositories ?? {}).find(([, target]) =>
+      reviewEvent.triggerName !== undefined && target.workspace === reviewEvent.workspaceId
+      && target.source_trigger === reviewEvent.triggerName && target.repo_ref === reviewEvent.repoRef);
+    if (registered === undefined) continue;
+    return {
+      namespace: input.namespace,
+      connectionIdentity: JSON.stringify([input.namespace, "wecom_app", connection.corp_id, String(connection.agent_id), null]),
+      connectionName: input.connectionName,
+      bindingId,
+      workspaceId: registered[1].workspace,
+      sourceTrigger: registered[1].source_trigger,
+      repoRef: registered[1].repo_ref,
+      revision: reviewEvent.headSha,
+      configVersion: input.configSnapshotId,
+      conversationJson: JSON.stringify({ kind: "app_direct" }),
+      recipientId: null,
+    };
+  }
+  return undefined;
+}
+
+/**
+ * Resolves the issuance target for a feishu_app report card (IM-15 A09):
+ * the channel's app must be a feishu_app IM connection with callbacks
+ * enabled, a `review`-command binding must whitelist the destination group,
+ * and that binding must register the reviewed repository. Absent any of
+ * these the card carries no button — an unsupported surface never shows a
+ * clickable but dead operation (A13).
+ */
+export function resolveFeishuCardActionTarget(input: {
+  readonly config: AppConfig;
+  readonly channel: { readonly app_id?: string | undefined; readonly receive_id?: string | undefined; readonly receive_id_type?: string | undefined };
+  readonly reviewEvent: { readonly headSha?: string | undefined; readonly workspaceId: string; readonly triggerName?: string | undefined; readonly repoRef?: string | undefined };
+  readonly namespace: string;
+  /** Run-pinned generation snapshot id; "file-only" when no snapshot exists. */
+  readonly configSnapshotId: string;
+}): CardActionTarget | undefined {
+  const { config, channel, reviewEvent } = input;
+  if (reviewEvent.headSha === undefined || channel.receive_id === undefined || channel.app_id === undefined) return undefined;
+  // Card action callbacks only carry a chat context; a direct (open_id)
+  // destination has no callback surface, so its cards stay button-free.
+  if ((channel.receive_id_type ?? "chat_id") !== "chat_id") return undefined;
+  const im = config.im;
+  if (im === undefined) return undefined;
+  for (const [connectionName, connection] of Object.entries(im.connections ?? {})) {
+    if (connection.enabled === false || connection.kind !== "feishu_app" || connection.app_id !== channel.app_id) continue;
+    const callback = (connection as { callback?: { enabled?: boolean } }).callback;
+    if (callback?.enabled !== true) continue;
+    for (const [bindingId, binding] of Object.entries(im.command_bindings ?? {})) {
+      if (binding.connection !== connectionName || binding.enabled !== true || !binding.commands.includes("review")) continue;
+      if (!binding.conversations.some(allowed => allowed.kind === "group" && allowed.id === channel.receive_id)) continue;
+      const registered = Object.entries(binding.repositories ?? {}).find(([, target]) =>
+        reviewEvent.triggerName !== undefined && target.workspace === reviewEvent.workspaceId
+        && target.source_trigger === reviewEvent.triggerName && target.repo_ref === reviewEvent.repoRef);
+      if (registered === undefined) continue;
+      const [, target] = registered;
+      return {
+        namespace: input.namespace,
+        connectionIdentity: JSON.stringify([input.namespace, "feishu_app", null, channel.app_id, connection.tenant_key ?? null]),
+        connectionName,
+        bindingId,
+        workspaceId: target.workspace,
+        sourceTrigger: target.source_trigger,
+        repoRef: target.repo_ref,
+        revision: reviewEvent.headSha,
+        configVersion: input.configSnapshotId,
+        conversationJson: JSON.stringify({ kind: "group", id: channel.receive_id }),
+        recipientId: null,
+      };
+    }
+  }
+  return undefined;
+}
+
 export type CardActionResult =
   | { readonly kind: "accepted"; readonly requestId: string }
   | { readonly kind: "duplicate"; readonly requestId: string }
@@ -75,7 +183,12 @@ export async function consumeCardAction(store: StoreDb, input: {
   readonly connectionName: string;
   readonly connectionIdentity: string;
   readonly sourceMessageId?: string | undefined;
+  /** WeCom template-card TaskId; required to consume a task-bound action. */
+  readonly sourceTaskId?: string | undefined;
   readonly config: AppConfig;
+  /** Admission generation at the click; issuance version is audit/GC only. */
+  readonly configSnapshotId?: string | undefined;
+  readonly configFileDigest?: string | undefined;
   readonly actor: ImPrincipal;
   readonly conversation: ImConversation;
   readonly directory?: ImCommandDirectoryLike | undefined;
@@ -85,8 +198,13 @@ export async function consumeCardAction(store: StoreDb, input: {
   const action = await getImAction(store, input.actionId);
   if (action === undefined) return { kind: "not_found" };
   if (action.namespace !== input.namespace || action.connectionIdentity !== input.connectionIdentity) return { kind: "rejected", reason: "source_mismatch" };
+  // A13: an action whose send acknowledgement never became durable (lost
+  // response or failed bind) stays pending and never executes — a callback's
+  // self-reported source must not complete the binding either. Feishu cards
+  // bind the platform message id; WeCom cards bind the send-side TaskId.
+  if (action.sourceMessageId === null && action.sourceTaskId === null) return { kind: "rejected", reason: "unbound" };
   if (action.sourceMessageId !== null && action.sourceMessageId !== input.sourceMessageId) return { kind: "rejected", reason: "source_mismatch" };
-  if (action.sourceTaskId !== null) return { kind: "rejected", reason: "source_mismatch" };
+  if (action.sourceTaskId !== null && action.sourceTaskId !== input.sourceTaskId) return { kind: "rejected", reason: "source_mismatch" };
   if (action.recipientId !== null && action.recipientId !== input.actor.id) return { kind: "rejected", reason: "recipient_mismatch" };
   try {
     const savedConversation = JSON.parse(action.conversationJson ?? "null") as ImConversation | null;
@@ -119,6 +237,9 @@ export async function consumeCardAction(store: StoreDb, input: {
     return { kind: "duplicate", requestId: action.consumedRequestId };
   }
   if (action.expiresAt.getTime() <= now.getTime()) return { kind: "expired" };
+  if (!input.configSnapshotId || input.configSnapshotId === "file-only" || !input.configFileDigest) {
+    return { kind: "rejected", reason: "execution_unavailable" };
+  }
   const requestId = `imr-${randomUUID()}`;
   const runId = `imrun-${randomUUID()}`;
   // The request and action transition share acceptImDelivery's transaction.
@@ -141,9 +262,10 @@ export async function consumeCardAction(store: StoreDb, input: {
         sourceTrigger: action.sourceTrigger,
         repoRef: action.repoRef,
         requestedRevision: action.revision,
-        configSnapshotId: "card-action",
-        configFileDigest: action.issuedConfigVersion,
-        configVersionJson: JSON.stringify({ issuedConfigVersion: action.issuedConfigVersion, connectionName: input.connectionName }),
+        configSnapshotId: input.configSnapshotId,
+        configFileDigest: input.configFileDigest,
+        configVersionJson: JSON.stringify({ configSnapshotId: input.configSnapshotId, fileDigest: input.configFileDigest,
+          issuedConfigVersion: action.issuedConfigVersion, connectionName: input.connectionName }),
       },
       activeTarget: {
         workspaceInstance: action.workspaceId,

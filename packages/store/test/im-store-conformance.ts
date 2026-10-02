@@ -5,8 +5,10 @@ import { expect } from "vitest";
 import type { StoreDb } from "../src/database.js";
 import {
   acceptImDelivery,
+  bindImActionSource,
   claimDueImReplyNotifications,
   claimDueImReviewRequests,
+  claimImReviewRequestById,
   consumeImAction,
   consumeImRateLimit,
   deleteExpiredImActions,
@@ -89,8 +91,70 @@ export async function runImStoreConformance(store: StoreDb): Promise<void> {
   await mergesActiveTargetsWithoutConsumingQuota(store);
   await atomicActionConsumptionAndQuota(store);
   await claimsWithFencing(store);
+  await targetedWakeUpClaims(store);
+  await actionBindingBoundaries(store);
   await dispatchSequencesAndSnapshotReferences(store);
   await retentionLifecycle(store);
+}
+
+async function actionBindingBoundaries(store: StoreDb): Promise<void> {
+  const actionId = `action-${randomUUID()}`;
+  await insertImAction(store, {
+    actionId, namespace: "ns-test", connectionIdentity: "c", issuedConfigVersion: "cfg",
+    sourceMessageId: null, sourceTaskId: null, conversationJson: JSON.stringify({ kind: "app_direct" }), recipientId: null,
+    bindingId: "reviewers", workspaceId: "ws-main", sourceTrigger: "github-main", repoRef: "org/service", revision: uniqueHex(),
+    expiresAt: new Date(T0.getTime() + 1000), status: "issued", createdAt: T0, updatedAt: T0,
+  });
+  expect(await bindImActionSource(store, { actionId, now: T0 })).toBe(false);
+  expect(await bindImActionSource(store, { actionId, sourceTaskId: "", now: T0 })).toBe(false);
+  expect(await listImActiveConfigSnapshotIds(store, "ns-test", T0)).toContain("cfg");
+  expect(await listImActiveConfigSnapshotIds(store, "ns-test", new Date(T0.getTime() + 1000))).not.toContain("cfg");
+  expect(await listImActiveConfigSnapshotIds(store, "other-namespace", T0)).not.toContain("cfg");
+  expect(await bindImActionSource(store, { actionId, sourceTaskId: "task", now: new Date(T0.getTime() + 1000) })).toBe(false);
+  const bindings = await Promise.all([
+    bindImActionSource(store, { actionId, sourceTaskId: "first", now: T0 }),
+    bindImActionSource(store, { actionId, sourceTaskId: "second", now: T0 }),
+  ]);
+  expect(bindings.filter(Boolean)).toHaveLength(1);
+  expect((await getImAction(store, actionId))?.sourceTaskId).toBe(bindings[0] ? "first" : "second");
+}
+
+/** IM-14 R11/R12: the queue wake-up claims exactly one due request with the same CAS rules. */
+async function targetedWakeUpClaims(store: StoreDb): Promise<void> {
+  // Isolated namespace: the shared due scans in other helpers must not
+  // claim these rows while the targeted-claim semantics are under test.
+  const namespace = `ns-wake-${randomUUID()}`;
+  const due = request();
+  const deferred = request();
+  await acceptImDelivery(store, commandInput(deliveryInput({ namespace }), due));
+  await acceptImDelivery(store, commandInput(deliveryInput({ namespace }), deferred));
+
+  // A targeted claim of an unknown id resolves undefined without side effects.
+  expect(await claimImReviewRequestById(store, { namespace, requestId: "missing", now: T0, leaseMs: 60_000, owner: "wake-1" })).toBeUndefined();
+
+  // Defer the second request first so later due scans cannot claim it.
+  const deferredClaim = await claimImReviewRequestById(store, { namespace, requestId: deferred.requestId, now: T0, leaseMs: 60_000, owner: "wake-4" });
+  expect(deferredClaim).toBeDefined();
+  await updateImReviewRequest(store, { requestId: deferred.requestId, fence: deferredClaim!.fence,
+    nextAttemptAt: new Date(T0.getTime() + 60_000), releaseLease: true, now: T0 });
+  expect(await claimImReviewRequestById(store, { namespace, requestId: deferred.requestId, now: T0, leaseMs: 60_000, owner: "wake-5" })).toBeUndefined();
+
+  const claim = await claimImReviewRequestById(store, { namespace, requestId: due.requestId, now: T0, leaseMs: 60_000, owner: "wake-2" });
+  expect(claim?.request.requestId).toBe(due.requestId);
+  expect(claim?.request.leaseOwner).toBe("wake-2");
+
+  // While the lease holds, neither a wake-up nor the due scan re-claims it.
+  expect(await claimImReviewRequestById(store, { namespace, requestId: due.requestId, now: new Date(T0.getTime() + 1000), leaseMs: 60_000, owner: "wake-3" })).toBeUndefined();
+  expect((await claimDueImReviewRequests(store, { namespace, now: new Date(T0.getTime() + 1000), leaseMs: 60_000, owner: "w", limit: 10 }))
+    .some(entry => entry.request.requestId === due.requestId)).toBe(false);
+
+  // After the lease expires, the targeted claim CAS-bumps the fence.
+  const reclaimed = await claimImReviewRequestById(store, { namespace, requestId: due.requestId, now: new Date(T0.getTime() + 61_000), leaseMs: 60_000, owner: "wake-6" });
+  expect(reclaimed?.fence).toBeGreaterThan(claim!.fence);
+
+  // Terminal requests are never wakeable.
+  await finishImReviewRequest(store, { requestId: due.requestId, fence: reclaimed!.fence, state: "succeeded", now: T0 });
+  expect(await claimImReviewRequestById(store, { namespace, requestId: due.requestId, now: new Date(T0.getTime() + 200_000), leaseMs: 60_000, owner: "wake-7" })).toBeUndefined();
 }
 
 async function promotesRecordedDelivery(store: StoreDb): Promise<void> {

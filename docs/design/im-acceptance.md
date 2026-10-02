@@ -1,6 +1,8 @@
 # IM 开发验收矩阵
 
-状态：分阶段验收中，已完成项及证据以 [Plan.md](../../Plan.md) 为准。配合[任务卡](im-implementation.md)和[实施规范](im-implementation-spec.md)使用。
+状态：本地部分验收和审查修复见 [M38](../ai/milestones/M38.md)，缺失断言保留在计划中；
+真实平台 L01–L06（IM-21）待授权账户。
+配合[实施规范](im-implementation-spec.md)使用，进度以 [Plan.md](../../Plan.md) 为准。
 编号表示需求断言组，不表示已存在测试，也不等同 Vitest 用例数量。每组允许多个测试，不能用一条宽泛快照替代。
 源码定位基于 2026-09-28；当前门禁的唯一权威是[仓库基线](../ai/AGENTS.repository-baseline.md)。
 

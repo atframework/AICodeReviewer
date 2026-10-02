@@ -168,7 +168,12 @@ PostgreSQL 后端见 [M17](milestones/M17.md)，来源合并、路由图与发�
   `listRoutingIntakeIdsForReceipts` 映射按 `detail.routingId` 翻转。清扫在
   bootstrap 周期执行（10 分钟），且在 `scheduler.start()` 之前先按各 workspace
   边界执行一次；IM 工作器也按保存的请求配置清扫等待请求，并写入
-  `im.queued_timeout` 和通知 outbox。批次 `created_at` 继承最早成员的
+  `im.queued_timeout` 和通知 outbox。IM 请求按 dispatchSeq 交接队列唤醒 job
+  （`maxAttempts:1`，job 与请求表配置版本不一致拒绝执行）；重复唤醒被请求租约
+  挡下，丢失唤醒由 due 扫描按新序号补投递。执行中断按阶段恢复：分析崩溃按
+  `attemptsByPhase` 有界重试（`retry_wait` 持久退避，默认每阶段 3 次），发布中断
+  按持久 checkpoint 仅恢复发布（不重跑 LLM）；不可证明送达的发布终态
+  `publication_unknown` 不自动重发。批次 `created_at` 继承最早成员的
   `firstAcceptedAt`，包含元数据准备与首次延迟；此外**所有自动恢复路径都按首次接收时间
   预检超龄**：启动时的租约回收、中断恢复和 dead 批次重新排队，每 tick 的过期租约回收、
   以及 `dispatchOne` 的领取边界，超龄批次一律终态 `queued_timeout`
@@ -726,6 +731,7 @@ AICR 采用**两层上下文管理**，两者互补：
 - `aicr.fetch_more_context` 可用于缺失/过窄 diff 下的完整变更文件，以及为验证变更行所必需的窄范围相关文件；problem 仍必须锚定到本次变更的文件与行。
 - IM 通知保持 `Review target` / `Summary` / `Problems` 分段结构，问题位置必须来自 `aicr.report_problem.file` 与 `line`。
 - 复合输出 publisher 必须隔离单通道发布失败：某个 channel（例如 GitHub issue API 403）失败时记录 `DispatchResult.status=failed` 和告警日志，继续尝试后续 channel；只有成功发布的 dispatch 才使 run 状态成为 `published`，若全部 dispatch 都失败则 run 以 `skipped/output_dispatch_failed` 结束，而不是把触发器升级为 `review_orchestration_failed`。
+- 支持回调的 IM 应用渠道（飞书应用群聊目标、企业微信应用显式收件人）的报告卡片可携带「重新评审」按钮：发送前发行仅含服务端不透明动作 ID 的卡片（24 小时有效，企业微信 `task_id` 与按钮 key 都只用动作 ID），平台发送回执（飞书 message_id / 企业微信 TaskId）落库绑定后点击才可消费；点击复验真实操作人、平台消息/任务标识、会话与命令绑定授权，同事务创建重评请求，重复点击返回原请求，转发、伪造来源、撤权与过期拒绝。webhook、appchat 等无回调渠道不显示按钮；协议依据见[来源记录](sources/im-integrations.md)，行为约定见[IM 集成设计](../design/im-integrations.md)。
 
 #### 3.9.0 PR Review Summary 更新模式
 
@@ -762,6 +768,8 @@ AICR 采用**两层上下文管理**，两者互补：
 
 - 作者解析优先事件用户名，再补 display name、邮箱或 provider profile。
 - IM bot channels（当前实现 `feishu_bot`、`wecom_bot`，未来可扩展 `dingtalk_bot`、`slack_bot` 等）的 mention 方言由输出层负责转换，各平台使用 `im-markdown.ts` 中对应的 `toXxxMarkdown()` transformer 适配 Markdown 子集。
+- IM 发布恢复复用 journal 中的原卡片动作 ID，等待发送绑定后返回；动作的发行快照在未消费且未过期时阻止 GC。
+  严格校验发布检查点，超限或写入失败停止新远端发送并保留最后有效 journal；缺少完整验收的恢复/授权行为见 [Plan.md](../../Plan.md)。
 - 黑名单邮箱不能用于自动 mention。
 - IM 总结要尽量输出 `@username (Display Name)` 这样的稳定格式；平台原生 mention tag（`<at>`、`<@user>` 等）由 `author-resolution.ts` 通过 `MentionChannelKind` 处理，模板只负责人类可读格式。
 

@@ -49,7 +49,28 @@ export interface WeComDirectoryTag {
 
 export type WeComAppMessage =
 	| { readonly msgtype: "text"; readonly text: { readonly content: string } }
-	| { readonly msgtype: "markdown"; readonly markdown: { readonly content: string } };
+	| { readonly msgtype: "markdown"; readonly markdown: { readonly content: string } }
+	| { readonly msgtype: "template_card"; readonly template_card: WeComButtonCardMessage };
+
+/**
+ * button_interaction template card (W13/W15): a single callback button. Only
+ * apps with a configured callback URL may send callback cards; appchat/send
+ * has no template_card type at all (W14), so this rides message/send only.
+ */
+export interface WeComButtonCardMessage {
+	readonly card_type: "button_interaction";
+	readonly main_title: { readonly title: string; readonly desc?: string | undefined };
+	readonly sub_title_text?: string | undefined;
+	/** Required for button cards: `[0-9A-Za-z_\-@]`, ≤128 bytes, unique per application task. */
+	readonly task_id: string;
+	readonly button_list: readonly [{
+		readonly text: string;
+		/** 0 = callback click event (the key returns as the callback EventKey). */
+		readonly type: 0;
+		readonly key: string;
+		readonly style?: 1 | 2 | 3 | 4;
+	}];
+}
 
 export interface WeComRecipients {
 	readonly users?: readonly string[] | undefined;
@@ -410,6 +431,17 @@ export class WeComAppClient {
 }
 
 function messageBody(message: WeComAppMessage): Record<string, unknown> {
+	if (message.msgtype === "template_card") {
+		const card = message.template_card;
+		const taskId = card.task_id;
+		if (!/^[0-9A-Za-z_\-@]{1,128}$/u.test(taskId)) {
+			throw new TypeError("WeCom template_card task_id must match [0-9A-Za-z_\\-@] within 128 bytes.");
+		}
+		if (card.button_list.some(button => Buffer.byteLength(button.key, "utf8") > 1024)) {
+			throw new TypeError("WeCom template_card button keys are capped at 1024 bytes.");
+		}
+		return message as Record<string, unknown>;
+	}
 	const content = message.msgtype === "text" ? message.text.content : message.markdown.content;
 	const bytes = Buffer.byteLength(content, "utf8");
 	if (bytes > CONTENT_MAX_BYTES) {

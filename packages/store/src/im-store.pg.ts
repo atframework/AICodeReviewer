@@ -4,7 +4,7 @@
  * and GREATEST-free set expressions kept in drizzle's portable form.
  */
 
-import { and, eq, gte, inArray, isNull, lt, lte, or, sql } from "drizzle-orm";
+import { and, eq, gt, gte, inArray, isNull, lt, lte, or, sql } from "drizzle-orm";
 
 import { randomUUID } from "node:crypto";
 
@@ -35,19 +35,38 @@ export async function findImReviewRequestPg(store: PgStoreDb, namespace: string,
   return rows[0] !== undefined ? toRequestRow(rows[0]) : undefined;
 }
 
-export async function listImActiveConfigSnapshotIdsPg(store: PgStoreDb, namespace: string): Promise<string[]> {
+export async function listImActiveConfigSnapshotIdsPg(store: PgStoreDb, namespace: string, now = new Date()): Promise<string[]> {
   const rows = await store.db.selectDistinct({ snapshotId: imReviewRequests.configSnapshotId })
     .from(imReviewRequests)
     .where(and(
       eq(imReviewRequests.namespace, namespace),
       inArray(imReviewRequests.state, ["accepted", "validating", "queued", "running", "publishing", "retry_wait"]),
     ));
-  return rows.map(row => row.snapshotId);
+  const actions = await store.db.selectDistinct({ snapshotId: imActions.issuedConfigVersion }).from(imActions).where(and(
+    eq(imActions.namespace, namespace), eq(imActions.status, "issued"), gt(imActions.expiresAt, now),
+  ));
+  return [...new Set([...rows, ...actions].map(row => row.snapshotId))];
 }
 
 export async function getImActionPg(store: PgStoreDb, actionId: string): Promise<ImActionRecord | undefined> {
   const rows = await store.db.select().from(imActions).where(eq(imActions.actionId, actionId));
   return rows[0];
+}
+
+export async function bindImActionSourcePg(store: PgStoreDb, input: { readonly actionId: string; readonly sourceMessageId?: string | undefined; readonly sourceTaskId?: string | undefined; readonly now: Date }): Promise<boolean> {
+  if ((!input.sourceMessageId && !input.sourceTaskId) || input.sourceMessageId === "" || input.sourceTaskId === "") return false;
+  const rows = await store.db.update(imActions).set({
+    ...(input.sourceMessageId !== undefined ? { sourceMessageId: input.sourceMessageId } : {}),
+    ...(input.sourceTaskId !== undefined ? { sourceTaskId: input.sourceTaskId } : {}),
+    updatedAt: input.now,
+  }).where(and(
+    eq(imActions.actionId, input.actionId),
+    eq(imActions.status, "issued"),
+    gt(imActions.expiresAt, input.now),
+    isNull(imActions.sourceMessageId),
+    isNull(imActions.sourceTaskId),
+  )).returning({ actionId: imActions.actionId });
+  return rows.length > 0;
 }
 
 export async function deleteExpiredImInboxPg(store: PgStoreDb, namespace: string, before: Date, keepRequestIds: readonly string[]): Promise<number> {
@@ -233,6 +252,29 @@ export async function claimDueImReviewRequestsPg(
     if (updated[0] !== undefined) claimed.push({ request: toRequestRow(updated[0]), fence: updated[0].fence });
   }
   return claimed;
+}
+
+export async function claimImReviewRequestByIdPg(
+  store: PgStoreDb,
+  options: { readonly namespace: string; readonly requestId: string; readonly now: Date; readonly leaseMs: number; readonly owner: string },
+): Promise<ClaimedImReviewRequest | undefined> {
+  const candidate = (await store.db.select().from(imReviewRequests)
+    .where(and(eq(imReviewRequests.namespace, options.namespace), eq(imReviewRequests.requestId, options.requestId))))[0];
+  if (candidate === undefined) return undefined;
+  if (!["accepted", "validating", "queued", "running", "publishing", "retry_wait"].includes(candidate.state)) return undefined;
+  if (candidate.nextAttemptAt !== null && candidate.nextAttemptAt.getTime() > options.now.getTime()) return undefined;
+  if (candidate.leaseUntil !== null && candidate.leaseUntil.getTime() > options.now.getTime()) return undefined;
+  const updated = await store.db.update(imReviewRequests).set({
+    leaseOwner: options.owner,
+    leaseUntil: new Date(options.now.getTime() + options.leaseMs),
+    fence: candidate.fence + 1,
+    updatedAt: options.now,
+  }).where(and(
+    eq(imReviewRequests.requestId, candidate.requestId),
+    eq(imReviewRequests.fence, candidate.fence),
+    or(isNull(imReviewRequests.leaseUntil), lte(imReviewRequests.leaseUntil, options.now)),
+  )).returning();
+  return updated[0] !== undefined ? { request: toRequestRow(updated[0]), fence: updated[0].fence } : undefined;
 }
 
 export async function updateImReviewRequestPg(store: PgStoreDb, update: ImFencedUpdate): Promise<boolean> {

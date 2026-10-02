@@ -39,6 +39,16 @@ Sources: root/package manifests, `pnpm-workspace.yaml`, `tsconfig.json`,
   convenience, runs in no CI job, and is not part of the repository-baseline
   gate list. Do not "fix" it by mass-reformatting or by weakening the config
   without a repo-wide decision.
+- A standalone pnpm installation can break while staying on `PATH`: the
+  `%LOCALAPPDATA%\pnpm\bin\pnpm.cmd` shim executes the global store's `pnpm`
+  entry directly, so a missing or corrupted CLI bundle in that store makes
+  every call fail instantly with `'"…pnpm"' is not recognized` — including the
+  nested `pnpm` invocations inside `pnpm build`, even when `corepack pnpm`
+  works. Route the command through the repo-pinned Corepack entry
+  (`corepack pnpm build`; `packageManager` owns the version) and, because
+  build scripts re-invoke `pnpm` recursively, prepend a shim directory that
+  forwards to `corepack pnpm@<version>` so nested calls resolve the same way.
+  Probe with `pnpm --version` before starting long gate runs.
 - Browser-gate specs share one persistent config namespace per fixture
   launch. A spec that publishes scheduling config (e.g.
   `review.pull_request.schedule.rules` weekly windows, M16 durable deferral)

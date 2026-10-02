@@ -3,7 +3,7 @@
 - last_checked: 2026-09-28
 - next_review: before implementing application sends, callbacks, file directories or command admission
 - update_trigger: platform payload/permission changes, rejected callback verification, mention delivery changes, SDK updates
-- scope: planning evidence only; no application was configured and no real message was sent
+- scope: protocol research and local implementation evidence; no real-platform acceptance or message delivery is established here
 
 This record supports the [IM design](../../design/im-integrations.md) and
 [member directory design](../../design/member-directory.md). Existing Feishu sending and
@@ -27,6 +27,7 @@ directory evidence retains its own dates in [feishu.md](feishu.md).
 | W12 | [WeCom gettoken](https://developer.work.weixin.qq.com/document/path/91039), checked 2026-09-28 | `GET /cgi-bin/gettoken` returns `expires_in` 7200 s normally, token at most 512 bytes, must be cached per application; the platform may expire tokens early, so expiry-driven refresh is mandatory |
 | W13 | [WeCom message/send limits](https://developer.work.weixin.qq.com/document/path/90236), checked 2026-09-28 | text and Markdown content cap at 2048 UTF-8 bytes with platform-side truncation (senders must split themselves); `touser` ≤1000, `toparty`/`totag` ≤100; partial invalid recipients return `invaliduser/invalidparty/invalidtag/unlicenseduser` with all-invalid `81013`; per member 30 msgs/min and 1000/hour, per app 账号上限数×200 人次/day; duplicate check window defaults 1800 s, max 4 h; interactive template-card `response_code` is single-use within 72 h; `task_id` ≤128 bytes over `[0-9A-Za-z_\-@]` |
 | W14 | [WeCom appchat/send limits](https://developer.work.weixin.qq.com/document/path/90248), checked 2026-09-28 | supported types are text/image/voice/video/file/textcard/news/mpnews/Markdown and template_card is absent; text/Markdown cap at 2048 bytes; chatid groups must be created by the same self-built app whose visible scope is the root department; enterprise cap 20,000 recipients/min with per-member 200/min and 10,000/day silently dropped; the endpoint has no deduplication parameter or message ID |
+| W15 | [WeCom template-card messages](https://developer.work.weixin.qq.com/document/path/90236), [event callbacks](https://developer.work.weixin.qq.com/document/path/90240) and [update_template_card](https://developer.work.weixin.qq.com/document/path/94888), checked 2026-10-02 | `message/send` carries `msgtype: template_card` with `card_type: button_interaction` (task_id required, button fields `text`/`type 0 = callback`/`key ≤1024 B`, key returns as the callback EventKey); only callback-configured apps may send callback cards; clicks arrive as `MsgType=event` with `Event=template_card_event` plus EventKey/TaskId/CardType/ResponseCode (no message-level dedup field; response_code updates the card once within 72 h via `message/update_template_card` with `button.replace_name`); multiple_interaction answer structures (SelectedItems) are nested XML and stay out of the flat envelope whitelist |
 | F1 | [Receive Feishu messages](https://open.feishu.cn/document/server-docs/im-v1/message/events/receive) | im.message.receive_v1, sender_type, chat_id, p2p/@ permissions; deduplicate by message_id, not event_id |
 | F2 | [Event overview](https://open.feishu.cn/document/ukTMukTMukTM/uUTNz4SN1MjL1UzM) | HTTP and SDK long connection; 3-second event acknowledgment; retry intervals of 15 seconds, 5 minutes, 1 hour and 6 hours, at most four retries |
 | F3 | [Callback overview](https://open.feishu.cn/document/uAjLw4CM/ukTMukTMukTM/event-subscription-guide/callback-subscription/callback-overview) | synchronous interaction with no event-style redelivery guarantee |
@@ -62,6 +63,11 @@ instead of assuming the path still means HTTP configuration.
 The official [Node SDK request handler](https://github.com/larksuite/node-sdk/blob/main/dispatcher/request-handle.ts)
 was also inspected, but protocol claims above follow the official API articles;
 SDK JSON reserialization is not a reason to discard the HTTP request's raw bytes.
+
+On 2026-10-02, W2/W5 were retrieved directly again and F4's Markdown endpoint
+was read: button_interaction task_id/EventKey/TaskId and Feishu
+open_message_id/open_chat_id still match the implemented send/bind/consume path.
+Other source dates above were not refreshed by this focused check.
 
 The [API bot encryption page](https://developer.work.weixin.qq.com/document/path/101035)
 returned its title without readable protocol content. W7's official archive provided

@@ -121,34 +121,43 @@ const XML_MAX_PLAIN_BYTES = 256 * 1024;
 function buildEvent(envelope: { fields: ReadonlyMap<string, string> }, connection: { identity: ImConnectionIdentity; name: string }, plaintext: string): ReturnType<typeof brandVerifiedImEvent> {
   const fields = envelope.fields;
   const msgType = fields.get("MsgType") ?? "";
-  const createTime = Number(fields.get("CreateTime") ?? 0);
-  const from = fields.get("FromUserName") ?? "";
+  const event = fields.get("Event") ?? "";
+  // Template-card button clicks arrive as MsgType=event with
+  // Event=template_card_event (W5); EventKey echoes the button key and TaskId
+  // the send-side task_id. Other events stay lifecycle notifications.
+  const isCardAction = event === "template_card_event";
   const data: VerifiedImEventData = {
     connectionIdentity: connection.identity,
     connectionName: connection.name,
     protocol: "wecom_app",
-    deliveryKind: msgType === "event" || msgType === "template_card_event" ? "event" : "message",
+    deliveryKind: isCardAction ? "card_action" : msgType === "event" ? "event" : "message",
     deliveryKey: fields.get("MsgId") ?? `sha256:${digestKey(fields)}`,
     payloadDigest: `xml:sha256:${simpleDigest(plaintext)}`,
-    actor: from ? { type: "wecom_userid", id: from } : undefined,
+    actor: fields.get("FromUserName") ? { type: "wecom_userid", id: fields.get("FromUserName")! } : undefined,
     conversation: { kind: "app_direct" },
-    occurredAt: createTime * 1000,
+    occurredAt: Number(fields.get("CreateTime") ?? 0) * 1000,
     messageId: fields.get("MsgId") ?? undefined,
-    eventId: msgType === "event" || msgType === "template_card_event" ? `${fields.get("Event") ?? ""}:${fields.get("EventKey") ?? ""}:${createTime}` : undefined,
-    actionId: msgType === "template_card_event" ? fields.get("EventKey") ?? undefined : undefined,
+    eventId: msgType === "event" ? `${event}:${fields.get("EventKey") ?? ""}:${createTimeOf(fields)}` : undefined,
+    actionId: isCardAction ? fields.get("EventKey") ?? undefined : undefined,
+    taskId: isCardAction ? fields.get("TaskId") ?? undefined : undefined,
     content: contentFor(fields),
   };
   return brandVerifiedImEvent(data);
 }
 
+function createTimeOf(fields: ReadonlyMap<string, string>): number {
+  return Number(fields.get("CreateTime") ?? 0);
+}
+
 function contentFor(fields: ReadonlyMap<string, string>): VerifiedImEventData["content"] {
   const msgType = fields.get("MsgType") ?? "";
+  const event = fields.get("Event") ?? "";
   if (msgType === "text") return { kind: "message", text: fields.get("Content") ?? "" };
-  if (msgType === "template_card_event") {
+  if (msgType === "event" && event === "template_card_event") {
     const key = fields.get("EventKey") ?? "";
     return { kind: "card_action", actionId: key };
   }
-  if (msgType === "event") return { kind: "lifecycle", event: fields.get("Event") ?? "" };
+  if (msgType === "event") return { kind: "lifecycle", event };
   return { kind: "unknown_type", type: msgType };
 }
 

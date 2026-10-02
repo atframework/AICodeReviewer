@@ -372,6 +372,14 @@ Sources: `packages/server/src/review-orchestrator.ts`, `live-runs.ts`,
   migration tests. With a shared `AICR_PG_TEST_URL`, run the complete suite with
   `--maxWorkers=1` or provide separate databases; retain timeouts and the
   concurrency exercised inside each test.
+  Schema isolation also does not isolate connection budgets: the deployment
+  fixture sets `max_connections=30`, so parallel pools can fail with SQLSTATE
+  `53300` before assertions (`pg-config-store.test.ts`, T4). Diagnose the
+  fixture's connection/PID budget and pool lifetime. Close per-case stores in
+  `afterEach`, retaining schema cleanup in `afterAll`; serial workers alone
+  cannot fix pools accumulated within one file. Keep the serial full-suite
+  command for database-wide lock isolation; do not weaken tests or treat an
+  unstarted backend case as passed.
   Extend test URLs with `URL.searchParams`: appending a second `?options=` after
   `sslmode` loses the schema option, so migration probes and the consumer can
   silently use different schemas (`post-migration-consumption.test.ts`).

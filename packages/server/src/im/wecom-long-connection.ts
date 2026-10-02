@@ -203,6 +203,7 @@ export class WecomAibotLongConnection {
       messageId: msgid,
       eventId: undefined,
       actionId: undefined,
+      taskId: undefined,
       content: text !== undefined ? { kind: "message", text } : { kind: "unknown_type", type: msgType },
     };
     return brandVerifiedImEvent(data);

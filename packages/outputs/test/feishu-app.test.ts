@@ -179,6 +179,29 @@ describe("Feishu application API", () => {
     expect(request).not.toHaveProperty("card");
     expect(fetch.mock.calls[1]?.[0]).toBe("https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id");
   });
+  it("embeds only the opaque action id in a re-review button (IM-15 A09)", async () => {
+    const fetch = vi.fn<FetchLike>(async url => response(url.includes("tenant_access_token") ? token : { code: 0, data: { message_id: "om_action" } }));
+    const client = new FeishuAppClient({ appId: "a", appSecret: "s", fetch });
+    const result = await createFeishuAppDispatcher({ client, receiveId: "oc_target" }).publishAggregatedProblems(
+      [{ file: "x.ts", line: 2, severity: "high", category: "bug", message: "m", suggestion: "fix" }],
+      "Summary", undefined, undefined, "ima-opaque-123");
+    expect(result).toEqual({ channel: "feishu_app", status: "published", externalId: "om_action" });
+    const request = JSON.parse(fetch.mock.calls[1]?.[1]?.body ?? "{}");
+    const card = JSON.parse(request.content) as { body: { elements: Record<string, unknown>[] } };
+    const buttonElement = card.body.elements.at(-1);
+    // The button value carries ONLY the opaque id — never a command or URL.
+    expect(buttonElement).toEqual({
+      tag: "action",
+      actions: [{
+        tag: "button",
+        text: { tag: "plain_text", content: "重新评审" },
+        type: "primary",
+        value: { aicr_action_id: "ima-opaque-123" },
+      }],
+    });
+    expect(JSON.stringify(card)).not.toContain("aicr review");
+    expect(JSON.stringify(card)).not.toContain("http");
+  });
   it("sends a brief card with the issue link and keeps the mention when issueLinkCard is brief", async () => {
     let webhookBody: Record<string, unknown> = {};
     const problems: ReviewProblem[] = [

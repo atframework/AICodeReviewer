@@ -1,7 +1,8 @@
 # IM 实施规范
 
-状态：分阶段实施中，完成范围以 [Plan.md](../../Plan.md) 和当前代码为准。本文为[执行手册](im-implementation.md)
-规定跨模块接口和失败处理方式，未完成部分不是现成 API。平台能力见[总体设计](im-integrations.md)及[来源记录](../ai/sources/im-integrations.md)。
+状态：本地实现与审查修复见 [M38](../ai/milestones/M38.md)，尚有 [Plan.md](../../Plan.md) 列明的本地缺口；
+本文包含已实现约定与待完成验收要求，真实平台验收（IM-21）未完成。
+本文规定跨模块接口和失败处理方式。平台能力见[总体设计](im-integrations.md)及[来源记录](../ai/sources/im-integrations.md)。
 标为“新增”的位置须先核对实际代码，未创建的类型、字段和数据表在对应任务中实现。
 
 ## 1. 范围和默认决策
@@ -174,6 +175,13 @@ lease 到期不等于状态回退：保存 checkpoint/resumePhase；新所有者
 发布前先检查 fencing，失去 lease 立刻停止新的远端请求；已在网络中的发送进入 unknown 对账。
 partial 表示已知部分送达；publication_unknown 表示至少一笔远端结果不可证明，不能自动重新发送。
 `status` 分开展示 analysis、publication 和 reply delivery，禁止把 accepted 展示为 review 成功。
+
+当前发布恢复严格校验 output、逐渠道 receipts 与 remote journal；非法载荷按无法证明送达处理，
+不以部分有效字段授权重发。检查点超过 1 MiB 或写入失败时停止新发布，保留最后有效检查点；
+超大分析结果不能启动远端写入。固定目标的可信作者随检查点持久化，恢复时不以 IM 操作人替代。
+卡片动作 ID 同样沿 publication operation 身份恢复；发送返回前等待 message_id/TaskId 绑定完成，
+已确认消息不因生成新动作 ID 而再次发送。未消费、未过期动作的发行快照纳入 GC 活动引用。
+停机先停止新 claim、中止执行，再等待 scan/wake 排空后关闭 store；中止不写成功终态。
 
 请求表是次数/退避的唯一所有者。ReviewQueue 对 IM 唤醒 job 使用 `maxAttempts: 1`，
 队列 job 完成只是本次唤醒结束；后台扫描仍按请求表 due 状态补投递。

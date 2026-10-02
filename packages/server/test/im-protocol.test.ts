@@ -114,6 +114,50 @@ describe("S02: application GET challenge and POST verification", () => {
   });
 });
 
+describe("template-card event typing (W5, IM-15)", () => {
+  const cardFields = {
+    ToUserName: vectors.corpId, FromUserName: "alice_zhang", CreateTime: timestamp,
+    MsgType: "event", Event: "template_card_event", EventKey: "ima-card-1", TaskId: "ima-card-1",
+    CardType: "button_interaction", ResponseCode: "resp-1", AgentID: "1000002",
+  };
+  const innerXml = (fields: Record<string, string>): string =>
+    `<xml>${Object.entries(fields).map(([key, value]) => `<${key}>${value}</${key}>`).join("")}</xml>`;
+
+  const verifyEvent = (fields: Record<string, string>) => {
+    const key = decodeEncodingAesKey(vectors.encodingAesKey);
+    const { ciphertext } = encryptWecomMessage(key, innerXml(fields), vectors.corpId, Buffer.from(vectors.challenge.prefix, "hex"));
+    const envelope = `<xml><ToUserName>${vectors.corpId}</ToUserName><Encrypt>${ciphertext}</Encrypt></xml>`;
+    return verifyWecomAppCallback({
+      method: "POST", query: query(wecomSignature(vectors.token, timestamp, nonce, ciphertext)),
+      body: envelope, credentials, connection, now,
+    });
+  };
+
+  it("types a button click as a card action carrying EventKey and TaskId", () => {
+    const result = verifyEvent(cardFields);
+    expect(result.kind).toBe("verified");
+    if (result.kind !== "verified") return;
+    expect(result.event.deliveryKind).toBe("card_action");
+    expect(result.event.content).toEqual({ kind: "card_action", actionId: "ima-card-1" });
+    expect(result.event.actionId).toBe("ima-card-1");
+    expect(result.event.taskId).toBe("ima-card-1");
+    expect(result.event.actor).toEqual({ type: "wecom_userid", id: "alice_zhang" });
+    expect(result.event.conversation).toEqual({ kind: "app_direct" });
+    // No MsgId on card events: the action-field digest keys the delivery.
+    expect(result.event.deliveryKey).toMatch(/^sha256:/u);
+  });
+
+  it("keeps ordinary events out of the card branch (S12)", () => {
+    const { EventKey: _key, TaskId: _task, CardType: _card, ResponseCode: _resp, ...lifecycleFields } = cardFields;
+    const result = verifyEvent({ ...lifecycleFields, Event: "subscribe" });
+    expect(result.kind).toBe("verified");
+    if (result.kind !== "verified") return;
+    expect(result.event.deliveryKind).toBe("event");
+    expect(result.event.content).toEqual({ kind: "lifecycle", event: "subscribe" });
+    expect(result.event.actionId).toBeUndefined();
+  });
+});
+
 describe("S06: XML strictness", () => {
   it("rejects DTD, entities, multiple roots, deep nesting, duplicates and oversize", () => {
     expect(() => parseStrictWcomXml(`<!DOCTYPE foo [<!ENTITY x "y">]><xml><Encrypt>a</Encrypt></xml>`)).toThrow(StrictXmlError);

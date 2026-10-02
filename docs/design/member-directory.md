@@ -1,8 +1,8 @@
 # 外部成员目录与热加载设计
 
 本设计规定文件成员目录的格式、匹配和热加载规则，与[回调授权](im-integrations.md#6-会话发现与命令授权)独立。
-实现与验收进度见 [IM 开发计划](../../Plan.md)，当前使用方式见[用户说明](../site/src/content/docs/zh-cn/integrations/im-bots.md)。
-执行步骤为 [IM-06–08](im-implementation.md#im-06-目录-schema-与纯解析)，断言为[验收矩阵 D 组](im-acceptance.md#4-文件目录-d01d16)。
+实现进度见 [IM 开发计划](../../Plan.md)，当前使用方式见[用户说明](../site/src/content/docs/zh-cn/integrations/im-bots.md)。
+断言为[验收矩阵 D 组](im-acceptance.md#4-文件目录-d01d16)。
 
 ## 1. 文件与绑定
 

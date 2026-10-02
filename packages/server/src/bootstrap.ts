@@ -93,6 +93,7 @@ import {
 } from "@aicr/vcs";
 import {
   ACTIVE_RUN_STATUSES,
+  bindImActionSource,
   closeStoreDb,
   createStoreDb,
   getReviewRunById,
@@ -182,11 +183,13 @@ import {
 import { ImConnectionRegistry } from "./im/connections.js";
 import type { ImCallbackRoutesOptions } from "./im/callback-routes.js";
 import { ImLongConnectionService } from "./im/long-connection-service.js";
+import { issueCardAction, resolveFeishuCardActionTarget, resolveWecomCardActionTarget } from "./im/action-service.js";
 import { IM_HELP_TEXT, invalidImCommandReply, parseImCommand, processImCommand, stripImMentionPrefix } from "./im/command-service.js";
 import { ImAuthorizationDirectory } from "./im/authorization-directory.js";
 import { ImQueryService } from "./im/query-service.js";
 import { ImReplyService } from "./im/reply-service.js";
-import { classifyImReviewResult, IM_CANCEL_REASON, ManualReviewService } from "./im/manual-review-service.js";
+import { ManualReviewService } from "./im/manual-review-service.js";
+import { createImReviewExecutor } from "./im/review-execution.js";
 import { MemberDirectoryService, type MemberDirectoryView } from "./im/member-directory-service.js";
 import {
   createRedisConfigStore,
@@ -1136,6 +1139,18 @@ interface TargetUrlTemplateOptions {
   readonly baseUrl?: string;
 }
 
+/**
+ * IM-15 card-action issuance surface for feishu_app report cards: issues the
+ * opaque action pre-send and binds the platform-acknowledged message id after
+ * the send. Absent on deployments without a persistent IM store.
+ */
+export interface CardActionIssuerOptions {
+  readonly store: StoreDb;
+  readonly namespace: string;
+  /** Run-pinned generation snapshot id; null in file-only deployments. */
+  readonly currentSnapshotId: () => string | null;
+}
+
 export interface OutputPublisherConfigOptions {
   readonly authorGuesserFactory?: (context: ReviewOrchestrationContext) => ChannelAuthorGuesser;
   readonly baseDir?: string;
@@ -1144,6 +1159,7 @@ export interface OutputPublisherConfigOptions {
     sourceRoot: string,
     context: ReviewOrchestrationContext,
   ) => ProblemResolutionAnalyzer;
+  readonly cardActionIssuer?: CardActionIssuerOptions | undefined;
 }
 
 function readNoProblemsAction(value: unknown): NoProblemsAction | undefined {
@@ -1799,6 +1815,7 @@ export function createOutputPublisherFromConfig(
   resolvedTriggerToken?: string,
   resolutionAnalyzer?: ProblemResolutionAnalyzer,
   authorGuesser?: ChannelAuthorGuesser,
+  cardActionIssuer?: CardActionIssuerOptions,
 ): ReviewOutputPublisher | undefined {
   const channels = config.outputs.channels;
   if (channels.length === 0) {
@@ -2417,8 +2434,43 @@ export function createOutputPublisherFromConfig(
               ...(channel.issue_link_card ? { issueLinkCard: channel.issue_link_card } : {}),
             }
           : undefined;
-        return dispatcher.publishAggregatedProblems(renderedProblems,
-          appRendering.renderSummary(summary, renderedProblems, options?.title), mention || undefined, aggregated);
+        // IM-15: issue the opaque card action pre-send (only when the im
+        // connection/binding surface can consume the callback), then bind
+        // the platform-acknowledged message id after the send settles.
+        let cardActionId: string | undefined;
+        if (cardActionIssuer !== undefined && reviewEvent !== undefined) {
+          const actionTarget = resolveFeishuCardActionTarget({
+            config,
+            channel: { app_id: channel.app_id, receive_id: channel.receive_id, receive_id_type: channel.receive_id_type },
+            reviewEvent: {
+              headSha: reviewEvent.headSha, workspaceId: reviewEvent.workspaceId,
+              triggerName: reviewEvent.triggerName, repoRef: reviewEvent.repoRef,
+            },
+            namespace: cardActionIssuer.namespace,
+            configSnapshotId: cardActionIssuer.currentSnapshotId() ?? "file-only",
+          });
+          if (actionTarget !== undefined) {
+            try {
+              cardActionId = await issueCardAction(cardActionIssuer.store, actionTarget);
+            } catch (error) {
+              console.warn(JSON.stringify({ msg: "im_card_action_issue_failed", channel: channel.name, error: String(error) }));
+            }
+          }
+        }
+        const result = await dispatcher.publishAggregatedProblems(renderedProblems,
+          appRendering.renderSummary(summary, renderedProblems, options?.title), mention || undefined, aggregated, cardActionId);
+        if (cardActionIssuer !== undefined && cardActionId !== undefined && result.externalId !== undefined) {
+          // A failed bind leaves the action pending: clicks answer `unbound`
+          // (A13) — never executed from a callback's self-reported source.
+          await bindImActionSource(cardActionIssuer.store, { actionId: cardActionId, sourceMessageId: result.externalId, now: new Date() })
+            .then((bound: boolean) => {
+              if (!bound) console.warn(JSON.stringify({ msg: "im_card_action_bind_rejected", actionId: cardActionId }));
+            })
+            .catch((error: unknown) => {
+              console.warn(JSON.stringify({ msg: "im_card_action_bind_failed", actionId: cardActionId, error: String(error) }));
+            });
+        }
+        return result;
       },
     };
   }
@@ -2576,6 +2628,46 @@ export function createOutputPublisherFromConfig(
         );
         if (mobileReminder !== undefined && result.status === "published") {
           await dispatcher.publishTextReminder("Code review report published; mentioned member please check.", { mentionedMobileList: [mobileReminder] });
+        }
+        // IM-15: after the report parts, send one button card when the im
+        // surface (callback-enabled connection + review binding covering the
+        // repository) can consume clicks. appchat never gets a button (W14).
+        if (result.status === "published" && cardActionIssuer !== undefined && reviewEvent !== undefined && channel.target?.kind !== "appchat") {
+          const actionTarget = resolveWecomCardActionTarget({
+            config, connectionName: connectionName!, connection,
+            reviewEvent: {
+              headSha: reviewEvent.headSha, workspaceId: reviewEvent.workspaceId,
+              triggerName: reviewEvent.triggerName, repoRef: reviewEvent.repoRef,
+            },
+            namespace: cardActionIssuer.namespace,
+            configSnapshotId: cardActionIssuer.currentSnapshotId() ?? "file-only",
+          });
+          if (actionTarget !== undefined) {
+            try {
+              const actionId = await issueCardAction(cardActionIssuer.store, actionTarget);
+              const card = await dispatcher.publishCardButton({
+                title: "代码评审报告",
+                desc: reviewEvent.repoRef,
+                subTitle: `修订 ${(reviewEvent.headSha ?? "").slice(0, 12)}`,
+                actionId,
+              });
+              if (card.status === "failed") {
+                console.warn(JSON.stringify({ msg: "im_card_button_send_failed", channel: channel.name, actionId }));
+              } else {
+                // The send is acknowledged: bind the send-side TaskId (equal
+                // to the action id by construction) so clicks become valid.
+                await bindImActionSource(cardActionIssuer.store, { actionId, sourceTaskId: actionId, now: new Date() })
+                  .then((bound: boolean) => {
+                    if (!bound) console.warn(JSON.stringify({ msg: "im_card_action_bind_rejected", actionId }));
+                  })
+                  .catch((error: unknown) => {
+                    console.warn(JSON.stringify({ msg: "im_card_action_bind_failed", actionId, error: String(error) }));
+                  });
+              }
+            } catch (error) {
+              console.warn(JSON.stringify({ msg: "im_card_action_issue_failed", channel: channel.name, error: String(error) }));
+            }
+          }
         }
         return result;
       },
@@ -2762,6 +2854,7 @@ export function createOutputPublisherResolverFromConfig(
           await channelToken(name),
           resolutionAnalyzer,
           authorGuesser,
+          options.cardActionIssuer,
         );
         return publisher ? { name, kind: config.outputs.channels.find((c) => c.name === name)?.kind, publisher } : undefined;
       })))
@@ -2778,6 +2871,7 @@ export function createOutputPublisherResolverFromConfig(
           await channelToken(name),
           resolutionAnalyzer,
           authorGuesser,
+          options.cardActionIssuer,
         );
         return publisher ? { name, kind: config.outputs.channels.find((c) => c.name === name)?.kind, publisher } : undefined;
       })))
@@ -3722,6 +3816,13 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
       outputPublisherResolver: createOutputPublisherResolverFromConfig(executionConfig, {
         baseDir,
         appTokenServices: tokenServices,
+        ...(store !== undefined ? { cardActionIssuer: {
+          store,
+          namespace: configSources.database.namespace,
+          // Keep the issuing run's generation for audit and GC. A click's
+          // new request captures the current admission generation.
+          currentSnapshotId: () => (runtimeConfig.mode === "file-only" ? null : generation.snapshotId),
+        } } : {}),
         authorGuesserFactory: () => createConfiguredAuthorGuesser(generationConfig, workspaceId, {
           enrich: candidate => generationCatalogs.get(generation)?.enrichModelSpec(candidate) ?? candidate,
           billingScope, dailyBudgetTracker,
@@ -3812,6 +3913,11 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
     // pinned generation per task instead.
     outputPublisherResolver: createOutputPublisherResolverFromConfig(config, {
       baseDir,
+      ...(store !== undefined ? { cardActionIssuer: {
+        store,
+        namespace: configSources.database.namespace,
+        currentSnapshotId: () => (runtimeConfig.mode === "file-only" ? null : runtimeConfig.current().snapshotId),
+      } } : {}),
       resolutionAnalyzerFactory: (sourceRoot, context) => createProblemResolutionAnalyzer({
         ...triageModelOptionsResolver(context.reviewEvent.workspaceId),
         sourceRoot,
@@ -3966,9 +4072,20 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
   });
 
   let worker: QueueWorker | undefined;
-  if (jobHandler) {
+  let imReviewServiceRef: { wake: (job: { readonly requestId: string; readonly configSnapshotId?: string | undefined }) => Promise<string> } | undefined;
+  const createWorker = (): QueueWorker => {
     const workersConfig = config.queue.workers;
-    worker = createQueueWorker(async job => {
+    return createQueueWorker(async job => {
+      const data = job.data as { kind?: string } | null | undefined;
+      if (data !== null && typeof data === "object" && (data as { kind?: string }).kind === "im_review" && imReviewServiceRef !== undefined) {
+        // Strict IM wake-up branch (spec §5): the job only wakes the request
+        // worker; duplicate wake-ups no-op behind the request lease.
+        const payload = data as { kind: "im_review"; requestId: string; configSnapshotId?: string };
+        const outcome = await imReviewServiceRef.wake({ requestId: payload.requestId, ...(payload.configSnapshotId !== undefined ? { configSnapshotId: payload.configSnapshotId } : {}) });
+        if (outcome === "version_mismatch") throw new Error(`im wake-up config version mismatch: ${payload.requestId}`);
+        return;
+      }
+      if (!jobHandler) throw new Error(`no handler registered for queue job ${job.id}`);
       const generation = await runtimeConfig.resolveGeneration(job.configVersion?.configSnapshotId ?? null);
       await runtimeConfig.withGeneration(generation, () => jobHandler(job));
     }, {
@@ -3979,6 +4096,9 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
       perWorkspaceConcurrency: () => runtimeConfig.current().config.queue.workers?.per_workspace_concurrency ?? 1,
       lockTtlSeconds: workersConfig?.lock_ttl_seconds ?? 1800,
     });
+  };
+  if (jobHandler) {
+    worker = createWorker();
   }
 
   // Sweep only the previous process's markers, before any worker can start.
@@ -4133,7 +4253,7 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
     clearInterval(queuedTimeoutTimer);
     if (imReviewTimer) clearInterval(imReviewTimer);
     for (const run of adminReviews.values()) run.controller.abort(new ReviewCancelledError());
-    draining = Promise.all([sweepRunning, imReviewRunning, ...[...adminReviews.values()].map(run => run.task), historyMaintenance.stop(), worker?.stop(), autoCommitPipeline.scheduler.stopAndDrain()]).then(() => {});
+    draining = Promise.all([sweepRunning, imReviewRunning, imReviewService?.stop(), ...[...adminReviews.values()].map(run => run.task), historyMaintenance.stop(), worker?.stop(), autoCommitPipeline.scheduler.stopAndDrain()]).then(() => {});
     return draining;
   };
 
@@ -4169,44 +4289,27 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
         return createVcsAdapterFromConfig(pinnedConfig, sourceRoot, request.sourceTrigger, request.repoRef,
           token !== undefined ? { resolvedToken: token } : undefined);
       },
-      enqueueReview: (_jobId, run, workspaceId) => executionConcurrency.run(workspaceId, run),
-      executeReview: async (event, _pinnedConfig, request, signal) => {
-        const startMs = Date.now();
+      dispatch: async handoff => {
+        // Durable wake-up handoff (R10–R12): the job id dedups a re-dispatch
+        // of the same dispatchSeq, and the version record captures the
+        // REQUEST's generation — never the background current one.
         try {
-          const result = await runReviewOrchestration({
-            reviewEvent: event, payload: {}, provider: "manual", eventName: "im.command.review",
-            runId: request.runId, runSource: "im_command", signal,
-            configSnapshotId: request.configSnapshotId === "file-only" ? null : request.configSnapshotId,
-          }, orchestrationOptions);
-          signal.throwIfAborted();
-          // Terminal persistence mirrors the webhook path so the in-flight
-          // `analyzing` marker written at execution start is replaced by the
-          // full outcome row (otherwise `aicr running` shows stale entries).
-          await persistReviewRunToStore(
-            store,
-            request.runId,
-            event,
-            summarizeReviewOrchestrationForWebhook(result),
-            Date.now() - startMs,
-            startMs,
-          );
-          return classifyImReviewResult(result);
+          const generation = await runtimeConfig.resolveGeneration(handoff.configSnapshotId === "file-only" ? null : handoff.configSnapshotId);
+          await runtimeConfig.withGeneration(generation, () => queue.enqueue(
+            { kind: "im_review" as const, requestId: handoff.requestId, dispatchSeq: handoff.dispatchSeq, configSnapshotId: handoff.configSnapshotId },
+            { id: handoff.jobId, workspaceId: handoff.workspaceId, triggerName: handoff.triggerName, maxAttempts: 1 },
+          ));
         } catch (error) {
-          // Operator cancellation: the cancel coordinator already wrote the
-          // terminal request state and the cancelled run row; a failed row
-          // here would overwrite it.
-          const cancelled = signal?.aborted === true
-            && (signal as { reason?: unknown }).reason === IM_CANCEL_REASON;
-          if (!cancelled) {
-            console.warn(JSON.stringify({ msg: "im_review_orchestration_failed", requestId: request.requestId, error: String(error) }));
-            await persistFailedRunToStore(store, request.runId, event, Date.now() - startMs, startMs, error);
-          }
-          return {
-            state: "publication_unknown" as const,
-            errorCode: cancelled ? "im.cancelled_by_user" : "im.review_failed_unknown",
-          };
+          // The request table owns retry truth: a failed wake-up enqueue only
+          // costs promptness; the due scan re-drives the request.
+          console.warn(JSON.stringify({ msg: "im_wake_enqueue_failed", requestId: handoff.requestId, jobId: handoff.jobId, error: String(error) }));
         }
+        // R13: exactly one shared permit per execution — the queue worker
+        // branch already holds it, the timer scan acquires it here.
+        if (handoff.permitHeld) await handoff.execute();
+        else await executionConcurrency.run(handoff.workspaceId, handoff.execute);
       },
+      executeReview: createImReviewExecutor({ store, orchestrationOptions }),
     });
     const scanService = imReviewService;
     const scanImReviews = () => {
@@ -4218,6 +4321,14 @@ async function bootstrapServerAppCore(options: BootstrapServerOptions, opened: B
     imReviewTimer = setInterval(scanImReviews, 10_000);
     imReviewTimer.unref();
     scanImReviews();
+    // The IM service needs a queue consumer for its wake-up jobs. In the
+    // jobHandler-injection mode the caller keeps owning the returned worker's
+    // lifecycle; `aicr serve` starts one here so wake-ups dispatch promptly.
+    imReviewServiceRef = imReviewService;
+    if (!worker) {
+      worker = createWorker();
+      worker.start();
+    }
   }
 
   // Operator cancellation coordinator (IM `aicr cancel`, admin operations):

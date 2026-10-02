@@ -70,6 +70,7 @@ outputs:
 
 `github-main`、`service-main` 和输出路由必须在完整配置中存在且互相匹配。
 review 命令还要求 SQLite/PG StoreDb、持久 ConfigStore、密封密钥及已接线 worker；
+这些是设计前置，运行时 readiness 与后续撤权复查仍须按 Plan 的 IM-11/IM-17 补齐验收。
 `backend: storage` 表示使用现有 storage.database，并不是新建名为 storage 的数据库。
 文件目录的可选 `allowed_root` 缺省为主配置 baseDir；挂载在其他位置时显式指定管理员受信根。
 应用单聊的会话策略不等于允许所有成员发命令，必须同时命中 actors。

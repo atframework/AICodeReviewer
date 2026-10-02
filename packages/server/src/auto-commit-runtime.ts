@@ -364,7 +364,7 @@ export function reviewEventForBatch(
   });
 }
 
-type ResumePublicationOutput = {
+export type ResumePublicationOutput = {
   readonly problems: AicrOutputState["problems"];
   readonly summaries: AicrOutputState["summaries"];
   readonly skipReason?: string;
@@ -374,9 +374,10 @@ type ResumePublicationOutput = {
 /**
  * Reads the persisted analysis output of a `publication_pending` checkpoint.
  * Legacy checkpoints (written before per-target recovery existed) carry no
- * payload and return undefined, degrading recovery to a full replay.
+ * payload and return undefined, degrading recovery to a full replay. Shared
+ * with the IM request executor (IM-14), which stores the same shape.
  */
-function readResumePublication(
+export function readResumePublication(
   checkpoint: BatchExecutionCheckpoint | null | undefined,
 ): ResumePublicationOutput | undefined {
   if (checkpoint?.phase !== "publication_pending") return undefined;
@@ -429,24 +430,28 @@ function readResumePublication(
  * Client rejections are failed; transport errors, timeouts and server/gateway
  * failures leave the write outcome unknown (a response is not a rollback).
  * `buffered` results and local problem collection remain pending because
- * nothing reached the remote yet.
+ * nothing reached the remote yet. Shared with the IM request executor.
  */
-function receiptStatusForDispatch(
+export function receiptStatusForDispatch(
   result: DispatchResult,
   phase: "problem" | "summary",
 ): { readonly status: PublicationReceiptStatus; readonly lastError?: string } | undefined {
   if (result.status === "published") {
-    const raw = result.raw as { readonly collected?: unknown } | undefined;
+    const raw = result.raw as { readonly collected?: unknown; readonly kind?: unknown; readonly details?: readonly { readonly kind?: unknown }[] } | undefined;
     if (raw?.collected === true) {
       return { status: "pending" };
     }
     if (phase === "problem") return { status: "unknown" };
-    return { status: "published" };
+    return { status: "published", ...(raw?.kind === "partial" || Array.isArray(raw?.details) && raw.details.some(part => part.kind === "partial") ? { lastError: "recipient_partial" } : {}) };
   }
   if (result.status === "buffered") {
     return { status: "pending" };
   }
-  const raw = result.raw as { readonly status?: unknown; readonly error?: unknown } | undefined;
+  const detail = result.raw as { readonly failure?: unknown } | undefined;
+  const raw = (detail?.failure ?? result.raw) as { readonly status?: unknown; readonly error?: unknown; readonly kind?: unknown } | undefined;
+  if (raw?.kind === "rejected") {
+    return { status: "failed" };
+  }
   return {
     status: typeof raw?.status === "number" && raw.status >= 400 && raw.status < 500 && raw.status !== 408 ? "failed" : "unknown",
     ...(typeof raw?.error === "string" ? { lastError: raw.error } : {}),

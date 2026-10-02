@@ -232,6 +232,8 @@ export function registerImCallbackRoutes(app: Hono, options: ImCallbackRoutesOpt
           connectionName: name,
           connectionIdentity: feishuDelivery.delivery.connectionIdentity,
           sourceMessageId: feishuResult.event.messageId,
+          configSnapshotId: generation?.snapshotId ?? undefined,
+          configFileDigest: generation?.fileDigest,
           config, actor: feishuResult.event.actor, conversation: feishuResult.event.conversation,
           ...(options.directory !== undefined ? { directory: options.directory } : {}),
         });
@@ -324,6 +326,25 @@ export function registerImCallbackRoutes(app: Hono, options: ImCallbackRoutesOpt
     }
     // A redelivered callback must not re-execute write commands (cancel).
     const deliveryDuplicate = outcome.kind === "duplicate";
+    // WeCom template-card button click (IM-15): consume the opaque action id
+    // against this card's send-side TaskId. Storage failures surface as 5xx
+    // so the platform retries — never a fake success answer.
+    if (resolved.kind === "wecom_app" && result.event.content.kind === "card_action" && result.event.actor !== undefined && result.event.conversation !== undefined) {
+      const cardOutcome = await consumeCardAction(options.store, {
+        actionId: result.event.content.actionId,
+        namespace: options.namespace,
+        connectionName: name,
+        connectionIdentity: delivery.delivery.connectionIdentity,
+        sourceTaskId: result.event.taskId,
+        configSnapshotId: generation?.snapshotId ?? undefined,
+        configFileDigest: generation?.fileDigest,
+        config, actor: result.event.actor, conversation: result.event.conversation,
+        ...(options.directory !== undefined ? { directory: options.directory } : {}),
+        now: new Date(now()),
+      });
+      console.log(JSON.stringify({ msg: "im_card_action", connection: name, actionId: result.event.content.actionId, outcome: cardOutcome.kind }));
+      return response("success", 200, { "content-type": "text/plain; charset=utf-8" });
+    }
     // Inline command reply (aibot callback only): the platform renders the
     // encrypted response body as the bot's answer; persistence stays first.
     if (resolved.kind === "wecom_aibot" && result.event.content.kind === "stream_refresh") {

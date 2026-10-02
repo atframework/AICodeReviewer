@@ -13,7 +13,7 @@
 
 import { randomUUID } from "node:crypto";
 
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 
 import type { CommitChangesetInput, ConfigStore, WriteSnapshotInput } from "../src/config-store.js";
 import { isConfigError } from "../src/config-format.js";
@@ -32,6 +32,12 @@ const PG_TEST_URL = process.env.AICR_PG_TEST_URL;
 if (PG_TEST_URL) {
   const stores: ConfigStore[] = [];
   const schemas: string[] = [];
+
+  afterEach(async () => {
+    // Unique schemas isolate data, but all pools share the server's connection
+    // budget. Release each case's connections before opening the next store.
+    await Promise.all(stores.splice(0).map((store) => store.close()));
+  });
 
   afterAll(async () => {
     await Promise.allSettled(stores.map((store) => store.close()));

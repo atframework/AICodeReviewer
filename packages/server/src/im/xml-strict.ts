@@ -7,6 +7,10 @@ import { XMLParser } from "fast-xml-parser";
  * fields are refused, and only the whitelisted WeCom envelope tags survive.
  * Consumes fast-xml-parser's preserveOrder structure (arrays of single-key
  * nodes with {"#text": value} leaves).
+ *
+ * CardType/ResponseCode are the flat template-card event fields (W5);
+ * nested multi-select answer structures (SelectedItems) stay rejected —
+ * this deployment never sends cards that produce them.
  */
 
 export class StrictXmlError extends Error {
@@ -19,7 +23,7 @@ export class StrictXmlError extends Error {
 export const XML_MAX_BYTES = 256 * 1024;
 const XML_MAX_DEPTH = 32;
 
-const WECOM_ENVELOPE_FIELDS = new Set(["ToUserName", "FromUserName", "CreateTime", "MsgType", "Content", "MsgId", "AgentID", "Event", "EventKey", "TaskId", "Encrypt", "ChatId", "ChatType", "Receiver", "Sender"]);
+const WECOM_ENVELOPE_FIELDS = new Set(["ToUserName", "FromUserName", "CreateTime", "MsgType", "Content", "MsgId", "AgentID", "Event", "EventKey", "TaskId", "Encrypt", "ChatId", "ChatType", "Receiver", "Sender", "CardType", "ResponseCode"]);
 
 export interface XmlEnvelope {
   readonly root: string;

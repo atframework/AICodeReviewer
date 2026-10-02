@@ -139,6 +139,7 @@ function buildEvent(payload: Record<string, unknown>, connection: { identity: Im
     messageId: msgid,
     eventId: undefined,
     actionId: undefined,
+    taskId: undefined,
     content: isStreamRefresh
       ? { kind: "stream_refresh", streamId: streamId ?? "" }
       : text !== undefined

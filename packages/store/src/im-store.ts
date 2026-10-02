@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import { and, eq, gte, inArray, isNull, lt, lte, or, sql } from "drizzle-orm";
+import { and, eq, gt, gte, inArray, isNull, lt, lte, or, sql } from "drizzle-orm";
 
 import type { StoreDb } from "./database.js";
 import {
@@ -13,7 +13,9 @@ import {
 } from "./schema.js";
 import {
   acceptImDeliveryPg,
+  bindImActionSourcePg,
   claimDueImReviewRequestsPg,
+  claimImReviewRequestByIdPg,
   consumeImActionPg,
   consumeImRateLimitPg,
   deleteExpiredImActionsPg,
@@ -396,6 +398,35 @@ export async function claimDueImReviewRequests(
   return claimed;
 }
 
+/**
+ * Targeted claim of one due request (queue wake-up path, IM-14 R11/R12):
+ * identical due/lease/CAS-fence rules to the due scan, scoped to a single
+ * request id so the wake-up never holds another request's lease.
+ */
+export async function claimImReviewRequestById(
+  store: StoreDb,
+  options: { readonly namespace: string; readonly requestId: string; readonly now: Date; readonly leaseMs: number; readonly owner: string },
+): Promise<ClaimedImReviewRequest | undefined> {
+  if (store.kind === "postgres") return claimImReviewRequestByIdPg(store, options);
+  const candidate = (await store.db.select().from(imReviewRequests)
+    .where(and(eq(imReviewRequests.namespace, options.namespace), eq(imReviewRequests.requestId, options.requestId))))[0];
+  if (candidate === undefined) return undefined;
+  if (!["accepted", "validating", "queued", "running", "publishing", "retry_wait"].includes(candidate.state)) return undefined;
+  if (candidate.nextAttemptAt !== null && candidate.nextAttemptAt.getTime() > options.now.getTime()) return undefined;
+  if (candidate.leaseUntil !== null && candidate.leaseUntil.getTime() > options.now.getTime()) return undefined;
+  const updated = await store.db.update(imReviewRequests).set({
+    leaseOwner: options.owner,
+    leaseUntil: new Date(options.now.getTime() + options.leaseMs),
+    fence: candidate.fence + 1,
+    updatedAt: options.now,
+  }).where(and(
+    eq(imReviewRequests.requestId, candidate.requestId),
+    eq(imReviewRequests.fence, candidate.fence),
+    or(isNull(imReviewRequests.leaseUntil), lte(imReviewRequests.leaseUntil, options.now)),
+  )).returning();
+  return updated[0] !== undefined ? { request: toRequestRow(updated[0]), fence: updated[0].fence } : undefined;
+}
+
 /** Fenced update; a zero-row result means ownership was lost (R05). */
 export async function updateImReviewRequest(store: StoreDb, update: ImFencedUpdate): Promise<boolean> {
   if (store.kind === "postgres") return updateImReviewRequestPg(store, update);
@@ -610,15 +641,18 @@ export async function finishImReplyNotification(store: StoreDb, input: { readonl
 }
 
 /** Active config snapshot references registered with the runtime GC (R06). */
-export async function listImActiveConfigSnapshotIds(store: StoreDb, namespace: string): Promise<string[]> {
-  if (store.kind === "postgres") return listImActiveConfigSnapshotIdsPg(store, namespace);
+export async function listImActiveConfigSnapshotIds(store: StoreDb, namespace: string, now = new Date()): Promise<string[]> {
+  if (store.kind === "postgres") return listImActiveConfigSnapshotIdsPg(store, namespace, now);
   const rows = await store.db.selectDistinct({ snapshotId: imReviewRequests.configSnapshotId })
     .from(imReviewRequests)
     .where(and(
       eq(imReviewRequests.namespace, namespace),
       inArray(imReviewRequests.state, ["accepted", "validating", "queued", "running", "publishing", "retry_wait"]),
     ));
-  return rows.map(row => row.snapshotId);
+  const actions = await store.db.selectDistinct({ snapshotId: imActions.issuedConfigVersion }).from(imActions).where(and(
+    eq(imActions.namespace, namespace), eq(imActions.status, "issued"), gt(imActions.expiresAt, now),
+  ));
+  return [...new Set([...rows, ...actions].map(row => row.snapshotId))];
 }
 
 // ---------------------------------------------------------------------------
@@ -634,6 +668,30 @@ export async function getImAction(store: StoreDb, actionId: string): Promise<ImA
   if (store.kind === "postgres") return getImActionPg(store, actionId);
   const rows = await store.db.select().from(imActions).where(eq(imActions.actionId, actionId));
   return rows[0];
+}
+
+/**
+ * Binds the platform message identity to a still-pending action (IM-15 A13):
+ * called only from the send-acknowledgement path — Feishu cards bind the
+ * returned message id, WeCom cards the send-side TaskId — never from a
+ * callback's self-reported source. The first binding wins; consumed/expired
+ * actions never rebind.
+ */
+export async function bindImActionSource(store: StoreDb, input: { readonly actionId: string; readonly sourceMessageId?: string | undefined; readonly sourceTaskId?: string | undefined; readonly now: Date }): Promise<boolean> {
+  if ((!input.sourceMessageId && !input.sourceTaskId) || input.sourceMessageId === "" || input.sourceTaskId === "") return false;
+  if (store.kind === "postgres") return bindImActionSourcePg(store, input);
+  const rows = await store.db.update(imActions).set({
+    ...(input.sourceMessageId !== undefined ? { sourceMessageId: input.sourceMessageId } : {}),
+    ...(input.sourceTaskId !== undefined ? { sourceTaskId: input.sourceTaskId } : {}),
+    updatedAt: input.now,
+  }).where(and(
+    eq(imActions.actionId, input.actionId),
+    eq(imActions.status, "issued"),
+    gt(imActions.expiresAt, input.now),
+    isNull(imActions.sourceMessageId),
+    isNull(imActions.sourceTaskId),
+  )).returning({ actionId: imActions.actionId });
+  return rows.length > 0;
 }
 
 /** Standalone consumption probe (card replay without a new command). */

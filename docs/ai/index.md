@@ -26,9 +26,10 @@ IM 任务进度和验收条件见 [Plan.md](../../Plan.md)，接口边界见
 [IM 实施规范](../design/im-implementation-spec.md)，外部协议见[来源记录](sources/im-integrations.md)。
 主要未完成项：
 
-- IM-14：实现跨重启的持久队列唤醒与发布 checkpoint 恢复；执行中断后的
-  `publication_unknown` 须按远端操作身份核对，不能盲目重发。
-- IM-15：在输出卡片发行按钮动作，并保存平台消息身份用于回调来源校验。
+- IM-11、IM-17：补可执行命令的持久配置/worker readiness 校验，以及排队和发布前的当前授权复查。
+- IM-14：补同次队列交接恢复、跨 workspace 公平性、执行窗口和完整阶段尝试/退避。
+- IM-13、IM-19、IM-20：核验 VCS 家族与范围、真实重启及多连接竞争，完成逐项验收证据映射；
+  现有测试通过不代表整个验收矩阵完成。
 - IM-21：使用受控平台账户完成真实回调、长连接、通知与卡片动作验收；
   本地替身和固定向量不代表真实平台验收。
 
@@ -104,6 +105,7 @@ IM 任务进度和验收条件见 [Plan.md](../../Plan.md)，接口边界见
 | [M35](milestones/M35.md) | 品牌图标与静态资源 |
 | [M36](milestones/M36.md) | 运行控制与队列治理 |
 | [M37](milestones/M37.md) | Git push 完整评审单元 |
+| [M38](milestones/M38.md) | IM 回调重新评审与恢复修复 |
 | [P0–P15](milestones/local-priority-queue.md) | 本地优先执行队列 |
 
 归档规则见根 [AGENTS.md](../../AGENTS.md)；详细过程由 Git 历史追溯。

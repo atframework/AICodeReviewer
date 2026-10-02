@@ -133,7 +133,10 @@ Use `feishu_app` to send reports as a custom application's bot. Enable the bot
 capability, publish the application, and add it to the report group and member
 source group. These groups may differ. A direct-message recipient must be within
 the application's availability scope. This outbound integration needs no event
-subscription, callback server, or WebSocket connection.
+subscription, callback server, or WebSocket connection of its own; enabling the
+report card's re-review button additionally requires an IM connection with
+event callbacks for the same application (see
+[Review card button](#review-card-button-feishu-and-wecom-apps)).
 
 ### Create the app and grant permissions
 
@@ -488,6 +491,40 @@ Behavior notes:
 - Message commands and review buttons for IM connections are configured
   separately (see [Managing IM connections](#managing-im-connections-and-command-bindings)).
 
+### Review card button (Feishu and WeCom apps)
+
+A `feishu_app` or `wecom_app` output channel attaches a **re-review** button
+to its report when all of the following hold:
+
+- Feishu: the channel's `app_id` maps to a `im.connections` Feishu
+  connection with event callbacks enabled and the destination is a group
+  (`receive_id_type: chat_id`);
+- WeCom: the channel's connection has callbacks enabled and the target is
+  explicit recipients (`target.kind: recipients` — only callback-configured
+  apps may send callback cards, and appchat group messages have no card
+  type). The card is sent as one extra message after the Markdown report
+  parts; its `task_id` and button key carry only the action id;
+- both platforms require an enabled command binding allowing the `review`
+  command, covering the report conversation (the receiving group on Feishu,
+  the direct conversation on WeCom) and registering the reviewed repository
+  under `repositories`.
+
+The button carries only a server-issued opaque action id (valid for 24
+hours). On click the server verifies the real operator, the platform
+message/task identity, the conversation and the binding authorization before
+creating a new review request; repeated clicks on the same button return the
+original request id, while cards forwarded to another conversation, revoked
+bindings and expired actions are rejected. An action whose send
+acknowledgement never became durable stays pending and is never activated by
+a callback's self-reported source. Channels without a callback surface
+(WeCom webhook, appchat, …) show no button.
+
+Publication recovery reuses the original action id and acknowledged message;
+it does not issue a new button for a confirmed send. The action retains its
+issuance snapshot for audit until consumption or expiry; a click creates its
+new request under the current configuration snapshot. Without a durable
+click-time snapshot, the action remains unconsumed.
+
 ## Receiving message commands (callback and long connection)
 
 Besides sending reports, IM connections can **receive** @-mention message
@@ -617,13 +654,24 @@ A repeated request for the same active workspace, repository and revision
 reuses the existing review without consuming the quota for a new request.
 `aicr status` reveals a request only to its original actor on the original
 connection and conversation, while its repository remains allowed by the
-status binding. A review interrupted after execution started is reported as
-`publication_unknown`; the service does not automatically publish it again.
+status binding. An interrupted review recovers per phase: a crash during
+analysis retries with persisted backoff (currently at most three recovery
+attempts by default before the request fails); a publication interrupted after the
+analysis completed resumes publication only from its durable checkpoint
+without calling the model again; a publication whose delivery outcome cannot
+be proven is reported as `publication_unknown` and is never automatically
+published again.
+Malformed publication checkpoints cannot authorize a resend. A checkpoint
+over 1 MiB or a failed checkpoint write stops further sends and preserves
+the last durable recovery state. Git commit authors come from stored VCS
+metadata; the chat operator is recorded separately.
 Terminal notifications use the requesting conversation. In WeCom long
 connection mode, they use the existing subscribed socket and wait for the
 platform send acknowledgement.
 A request fails when all publication operations fail or no publisher is configured;
 it is partial when some operations publish and others fail.
+Transport failures and unprovable delivery remain `publication_unknown`;
+explicit recipient rejection is a failure, and known partial delivery is partial.
 
 Long-connection modes are initiated by the server: `aicr serve` dials per the
 connection table (auto-reconnecting on drops), needing neither a callback URL
