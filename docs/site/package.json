@@ -3,7 +3,7 @@
   "version": "0.3.0",
   "private": true,
   "type": "module",
-  "description": "AICodeReviewer user documentation site (Astro Starlight). Independent of the AICR runtime.",
+  "description": "AICodeReviewer user documentation.",
   "scripts": {
     "patch:astro-deps": "node scripts/patch-astro-deps.mjs",
     "dev": "node scripts/patch-astro-deps.mjs && astro dev",
