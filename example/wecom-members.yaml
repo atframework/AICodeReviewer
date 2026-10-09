@@ -1,0 +1,21 @@
+# Copy to a private path and replace the corporate scope and member identities.
+# Use a runtime-owned directory with mode 0700 and a member file with mode 0600.
+# This is a member directory document, not an AICR config document.
+version: 1
+directories:
+  engineering-wecom:
+    platform: wecom
+    identity_scope: { kind: wecom_corp, id: ww_example }
+    members:
+      - key: alice
+        display_name: Alice Zhang
+        aliases: [alice]
+        emails: [alice@example.invalid]
+        vcs_accounts:
+          - provider: p4
+            source_trigger: p4-main
+            username: alice-p4
+        mention: { type: wecom_userid, id: alice_zhang }
+# For shared P4 accounts, use a complete-workspace author_mappings entry in the
+# channel, or guess_author: true with a unique workspace alias; do not associate
+# the shared login with one member. wecom_mobile uses a separate text reminder.

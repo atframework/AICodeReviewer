@@ -345,8 +345,10 @@ outputs:
 **表格会被拍平为纯文本行。** 代码块会被保留。AICR 在分发前自动应用
 `toWeComMarkdown()`。
 
-为遵守企业微信消息大小限制，消息会被**截断到 500 字符**，建议（suggestion）会被截断到
-**300 字符**，并以 `...` 后缀标注。
+报告保留每条问题的完整正文、建议和代码引用。企业微信 webhook Markdown 的上限是
+**4096 个 UTF-8 字节**，仅超限时裁剪正文并注明，原生提醒保留。飞书 webhook 请求上限
+为 **20 KiB**，应用卡片请求为 **30 KiB**，预算包含 JSON 转义与请求字段；报告链接、
+提醒和卡片按钮保留。企业微信应用报告按 2048 字节分片。
 
 ## 外部成员目录（文件）
 
@@ -369,7 +371,17 @@ outputs:
         watch: true          # 父目录 watch，默认开启
 ```
 
+成员文件应由运行时用户持有，目录权限为 `0700`，文件权限为 `0600`。
+通过 `deploy.sh` 部署时，`/app/data/private` 对应宿主的 `data/db/private`；
+部署权限修复保留该子树及 `data/db/build` 中任务备份的私有权限。
+
 成员文件格式见[配置参考](/zh-cn/reference/config-fields/)；要点：
+
+未配置目录的 webhook 只从显式 `outputs.author_resolution.email_mappings` 获取原生
+提醒身份。VCS 登录名或飞书 ID 不能直接标识企业微信成员。P4 共用账号可用
+`author_mappings` 将完整提交工作区映射到成员 key，或开启 `guess_author` 做无歧义
+的工作区匹配。文件目录结果替换回退提醒，并在渲染前传入自定义 `atMentions`。
+`mention_author: false` 关闭目录匹配与动态手机号提醒。
 
 - 匹配顺序：按触发器隔离的精确 `vcs_accounts`、显式 `author_mappings`、
   再是确定性的姓名/邮箱——猜测默认关闭，频道显式 `guess_author: true` 才开启。

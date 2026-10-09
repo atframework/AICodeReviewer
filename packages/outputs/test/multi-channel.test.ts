@@ -281,7 +281,7 @@ describe("createWeComBotDispatcher", () => {
 		await expect(dispatcher.publishAggregatedProblems(problems)).rejects.toThrow("WeCom webhook returned 400");
 	});
 
-	it("truncates problems to 10 in display", async () => {
+	it("includes every problem when the complete report fits the message limit", async () => {
 		const manyProblems: ReviewProblem[] = Array.from({ length: 15 }, (_, i) => ({
 			file: `file${i}.ts`,
 			line: i + 1,
@@ -306,10 +306,11 @@ describe("createWeComBotDispatcher", () => {
 		expect(md.content).toContain("Problems (15)");
 		expect(md.content).toContain("file0.ts");
 		expect(md.content).toContain("file9.ts");
-		expect(md.content).not.toContain("file10.ts");
+		expect(md.content).toContain("file10.ts");
+		expect(md.content).toContain("file14.ts");
 	});
 
-	it("truncates long messages to avoid exceeding card limits", async () => {
+	it("keeps complete messages and suggestions below the card limit", async () => {
 		const longMessage = "A".repeat(600);
 		const longSuggestion = "B".repeat(400);
 		const longProblems: ReviewProblem[] = [{
@@ -337,11 +338,9 @@ describe("createWeComBotDispatcher", () => {
 		const cardBody = card.body as Record<string, unknown>;
 		const elements = cardBody.elements as Record<string, unknown>[];
 		const content = (elements[0] as Record<string, unknown>).content as string;
-		expect(content).toContain("A".repeat(500));
-		expect(content).toContain("...");
-		expect(content).toContain("B".repeat(300));
-		expect(content).not.toContain("A".repeat(501));
-		expect(content).not.toContain("B".repeat(301));
+		expect(content).toContain(longMessage);
+		expect(content).toContain(longSuggestion);
+		expect(content).not.toContain("Report truncated");
 	});
 });
 

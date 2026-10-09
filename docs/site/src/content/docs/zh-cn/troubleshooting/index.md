@@ -113,7 +113,7 @@ podman ps || podman --storage-driver=overlay system migrate
 **诊断与修复：**
 
 - **Feishu** 要求 JSON 卡片 2.0 schema。AICR 发送 `card.schema = "2.0"` 的卡片，让 inline `code`、带语言高亮的 fenced 代码块、标题、引用块和表格原生渲染。如果你覆盖 Feishu 模板，请把 markdown 元素放在 `card.body.elements` 下，不要把标题/表格降级为纯文本——那些 1.0 时代的转换会损害 2.0 渲染。
-- **WeCom** 群 bot 消息被截断到 500 字符、建议截断到 300 字符（带 `...` 后缀），以适配大小限制。表格被铺平为纯文本行。AICR 在分派前自动应用 `toWeComMarkdown()`。
+- **WeCom** 群 bot 报告在 4096 个 UTF-8 字节内保留完整正文与建议，仅超限时裁剪并注明，原生提醒保留。表格被铺平为纯文本行。AICR 在分派前自动应用 `toWeComMarkdown()`。
 
 按 channel 的渲染说明参见[输出通道](/zh-cn/integrations/output-channels/)。
 

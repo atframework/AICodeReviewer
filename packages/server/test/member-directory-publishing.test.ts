@@ -88,6 +88,54 @@ function wecomBotConfig(path: string, overrides: Record<string, unknown> = {}) {
 const problem = { file: "src/a.ts", line: 1, severity: "high" as const, category: "bug", message: "问题" };
 
 describe("D11/D14: scoped accounts and typed native mentions", () => {
+  it("replaces shared P4 logins with the directory workspace owner's native id, including custom templates", async () => {
+    const path = writeDirectory([memberAlice, `{ key: shared, display_name: Shared Account, aliases: [shared-login],
+        mention: { type: wecom_userid, id: shared_account } }`]);
+    const calls = stubFetch();
+    const config = wecomBotConfig(path, { mention_author: true, guess_author: true,
+      templates: { summary: "with-mention" } });
+    config.outputs.templates["with-mention"] = "{{{atMentions}}}\n\n{{summary}}";
+    const p4Event = { ...event, provider: "p4" as const, targetKind: "commit" as const,
+      author: { username: "shared-login" }, submitterWorkspace: "client_alice_machine" };
+    await createOutputPublisherFromConfig(config, "hook", undefined, "ws", p4Event, dir)!.publishSummary!("总结", [problem]);
+    const markdown = JSON.stringify(calls.find(call => call.body.msgtype === "markdown")?.body);
+    expect(markdown).toContain("<@alice_zhang>");
+    expect(markdown).not.toContain("<@shared-login>");
+    expect(markdown).not.toContain("<@shared_account>");
+  });
+
+  it("honors an explicit P4 workspace mapping when guessing is disabled", async () => {
+    const path = writeDirectory([memberAlice]);
+    const calls = stubFetch();
+    const config = wecomBotConfig(path, { mention_author: true,
+      author_mappings: { client_owner_machine: "alice" } });
+    const p4Event = { ...event, provider: "p4" as const, targetKind: "commit" as const,
+      author: { username: "shared-login" }, submitterWorkspace: "client_owner_machine" };
+    await createOutputPublisherFromConfig(config, "hook", undefined, "ws", p4Event, dir)!.publishSummary!("总结", [problem]);
+    expect(JSON.stringify(calls.find(call => call.body.msgtype === "markdown")?.body)).toContain("<@alice_zhang>");
+  });
+
+  it.each([memberAlice, memberAliceMobile])("does not resolve or remind directory members when mention_author is false", async member => {
+    const path = writeDirectory([member]);
+    const calls = stubFetch();
+    const guesser = vi.fn(async () => "alice");
+    await createOutputPublisherFromConfig(wecomBotConfig(path, { mention_author: false, guess_author: true }),
+      "hook", 1, "ws", event, dir, undefined, undefined, guesser)!.publishSummary!("总结", [problem]);
+    expect(guesser).not.toHaveBeenCalled();
+    expect(calls).toHaveLength(1);
+    expect(JSON.stringify(calls[0]?.body)).not.toContain("<@");
+  });
+
+  it("does not treat a VCS username as a WeCom identity without a directory", async () => {
+    const calls = stubFetch();
+    const config = appConfigSchema.parse({ outputs: { channels: [{ name: "hook", kind: "wecom_bot",
+      webhook_url: "https://qyapi.weixin.qq.com/hook/t", mention_author: true, mention_fallback: "skip" }] } });
+    await createOutputPublisherFromConfig(config, "hook", undefined, "ws", { ...event, author: { username: "shared-login" } }, dir)!
+      .publishSummary!("总结", [problem]);
+    expect(JSON.stringify(calls[0]?.body)).not.toContain("<@shared-login>");
+    expect(JSON.stringify(calls[0]?.body)).toContain("Author: @shared-login");
+  });
+
   it("mentions the member whose vcs account matches the accepting trigger", async () => {
     const path = writeDirectory([memberAlice, memberBob]);
     const calls = stubFetch();

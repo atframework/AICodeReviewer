@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-import { isTransientIoError, isTransientIoHttpStatus, normalizePath, withTransientIoRetry } from "@aicr/core";
+import { fixAndValidateMarkdown, isTransientIoError, isTransientIoHttpStatus, normalizePath, withTransientIoRetry } from "@aicr/core";
 
 import { renderMarkdownCodeFence } from "./template-engine.js";
 import { toFeishuMarkdown, toWeComMarkdown } from "./im-markdown.js";
@@ -811,20 +811,25 @@ function shouldFallbackToGeneralComment(status: number): boolean {
 	return status === 422 || status === 403;
 }
 
-function truncateText(text: string, maxLength: number): string {
-	if (text.length <= maxLength) {
-		return text;
+const IM_TRUNCATION_NOTICE = "\n\n... Report truncated at the platform message size limit.";
+
+/** Measure the actual outgoing payload, including JSON escaping and reserved elements. */
+function fitImReportText(text: string, fits: (content: string) => boolean, retainedText?: string): string {
+	if (fits(text)) return text;
+	const characters = Array.from(retainedText && text.endsWith(retainedText) ? text.slice(0, -retainedText.length).trimEnd() : text);
+	const truncated = (length: number): string =>
+		`${fixAndValidateMarkdown(characters.slice(0, length).join("")).trimEnd()}${IM_TRUNCATION_NOTICE}${retainedText ? `\n\n${retainedText}` : ""}`;
+	if (!fits(truncated(0))) {
+		throw new OutputDispatchError("IM message metadata exceeds the platform size limit.");
 	}
-
-	return `${text.slice(0, maxLength)}...`;
-}
-
-const IM_PROBLEM_DISPLAY_LIMIT = 10;
-const IM_MESSAGE_MAX_LENGTH = 500;
-const IM_SUGGESTION_MAX_LENGTH = 300;
-
-function normalizeImInlineText(text: string, maxLength: number): string {
-	return truncateText(text.replace(/\s+/gu, " ").trim(), maxLength);
+	let low = 0;
+	let high = characters.length;
+	while (low < high) {
+		const middle = Math.ceil((low + high) / 2);
+		if (fits(truncated(middle))) low = middle;
+		else high = middle - 1;
+	}
+	return truncated(low);
 }
 
 function buildImProblemSections(problems: readonly ReviewProblem[]): string[] {
@@ -833,20 +838,20 @@ function buildImProblemSections(problems: readonly ReviewProblem[]): string[] {
 	}
 
 	const sections: string[] = ["", `## Problems (${problems.length})`];
-	for (let i = 0; i < Math.min(problems.length, IM_PROBLEM_DISPLAY_LIMIT); i += 1) {
+	for (let i = 0; i < problems.length; i += 1) {
 		const problem = problems[i]!;
 		sections.push(
 			"",
 			`### ${i + 1}. [${problem.severity.toUpperCase()}] ${problem.category}`,
 			`- Location: \`${buildProblemLocation(problem)}\``,
-			`- Message: ${normalizeImInlineText(problem.message, IM_MESSAGE_MAX_LENGTH)}`,
+			`- Message: ${problem.message.trim()}`,
 		);
 		if (problem.suggestion) {
-			sections.push(`- Suggestion: ${normalizeImInlineText(problem.suggestion, IM_SUGGESTION_MAX_LENGTH)}`);
+			sections.push(`- Suggestion: ${problem.suggestion.trim()}`);
 		}
-	}
-	if (problems.length > IM_PROBLEM_DISPLAY_LIMIT) {
-		sections.push("", `... and ${problems.length - IM_PROBLEM_DISPLAY_LIMIT} more`);
+		if (problem.codeSnippet) {
+			sections.push("", "Referenced code:", "", renderMarkdownCodeFence(problem.codeSnippet, problem.codeLanguage));
+		}
 	}
 
 	return sections;
@@ -5673,7 +5678,7 @@ export interface FeishuBotOptions {
  * issue platform and the card links to it (`detailLink`):
  * - `brief`: headline + problem count + link (legacy behavior).
  * - `titles` (default): adds one title line per problem.
- * - `full`: full problem sections (location + truncated message/suggestion) + link.
+ * - `full`: full problem sections + link, subject to the platform message limit.
  */
 export type FeishuIssueLinkCardMode = "brief" | "titles" | "full";
 
@@ -5755,6 +5760,12 @@ export function createFeishuBotDispatcher(options: FeishuBotOptions): FeishuBotD
 				body.timestamp = String(timestamp);
 				body.sign = await computeFeishuSign(timestamp, options.secret);
 			}
+			const card = body.card as { body: { elements: Array<{ content: string }> } };
+			const report = card.body.elements[0]!;
+			report.content = fitImReportText(report.content, content => {
+				report.content = content;
+				return Buffer.byteLength(JSON.stringify(body), "utf8") <= 20 * 1024;
+			}, aggregatedOptions?.detailLink ? `Full details: [${aggregatedOptions.detailLink.label}](${aggregatedOptions.detailLink.url})` : undefined);
 
 			const response = await fetchImpl(options.webhookUrl, {
 				method: "POST",
@@ -5837,11 +5848,8 @@ function buildFeishuIssueLinkSections(
 		return sections;
 	}
 	sections.push(`**Problems (${problems.length})**`);
-	for (let i = 0; i < Math.min(problems.length, IM_PROBLEM_DISPLAY_LIMIT); i += 1) {
+	for (let i = 0; i < problems.length; i += 1) {
 		sections.push(`${i + 1}. ${buildProblemTitle(problems[i]!)}`);
-	}
-	if (problems.length > IM_PROBLEM_DISPLAY_LIMIT) {
-		sections.push(`... and ${problems.length - IM_PROBLEM_DISPLAY_LIMIT} more`);
 	}
 	sections.push("", linkLine);
 	return sections;
@@ -5856,6 +5864,14 @@ export function createFeishuAppDispatcher(options: {
 	return {
 		async publishAggregatedProblems(problems, summary, mentionText, aggregatedOptions, cardActionId) {
 			const body = buildFeishuReportBody(problems, summary, mentionText, aggregatedOptions, cardActionId);
+			const card = body.card as { body: { elements: Array<{ content: string }> } };
+			const report = card.body.elements[0]!;
+			report.content = fitImReportText(report.content, content => {
+				report.content = content;
+				// Publication recovery replaces the UUID with a 48-character identity.
+				return Buffer.byteLength(JSON.stringify({ receive_id: options.receiveId, msg_type: "interactive",
+					content: JSON.stringify(card), uuid: "0".repeat(48) }), "utf8") <= 30 * 1024;
+			}, aggregatedOptions?.detailLink ? `Full details: [${aggregatedOptions.detailLink.label}](${aggregatedOptions.detailLink.url})` : undefined);
 			const externalId = await options.client.sendCard(options.receiveId, options.receiveIdType ?? "chat_id", body.card, cardActionId);
 			return { channel: options.channelName ?? "feishu_app", status: "published", externalId };
 		},
@@ -5953,15 +5969,15 @@ export function createWeComBotDispatcher(options: WeComBotOptions): WeComBotDisp
 			if (summary) {
 				sections.push(summary.trim());
 			}
-			if (mentionText) {
-				sections.push(mentionText);
-			}
 			sections.push(...buildImProblemSections(problems));
+			const mention = mentionText ? `\n\n${mentionText}` : "";
+			const content = fitImReportText(toWeComMarkdown(sections.join("\n")), text =>
+				Buffer.byteLength(text + mention, "utf8") <= 4096) + mention;
 
 			const raw = await postWebhook({
 				msgtype: "markdown",
 				markdown: {
-					content: toWeComMarkdown(sections.join("\n")),
+					content,
 				},
 			});
 

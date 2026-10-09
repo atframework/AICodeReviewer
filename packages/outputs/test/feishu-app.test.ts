@@ -266,7 +266,7 @@ describe("Feishu application API", () => {
     expect(markdown).toContain("- Suggestion: fix-one");
     expect(markdown).toContain("Full details: [View full report](https://github.com/o/r/issues/42)");
   });
-  it("caps the title list at ten problems and keeps the link for empty results", async () => {
+  it("keeps every title below the message limit and keeps the link for empty results", async () => {
     let webhookBody: Record<string, unknown> = {};
     const problems: ReviewProblem[] = Array.from({ length: 12 }, (_, i) =>
       ({ file: `f${i}.ts`, line: i + 1, severity: "medium" as const, category: "bug", message: `m${i}` }));
@@ -280,8 +280,8 @@ describe("Feishu application API", () => {
     const markdown = card.body.elements[0]?.content ?? "";
     expect(markdown).toContain("**Problems (12)**");
     expect(markdown).toContain("10. [MEDIUM] bug — f9.ts:10");
-    expect(markdown).not.toContain("f10.ts");
-    expect(markdown).toContain("... and 2 more");
+    expect(markdown).toContain("f10.ts");
+    expect(markdown).toContain("f11.ts");
     await dispatcher.publishAggregatedProblems([], "# Review Complete", undefined,
       { detailLink: { url: "https://github.com/o/r/issues/42", label: "View full report" } });
     const emptyMarkdown = (webhookBody.card as { body: { elements: { content?: string }[] } }).body.elements[0]?.content ?? "";

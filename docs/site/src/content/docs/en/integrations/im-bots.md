@@ -402,8 +402,12 @@ inline code, and blockquotes render natively. **Tables are flattened to
 plain-text rows.** Code fences are preserved. AICR applies
 `toWeComMarkdown()` automatically before dispatch.
 
-To stay within WeCom message-size limits, messages are **truncated to 500
-characters** and suggestions to **300 characters**, with a `...` suffix.
+Reports keep every problem's complete message, suggestion and code reference.
+WeCom webhook Markdown has a **4096-byte UTF-8 limit**. Only excess text is
+truncated, with a notice; the native mention remains. Feishu webhook requests
+are bounded at **20 KiB** and application card requests at **30 KiB**, including
+JSON escaping and request fields. Report links, mentions and card buttons remain.
+WeCom application reports split into 2048-byte parts.
 
 ## External member directory (file)
 
@@ -426,8 +430,21 @@ outputs:
         watch: true          # parent-directory watch, default on
 ```
 
+Keep member files owned by the runtime user, with directory mode `0700` and file
+mode `0600`. In `deploy.sh` deployments, `/app/data/private` maps to the host's
+`data/db/private`; permission repair preserves this subtree and task backups
+under `data/db/build`.
+
 The member file format is documented in the
 [configuration reference](/en/reference/config-fields/); highlights:
+
+Without a directory, native webhook mentions require explicit
+`outputs.author_resolution.email_mappings`. A VCS login or a Feishu ID does not
+identify a WeCom member. For shared P4 accounts, map the complete submitter
+workspace through `author_mappings`, or enable `guess_author` for unambiguous
+workspace matching. File-directory results replace fallback mentions and populate
+custom `atMentions` before rendering. `mention_author: false` disables directory
+matching and dynamic mobile reminders.
 
 - Matching order: exact scoped `vcs_accounts` (trigger-isolated), explicit
   `author_mappings`, then deterministic names/emails — guessing stays OFF

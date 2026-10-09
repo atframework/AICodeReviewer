@@ -58,6 +58,11 @@ to `aicr.skip`, not published as a fallback message.
 
 ## Problem schema
 
+IM reports retain full problem messages, suggestions and code references until
+the outgoing message reaches its platform byte limit. Excess text carries a
+truncation notice; native mentions and report links remain. See
+[IM message limits](/en/integrations/im-bots/#5-markdown-rendering-and-limits).
+
 `aicr.report_problem` accepts a minimal, channel-neutral shape:
 
 | Field | Required | Meaning |

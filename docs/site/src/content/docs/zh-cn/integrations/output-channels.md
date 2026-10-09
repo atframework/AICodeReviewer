@@ -45,6 +45,10 @@ Agent 适配器运行**绝不能**把自然语言 stdout 当作 IM 摘要发布�
 
 ## Problem schema
 
+IM 报告保留完整问题正文、建议和代码引用，仅在发送消息超过平台字节上限时裁剪并注明，
+原生提醒和报告链接保留。详见
+[IM 消息限制](/zh-cn/integrations/im-bots/#5-markdown-渲染与长度限制)。
+
 `aicr.report_problem` 接受最小化、通道无关的形状：
 
 | 字段 | 必填 | 含义 |

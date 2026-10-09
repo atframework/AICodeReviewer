@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+
 import { describe, expect, it } from "vitest";
 
 import {
@@ -54,6 +56,15 @@ const wecomJson = JSON.stringify({
 const model = (data: MemberDirectoryData) => data.directories.get("engineering-wecom")?.members[0];
 
 describe("D01: YAML/JSON parity and clear semantics", () => {
+  it("validates the published WeCom member directory example", () => {
+    const source = readFileSync(new URL("../../../example/wecom-members.yaml", import.meta.url), "utf8");
+    const result = parseMemberDirectorySource(source, { fileName: "wecom-members.yaml" });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.directories.get("engineering-wecom")?.members[0]?.mention)
+      .toEqual({ type: "wecom_userid", id: "alice_zhang" });
+  });
+
   it("parses equivalent YAML and JSON into the same member model", () => {
     const yaml = parseMemberDirectorySource(wecomYaml, { fileName: "members.yaml" });
     const json = parseMemberDirectorySource(wecomJson, { fileName: "members.json" });

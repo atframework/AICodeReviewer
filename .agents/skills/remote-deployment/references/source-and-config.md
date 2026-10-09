@@ -39,6 +39,10 @@ host snapshot or secrets into a committed helper.
 - Restart through the current owner: systemd unit, compose project, or plain
   engine. For rootless port-release races, stop/start after confirming the port
   is free. Recheck health and logs after the configuration is loaded.
+- Preserve runtime-owned `0700` directories and `0600` files for member lists
+  under `data/db/private` and task backups under `data/db/build`. Recursive
+  permission repair must prune these subtrees; verify modes after deployment.
+  See `ensure_writable_tree` and `deploy-private-permissions.test.ts`.
 - Name pre-migration DB/config backups with a unique second-resolution path and
   confirm the target differs from any cleanup path before removing superseded
   partials; a same-minute collision has silently deleted a fresh backup. Once a

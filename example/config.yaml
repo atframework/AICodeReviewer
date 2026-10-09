@@ -601,7 +601,7 @@ outputs:
     #   webhook_url_env: AICR_FEISHU_WEBHOOK   # env var with the webhook URL
     #   secret_env: AICR_FEISHU_SECRET          # env var with signing secret
     #                                             (required if bot has signature verification enabled)
-    #   mention_author: true                     # @-mention the commit author in the card
+    #   mention_author: true                     # native ID from an explicit email mapping or member directory
     #   mention_fallback: skip                  # "all" = mention everyone, "skip" = no mention if author not found
     #   no_problems: { action: suppress }        # keep quiet when no actionable problems are found
     #   # issue_link_card: titles                # card content when the summary route also records a
@@ -724,10 +724,18 @@ outputs:
     # - name: wecom-ops
     #   kind: wecom_bot
     #   webhook_url_env: AICR_WECOM_WEBHOOK        # env var with the webhook URL
-    #   mention_author: false                       # @-mention the commit author
+    #   mention_author: false                       # enable only with platform identity mappings/directory
     #   mention_fallback: skip                      # "all" = mention everyone, "skip" = no mention if author not found
     #   no_problems: { action: suppress }
     #   # mentioned_mobile_list: ["+86-13800138000"] # optional: @ specific users by phone number
+    #   # member_directory:                         # file contents: example/wecom-members.yaml
+    #   #   source: file
+    #   #   path: ./private/wecom-members.yaml
+    #   #   directory_id: engineering-wecom
+    #   #   identity_scope: { kind: wecom_corp, id: ww_example }
+    #   # guess_author: true                        # unambiguous P4 submitter workspace matching
+    #   # author_mappings: { alice_desktop_client: alice } # complete workspace -> member key
+    # Full IM report text is preserved up to each platform's UTF-8/request size limit.
 
   routes:
     default:

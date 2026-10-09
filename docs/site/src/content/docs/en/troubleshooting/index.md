@@ -192,9 +192,9 @@ Feishu, or WeCom messages are cut off mid-sentence.
   natively. If you override a Feishu template, keep markdown elements under
   `card.body.elements` and do not downgrade headings/tables to plain text —
   those 1.0-era transforms actively harm 2.0 rendering.
-- **WeCom** group-bot messages are truncated to 500 characters and
-  suggestions to 300 characters (with a `...` suffix) to stay within size
-  limits. Tables are flattened to plain-text rows. AICR applies
+- **WeCom** group-bot reports keep complete problem text and suggestions up
+  to 4096 UTF-8 bytes. Only oversized reports are truncated with a notice;
+  native mentions remain. Tables are flattened to plain-text rows. AICR applies
   `toWeComMarkdown()` automatically before dispatch.
 
 See [Output channels](/en/integrations/output-channels/) for the per-channel

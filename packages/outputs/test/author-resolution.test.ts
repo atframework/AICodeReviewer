@@ -108,6 +108,14 @@ describe("renderMentions", () => {
 });
 
 describe("buildAtMentions", () => {
+	it.each(["wecom_bot", "wecom_app", "feishu_bot"] as const)("requires platform identity evidence for %s", channel => {
+		const author = { username: "shared-vcs-login", email: "dev@example.com", fallbackUsername: "delivery-actor" };
+		expect(buildAtMentions({ author }, channel)).toBe("");
+		const mapped = buildAtMentions({ author }, channel, { emailMappings: { "dev@example.com": "native-id" } });
+		expect(mapped).toContain("native-id");
+		expect(mapped).not.toContain("shared-vcs-login");
+		expect(buildAtMentions({ author }, channel, { mentionFallback: "all" })).toContain("all");
+	});
 	it("builds mention string for resolved author", () => {
 		const ctx: AuthorMentionContext = { author: { username: "owent" } };
 		expect(buildAtMentions(ctx, "github_pr_review")).toBe("@owent");

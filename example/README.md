@@ -1861,5 +1861,8 @@ inline code, and blockquotes are rendered natively. Tables are flattened to
 plain-text rows. Code fences are preserved. AICodeReviewer applies
 `toWeComMarkdown()` automatically before dispatch.
 
-Messages are truncated to 500 characters and suggestions to 300 characters
-with a `...` suffix to stay within WeCom message size limits.
+Reports retain complete problem text and suggestions up to 4096 UTF-8 bytes.
+Only oversized reports are truncated with a notice; native mentions remain.
+For native author mentions, configure a platform identity mapping or the
+[`wecom-members.yaml`](wecom-members.yaml) file directory. P4 shared accounts
+need submitter workspace matching; raw VCS logins are not WeCom user IDs.

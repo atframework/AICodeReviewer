@@ -1260,7 +1260,8 @@ function shouldMentionAuthor(channel: OutputChannelConfig): boolean {
     return configured;
   }
 
-  return channel.kind === "gitea_pr_review" ||
+  return readFileDirectoryConfig(channel as Record<string, unknown>) !== undefined ||
+    channel.kind === "gitea_pr_review" ||
     channel.kind === "github_pr_review" ||
     channel.kind === "github_issue" ||
     channel.kind === "github_problem_issue" ||
@@ -1410,7 +1411,7 @@ function createChannelRendering(
     reviewEvent,
     repoRef,
     mentionChannelKind,
-    shouldMentionAuthor(channel),
+    shouldMentionAuthor(channel) && readFileDirectoryConfig(channel as Record<string, unknown>) === undefined,
     authorResolution,
     targetUrlTemplates,
   );
@@ -2494,11 +2495,10 @@ export function createOutputPublisherFromConfig(
       noProblemsAction,
       publishEmptySummary,
       async publishProblem(problem: ReviewProblem): Promise<DispatchResult> {
-        problems.push(rendering.renderProblem(problem));
+        problems.push(problem);
         return { channel: channel.name, status: "published", raw: { collected: true } };
       },
       async publishSummary(summary: string, summaryProblems?: readonly ReviewProblem[], options?: ReviewSummaryPublishOptions): Promise<DispatchResult> {
-        const renderedProblems = (summaryProblems ?? problems).map((problem) => rendering.renderProblem(problem));
         const aggregated: FeishuBotAggregatedOptions | undefined = options?.summaryIssueUrl
           ? {
               detailLink: { url: options.summaryIssueUrl, label: "View full report" },
@@ -2508,15 +2508,17 @@ export function createOutputPublisherFromConfig(
         // File member directory (IM-08): typed feishu mention, one snapshot per report.
         let mention = rendering.mentionText;
         const fileDirectory = readFileDirectoryConfig(channelConfig);
-        if (fileDirectory !== undefined && reviewEvent !== undefined) {
+        if (shouldMentionAuthor(channel) && fileDirectory !== undefined && reviewEvent !== undefined) {
           const resolved = await resolveFileDirectoryMention({ config, channelKind: channel.kind, channelName: channel.name,
             directory: fileDirectory, authorMappings: channel.author_mappings, guessAuthor: channel.guess_author === true,
             guesser: authorGuesser, reviewEvent, baseDir });
-          if (resolved.mentionText !== "") mention = `${mention}${mention ? " " : ""}${resolved.mentionText}`;
+          mention = resolved.mentionText;
         }
+        const reportRendering = createChannelRendering(config, channel, workspaceId, reviewEvent, repoRef, baseDir, targetUrlTemplates, mention);
+        const renderedProblems = (summaryProblems ?? problems).map(problem => reportRendering.renderProblem(problem));
         return dispatcher.publishAggregatedProblems(
           renderedProblems,
-          rendering.renderSummary(summary, renderedProblems, options?.title),
+          reportRendering.renderSummary(summary, renderedProblems, options?.title),
           mention || undefined,
           aggregated,
         );
@@ -2544,26 +2546,27 @@ export function createOutputPublisherFromConfig(
       noProblemsAction,
       publishEmptySummary,
       async publishProblem(problem: ReviewProblem): Promise<DispatchResult> {
-        problems.push(rendering.renderProblem(problem));
+        problems.push(problem);
         return { channel: channel.name, status: "published", raw: { collected: true } };
       },
       async publishSummary(summary: string, summaryProblems?: readonly ReviewProblem[], options?: ReviewSummaryPublishOptions): Promise<DispatchResult> {
-        const renderedProblems = (summaryProblems ?? problems).map((problem) => rendering.renderProblem(problem));
         // File member directory (IM-08): wecom userid mention inline; mobile
         // members ride one bounded text reminder after the report.
         let mention = rendering.mentionText;
         let mobileReminder: string | undefined;
         const fileDirectory = readFileDirectoryConfig(channelConfig);
-        if (fileDirectory !== undefined && reviewEvent !== undefined) {
+        if (shouldMentionAuthor(channel) && fileDirectory !== undefined && reviewEvent !== undefined) {
           const resolved = await resolveFileDirectoryMention({ config, channelKind: channel.kind, channelName: channel.name,
             directory: fileDirectory, authorMappings: channel.author_mappings, guessAuthor: channel.guess_author === true,
             guesser: authorGuesser, reviewEvent, baseDir });
-          if (resolved.mentionText !== "") mention = `${mention}${mention ? " " : ""}${resolved.mentionText}`;
+          mention = resolved.mentionText;
           mobileReminder = resolved.mobileReminder;
         }
+        const reportRendering = createChannelRendering(config, channel, workspaceId, reviewEvent, repoRef, baseDir, targetUrlTemplates, mention);
+        const renderedProblems = (summaryProblems ?? problems).map(problem => reportRendering.renderProblem(problem));
         const result = await dispatcher.publishAggregatedProblems(
           renderedProblems,
-          rendering.renderSummary(summary, renderedProblems, options?.title),
+          reportRendering.renderSummary(summary, renderedProblems, options?.title),
           mention || undefined,
         );
         if (mobileReminder !== undefined && result.status === "published") {
@@ -2606,24 +2609,25 @@ export function createOutputPublisherFromConfig(
       noProblemsAction,
       publishEmptySummary,
       async publishProblem(problem: ReviewProblem): Promise<DispatchResult> {
-        problems.push(rendering.renderProblem(problem));
+        problems.push(problem);
         return { channel: channel.name, status: "published", raw: { collected: true } };
       },
       async publishSummary(summary: string, summaryProblems?: readonly ReviewProblem[], options?: ReviewSummaryPublishOptions): Promise<DispatchResult> {
-        const renderedProblems = (summaryProblems ?? problems).map((problem) => rendering.renderProblem(problem));
         let mention = rendering.mentionText;
         let mobileReminder: string | undefined;
         const fileDirectory = readFileDirectoryConfig(channelConfig);
-        if (fileDirectory !== undefined && reviewEvent !== undefined) {
+        if (shouldMentionAuthor(channel) && fileDirectory !== undefined && reviewEvent !== undefined) {
           const resolved = await resolveFileDirectoryMention({ config, channelKind: channel.kind, channelName: channel.name,
             directory: fileDirectory, authorMappings: channel.author_mappings, guessAuthor: channel.guess_author === true,
             guesser: authorGuesser, reviewEvent, baseDir });
-          if (resolved.mentionText !== "") mention = `${mention}${mention ? " " : ""}${resolved.mentionText}`;
+          mention = resolved.mentionText;
           mobileReminder = resolved.mobileReminder;
         }
+        const reportRendering = createChannelRendering(config, channel, workspaceId, reviewEvent, repoRef, baseDir, targetUrlTemplates, mention);
+        const renderedProblems = (summaryProblems ?? problems).map(problem => reportRendering.renderProblem(problem));
         const result = await dispatcher.publishAggregatedProblems(
           renderedProblems,
-          rendering.renderSummary(summary, renderedProblems, options?.title),
+          reportRendering.renderSummary(summary, renderedProblems, options?.title),
           mention || undefined,
         );
         if (mobileReminder !== undefined && result.status === "published") {

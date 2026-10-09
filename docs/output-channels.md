@@ -255,7 +255,7 @@ If a run has problems but records `skipReason="no_output_publisher"`, no summary
 | `github_problem_issue` | Collected for reconciliation | Creates or resolves managed GitHub issues | Like `gitea_problem_issue` but uses string label names; `resolved_action` supports `close`, `mark_resolved`, and `none` (GitHub has no issue delete API) |
 | `gitlab_problem_issue` | Collected for reconciliation | Creates, updates, or resolves managed GitLab issues | Like `gitea_problem_issue` but uses comma-separated label names and numeric assignee IDs resolved through the users API |
 | `feishu_bot` | Collected for aggregation | Interactive card Markdown (JSON 2.0 schema) | Renders sectioned `Review target` / `Summary` / `Problems` blocks. Cards are sent with `card.schema = "2.0"` so headings, tables, inline code (`code`), and fenced code blocks with language-based syntax highlighting render natively; each problem includes severity, category, `Location: file:line`, and truncated message/suggestion; built-in summaries render `@username (Display Name)` when both are available |
-| `wecom_bot` | Collected for aggregation | Markdown message | Same sectioned content as Feishu; messages are truncated to 500 chars and suggestions to 300 chars to stay within size limits; built-in summaries render `@username (Display Name)` when both are available; `mentioned_mobile_list` sends one bounded text reminder (mobile mentions exist only on the text message type) and business `errcode != 0` fails the dispatch |
+| `wecom_bot` | Collected for aggregation | Markdown message | Complete sectioned content up to 4096 UTF-8 bytes; excess text receives a truncation notice while native mentions remain; built-in summaries render `@username (Display Name)` when both are available; `mentioned_mobile_list` sends one bounded text reminder (mobile mentions exist only on the text message type) and business `errcode != 0` fails the dispatch |
 | `wecom_app` | Collected for aggregation | WeCom application `message/send` / `appchat/send` Markdown parts | Connection references `im.connections` (literal/env secrets); recipients or one appchat target per channel; reports split into UTF-8-safe 2048-byte parts with per-part publication receipts; only `40014`/`42001` refresh the token once and business rejections never resend |
 
 ## Feishu card content when a managed issue carries the full report
@@ -668,6 +668,29 @@ Common template variables:
 | `{{problem.codeSnippet}}`, `{{problem.codeLanguage}}`, `{{{problem.codeFence}}}` | Optional AICR-derived code reference snippet, language, and pre-built fenced code block |
 
 For Git-based channels (`gitea_*`, `github_*`, `gitlab_mr_review`), built-in templates prefer `@username` formatting when a provider username is available. If a display name is also available, they render it as `@username (Display Name)` so the platform can still resolve the mention while humans see the nickname. IM bot summary templates (`feishu_bot`, `wecom_bot`, and future IM channels) use the same human-readable `@username (Display Name)` convention for event authors; native bot mentions still flow through the separate `{{atMentions}}` / author-resolution path when enabled.
+
+IM native mentions require platform identity evidence. Webhooks without a member
+directory use only explicit `outputs.author_resolution.email_mappings`; VCS logins
+and delivery actors are never assumed to be platform user IDs. File directories
+replace this fallback and supply the resolved native mention to custom templates.
+`mention_author: false` disables directory matching and dynamic mobile reminders.
+For shared P4 accounts, map the complete submitter workspace to a member key with
+`author_mappings`, or enable `guess_author` for unambiguous workspace matching.
+See [member directory format](design/member-directory.md) and
+[`example/wecom-members.yaml`](../example/wecom-members.yaml).
+
+Keep member files owned by the runtime user, with directory mode `0700` and file
+mode `0600`. For `deploy.sh` deployments, `/app/data/private` maps to the host's
+`data/db/private`; deployment permission repair preserves this private subtree
+and task backups under `data/db/build`.
+
+Aggregated reports preserve every problem's message, suggestion and code reference
+without fixed field-length or problem-count caps. WeCom webhook Markdown is bounded
+at 4096 UTF-8 bytes; Feishu webhook requests at 20 KiB and application card requests
+at 30 KiB. Feishu budgets include JSON escaping, signing fields or the serialized
+card, recipient and recovery UUID. Oversized reports receive a truncation notice;
+native mentions, report links and card actions remain. WeCom application reports
+split at their 2048-byte content limit with per-part receipts.
 
 Templates must use `{{problems}}` and `{{problem.*}}`; the removed `{{findings}}` and `{{finding.*}}` variables are not provided.
 

@@ -51,10 +51,16 @@ ensure_writable_tree() {
   # Repair the whole tree before starting a new container so restarts and
   # rollouts remain no-downtime.
   chmod u+rwX,g+rwX,o+rwX "$path" 2>/dev/null || true
+  # Member directories and task backups carry private identities. Preserve
+  # their owner-only permissions while repairing the public runtime tree.
   if [ "$ENGINE_BASENAME" = "podman" ]; then
-    "$ENGINE_CMD" unshare chmod -R u+rwX,g+rwX,o+rwX "$path"
+    "$ENGINE_CMD" unshare find "$path" \
+      \( -path "$DEPLOY_DIR/data/db/private" -o -path "$DEPLOY_DIR/data/db/build" \) -prune \
+      -o -exec chmod u+rwX,g+rwX,o+rwX {} +
   else
-    chmod -R u+rwX,g+rwX,o+rwX "$path"
+    find "$path" \
+      \( -path "$DEPLOY_DIR/data/db/private" -o -path "$DEPLOY_DIR/data/db/build" \) -prune \
+      -o -exec chmod u+rwX,g+rwX,o+rwX {} +
   fi
 }
 

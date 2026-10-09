@@ -168,7 +168,11 @@ export function buildAtMentions(
 		return "";
 	}
 
-	const username = resolveAuthorUsername(context, opts);
+	// VCS logins and delivery actors are not IM platform identities. Without
+	// a directory, only an administrator-provided email mapping can supply one.
+	const username = isGitMentionChannel(channelKind)
+		? resolveAuthorUsername(context, opts)
+		: context.author.email ? resolveEmailMapping(context.author.email, opts?.emailMappings) : undefined;
 	if (!username) {
 		if (opts?.mentionFallback === "all") {
 			return renderFallbackMention(channelKind);

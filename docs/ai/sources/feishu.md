@@ -33,6 +33,15 @@ includes `name`, `en_name`, `nickname`, `email`, `enterprise_email`, `mobile`,
 `open_id`, `user_id` and `union_id`. Fields are optional in the SDK; schema
 presence does not establish tenant permission or visibility.
 
+The send page's declared Markdown alternate was checked again on 2026-10-08:
+card/rich-text requests are capped at 30 KB, including JSON escaping of `content`.
+Webhook requests have a separate 20 KB cap in the
+[custom bot guide](https://open.feishu.cn/document/client-docs/bot-v3/add-custom-bot).
+The report renderer measures outgoing UTF-8 requests, reserves native mentions,
+detail links and actions, and marks truncation only when that limit is exceeded.
+Local boundary tests are in `packages/outputs/test/im-report-limits.test.ts`;
+they do not establish platform rendering or delivery.
+
 The send page's Markdown alternate specifies a UUID limit of 50 characters and
 a one-hour deduplication period. Automatic batch recovery uses a stable UUID
 within 59 minutes; see [publication contracts](publication-reconciliation.md).
