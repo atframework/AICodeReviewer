@@ -2,6 +2,10 @@
 
 This directory contains a ready-to-edit deployment configuration.
 
+The [Slack, Discord and Telegram design examples](slack-discord-telegram-design.md)
+describe planned fields. They are not runnable configuration; implementation and
+user-guide deliverables are tracked in [Plan.md](../Plan.md).
+
 For Feishu custom application reports, merge [feishu-app.yaml](feishu-app.yaml).
 It configures the application credentials, report recipient, source group and
 explicit identity mappings. Both Feishu transports share templates.

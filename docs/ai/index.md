@@ -6,7 +6,7 @@
 
 | 任务 | 首选实现与参考 |
 | --- | --- |
-| 当前待办与验收边界 | [Plan.md](../../Plan.md)：IM 应用、外部成员目录和回调重新评审；[路线图](#路线图)；Workspace 动态配置规则见架构 §3.10、§3.14–3.16 |
+| 当前待办与验收边界 | [Plan.md](../../Plan.md)：既有 IM 待办与 Slack/Discord/Telegram 接入；[路线图](#路线图)；Workspace 动态配置规则见架构 §3.10、§3.14–3.16 |
 | Config / workspace / model groups | `packages/core/src/config.ts`、server bootstrap；[架构 §3.10](architecture.md#310-配置体系)、[配置坑点](pitfalls/AGENTS.config-and-state.md) |
 | Webhook / 调度 / 去重 / PR 延期 | server runtime/scheduler/deferral-manager；[架构 §3.1](architecture.md#31-触发器与-reviewevent-归一化)、[调度坑点](pitfalls/AGENTS.scheduling.md) |
 | VCS / 多源上下文 / GitHub App | `packages/vcs/src/`、server credential wiring；[架构 §3.2](architecture.md#32-vcs-adapter-与-scoped-fetch)、[VCS 坑点](pitfalls/AGENTS.vcs.md) |
@@ -21,6 +21,12 @@
 | 部署 / 用户示例 | [部署 skill](../../.agents/skills/remote-deployment/SKILL.md)、[Podman](../podman.md)、[示例](../../example/README.md) |
 
 ## 路线图
+
+Slack、Discord、Telegram 接入范围为结果推送及命令触发审查，当前待实施。
+按 [SDC 执行步骤](../design/slack-discord-telegram-execution.md)推进配置、发送恢复、三平台输出、
+HTTP 命令、管理联调、故障测试、双语指南和真实平台验收；
+默认值见[接入规范](../design/slack-discord-telegram.md)，断言见[验收矩阵](../design/slack-discord-telegram-acceptance.md)，
+外部接口见[官方来源](sources/slack-discord-telegram.md)。命令交付依赖下列已有 IM 缺口的相关验收。
 
 IM 任务进度和验收条件见 [Plan.md](../../Plan.md)，接口边界见
 [IM 实施规范](../design/im-implementation-spec.md)，外部协议见[来源记录](sources/im-integrations.md)。

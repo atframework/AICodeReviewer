@@ -17,6 +17,7 @@ records from primary sources and mark unavailable claims unverified.
 | MCP schemas, transport or authorization | [MCP](sources/mcp.md) |
 | Feishu application bot, contacts, member pagination or card envelopes | [Feishu](sources/feishu.md) |
 | WeCom applications/API bots, IM callbacks, file members or review commands | [IM integration research](sources/im-integrations.md), including protocol samples and evidence limits |
+| Slack/Discord/Telegram sends, command callbacks, authentication or delivery recovery | [Official protocol research](sources/slack-discord-telegram.md); planned implementation, no live-platform acceptance |
 | Automatic batch publisher queries, remote receipts or idempotency | [Publication reconciliation](sources/publication-reconciliation.md) |
 | PowerShell or runtime image tools/releases | [Shell and tooling](sources/shell-and-tooling.md) |
 
